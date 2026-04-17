@@ -20,7 +20,11 @@ REQUIRED_FILES = {
     "Sample Decision": ROOT / "workflows/software-project-governance/examples/current-project-decision-log.md",
     "Sample Risk": ROOT / "workflows/software-project-governance/examples/current-project-risk-log.md",
     "Claude Adapter": ROOT / "adapters/claude/README.md",
+    "Claude Adapter Manifest": ROOT / "adapters/claude/adapter-manifest.json",
+    "Claude Launcher": ROOT / "adapters/claude/launch.py",
     "Codex Adapter": ROOT / "adapters/codex/README.md",
+    "Codex Adapter Manifest": ROOT / "adapters/codex/adapter-manifest.json",
+    "Codex Launcher": ROOT / "adapters/codex/launch.py",
     "Gemini Adapter": ROOT / "adapters/gemini/README.md",
 }
 
@@ -57,13 +61,33 @@ REQUIRED_SNIPPETS = {
     ],
     ROOT / "adapters/claude/README.md": [
         "## Claude 入口约定",
-        "manifest.md",
-        "## Claude 执行要求",
+        "## 半可执行入口",
+        "python adapters/claude/launch.py",
+    ],
+    ROOT / "adapters/claude/adapter-manifest.json": [
+        "adapter_id",
+        "workflow_id",
+        "launcher",
+    ],
+    ROOT / "adapters/claude/launch.py": [
+        "Claude Adapter Launcher",
+        "read_order",
+        "validation",
     ],
     ROOT / "adapters/codex/README.md": [
         "## Codex 入口约定",
-        "protocol/workflow-schema.md",
-        "## Codex 执行要求",
+        "## 半可执行入口",
+        "python adapters/codex/launch.py",
+    ],
+    ROOT / "adapters/codex/adapter-manifest.json": [
+        "adapter_id",
+        "workflow_id",
+        "launcher",
+    ],
+    ROOT / "adapters/codex/launch.py": [
+        "Codex Adapter Launcher",
+        "read_order",
+        "validation",
     ],
     ROOT / "adapters/gemini/README.md": [
         "## 兼容要求",

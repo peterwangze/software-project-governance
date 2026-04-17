@@ -1,0 +1,37 @@
+{
+  "adapter_id": "codex",
+  "workflow_id": "software-project-governance",
+  "entry_type": "half-executable",
+  "supported_runtime": ["Codex CLI", "Codex-compatible coding agents"],
+  "trigger": [
+    "Before starting a software project task that changes workflow assets",
+    "When implementing, validating, or updating project-governance workflow behavior"
+  ],
+  "inputs": [
+    "workflows/software-project-governance/manifest.md",
+    "protocol/workflow-schema.md",
+    "protocol/plugin-contract.md",
+    "workflows/software-project-governance/rules/lifecycle.md",
+    "workflows/software-project-governance/rules/stage-gates.md",
+    "workflows/software-project-governance/templates/plan-tracker.md",
+    "workflows/software-project-governance/templates/evidence-log.md",
+    "workflows/software-project-governance/templates/decision-log.md",
+    "workflows/software-project-governance/templates/risk-log.md",
+    "workflows/software-project-governance/examples/current-project-sample.md"
+  ],
+  "outputs": [
+    "workflows/software-project-governance/examples/current-project-sample.md",
+    "workflows/software-project-governance/examples/current-project-evidence-log.md",
+    "workflows/software-project-governance/examples/current-project-decision-log.md",
+    "workflows/software-project-governance/examples/current-project-risk-log.md"
+  ],
+  "gate_behavior": {
+    "on_fail": "block-next-stage",
+    "required_action": "update-risk-or-decision-log"
+  },
+  "validation": {
+    "command": "python scripts/verify_workflow.py",
+    "required": true
+  },
+  "launcher": "adapters/codex/launch.py"
+}

@@ -33,6 +33,19 @@
 - 不同阶段的任务推进必须引用 Gate 规则。
 - 校验脚本通过后，才能声称 workflow 资产完整。
 
+## 半可执行入口
+
+当前目录已提供两类可被脚本消费的入口：
+
+- `adapters/codex/adapter-manifest.json`：机器可读的适配器元数据
+- `adapters/codex/launch.py`：输出读取顺序、输出目标、Gate 行为和校验命令的 launcher
+
+可通过以下命令查看入口输出：
+
+```bash
+python adapters/codex/launch.py
+```
+
 ## 后续可扩展方向
 
 - 可进一步提供面向 Codex CLI 的命令式入口描述。

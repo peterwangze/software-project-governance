@@ -34,6 +34,19 @@
 - 发现偏差时必须同步更新风险或决策记录。
 - Gate 未通过时，不得声称进入下一阶段。
 
+## 半可执行入口
+
+当前目录已提供两类可被脚本消费的入口：
+
+- `adapters/claude/adapter-manifest.json`：机器可读的适配器元数据
+- `adapters/claude/launch.py`：输出读取顺序、输出目标、Gate 行为和校验命令的 launcher
+
+可通过以下命令查看入口输出：
+
+```bash
+python adapters/claude/launch.py
+```
+
 ## 后续可扩展方向
 
 - 可进一步沉淀为 Claude skill 描述文件或更贴近 Claude Code 的加载入口。

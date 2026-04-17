@@ -1,0 +1,121 @@
+from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+
+REQUIRED_FILES = {
+    "README": ROOT / "README.md",
+    "Workflow Schema": ROOT / "protocol/workflow-schema.md",
+    "Plugin Contract": ROOT / "protocol/plugin-contract.md",
+    "Workflow Manifest": ROOT / "workflows/software-project-governance/manifest.md",
+    "Company Practices": ROOT / "workflows/software-project-governance/research/company-practices.md",
+    "Lifecycle Rules": ROOT / "workflows/software-project-governance/rules/lifecycle.md",
+    "Stage Gates": ROOT / "workflows/software-project-governance/rules/stage-gates.md",
+    "Plan Tracker": ROOT / "workflows/software-project-governance/templates/plan-tracker.md",
+    "Evidence Template": ROOT / "workflows/software-project-governance/templates/evidence-log.md",
+    "Decision Template": ROOT / "workflows/software-project-governance/templates/decision-log.md",
+    "Risk Template": ROOT / "workflows/software-project-governance/templates/risk-log.md",
+    "Sample Project": ROOT / "workflows/software-project-governance/examples/current-project-sample.md",
+    "Sample Evidence": ROOT / "workflows/software-project-governance/examples/current-project-evidence-log.md",
+    "Sample Decision": ROOT / "workflows/software-project-governance/examples/current-project-decision-log.md",
+    "Sample Risk": ROOT / "workflows/software-project-governance/examples/current-project-risk-log.md",
+    "Claude Adapter": ROOT / "adapters/claude/README.md",
+    "Codex Adapter": ROOT / "adapters/codex/README.md",
+    "Gemini Adapter": ROOT / "adapters/gemini/README.md",
+}
+
+REQUIRED_SNIPPETS = {
+    ROOT / "README.md": [
+        "## 当前目标",
+        "protocol/",
+        "workflows/software-project-governance/",
+    ],
+    ROOT / "protocol/workflow-schema.md": [
+        "## 通用对象模型",
+        "### 1. Workflow",
+        "### 3. Gate",
+    ],
+    ROOT / "protocol/plugin-contract.md": [
+        "## 最小承载单元",
+        "## Skill / Plugin 行为描述要素",
+        "software-project-governance",
+    ],
+    ROOT / "workflows/software-project-governance/manifest.md": [
+        "supported_agents",
+        "Claude",
+        "Codex",
+    ],
+    ROOT / "workflows/software-project-governance/rules/lifecycle.md": [
+        "## 阶段列表",
+        "### 开发",
+        "## 统一要求",
+    ],
+    ROOT / "workflows/software-project-governance/rules/stage-gates.md": [
+        "## G1 - 立项完成",
+        "## G8 - 维护闭环",
+        "## Gate 执行原则",
+    ],
+    ROOT / "adapters/claude/README.md": [
+        "## Claude 入口约定",
+        "manifest.md",
+        "## Claude 执行要求",
+    ],
+    ROOT / "adapters/codex/README.md": [
+        "## Codex 入口约定",
+        "protocol/workflow-schema.md",
+        "## Codex 执行要求",
+    ],
+    ROOT / "adapters/gemini/README.md": [
+        "## 兼容要求",
+        "## 适配原则",
+        "## TODO",
+    ],
+    ROOT / "workflows/software-project-governance/examples/current-project-sample.md": [
+        "## 项目总览",
+        "## 样例跟踪表",
+        "Claude",
+    ],
+}
+
+
+def check_files():
+    failures = []
+    for label, path in REQUIRED_FILES.items():
+        if path.is_file():
+            print(f"[OK] file exists: {label} -> {path.relative_to(ROOT)}")
+        else:
+            failures.append(f"missing file: {label} -> {path.relative_to(ROOT)}")
+            print(f"[FAIL] missing file: {label} -> {path.relative_to(ROOT)}")
+    return failures
+
+
+def check_snippets():
+    failures = []
+    for path, snippets in REQUIRED_SNIPPETS.items():
+        content = path.read_text(encoding="utf-8")
+        for snippet in snippets:
+            if snippet in content:
+                print(f"[OK] snippet found: {path.relative_to(ROOT)} :: {snippet}")
+            else:
+                failures.append(f"missing snippet in {path.relative_to(ROOT)}: {snippet}")
+                print(f"[FAIL] snippet missing: {path.relative_to(ROOT)} :: {snippet}")
+    return failures
+
+
+def main():
+    print("== Workflow Plugin Verification ==")
+    file_failures = check_files()
+    snippet_failures = check_snippets()
+    failures = file_failures + snippet_failures
+
+    if failures:
+        print("== Verification Result: FAILED ==")
+        for failure in failures:
+            print(f" - {failure}")
+        sys.exit(1)
+
+    print("== Verification Result: PASSED ==")
+
+
+if __name__ == "__main__":
+    main()

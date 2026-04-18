@@ -33,8 +33,8 @@ REQUIRED_FILES = {
 REQUIRED_SNIPPETS = {
     ROOT / "README.md": [
         "## 当前目标",
-        "protocol/",
-        "workflows/software-project-governance/",
+        "低侵入优先",
+        "repo-local 探索性接法",
     ],
     ROOT / "protocol/workflow-schema.md": [
         "## 通用对象模型",

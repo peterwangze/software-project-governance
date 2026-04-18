@@ -64,7 +64,7 @@ REQUIRED_SNIPPETS = {
     ROOT / "CLAUDE.md": [
         "software-project-governance",
         ".claude/skills/software-project-governance/SKILL.md",
-        "python scripts/verify_workflow.py",
+        "仓库级约束尽量保持最小化",
     ],
     ROOT / ".claude/skills/software-project-governance/SKILL.md": [
         "# Software Project Governance",

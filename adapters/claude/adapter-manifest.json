@@ -33,5 +33,9 @@
     "command": "python scripts/verify_workflow.py",
     "required": true
   },
+  "native_entry": {
+    "repository_entry": "CLAUDE.md",
+    "skill_path": ".claude/skills/software-project-governance/SKILL.md"
+  },
   "launcher": "adapters/claude/launch.py"
 }

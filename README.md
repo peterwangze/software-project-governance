@@ -30,8 +30,9 @@
 2. 读取 `protocol/workflow-schema.md` 和 `protocol/plugin-contract.md`，理解通用协议。
 3. 读取 `workflows/software-project-governance/rules/` 下的生命周期与 Gate 规则。
 4. 读取 `workflows/software-project-governance/templates/` 下的模板，作为统一事实源。
-5. 根据所用 agent 进入 `adapters/claude/` 或 `adapters/codex/`。
-6. 使用 `workflows/software-project-governance/examples/` 验证流程运行效果。
+5. 在 Claude 场景下，优先通过 `CLAUDE.md` 与 `.claude/skills/software-project-governance/SKILL.md` 加载 workflow；`adapters/claude/launch.py` 作为辅助调试入口。
+6. 在其他 agent 场景下，根据所用 agent 进入 `adapters/claude/` 或 `adapters/codex/`。
+7. 使用 `workflows/software-project-governance/examples/` 验证流程运行效果，并统一写回当前项目样例事实源。
 
 ## 设计原则
 

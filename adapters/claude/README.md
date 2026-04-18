@@ -34,12 +34,19 @@
 - 发现偏差时必须同步更新风险或决策记录。
 - Gate 未通过时，不得声称进入下一阶段。
 
+## 原生 skill 入口
+
+当前仓库已提供 Claude 原生入口：
+
+- `CLAUDE.md`：仓库级默认约束入口
+- `.claude/skills/software-project-governance/SKILL.md`：Claude 当前可加载的 project skill
+
 ## 半可执行入口
 
-当前目录已提供两类可被脚本消费的入口：
+当前目录仍保留两类可被脚本消费的辅助入口：
 
 - `adapters/claude/adapter-manifest.json`：机器可读的适配器元数据
-- `adapters/claude/launch.py`：输出读取顺序、输出目标、Gate 行为和校验命令的 launcher
+- `adapters/claude/launch.py`：输出读取顺序、输出目标、原生 skill 路径、Gate 行为和校验命令的 launcher
 
 可通过以下命令查看入口输出：
 
@@ -47,7 +54,13 @@
 python adapters/claude/launch.py
 ```
 
+## 入口分工
+
+- Claude 正式加载入口：`CLAUDE.md` 与 `.claude/skills/software-project-governance/SKILL.md`
+- Adapter manifest：仓库内部统一 contract
+- Launcher：辅助查看和验证当前 Claude 入口映射
+
 ## 后续可扩展方向
 
-- 可进一步沉淀为 Claude skill 描述文件或更贴近 Claude Code 的加载入口。
-- 可补充专门的 prompt contract，使 Claude 在执行任务时自动绑定本 workflow。
+- 可按需要补充 `.claude/commands/` 下的显式 slash command 入口。
+- 可继续补充更贴近 Claude Code 自动触发场景的 skill 说明。

@@ -12,3 +12,6 @@
 | EVD-006 | DESIGN-003 | 设计 | 命令输出 | Codex 半可执行入口已可运行并输出读取顺序与校验命令 | `adapters/codex/launch.py` | Claude | 2026-04-17 | G3 | 支撑 Codex launcher 落地 |
 | EVD-007 | CI-001 | CI | 命令输出 | 升级后的校验脚本已覆盖 adapter manifest 与 launcher，并验证通过 | `scripts/verify_workflow.py` | Claude | 2026-04-17 | G5 | 支撑 CI 闭环完成 |
 | EVD-008 | MAINT-001 | 维护 | 文档 | 当前项目样例已从展示态升级为持续跟踪态 | `workflows/software-project-governance/examples/current-project-sample.md` | Claude | 2026-04-17 | G8 | 支撑跟踪治理动作 |
+| EVD-009 | ACCEPT-001 | 验收 | 文档 | Claude 仓库级入口 `CLAUDE.md` 已建立，并指向原生 skill | `CLAUDE.md` | Claude | 2026-04-18 | G6 | 支撑 Claude 原生入口可发现 |
+| EVD-010 | ACCEPT-001 | 验收 | 文档 | Claude 原生 project skill 已落地并声明读取顺序、输出规则与验证命令 | `.claude/skills/software-project-governance/SKILL.md` | Claude | 2026-04-18 | G6 | 支撑 Claude skill 可直接消费 workflow |
+| EVD-011 | ACCEPT-001 | 验收 | 命令输出 | 升级后的 Claude launcher 与验证脚本已覆盖原生 skill 入口并验证通过 | `adapters/claude/launch.py` | Claude | 2026-04-18 | G6 | 支撑原生入口与 adapter 闭环 |

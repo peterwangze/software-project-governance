@@ -22,6 +22,9 @@ def main():
     print("gate_behavior:")
     print(f" - on_fail: {manifest['gate_behavior']['on_fail']}")
     print(f" - required_action: {manifest['gate_behavior']['required_action']}")
+    print("native_entry:")
+    print(f" - repository_entry: {manifest['native_entry']['repository_entry']}")
+    print(f" - skill_path: {manifest['native_entry']['skill_path']}")
     print("validation:")
     print(f" - command: {manifest['validation']['command']}")
 

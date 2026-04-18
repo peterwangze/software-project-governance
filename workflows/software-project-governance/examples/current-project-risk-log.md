@@ -8,3 +8,4 @@
 | RISK-002 | 2026-04-17 | Gemini 与国内 agent CLI 兼容细节仍不明确 | 设计 | 缺少统一公开标准 | 可能影响后续扩展节奏 | 中 | 项目负责人 | 打开 | 先抽象协议层和兼容原则，延后具体适配实现 | 2026-04-25 | OPS-001 | 当前不阻塞 Claude/Codex 首版支持 |
 | RISK-003 | 2026-04-17 | Claude / Codex 半可执行入口尚未落地 | 设计 | 当前仅有 README 级入口说明 | 影响 adapter 从文档适配升级到半可执行适配 | 高 | Claude | 缓解完成 | 已实现 `adapter-manifest.json` 与 `launch.py`，并完成校验脚本升级 | 2026-04-17 | DESIGN-002 | 当前主线风险已关闭 |
 | RISK-004 | 2026-04-17 | backlog 颗粒度仍需在执行中持续校准 | 维护 | 当前虽已补齐主线事项，但后续新增事项可能继续膨胀 | 影响计划的可维护性和排序清晰度 | 中 | 项目负责人 | 打开 | 每次新增事项时同步调整 P0/P1/P2 与状态定义 | 2026-04-19 | MAINT-001 | 当前不阻塞主线开发 |
+| RISK-005 | 2026-04-18 | Claude 原生 skill 目录与触发约定未来可能演化 | 验收 | 当前 skill 已按 Claude 当前 project skill 目录落地，但后续官方机制可能继续调整 | 可能导致 skill 入口层需要迁移或补充元数据 | 中 | Claude | 打开 | 保持 `CLAUDE.md` 与 `.claude/skills/software-project-governance/SKILL.md` 为薄封装，继续以 workflow 本体和 adapter contract 为主事实源 | 2026-04-25 | ACCEPT-001 | 当前不阻塞首版可用 |

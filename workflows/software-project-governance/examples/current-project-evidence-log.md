@@ -39,3 +39,4 @@
 | EVD-033 | PLAN-006 | 规划 | 文档 | 已正式执行 onboarding 协议：选择 standard profile、声明 always-on 触发模式、前置阶段 Gate 全部标记 passed-on-entry、补齐 11 个前置阶段的关键决策 | `workflows/software-project-governance/examples/current-project-sample.md` | Claude | 2026-04-20 | G2 | 支撑项目正式应用自身工作流 |
 | EVD-034 | PLAN-006 | 规划 | 用户决策 | 用户确认三个关键决策：先集中主线 A、子工作流首批覆盖立项→调研→架构设计→开发、企业经验首批覆盖 Google+Amazon+华为+字节 | 会话上下文（AskUserQuestion 回答） | Claude | 2026-04-20 | G2 | 支撑产品内容层执行路线正式确认 |
 | EVD-035 | DESIGN-009 | 设计 | 文档 | 已为立项、调研、架构设计、开发四个阶段创建子工作流，每个包含进入条件、活动清单（含交互边界标注）、产出物标准、退出条件和 Gate 映射 | `workflows/software-project-governance/stages/` | Claude | 2026-04-20 | G3 | 支撑子工作流从 0%到首批 4 个阶段可独立执行 |
+| EVD-036 | RESEARCH-002 | 调研 | 文档 | 已将 6 条通用经验升级为 Google/Amazon/华为/字节四家企业差异化实践，每个实践有适用条件、子工作流映射和具体规则 | `workflows/software-project-governance/research/company-practices.md` | Claude | 2026-04-21 | G2 | 支撑企业经验从 20%到可映射的差异化深度 |

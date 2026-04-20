@@ -37,6 +37,10 @@ REQUIRED_FILES = {
     "External Capability Minimum Validation": ROOT / "workflows/software-project-governance/research/external-capability-minimum-validation.md",
     "Domestic Agent CLI Compatibility": ROOT / "workflows/software-project-governance/research/domestic-agent-cli-compatibility.md",
     "Repo-local Termination Note": ROOT / "workflows/software-project-governance/research/repo-local-termination-note.md",
+    "Initiation Sub-workflow": ROOT / "workflows/software-project-governance/stages/initiation/sub-workflow.md",
+    "Research Sub-workflow": ROOT / "workflows/software-project-governance/stages/research/sub-workflow.md",
+    "Architecture Sub-workflow": ROOT / "workflows/software-project-governance/stages/architecture/sub-workflow.md",
+    "Development Sub-workflow": ROOT / "workflows/software-project-governance/stages/development/sub-workflow.md",
 }
 
 REQUIRED_SNIPPETS = {
@@ -108,6 +112,31 @@ REQUIRED_SNIPPETS = {
         "passed-on-entry",
         "G11",
         "pending",
+    ],
+    ROOT / "workflows/software-project-governance/stages/initiation/sub-workflow.md": [
+        "## 进入条件",
+        "## 活动清单",
+        "交互边界",
+        "## 退出条件",
+        "## Gate 映射",
+    ],
+    ROOT / "workflows/software-project-governance/stages/research/sub-workflow.md": [
+        "## 进入条件",
+        "## 活动清单",
+        "## 退出条件",
+        "## Gate 映射",
+    ],
+    ROOT / "workflows/software-project-governance/stages/architecture/sub-workflow.md": [
+        "## 进入条件",
+        "## 活动清单",
+        "## 退出条件",
+        "## Gate 映射",
+    ],
+    ROOT / "workflows/software-project-governance/stages/development/sub-workflow.md": [
+        "## 进入条件",
+        "## 活动清单",
+        "## 退出条件",
+        "## Gate 映射",
     ],
     ROOT / "workflows/software-project-governance/examples/current-project-decision-log.md": [
         "DEC-008",

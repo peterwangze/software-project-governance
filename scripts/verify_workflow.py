@@ -15,6 +15,7 @@ REQUIRED_FILES = {
     "Stage Gates": ROOT / "workflows/software-project-governance/rules/stage-gates.md",
     "Profiles": ROOT / "workflows/software-project-governance/rules/profiles.md",
     "Onboarding": ROOT / "workflows/software-project-governance/rules/onboarding.md",
+    "Interaction Boundary": ROOT / "workflows/software-project-governance/rules/interaction-boundary.md",
     "Plan Tracker": ROOT / "workflows/software-project-governance/templates/plan-tracker.md",
     "Evidence Template": ROOT / "workflows/software-project-governance/templates/evidence-log.md",
     "Decision Template": ROOT / "workflows/software-project-governance/templates/decision-log.md",
@@ -274,6 +275,12 @@ REQUIRED_SNIPPETS = {
         "## 接入流程",
         "## 最小接入路径",
         "passed-on-entry",
+    ],
+    ROOT / "workflows/software-project-governance/rules/interaction-boundary.md": [
+        "## 判定原则",
+        "## 交互类型分类",
+        "## 按阶段的交互密度",
+        "## 批量交互原则",
     ],
     ROOT / "CLAUDE.md": [
         "software-project-governance",

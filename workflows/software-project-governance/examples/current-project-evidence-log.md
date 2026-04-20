@@ -33,3 +33,6 @@
 | EVD-027 | MAINT-006 | 维护 | 文档 | 已形成 headless runner 最小样例，明确 `software-project-governance.headless` 的输入映射、execution mode 与运行态状态收敛规则 | `protocol/headless-runner-sample.md` | Claude | 2026-04-19 | G8 | 支撑外部能力层从契约样例进入自动化运行态样例 |
 | EVD-028 | PLAN-005 | 规划 | 文档 | 已通过 `DEC-018` 和 `DEC-019` 正式重排实施主线优先级，并承认共同抽象 V1 只是骨架而非强基座 | `workflows/software-project-governance/examples/current-project-sample.md` | Claude | 2026-04-20 | G2 | 支撑优先级收口与基座补强启动 |
 | EVD-029 | PLAN-005 | 规划 | 文档 | 已在样例跟踪表新增 `PLAN-005`~`MAINT-007` 七项任务，明确 P0~P3 优先级与执行顺序约束 | `workflows/software-project-governance/examples/current-project-sample.md` | Claude | 2026-04-20 | G2 | 支撑新主线任务正式入账 |
+| EVD-030 | DOC-001 | 文档 | 文档 | README 已重写为用户面入口文档，明确项目愿景（解放用户非思考动作）、快速接入指南（Profile 选择、中途接入、Agent 选择）、三层架构说明、更新指引和设计原则 | `README.md` | Claude | 2026-04-20 | G2 | 支撑 README 从路由式入口升级为完整用户入口文档 |
+| EVD-031 | PLAN-006 | 规划 | 文档 | 已完成新愿景下的产品内容审视，识别子工作流（0%）、Gate 量化（缺失）、企业经验（20%）等核心缺口 | 审视报告（会话上下文） | Claude | 2026-04-20 | G2 | 支撑产品内容层从 P2 提升到 P0 |
+| EVD-032 | PLAN-006 | 规划 | 文档 | 已在样例跟踪表正式新增主线 A 的 6 项产品内容层任务（PLAN-006~DESIGN-012），明确 P0~P2 优先级与依赖关系 | `workflows/software-project-governance/examples/current-project-sample.md` | Claude | 2026-04-20 | G2 | 支撑两条并行主线正式入账 |

@@ -41,9 +41,11 @@ REQUIRED_FILES = {
 
 REQUIRED_SNIPPETS = {
     ROOT / "README.md": [
-        "## 当前目标",
+        "解放使用本工作流的用户非思考动作",
+        "降低 LLM 依赖",
+        "选择 Profile",
+        "中途接入",
         "低侵入优先",
-        "repo-local 探索性接法",
     ],
     ROOT / "workflows/software-project-governance/research/agent-integration-models.md": [
         "## 调研目标",
@@ -90,6 +92,14 @@ REQUIRED_SNIPPETS = {
         "MAINT-006",
         "headless-runner-sample.md",
     ],
+    ROOT / "workflows/software-project-governance/examples/current-project-sample.md": [
+        "主线 A：产品内容层",
+        "主线 B：交付架构层",
+        "PLAN-006",
+        "DESIGN-009",
+        "DESIGN-010",
+        "DESIGN-012",
+    ],
     ROOT / "workflows/software-project-governance/examples/current-project-decision-log.md": [
         "DEC-008",
         "默认产品形态采用三层结构",
@@ -105,6 +115,10 @@ REQUIRED_SNIPPETS = {
         "shared command 先固化统一 contract 再映射实现",
         "DEC-017",
         "headless runner 必须严格映射 shared command 契约",
+        "DEC-020",
+        "解放使用本工作流的用户非思考动作",
+        "DEC-021",
+        "产品内容层与交付架构层并行推进",
     ],
     ROOT / "workflows/software-project-governance/examples/current-project-risk-log.md": [
         "RISK-009",
@@ -123,6 +137,10 @@ REQUIRED_SNIPPETS = {
         "external-command-contract.md",
         "RISK-014",
         "headless-runner-sample.md",
+        "RISK-019",
+        "产品内容层严重不足",
+        "RISK-020",
+        "子工作流设计可能过度追求全面覆盖",
     ],
     ROOT / "workflows/software-project-governance/examples/current-project-evidence-log.md": [
         "EVD-018",
@@ -141,6 +159,10 @@ REQUIRED_SNIPPETS = {
         "software-project-governance.run",
         "EVD-027",
         "software-project-governance.headless",
+        "EVD-031",
+        "产品内容审视",
+        "EVD-032",
+        "主线 A",
     ],
     ROOT / "workflows/software-project-governance/examples/current-project-sample.md": [
         "RESEARCH-001",

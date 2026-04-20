@@ -100,6 +100,15 @@ REQUIRED_SNIPPETS = {
         "DESIGN-010",
         "DESIGN-012",
     ],
+    ROOT / "workflows/software-project-governance/examples/current-project-sample.md": [
+        "## 项目配置",
+        "standard",
+        "always-on",
+        "## Gate 状态跟踪",
+        "passed-on-entry",
+        "G11",
+        "pending",
+    ],
     ROOT / "workflows/software-project-governance/examples/current-project-decision-log.md": [
         "DEC-008",
         "默认产品形态采用三层结构",
@@ -119,6 +128,8 @@ REQUIRED_SNIPPETS = {
         "解放使用本工作流的用户非思考动作",
         "DEC-021",
         "产品内容层与交付架构层并行推进",
+        "DEC-026",
+        "正式执行 onboarding 协议",
     ],
     ROOT / "workflows/software-project-governance/examples/current-project-risk-log.md": [
         "RISK-009",
@@ -141,6 +152,8 @@ REQUIRED_SNIPPETS = {
         "产品内容层严重不足",
         "RISK-020",
         "子工作流设计可能过度追求全面覆盖",
+        "RISK-021",
+        "用自己管自己但执行不到位",
     ],
     ROOT / "workflows/software-project-governance/examples/current-project-evidence-log.md": [
         "EVD-018",

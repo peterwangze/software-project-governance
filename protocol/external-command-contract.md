@@ -52,17 +52,39 @@ command 至少需要产出以下结构化结果：
 
 `software-project-governance.run` 的默认读取顺序为：
 
+### 协议层（必读）
+
 1. `workflows/software-project-governance/manifest.md`
 2. `protocol/workflow-schema.md`
 3. `protocol/plugin-contract.md`
 4. `protocol/external-command-contract.md`
+
+### 规则层（必读）
+
 5. `workflows/software-project-governance/rules/lifecycle.md`
 6. `workflows/software-project-governance/rules/stage-gates.md`
-7. `workflows/software-project-governance/templates/plan-tracker.md`
-8. `workflows/software-project-governance/templates/evidence-log.md`
-9. `workflows/software-project-governance/templates/decision-log.md`
-10. `workflows/software-project-governance/templates/risk-log.md`
-11. `workflows/software-project-governance/examples/current-project-sample.md`
+7. `workflows/software-project-governance/rules/profiles.md`
+8. `workflows/software-project-governance/rules/onboarding.md`
+9. `workflows/software-project-governance/rules/interaction-boundary.md`
+
+### 模板层（必读）
+
+10. `workflows/software-project-governance/templates/plan-tracker.md`
+11. `workflows/software-project-governance/templates/evidence-log.md`
+12. `workflows/software-project-governance/templates/decision-log.md`
+13. `workflows/software-project-governance/templates/risk-log.md`
+
+### 当前阶段子工作流（按 stage 参数加载）
+
+14. `workflows/software-project-governance/stages/<stage>/sub-workflow.md`
+
+### 当前阶段 skill（按需加载）
+
+15. `workflows/software-project-governance/stages/<stage>/` 下的 skill 文件
+
+### 项目实例（必读）
+
+16. `workflows/software-project-governance/examples/current-project-sample.md`
 
 ## write-back targets
 
@@ -161,10 +183,12 @@ python scripts/verify_workflow.py
 ## 与现有协议的关系
 
 - `workflow-schema.md` 负责定义 workflow、stage、gate 的通用对象模型。
-- `plugin-contract.md` 负责定义三层承载模型与集成回答的问题。
-- `external-command-contract.md` 负责把外部能力层里的 shared command 进一步收敛成可执行样例。
+- `plugin-contract.md` 负责定义三层承载模型与集成回答的问题，包含 agent 准入标准、默认推荐判定标准和冲击场景。
+- `external-command-contract.md` 负责把外部能力层里的 shared command 进一步收敛成可执行样例，包含字段边界和验证矩阵。
+- `headless-runner-sample.md` 负责验证 shared command 契约的自动化运行态映射。
+- `interaction-boundary.md` 负责定义用户交互边界，决定哪些活动自动执行、哪些需要用户参与。
 
-三者关系是：上层统一模型 -> 中层接入原则 -> 下层最小 command 契约。
+五者关系是：上层统一模型 → 中层接入原则 → 下层最小 command 契约 → 运行态映射 → 交互边界约束。
 
 ## 当前不做
 

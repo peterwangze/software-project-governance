@@ -236,6 +236,8 @@ REQUIRED_SNIPPETS = {
         "## 默认接入要求",
         "workflow 本体层 + agent 入口投影层 + 外部能力层",
         "software-project-governance",
+        "stages",
+        "interaction-boundary",
     ],
     ROOT / "protocol/external-command-contract.md": [
         "## 目标",
@@ -244,6 +246,9 @@ REQUIRED_SNIPPETS = {
         "## 最小输出",
         "## write-back targets",
         "## replacement boundary",
+        "### 协议层（必读）",
+        "### 当前阶段子工作流（按 stage 参数加载）",
+        "interaction-boundary",
     ],
     ROOT / "protocol/headless-runner-sample.md": [
         "## 目标",
@@ -252,6 +257,7 @@ REQUIRED_SNIPPETS = {
         "## execution mode",
         "dry-run",
         "## 最小返回样例",
+        "### 当前阶段子工作流（按 stage 参数加载）",
     ],
     ROOT / "workflows/software-project-governance/manifest.md": [
         "supported_agents",

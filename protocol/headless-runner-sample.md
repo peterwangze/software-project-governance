@@ -87,18 +87,36 @@ headless runner 至少输出以下结构：
 
 headless runner 继续复用以下顺序：
 
+### 协议层（必读）
+
 1. `workflows/software-project-governance/manifest.md`
 2. `protocol/workflow-schema.md`
 3. `protocol/plugin-contract.md`
 4. `protocol/external-command-contract.md`
 5. `protocol/headless-runner-sample.md`
+
+### 规则层（必读）
+
 6. `workflows/software-project-governance/rules/lifecycle.md`
 7. `workflows/software-project-governance/rules/stage-gates.md`
-8. `workflows/software-project-governance/templates/plan-tracker.md`
-9. `workflows/software-project-governance/templates/evidence-log.md`
-10. `workflows/software-project-governance/templates/decision-log.md`
-11. `workflows/software-project-governance/templates/risk-log.md`
-12. `workflows/software-project-governance/examples/current-project-sample.md`
+8. `workflows/software-project-governance/rules/profiles.md`
+9. `workflows/software-project-governance/rules/onboarding.md`
+10. `workflows/software-project-governance/rules/interaction-boundary.md`
+
+### 模板层（必读）
+
+11. `workflows/software-project-governance/templates/plan-tracker.md`
+12. `workflows/software-project-governance/templates/evidence-log.md`
+13. `workflows/software-project-governance/templates/decision-log.md`
+14. `workflows/software-project-governance/templates/risk-log.md`
+
+### 当前阶段子工作流（按 stage 参数加载）
+
+15. `workflows/software-project-governance/stages/<stage>/sub-workflow.md`
+
+### 项目实例（必读）
+
+16. `workflows/software-project-governance/examples/current-project-sample.md`
 
 ## gate behavior
 

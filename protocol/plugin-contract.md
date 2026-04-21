@@ -16,13 +16,17 @@
    - 记录来源于大型软件公司的项目管理经验，以及对主流 agent 集成方式的调研结论。
 3. `rules`
    - 把经验转成生命周期、Gate、留痕和阻断规则。
-4. `templates`
+4. `stages`
+   - 每个阶段的子工作流定义，包含进入条件、活动清单、产出物标准、退出条件和 Gate 映射。
+5. `stage skills`
+   - 每个阶段的具体事务 skill/script，有触发条件、输入输出和独立执行能力。
+6. `templates`
    - 提供计划、证据、决策、风险等记录模板。
-5. `examples`
+7. `examples`
    - 提供真实样例，证明 workflow 可运行。
-6. `integration contract`
+8. `integration contract`
    - 回答不同 agent 如何触发、加载、回写和验证 workflow。
-7. `validation`
+9. `validation`
    - 提供校验脚本或校验规则，验证资产完整性与一致性。
 
 ## 三层承载模型
@@ -35,7 +39,9 @@
 
 - `manifest`
 - `research`
-- `rules`
+- `rules`（含 lifecycle、stage-gates、profiles、onboarding、interaction-boundary）
+- `stages`（每个阶段的 sub-workflow.md）
+- `stage skills`（每个阶段的 skill/script 文件）
 - `templates`
 - `examples`
 - `validation`
@@ -154,10 +160,15 @@
 
 ## 当前建议目录布局
 
-当前目录布局服务于“本体层优先、投影层最薄、外部能力层后续扩展”的原则：
+当前目录布局服务于”本体层优先、投影层最薄、外部能力层后续扩展”的原则：
 
 - `protocol/`：通用协议
 - `workflows/<workflow-id>/`：workflow 本体内容
+  - `rules/`：生命周期、Gate、Profile、onboarding、交互边界
+  - `stages/`：每个阶段的子工作流和 skill/script
+  - `templates/`：计划、证据、决策、风险模板
+  - `examples/`：真实项目样例和治理记录
+  - `research/`：企业经验、产品形态、兼容抽象等调研结论
 - `adapters/<agent>/`：探索性 agent 投影样例、调试入口或对比基线
 - `scripts/`：校验脚本
 

@@ -286,6 +286,8 @@ REQUIRED_SNIPPETS = {
         "## 交互类型分类",
         "## 按阶段的交互密度",
         "## 批量交互原则",
+        "## 执行连续性约束",
+        "实时闭环规则",
     ],
     ROOT / "CLAUDE.md": [
         "software-project-governance",

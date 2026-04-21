@@ -15,15 +15,22 @@
 2. 读取协议层：
    - `protocol/workflow-schema.md`
    - `protocol/plugin-contract.md`
+   - `protocol/external-command-contract.md`
 3. 读取规则层：
    - `workflows/software-project-governance/rules/lifecycle.md`
    - `workflows/software-project-governance/rules/stage-gates.md`
+   - `workflows/software-project-governance/rules/profiles.md`
+   - `workflows/software-project-governance/rules/onboarding.md`
+   - `workflows/software-project-governance/rules/interaction-boundary.md`
 4. 读取模板层：
    - `workflows/software-project-governance/templates/plan-tracker.md`
    - `workflows/software-project-governance/templates/evidence-log.md`
    - `workflows/software-project-governance/templates/decision-log.md`
    - `workflows/software-project-governance/templates/risk-log.md`
-5. 读取样例：
+5. 按当前阶段读取子工作流和 skill：
+   - `workflows/software-project-governance/stages/<stage>/sub-workflow.md`
+   - `workflows/software-project-governance/stages/<stage>/` 下的 skill 文件
+6. 读取样例：
    - `workflows/software-project-governance/examples/current-project-sample.md`
 
 ## Codex 执行要求

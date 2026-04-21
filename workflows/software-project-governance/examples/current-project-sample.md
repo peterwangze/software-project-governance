@@ -38,7 +38,7 @@
 
 | 项目 | 当前阶段 | 总任务数 | 已完成 | 阻塞中 | 关键风险数 | 最近 Gate 结论 | 最近复盘日期 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 项目管理工作流插件 | 维护（并行活跃：规划） | 35 | 25 | 0 | 6 | G11 通过 | 2026-04-21 |
+| 项目管理工作流插件 | 维护（并行活跃：规划） | 35 | 26 | 0 | 6 | G11 通过 | 2026-04-21 |
 
 
 ## 样例跟踪表
@@ -95,5 +95,5 @@
 | CI-002 | CI | 升级校验脚本覆盖基座级约束 | 让 `verify_workflow.py` 校验新增的准入标准、优先级顺序与冲击场景关键片段 | 补强后的协议与样例 | 升级后的校验脚本 | Claude | 项目负责人 | 已完成 | P0 | 2026-04-24 | 2026-04-25 | 2026-04-21 | G5 | 校验脚本覆盖基座补强后的所有新关键片段 | `scripts/verify_workflow.py` | 与 DESIGN-006 同步闭环 | 与 DESIGN-006 同步闭环 | 基座补强的防护网 |
 | DESIGN-007 | 设计 | Claude 正式默认接法方案与最小实现样例 | 把"Claude 默认优先 personal skill / plugin skill / MCP"从 README 摘要正式收敛为决策+样例+验收标准 | 补强后的共同抽象基座、调研结论 | Claude 正式接法方案与接入说明 | Claude | 项目负责人 | 已完成 | P1 | 2026-04-25 | 2026-04-28 | 2026-04-21 | G3 | 有正式决策、有接入说明或最小样例、有验收标准、显式说明为什么优于 repo-local | `.claude/skills/software-project-governance/SKILL.md` | 准入审计 6 条标准全 PASS（3 直接 PASS + 3 修复后 PASS） | SKILL.md 补齐 replacement_boundary 声明 | Claude 是目标 agent 优先级最高的第一顺位 |
 | ACCEPT-002 | 验收 | Claude 正式默认接法验收 | 验证 Claude 正式接法是否严格遵守共同抽象和 write-back 边界 | Claude 正式接法方案 | 验收结论与证据 | Claude | 项目负责人 | 已完成 | P1 | 2026-04-28 | 2026-04-29 | 2026-04-21 | G6 | 正式接法通过基座准入标准、校验脚本通过、决策/风险/证据同步补齐 | 准入审计报告（会话上下文） | 准入审计 6 条标准全 PASS；校验脚本通过 | 与 DESIGN-007 同步闭环 | Claude 验收闭环后才进入 Codex |
-| DESIGN-008 | 设计 | Codex 正式接法 | 基于 Claude 验收后的强基座，验证共同抽象跨 agent 可复用 | Claude 验收结论、共同抽象基座 | Codex 接法方案 | Claude | 项目负责人 | 未开始 | P2 | 2026-04-29 | 2026-05-02 | | G3 | 复用相同基座与验证矩阵，不复制第二套协议 | 待补 | 若 Claude 阶段证明某些准入规则不足，应先回补基座 | Codex 的目标是验证跨 agent 可复用 | 第二顺位目标 agent |
+| DESIGN-008 | 设计 | Codex 正式接法 | 基于 Claude 验收后的强基座，验证共同抽象跨 agent 可复用 | Claude 验收结论、共同抽象基座 | Codex 接法方案 | Claude | 项目负责人 | 已完成 | P2 | 2026-04-29 | 2026-05-02 | 2026-04-21 | G3 | 复用相同基座与验证矩阵，不复制第二套协议 | `adapters/codex/adapter-manifest.json`, `adapters/codex/README.md` | Codex manifest 已更新为新 read_order（含 profiles、onboarding、interaction-boundary）和 replacement_boundary | 共同抽象基座验证跨 agent 可复用 | 第二顺位目标 agent |
 | MAINT-007 | 维护 | Gemini / 国内 agent CLI 在强基座上的最小验证 | 等 Claude/Codex 收敛后，再进入第三优先级 | Claude/Codex 验收结论、`OPS-001`、`MAINT-003` 兼容预研 | Gemini / 国内 agent CLI 最小验证结论 | 项目负责人 | Claude | 未开始 | P3 | 2026-05-02 | 2026-05-08 | | G8 | 在强基座上验证 Gemini / 国内 agent CLI 是否可复用共同抽象 | 待补 | 必须等前序 agent 验收通过后才能启动 | 不因已有研究文档而提前占用执行优先级 | 第三顺位，研究结论已储备但执行后置 |

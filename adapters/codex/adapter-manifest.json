@@ -11,8 +11,12 @@
     "workflows/software-project-governance/manifest.md",
     "protocol/workflow-schema.md",
     "protocol/plugin-contract.md",
+    "protocol/external-command-contract.md",
     "workflows/software-project-governance/rules/lifecycle.md",
     "workflows/software-project-governance/rules/stage-gates.md",
+    "workflows/software-project-governance/rules/profiles.md",
+    "workflows/software-project-governance/rules/onboarding.md",
+    "workflows/software-project-governance/rules/interaction-boundary.md",
     "workflows/software-project-governance/templates/plan-tracker.md",
     "workflows/software-project-governance/templates/evidence-log.md",
     "workflows/software-project-governance/templates/decision-log.md",
@@ -32,6 +36,16 @@
   "validation": {
     "command": "python scripts/verify_workflow.py",
     "required": true
+  },
+  "replacement_boundary": {
+    "keep": [
+      "protocol/",
+      "workflows/software-project-governance/",
+      "scripts/verify_workflow.py"
+    ],
+    "remove": [
+      "adapters/codex/"
+    ]
   },
   "launcher": "adapters/codex/launch.py"
 }

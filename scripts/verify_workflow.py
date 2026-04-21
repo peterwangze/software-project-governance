@@ -42,6 +42,11 @@ REQUIRED_FILES = {
     "Research Sub-workflow": ROOT / "workflows/software-project-governance/stages/research/sub-workflow.md",
     "Architecture Sub-workflow": ROOT / "workflows/software-project-governance/stages/architecture/sub-workflow.md",
     "Development Sub-workflow": ROOT / "workflows/software-project-governance/stages/development/sub-workflow.md",
+    "Requirement Clarification Skill": ROOT / "workflows/software-project-governance/stages/initiation/requirement-clarification.md",
+    "Tech Review Checklist Skill": ROOT / "workflows/software-project-governance/stages/architecture/tech-review-checklist.md",
+    "Code Review Standard Skill": ROOT / "workflows/software-project-governance/stages/development/code-review-standard.md",
+    "Release Checklist Skill": ROOT / "workflows/software-project-governance/stages/release/release-checklist.md",
+    "Retro Meeting Template Skill": ROOT / "workflows/software-project-governance/stages/maintenance/retro-meeting-template.md",
 }
 
 REQUIRED_SNIPPETS = {
@@ -336,6 +341,41 @@ REQUIRED_SNIPPETS = {
         "## 项目总览",
         "## 样例跟踪表",
         "Claude",
+    ],
+    ROOT / "workflows/software-project-governance/stages/initiation/requirement-clarification.md": [
+        "## 触发条件",
+        "5 问法",
+        "IN/OUT 范围表",
+        "## 独立使用说明",
+        "## 子工作流映射",
+    ],
+    ROOT / "workflows/software-project-governance/stages/architecture/tech-review-checklist.md": [
+        "## 触发条件",
+        "蓝军挑战",
+        "评审结论",
+        "## 独立使用说明",
+        "## 子工作流映射",
+    ],
+    ROOT / "workflows/software-project-governance/stages/development/code-review-standard.md": [
+        "## 触发条件",
+        "P0 阻塞",
+        "P1 关键",
+        "## 独立使用说明",
+        "## 子工作流映射",
+    ],
+    ROOT / "workflows/software-project-governance/stages/release/release-checklist.md": [
+        "## 触发条件",
+        "回滚方案验证",
+        "发布决策",
+        "## 独立使用说明",
+        "## 子工作流映射",
+    ],
+    ROOT / "workflows/software-project-governance/stages/maintenance/retro-meeting-template.md": [
+        "## 触发条件",
+        "5-Why",
+        "经验沉淀",
+        "## 独立使用说明",
+        "## 子工作流映射",
     ],
 }
 

@@ -38,7 +38,7 @@
 
 | 项目 | 当前阶段 | 总任务数 | 已完成 | 阻塞中 | 关键风险数 | 最近 Gate 结论 | 最近复盘日期 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 项目管理工作流插件 | 维护（并行活跃：规划） | 35 | 23 | 0 | 6 | G11 通过 | 2026-04-21 |
+| 项目管理工作流插件 | 维护（并行活跃：规划） | 35 | 24 | 0 | 6 | G11 通过 | 2026-04-21 |
 
 
 ## 样例跟踪表
@@ -92,7 +92,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | PLAN-005 | 规划 | 共同抽象基座补强方案 | 把 V1 骨架从"有结构"升级为"可承载长期演进的强基座" | 当前三层协议、shared command contract、headless runner 样例 | 基座补强方案与准入标准文档 | Claude | 项目负责人 | 已完成 | P0 | 2026-04-20 | 2026-04-22 | 2026-04-21 | G2 | 明确准入问题、默认推荐判定标准、优先级规则与冲击场景 | `protocol/plugin-contract.md` | 准入标准、冲击场景、validation matrix 已在前期补入；本轮补齐 read_order（子工作流+skill+交互边界）和跨协议一致性引用 | 与 DESIGN-006 合并执行 | 作为 P0 最高优先级，后续所有 agent 适配的前置依赖 |
 | DESIGN-006 | 设计 | 补强 integration contract 与 validation matrix | 在 `plugin-contract`、`external-command-contract`、`headless-runner-sample` 中补入准入标准、required/optional 边界、失败语义与冲击场景 | `PLAN-005` 方案、现有协议 | 补强后的协议文件 | Claude | 项目负责人 | 已完成 | P0 | 2026-04-22 | 2026-04-24 | 2026-04-21 | G3 | 协议补入准入标准、validation matrix 与 shock scenarios，且三者口径一致 | `protocol/external-command-contract.md`, `protocol/headless-runner-sample.md`, `protocol/plugin-contract.md` | V1 骨架已在前期多次补强（字段边界、失败语义、准入标准），本轮补齐 read_order 分层结构和跨协议一致性引用 | 与 PLAN-005 同步闭环 | 基座补强的核心设计任务 |
-| CI-002 | CI | 升级校验脚本覆盖基座级约束 | 让 `verify_workflow.py` 校验新增的准入标准、优先级顺序与冲击场景关键片段 | 补强后的协议与样例 | 升级后的校验脚本 | Claude | 项目负责人 | 未开始 | P0 | 2026-04-24 | 2026-04-25 | | G5 | 校验脚本覆盖基座补强后的所有新关键片段 | 待补 | 校验脚本若不跟进，基座补强没有防护网 | 必须与 DESIGN-006 同步闭环 | 基座补强的防护网 |
+| CI-002 | CI | 升级校验脚本覆盖基座级约束 | 让 `verify_workflow.py` 校验新增的准入标准、优先级顺序与冲击场景关键片段 | 补强后的协议与样例 | 升级后的校验脚本 | Claude | 项目负责人 | 已完成 | P0 | 2026-04-24 | 2026-04-25 | 2026-04-21 | G5 | 校验脚本覆盖基座补强后的所有新关键片段 | `scripts/verify_workflow.py` | 与 DESIGN-006 同步闭环 | 与 DESIGN-006 同步闭环 | 基座补强的防护网 |
 | DESIGN-007 | 设计 | Claude 正式默认接法方案与最小实现样例 | 把"Claude 默认优先 personal skill / plugin skill / MCP"从 README 摘要正式收敛为决策+样例+验收标准 | 补强后的共同抽象基座、调研结论 | Claude 正式接法方案与接入说明 | Claude | 项目负责人 | 未开始 | P1 | 2026-04-25 | 2026-04-28 | | G3 | 有正式决策、有接入说明或最小样例、有验收标准、显式说明为什么优于 repo-local | 待补 | 不能把 README 摘要误当成正式闭环 | 必须等 PLAN-005/DESIGN-006/CI-002 闭环后再启动 | Claude 是目标 agent 优先级最高的第一顺位 |
 | ACCEPT-002 | 验收 | Claude 正式默认接法验收 | 验证 Claude 正式接法是否严格遵守共同抽象和 write-back 边界 | Claude 正式接法方案 | 验收结论与证据 | Claude | 项目负责人 | 未开始 | P1 | 2026-04-28 | 2026-04-29 | | G6 | 正式接法通过基座准入标准、校验脚本通过、决策/风险/证据同步补齐 | 待补 | 若验收不通过则先回补基座 | 验收不通过不推进 Codex | Claude 验收闭环后才进入 Codex |
 | DESIGN-008 | 设计 | Codex 正式接法 | 基于 Claude 验收后的强基座，验证共同抽象跨 agent 可复用 | Claude 验收结论、共同抽象基座 | Codex 接法方案 | Claude | 项目负责人 | 未开始 | P2 | 2026-04-29 | 2026-05-02 | | G3 | 复用相同基座与验证矩阵，不复制第二套协议 | 待补 | 若 Claude 阶段证明某些准入规则不足，应先回补基座 | Codex 的目标是验证跨 agent 可复用 | 第二顺位目标 agent |

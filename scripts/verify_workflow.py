@@ -238,6 +238,9 @@ REQUIRED_SNIPPETS = {
         "software-project-governance",
         "stages",
         "interaction-boundary",
+        "Agent 适配准入标准",
+        "冲击场景",
+        "SC-1",
     ],
     ROOT / "protocol/external-command-contract.md": [
         "## 目标",
@@ -249,6 +252,8 @@ REQUIRED_SNIPPETS = {
         "### 协议层（必读）",
         "### 当前阶段子工作流（按 stage 参数加载）",
         "interaction-boundary",
+        "Validation Matrix",
+        "失败与阻断语义",
     ],
     ROOT / "protocol/headless-runner-sample.md": [
         "## 目标",

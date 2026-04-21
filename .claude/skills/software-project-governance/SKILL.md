@@ -152,3 +152,26 @@ python scripts/verify_workflow.py
 ```bash
 python adapters/claude/launch.py
 ```
+
+## Replacement boundary
+
+当用户替换或移除 Claude 时，遵循以下边界：
+
+### 必须保留（workflow 本体层）
+
+- `protocol/`（通用协议）
+- `workflows/software-project-governance/`（manifest、rules、stages、templates、examples、research）
+- `scripts/verify_workflow.py`（校验脚本）
+
+### 可以移除（Claude 投影层）
+
+- `CLAUDE.md`（仓库级指针）
+- `.claude/skills/software-project-governance/SKILL.md`（本文件）
+- `adapters/claude/`（Claude adapter 目录）
+
+### 替换为其他 agent 时
+
+1. 移除上述"可以移除"的文件
+2. 按 `adapters/<new-agent>/` 的 README 建立新投影层入口
+3. workflow 本体层不需要任何修改
+4. 统一事实源（`examples/` 四类文件）不受影响

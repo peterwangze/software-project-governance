@@ -42,3 +42,4 @@
 | EVD-036 | RESEARCH-002 | 调研 | 文档 | 已将 6 条通用经验升级为 Google/Amazon/华为/字节四家企业差异化实践，每个实践有适用条件、子工作流映射和具体规则 | `workflows/software-project-governance/research/company-practices.md` | Claude | 2026-04-21 | G2 | 支撑企业经验从 20%到可映射的差异化深度 |
 | EVD-037 | DESIGN-012 | 设计 | 文档 | 已为立项、架构设计、开发、发布、维护 5 个阶段创建首批 skill 定义：需求澄清 checklist、技术评审表、Code Review 规范、发布 checklist、回顾会议模板 | `workflows/software-project-governance/stages/` | Claude | 2026-04-21 | G3 | 支撑第三层 skill/script 从 0%到首批 5 个可独立执行 |
 | EVD-038 | PLAN-006 | 规划 | 文档 | 主线 A 6 项任务全部完成，产品内容层从 0%到具备子工作流、Gate 量化、企业经验、交互边界和首批 skill | `workflows/software-project-governance/examples/current-project-sample.md` | Claude | 2026-04-21 | G2 | 支撑产品内容层首批闭环 |
+| EVD-039 | PLAN-006 | 维护 | 文档 | G11 维护闭环正式复盘已完成，使用自身回顾会议模板，包含目标回顾、结果评估、根因分析、经验沉淀和改进计划 | 会话上下文（G11 复盘） | Claude | 2026-04-21 | G11 | 支撑 G11 从 passed 升级为 passed（复盘完成） |

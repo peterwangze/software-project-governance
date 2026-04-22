@@ -66,11 +66,10 @@ REQUIRED_FILES = {
 
 REQUIRED_SNIPPETS = {
     ROOT / "README.md": [
-        "解放使用本工作流的用户非思考动作",
-        "降低 LLM 依赖",
-        "选择 Profile",
-        "中途接入",
-        "低侵入优先",
+        "让 coding agent 帮你看护项目质量",
+        "## 安装",
+        "## 5 分钟开始",
+        "## 内部文档",
     ],
     ROOT / "workflows/software-project-governance/research/agent-integration-models.md": [
         "## 调研目标",

@@ -1,151 +1,134 @@
-# Software Project Governance Workflow
+# Software Project Governance
 
-> **解放使用本工作流的用户非思考动作。** 让用户专注于对产品、需求、特性和竞争力的思考，其他所有的过程动作和实现由工作流完整看护。
+> 让 coding agent 帮你看护项目质量——你只负责思考，过程管理全自动。
 
-## 项目愿景
+## 一句话说明
 
-本项目的最终目标是：**用户只需要思考，不需要做过程管理。**
+你的 AI 编程助手（Claude / Codex / 其他）安装这个工作流后，会自动帮你做这些事：
 
-具体来说：
+- 每完成一个任务，**自动记录证据**（改了什么、为什么改、怎么验证的）
+- 每推进一个阶段，**自动检查 Gate**（有没有遗漏、质量达标没）
+- 遇到方向选择时，**帮你列出选项和后果**，你做判断
+- 风险、决策、计划变更——**全程留痕，可复盘**
 
-- **用户专注思考**：产品方向、需求优先级、特性竞争力、技术取舍——这些需要人做判断的事，交给用户。
-- **工作流看护过程**：阶段推进、Gate 检查、证据收集、决策留痕、风险跟踪、记录维护——这些不需要创造力的机械动作，全部由工作流自动完成。
-- **过程可信**：所有治理记录可追溯、可复盘、不可伪造。
-- **质量可靠**：Gate 门禁确保每个阶段达到质量标准才允许推进。
-- **降低 LLM 依赖**：工作流不依赖某个具体 LLM 的能力，用户可以自由选择 Claude、Codex、Gemini 或国内 agent CLI，工作流本体不受影响。
+你不需要手动维护项目文档、不需要记住"上次做到哪了"、不需要提醒自己"该做 code review 了"。
 
-## 快速接入
+## 安装
 
-### 1. 选择 Profile
+### Claude Code
 
-根据项目规模选择治理强度：
+```bash
+# 方式一：通过插件市场安装（推荐）
+/plugin install peterwangze/software-project-governance
 
-| Profile | 适用场景 | 阶段覆盖 | Gate 强度 |
-|---------|---------|---------|----------|
-| **lightweight** | 个人项目、探索性项目、MVP | 5 个核心阶段 | 合并 Gate，最小记录 |
-| **standard** | 团队项目、正式产品 | 全部 11 个阶段 | 完整 Gate，支持有条件通过 |
-| **strict** | 大型项目、合规项目、关键系统 | 全部 11 个阶段 | 增强 Gate，不允许有条件通过 |
+# 方式二：克隆到本地后安装
+git clone https://github.com/peterwangze/software-project-governance.git
+cd your-project
+/plugin install /path/to/software-project-governance
+```
 
-详见 [`rules/profiles.md`](workflows/software-project-governance/rules/profiles.md)。
+安装后，工作流会在每次会话自动加载。你不需要做任何额外配置。
 
-### 2. 中途接入
+### Codex
 
-项目已在进行中？不需要从立项开始。按以下步骤接入：
+```bash
+# 在项目根目录安装
+git clone https://github.com/peterwangze/software-project-governance.git
+# Codex 会自动识别 .codex-plugin/plugin.json
+```
 
-1. 声明项目当前所处阶段（对照 [`rules/lifecycle.md`](workflows/software-project-governance/rules/lifecycle.md)）
-2. 选择 Profile
-3. 补齐当前阶段的最小记录
-4. 前置阶段标记为 `passed-on-entry`，不需要补齐全部证据
-5. 开始工作
+### 手动使用（任意 agent）
 
-详见 [`rules/onboarding.md`](workflows/software-project-governance/rules/onboarding.md)。
+将 `skills/software-project-governance/SKILL.md` 的内容复制到你的 agent 配置中即可。
 
-### 3. 选择 Agent
+## 5 分钟开始
 
-本工作流支持多种 coding agent，不绑定任何一个：
+### 新项目
 
-| Agent | 默认接入方式 | 状态 |
-|-------|------------|------|
-| **Claude** | plugin marketplace / plugin skill / MCP | 插件打包完成 |
-| **Codex** | plugin marketplace / skill / MCP | 插件打包完成 |
-| **Gemini** | MCP / custom commands / headless runner | 兼容预研完成 |
-| **国内 agent CLI** | external runner / MCP / 最薄投影 | 兼容抽象完成 |
+1. 告诉你的 agent："我要开始一个新项目，项目目标是 XXX"
+2. 工作流自动从**立项阶段**开始，引导你明确目标、范围和关键决策
+3. 每推进一个阶段，agent 会自动检查是否达到质量标准
 
-接入方式不影响工作流本体。替换 agent 时，治理记录不受影响。
+### 已在进行的项目
 
-详见 [`protocol/plugin-contract.md`](protocol/plugin-contract.md)。
+1. 告诉你的 agent："我的项目目前在开发阶段，想接入治理工作流"
+2. 工作流会要求你补充最少的信息（当前状态、关键决策、已知风险）
+3. 之前的阶段自动标记为"已通过"，不需要补齐历史记录
+4. 立即从当前阶段开始治理
 
-### 4. 验证
+### 只用某个功能
+
+不需要加载全流程。你可以直接告诉 agent：
+
+- "帮我做一次技术方案评审" → 加载技术评审 checklist
+- "帮我做 Code Review" → 加载 Code Review 规范
+- "帮我做发布 checklist" → 加载发布检查清单
+- "帮我做项目复盘" → 加载回顾会议模板
+
+## 项目规模选择
+
+安装后第一次使用，工作流会问你的项目规模：
+
+| 选择 | 适合 | 工作流做什么 | 你需要做什么 |
+|------|------|------------|------------|
+| **轻量** | 个人项目、MVP、探索 | 只跟踪核心阶段，最少记录 | 几乎不管，只在关键节点确认 |
+| **标准** | 团队项目、正式产品 | 全流程 11 阶段，完整记录 | 方向决策和质量审核 |
+| **严格** | 大型项目、合规系统 | 全流程 + 双重证据 + 不允许跳步 | 每个决策审核 + 审批 |
+
+不确定选哪个？先选"标准"，随时可以调整。
+
+## 日常体验
+
+### 工作流自动做的事（不打扰你）
+
+- 记录每个任务完成后的证据
+- 检查 Gate 是否通过
+- 跟踪风险状态变化
+- 更新项目状态面板
+- 在阶段转换时提醒你补齐必要记录
+
+### 需要你做的事
+
+- **方向决策**：多条路线时选择走哪条
+- **需求澄清**：确认你到底要做什么
+- **质量审核**：确认产出物是否满足要求
+
+### 你不会被打扰的事
+
+- 记录更新、文件编辑、状态跟踪——全自动
+- Gate 通过时不会打断你
+- 两个紧密关联的任务之间不会停下来请示
+
+## 覆盖的项目阶段
+
+```
+立项 → 调研 → 技术选型 → 环境搭建 → 架构设计 → 开发 → 测试 → CI/CD → 发布 → 运营 → 维护
+```
+
+每个阶段有独立的子工作流，包含：进入条件、活动清单、产出标准、退出检查。你可以从任意阶段开始。
+
+## 验证
+
+确认工作流资产完整：
 
 ```bash
 python scripts/verify_workflow.py
 ```
 
-校验工作流资产完整性与一致性。
+查看项目当前状态：
 
-## 生命周期
-
-工作流覆盖软件项目从立项到维护的 11 个阶段：
-
-```
-立项 → 调研 → 技术选型 → 环境搭建 → 架构设计 → 开发实现 → 测试 → 防护网与CI/CD → 版本发布 → 运营 → 维护
+```bash
+python scripts/verify_workflow.py status
 ```
 
-每个阶段有独立的子工作流，包含进入条件、活动清单、产出物标准和退出条件。用户可以按需使用任意阶段，不强制加载全流程。
+## 内部文档
 
-详见 [`rules/lifecycle.md`](workflows/software-project-governance/rules/lifecycle.md) 和 [`rules/stage-gates.md`](workflows/software-project-governance/rules/stage-gates.md)。
+以下文档供工作流开发者和贡献者参考，普通用户不需要阅读：
 
-## 三层架构
-
-```
-┌─────────────────────────────────┐
-│  项目整体治理层                    │  全流程目标看护、阶段推进、全局 Gate
-├─────────────────────────────────┤
-│  阶段子工作流层                    │  每阶段独立进入条件、活动、产出、退出条件
-├─────────────────────────────────┤
-│  具体 skill / script 层           │  单个操作工具（需求澄清、技术评审等）
-└─────────────────────────────────┘
-```
-
-用户可以：
-- 加载整体治理层 → 获得全流程看护能力
-- 只加载某个阶段 → 获得该阶段的独立执行能力
-- 只加载某个 skill → 获得该具体事务的执行能力
-
-## 仓库结构
-
-```
-protocol/                    通用协议层（schema、contract、shared command）
-workflows/
-  software-project-governance/
-    manifest.md              工作流元信息
-    rules/                   生命周期、Gate、Profile、中途接入规则
-    templates/               计划、证据、决策、风险模板
-    examples/                当前项目样例数据（治理记录事实源）
-    research/                企业经验调研与产品形态研究
-adapters/                    Agent 投影样例（探索性，不代表默认产品形态）
-scripts/                     校验脚本
-```
-
-治理记录统一写入 `workflows/software-project-governance/examples/`，不同 agent 共享同一事实源。
-
-## 如何更新工作流
-
-### 修改规则
-
-1. 修改 `rules/` 或 `protocol/` 下的对应文件
-2. 更新 `scripts/verify_workflow.py` 中的校验片段
-3. 运行 `python scripts/verify_workflow.py` 确认通过
-4. 更新样例治理记录（决策、证据、风险）
-
-### 新增阶段子工作流
-
-1. 在 `workflows/software-project-governance/stages/<stage-id>/` 下创建 `sub-workflow.md`
-2. 定义进入条件、活动清单、产出物标准、退出条件
-3. 更新 `rules/lifecycle.md` 和 `rules/stage-gates.md` 中的对应引用
-4. 更新校验脚本和样例记录
-
-### 新增 Agent 适配
-
-1. 先确认该 agent 能通过 [`protocol/plugin-contract.md`](protocol/plugin-contract.md) 中的 6 项准入问题
-2. 优先选择外部能力层接入（MCP、shared command、headless runner）
-3. 确保治理记录写入统一事实源，不维护第二套记录
-4. 更新校验脚本覆盖新入口
-
-## 设计原则
-
-1. **低侵入优先**：不把工作流本体复制进用户仓库
-2. **可替换**：替换或移除 agent 时不影响工作流本体和治理记录
-3. **单一事实源**：不同 agent 共享同一套治理记录，不维护多版本
-4. **先调研后实现**：产品形态以调研结论为依据，不拍脑袋
-5. **LLM 无关**：工作流本体不依赖某个具体 LLM 的能力或 API
-
-## 关键事实源
-
-以下文件是长期事实源，README 只做导航，不承载完整设计：
-
-- [`protocol/plugin-contract.md`](protocol/plugin-contract.md) — 三层承载模型、准入标准、冲击场景
-- [`protocol/external-command-contract.md`](protocol/external-command-contract.md) — shared command 契约
-- [`protocol/headless-runner-sample.md`](protocol/headless-runner-sample.md) — headless runner 运行态样例
-- [`workflows/software-project-governance/research/default-product-shape.md`](workflows/software-project-governance/research/default-product-shape.md) — 默认产品形态
-- [`workflows/software-project-governance/examples/current-project-sample.md`](workflows/software-project-governance/examples/current-project-sample.md) — 当前项目样例
+- [协议层定义](protocol/plugin-contract.md)
+- [生命周期规则](workflows/software-project-governance/rules/lifecycle.md)
+- [Gate 门禁规则](workflows/software-project-governance/rules/stage-gates.md)
+- [Profile 配置](workflows/software-project-governance/rules/profiles.md)
+- [中途接入协议](workflows/software-project-governance/rules/onboarding.md)
+- [企业实践经验](workflows/software-project-governance/research/company-practices.md)
+- [产品形态设计](workflows/software-project-governance/research/default-product-shape.md)

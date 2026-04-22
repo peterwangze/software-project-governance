@@ -37,9 +37,31 @@ git clone https://github.com/peterwangze/software-project-governance.git
 # Codex 会自动识别 .codex-plugin/plugin.json
 ```
 
-### 手动使用（任意 agent）
+### 其他 agent（Gemini、国内 agent CLI 等）
 
-将 `skills/software-project-governance/SKILL.md` 的内容复制到你的 agent 配置中即可。
+1. 克隆本仓库到本地
+2. 将 `skills/software-project-governance/SKILL.md` 的内容加载到你的 agent 配置中
+3. 确保 agent 能访问仓库中的以下文件（SKILL.md 会按顺序读取它们）：
+   - `workflows/software-project-governance/manifest.md`
+   - `protocol/workflow-schema.md`、`plugin-contract.md`
+   - `workflows/software-project-governance/rules/`（lifecycle、stage-gates、profiles、onboarding、interaction-boundary）
+   - `workflows/software-project-governance/templates/`（plan-tracker、evidence-log、decision-log、risk-log）
+   - `workflows/software-project-governance/examples/`（治理记录事实源）
+   - `workflows/software-project-governance/stages/`（子工作流和 skill）
+
+> 注意：SKILL.md 是入口文件，不是完整工作流。它引用了上述文件，agent 需要能读取整个仓库才能完整工作。
+
+## 常用命令
+
+安装后，在 Claude Code 中可以直接使用以下命令：
+
+| 命令 | 作用 |
+|------|------|
+| `/governance-status` | 查看当前项目状态、阶段、任务进度、Gate 概览 |
+| `/governance-gate` | 检查指定 Gate 详情（如 `/governance-gate G6`） |
+| `/governance-verify` | 运行完整校验，检查工作流资产完整性 |
+
+这些命令在 agent 内执行，不需要退出到终端。
 
 ## 5 分钟开始
 
@@ -109,16 +131,18 @@ git clone https://github.com/peterwangze/software-project-governance.git
 
 ## 验证
 
-确认工作流资产完整：
+**推荐方式**（在 agent 内部）：
 
-```bash
-python scripts/verify_workflow.py
+```
+/governance-verify
 ```
 
-查看项目当前状态：
+**手动方式**（在终端中）：
 
 ```bash
-python scripts/verify_workflow.py status
+python scripts/verify_workflow.py              # 完整校验
+python scripts/verify_workflow.py status       # 项目状态
+python scripts/verify_workflow.py gates        # 所有 Gate
 ```
 
 ## 内部文档

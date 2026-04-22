@@ -59,6 +59,9 @@ REQUIRED_FILES = {
     # Plugin marketplace packaging
     "Claude Plugin Marketplace": ROOT / ".claude-plugin/marketplace.json",
     "Claude Plugin Definition": ROOT / ".claude-plugin/plugin.json",
+    "Governance Status Command": ROOT / "commands/governance-status.md",
+    "Governance Gate Command": ROOT / "commands/governance-gate.md",
+    "Governance Verify Command": ROOT / "commands/governance-verify.md",
     "Codex Plugin Definition": ROOT / ".codex-plugin/plugin.json",
     "Codex Skill": ROOT / "skills/software-project-governance/SKILL.md",
     "Codex Marketplace": ROOT / ".agents/plugins/marketplace.json",

@@ -1,0 +1,1 @@
+Show the current project governance status. Run `python scripts/verify_workflow.py status` and present the output to the user in a readable format. Include: current stage, task completion rate, gate status summary, and active risks.

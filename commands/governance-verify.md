@@ -1,0 +1,1 @@
+Run the full workflow verification. Execute `python scripts/verify_workflow.py` and report the results. If any checks fail, explain what's missing and offer to fix it. If all pass, confirm the workflow is in good shape.

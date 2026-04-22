@@ -1,0 +1,1 @@
+Check a specific governance gate. The user may provide a gate ID like "G1" or "G6". If provided, run `python scripts/verify_workflow.py gate <gate-id>`. If not provided, run `python scripts/verify_workflow.py gates` to show all gates. Present the results clearly, highlighting any blocked or pending gates.

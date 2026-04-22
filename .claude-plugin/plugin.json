@@ -8,5 +8,6 @@
       "description": "Load unified workflow rules, templates, gates and fact sources for software project governance tasks.",
       "path": "skills/software-project-governance"
     }
-  ]
+  ],
+  "commands": "commands/"
 }

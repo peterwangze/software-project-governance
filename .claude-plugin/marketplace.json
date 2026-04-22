@@ -1,8 +1,14 @@
 {
+  "name": "software-project-governance-marketplace",
+  "description": "Plugin marketplace for Software Project Governance Workflow",
+  "owner": {
+    "name": "peterwangze"
+  },
   "plugins": [
     {
       "name": "software-project-governance",
       "description": "Software Project Governance Workflow - Automate process management for coding agents. Based on practices from Google, Amazon, Huawei, and ByteDance.",
+      "version": "0.1.0",
       "source": "./"
     }
   ]

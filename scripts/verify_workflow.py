@@ -58,7 +58,7 @@ REQUIRED_FILES = {
     "Retro Meeting Template Skill": ROOT / "workflows/software-project-governance/stages/maintenance/retro-meeting-template.md",
     # Plugin marketplace packaging
     "Claude Plugin Marketplace": ROOT / ".claude-plugin/marketplace.json",
-    "Claude Plugin Definition": ROOT / "plugin.json",
+    "Claude Plugin Definition": ROOT / ".claude-plugin/plugin.json",
     "Codex Plugin Definition": ROOT / ".codex-plugin/plugin.json",
     "Codex Skill": ROOT / "skills/software-project-governance/SKILL.md",
     "Codex Marketplace": ROOT / ".agents/plugins/marketplace.json",
@@ -451,7 +451,7 @@ REQUIRED_SNIPPETS = {
     ROOT / ".claude-plugin/marketplace.json": [
         "software-project-governance",
     ],
-    ROOT / "plugin.json": [
+    ROOT / ".claude-plugin/plugin.json": [
         "software-project-governance",
         "skills",
     ],

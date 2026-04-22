@@ -6,7 +6,7 @@
     {
       "name": "software-project-governance",
       "description": "Load unified workflow rules, templates, gates and fact sources for software project governance tasks.",
-      "path": ".claude/skills/software-project-governance"
+      "path": "skills/software-project-governance"
     }
   ]
 }

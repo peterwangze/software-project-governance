@@ -46,8 +46,8 @@
 
 | Agent | 默认接入方式 | 状态 |
 |-------|------------|------|
-| **Claude** | personal skill / plugin skill / MCP | 探索性样例可用 |
-| **Codex** | 全局配置 / external skill / MCP | 探索性样例可用 |
+| **Claude** | plugin marketplace / plugin skill / MCP | 插件打包完成 |
+| **Codex** | plugin marketplace / skill / MCP | 插件打包完成 |
 | **Gemini** | MCP / custom commands / headless runner | 兼容预研完成 |
 | **国内 agent CLI** | external runner / MCP / 最薄投影 | 兼容抽象完成 |
 

@@ -56,6 +56,12 @@ REQUIRED_FILES = {
     "Code Review Standard Skill": ROOT / "workflows/software-project-governance/stages/development/code-review-standard.md",
     "Release Checklist Skill": ROOT / "workflows/software-project-governance/stages/release/release-checklist.md",
     "Retro Meeting Template Skill": ROOT / "workflows/software-project-governance/stages/maintenance/retro-meeting-template.md",
+    # Plugin marketplace packaging
+    "Claude Plugin Marketplace": ROOT / ".claude-plugin/marketplace.json",
+    "Claude Plugin Definition": ROOT / "plugin.json",
+    "Codex Plugin Definition": ROOT / ".codex-plugin/plugin.json",
+    "Codex Skill": ROOT / "skills/software-project-governance/SKILL.md",
+    "Codex Marketplace": ROOT / ".agents/plugins/marketplace.json",
 }
 
 REQUIRED_SNIPPETS = {
@@ -440,6 +446,27 @@ REQUIRED_SNIPPETS = {
         "经验沉淀",
         "## 独立使用说明",
         "## 子工作流映射",
+    ],
+    # Plugin marketplace packaging
+    ROOT / ".claude-plugin/marketplace.json": [
+        "software-project-governance",
+    ],
+    ROOT / "plugin.json": [
+        "software-project-governance",
+        "skills",
+    ],
+    ROOT / ".codex-plugin/plugin.json": [
+        "software-project-governance",
+        "skills",
+    ],
+    ROOT / "skills/software-project-governance/SKILL.md": [
+        "# Software Project Governance",
+        "## Required read order",
+        "python scripts/verify_workflow.py",
+        "## Replacement boundary",
+    ],
+    ROOT / ".agents/plugins/marketplace.json": [
+        "software-project-governance",
     ],
 }
 

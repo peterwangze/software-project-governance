@@ -38,7 +38,7 @@
 
 | 项目 | 当前阶段 | 总任务数 | 已完成 | 阻塞中 | 关键风险数 | 最近 Gate 结论 | 最近复盘日期 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 项目管理工作流插件 | 维护（并行活跃：规划） | 35 | 29 | 0 | 3 | G11 通过 | 2026-04-21 |
+| 项目管理工作流插件 | 维护（并行活跃：规划） | 37 | 31 | 0 | 3 | G11 通过 | 2026-04-21 |
 
 
 ## 样例跟踪表
@@ -105,3 +105,12 @@
 | ID | 阶段 | 任务项 | 目标/预期结果 | 输入 | 输出 | Owner | 协同角色 | 状态 | 优先级 | 计划开始 | 计划完成 | 实际完成 | Gate | 验收标准 | 证据 | 风险/偏差 | 纠偏动作 | 备注 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | VAL-001 | 开发 | 升级 verify_workflow.py 为 CLI 工具 | 将校验脚本升级为可管理真实项目的 CLI 工具，支持 verify/status/gate/gates/stage/stages 6 个子命令 | 现有 `verify_workflow.py`、治理资产 | 升级后的 CLI 工具 | Claude | 项目负责人 | 已完成 | P0 | 2026-04-21 | 2026-04-21 | 2026-04-21 | G6 | 6 个子命令全部可运行、向后兼容、Windows GBK 兼容 | `scripts/verify_workflow.py` | 无 | 无 | 实战验证首个任务，验证工作流内容对真实开发是否有帮助 |
+
+### 实战验证：Plugin Marketplace 打包
+
+将现有 workflow 资产打包为 Claude Code 和 Codex 官方插件格式，验证交付架构能否真正对接平台。
+
+| ID | 阶段 | 任务项 | 目标/预期结果 | 输入 | 输出 | Owner | 协同角色 | 状态 | 优先级 | 计划开始 | 计划完成 | 实际完成 | Gate | 验收标准 | 证据 | 风险/偏差 | 纠偏动作 | 备注 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| VAL-002 | 开发 | Claude Code Plugin Marketplace 打包 | 创建 `.claude-plugin/marketplace.json` 和 `plugin.json`，将现有 skill 打包为 Claude Code 可安装插件 | 调研结论（Claude Code 插件格式）、现有 `.claude/skills/` | `.claude-plugin/marketplace.json`、`plugin.json` | Claude | 项目负责人 | 已完成 | P0 | 2026-04-22 | 2026-04-22 | 2026-04-22 | G6 | marketplace.json 和 plugin.json 符合 Claude Code 插件规范，校验脚本通过 | `.claude-plugin/marketplace.json`, `plugin.json` | 无 | 无 | P0：验证 Claude Code 真实插件接入 |
+| VAL-003 | 开发 | Codex Plugin 打包 | 创建 `.codex-plugin/plugin.json`、Codex skill 和 marketplace，验证 Codex 官方插件格式 | 调研结论（Codex 插件格式）、Claude skill 内容 | `.codex-plugin/plugin.json`、`skills/software-project-governance/SKILL.md`、`.agents/plugins/marketplace.json` | Claude | 项目负责人 | 已完成 | P1 | 2026-04-22 | 2026-04-22 | 2026-04-22 | G6 | plugin.json 符合 Codex 插件规范，Codex skill 可独立加载，校验脚本通过 | `.codex-plugin/plugin.json`, `skills/software-project-governance/SKILL.md` | 无 | 无 | P1：验证 Codex 真实插件接入 |

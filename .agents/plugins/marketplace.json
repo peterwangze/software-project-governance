@@ -1,0 +1,9 @@
+{
+  "plugins": [
+    {
+      "name": "software-project-governance",
+      "source": "./",
+      "manifest": ".codex-plugin/plugin.json"
+    }
+  ]
+}

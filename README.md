@@ -18,12 +18,15 @@
 ### Claude Code
 
 ```bash
-# 方式一：通过插件市场安装（推荐）
-/plugin install peterwangze/software-project-governance
+# 方式一：通过插件市场安装（推荐，两步）
+/plugin marketplace add peterwangze/software-project-governance
+/plugin install software-project-governance@spg
 
-# 方式二：克隆到本地后安装
+# 方式二：直接从 git URL 安装
+/plugin install https://github.com/peterwangze/software-project-governance.git
+
+# 方式三：克隆到本地后安装
 git clone https://github.com/peterwangze/software-project-governance.git
-cd your-project
 /plugin install /path/to/software-project-governance
 ```
 
@@ -32,24 +35,23 @@ cd your-project
 ### Codex
 
 ```bash
-# 在项目根目录安装
+# 在项目根目录克隆
 git clone https://github.com/peterwangze/software-project-governance.git
 # Codex 会自动识别 .codex-plugin/plugin.json
 ```
 
 ### 其他 agent（Gemini、国内 agent CLI 等）
 
-1. 克隆本仓库到本地
-2. 将 `skills/software-project-governance/SKILL.md` 的内容加载到你的 agent 配置中
-3. 确保 agent 能访问仓库中的以下文件（SKILL.md 会按顺序读取它们）：
-   - `workflows/software-project-governance/manifest.md`
-   - `protocol/workflow-schema.md`、`plugin-contract.md`
-   - `workflows/software-project-governance/rules/`（lifecycle、stage-gates、profiles、onboarding、interaction-boundary）
-   - `workflows/software-project-governance/templates/`（plan-tracker、evidence-log、decision-log、risk-log）
-   - `workflows/software-project-governance/examples/`（治理记录事实源）
-   - `workflows/software-project-governance/stages/`（子工作流和 skill）
+**SKILL.md 只是入口，不是完整工作流。** 它会按固定顺序读取仓库中的多个文件。
 
-> 注意：SKILL.md 是入口文件，不是完整工作流。它引用了上述文件，agent 需要能读取整个仓库才能完整工作。
+1. 克隆本仓库到本地
+2. 在你的 agent 配置中，让它读取 `skills/software-project-governance/SKILL.md`
+3. 确保 agent 能访问仓库根目录——SKILL.md 会按顺序读取以下文件：
+   - `workflows/software-project-governance/manifest.md`
+   - `protocol/workflow-schema.md`、`protocol/plugin-contract.md`
+   - `workflows/software-project-governance/rules/lifecycle.md`、`rules/stage-gates.md`
+   - `workflows/software-project-governance/templates/plan-tracker.md`、`templates/evidence-log.md`、`templates/decision-log.md`、`templates/risk-log.md`
+   - `workflows/software-project-governance/examples/current-project-sample.md`
 
 ## 常用命令
 

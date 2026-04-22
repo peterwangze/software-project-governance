@@ -2,12 +2,6 @@
   "name": "software-project-governance",
   "version": "0.1.0",
   "description": "Software Project Governance Workflow - Automate process management so users focus on thinking, not process. Covers 11 project stages with gate checks, evidence tracking, and enterprise-grade practices.",
-  "skills": [
-    {
-      "name": "software-project-governance",
-      "description": "Load unified workflow rules, templates, gates and fact sources for software project governance tasks.",
-      "path": "skills/software-project-governance"
-    }
-  ],
-  "commands": "commands/"
+  "skills": "./skills/",
+  "commands": "./commands/"
 }

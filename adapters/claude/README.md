@@ -2,9 +2,9 @@
 
 > **已废弃（Deprecated）**：本目录是早期的 repo-local 探索性样例，已被 Claude Code 官方插件系统取代。
 > 新的正式入口请使用：
-> - **插件市场**：`.claude-plugin/marketplace.json` + `plugin.json`
+> - **插件市场**：`.claude-plugin/marketplace.json` + `.claude-plugin/plugin.json`
 > - **项目级 skill**：`.claude/skills/software-project-governance/SKILL.md`
-> - **Codex 插件**：`.codex-plugin/plugin.json` + `skills/software-project-governance/SKILL.md`
+> - **交互命令**：`/governance-status`、`/governance-gate`、`/governance-verify`
 >
 > 本目录保留仅作为历史参考，不再继续扩展。
 

@@ -4,7 +4,6 @@
 > 新的正式入口请使用：
 > - **Codex 插件**：`.codex-plugin/plugin.json` + `skills/software-project-governance/SKILL.md`
 > - **Codex 市场**：`.agents/plugins/marketplace.json`
-> - **Claude 插件**：`.claude-plugin/marketplace.json` + `plugin.json`
 >
 > 本目录保留仅作为历史参考，不再继续扩展。
 

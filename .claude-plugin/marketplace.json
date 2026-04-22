@@ -1,6 +1,6 @@
 {
-  "name": "software-project-governance-marketplace",
-  "description": "Plugin marketplace for Software Project Governance Workflow",
+  "name": "spg",
+  "description": "Software Project Governance Workflow Plugin Marketplace",
   "owner": {
     "name": "peterwangze"
   },

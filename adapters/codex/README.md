@@ -1,5 +1,13 @@
 # Codex Adapter
 
+> **已废弃（Deprecated）**：本目录是早期的 repo-local 探索性样例，已被 Codex 官方插件系统取代。
+> 新的正式入口请使用：
+> - **Codex 插件**：`.codex-plugin/plugin.json` + `skills/software-project-governance/SKILL.md`
+> - **Codex 市场**：`.agents/plugins/marketplace.json`
+> - **Claude 插件**：`.claude-plugin/marketplace.json` + `plugin.json`
+>
+> 本目录保留仅作为历史参考，不再继续扩展。
+
 本目录定义 `software-project-governance` workflow 在 Codex CLI 场景下的消费方式。
 
 ## 适配目标

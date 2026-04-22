@@ -1,5 +1,13 @@
 # Claude Adapter
 
+> **已废弃（Deprecated）**：本目录是早期的 repo-local 探索性样例，已被 Claude Code 官方插件系统取代。
+> 新的正式入口请使用：
+> - **插件市场**：`.claude-plugin/marketplace.json` + `plugin.json`
+> - **项目级 skill**：`.claude/skills/software-project-governance/SKILL.md`
+> - **Codex 插件**：`.codex-plugin/plugin.json` + `skills/software-project-governance/SKILL.md`
+>
+> 本目录保留仅作为历史参考，不再继续扩展。
+
 本目录定义 `software-project-governance` workflow 在 Claude 场景下的消费方式。
 
 ## 适配目标

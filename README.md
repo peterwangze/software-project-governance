@@ -59,6 +59,7 @@ git clone https://github.com/peterwangze/software-project-governance.git
 
 | 命令 | 作用 |
 |------|------|
+| `/governance-init` | 首次使用时初始化项目治理文件（安装后第一步） |
 | `/governance-status` | 查看当前项目状态、阶段、任务进度、Gate 概览 |
 | `/governance-gate` | 检查指定 Gate 详情（如 `/governance-gate G6`） |
 | `/governance-verify` | 运行完整校验，检查工作流资产完整性 |
@@ -66,6 +67,20 @@ git clone https://github.com/peterwangze/software-project-governance.git
 这些命令在 agent 内执行，不需要退出到终端。
 
 ## 5 分钟开始
+
+### 第一步：初始化（必须）
+
+安装后，在 Claude Code 中运行：
+
+```
+/governance-init
+```
+
+这个命令会引导你完成初始设置：
+1. 输入项目名称和目标
+2. 选择是新项目还是已有项目
+3. 选择治理强度（轻量/标准/严格）
+4. 自动在项目根目录创建 `.governance/` 文件夹，包含所有治理文件
 
 ### 新项目
 

@@ -31,7 +31,16 @@ Before execution, read and understand in this order:
 
 ## Output rules
 
-All results related to the current project sample must only be written to:
+**User project** (standard path): All governance records are written to `.governance/` in the user's project root:
+
+- `.governance/plan-tracker.md` — plan tracking, project config, gate status, tasks
+- `.governance/evidence-log.md` — evidence records
+- `.governance/decision-log.md` — decision records
+- `.governance/risk-log.md` — risk records
+
+If `.governance/` does not exist, suggest the user run `/governance-init` to create it.
+
+**Dogfood mode** (when developing this workflow itself): Records go to:
 
 - `workflows/software-project-governance/examples/current-project-sample.md`
 - `workflows/software-project-governance/examples/current-project-evidence-log.md`

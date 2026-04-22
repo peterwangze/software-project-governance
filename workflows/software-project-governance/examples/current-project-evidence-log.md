@@ -49,3 +49,4 @@
 | EVD-043 | DESIGN-007 | 设计 | 文档 | Claude 准入审计完成：6 条标准全 PASS（write-back boundary、Gate blocking、validation 为直接 PASS；load surface 为已知的 project-local 选择；replacement boundary 通过补齐 SKILL.md 声明修复；structured output 的 6 个要素全部存在） | 准入审计报告（会话上下文） | Claude | 2026-04-21 | G3 | 支撑 Claude 正式接法方案闭环 |
 | EVD-044 | ACCEPT-002 | 验收 | 命令输出 | Claude 正式接法验收通过：准入审计 6/6 PASS、SKILL.md replacement_boundary 已补齐、verify_workflow.py 校验通过、决策/证据/风险记录已同步 | `verify_workflow.py` 输出、治理记录 | Claude | 2026-04-21 | G6 | 支撑 Claude 正式接法验收闭环 |
 | EVD-045 | DESIGN-009 | 设计 | 文档 | 已为剩余 7 个阶段（选型、环境搭建、测试、CI/CD、发布、运营、维护）创建子工作流，全部 11 个阶段现在都有独立的 sub-workflow.md | `workflows/software-project-governance/stages/` | Claude | 2026-04-21 | G3 | 支撑子工作流从 4/11 到 11/11 全覆盖 |
+| EVD-046 | VAL-001 | 开发 | 命令输出 | verify_workflow.py 已升级为 CLI 工具，支持 verify/status/gate/gates/stage/stages 6 个子命令，全部通过测试，向后兼容且 Windows GBK 兼容 | `scripts/verify_workflow.py` | Claude | 2026-04-21 | G6 | 支撑 CLI 工具作为实战验证首个任务 |

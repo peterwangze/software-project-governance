@@ -1,5 +1,7 @@
 from pathlib import Path
 import sys
+import re
+import argparse
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -442,6 +444,8 @@ REQUIRED_SNIPPETS = {
 }
 
 
+# ── Existing verification functions ──────────────────────────────
+
 def check_files():
     failures = []
     for label, path in REQUIRED_FILES.items():
@@ -462,23 +466,449 @@ def check_snippets():
                 print(f"[OK] snippet found: {path.relative_to(ROOT)} :: {snippet}")
             else:
                 failures.append(f"missing snippet in {path.relative_to(ROOT)}: {snippet}")
-                print(f"[FAIL] snippet missing: {path.relative_to(ROOT)} :: {snippet}")
+                print(f"[FAIL] missing snippet: {path.relative_to(ROOT)} :: {snippet}")
     return failures
 
 
-def main():
+# ── Markdown parsing helpers ─────────────────────────────────────
+
+SAMPLE_PATH = ROOT / "workflows/software-project-governance/examples/current-project-sample.md"
+GATES_PATH = ROOT / "workflows/software-project-governance/rules/stage-gates.md"
+LIFECYCLE_PATH = ROOT / "workflows/software-project-governance/rules/lifecycle.md"
+STAGES_DIR = ROOT / "workflows/software-project-governance/stages"
+
+STAGE_ORDER = [
+    "initiation", "research", "selection", "infrastructure",
+    "architecture", "development", "testing", "ci-cd",
+    "release", "operations", "maintenance",
+]
+
+STATUS_ICONS = {
+    "passed": "[PASS]",
+    "passed-on-entry": "[ENTRY]",
+    "blocked": "[BLOCK]",
+    "pending": "[????]",
+}
+
+
+def _extract_section(content, heading, stop_headings=None):
+    """Extract lines between a ## heading and the next ## heading."""
+    lines = content.split("\n")
+    capture = False
+    result = []
+    for line in lines:
+        if line.strip() == heading or line.startswith(heading + "\n"):
+            capture = True
+            continue
+        if capture:
+            if stop_headings and any(line.startswith(sh) for sh in stop_headings):
+                break
+            if line.startswith("## ") and not line.strip() == heading:
+                break
+            result.append(line)
+    return "\n".join(result)
+
+
+def parse_project_config():
+    """Parse project configuration section from sample."""
+    content = SAMPLE_PATH.read_text(encoding="utf-8")
+    config = {}
+    in_section = False
+    for line in content.split("\n"):
+        if line.strip() == "## 项目配置":
+            in_section = True
+            continue
+        if in_section and line.startswith("## "):
+            break
+        if in_section:
+            m = re.match(r"- \*\*(.+?)\*\*:\s*(.+)", line)
+            if m:
+                config[m.group(1)] = m.group(2)
+    return config
+
+
+def parse_gate_status():
+    """Parse Gate status table from sample."""
+    content = SAMPLE_PATH.read_text(encoding="utf-8")
+    gates = []
+    in_section = False
+    for line in content.split("\n"):
+        if line.strip() == "## Gate 状态跟踪":
+            in_section = True
+            continue
+        if in_section and line.startswith("## "):
+            break
+        if in_section and line.startswith("|"):
+            parts = [p.strip() for p in line.split("|")[1:-1]]
+            if len(parts) >= 5 and parts[0] != "Gate" and not all(
+                set(p.strip()) <= {"-", " "} for p in parts
+            ):
+                gates.append({
+                    "gate": parts[0],
+                    "transition": parts[1],
+                    "status": parts[2],
+                    "date": parts[3],
+                    "evidence": parts[4] if len(parts) > 4 else "",
+                })
+    return gates
+
+
+def parse_overview():
+    """Parse project overview table from sample."""
+    content = SAMPLE_PATH.read_text(encoding="utf-8")
+    in_section = False
+    for line in content.split("\n"):
+        if line.strip() == "## 项目总览":
+            in_section = True
+            continue
+        if in_section and line.startswith("## "):
+            break
+        if in_section and line.startswith("|"):
+            parts = [p.strip() for p in line.split("|")[1:-1]]
+            if len(parts) >= 8 and parts[0] != "项目" and not all(
+                set(p.strip()) <= {"-", " "} for p in parts
+            ):
+                return {
+                    "project": parts[0],
+                    "current_stage": parts[1],
+                    "total": parts[2],
+                    "completed": parts[3],
+                    "blocked": parts[4],
+                    "risks": parts[5],
+                    "latest_gate": parts[6],
+                    "latest_retro": parts[7],
+                }
+    return {}
+
+
+def parse_task_stats():
+    """Count task statuses from sample tracking table."""
+    content = SAMPLE_PATH.read_text(encoding="utf-8")
+    stats = {"已完成": 0, "进行中": 0, "未开始": 0, "已终止": 0}
+    for line in content.split("\n"):
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) >= 10:
+            status = parts[9] if len(parts) > 9 else ""
+            if status in stats:
+                stats[status] += 1
+    return stats
+
+
+def parse_gate_detail(gate_id):
+    """Parse a specific Gate's details from stage-gates.md."""
+    gate_id = gate_id.upper()
+    if not gate_id.startswith("G"):
+        gate_id = "G" + gate_id
+
+    content = GATES_PATH.read_text(encoding="utf-8")
+
+    pattern = re.compile(
+        rf"### ({re.escape(gate_id)} .+?)\n\n(.*?)(?=\n### G\d|\n## )",
+        re.DOTALL,
+    )
+    m = pattern.search(content)
+    if not m:
+        return None
+
+    title = m.group(1).strip()
+    body = m.group(2).strip()
+
+    detail = {"title": title, "raw": body}
+
+    # Extract transition
+    tm = re.search(r"\*\*阶段转换\*\*[：:]\s*(.+)", body)
+    detail["transition"] = tm.group(1).strip() if tm else ""
+
+    # Extract required materials
+    mm = re.search(r"\*\*必审材料\*\*[：:]\s*(.+)", body)
+    detail["materials"] = mm.group(1).strip() if mm else ""
+
+    # Extract check items
+    checks = re.findall(r"^\s+\d+\.\s+(.+)$", body, re.MULTILINE)
+    detail["checks"] = checks
+
+    # Extract pass criteria
+    pm = re.search(r"\*\*通过标准\*\*[：:]\s*(.+)", body)
+    detail["pass_criteria"] = pm.group(1).strip() if pm else ""
+
+    # Extract auto-judgment criteria
+    auto_checks = re.findall(r"^\s+- 检查项\d+[：:]\s*(.+)$", body, re.MULTILINE)
+    detail["auto_criteria"] = auto_checks
+
+    # Extract conditional pass info
+    cm = re.search(r"\*\*有条件通过\*\*[：:]\s*(.+?)(?:\n\n|\n- \*\*|$)", body, re.DOTALL)
+    detail["conditional"] = cm.group(1).strip() if cm else ""
+
+    return detail
+
+
+def list_available_stages():
+    """List all available stage directories."""
+    if not STAGES_DIR.is_dir():
+        return []
+    return sorted(
+        [d.name for d in STAGES_DIR.iterdir() if d.is_dir()],
+        key=lambda x: STAGE_ORDER.index(x) if x in STAGE_ORDER else 99,
+    )
+
+
+# ── CLI commands ─────────────────────────────────────────────────
+
+def cmd_verify(args):
+    """Run existing file + snippet verification."""
     print("== Workflow Plugin Verification ==")
     file_failures = check_files()
     snippet_failures = check_snippets()
     failures = file_failures + snippet_failures
 
     if failures:
-        print("== Verification Result: FAILED ==")
+        print("\n== Verification Result: FAILED ==")
         for failure in failures:
-            print(f" - {failure}")
+            print(f"  - {failure}")
         sys.exit(1)
 
-    print("== Verification Result: PASSED ==")
+    print("\n== Verification Result: PASSED ==")
+
+
+def cmd_status(args):
+    """Show project status overview."""
+    config = parse_project_config()
+    overview = parse_overview()
+    gates = parse_gate_status()
+    stats = parse_task_stats()
+
+    # Config section
+    print("\n┌─ Project Config ────────────────────────────────────┐")
+    labels = {"Profile": "Profile", "触发模式": "Trigger", "当前阶段": "Stage",
+              "并行活跃阶段": "Active", "接入方式": "Onboarding"}
+    for k, v in config.items():
+        label = labels.get(k, k)
+        print(f"│  {label}: {v}")
+    print("└──────────────────────────────────────────────────────┘")
+
+    # Overview section
+    if overview:
+        print("\n┌─ Project Overview ──────────────────────────────────┐")
+        print(f"│  Project:    {overview.get('project', 'N/A')}")
+        print(f"│  Stage:      {overview.get('current_stage', 'N/A')}")
+        print(f"│  Tasks:      {overview.get('completed', '0')}/{overview.get('total', '0')} completed")
+        print(f"│  Blocked:    {overview.get('blocked', '0')}")
+        print(f"│  Key Risks:  {overview.get('risks', '0')}")
+        print(f"│  Latest Gate: {overview.get('latest_gate', 'N/A')}")
+        print(f"│  Last Retro: {overview.get('latest_retro', 'N/A')}")
+        print("└──────────────────────────────────────────────────────┘")
+
+    # Task stats
+    if any(stats.values()):
+        print("\n┌─ Task Status ───────────────────────────────────────┐")
+        total = sum(stats.values())
+        for status, count in stats.items():
+            bar = "#" * count + "." * (total - count)
+            print(f"│  {status:6s} {count:2d} {bar}")
+        print("└──────────────────────────────────────────────────────┘")
+
+    # Gate status
+    if gates:
+        print("\n┌─ Gate Status ───────────────────────────────────────┐")
+        for g in gates:
+            icon = STATUS_ICONS.get(g["status"], "?")
+            date = g["date"] if g["date"] else ""
+            print(f"│  {icon} {g['gate']:4s}  {g['status']:20s}  {date}")
+        print("└──────────────────────────────────────────────────────┘")
+
+
+def cmd_gate(args):
+    """Show detailed info for a specific Gate."""
+    gate_id = args.gate_id
+    detail = parse_gate_detail(gate_id)
+
+    if not detail:
+        print(f"[FAIL] Gate {gate_id.upper()} not found")
+        sys.exit(1)
+
+    print(f"\n┌─ {detail['title']} ─┐")
+
+    if detail["transition"]:
+        print(f"│  Transition:    {detail['transition']}")
+    if detail["materials"]:
+        print(f"│  Materials:     {detail['materials']}")
+
+    if detail["checks"]:
+        print("│")
+        print("│  Check items:")
+        for i, check in enumerate(detail["checks"], 1):
+            print(f"│    {i}. {check}")
+
+    if detail["pass_criteria"]:
+        print("│")
+        print(f"│  Pass criteria: {detail['pass_criteria']}")
+
+    if detail["conditional"]:
+        print("│")
+        print(f"│  Conditional:   {detail['conditional']}")
+
+    if detail["auto_criteria"]:
+        print("│")
+        print("│  Auto-judgment criteria:")
+        for i, ac in enumerate(detail["auto_criteria"], 1):
+            print(f"│    {i}. {ac}")
+
+    print("└──────────────────────────────────────────────────────┘")
+
+    # Also show current status from sample
+    gates = parse_gate_status()
+    for g in gates:
+        if g["gate"].upper() == gate_id.upper().lstrip("G").zfill(2) \
+           or g["gate"].upper() == gate_id.upper():
+            icon = STATUS_ICONS.get(g["status"], "[????]")
+            print(f"\n  Current status: {icon} {g['status']} ({g['date']})")
+            break
+
+
+def cmd_stage(args):
+    """Show sub-workflow summary for a specific stage."""
+    stage_name = args.stage_name.lower()
+
+    stage_path = STAGES_DIR / stage_name / "sub-workflow.md"
+    if not stage_path.is_file():
+        print(f"[FAIL] Stage '{stage_name}' not found")
+        available = list_available_stages()
+        if available:
+            print(f"Available: {', '.join(available)}")
+        sys.exit(1)
+
+    content = stage_path.read_text(encoding="utf-8")
+
+    # Also check for skills in this stage
+    stage_dir = STAGES_DIR / stage_name
+    skills = sorted([
+        f.name for f in stage_dir.iterdir()
+        if f.is_file() and f.name != "sub-workflow.md" and f.suffix == ".md"
+    ])
+
+    print(f"\n┌─ Stage: {stage_name} ─────────────────────────────────────┐")
+
+    lines = content.split("\n")
+    current_section = ""
+    for line in lines:
+        if line.startswith("# "):
+            continue
+        if line.startswith("## "):
+            current_section = line[3:].strip()
+            print(f"│\n│  {current_section}")
+        elif line.startswith("### "):
+            print(f"│    {line[4:].strip()}")
+        elif line.strip().startswith("|") and "---" not in line:
+            parts = [p.strip() for p in line.split("|")[1:-1]]
+            if parts and not all(set(p) <= {"-"} for p in parts):
+                print(f"│    {' | '.join(p for p in parts if p)}")
+        elif line.strip().startswith("- ["):
+            check = line.strip()
+            icon = "[x]" if "[x]" in check else "[ ]"
+            text = re.sub(r"- \[[ x]\]\s*", "", check)
+            print(f"│    {icon} {text}")
+        elif line.strip().startswith("- **"):
+            print(f"│    {line.strip()}")
+        elif line.strip() and not line.startswith("|"):
+            print(f"│    {line.strip()}")
+
+    if skills:
+        print(f"│\n│  Skills ({len(skills)}):")
+        for s in skills:
+            print(f"│    - {s}")
+
+    print("└──────────────────────────────────────────────────────┘")
+
+
+def cmd_stages(args):
+    """List all available stages with index."""
+    stages = list_available_stages()
+    lifecycle_content = LIFECYCLE_PATH.read_text(encoding="utf-8")
+
+    # Parse stage names from lifecycle
+    stage_names = {}
+    for m in re.finditer(r"### (\d+)\.\s+(.+?)(?:（|$)", lifecycle_content):
+        stage_names[m.group(1)] = m.group(2).strip()
+
+    print("\n┌─ Available Stages ──────────────────────────────────┐")
+    for i, stage in enumerate(stages, 1):
+        name = stage_names.get(str(i), stage)
+        sw_path = STAGES_DIR / stage / "sub-workflow.md"
+        has_sw = "Y" if sw_path.is_file() else "N"
+
+        # Count skills
+        stage_dir = STAGES_DIR / stage
+        skill_count = len([
+            f for f in stage_dir.iterdir()
+            if f.is_file() and f.name != "sub-workflow.md" and f.suffix == ".md"
+        ]) if stage_dir.is_dir() else 0
+
+        skill_info = f", {skill_count} skill(s)" if skill_count else ""
+        print(f"│  {i:2d}. {stage:16s} {name:20s}  sub-workflow:{has_sw}{skill_info}")
+    print("└──────────────────────────────────────────────────────┘")
+
+
+def cmd_gates(args):
+    """List all Gates with current status."""
+    gates = parse_gate_status()
+
+    print("\n┌─ All Gates ─────────────────────────────────────────┐")
+    for g in gates:
+        icon = STATUS_ICONS.get(g["status"], "?")
+        date = g["date"] if g["date"] else "        "
+        print(f"│  {icon} {g['gate']:4s}  {g['transition']:20s}  {g['status']:20s}  {date}")
+    print("└──────────────────────────────────────────────────────┘")
+
+    # Summary
+    statuses = {}
+    for g in gates:
+        statuses[g["status"]] = statuses.get(g["status"], 0) + 1
+    summary = ", ".join(f"{k}: {v}" for k, v in sorted(statuses.items()))
+    print(f"\n  Summary: {summary}")
+
+
+# ── Main CLI entry point ─────────────────────────────────────────
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="verify_workflow",
+        description="Software Project Governance CLI",
+    )
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    # verify (default, backward compatible)
+    subparsers.add_parser("verify", help="Verify workflow assets exist and contain required snippets")
+
+    # status
+    subparsers.add_parser("status", help="Show project status overview")
+
+    # gate <id>
+    gate_p = subparsers.add_parser("gate", help="Show details for a specific Gate")
+    gate_p.add_argument("gate_id", help="Gate ID (e.g. G3, 3, g5)")
+
+    # gates (list all)
+    subparsers.add_parser("gates", help="List all Gates with current status")
+
+    # stage <name>
+    stage_p = subparsers.add_parser("stage", help="Show sub-workflow for a stage")
+    stage_p.add_argument("stage_name", help="Stage name (e.g. initiation, research, development)")
+
+    # stages (list all)
+    subparsers.add_parser("stages", help="List all available stages")
+
+    args = parser.parse_args()
+
+    commands = {
+        "verify": cmd_verify,
+        "status": cmd_status,
+        "gate": cmd_gate,
+        "gates": cmd_gates,
+        "stage": cmd_stage,
+        "stages": cmd_stages,
+    }
+
+    cmd = args.command or "verify"
+    commands[cmd](args)
 
 
 if __name__ == "__main__":

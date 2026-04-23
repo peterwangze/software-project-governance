@@ -84,16 +84,16 @@ command 至少需要产出以下结构化结果：
 
 ### 项目实例（必读）
 
-16. `workflows/software-project-governance/examples/current-project-sample.md`
+16. `.governance/plan-tracker.md`
 
 ## write-back targets
 
 command 只允许回写以下统一事实源：
 
-- `workflows/software-project-governance/examples/current-project-sample.md`
-- `workflows/software-project-governance/examples/current-project-evidence-log.md`
-- `workflows/software-project-governance/examples/current-project-decision-log.md`
-- `workflows/software-project-governance/examples/current-project-risk-log.md`
+- `.governance/plan-tracker.md`
+- `.governance/evidence-log.md`
+- `.governance/decision-log.md`
+- `.governance/risk-log.md`
 
 明确禁止：
 
@@ -155,10 +155,10 @@ python scripts/verify_workflow.py
     "protocol/external-command-contract.md"
   ],
   "write_back_targets": [
-    "workflows/software-project-governance/examples/current-project-sample.md",
-    "workflows/software-project-governance/examples/current-project-evidence-log.md",
-    "workflows/software-project-governance/examples/current-project-decision-log.md",
-    "workflows/software-project-governance/examples/current-project-risk-log.md"
+    ".governance/plan-tracker.md",
+    ".governance/evidence-log.md",
+    ".governance/decision-log.md",
+    ".governance/risk-log.md"
   ],
   "gate_check": {
     "gate": "G8",

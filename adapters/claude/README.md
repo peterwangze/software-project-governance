@@ -32,7 +32,7 @@
    - `workflows/software-project-governance/templates/decision-log.md`
    - `workflows/software-project-governance/templates/risk-log.md`
 5. 使用样例验证：
-   - `workflows/software-project-governance/examples/current-project-sample.md`
+   - `.governance/plan-tracker.md`
 
 ## Claude 执行要求
 

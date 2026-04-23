@@ -47,11 +47,8 @@ git clone https://github.com/peterwangze/software-project-governance.git
 1. 克隆本仓库到本地
 2. 在你的 agent 配置中，让它读取 `skills/software-project-governance/SKILL.md`
 3. 确保 agent 能访问仓库根目录——SKILL.md 会按顺序读取以下文件：
-   - `workflows/software-project-governance/manifest.md`
-   - `protocol/workflow-schema.md`、`protocol/plugin-contract.md`
-   - `workflows/software-project-governance/rules/lifecycle.md`、`rules/stage-gates.md`
-   - `workflows/software-project-governance/templates/plan-tracker.md`、`templates/evidence-log.md`、`templates/decision-log.md`、`templates/risk-log.md`
-   - `workflows/software-project-governance/examples/current-project-sample.md`
+   - `skills/software-project-governance/SKILL.md`（入口，内嵌核心规则）
+   - `skills/software-project-governance/references/stage-gates.md`、`references/lifecycle.md`（详细规则，按需读取）
 
 ## 常用命令
 

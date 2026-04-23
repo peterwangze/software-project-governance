@@ -1,1 +1,1 @@
-Show the current project governance status. Run `python scripts/verify_workflow.py status` and present the output to the user in a readable format. Include: current stage, task completion rate, gate status summary, and active risks.
+Show the current project governance status. Read `.governance/plan-tracker.md` and present a summary including: current stage, Gate status (G1-G11), task completion rate, and active risks. Format as a readable dashboard.

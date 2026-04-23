@@ -38,7 +38,7 @@
 
 | 项目 | 当前阶段 | 总任务数 | 已完成 | 阻塞中 | 关键风险数 | 最近 Gate 结论 | 最近复盘日期 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 项目管理工作流插件 | 维护（并行活跃：规划） | 38 | 32 | 0 | 3 | G11 通过 | 2026-04-22 |
+| 项目管理工作流插件 | 维护（并行活跃：规划） | 39 | 33 | 0 | 3 | G11 通过 | 2026-04-23 |
 
 
 ## 样例跟踪表
@@ -122,3 +122,4 @@
 | ID | 阶段 | 任务项 | 目标/预期结果 | 输入 | 输出 | Owner | 协同角色 | 状态 | 优先级 | 计划开始 | 计划完成 | 实际完成 | Gate | 验收标准 | 证据 | 风险/偏差 | 纠偏动作 | 备注 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | DESIGN-013 | 设计 | SKILL.md 行为协议重构 | 将 SKILL.md 从参考文档重构为行为协议，解决 agent 不遵循 skill 规则的问题 | 用户反馈（skill 不生效、AskUserQuestion 未被使用）、根因分析（6 个结构性缺陷） | 重构后的 `.claude/skills/` 和 `skills/` 两个 SKILL.md | Claude | 项目负责人 | 已完成 | P0 | 2026-04-22 | 2026-04-22 | 2026-04-22 | G3 | SKILL.md 使用 MUST/MUST NOT 强制语言、有明确的 AskUserQuestion 触发器映射、有 compliance 自检机制、有优先级声明、校验脚本通过 | `.claude/skills/software-project-governance/SKILL.md`, `skills/software-project-governance/SKILL.md` | 无 | 无 | 解决"skill 作为上下文不等于 skill 被遵循"的根本问题 |
+| DESIGN-014 | 设计 | 插件自包含重构 | 端到端验证发现所有预加载路径在插件安装后失效，SKILL.md 引用的文件用户项目里不存在 | 端到端验证报告（6 个 P0/P1 问题）、用户决策（自包含重构） | 自包含 SKILL.md + references/ 目录 + .governance/ 迁移 + commands 修复 + examples 清理 | Claude | 项目负责人 | 已完成 | P0 | 2026-04-23 | 2026-04-23 | 2026-04-23 | G3 | 插件 SKILL.md 不依赖仓库根目录路径、references/ 从 skill 目录解析、.governance/ 从用户 CWD 解析、所有路径通过验证 | `skills/software-project-governance/SKILL.md`, `skills/software-project-governance/references/`, `.governance/` | 无 | 无 | 解决"从未从用户视角验证插件"的根本问题 |

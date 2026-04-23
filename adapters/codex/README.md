@@ -38,7 +38,7 @@
    - `workflows/software-project-governance/stages/<stage>/sub-workflow.md`
    - `workflows/software-project-governance/stages/<stage>/` 下的 skill 文件
 6. 读取样例：
-   - `workflows/software-project-governance/examples/current-project-sample.md`
+   - `.governance/plan-tracker.md`
 
 ## Codex 执行要求
 

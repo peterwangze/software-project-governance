@@ -17,13 +17,13 @@
     "workflows/software-project-governance/templates/evidence-log.md",
     "workflows/software-project-governance/templates/decision-log.md",
     "workflows/software-project-governance/templates/risk-log.md",
-    "workflows/software-project-governance/examples/current-project-sample.md"
+    ".governance/plan-tracker.md"
   ],
   "outputs": [
-    "workflows/software-project-governance/examples/current-project-sample.md",
-    "workflows/software-project-governance/examples/current-project-evidence-log.md",
-    "workflows/software-project-governance/examples/current-project-decision-log.md",
-    "workflows/software-project-governance/examples/current-project-risk-log.md"
+    ".governance/plan-tracker.md",
+    ".governance/evidence-log.md",
+    ".governance/decision-log.md",
+    ".governance/risk-log.md"
   ],
   "gate_behavior": {
     "on_fail": "block-next-stage",

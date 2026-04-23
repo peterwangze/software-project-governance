@@ -2,11 +2,13 @@
 
 > **已废弃（Deprecated）**：本目录是早期的 repo-local 探索性样例，已被 Claude Code 官方插件系统取代。
 > 新的正式入口请使用：
-> - **插件市场**：`.claude-plugin/marketplace.json` + `.claude-plugin/plugin.json`
-> - **项目级 skill**：`.claude/skills/software-project-governance/SKILL.md`
+> - **自包含插件**：`skills/software-project-governance/SKILL.md`（内嵌核心规则 + `references/` 按需加载）
+> - **项目级入口**：`.claude/skills/software-project-governance/SKILL.md`
+> - **插件市场**：`.claude-plugin/marketplace.json` + `plugin.json`
 > - **交互命令**：`/governance-status`、`/governance-gate`、`/governance-verify`
+> - **活跃数据源**：`.governance/`（plan-tracker、evidence-log、decision-log、risk-log）
 >
-> 本目录保留仅作为历史参考，不再继续扩展。
+> 本目录保留仅作为历史参考，不再继续扩展。下方"入口约定"和"执行要求"描述的是早期 repo-local 多文件读取模式，与当前自包含插件架构不一致，请以 SKILL.md 为准。
 
 本目录定义 `software-project-governance` workflow 在 Claude 场景下的消费方式。
 

@@ -19,7 +19,8 @@
 - `workflows/software-project-governance/manifest.md`
 - `workflows/software-project-governance/rules/*`
 - `workflows/software-project-governance/templates/*`
-- `workflows/software-project-governance/examples/*`
+- `workflows/software-project-governance/templates/*`（模板参考）
+- `.governance/*`（活跃治理记录，项目级事实源）
 - `workflows/software-project-governance/research/agent-integration-models.md`
 - `workflows/software-project-governance/research/default-product-shape.md`
 

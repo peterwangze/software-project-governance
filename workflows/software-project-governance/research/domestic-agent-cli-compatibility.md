@@ -33,7 +33,8 @@
 - `protocol/`
 - `workflows/software-project-governance/rules/`
 - `workflows/software-project-governance/templates/`
-- `workflows/software-project-governance/examples/`
+- `workflows/software-project-governance/examples/`（历史迁移指针）
+- `.governance/`（活跃治理记录）
 - `workflows/software-project-governance/research/`
 - `scripts/verify_workflow.py`
 
@@ -139,5 +140,5 @@
 ## 下一步建议
 
 1. 若要进入实现验证，优先选一个支持 external runner 或 MCP 的国内 agent CLI 做最小样例。
-2. 将验证结果继续回写到 `examples/`，而不是在 adapter 层单独维护状态。
+2. 将验证结果继续回写到 `.governance/`，而不是在 adapter 层单独维护状态。
 3. 如果某个国内 agent CLI 只支持项目级上下文文件，也应坚持“最薄投影”原则。 

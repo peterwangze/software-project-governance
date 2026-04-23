@@ -8,15 +8,9 @@
     "When planning, reviewing, or validating project-governance work"
   ],
   "inputs": [
-    "workflows/software-project-governance/manifest.md",
-    "protocol/workflow-schema.md",
-    "protocol/plugin-contract.md",
-    "workflows/software-project-governance/rules/lifecycle.md",
-    "workflows/software-project-governance/rules/stage-gates.md",
-    "workflows/software-project-governance/templates/plan-tracker.md",
-    "workflows/software-project-governance/templates/evidence-log.md",
-    "workflows/software-project-governance/templates/decision-log.md",
-    "workflows/software-project-governance/templates/risk-log.md",
+    "skills/software-project-governance/SKILL.md",
+    "skills/software-project-governance/references/stage-gates.md",
+    "skills/software-project-governance/references/lifecycle.md",
     ".governance/plan-tracker.md"
   ],
   "outputs": [

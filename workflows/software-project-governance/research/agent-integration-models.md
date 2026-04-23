@@ -116,7 +116,7 @@
 2. project-local 入口只应作为样例、fallback 或团队显式绑定方案。
 3. 默认推荐形态应优先考虑 user/global skill、plugin/extension、MCP、headless command 等低侵入方式。
 4. agent 私有入口文件只应承载“如何映射到 workflow 本体”，不应复制整套治理事实源。
-5. 单一事实源必须继续保留在 `workflows/software-project-governance/examples/` 及 workflow 本体资产中，而不是散落到不同 agent 入口文件。
+5. 单一事实源必须继续保留在项目级 `.governance/` 中，workflow 本体层的 `examples/` 仅保留历史迁移指针，而不是散落到不同 agent 入口文件。
 
 ### 暂不做过度结论的部分
 

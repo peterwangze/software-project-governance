@@ -79,7 +79,7 @@ headless runner 至少输出以下结构：
 
 要求：
 
-- 只允许回写 `examples/` 四类事实源
+- 只允许回写 `.governance/` 四类事实源
 - 执行后必须运行 `python scripts/verify_workflow.py`
 - 只有校验通过后，`status` 才能为 `validated`
 
@@ -245,7 +245,7 @@ blocked → planned（补齐缺失证据或动作后重新进入）
 快照的用途：
 
 - 供后续人工或自动化恢复使用。
-- 不作为第二事实源。治理记录仍以 `examples/` 四类文件为准。
+- 不作为第二事实源。治理记录仍以 `.governance/` 四类文件为准。
 
 ## CI 环境最小行为边界
 
@@ -261,7 +261,7 @@ blocked → planned（补齐缺失证据或动作后重新进入）
 本文件定义的 runner 只是 `software-project-governance.run` 的执行宿主，不构成第二事实源：
 
 - runner 的输出快照仅供恢复和调试使用。
-- 治理记录的唯一事实源仍然是 `examples/` 四类文件。
+- 治理记录的唯一事实源仍然是 `.governance/` 四类文件。
 - runner 不得把执行中间状态写入 `protocol/`、`workflows/` 或 `scripts/` 下的任何文件。
 
 ## 下一步建议

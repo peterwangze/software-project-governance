@@ -28,7 +28,7 @@
 - `research/`：大型软件公司管理经验
 - `rules/`：生命周期、Gate 与过程规则
 - `templates/`：计划、证据、决策、风险模板
-- `examples/`：当前项目样例数据
+- `examples/`：历史样例数据（活跃治理记录已迁移至项目级 `.governance/`）
 
 ## 当前事实源
 

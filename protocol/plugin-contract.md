@@ -145,7 +145,7 @@
 
 - 继续复用 workflow 本体层，不复制规则、模板和治理日志。
 - 优先使用外部能力层或最薄投影层。
-- 保持事实源集中在 `workflows/software-project-governance/examples/` 等统一记录位置。
+- 保持事实源集中在 `.governance/` 等项目级统一记录位置。
 - 能说明校验命令、Gate 阻断和回写约束如何稳定执行。
 
 如果某种接入方式只能通过新增大量 repo-local 资产才能成立，它默认只能被视为样例、fallback 或团队级显式绑定方案。
@@ -167,7 +167,7 @@
   - `rules/`：生命周期、Gate、Profile、onboarding、交互边界
   - `stages/`：每个阶段的子工作流和 skill/script
   - `templates/`：计划、证据、决策、风险模板
-  - `examples/`：真实项目样例和治理记录
+  - `examples/`：历史样例（活跃治理记录已迁移至项目级 `.governance/`）
   - `research/`：企业经验、产品形态、兼容抽象等调研结论
 - `adapters/<agent>/`：探索性 agent 投影样例、调试入口或对比基线
 - `scripts/`：校验脚本
@@ -205,7 +205,7 @@
    - 是否有官方文档支撑该承载形态？
 
 2. **write-back 边界**
-   - 该 agent 能否将执行结果回写到 workflow 统一事实源（`examples/` 四类文件）？
+   - 该 agent 能否将执行结果回写到项目级统一事实源（`.governance/` 四类文件）？
    - 是否存在 agent 私有状态文件、独立日志或绕开统一 write-back targets 的路径？
 
 3. **Gate 阻断语义**
@@ -237,7 +237,7 @@
 
 1. **低侵入**：不需要把 workflow 本体复制进用户仓库，不修改用户项目级文件。
 2. **可替换**：用户替换或移除该接法时，workflow 本体和治理记录不受影响。
-3. **共享事实源**：接法产生的治理记录统一写入 `examples/` 四类文件，不维护第二套事实源。
+3. **共享事实源**：接法产生的治理记录统一写入 `.governance/` 四类文件，不维护第二套事实源。
 4. **可验证**：有明确的校验命令，且校验失败时能阻止声称完成。
 5. **可自动化**：能映射到 shared command contract 或 headless runner 样例的结构化语义。
 

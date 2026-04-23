@@ -51,7 +51,8 @@
 - `workflows/software-project-governance/manifest.md`
 - `workflows/software-project-governance/rules/`
 - `workflows/software-project-governance/templates/`
-- `workflows/software-project-governance/examples/`
+- `workflows/software-project-governance/examples/`（历史迁移指针）
+- `.governance/`（活跃治理记录）
 - `workflows/software-project-governance/research/`
 - `scripts/verify_workflow.py`
 

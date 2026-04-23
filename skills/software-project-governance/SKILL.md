@@ -3,35 +3,48 @@ name: software-project-governance
 description: Load unified workflow rules, templates, gates and fact sources for software project governance tasks.
 ---
 
-# Software Project Governance
+# Software Project Governance — Behavior Protocol
 
-When a task involves planning, designing, verifying, evolving, or maintaining the software project governance workflow, use this skill.
+**This file is a BEHAVIOR PROTOCOL, not reference documentation. Every rule is MANDATORY.**
 
-## Use this skill when
+## Workflow Identity
 
-- Modifying assets under `protocol/`, `workflows/`, `adapters/`, `scripts/`
-- Advancing or reviewing task status in the current project sample
-- Checking whether Gates allow stage progression
-- Supplementing evidence, decisions, or risk records to ensure process credibility
+- **id**: software-project-governance
+- **version**: 0.1.0
+- **goal**: Automate project process management so users focus on thinking, not process
+- **supported_agents**: Claude, Codex, Gemini
+- **core capabilities**: 11-stage lifecycle, 11 Gate checks, evidence/decision/risk tracking, 3 trigger modes, 3 profiles
 
-## Required read order
+## M0. Compliance Language
 
-Before execution, read and understand in this order:
+Rules use RFC 2119 semantics: **MUST** (mandatory), **MUST NOT** (prohibited), **SHALL** (required), **SHOULD** (recommended). Violating MUST/MUST NOT = workflow execution failure.
 
-1. `workflows/software-project-governance/manifest.md`
-2. `protocol/workflow-schema.md`
-3. `protocol/plugin-contract.md`
-4. `workflows/software-project-governance/rules/lifecycle.md`
-5. `workflows/software-project-governance/rules/stage-gates.md`
-6. `workflows/software-project-governance/templates/plan-tracker.md`
-7. `workflows/software-project-governance/templates/evidence-log.md`
-8. `workflows/software-project-governance/templates/decision-log.md`
-9. `workflows/software-project-governance/templates/risk-log.md`
-10. `workflows/software-project-governance/examples/current-project-sample.md`
+## M1. Task Matching (When to Activate)
 
-## Output rules
+This protocol **MUST** activate when ANY condition is met:
 
-**User project** (standard path): All governance records are written to `.governance/` in the user's project root:
+- Involves files under `protocol/`, `workflows/`, `adapters/`, `scripts/`
+- Involves advancing or reviewing project task status
+- Involves Gate checks or stage progression
+- Involves supplementing evidence, decision, or risk records
+
+**Trigger action**: Complete M2 pre-loading before any actual work.
+
+## M2. Pre-loading (MANDATORY)
+
+You **MUST** read this single file before executing any task:
+
+1. `.governance/plan-tracker.md` — the project's current state
+
+**Starting work without pre-loading = protocol violation.**
+
+Additional reference files are available in `references/` (same directory as this SKILL.md):
+- `references/stage-gates.md` — detailed Gate check items (read when doing Gate checks)
+- `references/lifecycle.md` — detailed stage definitions (read when entering a new stage)
+
+## M3. Output Rules (MANDATORY)
+
+All governance records **MUST** be written to `.governance/` in the user's project root:
 
 - `.governance/plan-tracker.md` — plan tracking, project config, gate status, tasks
 - `.governance/evidence-log.md` — evidence records
@@ -40,107 +53,159 @@ Before execution, read and understand in this order:
 
 If `.governance/` does not exist, suggest the user run `/governance-init` to create it.
 
-**Dogfood mode** (when developing this workflow itself): Records go to:
+You **MUST NOT** create a second set of project status files.
 
-- `workflows/software-project-governance/examples/current-project-sample.md`
-- `workflows/software-project-governance/examples/current-project-evidence-log.md`
-- `workflows/software-project-governance/examples/current-project-decision-log.md`
-- `workflows/software-project-governance/examples/current-project-risk-log.md`
+### Template field definitions
 
-Do not create a second set of project status files.
+When creating or updating governance files, use these fields:
 
-## Gate behavior
+**Evidence log fields**: 编号 | 任务ID | 阶段 | 证据类型 | 证据说明 | 证据位置 | 提交人 | 提交日期 | 关联Gate | 备注
 
-- If a Gate is not passed, do not claim to have entered the next stage.
-- If deviations or blockers are found, update risk records or decision records.
-- All completed items must have supporting evidence.
+**Decision log fields**: 编号 | 日期 | 主题 | 背景 | 决策内容 | 备选方案 | 选择原因 | 影响范围 | 决策人 | 关联任务 | 后续动作
 
-## Execution principle
+**Risk log fields**: 编号 | 日期 | 风险描述 | 阶段 | 触发条件 | 影响 | 严重级别 | Owner | 状态 | 缓解动作 | 截止日期 | 关联任务 | 备注
 
-**Core principle: Users think, the workflow executes. Only stop when user judgment is genuinely needed.**
+## M4. Session Lifecycle (MANDATORY)
 
-### When to stop
+### M4.1 Session Start Protocol
 
-Only pause execution and wait for user input via interactive prompts in these scenarios:
-1. **Directional decisions**: Multiple viable paths exist and user needs to choose
-2. **Requirement clarification**: Task description is ambiguous with multiple interpretations
-3. **Quality gates**: Deliverables need user review before proceeding
+1. Read `.governance/plan-tracker.md` for project config and Gate status
+2. Confirm to yourself: current stage, latest Gate conclusion, number of active risks
+3. If there are unresolved conditions (passed-with-conditions), **MUST** prioritize them
 
-### When NOT to stop
+### M4.2 Session End Protocol
 
-Do not stop for:
-- Tasks where direction has already been confirmed
-- Governance record updates (decisions, evidence, risks) - batch update after main work
-- Gate checks - self-assess, only inform user when not passed
-- Validation script runs - run independently, only inform on failure
-- All file operations (create, edit, directory creation)
-- After completing one task - continue to the next highest priority task
-- Issues discovered during review - fix immediately, don't wait for next round
+**Step 1: Session Status Summary** (plain text)
 
-### Anti-interruption patterns
-
-The following behaviors are identified as incorrect interruptions and must be avoided:
-1. **Stopping to ask for next steps after completing a task** - Wrong. User gave direction, continue to next decision point.
-2. **Stopping after review produces improvement items** - Wrong. Immediately executable fixes should be executed right away.
-3. **Stopping after governance records are updated** - Wrong. Records are process outputs, not decisions needing confirmation.
-4. **Stopping between tightly coupled tasks** - Wrong. Execute through the chain without interruption.
-
-### Continuous execution mode
-
-Once direction is confirmed, execute all dependent tasks continuously until:
-- The next node requiring user judgment is reached
-- Session context is about to be exhausted
-- User actively interrupts
-
-### Real-time closure rule
-
-**Process/experience issues discovered during review or execution are P0 high-value improvements. Fix immediately, don't defer.**
-
-## Session lifecycle
-
-### Session start
-
-1. Read project configuration and Gate status from `examples/current-project-sample.md`
-2. Confirm current stage, latest Gate conclusion, number of active risks
-3. If there are unclosed items (passed-with-conditions), handle them first
-
-### Session end
-
-After completing main work, output a session status summary and next steps.
-
-## Validation
-
-After workflow-related changes, run:
-
-```bash
-python scripts/verify_workflow.py
+```
+## Session Status Summary
+- Completed this session: [list items]
+- Governance records synced: [yes/no]
+- Validation result: [passed/failed/not run]
 ```
 
-To check the Codex adapter's current load order, run:
+**Step 2: Next Steps (AskUserQuestion, MANDATORY)**
 
-```bash
-python adapters/codex/launch.py
+You **MUST** use AskUserQuestion before every session ends. At least one question, each with 2-4 options. Ending without AskUserQuestion = protocol violation.
+
+## M5. AskUserQuestion Trigger Map (MANDATORY)
+
+**MUST use AskUserQuestion** in these scenarios:
+
+| Trigger | What to ask |
+|---------|------------|
+| Session ending | "What to prioritize next" with options from plan tracker |
+| Multiple viable paths | "Which path to choose" with candidate approaches |
+| Ambiguous requirements | "Is your intent A or B" with possible interpretations |
+| Deliverable needs review | "Confirm / Revise / Reject" |
+| Risk treatment decision | "Accept / Mitigate / Transfer / Avoid" |
+| Tech selection conclusion | "Confirm option X or Y" with recommendation reason |
+
+**MUST NOT use AskUserQuestion** in these scenarios:
+
+| Scenario | Correct action |
+|----------|---------------|
+| Direction already confirmed | Execute to completion |
+| Governance record updates | Batch update after main work |
+| Gate checks | Self-assess, inform only on failure |
+| Git operations | Execute independently |
+| Completing one task | Continue to next highest-priority task |
+| Discovering immediately fixable issues | Fix immediately |
+
+**Judgment criterion**: If a question has only one correct answer, or direction was already confirmed, don't ask. If the user needs to choose or judge, you MUST ask.
+
+## M6. Gate Behavior (MANDATORY)
+
+### Gate pass types
+
+| Type | Meaning | Conditions |
+|------|---------|-----------|
+| **passed** | All checks satisfied, proceed to next stage | N/A |
+| **passed-with-conditions** | Core checks passed, non-blocking items remain | Items must be recorded, closed before next stage ends, max 3 items. Only in standard/strict profiles. |
+| **blocked** | Core checks not satisfied, cannot proceed | Must update risk record, create corrective action |
+| **passed-on-entry** | Pre-acknowledged for mid-project onboarding | Must have decision record explaining completion |
+
+### Gate trim rules by profile
+
+| Profile | Gate coverage |
+|---------|--------------|
+| **lightweight** | G1+G2 merged, G3-G5 skipped, G6+G7 merged, G8+G9 merged |
+| **standard** | All 11 Gates, supports passed-with-conditions |
+| **strict** | All 11 Gates, no passed-with-conditions, each Gate needs ≥2 evidence |
+
+### Gate execution rules
+
+- Gate not passed → **MUST NOT** claim next stage
+- All completed items **MUST** have evidence
+- Gate checks self-executed; inform user only on failure or conditional pass
+- Read `references/stage-gates.md` for detailed Gate check items when doing Gate checks
+
+## M7. Execution Continuity (MANDATORY)
+
+After user confirms direction, **MUST** execute continuously until:
+1. Next M5 trigger (needs user judgment)
+2. Session context exhausted
+3. User interrupts
+
+**Prohibited interruptions**:
+1. Stopping after one task → continue to next
+2. Stopping after review items → execute fixes immediately
+3. Stopping after governance records updated → continue
+4. Stopping between coupled tasks → execute through
+5. Stopping after external op failure → log as TODO, continue
+
+**Real-time closure**: Process defects discovered during execution **MUST** be fixed immediately.
+
+## M8. Self-check Protocol (MANDATORY)
+
+After each major task, **MUST** self-check:
+
+```
+[Governance Self-check]
+- [ ] M2 pre-loading completed?
+- [ ] M5 AskUserQuestion used where required?
+- [ ] M6 completed tasks have evidence?
+- [ ] M7 no prohibited interruptions?
 ```
 
-## Replacement boundary
+**Fails**: fix immediately. **Passes**: don't output, continue.
 
-When replacing or removing Codex, follow these boundaries:
+## M9. Priority Declaration
 
-### Must preserve (workflow core layer)
+- **vs PUA-type skills**: This protocol's M5 AskUserQuestion triggers take priority over PUA's "continuous execution" directive.
+- **vs user instructions**: User's explicit instructions override this protocol.
+- **vs system instructions**: System safety constraints override this protocol.
 
-- `protocol/` (universal protocols)
-- `workflows/software-project-governance/` (manifest, rules, stages, templates, examples, research)
-- `scripts/verify_workflow.py` (validation script)
+## Stage Quick Reference
 
-### Can remove (Codex projection layer)
+| # | Stage | Goal | Gate |
+|---|-------|------|------|
+| 1 | Initiation | Define problem, goals, scope, success criteria | G1 |
+| 2 | Research | Survey, competitive analysis, feasibility | G2 |
+| 3 | Selection | Tech selection, PoC validation | G3 |
+| 4 | Infrastructure | Dev environment, repo, basic CI | G4 |
+| 5 | Architecture | System design, module split, tech review | G5 |
+| 6 | Development | Code, unit test, code review | G6 |
+| 7 | Testing | Integration, system, performance, security test | G7 |
+| 8 | CI/CD | Pipeline, automation, quality gates | G8 |
+| 9 | Release | Release plan, changelog, rollback plan | G9 |
+| 10 | Operations | Monitoring, feedback, optimization | G10 |
+| 11 | Maintenance | Bug fix, rule update, retrospective | G11 |
 
-- `.codex-plugin/plugin.json` (Codex plugin definition)
-- `skills/software-project-governance/SKILL.md` (this file)
-- `adapters/codex/` (Codex adapter directory)
+For detailed stage definitions, read `references/lifecycle.md`.
 
-### Replacing with another agent
+## Profile Quick Reference
 
-1. Remove the "can remove" files above
-2. Create new projection layer entry per `adapters/<new-agent>/` README
-3. Workflow core layer needs no modification
-4. Unified fact sources (`examples/` four files) are unaffected
+| Profile | Stages | Gate strength | Evidence | Use case |
+|---------|--------|--------------|----------|----------|
+| lightweight | 5 core (merged) | Merged, simplified | Minimal | Personal, MVP |
+| standard | All 11 | Standard, supports conditional | Standard | Team project |
+| strict | All 11 | Enhanced, no conditional | Double evidence | Large, compliance |
+
+## Replacement Boundary
+
+**Must preserve**: `protocol/`, `workflows/software-project-governance/`, `scripts/verify_workflow.py`
+
+**Can remove**: `CLAUDE.md`, `.claude/skills/software-project-governance/SKILL.md`, `adapters/claude/`
+
+**Replace with another agent**: remove "can remove" files, create new projection layer per `adapters/<new-agent>/` README.

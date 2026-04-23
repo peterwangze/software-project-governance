@@ -26,6 +26,12 @@ REQUIRED_FILES = {
     "Sample Evidence": ROOT / "workflows/software-project-governance/examples/current-project-evidence-log.md",
     "Sample Decision": ROOT / "workflows/software-project-governance/examples/current-project-decision-log.md",
     "Sample Risk": ROOT / "workflows/software-project-governance/examples/current-project-risk-log.md",
+    "Governance Plan Tracker": ROOT / ".governance/plan-tracker.md",
+    "Governance Evidence Log": ROOT / ".governance/evidence-log.md",
+    "Governance Decision Log": ROOT / ".governance/decision-log.md",
+    "Governance Risk Log": ROOT / ".governance/risk-log.md",
+    "Skill References Stage Gates": ROOT / "skills/software-project-governance/references/stage-gates.md",
+    "Skill References Lifecycle": ROOT / "skills/software-project-governance/references/lifecycle.md",
     "Claude Repository Entry": ROOT / "CLAUDE.md",
     "Claude Skill": ROOT / ".claude/skills/software-project-governance/SKILL.md",
     "Claude Adapter": ROOT / "adapters/claude/README.md",
@@ -367,8 +373,8 @@ REQUIRED_SNIPPETS = {
     ],
     ROOT / ".claude/skills/software-project-governance/SKILL.md": [
         "# Software Project Governance",
-        "## Required read order",
-        "python scripts/verify_workflow.py",
+        "## M2",
+        "references/stage-gates.md",
     ],
     ROOT / "adapters/claude/README.md": [
         "## Claude 入口约定",
@@ -464,9 +470,9 @@ REQUIRED_SNIPPETS = {
     ],
     ROOT / "skills/software-project-governance/SKILL.md": [
         "# Software Project Governance",
-        "## Required read order",
-        "python scripts/verify_workflow.py",
-        "## Replacement boundary",
+        "## M2",
+        "references/stage-gates.md",
+        "Replacement Boundary",
     ],
     ROOT / ".agents/plugins/marketplace.json": [
         "software-project-governance",

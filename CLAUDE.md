@@ -2,14 +2,24 @@
 
 ## Governance Bootstrap（强制 — 每次会话第一动作）
 
-在执行任何用户任务之前，**MUST** 先完成：
+在执行任何用户任务之前，**MUST** 先完成以下 3 步：
 
-1. 读取 `.governance/plan-tracker.md`
-2. 在内心确认：当前阶段、最近 Gate 结论、活跃风险数、进行中的 P0 任务
-3. 如果存在 passed-with-conditions 遗留项，优先处理
-4. 如果 `.governance/` 不存在，提醒用户先初始化
+### Step 1: 读 plan-tracker
+读取 `.governance/plan-tracker.md`，确认：当前阶段、最近 Gate 结论、活跃风险数、进行中的 P0 任务。如果 `.governance/` 不存在，提醒用户先初始化。
 
-**没读 plan-tracker 就开始干活 = 流程违规。这不是"建议"，是前置条件。**
+### Step 2: 交叉验证（3 项强制检查）
+对照 `.governance/plan-tracker.md` 和 `.governance/evidence-log.md`：
+
+1. **证据完整性**：plan-tracker 中状态为"已完成"的任务，evidence-log 中是否有对应证据？缺失 = P0 漏洞，告知用户。
+2. **Gate 一致性**：plan-tracker 的 Gate 状态与 evidence-log 的最新证据是否匹配？Gate 标记 passed 但无对应证据 = 不一致，告知用户。
+3. **风险过期**：risk-log 中活跃风险超过 7 天未更新？是 = 标记为过期风险，告知用户。
+
+任一检查失败 → 列出差距 → 征求用户是否立即修复（AskUserQuestion）。
+
+### Step 3: 优先级确认
+如果 plan-tracker 中有 passed-with-conditions 遗留项或有进行中的 P0 任务 → 优先处理。上一 session 未完成的 P0 任务 → 继续执行。
+
+**没读 plan-tracker 就开始干活 = 流程违规。跳过交叉验证 = 流程违规。这不是"建议"，是前置条件。**
 
 ## 干活前检查（每次收到任务时）
 

@@ -70,3 +70,5 @@
 | EVD-064 | MAINT-020 | 维护 | 命令输出 | `verify_workflow.py` 已补入 skills/references/ 新增文件、skills/stages/ 全部文件、`.claude/skills/references/` 新增文件的检查项，全量校验通过（PASSED） | `scripts/verify_workflow.py` | Claude | 2026-04-24 | G8 | 支撑新增资产纳入校验口径 |
 | EVD-065 | MAINT-021 | 维护 | 文档 | CLAUDE.md 从"仓库级入口指针"重写为"Governance Bootstrap"，3 条无条件前置检查（读 plan-tracker → 任务入账 → 补证据），不依赖 SKILL.md 加载状态 | `CLAUDE.md` | Claude | 2026-04-24 | G8 | 解决"SKILL.md 被加载但从未被执行"的根本问题——CLAUDE.md 是唯一每次会话必定生效的入口 |
 | EVD-066 | MAINT-022 | 维护 | 文档 | `governance-init` 命令已更新：初始化时自动向用户项目 CLAUDE.md 注入治理 bootstrap 段落（如不存在则创建，如存在但无治理段落则追加） | `commands/governance-init.md` | Claude | 2026-04-24 | G8 | 解决"本仓库 CLAUDE.md 有 bootstrap，用户项目没有 = 开发/生产行为不一致"的致命缺陷 |
+| EVD-067 | MAINT-023 | 维护 | 文档 | 决策记录已补 DEC-036~039（自包含补全、CLAUDE.md bootstrap、governance-init 注入、两条核心路线召回），计划跟踪表新增 MAINT-023/024 | `.governance/decision-log.md`, `.governance/plan-tracker.md` | Claude | 2026-04-24 | G8 | 支撑被架构修补挤出视线的两条核心演进路线重新回到实施计划 |
+| EVD-068 | MAINT-024 | 维护 | 文档 | MAINT-007 被 MAINT-023 替代（策略从"等到最后"改为"选最友好目标先验证"），PLAN-002 正式关闭（backlog 已转入维护阶段常态化管理） | `.governance/plan-tracker.md` | Claude | 2026-04-24 | G8 | 支撑计划跟踪表的优先级和状态与项目实际演进对齐 |

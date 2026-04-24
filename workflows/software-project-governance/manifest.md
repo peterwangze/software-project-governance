@@ -26,10 +26,11 @@
 
 ## 组成结构
 
-- `research/`：大型软件公司管理经验
-- `rules/`：生命周期、Gate 与过程规则
-- `templates/`：计划、证据、决策、风险模板
-- `examples/`：历史样例数据（活跃治理记录已迁移至项目级 `.governance/`）
+- `skills/software-project-governance/`：**运行时唯一事实源**（SKILL.md 入口 + references/ 规则 + stages/ 子工作流 + main-workflow.md + TOOLS.md）
+- `workflows/software-project-governance/`：**设计时资产**（manifest + research/ + templates/ + examples/，不重复 skills/ 的运行时内容）
+- `protocol/`：通用协议层
+- `.governance/`：项目级治理数据（plan-tracker、evidence-log、decision-log、risk-log）
+- `scripts/`：校验脚本
 
 ## 当前事实源
 

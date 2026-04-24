@@ -38,7 +38,7 @@
 
 | 项目 | 当前阶段 | 总任务数 | 已完成 | 阻塞中 | 关键风险数 | 最近 Gate 结论 | 最近复盘日期 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 项目管理工作流插件 | 维护（并行活跃：规划） | 66 | 51 | 0 | 3 | G11 通过 | 2026-04-24 |
+| 项目管理工作流插件 | 维护（并行活跃：规划） | 67 | 52 | 0 | 3 | G11 通过 | 2026-04-25 |
 
 
 ## 样例跟踪表
@@ -164,3 +164,4 @@
 
 | MAINT-027 | 维护 | AskUserQuestion 唯一合法提问通道 + 关键决策分类机制 | 用户指出两个预期未落地：(1) AskUserQuestion 应是一致使用的提问工具；(2) 用户应能选择"仅在关键决策停下来"。M5/M7 有规则但 agent 实际未执行 | 用户反馈 | SKILL.md M5 升级为 M5.1~M5.4、M7 升级为 M7.1~M7.3、M8 自检升级、interaction-boundary.md 新增关键决策分类、CLAUDE.md 新增提问规则+自动 commit | Claude | 项目负责人 | 已完成 | P0 | 2026-04-24 | 2026-04-24 | 2026-04-24 | G8 | (1) M5.1: 内联文字提问=违规；(2) M5.3: 6 类关键+6 类非关键决策分类；(3) M7.1: 用户可声明"仅在关键决策停下来"；(4) verify_workflow.py PASSED | EVD-073、DEC-044 | 无 | 无 | 解决"规则写了但 agent 不执行"的执行一致性问题 |
 | MAINT-026 | 维护 | 清理 .claude/skills/ 冗余副本 | 用户已通过插件市场加载本地目录，不再需要手工维护 .claude/skills/ 副本。DEC-042 建立的逐字节等价校验也随副本删除而移除 | 用户决策 | 删除 .claude/skills/ 目录、移除 verify_workflow.py 等价校验、清理 settings.local.json 同步 hooks、更新 CLAUDE.md 引用 | Claude | 项目负责人 | 已完成 | P0 | 2026-04-24 | 2026-04-24 | 2026-04-24 | G8 | .claude/skills/ 已删除、verify_workflow.py PASSED、治理记录已更新 | EVD-072、DEC-043 | 无 | 无 | 用户明确指示：插件市场接管同步，无需手工维护副本 |
+| MAINT-028 | 维护 | Tier 1 双源合并：skills/ 成为运行时唯一事实源 | 三层架构审计发现 workflows/rules/、workflows/stages/ 与 skills/ 形成双事实源，协议与实现分叉。skills/ 正式成为运行时唯一事实源 | 三层架构审计报告（6 项结构性问题） | 删除 workflows/rules/（5 文件）、workflows/stages/（11 目录）、workflows/main-workflow.md、workflows/TOOLS.md；更新全部协议和文档路径；verify_workflow.py 移除冗余检查项 | Claude | 项目负责人 | 已完成 | P0 | 2026-04-25 | 2026-04-25 | 2026-04-25 | G8 | (1) workflows/ 不再包含规则层和阶段层副本；(2) 所有协议和文档的 Tier 1 定义指向 skills/；(3) verify_workflow.py PASSED | EVD-086、DEC-047 | 无 | 无 | 架构审计驱动——协议描述现实而不是描述愿望 |

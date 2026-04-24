@@ -30,18 +30,20 @@
 
 始终复用：
 
-- `protocol/`
-- `workflows/software-project-governance/rules/`
+- `skills/software-project-governance/`（运行时本体：SKILL.md + references/ + stages/）
+- `workflows/software-project-governance/manifest.md`
 - `workflows/software-project-governance/templates/`
 - `workflows/software-project-governance/examples/`（历史迁移指针）
-- `.governance/`（活跃治理记录）
 - `workflows/software-project-governance/research/`
+- `protocol/`
+- `.governance/`（活跃治理记录）
 - `scripts/verify_workflow.py`
 
 要求：
 
 - 不因接入新的国内 agent CLI 而复制第二套规则、模板或样例记录。
 - 计划、证据、决策、风险继续共用同一套事实源。
+- 运行时规则和子工作流以 `skills/` 为唯一正本，`workflows/` 不再包含规则层和阶段层副本。
 
 ### 2. Agent 入口投影层
 

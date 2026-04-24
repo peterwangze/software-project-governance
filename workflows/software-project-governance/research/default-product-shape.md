@@ -45,15 +45,23 @@
 
 ### 1. Workflow 本体层
 
-这一层继续以当前仓库资产为核心，包含：
+本体的运行时承载位置为 `skills/software-project-governance/`（agent 通过插件市场安装后唯一能访问的目录），包含：
 
-- `protocol/`
+- `skills/software-project-governance/SKILL.md`（入口，内嵌核心行为协议）
+- `skills/software-project-governance/references/`（lifecycle、stage-gates、profiles、onboarding、interaction-boundary）
+- `skills/software-project-governance/stages/`（子工作流和 stage skills）
+- `skills/software-project-governance/main-workflow.md`、`TOOLS.md`
+
+仓库中的 `workflows/software-project-governance/` 承载**设计时资产**，不重复运行时本体内容：
+
 - `workflows/software-project-governance/manifest.md`
-- `workflows/software-project-governance/rules/`
+- `workflows/software-project-governance/research/`
 - `workflows/software-project-governance/templates/`
 - `workflows/software-project-governance/examples/`（历史迁移指针）
+
+其他共享资产：
+- `protocol/`
 - `.governance/`（活跃治理记录）
-- `workflows/software-project-governance/research/`
 - `scripts/verify_workflow.py`
 
 职责：
@@ -65,7 +73,7 @@
 边界：
 
 - 不面向单一 agent 私有格式做深度定制。
-- 不把某个 agent 的项目级目录结构写成 workflow 真相。
+- `skills/` 和 `workflows/` 之间不重复内容：运行时规则和子工作流只在 `skills/`；设计文档和模板只在 `workflows/`。
 
 ### 2. Agent 入口投影层
 
@@ -123,10 +131,14 @@
 
 ## 目录与资产演进建议
 
-当前目录不需要大拆，但需要明确语义：
+当前目录已按"运行时正本在 skills/、设计资产在 workflows/"原则重组：
 
+- `skills/software-project-governance/`
+  - 运行时唯一事实源，agent 通过插件市场安装后访问。包含 SKILL.md、references/、stages/、main-workflow.md、TOOLS.md。
 - `workflows/software-project-governance/research/`
   - 继续承载调研结论与产品形态方案。
+- `workflows/software-project-governance/templates/`
+  - 计划、证据、决策、风险等记录模板（governance-init 命令的输入）。
 - `adapters/`
   - 明确为探索性投影样例、调试入口、fallback 或兼容占位。
 - 后续如启动正式低侵入实现，可考虑新增：
@@ -134,7 +146,7 @@
   - `services/`：MCP 或外部 workflow service
   - `packages/`：可安装分发资产
 
-这些新增目录只有在 `PLAN-003` 后续实施真正需要时才建立，不提前造目录。
+这些新增目录只有在后续实施真正需要时才建立，不提前造目录。
 
 ## 对当前主线任务的影响
 

@@ -199,9 +199,9 @@ python scripts/verify_workflow.py gates        # 所有 Gate
 以下文档供工作流开发者和贡献者参考，普通用户不需要阅读：
 
 - [协议层定义](protocol/plugin-contract.md)
-- [生命周期规则](workflows/software-project-governance/rules/lifecycle.md)
-- [Gate 门禁规则](workflows/software-project-governance/rules/stage-gates.md)
-- [Profile 配置](workflows/software-project-governance/rules/profiles.md)
-- [中途接入协议](workflows/software-project-governance/rules/onboarding.md)
+- [生命周期规则](skills/software-project-governance/references/lifecycle.md)
+- [Gate 门禁规则](skills/software-project-governance/references/stage-gates.md)
+- [Profile 配置](skills/software-project-governance/references/profiles.md)
+- [中途接入协议](skills/software-project-governance/references/onboarding.md)
 - [企业实践经验](workflows/software-project-governance/research/company-practices.md)
 - [产品形态设计](workflows/software-project-governance/research/default-product-shape.md)

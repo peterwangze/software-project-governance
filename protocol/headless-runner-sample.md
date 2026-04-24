@@ -95,28 +95,25 @@ headless runner 继续复用以下顺序：
 4. `protocol/external-command-contract.md`
 5. `protocol/headless-runner-sample.md`
 
-### 规则层（必读）
+### 运行时本体层（必读 — 从 skills/ 加载）
 
-6. `workflows/software-project-governance/rules/lifecycle.md`
-7. `workflows/software-project-governance/rules/stage-gates.md`
-8. `workflows/software-project-governance/rules/profiles.md`
-9. `workflows/software-project-governance/rules/onboarding.md`
-10. `workflows/software-project-governance/rules/interaction-boundary.md`
+6. `skills/software-project-governance/references/lifecycle.md`
+7. `skills/software-project-governance/references/stage-gates.md`
+8. `skills/software-project-governance/references/profiles.md`
+9. `skills/software-project-governance/references/onboarding.md`
+10. `skills/software-project-governance/references/interaction-boundary.md`
 
-### 模板层（必读）
+### 治理记录字段定义（在 skill 入口中内嵌）
 
-11. `workflows/software-project-governance/templates/plan-tracker.md`
-12. `workflows/software-project-governance/templates/evidence-log.md`
-13. `workflows/software-project-governance/templates/decision-log.md`
-14. `workflows/software-project-governance/templates/risk-log.md`
+`skills/software-project-governance/SKILL.md` 的 M3 段已内嵌 plan-tracker、evidence-log、decision-log、risk-log 的全部字段定义。不需要额外读取外部模板文件。
 
 ### 当前阶段子工作流（按 stage 参数加载）
 
-15. `workflows/software-project-governance/stages/<stage>/sub-workflow.md`
+11. `skills/software-project-governance/stages/<stage>/sub-workflow.md`
 
 ### 项目实例（必读）
 
-16. `.governance/plan-tracker.md`
+12. `.governance/plan-tracker.md`
 
 ## gate behavior
 

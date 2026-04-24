@@ -59,28 +59,25 @@ command 至少需要产出以下结构化结果：
 3. `protocol/plugin-contract.md`
 4. `protocol/external-command-contract.md`
 
-### 规则层（必读）
+### 运行时本体层（必读 — 从 skills/ 加载）
 
-5. `workflows/software-project-governance/rules/lifecycle.md`
-6. `workflows/software-project-governance/rules/stage-gates.md`
-7. `workflows/software-project-governance/rules/profiles.md`
-8. `workflows/software-project-governance/rules/onboarding.md`
-9. `workflows/software-project-governance/rules/interaction-boundary.md`
+5. `skills/software-project-governance/references/lifecycle.md`
+6. `skills/software-project-governance/references/stage-gates.md`
+7. `skills/software-project-governance/references/profiles.md`
+8. `skills/software-project-governance/references/onboarding.md`
+9. `skills/software-project-governance/references/interaction-boundary.md`
 
-### 模板层（必读）
+### 治理记录字段定义（在 skill 入口中内嵌）
 
-10. `workflows/software-project-governance/templates/plan-tracker.md`
-11. `workflows/software-project-governance/templates/evidence-log.md`
-12. `workflows/software-project-governance/templates/decision-log.md`
-13. `workflows/software-project-governance/templates/risk-log.md`
+`skills/software-project-governance/SKILL.md` 的 M3 段已内嵌 plan-tracker、evidence-log、decision-log、risk-log 的全部字段定义。不需要额外读取外部模板文件。
 
 ### 当前阶段子工作流（按 stage 参数加载）
 
-14. `workflows/software-project-governance/stages/<stage>/sub-workflow.md`
+10. `skills/software-project-governance/stages/<stage>/sub-workflow.md`
 
 ### 当前阶段 skill（按需加载）
 
-15. `workflows/software-project-governance/stages/<stage>/` 下的 skill 文件
+11. `skills/software-project-governance/stages/<stage>/` 下的 skill 文件
 
 ### 项目实例（必读）
 
@@ -131,7 +128,8 @@ python scripts/verify_workflow.py
 必须保留：
 
 - `protocol/`
-- `workflows/software-project-governance/`
+- `skills/software-project-governance/`（运行时本体）
+- `workflows/software-project-governance/`（设计时资产）
 - `scripts/verify_workflow.py`
 
 可以移除或替换：
@@ -170,6 +168,7 @@ python scripts/verify_workflow.py
   "replacement_boundary": {
     "keep": [
       "protocol/",
+      "skills/software-project-governance/",
       "workflows/software-project-governance/",
       "scripts/verify_workflow.py"
     ],

@@ -292,6 +292,7 @@ WORKFLOW_SNIPPETS = {
         "## G1 — 立项完成",
         "## G11 — 维护闭环",
         "## Gate 执行原则",
+        "Closure Follow-Through",
         "## Gate 裁剪规则",
     ],
     ROOT / "workflows/software-project-governance/rules/profiles.md": [
@@ -616,6 +617,7 @@ REQUIRED_SNIPPETS = {
         "## G1 — 立项完成",
         "## G11 — 维护闭环",
         "## Gate 执行原则",
+        "Closure Follow-Through",
         "## Gate 裁剪规则",
     ],
     ROOT / "workflows/software-project-governance/rules/profiles.md": [

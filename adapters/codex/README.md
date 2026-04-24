@@ -2,52 +2,43 @@
 
 > **已废弃（Deprecated）**：本目录是早期的 repo-local 探索性样例，已被 Codex 官方插件系统取代。
 > 新的正式入口请使用：
-> - **自包含插件**：`skills/software-project-governance/SKILL.md`（内嵌核心规则 + `references/` 按需加载）
+> - **自包含插件**：`skills/software-project-governance/SKILL.md`（内嵌核心规则 + `references/` 按需加载 + `stages/` 子工作流和 skills）
 > - **Codex 插件**：`.codex-plugin/plugin.json` + `skills/software-project-governance/SKILL.md`
 > - **Codex 市场**：`.agents/plugins/marketplace.json`
 > - **活跃数据源**：`.governance/`（plan-tracker、evidence-log、decision-log、risk-log）
 >
-> 本目录保留仅作为历史参考，不再继续扩展。下方"入口约定"描述的是早期 repo-local 多文件读取模式，与当前自包含插件架构不一致，请以 SKILL.md 为准。
+> 本目录保留仅作为历史参考，不再继续扩展。**不要按下方旧入口约定执行**——那是 repo-local 多文件预加载模式，与当前自包含插件架构冲突。
 
-本目录定义 `software-project-governance` workflow 在 Codex CLI 场景下的消费方式。
+本目录定义 `software-project-governance` workflow 在 Codex CLI 场景下的消费方式（历史）。
 
 ## 适配目标
 
 让 Codex 类 coding agent 在执行项目任务时，以统一流程资产为约束，避免直接基于临时上下文做局部最优决策。
 
-## Codex 入口约定
+## 当前有效入口（与自包含架构一致）
 
-建议 Codex 适配入口至少包含以下动作：
+Codex 加载 `skills/software-project-governance/SKILL.md` 作为自包含入口，该文件依赖：
+- `skills/software-project-governance/references/` — 按需读取的参考规则
+- `skills/software-project-governance/stages/` — 11 个阶段的子工作流和 skill
+- 用户项目的 `.governance/` — 活跃治理记录
 
-1. 读取 workflow manifest：
-   - `workflows/software-project-governance/manifest.md`
-2. 读取协议层：
-   - `protocol/workflow-schema.md`
-   - `protocol/plugin-contract.md`
-   - `protocol/external-command-contract.md`
-3. 读取规则层：
-   - `workflows/software-project-governance/rules/lifecycle.md`
-   - `workflows/software-project-governance/rules/stage-gates.md`
-   - `workflows/software-project-governance/rules/profiles.md`
-   - `workflows/software-project-governance/rules/onboarding.md`
-   - `workflows/software-project-governance/rules/interaction-boundary.md`
-4. 读取模板层：
-   - `workflows/software-project-governance/templates/plan-tracker.md`
-   - `workflows/software-project-governance/templates/evidence-log.md`
-   - `workflows/software-project-governance/templates/decision-log.md`
-   - `workflows/software-project-governance/templates/risk-log.md`
-5. 按当前阶段读取子工作流和 skill：
-   - `workflows/software-project-governance/stages/<stage>/sub-workflow.md`
-   - `workflows/software-project-governance/stages/<stage>/` 下的 skill 文件
-6. 读取样例：
-   - `.governance/plan-tracker.md`
+Codex 用户无需读取下方的旧入口约定。
 
-## Codex 执行要求
+## 历史入口约定（已废弃，仅供参考）
 
-- 将 workflow 视为执行任务前的治理约束，而不是事后补文档。
-- 更新计划、证据、决策、风险时，必须复用同一套事实源。
-- 不同阶段的任务推进必须引用 Gate 规则。
-- 校验脚本通过后，才能声称 workflow 资产完整。
+<details>
+<summary>旧版 repo-local 6 步预加载（不再有效）</summary>
+
+以下内容仅在早期 repo-local 架构下有效，已不再推荐使用。
+
+1. 读取 workflow manifest：`workflows/software-project-governance/manifest.md`
+2. 读取协议层：`protocol/workflow-schema.md`、`protocol/plugin-contract.md`、`protocol/external-command-contract.md`
+3. 读取规则层：`workflows/software-project-governance/rules/*.md`
+4. 读取模板层：`workflows/software-project-governance/templates/*.md`
+5. 按当前阶段读取子工作流和 skill：`workflows/software-project-governance/stages/<stage>/`
+6. 读取样例：`.governance/plan-tracker.md`
+
+</details>
 
 ## 半可执行入口
 

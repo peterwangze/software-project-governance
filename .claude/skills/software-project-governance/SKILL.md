@@ -38,9 +38,32 @@ You **MUST** read this single file before executing any task:
 
 **Starting work without pre-loading = protocol violation.**
 
-Additional reference files are available in `references/` (same directory as this SKILL.md):
-- `references/stage-gates.md` — detailed Gate check items (read when doing Gate checks)
-- `references/lifecycle.md` — detailed stage definitions (read when entering a new stage)
+### M2.1 Reference files (in `references/`, same directory as this SKILL.md)
+
+Read on demand based on task type:
+
+| File | Read when |
+|------|-----------|
+| `references/stage-gates.md` | Performing Gate checks |
+| `references/lifecycle.md` | Entering a new stage, need detailed stage definitions |
+| `references/profiles.md` | Initializing a project, user asks about profile/scale, or switching profile |
+| `references/onboarding.md` | Onboarding an existing (in-progress) project |
+| `references/interaction-boundary.md` | Uncertain whether to auto-execute or ask user |
+
+### M2.2 Sub-workflows and skills (in `stages/`, same directory as this SKILL.md)
+
+When the user asks to perform a specific activity (e.g., "do a code review", "run a tech review", "create a release checklist", "do a retrospective"), read the corresponding file:
+
+| Directory | Contains |
+|-----------|----------|
+| `stages/<stage>/sub-workflow.md` | 11 stage sub-workflows — entry conditions, activity checklist (with interaction boundary annotations), deliverables, exit conditions, Gate mapping |
+| `stages/initiation/requirement-clarification.md` | Requirement clarification checklist skill |
+| `stages/architecture/tech-review-checklist.md` | Technical review checklist skill |
+| `stages/development/code-review-standard.md` | Code review standard skill |
+| `stages/release/release-checklist.md` | Release checklist skill |
+| `stages/maintenance/retro-meeting-template.md` | Retrospective meeting template skill |
+
+If the user wants to use only a single feature (e.g., "help me with code review"), load only that skill file — do not load the full lifecycle.
 
 ## M3. Output Rules (MANDATORY)
 
@@ -51,7 +74,7 @@ All governance records **MUST** be written to `.governance/` in the user's proje
 - `.governance/decision-log.md` — decision records
 - `.governance/risk-log.md` — risk records
 
-If `.governance/` does not exist, suggest the user run `/governance-init` to create it.
+If `.governance/` does not exist, suggest the user run `/software-project-governance:governance-init` to create it.
 
 You **MUST NOT** create a second set of project status files.
 

@@ -5,44 +5,39 @@
 > - **自包含插件**：`skills/software-project-governance/SKILL.md`（内嵌核心规则 + `references/` 按需加载）
 > - **项目级入口**：`.claude/skills/software-project-governance/SKILL.md`
 > - **插件市场**：`.claude-plugin/marketplace.json` + `plugin.json`
-> - **交互命令**：`/governance-status`、`/governance-gate`、`/governance-verify`
+> - **交互命令**：`/software-project-governance:governance-init`、`/software-project-governance:governance-status`、`/software-project-governance:governance-gate`、`/software-project-governance:governance-verify`
 > - **活跃数据源**：`.governance/`（plan-tracker、evidence-log、decision-log、risk-log）
 >
 > 本目录保留仅作为历史参考，不再继续扩展。下方"入口约定"和"执行要求"描述的是早期 repo-local 多文件读取模式，与当前自包含插件架构不一致，请以 SKILL.md 为准。
 
-本目录定义 `software-project-governance` workflow 在 Claude 场景下的消费方式。
+本目录定义 `software-project-governance` workflow 在 Claude 场景下的消费方式（历史）。
 
 ## 适配目标
 
 让 Claude 类 coding agent 在执行软件项目任务时，优先读取统一规则与模板，而不是直接自由发挥。
 
-## Claude 入口约定
+## 当前有效入口
 
-建议 Claude 适配入口至少包含以下动作：
+Claude Code 加载 `.claude/skills/software-project-governance/SKILL.md` 作为自包含入口，该文件依赖：
+- `.claude/skills/software-project-governance/references/` — 按需读取的参考规则
+- 用户项目的 `.governance/` — 活跃治理记录
 
-1. 读取 workflow manifest：
-   - `workflows/software-project-governance/manifest.md`
-2. 读取协议层：
-   - `protocol/workflow-schema.md`
-   - `protocol/plugin-contract.md`
-3. 读取规则层：
-   - `workflows/software-project-governance/rules/lifecycle.md`
-   - `workflows/software-project-governance/rules/stage-gates.md`
-4. 读取模板层：
-   - `workflows/software-project-governance/templates/plan-tracker.md`
-   - `workflows/software-project-governance/templates/evidence-log.md`
-   - `workflows/software-project-governance/templates/decision-log.md`
-   - `workflows/software-project-governance/templates/risk-log.md`
-5. 使用样例验证：
-   - `.governance/plan-tracker.md`
+下方旧入口约定已废弃，不要执行。
 
-## Claude 执行要求
+## 历史入口约定（已废弃，仅供参考）
 
-- 先对齐当前项目所处阶段。
-- 所有计划状态以计划跟踪表为主事实源。
-- 已完成事项必须补证据。
-- 发现偏差时必须同步更新风险或决策记录。
-- Gate 未通过时，不得声称进入下一阶段。
+<details>
+<summary>旧版 repo-local 多文件预加载（不再有效）</summary>
+
+```
+1. 读取 workflow manifest：workflows/software-project-governance/manifest.md
+2. 读取协议层：protocol/workflow-schema.md、protocol/plugin-contract.md
+3. 读取规则层：workflows/software-project-governance/rules/lifecycle.md、stage-gates.md
+4. 读取模板层：workflows/software-project-governance/templates/*.md
+5. 使用样例验证：.governance/plan-tracker.md
+```
+
+</details>
 
 ## 原生 skill 入口
 

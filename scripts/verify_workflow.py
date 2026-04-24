@@ -22,25 +22,16 @@ REQUIRED_FILES = {
     "Evidence Template": ROOT / "workflows/software-project-governance/templates/evidence-log.md",
     "Decision Template": ROOT / "workflows/software-project-governance/templates/decision-log.md",
     "Risk Template": ROOT / "workflows/software-project-governance/templates/risk-log.md",
-    "Sample Project": ROOT / "workflows/software-project-governance/examples/current-project-sample.md",
-    "Sample Evidence": ROOT / "workflows/software-project-governance/examples/current-project-evidence-log.md",
-    "Sample Decision": ROOT / "workflows/software-project-governance/examples/current-project-decision-log.md",
-    "Sample Risk": ROOT / "workflows/software-project-governance/examples/current-project-risk-log.md",
     "Governance Plan Tracker": ROOT / ".governance/plan-tracker.md",
     "Governance Evidence Log": ROOT / ".governance/evidence-log.md",
     "Governance Decision Log": ROOT / ".governance/decision-log.md",
     "Governance Risk Log": ROOT / ".governance/risk-log.md",
     "Skill References Stage Gates": ROOT / "skills/software-project-governance/references/stage-gates.md",
     "Skill References Lifecycle": ROOT / "skills/software-project-governance/references/lifecycle.md",
-    "Claude Repository Entry": ROOT / "CLAUDE.md",
-    "Claude Skill": ROOT / ".claude/skills/software-project-governance/SKILL.md",
-    "Claude Adapter": ROOT / "adapters/claude/README.md",
-    "Claude Adapter Manifest": ROOT / "adapters/claude/adapter-manifest.json",
-    "Claude Launcher": ROOT / "adapters/claude/launch.py",
-    "Codex Adapter": ROOT / "adapters/codex/README.md",
-    "Codex Adapter Manifest": ROOT / "adapters/codex/adapter-manifest.json",
-    "Codex Launcher": ROOT / "adapters/codex/launch.py",
-    "Gemini Adapter": ROOT / "adapters/gemini/README.md",
+    "Skill References Profiles": ROOT / "skills/software-project-governance/references/profiles.md",
+    "Skill References Onboarding": ROOT / "skills/software-project-governance/references/onboarding.md",
+    "Skill References Interaction Boundary": ROOT / "skills/software-project-governance/references/interaction-boundary.md",
+    "Skill References Company Practices Summary": ROOT / "skills/software-project-governance/references/company-practices-summary.md",
     "Agent Integration Research": ROOT / "workflows/software-project-governance/research/agent-integration-models.md",
     "Default Product Shape": ROOT / "workflows/software-project-governance/research/default-product-shape.md",
     "External Capability Minimum Validation": ROOT / "workflows/software-project-governance/research/external-capability-minimum-validation.md",
@@ -62,17 +53,366 @@ REQUIRED_FILES = {
     "Code Review Standard Skill": ROOT / "workflows/software-project-governance/stages/development/code-review-standard.md",
     "Release Checklist Skill": ROOT / "workflows/software-project-governance/stages/release/release-checklist.md",
     "Retro Meeting Template Skill": ROOT / "workflows/software-project-governance/stages/maintenance/retro-meeting-template.md",
-    # Plugin marketplace packaging
-    "Claude Plugin Marketplace": ROOT / ".claude-plugin/marketplace.json",
-    "Claude Plugin Definition": ROOT / ".claude-plugin/plugin.json",
     "Governance Init Command": ROOT / "commands/governance-init.md",
     "Governance Status Command": ROOT / "commands/governance-status.md",
     "Governance Gate Command": ROOT / "commands/governance-gate.md",
     "Governance Verify Command": ROOT / "commands/governance-verify.md",
-    "Codex Plugin Definition": ROOT / ".codex-plugin/plugin.json",
     "Codex Skill": ROOT / "skills/software-project-governance/SKILL.md",
+    "Skill Stages Initiation Sub-workflow": ROOT / "skills/software-project-governance/stages/initiation/sub-workflow.md",
+    "Skill Stages Research Sub-workflow": ROOT / "skills/software-project-governance/stages/research/sub-workflow.md",
+    "Skill Stages Architecture Sub-workflow": ROOT / "skills/software-project-governance/stages/architecture/sub-workflow.md",
+    "Skill Stages Development Sub-workflow": ROOT / "skills/software-project-governance/stages/development/sub-workflow.md",
+    "Skill Stages Selection Sub-workflow": ROOT / "skills/software-project-governance/stages/selection/sub-workflow.md",
+    "Skill Stages Infrastructure Sub-workflow": ROOT / "skills/software-project-governance/stages/infrastructure/sub-workflow.md",
+    "Skill Stages Testing Sub-workflow": ROOT / "skills/software-project-governance/stages/testing/sub-workflow.md",
+    "Skill Stages CI-CD Sub-workflow": ROOT / "skills/software-project-governance/stages/ci-cd/sub-workflow.md",
+    "Skill Stages Release Sub-workflow": ROOT / "skills/software-project-governance/stages/release/sub-workflow.md",
+    "Skill Stages Operations Sub-workflow": ROOT / "skills/software-project-governance/stages/operations/sub-workflow.md",
+    "Skill Stages Maintenance Sub-workflow": ROOT / "skills/software-project-governance/stages/maintenance/sub-workflow.md",
+    "Skill Stages Requirement Clarification": ROOT / "skills/software-project-governance/stages/initiation/requirement-clarification.md",
+    "Skill Stages Tech Review Checklist": ROOT / "skills/software-project-governance/stages/architecture/tech-review-checklist.md",
+    "Skill Stages Code Review Standard": ROOT / "skills/software-project-governance/stages/development/code-review-standard.md",
+    "Skill Stages Release Checklist": ROOT / "skills/software-project-governance/stages/release/release-checklist.md",
+    "Skill Stages Retro Meeting Template": ROOT / "skills/software-project-governance/stages/maintenance/retro-meeting-template.md",
+}
+
+OPTIONAL_PROJECTION_FILES = {
+    "Sample Project": ROOT / "workflows/software-project-governance/examples/current-project-sample.md",
+    "Sample Evidence": ROOT / "workflows/software-project-governance/examples/current-project-evidence-log.md",
+    "Sample Decision": ROOT / "workflows/software-project-governance/examples/current-project-decision-log.md",
+    "Sample Risk": ROOT / "workflows/software-project-governance/examples/current-project-risk-log.md",
+    "Claude Repository Entry": ROOT / "CLAUDE.md",
+    "Claude Skill": ROOT / ".claude/skills/software-project-governance/SKILL.md",
+    "Claude Skill Refs Stage Gates": ROOT / ".claude/skills/software-project-governance/references/stage-gates.md",
+    "Claude Skill Refs Lifecycle": ROOT / ".claude/skills/software-project-governance/references/lifecycle.md",
+    "Claude Skill Refs Profiles": ROOT / ".claude/skills/software-project-governance/references/profiles.md",
+    "Claude Skill Refs Onboarding": ROOT / ".claude/skills/software-project-governance/references/onboarding.md",
+    "Claude Skill Refs Interaction Boundary": ROOT / ".claude/skills/software-project-governance/references/interaction-boundary.md",
+    "Claude Adapter": ROOT / "adapters/claude/README.md",
+    "Claude Adapter Manifest": ROOT / "adapters/claude/adapter-manifest.json",
+    "Claude Launcher": ROOT / "adapters/claude/launch.py",
+    "Codex Adapter": ROOT / "adapters/codex/README.md",
+    "Codex Adapter Manifest": ROOT / "adapters/codex/adapter-manifest.json",
+    "Codex Launcher": ROOT / "adapters/codex/launch.py",
+    "Gemini Adapter": ROOT / "adapters/gemini/README.md",
+    "Claude Plugin Marketplace": ROOT / ".claude-plugin/marketplace.json",
+    "Claude Plugin Definition": ROOT / ".claude-plugin/plugin.json",
+    "Codex Plugin Definition": ROOT / ".codex-plugin/plugin.json",
     "Codex Marketplace": ROOT / ".agents/plugins/marketplace.json",
 }
+
+PROJECTION_SNIPPETS = {
+    ROOT / "workflows/software-project-governance/examples/current-project-sample.md": [
+        "已迁移",
+    ],
+    ROOT / "CLAUDE.md": [
+        "software-project-governance",
+        ".claude/skills/software-project-governance/SKILL.md",
+        "仓库级约束尽量保持最小化",
+    ],
+    ROOT / ".claude/skills/software-project-governance/SKILL.md": [
+        "# Software Project Governance",
+        "## M2",
+        "references/stage-gates.md",
+    ],
+    ROOT / "adapters/claude/README.md": [
+        "已废弃（Deprecated）",
+        "历史入口约定（已废弃，仅供参考）",
+        "python adapters/claude/launch.py",
+    ],
+    ROOT / "adapters/claude/adapter-manifest.json": [
+        "adapter_id",
+        "workflow_id",
+        "native_entry",
+        "launcher",
+    ],
+    ROOT / "adapters/claude/launch.py": [
+        "Claude Adapter Launcher",
+        "native_entry",
+        "read_order",
+        "validation",
+    ],
+    ROOT / "adapters/codex/README.md": [
+        "已废弃（Deprecated）",
+        "历史入口约定（已废弃，仅供参考）",
+        "python adapters/codex/launch.py",
+    ],
+    ROOT / "adapters/codex/adapter-manifest.json": [
+        "adapter_id",
+        "workflow_id",
+        "launcher",
+    ],
+    ROOT / "adapters/codex/launch.py": [
+        "Codex Adapter Launcher",
+        "read_order",
+        "validation",
+    ],
+    ROOT / "adapters/gemini/README.md": [
+        "## 兼容要求",
+        "## Gemini 路线判断",
+        "## 默认接入顺序",
+        "## 国内 agent CLI 兼容抽象",
+        "## 适配原则",
+        "## 建议的最小验证顺序",
+    ],
+    ROOT / ".claude-plugin/marketplace.json": [
+        "software-project-governance",
+    ],
+    ROOT / ".claude-plugin/plugin.json": [
+        "software-project-governance",
+        "skills",
+    ],
+    ROOT / ".codex-plugin/plugin.json": [
+        "software-project-governance",
+        "skills",
+    ],
+    ROOT / ".agents/plugins/marketplace.json": [
+        "software-project-governance",
+    ],
+}
+
+PROJECT_FACT_SNIPPETS = {
+    ROOT / ".governance/plan-tracker.md": [
+        "## 项目配置",
+        "standard",
+        "always-on",
+        "## Gate 状态跟踪",
+        "passed-on-entry",
+        "G11",
+    ],
+    ROOT / ".governance/decision-log.md": [
+        "DEC-001",
+        "DEC-035",
+    ],
+    ROOT / ".governance/risk-log.md": [
+        "RISK-",
+    ],
+    ROOT / ".governance/evidence-log.md": [
+        "EVD-001",
+        "EVD-051",
+    ],
+}
+
+WORKFLOW_SNIPPETS = {
+    ROOT / "README.md": [
+        "让 coding agent 帮你看护项目质量",
+        "## 安装",
+        "## 5 分钟开始",
+        "## 内部文档",
+    ],
+    ROOT / "workflows/software-project-governance/research/agent-integration-models.md": [
+        "## 调研目标",
+        "## Claude Code",
+        "## 通用集成模式对比",
+    ],
+    ROOT / "workflows/software-project-governance/research/default-product-shape.md": [
+        "## 方案摘要",
+        "## 分层设计",
+        "## 默认接入矩阵",
+    ],
+    ROOT / "workflows/software-project-governance/research/external-capability-minimum-validation.md": [
+        "## 目标",
+        "## 为什么先选 external runner / shared command",
+        "## 最小验证范围",
+        "## 命令约定草案",
+        "software-project-governance.run",
+    ],
+    ROOT / "workflows/software-project-governance/research/domestic-agent-cli-compatibility.md": [
+        "## 目标",
+        "## 兼容抽象",
+        "## 默认接入顺序",
+        "## 能力检查清单",
+    ],
+    ROOT / "workflows/software-project-governance/research/repo-local-termination-note.md": [
+        "## 终止对象",
+        "## 终止原因",
+        "## 降级后的资产定位",
+        "## 新主线如何接管",
+    ],
+    ROOT / "protocol/workflow-schema.md": [
+        "## 通用对象模型",
+        "### 1. Workflow",
+        "### 3. Gate",
+    ],
+    ROOT / "protocol/plugin-contract.md": [
+        "## 最小承载单元",
+        "## 三层承载模型",
+        "## Skill / Plugin 行为描述要素",
+        "## 默认接入要求",
+        "workflow 本体层 + agent 入口投影层 + 外部能力层",
+        "software-project-governance",
+        "stages",
+        "interaction-boundary",
+        "Agent 适配准入标准",
+        "冲击场景",
+        "SC-1",
+    ],
+    ROOT / "protocol/external-command-contract.md": [
+        "## 目标",
+        "software-project-governance.run",
+        "## 最小输入",
+        "## 最小输出",
+        "## write-back targets",
+        "## replacement boundary",
+        "### 协议层（必读）",
+        "### 当前阶段子工作流（按 stage 参数加载）",
+        "interaction-boundary",
+        "Validation Matrix",
+        "失败与阻断语义",
+    ],
+    ROOT / "protocol/headless-runner-sample.md": [
+        "## 目标",
+        "software-project-governance.headless",
+        "## 输入映射",
+        "## execution mode",
+        "dry-run",
+        "## 最小返回样例",
+        "### 当前阶段子工作流（按 stage 参数加载）",
+    ],
+    ROOT / "workflows/software-project-governance/manifest.md": [
+        "supported_agents",
+        "Claude",
+        "Codex",
+    ],
+    ROOT / "workflows/software-project-governance/rules/lifecycle.md": [
+        "## 阶段列表",
+        "### 6. 开发实现",
+        "## 统一要求",
+        "## 触发模式",
+    ],
+    ROOT / "workflows/software-project-governance/rules/stage-gates.md": [
+        "## G1 — 立项完成",
+        "## G11 — 维护闭环",
+        "## Gate 执行原则",
+        "## Gate 裁剪规则",
+    ],
+    ROOT / "workflows/software-project-governance/rules/profiles.md": [
+        "## 预设 Profile",
+        "### lightweight",
+        "### standard",
+        "### strict",
+    ],
+    ROOT / "workflows/software-project-governance/rules/onboarding.md": [
+        "## 接入流程",
+        "## 最小接入路径",
+        "passed-on-entry",
+    ],
+    ROOT / "workflows/software-project-governance/rules/interaction-boundary.md": [
+        "## 判定原则",
+        "## 交互类型分类",
+        "## 按阶段的交互密度",
+        "## 批量交互原则",
+        "## 执行连续性约束",
+        "实时闭环规则",
+    ],
+    ROOT / "workflows/software-project-governance/stages/initiation/sub-workflow.md": [
+        "## 进入条件",
+        "## 活动清单",
+        "交互边界",
+        "## 退出条件",
+        "## Gate 映射",
+    ],
+    ROOT / "workflows/software-project-governance/stages/research/sub-workflow.md": [
+        "## 进入条件",
+        "## 活动清单",
+        "## 退出条件",
+        "## Gate 映射",
+    ],
+    ROOT / "workflows/software-project-governance/stages/architecture/sub-workflow.md": [
+        "## 进入条件",
+        "## 活动清单",
+        "## 退出条件",
+        "## Gate 映射",
+    ],
+    ROOT / "workflows/software-project-governance/stages/development/sub-workflow.md": [
+        "## 进入条件",
+        "## 活动清单",
+        "## 退出条件",
+        "## Gate 映射",
+    ],
+    ROOT / "workflows/software-project-governance/stages/selection/sub-workflow.md": [
+        "## 进入条件",
+        "## 活动清单",
+        "## 退出条件",
+        "## Gate 映射",
+    ],
+    ROOT / "workflows/software-project-governance/stages/infrastructure/sub-workflow.md": [
+        "## 进入条件",
+        "## 活动清单",
+        "## 退出条件",
+        "## Gate 映射",
+    ],
+    ROOT / "workflows/software-project-governance/stages/testing/sub-workflow.md": [
+        "## 进入条件",
+        "## 活动清单",
+        "## 退出条件",
+        "## Gate 映射",
+    ],
+    ROOT / "workflows/software-project-governance/stages/ci-cd/sub-workflow.md": [
+        "## 进入条件",
+        "## 活动清单",
+        "## 退出条件",
+        "## Gate 映射",
+    ],
+    ROOT / "workflows/software-project-governance/stages/release/sub-workflow.md": [
+        "## 进入条件",
+        "## 活动清单",
+        "## 退出条件",
+        "## Gate 映射",
+    ],
+    ROOT / "workflows/software-project-governance/stages/operations/sub-workflow.md": [
+        "## 进入条件",
+        "## 活动清单",
+        "## 退出条件",
+        "## Gate 映射",
+    ],
+    ROOT / "workflows/software-project-governance/stages/maintenance/sub-workflow.md": [
+        "## 进入条件",
+        "## 活动清单",
+        "## 退出条件",
+        "## Gate 映射",
+    ],
+    ROOT / "workflows/software-project-governance/stages/initiation/requirement-clarification.md": [
+        "## 触发条件",
+        "5 问法",
+        "IN/OUT 范围表",
+        "## 独立使用说明",
+        "## 子工作流映射",
+    ],
+    ROOT / "workflows/software-project-governance/stages/architecture/tech-review-checklist.md": [
+        "## 触发条件",
+        "蓝军挑战",
+        "评审结论",
+        "## 独立使用说明",
+        "## 子工作流映射",
+    ],
+    ROOT / "workflows/software-project-governance/stages/development/code-review-standard.md": [
+        "## 触发条件",
+        "P0 阻塞",
+        "P1 关键",
+        "## 独立使用说明",
+        "## 子工作流映射",
+    ],
+    ROOT / "workflows/software-project-governance/stages/release/release-checklist.md": [
+        "## 触发条件",
+        "回滚方案验证",
+        "发布决策",
+        "## 独立使用说明",
+        "## 子工作流映射",
+    ],
+    ROOT / "workflows/software-project-governance/stages/maintenance/retro-meeting-template.md": [
+        "## 触发条件",
+        "5-Why",
+        "经验沉淀",
+        "## 独立使用说明",
+        "## 子工作流映射",
+    ],
+}
+
+REQUIRED_SNIPPETS = {}
+REQUIRED_SNIPPETS.update(WORKFLOW_SNIPPETS)
+REQUIRED_SNIPPETS.update(PROJECT_FACT_SNIPPETS)
+REQUIRED_SNIPPETS.update(PROJECTION_SNIPPETS)
 
 REQUIRED_SNIPPETS = {
     ROOT / "README.md": [
@@ -286,8 +626,8 @@ REQUIRED_SNIPPETS = {
         "references/stage-gates.md",
     ],
     ROOT / "adapters/claude/README.md": [
-        "## Claude 入口约定",
-        "## 原生 skill 入口",
+        "已废弃（Deprecated）",
+        "历史入口约定（已废弃，仅供参考）",
         "python adapters/claude/launch.py",
     ],
     ROOT / "adapters/claude/adapter-manifest.json": [
@@ -303,8 +643,8 @@ REQUIRED_SNIPPETS = {
         "validation",
     ],
     ROOT / "adapters/codex/README.md": [
-        "## Codex 入口约定",
-        "## 半可执行入口",
+        "已废弃（Deprecated）",
+        "历史入口约定（已废弃，仅供参考）",
         "python adapters/codex/launch.py",
     ],
     ROOT / "adapters/codex/adapter-manifest.json": [
@@ -396,8 +736,15 @@ def check_files():
         if path.is_file():
             print(f"[OK] file exists: {label} -> {path.relative_to(ROOT)}")
         else:
-            failures.append(f"missing file: {label} -> {path.relative_to(ROOT)}")
-            print(f"[FAIL] missing file: {label} -> {path.relative_to(ROOT)}")
+            failures.append(f"missing required file: {label} -> {path.relative_to(ROOT)}")
+            print(f"[FAIL] missing required file: {label} -> {path.relative_to(ROOT)}")
+
+    for label, path in OPTIONAL_PROJECTION_FILES.items():
+        if path.is_file():
+            print(f"[OK] optional projection exists: {label} -> {path.relative_to(ROOT)}")
+        else:
+            print(f"[INFO] optional projection missing: {label} -> {path.relative_to(ROOT)}")
+
     return failures
 
 

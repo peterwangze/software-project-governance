@@ -114,7 +114,15 @@ When creating or updating governance files, use these fields:
 
 You **MUST** use AskUserQuestion before every session ends. At least one question, each with 2-4 options. Ending without AskUserQuestion = protocol violation.
 
-## M5. AskUserQuestion Trigger Map (MANDATORY)
+## M5. AskUserQuestion Protocol (MANDATORY)
+
+### M5.1 The Only Legal Question Channel
+
+**AskUserQuestion is the ONLY legal way to ask the user anything.** Inline text questions (e.g., "Should I proceed?", "Do you want me to...?") are protocol violations. Every user-facing question MUST go through the AskUserQuestion tool.
+
+Rationale: Inline text doesn't enforce structured options, doesn't prevent the agent from continuing without reading the answer, and degrades the user experience. AskUserQuestion ensures the user sees a clear question with bounded options and the agent MUST wait for the response.
+
+### M5.2 Trigger Map — When to Ask
 
 **MUST use AskUserQuestion** in these scenarios:
 
@@ -126,19 +134,42 @@ You **MUST** use AskUserQuestion before every session ends. At least one questio
 | Deliverable needs review | "Confirm / Revise / Reject" |
 | Risk treatment decision | "Accept / Mitigate / Transfer / Avoid" |
 | Tech selection conclusion | "Confirm option X or Y" with recommendation reason |
+| Critical decision point | Per M5.3 classification — stop and ask |
+| Commit/push decision | "Commit now or continue?" at natural boundaries |
 
-**MUST NOT use AskUserQuestion** in these scenarios:
+### M5.3 Critical Decision Classification
+
+The user MAY declare at session start (or at any point): **"仅在关键决策停下来"** (stop only for critical decisions). When this mode is active:
+
+**Critical decisions** — MUST stop and use AskUserQuestion:
+- Scope change (adding/removing features, changing project boundary)
+- Architecture decision (tech stack, module split, interface design)
+- Release decision (go/no-go, version bump, breaking change)
+- Risk acceptance (accepting a known risk, bypassing a Gate)
+- External dependency change (new library, new service, API change)
+- Profile/trigger mode change
+
+**Non-critical decisions** — auto-execute, do NOT ask:
+- Task ordering within confirmed direction
+- Evidence format and detail level
+- Commit timing at natural boundaries (commit autonomously per DEC-025)
+- Governance record updates
+- Minor implementation choices (file naming, variable names, code style)
+- Gate self-assessment results (inform only on failure)
+
+**Judgment criterion**: If the decision changes project direction, scope, architecture, or accepts risk → critical, MUST ask. If the decision is about how to execute within confirmed direction → non-critical, execute autonomously.
+
+### M5.4 When NOT to Ask
 
 | Scenario | Correct action |
 |----------|---------------|
 | Direction already confirmed | Execute to completion |
 | Governance record updates | Batch update after main work |
 | Gate checks | Self-assess, inform only on failure |
-| Git operations | Execute independently |
+| Git operations | Execute independently (commit per DEC-025) |
 | Completing one task | Continue to next highest-priority task |
 | Discovering immediately fixable issues | Fix immediately |
-
-**Judgment criterion**: If a question has only one correct answer, or direction was already confirmed, don't ask. If the user needs to choose or judge, you MUST ask.
+| Non-critical decision in "stop only for critical" mode | Execute autonomously |
 
 ## M6. Gate Behavior (MANDATORY)
 
@@ -169,18 +200,35 @@ You **MUST** use AskUserQuestion before every session ends. At least one questio
 ## M7. Execution Continuity (MANDATORY)
 
 After user confirms direction, **MUST** execute continuously until:
-1. Next M5 trigger (needs user judgment)
-2. Session context exhausted
-3. User interrupts
+1. Next M5 critical decision trigger (if user chose "stop only for critical")
+2. Next M5 trigger of any kind (if user chose "stop for all decisions")
+3. Session context exhausted
+4. User interrupts
 
-**Prohibited interruptions**:
+### M7.1 User Decision Mode Declaration
+
+At session start or when direction is confirmed, the agent **SHALL** apply one of these modes:
+
+| Mode | Behavior | Default for |
+|------|----------|-------------|
+| **Stop for critical only** | Auto-execute non-critical decisions; AskUserQuestion only for M5.3 critical list | standard, strict profiles |
+| **Stop for all decisions** | AskUserQuestion for every M5.2 trigger | lightweight profile, first-time users |
+
+The agent infers the mode from the project profile. The user can override at any time by saying "仅在关键决策停下来" or "所有决策都问我".
+
+### M7.2 Prohibited Interruptions
+
+These are NEVER valid reasons to stop, regardless of mode:
 1. Stopping after one task → continue to next
 2. Stopping after review items → execute fixes immediately
 3. Stopping after governance records updated → continue
 4. Stopping between coupled tasks → execute through
 5. Stopping after external op failure → log as TODO, continue
+6. **Inline text questions** → MUST use AskUserQuestion instead (M5.1)
 
-**Real-time closure**: Process defects discovered during execution **MUST** be fixed immediately.
+### M7.3 Real-time Closure
+
+Process defects discovered during execution **MUST** be fixed immediately. If the fix would change project direction/scope/architecture → it's a critical decision, use AskUserQuestion. If the fix is procedural (rules, templates, governance files) → execute immediately.
 
 ## M8. Self-check Protocol (MANDATORY)
 
@@ -189,9 +237,10 @@ After each major task, **MUST** self-check:
 ```
 [Governance Self-check]
 - [ ] M2 pre-loading completed?
-- [ ] M5 AskUserQuestion used where required?
+- [ ] M5.1 no inline text questions? All user questions via AskUserQuestion?
+- [ ] M5.2/M5.3 AskUserQuestion used where required? Non-critical decisions auto-executed?
 - [ ] M6 completed tasks have evidence?
-- [ ] M7 no prohibited interruptions?
+- [ ] M7 no prohibited interruptions? Decision mode respected?
 ```
 
 **Fails**: fix immediately. **Passes**: don't output, continue.

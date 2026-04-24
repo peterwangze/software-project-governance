@@ -32,9 +32,10 @@ This protocol **MUST** activate when ANY condition is met:
 
 ## M2. Pre-loading (MANDATORY)
 
-You **MUST** read this single file before executing any task:
+You **MUST** read these files before executing any task:
 
-1. `.governance/plan-tracker.md` — the project's current state
+1. `main-workflow.md` — the unified workflow entry point: two fundamental purposes, three-tier architecture, scene→sub-workflow matching rules, cross-tier invocation protocol
+2. `.governance/plan-tracker.md` — the project's current state
 
 **Starting work without pre-loading = protocol violation.**
 
@@ -44,6 +45,8 @@ Read on demand based on task type:
 
 | File | Read when |
 |------|-----------|
+| `main-workflow.md` | **Always** — confirms fundamental purposes and matching rules |
+| `TOOLS.md` | Need to find a specific tool/script/checklist |
 | `references/stage-gates.md` | Performing Gate checks |
 | `references/lifecycle.md` | Entering a new stage, need detailed stage definitions |
 | `references/profiles.md` | Initializing a project, user asks about profile/scale, or switching profile |

@@ -26,7 +26,7 @@
 
 ## 详细规则
 
-完整行为协议见 `.claude/skills/software-project-governance/SKILL.md`（M0~M9 强制性规则、Gate 行为、触发模式等）。但以上三条 bootstrap 规则不依赖 SKILL.md 是否被加载——它们就在本文件里，每次会话必定生效。
+完整行为协议见插件市场安装的 `software-project-governance` skill（M0~M9 强制性规则、Gate 行为、触发模式等）。但以上三条 bootstrap 规则不依赖 SKILL.md 是否被加载——它们就在本文件里，每次会话必定生效。
 
 ## 当前项目治理状态快速入口
 

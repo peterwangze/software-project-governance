@@ -38,7 +38,7 @@
 
 | 项目 | 当前阶段 | 总任务数 | 已完成 | 阻塞中 | 关键风险数 | 最近 Gate 结论 | 最近复盘日期 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 项目管理工作流插件 | 维护（并行活跃：规划） | 45 | 39 | 0 | 3 | G11 通过 | 2026-04-24 |
+| 项目管理工作流插件 | 维护（并行活跃：规划） | 47 | 41 | 0 | 3 | G11 通过 | 2026-04-24 |
 
 
 ## 样例跟踪表
@@ -136,3 +136,5 @@
 | MAINT-018 | 维护 | skills/references/ 新增企业经验摘要 | 在 `skills/references/` 中创建 `company-practices-summary.md`，让自包含插件用户也能获取企业实践经验 | 完整审视结果、P1-4 | `skills/software-project-governance/references/company-practices-summary.md` | Claude | 项目负责人 | 已完成 | P1 | 2026-04-24 | 2026-04-24 | 2026-04-24 | G8 | 插件用户能通过 references/ 获取企业实践经验摘要，并知道完整文档在哪 | `skills/software-project-governance/references/company-practices-summary.md` | 无 | 无 | 本轮用户视角审视新增 P1-4 |
 | MAINT-019 | 维护 | adapter README 旧入口约定清除 | 将 `adapters/claude/README.md` 和 `adapters/codex/README.md` 中仍残留的 repo-root 多文件预加载指令折叠为已废弃的历史章节，避免与自包含架构冲突 | 完整审视结果、P1-5 | 清理后的两份 adapter README | Claude | 项目负责人 | 已完成 | P1 | 2026-04-24 | 2026-04-24 | 2026-04-24 | G8 | adapter README 不再引导用户执行旧的多文件预加载流程 | `adapters/claude/README.md`, `adapters/codex/README.md` | 无 | 无 | 本轮用户视角审视新增 P1-5 |
 | MAINT-020 | 维护 | verify_workflow.py 覆盖新增 skills/ 资产 | 校验脚本补入 `skills/references/` 新增文件、`skills/stages/` 全部文件、`.claude/skills/references/` 新增文件的检查项，并修复 adapter snippet 检查 | 完整审视结果 | 更新后的 `scripts/verify_workflow.py` | Claude | 项目负责人 | 已完成 | P1 | 2026-04-24 | 2026-04-24 | 2026-04-24 | G8 | 全量校验通过，新增 22 个 REQUIRED_FILES 条目和 5 个 OPTIONAL_PROJECTION_FILES 条目 | `scripts/verify_workflow.py` | 无 | 无 | 本轮用户视角审视新增 |
+| MAINT-021 | 维护 | CLAUDE.md 治理 bootstrap | 将 CLAUDE.md 从"指针文件"升级为"治理 bootstrap"，包含 3 条无条件前置检查：读 plan-tracker → 任务入账 → 补证据。解决"SKILL.md 被加载但从未被执行"的根本问题 | 用户反馈（工作流自我管理无效，持续走偏）、根因分析（CLAUDE.md 是唯一每次会话必定生效的入口，但被浪费成指针） | 重写后的 `CLAUDE.md` | Claude | 项目负责人 | 已完成 | P0 | 2026-04-24 | 2026-04-24 | 2026-04-24 | G8 | agent 每次会话第一动作必须是读 plan-tracker；不依赖 SKILL.md 是否被加载 | `CLAUDE.md` | 仅解决本仓库行为，用户项目需 MAINT-022 配合 | 与 MAINT-022 配套闭环 | 本轮用户反馈核心问题 |
+| MAINT-022 | 维护 | governance-init 注入 CLAUDE.md bootstrap | 更新 `governance-init` 命令，在初始化时自动向用户项目的 CLAUDE.md 注入治理 bootstrap 段落，确保用户项目获得与本仓库一致的治理激活行为 | 用户反馈（本仓库 CLAUDE.md 有 bootstrap，用户项目没有 = 开发/生产行为不一致） | 更新后的 `commands/governance-init.md` | Claude | 项目负责人 | 已完成 | P0 | 2026-04-24 | 2026-04-24 | 2026-04-24 | G8 | 用户执行 governance-init 后，其项目的 CLAUDE.md 自动获得治理 bootstrap | `commands/governance-init.md` | 无 | 无 | 本轮用户反馈核心问题配套 |

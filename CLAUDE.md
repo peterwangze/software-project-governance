@@ -1,24 +1,37 @@
 # Claude Code Project Guidance
 
-本文件只作为仓库级入口指针，用于提示 Claude 在处理本仓库的 workflow 资产时优先查看对应 skill。
+## Governance Bootstrap（强制 — 每次会话第一动作）
 
-## Default Workflow
+在执行任何用户任务之前，**MUST** 先完成：
 
-当任务涉及以下任一场景时，优先查看 `.claude/skills/software-project-governance/SKILL.md`：
+1. 读取 `.governance/plan-tracker.md`
+2. 在内心确认：当前阶段、最近 Gate 结论、活跃风险数、进行中的 P0 任务
+3. 如果存在 passed-with-conditions 遗留项，优先处理
+4. 如果 `.governance/` 不存在，提醒用户先初始化
 
-- 修改 `protocol/`、`workflows/`、`adapters/`、`scripts/` 下的 workflow 资产
-- 规划、评审、验证软件项目治理相关工作
-- 更新当前项目样例中的计划、证据、决策、风险记录
+**没读 plan-tracker 就开始干活 = 流程违规。这不是"建议"，是前置条件。**
 
-## Boundary
+## 干活前检查（每次收到任务时）
 
-- 仓库级约束尽量保持最小化，workflow 规则、事实源和验证要求以 skill 与 workflow 本体为准。
-- 如果任务与 `software-project-governance` workflow 无关，不要求额外遵循本文件之外的规则。
+在开始执行任何任务前，确认三件事：
+- 这个任务在计划跟踪表里吗？不在就先入账
+- 做完后需要补什么证据？先想清楚
+- 这个任务会不会影响别的阶段？影响就先记风险
 
-## Entry
+## 收工前检查（session 结束前）
 
-- Skill entry: `.claude/skills/software-project-governance/SKILL.md`
-- Adapter debug entry: `adapters/claude/launch.py`
-- Workflow root: `workflows/software-project-governance/`
+1. 输出本轮完成事项摘要
+2. 补证据到 `.governance/evidence-log.md`
+3. 用 AskUserQuestion 确认下一步优先级
 
-详细读取顺序、输出约束、Gate 行为与验证命令，请以 skill 正文为准。
+## 详细规则
+
+完整行为协议见 `.claude/skills/software-project-governance/SKILL.md`（M0~M9 强制性规则、Gate 行为、触发模式等）。但以上三条 bootstrap 规则不依赖 SKILL.md 是否被加载——它们就在本文件里，每次会话必定生效。
+
+## 当前项目治理状态快速入口
+
+- 计划跟踪：`.governance/plan-tracker.md`
+- 证据记录：`.governance/evidence-log.md`
+- 决策记录：`.governance/decision-log.md`
+- 风险记录：`.governance/risk-log.md`
+- 验证命令：`python scripts/verify_workflow.py`

@@ -108,7 +108,8 @@ PROJECTION_SNIPPETS = {
     ROOT / "CLAUDE.md": [
         "software-project-governance",
         ".claude/skills/software-project-governance/SKILL.md",
-        "仓库级约束尽量保持最小化",
+        "Governance Bootstrap",
+        "没读 plan-tracker 就开始干活",
     ],
     ROOT / ".claude/skills/software-project-governance/SKILL.md": [
         "# Software Project Governance",
@@ -618,7 +619,8 @@ REQUIRED_SNIPPETS = {
     ROOT / "CLAUDE.md": [
         "software-project-governance",
         ".claude/skills/software-project-governance/SKILL.md",
-        "仓库级约束尽量保持最小化",
+        "Governance Bootstrap",
+        "没读 plan-tracker 就开始干活",
     ],
     ROOT / ".claude/skills/software-project-governance/SKILL.md": [
         "# Software Project Governance",

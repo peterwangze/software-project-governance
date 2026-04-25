@@ -26,6 +26,7 @@ This protocol **MUST** activate when ANY condition is met:
 - Involves files under `protocol/`, `workflows/`, `adapters/`, `scripts/`
 - Involves advancing or reviewing project task status
 - Involves Gate checks or stage progression
+- Involves audit execution (any of the 6 audit dimensions in `references/audit-framework.md`)
 - Involves supplementing evidence, decision, or risk records
 
 **Trigger action**: Complete M2 pre-loading before any actual work.
@@ -52,6 +53,7 @@ Read on demand based on task type:
 | `references/profiles.md` | Initializing a project, user asks about profile/scale, or switching profile |
 | `references/onboarding.md` | Onboarding an existing (in-progress) project |
 | `references/interaction-boundary.md` | Uncertain whether to auto-execute or ask user |
+| `references/audit-framework.md` | Performing Gate checks, completing a stage, completing a P0 task, after significant changes |
 
 ### M2.2 Sub-workflows and skills (in `stages/`, same directory as this SKILL.md)
 

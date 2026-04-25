@@ -38,7 +38,7 @@
 
 | 项目 | 当前阶段 | 总任务数 | 已完成 | 阻塞中 | 关键风险数 | 最近 Gate 结论 | 最近复盘日期 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 项目管理工作流插件 | 维护（并行活跃：规划） | 81 | 59 | 0 | 3 | G11 通过 | 2026-04-26 |
+| 项目管理工作流插件 | 维护（并行活跃：规划） | 82 | 60 | 0 | 3 | G11 通过 | 2026-04-26 |
 
 
 ## 样例跟踪表
@@ -193,3 +193,4 @@
 | MAINT-026 | 维护 | 清理 .claude/skills/ 冗余副本 | 用户已通过插件市场加载本地目录，不再需要手工维护 .claude/skills/ 副本。DEC-042 建立的逐字节等价校验也随副本删除而移除 | 用户决策 | 删除 .claude/skills/ 目录、移除 verify_workflow.py 等价校验、清理 settings.local.json 同步 hooks、更新 CLAUDE.md 引用 | Claude | 项目负责人 | 已完成 | P0 | 2026-04-24 | 2026-04-24 | 2026-04-24 | G8 | .claude/skills/ 已删除、verify_workflow.py PASSED、治理记录已更新 | EVD-072、DEC-043 | 无 | 无 | 用户明确指示：插件市场接管同步，无需手工维护副本 |
 | MAINT-028 | 维护 | Tier 1 双源合并：skills/ 成为运行时唯一事实源 | 三层架构审计发现 workflows/rules/、workflows/stages/ 与 skills/ 形成双事实源，协议与实现分叉。skills/ 正式成为运行时唯一事实源 | 三层架构审计报告（6 项结构性问题） | 删除 workflows/rules/（5 文件）、workflows/stages/（11 目录）、workflows/main-workflow.md、workflows/TOOLS.md；更新全部协议和文档路径；verify_workflow.py 移除冗余检查项 | Claude | 项目负责人 | 已完成 | P0 | 2026-04-25 | 2026-04-25 | 2026-04-25 | G8 | (1) workflows/ 不再包含规则层和阶段层副本；(2) 所有协议和文档的 Tier 1 定义指向 skills/；(3) verify_workflow.py PASSED | EVD-086、DEC-047 | 无 | 无 | 架构审计驱动——协议描述现实而不是描述愿望 |
 | MAINT-029 | 维护 | 全量冗余清理：修复 5 类陈旧引用 | MAINT-028 和 MAINT-026 遗留了指向已删除路径的陈旧引用（main-workflow.md rules/→references/、adapter-manifest.json .claude/skills/→skills/、adapter README .claude/skills/、SKILL.md replacement boundary、.gitignore 死规则），agent 加载时可能断链 | 冗余审计报告（8 项发现） | 5 个文件共 15 处编辑：(1) main-workflow.md: rules/→references/（9 处）；(2) adapter-manifest.json: skill_path 更新；(3) adapters/claude/README.md: .claude/skills/→skills/（4 处）；(4) skills/SKILL.md: 移除已删除目录引用；(5) .gitignore: 移除 3 条死规则 | Claude | 项目负责人 | 已完成 | P0 | 2026-04-25 | 2026-04-25 | 2026-04-25 | G8 | (1) agent 加载 main-workflow.md 不再遇到断链；(2) 所有文件不再引用 .claude/skills/（已删除）；(3) .gitignore 无死规则；(4) verify_workflow.py PASSED | EVD-088 | 无 | 无 | MAINT-028 配套清理——删完文件还要清理引用 |
+| AUDIT-028 | 维护 | 审计框架融入工作流：audit-framework.md 正式接入治理体系 | 用户要求"将审计作为重要的看护手段融入工作流，所有阶段必须接受审计"。已创建 `skills/software-project-governance/references/audit-framework.md`（6 维度 × 3 类别审计体系），需同步接入 stage-gates（Gate 原则 #7）、lifecycle（治理规则 #5）、SKILL.md（M1 触发条件 + M2.1 引用表）、verify_workflow.py（文件检查 + snippet 校验） | 用户指令 + audit-framework.md 初稿 | (1) stage-gates.md 新增 Gate 执行原则 #7：审计检查点；(2) lifecycle.md 新增治理规则 #5：审计看护；(3) SKILL.md M2.1 引用表新增 audit-framework.md 行，M1 新增审计触发条件；(4) verify_workflow.py 新增 audit-framework.md 文件检查和 13 个 snippet 校验；(5) 治理记录同步更新 | Claude | 项目负责人 | 已完成 | P0 | 2026-04-26 | 2026-04-26 | 2026-04-26 | G8 | (1) 全量校验 PASSED；(2) check-governance 0 issues；(3) audit-framework.md 被 Gate/生命周期/SKILL 行为协议正式引用 | EVD-094 | 无 | 无 | 审计从"文档中存在"升级为"被治理体系的每个关键环节强制引用"——Gate 过之前必须审计，生命周期规则包含审计看护，SKILL 加载时审计维度可用 |

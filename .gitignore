@@ -1,8 +1,5 @@
 # Local Claude Code state
 .claude/*
-!.claude/skills/
-!.claude/skills/software-project-governance/
-!.claude/skills/software-project-governance/SKILL.md
 
 # Python cache
 __pycache__/

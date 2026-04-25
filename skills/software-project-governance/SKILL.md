@@ -281,6 +281,6 @@ For detailed stage definitions, read `references/lifecycle.md`.
 
 **Must preserve**: `protocol/`, `workflows/software-project-governance/`, `scripts/verify_workflow.py`
 
-**Can remove**: `CLAUDE.md`, `.claude/skills/software-project-governance/SKILL.md`, `adapters/claude/`
+**Can remove**: `CLAUDE.md`, `adapters/claude/`
 
 **Replace with another agent**: remove "can remove" files, create new projection layer per `adapters/<new-agent>/` README.

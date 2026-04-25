@@ -29,7 +29,7 @@
   },
   "native_entry": {
     "repository_entry": "CLAUDE.md",
-    "skill_path": ".claude/skills/software-project-governance/SKILL.md"
+    "skill_path": "skills/software-project-governance/SKILL.md"
   },
   "launcher": "adapters/claude/launch.py"
 }

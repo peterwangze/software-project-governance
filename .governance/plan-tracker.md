@@ -40,6 +40,160 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 项目管理工作流插件 | 维护（并行活跃：规划） | 92 | 60 | 0 | 3 | G11 通过 | 2026-04-26 |
 
+## 实施路线图（DEC-052）
+
+**核心原则**：先防跑偏，再验证，然后建内容，最后做增强。计划本身必须被治理体系正式记录——不依赖会话上下文。
+
+### 四层推进模型
+
+```
+Layer 0: 防跑偏基础 ──→ Layer 1: 外部验证 ──→ Layer 2: 产品内容 ──→ Layer 3: 体验增强
+  (项目不会跑偏)         (产品真的存在)         (工作流有价值)         (从能用到好用)
+```
+
+### Layer 0: 防跑偏基础（Anti-Drift Foundation）
+
+**目标**：建立治理强制力——证据可信、责任明确、Gate 可脚本判定、agent 行为可外部验证。不依赖 agent "记得"或"自觉"。
+
+```
+Tier 0-A: 快速修复（3 tasks, ~1 session）
+  AUDIT-026 (P2) — CLAUDE.md/SKILL.md 循环依赖解耦
+  AUDIT-027 (P2) — 协议层与实际目录命名统一
+  AUDIT-035 (P1) — Agent 失败模式文档与应急预案
+  │ 无前置依赖，三个可并行
+  ▼
+Tier 0-B: 证据可信度（1 task, ~1 session）
+  AUDIT-022 (P1) — 证据质量基线升级
+  │ 产出：check-governance 新增证据质量检查（循环引用/会话上下文/空输出）
+  │ 前置：0-A 完成（证据格式需先稳定）
+  ▼
+Tier 0-C: 治理强制力（3 tasks, ~2 sessions）
+  AUDIT-030 (P1) — DRI 模型落地（Owner 唯一化 + escalation path）
+  AUDIT-031 (P1) — M8 自检外部验证（依赖 0-B 的证据检查基础）
+  AUDIT-011 (P1) — Gate 自动判定脚本（依赖 0-B 的证据质量模式）
+  │ 产出：Gate 可脚本判定，治理合规可外部验证，DRI 唯一化
+  ▼
+Tier 0-D: 防漂移机制（3 tasks, ~2 sessions）
+  AUDIT-029 (P1) — 跨会话记忆机制（session snapshot）
+  AUDIT-017 (P1) — 触发模式实现（always-on/on-demand/silent-track）
+  AUDIT-018 (P1) — Profile 差异化行为落地（依赖 0-C 的 Gate 判定能力）
+```
+
+**Layer 0 小计：10 tasks，P0:0 P1:8 P2:2，预计 ~6 sessions**
+
+### Layer 1: 外部验证（External Validation）
+
+**目标**：在外部项目中验证产品是否真的可用。没有外部反馈，所有内容改进方向都是猜测。
+
+```
+Tier 1-A: 最小外部验证（1 task, ~1 session + 外部项目时间）
+  AUDIT-003 (P0) — 外部项目验证最小路径
+  │ 产出：第一个真实用户反馈
+  │ 前置：Layer 0 完成（防跑偏机制就位后，外部验证才有意义）
+  ▼
+Tier 1-B: 端到端验证（3 tasks, ~1 session）
+  AUDIT-023 (P1) — 端到端可用性验证（依赖 AUDIT-003 的外部项目）
+  AUDIT-004 (P1) — governance-init 端到端验证（依赖 AUDIT-003）
+  AUDIT-006 (P1) — Claude Code 插件命令验证（依赖 AUDIT-003）
+```
+
+**Layer 1 小计：4 tasks，P0:1 P1:3，预计 ~2 sessions**
+
+### Layer 2: 产品内容（Product Content）
+
+**目标**：子工作流从骨架升级为深度指南，企业实践从概念变成可执行步骤。
+
+```
+Tier 2-A: 内容深度（2 tasks, ~2 sessions）
+  AUDIT-021 (P0) — 7 个子工作流内容深度补强（AI风险表+企业实践映射+Gate自动判定列）
+  AUDIT-024 (P1) — company-practices-summary 重写（自包含可执行摘要）
+  │ 前置：Layer 1 完成（外部反馈告诉我们哪些阶段最需要补强）
+  ▼
+Tier 2-B: 企业实践落地（4 tasks, ~2 sessions，可并行）
+  AUDIT-032 (P1) — Bar Raiser 否决权（Amazon）
+  AUDIT-033 (P1) — 字节 A/B 测试纳入 release
+  AUDIT-034 (P2) — 华为蓝军单 agent 适配
+  AUDIT-036 (P2) — Release 现代发布实践（依赖 AUDIT-021 release 需先有基础深度）
+  ▼
+Tier 2-C: 质量均衡（3 tasks, ~1 session）
+  AUDIT-025 (P2) — Stage skill 质量均衡（依赖 AUDIT-021）
+  AUDIT-038 (P2) — 子工作流独立使用目标锚定强制机制（依赖 AUDIT-021）
+  MAINT-002 (P2) — 更多大厂实践映射
+```
+
+**Layer 2 小计：9 tasks，P0:1 P1:3 P2:5，预计 ~5 sessions**
+
+### Layer 3: 体验增强（Enhancement）
+
+**目标**：从"能用"到"好用"——B/C 级自动化、工具通用化、兼容性政策。
+
+```
+Tier 3-A: 自动化升级（4 tasks, ~2 sessions，严格顺序依赖）
+  AUDIT-010 (P1) — CI 集成 check-governance（依赖 0-C AUDIT-011）
+  AUDIT-014 (P2) — git hook 治理触发（依赖 AUDIT-010）
+  AUDIT-012 (P2) — headless runner 可执行版（依赖 0-C AUDIT-011）
+  AUDIT-013 (P2) — MCP server 最小实现（依赖 0-C AUDIT-011）
+  │
+Tier 3-B: 工具通用化（3 tasks, ~2 sessions）
+  AUDIT-009 (P2) — 外部项目中途接入验证（依赖 Layer 1 AUDIT-003）
+  AUDIT-019 (P2) — verify_workflow.py 通用化（依赖 Layer 1 AUDIT-003）
+  AUDIT-020 (P2) — 自定义 Profile YAML 解析（依赖 0-D AUDIT-018）
+  │
+Tier 3-C: 兼容与政策（4 tasks, ~2 sessions，可并行）
+  AUDIT-037 (P2) — 向后兼容性政策与废弃通知
+  MAINT-013 (P1) — 用户项目/样例数据边界说明
+  MAINT-014 (P1) — Agent 入口差异显式化
+  MAINT-023 (P1) — Gemini/国内 agent CLI 最小验证
+```
+
+**Layer 3 小计：11 tasks，P0:0 P1:4 P2:7，预计 ~6 sessions**
+
+### 依赖关系总表
+
+| 任务 | 所属 Tier | 前置任务 | 被依赖 |
+|------|----------|---------|--------|
+| AUDIT-026 | 0-A | 无 | — |
+| AUDIT-027 | 0-A | 无 | — |
+| AUDIT-035 | 0-A | 无 | — |
+| AUDIT-022 | 0-B | 0-A 完成 | AUDIT-031, AUDIT-011 |
+| AUDIT-030 | 0-C | 0-B 完成 | — |
+| AUDIT-031 | 0-C | AUDIT-022 | — |
+| AUDIT-011 | 0-C | AUDIT-022 | AUDIT-018, AUDIT-010/012/013 |
+| AUDIT-029 | 0-D | 0-C 完成 | — |
+| AUDIT-017 | 0-D | 0-C 完成 | — |
+| AUDIT-018 | 0-D | AUDIT-011 | AUDIT-020 |
+| AUDIT-003 | 1-A | Layer 0 完成 | AUDIT-023/004/006/009/019 |
+| AUDIT-023 | 1-B | AUDIT-003 | — |
+| AUDIT-004 | 1-B | AUDIT-003 | — |
+| AUDIT-006 | 1-B | AUDIT-003 | — |
+| AUDIT-021 | 2-A | Layer 1 完成 | AUDIT-036/025/038 |
+| AUDIT-024 | 2-A | Layer 1 完成 | — |
+| AUDIT-032 | 2-B | 2-A 完成 | — |
+| AUDIT-033 | 2-B | 2-A 完成 | — |
+| AUDIT-034 | 2-B | 2-A 完成 | — |
+| AUDIT-036 | 2-B | AUDIT-021 | — |
+| AUDIT-025 | 2-C | AUDIT-021 | — |
+| AUDIT-038 | 2-C | AUDIT-021 | — |
+| MAINT-002 | 2-C | 2-A 完成 | — |
+| AUDIT-010 | 3-A | AUDIT-011 | AUDIT-014 |
+| AUDIT-014 | 3-A | AUDIT-010 | — |
+| AUDIT-012 | 3-A | AUDIT-011 | — |
+| AUDIT-013 | 3-A | AUDIT-011 | — |
+| AUDIT-009 | 3-B | AUDIT-003 | — |
+| AUDIT-019 | 3-B | AUDIT-003 | — |
+| AUDIT-020 | 3-B | AUDIT-018 | — |
+| AUDIT-037 | 3-C | 无 | — |
+| MAINT-013 | 3-C | 无 | — |
+| MAINT-014 | 3-C | 无 | — |
+| MAINT-023 | 3-C | 无 | — |
+
+### 执行纪律
+
+1. **严格按 Tier 顺序推进**：当前 Tier 的所有任务完成后才能进入下一 Tier。
+2. **Tier 内部任务可并行**：同一 Tier 内无依赖关系的任务可并行执行。
+3. **每个 Tier 完成后执行审计（D1+D3+D4 维度）**：确认 Tier 的目标是否达成，偏差是否已纠正。
+4. **计划本身接受 Meta-Audit**：如果连续 2 个 Tier 的执行顺序被打破，说明依赖分析有误 → 重新梳理依赖。
+
 
 ## 样例跟踪表
 

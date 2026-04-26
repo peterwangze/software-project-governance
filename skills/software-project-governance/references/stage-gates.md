@@ -111,3 +111,4 @@
 5. Gate 失败后的重新尝试不需要"回到上一阶段"，只需补齐缺失项后重新检查
 6. **任务关闭的后续承诺追踪（Closure Follow-Through）**：当任务状态标记为"已完成"时，必须检查该任务的"备注"和"纠偏动作"列中是否包含对后续工作的承诺（如"再规划 XX 实现路线""后续需创建 YY 任务"）。如果存在此类承诺但 plan-tracker 中没有对应的实施任务，该任务不得标记为关闭——必须先创建后续任务或将承诺转化为明确的跟踪条目。此规则防止"备注里写了但从未执行"的治理漏洞。
 7. **审计检查点（Audit Checkpoint）**：Gate 通过前，必须参考 `references/audit-framework.md` 对当前阶段执行适用的审计维度检查。审计发现阻塞级问题 → Gate 不得通过（blocked）。审计发现偏差级问题 → Gate 可条件通过（passed-with-conditions）但问题必须入账 plan-tracker。审计报告必须写入 evidence-log。此原则确保阶段推进前已完成多维一致性检查（方向、质量、体验），而非仅检查产出物是否存在。
+8. **DRI 检查（DRI Check）**：Gate 通过前，必须验证当前阶段所有活跃任务是否都有明确的唯一 DRI（Directly Responsible Individual）。任一活跃任务的 Owner 列为空、多值或模糊（如"待定"、"多人"）→ Gate 可条件通过（passed-with-conditions）但必须创建 DRI 指认任务。DRI 缺失的 task 数 ≥ 3 → Gate 不得通过（blocked）。此原则来自 Apple DRI 模型和 Amazon Single-Threaded Owner 实践——没有明确的唯一责任人，任务阻塞时无人负责推进。

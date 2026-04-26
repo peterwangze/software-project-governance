@@ -651,8 +651,8 @@ def parse_task_stats():
     stats = {"已完成": 0, "进行中": 0, "未开始": 0, "已终止": 0}
     for line in content.split("\n"):
         parts = [p.strip() for p in line.split("|")]
-        if len(parts) >= 10:
-            status = parts[9] if len(parts) > 9 else ""
+        if len(parts) >= 11:
+            status = parts[10] if len(parts) > 10 else ""
             if status in stats:
                 stats[status] += 1
     return stats
@@ -735,8 +735,8 @@ def parse_completed_task_ids():
             continue
         task_id = m.group(1)
         parts = [p.strip() for p in line.split("|")]
-        if len(parts) >= 10:
-            status = parts[9]
+        if len(parts) >= 11:
+            status = parts[10]
             if status == "已完成":
                 completed.add(task_id)
     return completed

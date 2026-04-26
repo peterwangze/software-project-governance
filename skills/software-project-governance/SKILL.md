@@ -94,6 +94,24 @@ When creating or updating governance files, use these fields:
 
 **Risk log fields**: 编号 | 日期 | 风险描述 | 阶段 | 触发条件 | 影响 | 严重级别 | Owner | 状态 | 缓解动作 | 截止日期 | 关联任务 | 备注
 
+### M3.1 DRI (Directly Responsible Individual) Rule (MANDATORY)
+
+Every task **MUST** have exactly one DRI — a single accountable person (Apple DRI model + Amazon Single-Threaded Owner).
+
+**DRI assignment rules**:
+- Owner column **MUST** be single-valued — one person/agent, not "X + Y"
+- If multiple names appear in Owner → task is **unassigned**, not shared
+- Each task **MUST** have an Escalation column — who to escalate to when blocked
+- DRI has decision authority within the task's scope (decides how to execute)
+- Decisions outside task scope → escalate to the Escalation person
+
+**AI agent DRI specific**:
+- When agent is DRI: agent has authority on execution decisions, human is Escalation
+- When human is DRI: agent is collaborator, human makes key decisions
+- DRI boundary aligns with M5.3 critical decision classification — DRI decides non-critical, Escalation decides critical
+
+**Gate check**: Each active task without a DRI → Gate passes with conditions + corrective task created.
+
 ## M4. Session Lifecycle (MANDATORY)
 
 ### M4.1 Session Start Protocol

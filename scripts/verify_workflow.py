@@ -472,7 +472,10 @@ REQUIRED_SNIPPETS = {
         "Replacement Boundary",
         "M7.4 Task Completion Protocol",
         "evidence → check-governance → audit → commit → continue",
-        "6 checks that the agent cannot fake",
+        "M7.5 Pre-Task Protocol",
+        "task ID as prefix",
+        "7 checks that the agent cannot fake",
+        "Commit-task traceability",
     ],
     ROOT / "skills/software-project-governance/references/audit-framework.md": [
         "# Audit Framework",
@@ -521,19 +524,19 @@ REQUIRED_SNIPPETS = {
     ],
     ROOT / "CHANGELOG.md": [
         "# Changelog",
-        "## [0.3.0]",
+        "## [0.4.0]",
     ],
     ROOT / ".claude-plugin/plugin.json": [
-        "0.3.0",
+        "0.4.0",
     ],
     ROOT / ".claude-plugin/marketplace.json": [
-        "0.3.0",
+        "0.4.0",
     ],
     ROOT / ".codex-plugin/plugin.json": [
-        "0.3.0",
+        "0.4.0",
     ],
     ROOT / "workflows/software-project-governance/manifest.md": [
-        "0.3.0",
+        "0.4.0",
     ],
 }
 
@@ -1302,6 +1305,70 @@ def check_version_consistency():
     return issues
 
 
+def check_commit_task_references(limit=20):
+    """Check that recent commit messages contain task ID references.
+
+    Per M7.4 step 4 and M7.5 step 4, every commit message MUST contain
+    a task ID as prefix (e.g., "AUDIT-044: description", "MAINT-028: description").
+    This function is the external validation counterpart — it detects commits
+    without task ID prefixes, which indicate untracked modifications.
+
+    Returns: dict with commits list, issues list, and summary stats.
+    """
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(ROOT), "log", f"--format=%H %s", f"-{limit}"],
+            capture_output=True, text=True, timeout=10, encoding="utf-8",
+            errors="replace",
+        )
+        if result.returncode != 0:
+            return {"error": f"git log failed: {result.stderr}", "commits": [], "issues": []}
+    except FileNotFoundError:
+        return {"error": "git command not found", "commits": [], "issues": []}
+    except Exception as e:
+        return {"error": str(e), "commits": [], "issues": []}
+
+    commits = []
+    issues = []
+    # Match task ID prefix at start of commit message: "AUDIT-044: ..." or "MAINT-028: ..."
+    task_id_pattern = re.compile(r"^([A-Z]+-\d+)")
+
+    if not result.stdout:
+        return {"error": "git log returned empty output", "commits": [], "issues": []}
+
+    for line in result.stdout.strip().split("\n"):
+        if not line:
+            continue
+        parts = line.split(" ", 1)
+        if len(parts) < 2:
+            continue
+        sha = parts[0][:7]
+        message = parts[1]
+
+        task_match = task_id_pattern.match(message)
+        has_task_id = task_match is not None
+        task_id = task_match.group(1) if has_task_id else None
+
+        commit_info = {
+            "sha": sha,
+            "message": message,
+            "has_task_id": has_task_id,
+            "task_id": task_id,
+        }
+        commits.append(commit_info)
+
+        if not has_task_id:
+            issues.append(commit_info)
+
+    return {
+        "commits": commits,
+        "issues": issues,
+        "total_checked": len(commits),
+        "without_task_id": len(issues),
+    }
+
+
 # ── CLI commands ─────────────────────────────────────────────────
 
 def cmd_verify(args):
@@ -1681,6 +1748,28 @@ def cmd_check_governance(args):
             else:
                 print(f"│  [PASS] No completed Tiers without audit evidence.")
 
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 7. Commit-task traceability ──
+    print("\n┌─ Check 7: Commit-Task Traceability ──────────────────┐")
+    ct_result = check_commit_task_references(limit=20)
+    if "error" in ct_result:
+        print(f"│  [INFO] Skipped: {ct_result['error']}")
+    else:
+        total = ct_result["total_checked"]
+        without = ct_result["without_task_id"]
+        print(f"│  Recent commits checked: {total}")
+        if without > 0:
+            all_issues += without
+            print(f"│  [WARN] {without} commit(s) without task ID reference:")
+            for c in ct_result["issues"]:
+                msg_short = c["message"][:70] + ("..." if len(c["message"]) > 70 else "")
+                print(f"│    - {c['sha']}: {msg_short}")
+        else:
+            print(f"│  [PASS] All {total} recent commits have task ID references.")
+        # Show stats
+        with_id = total - without
+        print(f"│  With task ID: {with_id}/{total}")
     print("└──────────────────────────────────────────────────────┘")
 
     # ── Summary ──

@@ -10,7 +10,7 @@ description: Load unified workflow rules, templates, gates and fact sources for 
 ## Workflow Identity
 
 - **id**: software-project-governance
-- **version**: 0.3.0
+- **version**: 0.4.0
 - **goal**: Automate project process management so users focus on thinking, not process
 - **supported_agents**: Claude, Codex, Gemini
 - **core capabilities**: 11-stage lifecycle, 11 Gate checks, evidence/decision/risk tracking, 3 trigger modes, 3 profiles
@@ -258,12 +258,25 @@ After marking any task as "已完成" in `.governance/plan-tracker.md`, the agen
 1. **Write evidence** — add an entry to `.governance/evidence-log.md` per M3 field definitions. Every completed task MUST have corresponding evidence.
 2. **Run external validation** — `python scripts/verify_workflow.py check-governance`. Per M8.1, script validation catches structural issues agent self-check cannot.
 3. **Self-audit** — if the task was P0, or modified any governance-critical file (SKILL.md, stage-gates.md, audit-framework.md, verify_workflow.py, lifecycle.md, profiles.md, onboarding.md, interaction-boundary.md, agent-failure-modes.md, main-workflow.md, TOOLS.md), execute D1 (goal alignment) + D4 (change closure) audit dimensions per `references/audit-framework.md`. Record audit conclusion in evidence-log.
-4. **Commit** — `git add` the changed governance files and `git commit` with a descriptive message. Per DEC-025, every meaningful change is a commit unit. Task completion IS a commit boundary.
+4. **Commit** — `git add` the changed governance files and `git commit` with a message that **MUST** contain the task ID as prefix (e.g., "AUDIT-044: description", "MAINT-028: description"). Per DEC-025, every meaningful change is a commit unit. Task completion IS a commit boundary. The task ID prefix is the link between the code change and the plan-tracker entry — without it, traceability is broken. Commit messages without a task ID prefix are detectable by check-governance Check 7.
 5. **Continue** — proceed to the next highest-priority task in plan-tracker per M7 execution continuity. If and only if the next task choice involves a critical decision (M5.3) → use AskUserQuestion. Otherwise → execute autonomously.
 
 **Skipping any step = protocol violation.** The agent **MUST NOT** declare a task "done" without completing all 5 steps. This protocol is designed to prevent the exact failure pattern where rules exist but are not executed — it binds the atomic actions of task closure into a single non-negotiable sequence.
 
 **Protocol design rationale**: Each of the 4 violations detected in the AUDIT-040 incident (no audit triggered, no auto-commit, execution interrupted, inline question instead of AskUserQuestion) maps to a missing step in the task completion sequence. By making the sequence explicit and atomic, the protocol eliminates the gaps that allowed each violation.
+
+### M7.5 Pre-Task Protocol (MANDATORY)
+
+Before executing any task that modifies files tracked in the repository, the agent **MUST** execute these steps in order:
+
+1. **Verify task tracking** — check `.governance/plan-tracker.md`: does a task entry exist for this work? The task entry MUST have: a valid task ID (e.g., AUDIT-XXX, MAINT-XXX), a DRI assignment, a priority level, and a clear description of the expected output.
+2. **If task not found → create first** — add a new task entry to plan-tracker with all required fields per the plan-tracker template (ID, 阶段, 任务项, 目标/预期结果, 输入, 输出, Owner/DRI, 协同角色, Escalation, 状态="进行中", 优先级, 计划开始, 计划完成, Gate, 验收标准). Then proceed with execution.
+3. **If task found but status is "未开始"** → update status to "进行中" before starting work.
+4. **Reference task ID in all commits** — every commit message **MUST** contain the task ID as prefix (e.g., "AUDIT-044: description"). Per DEC-025 and M7.4 step 4. The task ID in the commit message is the link between the code change and the plan-tracker entry — without it, traceability is broken.
+
+**Modifying files without a corresponding plan-tracker entry = protocol violation.** Untracked modifications corrupt the project's traceability — without a task ID, evidence can't be linked, Gate checks can't verify completion, and the project Owner can't reconstruct why a change was made. Every file modification MUST be traceable back to exactly one task in plan-tracker.
+
+**Why this protocol exists**: AUDIT-043 (M7.4 fix) was implemented BEFORE being added to plan-tracker — 8 files modified, 5 version declarations bumped, but no task entry existed. The task was retroactively created as AUDIT-043 after the code was already committed. M7.5 prevents this pattern by requiring the task entry to exist FIRST. AUDIT-044 is the first task to follow this protocol — the task entry was committed (04d0b7c) before any implementation began.
 
 ## M8. Self-check Protocol (MANDATORY)
 
@@ -277,6 +290,7 @@ After each major task, **MUST** self-check:
 - [ ] M6 completed tasks have evidence?
 - [ ] M7 no prohibited interruptions? Decision mode respected?
 - [ ] M7.4 task completion protocol executed? (evidence → check-governance → audit → commit → continue)
+- [ ] M7.5 pre-task protocol executed? (task in plan-tracker before modifying files?)
 ```
 
 **Fails**: fix immediately. **Passes**: don't output, continue.
@@ -285,7 +299,7 @@ After each major task, **MUST** self-check:
 
 Agent self-check alone is insufficient — an agent that violates protocol will also not honestly self-report violations (self-audit contradiction). This protocol therefore requires a **dual mechanism**: agent self-check (M8) + independent script validation.
 
-**Independent script validation** via `python scripts/verify_workflow.py check-governance` performs 6 checks that the agent cannot fake:
+**Independent script validation** via `python scripts/verify_workflow.py check-governance` performs 7 checks that the agent cannot fake:
 
 | Check | What it detects | Why agent self-check can't catch it |
 |-------|----------------|-------------------------------------|
@@ -295,6 +309,7 @@ Agent self-check alone is insufficient — an agent that violates protocol will 
 | 4. Evidence quality | Circular refs, session-context refs, empty claims | Agent may produce self-referencing or transient evidence |
 | 5. Protocol compliance | DRI violations, conditional passes without corrective tasks, evidence format errors | Structural violations agent won't self-report |
 | 6. Tier audit completeness | Completed Tiers without TIER-X-Y-AUDIT evidence | Agent may skip Tier audit, and agent self-check won't detect it (same self-audit contradiction as Check 5) |
+| 7. Commit-task traceability | Commits without task ID references in message | Agent may modify files without creating a plan-tracker entry first — untracked changes corrupt traceability |
 
 **When to run external validation** (MANDATORY):
 - Before declaring a Gate as passed → run check-governance, confirm 0 issues

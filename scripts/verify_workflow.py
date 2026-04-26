@@ -889,6 +889,53 @@ def check_gate_consistency():
     return issues
 
 
+def check_evidence_quality():
+    """Check evidence quality: session context references, circular refs, empty output claims."""
+    evidence_path = ROOT / ".governance" / "evidence-log.md"
+    issues = {
+        "session_context": [],      # 会话上下文 references
+        "circular_refs": [],        # 循环引用
+        "empty_output": [],         # 空输出声明
+    }
+
+    if not evidence_path.is_file():
+        return issues
+
+    content = evidence_path.read_text(encoding="utf-8")
+    lines = content.split("\n")
+
+    for i, line in enumerate(lines, 1):
+        # Skip header rows and separator rows
+        if not line.startswith("| EVD-"):
+            continue
+
+        parts = line.split("|")
+        if len(parts) < 8:
+            continue
+
+        evd_id = parts[1].strip()
+        evidence_location = parts[6].strip() if len(parts) > 6 else ""
+
+        # Check 1: 会话上下文 references (non-persistent)
+        if "会话上下文" in evidence_location:
+            issues["session_context"].append(f"{evd_id} (line {i}): evidence location = '{evidence_location}'")
+
+        # Check 2: Circular references — evidence referencing itself
+        if f"详见 {evd_id}" in line or f"see {evd_id}" in line.lower():
+            issues["circular_refs"].append(f"{evd_id} (line {i}): self-referencing — '{evd_id}' in content")
+
+        # Check 3: Empty or placeholder output claims
+        if evidence_location in ("待补", "会话上下文", "详见 EVD-070 完整内容", ""):
+            if evidence_location == "":
+                issues["empty_output"].append(f"{evd_id} (line {i}): empty evidence location")
+            elif evidence_location == "待补":
+                issues["empty_output"].append(f"{evd_id} (line {i}): evidence location = '待补'")
+            elif evidence_location.startswith("详见 EVD-"):
+                pass  # Already caught by Check 2
+
+    return issues
+
+
 # ── CLI commands ─────────────────────────────────────────────────
 
 def cmd_verify(args):
@@ -1161,6 +1208,34 @@ def cmd_check_governance(args):
                     print(f"│    - {eid}")
     else:
         print(f"│  [PASS] Gate status and evidence are consistent.")
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 4. Evidence quality ──
+    print("\n┌─ Check 4: Evidence Quality ─────────────────────────┐")
+    eq_issues = check_evidence_quality()
+    eq_count = 0
+    if eq_issues["session_context"]:
+        eq_count += len(eq_issues["session_context"])
+        print(f"│  [WARN] {len(eq_issues['session_context'])} evidence with '会话上下文' reference:")
+        for item in eq_issues["session_context"]:
+            print(f"│    - {item}")
+    else:
+        print(f"│  [PASS] No '会话上下文' references found.")
+    if eq_issues["circular_refs"]:
+        eq_count += len(eq_issues["circular_refs"])
+        print(f"│  [WARN] {len(eq_issues['circular_refs'])} circular reference(s):")
+        for item in eq_issues["circular_refs"]:
+            print(f"│    - {item}")
+    else:
+        print(f"│  [PASS] No circular references found.")
+    if eq_issues["empty_output"]:
+        eq_count += len(eq_issues["empty_output"])
+        print(f"│  [WARN] {len(eq_issues['empty_output'])} empty/incomplete evidence location(s):")
+        for item in eq_issues["empty_output"]:
+            print(f"│    - {item}")
+    else:
+        print(f"│  [PASS] No empty evidence locations found.")
+    all_issues += eq_count
     print("└──────────────────────────────────────────────────────┘")
 
     # ── Summary ──

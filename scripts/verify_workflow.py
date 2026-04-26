@@ -1101,6 +1101,134 @@ def check_evidence_quality():
     return issues
 
 
+def parse_tier_definitions():
+    """Parse Tier definitions from plan-tracker's DEC-052 implementation roadmap.
+
+    Returns: dict mapping tier_id (e.g., "0-A") -> list of task IDs.
+    """
+    content = SAMPLE_PATH.read_text(encoding="utf-8")
+    lines = content.split("\n")
+
+    in_roadmap = False
+    tiers = {}
+    current_tier = None
+
+    for line in lines:
+        # Detect start of implementation roadmap section
+        if line.strip() == "## 实施路线图（DEC-052）":
+            in_roadmap = True
+            continue
+        # Stop at next top-level section
+        if in_roadmap and line.startswith("## "):
+            break
+
+        if not in_roadmap:
+            continue
+
+        # Detect Tier header: "Tier 0-A: description"
+        tier_match = re.match(r"^Tier (\d+-[A-Z]):", line)
+        if tier_match:
+            current_tier = tier_match.group(1)
+            tiers[current_tier] = []
+            continue
+
+        # Collect task IDs within current tier
+        # Format: "  AUDIT-XXX (PX) — description" or "  MAINT-XXX (PX) — description"
+        if current_tier:
+            task_match = re.match(r"^\s+([A-Z]+-\d+)\s+\(P\d\)", line)
+            if task_match:
+                tiers[current_tier].append(task_match.group(1))
+
+    return tiers
+
+
+def parse_task_status_map():
+    """Return dict mapping task_id -> status from ALL tracking tables in plan-tracker.
+
+    Scans the entire file for task rows regardless of section boundaries,
+    since tracking tables are spread across multiple subsections.
+    """
+    content = SAMPLE_PATH.read_text(encoding="utf-8")
+    status_map = {}
+
+    for line in content.split("\n"):
+        line_stripped = line.strip()
+        if not line_stripped.startswith("| ") or "---" in line_stripped:
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) >= 11:
+            task_id_match = re.match(r"([A-Z]+-\d+)", parts[1])
+            if task_id_match:
+                task_id = task_id_match.group(1)
+                status = parts[10] if len(parts) > 10 else ""
+                status_map[task_id] = status
+
+    return status_map
+
+
+def check_tier_audit_completeness():
+    """Check that each completed Tier has a corresponding TIER-X-Y-AUDIT evidence entry.
+
+    Per DEC-052 execution discipline rule #3: every completed Tier MUST have an audit.
+    Audit evidence uses task ID format: TIER-<layer>-<tier>-AUDIT (e.g., TIER-0-C-AUDIT).
+
+    Returns: dict with tier details and issue lists.
+    """
+    tiers = parse_tier_definitions()
+    status_map = parse_task_status_map()
+    evidence_task_ids = parse_evidence_task_ids()
+
+    completed_without_audit = []
+    completed_with_audit = []
+    incomplete_tiers = []
+    all_details = []
+
+    for tier_id, task_ids in tiers.items():
+        if not task_ids:
+            continue
+
+        # Check status of each task in this tier
+        task_statuses = {}
+        all_completed = True
+        completed_count = 0
+        for tid in task_ids:
+            status = status_map.get(tid, "未找到")
+            task_statuses[tid] = status
+            if status == "已完成":
+                completed_count += 1
+            else:
+                all_completed = False
+
+        # Check for TIER audit evidence
+        audit_evidence_id = f"TIER-{tier_id}-AUDIT"
+        has_audit = audit_evidence_id in evidence_task_ids
+
+        detail = {
+            "tier_id": tier_id,
+            "task_count": len(task_ids),
+            "completed_count": completed_count,
+            "task_statuses": task_statuses,
+            "all_completed": all_completed,
+            "has_audit": has_audit,
+            "audit_evidence_id": audit_evidence_id,
+        }
+        all_details.append(detail)
+
+        if all_completed and not has_audit:
+            completed_without_audit.append(detail)
+        elif all_completed and has_audit:
+            completed_with_audit.append(detail)
+        elif not all_completed:
+            incomplete_tiers.append(detail)
+
+    return {
+        "completed_without_audit": completed_without_audit,
+        "completed_with_audit": completed_with_audit,
+        "incomplete_tiers": incomplete_tiers,
+        "all_details": all_details,
+    }
+
+
 def check_version_consistency():
     """Check that all 5 version declaration files agree on the same version.
 
@@ -1510,6 +1638,45 @@ def cmd_check_governance(args):
         print(f"│  [PASS] All evidence entries have required fields.")
 
     all_issues += pc_count
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 6. Tier audit completeness ──
+    print("\n┌─ Check 6: Tier Audit Completeness ───────────────────┐")
+    tier_result = check_tier_audit_completeness()
+    tiers_defined = len(tier_result["all_details"])
+    if tiers_defined == 0:
+        print(f"│  [INFO] No Tier definitions found in plan-tracker — skip.")
+    else:
+        print(f"│  Tiers defined: {tiers_defined}")
+        ta_issues = 0
+
+        # Completed tiers WITH audit
+        for detail in tier_result["completed_with_audit"]:
+            print(f"│  [PASS] Tier {detail['tier_id']}: {detail['completed_count']}/{detail['task_count']} tasks completed, audit {detail['audit_evidence_id']} found.")
+
+        # Completed tiers WITHOUT audit
+        for detail in tier_result["completed_without_audit"]:
+            ta_issues += 1
+            all_issues += 1
+            print(f"│  [WARN] Tier {detail['tier_id']}: {detail['completed_count']}/{detail['task_count']} tasks completed but NO audit evidence ({detail['audit_evidence_id']}).")
+            for tid, status in detail["task_statuses"].items():
+                print(f"│    - {tid}: {status}")
+
+        # Incomplete tiers (informational)
+        for detail in tier_result["incomplete_tiers"]:
+            pending = detail["task_count"] - detail["completed_count"]
+            print(f"│  [INFO] Tier {detail['tier_id']}: {detail['completed_count']}/{detail['task_count']} completed, {pending} pending — audit not yet due.")
+            for tid, status in detail["task_statuses"].items():
+                if status != "已完成":
+                    print(f"│    - {tid}: {status}")
+
+        if ta_issues == 0 and tier_result["completed_without_audit"] == []:
+            completed_tiers = len(tier_result["completed_with_audit"])
+            if completed_tiers > 0:
+                print(f"│  [PASS] All {completed_tiers} completed Tier(s) have audit evidence.")
+            else:
+                print(f"│  [PASS] No completed Tiers without audit evidence.")
+
     print("└──────────────────────────────────────────────────────┘")
 
     # ── Summary ──

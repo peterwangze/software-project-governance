@@ -474,8 +474,10 @@ REQUIRED_SNIPPETS = {
         "evidence → check-governance → audit → commit → continue",
         "M7.5 Pre-Task Protocol",
         "task ID as prefix",
-        "7 checks that the agent cannot fake",
+        "9 checks that the agent cannot fake",
         "Commit-task traceability",
+        "Risk escalation deadline",
+        "Task deadline enforcement",
     ],
     ROOT / "skills/software-project-governance/references/audit-framework.md": [
         "# Audit Framework",
@@ -524,19 +526,19 @@ REQUIRED_SNIPPETS = {
     ],
     ROOT / "CHANGELOG.md": [
         "# Changelog",
-        "## [0.4.0]",
+        "## [0.5.0]",
     ],
     ROOT / ".claude-plugin/plugin.json": [
-        "0.4.0",
+        "0.5.0",
     ],
     ROOT / ".claude-plugin/marketplace.json": [
-        "0.4.0",
+        "0.5.0",
     ],
     ROOT / ".codex-plugin/plugin.json": [
-        "0.4.0",
+        "0.5.0",
     ],
     ROOT / "workflows/software-project-governance/manifest.md": [
-        "0.4.0",
+        "0.5.0",
     ],
 }
 
@@ -1369,6 +1371,127 @@ def check_commit_task_references(limit=20):
     }
 
 
+def check_risk_escalation():
+    """Check for open risks whose escalation deadline has passed.
+
+    Per AUDIT-045: risk-log defines Owner + escalation deadline + mitigation action,
+    but when the deadline passes, nothing enforces the escalation.
+    This function detects open risks with passed deadlines — the external validation
+    counterpart to the risk escalation MUST rule.
+
+    Returns: dict with escalated risks list and summary stats.
+    """
+    content = RISK_PATH.read_text(encoding="utf-8")
+    today = date.today()
+    escalated = []
+    all_open = []
+
+    for line in content.split("\n"):
+        line = line.strip()
+        if not line.startswith("| RISK-"):
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) < 13:
+            continue
+
+        risk_id = parts[1]
+        date_str = parts[2]          # 日期
+        status = parts[9]            # 当前状态
+        deadline_str = parts[11]     # 截止日期
+
+        if status != "打开":
+            continue
+
+        all_open.append(risk_id)
+
+        if not deadline_str or deadline_str == "":
+            continue
+
+        try:
+            deadline = datetime.strptime(deadline_str, "%Y-%m-%d").date()
+            if today > deadline:
+                escalated.append({
+                    "risk_id": risk_id,
+                    "created": date_str,
+                    "deadline": deadline_str,
+                    "days_overdue": (today - deadline).days,
+                })
+        except ValueError:
+            continue
+
+    return {
+        "escalated": escalated,
+        "total_open": len(all_open),
+        "escalation_count": len(escalated),
+    }
+
+
+def check_task_deadline():
+    """Check for non-completed tasks whose planned completion date has passed.
+
+    Per AUDIT-048: plan-tracker has "计划完成" column for each task,
+    but when the date passes with task still in "未开始" or "进行中",
+    nothing detects or escalates it. This is the same pattern as risk escalation
+    (AUDIT-045) — deadline fields exist but are not enforced.
+
+    Returns: dict with overdue tasks list and summary stats.
+    """
+    content = SAMPLE_PATH.read_text(encoding="utf-8")
+    today = date.today()
+    overdue = []
+    all_active = 0
+
+    for line in content.split("\n"):
+        line = line.strip()
+        if not line.startswith("| ") or "---" in line:
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) < 15:
+            continue
+
+        task_id_match = re.match(r"([A-Z]+-\d+)", parts[1])
+        if not task_id_match:
+            continue
+
+        task_id = task_id_match.group(1)
+        status = parts[10] if len(parts) > 10 else ""
+        priority = parts[11] if len(parts) > 11 else ""
+        # Column mapping: 0=empty,1=ID,...,12=计划开始,13=计划完成,14=实际完成
+        plan_complete_str = parts[13] if len(parts) > 13 else ""
+
+        # Only check non-completed tasks
+        if status in ("已完成", "已终止"):
+            continue
+
+        all_active += 1
+
+        if not plan_complete_str or plan_complete_str == "":
+            continue
+
+        try:
+            plan_complete = datetime.strptime(plan_complete_str, "%Y-%m-%d").date()
+            if today > plan_complete:
+                overdue.append({
+                    "task_id": task_id,
+                    "status": status,
+                    "priority": priority,
+                    "plan_complete": plan_complete_str,
+                    "days_overdue": (today - plan_complete).days,
+                })
+        except ValueError:
+            continue
+
+    # Sort by priority then days overdue
+    priority_order = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
+    overdue.sort(key=lambda t: (priority_order.get(t["priority"], 99), -t["days_overdue"]))
+
+    return {
+        "overdue": overdue,
+        "total_active": all_active,
+        "overdue_count": len(overdue),
+    }
+
+
 # ── CLI commands ─────────────────────────────────────────────────
 
 def cmd_verify(args):
@@ -1770,6 +1893,34 @@ def cmd_check_governance(args):
         # Show stats
         with_id = total - without
         print(f"│  With task ID: {with_id}/{total}")
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 8. Risk escalation deadline ──
+    print("\n┌─ Check 8: Risk Escalation Deadline ──────────────────┐")
+    re_result = check_risk_escalation()
+    escalated = re_result["escalated"]
+    if escalated:
+        all_issues += len(escalated)
+        print(f"│  [WARN] {len(escalated)} open risk(s) with escalation deadline passed:")
+        for r in escalated:
+            print(f"│    - {r['risk_id']}: deadline {r['deadline']} ({r['days_overdue']}d overdue)")
+    else:
+        print(f"│  [PASS] No open risks with passed escalation deadlines.")
+    print(f"│  Total open risks: {re_result['total_open']}")
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 9. Task deadline enforcement ──
+    print("\n┌─ Check 9: Task Deadline Enforcement ─────────────────┐")
+    td_result = check_task_deadline()
+    overdue_tasks = td_result["overdue"]
+    if overdue_tasks:
+        all_issues += len(overdue_tasks)
+        print(f"│  [WARN] {len(overdue_tasks)} active task(s) with plan-complete date passed:")
+        for t in overdue_tasks:
+            print(f"│    - {t['task_id']} ({t['priority']}, {t['status']}): due {t['plan_complete']} ({t['days_overdue']}d overdue)")
+    else:
+        print(f"│  [PASS] No active tasks with passed plan-complete dates.")
+    print(f"│  Total active tasks checked: {td_result['total_active']}")
     print("└──────────────────────────────────────────────────────┘")
 
     # ── Summary ──

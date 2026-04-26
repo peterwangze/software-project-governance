@@ -10,7 +10,7 @@ description: Load unified workflow rules, templates, gates and fact sources for 
 ## Workflow Identity
 
 - **id**: software-project-governance
-- **version**: 0.4.0
+- **version**: 0.5.0
 - **goal**: Automate project process management so users focus on thinking, not process
 - **supported_agents**: Claude, Codex, Gemini
 - **core capabilities**: 11-stage lifecycle, 11 Gate checks, evidence/decision/risk tracking, 3 trigger modes, 3 profiles
@@ -251,6 +251,10 @@ These are NEVER valid reasons to stop, regardless of mode:
 
 Process defects discovered during execution **MUST** be fixed immediately. If the fix would change project direction/scope/architecture → it's a critical decision, use AskUserQuestion. If the fix is procedural (rules, templates, governance files) → execute immediately.
 
+**Risk escalation deadline enforcement** (AUDIT-045): open risks with a passed escalation deadline (risk-log "截止日期" column) **MUST** be escalated — either closed with resolution or upgraded to a higher severity level. Risks left "打开" past their deadline are a protocol violation. `check-governance` Check 8 detects open risks with passed deadlines.
+
+**Task deadline enforcement** (AUDIT-048): active tasks ("未开始" or "进行中") with a passed "计划完成" date **MUST** be escalated — either completed, re-planned with a new deadline, or explicitly deprioritized. `check-governance` Check 9 detects tasks with passed plan-complete dates.
+
 ### M7.4 Task Completion Protocol (MANDATORY)
 
 After marking any task as "已完成" in `.governance/plan-tracker.md`, the agent **MUST** execute these 5 steps in order, as an atomic non-skippable sequence:
@@ -291,6 +295,8 @@ After each major task, **MUST** self-check:
 - [ ] M7 no prohibited interruptions? Decision mode respected?
 - [ ] M7.4 task completion protocol executed? (evidence → check-governance → audit → commit → continue)
 - [ ] M7.5 pre-task protocol executed? (task in plan-tracker before modifying files?)
+- [ ] M7.3 risk escalation deadlines checked? Any open risks past deadline?
+- [ ] M7.3 task deadlines checked? Any active tasks past plan-complete date?
 ```
 
 **Fails**: fix immediately. **Passes**: don't output, continue.
@@ -299,7 +305,7 @@ After each major task, **MUST** self-check:
 
 Agent self-check alone is insufficient — an agent that violates protocol will also not honestly self-report violations (self-audit contradiction). This protocol therefore requires a **dual mechanism**: agent self-check (M8) + independent script validation.
 
-**Independent script validation** via `python scripts/verify_workflow.py check-governance` performs 7 checks that the agent cannot fake:
+**Independent script validation** via `python scripts/verify_workflow.py check-governance` performs 9 checks that the agent cannot fake:
 
 | Check | What it detects | Why agent self-check can't catch it |
 |-------|----------------|-------------------------------------|
@@ -310,6 +316,8 @@ Agent self-check alone is insufficient — an agent that violates protocol will 
 | 5. Protocol compliance | DRI violations, conditional passes without corrective tasks, evidence format errors | Structural violations agent won't self-report |
 | 6. Tier audit completeness | Completed Tiers without TIER-X-Y-AUDIT evidence | Agent may skip Tier audit, and agent self-check won't detect it (same self-audit contradiction as Check 5) |
 | 7. Commit-task traceability | Commits without task ID references in message | Agent may modify files without creating a plan-tracker entry first — untracked changes corrupt traceability |
+| 8. Risk escalation deadline | Open risks with passed escalation deadlines | Agent has no built-in deadline awareness — risk deadlines pass silently |
+| 9. Task deadline enforcement | Active tasks with passed plan-complete dates | Same pattern as Check 8 — task deadlines exist but are never enforced |
 
 **When to run external validation** (MANDATORY):
 - Before declaring a Gate as passed → run check-governance, confirm 0 issues

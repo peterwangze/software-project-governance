@@ -2,6 +2,23 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.5.0] — 2026-04-26
+
+### 新增
+
+- **M7.3 风险 escalation 强制执行**：打开状态的风险在截止日期过后 MUST 升级或关闭。`check_risk_escalation()` 检测过期未处理的风险——解决"风险 escalation deadline 过了但什么都没发生"的系统性漏洞（与 M7.4/M7.5 同类模式）
+- **M7.3 任务 deadline 强制执行**：未完成任务在"计划完成"日期过后 MUST 完成、重排或显式降级。`check_task_deadline()` 检测过期未处理的任务
+- **Check 8：Risk Escalation Deadline**：check-governance 第 8 项检查——检测 risk-log 中"打开"状态且 escalation 截止日期已过的风险
+- **Check 9：Task Deadline Enforcement**：check-governance 第 9 项检查——检测 plan-tracker 中非"已完成/已终止"状态且"计划完成"日期已过的任务
+- **M8 自检升级**：新增 M7.3 风险 escalation 和任务 deadline 检查项
+- **M8.1 表格升级**：从 7 checks 扩展到 9 checks
+
+### 修复
+
+- **Deadline 盲区闭环**：风险 escalation 和任务 deadline 两个字段被定义但从未被自动检测——check-governance 的 Check 2（风险 staleness）只检测 >7 天未更新，不检测 escalation deadline。Check 8/9 补上了这个检测盲区
+
+---
+
 ## [0.4.0] — 2026-04-26
 
 ### 新增

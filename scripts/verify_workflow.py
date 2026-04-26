@@ -470,6 +470,9 @@ REQUIRED_SNIPPETS = {
         "## M2",
         "references/stage-gates.md",
         "Replacement Boundary",
+        "M7.4 Task Completion Protocol",
+        "evidence → check-governance → audit → commit → continue",
+        "6 checks that the agent cannot fake",
     ],
     ROOT / "skills/software-project-governance/references/audit-framework.md": [
         "# Audit Framework",
@@ -484,6 +487,7 @@ REQUIRED_SNIPPETS = {
         "## 审计执行协议",
         "## Profile 对审计的影响",
         "## Agent 审计纪律",
+        "governance-critical 文件",
     ],
     ROOT / "skills/software-project-governance/references/agent-failure-modes.md": [
         "# Agent 失败模式文档",
@@ -517,19 +521,19 @@ REQUIRED_SNIPPETS = {
     ],
     ROOT / "CHANGELOG.md": [
         "# Changelog",
-        "## [0.2.0]",
+        "## [0.3.0]",
     ],
     ROOT / ".claude-plugin/plugin.json": [
-        "0.2.0",
+        "0.3.0",
     ],
     ROOT / ".claude-plugin/marketplace.json": [
-        "0.2.0",
+        "0.3.0",
     ],
     ROOT / ".codex-plugin/plugin.json": [
-        "0.2.0",
+        "0.3.0",
     ],
     ROOT / "workflows/software-project-governance/manifest.md": [
-        "0.2.0",
+        "0.3.0",
     ],
 }
 

@@ -30,7 +30,7 @@ Gate 检查（阶段转换关口）
 
 | 属性 | 内容 |
 |------|------|
-| 触发时机 | 每个 Gate 通过前（强制）、每个 Tier 完成时（强制——按实施计划的分层推进模型）、任何 P0 任务完成时（强制）、用户主动要求（按需） |
+| 触发时机 | 每个 Gate 通过前（强制）、每个 Tier 完成时（强制——按实施计划的分层推进模型）、任何 P0 任务完成时（强制）、任何修改了 governance-critical 文件（SKILL.md、stage-gates.md、audit-framework.md、verify_workflow.py、lifecycle.md、profiles.md、onboarding.md、interaction-boundary.md、agent-failure-modes.md、main-workflow.md、TOOLS.md）的任务完成时（强制——不论任务优先级）、用户主动要求（按需） |
 | 适用阶段 | 全部 11 阶段 |
 | 检查项 | (1) 最近完成的 N 个任务是否可追溯到立项目标或 plan-tracker 中的明确需求；(2) plan-tracker 中是否有与立项目标无关但占用了 P0 资源的任务；(3) 决策记录中是否有改变原始目标方向但未在 plan-tracker 中反映的决策；(4) 范围是否发生了未经记录的漂移（对比立项时的"范围外"清单） |
 | 产出 | 审计结论（ON-TRACK / DEVIATION-DETECTED / NEEDS-REALIGNMENT）+ 偏差清单 |

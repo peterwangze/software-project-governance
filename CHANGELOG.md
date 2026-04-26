@@ -2,6 +2,19 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.3.0] — 2026-04-26
+
+### 新增
+
+- **M7.4 任务完成协议**：将 evidence → check-governance → audit → commit → continue 绑定为原子不可跳过序列。解决"规则存在但 agent 不执行"的系统性执行一致性问题——每项任务标记"已完成"后 MUST 按序执行 5 步
+- **M8 自检升级**：新增 M7.4 检查项（任务完成协议是否执行？）
+- **M8.1 表格升级**：从 5 checks 扩展到 6 checks（新增 Check 6：Tier 审计完整性）
+- **audit-framework.md D1 触发条件具体化**：新增 governance-critical 文件清单——任何修改了这些文件的任务完成时 MUST 触发审计（不论任务优先级）
+
+### 修复
+
+- **执行一致性漏洞闭环**：AUDIT-040 完成时发现的 4 项 MUST 规则被跳过（审计未触发/未 commit/执行中断/内联提问）通过 M7.4 原子协议系统性修复
+
 ## [0.2.0] — 2026-04-26
 
 ### 新增

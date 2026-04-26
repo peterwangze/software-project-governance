@@ -10,7 +10,7 @@ description: Load unified workflow rules, templates, gates and fact sources for 
 ## Workflow Identity
 
 - **id**: software-project-governance
-- **version**: 0.2.0
+- **version**: 0.3.0
 - **goal**: Automate project process management so users focus on thinking, not process
 - **supported_agents**: Claude, Codex, Gemini
 - **core capabilities**: 11-stage lifecycle, 11 Gate checks, evidence/decision/risk tracking, 3 trigger modes, 3 profiles
@@ -251,6 +251,20 @@ These are NEVER valid reasons to stop, regardless of mode:
 
 Process defects discovered during execution **MUST** be fixed immediately. If the fix would change project direction/scope/architecture → it's a critical decision, use AskUserQuestion. If the fix is procedural (rules, templates, governance files) → execute immediately.
 
+### M7.4 Task Completion Protocol (MANDATORY)
+
+After marking any task as "已完成" in `.governance/plan-tracker.md`, the agent **MUST** execute these 5 steps in order, as an atomic non-skippable sequence:
+
+1. **Write evidence** — add an entry to `.governance/evidence-log.md` per M3 field definitions. Every completed task MUST have corresponding evidence.
+2. **Run external validation** — `python scripts/verify_workflow.py check-governance`. Per M8.1, script validation catches structural issues agent self-check cannot.
+3. **Self-audit** — if the task was P0, or modified any governance-critical file (SKILL.md, stage-gates.md, audit-framework.md, verify_workflow.py, lifecycle.md, profiles.md, onboarding.md, interaction-boundary.md, agent-failure-modes.md, main-workflow.md, TOOLS.md), execute D1 (goal alignment) + D4 (change closure) audit dimensions per `references/audit-framework.md`. Record audit conclusion in evidence-log.
+4. **Commit** — `git add` the changed governance files and `git commit` with a descriptive message. Per DEC-025, every meaningful change is a commit unit. Task completion IS a commit boundary.
+5. **Continue** — proceed to the next highest-priority task in plan-tracker per M7 execution continuity. If and only if the next task choice involves a critical decision (M5.3) → use AskUserQuestion. Otherwise → execute autonomously.
+
+**Skipping any step = protocol violation.** The agent **MUST NOT** declare a task "done" without completing all 5 steps. This protocol is designed to prevent the exact failure pattern where rules exist but are not executed — it binds the atomic actions of task closure into a single non-negotiable sequence.
+
+**Protocol design rationale**: Each of the 4 violations detected in the AUDIT-040 incident (no audit triggered, no auto-commit, execution interrupted, inline question instead of AskUserQuestion) maps to a missing step in the task completion sequence. By making the sequence explicit and atomic, the protocol eliminates the gaps that allowed each violation.
+
 ## M8. Self-check Protocol (MANDATORY)
 
 After each major task, **MUST** self-check:
@@ -262,6 +276,7 @@ After each major task, **MUST** self-check:
 - [ ] M5.2/M5.3 AskUserQuestion used where required? Non-critical decisions auto-executed?
 - [ ] M6 completed tasks have evidence?
 - [ ] M7 no prohibited interruptions? Decision mode respected?
+- [ ] M7.4 task completion protocol executed? (evidence → check-governance → audit → commit → continue)
 ```
 
 **Fails**: fix immediately. **Passes**: don't output, continue.
@@ -270,7 +285,7 @@ After each major task, **MUST** self-check:
 
 Agent self-check alone is insufficient — an agent that violates protocol will also not honestly self-report violations (self-audit contradiction). This protocol therefore requires a **dual mechanism**: agent self-check (M8) + independent script validation.
 
-**Independent script validation** via `python scripts/verify_workflow.py check-governance` performs 5 checks that the agent cannot fake:
+**Independent script validation** via `python scripts/verify_workflow.py check-governance` performs 6 checks that the agent cannot fake:
 
 | Check | What it detects | Why agent self-check can't catch it |
 |-------|----------------|-------------------------------------|
@@ -279,6 +294,7 @@ Agent self-check alone is insufficient — an agent that violates protocol will 
 | 3. Gate consistency | Gate status vs evidence mismatch | Agent may mark Gate passed without evidence |
 | 4. Evidence quality | Circular refs, session-context refs, empty claims | Agent may produce self-referencing or transient evidence |
 | 5. Protocol compliance | DRI violations, conditional passes without corrective tasks, evidence format errors | Structural violations agent won't self-report |
+| 6. Tier audit completeness | Completed Tiers without TIER-X-Y-AUDIT evidence | Agent may skip Tier audit, and agent self-check won't detect it (same self-audit contradiction as Check 5) |
 
 **When to run external validation** (MANDATORY):
 - Before declaring a Gate as passed → run check-governance, confirm 0 issues

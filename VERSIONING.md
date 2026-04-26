@@ -1,0 +1,56 @@
+# Versioning Policy
+
+本文件定义 `software-project-governance` 的语义化版本规则、版本升级触发条件和废弃通知期。
+
+## 语义化版本规则
+
+采用 [Semantic Versioning 2.0.0](https://semver.org/)：`Major.Minor.Patch`
+
+| 版本段 | 升级触发条件 | 示例 |
+|--------|-------------|------|
+| **Major** (X.0.0) | Breaking Change：删除/重命名 MUST 规则、改变 Gate 行为语义、改变 governance 文件字段格式（旧版本 agent 按旧规则执行会出错） | 删除 M3.1 DRI 规则、Gate 从 11 个减少到 5 个 |
+| **Minor** (0.X.0) | 新增 MUST 规则、新增 B/C 级自动化能力、新增 references 文件、新增子工作流或 skill、扩展 Gate 检查项 | 新增 M8.1 外部验证、新增 gate-check 子命令 |
+| **Patch** (0.0.X) | 修复 bug、修正文档措辞、优化已有规则表述（不改变行为语义）、更新模板示例 | 修复 parse_gate_detail regex、修正 README 错字 |
+
+## 版本升级触发条件
+
+以下变更 **MUST** 触发版本号升级：
+
+1. **SKILL.md 行为协议变更**（M0~M9 规则的增/删/改）
+2. **references/ 文件变更**（新增/删除/重命名文件，或修改强制检查项）
+3. **verify_workflow.py 子命令变更**（新增/删除/修改 CLI 接口）
+4. **stages/ 子工作流或 skill 变更**（新增/删除，或修改活动清单中的强制步骤）
+5. **governance 文件模板字段变更**（plan-tracker/evidence-log/decision-log/risk-log 列定义）
+
+以下变更 **不需要** 触发版本号升级：
+
+- 仅修改当前项目自身的 `.governance/` 记录（plan-tracker/evidence/decision/risk）
+- 仅修改 `adapters/` 历史样例
+- 仅修改 `workflows/research/` 调研文档
+- 仅修改 `README.md` 措辞（不影响 agent 行为）
+
+## 版本声明位置
+
+所有以下文件中的版本号必须保持一致：
+
+1. `.claude-plugin/plugin.json` — `version` 字段
+2. `.claude-plugin/marketplace.json` — `plugins[0].version` 字段
+3. `.codex-plugin/plugin.json` — `version` 字段
+4. `skills/software-project-governance/SKILL.md` — frontmatter `version` 字段
+5. `workflows/software-project-governance/manifest.md` — `version` 字段
+
+`verify_workflow.py` 的 snippet 检查会自动验证这 5 个文件的版本号一致性。
+
+## 废弃通知期
+
+- **Major 版本**：至少提前一个 Minor 版本在 CHANGELOG 中标注废弃内容
+- **Minor 版本**：无需通知期（向后兼容的增量变更）
+- **1.0.0 之前**：Minor 版本可以包含有限的 Breaking Change，但必须在 CHANGELOG 中显式标注
+
+## 版本发布流程
+
+1. 确定本次变更的版本段（Major/Minor/Patch）
+2. 更新 CHANGELOG.md（在 `## [Unreleased]` 下列出变更）
+3. 同步更新 5 个版本声明文件
+4. 提交：`git commit -m "Bump version to X.Y.Z"`
+5. 在 CHANGELOG.md 中将 `[Unreleased]` 改为 `[X.Y.Z]` + 日期

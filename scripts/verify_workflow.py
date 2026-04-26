@@ -78,6 +78,8 @@ OPTIONAL_PROJECTION_FILES = {
     "Claude Plugin Definition": ROOT / ".claude-plugin/plugin.json",
     "Codex Plugin Definition": ROOT / ".codex-plugin/plugin.json",
     "Codex Marketplace": ROOT / ".agents/plugins/marketplace.json",
+    "VERSIONING": ROOT / "VERSIONING.md",
+    "CHANGELOG": ROOT / "CHANGELOG.md",
 }
 
 PROJECTION_SNIPPETS = {
@@ -497,6 +499,37 @@ REQUIRED_SNIPPETS = {
     ],
     ROOT / ".agents/plugins/marketplace.json": [
         "software-project-governance",
+    ],
+    ROOT / "skills/software-project-governance/references/stage-gates.md": [
+        "Tier 审计检查点（Tier Audit Checkpoint）",
+        "TIER-<layer>-<tier>-AUDIT",
+    ],
+    ROOT / "skills/software-project-governance/references/audit-framework.md": [
+        "Tier 完成时",
+    ],
+    ROOT / "skills/software-project-governance/SKILL.md": [
+        "completing a Tier",
+    ],
+    ROOT / "VERSIONING.md": [
+        "# Versioning Policy",
+        "语义化版本规则",
+        "版本升级触发条件",
+    ],
+    ROOT / "CHANGELOG.md": [
+        "# Changelog",
+        "## [0.2.0]",
+    ],
+    ROOT / ".claude-plugin/plugin.json": [
+        "0.2.0",
+    ],
+    ROOT / ".claude-plugin/marketplace.json": [
+        "0.2.0",
+    ],
+    ROOT / ".codex-plugin/plugin.json": [
+        "0.2.0",
+    ],
+    ROOT / "workflows/software-project-governance/manifest.md": [
+        "0.2.0",
     ],
 }
 
@@ -1068,6 +1101,75 @@ def check_evidence_quality():
     return issues
 
 
+def check_version_consistency():
+    """Check that all 5 version declaration files agree on the same version.
+
+    Source of truth: skills/software-project-governance/SKILL.md frontmatter.
+    Other files that must match:
+      - workflows/software-project-governance/manifest.md
+      - .claude-plugin/plugin.json
+      - .claude-plugin/marketplace.json
+      - .codex-plugin/plugin.json
+    """
+    import json
+
+    VERSION_FILES = {
+        "SKILL.md (source of truth)": ROOT / "skills/software-project-governance/SKILL.md",
+        "manifest.md": ROOT / "workflows/software-project-governance/manifest.md",
+        ".claude-plugin/plugin.json": ROOT / ".claude-plugin/plugin.json",
+        ".claude-plugin/marketplace.json": ROOT / ".claude-plugin/marketplace.json",
+        ".codex-plugin/plugin.json": ROOT / ".codex-plugin/plugin.json",
+    }
+
+    issues = []
+    versions = {}
+
+    for label, path in VERSION_FILES.items():
+        if not path.exists():
+            issues.append(f"[MISSING] {label}: {path} not found")
+            continue
+
+        content = path.read_text(encoding="utf-8")
+
+        if path.suffix == ".json":
+            try:
+                data = json.loads(content)
+                if "version" in data:
+                    ver = data["version"]
+                elif "plugins" in data and len(data["plugins"]) > 0:
+                    ver = data["plugins"][0].get("version", "NOT FOUND")
+                else:
+                    ver = "NOT FOUND"
+            except json.JSONDecodeError:
+                issues.append(f"[ERROR] {label}: invalid JSON")
+                continue
+        else:
+            # Markdown files: look for version in frontmatter or inline
+            match = re.search(r"(?:`?\*{0,2}version\*{0,2}`?\s*[:=]\s*`?)(\d+\.\d+\.\d+)", content)
+            if match:
+                ver = match.group(1)
+            else:
+                ver = "NOT FOUND"
+
+        versions[label] = ver
+
+    # Check consistency
+    source_version = versions.get("SKILL.md (source of truth)")
+    if not source_version:
+        issues.append("[ERROR] Cannot determine source version from SKILL.md")
+        return issues
+
+    for label, ver in versions.items():
+        if label == "SKILL.md (source of truth)":
+            continue
+        if ver != source_version:
+            issues.append(
+                f"[MISMATCH] {label}: version={ver}, expected={source_version}"
+            )
+
+    return issues
+
+
 # ── CLI commands ─────────────────────────────────────────────────
 
 def cmd_verify(args):
@@ -1075,7 +1177,8 @@ def cmd_verify(args):
     print("== Workflow Plugin Verification ==")
     file_failures = check_files()
     snippet_failures = check_snippets()
-    failures = file_failures + snippet_failures
+    version_failures = check_version_consistency()
+    failures = file_failures + snippet_failures + version_failures
 
     if failures:
         print("\n== Verification Result: FAILED ==")

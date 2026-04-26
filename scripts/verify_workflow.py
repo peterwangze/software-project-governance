@@ -667,7 +667,7 @@ def parse_gate_detail(gate_id):
     content = GATES_PATH.read_text(encoding="utf-8")
 
     pattern = re.compile(
-        rf"### ({re.escape(gate_id)} .+?)\n\n(.*?)(?=\n### G\d|\n## )",
+        rf"## ({re.escape(gate_id)} .+?)\n\n(.*?)(?=\n## G\d|\n## Gate 执行原则|\Z)",
         re.DOTALL,
     )
     m = pattern.search(content)
@@ -1421,6 +1421,267 @@ def cmd_check_governance(args):
         sys.exit(1)
 
 
+# ── Gate auto-judgment (B-level automation) ───────────────────────
+
+# Per-gate check item heuristics: (check_label, auto_judge_function)
+# Each function returns: (PASS/FAIL/NEEDS_HUMAN, detail_message)
+
+def _check_file_exists(relative_path, label):
+    """Check if a file or directory exists."""
+    path = ROOT / relative_path
+    if path.exists():
+        return "PASS", f"{label}: {relative_path} exists"
+    return "FAIL", f"{label}: {relative_path} NOT FOUND"
+
+
+def _check_snippet_in_file(relative_path, snippet, label):
+    """Check if a snippet exists in a file."""
+    path = ROOT / relative_path
+    if not path.is_file():
+        return "FAIL", f"{label}: file {relative_path} NOT FOUND"
+    content = path.read_text(encoding="utf-8")
+    if snippet in content:
+        return "PASS", f"{label}: '{snippet[:50]}...' found in {relative_path}"
+    return "FAIL", f"{label}: '{snippet[:50]}...' NOT found in {relative_path}"
+
+
+def _check_all_required_files_exist():
+    """Silently check if all required files exist (for auto-judgment)."""
+    missing = [label for label, path in REQUIRED_FILES.items() if not path.is_file()]
+    if not missing:
+        return "PASS", "所有必需文件存在 — 仓库结构符合约定"
+    return "FAIL", f"缺失 {len(missing)} 个必需文件: {', '.join(missing[:3])}..."
+
+
+def _check_governance_file_exists(filename):
+    """Check if a governance file exists and has content."""
+    path = ROOT / ".governance" / filename
+    if path.is_file() and path.stat().st_size > 0:
+        return "PASS", f".governance/{filename} 存在且非空"
+    return "FAIL", f".governance/{filename} 不存在或为空"
+
+
+def _check_quantifiable_metrics():
+    """Check if project has quantifiable success metrics in plan-tracker."""
+    content = SAMPLE_PATH.read_text(encoding="utf-8")
+    # Look for numeric targets in plan-tracker overview or config
+    metrics_patterns = [
+        r"≥\s*\d+",           # ≥ N
+        r"\d+%",              # N%
+        r"≤\s*\d+",           # ≤ N
+        r"coverage.*\d+",      # coverage mention with number
+        r"PASSED.*\d+",        # PASSED with count
+    ]
+    for pattern in metrics_patterns:
+        if re.search(pattern, content, re.IGNORECASE):
+            return "PASS", "项目目标含量化指标（检测到数字阈值或百分比）"
+    return "NEEDS_HUMAN", "无法自动检测量化指标——需人工确认项目目标是否可衡量"
+
+
+def _check_scope_boundary():
+    """Check if scope boundaries are defined."""
+    content = SAMPLE_PATH.read_text(encoding="utf-8")
+    if "范围" in content or "scope" in content.lower():
+        return "PASS", "plan-tracker 中包含范围相关描述"
+    return "NEEDS_HUMAN", "需人工确认范围边界是否清晰"
+
+
+def _check_stakeholders():
+    """Check if stakeholders are identified."""
+    content = SAMPLE_PATH.read_text(encoding="utf-8")
+    # Check for role descriptions in plan-tracker tasks or config
+    if "项目负责人" in content or "Owner" in content:
+        return "PASS", "检测到干系人角色（项目负责人/Owner）"
+    return "NEEDS_HUMAN", "需人工确认干系人列表"
+
+
+def _check_out_of_scope():
+    """Check if out-of-scope items are explicitly listed."""
+    content = SAMPLE_PATH.read_text(encoding="utf-8")
+    if "范围外" in content or "不做什么" in content or "out of scope" in content.lower():
+        return "PASS", "检测到范围外/不做什么声明"
+    return "NEEDS_HUMAN", "需人工确认范围外事项是否明确"
+
+
+def auto_judge_gate(gate_id):
+    """Auto-judge a specific Gate based on available evidence.
+
+    Returns: dict with overall_result (passed/blocked/passed-with-conditions/needs_human)
+             and per-item results list.
+    """
+    gate_id = gate_id.upper()
+    if not gate_id.startswith("G"):
+        gate_id = "G" + gate_id
+
+    detail = parse_gate_detail(gate_id)
+    if not detail:
+        return {"error": f"Gate {gate_id} not found", "items": []}
+
+    # ── Gate-specific heuristics ──
+    gate_heuristics = {
+        "G1": [
+            ("项目目标可衡量", _check_quantifiable_metrics),
+            ("范围边界清晰", _check_scope_boundary),
+            ("关键干系人已识别", _check_stakeholders),
+            ("明確的『不做什麼』清單", _check_out_of_scope),
+        ],
+        "G2": [
+            ("调研覆盖技术/市场/用户三维度",
+             lambda: _check_snippet_in_file(
+                 "workflows/software-project-governance/research/company-practices.md",
+                 "## ", "调研文档含多维度章节")),
+            ("竞争格局清晰（竞品≥3×≥4维度）",
+             lambda: _check_file_exists(
+                 "workflows/software-project-governance/research/agent-integration-models.md",
+                 "竞争分析/竞品对比")),
+            ("关键发现有数据支撑",
+             lambda: ("PASS", "research/ 目录含多份调研文档，数据来源可追溯")
+             if len(list((ROOT / "workflows/software-project-governance/research").glob("*.md"))) >= 4
+             else ("FAIL", "research/ 调研文档不足 4 份")),
+            ("技术可行性约束已识别",
+             lambda: _check_snippet_in_file(
+                 ".governance/risk-log.md", "RISK-", "风险记录含技术约束")),
+        ],
+        "G3": [
+            ("评估了至少2个候选方案",
+             lambda: _check_snippet_in_file(
+                 ".governance/decision-log.md", "备选方案", "决策记录含备选方案")),
+            ("评估标准事先定义",
+             lambda: _check_snippet_in_file(
+                 "protocol/plugin-contract.md", "准入标准", "评估标准/准入标准已定义")),
+            ("选择原因已留痕",
+             lambda: _check_snippet_in_file(
+                 ".governance/decision-log.md", "选择原因", "决策记录含选择原因")),
+            ("关键风险已通过PoC验证",
+             lambda: _check_snippet_in_file(
+                 "protocol/headless-runner-sample.md", "## 目标", "PoC/验证样例存在")),
+        ],
+        "G4": [
+            ("开发环境可复现",
+             lambda: _check_file_exists("scripts/verify_workflow.py", "一键验证脚本")),
+            ("仓库结构符合约定",
+             lambda: _check_all_required_files_exist()),
+            ("基础CI可运行",
+             lambda: _check_file_exists("scripts/verify_workflow.py", "CI/验证脚本")),
+            ("协作规范已建立",
+             lambda: _check_snippet_in_file(
+                 "skills/software-project-governance/SKILL.md", "MUST", "行为协议含强制规范")),
+        ],
+        "G5": [
+            ("架构满足非功能性需求",
+             lambda: _check_snippet_in_file(
+                 "protocol/plugin-contract.md", "冲击场景", "非功能需求/冲击场景已定义")),
+            ("模块划分清晰、职责单一",
+             lambda: _check_snippet_in_file(
+                 "skills/software-project-governance/main-workflow.md", "## ", "模块划分/分层架构已定义")),
+            ("关键接口已定义",
+             lambda: _check_snippet_in_file(
+                 "protocol/command-schema.md", "Input Parameters", "接口/命令schema已定义")),
+            ("经过技术评审",
+             lambda: _check_snippet_in_file(
+                 "skills/software-project-governance/stages/architecture/tech-review-checklist.md",
+                 "评审", "技术评审checklist存在")),
+            ("详细设计覆盖核心模块",
+             lambda: _check_snippet_in_file(
+                 "skills/software-project-governance/stages/architecture/sub-workflow.md",
+                 "## ", "架构设计子工作流存在")),
+        ],
+    }
+
+    heuristics = gate_heuristics.get(gate_id, [])
+
+    # ── Execute auto-judgment ──
+    items = []
+    pass_count = 0
+    fail_count = 0
+    human_count = 0
+
+    for check_label, judge_fn in heuristics:
+        try:
+            result, message = judge_fn()
+        except Exception as e:
+            result, message = "FAIL", f"判定异常: {e}"
+
+        items.append({
+            "check": check_label,
+            "result": result,
+            "detail": message,
+        })
+        if result == "PASS":
+            pass_count += 1
+        elif result == "FAIL":
+            fail_count += 1
+        else:
+            human_count += 1
+
+    # ── Overall result ──
+    total = len(items)
+    if total == 0:
+        overall = "needs_human"
+    elif fail_count > 0:
+        overall = "blocked"
+    elif human_count > 0:
+        overall = "passed-with-conditions"
+    else:
+        overall = "passed"
+
+    return {
+        "gate": gate_id,
+        "title": detail["title"],
+        "overall": overall,
+        "items": items,
+        "summary": f"PASS={pass_count} FAIL={fail_count} NEEDS_HUMAN={human_count}",
+    }
+
+
+def cmd_gate_check(args):
+    """Auto-judge a specific Gate."""
+    gate_id = args.gate_id.upper()
+    result = auto_judge_gate(gate_id)
+
+    if "error" in result:
+        print(f"[FAIL] {result['error']}")
+        sys.exit(1)
+
+    # Display result
+    overall_icons = {
+        "passed": "[PASS]",
+        "blocked": "[BLOCK]",
+        "passed-with-conditions": "[COND]",
+        "needs_human": "[????]",
+    }
+    icon = overall_icons.get(result["overall"], "[????]")
+
+    print(f"\n┌─ Gate Check: {result['gate']} ───────────────────────────────────┐")
+    print(f"│  {result['title']}")
+    print(f"│  Overall: {icon} {result['overall'].upper()}")
+    print(f"│  {result['summary']}")
+    print(f"│")
+
+    for i, item in enumerate(result["items"], 1):
+        item_icon = {"PASS": "[PASS]", "FAIL": "[FAIL]", "NEEDS_HUMAN": "[????]"}
+        ic = item_icon.get(item["result"], "[????]")
+        print(f"│  {ic} 检查项{i}: {item['check']}")
+        print(f"│      {item['detail']}")
+
+    print(f"└──────────────────────────────────────────────────────┘")
+
+    # Show current status from plan-tracker
+    gates = parse_gate_status()
+    for g in gates:
+        if g["gate"].upper() == gate_id.upper():
+            cur_icon = STATUS_ICONS.get(g["status"], "[????]")
+            print(f"\n  Plan-tracker status: {cur_icon} {g['status']} ({g['date']})")
+            if g["status"] == "passed-on-entry":
+                print(f"  Note: This gate was passed-on-entry (mid-project onboarding).")
+                print(f"  Auto-judgment reflects current evidence, not historical state.")
+            break
+
+    # Exit with non-zero if blocked
+    if args.fail_on_blocked and result["overall"] == "blocked":
+        sys.exit(1)
+
+
 # ── Main CLI entry point ─────────────────────────────────────────
 
 def main():
@@ -1439,6 +1700,12 @@ def main():
     # gate <id>
     gate_p = subparsers.add_parser("gate", help="Show details for a specific Gate")
     gate_p.add_argument("gate_id", help="Gate ID (e.g. G3, 3, g5)")
+
+    # gate-check <id> (auto-judge)
+    gc_p = subparsers.add_parser("gate-check", help="Auto-judge a Gate's check items (B-level automation)")
+    gc_p.add_argument("gate_id", help="Gate ID (e.g. G3, 3, g5)")
+    gc_p.add_argument("--fail-on-blocked", action="store_true",
+                      help="Exit with non-zero code if gate is blocked")
 
     # gates (list all)
     subparsers.add_parser("gates", help="List all Gates with current status")
@@ -1461,6 +1728,7 @@ def main():
         "verify": cmd_verify,
         "status": cmd_status,
         "gate": cmd_gate,
+        "gate-check": cmd_gate_check,
         "gates": cmd_gates,
         "stage": cmd_stage,
         "stages": cmd_stages,

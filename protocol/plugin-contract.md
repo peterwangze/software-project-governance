@@ -8,7 +8,7 @@
 
 ## 最小承载单元
 
-每个 workflow plugin/skill 至少应包含以下内容：
+每个 workflow plugin/skill 至少应包含以下内容。注意：以下为逻辑单元定义，协议称谓是设计时的概念名称，实际物理路径可能不同。映射关系见下方表格。
 
 1. `manifest`
    - 描述 workflow 的名称、目标、版本、支持 agent、关键能力。
@@ -28,6 +28,24 @@
    - 回答不同 agent 如何触发、加载、回写和验证 workflow。
 9. `validation`
    - 提供校验脚本或校验规则，验证资产完整性与一致性。
+
+### 逻辑→物理路径映射
+
+协议中使用设计时称谓（逻辑名），实际文件系统中的路径（物理路径）可能不同。下表给出映射关系：
+
+| 逻辑单元 | 协议称谓 | 实际物理路径（以 `software-project-governance` 为例） |
+|---------|---------|--------------------------------------------------|
+| manifest | `manifest` | `skills/software-project-governance/SKILL.md`（运行时入口）+ `workflows/software-project-governance/manifest.md`（设计时元数据） |
+| research | `research` | `workflows/software-project-governance/research/`（设计时调研资产） |
+| rules | `rules` | `skills/software-project-governance/references/`（运行时规则正本） |
+| stages | `stages` | `skills/software-project-governance/stages/<stage>/sub-workflow.md` |
+| stage skills | `stage skills` | `skills/software-project-governance/stages/<stage>/<skill-name>.md` |
+| templates | `templates` | `workflows/software-project-governance/templates/`（设计时模板资产） |
+| examples | `examples` | `workflows/software-project-governance/examples/`（设计时样例资产） |
+| integration contract | `integration contract` | `protocol/plugin-contract.md`（本文件） |
+| validation | `validation` | `scripts/verify_workflow.py` |
+
+**设计原则**：运行时正本在 `skills/` 目录（agent 插件市场安装后可访问），设计时补充资产在 `workflows/` 目录（不重复运行时内容）。协议称谓保留设计时的概念名称（如 `rules`），物理路径使用更精确的目录名（如 `references/`）以避免歧义。
 
 ## 自动化能力分级
 

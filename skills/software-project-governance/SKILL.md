@@ -54,6 +54,7 @@ Read on demand based on task type:
 | `references/onboarding.md` | Onboarding an existing (in-progress) project |
 | `references/interaction-boundary.md` | Uncertain whether to auto-execute or ask user |
 | `references/audit-framework.md` | Performing Gate checks, completing a stage, completing a P0 task, after significant changes |
+| `references/agent-failure-modes.md` | Agent behavior anomaly detected (protocol skip, selective execution, false closure, hallucinated evidence) — troubleshoot and execute emergency actions |
 
 ### M2.2 Sub-workflows and skills (in `stages/`, same directory as this SKILL.md)
 

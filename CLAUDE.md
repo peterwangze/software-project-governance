@@ -32,7 +32,27 @@
 
 **AskUserQuestion 是唯一合法的用户提问方式。** 禁止用内联文字问"要不要继续""是否如何如何"——所有需要用户判断的问题必须通过 AskUserQuestion 工具。
 
-默认模式：**仅在关键决策停下来**（范围变更、架构决策、发布决策、风险接受、外部依赖变更、Profile 变更）。非关键决策自动执行不中断。
+默认模式：**仅在关键决策停下来**。非关键决策自动执行不中断。
+
+### 关键决策分类（自包含——不依赖 SKILL.md 加载状态）
+
+**关键决策** — 必须停下来用 AskUserQuestion：
+- 范围变更（新增/删除功能、改变项目边界）
+- 架构决策（技术栈选择、模块拆分、接口设计）
+- 发布决策（go/no-go、版本号升级、breaking change）
+- 风险接受（接受已知风险、绕过 Gate）
+- 外部依赖变更（引入新库、新服务、API 变更）
+- Profile/触发模式变更
+
+**非关键决策** — 自动执行，不提问：
+- 已确认方向内的任务排序
+- 证据格式和详细程度
+- 自然边界的 commit 时机（按 DEC-025 自动提交）
+- 治理记录更新
+- 微小实现选择（文件命名、变量名、代码风格）
+- Gate 自评结果（仅在失败时告知）
+
+**判断标准**：决策是否改变项目方向、范围、架构或接受风险？是 → 关键决策，必须问。决策是关于如何在已确认方向内执行？是 → 非关键决策，自动执行。
 
 ## 收工前检查（session 结束前）
 
@@ -44,6 +64,17 @@
 ## 详细规则
 
 完整行为协议见插件市场安装的 `software-project-governance` skill（M0~M9 强制性规则、Gate 行为、触发模式等）。但以上三条 bootstrap 规则不依赖 SKILL.md 是否被加载——它们就在本文件里，每次会话必定生效。
+
+## 故障排除（Agent 行为异常时）
+
+如果 agent 不遵守协议（跳过 Gate、忽略 AskUserQuestion、选择性执行规则），按以下顺序排查：
+
+1. agent 加载了 skill 吗？ → 检查 agent 是否知道当前阶段和 Gate 状态
+2. agent 读了 plan-tracker 吗？ → 检查 agent 是否提到当前 Tier 和待执行任务
+3. agent 的证据可信吗？ → 运行 `python scripts/verify_workflow.py check-governance`
+4. agent 的完成是真的吗？ → 读 agent 声称创建/修改的文件
+
+完整的 8 种失败模式、检测方法和应急动作见 `skills/software-project-governance/references/agent-failure-modes.md`。
 
 ## 当前项目治理状态快速入口
 

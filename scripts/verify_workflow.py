@@ -889,6 +889,138 @@ def check_gate_consistency():
     return issues
 
 
+def check_protocol_compliance():
+    """Check protocol compliance: DRI assignment, evidence format, conditional pass tracking.
+
+    This is the external validation counterpart to M8 agent self-check.
+    It independently detects structural protocol violations from governance records.
+    """
+    issues = {
+        "dri_violations": [],       # Tasks without unique DRI
+        "evidence_format": [],      # Evidence entries with missing required fields
+        "conditional_pass": [],     # passed-with-conditions without corrective tasks
+    }
+
+    plan_content = SAMPLE_PATH.read_text(encoding="utf-8")
+
+    # ── DRI Check: tasks with missing/multi-valued/ambiguous Owner ──
+    task_rows = []
+    in_table = False
+    for line in plan_content.split("\n"):
+        line = line.strip()
+        if "## 样例跟踪表" in line:
+            in_table = True
+            continue
+        if in_table and line.startswith("## "):
+            break
+        if in_table and line.startswith("|") and not "---" in line:
+            parts = [p.strip() for p in line.split("|")]
+            # Skip header row
+            if parts[1] == "ID" or not re.match(r"[A-Z]+-\d+", parts[1]):
+                continue
+            task_rows.append(parts)
+
+    dri_violations = []
+    for parts in task_rows:
+        if len(parts) < 11:
+            continue
+        task_id = parts[1]
+        status = parts[10] if len(parts) > 10 else ""
+        owner = parts[7] if len(parts) > 7 else ""
+
+        # Only check active tasks (not completed/terminated)
+        if status in ("已完成", "已终止"):
+            continue
+
+        # Check for DRI violations
+        violations = []
+        if not owner or owner == "":
+            violations.append("Owner is empty")
+        elif any(sep in owner for sep in ("+", "/", "、", "&", ",")):
+            violations.append(f"Owner is multi-valued: '{owner}'")
+        elif owner in ("待定", "多人", "TBD", "N/A", "未分配"):
+            violations.append(f"Owner is ambiguous: '{owner}'")
+
+        if violations:
+            dri_violations.append({
+                "task_id": task_id,
+                "status": status,
+                "owner": owner,
+                "violations": violations,
+            })
+
+    issues["dri_violations"] = dri_violations
+
+    # ── Conditional Pass Check: passed-with-conditions without corrective tasks ──
+    gates = parse_gate_status()
+    conditional_gates = [g for g in gates if g["status"] == "passed-with-conditions"]
+
+    if conditional_gates:
+        # Collect all task descriptions for corrective task detection
+        all_task_text = plan_content
+
+        for g in conditional_gates:
+            gate_id = g["gate"]
+            # Look for corrective tasks related to this gate
+            # Search for tasks whose description references this gate's conditions
+            found_corrective = False
+            for parts in task_rows:
+                task_desc = " ".join(parts[3:7]) if len(parts) > 6 else ""
+                # Check if any task mentions corrective action for this gate
+                if gate_id in task_desc and any(
+                    kw in task_desc for kw in ("纠正", "修复", "补齐", "DRI", "条件")
+                ):
+                    found_corrective = True
+                    break
+
+            if not found_corrective:
+                issues["conditional_pass"].append({
+                    "gate": gate_id,
+                    "issue": f"Gate {gate_id} is passed-with-conditions but no corrective task found in plan-tracker",
+                })
+
+    # ── Evidence Format Check: evidence entries with missing required fields ──
+    evidence_path = ROOT / ".governance" / "evidence-log.md"
+    if evidence_path.is_file():
+        ev_content = evidence_path.read_text(encoding="utf-8")
+        for line in ev_content.split("\n"):
+            line = line.strip()
+            if not line.startswith("| EVD-"):
+                continue
+            parts = [p.strip() for p in line.split("|")]
+            # Expected: empty, EVD-XXX, TaskID, Stage, Type, Description, Location, Author, Date, Gate, Notes
+            # parts indices: 0=empty, 1=EVD, 2=TaskID, 3=Stage, 4=Type, 5=Description, 6=Location, 7=Author, 8=Date, 9=Gate, 10=Notes
+            if len(parts) < 11:
+                issues["evidence_format"].append(
+                    f"{parts[1] if len(parts) > 1 else '???'}: only {len(parts)-1} fields (expected ≥10)"
+                )
+                continue
+
+            evd_id = parts[1]
+            missing = []
+            if not parts[2] or parts[2] == "":
+                missing.append("TaskID")
+            if not parts[3] or parts[3] == "":
+                missing.append("Stage")
+            if not parts[4] or parts[4] == "":
+                missing.append("Type")
+            if not parts[5] or parts[5] == "":
+                missing.append("Description")
+            if not parts[6] or parts[6] == "":
+                missing.append("Location")
+            if not parts[7] or parts[7] == "":
+                missing.append("Author")
+            if not parts[8] or parts[8] == "":
+                missing.append("Date")
+
+            if missing:
+                issues["evidence_format"].append(
+                    f"{evd_id}: missing fields — {', '.join(missing)}"
+                )
+
+    return issues
+
+
 def check_evidence_quality():
     """Check evidence quality: session context references, circular refs, empty output claims."""
     evidence_path = ROOT / ".governance" / "evidence-log.md"
@@ -1236,6 +1368,45 @@ def cmd_check_governance(args):
     else:
         print(f"│  [PASS] No empty evidence locations found.")
     all_issues += eq_count
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 5. Protocol compliance (external M8 validation) ──
+    print("\n┌─ Check 5: Protocol Compliance (M8 External) ─────────┐")
+    pc_issues = check_protocol_compliance()
+    pc_count = 0
+
+    if pc_issues["dri_violations"]:
+        pc_count += len(pc_issues["dri_violations"])
+        print(f"│  [WARN] {len(pc_issues['dri_violations'])} active task(s) with DRI violations:")
+        for v in pc_issues["dri_violations"]:
+            print(f"│    - {v['task_id']} ({v['status']}): {', '.join(v['violations'])}")
+    else:
+        print(f"│  [PASS] All active tasks have unique DRI.")
+
+    if pc_issues["conditional_pass"]:
+        pc_count += len(pc_issues["conditional_pass"])
+        print(f"│  [WARN] {len(pc_issues['conditional_pass'])} conditional pass(es) without corrective tasks:")
+        for v in pc_issues["conditional_pass"]:
+            print(f"│    - {v['gate']}: {v['issue']}")
+    else:
+        print(f"│  [PASS] No unresolved conditional passes.")
+        # Show conditional pass tracking if any exist
+        gates = parse_gate_status()
+        cp_gates = [g for g in gates if g["status"] == "passed-with-conditions"]
+        if cp_gates:
+            print(f"│  [INFO] {len(cp_gates)} conditional passes tracked: {', '.join(g['gate'] for g in cp_gates)}")
+
+    if pc_issues["evidence_format"]:
+        pc_count += len(pc_issues["evidence_format"])
+        print(f"│  [WARN] {len(pc_issues['evidence_format'])} evidence entry(ies) with missing required fields:")
+        for v in pc_issues["evidence_format"][:10]:  # Limit output
+            print(f"│    - {v}")
+        if len(pc_issues["evidence_format"]) > 10:
+            print(f"│    ... and {len(pc_issues['evidence_format']) - 10} more")
+    else:
+        print(f"│  [PASS] All evidence entries have required fields.")
+
+    all_issues += pc_count
     print("└──────────────────────────────────────────────────────┘")
 
     # ── Summary ──

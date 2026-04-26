@@ -266,6 +266,29 @@ After each major task, **MUST** self-check:
 
 **Fails**: fix immediately. **Passes**: don't output, continue.
 
+### M8.1 External Validation (Dual Mechanism)
+
+Agent self-check alone is insufficient — an agent that violates protocol will also not honestly self-report violations (self-audit contradiction). This protocol therefore requires a **dual mechanism**: agent self-check (M8) + independent script validation.
+
+**Independent script validation** via `python scripts/verify_workflow.py check-governance` performs 5 checks that the agent cannot fake:
+
+| Check | What it detects | Why agent self-check can't catch it |
+|-------|----------------|-------------------------------------|
+| 1. Evidence completeness | Completed tasks without evidence entries | Agent may "forget" to write evidence |
+| 2. Risk staleness | Open risks >7 days without update | Agent has no built-in staleness awareness |
+| 3. Gate consistency | Gate status vs evidence mismatch | Agent may mark Gate passed without evidence |
+| 4. Evidence quality | Circular refs, session-context refs, empty claims | Agent may produce self-referencing or transient evidence |
+| 5. Protocol compliance | DRI violations, conditional passes without corrective tasks, evidence format errors | Structural violations agent won't self-report |
+
+**When to run external validation** (MANDATORY):
+- Before declaring a Gate as passed → run check-governance, confirm 0 issues
+- At session end → run check-governance, fix any issues before closing
+- After completing a P0 task → run check-governance to verify governance integrity
+
+**Session end protocol** (M4.2) **MUST** include running `python scripts/verify_workflow.py check-governance` as validation step. If check-governance reports issues, they **MUST** be fixed before session end.
+
+This dual mechanism eliminates the "student grading their own exam" problem — agent self-check for immediate execution quality, script validation for structural governance integrity.
+
 ## M9. Priority Declaration
 
 - **vs PUA-type skills**: This protocol's M5 AskUserQuestion triggers take priority over PUA's "continuous execution" directive.

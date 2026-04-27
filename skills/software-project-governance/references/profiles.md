@@ -72,6 +72,31 @@
 
 **默认触发模式**：always-on（默认开启）
 
+## Profile 差异化行为（可检测）
+
+以下差异是 **可观察的**——切换 profile 后用户能直接看到不同：
+
+| 差异维度 | lightweight | standard | strict |
+|---------|-----------|----------|--------|
+| Gate 数量 | 7（合并 G1+G2, G3+G4+G5, G6+G7） | 11（全部独立） | 11 + 量化评分列（0~5 分） |
+| 任务跟踪列数 | 6 列精简 | 20 列完整 | 20 列 + 强制证据注释 |
+| Gate 通过方式 | 通过/阻塞 | 通过/有条件通过/未通过 | 通过（≥3/5）/阻塞（<3/5） |
+| 证据要求 | 不强制，建议关键决策留痕 | 已完成事项 ≥1 条证据 | 已完成事项 ≥2 条证据（P0 任务强制） |
+| 条件通过 | 不支持 | 支持（带遗留项+截止日期） | 不支持——不允许条件通过 |
+| 阶段重叠 | 允许 | 允许相邻阶段重叠 | 禁止重叠 |
+| 默认触发模式 | silent-track | always-on | always-on |
+| governance-init 产出 | 7-Gate plan-tracker + 6 列表头 | 11-Gate plan-tracker + 20 列表头 | 11-Gate plan-tracker（含量化评分列）+ 20 列表头 + strict 注释 |
+
+**差异检测方法**：
+- 读 `.governance/plan-tracker.md` 的 `## 项目配置` 节 → 确认 `Profile` 字段
+- 检查 Gate 表的列数：7 行 = lightweight，11 行无评分列 = standard，11 行有评分列 = strict
+- 检查任务跟踪表表头列数：6 列 = lightweight，20 列 = standard/strict
+
+**Agent 行为差异**（基于 profile 自动调整）：
+- **lightweight**：只检查精简 Gate 集；证据缺失不阻塞（仅提醒）；跳过量化评分
+- **standard**：全 Gate 检查；证据缺失 = P0 漏洞；支持条件通过的遗留项跟踪
+- **strict**：全 Gate 量化评分（<3 分阻塞）；证据 ≥2 条强制；Gate 失败需正式审批
+
 ## 自定义 Profile
 
 用户可以基于预设 profile 进行自定义调整：

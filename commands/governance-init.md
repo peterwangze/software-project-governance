@@ -37,13 +37,45 @@
 创建以下文件（字段定义以 SKILL.md M3 节为准）：
 
 #### plan-tracker.md
-必填字段：
+
+**Profile 差异化生成规则**——profile 选择产生**不同结构**的 plan-tracker：
+
+##### 通用配置块（所有 profile 均创建）
 - 项目配置块：项目名称、Profile、触发模式、当前阶段
-- Gate 状态跟踪表：G1~G11 行，状态列按以下规则填写：
+- 项目概览表：项目名称、当前阶段、总任务数(0)、已完成(0)、阻塞中(0)、关键风险数(0)、最近 Gate 结论、最近复盘日期
+
+##### Gate 状态跟踪表（按 profile 生成不同 Gate 数量）
+
+**lightweight**（7 Gates — 合并相邻门控）：
+- G1（立项→调研，合并 G1 目标检查）
+- G2（调研+选型→设计，G2+G3 merged）
+- G3（设计→开发，G5）
+- G4（开发+测试→CI，G6+G7 merged）
+- G5（CI→发布，G8）
+- G6（发布→运营，G9）
+- G7（运营→维护，G10）
+
+**standard**（11 Gates — 完整门控）：
+- G1~G11 全部独立行，状态列按以下规则填写：
   - **IF** project_type=new → 全部标记为 `pending`
   - **IF** project_type=existing → `current_stage` 之前的 Gate 标记为 `passed-on-entry`，`current_stage` 的 Gate 标记为 `pending`
-- 项目概览表：项目名称、当前阶段、总任务数(0)、已完成(0)、阻塞中(0)、关键风险数(0)、最近 Gate 结论、最近复盘日期
-- 空白任务跟踪表（仅表头行）
+
+**strict**（11 Gates + 量化评分列）：
+- G1~G11 全部独立行，且每行增加"量化评分（0~5）"列
+  - ≥3 分通过，<3 分阻塞
+  - **IF** project_type=new → Gate 评分列留空标记 `pending`
+  - **IF** project_type=existing → 前置 Gate 标记 `passed-on-entry`，评分留 `—`
+
+##### 任务跟踪表（按 profile 生成不同列）
+
+**lightweight**（6 列精简）：
+`[ID, 阶段, 任务项, 目标/预期结果, 状态, 优先级]`
+
+**standard**（完整 20 列）：
+`[ID, 阶段, 任务项, 目标/预期结果, 输入, 输出, Owner (DRI), 协同角色, Escalation, 状态, 优先级, 计划开始, 计划完成, 实际完成, Gate, 验收标准, 证据, 风险/偏差, 纠偏动作, 备注]`
+
+**strict**（完整 20 列 + 强制证据要求）：
+与 standard 相同列，但在 plan-tracker 顶部增加注释：`> **Strict Profile 强制要求**：每个 P0 任务完成时 MUST 有 ≥2 条证据；Gate 评分 ≥3/5 才通过；无 Owner 的任务不允许进入执行`
 
 #### evidence-log.md
 - 证据记录表头：[编号, 对应任务 ID, 阶段, 证据类型, 证据说明, 证据位置, 提交人, 提交日期, 关联 Gate, 备注]

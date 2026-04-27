@@ -1,0 +1,26 @@
+name: Governance Check
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+  workflow_dispatch:
+
+jobs:
+  check-governance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run governance check
+        run: |
+          if [ -d ".governance" ]; then
+            python scripts/verify_workflow.py check-governance --fail-on-issues
+          else
+            echo "SKIPPED: .governance/ not found (project not initialized)"
+          fi
+      - name: Run workflow verification
+        run: python scripts/verify_workflow.py

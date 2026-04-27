@@ -2,10 +2,25 @@
 
 ## Governance Bootstrap（强制 — 每次会话第一动作）
 
-在执行任何用户任务之前，**MUST** 先完成以下 3 步：
+在执行任何用户任务之前，**MUST** 先完成以下步骤：
 
-### Step 1: 读 plan-tracker
+### Step 0: 确定触发模式
+
+读取 `.governance/plan-tracker.md` 的 `## 项目配置` 节，确认 `触发模式`：
+
+- **always-on**（默认）→ 执行完整 Step 1~3。治理面板可正常输出。
+- **on-demand** → 仅执行 Step 1（读 plan-tracker 确认当前阶段/活跃风险）。Step 2 交叉验证和 Step 3 优先级确认仅在用户显式调用 governance 命令（`/governance-status`、`/governance-gate`、`/governance-verify`）时执行。不主动输出治理面板。
+- **silent-track** → 执行 Step 1~2（读 plan-tracker + 交叉验证），但 **MUST NOT** 向用户输出治理面板、风险统计、任务进度表。仅在 Gate 检查失败或风险 escalation 到期时打断用户。Step 3 仅在 P0 任务阻塞时提醒。
+
+**触发模式差异可被检测到**：用户切换模式后观察到 agent 治理输出量显著变化。如果 silent-track 模式下 agent 仍输出完整治理面板 = 触发模式未生效。
+
+### Step 1: 读 plan-tracker + 跨会话恢复
 读取 `.governance/plan-tracker.md`，确认：当前阶段、最近 Gate 结论、活跃风险数、进行中的 P0 任务。如果 `.governance/` 不存在，提醒用户先初始化。
+
+**跨会话状态恢复**：读取 `.governance/session-snapshot.md`（如存在），对照 plan-tracker：
+- 快照中的进行中任务 → 确认为 carry-over 任务，继续执行
+- 快照中的待确认决策 → 检查是否已过期或仍需确认
+- 快照中的风险 escalation deadline ≤ 今天 → 立即升级
 
 ### Step 2: 交叉验证（3 项强制检查）
 对照 `.governance/plan-tracker.md` 和 `.governance/evidence-log.md`：
@@ -17,7 +32,7 @@
 任一检查失败 → 列出差距 → 征求用户是否立即修复（AskUserQuestion）。
 
 ### Step 3: 优先级确认
-如果 plan-tracker 中有 passed-with-conditions 遗留项或有进行中的 P0 任务 → 优先处理。上一 session 未完成的 P0 任务 → 继续执行。
+如果 plan-tracker 中有 passed-with-conditions 遗留项或有进行中的 P0 任务 → 优先处理。上一 session 未完成的 P0 任务 → 继续执行（从 session-snapshot.md 中识别）。
 
 **没读 plan-tracker 就开始干活 = 流程违规。跳过交叉验证 = 流程违规。这不是"建议"，是前置条件。**
 
@@ -58,8 +73,9 @@
 
 1. 输出本轮完成事项摘要
 2. 补证据到 `.governance/evidence-log.md`
-3. 自动 git commit（DEC-025：每次有意义变更即提交）
-4. 用 AskUserQuestion 确认下一步优先级
+3. **生成跨会话快照**：写入 `.governance/session-snapshot.md`（格式见 SKILL.md M4.2）——记录 carry-over 任务、待确认决策、活跃风险和下一 session 优先级。下一 session 的 Step 1 将从此文件恢复状态。
+4. 自动 git commit（DEC-025：每次有意义变更即提交）
+5. 用 AskUserQuestion 确认下一步优先级
 
 ## 详细规则
 

@@ -117,12 +117,56 @@ Every task **MUST** have exactly one DRI — a single accountable person (Apple 
 ### M4.1 Session Start Protocol
 
 1. Read `.governance/plan-tracker.md` for project config and Gate status
-2. Confirm to yourself: current stage, latest Gate conclusion, number of active risks
-3. If there are unresolved conditions (passed-with-conditions), **MUST** prioritize them
+2. **Cross-session state recovery (MANDATORY)**: Read `.governance/session-snapshot.md` if it exists. Compare with `.governance/plan-tracker.md`:
+   - Tasks marked "in_progress" in snapshot but still "in_progress" in plan-tracker → these are carry-over tasks, continue
+   - Tasks marked "in_progress" in snapshot but "未开始" in plan-tracker → stale snapshot, ignore
+   - Decisions marked "pending" in snapshot → check if they were resolved in another session
+   - Risks with escalation deadlines ≤ current date → escalate immediately
+3. Confirm to yourself: current stage, latest Gate conclusion, number of active risks, carry-over tasks
+4. If there are unresolved conditions (passed-with-conditions), **MUST** prioritize them
 
 ### M4.2 Session End Protocol
 
-**Step 1: Session Status Summary** (plain text)
+**Step 1: Generate Session Snapshot (MANDATORY)**
+
+You **MUST** write `.governance/session-snapshot.md` at session end. This file preserves cross-session continuity:
+
+```markdown
+# Session Snapshot — {{DATE}}
+
+## Current State
+- **Stage**: {{CURRENT_STAGE}}
+- **Active parallel stages**: {{ACTIVE_PARALLEL_STAGES}}
+- **Profile**: {{PROFILE}}
+- **Trigger mode**: {{TRIGGER_MODE}}
+- **Last Gate**: {{LAST_GATE_ID}} — {{LAST_GATE_RESULT}}
+
+## Carry-over Tasks
+| Task ID | Description | Status | Since | Notes |
+|---------|-------------|--------|-------|-------|
+{{CARRY_OVER_TASKS}}
+
+## Pending Decisions
+| Decision ID | Question | Context | Created |
+|-------------|----------|---------|---------|
+{{PENDING_DECISIONS}}
+
+## Active Risks
+| Risk ID | Description | Escalation deadline | Days remaining |
+|---------|-------------|---------------------|----------------|
+{{ACTIVE_RISKS}}
+
+## Completed This Session
+{{COMPLETED_ITEMS}}
+
+## Unfinished Work
+{{UNFINISHED_ITEMS}}
+
+## Next Session Priority
+{{NEXT_PRIORITY}}
+```
+
+**Step 2: Session Status Summary** (plain text)
 
 ```
 ## Session Status Summary
@@ -131,7 +175,7 @@ Every task **MUST** have exactly one DRI — a single accountable person (Apple 
 - Validation result: [passed/failed/not run]
 ```
 
-**Step 2: Next Steps (AskUserQuestion, MANDATORY)**
+**Step 3: Next Steps (AskUserQuestion, MANDATORY)**
 
 You **MUST** use AskUserQuestion before every session ends. At least one question, each with 2-4 options. Ending without AskUserQuestion = protocol violation.
 

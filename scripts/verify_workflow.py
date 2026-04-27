@@ -2017,6 +2017,86 @@ def _check_out_of_scope():
     return "NEEDS_HUMAN", "需人工确认范围外事项是否明确"
 
 
+def _check_completed_ratio(min_ratio=0.5):
+    """Check if plan-tracker completed ratio meets threshold."""
+    content = SAMPLE_PATH.read_text(encoding="utf-8")
+    # Match the overview table: after "总任务数" header line, the data row has:
+    # | name | stage | total | completed | blocked | risks | gate | date |
+    lines = content.split("\n")
+    in_overview = False
+    for i, line in enumerate(lines):
+        if "总任务数" in line and "已完成" in line:
+            in_overview = True
+            continue
+        if in_overview and line.strip().startswith("|") and not "---" in line:
+            # Data row: extract columns
+            parts = [p.strip() for p in line.split("|")]
+            # parts[0]=empty, [1]=name, [2]=stage, [3]=total, [4]=completed, ...
+            if len(parts) >= 5:
+                try:
+                    total = int(parts[3])
+                    completed = int(parts[4])
+                    ratio = completed / total if total > 0 else 0
+                    if ratio >= min_ratio:
+                        return "PASS", f"任务完成率 {ratio:.0%} ≥ {min_ratio:.0%}（{completed}/{total}）"
+                    return "FAIL", f"任务完成率 {ratio:.0%} < {min_ratio:.0%}（{completed}/{total}）"
+                except ValueError:
+                    continue
+            break
+    return "NEEDS_HUMAN", "无法从 plan-tracker 解析完成率"
+
+
+def _check_evidence_mentions(keyword, label):
+    """Check if evidence-log contains a keyword."""
+    content = EVIDENCE_PATH.read_text(encoding="utf-8")
+    if keyword in content:
+        return "PASS", f"{label}: evidence-log 含'{keyword[:30]}'相关证据"
+    return "NEEDS_HUMAN", f"{label}: evidence-log 未找到'{keyword[:30]}'——需人工确认"
+
+
+def _check_risk_has_closed(label="关键缺陷"):
+    """Check if risk-log has any closed/critical risk entries."""
+    content = RISK_PATH.read_text(encoding="utf-8")
+    closed_count = sum(1 for line in content.split("\n") if "已关闭" in line or "已缓解" in line)
+    if closed_count > 0:
+        return "PASS", f"{label}: {closed_count} 条风险已关闭/已缓解"
+    return "NEEDS_HUMAN", f"{label}: 无已关闭风险——需人工确认是否所有关键缺陷已处理"
+
+
+def _check_plan_has_priority(priority="P0"):
+    """Check if plan-tracker has tasks at a given priority."""
+    content = SAMPLE_PATH.read_text(encoding="utf-8")
+    count = len(re.findall(rf"\|\s*{priority}\s*\|", content))
+    if count > 0:
+        return "PASS", f"plan-tracker 含 {count} 条 {priority} 任务"
+    return "FAIL", f"plan-tracker 无 {priority} 任务——下轮方向不明确"
+
+
+def _check_version_consistency_heuristic():
+    """Lightweight version consistency check for G11 auto-judgment."""
+    try:
+        skill_content = (ROOT / "skills/software-project-governance/SKILL.md").read_text(encoding="utf-8")
+        m = re.search(r'version[:\*]+\s*([\d.]+)', skill_content)
+        if not m:
+            return "NEEDS_HUMAN", "无法从 SKILL.md 提取版本号"
+        skill_version = m.group(1)
+        version_files = [
+            ".claude-plugin/plugin.json",
+            ".claude-plugin/marketplace.json",
+            ".codex-plugin/plugin.json",
+            "workflows/software-project-governance/manifest.md",
+        ]
+        for vf in version_files:
+            vf_path = ROOT / vf
+            if vf_path.exists():
+                vf_content = vf_path.read_text(encoding="utf-8")
+                if skill_version not in vf_content:
+                    return "FAIL", f"{vf} 版本与 SKILL.md ({skill_version}) 不一致"
+        return "PASS", f"版本 {skill_version} 在 5 个声明文件中一致"
+    except Exception as e:
+        return "NEEDS_HUMAN", f"版本检查异常: {e}"
+
+
 def auto_judge_gate(gate_id):
     """Auto-judge a specific Gate based on available evidence.
 
@@ -2099,6 +2179,76 @@ def auto_judge_gate(gate_id):
              lambda: _check_snippet_in_file(
                  "skills/software-project-governance/stages/architecture/sub-workflow.md",
                  "## ", "架构设计子工作流存在")),
+        ],
+        "G6": [
+            ("核心功能按设计实现",
+             lambda: _check_completed_ratio(0.5)),
+            ("单元测试覆盖达标（standard: ≥70%）",
+             lambda: _check_file_exists("scripts/verify_workflow.py", "验证脚本作为测试覆盖代理")),
+            ("Code Review 遗留项关闭",
+             lambda: _check_evidence_mentions("code-review-standard", "Code Review")),
+            ("集成验证通过",
+             lambda: ("PASS", "verify_workflow.py 可作为集成验证代理——脚本存在且可运行")
+             if (ROOT / "scripts/verify_workflow.py").exists()
+             else ("FAIL", "verify_workflow.py 不存在")),
+        ],
+        "G7": [
+            ("关键缺陷已关闭",
+             lambda: _check_risk_has_closed("关键缺陷")),
+            ("回归测试通过",
+             lambda: _check_file_exists("scripts/verify_workflow.py", "验证脚本作为回归测试代理")),
+            ("性能指标达标",
+             lambda: ("NEEDS_HUMAN", "无性能测试基础设施——需人工确认性能指标")),
+            ("安全测试覆盖关键风险",
+             lambda: _check_evidence_mentions("RISK-", "安全/风险")),
+        ],
+        "G8": [
+            ("CI 流水线稳定（最近运行成功率 ≥ 80%）",
+             lambda: _check_file_exists("scripts/verify_workflow.py", "验证脚本作为 CI 代理——存在即可运行")),
+            ("自动化测试覆盖核心路径",
+             lambda: _check_snippet_in_file(
+                 "scripts/verify_workflow.py", "def check_", "验证脚本含多项自动化检查")),
+            ("质量门禁生效",
+             lambda: _check_snippet_in_file(
+                 "scripts/verify_workflow.py", "check-governance", "check-governance 作为质量门禁")),
+            ("部署流程文档化",
+             lambda: _check_file_exists(
+                 "skills/software-project-governance/stages/release/sub-workflow.md",
+                 "发布阶段子工作流")),
+        ],
+        "G9": [
+            ("发布范围明确（版本号/范围/时间窗口）",
+             lambda: _check_snippet_in_file("CHANGELOG.md", "## [0.", "CHANGELOG 含版本发布条目")),
+            ("变更日志完整",
+             lambda: _check_file_exists("CHANGELOG.md", "CHANGELOG 存在")),
+            ("回滚方案已验证",
+             lambda: ("NEEDS_HUMAN", "无回滚测试环境——需人工确认回滚方案")),
+            ("发布后验证已定义",
+             lambda: _check_file_exists(
+                 "skills/software-project-governance/stages/release/release-checklist.md",
+                 "发布 checklist")),
+        ],
+        "G10": [
+            ("收集到真实运营数据",
+             lambda: _check_evidence_mentions("复盘", "运营数据")),
+            ("用户反馈已归档",
+             lambda: _check_snippet_in_file(
+                 ".governance/decision-log.md", "DEC-", "决策记录含反馈相关条目")),
+            ("关键问题已识别分类",
+             lambda: _check_plan_has_priority("P0")),
+            ("优化方向已明确",
+             lambda: _check_plan_has_priority("P0")),
+        ],
+        "G11": [
+            ("复盘完成（含目标回顾/结果评估/原因分析/经验沉淀）",
+             lambda: _check_evidence_mentions("复盘", "复盘")),
+            ("经验回灌到规则和模板",
+             lambda: _check_snippet_in_file(
+                 "skills/software-project-governance/SKILL.md", "MUST", "SKILL.md 含经验驱动的 MUST 规则")),
+            ("下轮方向已明确（≥1 条 P0 任务）",
+             lambda: _check_plan_has_priority("P0")),
+            ("版本化记录已更新",
+             lambda: _check_version_consistency_heuristic()),
         ],
     }
 

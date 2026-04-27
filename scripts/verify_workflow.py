@@ -785,8 +785,37 @@ def parse_completed_task_ids():
     return completed
 
 
+def expand_task_ids(raw_text):
+    """Expand range notations and comma-separated task IDs into individual IDs.
+
+    Supported formats:
+      - Single: AUDIT-021
+      - Comma-separated: AUDIT-045, AUDIT-048
+      - Range: AUDIT-015~020  (expands to AUDIT-015 through AUDIT-020)
+      - Mixed comma + range: RISK-021, RISK-022, MAINT-002
+    Returns a set of individual task IDs.
+    """
+    result = set()
+    # Split by comma first
+    for chunk in raw_text.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        # Check for range notation: PREFIX-NUM1~NUM2
+        range_match = re.match(r"^([A-Z]+-)(\d+)\s*~\s*(\d+)$", chunk)
+        if range_match:
+            prefix = range_match.group(1)
+            start_num = int(range_match.group(2))
+            end_num = int(range_match.group(3))
+            for num in range(start_num, end_num + 1):
+                result.add(f"{prefix}{num:03d}")
+        elif re.match(r"[A-Z]+-\d+", chunk):
+            result.add(chunk)
+    return result
+
+
 def parse_evidence_task_ids():
-    """Return set of task IDs that have evidence entries."""
+    """Return set of task IDs that have evidence entries (range-expanded)."""
     content = EVIDENCE_PATH.read_text(encoding="utf-8")
     task_ids = set()
     for line in content.split("\n"):
@@ -795,14 +824,14 @@ def parse_evidence_task_ids():
             continue
         parts = [p.strip() for p in line.split("|")]
         if len(parts) >= 3:
-            task_id = parts[2]
-            if task_id and re.match(r"[A-Z]+-\d+", task_id):
-                task_ids.add(task_id)
+            raw_ids = parts[2]
+            if raw_ids and re.search(r"[A-Z]+-\d+", raw_ids):
+                task_ids |= expand_task_ids(raw_ids)
     return task_ids
 
 
 def parse_evidence_task_map():
-    """Return dict mapping task_id -> list of evidence IDs."""
+    """Return dict mapping task_id -> list of evidence IDs (range-expanded)."""
     content = EVIDENCE_PATH.read_text(encoding="utf-8")
     task_map = {}
     for line in content.split("\n"):
@@ -812,9 +841,10 @@ def parse_evidence_task_map():
         parts = [p.strip() for p in line.split("|")]
         if len(parts) >= 3:
             evd_id = parts[1]
-            task_id = parts[2]
-            if task_id and re.match(r"[A-Z]+-\d+", task_id):
-                task_map.setdefault(task_id, []).append(evd_id)
+            raw_ids = parts[2]
+            if raw_ids and re.search(r"[A-Z]+-\d+", raw_ids):
+                for task_id in expand_task_ids(raw_ids):
+                    task_map.setdefault(task_id, []).append(evd_id)
     return task_map
 
 

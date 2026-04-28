@@ -1,8 +1,8 @@
-# governance-update — 更新 CLAUDE.md bootstrap（不覆盖治理数据）
+# governance-update — 更新 CLAUDE.md bootstrap（手动回退命令）
 
-更新已安装用户的 CLAUDE.md 中的 Governance Bootstrap 段到最新版本。**不触碰 `.governance/` 目录中的任何文件**——只更新 bootstrap 模板。
+更新 CLAUDE.md 中的 Governance Bootstrap 段到最新版本。**不触碰 `.governance/` 目录中的任何文件**。
 
-这是老用户升级路径的核心——用户通过 `/plugin update` 获取新版本后，运行此命令将 bootstrap 行为升级到最新。
+**注意**：此命令是手动回退选项。正常情况下，bootstrap 在每次会话开始时会**自动检测版本变化并自升级**——用户不需要手动运行此命令。仅在自动升级失败或用户想立即升级（不等下次会话）时使用。
 
 ## Input Parameters
 

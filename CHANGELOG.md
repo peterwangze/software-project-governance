@@ -2,6 +2,14 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.6.8] — 2026-04-29
+
+### 修复
+
+- **bootstrap 自升级**：版本变化检测不再只是提示用户运行命令——agent 检测到 bootstrap 落后时**自动替换 CLAUDE.md 的 bootstrap 段为最新模板**。用户 `/plugin update` → 下次会话 → 自动完成，零用户行动。governance-update 命令降级为手动回退选项。
+
+---
+
 ## [0.6.7] — 2026-04-29
 
 ### 新增

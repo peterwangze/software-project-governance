@@ -44,22 +44,28 @@
 
 **Hook 存活检测**：检查 `.git/hooks/post-commit` 是否存在。不存在 → ⚠️ 治理 hook 缺失——每次 commit 后的自动检查不会触发。**MUST** 提醒用户重装 hook：`cp scripts/post-commit-hook.sh .git/hooks/post-commit`。
 
-**版本变化自动检测**（用户更新后自动感知——不需要手动运行任何命令）：
-1. 读取 plan-tracker `## 项目配置` 节中的 `工作流版本`
-2. 读取当前安装的 workflow 版本（从 `skills/software-project-governance/SKILL.md` frontmatter 的 `version` 字段）
-3. **IF** 当前版本 > 记录版本 → 自动输出更新摘要：
-   - 版本跨度：`{记录版本} → {当前版本}`
-   - 从 CHANGELOG.md 提取中间版本的新增/修复摘要
-   - 自动检查是否需要手动采纳：
-     - `.git/hooks/post-commit` 是否存在？否 → 提示安装
-     - plan-tracker 是否含 `## 版本规划` 节？否 → 提示新增
-     - plan-tracker 项目配置是否含 `permission_mode`？否 → 提示新增字段
-     - CLAUDE.md bootstrap 是否为旧版英文 stub？是 → 提示升级
-   - 输出一句总结：需要手动操作的项和可自动生效的项
-4. **IF** bootstrap 版本落后（CLAUDE.md 中非最新模板）→ 自动提示：`运行 /governance-update 升级 bootstrap（不触碰 .governance/ 数据）`
-5. 更新 plan-tracker 中的 `工作流版本` 为当前版本
+**版本变化自动检测 + bootstrap 自升级**（用户更新插件后首次会话自动触发——零用户行动）：
+1. 读取 plan-tracker `工作流版本` 和当前安装版本（SKILL.md frontmatter `version`）
+2. **IF** 当前版本 > 记录版本 → 执行以下自动序列：
 
-**用户不需要记住任何命令——每次会话开始自动执行。老用户用 /governance-update 升级。**
+   **A. 自动输出更新摘要**（告知用户）：
+   - 版本跨度 + 从 CHANGELOG.md 提取的新增/修复要点
+
+   **B. 自动升级 CLAUDE.md bootstrap 段**（agent 自己升级自己）：
+   - 读取当前 CLAUDE.md，找到 `## Governance Bootstrap` 段落
+   - 替换为**与本文件完全一致的最新模板**（按 profile 选精简/完整版）
+   - **保留 CLAUDE.md 其余所有内容不变**
+   - 输出：`Bootstrap 已自动升级：v{old} → v{new}。`
+
+   **C. 自动检查需手动操作项**（agent 无法自动完成的）：
+   - `.git/hooks/post-commit` 不存在？→ 提示一次性命令
+   - plan-tracker 缺少新字段（permission_mode/工作流版本）？→ agent 自动补全
+   - plan-tracker 缺少 `## 版本规划` 节？→ agent 自动补全
+
+   **D. 更新 plan-tracker `工作流版本`** 为当前版本
+
+**这就是用户要做的全部：/plugin update → 下次会话 → 一切自动完成。**
+不需要记住命令，不需要读文档，不需要手动操作——agent 自己升级自己。
 
 ### Step 2: 交叉验证（3 项强制检查）
 对照 `.governance/plan-tracker.md` 和 `.governance/evidence-log.md`：

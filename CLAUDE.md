@@ -84,6 +84,20 @@
 
 **没读 plan-tracker 就开始干活 = 流程违规。跳过交叉验证 = 流程违规。跳过阶段跳跃防护 = 流程违规。这不是"建议"，是前置条件。**
 
+### Bootstrap 变更纪律（MANDATORY — 工作流开发者 MUST 遵守）
+
+```
+❌ 禁止：直接修改 CLAUDE.md 添加新行为
+        → 改了用户得不到——狗粮实例不是事实源
+
+✅ 强制：commands/governance-init.md Step 7 注入模板 → bump 版本 →
+       用户 /plugin update → bootstrap 自升级 → 本仓库 CLAUDE.md 同步
+        → 模板是唯一事实源，用户通过插件更新获得
+```
+
+**MUST NOT** 直接修改本文件来添加新行为。**MUST** 先改 `commands/governance-init.md` Step 7（canonical source），bump 版本。本文件是狗粮实例——修改它只影响本仓库，用户拿不到。
+这是 FIX-011 自升级机制的一部分：你自己的 bootstrap 也必须通过正确流向升级。
+
 ## 干活前检查（每次收到任务时）
 
 在开始执行任何任务前，确认三件事：

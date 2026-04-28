@@ -44,6 +44,22 @@
 
 **Hook 存活检测**：检查 `.git/hooks/post-commit` 是否存在。不存在 → ⚠️ 治理 hook 缺失——每次 commit 后的自动检查不会触发。**MUST** 提醒用户重装 hook：`cp scripts/post-commit-hook.sh .git/hooks/post-commit`。
 
+**版本变化自动检测**（用户更新后自动感知——不需要手动运行任何命令）：
+1. 读取 plan-tracker `## 项目配置` 节中的 `工作流版本`
+2. 读取当前安装的 workflow 版本（从 `skills/software-project-governance/SKILL.md` frontmatter 的 `version` 字段）
+3. **IF** 当前版本 > 记录版本 → 自动输出更新摘要：
+   - 版本跨度：`{记录版本} → {当前版本}`
+   - 从 CHANGELOG.md 提取中间版本的新增/修复摘要
+   - 自动检查是否需要手动采纳：
+     - `.git/hooks/post-commit` 是否存在？否 → 提示安装
+     - plan-tracker 是否含 `## 版本规划` 节？否 → 提示新增
+     - plan-tracker 项目配置是否含 `permission_mode`？否 → 提示新增字段
+     - CLAUDE.md bootstrap 是否为旧版英文 stub？是 → 提示升级
+   - 输出一句总结：需要手动操作的项和可自动生效的项
+4. **更新 plan-tracker 中的 `工作流版本` 为当前版本**（标记"已采纳到此版本"）
+
+**用户不需要记住任何命令——每次会话开始自动执行。**
+
 ### Step 2: 交叉验证（3 项强制检查）
 对照 `.governance/plan-tracker.md` 和 `.governance/evidence-log.md`：
 

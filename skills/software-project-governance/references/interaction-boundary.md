@@ -68,9 +68,66 @@ agent 完成工作后提交用户审核。
 | 运营 | 40% | **60%** | 用户需要解读数据、判断优化方向 |
 | 维护 | 30% | **70%** | agent 分析和总结，用户做改进决策 |
 
+## 操作权限模式（双维度融合）
+
+触发模式（何时激活治理）和操作权限模式（能做什么不打断）是两个正交维度。以下定义操作权限模式的具体边界。
+
+### maximum-autonomy（最高权限）
+
+**唯一打断条件**：
+1. 关键决策（范围/架构/发布/风险/外部依赖/模式变更）
+2. 全部任务完成（确认下一步）
+3. 用户显式要求停止
+
+**自动执行范围**（不确认，不打断）：
+- git 全系列：commit、push（含 master/main）、pull、merge、tag
+- 本地命令全系列：bash、npm/pip/cargo、docker、make
+- 文件全系列：创建、编辑、删除、重命名、chmod
+- 网络操作：API 调用（含非只读）、package 安装/卸载
+- 环境操作：环境变量修改、配置文件修改、数据库变更
+- 治理操作：plan-tracker/evidence-log/decision-log/risk-log 更新
+
+**禁止**：在用户思考流中插入"要不要继续""确认执行 X 吗"等确认。**用户选择此模式 = 信任 agent 的判断力。**
+
+### default-confirm（默认确认）
+
+**必须确认的 4 类危险操作**：
+
+| 类别 | 具体操作 | 确认方式 |
+|------|---------|---------|
+| 破坏性 git | push --force、reset --hard、branch -D、删除远程分支、force push to master/main | AskUserQuestion |
+| 文件系统破坏 | rm -rf、批量删除（>5 文件）、覆盖重要配置（.env/package.json/CLAUDE.md） | AskUserQuestion |
+| 外部副作用 | API 调用（非 GET）、package 安装/卸载、数据库 schema 变更、环境变量修改 | AskUserQuestion |
+| 不可逆操作 | squash 合并、rebase 变基、修改已推送的 commit、删除 tag/release | AskUserQuestion |
+
+**自动执行范围**（不确认）：
+- git：commit、push（非 force）、pull、status、diff、log
+- 文件：创建、编辑（非 .env/配置类）、读取
+- 命令：运行测试、lint、build、type check
+- 治理：plan-tracker/evidence-log 更新
+
+### 治理开关
+
+用户在任何会话中可以动态切换，agent 必须立即更新 plan-tracker：
+
+```
+"切换到最高权限模式"  → permission_mode = maximum-autonomy
+"切换到默认确认模式"  → permission_mode = default-confirm
+"切换到始终在线"      → trigger_mode = always-on
+"切换到按需调用"      → trigger_mode = on-demand
+"切换到静默跟踪"      → trigger_mode = silent-track
+"当前模式"            → 输出当前双维度状态
+```
+
+**切换时 agent 必须**：
+1. 读取 `.governance/plan-tracker.md` 项目配置节
+2. 更新对应字段
+3. 输出确认：`> 🔄 模式已切换：{trigger_mode} × {permission_mode}`
+4. 模式变更本身是 profile/模式变更 → 如果是用户主动要求的，不需要再确认
+
 ## 关键决策分类
 
-用户可以声明"仅在关键决策停下来"模式。此模式下，agent 只在以下关键决策点使用 AskUserQuestion，其余决策自动执行。
+以下关键决策在**所有模式**下均必须停下来用 AskUserQuestion：
 
 ### 关键决策（必须停下来用 AskUserQuestion）
 

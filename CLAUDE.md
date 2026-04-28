@@ -9,15 +9,28 @@
 
 如果你已经回答了用户的任务请求但没有执行以上检查 → **停下来补执行。**
 
-### Step 0: 确定触发模式
+### Step 0: 确定双维度模式
 
-读取 `.governance/plan-tracker.md` 的 `## 项目配置` 节，确认 `触发模式`：
+读取 `.governance/plan-tracker.md` 的 `## 项目配置` 节，确认两个正交维度：
 
-- **always-on**（默认）→ 执行完整 Step 1~3。治理面板可正常输出。
-- **on-demand** → 仅执行 Step 1（读 plan-tracker 确认当前阶段/活跃风险）。Step 2 交叉验证和 Step 3 优先级确认仅在用户显式调用 governance 命令（`/governance-status`、`/governance-gate`、`/governance-verify`）时执行。不主动输出治理面板。
-- **silent-track** → 执行 Step 1~2（读 plan-tracker + 交叉验证），但 **MUST NOT** 向用户输出治理面板、风险统计、任务进度表。仅在 Gate 检查失败或风险 escalation 到期时打断用户。Step 3 仅在 P0 任务阻塞时提醒。
+**维度一：触发模式（何时激活治理）**：
+- **always-on** → 执行完整 Step 1~4。治理面板可正常输出。
+- **on-demand** → 仅执行 Step 1。Step 2~4 仅在用户显式调用 governance 命令时执行。**MUST NOT** 主动输出治理面板。
+- **silent-track** → 执行 Step 1~2，**MUST NOT** 输出治理面板/风险统计/任务进度表。仅在 Gate 失败或风险 escalation 到期时打断用户。
 
-**触发模式差异可被检测到**：用户切换模式后观察到 agent 治理输出量显著变化。如果 silent-track 模式下 agent 仍输出完整治理面板 = 触发模式未生效。
+**维度二：操作权限模式（能做什么不打断）**：
+- **maximum-autonomy（最高权限）**：除关键决策和全部任务完成外，**一切操作自动执行**——包括 git commit+push（含 master/main）、本地命令、文件创建/编辑/删除、package 安装。用户思考流不被打断。
+- **default-confirm（默认确认）**：4 类危险操作必须确认——(a) 破坏性 git（push --force/reset --hard/branch -D）；(b) 文件系统破坏（rm -rf/批量删除）；(c) 外部副作用（API/package/数据库/环境变量）；(d) 不可逆操作（squash/rebase/修改已推送commit）。常规操作自动执行。
+
+**治理开关——用户随时动态切换**：
+会话中用户说以下任意一句 → 立即切换并更新 plan-tracker：
+- "切换到最高权限模式" / "开启最高权限" / "maximum autonomy" → permission_mode = maximum-autonomy
+- "切换到默认确认模式" / "开启确认模式" / "default confirm" → permission_mode = default-confirm
+- "切换到始终在线" / "切换到按需调用" / "切换到静默跟踪" → trigger_mode 对应切换
+- "当前模式" / "现在什么模式" → 输出当前 trigger_mode × permission_mode
+
+**每次会话输出一句确认**：
+> 🔍 Governance: {trigger_mode} × {permission_mode} | stage: {stage}, Gate {gate}: {status}, {risk_count} risk(s)
 
 ### Step 1: 读 plan-tracker + 跨会话恢复
 读取 `.governance/plan-tracker.md`，确认：当前阶段、最近 Gate 结论、活跃风险数、进行中的 P0 任务。如果 `.governance/` 不存在，提醒用户先初始化。
@@ -61,31 +74,40 @@
 
 ### 关键决策分类（自包含——不依赖 SKILL.md 加载状态）
 
-**关键决策** — 必须停下来用 AskUserQuestion：
+**关键决策** — 无论何种 permission_mode，**永远**停下来用 AskUserQuestion：
 - 范围变更（新增/删除功能、改变项目边界）
 - 架构决策（技术栈选择、模块拆分、接口设计）
 - 发布决策（go/no-go、版本号升级、breaking change）
 - 风险接受（接受已知风险、绕过 Gate）
 - 外部依赖变更（引入新库、新服务、API 变更）
-- Profile/触发模式变更
+- Profile/触发模式/操作权限模式变更
+- 阶段跳跃（跳过 Gate）
+
+**危险操作确认** — 仅 default-confirm 模式下停下来：
+- 破坏性 git：push --force、reset --hard、branch -D、删除远程分支
+- 文件系统破坏：rm -rf、批量删除文件、覆盖重要配置
+- 外部副作用：API 调用（非只读）、package 安装/卸载、数据库变更、环境变量修改
+- 不可逆操作：squash 合并、rebase 变基、修改已推送的 commit
+- **maximum-autonomy 模式下以上操作自动执行不确认。**
 
 **非关键决策** — 自动执行，不提问：
 - 已确认方向内的任务排序
 - 证据格式和详细程度
-- 自然边界的 commit 时机（按 DEC-025 自动提交）
+- git commit（不带 --force）/ git push（maximum-autonomy 下自动）
 - 治理记录更新
 - 微小实现选择（文件命名、变量名、代码风格）
 - Gate 自评结果（仅在失败时告知）
+- 文件编辑 / 运行测试 / 创建文件
 
-**判断标准**：决策是否改变项目方向、范围、架构或接受风险？是 → 关键决策，必须问。决策是关于如何在已确认方向内执行？是 → 非关键决策，自动执行。
+**判断标准**：决策是否改变项目方向、范围、架构或接受风险？是 → 关键决策，永远必须问。决策是否涉及破坏性/不可逆操作？是 + default-confirm → 必须确认。否 → 自动执行。
 
 ## 收工前检查（session 结束前）
 
 1. 输出本轮完成事项摘要
 2. 补证据到 `.governance/evidence-log.md`
 3. 更新 plan-tracker 任务状态（已完成/进行中）
-4. **生成跨会话快照**：写入 `.governance/session-snapshot.md`（格式见 SKILL.md M4.2）——记录 carry-over 任务、待确认决策、活跃风险和下一 session 优先级。下一 session 的 Step 1 将从此文件恢复状态。
-5. 自动 git commit（DEC-025：每次有意义变更即提交，commit message 必须引用 task ID）
+4. **生成跨会话快照**：写入 `.governance/session-snapshot.md`
+5. **auto git commit + push**（maximum-autonomy 模式）或 **auto git commit**（default-confirm 模式——push 需确认）。commit message 必须引用 task ID。
 6. 用 AskUserQuestion 确认下一步优先级
 
 ## 详细规则

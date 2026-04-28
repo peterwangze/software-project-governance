@@ -90,20 +90,87 @@
 - **IF** project_type=existing → 在 decision-log.md 中新增一条决策记录，说明为何项目当前处于 `current_stage` 阶段，格式：`DEC-001 | <today> | 中途接入声明 | 项目已在 <current_stage> 阶段 | 选项：从立项开始 / 中途接入 | 中途接入 — 前置阶段标记 passed-on-entry | 项目已运行至 <current_stage>，补齐历史记录成本过高 | G1~G{current_gate-1} 状态 | — | 已执行 | —`
 
 ### Step 7: 注入 governance bootstrap 到 agent 入口文件
-- **IF** 项目根目录存在 `CLAUDE.md` → 检查是否含 `## Governance Bootstrap`
-  - **IF** 已含 → 跳过，不做修改
-  - **ELSE** → 在文件末尾追加 goverance bootstrap 块（以 `## Governance Bootstrap (added by software-project-governance plugin)` 开头标记）
+
+**版本检测规则**——bootstrap 模板升级时，已注入用户需要升级路径：
+
+- **IF** 项目根目录存在 `CLAUDE.md`：
+  - **IF** 含 `## Governance Bootstrap（强制` → 已是最新版中文完整模板，跳过
+  - **IF** 含 `## Governance Bootstrap (added by software-project-governance plugin)` → 旧版英文 stub 检测到——**MUST** 提示用户："检测到旧版 governance bootstrap（v0.1 英文 stub）。新版包含触发模式感知、跨会话状态恢复、3 项交叉验证等升级。是否升级？" → 用户确认后替换为新模板
+  - **ELSE** → 在文件末尾追加 governance bootstrap 块
 - **IF** 项目根目录不存在 `CLAUDE.md` → 创建 `CLAUDE.md`，内容仅为 governance bootstrap 块
 
-Bootstrap 注入内容：
+**注入时 Profile 差异化**：
+- **IF** profile = lightweight → 注入精简版模板（3 节：首次动作/干活前/收工前）
+- **IF** profile = standard 或 strict → 注入完整版模板（Step 0~3 + 干活前检查 + 提问规则 + 关键决策分类 + 收工前检查）
+
+Bootstrap 注入内容（按 `profile` 差异化——lightweight 注入精简版，standard/strict 注入完整版）：
+
+**lightweight profile 注入模板**：
 ```markdown
 ## Governance Bootstrap (added by software-project-governance plugin)
 
-Before executing any tasks, read `.governance/plan-tracker.md` to confirm: current stage, latest Gate status, active risks, and in-progress P0 tasks. If `.governance/` does not exist, remind the user to run governance-init first.
+### 每次会话第一动作
+读取 `.governance/plan-tracker.md`，确认：当前阶段、最近 Gate 结论、活跃风险。如果 `.governance/` 不存在，提醒用户先初始化。
 
-Before starting a new task: check if it's already in the plan tracker. If not, add it first.
+### 干活前检查
+- 这个任务在计划跟踪表里吗？不在就先入账
+- 做完后需要补什么证据？先想清楚
 
-After completing a task: log evidence to `.governance/evidence-log.md`.
+### 收工前检查
+1. 输出本轮完成事项摘要
+2. 补证据到 `.governance/evidence-log.md`
+```
+
+**standard / strict profile 注入模板**（完整版——自包含，不依赖 SKILL.md 加载状态）：
+```markdown
+## Governance Bootstrap（强制 — 每次会话第一动作）
+
+在执行任何用户任务之前，**MUST** 先完成以下步骤：
+
+### Step 0: 确定触发模式
+读取 `.governance/plan-tracker.md` 的 `## 项目配置` 节，确认 `触发模式`：
+- **always-on**（默认）→ 执行完整 Step 1~3。治理面板可正常输出。
+- **on-demand** → 仅执行 Step 1（读 plan-tracker 确认当前阶段/活跃风险）。Step 2~3 仅在用户显式调用 governance 命令时执行。不主动输出治理面板。
+- **silent-track** → 执行 Step 1~2，但 **MUST NOT** 向用户输出治理面板、风险统计、任务进度表。仅在 Gate 失败或风险 escalation 到期时打断用户。
+
+### Step 1: 读 plan-tracker + 跨会话恢复
+读取 `.governance/plan-tracker.md`，确认：当前阶段、最近 Gate 结论、活跃风险数、进行中的 P0 任务。
+**跨会话恢复**：读取 `.governance/session-snapshot.md`（如存在）——恢复 carry-over 任务、待确认决策、活跃风险。
+
+### Step 2: 交叉验证（3 项强制检查）
+1. **证据完整性**：plan-tracker 中"已完成"的任务，evidence-log 中是否有对应证据？
+2. **Gate 一致性**：Gate 标记 passed 但无对应证据 = 不一致
+3. **风险过期**：risk-log 中活跃风险超过 7 天未更新 = 过期
+任一失败 → 列出差距 → 征求用户是否修复（AskUserQuestion）。
+
+### Step 3: 优先级确认
+passed-with-conditions 遗留项或有 P0 任务 → 优先处理。上次 session 未完成的 P0 任务 → 继续执行。
+
+**没读 plan-tracker 就开始干活 = 流程违规。**
+
+### 干活前检查（每次收到任务时）
+- 这个任务在计划跟踪表里吗？不在就先入账
+- 做完后需要补什么证据？先想清楚
+- 这个任务会不会影响别的阶段？影响就先记风险
+
+### 提问规则（强制）
+**AskUserQuestion 是唯一合法的用户提问方式。** 禁止内联文字问"要不要继续""是否如何如何"。
+默认模式：**仅在关键决策停下来**，非关键决策自动执行。
+
+**关键决策** — 必须停下来用 AskUserQuestion：
+- 范围变更 / 架构决策 / 发布决策 / 风险接受 / 外部依赖变更 / Profile或触发模式变更
+
+**非关键决策** — 自动执行：
+- 任务排序 / 证据格式 / commit时机 / 治理记录更新 / 微小实现选择 / Gate自评（仅失败时告知）
+
+### 收工前检查（session 结束前）
+1. 输出本轮完成事项摘要
+2. 补证据到 `.governance/evidence-log.md`
+3. 写入 `.governance/session-snapshot.md`（carry-over任务+待确认决策+活跃风险+下轮优先级）
+4. 用 AskUserQuestion 确认下一步优先级
+
+### 详细规则
+完整行为协议见 `software-project-governance` skill（M0~M9 强制性规则、Gate 行为等）。以上 bootstrap 规则不依赖 SKILL.md 是否被加载。
 ```
 
 ### Step 8: 输出确认

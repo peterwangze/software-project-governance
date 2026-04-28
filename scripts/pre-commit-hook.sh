@@ -22,7 +22,9 @@ else
     COMMIT_MSG=$(cat "$COMMIT_MSG_FILE")
 fi
 
-TASK_ID=$(echo "$COMMIT_MSG" | grep -oE '[A-Z]+-[0-9]+' | head -1)
+# Extract task ID: first line, word before ":" that matches UPPERCASE-NUMBERS
+FIRST_LINE=$(echo "$COMMIT_MSG" | head -1)
+TASK_ID=$(echo "$FIRST_LINE" | sed -n 's/^\([A-Z][A-Z]*-[0-9][0-9]*\):.*/\1/p')
 
 # --- Step 2: Task ID must be present ---
 if [ -z "$TASK_ID" ]; then

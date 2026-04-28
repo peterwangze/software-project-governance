@@ -187,6 +187,26 @@
 
 ## 应急流程总览
 
+## 失败模式 9：无版本管理环境下的治理盲区
+
+**症状**：用户项目不使用 git/svn 等版本管理工具。pre-commit/post-commit hooks 无法安装。所有系统级约束（hook 阻断）失效，治理完全依赖 agent 自觉（失败模式 1~8）。
+
+**检测方法**：
+- governance-init 或 bootstrap 检测到 `.git/` 不存在 → 标记为"无版本管理环境"
+- 输出约束降级声明
+
+**用户应急动作**：
+- `git init` → 重新运行 governance-init 安装 hooks
+- 或接受降级模式——治理依赖 session 级检查
+
+**降级模式（无 git 时的替代约束）**：
+- Session 结束强制 `check-governance`，FAILED → MUST 修复后才能结束
+- 连续 2 session FAILED → agent 提醒"建议 git init 获得自动阻断"
+
+**根因**：系统级约束依赖 git hooks 作为执行载体。这是架构限制。
+
+## 应急响应矩阵
+
 当用户发现 agent 行为异常时，按以下顺序排查：
 
 ```

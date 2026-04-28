@@ -2,7 +2,12 @@
 
 ## Governance Bootstrap（强制 — 每次会话第一动作）
 
-在执行任何用户任务之前，**MUST** 先完成以下步骤：
+**⚡ SELF-CHECK（在任何输出之前先问自己）**：
+1. 我是否已经读了 `.governance/plan-tracker.md`？否 → **立即停止，先去读**
+2. 我是否知道当前项目处于哪个阶段？否 → **你没读 plan-tracker，去读**
+3. 上一 session 结束后是哪个阶段？是否有 carry-over 任务？不知道 → **去读 session-snapshot.md**
+
+如果你已经回答了用户的任务请求但没有执行以上检查 → **停下来补执行。**
 
 ### Step 0: 确定触发模式
 
@@ -22,6 +27,8 @@
 - 快照中的待确认决策 → 检查是否已过期或仍需确认
 - 快照中的风险 escalation deadline ≤ 今天 → 立即升级
 
+**工作流脱轨检测**：检查 plan-tracker 的 `最近复盘日期`——如果距今 > 7 天 AND 有若干新 commit 但 plan-tracker 无更新 → ⚠️ 工作流可能已被忽略。提醒用户是否需要更新治理状态。
+
 ### Step 2: 交叉验证（3 项强制检查）
 对照 `.governance/plan-tracker.md` 和 `.governance/evidence-log.md`：
 
@@ -31,10 +38,13 @@
 
 任一检查失败 → 列出差距 → 征求用户是否立即修复（AskUserQuestion）。
 
-### Step 3: 优先级确认
+### Step 3: 阶段跳跃防护（MANDATORY）
+**IF** 用户请求直接进入开发/测试/发布等后期阶段，但当前 Gate 状态显示前置 Gate 均为 pending → **MUST** 警告用户跳过前置阶段的风险（没有明确目标就开始编码的返工风险 / 没有架构设计导致后续重构成本高 / 缺少 Gate 检查的证据记录）。**这不是阻止用户前进——是确保用户知悉风险。** 用户可以选择继续跳过，但决策必须记录到 decision-log。
+
+### Step 4: 优先级确认
 如果 plan-tracker 中有 passed-with-conditions 遗留项或有进行中的 P0 任务 → 优先处理。上一 session 未完成的 P0 任务 → 继续执行（从 session-snapshot.md 中识别）。
 
-**没读 plan-tracker 就开始干活 = 流程违规。跳过交叉验证 = 流程违规。这不是"建议"，是前置条件。**
+**没读 plan-tracker 就开始干活 = 流程违规。跳过交叉验证 = 流程违规。跳过阶段跳跃防护 = 流程违规。这不是"建议"，是前置条件。**
 
 ## 干活前检查（每次收到任务时）
 
@@ -73,9 +83,10 @@
 
 1. 输出本轮完成事项摘要
 2. 补证据到 `.governance/evidence-log.md`
-3. **生成跨会话快照**：写入 `.governance/session-snapshot.md`（格式见 SKILL.md M4.2）——记录 carry-over 任务、待确认决策、活跃风险和下一 session 优先级。下一 session 的 Step 1 将从此文件恢复状态。
-4. 自动 git commit（DEC-025：每次有意义变更即提交）
-5. 用 AskUserQuestion 确认下一步优先级
+3. 更新 plan-tracker 任务状态（已完成/进行中）
+4. **生成跨会话快照**：写入 `.governance/session-snapshot.md`（格式见 SKILL.md M4.2）——记录 carry-over 任务、待确认决策、活跃风险和下一 session 优先级。下一 session 的 Step 1 将从此文件恢复状态。
+5. 自动 git commit（DEC-025：每次有意义变更即提交，commit message 必须引用 task ID）
+6. 用 AskUserQuestion 确认下一步优先级
 
 ## 详细规则
 

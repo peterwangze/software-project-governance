@@ -2,6 +2,15 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.6.9] — 2026-04-29
+
+### 修复
+
+- **bootstrap 变更纪律**：governance-init.md 和 CLAUDE.md 新增 Step 1.5——MUST NOT 直接修改 CLAUDE.md 添加新行为，MUST 先改 governance-init.md 注入模板（canonical source），通过版本 bump + /plugin update + bootstrap 自升级到达用户
+- **Tier 审计补齐**：EVD-123——用户反馈驱动密集修复轮次审计（D1/D3/D4）。审计发现 2 项治理违规：所有 FIX 任务 Gate 标记错误（G8→G11 修正）+ 全部先执行后入账（违反 M7.5）
+
+---
+
 ## [0.6.8] — 2026-04-29
 
 ### 修复

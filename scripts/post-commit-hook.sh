@@ -19,9 +19,9 @@ if [ -z "$TASK_ID" ]; then
     echo "   Action: Update plan-tracker or amend commit message."
     echo ""
 else
-    # Check if evidence exists for this task
+    # Check if evidence exists for this task (handles comma-separated and range IDs)
     if [ -f "$REPO_ROOT/.governance/evidence-log.md" ]; then
-        if grep -q "| $TASK_ID " "$REPO_ROOT/.governance/evidence-log.md" 2>/dev/null; then
+        if grep -qE "$TASK_ID" "$REPO_ROOT/.governance/evidence-log.md" 2>/dev/null; then
             echo ""
             echo "✅ GOVERNANCE: Commit '$TASK_ID' — evidence found in evidence-log."
             echo ""

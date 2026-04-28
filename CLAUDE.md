@@ -42,6 +42,8 @@
 
 **工作流脱轨检测**：检查 plan-tracker 的 `最近复盘日期`——如果距今 > 7 天 AND 有若干新 commit 但 plan-tracker 无更新 → ⚠️ 工作流可能已被忽略。提醒用户是否需要更新治理状态。
 
+**Hook 存活检测**：检查 `.git/hooks/post-commit` 是否存在。不存在 → ⚠️ 治理 hook 缺失——每次 commit 后的自动检查不会触发。**MUST** 提醒用户重装 hook：`cp scripts/post-commit-hook.sh .git/hooks/post-commit`。
+
 ### Step 2: 交叉验证（3 项强制检查）
 对照 `.governance/plan-tracker.md` 和 `.governance/evidence-log.md`：
 

@@ -262,7 +262,24 @@ passed-with-conditions 遗留项或 P0 任务 → 优先处理。上次 session 
 完整行为协议见 `software-project-governance` skill（M0~M9 强制性规则、Gate 行为等）。以上 bootstrap 规则不依赖 SKILL.md 是否被加载——它们就在这里，每次会话必定生效。
 ```
 
-### Step 8: 输出确认
+### Step 8: 安装 git post-commit governance hook
+
+任务间治理盲区是当前工作流最致命的漏洞——agent 在 commit 之间完全不受约束。post-commit hook 让每次 git commit 自动触发治理检查，agent 无法绕过。
+
+- **IF** 项目根目录存在 `.git/` → 安装 hook：
+  1. 复制 `scripts/post-commit-hook.sh` 到 `.git/hooks/post-commit`
+  2. 验证 hook 文件存在且可执行
+- **IF** `.git/hooks/post-commit` 已存在且非本工作流安装 → 备份为 `post-commit.bak`，再安装
+- **IF** 项目不是 git 仓库 → 跳过，提醒用户"建议初始化 git 仓库以启用治理 hook"
+
+Hook 行为：每次 `git commit` 后自动执行：
+1. 从 commit message 提取 task ID
+2. 检查 task ID 是否在 plan-tracker 中存在（不存在 = 任务未入账）
+3. 检查 evidence-log 中是否有该 task 的证据（不存在 = 未补证据）
+4. 输出 check-governance 摘要
+5. Hook 不阻塞 commit——只报告，不拒绝
+
+### Step 9: 输出确认
 按照 Output Format 模板输出确认信息。
 
 ## Output Format
@@ -294,6 +311,8 @@ Created files:
   ✅ .governance/risk-log.md
   {if bootstrap_injected}✅ CLAUDE.md — governance bootstrap injected
   {if not bootstrap_injected}⊘ CLAUDE.md — governance bootstrap already present, skipped
+  {if hook_installed}✅ .git/hooks/post-commit — governance hook installed
+  {if hook_skipped}⊘ .git/hooks/post-commit — skipped (not a git repo)
 
 Gate status:
   {gate_status_table}

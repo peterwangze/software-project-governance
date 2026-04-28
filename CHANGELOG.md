@@ -2,6 +2,20 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.6.4] — 2026-04-28
+
+### 新增
+
+- **post-commit governance hook**：每次 `git commit` 后自动触发——提取 commit message 中的 task ID → 检查 plan-tracker 中是否存在 → 检查 evidence-log 中是否有证据 → 输出 check-governance 摘要。消除会话中间"commit 之间"的治理盲区。Hook 不阻塞 commit——只报告，不拒绝。
+- **RISK-024**：记录"端点强制模型 vs 流式执行行为的结构性不匹配"风险——5-Why 根因分析
+
+### 修复
+
+- **governance-init Step 8**：新项目初始化时自动安装 post-commit hook
+- **CLAUDE.md bootstrap**：新增 Hook 存活检测——hook 缺失时 MUST 提醒用户重装
+
+---
+
 ## [0.6.3] — 2026-04-28
 
 ### 变更

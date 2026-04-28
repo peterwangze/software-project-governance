@@ -209,10 +209,10 @@ Tier 3-C: 兼容与政策（4 tasks, ~2 sessions，可并行）
 | 0.4.0 | 已发布 | 2026-04-26 | 治理强制力 V1 | Layer 0-A/B/C | DRI, M8外部验证, Gate自动判定, 证据质量基线 |
 | 0.5.0 | 已发布 | 2026-04-26 | 执行连续性 + Deadline 强制 | — | M7.4/M7.5, Check 8/9, audit-framework 融入 |
 | 0.5.1 | 已发布 | 2026-04-27 | Gate 自动判定 45%→100% | — | G6-G11 启发式规则, company-practices-summary |
-| **0.6.0** | **已发布** | **2026-04-28** | **用户体验断层闭环 + 内容深度** | **Layer 0-D, 2-A/B** | **bootstrap升级, session-snapshot, 触发模式, 交互式init, 7子工作流深度, BarRaiser否决权, A/B测试, CI集成, Profile差异化** |
-| 0.7.0 | 规划中 | 2026-05-04 | 外部验证 + 剩余企业实践 | Layer 1, 2-B 剩余, 2-C | AUDIT-003外部验证, 蓝军单agent, 现代发布实践, skill质量均衡 |
-| 0.8.0 | 规划中 | 2026-05-18 | 自动化升级 + 体验增强 | Layer 3 | headless runner, MCP server, git hook, 向后兼容政策 |
-| 1.0.0 | 规划中 | 2026-06-01 | 首次正式发布 | 全部 Layer 完成 | 外部验证报告 + 全部 P0/P1 关闭 + 用户文档完整 |
+| **0.6.0** | **已发布** | **2026-04-28** | **用户体验断层闭环 + 内容深度** | **AUDIT-021,024,029,017,032,033,010,018,047 + FIX-001~005 + DIAG-001** | **bootstrap升级, session-snapshot, 触发模式×权限模式双维度, 交互式init, 7子工作流深度, BarRaiser否决权, A/B测试, CI集成, Profile差异化, 版本规划, 需求跟踪, 变更控制, 里程碑, PR/FAQ/OKR/6-Pager模板** |
+| **0.7.0** | **规划中** | **2026-05-04** | **外部验证 + 剩余企业实践 + P0/P1 清零（10 个任务）** | **AUDIT-003(P0), AUDIT-004(P1), AUDIT-006(P1), AUDIT-023(P1), MAINT-013(P1), MAINT-014(P1), MAINT-023(P1) + AUDIT-034(P2), AUDIT-036(P2), AUDIT-038(P2)** | **外部项目验证报告, governance-init/命令端到端验证, 蓝军单agent适配, 现代发布实践, 用户数据边界/agent入口差异文档, Gemini最小验证, 目标锚定强制机制** |
+| **0.8.0** | **规划中** | **2026-05-18** | **自动化升级 + 体验增强（12 个 P2）** | **AUDIT-008(P2), AUDIT-009(P2), AUDIT-012(P2), AUDIT-013(P2), AUDIT-014(P2), AUDIT-019(P2), AUDIT-020(P2), AUDIT-037(P2), AUDIT-042(P2), AUDIT-049(P2), AUDIT-050(P2), AUDIT-025(P2)** | **README措辞修正, 中途接入验证, headless runner可执行版, MCP server, git hook, verify通用化, Profile YAML解析, 向后兼容政策, 插件新鲜度检测, D5审计, M8行为层检测, skill质量均衡** |
+| **1.0.0** | **规划中** | **2026-06-01** | **首次正式发布——全部 P0/P1/P2 关闭** | **所有剩余任务 + 发布前审计** | **外部验证报告 + 全部 P0/P1/P2 关闭 + 用户文档完整 + 首次正式语义化版本** |
 
 ### 版本 Gate（V-Gate）
 

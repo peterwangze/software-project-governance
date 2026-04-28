@@ -535,20 +535,20 @@ REQUIRED_SNIPPETS = {
     ],
     ROOT / "CHANGELOG.md": [
         "# Changelog",
-        "## [0.7.0]",
+        "## [0.6.10]",
         "## [0.5.0]",
     ],
     ROOT / ".claude-plugin/plugin.json": [
-        "0.7.0",
+        "0.6.10",
     ],
     ROOT / ".claude-plugin/marketplace.json": [
-        "0.7.0",
+        "0.6.10",
     ],
     ROOT / ".codex-plugin/plugin.json": [
-        "0.7.0",
+        "0.6.10",
     ],
     ROOT / "workflows/software-project-governance/manifest.md": [
-        "0.7.0",
+        "0.6.10",
     ],
 }
 

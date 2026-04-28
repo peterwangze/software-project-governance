@@ -2,6 +2,20 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.7.0] — 2026-04-29
+
+### 新增
+
+- **系统级约束架构**：设计假设从"agent 会遵守规则"翻转为"agent 一定不会自觉遵守，必须用系统级约束强制"。pre-commit hook（阻断型——commit 前验证 task ID + plan-tracker 存在，不通过则 BLOCK commit）+ post-commit hook（报告型——commit 后检查 evidence + check-governance）。双重屏障：pre-commit 阻断违规 commit，post-commit 报告 governance 状态。
+- **governance-init Step 8 重写**：安装双 hook（pre-commit + post-commit），定义双重屏障设计
+- **bootstrap Hook 存活检测升级**：从只检查 post-commit 升级为双 hook 检查
+
+### 变更
+
+- **设计哲学转变**：所有现有 MUST 规则按"系统可强制执行 vs agent 自执行"重新分类。pre-commit hook 是第一个 BLOCKING 级别的系统约束。CI check-governance --fail-on-issues 是第二个。未来所有新规则 MUST 优先设计系统级强制执行方案。
+
+---
+
 ## [0.6.9] — 2026-04-29
 
 ### 修复

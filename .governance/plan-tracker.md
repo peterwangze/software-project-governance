@@ -7,7 +7,7 @@
 - **Profile**: standard（本项目即为工作流产品本身，需要充分验证标准 profile 的治理能力）
 - **触发模式**: always-on（每次会话自动加载，持续跟踪项目状态）
 - **操作权限模式**: maximum-autonomy
-- **工作流版本**: 0.6.5（自动检测版本变化——更新后首次会话自动触发增量采纳）
+- **工作流版本**: 0.7.0（自动检测版本变化——更新后首次会话自动触发增量采纳）
 - **当前阶段**: 维护与演进（第 11 阶段）
 - **并行活跃阶段**: 规划（第 2 阶段）— 主线 A/B 的 P0 任务已进入规划
 - **接入方式**: 从立项开始，但前期未正式执行 Gate 检查，2026-04-20 起补正式 onboarding
@@ -529,6 +529,7 @@ Step 4: 下一 Gate 检查时正式审计
 | FIX-006 | 维护 | 补全被忽略的基础实践——需求跟踪+变更控制+里程碑 | AUDIT-051 审计发现 | 需求跟踪矩阵 + 变更控制流程 + 里程碑管理 + pr-faq/okr/6-pager 模板 | Claude | 项目负责人 | 项目负责人 | 已完成 | P0 | 2026-04-28 | 2026-04-28 | 2026-04-28 | G11 | 3 项基础实践机制落地 + 3 个模板创建 | EVD-122 | — | — | — |
 | FIX-007 | 维护 | 细粒度版本控制——Patch即细粒度+check-plugin-freshness+更新指引 | 用户反馈 (2026-04-28) | VERSIONING.md 重写 + check-plugin-freshness 子命令 + CHANGELOG | Claude | 项目负责人 | 项目负责人 | 已完成 | P0 | 2026-04-28 | 2026-04-28 | 2026-04-28 | G11 | Patch bump 纪律 + freshness 可用 | EVD-122 | — | — | — |
 | FIX-008 | 维护 | post-commit governance hook——消除任务间治理盲区 | 5-Why 根因分析 (2026-04-28) | post-commit-hook.sh + governance-init Step 8 + CLAUDE.md hook 存活检测 + RISK-024 | Claude | 项目负责人 | 项目负责人 | 已完成 | P0 | 2026-04-28 | 2026-04-28 | 2026-04-28 | G11 | hook 首次 commit 即检测到自身 gap | EVD-122 | 端点强制模型 vs 流式执行行为的结构性不匹配 | — | — |
+| CONSTRAINT-001 | 维护 | 系统级约束架构——设计假设从"agent会遵守"翻转为"agent一定不自觉" | 本会话全部违规模式分析 | pre-commit-hook（阻断型）+ post-commit-hook（报告型）双重屏障 + governance-init Step 8 双 hook 安装 + bootstrap Hook 存活检测升级 | Claude | 项目负责人 | 项目负责人 | 已完成 | P0 | 2026-04-29 | 2026-04-29 | 2026-04-29 | G11 | pre-commit 阻断无 task ID / task 不在 plan-tracker 的 commit | EVD-124 | agent 反复违反自设规则——自执行约束不可信 | 所有新规则 MUST 优先设计系统级强制执行方案 | P0——最高优先级 |
 | FIX-012 | 维护 | 变更控制新增快速通道——顺应紧急修复节奏，不强推全 ceremony | EVD-123审计发现（先执行后入账违规） | plan-tracker 变更控制节新增快速通道（最小入账→立即执行→事后补齐→Gate审计） | Claude | 项目负责人 | 项目负责人 | 已完成 | P0 | 2026-04-29 | 2026-04-29 | 2026-04-29 | G11 | 快速通道定义 + 判断标准 + post-commit hook 安全网 | EVD-123 | 工作流强制全ceremony在对抗自然的修复节奏 | 本 commit 自身就是快速通道的首次实践——先执行后入账，hook 抓到后补记录 | — |
 | FIX-011 | 维护 | bootstrap 自升级——agent 检测到版本落后自动更新 CLAUDE.md bootstrap 段 | 用户反馈 (2026-04-29) | CLAUDE.md Step 1 自升级逻辑 + governance-init 模板同步 + governance-update 降级为回退 | Claude | 项目负责人 | 项目负责人 | 已完成 | P0 | 2026-04-29 | 2026-04-29 | 2026-04-29 | G11 | 用户 /plugin update → 下次会话 → bootstrap 自动替换为最新，零行动 | EVD-122 | 之前假设用户会主动运行命令——真实用户不会 | — | — |
 | FIX-010 | 维护 | governance-update——老用户升级路径（只更新 bootstrap，不动 .governance/） | 用户反馈 (2026-04-28) | governance-update.md 命令 + verify_workflow.py snippet + TOOLS.md + bootstrap 版本检测提示 | Claude | 项目负责人 | 项目负责人 | 已完成 | P0 | 2026-04-29 | 2026-04-29 | 2026-04-29 | G11 | 老用户 /plugin update 后运行此命令，bootstrap 段升级到最新，不动治理数据 | EVD-122 | 老用户 CLAUDE.md 是 init 时注入的旧版，升级后不会自动更新 | — | — |

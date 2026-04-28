@@ -42,7 +42,7 @@
 
 **工作流脱轨检测**：检查 plan-tracker 的 `最近复盘日期`——如果距今 > 7 天 AND 有若干新 commit 但 plan-tracker 无更新 → ⚠️ 工作流可能已被忽略。提醒用户是否需要更新治理状态。
 
-**Hook 存活检测**：检查 `.git/hooks/post-commit` 是否存在。不存在 → ⚠️ 治理 hook 缺失——每次 commit 后的自动检查不会触发。**MUST** 提醒用户重装 hook：`cp scripts/post-commit-hook.sh .git/hooks/post-commit`。
+**Hook 存活检测**（系统级约束——不依赖 agent 自觉）：检查 `.git/hooks/pre-commit` 和 `.git/hooks/post-commit` 是否存在。缺失 → ⚠️ 治理 hook 缺失——agent 的 commit 不受系统约束。**MUST** 提醒重装：`cp scripts/pre-commit-hook.sh .git/hooks/pre-commit && cp scripts/post-commit-hook.sh .git/hooks/post-commit`
 
 **版本变化自动检测 + bootstrap 自升级**（用户更新插件后首次会话自动触发——零用户行动）：
 1. 读取 plan-tracker `工作流版本` 和当前安装版本（SKILL.md frontmatter `version`）
@@ -57,10 +57,13 @@
    - **保留 CLAUDE.md 其余所有内容不变**
    - 输出：`Bootstrap 已自动升级：v{old} → v{new}。`
 
-   **C. 自动检查需手动操作项**（agent 无法自动完成的）：
-   - `.git/hooks/post-commit` 不存在？→ 提示一次性命令
-   - plan-tracker 缺少新字段（permission_mode/工作流版本）？→ agent 自动补全
-   - plan-tracker 缺少 `## 版本规划` 节？→ agent 自动补全
+   **C. 自动补全 plan-tracker 缺失结构**（agent 自动补全——不是提示，是直接做）：
+   - 项目配置缺少字段？→ 自动添加（permission_mode、工作流版本）
+   - 缺少 `## 版本规划` 节？→ 自动添加（版本路线图空表 + 版本里程碑 + V-Gate + 版本规划纪律）
+   - 缺少 `## 需求跟踪矩阵` 节？→ 自动添加
+   - 缺少 `## 变更控制` 节？→ 自动添加（含快速通道）
+   - 变更控制流程中是旧版（无快速通道）？→ 自动更新为含快速通道的版本
+   - `.git/hooks/post-commit` 不存在？→ 提示一次性命令（agent 不能自动写 .git/hooks/——安全问题）
 
    **D. 更新 plan-tracker `工作流版本`** 为当前版本
 

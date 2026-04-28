@@ -10,7 +10,7 @@ description: Load unified workflow rules, templates, gates and fact sources for 
 ## Workflow Identity
 
 - **id**: software-project-governance
-- **version**: 0.6.4
+- **version**: 0.6.5
 - **goal**: Automate project process management so users focus on thinking, not process
 - **supported_agents**: Claude, Codex, Gemini
 - **core capabilities**: 11-stage lifecycle, 11 Gate checks, evidence/decision/risk tracking, 3 trigger modes, 3 profiles
@@ -55,6 +55,7 @@ Read on demand based on task type:
 | `references/interaction-boundary.md` | Uncertain whether to auto-execute or ask user |
 | `references/audit-framework.md` | Performing Gate checks, completing a stage, completing a Tier (per DEC-052 layered execution model), completing a P0 task, after significant changes |
 | `references/agent-failure-modes.md` | Agent behavior anomaly detected (protocol skip, selective execution, false closure, hallucinated evidence) — troubleshoot and execute emergency actions |
+| `references/user-perspective-principle.md` | **Every task** — before completing any change that affects user behavior, MUST verify user accessibility, discoverability, and verifiability. Also loaded when planning/designing new features |
 
 ### M2.2 Sub-workflows and skills (in `stages/`, same directory as this SKILL.md)
 

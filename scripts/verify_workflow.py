@@ -526,20 +526,20 @@ REQUIRED_SNIPPETS = {
     ],
     ROOT / "CHANGELOG.md": [
         "# Changelog",
-        "## [0.6.0]",
+        "## [0.6.3]",
         "## [0.5.0]",
     ],
     ROOT / ".claude-plugin/plugin.json": [
-        "0.6.0",
+        "0.6.3",
     ],
     ROOT / ".claude-plugin/marketplace.json": [
-        "0.6.0",
+        "0.6.3",
     ],
     ROOT / ".codex-plugin/plugin.json": [
-        "0.6.0",
+        "0.6.3",
     ],
     ROOT / "workflows/software-project-governance/manifest.md": [
-        "0.6.0",
+        "0.6.3",
     ],
 }
 
@@ -2379,6 +2379,119 @@ def cmd_gate_check(args):
 
 # ── Main CLI entry point ─────────────────────────────────────────
 
+def check_plugin_freshness():
+    """Compare installed plugin version with source repository HEAD."""
+    import json
+    import subprocess
+    from datetime import datetime
+
+    result = {
+        "installed_version": "unknown",
+        "installed_commit": "unknown",
+        "installed_date": "unknown",
+        "source_version": "unknown",
+        "source_commit": "unknown",
+        "status": "UNKNOWN",
+        "commits_behind": 0,
+        "action": "",
+    }
+
+    # Read installed plugin info
+    installed_json = ROOT / ".claude-plugin" / "installed_plugins.json"
+    if not installed_json.exists():
+        # Try Claude's global installed_plugins.json
+        import os as _os
+        home = _os.path.expanduser("~")
+        installed_json = _os_path(home) / ".claude" / "installed_plugins.json"
+
+    if installed_json.exists():
+        try:
+            with open(installed_json, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            plugins = data.get("plugins", data) if isinstance(data, dict) else data
+            if isinstance(plugins, list):
+                for p in plugins:
+                    if p.get("name") == "software-project-governance":
+                        result["installed_version"] = p.get("version", "unknown")
+                        result["installed_commit"] = (p.get("gitCommitSha") or "unknown")[:7]
+                        result["installed_date"] = p.get("installedAt", "unknown")[:10] if p.get("installedAt") else "unknown"
+                        break
+        except (json.JSONDecodeError, KeyError, IOError):
+            pass
+
+    # Read source version from marketplace.json
+    marketplace_json = ROOT / ".claude-plugin" / "marketplace.json"
+    if marketplace_json.exists():
+        try:
+            with open(marketplace_json, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            plugins = data.get("plugins", [])
+            for p in plugins:
+                if p.get("name") == "software-project-governance":
+                    result["source_version"] = p.get("version", "unknown")
+                    break
+        except (json.JSONDecodeError, KeyError, IOError):
+            pass
+
+    # Get source HEAD commit
+    try:
+        r = subprocess.run(
+            ["git", "rev-parse", "HEAD"], capture_output=True, text=True,
+            cwd=str(ROOT), timeout=5
+        )
+        if r.returncode == 0:
+            result["source_commit"] = r.stdout.strip()[:7]
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        pass
+
+    # Determine status
+    if result["installed_version"] == result["source_version"]:
+        result["status"] = "UP TO DATE"
+        result["action"] = "No action needed."
+    elif result["installed_version"] == "unknown":
+        result["status"] = "UNKNOWN (plugin not installed via marketplace?)"
+        result["action"] = "Run /plugin marketplace add <path> to install."
+    else:
+        result["status"] = "OUTDATED"
+        result["action"] = "Run /plugin update software-project-governance  or  /reload-plugins"
+
+    return result
+
+
+def cmd_check_plugin_freshness(_args):
+    """Check if installed plugin is up to date with source repository."""
+    result = check_plugin_freshness()
+
+    # Calculate behind count
+    import subprocess
+    try:
+        # Try to find installed commit in git log
+        r = subprocess.run(
+            ["git", "rev-list", "--count", f"{result['installed_commit']}..HEAD"],
+            capture_output=True, text=True, cwd=str(ROOT), timeout=5
+        )
+        if r.returncode == 0:
+            result["commits_behind"] = int(r.stdout.strip())
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError, ValueError):
+        pass
+
+    print()
+    print("=== Plugin Freshness Check ===")
+    print(f"  Installed: {result['installed_version']} (commit {result['installed_commit']}, {result['installed_date']})")
+    print(f"  Source:    {result['source_version']} (commit {result['source_commit']})")
+    print(f"  Status:    {result['status']}")
+    if result["commits_behind"] > 0:
+        print(f"  Behind:    {result['commits_behind']} commit(s)")
+    if result["action"]:
+        print(f"  Action:    {result['action']}")
+    print()
+
+    # Exit with error if outdated (for CI)
+    if result["status"] == "OUTDATED":
+        import sys
+        sys.exit(1)
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="verify_workflow",
@@ -2417,6 +2530,9 @@ def main():
     check_p.add_argument("--fail-on-issues", action="store_true",
                          help="Exit with non-zero code if issues found")
 
+    # check-plugin-freshness
+    subparsers.add_parser("check-plugin-freshness", help="Check if installed plugin is up to date with source")
+
     args = parser.parse_args()
 
     commands = {
@@ -2428,6 +2544,7 @@ def main():
         "stage": cmd_stage,
         "stages": cmd_stages,
         "check-governance": cmd_check_governance,
+        "check-plugin-freshness": cmd_check_plugin_freshness,
     }
 
     cmd = args.command or "verify"

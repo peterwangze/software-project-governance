@@ -2,6 +2,41 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.6.3] — 2026-04-28
+
+### 变更
+
+- **VERSIONING.md 重写**：砍掉 alpha/beta/rc 预发布标签——三层 Major.Minor.Patch 本身提供细粒度。Patch 就是最小增量单位。每轮有意义的变更 MUST bump PATCH，不攒着等 Minor。新增"用户如何更新"章节（3 种更新方式 + freshness 检查）。
+- **check-plugin-freshness 子命令**：`python scripts/verify_workflow.py check-plugin-freshness` 对比 installed_plugins.json 的 gitCommitSha 与源仓库 HEAD，输出 installed/source/status/action。
+
+---
+
+## [0.6.2] — 2026-04-28
+
+### 新增
+
+- **版本规划机制**：plan-tracker 新增 `## 版本规划` 节——版本路线图（显式 task ID 映射）+ 版本里程碑（M1~M5）+ V-Gate（6 项检查）+ 版本规划纪律
+- **需求跟踪矩阵**：REQ-001~008 需求→任务→验证全链路可追溯
+- **变更控制流程**：临时任务的 4 步 triage（优先级判定→版本适配→冲突检查→范围更新）
+- **3 个缺失模板**：`pr-faq-template.md`（Amazon PR/FAQ）、`okr-template.md`（Google OKR + ByteDance 基线）、`six-pager-template.md`（Amazon 6-Pager/Narrative）
+
+### 修复
+
+- **AUDIT-051 审计闭环**：16 条企业实践 31% 敷衍率——5 条只有文档无模板无强制力。建立纪律：每条实践 MUST 有模板 + 检查项 + 自动化验证，缺一不可。
+
+---
+
+## [0.6.1] — 2026-04-28
+
+### 新增
+
+- **触发模式 × 操作权限双维度融合**：trigger_mode（何时激活治理）和 permission_mode（能做什么不打断）正交组合——maximum-autonomy（除关键决策外全自动，含 git push/本地命令/文件删除）/ default-confirm（4 类危险操作必须确认）
+- **治理开关**：用户会话中随时说"切换到最高权限模式"等 → 立即切换 + 更新 plan-tracker
+- **governance-init Q4**：交互式选择操作权限模式
+- **interaction-boundary.md 重写**：新增操作权限模式章节，定义 4 类危险操作边界
+
+---
+
 ## [0.6.0] — 2026-04-28
 
 ### 新增

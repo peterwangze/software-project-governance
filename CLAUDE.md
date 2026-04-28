@@ -56,9 +56,10 @@
      - plan-tracker 项目配置是否含 `permission_mode`？否 → 提示新增字段
      - CLAUDE.md bootstrap 是否为旧版英文 stub？是 → 提示升级
    - 输出一句总结：需要手动操作的项和可自动生效的项
-4. **更新 plan-tracker 中的 `工作流版本` 为当前版本**（标记"已采纳到此版本"）
+4. **IF** bootstrap 版本落后（CLAUDE.md 中非最新模板）→ 自动提示：`运行 /governance-update 升级 bootstrap（不触碰 .governance/ 数据）`
+5. 更新 plan-tracker 中的 `工作流版本` 为当前版本
 
-**用户不需要记住任何命令——每次会话开始自动执行。**
+**用户不需要记住任何命令——每次会话开始自动执行。老用户用 /governance-update 升级。**
 
 ### Step 2: 交叉验证（3 项强制检查）
 对照 `.governance/plan-tracker.md` 和 `.governance/evidence-log.md`：

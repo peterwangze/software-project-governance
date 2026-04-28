@@ -12,6 +12,7 @@
 | TOOL-004 | 发布 checklist | checklist | `stages/release/release-checklist.md` | 版本发布前做最终检查时 | 版本发布（release） | 是 |
 | TOOL-005 | 回顾会议模板 | template | `stages/maintenance/retro-meeting-template.md` | 阶段结束或项目复盘时 | 维护（maintenance） | 是 |
 | TOOL-006 | 校验脚本 | script | `scripts/verify_workflow.py` | 验证工作流资产完整性时 | 全部阶段 | 是 |
+| TOOL-007 | governance-update 命令 | command | `commands/governance-update.md` | 更新 CLAUDE.md bootstrap 到最新版本（不触碰 .governance/） | 维护（maintenance） | 是 |
 
 ## 工具详情
 

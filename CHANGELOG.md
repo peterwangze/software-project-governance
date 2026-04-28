@@ -2,6 +2,14 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.6.7] — 2026-04-29
+
+### 新增
+
+- **governance-update 命令**：老用户升级路径的核心——`/plugin update` 获取新版本后运行此命令，将 CLAUDE.md 的 bootstrap 段更新到最新。**不触碰 .governance/ 数据**——只替换 bootstrap 模板段，保留用户的项目配置和治理记录。bootstrap 版本变化检测自动提示用户运行此命令。
+
+---
+
 ## [0.6.6] — 2026-04-28
 
 ### 新增

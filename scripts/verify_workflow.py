@@ -42,6 +42,7 @@ REQUIRED_FILES = {
     "Governance Status Command": ROOT / "commands/governance-status.md",
     "Governance Gate Command": ROOT / "commands/governance-gate.md",
     "Governance Verify Command": ROOT / "commands/governance-verify.md",
+    "Governance Update Command": ROOT / "commands/governance-update.md",
     "Codex Skill": ROOT / "skills/software-project-governance/SKILL.md",
     "Skill Stages Initiation Sub-workflow": ROOT / "skills/software-project-governance/stages/initiation/sub-workflow.md",
     "Skill Stages Research Sub-workflow": ROOT / "skills/software-project-governance/stages/research/sub-workflow.md",
@@ -409,6 +410,14 @@ REQUIRED_SNIPPETS = {
         "## Self-Validation",
         "VERIFY-ERR-001",
     ],
+    ROOT / "commands/governance-update.md": [
+        "## Input Parameters",
+        "## Execution Flow",
+        "## Output Format",
+        "## Error Codes",
+        "## Self-Validation",
+        "UPDATE-ERR-001",
+    ],
     ROOT / "adapters/claude/README.md": [
         "已废弃（Deprecated）",
         "历史入口约定（已废弃，仅供参考）",
@@ -526,20 +535,20 @@ REQUIRED_SNIPPETS = {
     ],
     ROOT / "CHANGELOG.md": [
         "# Changelog",
-        "## [0.6.6]",
+        "## [0.6.7]",
         "## [0.5.0]",
     ],
     ROOT / ".claude-plugin/plugin.json": [
-        "0.6.6",
+        "0.6.7",
     ],
     ROOT / ".claude-plugin/marketplace.json": [
-        "0.6.6",
+        "0.6.7",
     ],
     ROOT / ".codex-plugin/plugin.json": [
-        "0.6.6",
+        "0.6.7",
     ],
     ROOT / "workflows/software-project-governance/manifest.md": [
-        "0.6.6",
+        "0.6.7",
     ],
 }
 

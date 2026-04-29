@@ -80,7 +80,7 @@
 任一检查失败 → 列出差距 → 征求用户是否立即修复（AskUserQuestion）。
 
 ### Step 3: 阶段跳跃防护（MANDATORY）
-**IF** 用户请求直接进入开发/测试/发布等后期阶段，但当前 Gate 状态显示前置 Gate 均为 pending → **MUST** 警告用户跳过前置阶段的风险（没有明确目标就开始编码的返工风险 / 没有架构设计导致后续重构成本高 / 缺少 Gate 检查的证据记录）。**这不是阻止用户前进——是确保用户知悉风险。** 用户可以选择继续跳过，但决策必须记录到 decision-log。
+**IF** 用户请求直接进入开发/测试/发布等后期阶段，但当前 Gate 状态显示前置 Gate 均为 pending → **MUST** 通过 AskUserQuestion 警告用户（M5.1 禁止内联文字警告）："当前项目处于 {current_stage} 阶段（Gate {n} pending）。你确定要跳过 {n-1} 个前置阶段直接进入 {requested_stage}？这可能导致返工和架构重构。" 选项：(1) "继续跳过——我已知悉风险" (2) "先完成当前 Gate 检查"。**用户选择跳过后 MUST 记录到 decision-log。**
 
 ### Step 4: 优先级确认
 如果 plan-tracker 中有 passed-with-conditions 遗留项或有进行中的 P0 任务 → 优先处理。上一 session 未完成的 P0 任务 → 继续执行（从 session-snapshot.md 中识别）。

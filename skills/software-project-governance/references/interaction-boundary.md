@@ -39,9 +39,9 @@ agent 给出框架或选项，用户填充关键信息。
 | 非功能需求 | "性能要求是什么级别" | AskUserQuestion 选项选择 |
 | 用户画像 | "目标用户是谁" | AskUserQuestion 开放输入 |
 
-### 类型 C：需用户确认（中断一次）
+### 类型 C：需用户确认（中断一次——MUST 使用 AskUserQuestion）
 
-agent 完成工作后提交用户审核。
+agent 完成工作后提交用户审核。**MUST use AskUserQuestion** — 内联文字"请确认"是 M5.1 违规。
 
 | 活动类型 | 示例 | 交互方式 |
 |---------|------|---------|
@@ -49,6 +49,9 @@ agent 完成工作后提交用户审核。
 | 技术选型 | "推荐方案 A，原因如下，确认" | AskUserQuestion 确认 |
 | 评审结论 | "评审结果：有条件通过，遗留项如下" | AskUserQuestion 确认 |
 | 发布决策 | "发布计划已就绪，确认发布" | AskUserQuestion 确认 |
+| 风险评估 | "检测到 X 风险过期，选择处理方式" | AskUserQuestion 选项：修复/记录例外/延期 |
+| 审计发现 | "审计发现 N 项违规，选择处置方式" | AskUserQuestion 选项：立即修复/创建任务/接受风险 |
+| 阶段推进 | "Gate X 已通过，确认进入下一阶段" | AskUserQuestion 确认 |
 
 ## 按阶段的交互密度
 

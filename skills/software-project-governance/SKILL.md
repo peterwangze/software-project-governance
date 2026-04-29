@@ -10,7 +10,7 @@ description: Load unified workflow rules, templates, gates and fact sources for 
 ## Workflow Identity
 
 - **id**: software-project-governance
-- **version**: 0.6.11
+- **version**: 0.6.12
 - **goal**: Automate project process management so users focus on thinking, not process
 - **supported_agents**: Claude, Codex, Gemini
 - **core capabilities**: 11-stage lifecycle, 11 Gate checks, evidence/decision/risk tracking, 3 trigger modes, 3 profiles
@@ -201,6 +201,8 @@ Rationale: Inline text doesn't enforce structured options, doesn't prevent the a
 | Risk treatment decision | "Accept / Mitigate / Transfer / Avoid" |
 | Tech selection conclusion | "Confirm option X or Y" with recommendation reason |
 | Critical decision point | Per M5.3 classification — stop and ask |
+| Risk escalation triggered | "Fix / Record exception / Defer" — when check-governance detects stale risk or passed escalation deadline |
+| Audit finding (Block/Deviation) | "Fix now / Schedule as task / Accept risk" — when audit discovers blocking or deviation-level findings |
 | Commit/push decision | "Commit now or continue?" at natural boundaries |
 
 ### M5.3 Critical Decision Classification

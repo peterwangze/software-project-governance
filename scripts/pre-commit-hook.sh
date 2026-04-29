@@ -74,9 +74,30 @@ if [ -f "$REPO_ROOT/.governance/evidence-log.md" ]; then
     if ! grep -qE "$TASK_ID" "$REPO_ROOT/.governance/evidence-log.md" 2>/dev/null; then
         echo ""
         echo "⚠️  GOVERNANCE: Task '$TASK_ID' has no evidence yet."
-        echo "   Commit allowed, but MUST add evidence to .governance/evidence-log.md"
-        echo "   in the same session. post-commit hook will remind you."
+        echo "   Commit allowed, but MUST add evidence this session."
         echo ""
+    fi
+fi
+
+# --- Step 4.5: Task-to-task evidence chain (跨任务防护) ---
+# When starting a NEW task, verify previous task's evidence is complete
+if [ -f "$REPO_ROOT/.governance/evidence-log.md" ] && [ -f "$REPO_ROOT/.governance/plan-tracker.md" ]; then
+    PREV_TASK=$(git log -1 --format=%s 2>/dev/null | grep -oE '^[A-Z]+-[0-9]+' || true)
+    if [ -n "$PREV_TASK" ] && [ "$PREV_TASK" != "$TASK_ID" ]; then
+        # This is a different task from the last commit — check if previous is clean
+        if ! grep -qE "$PREV_TASK" "$REPO_ROOT/.governance/evidence-log.md" 2>/dev/null; then
+            echo ""
+            echo "╔══════════════════════════════════════════════════════════════╗"
+            echo "║  M7.4 DEBT: Previous task '$PREV_TASK' has NO evidence.    ║"
+            echo "║                                                            ║"
+            echo "║  You are starting '$TASK_ID' while '$PREV_TASK' is          ║"
+            echo "║  incomplete. Each task MUST be fully closed before moving   ║"
+            echo "║  to the next. Evidence → check-governance → audit.          ║"
+            echo "║                                                            ║"
+            echo "║  Commit allowed, but MUST fix '$PREV_TASK' evidence first.  ║"
+            echo "╚══════════════════════════════════════════════════════════════╝"
+            echo ""
+        fi
     fi
 fi
 

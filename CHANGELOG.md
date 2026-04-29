@@ -2,6 +2,28 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.7.0] — 2026-04-29
+
+### 0.7.0 正式发布——外部验证 + 企业实践 + 交互覆盖闭环
+
+0.7.0 完成 12 个任务（3 P0 + 4 P1 + 5 P2）：
+- AUDIT-003(P0): E2E 外部验证——e2e-test-project 全链路走通
+- FIX-013(P1): M5 AskUserQuestion 交互覆盖审计——3 缺口修复
+- FIX-014(P0): 任务级防护——跨任务 evidence 链 + 用户插入先入账
+- AUDIT-034(P2): 蓝军单 agent 结构化协议
+- AUDIT-036(P2): 现代发布实践——金丝雀/feature flag/kill switch
+- AUDIT-038(P2): 子工作流目标锚定自包含化 + 降级行为
+- AUDIT-004/006/023(P1): governance-init/命令/可用性端到端验证
+- MAINT-013/014(P1): 数据边界说明 + Agent 入口差异文档
+- MAINT-023(P1): Gemini/国内 agent CLI 最小验证路径
+- AUDIT-003 闭环(P0): E2E 验证完成
+
+### 新增
+- data-boundary.md + agent-entry-differences.md 参考文档
+- prepare-commit-msg hook（Windows git bash 桥接）
+
+---
+
 ## [0.6.15] — 2026-04-29
 
 ### 新增

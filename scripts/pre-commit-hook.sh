@@ -20,7 +20,11 @@ COMMIT_MSG=""
 if [ -n "$1" ] && [ -f "$1" ]; then
     COMMIT_MSG=$(cat "$1" 2>/dev/null)
 fi
-# Source 2: git's commit message file (works for some git versions)
+# Source 2: prepare-commit-msg bridge (cross-platform workaround)
+if [ -z "$COMMIT_MSG" ] && [ -f "$REPO_ROOT/.git/GOV_COMMIT_MSG" ]; then
+    COMMIT_MSG=$(cat "$REPO_ROOT/.git/GOV_COMMIT_MSG" 2>/dev/null)
+fi
+# Source 3: git's commit message file (fallback)
 if [ -z "$COMMIT_MSG" ] && [ -f "$REPO_ROOT/.git/COMMIT_EDITMSG" ]; then
     COMMIT_MSG=$(cat "$REPO_ROOT/.git/COMMIT_EDITMSG" 2>/dev/null)
 fi

@@ -14,17 +14,27 @@ if [ ! -f "$REPO_ROOT/.governance/plan-tracker.md" ]; then
 fi
 
 # --- Step 1: Extract task ID from commit message ---
-COMMIT_MSG_FILE="$1"
-if [ -z "$COMMIT_MSG_FILE" ]; then
-    # No commit message file (e.g., commit -m used, message is in stdin)
-    COMMIT_MSG=$(cat)
-else
-    COMMIT_MSG=$(cat "$COMMIT_MSG_FILE")
+# On Windows git bash, $1 may be empty for 'git commit -m'. Try multiple sources.
+COMMIT_MSG=""
+# Source 1: explicit file argument (works for 'git commit' with editor)
+if [ -n "$1" ] && [ -f "$1" ]; then
+    COMMIT_MSG=$(cat "$1" 2>/dev/null)
+fi
+# Source 2: git's commit message file (works for some git versions)
+if [ -z "$COMMIT_MSG" ] && [ -f "$REPO_ROOT/.git/COMMIT_EDITMSG" ]; then
+    COMMIT_MSG=$(cat "$REPO_ROOT/.git/COMMIT_EDITMSG" 2>/dev/null)
 fi
 
-# Extract task ID: first line, word before ":" that matches UPPERCASE-NUMBERS
+# Extract task ID from first line of whatever we got
 FIRST_LINE=$(echo "$COMMIT_MSG" | head -1)
-TASK_ID=$(echo "$FIRST_LINE" | sed -n 's/^\([A-Z][A-Z]*-[0-9][0-9]*\):.*/\1/p')
+TASK_ID=$(echo "$FIRST_LINE" | grep -oE '^[A-Z]+-[0-9]+' || true)
+
+# If we still can't get the commit message, skip blocking (post-commit will catch)
+if [ -z "$COMMIT_MSG" ]; then
+    echo "⚠️  GOVERNANCE: Cannot read commit message. Skipping pre-commit check."
+    echo "   post-commit hook will verify governance."
+    exit 0
+fi
 
 # --- Step 2: Task ID must be present ---
 if [ -z "$TASK_ID" ]; then

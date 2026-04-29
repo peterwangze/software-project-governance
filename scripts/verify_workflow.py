@@ -535,20 +535,20 @@ REQUIRED_SNIPPETS = {
     ],
     ROOT / "CHANGELOG.md": [
         "# Changelog",
-        "## [0.6.12]",
+        "## [0.6.13]",
         "## [0.5.0]",
     ],
     ROOT / ".claude-plugin/plugin.json": [
-        "0.6.12",
+        "0.6.13",
     ],
     ROOT / ".claude-plugin/marketplace.json": [
-        "0.6.12",
+        "0.6.13",
     ],
     ROOT / ".codex-plugin/plugin.json": [
-        "0.6.12",
+        "0.6.13",
     ],
     ROOT / "workflows/software-project-governance/manifest.md": [
-        "0.6.12",
+        "0.6.13",
     ],
 }
 
@@ -2501,6 +2501,68 @@ def cmd_check_plugin_freshness(_args):
         sys.exit(1)
 
 
+def cmd_e2e_check(_args):
+    """Run E2E governance verification against the e2e-test-project."""
+    e2e_dir = ROOT / "e2e-test-project"
+    if not e2e_dir.exists():
+        print("[SKIPPED] e2e-test-project/ not found")
+        return
+
+    passed, failed = 0, 0
+    def check(condition, msg):
+        nonlocal passed, failed
+        if condition:
+            print(f"  [PASS] {msg}")
+            passed += 1
+        else:
+            print(f"  [FAIL] {msg}")
+            failed += 1
+
+    print("=== E2E Governance Verification ===")
+    print(f"Target: {e2e_dir}\n")
+
+    # Category A: Project structure
+    print("--- Category A: Project structure ---")
+    check((e2e_dir / "CLAUDE.md").exists(), "CLAUDE.md exists")
+    check((e2e_dir / ".governance").is_dir(), ".governance/ exists")
+    check((e2e_dir / ".governance/plan-tracker.md").exists(), "plan-tracker.md exists")
+    check((e2e_dir / ".governance/evidence-log.md").exists(), "evidence-log.md exists")
+    check((e2e_dir / ".governance/decision-log.md").exists(), "decision-log.md exists")
+    check((e2e_dir / ".governance/risk-log.md").exists(), "risk-log.md exists")
+
+    # Category B: Bootstrap content
+    print("\n--- Category B: Bootstrap content ---")
+    claude_md = e2e_dir / "CLAUDE.md"
+    if claude_md.exists():
+        content = claude_md.read_text(encoding="utf-8")
+        check("SELF-CHECK" in content, "Bootstrap: SELF-CHECK present")
+        check("Governance Bootstrap" in content, "Bootstrap: section present")
+        check("AskUserQuestion" in content, "Bootstrap: AskUserQuestion rule")
+        check("阶段跳跃防护" in content, "Bootstrap: stage jump protection")
+        check("收工前检查" in content, "Bootstrap: session end checklist")
+        check("版本变化自动检测" in content, "Bootstrap: version change detection")
+
+    # Category C: Plan-tracker completeness
+    print("\n--- Category C: Plan-tracker completeness ---")
+    pt = e2e_dir / ".governance/plan-tracker.md"
+    if pt.exists():
+        content = pt.read_text(encoding="utf-8")
+        check("## 版本规划" in content, "Plan-tracker: version planning")
+        check("## 需求跟踪矩阵" in content, "Plan-tracker: requirement traceability")
+        check("## 变更控制" in content, "Plan-tracker: change control")
+        check("快速通道" in content, "Plan-tracker: fast track defined")
+        check("项目配置" in content, "Plan-tracker: project config")
+        check("工作流版本" in content, "Plan-tracker: workflow version field")
+        check("操作权限模式" in content, "Plan-tracker: permission mode field")
+
+    print(f"\n=== Result: {passed} passed, {failed} failed ===")
+    if failed > 0:
+        print("ACTION: Fix failures above. These represent real user-facing gaps.")
+        import sys
+        sys.exit(1)
+    print("All E2E checks passed. User experience intact.")
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="verify_workflow",
@@ -2542,6 +2604,9 @@ def main():
     # check-plugin-freshness
     subparsers.add_parser("check-plugin-freshness", help="Check if installed plugin is up to date with source")
 
+    # e2e-check
+    subparsers.add_parser("e2e-check", help="Run E2E governance verification against e2e-test-project")
+
     args = parser.parse_args()
 
     commands = {
@@ -2554,6 +2619,7 @@ def main():
         "stages": cmd_stages,
         "check-governance": cmd_check_governance,
         "check-plugin-freshness": cmd_check_plugin_freshness,
+        "e2e-check": cmd_e2e_check,
     }
 
     cmd = args.command or "verify"

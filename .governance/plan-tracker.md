@@ -40,7 +40,7 @@
 
 | 项目 | 当前阶段 | 总任务数 | 已完成 | 阻塞中 | 关键风险数 | 最近 Gate 结论 | 最近复盘日期 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 项目管理工作流插件 | 维护（并行活跃：规划） | 117 | 98 | 0 | 2 | G11 通过 | 2026-04-29 |
+| 项目管理工作流插件 | 维护（并行活跃：规划） | 118 | 98 | 0 | 2 | G11 通过 | 2026-04-29 |
 
 ## 实施路线图（DEC-052）
 
@@ -214,7 +214,7 @@ Tier 3-C: 兼容与政策（4 tasks, ~2 sessions，可并行）
 | **0.6.0** | **已发布** | **2026-04-28** | **用户体验断层闭环 + 内容深度** | **AUDIT-021,024,029,017,032,033,010,018,047 + FIX-001~005 + DIAG-001** | **bootstrap升级, session-snapshot, 触发模式×权限模式双维度, 交互式init, 7子工作流深度, BarRaiser否决权, A/B测试, CI集成, Profile差异化, 版本规划, 需求跟踪, 变更控制, 里程碑, PR/FAQ/OKR/6-Pager模板** |
 | 0.6.10 | 已发布 | 2026-04-29 | 系统级约束架构——pre-commit hook（阻断型） | CONSTRAINT-001 | pre-commit-hook.sh, governance-init Step 8 双 hook 安装, Hook 存活检测升级, 版本 0.6.9→0.6.10 |
 | 0.6.11 | 已发布 | 2026-04-29 | 版本规划纪律强化——8 条纪律 + 违规案例 + failure mode 9 | CONSTRAINT-001 | plan-tracker 版本规划纪律重写, VERSIONING.md 版本规划纪律, agent-failure-modes 失败模式 9, 版本 0.6.10→0.6.11 |
-| **0.7.0** | **规划中** | **2026-05-04** | **外部验证 + 剩余企业实践 + P0/P1 清零（10 个任务）** | **AUDIT-003(P0), AUDIT-004(P1), AUDIT-006(P1), AUDIT-023(P1), MAINT-013(P1), MAINT-014(P1), MAINT-023(P1) + AUDIT-034(P2), AUDIT-036(P2), AUDIT-038(P2)** | **外部项目验证报告, governance-init/命令端到端验证, 蓝军单agent适配, 现代发布实践, 用户数据边界/agent入口差异文档, Gemini最小验证, 目标锚定强制机制** |
+| **0.7.0** | **规划中** | **2026-05-04** | **外部验证 + 企业实践 + 交互覆盖闭环（11 个任务）** | **AUDIT-003(P0), AUDIT-004(P1), AUDIT-006(P1), AUDIT-023(P1), MAINT-013(P1), MAINT-014(P1), MAINT-023(P1), FIX-013(P1) + AUDIT-034(P2), AUDIT-036(P2), AUDIT-038(P2)** | **外部项目验证报告, governance-init/命令端到端验证, 蓝军单agent适配, 现代发布实践, 用户数据边界/agent入口差异文档, Gemini最小验证, 目标锚定强制机制** |
 | **0.8.0** | **规划中** | **2026-05-18** | **自动化升级 + 体验增强（12 个 P2）** | **AUDIT-008(P2), AUDIT-009(P2), AUDIT-012(P2), AUDIT-013(P2), AUDIT-014(P2), AUDIT-019(P2), AUDIT-020(P2), AUDIT-037(P2), AUDIT-042(P2), AUDIT-049(P2), AUDIT-050(P2), AUDIT-025(P2)** | **README措辞修正, 中途接入验证, headless runner可执行版, MCP server, git hook, verify通用化, Profile YAML解析, 向后兼容政策, 插件新鲜度检测, D5审计, M8行为层检测, skill质量均衡** |
 | **1.0.0** | **规划中** | **2026-06-01** | **首次正式发布——全部 P0/P1/P2 关闭** | **所有剩余任务 + 发布前审计** | **外部验证报告 + 全部 P0/P1/P2 关闭 + 用户文档完整 + 首次正式语义化版本** |
 
@@ -549,6 +549,7 @@ Step 4: 下一 Gate 检查时正式审计
 | FIX-007 | 维护 | 细粒度版本控制——Patch即细粒度+check-plugin-freshness+更新指引 | 用户反馈 (2026-04-28) | VERSIONING.md 重写 + check-plugin-freshness 子命令 + CHANGELOG | Claude | 项目负责人 | 项目负责人 | 已完成 | P0 | 2026-04-28 | 2026-04-28 | 2026-04-28 | G11 | Patch bump 纪律 + freshness 可用 | EVD-122 | — | — | — |
 | FIX-008 | 维护 | post-commit governance hook——消除任务间治理盲区 | 5-Why 根因分析 (2026-04-28) | post-commit-hook.sh + governance-init Step 8 + CLAUDE.md hook 存活检测 + RISK-024 | Claude | 项目负责人 | 项目负责人 | 已完成 | P0 | 2026-04-28 | 2026-04-28 | 2026-04-28 | G11 | hook 首次 commit 即检测到自身 gap | EVD-122 | 端点强制模型 vs 流式执行行为的结构性不匹配 | — | — |
 | CONSTRAINT-001 | 维护 | 系统级约束架构——设计假设从"agent会遵守"翻转为"agent一定不自觉" | 本会话全部违规模式分析 | pre-commit-hook（阻断型）+ post-commit-hook（报告型）双重屏障 + governance-init Step 8 双 hook 安装 + bootstrap Hook 存活检测升级 | Claude | 项目负责人 | 项目负责人 | 已完成 | P0 | 2026-04-29 | 2026-04-29 | 2026-04-29 | G11 | pre-commit 阻断无 task ID / task 不在 plan-tracker 的 commit | EVD-124 | agent 反复违反自设规则——自执行约束不可信 | 所有新规则 MUST 优先设计系统级强制执行方案 | P0——最高优先级 |
+| FIX-013 | 维护 | M5 AskUserQuestion 交互覆盖审计——修复 3 个缺口（risk escalation触发+deliverable review强制+阶段跳跃AskUserQuestion格式） | 用户反馈 (2026-04-29)——agent 反复使用内联文字而非 AskUserQuestion | interaction-boundary.md 升级 + SKILL.md M5.2 触发机制补全 + risk-log escalation AskUserQuestion 触发 | Claude | 项目负责人 | 项目负责人 | 进行中 | P1 | 2026-04-29 | 2026-04-29 | | G11 | 3 个缺口修复 + M5.2 8 个触发点全部有对应落地机制 | 待补 | M5 规则存在但 agent 反复违规——规则无强制力 | 纳入 0.7.0（用户反馈驱动 P1） | — |
 | FIX-012 | 维护 | 变更控制新增快速通道——顺应紧急修复节奏，不强推全 ceremony | EVD-123审计发现（先执行后入账违规） | plan-tracker 变更控制节新增快速通道（最小入账→立即执行→事后补齐→Gate审计） | Claude | 项目负责人 | 项目负责人 | 已完成 | P0 | 2026-04-29 | 2026-04-29 | 2026-04-29 | G11 | 快速通道定义 + 判断标准 + post-commit hook 安全网 | EVD-123 | 工作流强制全ceremony在对抗自然的修复节奏 | 本 commit 自身就是快速通道的首次实践——先执行后入账，hook 抓到后补记录 | — |
 | FIX-011 | 维护 | bootstrap 自升级——agent 检测到版本落后自动更新 CLAUDE.md bootstrap 段 | 用户反馈 (2026-04-29) | CLAUDE.md Step 1 自升级逻辑 + governance-init 模板同步 + governance-update 降级为回退 | Claude | 项目负责人 | 项目负责人 | 已完成 | P0 | 2026-04-29 | 2026-04-29 | 2026-04-29 | G11 | 用户 /plugin update → 下次会话 → bootstrap 自动替换为最新，零行动 | EVD-122 | 之前假设用户会主动运行命令——真实用户不会 | — | — |
 | FIX-010 | 维护 | governance-update——老用户升级路径（只更新 bootstrap，不动 .governance/） | 用户反馈 (2026-04-28) | governance-update.md 命令 + verify_workflow.py snippet + TOOLS.md + bootstrap 版本检测提示 | Claude | 项目负责人 | 项目负责人 | 已完成 | P0 | 2026-04-29 | 2026-04-29 | 2026-04-29 | G11 | 老用户 /plugin update 后运行此命令，bootstrap 段升级到最新，不动治理数据 | EVD-122 | 老用户 CLAUDE.md 是 init 时注入的旧版，升级后不会自动更新 | — | — |

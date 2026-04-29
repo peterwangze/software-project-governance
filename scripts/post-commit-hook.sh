@@ -27,8 +27,16 @@ else
             echo ""
         else
             echo ""
-            echo "⚠️  GOVERNANCE: Commit '$TASK_ID' has NO evidence entry yet."
-            echo "   Action: Add evidence to .governance/evidence-log.md"
+            echo "╔══════════════════════════════════════════════════════════════╗"
+            echo "║  M7.4 VIOLATION: Commit '$TASK_ID' has NO evidence.         ║"
+            echo "║                                                            ║"
+            echo "║  Task Completion Protocol: evidence → check-governance      ║"
+            echo "║  → audit → commit → continue. You committed without         ║"
+            echo "║  evidence. This is the most common M7.4 failure pattern.    ║"
+            echo "║                                                            ║"
+            echo "║  Action: Add evidence NOW (before next commit).             ║"
+            echo "║  DO NOT start another task until evidence is logged.        ║"
+            echo "╚══════════════════════════════════════════════════════════════╝"
             echo ""
         fi
     fi

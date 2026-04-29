@@ -2,6 +2,15 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.6.12] — 2026-04-29
+
+### 修复
+
+- **M5 AskUserQuestion 交互覆盖审计**：修复 3 个缺口——SKILL.md M5.2 新增 risk escalation/audit finding 触发点；interaction-boundary.md 类型 C 新增风险评估/审计发现/阶段推进，强制 AskUserQuestion 格式；bootstrap Step 3 升级为 AskUserQuestion 选项。
+- **post-commit hook M7.4 违规标记强化**：evidence 缺失时输出带框 M7.4 VIOLATION 警告——"DO NOT start another task until evidence is logged"。
+
+---
+
 ## [0.6.11] — 2026-04-29
 
 ### 修复

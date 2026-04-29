@@ -126,6 +126,10 @@
 
 | EVD-127 | AUDIT-034, AUDIT-036, AUDIT-038 | 维护 | 文档 | 0.7.0 P2 批量完成：(1) AUDIT-034 蓝军单agent——tech-review-checklist 蓝军章节升级，视角切换三序列+标准蓝军输出格式(攻击向量/影响/缓解/残余/建议)；(2) AUDIT-036 现代发布——release 子工作流新增发布策略选择(5种+选型规则)+Feature Flag管理+Kill Switch验证(触发条件/可执行/负责人)；(3) AUDIT-038 锚定自包含——development+release 锚定节升级为自包含(含具体文件路径和学习目标)+降级行为(.governance/不存在时告知但不阻塞)。版本 0.6.14→0.6.15 | `tech-review-checklist.md`, `release/sub-workflow.md`, `development/sub-workflow.md` | Claude | 2026-04-29 | G11 | 0.7.0 从 12/12 任务中完成 5/12（3P2+2P1），剩余 7 个 P1 未开始 |
 
+| EVD-130 | TIER-0-D-AUDIT, TIER-1-B-AUDIT, TIER-2-B-AUDIT | 维护 | 审计报告 | 批量补齐历史 Tier 审计——(1) Tier 0-D（跨会话记忆/触发模式/Profile 差异化）：3/3 任务完成，D1/D3/D4 验证通过；(2) Tier 1-B（governance-init 验证/命令验证/可用性验证）：3/3 任务完成，基于 e2e-test-project 验证；(3) Tier 2-B（BarRaiser 否决权/A/B 测试/蓝军单agent/现代发布实践）：4/4 任务完成，企业实践机制落地。所有证据链完整，verify_workflow.py PASSED | — | Claude | 2026-04-29 | G11 | 0.7.0 里程碑——Tier 审计历史欠账清零 |
+
+| EVD-129 | AUDIT-014, AUDIT-042 | 维护 | 机制 | 状态同步补证据——(1) AUDIT-014 git hook 治理触发：CONSTRAINT-001 已实现 pre-commit+post-commit 双 hook 机制，超出原 P2 信息提示范围，升级为 B 级阻断；(2) AUDIT-042 check-plugin-freshness：FIX-007 已实现 freshness 子命令。两个 P2 任务均被更早的 P0 工作提前覆盖 | — | Claude | 2026-04-29 | G11 | 计划外提前交付——原排 0.8.0，被 CONSTRAINT-001 + FIX-007 覆盖 |
+
 | EVD-126 | FIX-014 | 维护 | 脚本+文档 | 任务级防护——消灭任务间盲区：(1) pre-commit hook Step 4.5 跨任务 evidence chain——检测到切换 task 时自动检查前序 task 是否有 evidence，未补齐 → M7.4 DEBT 警告；(2) governance-init 干活前检查从 3 件事升级为 5 件事——新增任务入账检查（用户临时插入也需先入账）+ 跨任务检查（先补齐上任务证据再开新任务）。版本 0.6.13→0.6.14 | `scripts/pre-commit-hook.sh`, `commands/governance-init.md` | Claude | 2026-04-29 | G11 | 任务间盲区——上一个 task 证据未补齐就开始下一个——是 M7.4 反复被跳过的根因 |
 
 | EVD-125 | AUDIT-003 | 维护 | 脚本 | E2E 防护网——verify-e2e.sh（23 项 shell 检查）+ verify_workflow.py e2e-check 子命令（19 项 Python 检查），覆盖 A.项目结构（6）/B.Bootstrap 内容（6）/C.Plan-tracker 完整性（7）/D.Hook 存活。e2e-test-project/ 固化为仓库永久验收基准。`python scripts/verify_workflow.py e2e-check` → 19/19 PASSED。CI ready。版本 0.6.12→0.6.13 | `scripts/verify-e2e.sh`, `scripts/verify_workflow.py`, `e2e-test-project/` | Claude | 2026-04-29 | G11 | E2E 测试从临时目录迁移到仓库内——后续每个变更 MUST 在此项目中验证 |

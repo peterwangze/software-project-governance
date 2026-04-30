@@ -10,7 +10,7 @@ description: Load unified workflow rules, templates, gates and fact sources for 
 ## Workflow Identity
 
 - **id**: software-project-governance
-- **version**: 0.9.0
+- **version**: 0.10.0
 - **goal**: Automate project process management so users focus on thinking, not process
 - **supported_agents**: Claude, Codex, Gemini
 - **core capabilities**: 11-stage lifecycle, 11 Gate checks, evidence/decision/risk tracking, 3 trigger modes, 3 profiles
@@ -77,14 +77,19 @@ If the user wants to use only a single feature (e.g., "help me with code review"
 
 ### M2.2b Agent Team — Prompt Templates (in `agents/`, same directory as this SKILL.md)
 
-When using the Agent Team architecture (0.9.0+), the Coordinator acts as the team lead. Role agents are spawned via the `Agent` tool using these prompt templates. Each template follows the superpowers subagent-driven-development pattern.
+When using the Agent Team architecture (0.10.0+), the Coordinator acts as the team lead. Role agents are spawned via the `Agent` tool using these prompt templates. Each template follows the superpowers subagent-driven-development pattern.
 
 | Template | File | Role | Format |
 |----------|------|------|--------|
 | `coordinator` | `agents/coordinator.md` | Team lead skill — the main agent reads this | Agent SKILL (frontmatter + role definition) |
-| `developer` | `agents/developer.md` | Prompt template for spawning Developer sub-agents | Agent() prompt template with {placeholders} |
-| `reviewer` | `agents/reviewer.md` | Prompt template for spawning Reviewer sub-agents | Agent() prompt template with {placeholders} |
-| `architect` | `agents/architect.md` | Prompt template for spawning Architect sub-agents | Agent() prompt template with {placeholders} |
+| `developer` | `agents/developer.md` | Prompt template for spawning Developer sub-agents | Agent() prompt template |
+| `reviewer` | `agents/reviewer.md` | Prompt template for spawning Reviewer sub-agents | Agent() prompt template |
+| `architect` | `agents/architect.md` | Prompt template for spawning Architect sub-agents | Agent() prompt template |
+| `qa` | `agents/qa.md` | Prompt template for spawning QA sub-agents | Agent() prompt template |
+| `devops` | `agents/devops.md` | Prompt template for spawning DevOps sub-agents | Agent() prompt template |
+| `analyst` | `agents/analyst.md` | Prompt template for spawning Analyst sub-agents | Agent() prompt template |
+| `release` | `agents/release.md` | Prompt template for spawning Release sub-agents | Agent() prompt template |
+| `maintenance` | `agents/maintenance.md` | Prompt template for spawning Maintenance sub-agents | Agent() prompt template |
 
 **Usage**: The Coordinator reads the appropriate template, fills in `{placeholders}` (TASK_ID, TASK_NAME, file paths, acceptance criteria), and calls `Agent(subagent_type="general-purpose", prompt="[filled template]")`.
 

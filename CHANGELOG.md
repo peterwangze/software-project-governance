@@ -2,28 +2,29 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.10.0] — 2026-05-01
+
+### 0.10.0 正式发布——全 8 角色 Agent Team
+
+0.10.0 补齐全部 8 个角色 Agent：
+- AUDIT-063(P1): QA Agent——测试者(阿测),边界case+集成/性能/安全测试,CEO打脸教训
+- AUDIT-064(P1): DevOps Agent——运维者(老管),Pipeline+环境一致性+监控告警,凌晨3点教训
+- AUDIT-065(P1): Analyst Agent——分析者(阿析),需求澄清+竞品分析+PR/FAQ+OKR,87%教训
+- AUDIT-066(P1): Release Agent——发布者(老发),发布检查+版本规划+回滚方案,周五下午教训
+- AUDIT-067(P2): Maintenance Agent——维护者(老维),5-Why根因+同类扫查+预防机制,47次教训
+- SKILL.md M2.2b 更新——全 8 角色 Agent Team 路由表
+
+### 新增
+- `agents/qa.md`, `agents/devops.md`, `agents/analyst.md`, `agents/release.md`, `agents/maintenance.md`
+- 每个 Agent 含 persona(人物+教训)+座右铭+擅长+痛恨+职责+输入输出
+
 ## [0.9.0] — 2026-05-01
 
 ### 0.9.0 正式发布——Agent Team 基础架构
 
 0.9.0 完成 Agent Team 最小可行架构——Coordinator + 3 核心角色 + 通信协议：
-- AUDIT-053(P0): Coordinator Agent——统筹者(老周),用户交互+任务分解+Agent路由+治理看护
-- AUDIT-054(P0): Developer Agent——实现者(阿速),TDD编码+自动化门禁,不审查自己代码
-- AUDIT-055(P0): Reviewer Agent——审查者(老严),逐行审查+AI专项检查+安全检查,不修改代码
-- AUDIT-056(P0): Architect Agent——设计者(老顾),技术选型+系统设计+ADR+技术评审
-- AUDIT-057(P0): Task-Gate 模型——plan-tracker 支持 workflow_model 双模式
-- AUDIT-058(P0): Agent 通信协议——Coordinator↔Role Agent I/O 契约
-
-### 新增
-- `skills/software-project-governance/agents/`——4 角色 Agent skill 文件(writing-workflow 格式)
-- `references/task-gate-model.md`——Task-Gate vs Phase-Gate 对比+plan-tracker 变更
-- `references/agent-communication-protocol.md`——Agent 间 I/O 契约+错误处理
-- SKILL.md M2.2b——Agent Team prompt templates 使用说明
-
-### 架构原则
-- **Producer-Reviewer 分离**: Developer 不审查自己代码,Reviewer 不修改代码
-- **Coordinator 不执行**: Coordinator 只协调/路由/治理,不写代码不做决策
-- **Sub-agent 不交互**: 角色 Agent 不与用户直接对话——M5 由 Coordinator 集中处理
+- AUDIT-053(P0): Coordinator Agent, AUDIT-054(P0): Developer Agent, AUDIT-055(P0): Reviewer Agent, AUDIT-056(P0): Architect Agent
+- AUDIT-057(P0): Task-Gate 模型, AUDIT-058(P0): Agent 通信协议
 
 ## [0.8.0] — 2026-05-01
 
@@ -60,7 +61,7 @@
   - **P0 严重矛盾（8/8）**：C1 M7.2 停止规则加例外 / C2 review 区分 / C3 Gate 独立使用例外 / C4 commit 触发点替换 / C5 方向确认限定 / C6 maximum-autonomy 加 P0 审查 / C7 Gate 评估区分 / C8 session end 边界
   - **P1 重要矛盾（5/7）**：S1 阶段重叠 profile 约束 / S2 关键决策列表同步 / S3 M7.4 步骤数修正 / S5 Step2 profile-aware / S6 interaction-boundary 同步
   - **P2 引用/漂移/M5（7/17）**：V1 agent-team-architecture 版本 banner / AQ1 确认行模式自适应 / R1 TOOLS.md 路径修正 / R2 Replacement Boundary 路径 / R3 孤儿引用补全 / S6 M5.2 同步声明
-  - 剩余 12 项 P2（R4 Gate AUTO/ASK 标注、D1-D7 死规则标注、DR1-DR3 非关键列表漂移、AQ2 on-demand Gate 状态）归入 0.9.0
+  - 剩余 12 项 P2（R4 Gate AUTO/ASK 标注、D1-D7 死规则标注、DR1-DR3 非关键列表漂移、AQ2 on-demand Gate 状态）归入 0.10.0
 - **pre-commit hook Step 6 升级**：CLAUDE.md 直接修改检测从 WARNING → BLOCKING——BOOTSTRAP DISCIPLINE 违反（第 5+ 次）后升级为阻断级强制力
 - 版本 bump 0.7.1→0.7.2
 

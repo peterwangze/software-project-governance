@@ -2,6 +2,19 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.7.1] — 2026-04-30
+
+### 修复
+
+- **FIX-015: M5 AskUserQuestion 绕过根因修复——6 缺口系统性闭环**。此前 FIX-013 修复了 M5 触发覆盖但未解决子工作流层面的源头污染——agent 读到 `询问用户："当前项目目标是什么？"` 这样的内联指令会直接照做。
+  - **GAP-1 (P0)**: `development/sub-workflow.md:27` — 清除 `询问用户` 内联指令，替换为 AskUserQuestion 工具调用指令
+  - **GAP-2 (P0)**: `SKILL.md` 新增 M2.3 M5 交互信号——所有子工作流的 `需用户确认/输入/判断` 标注 MUST 通过 AskUserQuestion 执行
+  - **GAP-3 (P1)**: 轻量 profile bootstrap 模板补 M5 提问规则——此前轻量用户完全没有 AskUserQuestion 指令
+  - **GAP-4 (P1)**: `stage-gates.md` 新增原则 #10——Gate 确认 MUST 绑定 AskUserQuestion
+  - **GAP-5 (P1)**: `verify_workflow.py` 新增 Check 10——M5 反模式静态检测（`询问用户` 污染模式 + bootstrap 覆盖 + interaction-boundary 绑定）
+  - **GAP-6 (P2)**: SKILL.md M8.1 表格从 9→10 checks，覆盖 M5 外部验证
+- `development/sub-workflow.md` + `release/sub-workflow.md` — 降级行为中的 `告知用户` 标注为单向通知（非提问），与 M5.1 禁令边界明确
+
 ## [0.7.0] — 2026-04-29
 
 ### 0.7.0 正式发布——外部验证 + 企业实践 + 交互覆盖闭环

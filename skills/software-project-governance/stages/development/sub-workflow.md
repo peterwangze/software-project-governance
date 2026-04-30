@@ -24,13 +24,13 @@
 > 当本子工作流被独立加载（非通过 `main-workflow.md` 总入口加载）时，**MUST** 在执行阶段活动前完成以下自包含检查。本段不依赖任何其他文件。
 
 **锚定步骤**（每步有具体文件路径和检查目标）：
-1. **目标确认**：读取 `.governance/plan-tracker.md` → 找到 `## 项目配置` 节 → 提取"项目目标"和"量化成功标准"。如果 plan-tracker 中无明确目标 → 询问用户："当前项目目标是什么？"
+1. **目标确认**：读取 `.governance/plan-tracker.md` → 找到 `## 项目配置` 节 → 提取"项目目标"和"量化成功标准"。如果 plan-tracker 中无明确目标 → **MUST 通过 AskUserQuestion 工具**询问用户（M5.1 禁止内联文字问题），选项示例：(1) "输入项目目标" (2) "跳过目标锚定——我知道风险" (3) "初始化 governance 后再继续"
 2. **偏离检查**：对照成功标准，确认本轮开发范围是否在目标方向上。偏离 = 发现你准备实现的与 plan-tracker 中定义的目标不一致 → **MUST** 先记录到 `.governance/decision-log.md`
 3. **质量底线**：代码 MUST 通过自动化门禁（lint/test/coverage/security）+ Code Review 闭环（≥1 reviewer，遗留项=0）
 
 **降级行为**（`.governance/` 不存在时）：
-- `.governance/plan-tracker.md` 不存在 → 告知用户："当前项目未初始化 governance。独立使用模式下目标锚定不可用——无法确认开发方向是否与项目目标一致。建议运行 governance-init 初始化治理。"
-- 降级不阻塞执行——独立使用模式下可以直接开始开发，但 agent MUST 在开始前告知用户锚定缺失的风险
+- `.governance/plan-tracker.md` 不存在 → 内联告知用户（单向通知，非提问——不触发 M5.1 禁令）："当前项目未初始化 governance。独立使用模式下目标锚定不可用——无法确认开发方向是否与项目目标一致。建议运行 governance-init 初始化治理。"
+- 降级不阻塞执行——独立使用模式下可以直接开始开发，但 agent MUST 在开始前内联告知用户锚定缺失的风险（单向通知——非交互式提问）
 - 如果后续初始化了 governance，锚定检查在下一会话自动恢复
 
 ## 进入条件

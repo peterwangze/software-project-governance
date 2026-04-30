@@ -535,20 +535,21 @@ REQUIRED_SNIPPETS = {
     ],
     ROOT / "CHANGELOG.md": [
         "# Changelog",
+        "## [0.7.1]",
         "## [0.7.0]",
         "## [0.5.0]",
     ],
     ROOT / ".claude-plugin/plugin.json": [
-        "0.7.0",
+        "0.7.1",
     ],
     ROOT / ".claude-plugin/marketplace.json": [
-        "0.7.0",
+        "0.7.1",
     ],
     ROOT / ".codex-plugin/plugin.json": [
-        "0.7.0",
+        "0.7.1",
     ],
     ROOT / "workflows/software-project-governance/manifest.md": [
-        "0.7.0",
+        "0.7.1",
     ],
 }
 
@@ -1748,6 +1749,94 @@ def cmd_gates(args):
     print(f"\n  Summary: {summary}")
 
 
+def check_m5_compliance():
+    """Check M5 AskUserQuestion compliance — static anti-pattern detection.
+
+    Detects:
+    1. Source file contamination: sub-workflow files containing '询问用户：' patterns
+       that instruct agent to output inline text questions (M5.1 violation)
+    2. Bootstrap coverage: CLAUDE.md contains AskUserQuestion rule
+    3. Interaction boundary: interaction-boundary.md exists and references AskUserQuestion
+
+    This CANNOT detect runtime M5 violations (actual inline questions in conversation).
+    It catches the ROOT CAUSE: source files that teach agents to use inline text.
+    """
+    issues = []
+    skills_dir = ROOT / "skills" / "software-project-governance"
+
+    # Check 1: Anti-pattern in sub-workflow files
+    # Pattern: 询问用户："..." or 询问用户：'...' (direct inline question instruction)
+    inline_question_pattern = re.compile(r'询问用户[：:]\s*["\u201c]')
+    stages_dir = skills_dir / "stages"
+    if stages_dir.is_dir():
+        for md_file in stages_dir.rglob("*.md"):
+            try:
+                content = md_file.read_text(encoding="utf-8")
+                for i, line in enumerate(content.splitlines(), 1):
+                    if inline_question_pattern.search(line):
+                        # Check it's not already annotated with AskUserQuestion
+                        if "AskUserQuestion" not in line:
+                            rel_path = md_file.relative_to(ROOT)
+                            issues.append({
+                                "type": "m5_anti_pattern",
+                                "file": str(rel_path),
+                                "line": i,
+                                "text": line.strip()[:120],
+                                "severity": "BLOCKING",
+                                "fix": "Change to: MUST 通过 AskUserQuestion 工具询问用户 (M5.1 禁止内联文字问题)"
+                            })
+            except Exception:
+                pass
+
+    # Check 2: Bootstrap contains AskUserQuestion rule
+    claude_md = ROOT / "CLAUDE.md"
+    if claude_md.is_file():
+        content = claude_md.read_text(encoding="utf-8")
+        if "AskUserQuestion" not in content:
+            issues.append({
+                "type": "m5_bootstrap_missing",
+                "file": "CLAUDE.md",
+                "line": 0,
+                "text": "CLAUDE.md bootstrap does not contain AskUserQuestion rule",
+                "severity": "WARNING",
+                "fix": "Add M5 AskUserQuestion rule to CLAUDE.md bootstrap (via governance-init.md template update)"
+            })
+    else:
+        issues.append({
+            "type": "m5_bootstrap_missing",
+            "file": "CLAUDE.md",
+            "line": 0,
+            "text": "CLAUDE.md not found — no M5 bootstrap coverage",
+            "severity": "WARNING",
+            "fix": "Run governance-init to create CLAUDE.md with M5 rules"
+        })
+
+    # Check 3: interaction-boundary.md exists and references AskUserQuestion
+    ib_file = skills_dir / "references" / "interaction-boundary.md"
+    if ib_file.is_file():
+        content = ib_file.read_text(encoding="utf-8")
+        if "AskUserQuestion" not in content:
+            issues.append({
+                "type": "m5_ib_missing",
+                "file": str(ib_file.relative_to(ROOT)),
+                "line": 0,
+                "text": "interaction-boundary.md does not reference AskUserQuestion",
+                "severity": "ERROR",
+                "fix": "Add AskUserQuestion binding to interaction types in interaction-boundary.md"
+            })
+    else:
+        issues.append({
+            "type": "m5_ib_missing",
+            "file": "skills/software-project-governance/references/interaction-boundary.md",
+            "line": 0,
+            "text": "interaction-boundary.md not found",
+            "severity": "ERROR",
+            "fix": "Create interaction-boundary.md with AskUserQuestion binding rules"
+        })
+
+    return {"issues": issues, "total_checks": 3}
+
+
 def cmd_check_governance(args):
     """Run governance health checks: evidence completeness, risk staleness, gate consistency."""
     all_issues = 0
@@ -1961,6 +2050,36 @@ def cmd_check_governance(args):
     else:
         print(f"│  [PASS] No active tasks with passed plan-complete dates.")
     print(f"│  Total active tasks checked: {td_result['total_active']}")
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 10. M5 AskUserQuestion compliance ──
+    print("\n┌─ Check 10: M5 AskUserQuestion Compliance ────────────┐")
+    m5_result = check_m5_compliance()
+    m5_issues = m5_result["issues"]
+    if m5_issues:
+        blocking = [i for i in m5_issues if i["severity"] == "BLOCKING"]
+        errors = [i for i in m5_issues if i["severity"] == "ERROR"]
+        warnings = [i for i in m5_issues if i["severity"] == "WARNING"]
+        all_issues += len(blocking) + len(errors)
+        if blocking:
+            print(f"│  [BLOCKING] {len(blocking)} M5 anti-pattern(s) — source files containing")
+            print(f"│             inline question instructions (M5.1 violation):")
+            for b in blocking:
+                print(f"│    - {b['file']}:{b['line']}: {b['text'][:80]}")
+                print(f"│      Fix: {b['fix']}")
+        if errors:
+            print(f"│  [ERROR] {len(errors)} M5 structural gap(s):")
+            for e in errors:
+                print(f"│    - {e['file']}: {e['text'][:80]}")
+        if warnings:
+            print(f"│  [WARN] {len(warnings)} M5 coverage warning(s):")
+            for w in warnings:
+                print(f"│    - {w['file']}: {w['text'][:80]}")
+    else:
+        print(f"│  [PASS] No M5 anti-patterns in source files.")
+        print(f"│  [PASS] M5 AskUserQuestion rules present in bootstrap.")
+        print(f"│  [PASS] interaction-boundary.md has AskUserQuestion bindings.")
+    print(f"│  Total M5 checks: {m5_result['total_checks']}")
     print("└──────────────────────────────────────────────────────┘")
 
     # ── Summary ──

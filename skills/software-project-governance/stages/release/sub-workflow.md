@@ -26,7 +26,7 @@
 2. **偏离检查**：本次发布内容是否与项目目标一致？偏离 → 记录到 `.governance/decision-log.md`
 3. **质量底线**：发布 MUST 通过 checklist 全项 + 有可验证的回滚方案 + 版本号符合 semver
 
-**降级**：`.governance/plan-tracker.md` 不存在 → 告知用户锚定不可用，独立模式直接开始发布流程。后续初始化 governance 后自动恢复。
+**降级**：`.governance/plan-tracker.md` 不存在 → 内联告知用户锚定不可用（单向通知，非提问——不触发 M5.1 禁令），独立模式直接开始发布流程。后续初始化 governance 后自动恢复。
 
 ## 进入条件
 

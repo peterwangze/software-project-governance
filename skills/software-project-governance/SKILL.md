@@ -10,7 +10,7 @@ description: Load unified workflow rules, templates, gates and fact sources for 
 ## Workflow Identity
 
 - **id**: software-project-governance
-- **version**: 0.7.0
+- **version**: 0.7.1
 - **goal**: Automate project process management so users focus on thinking, not process
 - **supported_agents**: Claude, Codex, Gemini
 - **core capabilities**: 11-stage lifecycle, 11 Gate checks, evidence/decision/risk tracking, 3 trigger modes, 3 profiles
@@ -71,6 +71,17 @@ When the user asks to perform a specific activity (e.g., "do a code review", "ru
 | `stages/maintenance/retro-meeting-template.md` | Retrospective meeting template skill |
 
 If the user wants to use only a single feature (e.g., "help me with code review"), load only that skill file — do not load the full lifecycle.
+
+### M2.3 M5 Interaction Signal (MANDATORY — applies to ALL sub-workflow executions)
+
+**When executing any sub-workflow or skill from `stages/`**, the agent **MUST** apply the following M5 interaction binding:
+
+- All activities marked **`需用户确认`**, **`需用户输入`**, or **`需用户判断`** in the sub-workflow's 交互边界 (interaction boundary) column **MUST** be executed via the **AskUserQuestion** tool — per M5.1, inline text questions are protocol violations.
+- The trigger phrases `询问用户` or `问用户` in sub-workflow text are **instructions to use AskUserQuestion**, NOT instructions to output inline text questions.
+- The phrase `告知用户` (inform/tell the user) in sub-workflow text is a **one-way notification** — it does NOT require AskUserQuestion (not a question), but the agent SHOULD prefix such notifications with a clear signal that they are informational, not interactive.
+- **Self-check before any user interaction**: "Am I about to output an inline question? If yes → STOP, use AskUserQuestion instead. Am I about to deliver a one-way notification? If yes → prefix with 'ℹ️' to distinguish from questions."
+
+**Why this signal exists**: FIX-013 (M5 audit) fixed gaps in SKILL.md trigger coverage, but the root cause of M5 bypass persisted: sub-workflows contain natural-language interaction patterns (e.g., `询问用户："当前项目目标是什么？"`) that agents read as direct instructions to output inline text. M2.3 closes this gap by establishing a binding rule: sub-workflow interaction annotations → AskUserQuestion tool. The binding is enforced by verify_workflow.py's M5 anti-pattern check (Check 10).
 
 ## M3. Output Rules (MANDATORY)
 
@@ -344,6 +355,7 @@ After each major task, **MUST** self-check:
 - [ ] M7.5 pre-task protocol executed? (task in plan-tracker before modifying files?)
 - [ ] M7.3 risk escalation deadlines checked? Any open risks past deadline?
 - [ ] M7.3 task deadlines checked? Any active tasks past plan-complete date?
+- [ ] M5 source clean? (Check 10: no `询问用户` anti-patterns in staged skill files; bootstrap has AskUserQuestion rule)
 ```
 
 **Fails**: fix immediately. **Passes**: don't output, continue.
@@ -352,7 +364,7 @@ After each major task, **MUST** self-check:
 
 Agent self-check alone is insufficient — an agent that violates protocol will also not honestly self-report violations (self-audit contradiction). This protocol therefore requires a **dual mechanism**: agent self-check (M8) + independent script validation.
 
-**Independent script validation** via `python scripts/verify_workflow.py check-governance` performs 9 checks that the agent cannot fake:
+**Independent script validation** via `python scripts/verify_workflow.py check-governance` performs 10 checks that the agent cannot fake:
 
 | Check | What it detects | Why agent self-check can't catch it |
 |-------|----------------|-------------------------------------|
@@ -365,6 +377,7 @@ Agent self-check alone is insufficient — an agent that violates protocol will 
 | 7. Commit-task traceability | Commits without task ID references in message | Agent may modify files without creating a plan-tracker entry first — untracked changes corrupt traceability |
 | 8. Risk escalation deadline | Open risks with passed escalation deadlines | Agent has no built-in deadline awareness — risk deadlines pass silently |
 | 9. Task deadline enforcement | Active tasks with passed plan-complete dates | Same pattern as Check 8 — task deadlines exist but are never enforced |
+| 10. M5 AskUserQuestion compliance | Source files containing `询问用户` anti-patterns (teaching agent to output inline questions); bootstrap missing AskUserQuestion rule; interaction-boundary.md missing AskUserQuestion bindings | Agent reads sub-workflow files containing literal `询问用户："..."` instructions and follows them literally — outputting inline text instead of using AskUserQuestion. Agent self-check can't detect this because the agent is following the (contaminated) instruction it read. Static anti-pattern detection catches the ROOT CAUSE before the agent encounters it |
 
 **When to run external validation** (MANDATORY):
 - Before declaring a Gate as passed → run check-governance, confirm 0 issues

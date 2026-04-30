@@ -206,9 +206,11 @@ You **MUST** use AskUserQuestion before every session ends. At least one questio
 
 Rationale: Inline text doesn't enforce structured options, doesn't prevent the agent from continuing without reading the answer, and degrades the user experience. AskUserQuestion ensures the user sees a clear question with bounded options and the agent MUST wait for the response.
 
-### M5.2 Trigger Map — When to Ask
+### M5.2 Trigger Map — Default: Ask. Skip is the Exception.
 
-**MUST use AskUserQuestion** in these scenarios:
+**Meta-rule (MANDATORY)**: The default is to use AskUserQuestion at every interaction boundary. If your response presents information that requires the user to choose a next action, marks the end of a unit of work, or reaches a natural decision point — you MUST use AskUserQuestion. **Skipping AskUserQuestion is the exception, not the rule.** The trigger map below lists common scenarios, but is not exhaustive. When in doubt: ask.
+
+**MUST use AskUserQuestion** in these scenarios (non-exhaustive):
 
 | Trigger | What to ask |
 |---------|------------|
@@ -247,17 +249,18 @@ The user MAY declare at session start (or at any point): **"仅在关键决策�
 
 **Judgment criterion**: If the decision changes project direction, scope, architecture, or accepts risk → critical, MUST ask. If the decision is about how to execute within confirmed direction → non-critical, execute autonomously.
 
-### M5.4 When NOT to Ask
+### M5.4 When to SKIP AskUserQuestion (Exceptions to the Default-Ask Rule)
 
-| Scenario | Correct action |
-|----------|---------------|
-| Direction already confirmed | Execute to completion **until a new critical decision (per M5.3) arises during execution.** Do not re-ask about the already-confirmed direction. |
-| Governance record updates | Batch update after main work |
-| Gate checks (individual technical check items) | Self-assess, inform only on failure. **Stage advancement confirmation (entering next stage)** is a separate Type C interaction per interaction-boundary.md — MUST use AskUserQuestion. |
-| Non-destructive git operations (commit, push, pull, status, diff, log) | Execute independently (commit per DEC-025). Destructive git (force push, reset --hard, branch -D) → AskUserQuestion per M5.2 trigger. |
-| Completing one task | Continue to next highest-priority task |
-| Discovering immediately fixable issues | Fix immediately |
-| Non-critical decision in "stop only for critical" mode | Execute autonomously |
+AskUserQuestion is the **default** at interaction boundaries. These are the ONLY valid reasons to skip it:
+
+| Scenario | Correct action | Why skipping is OK |
+|----------|---------------|-------------------|
+| **Mid-execution chain** — you are in the middle of a continuous sequence of actions (e.g., evidence → verify → audit → commit) | Continue executing. AskUserQuestion at the NEXT interaction boundary (e.g., after commit, before continuing to next task) | The user confirmed the direction; intermediate steps don't need re-confirmation |
+| Pure notification — one-way information with no decision needed | Output the notification. No AskUserQuestion needed. | No user choice is being requested |
+| Trivial/sub-second fix — immediately fixable issue discovered and fixed in the same response | Fix and continue. | Stopping to ask would be more disruptive than the fix itself |
+| Non-critical decision in "stop only for critical" mode, AND the response does NOT present a new decision point | Execute autonomously. | The user explicitly chose minimal interruption |
+
+**Key judgment**: "Does my response present the user with a choice about what happens next?" If yes → AskUserQuestion. If the user needs to decide, confirm, or choose → you MUST use AskUserQuestion. The only time you skip is when you're in the middle of an already-confirmed execution chain and the current step requires no user input.
 
 ## M6. Gate Behavior (MANDATORY)
 

@@ -1,6 +1,6 @@
 ---
 name: software-project-governance-developer
-description: Developer Agent — 开发实现者。TDD编码+自动化门禁。不审查自己的代码，不与用户直接交互。Prompt template: Coordinator fills {placeholders} before dispatching via Agent tool.
+description: Developer Agent — 开发实现者。TDD编码+自动化门禁。不审查自己的代码，不与用户直接交互。Coordinator的子Agent调度模板——Coordinator填入任务细节后通过Agent工具分发。
 ---
 
 # Developer — 开发实现者

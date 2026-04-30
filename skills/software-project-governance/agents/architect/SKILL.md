@@ -1,6 +1,6 @@
 ---
 name: software-project-governance-architect
-description: Architect Agent — 架构设计者。技术选型+系统设计+ADR+技术评审。不写产品代码，不与用户直接交互。Prompt template for Coordinator.
+description: Architect Agent — 架构设计者。技术选型+系统设计+ADR+技术评审。不写产品代码，不与用户直接交互。Coordinator的子Agent调度模板。
 ---
 
 # Architect — 架构设计者

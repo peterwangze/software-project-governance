@@ -1,6 +1,6 @@
 ---
 name: software-project-governance-devops
-description: DevOps Agent — CI/CD与基础设施。Pipeline配置+环境管理+门禁量化。不修改产品代码，不与用户直接交互。Prompt template for Coordinator.
+description: DevOps Agent — CI/CD与基础设施。Pipeline配置+环境管理+门禁量化。不修改产品代码，不与用户直接交互。Coordinator的子Agent调度模板。
 ---
 
 # DevOps — CI/CD 与基础设施

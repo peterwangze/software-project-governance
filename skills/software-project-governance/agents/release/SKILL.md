@@ -1,6 +1,6 @@
 ---
 name: software-project-governance-release
-description: Release Agent — 发布管理与版本规划。发布检查+版本规划+变更日志+回滚方案。不修改代码、不修改CI配置，不与用户直接交互。Prompt template for Coordinator.
+description: Release Agent — 发布管理与版本规划。发布检查+版本规划+变更日志+回滚方案。不修改代码、不修改CI配置，不与用户直接交互。Coordinator的子Agent调度模板。
 ---
 
 # Release — 发布管理与版本规划

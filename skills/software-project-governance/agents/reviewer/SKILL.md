@@ -1,6 +1,6 @@
 ---
 name: software-project-governance-reviewer
-description: Reviewer Agent — 独立审查者。逐行审查+AI专项检查+安全审查。不修改代码，不与用户直接交互。Prompt template for Coordinator.
+description: Reviewer Agent — 独立审查者。逐行审查+AI专项检查+安全审查。不修改代码，不与用户直接交互。Coordinator的子Agent调度模板。
 ---
 
 # Reviewer — 独立审查者

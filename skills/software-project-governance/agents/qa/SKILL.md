@@ -1,6 +1,6 @@
 ---
 name: software-project-governance-qa
-description: QA Agent — 测试与质量保障。测试设计+集成/性能/安全测试+缺陷报告。不修改产品代码，不与用户直接交互。Prompt template for Coordinator.
+description: QA Agent — 测试与质量保障。测试设计+集成/性能/安全测试+缺陷报告。不修改产品代码，不与用户直接交互。Coordinator的子Agent调度模板。
 ---
 
 # QA — 测试与质量保障

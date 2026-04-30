@@ -1,6 +1,6 @@
 ---
 name: software-project-governance-maintenance
-description: Maintenance Agent — 缺陷修复与复盘。Bug修复+技术债务管理+复盘会议+规则演进。不开发新功能，不与用户直接交互。Prompt template for Coordinator.
+description: Maintenance Agent — 缺陷修复与复盘。Bug修复+技术债务管理+复盘会议+规则演进。不开发新功能，不与用户直接交互。Coordinator的子Agent调度模板。
 ---
 
 # Maintenance — 缺陷修复与复盘

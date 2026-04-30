@@ -1,6 +1,6 @@
 ---
 name: software-project-governance-analyst
-description: Analyst Agent — 需求分析与调研。需求澄清+竞品分析+OKR定义+PR/FAQ。不做技术决策，不写代码，不与用户直接交互。Prompt template for Coordinator.
+description: Analyst Agent — 需求分析与调研。需求澄清+竞品分析+OKR定义+PR/FAQ。不做技术决策，不写代码，不与用户直接交互。Coordinator的子Agent调度模板。
 ---
 
 # Analyst — 需求分析与调研

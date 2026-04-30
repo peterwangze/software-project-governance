@@ -113,5 +113,41 @@ if grep -qiE "wip|work in progress|临时|tmp|temp" <<< "$COMMIT_MSG"; then
     echo ""
 fi
 
+# --- Step 6: Bootstrap change discipline (CLAUDE.md direct modification guard) ---
+# Rule: MUST NOT directly modify CLAUDE.md to add new behaviors.
+# MUST first modify commands/governance-init.md Step 7 (canonical source), bump version,
+# then user /plugin update → bootstrap self-upgrade → CLAUDE.md synced.
+if git diff --cached --name-only 2>/dev/null | grep -q "^CLAUDE.md$"; then
+    if ! git diff --cached --name-only 2>/dev/null | grep -q "^commands/governance-init.md$"; then
+        echo ""
+        echo "╔══════════════════════════════════════════════════════════════╗"
+        echo "║  BOOTSTRAP DISCIPLINE: CLAUDE.md modified directly.         ║"
+        echo "║                                                            ║"
+        echo "║  CLAUDE.md is a dogfood instance — NOT the canonical       ║"
+        echo "║  source. New governance behaviors MUST be added to:        ║"
+        echo "║    commands/governance-init.md Step 7 (canonical template)  ║"
+        echo "║                                                            ║"
+        echo "║  The correct flow:                                         ║"
+        echo "║  1. Modify governance-init.md template (canonical source)   ║"
+        echo "║  2. Bump version                                           ║"
+        echo "║  3. User /plugin update → bootstrap self-upgrade           ║"
+        echo "║  4. CLAUDE.md auto-synced via bootstrap                    ║"
+        echo "║                                                            ║"
+        echo "║  If governance-init.md IS also in this commit, both files  ║"
+        echo "║  must be modified in the correct order: template FIRST,    ║"
+        echo "║  then dogfood CLAUDE.md synced.                            ║"
+        echo "║                                                            ║"
+        echo "║  This violation has occurred 4+ times. The discipline      ║"
+        echo "║  exists because direct CLAUDE.md edits leave users behind. ║"
+        echo "║  Emergency bypass: git commit --no-verify                  ║"
+        echo "╚══════════════════════════════════════════════════════════════╝"
+        echo ""
+        # BLOCKING — but allow if governance-init.md is also staged (same commit, both synced)
+        # For now, WARN but don't block. Upgrade to BLOCK after the workflow validates.
+        # This is a warning because there are legitimate CLAUDE.md changes that don't
+        # involve governance behaviors (other project instructions, etc.)
+    fi
+fi
+
 # All checks passed
 exit 0

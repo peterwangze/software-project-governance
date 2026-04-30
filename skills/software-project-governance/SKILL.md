@@ -432,8 +432,8 @@ For detailed stage definitions, read `references/lifecycle.md`.
 
 ## Replacement Boundary
 
-**Must preserve**: `protocol/`, `workflows/software-project-governance/`, `scripts/verify_workflow.py`
+**Must preserve** (project root paths, not relative to this SKILL.md): `./protocol/`, `./workflows/software-project-governance/`, `./scripts/verify_workflow.py`
 
-**Can remove**: `CLAUDE.md`, `adapters/claude/`
+**Can remove**: `./CLAUDE.md`, `./adapters/claude/`
 
 **Replace with another agent**: remove "can remove" files, create new projection layer per `adapters/<new-agent>/` README.

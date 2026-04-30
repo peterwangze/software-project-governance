@@ -35,11 +35,11 @@ This protocol **MUST** activate when ANY condition is met:
 
 When the user requests development, code review, architecture design, or any multi-step task that benefits from role separation, the agent **MUST** activate Agent Team mode:
 
-1. Read `agents/coordinator.md` — take on the Coordinator persona (老周)
+1. Read `agents/coordinator/SKILL.md` — take on the Coordinator persona (老周)
 2. Coordinator decomposes the task and spawns role agents via the Agent tool:
-   - Developer (agents/developer.md) — for coding/implementation
-   - Reviewer (agents/reviewer.md) — for independent code review
-   - Architect (agents/architect.md) — for architecture/tech selection
+   - Developer (agents/developer/SKILL.md) — for coding/implementation
+   - Reviewer (agents/reviewer/SKILL.md) — for independent code review
+   - Architect (agents/architect/SKILL.md) — for architecture/tech selection
 3. Coordinator collects outputs, verifies consistency, presents results to user via AskUserQuestion
 4. **Producer-Reviewer separation is MANDATORY**: the Coordinator MUST NOT review its own code. Developer MUST NOT review its own code. Reviewer MUST NOT modify code.
 
@@ -96,15 +96,15 @@ When using the Agent Team architecture (0.10.0+), the Coordinator acts as the te
 
 | Template | File | Role | Format |
 |----------|------|------|--------|
-| `coordinator` | `agents/coordinator.md` | Team lead skill — the main agent reads this | Agent SKILL (frontmatter + role definition) |
-| `developer` | `agents/developer.md` | Prompt template for spawning Developer sub-agents | Agent() prompt template |
-| `reviewer` | `agents/reviewer.md` | Prompt template for spawning Reviewer sub-agents | Agent() prompt template |
-| `architect` | `agents/architect.md` | Prompt template for spawning Architect sub-agents | Agent() prompt template |
-| `qa` | `agents/qa.md` | Prompt template for spawning QA sub-agents | Agent() prompt template |
-| `devops` | `agents/devops.md` | Prompt template for spawning DevOps sub-agents | Agent() prompt template |
-| `analyst` | `agents/analyst.md` | Prompt template for spawning Analyst sub-agents | Agent() prompt template |
-| `release` | `agents/release.md` | Prompt template for spawning Release sub-agents | Agent() prompt template |
-| `maintenance` | `agents/maintenance.md` | Prompt template for spawning Maintenance sub-agents | Agent() prompt template |
+| `coordinator` | `agents/coordinator/SKILL.md` | Team lead — main agent loads this to become Coordinator | Agent SKILL |
+| `developer` | `agents/developer/SKILL.md` | Coding + TDD + tool-constrained (no Agent/AskUserQuestion) | Agent SKILL |
+| `reviewer` | `agents/reviewer/SKILL.md` | Independent review — Read/Grep only (no Write/Edit/Bash) | Agent SKILL |
+| `architect` | `agents/architect/SKILL.md` | Architecture + ADR — no product code modification | Agent SKILL |
+| `qa` | `agents/qa/SKILL.md` | Testing — test code only, no product code | Agent SKILL |
+| `devops` | `agents/devops/SKILL.md` | CI/CD + infrastructure — no product code | Agent SKILL |
+| `analyst` | `agents/analyst/SKILL.md` | Requirements + research — no technical decisions | Agent SKILL |
+| `release` | `agents/release/SKILL.md` | Release management — no code modification | Agent SKILL |
+| `maintenance` | `agents/maintenance/SKILL.md` | Bug fixes + retrospectives — no new features | Agent SKILL |
 
 **Usage**: The Coordinator reads the appropriate template, fills in `{placeholders}` (TASK_ID, TASK_NAME, file paths, acceptance criteria), and calls `Agent(subagent_type="general-purpose", prompt="[filled template]")`.
 

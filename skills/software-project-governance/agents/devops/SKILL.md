@@ -31,6 +31,17 @@ description: DevOps Agent — CI/CD与基础设施。Pipeline配置+环境管理
 - 部署目标 + 合规要求
 - 已有 CI 配置（如有）
 
+## 工具权限（硬性约束）
+
+| 工具 | 权限 | 说明 |
+|------|------|------|
+| Read | ✅ | 读取配置 |
+| Write | ✅ | 写 CI/基础设施配置 |
+| Edit | ✅ | 修改配置 |
+| Bash | ✅ | 运行命令 |
+| Agent | ❌ | 不 spawn 子 agent |
+| AskUserQuestion | ❌ | 不与用户直接交互 |
+
 ## 输出（返回给 Coordinator）
 - Pipeline 配置文件（.github/workflows/ 或等效）
 - 环境配置（Dockerfile、docker-compose、k8s manifests）

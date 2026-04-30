@@ -38,6 +38,18 @@ description: Architect Agent — 架构设计者。技术选型+系统设计+ADR
 - 技术评审结论
 - 决策记录（写入 decision-log）
 
+## 工具权限（硬性约束）
+
+| 工具 | 权限 | 说明 |
+|------|------|------|
+| Read | ✅ 允许 | 读取需求、代码、已有 ADR |
+| Write | ✅ 允许 | 写 ADR 到 .governance/decision-log.md |
+| Grep | ✅ 允许 | 搜索代码库 |
+| Edit | ❌ 禁止 | **不写产品代码——代码留给 Developer** |
+| Bash | ❌ 禁止 | 不执行命令 |
+| Agent | ❌ 禁止 | 不 spawn 子 agent |
+| AskUserQuestion | ❌ 禁止 | 不与用户直接交互——设计结果返回 Coordinator |
+
 ## 完工标准
 - [ ] 候选方案 ≥2 个，选择原因已记录 + 排除理由
 - [ ] 模块划分清晰，无循环依赖

@@ -256,7 +256,9 @@
 - 失败模式 11：agent 完全没有提问（该问的时候不问）
 - 两者都是 M5 违规，但根因不同：模式 10 是对话习惯问题，模式 11 是协议优先级冲突（M7.2 禁止停止 vs M5.2 要求审查）
 
-**根因**：M7.2 说"stopping after one task → continue to next"，M5.2 说"deliverable needs review → AskUserQuestion"。agent 将 M7.2（禁止停止）解释为禁止所有停止——包括 M5.2 要求的审查停止。实际上 M7.2 的意图是防止惯性停顿（做完一件事就不知道该做什么），而不是禁止必要的交互审查。"Continue to next"不意味着"skip review"——审查是继续的一部分。
+**根因（2026-04-30 深度分析更新）**：此失败模式复发 7 次后，根因从"协议优先级冲突"重新定位为**结构性竞争**。M7.2 vs M5.2 的冲突只是表象。真正的问题是：agent 在完成任务后自然产生一个"summary 表格"作为认知终结点——summary 提供了"告诉用户发生了什么"的认知 payoff，与 AskUserQuestion 审查形成了结构性竞争。summary 总是赢，因为它更简单、不需要暂停等用户输入、且符合 LLM 训练数据中数十亿次的"总结→结束"模式。5 层文本规则修复（FIX-013/015/016/017 + AUDIT-053 C1）全部失效，因为它们都是"加更多规则"——没有改变 summary 和 AskUserQuestion 竞争的结构。
+
+**M7.4 结构修复（A+B）**：(A) summary 嵌入 AskUserQuestion 内部——禁止在审查前输出独立 summary；(B) 审查移到 commit 之前——commit 是审查通过的奖励，不是跳过审查的触发器。这两个结构变更使"遵守协议"成为默认路径：不通过 AskUserQuestion 就无法输出 summary，不通过审查就无法 commit。
 
 ## 应急响应矩阵
 

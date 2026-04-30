@@ -4,6 +4,7 @@
 
 | 编号 | 对应任务 ID | 阶段 | 证据类型 | 证据说明 | 证据位置 | 提交人 | 提交日期 | 关联 Gate | 备注 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| EVD-131 | REL-001 | 维护 | 版本标签 | 0.7.0 正式发布——git tag v0.7.0 创建并推送远程。12/12 任务全部完成，commit 330bdf8，tag 已推送至 origin。用户需 `/reload-plugins` 更新插件缓存从 0.6.15→0.7.0，下次会话 bootstrap 自升级自动生效 | `git tag v0.7.0` (pushed to origin) | Claude | 2026-04-29 | G11 | 版本路线图中 0.7.0 标记"已发布"，首次创建 git tag，发布闭环 |
 | EVD-001 | INIT-001 | 立项 | 文档 | workflow 已重新定义为 agent plugin/skill 仓库 | `workflows/software-project-governance/manifest.md` | Claude | 2026-04-17 | G1 | 支撑立项完成 |
 | EVD-002 | PLAN-001 | 规划 | 文档 | 协议层与插件约定已建立 | `protocol/workflow-schema.md` | Claude | 2026-04-17 | G2 | 支撑规划完成 |
 | EVD-003 | PLAN-002 | 规划 | 文档 | 当前项目样例已扩展为可执行 backlog，并区分优先级与状态 | `workflows/software-project-governance/examples/current-project-sample.md` | Claude | 2026-04-17 | G2 | 支撑演进 backlog 建立 |

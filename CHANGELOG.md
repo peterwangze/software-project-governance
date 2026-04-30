@@ -2,6 +2,27 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.8.0] — 2026-05-01
+
+### 0.8.0 正式发布——统一治理命令（用户易用性基础设施）
+
+0.8.0 完成 5 个任务（5 P0）：
+- AUDIT-077(P0): 统一命令设计——6 场景决策树 + 场景 A/C/F 实现
+- AUDIT-078(P0): 场景 B——半途接入（项目探索信号矩阵+阶段推断+差异化 onboarding）
+- AUDIT-079(P0): 场景 D/E——会话恢复+异常恢复（诊断+修复）
+- AUDIT-080(P1): Snapshot 格式升级（新增 session_id/current_gate/permission_mode/incomplete/user_preferences 字段）
+- AUDIT-081(P1): 旧 5 命令统一路由（governance-update 标记 DEPRECATED）
+
+### 新增
+- `commands/software-project-governance.md`——统一入口，一个命令覆盖全部 6 场景
+- Snapshot 格式 7 个新字段支撑会话恢复
+
+### 变更
+- governance-init/status/verify 添加统一入口路由说明
+- governance-update 标记为 DEPRECATED
+- SKILL.md M3 引用统一命令替代 governance-init
+- SKILL.md M4.2 snapshot 格式升级
+
 ## [0.7.3] — 2026-04-30
 
 ### 修复

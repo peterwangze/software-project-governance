@@ -10,7 +10,7 @@ description: Load unified workflow rules, templates, gates and fact sources for 
 ## Workflow Identity
 
 - **id**: software-project-governance
-- **version**: 0.7.3
+- **version**: 0.8.0
 - **goal**: Automate project process management so users focus on thinking, not process
 - **supported_agents**: Claude, Codex, Gemini
 - **core capabilities**: 11-stage lifecycle, 11 Gate checks, evidence/decision/risk tracking, 3 trigger modes, 3 profiles

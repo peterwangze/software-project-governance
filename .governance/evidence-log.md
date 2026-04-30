@@ -5,6 +5,7 @@
 | 编号 | 对应任务 ID | 阶段 | 证据类型 | 证据说明 | 证据位置 | 提交人 | 提交日期 | 关联 Gate | 备注 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | EVD-131 | REL-001 | 维护 | 版本标签 | 0.7.0 正式发布——git tag v0.7.0 创建并推送远程。12/12 任务全部完成，commit 330bdf8，tag 已推送至 origin。用户需 `/reload-plugins` 更新插件缓存从 0.6.15→0.7.0，下次会话 bootstrap 自升级自动生效 | `git tag v0.7.0` (pushed to origin) | Claude | 2026-04-29 | G11 | 版本路线图中 0.7.0 标记"已发布"，首次创建 git tag，发布闭环 |
+| EVD-142 | AUDIT-068 | 架构 | 参考文档 | 方法论智能路由——12种任务类型→PUA味道→角色Agent匹配表+味道切换规则+Dispatch集成 | references/methodology-routing.md + SKILL.md M2.1 | Claude | 2026-05-01 | G11 | verify PASSED |
 | EVD-141 | AUDIT-079 | 架构 | 命令实现 | Scenario D/E——会话恢复+异常恢复。D1-D4: snapshot加载+交叉验证+3档新鲜度恢复面板+用户选择。E1-E4: P0/P1分级全量诊断+修复面板+执行修复(hooks/plan-tracker/证据/风险)+修复报告 | commands/software-project-governance.md | Claude | 2026-05-01 | G11 | verify PASSED |
 | EVD-140 | AUDIT-078 | 架构 | 命令实现 | Scenario B半途接入实现——8步详细流程: B1项目探索(8维度信号矩阵:技术栈/目录/git/测试/CI/发布/文档) B2阶段推断(11阶段优先级匹配规则) B3 AskUserQuestion确认面板(推断+证据+调整) B4-B8参数收集+profile差异化onboarding+bootstrap+hooks+确认 | commands/software-project-governance.md | Claude | 2026-05-01 | G11 | verify PASSED |
 | EVD-139 | FIX-019 | 维护 | 协议升级 | M5 模型方向性翻转——白名单触发→默认审查。复发9次后方向性根因: M5.2白名单模式导致agent将"不在11个触发点中"解释为"不需要问"。修复: (1)M5.2元规则——默认是问,跳过是例外 (2)M5.4重构为When to SKIP(仅3种例外) (3)SELF-CHECK #5 (4)失败模式11第三次更新——6层修复都在白名单内打转 | SKILL.md(M5.2+M5.4)+CLAUDE.md(SELF-CHECK#5)+governance-init.md+agent-failure-modes.md(模式11) | Claude | 2026-05-01 | G11 | verify PASSED |

@@ -90,6 +90,42 @@
 **差异检测方法**：
 - 读 `.governance/plan-tracker.md` 的 `## 项目配置` 节 → 确认 `Profile` 字段
 - 检查 Gate 表的列数：7 行 = lightweight，11 行无评分列 = standard，11 行有评分列 = strict
+
+## Agent Team 角色配置（0.10.0+）
+
+使用 Agent Team 架构时，profile 定义启用的角色 Agent 范围：
+
+### lightweight（精简团队）
+
+| 角色 | 启用 | 说明 |
+|------|------|------|
+| Coordinator | ✅ | 始终启用——用户交互必需 |
+| Developer | ✅ | 核心开发角色 |
+| Reviewer | ✅ | 独立审查——轻量也不跳过 |
+| Architect | ❌ | 跳过——小项目自包含架构 |
+| QA | ❌ | 跳过——Developer 自测 |
+| DevOps | ❌ | 跳过——手动部署 |
+| Analyst | ❌ | 跳过——用户自定需求 |
+| Release | ❌ | 跳过——简化发布 |
+| Maintenance | ❌ | 跳过——合并到 Developer |
+
+### standard（标准团队）
+
+| 角色 | 启用 | 说明 |
+|------|------|------|
+| Coordinator | ✅ | 始终启用 |
+| Developer | ✅ | 核心开发 |
+| Reviewer | ✅ | 独立审查 |
+| Architect | ✅ | 关键架构决策时启用 |
+| QA | ✅ | 测试与质量保障 |
+| DevOps | ❌ | 按需启用 |
+| Analyst | ❌ | 按需启用 |
+| Release | ✅ | 发布管理 |
+| Maintenance | ✅ | 缺陷修复与复盘 |
+
+### strict（全团队）
+
+全部 8 个角色 Agent 启用——每个角色独立 spawn，严格 Producer-Reviewer 分离，所有 Gate 量化评分。
 - 检查任务跟踪表表头列数：6 列 = lightweight，20 列 = standard/strict
 
 **Agent 行为差异**（基于 profile 自动调整）：

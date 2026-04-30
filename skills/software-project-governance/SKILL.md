@@ -55,6 +55,7 @@ Read on demand based on task type:
 | `references/interaction-boundary.md` | Uncertain whether to auto-execute or ask user |
 | `references/audit-framework.md` | Performing Gate checks, completing a stage, completing a Tier (per DEC-052 layered execution model), completing a P0 task, after significant changes |
 | `references/agent-failure-modes.md` | Agent behavior anomaly detected (protocol skip, selective execution, false closure, hallucinated evidence) — troubleshoot and execute emergency actions |
+| `references/agent-team-architecture.md` | Designing or evolving the Agent Team architecture — Coordinator + role agents + Task-Gate model. Read when planning architecture evolution, defining new agent roles, or migrating from Phase-Gate to Agent Team model |
 | `references/user-perspective-principle.md` | **Every task** — before completing any change that affects user behavior, MUST verify user accessibility, discoverability, and verifiability. Also loaded when planning/designing new features |
 
 ### M2.2 Sub-workflows and skills (in `stages/`, same directory as this SKILL.md)

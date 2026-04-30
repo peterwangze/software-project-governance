@@ -40,7 +40,7 @@
 
 | 项目 | 当前阶段 | 总任务数 | 已完成 | 阻塞中 | 关键风险数 | 最近 Gate 结论 | 最近复盘日期 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 项目管理工作流插件 | 维护（并行活跃：规划） | 121 | 112 | 0 | 2 | G11 通过 | 2026-04-30 |
+| 项目管理工作流插件 | 维护（并行活跃：规划+架构） | 122 | 113 | 0 | 2 | G11 通过 | 2026-04-30 |
 
 ## 实施路线图（DEC-052）
 
@@ -216,8 +216,9 @@ Tier 3-C: 兼容与政策（4 tasks, ~2 sessions，可并行）
 | 0.6.11 | 已发布 | 2026-04-29 | 版本规划纪律强化——8 条纪律 + 违规案例 + failure mode 9 | CONSTRAINT-001 | plan-tracker 版本规划纪律重写, VERSIONING.md 版本规划纪律, agent-failure-modes 失败模式 9, 版本 0.6.10→0.6.11 |
 | **0.7.0** | **已发布** | **2026-04-29** | **外部验证 + 企业实践 + 交互覆盖闭环（12/12 完成）** | **AUDIT-003(P0)✅, FIX-014(P0)✅, FIX-013(P1)✅, AUDIT-034(P2)✅, AUDIT-036(P2)✅, AUDIT-038(P2)✅ + AUDIT-004(P1), AUDIT-006(P1), AUDIT-023(P1), MAINT-013(P1), MAINT-014(P1), MAINT-023(P1)** | **外部项目验证报告, governance-init/命令端到端验证, 蓝军单agent适配, 现代发布实践, 用户数据边界/agent入口差异文档, Gemini最小验证, 目标锚定强制机制** |
 | **0.7.1** | **已发布** | **2026-04-30** | **M5 AskUserQuestion 绕过根因修复（6 缺口闭环）** | **FIX-015(P0)** | **development sub-workflow 清除内联问题指令, SKILL.md M2.3 M5 交互信号, 轻量 profile M5 规则, stage-gates.md 原则#10 Gate-M5 绑定, verify_workflow.py Check 10 M5 反模式检测** |
-| **0.8.0** | **规划中** | **2026-05-18** | **自动化升级 + 体验增强（12 个 P2）** | **AUDIT-008(P2), AUDIT-009(P2), AUDIT-012(P2), AUDIT-013(P2), AUDIT-014(P2), AUDIT-019(P2), AUDIT-020(P2), AUDIT-037(P2), AUDIT-042(P2), AUDIT-049(P2), AUDIT-050(P2), AUDIT-025(P2)** | **README措辞修正, 中途接入验证, headless runner可执行版, MCP server, git hook, verify通用化, Profile YAML解析, 向后兼容政策, 插件新鲜度检测, D5审计, M8行为层检测, skill质量均衡** |
-| **1.0.0** | **规划中** | **2026-06-01** | **首次正式发布——全部 P0/P1/P2 关闭** | **所有剩余任务 + 发布前审计** | **外部验证报告 + 全部 P0/P1/P2 关闭 + 用户文档完整 + 首次正式语义化版本** |
+| **0.8.0** | **规划中** | **2026-05-15** | **Agent Team 基础架构——Coordinator + 3 核心角色 + Task-Gate 模型** | **AUDIT-052(P0) 架构设计, AUDIT-053(P0) Coordinator, AUDIT-054(P0) Developer, AUDIT-055(P0) Reviewer, AUDIT-056(P0) Architect, AUDIT-057(P0) Task-Gate 数据结构, AUDIT-058(P0) Agent 通信协议, AUDIT-059~062(P1) main-workflow/stage-gates/verify/e2e 升级** | **Coordinator skill + Developer/Reviewer/Architect 3 角色 skill + Task-Gate plan-tracker 改造 + Agent 间输入输出契约 + e2e Agent Team 全链路验证** |
+| **0.9.0** | **规划中** | **2026-05-30** | **全角色覆盖——8 角色全部落地 + 方法论路由 + 治理模型完整迁移** | **AUDIT-063(P1) QA, AUDIT-064(P1) DevOps, AUDIT-065(P1) Analyst, AUDIT-066(P1) Release, AUDIT-067(P2) Maintenance, AUDIT-068(P1) 方法论路由, AUDIT-069(P1) 提示词工程, AUDIT-070(P1) 治理模型迁移, AUDIT-071(P2) profiles 重写** | **QA/DevOps/Analyst/Release/Maintenance 5 角色 skill + PUA 味道→角色自动匹配 + risk/decision/evidence 任务级粒度 + Phase-Gate deprecated** |
+| **1.0.0** | **规划中** | **2026-06-15** | **生产就绪——外部验证 + 完整文档 + 正式发布** | **AUDIT-072(P0) 外部项目验证 ≥2, AUDIT-073(P0) 迁移指南, AUDIT-074(P1) 旧模型废弃通知, AUDIT-075(P1) 用户文档, AUDIT-076(P1) 全套 E2E** | **≥2 外部项目 Agent Team 验证通过 + 迁移指南 + 旧 Phase-Gate deprecated + v2.0 移除时间线** |
 
 ### 版本 Gate（V-Gate）
 
@@ -286,7 +287,32 @@ Tier 3-C: 兼容与政策（4 tasks, ~2 sessions，可并行）
 | REQ-005 | 用户思考流不被无意义确认打断 | PR/FAQ: "不打断用户" | P1 | FIX-004 | ✅ 已交付 | maximum-autonomy 模式 |
 | REQ-006 | 版本规划先于执行——知道何时交付什么 | 用户反馈 (2026-04-28) | P0 | FIX-005 | ✅ 已交付 | 版本路线图 + V-Gate |
 | REQ-007 | 临时任务能按优先级纳入版本 | 用户反馈 (2026-04-28) | P0 | FIX-006 | 🔧 进行中 | 变更控制流程 |
-| REQ-008 | 企业实践不只是文档——有模板和强制力 | 用户反馈 (2026-04-28) | P0 | FIX-006 | 🔧 进行中 | PR/FAQ 模板 + OKR 模板 + 6-Pager 模板 |
+| REQ-008 | 企业实践不只是文档——有模板和强制力 | 用户反馈 (2026-04-28) | P0 | FIX-006 | ✅ 已交付 | PR/FAQ 模板 + OKR 模板 + 6-Pager 模板 |
+| REQ-009 | M5 AskUserQuestion 不被绕过——系统级源头防污染 | 用户反馈 (2026-04-30) | P0 | FIX-015 | ✅ 已交付 | SKILL.md M2.3 交互信号 + verify_workflow.py Check 10 + 轻量 profile M5 规则 |
+| REQ-010 | Coordinator Agent——用户交互+任务分解+Agent 路由+治理看护 | AUDIT-052 (2026-04-30) | P0 | AUDIT-053 | 📋 待启动 | 0.8.0 交付 |
+| REQ-011 | Developer Agent——TDD 编码+自动化门禁+M7.4 协议 | AUDIT-052 (2026-04-30) | P0 | AUDIT-054 | 📋 待启动 | 0.8.0 交付 |
+| REQ-012 | Reviewer Agent——独立代码审查+安全检查+AI 专项检查 | AUDIT-052 (2026-04-30) | P0 | AUDIT-055 | 📋 待启动 | Producer-Reviewer 分离 |
+| REQ-013 | Architect Agent——技术选型+系统设计+ADR+技术评审 | AUDIT-052 (2026-04-30) | P0 | AUDIT-056 | 📋 待启动 | 0.8.0 交付 |
+| REQ-014 | Task-Gate 模型——plan-tracker 数据结构改造（单阶段→多任务并行+依赖图） | AUDIT-052 (2026-04-30) | P0 | AUDIT-057 | 📋 待启动 | 0.8.0 交付 |
+| REQ-015 | Agent 间通信协议——Coordinator↔Role Agent 的输入/输出契约 | AUDIT-052 (2026-04-30) | P0 | AUDIT-058 | 📋 待启动 | 0.8.0 交付 |
+| REQ-016 | main-workflow.md 重写——从串行路由到 Agent Team 路由 | AUDIT-052 (2026-04-30) | P1 | AUDIT-059 | 📋 待启动 | 0.8.0 交付 |
+| REQ-017 | stage-gates.md 重写——从 Phase-Gate 到 Task-Gate（Agent 参与看护） | AUDIT-052 (2026-04-30) | P1 | AUDIT-060 | 📋 待启动 | 0.8.0 交付 |
+| REQ-018 | verify_workflow.py 升级——支持 Agent Team 结构验证 | AUDIT-052 (2026-04-30) | P1 | AUDIT-061 | 📋 待启动 | 0.8.0 交付 |
+| REQ-019 | e2e-test-project 更新——用 Agent Team 模式走通全链路 | AUDIT-052 (2026-04-30) | P1 | AUDIT-062 | 📋 待启动 | 0.8.0 交付 |
+| REQ-020 | QA Agent——测试设计+集成/性能/安全测试 | AUDIT-052 (2026-04-30) | P1 | AUDIT-063 | 📋 待启动 | 0.9.0 交付 |
+| REQ-021 | DevOps Agent——CI/CD 配置+环境管理 | AUDIT-052 (2026-04-30) | P1 | AUDIT-064 | 📋 待启动 | 0.9.0 交付 |
+| REQ-022 | Analyst Agent——需求澄清+调研+竞品分析 | AUDIT-052 (2026-04-30) | P1 | AUDIT-065 | 📋 待启动 | 0.9.0 交付 |
+| REQ-023 | Release Agent——发布管理+版本规划+回滚 | AUDIT-052 (2026-04-30) | P1 | AUDIT-066 | 📋 待启动 | 0.9.0 交付 |
+| REQ-024 | Maintenance Agent——缺陷修复+复盘+规则演进 | AUDIT-052 (2026-04-30) | P2 | AUDIT-067 | 📋 待启动 | 0.9.0 交付 |
+| REQ-025 | 方法论智能路由集成——PUA 味道→角色 Agent 自动匹配 | AUDIT-052 (2026-04-30) | P1 | AUDIT-068 | 📋 待启动 | 0.9.0 交付 |
+| REQ-026 | Agent 角色提示词工程——每个角色的提示词独立调优 | AUDIT-052 (2026-04-30) | P1 | AUDIT-069 | 📋 待启动 | 0.9.0 交付 |
+| REQ-027 | 治理模型完整迁移——risk/decision/evidence 任务级粒度 | AUDIT-052 (2026-04-30) | P1 | AUDIT-070 | 📋 待启动 | 0.9.0 交付 |
+| REQ-028 | profiles.md 重写——profile 定义角色 Agent 启用范围 | AUDIT-052 (2026-04-30) | P2 | AUDIT-071 | 📋 待启动 | 0.9.0 交付 |
+| REQ-029 | 外部项目验证——≥2 个外部项目用 Agent Team 走通 | AUDIT-052 (2026-04-30) | P0 | AUDIT-072 | 📋 待启动 | 1.0.0 交付 |
+| REQ-030 | 迁移指南——从旧串行模型到 Agent Team 的用户升级文档 | AUDIT-052 (2026-04-30) | P0 | AUDIT-073 | 📋 待启动 | 1.0.0 交付 |
+| REQ-031 | 旧模型废弃通知——Phase-Gate deprecated + v2.0 移除时间线 | AUDIT-052 (2026-04-30) | P1 | AUDIT-074 | 📋 待启动 | 1.0.0 交付 |
+| REQ-032 | 用户文档完整——README + 快速开始 + 角色配置指南 | AUDIT-052 (2026-04-30) | P1 | AUDIT-075 | 📋 待启动 | 1.0.0 交付 |
+| REQ-033 | 全套 E2E 测试——Agent Team 所有角色+所有场景验证脚本 | AUDIT-052 (2026-04-30) | P1 | AUDIT-076 | 📋 待启动 | 1.0.0 交付 |
 
 **需求跟踪纪律**：
 - 每个 P0 任务 MUST 关联到至少 1 条需求
@@ -559,3 +585,4 @@ Step 4: 下一 Gate 检查时正式审计
 | FIX-010 | 维护 | governance-update——老用户升级路径（只更新 bootstrap，不动 .governance/） | 用户反馈 (2026-04-28) | governance-update.md 命令 + verify_workflow.py snippet + TOOLS.md + bootstrap 版本检测提示 | Claude | 项目负责人 | 项目负责人 | 已完成 | P0 | 2026-04-29 | 2026-04-29 | 2026-04-29 | G11 | 老用户 /plugin update 后运行此命令，bootstrap 段升级到最新，不动治理数据 | EVD-122 | 老用户 CLAUDE.md 是 init 时注入的旧版，升级后不会自动更新 | — | — |
 | FIX-009 | 维护 | bootstrap 自动版本变化检测——用户更新后自动感知 | 用户反馈 (2026-04-28) | CLAUDE.md Step 1 版本变化检测 + plan-tracker 工作流版本字段 + governance-init 模板 | Claude | 项目负责人 | 项目负责人 | 已完成 | P0 | 2026-04-28 | 2026-04-28 | 2026-04-28 | G11 | bootstrap 每次会话自动对比版本 + 输出版本跨度/CHANGELOG摘要/需采纳项/自动生效项 | EVD-122 | governance-status 需主动调用——更新后无人跑 | — | 用户更新插件→下次会话→自动感知 |
 | PRINCIPLE-001 | 维护 | 用户视角强制原则——所有变更必须回答"用户怎么用" | 用户反馈 (2026-04-28) | user-perspective-principle.md + governance-status Step 3.5 + SKILL.md M2.1 + CLAUDE.md + governance-init 模板 | Claude | 项目负责人 | 项目负责人 | 已完成 | P0 | 2026-04-28 | 2026-04-28 | 2026-04-28 | G11 | 3 必答问题 + 6 检查清单 + 5 反模式 + 近期变更用户可达性审计 | EVD-122 | 3/4 版本对已安装用户有断点 | — | 工作流是给人用的，不是自嗨 |
+| AUDIT-052 | 架构 | Agent Team 架构演进——从串行阶段模型到按需触发的多 Agent 协作团队 | 用户反馈 (2026-04-30) | agent-team-architecture.md (Coordinator+8角色+Task-Gate) + 版本路线图更新 + 需求矩阵 REQ-010~033 | Claude | 项目负责人 | 项目负责人 | 已完成 | P0 | 2026-04-30 | 2026-05-04 | 2026-04-30 | G11 | 架构设计文档 + 24 条需求版本映射 + superpowers/PUA/Harness 对标分析 | EVD-133 | — | — | 0.8.0~1.0.0 演进路线已建立 |

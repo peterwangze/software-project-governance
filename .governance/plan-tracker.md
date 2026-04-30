@@ -40,7 +40,7 @@
 
 | 项目 | 当前阶段 | 总任务数 | 已完成 | 阻塞中 | 关键风险数 | 最近 Gate 结论 | 最近复盘日期 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 项目管理工作流插件 | 维护（并行活跃：规划+架构） | 124 | 115 | 0 | 2 | G11 通过 | 2026-04-30 |
+| 项目管理工作流插件 | 维护（并行活跃：规划+架构） | 125 | 116 | 0 | 2 | G11 通过 | 2026-05-01 |
 
 ## 实施路线图（DEC-052）
 
@@ -588,7 +588,7 @@ Step 4: 下一 Gate 检查时正式审计
 | FIX-014 | 维护 | 任务级防护——消灭任务间盲区（跨任务 evidence 链 + 用户插入先入账） | 用户反馈 (2026-04-29) | pre-commit Step 4.5 跨任务 evidence chain + governance-init 干活前检查升级（3→5 件事） | Claude | 项目负责人 | 项目负责人 | 已完成 | P0 | 2026-04-29 | 2026-04-29 | 2026-04-29 | G11 | pre-commit 检测到前序 task 无 evidence 时输出 M7.4 DEBT 警告 + 干活前检查含任务入账和跨任务检查 | 待补 | 任务间盲区——上一个 task 证据未补齐就开始下一个 | — | 纳入 0.7.0 |
 | FIX-013 | 维护 | M5 AskUserQuestion 交互覆盖审计——修复 3 个缺口（risk escalation触发+deliverable review强制+阶段跳跃AskUserQuestion格式） | 用户反馈 (2026-04-29)——agent 反复使用内联文字而非 AskUserQuestion | interaction-boundary.md 升级 + SKILL.md M5.2 触发机制补全 + risk-log escalation AskUserQuestion 触发 | Claude | 项目负责人 | 项目负责人 | 已完成 | P1 | 2026-04-29 | 2026-04-29 | 2026-04-29 | G11 | 3 个缺口修复 + M5.2 8 个触发点全部有对应落地机制 | EVD-127 | M5 规则存在但 agent 反复违规——规则无强制力 | — | 0.7.0 已发布 |
 | FIX-016 | 维护 | M5.1 运行时违规修复——预输出自拦截机制 | 用户反馈 (2026-04-30)——FIX-015 后 agent 仍输出"要继续吗？"内联问题 | (1) CLAUDE.md SELF-CHECK #4 (2) governance-init 模板同步 (3) SKILL.md M5.1 "STOP and replace" (4) 失败模式10 (5) Check 10.4 SELF-CHECK 覆盖检测 | Claude | 项目负责人 | 项目负责人 | 已完成 | P0 | 2026-04-30 | 2026-04-30 | 2026-04-30 | G11 | Check 10: 4/4 PASSED | EVD-134 | — | 失败模式10: 对话习惯违规 |
-| FIX-019 | 维护 | M5 模型方向性翻转——从"白名单触发"到"默认审查" | M5 under-use 复发 9 次后的方向性根因——agent 只在特定触发点使用 AskUserQuestion，但用户期望所有交互边界都以 AskUserQuestion 结束 | (1) M5.2 新增元规则: 默认所有交互边界 MUST AskUserQuestion, 跳过是例外 (2) M5.4 重构为"When to SKIP" (3) SELF-CHECK #5 (4) 失败模式11 更新 | Claude | 项目负责人 | 项目负责人 | 进行中 | P0 | 2026-04-30 | 2026-04-30 | | G11 | M5 模型翻转 + SELF-CHECK #5 + 失败模式11 更新 | 待补 | 当前 M5 是白名单模式——只在 11 个触发点使用 AskUserQuestion。agent 将"不在白名单中"解释为"不需要问"，导致状态展示/选项呈现等交互边界被静默跳过 | — |
+| FIX-019 | 维护 | M5 模型方向性翻转——从"白名单触发"到"默认审查" | M5 under-use 复发 9 次后方向性根因——白名单模式导致 agent 只在命中触发点时使用 AskUserQuestion | (1) M5.2 元规则 (2) M5.4 重构为 When to SKIP (3) SELF-CHECK #5 (4) 失败模式11 第三次更新 | Claude | 项目负责人 | 项目负责人 | 已完成 | P0 | 2026-04-30 | 2026-04-30 | 2026-05-01 | G11 | verify PASSED + 模型翻转 + SELF-CHECK #5 | EVD-139 | 6 层修复(FIX-013/015/016/017+AUDIT-053 C1+FIX-018)都在白名单模式内打转——FIX-019 是第一个跳出白名单框架的修复 | — |
 | FIX-018 | 维护 | M7.4 结构修复——review移到commit之前+summary嵌入AskUserQuestion | M5 under-use 复发7次深度根因——summary与AskUserQuestion结构性竞争 | (A)summary嵌入AskUserQuestion (B)审查移到commit之前 | Claude | 项目负责人 | 项目负责人 | 已完成 | P0 | 2026-04-30 | 2026-04-30 | 2026-04-30 | G11 | verify PASSED | EVD-137 | — | — |
 | FIX-017 | 维护 | M5 under-use 修复——AskUserQuestion 触发点静默跳过 | 用户反馈 (2026-04-30)——FIX-016 完成后 agent 直接总结+停止 | (1) M7.4 新增 step 5 (2) M5.2 新增触发点 (3) 失败模式11 | Claude | 项目负责人 | 项目负责人 | 已完成 | P0 | 2026-04-30 | 2026-04-30 | 2026-04-30 | G11 | M7.4 step 5 + M5.2 + 失败模式11 | EVD-135 | — | — |
 | FIX-015 | 维护 | M5 AskUserQuestion 绕过根因修复——6 缺口系统性闭环 | 用户反馈 (2026-04-30)——实战中仍存在绕过 AskUserQuestion | (1) development/sub-workflow.md 内联问题指令修复 (2) 全子工作流 AskUserQuestion 交互标注审计 (3) 轻量 profile bootstrap 模板补 M5 规则 (4) SKILL.md M2.3 M5 交互信号 (5) verify_workflow.py 新增 Check 10 M5 反模式检测 (6) stage-gates.md 原则#10 Gate-M5 绑定 | Claude | 项目负责人 | 项目负责人 | 已完成 | P0 | 2026-04-30 | 2026-04-30 | 2026-04-30 | G11 | 6 缺口修复 + verify_workflow.py PASSED + check-governance Check 10 PASSED | EVD-132 | FIX-013 修复了 M5 触发覆盖但未解决子工作流层面的源头污染——agent 读到 `询问用户："..."` 这样的内联指令会直接照做。M2.3 绑定规则建立：子工作流交互标注→AskUserQuestion 工具 | 版本 bump 0.7.0→0.7.1 |

@@ -1,5 +1,7 @@
 # Agent Team 架构演进设计
 
+> **DESIGN DOCUMENT FOR v0.8.0+ — NOT YET ACTIVE.** The current operational model is Phase-Gate as defined in `SKILL.md`, `references/stage-gates.md`, and `main-workflow.md`. Do not apply Task-Gate rules or Agent Team role definitions until v0.8.0 is implemented. This document describes the TARGET architecture, not the current runtime behavior.
+
 本文件定义 `software-project-governance` 从串行阶段模型（Phase-Gate）向按需触发的多 Agent 协作团队（Task-Gate + Agent Team）的架构演进方案。
 
 ## 1. 问题陈述：为什么串行阶段模型是死板的

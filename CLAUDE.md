@@ -20,7 +20,7 @@
 - **silent-track** → 执行 Step 1~2，**MUST NOT** 输出治理面板/风险统计/任务进度表。仅在 Gate 失败或风险 escalation 到期时打断用户。
 
 **维度二：操作权限模式（能做什么不打断）**：
-- **maximum-autonomy（最高权限）**：除关键决策和全部任务完成外，**一切操作自动执行**——包括 git commit+push（含 master/main）、本地命令、文件创建/编辑/删除、package 安装。用户思考流不被打断。
+- **maximum-autonomy（最高权限）**：除以下 3 类情况外**一切操作自动执行**——(a) 关键决策（范围/架构/发布/风险/依赖/模式变更）；(b) P0 任务或治理关键文件修改后的交付物审查（M7.4 step 5）；(c) 全部任务完成。自动执行：git commit+push（含 master/main）、本地命令、文件创建/编辑/删除、package 安装。
 - **default-confirm（默认确认）**：4 类危险操作必须确认——(a) 破坏性 git（push --force/reset --hard/branch -D）；(b) 文件系统破坏（rm -rf/批量删除）；(c) 外部副作用（API/package/数据库/环境变量）；(d) 不可逆操作（squash/rebase/修改已推送commit）。常规操作自动执行。
 
 **治理开关——用户随时动态切换**：
@@ -30,8 +30,10 @@
 - "切换到始终在线" / "切换到按需调用" / "切换到静默跟踪" → trigger_mode 对应切换
 - "当前模式" / "现在什么模式" → 输出当前 trigger_mode × permission_mode
 
-**每次会话输出一句确认**：
-> 🔍 Governance: {trigger_mode} × {permission_mode} | stage: {stage}, Gate {gate}: {status}, {risk_count} risk(s)
+**每次会话输出一句确认（模式自适应）**：
+- **always-on**：`Governance: {trigger_mode} x {permission_mode} | stage: {stage}, Gate {gate}: {status}, {risk_count} risk(s)`
+- **on-demand**：`Governance: on-demand x {permission_mode}`（仅在用户显式调用时展开完整状态）
+- **silent-track**：不输出（MUST NOT 输出治理面板/风险统计/任务进度表）
 
 ### Step 1: 读 plan-tracker + 跨会话恢复
 读取 `.governance/plan-tracker.md`，确认：当前阶段、最近 Gate 结论、活跃风险数、进行中的 P0 任务。如果 `.governance/` 不存在，提醒用户先初始化。
@@ -74,7 +76,7 @@
 ### Step 2: 交叉验证（3 项强制检查）
 对照 `.governance/plan-tracker.md` 和 `.governance/evidence-log.md`：
 
-1. **证据完整性**：plan-tracker 中状态为"已完成"的任务，evidence-log 中是否有对应证据？缺失 = P0 漏洞，告知用户。
+1. **证据完整性**：plan-tracker 中状态为"已完成"的任务，evidence-log 中是否有对应证据？缺失 → **检查 profile**：lightweight 不强制证据（信息提示），standard/strict = P0 漏洞。
 2. **Gate 一致性**：plan-tracker 的 Gate 状态与 evidence-log 的最新证据是否匹配？Gate 标记 passed 但无对应证据 = 不一致，告知用户。
 3. **风险过期**：risk-log 中活跃风险超过 7 天未更新？是 = 标记为过期风险，告知用户。
 

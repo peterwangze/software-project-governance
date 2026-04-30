@@ -40,14 +40,14 @@ You **MUST** read these files before executing any task:
 
 **Starting work without pre-loading = protocol violation.**
 
-### M2.1 Reference files (in `references/`, same directory as this SKILL.md)
+### M2.1 Reference files (relative to this SKILL.md's directory)
 
 Read on demand based on task type:
 
 | File | Read when |
 |------|-----------|
-| `main-workflow.md` | **Always** — confirms fundamental purposes and matching rules |
-| `TOOLS.md` | Need to find a specific tool/script/checklist |
+| `main-workflow.md` | **Always** — confirms fundamental purposes and matching rules (skill root, not in `references/`) |
+| `TOOLS.md` | Need to find a specific tool/script/checklist (skill root, not in `references/`) |
 | `references/stage-gates.md` | Performing Gate checks |
 | `references/lifecycle.md` | Entering a new stage, need detailed stage definitions |
 | `references/profiles.md` | Initializing a project, user asks about profile/scale, or switching profile |
@@ -220,7 +220,7 @@ Rationale: Inline text doesn't enforce structured options, doesn't prevent the a
 | Critical decision point | Per M5.3 classification — stop and ask |
 | Risk escalation triggered | "Fix / Record exception / Defer" — when check-governance detects stale risk or passed escalation deadline |
 | Audit finding (Block/Deviation) | "Fix now / Schedule as task / Accept risk" — when audit discovers blocking or deviation-level findings |
-| Commit/push decision | "Commit now or continue?" at natural boundaries |
+| Destructive git operation (default-confirm mode only) | "Force push / reset --hard / branch -D?" — per interaction-boundary dangerous operations. Non-destructive git (commit, push, pull) auto-execute per M5.3/M5.4 |
 
 ### M5.3 Critical Decision Classification
 
@@ -233,6 +233,7 @@ The user MAY declare at session start (or at any point): **"仅在关键决策�
 - Risk acceptance (accepting a known risk, bypassing a Gate)
 - External dependency change (new library, new service, API change)
 - Profile/trigger mode change
+- **Stage jump (skipping a Gate)** — pre-acknowledged risk with decision-log recording required
 
 **Non-critical decisions** — auto-execute, do NOT ask:
 - Task ordering within confirmed direction
@@ -248,10 +249,10 @@ The user MAY declare at session start (or at any point): **"仅在关键决策�
 
 | Scenario | Correct action |
 |----------|---------------|
-| Direction already confirmed | Execute to completion |
+| Direction already confirmed | Execute to completion **until a new critical decision (per M5.3) arises during execution.** Do not re-ask about the already-confirmed direction. |
 | Governance record updates | Batch update after main work |
-| Gate checks | Self-assess, inform only on failure |
-| Git operations | Execute independently (commit per DEC-025) |
+| Gate checks (individual technical check items) | Self-assess, inform only on failure. **Stage advancement confirmation (entering next stage)** is a separate Type C interaction per interaction-boundary.md — MUST use AskUserQuestion. |
+| Non-destructive git operations (commit, push, pull, status, diff, log) | Execute independently (commit per DEC-025). Destructive git (force push, reset --hard, branch -D) → AskUserQuestion per M5.2 trigger. |
 | Completing one task | Continue to next highest-priority task |
 | Discovering immediately fixable issues | Fix immediately |
 | Non-critical decision in "stop only for critical" mode | Execute autonomously |
@@ -277,7 +278,7 @@ The user MAY declare at session start (or at any point): **"仅在关键决策�
 
 ### Gate execution rules
 
-- Gate not passed → **MUST NOT** claim next stage
+- Gate not passed → **MUST NOT** claim next stage *in full-workflow mode*. Standalone sub-workflow or tool usage (per main-workflow.md scene matching) requires only goal anchor and quality baseline checks — gate progression is not enforced in standalone mode.
 - All completed items **MUST** have evidence
 - Gate checks self-executed; inform user only on failure or conditional pass
 - Read `references/stage-gates.md` for detailed Gate check items when doing Gate checks
@@ -303,9 +304,9 @@ The agent infers the mode from the project profile. The user can override at any
 
 ### M7.2 Prohibited Interruptions
 
-These are NEVER valid reasons to stop, regardless of mode:
-1. Stopping after one task → continue to next
-2. Stopping after review items → execute fixes immediately
+These are NEVER valid reasons to stop **within a session** (session end per M4.2/M5.2 is a valid boundary):
+1. Stopping after one task → continue to next, **except for P0/governance-critical task deliverable review per M7.4 step 5**
+2. Stopping after **self-identified fixable defects** → execute fixes immediately. **Deliverable review requiring user judgment MUST use AskUserQuestion per M5.2.**
 3. Stopping after governance records updated → continue
 4. Stopping between coupled tasks → execute through
 5. Stopping after external op failure → log as TODO, continue
@@ -321,7 +322,7 @@ Process defects discovered during execution **MUST** be fixed immediately. If th
 
 ### M7.4 Task Completion Protocol (MANDATORY)
 
-After marking any task as "已完成" in `.governance/plan-tracker.md`, the agent **MUST** execute these 5 steps in order, as an atomic non-skippable sequence:
+After marking any task as "已完成" in `.governance/plan-tracker.md`, the agent **MUST** execute these 6 steps in order, as an atomic non-skippable sequence:
 
 1. **Write evidence** — add an entry to `.governance/evidence-log.md` per M3 field definitions. Every completed task MUST have corresponding evidence.
 2. **Run external validation** — `python scripts/verify_workflow.py check-governance`. Per M8.1, script validation catches structural issues agent self-check cannot.
@@ -330,7 +331,7 @@ After marking any task as "已完成" in `.governance/plan-tracker.md`, the agen
 5. **Deliverable review (MANDATORY for P0/governance-critical tasks)** — if the completed task was P0 priority OR modified any governance-critical file (SKILL.md, stage-gates.md, audit-framework.md, verify_workflow.py, lifecycle.md, profiles.md, onboarding.md, interaction-boundary.md, agent-failure-modes.md, main-workflow.md, TOOLS.md, pre-commit-hook.sh, post-commit-hook.sh, governance-init.md, CLAUDE.md) → **MUST** use AskUserQuestion to present the deliverable for user review **before** continuing to the next task. Options: "Confirm — proceed to next" / "Revise — needs changes" / "Reject — roll back". Skipping this review for P0 tasks = M5 under-use violation. For non-P0, non-governance-critical tasks → proceed to step 5b.
 6. **Continue** — proceed to the next highest-priority task in plan-tracker per M7 execution continuity. If and only if the next task choice involves a critical decision (M5.3) → use AskUserQuestion. Otherwise → execute autonomously.
 
-**Skipping any step = protocol violation.** The agent **MUST NOT** declare a task "done" without completing all 5 steps. This protocol is designed to prevent the exact failure pattern where rules exist but are not executed — it binds the atomic actions of task closure into a single non-negotiable sequence.
+**Skipping any step = protocol violation.** The agent **MUST NOT** declare a task "done" without completing all 6 steps. This protocol is designed to prevent the exact failure pattern where rules exist but are not executed — it binds the atomic actions of task closure into a single non-negotiable sequence.
 
 **Protocol design rationale**: Each of the 4 violations detected in the AUDIT-040 incident (no audit triggered, no auto-commit, execution interrupted, inline question instead of AskUserQuestion) maps to a missing step in the task completion sequence. By making the sequence explicit and atomic, the protocol eliminates the gaps that allowed each violation.
 
@@ -358,7 +359,7 @@ After each major task, **MUST** self-check:
 - [ ] M5.2/M5.3 AskUserQuestion used where required? Non-critical decisions auto-executed?
 - [ ] M6 completed tasks have evidence?
 - [ ] M7 no prohibited interruptions? Decision mode respected?
-- [ ] M7.4 task completion protocol executed? (evidence → check-governance → audit → commit → continue)
+- [ ] M7.4 task completion protocol executed? (evidence → check-governance → audit → commit → deliverable review → continue)
 - [ ] M7.5 pre-task protocol executed? (task in plan-tracker before modifying files?)
 - [ ] M7.3 risk escalation deadlines checked? Any open risks past deadline?
 - [ ] M7.3 task deadlines checked? Any active tasks past plan-complete date?

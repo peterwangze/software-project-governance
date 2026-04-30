@@ -75,6 +75,21 @@ When the user asks to perform a specific activity (e.g., "do a code review", "ru
 
 If the user wants to use only a single feature (e.g., "help me with code review"), load only that skill file — do not load the full lifecycle.
 
+### M2.2b Agent Team — Prompt Templates (in `agents/`, same directory as this SKILL.md)
+
+When using the Agent Team architecture (0.9.0+), the Coordinator acts as the team lead. Role agents are spawned via the `Agent` tool using these prompt templates. Each template follows the superpowers subagent-driven-development pattern.
+
+| Template | File | Role | Format |
+|----------|------|------|--------|
+| `coordinator` | `agents/coordinator.md` | Team lead skill — the main agent reads this | Agent SKILL (frontmatter + role definition) |
+| `developer` | `agents/developer.md` | Prompt template for spawning Developer sub-agents | Agent() prompt template with {placeholders} |
+| `reviewer` | `agents/reviewer.md` | Prompt template for spawning Reviewer sub-agents | Agent() prompt template with {placeholders} |
+| `architect` | `agents/architect.md` | Prompt template for spawning Architect sub-agents | Agent() prompt template with {placeholders} |
+
+**Usage**: The Coordinator reads the appropriate template, fills in `{placeholders}` (TASK_ID, TASK_NAME, file paths, acceptance criteria), and calls `Agent(subagent_type="general-purpose", prompt="[filled template]")`.
+
+**Producer-Reviewer separation**: Developer NEVER reviews own code. Reviewer NEVER modifies code. Coordinator NEVER executes — only coordinates. Sub-agents NEVER interact with users directly — all user communication goes through the Coordinator (structural M5 enforcement).
+
 ### M2.3 M5 Interaction Signal (MANDATORY — applies to ALL sub-workflow executions)
 
 **When executing any sub-workflow or skill from `stages/`**, the agent **MUST** apply the following M5 interaction binding:

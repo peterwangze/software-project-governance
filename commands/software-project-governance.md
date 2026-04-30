@@ -190,54 +190,127 @@
 
 **检测条件**：`session-snapshot.md` 存在 AND 日期在 24h 内
 
-**Snapsho t 新鲜度规则**：
-- ≤24h：活跃恢复——自动展示恢复面板
-- 24h~7d：可能过期——展示但标记"另一 session 可能已修改"
-- >7d：归档——展示供参考，不自动恢复
+**新鲜度规则**：
+| 时间 | 处理 |
+|------|------|
+| ≤24h | 活跃恢复——自动展示恢复面板 |
+| 24h~7d | 可能过期——展示但标记"另一 session 可能已修改项目状态" |
+| >7d | 归档——展示供参考，不自动恢复（转 Scenario F） |
 
 **流程**：
-1. 加载 snapshot，解析所有字段
-2. 与 plan-tracker 交叉验证（任务状态、决策、风险）
-3. 检查风险 escalation deadline——到期则立即升级
-4. 展示恢复面板：
-   - 上次会话日期 + agent 身份
-   - 活跃 carry-over 任务（含完成百分比）
-   - 待确认决策
-   - 需关注的风险（escalation deadline 在 3 天内）
-   - 推荐下一步
-5. 用户选择：(1) 继续上次 (2) 先审查 snapshot (3) 重新开始
 
-**Snapsho t 必要字段**（`session-snapshot.md` 格式规范见下文）：
-- session_id, session_date, agent
-- current_stage, current_gate, trigger_mode, permission_mode
-- carry_over_tasks (ID, 描述, 完成%, 阻塞者, 优先级)
-- pending_decisions (ID, 标题, 上下文, deadline)
-- active_risks (ID, 描述, escalation deadline, owner)
-- completed_in_session, incomplete_in_session
-- next_priority, user_preferences
+### Step D1: 加载并验证 snapshot
+
+解析 `session-snapshot.md` 所有字段。缺失必要字段（session_date, carry_over_tasks）→ 降级为 Scenario F。
+
+### Step D2: 与 plan-tracker 交叉验证
+
+| 检查 | 方法 | 不一致时 |
+|------|------|---------|
+| 任务状态 | snapshot carry-over task ID → plan-tracker 中查找 | plan-tracker 中已标记"已完成" → 从 carry-over 移除 |
+| 决策 | snapshot pending decision ID → decision-log 查找 | decision-log 已有 → 标记为已解决 |
+| 风险 escalation | snapshot active risk → 比较 escalation deadline vs 今天 | deadline 已过 → 标记为"需立即升级" |
+| Gate 状态 | snapshot current_gate → plan-tracker Gate 表 | 已通过 → 更新状态 |
+
+### Step D3: 输出恢复面板
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+欢迎回来。上次会话: {session_date} ({agent})
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+活跃 carry-over 任务:
+  🔄 {task_id} — {description} ({complete_pct}%)
+  🔄 ...
+
+待确认决策:
+  ⏳ {decision_id} — {title}
+
+需要关注的风险:
+  ⚠️ {risk_id} — {description} (escalation: {deadline}, {days_left}d remaining)
+
+推荐下一步: {next_priority}
+
+(1) 继续上次——恢复 carry-over 任务
+(2) 先审查 snapshot——展示完整 snapshot
+(3) 重新开始——转 Scenario F 状态展示
+```
+
+### Step D4: 按用户选择执行
+
+- (1) 继续: 设置 carry-over 任务为当前活跃任务，恢复 trigger_mode/permission_mode
+- (2) 审查: 展示完整 snapshot，然后询问是否继续
+- (3) 重新开始: 转 Scenario F
 
 ---
 
 ## Scenario E: 异常恢复
 
-**检测条件**：任一异常标记——
-- `check-governance` 返回 FAILED
-- `.git/hooks/pre-commit` 或 `post-commit` 缺失
-- `plan-tracker.md` 损坏（解析失败、缺失必要节）
-- `.governance/` 中文件数量 < 4
+**检测条件**：任一异常标记触发
 
-**流程**：
-1. 执行全量诊断（Categories A-D + 系统检查）
-2. 分类异常严重级别：P0（hooks 缺失、plan-tracker 损坏、文件缺失）、P1（证据缺口、Gate 不一致、过期风险）
-3. 通过 AskUserQuestion 展示诊断 + 修复选项：
-   - "一键修复全部" / "仅修复 P0" / "先看详情" / "暂不处理（记录为已接受风险）"
-4. 执行修复：
-   - hooks 缺失 → 从 scripts/ 复制
-   - plan-tracker 损坏 → 尝试从 Markdown 表格恢复，或从模板重建（保留 evidence/decision/risk）
-   - 证据缺口 → 创建占位证据条目（标记"补录"）
-   - 过期风险 → 询问是否仍然活跃
-   - 文件缺失 → 从模板重建
-5. 输出修复报告
+### Step E1: 全量诊断
+
+执行以下检查并分类严重级别：
+
+**P0 — 阻断级（不修复则治理失效）**：
+| 检查项 | 检测方法 |
+|--------|---------|
+| Hooks 缺失 | `test -f .git/hooks/pre-commit` |
+| plan-tracker 损坏 | 解析 markdown 表格，检查 `## 项目配置` 和 `## Gate 状态跟踪` 节 |
+| 文件缺失 | 检查 `.governance/` 中 plan-tracker/evidence/decision/risk 是否都存在且非空 |
+
+**P1 — 警告级（治理退化但未完全失效）**：
+| 检查项 | 检测方法 |
+|--------|---------|
+| 证据缺口 | `python scripts/verify_workflow.py check-governance` Check 1 |
+| Gate 不一致 | Check 3 |
+| 过期风险 | Check 2 + Check 8 |
+| 过期任务 deadline | Check 9 |
+| Commit 无 task ID | Check 7 |
+
+### Step E2: 展示诊断面板
+
+通过 AskUserQuestion 展示：
+
+```
+治理异常诊断:
+
+P0 (阻断):
+  ❌ Git hooks 缺失——commit 不受治理约束
+  ❌ plan-tracker.md 损坏——无法读取项目状态
+
+P1 (警告):
+  ⚠️ 3个已完成任务无证据
+  ⚠️ 2个风险超过7天未更新
+
+修复选项:
+(1) 一键修复全部 ({p0_count}P0 + {p1_count}P1)
+(2) 仅修复 P0 ({p0_count}项)
+(3) 先看详情
+(4) 暂不处理（记录为已接受风险）
+```
+
+### Step E3: 执行修复
+
+按用户选择执行：
+
+- **Hooks 缺失**: `cp scripts/pre-commit-hook.sh .git/hooks/pre-commit && cp scripts/post-commit-hook.sh .git/hooks/post-commit`
+- **plan-tracker 损坏**: 尝试从 markdown 表格结构恢复；失败则从 profile 模板重建（保留 evidence-log/decision-log/risk-log）
+- **文件缺失**: 从 `workflows/software-project-governance/templates/` 复制模板
+- **证据缺口**: 创建占位证据条目（标记"补录——需用户确认"）
+- **过期风险/任务**: 询问用户是否仍然活跃，是→更新截止日期，否→关闭
+
+### Step E4: 输出修复报告
+
+```
+修复完成:
+  ✅ Git hooks 已安装
+  ✅ plan-tracker.md 已修复
+  ⚠️ 3个证据缺口已创建占位条目(标记"补录")
+
+仍需关注:
+  - 补录证据需用户确认内容
+```
 
 **输出**：诊断报告 + 已执行的修复 + 仍需关注的事项
 

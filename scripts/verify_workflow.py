@@ -1834,7 +1834,39 @@ def check_m5_compliance():
             "fix": "Create interaction-boundary.md with AskUserQuestion binding rules"
         })
 
-    return {"issues": issues, "total_checks": 3}
+    # Check 4: CLAUDE.md SELF-CHECK contains M5 pre-output item (FIX-016)
+    # This detects whether the agent has a pre-output self-interruption mechanism
+    # Without this, the agent's natural conversational patterns (e.g., "要继续吗？")
+    # will produce M5.1 violations even when all source files are clean.
+    if claude_md.is_file():
+        content = claude_md.read_text(encoding="utf-8")
+        # The SELF-CHECK section must contain item 4 (M5 pre-output check)
+        m5_selfcheck_patterns = [
+            "我即将输出的文本是否包含向用户提问的问句",
+            "M5.1",
+            "AskUserQuestion",
+        ]
+        has_selfcheck_item4 = all(p in content for p in m5_selfcheck_patterns)
+        if not has_selfcheck_item4:
+            issues.append({
+                "type": "m5_selfcheck_missing",
+                "file": "CLAUDE.md",
+                "line": 0,
+                "text": "CLAUDE.md SELF-CHECK missing M5 pre-output item (item #4). Without this, agent's natural conversational patterns ('要继续吗？') will produce M5.1 violations even when source files are clean.",
+                "severity": "BLOCKING",
+                "fix": "Add SELF-CHECK item #4: scan output for inline question keywords before responding"
+            })
+    else:
+        issues.append({
+            "type": "m5_selfcheck_missing",
+            "file": "CLAUDE.md",
+            "line": 0,
+            "text": "CLAUDE.md not found — no SELF-CHECK M5 pre-output guard",
+            "severity": "BLOCKING",
+            "fix": "Run governance-init to create CLAUDE.md with SELF-CHECK item #4"
+        })
+
+    return {"issues": issues, "total_checks": 4}
 
 
 def cmd_check_governance(args):

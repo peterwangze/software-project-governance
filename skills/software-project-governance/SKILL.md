@@ -196,7 +196,11 @@ You **MUST** use AskUserQuestion before every session ends. At least one questio
 
 ### M5.1 The Only Legal Question Channel
 
-**AskUserQuestion is the ONLY legal way to ask the user anything.** Inline text questions (e.g., "Should I proceed?", "Do you want me to...?") are protocol violations. Every user-facing question MUST go through the AskUserQuestion tool.
+**AskUserQuestion is the ONLY legal way to ask the user anything.** Inline text questions (e.g., "Should I proceed?", "Do you want me to...?", "要继续吗？", "要不要") are protocol violations. Every user-facing question MUST go through the AskUserQuestion tool.
+
+**Self-interruption protocol (MANDATORY)**: If you catch yourself about to output an inline question — STOP IMMEDIATELY. Delete the question text. Replace it with an AskUserQuestion tool call. This is not optional. The most common violation pattern is ending a response with a natural-language confirmation question (e.g., "要继续吗？", "需要我继续吗？", "Shall I proceed?"). These are LLM conversational defaults, not instructions from any file — and they are M5.1 violations just the same.
+
+**Why FIX-015 wasn't enough**: FIX-015 cleaned up source file contamination (sub-workflow files containing `询问用户："..."` instructions). But inline questions like "要继续吗？" are NOT caused by contaminated files — they are the LLM's natural conversational pattern, appearing billions of times in training data. No file told the agent to ask "要继续吗？" — it's how LLMs naturally end responses. The only defense is a pre-output self-check that catches the pattern BEFORE it reaches the user. This is why CLAUDE.md SELF-CHECK item #4 exists.
 
 Rationale: Inline text doesn't enforce structured options, doesn't prevent the agent from continuing without reading the answer, and degrades the user experience. AskUserQuestion ensures the user sees a clear question with bounded options and the agent MUST wait for the response.
 

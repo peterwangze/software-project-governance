@@ -205,6 +205,32 @@
 
 **根因**：系统级约束依赖 git hooks 作为执行载体。这是架构限制。
 
+## 失败模式 10：M5 修复后对话习惯性违规（Post-Fix Conversational Regression）
+
+**症状**：FIX-015 已修复所有源文件中的内联问题指令（`询问用户："..."` 已清除），verify_workflow.py Check 10 静态扫描通过（0 反模式），但 agent 仍然输出内联问题（如"要继续吗？"、"需要我继续吗？"）。用户在 FIX-015 上线后的下一次对话中立即发现了违规。
+
+**检测方法**：
+- 读取 CLAUDE.md SELF-CHECK —— 检查是否包含第 4 项（M5 预输出自检）
+- 搜索 agent 最近输出中的内联问题关键词：`吗？`、`要不要`、`是否`、`需要我`、`Do you want`
+- verify_workflow.py Check 10.4：检查 CLAUDE.md SELF-CHECK 是否包含 M5 预输出项
+
+**用户应急动作**：
+- 如果发现 agent 输出内联问句：直接说"你又绕过了 AskUserQuestion"——agent 会触发本失败模式的自检流程
+- 检查 CLAUDE.md 是否包含 SELF-CHECK 第 4 项：不包含 → 运行 `/plugin update` 获取最新 bootstrap
+- 切换到"所有决策都问我"模式——限制 agent 自主权，强制每个决策点都用 AskUserQuestion
+
+**预防机制**：
+- **CLAUDE.md SELF-CHECK 第 4 项**：在任何输出前扫描是否包含向用户提问的问句，如果发现 → 立即删除，改用 AskUserQuestion
+- **SKILL.md M5.1 自中断协议**：agent 发现自己在输出内联问题 → STOP IMMEDIATELY → 删除 → 替换为 AskUserQuestion
+- **Check 10 静态检测**：verify_workflow.py 检查 CLAUDE.md SELF-CHECK 是否包含 M5 项（Check 10.4）
+
+**与 FIX-015 的关系**：
+- FIX-015 修复的是**源头污染**（文件告诉 agent 输出内联问题）→ 静态检测 Check 10.1~10.3
+- FIX-016 修复的是**对话习惯**（agent 自然产生内联问题）→ 预输出自检 Check 10.4
+- 两个修复互补——源文件干净 ≠ agent 行为干净，因为内联问题是 LLM 训练数据的自然模式，不是文件教的
+
+**根因**：LLM（包括 Claude）在训练数据中看到过数十亿次"要继续吗？""Shall I proceed?"这类自然对话收尾。这不是任何文件"教"的——这是模型的默认对话行为。FIX-015 假设"清除源文件 = 清除行为"，但行为改变需要预输出自拦截机制。此失败模式是 **CONSTRAINT-001 设计哲学在 M5 层面的体现**：agent 不会自觉遵守规则——必须有系统级强制力。但文本输出无法被 git hook 阻断——唯一的系统级强制力是预输出自检。
+
 ## 应急响应矩阵
 
 当用户发现 agent 行为异常时，按以下顺序排查：

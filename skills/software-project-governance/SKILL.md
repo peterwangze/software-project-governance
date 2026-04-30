@@ -31,6 +31,20 @@ This protocol **MUST** activate when ANY condition is met:
 
 **Trigger action**: Complete M2 pre-loading before any actual work.
 
+### M1.1 Agent Team Activation (0.10.0+)
+
+When the user requests development, code review, architecture design, or any multi-step task that benefits from role separation, the agent **MUST** activate Agent Team mode:
+
+1. Read `agents/coordinator.md` — take on the Coordinator persona (老周)
+2. Coordinator decomposes the task and spawns role agents via the Agent tool:
+   - Developer (agents/developer.md) — for coding/implementation
+   - Reviewer (agents/reviewer.md) — for independent code review
+   - Architect (agents/architect.md) — for architecture/tech selection
+3. Coordinator collects outputs, verifies consistency, presents results to user via AskUserQuestion
+4. **Producer-Reviewer separation is MANDATORY**: the Coordinator MUST NOT review its own code. Developer MUST NOT review its own code. Reviewer MUST NOT modify code.
+
+**This is not optional.** If a task involves creating or modifying code, spawning a Reviewer sub-agent is as mandatory as writing evidence (M7.4).
+
 ## M2. Pre-loading (MANDATORY)
 
 You **MUST** read these files before executing any task:

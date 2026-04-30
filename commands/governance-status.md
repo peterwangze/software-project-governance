@@ -4,11 +4,11 @@
 
 展示当前项目的治理状态摘要。
 
-## Input Parameters
+## 输入参数
 
 此命令不接受任何输入参数。
 
-## Execution Flow
+## 执行流程
 
 ### Step 1: 检查是否已初始化
 - **IF** `.governance/plan-tracker.md` 不存在 → 返回错误 `STATUS-ERR-001`（未初始化）
@@ -33,47 +33,47 @@
 - **IF** 不存在 `scripts/verify_workflow.py` → 跳过（外部项目通过插件市场安装，无法直接运行脚本）
   - 提醒用户：`运行 /plugin update 或 /reload-plugins 获取最新版本`
 
-### Step 4: 按 Output Format 模板输出状态面板
+### Step 4: 按输出格式模板输出状态面板
 
-## Output Format
+## 输出格式
 
-### Required Fields
-| Field | Type | Description | Example |
+### 必要字段
+| 字段 | 类型 | 说明 | 示例 |
 |-------|------|-------------|---------|
-| project_name | string | 项目名称 | "项目管理工作流插件" |
-| profile | string | 治理强度 | "standard" |
-| trigger_mode | string | 触发模式 | "always-on" |
-| current_stage | string | 当前阶段中文名 | "维护与演进" |
-| total_tasks | number | 总任务数 | 74 |
-| completed_tasks | number | 已完成任务数 | 54 |
-| completion_rate | string | 完成率百分比 | "73%" |
-| blocked_tasks | number | 阻塞中任务数 | 0 |
-| active_p0_tasks | number | 未完成的 P0 任务数 | 3 |
-| active_risks | number | 活跃风险数 | 3 |
-| last_gate_conclusion | string | 最近 Gate 结论 | "G11 通过" |
-| last_review_date | string | 最近复盘日期 | "2026-04-25" |
-| gate_status_table | table | G1~G11 状态表 | 见模板 |
+| project_name | 字符串 | 项目名称 | "项目管理工作流插件" |
+| profile | 字符串 | 治理强度 | "standard" |
+| trigger_mode | 字符串 | 触发模式 | "always-on" |
+| current_stage | 字符串 | 当前阶段中文名 | "维护与演进" |
+| total_tasks | 数字 | 总任务数 | 74 |
+| completed_tasks | 数字 | 已完成任务数 | 54 |
+| completion_rate | 字符串 | 完成率百分比 | "73%" |
+| blocked_tasks | 数字 | 阻塞中任务数 | 0 |
+| active_p0_tasks | 数字 | 未完成的 P0 任务数 | 3 |
+| active_risks | 数字 | 活跃风险数 | 3 |
+| last_gate_conclusion | 字符串 | 最近 Gate 结论 | "G11 通过" |
+| last_review_date | 字符串 | 最近复盘日期 | "2026-04-25" |
+| gate_status_table | 表格 | G1~G11 状态表 | 见模板 |
 
-### Output Template
+### 输出模板
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│  {project_name} — Governance Status                │
+│  {project_name} — 治理状态                          │
 ├─────────────────────────────────────────────────────┤
-│  Profile: {profile}   Trigger: {trigger_mode}       │
-│  Stage: {current_stage}                             │
+│  Profile: {profile}   触发模式: {trigger_mode}       │
+│  当前阶段: {current_stage}                           │
 ├─────────────────────────────────────────────────────┤
-│  Tasks: {completed}/{total} ({completion_rate})      │
-│  Blocked: {blocked}   P0 pending: {active_p0}       │
-│  Active risks: {active_risks}                        │
-│  Last Gate: {last_gate_conclusion}                   │
-│  Last Review: {last_review_date}                     │
+│  任务: {completed}/{total} ({completion_rate})        │
+│  阻塞: {blocked}   待处理 P0: {active_p0}            │
+│  活跃风险: {active_risks}                             │
+│  最近 Gate: {last_gate_conclusion}                   │
+│  最近复盘: {last_review_date}                        │
 ├─────────────────────────────────────────────────────┤
-│  Gate   │ Status               │ Date               │
-│  G1     │ {status}             │ {date}             │
-│  G2     │ {status}             │ {date}             │
-│  ...                                              │
-│  G11    │ {status}             │ {date}             │
+│  Gate   │ 状态                  │ 日期               │
+│  G1     │ {status}              │ {date}             │
+│  G2     │ {status}              │ {date}             │
+│  ...                                                  │
+│  G11    │ {status}              │ {date}             │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -84,18 +84,18 @@ Gate 状态列的合法值：
 - `pending` — 待检查
 - `blocked` — 阻塞
 
-## Error Codes
+## 错误码
 
-| Code | Condition | User Message | Agent Action |
+| 代码 | 条件 | 用户消息 | Agent 动作 |
 |------|-----------|-------------|-------------|
-| STATUS-ERR-001 | `.governance/plan-tracker.md` 不存在 | "Project has not been initialized yet. Run `/governance-init` to set up governance tracking for this project." | 停止执行，不做任何文件修改 |
+| STATUS-ERR-001 | `.governance/plan-tracker.md` 不存在 | "项目尚未初始化。运行 `/governance-init` 为此项目设置治理跟踪。" | 停止执行，不做任何文件修改 |
 
-## Self-Validation
+## 自校验
 
-After execution, agent MUST verify:
-- [ ] All Required Fields are present in output
-- [ ] completion_rate is a percentage string or "N/A"
-- [ ] gate_status_table contains exactly G1 through G11
-- [ ] Every gate status is one of the 5 legal values
-- [ ] All numeric fields contain actual numbers (not descriptions or "—")
-- [ ] Output uses Unicode box-drawing characters as shown in template
+执行后，agent MUST 验证：
+- [ ] 所有必要字段均出现在输出中
+- [ ] completion_rate 为百分比字符串或 "N/A"
+- [ ] gate_status_table 恰好包含 G1 至 G11
+- [ ] 每个 Gate 状态均为 5 种合法值之一
+- [ ] 所有数字字段包含实际数字（非描述文字或 "—"）
+- [ ] 输出使用模板中所示的 Unicode 制表符

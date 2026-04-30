@@ -219,7 +219,7 @@
 欢迎回来。上次会话: {session_date} ({agent})
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-活跃 carry-over 任务:
+活跃遗留任务:
   🔄 {task_id} — {description} ({complete_pct}%)
   🔄 ...
 
@@ -227,18 +227,18 @@
   ⏳ {decision_id} — {title}
 
 需要关注的风险:
-  ⚠️ {risk_id} — {description} (escalation: {deadline}, {days_left}d remaining)
+  ⚠️ {risk_id} — {description} (升级: {deadline}, 剩余 {days_left}天)
 
 推荐下一步: {next_priority}
 
-(1) 继续上次——恢复 carry-over 任务
-(2) 先审查 snapshot——展示完整 snapshot
+(1) 继续上次——恢复遗留任务
+(2) 先审查快照——展示完整 session-snapshot
 (3) 重新开始——转 Scenario F 状态展示
 ```
 
 ### Step D4: 按用户选择执行
 
-- (1) 继续: 设置 carry-over 任务为当前活跃任务，恢复 trigger_mode/permission_mode
+- (1) 继续: 设置遗留任务为当前活跃任务，恢复 trigger_mode/permission_mode
 - (2) 审查: 展示完整 snapshot，然后询问是否继续
 - (3) 重新开始: 转 Scenario F
 
@@ -324,7 +324,7 @@ P1 (警告):
 - 项目配置摘要（名称、profile、trigger_mode、permission_mode、版本、阶段）
 - Gate 状态表（G1-G11，含通过日期和关键证据）
 - 任务统计（总数/已完成/阻塞中/P0 待处理）
-- 活跃风险（escalation deadline 在 3 天内的标记）
+- 活跃风险（升级截止日期在 3 天内的标记）
 - 最近活动（最近 5 个已完成任务、最近 5 个决策）
 - 插件版本新鲜度
 - 建议下一步
@@ -338,40 +338,40 @@ P1 (警告):
 `session-snapshot.md` 必须包含以下字段以确保 Scenario D 可无缝恢复：
 
 ```markdown
-# Session Snapshot — {{DATE}}
+# 会话快照 — {{DATE}}
 
 - **session_id**: {{YYYYMMDD-HHMMSS}}
 - **session_date**: {{YYYY-MM-DD}}
 - **agent**: {{AGENT_NAME_AND_VERSION}}
 
-## Current State
+## 当前状态
 - **current_stage**: {{STAGE_NUMBER_AND_NAME}}
-- **current_gate**: {{GATE_ID}} (status: {{STATUS}})
+- **current_gate**: {{GATE_ID}} (状态: {{STATUS}})
 - **trigger_mode**: {{TRIGGER_MODE}}
 - **permission_mode**: {{PERMISSION_MODE}}
 
-## Carry-over Tasks
-| Task ID | Description | % Complete | Blocked By | Priority |
+## 遗留任务
+| 任务 ID | 描述 | 完成百分比 | 阻塞原因 | 优先级 |
 |---------|-------------|-----------|------------|----------|
 
-## Pending Decisions
-| Decision ID | Title | Context | Deadline |
+## 待确认决策
+| 决策 ID | 标题 | 上下文 | 截止日期 |
 |-------------|-------|---------|----------|
 
-## Active Risks
-| Risk ID | Description | Escalation Deadline | Owner |
+## 活跃风险
+| 风险 ID | 描述 | 升级截止日期 | 负责人 |
 |---------|-------------|---------------------|-------|
 
-## Completed This Session
+## 本轮已完成
 {{LIST_WITH_EVIDENCE_REFS}}
 
-## Incomplete / Deferred
+## 未完成 / 已延期
 {{LIST_WITH_REASONS}}
 
-## Next Session Priority
+## 下次会话优先级
 {{ORDERED_LIST}}
 
-## User Preferences
+## 用户偏好设置
 {{PERSISTED_PREFERENCES}}
 ```
 

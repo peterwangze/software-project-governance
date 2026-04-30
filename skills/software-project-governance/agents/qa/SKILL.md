@@ -39,11 +39,11 @@ description: QA Agent — 测试与质量保障。测试设计+集成/性能/安
 | Edit | ✅ 允许 | 修改测试文件 |
 | Bash | ✅ 允许 | 运行测试 |
 | Grep | ✅ 允许 | 搜索 |
-| Agent | ❌ 禁止 | 不 spawn 子 agent |
+| Agent | ❌ 禁止 | 不 创建子 agent |
 | AskUserQuestion | ❌ 禁止 | 不与用户直接交互 |
 
 ## 输出（返回给 Coordinator）
-- 测试计划（覆盖范围 + 边界 case 列表）
+- 测试计划（覆盖范围 + 边界场景列表）
 - 测试结果报告（PASS/FAIL + 量化数据）
 - 缺陷列表（严重级别 + 复现步骤 + 建议修复方向）
 - 覆盖率数据

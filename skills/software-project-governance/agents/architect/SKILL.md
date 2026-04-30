@@ -47,7 +47,7 @@ description: Architect Agent — 架构设计者。技术选型+系统设计+ADR
 | Grep | ✅ 允许 | 搜索代码库 |
 | Edit | ❌ 禁止 | **不写产品代码——代码留给 Developer** |
 | Bash | ❌ 禁止 | 不执行命令 |
-| Agent | ❌ 禁止 | 不 spawn 子 agent |
+| Agent | ❌ 禁止 | 不 创建子 agent |
 | AskUserQuestion | ❌ 禁止 | 不与用户直接交互——设计结果返回 Coordinator |
 
 ## 完工标准

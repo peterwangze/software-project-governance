@@ -2,13 +2,13 @@
 
 检查指定的治理 Gate 是否满足通过条件。
 
-## Input Parameters
+## 输入参数
 
-| Parameter | Type | Required | Default | Valid Values | Description |
+| 参数 | 类型 | 必需 | 默认值 | 有效值 | 描述 |
 |-----------|------|----------|---------|-------------|-------------|
-| gate_id | enum | no | — | G1 / G2 / G3 / G4 / G5 / G6 / G7 / G8 / G9 / G10 / G11 | 待检查的 Gate ID。不提供时展示所有 Gate 的摘要 |
+| gate_id | 枚举 | 否 | — | G1 / G2 / G3 / G4 / G5 / G6 / G7 / G8 / G9 / G10 / G11 | 待检查的 Gate ID。不提供时展示所有 Gate 的摘要 |
 
-## Execution Flow
+## 执行流程
 
 ### Step 1: 检查是否已初始化
 - **IF** `.governance/plan-tracker.md` 不存在 → 返回错误 `GATE-ERR-001`（未初始化）
@@ -38,46 +38,46 @@
 - **IF** evidence-log 中无对应证据 AND 退出条件 checklist 未完成 → 标记为 FAIL
 - **IF** plan-tracker 中该 Gate 状态为 blocked → 标记为 BLOCKED（注明阻塞原因）
 
-### Step 6: 按 Output Format 模板输出结果
+### Step 6: 按输出格式模板输出结果
 
-## Output Format
+## 输出格式
 
-### Required Fields
-| Field | Type | Description | Example |
+### 必要字段
+| 字段 | 类型 | 说明 | 示例 |
 |-------|------|-------------|---------|
-| gate_id | string | Gate ID | "G8" |
-| gate_name | string | Gate 名称 | "防护网就绪" |
-| current_status | string | 当前状态 | "passed" |
-| check_items | table | 检查项及判定结果 | 见模板 |
+| gate_id | 字符串 | Gate ID | "G8" |
+| gate_name | 字符串 | Gate 名称 | "防护网就绪" |
+| current_status | 字符串 | 当前状态 | "passed" |
+| check_items | 表格 | 检查项及判定结果 | 见模板 |
 
-### Output Template (单个 Gate)
+### 输出模板（单个 Gate）
 
 ```
 Gate {gate_id} — {gate_name}
-Current status: {current_status}
+当前状态: {current_status}
 
-Check items:
+检查项:
   ✅ / ❌ / ⚠️ {check_item_1}
-     Evidence: {evidence_reference or "缺失"}
+     证据: {evidence_reference 或 "缺失"}
   ✅ / ❌ / ⚠️ {check_item_2}
-     Evidence: {evidence_reference or "缺失"}
+     证据: {evidence_reference 或 "缺失"}
   ...
 
-Result: {passed / failed / blocked}
-{if failed}Missing items: {count} — see ❌ lines above
-{if blocked}Blocker: {description from plan-tracker}
+结果: {passed / failed / blocked}
+{if failed}缺失项: {count} — 见上方 ❌ 行
+{if blocked}阻塞原因: {从 plan-tracker 获取的描述}
 ```
 
-### Output Template (All Gates Summary)
+### 输出模板（全部 Gate 摘要）
 
 ```
-Gate Summary:
+Gate 摘要:
   G1  {status_icon} {status_text}
   G2  {status_icon} {status_text}
   ...
   G11 {status_icon} {status_text}
 
-Legend: ✅ passed  ⚠️ passed-with-conditions  ⏳ pending  ❌ failed  🚫 blocked
+图例: ✅ passed  ⚠️ passed-with-conditions  ⏳ pending  ❌ failed  🚫 blocked
 ```
 
 状态图标映射：
@@ -90,19 +90,19 @@ Legend: ✅ passed  ⚠️ passed-with-conditions  ⏳ pending  ❌ failed  🚫
 | failed | ❌ |
 | blocked | 🚫 |
 
-## Error Codes
+## 错误码
 
-| Code | Condition | User Message | Agent Action |
+| 代码 | 条件 | 用户消息 | Agent 动作 |
 |------|-----------|-------------|-------------|
-| GATE-ERR-001 | `.governance/plan-tracker.md` 不存在 | "Project has not been initialized yet. Run `/governance-init` to set up governance tracking before checking gates." | 停止执行 |
-| GATE-ERR-002 | gate_id 不在 G1~G11 范围内 | "Invalid gate '{value}'. Valid gates are: G1 through G11." | 停止执行 |
+| GATE-ERR-001 | `.governance/plan-tracker.md` 不存在 | "项目尚未初始化。在检查 Gate 之前，请先运行 `/governance-init` 设置治理跟踪。" | 停止执行 |
+| GATE-ERR-002 | gate_id 不在 G1~G11 范围内 | "无效 Gate '{value}'。有效 Gate 为：G1 至 G11。" | 停止执行 |
 
-## Self-Validation
+## 自校验
 
-After execution, agent MUST verify:
-- [ ] Gate ID is valid and recognized
-- [ ] Every check item has a clear PASS/FAIL/BLOCKED determination
-- [ ] FAIL items have the missing evidence/reason explicitly stated
-- [ ] Output template structure matches the defined format
-- [ ] Status icons match the icon mapping table
-- [ ] If showing single gate, stage exit conditions are cross-referenced
+执行后，agent MUST 验证：
+- [ ] Gate ID 有效且可识别
+- [ ] 每个检查项均有明确的 PASS/FAIL/BLOCKED 判定
+- [ ] FAIL 项已明确说明缺失的证据/原因
+- [ ] 输出模板结构与定义的格式一致
+- [ ] 状态图标与图标映射表一致
+- [ ] 若展示单个 Gate，已交叉引用阶段退出条件

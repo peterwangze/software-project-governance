@@ -39,7 +39,7 @@ description: DevOps Agent — CI/CD与基础设施。Pipeline配置+环境管理
 | Write | ✅ | 写 CI/基础设施配置 |
 | Edit | ✅ | 修改配置 |
 | Bash | ✅ | 运行命令 |
-| Agent | ❌ | 不 spawn 子 agent |
+| Agent | ❌ | 不 创建子 agent |
 | AskUserQuestion | ❌ | 不与用户直接交互 |
 
 ## 输出（返回给 Coordinator）

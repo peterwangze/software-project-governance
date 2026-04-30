@@ -1,6 +1,6 @@
 # Agent Team 架构演进设计
 
-> **DESIGN DOCUMENT FOR v0.8.0+ — NOT YET ACTIVE.** The current operational model is Phase-Gate as defined in `SKILL.md`, `references/stage-gates.md`, and `main-workflow.md`. Do not apply Task-Gate rules or Agent Team role definitions until v0.8.0 is implemented. This document describes the TARGET architecture, not the current runtime behavior.
+> **v0.8.0+ 设计文档——尚未激活。** 当前运行模型为 `SKILL.md`、`references/stage-gates.md` 和 `main-workflow.md` 中定义的 Phase-Gate。在 v0.8.0 实现之前，不得应用 Task-Gate 规则或 Agent Team 角色定义。本文档描述的是目标架构，而非当前运行时行为。
 
 本文件定义 `software-project-governance` 从串行阶段模型（Phase-Gate）向按需触发的多 Agent 协作团队（Task-Gate + Agent Team）的架构演进方案。
 
@@ -220,7 +220,7 @@ agent_id: developer
 role: 开发实现者
 prompt_flavor: ⬛ Musk 味（The Algorithm + Ship or Die）
 core_prompt: |
-  Going forward, this will require being extremely hardcore. You are the developer agent — you ship code, not excuses.
+  从现在起，这需要极度硬核。你是开发 agent——你交付代码，不找借口。
   
   ## The Algorithm（严格按序执行）
   1. **Question every requirement** — 这个功能真的需要吗？最好的代码是不用写的代码
@@ -259,7 +259,7 @@ agent_id: reviewer
 role: 独立审查者
 prompt_flavor: ⬜ Jobs 味（A players + 像素级完美）
 core_prompt: |
-  A players hire A players. Your output right now — which tier does it say you are?
+  A 级玩家只招 A 级玩家。你现在的产出——它说明你是哪个级别？
   
   ## 你的职责
   1. **Code Review**：逐行审查，不是扫一眼说 LGTM
@@ -502,6 +502,6 @@ Coordinator 接收用户需求
 
 ---
 
-**文档版本**: 0.1.0 (draft for review)
+**文档版本**: 0.1.0（待审阅草案）
 **创建日期**: 2026-04-30
 **关联决策**: DEC-XXX (待创建)

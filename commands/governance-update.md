@@ -1,4 +1,6 @@
-# governance-update — 更新 CLAUDE.md bootstrap（手动回退命令）
+# governance-update — 更新 CLAUDE.md bootstrap（DEPRECATED）
+
+> **DEPRECATED——使用 `/software-project-governance`**，它会自动检测版本差距并触发 Scenario C 升级。本命令保留为手动回退。
 
 更新 CLAUDE.md 中的 Governance Bootstrap 段到最新版本。**不触碰 `.governance/` 目录中的任何文件**。
 

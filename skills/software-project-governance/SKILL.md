@@ -95,7 +95,7 @@ All governance records **MUST** be written to `.governance/` in the user's proje
 - `.governance/decision-log.md` — decision records
 - `.governance/risk-log.md` — risk records
 
-If `.governance/` does not exist, suggest the user run `/software-project-governance:governance-init` to create it.
+If `.governance/` does not exist, suggest the user run `/software-project-governance` (unified entry point — auto-detects new project vs mid-project onboarding and routes to the correct scenario).
 
 You **MUST NOT** create a second set of project status files.
 
@@ -149,36 +149,44 @@ You **MUST** write `.governance/session-snapshot.md` at session end. This file p
 ```markdown
 # Session Snapshot — {{DATE}}
 
+- **session_id**: {{YYYYMMDD-HHMMSS}}
+- **session_date**: {{YYYY-MM-DD}}
+- **agent**: {{AGENT_NAME_AND_VERSION}}
+
 ## Current State
 - **Stage**: {{CURRENT_STAGE}}
 - **Active parallel stages**: {{ACTIVE_PARALLEL_STAGES}}
+- **Current Gate**: {{GATE_ID}} — {{GATE_STATUS}}
 - **Profile**: {{PROFILE}}
 - **Trigger mode**: {{TRIGGER_MODE}}
-- **Last Gate**: {{LAST_GATE_ID}} — {{LAST_GATE_RESULT}}
+- **Permission mode**: {{PERMISSION_MODE}}
 
 ## Carry-over Tasks
-| Task ID | Description | Status | Since | Notes |
-|---------|-------------|--------|-------|-------|
+| Task ID | Description | % Complete | Blocked By | Priority |
+|---------|-------------|-----------|------------|----------|
 {{CARRY_OVER_TASKS}}
 
 ## Pending Decisions
-| Decision ID | Question | Context | Created |
-|-------------|----------|---------|---------|
+| Decision ID | Title | Context | Deadline |
+|-------------|-------|---------|----------|
 {{PENDING_DECISIONS}}
 
 ## Active Risks
-| Risk ID | Description | Escalation deadline | Days remaining |
-|---------|-------------|---------------------|----------------|
+| Risk ID | Description | Escalation Deadline | Owner |
+|---------|-------------|---------------------|-------|
 {{ACTIVE_RISKS}}
 
 ## Completed This Session
-{{COMPLETED_ITEMS}}
+{{COMPLETED_ITEMS_WITH_EVIDENCE_REFS}}
 
-## Unfinished Work
-{{UNFINISHED_ITEMS}}
+## Incomplete / Deferred
+{{INCOMPLETE_ITEMS_WITH_REASONS}}
 
 ## Next Session Priority
-{{NEXT_PRIORITY}}
+{{ORDERED_LIST}}
+
+## User Preferences
+{{PERSISTED_PREFERENCES}}
 ```
 
 **Step 2: Session Status Summary** (plain text)

@@ -231,6 +231,33 @@
 
 **根因**：LLM（包括 Claude）在训练数据中看到过数十亿次"要继续吗？""Shall I proceed?"这类自然对话收尾。这不是任何文件"教"的——这是模型的默认对话行为。FIX-015 假设"清除源文件 = 清除行为"，但行为改变需要预输出自拦截机制。此失败模式是 **CONSTRAINT-001 设计哲学在 M5 层面的体现**：agent 不会自觉遵守规则——必须有系统级强制力。但文本输出无法被 git hook 阻断——唯一的系统级强制力是预输出自检。
 
+## 失败模式 11：M5 使用不足——AskUserQuestion 触发点静默跳过（M5 Under-Use）
+
+**症状**：agent 在 M5.2 定义的触发点不使用 AskUserQuestion——不是输出内联文字（失败模式 10），而是完全跳过交互。典型模式：完成 P0 任务后直接总结+推送+停止，不询问用户审查交付物。M7.4 step 5 的"continue to next task"被 agent 优先于 M5.2 的"deliverable needs review"。
+
+**检测方法**：
+- 检查 agent 完成 P0 任务后是否使用了 AskUserQuestion
+- 检查 agent 是否在修改 governance-critical 文件后请求审查
+- 会话日志中 AskUserQuestion 使用频率——如果长时间无 AskUserQuestion 但有多个 P0 任务完成 → under-use
+- verify_workflow.py 无法直接检测此模式（运行时行为），但可以通过 post-commit hook 检查最近 N 次 commit 之间是否有对应的 AskUserQuestion 交互（间接检测）
+
+**用户应急动作**：
+- 发现 agent 推送了重要变更但没有征求确认 → 直接说："你没有用 AskUserQuestion 让我审查"
+- 切换到"所有决策都问我"模式——强制 agent 在每个决策点使用 AskUserQuestion
+- 要求 agent 在完成每个 P0 任务后展示 deliverable review
+
+**预防机制**：
+- **M7.4 step 5 升级**：P0 任务或修改 governance-critical 文件的交付物 MUST 通过 AskUserQuestion 审查后才能继续——这不是可选步骤
+- **M5.2 新增触发点**："P0 task completion"——与"Deliverable needs review"区分，明确绑定到 M7.4 协议
+- **M7.2 澄清**：M7.2 禁止"stopping after one task"是指非 P0 任务的惯性停止——P0 任务的 deliverable review 是 M7.4 step 5 的强制步骤，不是禁止中断
+
+**与失败模式 10 的区别**：
+- 失败模式 10：agent 用了内联文字而不是 AskUserQuestion（错误的方式提问）
+- 失败模式 11：agent 完全没有提问（该问的时候不问）
+- 两者都是 M5 违规，但根因不同：模式 10 是对话习惯问题，模式 11 是协议优先级冲突（M7.2 禁止停止 vs M5.2 要求审查）
+
+**根因**：M7.2 说"stopping after one task → continue to next"，M5.2 说"deliverable needs review → AskUserQuestion"。agent 将 M7.2（禁止停止）解释为禁止所有停止——包括 M5.2 要求的审查停止。实际上 M7.2 的意图是防止惯性停顿（做完一件事就不知道该做什么），而不是禁止必要的交互审查。"Continue to next"不意味着"skip review"——审查是继续的一部分。
+
 ## 应急响应矩阵
 
 当用户发现 agent 行为异常时，按以下顺序排查：

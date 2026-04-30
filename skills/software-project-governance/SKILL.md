@@ -213,6 +213,7 @@ Rationale: Inline text doesn't enforce structured options, doesn't prevent the a
 | Session ending | "What to prioritize next" with options from plan tracker |
 | Multiple viable paths | "Which path to choose" with candidate approaches |
 | Ambiguous requirements | "Is your intent A or B" with possible interpretations |
+| P0 task completion | "Confirm / Revise / Reject" — per M7.4 step 5, ALL P0 tasks and governance-critical file changes MUST trigger deliverable review via AskUserQuestion before continuing. Skipping this = M5 under-use violation |
 | Deliverable needs review | "Confirm / Revise / Reject" |
 | Risk treatment decision | "Accept / Mitigate / Transfer / Avoid" |
 | Tech selection conclusion | "Confirm option X or Y" with recommendation reason |
@@ -326,7 +327,8 @@ After marking any task as "已完成" in `.governance/plan-tracker.md`, the agen
 2. **Run external validation** — `python scripts/verify_workflow.py check-governance`. Per M8.1, script validation catches structural issues agent self-check cannot.
 3. **Self-audit** — if the task was P0, or modified any governance-critical file (SKILL.md, stage-gates.md, audit-framework.md, verify_workflow.py, lifecycle.md, profiles.md, onboarding.md, interaction-boundary.md, agent-failure-modes.md, main-workflow.md, TOOLS.md), execute D1 (goal alignment) + D4 (change closure) audit dimensions per `references/audit-framework.md`. Record audit conclusion in evidence-log.
 4. **Commit** — `git add` the changed governance files and `git commit` with a message that **MUST** contain the task ID as prefix (e.g., "AUDIT-044: description", "MAINT-028: description"). Per DEC-025, every meaningful change is a commit unit. Task completion IS a commit boundary. The task ID prefix is the link between the code change and the plan-tracker entry — without it, traceability is broken. Commit messages without a task ID prefix are detectable by check-governance Check 7.
-5. **Continue** — proceed to the next highest-priority task in plan-tracker per M7 execution continuity. If and only if the next task choice involves a critical decision (M5.3) → use AskUserQuestion. Otherwise → execute autonomously.
+5. **Deliverable review (MANDATORY for P0/governance-critical tasks)** — if the completed task was P0 priority OR modified any governance-critical file (SKILL.md, stage-gates.md, audit-framework.md, verify_workflow.py, lifecycle.md, profiles.md, onboarding.md, interaction-boundary.md, agent-failure-modes.md, main-workflow.md, TOOLS.md, pre-commit-hook.sh, post-commit-hook.sh, governance-init.md, CLAUDE.md) → **MUST** use AskUserQuestion to present the deliverable for user review **before** continuing to the next task. Options: "Confirm — proceed to next" / "Revise — needs changes" / "Reject — roll back". Skipping this review for P0 tasks = M5 under-use violation. For non-P0, non-governance-critical tasks → proceed to step 5b.
+6. **Continue** — proceed to the next highest-priority task in plan-tracker per M7 execution continuity. If and only if the next task choice involves a critical decision (M5.3) → use AskUserQuestion. Otherwise → execute autonomously.
 
 **Skipping any step = protocol violation.** The agent **MUST NOT** declare a task "done" without completing all 5 steps. This protocol is designed to prevent the exact failure pattern where rules exist but are not executed — it binds the atomic actions of task closure into a single non-negotiable sequence.
 

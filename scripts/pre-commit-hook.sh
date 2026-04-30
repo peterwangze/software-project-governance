@@ -142,10 +142,12 @@ if git diff --cached --name-only 2>/dev/null | grep -q "^CLAUDE.md$"; then
         echo "║  Emergency bypass: git commit --no-verify                  ║"
         echo "╚══════════════════════════════════════════════════════════════╝"
         echo ""
-        # BLOCKING — but allow if governance-init.md is also staged (same commit, both synced)
-        # For now, WARN but don't block. Upgrade to BLOCK after the workflow validates.
-        # This is a warning because there are legitimate CLAUDE.md changes that don't
-        # involve governance behaviors (other project instructions, etc.)
+        # BLOCKING — this discipline has been violated 5+ times.
+        # The warning was not sufficient to change behavior.
+        # Legitimate non-governance CLAUDE.md changes should still include
+        # governance-init.md if they touch the bootstrap section.
+        # Emergency bypass: git commit --no-verify
+        exit 1
     fi
 fi
 

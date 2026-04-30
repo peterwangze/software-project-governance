@@ -2,6 +2,18 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.7.2] — 2026-04-30
+
+### 修复
+
+- **AUDIT-053: 全规则一致性审计修复——32 项矛盾/死规则/漂移闭环（20/32 已修复）**
+  - **P0 严重矛盾（8/8）**：C1 M7.2 停止规则加例外 / C2 review 区分 / C3 Gate 独立使用例外 / C4 commit 触发点替换 / C5 方向确认限定 / C6 maximum-autonomy 加 P0 审查 / C7 Gate 评估区分 / C8 session end 边界
+  - **P1 重要矛盾（5/7）**：S1 阶段重叠 profile 约束 / S2 关键决策列表同步 / S3 M7.4 步骤数修正 / S5 Step2 profile-aware / S6 interaction-boundary 同步
+  - **P2 引用/漂移/M5（7/17）**：V1 agent-team-architecture 版本 banner / AQ1 确认行模式自适应 / R1 TOOLS.md 路径修正 / R2 Replacement Boundary 路径 / R3 孤儿引用补全 / S6 M5.2 同步声明
+  - 剩余 12 项 P2（R4 Gate AUTO/ASK 标注、D1-D7 死规则标注、DR1-DR3 非关键列表漂移、AQ2 on-demand Gate 状态）归入 0.8.0
+- **pre-commit hook Step 6 升级**：CLAUDE.md 直接修改检测从 WARNING → BLOCKING——BOOTSTRAP DISCIPLINE 违反（第 5+ 次）后升级为阻断级强制力
+- 版本 bump 0.7.1→0.7.2
+
 ## [0.7.1] — 2026-04-30
 
 ### 修复

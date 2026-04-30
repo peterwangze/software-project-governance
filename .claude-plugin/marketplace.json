@@ -8,7 +8,7 @@
     {
       "name": "software-project-governance",
       "description": "Software Project Governance Workflow - Automate process management for coding agents. Based on practices from Google, Amazon, Huawei, and ByteDance.",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "source": "./"
     }
   ]

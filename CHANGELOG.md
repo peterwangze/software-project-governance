@@ -2,6 +2,29 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.9.0] — 2026-05-01
+
+### 0.9.0 正式发布——Agent Team 基础架构
+
+0.9.0 完成 Agent Team 最小可行架构——Coordinator + 3 核心角色 + 通信协议：
+- AUDIT-053(P0): Coordinator Agent——统筹者(老周),用户交互+任务分解+Agent路由+治理看护
+- AUDIT-054(P0): Developer Agent——实现者(阿速),TDD编码+自动化门禁,不审查自己代码
+- AUDIT-055(P0): Reviewer Agent——审查者(老严),逐行审查+AI专项检查+安全检查,不修改代码
+- AUDIT-056(P0): Architect Agent——设计者(老顾),技术选型+系统设计+ADR+技术评审
+- AUDIT-057(P0): Task-Gate 模型——plan-tracker 支持 workflow_model 双模式
+- AUDIT-058(P0): Agent 通信协议——Coordinator↔Role Agent I/O 契约
+
+### 新增
+- `skills/software-project-governance/agents/`——4 角色 Agent skill 文件(writing-workflow 格式)
+- `references/task-gate-model.md`——Task-Gate vs Phase-Gate 对比+plan-tracker 变更
+- `references/agent-communication-protocol.md`——Agent 间 I/O 契约+错误处理
+- SKILL.md M2.2b——Agent Team prompt templates 使用说明
+
+### 架构原则
+- **Producer-Reviewer 分离**: Developer 不审查自己代码,Reviewer 不修改代码
+- **Coordinator 不执行**: Coordinator 只协调/路由/治理,不写代码不做决策
+- **Sub-agent 不交互**: 角色 Agent 不与用户直接对话——M5 由 Coordinator 集中处理
+
 ## [0.8.0] — 2026-05-01
 
 ### 0.8.0 正式发布——统一治理命令（用户易用性基础设施）
@@ -37,7 +60,7 @@
   - **P0 严重矛盾（8/8）**：C1 M7.2 停止规则加例外 / C2 review 区分 / C3 Gate 独立使用例外 / C4 commit 触发点替换 / C5 方向确认限定 / C6 maximum-autonomy 加 P0 审查 / C7 Gate 评估区分 / C8 session end 边界
   - **P1 重要矛盾（5/7）**：S1 阶段重叠 profile 约束 / S2 关键决策列表同步 / S3 M7.4 步骤数修正 / S5 Step2 profile-aware / S6 interaction-boundary 同步
   - **P2 引用/漂移/M5（7/17）**：V1 agent-team-architecture 版本 banner / AQ1 确认行模式自适应 / R1 TOOLS.md 路径修正 / R2 Replacement Boundary 路径 / R3 孤儿引用补全 / S6 M5.2 同步声明
-  - 剩余 12 项 P2（R4 Gate AUTO/ASK 标注、D1-D7 死规则标注、DR1-DR3 非关键列表漂移、AQ2 on-demand Gate 状态）归入 0.8.0
+  - 剩余 12 项 P2（R4 Gate AUTO/ASK 标注、D1-D7 死规则标注、DR1-DR3 非关键列表漂移、AQ2 on-demand Gate 状态）归入 0.9.0
 - **pre-commit hook Step 6 升级**：CLAUDE.md 直接修改检测从 WARNING → BLOCKING——BOOTSTRAP DISCIPLINE 违反（第 5+ 次）后升级为阻断级强制力
 - 版本 bump 0.7.1→0.7.2
 

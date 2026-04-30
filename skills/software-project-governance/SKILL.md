@@ -1,6 +1,6 @@
 ---
 name: software-project-governance
-description: Load unified workflow rules, templates, gates and fact sources for software project governance tasks.
+description: 加载统一工作流规则, templates, gates and fact sources for software project governance tasks.
 ---
 
 # Software Project Governance — Behavior Protocol
@@ -56,28 +56,28 @@ You **MUST** read these files before executing any task:
 
 ### M2.1 Reference files (relative to this SKILL.md's directory)
 
-Read on demand based on task type:
+按任务类型按需读取:
 
-| File | Read when |
+| File | 读取时机 |
 |------|-----------|
 | `main-workflow.md` | **Always** — confirms fundamental purposes and matching rules (skill root, not in `references/`) |
-| `TOOLS.md` | Need to find a specific tool/script/checklist (skill root, not in `references/`) |
-| `references/stage-gates.md` | Performing Gate checks |
-| `references/lifecycle.md` | Entering a new stage, need detailed stage definitions |
-| `references/profiles.md` | Initializing a project, user asks about profile/scale, or switching profile |
-| `references/onboarding.md` | Onboarding an existing (in-progress) project |
-| `references/interaction-boundary.md` | Uncertain whether to auto-execute or ask user |
-| `references/audit-framework.md` | Performing Gate checks, completing a stage, completing a Tier (per DEC-052 layered execution model), completing a P0 task, after significant changes |
-| `references/agent-failure-modes.md` | Agent behavior anomaly detected (protocol skip, selective execution, false closure, hallucinated evidence) — troubleshoot and execute emergency actions |
-| `references/agent-team-architecture.md` | Designing or evolving the Agent Team architecture — Coordinator + role agents + Task-Gate model. Read when planning architecture evolution, defining new agent roles, or migrating from Phase-Gate to Agent Team model |
+| `TOOLS.md` | 需要查找特定工具/script/checklist (skill root, not in `references/`) |
+| `references/stage-gates.md` | 执行 Gate 检查时 |
+| `references/lifecycle.md` | 进入新阶段时, need detailed stage definitions |
+| `references/profiles.md` | 初始化项目时, user asks about profile/scale, or switching profile |
+| `references/onboarding.md` | 已有项目接入时 (in-progress) project |
+| `references/interaction-boundary.md` | 不确定是自动执行还是询问用户时 |
+| `references/audit-framework.md` | 执行 Gate 检查时, completing a stage, completing a Tier (per DEC-052 layered execution model), completing a P0 task, after significant changes |
+| `references/agent-failure-modes.md` | 检测到 Agent 行为异常时 (protocol skip, selective execution, false closure, hallucinated evidence) — troubleshoot and execute emergency actions |
+| `references/agent-team-architecture.md` | 设计或演进 Agent Team 架构时 — Coordinator + role agents + Task-Gate model. 读取时机 planning architecture evolution, defining new agent roles, or migrating from Phase-Gate to Agent Team model |
 | `references/user-perspective-principle.md` | **Every task** — before completing any change that affects user behavior, MUST verify user accessibility, discoverability, and verifiability. Also loaded when planning/designing new features |
-| `references/data-boundary.md` | Clarifying user project data vs workflow sample data boundary — read when discussing data isolation or plugin deployment |
-| `references/agent-entry-differences.md` | Understanding Claude/Codex/Gemini/domestic agent CLI entry path differences — read when expanding multi-agent support |
-| `references/methodology-routing.md` | Dispatching role agents with PUA flavor matching — read when Coordinator routes tasks to role agents |
+| `references/data-boundary.md` | 需要澄清用户项目数据与工作流样例数据的边界时 — read when discussing data isolation or plugin deployment |
+| `references/agent-entry-differences.md` | 了解 Claude/Codex/Gemini/国内 Agent CLI 入口差异时 — read when expanding multi-agent support |
+| `references/methodology-routing.md` | Coordinator 按 PUA 味道匹配分发角色 Agent 时 — read when Coordinator routes tasks to role agents |
 
 ### M2.2 Sub-workflows and skills (in `stages/`, same directory as this SKILL.md)
 
-When the user asks to perform a specific activity (e.g., "do a code review", "run a tech review", "create a release checklist", "do a retrospective"), read the corresponding file:
+When the user asks to perform a specific activity (例如, "do a code review", "run a tech review", "create a release checklist", "do a retrospective"), read the corresponding file:
 
 | Directory | Contains |
 |-----------|----------|
@@ -88,16 +88,16 @@ When the user asks to perform a specific activity (e.g., "do a code review", "ru
 | `stages/release/release-checklist.md` | Release checklist skill |
 | `stages/maintenance/retro-meeting-template.md` | Retrospective meeting template skill |
 
-If the user wants to use only a single feature (e.g., "help me with code review"), load only that skill file — do not load the full lifecycle.
+If the user wants to 只使用单一功能 (例如, "help me with code review"), load only that skill file — 不加载完整生命周期.
 
-### M2.2b Agent Team — Prompt Templates (in `agents/`, same directory as this SKILL.md)
+### M2.2b Agent Team — prompt 模板 (在 `agents/` 目录中，与本 SKILL.md 同目录)
 
 When using the Agent Team architecture (0.10.0+), the Coordinator acts as the team lead. Role agents are spawned via the `Agent` tool using these prompt templates. Each template follows the superpowers subagent-driven-development pattern.
 
 | Template | File | Role | Format |
 |----------|------|------|--------|
 | `coordinator` | `agents/coordinator/SKILL.md` | Team lead — main agent loads this to become Coordinator | Agent SKILL |
-| `developer` | `agents/developer/SKILL.md` | Coding + TDD + tool-constrained (no Agent/AskUserQuestion) | Agent SKILL |
+| `developer` | `agents/developer/SKILL.md` | 编码 + TDD + 工具约束（禁止 Agent/AskUserQuestion） | Agent SKILL |
 | `reviewer` | `agents/reviewer/SKILL.md` | Independent review — Read/Grep only (no Write/Edit/Bash) | Agent SKILL |
 | `architect` | `agents/architect/SKILL.md` | Architecture + ADR — no product code modification | Agent SKILL |
 | `qa` | `agents/qa/SKILL.md` | Testing — test code only, no product code | Agent SKILL |
@@ -119,7 +119,7 @@ When using the Agent Team architecture (0.10.0+), the Coordinator acts as the te
 - The phrase `告知用户` (inform/tell the user) in sub-workflow text is a **one-way notification** — it does NOT require AskUserQuestion (not a question), but the agent SHOULD prefix such notifications with a clear signal that they are informational, not interactive.
 - **Self-check before any user interaction**: "Am I about to output an inline question? If yes → STOP, use AskUserQuestion instead. Am I about to deliver a one-way notification? If yes → prefix with 'ℹ️' to distinguish from questions."
 
-**Why this signal exists**: FIX-013 (M5 audit) fixed gaps in SKILL.md trigger coverage, but the root cause of M5 bypass persisted: sub-workflows contain natural-language interaction patterns (e.g., `询问用户："当前项目目标是什么？"`) that agents read as direct instructions to output inline text. M2.3 closes this gap by establishing a binding rule: sub-workflow interaction annotations → AskUserQuestion tool. The binding is enforced by verify_workflow.py's M5 anti-pattern check (Check 10).
+**Why this signal exists**: FIX-013 (M5 audit) fixed gaps in SKILL.md trigger coverage, but the root cause of M5 bypass persisted: sub-workflows contain natural-language interaction patterns (例如, `询问用户："当前项目目标是什么？"`) that agents read as direct instructions to output inline text. M2.3 closes this gap by establishing a binding rule: sub-workflow interaction annotations → AskUserQuestion tool. The binding is enforced by verify_workflow.py's M5 anti-pattern check (Check 10).
 
 ## M3. Output Rules (MANDATORY)
 
@@ -241,9 +241,9 @@ You **MUST** use AskUserQuestion before every session ends. At least one questio
 
 ### M5.1 The Only Legal Question Channel
 
-**AskUserQuestion is the ONLY legal way to ask the user anything.** Inline text questions (e.g., "Should I proceed?", "Do you want me to...?", "要继续吗？", "要不要") are protocol violations. Every user-facing question MUST go through the AskUserQuestion tool.
+**AskUserQuestion is the ONLY legal way to ask the user anything.** Inline text questions (例如, "Should I proceed?", "Do you want me to...?", "要继续吗？", "要不要") are protocol violations. Every user-facing question MUST go through the AskUserQuestion tool.
 
-**Self-interruption protocol (MANDATORY)**: If you catch yourself about to output an inline question — STOP IMMEDIATELY. Delete the question text. Replace it with an AskUserQuestion tool call. This is not optional. The most common violation pattern is ending a response with a natural-language confirmation question (e.g., "要继续吗？", "需要我继续吗？", "Shall I proceed?"). These are LLM conversational defaults, not instructions from any file — and they are M5.1 violations just the same.
+**Self-interruption protocol (MANDATORY)**: If you catch yourself about to output an inline question — STOP IMMEDIATELY. Delete the question text. Replace it with an AskUserQuestion tool call. This is not optional. The most common violation pattern is ending a response with a natural-language confirmation question (例如, "要继续吗？", "需要我继续吗？", "Shall I proceed?"). These are LLM conversational defaults, not instructions from any file — and they are M5.1 violations just the same.
 
 **Why FIX-015 wasn't enough**: FIX-015 cleaned up source file contamination (sub-workflow files containing `询问用户："..."` instructions). But inline questions like "要继续吗？" are NOT caused by contaminated files — they are the LLM's natural conversational pattern, appearing billions of times in training data. No file told the agent to ask "要继续吗？" — it's how LLMs naturally end responses. The only defense is a pre-output self-check that catches the pattern BEFORE it reaches the user. This is why CLAUDE.md SELF-CHECK item #4 exists.
 
@@ -298,7 +298,7 @@ AskUserQuestion is the **default** at interaction boundaries. These are the ONLY
 
 | Scenario | Correct action | Why skipping is OK |
 |----------|---------------|-------------------|
-| **Mid-execution chain** — you are in the middle of a continuous sequence of actions (e.g., evidence → verify → audit → commit) | Continue executing. AskUserQuestion at the NEXT interaction boundary (e.g., after commit, before continuing to next task) | The user confirmed the direction; intermediate steps don't need re-confirmation |
+| **Mid-execution chain** — you are in the middle of a continuous sequence of actions (例如, evidence → verify → audit → commit) | Continue executing. AskUserQuestion at the NEXT interaction boundary (例如, after commit, before continuing to next task) | The user confirmed the direction; intermediate steps don't need re-confirmation |
 | Pure notification — one-way information with no decision needed | Output the notification. No AskUserQuestion needed. | No user choice is being requested |
 | Trivial/sub-second fix — immediately fixable issue discovered and fixed in the same response | Fix and continue. | Stopping to ask would be more disruptive than the fix itself |
 | Non-critical decision in "stop only for critical" mode, AND the response does NOT present a new decision point | Execute autonomously. | The user explicitly chose minimal interruption |
@@ -376,7 +376,7 @@ After marking any task as "已完成" in `.governance/plan-tracker.md`, the agen
 2. **Run external validation** — `python scripts/verify_workflow.py check-governance`. Per M8.1, script validation catches structural issues agent self-check cannot.
 3. **Self-audit** — if the task was P0, or modified any governance-critical file (SKILL.md, stage-gates.md, audit-framework.md, verify_workflow.py, lifecycle.md, profiles.md, onboarding.md, interaction-boundary.md, agent-failure-modes.md, main-workflow.md, TOOLS.md), execute D1 (goal alignment) + D4 (change closure) audit dimensions per `references/audit-framework.md`. Record audit conclusion in evidence-log.
 4. **Deliverable review (BEFORE commit — MANDATORY for P0/governance-critical tasks)** — if the completed task was P0 priority OR modified any governance-critical file (SKILL.md, stage-gates.md, audit-framework.md, verify_workflow.py, lifecycle.md, profiles.md, onboarding.md, interaction-boundary.md, agent-failure-modes.md, main-workflow.md, TOOLS.md, pre-commit-hook.sh, post-commit-hook.sh, governance-init.md, CLAUDE.md) → **MUST** use AskUserQuestion to present the deliverable for user review. **The AskUserQuestion IS the output for this step.** DO NOT output a standalone summary or analysis before it — the summary lives INSIDE the AskUserQuestion body. The question body contains a brief summary of what was done and asks the user to confirm. Options: "Confirm — proceed to commit" / "Revise — needs changes" / "Reject — roll back". **Review comes BEFORE commit: commit is the reward for passed review, not the trigger to skip it.** Skipping this review for P0 tasks = M5 under-use violation (Failure Mode 11). For non-P0, non-governance-critical tasks → proceed to step 5.
-5. **Commit** — `git add` the changed governance files and `git commit` with a message that **MUST** contain the task ID as prefix (e.g., "AUDIT-044: description", "MAINT-028: description"). Per DEC-025, every meaningful change is a commit unit. Task completion IS a commit boundary. The task ID prefix is the link between the code change and the plan-tracker entry — without it, traceability is broken. Commit messages without a task ID prefix are detectable by check-governance Check 7.
+5. **Commit** — `git add` the changed governance files and `git commit` with a message that **MUST** contain the task ID as prefix (例如, "AUDIT-044: description", "MAINT-028: description"). Per DEC-025, every meaningful change is a commit unit. Task completion IS a commit boundary. The task ID prefix is the link between the code change and the plan-tracker entry — without it, traceability is broken. Commit messages without a task ID prefix are detectable by check-governance Check 7.
 6. **Continue** — proceed to the next highest-priority task in plan-tracker per M7 execution continuity. If and only if the next task choice involves a critical decision (M5.3) → use AskUserQuestion. Otherwise → execute autonomously.
 
 **Skipping any step = protocol violation.** The agent **MUST NOT** declare a task "done" without completing all 6 steps.
@@ -389,10 +389,10 @@ After marking any task as "已完成" in `.governance/plan-tracker.md`, the agen
 
 Before executing any task that modifies files tracked in the repository, the agent **MUST** execute these steps in order:
 
-1. **Verify task tracking** — check `.governance/plan-tracker.md`: does a task entry exist for this work? The task entry MUST have: a valid task ID (e.g., AUDIT-XXX, MAINT-XXX), a DRI assignment, a priority level, and a clear description of the expected output.
+1. **Verify task tracking** — check `.governance/plan-tracker.md`: does a task entry exist for this work? The task entry MUST have: a valid task ID (例如, AUDIT-XXX, MAINT-XXX), a DRI assignment, a priority level, and a clear description of the expected output.
 2. **If task not found → create first** — add a new task entry to plan-tracker with all required fields per the plan-tracker template (ID, 阶段, 任务项, 目标/预期结果, 输入, 输出, Owner/DRI, 协同角色, Escalation, 状态="进行中", 优先级, 计划开始, 计划完成, Gate, 验收标准). Then proceed with execution.
 3. **If task found but status is "未开始"** → update status to "进行中" before starting work.
-4. **Reference task ID in all commits** — every commit message **MUST** contain the task ID as prefix (e.g., "AUDIT-044: description"). Per DEC-025 and M7.4 step 4. The task ID in the commit message is the link between the code change and the plan-tracker entry — without it, traceability is broken.
+4. **Reference task ID in all commits** — every commit message **MUST** contain the task ID as prefix (例如, "AUDIT-044: description"). Per DEC-025 and M7.4 step 4. The task ID in the commit message is the link between the code change and the plan-tracker entry — without it, traceability is broken.
 
 **Modifying files without a corresponding plan-tracker entry = protocol violation.** Untracked modifications corrupt the project's traceability — without a task ID, evidence can't be linked, Gate checks can't verify completion, and the project Owner can't reconstruct why a change was made. Every file modification MUST be traceable back to exactly one task in plan-tracker.
 

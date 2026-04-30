@@ -1,4 +1,4 @@
-# Plugin Contract
+# 插件协议
 
 本文件定义一个 workflow plugin/skill 在本仓库中的最小承载约定。
 

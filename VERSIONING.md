@@ -1,4 +1,4 @@
-# Versioning Policy
+# 版本管理策略
 
 本文件定义 `software-project-governance` 的语义化版本规则、版本升级触发条件和废弃通知期。
 

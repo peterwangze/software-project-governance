@@ -489,7 +489,7 @@ REQUIRED_SNIPPETS = {
         "Task deadline enforcement",
     ],
     ROOT / "skills/software-project-governance/references/audit-framework.md": [
-        "# Audit Framework",
+        "# 审计框架",
         "审计作为一等治理看护手段",
         "## 审计维度",
         "D1 — 项目目标一致性审计",
@@ -529,12 +529,12 @@ REQUIRED_SNIPPETS = {
         "完成 Tier 时",
     ],
     ROOT / "VERSIONING.md": [
-        "# Versioning Policy",
+        "# 版本管理策略",
         "语义化版本规则",
         "版本升级触发条件",
     ],
     ROOT / "CHANGELOG.md": [
-        "# Changelog",
+        "# 变更日志",
         "## [0.10.0]",
         "## [0.9.0]",
         "## [0.8.0]",

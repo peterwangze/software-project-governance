@@ -1,4 +1,4 @@
-# Changelog
+# 变更日志
 
 本文件记录 `software-project-governance` 的每个版本变更。
 

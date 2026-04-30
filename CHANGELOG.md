@@ -2,6 +2,12 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.7.3] — 2026-04-30
+
+### 修复
+
+- **FIX-018: M7.4 结构修复——review 移到 commit 之前 + summary 嵌入 AskUserQuestion**。M5 under-use 复发 7 次后的深度根因：独立 summary 与 AskUserQuestion 形成结构性竞争——summary 总是赢（更简单、不需暂停、LLM 训练数据默认模式）。5 层文本规则修复（FIX-013/015/016/017 + AUDIT-053 C1）全部失效。修复：(A) summary 嵌入 AskUserQuestion 内部——禁止审查前输出独立 summary；(B) 审查移到 commit 之前——commit 是审查通过的奖励，不是跳过审查的触发器。M7.4 新顺序: evidence→verify→audit→AskUserQuestion 审查→commit→continue。M8 自检 + 失败模式 11 根因同步更新。
+
 ## [0.7.2] — 2026-04-30
 
 ### 修复

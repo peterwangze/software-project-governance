@@ -482,7 +482,7 @@ skills/software-project-governance/
     TOOLS.md
   references/                     ← 参考知识（Coordinator 按需读取）
     behavior-protocol.md
-    four-layer-architecture.md（本文件——六层架构设计）
+    architecture.md（本文件——六层架构设计）
     agent-team-architecture.md
     agent-failure-modes.md
     interaction-boundary.md

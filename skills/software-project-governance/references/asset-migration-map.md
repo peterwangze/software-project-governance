@@ -151,7 +151,7 @@ Coordinator 按需读取的参考知识，保留在 `references/`。
 | 当前路径 | 去向 | 方式 |
 |---------|------|------|
 | `skills/software-project-governance/references/behavior-protocol.md` | 留存 | — |
-| `skills/software-project-governance/references/four-layer-architecture.md` | 留存 | — |
+| `skills/software-project-governance/references/architecture.md` | 留存 | — |
 | `skills/software-project-governance/references/agent-team-architecture.md` | 留存 | — |
 | `skills/software-project-governance/references/agent-failure-modes.md` | 留存 | — |
 | `skills/software-project-governance/references/agent-communication-protocol.md` | 留存 | — |

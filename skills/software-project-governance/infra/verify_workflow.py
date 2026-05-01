@@ -64,7 +64,7 @@ REQUIRED_FILES = {
     "SKILL OKR Template": ROOT / "skills/software-project-governance/skills/okr/SKILL.md",
     "SKILL Six-Pager Template": ROOT / "skills/software-project-governance/skills/six-pager/SKILL.md",
     "Behavior Protocol (M0-M9)": ROOT / "skills/software-project-governance/references/behavior-protocol.md",
-    "Five-Layer Architecture Design": ROOT / "skills/software-project-governance/references/four-layer-architecture.md",
+    "Five-Layer Architecture Design": ROOT / "skills/software-project-governance/references/architecture.md",
     "Asset Migration Map": ROOT / "skills/software-project-governance/references/asset-migration-map.md",
 }
 
@@ -508,7 +508,7 @@ REQUIRED_SNIPPETS = {
         "阶段快速参考",
         "Profile 快速参考",
     ],
-    ROOT / "skills/software-project-governance/references/four-layer-architecture.md": [
+    ROOT / "skills/software-project-governance/references/architecture.md": [
         "# 六层架构设计",
         "适配层（Adapter）",
         "入口层",

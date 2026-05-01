@@ -320,7 +320,18 @@ Tier 3-C: 兼容与政策（4 tasks, ~2 sessions，可并行）
 | REQ-037 | 半途接入——借助 Claude /init 探索项目→推断当前阶段→映射到治理生命周期→创建onboarding记录 | 用户反馈 (2026-04-30) | P0 | AUDIT-078 | 📋 待启动 | 0.10.0 场景B |
 | REQ-038 | 会话恢复——从 session-snapshot.md 恢复 carry-over 任务/待确认决策/活跃风险→展示"欢迎回来"面板 | 用户反馈 (2026-04-30) | P0 | AUDIT-078 | 📋 待启动 | 0.10.0 场景D |
 | REQ-039 | 异常恢复——诊断 hooks 缺失/plan-tracker 损坏/证据缺口→分类严重级别→提供一键修复 | 用户反馈 (2026-04-30) | P0 | AUDIT-078 | 📋 待启动 | 0.10.0 场景E |
-| REQ-040 | Snapshot 格式升级——新增 session_id/current_gate/permission_mode/incomplete_in_session/user_preferences 字段，确保会话恢复有足够信息 | 用户反馈 (2026-04-30) | P1 | AUDIT-078 | 📋 待启动 | 0.10.0 场景D |
+| REQ-040 | Snapshot 格式升级 | 用户反馈 | P1 | AUDIT-078 | ✅ | 0.9.0 |
+| REQ-041 | 主 SKILL.md 瘦身为入口——删除行为协议,仅保留加载 Coordinator 指令 | AUDIT-082 | P0 | AUDIT-082 | 📋 | Phase 1 |
+| REQ-042 | 统一 SKILL 库目录结构——skills/{category}/{name}/SKILL.md | AUDIT-082 | P0 | AUDIT-082 | 📋 | Phase 3 |
+| REQ-043 | 统一 SKILL 格式——所有 SKILL 相同 frontmatter+触发条件+执行流程+步骤清单 | AUDIT-082 | P0 | AUDIT-082 | 📋 | Phase 3 |
+| REQ-044 | 迁移 stages/ 和 commands/ 到统一的 skills/ 目录 | AUDIT-082 | P0 | AUDIT-082 | 📋 | Phase 3 |
+| REQ-045 | 分离核心层——创建 core/ 目录 | AUDIT-082 | P0 | AUDIT-082 | 📋 | Phase 2 |
+| REQ-046 | 建立基础设施层——infra/hooks/, infra/tools/ | AUDIT-082 | P0 | AUDIT-082 | 📋 | Phase 2 |
+| REQ-047 | Agent↔SKILL 绑定——每个 Agent 声明可调用的 SKILL | AUDIT-082 | P1 | AUDIT-082 | 📋 | Phase 4 |
+| REQ-048 | SKILL 分类索引 | AUDIT-082 | P1 | AUDIT-082 | 📋 | Phase 4 |
+| REQ-049 | references/ 清理 | AUDIT-082 | P1 | AUDIT-082 | 📋 | Phase 2 |
+| REQ-050 | 统一工具/MCP 库索引 | AUDIT-082 | P2 | AUDIT-082 | 📋 | Phase 5 |
+| REQ-051 | verify_workflow.py 适配新目录结构 | AUDIT-082 | P2 | AUDIT-082 | 📋 | Phase 5 |
 
 **需求跟踪纪律**：
 - 每个 P0 任务 MUST 关联到至少 1 条需求
@@ -599,7 +610,8 @@ Step 4: 下一 Gate 检查时正式审计
 | AUDIT-077 | 架构 | 统一治理命令设计+场景A/C/F实现——`/software-project-governance` 6场景自动分类+一键入口 | 用户反馈——5命令碎片化,需统一入口 | 6场景决策树+设计文档+snapshot格式升级+旧命令路由 | Claude | 项目负责人 | 项目负责人 | 已完成 | P0 | 2026-04-30 | 2026-05-02 | 2026-05-01 | G11 | 统一命令文件+snapshot升级+命令路由 | EVD-138+EVD-140 | — | 0.10.0 基础设施 |
 | AUDIT-078 | 架构 | Scenario B 半途接入实现——项目探索+阶段推断+onboarding | 用户反馈——已有项目用户需要无缝接入 | 8步流程: B1项目探索(8维度信号矩阵) B2阶段推断(11阶段优先级匹配) B3 AskUserQuestion确认 B4-B8参数+onboarding+bootstrap+hooks | Claude | 项目负责人 | 项目负责人 | 已完成 | P0 | 2026-04-30 | 2026-05-02 | 2026-05-01 | G11 | 信号矩阵+阶段推断规则+差异化onboarding | EVD-140 | — | 0.10.0 用户存留关键 |
 | AUDIT-079 | 架构 | Scenario D/E 会话恢复+异常恢复实现 | 用户反馈——会话中断后需无缝恢复,异常需自动诊断修复 | D1-D4+E1-E4详细实现 | Claude | 项目负责人 | 项目负责人 | 已完成 | P0 | 2026-04-30 | 2026-05-02 | 2026-05-01 | G11 | verify PASSED | EVD-141 | — | 0.10.0 |
-| FIX-020 | 架构 | Agent 角色从 prompt 模板升级为行为约束 SKILL——消除"靠自觉"的架构缺陷 | Agent Team 首次验证暴露：Developer 权限约束全靠 prompt 文本，Reviewer 不修代码全靠"你痛恨修改代码"。CONSTRAINT-001 框架下 prompt 级约束已被证明不可靠。需将每个角色升级为工具权限声明+行为约束+可验证的 SKILL | (1) agents/ 目录重构为 skills/{role}/SKILL.md 格式 (2) 每个 SKILL 声明工具权限边界 (3) verify_workflow.py 新增 Agent Team 协议违规检测 (4) 更新 M1.1+M2.2b 引用新格式 | Claude | 项目负责人 | 项目负责人 | 进行中 | P0 | 2026-05-01 | 2026-05-01 | | G11 | 8 个角色 SKILL 含权限声明 + verify 检测 + 首次验证通过 | 待补 | M5 10次复发和Agent Team自觉约束是同一根因——text rules without enforcement | 0.10.0 基础设施修复 |
+| AUDIT-082 | 架构 | 四层架构重构——核心层+基础设施层+业务层(SKILL+Agent)解耦 | 用户反馈——当前架构混乱：主SKILL.md是500行行为协议而非入口、Agent和SKILL概念混淆、SKILL散落在stages/commands/references三处、无统一工具/MCP库。目标四层架构：核心层(工作流合约+模板)→基础设施层(脚本/工具/MCP库)→业务层(SKILL库+Agent库)。SKILL=确定性步骤不依赖LLM,Agent=角色+判断+可调用多SKILL。主SKILL仅作Coordinator入口 | (1)现状资产四层分类 (2)目录结构重设计 (3)主SKILL.md瘦身 (4)SKILL库建立+分类 (5)Agent库归类 (6)基础设施库统一 (7)verify适配 (8)版本bump | Claude | 项目负责人 | 项目负责人 | 进行中 | P0 | 2026-05-01 | 2026-05-03 | | G11 | 架构设计文档+需求拆解+目录重构+verify PASSED | 待补 | 当前结构最大的混淆：Agent的SKILL.md文件和SKILL层的SKILL.md是同名不同质——前者是persona+角色定义,后者是确定性执行步骤。此混淆是M5 10次复发和Agent自觉约束失效的架构根因 | 0.11.0 MAJOR重构 |
+| FIX-020 | 架构 | Agent 角色从 prompt 模板升级为行为约束 SKILL——消除"靠自觉"的架构缺陷 | Agent Team 首次验证暴露 | (1) agents/ 目录重构 (2) 工具权限声明 (3) 中文化 (4) verify 检测 | Claude | 项目负责人 | 项目负责人 | 已完成 | P0 | 2026-05-01 | 2026-05-01 | 2026-05-01 | G11 | 9 个 Agent SKILL + 工具权限 + 中文化 | EVD-143+EVD-144 | — | 0.10.0 |，Reviewer 不修代码全靠"你痛恨修改代码"。CONSTRAINT-001 框架下 prompt 级约束已被证明不可靠。需将每个角色升级为工具权限声明+行为约束+可验证的 SKILL | (1) agents/ 目录重构为 skills/{role}/SKILL.md 格式 (2) 每个 SKILL 声明工具权限边界 (3) verify_workflow.py 新增 Agent Team 协议违规检测 (4) 更新 M1.1+M2.2b 引用新格式 | Claude | 项目负责人 | 项目负责人 | 进行中 | P0 | 2026-05-01 | 2026-05-01 | | G11 | 8 个角色 SKILL 含权限声明 + verify 检测 + 首次验证通过 | 待补 | M5 10次复发和Agent Team自觉约束是同一根因——text rules without enforcement | 0.10.0 基础设施修复 |
 | AUDIT-053 | 架构 | Coordinator Agent skill 实现 | Agent Team 核心枢纽 | 角色定位+核心能力+执行流程+子任务格式+禁止事项+治理协议 | Claude | 项目负责人 | 项目负责人 | 已完成 | P0 | 2026-05-01 | 2026-05-04 | 2026-05-01 | G11 | agents/coordinator.md | EVD-138 | — | 0.9.0 |
 | AUDIT-054 | 架构 | Developer Agent skill 实现——开发实现者 | TDD编码+自动化门禁+完工标准 | The Algorithm+职责+输入输出契约+禁止事项+失败处理+治理协议 | Claude | 项目负责人 | 项目负责人 | 进行中 | P0 | 2026-05-01 | 2026-05-04 | | G11 | agents/developer.md | 待补 | — | 0.10.0 |
 | AUDIT-055 | 架构 | Reviewer Agent skill 实现——独立审查者 | 逐行审查+AI专项检查+安全审查+设计一致性 | 4维审查+输入输出契约+审查结论(APPROVED/NEEDS_CHANGE/BLOCKED)+审查清单 | Claude | 项目负责人 | 项目负责人 | 进行中 | P0 | 2026-05-01 | 2026-05-04 | | G11 | agents/reviewer.md | 待补 | — | 0.10.0 |

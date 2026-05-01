@@ -25,12 +25,17 @@
 1. 读取 `agents/management/coordinator/prompt.md` — 承担 Coordinator 角色（老周）
 2. Coordinator 分解任务并通过 Agent 工具派生角色 agent：
    - Developer (agents/development/developer/prompt.md) — 负责编码/实现
-   - Reviewer (agents/review/reviewer/prompt.md) — 负责独立代码审查
+   - Code Reviewer (agents/review/code-reviewer/prompt.md) — 负责独立代码审查
+   - Design Reviewer (agents/review/design-reviewer/prompt.md) — 负责独立设计审查
+   - Requirement Reviewer (agents/review/requirement-reviewer/prompt.md) — 负责独立需求审查
+   - Test Reviewer (agents/review/test-reviewer/prompt.md) — 负责独立测试审查
+   - Release Reviewer (agents/review/release-reviewer/prompt.md) — 负责独立发布审查
+   - Retro Reviewer (agents/review/retro-reviewer/prompt.md) — 负责独立复盘审查
    - Architect (agents/design/architect/prompt.md) — 负责架构/技术选型
 3. Coordinator 收集输出，验证一致性，通过 AskUserQuestion 向用户呈现结果
-4. **生产者-审查者分离是强制性的**：Coordinator MUST NOT 审查自己的代码。Developer MUST NOT 审查自己的代码。Reviewer MUST NOT 修改代码。
+4. **生产者-审查者分离是强制性的**：Coordinator MUST NOT 审查自己的代码。Developer MUST NOT 审查自己的代码。Reviewer agents MUST NOT 修改代码。
 
-**这不是可选项。** 如果任务涉及创建或修改代码，派生 Reviewer 子 agent 与编写证据（M7.4）同为强制性要求。
+**这不是可选项。** 如果任务涉及创建或修改代码，派生对应的审查子 agent 与编写证据（M7.4）同为强制性要求。
 
 ## M2. 预加载（MANDATORY）
 
@@ -81,7 +86,12 @@
 |----------|------|------|--------|
 | `coordinator` | `agents/management/coordinator/prompt.md` | 团队负责人——主 agent 加载此文件成为 Coordinator | Agent Prompt |
 | `developer` | `agents/development/developer/prompt.md` | 编码 + TDD + 工具约束（禁止 Agent/AskUserQuestion） | Agent Prompt |
-| `reviewer` | `agents/review/reviewer/prompt.md` | 独立审查——仅 Read/Grep（无 Write/Edit/Bash） | Agent Prompt |
+| `code-reviewer` | `agents/review/code-reviewer/prompt.md` | 独立代码审查——仅 Read/Grep/Glob（无 Write/Edit/Bash） | Agent Prompt |
+| `design-reviewer` | `agents/review/design-reviewer/prompt.md` | 独立设计审查——仅 Read/Grep/Glob（无 Write/Edit/Bash） | Agent Prompt |
+| `requirement-reviewer` | `agents/review/requirement-reviewer/prompt.md` | 独立需求审查——仅 Read/Grep/Glob（无 Write/Edit/Bash） | Agent Prompt |
+| `test-reviewer` | `agents/review/test-reviewer/prompt.md` | 独立测试审查——仅 Read/Grep/Glob（无 Write/Edit/Bash） | Agent Prompt |
+| `release-reviewer` | `agents/review/release-reviewer/prompt.md` | 独立发布审查——仅 Read/Grep/Glob（无 Write/Edit/Bash） | Agent Prompt |
+| `retro-reviewer` | `agents/review/retro-reviewer/prompt.md` | 独立复盘审查——仅 Read/Grep/Glob（无 Write/Edit/Bash） | Agent Prompt |
 | `architect` | `agents/design/architect/prompt.md` | 架构 + ADR——不修改产品代码 | Agent Prompt |
 | `qa` | `agents/testing/qa/prompt.md` | 测试——仅测试代码，不修改产品代码 | Agent Prompt |
 | `devops` | `agents/operations/devops/prompt.md` | CI/CD + 基础设施——不修改产品代码 | Agent Prompt |
@@ -91,7 +101,7 @@
 
 **使用方式**：Coordinator 读取相应模板，填入 `{placeholders}`（TASK_ID、TASK_NAME、文件路径、验收标准），然后调用 `Agent(subagent_type="general-purpose", prompt="[填充后的模板]")`。
 
-**生产者-审查者分离**：Developer NEVER 审查自己的代码。Reviewer NEVER 修改代码。Coordinator NEVER 亲自执行——仅协调。Sub-agent NEVER 直接与用户交互——所有用户通信通过 Coordinator 进行（结构性 M5 强制）。
+**生产者-审查者分离**：Developer NEVER 审查自己的代码。Reviewer agents NEVER 修改代码。Coordinator NEVER 亲自执行——仅协调。Sub-agent NEVER 直接与用户交互——所有用户通信通过 Coordinator 进行（结构性 M5 强制）。
 
 ### M2.3 M5 交互信号（MANDATORY — 适用于所有子工作流执行）
 

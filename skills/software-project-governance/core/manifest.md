@@ -4,7 +4,7 @@
 
 - `id`: `software-project-governance`
 - `name`: 软件项目治理工作流
-- `version`: `0.16.0`
+- `version`: `0.17.0`
 - `goal`: 将大型软件公司的项目管理经验沉淀为可被 coding agent 消费的项目治理 workflow plugin/skill
 - `supported_agents`: `Claude`, `Codex`, `Gemini`
 - `planned_agents`: `国内主流 agent CLI`
@@ -13,7 +13,7 @@
 ## 核心能力
 
 - 11 阶段生命周期 + 11 Gate 门禁
-- 7 职能组 9 Agent（管理/设计/开发/测试/评审/运维/维护）
+- 7 职能组 14 Agent（管理/设计/开发/测试/评审/运维/维护）
 - 25 能力层 SKILL（11 阶段 + 7 审查 + 3 模板 + 3 专项 + 1 入口）
 - 计划、证据、决策、风险等记录模板
 - 六层架构：适配层→入口层→业务智能层→能力层→基础设施层→核心层

@@ -60,6 +60,8 @@ REQUIRED_FILES = {
     "Skill Stages Code Review Standard": ROOT / "skills/software-project-governance/stages/development/code-review-standard.md",
     "Skill Stages Release Checklist": ROOT / "skills/software-project-governance/stages/release/release-checklist.md",
     "Skill Stages Retro Meeting Template": ROOT / "skills/software-project-governance/stages/maintenance/retro-meeting-template.md",
+    "Behavior Protocol (M0-M9)": ROOT / "skills/software-project-governance/references/behavior-protocol.md",
+    "Four-Layer Architecture Design": ROOT / "skills/software-project-governance/references/four-layer-architecture.md",
 }
 
 OPTIONAL_PROJECTION_FILES = {
@@ -475,18 +477,37 @@ REQUIRED_SNIPPETS = {
         "skills",
     ],
     ROOT / "skills/software-project-governance/SKILL.md": [
-        "# Software Project Governance",
-        "## M2",
+        "# 软件项目治理工作流入口",
+        "加载本 SKILL 后，你进入软件项目治理工作流",
+        "读取 `agents/coordinator/SKILL.md`",
+        "Coordinator 接管用户交互",
+        "Producer-Reviewer 分离",
+        "references/behavior-protocol.md",
+        "references/lifecycle.md",
         "references/stage-gates.md",
-        "Replacement Boundary",
-        "M7.4 Task Completion Protocol",
-        "evidence → check-governance → audit → commit → continue",
-        "M7.5 Pre-Task Protocol",
-        "task ID as prefix",
-        "9 checks that the agent cannot fake",
-        "Commit-task traceability",
-        "Risk escalation deadline",
-        "Task deadline enforcement",
+        "references/task-gate-model.md",
+        "references/agent-communication-protocol.md",
+    ],
+    ROOT / "skills/software-project-governance/references/behavior-protocol.md": [
+        "# 行为协议",
+        "M0-M9 强制性规则",
+        "## M0. 合规语言",
+        "## M1. 任务匹配",
+        "## M2. 预加载",
+        "## M3. 输出规则",
+        "## M4. 会话生命周期",
+        "## M5. AskUserQuestion 协议",
+        "## M6. Gate 行为",
+        "## M7. 执行连续性",
+        "## M8. 自检协议",
+        "## M9. 优先级声明",
+        "M7.4 任务完成协议",
+        "M7.5 任务前协议",
+        "证据 → check-governance → 审计 → 交付物审查在 commit 之前 → commit → 继续",
+        "双重机制",
+        "9 项 agent 无法造假的检查",
+        "阶段快速参考",
+        "Profile 快速参考",
     ],
     ROOT / "skills/software-project-governance/references/audit-framework.md": [
         "# 审计框架",
@@ -525,7 +546,7 @@ REQUIRED_SNIPPETS = {
     ROOT / "skills/software-project-governance/references/audit-framework.md": [
         "Tier 完成时",
     ],
-    ROOT / "skills/software-project-governance/SKILL.md": [
+    ROOT / "skills/software-project-governance/references/behavior-protocol.md": [
         "完成 Tier 时",
     ],
     ROOT / "VERSIONING.md": [
@@ -2438,7 +2459,7 @@ def auto_judge_gate(gate_id):
              lambda: _check_evidence_mentions("复盘", "复盘")),
             ("经验回灌到规则和模板",
              lambda: _check_snippet_in_file(
-                 "skills/software-project-governance/SKILL.md", "MUST", "SKILL.md 含经验驱动的 MUST 规则")),
+                 "skills/software-project-governance/references/behavior-protocol.md", "MUST", "behavior-protocol.md 含经验驱动的 MUST 规则")),
             ("下轮方向已明确（≥1 条 P0 任务）",
              lambda: _check_plan_has_priority("P0")),
             ("版本化记录已更新",

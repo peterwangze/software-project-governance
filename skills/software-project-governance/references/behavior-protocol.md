@@ -113,7 +113,7 @@
 - `.governance/decision-log.md` — 决策记录
 - `.governance/risk-log.md` — 风险记录
 
-如果 `.governance/` 不存在，建议用户运行 `/software-project-governance`（统一入口——自动检测新项目 vs 中途接入并路由到正确场景）。
+如果 `.governance/` 不存在，建议用户运行 `/governance`（统一入口——自动检测新项目 vs 中途接入并路由到正确场景）。
 
 **MUST NOT** 创建第二套项目状态文件。
 

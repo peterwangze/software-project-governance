@@ -19,7 +19,7 @@
 
 **用户应急动作**：
 1. 确认 skill 已安装：检查 `.claude/skills/` 或插件市场是否包含 `software-project-governance`
-2. 手动触发：输入 `/software-project-governance:governance-status` 看是否有响应
+2. 手动触发：输入 `/governance:governance-status` 看是否有响应
 3. 重新加载：`/reload-plugins` 或重启会话
 4. 如果协议持续不被加载，降级到手动模式：用户自行读 `.governance/plan-tracker.md`，手动记录证据
 

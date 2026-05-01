@@ -1,6 +1,6 @@
 # governance-status — 项目治理状态展示
 
-> **推荐使用 `/software-project-governance`**——自动检测项目状态并展示（Scenario F）。本命令保留为快捷方式。
+> **推荐使用 `/governance`**——自动检测项目状态并展示（Scenario F）。本命令保留为快捷方式。
 
 展示当前项目的治理状态摘要。
 

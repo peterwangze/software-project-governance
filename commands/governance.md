@@ -1,4 +1,4 @@
-# software-project-governance — 统一治理入口
+# governance — 统一治理入口
 
 一个命令覆盖全部治理场景。替代碎片化的 5 个独立命令（init/status/gate/verify/update）。
 
@@ -12,7 +12,7 @@
 ## 决策树（自动分类）
 
 ```
-/software-project-governance
+/governance
         │
         ▼
   [Check 1] .governance/ 存在？
@@ -405,10 +405,10 @@ P1 (警告):
 ## 文件变更清单
 
 ### 新增
-- `commands/software-project-governance.md`（本文件）
+- `commands/governance.md`（本文件）
 
 ### 修改
-- `skills/software-project-governance/SKILL.md` M3 节——将 `/governance-init` 引用更新为 `/software-project-governance`
+- `skills/software-project-governance/SKILL.md` M3 节——将 `/governance-init` 引用更新为 `/governance`
 - `commands/governance-init.md`——添加路由说明
 - `commands/governance-status.md`——添加路由说明
 - `commands/governance-verify.md`——添加路由说明

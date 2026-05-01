@@ -75,7 +75,7 @@
 
 | 代码 | 条件 | 动作 |
 |------|------|------|
-| REVIEW-ERR-001 | `.governance/` 不存在 | 提示用户先运行 `/software-project-governance` 初始化 |
+| REVIEW-ERR-001 | `.governance/` 不存在 | 提示用户先运行 `/governance` 初始化 |
 | REVIEW-ERR-002 | 指定阶段无产出物可审查 | 告知用户该阶段尚未产生可审查的产出物 |
 | REVIEW-ERR-003 | Reviewer Agent 不可用 | 降级为 Coordinator 执行审查（标注"非独立审查"） |
 

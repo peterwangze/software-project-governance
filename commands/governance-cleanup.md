@@ -5,7 +5,7 @@
 ## 触发条件
 
 - `/governance-cleanup` — 执行清理
-- 首次使用 `/software-project-governance` 时自动检测并提示（Scenario C 升级场景）
+- 首次使用 `/governance` 时自动检测并提示（Scenario C 升级场景）
 
 ## 清理目标
 

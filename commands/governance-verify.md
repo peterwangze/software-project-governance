@@ -1,6 +1,6 @@
 # governance-verify — 治理健康检查
 
-> **推荐使用 `/software-project-governance`**——自动检测异常并触发 Scenario E 诊断+修复。本命令保留为快捷方式。
+> **推荐使用 `/governance`**——自动检测异常并触发 Scenario E 诊断+修复。本命令保留为快捷方式。
 
 对当前项目执行治理健康检查，发现证据缺口、Gate 不一致和风险过期等问题。
 

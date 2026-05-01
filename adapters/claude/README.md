@@ -4,7 +4,7 @@
 > 新的正式入口请使用：
 > - **自包含插件**：`skills/software-project-governance/SKILL.md`（内嵌核心规则 + `references/` 按需加载）
 > - **插件市场**：`.claude-plugin/marketplace.json` + `plugin.json`
-> - **交互命令**：`/software-project-governance:governance-init`、`/software-project-governance:governance-status`、`/software-project-governance:governance-gate`、`/software-project-governance:governance-verify`
+> - **交互命令**：`/governance:governance-init`、`/governance:governance-status`、`/governance:governance-gate`、`/governance:governance-verify`
 > - **活跃数据源**：`.governance/`（plan-tracker、evidence-log、decision-log、risk-log）
 >
 > 本目录保留仅作为历史参考，不再继续扩展。下方"入口约定"和"执行要求"描述的是早期 repo-local 多文件读取模式，与当前自包含插件架构不一致，请以 SKILL.md 为准。

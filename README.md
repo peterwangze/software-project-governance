@@ -19,15 +19,15 @@
 
 ```bash
 # 方式一：通过插件市场安装（推荐，两步）
-/plugin marketplace add peterwangze/software-project-governance
+/plugin marketplace add peterwangze/governance
 /plugin install software-project-governance@spg
 
 # 方式二：直接从 git URL 安装
-/plugin install https://github.com/peterwangze/software-project-governance.git
+/plugin install https://github.com/peterwangze/governance.git
 
 # 方式三：克隆到本地后安装
-git clone https://github.com/peterwangze/software-project-governance.git
-/plugin install /path/to/software-project-governance
+git clone https://github.com/peterwangze/governance.git
+/plugin install /path/to/governance
 ```
 
 安装后，工作流入口会在后续会话中自动可用；**但首次使用前仍必须先完成一次初始化**，在你的项目根目录创建 `.governance/` 治理文件。安装完成不等于已经可用完成。
@@ -35,7 +35,7 @@ git clone https://github.com/peterwangze/software-project-governance.git
 ### Codex
 
 ```bash
-git clone https://github.com/peterwangze/software-project-governance.git
+git clone https://github.com/peterwangze/governance.git
 ```
 
 当前仓库已提供 Codex 所需资产：`.codex-plugin/plugin.json` 和 `skills/software-project-governance/SKILL.md`。
@@ -77,10 +77,10 @@ Codex 入口采用**自包含 skill**：`skills/software-project-governance/SKIL
 
 | 命令 | 作用 |
 |------|------|
-| `/software-project-governance:governance-init` | 首次使用时初始化项目治理文件（安装后第一步） |
-| `/software-project-governance:governance-status` | 查看当前项目状态、阶段、任务进度、Gate 概览 |
-| `/software-project-governance:governance-gate G6` | 检查指定 Gate 详情 |
-| `/software-project-governance:governance-verify` | 运行完整校验，检查工作流资产完整性 |
+| `/governance:governance-init` | 首次使用时初始化项目治理文件（安装后第一步） |
+| `/governance:governance-status` | 查看当前项目状态、阶段、任务进度、Gate 概览 |
+| `/governance:governance-gate G6` | 检查指定 Gate 详情 |
+| `/governance:governance-verify` | 运行完整校验，检查工作流资产完整性 |
 
 说明：当前 Claude Code 插件环境下，这些命令通常以 `插件名:命令名` 的形式暴露；如果你的环境后续支持短别名，再按该环境实际行为使用。
 
@@ -95,7 +95,7 @@ Codex 入口采用**自包含 skill**：`skills/software-project-governance/SKIL
 在支持 slash command 的环境里，优先运行：
 
 ```
-/software-project-governance:governance-init
+/governance:governance-init
 ```
 
 这个命令会引导你完成初始设置：
@@ -104,7 +104,7 @@ Codex 入口采用**自包含 skill**：`skills/software-project-governance/SKIL
 3. 选择治理强度（轻量/标准/严格）
 4. 自动在当前项目根目录创建 `.governance/` 文件夹，包含所有治理文件
 
-如果你的环境暂不支持 `/software-project-governance:governance-init` 这类命令，就直接告诉 agent：
+如果你的环境暂不支持 `/governance:governance-init` 这类命令，就直接告诉 agent：
 - 你的项目名称和目标
 - 这是新项目还是已有项目
 - 当前所处阶段（如果是已有项目）
@@ -183,7 +183,7 @@ Codex 入口采用**自包含 skill**：`skills/software-project-governance/SKIL
 **推荐方式**（在 agent 内部）：
 
 ```
-/software-project-governance:governance-verify
+/governance:governance-verify
 ```
 
 **手动方式**（在终端中）：

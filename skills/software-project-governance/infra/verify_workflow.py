@@ -44,24 +44,28 @@ REQUIRED_FILES = {
     "Governance Verify Command": ROOT / "commands/governance-verify.md",
     "Governance Update Command": ROOT / "commands/governance-update.md",
     "Codex Skill": ROOT / "skills/software-project-governance/SKILL.md",
-    "Skill Stages Initiation Sub-workflow": ROOT / "skills/software-project-governance/stages/initiation/sub-workflow.md",
-    "Skill Stages Research Sub-workflow": ROOT / "skills/software-project-governance/stages/research/sub-workflow.md",
-    "Skill Stages Architecture Sub-workflow": ROOT / "skills/software-project-governance/stages/architecture/sub-workflow.md",
-    "Skill Stages Development Sub-workflow": ROOT / "skills/software-project-governance/stages/development/sub-workflow.md",
-    "Skill Stages Selection Sub-workflow": ROOT / "skills/software-project-governance/stages/selection/sub-workflow.md",
-    "Skill Stages Infrastructure Sub-workflow": ROOT / "skills/software-project-governance/stages/infrastructure/sub-workflow.md",
-    "Skill Stages Testing Sub-workflow": ROOT / "skills/software-project-governance/stages/testing/sub-workflow.md",
-    "Skill Stages CI-CD Sub-workflow": ROOT / "skills/software-project-governance/stages/ci-cd/sub-workflow.md",
-    "Skill Stages Release Sub-workflow": ROOT / "skills/software-project-governance/stages/release/sub-workflow.md",
-    "Skill Stages Operations Sub-workflow": ROOT / "skills/software-project-governance/stages/operations/sub-workflow.md",
-    "Skill Stages Maintenance Sub-workflow": ROOT / "skills/software-project-governance/stages/maintenance/sub-workflow.md",
-    "Skill Stages Requirement Clarification": ROOT / "skills/software-project-governance/stages/initiation/requirement-clarification.md",
-    "Skill Stages Tech Review Checklist": ROOT / "skills/software-project-governance/stages/architecture/tech-review-checklist.md",
-    "Skill Stages Code Review Standard": ROOT / "skills/software-project-governance/stages/development/code-review-standard.md",
-    "Skill Stages Release Checklist": ROOT / "skills/software-project-governance/stages/release/release-checklist.md",
-    "Skill Stages Retro Meeting Template": ROOT / "skills/software-project-governance/stages/maintenance/retro-meeting-template.md",
+    "Skill Stages Initiation Sub-workflow": ROOT / "skills/software-project-governance/skills/stage-initiation/SKILL.md",
+    "Skill Stages Research Sub-workflow": ROOT / "skills/software-project-governance/skills/stage-research/SKILL.md",
+    "Skill Stages Architecture Sub-workflow": ROOT / "skills/software-project-governance/skills/stage-architecture/SKILL.md",
+    "Skill Stages Development Sub-workflow": ROOT / "skills/software-project-governance/skills/stage-development/SKILL.md",
+    "Skill Stages Selection Sub-workflow": ROOT / "skills/software-project-governance/skills/stage-selection/SKILL.md",
+    "Skill Stages Infrastructure Sub-workflow": ROOT / "skills/software-project-governance/skills/stage-infra/SKILL.md",
+    "Skill Stages Testing Sub-workflow": ROOT / "skills/software-project-governance/skills/stage-testing/SKILL.md",
+    "Skill Stages CI-CD Sub-workflow": ROOT / "skills/software-project-governance/skills/stage-cicd/SKILL.md",
+    "Skill Stages Release Sub-workflow": ROOT / "skills/software-project-governance/skills/stage-release/SKILL.md",
+    "Skill Stages Operations Sub-workflow": ROOT / "skills/software-project-governance/skills/stage-operations/SKILL.md",
+    "Skill Stages Maintenance Sub-workflow": ROOT / "skills/software-project-governance/skills/stage-maintenance/SKILL.md",
+    "Skill Stages Requirement Clarification": ROOT / "skills/software-project-governance/skills/requirement-clarification/SKILL.md",
+    "Skill Stages Tech Review Checklist": ROOT / "skills/software-project-governance/skills/tech-review/SKILL.md",
+    "Skill Stages Code Review Standard": ROOT / "skills/software-project-governance/skills/code-review/SKILL.md",
+    "Skill Stages Release Checklist": ROOT / "skills/software-project-governance/skills/release-checklist/SKILL.md",
+    "SKILL Retro Meeting": ROOT / "skills/software-project-governance/skills/retro-meeting/SKILL.md",
+    "SKILL PR-FAQ Template": ROOT / "skills/software-project-governance/skills/pr-faq/SKILL.md",
+    "SKILL OKR Template": ROOT / "skills/software-project-governance/skills/okr/SKILL.md",
+    "SKILL Six-Pager Template": ROOT / "skills/software-project-governance/skills/six-pager/SKILL.md",
     "Behavior Protocol (M0-M9)": ROOT / "skills/software-project-governance/references/behavior-protocol.md",
     "Five-Layer Architecture Design": ROOT / "skills/software-project-governance/references/four-layer-architecture.md",
+    "Asset Migration Map": ROOT / "skills/software-project-governance/references/asset-migration-map.md",
 }
 
 OPTIONAL_PROJECTION_FILES = {
@@ -1800,9 +1804,9 @@ def check_m5_compliance():
     # Check 1: Anti-pattern in sub-workflow files
     # Pattern: 询问用户："..." or 询问用户：'...' (direct inline question instruction)
     inline_question_pattern = re.compile(r'询问用户[：:]\s*["\u201c]')
-    stages_dir = skills_dir / "stages"
-    if stages_dir.is_dir():
-        for md_file in stages_dir.rglob("*.md"):
+    skills_impl_dir = skills_dir / "skills"
+    if skills_impl_dir.is_dir():
+        for md_file in skills_impl_dir.rglob("*.md"):
             try:
                 content = md_file.read_text(encoding="utf-8")
                 for i, line in enumerate(content.splitlines(), 1):
@@ -2393,11 +2397,11 @@ def auto_judge_gate(gate_id):
                  "protocol/command-schema.md", "Input Parameters", "接口/命令schema已定义")),
             ("经过技术评审",
              lambda: _check_snippet_in_file(
-                 "skills/software-project-governance/stages/architecture/tech-review-checklist.md",
+                 "skills/software-project-governance/skills/tech-review/SKILL.md",
                  "评审", "技术评审checklist存在")),
             ("详细设计覆盖核心模块",
              lambda: _check_snippet_in_file(
-                 "skills/software-project-governance/stages/architecture/sub-workflow.md",
+                 "skills/software-project-governance/skills/stage-architecture/SKILL.md",
                  "## ", "架构设计子工作流存在")),
         ],
         "G6": [
@@ -2433,7 +2437,7 @@ def auto_judge_gate(gate_id):
                  "skills/software-project-governance/infra/verify_workflow.py", "check-governance", "check-governance 作为质量门禁")),
             ("部署流程文档化",
              lambda: _check_file_exists(
-                 "skills/software-project-governance/stages/release/sub-workflow.md",
+                 "skills/software-project-governance/skills/stage-release/SKILL.md",
                  "发布阶段子工作流")),
         ],
         "G9": [
@@ -2445,7 +2449,7 @@ def auto_judge_gate(gate_id):
              lambda: ("NEEDS_HUMAN", "无回滚测试环境——需人工确认回滚方案")),
             ("发布后验证已定义",
              lambda: _check_file_exists(
-                 "skills/software-project-governance/stages/release/release-checklist.md",
+                 "skills/software-project-governance/skills/release-checklist/SKILL.md",
                  "发布 checklist")),
         ],
         "G10": [

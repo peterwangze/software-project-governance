@@ -52,17 +52,17 @@
 
 | # | 阶段 | 阶段 ID | 核心问题 | 子工作流 |
 |---|------|---------|---------|---------|
-| 1 | 立项与目标定义 | initiation | 做什么、为什么做、怎么算成功？ | `stages/initiation/sub-workflow.md` |
-| 2 | 调研与竞争分析 | research | 别人怎么做的、我们有什么选择？ | `stages/research/sub-workflow.md` |
-| 3 | 技术选型与方案预研 | selection | 用什么技术、为什么选这个？ | `stages/selection/sub-workflow.md` |
-| 4 | 环境搭建与基础设施 | infrastructure | 开发环境、CI 基础、工具链就绪了吗？ | `stages/infrastructure/sub-workflow.md` |
-| 5 | 架构设计 | architecture | 系统怎么拆、接口怎么定、数据怎么流？ | `stages/architecture/sub-workflow.md` |
-| 6 | 开发实现 | development | 代码怎么写、怎么审、怎么集成？ | `stages/development/sub-workflow.md` |
-| 7 | 测试与质量保障 | testing | 质量达标了吗、可以发布了吗？ | `stages/testing/sub-workflow.md` |
-| 8 | 防护网与 CI/CD | ci-cd | 自动化质量门禁生效了吗？ | `stages/ci-cd/sub-workflow.md` |
-| 9 | 版本发布 | release | 怎么发布、怎么回滚、怎么验证？ | `stages/release/sub-workflow.md` |
-| 10 | 运营与反馈 | operations | 用户怎么反馈、数据怎么说？ | `stages/operations/sub-workflow.md` |
-| 11 | 维护与演进 | maintenance | 怎么复盘、怎么改进、下一轮做什么？ | `stages/maintenance/sub-workflow.md` |
+| 1 | 立项与目标定义 | initiation | 做什么、为什么做、怎么算成功？ | `skills/stage-initiation/SKILL.md` |
+| 2 | 调研与竞争分析 | research | 别人怎么做的、我们有什么选择？ | `skills/stage-research/SKILL.md` |
+| 3 | 技术选型与方案预研 | selection | 用什么技术、为什么选这个？ | `skills/stage-selection/SKILL.md` |
+| 4 | 环境搭建与基础设施 | infrastructure | 开发环境、CI 基础、工具链就绪了吗？ | `skills/stage-infra/SKILL.md` |
+| 5 | 架构设计 | architecture | 系统怎么拆、接口怎么定、数据怎么流？ | `skills/stage-architecture/SKILL.md` |
+| 6 | 开发实现 | development | 代码怎么写、怎么审、怎么集成？ | `skills/stage-development/SKILL.md` |
+| 7 | 测试与质量保障 | testing | 质量达标了吗、可以发布了吗？ | `skills/stage-testing/SKILL.md` |
+| 8 | 防护网与 CI/CD | ci-cd | 自动化质量门禁生效了吗？ | `skills/stage-cicd/SKILL.md` |
+| 9 | 版本发布 | release | 怎么发布、怎么回滚、怎么验证？ | `skills/stage-release/SKILL.md` |
+| 10 | 运营与反馈 | operations | 用户怎么反馈、数据怎么说？ | `skills/stage-operations/SKILL.md` |
+| 11 | 维护与演进 | maintenance | 怎么复盘、怎么改进、下一轮做什么？ | `skills/stage-maintenance/SKILL.md` |
 
 ### 阶段推进规则
 

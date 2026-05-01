@@ -81,4 +81,4 @@ Coordinator 执行行为约束，详见 `references/behavior-protocol.md`（M0-M
 
 ## SKILL 库
 
-阶段工作流和治理命令按需由 Coordinator 或角色 Agent 加载，详见 `skills/` 和 `stages/` 目录。
+阶段工作流和治理命令按需由 Coordinator 或角色 Agent 加载。斜杠命令入口在 `commands/`，能力层 SKILL 实现在 `skills/`。

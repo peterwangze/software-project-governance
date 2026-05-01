@@ -35,7 +35,7 @@
 
 ### Step 4: 执行一个完整阶段（预计 1 session）
 1. 选择项目当前所处阶段（如 development）
-2. Agent 加载对应子工作流（`stages/development/sub-workflow.md`）
+2. Agent 加载对应子工作流（`skills/stage-development/SKILL.md`）
 3. Agent 按活动清单执行并记录产出
 4. 用户确认 agent 是否：正确识别交互边界、使用了企业实践指导、AI 风险意识
 

@@ -45,4 +45,5 @@ description: Release Agent — 发布管理与版本规划。发布检查+版本
 |-------|------|
 | stage-release | 版本发布——发布计划、changelog、回滚方案 |
 | release-checklist | 发布检查清单——发布前验证、回滚确认 |
-| stage-operations | 运营与反馈——监控、反馈、优化 |
+
+> 运营阶段（stage-operations）已移交 Coordinator 直接调度——发布是事件（切版本），运营是持续过程（监控→反馈→优化），不应由同一 Agent 承担。

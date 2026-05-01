@@ -577,16 +577,16 @@ REQUIRED_SNIPPETS = {
         "## [0.5.0]",
     ],
     ROOT / ".claude-plugin/plugin.json": [
-        "0.13.0",
+        "0.13.1",
     ],
     ROOT / ".claude-plugin/marketplace.json": [
-        "0.13.0",
+        "0.13.1",
     ],
     ROOT / ".codex-plugin/plugin.json": [
-        "0.13.0",
+        "0.13.1",
     ],
     ROOT / "skills/software-project-governance/core/manifest.md": [
-        "0.13.0",
+        "0.13.1",
     ],
 }
 

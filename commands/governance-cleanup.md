@@ -28,11 +28,20 @@
 | `references/data-boundary.md` | references/ | 内部数据边界说明 |
 | `references/agent-entry-differences.md` | references/ | 内部兼容性研究 |
 
+### v0.18.0 升级残留：SKILL stub
+
+v0.14.0~v0.17.0 期间在 `skills/` 下创建了 25 个 SKILL stub（重定向文件，每个约 350B）。v0.18.0 起 plugin.json 直接指向真实实现（`skills/software-project-governance/skills/`），stub 不再需要。
+
+升级后残留的 stub 目录：
+`skills/code-review/` `skills/design-review/` `skills/main-workflow/` `skills/okr/` `skills/pr-faq/` `skills/release-checklist/` `skills/release-review/` `skills/requirement-clarification/` `skills/requirement-review/` `skills/retro-meeting/` `skills/retro-review/` `skills/six-pager/` `skills/stage-architecture/` `skills/stage-cicd/` `skills/stage-development/` `skills/stage-infra/` `skills/stage-initiation/` `skills/stage-maintenance/` `skills/stage-operations/` `skills/stage-release/` `skills/stage-research/` `skills/stage-selection/` `skills/stage-testing/` `skills/tech-review/` `skills/test-review/`
+
+**检测方法**：检查 `skills/` 下的 SKILL.md 是否包含 stub 标识 `> 本文件是 plugin 发现 stub`。如果 `skills/software-project-governance/skills/` 下已有同名真实实现，则 stub 可安全删除。
+
 ## 执行流程
 
 ### Step 1: 检测
 
-检查插件缓存目录中是否存在上述冗余文件。
+检查插件缓存目录中是否存在上述冗余文件。对 SKILL stub 采用内容检测：读取 `skills/*/SKILL.md`（不含 `software-project-governance/`），检查是否包含 `plugin 发现 stub`。
 
 ### Step 2: 分类展示
 

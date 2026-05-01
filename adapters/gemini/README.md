@@ -19,7 +19,7 @@
 - `skills/software-project-governance/core/manifest.md`
 - `skills/software-project-governance/references/*`（运行时规则）
 - `skills/software-project-governance/stages/*`（子工作流和 skills）
-- `workflows/software-project-governance/templates/*`（设计时模板）
+- `core/templates/*`（设计时模板）
 - `.governance/*`（活跃治理记录，项目级事实源）
 - `workflows/software-project-governance/research/agent-integration-models.md`
 - `workflows/software-project-governance/research/default-product-shape.md`

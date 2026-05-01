@@ -1,3 +1,8 @@
+---
+name: okr
+description: OKR模板——Google OKR+ByteDance公开透明。模板生成SKILL，可独立使用。
+---
+
 # OKR 模板 — Google OKR + ByteDance 公开透明
 
 本模板用于立项阶段定义可衡量的项目目标。基于 Google OKR 和 ByteDance OKR 全员公开实践。

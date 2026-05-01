@@ -1,3 +1,8 @@
+---
+name: requirement-clarification
+description: 需求澄清checklist——需求分析、边界确认。专项技能SKILL，可独立使用。
+---
+
 # 需求澄清 Checklist
 
 本 skill 用于立项阶段的需求澄清，确保项目目标、范围和约束在启动时已充分对齐。可独立使用，不依赖完整生命周期。

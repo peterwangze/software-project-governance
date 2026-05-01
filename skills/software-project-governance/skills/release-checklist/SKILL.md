@@ -1,3 +1,8 @@
+---
+name: release-checklist
+description: 发布检查清单——发布前验证、回滚确认。专项技能SKILL，可独立使用。
+---
+
 # 发布 Checklist
 
 本 skill 用于版本发布前的系统化检查，确保发布内容、回滚方案和验证计划就绪。可独立使用。

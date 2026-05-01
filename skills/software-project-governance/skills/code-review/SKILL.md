@@ -1,3 +1,8 @@
+---
+name: code-review
+description: 代码审查标准——审查流程、P0-P3分级、检查项。质量保障SKILL，可独立使用。
+---
+
 # Code Review 规范
 
 本 skill 定义 Code Review 的标准流程、评审维度和问题分级规则。适用于开发阶段的代码审查。可独立使用。

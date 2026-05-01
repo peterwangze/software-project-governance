@@ -68,12 +68,12 @@
 
 | 目录 | 包含内容 |
 |-----------|----------|
-| `stages/<stage>/sub-workflow.md` | 11 个阶段子工作流——进入条件、活动 checklist（含交互边界标注）、交付物、退出条件、Gate 映射 |
-| `stages/initiation/requirement-clarification.md` | 需求澄清 checklist 技能 |
-| `stages/architecture/tech-review-checklist.md` | 技术评审 checklist 技能 |
-| `stages/development/code-review-standard.md` | 代码审查标准技能 |
-| `stages/release/release-checklist.md` | 发布 checklist 技能 |
-| `stages/maintenance/retro-meeting-template.md` | 复盘会议模板技能 |
+| `skills/stage-<name>/SKILL.md` | 11 个阶段子工作流——进入条件、活动 checklist（含交互边界标注）、交付物、退出条件、Gate 映射 |
+| `skills/requirement-clarification/SKILL.md` | 需求澄清 checklist 技能 |
+| `skills/tech-review/SKILL.md` | 技术评审 checklist 技能 |
+| `skills/code-review/SKILL.md` | 代码审查标准技能 |
+| `skills/release-checklist/SKILL.md` | 发布 checklist 技能 |
+| `skills/retro-meeting/SKILL.md` | 复盘会议模板技能 |
 
 如果用户只需要使用单一功能（例如，"帮我做代码审查"），仅加载该技能文件——不加载完整生命周期。
 

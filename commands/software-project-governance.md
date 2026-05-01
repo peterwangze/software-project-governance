@@ -296,7 +296,7 @@ P1 (警告):
 
 - **Hooks 缺失**: `cp skills/software-project-governance/infra/hooks/pre-commit .git/hooks/pre-commit && cp skills/software-project-governance/infra/hooks/post-commit .git/hooks/post-commit`
 - **plan-tracker 损坏**: 尝试从 markdown 表格结构恢复；失败则从 profile 模板重建（保留 evidence-log/decision-log/risk-log）
-- **文件缺失**: 从 `workflows/software-project-governance/templates/` 复制模板
+- **文件缺失**: 从 `core/templates/` 复制模板
 - **证据缺口**: 创建占位证据条目（标记"补录——需用户确认"）
 - **过期风险/任务**: 询问用户是否仍然活跃，是→更新截止日期，否→关闭
 

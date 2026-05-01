@@ -1,3 +1,8 @@
+---
+name: six-pager
+description: 6-Pager模板——Amazon Narrative结构化论证。模板生成SKILL，可独立使用。
+---
+
 # 6-Pager 模板 — Amazon Narrative
 
 本模板用于技术选型和架构决策阶段的结构化论证。基于 Amazon 6-Pager/Narrative 实践——用连贯叙述替代 PPT 散点，结论先行。

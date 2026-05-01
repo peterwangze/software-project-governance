@@ -31,8 +31,8 @@ Claude Code 通过插件市场加载 `skills/software-project-governance/SKILL.m
 ```
 1. 读取 workflow manifest：skills/software-project-governance/core/manifest.md
 2. 读取协议层：skills/software-project-governance/core/protocol/workflow-schema.md、skills/software-project-governance/core/protocol/plugin-contract.md
-3. 读取规则层：workflows/software-project-governance/rules/lifecycle.md、stage-gates.md
-4. 读取模板层：workflows/software-project-governance/templates/*.md
+3. 读取规则层：core/lifecycle.md、core/stage-gates.md
+4. 读取模板层：core/templates/*.md
 5. 使用样例验证：.governance/plan-tracker.md
 ```
 

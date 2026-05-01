@@ -1,3 +1,8 @@
+---
+name: pr-faq
+description: PR/FAQ模板——Amazon Working Backwards文档。模板生成SKILL，可独立使用。
+---
+
 # PR/FAQ 模板 — Amazon Working Backwards
 
 本模板用于立项阶段，在写任何代码之前先定义用户价值。基于 Amazon Working Backwards (PR/FAQ) 实践。

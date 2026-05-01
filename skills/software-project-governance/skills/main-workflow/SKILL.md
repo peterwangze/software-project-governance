@@ -1,3 +1,8 @@
+---
+name: main-workflow
+description: 软件项目治理总工作流入口——场景匹配、跨层调用协议。能力层入口SKILL。
+---
+
 # 软件项目治理 — 总工作流入口
 
 本文件是 `software-project-governance` 工作流的**唯一总入口**。无论是全流程推进还是单独使用某个子工作流，agent 都必须先读取本文件确认基础目的和匹配规则。
@@ -103,12 +108,12 @@
 
 | 用户意图 | 匹配工具 | 位置 |
 |---------|---------|------|
-| "澄清需求"、"需求评审" | 需求澄清 checklist | `stages/initiation/requirement-clarification.md` |
-| "技术评审"、"设计评审" | 技术评审 checklist | `stages/architecture/tech-review-checklist.md` |
-| "Code Review"、"审查代码" | Code Review 规范 | `stages/development/code-review-standard.md` |
-| "发布检查"、"上线前检查" | 发布 checklist | `stages/release/release-checklist.md` |
-| "开回顾会"、"复盘会议" | 回顾会议模板 | `stages/maintenance/retro-meeting-template.md` |
-| "校验工作流"、"检查治理状态" | 校验脚本 | `skills/software-project-governance/infra/verify_workflow.py` |
+| "澄清需求"、"需求评审" | 需求澄清 checklist | `skills/requirement-clarification/SKILL.md` |
+| "技术评审"、"设计评审" | 技术评审 checklist | `skills/tech-review/SKILL.md` |
+| "Code Review"、"审查代码" | Code Review 规范 | `skills/code-review/SKILL.md` |
+| "发布检查"、"上线前检查" | 发布 checklist | `skills/release-checklist/SKILL.md` |
+| "开回顾会"、"复盘会议" | 回顾会议模板 | `skills/retro-meeting/SKILL.md` |
+| "校验工作流"、"检查治理状态" | 校验脚本 | `infra/verify_workflow.py` |
 
 完整工具目录见 `TOOLS.md`。
 

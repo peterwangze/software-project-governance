@@ -1,3 +1,8 @@
+---
+name: tech-review
+description: 技术评审checklist——架构评审、技术选型评审。质量保障SKILL，可独立使用。
+---
+
 # 技术评审 Checklist
 
 本 skill 用于架构设计阶段的技术评审，确保设计方案在提交 Gate 前经过系统化的质量检查。可独立使用。

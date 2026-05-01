@@ -33,9 +33,9 @@ Codex 用户无需读取下方的旧入口约定。
 
 1. 读取 workflow manifest：`skills/software-project-governance/core/manifest.md`
 2. 读取协议层：`skills/software-project-governance/core/protocol/workflow-schema.md`、`skills/software-project-governance/core/protocol/plugin-contract.md`、`skills/software-project-governance/core/protocol/external-command-contract.md`
-3. 读取规则层：`workflows/software-project-governance/rules/*.md`
-4. 读取模板层：`workflows/software-project-governance/templates/*.md`
-5. 按当前阶段读取子工作流和 skill：`workflows/software-project-governance/stages/<stage>/`
+3. 读取规则层：`core/*.md`
+4. 读取模板层：`core/templates/*.md`
+5. 按当前阶段读取子工作流和 skill：`skills/<skill-name>/SKILL.md`
 6. 读取样例：`.governance/plan-tracker.md`
 
 </details>

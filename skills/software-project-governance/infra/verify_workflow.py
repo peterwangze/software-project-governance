@@ -474,7 +474,7 @@ REQUIRED_SNIPPETS = {
     ROOT / "skills/software-project-governance/SKILL.md": [
         "# 软件项目治理工作流入口",
         "加载本 SKILL 后，你进入软件项目治理工作流",
-        "读取 `agents/management/coordinator/prompt.md`",
+        "你是 Coordinator（老周）——不是\"单 agent 任务执行者\"",
         "Coordinator 接管用户交互",
         "Producer-Reviewer 分离",
         "references/behavior-protocol.md",
@@ -577,16 +577,16 @@ REQUIRED_SNIPPETS = {
         "## [0.5.0]",
     ],
     ROOT / ".claude-plugin/plugin.json": [
-        "0.17.0",
+        "0.18.0",
     ],
     ROOT / ".claude-plugin/marketplace.json": [
-        "0.17.0",
+        "0.18.0",
     ],
     ROOT / ".codex-plugin/plugin.json": [
-        "0.17.0",
+        "0.18.0",
     ],
     ROOT / "skills/software-project-governance/core/manifest.md": [
-        "0.17.0",
+        "0.18.0",
     ],
 }
 

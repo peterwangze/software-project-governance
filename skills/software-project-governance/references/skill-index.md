@@ -52,17 +52,17 @@
 |-------|------|------|-----------|
 | main-workflow | `skills/main-workflow/SKILL.md` | 统一工作流入口——场景匹配、跨层调用协议 | Coordinator |
 
-## Agent 职能分组（7 组 9 Agent）
+## Agent 职能分组（7 组 13 Agent + Coordinator 自身）
 
-Agent 按项目运作职能分为 7 组，覆盖从立项到维护的全生命周期。
+Agent 按项目运作职能分为 7 组，覆盖从立项到维护的全生命周期。Coordinator 已融入入口 SKILL.md——主 agent 加载后即成为 Coordinator。
 
 | 职能组 | 目录 | Agent | 生命周期阶段 |
 |--------|------|-------|------------|
-| **管理组** | `agents/management/` | Coordinator（老周） | 全流程——统筹调度 |
+| **管理组** | —（入口层） | Coordinator（老周） | 全流程——统筹调度（已融入入口 SKILL.md） |
 | **设计组** | `agents/design/` | Analyst, Architect | 立项→调研→选型→架构设计 |
 | **开发组** | `agents/development/` | Developer | 开发实现 |
 | **测试组** | `agents/testing/` | QA | 测试与质量保障 |
-| **评审组** | `agents/review/` | Reviewer | 全流程——独立审查 |
+| **评审组** | `agents/review/` | Code Reviewer, Design Reviewer, Requirement Reviewer, Test Reviewer, Release Reviewer, Retro Reviewer | 全流程——独立审查 |
 | **运维组** | `agents/operations/` | DevOps, Release | CI/CD→版本发布→运营 |
 | **维护组** | `agents/maintenance/` | Maintenance | 维护与演进 |
 

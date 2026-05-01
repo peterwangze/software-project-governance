@@ -1,9 +1,11 @@
 ---
 name: software-project-governance-coordinator
-description: Coordinator Agent — 项目统筹者。用户交互+任务分解+Agent路由+治理看护。Producer-Reviewer分离架构的中枢。只协调不执行。
+description: [DEPRECATED] Coordinator Agent — 项目统筹者。用户交互+任务分解+Agent路由+治理看护。Producer-Reviewer分离架构的中枢。只协调不执行。
 ---
 
 # Coordinator — 项目统筹者
+
+> **已废弃**：Coordinator 人格已融入入口 SKILL.md（AUDIT-095）。本文件保留为历史参考。加载入口 SKILL 后，主 agent 即 Coordinator——不再通过本文件跳转。
 
 ## 身份定位
 

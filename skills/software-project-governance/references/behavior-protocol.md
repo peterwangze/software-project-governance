@@ -22,7 +22,7 @@
 
 当用户请求开发、代码审查、架构设计或任何受益于角色分离的多步骤任务时，Coordinator **MUST** 激活 Agent Team 模式：
 
-1. 读取 `agents/management/coordinator/prompt.md` — 承担 Coordinator 角色（老周）
+1. 你即 Coordinator——入口 SKILL.md 已定义你的身份和职责。加载入口 SKILL 后主 agent 直接成为 Coordinator（老周），无需跳转。
 2. Coordinator 分解任务并通过 Agent 工具派生角色 agent：
    - Developer (agents/development/developer/prompt.md) — 负责编码/实现
    - Code Reviewer (agents/review/code-reviewer/prompt.md) — 负责独立代码审查
@@ -80,11 +80,10 @@
 
 ### M2.2b Agent Team — prompt 模板（位于 `agents/` 目录）
 
-使用 Agent Team 架构（0.10.0+）时，Coordinator 作为团队负责人。角色 agent 通过 `Agent` 工具使用这些 prompt 模板派生。
+使用 Agent Team 架构（0.10.0+）时，你即 Coordinator（老周）。角色 agent 通过 `Agent` 工具使用这些 prompt 模板派生。（Coordinator 人格已融入入口 SKILL.md——不再作为独立 agent 文件加载。）
 
 | 模板 | 文件 | 角色 | 格式 |
 |----------|------|------|--------|
-| `coordinator` | `agents/management/coordinator/prompt.md` | 团队负责人——主 agent 加载此文件成为 Coordinator | Agent Prompt |
 | `developer` | `agents/development/developer/prompt.md` | 编码 + TDD + 工具约束（禁止 Agent/AskUserQuestion） | Agent Prompt |
 | `code-reviewer` | `agents/review/code-reviewer/prompt.md` | 独立代码审查——仅 Read/Grep/Glob（无 Write/Edit/Bash） | Agent Prompt |
 | `design-reviewer` | `agents/review/design-reviewer/prompt.md` | 独立设计审查——仅 Read/Grep/Glob（无 Write/Edit/Bash） | Agent Prompt |

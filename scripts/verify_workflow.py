@@ -61,7 +61,7 @@ REQUIRED_FILES = {
     "Skill Stages Release Checklist": ROOT / "skills/software-project-governance/stages/release/release-checklist.md",
     "Skill Stages Retro Meeting Template": ROOT / "skills/software-project-governance/stages/maintenance/retro-meeting-template.md",
     "Behavior Protocol (M0-M9)": ROOT / "skills/software-project-governance/references/behavior-protocol.md",
-    "Four-Layer Architecture Design": ROOT / "skills/software-project-governance/references/four-layer-architecture.md",
+    "Five-Layer Architecture Design": ROOT / "skills/software-project-governance/references/four-layer-architecture.md",
 }
 
 OPTIONAL_PROJECTION_FILES = {
@@ -508,6 +508,17 @@ REQUIRED_SNIPPETS = {
         "9 项 agent 无法造假的检查",
         "阶段快速参考",
         "Profile 快速参考",
+    ],
+    ROOT / "skills/software-project-governance/references/four-layer-architecture.md": [
+        "# 五层架构设计",
+        "入口层",
+        "业务智能层（Agent 库）",
+        "能力层（SKILL 库）",
+        "基础设施层",
+        "核心层",
+        "依赖方向（铁律）",
+        "能力层 vs 业务智能层（关键区分）",
+        "单向依赖，不可反向",
     ],
     ROOT / "skills/software-project-governance/references/audit-framework.md": [
         "# 审计框架",

@@ -1,6 +1,6 @@
 ---
 name: software-project-governance
-version: 0.14.0
+version: 0.15.0
 description: 软件项目治理工作流入口——自动激活 Agent Team 模式，加载 Coordinator Agent 统筹项目管理
 ---
 

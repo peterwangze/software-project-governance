@@ -19,7 +19,7 @@ echo ""
 # --- Category A: Project structure (new user after governance-init) ---
 echo "--- Category A: Project structure ---"
 
-[ -f "$E2E_DIR/CLAUDE.md" ] && green "CLAUDE.md exists" || red "CLAUDE.md missing"
+[ -f "$E2E_DIR/平台原生入口文件" ] && green "平台原生入口文件 exists" || red "平台原生入口文件 missing"
 [ -d "$E2E_DIR/.governance" ] && green ".governance/ exists" || red ".governance/ missing"
 [ -f "$E2E_DIR/.governance/plan-tracker.md" ] && green "plan-tracker.md exists" || red "plan-tracker.md missing"
 [ -f "$E2E_DIR/.governance/evidence-log.md" ] && green "evidence-log.md exists" || red "evidence-log.md missing"
@@ -30,13 +30,13 @@ echo "--- Category A: Project structure ---"
 echo ""
 echo "--- Category B: Bootstrap content ---"
 
-if [ -f "$E2E_DIR/CLAUDE.md" ]; then
-    grep -q "SELF-CHECK" "$E2E_DIR/CLAUDE.md" && green "Bootstrap: SELF-CHECK present" || red "Bootstrap: SELF-CHECK missing"
-    grep -q "Governance Bootstrap" "$E2E_DIR/CLAUDE.md" && green "Bootstrap: Governance Bootstrap section present" || red "Bootstrap: missing"
-    grep -q "AskUserQuestion" "$E2E_DIR/CLAUDE.md" && green "Bootstrap: AskUserQuestion rule present" || red "Bootstrap: AskUserQuestion missing"
-    grep -q "阶段跳跃防护" "$E2E_DIR/CLAUDE.md" && green "Bootstrap: stage jump protection present" || red "Bootstrap: stage jump missing"
-    grep -q "收工前检查" "$E2E_DIR/CLAUDE.md" && green "Bootstrap: session end checklist present" || red "Bootstrap: session end missing"
-    grep -q "版本变化自动检测" "$E2E_DIR/CLAUDE.md" && green "Bootstrap: version change detection present" || red "Bootstrap: version detection missing"
+if [ -f "$E2E_DIR/平台原生入口文件" ]; then
+    grep -q "SELF-CHECK" "$E2E_DIR/平台原生入口文件" && green "Bootstrap: SELF-CHECK present" || red "Bootstrap: SELF-CHECK missing"
+    grep -q "Governance Bootstrap" "$E2E_DIR/平台原生入口文件" && green "Bootstrap: Governance Bootstrap section present" || red "Bootstrap: missing"
+    grep -q "AskUserQuestion" "$E2E_DIR/平台原生入口文件" && green "Bootstrap: AskUserQuestion rule present" || red "Bootstrap: AskUserQuestion missing"
+    grep -q "阶段跳跃防护" "$E2E_DIR/平台原生入口文件" && green "Bootstrap: stage jump protection present" || red "Bootstrap: stage jump missing"
+    grep -q "收工前检查" "$E2E_DIR/平台原生入口文件" && green "Bootstrap: session end checklist present" || red "Bootstrap: session end missing"
+    grep -q "版本变化自动检测" "$E2E_DIR/平台原生入口文件" && green "Bootstrap: version change detection present" || red "Bootstrap: version detection missing"
 fi
 
 # --- Category C: Plan-tracker structure (user has complete governance toolkit) ---

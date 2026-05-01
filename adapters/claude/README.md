@@ -40,9 +40,8 @@ Claude Code 通过插件市场加载 `skills/software-project-governance/SKILL.m
 
 ## 原生 skill 入口
 
-当前仓库已提供 Claude 原生入口：
+当前仓库提供 Claude 原生入口：
 
-- `CLAUDE.md`：仓库级默认约束入口
 - `skills/software-project-governance/SKILL.md`：自包含插件 skill（通过插件市场安装）
 
 ## 半可执行入口
@@ -60,7 +59,7 @@ python adapters/claude/launch.py
 
 ## 入口分工
 
-- Claude 正式加载入口：`CLAUDE.md`（治理 bootstrap）与插件市场安装的 `skills/software-project-governance/SKILL.md`
+- Claude 正式加载入口：插件市场安装的 `skills/software-project-governance/SKILL.md`
 - Adapter manifest：仓库内部统一 contract
 - Launcher：辅助查看和验证当前 Claude 入口映射
 

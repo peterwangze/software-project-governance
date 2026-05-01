@@ -192,7 +192,7 @@
 | bootstrap 模板 | 平台原生入口的**模板**（注入用户项目用） | `commands/governance-init.md` Step 7 |
 | adapter README | 平台特定说明 | `adapters/claude/README.md` |
 
-> **注意**：仓库根目录的 `CLAUDE.md` **不是产品资产**——它是当前仓库使用 Claude Code 开发的临时配置文件（类似 `.gitignore`、IDE 配置）。适配层的资产是 bootstrap 模板机制（定义在 `commands/governance-init.md`），不是某个具体的 CLAUDE.md 实例。每个用户项目通过 `governance-init` 注入自己的 CLAUDE.md。
+> **注意**：仓库不包含任何平台原生入口文件（如 Claude Code 的 `CLAUDE.md`）——这些是各平台用户项目的本地配置文件，类似于 `.gitignore`、IDE 配置。适配层提供的产品资产是 bootstrap 模板机制（定义在 `commands/governance-init.md`），用于在用户项目中生成其平台对应的入口文件。
 
 **adapter manifest 标准字段**（每个 adapter 必须回答）：
 
@@ -261,7 +261,7 @@
 | **依赖方向** | → 业务智能层 | → 入口层 |
 | **谁维护** | 工作流开发者 | 平台接入者 |
 | **变更频率** | 随工作流演进 | 随平台能力变化 |
-| **示例** | `SKILL.md` | `plugin.json` + `CLAUDE.md` |
+| **示例** | `SKILL.md` | `plugin.json` + `平台原生入口文件` |
 
 ## 与协议层概念的对齐
 
@@ -273,7 +273,7 @@
 | Agent 入口投影层 | 入口层 | 主 SKILL.md——引导进入 Coordinator |
 | 外部能力层 | 适配层 | 平台原生格式——plugin.json / manifest / bootstrap |
 
-之前的混淆在于把"入口层"当成了"入口投影层"的全部——实际上入口投影还包括适配层的平台原生文件（CLAUDE.md、plugin.json）。六层架构明确了这一区分：入口层是工作流内部的，适配层是平台外部的。
+之前的混淆在于把"入口层"当成了"入口投影层"的全部——实际上入口投影还包括适配层的平台原生文件（平台原生入口文件、plugin.json）。六层架构明确了这一区分：入口层是工作流内部的，适配层是平台外部的。
 
 ## 当前资产映射
 
@@ -504,8 +504,6 @@ adapters/                         ← 适配层（平台投影）
   plugin.json
 .agents/                          ← 适配层（国内 Agent CLI）
   plugins/marketplace.json
-
-CLAUDE.md                         ← 开发环境文件（非产品资产——当前仓库使用 Claude Code 开发的临时配置）
 ```
 
 ## 架构演进原则

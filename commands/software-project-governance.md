@@ -44,7 +44,7 @@
 **流程**：
 1. 通过 AskUserQuestion 收集参数（合并为 1-2 个面板，非 4 个连续问题）
 2. 创建 `.governance/` 目录及 4 个治理文件（按 profile 差异化）
-3. 注入 CLAUDE.md bootstrap（按 profile 差异化）
+3. 注入 平台原生入口文件 bootstrap（按 profile 差异化）
 4. 安装 git hooks（pre-commit + post-commit + prepare-commit-msg）
 5. 输出初始化确认面板
 6. 询问是否创建首个任务（INIT-001: 定义项目目标）
@@ -158,7 +158,7 @@
 输出面板：
 - 阶段映射: {inferred_stage} — {gate_status}
 - 已创建: plan-tracker(含 onboarding 声明) + evidence-log + decision-log + risk-log
-- Bootstrap: CLAUDE.md 已注入
+- Bootstrap: 平台原生入口文件 已注入
 - Hooks: pre-commit + post-commit 已安装
 - 下一步: 当前阶段子工作流可供使用
 
@@ -174,7 +174,7 @@
 1. 读取版本差距（plan-tracker vs SKILL.md）
 2. 提取 CHANGELOG delta（从 plan-tracker 版本到当前版本）
 3. 自动升级序列：
-   - A. 替换 CLAUDE.md bootstrap 段为最新模板（保留 profile 差异化）
+   - A. 替换 平台原生入口文件 bootstrap 段为最新模板（保留 profile 差异化）
    - B. 补全 plan-tracker 缺失结构（permission_mode、版本规划、需求跟踪矩阵、变更控制含快速通道）
    - C. Hook 存活检测——缺失则提示安装命令
    - D. 更新 `工作流版本` 为当前版本

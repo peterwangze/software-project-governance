@@ -31,7 +31,7 @@
 3. Plugin Skills：通过 Claude Code plugin 分发 skill，安装后自动可用。
 4. Custom Slash Commands：支持 project 级 `.claude/commands/` 与 user 级 `~/.claude/commands/`。
 5. MCP Servers：作为外接工具与 prompt 能力入口，由 `/mcp` 管理连接。
-6. `CLAUDE.md`：仓库级说明或约束入口，可作为最薄指针，但属于用户仓库资产。
+6. `平台原生入口文件`：仓库级说明或约束入口，可作为最薄指针，但属于用户仓库资产。
 
 ### 关键结论
 
@@ -40,11 +40,11 @@
 - Personal Skill 更接近低侵入主线：能力装在用户环境，不强依赖目标仓库改造。
 - Slash Commands 更适合显式触发的快捷动作、模板化 prompt 或固定操作脚本，不适合单独承载完整治理规则本体。
 - MCP 更适合承载“外接能力”而非“静态流程文本”：例如拉取任务系统、读取外部事实源、执行统一验证、暴露结构化 prompts/tools。
-- `CLAUDE.md` 适合做最薄边界说明，不适合成为 workflow 规则本体的主要承载位置。
+- `平台原生入口文件` 适合做最薄边界说明，不适合成为 workflow 规则本体的主要承载位置。
 
 ### 对本项目的含义
 
-- 当前仓库中的 `CLAUDE.md` + `.claude/skills/software-project-governance/SKILL.md` 只能视为 project-local 样例。
+- 当前仓库中的 `平台原生入口文件` + `.claude/skills/software-project-governance/SKILL.md` 只能视为 project-local 样例。
 - 若后续面向真实用户交付，Claude 默认主线应优先评估 personal skill、plugin skill 或 MCP，而不是要求用户复制 repo-local 入口。
 - 如果必须保留 repo-local 入口，也只能作为 fallback 或团队级显式绑定方式。
 
@@ -106,7 +106,7 @@
 | plugin / extension | 低 | 高 | 高 | 是 | 适合标准化分发与版本化 |
 | MCP / tool server | 低 | 高 | 高 | 是 | 适合结构化工具、外部事实源与统一 runner |
 | headless CLI / command entry | 低 | 高 | 中 | 是 | 适合自动化、CI、外部编排 |
-| 纯文档指针（如 `CLAUDE.md` / `GEMINI.md`） | 中 | 中 | 低 | 否 | 只能做投影层，不应承载完整 workflow 本体 |
+| 纯文档指针（如 `平台原生入口文件` / `GEMINI.md`） | 中 | 中 | 低 | 否 | 只能做投影层，不应承载完整 workflow 本体 |
 
 ## 统一判断
 

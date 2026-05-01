@@ -26,11 +26,11 @@
 1. 用户执行 `/governance-init` 或直接让 agent 执行初始化
 2. Agent 询问：项目名称、项目目标、project_type (new/existing)、profile
 3. 验证：`.governance/` 目录创建成功，含 plan-tracker / evidence-log / decision-log / risk-log
-4. 验证：如果项目有 `CLAUDE.md`，bootstrap 已注入
+4. 验证：如果项目有 `平台原生入口文件`，bootstrap 已注入
 
 ### Step 3: 新会话 Bootstrap（预计 2 分钟）
 1. 开启新会话（或等待下次会话）
-2. Agent 第一动作是否执行了 CLAUDE.md bootstrap（读 plan-tracker）？
+2. Agent 第一动作是否执行了 平台原生入口文件 bootstrap（读 plan-tracker）？
 3. 验证：agent 自己确认当前阶段、Gate 状态、活跃风险
 
 ### Step 4: 执行一个完整阶段（预计 1 session）

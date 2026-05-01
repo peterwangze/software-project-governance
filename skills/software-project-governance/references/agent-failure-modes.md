@@ -15,7 +15,7 @@
 - agent 使用内联文字提问（"要不要继续？"）而非 AskUserQuestion 工具
 - agent 声称完成任务但没有补证据记录
 - 会话开始时 agent 没有读 `.governance/plan-tracker.md`
-- CLAUDE.md 的 bootstrap 步骤没有被执行
+- 平台原生入口文件 的 bootstrap 步骤没有被执行
 
 **用户应急动作**：
 1. 确认 skill 已安装：检查 `.claude/skills/` 或插件市场是否包含 `software-project-governance`
@@ -24,8 +24,8 @@
 4. 如果协议持续不被加载，降级到手动模式：用户自行读 `.governance/plan-tracker.md`，手动记录证据
 
 **预防机制**：
-- CLAUDE.md bootstrap 是独立于 SKILL.md 的强制入口——即使 skill 未加载，bootstrap 步骤也应被执行
-- 如果 bootstrap 也未执行，说明 CLAUDE.md 本身未被加载——检查项目根目录是否有 CLAUDE.md
+- 平台原生入口文件 bootstrap 是独立于 SKILL.md 的强制入口——即使 skill 未加载，bootstrap 步骤也应被执行
+- 如果 bootstrap 也未执行，说明 平台原生入口文件 本身未被加载——检查项目根目录是否有 平台原生入口文件
 
 ---
 
@@ -115,7 +115,7 @@
 
 **预防机制**：
 - 会话结束时生成状态快照（AUDIT-029——跨会话记忆机制，待实现）
-- CLAUDE.md bootstrap 确保每次会话第一动作是读 plan-tracker
+- 平台原生入口文件 bootstrap 确保每次会话第一动作是读 plan-tracker
 - decision-log 中的决策记录提供持久化的"讨论记忆"
 
 ---
@@ -179,7 +179,7 @@
 3. 如果执行顺序被打破，要求 agent 解释为什么打破依赖关系
 
 **预防机制**：
-- CLAUDE.md bootstrap Step 3：优先级确认——优先处理 P0 和 passed-with-conditions
+- 平台原生入口文件 bootstrap Step 3：优先级确认——优先处理 P0 和 passed-with-conditions
 - 实施路线图定义了严格的 Tier 顺序和执行纪律
 - 每次会话结束时的状态摘要 + 下一次优先级确认（AskUserQuestion）
 
@@ -210,19 +210,19 @@
 **症状**：FIX-015 已修复所有源文件中的内联问题指令（`询问用户："..."` 已清除），verify_workflow.py Check 10 静态扫描通过（0 反模式），但 agent 仍然输出内联问题（如"要继续吗？"、"需要我继续吗？"）。用户在 FIX-015 上线后的下一次对话中立即发现了违规。
 
 **检测方法**：
-- 读取 CLAUDE.md SELF-CHECK —— 检查是否包含第 4 项（M5 预输出自检）
+- 读取 平台原生入口文件 SELF-CHECK —— 检查是否包含第 4 项（M5 预输出自检）
 - 搜索 agent 最近输出中的内联问题关键词：`吗？`、`要不要`、`是否`、`需要我`、`Do you want`
-- verify_workflow.py Check 10.4：检查 CLAUDE.md SELF-CHECK 是否包含 M5 预输出项
+- verify_workflow.py Check 10.4：检查 平台原生入口文件 SELF-CHECK 是否包含 M5 预输出项
 
 **用户应急动作**：
 - 如果发现 agent 输出内联问句：直接说"你又绕过了 AskUserQuestion"——agent 会触发本失败模式的自检流程
-- 检查 CLAUDE.md 是否包含 SELF-CHECK 第 4 项：不包含 → 运行 `/plugin update` 获取最新 bootstrap
+- 检查 平台原生入口文件 是否包含 SELF-CHECK 第 4 项：不包含 → 运行 `/plugin update` 获取最新 bootstrap
 - 切换到"所有决策都问我"模式——限制 agent 自主权，强制每个决策点都用 AskUserQuestion
 
 **预防机制**：
-- **CLAUDE.md SELF-CHECK 第 4 项**：在任何输出前扫描是否包含向用户提问的问句，如果发现 → 立即删除，改用 AskUserQuestion
+- **平台原生入口文件 SELF-CHECK 第 4 项**：在任何输出前扫描是否包含向用户提问的问句，如果发现 → 立即删除，改用 AskUserQuestion
 - **SKILL.md M5.1 自中断协议**：agent 发现自己在输出内联问题 → STOP IMMEDIATELY → 删除 → 替换为 AskUserQuestion
-- **Check 10 静态检测**：verify_workflow.py 检查 CLAUDE.md SELF-CHECK 是否包含 M5 项（Check 10.4）
+- **Check 10 静态检测**：verify_workflow.py 检查 平台原生入口文件 SELF-CHECK 是否包含 M5 项（Check 10.4）
 
 **与 FIX-015 的关系**：
 - FIX-015 修复的是**源头污染**（文件告诉 agent 输出内联问题）→ 静态检测 Check 10.1~10.3

@@ -11,11 +11,11 @@
 **初始化**：`/governance-init` 或直接让 agent 创建 `.governance/`
 
 **日常使用**：
-- CLAUDE.md bootstrap 在每次会话自动激活（全自动）
+- 平台原生入口文件 bootstrap 在每次会话自动激活（全自动）
 - 用户说"切换到最高权限模式"等口头命令即时生效
 - `/governance-status` / `/governance-gate` / `/governance-verify` 手动查询
 
-**自升级**：bootstrap 检测到版本变化时自动更新 CLAUDE.md 和 plan-tracker 结构
+**自升级**：bootstrap 检测到版本变化时自动更新 平台原生入口文件 和 plan-tracker 结构
 
 **特色能力**：
 - 完整 bootstrap 模板（SELF-CHECK + 双维度模式 + 阶段跳跃防护）
@@ -29,7 +29,7 @@
 
 **初始化**：与 Claude 相同的 governance-init 流程
 
-**日常使用**：CLAUDE.md 或等效入口文件中的 bootstrap 规则（取决于 Codex 的加载机制）
+**日常使用**：平台原生入口文件 或等效入口文件中的 bootstrap 规则（取决于 Codex 的加载机制）
 
 **限制**：
 - Codex 的 skill/rule 加载机制与 Claude 不同——bootstrap 模板可能需要适配

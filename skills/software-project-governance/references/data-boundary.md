@@ -40,7 +40,7 @@
 | 数据类别 | 升级时是否修改 | 说明 |
 |---------|:--:|------|
 | 用户 `.governance/` 文件 | **否** | 绝对不触碰用户数据 |
-| 用户 `CLAUDE.md` | 是（仅 bootstrap 段） | 自升级机制替换 `## Governance Bootstrap` 段，其余内容保留 |
+| 用户 `平台原生入口文件` | 是（仅 bootstrap 段） | 自升级机制替换 `## Governance Bootstrap` 段，其余内容保留 |
 | 插件文件 | 是（全部） | `/plugin update` 替换整个插件目录 |
 | 样例数据 | — | 用户项目中不存在 |
 

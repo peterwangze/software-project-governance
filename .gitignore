@@ -1,5 +1,9 @@
 # Local Claude Code state
 .claude/*
+CLAUDE.md
+
+# Local governance tracking (runtime data, not product asset)
+.governance/
 
 # Python cache
 __pycache__/

@@ -62,7 +62,7 @@
   - **P1 重要矛盾（5/7）**：S1 阶段重叠 profile 约束 / S2 关键决策列表同步 / S3 M7.4 步骤数修正 / S5 Step2 profile-aware / S6 interaction-boundary 同步
   - **P2 引用/漂移/M5（7/17）**：V1 agent-team-architecture 版本 banner / AQ1 确认行模式自适应 / R1 TOOLS.md 路径修正 / R2 Replacement Boundary 路径 / R3 孤儿引用补全 / S6 M5.2 同步声明
   - 剩余 12 项 P2（R4 Gate AUTO/ASK 标注、D1-D7 死规则标注、DR1-DR3 非关键列表漂移、AQ2 on-demand Gate 状态）归入 0.10.0
-- **pre-commit hook Step 6 升级**：CLAUDE.md 直接修改检测从 WARNING → BLOCKING——BOOTSTRAP DISCIPLINE 违反（第 5+ 次）后升级为阻断级强制力
+- **pre-commit hook Step 6 升级**：平台原生入口文件 直接修改检测从 WARNING → BLOCKING——BOOTSTRAP DISCIPLINE 违反（第 5+ 次）后升级为阻断级强制力
 - 版本 bump 0.7.1→0.7.2
 
 ## [0.7.1] — 2026-04-30
@@ -157,7 +157,7 @@
 
 ### 修复
 
-- **bootstrap 变更纪律**：governance-init.md 和 CLAUDE.md 新增 Step 1.5——MUST NOT 直接修改 CLAUDE.md 添加新行为，MUST 先改 governance-init.md 注入模板（canonical source），通过版本 bump + /plugin update + bootstrap 自升级到达用户
+- **bootstrap 变更纪律**：governance-init.md 和 平台原生入口文件 新增 Step 1.5——MUST NOT 直接修改 平台原生入口文件 添加新行为，MUST 先改 governance-init.md 注入模板（canonical source），通过版本 bump + /plugin update + bootstrap 自升级到达用户
 - **Tier 审计补齐**：EVD-123——用户反馈驱动密集修复轮次审计（D1/D3/D4）。审计发现 2 项治理违规：所有 FIX 任务 Gate 标记错误（G8→G11 修正）+ 全部先执行后入账（违反 M7.5）
 
 ---
@@ -166,7 +166,7 @@
 
 ### 修复
 
-- **bootstrap 自升级**：版本变化检测不再只是提示用户运行命令——agent 检测到 bootstrap 落后时**自动替换 CLAUDE.md 的 bootstrap 段为最新模板**。用户 `/plugin update` → 下次会话 → 自动完成，零用户行动。governance-update 命令降级为手动回退选项。
+- **bootstrap 自升级**：版本变化检测不再只是提示用户运行命令——agent 检测到 bootstrap 落后时**自动替换 平台原生入口文件 的 bootstrap 段为最新模板**。用户 `/plugin update` → 下次会话 → 自动完成，零用户行动。governance-update 命令降级为手动回退选项。
 
 ---
 
@@ -174,7 +174,7 @@
 
 ### 新增
 
-- **governance-update 命令**：老用户升级路径的核心——`/plugin update` 获取新版本后运行此命令，将 CLAUDE.md 的 bootstrap 段更新到最新。**不触碰 .governance/ 数据**——只替换 bootstrap 模板段，保留用户的项目配置和治理记录。bootstrap 版本变化检测自动提示用户运行此命令。
+- **governance-update 命令**：老用户升级路径的核心——`/plugin update` 获取新版本后运行此命令，将 平台原生入口文件 的 bootstrap 段更新到最新。**不触碰 .governance/ 数据**——只替换 bootstrap 模板段，保留用户的项目配置和治理记录。bootstrap 版本变化检测自动提示用户运行此命令。
 
 ---
 
@@ -195,7 +195,7 @@
 
 ### 新增
 
-- **用户视角强制原则**（`references/user-perspective-principle.md`）：所有规划/设计/开发/测试 MUST 回答三个问题——用户怎么获得变更？用户怎么知道变更存在？用户体验真的变了吗？含 6 项检查清单 + 5 种反模式定义 + 用户旅程描述要求。集成到 SKILL.md M2.1 + CLAUDE.md 干活前检查 + governance-init 注入模板。
+- **用户视角强制原则**（`references/user-perspective-principle.md`）：所有规划/设计/开发/测试 MUST 回答三个问题——用户怎么获得变更？用户怎么知道变更存在？用户体验真的变了吗？含 6 项检查清单 + 5 种反模式定义 + 用户旅程描述要求。集成到 SKILL.md M2.1 + 平台原生入口文件 干活前检查 + governance-init 注入模板。
 - **governance-status 版本新鲜度检查**（Step 3.5）：每次展示状态时自动检查插件是否最新，OUTDATED 时输出版本差距 + commits behind + 更新指引。已安装用户不再被遗忘。
 - **近期变更用户可达性审计**：4 个版本逐版审查——发现 3/4 对已安装用户有断点。0.6.1 治理开关是唯一对已安装用户立即可用的功能。
 
@@ -211,7 +211,7 @@
 ### 修复
 
 - **governance-init Step 8**：新项目初始化时自动安装 post-commit hook
-- **CLAUDE.md bootstrap**：新增 Hook 存活检测——hook 缺失时 MUST 提醒用户重装
+- **平台原生入口文件 bootstrap**：新增 Hook 存活检测——hook 缺失时 MUST 提醒用户重装
 
 ---
 
@@ -257,8 +257,8 @@
 - **交互式初始化**：`governance-init` 在参数缺失时通过 AskUserQuestion 引导用户选择 profile/触发模式/项目类型，不再静默应用默认配置
 - **Bootstrap 模板全面升级**：注入模板从 4 行英文 stub 升级为完整中文 bootstrap（Step 0 触发模式 + Step 1 跨会话恢复 + Step 2 三项交叉验证 + Step 3 优先级 + 干活前检查 + 提问规则 + 关键决策分类 + 收工快照生成），按 profile 差异化注入（lightweight 精简版 / standard+strict 完整版）
 - **旧版 Bootstrap 升级检测**：检测到旧版英文 stub 时主动提示用户升级，不再静默跳过
-- **跨会话状态恢复**：M4.1/M4.2 升级——session-snapshot.md 格式定义 + 会话加载/生成协议。CLAUDE.md 收工前检查自动生成快照
-- **触发模式实现**：CLAUDE.md Bootstrap Step 0 —— always-on/on-demand/silent-track 三种行为差异可检测
+- **跨会话状态恢复**：M4.1/M4.2 升级——session-snapshot.md 格式定义 + 会话加载/生成协议。平台原生入口文件 收工前检查自动生成快照
+- **触发模式实现**：平台原生入口文件 Bootstrap Step 0 —— always-on/on-demand/silent-track 三种行为差异可检测
 - **Profile 差异化行为落地**：governance-init 按 profile 生成不同 plan-tracker 结构（lightweight 7 Gates+6列 / standard 11 Gates+20列 / strict 11 Gates+量化评分列+强制证据注释）
 - **CI 集成 check-governance**：`.github/workflows/governance-check.yml` —— push/PR 自动运行 check-governance + verify_workflow.py，`--fail-on-issues` 阻断不完整治理记录合并
 - **Bar Raiser 否决权**：技术评审结论新增"否决（Block）"选项——独立评审人可单方面阻止 Gate 通过。单 agent 最低标准：切换分析框架 + 挑战 3 个核心假设
@@ -273,7 +273,7 @@
 
 ### 修复
 
-- **governance-init bootstrap 不对称**：本仓库 CLAUDE.md 与注入模板严重不对称（~80 行 vs 4 行）→ 同步为完整中文模板，按 profile 差异化注入
+- **governance-init bootstrap 不对称**：本仓库 平台原生入口文件 与注入模板严重不对称（~80 行 vs 4 行）→ 同步为完整中文模板，按 profile 差异化注入
 
 ---
 
@@ -349,7 +349,7 @@
 - **审计框架**（`audit-framework.md`）：6 维度 × 3 类别审计体系，融入 Gate 原则 #7 / SKILL.md M2.1 / lifecycle.md 治理规则 #5
 - **Agent 失败模式文档**（`agent-failure-modes.md`）：8 种失败模式 + 检测方法 + 用户应急动作
 - **Tier 审计检查点**（stage-gates.md 原则 #9）：分层推进模型的 Tier 完成后必须执行审计
-- **CLAUDE.md 自包含升级**：关键决策分类内嵌（不依赖 SKILL.md 加载状态）+ 故障排除章节
+- **平台原生入口文件 自包含升级**：关键决策分类内嵌（不依赖 SKILL.md 加载状态）+ 故障排除章节
 
 ### 变更
 
@@ -363,7 +363,7 @@
 
 - parse_gate_detail regex 从 `###` 改为 `##`（pre-existing bug——gate 和 gate-check 子命令均无法找到 Gate 定义）
 - 证据质量升级：5 条"会话上下文"引用替换为持久化文件路径，EVD-070 循环引修复
-- CLAUDE.md/SKILL.md 循环依赖解耦
+- 平台原生入口文件/SKILL.md 循环依赖解耦
 
 ---
 

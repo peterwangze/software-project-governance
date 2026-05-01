@@ -69,7 +69,7 @@ OPTIONAL_PROJECTION_FILES = {
     "Sample Evidence": ROOT / "workflows/software-project-governance/examples/current-project-evidence-log.md",
     "Sample Decision": ROOT / "workflows/software-project-governance/examples/current-project-decision-log.md",
     "Sample Risk": ROOT / "workflows/software-project-governance/examples/current-project-risk-log.md",
-    "Claude Repository Entry": ROOT / "CLAUDE.md",
+
     "Claude Adapter": ROOT / "adapters/claude/README.md",
     "Claude Adapter Manifest": ROOT / "adapters/claude/adapter-manifest.json",
     "Claude Launcher": ROOT / "adapters/claude/launch.py",
@@ -89,11 +89,6 @@ OPTIONAL_PROJECTION_FILES = {
 PROJECTION_SNIPPETS = {
     ROOT / "workflows/software-project-governance/examples/current-project-sample.md": [
         "已迁移",
-    ],
-    ROOT / "CLAUDE.md": [
-        "software-project-governance",
-        "Governance Bootstrap",
-        "没读 plan-tracker 就开始干活",
     ],
     ROOT / "adapters/claude/README.md": [
         "已废弃（Deprecated）",
@@ -363,11 +358,6 @@ REQUIRED_SNIPPETS = {
         "supported_agents",
         "Claude",
         "Codex",
-    ],
-    ROOT / "CLAUDE.md": [
-        "software-project-governance",
-        "Governance Bootstrap",
-        "没读 plan-tracker 就开始干活",
     ],
     # ── Command Protocol Schema + Upgraded Commands ──
     ROOT / "protocol/command-schema.md": [
@@ -1798,7 +1788,7 @@ def check_m5_compliance():
     Detects:
     1. Source file contamination: sub-workflow files containing '询问用户：' patterns
        that instruct agent to output inline text questions (M5.1 violation)
-    2. Bootstrap coverage: CLAUDE.md contains AskUserQuestion rule
+    2. Bootstrap coverage: governance-init.md template contains AskUserQuestion rule
     3. Interaction boundary: interaction-boundary.md exists and references AskUserQuestion
 
     This CANNOT detect runtime M5 violations (actual inline questions in conversation).
@@ -1831,27 +1821,27 @@ def check_m5_compliance():
             except Exception:
                 pass
 
-    # Check 2: Bootstrap contains AskUserQuestion rule
-    claude_md = ROOT / "CLAUDE.md"
-    if claude_md.is_file():
-        content = claude_md.read_text(encoding="utf-8")
+    # Check 2: Bootstrap template (governance-init.md) contains AskUserQuestion rule
+    bootstrap_template = ROOT / "commands" / "governance-init.md"
+    if bootstrap_template.is_file():
+        content = bootstrap_template.read_text(encoding="utf-8")
         if "AskUserQuestion" not in content:
             issues.append({
                 "type": "m5_bootstrap_missing",
-                "file": "CLAUDE.md",
+                "file": "commands/governance-init.md",
                 "line": 0,
-                "text": "CLAUDE.md bootstrap does not contain AskUserQuestion rule",
+                "text": "Bootstrap template does not contain AskUserQuestion rule",
                 "severity": "WARNING",
-                "fix": "Add M5 AskUserQuestion rule to CLAUDE.md bootstrap (via governance-init.md template update)"
+                "fix": "Add M5 AskUserQuestion rule to governance-init.md bootstrap template"
             })
     else:
         issues.append({
             "type": "m5_bootstrap_missing",
-            "file": "CLAUDE.md",
+            "file": "commands/governance-init.md",
             "line": 0,
-            "text": "CLAUDE.md not found — no M5 bootstrap coverage",
-            "severity": "WARNING",
-            "fix": "Run governance-init to create CLAUDE.md with M5 rules"
+            "text": "governance-init.md not found",
+            "severity": "ERROR",
+            "fix": "Create governance-init.md with bootstrap template"
         })
 
     # Check 3: interaction-boundary.md exists and references AskUserQuestion
@@ -1877,13 +1867,9 @@ def check_m5_compliance():
             "fix": "Create interaction-boundary.md with AskUserQuestion binding rules"
         })
 
-    # Check 4: CLAUDE.md SELF-CHECK contains M5 pre-output item (FIX-016)
-    # This detects whether the agent has a pre-output self-interruption mechanism
-    # Without this, the agent's natural conversational patterns (e.g., "要继续吗？")
-    # will produce M5.1 violations even when all source files are clean.
-    if claude_md.is_file():
-        content = claude_md.read_text(encoding="utf-8")
-        # The SELF-CHECK section must contain item 4 (M5 pre-output check)
+    # Check 4: Bootstrap template (governance-init.md) contains M5 pre-output guard
+    if bootstrap_template.is_file():
+        content = bootstrap_template.read_text(encoding="utf-8")
         m5_selfcheck_patterns = [
             "我即将输出的文本是否包含向用户提问的问句",
             "M5.1",
@@ -1893,20 +1879,20 @@ def check_m5_compliance():
         if not has_selfcheck_item4:
             issues.append({
                 "type": "m5_selfcheck_missing",
-                "file": "CLAUDE.md",
+                "file": "commands/governance-init.md",
                 "line": 0,
-                "text": "CLAUDE.md SELF-CHECK missing M5 pre-output item (item #4). Without this, agent's natural conversational patterns ('要继续吗？') will produce M5.1 violations even when source files are clean.",
+                "text": "Bootstrap template missing M5 pre-output guard. Without this, agent's natural conversational patterns can produce M5.1 violations.",
                 "severity": "BLOCKING",
-                "fix": "Add SELF-CHECK item #4: scan output for inline question keywords before responding"
+                "fix": "Add SELF-CHECK to governance-init.md bootstrap template"
             })
     else:
         issues.append({
             "type": "m5_selfcheck_missing",
-            "file": "CLAUDE.md",
+            "file": "commands/governance-init.md",
             "line": 0,
-            "text": "CLAUDE.md not found — no SELF-CHECK M5 pre-output guard",
+            "text": "Bootstrap template not found",
             "severity": "BLOCKING",
-            "fix": "Run governance-init to create CLAUDE.md with SELF-CHECK item #4"
+            "fix": "Create governance-init.md with SELF-CHECK in bootstrap template"
         })
 
     return {"issues": issues, "total_checks": 4}
@@ -2726,9 +2712,9 @@ def cmd_e2e_check(_args):
 
     # Category B: Bootstrap content
     print("\n--- Category B: Bootstrap content ---")
-    claude_md = e2e_dir / "CLAUDE.md"
-    if claude_md.exists():
-        content = claude_md.read_text(encoding="utf-8")
+    bootstrap_file = e2e_dir / "CLAUDE.md"
+    if bootstrap_file.exists():
+        content = bootstrap_file.read_text(encoding="utf-8")
         check("SELF-CHECK" in content, "Bootstrap: SELF-CHECK present")
         check("Governance Bootstrap" in content, "Bootstrap: section present")
         check("AskUserQuestion" in content, "Bootstrap: AskUserQuestion rule")

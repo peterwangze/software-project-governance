@@ -39,7 +39,7 @@
 - repo-local 入口虽然可运行，但侵入性高、可替换性差、容易让 workflow 和用户仓库资产绑定。
 - repo-local 更适合样例验证、fallback 或团队显式绑定场景，而不是默认产品方向。
 
-因此，默认产品形态不能再以 `CLAUDE.md`、`.claude/skills/`、`adapters/codex/*` 之类 repo-local 接法为中心展开。
+因此，默认产品形态不能再以 `平台原生入口文件`、`.claude/skills/`、`adapters/codex/*` 之类 repo-local 接法为中心展开。
 
 ## 分层设计
 
@@ -81,7 +81,7 @@
 
 当前已存在的投影层样例：
 
-- Claude：`CLAUDE.md`、`.claude/skills/software-project-governance/SKILL.md`
+- Claude：`平台原生入口文件`、`.claude/skills/software-project-governance/SKILL.md`
 - Codex：`adapters/codex/adapter-manifest.json`、`adapters/codex/launch.py`
 - Gemini：`adapters/gemini/README.md`
 
@@ -124,7 +124,7 @@
 
 | Agent | 默认推荐 | 条件推荐 | 样例 / fallback | 当前不推荐 |
 | --- | --- | --- | --- | --- |
-| Claude | personal skill、plugin skill、MCP | project skill、slash commands | `CLAUDE.md` + project skill | 以仓库级入口承载完整 workflow 本体 |
+| Claude | personal skill、plugin skill、MCP | project skill、slash commands | `平台原生入口文件` + project skill | 以仓库级入口承载完整 workflow 本体 |
 | Codex | 全局安装 + external skill/plugin/config、MCP、headless runner | repo rules、hooks、`AGENTS.md` 投影 | `adapters/codex/*` | 把 repo-local adapter 扩展成默认唯一入口 |
 | Gemini | MCP、custom commands、headless runner、extensions | `GEMINI.md` 最薄投影 | `adapters/gemini/README.md` | 在缺少更多验证前深做 repo-local 方案 |
 | 国内 agent CLI | MCP、external runner、shared command | 项目级上下文投影 | 待 Gemini 兼容抽象后再补 | 提前绑定单一目录布局 |

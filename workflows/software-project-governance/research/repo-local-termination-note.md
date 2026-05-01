@@ -7,7 +7,7 @@
 本轮终止的不是“所有 repo-local 入口”，而是以下默认主线假设：
 
 1. 把 workflow 默认做成用户仓库资产。
-2. 以 `CLAUDE.md`、`.claude/skills/`、`adapters/codex/*` 这类仓库内入口作为最终用户的主推荐接法。
+2. 以 `平台原生入口文件`、`.claude/skills/`、`adapters/codex/*` 这类仓库内入口作为最终用户的主推荐接法。
 3. 在缺少主流集成方式调研的前提下，继续沿 repo-local 目录结构扩展更多 agent 入口。
 
 ## 终止原因
@@ -22,7 +22,7 @@ repo-local 方案要求用户在目标仓库中引入额外入口文件或目录
 
 ### 3. 容易误把投影层当本体层
 
-`CLAUDE.md`、`.claude/skills/`、`adapters/*` 这类入口本质上只是 agent 投影层。若继续把它们当主线推进，会让 workflow 本体和 agent 私有入口混写，损害单一事实源。
+`平台原生入口文件`、`.claude/skills/`、`adapters/*` 这类入口本质上只是 agent 投影层。若继续把它们当主线推进，会让 workflow 本体和 agent 私有入口混写，损害单一事实源。
 
 ### 4. 调研顺序倒置
 
@@ -42,7 +42,7 @@ repo-local 方案要求用户在目标仓库中引入额外入口文件或目录
 
 以下资产继续保留，但定位已变化：
 
-- `CLAUDE.md`
+- `平台原生入口文件`
   - 保留为仓库级最薄指针，不再承载默认产品形态。
 - `.claude/skills/software-project-governance/SKILL.md`
   - 保留为当前仓库内的 project skill 样例。

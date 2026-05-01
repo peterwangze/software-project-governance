@@ -38,3 +38,11 @@ description: Release Agent — 发布管理与版本规划。发布检查+版本
 - 变更日志（用户视角，非技术视角）
 - 回滚方案（步骤 + 验证方式 + 预计回滚时间）
 - Feature Flag 状态（如有）
+
+## 可调用的 SKILL
+
+| SKILL | 用途 |
+|-------|------|
+| stage-release | 版本发布——发布计划、changelog、回滚方案 |
+| release-checklist | 发布检查清单——发布前验证、回滚确认 |
+| stage-operations | 运营与反馈——监控、反馈、优化 |

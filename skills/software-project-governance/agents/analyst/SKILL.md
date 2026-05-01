@@ -36,3 +36,14 @@ description: Analyst Agent — 需求分析与调研。需求澄清+竞品分析
 - 竞品分析（至少 3 个竞品，含差异分析 + 空白地带）
 - PR/FAQ（用户视角的新闻稿 + FAQ）
 - OKR（量化目标 + 关键结果 + 基线数据）
+
+## 可调用的 SKILL
+
+| SKILL | 用途 |
+|-------|------|
+| stage-initiation | 立项与目标定义 |
+| stage-research | 调研与竞争分析 |
+| requirement-clarification | 需求澄清 checklist |
+| pr-faq | PR/FAQ 模板 |
+| okr | OKR 模板 |
+| six-pager | 6-Pager 技术方案文档 |

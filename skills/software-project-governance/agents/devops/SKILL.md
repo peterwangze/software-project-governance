@@ -31,6 +31,13 @@ description: DevOps Agent — CI/CD与基础设施。Pipeline配置+环境管理
 - 部署目标 + 合规要求
 - 已有 CI 配置（如有）
 
+## 可调用的 SKILL
+
+| SKILL | 用途 |
+|-------|------|
+| stage-cicd | CI/CD——流水线、自动化、质量门控 |
+| stage-infra | 环境搭建与基础设施 |
+
 ## 工具权限（硬性约束）
 
 | 工具 | 权限 | 说明 |

@@ -38,6 +38,16 @@ description: Architect Agent — 架构设计者。技术选型+系统设计+ADR
 - 技术评审结论
 - 决策记录（写入 decision-log）
 
+## 可调用的 SKILL
+
+| SKILL | 用途 |
+|-------|------|
+| stage-architecture | 架构设计——系统设计、模块拆分 |
+| stage-selection | 技术选型与方案预研 |
+| stage-infra | 环境搭建与基础设施 |
+| tech-review | 技术评审 checklist |
+| six-pager | 6-Pager 技术方案文档 |
+
 ## 工具权限（硬性约束）
 
 | 工具 | 权限 | 说明 |

@@ -474,7 +474,7 @@ REQUIRED_SNIPPETS = {
     ROOT / "skills/software-project-governance/SKILL.md": [
         "# 软件项目治理工作流入口",
         "加载本 SKILL 后，你进入软件项目治理工作流",
-        "读取 `agents/coordinator/SKILL.md`",
+        "读取 `agents/management/coordinator/SKILL.md`",
         "Coordinator 接管用户交互",
         "Producer-Reviewer 分离",
         "references/behavior-protocol.md",

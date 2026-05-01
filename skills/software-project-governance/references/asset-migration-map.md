@@ -39,15 +39,15 @@
 
 | 当前路径 | 去向 | 方式 |
 |---------|------|------|
-| `skills/software-project-governance/agents/coordinator/SKILL.md` | 留存 | — |
-| `skills/software-project-governance/agents/developer/SKILL.md` | 留存 | — |
-| `skills/software-project-governance/agents/reviewer/SKILL.md` | 留存 | — |
-| `skills/software-project-governance/agents/architect/SKILL.md` | 留存 | — |
-| `skills/software-project-governance/agents/qa/SKILL.md` | 留存 | — |
-| `skills/software-project-governance/agents/devops/SKILL.md` | 留存 | — |
-| `skills/software-project-governance/agents/analyst/SKILL.md` | 留存 | — |
-| `skills/software-project-governance/agents/release/SKILL.md` | 留存 | — |
-| `skills/software-project-governance/agents/maintenance/SKILL.md` | 留存 | — |
+| `skills/software-project-governance/agents/management/coordinator/SKILL.md` | 留存 | — |
+| `skills/software-project-governance/agents/development/developer/SKILL.md` | 留存 | — |
+| `skills/software-project-governance/agents/review/reviewer/SKILL.md` | 留存 | — |
+| `skills/software-project-governance/agents/design/architect/SKILL.md` | 留存 | — |
+| `skills/software-project-governance/agents/testing/qa/SKILL.md` | 留存 | — |
+| `skills/software-project-governance/agents/operations/devops/SKILL.md` | 留存 | — |
+| `skills/software-project-governance/agents/design/analyst/SKILL.md` | 留存 | — |
+| `skills/software-project-governance/agents/operations/release/SKILL.md` | 留存 | — |
+| `skills/software-project-governance/agents/maintenance/maintenance/SKILL.md` | 留存 | — |
 
 ## 用户交互层 — 斜杠命令入口（6 文件）— 留存原地
 

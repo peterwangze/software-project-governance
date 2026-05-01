@@ -144,19 +144,19 @@
 - 动态组合（一个工作流可以有多个 Agent 参与）
 - **有判断权**——在能力层提供的确定性步骤之上做决策
 
-**Agent 分类**：
+**Agent 职能分组**（7 组 9 Agent，按项目运作职能组织）：
 
-| 类别 | Agent | 可调用的 SKILL |
-|------|-------|---------------|
-| 统筹 | Coordinator | 所有 SKILL（通过路由） |
-| 分析 | Analyst | 需求澄清, 竞品分析, PR/FAQ, OKR |
-| 设计 | Architect | 技术选型, 架构设计, ADR, 技术评审 |
-| 实现 | Developer | 开发, TDD, 环境搭建 |
-| 审查 | Reviewer | 代码审查, 技术评审, 安全审查 |
-| 测试 | QA | 测试设计, 集成测试, 性能测试 |
-| 运维 | DevOps | CI/CD, 环境管理, 监控 |
-| 发布 | Release | 发布检查, 版本规划, 变更日志 |
-| 维护 | Maintenance | 缺陷修复, 复盘会议, 规则演进 |
+| 职能组 | Agent | 生命周期覆盖 | 可调用的 SKILL |
+|--------|-------|------------|---------------|
+| **管理组** | Coordinator | 全流程——统筹调度 | 所有 SKILL（通过路由分发） |
+| **设计组** | Analyst, Architect | 立项→调研→选型→架构设计 | 需求澄清, 竞品分析, PR/FAQ, OKR, 6-Pager, 技术选型, 架构设计, ADR, 技术评审 |
+| **开发组** | Developer | 开发实现 | 开发, TDD, 环境搭建 |
+| **测试组** | QA | 测试与质量保障 | 测试设计, 集成测试, 性能测试 |
+| **评审组** | Reviewer | 全流程——独立审查 | 代码审查, 技术评审, 安全审查 |
+| **运维组** | DevOps, Release | CI/CD→发布→运营 | CI/CD, 环境管理, 发布检查, 版本规划, 变更日志 |
+| **维护组** | Maintenance | 维护与演进 | 缺陷修复, 复盘会议, 规则演进 |
+
+> 目录结构：`agents/{管理组/设计组/开发组/测试组/评审组/运维组/维护组}/{agent名}/SKILL.md`
 
 ### 入口层——引导进入业务智能层
 
@@ -336,15 +336,15 @@
 
 | 当前文件 | 目标位置 | 变更 |
 |---------|---------|------|
-| `agents/coordinator/SKILL.md` | `agents/coordinator/SKILL.md` | 保持 |
-| `agents/developer/SKILL.md` | `agents/developer/SKILL.md` | 保持 |
-| `agents/reviewer/SKILL.md` | `agents/reviewer/SKILL.md` | 保持 |
-| `agents/architect/SKILL.md` | `agents/architect/SKILL.md` | 保持 |
-| `agents/qa/SKILL.md` | `agents/qa/SKILL.md` | 保持 |
-| `agents/devops/SKILL.md` | `agents/devops/SKILL.md` | 保持 |
-| `agents/analyst/SKILL.md` | `agents/analyst/SKILL.md` | 保持 |
-| `agents/release/SKILL.md` | `agents/release/SKILL.md` | 保持 |
-| `agents/maintenance/SKILL.md` | `agents/maintenance/SKILL.md` | 保持 |
+| `agents/management/coordinator/SKILL.md` | `agents/management/coordinator/SKILL.md` | 保持 |
+| `agents/development/developer/SKILL.md` | `agents/development/developer/SKILL.md` | 保持 |
+| `agents/review/reviewer/SKILL.md` | `agents/review/reviewer/SKILL.md` | 保持 |
+| `agents/design/architect/SKILL.md` | `agents/design/architect/SKILL.md` | 保持 |
+| `agents/testing/qa/SKILL.md` | `agents/testing/qa/SKILL.md` | 保持 |
+| `agents/operations/devops/SKILL.md` | `agents/operations/devops/SKILL.md` | 保持 |
+| `agents/design/analyst/SKILL.md` | `agents/design/analyst/SKILL.md` | 保持 |
+| `agents/operations/release/SKILL.md` | `agents/operations/release/SKILL.md` | 保持 |
+| `agents/maintenance/maintenance/SKILL.md` | `agents/maintenance/maintenance/SKILL.md` | 保持 |
 
 ### 入口层映射
 
@@ -437,14 +437,22 @@ skills/software-project-governance/
   SKILL.md                        ← 入口层（仅引导进入 Coordinator）
   agents/                         ← 业务智能层（Agent 库）
     coordinator/SKILL.md
-    developer/SKILL.md
-    reviewer/SKILL.md
-    architect/SKILL.md
-    qa/SKILL.md
-    devops/SKILL.md
-    analyst/SKILL.md
-    release/SKILL.md
-    maintenance/SKILL.md
+    management/                   ← 管理组
+      coordinator/SKILL.md
+    design/                       ← 设计组
+      analyst/SKILL.md
+      architect/SKILL.md
+    development/                  ← 开发组
+      developer/SKILL.md
+    testing/                      ← 测试组
+      qa/SKILL.md
+    review/                       ← 评审组
+      reviewer/SKILL.md
+    operations/                   ← 运维组
+      devops/SKILL.md
+      release/SKILL.md
+    maintenance/                  ← 维护组
+      maintenance/SKILL.md
   skills/                         ← 能力层（SKILL 库）
     init/SKILL.md
     onboarding/SKILL.md

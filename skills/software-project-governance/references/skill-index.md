@@ -47,16 +47,53 @@
 |-------|------|------|-----------|
 | main-workflow | `skills/main-workflow/SKILL.md` | 统一工作流入口——场景匹配、跨层调用协议 | Coordinator |
 
+## Agent 职能分组（7 组 9 Agent）
+
+Agent 按项目运作职能分为 7 组，覆盖从立项到维护的全生命周期。
+
+| 职能组 | 目录 | Agent | 生命周期阶段 |
+|--------|------|-------|------------|
+| **管理组** | `agents/management/` | Coordinator（老周） | 全流程——统筹调度 |
+| **设计组** | `agents/design/` | Analyst, Architect | 立项→调研→选型→架构设计 |
+| **开发组** | `agents/development/` | Developer | 开发实现 |
+| **测试组** | `agents/testing/` | QA | 测试与质量保障 |
+| **评审组** | `agents/review/` | Reviewer | 全流程——独立审查 |
+| **运维组** | `agents/operations/` | DevOps, Release | CI/CD→版本发布→运营 |
+| **维护组** | `agents/maintenance/` | Maintenance | 维护与演进 |
+
+```
+管理组(Coordinator)
+    │
+    ├── 设计组(Analyst + Architect) → 立项·调研·选型·架构
+    │       │
+    │       ▼
+    ├── 开发组(Developer) → 编码实现
+    │       │
+    │       ▼
+    ├── 测试组(QA) → 测试验证
+    │       │
+    │       ▼
+    ├── 评审组(Reviewer) → 独立审查（贯穿全流程）
+    │       │
+    │       ▼
+    ├── 运维组(DevOps + Release) → CI/CD·发布·运营
+    │       │
+    │       ▼
+    └── 维护组(Maintenance) → 复盘·修复·演进
+            │
+            └── (循环回管理组)
+```
+
 ## Agent↔SKILL 绑定总表
 
-| Agent | 可调用 SKILL |
-|-------|-------------|
-| **Coordinator** | 全部 SKILL（通过路由分发） |
-| **Analyst** | stage-initiation, stage-research, requirement-clarification, pr-faq, okr, six-pager |
-| **Architect** | stage-architecture, stage-selection, stage-infra, tech-review, six-pager |
-| **Developer** | stage-development, stage-infra, code-review |
-| **Reviewer** | code-review, tech-review |
-| **QA** | stage-testing |
-| **DevOps** | stage-cicd, stage-infra |
-| **Release** | stage-release, release-checklist, stage-operations |
-| **Maintenance** | stage-maintenance, retro-meeting |
+| 职能组 | Agent | 可调用 SKILL |
+|--------|-------|-------------|
+| 管理组 | **Coordinator** | 全部 SKILL（通过路由分发） |
+| 设计组 | **Analyst** | stage-initiation, stage-research, requirement-clarification, pr-faq, okr, six-pager |
+| 设计组 | **Architect** | stage-architecture, stage-selection, stage-infra, tech-review, six-pager |
+| 开发组 | **Developer** | stage-development, stage-infra, code-review |
+| 测试组 | **QA** | stage-testing |
+| 评审组 | **Reviewer** | code-review, tech-review |
+| 运维组 | **DevOps** | stage-cicd, stage-infra |
+| 运维组 | **Release** | stage-release, release-checklist, stage-operations |
+| 维护组 | **Maintenance** | stage-maintenance, retro-meeting |

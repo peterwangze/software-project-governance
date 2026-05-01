@@ -67,7 +67,7 @@
 ### 阶段推进规则
 
 - **默认顺序**：1→2→3→...→11，前一阶段 Gate 通过后进入下一阶段
-- **可重叠**：相邻阶段在满足条件后可并行（如开发与测试）。**受 profile 约束**：strict 禁止阶段重叠（见 `references/profiles.md`），standard/lightweight 允许相邻阶段重叠
+- **可重叠**：相邻阶段在满足条件后可并行（如开发与测试）。**受 profile 约束**：strict 禁止阶段重叠（见 `core/profiles.md`），standard/lightweight 允许相邻阶段重叠
 - **可回退**：后续阶段发现前置阶段遗漏时允许回退补齐
 - **可跳转**：已在进行中的项目可通过 onboarding 协议中途接入当前阶段
 
@@ -108,7 +108,7 @@
 | "Code Review"、"审查代码" | Code Review 规范 | `stages/development/code-review-standard.md` |
 | "发布检查"、"上线前检查" | 发布 checklist | `stages/release/release-checklist.md` |
 | "开回顾会"、"复盘会议" | 回顾会议模板 | `stages/maintenance/retro-meeting-template.md` |
-| "校验工作流"、"检查治理状态" | 校验脚本 | `scripts/verify_workflow.py` |
+| "校验工作流"、"检查治理状态" | 校验脚本 | `skills/software-project-governance/infra/verify_workflow.py` |
 
 完整工具目录见 `TOOLS.md`。
 
@@ -157,9 +157,9 @@
 
 1. **本文件**（`main-workflow.md`）— 确认两个基础目的和匹配规则
 2. `.governance/plan-tracker.md` — 确认项目当前状态
-3. `references/lifecycle.md` — 确认阶段模型和触发模式
-4. `references/stage-gates.md` — 确认 Gate 规则
-5. `references/profiles.md` — 确认项目 profile 配置
+3. `core/lifecycle.md` — 确认阶段模型和触发模式
+4. `core/stage-gates.md` — 确认 Gate 规则
+5. `core/profiles.md` — 确认项目 profile 配置
 6. 匹配到的子工作流 — 执行具体阶段活动
 7. `TOOLS.md` — 按需查找工具
 
@@ -183,9 +183,9 @@
 
 ## 与其他规则文件的关系
 
-- `references/lifecycle.md`：阶段模型、触发模式、治理规则的详细定义
-- `references/stage-gates.md`：每个 Gate 的检查项、判定标准、通过条件
-- `references/profiles.md`：lightweight/standard/strict 三种 profile 的阶段范围和 Gate 强度
-- `references/onboarding.md`：项目中途接入的协议和最小路径
+- `core/lifecycle.md`：阶段模型、触发模式、治理规则的详细定义
+- `core/stage-gates.md`：每个 Gate 的检查项、判定标准、通过条件
+- `core/profiles.md`：lightweight/standard/strict 三种 profile 的阶段范围和 Gate 强度
+- `core/onboarding.md`：项目中途接入的协议和最小路径
 - `references/interaction-boundary.md`：agent 自主决策 vs 需用户确认的边界规则
 - `TOOLS.md`：所有可复用工具的目录和触发条件

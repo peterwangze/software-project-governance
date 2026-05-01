@@ -46,7 +46,7 @@
 
 **工作流脱轨检测**：检查 plan-tracker 的 `最近复盘日期`——如果距今 > 7 天 AND 有若干新 commit 但 plan-tracker 无更新 → ⚠️ 工作流可能已被忽略。提醒用户是否需要更新治理状态。
 
-**Hook 存活检测**（系统级约束——不依赖 agent 自觉）：检查 `.git/hooks/pre-commit` 和 `.git/hooks/post-commit` 是否存在。缺失 → ⚠️ 治理 hook 缺失——agent 的 commit 不受系统约束。**MUST** 提醒重装：`cp scripts/pre-commit-hook.sh .git/hooks/pre-commit && cp scripts/post-commit-hook.sh .git/hooks/post-commit`
+**Hook 存活检测**（系统级约束——不依赖 agent 自觉）：检查 `.git/hooks/pre-commit` 和 `.git/hooks/post-commit` 是否存在。缺失 → ⚠️ 治理 hook 缺失——agent 的 commit 不受系统约束。**MUST** 提醒重装：`cp skills/software-project-governance/infra/hooks/pre-commit .git/hooks/pre-commit && cp skills/software-project-governance/infra/hooks/post-commit .git/hooks/post-commit`
 
 **版本变化自动检测 + bootstrap 自升级**（用户更新插件后首次会话自动触发——零用户行动）：
 1. 读取 plan-tracker `工作流版本` 和当前安装版本（SKILL.md frontmatter `version`）
@@ -167,7 +167,7 @@
 
 1. agent 加载了 skill 吗？ → 检查 agent 是否知道当前阶段和 Gate 状态
 2. agent 读了 plan-tracker 吗？ → 检查 agent 是否提到当前 Tier 和待执行任务
-3. agent 的证据可信吗？ → 运行 `python scripts/verify_workflow.py check-governance`
+3. agent 的证据可信吗？ → 运行 `python skills/software-project-governance/infra/verify_workflow.py check-governance`
 4. agent 的完成是真的吗？ → 读 agent 声称创建/修改的文件
 
 完整的 8 种失败模式、检测方法和应急动作见 `skills/software-project-governance/references/agent-failure-modes.md`。
@@ -178,4 +178,4 @@
 - 证据记录：`.governance/evidence-log.md`
 - 决策记录：`.governance/decision-log.md`
 - 风险记录：`.governance/risk-log.md`
-- 验证命令：`python scripts/verify_workflow.py`
+- 验证命令：`python skills/software-project-governance/infra/verify_workflow.py`

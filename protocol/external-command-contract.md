@@ -61,10 +61,10 @@ command 至少需要产出以下结构化结果：
 
 ### 运行时本体层（必读 — 从 skills/ 加载）
 
-5. `skills/software-project-governance/references/lifecycle.md`
-6. `skills/software-project-governance/references/stage-gates.md`
-7. `skills/software-project-governance/references/profiles.md`
-8. `skills/software-project-governance/references/onboarding.md`
+5. `skills/software-project-governance/core/lifecycle.md`
+6. `skills/software-project-governance/core/stage-gates.md`
+7. `skills/software-project-governance/core/profiles.md`
+8. `skills/software-project-governance/core/onboarding.md`
 9. `skills/software-project-governance/references/interaction-boundary.md`
 
 ### 治理记录字段定义（在 skill 入口中内嵌）
@@ -112,7 +112,7 @@ command 只允许回写以下统一事实源：
 默认校验命令：
 
 ```bash
-python scripts/verify_workflow.py
+python skills/software-project-governance/infra/verify_workflow.py
 ```
 
 如 command 只是生成建议而未完成事实源回写，也不得跳过该校验口径。
@@ -130,7 +130,7 @@ python scripts/verify_workflow.py
 - `protocol/`
 - `skills/software-project-governance/`（运行时本体）
 - `workflows/software-project-governance/`（设计时资产）
-- `scripts/verify_workflow.py`
+- `skills/software-project-governance/infra/verify_workflow.py`
 
 可以移除或替换：
 
@@ -163,14 +163,14 @@ python scripts/verify_workflow.py
     "blocked": false
   },
   "validation": {
-    "command": "python scripts/verify_workflow.py"
+    "command": "python skills/software-project-governance/infra/verify_workflow.py"
   },
   "replacement_boundary": {
     "keep": [
       "protocol/",
       "skills/software-project-governance/",
       "workflows/software-project-governance/",
-      "scripts/verify_workflow.py"
+      "skills/software-project-governance/infra/verify_workflow.py"
     ],
     "replace": [
       "agent-specific command wrapper"

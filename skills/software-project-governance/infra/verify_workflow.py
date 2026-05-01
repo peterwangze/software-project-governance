@@ -4,7 +4,7 @@ import re
 import argparse
 from datetime import datetime, date
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[3]
 
 REQUIRED_FILES = {
     "README": ROOT / "README.md",
@@ -25,12 +25,12 @@ REQUIRED_FILES = {
     "Governance Risk Log": ROOT / ".governance/risk-log.md",
     "Skill Main Workflow Entry": ROOT / "skills/software-project-governance/main-workflow.md",
     "Skill Tools Index": ROOT / "skills/software-project-governance/TOOLS.md",
-    "Skill References Stage Gates": ROOT / "skills/software-project-governance/references/stage-gates.md",
-    "Skill References Lifecycle": ROOT / "skills/software-project-governance/references/lifecycle.md",
-    "Skill References Profiles": ROOT / "skills/software-project-governance/references/profiles.md",
-    "Skill References Onboarding": ROOT / "skills/software-project-governance/references/onboarding.md",
+    "Core Stage Gates": ROOT / "skills/software-project-governance/core/stage-gates.md",
+    "Core Lifecycle": ROOT / "skills/software-project-governance/core/lifecycle.md",
+    "Core Profiles": ROOT / "skills/software-project-governance/core/profiles.md",
+    "Core Onboarding": ROOT / "skills/software-project-governance/core/onboarding.md",
     "Skill References Interaction Boundary": ROOT / "skills/software-project-governance/references/interaction-boundary.md",
-    "Skill References Audit Framework": ROOT / "skills/software-project-governance/references/audit-framework.md",
+    "Core Audit Framework": ROOT / "skills/software-project-governance/core/audit-framework.md",
     "Skill References Agent Failure Modes": ROOT / "skills/software-project-governance/references/agent-failure-modes.md",
     "Skill References Company Practices Summary": ROOT / "skills/software-project-governance/references/company-practices-summary.md",
     "Agent Integration Research": ROOT / "workflows/software-project-governance/research/agent-integration-models.md",
@@ -81,7 +81,8 @@ OPTIONAL_PROJECTION_FILES = {
     "Claude Plugin Definition": ROOT / ".claude-plugin/plugin.json",
     "Codex Plugin Definition": ROOT / ".codex-plugin/plugin.json",
     "Codex Marketplace": ROOT / ".agents/plugins/marketplace.json",
-    "VERSIONING": ROOT / "VERSIONING.md",
+    "Core VERSIONING": ROOT / "skills/software-project-governance/core/VERSIONING.md",
+    "Core Task Gate Model": ROOT / "skills/software-project-governance/core/task-gate-model.md",
     "CHANGELOG": ROOT / "CHANGELOG.md",
 }
 
@@ -483,10 +484,14 @@ REQUIRED_SNIPPETS = {
         "Coordinator 接管用户交互",
         "Producer-Reviewer 分离",
         "references/behavior-protocol.md",
-        "references/lifecycle.md",
-        "references/stage-gates.md",
-        "references/task-gate-model.md",
+        "core/lifecycle.md",
+        "core/stage-gates.md",
+        "core/task-gate-model.md",
         "references/agent-communication-protocol.md",
+        "六层架构",
+        "适配层（平台投影）",
+        "infra/verify_workflow.py",
+        "infra/hooks/",
     ],
     ROOT / "skills/software-project-governance/references/behavior-protocol.md": [
         "# 行为协议",
@@ -523,7 +528,7 @@ REQUIRED_SNIPPETS = {
         "单向依赖，不可反向",
         "与协议层概念的对齐",
     ],
-    ROOT / "skills/software-project-governance/references/audit-framework.md": [
+    ROOT / "skills/software-project-governance/core/audit-framework.md": [
         "# 审计框架",
         "审计作为一等治理看护手段",
         "## 审计维度",
@@ -553,17 +558,17 @@ REQUIRED_SNIPPETS = {
     ROOT / ".agents/plugins/marketplace.json": [
         "software-project-governance",
     ],
-    ROOT / "skills/software-project-governance/references/stage-gates.md": [
+    ROOT / "skills/software-project-governance/core/stage-gates.md": [
         "Tier 审计检查点（Tier Audit Checkpoint）",
         "TIER-<layer>-<tier>-AUDIT",
     ],
-    ROOT / "skills/software-project-governance/references/audit-framework.md": [
+    ROOT / "skills/software-project-governance/core/audit-framework.md": [
         "Tier 完成时",
     ],
     ROOT / "skills/software-project-governance/references/behavior-protocol.md": [
         "完成 Tier 时",
     ],
-    ROOT / "VERSIONING.md": [
+    ROOT / "skills/software-project-governance/core/VERSIONING.md": [
         "# 版本管理策略",
         "语义化版本规则",
         "版本升级触发条件",
@@ -628,8 +633,8 @@ def check_snippets():
 # ── Markdown parsing helpers ─────────────────────────────────────
 
 SAMPLE_PATH = ROOT / ".governance/plan-tracker.md"
-GATES_PATH = ROOT / "skills/software-project-governance/references/stage-gates.md"
-LIFECYCLE_PATH = ROOT / "skills/software-project-governance/references/lifecycle.md"
+GATES_PATH = ROOT / "skills/software-project-governance/core/stage-gates.md"
+LIFECYCLE_PATH = ROOT / "skills/software-project-governance/core/lifecycle.md"
 STAGES_DIR = ROOT / "skills/software-project-governance/stages"
 
 STAGE_ORDER = [
@@ -2381,11 +2386,11 @@ def auto_judge_gate(gate_id):
         ],
         "G4": [
             ("开发环境可复现",
-             lambda: _check_file_exists("scripts/verify_workflow.py", "一键验证脚本")),
+             lambda: _check_file_exists("skills/software-project-governance/infra/verify_workflow.py", "一键验证脚本")),
             ("仓库结构符合约定",
              lambda: _check_all_required_files_exist()),
             ("基础CI可运行",
-             lambda: _check_file_exists("scripts/verify_workflow.py", "CI/验证脚本")),
+             lambda: _check_file_exists("skills/software-project-governance/infra/verify_workflow.py", "CI/验证脚本")),
             ("协作规范已建立",
              lambda: _check_snippet_in_file(
                  "skills/software-project-governance/SKILL.md", "MUST", "行为协议含强制规范")),
@@ -2413,19 +2418,19 @@ def auto_judge_gate(gate_id):
             ("核心功能按设计实现",
              lambda: _check_completed_ratio(0.5)),
             ("单元测试覆盖达标（standard: ≥70%）",
-             lambda: _check_file_exists("scripts/verify_workflow.py", "验证脚本作为测试覆盖代理")),
+             lambda: _check_file_exists("skills/software-project-governance/infra/verify_workflow.py", "验证脚本作为测试覆盖代理")),
             ("Code Review 遗留项关闭",
              lambda: _check_evidence_mentions("code-review-standard", "Code Review")),
             ("集成验证通过",
              lambda: ("PASS", "verify_workflow.py 可作为集成验证代理——脚本存在且可运行")
-             if (ROOT / "scripts/verify_workflow.py").exists()
+             if (ROOT / "skills/software-project-governance/infra/verify_workflow.py").exists()
              else ("FAIL", "verify_workflow.py 不存在")),
         ],
         "G7": [
             ("关键缺陷已关闭",
              lambda: _check_risk_has_closed("关键缺陷")),
             ("回归测试通过",
-             lambda: _check_file_exists("scripts/verify_workflow.py", "验证脚本作为回归测试代理")),
+             lambda: _check_file_exists("skills/software-project-governance/infra/verify_workflow.py", "验证脚本作为回归测试代理")),
             ("性能指标达标",
              lambda: ("NEEDS_HUMAN", "无性能测试基础设施——需人工确认性能指标")),
             ("安全测试覆盖关键风险",
@@ -2433,13 +2438,13 @@ def auto_judge_gate(gate_id):
         ],
         "G8": [
             ("CI 流水线稳定（最近运行成功率 ≥ 80%）",
-             lambda: _check_file_exists("scripts/verify_workflow.py", "验证脚本作为 CI 代理——存在即可运行")),
+             lambda: _check_file_exists("skills/software-project-governance/infra/verify_workflow.py", "验证脚本作为 CI 代理——存在即可运行")),
             ("自动化测试覆盖核心路径",
              lambda: _check_snippet_in_file(
-                 "scripts/verify_workflow.py", "def check_", "验证脚本含多项自动化检查")),
+                 "skills/software-project-governance/infra/verify_workflow.py", "def check_", "验证脚本含多项自动化检查")),
             ("质量门禁生效",
              lambda: _check_snippet_in_file(
-                 "scripts/verify_workflow.py", "check-governance", "check-governance 作为质量门禁")),
+                 "skills/software-project-governance/infra/verify_workflow.py", "check-governance", "check-governance 作为质量门禁")),
             ("部署流程文档化",
              lambda: _check_file_exists(
                  "skills/software-project-governance/stages/release/sub-workflow.md",

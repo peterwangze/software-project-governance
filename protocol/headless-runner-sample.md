@@ -80,7 +80,7 @@ headless runner 至少输出以下结构：
 要求：
 
 - 只允许回写 `.governance/` 四类事实源
-- 执行后必须运行 `python scripts/verify_workflow.py`
+- 执行后必须运行 `python skills/software-project-governance/infra/verify_workflow.py`
 - 只有校验通过后，`status` 才能为 `validated`
 
 ## read order
@@ -97,10 +97,10 @@ headless runner 继续复用以下顺序：
 
 ### 运行时本体层（必读 — 从 skills/ 加载）
 
-6. `skills/software-project-governance/references/lifecycle.md`
-7. `skills/software-project-governance/references/stage-gates.md`
-8. `skills/software-project-governance/references/profiles.md`
-9. `skills/software-project-governance/references/onboarding.md`
+6. `skills/software-project-governance/core/lifecycle.md`
+7. `skills/software-project-governance/core/stage-gates.md`
+8. `skills/software-project-governance/core/profiles.md`
+9. `skills/software-project-governance/core/onboarding.md`
 10. `skills/software-project-governance/references/interaction-boundary.md`
 
 ### 治理记录字段定义（在 skill 入口中内嵌）
@@ -132,7 +132,7 @@ headless runner 的 Gate 规则必须比 shared command 更明确：
 3. 运行：
 
 ```bash
-python scripts/verify_workflow.py
+python skills/software-project-governance/infra/verify_workflow.py
 ```
 
 4. 只有验证通过时，输出 `status=validated`
@@ -181,7 +181,7 @@ headless runner 与 shared command 一样，只允许回写：
     "blocked": false
   },
   "validation": {
-    "command": "python scripts/verify_workflow.py"
+    "command": "python skills/software-project-governance/infra/verify_workflow.py"
   },
   "status": "planned"
 }

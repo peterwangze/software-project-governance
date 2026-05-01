@@ -37,7 +37,7 @@
 - `workflows/software-project-governance/research/`
 - `protocol/`
 - `.governance/`（活跃治理记录）
-- `scripts/verify_workflow.py`
+- `skills/software-project-governance/infra/verify_workflow.py`
 
 要求：
 

@@ -18,9 +18,9 @@ jobs:
       - name: Run governance check
         run: |
           if [ -d ".governance" ]; then
-            python scripts/verify_workflow.py check-governance --fail-on-issues
+            python skills/software-project-governance/infra/verify_workflow.py check-governance --fail-on-issues
           else
             echo "SKIPPED: .governance/ not found (project not initialized)"
           fi
       - name: Run workflow verification
-        run: python scripts/verify_workflow.py
+        run: python skills/software-project-governance/infra/verify_workflow.py

@@ -9,8 +9,8 @@
   ],
   "inputs": [
     "skills/software-project-governance/SKILL.md",
-    "skills/software-project-governance/references/stage-gates.md",
-    "skills/software-project-governance/references/lifecycle.md",
+    "skills/software-project-governance/core/stage-gates.md",
+    "skills/software-project-governance/core/lifecycle.md",
     ".governance/plan-tracker.md"
   ],
   "outputs": [
@@ -24,7 +24,7 @@
     "required_action": "update-risk-or-decision-log"
   },
   "validation": {
-    "command": "python scripts/verify_workflow.py",
+    "command": "python skills/software-project-governance/infra/verify_workflow.py",
     "required": true
   },
   "native_entry": {

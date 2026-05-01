@@ -65,8 +65,8 @@ Codex 入口采用**自包含 skill**：`skills/software-project-governance/SKIL
 
 `SKILL.md` 不是“要求 agent 顺序扫描整个仓库根目录”的索引文件；它是**自包含入口**，只依赖：
 - `skills/software-project-governance/SKILL.md`（入口，内嵌核心规则）
-- `skills/software-project-governance/references/stage-gates.md`
-- `skills/software-project-governance/references/lifecycle.md`
+- `skills/software-project-governance/core/stage-gates.md`
+- `skills/software-project-governance/core/lifecycle.md`
 - 你项目中的 `.governance/`（活跃治理记录）
 
 如果你的 agent 不能稳定满足上面 4 个条件，就说明当前更适合走兼容路线，而不是直接按 README 当成现成产品入口使用。
@@ -189,9 +189,9 @@ Codex 入口采用**自包含 skill**：`skills/software-project-governance/SKIL
 **手动方式**（在终端中）：
 
 ```bash
-python scripts/verify_workflow.py              # 完整校验
-python scripts/verify_workflow.py status       # 项目状态
-python scripts/verify_workflow.py gates        # 所有 Gate
+python skills/software-project-governance/infra/verify_workflow.py              # 完整校验
+python skills/software-project-governance/infra/verify_workflow.py status       # 项目状态
+python skills/software-project-governance/infra/verify_workflow.py gates        # 所有 Gate
 ```
 
 ## 内部文档
@@ -199,9 +199,9 @@ python scripts/verify_workflow.py gates        # 所有 Gate
 以下文档供工作流开发者和贡献者参考，普通用户不需要阅读：
 
 - [协议层定义](protocol/plugin-contract.md)
-- [生命周期规则](skills/software-project-governance/references/lifecycle.md)
-- [Gate 门禁规则](skills/software-project-governance/references/stage-gates.md)
-- [Profile 配置](skills/software-project-governance/references/profiles.md)
-- [中途接入协议](skills/software-project-governance/references/onboarding.md)
+- [生命周期规则](skills/software-project-governance/core/lifecycle.md)
+- [Gate 门禁规则](skills/software-project-governance/core/stage-gates.md)
+- [Profile 配置](skills/software-project-governance/core/profiles.md)
+- [中途接入协议](skills/software-project-governance/core/onboarding.md)
 - [企业实践经验](workflows/software-project-governance/research/company-practices.md)
 - [产品形态设计](workflows/software-project-governance/research/default-product-shape.md)

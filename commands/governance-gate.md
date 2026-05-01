@@ -19,7 +19,7 @@
 - **ELSE** → 继续 Step 3
 
 ### Step 3: 读取 Gate 定义
-- 读取 `skills/software-project-governance/references/stage-gates.md`，提取以下内容：
+- 读取 `skills/software-project-governance/core/stage-gates.md`，提取以下内容：
   - gate_id 对应的 Gate 检查项列表
   - 每个检查项的判定标准
 - 读取对应阶段的子工作流文件 `skills/software-project-governance/stages/{stage}/sub-workflow.md`，提取退出条件 checklist

@@ -46,7 +46,7 @@
 1. 能否用统一命令入口触发 workflow 读取顺序。
 2. 能否把允许回写的事实源限制在 `.governance/` 四类日志。
 3. 能否在 Gate 未通过时给出稳定阻断语义。
-4. 能否稳定调用 `python scripts/verify_workflow.py` 作为闭环验证。
+4. 能否稳定调用 `python skills/software-project-governance/infra/verify_workflow.py` 作为闭环验证。
 
 明确不在首轮最小验证中承诺：
 

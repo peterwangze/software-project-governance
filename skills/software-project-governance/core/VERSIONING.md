@@ -154,7 +154,7 @@ git pull
 ### 方法三：检查新鲜度
 
 ```bash
-python scripts/verify_workflow.py check-plugin-freshness
+python skills/software-project-governance/infra/verify_workflow.py check-plugin-freshness
 ```
 
 输出示例：
@@ -179,6 +179,6 @@ Action:    Run /plugin update software-project-governance
 1. 确定本次变更的版本段和预发布标签
 2. 更新 CHANGELOG.md（新增版本条目）
 3. 同步更新 5 个版本声明文件
-4. 运行 `python scripts/verify_workflow.py` —— MUST PASSED
+4. 运行 `python skills/software-project-governance/infra/verify_workflow.py` —— MUST PASSED
 5. 提交：`git commit -m "Bump version to X.Y.Z-alpha.N: <summary>"`
 6. 用户执行 `/plugin update` 或 `/reload-plugins` 获取新版本

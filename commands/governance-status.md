@@ -27,10 +27,10 @@
 - 活跃风险数 = risk-log 中状态="活跃"的条目数
 
 ### Step 3.5: 插件版本新鲜度检查（用户视角——"我的工作流是最新的吗？"）
-- **IF** 项目根目录存在 `scripts/verify_workflow.py` → 运行 `check-plugin-freshness`，捕获输出
+- **IF** 项目根目录存在 `skills/software-project-governance/infra/verify_workflow.py` → 运行 `check-plugin-freshness`，捕获输出
   - **IF** 状态为 OUTDATED → 在状态面板底部输出更新提醒（版本差距 + commits behind + 操作指引）
   - **IF** 状态为 UP TO DATE → 在状态面板底部简短确认 ✅
-- **IF** 不存在 `scripts/verify_workflow.py` → 跳过（外部项目通过插件市场安装，无法直接运行脚本）
+- **IF** 不存在 `skills/software-project-governance/infra/verify_workflow.py` → 跳过（外部项目通过插件市场安装，无法直接运行脚本）
   - 提醒用户：`运行 /plugin update 或 /reload-plugins 获取最新版本`
 
 ### Step 4: 按输出格式模板输出状态面板

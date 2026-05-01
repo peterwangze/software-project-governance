@@ -134,7 +134,7 @@
 
 ### Step B5: 创建 .governance/ 并执行 onboarding
 
-按 profile 差异化执行（参考 `references/onboarding.md`）：
+按 profile 差异化执行（参考 `core/onboarding.md`）：
 
 **所有 profile**：
 - 创建 4 个治理文件（plan-tracker/evidence-log/decision-log/risk-log）
@@ -262,7 +262,7 @@
 **P1 — 警告级（治理退化但未完全失效）**：
 | 检查项 | 检测方法 |
 |--------|---------|
-| 证据缺口 | `python scripts/verify_workflow.py check-governance` Check 1 |
+| 证据缺口 | `python skills/software-project-governance/infra/verify_workflow.py check-governance` Check 1 |
 | Gate 不一致 | Check 3 |
 | 过期风险 | Check 2 + Check 8 |
 | 过期任务 deadline | Check 9 |
@@ -294,7 +294,7 @@ P1 (警告):
 
 按用户选择执行：
 
-- **Hooks 缺失**: `cp scripts/pre-commit-hook.sh .git/hooks/pre-commit && cp scripts/post-commit-hook.sh .git/hooks/post-commit`
+- **Hooks 缺失**: `cp skills/software-project-governance/infra/hooks/pre-commit .git/hooks/pre-commit && cp skills/software-project-governance/infra/hooks/post-commit .git/hooks/post-commit`
 - **plan-tracker 损坏**: 尝试从 markdown 表格结构恢复；失败则从 profile 模板重建（保留 evidence-log/decision-log/risk-log）
 - **文件缺失**: 从 `workflows/software-project-governance/templates/` 复制模板
 - **证据缺口**: 创建占位证据条目（标记"补录——需用户确认"）
@@ -415,5 +415,5 @@ P1 (警告):
 - `commands/governance-update.md`——标记为 DEPRECATED，路由到统一命令
 
 ### 不变
-- `skills/software-project-governance/references/onboarding.md`——Scenario B 的参考协议
-- `scripts/verify_workflow.py`——Scenario E 的诊断引擎
+- `skills/software-project-governance/core/onboarding.md`——Scenario B 的参考协议
+- `skills/software-project-governance/infra/verify_workflow.py`——Scenario E 的诊断引擎

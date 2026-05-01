@@ -11,7 +11,7 @@
 | TOOL-003 | Code Review 规范 | standard | `stages/development/code-review-standard.md` | 代码变更需要审查时 | 开发（development） | 是 |
 | TOOL-004 | 发布 checklist | checklist | `stages/release/release-checklist.md` | 版本发布前做最终检查时 | 版本发布（release） | 是 |
 | TOOL-005 | 回顾会议模板 | template | `stages/maintenance/retro-meeting-template.md` | 阶段结束或项目复盘时 | 维护（maintenance） | 是 |
-| TOOL-006 | 校验脚本 | script | `scripts/verify_workflow.py` | 验证工作流资产完整性时 | 全部阶段 | 是 |
+| TOOL-006 | 校验脚本 | script | `skills/software-project-governance/infra/verify_workflow.py` | 验证工作流资产完整性时 | 全部阶段 | 是 |
 | TOOL-007 | governance-update 命令 | command | `commands/governance-update.md` | 更新 CLAUDE.md bootstrap 到最新版本（不触碰 .governance/） | 维护（maintenance） | 是 |
 
 ## 工具详情
@@ -68,7 +68,7 @@
 
 ### TOOL-006：校验脚本
 
-- **文件**：`scripts/verify_workflow.py`
+- **文件**：`skills/software-project-governance/infra/verify_workflow.py`
 - **子命令**：`verify`（全量校验）、`status`（治理状态摘要）、`gate <G1-G11>`（Gate 检查）、`gates`（全部 Gate 状态）、`stage <stage-id>`（阶段状态）、`stages`（全部阶段状态）
 - **输入**：无（自动读取项目文件）
 - **输出**：校验结果（PASSED/FAILED）+ 治理状态摘要

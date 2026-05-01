@@ -40,7 +40,7 @@
 - 某些 P0 任务被跳过，直接做了 P1/P2 任务
 
 **用户应急动作**：
-1. 运行 `python scripts/verify_workflow.py check-governance` — 脚本会发现 agent 遗漏的治理动作
+1. 运行 `python skills/software-project-governance/infra/verify_workflow.py check-governance` — 脚本会发现 agent 遗漏的治理动作
 2. 手动检查 plan-tracker：对比"已完成"任务和 evidence-log 是否有对应证据
 3. 要求 agent 自检：输入"执行 M8 自检"或"运行 governance-verify"
 4. 如果选择性执行持续发生，切换为"所有决策都问我"模式（覆盖 M7.1 的默认模式）
@@ -66,7 +66,7 @@
 1. 对于"会话上下文"证据：要求 agent 明确写出可持久化的证据路径
 2. 对于空输出声明：要求 agent 重新运行命令并贴完整输出
 3. 对于循环引用：要求 agent 补充独立的证据描述
-4. 运行 `python scripts/verify_workflow.py check-governance` 检查证据完整性
+4. 运行 `python skills/software-project-governance/infra/verify_workflow.py check-governance` 检查证据完整性
 
 **预防机制**：
 - check-governance 新增证据质量检查：检测"会话上下文"引用、循环引用、空输出声明（AUDIT-022）
@@ -87,7 +87,7 @@
 **用户应急动作**：
 1. 要求 agent 运行验证命令并贴输出（不要接受"已完成"三个字）
 2. 检查对应文件是否实际存在：读取声称已创建/修改的文件
-3. 运行 `python scripts/verify_workflow.py` 检查文件完整性
+3. 运行 `python skills/software-project-governance/infra/verify_workflow.py` 检查文件完整性
 4. 对于代码修改：要求 agent 运行 build + test 并贴输出
 
 **预防机制**：
@@ -130,7 +130,7 @@
 - agent 声称"所有完成任务都有证据"，但 evidence-log 中存在缺失
 
 **用户应急动作**：
-1. 不要仅依赖 agent 自检——运行 `python scripts/verify_workflow.py check-governance` 做独立验证
+1. 不要仅依赖 agent 自检——运行 `python skills/software-project-governance/infra/verify_workflow.py check-governance` 做独立验证
 2. 抽查：随机选 2-3 个 agent 声称"已完成"的任务，手动验证是否真的完成
 3. 如果发现自检与独立验证不一致，告知 agent 哪个检查项不准确，要求修正
 
@@ -280,7 +280,7 @@
    → 没遵循：切换为"所有决策都问我"模式，限制 agent 自主权
 
 4. agent 的证据可信吗？
-   → 运行：python scripts/verify_workflow.py check-governance
+   → 运行：python skills/software-project-governance/infra/verify_workflow.py check-governance
    → 有问题：要求 agent 补全证据，不接受"会话上下文"引用
 
 5. agent 的完成是真的吗？

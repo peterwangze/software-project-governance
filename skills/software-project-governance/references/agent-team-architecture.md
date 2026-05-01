@@ -1,6 +1,6 @@
 # Agent Team 架构演进设计
 
-> **v0.8.0+ 设计文档——尚未激活。** 当前运行模型为 `SKILL.md`、`references/stage-gates.md` 和 `main-workflow.md` 中定义的 Phase-Gate。在 v0.8.0 实现之前，不得应用 Task-Gate 规则或 Agent Team 角色定义。本文档描述的是目标架构，而非当前运行时行为。
+> **v0.8.0+ 设计文档——尚未激活。** 当前运行模型为 `SKILL.md`、`core/stage-gates.md` 和 `main-workflow.md` 中定义的 Phase-Gate。在 v0.8.0 实现之前，不得应用 Task-Gate 规则或 Agent Team 角色定义。本文档描述的是目标架构，而非当前运行时行为。
 
 本文件定义 `software-project-governance` 从串行阶段模型（Phase-Gate）向按需触发的多 Agent 协作团队（Task-Gate + Agent Team）的架构演进方案。
 

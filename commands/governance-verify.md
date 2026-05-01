@@ -40,7 +40,7 @@
 - **IF** 最后更新日期距今 ≤ 7 天 → PASS
 
 ### Step 6: workflow 仓库专属检查（类别 E — 仅当适用时）
-- **IF** 项目根目录存在 `scripts/verify_workflow.py` → 执行 `python scripts/verify_workflow.py`，捕获输出和退出码
+- **IF** 项目根目录存在 `skills/software-project-governance/infra/verify_workflow.py` → 执行 `python skills/software-project-governance/infra/verify_workflow.py`，捕获输出和退出码
   - **IF** 退出码 = 0 → PASS
   - **ELSE** → 记录为 `workflow_verify_failed`，附带脚本输出
 - **IF** 不存在 → 跳过此检查

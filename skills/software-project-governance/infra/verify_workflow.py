@@ -8,23 +8,23 @@ ROOT = Path(__file__).resolve().parents[3]
 
 REQUIRED_FILES = {
     "README": ROOT / "README.md",
-    "Workflow Schema": ROOT / "protocol/workflow-schema.md",
-    "Plugin Contract": ROOT / "protocol/plugin-contract.md",
-    "External Command Contract": ROOT / "protocol/external-command-contract.md",
-    "Headless Runner Sample": ROOT / "protocol/headless-runner-sample.md",
-    "Command Protocol Schema": ROOT / "protocol/command-schema.md",
-    "Workflow Manifest": ROOT / "workflows/software-project-governance/manifest.md",
+    "Workflow Schema": ROOT / "skills/software-project-governance/core/protocol/workflow-schema.md",
+    "Plugin Contract": ROOT / "skills/software-project-governance/core/protocol/plugin-contract.md",
+    "External Command Contract": ROOT / "skills/software-project-governance/core/protocol/external-command-contract.md",
+    "Headless Runner Sample": ROOT / "skills/software-project-governance/core/protocol/headless-runner-sample.md",
+    "Command Protocol Schema": ROOT / "skills/software-project-governance/core/protocol/command-schema.md",
+    "Workflow Manifest": ROOT / "skills/software-project-governance/core/manifest.md",
     "Company Practices": ROOT / "workflows/software-project-governance/research/company-practices.md",
-    "Plan Tracker": ROOT / "workflows/software-project-governance/templates/plan-tracker.md",
-    "Evidence Template": ROOT / "workflows/software-project-governance/templates/evidence-log.md",
-    "Decision Template": ROOT / "workflows/software-project-governance/templates/decision-log.md",
-    "Risk Template": ROOT / "workflows/software-project-governance/templates/risk-log.md",
+    "Plan Tracker": ROOT / "skills/software-project-governance/core/templates/plan-tracker.md",
+    "Evidence Template": ROOT / "skills/software-project-governance/core/templates/evidence-log.md",
+    "Decision Template": ROOT / "skills/software-project-governance/core/templates/decision-log.md",
+    "Risk Template": ROOT / "skills/software-project-governance/core/templates/risk-log.md",
     "Governance Plan Tracker": ROOT / ".governance/plan-tracker.md",
     "Governance Evidence Log": ROOT / ".governance/evidence-log.md",
     "Governance Decision Log": ROOT / ".governance/decision-log.md",
     "Governance Risk Log": ROOT / ".governance/risk-log.md",
-    "Skill Main Workflow Entry": ROOT / "skills/software-project-governance/main-workflow.md",
-    "Skill Tools Index": ROOT / "skills/software-project-governance/TOOLS.md",
+    "Skill Main Workflow Entry": ROOT / "skills/software-project-governance/skills/main-workflow/SKILL.md",
+    "Skill Tools Index": ROOT / "skills/software-project-governance/infra/TOOLS.md",
     "Core Stage Gates": ROOT / "skills/software-project-governance/core/stage-gates.md",
     "Core Lifecycle": ROOT / "skills/software-project-governance/core/lifecycle.md",
     "Core Profiles": ROOT / "skills/software-project-governance/core/profiles.md",
@@ -208,12 +208,12 @@ WORKFLOW_SNIPPETS = {
         "## 降级后的资产定位",
         "## 新主线如何接管",
     ],
-    ROOT / "protocol/workflow-schema.md": [
+    ROOT / "skills/software-project-governance/core/protocol/workflow-schema.md": [
         "## 通用对象模型",
         "### 1. Workflow",
         "### 3. Gate",
     ],
-    ROOT / "protocol/plugin-contract.md": [
+    ROOT / "skills/software-project-governance/core/protocol/plugin-contract.md": [
         "## 最小承载单元",
         "## 三层承载模型",
         "## Skill / Plugin 行为描述要素",
@@ -226,7 +226,7 @@ WORKFLOW_SNIPPETS = {
         "冲击场景",
         "SC-1",
     ],
-    ROOT / "protocol/external-command-contract.md": [
+    ROOT / "skills/software-project-governance/core/protocol/external-command-contract.md": [
         "## 目标",
         "software-project-governance.run",
         "## 最小输入",
@@ -239,7 +239,7 @@ WORKFLOW_SNIPPETS = {
         "Validation Matrix",
         "失败与阻断语义",
     ],
-    ROOT / "protocol/headless-runner-sample.md": [
+    ROOT / "skills/software-project-governance/core/protocol/headless-runner-sample.md": [
         "## 目标",
         "software-project-governance.headless",
         "## 输入映射",
@@ -248,7 +248,7 @@ WORKFLOW_SNIPPETS = {
         "## 最小返回样例",
         "### 当前阶段子工作流（按 stage 参数加载）",
     ],
-    ROOT / "workflows/software-project-governance/manifest.md": [
+    ROOT / "skills/software-project-governance/core/manifest.md": [
         "supported_agents",
         "Claude",
         "Codex",
@@ -318,12 +318,12 @@ REQUIRED_SNIPPETS = {
     ROOT / "workflows/software-project-governance/examples/current-project-sample.md": [
         "已迁移",
     ],
-    ROOT / "protocol/workflow-schema.md": [
+    ROOT / "skills/software-project-governance/core/protocol/workflow-schema.md": [
         "## 通用对象模型",
         "### 1. Workflow",
         "### 3. Gate",
     ],
-    ROOT / "protocol/plugin-contract.md": [
+    ROOT / "skills/software-project-governance/core/protocol/plugin-contract.md": [
         "## 最小承载单元",
         "## 三层承载模型",
         "## Skill / Plugin 行为描述要素",
@@ -336,7 +336,7 @@ REQUIRED_SNIPPETS = {
         "冲击场景",
         "SC-1",
     ],
-    ROOT / "protocol/external-command-contract.md": [
+    ROOT / "skills/software-project-governance/core/protocol/external-command-contract.md": [
         "## 目标",
         "software-project-governance.run",
         "## 最小输入",
@@ -349,7 +349,7 @@ REQUIRED_SNIPPETS = {
         "Validation Matrix",
         "失败与阻断语义",
     ],
-    ROOT / "protocol/headless-runner-sample.md": [
+    ROOT / "skills/software-project-governance/core/protocol/headless-runner-sample.md": [
         "## 目标",
         "software-project-governance.headless",
         "## 输入映射",
@@ -358,13 +358,13 @@ REQUIRED_SNIPPETS = {
         "## 最小返回样例",
         "### 当前阶段子工作流（按 stage 参数加载）",
     ],
-    ROOT / "workflows/software-project-governance/manifest.md": [
+    ROOT / "skills/software-project-governance/core/manifest.md": [
         "supported_agents",
         "Claude",
         "Codex",
     ],
     # ── Command Protocol Schema + Upgraded Commands ──
-    ROOT / "protocol/command-schema.md": [
+    ROOT / "skills/software-project-governance/core/protocol/command-schema.md": [
         "## Input Parameters 定义规范",
         "## Execution Flow 定义规范",
         "## Output Format 定义规范",
@@ -585,7 +585,7 @@ REQUIRED_SNIPPETS = {
     ROOT / ".codex-plugin/plugin.json": [
         "0.10.0",
     ],
-    ROOT / "workflows/software-project-governance/manifest.md": [
+    ROOT / "skills/software-project-governance/core/manifest.md": [
         "0.10.0",
     ],
 }
@@ -1321,7 +1321,7 @@ def check_version_consistency():
 
     Source of truth: skills/software-project-governance/SKILL.md frontmatter.
     Other files that must match:
-      - workflows/software-project-governance/manifest.md
+      - skills/software-project-governance/core/manifest.md
       - .claude-plugin/plugin.json
       - .claude-plugin/marketplace.json
       - .codex-plugin/plugin.json
@@ -1330,7 +1330,7 @@ def check_version_consistency():
 
     VERSION_FILES = {
         "SKILL.md (source of truth)": ROOT / "skills/software-project-governance/SKILL.md",
-        "manifest.md": ROOT / "workflows/software-project-governance/manifest.md",
+        "manifest.md": ROOT / "skills/software-project-governance/core/manifest.md",
         ".claude-plugin/plugin.json": ROOT / ".claude-plugin/plugin.json",
         ".claude-plugin/marketplace.json": ROOT / ".claude-plugin/marketplace.json",
         ".codex-plugin/plugin.json": ROOT / ".codex-plugin/plugin.json",
@@ -2308,7 +2308,7 @@ def _check_version_consistency_heuristic():
             ".claude-plugin/plugin.json",
             ".claude-plugin/marketplace.json",
             ".codex-plugin/plugin.json",
-            "workflows/software-project-governance/manifest.md",
+            "skills/software-project-governance/core/manifest.md",
         ]
         for vf in version_files:
             vf_path = ROOT / vf
@@ -2366,13 +2366,13 @@ def auto_judge_gate(gate_id):
                  ".governance/decision-log.md", "备选方案", "决策记录含备选方案")),
             ("评估标准事先定义",
              lambda: _check_snippet_in_file(
-                 "protocol/plugin-contract.md", "准入标准", "评估标准/准入标准已定义")),
+                 "skills/software-project-governance/core/protocol/plugin-contract.md", "准入标准", "评估标准/准入标准已定义")),
             ("选择原因已留痕",
              lambda: _check_snippet_in_file(
                  ".governance/decision-log.md", "选择原因", "决策记录含选择原因")),
             ("关键风险已通过PoC验证",
              lambda: _check_snippet_in_file(
-                 "protocol/headless-runner-sample.md", "## 目标", "PoC/验证样例存在")),
+                 "skills/software-project-governance/core/protocol/headless-runner-sample.md", "## 目标", "PoC/验证样例存在")),
         ],
         "G4": [
             ("开发环境可复现",
@@ -2388,13 +2388,13 @@ def auto_judge_gate(gate_id):
         "G5": [
             ("架构满足非功能性需求",
              lambda: _check_snippet_in_file(
-                 "protocol/plugin-contract.md", "冲击场景", "非功能需求/冲击场景已定义")),
+                 "skills/software-project-governance/core/protocol/plugin-contract.md", "冲击场景", "非功能需求/冲击场景已定义")),
             ("模块划分清晰、职责单一",
              lambda: _check_snippet_in_file(
-                 "skills/software-project-governance/main-workflow.md", "## ", "模块划分/分层架构已定义")),
+                 "skills/software-project-governance/skills/main-workflow/SKILL.md", "## ", "模块划分/分层架构已定义")),
             ("关键接口已定义",
              lambda: _check_snippet_in_file(
-                 "protocol/command-schema.md", "Input Parameters", "接口/命令schema已定义")),
+                 "skills/software-project-governance/core/protocol/command-schema.md", "Input Parameters", "接口/命令schema已定义")),
             ("经过技术评审",
              lambda: _check_snippet_in_file(
                  "skills/software-project-governance/skills/tech-review/SKILL.md",

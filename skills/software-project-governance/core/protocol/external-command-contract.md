@@ -54,10 +54,10 @@ command 至少需要产出以下结构化结果：
 
 ### 协议层（必读）
 
-1. `workflows/software-project-governance/manifest.md`
-2. `protocol/workflow-schema.md`
-3. `protocol/plugin-contract.md`
-4. `protocol/external-command-contract.md`
+1. `skills/software-project-governance/core/manifest.md`
+2. `skills/software-project-governance/core/protocol/workflow-schema.md`
+3. `skills/software-project-governance/core/protocol/plugin-contract.md`
+4. `skills/software-project-governance/core/protocol/external-command-contract.md`
 
 ### 运行时本体层（必读 — 从 skills/ 加载）
 
@@ -147,10 +147,10 @@ python skills/software-project-governance/infra/verify_workflow.py
   "entry_task": "MAINT-005",
   "stage": "maintenance",
   "read_order": [
-    "workflows/software-project-governance/manifest.md",
-    "protocol/workflow-schema.md",
-    "protocol/plugin-contract.md",
-    "protocol/external-command-contract.md"
+    "skills/software-project-governance/core/manifest.md",
+    "skills/software-project-governance/core/protocol/workflow-schema.md",
+    "skills/software-project-governance/core/protocol/plugin-contract.md",
+    "skills/software-project-governance/core/protocol/external-command-contract.md"
   ],
   "write_back_targets": [
     ".governance/plan-tracker.md",

@@ -31,7 +31,7 @@
 始终复用：
 
 - `skills/software-project-governance/`（运行时本体：SKILL.md + references/ + stages/）
-- `workflows/software-project-governance/manifest.md`
+- `skills/software-project-governance/core/manifest.md`
 - `workflows/software-project-governance/templates/`
 - `workflows/software-project-governance/examples/`（历史迁移指针）
 - `workflows/software-project-governance/research/`

@@ -14,9 +14,9 @@
 
 后续适配 Gemini 或其他 agent CLI 时，应继续复用以下公共资产：
 
-- `protocol/workflow-schema.md`
-- `protocol/plugin-contract.md`
-- `workflows/software-project-governance/manifest.md`
+- `skills/software-project-governance/core/protocol/workflow-schema.md`
+- `skills/software-project-governance/core/protocol/plugin-contract.md`
+- `skills/software-project-governance/core/manifest.md`
 - `skills/software-project-governance/references/*`（运行时规则）
 - `skills/software-project-governance/stages/*`（子工作流和 skills）
 - `workflows/software-project-governance/templates/*`（设计时模板）

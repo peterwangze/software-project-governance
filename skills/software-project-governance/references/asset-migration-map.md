@@ -97,7 +97,7 @@
 
 | 当前路径 | 目标路径 | 方式 |
 |---------|---------|------|
-| `skills/software-project-governance/main-workflow.md` | `skills/main-workflow/SKILL.md` | git mv |
+| `skills/software-project-governance/skills/main-workflow/SKILL.md` | `skills/main-workflow/SKILL.md` | git mv |
 
 ## 基础设施层（5 文件）— 部分需迁移
 
@@ -107,8 +107,8 @@
 | `skills/software-project-governance/infra/hooks/pre-commit` | 留存 | — |
 | `skills/software-project-governance/infra/hooks/post-commit` | 留存 | — |
 | `skills/software-project-governance/infra/hooks/prepare-commit-msg` | 留存 | — |
-| `skills/software-project-governance/TOOLS.md` | `skills/software-project-governance/infra/TOOLS.md` | git mv |
-| `scripts/verify-e2e.sh` | `skills/software-project-governance/infra/verify-e2e.sh` | git mv |
+| `skills/software-project-governance/infra/TOOLS.md` | `skills/software-project-governance/infra/TOOLS.md` | git mv |
+| `skills/software-project-governance/infra/verify-e2e.sh` | `skills/software-project-governance/infra/verify-e2e.sh` | git mv |
 
 ## 核心层（18 文件）— 部分需迁移
 
@@ -128,21 +128,21 @@
 
 | 当前路径 | 目标路径 | 方式 |
 |---------|---------|------|
-| `protocol/workflow-schema.md` | `core/protocol/workflow-schema.md` | git mv |
-| `protocol/plugin-contract.md` | `core/protocol/plugin-contract.md` | git mv |
-| `protocol/external-command-contract.md` | `core/protocol/external-command-contract.md` | git mv |
-| `protocol/headless-runner-sample.md` | `core/protocol/headless-runner-sample.md` | git mv |
-| `protocol/command-schema.md` | `core/protocol/command-schema.md` | git mv |
+| `skills/software-project-governance/core/protocol/workflow-schema.md` | `core/skills/software-project-governance/core/protocol/workflow-schema.md` | git mv |
+| `skills/software-project-governance/core/protocol/plugin-contract.md` | `core/skills/software-project-governance/core/protocol/plugin-contract.md` | git mv |
+| `skills/software-project-governance/core/protocol/external-command-contract.md` | `core/skills/software-project-governance/core/protocol/external-command-contract.md` | git mv |
+| `skills/software-project-governance/core/protocol/headless-runner-sample.md` | `core/skills/software-project-governance/core/protocol/headless-runner-sample.md` | git mv |
+| `skills/software-project-governance/core/protocol/command-schema.md` | `core/skills/software-project-governance/core/protocol/command-schema.md` | git mv |
 
 ### 待迁移：workflows/ 核心资产（6 文件）
 
 | 当前路径 | 目标路径 | 方式 |
 |---------|---------|------|
-| `workflows/software-project-governance/manifest.md` | `core/manifest.md` | git mv |
-| `workflows/software-project-governance/templates/plan-tracker.md` | `core/templates/plan-tracker.md` | git mv |
-| `workflows/software-project-governance/templates/evidence-log.md` | `core/templates/evidence-log.md` | git mv |
-| `workflows/software-project-governance/templates/decision-log.md` | `core/templates/decision-log.md` | git mv |
-| `workflows/software-project-governance/templates/risk-log.md` | `core/templates/risk-log.md` | git mv |
+| `skills/software-project-governance/core/manifest.md` | `core/manifest.md` | git mv |
+| `skills/software-project-governance/core/templates/plan-tracker.md` | `core/templates/plan-tracker.md` | git mv |
+| `skills/software-project-governance/core/templates/evidence-log.md` | `core/templates/evidence-log.md` | git mv |
+| `skills/software-project-governance/core/templates/decision-log.md` | `core/templates/decision-log.md` | git mv |
+| `skills/software-project-governance/core/templates/risk-log.md` | `core/templates/risk-log.md` | git mv |
 
 ## 参考知识层（10 文件）— 留存原地
 

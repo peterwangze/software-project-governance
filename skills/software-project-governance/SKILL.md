@@ -68,7 +68,7 @@ Coordinator 执行行为约束，详见 `references/behavior-protocol.md`（M0-M
 
 ## 适配层（平台投影）
 
-本工作流支持多 AI CLI 平台（详见 `protocol/plugin-contract.md`）。每平台通过 adapter manifest 声明加载方式。bootstrap 模板的 canonical source 在 `commands/governance-init.md` Step 7。
+本工作流支持多 AI CLI 平台（详见 `skills/software-project-governance/core/protocol/plugin-contract.md`）。每平台通过 adapter manifest 声明加载方式。bootstrap 模板的 canonical source 在 `commands/governance-init.md` Step 7。
 
 | 平台 | adapter | plugin 包 |
 |------|---------|----------|

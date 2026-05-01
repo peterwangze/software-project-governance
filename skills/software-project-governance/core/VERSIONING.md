@@ -68,7 +68,7 @@
 2. `.claude-plugin/marketplace.json` — `plugins[0].version` 字段
 3. `.codex-plugin/plugin.json` — `version` 字段
 4. `skills/software-project-governance/SKILL.md` — frontmatter `version` 字段
-5. `workflows/software-project-governance/manifest.md` — `version` 字段
+5. `skills/software-project-governance/core/manifest.md` — `version` 字段
 
 `verify_workflow.py` 的 snippet 检查会自动验证这 5 个文件的版本号一致性。
 

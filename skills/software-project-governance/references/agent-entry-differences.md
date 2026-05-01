@@ -40,7 +40,7 @@
 
 **安装**：通过 Gemini 的 custom commands 或 external runner 机制
 
-**初始化**：通过 shared command contract（`protocol/external-command-contract.md`）调用
+**初始化**：通过 shared command contract（`skills/software-project-governance/core/protocol/external-command-contract.md`）调用
 
 **日常使用**：Gemini 通过 MCP server 或 external runner 调用 workflow 功能
 

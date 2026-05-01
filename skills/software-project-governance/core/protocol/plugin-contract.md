@@ -35,14 +35,14 @@
 
 | 逻辑单元 | 协议称谓 | 实际物理路径（以 `software-project-governance` 为例） |
 |---------|---------|--------------------------------------------------|
-| manifest | `manifest` | `skills/software-project-governance/SKILL.md`（运行时入口）+ `workflows/software-project-governance/manifest.md`（设计时元数据） |
+| manifest | `manifest` | `skills/software-project-governance/SKILL.md`（运行时入口）+ `skills/software-project-governance/core/manifest.md`（设计时元数据） |
 | research | `research` | `workflows/software-project-governance/research/`（设计时调研资产） |
 | rules | `rules` | `skills/software-project-governance/references/`（运行时规则正本） |
 | stages | `stages` | `skills/software-project-governance/stages/<stage>/sub-workflow.md` |
 | stage skills | `stage skills` | `skills/software-project-governance/stages/<stage>/<skill-name>.md` |
 | templates | `templates` | `workflows/software-project-governance/templates/`（设计时模板资产） |
 | examples | `examples` | `workflows/software-project-governance/examples/`（设计时样例资产） |
-| integration contract | `integration contract` | `protocol/plugin-contract.md`（本文件） |
+| integration contract | `integration contract` | `skills/software-project-governance/core/protocol/plugin-contract.md`（本文件） |
 | validation | `validation` | `skills/software-project-governance/infra/verify_workflow.py` |
 
 **设计原则**：运行时正本在 `skills/` 目录（agent 插件市场安装后可访问），设计时补充资产在 `workflows/` 目录（不重复运行时内容）。协议称谓保留设计时的概念名称（如 `rules`），物理路径使用更精确的目录名（如 `references/`）以避免歧义。

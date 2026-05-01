@@ -231,7 +231,7 @@
 | 国内 Agent CLI | 兼容分析（文档） | — | `.agents/` |
 
 **新增平台的标准流程**：
-1. 阅读 `protocol/plugin-contract.md` 六项准入问题
+1. 阅读 `skills/software-project-governance/core/protocol/plugin-contract.md` 六项准入问题
 2. 创建 `adapters/<platform>/` 目录
 3. 编写 `adapter-manifest.json`（回答所有标准字段）
 4. 编写 `launch.py`（验证加载顺序）
@@ -265,7 +265,7 @@
 
 ## 与协议层概念的对齐
 
-本六层架构与 `protocol/plugin-contract.md` 的三层承载模型完全对齐：
+本六层架构与 `skills/software-project-governance/core/protocol/plugin-contract.md` 的三层承载模型完全对齐：
 
 | 三层承载模型 | 六层架构映射 | 说明 |
 |-------------|------------|------|
@@ -283,7 +283,7 @@
 |---------|---------|------|
 | `protocol/*.md` | `core/protocol/` | 保持不变 |
 | `workflows/software-project-governance/templates/` | `core/templates/` | 保持不变 |
-| `workflows/software-project-governance/manifest.md` | `core/manifest.md` | 工作流身份声明 |
+| `skills/software-project-governance/core/manifest.md` | `core/manifest.md` | 工作流身份声明 |
 | `core/lifecycle.md` | `core/lifecycle.md` | ✅ 已迁移（从 references/） |
 | `core/stage-gates.md` | `core/stage-gates.md` | ✅ 已迁移 |
 | `core/profiles.md` | `core/profiles.md` | ✅ 已迁移 |

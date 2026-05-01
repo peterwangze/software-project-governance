@@ -198,7 +198,7 @@ python skills/software-project-governance/infra/verify_workflow.py gates        
 
 以下文档供工作流开发者和贡献者参考，普通用户不需要阅读：
 
-- [协议层定义](protocol/plugin-contract.md)
+- [协议层定义](skills/software-project-governance/core/protocol/plugin-contract.md)
 - [生命周期规则](skills/software-project-governance/core/lifecycle.md)
 - [Gate 门禁规则](skills/software-project-governance/core/stage-gates.md)
 - [Profile 配置](skills/software-project-governance/core/profiles.md)

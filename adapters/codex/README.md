@@ -31,8 +31,8 @@ Codex 用户无需读取下方的旧入口约定。
 
 以下内容仅在早期 repo-local 架构下有效，已不再推荐使用。
 
-1. 读取 workflow manifest：`workflows/software-project-governance/manifest.md`
-2. 读取协议层：`protocol/workflow-schema.md`、`protocol/plugin-contract.md`、`protocol/external-command-contract.md`
+1. 读取 workflow manifest：`skills/software-project-governance/core/manifest.md`
+2. 读取协议层：`skills/software-project-governance/core/protocol/workflow-schema.md`、`skills/software-project-governance/core/protocol/plugin-contract.md`、`skills/software-project-governance/core/protocol/external-command-contract.md`
 3. 读取规则层：`workflows/software-project-governance/rules/*.md`
 4. 读取模板层：`workflows/software-project-governance/templates/*.md`
 5. 按当前阶段读取子工作流和 skill：`workflows/software-project-governance/stages/<stage>/`

@@ -127,7 +127,7 @@
 ## 对当前仓库主线的直接影响
 
 1. `README.md` 中“低侵入优先、repo-local 仅为探索性接法”的叙事成立，并应继续保留。
-2. `protocol/plugin-contract.md` 应继续坚持“集成模式优先”，而不是回退到 `adapters/<agent>/` 目录布局优先。
+2. `skills/software-project-governance/core/protocol/plugin-contract.md` 应继续坚持“集成模式优先”，而不是回退到 `adapters/<agent>/` 目录布局优先。
 3. `adapters/claude/`、`adapters/codex/`、`adapters/gemini/` 应统一定位为样例、fallback、调试入口或兼容占位。
 4. `PLAN-003` 的目标不再是补更多 repo-local 入口，而是基于本调研确定默认产品形态。
 5. `OPS-001` 与后续国内 agent CLI 兼容设计，应优先复用“MCP / global skill / command / external runner”这类低侵入抽象。

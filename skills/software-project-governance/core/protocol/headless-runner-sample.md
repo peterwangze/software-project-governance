@@ -89,11 +89,11 @@ headless runner 继续复用以下顺序：
 
 ### 协议层（必读）
 
-1. `workflows/software-project-governance/manifest.md`
-2. `protocol/workflow-schema.md`
-3. `protocol/plugin-contract.md`
-4. `protocol/external-command-contract.md`
-5. `protocol/headless-runner-sample.md`
+1. `skills/software-project-governance/core/manifest.md`
+2. `skills/software-project-governance/core/protocol/workflow-schema.md`
+3. `skills/software-project-governance/core/protocol/plugin-contract.md`
+4. `skills/software-project-governance/core/protocol/external-command-contract.md`
+5. `skills/software-project-governance/core/protocol/headless-runner-sample.md`
 
 ### 运行时本体层（必读 — 从 skills/ 加载）
 
@@ -164,11 +164,11 @@ headless runner 与 shared command 一样，只允许回写：
   "goal": "validate headless runner mapping",
   "execution_mode": "dry-run",
   "read_order": [
-    "workflows/software-project-governance/manifest.md",
-    "protocol/workflow-schema.md",
-    "protocol/plugin-contract.md",
-    "protocol/external-command-contract.md",
-    "protocol/headless-runner-sample.md"
+    "skills/software-project-governance/core/manifest.md",
+    "skills/software-project-governance/core/protocol/workflow-schema.md",
+    "skills/software-project-governance/core/protocol/plugin-contract.md",
+    "skills/software-project-governance/core/protocol/external-command-contract.md",
+    "skills/software-project-governance/core/protocol/headless-runner-sample.md"
   ],
   "write_back_targets": [
     ".governance/plan-tracker.md",

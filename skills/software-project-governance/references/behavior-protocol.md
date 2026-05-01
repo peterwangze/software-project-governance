@@ -22,11 +22,11 @@
 
 当用户请求开发、代码审查、架构设计或任何受益于角色分离的多步骤任务时，Coordinator **MUST** 激活 Agent Team 模式：
 
-1. 读取 `agents/management/coordinator/SKILL.md` — 承担 Coordinator 角色（老周）
+1. 读取 `agents/management/coordinator/prompt.md` — 承担 Coordinator 角色（老周）
 2. Coordinator 分解任务并通过 Agent 工具派生角色 agent：
-   - Developer (agents/development/developer/SKILL.md) — 负责编码/实现
-   - Reviewer (agents/review/reviewer/SKILL.md) — 负责独立代码审查
-   - Architect (agents/design/architect/SKILL.md) — 负责架构/技术选型
+   - Developer (agents/development/developer/prompt.md) — 负责编码/实现
+   - Reviewer (agents/review/reviewer/prompt.md) — 负责独立代码审查
+   - Architect (agents/design/architect/prompt.md) — 负责架构/技术选型
 3. Coordinator 收集输出，验证一致性，通过 AskUserQuestion 向用户呈现结果
 4. **生产者-审查者分离是强制性的**：Coordinator MUST NOT 审查自己的代码。Developer MUST NOT 审查自己的代码。Reviewer MUST NOT 修改代码。
 
@@ -79,15 +79,15 @@
 
 | 模板 | 文件 | 角色 | 格式 |
 |----------|------|------|--------|
-| `coordinator` | `agents/management/coordinator/SKILL.md` | 团队负责人——主 agent 加载此文件成为 Coordinator | Agent SKILL |
-| `developer` | `agents/development/developer/SKILL.md` | 编码 + TDD + 工具约束（禁止 Agent/AskUserQuestion） | Agent SKILL |
-| `reviewer` | `agents/review/reviewer/SKILL.md` | 独立审查——仅 Read/Grep（无 Write/Edit/Bash） | Agent SKILL |
-| `architect` | `agents/design/architect/SKILL.md` | 架构 + ADR——不修改产品代码 | Agent SKILL |
-| `qa` | `agents/testing/qa/SKILL.md` | 测试——仅测试代码，不修改产品代码 | Agent SKILL |
-| `devops` | `agents/operations/devops/SKILL.md` | CI/CD + 基础设施——不修改产品代码 | Agent SKILL |
-| `analyst` | `agents/design/analyst/SKILL.md` | 需求 + 调研——不做技术决策 | Agent SKILL |
-| `release` | `agents/operations/release/SKILL.md` | 发布管理——不修改代码 | Agent SKILL |
-| `maintenance` | `agents/maintenance/maintenance/SKILL.md` | Bug 修复 + 复盘——不新增功能 | Agent SKILL |
+| `coordinator` | `agents/management/coordinator/prompt.md` | 团队负责人——主 agent 加载此文件成为 Coordinator | Agent Prompt |
+| `developer` | `agents/development/developer/prompt.md` | 编码 + TDD + 工具约束（禁止 Agent/AskUserQuestion） | Agent Prompt |
+| `reviewer` | `agents/review/reviewer/prompt.md` | 独立审查——仅 Read/Grep（无 Write/Edit/Bash） | Agent Prompt |
+| `architect` | `agents/design/architect/prompt.md` | 架构 + ADR——不修改产品代码 | Agent Prompt |
+| `qa` | `agents/testing/qa/prompt.md` | 测试——仅测试代码，不修改产品代码 | Agent Prompt |
+| `devops` | `agents/operations/devops/prompt.md` | CI/CD + 基础设施——不修改产品代码 | Agent Prompt |
+| `analyst` | `agents/design/analyst/prompt.md` | 需求 + 调研——不做技术决策 | Agent Prompt |
+| `release` | `agents/operations/release/prompt.md` | 发布管理——不修改代码 | Agent Prompt |
+| `maintenance` | `agents/maintenance/maintenance/prompt.md` | Bug 修复 + 复盘——不新增功能 | Agent Prompt |
 
 **使用方式**：Coordinator 读取相应模板，填入 `{placeholders}`（TASK_ID、TASK_NAME、文件路径、验收标准），然后调用 `Agent(subagent_type="general-purpose", prompt="[填充后的模板]")`。
 

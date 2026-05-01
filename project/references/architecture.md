@@ -156,7 +156,7 @@
 | **运维组** | DevOps, Release | CI/CD→发布→运营 | CI/CD, 环境管理, 发布检查, 版本规划, 变更日志 |
 | **维护组** | Maintenance | 维护与演进 | 缺陷修复, 复盘会议, 规则演进 |
 
-> 目录结构：`agents/{管理组/设计组/开发组/测试组/评审组/运维组/维护组}/{agent名}/SKILL.md`
+> 目录结构：`agents/{管理组/设计组/开发组/测试组/评审组/运维组/维护组}/{agent名}/prompt.md`
 
 ### 入口层——引导进入业务智能层
 
@@ -336,15 +336,15 @@
 
 | 当前文件 | 目标位置 | 变更 |
 |---------|---------|------|
-| `agents/management/coordinator/SKILL.md` | `agents/management/coordinator/SKILL.md` | 保持 |
-| `agents/development/developer/SKILL.md` | `agents/development/developer/SKILL.md` | 保持 |
-| `agents/review/reviewer/SKILL.md` | `agents/review/reviewer/SKILL.md` | 保持 |
-| `agents/design/architect/SKILL.md` | `agents/design/architect/SKILL.md` | 保持 |
-| `agents/testing/qa/SKILL.md` | `agents/testing/qa/SKILL.md` | 保持 |
-| `agents/operations/devops/SKILL.md` | `agents/operations/devops/SKILL.md` | 保持 |
-| `agents/design/analyst/SKILL.md` | `agents/design/analyst/SKILL.md` | 保持 |
-| `agents/operations/release/SKILL.md` | `agents/operations/release/SKILL.md` | 保持 |
-| `agents/maintenance/maintenance/SKILL.md` | `agents/maintenance/maintenance/SKILL.md` | 保持 |
+| `agents/management/coordinator/prompt.md` | `agents/management/coordinator/prompt.md` | 保持 |
+| `agents/development/developer/prompt.md` | `agents/development/developer/prompt.md` | 保持 |
+| `agents/review/reviewer/prompt.md` | `agents/review/reviewer/prompt.md` | 保持 |
+| `agents/design/architect/prompt.md` | `agents/design/architect/prompt.md` | 保持 |
+| `agents/testing/qa/prompt.md` | `agents/testing/qa/prompt.md` | 保持 |
+| `agents/operations/devops/prompt.md` | `agents/operations/devops/prompt.md` | 保持 |
+| `agents/design/analyst/prompt.md` | `agents/design/analyst/prompt.md` | 保持 |
+| `agents/operations/release/prompt.md` | `agents/operations/release/prompt.md` | 保持 |
+| `agents/maintenance/maintenance/prompt.md` | `agents/maintenance/maintenance/prompt.md` | 保持 |
 
 ### 入口层映射
 

@@ -70,13 +70,13 @@ Coordinator 何时选你:
 
 收到 Coordinator 分配的任务后:
 
-1. 读取任务指定的 SKILL 文件（见下方 SKILL 绑定表）——按 SKILL 定义的步骤逐项执行，不跳步，不自创步骤
-2. TDD 循环：写测试 → 实现 → 重构 → 跑全量门禁（lint/test/coverage/security）
-3. 完成后返回结构化结论给 Coordinator:
-   - 完成状态（成功/部分/失败）
-   - 产出物位置（修改的文件路径 + commit hash 含 task ID）
-   - 自检结果（lint/test/coverage/security 全部 PASS/FAIL 明细）
-   - 证据（命令输出或文件路径）
+1. 读取任务指定的 SKILL 文件（见下方 SKILL 绑定表）——按 SKILL 定义的确定性步骤逐项执行，不跳步，不自创步骤
+2. 完成后返回结构化结论给 Coordinator:
+   - 完成状态
+   - 产出物位置
+   - 证据
+
+具体执行步骤见 SKILL 绑定表引用的各 SKILL 文件——prompt 不重复定义步骤。
 
 ## 可调用的 SKILL
 

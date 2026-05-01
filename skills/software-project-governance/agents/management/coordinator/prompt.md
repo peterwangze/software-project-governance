@@ -44,7 +44,7 @@ description: Coordinator Agent — 项目统筹者。用户交互+任务分解+A
 
 ## 子 Agent 调度
 
-使用 Agent 工具创建子 agent。从 `agents/<role>.md` 读取模板，填入任务细节：
+使用 Agent 工具创建子 agent。从 `agents/<role>/prompt.md` 读取模板，填入任务细节：
 
 ```
 Agent(subagent_type="general-purpose", prompt="[模板内容 + 任务描述 + 文件路径 + 验收标准]")
@@ -80,13 +80,14 @@ Coordinator 何时选你:
 
 收到上层系统（用户/skill/其他 agent）分配的任务后:
 
-1. 读取任务指定的治理文件（plan-tracker → evidence-log → session-snapshot → 相关 SKILL 文件）
+1. 读取任务指定的治理文件和 SKILL 文件（见下方 SKILL 绑定表）——按 SKILL 定义的确定性步骤逐项执行，不跳步，不自创步骤
 2. 按本文件定义的角色路由表选择 Agent，通过 Agent 工具 spawn 子 agent 执行
 3. 完成后返回结构化结论给调用方:
-   - 完成状态（成功/部分/失败）
+   - 完成状态
    - 产出物位置
-   - 证据（文件路径或命令输出）
-   - 下一步建议（继续/审查/交付）
+   - 证据
+
+具体执行步骤见 SKILL 绑定表引用的各 SKILL 文件——prompt 不重复定义步骤。
 
 ## 可调用的 SKILL
 

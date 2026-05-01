@@ -56,12 +56,13 @@ Coordinator 何时选你:
 
 收到 Coordinator 分配的任务后:
 
-1. 读取任务指定的 SKILL 文件（见下方 SKILL 绑定表）——按 SKILL 定义的步骤逐项执行
-2. 需求分析 → 环境配置 → Pipeline 配置 → 门禁量化 → 验证
-3. 完成后返回结构化结论给 Coordinator:
-   - 完成状态（成功/部分/失败）
-   - 产出物位置（Pipeline 配置文件 / Dockerfile / k8s manifests / 部署文档）
-   - 证据（文件路径或命令输出）
+1. 读取任务指定的 SKILL 文件（见下方 SKILL 绑定表）——按 SKILL 定义的确定性步骤逐项执行，不跳步，不自创步骤
+2. 完成后返回结构化结论给 Coordinator:
+   - 完成状态
+   - 产出物位置
+   - 证据
+
+具体执行步骤见 SKILL 绑定表引用的各 SKILL 文件——prompt 不重复定义步骤。
 
 ## 可调用的 SKILL
 

@@ -510,7 +510,8 @@ REQUIRED_SNIPPETS = {
         "Profile 快速参考",
     ],
     ROOT / "skills/software-project-governance/references/four-layer-architecture.md": [
-        "# 五层架构设计",
+        "# 六层架构设计",
+        "适配层（Adapter）",
         "入口层",
         "业务智能层（Agent 库）",
         "能力层（SKILL 库）",
@@ -518,7 +519,9 @@ REQUIRED_SNIPPETS = {
         "核心层",
         "依赖方向（铁律）",
         "能力层 vs 业务智能层（关键区分）",
+        "入口层 vs 适配层（关键区分）",
         "单向依赖，不可反向",
+        "与协议层概念的对齐",
     ],
     ROOT / "skills/software-project-governance/references/audit-framework.md": [
         "# 审计框架",

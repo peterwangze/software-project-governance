@@ -177,7 +177,7 @@ Action:    Run /plugin update software-project-governance
 ## 版本发布流程
 
 1. 确定本次变更的版本段和预发布标签
-2. 更新 CHANGELOG.md（新增版本条目）
+2. 更新 project/CHANGELOG.md（新增版本条目）
 3. 同步更新 5 个版本声明文件
 4. 运行 `python skills/software-project-governance/infra/verify_workflow.py` —— MUST PASSED
 5. 提交：`git commit -m "Bump version to X.Y.Z-alpha.N: <summary>"`

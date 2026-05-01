@@ -129,7 +129,7 @@ python skills/software-project-governance/infra/verify_workflow.py
 
 - `protocol/`
 - `skills/software-project-governance/`（运行时本体）
-- `workflows/software-project-governance/`（设计时资产）
+- `project/workflows/software-project-governance/`（设计时资产）
 - `skills/software-project-governance/infra/verify_workflow.py`
 
 可以移除或替换：
@@ -169,7 +169,7 @@ python skills/software-project-governance/infra/verify_workflow.py
     "keep": [
       "protocol/",
       "skills/software-project-governance/",
-      "workflows/software-project-governance/",
+      "project/workflows/software-project-governance/",
       "skills/software-project-governance/infra/verify_workflow.py"
     ],
     "replace": [

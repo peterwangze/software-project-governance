@@ -30,7 +30,7 @@
   "replacement_boundary": {
     "keep": [
       "protocol/",
-      "workflows/software-project-governance/",
+      "project/workflows/software-project-governance/",
       "skills/software-project-governance/infra/verify_workflow.py"
     ],
     "remove": [

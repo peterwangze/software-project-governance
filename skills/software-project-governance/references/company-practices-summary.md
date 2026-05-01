@@ -1,6 +1,6 @@
 # 企业实践经验 — 可执行规则摘要
 
-本文件从 `workflows/software-project-governance/research/company-practices.md` 提取可执行检查项。**Agent 加载本文件即可独立执行企业实践评审，不需要跳转完整文件。**
+本文件从 `project/workflows/software-project-governance/research/company-practices.md` 提取可执行检查项。**Agent 加载本文件即可独立执行企业实践评审，不需要跳转完整文件。**
 
 ---
 
@@ -248,4 +248,4 @@
 
 ---
 
-完整企业实践（含每条实践的适用条件、深层背景和引用来源）见 `workflows/software-project-governance/research/company-practices.md`。
+完整企业实践（含每条实践的适用条件、深层背景和引用来源）见 `project/workflows/software-project-governance/research/company-practices.md`。

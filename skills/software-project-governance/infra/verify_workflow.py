@@ -14,7 +14,7 @@ REQUIRED_FILES = {
     "Headless Runner Sample": ROOT / "skills/software-project-governance/core/protocol/headless-runner-sample.md",
     "Command Protocol Schema": ROOT / "skills/software-project-governance/core/protocol/command-schema.md",
     "Workflow Manifest": ROOT / "skills/software-project-governance/core/manifest.md",
-    "Company Practices": ROOT / "workflows/software-project-governance/research/company-practices.md",
+    "Company Practices": ROOT / "project/workflows/software-project-governance/research/company-practices.md",
     "Plan Tracker": ROOT / "skills/software-project-governance/core/templates/plan-tracker.md",
     "Evidence Template": ROOT / "skills/software-project-governance/core/templates/evidence-log.md",
     "Decision Template": ROOT / "skills/software-project-governance/core/templates/decision-log.md",
@@ -33,11 +33,11 @@ REQUIRED_FILES = {
     "Core Audit Framework": ROOT / "skills/software-project-governance/core/audit-framework.md",
     "Skill References Agent Failure Modes": ROOT / "skills/software-project-governance/references/agent-failure-modes.md",
     "Skill References Company Practices Summary": ROOT / "skills/software-project-governance/references/company-practices-summary.md",
-    "Agent Integration Research": ROOT / "workflows/software-project-governance/research/agent-integration-models.md",
-    "Default Product Shape": ROOT / "workflows/software-project-governance/research/default-product-shape.md",
-    "External Capability Minimum Validation": ROOT / "workflows/software-project-governance/research/external-capability-minimum-validation.md",
-    "Domestic Agent CLI Compatibility": ROOT / "workflows/software-project-governance/research/domestic-agent-cli-compatibility.md",
-    "Repo-local Termination Note": ROOT / "workflows/software-project-governance/research/repo-local-termination-note.md",
+    "Agent Integration Research": ROOT / "project/workflows/software-project-governance/research/agent-integration-models.md",
+    "Default Product Shape": ROOT / "project/workflows/software-project-governance/research/default-product-shape.md",
+    "External Capability Minimum Validation": ROOT / "project/workflows/software-project-governance/research/external-capability-minimum-validation.md",
+    "Domestic Agent CLI Compatibility": ROOT / "project/workflows/software-project-governance/research/domestic-agent-cli-compatibility.md",
+    "Repo-local Termination Note": ROOT / "project/workflows/software-project-governance/research/repo-local-termination-note.md",
     "Governance Init Command": ROOT / "commands/governance-init.md",
     "Governance Status Command": ROOT / "commands/governance-status.md",
     "Governance Gate Command": ROOT / "commands/governance-gate.md",
@@ -64,15 +64,15 @@ REQUIRED_FILES = {
     "SKILL OKR Template": ROOT / "skills/software-project-governance/skills/okr/SKILL.md",
     "SKILL Six-Pager Template": ROOT / "skills/software-project-governance/skills/six-pager/SKILL.md",
     "Behavior Protocol (M0-M9)": ROOT / "skills/software-project-governance/references/behavior-protocol.md",
-    "Five-Layer Architecture Design": ROOT / "skills/software-project-governance/references/architecture.md",
-    "Asset Migration Map": ROOT / "skills/software-project-governance/references/asset-migration-map.md",
+    "Five-Layer Architecture Design": ROOT / "project/references/architecture.md",
+    "Asset Migration Map": ROOT / "project/references/asset-migration-map.md",
 }
 
 OPTIONAL_PROJECTION_FILES = {
-    "Sample Project": ROOT / "workflows/software-project-governance/examples/current-project-sample.md",
-    "Sample Evidence": ROOT / "workflows/software-project-governance/examples/current-project-evidence-log.md",
-    "Sample Decision": ROOT / "workflows/software-project-governance/examples/current-project-decision-log.md",
-    "Sample Risk": ROOT / "workflows/software-project-governance/examples/current-project-risk-log.md",
+    "Sample Project": ROOT / "project/workflows/software-project-governance/examples/current-project-sample.md",
+    "Sample Evidence": ROOT / "project/workflows/software-project-governance/examples/current-project-evidence-log.md",
+    "Sample Decision": ROOT / "project/workflows/software-project-governance/examples/current-project-decision-log.md",
+    "Sample Risk": ROOT / "project/workflows/software-project-governance/examples/current-project-risk-log.md",
 
     "Claude Adapter": ROOT / "adapters/claude/README.md",
     "Claude Adapter Manifest": ROOT / "adapters/claude/adapter-manifest.json",
@@ -87,11 +87,11 @@ OPTIONAL_PROJECTION_FILES = {
     "Codex Marketplace": ROOT / ".agents/plugins/marketplace.json",
     "Core VERSIONING": ROOT / "skills/software-project-governance/core/VERSIONING.md",
     "Core Task Gate Model": ROOT / "skills/software-project-governance/core/task-gate-model.md",
-    "CHANGELOG": ROOT / "CHANGELOG.md",
+    "CHANGELOG": ROOT / "project/CHANGELOG.md",
 }
 
 PROJECTION_SNIPPETS = {
-    ROOT / "workflows/software-project-governance/examples/current-project-sample.md": [
+    ROOT / "project/workflows/software-project-governance/examples/current-project-sample.md": [
         "已迁移",
     ],
     ROOT / "adapters/claude/README.md": [
@@ -179,30 +179,30 @@ WORKFLOW_SNIPPETS = {
         "## 5 分钟开始",
         "## 内部文档",
     ],
-    ROOT / "workflows/software-project-governance/research/agent-integration-models.md": [
+    ROOT / "project/workflows/software-project-governance/research/agent-integration-models.md": [
         "## 调研目标",
         "## Claude Code",
         "## 通用集成模式对比",
     ],
-    ROOT / "workflows/software-project-governance/research/default-product-shape.md": [
+    ROOT / "project/workflows/software-project-governance/research/default-product-shape.md": [
         "## 方案摘要",
         "## 分层设计",
         "## 默认接入矩阵",
     ],
-    ROOT / "workflows/software-project-governance/research/external-capability-minimum-validation.md": [
+    ROOT / "project/workflows/software-project-governance/research/external-capability-minimum-validation.md": [
         "## 目标",
         "## 为什么先选 external runner / shared command",
         "## 最小验证范围",
         "## 命令约定草案",
         "software-project-governance.run",
     ],
-    ROOT / "workflows/software-project-governance/research/domestic-agent-cli-compatibility.md": [
+    ROOT / "project/workflows/software-project-governance/research/domestic-agent-cli-compatibility.md": [
         "## 目标",
         "## 兼容抽象",
         "## 默认接入顺序",
         "## 能力检查清单",
     ],
-    ROOT / "workflows/software-project-governance/research/repo-local-termination-note.md": [
+    ROOT / "project/workflows/software-project-governance/research/repo-local-termination-note.md": [
         "## 终止对象",
         "## 终止原因",
         "## 降级后的资产定位",
@@ -267,30 +267,30 @@ REQUIRED_SNIPPETS = {
         "## 5 分钟开始",
         "## 内部文档",
     ],
-    ROOT / "workflows/software-project-governance/research/agent-integration-models.md": [
+    ROOT / "project/workflows/software-project-governance/research/agent-integration-models.md": [
         "## 调研目标",
         "## Claude Code",
         "## 通用集成模式对比",
     ],
-    ROOT / "workflows/software-project-governance/research/default-product-shape.md": [
+    ROOT / "project/workflows/software-project-governance/research/default-product-shape.md": [
         "## 方案摘要",
         "## 分层设计",
         "## 默认接入矩阵",
     ],
-    ROOT / "workflows/software-project-governance/research/external-capability-minimum-validation.md": [
+    ROOT / "project/workflows/software-project-governance/research/external-capability-minimum-validation.md": [
         "## 目标",
         "## 为什么先选 external runner / shared command",
         "## 最小验证范围",
         "## 命令约定草案",
         "software-project-governance.run",
     ],
-    ROOT / "workflows/software-project-governance/research/domestic-agent-cli-compatibility.md": [
+    ROOT / "project/workflows/software-project-governance/research/domestic-agent-cli-compatibility.md": [
         "## 目标",
         "## 兼容抽象",
         "## 默认接入顺序",
         "## 能力检查清单",
     ],
-    ROOT / "workflows/software-project-governance/research/repo-local-termination-note.md": [
+    ROOT / "project/workflows/software-project-governance/research/repo-local-termination-note.md": [
         "## 终止对象",
         "## 终止原因",
         "## 降级后的资产定位",
@@ -315,7 +315,7 @@ REQUIRED_SNIPPETS = {
         "EVD-001",
         "EVD-051",
     ],
-    ROOT / "workflows/software-project-governance/examples/current-project-sample.md": [
+    ROOT / "project/workflows/software-project-governance/examples/current-project-sample.md": [
         "已迁移",
     ],
     ROOT / "skills/software-project-governance/core/protocol/workflow-schema.md": [
@@ -508,7 +508,7 @@ REQUIRED_SNIPPETS = {
         "阶段快速参考",
         "Profile 快速参考",
     ],
-    ROOT / "skills/software-project-governance/references/architecture.md": [
+    ROOT / "project/references/architecture.md": [
         "# 六层架构设计",
         "适配层（Adapter）",
         "入口层",
@@ -567,7 +567,7 @@ REQUIRED_SNIPPETS = {
         "语义化版本规则",
         "版本升级触发条件",
     ],
-    ROOT / "CHANGELOG.md": [
+    ROOT / "project/CHANGELOG.md": [
         "# 变更日志",
         "## [0.10.0]",
         "## [0.9.0]",
@@ -2346,15 +2346,15 @@ def auto_judge_gate(gate_id):
         "G2": [
             ("调研覆盖技术/市场/用户三维度",
              lambda: _check_snippet_in_file(
-                 "workflows/software-project-governance/research/company-practices.md",
+                 "project/workflows/software-project-governance/research/company-practices.md",
                  "## ", "调研文档含多维度章节")),
             ("竞争格局清晰（竞品≥3×≥4维度）",
              lambda: _check_file_exists(
-                 "workflows/software-project-governance/research/agent-integration-models.md",
+                 "project/workflows/software-project-governance/research/agent-integration-models.md",
                  "竞争分析/竞品对比")),
             ("关键发现有数据支撑",
              lambda: ("PASS", "research/ 目录含多份调研文档，数据来源可追溯")
-             if len(list((ROOT / "workflows/software-project-governance/research").glob("*.md"))) >= 4
+             if len(list((ROOT / "project/workflows/software-project-governance/research").glob("*.md"))) >= 4
              else ("FAIL", "research/ 调研文档不足 4 份")),
             ("技术可行性约束已识别",
              lambda: _check_snippet_in_file(
@@ -2442,9 +2442,9 @@ def auto_judge_gate(gate_id):
         ],
         "G9": [
             ("发布范围明确（版本号/范围/时间窗口）",
-             lambda: _check_snippet_in_file("CHANGELOG.md", "## [0.", "CHANGELOG 含版本发布条目")),
+             lambda: _check_snippet_in_file("project/CHANGELOG.md", "## [0.", "CHANGELOG 含版本发布条目")),
             ("变更日志完整",
-             lambda: _check_file_exists("CHANGELOG.md", "CHANGELOG 存在")),
+             lambda: _check_file_exists("project/CHANGELOG.md", "CHANGELOG 存在")),
             ("回滚方案已验证",
              lambda: ("NEEDS_HUMAN", "无回滚测试环境——需人工确认回滚方案")),
             ("发布后验证已定义",
@@ -2687,9 +2687,9 @@ def cmd_check_plugin_freshness(_args):
 
 def cmd_e2e_check(_args):
     """Run E2E governance verification against the e2e-test-project."""
-    e2e_dir = ROOT / "e2e-test-project"
+    e2e_dir = ROOT / "project/e2e-test-project"
     if not e2e_dir.exists():
-        print("[SKIPPED] e2e-test-project/ not found")
+        print("[SKIPPED] project/e2e-test-project/ not found")
         return
 
     passed, failed = 0, 0

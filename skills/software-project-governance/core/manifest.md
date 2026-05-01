@@ -35,5 +35,5 @@
   - `references/`：参考知识——行为协议/架构设计/失败模式等
 - `commands/`：用户斜杠命令入口（7 个命令）
 - `adapters/`：适配层——平台投影（Claude/Codex/Gemini）
-- `workflows/software-project-governance/`：设计时资产（research/ + examples/）
+- `project/workflows/software-project-governance/`：设计时资产（research/ + examples/）
 - `.claude-plugin/` `.codex-plugin/` `.agents/`：插件包

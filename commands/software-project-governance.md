@@ -79,7 +79,7 @@
 | Git 历史 | `git log --oneline -20`, `git tag -l`, `git rev-list --count HEAD` | 确定项目成熟度 |
 | 测试基础设施 | 搜索 `test/`, `tests/`, `spec/`, `__tests__/`, `*_test.*`, `*.spec.*` | 确定测试覆盖 |
 | CI/CD | 搜索 `.github/workflows/`, `.gitlab-ci.yml`, `Jenkinsfile`, `Dockerfile` | 确定自动化成熟度 |
-| 发布历史 | `git tag -l`, `CHANGELOG.md`, `VERSION` 文件 | 确定发布阶段 |
+| 发布历史 | `git tag -l`, `project/CHANGELOG.md`, `VERSION` 文件 | 确定发布阶段 |
 | 文档 | 搜索 `README.md`, `docs/`, `ARCHITECTURE.md`, `CONTRIBUTING.md` | 确定文档成熟度 |
 | 项目配置 | 读取 `README.md` 前 50 行——项目名称和一句话描述 | 确定项目目标 |
 

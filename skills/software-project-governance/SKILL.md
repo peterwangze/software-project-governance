@@ -48,16 +48,17 @@ Coordinator 执行行为约束，详见 `references/behavior-protocol.md`（M0-M
 | `core/task-gate-model.md` | Task-Gate 模型定义 |
 | `core/VERSIONING.md` | 版本管理策略 |
 
-### 架构与参考
+### 参考知识
 
 | 文件 | 用途 |
 |------|------|
-| `references/architecture.md` | 六层架构设计（本工作流的结构设计） |
-| `references/agent-team-architecture.md` | Agent Team 架构设计 |
+| `references/behavior-protocol.md` | M0-M9 强制性行为协议 |
 | `references/methodology-routing.md` | PUA 味道→角色匹配表 |
 | `references/agent-failure-modes.md` | Agent 异常排查指南 |
 | `references/interaction-boundary.md` | 交互边界规则 |
 | `references/agent-communication-protocol.md` | Agent 间通信协议 |
+| `references/skill-index.md` | SKILL 分类索引 |
+| `references/company-practices-summary.md` | 企业实践摘要 |
 
 ## 治理基础设施（自动使用）
 

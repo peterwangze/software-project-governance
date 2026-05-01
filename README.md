@@ -203,5 +203,5 @@ python skills/software-project-governance/infra/verify_workflow.py gates        
 - [Gate 门禁规则](skills/software-project-governance/core/stage-gates.md)
 - [Profile 配置](skills/software-project-governance/core/profiles.md)
 - [中途接入协议](skills/software-project-governance/core/onboarding.md)
-- [企业实践经验](workflows/software-project-governance/research/company-practices.md)
-- [产品形态设计](workflows/software-project-governance/research/default-product-shape.md)
+- [企业实践经验](project/workflows/software-project-governance/research/company-practices.md)
+- [产品形态设计](project/workflows/software-project-governance/research/default-product-shape.md)

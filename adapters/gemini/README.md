@@ -6,7 +6,7 @@
 
 当前阶段仍不直接实现完整 Gemini 适配，而是先形成一份可执行的兼容路线，确保后续扩展继续遵守 `PLAN-003` 的三层结构：
 
-- 运行时本体层在 `skills/software-project-governance/`，设计时资产在 `workflows/software-project-governance/`
+- 运行时本体层在 `skills/software-project-governance/`，设计时资产在 `project/workflows/software-project-governance/`
 - Gemini / 国内 agent CLI 只提供最薄投影层
 - 默认优先复用外部能力层，而不是先做 repo-local 入口
 
@@ -21,8 +21,8 @@
 - `skills/software-project-governance/stages/*`（子工作流和 skills）
 - `core/templates/*`（设计时模板）
 - `.governance/*`（活跃治理记录，项目级事实源）
-- `workflows/software-project-governance/research/agent-integration-models.md`
-- `workflows/software-project-governance/research/default-product-shape.md`
+- `project/workflows/software-project-governance/research/agent-integration-models.md`
+- `project/workflows/software-project-governance/research/default-product-shape.md`
 
 ## Gemini 路线判断
 

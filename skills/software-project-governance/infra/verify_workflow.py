@@ -577,16 +577,16 @@ REQUIRED_SNIPPETS = {
         "## [0.5.0]",
     ],
     ROOT / ".claude-plugin/plugin.json": [
-        "0.24.0",
+        "0.24.1",
     ],
     ROOT / ".claude-plugin/marketplace.json": [
-        "0.24.0",
+        "0.24.1",
     ],
     ROOT / ".codex-plugin/plugin.json": [
-        "0.24.0",
+        "0.24.1",
     ],
     ROOT / "skills/software-project-governance/core/manifest.json": [
-        "0.24.0",
+        "0.24.1",
     ],
 }
 
@@ -1627,7 +1627,7 @@ def check_version_consistency():
     # These must match the source of truth.
     snippet_self_path = ROOT / "skills/software-project-governance/infra/verify_workflow.py"
     snippet_self_content = snippet_self_path.read_text(encoding="utf-8")
-    # Match only bare quoted version strings like "0.24.0" (excludes
+    # Match only bare quoted version strings like "0.24.1" (excludes
     # CHANGELOG entries like "## [0.7.1]" which use a different format)
     snippet_versions = set(re.findall(r'"(\d+\.\d+\.\d+)"', snippet_self_content))
     for sv in snippet_versions:

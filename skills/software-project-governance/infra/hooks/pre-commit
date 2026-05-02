@@ -24,9 +24,30 @@ fi
 if [ -z "$COMMIT_MSG" ] && [ -f "$REPO_ROOT/.git/GOV_COMMIT_MSG" ]; then
     COMMIT_MSG=$(cat "$REPO_ROOT/.git/GOV_COMMIT_MSG" 2>/dev/null)
 fi
-# Source 3: git's commit message file (fallback)
+# Source 3: git's commit message file (fallback, with staleness check)
+# On Windows, git commit -m may leave stale COMMIT_EDITMSG from previous commit.
+# Check mtime: if modified within last 5 seconds, it's from THIS commit.
 if [ -z "$COMMIT_MSG" ] && [ -f "$REPO_ROOT/.git/COMMIT_EDITMSG" ]; then
-    COMMIT_MSG=$(cat "$REPO_ROOT/.git/COMMIT_EDITMSG" 2>/dev/null)
+    EDITMSG_STALE=0
+    # Try to get mtime in seconds since epoch
+    EDITMSG_MTIME=$(stat -c %Y "$REPO_ROOT/.git/COMMIT_EDITMSG" 2>/dev/null || stat -f %m "$REPO_ROOT/.git/COMMIT_EDITMSG" 2>/dev/null || echo "0")
+    NOW=$(date +%s 2>/dev/null || echo "0")
+    if [ "$NOW" -gt 0 ] && [ "$EDITMSG_MTIME" -gt 0 ]; then
+        AGE=$((NOW - EDITMSG_MTIME))
+        if [ "$AGE" -le 5 ]; then
+            COMMIT_MSG=$(cat "$REPO_ROOT/.git/COMMIT_EDITMSG" 2>/dev/null)
+        else
+            EDITMSG_STALE=1
+        fi
+    else
+        # Cannot determine mtime — trust the file
+        COMMIT_MSG=$(cat "$REPO_ROOT/.git/COMMIT_EDITMSG" 2>/dev/null)
+    fi
+fi
+# Source 4: explicit $1 retry (on some Windows git versions, $1 may be the message
+# but fails the [ -f "$1" ] check due to path format differences)
+if [ -z "$COMMIT_MSG" ] && [ -n "$1" ]; then
+    COMMIT_MSG=$(cat "$1" 2>/dev/null || true)
 fi
 
 # Extract task ID from first line of whatever we got
@@ -155,7 +176,7 @@ fi
 # For P0 tasks, check if a review evidence entry exists.
 # This enforces the Producer-Reviewer separation at the system level.
 if [ -f "$REPO_ROOT/.governance/evidence-log.md" ]; then
-    TASK_ID=$(echo "$COMMIT_MSG" | grep -oE '(AUDIT|FIX|REQ|MAINT|INIT|PLAN|DESIGN|REL|VAL|CI|ACCEPT|RESEARCH|DOC|OPS|CONSTRAINT)-[0-9]+' | head -1)
+    TASK_ID=$(echo "$COMMIT_MSG" | grep -oE '(AUDIT|FIX|REQ|MAINT|INIT|PLAN|DESIGN|REL|VAL|CI|ACCEPT|RESEARCH|DOC|OPS|CONSTRAINT|SYSGAP|CLEANUP)-[0-9]+' | head -1)
     if [ -n "$TASK_ID" ]; then
         # Check if the task is P0 priority
         if [ -f "$REPO_ROOT/.governance/plan-tracker.md" ]; then
@@ -359,7 +380,7 @@ if [ -n "$CHANGED_FILES" ] && [ "${IS_PRODUCT_CODE:-0}" -eq 1 ]; then
             fi
             # Check: 体验变化=是 + migration guide path that doesn't exist
             if echo "$USER_IMPACT_LINE" | grep -q "体验变化=是"; then
-                MIGRATION_PATH=$(echo "$USER_IMPACT_LINE" | grep -oP '迁移指南=\K[^,，\s]+' | head -1 || true)
+                MIGRATION_PATH=$(echo "$USER_IMPACT_LINE" | sed -n 's/.*迁移指南=\([^,，[:space:]]*\).*/\1/p' | head -1 || true)
                 if [ -n "$MIGRATION_PATH" ] && [ "$MIGRATION_PATH" != "不需要" ]; then
                     if [ ! -f "$REPO_ROOT/$MIGRATION_PATH" ] && [ ! -f "$MIGRATION_PATH" ]; then
                         echo ""

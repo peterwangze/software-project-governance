@@ -1,6 +1,6 @@
 ---
 name: software-project-governance
-version: 0.18.0
+version: 0.19.0
 description: 软件项目治理工作流入口——加载后主 agent 即 Coordinator（老周），直接协调角色 Agent 完成工作，无跳转
 ---
 
@@ -62,44 +62,44 @@ description: 软件项目治理工作流入口——加载后主 agent 即 Coord
 
 | Agent | 文件 | 职责 |
 |-------|------|------|
-| Architect（老顾） | `agents/design/architect/prompt.md` | 技术选型、系统设计、ADR、技术评审 |
-| Analyst（阿析） | `agents/design/analyst/prompt.md` | 需求澄清、竞品分析、PR/FAQ、OKR |
+| Architect（老顾） | `agents/architect.md` | 技术选型、系统设计、ADR、技术评审 |
+| Analyst（阿析） | `agents/analyst.md` | 需求澄清、竞品分析、PR/FAQ、OKR |
 
 ### 开发组
 
 | Agent | 文件 | 职责 |
 |-------|------|------|
-| Developer（阿速） | `agents/development/developer/prompt.md` | TDD 编码、自动化门禁、单元测试 |
+| Developer（阿速） | `agents/developer.md` | TDD 编码、自动化门禁、单元测试 |
 
 ### 测试组
 
 | Agent | 文件 | 职责 |
 |-------|------|------|
-| QA（阿测） | `agents/testing/qa/prompt.md` | 测试策略、边界测试、集成/性能/安全测试 |
+| QA（阿测） | `agents/qa.md` | 测试策略、边界测试、集成/性能/安全测试 |
 
 ### 评审组（6 个独立审查 Agent）
 
 | Agent | 文件 | 职责 |
 |-------|------|------|
-| Code Reviewer（老严） | `agents/review/code-reviewer/prompt.md` | 逐行代码审查、AI 专项检查、安全检查 |
-| Design Reviewer（老洪） | `agents/review/design-reviewer/prompt.md` | 设计一致性、ADR 审查、技术方案评审 |
-| Requirement Reviewer（老甄） | `agents/review/requirement-reviewer/prompt.md` | PR/FAQ 审查、OKR 审查、需求质量 |
-| Test Reviewer（老漏） | `agents/review/test-reviewer/prompt.md` | 测试策略审查、用例质量、覆盖率 |
-| Release Reviewer（老炸） | `agents/review/release-reviewer/prompt.md` | 发布检查清单、回滚方案审查 |
-| Retro Reviewer（老账） | `agents/review/retro-reviewer/prompt.md` | 复盘报告审查、改进计划验证 |
+| Code Reviewer（老严） | `agents/code-reviewer.md` | 逐行代码审查、AI 专项检查、安全检查 |
+| Design Reviewer（老洪） | `agents/design-reviewer.md` | 设计一致性、ADR 审查、技术方案评审 |
+| Requirement Reviewer（老甄） | `agents/requirement-reviewer.md` | PR/FAQ 审查、OKR 审查、需求质量 |
+| Test Reviewer（老漏） | `agents/test-reviewer.md` | 测试策略审查、用例质量、覆盖率 |
+| Release Reviewer（老炸） | `agents/release-reviewer.md` | 发布检查清单、回滚方案审查 |
+| Retro Reviewer（老账） | `agents/retro-reviewer.md` | 复盘报告审查、改进计划验证 |
 
 ### 运维组
 
 | Agent | 文件 | 职责 |
 |-------|------|------|
-| DevOps（老管） | `agents/operations/devops/prompt.md` | CI/CD Pipeline、环境一致性、监控告警 |
-| Release（老发） | `agents/operations/release/prompt.md` | 版本规划、变更日志、Feature Flag |
+| DevOps（老管） | `agents/devops.md` | CI/CD Pipeline、环境一致性、监控告警 |
+| Release（老发） | `agents/release.md` | 版本规划、变更日志、Feature Flag |
 
 ### 维护组
 
 | Agent | 文件 | 职责 |
 |-------|------|------|
-| Maintenance（老维） | `agents/maintenance/maintenance/prompt.md` | Bug 修复、5-Why 根因分析、技术债务、复盘 |
+| Maintenance（老维） | `agents/maintenance.md` | Bug 修复、5-Why 根因分析、技术债务、复盘 |
 
 ## Agent 分发路由
 
@@ -125,7 +125,7 @@ description: 软件项目治理工作流入口——加载后主 agent 即 Coord
 
 使用 Agent 工具创建子 agent。每个子 agent 启动时 MUST 加载两个文件：
 
-- **角色定义**：`agents/<group>/<role>/prompt.md`——定义身份、职责边界、工具权限
+- **角色定义**：`agents/<name>.md`——定义身份、职责边界、工具权限
 - **任务规范**：`skills/<skill-name>/SKILL.md`——定义确定性执行步骤
 
 Sub-agent 硬边界：

@@ -33,21 +33,26 @@
 |---------|------|------|
 | `skills/software-project-governance/SKILL.md` | 留存（已在正确位置） | — |
 
-## 业务智能层 — Agent 库（9 文件）— 留存原地
+## 业务智能层 — Agent 库（14 文件）— 已迁移到 plugin root 平铺
 
-每个 Agent 已是独立 SKILL 目录，工具权限+persona 完整。
+Agent 已从嵌套目录 `agents/<组>/<角色>/prompt.md` 迁移到 `agents/<name>.md`（plugin root 平铺）。
 
 | 当前路径 | 去向 | 方式 |
 |---------|------|------|
-| `skills/software-project-governance/agents/management/coordinator/prompt.md` | 留存 | — |
-| `skills/software-project-governance/agents/development/developer/prompt.md` | 留存 | — |
-| `skills/software-project-governance/agents/review/reviewer/prompt.md` | 留存 | — |
-| `skills/software-project-governance/agents/design/architect/prompt.md` | 留存 | — |
-| `skills/software-project-governance/agents/testing/qa/prompt.md` | 留存 | — |
-| `skills/software-project-governance/agents/operations/devops/prompt.md` | 留存 | — |
-| `skills/software-project-governance/agents/design/analyst/prompt.md` | 留存 | — |
-| `skills/software-project-governance/agents/operations/release/prompt.md` | 留存 | — |
-| `skills/software-project-governance/agents/maintenance/maintenance/prompt.md` | 留存 | — |
+| `agents/coordinator.md` | 留存 | — |
+| `agents/developer.md` | 留存 | — |
+| `agents/code-reviewer.md` | 留存 | — |
+| `agents/design-reviewer.md` | 留存 | — |
+| `agents/requirement-reviewer.md` | 留存 | — |
+| `agents/test-reviewer.md` | 留存 | — |
+| `agents/release-reviewer.md` | 留存 | — |
+| `agents/retro-reviewer.md` | 留存 | — |
+| `agents/architect.md` | 留存 | — |
+| `agents/qa.md` | 留存 | — |
+| `agents/devops.md` | 留存 | — |
+| `agents/analyst.md` | 留存 | — |
+| `agents/release.md` | 留存 | — |
+| `agents/maintenance.md` | 留存 | — |
 
 ## 用户交互层 — 斜杠命令入口（6 文件）— 留存原地
 
@@ -97,7 +102,7 @@
 
 | 当前路径 | 目标路径 | 方式 |
 |---------|---------|------|
-| `skills/software-project-governance/skills/main-workflow/SKILL.md` | `skills/main-workflow/SKILL.md` | git mv |
+| `skills/software-project-governance/skills/main-workflow/SKILL.md` | `skills/main-workflow/SKILL.md` | git mv ✅ 0.19.0 |
 
 ## 基础设施层（5 文件）— 部分需迁移
 

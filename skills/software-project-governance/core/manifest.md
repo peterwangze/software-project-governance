@@ -4,7 +4,7 @@
 
 - `id`: `software-project-governance`
 - `name`: 软件项目治理工作流
-- `version`: `0.18.0`
+- `version`: `0.19.0`
 - `goal`: 将大型软件公司的项目管理经验沉淀为可被 coding agent 消费的项目治理 workflow plugin/skill
 - `supported_agents`: `Claude`, `Codex`, `Gemini`
 - `planned_agents`: `国内主流 agent CLI`
@@ -28,7 +28,7 @@
 
 - `skills/software-project-governance/`：**运行时唯一事实源**
   - `SKILL.md`：入口层——引导进入 Coordinator
-  - `agents/`：业务智能层——7 职能组 13 Agent（Coordinator 已融入入口 SKILL.md）
+  - `agents/`：业务智能层——14 Agent 平铺（`agents/<name>.md`）
   - `skills/`：能力层——25 SKILL
   - `core/`：核心层——protocol/ + templates/ + 生命周期/Gate/Profile 等规则
   - `infra/`：基础设施层——verify_workflow.py + hooks + TOOLS.md

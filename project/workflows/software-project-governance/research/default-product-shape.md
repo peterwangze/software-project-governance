@@ -49,8 +49,8 @@
 
 - `skills/software-project-governance/SKILL.md`（入口，内嵌核心行为协议）
 - `skills/software-project-governance/references/`（lifecycle、stage-gates、profiles、onboarding、interaction-boundary）
-- `skills/software-project-governance/stages/`（子工作流和 stage skills）
-- `skills/software-project-governance/skills/main-workflow/SKILL.md`、`TOOLS.md`
+- `skills/software-project-governance/stages/`（子工作流和 stage skills，v0.19.0 起已迁移至 `skills/<name>/SKILL.md` 平铺）
+- `skills/main-workflow/SKILL.md`、`TOOLS.md`（v0.19.0 起真实 SKILL 已迁至 `skills/<name>/SKILL.md` 平铺）
 
 仓库中的 `workflows/software-project-governance/` 承载**设计时资产**，不重复运行时本体内容：
 

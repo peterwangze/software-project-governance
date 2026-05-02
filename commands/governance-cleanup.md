@@ -30,12 +30,12 @@
 
 ### v0.18.0 升级残留：SKILL stub
 
-v0.14.0~v0.17.0 期间在 `skills/` 下创建了 25 个 SKILL stub（重定向文件，每个约 350B）。v0.18.0 起 plugin.json 直接指向真实实现（`skills/software-project-governance/skills/`），stub 不再需要。
+v0.14.0~v0.17.0 期间在 `skills/` 下创建了 25 个 SKILL stub（重定向文件，每个约 350B）。v0.19.0 起真实 SKILL 已直接迁至 `skills/<name>/SKILL.md` 平铺，stub 不再需要。
 
 升级后残留的 stub 目录：
 `skills/code-review/` `skills/design-review/` `skills/main-workflow/` `skills/okr/` `skills/pr-faq/` `skills/release-checklist/` `skills/release-review/` `skills/requirement-clarification/` `skills/requirement-review/` `skills/retro-meeting/` `skills/retro-review/` `skills/six-pager/` `skills/stage-architecture/` `skills/stage-cicd/` `skills/stage-development/` `skills/stage-infra/` `skills/stage-initiation/` `skills/stage-maintenance/` `skills/stage-operations/` `skills/stage-release/` `skills/stage-research/` `skills/stage-selection/` `skills/stage-testing/` `skills/tech-review/` `skills/test-review/`
 
-**检测方法**：检查 `skills/` 下的 SKILL.md 是否包含 stub 标识 `> 本文件是 plugin 发现 stub`。如果 `skills/software-project-governance/skills/` 下已有同名真实实现，则 stub 可安全删除。
+**检测方法**：检查 `skills/` 下的 SKILL.md 是否包含 stub 标识 `> 本文件是 plugin 发现 stub`。v0.19.0+ 真实 SKILL 已迁至 `skills/<name>/SKILL.md` 平铺，stub 可直接安全删除。
 
 ## 执行流程
 

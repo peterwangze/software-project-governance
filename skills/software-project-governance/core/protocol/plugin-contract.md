@@ -38,8 +38,8 @@
 | manifest | `manifest` | `skills/software-project-governance/SKILL.md`（运行时入口）+ `skills/software-project-governance/core/manifest.md`（设计时元数据） |
 | research | `research` | `project/workflows/software-project-governance/research/`（设计时调研资产） |
 | rules | `rules` | `skills/software-project-governance/references/`（运行时规则正本） |
-| stages | `stages` | `skills/software-project-governance/skills/stage-<name>/SKILL.md` |
-| stage skills | `stage skills` | `skills/software-project-governance/skills/<skill-name>/SKILL.md` |
+| stages | `stages` | `skills/stage-<name>/SKILL.md` |
+| stage skills | `stage skills` | `skills/<skill-name>/SKILL.md` |
 | templates | `templates` | `skills/software-project-governance/core/templates/`（设计时模板资产） |
 | examples | `examples` | `project/workflows/software-project-governance/examples/`（设计时样例资产） |
 | integration contract | `integration contract` | `skills/software-project-governance/core/protocol/plugin-contract.md`（本文件） |

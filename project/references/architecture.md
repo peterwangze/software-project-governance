@@ -156,7 +156,7 @@
 | **运维组** | DevOps, Release | CI/CD→发布→运营 | CI/CD, 环境管理, 发布检查, 版本规划, 变更日志 |
 | **维护组** | Maintenance | 维护与演进 | 缺陷修复, 复盘会议, 规则演进 |
 
-> 目录结构：`agents/{管理组/设计组/开发组/测试组/评审组/运维组/维护组}/{agent名}/prompt.md`
+> 目录结构：`agents/<name>.md`（plugin root 平铺，符合 Claude Code 官方规范）
 
 ### 入口层——引导进入业务智能层
 
@@ -336,15 +336,20 @@
 
 | 当前文件 | 目标位置 | 变更 |
 |---------|---------|------|
-| `agents/management/coordinator/prompt.md` | `agents/management/coordinator/prompt.md` | 保持 |
-| `agents/development/developer/prompt.md` | `agents/development/developer/prompt.md` | 保持 |
-| `agents/review/reviewer/prompt.md` | `agents/review/reviewer/prompt.md` | 保持 |
-| `agents/design/architect/prompt.md` | `agents/design/architect/prompt.md` | 保持 |
-| `agents/testing/qa/prompt.md` | `agents/testing/qa/prompt.md` | 保持 |
-| `agents/operations/devops/prompt.md` | `agents/operations/devops/prompt.md` | 保持 |
-| `agents/design/analyst/prompt.md` | `agents/design/analyst/prompt.md` | 保持 |
-| `agents/operations/release/prompt.md` | `agents/operations/release/prompt.md` | 保持 |
-| `agents/maintenance/maintenance/prompt.md` | `agents/maintenance/maintenance/prompt.md` | 保持 |
+| `agents/coordinator.md` | `agents/coordinator.md` | 已平铺（AUDIT-097） |
+| `agents/developer.md` | `agents/developer.md` | 已平铺（AUDIT-097） |
+| `agents/code-reviewer.md` | `agents/code-reviewer.md` | 已平铺（AUDIT-097） |
+| `agents/design-reviewer.md` | `agents/design-reviewer.md` | 已平铺（AUDIT-097） |
+| `agents/requirement-reviewer.md` | `agents/requirement-reviewer.md` | 已平铺（AUDIT-097） |
+| `agents/test-reviewer.md` | `agents/test-reviewer.md` | 已平铺（AUDIT-097） |
+| `agents/release-reviewer.md` | `agents/release-reviewer.md` | 已平铺（AUDIT-097） |
+| `agents/retro-reviewer.md` | `agents/retro-reviewer.md` | 已平铺（AUDIT-097） |
+| `agents/architect.md` | `agents/architect.md` | 已平铺（AUDIT-097） |
+| `agents/qa.md` | `agents/qa.md` | 已平铺（AUDIT-097） |
+| `agents/devops.md` | `agents/devops.md` | 已平铺（AUDIT-097） |
+| `agents/analyst.md` | `agents/analyst.md` | 已平铺（AUDIT-097） |
+| `agents/release.md` | `agents/release.md` | 已平铺（AUDIT-097） |
+| `agents/maintenance.md` | `agents/maintenance.md` | 已平铺（AUDIT-097） |
 
 ### 入口层映射
 
@@ -434,25 +439,8 @@
 
 ```
 skills/software-project-governance/
-  SKILL.md                        ← 入口层（仅引导进入 Coordinator）
-  agents/                         ← 业务智能层（Agent 库）
-    coordinator/SKILL.md
-    management/                   ← 管理组
-      coordinator/SKILL.md
-    design/                       ← 设计组
-      analyst/SKILL.md
-      architect/SKILL.md
-    development/                  ← 开发组
-      developer/SKILL.md
-    testing/                      ← 测试组
-      qa/SKILL.md
-    review/                       ← 评审组
-      reviewer/SKILL.md
-    operations/                   ← 运维组
-      devops/SKILL.md
-      release/SKILL.md
-    maintenance/                  ← 维护组
-      maintenance/SKILL.md
+  SKILL.md                        ← 入口层（Coordinator 人格+路由表自包含）
+  skills/                         ← 能力层（SKILL 库）
   skills/                         ← 能力层（SKILL 库）
     init/SKILL.md
     onboarding/SKILL.md

@@ -24,14 +24,14 @@
 
 1. 你即 Coordinator——入口 SKILL.md 已定义你的身份和职责。加载入口 SKILL 后主 agent 直接成为 Coordinator（老周），无需跳转。
 2. Coordinator 分解任务并通过 Agent 工具派生角色 agent：
-   - Developer (agents/development/developer/prompt.md) — 负责编码/实现
-   - Code Reviewer (agents/review/code-reviewer/prompt.md) — 负责独立代码审查
-   - Design Reviewer (agents/review/design-reviewer/prompt.md) — 负责独立设计审查
-   - Requirement Reviewer (agents/review/requirement-reviewer/prompt.md) — 负责独立需求审查
-   - Test Reviewer (agents/review/test-reviewer/prompt.md) — 负责独立测试审查
-   - Release Reviewer (agents/review/release-reviewer/prompt.md) — 负责独立发布审查
-   - Retro Reviewer (agents/review/retro-reviewer/prompt.md) — 负责独立复盘审查
-   - Architect (agents/design/architect/prompt.md) — 负责架构/技术选型
+   - Developer (agents/developer.md) — 负责编码/实现
+   - Code Reviewer (agents/code-reviewer.md) — 负责独立代码审查
+   - Design Reviewer (agents/design-reviewer.md) — 负责独立设计审查
+   - Requirement Reviewer (agents/requirement-reviewer.md) — 负责独立需求审查
+   - Test Reviewer (agents/test-reviewer.md) — 负责独立测试审查
+   - Release Reviewer (agents/release-reviewer.md) — 负责独立发布审查
+   - Retro Reviewer (agents/retro-reviewer.md) — 负责独立复盘审查
+   - Architect (agents/architect.md) — 负责架构/技术选型
 3. Coordinator 收集输出，验证一致性，通过 AskUserQuestion 向用户呈现结果
 4. **生产者-审查者分离是强制性的**：Coordinator MUST NOT 审查自己的代码。Developer MUST NOT 审查自己的代码。Reviewer agents MUST NOT 修改代码。
 
@@ -84,19 +84,19 @@
 
 | 模板 | 文件 | 角色 | 格式 |
 |----------|------|------|--------|
-| `developer` | `agents/development/developer/prompt.md` | 编码 + TDD + 工具约束（禁止 Agent/AskUserQuestion） | Agent Prompt |
-| `code-reviewer` | `agents/review/code-reviewer/prompt.md` | 独立代码审查——仅 Read/Grep/Glob（无 Write/Edit/Bash） | Agent Prompt |
-| `design-reviewer` | `agents/review/design-reviewer/prompt.md` | 独立设计审查——仅 Read/Grep/Glob（无 Write/Edit/Bash） | Agent Prompt |
-| `requirement-reviewer` | `agents/review/requirement-reviewer/prompt.md` | 独立需求审查——仅 Read/Grep/Glob（无 Write/Edit/Bash） | Agent Prompt |
-| `test-reviewer` | `agents/review/test-reviewer/prompt.md` | 独立测试审查——仅 Read/Grep/Glob（无 Write/Edit/Bash） | Agent Prompt |
-| `release-reviewer` | `agents/review/release-reviewer/prompt.md` | 独立发布审查——仅 Read/Grep/Glob（无 Write/Edit/Bash） | Agent Prompt |
-| `retro-reviewer` | `agents/review/retro-reviewer/prompt.md` | 独立复盘审查——仅 Read/Grep/Glob（无 Write/Edit/Bash） | Agent Prompt |
-| `architect` | `agents/design/architect/prompt.md` | 架构 + ADR——不修改产品代码 | Agent Prompt |
-| `qa` | `agents/testing/qa/prompt.md` | 测试——仅测试代码，不修改产品代码 | Agent Prompt |
-| `devops` | `agents/operations/devops/prompt.md` | CI/CD + 基础设施——不修改产品代码 | Agent Prompt |
-| `analyst` | `agents/design/analyst/prompt.md` | 需求 + 调研——不做技术决策 | Agent Prompt |
-| `release` | `agents/operations/release/prompt.md` | 发布管理——不修改代码 | Agent Prompt |
-| `maintenance` | `agents/maintenance/maintenance/prompt.md` | Bug 修复 + 复盘——不新增功能 | Agent Prompt |
+| `developer` | `agents/developer.md` | 编码 + TDD + 工具约束（禁止 Agent/AskUserQuestion） | Agent Prompt |
+| `code-reviewer` | `agents/code-reviewer.md` | 独立代码审查——仅 Read/Grep/Glob（无 Write/Edit/Bash） | Agent Prompt |
+| `design-reviewer` | `agents/design-reviewer.md` | 独立设计审查——仅 Read/Grep/Glob（无 Write/Edit/Bash） | Agent Prompt |
+| `requirement-reviewer` | `agents/requirement-reviewer.md` | 独立需求审查——仅 Read/Grep/Glob（无 Write/Edit/Bash） | Agent Prompt |
+| `test-reviewer` | `agents/test-reviewer.md` | 独立测试审查——仅 Read/Grep/Glob（无 Write/Edit/Bash） | Agent Prompt |
+| `release-reviewer` | `agents/release-reviewer.md` | 独立发布审查——仅 Read/Grep/Glob（无 Write/Edit/Bash） | Agent Prompt |
+| `retro-reviewer` | `agents/retro-reviewer.md` | 独立复盘审查——仅 Read/Grep/Glob（无 Write/Edit/Bash） | Agent Prompt |
+| `architect` | `agents/architect.md` | 架构 + ADR——不修改产品代码 | Agent Prompt |
+| `qa` | `agents/qa.md` | 测试——仅测试代码，不修改产品代码 | Agent Prompt |
+| `devops` | `agents/devops.md` | CI/CD + 基础设施——不修改产品代码 | Agent Prompt |
+| `analyst` | `agents/analyst.md` | 需求 + 调研——不做技术决策 | Agent Prompt |
+| `release` | `agents/release.md` | 发布管理——不修改代码 | Agent Prompt |
+| `maintenance` | `agents/maintenance.md` | Bug 修复 + 复盘——不新增功能 | Agent Prompt |
 
 **使用方式**：Coordinator 读取相应模板，填入 `{placeholders}`（TASK_ID、TASK_NAME、文件路径、验收标准），然后调用 `Agent(subagent_type="general-purpose", prompt="[填充后的模板]")`。
 

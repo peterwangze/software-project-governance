@@ -2,6 +2,20 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.21.0] — 2026-05-02
+
+### 0.21.0 — 纪律防线
+
+建立"不再继续犯错"的系统机制——产品代码边界定义 + Agent Team 强制激活 + 影响分析 checklist + commit 粒度规范。
+
+- **SYSGAP-001**: 产品代码 vs 治理记录边界定义（SKILL.md + interaction-boundary.md）
+- **SYSGAP-002**: M7.5 Agent Team 强制激活检查（behavior-protocol.md Step 2.5）
+- **SYSGAP-003**: 变更影响分析 checklist 创建（change-impact-checklist.md）
+- **SYSGAP-004**: M7.5 影响分析步骤嵌入（behavior-protocol.md Step 2.6）
+- **SYSGAP-005**: Commit message 规范强化（behavior-protocol.md M7.4 Step 5）
+- **SYSGAP-006**: Pre-commit scope WARN（infra/hooks/pre-commit Step 8）
+- **SYSGAP-007**: Pre-commit Agent Team bypass WARN（infra/hooks/pre-commit Step 9）
+
 ## [0.20.0] — 2026-05-02
 
 ### 0.20.0 — 声明式清理机制

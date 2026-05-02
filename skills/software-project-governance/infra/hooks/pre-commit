@@ -182,5 +182,90 @@ if [ -f "$REPO_ROOT/.governance/evidence-log.md" ]; then
     fi
 fi
 
+# --- Step 8: Commit Scope WARN (SYSGAP-006) ---
+# Group staged files by top-level directory. Warn if commit spans
+# too many unrelated directories. This enforces single-concern commits.
+# WARN at 3+ directories, [SCOPE-CRITICAL] at 5+ directories.
+# Never blocks — cross-directory changes have legitimate use cases
+# (migrations, refactors) but should be explained in commit message.
+CHANGED_FILES=$(git diff --cached --name-only 2>/dev/null || true)
+if [ -n "$CHANGED_FILES" ]; then
+    SCOPE_DIRS=$(echo "$CHANGED_FILES" | awk -F/ '{if (NF>1) print $1; else print "(root)"}' | sort -u)
+    SCOPE_COUNT=$(echo "$SCOPE_DIRS" | grep -c . 2>/dev/null || echo "0")
+    if [ "$SCOPE_COUNT" -ge 5 ]; then
+        SCOPE_LIST=$(echo "$SCOPE_DIRS" | tr '\n' ' ')
+        echo ""
+        echo "╔══════════════════════════════════════════════════════════════╗"
+        echo "║  [SCOPE-CRITICAL] GOVERNANCE: Scope Warning                ║"
+        echo "║                                                            ║"
+        echo "║  This commit touches $SCOPE_COUNT unrelated directories:"
+        echo "║    $SCOPE_LIST"
+        echo "║                                                            ║"
+        echo "║  Consider splitting into separate commits                   ║"
+        echo "║  (one per logical change).                                 ║"
+        echo "║                                                            ║"
+        echo "║  Commit allowed, but scope discipline is expected.         ║"
+        echo "╚══════════════════════════════════════════════════════════════╝"
+        echo ""
+    elif [ "$SCOPE_COUNT" -ge 3 ]; then
+        SCOPE_LIST=$(echo "$SCOPE_DIRS" | tr '\n' ' ')
+        echo ""
+        echo "╔══════════════════════════════════════════════════════════════╗"
+        echo "║  GOVERNANCE: Scope Warning                                 ║"
+        echo "║                                                            ║"
+        echo "║  This commit touches $SCOPE_COUNT unrelated directories:"
+        echo "║    $SCOPE_LIST"
+        echo "║                                                            ║"
+        echo "║  Consider splitting into separate commits                   ║"
+        echo "║  (one per logical change).                                 ║"
+        echo "║                                                            ║"
+        echo "║  Commit allowed, but scope discipline is expected.         ║"
+        echo "╚══════════════════════════════════════════════════════════════╝"
+        echo ""
+    fi
+fi
+
+# --- Step 9: Agent Team Bypass WARN (SYSGAP-007) ---
+# Check if this commit modifies "product code" files. If so, verify
+# that the commit message shows evidence of Agent Team execution.
+# Product code = files under skills/software-project-governance/, agents/,
+# skills/stage-*, skills/*-review/, skills/code-review/, commands/,
+# infra/ (verify_workflow.py, cleanup.py, hooks/), .claude-plugin/, .codex-plugin/.
+# WARN only — emergency hotfixes may need direct commits.
+# See SKILL.md "产品代码 vs 治理记录边界" for the full boundary definition.
+if [ -n "$CHANGED_FILES" ]; then
+    IS_PRODUCT_CODE=0
+    echo "$CHANGED_FILES" | grep -qE "^skills/software-project-governance/" && IS_PRODUCT_CODE=1
+    echo "$CHANGED_FILES" | grep -qE "^agents/" && IS_PRODUCT_CODE=1
+    echo "$CHANGED_FILES" | grep -qE "^skills/stage-" && IS_PRODUCT_CODE=1
+    echo "$CHANGED_FILES" | grep -qE "^skills/[a-z]+-review/" && IS_PRODUCT_CODE=1
+    echo "$CHANGED_FILES" | grep -qE "^skills/code-review/" && IS_PRODUCT_CODE=1
+    echo "$CHANGED_FILES" | grep -qE "^commands/" && IS_PRODUCT_CODE=1
+    echo "$CHANGED_FILES" | grep -qE "^infra/verify_workflow\.py$" && IS_PRODUCT_CODE=1
+    echo "$CHANGED_FILES" | grep -qE "^infra/cleanup\.py$" && IS_PRODUCT_CODE=1
+    echo "$CHANGED_FILES" | grep -qE "^infra/hooks/" && IS_PRODUCT_CODE=1
+    echo "$CHANGED_FILES" | grep -qE "^\.claude-plugin/" && IS_PRODUCT_CODE=1
+    echo "$CHANGED_FILES" | grep -qE "^\.codex-plugin/" && IS_PRODUCT_CODE=1
+
+    if [ "$IS_PRODUCT_CODE" -eq 1 ]; then
+        # Check for Agent Team trace: commit message must start with task ID
+        AGENT_TRACE=$(echo "$FIRST_LINE" | grep -oE '^[A-Z]+-[0-9]+:' || true)
+        if [ -z "$AGENT_TRACE" ]; then
+            echo ""
+            echo "╔══════════════════════════════════════════════════════════════╗"
+            echo "║  GOVERNANCE: Agent Team bypass detected                    ║"
+            echo "║                                                            ║"
+            echo "║  This commit modifies product code without evidence of     ║"
+            echo "║  Agent Team execution. Coordinator should NOT directly     ║"
+            echo "║  modify product code (see SKILL.md product code vs         ║"
+            echo "║  governance record boundary).                              ║"
+            echo "║                                                            ║"
+            echo "║  Commit allowed, but this is a process violation.          ║"
+            echo "╚══════════════════════════════════════════════════════════════╝"
+            echo ""
+        fi
+    fi
+fi
+
 # All checks passed
 exit 0

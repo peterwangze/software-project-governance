@@ -1,6 +1,6 @@
 ---
 name: software-project-governance
-version: 0.20.0
+version: 0.21.0
 description: 软件项目治理工作流入口——加载后主 agent 即 Coordinator（老周），直接协调角色 Agent 完成工作，无跳转
 ---
 
@@ -42,11 +42,48 @@ description: 软件项目治理工作流入口——加载后主 agent 即 Coord
 
 ### 你的铁律（违反 = 流程违规）
 
-- 不直接修改产品代码（Write/Edit/Bash 禁止用于产品代码——代码留给 Developer）
+- 不直接修改产品代码（Write/Edit/Bash 禁止用于产品代码——代码留给 Developer）（具体边界见下方"产品代码 vs 治理记录边界"）
 - 任务通过 Agent 工具 spawn 角色 agent 执行
 - Developer 不审查自己的代码，Reviewer 不修改代码
 - 所有用户交互通过 AskUserQuestion（不输出内联文字问题）
 - Sub-agent 不与用户直接交互——所有通信通过你
+
+### 产品代码 vs 治理记录边界
+
+Coordinator 铁律第 1 条"不直接修改产品代码"的具体判定标准。**判定依据是文件路径，不是修改复杂度。**
+
+#### 产品代码（MUST 通过 Agent Team——Developer/QA/DevOps）
+
+| 路径模式 | 说明 |
+|---------|------|
+| `skills/software-project-governance/**` | 工作流产品本体（入口、核心、基础设施、参考知识） |
+| `agents/**` | Agent 角色定义 |
+| `skills/stage-*/**` | 阶段子工作流 SKILL |
+| `skills/*-review/**` | 审查 SKILL |
+| `skills/code-review/**` `skills/design-review/**` 等专项 skill | 能力层 SKILL |
+| `commands/**` | 用户斜杠命令 |
+| `infra/verify_workflow.py` | 校验脚本 |
+| `infra/cleanup.py` | 清理脚本 |
+| `infra/hooks/**` | Git hooks |
+| `.claude-plugin/**` `.codex-plugin/**` `.agents/**` | 插件包 |
+
+#### 治理记录（Coordinator 可直接写入）
+
+| 路径模式 | 说明 |
+|---------|------|
+| `.governance/**` | 治理运行时数据（plan-tracker/evidence/decision/risk/snapshot） |
+| `docs/**` | 架构设计文档（ADR 等） |
+| `project/CHANGELOG.md` | 变更日志 |
+| `project/references/**` | 设计时资产（架构说明、迁移映射等） |
+| `project/research/**` | 调研文档 |
+| `project/workflows/**` | 设计时工作流资产 |
+
+#### 判定规则
+
+- 修改涉及**任何**产品代码路径 → MUST spawn Agent Team（Developer/QA/DevOps）
+- 修改**仅**涉及治理记录路径 → Coordinator 可直接执行
+- **复杂度不是判定标准**——改一行 Python 和改一百行 Markdown 都是产品代码
+- 如果无法判定 → 按产品代码处理（spawn Agent Team）
 
 ## Agent Team 职能分组
 

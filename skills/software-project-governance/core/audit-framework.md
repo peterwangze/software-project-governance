@@ -32,7 +32,7 @@ Gate 检查（阶段转换关口）
 |------|------|
 | 触发时机 | 每个 Gate 通过前（强制）、每个 Tier 完成时（强制——按实施计划的分层推进模型）、任何 P0 任务完成时（强制）、任何修改了 governance-critical 文件（SKILL.md、stage-gates.md、audit-framework.md、verify_workflow.py、lifecycle.md、profiles.md、onboarding.md、interaction-boundary.md、agent-failure-modes.md、main-workflow.md、TOOLS.md）的任务完成时（强制——不论任务优先级）、用户主动要求（按需） |
 | 适用阶段 | 全部 11 阶段 |
-| 检查项 | (1) 最近完成的 N 个任务是否可追溯到立项目标或 plan-tracker 中的明确需求；(2) plan-tracker 中是否有与立项目标无关但占用了 P0 资源的任务；(3) 决策记录中是否有改变原始目标方向但未在 plan-tracker 中反映的决策；(4) 范围是否发生了未经记录的漂移（对比立项时的"范围外"清单） |
+| 检查项 | (1) 最近完成的 N 个任务是否可追溯到立项目标或 plan-tracker 中的明确需求；(2) plan-tracker 中是否有与立项目标无关但占用了 P0 资源的任务；(3) 决策记录中是否有改变原始目标方向但未在 plan-tracker 中反映的决策；(4) 范围是否发生了未经记录的漂移（对比立项时的"范围外"清单）；(5) verify_workflow.py Check 16 是否全部 PASS？是否有目标对齐缺失的条目？ |
 | 产出 | 审计结论（ON-TRACK / DEVIATION-DETECTED / NEEDS-REALIGNMENT）+ 偏差清单 |
 | 回写路径 | 偏差→decision-log；错位任务→plan-tracker 纠偏动作列 |
 
@@ -44,7 +44,7 @@ Gate 检查（阶段转换关口）
 |------|------|
 | 触发时机 | 每个面向用户的功能完成时（强制）、每个里程碑结束时（强制）、外部验证前（强制） |
 | 适用阶段 | 全部阶段，尤其是涉及 README/命令/安装流程的变更 |
-| 检查项 | (1) README 的承诺是否能在当前实现中走通；(2) 用户按文档操作是否会遇到卡点（缺失文件、命令不可用、路径错误）；(3) agent 行为是否符合用户从 README 建立的预期；(4) 错误场景是否有明确的用户引导（不是静默失败） |
+| 检查项 | (1) README 的承诺是否能在当前实现中走通；(2) 用户按文档操作是否会遇到卡点（缺失文件、命令不可用、路径错误）；(3) agent 行为是否符合用户从 README 建立的预期；(4) 错误场景是否有明确的用户引导（不是静默失败）；(5) verify_workflow.py Check 17 是否全部 PASS？是否有 breaking change 无迁移指南的条目？ |
 | 产出 | 审计结论 + 用户体验差距清单（按严重度：阻塞/困惑/失望） |
 | 回写路径 | 差距→plan-tracker 新任务；误导性文档→AUDIT 任务 |
 

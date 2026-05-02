@@ -19,10 +19,23 @@
 
 ## Step 3: 用户影响分析
 
-- [ ] 用户是否需要做什么来获得变更？（plugin update / governance-init / governance-update / 手动 / 不需要）
-- [ ] 用户如何知道变更存在？（CHANGELOG / README / 版本号 bump / 不可见变更）
-- [ ] 用户体验是否真的改变了？（如果只是内部重构 → 标注为"不可见变更"）
-- [ ] 变更是否需要迁移指南？（Breaking Change → MUST 提供迁移步骤）
+- [ ] Q1: 用户是否需要做什么来获得变更？
+      答案 MUST 为以下之一：`plugin update` / `governance-init` / `governance-update` / `手动` / `自动生效（下次会话）`
+- [ ] Q2: 用户如何知道变更存在？
+      答案 MUST 为以下之一：`CHANGELOG` / `README` / `版本号 bump` / `不可见变更`
+- [ ] Q3: 用户体验是否真的改变了？
+      答案 MUST 为以下之一：`是-需迁移指南` / `是-有说明（见下文）` / `否-内部重构` / `否-治理记录`
+- [ ] Q4: 变更是否需要迁移指南？
+      IF Q3 = `是-需迁移指南` → MUST 提供迁移指南文件路径
+      Breaking change 无迁移指南 → BLOCK
+
+## Step 3.5: 目标一致性分析
+
+- [ ] 读取 plan-tracker `## 项目配置` 中的 `- **项目目标**:` 字段
+- [ ] 本次变更是否服务于项目目标？（MUST 回答并论证，min 30 字符）
+- [ ] 如果变更引入新功能/新概念/新文件 → MUST 论证此变更如何服务于项目目标
+- [ ] 如果变更与项目目标的关系不直接（如重构、基础设施改进）→ MUST 说明间接服务关系
+- [ ] 论证缺失或不充分（< 30 字符）→ 本次变更将被 pre-commit hook BLOCK
 
 ## Step 4: 架构影响分析
 
@@ -34,7 +47,7 @@
 
 ## Step 5: 记录
 
-- [ ] 影响分析结论已写入 evidence-log（格式：`| EVD-XXX | TASK-ID | 影响分析 | 范围:{文件数}文件, 依赖:{N}引用者, 用户影响:{无/plugin update/init}, 架构影响:{无/有-详见risk-log} | ...`）
+- [ ] 影响分析结论已写入 evidence-log（格式：`| EVD-XXX | TASK-ID | 影响分析 | 范围:{文件数}文件, 依赖:{N}引用者, 目标对齐:{min 30 chars rationale}, 用户影响: 获得={Q1答案}, 感知={Q2答案}, 体验变化={Q3答案}, 迁移指南={path 或 "不需要"}, 架构影响:{无/有-详见risk-log} | ...`）
 - [ ] 如果影响分析发现风险 → 已创建 risk-log 条目
 - [ ] 如果影响分析确认无影响 → 已声明"无影响"（简短说明原因）
 
@@ -47,12 +60,13 @@
 | P0 任务且涉及 >=2 个架构层的修改 | **MUST** + 额外 spawn Analyst + Architect |
 | 紧急 hotfix（事后 MUST 补影响分析） | 事后补 |
 
-## 影响分析示例
+## 影响分析格式
 
 ```
-EVD-XXX | SYSGAP-001 | 影响分析 | 
-范围: SKILL.md (1行引用) + interaction-boundary.md (新增段落), 
-依赖: 无（新内容不改变现有路径引用）, 
-用户影响: 无（Coordinator 内部行为规则，下次 session 自动生效）, 
-架构影响: 无（纯规则增补，不改变模块间依赖）
+格式: EVD-XXX | TASK-ID | 影响分析 | 
+范围:{文件数}文件, 
+依赖:{N}引用者, 
+目标对齐:{min 30 chars rationale}, 
+用户影响: 获得={Q1答案}, 感知={Q2答案}, 体验变化={Q3答案}, 迁移指南={path 或 "不需要"}, 
+架构影响:{无/有-详见risk-log}
 ```

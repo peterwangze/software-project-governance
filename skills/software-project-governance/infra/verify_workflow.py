@@ -577,16 +577,16 @@ REQUIRED_SNIPPETS = {
         "## [0.5.0]",
     ],
     ROOT / ".claude-plugin/plugin.json": [
-        "0.23.0",
+        "0.24.0",
     ],
     ROOT / ".claude-plugin/marketplace.json": [
-        "0.23.0",
+        "0.24.0",
     ],
     ROOT / ".codex-plugin/plugin.json": [
-        "0.23.0",
+        "0.24.0",
     ],
     ROOT / "skills/software-project-governance/core/manifest.json": [
-        "0.23.0",
+        "0.24.0",
     ],
 }
 
@@ -1627,7 +1627,7 @@ def check_version_consistency():
     # These must match the source of truth.
     snippet_self_path = ROOT / "skills/software-project-governance/infra/verify_workflow.py"
     snippet_self_content = snippet_self_path.read_text(encoding="utf-8")
-    # Match only bare quoted version strings like "0.23.0" (excludes
+    # Match only bare quoted version strings like "0.24.0" (excludes
     # CHANGELOG entries like "## [0.7.1]" which use a different format)
     snippet_versions = set(re.findall(r'"(\d+\.\d+\.\d+)"', snippet_self_content))
     for sv in snippet_versions:
@@ -2822,6 +2822,260 @@ def check_commit_scope(limit=20):
     }
 
 
+# ── SYSGAP-023: Goal Alignment Check ──────────────────────────────
+
+def parse_impact_analysis_entries():
+    """Parse evidence-log entries of type '影响分析'.
+    Returns list of dicts: {evd_id, task_id, description, file_location, raw_line}
+    """
+    if not EVIDENCE_PATH.is_file():
+        return []
+    content = EVIDENCE_PATH.read_text(encoding="utf-8")
+    entries = []
+    for line in content.split("\n"):
+        line = line.strip()
+        if not line.startswith("| EVD-"):
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) < 8:
+            continue
+        evd_id = parts[1]
+        task_id = parts[2]
+        evd_type = parts[4] if len(parts) > 4 else ""
+        description = parts[5] if len(parts) > 5 else ""
+        file_location = parts[6] if len(parts) > 6 else ""
+
+        if evd_type == "影响分析":
+            entries.append({
+                "evd_id": evd_id,
+                "task_id": task_id,
+                "description": description,
+                "file_location": file_location,
+                "raw_line": line,
+            })
+    return entries
+
+
+def check_goal_alignment():
+    """SYSGAP-023: Check that all impact analysis entries have goal alignment.
+
+    Checks:
+    1. plan-tracker has 项目目标 field (WARN if missing)
+    2. Each 影响分析 entry has 目标对齐: field with >= 30 chars (FAIL if missing/short)
+    3. Identical goal alignment text across different tasks (WARN — template reuse)
+
+    Returns dict with 'has_project_goal', 'entries', 'duplicates', 'pass'.
+    """
+    result = {
+        "has_project_goal": False,
+        "project_goal": "",
+        "entries": [],
+        "duplicates": [],
+        "pass": True,
+    }
+
+    # 1. Check project goal in plan-tracker
+    config = parse_project_config()
+    project_goal = config.get("项目目标", "")
+    result["project_goal"] = project_goal
+    if project_goal:
+        result["has_project_goal"] = True
+
+    # 2. Parse impact analysis entries
+    entries = parse_impact_analysis_entries()
+    if not entries:
+        return result
+
+    goal_map = {}  # goal_text -> [task_ids]
+
+    for entry in entries:
+        desc = entry["description"]
+        # Extract 目标对齐: field — captures text until next known field or end
+        goal_match = re.search(
+            r'目标对齐:\s*(.+?)(?:\s*(?:用户影响:|范围:|依赖:|架构影响:|$))',
+            desc
+        )
+        goal_text = goal_match.group(1).strip() if goal_match else ""
+        goal_len = len(goal_text)
+
+        has_goal = bool(goal_text)
+        status = "PASS"
+        if not has_goal:
+            status = "FAIL"
+            result["pass"] = False
+        elif goal_len < 30:
+            status = "FAIL"
+            result["pass"] = False
+        else:
+            # Track for duplicate detection
+            if goal_text in goal_map:
+                goal_map[goal_text].append(entry["task_id"])
+            else:
+                goal_map[goal_text] = [entry["task_id"]]
+
+        result["entries"].append({
+            "task_id": entry["task_id"],
+            "evd_id": entry["evd_id"],
+            "has_goal": has_goal,
+            "goal_text": goal_text[:80] + ("..." if goal_len > 80 else ""),
+            "goal_len": goal_len,
+            "status": status,
+        })
+
+    # 3. Check duplicates
+    for goal_text, task_ids in goal_map.items():
+        if len(task_ids) >= 2:
+            for i in range(len(task_ids)):
+                for j in range(i + 1, len(task_ids)):
+                    result["duplicates"].append((task_ids[i], task_ids[j]))
+
+    return result
+
+
+# ── SYSGAP-024: User Impact Check ────────────────────────────────
+
+def check_user_impact():
+    """SYSGAP-024: Check that all impact analysis entries have user impact analysis.
+
+    Checks:
+    1. Each 影响分析 entry has 用户影响: field (FAIL if missing)
+    2. Required sub-fields parsed: 获得= / 感知= / 体验变化= / 迁移指南=
+    3. Value validity for 获得= (WARN if unrecognized)
+    4. Contradiction: 体验变化=否 but diff involves user-visible files (WARN)
+    5. Breaking change: 体验变化=是 but 迁移指南=不需要 (BLOCKING)
+    6. Breaking change: migration guide path does not exist (BLOCKING — if path provided)
+
+    Returns dict with 'entries', 'blocking', 'pass'.
+    """
+    USER_VISIBLE_PATTERNS = [
+        "CLAUDE.md", "README.md", "CHANGELOG.md",
+        "plugin.json", "marketplace.json",
+        "commands/", ".claude-plugin/", ".codex-plugin/",
+    ]
+
+    VALID_OBTAIN_VALUES = [
+        "plugin update", "governance-init", "governance-update",
+        "手动", "自动生效（下次会话）", "自动生效", "不需要",
+    ]
+
+    result = {
+        "entries": [],
+        "blocking": [],
+        "pass": True,
+    }
+
+    entries = parse_impact_analysis_entries()
+    if not entries:
+        return result
+
+    for entry in entries:
+        desc = entry["description"]
+        file_location = entry["file_location"]
+
+        # Extract 用户影响: field — captures text until next known field or end
+        user_impact_match = re.search(
+            r'用户影响:\s*(.+?)(?:\s*(?:目标对齐:|范围:|依赖:|架构影响:|$))',
+            desc
+        )
+        user_impact_text = user_impact_match.group(1).strip() if user_impact_match else ""
+
+        has_field = bool(user_impact_text)
+
+        # Parse sub-fields
+        obtain_match = re.search(r'获得=([^,]*?)(?:,|，|\s*(?:感知=|体验变化=|迁移指南=|$))', user_impact_text)
+        obtain = obtain_match.group(1).strip() if obtain_match else ""
+
+        perceive_match = re.search(r'感知=([^,]*?)(?:,|，|\s*(?:获得=|体验变化=|迁移指南=|$))', user_impact_text)
+        perceive = perceive_match.group(1).strip() if perceive_match else ""
+
+        exp_change_match = re.search(r'体验变化=([^,]*?)(?:,|，|\s*(?:获得=|感知=|迁移指南=|$))', user_impact_text)
+        exp_change = exp_change_match.group(1).strip() if exp_change_match else ""
+
+        migration_match = re.search(r'迁移指南=([^,]*?)(?:,|，|\s*(?:获得=|感知=|体验变化=|$))', user_impact_text)
+        migration = migration_match.group(1).strip() if migration_match else ""
+
+        status = "PASS"
+        issues = []
+
+        if not has_field:
+            status = "FAIL"
+            issues.append("缺少 用户影响: 字段")
+            result["pass"] = False
+        else:
+            # Check sub-fields presence
+            missing_subs = []
+            if not obtain:
+                missing_subs.append("获得=")
+            if not perceive:
+                missing_subs.append("感知=")
+            if not exp_change:
+                missing_subs.append("体验变化=")
+            if not migration:
+                missing_subs.append("迁移指南=")
+            if missing_subs:
+                issues.append(f"缺少子字段: {', '.join(missing_subs)}")
+                status = "FAIL"
+                result["pass"] = False
+
+            # Value validity for 获得=
+            if obtain:
+                # Check if obtain value matches any valid value (lenient — contains check)
+                found_valid = any(v in obtain for v in VALID_OBTAIN_VALUES)
+                if not found_valid:
+                    issues.append(
+                        f"获得= 值 '{obtain}' 不在合法范围内"
+                        f" ({', '.join(VALID_OBTAIN_VALUES[:4])} 等)"
+                    )
+                    if status == "PASS":
+                        status = "WARN"
+
+            # Contradiction: 体验变化=否 but file_location contains user-visible patterns
+            if exp_change == "否":
+                for pattern in USER_VISIBLE_PATTERNS:
+                    if pattern in file_location:
+                        issues.append(
+                            f"体验变化=否 但证据位置涉及用户可见文件 '{pattern}'"
+                        )
+                        if status == "PASS":
+                            status = "WARN"
+                        break
+
+            # Breaking change: 体验变化=是 + 迁移指南=不需要
+            if exp_change == "是" and migration == "不需要":
+                status = "BLOCKING"
+                issues.append("体验变化=是（Breaking Change）但 迁移指南=不需要")
+
+            # Breaking change: migration guide path validity
+            if exp_change == "是" and migration and migration not in ("不需要", ""):
+                # migration could be a relative file path from repo root
+                migration_path = ROOT / migration.lstrip("/")
+                if not migration_path.is_file():
+                    status = "BLOCKING"
+                    issues.append(
+                        f"体验变化=是（Breaking Change）但迁移指南路径不存在: {migration}"
+                    )
+
+        entry_result = {
+            "task_id": entry["task_id"],
+            "evd_id": entry["evd_id"],
+            "has_field": has_field,
+            "obtain": obtain,
+            "perceive": perceive,
+            "exp_change": exp_change,
+            "migration": migration,
+            "status": status,
+            "issues": issues,
+        }
+        result["entries"].append(entry_result)
+
+        if status in ("FAIL", "BLOCKING"):
+            result["pass"] = False
+        if status == "BLOCKING":
+            result["blocking"].append(entry["task_id"])
+
+    return result
+
+
 def cmd_check_governance(args):
     """Run governance health checks: evidence completeness, risk staleness, gate consistency."""
     # Ensure UTF-8 stdout to handle Chinese characters from .md files (Windows GBK workaround)
@@ -3227,6 +3481,73 @@ def cmd_check_governance(args):
                 print(f"│    ... and {len(cs_issues) - 10} more")
         else:
             print(f"│  [PASS] All recent commits have clean scope discipline.")
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 16. Goal Alignment (SYSGAP-023) ──
+    print("\n┌─ Check 16: Goal Alignment ───────────────────────────┐")
+    ga_result = check_goal_alignment()
+    ga_issues = 0
+    if not ga_result["has_project_goal"]:
+        print(f"│  [WARN] plan-tracker missing 项目目标 field.")
+        ga_issues += 1
+    else:
+        project_goal_short = ga_result["project_goal"][:60]
+        print(f"│  [INFO] 项目目标: {project_goal_short}...")
+    print(f"│  Impact analysis entries: {len(ga_result['entries'])}")
+    if ga_result["entries"]:
+        for e in ga_result["entries"]:
+            if e["status"] == "FAIL":
+                ga_issues += 1
+                if not e["has_goal"]:
+                    print(f"│  [FAIL] {e['task_id']} ({e['evd_id']}): 缺少 目标对齐: 字段")
+                else:
+                    print(f"│  [FAIL] {e['task_id']} ({e['evd_id']}): 目标对齐: 仅 {e['goal_len']} chars (需 >= 30)")
+            elif e["status"] == "PASS":
+                print(f"│  [PASS] {e['task_id']} ({e['evd_id']}): {e['goal_len']} chars")
+        if ga_result["duplicates"]:
+            ga_issues += len(ga_result["duplicates"])
+            print(f"│  [WARN] {len(ga_result['duplicates'])} duplicate goal alignment(s) (template reuse):")
+            for t1, t2 in ga_result["duplicates"][:5]:
+                print(f"│    - {t1} <-> {t2}")
+            if len(ga_result["duplicates"]) > 5:
+                print(f"│    ... and {len(ga_result['duplicates']) - 5} more")
+    else:
+        print(f"│  [PASS] No impact analysis entries to check.")
+    if ga_issues == 0 and ga_result["has_project_goal"]:
+        print(f"│  [PASS] Goal alignment check passed.")
+    all_issues += ga_issues
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 17. User Impact (SYSGAP-024) ──
+    print("\n┌─ Check 17: User Impact ──────────────────────────────┐")
+    ui_result = check_user_impact()
+    ui_issues = 0
+    print(f"│  Impact analysis entries: {len(ui_result['entries'])}")
+    if ui_result["entries"]:
+        for e in ui_result["entries"]:
+            if e["status"] == "BLOCKING":
+                ui_issues += 1
+                all_issues += 1
+                for issue in e["issues"]:
+                    print(f"│  [BLOCKING] {e['task_id']} ({e['evd_id']}): {issue}")
+            elif e["status"] == "FAIL":
+                ui_issues += 1
+                all_issues += 1
+                for issue in e["issues"]:
+                    print(f"│  [FAIL] {e['task_id']} ({e['evd_id']}): {issue}")
+            elif e["status"] == "WARN":
+                ui_issues += 1
+                for issue in e["issues"]:
+                    print(f"│  [WARN] {e['task_id']} ({e['evd_id']}): {issue}")
+            else:
+                print(f"│  [PASS] {e['task_id']} ({e['evd_id']}): "
+                      f"获得={e['obtain']}, 体验变化={e['exp_change']}, "
+                      f"迁移指南={e['migration']}")
+    else:
+        print(f"│  [PASS] No impact analysis entries to check.")
+    if ui_issues == 0:
+        print(f"│  [PASS] User impact check passed.")
+    all_issues += ui_issues
     print("└──────────────────────────────────────────────────────┘")
 
     # ── Summary ──
@@ -4027,6 +4348,84 @@ def cmd_check_commit_scope(args):
     print()
 
 
+def cmd_check_goal_alignment(args):
+    """CLI wrapper for goal alignment checking (SYSGAP-023)."""
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+    result = check_goal_alignment()
+    fail = False
+    print()
+    print("=== Goal Alignment Check ===")
+    if not result["has_project_goal"]:
+        print(f"  [WARN] plan-tracker missing 项目目标 field.")
+    else:
+        project_goal_short = result["project_goal"][:60]
+        print(f"  [INFO] 项目目标: {project_goal_short}...")
+    print(f"  Impact analysis entries: {len(result['entries'])}")
+    if result["entries"]:
+        for e in result["entries"]:
+            if e["status"] == "FAIL":
+                fail = True
+                if not e["has_goal"]:
+                    print(f"  [FAIL] {e['task_id']} ({e['evd_id']}): 缺少 目标对齐: 字段")
+                else:
+                    print(f"  [FAIL] {e['task_id']} ({e['evd_id']}): 目标对齐: 仅 {e['goal_len']} chars (需 >= 30)")
+            elif e["status"] == "PASS":
+                print(f"  [PASS] {e['task_id']} ({e['evd_id']}): {e['goal_len']} chars")
+        if result["duplicates"]:
+            print(f"  [WARN] {len(result['duplicates'])} duplicate goal alignment(s):")
+            for t1, t2 in result["duplicates"]:
+                print(f"    - {t1} <-> {t2}")
+    else:
+        print(f"  [PASS] No impact analysis entries to check.")
+    if not fail and result["has_project_goal"]:
+        print(f"  [PASS] All impact analysis entries have valid goal alignment.")
+    print()
+    if fail:
+        sys.exit(1)
+
+
+def cmd_check_user_impact(args):
+    """CLI wrapper for user impact checking (SYSGAP-024)."""
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+    result = check_user_impact()
+    fail = False
+    print()
+    print("=== User Impact Check ===")
+    print(f"  Impact analysis entries: {len(result['entries'])}")
+    if result["entries"]:
+        for e in result["entries"]:
+            status_label = {
+                "BLOCKING": "BLOCK",
+                "FAIL": "FAIL",
+                "WARN": "WARN",
+                "PASS": "PASS",
+            }.get(e["status"], "?")
+            if e["status"] in ("BLOCKING", "FAIL"):
+                fail = True
+                for issue in e["issues"]:
+                    print(f"  [{status_label}] {e['task_id']} ({e['evd_id']}): {issue}")
+            elif e["status"] == "WARN":
+                for issue in e["issues"]:
+                    print(f"  [WARN] {e['task_id']} ({e['evd_id']}): {issue}")
+            else:
+                print(f"  [PASS] {e['task_id']} ({e['evd_id']}): "
+                      f"获得={e['obtain']}, 体验变化={e['exp_change']}, "
+                      f"迁移指南={e['migration']}")
+    else:
+        print(f"  [PASS] No impact analysis entries to check.")
+    if not fail and not result["blocking"]:
+        print(f"  [PASS] All impact analysis entries have valid user impact analysis.")
+    print()
+    if fail:
+        sys.exit(1)
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="verify_workflow",
@@ -4101,6 +4500,18 @@ def main():
     cs_p.add_argument("--limit", type=int, default=20,
                       help="Number of recent commits to check (default: 20)")
 
+    # check-goal-alignment (SYSGAP-023)
+    cga_p = subparsers.add_parser("check-goal-alignment",
+                                  help="Verify goal alignment in impact analysis entries")
+    cga_p.add_argument("--fail-on-issues", action="store_true",
+                       help="Exit with non-zero code if issues found")
+
+    # check-user-impact (SYSGAP-024)
+    cui_p = subparsers.add_parser("check-user-impact",
+                                  help="Verify user impact analysis in impact analysis entries")
+    cui_p.add_argument("--fail-on-issues", action="store_true",
+                       help="Exit with non-zero code if issues found")
+
     args = parser.parse_args()
 
     commands = {
@@ -4119,6 +4530,8 @@ def main():
         "check-sequential-ids": cmd_check_sequential_ids,
         "check-structural-validity": cmd_check_structural_validity,
         "check-commit-scope": cmd_check_commit_scope,
+        "check-goal-alignment": cmd_check_goal_alignment,
+        "check-user-impact": cmd_check_user_impact,
     }
 
     cmd = args.command or "verify"

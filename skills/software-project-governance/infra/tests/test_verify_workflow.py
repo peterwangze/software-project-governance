@@ -397,5 +397,243 @@ class GovernanceIntegrationTests(unittest.TestCase):
                     self.fail(f"check_gate_consistency raised: {exc}")
 
 
+# ────────────────────────────────────────────────────────────
+# SYSGAP-029: Goal Alignment (Check 11) and User Impact (Check 12) regression tests
+# ────────────────────────────────────────────────────────────
+
+def _impact_evidence_row(evd_id, task_id, description, file_location="skills/test.md"):
+    """Build an evidence-log row with type=影响分析.
+
+    Column layout matching evidence-log.md:
+      | EVD-xxx | TASK-xxx | category | type | description | file_loc | author | date | gate | notes |
+    parts[1]=evd_id  parts[2]=task_id  parts[3]=cat  parts[4]=type  parts[5]=desc  parts[6]=file
+    """
+    return f"| {evd_id} | {task_id} | 架构 | 影响分析 | {description} | {file_location} | Developer | 2026-05-02 | G11 | PASS |"
+
+
+class GoalAlignmentTests(unittest.TestCase):
+    """Test check_goal_alignment() — SYSGAP-023 Check 11."""
+
+    GOAL_TEXT = (
+        "This change aligns with the project goal of providing a comprehensive "
+        "governance workflow for software projects with automated checks and "
+        "cross-session state management."
+    )
+
+    def _setup(self, tmpdir, plan_config_lines=None, evidence_lines=None):
+        """Create plan-tracker and evidence-log in temp dir; return (sp, ep)."""
+        root = Path(tmpdir)
+        gov = root / ".governance"; gov.mkdir(parents=True, exist_ok=True)
+        sp = gov / "plan-tracker.md"
+        ep = gov / "evidence-log.md"
+
+        config_lines = plan_config_lines if plan_config_lines is not None else [
+            "- **Profile**: standard",
+            "- **触发模式**: always-on",
+            "- **项目目标**: 提供一套完整的软件项目治理工作流插件",
+        ]
+        plan = "\n".join([
+            "# 计划跟踪",
+            "",
+            "## 项目配置",
+        ] + config_lines + [
+            "",
+            "## Gate 状态跟踪",
+            "",
+            "| Gate | 阶段转换 | 状态 | 通过日期 | 关键证据 |",
+            "| --- | --- | --- | --- | --- |",
+            "| G1 | 立项 | passed | 2026-04-01 | EVD-001 |",
+        ])
+        sp.write_text(plan, encoding="utf-8")
+
+        evidence = "\n".join(evidence_lines or [])
+        ep.write_text(evidence, encoding="utf-8")
+        return sp, ep
+
+    def test_check_goal_alignment_all_pass(self):
+        """plan-tracker has 项目目标 + evidence-log has 目标对齐 >= 30 chars -> PASS."""
+        with tempfile.TemporaryDirectory() as td:
+            evidence_rows = [
+                _impact_evidence_row("EVD-001", "TASK-001",
+                                     f"目标对齐: {self.GOAL_TEXT}"),
+            ]
+            sp, ep = self._setup(td, evidence_lines=evidence_rows)
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_goal_alignment()
+                self.assertTrue(r["has_project_goal"])
+                self.assertTrue(r["pass"])
+                self.assertEqual(len(r["entries"]), 1)
+                self.assertEqual(r["entries"][0]["status"], "PASS")
+                self.assertTrue(r["entries"][0]["has_goal"])
+                self.assertGreaterEqual(r["entries"][0]["goal_len"], 30)
+
+    def test_check_goal_alignment_missing_project_goal(self):
+        """plan-tracker has no 项目目标 -> has_project_goal=False (WARN indicator)."""
+        with tempfile.TemporaryDirectory() as td:
+            evidence_rows = [
+                _impact_evidence_row("EVD-001", "TASK-001",
+                                     f"目标对齐: {self.GOAL_TEXT}"),
+            ]
+            sp, ep = self._setup(td,
+                                 plan_config_lines=["- **Profile**: standard"],
+                                 evidence_lines=evidence_rows)
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_goal_alignment()
+                self.assertFalse(r["has_project_goal"])
+                self.assertEqual(r["project_goal"], "")
+                # Entry still passes (goal alignment present in evidence)
+                self.assertEqual(r["entries"][0]["status"], "PASS")
+
+    def test_check_goal_alignment_missing_field(self):
+        """Impact entry has no 目标对齐 field -> FAIL."""
+        with tempfile.TemporaryDirectory() as td:
+            evidence_rows = [
+                _impact_evidence_row("EVD-002", "TASK-002",
+                                     "No goal alignment info in this entry"),
+            ]
+            sp, ep = self._setup(td, evidence_lines=evidence_rows)
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_goal_alignment()
+                self.assertFalse(r["pass"])
+                self.assertEqual(len(r["entries"]), 1)
+                self.assertFalse(r["entries"][0]["has_goal"])
+                self.assertEqual(r["entries"][0]["status"], "FAIL")
+
+    def test_check_goal_alignment_too_short(self):
+        """目标对齐 text < 30 chars -> FAIL."""
+        with tempfile.TemporaryDirectory() as td:
+            evidence_rows = [
+                _impact_evidence_row("EVD-003", "TASK-003",
+                                     "目标对齐: Too short"),
+            ]
+            sp, ep = self._setup(td, evidence_lines=evidence_rows)
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_goal_alignment()
+                self.assertFalse(r["pass"])
+                self.assertEqual(len(r["entries"]), 1)
+                self.assertTrue(r["entries"][0]["has_goal"])
+                self.assertLess(r["entries"][0]["goal_len"], 30)
+                self.assertEqual(r["entries"][0]["status"], "FAIL")
+
+
+class UserImpactTests(unittest.TestCase):
+    """Test check_user_impact() — SYSGAP-024 Check 12."""
+
+    def _setup(self, tmpdir, evidence_lines=None):
+        """Create evidence-log in temp dir. plan-tracker not needed for user_impact."""
+        root = Path(tmpdir)
+        gov = root / ".governance"; gov.mkdir(parents=True, exist_ok=True)
+        plan = "\n".join([
+            "# 计划跟踪",
+            "",
+            "## 项目配置",
+            "- **Profile**: standard",
+            "",
+            "## Gate 状态跟踪",
+            "| Gate | 阶段转换 | 状态 | 通过日期 | 关键证据 |",
+            "| --- | --- | --- | --- | --- |",
+            "| G1 | 立项 | passed | 2026-04-01 | EVD-001 |",
+        ])
+        sp = gov / "plan-tracker.md"
+        sp.write_text(plan, encoding="utf-8")
+        ep = gov / "evidence-log.md"
+        ep.write_text("\n".join(evidence_lines or []), encoding="utf-8")
+        return sp, ep
+
+    def test_check_user_impact_all_pass(self):
+        """用户影响 field complete with valid values -> PASS."""
+        with tempfile.TemporaryDirectory() as td:
+            desc = (
+                "用户影响: 获得=plugin update, 感知=下次会话启动时自动检测, "
+                "体验变化=否, 迁移指南=不需要"
+            )
+            evidence_rows = [
+                _impact_evidence_row("EVD-001", "TASK-001", desc),
+            ]
+            sp, ep = self._setup(td, evidence_lines=evidence_rows)
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_user_impact()
+                self.assertTrue(r["pass"])
+                self.assertEqual(len(r["entries"]), 1)
+                entry = r["entries"][0]
+                self.assertEqual(entry["status"], "PASS")
+                self.assertTrue(entry["has_field"])
+                self.assertEqual(entry["obtain"], "plugin update")
+                self.assertEqual(entry["perceive"], "下次会话启动时自动检测")
+                self.assertEqual(entry["exp_change"], "否")
+                self.assertEqual(entry["migration"], "不需要")
+                self.assertEqual(len(entry["issues"]), 0)
+
+    def test_check_user_impact_missing_field(self):
+        """No 用户影响 field -> FAIL."""
+        with tempfile.TemporaryDirectory() as td:
+            evidence_rows = [
+                _impact_evidence_row("EVD-002", "TASK-002",
+                                     "No user impact info here"),
+            ]
+            sp, ep = self._setup(td, evidence_lines=evidence_rows)
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_user_impact()
+                self.assertFalse(r["pass"])
+                self.assertEqual(len(r["entries"]), 1)
+                entry = r["entries"][0]
+                self.assertFalse(entry["has_field"])
+                self.assertEqual(entry["status"], "FAIL")
+                self.assertIn("缺少 用户影响", entry["issues"][0])
+
+    def test_check_user_impact_invalid_obtain_value(self):
+        """获得= value not in valid set -> WARN."""
+        with tempfile.TemporaryDirectory() as td:
+            desc = (
+                "用户影响: 获得=unknown_method, 感知=visible, "
+                "体验变化=否, 迁移指南=不需要"
+            )
+            evidence_rows = [
+                _impact_evidence_row("EVD-003", "TASK-003", desc),
+            ]
+            sp, ep = self._setup(td, evidence_lines=evidence_rows)
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_user_impact()
+                # WARN does NOT set pass=False (only FAIL/BLOCKING do)
+                self.assertTrue(r["pass"])
+                self.assertEqual(len(r["entries"]), 1)
+                entry = r["entries"][0]
+                self.assertEqual(entry["status"], "WARN")
+                self.assertEqual(entry["obtain"], "unknown_method")
+                self.assertEqual(len(entry["issues"]), 1)
+                self.assertIn("获得=", entry["issues"][0])
+                self.assertIn("unknown_method", entry["issues"][0])
+
+    def test_check_user_impact_breaking_change_no_migration_guide(self):
+        """体验变化=是 + 迁移指南=不需要 -> BLOCKING."""
+        with tempfile.TemporaryDirectory() as td:
+            desc = (
+                "用户影响: 获得=plugin update, 感知=需要手动运行迁移命令, "
+                "体验变化=是, 迁移指南=不需要"
+            )
+            evidence_rows = [
+                _impact_evidence_row("EVD-004", "TASK-004", desc),
+            ]
+            sp, ep = self._setup(td, evidence_lines=evidence_rows)
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_user_impact()
+                self.assertFalse(r["pass"])
+                self.assertEqual(len(r["entries"]), 1)
+                entry = r["entries"][0]
+                self.assertEqual(entry["status"], "BLOCKING")
+                self.assertEqual(entry["exp_change"], "是")
+                self.assertEqual(entry["migration"], "不需要")
+                self.assertIn("TASK-004", r["blocking"])
+                self.assertIn("迁移指南=不需要", entry["issues"][0])
+
+
 if __name__ == "__main__":
     unittest.main()

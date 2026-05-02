@@ -2,6 +2,22 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.24.0] — 2026-05-03
+
+### 0.24.0 — 目标一致性 + 用户影响系统强制
+
+三层强制体系：每次 commit 产品代码时 MUST 论证变更如何服务于项目目标 + 回答用户影响三问。缺失 → pre-commit hook BLOCK。
+
+- **SYSGAP-021**: project_goal 字段存储（governance-init.md 模板）
+- **SYSGAP-022**: change-impact-checklist 增强——Step 3.5 目标一致性 + Step 3/5 强制格式
+- **SYSGAP-023**: verify_workflow.py Check 16——目标一致性检查
+- **SYSGAP-024**: verify_workflow.py Check 17——用户影响检查
+- **SYSGAP-025**: pre-commit hook Step 10-12——目标+用户影响 BLOCK
+- **SYSGAP-026**: governance-init.md 模板更新（project_goal 注入）
+- **SYSGAP-027**: behavior-protocol.md M7.5 系统强制说明
+- **SYSGAP-028**: audit-framework.md D1/D2 引用 Check 16/17
+- **SYSGAP-029**: 回归测试——8 新用例（31 tests PASSED）
+
 ## [0.23.0] — 2026-05-02
 
 ### 0.23.0 — 测试体系 + CI

@@ -33,6 +33,7 @@
 | references/ 文件变更（新增/修改强制检查项） | PATCH | 影响 agent 决策 |
 | verify_workflow.py 新增检查项 | PATCH | 新增自动化验证能力 |
 | governance 模板字段变更 | PATCH | 影响初始化产出 |
+| manifest.json 条目变更（文件增/删/移动） | PATCH | 影响 cleanup diff + REQUIRED_FILES 检查 |
 | SKILL.md MUST 规则新增 | MINOR | 影响所有 agent 行为——但 1.0.0 之前可灵活处理 |
 | 仅修复 bug（不改变行为语义） | PATCH | |
 
@@ -52,6 +53,8 @@
 3. **verify_workflow.py 子命令变更**（新增/删除/修改 CLI 接口）
 4. **stages/ 子工作流或 skill 变更**（新增/删除，或修改活动清单中的强制步骤）
 5. **governance 文件模板字段变更**（plan-tracker/evidence-log/decision-log/risk-log 列定义）
+6. **manifest.json 条目变更**（文件增/删/移动 MUST 同步更新 manifest.json。`check-manifest-consistency` 在 CI 中强制此项）
+7. **目录结构调整**（任何文件/目录移动或重命名后 MUST 同步更新 manifest.json）
 
 以下变更 **不需要** 触发版本号升级：
 
@@ -69,8 +72,9 @@
 3. `.codex-plugin/plugin.json` — `version` 字段
 4. `skills/software-project-governance/SKILL.md` — frontmatter `version` 字段
 5. `skills/software-project-governance/core/manifest.md` — `version` 字段
+6. `skills/software-project-governance/core/manifest.json` — `version` 字段（canonical source of truth）
 
-`verify_workflow.py` 的 snippet 检查会自动验证这 5 个文件的版本号一致性。
+`verify_workflow.py` 的 snippet 检查会自动验证这些文件的版本号一致性。
 
 ## 废弃通知期
 

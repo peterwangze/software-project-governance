@@ -2,6 +2,30 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.20.0] — 2026-05-02
+
+### 0.20.0 — 声明式清理机制
+
+清理命令从硬编码冗余列表改为 canonical manifest + 结构 diff，每次目录结构调整后清理命令自动生效。
+
+- **CLEANUP-001**: 创建 `core/manifest.json`——v0.19.0 完整目录结构声明（product + repo_only + exclude）
+- **CLEANUP-002**: 新增 `infra/cleanup.py`——声明式 diff 清理脚本（支持 --dry-run/--json）
+- **CLEANUP-002**: 重写 `commands/governance-cleanup.md`——基于 manifest.json 的声明式清理流程
+- **CLEANUP-003**: `verify_workflow.py` 增强——新增 `check-manifest-consistency` 子命令 + REQUIRED_FILES 从 manifest.json 读取（124 entries）
+- **CLEANUP-004**: Bootstrap 清理逻辑更新——CLAUDE.md + governance-init.md 改用 manifest-based cleanup
+- **CLEANUP-005**: 文档纪律更新——manifest.md 简化 + VERSIONING.md 新增 manifest 更新规则
+
+## [0.19.0] — 2026-05-02
+
+### 0.19.0 — 代码仓对齐 Claude Code 官方插件约定
+
+目录结构从 nested 改为 flat：Agent 和 SKILL 文件迁至 plugin root 平铺。
+
+- **AUDIT-097**: 14 Agent 文件从 `skills/software-project-governance/agents/<组>/<角色>/prompt.md` 迁至 `agents/<name>.md`
+- **AUDIT-098**: 25 真实 SKILL 从 `skills/software-project-governance/skills/<name>/` 迁至 `skills/<name>/`，删除 25 stub，git rm 清理旧目录
+- 11+ 文件路径引用更新（verify_workflow.py 27 处、CLAUDE.md、governance-init/cleanup 等）
+- 版本 bump 0.18.0→0.19.0（7 文件）
+
 ## [0.10.0] — 2026-05-01
 
 ### 0.10.0 正式发布——全 8 角色 Agent Team

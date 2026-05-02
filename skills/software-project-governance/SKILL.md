@@ -1,6 +1,6 @@
 ---
 name: software-project-governance
-version: 0.22.1
+version: 0.23.0
 description: 软件项目治理工作流入口——加载后主 agent 即 Coordinator（老周），直接协调角色 Agent 完成工作，无跳转
 ---
 

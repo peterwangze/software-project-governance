@@ -2,6 +2,30 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.23.0] — 2026-05-02
+
+### 0.23.0 — 测试体系 + CI
+
+建立适配 skill/workflow 项目的测试体系：36 个单元测试 + e2e 测试 + GitHub Actions CI pipeline。
+
+- **SYSGAP-015**: 本项目测试类型对应定义（stage-testing/SKILL.md）
+- **SYSGAP-016**: verify_workflow.py 单元测试（23 个用例，6 个测试类）
+- **SYSGAP-017**: e2e 测试项目（13 个用例，5 个测试类）
+- **SYSGAP-018**: GitHub Actions CI pipeline（6 步自动检查）
+- **SYSGAP-019**: 缺陷驱动测试积累（stage-maintenance/SKILL.md）
+- **SYSGAP-020**: 版本一致性增强（CHANGELOG + plan-tracker 版本检查）
+
+## [0.22.1] — 2026-05-02
+
+### 0.22.1 — 检查器解析缺陷修复
+
+修复 verify_workflow.py 3 个解析缺陷：sequential ID 检查器（plan-tracker 任务表解析修复，orphan 降为 INFO）、结构有效性检查（代码块过滤 + exclude→exclude_from_cleanup）、交叉引用检查（代码块/内联代码过滤）。Issue count: 1304→633 (-51%)。
+
+- **FIX-021**: DEC-046 缺失占位补充
+- **FIX-022**: plan-tracker 任务表头补"状态"列
+- **FIX-023**: Sequential ID 检查修复
+- **FIX-024**: 交叉引用/结构有效性检查修复
+
 ## [0.22.0] — 2026-05-02
 
 ### 0.22.0 — 检查体系升级

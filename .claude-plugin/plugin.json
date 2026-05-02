@@ -1,6 +1,6 @@
 {
   "name": "software-project-governance",
-  "version": "0.22.1",
+  "version": "0.23.0",
   "description": "Software Project Governance Workflow - Automate process management so users focus on thinking, not process. Covers 11 project stages with gate checks, evidence tracking, and enterprise-grade practices.",
   "author": {
     "name": "peterwangze"

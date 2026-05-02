@@ -1,0 +1,27 @@
+name: Governance CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify workflow integrity
+        run: python skills/software-project-governance/infra/verify_workflow.py
+      - name: Verify governance health
+        run: python skills/software-project-governance/infra/verify_workflow.py check-governance
+      - name: Verify manifest consistency
+        run: python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency
+      - name: Run unit tests
+        run: python -m pytest skills/software-project-governance/infra/tests/ -v
+      - name: Verify cross-references
+        run: python skills/software-project-governance/infra/verify_workflow.py check-cross-references

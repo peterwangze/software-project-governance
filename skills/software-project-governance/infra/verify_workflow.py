@@ -577,16 +577,16 @@ REQUIRED_SNIPPETS = {
         "## [0.5.0]",
     ],
     ROOT / ".claude-plugin/plugin.json": [
-        "0.22.1",
+        "0.23.0",
     ],
     ROOT / ".claude-plugin/marketplace.json": [
-        "0.22.1",
+        "0.23.0",
     ],
     ROOT / ".codex-plugin/plugin.json": [
-        "0.22.1",
+        "0.23.0",
     ],
     ROOT / "skills/software-project-governance/core/manifest.json": [
-        "0.22.1",
+        "0.23.0",
     ],
 }
 
@@ -1540,20 +1540,27 @@ def check_tier_audit_completeness():
 
 
 def check_version_consistency():
-    """Check that all 5 version declaration files agree on the same version.
+    """Check version consistency across all declaration locations (SYSGAP-020).
 
     Source of truth: skills/software-project-governance/SKILL.md frontmatter.
-    Other files that must match:
-      - skills/software-project-governance/core/manifest.md
-      - .claude-plugin/plugin.json
-      - .claude-plugin/marketplace.json
-      - .codex-plugin/plugin.json
+
+    Checks performed:
+      1. Version declaration files (manifest.md, manifest.json, plugin.json x2,
+         marketplace.json, codex plugin.json) all match SKILL.md version.
+      2. verify_workflow.py hardcoded snippet versions match SKILL.md.
+      3. CHANGELOG.md latest entry version matches SKILL.md.          (FAIL)
+      4. plan-tracker.md workflow version matches SKILL.md.          (WARN)
+
+    Returns: list of issue strings. Items prefixed with [WARN] indicate
+    non-blocking drift (e.g., local plan-tracker lagging behind plugin version).
+    Items prefixed with [FAIL] or [MISMATCH] are hard failures.
     """
     import json
 
     VERSION_FILES = {
         "SKILL.md (source of truth)": ROOT / "skills/software-project-governance/SKILL.md",
         "manifest.md": ROOT / "skills/software-project-governance/core/manifest.md",
+        "manifest.json": ROOT / "skills/software-project-governance/core/manifest.json",
         ".claude-plugin/plugin.json": ROOT / ".claude-plugin/plugin.json",
         ".claude-plugin/marketplace.json": ROOT / ".claude-plugin/marketplace.json",
         ".codex-plugin/plugin.json": ROOT / ".codex-plugin/plugin.json",
@@ -1564,7 +1571,7 @@ def check_version_consistency():
 
     for label, path in VERSION_FILES.items():
         if not path.exists():
-            issues.append(f"[MISSING] {label}: {path} not found")
+            issues.append(f"[FAIL] {label}: {path} not found")
             continue
 
         content = path.read_text(encoding="utf-8")
@@ -1579,7 +1586,7 @@ def check_version_consistency():
                 else:
                     ver = "NOT FOUND"
             except json.JSONDecodeError:
-                issues.append(f"[ERROR] {label}: invalid JSON")
+                issues.append(f"[FAIL] {label}: invalid JSON")
                 continue
         else:
             # Markdown files: look for version in frontmatter or inline
@@ -1591,19 +1598,77 @@ def check_version_consistency():
 
         versions[label] = ver
 
-    # Check consistency
+    # Determine source version
     source_version = versions.get("SKILL.md (source of truth)")
-    if not source_version:
-        issues.append("[ERROR] Cannot determine source version from SKILL.md")
-        return issues
+    if not source_version or source_version == "NOT FOUND":
+        issues.append("[FAIL] Cannot determine source version from SKILL.md")
+        # Attempt fallback: extract any semver from SKILL.md content
+        skill_path = ROOT / "skills/software-project-governance/SKILL.md"
+        if skill_path.exists():
+            skill_text = skill_path.read_text(encoding="utf-8")
+            fallback = re.search(r'(\d+\.\d+\.\d+)', skill_text)
+            if fallback:
+                source_version = fallback.group(1)
+        if not source_version:
+            return issues
 
+    # Check file consistency
     for label, ver in versions.items():
         if label == "SKILL.md (source of truth)":
             continue
         if ver != source_version:
             issues.append(
-                f"[MISMATCH] {label}: version={ver}, expected={source_version}"
+                f"[FAIL] {label}: version={ver}, expected={source_version}"
             )
+
+    # ── Check verify_workflow.py snippet versions ──
+    # The REQUIRED_SNIPPETS dict in this file hardcodes version strings
+    # for plugin.json, marketplace.json, codex plugin.json, and manifest.json.
+    # These must match the source of truth.
+    snippet_self_path = ROOT / "skills/software-project-governance/infra/verify_workflow.py"
+    snippet_self_content = snippet_self_path.read_text(encoding="utf-8")
+    # Match only bare quoted version strings like "0.23.0" (excludes
+    # CHANGELOG entries like "## [0.7.1]" which use a different format)
+    snippet_versions = set(re.findall(r'"(\d+\.\d+\.\d+)"', snippet_self_content))
+    for sv in snippet_versions:
+        if sv != source_version:
+            issues.append(
+                f"[FAIL] verify_workflow.py snippet: hardcoded version={sv}, expected={source_version}"
+            )
+            break  # One mismatch is enough to signal the issue
+
+    # ── Check CHANGELOG latest entry ──
+    changelog_path = ROOT / "project/CHANGELOG.md"
+    if changelog_path.exists():
+        changelog_content = changelog_path.read_text(encoding="utf-8")
+        # Extract first ## [X.Y.Z] entry (latest version)
+        changelog_match = re.search(r'##\s*\[(\d+\.\d+\.\d+)\]', changelog_content)
+        if changelog_match:
+            changelog_version = changelog_match.group(1)
+            if changelog_version != source_version:
+                issues.append(
+                    f"[FAIL] CHANGELOG.md latest entry: version=[{changelog_version}], expected=[{source_version}]"
+                )
+        else:
+            issues.append("[FAIL] CHANGELOG.md: no version entry found (expected ## [X.Y.Z])")
+    else:
+        issues.append("[FAIL] CHANGELOG.md: file not found")
+
+    # ── Check plan-tracker workflow version (WARN only) ──
+    plan_tracker_path = ROOT / ".governance/plan-tracker.md"
+    if plan_tracker_path.exists():
+        plan_content = plan_tracker_path.read_text(encoding="utf-8")
+        # Match: **工作流版本**: X.Y.Z
+        pt_match = re.search(r'工作流版本[**:\s]+(\d+\.\d+\.\d+)', plan_content)
+        if pt_match:
+            pt_version = pt_match.group(1)
+            if pt_version != source_version:
+                # WARN — plan-tracker is a local file, may lag behind plugin version
+                issues.append(
+                    f"[WARN] plan-tracker.md 工作流版本={pt_version}, expected={source_version} "
+                    f"(plan-tracker is local, may lag — not a blocker)"
+                )
+        # Missing version field or missing file: not an error (CI edge case)
 
     return issues
 
@@ -1801,11 +1866,20 @@ def cmd_verify(args):
     file_failures = check_files()
     snippet_failures = check_snippets()
     version_failures = check_version_consistency()
-    failures = file_failures + snippet_failures + version_failures
+    all_items = file_failures + snippet_failures + version_failures
 
-    if failures:
+    # Separate WARN (non-blocking drift) from FAIL (hard gate)
+    fail_items = [f for f in all_items if not f.startswith("[WARN]")]
+    warn_items = [f for f in all_items if f.startswith("[WARN]")]
+
+    if warn_items:
+        print("\n== Warnings (non-blocking) ==")
+        for w in warn_items:
+            print(f"  - {w}")
+
+    if fail_items:
         print("\n== Verification Result: FAILED ==")
-        for failure in failures:
+        for failure in fail_items:
             print(f"  - {failure}")
         sys.exit(1)
 
@@ -3308,18 +3382,27 @@ def _check_plan_has_priority(priority="P0"):
 
 
 def _check_version_consistency_heuristic():
-    """Lightweight version consistency check for G11 auto-judgment."""
+    """Lightweight version consistency check for G11 auto-judgment (SYSGAP-020 enhanced).
+
+    Checks: SKILL.md frontmatter version must appear consistently in all
+    version declaration files (8 positions), CHANGELOG latest entry,
+    and verify_workflow.py hardcoded snippets.
+    """
     try:
         skill_content = (ROOT / "skills/software-project-governance/SKILL.md").read_text(encoding="utf-8")
         m = re.search(r'version[:\*]+\s*([\d.]+)', skill_content)
         if not m:
             return "NEEDS_HUMAN", "无法从 SKILL.md 提取版本号"
         skill_version = m.group(1)
+
+        # Version declaration files
         version_files = [
+            "skills/software-project-governance/core/manifest.md",
+            "skills/software-project-governance/core/manifest.json",
             ".claude-plugin/plugin.json",
             ".claude-plugin/marketplace.json",
             ".codex-plugin/plugin.json",
-            "skills/software-project-governance/core/manifest.md",
+            "skills/software-project-governance/infra/verify_workflow.py",
         ]
         for vf in version_files:
             vf_path = ROOT / vf
@@ -3327,7 +3410,16 @@ def _check_version_consistency_heuristic():
                 vf_content = vf_path.read_text(encoding="utf-8")
                 if skill_version not in vf_content:
                     return "FAIL", f"{vf} 版本与 SKILL.md ({skill_version}) 不一致"
-        return "PASS", f"版本 {skill_version} 在 5 个声明文件中一致"
+
+        # CHANGELOG latest entry
+        changelog_path = ROOT / "project/CHANGELOG.md"
+        if changelog_path.exists():
+            changelog_content = changelog_path.read_text(encoding="utf-8")
+            cl_match = re.search(r'##\s*\[([\d.]+)\]', changelog_content)
+            if cl_match and cl_match.group(1) != skill_version:
+                return "FAIL", f"CHANGELOG.md 最新版本 [{cl_match.group(1)}] 与 SKILL.md ({skill_version}) 不一致"
+
+        return "PASS", f"版本 {skill_version} 在 {len(version_files)} 个声明文件中一致"
     except Exception as e:
         return "NEEDS_HUMAN", f"版本检查异常: {e}"
 

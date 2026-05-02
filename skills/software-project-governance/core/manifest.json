@@ -1,0 +1,100 @@
+{
+  "$schema": "https://example.com/manifest-schema-v1.json",
+  "workflow": "software-project-governance",
+  "version": "0.19.0",
+  "description": "Canonical file manifest. All entries define files/directories/patterns that SHOULD exist after plugin installation or repo checkout. The single source of truth for cleanup and verification.",
+  "source_of_truth": true,
+
+  "root_entries": {
+    "files": [
+      "README.md",
+      "CLAUDE.md",
+      ".gitignore"
+    ],
+    "directories": []
+  },
+
+  "product": {
+    "description": "Files shipped to end users via plugin installation.",
+    "entries": [
+      { "path": "skills/software-project-governance/SKILL.md", "type": "file" },
+      { "path": "skills/software-project-governance/core/", "type": "dir" },
+      { "path": "skills/software-project-governance/core/templates/", "type": "dir" },
+      { "path": "skills/software-project-governance/core/protocol/", "type": "dir" },
+      { "path": "skills/software-project-governance/infra/", "type": "dir" },
+      { "path": "skills/software-project-governance/infra/hooks/", "type": "dir" },
+      { "path": "skills/software-project-governance/infra/TOOLS.md", "type": "file" },
+      { "path": "skills/software-project-governance/infra/verify_workflow.py", "type": "file" },
+      { "path": "skills/software-project-governance/infra/verify-e2e.sh", "type": "file" },
+      { "path": "skills/software-project-governance/references/", "type": "dir" },
+      { "path": "agents/", "type": "dir" },
+      { "path": "commands/", "type": "dir" },
+      { "path": "adapters/", "type": "dir" },
+      { "path": ".claude-plugin/", "type": "dir" },
+      { "path": ".codex-plugin/", "type": "dir" },
+      { "path": ".agents/", "type": "dir" }
+    ],
+    "glob_patterns": [
+      "skills/software-project-governance/core/**/*.md",
+      "skills/software-project-governance/references/**/*.md",
+      "skills/software-project-governance/infra/hooks/*",
+      "skills/stage-*/SKILL.md",
+      "skills/code-review/SKILL.md",
+      "skills/design-review/SKILL.md",
+      "skills/main-workflow/SKILL.md",
+      "skills/okr/SKILL.md",
+      "skills/pr-faq/SKILL.md",
+      "skills/release-checklist/SKILL.md",
+      "skills/release-review/SKILL.md",
+      "skills/requirement-clarification/SKILL.md",
+      "skills/requirement-review/SKILL.md",
+      "skills/retro-meeting/SKILL.md",
+      "skills/retro-review/SKILL.md",
+      "skills/six-pager/SKILL.md",
+      "skills/tech-review/SKILL.md",
+      "skills/test-review/SKILL.md",
+      "agents/*.md",
+      "commands/*.md",
+      "adapters/*/README.md",
+      "adapters/*/adapter-manifest.json",
+      "adapters/*/launch.py",
+      ".claude-plugin/*.json",
+      ".codex-plugin/*.json",
+      ".agents/plugins/*.json"
+    ]
+  },
+
+  "repo_only": {
+    "description": "Files that exist only in the development repository, NOT shipped to end users via plugin installation.",
+    "entries": [
+      { "path": "project/", "type": "dir" },
+      { "path": ".governance/", "type": "dir" },
+      { "path": ".git/", "type": "dir" },
+      { "path": ".claude/", "type": "dir" },
+      { "path": "docs/", "type": "dir" }
+    ],
+    "glob_patterns": [
+      "project/**/*.md",
+      "project/**/*.yml",
+      "project/**/*.json",
+      ".governance/*.md",
+      "docs/**/*.md"
+    ]
+  },
+
+  "exclude_from_cleanup": {
+    "description": "Paths NEVER considered redundant, even if not in the manifest above. These are user-generated or external.",
+    "entries": [
+      ".git/",
+      "node_modules/",
+      "__pycache__/",
+      "*.pyc",
+      ".env",
+      ".env.*",
+      "*.log"
+    ],
+    "user_data_dirs": [
+      ".governance/"
+    ]
+  }
+}

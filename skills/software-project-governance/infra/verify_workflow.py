@@ -591,18 +591,241 @@ REQUIRED_SNIPPETS = {
 }
 
 
+# ── Manifest-based REQUIRED_FILES builder ────────────────────────
+
+def _path_to_label(relative_path_str):
+    """Generate a human-readable label from a relative path."""
+    import pathlib as _pl
+    path = _pl.PurePosixPath(relative_path_str.replace("\\", "/"))
+    parts = path.parts
+    filename = path.stem
+
+    if path.name == "SKILL.md":
+        if len(parts) >= 2:
+            return f"Skill: {parts[-2]}"
+    if path.name == "README.md":
+        if len(parts) >= 2:
+            return f"Readme: {parts[-2]}"
+    if path.name == "plugin.json":
+        if len(parts) >= 3:
+            return f"Plugin JSON: {parts[-3]}/{parts[-2]}"
+    if path.name == "marketplace.json":
+        if len(parts) >= 3:
+            return f"Marketplace JSON: {parts[-3]}/{parts[-2]}"
+    if path.name.endswith(".json"):
+        if len(parts) >= 3:
+            return f"{parts[-2]}/{path.name}"
+
+    label = filename.replace("-", " ").replace("_", " ").title()
+    if len(parts) >= 3:
+        return f"{parts[-2]}/{label}"
+    return label
+
+
+def build_required_files_from_manifest(manifest_path=None):
+    """Build REQUIRED_FILES-equivalent dict from manifest.json.
+
+    Expands product + repo_only entries and glob_patterns into a
+    {label: Path} mapping.  Returns None when manifest.json is not
+    available or cannot be parsed — the caller should fall back to
+    the hard-coded builtin dicts.
+    """
+    import json as _json
+
+    if manifest_path is None:
+        manifest_path = ROOT / "skills/software-project-governance/core/manifest.json"
+
+    if not manifest_path.is_file():
+        return None
+
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = _json.load(f)
+    except (_json.JSONDecodeError, KeyError):
+        return None
+
+    result = {}
+    seen_labels = set()
+
+    def _add(relpath_str, label=None):
+        nonlocal result, seen_labels
+        if label is None:
+            label = _path_to_label(relpath_str)
+        # De-duplicate: append path suffix if label already used
+        if label in seen_labels:
+            label = f"{label} ({relpath_str})"
+        seen_labels.add(label)
+        result[label] = ROOT / relpath_str
+
+    # root_entries
+    root_entries = manifest.get("root_entries", {})
+    for f in root_entries.get("files", []):
+        _add(f)
+
+    for section_name in ("product", "repo_only"):
+        section = manifest.get(section_name, {})
+        entries = section.get("entries", [])
+        glob_patterns = section.get("glob_patterns", [])
+
+        for entry in entries:
+            if entry.get("type") == "file":
+                _add(entry["path"])
+
+        for pattern in glob_patterns:
+            for rp in sorted(ROOT.glob(pattern)):
+                if rp.is_file():
+                    rel = str(rp.relative_to(ROOT)).replace("\\", "/")
+                    _add(rel)
+
+    if result:
+        print(f"[INFO] REQUIRED_FILES loaded from manifest.json ({len(result)} entries)")
+    return result
+
+
+def expand_manifest_to_canonical_set(manifest_path=None):
+    """Expand manifest.json entries + glob_patterns into a canonical
+    set of relative-paths-as-strings.
+
+    Includes product *and* repo_only sections because this function
+    runs against the development repository, not a user install.
+    """
+    import json as _json
+
+    if manifest_path is None:
+        manifest_path = ROOT / "skills/software-project-governance/core/manifest.json"
+
+    if not manifest_path.is_file():
+        return None
+
+    with open(manifest_path, "r", encoding="utf-8") as f:
+        manifest = _json.load(f)
+
+    canonical = set()
+
+    # root_entries
+    root_entries = manifest.get("root_entries", {})
+    for f in root_entries.get("files", []):
+        canonical.add(f)
+    for d in root_entries.get("directories", []):
+        canonical.add(d.rstrip("/") + "/")
+
+    for section_name in ("product", "repo_only"):
+        section = manifest.get(section_name, {})
+        entries = section.get("entries", [])
+        glob_patterns = section.get("glob_patterns", [])
+
+        for entry in entries:
+            p = entry["path"]
+            if entry.get("type") == "file":
+                canonical.add(p)
+            elif entry.get("type") == "dir":
+                canonical.add(p.rstrip("/") + "/")
+
+        for pattern in glob_patterns:
+            for rp in ROOT.glob(pattern):
+                if rp.is_file():
+                    rel = str(rp.relative_to(ROOT)).replace("\\", "/")
+                    canonical.add(rel)
+
+    return canonical
+
+
+def scan_actual_files(exclude_patterns=None):
+    """Scan project root for all actual files, returning a set of
+    relative-paths-as-strings.
+
+    Directories matching the exclude set are skipped wholesale.
+    """
+    if exclude_patterns is None:
+        exclude_patterns = {
+            ".git", "node_modules", "__pycache__",
+        }
+
+    actual = set()
+    for f in ROOT.rglob("*"):
+        if not f.is_file():
+            continue
+        parts = f.relative_to(ROOT).parts
+        skip = False
+        for part in parts:
+            if part in exclude_patterns:
+                skip = True
+                break
+            if part.startswith("__pycache__"):
+                skip = True
+                break
+        if skip:
+            continue
+        if f.suffix in (".pyc",):
+            continue
+        rel = str(f.relative_to(ROOT)).replace("\\", "/")
+        actual.add(rel)
+    return actual
+
+
+def check_manifest_consistency(manifest_path=None):
+    """Compare manifest.json canonical set against actual filesystem.
+
+    Returns: dict with 'missing', 'untracked', 'pass' keys.
+    """
+    canonical = expand_manifest_to_canonical_set(manifest_path)
+    if canonical is None:
+        return {
+            "missing": [],
+            "untracked": [],
+            "pass": None,
+            "error": "manifest.json not found or unreadable",
+        }
+
+    actual = scan_actual_files()
+
+    # For canonical dir entries, we only check the dir exists (not the files inside)
+    canonical_dirs = {p for p in canonical if p.endswith("/")}
+    canonical_files = {p for p in canonical if not p.endswith("/")}
+
+    missing = sorted(canonical_files - actual)
+    # Untracked: files that exist but are not in canon (excluding well-known patterns)
+    untracked = sorted(actual - canonical_files)
+
+    # Filter out obviously non-manifest content from untracked
+    untracked_filtered = []
+    for u in untracked:
+        # Skip files inside directories that are listed as canonical dirs
+        covered_by_dir = any(u.startswith(d) for d in canonical_dirs)
+        if covered_by_dir:
+            continue
+        untracked_filtered.append(u)
+
+    return {
+        "missing": missing,
+        "untracked": untracked_filtered,
+        "pass": len(missing) == 0 and len(untracked_filtered) == 0,
+        "canonical_count": len(canonical_files),
+        "actual_count": len(actual),
+    }
+
+
 # ── Existing verification functions ──────────────────────────────
 
 def check_files():
     failures = []
-    for label, path in REQUIRED_FILES.items():
+
+    # Attempt manifest.json first; fall back to builtin hard-coded dicts
+    required = build_required_files_from_manifest()
+    if required is None:
+        required = REQUIRED_FILES
+        optional = OPTIONAL_PROJECTION_FILES
+    else:
+        optional = {}  # manifest covers everything
+
+    for label, path in required.items():
         if path.is_file():
             print(f"[OK] file exists: {label} -> {path.relative_to(ROOT)}")
         else:
             failures.append(f"missing required file: {label} -> {path.relative_to(ROOT)}")
             print(f"[FAIL] missing required file: {label} -> {path.relative_to(ROOT)}")
 
-    for label, path in OPTIONAL_PROJECTION_FILES.items():
+    for label, path in optional.items():
         if path.is_file():
             print(f"[OK] optional projection exists: {label} -> {path.relative_to(ROOT)}")
         else:
@@ -2147,6 +2370,32 @@ def cmd_check_governance(args):
     print(f"│  Total M5 checks: {m5_result['total_checks']}")
     print("└──────────────────────────────────────────────────────┘")
 
+    # ── 11. Manifest consistency ──
+    print("\n┌─ Check 11: Manifest Consistency ─────────────────────┐")
+    mc_result = check_manifest_consistency()
+    if mc_result.get("error"):
+        print(f"│  [INFO] Skipped: {mc_result.get('error')}")
+    else:
+        mc_missing = mc_result["missing"]
+        mc_untracked = mc_result["untracked"]
+        print(f"│  Canonical files in manifest: {mc_result['canonical_count']}")
+        print(f"│  Actual files on disk:       {mc_result['actual_count']}")
+        if mc_missing:
+            all_issues += len(mc_missing)
+            print(f"│  [WARN] {len(mc_missing)} file(s) in manifest but missing on disk:")
+            for m in mc_missing:
+                print(f"│    - {m}")
+        else:
+            print(f"│  [PASS] No missing files (all manifest entries exist on disk).")
+        if mc_untracked:
+            all_issues += len(mc_untracked)
+            print(f"│  [WARN] {len(mc_untracked)} file(s) on disk but not in manifest:")
+            for u in mc_untracked:
+                print(f"│    - {u}")
+        else:
+            print(f"│  [PASS] No untracked files (all files covered by manifest).")
+    print("└──────────────────────────────────────────────────────┘")
+
     # ── Summary ──
     print(f"\n┌─ Governance Health Summary ──────────────────────────┐")
     if all_issues == 0:
@@ -2185,7 +2434,10 @@ def _check_snippet_in_file(relative_path, snippet, label):
 
 def _check_all_required_files_exist():
     """Silently check if all required files exist (for auto-judgment)."""
-    missing = [label for label, path in REQUIRED_FILES.items() if not path.is_file()]
+    required = build_required_files_from_manifest()
+    if required is None:
+        required = REQUIRED_FILES
+    missing = [label for label, path in required.items() if not path.is_file()]
     if not missing:
         return "PASS", "所有必需文件存在 — 仓库结构符合约定"
     return "FAIL", f"缺失 {len(missing)} 个必需文件: {', '.join(missing[:3])}..."
@@ -2747,6 +2999,41 @@ def cmd_e2e_check(_args):
     print("All E2E checks passed. User experience intact.")
 
 
+def cmd_check_manifest_consistency(args):
+    """Compare manifest.json canonical set against actual filesystem."""
+    result = check_manifest_consistency()
+
+    print()
+    if result.get("error"):
+        print(f"[ERROR] {result['error']}")
+        return
+
+    print("=== Manifest Consistency Check ===")
+    print(f"  Canonical files:  {result['canonical_count']}")
+    print(f"  Actual files:     {result['actual_count']}")
+
+    missing = result["missing"]
+    untracked = result["untracked"]
+
+    if missing:
+        print(f"\n  [MISSING] {len(missing)} file(s) declared in manifest but absent:")
+        for m in missing:
+            print(f"    - {m}")
+
+    if untracked:
+        print(f"\n  [UNTRACKED] {len(untracked)} file(s) present on disk but not in manifest:")
+        for u in untracked:
+            print(f"    - {u}")
+
+    if result["pass"]:
+        print(f"\n  [PASS] Manifest and filesystem are consistent.")
+    else:
+        print(f"\n  [FAIL] Manifest-filesystem mismatch detected.")
+
+    if args.fail_on_issues and not result["pass"]:
+        sys.exit(1)
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="verify_workflow",
@@ -2785,6 +3072,12 @@ def main():
     check_p.add_argument("--fail-on-issues", action="store_true",
                          help="Exit with non-zero code if issues found")
 
+    # check-manifest-consistency
+    cmc_p = subparsers.add_parser("check-manifest-consistency",
+                                   help="Compare manifest.json canonical set against actual filesystem")
+    cmc_p.add_argument("--fail-on-issues", action="store_true",
+                        help="Exit with non-zero code if mismatch detected")
+
     # check-plugin-freshness
     subparsers.add_parser("check-plugin-freshness", help="Check if installed plugin is up to date with source")
 
@@ -2802,6 +3095,7 @@ def main():
         "stage": cmd_stage,
         "stages": cmd_stages,
         "check-governance": cmd_check_governance,
+        "check-manifest-consistency": cmd_check_manifest_consistency,
         "check-plugin-freshness": cmd_check_plugin_freshness,
         "e2e-check": cmd_e2e_check,
     }

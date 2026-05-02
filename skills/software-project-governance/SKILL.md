@@ -1,6 +1,6 @@
 ---
 name: software-project-governance
-version: 0.21.0
+version: 0.22.0
 description: 软件项目治理工作流入口——加载后主 agent 即 Coordinator（老周），直接协调角色 Agent 完成工作，无跳转
 ---
 
@@ -156,6 +156,7 @@ Coordinator 铁律第 1 条"不直接修改产品代码"的具体判定标准。
 | 部署/运维 | DevOps | 运维组 | 定目标→追过程→拿结果闭环 |
 | 发布管理 | Release | 运维组 | 专注极致口碑快 |
 | 技术债务 | Maintenance | 维护组 | 做难而正确的事 + 长期有耐心 |
+| 影响分析（P0/跨层变更） | Analyst + Architect | 设计组 | 变更前影响分析（checklist-driven）——change-impact-checklist Step 1-5 |
 | 任务模糊 | Coordinator 自行处理 | 管理组 | 通用闭环（默认） |
 
 ## Sub-agent 调度

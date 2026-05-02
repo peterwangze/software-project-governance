@@ -2,6 +2,20 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.22.0] — 2026-05-02
+
+### 0.22.0 — 检查体系升级
+
+verify_workflow.py 从"文件存在性检查"升级为"语义一致性检查"——从 11 项扩展到 15 项自动检查。
+
+- **SYSGAP-008**: 交叉引用检查——扫描 51 文件 1012 引用，检测悬空引用+废弃路径+循环引用
+- **SYSGAP-009**: 顺序 ID 检查——DEC/EVD/RISK 编号连续 + 交叉引用完整性
+- **SYSGAP-010**: 结构有效性检查——表格列数一致 + frontmatter 必需字段 + JSON 段完整
+- **SYSGAP-011**: M5 语义检查增强——中英文内联提问模式检测 + 选项列表无 AskUserQuestion 检测
+- **SYSGAP-012**: Commit scope verify——重复 task ID + "顺带"关键词 + bulk commit 检测
+- **SYSGAP-013**: Governance Developer agent（阿治）创建
+- **SYSGAP-014**: 影响分析路由——Agent 分发表新增 Analyst+Architect 行
+
 ## [0.21.0] — 2026-05-02
 
 ### 0.21.0 — 纪律防线

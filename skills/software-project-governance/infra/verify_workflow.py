@@ -577,16 +577,16 @@ REQUIRED_SNIPPETS = {
         "## [0.5.0]",
     ],
     ROOT / ".claude-plugin/plugin.json": [
-        "0.21.0",
+        "0.22.0",
     ],
     ROOT / ".claude-plugin/marketplace.json": [
-        "0.21.0",
+        "0.22.0",
     ],
     ROOT / ".codex-plugin/plugin.json": [
-        "0.21.0",
+        "0.22.0",
     ],
     ROOT / "skills/software-project-governance/core/manifest.json": [
-        "0.21.0",
+        "0.22.0",
     ],
 }
 
@@ -2010,43 +2010,123 @@ def cmd_gates(args):
 
 
 def check_m5_compliance():
-    """Check M5 AskUserQuestion compliance — static anti-pattern detection.
+    """Check M5 AskUserQuestion compliance -- static anti-pattern detection (enhanced).
 
     Detects:
-    1. Source file contamination: sub-workflow files containing '询问用户：' patterns
-       that instruct agent to output inline text questions (M5.1 violation)
-    2. Bootstrap coverage: governance-init.md template contains AskUserQuestion rule
-    3. Interaction boundary: interaction-boundary.md exists and references AskUserQuestion
+    1. Inline question patterns in sub-agent-scoped .md files:
+       - Chinese: "要不要", "是否", "确认吗", "需要我", "你想"
+       - English: "Should I", "Do you want"
+       - Search scope: skills/stage-*/, skills/*-review/, commands/ .md files
+       (these are files sub-agents read -- they must not instruct inline text questions)
+    2. Option-list patterns without AskUserQuestion:
+       - Matches (1) / (a) style options + "选择" context, but no "AskUserQuestion"
+       - Detects source files that instruct agents to output choice menus as text
+    3. Bootstrap coverage: governance-init.md template contains AskUserQuestion rule
+    4. Interaction boundary: interaction-boundary.md exists and references AskUserQuestion
+    5. Bootstrap template contains M5 pre-output guard (SELF-CHECK item 4)
 
     This CANNOT detect runtime M5 violations (actual inline questions in conversation).
-    It catches the ROOT CAUSE: source files that teach agents to use inline text.
+    It catches the ROOT CAUSE: source files that teach or allow agents to use inline text.
     """
     issues = []
     skills_dir = ROOT / "skills" / "software-project-governance"
 
-    # Check 1: Anti-pattern in sub-workflow files
-    # Pattern: 询问用户："..." or 询问用户：'...' (direct inline question instruction)
+    # (Cleanup: old Check 1 pattern removed)
     inline_question_pattern = re.compile(r'询问用户[：:]\s*["\u201c]')
-    skills_impl_dir = skills_dir / "skills"
-    if skills_impl_dir.is_dir():
-        for md_file in skills_impl_dir.rglob("*.md"):
-            try:
-                content = md_file.read_text(encoding="utf-8")
-                for i, line in enumerate(content.splitlines(), 1):
-                    if inline_question_pattern.search(line):
-                        # Check it's not already annotated with AskUserQuestion
-                        if "AskUserQuestion" not in line:
-                            rel_path = md_file.relative_to(ROOT)
-                            issues.append({
-                                "type": "m5_anti_pattern",
-                                "file": str(rel_path),
-                                "line": i,
-                                "text": line.strip()[:120],
-                                "severity": "BLOCKING",
-                                "fix": "Change to: MUST 通过 AskUserQuestion 工具询问用户 (M5.1 禁止内联文字问题)"
-                            })
-            except Exception:
-                pass
+    # -- Check 1: Inline question patterns in sub-agent-scoped .md files --
+    import glob as _glob
+    inline_patterns_cn = ["要不要", "是否", "确认吗", "需要我", "你想"]
+    inline_patterns_en = ["Should I", "Do you want"]
+
+    scan_files = []
+    for pattern in ["skills/stage-*/**/*.md", "skills/*-review/**/*.md", "skills/*-review/*.md",
+                     "commands/**/*.md", "commands/*.md"]:
+        for f in _glob.glob(str(ROOT / pattern), recursive=True):
+            scan_files.append(Path(f))
+
+    seen_paths = set()
+    scan_files_dedup = []
+    for f in scan_files:
+        if str(f) not in seen_paths:
+            seen_paths.add(str(f))
+            scan_files_dedup.append(f)
+    scan_files = scan_files_dedup
+
+    for md_file in scan_files:
+        if not md_file.is_file():
+            continue
+        try:
+            content = md_file.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        rel_path = str(md_file.relative_to(ROOT)).replace("\\", "/")
+
+        for i, line in enumerate(content.splitlines(), 1):
+            line_stripped = line.strip()
+            if not line_stripped:
+                continue
+            if "AskUserQuestion" in line:
+                continue
+
+            for kw in inline_patterns_cn:
+                if kw in line_stripped:
+                    if any(guard in line_stripped for guard in ("检测", "禁止", "MUST", "违反")):
+                        continue
+                    issues.append({
+                        "type": "m5_inline_question_cn",
+                        "file": rel_path,
+                        "line": i,
+                        "text": line_stripped[:120],
+                        "severity": "BLOCKING",
+                        "pattern": kw,
+                        "fix": "MUST use AskUserQuestion tool instead of inline text questions (M5.1)"
+                    })
+                    break
+
+            for kw in inline_patterns_en:
+                if kw.lower() in line_stripped.lower():
+                    if any(guard in line_stripped for guard in ("detect", "prohibit", "MUST", "violation")):
+                        continue
+                    issues.append({
+                        "type": "m5_inline_question_en",
+                        "file": rel_path,
+                        "line": i,
+                        "text": line_stripped[:120],
+                        "severity": "WARNING",
+                        "pattern": kw,
+                        "fix": "MUST use AskUserQuestion tool instead of inline text questions (M5.1)"
+                    })
+                    break
+
+    # -- Check 1b: Option-list patterns without AskUserQuestion --
+    option_list_re = re.compile(r'([(][1-9][0-9]*[)]|[(][a-z][)])')
+    for md_file in scan_files:
+        if not md_file.is_file():
+            continue
+        try:
+            content = md_file.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        rel_path = str(md_file.relative_to(ROOT)).replace("\\", "/")
+
+        has_option_list = bool(option_list_re.search(content))
+        has_choice_context = any(kw in content for kw in ("选择", "choose", "select", "选项"))
+        has_askuserquestion = "AskUserQuestion" in content
+
+        if has_option_list and has_choice_context and not has_askuserquestion:
+            for i, line in enumerate(content.splitlines(), 1):
+                if option_list_re.search(line) and any(
+                    kw in line for kw in ("选择", "choose", "select", "选项")
+                ):
+                    issues.append({
+                        "type": "m5_option_list_no_auq",
+                        "file": rel_path,
+                        "line": i,
+                        "text": line.strip()[:120],
+                        "severity": "BLOCKING",
+                        "fix": "Option list detected with choice context but no AskUserQuestion - agent may output inline choice menus (M5 violation)"
+                    })
+                    break
 
     # Check 2: Bootstrap template (governance-init.md) contains AskUserQuestion rule
     bootstrap_template = ROOT / "commands" / "governance-init.md"
@@ -2122,11 +2202,534 @@ def check_m5_compliance():
             "fix": "Create governance-init.md with SELF-CHECK in bootstrap template"
         })
 
-    return {"issues": issues, "total_checks": 4}
+    return {"issues": issues, "total_checks": 5}
+
+
+# ── SYSGAP-008: Cross-Reference Checking ──────────────────────────
+
+def check_cross_references():
+    """Scan .md and .py files for path references, build a reference graph,
+    and detect: (1) dangling references (target file does not exist),
+    (2) deprecated path patterns, (3) circular references (cycle detection).
+
+    Path reference patterns extracted:
+    - Markdown: [text](path), bare `` file.md `` paths, `` `path/to/file` ``
+    - Python: ROOT / "relative/path" format
+    """
+    import collections
+
+    scan_dirs = [
+        "skills/software-project-governance/",
+        "commands/",
+        "agents/",
+    ]
+
+    # Collect all .md files from scan directories
+    md_files = []
+    for d in scan_dirs:
+        p = ROOT / d
+        if p.is_dir():
+            md_files.extend(p.rglob("*.md"))
+
+    # Also include verify_workflow.py itself
+    py_files = [ROOT / "skills/software-project-governance/infra/verify_workflow.py"]
+
+    # Build: dict[source_relpath] -> list of (target_raw, line_num)
+    refs = {}
+
+    for f in md_files + py_files:
+        try:
+            content = f.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        source = str(f.relative_to(ROOT)).replace("\\", "/")
+        refs[source] = []
+
+        for i, line in enumerate(content.split("\n"), 1):
+            if f.suffix == ".py":
+                # Python: ROOT / "relative/path"  pattern
+                for m in re.finditer(r'ROOT\s*/\s*"([^"]+)"', line):
+                    refs[source].append((m.group(1), i))
+            else:
+                # Markdown: [text](path) — skip http/https/#/mailto links
+                for m in re.finditer(r'\[([^\]]*)\]\(([^)]+)\)', line):
+                    target = m.group(2)
+                    if not target.startswith(("http://", "https://", "#", "mailto:")):
+                        refs[source].append((target, i))
+                # Bare .md / .py paths (not inside brackets)
+                for m in re.finditer(r'(?<!["\w/\-])([a-zA-Z0-9_\-/]+\.(?:md|py))(?!\w)', line):
+                    refs[source].append((m.group(1), i))
+                # Backtick-quoted paths: `path/to/file.md`
+                for m in re.finditer(r'`([^`]+\.(?:md|py))`', line):
+                    refs[source].append((m.group(1), i))
+
+    # ── Detect dangling references ──
+    dangling = []
+    for source, targets in refs.items():
+        source_dir = (ROOT / source).parent
+        for target, line_num in targets:
+            # Resolve target relative to the source file's directory
+            try:
+                resolved = (source_dir / target).resolve()
+                resolved.relative_to(ROOT)
+            except (ValueError, OSError):
+                continue  # outside project or unresolvable
+            if not resolved.exists():
+                dangling.append({
+                    "source": source,
+                    "line": line_num,
+                    "target": target,
+                })
+
+    # ── Detect deprecated path patterns ──
+    deprecated_patterns = [
+        "skills/software-project-governance/skills/",
+        "skills/software-project-governance/agents/",
+    ]
+    deprecated = []
+    for source, targets in refs.items():
+        for target, line_num in targets:
+            for dp in deprecated_patterns:
+                if dp in target:
+                    deprecated.append({
+                        "source": source,
+                        "line": line_num,
+                        "target": target,
+                        "deprecated_pattern": dp,
+                    })
+
+    # ── Detect circular references (DFS on directed graph) ──
+    graph = collections.defaultdict(list)
+    for source, targets in refs.items():
+        source_dir = (ROOT / source).parent
+        for target, _ in targets:
+            try:
+                resolved = (source_dir / target).resolve()
+                rel_target = str(resolved.relative_to(ROOT)).replace("\\", "/")
+            except (ValueError, OSError):
+                continue
+            if rel_target in refs:  # only edges within scanned scope
+                graph[source].append(rel_target)
+
+    cycles = []
+    seen_nodes = set()
+    WHITE, GRAY, BLACK = 0, 1, 2
+
+    def _dfs_cycle(node, colors, parent_map, stack):
+        colors[node] = GRAY
+        stack.append(node)
+        for neighbor in graph.get(node, []):
+            ncolors_key = neighbor
+            if colors.get(ncolors_key, WHITE) == WHITE:
+                parent_map[neighbor] = node
+                _dfs_cycle(neighbor, colors, parent_map, stack)
+            elif colors.get(ncolors_key, WHITE) == GRAY:
+                # Found a cycle — extract the subsequence
+                try:
+                    idx = stack.index(neighbor)
+                    cycle = stack[idx:] + [neighbor]
+                    cycles.append(cycle)
+                except ValueError:
+                    pass
+        colors[node] = BLACK
+        stack.pop()
+
+    colors_map = {}
+    for node in list(graph):
+        if colors_map.get(node, WHITE) == WHITE:
+            _dfs_cycle(node, colors_map, {}, [])
+
+    # Deduplicate cycles (same set of nodes in different rotations)
+    unique_cycles = []
+    seen_cycles = set()
+    for cycle in cycles:
+        key = tuple(sorted(cycle))
+        if key not in seen_cycles:
+            seen_cycles.add(key)
+            unique_cycles.append(cycle)
+
+    return {
+        "dangling": dangling,
+        "deprecated": deprecated,
+        "cycles": unique_cycles,
+        "total_files_scanned": len(md_files) + len(py_files),
+        "total_refs": sum(len(t) for t in refs.values()),
+    }
+
+
+# ── SYSGAP-009: Sequential ID Checking ────────────────────────────
+
+def check_sequential_ids():
+    """Verify ID continuity in governance records:
+    1. DEC-XXX: detect numbering gaps starting from 001
+    2. EVD-XXX: detect numbering gaps
+    3. RISK-XXX: detect numbering gaps
+    4. Cross-reference integrity: task IDs referenced in evidence/decision/risk
+       must exist in plan-tracker
+    5. Completed tasks in plan-tracker must have evidence entries
+    """
+
+    def _extract_ids(file_path, prefix):
+        """Extract sequential IDs with given prefix from a file, return sorted list of ints."""
+        if not file_path.is_file():
+            return []
+        content = file_path.read_text(encoding="utf-8")
+        ids = set()
+        for m in re.finditer(rf"\b{re.escape(prefix)}(\d+)\b", content):
+            ids.add(int(m.group(1)))
+        return sorted(ids)
+
+    def _find_gaps(sorted_ids, prefix):
+        """Find gaps in a sorted list of integer IDs. Returns list of missing numbers."""
+        if not sorted_ids:
+            return []
+        gaps = []
+        expected = 1  # IDs start at 001
+        for num in sorted_ids:
+            while expected < num:
+                gaps.append(expected)
+                expected += 1
+            expected = num + 1
+        return gaps
+
+    dec_path = ROOT / ".governance/decision-log.md"
+    evd_path = ROOT / ".governance/evidence-log.md"
+    risk_path = ROOT / ".governance/risk-log.md"
+
+    dec_ids = _extract_ids(dec_path, "DEC-")
+    evd_ids = _extract_ids(evd_path, "EVD-")
+    risk_ids = _extract_ids(risk_path, "RISK-")
+
+    dec_gaps = _find_gaps(dec_ids, "DEC-")
+    evd_gaps = _find_gaps(evd_ids, "EVD-")
+    risk_gaps = _find_gaps(risk_ids, "RISK-")
+
+    # Cross-reference: all task IDs in evidence/decision/risk must exist in plan-tracker
+    all_task_ids = set()
+    pt_content = SAMPLE_PATH.read_text(encoding="utf-8") if SAMPLE_PATH.is_file() else ""
+    for line in pt_content.split("\n"):
+        m = re.match(r"\|\s*([A-Z]+-\d+)\s*\|", line.strip())
+        if m:
+            all_task_ids.add(m.group(1))
+
+    # Collect task IDs referenced in evidence-log
+    evd_task_ids = parse_evidence_task_ids()
+
+    # Collect task IDs referenced in decision-log
+    dec_task_ids = set()
+    if dec_path.is_file():
+        dec_content = dec_path.read_text(encoding="utf-8")
+        for m in re.finditer(r"\b([A-Z]+-\d+)\b", dec_content):
+            task_id = m.group(1)
+            if re.match(r"^[A-Z]+-\d+$", task_id) and not task_id.startswith("DEC-"):
+                dec_task_ids.add(task_id)
+
+    # Collect task IDs referenced in risk-log
+    risk_task_ids = set()
+    if risk_path.is_file():
+        risk_content = risk_path.read_text(encoding="utf-8")
+        for m in re.finditer(r"\b([A-Z]+-\d+)\b", risk_content):
+            task_id = m.group(1)
+            if re.match(r"^[A-Z]+-\d+$", task_id) and not task_id.startswith("RISK-"):
+                risk_task_ids.add(task_id)
+
+    orphan_evd = sorted(evd_task_ids - all_task_ids)
+    orphan_dec = sorted(dec_task_ids - all_task_ids - evd_task_ids)  # avoid dup reporting
+    orphan_risk = sorted(risk_task_ids - all_task_ids)
+
+    # Completed tasks without evidence
+    completed = parse_completed_task_ids()
+    missing_evd = sorted(completed - evd_task_ids)
+
+    return {
+        "dec_ids": dec_ids,
+        "evd_ids": evd_ids,
+        "risk_ids": risk_ids,
+        "dec_gaps": dec_gaps,
+        "evd_gaps": evd_gaps,
+        "risk_gaps": risk_gaps,
+        "orphan_evidence_refs": orphan_evd,
+        "orphan_decision_refs": orphan_dec,
+        "orphan_risk_refs": orphan_risk,
+        "completed_missing_evidence": missing_evd,
+    }
+
+
+# ── SYSGAP-010: Structural Validity Checking ─────────────────────
+
+def check_structural_validity():
+    """Validate structural integrity of governance files:
+    1. plan-tracker.md: table column count consistency (every row
+       pipe-count matches header)
+    2. evidence-log.md: every record has consistent column count
+       (10 columns standard)
+    3. decision-log.md: each ADR contains all required fields
+    4. SKILL.md: frontmatter contains required fields (name/version/description)
+    5. manifest.json: product / repo_only / exclude sections all present
+    """
+    import json as _json
+    issues = []
+
+    # ── 1. plan-tracker.md table column consistency ──
+    pt_path = ROOT / ".governance/plan-tracker.md"
+    if pt_path.is_file():
+        pt_content = pt_path.read_text(encoding="utf-8")
+        # Find all markdown tables: contiguous |...| lines after a header row
+        lines = pt_content.split("\n")
+        current_header_cols = None
+        current_header_line = 0
+        for i, line in enumerate(lines, 1):
+            line = line.strip()
+            if not line.startswith("|"):
+                current_header_cols = None
+                continue
+            if "---" in line or ":--" in line:
+                continue  # separator row
+            cols = len(line.split("|")) - 2  # strip outer empty parts
+            if not cols:
+                continue
+
+            # Heuristic: if this looks like a header (next line is separator),
+            # treat it as header
+            is_header = False
+            if i < len(lines):
+                next_line = lines[i].strip()
+                if re.match(r"^\|[\s\-:]+\|", next_line):
+                    is_header = True
+
+            if is_header:
+                current_header_cols = cols
+                current_header_line = i
+                continue
+
+            if current_header_cols is not None and cols != current_header_cols:
+                issues.append({
+                    "type": "table_column_mismatch",
+                    "file": ".governance/plan-tracker.md",
+                    "line": i,
+                    "detail": f"Row has {cols} columns, header (line {current_header_line}) has {current_header_cols}",
+                })
+    else:
+        issues.append({
+            "type": "file_missing",
+            "file": ".governance/plan-tracker.md",
+            "detail": "plan-tracker.md not found",
+        })
+
+    # ── 2. evidence-log.md column count consistency ──
+    evd_path = ROOT / ".governance/evidence-log.md"
+    if evd_path.is_file():
+        evd_content = evd_path.read_text(encoding="utf-8")
+        evd_lines = evd_content.split("\n")
+        standard_cols = None
+        for i, line in enumerate(evd_lines, 1):
+            line = line.strip()
+            if not line.startswith("| EVD-"):
+                continue
+            parts = [p.strip() for p in line.split("|")]
+            cols = len(parts) - 2  # strip leading/trailing empty
+            if standard_cols is None:
+                standard_cols = cols
+            elif cols != standard_cols:
+                evd_id = parts[1] if len(parts) > 1 else "???"
+                issues.append({
+                    "type": "evidence_col_mismatch",
+                    "file": ".governance/evidence-log.md",
+                    "line": i,
+                    "detail": f"{evd_id}: {cols} columns (expected {standard_cols})",
+                })
+    else:
+        issues.append({
+            "type": "file_missing",
+            "file": ".governance/evidence-log.md",
+            "detail": "evidence-log.md not found",
+        })
+
+    # ── 3. decision-log.md ADR required fields ──
+    dec_path = ROOT / ".governance/decision-log.md"
+    required_decision_fields = ["日期", "状态", "决策", "原因"]
+    if dec_path.is_file():
+        dec_content = dec_path.read_text(encoding="utf-8")
+        # Parse ADR sections: each ADR starts with "## DEC-XXX"
+        adr_sections = re.split(r"\n(?=## DEC-)", dec_content)
+        for section in adr_sections:
+            if not section.strip().startswith("## DEC-"):
+                continue
+            adr_id = section.split("\n")[0].replace("##", "").strip()
+            missing = []
+            for field in required_decision_fields:
+                if field not in section:
+                    missing.append(field)
+            if missing:
+                issues.append({
+                    "type": "decision_missing_fields",
+                    "file": ".governance/decision-log.md",
+                    "detail": f"{adr_id}: missing required fields — {', '.join(missing)}",
+                })
+    else:
+        issues.append({
+            "type": "file_missing",
+            "file": ".governance/decision-log.md",
+            "detail": "decision-log.md not found",
+        })
+
+    # ── 4. SKILL.md frontmatter required fields ──
+    skill_path = ROOT / "skills/software-project-governance/SKILL.md"
+    if skill_path.is_file():
+        content = skill_path.read_text(encoding="utf-8")
+        # Extract frontmatter: content between first --- and second ---
+        fm_match = re.match(r"^\s*---\s*\n(.*?)\n\s*---", content, re.DOTALL)
+        if fm_match:
+            fm_text = fm_match.group(1)
+            required_frontmatter = ["name:", "version:", "description:"]
+            missing = []
+            for fm_field in required_frontmatter:
+                if fm_field not in fm_text:
+                    missing.append(fm_field.rstrip(":"))
+            if missing:
+                issues.append({
+                    "type": "skill_frontmatter_missing",
+                    "file": "skills/software-project-governance/SKILL.md",
+                    "detail": f"Frontmatter missing required fields: {', '.join(missing)}",
+                })
+        else:
+            issues.append({
+                "type": "skill_frontmatter_missing",
+                "file": "skills/software-project-governance/SKILL.md",
+                "detail": "No YAML frontmatter found (missing --- delimiters)",
+            })
+
+    # ── 5. manifest.json structure ──
+    manifest_path = ROOT / "skills/software-project-governance/core/manifest.json"
+    if manifest_path.is_file():
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                manifest = _json.load(f)
+            for section in ["product", "repo_only", "exclude"]:
+                if section not in manifest:
+                    issues.append({
+                        "type": "manifest_section_missing",
+                        "file": "skills/software-project-governance/core/manifest.json",
+                        "detail": f"manifest.json is missing '{section}' section",
+                    })
+        except (_json.JSONDecodeError, IOError) as e:
+            issues.append({
+                "type": "manifest_parse_error",
+                "file": "skills/software-project-governance/core/manifest.json",
+                "detail": str(e),
+            })
+    else:
+        issues.append({
+            "type": "file_missing",
+            "file": "skills/software-project-governance/core/manifest.json",
+            "detail": "manifest.json not found",
+        })
+
+    return issues
+
+
+# ── SYSGAP-012: Commit Scope Verification ────────────────────────
+
+def check_commit_scope(limit=20):
+    """Check recent commits for scope discipline violations:
+    1. Each commit's task ID should be unique (unless explicitly marked as
+       multi-task with a shared rationale, e.g. "SYSGAP-002 + SYSGAP-004").
+    2. If commit message contains "顺带" / "also" / "顺便" keywords -> WARN
+    3. Single commit touching > 15 files -> WARN (possible bulk commit)
+    """
+    import subprocess
+
+    try:
+        # Get full commit log with stats
+        result = subprocess.run(
+            ["git", "-C", str(ROOT), "log", f"--format=%H%x00%s", f"-{limit}",
+             "--no-merges"],
+            capture_output=True, text=True, timeout=10, encoding="utf-8",
+            errors="replace",
+        )
+        if result.returncode != 0:
+            return {"error": f"git log failed: {result.stderr}", "issues": []}
+    except FileNotFoundError:
+        return {"error": "git command not found", "issues": []}
+    except Exception as e:
+        return {"error": str(e), "issues": []}
+
+    if not result.stdout:
+        return {"error": "git log returned empty output", "issues": []}
+
+    issues = []
+    task_id_commits = {}    # task_id -> list of commit shas
+    duo_commits = []        # commits with "also"/"顺带"/"顺便"
+
+    lines = result.stdout.strip().split("\n")
+    for line in lines:
+        if not line or "\x00" not in line:
+            continue
+        sha, message = line.split("\x00", 1)
+        sha_short = sha[:7]
+
+        # Extract all task IDs from commit message
+        task_ids = re.findall(r"([A-Z]+-\d+)", message)
+
+        # Check 1: task ID uniqueness across commits
+        for tid in task_ids:
+            task_id_commits.setdefault(tid, []).append(sha_short)
+
+        # Check 2: "顺带"/"also"/"顺便" keywords
+        if re.search(r"顺带|顺便|also\b", message, re.IGNORECASE):
+            duo_commits.append({"sha": sha_short, "message": message[:100]})
+
+        # Check 3: files touched > 15 (use git show --stat)
+        try:
+            stat_result = subprocess.run(
+                ["git", "-C", str(ROOT), "show", "--stat", "--format=", sha],
+                capture_output=True, text=True, timeout=5, encoding="utf-8",
+                errors="replace",
+            )
+            if stat_result.returncode == 0:
+                # Count changed files from --stat output
+                file_count = len([l for l in stat_result.stdout.split("\n")
+                                 if l.strip() and "|" in l and not l.startswith(" ")])
+                if file_count > 15:
+                    issues.append({
+                        "type": "bulk_commit",
+                        "sha": sha_short,
+                        "detail": f"{file_count} files changed in single commit",
+                    })
+        except (subprocess.TimeoutExpired, Exception):
+            pass
+
+    # Dedup check: task IDs appearing in multiple commits
+    for tid, shas in task_id_commits.items():
+        if len(shas) > 1:
+            issues.append({
+                "type": "duplicate_task_id",
+                "detail": f"{tid} appears in {len(shas)} commits: {', '.join(shas)}",
+            })
+
+    # Add duo keyword warnings
+    for duo in duo_commits:
+        issues.append({
+            "type": "side_effect_warning",
+            "sha": duo["sha"],
+            "detail": f"Commit contains 'also/顺带/顺便': {duo['message']}",
+        })
+
+    return {
+        "issues": issues,
+        "total_checked": len(lines),
+        "issue_count": len(issues),
+    }
 
 
 def cmd_check_governance(args):
     """Run governance health checks: evidence completeness, risk staleness, gate consistency."""
+    # Ensure UTF-8 stdout to handle Chinese characters from .md files (Windows GBK workaround)
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+
     all_issues = 0
 
     # ── 1. Evidence completeness ──
@@ -2394,6 +2997,134 @@ def cmd_check_governance(args):
                 print(f"│    - {u}")
         else:
             print(f"│  [PASS] No untracked files (all files covered by manifest).")
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 12. Cross-Reference Checking (SYSGAP-008) ──
+    print("\n┌─ Check 12: Cross-Reference Checking ────────────────┐")
+    xr_result = check_cross_references()
+    print(f"│  Files scanned: {xr_result['total_files_scanned']}")
+    print(f"│  References extracted: {xr_result['total_refs']}")
+    xr_issues = 0
+    if xr_result["dangling"]:
+        xr_issues += len(xr_result["dangling"])
+        all_issues += len(xr_result["dangling"])
+        print(f"│  [WARN] {len(xr_result['dangling'])} dangling reference(s):")
+        for d in xr_result["dangling"][:10]:
+            print(f"│    - {d['source']}:{d['line']} -> {d['target']}")
+        if len(xr_result["dangling"]) > 10:
+            print(f"│    ... and {len(xr_result['dangling']) - 10} more")
+    else:
+        print(f"│  [PASS] No dangling references found.")
+    if xr_result["deprecated"]:
+        xr_issues += len(xr_result["deprecated"])
+        all_issues += len(xr_result["deprecated"])
+        print(f"│  [WARN] {len(xr_result['deprecated'])} deprecated path(s):")
+        for d in xr_result["deprecated"][:10]:
+            print(f"│    - {d['source']}:{d['line']}: {d['target']} ({d['deprecated_pattern']})")
+        if len(xr_result["deprecated"]) > 10:
+            print(f"│    ... and {len(xr_result['deprecated']) - 10} more")
+    else:
+        print(f"│  [PASS] No deprecated path patterns found.")
+    if xr_result["cycles"]:
+        xr_issues += len(xr_result["cycles"])
+        all_issues += len(xr_result["cycles"])
+        print(f"│  [WARN] {len(xr_result['cycles'])} circular reference(s):")
+        for cycle in xr_result["cycles"]:
+            print(f"│    - {' -> '.join(cycle)}")
+    else:
+        print(f"│  [PASS] No circular references found.")
+    if xr_issues == 0:
+        print(f"│  [PASS] Cross-reference graph is clean.")
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 13. Sequential ID Checking (SYSGAP-009) ──
+    print("\n┌─ Check 13: Sequential ID Checking ───────────────────┐")
+    si_result = check_sequential_ids()
+    si_issue_count = 0
+    # DEC gaps
+    if si_result["dec_gaps"]:
+        si_issue_count += 1
+        all_issues += 1
+        print(f"│  [WARN] DEC-ID gaps: missing {si_result['dec_gaps']}")
+    else:
+        print(f"│  [PASS] DEC-IDs: {si_result['dec_ids'][0]:03d}-{si_result['dec_ids'][-1]:03d} ({len(si_result['dec_ids'])} entries, no gaps)")
+    # EVD gaps
+    if si_result["evd_gaps"]:
+        si_issue_count += 1
+        all_issues += 1
+        print(f"│  [WARN] EVD-ID gaps: missing {si_result['evd_gaps']}")
+    else:
+        print(f"│  [PASS] EVD-IDs: {si_result['evd_ids'][0]:03d}-{si_result['evd_ids'][-1]:03d} ({len(si_result['evd_ids'])} entries, no gaps)")
+    # RISK gaps
+    if si_result["risk_gaps"]:
+        si_issue_count += 1
+        all_issues += 1
+        print(f"│  [WARN] RISK-ID gaps: missing {si_result['risk_gaps']}")
+    else:
+        if si_result["risk_ids"]:
+            print(f"│  [PASS] RISK-IDs: {si_result['risk_ids'][0]:03d}-{si_result['risk_ids'][-1]:03d} ({len(si_result['risk_ids'])} entries, no gaps)")
+        else:
+            print(f"│  [PASS] RISK-IDs: no entries found.")
+    # Orphan cross-references
+    orphans = (si_result.get("orphan_evidence_refs", []) +
+               si_result.get("orphan_decision_refs", []) +
+               si_result.get("orphan_risk_refs", []))
+    if orphans:
+        si_issue_count += len(orphans)
+        all_issues += len(orphans)
+        print(f"│  [WARN] {len(orphans)} cross-reference(s) to non-existent task ID(s): {orphans[:10]}")
+    else:
+        print(f"│  [PASS] All cross-referenced task IDs exist in plan-tracker.")
+    # Completed tasks without evidence
+    missing_evd = si_result.get("completed_missing_evidence", [])
+    if missing_evd:
+        si_issue_count += len(missing_evd)
+        all_issues += len(missing_evd)
+        print(f"│  [WARN] {len(missing_evd)} completed task(s) without evidence: {missing_evd[:10]}")
+    else:
+        print(f"│  [PASS] All completed tasks have evidence entries.")
+    if si_issue_count == 0:
+        print(f"│  [PASS] All ID sequences are clean.")
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 14. Structural Validity Checking (SYSGAP-010) ──
+    print("\n┌─ Check 14: Structural Validity ──────────────────────┐")
+    sv_issues = check_structural_validity()
+    if sv_issues:
+        all_issues += len(sv_issues)
+        print(f"│  [WARN] {len(sv_issues)} structural issue(s):")
+        for v in sv_issues[:10]:
+            detail = v.get("detail", "")
+            ftype = v.get("type", "unknown")
+            ffile = v.get("file", "?")
+            line_info = f":{v['line']}" if v.get("line") else ""
+            print(f"│    - [{ftype}] {ffile}{line_info}: {detail}")
+        if len(sv_issues) > 10:
+            print(f"│    ... and {len(sv_issues) - 10} more")
+    else:
+        print(f"│  [PASS] All governance files have valid structure.")
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 15. Commit Scope Verification (SYSGAP-012) ──
+    print("\n┌─ Check 15: Commit Scope Verification ────────────────┐")
+    cs_result = check_commit_scope(limit=20)
+    if cs_result.get("error"):
+        print(f"│  [INFO] Skipped: {cs_result['error']}")
+    else:
+        cs_issues = cs_result["issues"]
+        print(f"│  Recent commits checked: {cs_result['total_checked']}")
+        if cs_issues:
+            all_issues += len(cs_issues)
+            print(f"│  [WARN] {len(cs_issues)} scope discipline issue(s):")
+            for v in cs_issues[:10]:
+                detail = v.get("detail", "")
+                sha = v.get("sha", "?")
+                itype = v.get("type", "?")
+                print(f"│    - [{itype}] {sha}: {detail}")
+            if len(cs_issues) > 10:
+                print(f"│    ... and {len(cs_issues) - 10} more")
+        else:
+            print(f"│  [PASS] All recent commits have clean scope discipline.")
     print("└──────────────────────────────────────────────────────┘")
 
     # ── Summary ──
@@ -3034,6 +3765,148 @@ def cmd_check_manifest_consistency(args):
         sys.exit(1)
 
 
+# ── Standalone CLI wrappers for new checks ────────────────────────
+
+def cmd_check_cross_references(args):
+    """CLI wrapper for cross-reference checking (SYSGAP-008)."""
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+    result = check_cross_references()
+    print()
+    print("=== Cross-Reference Check ===")
+    print(f"  Files scanned: {result['total_files_scanned']}")
+    print(f"  References extracted: {result['total_refs']}")
+    fail = False
+
+    if result["dangling"]:
+        fail = True
+        print(f"\n  [FAIL] {len(result['dangling'])} dangling reference(s):")
+        for d in result["dangling"]:
+            print(f"    - {d['source']}:{d['line']} -> {d['target']}")
+    else:
+        print(f"\n  [PASS] No dangling references.")
+
+    if result["deprecated"]:
+        fail = True
+        print(f"\n  [FAIL] {len(result['deprecated'])} deprecated path(s):")
+        for d in result["deprecated"]:
+            print(f"    - {d['source']}:{d['line']}: {d['target']} ({d['deprecated_pattern']})")
+    else:
+        print(f"\n  [PASS] No deprecated paths.")
+
+    if result["cycles"]:
+        fail = True
+        print(f"\n  [FAIL] {len(result['cycles'])} circular reference(s):")
+        for cycle in result["cycles"]:
+            print(f"    - {' -> '.join(cycle)}")
+    else:
+        print(f"\n  [PASS] No circular references.")
+
+    print()
+    if fail:
+        sys.exit(1)
+
+
+def cmd_check_sequential_ids(args):
+    """CLI wrapper for sequential ID checking (SYSGAP-009)."""
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+    result = check_sequential_ids()
+    print()
+    print("=== Sequential ID Check ===")
+    fail = False
+
+    def _report(prefix, ids, gaps):
+        nonlocal fail
+        if ids:
+            print(f"  {prefix}: {ids[0]:03d}-{ids[-1]:03d} ({len(ids)} entries)")
+        else:
+            print(f"  {prefix}: no entries found")
+        if gaps:
+            fail = True
+            print(f"    [FAIL] Gaps detected: missing {gaps}")
+        else:
+            print(f"    [PASS] No gaps.")
+
+    _report("DEC", result["dec_ids"], result["dec_gaps"])
+    _report("EVD", result["evd_ids"], result["evd_gaps"])
+    _report("RISK", result["risk_ids"], result["risk_gaps"])
+
+    orphans = (result.get("orphan_evidence_refs", []) +
+               result.get("orphan_decision_refs", []) +
+               result.get("orphan_risk_refs", []))
+    if orphans:
+        fail = True
+        print(f"\n  [FAIL] {len(orphans)} cross-reference(s) to non-existent task IDs: {orphans}")
+    else:
+        print(f"\n  [PASS] All cross-referenced task IDs exist in plan-tracker.")
+
+    missing_evd = result.get("completed_missing_evidence", [])
+    if missing_evd:
+        fail = True
+        print(f"  [FAIL] {len(missing_evd)} completed task(s) without evidence: {missing_evd}")
+    else:
+        print(f"  [PASS] All completed tasks have evidence.")
+
+    print()
+    if fail:
+        sys.exit(1)
+
+
+def cmd_check_structural_validity(args):
+    """CLI wrapper for structural validity checking (SYSGAP-010)."""
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+    issues = check_structural_validity()
+    print()
+    print("=== Structural Validity Check ===")
+    if issues:
+        print(f"  [FAIL] {len(issues)} structural issue(s):")
+        for v in issues:
+            ftype = v.get("type", "unknown")
+            ffile = v.get("file", "?")
+            detail = v.get("detail", "")
+            print(f"    - [{ftype}] {ffile}: {detail}")
+        print()
+        sys.exit(1)
+    print(f"  [PASS] All governance files have valid structure.")
+    print()
+
+
+def cmd_check_commit_scope(args):
+    """CLI wrapper for commit scope verification (SYSGAP-012)."""
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+    limit = args.limit if hasattr(args, 'limit') else 20
+    result = check_commit_scope(limit=limit)
+    print()
+    print("=== Commit Scope Verification ===")
+    if result.get("error"):
+        print(f"  [ERROR] {result['error']}")
+        print()
+        return
+    print(f"  Recent commits checked: {result['total_checked']}")
+    issues = result["issues"]
+    if issues:
+        print(f"\n  [WARN] {len(issues)} scope discipline issue(s):")
+        for v in issues:
+            itype = v.get("type", "?")
+            detail = v.get("detail", "")
+            sha = v.get("sha", "?")
+            print(f"    - [{itype}] {sha}: {detail}")
+    else:
+        print(f"\n  [PASS] All recent commits have clean scope discipline.")
+    print()
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="verify_workflow",
@@ -3084,6 +3957,30 @@ def main():
     # e2e-check
     subparsers.add_parser("e2e-check", help="Run E2E governance verification against e2e-test-project")
 
+    # check-cross-references (SYSGAP-008)
+    xr_p = subparsers.add_parser("check-cross-references",
+                                 help="Scan .md/.py files for dangling, deprecated, and circular path references")
+    xr_p.add_argument("--fail-on-issues", action="store_true",
+                      help="Exit with non-zero code if issues found")
+
+    # check-sequential-ids (SYSGAP-009)
+    si_p = subparsers.add_parser("check-sequential-ids",
+                                 help="Verify ID continuity and cross-reference integrity in governance records")
+    si_p.add_argument("--fail-on-issues", action="store_true",
+                      help="Exit with non-zero code if issues found")
+
+    # check-structural-validity (SYSGAP-010)
+    sv_p = subparsers.add_parser("check-structural-validity",
+                                 help="Validate structural integrity of governance files")
+    sv_p.add_argument("--fail-on-issues", action="store_true",
+                      help="Exit with non-zero code if issues found")
+
+    # check-commit-scope (SYSGAP-012)
+    cs_p = subparsers.add_parser("check-commit-scope",
+                                 help="Verify commit scope discipline (task ID uniqueness, bulk commits, side-effect keywords)")
+    cs_p.add_argument("--limit", type=int, default=20,
+                      help="Number of recent commits to check (default: 20)")
+
     args = parser.parse_args()
 
     commands = {
@@ -3098,6 +3995,10 @@ def main():
         "check-manifest-consistency": cmd_check_manifest_consistency,
         "check-plugin-freshness": cmd_check_plugin_freshness,
         "e2e-check": cmd_e2e_check,
+        "check-cross-references": cmd_check_cross_references,
+        "check-sequential-ids": cmd_check_sequential_ids,
+        "check-structural-validity": cmd_check_structural_validity,
+        "check-commit-scope": cmd_check_commit_scope,
     }
 
     cmd = args.command or "verify"

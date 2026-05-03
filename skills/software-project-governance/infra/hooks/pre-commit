@@ -202,19 +202,22 @@ fi
 # For P0 tasks, check if a review evidence entry exists.
 # This enforces the Producer-Reviewer separation at the system level.
 # WARN only — detected gap is logged but commit proceeds.
+# IS_P0 default: initialized here so Step 7b won't fail with "integer expression expected"
+# when evidence-log.md does not exist (IS_P0 was never set in that codepath).
+IS_P0=0
 if [ -f "$REPO_ROOT/.governance/evidence-log.md" ]; then
-    TASK_ID=$(echo "$COMMIT_MSG" | grep -oE '(AUDIT|FIX|REQ|MAINT|INIT|PLAN|DESIGN|REL|VAL|CI|ACCEPT|RESEARCH|DOC|OPS|CONSTRAINT|SYSGAP|CLEANUP)-[0-9]+' | head -1)
-    if [ -n "$TASK_ID" ]; then
+    STEP7_TASK_ID=$(echo "$COMMIT_MSG" | grep -oE '(AUDIT|FIX|REQ|MAINT|INIT|PLAN|DESIGN|REL|VAL|CI|ACCEPT|RESEARCH|DOC|OPS|CONSTRAINT|SYSGAP|CLEANUP)-[0-9]+' | head -1)
+    if [ -n "$STEP7_TASK_ID" ]; then
         # Check if the task is P0 priority
         if [ -f "$REPO_ROOT/.governance/plan-tracker.md" ]; then
-            IS_P0=$(grep -c "| $TASK_ID |.*| P0 |" "$REPO_ROOT/.governance/plan-tracker.md" 2>/dev/null || echo "0")
+            IS_P0=$(grep -c "| $STEP7_TASK_ID |.*| P0 |" "$REPO_ROOT/.governance/plan-tracker.md" 2>/dev/null || echo "0")
             if [ "$IS_P0" -gt 0 ]; then
                 # Check for review evidence (REVIEW-* or EVD-* mentioning review)
                 HAS_REVIEW=$(grep -c "REVIEW-\|审查" "$REPO_ROOT/.governance/evidence-log.md" 2>/dev/null || echo "0")
                 if [ "$HAS_REVIEW" -eq 0 ]; then
                     echo ""
                     echo "╔══════════════════════════════════════════════════════════════╗"
-                    echo "║  REVIEW GAP: P0 task '$TASK_ID' has no review evidence.      ║"
+                    echo "║  REVIEW GAP: P0 task '$STEP7_TASK_ID' has no review evidence.      ║"
                     echo "║                                                            ║"
                     echo "║  Producer-Reviewer separation requires independent review    ║"
                     echo "║  for all P0 tasks. Run /governance-review before commit.     ║"
@@ -234,7 +237,9 @@ fi
 # For P0 tasks + product code changes, BLOCK commit if no review evidence.
 # Task prefix determines whether review is required (routing table mapping).
 # Tasks whose type IS review (REVIEW, EVD, DEC, RISK, GOV) are exempt.
-if [ -n "$TASK_ID" ] && [ "$IS_P0" -gt 0 ]; then
+# Uses STEP7_TASK_ID from Step 7a (with whitelist prefix extraction) — separate from
+# the original TASK_ID (line 81) which is preserved for Steps 10-12.
+if [ -n "$STEP7_TASK_ID" ] && [ "$IS_P0" -gt 0 ]; then
     # Determine if this commit touches product code
     # (same definition as Step 9 — see SKILL.md "产品代码 vs 治理记录边界")
     CHANGED_FILES_STEP7=$(git diff --cached --name-only 2>/dev/null || true)
@@ -247,7 +252,7 @@ if [ -n "$TASK_ID" ] && [ "$IS_P0" -gt 0 ]; then
 
     if [ "$IS_PRODUCT_CODE_STEP7" -eq 1 ]; then
         # Task prefix → review requirement mapping
-        TASK_PREFIX=$(echo "$TASK_ID" | grep -oE '^[A-Z]+')
+        TASK_PREFIX=$(echo "$STEP7_TASK_ID" | grep -oE '^[A-Z]+')
         case "$TASK_PREFIX" in
             SYSGAP|AUDIT|FIX|MAINT|CLEANUP|DESIGN|INIT|REL|VAL|CI|ACCEPT|RESEARCH|DOC|OPS|CONSTRAINT|PLAN)
                 NEEDS_REVIEW=1 ;;
@@ -258,11 +263,11 @@ if [ -n "$TASK_ID" ] && [ "$IS_P0" -gt 0 ]; then
         esac
 
         if [ "$NEEDS_REVIEW" -eq 1 ]; then
-            HAS_REVIEW_EVD=$(grep -cE "REVIEW-.*$TASK_ID" "$REPO_ROOT/.governance/evidence-log.md" 2>/dev/null || echo "0")
+            HAS_REVIEW_EVD=$(grep -cE "REVIEW-.*$STEP7_TASK_ID" "$REPO_ROOT/.governance/evidence-log.md" 2>/dev/null || echo "0")
             if [ "$HAS_REVIEW_EVD" -eq 0 ]; then
                 echo ""
                 echo "╔══════════════════════════════════════════════════════════════╗"
-                echo "║  REVIEW BLOCKED: P0 task '$TASK_ID' has no review evidence. ║"
+                echo "║  REVIEW BLOCKED: P0 task '$STEP7_TASK_ID' has no review evidence. ║"
                 echo "║                                                            ║"
                 echo "║  Product code changes require independent review (M7.4      ║"
                 echo "║  step 4.5). Spawn a Reviewer agent and complete review       ║"

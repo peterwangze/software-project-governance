@@ -65,7 +65,7 @@ Coordinator 在并行 spawn 多个 agent 前 **MUST** 校验：任意两个 agen
 当并行 agent 文件修改目标重叠时，Coordinator MUST 在 Agent 工具调用中设置 `isolation: "worktree"`。此参数为 Agent 平台原生支持：
 
 - **效果**: agent 在独立 git worktree 中执行，物理隔离文件系统
-- **清理**: 无修改时自动清理 worktree；有修改时返回 worktree 路径和分支
+- **清理**: 无修改时自动清理 worktree；有修改时 Agent 工具结果中返回 worktree 路径和分支，供 Coordinator 后续处理
 - **使用**: 仅对修改文件的 agent 使用；只读 agent（如 Reviewer）不需要
 
 ## Coordinator 不得做的事

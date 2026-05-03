@@ -181,7 +181,7 @@ Sub-agent 硬边界：
 
 **调度模板**：Coordinator spawn sub-agent 时 MUST 使用 `references/agent-dispatch-template.md`——禁止传自定义 prompt，只能填充模板中的占位符。
 
-**并行调度安全**：Coordinator spawn 多个 agent 前 MUST 校验文件修改目标无重叠。两个 agent 修改同一文件路径 -> 串行化或 worktree 隔离。详见 `references/behavior-protocol.md` M7.6。
+**并行调度安全**：Coordinator spawn 多个 agent 前 MUST 校验文件修改目标无重叠。两个 agent 修改同一文件路径 -> 启用 `isolation: "worktree"`（Agent 平台原生支持）物理隔离。不可用时串行化。详见 `references/behavior-protocol.md` M7.6。
 
 ## 工作流合约
 

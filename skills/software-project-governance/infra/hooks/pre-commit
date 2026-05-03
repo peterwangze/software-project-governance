@@ -26,7 +26,10 @@ if [ -z "$COMMIT_MSG" ] && [ -f "$REPO_ROOT/.git/GOV_COMMIT_MSG" ]; then
 fi
 # Source 3: git's commit message file (fallback, with staleness check)
 # On Windows, git commit -m may leave stale COMMIT_EDITMSG from previous commit.
-# Check mtime: if modified within last 5 seconds, it's from THIS commit.
+# Check mtime: if modified within last 60 seconds, it's from THIS commit.
+# Window is 60s (not 5s) because Windows file system latency (AV, indexing, etc.)
+# can delay the hook execution beyond 5s after git writes COMMIT_EDITMSG.
+# Without this, all version-bump commits required --no-verify bypass.
 if [ -z "$COMMIT_MSG" ] && [ -f "$REPO_ROOT/.git/COMMIT_EDITMSG" ]; then
     EDITMSG_STALE=0
     # Try to get mtime in seconds since epoch
@@ -34,7 +37,7 @@ if [ -z "$COMMIT_MSG" ] && [ -f "$REPO_ROOT/.git/COMMIT_EDITMSG" ]; then
     NOW=$(date +%s 2>/dev/null || echo "0")
     if [ "$NOW" -gt 0 ] && [ "$EDITMSG_MTIME" -gt 0 ]; then
         AGE=$((NOW - EDITMSG_MTIME))
-        if [ "$AGE" -le 5 ]; then
+        if [ "$AGE" -le 60 ]; then
             COMMIT_MSG=$(cat "$REPO_ROOT/.git/COMMIT_EDITMSG" 2>/dev/null)
         else
             EDITMSG_STALE=1

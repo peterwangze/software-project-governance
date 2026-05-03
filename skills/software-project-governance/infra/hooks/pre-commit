@@ -172,9 +172,10 @@ if git diff --cached --name-only 2>/dev/null | grep -q "^CLAUDE.md$"; then
     fi
 fi
 
-# ── Step 7: Review evidence chain (AUDIT-086) ──
+# ── Step 7a: Review evidence WARN (AUDIT-086) ──
 # For P0 tasks, check if a review evidence entry exists.
 # This enforces the Producer-Reviewer separation at the system level.
+# WARN only — detected gap is logged but commit proceeds.
 if [ -f "$REPO_ROOT/.governance/evidence-log.md" ]; then
     TASK_ID=$(echo "$COMMIT_MSG" | grep -oE '(AUDIT|FIX|REQ|MAINT|INIT|PLAN|DESIGN|REL|VAL|CI|ACCEPT|RESEARCH|DOC|OPS|CONSTRAINT|SYSGAP|CLEANUP)-[0-9]+' | head -1)
     if [ -n "$TASK_ID" ]; then
@@ -198,6 +199,64 @@ if [ -f "$REPO_ROOT/.governance/evidence-log.md" ]; then
                     echo ""
                     # WARNING only (not BLOCKING) — review can be post-commit for now
                 fi
+            fi
+        fi
+    fi
+fi
+
+# ── Step 7b: Review evidence BLOCK (SYSGAP-032) ──
+# For P0 tasks + product code changes, BLOCK commit if no review evidence.
+# Task prefix determines whether review is required (routing table mapping).
+# Tasks whose type IS review (REVIEW, EVD, DEC, RISK, GOV) are exempt.
+if [ -n "$TASK_ID" ] && [ "$IS_P0" -gt 0 ]; then
+    # Determine if this commit touches product code
+    # (same definition as Step 9 — see SKILL.md "产品代码 vs 治理记录边界")
+    CHANGED_FILES_STEP7=$(git diff --cached --name-only 2>/dev/null || true)
+    IS_PRODUCT_CODE_STEP7=0
+    if [ -n "$CHANGED_FILES_STEP7" ]; then
+        echo "$CHANGED_FILES_STEP7" | grep -qE "^skills/software-project-governance/" && IS_PRODUCT_CODE_STEP7=1
+        echo "$CHANGED_FILES_STEP7" | grep -qE "^agents/" && IS_PRODUCT_CODE_STEP7=1
+        echo "$CHANGED_FILES_STEP7" | grep -qE "^skills/stage-" && IS_PRODUCT_CODE_STEP7=1
+        echo "$CHANGED_FILES_STEP7" | grep -qE "^skills/[a-z]+-review/" && IS_PRODUCT_CODE_STEP7=1
+        echo "$CHANGED_FILES_STEP7" | grep -qE "^skills/code-review/" && IS_PRODUCT_CODE_STEP7=1
+        echo "$CHANGED_FILES_STEP7" | grep -qE "^commands/" && IS_PRODUCT_CODE_STEP7=1
+        echo "$CHANGED_FILES_STEP7" | grep -qE "^infra/verify_workflow\.py$" && IS_PRODUCT_CODE_STEP7=1
+        echo "$CHANGED_FILES_STEP7" | grep -qE "^infra/cleanup\.py$" && IS_PRODUCT_CODE_STEP7=1
+        echo "$CHANGED_FILES_STEP7" | grep -qE "^infra/hooks/" && IS_PRODUCT_CODE_STEP7=1
+        echo "$CHANGED_FILES_STEP7" | grep -qE "^\.claude-plugin/" && IS_PRODUCT_CODE_STEP7=1
+        echo "$CHANGED_FILES_STEP7" | grep -qE "^\.codex-plugin/" && IS_PRODUCT_CODE_STEP7=1
+        echo "$CHANGED_FILES_STEP7" | grep -qE "^skills/software-project-governance/references/" && IS_PRODUCT_CODE_STEP7=1
+    fi
+
+    if [ "$IS_PRODUCT_CODE_STEP7" -eq 1 ]; then
+        # Task prefix → review requirement mapping
+        TASK_PREFIX=$(echo "$TASK_ID" | grep -oE '^[A-Z]+')
+        case "$TASK_PREFIX" in
+            SYSGAP|AUDIT|FIX|MAINT|CLEANUP|DESIGN|INIT|REL|VAL|CI|ACCEPT|RESEARCH|DOC|OPS|CONSTRAINT|PLAN)
+                NEEDS_REVIEW=1 ;;
+            REVIEW|EVD|DEC|RISK|GOV)
+                NEEDS_REVIEW=0 ;;
+            *)
+                NEEDS_REVIEW=0 ;;
+        esac
+
+        if [ "$NEEDS_REVIEW" -eq 1 ]; then
+            HAS_REVIEW_EVD=$(grep -cE "REVIEW-.*$TASK_ID" "$REPO_ROOT/.governance/evidence-log.md" 2>/dev/null || echo "0")
+            if [ "$HAS_REVIEW_EVD" -eq 0 ]; then
+                echo ""
+                echo "╔══════════════════════════════════════════════════════════════╗"
+                echo "║  REVIEW BLOCKED: P0 task '$TASK_ID' has no review evidence. ║"
+                echo "║                                                            ║"
+                echo "║  Product code changes require independent review (M7.4      ║"
+                echo "║  step 4.5). Spawn a Reviewer agent and complete review       ║"
+                echo "║  before retrying this commit.                               ║"
+                echo "║                                                            ║"
+                echo "║  Action: spawn Reviewer agent and complete review.          ║"
+                echo "║          The review conclusion MUST be in evidence-log.     ║"
+                echo "║  Emergency bypass: git commit --no-verify                  ║"
+                echo "╚══════════════════════════════════════════════════════════════╝"
+                echo ""
+                exit 1
             fi
         fi
     fi

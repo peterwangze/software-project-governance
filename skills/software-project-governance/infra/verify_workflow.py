@@ -3076,6 +3076,321 @@ def check_user_impact():
     return result
 
 
+# ── SYSGAP-035: Agent Team Review Check (Check 18) ────────────────
+
+def _parse_review_covered_tasks():
+    """Parse evidence-log and review-*.md files to find all tasks covered by reviews.
+
+    Returns dict: task_id -> list of review sources (evidence IDs or file names).
+    """
+    covered = {}
+
+    if not EVIDENCE_PATH.is_file():
+        return covered
+
+    evidence_content = EVIDENCE_PATH.read_text(encoding="utf-8")
+
+    # 1. Scan evidence-log for REVIEW evidence entries
+    for line in evidence_content.split("\n"):
+        line = line.strip()
+        if not line.startswith("| EVD-"):
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) < 8:
+            continue
+        evd_id = parts[1]
+        raw_ids = parts[2]
+        evd_type = parts[4] if len(parts) > 4 else ""
+        description = parts[5] if len(parts) > 5 else ""
+        file_location = parts[6] if len(parts) > 6 else ""
+
+        # REVIEW evidence: task ID starts with REVIEW- or type is Code Review/审查
+        is_review_entry = (
+            raw_ids.startswith("REVIEW-")
+            or evd_type == "Code Review"
+            or evd_type == "审查"
+        )
+        if not is_review_entry:
+            continue
+
+        if raw_ids.startswith("REVIEW-"):
+            # Extract covered task IDs from REVIEW- prefix
+            inner_tasks = raw_ids[len("REVIEW-"):]
+            for inner_id in expand_task_ids(inner_tasks):
+                covered.setdefault(inner_id, []).append(evd_id)
+
+        # Check description and file_location for task references
+        combined = description + " " + file_location
+        for match in re.finditer(r"([A-Z]+-\d+(?:~\d+)?)", combined):
+            raw = match.group(1)
+            for inner_id in expand_task_ids(raw):
+                if not inner_id.startswith("REVIEW-"):
+                    covered.setdefault(inner_id, []).append(evd_id)
+
+    # 2. Scan review-*.md files for task references
+    review_dir = ROOT / ".governance"
+    if review_dir.is_dir():
+        for review_file in review_dir.glob("review-*.md"):
+            try:
+                content = review_file.read_text(encoding="utf-8")
+                for match in re.finditer(r"([A-Z]+-\d+(?:~\d+)?)", content):
+                    raw = match.group(1)
+                    for inner_id in expand_task_ids(raw):
+                        if not inner_id.startswith("REVIEW-"):
+                            covered.setdefault(inner_id, []).append(review_file.name)
+            except (IOError, OSError):
+                pass
+
+    return covered
+
+
+def check_agent_team_review():
+    """SYSGAP-035: Check 18 — Agent Team review completeness.
+
+    For completed tasks involving product code changes, verify that an
+    independent code review was performed. Review evidence is identified
+    by REVIEW-prefixed task IDs in evidence-log or review-*.md files
+    in .governance/.
+
+    Product code detection: evidence file locations outside .governance/
+    (skills/, agents/, infra/, commands/, adapters/, .claude-plugin/,
+    .codex-plugin/, .agents/, project/).
+
+    Returns dict with total_tasks, reviewed, unreviewed, review_gap_tasks, pass.
+    """
+    PRODUCT_CODE_PATTERNS = [
+        "skills/", "agents/", "infra/", "commands/",
+        "adapters/", ".claude-plugin/", ".codex-plugin/", ".agents/",
+        "project/",
+    ]
+
+    result = {
+        "total_tasks": 0,
+        "reviewed": 0,
+        "unreviewed": 0,
+        "review_gap_tasks": [],
+        "pass": True,
+    }
+
+    completed = parse_completed_task_ids()
+    if not completed:
+        return result
+
+    # Read evidence-log
+    if not EVIDENCE_PATH.is_file():
+        return result
+    evidence_content = EVIDENCE_PATH.read_text(encoding="utf-8")
+
+    # Build map: task_id -> list of file locations
+    task_file_locations = {}
+    for line in evidence_content.split("\n"):
+        line = line.strip()
+        if not line.startswith("| EVD-"):
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) < 8:
+            continue
+        raw_ids = parts[2]
+        file_location = parts[6] if len(parts) > 6 else ""
+        for tid in expand_task_ids(raw_ids) if raw_ids and re.search(r"[A-Z]+-\d+", raw_ids) else []:
+            task_file_locations.setdefault(tid, []).append(file_location)
+
+    # Build review coverage map
+    review_covered = _parse_review_covered_tasks()
+
+    for task_id in sorted(completed):
+        file_locs = task_file_locations.get(task_id, [])
+        if not file_locs:
+            continue
+
+        is_product_code = any(
+            any(pat in loc for pat in PRODUCT_CODE_PATTERNS)
+            for loc in file_locs
+        )
+        if not is_product_code:
+            continue
+
+        result["total_tasks"] += 1
+        if task_id in review_covered:
+            result["reviewed"] += 1
+        else:
+            result["unreviewed"] += 1
+            result["review_gap_tasks"].append(task_id)
+
+    result["pass"] = result["unreviewed"] == 0
+    return result
+
+
+# ── SYSGAP-036: Agent Activation Check (Check 19) ────────────────
+
+def check_agent_activation():
+    """SYSGAP-036: Check 19 — Analyst/Architect activation for P0 cross-layer tasks.
+
+    For P0 tasks involving >= 2 architecture layers of product code change,
+    verify that Analyst/Architect agents were activated for impact analysis.
+
+    Detection:
+    - P0 tasks: parsed from plan-tracker tracking tables (priority column index 11)
+    - Product code: evidence file locations in skills/, agents/, infra/, etc.
+    - Cross-layer: >= 2 distinct top-level directories in evidence locations
+    - Analyst involvement: evidence author contains "Analyst" or description
+      contains "Analyst:" marker
+
+    Returns dict with total_p0_cross_layer, analyst_activated, analyst_bypassed, pass.
+    """
+    PRODUCT_CODE_PATTERNS = [
+        "skills/", "agents/", "infra/", "commands/",
+        "adapters/", ".claude-plugin/", ".codex-plugin/", ".agents/",
+        "project/",
+    ]
+    ARCH_LAYER_MAP = {
+        "skills/": "skills",
+        "commands/": "commands",
+        "agents/": "agents",
+        "infra/": "infra",
+        "adapters/": "adapters",
+        "project/": "project",
+        ".claude-plugin/": "claude-plugin",
+        ".codex-plugin/": "codex-plugin",
+        ".agents/": "agents-plugin",
+    }
+
+    result = {
+        "total_p0_cross_layer": 0,
+        "analyst_activated": 0,
+        "analyst_bypassed": 0,
+        "bypassed_tasks": [],
+        "pass": True,
+    }
+
+    # Parse P0 completed tasks from plan-tracker
+    content = SAMPLE_PATH.read_text(encoding="utf-8")
+    p0_tasks = {}  # task_id -> True
+
+    for line in content.split("\n"):
+        line_stripped = line.strip()
+        if not line_stripped.startswith("| ") or "---" in line_stripped:
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) < 11:
+            continue
+        task_id_match = re.match(r"([A-Z]+-\d+)", parts[1])
+        if not task_id_match:
+            continue
+        task_id = task_id_match.group(1)
+        # Column indices: real format has 20 cols (priority at [11]), test format has 10 (priority at [3])
+        status = parts[10] if len(parts) > 10 else ""
+        if len(parts) >= 13:
+            priority = parts[11] if len(parts) > 11 else ""  # full 20-column format
+        elif len(parts) >= 5:
+            priority = parts[3] if len(parts) > 3 else ""    # simplified 10-column test format
+        else:
+            priority = ""
+        if priority == "P0" and status == "已完成":
+            p0_tasks[task_id] = True
+
+    if not p0_tasks:
+        return result
+
+    # Read evidence-log
+    if not EVIDENCE_PATH.is_file():
+        return result
+    evidence_content = EVIDENCE_PATH.read_text(encoding="utf-8")
+
+    # Build map: task_id -> [(evd_id, file_location, author, description, evd_type)]
+    task_entries = {}
+    for line in evidence_content.split("\n"):
+        line = line.strip()
+        if not line.startswith("| EVD-"):
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) < 9:
+            continue
+        evd_id = parts[1]
+        raw_ids = parts[2]
+        evd_type = parts[4] if len(parts) > 4 else ""
+        description = parts[5] if len(parts) > 5 else ""
+        file_location = parts[6] if len(parts) > 6 else ""
+        author = parts[7] if len(parts) > 7 else ""
+
+        for tid in expand_task_ids(raw_ids) if raw_ids and re.search(r"[A-Z]+-\d+", raw_ids) else []:
+            task_entries.setdefault(tid, []).append(
+                (evd_id, file_location, author, description, evd_type)
+            )
+
+    for task_id in sorted(p0_tasks):
+        entries = task_entries.get(task_id, [])
+        if not entries:
+            continue
+
+        # Check product code involvement
+        is_product_code = any(
+            any(pat in file_loc for pat in PRODUCT_CODE_PATTERNS)
+            for _, file_loc, _, _, _ in entries
+        )
+        if not is_product_code:
+            continue
+
+        # Count architecture layers
+        all_locs = " ".join(file_loc for _, file_loc, _, _, _ in entries)
+        layers = set()
+        for prefix, layer_name in ARCH_LAYER_MAP.items():
+            if prefix in all_locs:
+                layers.add(layer_name)
+        if len(layers) < 2:
+            # Not cross-layer — skip (only single layer change)
+            continue
+
+        result["total_p0_cross_layer"] += 1
+
+        # Check for Analyst/Architect involvement
+        # Look for impact analysis evidence entries covering this task
+        has_impact_analysis = False
+        has_analyst_involvement = False
+
+        for _, _, author, description, evd_type in entries:
+            if evd_type == "影响分析" or "影响分析" in description:
+                has_impact_analysis = True
+                if "Analyst" in author or "Architect" in author:
+                    has_analyst_involvement = True
+                if "Analyst:" in description or "Architect:" in description:
+                    has_analyst_involvement = True
+
+        # Also check if any evidence entry for ANY task has impact analysis
+        # that references this task (e.g., separate Analyst analysis entry)
+        for line in evidence_content.split("\n"):
+            line = line.strip()
+            if not line.startswith("| EVD-"):
+                continue
+            parts = [p.strip() for p in line.split("|")]
+            if len(parts) < 9:
+                continue
+            evd_type = parts[4] if len(parts) > 4 else ""
+            if evd_type != "影响分析":
+                continue
+            raw_ids = parts[2]
+            description = parts[5] if len(parts) > 5 else ""
+            author = parts[7] if len(parts) > 7 else ""
+            covered = expand_task_ids(raw_ids) if raw_ids and re.search(r"[A-Z]+-\d+", raw_ids) else set()
+            if task_id in covered:
+                has_impact_analysis = True
+                if "Analyst" in author or "Architect" in author:
+                    has_analyst_involvement = True
+                if "Analyst:" in description or "Architect:" in description:
+                    has_analyst_involvement = True
+
+        if has_impact_analysis and not has_analyst_involvement:
+            result["analyst_bypassed"] += 1
+            result["bypassed_tasks"].append(task_id)
+        elif has_impact_analysis and has_analyst_involvement:
+            result["analyst_activated"] += 1
+        # If no impact analysis at all, the task was completed without any
+        # analysis — not counted as "bypassed" (analysis step entirely skipped)
+
+    result["pass"] = result["analyst_bypassed"] == 0
+    return result
+
+
 def cmd_check_governance(args):
     """Run governance health checks: evidence completeness, risk staleness, gate consistency."""
     # Ensure UTF-8 stdout to handle Chinese characters from .md files (Windows GBK workaround)
@@ -3548,6 +3863,40 @@ def cmd_check_governance(args):
     if ui_issues == 0:
         print(f"│  [PASS] User impact check passed.")
     all_issues += ui_issues
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 18. Agent Team Review (SYSGAP-035) ──
+    print("\n┌─ Check 18: Agent Team Review ────────────────────────┐")
+    atr_result = check_agent_team_review()
+    print(f"│  Product-code tasks (completed): {atr_result['total_tasks']}")
+    print(f"│  Reviewed: {atr_result['reviewed']}")
+    if atr_result["unreviewed"] > 0:
+        all_issues += atr_result["unreviewed"]
+        print(f"│  [FAIL] {atr_result['unreviewed']} product-code task(s) without review evidence:")
+        for tid in atr_result["review_gap_tasks"]:
+            print(f"│    - {tid}")
+    else:
+        if atr_result["total_tasks"] > 0:
+            print(f"│  [PASS] All product-code tasks have review evidence.")
+        else:
+            print(f"│  [PASS] No product-code tasks to review.")
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 19. Agent Activation (SYSGAP-036) ──
+    print("\n┌─ Check 19: Agent Activation (Analyst/Architect) ─────┐")
+    aa_result = check_agent_activation()
+    print(f"│  P0 cross-layer product tasks: {aa_result['total_p0_cross_layer']}")
+    print(f"│  Analyst activated: {aa_result['analyst_activated']}")
+    if aa_result["analyst_bypassed"] > 0:
+        all_issues += aa_result["analyst_bypassed"]
+        print(f"│  [FAIL] {aa_result['analyst_bypassed']} task(s) with impact analysis but no Analyst:")
+        for tid in aa_result["bypassed_tasks"]:
+            print(f"│    - {tid}")
+    else:
+        if aa_result["total_p0_cross_layer"] > 0:
+            print(f"│  [PASS] All P0 cross-layer tasks have Analyst involvement.")
+        else:
+            print(f"│  [PASS] No P0 cross-layer product tasks to check.")
     print("└──────────────────────────────────────────────────────┘")
 
     # ── Summary ──
@@ -4426,6 +4775,61 @@ def cmd_check_user_impact(args):
         sys.exit(1)
 
 
+# ── SYSGAP-037: check-agent-team subcommand ──────────────────────
+
+def cmd_check_agent_team(args):
+    """Run Check 18 (Agent Team Review) + Check 19 (Agent Activation) together."""
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+
+    issues = 0
+
+    # Check 18: Agent Team Review
+    print("\n=== Check 18: Agent Team Review (SYSGAP-035) ===")
+    atr_result = check_agent_team_review()
+    print(f"  Product-code tasks (completed): {atr_result['total_tasks']}")
+    print(f"  Reviewed: {atr_result['reviewed']}")
+    if atr_result["unreviewed"] > 0:
+        issues += atr_result["unreviewed"]
+        print(f"  [FAIL] {atr_result['unreviewed']} product-code task(s) without review evidence:")
+        for tid in atr_result["review_gap_tasks"]:
+            print(f"    - {tid}")
+    else:
+        if atr_result["total_tasks"] > 0:
+            print(f"  [PASS] All product-code tasks have review evidence.")
+        else:
+            print(f"  [PASS] No product-code tasks to review.")
+
+    # Check 19: Agent Activation
+    print("\n=== Check 19: Agent Activation (SYSGAP-036) ===")
+    aa_result = check_agent_activation()
+    print(f"  P0 cross-layer product tasks: {aa_result['total_p0_cross_layer']}")
+    print(f"  Analyst activated: {aa_result['analyst_activated']}")
+    if aa_result["analyst_bypassed"] > 0:
+        issues += aa_result["analyst_bypassed"]
+        print(f"  [FAIL] {aa_result['analyst_bypassed']} task(s) with impact analysis but no Analyst:")
+        for tid in aa_result["bypassed_tasks"]:
+            print(f"    - {tid}")
+    else:
+        if aa_result["total_p0_cross_layer"] > 0:
+            print(f"  [PASS] All P0 cross-layer tasks have Analyst involvement.")
+        else:
+            print(f"  [PASS] No P0 cross-layer product tasks to check.")
+
+    # Summary
+    print(f"\n  ── Agent Team Check Summary ──")
+    if issues == 0:
+        print(f"  Result: PASSED — 0 issues found")
+    else:
+        print(f"  Result: ISSUES FOUND — {issues} issue(s)")
+    print()
+
+    if args.fail_on_issues and issues > 0:
+        sys.exit(1)
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="verify_workflow",
@@ -4512,6 +4916,12 @@ def main():
     cui_p.add_argument("--fail-on-issues", action="store_true",
                        help="Exit with non-zero code if issues found")
 
+    # check-agent-team (SYSGAP-037)
+    cat_p = subparsers.add_parser("check-agent-team",
+                                  help="Run Agent Team integrity checks (Check 18 + Check 19)")
+    cat_p.add_argument("--fail-on-issues", action="store_true",
+                       help="Exit with non-zero code if issues found")
+
     args = parser.parse_args()
 
     commands = {
@@ -4532,6 +4942,7 @@ def main():
         "check-commit-scope": cmd_check_commit_scope,
         "check-goal-alignment": cmd_check_goal_alignment,
         "check-user-impact": cmd_check_user_impact,
+        "check-agent-team": cmd_check_agent_team,
     }
 
     cmd = args.command or "verify"

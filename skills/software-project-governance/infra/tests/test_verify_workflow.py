@@ -635,5 +635,272 @@ class UserImpactTests(unittest.TestCase):
                 self.assertIn("迁移指南=不需要", entry["issues"][0])
 
 
+# ────────────────────────────────────────────────────────────
+# SYSGAP-039: Agent Team Review + Agent Activation regression tests
+# ────────────────────────────────────────────────────────────
+
+def _evidence_row_generic(evd_id, task_id, category="开发", evd_type="实现",
+                           description="test", file_location="skills/test.py",
+                           author="Developer", date_str="2026-05-02",
+                           gate="G4", notes="PASS"):
+    """Build a generic evidence-log row with configurable type and file location.
+
+    Column layout: | EVD-xxx | TASK-xxx | cat | type | desc | file | author | date | gate | notes |
+    """
+    return (
+        f"| {evd_id} | {task_id} | {category} | {evd_type} | {description} | "
+        f"{file_location} | {author} | {date_str} | {gate} | {notes} |"
+    )
+
+
+def _task_with_priority(tid, priority="P1", status="已完成"):
+    """Build a task row with priority at parts[11] and status at parts[10].
+
+    Column layout matching check_agent_activation() column indices:
+    | 任务ID | c2 | c3 | c4 | c5 | c6 | c7 | c8 | c9 | 状态 | 优先级 |
+    parts:   1     2    3    4    5    6    7    8    9    10      11
+    """
+    return f"| {tid} | x | x | x | x | x | x | x | x | {status} | {priority} |"
+
+
+class AgentTeamReviewTests(unittest.TestCase):
+    """Test check_agent_team_review() — SYSGAP-035 (Check 18)."""
+
+    def _setup(self, tmpdir, plan_lines=None, evidence_lines=None):
+        """Create plan-tracker and evidence-log in temp dir; return (sp, ep)."""
+        root = Path(tmpdir)
+        gov = root / ".governance"; gov.mkdir(parents=True, exist_ok=True)
+        sp = gov / "plan-tracker.md"
+        ep = gov / "evidence-log.md"
+
+        plan = "\n".join(plan_lines or [])
+        sp.write_text(plan, encoding="utf-8")
+        ep.write_text("\n".join(evidence_lines or []), encoding="utf-8")
+        return sp, ep
+
+    def test_check_agent_team_review_all_pass(self):
+        """Product code task completed + REVIEW evidence entry (REVIEW- prefix) -> PASS."""
+        with tempfile.TemporaryDirectory() as td:
+            plan = "\n".join([
+                "# 计划跟踪",
+                "",
+                "## 任务跟踪",
+                _TASK_COLS,
+                _TASK_SEP,
+                _task("TASK-001", "已完成"),
+            ])
+            # Two evidence entries: product code task + separate REVIEW entry
+            evidence_rows = [
+                _evidence_row_generic(
+                    "EVD-001", "TASK-001",
+                    evd_type="实现",
+                    file_location="skills/software-project-governance/SKILL.md",
+                    author="Developer",
+                ),
+                _evidence_row_generic(
+                    "EVD-002", "REVIEW-TASK-001",
+                    category="审查",
+                    evd_type="Code Review",
+                    description="Reviewed TASK-001",
+                    file_location=".governance/review-REVIEW-TASK-001.md",
+                    author="Code Reviewer",
+                ),
+            ]
+            sp, ep = self._setup(td, plan_lines=[plan], evidence_lines=evidence_rows)
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_agent_team_review()
+                self.assertTrue(r["pass"])
+                self.assertEqual(r["total_tasks"], 1)
+                self.assertEqual(r["reviewed"], 1)
+                self.assertEqual(r["unreviewed"], 0)
+                self.assertEqual(len(r["review_gap_tasks"]), 0)
+
+    def test_check_agent_team_review_missing_evidence(self):
+        """Product code task completed but no REVIEW evidence -> FAIL."""
+        with tempfile.TemporaryDirectory() as td:
+            plan = "\n".join([
+                "# 计划跟踪",
+                "",
+                "## 任务跟踪",
+                _TASK_COLS,
+                _TASK_SEP,
+                _task("TASK-001", "已完成"),
+            ])
+            evidence_rows = [
+                _evidence_row_generic(
+                    "EVD-001", "TASK-001",
+                    evd_type="实现",
+                    file_location="skills/software-project-governance/SKILL.md",
+                    author="Developer",
+                ),
+            ]
+            sp, ep = self._setup(td, plan_lines=[plan], evidence_lines=evidence_rows)
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_agent_team_review()
+                self.assertFalse(r["pass"])
+                self.assertIn("TASK-001", r["review_gap_tasks"])
+                self.assertEqual(r["unreviewed"], 1)
+                self.assertEqual(r["reviewed"], 0)
+
+    def test_check_agent_team_review_no_product_code(self):
+        """Governance record task no review requirement -> PASS (not counted as product code)."""
+        with tempfile.TemporaryDirectory() as td:
+            plan = "\n".join([
+                "# 计划跟踪",
+                "",
+                "## 任务跟踪",
+                _TASK_COLS,
+                _TASK_SEP,
+                _task("TASK-001", "已完成"),
+            ])
+            evidence_rows = [
+                _evidence_row_generic(
+                    "EVD-001", "TASK-001",
+                    evd_type="记录",
+                    file_location=".governance/plan-tracker.md",
+                    author="Coordinator",
+                ),
+            ]
+            sp, ep = self._setup(td, plan_lines=[plan], evidence_lines=evidence_rows)
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_agent_team_review()
+                self.assertTrue(r["pass"])
+                self.assertEqual(r["total_tasks"], 0)
+                self.assertEqual(r["reviewed"], 0)
+                self.assertEqual(r["unreviewed"], 0)
+
+
+class AgentActivationTests(unittest.TestCase):
+    """Test check_agent_activation() — SYSGAP-036 (Check 19)."""
+
+    def _setup(self, tmpdir, plan_lines=None, evidence_lines=None):
+        """Create plan-tracker and evidence-log in temp dir; return (sp, ep)."""
+        root = Path(tmpdir)
+        gov = root / ".governance"; gov.mkdir(parents=True, exist_ok=True)
+        sp = gov / "plan-tracker.md"
+        ep = gov / "evidence-log.md"
+
+        plan = "\n".join(plan_lines or [])
+        sp.write_text(plan, encoding="utf-8")
+        ep.write_text("\n".join(evidence_lines or []), encoding="utf-8")
+        return sp, ep
+
+    def test_check_agent_activation_all_pass(self):
+        """P0 task + cross-layer product code + Analyst involvement -> PASS."""
+        with tempfile.TemporaryDirectory() as td:
+            plan = "\n".join([
+                "# 计划跟踪",
+                "",
+                "## 任务跟踪",
+                _TASK_COLS,
+                _TASK_SEP,
+                _task_with_priority("TASK-001", priority="P0", status="已完成"),
+            ])
+            # Two evidence entries: impact analysis + implementation,
+            # touching two architecture layers (skills/ and commands/)
+            evidence_rows = [
+                _evidence_row_generic(
+                    "EVD-001", "TASK-001",
+                    category="架构",
+                    evd_type="影响分析",
+                    description="目标对齐: cross-layer impact analysis",
+                    file_location="skills/software-project-governance/SKILL.md",
+                    author="Analyst",
+                    gate="G11",
+                ),
+                _evidence_row_generic(
+                    "EVD-002", "TASK-001",
+                    category="开发",
+                    evd_type="实现",
+                    description="Implementation",
+                    file_location="commands/governance-status.md",
+                    author="Developer",
+                    gate="G11",
+                ),
+            ]
+            sp, ep = self._setup(td, plan_lines=[plan], evidence_lines=evidence_rows)
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_agent_activation()
+                self.assertTrue(r["pass"])
+                self.assertEqual(r["total_p0_cross_layer"], 1)
+                self.assertEqual(r["analyst_activated"], 1)
+                self.assertEqual(r["analyst_bypassed"], 0)
+                self.assertEqual(len(r["bypassed_tasks"]), 0)
+
+    def test_check_agent_activation_no_analyst(self):
+        """P0 + cross-layer + Coordinator-only impact analysis -> FAIL."""
+        with tempfile.TemporaryDirectory() as td:
+            plan = "\n".join([
+                "# 计划跟踪",
+                "",
+                "## 任务跟踪",
+                _TASK_COLS,
+                _TASK_SEP,
+                _task_with_priority("TASK-001", priority="P0", status="已完成"),
+            ])
+            # Two evidence entries across two layers: skills/ and agents/
+            evidence_rows = [
+                _evidence_row_generic(
+                    "EVD-001", "TASK-001",
+                    category="架构",
+                    evd_type="影响分析",
+                    description="Coordinator performed impact analysis solo",
+                    file_location="skills/software-project-governance/SKILL.md",
+                    author="Coordinator",
+                    gate="G11",
+                ),
+                _evidence_row_generic(
+                    "EVD-002", "TASK-001",
+                    category="开发",
+                    evd_type="实现",
+                    description="Implementation",
+                    file_location="agents/developer.md",
+                    author="Developer",
+                    gate="G11",
+                ),
+            ]
+            sp, ep = self._setup(td, plan_lines=[plan], evidence_lines=evidence_rows)
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_agent_activation()
+                self.assertFalse(r["pass"])
+                self.assertEqual(r["total_p0_cross_layer"], 1)
+                self.assertEqual(r["analyst_bypassed"], 1)
+                self.assertIn("TASK-001", r["bypassed_tasks"])
+                self.assertEqual(r["analyst_activated"], 0)
+
+    def test_check_agent_activation_not_p0(self):
+        """Non-P0 task skipped -> PASS (no P0 tasks found)."""
+        with tempfile.TemporaryDirectory() as td:
+            plan = "\n".join([
+                "# 计划跟踪",
+                "",
+                "## 任务跟踪",
+                _TASK_COLS,
+                _TASK_SEP,
+                _task_with_priority("TASK-001", priority="P1", status="已完成"),
+            ])
+            evidence_rows = [
+                _evidence_row_generic(
+                    "EVD-001", "TASK-001",
+                    evd_type="实现",
+                    file_location="skills/test.py",
+                    author="Developer",
+                ),
+            ]
+            sp, ep = self._setup(td, plan_lines=[plan], evidence_lines=evidence_rows)
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_agent_activation()
+                self.assertTrue(r["pass"])
+                self.assertEqual(r["total_p0_cross_layer"], 0)
+                self.assertEqual(r["analyst_activated"], 0)
+                self.assertEqual(r["analyst_bypassed"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

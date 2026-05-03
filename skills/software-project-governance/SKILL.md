@@ -179,6 +179,8 @@ Sub-agent 硬边界：
 | 执行审查并输出报告 | 与其他 Sub-agent 直接通信 |
 | 执行验证命令 | 拒绝 Coordinator 分配的任务 |
 
+**调度模板**：Coordinator spawn sub-agent 时 MUST 使用 `references/agent-dispatch-template.md`——禁止传自定义 prompt，只能填充模板中的占位符。
+
 ## 工作流合约
 
 Coordinator 执行行为约束，详见 `references/behavior-protocol.md`（M0-M9 强制性规则）。所有角色 Agent 必须遵守。
@@ -208,6 +210,7 @@ Coordinator 执行行为约束，详见 `references/behavior-protocol.md`（M0-M
 | `references/agent-communication-protocol.md` | Agent 间通信协议 |
 | `references/skill-index.md` | SKILL 分类索引 |
 | `references/company-practices-summary.md` | 企业实践摘要 |
+| `references/agent-dispatch-template.md` | Agent 调度模板——sub-agent prompt 标准化 |
 
 ## 治理基础设施（自动使用）
 

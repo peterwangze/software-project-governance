@@ -5,6 +5,29 @@
 
 set -e
 
+# --- Product code detection (shared by Step 7b and Step 9) ---
+# Detects whether staged files include product code (as opposed to governance records).
+# Usage: if is_product_code "$file_list"; then ... fi
+# Returns 0 (true) if product code detected, 1 (false) otherwise.
+# Definition: same 12 patterns as SKILL.md "产品代码 vs 治理记录边界".
+is_product_code() {
+    local files="$1"
+    local result=0
+    echo "$files" | grep -qE "^skills/software-project-governance/" && result=1
+    echo "$files" | grep -qE "^agents/" && result=1
+    echo "$files" | grep -qE "^skills/stage-" && result=1
+    echo "$files" | grep -qE "^skills/[a-z]+-review/" && result=1
+    echo "$files" | grep -qE "^skills/code-review/" && result=1
+    echo "$files" | grep -qE "^commands/" && result=1
+    echo "$files" | grep -qE "^infra/verify_workflow\.py$" && result=1
+    echo "$files" | grep -qE "^infra/cleanup\.py$" && result=1
+    echo "$files" | grep -qE "^infra/hooks/" && result=1
+    echo "$files" | grep -qE "^\.claude-plugin/" && result=1
+    echo "$files" | grep -qE "^\.codex-plugin/" && result=1
+    echo "$files" | grep -qE "^skills/software-project-governance/references/" && result=1
+    return $result
+}
+
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo ".")
 
 # --- Check if governance is initialized ---
@@ -217,18 +240,9 @@ if [ -n "$TASK_ID" ] && [ "$IS_P0" -gt 0 ]; then
     CHANGED_FILES_STEP7=$(git diff --cached --name-only 2>/dev/null || true)
     IS_PRODUCT_CODE_STEP7=0
     if [ -n "$CHANGED_FILES_STEP7" ]; then
-        echo "$CHANGED_FILES_STEP7" | grep -qE "^skills/software-project-governance/" && IS_PRODUCT_CODE_STEP7=1
-        echo "$CHANGED_FILES_STEP7" | grep -qE "^agents/" && IS_PRODUCT_CODE_STEP7=1
-        echo "$CHANGED_FILES_STEP7" | grep -qE "^skills/stage-" && IS_PRODUCT_CODE_STEP7=1
-        echo "$CHANGED_FILES_STEP7" | grep -qE "^skills/[a-z]+-review/" && IS_PRODUCT_CODE_STEP7=1
-        echo "$CHANGED_FILES_STEP7" | grep -qE "^skills/code-review/" && IS_PRODUCT_CODE_STEP7=1
-        echo "$CHANGED_FILES_STEP7" | grep -qE "^commands/" && IS_PRODUCT_CODE_STEP7=1
-        echo "$CHANGED_FILES_STEP7" | grep -qE "^infra/verify_workflow\.py$" && IS_PRODUCT_CODE_STEP7=1
-        echo "$CHANGED_FILES_STEP7" | grep -qE "^infra/cleanup\.py$" && IS_PRODUCT_CODE_STEP7=1
-        echo "$CHANGED_FILES_STEP7" | grep -qE "^infra/hooks/" && IS_PRODUCT_CODE_STEP7=1
-        echo "$CHANGED_FILES_STEP7" | grep -qE "^\.claude-plugin/" && IS_PRODUCT_CODE_STEP7=1
-        echo "$CHANGED_FILES_STEP7" | grep -qE "^\.codex-plugin/" && IS_PRODUCT_CODE_STEP7=1
-        echo "$CHANGED_FILES_STEP7" | grep -qE "^skills/software-project-governance/references/" && IS_PRODUCT_CODE_STEP7=1
+        if is_product_code "$CHANGED_FILES_STEP7"; then
+            IS_PRODUCT_CODE_STEP7=1
+        fi
     fi
 
     if [ "$IS_PRODUCT_CODE_STEP7" -eq 1 ]; then
@@ -318,17 +332,9 @@ fi
 # See SKILL.md "产品代码 vs 治理记录边界" for the full boundary definition.
 if [ -n "$CHANGED_FILES" ]; then
     IS_PRODUCT_CODE=0
-    echo "$CHANGED_FILES" | grep -qE "^skills/software-project-governance/" && IS_PRODUCT_CODE=1
-    echo "$CHANGED_FILES" | grep -qE "^agents/" && IS_PRODUCT_CODE=1
-    echo "$CHANGED_FILES" | grep -qE "^skills/stage-" && IS_PRODUCT_CODE=1
-    echo "$CHANGED_FILES" | grep -qE "^skills/[a-z]+-review/" && IS_PRODUCT_CODE=1
-    echo "$CHANGED_FILES" | grep -qE "^skills/code-review/" && IS_PRODUCT_CODE=1
-    echo "$CHANGED_FILES" | grep -qE "^commands/" && IS_PRODUCT_CODE=1
-    echo "$CHANGED_FILES" | grep -qE "^infra/verify_workflow\.py$" && IS_PRODUCT_CODE=1
-    echo "$CHANGED_FILES" | grep -qE "^infra/cleanup\.py$" && IS_PRODUCT_CODE=1
-    echo "$CHANGED_FILES" | grep -qE "^infra/hooks/" && IS_PRODUCT_CODE=1
-    echo "$CHANGED_FILES" | grep -qE "^\.claude-plugin/" && IS_PRODUCT_CODE=1
-    echo "$CHANGED_FILES" | grep -qE "^\.codex-plugin/" && IS_PRODUCT_CODE=1
+    if is_product_code "$CHANGED_FILES"; then
+        IS_PRODUCT_CODE=1
+    fi
 
     if [ "$IS_PRODUCT_CODE" -eq 1 ]; then
         # Check for Agent Team trace: commit message must start with task ID

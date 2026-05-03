@@ -1,7 +1,7 @@
 {
   "$schema": "https://example.com/manifest-schema-v1.json",
   "workflow": "software-project-governance",
-  "version": "0.25.0",
+  "version": "0.25.1",
   "description": "Canonical file manifest. All entries define files/directories/patterns that SHOULD exist after plugin installation or repo checkout. The single source of truth for cleanup and verification.",
   "source_of_truth": true,
 

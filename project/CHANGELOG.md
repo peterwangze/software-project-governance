@@ -2,6 +2,38 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.27.0] — 2026-05-03
+
+### 0.27.0 — Agent Team 并行安全 + 基础设施修复
+
+3 项 Hook/模板修复 + 并行调度双重防护（Coordinator 预检规则 + Worktree 物理隔离）。
+
+- **FIX-028**: COMMIT_EDITMSG 过期窗口 5→60 秒——消除 Windows 版本 bump 的 --no-verify 依赖
+- **FIX-026**: pre-commit is_product_code() 公共函数提取——统一 Step 7b/9 产品代码检测 + 7 单元测试
+- **FIX-027**: governance-init.md 模板补全调度模板+行为协议引用
+- **SYSGAP-043**: M7.6 并行调度预检规则——spawn 前 MUST 校验文件目标无重叠
+- **SYSGAP-044**: Worktree 物理隔离——并行 Agent 文件目标重叠时使用 isolation: "worktree"
+
+## [0.26.0] — 2026-05-03
+
+### 0.26.0 — 审查跟踪层
+
+Agent Team 协议强制执行 Phase 3。
+
+- **SYSGAP-040~042**: 审查跟踪层——产品代码任务的后置审查状态追踪（plan-tracker 审查状态列 + verify Check 18/19 + hook Step 7b review BLOCK）
+
+## [0.25.1] — 2026-05-03
+
+### 0.25.1 — Agent Team 协议强制执行 Phase 2
+
+- **SYSGAP-035~039**: Check 18/19——审查覆盖率检测 + Agent 激活检测
+
+## [0.25.0] — 2026-05-03
+
+### 0.25.0 — Agent Team 协议强制执行 Phase 1
+
+- **SYSGAP-030~034**: 路由 1:N + hook BLOCK——Developer→CodeReviewer 强制分离 + pre-commit Step 7b review BLOCK
+
 ## [0.24.0] — 2026-05-03
 
 ### 0.24.0 — 目标一致性 + 用户影响系统强制

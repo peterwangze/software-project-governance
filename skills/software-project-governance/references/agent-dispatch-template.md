@@ -56,9 +56,14 @@ Coordinator spawn sub-agent 时 MUST 使用本模板，**禁止**传自定义 pr
 | `{priority}` | 优先级 | P0 |
 | `{hard_gates}` | 硬门槛列表 | verify_workflow.py PASSED, cross-reference consistency PASSED |
 
+## 并行调度安全
+
+Coordinator 在并行 spawn 多个 agent 前 **MUST** 校验：任意两个 agent 的任务所涉及的文件修改目标无重叠。如两个 agent 都要修改同一文件路径 -> **MUST NOT** 并行 spawn——改为串行执行或 worktree 隔离。仅读取文件（不修改）的 agent 之间无冲突风险——可安全并行。详见 `references/behavior-protocol.md` M7.6。
+
 ## Coordinator 不得做的事
 
 - ❌ 传自定义 prompt 替代模板
 - ❌ 在模板外追加额外指令
 - ❌ 修改模板结构
 - ❌ 跳过角色定义或任务 SKILL 的加载指令
+- ❌ 在未预检文件目标重叠的情况下并行 spawn 多个修改 agent

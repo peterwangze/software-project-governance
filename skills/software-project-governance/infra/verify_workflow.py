@@ -3391,6 +3391,110 @@ def check_agent_activation():
     return result
 
 
+# ── SYSGAP-042: Review Debt Check (Check 20) ─────────────────────
+
+def check_review_debt():
+    """SYSGAP-042: Check 20 — Review debt.
+
+    Check all product-code tasks for review debt: tasks that have execution
+    evidence in evidence-log but lack corresponding review evidence.
+
+    Product code detection: evidence file locations outside .governance/
+    (skills/, agents/, infra/, commands/, adapters/, .claude-plugin/,
+    .codex-plugin/, .agents/, project/).
+
+    Returns dict with total_tasks, review_debt_count, review_debt_tasks, pass.
+    """
+    PRODUCT_CODE_PATTERNS = [
+        "skills/", "agents/", "infra/", "commands/",
+        "adapters/", ".claude-plugin/", ".codex-plugin/", ".agents/",
+        "project/",
+    ]
+
+    result = {
+        "total_tasks": 0,
+        "review_debt_count": 0,
+        "review_debt_tasks": [],
+        "pass": True,
+    }
+
+    if not SAMPLE_PATH.is_file():
+        return result
+
+    # 1. Parse all tasks from plan-tracker tracking tables
+    plan_content = SAMPLE_PATH.read_text(encoding="utf-8")
+    all_task_ids = set()
+    for line in plan_content.split("\n"):
+        line_stripped = line.strip()
+        if not line_stripped.startswith("| ") or "---" in line_stripped:
+            continue
+        m = re.match(r"\|\s*([A-Z]+-\d+)\s*\|", line_stripped)
+        if not m:
+            continue
+        all_task_ids.add(m.group(1))
+
+    if not all_task_ids:
+        return result
+
+    # 2. Build evidence map: task_id -> list of (evd_id, evd_type, file_location)
+    if not EVIDENCE_PATH.is_file():
+        return result
+    evidence_content = EVIDENCE_PATH.read_text(encoding="utf-8")
+
+    task_evidence = {}  # task_id -> [{evd_id, evd_type, file_location, description}]
+    for line in evidence_content.split("\n"):
+        line = line.strip()
+        if not line.startswith("| EVD-"):
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) < 8:
+            continue
+        evd_id = parts[1]
+        raw_ids = parts[2]
+        evd_type = parts[4] if len(parts) > 4 else ""
+        description = parts[5] if len(parts) > 5 else ""
+        file_location = parts[6] if len(parts) > 6 else ""
+
+        covered_ids = expand_task_ids(raw_ids) if raw_ids and re.search(r"[A-Z]+-\d+", raw_ids) else set()
+        for tid in covered_ids:
+            task_evidence.setdefault(tid, []).append({
+                "evd_id": evd_id,
+                "evd_type": evd_type,
+                "file_location": file_location,
+                "description": description,
+            })
+
+    # 3. Build review coverage map (same logic as _parse_review_covered_tasks)
+    review_covered = _parse_review_covered_tasks()
+
+    # 4. For each product-code task: check if it has execution evidence but no review evidence
+    for task_id in sorted(all_task_ids):
+        entries = task_evidence.get(task_id, [])
+        if not entries:
+            continue
+
+        # Determine if this task touched product code
+        is_product_code = any(
+            any(pat in e["file_location"] for pat in PRODUCT_CODE_PATTERNS)
+            for e in entries
+        )
+        if not is_product_code:
+            continue
+
+        result["total_tasks"] += 1
+
+        # Check for review evidence
+        if task_id in review_covered:
+            continue  # Has review — no debt
+
+        # No review evidence found — this is review debt
+        result["review_debt_count"] += 1
+        result["review_debt_tasks"].append(task_id)
+
+    result["pass"] = result["review_debt_count"] == 0
+    return result
+
+
 def cmd_check_governance(args):
     """Run governance health checks: evidence completeness, risk staleness, gate consistency."""
     # Ensure UTF-8 stdout to handle Chinese characters from .md files (Windows GBK workaround)
@@ -3897,6 +4001,23 @@ def cmd_check_governance(args):
             print(f"│  [PASS] All P0 cross-layer tasks have Analyst involvement.")
         else:
             print(f"│  [PASS] No P0 cross-layer product tasks to check.")
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 20. Review Debt (SYSGAP-042) ──
+    print("\n┌─ Check 20: Review Debt ─────────────────────────────┐")
+    rd_result = check_review_debt()
+    print(f"│  Product-code tasks (all, with evidence): {rd_result['total_tasks']}")
+    print(f"│  Review debt (have execution evidence, no review): {rd_result['review_debt_count']}")
+    if rd_result["review_debt_count"] > 0:
+        all_issues += rd_result["review_debt_count"]
+        print(f"│  [FAIL] {rd_result['review_debt_count']} product-code task(s) with review debt:")
+        for tid in rd_result["review_debt_tasks"]:
+            print(f"│    - {tid}")
+    else:
+        if rd_result["total_tasks"] > 0:
+            print(f"│  [PASS] All product-code tasks have review evidence.")
+        else:
+            print(f"│  [PASS] No product-code tasks to check.")
     print("└──────────────────────────────────────────────────────┘")
 
     # ── Summary ──
@@ -4830,6 +4951,33 @@ def cmd_check_agent_team(args):
         sys.exit(1)
 
 
+# ── SYSGAP-042: check-review-debt subcommand ──────────────────────
+
+def cmd_check_review_debt(args):
+    """Run Check 20: Review Debt independently."""
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+
+    print("\n=== Check 20: Review Debt (SYSGAP-042) ===")
+    rd_result = check_review_debt()
+    print(f"  Product-code tasks (all, with evidence): {rd_result['total_tasks']}")
+    print(f"  Review debt (have execution evidence, no review): {rd_result['review_debt_count']}")
+    if rd_result["review_debt_count"] > 0:
+        print(f"  [FAIL] {rd_result['review_debt_count']} product-code task(s) with review debt:")
+        for tid in rd_result["review_debt_tasks"]:
+            print(f"    - {tid}")
+    else:
+        if rd_result["total_tasks"] > 0:
+            print(f"  [PASS] All product-code tasks have review evidence.")
+        else:
+            print(f"  [PASS] No product-code tasks to check.")
+    print()
+    if args.fail_on_issues and rd_result["review_debt_count"] > 0:
+        sys.exit(1)
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="verify_workflow",
@@ -4922,6 +5070,12 @@ def main():
     cat_p.add_argument("--fail-on-issues", action="store_true",
                        help="Exit with non-zero code if issues found")
 
+    # check-review-debt (SYSGAP-042)
+    crd_p = subparsers.add_parser("check-review-debt",
+                                  help="Run review debt check (Check 20)")
+    crd_p.add_argument("--fail-on-issues", action="store_true",
+                      help="Exit with non-zero code if review debt found")
+
     args = parser.parse_args()
 
     commands = {
@@ -4943,6 +5097,7 @@ def main():
         "check-goal-alignment": cmd_check_goal_alignment,
         "check-user-impact": cmd_check_user_impact,
         "check-agent-team": cmd_check_agent_team,
+        "check-review-debt": cmd_check_review_debt,
     }
 
     cmd = args.command or "verify"

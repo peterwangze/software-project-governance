@@ -9,6 +9,26 @@
 3. **安全默认**：异常先于状态展示，恢复先于推进
 4. **会话连续性**：snapshot 是跨会话的契约
 
+## 与 Bootstrap 的分工
+
+CLAUDE.md bootstrap 与 /governance 有明确职责边界：
+
+**Bootstrap 负责**（每次会话自动执行，不加载 SKILL.md）：
+- 读 plan-tracker 确定当前阶段/Gate/风险
+- 确定双维度模式（trigger_mode × permission_mode）
+- SELF-CHECK 纪律（读 plan-tracker、阶段感知、AskUserQuestion 规则）
+- 版本升级的**自动检测**——发现版本变化后自动执行升级（模板替换+结构补全+hook检查）
+- 干活前/收工前基本纪律
+
+**/governance 负责**（用户主动调用时执行）：
+- 状态展示（Scenario F）——完整项目治理面板
+- 会话恢复（Scenario D）——跨会话 carry-over 任务/决策/风险恢复
+- 异常诊断修复（Scenario E）——全量 P0+P1 诊断 + 一键修复
+- 项目初始化（Scenario A）+ 半途接入（Scenario B）
+- 手动触发升级（Scenario C）
+
+**关键原则**：Bootstrap 是"开机自检"——最小化、自动化、不依赖 SKILL.md。/governance 是"仪表盘"——完整交互、按需调用。
+
 ## 决策树（自动分类）
 
 ```

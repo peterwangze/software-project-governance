@@ -37,6 +37,35 @@
 
 **这不是可选项。** 如果任务涉及创建或修改代码，派生对应的审查子 agent 与编写证据（M7.4）同为强制性要求。
 
+### M1.2 简单操作快速通道 (0.28.0+)
+
+**治理记录修改不触发 Agent Team 激活。** 以下路径操作 Coordinator **MAY** 直接执行，无需 spawn Developer + Code Reviewer：
+
+**快速通道路径**（文件路径模式匹配）：
+| 路径模式 | 操作类型 | Coordinator 动作 |
+|---------|---------|-----------------|
+| `.governance/plan-tracker.md` | 任务状态更新、优先级调整、阶段推进记录 | 直接 Edit |
+| `.governance/evidence-log.md` | 证据条目追加 | 直接 Edit |
+| `.governance/decision-log.md` | 决策记录追加 | 直接 Edit |
+| `.governance/risk-log.md` | 风险状态更新、新风险记录 | 直接 Edit |
+| `.governance/session-snapshot.md` | 会话快照写入 | 直接 Write |
+
+**非快速通道**（以下路径 MUST 走 Agent Team 标准流程）：
+| 路径模式 | 说明 |
+|---------|------|
+| `skills/**` | 能力层 SKILL 文件——产品代码 |
+| `agents/**` | Agent prompt 定义——产品代码 |
+| `commands/**` | 斜杠命令定义——产品代码 |
+| `core/**` | 核心合约/模板——产品代码 |
+| `infra/**` (非 hooks) | 基础设施脚本——产品代码 |
+| `references/**` | 行为协议/参考文档——产品代码 |
+| `adapters/**` | 平台适配器——产品代码 |
+
+**快速通道纪律**：
+- 快速通道操作完成后仍 MUST 遵循 M7.4 completion protocol（证据 + check-governance）
+- 快速通道仅跳过 Agent Team spawn——不跳过治理记录更新
+- 如果一次操作同时涉及快速通道路径和产品代码路径 → 整体走标准流程
+
 ## M2. 预加载（MANDATORY）
 
 在执行任何任务前，Coordinator **MUST** 读取以下文件：

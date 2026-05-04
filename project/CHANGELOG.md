@@ -2,6 +2,14 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.29.0] — 2026-05-04
+
+### 系统级强制
+- FIX-036: pre-commit hook Step 7 WARN→BLOCK — 产品代码无审查证据 → 拒绝 commit
+- FIX-037: verify_workflow.py Check 21 — 审查覆盖率量化检查
+- FIX-038: verify_workflow.py Check 22 — Profile 一致性自动校验
+- FIX-043: 路由表补全 (16→18行) + Agent namespace 限制文档化降级方案
+
 ## [0.28.0] — 2026-05-04
 
 ### 0.28.0 — 用户入口精简

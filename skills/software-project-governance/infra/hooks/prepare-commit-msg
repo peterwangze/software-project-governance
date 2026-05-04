@@ -2,6 +2,7 @@
 # prepare-commit-msg governance hook
 # Saves the commit message so pre-commit can read it (Windows git bash workaround)
 # On Windows, git commit -m doesn't pass $1 to pre-commit.
+# @version: 0.30.0
 
 COMMIT_MSG_FILE="$1"
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo ".")

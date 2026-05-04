@@ -2,6 +2,7 @@
 # pre-commit governance hook — installed by software-project-governance
 # Runs BEFORE every git commit. BLOCKS commits that don't meet governance criteria.
 # Design assumption: agent WILL NOT follow rules voluntarily. System MUST enforce.
+# @version: 0.30.0
 
 set -e
 
@@ -25,6 +26,21 @@ is_product_code() {
 
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo ".")
 
+# --- Step 0: Hook self-upgrade check (FIX-046) ---
+# When workflow version bumps, hooks in .git/hooks/ may be outdated.
+# Compare installed hook vs source hook; auto-copy if different, then restart.
+# Bash has already loaded this script into memory, so overwriting $0 is safe.
+HOOK_NAME=$(basename "$0")
+SOURCE_HOOK="$REPO_ROOT/skills/software-project-governance/infra/hooks/$HOOK_NAME"
+if [ -f "$SOURCE_HOOK" ] && [ "$0" != "$SOURCE_HOOK" ]; then
+    if ! cmp -s "$0" "$SOURCE_HOOK" 2>/dev/null; then
+        SOURCE_VER=$(grep '@version:' "$SOURCE_HOOK" 2>/dev/null | head -1 | sed 's/.*@version: *//')
+        cp "$SOURCE_HOOK" "$0" 2>/dev/null && \
+            echo "🔄 GOVERNANCE: Hook '$HOOK_NAME' self-upgraded to v${SOURCE_VER:-?}. Restarting with latest version..." && \
+            exec "$0" "$@"
+    fi
+fi
+
 # --- Check if governance is initialized ---
 if [ ! -f "$REPO_ROOT/.governance/plan-tracker.md" ]; then
     # Not initialized — allow commit without governance checks
@@ -41,6 +57,15 @@ fi
 # Source 2: prepare-commit-msg bridge (cross-platform workaround)
 if [ -z "$COMMIT_MSG" ] && [ -f "$REPO_ROOT/.git/GOV_COMMIT_MSG" ]; then
     COMMIT_MSG=$(cat "$REPO_ROOT/.git/GOV_COMMIT_MSG" 2>/dev/null)
+    # FIX-044: Clean up bridge file immediately after reading to prevent
+    # the next pre-commit from reading a stale task ID from a previous commit.
+    rm -f "$REPO_ROOT/.git/GOV_COMMIT_MSG" 2>/dev/null
+    # FIX-045: Mark that the bridge was used. When prepare-commit-msg wrote
+    # GOV_COMMIT_MSG, we trust it completely and skip the unreliable
+    # COMMIT_EDITMSG staleness check (Source 3).
+    if [ -n "$COMMIT_MSG" ]; then
+        GOV_BRIDGE_VALID=1
+    fi
 fi
 # Source 3: git's commit message file (fallback, with staleness check)
 # On Windows, git commit -m may leave stale COMMIT_EDITMSG from previous commit.
@@ -48,7 +73,10 @@ fi
 # Window is 60s (not 5s) because Windows file system latency (AV, indexing, etc.)
 # can delay the hook execution beyond 5s after git writes COMMIT_EDITMSG.
 # Without this, all version-bump commits required --no-verify bypass.
-if [ -z "$COMMIT_MSG" ] && [ -f "$REPO_ROOT/.git/COMMIT_EDITMSG" ]; then
+# FIX-045: When GOV bridge (Source 2) provided the message, skip Source 3
+# entirely. The bridge is the reliable cross-platform mechanism; COMMIT_EDITMSG
+# staleness check is a best-effort fallback for when prepare-commit-msg didn't run.
+if [ -z "$COMMIT_MSG" ] && [ "${GOV_BRIDGE_VALID:-0}" != "1" ] && [ -f "$REPO_ROOT/.git/COMMIT_EDITMSG" ]; then
     EDITMSG_STALE=0
     # Try to get mtime in seconds since epoch
     EDITMSG_MTIME=$(stat -c %Y "$REPO_ROOT/.git/COMMIT_EDITMSG" 2>/dev/null || stat -f %m "$REPO_ROOT/.git/COMMIT_EDITMSG" 2>/dev/null || echo "0")

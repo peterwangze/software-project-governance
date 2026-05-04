@@ -1,6 +1,7 @@
 #!/bin/bash
 # post-commit governance hook — installed by software-project-governance
 # Fires after every git commit. Forces governance visibility at each commit point.
+# @version: 0.30.0
 
 set -e
 
@@ -9,6 +10,10 @@ REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo ".")
 # --- Step 1: Extract task ID from commit message ---
 COMMIT_MSG=$(git log -1 --format=%B)
 TASK_ID=$(echo "$COMMIT_MSG" | grep -oE '[A-Z]+-[0-9]+' | head -1)
+
+# FIX-044: Safety net — cleanup stale GOV_COMMIT_MSG if pre-commit was skipped.
+# This prevents the next commit's pre-commit from reading an expired task ID.
+rm -f "$REPO_ROOT/.git/GOV_COMMIT_MSG" 2>/dev/null
 
 # --- Step 2: Check task traceability ---
 if [ -z "$TASK_ID" ]; then

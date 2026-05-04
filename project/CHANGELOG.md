@@ -2,6 +2,16 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.28.0] — 2026-05-04
+
+### 0.28.0 — 用户入口精简
+
+Bootstrap 模板按 Profile 三级差异化 + /governance 职责边界重定义 + 简单操作快速通道。
+
+- **FIX-030**: Profile 差异化 bootstrap 模板——lightweight ~47行/standard ~212行/strict ~232行，governance-init.md Step 7 三级注入
+- **FIX-033**: bootstrap 与 /governance 职责边界重定义——governance.md 新增分工章节
+- **FIX-035**: 简单操作快速通道——M1.2 规则，治理记录修改跳过 Agent Team 激活
+
 ## [0.27.0] — 2026-05-03
 
 ### 0.27.0 — Agent Team 并行安全 + 基础设施修复

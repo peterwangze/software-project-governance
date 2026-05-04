@@ -37,6 +37,12 @@
 
 **这不是可选项。** 如果任务涉及创建或修改代码，派生对应的审查子 agent 与编写证据（M7.4）同为强制性要求。
 
+**版本规划与发布管理纪律**：
+- 版本号 bump、CHANGELOG 更新、版本路线图变更 → Coordinator MUST spawn Release Agent（使用 general-purpose + 角色定义降级方案）
+- 任务优先级调整、路线图排期 → Coordinator MUST spawn Analyst + Release Agent
+- Release Agent 输出必须经过 Release Reviewer 独立审查
+- 禁止 Coordinator 自行执行版本规划决策——这是 Release Agent 零激活的根因
+
 ### M1.2 简单操作快速通道 (0.28.0+)
 
 **治理记录修改不触发 Agent Team 激活。** 以下路径操作 Coordinator **MAY** 直接执行，无需 spawn Developer + Code Reviewer：

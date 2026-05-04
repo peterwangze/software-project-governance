@@ -3495,6 +3495,239 @@ def check_review_debt():
     return result
 
 
+# ── FIX-037: Review Coverage Check (Check 21) ──────────────────────
+
+PRODUCT_CODE_PATTERNS = [
+    "skills/", "agents/", "infra/", "commands/",
+    "adapters/", ".claude-plugin/", ".codex-plugin/", ".agents/",
+    "project/",
+]
+
+
+def check_review_coverage():
+    """FIX-037: Check 21 — Review coverage for product code tasks.
+
+    Counts product code tasks (excluding P2 priority) and verifies what
+    fraction has review evidence. Uses _parse_review_covered_tasks() to
+    determine which tasks have been independently reviewed.
+
+    Returns dict with total_tasks, reviewed, unreviewed, unreviewed_tasks,
+    coverage_pct, pass.
+    """
+    result = {
+        "total_tasks": 0,
+        "reviewed": 0,
+        "unreviewed": 0,
+        "unreviewed_tasks": [],
+        "coverage_pct": 0.0,
+        "pass": True,
+    }
+
+    if not SAMPLE_PATH.is_file():
+        return result
+    if not EVIDENCE_PATH.is_file():
+        return result
+
+    plan_content = SAMPLE_PATH.read_text(encoding="utf-8")
+
+    # ── Parse task priorities from plan-tracker tracking tables ──
+    task_priorities = {}          # task_id -> priority string (P0/P1/P2)
+    all_task_ids = set()
+    for line in plan_content.split("\n"):
+        line_s = line.strip()
+        if not line_s.startswith("| ") or "---" in line_s:
+            continue
+        m = re.match(r"\|\s*([A-Z]+-\d+)\s*\|", line_s)
+        if not m:
+            continue
+        task_id = m.group(1)
+        all_task_ids.add(task_id)
+        parts = [p.strip() for p in line.split("|")]
+        # parts[10] = status; parts[11] = priority (20-col table)
+        if len(parts) >= 12:
+            task_priorities[task_id] = parts[11]
+
+    if not all_task_ids:
+        return result
+
+    # ── Build evidence map from evidence-log ──
+    evidence_content = EVIDENCE_PATH.read_text(encoding="utf-8")
+    task_file_locations = {}
+    for line in evidence_content.split("\n"):
+        line = line.strip()
+        if not line.startswith("| EVD-"):
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) < 8:
+            continue
+        raw_ids = parts[2]
+        file_location = parts[6] if len(parts) > 6 else ""
+        for tid in expand_task_ids(raw_ids) if raw_ids and re.search(r"[A-Z]+-\d+", raw_ids) else []:
+            task_file_locations.setdefault(tid, []).append(file_location)
+
+    # ── Build review coverage map ──
+    review_covered = _parse_review_covered_tasks()
+
+    # ── Count product-code tasks and check review coverage ──
+    for task_id in sorted(all_task_ids):
+        # Exclude P2 priority tasks
+        priority = task_priorities.get(task_id, "")
+        if priority == "P2":
+            continue
+
+        file_locs = task_file_locations.get(task_id, [])
+        if not file_locs:
+            continue
+
+        is_product_code = any(
+            any(pat in loc for pat in PRODUCT_CODE_PATTERNS)
+            for loc in file_locs
+        )
+        if not is_product_code:
+            continue
+
+        result["total_tasks"] += 1
+        if task_id in review_covered:
+            result["reviewed"] += 1
+        else:
+            result["unreviewed"] += 1
+            result["unreviewed_tasks"].append(task_id)
+
+    if result["total_tasks"] > 0:
+        result["coverage_pct"] = round((result["reviewed"] / result["total_tasks"]) * 100, 1)
+    result["pass"] = result["unreviewed"] == 0
+    return result
+
+
+# ── FIX-038: Profile Consistency Check (Check 22) ──────────────────
+
+# Per-profile expectations (from core/profiles.md)
+_PROFILE_GATE_COUNT = {
+    "lightweight": 7,
+    "standard": 11,
+    "strict": 11,
+}
+_PROFILE_TASK_COLUMNS = {
+    "lightweight": 6,
+    "standard": 20,
+    "strict": 20,
+}
+
+
+def check_profile_consistency():
+    """FIX-038: Check 22 — Profile consistency between declaration and actual structure.
+
+    Validates:
+      a. Gate table row count matches profile expectation
+      b. Task tracking table column count matches profile expectation
+      c. Strict profile must not contain any "passed-with-conditions" entries
+
+    Returns dict with profile, gate_rows, expected_gate_rows, task_cols,
+    expected_task_cols, conditional_passes, issues, pass.
+    """
+    result = {
+        "profile": "",
+        "gate_rows": 0,
+        "expected_gate_rows": 0,
+        "task_cols": 0,
+        "expected_task_cols": 0,
+        "conditional_passes": 0,
+        "issues": [],
+        "pass": True,
+    }
+
+    if not SAMPLE_PATH.is_file():
+        result["issues"].append("plan-tracker.md not found")
+        result["pass"] = False
+        return result
+
+    # 1. Parse profile from plan-tracker project config
+    config = parse_project_config()
+    profile_raw = config.get("Profile", "")
+    # Remove parenthetical remarks like "standard（本项目即为工作流产品本身...）"
+    profile = re.match(r"^\s*(\w+)", profile_raw)
+    if not profile:
+        result["issues"].append(
+            f"Profile field not found or unparseable in plan-tracker project config"
+        )
+        result["pass"] = False
+        return result
+    profile = profile.group(1).lower()
+    result["profile"] = profile
+
+    if profile not in _PROFILE_GATE_COUNT:
+        result["issues"].append(f"Unknown profile: '{profile}'")
+        result["pass"] = False
+        return result
+
+    # 2. Set expected values
+    result["expected_gate_rows"] = _PROFILE_GATE_COUNT[profile]
+    result["expected_task_cols"] = _PROFILE_TASK_COLUMNS[profile]
+
+    # 3. Count actual gate rows
+    gates = parse_gate_status()
+    result["gate_rows"] = len(gates)
+    if result["gate_rows"] != result["expected_gate_rows"]:
+        result["issues"].append(
+            f"Gate table has {result['gate_rows']} rows, "
+            f"expected {result['expected_gate_rows']} for '{profile}' profile"
+        )
+        result["pass"] = False
+
+    # 4. Count task tracking table columns (first table under ## 样例跟踪表)
+    plan_content = SAMPLE_PATH.read_text(encoding="utf-8")
+    in_section = False
+    for line in plan_content.split("\n"):
+        if "## 样例跟踪表" in line:
+            in_section = True
+            continue
+        if in_section:
+            line = line.strip()
+            if not line:
+                continue  # skip blank lines between heading and table
+            if line.startswith("## "):
+                break   # hit next section — no table found
+            if not line.startswith("|"):
+                break   # end of table
+            if "---" in line:
+                continue  # separator row
+            # Header row — count columns (strip leading/trailing empties)
+            parts = [p.strip() for p in line.split("|")]
+            # Remove leading and trailing empty strings from split
+            if parts and parts[0] == "":
+                parts = parts[1:]
+            if parts and parts[-1] == "":
+                parts = parts[:-1]
+            result["task_cols"] = len(parts)
+            break  # Only count the first header row
+
+    if result["task_cols"] == 0:
+        result["issues"].append(
+            "Task tracking table ('样例跟踪表') not found or has no header row"
+        )
+        result["pass"] = False
+    elif result["task_cols"] != result["expected_task_cols"]:
+        result["issues"].append(
+            f"Task table has {result['task_cols']} columns, "
+            f"expected {result['expected_task_cols']} for '{profile}' profile"
+        )
+        result["pass"] = False
+
+    # 5. Strict profile: no conditional passes allowed
+    if profile == "strict":
+        for g in gates:
+            if g["status"] == "passed-with-conditions":
+                result["conditional_passes"] += 1
+        if result["conditional_passes"] > 0:
+            result["issues"].append(
+                f"Strict profile forbids 'passed-with-conditions', "
+                f"but {result['conditional_passes']} gate(s) have it"
+            )
+            result["pass"] = False
+
+    return result
+
+
 def cmd_check_governance(args):
     """Run governance health checks: evidence completeness, risk staleness, gate consistency."""
     # Ensure UTF-8 stdout to handle Chinese characters from .md files (Windows GBK workaround)
@@ -4018,6 +4251,41 @@ def cmd_check_governance(args):
             print(f"│  [PASS] All product-code tasks have review evidence.")
         else:
             print(f"│  [PASS] No product-code tasks to check.")
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 21. Review Coverage (FIX-037) ──
+    print("\n┌─ Check 21: Review Coverage (FIX-037) ────────────────┐")
+    rc_result = check_review_coverage()
+    print(f"│  Product code tasks: {rc_result['total_tasks']}")
+    print(f"│  Tasks with review evidence: {rc_result['reviewed']}")
+    print(f"│  Coverage: {rc_result['coverage_pct']}%")
+    if rc_result["unreviewed"] > 0:
+        all_issues += rc_result["unreviewed"]
+        print(f"│  [WARN] {rc_result['unreviewed']} unreviewed product-code task(s):")
+        for tid in rc_result["unreviewed_tasks"]:
+            print(f"│    - {tid}")
+    else:
+        if rc_result["total_tasks"] > 0:
+            print(f"│  [PASS] Review coverage = 100% — all product-code tasks reviewed.")
+        else:
+            print(f"│  [PASS] No product-code tasks to check.")
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 22. Profile Consistency (FIX-038) ──
+    print("\n┌─ Check 22: Profile Consistency (FIX-038) ────────────┐")
+    pc_result = check_profile_consistency()
+    print(f"│  Profile: {pc_result['profile']}")
+    print(f"│  Gate table rows: {pc_result['gate_rows']} (expected: {pc_result['expected_gate_rows']})")
+    print(f"│  Task table columns: {pc_result['task_cols']} (expected: {pc_result['expected_task_cols']})")
+    print(f"│  Conditional passes found: {pc_result['conditional_passes']}"
+          f" {'(strict: must be 0)' if pc_result['profile'] == 'strict' else ''}")
+    if pc_result["issues"]:
+        all_issues += len(pc_result["issues"])
+        print(f"│  [WARN] {len(pc_result['issues'])} profile consistency issue(s):")
+        for issue in pc_result["issues"]:
+            print(f"│    - {issue}")
+    else:
+        print(f"│  [PASS] Profile declaration matches actual structure.")
     print("└──────────────────────────────────────────────────────┘")
 
     # ── Summary ──

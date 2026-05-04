@@ -262,6 +262,28 @@
 
 **历史演进**：FIX-013 补了触发覆盖（白名单加项）→ FIX-015 清了源文件污染 → FIX-016 加了预输出扫描 → FIX-017 加了 P0 强制审查 → AUDIT-053 C1 修了 M7.2 冲突 → FIX-018 做了结构重排（审查在 commit 前）。全部 6 层修复都在白名单模式内打转——加更多触发点、修更多冲突、改更多结构。FIX-019 是第一个跳出白名单框架的修复：不修触发点，修**模型方向**。
 
+## 失败模式 12：Agent Namespace Resolution Failure
+
+**症状**：Coordinator 调用 Agent 工具但 sub-agent 未 spawn——改为加载同名 Skill。Agent 工具结果中无 agentId，sub-agent 输出未出现在对话中。
+
+**检测方法**：
+- Agent 工具调用后没有 agentId 返回
+- 预期的 sub-agent 行为（代码修改、文件创建）没有发生
+- Agent 工具结果看起来像 SKILL.md 内容而非 agent 执行结果
+- 多次尝试 spawn 同一个 agent type 均失败
+
+**用户应急动作**：
+1. 改用 `general-purpose` agent type + 在 prompt 中显式加载角色定义文件
+2. 检查 Agent 工具返回中是否提示"加载为 Skill 而非 Agent"
+3. 如果降级方案仍失败，手动执行任务（绕过 Agent Team 模式）
+
+**预防机制**：
+- 平台修复前使用降级方案（`general-purpose` + 角色定义加载）
+- 0.28.0 已验证降级方案可用（FIX-030/033/035/REL-004 全部使用此方式）
+- SKILL.md Sub-agent 调度章节已记录此限制和降级方案
+
+**根因**：Plugin-namespaced agent type（如 `software-project-governance:software-project-governance-developer`）在 Agent 工具的 `subagent_type` 参数中不被支持——会被路由为 Skill 加载而非 Agent spawn。只有系统内置类型（`general-purpose`, `Explore`, `Plan`）能成功 spawn。
+
 ## 应急响应矩阵
 
 当用户发现 agent 行为异常时，按以下顺序排查：

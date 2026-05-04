@@ -68,6 +68,19 @@ Coordinator 在并行 spawn 多个 agent 前 **MUST** 校验：任意两个 agen
 - **清理**: 无修改时自动清理 worktree；有修改时 Agent 工具结果中返回 worktree 路径和分支，供 Coordinator 后续处理
 - **使用**: 仅对修改文件的 agent 使用；只读 agent（如 Reviewer）不需要
 
+## 平台兼容性
+
+当 plugin-namespaced agent type 不可用时，使用以下降级模板：
+
+```
+Agent(
+  subagent_type="general-purpose",
+  prompt="你是 {agent_role}（{agent_nickname}）。在执行任务前，MUST 先加载两个文件：\n\n1. 角色定义：{role_definition_path}\n2. 任务规范：{task_skill_path}\n\n## 任务：{task_id} — {task_summary}\n\n[填充模板其余部分...]"
+)
+```
+
+已验证：`general-purpose` agent 可成功 spawn 并完成任务（0.28.0 全部任务使用此方式）。
+
 ## Coordinator 不得做的事
 
 - ❌ 传自定义 prompt 替代模板

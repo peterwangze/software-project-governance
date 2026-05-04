@@ -5,27 +5,22 @@
 
 set -e
 
-# --- Product code detection (shared by Step 7b and Step 9) ---
+# --- Product code detection (shared by Step 7 and Step 9) ---
 # Detects whether staged files include product code (as opposed to governance records).
 # Usage: if is_product_code "$file_list"; then ... fi
 # Returns 0 (true) if product code detected, 1 (false) otherwise.
-# Definition: same 12 patterns as SKILL.md "产品代码 vs 治理记录边界".
+# Definition: aligned with SKILL.md "产品代码 vs 治理记录边界" and M1.2.
 is_product_code() {
     local files="$1"
-    local result=0
-    echo "$files" | grep -qE "^skills/software-project-governance/" && result=1
-    echo "$files" | grep -qE "^agents/" && result=1
-    echo "$files" | grep -qE "^skills/stage-" && result=1
-    echo "$files" | grep -qE "^skills/[a-z]+-review/" && result=1
-    echo "$files" | grep -qE "^skills/code-review/" && result=1
-    echo "$files" | grep -qE "^commands/" && result=1
-    echo "$files" | grep -qE "^infra/verify_workflow\.py$" && result=1
-    echo "$files" | grep -qE "^infra/cleanup\.py$" && result=1
-    echo "$files" | grep -qE "^infra/hooks/" && result=1
-    echo "$files" | grep -qE "^\.claude-plugin/" && result=1
-    echo "$files" | grep -qE "^\.codex-plugin/" && result=1
-    echo "$files" | grep -qE "^skills/software-project-governance/references/" && result=1
-    return $result
+    local file
+    while IFS= read -r file; do
+        [ -z "$file" ] && continue
+        case "$file" in
+            skills/*|agents/*|commands/*|core/*|infra/*|references/*|adapters/*|.claude-plugin/*|.codex-plugin/*|.agents/*)
+                return 0 ;;
+        esac
+    done <<< "$files"
+    return 1
 }
 
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo ".")
@@ -198,59 +193,18 @@ if git diff --cached --name-only 2>/dev/null | grep -q "^CLAUDE.md$"; then
     fi
 fi
 
-# ── Step 7a: Review evidence WARN (AUDIT-086) ──
-# For P0 tasks, check if a review evidence entry exists.
-# This enforces the Producer-Reviewer separation at the system level.
-# WARN only — detected gap is logged but commit proceeds.
-# IS_P0 default: initialized here so Step 7b won't fail with "integer expression expected"
-# when evidence-log.md does not exist (IS_P0 was never set in that codepath).
-IS_P0=0
-if [ -f "$REPO_ROOT/.governance/evidence-log.md" ]; then
-    STEP7_TASK_ID=$(echo "$COMMIT_MSG" | grep -oE '(AUDIT|FIX|REQ|MAINT|INIT|PLAN|DESIGN|REL|VAL|CI|ACCEPT|RESEARCH|DOC|OPS|CONSTRAINT|SYSGAP|CLEANUP)-[0-9]+' | head -1)
-    if [ -n "$STEP7_TASK_ID" ]; then
-        # Check if the task is P0 priority
-        if [ -f "$REPO_ROOT/.governance/plan-tracker.md" ]; then
-            IS_P0=$(grep -c "| $STEP7_TASK_ID |.*| P0 |" "$REPO_ROOT/.governance/plan-tracker.md" 2>/dev/null || echo "0")
-            if [ "$IS_P0" -gt 0 ]; then
-                # Check for review evidence (REVIEW-* or EVD-* mentioning review)
-                HAS_REVIEW=$(grep -c "REVIEW-\|审查" "$REPO_ROOT/.governance/evidence-log.md" 2>/dev/null || echo "0")
-                if [ "$HAS_REVIEW" -eq 0 ]; then
-                    echo ""
-                    echo "╔══════════════════════════════════════════════════════════════╗"
-                    echo "║  REVIEW GAP: P0 task '$STEP7_TASK_ID' has no review evidence.      ║"
-                    echo "║                                                            ║"
-                    echo "║  Producer-Reviewer separation requires independent review    ║"
-                    echo "║  for all P0 tasks. Run /governance-review before commit.     ║"
-                    echo "║                                                            ║"
-                    echo "║  This is a WARNING — commit allowed but review debt          ║"
-                    echo "║  is being tracked. Fix in next commit.                      ║"
-                    echo "╚══════════════════════════════════════════════════════════════╝"
-                    echo ""
-                    # WARNING only (not BLOCKING) — review can be post-commit for now
-                fi
-            fi
-        fi
-    fi
-fi
-
-# ── Step 7b: Review evidence BLOCK (SYSGAP-032) ──
-# For P0 tasks + product code changes, BLOCK commit if no review evidence.
+# ── Step 7: Product Code Review Evidence BLOCK (FIX-036) ──
+# When product code files are changed, review evidence is MANDATORY.
+# This enforces the Producer-Reviewer separation at the system level (M7.4 + M1.1).
 # Task prefix determines whether review is required (routing table mapping).
 # Tasks whose type IS review (REVIEW, EVD, DEC, RISK, GOV) are exempt.
-# Uses STEP7_TASK_ID from Step 7a (with whitelist prefix extraction) — separate from
-# the original TASK_ID (line 81) which is preserved for Steps 10-12.
-if [ -n "$STEP7_TASK_ID" ] && [ "$IS_P0" -gt 0 ]; then
-    # Determine if this commit touches product code
-    # (same definition as Step 9 — see SKILL.md "产品代码 vs 治理记录边界")
-    CHANGED_FILES_STEP7=$(git diff --cached --name-only 2>/dev/null || true)
-    IS_PRODUCT_CODE_STEP7=0
-    if [ -n "$CHANGED_FILES_STEP7" ]; then
-        if is_product_code "$CHANGED_FILES_STEP7"; then
-            IS_PRODUCT_CODE_STEP7=1
-        fi
-    fi
+# Uses STEP7_TASK_ID — separate from the original TASK_ID (line 81) preserved for Steps 10-12.
+STEP7_TASK_ID=$(echo "$COMMIT_MSG" | grep -oE '(AUDIT|FIX|REQ|MAINT|INIT|PLAN|DESIGN|REL|VAL|CI|ACCEPT|RESEARCH|DOC|OPS|CONSTRAINT|SYSGAP|CLEANUP)-[0-9]+' | head -1)
 
-    if [ "$IS_PRODUCT_CODE_STEP7" -eq 1 ]; then
+if [ -n "$STEP7_TASK_ID" ]; then
+    # Check if staged files include product code
+    CHANGED_FILES_STEP7=$(git diff --cached --name-only 2>/dev/null || true)
+    if [ -n "$CHANGED_FILES_STEP7" ] && is_product_code "$CHANGED_FILES_STEP7"; then
         # Task prefix → review requirement mapping
         TASK_PREFIX=$(echo "$STEP7_TASK_ID" | grep -oE '^[A-Z]+')
         case "$TASK_PREFIX" in
@@ -263,18 +217,27 @@ if [ -n "$STEP7_TASK_ID" ] && [ "$IS_P0" -gt 0 ]; then
         esac
 
         if [ "$NEEDS_REVIEW" -eq 1 ]; then
-            HAS_REVIEW_EVD=$(grep -cE "REVIEW-.*$STEP7_TASK_ID" "$REPO_ROOT/.governance/evidence-log.md" 2>/dev/null || echo "0")
+            HAS_REVIEW_EVD=0
+            if [ -f "$REPO_ROOT/.governance/evidence-log.md" ]; then
+                HAS_REVIEW_EVD=$(grep -cE "REVIEW-.*$STEP7_TASK_ID" "$REPO_ROOT/.governance/evidence-log.md" 2>/dev/null || echo "0")
+            fi
             if [ "$HAS_REVIEW_EVD" -eq 0 ]; then
+                # Format changed files list (first 5, with ellipsis if more)
+                PC_FILES=$(echo "$CHANGED_FILES_STEP7" | head -5 | tr '\n' ' ')
+                PC_FILE_COUNT=$(echo "$CHANGED_FILES_STEP7" | grep -c . 2>/dev/null || echo "0")
+                if [ "$PC_FILE_COUNT" -gt 5 ]; then
+                    PC_FILES="$PC_FILES... (+$((PC_FILE_COUNT - 5)) more)"
+                fi
+
                 echo ""
                 echo "╔══════════════════════════════════════════════════════════════╗"
-                echo "║  REVIEW BLOCKED: P0 task '$STEP7_TASK_ID' has no review evidence. ║"
+                echo "║  M7.4 BLOCKED: Product code changes without review evidence ║"
                 echo "║                                                            ║"
-                echo "║  Product code changes require independent review (M7.4      ║"
-                echo "║  step 4.5). Spawn a Reviewer agent and complete review       ║"
-                echo "║  before retrying this commit.                               ║"
+                echo "║  Changed files: $PC_FILES"
+                echo "║  These are product code paths. Review evidence is          ║"
+                echo "║  MANDATORY before commit (M7.4 + M1.1).                    ║"
                 echo "║                                                            ║"
-                echo "║  Action: spawn Reviewer agent and complete review.          ║"
-                echo "║          The review conclusion MUST be in evidence-log.     ║"
+                echo "║  Action: spawn Code Reviewer → get APPROVED → add evidence ║"
                 echo "║  Emergency bypass: git commit --no-verify                  ║"
                 echo "╚══════════════════════════════════════════════════════════════╝"
                 echo ""
@@ -330,9 +293,9 @@ fi
 # --- Step 9: Agent Team Bypass WARN (SYSGAP-007) ---
 # Check if this commit modifies "product code" files. If so, verify
 # that the commit message shows evidence of Agent Team execution.
-# Product code = files under skills/software-project-governance/, agents/,
-# skills/stage-*, skills/*-review/, skills/code-review/, commands/,
-# infra/ (verify_workflow.py, cleanup.py, hooks/), .claude-plugin/, .codex-plugin/.
+# Product code = files matching is_product_code() patterns:
+# skills/*|agents/*|commands/*|core/*|infra/*|references/*|adapters/*|
+# .claude-plugin/*|.codex-plugin/*|.agents/*
 # WARN only — emergency hotfixes may need direct commits.
 # See SKILL.md "产品代码 vs 治理记录边界" for the full boundary definition.
 if [ -n "$CHANGED_FILES" ]; then

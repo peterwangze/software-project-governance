@@ -158,6 +158,8 @@ Coordinator 铁律第 1 条"不直接修改产品代码"的具体判定标准。
 | 测试设计 | QA | Test Reviewer | 自动——QA 完成测试策略后 | 数据驱动——每个结论有量化数据 |
 | 部署/运维 | DevOps | — | 用户触发 | 定目标→追过程→拿结果闭环 |
 | 发布管理 | Release | Release Reviewer | 自动——发布计划完成后 | 专注极致口碑快 |
+| 版本规划/任务排布 | Release + Analyst | Release Reviewer + Design Reviewer | 自动——版本规划完成后 | 定目标→追过程→拿结果闭环 + Working Backwards |
+| 任务优先级调整/路线图更新 | Analyst + Release | Design Reviewer | 自动——路线图变更后 | Working Backwards + 专注极致口碑快 |
 | 技术债务 | Maintenance | Code Reviewer（如涉及产品代码） | 自动——修改产品代码时 | 做难而正确的事 + 长期有耐心 |
 | 影响分析（P0/跨层变更） | Analyst + Architect | Design Reviewer + Requirement Reviewer | 自动——分析完成后 | change-impact-checklist Step 1-5 |
 | 任务模糊 | Coordinator 自行处理 | — | 用户触发 | 通用闭环（默认） |
@@ -182,6 +184,22 @@ Sub-agent 硬边界：
 **调度模板**：Coordinator spawn sub-agent 时 MUST 使用 `references/agent-dispatch-template.md`——禁止传自定义 prompt，只能填充模板中的占位符。
 
 **并行调度安全**：Coordinator spawn 多个 agent 前 MUST 校验文件修改目标无重叠。两个 agent 修改同一文件路径 -> 启用 `isolation: "worktree"`（Agent 平台原生支持）物理隔离。不可用时串行化。详见 `references/behavior-protocol.md` M7.6。
+
+### Agent 调度平台限制 (0.28.0 发现)
+
+**已知限制**：Claude Code 当前版本不支持 plugin-namespaced subagent type。`software-project-governance:*` 格式的 agent type 会被路由为 Skill 加载而非独立 Agent spawn。
+
+**降级方案**：使用系统内置 `general-purpose` agent type，在 prompt 中显式加载角色定义：
+
+```
+Agent(
+  subagent_type="general-purpose",
+  prompt="你是 {角色名}。先加载角色定义：agents/{name}.md。然后加载任务规范：skills/{skill}/SKILL.md。\n\n## 任务...",
+  ...
+)
+```
+
+**已验证有效**：0.28.0 开发中 FIX-030/033/035/REL-004 全部使用此降级方案完成。
 
 ## 工作流合约
 

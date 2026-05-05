@@ -1545,7 +1545,7 @@ def check_version_consistency():
     Source of truth: skills/software-project-governance/SKILL.md frontmatter.
 
     Checks performed:
-      1. Version declaration files (manifest.md, manifest.json, plugin.json x2,
+      1. Version declaration files (manifest.json, plugin.json x2,
          marketplace.json, codex plugin.json) all match SKILL.md version.
       2. verify_workflow.py hardcoded snippet versions match SKILL.md.
       3. CHANGELOG.md latest entry version matches SKILL.md.          (FAIL)
@@ -1559,7 +1559,6 @@ def check_version_consistency():
 
     VERSION_FILES = {
         "SKILL.md (source of truth)": ROOT / "skills/software-project-governance/SKILL.md",
-        "manifest.md": ROOT / "skills/software-project-governance/core/manifest.md",
         "manifest.json": ROOT / "skills/software-project-governance/core/manifest.json",
         ".claude-plugin/plugin.json": ROOT / ".claude-plugin/plugin.json",
         ".claude-plugin/marketplace.json": ROOT / ".claude-plugin/marketplace.json",
@@ -1629,7 +1628,11 @@ def check_version_consistency():
     snippet_self_content = snippet_self_path.read_text(encoding="utf-8")
     # Match only bare quoted version strings like "0.26.0" (excludes
     # CHANGELOG entries like "## [0.7.1]" which use a different format)
-    snippet_versions = set(re.findall(r'"(\d+\.\d+\.\d+)"', snippet_self_content))
+    # Exclude comment lines to avoid matching example versions in comments
+    non_comment_lines = [l for l in snippet_self_content.split('\n') if not l.strip().startswith('#')]
+    snippet_versions = set()
+    for line in non_comment_lines:
+        snippet_versions.update(re.findall(r'"(\d+\.\d+\.\d+)"', line))
     for sv in snippet_versions:
         if sv != source_version:
             issues.append(
@@ -1669,6 +1672,26 @@ def check_version_consistency():
                     f"(plan-tracker is local, may lag — not a blocker)"
                 )
         # Missing version field or missing file: not an error (CI edge case)
+
+    # ── Check hook @version tags ──
+    HOOK_FILES = {
+        "hooks/pre-commit": ROOT / "skills/software-project-governance/infra/hooks/pre-commit",
+        "hooks/commit-msg": ROOT / "skills/software-project-governance/infra/hooks/commit-msg",
+        "hooks/post-commit": ROOT / "skills/software-project-governance/infra/hooks/post-commit",
+        "hooks/prepare-commit-msg": ROOT / "skills/software-project-governance/infra/hooks/prepare-commit-msg",
+    }
+    for label, path in HOOK_FILES.items():
+        if not path.exists():
+            issues.append(f"[FAIL] {label}: {path} not found")
+            continue
+        content = path.read_text(encoding="utf-8")
+        hook_match = re.search(r'@version:\s*(\d+\.\d+\.\d+)', content)
+        if hook_match:
+            hook_ver = hook_match.group(1)
+            if hook_ver != source_version:
+                issues.append(f"[FAIL] {label}: @version={hook_ver}, expected={source_version}")
+        else:
+            issues.append(f"[FAIL] {label}: no @version tag found")
 
     return issues
 
@@ -4288,6 +4311,24 @@ def cmd_check_governance(args):
         print(f"│  [PASS] Profile declaration matches actual structure.")
     print("└──────────────────────────────────────────────────────┘")
 
+    # ── 23. Version Consistency (FIX-052) ──
+    print("\n┌─ Check 23: Version Consistency (FIX-052) ───────────┐")
+    vc_issues = check_version_consistency()
+    vc_fail = [i for i in vc_issues if not i.startswith("[WARN]")]
+    vc_warn = [i for i in vc_issues if i.startswith("[WARN]")]
+    if vc_fail:
+        all_issues += len(vc_fail)
+        print(f"│  [FAIL] {len(vc_fail)} version mismatch(es):")
+        for v in vc_fail:
+            print(f"│    - {v}")
+    else:
+        print(f"│  [PASS] All version declarations match SKILL.md.")
+    if vc_warn:
+        print(f"│  [INFO] {len(vc_warn)} non-blocking drift(s):")
+        for w in vc_warn:
+            print(f"│    - {w}")
+    print("└──────────────────────────────────────────────────────┘")
+
     # ── Summary ──
     print(f"\n┌─ Governance Health Summary ──────────────────────────┐")
     if all_issues == 0:
@@ -4456,7 +4497,6 @@ def _check_version_consistency_heuristic():
 
         # Version declaration files
         version_files = [
-            "skills/software-project-governance/core/manifest.md",
             "skills/software-project-governance/core/manifest.json",
             ".claude-plugin/plugin.json",
             ".claude-plugin/marketplace.json",
@@ -5246,6 +5286,39 @@ def cmd_check_review_debt(args):
         sys.exit(1)
 
 
+def cmd_check_version_consistency(_args):
+    """Run version consistency check across all declaration locations."""
+    import sys
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+
+    issues = check_version_consistency()
+
+    print("\n=== Version Consistency Check ===")
+    print(f"  Source of truth: skills/software-project-governance/SKILL.md")
+    print(f"  Files checked: 11 (SKILL.md, manifest.json, 3 plugin.json, CHANGELOG, plan-tracker, 4 hooks)")
+
+    fail_items = [i for i in issues if not i.startswith("[WARN]")]
+    warn_items = [i for i in issues if i.startswith("[WARN]")]
+
+    if warn_items:
+        print(f"\n  Warnings ({len(warn_items)}):")
+        for w in warn_items:
+            print(f"    {w}")
+
+    if fail_items:
+        print(f"\n  Failures ({len(fail_items)}):")
+        for f in fail_items:
+            print(f"    {f}")
+        print(f"\n  Result: FAILED — {len(fail_items)} mismatch(es)")
+        sys.exit(1)
+    else:
+        print(f"\n  Result: PASSED — all version declarations consistent")
+    print()
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="verify_workflow",
@@ -5344,6 +5417,10 @@ def main():
     crd_p.add_argument("--fail-on-issues", action="store_true",
                       help="Exit with non-zero code if review debt found")
 
+    # check-version-consistency (FIX-052)
+    subparsers.add_parser("check-version-consistency",
+                          help="Check version consistency across all declaration files")
+
     args = parser.parse_args()
 
     commands = {
@@ -5366,6 +5443,7 @@ def main():
         "check-user-impact": cmd_check_user_impact,
         "check-agent-team": cmd_check_agent_team,
         "check-review-debt": cmd_check_review_debt,
+        "check-version-consistency": cmd_check_version_consistency,
     }
 
     cmd = args.command or "verify"

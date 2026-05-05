@@ -47,7 +47,7 @@ Coordinator spawn sub-agent 时 MUST 使用本模板，**禁止**传自定义 pr
 | `{task_id}` | 任务 ID | SYSGAP-030 |
 | `{task_summary}` | 一句话任务摘要 | 路由表 1:1→1:N 升级 |
 | `{agent_role}` | 角色名（英文） | Developer |
-| `{agent_nickname}` | 角色昵称（中文） | 阿速 |
+| `{agent_nickname}` | 角色名（功能性描述，如 Developer、Code Reviewer） | Developer |
 | `{role_definition_path}` | 角色定义文件路径 | agents/developer.md |
 | `{task_skill_path}` | 任务 SKILL 文件路径 | skills/stage-development/SKILL.md |
 | `{task_description}` | 任务详细描述 | 修改 SKILL.md 路由表... |
@@ -80,6 +80,22 @@ Agent(
 ```
 
 已验证：`general-purpose` agent 可成功 spawn 并完成任务（0.28.0 全部任务使用此方式）。
+
+## 进度通知（FIX-039）
+
+Coordinator spawn sub-agent 时 MUST 在用户可见输出中报告进度：
+
+```
+>> 派发 {功能性角色名} 执行 {TASK_ID}: {简短描述}...
+```
+
+完成后报告结果：
+
+```
+✅ {TASK_ID} 完成——{功能性角色名}: {关键成果摘要}
+```
+
+禁止静默 spawn——即 spawn agent 后不在用户侧输出任何进度信息。
 
 ## Coordinator 不得做的事
 

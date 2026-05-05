@@ -33,7 +33,7 @@ Agent(
 
 ## 角色 Agent I/O 契约
 
-### Developer (阿速)
+### Developer
 
 **Input**:
 ```
@@ -53,7 +53,7 @@ Dependencies: {前置 task ID}
 
 **Escalation**: 3 次失败 → 停止，质疑方案，升级给 Coordinator
 
-### Reviewer (老严)
+### Reviewer
 
 **Input**:
 ```
@@ -73,7 +73,7 @@ Findings (if any):
 
 **Escalation**: BLOCKED → 升级给 Coordinator，附带影响评估 + 建议方向
 
-### Architect (老顾)
+### Architect
 
 **Input**:
 ```

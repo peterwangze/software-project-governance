@@ -1,5 +1,7 @@
 # governance-review — 触发独立审查
 
+> **推荐使用 `/governance`**——自动检测项目状态并按需路由到对应 Reviewer Agent。本命令保留为手动触发快捷方式。
+
 用户通过斜杠命令 `/governance-review` 手动触发 Reviewer Agent 对指定阶段/类型的产出物进行独立审查。
 
 ## 触发条件

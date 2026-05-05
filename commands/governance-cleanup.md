@@ -1,5 +1,7 @@
 # governance-cleanup -- 声明式插件残留清理
 
+> **推荐使用 `/governance`**——版本升级时自动触发清理（Scenario C）。本命令保留为手动快捷方式。
+
 清理命令基于 canonical manifest (`skills/software-project-governance/core/manifest.json`) 的声明式 diff：
 **REDUNDANT = ACTUAL - CANONICAL - EXCLUDE**。不再维护硬编码的冗余文件列表，
 每次 manifest 更新后清理逻辑自动生效。

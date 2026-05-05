@@ -19,15 +19,15 @@
 
 ```bash
 # 方式一：通过插件市场安装（推荐，两步）
-/plugin marketplace add peterwangze/governance
+/plugin marketplace add peterwangze/software-project-governance
 /plugin install software-project-governance@spg
 
 # 方式二：直接从 git URL 安装
-/plugin install https://github.com/peterwangze/governance.git
+/plugin install https://github.com/peterwangze/software-project-governance.git
 
 # 方式三：克隆到本地后安装
-git clone https://github.com/peterwangze/governance.git
-/plugin install /path/to/governance
+git clone https://github.com/peterwangze/software-project-governance.git
+/plugin install /path/to/software-project-governance
 ```
 
 安装后，工作流入口会在后续会话中自动可用；**但首次使用前仍必须先完成一次初始化**，在你的项目根目录创建 `.governance/` 治理文件。安装完成不等于已经可用完成。
@@ -35,7 +35,7 @@ git clone https://github.com/peterwangze/governance.git
 ### Codex
 
 ```bash
-git clone https://github.com/peterwangze/governance.git
+git clone https://github.com/peterwangze/software-project-governance.git
 ```
 
 当前仓库已提供 Codex 所需资产：`.codex-plugin/plugin.json` 和 `skills/software-project-governance/SKILL.md`。
@@ -71,20 +71,25 @@ Codex 入口采用**自包含 skill**：`skills/software-project-governance/SKIL
 
 如果你的 agent 不能稳定满足上面 4 个条件，就说明当前更适合走兼容路线，而不是直接按 README 当成现成产品入口使用。
 
-## 常用命令
+## 唯一命令
 
-安装后，在 Claude Code 中优先使用插件命名空间命令：
+安装后，只需记住**一条命令**：
 
-| 命令 | 作用 |
-|------|------|
-| `/governance:governance-init` | 首次使用时初始化项目治理文件（安装后第一步） |
-| `/governance:governance-status` | 查看当前项目状态、阶段、任务进度、Gate 概览 |
-| `/governance:governance-gate G6` | 检查指定 Gate 详情 |
-| `/governance:governance-verify` | 运行完整校验，检查工作流资产完整性 |
+```
+/governance
+```
 
-说明：当前 Claude Code 插件环境下，这些命令通常以 `插件名:命令名` 的形式暴露；如果你的环境后续支持短别名，再按该环境实际行为使用。
+这条命令会根据当前项目状态自动决策：
 
-这些命令在 agent 内执行，不需要退出到终端。
+| 你的项目状态 | `/governance` 自动做的事 |
+|-------------|------------------------|
+| 首次使用（无 `.governance/`） | 引导初始化——收集项目信息 → 创建治理文件 |
+| 会话恢复（上次有未完成工作） | 恢复遗留任务 + 待确认决策 + 活跃风险 |
+| 异常检测（hook 缺失等） | 自动诊断 → 一键修复 |
+| 日常状态查看 | 展示完整治理面板（阶段/Gate/任务/风险） |
+| 工作流版本更新 | 自动升级 bootstrap + 补全缺失结构 |
+
+**所有场景，一条命令，零记忆负担。**
 
 ## 5 分钟开始
 
@@ -92,25 +97,19 @@ Codex 入口采用**自包含 skill**：`skills/software-project-governance/SKIL
 
 **首次使用时，先初始化，再谈状态/校验/阶段检查。**
 
-在支持 slash command 的环境里，优先运行：
+在 Claude Code 中直接运行：
 
 ```
-/governance:governance-init
+/governance
 ```
 
-这个命令会引导你完成初始设置：
+首次运行会自动检测到项目尚未初始化，引导你完成：
 1. 输入项目名称和目标
-2. 选择是新项目还是已有项目
+2. 确认项目阶段（新项目/已有项目）
 3. 选择治理强度（轻量/标准/严格）
-4. 自动在当前项目根目录创建 `.governance/` 文件夹，包含所有治理文件
+4. 自动创建 `.governance/` 治理文件
 
-如果你的环境暂不支持 `/governance:governance-init` 这类命令，就直接告诉 agent：
-- 你的项目名称和目标
-- 这是新项目还是已有项目
-- 当前所处阶段（如果是已有项目）
-- 你想使用的治理强度（lightweight / standard / strict）
-
-然后让它按 `skills/software-project-governance/SKILL.md` 的规则帮你初始化 `.governance/`。
+如果你的环境暂不支持 slash command，就直接告诉 agent 以上信息，让它按 `skills/software-project-governance/SKILL.md` 的规则帮你初始化。
 
 **仓库里已有的 `.governance/` 是本项目自己的运行样例，不是你的初始化模板。** 不要直接复制仓库根目录下已有的治理记录来当你的项目初始状态。
 
@@ -180,11 +179,7 @@ Codex 入口采用**自包含 skill**：`skills/software-project-governance/SKIL
 
 ## 验证
 
-**推荐方式**（在 agent 内部）：
-
-```
-/governance:governance-verify
-```
+**推荐方式**（在 agent 内部）：运行 `/governance`，异常时自动触发诊断修复。
 
 **手动方式**（在终端中）：
 

@@ -1,5 +1,7 @@
 # governance-gate — 特定 Gate 检查
 
+> **推荐使用 `/governance`**——自动检测项目状态并在 Scenario F 中展示 Gate 状态表。本命令保留为快捷方式，直接检查指定 Gate。
+
 检查指定的治理 Gate 是否满足通过条件。
 
 ## 输入参数

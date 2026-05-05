@@ -10,7 +10,7 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
 
 ## 六层架构
 
-本工作流按六层架构组织（详见 `references/architecture.md`）：
+本工作流按六层架构组织（详见 `docs/architecture/`）：
 
 ```
 适配层（平台投影）→ 入口层（本文件）→ 业务智能层（Agent 库）→ 能力层（SKILL 库）→ 基础设施层 → 核心层

@@ -76,7 +76,7 @@
 
 在执行任何任务前，Coordinator **MUST** 读取以下文件：
 
-1. `main-workflow.md` — 统一工作流入口：两个基本目的、三层架构、场景→子工作流匹配规则、跨层调用协议
+1. `skills/main-workflow/SKILL.md` — 统一工作流入口：两个基本目的、三层架构、场景→子工作流匹配规则、跨层调用协议
 2. `.governance/plan-tracker.md` — 项目当前状态
 
 **未预加载就开始工作 = 协议违规。**

@@ -151,7 +151,7 @@ if [ -n "$CHANGED_FILES" ] && [ "$IS_PRODUCT_CODE" -eq 1 ]; then
         HAS_PROJECT_GOAL=$(grep -c '\*\*项目目标\*\*:' "$REPO_ROOT/.governance/plan-tracker.md" 2>/dev/null || echo "0")
         if [ "$HAS_PROJECT_GOAL" -gt 0 ]; then
             # Check if evidence-log has 目标对齐: for this task
-            if ! grep -E "^\| EVD-[^|]*\| $TASK_ID \|" "$REPO_ROOT/.governance/evidence-log.md" 2>/dev/null | grep -q "目标对齐:"; then
+            if ! grep -E "^\| EVD-[^|]*\| $TASK_ID \|" "$REPO_ROOT/.governance/evidence-log.md" 2>/dev/null | grep -q "目标对齐[:：]"; then
                 echo ""
                 echo "╔══════════════════════════════════════════════════════════════╗"
                 echo "║  GOAL ALIGNMENT BLOCKED: Task '$TASK_ID' has NO            ║"
@@ -188,7 +188,7 @@ fi
 # BLOCKING if missing.
 if [ -n "$CHANGED_FILES" ] && [ "$IS_PRODUCT_CODE" -eq 1 ]; then
     if [ -f "$REPO_ROOT/.governance/evidence-log.md" ]; then
-        if ! grep -E "^\| EVD-[^|]*\| $TASK_ID \|" "$REPO_ROOT/.governance/evidence-log.md" 2>/dev/null | grep -q "用户影响:"; then
+        if ! grep -E "^\| EVD-[^|]*\| $TASK_ID \|" "$REPO_ROOT/.governance/evidence-log.md" 2>/dev/null | grep -q "用户影响[:：]"; then
             echo ""
             echo "╔══════════════════════════════════════════════════════════════╗"
             echo "║  USER IMPACT BLOCKED: Task '$TASK_ID' has NO               ║"
@@ -213,7 +213,7 @@ fi
 if [ -n "$CHANGED_FILES" ] && [ "$IS_PRODUCT_CODE" -eq 1 ]; then
     if [ -f "$REPO_ROOT/.governance/evidence-log.md" ]; then
         # Get the 用户影响: line for this task
-        USER_IMPACT_LINE=$(grep -E "^\| EVD-[^|]*\| $TASK_ID \|" "$REPO_ROOT/.governance/evidence-log.md" 2>/dev/null | grep "用户影响:" | head -1 || true)
+        USER_IMPACT_LINE=$(grep -E "^\| EVD-[^|]*\| $TASK_ID \|" "$REPO_ROOT/.governance/evidence-log.md" 2>/dev/null | grep "用户影响[:：]" | head -1 || true)
         if [ -n "$USER_IMPACT_LINE" ]; then
             # Check: 体验变化=是 + 迁移指南=不需要
             if echo "$USER_IMPACT_LINE" | grep -q "体验变化=是" && echo "$USER_IMPACT_LINE" | grep -q "迁移指南=不需要"; then

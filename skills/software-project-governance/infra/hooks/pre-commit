@@ -132,6 +132,8 @@ if [ -n "$STEP7_TASK_ID" ]; then
             HAS_REVIEW_EVD=0
             if [ -f "$REPO_ROOT/.governance/evidence-log.md" ]; then
                 HAS_REVIEW_EVD=$(grep -cE "REVIEW-.*$STEP7_TASK_ID" "$REPO_ROOT/.governance/evidence-log.md" 2>/dev/null || echo "0")
+                HAS_REVIEW_EVD=$(echo "$HAS_REVIEW_EVD" | tr -d '\r' | head -1)
+                [ -z "$HAS_REVIEW_EVD" ] && HAS_REVIEW_EVD=0
             fi
             if [ "$HAS_REVIEW_EVD" -eq 0 ]; then
                 # Format changed files list (first 5, with ellipsis if more)

@@ -2,6 +2,22 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.30.0] — 2026-05-04
+
+### 用户入口统一
+- FIX-049: README 安装链接修复——`peterwangze/governance` → `peterwangze/software-project-governance`，用户指引重写为"唯一命令 `/governance`"
+- FIX-050: `/governance` 嵌入 Coordinator 激活——身份+铁律+路由表+产品代码边界+交互规则
+- FIX-051: 用户视角全路径修复——Scenario 自动衔接 + Scenario F 任务入口 + 新鲜度放宽
+- 7 个旧命令全部添加重定向头 → `/governance`
+
+### Hook 架构修复
+- FIX-044: GOV_COMMIT_MSG 桥接文件清理——post-commit 安全网
+- FIX-045: COMMIT_EDITMSG 过期修复——GOV_BRIDGE_VALID 标志跳过不可靠的 Source 3
+- FIX-046: Hook 自升级链路——pre-commit Step 0 自动同步 `.git/hooks/`
+- FIX-047: 新建 commit-msg hook——消息依赖检查从 pre-commit 迁移（$1 可靠读取）
+- FIX-048: integer expression 修复 + 冒号匹配修复（全角/半角）+ 3-hook 存活检测
+- 3-hook 架构（pre-commit + commit-msg + post-commit）端到端验证通过
+
 ## [0.29.0] — 2026-05-04
 
 ### 系统级强制

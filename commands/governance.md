@@ -407,7 +407,22 @@ P1 (警告):
 - 插件版本新鲜度
 - 建议下一步
 
-**输出模板**：参考 `commands/governance-status.md`，扩展含 permission_mode、版本新鲜度、最近活动
+**输出格式规则**：
+
+**始终展开（关键信息）**：
+- 项目配置摘要（名称、profile、trigger_mode、permission_mode、版本、阶段）
+- 任务统计（总数/已完成/阻塞中/P0 待处理）
+- 活跃风险（升级截止日期在 3 天内的标记）
+- 建议下一步
+
+**默认折叠（非关键信息）**——使用 `<details>` 标签，默认关闭：
+- Gate 状态表（G1-G11）→ `<details><summary>Gate 状态表</summary>...表格...</details>`
+- 最近活动（最近 5 个已完成任务、最近 5 个决策）→ `<details><summary>最近活动</summary>...列表...</details>`
+- 插件版本新鲜度 → `<details><summary>插件版本</summary>...版本信息...</details>`
+
+折叠原则：用户一眼看到项目健康摘要（配置 + 风险 + 下一步），细节按需展开。
+
+**输出模板**：参考 `commands/governance-status.md`，扩展含 permission_mode、版本新鲜度、最近活动，并应用上述折叠规则。
 
 ### 状态展示后的引导（MUST）
 

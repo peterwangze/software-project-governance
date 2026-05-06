@@ -6,6 +6,44 @@ from datetime import datetime, date
 
 ROOT = Path(__file__).resolve().parents[3]
 
+# ── PLUGIN_SCOPE_DIRS (keep in sync with cleanup.py) ─────────────
+# Directories that constitute the plugin installation boundary.
+# Check 10 (M5 compliance) skips these to avoid false positives from
+# legitimate checklists in plugin SKILL.md files (FIX-054).
+PLUGIN_SCOPE_DIRS = {
+    "skills",
+    "agents",
+    "commands",
+    "adapters",
+    ".claude-plugin",
+    ".codex-plugin",
+    ".agents",
+}
+
+
+def _is_plugin_path(rel_path: str) -> bool:
+    """Check if a relative path is inside a plugin scope directory.
+
+    Plugin scope dirs (PLUGIN_SCOPE_DIRS) are matched as path components
+    anywhere in the path, not just as a prefix.  This catches nested
+    installations (e.g. project/e2e-test-project/skills/) and avoids
+    false positives from legitimate checklists in plugin SKILL.md files.
+
+    Semantics synced with cleanup.py _is_path_excluded() for directory
+    patterns (FIX-054).
+    """
+    rel_path = rel_path.replace("\\", "/")
+    segments = rel_path.split("/")
+    for scope_dir in PLUGIN_SCOPE_DIRS:
+        # Root-prefix match
+        if rel_path == scope_dir or rel_path.startswith(scope_dir + "/"):
+            return True
+        # Nested as a path component (e.g. project/e2e-test-project/skills/...)
+        if scope_dir in segments:
+            return True
+    return False
+
+
 REQUIRED_FILES = {
     "README": ROOT / "README.md",
     "Workflow Schema": ROOT / "skills/software-project-governance/core/protocol/workflow-schema.md",
@@ -2110,11 +2148,13 @@ def check_m5_compliance():
     """Check M5 AskUserQuestion compliance -- static anti-pattern detection (enhanced).
 
     Detects:
-    1. Inline question patterns in sub-agent-scoped .md files:
+    1. Inline question patterns in user-project and sub-agent-scoped .md files:
        - Chinese: "要不要", "是否", "确认吗", "需要我", "你想"
        - English: "Should I", "Do you want"
-       - Search scope: skills/stage-*/, skills/*-review/, commands/ .md files
-       (these are files sub-agents read -- they must not instruct inline text questions)
+       - Search scope: CLAUDE.md, .governance/**, docs/**, project/** .md files
+         (plugin scope dirs -- skills/, agents/, commands/, adapters/, .claude-plugin/,
+         .codex-plugin/, .agents/ -- are excluded per FIX-054 to avoid false positives
+         from legitimate checklists in plugin SKILL.md files)
     2. Option-list patterns without AskUserQuestion:
        - Matches (1) / (a) style options + "选择" context, but no "AskUserQuestion"
        - Detects source files that instruct agents to output choice menus as text
@@ -2136,8 +2176,8 @@ def check_m5_compliance():
     inline_patterns_en = ["Should I", "Do you want"]
 
     scan_files = []
-    for pattern in ["skills/stage-*/**/*.md", "skills/*-review/**/*.md", "skills/*-review/*.md",
-                     "commands/**/*.md", "commands/*.md"]:
+    # User project file patterns (FIX-054: check CLAUDE.md, governance, docs, project)
+    for pattern in ["CLAUDE.md", ".governance/**/*.md", "docs/**/*.md", "project/**/*.md"]:
         for f in _glob.glob(str(ROOT / pattern), recursive=True):
             scan_files.append(Path(f))
 
@@ -2148,6 +2188,15 @@ def check_m5_compliance():
             seen_paths.add(str(f))
             scan_files_dedup.append(f)
     scan_files = scan_files_dedup
+
+    # FIX-054: Filter out plugin scope directories to avoid false positives
+    # from legitimate checklists in plugin SKILL.md files (e.g., checklist items
+    # with Chinese question marks like "是否评估了至少 2 个候选方案?").
+    # PLUGIN_SCOPE_DIRS is synced with cleanup.py.
+    scan_files = [
+        f for f in scan_files
+        if not _is_plugin_path(str(f.relative_to(ROOT)))
+    ]
 
     for md_file in scan_files:
         if not md_file.is_file():

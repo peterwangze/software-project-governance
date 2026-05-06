@@ -35,6 +35,23 @@ _HARD_PROTECTED = {
     ".governance", ".governance/",
 }
 
+# Directories that constitute the plugin installation boundary.
+# scan_actual() only walks these subtrees — user project files outside
+# these directories are never scanned and therefore never flagged as
+# redundant (FIX-053).
+#
+# Keep in sync with manifest.json product.entries dir paths.
+# Any new top-level dir added there MUST also be added here.
+PLUGIN_SCOPE_DIRS = {
+    "skills",
+    "agents",
+    "commands",
+    "adapters",
+    ".claude-plugin",
+    ".codex-plugin",
+    ".agents",
+}
+
 
 # ─── Core functions ───────────────────────────────────────────
 
@@ -185,7 +202,12 @@ def expand_canonical(manifest: dict, root: Path) -> Set[str]:
 
 
 def scan_actual(root: Path, excludes: Set[str]) -> Set[str]:
-    """Recursively scan *root* and return the set of relative file paths.
+    """Scan only plugin-scope directories under *root* and return the set
+    of relative file paths.
+
+    Only PLUGIN_SCOPE_DIRS subtrees are traversed (FIX-053).  User project
+    files outside these directories are never touched — they never appear in
+    the actual set and therefore never become "redundant".
 
     Directories are NOT included -- only regular files.  Paths matching
     *excludes* are silently dropped.
@@ -198,13 +220,17 @@ def scan_actual(root: Path, excludes: Set[str]) -> Set[str]:
         sys.exit(ERR_TARGET_NOT_FOUND)
 
     actual: Set[str] = set()
-    for f in root.rglob("*"):
-        if not f.is_file():
+    for scope_dir in PLUGIN_SCOPE_DIRS:
+        scope_path = root / scope_dir
+        if not scope_path.exists() or not scope_path.is_dir():
             continue
-        rel = _resolve_path(str(f.relative_to(root)))
-        if _is_path_excluded(rel, excludes):
-            continue
-        actual.add(rel)
+        for f in scope_path.rglob("*"):
+            if not f.is_file():
+                continue
+            rel = _resolve_path(str(f.relative_to(root)))
+            if _is_path_excluded(rel, excludes):
+                continue
+            actual.add(rel)
     return actual
 
 

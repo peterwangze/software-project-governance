@@ -543,6 +543,7 @@ Coordinator 在每次读取 `agent-locks.json` 时 **MUST** 检查 `file_locks` 
 - [ ] M7.4 任务完成协议已执行？（证据 → check-governance → 审计 → 交付物审查在 commit 之前 → commit → 继续）。审查前无独立摘要——AskUserQuestion 就是输出。
 - [ ] M7.5 任务前协议已执行？（修改文件前任务已在 plan-tracker 中？）
 - [ ] M7.6 并行 agent 文件目标无重叠？重叠时已启用 worktree 隔离？
+- [ ] M7.6a Agent 并发锁已执行？（spawn 前读 agent-locks.json → 任务去重 → 文件锁 → 获取锁）
 - [ ] M7.3 风险升级截止日期已检查？是否有过期的开放风险？
 - [ ] M7.3 任务截止日期已检查？是否有超期的活跃任务？
 - [ ] M5 源文件干净？（Check 10：已暂存 skill 文件中无 `询问用户` 反模式；bootstrap 有 AskUserQuestion 规则）

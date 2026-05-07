@@ -101,7 +101,7 @@ Existing ADRs: {已有 ADR}
 | Agent 产出不满足 Gate | Coordinator 退回给 Agent 修复，附带具体差距 |
 | Agent 需要澄清 | Agent 向 Coordinator 提问（不直接问用户），Coordinator 向用户确认后回答 |
 | Agent 产出有跨 Agent 矛盾 | Coordinator 验证一致性——发现矛盾则回退给两个 Agent 协调 |
-| Agent 丢失/超时 | Coordinator **MUST** 先检查 `agent-locks.json` 中是否仍有该 task 的活跃锁 → 检查 `git diff` 是否有该 Agent 的新产出 → 根据结果决定：锁已释放且有产出 → 收集产出不重新 dispatch；锁未释放但 git diff 有新产出 → 等待锁释放或超时后收集；锁未释放且无产出 → 等待 TTL 过期后强制释放锁并重新 dispatch；不确定 → 报告用户，附带检查结果 |
+| Agent 丢失/超时 | Coordinator **MUST** 先检查 `agent-locks.json` 中是否仍有该 task 的活跃锁 → 检查 `git diff` 是否有该 Agent 的新产出 → 根据结果决定：锁已释放且有产出 → 收集产出不重新 dispatch；锁未释放但 git diff 有新产出 → 等待锁释放或超时后收集；锁未释放且无产出 → 等待 TTL 过期后强制释放锁并重新 dispatch；不确定 → MUST 通过 AskUserQuestion 向用户报告检查结果并提供选项 (1) 继续等待 (2) 强制重新 dispatch (3) 取消任务 |
 
 ## 治理写回
 

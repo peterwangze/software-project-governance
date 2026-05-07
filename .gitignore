@@ -20,4 +20,12 @@ Thumbs.db
 # Editor files
 .vscode/
 .idea/
-e2e-test-project/.git/
+
+# E2E test project (independent git repo + plugin copies for testing)
+project/e2e-test-project/.git/
+project/e2e-test-project/agents/
+project/e2e-test-project/skills/
+project/e2e-test-project/commands/
+
+# Temporary fix/reconstruct scripts
+_fix_*.py

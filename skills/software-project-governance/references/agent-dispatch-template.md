@@ -24,6 +24,28 @@ Coordinator spawn sub-agent 时 MUST 使用本模板，**禁止**传自定义 pr
 
 {hard_gates}
 
+## 并发锁操作（Coordinator — spawn 前 MUST 执行）
+
+Coordinator dispatch Agent 前 **MUST** 按 behavior-protocol.md M7.6a 执行锁检查与获取：
+
+1. **读取** `.governance/agent-locks.json`
+2. **任务去重检查**：`active_tasks` 中是否已有 `{task_id}` 键
+   - 不存在 → 继续
+   - 已存在 → 按 M7.6a 三步协议处理（等待 → 报告用户 → 强制重试）
+3. **文件锁检查**：对 `{file_list}` 中的每个文件，检查 `file_locks` 中是否有其他 task 的锁
+   - 无冲突 → 继续
+   - 有冲突 → 启用 worktree 隔离或串行化
+4. **获取锁**：写入 `active_tasks["{task_id}"]` + 每个目标文件的 `file_locks` 条目 → 保存 `agent-locks.json`
+5. **Spawn Agent**
+
+## Coordinator 锁释放（Agent 完成后 MUST 执行）
+
+Agent 返回结果后，Coordinator **MUST** 立即：
+
+1. 从 `active_tasks` 中移除 `{task_id}` 条目
+2. 从 `file_locks` 中移除该 task 持有的所有文件锁条目
+3. 保存 `agent-locks.json`
+
 ## 执行流程
 
 1. 加载角色定义和任务规范

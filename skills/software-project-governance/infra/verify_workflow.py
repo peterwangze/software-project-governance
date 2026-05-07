@@ -4414,6 +4414,17 @@ def cmd_check_governance(args):
                 print(f"│    - {f}")
     print("└──────────────────────────────────────────────────────┘")
 
+    # ── Agent Locks Format (FIX-056 Phase 1 — 不分配 Check 编号，Phase 2 分配 Check 25) ──
+    print("\n┌─ Agent Locks Format (FIX-056 Phase 1) ───────────────┐")
+    al_issues = check_agent_locks_format()
+    if al_issues:
+        print(f"│  [WARN] {len(al_issues)} agent-locks.json issue(s):")
+        for issue in al_issues:
+            print(f"│    - [{issue['type']}] {issue['detail']}")
+    else:
+        print(f"│  [PASS] agent-locks.json exists and schema is valid.")
+    print("└──────────────────────────────────────────────────────┘")
+
     # ── Summary ──
     print(f"\n┌─ Governance Health Summary ──────────────────────────┐")
     if all_issues == 0:
@@ -4994,6 +5005,128 @@ def check_untracked_files():
         result["pass"] = None
 
     return result
+
+
+def check_agent_locks_format():
+    """Validate .governance/agent-locks.json existence, JSON validity, and schema integrity.
+
+    Returns a list of WARN-level issue dicts.  Empty list = clean.
+    This check is informational-only (WARN) -- format corruption does not block commit.
+    Check number reserved for Phase 2 (Check 25).
+    """
+    import json
+
+    issues = []
+    locks_path = ROOT / ".governance" / "agent-locks.json"
+
+    # ── Existence check ──
+    if not locks_path.is_file():
+        issues.append({
+            "type": "missing",
+            "detail": ".governance/agent-locks.json not found. Run governance init or create with: {\"active_tasks\": {}, \"file_locks\": {}}"
+        })
+        return issues
+
+    # ── JSON validity ──
+    try:
+        with open(locks_path, "r", encoding="utf-8") as f:
+            raw = f.read()
+        if not raw.strip():
+            issues.append({
+                "type": "empty",
+                "detail": ".governance/agent-locks.json is empty"
+            })
+            return issues
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        issues.append({
+            "type": "invalid_json",
+            "detail": f".governance/agent-locks.json is not valid JSON: {e}"
+        })
+        return issues
+    except IOError as e:
+        issues.append({
+            "type": "io_error",
+            "detail": f".governance/agent-locks.json read error: {e}"
+        })
+        return issues
+
+    # ── Schema check ──
+    if not isinstance(data, dict):
+        issues.append({
+            "type": "not_dict",
+            "detail": ".governance/agent-locks.json root must be a JSON object (dict)"
+        })
+        return issues
+
+    # Required top-level keys
+    required_keys = ["active_tasks", "file_locks"]
+    for key in required_keys:
+        if key not in data:
+            issues.append({
+                "type": "missing_key",
+                "detail": f".governance/agent-locks.json missing required key: '{key}'"
+            })
+
+    # active_tasks must be a dict
+    if "active_tasks" in data and not isinstance(data["active_tasks"], dict):
+        issues.append({
+            "type": "type_error",
+            "detail": ".governance/agent-locks.json 'active_tasks' must be a JSON object (dict), got " + type(data["active_tasks"]).__name__
+        })
+
+    # file_locks must be a dict
+    if "file_locks" in data and not isinstance(data["file_locks"], dict):
+        issues.append({
+            "type": "type_error",
+            "detail": ".governance/agent-locks.json 'file_locks' must be a JSON object (dict), got " + type(data["file_locks"]).__name__
+        })
+
+    # ── active_tasks entry schema check ──
+    if "active_tasks" in data and isinstance(data["active_tasks"], dict):
+        for task_id, entry in data["active_tasks"].items():
+            if not isinstance(entry, dict):
+                issues.append({
+                    "type": "schema_violation",
+                    "detail": f"agent-locks.json active_tasks['{task_id}'] must be a dict"
+                })
+                continue
+            required_entry_keys = ["spawned_at", "coordinator_session", "target_files"]
+            for rk in required_entry_keys:
+                if rk not in entry:
+                    issues.append({
+                        "type": "schema_violation",
+                        "detail": f"agent-locks.json active_tasks['{task_id}'] missing required field: '{rk}'"
+                    })
+            if "target_files" in entry and not isinstance(entry["target_files"], list):
+                issues.append({
+                    "type": "schema_violation",
+                    "detail": f"agent-locks.json active_tasks['{task_id}'].target_files must be a list"
+                })
+
+    # ── file_locks entry schema check ──
+    if "file_locks" in data and isinstance(data["file_locks"], dict):
+        for file_path, entry in data["file_locks"].items():
+            if not isinstance(entry, dict):
+                issues.append({
+                    "type": "schema_violation",
+                    "detail": f"agent-locks.json file_locks['{file_path}'] must be a dict"
+                })
+                continue
+            required_entry_keys = ["locked_by", "locked_at", "ttl_seconds", "ttl_reason"]
+            for rk in required_entry_keys:
+                if rk not in entry:
+                    issues.append({
+                        "type": "schema_violation",
+                        "detail": f"agent-locks.json file_locks['{file_path}'] missing required field: '{rk}'"
+                    })
+            if "ttl_seconds" in entry and not isinstance(entry["ttl_seconds"], (int, float)):
+                issues.append({
+                    "type": "schema_violation",
+                    "detail": f"agent-locks.json file_locks['{file_path}'].ttl_seconds must be a number"
+                })
+
+    return issues
 
 
 def cmd_check_plugin_freshness(_args):

@@ -76,7 +76,7 @@
 
 **工作流脱轨检测**：检查 plan-tracker 的 `最近复盘日期`——如果距今 > 7 天 AND 有若干新 commit 但 plan-tracker 无更新 -> ⚠️ 工作流可能已被忽略。提醒用户是否需要更新治理状态。
 
-**Hook 存活检测**（系统级约束——不依赖 agent 自觉）：检查 `.git/hooks/pre-commit` 和 `.git/hooks/post-commit` 是否存在。缺失 -> ⚠️ 治理 hook 缺失——agent 的 commit 不受系统约束。**MUST** 提醒重装：`cp skills/software-project-governance/infra/hooks/pre-commit .git/hooks/pre-commit && cp skills/software-project-governance/infra/hooks/post-commit .git/hooks/post-commit`
+**Hook 存活检测**（系统级约束——不依赖 agent 自觉）：检查 `.git/hooks/pre-commit`、`.git/hooks/commit-msg` 和 `.git/hooks/post-commit` 是否存在。缺失 -> ⚠️ 治理 hook 缺失——agent 的 commit 不受系统约束。**MUST** 提醒重装：`cp skills/software-project-governance/infra/hooks/pre-commit .git/hooks/pre-commit && cp skills/software-project-governance/infra/hooks/commit-msg .git/hooks/commit-msg && cp skills/software-project-governance/infra/hooks/post-commit .git/hooks/post-commit`
 
 **版本变化自动检测 + bootstrap 自升级**（用户更新插件后首次会话自动触发——零用户行动）：
 1. 读取 plan-tracker `工作流版本` 和当前安装版本（SKILL.md frontmatter `version`）
@@ -98,6 +98,7 @@
    - 缺少 `## 变更控制` 节？-> 自动添加（含快速通道）
    - 变更控制流程中是旧版（无快速通道）？-> 自动更新为含快速通道的版本
    - `.git/hooks/post-commit` 不存在？-> 提示一次性命令（agent 不能自动写 .git/hooks/——安全问题）
+   - `.git/hooks/commit-msg` 不存在？-> 提示一次性命令（同上）
    - **自动清理升级残留**（每版本更新时执行）：运行 `python skills/software-project-governance/infra/cleanup.py`（基于 manifest.json 的结构 diff——不在 canonical manifest 中的文件 = 残留，自动删除）。输出 `✅ 已清理 {N} 个过期文件/目录`
 
    **D. 更新 plan-tracker `工作流版本`** 为当前版本

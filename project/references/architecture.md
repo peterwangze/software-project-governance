@@ -95,7 +95,7 @@
 **被谁依赖**：能力层、业务智能层
 
 **包含**：
-- Git hooks（pre-commit, post-commit, prepare-commit-msg）
+- Git hooks（pre-commit, prepare-commit-msg, commit-msg, post-commit）
 - 验证引擎（verify_workflow.py）
 - 治理检查脚本（check-governance）
 - MCP 服务

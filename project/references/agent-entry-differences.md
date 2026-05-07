@@ -21,7 +21,7 @@
 - 完整 bootstrap 模板（SELF-CHECK + 双维度模式 + 阶段跳跃防护）
 - 交互式 governance-init（AskUserQuestion）
 - 治理开关动态切换
-- git hooks（pre-commit + post-commit + prepare-commit-msg）
+- git hooks（pre-commit + prepare-commit-msg + commit-msg + post-commit）
 
 ### Codex (OpenAI)
 
@@ -63,7 +63,7 @@
 |------|------|:--:|
 | `.governance/` 文件结构 | 文件系统 | ✅ |
 | verify_workflow.py | Python | ✅ |
-| git hooks (pre-commit/post-commit) | Git | ✅ |
+| git hooks (pre-commit/commit-msg/post-commit) | Git | ✅ |
 | check-governance | Python | ✅ |
 | plan-tracker/evidence/decision/risk 模板 | 文件系统 | ✅ |
 | bootstrap 规则 | Agent 加载机制 | ⚠️ 需适配 |

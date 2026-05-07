@@ -64,3 +64,75 @@ if [ -f "$REPO_ROOT/scripts/verify_workflow.py" ]; then
         grep -E "(Check [0-9]|PASS|WARN|issued)" | head -12
     echo "-------------------------------"
 fi
+
+# --- Step 5: Agent lock cleanup + scope creep detection (FIX-056 Phase 2) ---
+LOCKS_FILE="$REPO_ROOT/.governance/agent-locks.json"
+if [ -f "$LOCKS_FILE" ]; then
+    # 5a. Scope creep: detect if agent-locks.json was accidentally committed
+    if git diff-tree --no-commit-id -r HEAD --name-only 2>/dev/null | grep -q "\.governance/agent-locks\.json"; then
+        echo ""
+        echo "⚠️  GOVERNANCE: agent-locks.json was included in this commit."
+        echo "   agent-locks.json is a runtime lock state file and should NOT"
+        echo "   be committed to version control."
+        echo "   Action: confirm .gitignore includes .governance/ or add:"
+        echo "     echo '.governance/agent-locks.json' >> .gitignore"
+        echo "   Then unstage: git rm --cached .governance/agent-locks.json"
+        echo ""
+    fi
+
+    # 5b. Cleanup: release lock entries for the task just committed (task ID match)
+    if [ -n "$TASK_ID" ]; then
+        python3 -c "
+import json, sys, os
+locks_path = os.path.expandvars(r'$LOCKS_FILE')
+task_id = os.path.expandvars(r'$TASK_ID')
+try:
+    with open(locks_path, 'r') as f:
+        data = json.load(f)
+    cleaned = 0
+    # Remove active_tasks entry matching this task_id
+    if 'active_tasks' in data and isinstance(data['active_tasks'], dict):
+        if task_id in data['active_tasks']:
+            del data['active_tasks'][task_id]
+            cleaned += 1
+    # Remove file_locks entries locked by this task_id
+    if 'file_locks' in data and isinstance(data['file_locks'], dict):
+        to_remove = [fp for fp, e in data['file_locks'].items()
+                     if isinstance(e, dict) and e.get('locked_by') == task_id]
+        for fp in to_remove:
+            del data['file_locks'][fp]
+            cleaned += 1
+    if cleaned > 0:
+        with open(locks_path, 'w') as f:
+            json.dump(data, f, indent=2)
+            f.write('\n')
+        print(f'🔒 FIX-056: Released {cleaned} lock(s) for {task_id} (task completed).')
+except Exception as e:
+    print(f'⚠️  FIX-056: Failed to clean locks for {task_id}: {e}', file=sys.stderr)
+" 2>/dev/null || true
+    fi
+
+    # 5c. Scope creep: detect if committed files are locked by ANOTHER task
+    CHANGED_FILES=$(git diff-tree --no-commit-id -r HEAD --name-only 2>/dev/null | tr '\n' ' ')
+    if [ -n "$CHANGED_FILES" ]; then
+        python3 -c "
+import json, sys, os
+locks_path = os.path.expandvars(r'$LOCKS_FILE')
+task_id = os.path.expandvars(r'$TASK_ID')
+changed_raw = os.path.expandvars(r'$CHANGED_FILES')
+changed = set(f for f in changed_raw.split() if f.strip())
+try:
+    with open(locks_path, 'r') as f:
+        data = json.load(f)
+    if 'file_locks' in data and isinstance(data['file_locks'], dict):
+        for fp, entry in data['file_locks'].items():
+            if fp in changed and isinstance(entry, dict):
+                locker = entry.get('locked_by', 'unknown')
+                if locker != task_id:
+                    print(f'⚠️  SCOPE CREEP: {fp} modified in this commit ({task_id}) '
+                          f'but currently locked by {locker} — possible concurrent Agent conflict.')
+except Exception as e:
+    pass
+" 2>/dev/null || true
+    fi
+fi

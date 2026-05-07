@@ -4414,15 +4414,24 @@ def cmd_check_governance(args):
                 print(f"│    - {f}")
     print("└──────────────────────────────────────────────────────┘")
 
-    # ── Agent Locks Format (FIX-056 Phase 1 — 不分配 Check 编号，Phase 2 分配 Check 25) ──
-    print("\n┌─ Agent Locks Format (FIX-056 Phase 1) ───────────────┐")
-    al_issues = check_agent_locks_format()
-    if al_issues:
-        print(f"│  [WARN] {len(al_issues)} agent-locks.json issue(s):")
-        for issue in al_issues:
-            print(f"│    - [{issue['type']}] {issue['detail']}")
+    # ── 25. Agent Lock Consistency (FIX-056 Phase 2) ──
+    print("\n┌─ Check 25: Agent Lock Consistency (FIX-056) ─────────┐")
+    al_result = check_agent_lock_consistency()
+    al_issue_count = len(al_result.get("issues", []))
+    if al_result.get("skipped"):
+        print(f"│  [INFO] Skipped: {al_result['skipped']}")
+    elif al_issue_count == 0:
+        print(f"│  [PASS] agent-locks.json schema valid, {al_result['active_task_count']} active task(s), "
+              f"{al_result['file_lock_count']} file lock(s).")
     else:
-        print(f"│  [PASS] agent-locks.json exists and schema is valid.")
+        # All issues are WARN level — accumulate but don't block
+        all_issues += al_issue_count
+        print(f"│  [WARN] {al_issue_count} lock consistency issue(s):")
+        for issue in al_result["issues"]:
+            print(f"│    - [{issue['type']}] {issue['detail']}")
+        if al_result["active_task_count"] > 0 or al_result["file_lock_count"] > 0:
+            print(f"│  State: {al_result['active_task_count']} active task(s), "
+                  f"{al_result['file_lock_count']} file lock(s).")
     print("└──────────────────────────────────────────────────────┘")
 
     # ── Summary ──
@@ -5012,7 +5021,8 @@ def check_agent_locks_format():
 
     Returns a list of WARN-level issue dicts.  Empty list = clean.
     This check is informational-only (WARN) -- format corruption does not block commit.
-    Check number reserved for Phase 2 (Check 25).
+    Used as a helper by check_agent_lock_consistency() (Check 25, FIX-056 Phase 2).
+    Phase 1 format-only check has been subsumed into the full Check 25.
     """
     import json
 
@@ -5127,6 +5137,205 @@ def check_agent_locks_format():
                 })
 
     return issues
+
+
+def check_agent_lock_consistency():
+    """Comprehensive agent lock consistency check (FIX-056 Phase 2).
+
+    Checks:
+      - Format/schema validity (delegates to check_agent_locks_format)
+      - Task existence: locked_by task_ids must exist in plan-tracker
+      - Orphan locks: file_locks referencing task_ids not in active_tasks
+      - Expired locks: locked_at + ttl_seconds < now
+      - Multi-lock conflict: same file locked by multiple active tasks
+
+    Returns a dict with keys:
+      - skipped: str if check was skipped (agent-locks.json missing), else None
+      - active_task_count: number of active_tasks entries
+      - file_lock_count: number of file_locks entries
+      - issues: list of WARN-level issue dicts (type + detail)
+    """
+    import json
+    from datetime import datetime, timezone
+
+    result = {
+        "skipped": None,
+        "active_task_count": 0,
+        "file_lock_count": 0,
+        "issues": [],
+    }
+
+    locks_path = ROOT / ".governance" / "agent-locks.json"
+
+    # ── Format check (Phase 1, reused) ──
+    fmt_issues = check_agent_locks_format()
+    for fi in fmt_issues:
+        result["issues"].append({
+            "type": f"format_{fi['type']}",
+            "detail": fi["detail"],
+        })
+
+    # If format is broken, skip consistency checks (can't parse data)
+    if not locks_path.is_file():
+        result["skipped"] = "agent-locks.json not found — lock consistency check skipped."
+        return result
+
+    try:
+        with open(locks_path, "r", encoding="utf-8") as f:
+            raw = f.read()
+        if not raw.strip():
+            result["skipped"] = "agent-locks.json is empty — lock consistency check skipped."
+            return result
+        data = json.loads(raw)
+    except (json.JSONDecodeError, IOError):
+        result["skipped"] = "agent-locks.json is unparseable — lock consistency check skipped."
+        return result
+
+    if not isinstance(data, dict):
+        result["skipped"] = "agent-locks.json root is not a dict — lock consistency check skipped."
+        return result
+
+    active_tasks = data.get("active_tasks", {})
+    file_locks = data.get("file_locks", {})
+
+    if not isinstance(active_tasks, dict):
+        active_tasks = {}
+    if not isinstance(file_locks, dict):
+        file_locks = {}
+
+    result["active_task_count"] = len(active_tasks)
+    result["file_lock_count"] = len(file_locks)
+
+    # If nothing active, skip consistency checks
+    if not active_tasks and not file_locks:
+        return result
+
+    # ── Load plan-tracker task IDs ──
+    plan_task_ids = set()
+    try:
+        pt_path = ROOT / ".governance" / "plan-tracker.md"
+        if pt_path.is_file():
+            pt_content = pt_path.read_text(encoding="utf-8")
+            # Match task IDs in table rows: | TASK-ID | ...
+            for line in pt_content.split("\n"):
+                m = re.match(r"\|\s*([A-Z]+-\d+)\s*\|", line)
+                if m:
+                    plan_task_ids.add(m.group(1))
+    except Exception:
+        pass  # Can't read plan-tracker — skip task-existence check
+
+    now = datetime.now(timezone.utc)
+
+    # ── Check 1: Task existence — every locked_by / active_tasks key must be in plan-tracker ──
+    all_lock_task_ids = set()
+
+    for task_id in active_tasks.keys():
+        all_lock_task_ids.add(task_id)
+        if plan_task_ids and task_id not in plan_task_ids:
+            result["issues"].append({
+                "type": "task_not_in_plan",
+                "detail": f"active_tasks['{task_id}'] is not found in plan-tracker.md — lock references an unregistered task.",
+            })
+
+    for file_path, entry in file_locks.items():
+        if isinstance(entry, dict):
+            locker = entry.get("locked_by", "")
+            if locker:
+                all_lock_task_ids.add(locker)
+                if plan_task_ids and locker not in plan_task_ids:
+                    result["issues"].append({
+                        "type": "task_not_in_plan",
+                        "detail": f"file_locks['{file_path}'].locked_by='{locker}' is not found in plan-tracker.md.",
+                    })
+
+    # ── Check 2: Orphan locks — file_locks.locked_by not in active_tasks ──
+    active_task_ids = set(active_tasks.keys())
+    for file_path, entry in file_locks.items():
+        if isinstance(entry, dict):
+            locker = entry.get("locked_by", "")
+            if locker and locker not in active_task_ids:
+                result["issues"].append({
+                    "type": "orphan_lock",
+                    "detail": f"file_locks['{file_path}'] is locked by '{locker}' which has no active_tasks entry (orphan lock).",
+                })
+
+    # ── Check 3: Expired locks ──
+    for file_path, entry in file_locks.items():
+        if not isinstance(entry, dict):
+            continue
+        locked_at_str = entry.get("locked_at", "")
+        ttl = entry.get("ttl_seconds", 0)
+        if locked_at_str and ttl:
+            try:
+                locked_at = datetime.fromisoformat(locked_at_str.replace("Z", "+00:00"))
+                expiry = locked_at.timestamp() + float(ttl)
+                if now.timestamp() > expiry:
+                    locker = entry.get("locked_by", "unknown")
+                    elapsed = int(now.timestamp() - locked_at.timestamp())
+                    result["issues"].append({
+                        "type": "expired_lock",
+                        "detail": (f"file_locks['{file_path}'] expired (locked by '{locker}', "
+                                   f"TTL {ttl}s, elapsed {elapsed}s) — stale lock should be cleaned up."),
+                    })
+            except (ValueError, TypeError, OverflowError):
+                pass
+
+    # Also check active_tasks expiry (based on spawned_at + max TTL 600s)
+    for task_id, entry in active_tasks.items():
+        if not isinstance(entry, dict):
+            continue
+        spawned_at_str = entry.get("spawned_at", "")
+        if spawned_at_str:
+            try:
+                spawned_at = datetime.fromisoformat(spawned_at_str.replace("Z", "+00:00"))
+                # Use 600s as max reasonable TTL for any task
+                if (now - spawned_at).total_seconds() > 600:
+                    result["issues"].append({
+                        "type": "expired_task",
+                        "detail": (f"active_tasks['{task_id}'] spawned at {spawned_at_str} "
+                                   f"({int((now - spawned_at).total_seconds())}s ago) — may be stale."),
+                    })
+            except (ValueError, TypeError, OverflowError):
+                pass
+
+    # ── Check 4: Multi-lock conflict — same file locked by multiple active tasks ──
+    file_to_lockers = {}
+    for file_path, entry in file_locks.items():
+        if isinstance(entry, dict):
+            locker = entry.get("locked_by", "")
+            if locker and locker in active_task_ids:
+                file_to_lockers.setdefault(file_path, set()).add(locker)
+
+    for file_path, lockers in file_to_lockers.items():
+        if len(lockers) > 1:
+            result["issues"].append({
+                "type": "multi_lock_conflict",
+                "detail": (f"file_locks['{file_path}'] is locked by multiple active tasks: "
+                           f"{sorted(lockers)} — potential concurrent write conflict."),
+            })
+
+    return result
+
+
+def cmd_check_agent_locks(_args):
+    """Standalone subcommand: check-locks — run agent lock consistency check."""
+    result = check_agent_lock_consistency()
+
+    if result.get("skipped"):
+        print(f"[INFO] {result['skipped']}")
+        return
+
+    print(f"Active tasks: {result['active_task_count']}")
+    print(f"File locks:   {result['file_lock_count']}")
+
+    issues = result.get("issues", [])
+    if not issues:
+        print("Result: PASS — agent-locks.json is clean.")
+    else:
+        print(f"\n{len(issues)} WARN-level issue(s):")
+        for issue in issues:
+            print(f"  [{issue['type']}] {issue['detail']}")
+        print(f"\nResult: WARN — {len(issues)} lock consistency issue(s).")
 
 
 def cmd_check_plugin_freshness(_args):
@@ -5697,6 +5906,10 @@ def main():
     subparsers.add_parser("check-version-consistency",
                           help="Check version consistency across all declaration files")
 
+    # check-locks (FIX-056 Phase 2)
+    subparsers.add_parser("check-locks",
+                          help="Check agent-locks.json consistency (FIX-056 Check 25)")
+
     args = parser.parse_args()
 
     commands = {
@@ -5720,6 +5933,7 @@ def main():
         "check-agent-team": cmd_check_agent_team,
         "check-review-debt": cmd_check_review_debt,
         "check-version-consistency": cmd_check_version_consistency,
+        "check-locks": cmd_check_agent_locks,
     }
 
     cmd = args.command or "verify"

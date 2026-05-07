@@ -3,7 +3,7 @@
 # Runs BEFORE every git commit. BLOCKS commits that don't meet governance criteria.
 # Handles FILE-DEPENDENT checks only. Message-dependent checks are in commit-msg (FIX-047).
 # Design assumption: agent WILL NOT follow rules voluntarily. System MUST enforce.
-# @version: 0.30.0
+# @version: 0.31.0
 
 set -e
 
@@ -236,6 +236,24 @@ if [ -n "$CHANGED_FILES" ] && [ -n "$FIRST_LINE" ]; then
             echo ""
         fi
     fi
+fi
+
+# --- Step 10: Untracked Files WARN (FIX-057 Phase 2) ---
+# Detect untracked files in the working tree.  Only counts them (fast),
+# detailed classification is left to check-governance.
+# WARN only -- untracked files are not errors, just signals that need attention.
+UNTRACKED_COUNT=$(git ls-files --others --exclude-standard 2>/dev/null | wc -l | tr -d ' ')
+if [ "$UNTRACKED_COUNT" -gt 0 ] 2>/dev/null; then
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════════╗"
+    echo "║  GOVERNANCE: Untracked files detected                      ║"
+    echo "║                                                            ║"
+    echo "║  ${UNTRACKED_COUNT} untracked file(s) found in working tree.               ║"
+    echo "║                                                            ║"
+    echo "║  Action: run 'check-governance' for classification         ║"
+    echo "║  suggestions, or manually git add / .gitignore.           ║"
+    echo "╚══════════════════════════════════════════════════════════════╝"
+    echo ""
 fi
 
 # ── FIX-047: All message-dependent checks migrated to commit-msg hook ──

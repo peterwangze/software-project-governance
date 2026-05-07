@@ -2,6 +2,31 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.31.0] — 2026-05-05
+
+### 0.31.0 — 验证驱动修复 + 收尾打磨
+
+外部项目实战验证 (FIX-042) 发现 3 个问题（cleanup 范围边界/Check 10 M5 误报/commit-msg hook 缺失）全部修复。同时完成内部归档清理、Agent 体验打磨和版本 bump 自动化。
+
+### 验证驱动修复 (P0/P1)
+- **FIX-053 (P0)**: cleanup.py 范围边界修复——`PLUGIN_SCOPE_DIRS` 常量化，`scan_actual()` 重写为仅扫描插件目录。不再误删用户项目文件。
+- **FIX-054 (P1)**: Check 10 M5 反模式检测误报修复——排除 `skills/`/`agents/`/`commands/` 等插件自审计路径，262 hits → 0。
+- **FIX-055 (P2)**: commit-msg hook 安装链路补全——governance-init.md + bootstrap 模板 + Hook 存活检测等 9 文件补充 commit-msg hook 引用。
+
+### 版本 bump 自动化 (P1)
+- **FIX-052**: verify_workflow.py 新增 `check-version-consistency` 子命令——跨 11 文件同步版本号（JSON/MD/hook @version）+ SKILL.md 为事实源 + CHANGELOG + plan-tracker 对比 + snippet 自检。check-governance Check 23 集成。
+
+### 内部归档 (P2)
+- **FIX-031**: 六层架构文档归档——从 SKILL.md 移除空引用（`references/architecture.md` → `docs/architecture/`）
+- **FIX-032**: M2 预加载路径修复——`main-workflow.md` → `skills/main-workflow/SKILL.md`
+- **FIX-034**: 清理幽灵 Agent 文件确认——coordinator.md 已于 AUDIT-095 标注 DEPRECATED，governance-developer.md 仍被路由表引用（非幽灵文件）
+
+### 体验打磨 (P2)
+- **FIX-039**: Agent 工作可见性——Coordinator spawn agent 时输出进度通知 + 完成报告格式标准化
+- **FIX-040**: 角色昵称收敛——用户可见消息用功能性描述替代昵称（5 文件）
+- **FIX-041**: Scenario F 状态面板输出折叠优化——3 项非关键信息（Gate 表/最近活动/插件版本）用 `<details>` 折叠
+- **FIX-042**: 外部项目实战验证——6/12 场景通过，3 问题发现并全部修复
+
 ## [0.30.0] — 2026-05-04
 
 ### 用户入口统一

@@ -615,16 +615,16 @@ REQUIRED_SNIPPETS = {
         "## [0.5.0]",
     ],
     ROOT / ".claude-plugin/plugin.json": [
-        "0.30.0",
+        "0.31.0",
     ],
     ROOT / ".claude-plugin/marketplace.json": [
-        "0.30.0",
+        "0.31.0",
     ],
     ROOT / ".codex-plugin/plugin.json": [
-        "0.30.0",
+        "0.31.0",
     ],
     ROOT / "skills/software-project-governance/core/manifest.json": [
-        "0.30.0",
+        "0.31.0",
     ],
 }
 
@@ -4378,6 +4378,42 @@ def cmd_check_governance(args):
             print(f"│    - {w}")
     print("└──────────────────────────────────────────────────────┘")
 
+    # ── 24. Untracked Files Detection (FIX-057 Phase 2) ──
+    print("\n┌─ Check 24: Untracked Files ──────────────────────────┐")
+    uf_result = check_untracked_files()
+    if uf_result["pass"] is None:
+        print(f"│  [INFO] Skipped: could not run git ls-files.")
+    elif uf_result["pass"] is True:
+        print(f"│  [PASS] No untracked files found.")
+    else:
+        count = uf_result["untracked_count"]
+        all_issues += count
+        print(f"│  [WARN] {count} untracked file(s) detected:")
+        # Group by directory
+        by_dir = {}
+        for f in uf_result["untracked_files"]:
+            d = f.rsplit("/", 1)[0] if "/" in f else "(repo root)"
+            by_dir.setdefault(d, []).append(f)
+        for d in sorted(by_dir.keys()):
+            print(f"│    {d}/")
+            for fname in sorted(by_dir[d]):
+                basename = fname.rsplit("/", 1)[-1] if "/" in fname else fname
+                print(f"│      - {basename}")
+        # Category suggestions
+        if uf_result["suggest_archive"]:
+            print(f"│  ── 应归档到仓库（git add）── {len(uf_result['suggest_archive'])} file(s):")
+            for f in uf_result["suggest_archive"]:
+                print(f"│    - {f}")
+        if uf_result["suggest_temp_script"]:
+            print(f"│  ── 可能是临时脚本，确认后归档或添加到 .gitignore ── {len(uf_result['suggest_temp_script'])} file(s):")
+            for f in uf_result["suggest_temp_script"]:
+                print(f"│    - {f}")
+        if uf_result["suggest_manual"]:
+            print(f"│  ── 需人工判断 ── {len(uf_result['suggest_manual'])} file(s):")
+            for f in uf_result["suggest_manual"]:
+                print(f"│    - {f}")
+    print("└──────────────────────────────────────────────────────┘")
+
     # ── Summary ──
     print(f"\n┌─ Governance Health Summary ──────────────────────────┐")
     if all_issues == 0:
@@ -4898,6 +4934,64 @@ def check_plugin_freshness():
     else:
         result["status"] = "OUTDATED"
         result["action"] = "Run /plugin update software-project-governance  or  /reload-plugins"
+
+    return result
+
+
+def check_untracked_files():
+    """Check for untracked files in the working directory (FIX-057 Phase 2).
+
+    Runs ``git ls-files --others --exclude-standard`` and reports any
+    untracked files with heuristic classification suggestions.  This check
+    never blocks -- untracked files are not errors, just signals that need
+    attention.
+    """
+    import subprocess
+
+    result = {
+        "pass": True,
+        "untracked_count": 0,
+        "untracked_files": [],
+        "suggest_archive": [],
+        "suggest_temp_script": [],
+        "suggest_manual": [],
+    }
+
+    try:
+        r = subprocess.run(
+            ["git", "ls-files", "--others", "--exclude-standard"],
+            capture_output=True, text=True,
+            cwd=str(ROOT), timeout=10
+        )
+        if r.returncode != 0:
+            result["pass"] = None  # couldn't run
+            return result
+
+        files = [f.strip().replace("\\", "/") for f in r.stdout.splitlines() if f.strip()]
+        if not files:
+            return result  # PASS -- no untracked files
+
+        result["pass"] = False
+        result["untracked_count"] = len(files)
+        result["untracked_files"] = files
+
+        # Heuristic classification
+        for f in files:
+            # ── docs/** or project/references/** → suggest archive ──
+            if f.startswith("docs/") or f.startswith("project/references/"):
+                result["suggest_archive"].append(f)
+                continue
+
+            # ── *.py single file at repo root → possible temp script ──
+            if "/" not in f and f.endswith(".py"):
+                result["suggest_temp_script"].append(f)
+                continue
+
+            # ── Everything else needs human judgment ──
+            result["suggest_manual"].append(f)
+
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        result["pass"] = None
 
     return result
 

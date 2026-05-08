@@ -41,7 +41,7 @@
 
 | 项目 | 当前阶段 | 总任务数 | 已完成 | 阻塞中 | 关键风险数 | 最近 Gate 结论 | 最近复盘日期 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 项目管理工作流插件 | 维护（并行活跃：架构） | 167 | 152 | 0 | 2 | G11 通过 | 2026-05-07 |
+| 项目管理工作流插件 | 维护（并行活跃：架构） | 168 | 153 | 0 | 2 | G11 通过 | 2026-05-07 |
 
 ## 当前活跃事项（2026-05-03 全路径架构审查后更新）
 
@@ -103,7 +103,7 @@ AUDIT-082 Phase 1-5 全部完成 ✅。六层架构已落地。
 | **P1** | FIX-052 | 版本 bump 自动化——checklist/脚本防版本号遗漏（0.30.0 开发中 5 次版本 bump 均需人工逐文件同步） | REL-006 | 0.31.0 | verify_workflow.py 新增 check-version-consistency 子命令 + check-governance Check 23 + hook @version 检查 + 2 bug 修复 | ✅ 已完成 |
 | **P0** | REL-006 | 0.30.0 版本发布——版本 bump 0.29.0→0.30.0 + CHANGELOG + 路线图更新 | FIX-051 | 0.30.0 | 6 文件版本号同步 + CHANGELOG 0.30.0 条目 + 版本路线图 0.30.0 标记已发布 | ✅ 已完成 |
 | **P0** | REL-007 | 0.31.0 版本发布——版本 bump 0.30.0→0.31.0 + CHANGELOG + 路线图更新 + tag | — | 0.31.0 | 11 文件版本号同步 + CHANGELOG 0.31.0 条目 + 版本路线图 0.31.0 标记已发布 + git tag v0.31.0 | ✅ 已完成 |
-| **P0** | REL-008 | 0.32.0 版本发布——版本 bump 0.31.0→0.32.0 + CHANGELOG + 路线图更新 + tag | FIX-056, FIX-057 | 0.32.0 | 11 文件版本号同步 + CHANGELOG 0.32.0 条目(FIX-056+057) + 版本路线图 0.32.0 标记已发布 + 3 份 release docs + git tag v0.32.0 | ✅ 已完成 |
+| **P0** | REL-008 | 0.32.0 版本发布——版本 bump 0.31.0→0.32.0 + CHANGELOG + 路线图更新 + tag | FIX-056, FIX-057 | 0.32.0 | 14 文件版本号同步 + CHANGELOG 0.32.0 条目(FIX-056+057) + 版本路线图 0.32.0 标记已发布 + 3 份 release docs + git tag v0.32.0 + hooks 同步修复(F-001) | ✅ 已完成 |
 | **P2** | FIX-039 | Agent 工作可见性——Coordinator spawn agent 时输出进度通知 | — | 0.31.0 | SKILL.md + agent-dispatch-template.md——进度通知规范 + 完成报告格式 | ✅ 已完成 |
 | **P2** | FIX-040 | 角色昵称不再向用户输出——用户可见消息用功能性描述 | — | 0.31.0 | 5 文件——SKILL.md + agent-dispatch-template.md + behavior-protocol.md + skill-index.md + agent-communication-protocol.md | ✅ 已完成 |
 | **P2** | FIX-041 | Scenario F 状态面板输出折叠优化——非关键信息默认折叠 | — | 1.0.0 | governance.md Scenario F——3 项非关键信息（Gate 表/最近活动/插件版本）用 <details> 折叠 | ✅ 已完成 |

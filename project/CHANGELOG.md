@@ -2,6 +2,23 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.32.0] — 2026-05-08
+
+### 0.32.0 — Agent 调度可靠性——并发控制 + 清洁度治理
+
+FIX-056 和 FIX-057 两项 Agent 可靠性专项，建立"防多 spawn + 防脏仓库"双层系统级防护。
+
+### Agent 并发防护 (P0)
+- **FIX-056**: Agent 意外并发防护——两道防线（task_id 去重 + agent-locks.json 文件锁），防止 Coordinator 误判超时导致重复 spawn 同一任务。
+  - Phase 1（核心锁机制）: agent-locks.json 锁表模板 + behavior-protocol.md M7.6a 锁协议 + agent-communication-protocol.md 超时处理语言强化（MUST AskUserQuestion）+ SKILL.md Coordinator 铁律 + agent-dispatch-template.md 锁声明占位符
+  - Phase 2（锁清理 + 检测）: post-commit hook Step 5 锁清理 + scope creep 检测 + verify_workflow.py Check 25 agent_lock_consistency + check-locks 子命令
+  - ADR-005 架构决策记录归档（5 WARNING → 全部修复）
+
+### 仓库清洁度治理 (P1)
+- **FIX-057**: 项目清洁度治理——未跟踪文件分类归档 + .gitignore 更新 + 系统级未跟踪检测。
+  - Phase 1: 6 个文档归档到 docs/ + .gitignore 新增项目特定忽略规则 + evidence-log.md/risk-log.md 解除 Git 跟踪
+  - Phase 2: verify_workflow.py Check 24 未跟踪文件检测 + pre-commit hook Step 10 未跟踪文件阻断（cleanliness BLOCK）
+
 ## [0.31.0] — 2026-05-05
 
 ### 0.31.0 — 验证驱动修复 + 收尾打磨

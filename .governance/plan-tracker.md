@@ -8,7 +8,7 @@
 - **Profile**: standard（本项目即为工作流产品本身，需要充分验证标准 profile 的治理能力）
 - **触发模式**: always-on（每次会话自动加载，持续跟踪项目状态）
 - **操作权限模式**: maximum-autonomy
-- **工作流版本**: 0.31.0（自动检测版本变化——更新后首次会话自动触发增量采纳）
+- **工作流版本**: 0.32.0（自动检测版本变化——更新后首次会话自动触发增量采纳）
 - **当前阶段**: 维护与演进（第 11 阶段）— 六层架构重构进行中
 - **并行活跃阶段**: 架构设计（第 5 阶段）— AUDIT-082 Phase 3-5 能力层+业务智能层迁移
 - **接入方式**: 从立项开始，但前期未正式执行 Gate 检查，2026-04-20 起补正式 onboarding
@@ -103,6 +103,7 @@ AUDIT-082 Phase 1-5 全部完成 ✅。六层架构已落地。
 | **P1** | FIX-052 | 版本 bump 自动化——checklist/脚本防版本号遗漏（0.30.0 开发中 5 次版本 bump 均需人工逐文件同步） | REL-006 | 0.31.0 | verify_workflow.py 新增 check-version-consistency 子命令 + check-governance Check 23 + hook @version 检查 + 2 bug 修复 | ✅ 已完成 |
 | **P0** | REL-006 | 0.30.0 版本发布——版本 bump 0.29.0→0.30.0 + CHANGELOG + 路线图更新 | FIX-051 | 0.30.0 | 6 文件版本号同步 + CHANGELOG 0.30.0 条目 + 版本路线图 0.30.0 标记已发布 | ✅ 已完成 |
 | **P0** | REL-007 | 0.31.0 版本发布——版本 bump 0.30.0→0.31.0 + CHANGELOG + 路线图更新 + tag | — | 0.31.0 | 11 文件版本号同步 + CHANGELOG 0.31.0 条目 + 版本路线图 0.31.0 标记已发布 + git tag v0.31.0 | ✅ 已完成 |
+| **P0** | REL-008 | 0.32.0 版本发布——版本 bump 0.31.0→0.32.0 + CHANGELOG + 路线图更新 + tag | FIX-056, FIX-057 | 0.32.0 | 11 文件版本号同步 + CHANGELOG 0.32.0 条目(FIX-056+057) + 版本路线图 0.32.0 标记已发布 + 3 份 release docs + git tag v0.32.0 | ✅ 已完成 |
 | **P2** | FIX-039 | Agent 工作可见性——Coordinator spawn agent 时输出进度通知 | — | 0.31.0 | SKILL.md + agent-dispatch-template.md——进度通知规范 + 完成报告格式 | ✅ 已完成 |
 | **P2** | FIX-040 | 角色昵称不再向用户输出——用户可见消息用功能性描述 | — | 0.31.0 | 5 文件——SKILL.md + agent-dispatch-template.md + behavior-protocol.md + skill-index.md + agent-communication-protocol.md | ✅ 已完成 |
 | **P2** | FIX-041 | Scenario F 状态面板输出折叠优化——非关键信息默认折叠 | — | 1.0.0 | governance.md Scenario F——3 项非关键信息（Gate 表/最近活动/插件版本）用 <details> 折叠 | ✅ 已完成 |
@@ -111,7 +112,7 @@ AUDIT-082 Phase 1-5 全部完成 ✅。六层架构已落地。
 | **P1** | FIX-054 | Check 10 M5 误报修复——排除 skills/ agents/ commands/ 等 plugin 源文件，仅检查用户项目文件 | FIX-042 | 0.31.0 | verify_workflow.py（PLUGIN_SCOPE_DIRS + _is_plugin_path() + 用户文件扫描 + 死代码清理）+ Review ✅ | ✅ 已完成 (2026-05-07) |
 | **P2** | FIX-055 | commit-msg hook 安装——governance-init.md/bootstrap 增加 commit-msg 安装步骤 + Hook 存活检测增加 commit-msg | FIX-042 | 0.31.0 | governance-init.md + CLAUDE.md bootstrap 模板（9 文件各 +1 hook 引用）+ Review ✅ (APPROVED) | ✅ 已完成 (2026-05-07) |
 | **P0** | FIX-056 | Agent 意外并发防护——Coordinator 误判超时导致重复 spawn 同一任务 | 用户反馈 (2026-05-07) | 0.32.0 | Phase 1 ✅: agent-locks.json + behavior-protocol/SKILL/communication/dispatch-template (6 文件). Phase 2 ✅: post-commit Step 5 (锁清理+scope creep检测) + Check 25 (agent_lock_consistency) + check-locks 子命令 (965133e) | ✅ 已完成 (2026-05-07) |
-| **P1** | FIX-057 | 项目清洁度治理——未跟踪文件分类归档 + .gitignore + 未跟踪检测机制 | 用户反馈 (2026-05-07) | 0.31.0 | Phase 1: 6 文档归档 + .gitignore + evidence-log 解除跟踪 (f293743). Phase 2: check-governance Check 24 + pre-commit Step 10 未跟踪检测 (a9225cf, 混入 REL-007) | ✅ 已完成 (2026-05-07) |
+| **P1** | FIX-057 | 项目清洁度治理——未跟踪文件分类归档 + .gitignore + 未跟踪检测机制 | 用户反馈 (2026-05-07) | 0.32.0 | Phase 1: 6 文档归档 + .gitignore + evidence-log 解除跟踪 (f293743). Phase 2: check-governance Check 24 + pre-commit Step 10 未跟踪检测 (a9225cf) | ✅ 已完成 (2026-05-07) |
 | **降级** | REQ-014/016/017/018/019/027/028 | Agent Team 实战验证后 | 1.0.0 | Task-Gate/Phase-Gate 迁移 + E2E |
 | **P0** | CLEANUP-001 | Phase 1: 创建 canonical manifest.json | — | 0.20.0 | v0.19.0 完整目录结构 JSON 声明（product + repo_only + exclude） | | — |
 | **P0** | CLEANUP-002 | Phase 2: 重写 governance-cleanup.md | CLEANUP-001 | 0.20.0 | 声明式 diff 清理——基于 manifest.json 自动计算冗余 | | — |
@@ -540,7 +541,7 @@ Tier 3-C: 兼容与政策（4 tasks, ~2 sessions，可并行）
 | **0.29.0** | **已发布** | **2026-05-04** | **系统级强制——pre-commit BLOCK + 审查覆盖率检查 + Profile 一致性校验 + 路由表补全** | **FIX-036(P0) pre-commit BLOCK, FIX-037(P0) 审查覆盖率检查, FIX-038(P0) Profile 代码级强制, FIX-043(P0) 路由表补全 16→18行** | **审查覆盖率量化检查 + Profile 一致性自动校验 + pre-commit 真阻断** |
 | **0.30.0** | **已发布** | **2026-05-04** | **用户入口统一 + Hook 架构修复——8 项 P0/P1 全部交付** | **FIX-044~048(P0+P1) 3-hook 架构修复, FIX-049~051(P0) 用户入口统一 + Coordinator 激活 + 全路径引导** | **用户只需 /governance 一条命令，3-hook 端到端验证通过** |
 | **0.31.0** | **已发布** | **2026-05-05** | **收尾打磨——P2 内部归档 + 体验打磨 + 版本 bump 自动化 + 外部验证 + 验证驱动修复** | **FIX-031/032/034(P2) 内部归档✅, FIX-039~042(P2) 体验打磨✅, AUDIT-087 Ph3(P2) E2E 验证 静态2/6✅, FIX-052(P1) 版本 bump 自动化✅, FIX-053(P0) cleanup 边界✅, FIX-054(P1) Check 10 误报✅, FIX-055(P2) commit-msg hook✅** | **3 FIX 验证驱动修复 + E2E 静态验证完成** |
-| **0.32.0** | **规划中** | **—** | **Agent 调度可靠性——并发控制 + 存活检测 + 超时协议** | **FIX-056(P0) Agent 意外并发防护——误判超时→重复 spawn→冲突** | **待定** |
+| **0.32.0** | **已发布** | **2026-05-08** | **Agent 调度可靠性——并发控制 + 清洁度治理** | **FIX-056(P0) Agent 意外并发防护——锁机制+post-commit锁清理+Check 25+check-locks子命令, FIX-057(P1) 项目清洁度治理——未跟踪文件分类归档+.gitignore+Check 24+pre-commit Step 10** | **Agent 并发防护 + 仓库清洁度系统级防护** |
 | **1.0.0** | **预留** | **—** | **首次正式发布标签——不承载修改，仅当所有 0.32.0 任务完成 + 外部验证通过后打 tag** | **—** | **纯版本标签——production-ready 声明** |
 
 ### 版本 Gate（V-Gate）

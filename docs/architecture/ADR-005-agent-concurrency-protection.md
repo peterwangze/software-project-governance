@@ -438,7 +438,7 @@ IF active_tasks 中存在 matching task_id:
 
 本方案建议分 2 Phase 执行：
 
-**Phase 1（0.31.0）——核心锁机制**:
+**Phase 1（0.32.0）——核心锁机制**:
 - 修改 1（agent-locks.json 新文件）
 - 修改 2（behavior-protocol.md M7.6 增强）
 - 修改 3（agent-communication-protocol.md 超时处理修正）
@@ -563,7 +563,7 @@ Phase 2 完成后，脚本可独立检测锁一致性和过期锁，post-commit 
    a. 同一 task 重复 dispatch → 被任务去重阻止
    b. 不同 task 修改同一文件 → 后到 task 等待锁释放
    c. Agent 真超时 → TTL 过期 → git diff 无修改 → 锁自动释放 → 安全重新 dispatch
-7. **0.31.0 发布**——Phase 1 完成后发布
+7. **0.32.0 发布**——Phase 1 + Phase 2 完成后发布
 
 ---
 

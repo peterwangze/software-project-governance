@@ -41,7 +41,7 @@
 
 | 项目 | 当前阶段 | 总任务数 | 已完成 | 阻塞中 | 关键风险数 | 最近 Gate 结论 | 最近复盘日期 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 项目管理工作流插件 | 维护（并行活跃：架构） | 168 | 153 | 0 | 2 | G11 通过 | 2026-05-07 |
+| 项目管理工作流插件 | 维护（并行活跃：架构） | 168 | 154 | 0 | 2 | G11 通过 | 2026-05-07 |
 
 ## 当前活跃事项（2026-05-03 全路径架构审查后更新）
 
@@ -71,7 +71,7 @@ AUDIT-082 Phase 1-5 全部完成 ✅。六层架构已落地。
 | **P0** | AUDIT-096 | adapter 配置修复——plugin.json 回退 + stub 恢复 ✅ | — | 0.18.0 | 紧急修复：skills 数组格式不被支持导致插件失效，回退到 string + 恢复 stub——已完成 | | — |
 | **P0** | AUDIT-097 | 代码仓对齐官方约定——Agent 目录结构标准化 | — | 0.19.0 | agents/<组>/<角色>/prompt.md → agents/<name>.md（plugin root 平铺） | ✅ 已完成 |
 | **P0** | AUDIT-098 | 代码仓对齐官方约定——SKILL 目录结构标准化 | AUDIT-097 | 0.19.0 | skills/software-project-governance/skills/ → skills/<name>/（plugin root 平铺），删除 25 stub | ✅ 已完成 |
-| **P2** | AUDIT-087 | 命令端到端验证——e2e-test-project 逐命令验证 | — | 1.0.0 | 6 个命令全部在外部项目中走通 | 🔄 进行中 (Phase 1 ✅ Phase 2 ✅ Phase 3 静态 2/6 ✅) | — |
+| **P2** | AUDIT-087 | 命令端到端验证——e2e-test-project 逐命令验证 | — | 1.0.0 | 6 个命令全部 PASS——Phase 1 ✅ (infra 修复) Phase 2 ✅ (静态 2/6) Phase 3 ✅ (QA 静态验证 6/6, 0 P0/P1 缺陷) | ✅ 已完成 (2026-05-08) |
 | **P2** | AUDIT-025 | Stage skill 质量均衡 ✅ | — | 1.0.0 | Stage Skill 深度评分 Rubric 设计完成——6 维度/1-5 分/最低门槛/均衡目标/11 skill 评分/自动化检查脚本 | ✅ 已完成 | — |
 | **P1** | FIX-026 | Hook 产品代码检测同步——Step 7b/9 公共变量提取 ✅ | — | 0.27.0 | pre-commit——is_product_code() 函数提取 + 7 单元测试 | ✅ 已完成 |
 | **P1** | FIX-027 | SKILL.md 模板引用补充 ✅ | — | 0.27.0 | governance-init.md 模板——Agent 分发路由后补充调度模板+行为协议引用 | ✅ 已完成 |

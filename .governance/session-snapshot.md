@@ -16,6 +16,7 @@
 | 任务 | 优先级 | 关键成果 | Agent |
 |------|--------|---------|-------|
 | SYSGAP-030 需求澄清 v2 修复 | P0 | 响应审查报告 REVIEW-SYSGAP-030-requirement (1 BLOCKING + 5 WARNING)。B1: evidence-log 增长模型修正——1.41 entries/task 实际比率替代隐含 1.0，1000-task 投影从 ~700 KB → ~990 KB（+36%），总治理数据从 ~2.3 MB → ~2.6 MB，token 消耗从 ~940K (94%) → ~1,055K (超标 5.5%)。W1: 指标 1 与指标 3 关系澄清。W2: IN #8 归档触发三级优先级。W3: H1 验证计划增强（样本 10→20+错误准则定义）。W4: H6 新增（Agent 多文件读取）。W5: FAQ 6 个 Q&A。产出: `.governance/requirements-SYSGAP-030-governance-scalability.md` v2 | Analyst (阿析) |
+| SYSGAP-030 H6 假设验证 | P0 | Agent 多文件读取原型测试——3 场景全部 PASS：(1) 纯热数据 bootstrap ✅ (2) 按需索引查询归档 ✅ (3) 跨版本依赖追踪 ✅。结论：H6 假设成立，ADR-006 条件通过项 C1 解除阻塞。产出: `.governance/H6-validation-report.md` (EVD-240) | Coordinator (老周) |
 
 ### SYSGAP-030 v2 关键修正
 - evidence-log entries/task 比率: 237 条 / 168 tasks = 1.41 (非 1.0)

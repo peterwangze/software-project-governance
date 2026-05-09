@@ -26,6 +26,7 @@
       { "path": "skills/software-project-governance/infra/TOOLS.md", "type": "file" },
       { "path": "skills/software-project-governance/infra/verify_workflow.py", "type": "file" },
       { "path": "skills/software-project-governance/infra/verify-e2e.sh", "type": "file" },
+      { "path": "skills/software-project-governance/infra/archive.py", "type": "file" },
       { "path": "skills/software-project-governance/references/", "type": "dir" },
       { "path": "agents/", "type": "dir" },
       { "path": "commands/", "type": "dir" },

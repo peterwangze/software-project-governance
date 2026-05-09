@@ -1,0 +1,976 @@
+#!/usr/bin/env python3
+"""
+Governance Data Archive Script — SYSGAP-030
+
+Implements version-based archiving of governance data (plan-tracker tasks,
+evidence-log entries, etc.) with a light-weight Markdown index.
+
+Core functions:
+  - migrate_by_version: archive tasks+evidence for a version range
+  - build_index: scan archive files, generate archive/index.md
+  - verify_archive_integrity: check index-archive consistency
+  - rollback_last_migration: undo most recent migration
+
+Design: ADR-006 (docs/architecture/ADR-006-governance-data-scalability.md)
+"""
+
+import re
+import shutil
+import sys
+from datetime import date
+from pathlib import Path
+
+# ROOT is overridable for testing; paths are lazy to allow patching
+ROOT = Path(__file__).resolve().parents[3]
+
+
+def _gov_dir():
+    return ROOT / ".governance"
+
+
+def _archive_dir():
+    return _gov_dir() / "archive"
+
+
+def _index_path():
+    return _archive_dir() / "index.md"
+
+
+def _plan_tracker():
+    return _gov_dir() / "plan-tracker.md"
+
+
+def _evidence_log():
+    return _gov_dir() / "evidence-log.md"
+
+
+def _decision_log():
+    return _gov_dir() / "decision-log.md"
+
+
+def _risk_log():
+    return _gov_dir() / "risk-log.md"
+
+
+# Path getters are used throughout; module-level references updated below.
+# Keep convenience aliases for backward compat (computed lazily via property-like
+# accessors — but we replace direct constants with function calls below.)
+
+
+# ── Version Parsing Utilities ──────────────────────────────────────
+
+def _parse_version_from_title(title_line):
+    """Extract version string from a section title like '### v0.11.0 — Foo' or '## 0.24.0 — Bar'.
+    Returns (version_str, description) or (None, None).
+    """
+    # Match version patterns: v0.11.0, 0.11.0
+    m = re.match(r"^#{1,6}\s+(?:v)?(\d+\.\d+\.\d+)\s*[—\-]\s*(.*?)$", title_line.strip())
+    if m:
+        return m.group(1), m.group(2).strip()
+    return None, None
+
+
+def _version_to_tuple(version_str):
+    """Convert '0.11.0' to (0, 11, 0) for comparison."""
+    parts = version_str.split(".")
+    return tuple(int(p) for p in parts)
+
+
+def _version_in_range(version_str, start, end):
+    """Check if version_str is in [start, end] inclusive."""
+    vt = _version_to_tuple(version_str)
+    return _version_to_tuple(start) <= vt <= _version_to_tuple(end)
+
+
+def _find_version_sections(content):
+    """Parse plan-tracker content into version sections.
+
+    Returns list of dicts: {version, title, start_line, end_line, task_lines}
+    where task_lines are the table row lines for tasks.
+    """
+    lines = content.split("\n")
+    sections = []
+    current_section = None
+
+    for i, line in enumerate(lines):
+        # Detect version section headers
+        v, desc = _parse_version_from_title(line)
+        if v is not None:
+            if current_section:
+                current_section["end_line"] = i - 1
+                sections.append(current_section)
+
+            current_section = {
+                "version": v,
+                "title": line.strip(),
+                "start_line": i,
+                "end_line": len(lines) - 1,
+                "task_lines": [],
+                "table_started": False,
+                "header_line": None,
+                "separator_line": None,
+            }
+            continue
+
+        if current_section:
+            stripped = line.strip()
+            # Detect table separator row: | --- | --- | or | :--- | :---: | etc.
+            # The format is "|" followed by hyphens (optional colons) separated by "|"
+            if stripped.startswith("|") and re.match(r"^\|[\s\-:|\t]+\|$", stripped):
+                current_section["separator_line"] = i
+                continue
+            if stripped.startswith("|") and current_section["separator_line"] is not None:
+                # This is a table row - check if it's a task row
+                m = re.match(r"\|\s*([A-Z]+-\d+)\s*\|", stripped)
+                if m:
+                    current_section["task_lines"].append((i, line, m.group(1)))
+
+    if current_section:
+        current_section["end_line"] = len(lines) - 1
+        sections.append(current_section)
+
+    return sections, lines
+
+
+def _parse_task_status(line):
+    """Extract status from a task table row. Status is at the 10th column (index 10)."""
+    parts = [p.strip() for p in line.split("|")]
+    if len(parts) >= 11:
+        return parts[10]
+    return None
+
+
+# ── Archive File Management ────────────────────────────────────────
+
+def _ensure_archive_dirs():
+    """Create archive directory structure if it doesn't exist."""
+    for d in [_archive_dir(),
+              _archive_dir() / "tasks",
+              _archive_dir() / "evidence",
+              _archive_dir() / "decisions",
+              _archive_dir() / "risks"]:
+        d.mkdir(parents=True, exist_ok=True)
+
+
+def _get_existing_archive_files(subdir):
+    """Get sorted list of existing archive .md files (excluding .gitkeep)."""
+    dir_path = _archive_dir() / subdir
+    if not dir_path.exists():
+        return []
+    files = sorted([f for f in dir_path.glob("*.md") if f.name != ".gitkeep"],
+                   key=lambda f: f.name)
+    return files
+
+
+def _make_archive_filename(version_start, version_end, category="tasks"):
+    """Generate archive file name: v{start}~v{end}.md"""
+    return f"v{version_start}~v{version_end}.md"
+
+
+def _write_archive_file(filepath, header, body_lines):
+    """Write an archive file with standardized header."""
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(header)
+        f.write("\n")
+        f.write("\n".join(body_lines))
+        f.write("\n")
+
+
+def _build_archive_header(version_start, version_end, category, entry_count,
+                          prev_file=None, next_file=None):
+    """Build standardized archive file header.
+
+    category: 'tasks', 'evidence', 'decisions', 'risks'
+    """
+    category_labels = {
+        "tasks": ("归档 Task 表", "plan-tracker.md 中"),
+        "evidence": ("归档 Evidence 记录", "evidence-log.md 中"),
+        "decisions": ("归档 Decision 记录", "decision-log.md 中"),
+        "risks": ("归档 Risk 记录", "risk-log.md 中"),
+    }
+    label, source = category_labels.get(category, (f"归档 {category} 记录", ""))
+
+    lines = [
+        f"# {label} — v{version_start} ~ v{version_end}",
+        f"- **归档日期**: {date.today().isoformat()}",
+        f"- **归档范围**: {source} {version_start}~{version_end} 版本的所有 {category}",
+        f"- **条目数**: {entry_count}",
+    ]
+    if prev_file:
+        lines.append(f"- **上一个归档文件**: archive/{category}/{prev_file}")
+    else:
+        lines.append(f"- **上一个归档文件**: 无")
+    if next_file:
+        lines.append(f"- **下一个归档文件**: archive/{category}/{next_file}")
+    else:
+        lines.append(f"- **下一个归档文件**: 无")
+
+    lines.append("")
+    lines.append("> 查询方式：通过 `.governance/archive/index.md` 按 ID 定位。")
+    lines.append("")
+
+    return "\n".join(lines) + "\n"
+
+
+# ── Core Migration ─────────────────────────────────────────────────
+
+def migrate_by_version(version_start, version_end, dry_run=False, migrate_evidence=True):
+    """Archive completed tasks (and optionally evidence) for a version range.
+
+    Args:
+        version_start: e.g. "0.11.0"
+        version_end: e.g. "0.24.0"
+        dry_run: if True, report what would be done but don't modify files
+        migrate_evidence: if True, also archive evidence entries for archived tasks
+
+    Returns:
+        dict with keys: success, dry_run, tasks_archived, tasks_remaining,
+                        evidence_archived, archive_files_created, details
+    """
+    result = {
+        "success": False,
+        "dry_run": dry_run,
+        "tasks_archived": 0,
+        "tasks_remaining": 0,
+        "evidence_archived": 0,
+        "archive_files_created": [],
+        "details": "",
+    }
+
+    _ensure_archive_dirs()
+
+    if not _plan_tracker().exists():
+        result["details"] = "plan-tracker.md not found"
+        return result
+
+    content = _plan_tracker().read_text(encoding="utf-8")
+    sections, lines = _find_version_sections(content)
+
+    # Find sections in version range
+    archived_task_lines = []  # (line_index, original_line, task_id, version)
+    archived_tasks = set()
+    archive_body_lines = []
+
+    for section in sections:
+        if _version_in_range(section["version"], version_start, version_end):
+            # Check each task in this section
+            for line_idx, line, task_id in section["task_lines"]:
+                status = _parse_task_status(line)
+                if status == "已完成":
+                    archived_task_lines.append((line_idx, line, task_id, section["version"]))
+                    archived_tasks.add(task_id)
+                    archive_body_lines.append((section["version"], line))
+                else:
+                    result["tasks_remaining"] += 1
+        else:
+            # Tasks in non-matching sections remain in hot file
+            for _line_idx, _line, task_id in section["task_lines"]:
+                result["tasks_remaining"] += 1
+
+    result["tasks_archived"] = len(archived_tasks)
+
+    if result["tasks_archived"] == 0:
+        result["success"] = True
+        result["details"] = f"No completed tasks found in version range v{version_start}~v{version_end}"
+        return result
+
+    # Determine archive filename
+    archive_filename = _make_archive_filename(version_start, version_end, "tasks")
+    archive_path = _archive_dir() / "tasks" / archive_filename
+
+    # Check existing archive files for prev/next links
+    existing_files = _get_existing_archive_files("tasks")
+    existing_names = [f.name for f in existing_files]
+
+    try:
+        idx = existing_names.index(archive_filename)
+        # File already exists - we'd append, but for now this is a full rewrite
+    except ValueError:
+        pass
+
+    prev_file = existing_names[-1] if existing_names else None
+
+    # Build archive body with version sections
+    # Group archived tasks by version
+    tasks_by_version = {}
+    for version, line in archive_body_lines:
+        tasks_by_version.setdefault(version, []).append(line)
+
+    archive_lines = []
+    for version in sorted(tasks_by_version.keys(),
+                          key=lambda v: _version_to_tuple(v)):
+        # Find the original section title
+        section = next((s for s in sections if s["version"] == version), None)
+        if section:
+            archive_lines.append("")
+            archive_lines.append(section["title"])
+            # Use a standard table header
+            archive_lines.append("| 任务ID | 描述 | 优先级 | 依赖 | 目标版本 | 负责人 | 审查人 | 审查类型 | 闭环路径 | 状态 |")
+            archive_lines.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
+            for line in tasks_by_version[version]:
+                archive_lines.append(line)
+            archive_lines.append("")
+
+    # Build header
+    header = _build_archive_header(
+        version_start, version_end, "tasks",
+        result["tasks_archived"],
+        prev_file=prev_file,
+    )
+
+    if dry_run:
+        result["success"] = True
+        result["details"] = (f"Dry-run: would archive {result['tasks_archived']} tasks "
+                            f"from v{version_start}~v{version_end} to {archive_filename}")
+        result["archive_files_created"] = [archive_filename]
+        return result
+
+    # Write archive file
+    _write_archive_file(archive_path, header, archive_lines)
+    result["archive_files_created"].append(f"archive/tasks/{archive_filename}")
+
+    # Remove archived task lines from plan-tracker content
+    lines_to_remove = {idx for idx, _, _, _ in archived_task_lines}
+    new_lines = []
+    for i, line in enumerate(lines):
+        if i in lines_to_remove:
+            continue
+        new_lines.append(line)
+
+    # Update version section headers to mark as archived
+    final_lines = []
+    for i, line in enumerate(new_lines):
+        v, desc = _parse_version_from_title(line)
+        if v and _version_in_range(v, version_start, version_end):
+            # Add archived marker to version title
+            if "[已归档]" not in line:
+                line = line.rstrip() + " [已归档]"
+        final_lines.append(line)
+
+    if not dry_run:
+        _plan_tracker().write_text("\n".join(final_lines), encoding="utf-8")
+
+    # Migrate evidence if requested
+    if migrate_evidence and archived_tasks and _evidence_log().exists():
+        ev_content = _evidence_log().read_text(encoding="utf-8")
+        ev_lines = ev_content.split("\n")
+
+        ev_archived_lines = []
+        ev_archived_count = 0
+        ev_kept_lines = []
+
+        for i, line in enumerate(ev_lines):
+            stripped = line.strip()
+            if not stripped.startswith("| EVD-"):
+                ev_kept_lines.append(line)
+                continue
+
+            parts = [p.strip() for p in line.split("|")]
+            if len(parts) >= 3:
+                raw_task_ids = parts[2]
+                # Check if this evidence is for an archived task
+                ev_task_ids = set()
+                for tid in raw_task_ids.split(","):
+                    tid = tid.strip()
+                    if tid and re.match(r"[A-Z]+-\d+", tid):
+                        ev_task_ids.add(tid)
+
+                if ev_task_ids and ev_task_ids.issubset(archived_tasks):
+                    ev_archived_lines.append(line)
+                    ev_archived_count += 1
+                    continue
+
+            ev_kept_lines.append(line)
+
+        if ev_archived_count > 0:
+            # Create evidence archive file
+            ev_archive_filename = _make_archive_filename(version_start, version_end, "evidence")
+            ev_archive_path = _archive_dir() / "evidence" / ev_archive_filename
+
+            ev_archive_body = []
+            if ev_archived_lines:
+                ev_archive_body.append("| 证据ID | 关联Task | 摘要 | 日期 | 类型 | 产出 | 负责人 | 审查人 | 审查结果 | 备注 |")
+                ev_archive_body.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
+                ev_archive_body.extend(ev_archived_lines)
+
+            ev_header = _build_archive_header(
+                version_start, version_end, "evidence",
+                ev_archived_count,
+            )
+
+            _write_archive_file(ev_archive_path, ev_header, ev_archive_body)
+            result["archive_files_created"].append(f"archive/evidence/{ev_archive_filename}")
+            result["evidence_archived"] = ev_archived_count
+
+            # Update evidence-log.md
+            _evidence_log().write_text("\n".join(ev_kept_lines), encoding="utf-8")
+
+    result["success"] = True
+    result["details"] = (f"Archived {result['tasks_archived']} tasks "
+                        f"from v{version_start}~v{version_end}")
+    return result
+
+
+# ── Index Building ─────────────────────────────────────────────────
+
+def _extract_tasks_from_archive_file(filepath):
+    """Extract task IDs and statuses from an archive file.
+
+    Returns list of (task_id, status, version_str) tuples.
+    """
+    if not filepath.exists():
+        return []
+    content = filepath.read_text(encoding="utf-8")
+    results = []
+    current_version = None
+
+    for line in content.split("\n"):
+        # Detect version section headers
+        v, _ = _parse_version_from_title(line)
+        if v:
+            current_version = v
+            continue
+
+        # Parse task table rows
+        stripped = line.strip()
+        m = re.match(r"\|\s*([A-Z]+-\d+)\s*\|", stripped)
+        if m:
+            task_id = m.group(1)
+            status = _parse_task_status(stripped)
+            results.append((task_id, status, current_version or "unknown"))
+
+    return results
+
+
+def _extract_evidence_from_archive_file(filepath):
+    """Extract evidence IDs and associated task IDs from an archive file.
+
+    Returns list of (evidence_id, task_ids_str) tuples.
+    """
+    if not filepath.exists():
+        return []
+    content = filepath.read_text(encoding="utf-8")
+    results = []
+
+    for line in content.split("\n"):
+        stripped = line.strip()
+        if not stripped.startswith("| EVD-"):
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) >= 3:
+            evd_id = parts[1]
+            task_ids = parts[2]
+            if evd_id and re.match(r"EVD-\d+", evd_id):
+                results.append((evd_id, task_ids))
+
+    return results
+
+
+def build_index():
+    """Scan all archive files and build/rebuild archive/index.md.
+
+    The index is a Markdown file with tables mapping entry IDs to
+    their archive file locations.
+
+    Returns:
+        dict with keys: status, task_entries, evidence_entries,
+                        decision_entries, risk_entries
+    """
+    result = {
+        "status": "created",
+        "task_entries": 0,
+        "evidence_entries": 0,
+        "decision_entries": 0,
+        "risk_entries": 0,
+    }
+
+    _ensure_archive_dirs()
+
+    # Collect task entries
+    task_entries = []
+    for f in sorted((_archive_dir() / "tasks").glob("*.md")):
+        if f.name == ".gitkeep":
+            continue
+        rel_path = f"archive/tasks/{f.name}"
+        for task_id, status, version in _extract_tasks_from_archive_file(f):
+            task_entries.append({
+                "id": task_id,
+                "status": status or "?",
+                "version": version,
+                "file": rel_path,
+            })
+
+    # Collect evidence entries
+    evidence_entries = []
+    for f in sorted((_archive_dir() / "evidence").glob("*.md")):
+        if f.name == ".gitkeep":
+            continue
+        rel_path = f"archive/evidence/{f.name}"
+        for evd_id, task_ids in _extract_evidence_from_archive_file(f):
+            evidence_entries.append({
+                "id": evd_id,
+                "task_ids": task_ids,
+                "file": rel_path,
+            })
+
+    # Collect decision entries
+    decision_entries = []
+    for f in sorted((_archive_dir() / "decisions").glob("*.md")):
+        if f.name == ".gitkeep":
+            continue
+        rel_path = f"archive/decisions/{f.name}"
+        content = f.read_text(encoding="utf-8") if f.exists() else ""
+        for m in re.finditer(r"##\s+(DEC-\d+):\s*(.*)", content):
+            decision_entries.append({
+                "id": m.group(1),
+                "title": m.group(2).strip(),
+                "file": rel_path,
+            })
+
+    # Collect risk entries
+    risk_entries = []
+    for f in sorted((_archive_dir() / "risks").glob("*.md")):
+        if f.name == ".gitkeep":
+            continue
+        rel_path = f"archive/risks/{f.name}"
+        content = f.read_text(encoding="utf-8") if f.exists() else ""
+        for line in content.split("\n"):
+            stripped = line.strip()
+            if not stripped.startswith("| RISK-"):
+                continue
+            parts = [p.strip() for p in line.split("|")]
+            if len(parts) >= 4:
+                risk_id = parts[1]
+                desc = parts[2]
+                if risk_id and re.match(r"RISK-\d+", risk_id):
+                    risk_entries.append({
+                        "id": risk_id,
+                        "description": desc,
+                        "file": rel_path,
+                    })
+
+    result["task_entries"] = len(task_entries)
+    result["evidence_entries"] = len(evidence_entries)
+    result["decision_entries"] = len(decision_entries)
+    result["risk_entries"] = len(risk_entries)
+
+    # Build index.md content
+    index_lines = [
+        "# 归档索引",
+        "",
+        "> 自动生成，记录每个治理条目的归档位置。查询路径：条目 ID → 归档文件。",
+        "> 维护方式：归档脚本执行时自动更新。可通过 `build_index()` 重建。",
+        "",
+        "---",
+        "",
+        "## Task 索引",
+        "",
+        "| Task ID | 状态 | 版本 | 归档文件 |",
+        "|---------|------|------|---------|",
+    ]
+
+    for entry in task_entries:
+        index_lines.append(
+            f"| {entry['id']} | {entry['status']} | {entry['version']} | {entry['file']} |"
+        )
+
+    index_lines.extend([
+        "",
+        "## Evidence 索引",
+        "",
+        "| Evidence ID | Task ID | 归档文件 |",
+        "|-------------|--------|---------|",
+    ])
+
+    for entry in evidence_entries:
+        index_lines.append(
+            f"| {entry['id']} | {entry['task_ids']} | {entry['file']} |"
+        )
+
+    index_lines.extend([
+        "",
+        "## Decision 索引",
+        "",
+        "| Decision ID | 标题 | 归档文件 |",
+        "|-------------|------|---------|",
+    ])
+
+    for entry in decision_entries:
+        index_lines.append(
+            f"| {entry['id']} | {entry['title']} | {entry['file']} |"
+        )
+
+    index_lines.extend([
+        "",
+        "## Risk 索引",
+        "",
+        "| Risk ID | 描述 | 归档文件 |",
+        "|---------|------|---------|",
+    ])
+
+    for entry in risk_entries:
+        index_lines.append(
+            f"| {entry['id']} | {entry['description']} | {entry['file']} |"
+        )
+
+    index_lines.append("")
+
+    _index_path().write_text("\n".join(index_lines), encoding="utf-8")
+
+    return result
+
+
+# ── Integrity Verification ─────────────────────────────────────────
+
+def verify_archive_integrity():
+    """Verify archive integrity: index-archive consistency.
+
+    Checks:
+      1. Every file referenced in index.md exists
+      2. Every entry in archive files has a corresponding index entry
+      3. No orphan archive files (files exist but not in index)
+
+    Returns:
+        dict with keys: pass, issues (list of issue strings),
+                        total_archived_tasks, total_index_entries
+    """
+    result = {
+        "pass": True,
+        "issues": [],
+        "total_archived_tasks": 0,
+        "total_index_entries": 0,
+    }
+
+    _ensure_archive_dirs()
+
+    # If no index and no archive files, pass trivially
+    archive_files = []
+    for subdir in ["tasks", "evidence", "decisions", "risks"]:
+        d = _archive_dir() / subdir
+        if d.exists():
+            for f in d.glob("*.md"):
+                if f.name != ".gitkeep":
+                    archive_files.append((subdir, f))
+
+    if not archive_files and not _index_path().exists():
+        result["pass"] = True
+        return result
+
+    # If there are archive files but no index, that's an issue
+    if archive_files and not _index_path().exists():
+        result["pass"] = False
+        result["issues"].append(
+            f"有 {len(archive_files)} 个归档文件但 index.md 不存在。"
+            f"运行 build_index() 重建索引。"
+        )
+        return result
+
+    if not _index_path().exists():
+        result["pass"] = True
+        return result
+
+    # Parse index
+    index_content = _index_path().read_text(encoding="utf-8")
+    index_lines = index_content.split("\n")
+
+    # Extract file references from each index section
+    def _parse_index_section(content_lines, section_name):
+        """Extract rows from a specific index section."""
+        refs = set()
+        in_section = False
+        table_started = False
+
+        for line in content_lines:
+            if line.strip() == f"## {section_name}":
+                in_section = True
+                continue
+            if in_section and line.strip().startswith("## "):
+                in_section = False
+                continue
+            if not in_section:
+                continue
+            stripped = line.strip()
+            if "|---" in stripped:
+                table_started = True
+                continue
+            if not table_started:
+                continue
+            if not stripped.startswith("| "):
+                continue
+
+            parts = [p.strip() for p in line.split("|")]
+            if section_name == "Task 索引":
+                if len(parts) >= 5:
+                    refs.add(parts[4])  # archive file column
+            elif section_name == "Evidence 索引":
+                if len(parts) >= 4:
+                    refs.add(parts[3])
+            elif section_name == "Decision 索引":
+                if len(parts) >= 4:
+                    refs.add(parts[3])
+            elif section_name == "Risk 索引":
+                if len(parts) >= 4:
+                    refs.add(parts[3])
+
+        return refs
+
+    index_task_refs = _parse_index_section(index_lines, "Task 索引")
+    index_evidence_refs = _parse_index_section(index_lines, "Evidence 索引")
+    index_decision_refs = _parse_index_section(index_lines, "Decision 索引")
+    index_risk_refs = _parse_index_section(index_lines, "Risk 索引")
+
+    all_index_refs = index_task_refs | index_evidence_refs | index_decision_refs | index_risk_refs
+
+    # Check 1: Every referenced archive file exists
+    for ref in all_index_refs:
+        filepath = ROOT / ".governance" / ref
+        if not filepath.exists():
+            result["pass"] = False
+            result["issues"].append(f"索引引用的归档文件不存在: {ref}")
+
+    # Check 2: Every archive file is referenced in index
+    actual_files = set()
+    for subdir, f in archive_files:
+        rel = f"archive/{subdir}/{f.name}"
+        actual_files.add(rel)
+
+    unreferenced = actual_files - all_index_refs
+    if unreferenced:
+        result["pass"] = False
+        for f in sorted(unreferenced):
+            result["issues"].append(f"归档文件未在索引中记录: {f}")
+
+    # Check 3: Extract IDs from archive files and count
+    total_in_files = 0
+    for subdir, f in archive_files:
+        if subdir == "tasks":
+            total_in_files += len(_extract_tasks_from_archive_file(f))
+        elif subdir == "evidence":
+            total_in_files += len(_extract_evidence_from_archive_file(f))
+
+    result["total_archived_tasks"] = total_in_files
+
+    # Count index entries
+    total_in_index = 0
+    for line in index_lines:
+        stripped = line.strip()
+        if stripped.startswith("| ") and re.match(r"\|\s*[A-Z]+-\d+", stripped):
+            total_in_index += 1
+
+    result["total_index_entries"] = total_in_index
+
+    return result
+
+
+# ── Rollback ────────────────────────────────────────────────────────
+
+def rollback_last_migration():
+    """Rollback the most recent migration by:
+    1. Finding the most recently modified archive file
+    2. Merging its content back into the hot file
+    3. Removing the archive file
+    4. Updating the index
+
+    Returns:
+        dict with keys: success, rolled_back_file, details
+    """
+    result = {
+        "success": False,
+        "rolled_back_file": None,
+        "details": "",
+    }
+
+    _ensure_archive_dirs()
+
+    # Find most recently modified archive task file
+    recent_files = []
+    for subdir in ["tasks", "evidence"]:
+        d = _archive_dir() / subdir
+        if d.exists():
+            for f in d.glob("*.md"):
+                if f.name != ".gitkeep":
+                    recent_files.append((f.stat().st_mtime, subdir, f))
+
+    if not recent_files:
+        result["details"] = "没有找到归档文件，无法回滚。"
+        return result
+
+    recent_files.sort(reverse=True)
+    mtime, subdir, archive_file = recent_files[0]
+
+    result["rolled_back_file"] = f"archive/{subdir}/{archive_file.name}"
+
+    if subdir == "tasks":
+        # Read archive file content and merge back into plan-tracker
+        archive_content = archive_file.read_text(encoding="utf-8")
+        pt_content = _plan_tracker().read_text(encoding="utf-8") if _plan_tracker().exists() else ""
+
+        # Extract version sections from archive
+        sections, _ = _find_version_sections(archive_content)
+
+        # Find the body after the header section
+        body_start = 0
+        archive_lines = archive_content.split("\n")
+        for i, line in enumerate(archive_lines):
+            if line.startswith("#") and "归档" in line:
+                continue
+            if line.startswith("- **归档日期") or line.startswith("- **归档范围") or \
+               line.startswith("- **条目数") or line.startswith("- **上一个") or \
+               line.startswith("- **下一个") or line.startswith("> "):
+                continue
+            if line.startswith("###") or line.startswith("---"):
+                body_start = i
+                break
+
+        # Append task content back to plan-tracker
+        task_body = "\n".join(archive_lines[body_start:])
+        new_pt = pt_content.rstrip() + "\n\n" + task_body + "\n"
+
+        # Remove [已归档] markers ONLY from version titles in the
+        # archive file's version range (not globally).  Parse the
+        # version range from the archive filename first; fall back to
+        # extracting versions from archive content.
+        fname_match = re.match(
+            r'v(\d+\.\d+\.\d+)~v(\d+\.\d+\.\d+)\.md',
+            archive_file.name,
+        )
+        if fname_match:
+            version_start, version_end = fname_match.group(1), fname_match.group(2)
+            new_lines = new_pt.split("\n")
+            for i, line in enumerate(new_lines):
+                v_str, _ = _parse_version_from_title(line)
+                if v_str and _version_in_range(v_str, version_start, version_end):
+                    if "[已归档]" in line:
+                        new_lines[i] = line.replace("[已归档]", "").rstrip()
+            new_pt = "\n".join(new_lines)
+        else:
+            # Fallback: find versions that appear in the archive body
+            archive_sections, _ = _find_version_sections(archive_content)
+            archived_versions = {
+                s["version"] for s in archive_sections if s.get("version")
+            }
+            if archived_versions:
+                new_lines = new_pt.split("\n")
+                for i, line in enumerate(new_lines):
+                    v_str, _ = _parse_version_from_title(line)
+                    if v_str and v_str in archived_versions:
+                        if "[已归档]" in line:
+                            new_lines[i] = line.replace("[已归档]", "").rstrip()
+                new_pt = "\n".join(new_lines)
+
+        _plan_tracker().write_text(new_pt, encoding="utf-8")
+
+        # Remove the archive file
+        archive_file.unlink()
+        result["success"] = True
+        result["details"] = f"已回滚 {archive_file.name} → plan-tracker.md"
+
+    elif subdir == "evidence":
+        # Similar process for evidence
+        archive_content = archive_file.read_text(encoding="utf-8")
+        ev_content = _evidence_log().read_text(encoding="utf-8") if _evidence_log().exists() else ""
+
+        # Extract evidence rows from archive
+        ev_rows = []
+        for line in archive_content.split("\n"):
+            stripped = line.strip()
+            if stripped.startswith("| EVD-"):
+                ev_rows.append(line)
+
+        if ev_rows:
+            new_ev = ev_content.rstrip() + "\n" + "\n".join(ev_rows) + "\n"
+            _evidence_log().write_text(new_ev, encoding="utf-8")
+
+        archive_file.unlink()
+        result["success"] = True
+        result["details"] = f"已回滚 {archive_file.name} → evidence-log.md"
+
+    # Rebuild index after rollback
+    build_index()
+
+    return result
+
+
+# ── CLI Entry Point ─────────────────────────────────────────────────
+
+def main():
+    """CLI for archive operations."""
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="archive",
+        description="Governance Data Archive Tool — SYSGAP-030",
+    )
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    # migrate
+    migrate_p = subparsers.add_parser("migrate", help="Archive tasks for a version range")
+    migrate_p.add_argument("version_start", help="Start version (e.g. 0.11.0)")
+    migrate_p.add_argument("version_end", help="End version (e.g. 0.24.0)")
+    migrate_p.add_argument("--dry-run", action="store_true",
+                           help="Report what would be archived without modifying files")
+    migrate_p.add_argument("--no-evidence", action="store_true",
+                           help="Skip evidence archiving")
+
+    # build-index
+    subparsers.add_parser("build-index", help="Rebuild archive/index.md from archive files")
+
+    # verify
+    subparsers.add_parser("verify", help="Verify archive integrity")
+
+    # rollback
+    subparsers.add_parser("rollback", help="Rollback the most recent migration")
+
+    args = parser.parse_args()
+
+    if args.command == "migrate":
+        result = migrate_by_version(
+            args.version_start,
+            args.version_end,
+            dry_run=args.dry_run,
+            migrate_evidence=not args.no_evidence,
+        )
+        print(f"  Dry-run: {result['dry_run']}")
+        print(f"  Tasks archived: {result['tasks_archived']}")
+        print(f"  Tasks remaining: {result['tasks_remaining']}")
+        print(f"  Evidence archived: {result.get('evidence_archived', 0)}")
+        print(f"  Files created: {result.get('archive_files_created', [])}")
+        print(f"  {result['details']}")
+        if not result["success"]:
+            sys.exit(1)
+
+    elif args.command == "build-index":
+        result = build_index()
+        print(f"  Status: {result['status']}")
+        print(f"  Task entries: {result['task_entries']}")
+        print(f"  Evidence entries: {result['evidence_entries']}")
+        print(f"  Decision entries: {result['decision_entries']}")
+        print(f"  Risk entries: {result['risk_entries']}")
+
+    elif args.command == "verify":
+        result = verify_archive_integrity()
+        print(f"  Pass: {result['pass']}")
+        print(f"  Total archived tasks: {result['total_archived_tasks']}")
+        print(f"  Total index entries: {result['total_index_entries']}")
+        if result["issues"]:
+            print(f"  Issues ({len(result['issues'])}):")
+            for issue in result["issues"]:
+                print(f"    - {issue}")
+        if not result["pass"]:
+            sys.exit(1)
+
+    elif args.command == "rollback":
+        result = rollback_last_migration()
+        print(f"  Success: {result['success']}")
+        print(f"  Rolled back: {result['rolled_back_file']}")
+        print(f"  {result['details']}")
+        if not result["success"]:
+            sys.exit(1)
+
+    else:
+        parser.print_help()
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

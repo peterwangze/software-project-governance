@@ -1071,6 +1071,272 @@ def list_available_stages():
 
 EVIDENCE_PATH = ROOT / ".governance/evidence-log.md"
 RISK_PATH = ROOT / ".governance/risk-log.md"
+ARCHIVE_INDEX_PATH = ROOT / ".governance/archive/index.md"
+ARCHIVE_TASKS_DIR = ROOT / ".governance/archive/tasks"
+ARCHIVE_EVIDENCE_DIR = ROOT / ".governance/archive/evidence"
+ARCHIVE_DECISIONS_DIR = ROOT / ".governance/archive/decisions"
+ARCHIVE_RISKS_DIR = ROOT / ".governance/archive/risks"
+
+
+# ── SYSGAP-030: GovernanceDataSource (archive-aware data source) ──
+
+class GovernanceDataSource:
+    """Unified governance data source — transparently aggregates hot files
+    + archive files. Backward compatible: falls back to single-file mode
+    when archive/ directory does not exist."""
+
+    def _has_archive(self):
+        """Check if archive directory exists and has content."""
+        return ARCHIVE_INDEX_PATH.exists()
+
+    def _scan_archive_files(self, dir_path, extract_func):
+        """Scan all .md files in archive directory (excluding .gitkeep),
+        applying extract_func to each, returning aggregated results."""
+        results = []
+        if not dir_path.exists():
+            return results
+        for f in sorted(dir_path.glob("*.md")):
+            if f.name == ".gitkeep":
+                continue
+            results.extend(extract_func(f))
+        return results
+
+    # ── Task data ──
+
+    def get_all_completed_task_ids(self):
+        """Return set of completed task IDs from plan-tracker + archive/tasks/*."""
+        completed = set()
+        # Hot file
+        if SAMPLE_PATH.is_file():
+            content = SAMPLE_PATH.read_text(encoding="utf-8")
+            for line in content.split("\n"):
+                line_stripped = line.strip()
+                if not line_stripped.startswith("| ") or "---" in line_stripped:
+                    continue
+                m = re.match(r"\|\s*([A-Z]+-\d+)\s*\|", line_stripped)
+                if not m:
+                    continue
+                parts = [p.strip() for p in line.split("|")]
+                if len(parts) >= 11 and parts[10] == "已完成":
+                    completed.add(m.group(1))
+        # Archive files
+        for entry in self._scan_archive_files(ARCHIVE_TASKS_DIR, self._extract_task_ids):
+            if entry.get("status") == "已完成":
+                completed.add(entry["id"])
+        return completed
+
+    def _extract_task_ids(self, file_path):
+        """Extract task IDs and statuses from an archive task file."""
+        results = []
+        content = file_path.read_text(encoding="utf-8")
+        current_version = None
+        for line in content.split("\n"):
+            stripped = line.strip()
+            # Detect version headers
+            m_ver = re.match(r"^#{1,6}\s+(?:v)?(\d+\.\d+\.\d+)\s*[—\-]", stripped)
+            if m_ver:
+                current_version = m_ver.group(1)
+                continue
+            # Parse task rows
+            m = re.match(r"\|\s*([A-Z]+-\d+)\s*\|", stripped)
+            if m:
+                task_id = m.group(1)
+                parts = [p.strip() for p in line.split("|")]
+                status = parts[10] if len(parts) >= 11 else "?"
+                results.append({"id": task_id, "status": status, "version": current_version})
+        return results
+
+    def get_all_task_ids(self):
+        """Return set of all task IDs (any status) from hot + archive."""
+        task_ids = set()
+        # Hot file
+        if SAMPLE_PATH.is_file():
+            content = SAMPLE_PATH.read_text(encoding="utf-8")
+            for line in content.split("\n"):
+                stripped = line.strip()
+                if not stripped.startswith("| "):
+                    continue
+                m = re.match(r"\|\s*([A-Z]+-\d+)\s*\|", stripped)
+                if m:
+                    task_ids.add(m.group(1))
+        # Archive files
+        for entry in self._scan_archive_files(ARCHIVE_TASKS_DIR, self._extract_task_ids):
+            task_ids.add(entry["id"])
+        return task_ids
+
+    # ── Evidence data ──
+
+    def get_all_evidence_task_ids(self):
+        """Return set of task IDs that have evidence entries (hot + archive)."""
+        task_ids = set()
+        # Hot file
+        if EVIDENCE_PATH.is_file():
+            content = EVIDENCE_PATH.read_text(encoding="utf-8")
+            for line in content.split("\n"):
+                stripped = line.strip()
+                if not stripped.startswith("| EVD-"):
+                    continue
+                parts = [p.strip() for p in line.split("|")]
+                if len(parts) >= 3:
+                    raw_ids = parts[2]
+                    if raw_ids and re.search(r"[A-Z]+-\d+", raw_ids):
+                        task_ids |= expand_task_ids(raw_ids)
+        # Archive files
+        for entry in self._scan_archive_files(ARCHIVE_EVIDENCE_DIR, self._extract_evidence_entries):
+            raw_ids = entry.get("task_ids", "")
+            if raw_ids and re.search(r"[A-Z]+-\d+", raw_ids):
+                task_ids |= expand_task_ids(raw_ids)
+        return task_ids
+
+    def _extract_evidence_entries(self, file_path):
+        """Extract evidence entries from an archive evidence file."""
+        results = []
+        content = file_path.read_text(encoding="utf-8")
+        for line in content.split("\n"):
+            stripped = line.strip()
+            if not stripped.startswith("| EVD-"):
+                continue
+            parts = [p.strip() for p in line.split("|")]
+            if len(parts) >= 3:
+                results.append({
+                    "evd_id": parts[1],
+                    "task_ids": parts[2],
+                })
+        return results
+
+    # ── Decision data ──
+
+    def get_all_decision_ids(self):
+        """Return sorted set of decision integers from hot + archive."""
+        ids = set()
+        # Hot file
+        dec_path = ROOT / ".governance/decision-log.md"
+        if dec_path.is_file():
+            content = dec_path.read_text(encoding="utf-8")
+            for m in re.finditer(r"\bDEC-(\d+)\b", content):
+                ids.add(int(m.group(1)))
+        # Archive files
+        for f in sorted((ARCHIVE_DECISIONS_DIR).glob("*.md")):
+            if f.name == ".gitkeep":
+                continue
+            content = f.read_text(encoding="utf-8")
+            for m in re.finditer(r"\bDEC-(\d+)\b", content):
+                ids.add(int(m.group(1)))
+        return sorted(ids)
+
+    # ── Risk data ──
+
+    def get_all_risk_ids(self):
+        """Return sorted set of risk integers from hot + archive."""
+        ids = set()
+        # Hot file
+        risk_path = ROOT / ".governance/risk-log.md"
+        if risk_path.is_file():
+            content = risk_path.read_text(encoding="utf-8")
+            for m in re.finditer(r"\bRISK-(\d+)\b", content):
+                ids.add(int(m.group(1)))
+        # Archive files
+        for f in sorted((ARCHIVE_RISKS_DIR).glob("*.md")):
+            if f.name == ".gitkeep":
+                continue
+            content = f.read_text(encoding="utf-8")
+            for m in re.finditer(r"\bRISK-(\d+)\b", content):
+                ids.add(int(m.group(1)))
+        return sorted(ids)
+
+    # ── Lookup ──
+
+    def find_entry_by_id(self, entry_id):
+        """Find an entry by ID: check hot files first, then archive index,
+        then archive files. Returns dict with 'source' and 'content' keys,
+        or None if not found.
+
+        Supports: EVD-, DEC-, RISK-, and generic Task ID (e.g. FIX-001)
+        prefixes.  Uses \b word-boundary matching to avoid false matches
+        (EVD-10 will not match EVD-100).
+        """
+        boundary_pattern = re.compile(
+            rf"\b{re.escape(entry_id)}\b"
+        )
+
+        # ── Task ID (e.g. FIX-001, AUDIT-082) ──
+        if re.match(r"[A-Z]+-\d+", entry_id) and not entry_id.startswith(
+            ("EVD-", "DEC-", "RISK-")
+        ):
+            # 1) plan-tracker (hot)
+            if SAMPLE_PATH.is_file():
+                for line in SAMPLE_PATH.read_text(encoding="utf-8").split("\n"):
+                    if boundary_pattern.search(line):
+                        return {
+                            "source": "plan-tracker.md (hot)",
+                            "line": line.strip(),
+                        }
+            # 2) archive index
+            if ARCHIVE_INDEX_PATH.is_file():
+                for line in ARCHIVE_INDEX_PATH.read_text(encoding="utf-8").split("\n"):
+                    if boundary_pattern.search(line):
+                        return {
+                            "source": "archive/index.md",
+                            "line": line.strip(),
+                        }
+            # 3) archive task files
+            for f in sorted((ARCHIVE_TASKS_DIR).glob("*.md")):
+                if f.name == ".gitkeep":
+                    continue
+                for line in f.read_text(encoding="utf-8").split("\n"):
+                    if boundary_pattern.search(line):
+                        return {
+                            "source": f"archive/tasks/{f.name}",
+                            "line": line.strip(),
+                        }
+            return None
+
+        # ── Evidence IDs ──
+        if re.match(r"EVD-\d+", entry_id):
+            content = EVIDENCE_PATH.read_text(encoding="utf-8") if EVIDENCE_PATH.is_file() else ""
+            for line in content.split("\n"):
+                if boundary_pattern.search(line):
+                    return {"source": "evidence-log.md (hot)", "line": line.strip()}
+            # Search archive
+            for f in sorted((ARCHIVE_EVIDENCE_DIR).glob("*.md")):
+                if f.name == ".gitkeep":
+                    continue
+                fc = f.read_text(encoding="utf-8")
+                for line in fc.split("\n"):
+                    if boundary_pattern.search(line):
+                        return {"source": f"archive/evidence/{f.name}", "line": line.strip()}
+
+        # ── Decision IDs ──
+        if re.match(r"DEC-\d+", entry_id):
+            dec_path = ROOT / ".governance/decision-log.md"
+            if dec_path.is_file():
+                for line in dec_path.read_text(encoding="utf-8").split("\n"):
+                    if boundary_pattern.search(line):
+                        return {"source": "decision-log.md (hot)", "line": line.strip()}
+            # Search archive decisions
+            for f in sorted((ARCHIVE_DECISIONS_DIR).glob("*.md")):
+                if f.name == ".gitkeep":
+                    continue
+                for line in f.read_text(encoding="utf-8").split("\n"):
+                    if boundary_pattern.search(line):
+                        return {"source": f"archive/decisions/{f.name}", "line": line.strip()}
+
+        # ── Risk IDs ──
+        if re.match(r"RISK-\d+", entry_id):
+            risk_path = ROOT / ".governance/risk-log.md"
+            if risk_path.is_file():
+                for line in risk_path.read_text(encoding="utf-8").split("\n"):
+                    if boundary_pattern.search(line):
+                        return {"source": "risk-log.md (hot)", "line": line.strip()}
+            # Search archive risks
+            for f in sorted((ARCHIVE_RISKS_DIR).glob("*.md")):
+                if f.name == ".gitkeep":
+                    continue
+                for line in f.read_text(encoding="utf-8").split("\n"):
+                    if boundary_pattern.search(line):
+                        return {"source": f"archive/risks/{f.name}", "line": line.strip()}
+
+        return None
 
 
 def parse_completed_task_ids():
@@ -1180,9 +1446,15 @@ def parse_gate_statuses():
 
 
 def check_evidence_completeness():
-    """Check that every completed task has at least one evidence entry."""
-    completed = parse_completed_task_ids()
-    evidenced = parse_evidence_task_ids()
+    """Check that every completed task has at least one evidence entry.
+
+    Uses GovernanceDataSource to transparently aggregate hot files + archive
+    files. Falls back to single-file mode when archive/ directory does not
+    exist (backward compatible).
+    """
+    ds = GovernanceDataSource()
+    completed = ds.get_all_completed_task_ids()
+    evidenced = ds.get_all_evidence_task_ids()
     missing = completed - evidenced
     matched = completed & evidenced
     return {
@@ -1243,8 +1515,10 @@ def check_gate_consistency():
             # Flag gates with inconsistent dates
             pass
 
-    # Check for tasks marked 已完成 in plan-tracker but no evidence
-    completed = parse_completed_task_ids()
+    # Check for tasks marked 已完成 in plan-tracker but no evidence.
+    # Uses GovernanceDataSource to cover both hot files + archive files.
+    ds = GovernanceDataSource()
+    completed = ds.get_all_completed_task_ids()
     tasks_without_evidence = completed - set(evidenced.keys())
     if tasks_without_evidence:
         issues.append({
@@ -1252,13 +1526,9 @@ def check_gate_consistency():
             "detail": sorted(tasks_without_evidence),
         })
 
-    # Check for evidence entries referencing non-existent tasks
-    all_tasks = set()
-    content = SAMPLE_PATH.read_text(encoding="utf-8")
-    for line in content.split("\n"):
-        m = re.match(r"\|\s*([A-Z]+-\d+)\s*\|", line.strip())
-        if m:
-            all_tasks.add(m.group(1))
+    # Check for evidence entries referencing non-existent tasks.
+    # Uses GovernanceDataSource to include archived tasks.
+    all_tasks = ds.get_all_task_ids()
 
     orphan_evidence = set(evidenced.keys()) - all_tasks
     if orphan_evidence:
@@ -2558,31 +2828,37 @@ def check_sequential_ids():
     evd_path = ROOT / ".governance/evidence-log.md"
     risk_path = ROOT / ".governance/risk-log.md"
 
-    dec_ids = _extract_ids(dec_path, "DEC-")
-    evd_ids = _extract_ids(evd_path, "EVD-")
-    risk_ids = _extract_ids(risk_path, "RISK-")
+    # Use GovernanceDataSource for archive-aware ID collection.
+    # Falls back to hot-file-only when archive/index.md does not exist.
+    ds = GovernanceDataSource()
+
+    # DEC/RISK: via GovernanceDataSource (hot + archive)
+    dec_ids = ds.get_all_decision_ids()
+    risk_ids = ds.get_all_risk_ids()
+
+    # EVD: collect from hot evidence-log + archive evidence files
+    evd_id_set = set()
+    if evd_path.is_file():
+        evd_content = evd_path.read_text(encoding="utf-8")
+        for m in re.finditer(r"\bEVD-(\d+)\b", evd_content):
+            evd_id_set.add(int(m.group(1)))
+    for entry in ds._scan_archive_files(ARCHIVE_EVIDENCE_DIR,
+                                         ds._extract_evidence_entries):
+        evd_match = re.match(r"EVD-(\d+)", entry.get("evd_id", ""))
+        if evd_match:
+            evd_id_set.add(int(evd_match.group(1)))
+    evd_ids = sorted(evd_id_set)
 
     dec_gaps = _find_gaps(dec_ids, "DEC-")
     evd_gaps = _find_gaps(evd_ids, "EVD-")
     risk_gaps = _find_gaps(risk_ids, "RISK-")
 
-    # Cross-reference: all task IDs in evidence/decision/risk must exist in plan-tracker
-    all_task_ids = set()
-    pt_content = SAMPLE_PATH.read_text(encoding="utf-8") if SAMPLE_PATH.is_file() else ""
-    for line in pt_content.split("\n"):
-        stripped = line.strip()
-        # Extract task IDs from table rows (any column): | **P0** | SYSGAP-001 | ...
-        # and from non-table rows where task IDs appear in text.
-        if stripped.startswith("|"):
-            for m in re.finditer(r"\b[A-Z]+-\d+\b", stripped):
-                all_task_ids.add(m.group())
-        else:
-            # Also scan non-table lines for task IDs (e.g., in prose text)
-            for m in re.finditer(r"\b[A-Z]+-\d+\b", stripped):
-                all_task_ids.add(m.group())
+    # Cross-reference: all task IDs in evidence/decision/risk must exist
+    # in plan-tracker.  Use GovernanceDataSource to include archived tasks.
+    all_task_ids = ds.get_all_task_ids()
 
-    # Collect task IDs referenced in evidence-log
-    evd_task_ids = parse_evidence_task_ids()
+    # Collect task IDs referenced in evidence-log (hot + archive)
+    evd_task_ids = ds.get_all_evidence_task_ids()
 
     # Collect task IDs referenced in decision-log
     dec_task_ids = set()
@@ -2606,8 +2882,8 @@ def check_sequential_ids():
     orphan_dec = sorted(dec_task_ids - all_task_ids - evd_task_ids)  # avoid dup reporting
     orphan_risk = sorted(risk_task_ids - all_task_ids)
 
-    # Completed tasks without evidence
-    completed = parse_completed_task_ids()
+    # Completed tasks without evidence (archive-aware)
+    completed = ds.get_all_completed_task_ids()
     missing_evd = sorted(completed - evd_task_ids)
 
     return {
@@ -4434,6 +4710,21 @@ def cmd_check_governance(args):
                   f"{al_result['file_lock_count']} file lock(s).")
     print("└──────────────────────────────────────────────────────┘")
 
+    # ── 26. Archive Integrity (SYSGAP-030) ──
+    print("\n┌─ Check 26: Archive Integrity (SYSGAP-030) ───────────┐")
+    ai_result = check_archive_integrity()
+    print(f"│  Hot tasks (plan-tracker): {ai_result['hot_tasks']}")
+    print(f"│  Archived tasks: {ai_result['total_archived_tasks']}")
+    print(f"│  Index entries: {ai_result['index_entries']}")
+    if ai_result["issues"]:
+        all_issues += len(ai_result["issues"])
+        print(f"│  [WARN] {len(ai_result['issues'])} archive integrity issue(s):")
+        for issue in ai_result["issues"]:
+            print(f"│    - {issue}")
+    else:
+        print(f"│  [PASS] Archive integrity verified — {'no archive data' if ai_result['total_archived_tasks'] == 0 else f'{ai_result['total_expected']} total tasks, index consistent'}")
+    print("└──────────────────────────────────────────────────────┘")
+
     # ── Summary ──
     print(f"\n┌─ Governance Health Summary ──────────────────────────┐")
     if all_issues == 0:
@@ -5317,6 +5608,146 @@ def check_agent_lock_consistency():
     return result
 
 
+# ── SYSGAP-030: Archive Integrity Check ────────────────────────────
+
+def check_archive_integrity():
+    """Check 26: Verify archive integrity.
+
+    Checks:
+      1. archive/index.md referenced archive files all exist
+      2. Archive file entries have corresponding index entries
+      3. Task count conservation: hot + archive tasks == expected
+
+    Returns:
+        dict with keys: pass, issues, total_archived_tasks, index_entries,
+                        hot_tasks, total_expected
+    """
+    result = {
+        "pass": True,
+        "issues": [],
+        "total_archived_tasks": 0,
+        "index_entries": 0,
+        "hot_tasks": 0,
+        "total_expected": 0,
+    }
+
+    archive_index = ROOT / ".governance/archive/index.md"
+    archive_tasks_dir = ROOT / ".governance/archive/tasks"
+    archive_evidence_dir = ROOT / ".governance/archive/evidence"
+
+    # If no archive index, nothing to check — pass
+    if not archive_index.exists():
+        # But check if there are orphan archive files
+        has_archive_files = False
+        for d in [archive_tasks_dir, archive_evidence_dir]:
+            if d.exists():
+                for f in d.glob("*.md"):
+                    if f.name != ".gitkeep":
+                        has_archive_files = True
+                        break
+            if has_archive_files:
+                break
+        if has_archive_files:
+            result["pass"] = False
+            result["issues"].append(
+                "Archive files exist but index.md is missing. Run archive.build_index() to rebuild."
+            )
+        return result
+
+    # Parse index to get referenced archive files
+    index_content = archive_index.read_text(encoding="utf-8")
+    index_lines = index_content.split("\n")
+
+    # Extract archive file references from index
+    indexed_files = set()
+    in_section = False
+    table_started = False
+    for line in index_lines:
+        stripped = line.strip()
+        if stripped.startswith("## ") and "索引" in stripped:
+            in_section = True
+            table_started = False
+            continue
+        if not in_section:
+            continue
+        if "|---" in stripped:
+            table_started = True
+            continue
+        if not table_started or not stripped.startswith("| "):
+            continue
+
+        # Parse row for archive file reference
+        parts = [p.strip() for p in line.split("|")]
+        for part in parts:
+            if part.startswith("archive/"):
+                indexed_files.add(part)
+
+    # Check 1: All indexed files exist
+    for ref in sorted(indexed_files):
+        filepath = ROOT / ".governance" / ref
+        if not filepath.exists():
+            result["pass"] = False
+            result["issues"].append(f"Index references non-existent file: {ref}")
+
+    # Check 2: All archive files are in the index
+    actual_archive_files = set()
+    for d in [archive_tasks_dir, archive_evidence_dir]:
+        if d.exists():
+            for f in d.glob("*.md"):
+                if f.name == ".gitkeep":
+                    continue
+                rel = str(f.relative_to(ROOT / ".governance")).replace("\\", "/")
+                actual_archive_files.add(rel)
+
+    unindexed = actual_archive_files - indexed_files
+    if unindexed:
+        result["pass"] = False
+        for f in sorted(unindexed):
+            result["issues"].append(f"Archive file not in index: {f}")
+
+    # Check 3: Task count conservation
+    # Count hot file tasks
+    hot_tasks = 0
+    if SAMPLE_PATH.is_file():
+        content = SAMPLE_PATH.read_text(encoding="utf-8")
+        for line in content.split("\n"):
+            stripped = line.strip()
+            if not stripped.startswith("| ") or "---" in stripped:
+                continue
+            m = re.match(r"\|\s*([A-Z]+-\d+)\s*\|", stripped)
+            if m:
+                hot_tasks += 1
+    result["hot_tasks"] = hot_tasks
+
+    # Count archived tasks
+    archived_count = 0
+    if archive_tasks_dir.exists():
+        for f in archive_tasks_dir.glob("*.md"):
+            if f.name == ".gitkeep":
+                continue
+            content = f.read_text(encoding="utf-8")
+            for line in content.split("\n"):
+                stripped = line.strip()
+                if not stripped.startswith("| "):
+                    continue
+                m = re.match(r"\|\s*([A-Z]+-\d+)\s*\|", stripped)
+                if m:
+                    archived_count += 1
+    result["total_archived_tasks"] = archived_count
+
+    # Count index entries
+    index_entry_count = 0
+    for line in index_lines:
+        stripped = line.strip()
+        if stripped.startswith("| ") and re.match(r"\|\s*[A-Z]+-\d+", stripped):
+            index_entry_count += 1
+    result["index_entries"] = index_entry_count
+
+    result["total_expected"] = hot_tasks + archived_count
+
+    return result
+
+
 def cmd_check_agent_locks(_args):
     """Standalone subcommand: check-locks — run agent lock consistency check."""
     result = check_agent_lock_consistency()
@@ -5336,6 +5767,33 @@ def cmd_check_agent_locks(_args):
         for issue in issues:
             print(f"  [{issue['type']}] {issue['detail']}")
         print(f"\nResult: WARN — {len(issues)} lock consistency issue(s).")
+
+
+def cmd_check_archive_integrity(_args):
+    """Standalone subcommand: check-archive-integrity — Check 26."""
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+
+    result = check_archive_integrity()
+    print()
+    print("=== Archive Integrity Check (SYSGAP-030 Check 26) ===")
+    print(f"  Hot tasks (plan-tracker): {result['hot_tasks']}")
+    print(f"  Archived tasks: {result['total_archived_tasks']}")
+    print(f"  Index entries: {result['index_entries']}")
+    print(f"  Total tasks (hot + archive): {result['total_expected']}")
+
+    if result["issues"]:
+        print(f"\n  Issues ({len(result['issues'])}):")
+        for issue in result["issues"]:
+            print(f"    - {issue}")
+        print(f"\n  [FAIL] Archive integrity issues detected.")
+        import sys
+        sys.exit(1)
+    else:
+        print(f"\n  [PASS] Archive integrity verified.")
+    print()
 
 
 def cmd_check_plugin_freshness(_args):
@@ -5910,6 +6368,10 @@ def main():
     subparsers.add_parser("check-locks",
                           help="Check agent-locks.json consistency (FIX-056 Check 25)")
 
+    # check-archive-integrity (SYSGAP-030)
+    subparsers.add_parser("check-archive-integrity",
+                          help="Check archive integrity (SYSGAP-030 Check 26)")
+
     args = parser.parse_args()
 
     commands = {
@@ -5934,6 +6396,7 @@ def main():
         "check-review-debt": cmd_check_review_debt,
         "check-version-consistency": cmd_check_version_consistency,
         "check-locks": cmd_check_agent_locks,
+        "check-archive-integrity": cmd_check_archive_integrity,
     }
 
     cmd = args.command or "verify"

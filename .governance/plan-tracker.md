@@ -8,7 +8,7 @@
 - **Profile**: standard（本项目即为工作流产品本身，需要充分验证标准 profile 的治理能力）
 - **触发模式**: always-on（每次会话自动加载，持续跟踪项目状态）
 - **操作权限模式**: maximum-autonomy
-- **工作流版本**: 0.32.0（自动检测版本变化——更新后首次会话自动触发增量采纳）
+- **工作流版本**: 0.33.0（自动检测版本变化——更新后首次会话自动触发增量采纳）
 - **当前阶段**: 维护与演进（第 11 阶段）— 六层架构重构进行中
 - **并行活跃阶段**: 架构设计（第 5 阶段）— AUDIT-082 Phase 3-5 能力层+业务智能层迁移
 - **接入方式**: 从立项开始，但前期未正式执行 Gate 检查，2026-04-20 起补正式 onboarding
@@ -113,7 +113,7 @@ AUDIT-082 Phase 1-5 全部完成 ✅。六层架构已落地。
 | **P2** | FIX-055 | commit-msg hook 安装——governance-init.md/bootstrap 增加 commit-msg 安装步骤 + Hook 存活检测增加 commit-msg | FIX-042 | 0.31.0 | governance-init.md + CLAUDE.md bootstrap 模板（9 文件各 +1 hook 引用）+ Review ✅ (APPROVED) | ✅ 已完成 (2026-05-07) |
 | **P0** | FIX-056 | Agent 意外并发防护——Coordinator 误判超时导致重复 spawn 同一任务 | 用户反馈 (2026-05-07) | 0.32.0 | Phase 1 ✅: agent-locks.json + behavior-protocol/SKILL/communication/dispatch-template (6 文件). Phase 2 ✅: post-commit Step 5 (锁清理+scope creep检测) + Check 25 (agent_lock_consistency) + check-locks 子命令 (965133e) | ✅ 已完成 (2026-05-07) |
 | **P1** | FIX-057 | 项目清洁度治理——未跟踪文件分类归档 + .gitignore + 未跟踪检测机制 | 用户反馈 (2026-05-07) | 0.32.0 | Phase 1: 6 文档归档 + .gitignore + evidence-log 解除跟踪 (f293743). Phase 2: check-governance Check 24 + pre-commit Step 10 未跟踪检测 (a9225cf) | ✅ 已完成 (2026-05-07) |
-| **P0** | SYSGAP-030 | 治理数据伸缩性——归档/分层存储/增量索引，解决 plan-tracker/evidence-log 无限膨胀 + 每次会话治理负担线性增长 | — | 1.0.0 | Phase 1 ✅ (需求澄清+ADR+实现+审查): archive.py + GovernanceDataSource + Check 26 + 16 tests. Phase 2 ⬜ (迁移+CLAUDE.md) | 🔄 进行中 (Phase 1 完成) |
+| **P0** | SYSGAP-030 | 治理数据伸缩性——归档/分层存储/增量索引，解决 plan-tracker/evidence-log 无限膨胀 + 每次会话治理负担线性增长 | — | 1.0.0 | Phase 1 ✅ + Phase 2 ✅ (archive.py --auto + 模板同步 + CLAUDE.md Step E + 狗粮首次迁移: 36 tasks + 30 evidence 归档, plan-tracker 101→99KB, evidence 106→91KB) | ✅ 已完成 (2026-05-10) |
 | **降级** | REQ-014/016/017/018/019/027/028 | Agent Team 实战验证后 | 1.0.0 | Task-Gate/Phase-Gate 迁移 + E2E |
 | **P0** | CLEANUP-001 | Phase 1: 创建 canonical manifest.json | — | 0.20.0 | v0.19.0 完整目录结构 JSON 声明（product + repo_only + exclude） | | — |
 | **P0** | CLEANUP-002 | Phase 2: 重写 governance-cleanup.md | CLEANUP-001 | 0.20.0 | 声明式 diff 清理——基于 manifest.json 自动计算冗余 | | — |
@@ -155,40 +155,25 @@ AUDIT-082 Phase 1-5 全部完成 ✅。六层架构已落地。
 | **P0** | SYSGAP-029 | 回归测试——8 新用例 | SYSGAP-027 | 0.24.0 | test_verify_workflow.py——GoalAlignmentTests + UserImpactTests | ✅ 已完成 |
 | **P0** | FIX-025 | Hook 缺陷修复——grep -P 兼容 + task ID 模式 + 时序 | — | 0.24.1 | pre-commit——Windows grep -P → sed + SYSGAP/CLEANUP 加入模式 + COMMIT_EDITMSG 过期检测 | ✅ 已完成 |
 
-### 0.24.0 — 目标一致性 + 用户影响系统强制 ✅ 已发布
+### 0.24.0 — 目标一致性 + 用户影响系统强制 ✅ 已发布 [已归档]
 
 **目标**: 三层强制体系——每次 commit 产品代码时 MUST 论证变更如何服务于项目目标 + 回答用户影响三问。缺失 → BLOCK。
 
 **设计方案**: ADR-002（`docs/architecture/ADR-002-goal-alignment-user-impact-enforcement.md`）
 
 **交付清单**:
-- [x] **SYSGAP-021**: project_goal 字段存储
-- [x] **SYSGAP-022**: change-impact-checklist 增强
-- [x] **SYSGAP-023**: Check 16 目标一致性检查
-- [x] **SYSGAP-024**: Check 17 用户影响检查
-- [x] **SYSGAP-025**: Hook Step 10-12 BLOCK
-- [x] **SYSGAP-026**: 模板 project_goal 注入
-- [x] **SYSGAP-027**: M7.5 系统强制说明
-- [x] **SYSGAP-028**: D1/D2 引用更新
-- [x] **SYSGAP-029**: 回归测试——31 tests PASSED
 - [x] 首次 commit 被 Step 11 BLOCK——系统自执行验证通过
 - [x] git tag v0.24.0
 
-### 0.23.0 — 测试体系 + CI ✅ 已发布
+### 0.23.0 — 测试体系 + CI ✅ 已发布 [已归档]
 
 **目标**: 建立适配 skill/workflow 项目的测试体系和 CI pipeline。
 
 **交付清单**:
-- [x] **SYSGAP-015** (方案 4A): 本项目测试类型对应定义
-- [x] **SYSGAP-016** (方案 4B): verify 单元测试——23 tests
-- [x] **SYSGAP-017** (方案 4C): e2e 测试项目——13 tests
-- [x] **SYSGAP-018** (方案 4E): CI pipeline——6 步自动检查
-- [x] **SYSGAP-019** (方案 4D): 缺陷驱动测试积累
-- [x] **SYSGAP-020** (方案 3E): 版本一致性增强
 - [x] 36 tests PASSED
 - [x] git tag v0.23.0
 
-### 0.21.0 — 纪律防线
+### 0.21.0 — 纪律防线 [已归档]
 
 **目标**: 对照 Claude Code 官方 plugin 规范（`claude-code/plugins/plugin-dev/skills/plugin-structure/SKILL.md`），修正目录结构违规项。
 
@@ -199,14 +184,12 @@ AUDIT-082 Phase 1-5 全部完成 ✅。六层架构已落地。
 - plugin.json 不需要 `skills`/`agents`/`commands` 字段（靠约定自动发现）
 
 **当前违规**:
-- [x] **AUDIT-097**: Agent 在 `skills/software-project-governance/agents/<组>/<角色>/prompt.md` → 迁到 `agents/<name>.md`，平面化命名
-- [x] **AUDIT-098**: 真实 SKILL 在 `skills/software-project-governance/skills/<name>/` → 迁到 `skills/<name>/`，删除 25 stub
 - [x] 全仓路径引用更新（SKILL.md、behavior-protocol.md、verify_workflow.py、CLAUDE.md、governance-init.md 等 11 文件）
 - [x] governance-cleanup 更新（旧路径残留清理）
 - [x] verify PASSED
 - [x] git tag v0.19.0 → pushed
 
-### 0.20.0 — 声明式清理机制 ✅ 已发布
+### 0.20.0 — 声明式清理机制 ✅ 已发布 [已归档]
 
 **目标**: 清理命令从"硬编码已知冗余列表"改为"canonical manifest + 结构 diff"，每次目录结构调整后清理命令自动生效，不再需要手动适配。
 
@@ -218,15 +201,10 @@ AUDIT-082 Phase 1-5 全部完成 ✅。六层架构已落地。
 - verify_workflow.py 的 REQUIRED_FILES 同步迁移至从 manifest.json 读取（单一事实源）
 
 **交付清单**:
-- [x] **CLEANUP-001** (Phase 1): 创建 `skills/software-project-governance/core/manifest.json`——v0.20.0 完整目录结构声明
-- [x] **CLEANUP-002** (Phase 2): 重写 `commands/governance-cleanup.md` + 新增 `infra/cleanup.py`
-- [x] **CLEANUP-003** (Phase 3): verify_workflow.py 增强——`check-manifest-consistency` + REQUIRED_FILES 迁移
-- [x] **CLEANUP-004** (Phase 4): Bootstrap 清理逻辑更新——CLAUDE.md + governance-init.md
-- [x] **CLEANUP-005** (Phase 5): 文档纪律更新——manifest.md 简化 + VERSIONING.md 补规则 + CHANGELOG
 - [x] verify PASSED
 - [x] git tag v0.20.0
 
-### 0.21.0 — 纪律防线 ✅ 已发布
+### 0.21.0 — 纪律防线 ✅ 已发布 [已归档]
 
 **目标**: 建立"不再继续犯错"的系统机制——从文本规则升级为行为协议 + 系统检查。
 
@@ -239,17 +217,10 @@ AUDIT-082 Phase 1-5 全部完成 ✅。六层架构已落地。
 - Pre-commit hook 增强 → Agent Team bypass WARN + 跨域变更 WARN
 
 **交付清单**:
-- [x] **SYSGAP-001** (方案 1A): 产品代码边界定义——SKILL.md + interaction-boundary.md
-- [x] **SYSGAP-002** (方案 1C): M7.5 Agent Team 强制激活检查——behavior-protocol.md
-- [x] **SYSGAP-003** (方案 2A): 影响分析 checklist——references/change-impact-checklist.md
-- [x] **SYSGAP-004** (方案 2B): M7.5 影响分析步骤——behavior-protocol.md
-- [x] **SYSGAP-005** (方案 5B): Commit message 规范强化——behavior-protocol.md
-- [x] **SYSGAP-006** (方案 5A): Pre-commit scope WARN——infra/hooks/pre-commit
-- [x] **SYSGAP-007** (方案 1D): Pre-commit Agent Team WARN——infra/hooks/pre-commit
 - [x] verify PASSED
 - [x] git tag v0.21.0
 
-### 0.22.0 — 检查体系升级 ✅ 已发布
+### 0.22.0 — 检查体系升级 ✅ 已发布 [已归档]
 
 **目标**: verify_workflow.py 从"文件存在性检查"升级为"语义一致性检查"（11→15 项自动检查）。
 
@@ -261,17 +232,10 @@ AUDIT-082 Phase 1-5 全部完成 ✅。六层架构已落地。
 - Commit scope verify——重复 task ID+关键字+bulk
 
 **交付清单**:
-- [x] **SYSGAP-008** (方案 3A): 交叉引用检查
-- [x] **SYSGAP-009** (方案 3B): 顺序 ID 检查
-- [x] **SYSGAP-010** (方案 3C): 结构有效性检查
-- [x] **SYSGAP-011** (方案 3D): M5 语义检查增强
-- [x] **SYSGAP-012** (方案 5C): Commit scope verify
-- [x] **SYSGAP-013** (方案 1B): Governance Developer agent
-- [x] **SYSGAP-014** (方案 2C): 影响分析路由
 - [x] verify PASSED(新检查发现预存问题——按预期工作)
 - [x] git tag v0.22.0
 
-### 0.15.0 — Agent 职责强化+提示词增强 ✅ 已发布
+### 0.15.0 — Agent 职责强化+提示词增强 ✅ 已发布 [已归档]
 
 **目标**: Coordinator→Agent→SKILL 三层链路闭环——Coordinator 按需选择 Agent → Agent 收到任务 MUST 加载 SKILL → SKILL 提供确定性执行步骤
 
@@ -283,7 +247,7 @@ AUDIT-082 Phase 1-5 全部完成 ✅。六层架构已落地。
 - [x] verify PASSED
 - [x] git tag v0.15.0 → pushed (2026-05-01)
 
-### 0.14.0 — SKILL 独立可调用 ✅ 已发布
+### 0.14.0 — SKILL 独立可调用 ✅ 已发布 [已归档]
 
 **目标**: 25 能力 SKILL 不再是被动文档，而是 plugin 系统可发现的独立可调用实体
 
@@ -307,7 +271,7 @@ AUDIT-082 Phase 1-5 全部完成 ✅。六层架构已落地。
 - [x] git tag v0.13.0 → pushed (2026-05-01)
 - [x] git tag v0.13.1 → pushed (2026-05-01, PATCH: 命令重命名追加修复)
 
-### 0.12.0（✅ 已完成）
+### 0.12.0（✅ 已完成） [已归档]
 
 ```
 AUDIT-088 ✅ → 0.12.0 ✅
@@ -315,13 +279,13 @@ AUDIT-088 ✅ → 0.12.0 ✅
   版本 bump: 0.11.0→0.12.0
 ```
 
-### 0.11.0（✅ 已完成）
+### 0.11.0（✅ 已完成） [已归档]
 
 ```
 AUDIT-082 Phase 1-5 ✅ → AUDIT-083~086 ✅ + AUDIT-068~069 ✅ → 0.11.0 ✅
 ```
 
-### 0.11.0 交付清单（12/12 ✅）
+### 0.11.0 交付清单（12/12 ✅） [已归档]
 
 - [x] `skills/` 目录建立——25 SKILL 就位 ✅
 - [x] 所有 SKILL 统一 YAML frontmatter ✅

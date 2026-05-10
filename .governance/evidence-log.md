@@ -89,21 +89,13 @@
 
 | EVD-180 | AUDIT-087 | 维护 | 文件编辑+脚本输出 | Phase 1 — E2E 验证基础设施修复：(1) verify-e2e.sh 路径从 `$SCRIPT_DIR/../e2e-test-project` 更新为 `$SCRIPT_DIR/../../../project/e2e-test-project`（AUDIT-088 产品-项目分离后路径失效），"平台原生入口文件"引用更新为 CLAUDE.md；(2) e2e-test-project/CLAUDE.md bootstrap 从 0.6.11 更新到 0.27.0 模板（含 SELF-CHECK 5 项、双维度模式、Step 0.5 Agent Team 激活、版本自升级、Bootstrap 变更纪律）；(3) e2e-test-project plan-tracker 工作流版本 0.6.11→0.27.0。verify-e2e.sh 23/23 PASSED，Python E2E 13/13 PASSED，verify_workflow.py check-governance PASSED | skills/software-project-governance/infra/verify-e2e.sh, project/e2e-test-project/CLAUDE.md, project/e2e-test-project/.governance/plan-tracker.md | Developer (阿速) | 2026-05-03 | G11 | AUDIT-087 Phase 1/3 |
 
-| EVD-172 | SYSGAP-021 | 维护 | 文件编辑 | governance-init.md 模板 plan-tracker 项目配置块新增 project_goal 字段存储，目标对齐: project_goal 是目标一致性强制检查的基础设施——没有存储就没有机器可读的偏离检测参照物，用户影响: 获得=governance-init, 感知=CHANGELOG, 体验变化=否-治理记录, 迁移指南=不需要 | commands/governance-init.md | Developer (阿速) | 2026-05-03 | G11 | ADR-002 Phase 1 |
 
-| EVD-173 | SYSGAP-022 | 维护 | 文件编辑 | change-impact-checklist 增强——新增 Step 3.5 目标一致性分析 + Step 3 用户影响强制格式（Q1-Q4 枚举答案）+ Step 5 记录格式强化（含目标对齐/用户影响子字段），目标对齐: checklist 格式强制是三层体系的第一层——agent 填表时 MUST 回答目标对齐论证和用户影响三问，缺失格式将被脚本和 hook 检测到，用户影响: 获得=自动生效（下次会话）, 感知=CHANGELOG, 体验变化=否-治理记录, 迁移指南=不需要 | skills/software-project-governance/references/change-impact-checklist.md | Developer (阿速) | 2026-05-03 | G11 | ADR-002 Phase 1 |
 
-| EVD-174 | SYSGAP-023 | 维护 | 文件编辑 | verify_workflow.py 新增 check_goal_alignment() + Check 16——plan-tracker project_goal 提取 + evidence-log 目标对齐字段验证（缺失/过短/重复模式），目标对齐: 脚本审核是三层体系的第二层——verify_workflow.py 新增 Check 16 独立于 agent 验证目标对齐字段是否存在且合规（≥30 chars），互补 pre-commit hook 阻断，用户影响: 获得=自动生效（下次会话）, 感知=CHANGELOG, 体验变化=否-内部重构, 迁移指南=不需要 | skills/software-project-governance/infra/verify_workflow.py | Developer (阿速) | 2026-05-03 | G11 | check-goal-alignment 子命令独立可运行 |
 
-| EVD-175 | SYSGAP-024 | 维护 | 文件编辑 | verify_workflow.py 新增 check_user_impact() + Check 17——用户影响字段解析 + 答案合法性验证 + 矛盾检测 + breaking change 迁移指南 BLOCK，目标对齐: Check 17 实现用户影响六层检查（缺失/子字段/合法性/矛盾/breaking change/路径存在），将'影响用户使用'从 agent 自觉升级为可脚本化判定，用户影响: 获得=自动生效（下次会话）, 感知=CHANGELOG, 体验变化=否-内部重构, 迁移指南=不需要 | skills/software-project-governance/infra/verify_workflow.py | Developer (阿速) | 2026-05-03 | G11 | check-user-impact 子命令独立可运行 |
 
-| EVD-176 | SYSGAP-025 | 维护 | 文件编辑 | pre-commit hook 新增 Step 10-12——目标一致性 BLOCK（project_goal 缺失时 WARN）+ 用户影响 BLOCK + breaking change 迁移指南 BLOCK，目标对齐: hook 阻断是三层体系的第三层——pre-commit hook Step 10-12 在 commit 前验证 evidence-log 中的目标对齐和用户影响字段，缺失则 BLOCK（--no-verify 逃生口），首次实现'系统强制'而非'agent 自觉'，用户影响: 获得=自动生效（下次会话）, 感知=CHANGELOG, 体验变化=是-有说明（见下文）, 迁移指南=不需要（hook 升级向后兼容，不改变现有 commit 行为——新字段仅在 product code 变更时检查） | skills/software-project-governance/infra/hooks/pre-commit | Developer (阿速) | 2026-05-03 | G11 | 首次 commit 被 Step 11 BLOCK——系统自执行确认 |
 
-| EVD-177 | SYSGAP-026 | 维护 | 文件编辑 | governance-init.md plan-tracker 模板更新——确保新项目初始化自动含 project_goal 字段，目标对齐: project_goal 注入模板确保所有新项目有目标基线——存量项目通过 governance-update 自动补全缺失字段，用户影响: 获得=governance-init, 感知=CHANGELOG, 体验变化=否-治理记录, 迁移指南=不需要 | commands/governance-init.md | Developer (阿速) | 2026-05-03 | G11 | 与 SYSGAP-021 互补 |
 
-| EVD-178 | SYSGAP-027 | 维护 | 文件编辑 | behavior-protocol.md M7.5 Step 2.6 增加系统强制说明——pre-commit hook Step 10-12 验证目标对齐/用户影响字段，缺失 BLOCK commit，目标对齐: 行为协议更新确保 agent 在 M7.5 任务前协议中明确知道系统强制机制——不只是 checklist 建议，而是 hook 阻断，用户影响: 获得=自动生效（下次会话）, 感知=CHANGELOG, 体验变化=否-治理记录, 迁移指南=不需要 | skills/software-project-governance/references/behavior-protocol.md | Developer (阿速) | 2026-05-03 | G11 | 引用 Step 10-12 |
 
-| EVD-179 | SYSGAP-028 | 维护 | 文件编辑 | audit-framework.md D1 检查项新增 Check 16 引用 + D2 检查项新增 Check 17 引用——Gate 级深度审计互补 commit 级轻量格式检查，目标对齐: D1/D2 保留在 Gate/Tier/里程碑级别（深度语义审计），Check 16/17 在每次 commit 时执行（轻量格式检查）——互补而非替代，用户影响: 获得=自动生效（下次会话）, 感知=CHANGELOG, 体验变化=否-治理记录, 迁移指南=不需要 | skills/software-project-governance/core/audit-framework.md | Developer (阿速) | 2026-05-03 | G11 | D1/D2 引用更新 |
 
 | EVD-183 | REVIEW-SYSGAP-040~042 | 审查 | Code Review | Code Reviewer（老严）审查 SYSGAP-040~042 共 3 文件。结论：APPROVED（0 P0, 0 P1, 1 P2 术语不统一——"待审查"vs"未审查"） | .governance/review-REVIEW-SYSGAP-040~042.md + 3 文件 | Code Reviewer (老严) | 2026-05-03 | G11 | Producer-Reviewer 分离第三次闭环 |
 
@@ -127,49 +119,27 @@
 
 | EVD-181 | REVIEW-SYSGAP-030~034 | 审查 | Code Review | Code Reviewer（老严）逐行审查 SYSGAP-030~034 共 4 文件。结论：NEEDS_CHANGE（0 P0, 2 P1, 4 P2/P3）。P1: pre-commit Step 7b/Step 9 产品代码检测列表不同步（需提取公共变量）+ SKILL.md 未引用 agent-dispatch-template.md。P2: 路由表列名不一致、模板占位符未处理无 SKILL 场景 | .governance/review-REVIEW-SYSGAP-030~034.md + 4 个被审查文件 | Code Reviewer (老严) | 2026-05-03 | G11 | 首次启用新路由表的"后置审查 Agent"链——Developer(阿速)→CodeReviewer(老严)，Producer-Reviewer 分离已强制执行 |
 
-| EVD-180 | SYSGAP-029 | 维护 | 文件编辑 | 回归测试——test_verify_workflow.py 新增 GoalAlignmentTests（4 用例）+ UserImpactTests（4 用例），目标对齐: 每个 Check 16/17 的代码路径有对应的回归测试（PASS/FAIL/WARN/BLOCKING 四种状态均覆盖），缺陷驱动测试积累原则落地——每次新增检查项同步新增测试用例，用户影响: 获得=自动生效（下次会话）, 感知=CHANGELOG, 体验变化=否-内部重构, 迁移指南=不需要 | skills/software-project-governance/infra/tests/test_verify_workflow.py | Developer (阿速) | 2026-05-03 | G11 | 31/31 tests PASSED |
 
-| EVD-171 | SYSGAP-014 | 架构 | 文件编辑 | SKILL.md Agent 分发路由表新增"影响分析（P0/跨层变更）→ Analyst + Architect"路由条目 | skills/software-project-governance/SKILL.md | Developer (阿速) | 2026-05-02 | G11 | 仅新增 1 行, 不影响现有路由 |
 
-| EVD-153 | CLEANUP-001 | 架构 | 文件创建 | manifest.json 创建——v0.20.0 完整目录结构声明（product 16 entries + 26 globs, repo_only 5 entries + 5 globs, exclude 7 entries）。覆盖 124 个 canonical 文件。与 verify_workflow.py REQUIRED_FILES 交叉对比：77/77 全部覆盖，0 缺失 | skills/software-project-governance/core/manifest.json | Developer (阿速) | 2026-05-02 | G11 | JSON 合法, check-manifest-consistency PASS |
 
-| EVD-154 | CLEANUP-002 | 架构 | 文件创建+重写 | cleanup.py (585 行) + governance-cleanup.md 重写——声明式 diff 清理。核心算法：ACTUAL - CANONICAL - EXCLUDE = REDUNDANT。支持 --dry-run/--json/--target/--manifest。3 个错误码。dry-run 测试：当前仓库 0 冗余（CLEANUP-ERR-002 clean） | skills/software-project-governance/infra/cleanup.py, commands/governance-cleanup.md | Developer (阿速) | 2026-05-02 | G11 | 4 测试用例全部通过 |
 
-| EVD-155 | CLEANUP-003 | 架构 | 文件编辑 | verify_workflow.py 增强——新增 check-manifest-consistency 子命令（canonical vs actual diff）+ Check 11 集成到 check-governance + REQUIRED_FILES 从 manifest.json 读取（124 entries，硬编码 dict 保留为 fallback）。check-governance 无回归（30 issues baseline 不变） | skills/software-project-governance/infra/verify_workflow.py | Developer (阿速) | 2026-05-02 | G11 | check-manifest-consistency PASS (124 canonical, 127 actual, 0 missing) |
 
-| EVD-156 | CLEANUP-004 | 架构 | 文件编辑 | Bootstrap 清理逻辑更新——CLAUDE.md + governance-init.md 自动清理段落从 stub 内容检测改为 manifest-based cleanup：运行 cleanup.py 做结构 diff | CLAUDE.md, commands/governance-init.md | Coordinator (老周) | 2026-05-02 | G11 | 两处引用均已更新 |
 
-| EVD-158 | SYSGAP-001 | 架构 | 文件编辑 | 产品代码 vs 治理记录边界定义——SKILL.md 铁律新增边界判定表（10 产品代码模式 + 6 治理记录模式 + 4 判定规则）+ interaction-boundary.md 末尾追加产品代码修改权限表（精简版） | skills/software-project-governance/SKILL.md, skills/software-project-governance/references/interaction-boundary.md | Developer (阿速) | 2026-05-02 | G11 | 铁律引用已更新, 边界定义自包含 |
 
-| EVD-159 | SYSGAP-003 | 架构 | 文件创建 | 变更影响分析 checklist 创建（5 Step / 21 条目 / 4 执行时机规则 / 1 示例）——修改产品代码前 MUST 执行范围分析→依赖分析→用户影响→架构影响→记录 | skills/software-project-governance/references/change-impact-checklist.md | Developer (阿速) | 2026-05-02 | G11 | 文件创建, 内容完整 |
 
-| EVD-160 | SYSGAP-002 | 架构 | 文件编辑 | M7.5 Agent Team 强制激活检查——behavior-protocol.md M7.5 新增 Step 2.5：修改类型判定，产品代码 MUST spawn Agent Team，治理记录 Coordinator 可直接执行，复杂度不是判定标准 | skills/software-project-governance/references/behavior-protocol.md | Developer (阿速) | 2026-05-02 | G11 | 引用 SKILL.md 边界定义 |
 
-| EVD-161 | SYSGAP-004 | 架构 | 文件编辑 | M7.5 影响分析步骤嵌入——behavior-protocol.md M7.5 新增 Step 2.6：产品代码变更前 MUST 执行 change-impact-checklist（Step 1-5），影响分析结论 MUST 写入 evidence-log，发现风险 MUST 创建 risk-log | skills/software-project-governance/references/behavior-protocol.md | Developer (阿速) | 2026-05-02 | G11 | 引用 change-impact-checklist.md |
 
-| EVD-162 | SYSGAP-005 | 架构 | 文件编辑 | Commit message 规范强化——behavior-protocol.md M7.4 Step 5 增强：多 task ID MUST 显式说明关系、禁止"顺带/also/顺便"关键词、独立变更 MUST 拆分为独立 commit | skills/software-project-governance/references/behavior-protocol.md | Developer (阿速) | 2026-05-02 | G11 | M7.4 现有 commit 步骤增强 |
 
-| EVD-163 | SYSGAP-006 | 架构 | 文件编辑 | Pre-commit scope WARN——infra/hooks/pre-commit 新增 Step 8：检查变更文件分布，≥3 个不相关目录 WARN，≥5 个 SCOPE-CRITICAL | skills/software-project-governance/infra/hooks/pre-commit | Developer (阿速) | 2026-05-02 | G11 | WARN 级别不阻断, 退出码 0 |
 
-| EVD-165 | SYSGAP-008 | 架构 | 文件编辑 | verify_workflow.py 新增交叉引用检查——扫描 51 个 .md/.py 文件，提取 1012 个路径引用（Markdown link/裸路径/backtick/Python ROOT），检测悬空引用+废弃路径+循环引用（DFS）。新增 check-cross-references 子命令 + Check 12 集成 | skills/software-project-governance/infra/verify_workflow.py | Developer (阿速) | 2026-05-02 | G11 | 子命令独立可运行 |
 
-| EVD-166 | SYSGAP-009 | 架构 | 文件编辑 | verify_workflow.py 新增顺序 ID 检查——DEC/EVD/RISK 编号 Gap detection + 交叉引用完整性（task ID 在 plan-tracker 中存在）+ 已完成 task 有 evidence。新增 check-sequential-ids 子命令 + Check 13 | skills/software-project-governance/infra/verify_workflow.py | Developer (阿速) | 2026-05-02 | G11 | 发现预存 DEC-046 缺失 |
 
-| EVD-167 | SYSGAP-010 | 架构 | 文件编辑 | verify_workflow.py 新增结构有效性检查——plan-tracker/evidence-log/decision-log 表格列数一致性 + SKILL.md frontmatter 必需字段 + manifest.json 段完整性。新增 check-structural-validity 子命令 + Check 14 | skills/software-project-governance/infra/verify_workflow.py | Developer (阿速) | 2026-05-02 | G11 | 发现 48 个预存表格列不一致 |
 
-| EVD-168 | SYSGAP-011 | 架构 | 文件编辑 | verify_workflow.py M5 语义检查增强——从字符串匹配升级为内联提问模式检测（中英文 7 种模式）+ 选项列表无 AskUserQuestion 检测 + 误报抑制。Check 10 增强 | skills/software-project-governance/infra/verify_workflow.py | Developer (阿速) | 2026-05-02 | G11 | 向后兼容, 检测更精准 |
 
-| EVD-169 | SYSGAP-012 | 架构 | 文件编辑 | verify_workflow.py 新增 commit scope 检查——重复 task ID 检测 + "顺带/also/顺便"关键词 WARN + 单 commit >15 文件 WARN。新增 check-commit-scope 子命令 + Check 15 | skills/software-project-governance/infra/verify_workflow.py | Developer (阿速) | 2026-05-02 | G11 | 发现预存 3 个重复 task ID |
 
-| EVD-170 | SYSGAP-013 | 架构 | 文件创建 | Governance Developer agent（阿治）创建——专门负责治理基础设施开发（skill 文件/校验脚本/agent prompt/hooks）+ 5 项硬门槛（不同于普通 Developer 的 test coverage）+ 6 步执行协议 | agents/governance-developer.md | Developer (阿速) | 2026-05-02 | G11 | 硬门槛全部 PASS |
 
-| EVD-171 | SYSGAP-014 | 架构 | 文件编辑 | SKILL.md Agent 分发路由表新增"影响分析（P0/跨层变更）→ Analyst + Architect"路由条目 | skills/software-project-governance/SKILL.md | Developer (阿速) | 2026-05-02 | G11 | 仅新增 1 行, 不影响现有路由 |
 
-| EVD-164 | SYSGAP-007 | 架构 | 文件编辑 | Pre-commit Agent Team WARN——infra/hooks/pre-commit 新增 Step 9：检查产品代码变更是否通过 Agent Team 执行，未检测到 Agent Team trace 输出 WARN | skills/software-project-governance/infra/hooks/pre-commit | Developer (阿速) | 2026-05-02 | G11 | WARN 级别不阻断, 退出码 0 |
 
-| EVD-157 | CLEANUP-005 | 架构 | 文件编辑 | 文档纪律更新——manifest.md 简化（移除重复文件列表，指向 manifest.json）+ VERSIONING.md 新增 manifest.json 更新纪律（文件增删 MUST 同步更新）+ CHANGELOG 补 0.19.0/0.20.0 条目 | skills/software-project-governance/core/manifest.md, skills/software-project-governance/core/VERSIONING.md, project/CHANGELOG.md | Coordinator (老周) | 2026-05-02 | G11 | check-governance PASSED |
 
-| EVD-152 | AUDIT-098 | 架构 | 文件迁移 | SKILL 目录结构标准化——25 真实 SKILL 从 `skills/software-project-governance/skills/<name>/SKILL.md` 迁至 `skills/<name>/SKILL.md` 平铺（替换 25 stub）。`git rm -r` 清理旧嵌套目录。11 文件路径引用更新（verify_workflow.py 27 处、CLAUDE.md、governance-init.md、governance-cleanup.md、plugin-contract.md、asset-migration-map.md、default-product-shape.md、manifest.md、skill-index.md、SKILL.md、behavior-protocol.md）。零残留验证通过（Grep `software-project-governance/skills/` 仅剩 asset-migration-map 历史记录） | skills/*/SKILL.md (25 files), verify_workflow.py, CLAUDE.md, governance-init.md, governance-cleanup.md, plugin-contract.md, asset-migration-map.md, default-product-shape.md, manifest.md, skill-index.md, SKILL.md, behavior-protocol.md | Claude | 2026-05-02 | G11 | verify PASSED, check-governance 核心检查全部 PASS |
 
 | 编号 | 对应任务 ID | 阶段 | 证据类型 | 证据说明 | 证据位置 | 提交人 | 提交日期 | 关联 Gate | 备注 |
 | EVD-149 | AUDIT-093 | 架构 | 文件重命名+编辑 | Agent 命名纠正+动作下沉——9 个 agents/*/SKILL.md → prompt.md 重命名（git mv）。执行协议瘦身：删除与 SKILL 重复的执行步骤，统一为"读 SKILL → 按步骤执行 → 返回结论"。7 个文件引用路径更新（零残留）。版本 bump 0.15.0→0.16.0（6 文件） | agents/*/prompt.md (9 files), SKILL.md, behavior-protocol.md, verify_workflow.py, CLAUDE.md, governance-init.md, manifest.md, plugin.json/marketplace.json (5), architecture.md, asset-migration-map.md | Claude | 2026-05-01 | G11 | verify PASSED, agents/.*SKILL\.md Grep=0 |

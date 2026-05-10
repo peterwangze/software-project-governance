@@ -60,13 +60,26 @@ def _risk_log():
 # ── Version Parsing Utilities ──────────────────────────────────────
 
 def _parse_version_from_title(title_line):
-    """Extract version string from a section title like '### v0.11.0 — Foo' or '## 0.24.0 — Bar'.
+    """Extract version string from a section title.
+
+    Supports diverse formats:
+      - '### v0.11.0 — Foo'           (with em-dash separator)
+      - '## 0.24.0 - Bar'             (with hyphen separator)
+      - '### 0.11.0（已完成）'        (Chinese parentheses, no separator)
+      - '### 0.11.0 交付清单'        (description text, no separator)
+      - '### 0.32.0'                  (bare version, no description)
+      - '### 1.0.0 依赖链'            (Chinese text following version)
+
     Returns (version_str, description) or (None, None).
     """
-    # Match version patterns: v0.11.0, 0.11.0
-    m = re.match(r"^#{1,6}\s+(?:v)?(\d+\.\d+\.\d+)\s*[—\-]\s*(.*?)$", title_line.strip())
+    # Separator and description group made optional (?:...)?
+    m = re.match(
+        r"^#{1,6}\s+(?:v)?(\d+\.\d+\.\d+)(?:\s*[—\-]?\s*(.*?))?$",
+        title_line.strip()
+    )
     if m:
-        return m.group(1), m.group(2).strip()
+        desc = m.group(2)
+        return m.group(1), desc.strip() if desc else ""
     return None, None
 
 
@@ -124,6 +137,14 @@ def _find_version_sections(content):
                 m = re.match(r"\|\s*([A-Z]+-\d+)\s*\|", stripped)
                 if m:
                     current_section["task_lines"].append((i, line, m.group(1)))
+            elif stripped.startswith("- [") and "**" in stripped:
+                # Checklist format: - [x] **TASK_ID**: description
+                m = re.match(r"-\s*\[(x| )\]\s*\*\*([A-Z]+-\d+)\*\*[^:]*:", stripped)
+                if m:
+                    task_id = m.group(2)
+                    status = "已完成" if m.group(1) == "x" else "进行中"
+                    synthetic_line = f"| {task_id} | ... | ... | ... | ... | ... | ... | ... | ... | {status} |"
+                    current_section["task_lines"].append((i, synthetic_line, task_id))
 
     if current_section:
         current_section["end_line"] = len(lines) - 1
@@ -942,8 +963,8 @@ def _parse_version_roadmap(content):
             if table_started and stripped.startswith("|"):
                 parts = [p.strip() for p in line.split("|")]
                 if len(parts) >= 3:
-                    version = parts[1]
-                    status = parts[2]
+                    version = parts[1].strip("*")
+                    status = parts[2].strip("*")
                     if re.match(r"\d+\.\d+\.\d+", version):
                         versions.append((version, status))
 
@@ -971,8 +992,8 @@ def _parse_version_roadmap(content):
                 if table_started and subline.startswith("|"):
                     parts = [p.strip() for p in lines[j].split("|")]
                     if len(parts) >= 3:
-                        version = parts[1]
-                        status = parts[2]
+                        version = parts[1].strip("*")
+                        status = parts[2].strip("*")
                         if re.match(r"\d+\.\d+\.\d+", version):
                             versions.append((version, status))
             if versions:

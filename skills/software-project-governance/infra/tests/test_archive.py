@@ -127,6 +127,45 @@ def _make_risk_log(governance_dir, entries):
     return content
 
 
+def _make_plan_tracker_checklist(governance_dir, versions_data):
+    """Create a mock plan-tracker.md with checklist-format task sections.
+
+    versions_data: list of (version_label, tasks_list) where
+    tasks_list: list of (task_id, checked, description)
+        checked: True for [x], False for [ ]
+    """
+    lines = [
+        "# 当前项目样例",
+        "",
+        "## 项目配置",
+        "- **项目目标**: Test",
+        "- **Profile**: standard",
+        "- **触发模式**: always-on",
+        "- **操作权限模式**: maximum-autonomy",
+        "- **工作流版本**: 0.25.0",
+        "- **当前阶段**: 开发实现",
+        "",
+        "## Gate 状态跟踪",
+        "| Gate | 阶段转换 | 状态 | 通过日期 | 关键证据 |",
+        "| --- | --- | --- | --- | --- |",
+        "| G1 | -> 调研 | passed | 2026-04-20 | DEC-001 |",
+        "",
+    ]
+
+    for version_label, tasks in versions_data:
+        lines.append(f"### {version_label}")
+        lines.append("")
+        lines.append("**交付清单**:")
+        for tid, checked, desc in tasks:
+            mark = "x" if checked else " "
+            lines.append(f"- [{mark}] **{tid}**: {desc}")
+        lines.append("")
+
+    content = "\n".join(lines)
+    (governance_dir / "plan-tracker.md").write_text(content, encoding="utf-8")
+    return content
+
+
 def _make_plan_tracker_with_roadmap(governance_dir, roadmap_versions, version_tasks):
     """Create a plan-tracker.md with version roadmap table + version sections.
 
@@ -191,6 +230,94 @@ def _make_plan_tracker_with_roadmap(governance_dir, roadmap_versions, version_ta
 # ────────────────────────────────────────────────────────────
 # Tests
 # ────────────────────────────────────────────────────────────
+
+class TestVersionParsing(unittest.TestCase):
+    """Test _parse_version_from_title with various title formats."""
+
+    def test_standard_format_with_separator(self):
+        """Titles with — or - separator should parse correctly (existing behavior)."""
+        import archive
+        v, desc = archive._parse_version_from_title("### v0.11.0 — Early fixes")
+        self.assertEqual(v, "0.11.0")
+        self.assertEqual(desc, "Early fixes")
+
+        v, desc = archive._parse_version_from_title("## 0.24.0 - Bar baz qux")
+        self.assertEqual(v, "0.24.0")
+        self.assertEqual(desc, "Bar baz qux")
+
+    def test_chinese_parenthesis_no_separator(self):
+        """Version followed by Chinese parentheses without separator."""
+        import archive
+        v, desc = archive._parse_version_from_title("### 0.11.0（已发布）")
+        self.assertEqual(v, "0.11.0")
+
+        v, desc = archive._parse_version_from_title("### 0.12.0（已完成）")
+        self.assertEqual(v, "0.12.0")
+
+    def test_version_with_text_no_separator(self):
+        """Version followed by description text without — or - separator."""
+        import archive
+        v, desc = archive._parse_version_from_title("### 0.11.0 交付清单（12/12 ✅）")
+        self.assertEqual(v, "0.11.0")
+
+        v, desc = archive._parse_version_from_title("### 1.0.0 依赖链")
+        self.assertEqual(v, "1.0.0")
+
+    def test_bare_version_no_description(self):
+        """Just a version number with no description at all."""
+        import archive
+        v, desc = archive._parse_version_from_title("### 0.32.0")
+        self.assertEqual(v, "0.32.0")
+
+        v, desc = archive._parse_version_from_title("## 1.2.3")
+        self.assertEqual(v, "1.2.3")
+
+    def test_version_with_v_prefix_and_chinese_text(self):
+        """v-prefix + version with Chinese text, no — separator."""
+        import archive
+        v, desc = archive._parse_version_from_title("### v0.15.0（已发布）")
+        self.assertEqual(v, "0.15.0")
+
+    def test_non_version_title_returns_none(self):
+        """Titles without version numbers should return None, None."""
+        import archive
+        v, desc = archive._parse_version_from_title("### 交付清单")
+        self.assertEqual(v, None)
+        self.assertEqual(desc, None)
+
+        v, desc = archive._parse_version_from_title("## 项目配置")
+        self.assertEqual(v, None)
+        self.assertEqual(desc, None)
+
+    def test_find_version_sections_with_varied_formats(self):
+        """_find_version_sections should detect versions in mixed formats."""
+        import archive
+        content = """# 项目样例
+
+## 项目配置
+
+### 0.11.0（已发布）
+| Task | Status |
+| --- | --- |
+| FIX-001 | 已完成 |
+
+### 0.12.0 - With separator
+| Task | Status |
+| --- | --- |
+| FIX-002 | 进行中 |
+
+### 0.13.0
+| Task | Status |
+| --- | --- |
+| FIX-003 | 已完成 |
+"""
+        sections, lines = archive._find_version_sections(content)
+        versions_found = [s["version"] for s in sections]
+        self.assertIn("0.11.0", versions_found)
+        self.assertIn("0.12.0", versions_found)
+        self.assertIn("0.13.0", versions_found)
+        self.assertEqual(len(sections), 3)
+
 
 class TestArchiveMigrateByVersion(unittest.TestCase):
     """Test migrate_by_version function."""
@@ -330,6 +457,110 @@ class TestArchiveMigrateByVersion(unittest.TestCase):
         self.assertTrue(result["success"])
         # Evidence for FIX-001..FIX-005 should be archived
         self.assertGreaterEqual(result.get("evidence_archived", 0), 1)
+
+    def test_checklist_format_parsing_completed_tasks(self):
+        """Checklist-format tasks with [x] should be detected as completed."""
+        versions = [
+            ("v0.24.0 — Checklist version", [
+                ("SYSGAP-021", True, "project_goal 字段存储"),
+                ("SYSGAP-022", True, "Checklist 增强"),
+                ("SYSGAP-023", True, "Check 16 目标一致性检查"),
+                ("SYSGAP-024", False, "Check 17 用户影响检查"),
+            ]),
+        ]
+        _make_plan_tracker_checklist(self.gov_dir, versions)
+
+        import archive
+
+        with patch.object(archive, 'ROOT', self.root):
+            result = archive.migrate_by_version("0.24.0", "0.24.0", dry_run=False)
+
+        self.assertTrue(result["success"])
+        # [x] items: SYSGAP-021,022,023 → 3 completed
+        # [ ] items: SYSGAP-024 → NOT archived
+        self.assertEqual(result["tasks_archived"], 3)
+        self.assertEqual(result["tasks_remaining"], 1)
+
+    def test_checklist_format_all_incomplete(self):
+        """Checklist-format tasks with [ ] only should archive nothing."""
+        versions = [
+            ("v0.25.0 — WIP version", [
+                ("SYSGAP-030", False, "未完成的任务 A"),
+                ("SYSGAP-031", False, "未完成的任务 B"),
+            ]),
+        ]
+        _make_plan_tracker_checklist(self.gov_dir, versions)
+
+        import archive
+
+        with patch.object(archive, 'ROOT', self.root):
+            result = archive.migrate_by_version("0.25.0", "0.25.0", dry_run=False)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["tasks_archived"], 0)
+        self.assertEqual(result["tasks_remaining"], 2)
+
+    def test_checklist_format_dry_run(self):
+        """Checklist-format dry-run should report but not modify files."""
+        versions = [
+            ("v0.23.0 — Dry run version", [
+                ("SYSGAP-015", True, "方案 4A: 测试定义"),
+                ("SYSGAP-016", True, "方案 4B: 单元测试"),
+            ]),
+        ]
+        _make_plan_tracker_checklist(self.gov_dir, versions)
+
+        import archive
+
+        with patch.object(archive, 'ROOT', self.root):
+            result = archive.migrate_by_version("0.23.0", "0.23.0", dry_run=True)
+
+        self.assertTrue(result["dry_run"])
+        self.assertTrue(result["success"])
+        self.assertEqual(result["tasks_archived"], 2)
+
+        # No archive files should be created in dry-run mode
+        task_files = [
+            f for f in (self.archive_dir / "tasks").glob("*.md")
+            if f.name != ".gitkeep"
+        ]
+        self.assertEqual(len(task_files), 0)
+
+    def test_checklist_format_mixed_sections_table_and_checklist(self):
+        """Sections with both table and checklist tasks should detect both."""
+        # Create a plan-tracker with table tasks in one version and
+        # checklist tasks in another, to verify they coexist.
+        versions_table = [
+            ("v0.11.0 — Table version", [
+                ("FIX-001", "已完成", "Fix bug 1", "—"),
+                ("FIX-002", "已完成", "Fix bug 2", "—"),
+            ]),
+        ]
+        _make_plan_tracker(self.gov_dir, versions_table)
+
+        # Now append checklist-format section to the same file
+        pt_path = self.gov_dir / "plan-tracker.md"
+        existing = pt_path.read_text(encoding="utf-8")
+        checklist_section = """
+### v0.23.0 — Checklist version
+
+**交付清单**:
+- [x] **SYSGAP-015** (方案 4A): 本项目测试类型对应定义
+- [x] **SYSGAP-016** (方案 4B): verify 单元测试
+- [ ] **SYSGAP-017** (方案 4C): e2e 测试项目
+"""
+        pt_path.write_text(existing + checklist_section, encoding="utf-8")
+
+        import archive
+
+        with patch.object(archive, 'ROOT', self.root):
+            # Archive v0.11.0-v0.11.0 (table only)
+            result_table = archive.migrate_by_version("0.11.0", "0.11.0", dry_run=False)
+            self.assertEqual(result_table["tasks_archived"], 2)
+
+            # Archive v0.23.0-v0.23.0 (checklist only)
+            result_ck = archive.migrate_by_version("0.23.0", "0.23.0", dry_run=True)
+            self.assertEqual(result_ck["tasks_archived"], 2)  # 2 completed [x], 1 [ ] skipped
 
 
 class TestArchiveBuildIndex(unittest.TestCase):

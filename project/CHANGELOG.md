@@ -2,6 +2,17 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.33.0] — 2026-05-10
+
+### 0.33.0 — 治理数据升级迁移流程
+
+**SYSGAP-030 Phase 2**: 治理数据升级迁移流程
+
+- archive.py 新增 `migrate --auto` 模式——自动检测版本边界、pre-check dry-run、内建 verify + 回滚
+- governance-init.md 新增 Step 5.5（归档目录结构创建）
+- governance-init.md Step 7 三级 profile 模板同步——归档感知读取 + Step E 归档迁移检测
+- test_archive.py 新增 8 个 `--auto` 模式测试用例（24/24 PASSED）
+
 ## [0.32.0] — 2026-05-08
 
 ### 0.32.0 — Agent 调度可靠性——并发控制 + 清洁度治理

@@ -891,6 +891,304 @@ def rollback_last_migration():
     return result
 
 
+# ── Version Roadmap Parsing ─────────────────────────────────────────
+
+def _parse_version_roadmap(content):
+    """Parse version roadmap table from plan-tracker content.
+
+    Three strategies, tried in order:
+    1. Find '### 版本路线图' section and extract version/status from table
+    2. Fallback: search for any heading containing '版本路线图'
+    3. Fallback: extract versions from section titles (all treated as '已发布')
+
+    Returns list of (version, status) tuples.
+    """
+    lines = content.split("\n")
+
+    # Strategy 1: Find "### 版本路线图" section
+    in_roadmap = False
+    header_seen = False
+    table_started = False
+    versions = []
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+
+        if stripped == "### 版本路线图":
+            in_roadmap = True
+            header_seen = False
+            table_started = False
+            versions = []
+            continue
+
+        if in_roadmap:
+            # End on next heading (### or ##)
+            if (stripped.startswith("### ") or stripped.startswith("## ")) and "版本路线图" not in stripped:
+                if table_started:
+                    break
+                continue
+
+            # Detect table header row
+            if stripped.startswith("|") and "版本" in stripped and "状态" in stripped:
+                header_seen = True
+                continue
+
+            # Detect separator row
+            if header_seen and stripped.startswith("|") and "---" in stripped:
+                table_started = True
+                continue
+
+            # Parse data rows
+            if table_started and stripped.startswith("|"):
+                parts = [p.strip() for p in line.split("|")]
+                if len(parts) >= 3:
+                    version = parts[1]
+                    status = parts[2]
+                    if re.match(r"\d+\.\d+\.\d+", version):
+                        versions.append((version, status))
+
+    if versions:
+        return versions
+
+    # Strategy 2: Search for any heading containing "版本路线图"
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("#") and "版本路线图" in stripped:
+            in_roadmap = True
+            header_seen = False
+            table_started = False
+            versions = []
+            for j in range(i + 1, len(lines)):
+                subline = lines[j].strip()
+                if subline.startswith("#") and "版本路线图" not in subline:
+                    break
+                if "版本" in subline and "状态" in subline and subline.startswith("|"):
+                    header_seen = True
+                    continue
+                if header_seen and "---" in subline and subline.startswith("|"):
+                    table_started = True
+                    continue
+                if table_started and subline.startswith("|"):
+                    parts = [p.strip() for p in lines[j].split("|")]
+                    if len(parts) >= 3:
+                        version = parts[1]
+                        status = parts[2]
+                        if re.match(r"\d+\.\d+\.\d+", version):
+                            versions.append((version, status))
+            if versions:
+                return versions
+
+    # Strategy 3: Extract from version section titles
+    for line in lines:
+        v, _ = _parse_version_from_title(line)
+        if v and not any(pair[0] == v for pair in versions):
+            versions.append((v, "已发布"))
+
+    return versions
+
+
+# ── Auto Migration ──────────────────────────────────────────────────
+
+def migrate_auto(dry_run=False):
+    """Auto-detect version range from plan-tracker roadmap and migrate data.
+
+    Pipeline:
+    1. Parse version roadmap → filter published versions
+    2. Determine archive range [oldest, second-newest]
+    3. Pre-check dry-run → skip if no data
+    4. Idempotency: skip if archive/index.md exists
+    5. Execute migrate_by_version + build_index + verify
+    6. Calculate file size changes
+    7. Return structured summary dict
+
+    Args:
+        dry_run: if True, preview without modifying files
+
+    Returns:
+        dict with keys: success, skipped, reason, versions_archived,
+        versions_range, tasks_archived, evidence_archived,
+        plan_tracker_before, plan_tracker_after,
+        evidence_log_before, evidence_log_after,
+        archive_files_created, verify_pass, details
+    """
+    result = {
+        "success": False,
+        "skipped": False,
+        "reason": "",
+        "versions_archived": [],
+        "versions_range": None,
+        "tasks_archived": 0,
+        "evidence_archived": 0,
+        "plan_tracker_before": 0,
+        "plan_tracker_after": 0,
+        "evidence_log_before": 0,
+        "evidence_log_after": 0,
+        "archive_files_created": [],
+        "verify_pass": False,
+        "details": "",
+    }
+
+    _ensure_archive_dirs()
+
+    # Check plan-tracker exists
+    if not _plan_tracker().exists():
+        result["skipped"] = True
+        result["reason"] = "plan-tracker.md 不存在"
+        return result
+
+    # Idempotency: if index.md already exists, skip
+    if _index_path().exists():
+        result["skipped"] = True
+        result["reason"] = "archive/index.md 已存在——归档已执行过"
+        result["success"] = True
+        return result
+
+    # Read and parse plan-tracker
+    content = _plan_tracker().read_text(encoding="utf-8")
+    roadmap_versions = _parse_version_roadmap(content)
+
+    # Filter published versions, sort by semver
+    published_versions = [(v, s) for v, s in roadmap_versions if s == "已发布"]
+    published_versions.sort(key=lambda x: _version_to_tuple(x[0]))
+
+    if len(published_versions) < 2:
+        result["skipped"] = True
+        result["reason"] = (
+            f"已发布版本数不足（{len(published_versions)} < 2），跳过归档"
+        )
+        return result
+
+    # Archive range: oldest to second-newest (preserve latest published)
+    version_start = published_versions[0][0]
+    version_end = published_versions[-2][0]  # second newest
+
+    result["versions_archived"] = [v for v, _ in published_versions[:-1]]
+    result["versions_range"] = (version_start, version_end)
+
+    # Pre-check: dry-run to see if there is actual data to archive
+    pre_check = migrate_by_version(version_start, version_end, dry_run=True)
+    if pre_check["tasks_archived"] == 0:
+        result["skipped"] = True
+        result["reason"] = (
+            f"归档范围 v{version_start}~v{version_end} 内无可归档数据"
+        )
+        return result
+
+    # Dry-run mode: report preview and return
+    if dry_run:
+        result["success"] = True
+        result["tasks_archived"] = pre_check["tasks_archived"]
+        result["details"] = (
+            f"Dry-run: 将归档 {pre_check['tasks_archived']} 个 task "
+            f"(v{version_start}~v{version_end})"
+        )
+        return result
+
+    # Record file sizes before migration
+    result["plan_tracker_before"] = (
+        _plan_tracker().stat().st_size if _plan_tracker().exists() else 0
+    )
+    result["evidence_log_before"] = (
+        _evidence_log().stat().st_size if _evidence_log().exists() else 0
+    )
+
+    # Execute migration
+    migrate_result = migrate_by_version(
+        version_start, version_end, dry_run=False, migrate_evidence=True
+    )
+
+    if not migrate_result["success"]:
+        result["details"] = (
+            f"迁移失败: {migrate_result.get('details', 'Unknown error')}"
+        )
+        return result
+
+    result["tasks_archived"] = migrate_result["tasks_archived"]
+    result["evidence_archived"] = migrate_result.get("evidence_archived", 0)
+    result["archive_files_created"] = migrate_result.get(
+        "archive_files_created", []
+    )
+
+    # Build index
+    build_index()
+
+    # Verify integrity
+    verify_result = verify_archive_integrity()
+    result["verify_pass"] = verify_result["pass"]
+
+    # Record file sizes after migration
+    result["plan_tracker_after"] = (
+        _plan_tracker().stat().st_size if _plan_tracker().exists() else 0
+    )
+    result["evidence_log_after"] = (
+        _evidence_log().stat().st_size if _evidence_log().exists() else 0
+    )
+
+    result["success"] = True
+    result["details"] = (
+        f"归档完成: {result['tasks_archived']} 个 task, "
+        f"{result['evidence_archived']} 条证据 "
+        f"(v{version_start}~v{version_end})"
+    )
+    return result
+
+
+def _format_auto_summary(result):
+    """Format migrate_auto() result as a human-readable summary string.
+
+    Returns summary suitable for bootstrap output stream.
+    """
+    if result.get("skipped"):
+        return f"📦 治理数据归档: 跳过（无可归档数据——{result.get('reason', '')}）"
+
+    vr = result.get("versions_range")
+    if vr:
+        range_str = f"v{vr[0]} ~ v{vr[1]}（{len(result['versions_archived'])}个版本）"
+    else:
+        range_str = "未知"
+
+    lines = [
+        "📦 治理数据归档完成:",
+        f"  - 归档范围: {range_str}",
+        f"  - 归档 {result['tasks_archived']} 个 task "
+        f"→ archive/tasks/v{result['versions_range'][0]}~v{result['versions_range'][1]}.md",
+    ]
+
+    if result.get("evidence_archived", 0) > 0:
+        lines.append(
+            f"  - 归档 {result['evidence_archived']} 条证据 "
+            f"→ archive/evidence/v{result['versions_range'][0]}~v{result['versions_range'][1]}.md"
+        )
+
+    # File size changes
+    pt_before = result.get("plan_tracker_before", 0)
+    pt_after = result.get("plan_tracker_after", 0)
+    if pt_before > 0 and pt_after > 0:
+        pt_kb_before = pt_before / 1024
+        pt_kb_after = pt_after / 1024
+        pt_pct = int((1 - pt_after / pt_before) * 100)
+        lines.append(
+            f"  - plan-tracker: {pt_kb_before:.0f}KB → {pt_kb_after:.0f}KB (-{pt_pct}%)"
+        )
+
+    ev_before = result.get("evidence_log_before", 0)
+    ev_after = result.get("evidence_log_after", 0)
+    if ev_before > 0 and ev_after > 0:
+        ev_kb_before = ev_before / 1024
+        ev_kb_after = ev_after / 1024
+        ev_pct = int((1 - ev_after / ev_before) * 100)
+        lines.append(
+            f"  - evidence-log: {ev_kb_before:.0f}KB → {ev_kb_after:.0f}KB (-{ev_pct}%)"
+        )
+
+    lines.append(f"  - 索引: archive/index.md（{result['tasks_archived']} 条目）")
+    lines.append(
+        f"  - 校验: {'PASS' if result.get('verify_pass') else 'FAILED'}"
+    )
+
+    return "\n".join(lines)
+
+
 # ── CLI Entry Point ─────────────────────────────────────────────────
 
 def main():
@@ -905,12 +1203,16 @@ def main():
 
     # migrate
     migrate_p = subparsers.add_parser("migrate", help="Archive tasks for a version range")
-    migrate_p.add_argument("version_start", help="Start version (e.g. 0.11.0)")
-    migrate_p.add_argument("version_end", help="End version (e.g. 0.24.0)")
+    migrate_p.add_argument("version_start", nargs="?", default=None,
+                           help="Start version (e.g. 0.11.0)")
+    migrate_p.add_argument("version_end", nargs="?", default=None,
+                           help="End version (e.g. 0.24.0)")
     migrate_p.add_argument("--dry-run", action="store_true",
                            help="Report what would be archived without modifying files")
     migrate_p.add_argument("--no-evidence", action="store_true",
                            help="Skip evidence archiving")
+    migrate_p.add_argument("--auto", action="store_true",
+                           help="Auto-detect version range from plan-tracker roadmap")
 
     # build-index
     subparsers.add_parser("build-index", help="Rebuild archive/index.md from archive files")
@@ -923,20 +1225,37 @@ def main():
 
     args = parser.parse_args()
 
+    # Ensure stdout supports UTF-8 (Windows consoles default to GBK)
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
     if args.command == "migrate":
-        result = migrate_by_version(
-            args.version_start,
-            args.version_end,
-            dry_run=args.dry_run,
-            migrate_evidence=not args.no_evidence,
-        )
-        print(f"  Dry-run: {result['dry_run']}")
-        print(f"  Tasks archived: {result['tasks_archived']}")
-        print(f"  Tasks remaining: {result['tasks_remaining']}")
-        print(f"  Evidence archived: {result.get('evidence_archived', 0)}")
-        print(f"  Files created: {result.get('archive_files_created', [])}")
-        print(f"  {result['details']}")
-        if not result["success"]:
+        if args.auto:
+            result = migrate_auto(dry_run=args.dry_run)
+            print(_format_auto_summary(result))
+            if not result["skipped"] and not result["success"]:
+                sys.exit(1)
+        elif args.version_start and args.version_end:
+            result = migrate_by_version(
+                args.version_start,
+                args.version_end,
+                dry_run=args.dry_run,
+                migrate_evidence=not args.no_evidence,
+            )
+            print(f"  Dry-run: {result['dry_run']}")
+            print(f"  Tasks archived: {result['tasks_archived']}")
+            print(f"  Tasks remaining: {result['tasks_remaining']}")
+            print(f"  Evidence archived: {result.get('evidence_archived', 0)}")
+            print(f"  Files created: {result.get('archive_files_created', [])}")
+            print(f"  {result['details']}")
+            if not result["success"]:
+                sys.exit(1)
+        else:
+            print("Error: Either --auto or both version_start and version_end must be provided.")
+            migrate_p.print_usage()
             sys.exit(1)
 
     elif args.command == "build-index":

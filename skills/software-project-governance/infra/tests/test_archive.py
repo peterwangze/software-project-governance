@@ -127,6 +127,67 @@ def _make_risk_log(governance_dir, entries):
     return content
 
 
+def _make_plan_tracker_with_roadmap(governance_dir, roadmap_versions, version_tasks):
+    """Create a plan-tracker.md with version roadmap table + version sections.
+
+    roadmap_versions: list of (version, status)
+        e.g., [("0.11.0", "已发布"), ("0.12.0", "已发布"), ("0.13.0", "进行中")]
+    version_tasks: list of (version_label, tasks_list)
+        where tasks_list: list of (task_id, status, desc, depend)
+    """
+    lines = [
+        "# 当前项目样例",
+        "",
+        "## 项目配置",
+        "- **项目目标**: Test project for archive --auto",
+        "- **Profile**: standard",
+        "- **触发模式**: always-on",
+        "- **操作权限模式**: maximum-autonomy",
+        "- **工作流版本**: 0.25.0",
+        "- **当前阶段**: 开发实现",
+        "",
+        "## Gate 状态跟踪",
+        "| Gate | 阶段转换 | 状态 | 通过日期 | 关键证据 |",
+        "| --- | --- | --- | --- | --- |",
+        "| G1 | -> 调研 | passed | 2026-04-20 | DEC-001... |",
+        "",
+        "## 版本规划",
+        "",
+        "版本规划回答...",
+        "",
+        "### 版本路线图",
+        "",
+        "| 版本 | 状态 | 预计日期 | 核心范围 | 包含 Tier/Layer | 关键交付物 |",
+        "|------|------|---------|---------|---------------|-----------|",
+    ]
+
+    for version, status in roadmap_versions:
+        lines.append(
+            f"| {version} | {status} | 2026-05-01 | Test scope | - | Test deliverables |"
+        )
+
+    lines.append("")
+
+    # Add version sections
+    for version_label, tasks in version_tasks:
+        lines.append(f"### {version_label}")
+        lines.append(
+            "| 任务ID | 描述 | 优先级 | 依赖 | 目标版本 | 负责人 | 审查人 | 审查类型 | 闭环路径 | 状态 |"
+        )
+        lines.append(
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+        )
+        for tid, status, desc, depend in tasks:
+            lines.append(
+                f"| {tid} | {desc} | P1 | {depend} | 1.0.0 | 阿速 | — | Code Reviewer | TBD | {status} |"
+            )
+        lines.append("")
+
+    content = "\n".join(lines)
+    (governance_dir / "plan-tracker.md").write_text(content, encoding="utf-8")
+    return content
+
+
 # ────────────────────────────────────────────────────────────
 # Tests
 # ────────────────────────────────────────────────────────────
@@ -675,6 +736,299 @@ class TestArchiveRollback(unittest.TestCase):
             result = archive.rollback_last_migration()
             self.assertFalse(result["success"])
             self.assertIn("没有找到归档文件", result["details"])
+
+
+class TestArchiveMigrateAuto(unittest.TestCase):
+    """Test migrate_auto function (--auto mode)."""
+
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        self.gov_dir = self.root / ".governance"
+        self.gov_dir.mkdir(parents=True, exist_ok=True)
+        self.archive_dir = self.gov_dir / "archive"
+        for sub in ["tasks", "evidence", "decisions", "risks"]:
+            (self.archive_dir / sub).mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        self.tempdir.cleanup()
+
+    def test_auto_normal_migration(self):
+        """--auto should archive oldest published versions, keeping latest."""
+        # Override: need 3 published versions for a meaningful test
+        roadmap = [
+            ("0.10.0", "已发布"),
+            ("0.11.0", "已发布"),
+            ("0.12.0", "已发布"),
+            ("0.13.0", "进行中"),
+        ]
+        tasks = [
+            ("v0.10.0 — Initial", [
+                ("FIX-001", "已完成", "Fix bug 1", "—"),
+            ]),
+            ("v0.11.0 — Early fixes", [
+                ("FIX-002", "已完成", "Fix bug 2", "FIX-001"),
+                ("FIX-003", "已完成", "Fix bug 3", "—"),
+            ]),
+            ("v0.12.0 — Latest published", [
+                ("FIX-004", "已完成", "Fix bug 4", "—"),
+                ("FIX-005", "进行中", "Fix bug 5", "—"),
+            ]),
+            ("v0.13.0 — Current", [
+                ("FIX-006", "进行中", "Fix bug 6", "—"),
+            ]),
+        ]
+        _make_plan_tracker_with_roadmap(self.gov_dir, roadmap, tasks)
+        _make_evidence_log(self.gov_dir, [
+            ("EVD-001", "FIX-001", "Fixed bug 1"),
+            ("EVD-002", "FIX-002", "Fixed bug 2"),
+            ("EVD-003", "FIX-003", "Fixed bug 3"),
+            ("EVD-004", "FIX-004", "Fixed bug 4"),
+        ])
+
+        import archive
+
+        with patch.object(archive, 'ROOT', self.root):
+            result = archive.migrate_auto(dry_run=False)
+
+        self.assertTrue(result["success"])
+        self.assertFalse(result.get("skipped", False))
+        # Published: 0.10.0, 0.11.0, 0.12.0 → archive 0.10.0 ~ 0.11.0
+        self.assertIn("0.10.0", result["versions_archived"])
+        self.assertIn("0.11.0", result["versions_archived"])
+        self.assertNotIn("0.12.0", result["versions_archived"])  # Latest kept
+        self.assertGreaterEqual(result["tasks_archived"], 3)  # FIX-001,002,003
+        self.assertTrue(result["verify_pass"])
+
+        # Check archive file exists
+        task_files = [
+            f for f in (self.archive_dir / "tasks").glob("*.md")
+            if f.name != ".gitkeep"
+        ]
+        self.assertGreaterEqual(len(task_files), 1)
+
+        # Check index exists
+        self.assertTrue((self.archive_dir / "index.md").exists())
+
+    def test_auto_skip_few_published(self):
+        """< 2 published versions → skip with skipped=True."""
+        roadmap = [
+            ("0.11.0", "已发布"),
+            ("0.12.0", "进行中"),
+        ]
+        tasks = [
+            ("v0.11.0 — First", [
+                ("FIX-001", "已完成", "Fix bug 1", "—"),
+            ]),
+        ]
+        _make_plan_tracker_with_roadmap(self.gov_dir, roadmap, tasks)
+
+        import archive
+
+        with patch.object(archive, 'ROOT', self.root):
+            result = archive.migrate_auto(dry_run=False)
+
+        self.assertTrue(result.get("skipped", False))
+        self.assertIn("不足", result.get("reason", ""))
+
+    def test_auto_no_version_roadmap_table(self):
+        """Fallback: no roadmap table → parse version section titles."""
+        # Create plan-tracker without roadmap table but with version sections
+        versions = [
+            ("v0.11.0 — Old release", [
+                ("FIX-001", "已完成", "Fix bug 1", "—"),
+            ]),
+            ("v0.12.0 — Newer release", [
+                ("FIX-002", "已完成", "Fix bug 2", "—"),
+            ]),
+            ("0.13.0 — Current WIP", [
+                ("FIX-003", "进行中", "Fix bug 3", "—"),
+            ]),
+        ]
+        # Use _make_plan_tracker (no roadmap) and DO NOT add roadmap section
+        _make_plan_tracker(self.gov_dir, versions)
+
+        import archive
+
+        with patch.object(archive, 'ROOT', self.root):
+            result = archive.migrate_auto(dry_run=False)
+
+        # When parsing from titles, all found versions are treated as "已发布"
+        # So it would see 0.11.0, 0.12.0, 0.13.0 as published
+        # Archive range: 0.11.0 ~ 0.12.0
+        self.assertTrue(result.get("success"))
+        # Should not be skipped
+        self.assertFalse(result.get("skipped", False))
+
+    def test_auto_no_completed_tasks(self):
+        """Archive range has no completed tasks → skipped."""
+        roadmap = [
+            ("0.10.0", "已发布"),
+            ("0.11.0", "已发布"),
+            ("0.12.0", "已发布"),
+        ]
+        tasks = [
+            ("v0.10.0 — Initial", [
+                ("FIX-001", "进行中", "In-progress task", "—"),
+            ]),
+            ("v0.11.0 — Early fixes", [
+                ("FIX-002", "进行中", "In-progress task", "—"),
+            ]),
+            ("v0.12.0 — Latest", [
+                ("FIX-003", "进行中", "In-progress task", "—"),
+            ]),
+        ]
+        _make_plan_tracker_with_roadmap(self.gov_dir, roadmap, tasks)
+
+        import archive
+
+        with patch.object(archive, 'ROOT', self.root):
+            result = archive.migrate_auto(dry_run=False)
+
+        self.assertTrue(result.get("skipped", False))
+        self.assertIn("无可归档数据", result.get("reason", ""))
+
+    def test_auto_idempotent(self):
+        """If archive/index.md already exists → skip."""
+        # Create pre-existing index
+        (self.archive_dir / "index.md").write_text(
+            "# 归档索引\n\n> Existing index\n", encoding="utf-8"
+        )
+
+        roadmap = [
+            ("0.10.0", "已发布"),
+            ("0.11.0", "已发布"),
+        ]
+        tasks = [
+            ("v0.10.0 — Initial", [
+                ("FIX-001", "已完成", "Fix bug 1", "—"),
+            ]),
+        ]
+        _make_plan_tracker_with_roadmap(self.gov_dir, roadmap, tasks)
+
+        import archive
+
+        with patch.object(archive, 'ROOT', self.root):
+            result = archive.migrate_auto(dry_run=False)
+
+        self.assertTrue(result.get("skipped", False))
+        self.assertIn("已存在", result.get("reason", ""))
+        self.assertTrue(result["success"])
+
+    def test_auto_dry_run(self):
+        """--auto + dry-run → preview but no files modified."""
+        roadmap = [
+            ("0.10.0", "已发布"),
+            ("0.11.0", "已发布"),
+            ("0.12.0", "已发布"),
+        ]
+        tasks = [
+            ("v0.10.0 — Initial", [
+                ("FIX-001", "已完成", "Fix bug 1", "—"),
+            ]),
+            ("v0.11.0 — Early fixes", [
+                ("FIX-002", "已完成", "Fix bug 2", "—"),
+            ]),
+            ("v0.12.0 — Latest", [
+                ("FIX-003", "进行中", "Fix bug 3", "—"),
+            ]),
+        ]
+        _make_plan_tracker_with_roadmap(self.gov_dir, roadmap, tasks)
+
+        import archive
+
+        # Record original content
+        pt_before = (self.gov_dir / "plan-tracker.md").read_text(encoding="utf-8")
+
+        with patch.object(archive, 'ROOT', self.root):
+            result = archive.migrate_auto(dry_run=True)
+
+        self.assertTrue(result["success"])
+        self.assertFalse(result.get("skipped", False))
+        self.assertGreaterEqual(result.get("tasks_archived", 0), 1)
+
+        # Plan-tracker should be UNMODIFIED
+        pt_after = (self.gov_dir / "plan-tracker.md").read_text(encoding="utf-8")
+        self.assertEqual(pt_before, pt_after)
+
+        # No archive files should be created
+        task_files = [
+            f for f in (self.archive_dir / "tasks").glob("*.md")
+            if f.name != ".gitkeep"
+        ]
+        self.assertEqual(len(task_files), 0)
+
+        # No index should be created
+        self.assertFalse((self.archive_dir / "index.md").exists())
+
+    def test_auto_output_has_required_fields(self):
+        """--auto result dict must contain all required summary fields."""
+        roadmap = [
+            ("0.10.0", "已发布"),
+            ("0.11.0", "已发布"),
+            ("0.12.0", "已发布"),
+        ]
+        tasks = [
+            ("v0.10.0 — Initial", [
+                ("FIX-001", "已完成", "Fix bug 1", "—"),
+            ]),
+            ("v0.11.0 — Early fixes", [
+                ("FIX-002", "已完成", "Fix bug 2", "—"),
+            ]),
+            ("v0.12.0 — Latest", [
+                ("FIX-003", "进行中", "Fix bug 3", "—"),
+            ]),
+        ]
+        _make_plan_tracker_with_roadmap(self.gov_dir, roadmap, tasks)
+
+        import archive
+
+        with patch.object(archive, 'ROOT', self.root):
+            result = archive.migrate_auto(dry_run=False)
+
+        # Required fields must exist
+        for key in [
+            "success", "skipped", "reason", "versions_archived",
+            "versions_range", "tasks_archived", "evidence_archived",
+            "plan_tracker_before", "plan_tracker_after",
+            "evidence_log_before", "evidence_log_after",
+            "archive_files_created", "verify_pass",
+        ]:
+            self.assertIn(key, result, f"Required key '{key}' missing from result")
+
+        # For successful migration, verify_pass should be True
+        self.assertTrue(result["verify_pass"])
+
+    def test_auto_with_2_published_archives_oldest_only(self):
+        """With exactly 2 published versions, archive only the oldest."""
+        roadmap = [
+            ("0.10.0", "已发布"),
+            ("0.11.0", "已发布"),
+            ("0.12.0", "进行中"),
+        ]
+        tasks = [
+            ("v0.10.0 — Initial", [
+                ("FIX-001", "已完成", "Fix bug 1", "—"),
+            ]),
+            ("v0.11.0 — Latest published", [
+                ("FIX-002", "已完成", "Fix bug 2", "—"),
+            ]),
+        ]
+        _make_plan_tracker_with_roadmap(self.gov_dir, roadmap, tasks)
+        _make_evidence_log(self.gov_dir, [
+            ("EVD-001", "FIX-001", "Fixed bug 1"),
+        ])
+
+        import archive
+
+        with patch.object(archive, 'ROOT', self.root):
+            result = archive.migrate_auto(dry_run=False)
+
+        self.assertTrue(result["success"])
+        self.assertFalse(result.get("skipped", False))
+        # published: [0.10.0, 0.11.0] → archive 0.10.0 only
+        self.assertEqual(result["versions_archived"], ["0.10.0"])
+        self.assertEqual(result["tasks_archived"], 1)
 
 
 if __name__ == "__main__":

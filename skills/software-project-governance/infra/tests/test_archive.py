@@ -318,6 +318,63 @@ class TestVersionParsing(unittest.TestCase):
         self.assertIn("0.13.0", versions_found)
         self.assertEqual(len(sections), 3)
 
+    def test_parse_task_status_emoji(self):
+        """F-03: _parse_task_status should strip leading/trailing emoji
+        but preserve all text characters (CJK, Latin, etc)."""
+        import archive
+
+        def _make_row(status_text):
+            return f"| FIX-001 | desc | P1 | - | 1.0.0 | 阿速 | - | Code Reviewer | TBD | {status_text} |"
+
+        # Leading emoji + CJK
+        self.assertEqual(archive._parse_task_status(_make_row("✅ 已完成")), "已完成")
+        # Leading emoji + CJK (blocked)
+        self.assertEqual(archive._parse_task_status(_make_row("🚧 阻塞中")), "阻塞中")
+        # Leading emoji + CJK (pending)
+        self.assertEqual(archive._parse_task_status(_make_row("⏳ 待开始")), "待开始")
+        # No emoji — CJK only
+        self.assertEqual(archive._parse_task_status(_make_row("进行中（no emoji）")), "进行中（no emoji）")
+        # ASCII status — must NOT be stripped
+        self.assertEqual(archive._parse_task_status(_make_row("Done")), "Done")
+        # Trailing emoji
+        self.assertEqual(archive._parse_task_status(_make_row("Completed ✅")), "Completed")
+
+    def test_section_boundary_non_version_heading(self):
+        """F-04: version section should close at non-version ### heading."""
+        import archive
+        content = """# 项目样例
+
+## 项目配置
+
+### 0.11.0（已发布）
+| Task | Status |
+| --- | --- |
+| FIX-001 | ✅ 已完成 |
+
+### 优先级一览
+
+Some free text outside any version section.
+
+### 0.12.0 - With separator
+| Task | Status |
+| --- | --- |
+| FIX-002 | 进行中 |
+"""
+        sections, lines = archive._find_version_sections(content)
+        versions_found = [s["version"] for s in sections]
+        self.assertIn("0.11.0", versions_found)
+        self.assertIn("0.12.0", versions_found)
+        self.assertEqual(len(sections), 2)
+
+        # The v0.11.0 section should end before the non-version heading
+        v011 = next(s for s in sections if s["version"] == "0.11.0")
+        v012 = next(s for s in sections if s["version"] == "0.12.0")
+        # v0.11.0 end_line should be before v0.12.0 starts
+        self.assertLess(v011["end_line"], v012["start_line"])
+        # v0.11.0 should NOT contain lines from after the non-version heading
+        for line_idx, _, _ in v011["task_lines"]:
+            self.assertIn(line_idx, range(v011["start_line"], v011["end_line"] + 1))
+
 
 class TestArchiveMigrateByVersion(unittest.TestCase):
     """Test migrate_by_version function."""

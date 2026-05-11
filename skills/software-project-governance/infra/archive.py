@@ -17,6 +17,7 @@ Design: ADR-006 (docs/architecture/ADR-006-governance-data-scalability.md)
 import re
 import shutil
 import sys
+import unicodedata
 from datetime import date
 from pathlib import Path
 
@@ -125,6 +126,17 @@ def _find_version_sections(content):
             }
             continue
 
+        # Close current section on non-version headings
+        if current_section is not None:
+            stripped = line.strip()
+            if (stripped.startswith("### ") or stripped.startswith("## ")):
+                v_test, _ = _parse_version_from_title(line)
+                if v_test is None:
+                    current_section["end_line"] = i - 1
+                    sections.append(current_section)
+                    current_section = None
+                    continue
+
         if current_section:
             stripped = line.strip()
             # Detect table separator row: | --- | --- | or | :--- | :---: | etc.
@@ -154,10 +166,33 @@ def _find_version_sections(content):
 
 
 def _parse_task_status(line):
-    """Extract status from a task table row. Status is at the 10th column (index 10)."""
+    """Extract status from a task table row. Status is at the 10th column (index 10).
+
+    Strips leading/trailing emoji, symbols, spaces, and format characters
+    to handle patterns like "✅ 已完成", "⏳ 进行中", "🚧 阻塞中",
+    "已完成 ✅". Preserves all text characters (CJK, Latin, Cyrillic, etc).
+    """
     parts = [p.strip() for p in line.split("|")]
     if len(parts) >= 11:
-        return parts[10]
+        status = parts[10]
+        # Strip leading emoji/symbol/space/format characters only
+        # (not all non-CJK — preserve Latin/Cyrillic/etc text)
+        while status:
+            cat = unicodedata.category(status[0])
+            # So=Symbol_Other (emoji, etc), Sk=Modifier_Symbol, Sc=Currency_Symbol,
+            # Sm=Math_Symbol, Zs=Space_Separator, Cf=Format
+            if cat in ('So', 'Sk', 'Sc', 'Sm', 'Zs', 'Cf'):
+                status = status[1:].strip()
+            else:
+                break
+        # Also strip trailing emoji/symbols
+        while status:
+            cat = unicodedata.category(status[-1])
+            if cat in ('So', 'Sk', 'Sc', 'Sm', 'Zs', 'Cf'):
+                status = status[:-1].strip()
+            else:
+                break
+        return status
     return None
 
 

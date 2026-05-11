@@ -162,6 +162,75 @@ def _find_version_sections(content):
         current_section["end_line"] = len(lines) - 1
         sections.append(current_section)
 
+    # ── 样例跟踪表 detection ──────────────────────────────────────
+    # Plan-tracker may contain a "## 样例跟踪表" section with a large table
+    # of historical tasks (20-column format).  These tasks live outside of
+    # version sections and were previously invisible to the archive engine.
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped == '## 样例跟踪表':
+            header_seen = False
+            table_started = False
+            sample_tasks = []
+
+            for j in range(i + 1, len(lines)):
+                sl = lines[j].strip()
+                if not table_started:
+                    if sl.startswith('|') and 'ID' in sl and '状态' in sl:
+                        header_seen = True
+                        continue
+                    if header_seen and sl.startswith('|') and '---' in sl:
+                        table_started = True
+                        continue
+                    # Stop if we hit another heading before table starts
+                    if header_seen and not table_started and (
+                        sl.startswith('## ') or sl.startswith('### ')
+                    ):
+                        break
+                    continue
+
+                if table_started:
+                    if not sl.startswith('|'):
+                        # Table ended (blank line or non-table content)
+                        break
+                    # Also stop at next heading
+                    if sl.startswith('## '):
+                        break
+                    if sl.startswith('### '):
+                        break
+                    # Check if it's a task row (ID column with TASKID-NNN format)
+                    m = re.match(r"\|\s*([A-Z]+-\d+)\s*\|", sl)
+                    if m:
+                        task_id = m.group(1)
+                        sample_tasks.append((j, lines[j], task_id))
+
+            if sample_tasks:
+                # Use the earliest published version from the roadmap so it
+                # falls inside the archive range [earliest, second-latest].
+                roadmap_versions = _parse_version_roadmap(content)
+                published = [
+                    v for v, s in roadmap_versions if s == '已发布'
+                ]
+                if published:
+                    earliest_version = sorted(
+                        published, key=_version_to_tuple
+                    )[0]
+                else:
+                    earliest_version = '0.1.0'
+
+                sections.append({
+                    "version": earliest_version,
+                    "title": "## 样例跟踪表",
+                    "start_line": i,
+                    "end_line": i,
+                    "task_lines": sample_tasks,
+                    "table_started": True,
+                    "header_line": None,
+                    "separator_line": None,
+                    "sample_table": True,
+                })
+            break  # Only process the first 样例跟踪表 section
+
     return sections, lines
 
 
@@ -385,8 +454,20 @@ def migrate_by_version(version_start, version_end, dry_run=False, migrate_eviden
     _write_archive_file(archive_path, header, archive_lines)
     result["archive_files_created"].append(f"archive/tasks/{archive_filename}")
 
+    # Collect line indices from sample-table sections — these must NOT be
+    # deleted from the hot file (sample-table rows are interleaved with
+    # non-task text and deleting them would destroy table structure).
+    sample_table_line_indices = set()
+    for section in sections:
+        if section.get("sample_table", False):
+            for line_idx, _, _ in section["task_lines"]:
+                sample_table_line_indices.add(line_idx)
+
     # Remove archived task lines from plan-tracker content
-    lines_to_remove = {idx for idx, _, _, _ in archived_task_lines}
+    lines_to_remove = {
+        idx for idx, _, _, _ in archived_task_lines
+        if idx not in sample_table_line_indices
+    }
     new_lines = []
     for i, line in enumerate(lines):
         if i in lines_to_remove:

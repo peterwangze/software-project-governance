@@ -1319,5 +1319,336 @@ class TestArchiveMigrateAuto(unittest.TestCase):
         self.assertEqual(result["tasks_archived"], 1)
 
 
+def _make_plan_tracker_with_sample_table(governance_dir, sample_tasks, version_tasks=None,
+                                           roadmap_versions=None):
+    """Create a plan-tracker.md with a 样例跟踪表 section + optional version sections.
+
+    sample_tasks: list of (task_id, status, description)
+        e.g., [("DESIGN-002", "已终止", "补齐 Claude 半可执行入口"), ...]
+        Status is placed in column 10 (matching _parse_task_status convention).
+    version_tasks: optional list of (version_label, tasks_list) for version sections
+    roadmap_versions: optional list of (version, status) for version roadmap table
+    """
+    lines = [
+        "# 当前项目样例",
+        "",
+        "## 项目配置",
+        "- **项目目标**: Test project with sample table",
+        "- **Profile**: standard",
+        "- **触发模式**: always-on",
+        "- **操作权限模式**: maximum-autonomy",
+        "- **工作流版本**: 0.25.0",
+        "- **当前阶段**: 开发实现",
+        "",
+        "## Gate 状态跟踪",
+        "| Gate | 阶段转换 | 状态 | 通过日期 | 关键证据 |",
+        "| --- | --- | --- | --- | --- |",
+        "| G1 | -> 调研 | passed | 2026-04-20 | DEC-001 |",
+        "",
+    ]
+
+    # Add version roadmap if provided
+    if roadmap_versions:
+        lines.extend([
+            "## 版本规划",
+            "",
+            "版本规划回答...",
+            "",
+            "### 版本路线图",
+            "",
+            "| 版本 | 状态 | 预计日期 | 核心范围 | 包含 Tier/Layer | 关键交付物 |",
+            "|------|------|---------|---------|---------------|-----------|",
+        ])
+        for version, status in roadmap_versions:
+            lines.append(
+                f"| {version} | {status} | 2026-05-01 | Test | - | Test |"
+            )
+        lines.append("")
+
+    # Add version sections if provided
+    if version_tasks:
+        for version_label, tasks in version_tasks:
+            lines.append(f"### {version_label}")
+            lines.append(
+                "| 任务ID | 描述 | 优先级 | 依赖 | 目标版本 | 负责人 | 审查人 | 审查类型 | 闭环路径 | 状态 |"
+            )
+            lines.append(
+                "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+            )
+            for tid, status, desc, depend in tasks:
+                lines.append(
+                    f"| {tid} | {desc} | P1 | {depend} | 1.0.0 | 阿速 | — | Code Reviewer | TBD | {status} |"
+                )
+            lines.append("")
+
+    # Add 样例跟踪表 section (20-column format matching real plan-tracker)
+    lines.append("## 样例跟踪表")
+    lines.append("")
+    lines.append("| ID | 阶段 | 任务项 | 目标/预期结果 | 输入 | 输出 | Owner (DRI) | 协同角色 | Escalation | 状态 | 优先级 | 计划开始 | 计划完成 | 实际完成 | Gate | 验收标准 | 证据 | 风险/偏差 | 纠偏动作 | 备注 |")
+    lines.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
+    for tid, status, desc in sample_tasks:
+        lines.append(
+            f"| {tid} | 维护 | {desc} | Test goal | Test input | Test output "
+            f"| 项目负责人 | Claude | 项目负责人 | {status} | P1 "
+            f"| 2026-04-01 | 2026-04-15 | 2026-04-10 | G8 "
+            f"| Test criteria | EVD-999 | — | — | Test note |"
+        )
+    lines.append("")
+    lines.append("## 下一个章节")
+    lines.append("")
+    lines.append("Content after sample table.")
+
+    content = "\n".join(lines)
+    (governance_dir / "plan-tracker.md").write_text(content, encoding="utf-8")
+    return content
+
+
+class TestSampleTableArchive(unittest.TestCase):
+    """Test sample tracking table (样例跟踪表) integration with archive."""
+
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        self.gov_dir = self.root / ".governance"
+        self.gov_dir.mkdir(parents=True, exist_ok=True)
+        self.archive_dir = self.gov_dir / "archive"
+        for sub in ["tasks", "evidence", "decisions", "risks"]:
+            (self.archive_dir / sub).mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        self.tempdir.cleanup()
+
+    def test_sample_table_section_detected(self):
+        """_find_version_sections should create a synthetic section for 样例跟踪表."""
+        sample_tasks = [
+            ("DESIGN-002", "已终止", "补齐 Claude 半可执行入口"),
+            ("AUDIT-003", "已完成", "P0: 外部项目验证"),
+            ("MAINT-002", "已终止", "补更多大厂实践映射"),
+        ]
+        roadmap = [
+            ("0.1.0", "已发布"),
+            ("0.2.0", "已发布"),
+            ("0.3.0", "进行中"),
+        ]
+        _make_plan_tracker_with_sample_table(
+            self.gov_dir, sample_tasks,
+            roadmap_versions=roadmap,
+        )
+
+        import archive
+
+        with patch.object(archive, 'ROOT', self.root):
+            content = (self.gov_dir / "plan-tracker.md").read_text(encoding="utf-8")
+            sections, lines = archive._find_version_sections(content)
+
+        sample_sections = [s for s in sections if s.get("sample_table", False)]
+        self.assertEqual(len(sample_sections), 1)
+        sample = sample_sections[0]
+        self.assertTrue(sample["sample_table"])
+        self.assertEqual(sample["version"], "0.1.0")  # Earliest published
+        self.assertEqual(len(sample["task_lines"]), 3)
+        task_ids = [tid for _, _, tid in sample["task_lines"]]
+        self.assertIn("DESIGN-002", task_ids)
+        self.assertIn("AUDIT-003", task_ids)
+        self.assertIn("MAINT-002", task_ids)
+
+    def test_sample_table_completed_archived(self):
+        """Completed tasks in 样例跟踪表 should be archived."""
+        sample_tasks = [
+            ("DESIGN-002", "已终止", "补齐 Claude 半可执行入口"),
+            ("AUDIT-003", "已完成", "P0: 外部项目验证"),
+            ("AUDIT-008", "已完成", "P2: README 承诺措辞修正"),
+            ("MAINT-002", "已终止", "补更多大厂实践映射"),
+        ]
+        roadmap = [
+            ("0.1.0", "已发布"),
+            ("0.2.0", "已发布"),
+            ("0.3.0", "进行中"),
+        ]
+        _make_plan_tracker_with_sample_table(
+            self.gov_dir, sample_tasks,
+            roadmap_versions=roadmap,
+        )
+
+        import archive
+
+        with patch.object(archive, 'ROOT', self.root):
+            result = archive.migrate_by_version("0.1.0", "0.2.0", dry_run=False)
+
+        self.assertTrue(result["success"])
+        # AUDIT-003 and AUDIT-008 are "已完成" → 2 archived
+        # DESIGN-002 and MAINT-002 are "已终止" → NOT archived
+        self.assertEqual(result["tasks_archived"], 2)
+
+        # Check archive file content
+        archive_files = [
+            f for f in (self.archive_dir / "tasks").glob("*.md")
+            if f.name != ".gitkeep"
+        ]
+        self.assertEqual(len(archive_files), 1)
+        archive_content = archive_files[0].read_text(encoding="utf-8")
+        self.assertIn("AUDIT-003", archive_content)
+        self.assertIn("AUDIT-008", archive_content)
+        self.assertNotIn("DESIGN-002", archive_content)
+
+    def test_sample_table_rows_not_deleted_from_hot_file(self):
+        """Sample table rows must NOT be deleted from plan-tracker after archive."""
+        sample_tasks = [
+            ("DESIGN-002", "已终止", "补齐 Claude 半可执行入口"),
+            ("AUDIT-003", "已完成", "P0: 外部项目验证"),
+            ("MAINT-002", "已终止", "补更多大厂实践映射"),
+        ]
+        roadmap = [
+            ("0.1.0", "已发布"),
+            ("0.2.0", "已发布"),
+        ]
+        _make_plan_tracker_with_sample_table(
+            self.gov_dir, sample_tasks,
+            roadmap_versions=roadmap,
+        )
+
+        import archive
+
+        with patch.object(archive, 'ROOT', self.root):
+            result = archive.migrate_by_version("0.1.0", "0.2.0", dry_run=False)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["tasks_archived"], 1)  # Only AUDIT-003
+
+        # All sample table rows should still be in plan-tracker
+        pt_content = (self.gov_dir / "plan-tracker.md").read_text(encoding="utf-8")
+        self.assertIn("DESIGN-002", pt_content)
+        self.assertIn("AUDIT-003", pt_content)
+        self.assertIn("MAINT-002", pt_content)
+
+    def test_sample_table_with_version_sections(self):
+        """Sample table tasks archived alongside regular version section tasks."""
+        sample_tasks = [
+            ("AUDIT-003", "已完成", "P0: 外部项目验证"),
+            ("AUDIT-008", "已完成", "P2: README 承诺措辞修正"),
+        ]
+        roadmap = [
+            ("0.1.0", "已发布"),
+            ("0.2.0", "已发布"),
+            ("0.3.0", "已发布"),
+        ]
+        version_tasks = [
+            ("v0.2.0 — Version tasks", [
+                ("FIX-001", "已完成", "Fix bug 1", "—"),
+                ("FIX-002", "已完成", "Fix bug 2", "—"),
+            ]),
+            ("v0.3.0 — Current", [
+                ("FIX-003", "进行中", "Fix bug 3", "—"),
+            ]),
+        ]
+        _make_plan_tracker_with_sample_table(
+            self.gov_dir, sample_tasks,
+            version_tasks=version_tasks,
+            roadmap_versions=roadmap,
+        )
+
+        import archive
+
+        with patch.object(archive, 'ROOT', self.root):
+            result = archive.migrate_by_version("0.1.0", "0.2.0", dry_run=False)
+
+        self.assertTrue(result["success"])
+        # Sample table (version=0.1.0): 2 completed → archived
+        # v0.2.0 section: 2 completed → archived
+        # v0.3.0 section: out of range, FIX-003 not completed
+        # Total: 4 archived
+        self.assertEqual(result["tasks_archived"], 4)
+
+        # v0.2.0 task rows should be REMOVED from hot file
+        pt_content = (self.gov_dir / "plan-tracker.md").read_text(encoding="utf-8")
+        self.assertNotIn("| FIX-001 |", pt_content)
+        self.assertNotIn("| FIX-002 |", pt_content)
+
+        # Sample table rows should still be PRESENT
+        self.assertIn("AUDIT-003", pt_content)
+        self.assertIn("AUDIT-008", pt_content)
+
+    def test_sample_table_out_of_archive_range(self):
+        """Sample table tasks outside archive range should not be archived."""
+        sample_tasks = [
+            ("AUDIT-003", "已完成", "P0: 外部项目验证"),
+        ]
+        roadmap = [
+            ("0.1.0", "已发布"),
+            ("0.5.0", "已发布"),
+            ("0.6.0", "已发布"),
+        ]
+        _make_plan_tracker_with_sample_table(
+            self.gov_dir, sample_tasks,
+            roadmap_versions=roadmap,
+        )
+
+        import archive
+
+        with patch.object(archive, 'ROOT', self.root):
+            # Archive range 0.5.0 ~ 0.5.0 — sample table version is 0.1.0, OUT of range
+            result = archive.migrate_by_version("0.5.0", "0.5.0", dry_run=False)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["tasks_archived"], 0)
+
+    def test_sample_table_no_roadmap_fallback_version(self):
+        """When no roadmap exists, sample table uses fallback version '0.1.0'."""
+        sample_tasks = [
+            ("AUDIT-003", "已完成", "P0: 外部项目验证"),
+        ]
+        # No roadmap_versions provided — fallback to '0.1.0'
+        _make_plan_tracker_with_sample_table(
+            self.gov_dir, sample_tasks,
+            roadmap_versions=None,
+        )
+
+        import archive
+
+        with patch.object(archive, 'ROOT', self.root):
+            content = (self.gov_dir / "plan-tracker.md").read_text(encoding="utf-8")
+            sections, lines = archive._find_version_sections(content)
+
+        sample_sections = [s for s in sections if s.get("sample_table", False)]
+        self.assertEqual(len(sample_sections), 1)
+        self.assertEqual(sample_sections[0]["version"], "0.1.0")
+
+    def test_sample_table_dry_run(self):
+        """Dry-run mode should report sample table tasks without modifying files."""
+        sample_tasks = [
+            ("AUDIT-003", "已完成", "P0: 外部项目验证"),
+            ("AUDIT-008", "已完成", "P2: README 承诺措辞修正"),
+        ]
+        roadmap = [
+            ("0.1.0", "已发布"),
+            ("0.2.0", "已发布"),
+        ]
+        _make_plan_tracker_with_sample_table(
+            self.gov_dir, sample_tasks,
+            roadmap_versions=roadmap,
+        )
+
+        import archive
+
+        pt_before = (self.gov_dir / "plan-tracker.md").read_text(encoding="utf-8")
+
+        with patch.object(archive, 'ROOT', self.root):
+            result = archive.migrate_by_version("0.1.0", "0.2.0", dry_run=True)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["tasks_archived"], 2)
+
+        # Plan-tracker should be UNMODIFIED
+        pt_after = (self.gov_dir / "plan-tracker.md").read_text(encoding="utf-8")
+        self.assertEqual(pt_before, pt_after)
+
+        # No archive files should be created
+        task_files = [
+            f for f in (self.archive_dir / "tasks").glob("*.md")
+            if f.name != ".gitkeep"
+        ]
+        self.assertEqual(len(task_files), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

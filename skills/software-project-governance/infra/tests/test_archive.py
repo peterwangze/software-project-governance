@@ -1650,5 +1650,63 @@ class TestSampleTableArchive(unittest.TestCase):
         self.assertEqual(len(task_files), 0)
 
 
+    def test_sample_table_sub_chapter_scanning(self):
+        """样例跟踪表 should scan across ### sub-chapters to capture all tasks."""
+        import archive
+
+        pt_content = """# 项目样例
+
+## 项目配置
+
+## 样例跟踪表
+
+| ID | 阶段 | 任务项 | 目标/预期结果 | 输入 | 输出 | Owner (DRI) | 协同角色 | Escalation | 状态 | 优先级 | 计划开始 | 计划完成 | 实际完成 | Gate | 验收标准 | 证据 | 风险/偏差 | 纠偏动作 | 备注 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| TASK-001 | 维护 | First task | Goal | In | Out | Dev | Peer | Lead | 已完成 | P1 | 2026-01 | 2026-02 | 2026-03 | G1 | Criteria | EVD-1 | — | — | Note |
+| TASK-002 | 维护 | Second task | Goal | In | Out | Dev | Peer | Lead | 已完成 | P1 | 2026-01 | 2026-02 | 2026-03 | G1 | Criteria | EVD-2 | — | — | Note |
+
+Text between tables — should be skipped.
+
+### 主线 A：产品内容层
+
+| ID | 阶段 | 任务项 | 目标/预期结果 | 输入 | 输出 | Owner (DRI) | 协同角色 | Escalation | 状态 | 优先级 | 计划开始 | 计划完成 | 实际完成 | Gate | 验收标准 | 证据 | 风险/偏差 | 纠偏动作 | 备注 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| TASK-003 | 维护 | Sub-chapter task | Goal | In | Out | Dev | Peer | Lead | 已完成 | P1 | 2026-01 | 2026-02 | 2026-03 | G1 | Criteria | EVD-3 | — | — | Note |
+
+### 主线 B：交付架构层
+
+| ID | 阶段 | 任务项 | 目标/预期结果 | 输入 | 输出 | Owner (DRI) | 协同角色 | Escalation | 状态 | 优先级 | 计划开始 | 计划完成 | 实际完成 | Gate | 验收标准 | 证据 | 风险/偏差 | 纠偏动作 | 备注 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| TASK-004 | 维护 | Fourth task | Goal | In | Out | Dev | Peer | Lead | 进行中 | P1 | 2026-01 | 2026-02 | 2026-03 | G1 | Criteria | EVD-4 | — | — | Note |
+| TASK-005 | 维护 | Fifth task | Goal | In | Out | Dev | Peer | Lead | 已完成 | P1 | 2026-01 | 2026-02 | 2026-03 | G1 | Criteria | EVD-5 | — | — | Note |
+
+## 下一个章节
+
+Content after sample table.
+"""
+        (self.gov_dir / "plan-tracker.md").write_text(pt_content, encoding="utf-8")
+
+        with patch.object(archive, 'ROOT', self.root):
+            content = (self.gov_dir / "plan-tracker.md").read_text(encoding="utf-8")
+            sections, lines = archive._find_version_sections(content)
+
+        sample_sections = [s for s in sections if s.get("sample_table", False)]
+        self.assertEqual(len(sample_sections), 1, "Should have exactly 1 sample_table section")
+        sample = sample_sections[0]
+        self.assertTrue(sample["sample_table"])
+        self.assertEqual(len(sample["task_lines"]), 5, "Should capture all 5 tasks across sub-chapters")
+        task_ids = [tid for _, _, tid in sample["task_lines"]]
+        self.assertIn("TASK-001", task_ids)
+        self.assertIn("TASK-002", task_ids)
+        self.assertIn("TASK-003", task_ids)
+        self.assertIn("TASK-004", task_ids)
+        self.assertIn("TASK-005", task_ids)
+
+        # Verify completed count
+        completed = sum(1 for _, line, _ in sample["task_lines"]
+                       if archive._parse_task_status(line) == "已完成")
+        self.assertEqual(completed, 4, "TASK-001,002,003,005 completed; TASK-004 in progress")
+
+
 if __name__ == "__main__":
     unittest.main()

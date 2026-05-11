@@ -175,6 +175,17 @@ def _find_version_sections(content):
 
             for j in range(i + 1, len(lines)):
                 sl = lines[j].strip()
+
+                # Stop at next ## heading (parent section boundary)
+                if sl.startswith('## ') and '样例跟踪表' not in sl:
+                    break
+
+                # ### sub-heading: reset table state, continue scanning next table
+                if sl.startswith('### '):
+                    header_seen = False
+                    table_started = False
+                    continue
+
                 if not table_started:
                     if sl.startswith('|') and 'ID' in sl and '状态' in sl:
                         header_seen = True
@@ -182,22 +193,14 @@ def _find_version_sections(content):
                     if header_seen and sl.startswith('|') and '---' in sl:
                         table_started = True
                         continue
-                    # Stop if we hit another heading before table starts
-                    if header_seen and not table_started and (
-                        sl.startswith('## ') or sl.startswith('### ')
-                    ):
-                        break
                     continue
 
                 if table_started:
                     if not sl.startswith('|'):
-                        # Table ended (blank line or non-table content)
-                        break
-                    # Also stop at next heading
-                    if sl.startswith('## '):
-                        break
-                    if sl.startswith('### '):
-                        break
+                        # End of current sub-table, keep scanning for next sub-table
+                        table_started = False
+                        header_seen = False
+                        continue
                     # Check if it's a task row (ID column with TASKID-NNN format)
                     m = re.match(r"\|\s*([A-Z]+-\d+)\s*\|", sl)
                     if m:

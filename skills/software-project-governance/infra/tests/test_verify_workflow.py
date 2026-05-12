@@ -391,6 +391,114 @@ class E2ECommandMatrixTests(unittest.TestCase):
         self.assertIn("target_fixture_fail=1", output.getvalue())
 
 
+class GovernanceReviewFallbackPolicyTests(unittest.TestCase):
+    """FIX-061: /governance-review must not allow Coordinator self-review fallback."""
+
+    VALID_COMMAND = """
+# governance-review
+
+## 错误码
+
+| 代码 | 条件 | 动作 |
+|------|------|------|
+| REVIEW-ERR-003 | Reviewer Agent 不可用 | 先尝试平台 Reviewer spawn/fallback（`general-purpose` + Reviewer role prompt + 审查 SKILL）；仍不可用则 `BLOCKED` 或仅写 degraded evidence。Coordinator MUST NOT 自审；degraded evidence 不构成独立审查、不得解锁交付 |
+"""
+
+    def test_review_fallback_policy_requires_source_file(self):
+        with tempfile.TemporaryDirectory() as td:
+            missing = Path(td) / "commands" / "governance-review.md"
+
+            result = vw.check_governance_review_fallback_policy(
+                required_paths=[missing],
+                optional_paths=[],
+            )
+
+        self.assertFalse(result["pass"])
+        issue_types = {issue["type"] for issue in result["issues"]}
+        self.assertIn("missing_file", issue_types)
+
+    def test_review_fallback_policy_accepts_compliant_source(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            command = root / "commands" / "governance-review.md"
+            command.parent.mkdir(parents=True)
+            command.write_text(self.VALID_COMMAND, encoding="utf-8")
+
+            result = vw.check_governance_review_fallback_policy(
+                required_paths=[command],
+                optional_paths=[],
+            )
+
+        self.assertTrue(result["pass"], result["issues"])
+        self.assertEqual(result["files_checked"], 1)
+        self.assertEqual(result["issues"], [])
+
+    def test_review_fallback_policy_rejects_coordinator_self_review(self):
+        with tempfile.TemporaryDirectory() as td:
+            command = Path(td) / "governance-review.md"
+            command.write_text(
+                "| REVIEW-ERR-003 | Reviewer Agent 不可用 | "
+                "降级为 Coordinator 执行审查（标注\"非独立审查\"） |",
+                encoding="utf-8",
+            )
+
+            result = vw.check_governance_review_fallback_policy(
+                required_paths=[command],
+                optional_paths=[],
+            )
+
+        self.assertFalse(result["pass"])
+        issue_types = {issue["type"] for issue in result["issues"]}
+        self.assertIn("coordinator_self_review_fallback", issue_types)
+
+    def test_review_fallback_policy_skips_missing_optional_fixture(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            command = root / "commands" / "governance-review.md"
+            fixture = root / "project" / "e2e-test-project" / "commands" / "governance-review.md"
+            command.parent.mkdir(parents=True)
+            command.write_text(self.VALID_COMMAND, encoding="utf-8")
+
+            result = vw.check_governance_review_fallback_policy(
+                required_paths=[command],
+                optional_paths=[fixture],
+            )
+
+        self.assertTrue(result["pass"], result["issues"])
+        self.assertEqual(result["files_checked"], 1)
+        self.assertEqual(result["optional_skipped"], [fixture.as_posix()])
+
+    def test_review_fallback_policy_checks_optional_fixture_when_present(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            command = root / "commands" / "governance-review.md"
+            fixture = root / "project" / "e2e-test-project" / "commands" / "governance-review.md"
+            command.parent.mkdir(parents=True)
+            fixture.parent.mkdir(parents=True)
+            command.write_text(self.VALID_COMMAND, encoding="utf-8")
+            fixture.write_text(
+                "| REVIEW-ERR-003 | Reviewer Agent 不可用 | "
+                "降级为 Coordinator 执行审查（标注\"非独立审查\"） |",
+                encoding="utf-8",
+            )
+
+            result = vw.check_governance_review_fallback_policy(
+                required_paths=[command],
+                optional_paths=[fixture],
+            )
+
+        self.assertFalse(result["pass"])
+        self.assertEqual(result["files_checked"], 2)
+        issue_types = {issue["type"] for issue in result["issues"]}
+        self.assertIn("coordinator_self_review_fallback", issue_types)
+
+    def test_repository_governance_review_commands_match_policy(self):
+        result = vw.check_governance_review_fallback_policy()
+
+        self.assertTrue(result["pass"], result["issues"])
+        self.assertGreaterEqual(result["files_checked"], 1)
+
+
 class StageSkillPathTests(unittest.TestCase):
     """Test canonical stage workflow SKILL.md path mapping."""
 

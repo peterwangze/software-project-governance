@@ -4126,6 +4126,102 @@ def check_profile_consistency():
     return result
 
 
+# ── FIX-061: governance-review Reviewer fallback policy ───────────
+
+REVIEW_FALLBACK_POLICY_REQUIRED_FILES = [
+    ROOT / "commands/governance-review.md",
+]
+
+REVIEW_FALLBACK_POLICY_OPTIONAL_FILES = [
+    ROOT / "project/e2e-test-project/commands/governance-review.md",
+]
+
+_REVIEW_FALLBACK_FORBIDDEN_PATTERNS = [
+    r"降级为\s*Coordinator\s*执行审查",
+    r"Coordinator\s*执行审查",
+    r"Coordinator\s*自行执行审查",
+]
+
+_REVIEW_FALLBACK_REQUIRED_SNIPPETS = [
+    "REVIEW-ERR-003",
+    "general-purpose",
+    "Reviewer role prompt",
+    "BLOCKED",
+    "degraded evidence",
+    "不构成独立审查",
+    "不得解锁",
+    "Coordinator MUST NOT",
+]
+
+
+def check_governance_review_fallback_policy(required_paths=None, optional_paths=None):
+    """FIX-061: prevent Coordinator self-review fallback in /governance-review.
+
+    REVIEW-ERR-003 must require Reviewer spawn/fallback first; if no Reviewer
+    runtime is available, the command may only block or emit degraded evidence
+    that cannot count as independent review or unlock delivery.
+    """
+    result = {
+        "files_checked": 0,
+        "optional_skipped": [],
+        "issues": [],
+        "pass": True,
+    }
+    required = list(
+        REVIEW_FALLBACK_POLICY_REQUIRED_FILES if required_paths is None else required_paths
+    )
+    optional = list(
+        REVIEW_FALLBACK_POLICY_OPTIONAL_FILES if optional_paths is None else optional_paths
+    )
+
+    def _path_label(path):
+        if path.is_absolute():
+            try:
+                return path.relative_to(ROOT).as_posix()
+            except ValueError:
+                return path.as_posix()
+        return str(path).replace("\\", "/")
+
+    def _check_file(path, optional_file=False):
+        rel = _path_label(path)
+        if not path.is_file():
+            if optional_file:
+                result["optional_skipped"].append(rel)
+                return
+            result["issues"].append({
+                "file": rel,
+                "type": "missing_file",
+                "detail": "governance-review command file not found",
+            })
+            return
+
+        result["files_checked"] += 1
+        content = path.read_text(encoding="utf-8")
+        for pattern in _REVIEW_FALLBACK_FORBIDDEN_PATTERNS:
+            if re.search(pattern, content):
+                result["issues"].append({
+                    "file": rel,
+                    "type": "coordinator_self_review_fallback",
+                    "detail": f"forbidden fallback pattern found: {pattern}",
+                })
+
+        for snippet in _REVIEW_FALLBACK_REQUIRED_SNIPPETS:
+            if snippet not in content:
+                result["issues"].append({
+                    "file": rel,
+                    "type": "missing_policy_marker",
+                    "detail": f"missing required marker: {snippet}",
+                })
+
+    for path in required:
+        _check_file(path, optional_file=False)
+    for path in optional:
+        _check_file(path, optional_file=True)
+
+    result["pass"] = len(result["issues"]) == 0
+    return result
+
+
 def cmd_check_governance(args):
     """Run governance health checks: evidence completeness, risk staleness, gate consistency."""
     # Ensure UTF-8 stdout to handle Chinese characters from .md files (Windows GBK workaround)
@@ -4773,6 +4869,24 @@ def cmd_check_governance(args):
             print(f"│    - {issue}")
     else:
         print(f"│  [PASS] Archive integrity verified — {'no archive data' if ai_result['total_archived_tasks'] == 0 else f'{ai_result['total_expected']} total tasks, index consistent'}")
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 27. Governance Review Fallback Policy (FIX-061) ──
+    print("\n┌─ Check 27: Governance Review Fallback Policy ────────┐")
+    gr_result = check_governance_review_fallback_policy()
+    print(f"│  Command files checked: {gr_result['files_checked']}")
+    if gr_result["optional_skipped"]:
+        print(f"│  Optional fixture skipped: {len(gr_result['optional_skipped'])}")
+        for skipped in gr_result["optional_skipped"]:
+            print(f"│    - {skipped}")
+    if gr_result["issues"]:
+        all_issues += len(gr_result["issues"])
+        print(f"│  [FAIL] {len(gr_result['issues'])} /governance-review fallback policy issue(s):")
+        for issue in gr_result["issues"]:
+            print(f"│    - [{issue['type']}] {issue['file']}: {issue['detail']}")
+    else:
+        print("│  [PASS] Reviewer unavailable path blocks or records degraded evidence only.")
+        print("│  [PASS] Coordinator self-review fallback is not allowed.")
     print("└──────────────────────────────────────────────────────┘")
 
     # ── Summary ──
@@ -5971,7 +6085,14 @@ def _e2e_contract_checks():
             "label": "/governance-review code",
             "kind": "AGENT_RUNTIME_REQUIRED",
             "path": ROOT / "commands/governance-review.md",
-            "needles": ["Reviewer Agent", "code-review", "代码审查"],
+            "needles": [
+                "Reviewer Agent",
+                "code-review",
+                "代码审查",
+                "general-purpose",
+                "degraded evidence",
+                "不得解锁",
+            ],
             "reason": "Agent spawn is provided by the host platform, not Python.",
         },
         {

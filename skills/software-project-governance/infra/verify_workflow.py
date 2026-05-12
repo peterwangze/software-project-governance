@@ -1135,14 +1135,46 @@ class GovernanceDataSource:
     + archive files. Backward compatible: falls back to single-file mode
     when archive/ directory does not exist."""
 
+    def __init__(self, sample_path=None, evidence_path=None, archive_index_path=None,
+                 archive_root=None, decision_path=None, risk_path=None):
+        self.sample_path = Path(sample_path) if sample_path is not None else SAMPLE_PATH
+        self.evidence_path = Path(evidence_path) if evidence_path is not None else EVIDENCE_PATH
+        self.decision_path = Path(decision_path) if decision_path is not None else ROOT / ".governance/decision-log.md"
+        self.risk_path = Path(risk_path) if risk_path is not None else ROOT / ".governance/risk-log.md"
+
+        if archive_root is not None:
+            self.archive_root = Path(archive_root)
+        elif archive_index_path is not None:
+            self.archive_root = Path(archive_index_path).parent
+        else:
+            self.archive_root = self._infer_governance_dir() / "archive"
+
+        self.archive_index_path = (
+            Path(archive_index_path)
+            if archive_index_path is not None
+            else self.archive_root / "index.md"
+        )
+        self.archive_tasks_dir = self.archive_root / "tasks"
+        self.archive_evidence_dir = self.archive_root / "evidence"
+        self.archive_decisions_dir = self.archive_root / "decisions"
+        self.archive_risks_dir = self.archive_root / "risks"
+
+    def _infer_governance_dir(self):
+        for path in (self.sample_path, self.evidence_path):
+            if path.name in {"plan-tracker.md", "evidence-log.md"}:
+                return path.parent
+        return ROOT / ".governance"
+
     def _has_archive(self):
         """Check if archive directory exists and has content."""
-        return ARCHIVE_INDEX_PATH.exists()
+        return self.archive_index_path.exists()
 
     def _scan_archive_files(self, dir_path, extract_func):
         """Scan all .md files in archive directory (excluding .gitkeep),
         applying extract_func to each, returning aggregated results."""
         results = []
+        if not self._has_archive():
+            return results
         if not dir_path.exists():
             return results
         for f in sorted(dir_path.glob("*.md")):
@@ -1157,8 +1189,8 @@ class GovernanceDataSource:
         """Return set of completed task IDs from plan-tracker + archive/tasks/*."""
         completed = set()
         # Hot file
-        if SAMPLE_PATH.is_file():
-            content = SAMPLE_PATH.read_text(encoding="utf-8")
+        if self.sample_path.is_file():
+            content = self.sample_path.read_text(encoding="utf-8")
             for line in content.split("\n"):
                 line_stripped = line.strip()
                 if not line_stripped.startswith("| ") or "---" in line_stripped:
@@ -1170,7 +1202,7 @@ class GovernanceDataSource:
                 if len(parts) >= 11 and parts[10] == "已完成":
                     completed.add(m.group(1))
         # Archive files
-        for entry in self._scan_archive_files(ARCHIVE_TASKS_DIR, self._extract_task_ids):
+        for entry in self._scan_archive_files(self.archive_tasks_dir, self._extract_task_ids):
             if entry.get("status") == "已完成":
                 completed.add(entry["id"])
         return completed
@@ -1200,8 +1232,8 @@ class GovernanceDataSource:
         """Return set of all task IDs (any status) from hot + archive."""
         task_ids = set()
         # Hot file
-        if SAMPLE_PATH.is_file():
-            content = SAMPLE_PATH.read_text(encoding="utf-8")
+        if self.sample_path.is_file():
+            content = self.sample_path.read_text(encoding="utf-8")
             for line in content.split("\n"):
                 stripped = line.strip()
                 if not stripped.startswith("| "):
@@ -1210,7 +1242,7 @@ class GovernanceDataSource:
                 if m:
                     task_ids.add(m.group(1))
         # Archive files
-        for entry in self._scan_archive_files(ARCHIVE_TASKS_DIR, self._extract_task_ids):
+        for entry in self._scan_archive_files(self.archive_tasks_dir, self._extract_task_ids):
             task_ids.add(entry["id"])
         return task_ids
 
@@ -1220,8 +1252,8 @@ class GovernanceDataSource:
         """Return set of task IDs that have evidence entries (hot + archive)."""
         task_ids = set()
         # Hot file
-        if EVIDENCE_PATH.is_file():
-            content = EVIDENCE_PATH.read_text(encoding="utf-8")
+        if self.evidence_path.is_file():
+            content = self.evidence_path.read_text(encoding="utf-8")
             for line in content.split("\n"):
                 stripped = line.strip()
                 if not stripped.startswith("| EVD-"):
@@ -1232,11 +1264,35 @@ class GovernanceDataSource:
                     if raw_ids and re.search(r"[A-Z]+-\d+", raw_ids):
                         task_ids |= expand_task_ids(raw_ids)
         # Archive files
-        for entry in self._scan_archive_files(ARCHIVE_EVIDENCE_DIR, self._extract_evidence_entries):
+        for entry in self._scan_archive_files(self.archive_evidence_dir, self._extract_evidence_entries):
             raw_ids = entry.get("task_ids", "")
             if raw_ids and re.search(r"[A-Z]+-\d+", raw_ids):
                 task_ids |= expand_task_ids(raw_ids)
         return task_ids
+
+    def get_all_evidence_task_map(self):
+        """Return task_id -> evidence IDs from hot evidence-log + archive evidence files."""
+        task_map = {}
+
+        def add_entry(evd_id, raw_ids):
+            if raw_ids and re.search(r"[A-Z]+-\d+", raw_ids):
+                for task_id in expand_task_ids(raw_ids):
+                    task_map.setdefault(task_id, []).append(evd_id)
+
+        if self.evidence_path.is_file():
+            content = self.evidence_path.read_text(encoding="utf-8")
+            for line in content.split("\n"):
+                line = line.strip()
+                if not line.startswith("| EVD-"):
+                    continue
+                parts = [p.strip() for p in line.split("|")]
+                if len(parts) >= 3:
+                    add_entry(parts[1], parts[2])
+
+        for entry in self._scan_archive_files(self.archive_evidence_dir, self._extract_evidence_entries):
+            add_entry(entry.get("evd_id", ""), entry.get("task_ids", ""))
+
+        return task_map
 
     def _extract_evidence_entries(self, file_path):
         """Extract evidence entries from an archive evidence file."""
@@ -1260,13 +1316,12 @@ class GovernanceDataSource:
         """Return sorted set of decision integers from hot + archive."""
         ids = set()
         # Hot file
-        dec_path = ROOT / ".governance/decision-log.md"
-        if dec_path.is_file():
-            content = dec_path.read_text(encoding="utf-8")
+        if self.decision_path.is_file():
+            content = self.decision_path.read_text(encoding="utf-8")
             for m in re.finditer(r"\bDEC-(\d+)\b", content):
                 ids.add(int(m.group(1)))
         # Archive files
-        for f in sorted((ARCHIVE_DECISIONS_DIR).glob("*.md")):
+        for f in sorted((self.archive_decisions_dir).glob("*.md")):
             if f.name == ".gitkeep":
                 continue
             content = f.read_text(encoding="utf-8")
@@ -1280,13 +1335,12 @@ class GovernanceDataSource:
         """Return sorted set of risk integers from hot + archive."""
         ids = set()
         # Hot file
-        risk_path = ROOT / ".governance/risk-log.md"
-        if risk_path.is_file():
-            content = risk_path.read_text(encoding="utf-8")
+        if self.risk_path.is_file():
+            content = self.risk_path.read_text(encoding="utf-8")
             for m in re.finditer(r"\bRISK-(\d+)\b", content):
                 ids.add(int(m.group(1)))
         # Archive files
-        for f in sorted((ARCHIVE_RISKS_DIR).glob("*.md")):
+        for f in sorted((self.archive_risks_dir).glob("*.md")):
             if f.name == ".gitkeep":
                 continue
             content = f.read_text(encoding="utf-8")
@@ -1314,23 +1368,23 @@ class GovernanceDataSource:
             ("EVD-", "DEC-", "RISK-")
         ):
             # 1) plan-tracker (hot)
-            if SAMPLE_PATH.is_file():
-                for line in SAMPLE_PATH.read_text(encoding="utf-8").split("\n"):
+            if self.sample_path.is_file():
+                for line in self.sample_path.read_text(encoding="utf-8").split("\n"):
                     if boundary_pattern.search(line):
                         return {
                             "source": "plan-tracker.md (hot)",
                             "line": line.strip(),
                         }
             # 2) archive index
-            if ARCHIVE_INDEX_PATH.is_file():
-                for line in ARCHIVE_INDEX_PATH.read_text(encoding="utf-8").split("\n"):
+            if self.archive_index_path.is_file():
+                for line in self.archive_index_path.read_text(encoding="utf-8").split("\n"):
                     if boundary_pattern.search(line):
                         return {
                             "source": "archive/index.md",
                             "line": line.strip(),
                         }
             # 3) archive task files
-            for f in sorted((ARCHIVE_TASKS_DIR).glob("*.md")):
+            for f in sorted((self.archive_tasks_dir).glob("*.md")):
                 if f.name == ".gitkeep":
                     continue
                 for line in f.read_text(encoding="utf-8").split("\n"):
@@ -1343,12 +1397,12 @@ class GovernanceDataSource:
 
         # ── Evidence IDs ──
         if re.match(r"EVD-\d+", entry_id):
-            content = EVIDENCE_PATH.read_text(encoding="utf-8") if EVIDENCE_PATH.is_file() else ""
+            content = self.evidence_path.read_text(encoding="utf-8") if self.evidence_path.is_file() else ""
             for line in content.split("\n"):
                 if boundary_pattern.search(line):
                     return {"source": "evidence-log.md (hot)", "line": line.strip()}
             # Search archive
-            for f in sorted((ARCHIVE_EVIDENCE_DIR).glob("*.md")):
+            for f in sorted((self.archive_evidence_dir).glob("*.md")):
                 if f.name == ".gitkeep":
                     continue
                 fc = f.read_text(encoding="utf-8")
@@ -1358,13 +1412,12 @@ class GovernanceDataSource:
 
         # ── Decision IDs ──
         if re.match(r"DEC-\d+", entry_id):
-            dec_path = ROOT / ".governance/decision-log.md"
-            if dec_path.is_file():
-                for line in dec_path.read_text(encoding="utf-8").split("\n"):
+            if self.decision_path.is_file():
+                for line in self.decision_path.read_text(encoding="utf-8").split("\n"):
                     if boundary_pattern.search(line):
                         return {"source": "decision-log.md (hot)", "line": line.strip()}
             # Search archive decisions
-            for f in sorted((ARCHIVE_DECISIONS_DIR).glob("*.md")):
+            for f in sorted((self.archive_decisions_dir).glob("*.md")):
                 if f.name == ".gitkeep":
                     continue
                 for line in f.read_text(encoding="utf-8").split("\n"):
@@ -1373,13 +1426,12 @@ class GovernanceDataSource:
 
         # ── Risk IDs ──
         if re.match(r"RISK-\d+", entry_id):
-            risk_path = ROOT / ".governance/risk-log.md"
-            if risk_path.is_file():
-                for line in risk_path.read_text(encoding="utf-8").split("\n"):
+            if self.risk_path.is_file():
+                for line in self.risk_path.read_text(encoding="utf-8").split("\n"):
                     if boundary_pattern.search(line):
                         return {"source": "risk-log.md (hot)", "line": line.strip()}
             # Search archive risks
-            for f in sorted((ARCHIVE_RISKS_DIR).glob("*.md")):
+            for f in sorted((self.archive_risks_dir).glob("*.md")):
                 if f.name == ".gitkeep":
                     continue
                 for line in f.read_text(encoding="utf-8").split("\n"):
@@ -1540,7 +1592,8 @@ def check_risk_staleness():
 def check_gate_consistency():
     """Check gate status vs evidence consistency."""
     gates = parse_gate_statuses()
-    evidenced = parse_evidence_task_map()
+    ds = GovernanceDataSource()
+    evidenced = ds.get_all_evidence_task_map()
 
     issues = []
 
@@ -1567,7 +1620,6 @@ def check_gate_consistency():
 
     # Check for tasks marked 已完成 in plan-tracker but no evidence.
     # Uses GovernanceDataSource to cover both hot files + archive files.
-    ds = GovernanceDataSource()
     completed = ds.get_all_completed_task_ids()
     tasks_without_evidence = completed - set(evidenced.keys())
     if tasks_without_evidence:
@@ -2892,7 +2944,7 @@ def check_sequential_ids():
         evd_content = evd_path.read_text(encoding="utf-8")
         for m in re.finditer(r"\bEVD-(\d+)\b", evd_content):
             evd_id_set.add(int(m.group(1)))
-    for entry in ds._scan_archive_files(ARCHIVE_EVIDENCE_DIR,
+    for entry in ds._scan_archive_files(ds.archive_evidence_dir,
                                          ds._extract_evidence_entries):
         evd_match = re.match(r"EVD-(\d+)", entry.get("evd_id", ""))
         if evd_match:
@@ -3476,17 +3528,19 @@ def check_user_impact():
 
 # ── SYSGAP-035: Agent Team Review Check (Check 18) ────────────────
 
-def _parse_review_covered_tasks():
+def _parse_review_covered_tasks(evidence_path=None, review_dir=None):
     """Parse evidence-log and review-*.md files to find all tasks covered by reviews.
 
     Returns dict: task_id -> list of review sources (evidence IDs or file names).
     """
     covered = {}
+    evidence_path = Path(evidence_path) if evidence_path is not None else EVIDENCE_PATH
+    review_dir = Path(review_dir) if review_dir is not None else evidence_path.parent
 
-    if not EVIDENCE_PATH.is_file():
+    if not evidence_path.is_file():
         return covered
 
-    evidence_content = EVIDENCE_PATH.read_text(encoding="utf-8")
+    evidence_content = evidence_path.read_text(encoding="utf-8")
 
     # 1. Scan evidence-log for REVIEW evidence entries
     for line in evidence_content.split("\n"):
@@ -3526,7 +3580,6 @@ def _parse_review_covered_tasks():
                     covered.setdefault(inner_id, []).append(evd_id)
 
     # 2. Scan review-*.md files for task references
-    review_dir = ROOT / ".governance"
     if review_dir.is_dir():
         for review_file in review_dir.glob("review-*.md"):
             try:

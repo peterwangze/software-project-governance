@@ -737,6 +737,40 @@ class GovernanceIntegrationTests(unittest.TestCase):
                 r = vw.check_evidence_completeness()
                 self.assertIn("TASK-001", r["missing_evidence"])
 
+    def test_evidence_completeness_uses_fixture_archive_when_index_exists(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            sp, ep, rp = self._setup(root, evidence=_evd_row("EVD-001", "TASK-001"))
+            archive = root / ".governance" / "archive"
+            tasks_dir = archive / "tasks"
+            evidence_dir = archive / "evidence"
+            tasks_dir.mkdir(parents=True)
+            evidence_dir.mkdir(parents=True)
+            (archive / "index.md").write_text(
+                "| Task ID | 状态 | 版本 | 归档文件 |\n"
+                "|---------|------|------|---------|\n"
+                "| TASK-002 | 已完成 | 0.1.0 | archive/tasks/v0.1.0.md |\n"
+                "\n"
+                "| Evidence ID | Task ID | 归档文件 |\n"
+                "|-------------|--------|---------|\n"
+                "| EVD-002 | TASK-002 | archive/evidence/v0.1.0.md |\n",
+                encoding="utf-8",
+            )
+            (tasks_dir / "v0.1.0.md").write_text(
+                "\n".join([_TASK_COLS, _TASK_SEP, _task("TASK-002", "已完成")]),
+                encoding="utf-8",
+            )
+            (evidence_dir / "v0.1.0.md").write_text(
+                _evd_row("EVD-002", "TASK-002"),
+                encoding="utf-8",
+            )
+
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_evidence_completeness()
+                self.assertEqual(r["completed_count"], 2)
+                self.assertEqual(len(r["missing_evidence"]), 0)
+
     def test_risk_staleness_fresh(self):
         from datetime import date
         today = date.today().strftime("%Y-%m-%d")

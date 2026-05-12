@@ -181,6 +181,96 @@ class FileExistenceTests(unittest.TestCase):
                 self.assertIn("NOT FOUND", m)
 
 
+class StageSkillPathTests(unittest.TestCase):
+    """Test canonical stage workflow SKILL.md path mapping."""
+
+    def test_stage_skill_path_uses_top_level_stage_skill(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with patch.object(vw, "ROOT", root), \
+                 patch.object(vw, "STAGE_SKILLS_ROOT", root / "skills"):
+                self.assertEqual(
+                    vw.stage_skill_path("development"),
+                    root / "skills" / "stage-development" / "SKILL.md",
+                )
+
+    def test_stage_skill_path_normalizes_infra_and_cicd_aliases(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with patch.object(vw, "ROOT", root), \
+                 patch.object(vw, "STAGE_SKILLS_ROOT", root / "skills"):
+                self.assertEqual(
+                    vw.stage_skill_path("infrastructure"),
+                    root / "skills" / "stage-infra" / "SKILL.md",
+                )
+                self.assertEqual(
+                    vw.stage_skill_path("infra"),
+                    root / "skills" / "stage-infra" / "SKILL.md",
+                )
+                self.assertEqual(
+                    vw.stage_skill_path("ci-cd"),
+                    root / "skills" / "stage-cicd" / "SKILL.md",
+                )
+                self.assertEqual(
+                    vw.stage_skill_path("stage-cicd"),
+                    root / "skills" / "stage-cicd" / "SKILL.md",
+                )
+
+    def test_list_available_stages_reads_stage_skill_dirs(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            skills = root / "skills"
+            (skills / "stage-development").mkdir(parents=True)
+            (skills / "stage-development" / "SKILL.md").write_text("# dev", encoding="utf-8")
+            (skills / "stage-infra").mkdir()
+            (skills / "stage-infra" / "SKILL.md").write_text("# infra", encoding="utf-8")
+
+            with patch.object(vw, "ROOT", root), \
+                 patch.object(vw, "STAGE_SKILLS_ROOT", skills):
+                stages = vw.list_available_stages()
+                self.assertIn("development", stages)
+                self.assertIn("infrastructure", stages)
+
+    def test_legacy_stages_dir_constant_removed(self):
+        self.assertFalse(hasattr(vw, "STAGES" + "_DIR"))
+
+    def test_authorized_files_do_not_reference_legacy_stage_workflows(self):
+        files_to_scan = [
+            "commands/governance-gate.md",
+            "skills/software-project-governance/infra/verify_workflow.py",
+            "skills/software-project-governance/infra/tests/test_verify_workflow.py",
+            "skills/software-project-governance/core/onboarding.md",
+            "skills/software-project-governance/core/protocol/external-command-contract.md",
+            "skills/software-project-governance/core/protocol/headless-runner-sample.md",
+            "skills/software-project-governance/core/protocol/plugin-contract.md",
+            "project/references/agent-team-architecture.md",
+            "project/workflows/software-project-governance/research/default-product-shape.md",
+        ]
+        legacy_patterns = [
+            "skills/software-project-governance/" + "stages",
+            "stages/" + "*/" + "sub-" + "workflow.md",
+            "stages/" + "<current-stage>/" + "sub-" + "workflow.md",
+            "sub-" + "workflow.md",
+            "STAGES" + "_DIR",
+        ]
+        bad_templates = [
+            "skills/stage-" + "<stage>" + "/SKILL.md",
+            "skills/stage-" + "<current-stage>" + "/SKILL.md",
+            "skills/stage-" + "{stage}" + "/SKILL.md",
+            "skills/" + "stage-" + "infrastructure" + "/SKILL.md",
+            "skills/" + "stage-" + "ci-cd" + "/SKILL.md",
+        ]
+
+        failures = []
+        for rel_path in files_to_scan:
+            path = vw.ROOT / rel_path
+            content = path.read_text(encoding="utf-8")
+            for pattern in legacy_patterns + bad_templates:
+                if pattern in content:
+                    failures.append(f"{rel_path}: {pattern}")
+        self.assertEqual(failures, [])
+
+
 class DecisionLogParsingTests(unittest.TestCase):
     """Test decision-log.md parsing."""
 

@@ -24,7 +24,10 @@
 - 读取 `skills/software-project-governance/core/stage-gates.md`，提取以下内容：
   - gate_id 对应的 Gate 检查项列表
   - 每个检查项的判定标准
-- 读取对应阶段的子工作流文件 `skills/software-project-governance/stages/{stage}/sub-workflow.md`，提取退出条件 checklist
+- 通过 `verify_workflow.py` 的 stage mapping 解析对应阶段 SKILL，提取退出条件 checklist：
+  - 常规阶段：`development` → `skills/stage-development/SKILL.md`
+  - 特殊映射：`infrastructure` → `skills/stage-infra/SKILL.md`
+  - 特殊映射：`ci-cd` → `skills/stage-cicd/SKILL.md`
 
 ### Step 4: 读取项目当前状态
 - 读取 `.governance/plan-tracker.md`：

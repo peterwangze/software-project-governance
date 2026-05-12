@@ -109,7 +109,13 @@ headless runner 继续复用以下顺序：
 
 ### 当前阶段子工作流（按 stage 参数加载）
 
-11. `skills/software-project-governance/stages/<stage>/sub-workflow.md`
+11. 通过 `verify_workflow.py` 的 stage mapping 解析当前阶段 SKILL，禁止 headless runner 自行拼接目录名。
+
+| stage 参数 | canonical SKILL 路径 |
+| --- | --- |
+| `development` 等常规阶段 | `skills/stage-development/SKILL.md`（按映射结果读取，不直接拼接） |
+| `infrastructure` / `infra` | `skills/stage-infra/SKILL.md` |
+| `ci-cd` / `cicd` | `skills/stage-cicd/SKILL.md` |
 
 ### 项目实例（必读）
 

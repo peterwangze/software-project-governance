@@ -49,7 +49,7 @@
 
 - `skills/software-project-governance/SKILL.md`（入口，内嵌核心行为协议）
 - `skills/software-project-governance/references/`（lifecycle、stage-gates、profiles、onboarding、interaction-boundary）
-- `skills/software-project-governance/stages/`（子工作流和 stage skills，v0.19.0 起已迁移至 `skills/<name>/SKILL.md` 平铺）
+- `skills/stage-*/SKILL.md`（子工作流，v0.19.0 起已迁移至顶层 stage SKILL 平铺；具体路径以 `verify_workflow.py` stage mapping 为准，其中 `infrastructure` → `skills/stage-infra/SKILL.md`，`ci-cd` → `skills/stage-cicd/SKILL.md`）
 - `skills/main-workflow/SKILL.md`、`TOOLS.md`（v0.19.0 起真实 SKILL 已迁至 `skills/<name>/SKILL.md` 平铺）
 
 仓库中的 `workflows/software-project-governance/` 承载**设计时资产**，不重复运行时本体内容：
@@ -134,7 +134,7 @@
 当前目录已按"运行时正本在 skills/、设计资产在 workflows/"原则重组：
 
 - `skills/software-project-governance/`
-  - 运行时唯一事实源，agent 通过插件市场安装后访问。包含 SKILL.md、references/、stages/、main-workflow.md、TOOLS.md。
+  - 运行时唯一事实源，agent 通过插件市场安装后访问。包含 SKILL.md、references/、main-workflow.md、TOOLS.md；阶段子工作流使用顶层 `skills/stage-*/SKILL.md`，具体路径以 `verify_workflow.py` stage mapping 为准。
 - `workflows/software-project-governance/research/`
   - 继续承载调研结论与产品形态方案。
 - `workflows/software-project-governance/templates/`

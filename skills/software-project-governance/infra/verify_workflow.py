@@ -890,13 +890,25 @@ def check_snippets():
 SAMPLE_PATH = ROOT / ".governance/plan-tracker.md"
 GATES_PATH = ROOT / "skills/software-project-governance/core/stage-gates.md"
 LIFECYCLE_PATH = ROOT / "skills/software-project-governance/core/lifecycle.md"
-STAGES_DIR = ROOT / "skills/software-project-governance/stages"
+STAGE_SKILLS_ROOT = ROOT / "skills"
 
 STAGE_ORDER = [
     "initiation", "research", "selection", "infrastructure",
     "architecture", "development", "testing", "ci-cd",
     "release", "operations", "maintenance",
 ]
+
+STAGE_SKILL_ALIASES = {
+    "infra": "infrastructure",
+    "infrastructure": "infrastructure",
+    "cicd": "ci-cd",
+    "ci-cd": "ci-cd",
+}
+
+STAGE_SKILL_DIR_NAMES = {
+    "infrastructure": "stage-infra",
+    "ci-cd": "stage-cicd",
+}
 
 STATUS_ICONS = {
     "passed": "[PASS]",
@@ -1057,12 +1069,47 @@ def parse_gate_detail(gate_id):
     return detail
 
 
+def normalize_stage_name(stage_name):
+    """Normalize CLI stage names to lifecycle stage identifiers."""
+    normalized = stage_name.strip().lower()
+    if normalized.startswith("stage-"):
+        normalized = normalized[len("stage-"):]
+    return STAGE_SKILL_ALIASES.get(normalized, normalized)
+
+
+def stage_skill_dir_name(stage_name):
+    """Return the canonical skill directory name for a lifecycle stage."""
+    stage = normalize_stage_name(stage_name)
+    return STAGE_SKILL_DIR_NAMES.get(stage, f"stage-{stage}")
+
+
+def stage_skill_path(stage_name):
+    """Return the canonical stage workflow SKILL.md path."""
+    return STAGE_SKILLS_ROOT / stage_skill_dir_name(stage_name) / "SKILL.md"
+
+
+def _stage_name_from_skill_dir(dirname):
+    """Map a stage skill directory back to the lifecycle stage identifier."""
+    for stage, mapped_dir in STAGE_SKILL_DIR_NAMES.items():
+        if dirname == mapped_dir:
+            return stage
+    if dirname.startswith("stage-"):
+        return normalize_stage_name(dirname[len("stage-"):])
+    return dirname
+
+
 def list_available_stages():
-    """List all available stage directories."""
-    if not STAGES_DIR.is_dir():
+    """List all available lifecycle stages backed by stage SKILL.md files."""
+    if not STAGE_SKILLS_ROOT.is_dir():
         return []
+    stages = {
+        stage for stage in STAGE_ORDER
+        if stage_skill_path(stage).is_file()
+    }
+    for skill_md in STAGE_SKILLS_ROOT.glob("stage-*/SKILL.md"):
+        stages.add(_stage_name_from_skill_dir(skill_md.parent.name))
     return sorted(
-        [d.name for d in STAGES_DIR.iterdir() if d.is_dir()],
+        stages,
         key=lambda x: STAGE_ORDER.index(x) if x in STAGE_ORDER else 99,
     )
 
@@ -2313,10 +2360,10 @@ def cmd_gate(args):
 
 
 def cmd_stage(args):
-    """Show sub-workflow summary for a specific stage."""
-    stage_name = args.stage_name.lower()
+    """Show workflow summary for a specific stage."""
+    stage_name = normalize_stage_name(args.stage_name)
 
-    stage_path = STAGES_DIR / stage_name / "sub-workflow.md"
+    stage_path = stage_skill_path(stage_name)
     if not stage_path.is_file():
         print(f"[FAIL] Stage '{stage_name}' not found")
         available = list_available_stages()
@@ -2326,11 +2373,11 @@ def cmd_stage(args):
 
     content = stage_path.read_text(encoding="utf-8")
 
-    # Also check for skills in this stage
-    stage_dir = STAGES_DIR / stage_name
+    # Also check for supporting markdown files in this stage skill directory.
+    stage_dir = stage_path.parent
     skills = sorted([
         f.name for f in stage_dir.iterdir()
-        if f.is_file() and f.name != "sub-workflow.md" and f.suffix == ".md"
+        if f.is_file() and f.name != "SKILL.md" and f.suffix == ".md"
     ])
 
     print(f"\n┌─ Stage: {stage_name} ─────────────────────────────────────┐")
@@ -2380,18 +2427,18 @@ def cmd_stages(args):
     print("\n┌─ Available Stages ──────────────────────────────────┐")
     for i, stage in enumerate(stages, 1):
         name = stage_names.get(str(i), stage)
-        sw_path = STAGES_DIR / stage / "sub-workflow.md"
-        has_sw = "Y" if sw_path.is_file() else "N"
+        skill_path = stage_skill_path(stage)
+        has_skill = "Y" if skill_path.is_file() else "N"
 
-        # Count skills
-        stage_dir = STAGES_DIR / stage
+        # Count supporting markdown files.
+        stage_dir = skill_path.parent
         skill_count = len([
             f for f in stage_dir.iterdir()
-            if f.is_file() and f.name != "sub-workflow.md" and f.suffix == ".md"
+            if f.is_file() and f.name != "SKILL.md" and f.suffix == ".md"
         ]) if stage_dir.is_dir() else 0
 
         skill_info = f", {skill_count} skill(s)" if skill_count else ""
-        print(f"│  {i:2d}. {stage:16s} {name:20s}  sub-workflow:{has_sw}{skill_info}")
+        print(f"│  {i:2d}. {stage:16s} {name:20s}  SKILL.md:{has_skill}{skill_info}")
     print("└──────────────────────────────────────────────────────┘")
 
 
@@ -6289,7 +6336,7 @@ def main():
     subparsers.add_parser("gates", help="List all Gates with current status")
 
     # stage <name>
-    stage_p = subparsers.add_parser("stage", help="Show sub-workflow for a stage")
+    stage_p = subparsers.add_parser("stage", help="Show workflow SKILL.md for a stage")
     stage_p.add_argument("stage_name", help="Stage name (e.g. initiation, research, development)")
 
     # stages (list all)

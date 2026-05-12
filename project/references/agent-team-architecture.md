@@ -13,7 +13,7 @@
 | 路由引擎 | `main-workflow.md:69` | 默认序列 `1→2→3→...→11`，前 Gate 通过才进入下一阶段 |
 | Gate 模型 | `stage-gates.md:108` | Phase-Gate：整个阶段通过才进入下一阶段（"未通过 Gate 不得声称进入下一阶段"） |
 | 数据结构 | `plan-tracker.md:10` | 单一 `当前阶段` 字段，无法表示多阶段并行 |
-| 子工作流 | `stages/*/sub-workflow.md` | 入口条件硬编码要求前置 Gate 通过（如开发要求 G5 通过） |
+| 子工作流 | `skills/stage-*/SKILL.md`（以 `verify_workflow.py` stage mapping 解析具体路径） | 入口条件硬编码要求前置 Gate 通过（如开发要求 G5 通过） |
 | Profile 约束 | `profiles.md:59` | strict profile 明确禁止阶段重叠 |
 | 任务协议 | `SKILL.md M7.4/M7.5` | 原子线性任务序列（evidence → check → audit → commit → continue） |
 

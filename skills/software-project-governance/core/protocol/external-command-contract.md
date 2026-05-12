@@ -73,15 +73,17 @@ command 至少需要产出以下结构化结果：
 
 ### 当前阶段子工作流（按 stage 参数加载）
 
-10. `skills/software-project-governance/stages/<stage>/sub-workflow.md`
+10. 通过 `verify_workflow.py` 的 stage mapping 解析当前阶段 SKILL，禁止调用方自行拼接目录名。
 
-### 当前阶段 skill（按需加载）
-
-11. `skills/software-project-governance/stages/<stage>/` 下的 skill 文件
+| stage 参数 | canonical SKILL 路径 |
+| --- | --- |
+| `development` 等常规阶段 | `skills/stage-development/SKILL.md`（按映射结果读取，不直接拼接） |
+| `infrastructure` / `infra` | `skills/stage-infra/SKILL.md` |
+| `ci-cd` / `cicd` | `skills/stage-cicd/SKILL.md` |
 
 ### 项目实例（必读）
 
-16. `.governance/plan-tracker.md`
+11. `.governance/plan-tracker.md`
 
 ## write-back targets
 

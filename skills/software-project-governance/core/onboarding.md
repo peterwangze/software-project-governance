@@ -60,7 +60,7 @@
 
 完成最小记录补齐后，立即进入当前阶段的子工作流：
 
-1. 读取 `stages/<current-stage>/sub-workflow.md`
+1. 通过 `verify_workflow.py` 的 stage mapping 解析并读取当前阶段 SKILL（例如 `development` → `skills/stage-development/SKILL.md`；`infrastructure` → `skills/stage-infra/SKILL.md`；`ci-cd` → `skills/stage-cicd/SKILL.md`）
 2. 检查当前阶段的进入条件是否满足
 3. 如果进入条件未完全满足，补齐缺失项或记录为风险
 4. 开始执行当前阶段的活动清单

@@ -11,10 +11,13 @@ Run:
 """
 
 import json
+import io
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -179,6 +182,213 @@ class FileExistenceTests(unittest.TestCase):
                 s, m = vw._check_file_exists("nonexistent.txt", "X")
                 self.assertEqual(s, "FAIL")
                 self.assertIn("NOT FOUND", m)
+
+
+class E2ECommandMatrixTests(unittest.TestCase):
+    """FIX-060: e2e-check must execute real command proxies."""
+
+    def test_e2e_matrix_entry_invokes_subprocess(self):
+        entry = vw._e2e_command_matrix()[0]
+        completed = subprocess.CompletedProcess(
+            entry["command"],
+            0,
+            stdout="Project Overview\nTasks\nGate\nmaximum-autonomy\n",
+            stderr="",
+        )
+
+        with patch.object(vw.subprocess, "run", return_value=completed) as run:
+            result = vw._evaluate_e2e_command(entry)
+
+        self.assertEqual(result["status"], "PASS")
+        run.assert_called_once()
+        args, kwargs = run.call_args
+        self.assertEqual(args[0], entry["command"])
+        self.assertTrue(kwargs["capture_output"])
+        self.assertEqual(kwargs["cwd"], str(vw.ROOT))
+
+    def _known_verify_failure_output(self, extra_failure=None, subset=False):
+        if subset:
+            lines = [
+                "== Workflow Plugin Verification ==",
+                "",
+                "== Verification Result: FAILED ==",
+                "  - missing snippet in skills\\software-project-governance\\SKILL.md: Coordinator 接管用户交互",
+                "  - missing snippet in skills/software-project-governance/SKILL.md: Producer-Reviewer 分离",
+            ]
+        else:
+            lines = [
+                "== Workflow Plugin Verification ==",
+                "",
+                "== Verification Result: FAILED ==",
+                "  - missing snippet in .governance\\evidence-log.md: EVD-001",
+                "  - missing snippet in .governance/evidence-log.md: EVD-051",
+                "  - missing snippet in skills\\software-project-governance\\SKILL.md: Coordinator 接管用户交互",
+                "  - missing snippet in skills/software-project-governance/SKILL.md: Producer-Reviewer 分离",
+            ]
+        if extra_failure:
+            lines.append(f"  - {extra_failure}")
+        return "\n".join(lines)
+
+    def test_expected_known_failure_accepts_full_allowed_set(self):
+        entry = {
+            "label": "/governance-verify",
+            "command": ["python", "verify_workflow.py", "verify"],
+            "validator": vw._validate_e2e_verify_known_failure,
+            "expected_known_failure": True,
+        }
+
+        result = vw._evaluate_e2e_command(
+            entry,
+            runner=lambda command: subprocess.CompletedProcess(
+                command,
+                1,
+                stdout=self._known_verify_failure_output(),
+                stderr="",
+            ),
+        )
+
+        self.assertEqual(result["status"], "EXPECTED_KNOWN_FAILURE")
+        self.assertEqual(result["exit_code"], 1)
+
+    def test_expected_known_failure_accepts_known_signature_subset(self):
+        entry = {
+            "label": "/governance-verify",
+            "command": ["python", "verify_workflow.py", "verify"],
+            "validator": vw._validate_e2e_verify_known_failure,
+            "expected_known_failure": True,
+        }
+
+        result = vw._evaluate_e2e_command(
+            entry,
+            runner=lambda command: subprocess.CompletedProcess(
+                command,
+                1,
+                stdout=self._known_verify_failure_output(subset=True),
+                stderr="",
+            ),
+        )
+
+        self.assertEqual(result["status"], "EXPECTED_KNOWN_FAILURE")
+        self.assertIn("known allowed signatures", result["message"])
+
+    def test_expected_known_failure_rejects_generic_failure(self):
+        entry = {
+            "label": "/governance-verify",
+            "command": ["python", "verify_workflow.py", "verify"],
+            "validator": vw._validate_e2e_verify_known_failure,
+            "expected_known_failure": True,
+        }
+
+        result = vw._evaluate_e2e_command(
+            entry,
+            runner=lambda command: subprocess.CompletedProcess(
+                command,
+                1,
+                stdout="== Workflow Plugin Verification ==\n== Verification Result: FAILED ==\n  - missing snippet in README.md: NOT FOUND\n",
+                stderr="",
+            ),
+        )
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("did not match allowed known signatures", result["message"])
+
+    def test_expected_known_failure_rejects_extra_unknown_failure(self):
+        entry = {
+            "label": "/governance-verify",
+            "command": ["python", "verify_workflow.py", "verify"],
+            "validator": vw._validate_e2e_verify_known_failure,
+            "expected_known_failure": True,
+        }
+
+        result = vw._evaluate_e2e_command(
+            entry,
+            runner=lambda command: subprocess.CompletedProcess(
+                command,
+                1,
+                stdout=self._known_verify_failure_output(
+                    "missing snippet in commands/governance.md: NEW-REGRESSION"
+                ),
+                stderr="",
+            ),
+        )
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("unknown failures", result["message"])
+
+    def test_e2e_check_summary_separates_source_proxy_and_target_fixture(self):
+        fake_entries = [{"label": "pass"}, {"label": "known"}]
+        fake_results = [
+            {
+                "label": "/governance-status",
+                "kind": "source_cli_proxy",
+                "status": "PASS",
+                "exit_code": 0,
+                "message": "status executed",
+                "command": ["python", "verify_workflow.py", "status"],
+            },
+            {
+                "label": "/governance-verify",
+                "kind": "source_cli_proxy",
+                "status": "EXPECTED_KNOWN_FAILURE",
+                "exit_code": 1,
+                "message": "known failure observed",
+                "command": ["python", "verify_workflow.py", "verify"],
+            },
+        ]
+        fake_fixture_results = [
+            {
+                "label": "target plan-tracker project config",
+                "status": "PASS",
+                "message": "fixture content matches expected markers",
+            }
+        ]
+
+        with patch.object(vw, "_e2e_command_matrix", return_value=fake_entries), \
+             patch.object(vw, "_evaluate_e2e_command", side_effect=fake_results), \
+             patch.object(vw, "_e2e_target_fixture_checks", return_value=[{"label": "fixture"}]), \
+             patch.object(vw, "_evaluate_e2e_target_fixture_check", side_effect=fake_fixture_results), \
+             patch.object(vw, "_e2e_contract_checks", return_value=[]):
+            output = io.StringIO()
+            with redirect_stdout(output):
+                vw.cmd_e2e_check(None)
+
+        text = output.getvalue()
+        self.assertIn("Source CLI proxy command matrix", text)
+        self.assertIn("Target fixture checks", text)
+        self.assertIn("source_cli_proxy_pass=1", text)
+        self.assertIn("expected_known_failure=1", text)
+        self.assertIn("target_fixture_pass=1", text)
+        self.assertIn("contract_only=0", text)
+        self.assertNotIn("executed_pass=", text)
+        self.assertNotIn("19/19", text)
+        self.assertNotIn("Category A", text)
+
+    def test_e2e_check_fails_when_target_fixture_fails(self):
+        fake_source = {
+            "label": "/governance-status",
+            "kind": "source_cli_proxy",
+            "status": "PASS",
+            "exit_code": 0,
+            "message": "status executed",
+            "command": ["python", "verify_workflow.py", "status"],
+        }
+        fake_fixture = {
+            "label": "target plan-tracker project config",
+            "status": "FAIL",
+            "message": "missing markers=['操作权限模式']",
+        }
+
+        with patch.object(vw, "_e2e_command_matrix", return_value=[{"label": "pass"}]), \
+             patch.object(vw, "_evaluate_e2e_command", return_value=fake_source), \
+             patch.object(vw, "_e2e_target_fixture_checks", return_value=[{"label": "fixture"}]), \
+             patch.object(vw, "_evaluate_e2e_target_fixture_check", return_value=fake_fixture), \
+             patch.object(vw, "_e2e_contract_checks", return_value=[]):
+            output = io.StringIO()
+            with self.assertRaises(SystemExit) as cm, redirect_stdout(output):
+                vw.cmd_e2e_check(None)
+
+        self.assertEqual(cm.exception.code, 1)
+        self.assertIn("target_fixture_fail=1", output.getvalue())
 
 
 class StageSkillPathTests(unittest.TestCase):

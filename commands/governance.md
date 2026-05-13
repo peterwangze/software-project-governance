@@ -252,6 +252,16 @@
    - B. 补全 plan-tracker 缺失结构（permission_mode、版本规划、需求跟踪矩阵、变更控制含快速通道）
    - C. Hook 存活检测——缺失则提示安装命令
    - D. 更新 `工作流版本` 为当前版本
+   - E. 持续归档触发检测与执行：
+     - 运行 `python skills/software-project-governance/infra/archive.py migrate --auto --dry-run` 检测四类触发器：
+       1. 首次迁移：`.governance/archive/index.md` 不存在 AND `plan-tracker.md` > 80 KB AND 已发布版本 ≥ 2
+       2. 发布强制：出现新的已发布版本后，除最新已发布版本外仍有未归档历史 task
+       3. task 增量：热文件中可归档 completed task 达到阈值
+       4. 90 天兜底：长期未归档但仍有可归档历史数据
+     - dry-run 报告需要归档 → 运行 `python skills/software-project-governance/infra/archive.py migrate --auto`，再运行 `python skills/software-project-governance/infra/verify_workflow.py check-archive-integrity`
+     - 归档成功 → 输出归档迁移摘要（格式: 📦 治理数据归档完成: 归档{N}个task→..., plan-tracker: {old}KB→{new}KB(-{pct}%)）
+     - 归档完整性失败 → 记录到 risk-log；发布/版本 bump 收尾场景 MUST 阻断完成
+     - 无可归档数据 → 跳过归档（不修改文件）
 4. 输出升级摘要面板
 
 **输出**：升级摘要（版本跨度 + 新增功能 + 已自动升级 + 需手动操作）

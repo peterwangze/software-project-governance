@@ -192,7 +192,7 @@ class E2ECommandMatrixTests(unittest.TestCase):
         completed = subprocess.CompletedProcess(
             entry["command"],
             0,
-            stdout="Project Overview\nTasks\nGate\nmaximum-autonomy\n",
+            stdout="Project Overview\nTasks\nGate\npermission_mode\n操作权限模式\nmaximum-autonomy\n",
             stderr="",
         )
 
@@ -205,6 +205,39 @@ class E2ECommandMatrixTests(unittest.TestCase):
         self.assertEqual(args[0], entry["command"])
         self.assertTrue(kwargs["capture_output"])
         self.assertEqual(kwargs["cwd"], str(vw.ROOT))
+
+    def test_e2e_status_validator_requires_permission_mode_label(self):
+        entry = vw._e2e_command_matrix()[0]
+        completed = subprocess.CompletedProcess(
+            entry["command"],
+            0,
+            stdout="Project Overview\nTasks\nGate\nmaximum-autonomy\n",
+            stderr="",
+        )
+
+        result = vw._evaluate_e2e_command(
+            entry,
+            runner=lambda command: completed,
+        )
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("permission_mode", result["message"])
+
+    def test_e2e_status_validator_accepts_default_confirm_permission_mode(self):
+        entry = vw._e2e_command_matrix()[0]
+        completed = subprocess.CompletedProcess(
+            entry["command"],
+            0,
+            stdout="Project Overview\nTasks\nGate\npermission_mode\n操作权限模式\ndefault-confirm\n",
+            stderr="",
+        )
+
+        result = vw._evaluate_e2e_command(
+            entry,
+            runner=lambda command: completed,
+        )
+
+        self.assertEqual(result["status"], "PASS")
 
     def _known_verify_failure_output(self, extra_failure=None, subset=False):
         if subset:
@@ -389,6 +422,75 @@ class E2ECommandMatrixTests(unittest.TestCase):
 
         self.assertEqual(cm.exception.code, 1)
         self.assertIn("target_fixture_fail=1", output.getvalue())
+
+
+class GovernanceStatusContractTests(unittest.TestCase):
+    """FIX-064: status contracts must expose operation permission mode."""
+
+    def test_cmd_status_outputs_stable_permission_mode_line(self):
+        plan = "\n".join([
+            "# 计划跟踪",
+            "",
+            "## 项目配置",
+            "- **项目目标**: test",
+            "- **Profile**: standard",
+            "- **触发模式**: always-on",
+            "- **操作权限模式**: maximum-autonomy",
+            "- **当前阶段**: 维护",
+            "",
+            "## Gate 状态跟踪",
+            "| Gate | 阶段转换 | 状态 | 通过日期 | 关键证据 |",
+            "| --- | --- | --- | --- | --- |",
+            "| G11 | → 下一轮 | passed | 2026-05-13 | done |",
+            "",
+            "## 项目总览",
+            "| 项目 | 当前阶段 | 总任务数 | 已完成 | 阻塞中 | 关键风险数 | 最近 Gate 结论 | 最近复盘日期 |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| Demo | 维护 | 1 | 1 | 0 | 0 | G11 通过 | 2026-05-13 |",
+            "",
+            "## 任务跟踪",
+            _TASK_COLS,
+            _TASK_SEP,
+            _task("FIX-064", status="已完成"),
+        ])
+        with tempfile.TemporaryDirectory() as td:
+            sample = Path(td) / "plan-tracker.md"
+            sample.write_text(plan, encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sample):
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    vw.cmd_status(None)
+
+        output = buf.getvalue()
+        self.assertIn("Permission Mode (permission_mode / 操作权限模式): maximum-autonomy", output)
+        self.assertIn("Project Overview", output)
+
+    def test_governance_status_docs_require_permission_mode(self):
+        text = (vw.ROOT / "commands" / "governance-status.md").read_text(encoding="utf-8")
+
+        required = [
+            "操作权限模式 permission_mode",
+            "| permission_mode |",
+            "操作权限模式: {permission_mode}",
+            "不得只依赖项目配置原始字段顺序偶然展示",
+        ]
+        missing = [needle for needle in required if needle not in text]
+        self.assertEqual(missing, [])
+
+    def test_governance_scenario_c_matches_continuous_archive_step_e(self):
+        governance = (vw.ROOT / "commands" / "governance.md").read_text(encoding="utf-8")
+        init = (vw.ROOT / "commands" / "governance-init.md").read_text(encoding="utf-8")
+
+        required = [
+            "持续归档触发检测与执行",
+            "archive.py migrate --auto --dry-run",
+            "archive.py migrate --auto",
+            "verify_workflow.py check-archive-integrity",
+            "发布/版本 bump 收尾场景 MUST 阻断完成",
+            "无可归档数据",
+        ]
+        self.assertEqual([needle for needle in required if needle not in governance], [])
+        self.assertEqual([needle for needle in required if needle not in init], [])
 
 
 class GovernanceReviewFallbackPolicyTests(unittest.TestCase):

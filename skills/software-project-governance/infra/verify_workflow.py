@@ -198,6 +198,12 @@ PROJECT_FACT_SNIPPETS = {
         "standard",
         "always-on",
         "## Gate 状态跟踪",
+        "## 项目总览",
+        "## 当前活跃事项",
+        "## 版本规划",
+        "## 需求跟踪矩阵",
+        "## 变更控制",
+        "操作权限模式",
         "passed-on-entry",
         "G11",
     ],
@@ -343,6 +349,12 @@ REQUIRED_SNIPPETS = {
         "standard",
         "always-on",
         "## Gate 状态跟踪",
+        "## 项目总览",
+        "## 当前活跃事项",
+        "## 版本规划",
+        "## 需求跟踪矩阵",
+        "## 变更控制",
+        "操作权限模式",
         "passed-on-entry",
         "G11",
     ],
@@ -430,6 +442,8 @@ REQUIRED_SNIPPETS = {
         "## 输出格式",
         "## 错误码",
         "## 自校验",
+        "permission_mode",
+        "操作权限模式",
         "STATUS-ERR-001",
     ],
     ROOT / "commands/governance-gate.md": [
@@ -496,10 +510,6 @@ REQUIRED_SNIPPETS = {
         "## 国内 agent CLI 兼容抽象",
         "## 适配原则",
         "## 建议的最小验证顺序",
-    ],
-    ROOT / ".governance/plan-tracker.md": [
-        "## 项目总览",
-        "## 样例跟踪表",
     ],
     # Plugin marketplace packaging
     ROOT / ".claude-plugin/marketplace.json": [
@@ -2339,14 +2349,23 @@ def cmd_status(args):
     overview = parse_overview()
     gates = parse_gate_status()
     stats = parse_task_stats()
+    permission_mode = config.get("操作权限模式", config.get("permission_mode", "N/A"))
 
     # Config section
     print("\n┌─ Project Config ────────────────────────────────────┐")
     labels = {"Profile": "Profile", "触发模式": "Trigger", "当前阶段": "Stage",
-              "并行活跃阶段": "Active", "接入方式": "Onboarding"}
+              "并行活跃阶段": "Active", "接入方式": "Onboarding",
+              "操作权限模式": "Permission Mode"}
+    emitted_permission_mode = False
     for k, v in config.items():
         label = labels.get(k, k)
+        if k in ("操作权限模式", "permission_mode"):
+            print(f"│  Permission Mode (permission_mode / 操作权限模式): {v}")
+            emitted_permission_mode = True
+            continue
         print(f"│  {label}: {v}")
+    if not emitted_permission_mode:
+        print(f"│  Permission Mode (permission_mode / 操作权限模式): {permission_mode}")
     print("└──────────────────────────────────────────────────────┘")
 
     # Overview section
@@ -6236,11 +6255,19 @@ def _has_all(text, needles):
 
 def _validate_e2e_status(result):
     output = _e2e_output(result)
+    labels_present = _has_all(output, ["permission_mode", "操作权限模式"])
+    legal_permission_mode_present = any(
+        value in output for value in ("maximum-autonomy", "default-confirm")
+    )
     ok = result.returncode == 0 and _has_all(
         output,
-        ["Project Overview", "Tasks", "Gate", "maximum-autonomy"],
+        ["Project Overview", "Tasks", "Gate"],
+    ) and labels_present and legal_permission_mode_present
+    return ok, (
+        "status output exposes Project Overview, Tasks, Gate, "
+        "permission_mode/操作权限模式, and a legal permission mode "
+        "(maximum-autonomy or default-confirm)"
     )
-    return ok, "status output exposes Project Overview, Tasks, Gate, and maximum-autonomy"
 
 
 def _validate_e2e_gate_g1(result):

@@ -827,6 +827,7 @@ post-commit: evidence? check-governance? → 输出报告
 | project_name | 字符串 | 项目名称 | "项目管理工作流插件" |
 | profile | 字符串 | 治理强度 | "standard" |
 | trigger_mode | 字符串 | 触发模式 | "always-on" |
+| permission_mode | 字符串 | 操作权限模式 | "maximum-autonomy" |
 | current_stage | 字符串 | 当前阶段 | "initiation" |
 | created_files | 列表 | 创建的文件列表 | [".governance/plan-tracker.md", ".governance/evidence-log.md", ".governance/decision-log.md", ".governance/risk-log.md"] |
 | bootstrap_injected | 布尔 | 是否注入了 bootstrap | true/false |
@@ -839,6 +840,7 @@ post-commit: evidence? check-governance? → 输出报告
 
 Profile: {profile}
 触发模式: {trigger_mode}
+操作权限模式: {permission_mode}
 当前阶段: {current_stage}
 
 已创建文件:
@@ -878,4 +880,5 @@ Gate 状态:
 - [ ] plan-tracker.md 包含：项目配置块、Gate 状态表（11 行）、项目概览表、空任务表表头
 - [ ] 若 project_type=existing，decision-log.md 至少包含 1 条决策记录（DEC-001）
 - [ ] 输出确认包含输出格式中所有必要字段
+- [ ] 输出确认必须明确包含 permission_mode / 操作权限模式
 - [ ] 任何文件的必需顶级字段均不包含占位值

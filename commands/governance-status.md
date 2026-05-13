@@ -16,7 +16,7 @@
 
 ### Step 2: 读取治理记录
 - 读取 `.governance/plan-tracker.md`，提取：
-  - 项目配置（项目名称、Profile、触发模式、当前阶段）
+  - 项目配置（项目名称、Profile、触发模式、操作权限模式 permission_mode、当前阶段）
   - Gate 状态跟踪表（G1~G11 各行的状态和通过日期）
   - 项目概览表（总任务数、已完成、阻塞中、关键风险数、最近 Gate 结论）
 - 读取 `.governance/risk-log.md`，统计状态为"活跃"的风险
@@ -43,6 +43,7 @@
 | project_name | 字符串 | 项目名称 | "项目管理工作流插件" |
 | profile | 字符串 | 治理强度 | "standard" |
 | trigger_mode | 字符串 | 触发模式 | "always-on" |
+| permission_mode | 字符串 | 操作权限模式 | "maximum-autonomy" |
 | current_stage | 字符串 | 当前阶段中文名 | "维护与演进" |
 | total_tasks | 数字 | 总任务数 | 74 |
 | completed_tasks | 数字 | 已完成任务数 | 54 |
@@ -61,6 +62,7 @@
 │  {project_name} — 治理状态                          │
 ├─────────────────────────────────────────────────────┤
 │  Profile: {profile}   触发模式: {trigger_mode}       │
+│  操作权限模式: {permission_mode}                     │
 │  当前阶段: {current_stage}                           │
 ├─────────────────────────────────────────────────────┤
 │  任务: {completed}/{total} ({completion_rate})        │
@@ -94,6 +96,7 @@ Gate 状态列的合法值：
 
 执行后，agent MUST 验证：
 - [ ] 所有必要字段均出现在输出中
+- [ ] 输出必须明确包含 `permission_mode` 或 `操作权限模式`，不得只依赖项目配置原始字段顺序偶然展示
 - [ ] completion_rate 为百分比字符串或 "N/A"
 - [ ] gate_status_table 恰好包含 G1 至 G11
 - [ ] 每个 Gate 状态均为 5 种合法值之一

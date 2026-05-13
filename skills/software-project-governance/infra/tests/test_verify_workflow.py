@@ -1077,6 +1077,77 @@ class UserImpactTests(unittest.TestCase):
                 self.assertIn("迁移指南=不需要", entry["issues"][0])
 
 
+class ArchiveTriggerGapTests(unittest.TestCase):
+    """FIX-063: Check 26 exposes continuous archive trigger gaps."""
+
+    def test_archive_integrity_reports_pending_archive_trigger_gap(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gov = root / ".governance"
+            gov.mkdir(parents=True)
+            (gov / "plan-tracker.md").write_text(
+                "# plan\n\n| 任务ID | c2 | c3 | c4 | c5 | c6 | c7 | c8 | c9 | 状态 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
+                "| FIX-001 | x | x | x | x | x | x | x | x | 已完成 |\n",
+                encoding="utf-8",
+            )
+
+            class FakeArchive:
+                @staticmethod
+                def analyze_auto_archive_candidates():
+                    return {
+                        "should_archive": True,
+                        "tasks_archived": 1,
+                        "triggers": ["release_forced"],
+                        "versions_range": ("0.10.0", "0.10.0"),
+                    }
+
+            with patch.object(vw, "ROOT", root), \
+                 patch.object(vw, "SAMPLE_PATH", gov / "plan-tracker.md"), \
+                 patch.object(vw, "_load_archive_module", return_value=FakeArchive):
+                result = vw.check_archive_integrity()
+
+            self.assertFalse(result["pass"])
+            self.assertEqual(result["pending_archive_tasks"], 1)
+            self.assertEqual(result["archive_triggers"], ["release_forced"])
+            self.assertTrue(any("Archive trigger gap" in issue for issue in result["issues"]))
+
+    def test_check_archive_integrity_no_archive_dir_is_read_only(self):
+        """Check 26 must not create .governance/archive during trigger analysis."""
+        import archive
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gov = root / ".governance"
+            gov.mkdir(parents=True)
+            (gov / "plan-tracker.md").write_text(
+                "# plan\n\n"
+                "## 版本规划\n\n"
+                "### 版本路线图\n\n"
+                "| 版本 | 状态 | 日期 |\n"
+                "| --- | --- | --- |\n"
+                "| 0.10.0 | 已发布 | 2026-01-01 |\n"
+                "| 0.11.0 | 已发布 | 2026-02-01 |\n\n"
+                "### v0.10.0 — Old\n"
+                "| 任务ID | c2 | c3 | c4 | c5 | c6 | c7 | c8 | c9 | 状态 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
+                "| FIX-001 | x | x | x | x | x | x | x | x | 已完成 |\n\n"
+                "### v0.11.0 — Latest\n"
+                "| 任务ID | c2 | c3 | c4 | c5 | c6 | c7 | c8 | c9 | 状态 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
+                "| FIX-002 | x | x | x | x | x | x | x | x | 进行中 |\n",
+                encoding="utf-8",
+            )
+            with patch.object(archive, "ROOT", root), \
+                 patch.object(vw, "ROOT", root), \
+                 patch.object(vw, "SAMPLE_PATH", gov / "plan-tracker.md"), \
+                 patch.object(vw, "_load_archive_module", return_value=archive):
+                result = vw.check_archive_integrity()
+
+            self.assertIn("pending_archive_tasks", result)
+            self.assertFalse((gov / "archive").exists())
+
+
 # ────────────────────────────────────────────────────────────
 # SYSGAP-039: Agent Team Review + Agent Activation regression tests
 # ────────────────────────────────────────────────────────────

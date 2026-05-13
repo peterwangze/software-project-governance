@@ -18,11 +18,15 @@ import re
 import shutil
 import sys
 import unicodedata
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 # ROOT is overridable for testing; paths are lazy to allow patching
 ROOT = Path(__file__).resolve().parents[3]
+
+FIRST_MIGRATION_PLAN_SIZE_THRESHOLD = 80 * 1024
+TASK_INCREMENTAL_THRESHOLD = 20
+FALLBACK_ARCHIVE_DAYS = 90
 
 
 def _gov_dir():
@@ -295,6 +299,62 @@ def _make_archive_filename(version_start, version_end, category="tasks"):
     return f"v{version_start}~v{version_end}.md"
 
 
+def _make_incremental_archive_filename(version_start, version_end, category="tasks"):
+    """Generate an independent archive filename for a repeated range.
+
+    Continuous archive must not append to an older archive file because rollback
+    operates at file granularity.  A repeated range therefore gets its own
+    increment file that can be safely unlinked without deleting history.
+    """
+    base_name = _make_archive_filename(version_start, version_end, category)
+    archive_subdir = _archive_dir() / category
+    base_path = archive_subdir / base_name
+    if not base_path.exists():
+        return base_name
+
+    today = date.today().isoformat().replace("-", "")
+    index = 1
+    while True:
+        candidate = f"v{version_start}~v{version_end}-incremental-{today}-{index}.md"
+        if not (archive_subdir / candidate).exists():
+            return candidate
+        index += 1
+
+
+def _parse_archive_version_range(filename):
+    """Parse archive filename into (version_start, version_end).
+
+    Supports both base archive files (vX~vY.md) and independent incremental
+    archive files (vX~vY-incremental-YYYYMMDD-N.md).
+    """
+    match = re.match(
+        r"^v(\d+\.\d+\.\d+)~v(\d+\.\d+\.\d+)"
+        r"(?:-incremental-\d{8}-\d+)?\.md$",
+        filename,
+    )
+    if not match:
+        return None
+    return match.group(1), match.group(2)
+
+
+def _version_still_covered_by_task_archive(version_str, excluding_file):
+    """Return True if another task archive still covers version_str."""
+    tasks_dir = _archive_dir() / "tasks"
+    if not tasks_dir.exists():
+        return False
+
+    for archive_path in tasks_dir.glob("*.md"):
+        if archive_path.name == ".gitkeep" or archive_path == excluding_file:
+            continue
+        parsed_range = _parse_archive_version_range(archive_path.name)
+        if not parsed_range:
+            continue
+        version_start, version_end = parsed_range
+        if _version_in_range(version_str, version_start, version_end):
+            return True
+    return False
+
+
 def _write_archive_file(filepath, header, body_lines):
     """Write an archive file with standardized header."""
     with open(filepath, "w", encoding="utf-8") as f:
@@ -365,7 +425,8 @@ def migrate_by_version(version_start, version_end, dry_run=False, migrate_eviden
         "details": "",
     }
 
-    _ensure_archive_dirs()
+    if not dry_run:
+        _ensure_archive_dirs()
 
     if not _plan_tracker().exists():
         result["details"] = "plan-tracker.md not found"
@@ -377,6 +438,7 @@ def migrate_by_version(version_start, version_end, dry_run=False, migrate_eviden
     # Find sections in version range
     archived_task_lines = []  # (line_index, original_line, task_id, version)
     archived_tasks = set()
+    already_archived_tasks = _get_archived_task_ids()
     archive_body_lines = []
 
     for section in sections:
@@ -385,6 +447,8 @@ def migrate_by_version(version_start, version_end, dry_run=False, migrate_eviden
             for line_idx, line, task_id in section["task_lines"]:
                 status = _parse_task_status(line)
                 if status == "已完成":
+                    if task_id in already_archived_tasks:
+                        continue
                     archived_task_lines.append((line_idx, line, task_id, section["version"]))
                     archived_tasks.add(task_id)
                     archive_body_lines.append((section["version"], line))
@@ -403,18 +467,12 @@ def migrate_by_version(version_start, version_end, dry_run=False, migrate_eviden
         return result
 
     # Determine archive filename
-    archive_filename = _make_archive_filename(version_start, version_end, "tasks")
+    archive_filename = _make_incremental_archive_filename(version_start, version_end, "tasks")
     archive_path = _archive_dir() / "tasks" / archive_filename
 
     # Check existing archive files for prev/next links
     existing_files = _get_existing_archive_files("tasks")
     existing_names = [f.name for f in existing_files]
-
-    try:
-        idx = existing_names.index(archive_filename)
-        # File already exists - we'd append, but for now this is a full rewrite
-    except ValueError:
-        pass
 
     prev_file = existing_names[-1] if existing_names else None
 
@@ -453,7 +511,6 @@ def migrate_by_version(version_start, version_end, dry_run=False, migrate_eviden
         result["archive_files_created"] = [archive_filename]
         return result
 
-    # Write archive file
     _write_archive_file(archive_path, header, archive_lines)
     result["archive_files_created"].append(f"archive/tasks/{archive_filename}")
 
@@ -524,7 +581,7 @@ def migrate_by_version(version_start, version_end, dry_run=False, migrate_eviden
 
         if ev_archived_count > 0:
             # Create evidence archive file
-            ev_archive_filename = _make_archive_filename(version_start, version_end, "evidence")
+            ev_archive_filename = archive_filename
             ev_archive_path = _archive_dir() / "evidence" / ev_archive_filename
 
             ev_archive_body = []
@@ -604,6 +661,20 @@ def _extract_evidence_from_archive_file(filepath):
                 results.append((evd_id, task_ids))
 
     return results
+
+
+def _get_archived_task_ids():
+    """Return task IDs already present in archive task files."""
+    archived = set()
+    task_dir = _archive_dir() / "tasks"
+    if not task_dir.exists():
+        return archived
+    for f in sorted(task_dir.glob("*.md")):
+        if f.name == ".gitkeep":
+            continue
+        for task_id, _status, _version in _extract_tasks_from_archive_file(f):
+            archived.add(task_id)
+    return archived
 
 
 def build_index():
@@ -904,19 +975,119 @@ def verify_archive_integrity():
 
 # ── Rollback ────────────────────────────────────────────────────────
 
+def _get_migration_archive_group(subdir, archive_file):
+    """Return archive files that belong to the same migration.
+
+    A normal migration writes task and evidence archive files with the same
+    filename in sibling directories.  Rollback therefore treats those same-name
+    files as one migration unit while still supporting older task-only or
+    evidence-only archives.
+    """
+    group = []
+    for candidate_subdir in ["tasks", "evidence"]:
+        candidate = _archive_dir() / candidate_subdir / archive_file.name
+        if candidate.exists() and candidate.is_file() and candidate.name != ".gitkeep":
+            group.append((candidate_subdir, candidate))
+
+    if group:
+        return group
+    return [(subdir, archive_file)]
+
+
+def _rollback_task_archive(archive_file):
+    """Restore one task archive file into plan-tracker.md and remove it."""
+    archive_content = archive_file.read_text(encoding="utf-8")
+    pt_content = _plan_tracker().read_text(encoding="utf-8") if _plan_tracker().exists() else ""
+
+    # Find the body after the header section
+    body_start = 0
+    archive_lines = archive_content.split("\n")
+    for i, line in enumerate(archive_lines):
+        if line.startswith("#") and "归档" in line:
+            continue
+        if line.startswith("- **归档日期") or line.startswith("- **归档范围") or \
+           line.startswith("- **条目数") or line.startswith("- **上一个") or \
+           line.startswith("- **下一个") or line.startswith("> "):
+            continue
+        if line.startswith("###") or line.startswith("---"):
+            body_start = i
+            break
+
+    # Append task content back to plan-tracker
+    task_body = "\n".join(archive_lines[body_start:])
+    new_pt = pt_content.rstrip() + "\n\n" + task_body + "\n"
+
+    # Remove [已归档] markers ONLY from version titles in the archive file's
+    # version range (not globally).  Parse the version range from the archive
+    # filename first; fall back to extracting versions from archive content.
+    filename_range = _parse_archive_version_range(archive_file.name)
+    if filename_range:
+        version_start, version_end = filename_range
+        new_lines = new_pt.split("\n")
+        for i, line in enumerate(new_lines):
+            v_str, _ = _parse_version_from_title(line)
+            if v_str and _version_in_range(v_str, version_start, version_end):
+                if "[已归档]" in line and not _version_still_covered_by_task_archive(
+                    v_str, archive_file
+                ):
+                    new_lines[i] = line.replace("[已归档]", "").rstrip()
+        new_pt = "\n".join(new_lines)
+    else:
+        # Fallback: find versions that appear in the archive body
+        archive_sections, _ = _find_version_sections(archive_content)
+        archived_versions = {
+            s["version"] for s in archive_sections if s.get("version")
+        }
+        if archived_versions:
+            new_lines = new_pt.split("\n")
+            for i, line in enumerate(new_lines):
+                v_str, _ = _parse_version_from_title(line)
+                if v_str and v_str in archived_versions:
+                    if "[已归档]" in line and not _version_still_covered_by_task_archive(
+                        v_str, archive_file
+                    ):
+                        new_lines[i] = line.replace("[已归档]", "").rstrip()
+            new_pt = "\n".join(new_lines)
+
+    _plan_tracker().write_text(new_pt, encoding="utf-8")
+    archive_file.unlink()
+    return f"{archive_file.name} → plan-tracker.md"
+
+
+def _rollback_evidence_archive(archive_file):
+    """Restore one evidence archive file into evidence-log.md and remove it."""
+    archive_content = archive_file.read_text(encoding="utf-8")
+    ev_content = _evidence_log().read_text(encoding="utf-8") if _evidence_log().exists() else ""
+
+    # Extract evidence rows from archive
+    ev_rows = []
+    for line in archive_content.split("\n"):
+        stripped = line.strip()
+        if stripped.startswith("| EVD-"):
+            ev_rows.append(line)
+
+    if ev_rows:
+        new_ev = ev_content.rstrip() + "\n" + "\n".join(ev_rows) + "\n"
+        _evidence_log().write_text(new_ev, encoding="utf-8")
+
+    archive_file.unlink()
+    return f"{archive_file.name} → evidence-log.md"
+
+
 def rollback_last_migration():
     """Rollback the most recent migration by:
     1. Finding the most recently modified archive file
-    2. Merging its content back into the hot file
-    3. Removing the archive file
+    2. Rolling back same-name task/evidence archive files as one migration group
+    3. Merging their content back into the hot files and removing archive files
     4. Updating the index
 
     Returns:
-        dict with keys: success, rolled_back_file, details
+        dict with keys: success, rolled_back_file, rolled_back_files, details
     """
     result = {
         "success": False,
         "rolled_back_file": None,
+        "rolled_back_files": [],
         "details": "",
     }
 
@@ -938,92 +1109,23 @@ def rollback_last_migration():
     recent_files.sort(reverse=True)
     mtime, subdir, archive_file = recent_files[0]
 
-    result["rolled_back_file"] = f"archive/{subdir}/{archive_file.name}"
+    migration_files = _get_migration_archive_group(subdir, archive_file)
+    result["rolled_back_files"] = [
+        f"archive/{group_subdir}/{group_file.name}"
+        for group_subdir, group_file in migration_files
+    ]
+    result["rolled_back_file"] = ", ".join(result["rolled_back_files"])
 
-    if subdir == "tasks":
-        # Read archive file content and merge back into plan-tracker
-        archive_content = archive_file.read_text(encoding="utf-8")
-        pt_content = _plan_tracker().read_text(encoding="utf-8") if _plan_tracker().exists() else ""
+    details = []
+    for group_subdir, group_file in migration_files:
+        if group_subdir == "tasks":
+            details.append(_rollback_task_archive(group_file))
+        elif group_subdir == "evidence":
+            details.append(_rollback_evidence_archive(group_file))
 
-        # Extract version sections from archive
-        sections, _ = _find_version_sections(archive_content)
-
-        # Find the body after the header section
-        body_start = 0
-        archive_lines = archive_content.split("\n")
-        for i, line in enumerate(archive_lines):
-            if line.startswith("#") and "归档" in line:
-                continue
-            if line.startswith("- **归档日期") or line.startswith("- **归档范围") or \
-               line.startswith("- **条目数") or line.startswith("- **上一个") or \
-               line.startswith("- **下一个") or line.startswith("> "):
-                continue
-            if line.startswith("###") or line.startswith("---"):
-                body_start = i
-                break
-
-        # Append task content back to plan-tracker
-        task_body = "\n".join(archive_lines[body_start:])
-        new_pt = pt_content.rstrip() + "\n\n" + task_body + "\n"
-
-        # Remove [已归档] markers ONLY from version titles in the
-        # archive file's version range (not globally).  Parse the
-        # version range from the archive filename first; fall back to
-        # extracting versions from archive content.
-        fname_match = re.match(
-            r'v(\d+\.\d+\.\d+)~v(\d+\.\d+\.\d+)\.md',
-            archive_file.name,
-        )
-        if fname_match:
-            version_start, version_end = fname_match.group(1), fname_match.group(2)
-            new_lines = new_pt.split("\n")
-            for i, line in enumerate(new_lines):
-                v_str, _ = _parse_version_from_title(line)
-                if v_str and _version_in_range(v_str, version_start, version_end):
-                    if "[已归档]" in line:
-                        new_lines[i] = line.replace("[已归档]", "").rstrip()
-            new_pt = "\n".join(new_lines)
-        else:
-            # Fallback: find versions that appear in the archive body
-            archive_sections, _ = _find_version_sections(archive_content)
-            archived_versions = {
-                s["version"] for s in archive_sections if s.get("version")
-            }
-            if archived_versions:
-                new_lines = new_pt.split("\n")
-                for i, line in enumerate(new_lines):
-                    v_str, _ = _parse_version_from_title(line)
-                    if v_str and v_str in archived_versions:
-                        if "[已归档]" in line:
-                            new_lines[i] = line.replace("[已归档]", "").rstrip()
-                new_pt = "\n".join(new_lines)
-
-        _plan_tracker().write_text(new_pt, encoding="utf-8")
-
-        # Remove the archive file
-        archive_file.unlink()
-        result["success"] = True
-        result["details"] = f"已回滚 {archive_file.name} → plan-tracker.md"
-
-    elif subdir == "evidence":
-        # Similar process for evidence
-        archive_content = archive_file.read_text(encoding="utf-8")
-        ev_content = _evidence_log().read_text(encoding="utf-8") if _evidence_log().exists() else ""
-
-        # Extract evidence rows from archive
-        ev_rows = []
-        for line in archive_content.split("\n"):
-            stripped = line.strip()
-            if stripped.startswith("| EVD-"):
-                ev_rows.append(line)
-
-        if ev_rows:
-            new_ev = ev_content.rstrip() + "\n" + "\n".join(ev_rows) + "\n"
-            _evidence_log().write_text(new_ev, encoding="utf-8")
-
-        archive_file.unlink()
-        result["success"] = True
-        result["details"] = f"已回滚 {archive_file.name} → evidence-log.md"
+    result["success"] = bool(details)
+    if result["success"]:
+        result["details"] = "已回滚 " + "; ".join(details)
 
     # Rebuild index after rollback
     build_index()
@@ -1129,6 +1231,163 @@ def _parse_version_roadmap(content):
 
 # ── Auto Migration ──────────────────────────────────────────────────
 
+def _parse_version_roadmap_entries(content):
+    """Parse roadmap rows into dicts with version, status, and optional date."""
+    entries = []
+    lines = content.split("\n")
+    in_roadmap = False
+    header_seen = False
+    table_started = False
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped == "### 版本路线图":
+            in_roadmap = True
+            header_seen = False
+            table_started = False
+            continue
+
+        if in_roadmap:
+            if (stripped.startswith("### ") or stripped.startswith("## ")) and "版本路线图" not in stripped:
+                if table_started:
+                    break
+                continue
+            if stripped.startswith("|") and "版本" in stripped and "状态" in stripped:
+                header_seen = True
+                continue
+            if header_seen and stripped.startswith("|") and "---" in stripped:
+                table_started = True
+                continue
+            if table_started and stripped.startswith("|"):
+                parts = [p.strip().strip("*") for p in line.split("|")]
+                if len(parts) >= 4 and re.match(r"\d+\.\d+\.\d+", parts[1]):
+                    entries.append({
+                        "version": parts[1],
+                        "status": parts[2],
+                        "date": parts[3],
+                    })
+
+    if entries:
+        return entries
+
+    return [
+        {"version": version, "status": status, "date": ""}
+        for version, status in _parse_version_roadmap(content)
+    ]
+
+
+def _parse_iso_date(value):
+    """Parse YYYY-MM-DD from a roadmap cell; return None when absent."""
+    if not value:
+        return None
+    m = re.search(r"\d{4}-\d{2}-\d{2}", value)
+    if not m:
+        return None
+    try:
+        return datetime.strptime(m.group(0), "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def _days_since_file(path):
+    if not path.exists():
+        return None
+    modified = date.fromtimestamp(path.stat().st_mtime)
+    return (date.today() - modified).days
+
+
+def analyze_auto_archive_candidates():
+    """Analyze whether continuous auto archive should run.
+
+    This pure analysis is shared by archive.py --auto and verify_workflow.py.
+    It covers the FIX-063 trigger loop:
+      - first migration threshold
+      - release-forced incremental archive when index already exists
+      - task-count incremental threshold
+      - 90-day fallback
+    """
+    result = {
+        "success": False,
+        "should_archive": False,
+        "skipped": False,
+        "reason": "",
+        "triggers": [],
+        "versions_archived": [],
+        "versions_range": None,
+        "tasks_archived": 0,
+        "plan_tracker_size": 0,
+        "published_count": 0,
+        "index_exists": False,
+        "days_since_archive": None,
+    }
+
+    if not _plan_tracker().exists():
+        result["skipped"] = True
+        result["reason"] = "plan-tracker.md 不存在"
+        return result
+
+    result["success"] = True
+    result["plan_tracker_size"] = _plan_tracker().stat().st_size
+    result["index_exists"] = _index_path().exists()
+    result["days_since_archive"] = _days_since_file(_index_path())
+
+    content = _plan_tracker().read_text(encoding="utf-8")
+    roadmap_entries = _parse_version_roadmap_entries(content)
+    published = [
+        entry for entry in roadmap_entries
+        if entry.get("status") == "已发布"
+    ]
+    published.sort(key=lambda entry: _version_to_tuple(entry["version"]))
+    result["published_count"] = len(published)
+
+    if len(published) < 2:
+        result["skipped"] = True
+        result["reason"] = f"已发布版本数不足（{len(published)} < 2），跳过归档"
+        return result
+
+    archive_entries = published[:-1]
+    version_start = archive_entries[0]["version"]
+    version_end = archive_entries[-1]["version"]
+    result["versions_archived"] = [entry["version"] for entry in archive_entries]
+    result["versions_range"] = (version_start, version_end)
+
+    pre_check = migrate_by_version(version_start, version_end, dry_run=True)
+    result["tasks_archived"] = pre_check.get("tasks_archived", 0)
+
+    if result["tasks_archived"] == 0:
+        result["skipped"] = True
+        result["reason"] = f"归档范围 v{version_start}~v{version_end} 内无可归档数据"
+        return result
+
+    if (
+        not result["index_exists"]
+        and result["plan_tracker_size"] > FIRST_MIGRATION_PLAN_SIZE_THRESHOLD
+    ):
+        result["triggers"].append("first_migration")
+
+    if result["index_exists"]:
+        result["triggers"].append("release_forced")
+
+    if result["tasks_archived"] >= TASK_INCREMENTAL_THRESHOLD:
+        result["triggers"].append("task_incremental")
+
+    version_end_entry = archive_entries[-1]
+    version_end_date = _parse_iso_date(version_end_entry.get("date", ""))
+    if version_end_date and (date.today() - version_end_date).days >= FALLBACK_ARCHIVE_DAYS:
+        result["triggers"].append("fallback_90d")
+    elif result["days_since_archive"] is not None and result["days_since_archive"] >= FALLBACK_ARCHIVE_DAYS:
+        result["triggers"].append("fallback_90d")
+
+    result["triggers"] = sorted(set(result["triggers"]))
+    result["should_archive"] = bool(result["triggers"])
+    if not result["should_archive"]:
+        result["skipped"] = True
+        result["reason"] = (
+            "归档触发条件未满足"
+            f"（tasks={result['tasks_archived']}, plan={result['plan_tracker_size']} bytes）"
+        )
+    return result
+
 def migrate_auto(dry_run=False):
     """Auto-detect version range from plan-tracker roadmap and migrate data.
 
@@ -1165,62 +1424,34 @@ def migrate_auto(dry_run=False):
         "evidence_log_after": 0,
         "archive_files_created": [],
         "verify_pass": False,
+        "triggers": [],
         "details": "",
     }
 
-    _ensure_archive_dirs()
+    if not dry_run:
+        _ensure_archive_dirs()
 
-    # Check plan-tracker exists
-    if not _plan_tracker().exists():
+    analysis = analyze_auto_archive_candidates()
+    result["versions_archived"] = analysis.get("versions_archived", [])
+    result["versions_range"] = analysis.get("versions_range")
+    result["tasks_archived"] = analysis.get("tasks_archived", 0)
+    result["triggers"] = analysis.get("triggers", [])
+
+    if analysis.get("skipped") or not analysis.get("should_archive"):
+        result["success"] = analysis.get("success", False)
         result["skipped"] = True
-        result["reason"] = "plan-tracker.md 不存在"
+        result["reason"] = analysis.get("reason", "")
         return result
 
-    # Idempotency: if index.md already exists, skip
-    if _index_path().exists():
-        result["skipped"] = True
-        result["reason"] = "archive/index.md 已存在——归档已执行过"
-        result["success"] = True
-        return result
-
-    # Read and parse plan-tracker
-    content = _plan_tracker().read_text(encoding="utf-8")
-    roadmap_versions = _parse_version_roadmap(content)
-
-    # Filter published versions, sort by semver
-    published_versions = [(v, s) for v, s in roadmap_versions if s == "已发布"]
-    published_versions.sort(key=lambda x: _version_to_tuple(x[0]))
-
-    if len(published_versions) < 2:
-        result["skipped"] = True
-        result["reason"] = (
-            f"已发布版本数不足（{len(published_versions)} < 2），跳过归档"
-        )
-        return result
-
-    # Archive range: oldest to second-newest (preserve latest published)
-    version_start = published_versions[0][0]
-    version_end = published_versions[-2][0]  # second newest
-
-    result["versions_archived"] = [v for v, _ in published_versions[:-1]]
-    result["versions_range"] = (version_start, version_end)
-
-    # Pre-check: dry-run to see if there is actual data to archive
-    pre_check = migrate_by_version(version_start, version_end, dry_run=True)
-    if pre_check["tasks_archived"] == 0:
-        result["skipped"] = True
-        result["reason"] = (
-            f"归档范围 v{version_start}~v{version_end} 内无可归档数据"
-        )
-        return result
+    version_start, version_end = result["versions_range"]
 
     # Dry-run mode: report preview and return
     if dry_run:
         result["success"] = True
-        result["tasks_archived"] = pre_check["tasks_archived"]
         result["details"] = (
-            f"Dry-run: 将归档 {pre_check['tasks_archived']} 个 task "
-            f"(v{version_start}~v{version_end})"
+            f"Dry-run: 将归档 {result['tasks_archived']} 个 task "
+            f"(v{version_start}~v{version_end}); "
+            f"triggers={','.join(result['triggers'])}"
         )
         return result
 
@@ -1290,15 +1521,20 @@ def _format_auto_summary(result):
     lines = [
         "📦 治理数据归档完成:",
         f"  - 归档范围: {range_str}",
-        f"  - 归档 {result['tasks_archived']} 个 task "
-        f"→ archive/tasks/v{result['versions_range'][0]}~v{result['versions_range'][1]}.md",
     ]
 
+    task_file = next(
+        (f for f in result.get("archive_files_created", []) if f.startswith("archive/tasks/")),
+        f"archive/tasks/v{result['versions_range'][0]}~v{result['versions_range'][1]}.md",
+    )
+    lines.append(f"  - 归档 {result['tasks_archived']} 个 task → {task_file}")
+
     if result.get("evidence_archived", 0) > 0:
-        lines.append(
-            f"  - 归档 {result['evidence_archived']} 条证据 "
-            f"→ archive/evidence/v{result['versions_range'][0]}~v{result['versions_range'][1]}.md"
+        evidence_file = next(
+            (f for f in result.get("archive_files_created", []) if f.startswith("archive/evidence/")),
+            f"archive/evidence/v{result['versions_range'][0]}~v{result['versions_range'][1]}.md",
         )
+        lines.append(f"  - 归档 {result['evidence_archived']} 条证据 → {evidence_file}")
 
     # File size changes
     pt_before = result.get("plan_tracker_before", 0)

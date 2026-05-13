@@ -5,6 +5,7 @@ import argparse
 import json
 import locale
 import subprocess
+import importlib.util
 from datetime import datetime, date
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -1126,6 +1127,19 @@ ARCHIVE_TASKS_DIR = ROOT / ".governance/archive/tasks"
 ARCHIVE_EVIDENCE_DIR = ROOT / ".governance/archive/evidence"
 ARCHIVE_DECISIONS_DIR = ROOT / ".governance/archive/decisions"
 ARCHIVE_RISKS_DIR = ROOT / ".governance/archive/risks"
+
+
+def _load_archive_module():
+    archive_path = ROOT / "skills/software-project-governance/infra/archive.py"
+    if not archive_path.is_file():
+        return None
+    spec = importlib.util.spec_from_file_location("governance_archive_runtime", archive_path)
+    if spec is None or spec.loader is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.ROOT = ROOT
+    return module
 
 
 # ── SYSGAP-030: GovernanceDataSource (archive-aware data source) ──
@@ -4915,6 +4929,9 @@ def cmd_check_governance(args):
     print(f"│  Hot tasks (plan-tracker): {ai_result['hot_tasks']}")
     print(f"│  Archived tasks: {ai_result['total_archived_tasks']}")
     print(f"│  Index entries: {ai_result['index_entries']}")
+    if ai_result.get("pending_archive_tasks", 0):
+        print(f"│  Pending archive tasks: {ai_result['pending_archive_tasks']}")
+        print(f"│  Archive triggers: {', '.join(ai_result.get('archive_triggers', [])) or 'none'}")
     if ai_result["issues"]:
         all_issues += len(ai_result["issues"])
         print(f"│  [WARN] {len(ai_result['issues'])} archive integrity issue(s):")
@@ -5846,13 +5863,31 @@ def check_archive_integrity():
         "index_entries": 0,
         "hot_tasks": 0,
         "total_expected": 0,
+        "pending_archive_tasks": 0,
+        "archive_triggers": [],
     }
 
     archive_index = ROOT / ".governance/archive/index.md"
     archive_tasks_dir = ROOT / ".governance/archive/tasks"
     archive_evidence_dir = ROOT / ".governance/archive/evidence"
 
-    # If no archive index, nothing to check — pass
+    archive_module = _load_archive_module()
+    if archive_module is not None:
+        analysis = archive_module.analyze_auto_archive_candidates()
+        result["pending_archive_tasks"] = analysis.get("tasks_archived", 0)
+        result["archive_triggers"] = analysis.get("triggers", [])
+        if analysis.get("should_archive"):
+            result["pass"] = False
+            result["issues"].append(
+                "Archive trigger gap: "
+                f"{analysis.get('tasks_archived', 0)} hot completed task(s) "
+                f"should be archived via {', '.join(analysis.get('triggers', []))} "
+                f"for v{analysis.get('versions_range', ('?', '?'))[0]}~"
+                f"v{analysis.get('versions_range', ('?', '?'))[1]}. "
+                "Run archive.py migrate --auto."
+            )
+
+    # If no archive index, integrity can still pass when no trigger gap exists.
     if not archive_index.exists():
         # But check if there are orphan archive files
         has_archive_files = False
@@ -5869,6 +5904,16 @@ def check_archive_integrity():
             result["issues"].append(
                 "Archive files exist but index.md is missing. Run archive.build_index() to rebuild."
             )
+        # Count hot tasks for the check output even before first archive.
+        if SAMPLE_PATH.is_file():
+            content = SAMPLE_PATH.read_text(encoding="utf-8")
+            for line in content.split("\n"):
+                stripped = line.strip()
+                if not stripped.startswith("| ") or "---" in stripped:
+                    continue
+                if re.match(r"\|\s*([A-Z]+-\d+)\s*\|", stripped):
+                    result["hot_tasks"] += 1
+        result["total_expected"] = result["hot_tasks"]
         return result
 
     # Parse index to get referenced archive files
@@ -6000,6 +6045,9 @@ def cmd_check_archive_integrity(_args):
     print(f"  Archived tasks: {result['total_archived_tasks']}")
     print(f"  Index entries: {result['index_entries']}")
     print(f"  Total tasks (hot + archive): {result['total_expected']}")
+    if result.get("pending_archive_tasks", 0):
+        print(f"  Pending archive tasks: {result['pending_archive_tasks']}")
+        print(f"  Archive triggers: {', '.join(result.get('archive_triggers', [])) or 'none'}")
 
     if result["issues"]:
         print(f"\n  Issues ({len(result['issues'])}):")

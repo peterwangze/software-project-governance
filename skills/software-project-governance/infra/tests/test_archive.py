@@ -227,6 +227,16 @@ def _make_plan_tracker_with_roadmap(governance_dir, roadmap_versions, version_ta
     return content
 
 
+def _pad_plan_tracker(governance_dir, min_bytes=82 * 1024):
+    """Pad plan-tracker so first-migration size threshold is met."""
+    path = governance_dir / "plan-tracker.md"
+    content = path.read_text(encoding="utf-8")
+    if len(content.encode("utf-8")) < min_bytes:
+        content += "\n\n<!-- test padding -->\n" + ("x" * min_bytes)
+        path.write_text(content, encoding="utf-8")
+    return content
+
+
 # ────────────────────────────────────────────────────────────
 # Tests
 # ────────────────────────────────────────────────────────────
@@ -1025,6 +1035,178 @@ class TestArchiveRollback(unittest.TestCase):
             self.assertFalse(result["success"])
             self.assertIn("没有找到归档文件", result["details"])
 
+    def test_rollback_groups_task_and_evidence_when_evidence_file_is_newer(self):
+        """Rollback should undo same-name task/evidence archives as one migration."""
+        versions = [
+            ("v0.10.0 — Old release", [
+                ("FIX-001", "已完成", "Fix old bug", "—"),
+            ]),
+            ("v0.11.0 — Current", [
+                ("FIX-002", "进行中", "Keep hot", "—"),
+            ]),
+        ]
+        _make_plan_tracker(self.gov_dir, versions)
+        _make_evidence_log(self.gov_dir, [
+            ("EVD-001", "FIX-001", "Archived evidence"),
+            ("EVD-002", "FIX-002", "Hot evidence"),
+        ])
+
+        import archive
+
+        with patch.object(archive, 'ROOT', self.root):
+            result = archive.migrate_by_version(
+                "0.10.0", "0.10.0", dry_run=False, migrate_evidence=True
+            )
+            archive.build_index()
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["tasks_archived"], 1)
+        self.assertEqual(result["evidence_archived"], 1)
+
+        task_file = self.archive_dir / "tasks" / "v0.10.0~v0.10.0.md"
+        evidence_file = self.archive_dir / "evidence" / "v0.10.0~v0.10.0.md"
+        self.assertTrue(task_file.exists())
+        self.assertTrue(evidence_file.exists())
+
+        pt_after_migrate = (self.gov_dir / "plan-tracker.md").read_text(encoding="utf-8")
+        ev_after_migrate = (self.gov_dir / "evidence-log.md").read_text(encoding="utf-8")
+        self.assertNotIn("| FIX-001 |", pt_after_migrate)
+        self.assertNotIn("| EVD-001 |", ev_after_migrate)
+        self.assertIn("| EVD-002 |", ev_after_migrate)
+
+        # Force the evidence archive to be the newest file.  The rollback must
+        # still find and process the same-name task archive.
+        newer = task_file.stat().st_mtime + 10
+        os.utime(evidence_file, (newer, newer))
+
+        with patch.object(archive, 'ROOT', self.root):
+            rollback = archive.rollback_last_migration()
+
+        self.assertTrue(rollback["success"])
+        self.assertEqual(
+            set(rollback["rolled_back_files"]),
+            {
+                "archive/tasks/v0.10.0~v0.10.0.md",
+                "archive/evidence/v0.10.0~v0.10.0.md",
+            },
+        )
+        self.assertFalse(task_file.exists())
+        self.assertFalse(evidence_file.exists())
+
+        pt_after_rollback = (self.gov_dir / "plan-tracker.md").read_text(encoding="utf-8")
+        ev_after_rollback = (self.gov_dir / "evidence-log.md").read_text(encoding="utf-8")
+        self.assertIn("| FIX-001 |", pt_after_rollback)
+        self.assertIn("| EVD-001 |", ev_after_rollback)
+        self.assertIn("| EVD-002 |", ev_after_rollback)
+
+        index_content = (self.archive_dir / "index.md").read_text(encoding="utf-8")
+        self.assertNotIn("v0.10.0~v0.10.0.md", index_content)
+
+    def test_rollback_supports_evidence_only_archive_file(self):
+        """Backward compatibility: evidence-only archives can still rollback."""
+        _make_plan_tracker(self.gov_dir, [])
+        _make_evidence_log(self.gov_dir, [
+            ("EVD-002", "FIX-002", "Hot evidence"),
+        ])
+        evidence_file = self.archive_dir / "evidence" / "v0.10.0~v0.10.0.md"
+        evidence_file.write_text(
+            "# 归档 Evidence 表 — v0.10.0 ~ v0.10.0\n\n"
+            "| 证据ID | 关联Task | 摘要 | 日期 | 类型 | 产出 | 负责人 | 审查人 | 审查结果 | 备注 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
+            "| EVD-001 | FIX-001 | Archived evidence | 2026-05-01 | 代码 | src/ | 阿速 | 老赵 | 通过 | — |\n",
+            encoding="utf-8",
+        )
+
+        import archive
+
+        with patch.object(archive, 'ROOT', self.root):
+            archive.build_index()
+            rollback = archive.rollback_last_migration()
+
+        self.assertTrue(rollback["success"])
+        self.assertEqual(
+            rollback["rolled_back_files"],
+            ["archive/evidence/v0.10.0~v0.10.0.md"],
+        )
+        self.assertFalse(evidence_file.exists())
+        ev_after_rollback = (self.gov_dir / "evidence-log.md").read_text(encoding="utf-8")
+        self.assertIn("| EVD-001 |", ev_after_rollback)
+        self.assertIn("| EVD-002 |", ev_after_rollback)
+
+    def test_incremental_archive_uses_independent_file_and_rollback_keeps_history(self):
+        """Repeated version-range archive should rollback only the increment file."""
+        versions = [
+            ("v0.10.0 — Old release", [
+                ("FIX-001", "已完成", "Original task", "—"),
+            ]),
+        ]
+        _make_plan_tracker(self.gov_dir, versions)
+
+        import archive
+
+        with patch.object(archive, 'ROOT', self.root):
+            first = archive.migrate_by_version("0.10.0", "0.10.0", dry_run=False)
+            archive.build_index()
+
+        self.assertTrue(first["success"])
+        base_file = self.archive_dir / "tasks" / "v0.10.0~v0.10.0.md"
+        self.assertTrue(base_file.exists())
+
+        # Simulate a later completed task becoming eligible in the same
+        # version range after the base archive already exists.
+        pt_path = self.gov_dir / "plan-tracker.md"
+        pt_content = pt_path.read_text(encoding="utf-8")
+        pt_content = pt_content.replace(
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
+            "| FIX-002 | Incremental task | P1 | — | 1.0.0 | 阿速 | — | Code Reviewer | TBD | 已完成 |",
+        )
+        pt_path.write_text(pt_content, encoding="utf-8")
+
+        with patch.object(archive, 'ROOT', self.root):
+            second = archive.migrate_by_version("0.10.0", "0.10.0", dry_run=False)
+            archive.build_index()
+
+        self.assertTrue(second["success"])
+        self.assertEqual(second["tasks_archived"], 1)
+        inc_files = sorted((self.archive_dir / "tasks").glob("v0.10.0~v0.10.0-incremental-*.md"))
+        self.assertEqual(len(inc_files), 1)
+        self.assertTrue(base_file.exists())
+
+        with patch.object(archive, 'ROOT', self.root):
+            rollback = archive.rollback_last_migration()
+
+        self.assertTrue(rollback["success"])
+        self.assertTrue(base_file.exists(), "Rollback must keep historical base archive")
+        self.assertFalse(inc_files[0].exists(), "Rollback should remove only the increment file")
+
+        pt_after = pt_path.read_text(encoding="utf-8")
+        self.assertNotIn("| FIX-001 |", pt_after, "Rollback must not restore old archived history")
+        self.assertIn("| FIX-002 |", pt_after, "Rollback should restore only incremental task")
+        self.assertRegex(
+            pt_after,
+            r"### v0\.10\.0 .* \[已归档\]",
+            "v0.10.0 title must stay marked while base archive still covers it",
+        )
+
+    def test_archive_version_range_parser_supports_base_and_incremental_names(self):
+        """Filename parser should recognize base and incremental archive ranges."""
+        import archive
+
+        self.assertEqual(
+            archive._parse_archive_version_range("v0.10.0~v0.10.0.md"),
+            ("0.10.0", "0.10.0"),
+        )
+        self.assertEqual(
+            archive._parse_archive_version_range(
+                "v0.10.0~v0.12.0-incremental-20260513-2.md"
+            ),
+            ("0.10.0", "0.12.0"),
+        )
+        self.assertIsNone(
+            archive._parse_archive_version_range("legacy-v0.10.0.md")
+        )
+
 
 class TestArchiveMigrateAuto(unittest.TestCase):
     """Test migrate_auto function (--auto mode)."""
@@ -1073,6 +1255,7 @@ class TestArchiveMigrateAuto(unittest.TestCase):
             ("EVD-003", "FIX-003", "Fixed bug 3"),
             ("EVD-004", "FIX-004", "Fixed bug 4"),
         ])
+        _pad_plan_tracker(self.gov_dir)
 
         import archive
 
@@ -1135,6 +1318,9 @@ class TestArchiveMigrateAuto(unittest.TestCase):
         ]
         # Use _make_plan_tracker (no roadmap) and DO NOT add roadmap section
         _make_plan_tracker(self.gov_dir, versions)
+        # No roadmap dates are available, so use an existing index to trigger
+        # continuous release-forced archive without relying on first threshold.
+        (self.archive_dir / "index.md").write_text("# 归档索引\n", encoding="utf-8")
 
         import archive
 
@@ -1167,6 +1353,7 @@ class TestArchiveMigrateAuto(unittest.TestCase):
             ]),
         ]
         _make_plan_tracker_with_roadmap(self.gov_dir, roadmap, tasks)
+        _pad_plan_tracker(self.gov_dir)
 
         import archive
 
@@ -1176,11 +1363,24 @@ class TestArchiveMigrateAuto(unittest.TestCase):
         self.assertTrue(result.get("skipped", False))
         self.assertIn("无可归档数据", result.get("reason", ""))
 
-    def test_auto_idempotent(self):
-        """If archive/index.md already exists → skip."""
-        # Create pre-existing index
+    def test_auto_existing_index_no_new_data_idempotent_skip(self):
+        """If index exists and no hot archivable data exists → skip without changes."""
+        # Create pre-existing index + archive file for FIX-001.
+        task_archive = self.archive_dir / "tasks" / "v0.10.0~v0.10.0.md"
+        task_archive.write_text(
+            "# 归档 Task 表 — v0.10.0 ~ v0.10.0\n\n"
+            "### v0.10.0 — Initial\n"
+            "| 任务ID | 描述 | 优先级 | 依赖 | 目标版本 | 负责人 | 审查人 | 审查类型 | 闭环路径 | 状态 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
+            "| FIX-001 | Fix bug 1 | P1 | — | 1.0.0 | 阿速 | — | Code Reviewer | TBD | 已完成 |\n",
+            encoding="utf-8",
+        )
         (self.archive_dir / "index.md").write_text(
-            "# 归档索引\n\n> Existing index\n", encoding="utf-8"
+            "# 归档索引\n\n## Task 索引\n\n"
+            "| Task ID | 状态 | 版本 | 归档文件 |\n"
+            "|---------|------|------|---------|\n"
+            "| FIX-001 | 已完成 | 0.10.0 | archive/tasks/v0.10.0~v0.10.0.md |\n",
+            encoding="utf-8",
         )
 
         roadmap = [
@@ -1191,8 +1391,12 @@ class TestArchiveMigrateAuto(unittest.TestCase):
             ("v0.10.0 — Initial", [
                 ("FIX-001", "已完成", "Fix bug 1", "—"),
             ]),
+            ("v0.11.0 — Latest published", [
+                ("FIX-002", "进行中", "Fix bug 2", "—"),
+            ]),
         ]
         _make_plan_tracker_with_roadmap(self.gov_dir, roadmap, tasks)
+        before = (self.gov_dir / "plan-tracker.md").read_text(encoding="utf-8")
 
         import archive
 
@@ -1200,8 +1404,10 @@ class TestArchiveMigrateAuto(unittest.TestCase):
             result = archive.migrate_auto(dry_run=False)
 
         self.assertTrue(result.get("skipped", False))
-        self.assertIn("已存在", result.get("reason", ""))
+        self.assertIn("无可归档数据", result.get("reason", ""))
         self.assertTrue(result["success"])
+        after = (self.gov_dir / "plan-tracker.md").read_text(encoding="utf-8")
+        self.assertEqual(before, after)
 
     def test_auto_dry_run(self):
         """--auto + dry-run → preview but no files modified."""
@@ -1222,6 +1428,7 @@ class TestArchiveMigrateAuto(unittest.TestCase):
             ]),
         ]
         _make_plan_tracker_with_roadmap(self.gov_dir, roadmap, tasks)
+        _pad_plan_tracker(self.gov_dir)
 
         import archive
 
@@ -1268,6 +1475,7 @@ class TestArchiveMigrateAuto(unittest.TestCase):
             ]),
         ]
         _make_plan_tracker_with_roadmap(self.gov_dir, roadmap, tasks)
+        _pad_plan_tracker(self.gov_dir)
 
         import archive
 
@@ -1306,6 +1514,7 @@ class TestArchiveMigrateAuto(unittest.TestCase):
         _make_evidence_log(self.gov_dir, [
             ("EVD-001", "FIX-001", "Fixed bug 1"),
         ])
+        _pad_plan_tracker(self.gov_dir)
 
         import archive
 
@@ -1317,6 +1526,149 @@ class TestArchiveMigrateAuto(unittest.TestCase):
         # published: [0.10.0, 0.11.0] → archive 0.10.0 only
         self.assertEqual(result["versions_archived"], ["0.10.0"])
         self.assertEqual(result["tasks_archived"], 1)
+
+    def test_auto_existing_index_new_published_version_incremental_archive(self):
+        """Existing index must not block newly eligible published-version data."""
+        roadmap = [
+            ("0.10.0", "已发布"),
+            ("0.11.0", "已发布"),
+            ("0.12.0", "已发布"),
+        ]
+        tasks = [
+            ("v0.10.0 — Already archived", [
+                ("FIX-001", "已完成", "Fix old bug", "—"),
+            ]),
+            ("v0.11.0 — Newly old", [
+                ("FIX-002", "已完成", "Fix new old bug", "—"),
+            ]),
+            ("v0.12.0 — Latest published", [
+                ("FIX-003", "已完成", "Keep latest hot", "—"),
+            ]),
+        ]
+        _make_plan_tracker_with_roadmap(self.gov_dir, roadmap, tasks)
+        existing = self.archive_dir / "tasks" / "v0.10.0~v0.10.0.md"
+        existing.write_text(
+            "# 归档 Task 表 — v0.10.0 ~ v0.10.0\n\n"
+            "### v0.10.0 — Already archived\n"
+            "| 任务ID | 描述 | 优先级 | 依赖 | 目标版本 | 负责人 | 审查人 | 审查类型 | 闭环路径 | 状态 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
+            "| FIX-001 | Fix old bug | P1 | — | 1.0.0 | 阿速 | — | Code Reviewer | TBD | 已完成 |\n",
+            encoding="utf-8",
+        )
+        (self.archive_dir / "index.md").write_text(
+            "# 归档索引\n\n## Task 索引\n\n"
+            "| Task ID | 状态 | 版本 | 归档文件 |\n"
+            "|---------|------|------|---------|\n"
+            "| FIX-001 | 已完成 | 0.10.0 | archive/tasks/v0.10.0~v0.10.0.md |\n",
+            encoding="utf-8",
+        )
+
+        import archive
+
+        with patch.object(archive, 'ROOT', self.root):
+            result = archive.migrate_auto(dry_run=False)
+
+        self.assertTrue(result["success"])
+        self.assertFalse(result.get("skipped", False))
+        self.assertIn("release_forced", result["triggers"])
+        self.assertEqual(result["tasks_archived"], 1)
+
+        pt_content = (self.gov_dir / "plan-tracker.md").read_text(encoding="utf-8")
+        self.assertNotIn("| FIX-002 |", pt_content)
+        self.assertIn("| FIX-003 |", pt_content)
+        index_content = (self.archive_dir / "index.md").read_text(encoding="utf-8")
+        self.assertIn("FIX-002", index_content)
+
+    def test_auto_task_incremental_threshold_dry_run_reports_archive_needed(self):
+        """A large batch of hot completed tasks should trigger dry-run reporting."""
+        roadmap = [
+            ("0.10.0", "已发布"),
+            ("0.11.0", "已发布"),
+        ]
+        old_tasks = [
+            (f"FIX-{i:03d}", "已完成", f"Fix bug {i}", "—")
+            for i in range(1, 22)
+        ]
+        tasks = [
+            ("v0.10.0 — Old release", old_tasks),
+            ("v0.11.0 — Latest published", [
+                ("FIX-999", "进行中", "Keep hot", "—"),
+            ]),
+        ]
+        _make_plan_tracker_with_roadmap(self.gov_dir, roadmap, tasks)
+
+        import archive
+
+        with patch.object(archive, 'ROOT', self.root):
+            result = archive.migrate_auto(dry_run=True)
+
+        self.assertTrue(result["success"])
+        self.assertFalse(result.get("skipped", False))
+        self.assertIn("task_incremental", result["triggers"])
+        self.assertEqual(result["tasks_archived"], 21)
+        self.assertFalse((self.archive_dir / "index.md").exists())
+
+    def test_auto_90_day_fallback_reports_archive_needed(self):
+        """A stale archive cadence with hot historical data should trigger fallback."""
+        roadmap = [
+            ("0.10.0", "已发布"),
+            ("0.11.0", "已发布"),
+            ("0.12.0", "已发布"),
+        ]
+        tasks = [
+            ("v0.10.0 — Old release", [
+                ("FIX-001", "已完成", "Fix old bug", "—"),
+            ]),
+            ("v0.11.0 — Another old release", [
+                ("FIX-002", "已完成", "Fix another bug", "—"),
+            ]),
+            ("v0.12.0 — Latest", [
+                ("FIX-003", "进行中", "Keep hot", "—"),
+            ]),
+        ]
+        _make_plan_tracker_with_roadmap(self.gov_dir, roadmap, tasks)
+        index = self.archive_dir / "index.md"
+        index.write_text("# 归档索引\n", encoding="utf-8")
+        stale = 0
+        import time
+        stale = time.time() - (91 * 24 * 60 * 60)
+        os.utime(index, (stale, stale))
+
+        import archive
+
+        with patch.object(archive, 'ROOT', self.root):
+            result = archive.migrate_auto(dry_run=True)
+
+        self.assertTrue(result["success"])
+        self.assertIn("fallback_90d", result["triggers"])
+        self.assertGreaterEqual(result["tasks_archived"], 2)
+
+    def test_analyze_candidates_no_archive_dir_is_read_only(self):
+        """Candidate analysis must not create archive/ in unarchived projects."""
+        import shutil
+        shutil.rmtree(str(self.archive_dir))
+
+        roadmap = [
+            ("0.10.0", "已发布"),
+            ("0.11.0", "已发布"),
+        ]
+        tasks = [
+            ("v0.10.0 — Old release", [
+                ("FIX-001", "已完成", "Fix old bug", "—"),
+            ]),
+            ("v0.11.0 — Latest", [
+                ("FIX-002", "进行中", "Keep hot", "—"),
+            ]),
+        ]
+        _make_plan_tracker_with_roadmap(self.gov_dir, roadmap, tasks)
+
+        import archive
+
+        with patch.object(archive, 'ROOT', self.root):
+            result = archive.analyze_auto_archive_candidates()
+
+        self.assertTrue(result["success"])
+        self.assertFalse((self.gov_dir / "archive").exists())
 
 
 def _make_plan_tracker_with_sample_table(governance_dir, sample_tasks, version_tasks=None,

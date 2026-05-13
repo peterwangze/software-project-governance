@@ -1085,6 +1085,374 @@ class GovernanceIntegrationTests(unittest.TestCase):
                     self.fail(f"check_gate_consistency raised: {exc}")
 
 
+class GovernanceSignalNoiseTests(unittest.TestCase):
+    """FIX-066: governance checks keep signal while suppressing historical noise."""
+
+    def _minimal_m5_root(self, root, claude_text):
+        (root / "CLAUDE.md").write_text(claude_text, encoding="utf-8")
+        (root / "commands").mkdir(parents=True)
+        (root / "commands" / "governance-init.md").write_text(
+            "AskUserQuestion\nM5.1\n我即将输出的文本是否包含向用户提问的问句\n",
+            encoding="utf-8",
+        )
+        ib_dir = root / "skills/software-project-governance/references"
+        ib_dir.mkdir(parents=True)
+        (ib_dir / "interaction-boundary.md").write_text(
+            "Use AskUserQuestion at interaction boundaries.\n",
+            encoding="utf-8",
+        )
+
+    def test_m5_ignores_checklist_questions_but_catches_inline_ask_instruction(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._minimal_m5_root(
+                root,
+                "1. 我是否已经读了 plan-tracker？否 -> 去读\n"
+                "合法检查清单：这个方案是否覆盖测试？\n"
+                "违规：MUST 直接问用户“要不要继续？”\n",
+            )
+            with patch.object(vw, "ROOT", root):
+                result = vw.check_m5_compliance()
+
+        blocking = [i for i in result["issues"] if i["severity"] == "BLOCKING"]
+        self.assertEqual(len(blocking), 1)
+        self.assertEqual(blocking[0]["type"], "m5_inline_question_cn")
+        self.assertIn("直接问用户", blocking[0]["text"])
+
+    def test_m5_scans_root_agents_entry_surface(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._minimal_m5_root(root, "safe\n")
+            (root / "AGENTS.md").write_text(
+                "违规：MUST 直接问用户“要不要继续？”\n",
+                encoding="utf-8",
+            )
+
+            with patch.object(vw, "ROOT", root):
+                result = vw.check_m5_compliance()
+
+        blocking = [i for i in result["issues"] if i["severity"] == "BLOCKING"]
+        self.assertEqual(len(blocking), 1)
+        self.assertEqual(blocking[0]["file"], "AGENTS.md")
+
+    def test_manifest_uses_tracked_scope_and_ignores_local_runtime_files(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            manifest = {
+                "root_entries": {"files": ["README.md"], "directories": []},
+                "product": {"entries": [], "glob_patterns": []},
+                "repo_only": {"entries": [], "glob_patterns": []},
+            }
+            mp = root / "manifest.json"
+            mp.write_text(json.dumps(manifest), encoding="utf-8")
+            (root / "README.md").write_text("ok", encoding="utf-8")
+            (root / "AGENTS.md").write_text("local user note", encoding="utf-8")
+            cache = root / ".pytest_cache"
+            cache.mkdir()
+            (cache / "README.md").write_text("cache", encoding="utf-8")
+
+            with patch.object(vw, "ROOT", root), \
+                 patch.object(vw, "_git_files", return_value={"README.md"}):
+                result = vw.check_manifest_consistency(mp)
+
+        self.assertTrue(result["pass"])
+        self.assertEqual(result["untracked"], [])
+
+    def test_manifest_still_catches_tracked_file_missing_from_manifest(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            manifest = {
+                "root_entries": {"files": ["README.md"], "directories": []},
+                "product": {"entries": [], "glob_patterns": []},
+                "repo_only": {"entries": [], "glob_patterns": []},
+            }
+            mp = root / "manifest.json"
+            mp.write_text(json.dumps(manifest), encoding="utf-8")
+            (root / "README.md").write_text("ok", encoding="utf-8")
+            (root / "tracked-extra.md").write_text("real drift", encoding="utf-8")
+
+            with patch.object(vw, "ROOT", root), \
+                 patch.object(vw, "_git_files", return_value={"README.md", "tracked-extra.md"}):
+                result = vw.check_manifest_consistency(mp)
+
+        self.assertFalse(result["pass"])
+        self.assertEqual(result["untracked"], ["tracked-extra.md"])
+
+    def test_archive_completed_missing_evidence_is_info_but_hot_missing_fails(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gov = root / ".governance"
+            gov.mkdir(parents=True)
+            sp = gov / "plan-tracker.md"
+            ep = gov / "evidence-log.md"
+            sp.write_text(
+                "\n".join([_TASK_COLS, _TASK_SEP, _task("HOT-001", "已完成")]),
+                encoding="utf-8",
+            )
+            ep.write_text("", encoding="utf-8")
+            archive = gov / "archive"
+            tasks_dir = archive / "tasks"
+            evidence_dir = archive / "evidence"
+            tasks_dir.mkdir(parents=True)
+            evidence_dir.mkdir()
+            (archive / "index.md").write_text("index", encoding="utf-8")
+            (tasks_dir / "v0.1.0.md").write_text(
+                "\n".join([_TASK_COLS, _TASK_SEP, _task("OLD-001", "已完成")]),
+                encoding="utf-8",
+            )
+            (evidence_dir / "v0.1.0.md").write_text("", encoding="utf-8")
+
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                missing = vw.check_evidence_completeness()
+                gate = vw.check_gate_consistency()
+
+        self.assertEqual(missing["missing_evidence"], ["HOT-001"])
+        self.assertEqual(missing["historical_missing_evidence"], ["OLD-001"])
+        self.assertTrue(any(i["type"] == "completed_tasks_missing_evidence" for i in gate))
+        self.assertTrue(any(i["type"] == "historical_completed_tasks_missing_evidence" for i in gate))
+
+    def test_cross_reference_ignores_bare_filenames_but_catches_real_broken_path(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source_dir = root / "skills/software-project-governance"
+            source_dir.mkdir(parents=True)
+            (source_dir / "SKILL.md").write_text(
+                "Bare SKILL.md is prose.\nBroken inline path: `missing/path.md`\n",
+                encoding="utf-8",
+            )
+            with patch.object(vw, "ROOT", root):
+                result = vw.check_cross_references()
+
+        self.assertEqual(len(result["dangling"]), 1)
+        self.assertEqual(result["dangling"][0]["target"], "missing/path.md")
+
+    def test_cross_reference_resolves_skill_root_paths_from_commands_and_agents(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "commands").mkdir()
+            (root / "agents").mkdir()
+            skill = root / "skills/software-project-governance"
+            (skill / "core").mkdir(parents=True)
+            (skill / "infra").mkdir()
+            (skill / "references").mkdir()
+            (skill / "core/onboarding.md").write_text("ok\n", encoding="utf-8")
+            (skill / "infra/verify_workflow.py").write_text("# ok\n", encoding="utf-8")
+            (skill / "references/guide.md").write_text("ok\n", encoding="utf-8")
+            (root / "commands/governance.md").write_text("See `core/onboarding.md`.\n", encoding="utf-8")
+            (root / "agents/governance-developer.md").write_text(
+                "Owns `infra/verify_workflow.py` and `references/guide.md`.\n",
+                encoding="utf-8",
+            )
+
+            with patch.object(vw, "ROOT", root):
+                result = vw.check_cross_references()
+
+        self.assertEqual(result["dangling"], [])
+
+    def test_cross_reference_ignores_generated_output_paths_but_not_other_docs_paths(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            agents = root / "agents"
+            agents.mkdir()
+            (agents / "analyst.md").write_text(
+                "## 输出格式\n\n"
+                "执行完毕后必须生成：\n"
+                "- `docs/requirements/user-profiles.md`（用户画像）\n"
+                "\n"
+                "## 其他\n"
+                "真实引用：`docs/requirements/missing-source.md`\n",
+                encoding="utf-8",
+            )
+
+            with patch.object(vw, "ROOT", root):
+                result = vw.check_cross_references()
+
+        self.assertEqual(len(result["dangling"]), 1)
+        self.assertEqual(result["dangling"][0]["target"], "docs/requirements/missing-source.md")
+
+    def test_cross_reference_ignores_external_and_runtime_generated_refs(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            ref_dir = root / "skills/software-project-governance/references"
+            ref_dir.mkdir(parents=True)
+            (ref_dir / "methodology-routing.md").write_text(
+                "味道指令由 PUA skill 的 `references/flavors.md` 定义。\n",
+                encoding="utf-8",
+            )
+            commands = root / "commands"
+            commands.mkdir()
+            (commands / "governance-init.md").write_text(
+                "- **不**创建 `archive/index.md`——索引在首次归档时由 archive.py 自动生成\n",
+                encoding="utf-8",
+            )
+
+            with patch.object(vw, "ROOT", root):
+                result = vw.check_cross_references()
+
+        self.assertEqual(result["dangling"], [])
+
+    def test_cross_reference_excludes_validator_coverage_edges_from_cycle_graph(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            skill = root / "skills/software-project-governance"
+            infra = skill / "infra"
+            core = skill / "core/protocol"
+            infra.mkdir(parents=True)
+            core.mkdir(parents=True)
+            (infra / "verify_workflow.py").write_text(
+                'REQUIRED_FILES = {"contract": ROOT / "skills/software-project-governance/core/protocol/plugin-contract.md"}\n',
+                encoding="utf-8",
+            )
+            (core / "plugin-contract.md").write_text(
+                "Validator: `skills/software-project-governance/infra/verify_workflow.py`\n",
+                encoding="utf-8",
+            )
+
+            with patch.object(vw, "ROOT", root):
+                result = vw.check_cross_references()
+
+        self.assertEqual(result["dangling"], [])
+        self.assertEqual(result["cycles"], [])
+
+    def test_cross_reference_excludes_entry_index_edges_from_cycle_graph(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            skill = root / "skills/software-project-governance"
+            ref = skill / "references"
+            ref.mkdir(parents=True)
+            (skill / "SKILL.md").write_text(
+                "| `references/template.md` | Agent dispatch template |\n",
+                encoding="utf-8",
+            )
+            (ref / "template.md").write_text(
+                "Coordinator identity is defined in `skills/software-project-governance/SKILL.md`.\n",
+                encoding="utf-8",
+            )
+
+            with patch.object(vw, "ROOT", root):
+                result = vw.check_cross_references()
+
+        self.assertEqual(result["dangling"], [])
+        self.assertEqual(result["cycles"], [])
+
+    def test_cross_reference_still_detects_real_doc_cycles(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            docs = root / "skills/software-project-governance/references"
+            docs.mkdir(parents=True)
+            (docs / "a.md").write_text("See [b](b.md).\n", encoding="utf-8")
+            (docs / "b.md").write_text("See [a](a.md).\n", encoding="utf-8")
+
+            with patch.object(vw, "ROOT", root):
+                result = vw.check_cross_references()
+
+        self.assertEqual(result["dangling"], [])
+        self.assertEqual(len(result["cycles"]), 1)
+
+    def test_hot_evidence_extra_columns_remain_actionable(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gov = root / ".governance"
+            gov.mkdir(parents=True)
+            (gov / "plan-tracker.md").write_text("ok\n", encoding="utf-8")
+            (gov / "decision-log.md").write_text("", encoding="utf-8")
+            (gov / "evidence-log.md").write_text(
+                "| EVD-001 | FIX-001 | type | date | actor | action | file | result | notes | status |\n"
+                "| EVD-002 | FIX-002 | type | date | actor | action | file | result | notes | status | extra |\n",
+                encoding="utf-8",
+            )
+            manifest = root / "skills/software-project-governance/core/manifest.json"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text(
+                json.dumps({"product": {}, "repo_only": {}, "exclude": {}}),
+                encoding="utf-8",
+            )
+
+            with patch.object(vw, "ROOT", root):
+                issues = vw.check_structural_validity()
+
+        evidence_issues = [i for i in issues if i.get("file") == ".governance/evidence-log.md"]
+        self.assertEqual(len(evidence_issues), 1)
+        self.assertEqual(evidence_issues[0]["type"], "evidence_col_mismatch")
+        self.assertEqual(evidence_issues[0]["severity"], "WARN")
+
+    def test_untracked_root_agents_is_actionable_entry_surface(self):
+        completed = subprocess.CompletedProcess(
+            args=["git"],
+            returncode=0,
+            stdout="AGENTS.md\nscratch.txt\n",
+            stderr="",
+        )
+        with patch("subprocess.run", return_value=completed):
+            result = vw.check_untracked_files()
+
+        self.assertFalse(result["pass"])
+        self.assertEqual(result["actionable_entry_files"], ["AGENTS.md"])
+        self.assertEqual(result["suggest_manual"], ["scratch.txt"])
+
+    def test_ignored_root_agents_entry_surface_is_not_reported(self):
+        completed = subprocess.CompletedProcess(
+            args=["git"],
+            returncode=0,
+            stdout="scratch.txt\n",
+            stderr="",
+        )
+        with patch("subprocess.run", return_value=completed):
+            result = vw.check_untracked_files()
+
+        self.assertFalse(result["pass"])
+        self.assertEqual(result["actionable_entry_files"], [])
+        self.assertEqual(result["untracked_files"], ["scratch.txt"])
+        self.assertEqual(result["suggest_manual"], ["scratch.txt"])
+
+    def test_lock_severity_blocks_invalid_lock_and_parses_task_id_in_any_cell(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gov = root / ".governance"
+            gov.mkdir(parents=True)
+            (gov / "plan-tracker.md").write_text(
+                "| 优先级 | ID | 状态 |\n"
+                "| --- | --- | --- |\n"
+                "| **P1** | FIX-066 | 进行中 |\n",
+                encoding="utf-8",
+            )
+            (gov / "agent-locks.json").write_text(
+                json.dumps({
+                    "active_tasks": {},
+                    "file_locks": {
+                        "skills/software-project-governance/infra/verify_workflow.py": {
+                            "locked_by": "FIX-066",
+                            "locked_at": "2099-01-01T00:00:00Z",
+                            "ttl_seconds": 600,
+                            "ttl_reason": "test",
+                        }
+                    },
+                }),
+                encoding="utf-8",
+            )
+
+            with patch.object(vw, "ROOT", root):
+                result = vw.check_agent_lock_consistency()
+
+        self.assertFalse(any(i["type"] == "task_not_in_plan" for i in result["issues"]))
+        orphan = next(i for i in result["issues"] if i["type"] == "orphan_lock")
+        self.assertTrue(vw.lock_issue_is_blocking(orphan))
+        self.assertEqual(orphan["severity"], "BLOCKING")
+
+    def test_check_snippets_reports_current_missing_source_file(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            missing = root / "current.md"
+            with patch.object(vw, "ROOT", root), \
+                 patch.object(vw, "REQUIRED_SNIPPETS", {missing: ["current fact"]}):
+                with redirect_stdout(io.StringIO()):
+                    failures = vw.check_snippets()
+
+        self.assertEqual(len(failures), 1)
+        self.assertIn("missing snippet source file", failures[0])
+
+
 # ────────────────────────────────────────────────────────────
 # SYSGAP-029: Goal Alignment (Check 11) and User Impact (Check 12) regression tests
 # ────────────────────────────────────────────────────────────

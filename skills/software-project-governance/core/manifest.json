@@ -72,6 +72,8 @@
       { "path": ".governance/", "type": "dir" },
       { "path": ".git/", "type": "dir" },
       { "path": ".claude/", "type": "dir" },
+      { "path": ".github/", "type": "dir" },
+      { "path": "tests/", "type": "dir" },
       { "path": "docs/", "type": "dir" }
     ],
     "glob_patterns": [
@@ -79,6 +81,8 @@
       "project/**/*.yml",
       "project/**/*.json",
       ".governance/*.md",
+      ".github/workflows/*.yml",
+      "tests/**/*.py",
       "docs/**/*.md"
     ]
   },

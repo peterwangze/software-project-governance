@@ -2,6 +2,9 @@
 .claude/*
 CLAUDE.md
 
+# Local Codex state
+AGENTS.md
+
 # Local governance tracking (runtime data, not product asset)
 .governance/
 

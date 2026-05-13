@@ -20,8 +20,8 @@
                            │ 加载（单向依赖）
 ┌──────────────────────────▼──────────────────────────────┐
 │                    入口层（Entry）                         │
-│  主 SKILL.md（仅引导进入 Coordinator）                    │
-│  Coordinator Agent（直接由主 agent 加载）                  │
+│  主 SKILL.md（内嵌 Coordinator 身份、边界、路由、参考索引） │
+│  Coordinator（直接由主 agent 加载，不再是独立 agent 文件） │
 └──────────────────────────┬──────────────────────────────┘
                            │ 加载并成为（单向依赖）
 ┌──────────────────────────▼──────────────────────────────┐
@@ -144,34 +144,37 @@
 - 动态组合（一个工作流可以有多个 Agent 参与）
 - **有判断权**——在能力层提供的确定性步骤之上做决策
 
-**Agent 职能分组**（7 组 9 Agent，按项目运作职能组织）：
+**Agent 职能分组**（7 组，13 个文件化角色 Agent + Coordinator，按项目运作职能组织）：
 
 | 职能组 | Agent | 生命周期覆盖 | 可调用的 SKILL |
 |--------|-------|------------|---------------|
-| **管理组** | Coordinator | 全流程——统筹调度 | 所有 SKILL（通过路由分发） |
+| **管理组** | Coordinator（融入入口层） | 全流程——统筹调度 | 所有 SKILL（通过路由分发） |
 | **设计组** | Analyst, Architect | 立项→调研→选型→架构设计 | 需求澄清, 竞品分析, PR/FAQ, OKR, 6-Pager, 技术选型, 架构设计, ADR, 技术评审 |
 | **开发组** | Developer | 开发实现 | 开发, TDD, 环境搭建 |
 | **测试组** | QA | 测试与质量保障 | 测试设计, 集成测试, 性能测试 |
-| **评审组** | Reviewer | 全流程——独立审查 | 代码审查, 技术评审, 安全审查 |
-| **运维组** | DevOps, Release | CI/CD→发布→运营 | CI/CD, 环境管理, 发布检查, 版本规划, 变更日志 |
+| **评审组** | Code Reviewer, Design Reviewer, Requirement Reviewer, Test Reviewer, Release Reviewer, Retro Reviewer | 全流程——独立审查 | 代码审查, 设计审查, 需求审查, 测试审查, 发布审查, 复盘审查 |
+| **运维组** | DevOps, Release | CI/CD→版本发布；运营监控由 DevOps 承接，反馈闭环进入 Maintenance | CI/CD, 环境管理, 监控告警, 发布检查, 版本规划, 变更日志 |
 | **维护组** | Maintenance | 维护与演进 | 缺陷修复, 复盘会议, 规则演进 |
 
-> 目录结构：`agents/<name>.md`（plugin root 平铺，符合 Claude Code 官方规范）
+> 目录结构：`agents/<name>.md`（plugin root 平铺，符合 Claude Code 官方规范）。`agents/` 下的 13 个文件化角色 Agent 是活跃路由口径；Coordinator 融入入口层，14 个角色含 Coordinator。Deprecated 历史参考文件可存在于仓库，但不参与活跃路由口径。
 
 ### 入口层——引导进入业务智能层
 
-**是什么**：主 SKILL.md，仅做一件事——声明"加载 Coordinator Agent，进入 Agent Team 模式"。不包含任何行为规则，不包含任何执行步骤。
+**是什么**：主 `skills/software-project-governance/SKILL.md`。它是当前工作流入口，内嵌 Coordinator 身份、产品代码边界、Agent 分发路由、Sub-agent 调度约束和参考索引；主 agent 加载后即成为 Coordinator，负责接管用户交互并编排 Agent Team。
 
 **依赖**：业务智能层（加载 Coordinator Agent）
 
 **被谁依赖**：适配层（各平台 adapter 指向此入口）
 
 **内容**：
-- 激活流程（4 步）
+- 六层架构摘要
+- Coordinator 身份、铁律与产品代码边界
+- Agent Team 职能分组与完整路由表
+- Sub-agent 调度约束
 - 工作流合约引用
 - Coordinator 参考知识表
 - 治理基础设施列表
-- SKILL 库入口
+- 适配层平台投影说明
 
 ### 适配层——平台投影
 
@@ -192,7 +195,7 @@
 | bootstrap 模板 | 平台原生入口的**模板**（注入用户项目用） | `commands/governance-init.md` Step 7 |
 | adapter README | 平台特定说明 | `adapters/claude/README.md` |
 
-> **注意**：仓库不包含任何平台原生入口文件（如 Claude Code 的 `CLAUDE.md`）——这些是各平台用户项目的本地配置文件，类似于 `.gitignore`、IDE 配置。适配层提供的产品资产是 bootstrap 模板机制（定义在 `commands/governance-init.md`），用于在用户项目中生成其平台对应的入口文件。
+> **注意**：平台原生入口文件有两类边界。产品事实源是 bootstrap 模板机制（定义在 `commands/governance-init.md` Step 7），用于注入用户项目；当前开发仓库还保留一个根目录 `CLAUDE.md` 作为本仓库自管理入口。仓库事实：`CLAUDE.md` 当前存在于工作树，受 `.gitignore` 忽略、未被 git 跟踪，但已列入 `skills/software-project-governance/core/manifest.json` 的 `root_entries.files`，因此它是 repo root 允许存在的本地入口文件，不是随插件分发的产品逻辑源。
 
 **adapter manifest 标准字段**（每个 adapter 必须回答）：
 
@@ -261,7 +264,7 @@
 | **依赖方向** | → 业务智能层 | → 入口层 |
 | **谁维护** | 工作流开发者 | 平台接入者 |
 | **变更频率** | 随工作流演进 | 随平台能力变化 |
-| **示例** | `SKILL.md` | `plugin.json` + `平台原生入口文件` |
+| **示例** | `SKILL.md` | `plugin.json` + bootstrap 模板/当前仓库本地 `CLAUDE.md` |
 
 ## 与协议层概念的对齐
 
@@ -270,7 +273,7 @@
 | 三层承载模型 | 六层架构映射 | 说明 |
 |-------------|------------|------|
 | Workflow 本体层 | 核心层 + 基础设施层 + 能力层 + 业务智能层 | "工作流本身"——从合约到 Agent |
-| Agent 入口投影层 | 入口层 | 主 SKILL.md——引导进入 Coordinator |
+| Agent 入口投影层 | 入口层 | 主 SKILL.md——内嵌 Coordinator 身份、边界、路由和参考索引 |
 | 外部能力层 | 适配层 | 平台原生格式——plugin.json / manifest / bootstrap |
 
 之前的混淆在于把"入口层"当成了"入口投影层"的全部——实际上入口投影还包括适配层的平台原生文件（平台原生入口文件、plugin.json）。六层架构明确了这一区分：入口层是工作流内部的，适配层是平台外部的。
@@ -336,7 +339,7 @@
 
 | 当前文件 | 目标位置 | 变更 |
 |---------|---------|------|
-| `agents/coordinator.md` | `agents/coordinator.md` | 已平铺（AUDIT-097） |
+| `skills/software-project-governance/SKILL.md` | 入口层 | Coordinator 已融入入口层（`agents/coordinator.md` 如存在仅作 deprecated 历史参考，不参与活跃路由） |
 | `agents/developer.md` | `agents/developer.md` | 已平铺（AUDIT-097） |
 | `agents/code-reviewer.md` | `agents/code-reviewer.md` | 已平铺（AUDIT-097） |
 | `agents/design-reviewer.md` | `agents/design-reviewer.md` | 已平铺（AUDIT-097） |
@@ -355,7 +358,7 @@
 
 | 当前文件 | 变更 |
 |---------|------|
-| `SKILL.md` | ✅ 已瘦身为入口：46 行，仅声明"加载 Coordinator Agent" |
+| `skills/software-project-governance/SKILL.md` | ✅ 入口层自包含：Coordinator 身份、铁律、产品代码边界、18 行路由表、Sub-agent 调度约束、参考索引与适配层说明 |
 
 ### 适配层映射
 
@@ -407,7 +410,7 @@
 ## 实施分步
 
 ### Phase 1: 主 SKILL.md 瘦身（P0, ✅ 已完成）
-1. ✅ 将主 SKILL.md 从 487 行行为协议瘦身为 46 行入口
+1. ✅ 将主 SKILL.md 从大段行为协议收敛为入口层自包含文件：保留 Coordinator 身份、边界、路由表和参考索引，详细 M0-M9 行为协议迁入 `references/behavior-protocol.md`
 2. ✅ 创建 references/behavior-protocol.md 保存 M0-M9 强制性规则
 3. ✅ verify_workflow.py snippets 同步更新
 

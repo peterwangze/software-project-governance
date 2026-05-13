@@ -40,7 +40,7 @@
 | CI/部署 | DevOps | — |
 | 复盘/维护 | Maintenance | Retro Reviewer（如涉及规则变更） |
 
-完整路由表（16 行）见 `skills/software-project-governance/SKILL.md`。
+完整路由表（18 行）见 `skills/software-project-governance/SKILL.md`。
 
 ### Sub-agent 调度
 

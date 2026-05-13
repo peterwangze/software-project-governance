@@ -184,6 +184,129 @@ class FileExistenceTests(unittest.TestCase):
                 self.assertIn("NOT FOUND", m)
 
 
+class ArchitectureFactSourceTests(unittest.TestCase):
+    """FIX-065: architecture facts must stay synchronized across sources."""
+
+    def _write_fact_files(
+        self,
+        root,
+        skill_extra="",
+        skill_index_operations_agents="Coordinator, DevOps, Maintenance",
+        architecture_extra="",
+        governance_route_count=18,
+    ):
+        skill = root / "SKILL.md"
+        skill.write_text(
+            "# 软件项目治理工作流入口\n\n"
+            "Coordinator 融入入口层。\n"
+            "13 个文件化角色 Agent；14 个角色含 Coordinator。\n"
+            "Coordinator 接管用户交互。\n"
+            "Producer-Reviewer 分离。\n\n"
+            "## Agent 分发路由\n\n"
+            "| 任务类型 | 执行 Agent | 后置审查 Agent(s) | 触发条件 | 核心方法论 |\n"
+            "| --- | --- | --- | --- | --- |\n"
+            + "\n".join(
+                f"| Route {i:02d} | Agent | Reviewer | 自动 | Method |"
+                for i in range(1, 19)
+            )
+            + f"\n{skill_extra}\n\n## Sub-agent 调度\n",
+            encoding="utf-8",
+        )
+
+        skill_index = root / "skill-index.md"
+        skill_index.write_text(
+            "# SKILL 分类索引\n\n"
+            "| SKILL | 路径 | 用途 | 调用 Agent |\n"
+            "| --- | --- | --- | --- |\n"
+            f"| stage-operations | `skills/stage-operations/SKILL.md` | 运营与反馈 | {skill_index_operations_agents} |\n",
+            encoding="utf-8",
+        )
+
+        architecture = root / "architecture.md"
+        architecture.write_text(
+            "# 六层架构设计\n\n"
+            "入口层 SKILL.md 内嵌 Coordinator 身份、路由、边界和参考索引。\n"
+            "仓库根目录 CLAUDE.md 当前存在但未被 git 跟踪；core/manifest.json root_entries 声明它。\n"
+            f"{architecture_extra}\n",
+            encoding="utf-8",
+        )
+
+        governance = root / "governance.md"
+        governance.write_text(
+            "# /governance\n\n"
+            f"完整路由表（{governance_route_count} 行）见 `skills/software-project-governance/SKILL.md`。\n",
+            encoding="utf-8",
+        )
+        return skill, skill_index, architecture, governance
+
+    def test_architecture_fact_source_accepts_current_facts(self):
+        with tempfile.TemporaryDirectory() as td:
+            paths = self._write_fact_files(Path(td))
+            self.assertEqual(vw.check_architecture_fact_source(*paths), [])
+
+    def test_architecture_fact_source_external_paths_do_not_call_is_relative_to(self):
+        with tempfile.TemporaryDirectory() as td:
+            paths = self._write_fact_files(Path(td))
+            concrete_path_type = type(paths[0])
+            with patch.object(
+                concrete_path_type,
+                "is_relative_to",
+                side_effect=AssertionError("Path.is_relative_to must not be called"),
+                create=True,
+            ):
+                self.assertEqual(vw.check_architecture_fact_source(*paths), [])
+
+    def test_architecture_fact_source_rejects_legacy_agent_count(self):
+        with tempfile.TemporaryDirectory() as td:
+            paths = self._write_fact_files(
+                Path(td),
+                architecture_extra="Agent 职能分组（7 组 9 Agent，按项目运作职能组织）",
+            )
+            issues = vw.check_architecture_fact_source(*paths)
+            self.assertTrue(any("7 groups / 9 Agent" in issue for issue in issues))
+
+    def test_architecture_fact_source_rejects_release_operations_binding(self):
+        with tempfile.TemporaryDirectory() as td:
+            paths = self._write_fact_files(
+                Path(td),
+                skill_index_operations_agents="Coordinator, Release",
+            )
+            issues = vw.check_architecture_fact_source(*paths)
+            self.assertTrue(any("stage-operations must not be bound to Release" in issue for issue in issues))
+
+    def test_architecture_fact_source_rejects_legacy_entry_narratives(self):
+        with tempfile.TemporaryDirectory() as td:
+            paths = self._write_fact_files(
+                Path(td),
+                architecture_extra=(
+                    "主 SKILL.md 46 行入口。\n"
+                    "不包含任何行为规则。\n"
+                    "仓库不包含任何平台原生入口文件。"
+                ),
+            )
+            issues = vw.check_architecture_fact_source(*paths)
+            self.assertTrue(any("46-line" in issue for issue in issues))
+            self.assertTrue(any("no behavior rules" in issue for issue in issues))
+            self.assertTrue(any("native-entry exclusion" in issue for issue in issues))
+
+    def test_architecture_fact_source_rejects_route_count_drift(self):
+        with tempfile.TemporaryDirectory() as td:
+            paths = self._write_fact_files(Path(td), governance_route_count=16)
+            issues = vw.check_architecture_fact_source(*paths)
+            self.assertTrue(any("route table count 16 does not match SKILL.md actual 18" in issue for issue in issues))
+
+    def test_architecture_fact_source_requires_key_phrases(self):
+        with tempfile.TemporaryDirectory() as td:
+            paths = self._write_fact_files(
+                Path(td),
+                skill_extra="\n",
+            )
+            skill, skill_index, architecture, governance = paths
+            skill.write_text(skill.read_text(encoding="utf-8").replace("Producer-Reviewer 分离。\n", ""), encoding="utf-8")
+            issues = vw.check_architecture_fact_source(skill, skill_index, architecture, governance)
+            self.assertTrue(any("Producer-Reviewer 分离" in issue for issue in issues))
+
+
 class E2ECommandMatrixTests(unittest.TestCase):
     """FIX-060: e2e-check must execute real command proxies."""
 
@@ -282,6 +405,27 @@ class E2ECommandMatrixTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "EXPECTED_KNOWN_FAILURE")
         self.assertEqual(result["exit_code"], 1)
+
+    def test_expected_known_failure_entry_accepts_verify_pass(self):
+        entry = {
+            "label": "/governance-verify",
+            "command": ["python", "verify_workflow.py", "verify"],
+            "validator": vw._validate_e2e_verify_known_failure,
+            "expected_known_failure": True,
+        }
+
+        result = vw._evaluate_e2e_command(
+            entry,
+            runner=lambda command: subprocess.CompletedProcess(
+                command,
+                0,
+                stdout="== Workflow Plugin Verification ==\n\n== Verification Result: PASSED ==\n",
+                stderr="",
+            ),
+        )
+
+        self.assertEqual(result["status"], "PASS")
+        self.assertEqual(result["exit_code"], 0)
 
     def test_expected_known_failure_accepts_known_signature_subset(self):
         entry = {

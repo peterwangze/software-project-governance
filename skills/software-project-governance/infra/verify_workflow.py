@@ -10,6 +10,16 @@ from datetime import datetime, date
 
 ROOT = Path(__file__).resolve().parents[3]
 
+
+def _display_path(path, root=None):
+    """Return repo-relative path when possible, without Path.is_relative_to()."""
+    root = root or ROOT
+    try:
+        return path.relative_to(root)
+    except ValueError:
+        return path
+
+
 # ── PLUGIN_SCOPE_DIRS (keep in sync with cleanup.py) ─────────────
 # Directories that constitute the plugin installation boundary.
 # Check 10 (M5 compliance) skips these to avoid false positives from
@@ -896,6 +906,117 @@ def check_snippets():
             else:
                 failures.append(f"missing snippet in {path.relative_to(ROOT)}: {snippet}")
                 print(f"[FAIL] missing snippet: {path.relative_to(ROOT)} :: {snippet}")
+    return failures
+
+
+def _extract_markdown_table_rows_after_heading(content, heading):
+    """Return data rows from the first markdown table after a heading."""
+    lines = content.splitlines()
+    in_section = False
+    table_started = False
+    rows = []
+    for line in lines:
+        stripped = line.strip()
+        if not in_section:
+            if stripped == heading:
+                in_section = True
+            continue
+        if stripped.startswith("## ") and stripped != heading:
+            break
+        if not stripped.startswith("|"):
+            if table_started and rows:
+                break
+            continue
+        table_started = True
+        cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+        if not cells or all(not cell for cell in cells):
+            continue
+        if all(set(cell) <= {"-", ":"} for cell in cells):
+            continue
+        if any(cell in ("任务类型", "SKILL") for cell in cells):
+            continue
+        rows.append(cells)
+    return rows
+
+
+def _skill_route_table_count(skill_path=None):
+    path = skill_path or ROOT / "skills/software-project-governance/SKILL.md"
+    content = path.read_text(encoding="utf-8")
+    return len(_extract_markdown_table_rows_after_heading(content, "## Agent 分发路由"))
+
+
+def _documented_route_table_count(command_path=None):
+    path = command_path or ROOT / "commands/governance.md"
+    content = path.read_text(encoding="utf-8")
+    match = re.search(r"完整路由表（(\d+)\s*行）", content)
+    return int(match.group(1)) if match else None
+
+
+def check_architecture_fact_source(
+    skill_path=None,
+    skill_index_path=None,
+    architecture_path=None,
+    governance_command_path=None,
+):
+    """FIX-065: keep Agent/team architecture facts synchronized."""
+    skill_path = skill_path or ROOT / "skills/software-project-governance/SKILL.md"
+    skill_index_path = skill_index_path or ROOT / "skills/software-project-governance/references/skill-index.md"
+    architecture_path = architecture_path or ROOT / "project/references/architecture.md"
+    governance_command_path = governance_command_path or ROOT / "commands/governance.md"
+
+    failures = []
+    contents = {
+        skill_path: skill_path.read_text(encoding="utf-8"),
+        skill_index_path: skill_index_path.read_text(encoding="utf-8"),
+        architecture_path: architecture_path.read_text(encoding="utf-8"),
+        governance_command_path: governance_command_path.read_text(encoding="utf-8"),
+    }
+
+    forbidden_patterns = [
+        ("legacy 7 groups / 9 Agent narrative", r"7\s*组\s*9\s*Agent|7组9Agent"),
+        ("legacy 46-line SKILL.md entry narrative", r"46\s*行"),
+        ("legacy entry-layer no behavior rules narrative", r"不包含任何行为规则"),
+        ("legacy native-entry exclusion narrative", r"仓库不包含任何平台原生入口文件"),
+    ]
+    for path, content in contents.items():
+        rel = _display_path(path)
+        for label, pattern in forbidden_patterns:
+            if re.search(pattern, content):
+                failures.append(f"{rel}: forbidden {label}")
+
+    skill_index_content = contents[skill_index_path]
+    for line in skill_index_content.splitlines():
+        if line.strip().startswith("| stage-operations ") and "Release" in line:
+            rel = _display_path(skill_index_path)
+            failures.append(f"{rel}: stage-operations must not be bound to Release")
+
+    skill_content = contents[skill_path]
+    required_skill_phrases = [
+        "Coordinator 融入入口层",
+        "13 个文件化角色 Agent",
+        "14 个角色含 Coordinator",
+        "Coordinator 接管用户交互",
+        "Producer-Reviewer 分离",
+    ]
+    rel_skill = _display_path(skill_path)
+    for phrase in required_skill_phrases:
+        if phrase not in skill_content:
+            failures.append(f"{rel_skill}: missing architecture fact phrase: {phrase}")
+
+    actual_routes = _skill_route_table_count(skill_path)
+    documented_routes = _documented_route_table_count(governance_command_path)
+    rel_command = _display_path(governance_command_path)
+    if documented_routes is None:
+        failures.append(f"{rel_command}: missing documented full route table count")
+    elif documented_routes != actual_routes:
+        failures.append(
+            f"{rel_command}: route table count {documented_routes} does not match SKILL.md actual {actual_routes}"
+        )
+
+    for failure in failures:
+        print(f"[FAIL] architecture fact source: {failure}")
+    if not failures:
+        print("[OK] architecture fact source synchronized")
     return failures
 
 
@@ -2322,8 +2443,9 @@ def cmd_verify(args):
     print("== Workflow Plugin Verification ==")
     file_failures = check_files()
     snippet_failures = check_snippets()
+    architecture_failures = check_architecture_fact_source()
     version_failures = check_version_consistency()
-    all_items = file_failures + snippet_failures + version_failures
+    all_items = file_failures + snippet_failures + architecture_failures + version_failures
 
     # Separate WARN (non-blocking drift) from FAIL (hard gate)
     fail_items = [f for f in all_items if not f.startswith("[WARN]")]
@@ -6327,6 +6449,9 @@ def _extract_e2e_verify_failures(output):
 
 def _validate_e2e_verify_known_failure(result):
     output = _e2e_output(result)
+    if result.returncode == 0 and "Workflow Plugin Verification" in output and "Verification Result: PASSED" in output:
+        return True, "verify command executed and passed"
+
     failures = set(_extract_e2e_verify_failures(output))
     ok = (
         result.returncode != 0
@@ -6430,7 +6555,7 @@ def _evaluate_e2e_command(entry, runner=_run_e2e_subprocess):
             "command": entry["command"],
         }
 
-    status = "EXPECTED_KNOWN_FAILURE" if entry.get("expected_known_failure") else "PASS"
+    status = "EXPECTED_KNOWN_FAILURE" if entry.get("expected_known_failure") and result.returncode != 0 else "PASS"
     return {
         "label": entry["label"],
         "kind": entry.get("kind", "source_cli_proxy"),

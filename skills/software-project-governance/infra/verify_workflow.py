@@ -5500,6 +5500,240 @@ def _check_evidence_mentions(keyword, label):
     return "NEEDS_HUMAN", f"{label}: evidence-log 未找到'{keyword[:30]}'——需人工确认"
 
 
+def _read_archive_aware_governance_text(include=()):
+    """Read hot governance files plus selected archive directories."""
+    ds = GovernanceDataSource()
+    chunks = []
+    hot_paths = []
+    if "plan" in include:
+        hot_paths.append(ds.sample_path)
+    if "evidence" in include:
+        hot_paths.append(ds.evidence_path)
+    if "decision" in include:
+        hot_paths.append(ds.decision_path)
+    if "risk" in include:
+        hot_paths.append(ds.risk_path)
+
+    for path in hot_paths:
+        if path.is_file():
+            chunks.append(path.read_text(encoding="utf-8"))
+
+    archive_dirs = []
+    if "plan" in include:
+        archive_dirs.append(ds.archive_tasks_dir)
+    if "evidence" in include:
+        archive_dirs.append(ds.archive_evidence_dir)
+    if "decision" in include:
+        archive_dirs.append(ds.archive_decisions_dir)
+    if "risk" in include:
+        archive_dirs.append(ds.archive_risks_dir)
+
+    if ds._has_archive():
+        for archive_dir in archive_dirs:
+            if not archive_dir.exists():
+                continue
+            for path in sorted(archive_dir.glob("*.md")):
+                if path.name != ".gitkeep":
+                    chunks.append(path.read_text(encoding="utf-8"))
+
+    return "\n".join(chunks)
+
+
+def _contains_all(text, keywords):
+    return all(keyword in text for keyword in keywords)
+
+
+def _contains_any(text, keywords):
+    return any(keyword in text for keyword in keywords)
+
+
+def _has_line_with_all(text, keyword_groups):
+    """Return True when one line contains at least one keyword from each group."""
+    for line in text.splitlines():
+        if all(_contains_any(line, group) for group in keyword_groups):
+            return True
+    return False
+
+
+def _iter_archive_aware_evidence_units():
+    """Yield hot/archive evidence rows; fallback to whole non-table archive docs."""
+    ds = GovernanceDataSource()
+    if ds.evidence_path.is_file():
+        for line in ds.evidence_path.read_text(encoding="utf-8").splitlines():
+            if line.strip().startswith("| EVD-"):
+                yield line
+
+    if not ds._has_archive() or not ds.archive_evidence_dir.exists():
+        return
+
+    for path in sorted(ds.archive_evidence_dir.glob("*.md")):
+        if path.name == ".gitkeep":
+            continue
+        content = path.read_text(encoding="utf-8")
+        rows = [
+            line for line in content.splitlines()
+            if line.strip().startswith("| EVD-")
+        ]
+        if rows:
+            for row in rows:
+                yield row
+        else:
+            yield content
+
+
+def _line_has_issue_severity(line):
+    """Detect explicit issue severity values, not schema/header field names."""
+    severity_patterns = [
+        r"严重级别\s*[:：=|]\s*(P0|P1|P2|高风险|中风险|低风险|高严重|中严重|低严重|critical|high|medium|low)\b",
+        r"\bseverity\s*[:：=|]\s*(P0|P1|P2|critical|high|medium|low)\b",
+        r"\b(P0|P1|P2|critical|high|medium|low)\b",
+        r"(高风险|中风险|低风险|高严重|中严重|低严重)",
+    ]
+    return any(re.search(pattern, line, re.IGNORECASE) for pattern in severity_patterns)
+
+
+def _line_has_issue_status_value(line):
+    """Detect explicit issue status values, not only a status field name."""
+    status_patterns = [
+        r"状态\s*[:：=|]\s*(打开|已关闭|进行中|待处理|处理中|已解决|closed|open|done|resolved|in progress)\b",
+        r"\bstatus\s*[:：=|]\s*(closed|open|done|resolved|in progress)\b",
+    ]
+    return any(re.search(pattern, line, re.IGNORECASE) for pattern in status_patterns)
+
+
+def _line_has_real_issue_item(line):
+    """Detect an actual issue item/task entry rather than a schema-only line."""
+    if _contains_any(line.lower(), ("schema", "header")):
+        return False
+    if _contains_any(line, ("字段", "表头", "模板", "格式")):
+        return False
+    item_patterns = [
+        r"(问题项|问题条目|问题实例|issue item)",
+        r"\b(ISSUE|BUG|TASK|FIX|AUDIT)-\d+\b",
+        r"问题\s*\d+",
+        r"问题\s*[:：]\s*\S+",
+        r"任务\s*[:：]\s*\S+",
+    ]
+    return any(re.search(pattern, line, re.IGNORECASE) for pattern in item_patterns)
+
+
+def _plan_row_is_inactive(parts):
+    """Return True when a plan table row is completed/terminated/cancelled."""
+    joined = " ".join(parts).lower()
+    inactive_markers = (
+        "已完成", "✅", "已终止", "终止", "取消", "已取消",
+        "closed", "done", "completed", "terminated", "cancelled", "canceled",
+    )
+    return any(marker in joined for marker in inactive_markers)
+
+
+def _check_g10_real_operation_data():
+    """G10: require explicit real operation data for at least one week."""
+    text = _read_archive_aware_governance_text(include=("evidence",))
+    if _has_line_with_all(text, (
+        ("真实运营数据", "真实运行数据", "运行数据", "运营数据"),
+        ("至少 1 周", "至少1周", "一周", "7天", "7 天", "1 week", "one week"),
+    )):
+        return "PASS", "检测到至少 1 周真实运营/运行数据证据（含归档 evidence）"
+    return "NEEDS_HUMAN", "未检测到明确的至少 1 周真实运营数据证据"
+
+
+def _check_g10_feedback_archived_classified():
+    """G10: feedback must be archived and classified."""
+    text = _read_archive_aware_governance_text(include=("evidence", "plan"))
+    if _has_line_with_all(text, (
+        ("用户反馈", "反馈汇总", "反馈归档"),
+        ("已归档", "归档", "archive"),
+        ("分类", "类别", "类型"),
+    )):
+        return "PASS", "检测到已归档且已分类的用户反馈证据（含归档 evidence）"
+    return "NEEDS_HUMAN", "未检测到反馈归档+分类的完整证据"
+
+
+def _check_g10_issue_list_severity_status():
+    """G10: issue list must include severity and status, not just priority."""
+    text = _read_archive_aware_governance_text(include=("evidence", "plan", "risk"))
+    for line in text.splitlines():
+        has_issue_list = _contains_any(line, ("问题清单", "issue list", "问题列表"))
+        if (
+            has_issue_list
+            and _line_has_real_issue_item(line)
+            and _line_has_issue_severity(line)
+            and _line_has_issue_status_value(line)
+        ):
+            return "PASS", "检测到包含严重级别和状态的问题清单"
+    return "NEEDS_HUMAN", "未检测到真实问题项及其严重级别值和状态值"
+
+
+def _check_g10_executable_optimization_items():
+    """G10: optimization direction must be executable, not only a slogan."""
+    text = _read_archive_aware_governance_text(include=("evidence", "plan"))
+    if _has_line_with_all(text, (
+        ("优化项", "改进项", "优化方向", "改进方向", "可执行优化项"),
+        ("Owner", "DRI", "截止", "验收", "验证", "命令", "文件", "任务"),
+    )):
+        return "PASS", "检测到带执行标记的优化/改进项"
+    return "NEEDS_HUMAN", "未检测到可执行优化项（需 Owner/截止/验收/验证等执行标记）"
+
+
+def _check_g11_retro_complete():
+    """G11: retro must include the four required sections."""
+    required = ("目标回顾", "结果评估", "原因分析", "经验沉淀")
+    evidence_units = list(_iter_archive_aware_evidence_units())
+    for unit in evidence_units:
+        if _contains_all(unit, required):
+            return "PASS", "复盘证据包含目标回顾/结果评估/原因分析/经验沉淀（含归档 evidence）"
+    text = "\n".join(evidence_units)
+    if not text:
+        text = _read_archive_aware_governance_text(include=("evidence",))
+    missing = [keyword for keyword in required if keyword not in text]
+    if not missing:
+        return "NEEDS_HUMAN", "复盘四要素分散在多条证据中，未检测到同一条复盘证据包含全部四要素"
+    return "NEEDS_HUMAN", f"复盘证据缺少: {', '.join(missing)}"
+
+
+def _check_g11_rules_templates_backfilled():
+    """G11: rules/templates backfill needs evidence, commit, or file-change proof."""
+    text = _read_archive_aware_governance_text(include=("evidence",))
+    if _has_line_with_all(text, (
+        ("回灌", "规则修订", "模板更新", "经验回灌"),
+        ("规则", "模板", "protocol", "template", "SKILL.md", "stage-gates.md"),
+        ("commit", "提交", "文件变更", "修改", "更新", ".md", ".py"),
+    )):
+        return "PASS", "检测到规则/模板回灌及提交或文件变更证据"
+    return "NEEDS_HUMAN", "未检测到规则/模板回灌的提交或文件变更证据"
+
+
+def _check_g11_next_round_direction():
+    """G11: next-round direction must be explicit or an active P0, not any historical P0."""
+    content = SAMPLE_PATH.read_text(encoding="utf-8") if SAMPLE_PATH.is_file() else ""
+    active_section = content
+    marker = "## 当前活跃事项"
+    if marker in content:
+        active_section = content.split(marker, 1)[1].split("\n## ", 1)[0]
+
+    for line in active_section.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("|") or "---" in stripped:
+            continue
+        parts = _split_markdown_table_row(line)
+        normalized = [part.replace("*", "").strip() for part in parts]
+        has_active_p0 = any(part == "P0" for part in normalized)
+        if has_active_p0 and not _plan_row_is_inactive(normalized):
+            return "PASS", "当前活跃事项中存在未完成的 P0 任务，下一轮方向明确"
+
+    next_round_terms = ("下一轮", "下轮")
+    for line in active_section.splitlines():
+        if (
+            _contains_any(line, next_round_terms)
+            and re.search(r"[A-Z]+-\d+", line)
+            and not _plan_row_is_inactive([line])
+        ):
+            return "PASS", "当前活跃事项显式描述下一轮方向并关联任务"
+
+    return "FAIL", "未检测到计划中的下一轮方向或活跃 P0 任务"
+
+
 def _check_risk_has_closed(label="关键缺陷"):
     """Check if risk-log has any closed/critical risk entries."""
     content = RISK_PATH.read_text(encoding="utf-8")
@@ -5693,23 +5927,21 @@ def auto_judge_gate(gate_id):
         ],
         "G10": [
             ("收集到真实运营数据",
-             lambda: _check_evidence_mentions("复盘", "运营数据")),
+             lambda: _check_g10_real_operation_data()),
             ("用户反馈已归档",
-             lambda: _check_snippet_in_file(
-                 ".governance/decision-log.md", "DEC-", "决策记录含反馈相关条目")),
+             lambda: _check_g10_feedback_archived_classified()),
             ("关键问题已识别分类",
-             lambda: _check_plan_has_priority("P0")),
+             lambda: _check_g10_issue_list_severity_status()),
             ("优化方向已明确",
-             lambda: _check_plan_has_priority("P0")),
+             lambda: _check_g10_executable_optimization_items()),
         ],
         "G11": [
             ("复盘完成（含目标回顾/结果评估/原因分析/经验沉淀）",
-             lambda: _check_evidence_mentions("复盘", "复盘")),
+             lambda: _check_g11_retro_complete()),
             ("经验回灌到规则和模板",
-             lambda: _check_snippet_in_file(
-                 "skills/software-project-governance/references/behavior-protocol.md", "MUST", "behavior-protocol.md 含经验驱动的 MUST 规则")),
-            ("下轮方向已明确（≥1 条 P0 任务）",
-             lambda: _check_plan_has_priority("P0")),
+             lambda: _check_g11_rules_templates_backfilled()),
+            ("下轮方向已明确（计划中的下一轮/活跃 P0）",
+             lambda: _check_g11_next_round_direction()),
             ("版本化记录已更新",
              lambda: _check_version_consistency_heuristic()),
         ],

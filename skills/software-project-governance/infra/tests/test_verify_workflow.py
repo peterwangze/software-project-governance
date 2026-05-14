@@ -1790,6 +1790,277 @@ def _task_with_priority(tid, priority="P1", status="已完成"):
     return f"| {tid} | x | x | x | x | x | x | x | x | {status} | {priority} |"
 
 
+class GateAutoJudgmentEvidenceQualityTests(unittest.TestCase):
+    """FIX-067: G10/G11 should use real evidence, not weak proxy keywords."""
+
+    def _setup(self, tmpdir, plan="", evidence="", risk=""):
+        root = Path(tmpdir)
+        gov = root / ".governance"
+        gov.mkdir(parents=True, exist_ok=True)
+        sp = gov / "plan-tracker.md"
+        ep = gov / "evidence-log.md"
+        rp = gov / "risk-log.md"
+        sp.write_text(plan, encoding="utf-8")
+        ep.write_text(evidence, encoding="utf-8")
+        rp.write_text(risk, encoding="utf-8")
+        return sp, ep, rp, gov
+
+    def _patch_governance_paths(self, sp, ep, rp):
+        return patch.multiple(vw, SAMPLE_PATH=sp, EVIDENCE_PATH=ep, RISK_PATH=rp)
+
+    def test_g10_weak_proxies_do_not_pass(self):
+        """复盘/DEC/P0 alone are not credible G10 operation evidence."""
+        with tempfile.TemporaryDirectory() as td:
+            plan = "\n".join([
+                "# 计划跟踪",
+                "## 当前活跃事项",
+                "| 优先级 | ID | 事项 | 状态 |",
+                "| --- | --- | --- | --- |",
+                "| **P0** | FIX-001 | 下轮方向 | 进行中 |",
+            ])
+            evidence = _evidence_row_generic(
+                "EVD-001", "FIX-001",
+                description="复盘完成，但没有运营数据、反馈分类、问题清单或可执行优化项",
+                gate="G10",
+            )
+            risk = "| RISK-001 | 2026-05-01 | 问题 | 维护 | x | x | 高 | Owner | 打开 | x | x | x |"
+            sp, ep, rp, _ = self._setup(td, plan=plan, evidence=evidence, risk=risk)
+
+            with self._patch_governance_paths(sp, ep, rp):
+                result = vw.auto_judge_gate("G10")
+
+            self.assertNotEqual(result["overall"], "passed")
+            self.assertTrue(any(item["result"] == "NEEDS_HUMAN" for item in result["items"]))
+
+    def test_g10_archive_evidence_can_pass(self):
+        """Archived evidence participates in G10 PASS judgment."""
+        with tempfile.TemporaryDirectory() as td:
+            sp, ep, rp, gov = self._setup(td, plan="# 计划跟踪\n")
+            archive = gov / "archive"
+            evidence_dir = archive / "evidence"
+            evidence_dir.mkdir(parents=True)
+            (archive / "index.md").write_text("index", encoding="utf-8")
+            archived_evidence = _evidence_row_generic(
+                "EVD-777", "OPS-001",
+                description=(
+                    "真实运营数据：至少 1 周真实运行数据；用户反馈已归档并按类别分类；"
+                    "问题清单：问题项 ISSUE-001 登录失败，严重级别=高风险，状态=打开；"
+                    "可执行优化项含 Owner、截止和验证命令"
+                ),
+                gate="G10",
+            )
+            (evidence_dir / "v0.1.0.md").write_text(archived_evidence, encoding="utf-8")
+
+            with self._patch_governance_paths(sp, ep, rp):
+                result = vw.auto_judge_gate("G10")
+
+            self.assertEqual(result["overall"], "passed")
+            self.assertTrue(all(item["result"] == "PASS" for item in result["items"]))
+
+    def test_g11_weak_proxies_do_not_pass(self):
+        """Any retro keyword + any P0 must not pass G11."""
+        with tempfile.TemporaryDirectory() as td:
+            plan = "\n".join([
+                "# 计划跟踪",
+                "## 当前活跃事项",
+                "| 优先级 | ID | 事项 | 状态 |",
+                "| --- | --- | --- | --- |",
+                "| **P0** | FIX-001 | 普通优先级代理 | 进行中 |",
+            ])
+            evidence = _evidence_row_generic(
+                "EVD-001", "FIX-001",
+                description="复盘 已完成；behavior-protocol.md 含 MUST",
+                gate="G11",
+            )
+            sp, ep, rp, _ = self._setup(td, plan=plan, evidence=evidence)
+
+            with self._patch_governance_paths(sp, ep, rp), \
+                 patch.object(vw, "_check_version_consistency_heuristic",
+                              return_value=("PASS", "version ok")):
+                result = vw.auto_judge_gate("G11")
+
+            self.assertNotEqual(result["overall"], "passed")
+            self.assertTrue(any(item["result"] == "NEEDS_HUMAN" for item in result["items"]))
+
+    def test_g11_archive_evidence_can_pass_with_active_p0(self):
+        """Archived retro/backfill evidence can satisfy G11."""
+        with tempfile.TemporaryDirectory() as td:
+            plan = "\n".join([
+                "# 计划跟踪",
+                "## 当前活跃事项",
+                "| 优先级 | ID | 事项 | 状态 |",
+                "| --- | --- | --- | --- |",
+                "| **P0** | NEXT-001 | 下一轮核心方向 | 进行中 |",
+            ])
+            sp, ep, rp, gov = self._setup(td, plan=plan)
+            archive = gov / "archive"
+            evidence_dir = archive / "evidence"
+            evidence_dir.mkdir(parents=True)
+            (archive / "index.md").write_text("index", encoding="utf-8")
+            archived_evidence = _evidence_row_generic(
+                "EVD-778", "RETRO-001",
+                description=(
+                    "复盘文档包含目标回顾、结果评估、原因分析、经验沉淀；"
+                    "经验回灌到规则和模板，提交 commit abc123，文件变更 stage-gates.md"
+                ),
+                gate="G11",
+            )
+            (evidence_dir / "v0.1.0.md").write_text(archived_evidence, encoding="utf-8")
+
+            with self._patch_governance_paths(sp, ep, rp), \
+                 patch.object(vw, "_check_version_consistency_heuristic",
+                              return_value=("PASS", "version ok")):
+                result = vw.auto_judge_gate("G11")
+
+            self.assertEqual(result["overall"], "passed")
+            self.assertTrue(all(item["result"] == "PASS" for item in result["items"]))
+
+    def test_g11_missing_next_round_direction_fails(self):
+        """Missing next-round plan remains a blocking G11 failure."""
+        with tempfile.TemporaryDirectory() as td:
+            evidence = _evidence_row_generic(
+                "EVD-001", "RETRO-001",
+                description=(
+                    "目标回顾、结果评估、原因分析、经验沉淀；"
+                    "经验回灌到规则和模板，提交 commit abc123，文件变更 template.md"
+                ),
+                gate="G11",
+            )
+            sp, ep, rp, _ = self._setup(td, plan="# 计划跟踪\n## 当前活跃事项\n", evidence=evidence)
+
+            with self._patch_governance_paths(sp, ep, rp), \
+                 patch.object(vw, "_check_version_consistency_heuristic",
+                              return_value=("PASS", "version ok")):
+                result = vw.auto_judge_gate("G11")
+
+            self.assertEqual(result["overall"], "blocked")
+            details = "\n".join(item["detail"] for item in result["items"])
+            self.assertIn("未检测到计划中的下一轮方向", details)
+
+    def test_g11_completed_or_terminated_p0_is_not_active_direction(self):
+        """Completed/terminated P0 rows do not satisfy next-round direction."""
+        with tempfile.TemporaryDirectory() as td:
+            plan = "\n".join([
+                "# 计划跟踪",
+                "## 当前活跃事项",
+                "| 优先级 | ID | 事项 | 状态 |",
+                "| --- | --- | --- | --- |",
+                "| **P0** | OLD-001 | 下一轮旧方向 | 已完成 |",
+                "| **P0** | OLD-002 | 下一轮终止方向 | 已终止 |",
+            ])
+            evidence = _evidence_row_generic(
+                "EVD-001", "RETRO-001",
+                description=(
+                    "目标回顾、结果评估、原因分析、经验沉淀；"
+                    "经验回灌到规则和模板，提交 commit abc123，文件变更 template.md"
+                ),
+                gate="G11",
+            )
+            sp, ep, rp, _ = self._setup(td, plan=plan, evidence=evidence)
+
+            with self._patch_governance_paths(sp, ep, rp), \
+                 patch.object(vw, "_check_version_consistency_heuristic",
+                              return_value=("PASS", "version ok")):
+                result = vw.auto_judge_gate("G11")
+
+            self.assertEqual(result["overall"], "blocked")
+            details = "\n".join(item["detail"] for item in result["items"])
+            self.assertIn("未检测到计划中的下一轮方向", details)
+
+    def test_g11_retro_keywords_split_across_rows_do_not_pass(self):
+        """Retro four elements must be present in one evidence unit."""
+        with tempfile.TemporaryDirectory() as td:
+            plan = "\n".join([
+                "# 计划跟踪",
+                "## 当前活跃事项",
+                "| 优先级 | ID | 事项 | 状态 |",
+                "| --- | --- | --- | --- |",
+                "| **P0** | NEXT-001 | 下一轮核心方向 | 进行中 |",
+            ])
+            evidence = "\n".join([
+                _evidence_row_generic("EVD-001", "RETRO-001", description="目标回顾", gate="G11"),
+                _evidence_row_generic("EVD-002", "RETRO-001", description="结果评估", gate="G11"),
+                _evidence_row_generic("EVD-003", "RETRO-001", description="原因分析", gate="G11"),
+                _evidence_row_generic("EVD-004", "RETRO-001", description="经验沉淀", gate="G11"),
+                _evidence_row_generic(
+                    "EVD-005", "RETRO-001",
+                    description="经验回灌到规则和模板，提交 commit abc123，文件变更 template.md",
+                    gate="G11",
+                ),
+            ])
+            sp, ep, rp, _ = self._setup(td, plan=plan, evidence=evidence)
+
+            with self._patch_governance_paths(sp, ep, rp), \
+                 patch.object(vw, "_check_version_consistency_heuristic",
+                              return_value=("PASS", "version ok")):
+                result = vw.auto_judge_gate("G11")
+
+            self.assertEqual(result["overall"], "passed-with-conditions")
+            details = "\n".join(item["detail"] for item in result["items"])
+            self.assertIn("分散在多条证据", details)
+
+    def test_g10_in_progress_status_is_not_severity_signal(self):
+        """进行中 must not satisfy issue severity by its 中 character."""
+        with tempfile.TemporaryDirectory() as td:
+            evidence = _evidence_row_generic(
+                "EVD-001", "OPS-001",
+                description=(
+                    "真实运营数据：至少 1 周真实运行数据；用户反馈已归档并按类别分类；"
+                    "问题清单包含状态：进行中；可执行优化项含 Owner、截止和验证命令"
+                ),
+                gate="G10",
+            )
+            sp, ep, rp, _ = self._setup(td, plan="# 计划跟踪\n", evidence=evidence)
+
+            with self._patch_governance_paths(sp, ep, rp):
+                result = vw.auto_judge_gate("G10")
+
+            self.assertEqual(result["overall"], "passed-with-conditions")
+            issue_item = next(item for item in result["items"] if "关键问题" in item["check"])
+            self.assertEqual(issue_item["result"], "NEEDS_HUMAN")
+
+    def test_g10_issue_schema_only_line_does_not_pass(self):
+        """Schema/header-only issue-list fields are not real classified issues."""
+        with tempfile.TemporaryDirectory() as td:
+            evidence = _evidence_row_generic(
+                "EVD-001", "OPS-001",
+                description=(
+                    "真实运营数据：至少 1 周真实运行数据；用户反馈已归档并按类别分类；"
+                    "问题清单字段：严重级别、状态；可执行优化项含 Owner、截止和验证命令"
+                ),
+                gate="G10",
+            )
+            sp, ep, rp, _ = self._setup(td, plan="# 计划跟踪\n", evidence=evidence)
+
+            with self._patch_governance_paths(sp, ep, rp):
+                result = vw.auto_judge_gate("G10")
+
+            self.assertEqual(result["overall"], "passed-with-conditions")
+            issue_item = next(item for item in result["items"] if "关键问题" in item["check"])
+            self.assertEqual(issue_item["result"], "NEEDS_HUMAN")
+
+    def test_g10_real_issue_item_with_severity_and_status_passes(self):
+        """A real issue item with severity value and status value satisfies G10."""
+        with tempfile.TemporaryDirectory() as td:
+            evidence = _evidence_row_generic(
+                "EVD-001", "OPS-001",
+                description=(
+                    "真实运营数据：至少 1 周真实运行数据；用户反馈已归档并按类别分类；"
+                    "问题清单：问题项 ISSUE-001 初始化失败，严重级别=high，状态=closed；"
+                    "可执行优化项含 Owner、截止和验证命令"
+                ),
+                gate="G10",
+            )
+            sp, ep, rp, _ = self._setup(td, plan="# 计划跟踪\n", evidence=evidence)
+
+            with self._patch_governance_paths(sp, ep, rp):
+                result = vw.auto_judge_gate("G10")
+
+            self.assertEqual(result["overall"], "passed")
+            issue_item = next(item for item in result["items"] if "关键问题" in item["check"])
+            self.assertEqual(issue_item["result"], "PASS")
+
+
 class AgentTeamReviewTests(unittest.TestCase):
     """Test check_agent_team_review() — SYSGAP-035 (Check 18)."""
 

@@ -2,6 +2,29 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.34.0] — 2026-05-14
+
+### 0.34.0 — 审查驱动质量回收 + plan-tracker 标准化
+
+AUDIT-099 全项目审查后的质量回收版本，覆盖真实 E2E、防护网恢复、审查降级防护、归档数据源、持续归档、治理信噪比、架构事实源、Gate 证据质量和治理热文件标准化。
+
+### 审查与验证防护
+- **AUDIT-099**: 全项目质量审查闭环，识别并收敛 0.34.0 质量回收范围。
+- **FIX-059**: Stage 子工作流路径事实源修复，恢复 stage skill 路径验证可靠性。
+- **FIX-060**: E2E 从静态检查升级为真实命令代理矩阵，提升端到端验证可信度。
+- **FIX-061**: `/governance-review` 禁止 Coordinator 自审降级，补充 review fallback 防护与 Check 27。
+
+### 归档与治理数据质量
+- **FIX-062**: verify_workflow 归档数据源测试隔离与审查覆盖检查修复，避免归档数据污染当前验证。
+- **FIX-063**: 持续归档触发闭环，archive.py --auto 支持发布强制、task 增量和 90 天兜底触发。
+- **FMT-001**: plan-tracker 热文件标准化，移除历史路线图/样例表/已归档任务段，保持活跃治理数据轻量可读。
+
+### 治理信噪比与事实源收敛
+- **FIX-064**: `/governance` 升级路径同步持续归档 Step E，status/init 输出契约补齐 permission_mode。
+- **FIX-065**: 架构事实源收敛，统一 Agent/Coordinator 数量、Release/operations 边界、入口层边界和路由表口径。
+- **FIX-066**: 治理检查信噪比治理，收敛 M5、manifest、归档历史、cross-reference、lock 和 untracked 噪音。
+- **FIX-067**: G10/G11 Gate 自动判定可信度修复，弱代理条件替换为真实证据并补归档感知。
+
 ## [0.33.0] — 2026-05-10
 
 ### 0.33.0 — 治理数据升级迁移流程

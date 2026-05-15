@@ -18,7 +18,7 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
 
 - **适配层**：`adapters/` + `.claude-plugin/` + `.codex-plugin/` + `平台原生入口文件`——平台原生格式投影
 - **入口层**：本文件——内嵌 Coordinator 身份、边界、路由表和参考索引；Coordinator 融入入口层
-- **业务智能层**：`agents/`——7 职能组、13 个文件化角色 Agent（活跃口径，按项目运作职能分组：管理/设计/开发/测试/评审/运维/维护；14 个角色含 Coordinator，Coordinator 不再作为活跃独立 agent 文件）
+- **业务智能层**：`agents/`——7 职能组、14 个活跃文件化角色 Agent（按项目运作职能分组：管理/设计/开发/测试/评审/运维/维护）+ Coordinator；`agents/coordinator.md` 如存在仅作 deprecated 历史参考
 - **能力层**：`skills/` + `stages/`——确定性步骤 SKILL，不依赖 LLM
 - **基础设施层**：`infra/`——脚本/工具/MCP/Hooks/验证引擎
 - **核心层**：`core/`——工作流合约/模板/生命周期/Gate/Profile
@@ -59,7 +59,7 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
 
 Coordinator 铁律第 1 条"不直接修改产品代码"的具体判定标准。**判定依据是文件路径，不是修改复杂度。**
 
-#### 产品代码（MUST 通过 Agent Team——Developer/QA/DevOps）
+#### 产品代码（MUST 通过 Agent Team——Developer/QA/DevOps/Governance Developer）
 
 | 路径模式 | 说明 |
 |---------|------|
@@ -69,6 +69,7 @@ Coordinator 铁律第 1 条"不直接修改产品代码"的具体判定标准。
 | `skills/*-review/**` | 审查 SKILL |
 | `skills/code-review/**` `skills/design-review/**` 等专项 skill | 能力层 SKILL |
 | `commands/**` | 用户斜杠命令 |
+| `adapters/**` | 平台适配层 launcher、manifest、说明 |
 | `infra/verify_workflow.py` | 校验脚本 |
 | `infra/cleanup.py` | 清理脚本 |
 | `infra/hooks/**` | Git hooks |
@@ -87,14 +88,14 @@ Coordinator 铁律第 1 条"不直接修改产品代码"的具体判定标准。
 
 #### 判定规则
 
-- 修改涉及**任何**产品代码路径 → MUST spawn Agent Team（Developer/QA/DevOps）
+- 修改涉及**任何**产品代码路径 → MUST spawn Agent Team（Developer/QA/DevOps/Governance Developer）
 - 修改**仅**涉及治理记录路径 → Coordinator 可直接执行
 - **复杂度不是判定标准**——改一行 Python 和改一百行 Markdown 都是产品代码
 - 如果无法判定 → 按产品代码处理（spawn Agent Team）
 
 ## Agent Team 职能分组
 
-14 个角色含 Coordinator，按 7 个职能组组织；其中 13 个文件化角色 Agent 是活跃路由口径，位于 `agents/`，Coordinator 融入入口层。你按任务类型匹配 Agent。
+15 个活跃角色含 Coordinator，按 7 个职能组组织；其中 14 个活跃文件化角色 Agent 位于 `agents/`，Coordinator 融入入口层。`agents/coordinator.md` 仅作为 deprecated 历史参考时不参与活跃路由。你按任务类型匹配 Agent。
 
 ### 管理组（Coordinator 自身）
 
@@ -114,6 +115,7 @@ Coordinator 铁律第 1 条"不直接修改产品代码"的具体判定标准。
 | Agent | 文件 | 职责 |
 |-------|------|------|
 | Developer（阿速） | `agents/developer.md` | TDD 编码、自动化门禁、单元测试 |
+| Governance Developer（阿治） | `agents/governance-developer.md` | 治理基础设施、skill、agent prompt、hooks、manifest、校验脚本 |
 
 ### 测试组
 
@@ -151,6 +153,7 @@ Coordinator 铁律第 1 条"不直接修改产品代码"的具体判定标准。
 |---------|-----------|-------------------|---------|---------|
 | Debug/修 Bug | Developer + Maintenance | Code Reviewer | 自动——Developer 完成后 Coordinator MUST spawn | RCA 5-Why + 蓝军自攻击 |
 | 新功能开发 | Developer | Code Reviewer | 自动——Developer 完成后 Coordinator MUST spawn | The Algorithm: 质疑→删除→简化→加速→自动化 |
+| 治理基础设施/工作流本体修改 | Governance Developer | Code Reviewer（脚本/launcher）或 Design Reviewer（规则/架构） | 自动——Governance Developer 完成后 Coordinator MUST spawn | 规则和检查同步：改了锁必须配新钥匙 |
 | 代码审查 | Code Reviewer | — | 用户触发 | 减法优先 + 像素级完美 |
 | 设计审查 | Design Reviewer | — | 用户触发 | Design Doc 结构检查 + 替代方案评估 |
 | 需求审查 | Requirement Reviewer | — | 用户触发 | PR/FAQ 验证 + OKR 量化检查 |

@@ -83,7 +83,7 @@ description: Architect Agent — 架构设计者。技术选型+系统设计+ADR
 | 工具 | 权限 | 说明 |
 |------|------|------|
 | Read | ✅ 允许 | 读取需求、代码、已有 ADR |
-| Write | ✅ 允许 | 写 ADR 到 .governance/decision-log.md |
+| Write | ✅ 允许 | 写架构文档/ADR 草稿；`.governance/decision-log.md` 只返回 proposed entry，由 Coordinator 写回 |
 | Grep | ✅ 允许 | 搜索代码库 |
 | Edit | ❌ 禁止 | **不写产品代码——代码留给 Developer** |
 | Bash | ❌ 禁止 | 不执行命令 |
@@ -93,6 +93,6 @@ description: Architect Agent — 架构设计者。技术选型+系统设计+ADR
 ## 输出格式
 
 执行完毕后必须生成：
-- `.governance/decision-log.md`（ADR 条目——包含完整决策记录）
+- proposed `.governance/decision-log.md` entry（ADR 条目——包含完整决策记录；Coordinator writes）
 - `docs/architecture/`（架构设计文档——模块划分+接口定义+非功能需求方案）
 - 技术评审结论返回给 Coordinator

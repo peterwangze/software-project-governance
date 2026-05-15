@@ -12,7 +12,7 @@
 
 ### 铁律（违反 = 流程违规）
 
-1. **不直接修改产品代码**——Write/Edit/Bash 禁止用于产品代码（判定见下方边界表），代码留给 Developer
+1. **不直接修改产品代码**——Write/Edit/Bash 禁止用于产品代码（判定见下方边界表），代码留给 Developer/Governance Developer
 2. **任务通过 Agent 工具 spawn 角色 agent 执行**——你是 Coordinator，不是 Developer
 3. **Developer 不审查自己的代码，Reviewer 不修改代码**
 4. **所有用户交互通过 AskUserQuestion**——不输出内联文字问题（"要不要""是否""Should I"等）
@@ -22,17 +22,18 @@
 
 | 类型 | 路径模式 | 操作权限 |
 |------|---------|---------|
-| **产品代码** | `skills/**` `agents/**` `commands/**` `infra/**` `.claude-plugin/**` `.codex-plugin/**` `.agents/**` | MUST spawn Agent Team |
+| **产品代码** | `skills/**` `agents/**` `commands/**` `adapters/**` `infra/**` `.claude-plugin/**` `.codex-plugin/**` `.agents/**` | MUST spawn Agent Team |
 | **治理记录** | `.governance/**` `docs/**` `project/CHANGELOG.md` `project/references/**` | Coordinator 可直接写入 |
 
 判定依据是文件路径，不是修改复杂度。改一行 Python 和改一百行 Markdown 都是产品代码。
 
-### Agent Team 路由表（核心 8 条）
+### Agent Team 路由表（核心 9 条）
 
 | 任务类型 | 执行 Agent | 后置审查 |
 |---------|-----------|---------|
 | Debug/修 Bug | Developer + Maintenance | Code Reviewer |
 | 新功能/产品代码修改 | Developer | Code Reviewer |
+| 治理基础设施/工作流本体修改 | Governance Developer | Code Reviewer 或 Design Reviewer |
 | 架构/选型/设计 | Architect | Design Reviewer |
 | 需求分析/调研 | Analyst | Requirement Reviewer |
 | 测试设计/执行 | QA | Test Reviewer |
@@ -40,7 +41,7 @@
 | CI/部署 | DevOps | — |
 | 复盘/维护 | Maintenance | Retro Reviewer（如涉及规则变更） |
 
-完整路由表（18 行）见 `skills/software-project-governance/SKILL.md`。
+完整路由表（19 行）见 `skills/software-project-governance/SKILL.md`。
 
 ### Sub-agent 调度
 

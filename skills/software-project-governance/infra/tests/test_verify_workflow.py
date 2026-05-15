@@ -185,29 +185,66 @@ class FileExistenceTests(unittest.TestCase):
 
 
 class ArchitectureFactSourceTests(unittest.TestCase):
-    """FIX-065: architecture facts must stay synchronized across sources."""
+    """FIX-065/FIX-070: architecture and Agent Team facts must stay synchronized."""
+
+    def _agent_protocol_content(self):
+        role_sections = []
+        for role in vw.ACTIVE_AGENT_ROLES:
+            output = "- Proposed evidence-log entry\n"
+            if role == "Governance Developer":
+                output += "- Proposed decision-log / risk-log entry when rule or risk posture changes\n"
+            elif "Reviewer" in role:
+                output = "- Proposed review evidence entry\n"
+            role_sections.append(
+                f"### {role}\n\n"
+                "**Input**:\n```\nTask: {{task_id}}\n```\n\n"
+                "**Output**:\n```\n"
+                f"{output}"
+                "```\n"
+            )
+        return (
+            "# Agent 通信协议\n\n"
+            "## 原则\n\n"
+            "Sub-agent 不直接写 `.governance/`；由 Coordinator 写回 proposed entry。\n\n"
+            "## 角色 Agent I/O 契约\n\n"
+            + "\n".join(role_sections)
+        )
+
+    def _governance_developer_prompt_content(self):
+        return (
+            "# Governance Developer\n\n"
+            "不得直接写 `.governance/` 治理记录；必须返回 proposed evidence-log entry；"
+            "规则或风险姿态变化时返回 proposed decision-log / risk-log entry；"
+            "Coordinator 负责最终写回。\n\n"
+            "## 输出格式\n\n"
+            "- Proposed evidence-log entry\n"
+            "- Proposed decision-log / risk-log entry\n"
+        )
 
     def _write_fact_files(
         self,
         root,
         skill_extra="",
         skill_index_operations_agents="Coordinator, DevOps, Maintenance",
+        skill_index_extra="",
+        agent_protocol_content=None,
+        governance_developer_prompt_content=None,
         architecture_extra="",
-        governance_route_count=18,
+        governance_route_count=19,
     ):
         skill = root / "SKILL.md"
         skill.write_text(
             "# 软件项目治理工作流入口\n\n"
             "Coordinator 融入入口层。\n"
-            "13 个文件化角色 Agent；14 个角色含 Coordinator。\n"
+            "14 个活跃文件化角色 Agent；15 个活跃角色含 Coordinator。\n"
             "Coordinator 接管用户交互。\n"
             "Producer-Reviewer 分离。\n\n"
             "## Agent 分发路由\n\n"
             "| 任务类型 | 执行 Agent | 后置审查 Agent(s) | 触发条件 | 核心方法论 |\n"
             "| --- | --- | --- | --- | --- |\n"
             + "\n".join(
-                f"| Route {i:02d} | Agent | Reviewer | 自动 | Method |"
-                for i in range(1, 19)
+                f"| Route {i:02d} | Agent | Code Reviewer | 自动 | Method |"
+                for i in range(1, 20)
             )
             + f"\n{skill_extra}\n\n## Sub-agent 调度\n",
             encoding="utf-8",
@@ -218,7 +255,15 @@ class ArchitectureFactSourceTests(unittest.TestCase):
             "# SKILL 分类索引\n\n"
             "| SKILL | 路径 | 用途 | 调用 Agent |\n"
             "| --- | --- | --- | --- |\n"
-            f"| stage-operations | `skills/stage-operations/SKILL.md` | 运营与反馈 | {skill_index_operations_agents} |\n",
+            "| stage-infra | `skills/stage-infra/SKILL.md` | 基础设施 | Coordinator, Architect, Developer, Governance Developer, DevOps |\n"
+            f"| stage-operations | `skills/stage-operations/SKILL.md` | 运营与反馈 | {skill_index_operations_agents} |\n"
+            "| stage-maintenance | `skills/stage-maintenance/SKILL.md` | 维护与演进 | Coordinator, Governance Developer, Maintenance |\n"
+            "| code-review | `skills/code-review/SKILL.md` | 代码审查 | Developer(自检), Governance Developer(自检), Code Reviewer(正式) |\n\n"
+            "## Agent↔SKILL 绑定总表\n\n"
+            "| 职能组 | Agent | 可调用 SKILL |\n"
+            "| --- | --- | --- |\n"
+            "| 开发组 | **Governance Developer** | stage-maintenance, stage-infra, code-review |\n"
+            f"{skill_index_extra}\n",
             encoding="utf-8",
         )
 
@@ -237,7 +282,23 @@ class ArchitectureFactSourceTests(unittest.TestCase):
             f"完整路由表（{governance_route_count} 行）见 `skills/software-project-governance/SKILL.md`。\n",
             encoding="utf-8",
         )
-        return skill, skill_index, architecture, governance
+
+        agent_protocol = root / "agent-communication-protocol.md"
+        agent_protocol.write_text(
+            agent_protocol_content if agent_protocol_content is not None else self._agent_protocol_content(),
+            encoding="utf-8",
+        )
+
+        governance_developer_prompt = root / "governance-developer.md"
+        governance_developer_prompt.write_text(
+            (
+                governance_developer_prompt_content
+                if governance_developer_prompt_content is not None
+                else self._governance_developer_prompt_content()
+            ),
+            encoding="utf-8",
+        )
+        return skill, skill_index, architecture, governance, agent_protocol, governance_developer_prompt
 
     def test_architecture_fact_source_accepts_current_facts(self):
         with tempfile.TemporaryDirectory() as td:
@@ -293,7 +354,7 @@ class ArchitectureFactSourceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             paths = self._write_fact_files(Path(td), governance_route_count=16)
             issues = vw.check_architecture_fact_source(*paths)
-            self.assertTrue(any("route table count 16 does not match SKILL.md actual 18" in issue for issue in issues))
+            self.assertTrue(any("route table count 16 does not match SKILL.md actual 19" in issue for issue in issues))
 
     def test_architecture_fact_source_requires_key_phrases(self):
         with tempfile.TemporaryDirectory() as td:
@@ -301,10 +362,107 @@ class ArchitectureFactSourceTests(unittest.TestCase):
                 Path(td),
                 skill_extra="\n",
             )
-            skill, skill_index, architecture, governance = paths
+            skill, skill_index, architecture, governance, agent_protocol, governance_developer_prompt = paths
             skill.write_text(skill.read_text(encoding="utf-8").replace("Producer-Reviewer 分离。\n", ""), encoding="utf-8")
-            issues = vw.check_architecture_fact_source(skill, skill_index, architecture, governance)
+            issues = vw.check_architecture_fact_source(
+                skill, skill_index, architecture, governance, agent_protocol, governance_developer_prompt
+            )
             self.assertTrue(any("Producer-Reviewer 分离" in issue for issue in issues))
+
+    def test_architecture_fact_source_requires_governance_developer_skill_binding(self):
+        with tempfile.TemporaryDirectory() as td:
+            paths = self._write_fact_files(Path(td))
+            skill, skill_index, architecture, governance, agent_protocol, governance_developer_prompt = paths
+            skill_index.write_text(
+                skill_index.read_text(encoding="utf-8")
+                .replace(", Governance Developer", "")
+                .replace("Governance Developer(自检), ", "")
+                .replace("| 开发组 | **Governance Developer** | stage-maintenance, stage-infra, code-review |\n", ""),
+                encoding="utf-8",
+            )
+            issues = vw.check_architecture_fact_source(
+                skill, skill_index, architecture, governance, agent_protocol, governance_developer_prompt
+            )
+            self.assertTrue(any("missing Governance Developer skill binding row" in issue for issue in issues))
+            self.assertTrue(any("stage-infra must bind Governance Developer" in issue for issue in issues))
+            self.assertTrue(any("stage-maintenance must bind Governance Developer" in issue for issue in issues))
+            self.assertTrue(any("code-review must bind Governance Developer" in issue for issue in issues))
+
+    def test_architecture_fact_source_requires_governance_developer_protocol_entries(self):
+        with tempfile.TemporaryDirectory() as td:
+            protocol = self._agent_protocol_content().replace(
+                "- Proposed decision-log / risk-log entry when rule or risk posture changes\n",
+                "",
+            )
+            paths = self._write_fact_files(Path(td), agent_protocol_content=protocol)
+            issues = vw.check_architecture_fact_source(*paths)
+            self.assertTrue(any("Governance Developer contract missing Proposed decision-log / risk-log entry" in issue for issue in issues))
+
+    def test_architecture_fact_source_requires_governance_developer_protocol_evidence_entry(self):
+        with tempfile.TemporaryDirectory() as td:
+            protocol = self._agent_protocol_content().replace(
+                "- Proposed evidence-log entry\n",
+                "",
+            )
+            paths = self._write_fact_files(Path(td), agent_protocol_content=protocol)
+            issues = vw.check_architecture_fact_source(*paths)
+            self.assertTrue(any("Governance Developer contract missing Proposed evidence-log entry" in issue for issue in issues))
+
+    def test_architecture_fact_source_requires_all_active_role_protocol_sections(self):
+        with tempfile.TemporaryDirectory() as td:
+            protocol = self._agent_protocol_content().replace("### Release Reviewer\n", "### Reviewer\n")
+            paths = self._write_fact_files(Path(td), agent_protocol_content=protocol)
+            issues = vw.check_architecture_fact_source(*paths)
+            self.assertTrue(any("missing active role communication contract: Release Reviewer" in issue for issue in issues))
+            self.assertTrue(any("generic Reviewer communication contract is forbidden" in issue for issue in issues))
+
+    def test_architecture_fact_source_rejects_generic_reviewer_skill_binding(self):
+        with tempfile.TemporaryDirectory() as td:
+            paths = self._write_fact_files(
+                Path(td),
+                skill_index_extra="| 评审组 | **Reviewer** | requirement-review, design-review, code-review |\n",
+            )
+            issues = vw.check_architecture_fact_source(*paths)
+            self.assertTrue(any("generic Reviewer role is forbidden" in issue for issue in issues))
+
+    def test_architecture_fact_source_requires_governance_developer_prompt_no_direct_write_boundary(self):
+        with tempfile.TemporaryDirectory() as td:
+            prompt = self._governance_developer_prompt_content().replace(
+                "不得直接写 `.governance/` 治理记录；", ""
+            )
+            paths = self._write_fact_files(Path(td), governance_developer_prompt_content=prompt)
+            issues = vw.check_architecture_fact_source(*paths)
+            self.assertTrue(any("不得直接写 `.governance/` 治理记录" in issue for issue in issues))
+
+    def test_architecture_fact_source_requires_governance_developer_prompt_evidence_entry(self):
+        with tempfile.TemporaryDirectory() as td:
+            prompt = self._governance_developer_prompt_content().replace(
+                "- Proposed evidence-log entry\n",
+                "",
+            )
+            paths = self._write_fact_files(Path(td), governance_developer_prompt_content=prompt)
+            issues = vw.check_architecture_fact_source(*paths)
+            self.assertTrue(any("Proposed evidence-log entry" in issue for issue in issues))
+
+    def test_architecture_fact_source_requires_governance_developer_prompt_decision_risk_entry(self):
+        with tempfile.TemporaryDirectory() as td:
+            prompt = self._governance_developer_prompt_content().replace(
+                "- Proposed decision-log / risk-log entry\n",
+                "",
+            )
+            paths = self._write_fact_files(Path(td), governance_developer_prompt_content=prompt)
+            issues = vw.check_architecture_fact_source(*paths)
+            self.assertTrue(any("Proposed decision-log / risk-log entry" in issue for issue in issues))
+
+    def test_architecture_fact_source_requires_governance_developer_prompt_coordinator_writeback_boundary(self):
+        with tempfile.TemporaryDirectory() as td:
+            prompt = self._governance_developer_prompt_content().replace(
+                "Coordinator 负责最终写回。",
+                "",
+            )
+            paths = self._write_fact_files(Path(td), governance_developer_prompt_content=prompt)
+            issues = vw.check_architecture_fact_source(*paths)
+            self.assertTrue(any("Coordinator 负责最终写回" in issue for issue in issues))
 
 
 class E2ECommandMatrixTests(unittest.TestCase):

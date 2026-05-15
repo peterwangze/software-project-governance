@@ -5,7 +5,7 @@
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                   外部 AI CLI 平台                        │
-│   Claude Code  │  Codex  │  Gemini  │  国内 Agent CLI     │
+│   Claude Code  │  Codex  │  Gemini  │  opencode / 其他 CLI │
 └──────────────────────────┬──────────────────────────────┘
                            │ 通过平台原生机制加载
 ┌──────────────────────────▼──────────────────────────────┐
@@ -144,19 +144,19 @@
 - 动态组合（一个工作流可以有多个 Agent 参与）
 - **有判断权**——在能力层提供的确定性步骤之上做决策
 
-**Agent 职能分组**（7 组，13 个文件化角色 Agent + Coordinator，按项目运作职能组织）：
+**Agent 职能分组**（7 组，14 个活跃文件化角色 Agent + Coordinator，按项目运作职能组织）：
 
 | 职能组 | Agent | 生命周期覆盖 | 可调用的 SKILL |
 |--------|-------|------------|---------------|
 | **管理组** | Coordinator（融入入口层） | 全流程——统筹调度 | 所有 SKILL（通过路由分发） |
 | **设计组** | Analyst, Architect | 立项→调研→选型→架构设计 | 需求澄清, 竞品分析, PR/FAQ, OKR, 6-Pager, 技术选型, 架构设计, ADR, 技术评审 |
-| **开发组** | Developer | 开发实现 | 开发, TDD, 环境搭建 |
+| **开发组** | Developer, Governance Developer | 业务实现；治理基础设施实现 | 开发, TDD, 环境搭建, 维护与演进, 基础设施 |
 | **测试组** | QA | 测试与质量保障 | 测试设计, 集成测试, 性能测试 |
 | **评审组** | Code Reviewer, Design Reviewer, Requirement Reviewer, Test Reviewer, Release Reviewer, Retro Reviewer | 全流程——独立审查 | 代码审查, 设计审查, 需求审查, 测试审查, 发布审查, 复盘审查 |
 | **运维组** | DevOps, Release | CI/CD→版本发布；运营监控由 DevOps 承接，反馈闭环进入 Maintenance | CI/CD, 环境管理, 监控告警, 发布检查, 版本规划, 变更日志 |
 | **维护组** | Maintenance | 维护与演进 | 缺陷修复, 复盘会议, 规则演进 |
 
-> 目录结构：`agents/<name>.md`（plugin root 平铺，符合 Claude Code 官方规范）。`agents/` 下的 13 个文件化角色 Agent 是活跃路由口径；Coordinator 融入入口层，14 个角色含 Coordinator。Deprecated 历史参考文件可存在于仓库，但不参与活跃路由口径。
+> 目录结构：`agents/<name>.md`（plugin root 平铺，符合 Claude Code 官方规范）。`agents/` 当前有 15 个文件：14 个活跃文件化角色 Agent，加 1 个 deprecated 的 `agents/coordinator.md` 历史参考；Coordinator 融入入口层，不再作为活跃独立 agent 文件。FIX-070 已把入口层路由、Agent 索引、通信协议和治理写回边界收敛到这一事实源口径。
 
 ### 入口层——引导进入业务智能层
 
@@ -217,8 +217,8 @@
     "required": true
   },
   "native_entry": {
-    "repository_entry": "平台原生入口文件名",
-    "skill_path": "skills/software-project-governance/SKILL.md"
+    "skill_path": "skills/software-project-governance/SKILL.md",
+    "repository_entry": "平台原生入口文件名（可选：仅平台存在仓库级入口文件时声明）"
   },
   "launcher": "launcher 脚本路径"
 }
@@ -228,10 +228,11 @@
 
 | 平台 | 状态 | adapter 目录 | plugin 目录 |
 |------|------|-------------|------------|
-| Claude Code | 主线（已实现） | `adapters/claude/` | `.claude-plugin/` |
-| Codex | 预研（样例） | `adapters/codex/` | `.codex-plugin/` |
-| Gemini | 兼容分析（文档） | `adapters/gemini/` | — |
-| 国内 Agent CLI | 兼容分析（文档） | — | `.agents/` |
+| Claude Code | 主线（已实现，launcher 字段兼容由 FIX-071 收口） | `adapters/claude/` | `.claude-plugin/` |
+| Codex | 预研（样例，仍需运行时加载验证） | `adapters/codex/` | `.codex-plugin/` |
+| Gemini | 未完成（仅兼容分析文档） | `adapters/gemini/` | — |
+| opencode | 未实现（0.35.0 P0 适配缺口） | — | — |
+| 通用 `.agents` marketplace | 兼容分析（文档/元数据） | — | `.agents/` |
 
 **新增平台的标准流程**：
 1. 阅读 `skills/software-project-governance/core/protocol/plugin-contract.md` 六项准入问题
@@ -358,7 +359,7 @@
 
 | 当前文件 | 变更 |
 |---------|------|
-| `skills/software-project-governance/SKILL.md` | ✅ 入口层自包含：Coordinator 身份、铁律、产品代码边界、18 行路由表、Sub-agent 调度约束、参考索引与适配层说明 |
+| `skills/software-project-governance/SKILL.md` | ✅ 入口层自包含：Coordinator 身份、铁律、产品代码边界、19 行路由表、Sub-agent 调度约束、参考索引与适配层说明 |
 
 ### 适配层映射
 
@@ -375,6 +376,7 @@
 | `adapters/codex/README.md` | Codex | 预研 |
 | `.codex-plugin/plugin.json` | Codex | plugin manifest |
 | `adapters/gemini/README.md` | Gemini | 兼容分析 |
+| `adapters/opencode/` | opencode | ⬜ 未实现（FIX-071） |
 | `.agents/plugins/marketplace.json` | 国内 Agent CLI | 兼容分析 |
 
 ## 需求拆解
@@ -384,12 +386,12 @@
 | ID | 需求 | 工作量 | 状态 |
 |----|------|--------|------|
 | REQ-041 | 主 SKILL.md 瘦身为入口 | 小 | ✅ 已完成 |
-| REQ-042 | 建立统一的能力层（SKILL）目录结构 | 中 | 待实施 |
-| REQ-043 | 统一 SKILL 格式 | 中 | 待实施 |
-| REQ-044 | 迁移 stages/ 和 commands/ 到能力层 skills/ | 大 | 待实施 |
-| REQ-045 | 分离核心层文件到 core/ 目录 | 中 | 🔄 文件已移动，引用待更新 |
-| REQ-046 | 建立基础设施层目录结构 infra/ | 小 | 🔄 文件已移动，引用待更新 |
-| REQ-052 | 适配层正式纳入架构——adapter 标准字段 + 新增平台流程 | 小 | 待实施 |
+| REQ-042 | 建立统一的能力层（SKILL）目录结构 | 中 | ✅ 已实施（根级 `skills/` + workflow 内部 `skills/software-project-governance/`） |
+| REQ-043 | 统一 SKILL 格式 | 中 | ✅ 已实施，剩余问题转入 FIX-072 的“确定性行为覆盖/工具化”核查 |
+| REQ-044 | 迁移 stages/ 和 commands/ 到能力层 skills/ | 大 | ⚠️ 部分完成：stage 已 skill 化；`commands/` 仍承担平台命令入口，是否迁移由 FIX-072 复核 |
+| REQ-045 | 分离核心层文件到 core/ 目录 | 中 | ✅ 已完成，交叉引用校验通过 |
+| REQ-046 | 建立基础设施层目录结构 infra/ | 小 | ✅ 已完成，hooks / verify / archive / cleanup 已归入 infra |
+| REQ-052 | 适配层正式纳入架构——adapter 标准字段 + 新增平台流程 | 小 | ⚠️ 部分完成：Claude/Codex 有 manifest+launcher；Gemini/opencode 缺入口，由 FIX-071 收口 |
 
 ### P1（重要——可用性）
 
@@ -414,29 +416,29 @@
 2. ✅ 创建 references/behavior-protocol.md 保存 M0-M9 强制性规则
 3. ✅ verify_workflow.py snippets 同步更新
 
-### Phase 2: 核心层和基础设施层建立（P0, 🔄 进行中）
+### Phase 2: 核心层和基础设施层建立（P0, ✅ 已完成）
 4. ✅ 创建 core/ 目录，移入 lifecycle/stage-gates/profiles/onboarding/audit-framework/VERSIONING/task-gate-model
 5. ✅ 创建 infra/ 目录，移入 hooks/ 和 verify_workflow.py
-6. ⬜ 更新全仓路径引用（~30 个文件）
-7. ⬜ verify_workflow.py 适配新路径
+6. ✅ 更新全仓路径引用并通过 cross-reference 校验
+7. ✅ verify_workflow.py 适配当前路径并通过 0.34.0 验证矩阵
 
-### Phase 3: 能力层（SKILL）建立和迁移（P0）
-8. 创建统一的 skills/ 目录结构
-9. 将 stages/ 下的 SKILL 迁移到 skills/
-10. 将 commands/ 下的 SKILL 迁移到 skills/
-11. 统一所有 SKILL 格式
+### Phase 3: 能力层（SKILL）建立和迁移（P0, ⚠️ 部分完成）
+8. ✅ 创建统一的 `skills/` 目录结构
+9. ✅ 阶段工作流已形成 `skills/stage-*/SKILL.md`
+10. ⚠️ `commands/` 当前作为平台命令入口保留，是否继续迁移由 FIX-072 复核
+11. ✅ SKILL 格式已统一；确定性行为是否全部 skill 化由 FIX-072 继续核查
 
-### Phase 4: 业务智能层（Agent）升级 + 适配层正式化（P1）
-12. 为每个 Agent 添加"可调用的 SKILL"列表
-13. 建立 SKILL 分类索引
-14. 适配层标准字段文档化（adapter-manifest.json schema）
-15. 新增平台 checklist 文档化
+### Phase 4: 业务智能层（Agent）升级 + 适配层正式化（P1, ⚠️ 部分完成）
+12. ✅ Governance Developer 路由、可调用 SKILL、通信 I/O 和 Coordinator 单点写回边界已由 FIX-070 收口
+13. ✅ 建立 SKILL 分类索引；索引与 agent 调用覆盖由 FIX-072 复核
+14. ✅ adapter 标准字段文档化；Claude launcher 字段漂移由 FIX-071 修复
+15. ⚠️ 新增平台 checklist 不足，Gemini/opencode 入口缺口由 FIX-071 收口
 
-### Phase 5: 验证和发布（P2）
-16. verify_workflow.py 适配新结构
-17. adapter 标准字段校验
-18. 版本 bump + CHANGELOG
-19. E2E 验证
+### Phase 5: 验证和发布（P2, 🔄 0.35.0 收口中）
+16. ✅ verify_workflow.py 适配当前结构
+17. ⚠️ adapter 标准字段校验仍需覆盖 Gemini/opencode 和 runtime contract（FIX-071）
+18. ⬜ 0.35.0 版本 bump + CHANGELOG
+19. ⚠️ E2E 当前覆盖源 CLI 代理，目标 cwd 真实执行由 FIX-074 补齐
 
 ## 目标目录结构
 
@@ -494,6 +496,10 @@ adapters/                         ← 适配层（平台投影）
     launch.py
     README.md
   gemini/
+    README.md
+  opencode/
+    adapter-manifest.json
+    launch.py
     README.md
 
 .claude-plugin/                   ← 适配层（Claude Code 插件包）

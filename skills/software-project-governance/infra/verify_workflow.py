@@ -1051,17 +1051,115 @@ def _documented_route_table_count(command_path=None):
     return int(match.group(1)) if match else None
 
 
+ACTIVE_AGENT_ROLES = [
+    "Analyst",
+    "Architect",
+    "Developer",
+    "Governance Developer",
+    "QA",
+    "Code Reviewer",
+    "Design Reviewer",
+    "Requirement Reviewer",
+    "Test Reviewer",
+    "Release Reviewer",
+    "Retro Reviewer",
+    "DevOps",
+    "Release",
+    "Maintenance",
+]
+
+NAMED_REVIEWER_ROLES = [
+    "Code Reviewer",
+    "Design Reviewer",
+    "Requirement Reviewer",
+    "Test Reviewer",
+    "Release Reviewer",
+    "Retro Reviewer",
+]
+
+GOVERNANCE_DEVELOPER_REQUIRED_SKILLS = [
+    "stage-maintenance",
+    "stage-infra",
+    "code-review",
+]
+
+
+def _markdown_has_heading(content, level, title):
+    return re.search(rf"^{'#' * level}\s+{re.escape(title)}\s*$", content, re.MULTILINE) is not None
+
+
+def _markdown_section(content, heading):
+    lines = content.splitlines()
+    start = None
+    level = None
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped == heading:
+            start = idx + 1
+            level = len(stripped) - len(stripped.lstrip("#"))
+            break
+    if start is None:
+        return ""
+
+    end = len(lines)
+    heading_pattern = re.compile(r"^(#{1,%d})\s+" % level)
+    for idx in range(start, len(lines)):
+        if heading_pattern.match(lines[idx].strip()):
+            end = idx
+            break
+    return "\n".join(lines[start:end])
+
+
+def _markdown_table_cells(line):
+    stripped = line.strip()
+    if not stripped.startswith("|"):
+        return []
+    return [cell.strip() for cell in stripped.strip("|").split("|")]
+
+
+def _normalize_agent_token(token):
+    token = re.sub(r"[`*]", "", token)
+    token = re.sub(r"[（(][^）)]*[）)]", "", token)
+    return token.strip()
+
+
+def _generic_reviewer_cells(content):
+    hits = []
+    for line_no, line in enumerate(content.splitlines(), start=1):
+        for cell in _markdown_table_cells(line):
+            cleaned = _normalize_agent_token(cell)
+            parts = [
+                _normalize_agent_token(part)
+                for part in re.split(r"\s*(?:,|，|、|\+|/|或|和)\s*", cleaned)
+            ]
+            if any(part in ("Reviewer", "Reviewer Agent") for part in parts):
+                hits.append(line_no)
+                break
+    return hits
+
+
+def _find_table_line(content, prefix):
+    for line in content.splitlines():
+        if line.strip().startswith(prefix):
+            return line
+    return ""
+
+
 def check_architecture_fact_source(
     skill_path=None,
     skill_index_path=None,
     architecture_path=None,
     governance_command_path=None,
+    agent_protocol_path=None,
+    governance_developer_prompt_path=None,
 ):
     """FIX-065: keep Agent/team architecture facts synchronized."""
     skill_path = skill_path or ROOT / "skills/software-project-governance/SKILL.md"
     skill_index_path = skill_index_path or ROOT / "skills/software-project-governance/references/skill-index.md"
     architecture_path = architecture_path or ROOT / "project/references/architecture.md"
     governance_command_path = governance_command_path or ROOT / "commands/governance.md"
+    agent_protocol_path = agent_protocol_path or ROOT / "skills/software-project-governance/references/agent-communication-protocol.md"
+    governance_developer_prompt_path = governance_developer_prompt_path or ROOT / "agents/governance-developer.md"
 
     failures = []
     contents = {
@@ -1069,6 +1167,8 @@ def check_architecture_fact_source(
         skill_index_path: skill_index_path.read_text(encoding="utf-8"),
         architecture_path: architecture_path.read_text(encoding="utf-8"),
         governance_command_path: governance_command_path.read_text(encoding="utf-8"),
+        agent_protocol_path: agent_protocol_path.read_text(encoding="utf-8"),
+        governance_developer_prompt_path: governance_developer_prompt_path.read_text(encoding="utf-8"),
     }
 
     forbidden_patterns = [
@@ -1092,8 +1192,8 @@ def check_architecture_fact_source(
     skill_content = contents[skill_path]
     required_skill_phrases = [
         "Coordinator 融入入口层",
-        "13 个文件化角色 Agent",
-        "14 个角色含 Coordinator",
+        "14 个活跃文件化角色 Agent",
+        "15 个活跃角色含 Coordinator",
         "Coordinator 接管用户交互",
         "Producer-Reviewer 分离",
     ]
@@ -1111,6 +1211,69 @@ def check_architecture_fact_source(
         failures.append(
             f"{rel_command}: route table count {documented_routes} does not match SKILL.md actual {actual_routes}"
         )
+
+    rel_skill_index = _display_path(skill_index_path)
+    governance_developer_binding = _find_table_line(
+        skill_index_content, "| 开发组 | **Governance Developer** "
+    )
+    if not governance_developer_binding:
+        failures.append(f"{rel_skill_index}: missing Governance Developer skill binding row")
+    else:
+        for required_skill in GOVERNANCE_DEVELOPER_REQUIRED_SKILLS:
+            if required_skill not in governance_developer_binding:
+                failures.append(
+                    f"{rel_skill_index}: Governance Developer skill binding missing {required_skill}"
+                )
+
+    required_skill_index_bindings = [
+        ("| stage-infra ", "stage-infra"),
+        ("| stage-maintenance ", "stage-maintenance"),
+        ("| code-review ", "code-review"),
+    ]
+    for row_prefix, skill_name in required_skill_index_bindings:
+        row = _find_table_line(skill_index_content, row_prefix)
+        if not row or "Governance Developer" not in row:
+            failures.append(f"{rel_skill_index}: {skill_name} must bind Governance Developer")
+
+    agent_protocol_content = contents[agent_protocol_path]
+    rel_protocol = _display_path(agent_protocol_path)
+    for role in ACTIVE_AGENT_ROLES:
+        if not _markdown_has_heading(agent_protocol_content, 3, role):
+            failures.append(f"{rel_protocol}: missing active role communication contract: {role}")
+    for reviewer_role in NAMED_REVIEWER_ROLES:
+        if not _markdown_has_heading(agent_protocol_content, 3, reviewer_role):
+            failures.append(f"{rel_protocol}: missing named reviewer communication contract: {reviewer_role}")
+    if _markdown_has_heading(agent_protocol_content, 3, "Reviewer"):
+        failures.append(f"{rel_protocol}: generic Reviewer communication contract is forbidden")
+
+    governance_developer_protocol = _markdown_section(agent_protocol_content, "### Governance Developer")
+    required_governance_developer_protocol_phrases = [
+        "Proposed evidence-log entry",
+        "Proposed decision-log / risk-log entry",
+    ]
+    if not governance_developer_protocol:
+        failures.append(f"{rel_protocol}: missing Governance Developer communication contract")
+    else:
+        for phrase in required_governance_developer_protocol_phrases:
+            if phrase not in governance_developer_protocol:
+                failures.append(f"{rel_protocol}: Governance Developer contract missing {phrase}")
+
+    governance_developer_prompt_content = contents[governance_developer_prompt_path]
+    rel_governance_developer_prompt = _display_path(governance_developer_prompt_path)
+    required_governance_developer_prompt_phrases = [
+        "不得直接写 `.governance/` 治理记录",
+        "Proposed evidence-log entry",
+        "Proposed decision-log / risk-log entry",
+        "Coordinator 负责最终写回",
+    ]
+    for phrase in required_governance_developer_prompt_phrases:
+        if phrase not in governance_developer_prompt_content:
+            failures.append(f"{rel_governance_developer_prompt}: missing Governance Developer output boundary: {phrase}")
+
+    for path in (skill_path, skill_index_path, agent_protocol_path):
+        rel = _display_path(path)
+        for line_no in _generic_reviewer_cells(contents[path]):
+            failures.append(f"{rel}:{line_no}: generic Reviewer role is forbidden; use named reviewer roles")
 
     for failure in failures:
         print(f"[FAIL] architecture fact source: {failure}")

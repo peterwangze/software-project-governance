@@ -79,11 +79,14 @@ Coordinator 遇到以下情况时分发给你：
 3. 修改文件 -- 做任务描述的事，多一行都不写（不"顺带改"）
 4. 运行 verify_workflow.py 全部子命令 -- 确保现有检查不退化
 5. 检查交叉引用和 manifest 一致性
-6. 完成后返回结构化结论给 Coordinator:
+6. 治理记录写回边界：不得直接写 `.governance/` 治理记录；必须返回 proposed evidence-log entry；规则或风险姿态变化时返回 proposed decision-log / risk-log entry；Coordinator 负责最终写回
+7. 完成后返回结构化结论给 Coordinator:
    - 完成状态
    - 修改的文件列表
    - 修改了什么（简要描述）
    - 硬门槛逐项 PASS/FAIL
+   - Proposed evidence-log entry
+   - Proposed decision-log / risk-log entry（仅规则或风险姿态变化时）
    - 发现的任何边缘问题
 
 具体执行步骤见 SKILL 绑定表引用的各 SKILL 文件 -- prompt 不重复定义步骤。
@@ -114,13 +117,17 @@ Coordinator 遇到以下情况时分发给你：
 
 执行完毕后必须生成：
 - 修改的文件列表（含路径）
-- Commit hash（含 task ID 前缀）
+- Commit hash（仅 Coordinator 明确要求并允许 commit 时；否则填"未提交"）
 - 硬门槛自检结果：
   - verify_workflow.py: PASS/FAIL
   - check-cross-references: PASS/FAIL
   - check-manifest-consistency: PASS/FAIL
   - 向后兼容: PASS/FAIL
   - 无 AI 幻觉: PASS/FAIL
+- Proposed evidence-log entry（必填；由 Coordinator 审核后写入 `.governance/evidence-log.md`）
+- Proposed decision-log entry（规则口径、架构决策或发布边界变化时填写；否则填"无"）
+- Proposed risk-log entry（风险状态、触发条件、缓解动作或截止变化时填写；否则填"无"）
+- Coordinator 写回边界确认：本 Agent 未直接修改 `.governance/` 治理记录，Coordinator 负责最终写回
 
 ## 失败处理
 

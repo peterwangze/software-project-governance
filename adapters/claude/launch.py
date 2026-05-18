@@ -23,8 +23,11 @@ def main():
     print(f" - on_fail: {manifest['gate_behavior']['on_fail']}")
     print(f" - required_action: {manifest['gate_behavior']['required_action']}")
     print("native_entry:")
-    print(f" - repository_entry: {manifest['native_entry']['repository_entry']}")
-    print(f" - skill_path: {manifest['native_entry']['skill_path']}")
+    native_entry = manifest.get("native_entry")
+    if not isinstance(native_entry, dict) or not native_entry:
+        raise ValueError("adapter manifest must define a non-empty native_entry object")
+    for key in sorted(native_entry):
+        print(f" - {key}: {native_entry[key]}")
     print("validation:")
     print(f" - command: {manifest['validation']['command']}")
 

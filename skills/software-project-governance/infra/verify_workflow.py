@@ -1083,6 +1083,26 @@ GOVERNANCE_DEVELOPER_REQUIRED_SKILLS = [
     "code-review",
 ]
 
+FIX_069_RELEASE_BLOCKERS = [
+    "FIX-069",
+    "FIX-070",
+    "FIX-071",
+    "FIX-072",
+    "FIX-073",
+    "FIX-074",
+]
+
+REQ_059_RELEASE_BLOCKERS = [
+    "REQ-059",
+    "REQ-060",
+    "REQ-061",
+    "REQ-062",
+    "REQ-063",
+    "REQ-064",
+]
+FIX_069_RELEASE_VERSION = "0." + "35.0"
+FIX_069_READINESS_VERSION = "1." + "0.0"
+
 
 def _markdown_has_heading(content, level, title):
     return re.search(rf"^{'#' * level}\s+{re.escape(title)}\s*$", content, re.MULTILINE) is not None
@@ -1143,6 +1163,251 @@ def _find_table_line(content, prefix):
         if line.strip().startswith(prefix):
             return line
     return ""
+
+
+def _normalize_markdown_cell(cell):
+    return re.sub(r"[`*]", "", cell).strip()
+
+
+def _find_table_row_by_first_cell(content, first_cell):
+    for line in content.splitlines():
+        cells = _markdown_table_cells(line)
+        if cells and _normalize_markdown_cell(cells[0]) == first_cell:
+            return cells
+    return []
+
+
+def _find_table_rows_with_cell(content, target_cell):
+    rows = []
+    for line in content.splitlines():
+        cells = _markdown_table_cells(line)
+        if any(_normalize_markdown_cell(cell) == target_cell for cell in cells):
+            rows.append(cells)
+    return rows
+
+
+def _status_cell_is_delivered(status):
+    return "✅" in status or "已交付" in status or "已完成" in status
+
+
+def _task_id_has_open_status(content, task_id):
+    for cells in _find_table_rows_with_cell(content, task_id):
+        if len(cells) >= 2 and _normalize_markdown_cell(cells[1]) == task_id:
+            status = cells[-1]
+            if not _status_cell_is_delivered(status):
+                return True
+    return False
+
+
+def _contains_fix_token_or_range(content, fix_id):
+    if fix_id in content:
+        return True
+    match = re.match(r"FIX-(\d{3})$", fix_id)
+    if not match:
+        return False
+    fix_num = int(match.group(1))
+    for start, end in re.findall(r"FIX-(\d{3})\s*[~～-]\s*(\d{3})", content):
+        if int(start) <= fix_num <= int(end):
+            return True
+    return False
+
+
+def _extract_fenced_blocks(content):
+    blocks = []
+    in_block = False
+    current = []
+    for line in content.splitlines():
+        if line.strip().startswith("```"):
+            if in_block:
+                blocks.append("\n".join(current))
+                current = []
+                in_block = False
+            else:
+                in_block = True
+            continue
+        if in_block:
+            current.append(line)
+    return blocks
+
+
+def _duplicate_target_structure_entries(architecture_content):
+    section = _markdown_section(architecture_content, "## 目标目录结构")
+    duplicates = []
+    seen = {}
+    for block in _extract_fenced_blocks(section):
+        stack = []
+        for line_no, line in enumerate(block.splitlines(), start=1):
+            raw_entry = line.split("←", 1)[0].rstrip()
+            entry = raw_entry.strip()
+            if not entry:
+                continue
+            indent = len(raw_entry) - len(raw_entry.lstrip(" "))
+            while stack and indent <= stack[-1][0]:
+                stack.pop()
+            parent = "/".join(item[1].strip("/") for item in stack if item[1].strip("/"))
+            normalized_name = re.sub(r"\s+", " ", entry)
+            normalized = f"{parent}/{normalized_name}".strip("/")
+            if normalized in seen:
+                duplicates.append((normalized, seen[normalized], line_no))
+            else:
+                seen[normalized] = line_no
+            if entry.endswith("/"):
+                stack.append((indent, entry))
+    return duplicates
+
+
+def _evidence_closes_fix_069_while_req_open(evidence_content):
+    closing_pattern = re.compile(
+        r"(FIX-069).*(已完成|已交付|关闭|可关闭|最终审查通过)"
+        r"|"
+        r"(已完成|已交付|关闭|可关闭|最终审查通过).*(FIX-069)"
+    )
+    non_closing_markers = [
+        "BLOCKED",
+        "不可关闭",
+        "不能关闭",
+        "不得关闭",
+        "未完成",
+        "待最终",
+        "未最终",
+        "首轮",
+        "NEEDS_CHANGE",
+    ]
+    for line in evidence_content.splitlines():
+        if "FIX-069" not in line:
+            continue
+        if any(marker in line for marker in non_closing_markers):
+            continue
+        cells = _markdown_table_cells(line)
+        if cells and _normalize_markdown_cell(cells[-1]) in ["完成", "已完成", "关闭", "已关闭"]:
+            return line.strip()
+        if closing_pattern.search(line):
+            return line.strip()
+    return ""
+
+
+def _line_overstates_pending_adapter_or_e2e(line):
+    done_markers = ["已完成", "已实现", "已验证", "E2E 通过", "真实环境 E2E 通过", "✅"]
+    has_done_marker = any(marker in line for marker in done_markers)
+    if not has_done_marker:
+        return False
+    non_closing_patterns = [
+        r"未完成",
+        r"未实现",
+        r"待实现",
+        r"待实施",
+        r"预研",
+        r"不构成",
+        r"仅(?:作为)?预检",
+        r"仅兼容",
+        r"仅路线",
+        r"仅.*分析",
+    ]
+    if any(re.search(pattern, line) for pattern in non_closing_patterns):
+        return False
+    adapter_markers = ["Gemini", "opencode"]
+    if any(adapter in line for adapter in adapter_markers):
+        return True
+    if re.search(r"真实(?:\s*agent)?(?:运行)?环境\s*E2E", line):
+        return True
+    return False
+
+
+def check_release_readiness_fact_source(
+    plan_tracker_path=None,
+    architecture_path=None,
+    evidence_log_path=None,
+):
+    """FIX-069: keep release blockers, requirements, and readiness facts aligned."""
+    plan_tracker_path = plan_tracker_path or ROOT / ".governance/plan-tracker.md"
+    architecture_path = architecture_path or ROOT / "project/references/architecture.md"
+    evidence_log_path = evidence_log_path or ROOT / ".governance/evidence-log.md"
+
+    failures = []
+    plan_content = plan_tracker_path.read_text(encoding="utf-8")
+    architecture_content = architecture_path.read_text(encoding="utf-8")
+    evidence_content = (
+        evidence_log_path.read_text(encoding="utf-8")
+        if evidence_log_path and evidence_log_path.exists()
+        else ""
+    )
+
+    rel_plan = _display_path(plan_tracker_path)
+    rel_architecture = _display_path(architecture_path)
+    rel_evidence = _display_path(evidence_log_path) if evidence_log_path else "evidence-log"
+
+    dependency_chain = _markdown_section(plan_content, f"### {FIX_069_READINESS_VERSION} 依赖链")
+    if not dependency_chain:
+        failures.append(f"{rel_plan}: missing {FIX_069_READINESS_VERSION} dependency chain section")
+    else:
+        required_chain_tokens = [FIX_069_RELEASE_VERSION, "RISK-030"] + FIX_069_RELEASE_BLOCKERS
+        for token in required_chain_tokens:
+            present = _contains_fix_token_or_range(dependency_chain, token) if token.startswith("FIX-") else token in dependency_chain
+            if not present:
+                failures.append(f"{rel_plan}: {FIX_069_READINESS_VERSION} dependency chain missing blocker token {token}")
+        required_chain_semantics = [
+            ("real agent E2E blocker", r"真实\s*agent\s*环境\s*E2E|agent\s*真实环境\s*E2E|真实运行环境\s*E2E"),
+            ("goal-drift guardrail blocker", r"防跑偏|目标偏离"),
+            ("blocking release language", r"不得推进\s*1\.0\.0|不得发布|阻断|全部闭环前|关闭前"),
+        ]
+        for label, pattern in required_chain_semantics:
+            if not re.search(pattern, dependency_chain):
+                failures.append(f"{rel_plan}: {FIX_069_READINESS_VERSION} dependency chain missing {label}")
+
+    release_row = _find_table_row_by_first_cell(plan_content, FIX_069_READINESS_VERSION)
+    if not release_row:
+        failures.append(f"{rel_plan}: missing {FIX_069_READINESS_VERSION} roadmap row")
+    else:
+        release_row_text = " | ".join(release_row)
+        for token in [FIX_069_RELEASE_VERSION, "RISK-030"] + FIX_069_RELEASE_BLOCKERS:
+            present = _contains_fix_token_or_range(release_row_text, token) if token.startswith("FIX-") else token in release_row_text
+            if not present:
+                failures.append(f"{rel_plan}: {FIX_069_READINESS_VERSION} roadmap row missing release blocker {token}")
+
+    for req_id, fix_id in zip(REQ_059_RELEASE_BLOCKERS, FIX_069_RELEASE_BLOCKERS):
+        req_row = _find_table_row_by_first_cell(plan_content, req_id)
+        if not req_row:
+            failures.append(f"{rel_plan}: requirement matrix missing {req_id}")
+            continue
+        if len(req_row) >= 5 and fix_id not in req_row[4]:
+            failures.append(f"{rel_plan}: requirement matrix {req_id} must reference {fix_id}")
+
+    req_059_row = _find_table_row_by_first_cell(plan_content, "REQ-059")
+    req_059_status = req_059_row[5] if len(req_059_row) > 5 else ""
+    closing_line = _evidence_closes_fix_069_while_req_open(evidence_content)
+    if req_059_status and not _status_cell_is_delivered(req_059_status) and closing_line:
+        failures.append(
+            f"{rel_evidence}: FIX-069 closing evidence conflicts with open REQ-059 status: {closing_line}"
+        )
+
+    req_061_row = _find_table_row_by_first_cell(plan_content, "REQ-061")
+    req_064_row = _find_table_row_by_first_cell(plan_content, "REQ-064")
+    req_061_status = req_061_row[5] if len(req_061_row) > 5 else ""
+    req_064_status = req_064_row[5] if len(req_064_row) > 5 else ""
+    adapter_or_e2e_pending = (
+        not _status_cell_is_delivered(req_061_status)
+        or not _status_cell_is_delivered(req_064_status)
+        or _task_id_has_open_status(plan_content, "FIX-071")
+        or _task_id_has_open_status(plan_content, "FIX-074")
+    )
+    if adapter_or_e2e_pending:
+        for line_no, line in enumerate(architecture_content.splitlines(), start=1):
+            if _line_overstates_pending_adapter_or_e2e(line):
+                failures.append(
+                    f"{rel_architecture}:{line_no}: architecture overstates pending Gemini/opencode or real-environment E2E status"
+                )
+
+    for entry, first_line, second_line in _duplicate_target_structure_entries(architecture_content):
+        failures.append(
+            f"{rel_architecture}: target directory structure repeats `{entry}` "
+            f"(fenced-block lines {first_line} and {second_line})"
+        )
+
+    for failure in failures:
+        print(f"[FAIL] release readiness fact source: {failure}")
+    if not failures:
+        print("[OK] release readiness fact source synchronized")
+    return failures
 
 
 def check_architecture_fact_source(
@@ -2724,8 +2989,15 @@ def cmd_verify(args):
     file_failures = check_files()
     snippet_failures = check_snippets()
     architecture_failures = check_architecture_fact_source()
+    release_readiness_failures = check_release_readiness_fact_source()
     version_failures = check_version_consistency()
-    all_items = file_failures + snippet_failures + architecture_failures + version_failures
+    all_items = (
+        file_failures
+        + snippet_failures
+        + architecture_failures
+        + release_readiness_failures
+        + version_failures
+    )
 
     # Separate WARN (non-blocking drift) from FAIL (hard gate)
     fail_items = [f for f in all_items if not f.startswith("[WARN]")]

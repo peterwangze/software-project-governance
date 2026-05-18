@@ -446,7 +446,6 @@
 skills/software-project-governance/
   SKILL.md                        ← 入口层（Coordinator 人格+路由表自包含）
   skills/                         ← 能力层（SKILL 库）
-  skills/                         ← 能力层（SKILL 库）
     init/SKILL.md
     onboarding/SKILL.md
     upgrade/SKILL.md

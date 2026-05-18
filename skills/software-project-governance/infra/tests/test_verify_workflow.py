@@ -465,6 +465,197 @@ class ArchitectureFactSourceTests(unittest.TestCase):
             self.assertTrue(any("Coordinator 负责最终写回" in issue for issue in issues))
 
 
+class ReleaseReadinessFactSourceTests(unittest.TestCase):
+    """FIX-069: plan, requirement matrix, 1.0.0 blockers, and architecture facts stay aligned."""
+
+    def _plan_content(self, release_row=None, dependency_chain_extra=None, req_overrides=None, active_rows=""):
+        req_overrides = req_overrides or {}
+        if release_row is None:
+            release_row = (
+                "| **1.0.0** | **预留** | **—** | **首次正式发布标签——不承载修改，仅当 "
+                "0.35.0 FIX-069~074 全部闭环、RISK-030 关闭、外部验证通过后打 tag** | **—** | "
+                "**纯版本标签——production-ready 声明；不得绕过主流 agent 真实环境 E2E 和防跑偏看护收口** |"
+            )
+        elif release_row is False:
+            release_row = ""
+        dependency_chain_extra = dependency_chain_extra or (
+            "\n    │\n    ▼\n"
+            "0.35.0 FIX-069~074 全部闭环 + RISK-030 关闭\n"
+            "（含主流 agent 真实环境 E2E、防跑偏看护、工具化收口；全部闭环前不得推进 1.0.0）"
+        )
+        req_rows = {
+            "REQ-059": "| REQ-059 | 架构事实源状态必须一致 | AUDIT-100 | P0 | FIX-069 | 🔄 进行中 | 0.35.0 |",
+            "REQ-060": "| REQ-060 | Agent Team 边界覆盖 | AUDIT-100 | P0 | FIX-070 | ✅ 已交付 | 0.35.0 |",
+            "REQ-061": "| REQ-061 | 主流 agent 入口状态真实 | AUDIT-100 | P0 | FIX-071 | 📋 待实施 | 0.35.0 |",
+            "REQ-062": "| REQ-062 | Skill 工具化归档 | AUDIT-100 | P1 | FIX-072 | 📋 待实施 | 0.35.0 |",
+            "REQ-063": "| REQ-063 | 目标偏离看护不空跑 | AUDIT-100 | P1 | FIX-073 | 📋 待实施 | 0.35.0 |",
+            "REQ-064": "| REQ-064 | E2E 真实性分层 | AUDIT-100 | P1 | FIX-074 | 📋 待实施 | 0.35.0 |",
+        }
+        req_rows.update(req_overrides)
+        return (
+            "# 当前项目样例\n\n"
+            f"{active_rows}\n\n"
+            "### 1.0.0 依赖链\n\n"
+            "```\n"
+            "0.11.0 ✅\n"
+            "    │\n"
+            "    ▼\n"
+            "AUDIT-072: 外部验证≥2(P0)"
+            f"{dependency_chain_extra}\n"
+            "    │\n"
+            "    ▼\n"
+            "1.0.0 正式发布\n"
+            "```\n\n"
+            "### 版本路线图\n\n"
+            "| 版本 | 状态 | 预计日期 | 核心范围 | 包含 Tier/Layer | 关键交付物 |\n"
+            "| --- | --- | --- | --- | --- | --- |\n"
+            f"{release_row}\n\n"
+            "## 需求跟踪矩阵\n\n"
+            "| 需求ID | 需求描述 | 来源 | 优先级 | 关联任务 | 当前状态 | 验证方式 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- |\n"
+            + "\n".join(req_rows[req_id] for req_id in sorted(req_rows))
+            + "\n"
+        )
+
+    def _architecture_content(self, extra=""):
+        return (
+            "# 六层架构设计\n\n"
+            "| 平台 | 状态 |\n"
+            "| --- | --- |\n"
+            "| Gemini | 未完成（仅兼容分析文档） |\n"
+            "| opencode | 未实现（0.35.0 P0 适配缺口） |\n\n"
+            "## 目标目录结构\n\n"
+            "```\n"
+            "skills/software-project-governance/\n"
+            "  SKILL.md                        ← 入口层\n"
+            "  skills/                         ← 能力层\n"
+            "    stage-development/SKILL.md\n"
+            "```\n"
+            f"{extra}\n"
+        )
+
+    def _write_release_fact_files(
+        self,
+        root,
+        plan_content=None,
+        architecture_content=None,
+        evidence_content="",
+    ):
+        plan = root / "plan-tracker.md"
+        architecture = root / "architecture.md"
+        evidence = root / "evidence-log.md"
+        plan.write_text(plan_content or self._plan_content(), encoding="utf-8")
+        architecture.write_text(architecture_content or self._architecture_content(), encoding="utf-8")
+        evidence.write_text(evidence_content, encoding="utf-8")
+        return plan, architecture, evidence
+
+    def test_release_readiness_fact_source_accepts_current_facts(self):
+        with tempfile.TemporaryDirectory() as td:
+            paths = self._write_release_fact_files(Path(td))
+            self.assertEqual(vw.check_release_readiness_fact_source(*paths), [])
+
+    def test_release_readiness_fact_source_requires_035_blockers_in_dependency_chain(self):
+        with tempfile.TemporaryDirectory() as td:
+            plan = self._plan_content(
+                dependency_chain_extra="\n    │\n    ▼\n外部验证通过后发布"
+            )
+            paths = self._write_release_fact_files(Path(td), plan_content=plan)
+            issues = vw.check_release_readiness_fact_source(*paths)
+            self.assertTrue(any("1.0.0 dependency chain missing blocker token 0.35.0" in issue for issue in issues))
+            self.assertTrue(any("1.0.0 dependency chain missing blocker token RISK-030" in issue for issue in issues))
+            self.assertTrue(any("1.0.0 dependency chain missing goal-drift guardrail blocker" in issue for issue in issues))
+
+    def test_release_readiness_fact_source_requires_100_row_blockers(self):
+        with tempfile.TemporaryDirectory() as td:
+            plan = self._plan_content(
+                release_row=(
+                    "| **1.0.0** | **预留** | **—** | **首次正式发布标签——不承载修改，仅当所有 0.32.0 "
+                    "任务完成 + 外部验证通过后打 tag** | **—** | **纯版本标签** |"
+                )
+            )
+            paths = self._write_release_fact_files(Path(td), plan_content=plan)
+            issues = vw.check_release_readiness_fact_source(*paths)
+            self.assertTrue(any("1.0.0 roadmap row missing release blocker 0.35.0" in issue for issue in issues))
+            self.assertTrue(any("1.0.0 roadmap row missing release blocker FIX-069" in issue for issue in issues))
+
+    def test_release_readiness_fact_source_requires_100_roadmap_row(self):
+        with tempfile.TemporaryDirectory() as td:
+            plan = self._plan_content(release_row=False)
+            paths = self._write_release_fact_files(Path(td), plan_content=plan)
+            issues = vw.check_release_readiness_fact_source(*paths)
+            self.assertTrue(any("missing 1.0.0 roadmap row" in issue for issue in issues))
+
+    def test_release_readiness_fact_source_rejects_req_fix_mapping_drift(self):
+        with tempfile.TemporaryDirectory() as td:
+            plan = self._plan_content(
+                req_overrides={
+                    "REQ-063": "| REQ-063 | 目标偏离看护不空跑 | AUDIT-100 | P1 | FIX-072 | 📋 待实施 | 0.35.0 |",
+                }
+            )
+            paths = self._write_release_fact_files(Path(td), plan_content=plan)
+            issues = vw.check_release_readiness_fact_source(*paths)
+            self.assertTrue(any("requirement matrix REQ-063 must reference FIX-073" in issue for issue in issues))
+
+    def test_release_readiness_fact_source_blocks_closing_fix_069_while_req_open(self):
+        with tempfile.TemporaryDirectory() as td:
+            evidence = (
+                "| EVD-999 | FIX-069 | 维护 | 修复闭环 | FIX-069 已完成，最终审查通过。 | files | Coordinator | 2026-05-15 | G11 | 完成 |\n"
+            )
+            paths = self._write_release_fact_files(Path(td), evidence_content=evidence)
+            issues = vw.check_release_readiness_fact_source(*paths)
+            self.assertTrue(any("FIX-069 closing evidence conflicts with open REQ-059" in issue for issue in issues))
+
+    def test_release_readiness_fact_source_blocks_final_status_closure_while_req_open(self):
+        with tempfile.TemporaryDirectory() as td:
+            evidence = (
+                "| EVD-999 | FIX-069 | 维护 | 修复闭环 | 跨事实源检查已补齐。 | files | Coordinator | 2026-05-15 | G11 | 完成 |\n"
+            )
+            paths = self._write_release_fact_files(Path(td), evidence_content=evidence)
+            issues = vw.check_release_readiness_fact_source(*paths)
+            self.assertTrue(any("FIX-069 closing evidence conflicts with open REQ-059" in issue for issue in issues))
+
+    def test_release_readiness_fact_source_rejects_adapter_e2e_overstatement(self):
+        with tempfile.TemporaryDirectory() as td:
+            architecture = self._architecture_content(extra="| Gemini | ✅ 已完成，真实环境 E2E 通过 |\n")
+            paths = self._write_release_fact_files(Path(td), architecture_content=architecture)
+            issues = vw.check_release_readiness_fact_source(*paths)
+            self.assertTrue(any("architecture overstates pending Gemini/opencode" in issue for issue in issues))
+
+    def test_release_readiness_fact_source_rejects_overstatement_when_req_delivered_but_fix_active(self):
+        with tempfile.TemporaryDirectory() as td:
+            plan = self._plan_content(
+                req_overrides={
+                    "REQ-061": "| REQ-061 | 主流 agent 入口状态真实 | AUDIT-100 | P0 | FIX-071 | ✅ 已交付 | 0.35.0 |",
+                    "REQ-064": "| REQ-064 | E2E 真实性分层 | AUDIT-100 | P1 | FIX-074 | ✅ 已交付 | 0.35.0 |",
+                },
+                active_rows=(
+                    "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |\n"
+                    "| --- | --- | --- | --- | --- | --- | --- |\n"
+                    "| **P0** | FIX-071 | 主流 code agent 适配闭环 | AUDIT-100 | 0.35.0 | 真实 agent E2E | 🔄 进行中 |"
+                ),
+            )
+            architecture = self._architecture_content(extra="| opencode | ✅ 已完成，真实环境 E2E 通过 |\n")
+            paths = self._write_release_fact_files(Path(td), plan_content=plan, architecture_content=architecture)
+            issues = vw.check_release_readiness_fact_source(*paths)
+            self.assertTrue(any("architecture overstates pending Gemini/opencode" in issue for issue in issues))
+
+    def test_release_readiness_fact_source_rejects_duplicate_target_structure_entry(self):
+        with tempfile.TemporaryDirectory() as td:
+            architecture = (
+                "# 六层架构设计\n\n"
+                "## 目标目录结构\n\n"
+                "```\n"
+                "skills/software-project-governance/\n"
+                "  SKILL.md                        ← 入口层\n"
+                "  skills/                         ← 能力层\n"
+                "  skills/                         ← 能力层\n"
+                "```\n"
+            )
+            paths = self._write_release_fact_files(Path(td), architecture_content=architecture)
+            issues = vw.check_release_readiness_fact_source(*paths)
+            self.assertTrue(any("target directory structure repeats" in issue for issue in issues))
+
+
 class E2ECommandMatrixTests(unittest.TestCase):
     """FIX-060: e2e-check must execute real command proxies."""
 

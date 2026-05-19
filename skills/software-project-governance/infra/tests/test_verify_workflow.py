@@ -1514,6 +1514,22 @@ class PlanTrackerParsingTests(unittest.TestCase):
                 completed = vw.parse_completed_task_ids()
                 self.assertEqual(completed, {"TASK-001", "TASK-003"})
 
+    def test_parse_completed_task_ids_accepts_priority_first_rows(self):
+        plan = "\n".join([
+            "# 计划跟踪",
+            "",
+            "## 当前活跃事项",
+            "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+            "|--------|----|------|------|---------|---------|------|",
+            "| **P1** | FIX-072 | release tooling | AUDIT-100 | 0.35.0 | tests | ✅ 已完成 (2026-05-20) |",
+            "| **P1** | FIX-073 | guardrails | AUDIT-100 | 0.35.0 | tests | ⬜ 待实施 |",
+        ])
+        with tempfile.TemporaryDirectory() as td:
+            sp = self._write(Path(td), plan)
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                completed = vw.parse_completed_task_ids()
+                self.assertEqual(completed, {"FIX-072"})
+
     def test_parse_gate_status(self):
         with tempfile.TemporaryDirectory() as td:
             sp = self._write(Path(td), self._PLAN_GATES)
@@ -2185,6 +2201,86 @@ class GoalAlignmentTests(unittest.TestCase):
                 self.assertLess(r["entries"][0]["goal_len"], 30)
                 self.assertEqual(r["entries"][0]["status"], "FAIL")
 
+    def test_check_goal_alignment_product_code_delivery_without_impact_type_fails(self):
+        """FIX-073: product-code delivery evidence must not no-op when type != 影响分析."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gov = root / ".governance"; gov.mkdir(parents=True, exist_ok=True)
+            sp = gov / "plan-tracker.md"
+            ep = gov / "evidence-log.md"
+            sp.write_text("\n".join([
+                "# 计划跟踪",
+                "## 项目配置",
+                "- **项目目标**: 提供一套完整的软件项目治理工作流插件",
+                "## 当前活跃事项",
+                "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+                "|--------|----|------|------|---------|---------|------|",
+                "| **P1** | FIX-073 | guardrails | AUDIT-100 | 0.35.0 | tests | ✅ 已完成 |",
+            ]), encoding="utf-8")
+            ep.write_text(_evidence_row_generic(
+                "EVD-073",
+                "FIX-073",
+                evd_type="实现",
+                description="实现完成但没有目标字段",
+                file_location="skills/software-project-governance/infra/verify_workflow.py",
+            ), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_goal_alignment()
+            self.assertFalse(r["pass"])
+            self.assertEqual(len(r["entries"]), 1)
+            self.assertEqual(r["entries"][0]["task_id"], "FIX-073")
+            self.assertFalse(r["entries"][0]["has_goal"])
+
+    def test_check_goal_alignment_uses_active_hot_tasks_beyond_release_row(self):
+        """FIX-073: active hot tasks outside the roadmap row are still guarded."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gov = root / ".governance"; gov.mkdir(parents=True, exist_ok=True)
+            sp = gov / "plan-tracker.md"
+            ep = gov / "evidence-log.md"
+            sp.write_text("\n".join([
+                "# 计划跟踪",
+                "## 项目配置",
+                "- **项目目标**: 提供一套完整的软件项目治理工作流插件",
+                "## 当前活跃事项",
+                "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+                "|--------|----|------|------|---------|---------|------|",
+                "| **P1** | FIX-999 | active hot guardrail | AUDIT-100 | 0.35.0 | tests | ✅ 已完成 |",
+                "### 最近完成",
+                "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+                "| **P1** | FIX-998 | old | AUDIT-100 | 0.34.0 | tests | ✅ 已完成 |",
+                "## 版本规划",
+                "| 版本 | 状态 | 预计日期 | 核心范围 | 包含 Tier/Layer | 关键交付物 |",
+                "| 0.35.0 | 进行中 | 2026-05-14 | scope | FIX-073~074 | delivery |",
+            ]), encoding="utf-8")
+            ep.write_text(_evidence_row_generic(
+                "EVD-999",
+                "FIX-999",
+                evd_type="实现",
+                description="实现完成但没有目标字段",
+                file_location="skills/software-project-governance/infra/verify_workflow.py",
+            ), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_goal_alignment()
+            self.assertFalse(r["pass"])
+            self.assertEqual(len(r["entries"]), 1)
+            self.assertEqual(r["entries"][0]["task_id"], "FIX-999")
+
+    def test_check_goal_alignment_accepts_fullwidth_colon(self):
+        with tempfile.TemporaryDirectory() as td:
+            evidence_rows = [
+                _impact_evidence_row("EVD-005", "TASK-005",
+                                     f"目标对齐：{self.GOAL_TEXT} 用户影响：获得=自动生效, 感知=无, 体验变化=否, 迁移指南=不需要"),
+            ]
+            sp, ep = self._setup(td, evidence_lines=evidence_rows)
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_goal_alignment()
+            self.assertTrue(r["pass"])
+            self.assertEqual(r["entries"][0]["status"], "PASS")
+
 
 class UserImpactTests(unittest.TestCase):
     """Test check_user_impact() — SYSGAP-024 Check 12."""
@@ -2299,6 +2395,70 @@ class UserImpactTests(unittest.TestCase):
                 self.assertEqual(entry["migration"], "不需要")
                 self.assertIn("TASK-004", r["blocking"])
                 self.assertIn("迁移指南=不需要", entry["issues"][0])
+
+    def test_check_user_impact_product_code_delivery_without_impact_type_fails(self):
+        """FIX-073: product-code delivery evidence must carry 用户影响 even when type != 影响分析."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gov = root / ".governance"; gov.mkdir(parents=True, exist_ok=True)
+            sp = gov / "plan-tracker.md"
+            ep = gov / "evidence-log.md"
+            sp.write_text("\n".join([
+                "# 计划跟踪",
+                "## 当前活跃事项",
+                "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+                "|--------|----|------|------|---------|---------|------|",
+                "| **P1** | FIX-073 | guardrails | AUDIT-100 | 0.35.0 | tests | ✅ 已完成 |",
+            ]), encoding="utf-8")
+            ep.write_text(_evidence_row_generic(
+                "EVD-073",
+                "FIX-073",
+                evd_type="实现",
+                description="目标对齐: enough target alignment text for this product code change",
+                file_location="skills/software-project-governance/infra/verify_workflow.py",
+            ), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_user_impact()
+            self.assertFalse(r["pass"])
+            self.assertEqual(len(r["entries"]), 1)
+            self.assertEqual(r["entries"][0]["status"], "FAIL")
+            self.assertIn("缺少 用户影响", r["entries"][0]["issues"][0])
+
+    def test_check_user_impact_uses_active_hot_tasks_beyond_release_row(self):
+        """FIX-073: user-impact guardrail covers active hot tasks outside roadmap row."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gov = root / ".governance"; gov.mkdir(parents=True, exist_ok=True)
+            sp = gov / "plan-tracker.md"
+            ep = gov / "evidence-log.md"
+            sp.write_text("\n".join([
+                "# 计划跟踪",
+                "## 当前活跃事项",
+                "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+                "|--------|----|------|------|---------|---------|------|",
+                "| **P1** | FIX-999 | active hot guardrail | AUDIT-100 | 0.35.0 | tests | ✅ 已完成 |",
+                "### 最近完成",
+                "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+                "| **P1** | FIX-998 | old | AUDIT-100 | 0.34.0 | tests | ✅ 已完成 |",
+                "## 版本规划",
+                "| 版本 | 状态 | 预计日期 | 核心范围 | 包含 Tier/Layer | 关键交付物 |",
+                "| 0.35.0 | 进行中 | 2026-05-14 | scope | FIX-073~074 | delivery |",
+            ]), encoding="utf-8")
+            ep.write_text(_evidence_row_generic(
+                "EVD-999",
+                "FIX-999",
+                evd_type="实现",
+                description="目标对齐: enough target alignment text for this product code change",
+                file_location="skills/software-project-governance/infra/verify_workflow.py",
+            ), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_user_impact()
+            self.assertFalse(r["pass"])
+            self.assertEqual(len(r["entries"]), 1)
+            self.assertEqual(r["entries"][0]["task_id"], "FIX-999")
+            self.assertEqual(r["entries"][0]["status"], "FAIL")
 
 
 class ArchiveTriggerGapTests(unittest.TestCase):
@@ -2779,6 +2939,83 @@ class AgentTeamReviewTests(unittest.TestCase):
                 self.assertEqual(r["total_tasks"], 0)
                 self.assertEqual(r["reviewed"], 0)
                 self.assertEqual(r["unreviewed"], 0)
+
+    def test_check_agent_team_review_accepts_review_prefixed_hot_rows(self):
+        """FIX-073: human-readable REVIEW-* rows count as review coverage."""
+        with tempfile.TemporaryDirectory() as td:
+            plan = "\n".join([
+                "# 计划跟踪",
+                "",
+                "## 当前活跃事项",
+                "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+                "|--------|----|------|------|---------|---------|------|",
+                "| **P1** | FIX-073 | guardrails | AUDIT-100 | 0.35.0 | tests | ✅ 已完成 |",
+            ])
+            evidence_rows = [
+                _evidence_row_generic(
+                    "EVD-073", "FIX-073",
+                    evd_type="实现",
+                    file_location="skills/software-project-governance/infra/verify_workflow.py",
+                ),
+                "| REVIEW-FIX-073 | FIX-073 | 维护 | 代码审查 | Code Reviewer APPROVED for FIX-073 | transcript | Code Reviewer | 2026-05-20 | G11 | APPROVED |",
+            ]
+            sp, ep = self._setup(td, plan_lines=[plan], evidence_lines=evidence_rows)
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_agent_team_review()
+            self.assertTrue(r["pass"])
+            self.assertEqual(r["total_tasks"], 1)
+            self.assertEqual(r["reviewed"], 1)
+
+    def test_check_agent_team_review_does_not_count_audit_evidence_as_product_delivery(self):
+        """FIX-073: audit/review evidence mentioning product files is not implementation debt."""
+        with tempfile.TemporaryDirectory() as td:
+            plan = "\n".join([
+                "# 计划跟踪",
+                "",
+                "## 当前活跃事项",
+                "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+                "|--------|----|------|------|---------|---------|------|",
+                "| **P0** | AUDIT-100 | audit | 用户请求 | 0.35.0 | review | ✅ 已完成 |",
+            ])
+            evidence_rows = [
+                _evidence_row_generic(
+                    "EVD-100", "AUDIT-100",
+                    evd_type="八维度审查",
+                    file_location="skills/software-project-governance/infra/verify_workflow.py",
+                ),
+            ]
+            sp, ep = self._setup(td, plan_lines=[plan], evidence_lines=evidence_rows)
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_agent_team_review()
+            self.assertTrue(r["pass"])
+            self.assertEqual(r["total_tasks"], 0)
+
+    def test_check_review_coverage_excludes_priority_first_p2_rows(self):
+        """FIX-073: Check 21 keeps P2 exclusion for priority-first hot tables."""
+        with tempfile.TemporaryDirectory() as td:
+            plan = "\n".join([
+                "# 计划跟踪",
+                "",
+                "## 当前活跃事项",
+                "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+                "|--------|----|------|------|---------|---------|------|",
+                "| **P2** | FIX-222 | optional cleanup | AUDIT-100 | 0.35.0 | tests | ✅ 已完成 |",
+            ])
+            evidence_rows = [
+                _evidence_row_generic(
+                    "EVD-222", "FIX-222",
+                    evd_type="实现",
+                    file_location="skills/software-project-governance/infra/verify_workflow.py",
+                ),
+            ]
+            sp, ep = self._setup(td, plan_lines=[plan], evidence_lines=evidence_rows)
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_review_coverage()
+            self.assertTrue(r["pass"])
+            self.assertEqual(r["total_tasks"], 0)
 
 
 class AgentActivationTests(unittest.TestCase):

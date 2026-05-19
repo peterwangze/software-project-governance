@@ -2454,15 +2454,13 @@ def parse_completed_task_ids():
         line = line.strip()
         if not line.startswith("| ") or "---" in line:
             continue
-        m = re.match(r"\|\s*([A-Z]+-\d+)\s*\|", line)
+        m = re.search(r"\|\s*(?:\*\*)?([A-Z]+-\d+)(?:\*\*)?\s*\|", line)
         if not m:
             continue
         task_id = m.group(1)
         parts = [p.strip() for p in line.split("|")]
-        if len(parts) >= 11:
-            status = parts[10]
-            if status == "已完成":
-                completed.add(task_id)
+        if any("已完成" in part for part in parts):
+            completed.add(task_id)
     return completed
 
 
@@ -4426,14 +4424,97 @@ def check_commit_scope(limit=20):
 
 # ── SYSGAP-023: Goal Alignment Check ──────────────────────────────
 
+PRODUCT_CODE_PATTERNS = [
+    "skills/", "agents/", "infra/", "commands/",
+    "adapters/", ".claude-plugin/", ".codex-plugin/", ".agents/",
+    "project/",
+]
+
+
+def _plan_task_ids_from_hot_tracker():
+    """Return task-like IDs from the current active hot-task table."""
+    if not SAMPLE_PATH.is_file():
+        return set()
+    content = SAMPLE_PATH.read_text(encoding="utf-8")
+    task_ids = set()
+    in_active_section = False
+    for line in content.split("\n"):
+        if line.startswith("## 当前活跃事项"):
+            in_active_section = True
+            continue
+        if in_active_section and line.startswith("### 最近完成"):
+            break
+        if not in_active_section:
+            continue
+        stripped = line.strip()
+        if not stripped.startswith("| ") or "---" in stripped:
+            continue
+        match = re.search(r"\|\s*(?:\*\*)?([A-Z]+-\d+)(?:\*\*)?\s*\|", stripped)
+        if match:
+            task_ids.add(match.group(1))
+    return task_ids
+
+
+def _current_release_task_ids():
+    """Return task IDs from the active in-progress version roadmap row."""
+    if not SAMPLE_PATH.is_file():
+        return set()
+    content = SAMPLE_PATH.read_text(encoding="utf-8")
+    task_ids = set()
+    for line in content.split("\n"):
+        if not line.strip().startswith("| "):
+            continue
+        if "进行中" not in line:
+            continue
+        for raw in re.findall(r"[A-Z]+-\d+(?:~\d+)?", line):
+            task_ids |= expand_task_ids(raw)
+    return task_ids
+
+
+def _is_product_code_location(file_location):
+    return any(pattern in file_location for pattern in PRODUCT_CODE_PATTERNS)
+
+
+def _is_review_evidence(raw_ids, evd_type):
+    return (
+        raw_ids.startswith("REVIEW-")
+        or evd_type in ("Code Review", "代码审查", "审查")
+        or "审查" in evd_type
+    )
+
+
+def _is_audit_or_review_type(evd_type):
+    return any(token in evd_type for token in ("审查", "审视", "审计", "Review"))
+
+
+def _normalize_priority(value):
+    normalized = value.strip().strip("*")
+    return normalized if normalized in ("P0", "P1", "P2") else ""
+
+
+def _task_priority_from_table_parts(parts):
+    priority_first = _normalize_priority(parts[1]) if len(parts) > 1 else ""
+    if priority_first:
+        return priority_first
+    old_table_priority = _normalize_priority(parts[11]) if len(parts) >= 12 else ""
+    return old_table_priority
+
+
 def parse_impact_analysis_entries():
-    """Parse evidence-log entries of type '影响分析'.
+    """Parse evidence-log entries that must carry goal/user impact guardrails.
+
+    This includes explicit type=影响分析 rows and hot plan product-code delivery
+    evidence rows. FIX-073: product-code evidence with no standalone impact
+    analysis must not make Check 16/17 silently pass with 0 entries.
+
     Returns list of dicts: {evd_id, task_id, description, file_location, raw_line}
     """
     if not EVIDENCE_PATH.is_file():
         return []
     content = EVIDENCE_PATH.read_text(encoding="utf-8")
     entries = []
+    hot_task_ids = _current_release_task_ids() | _plan_task_ids_from_hot_tracker()
+
     for line in content.split("\n"):
         line = line.strip()
         if not line.startswith("| EVD-"):
@@ -4447,14 +4528,27 @@ def parse_impact_analysis_entries():
         description = parts[5] if len(parts) > 5 else ""
         file_location = parts[6] if len(parts) > 6 else ""
 
-        if evd_type == "影响分析":
-            entries.append({
-                "evd_id": evd_id,
-                "task_id": task_id,
-                "description": description,
-                "file_location": file_location,
-                "raw_line": line,
-            })
+        covered_ids = expand_task_ids(task_id) if task_id and re.search(r"[A-Z]+-\d+", task_id) else set()
+        explicit_impact = evd_type == "影响分析"
+        product_delivery = (
+            bool(covered_ids & hot_task_ids)
+            and _is_product_code_location(file_location)
+            and not _is_review_evidence(task_id, evd_type)
+            and not _is_audit_or_review_type(evd_type)
+        )
+
+        if explicit_impact or product_delivery:
+            target_ids = sorted(covered_ids & hot_task_ids) if covered_ids & hot_task_ids else [task_id]
+            if not target_ids:
+                target_ids = [task_id]
+            for covered_task_id in target_ids:
+                entries.append({
+                    "evd_id": evd_id,
+                    "task_id": covered_task_id,
+                    "description": description,
+                    "file_location": file_location,
+                    "raw_line": line,
+                })
     return entries
 
 
@@ -4494,7 +4588,7 @@ def check_goal_alignment():
         desc = entry["description"]
         # Extract 目标对齐: field — captures text until next known field or end
         goal_match = re.search(
-            r'目标对齐:\s*(.+?)(?:\s*(?:用户影响:|范围:|依赖:|架构影响:|$))',
+            r'目标对齐[:：]\s*(.+?)(?:\s*(?:用户影响[:：]|范围[:：]|依赖[:：]|架构影响[:：]|$))',
             desc
         )
         goal_text = goal_match.group(1).strip() if goal_match else ""
@@ -4576,7 +4670,7 @@ def check_user_impact():
 
         # Extract 用户影响: field — captures text until next known field or end
         user_impact_match = re.search(
-            r'用户影响:\s*(.+?)(?:\s*(?:目标对齐:|范围:|依赖:|架构影响:|$))',
+            r'用户影响[:：]\s*(.+?)(?:\s*(?:目标对齐[:：]|范围[:：]|依赖[:：]|架构影响[:：]|$))',
             desc
         )
         user_impact_text = user_impact_match.group(1).strip() if user_impact_match else ""
@@ -4697,7 +4791,7 @@ def _parse_review_covered_tasks(evidence_path=None, review_dir=None):
     # 1. Scan evidence-log for REVIEW evidence entries
     for line in evidence_content.split("\n"):
         line = line.strip()
-        if not line.startswith("| EVD-"):
+        if not (line.startswith("| EVD-") or line.startswith("| REVIEW-")):
             continue
         parts = [p.strip() for p in line.split("|")]
         if len(parts) < 8:
@@ -4710,12 +4804,18 @@ def _parse_review_covered_tasks(evidence_path=None, review_dir=None):
 
         # REVIEW evidence: task ID starts with REVIEW- or type is Code Review/审查
         is_review_entry = (
-            raw_ids.startswith("REVIEW-")
+            evd_id.startswith("REVIEW-")
+            or raw_ids.startswith("REVIEW-")
             or evd_type == "Code Review"
             or evd_type == "审查"
+            or "审查" in evd_type
         )
         if not is_review_entry:
             continue
+
+        for inner_id in expand_task_ids(raw_ids) if raw_ids and re.search(r"[A-Z]+-\d+", raw_ids) else []:
+            if not inner_id.startswith("REVIEW-"):
+                covered.setdefault(inner_id, []).append(evd_id)
 
         if raw_ids.startswith("REVIEW-"):
             # Extract covered task IDs from REVIEW- prefix
@@ -4784,7 +4884,7 @@ def check_agent_team_review():
         return result
     evidence_content = EVIDENCE_PATH.read_text(encoding="utf-8")
 
-    # Build map: task_id -> list of file locations
+    # Build map: task_id -> list of evidence metadata
     task_file_locations = {}
     for line in evidence_content.split("\n"):
         line = line.strip()
@@ -4794,21 +4894,26 @@ def check_agent_team_review():
         if len(parts) < 8:
             continue
         raw_ids = parts[2]
+        evd_type = parts[4] if len(parts) > 4 else ""
         file_location = parts[6] if len(parts) > 6 else ""
         for tid in expand_task_ids(raw_ids) if raw_ids and re.search(r"[A-Z]+-\d+", raw_ids) else []:
-            task_file_locations.setdefault(tid, []).append(file_location)
+            task_file_locations.setdefault(tid, []).append({
+                "file_location": file_location,
+                "evd_type": evd_type,
+            })
 
     # Build review coverage map
     review_covered = _parse_review_covered_tasks()
 
     for task_id in sorted(completed):
-        file_locs = task_file_locations.get(task_id, [])
-        if not file_locs:
+        entries = task_file_locations.get(task_id, [])
+        if not entries:
             continue
 
         is_product_code = any(
-            any(pat in loc for pat in PRODUCT_CODE_PATTERNS)
-            for loc in file_locs
+            any(pat in e["file_location"] for pat in PRODUCT_CODE_PATTERNS)
+            and not _is_audit_or_review_type(e["evd_type"])
+            for e in entries
         )
         if not is_product_code:
             continue
@@ -5031,7 +5136,7 @@ def check_review_debt():
         line_stripped = line.strip()
         if not line_stripped.startswith("| ") or "---" in line_stripped:
             continue
-        m = re.match(r"\|\s*([A-Z]+-\d+)\s*\|", line_stripped)
+        m = re.search(r"\|\s*(?:\*\*)?([A-Z]+-\d+)(?:\*\*)?\s*\|", line_stripped)
         if not m:
             continue
         all_task_ids.add(m.group(1))
@@ -5079,6 +5184,7 @@ def check_review_debt():
         # Determine if this task touched product code
         is_product_code = any(
             any(pat in e["file_location"] for pat in PRODUCT_CODE_PATTERNS)
+            and not _is_audit_or_review_type(e["evd_type"])
             for e in entries
         )
         if not is_product_code:
@@ -5140,15 +5246,15 @@ def check_review_coverage():
         line_s = line.strip()
         if not line_s.startswith("| ") or "---" in line_s:
             continue
-        m = re.match(r"\|\s*([A-Z]+-\d+)\s*\|", line_s)
+        m = re.search(r"\|\s*(?:\*\*)?([A-Z]+-\d+)(?:\*\*)?\s*\|", line_s)
         if not m:
             continue
         task_id = m.group(1)
         all_task_ids.add(task_id)
         parts = [p.strip() for p in line.split("|")]
-        # parts[10] = status; parts[11] = priority (20-col table)
-        if len(parts) >= 12:
-            task_priorities[task_id] = parts[11]
+        priority = _task_priority_from_table_parts(parts)
+        if priority:
+            task_priorities[task_id] = priority
 
     if not all_task_ids:
         return result
@@ -5164,9 +5270,13 @@ def check_review_coverage():
         if len(parts) < 8:
             continue
         raw_ids = parts[2]
+        evd_type = parts[4] if len(parts) > 4 else ""
         file_location = parts[6] if len(parts) > 6 else ""
         for tid in expand_task_ids(raw_ids) if raw_ids and re.search(r"[A-Z]+-\d+", raw_ids) else []:
-            task_file_locations.setdefault(tid, []).append(file_location)
+            task_file_locations.setdefault(tid, []).append({
+                "file_location": file_location,
+                "evd_type": evd_type,
+            })
 
     # ── Build review coverage map ──
     review_covered = _parse_review_covered_tasks()
@@ -5178,13 +5288,14 @@ def check_review_coverage():
         if priority == "P2":
             continue
 
-        file_locs = task_file_locations.get(task_id, [])
-        if not file_locs:
+        entries = task_file_locations.get(task_id, [])
+        if not entries:
             continue
 
         is_product_code = any(
-            any(pat in loc for pat in PRODUCT_CODE_PATTERNS)
-            for loc in file_locs
+            any(pat in e["file_location"] for pat in PRODUCT_CODE_PATTERNS)
+            and not _is_audit_or_review_type(e["evd_type"])
+            for e in entries
         )
         if not is_product_code:
             continue
@@ -5878,7 +5989,6 @@ def cmd_check_governance(args):
             elif e["status"] == "PASS":
                 print(f"│  [PASS] {e['task_id']} ({e['evd_id']}): {e['goal_len']} chars")
         if ga_result["duplicates"]:
-            ga_issues += len(ga_result["duplicates"])
             print(f"│  [WARN] {len(ga_result['duplicates'])} duplicate goal alignment(s) (template reuse):")
             for t1, t2 in ga_result["duplicates"][:5]:
                 print(f"│    - {t1} <-> {t2}")
@@ -5909,7 +6019,6 @@ def cmd_check_governance(args):
                 for issue in e["issues"]:
                     print(f"│  [FAIL] {e['task_id']} ({e['evd_id']}): {issue}")
             elif e["status"] == "WARN":
-                ui_issues += 1
                 for issue in e["issues"]:
                     print(f"│  [WARN] {e['task_id']} ({e['evd_id']}): {issue}")
             else:

@@ -13,6 +13,12 @@
 | TOOL-005 | 回顾会议模板 | template | `skills/retro-meeting/SKILL.md` | 阶段结束或项目复盘时 | 维护（maintenance） | 是 |
 | TOOL-006 | 校验脚本 | script | `infra/verify_workflow.py` | 验证工作流资产完整性时 | 全部阶段 | 是 |
 | TOOL-007 | governance-update 命令 | command | `commands/governance-update.md` | 更新 平台原生入口文件 bootstrap 到最新版本（不触碰 .governance/） | 维护（maintenance） | 是 |
+| TOOL-008 | 发布就绪检查 | script | `infra/verify_workflow.py check-release` | 版本发布前聚合门禁检查时 | 发布（release） | 是 |
+| TOOL-009 | 主流 agent adapter 检查 | script | `infra/verify_workflow.py check-agent-adapters [--runtime]` | 验证 Claude/Codex/Gemini/opencode adapter 状态与 runtime probe 时 | 架构/发布/维护 | 是 |
+| TOOL-010 | 治理归档工具 | script | `infra/archive.py` | 治理数据膨胀、版本发布后持续归档、归档迁移时 | 维护/发布 | 是 |
+| TOOL-011 | 清理工具 | script | `infra/cleanup.py` | 插件升级后清理过期文件，或做 cleanup dry-run 时 | 维护 | 是 |
+| TOOL-012 | Git hooks 防护网 | hook | `infra/hooks/` | commit 前后执行治理门禁、证据检查、锁清理时 | 全部阶段 | 否（由 Git 自动触发） |
+| TOOL-013 | 交叉引用检查 | script | `infra/verify_workflow.py check-cross-references` | 路径迁移、文档/skill/agent 引用变更后 | 架构/维护 | 是 |
 
 ## 工具详情
 
@@ -69,12 +75,83 @@
 ### TOOL-006：校验脚本
 
 - **文件**：`infra/verify_workflow.py`
-- **子命令**：`verify`（全量校验）、`status`（治理状态摘要）、`gate <G1-G11>`（Gate 检查）、`gates`（全部 Gate 状态）、`stage <stage-id>`（阶段状态）、`stages`（全部阶段状态）
+- **子命令**：`verify`（全量校验）、`status`（治理状态摘要）、`gate <G1-G11>`（Gate 检查）、`gates`（全部 Gate 状态）、`stage <stage-id>`（阶段状态）、`stages`（全部阶段状态）、`check-governance --fail-on-issues`（治理健康检查）、`e2e-check`（E2E proxy + fixture 分层检查）、`check-version-consistency`、`check-manifest-consistency`、`check-locks`、`check-archive-integrity`
 - **输入**：无（自动读取项目文件）
 - **输出**：校验结果（PASSED/FAILED）+ 治理状态摘要
 - **触发条件**：工作流资产变更后、Gate 检查时、定期巡检
 - **依赖**：项目需已完成 `governance-init`
 - **被以下子工作流使用**：全部阶段
+
+### TOOL-007：governance-update 命令
+
+- **文件**：`commands/governance-update.md`
+- **子命令**：`/governance update`
+- **输入**：当前仓库中的平台原生入口文件和工作流版本
+- **输出**：升级后的 bootstrap 段落和升级摘要
+- **触发条件**：插件更新后、bootstrap 模板变化后、用户显式要求更新入口文件
+- **依赖**：`commands/governance-init.md` 中的 canonical bootstrap 模板
+- **被以下子工作流使用**：维护（maintenance）
+
+### TOOL-008：发布就绪检查
+
+- **文件**：`infra/verify_workflow.py`
+- **子命令**：`check-release [--version X.Y.Z] [--require-changelog] [--runtime-adapters] [--skip-execution-gates]`
+- **输入**：可选版本号；可选要求 CHANGELOG 已包含该版本；可选本机 agent runtime probe；默认执行发布门禁命令
+- **输出**：发布就绪检查结果（PASSED/FAILED）+ 版本一致性、release fact source、agent adapter、交叉引用、归档完整性、`verify`、`check-governance --fail-on-issues`、`e2e-check`、unittest 分项结果
+- **触发条件**：`stage-release` 执行发布 checklist 时；0.35.0 及后续版本发布前
+- **依赖**：`check_version_consistency()`、`check_release_readiness_fact_source()`、`check_agent_adapter_contract()`、`check_cross_references()`、`check_archive_integrity()`、`verify_workflow.py verify`、`check-governance --fail-on-issues`、`e2e-check`、`python -m unittest skills/software-project-governance/infra/tests/test_verify_workflow.py -v`
+- **降级口径**：`--skip-execution-gates` 仅用于诊断静态聚合，不作为正式发布 checklist 通过证据。
+- **被以下子工作流使用**：版本发布（release）
+
+### TOOL-009：主流 agent adapter 检查
+
+- **文件**：`infra/verify_workflow.py`
+- **子命令**：`check-agent-adapters [--runtime]`
+- **输入**：adapter manifest/README/launcher；`--runtime` 时读取本机 PATH 中的 agent CLI
+- **输出**：Claude/Codex/Gemini/opencode 的 STATIC/PASS/UNSUPPORTED/FAIL 状态
+- **触发条件**：适配层变更后、发布前检查、主流 agent runtime 证据刷新时
+- **依赖**：`adapters/{claude,codex,gemini,opencode}/adapter-manifest.json`
+- **被以下子工作流使用**：架构设计（architecture）、版本发布（release）、维护（maintenance）
+
+### TOOL-010：治理归档工具
+
+- **文件**：`infra/archive.py`
+- **子命令**：`migrate --auto [--dry-run]`
+- **输入**：`.governance/plan-tracker.md`、`.governance/evidence-log.md`、`.governance/archive/index.md`
+- **输出**：归档迁移摘要、归档后的 task/evidence 文件、索引更新
+- **触发条件**：插件升级归档迁移、版本发布后持续归档、plan-tracker 膨胀到阈值时
+- **依赖**：`verify_workflow.py check-archive-integrity`
+- **被以下子工作流使用**：版本发布（release）、维护（maintenance）
+
+### TOOL-011：清理工具
+
+- **文件**：`infra/cleanup.py`
+- **子命令**：`--dry-run --json`；升级流程中可执行实际清理
+- **输入**：`manifest.json` canonical 文件集合与当前工作区文件
+- **输出**：清理候选或已清理文件摘要
+- **触发条件**：插件升级后、manifest 变化后、需要检查过期文件残留时
+- **依赖**：`skills/software-project-governance/core/manifest.json`
+- **被以下子工作流使用**：维护（maintenance）
+
+### TOOL-012：Git hooks 防护网
+
+- **文件**：`infra/hooks/prepare-commit-msg`、`infra/hooks/pre-commit`、`infra/hooks/commit-msg`、`infra/hooks/post-commit`
+- **触发方式**：Git 自动触发
+- **输入**：staged diff、commit message、治理记录、agent locks
+- **输出**：阻断型错误或允许型治理提醒；post-commit 锁清理
+- **触发条件**：每次 commit
+- **依赖**：`.governance/evidence-log.md`、`.governance/plan-tracker.md`、`.governance/agent-locks.json`
+- **被以下子工作流使用**：全部阶段
+
+### TOOL-013：交叉引用检查
+
+- **文件**：`infra/verify_workflow.py`
+- **子命令**：`check-cross-references [--fail-on-issues]`
+- **输入**：`skills/software-project-governance/`、`commands/`、`agents/` 下的 Markdown/Python 引用
+- **输出**：dangling reference、deprecated path、circular reference 检查结果
+- **触发条件**：路径迁移、文档重构、skill/agent/command 引用变更后
+- **依赖**：无外部依赖
+- **被以下子工作流使用**：架构设计（architecture）、维护（maintenance）
 
 ## 工具与子工作流的关系矩阵
 
@@ -84,8 +161,14 @@
 | 技术评审 | | | ● | | ● | | | | | | |
 | Code Review | | | | | | ● | | | | | |
 | 发布检查 | | | | | | | | | ● | | |
+| 发布就绪脚本 | | | | | | | | | ● | | ○ |
+| Agent adapter 检查 | | | | | ● | | | | ● | | ● |
 | 回顾模板 | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ● |
 | 校验脚本 | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● |
+| 治理归档 | | | | | | | | | ● | | ● |
+| 清理工具 | | | | | | | | | | | ● |
+| Git hooks | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● |
+| 交叉引用检查 | | | | | ● | | | | | | ● |
 
 > ● 主要使用者  ○ 可选用
 
@@ -93,8 +176,8 @@
 
 向本工作流添加新工具时：
 
-1. **放置位置**：与阶段强绑定的放在 `stages/<stage-id>/`；跨阶段通用的放在 `tools/`（待创建）
+1. **放置位置**：与阶段强绑定的放在对应 `skills/stage-*/SKILL.md` 或专项 `skills/*/SKILL.md`；跨阶段自动化脚本放在 `skills/software-project-governance/infra/`
 2. **命名规范**：`<动词>-<对象>.md`（如 `requirement-clarification.md`）
 3. **必须包含**：触发条件、输入输出、执行步骤、独立使用说明、子工作流映射
 4. **更新本索引**：在本文件中新增工具条目和关系矩阵
-5. **更新校验脚本**：在 `verify_workflow.py` 中补入新工具的存在性检查
+5. **更新校验脚本**：在 `verify_workflow.py` 中补入新工具的存在性检查；若工具是发布/门禁相关行为，优先提供可复跑子命令

@@ -1591,6 +1591,153 @@ def check_agent_adapter_contract(root=None, run_runtime=False):
     return failures
 
 
+def _run_release_validation_command(label, command, timeout=180):
+    """Run one release validation command and normalize its result."""
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+            encoding=locale.getpreferredencoding(False),
+            errors="replace",
+            timeout=timeout,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+        return {
+            "label": label,
+            "pass": False,
+            "exit_code": None,
+            "issue": f"{label}: command did not complete: {exc}",
+            "command": " ".join(str(part) for part in command),
+        }
+
+    output = ((completed.stdout or "") + "\n" + (completed.stderr or "")).strip()
+    issue = None if completed.returncode == 0 else (
+        f"{label}: exit={completed.returncode}; "
+        f"output={output[-500:] if output else '<empty>'}"
+    )
+    return {
+        "label": label,
+        "pass": completed.returncode == 0,
+        "exit_code": completed.returncode,
+        "issue": issue,
+        "command": " ".join(str(part) for part in command),
+    }
+
+
+def run_release_execution_gates(runner=_run_release_validation_command):
+    """Run command-backed release gates that must be green before publishing."""
+    verify_script = ROOT / "skills/software-project-governance/infra/verify_workflow.py"
+    commands = [
+        ("verify", [sys.executable, str(verify_script), "verify"]),
+        ("governance health", [sys.executable, str(verify_script), "check-governance", "--fail-on-issues"]),
+        ("e2e check", [sys.executable, str(verify_script), "e2e-check"]),
+        ("unit tests", [sys.executable, "-m", "unittest", "skills/software-project-governance/infra/tests/test_verify_workflow.py", "-v"]),
+    ]
+    return [runner(label, command) for label, command in commands]
+
+
+def check_release_readiness(
+    version=None,
+    require_changelog=False,
+    run_runtime_adapters=False,
+    changelog_path=None,
+    run_execution_gates=False,
+    execution_gate_runner=_run_release_validation_command,
+):
+    """FIX-072: aggregate release gate scripts behind the stage-release check-release command."""
+    issues = []
+    details = {}
+
+    version_issues = check_version_consistency()
+    version_failures = [issue for issue in version_issues if not issue.startswith("[WARN]")]
+    details["version_consistency"] = {
+        "pass": not version_failures,
+        "issues": version_failures,
+        "warnings": [issue for issue in version_issues if issue.startswith("[WARN]")],
+    }
+    issues.extend(f"version consistency: {issue}" for issue in version_failures)
+
+    release_fact_issues = check_release_readiness_fact_source()
+    details["release_fact_source"] = {
+        "pass": not release_fact_issues,
+        "issues": release_fact_issues,
+    }
+    issues.extend(f"release fact source: {issue}" for issue in release_fact_issues)
+
+    adapter_issues = check_agent_adapter_contract(run_runtime=run_runtime_adapters)
+    details["agent_adapters"] = {
+        "pass": not adapter_issues,
+        "issues": adapter_issues,
+        "runtime": run_runtime_adapters,
+    }
+    issues.extend(f"agent adapters: {issue}" for issue in adapter_issues)
+
+    cross_ref_result = check_cross_references()
+    cross_ref_issues = (
+        [f"dangling reference: {item['source']}:{item['line']} -> {item['target']}" for item in cross_ref_result["dangling"]]
+        + [f"deprecated reference: {item['source']}:{item['line']} -> {item['target']}" for item in cross_ref_result["deprecated"]]
+        + [f"circular reference: {' -> '.join(cycle)}" for cycle in cross_ref_result["cycles"]]
+    )
+    details["cross_references"] = {
+        "pass": not cross_ref_issues,
+        "issues": cross_ref_issues,
+    }
+    issues.extend(cross_ref_issues)
+
+    archive_result = check_archive_integrity()
+    archive_issues = archive_result.get("issues", [])
+    details["archive_integrity"] = {
+        "pass": not archive_issues,
+        "issues": archive_issues,
+        "pending_archive_tasks": archive_result.get("pending_archive_tasks", 0),
+    }
+    issues.extend(f"archive integrity: {issue}" for issue in archive_issues)
+
+    execution_gate_results = []
+    execution_gate_issues = []
+    if run_execution_gates:
+        execution_gate_results = run_release_execution_gates(runner=execution_gate_runner)
+        execution_gate_issues = [result["issue"] for result in execution_gate_results if result.get("issue")]
+        issues.extend(f"execution gate: {issue}" for issue in execution_gate_issues)
+    details["execution_gates"] = {
+        "pass": not execution_gate_issues,
+        "issues": execution_gate_issues,
+        "required": run_execution_gates,
+        "results": execution_gate_results,
+    }
+
+    changelog_path = changelog_path or (ROOT / "project/CHANGELOG.md")
+    changelog_issues = []
+    if version:
+        if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+            changelog_issues.append(f"release version `{version}` is not semver X.Y.Z")
+        if require_changelog:
+            if not changelog_path.exists():
+                changelog_issues.append(f"{_display_path(changelog_path)}: missing changelog")
+            else:
+                changelog_content = changelog_path.read_text(encoding="utf-8")
+                if f"## [{version}]" not in changelog_content:
+                    changelog_issues.append(f"{_display_path(changelog_path)}: missing changelog entry ## [{version}]")
+    elif require_changelog:
+        changelog_issues.append("--require-changelog requires --version")
+
+    details["changelog"] = {
+        "pass": not changelog_issues,
+        "issues": changelog_issues,
+        "required": require_changelog,
+        "version": version,
+    }
+    issues.extend(changelog_issues)
+
+    return {
+        "pass": not issues,
+        "issues": issues,
+        "details": details,
+    }
+
+
 def check_architecture_fact_source(
     skill_path=None,
     skill_index_path=None,
@@ -7832,6 +7979,44 @@ def cmd_check_agent_adapters(args):
         sys.exit(1)
 
 
+def cmd_check_release(args):
+    """Run release readiness checks used by the stage-release workflow."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+    skip_execution_gates = getattr(args, "skip_execution_gates", False)
+    result = check_release_readiness(
+        version=getattr(args, "version", None),
+        require_changelog=getattr(args, "require_changelog", False),
+        run_runtime_adapters=getattr(args, "runtime_adapters", False),
+        run_execution_gates=not skip_execution_gates,
+    )
+    print()
+    print("=== Release Readiness Check ===")
+    if getattr(args, "version", None):
+        print(f"  Version: {args.version}")
+    print(f"  Runtime adapters: {'enabled' if getattr(args, 'runtime_adapters', False) else 'static'}")
+    print(f"  Execution gates: {'skipped' if skip_execution_gates else 'enabled'}")
+    for label, detail in result["details"].items():
+        status = "PASS" if detail["pass"] else "FAIL"
+        print(f"  [{status}] {label.replace('_', ' ')}")
+        for gate_result in detail.get("results", []):
+            gate_status = "PASS" if gate_result["pass"] else "FAIL"
+            exit_code = gate_result["exit_code"]
+            print(f"    [{gate_status}] {gate_result['label']} (exit={exit_code})")
+        for issue in detail.get("issues", [])[:10]:
+            print(f"    - {issue}")
+        if len(detail.get("issues", [])) > 10:
+            print(f"    ... and {len(detail['issues']) - 10} more")
+    if result["pass"]:
+        print("\n  Result: PASSED - release readiness checks are green.")
+    else:
+        print(f"\n  Result: FAILED - {len(result['issues'])} issue(s).")
+        sys.exit(1)
+
+
 # ── Standalone CLI wrappers for new checks ────────────────────────
 
 def cmd_check_cross_references(args):
@@ -8220,6 +8405,18 @@ def main():
     caa_p.add_argument("--runtime", action="store_true",
                        help="Also execute local runtime version commands for supported adapters")
 
+    # check-release
+    cr_p = subparsers.add_parser("check-release",
+                                 help="Run release readiness checks used by stage-release")
+    cr_p.add_argument("--version",
+                      help="Release version to validate (semver X.Y.Z)")
+    cr_p.add_argument("--require-changelog", action="store_true",
+                      help="Require project/CHANGELOG.md to contain ## [version]")
+    cr_p.add_argument("--runtime-adapters", action="store_true",
+                      help="Also execute local runtime version commands for supported adapters")
+    cr_p.add_argument("--skip-execution-gates", action="store_true",
+                      help="Diagnostic only: skip verify/check-governance/e2e/unit-test execution gates")
+
     # e2e-check
     subparsers.add_parser("e2e-check", help="Run E2E governance verification against e2e-test-project")
 
@@ -8297,6 +8494,7 @@ def main():
         "check-manifest-consistency": cmd_check_manifest_consistency,
         "check-plugin-freshness": cmd_check_plugin_freshness,
         "check-agent-adapters": cmd_check_agent_adapters,
+        "check-release": cmd_check_release,
         "e2e-check": cmd_e2e_check,
         "check-cross-references": cmd_check_cross_references,
         "check-sequential-ids": cmd_check_sequential_ids,

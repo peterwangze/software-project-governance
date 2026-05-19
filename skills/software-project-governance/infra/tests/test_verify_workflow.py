@@ -802,6 +802,121 @@ class AgentAdapterContractTests(unittest.TestCase):
             self.assertTrue(any("gemini: runtime command failed: gemini --version" in issue for issue in issues))
 
 
+class ReleaseReadinessCommandTests(unittest.TestCase):
+    """FIX-072: stage-release check-release must be backed by a real CLI command."""
+
+    def _clean_release_patches(self):
+        return [
+            patch.object(vw, "check_version_consistency", return_value=[]),
+            patch.object(vw, "check_release_readiness_fact_source", return_value=[]),
+            patch.object(vw, "check_agent_adapter_contract", return_value=[]),
+            patch.object(vw, "check_cross_references", return_value={
+                "dangling": [],
+                "deprecated": [],
+                "cycles": [],
+                "total_files_scanned": 1,
+                "total_refs": 0,
+            }),
+            patch.object(vw, "check_archive_integrity", return_value={
+                "pass": True,
+                "issues": [],
+                "hot_tasks": 0,
+                "total_archived_tasks": 0,
+                "index_entries": 0,
+                "total_expected": 0,
+                "pending_archive_tasks": 0,
+            }),
+        ]
+
+    def test_check_release_readiness_passes_when_all_underlying_checks_pass(self):
+        with tempfile.TemporaryDirectory() as td:
+            changelog = Path(td) / "CHANGELOG.md"
+            changelog.write_text("# Changelog\n\n## [0.35.0]\n", encoding="utf-8")
+            patches = self._clean_release_patches()
+            with patches[0], patches[1], patches[2] as adapter_mock, patches[3], patches[4]:
+                result = vw.check_release_readiness(
+                    version="0.35.0",
+                    require_changelog=True,
+                    run_runtime_adapters=True,
+                    changelog_path=changelog,
+                )
+            self.assertTrue(result["pass"])
+            adapter_mock.assert_called_once_with(run_runtime=True)
+
+    def test_check_release_readiness_requires_changelog_version_when_requested(self):
+        with tempfile.TemporaryDirectory() as td:
+            changelog = Path(td) / "CHANGELOG.md"
+            changelog.write_text("# Changelog\n\n## [0.34.0]\n", encoding="utf-8")
+            patches = self._clean_release_patches()
+            with patches[0], patches[1], patches[2], patches[3], patches[4]:
+                result = vw.check_release_readiness(
+                    version="0.35.0",
+                    require_changelog=True,
+                    changelog_path=changelog,
+                )
+            self.assertFalse(result["pass"])
+            self.assertTrue(any("missing changelog entry ## [0.35.0]" in issue for issue in result["issues"]))
+
+    def test_check_release_readiness_fails_on_cross_reference_issues(self):
+        patches = self._clean_release_patches()
+        cross_ref_result = {
+            "dangling": [{"source": "skills/example.md", "line": 3, "target": "missing.md"}],
+            "deprecated": [],
+            "cycles": [],
+            "total_files_scanned": 1,
+            "total_refs": 1,
+        }
+        with patches[0], patches[1], patches[2], patch.object(vw, "check_cross_references", return_value=cross_ref_result), patches[4]:
+            result = vw.check_release_readiness()
+        self.assertFalse(result["pass"])
+        self.assertTrue(any("dangling reference" in issue for issue in result["issues"]))
+
+    def test_check_release_readiness_runs_execution_gates_when_requested(self):
+        patches = self._clean_release_patches()
+        calls = []
+
+        def fake_runner(label, command):
+            calls.append((label, command))
+            return {
+                "label": label,
+                "pass": True,
+                "exit_code": 0,
+                "issue": None,
+                "command": " ".join(str(part) for part in command),
+            }
+
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            result = vw.check_release_readiness(
+                run_execution_gates=True,
+                execution_gate_runner=fake_runner,
+            )
+
+        self.assertTrue(result["pass"])
+        self.assertEqual(["verify", "governance health", "e2e check", "unit tests"], [call[0] for call in calls])
+        self.assertEqual(4, len(result["details"]["execution_gates"]["results"]))
+
+    def test_check_release_readiness_fails_when_execution_gate_fails(self):
+        patches = self._clean_release_patches()
+
+        def fake_runner(label, command):
+            return {
+                "label": label,
+                "pass": label != "unit tests",
+                "exit_code": 1 if label == "unit tests" else 0,
+                "issue": "unit tests: exit=1; output=FAILED" if label == "unit tests" else None,
+                "command": " ".join(str(part) for part in command),
+            }
+
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            result = vw.check_release_readiness(
+                run_execution_gates=True,
+                execution_gate_runner=fake_runner,
+            )
+
+        self.assertFalse(result["pass"])
+        self.assertTrue(any("execution gate: unit tests" in issue for issue in result["issues"]))
+
+
 class E2ECommandMatrixTests(unittest.TestCase):
     """FIX-060: e2e-check must execute real command proxies."""
 

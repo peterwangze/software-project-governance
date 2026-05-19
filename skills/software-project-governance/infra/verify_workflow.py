@@ -1267,6 +1267,7 @@ def _evidence_closes_fix_069_while_req_open(evidence_content):
         "不可关闭",
         "不能关闭",
         "不得关闭",
+        "未关闭",
         "未完成",
         "待最终",
         "未最终",

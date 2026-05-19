@@ -614,12 +614,37 @@ class ReleaseReadinessFactSourceTests(unittest.TestCase):
             issues = vw.check_release_readiness_fact_source(*paths)
             self.assertTrue(any("FIX-069 closing evidence conflicts with open REQ-059" in issue for issue in issues))
 
+    def test_release_readiness_fact_source_allows_review_approval_while_req_open(self):
+        with tempfile.TemporaryDirectory() as td:
+            evidence = (
+                "| REVIEW-FIX-069 | FIX-069 | 维护 | 代码审查 | Code Review APPROVED，未关闭任务。 | files | Code Reviewer | 2026-05-15 | G11 | 审查通过 |\n"
+            )
+            paths = self._write_release_fact_files(Path(td), evidence_content=evidence)
+            self.assertEqual(vw.check_release_readiness_fact_source(*paths), [])
+
     def test_release_readiness_fact_source_rejects_adapter_e2e_overstatement(self):
         with tempfile.TemporaryDirectory() as td:
             architecture = self._architecture_content(extra="| Gemini | ✅ 已完成，真实环境 E2E 通过 |\n")
             paths = self._write_release_fact_files(Path(td), architecture_content=architecture)
             issues = vw.check_release_readiness_fact_source(*paths)
             self.assertTrue(any("architecture overstates pending Gemini/opencode" in issue for issue in issues))
+
+    def test_release_readiness_fact_source_rejects_softened_adapter_overstatement(self):
+        with tempfile.TemporaryDirectory() as td:
+            architecture = self._architecture_content(
+                extra="| opencode | 缺口已完成，仅剩文档，真实环境 E2E 通过 |\n"
+            )
+            paths = self._write_release_fact_files(Path(td), architecture_content=architecture)
+            issues = vw.check_release_readiness_fact_source(*paths)
+            self.assertTrue(any("architecture overstates pending Gemini/opencode" in issue for issue in issues))
+
+    def test_release_readiness_fact_source_allows_explicit_adapter_non_closure(self):
+        with tempfile.TemporaryDirectory() as td:
+            architecture = self._architecture_content(
+                extra="| Gemini | 仅作为预检，source proxy PASS 不构成真实环境 E2E 闭环 |\n"
+            )
+            paths = self._write_release_fact_files(Path(td), architecture_content=architecture)
+            self.assertEqual(vw.check_release_readiness_fact_source(*paths), [])
 
     def test_release_readiness_fact_source_rejects_overstatement_when_req_delivered_but_fix_active(self):
         with tempfile.TemporaryDirectory() as td:

@@ -9,7 +9,7 @@
 >
 > 本目录保留仅作为历史参考，不再继续扩展。**不要按下方旧入口约定执行**——那是 repo-local 多文件预加载模式，与当前自包含插件架构冲突。
 
-本目录定义 `software-project-governance` workflow 在 Codex CLI 场景下的消费方式（历史）。
+本目录定义 `software-project-governance` workflow 在 Codex CLI 场景下的消费方式（历史 adapter + 当前 Codex 插件投影）。
 
 ## 适配目标
 
@@ -22,7 +22,14 @@ Codex 加载 `skills/software-project-governance/SKILL.md` 作为自包含入口
 - `skills/software-project-governance/stages/` — 11 个阶段的子工作流和 skill
 - 用户项目的 `.governance/` — 活跃治理记录
 
-Codex 用户无需读取下方的旧入口约定。
+当前仓库还提供 Codex 原生投影：
+
+- `AGENTS.md`：Codex 项目级 bootstrap，本会话已通过该入口读取 `.governance/plan-tracker.md` 并执行治理流程。
+- `.codex-plugin/plugin.json`：Codex 插件 manifest。
+- `.agents/plugins/marketplace.json`：Codex/agent marketplace 索引。
+- `adapters/codex/adapter-manifest.json` + `launch.py`：可复跑的 adapter contract 和 runtime E2E 元数据。
+
+2026-05-19 本机验证结果：`codex --version` 返回 `codex-cli 0.125.0`，当前 Codex 会话已使用 `AGENTS.md` governance bootstrap 辅助本项目自身迭代。
 
 ## 历史入口约定（已废弃，仅供参考）
 

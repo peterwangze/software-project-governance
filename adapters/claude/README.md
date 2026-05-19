@@ -44,6 +44,8 @@ Claude Code 通过插件市场加载 `skills/software-project-governance/SKILL.m
 
 - `skills/software-project-governance/SKILL.md`：自包含插件 skill（通过插件市场安装）
 
+2026-05-19 本机验证结果：`claude --version` 返回 `2.1.123 (Claude Code)`。该结果证明当前验证主机存在 Claude Code runtime；完整治理任务 E2E 仍由 FIX-074 继续推进到外部目标项目 cwd。
+
 ## 半可执行入口
 
 当前目录仍保留两类可被脚本消费的辅助入口：

@@ -2,6 +2,7 @@
   "adapter_id": "codex",
   "workflow_id": "software-project-governance",
   "entry_type": "half-executable",
+  "support_status": "runtime-verified",
   "supported_runtime": ["Codex CLI", "Codex-compatible coding agents"],
   "trigger": [
     "Before starting a software project task that changes workflow assets",
@@ -26,6 +27,18 @@
   "validation": {
     "command": "python skills/software-project-governance/infra/verify_workflow.py",
     "required": true
+  },
+  "native_entry": {
+    "project_instruction_file": "AGENTS.md",
+    "plugin_manifest": ".codex-plugin/plugin.json",
+    "marketplace_entry": ".agents/plugins/marketplace.json"
+  },
+  "runtime_e2e": {
+    "e2e_level": "runtime-version-probe",
+    "command": "codex",
+    "version_command": "codex --version",
+    "verified_on": "2026-05-19",
+    "evidence": "Local Codex CLI command returned version 0.125.0 and this session used AGENTS.md governance bootstrap to self-iterate."
   },
   "replacement_boundary": {
     "keep": [

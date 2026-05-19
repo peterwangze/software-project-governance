@@ -6,6 +6,7 @@ import json
 import locale
 import subprocess
 import importlib.util
+import shutil
 from datetime import datetime, date
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -210,6 +211,11 @@ OPTIONAL_PROJECTION_FILES = {
     "Codex Adapter Manifest": ROOT / "adapters/codex/adapter-manifest.json",
     "Codex Launcher": ROOT / "adapters/codex/launch.py",
     "Gemini Adapter": ROOT / "adapters/gemini/README.md",
+    "Gemini Adapter Manifest": ROOT / "adapters/gemini/adapter-manifest.json",
+    "Gemini Launcher": ROOT / "adapters/gemini/launch.py",
+    "opencode Adapter": ROOT / "adapters/opencode/README.md",
+    "opencode Adapter Manifest": ROOT / "adapters/opencode/adapter-manifest.json",
+    "opencode Launcher": ROOT / "adapters/opencode/launch.py",
     "Claude Plugin Marketplace": ROOT / ".claude-plugin/marketplace.json",
     "Claude Plugin Definition": ROOT / ".claude-plugin/plugin.json",
     "Codex Plugin Definition": ROOT / ".codex-plugin/plugin.json",
@@ -232,6 +238,7 @@ PROJECTION_SNIPPETS = {
         "adapter_id",
         "workflow_id",
         "native_entry",
+        "runtime_e2e",
         "launcher",
     ],
     ROOT / "adapters/claude/launch.py": [
@@ -248,6 +255,8 @@ PROJECTION_SNIPPETS = {
     ROOT / "adapters/codex/adapter-manifest.json": [
         "adapter_id",
         "workflow_id",
+        "native_entry",
+        "runtime_e2e",
         "launcher",
     ],
     ROOT / "adapters/codex/launch.py": [
@@ -262,6 +271,33 @@ PROJECTION_SNIPPETS = {
         "## 国内 agent CLI 兼容抽象",
         "## 适配原则",
         "## 建议的最小验证顺序",
+    ],
+    ROOT / "adapters/gemini/adapter-manifest.json": [
+        "adapter_id",
+        "support_status",
+        "native_entry",
+        "runtime_e2e",
+    ],
+    ROOT / "adapters/gemini/launch.py": [
+        "Gemini Adapter Launcher",
+        "runtime_e2e",
+        "native_entry",
+    ],
+    ROOT / "adapters/opencode/README.md": [
+        "opencode Adapter",
+        "not supported in this release",
+        "check-agent-adapters --runtime",
+    ],
+    ROOT / "adapters/opencode/adapter-manifest.json": [
+        "adapter_id",
+        "not-supported-current-release",
+        "no_full_coverage_claim",
+        "unsupported_reason",
+    ],
+    ROOT / "adapters/opencode/launch.py": [
+        "opencode Adapter Launcher",
+        "unsupported_reason",
+        "runtime_e2e",
     ],
     ROOT / ".claude-plugin/marketplace.json": [
         "software-project-governance",
@@ -1102,6 +1138,22 @@ REQ_059_RELEASE_BLOCKERS = [
 ]
 FIX_069_RELEASE_VERSION = "0." + "35.0"
 FIX_069_READINESS_VERSION = "1." + "0.0"
+MAINSTREAM_AGENT_ADAPTERS = ["claude", "codex", "gemini", "opencode"]
+ADAPTER_REQUIRED_KEYS = [
+    "adapter_id",
+    "workflow_id",
+    "entry_type",
+    "support_status",
+    "supported_runtime",
+    "trigger",
+    "inputs",
+    "outputs",
+    "gate_behavior",
+    "validation",
+    "native_entry",
+    "runtime_e2e",
+    "launcher",
+]
 
 
 def _markdown_has_heading(content, level, title):
@@ -1408,6 +1460,134 @@ def check_release_readiness_fact_source(
         print(f"[FAIL] release readiness fact source: {failure}")
     if not failures:
         print("[OK] release readiness fact source synchronized")
+    return failures
+
+
+def _load_adapter_manifest(adapter_dir):
+    manifest_path = adapter_dir / "adapter-manifest.json"
+    if not manifest_path.exists():
+        return None, [f"{_display_path(manifest_path)}: missing adapter manifest"]
+    try:
+        return json.loads(manifest_path.read_text(encoding="utf-8")), []
+    except json.JSONDecodeError as exc:
+        return None, [f"{_display_path(manifest_path)}: invalid JSON: {exc}"]
+
+
+def _run_version_command(command):
+    completed = subprocess.run(
+        command,
+        shell=True,
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    output = (completed.stdout or completed.stderr or "").strip()
+    return completed.returncode, output
+
+
+def check_agent_adapter_contract(root=None, run_runtime=False):
+    """FIX-071: mainstream agent adapters must be explicit and not overclaim coverage."""
+    root = root or ROOT
+    failures = []
+    reports = []
+
+    for adapter_id in MAINSTREAM_AGENT_ADAPTERS:
+        adapter_dir = root / "adapters" / adapter_id
+        readme_path = adapter_dir / "README.md"
+        launch_path = adapter_dir / "launch.py"
+        for path in [readme_path, launch_path]:
+            if not path.exists():
+                failures.append(f"{_display_path(path, root)}: missing adapter asset")
+
+        manifest, manifest_failures = _load_adapter_manifest(adapter_dir)
+        failures.extend(manifest_failures)
+        if not manifest:
+            continue
+
+        for key in ADAPTER_REQUIRED_KEYS:
+            if key not in manifest:
+                failures.append(f"{_display_path(adapter_dir / 'adapter-manifest.json', root)}: missing `{key}`")
+
+        if manifest.get("adapter_id") != adapter_id:
+            failures.append(
+                f"{_display_path(adapter_dir / 'adapter-manifest.json', root)}: adapter_id must be `{adapter_id}`"
+            )
+        if manifest.get("workflow_id") != "software-project-governance":
+            failures.append(
+                f"{_display_path(adapter_dir / 'adapter-manifest.json', root)}: workflow_id must be software-project-governance"
+            )
+        if manifest.get("launcher") != f"adapters/{adapter_id}/launch.py":
+            failures.append(
+                f"{_display_path(adapter_dir / 'adapter-manifest.json', root)}: launcher path mismatch"
+            )
+
+        support_status = manifest.get("support_status", "")
+        runtime_e2e = manifest.get("runtime_e2e", {})
+        native_entry = manifest.get("native_entry", {})
+        malformed_runtime_e2e = False
+        if not isinstance(native_entry, dict) or not native_entry:
+            failures.append(f"{_display_path(adapter_dir / 'adapter-manifest.json', root)}: native_entry must be non-empty")
+        if not isinstance(runtime_e2e, dict) or not runtime_e2e.get("command") or not runtime_e2e.get("version_command"):
+            failures.append(f"{_display_path(adapter_dir / 'adapter-manifest.json', root)}: runtime_e2e command/version_command required")
+            runtime_e2e = {}
+            malformed_runtime_e2e = True
+
+        if support_status == "not-supported-current-release":
+            if runtime_e2e.get("e2e_level") != "unsupported":
+                failures.append(
+                    f"{_display_path(adapter_dir / 'adapter-manifest.json', root)}: unsupported adapter runtime_e2e.e2e_level must be unsupported"
+                )
+            if manifest.get("no_full_coverage_claim") is not True:
+                failures.append(
+                    f"{_display_path(adapter_dir / 'adapter-manifest.json', root)}: unsupported adapter must set no_full_coverage_claim=true"
+                )
+            if not manifest.get("unsupported_reason"):
+                failures.append(
+                    f"{_display_path(adapter_dir / 'adapter-manifest.json', root)}: unsupported adapter must explain unsupported_reason"
+                )
+            reports.append((adapter_id, "UNSUPPORTED", manifest.get("unsupported_reason", "")))
+            continue
+
+        if support_status != "runtime-verified":
+            failures.append(
+                f"{_display_path(adapter_dir / 'adapter-manifest.json', root)}: support_status must be runtime-verified or not-supported-current-release"
+            )
+            continue
+
+        if runtime_e2e.get("e2e_level") != "runtime-version-probe":
+            failures.append(
+                f"{_display_path(adapter_dir / 'adapter-manifest.json', root)}: runtime-verified adapter runtime_e2e.e2e_level must be runtime-version-probe"
+            )
+        if not runtime_e2e.get("verified_on") or not runtime_e2e.get("evidence"):
+            failures.append(
+                f"{_display_path(adapter_dir / 'adapter-manifest.json', root)}: runtime-verified adapter must include verified_on and evidence"
+            )
+        if malformed_runtime_e2e:
+            reports.append((adapter_id, "FAIL", "invalid runtime_e2e"))
+            continue
+
+        if run_runtime:
+            command_name = runtime_e2e.get("command", "")
+            if not shutil.which(command_name):
+                failures.append(f"{adapter_id}: runtime command `{command_name}` not found on PATH")
+                reports.append((adapter_id, "FAIL", "command not found"))
+                continue
+            returncode, output = _run_version_command(runtime_e2e["version_command"])
+            if returncode != 0:
+                failures.append(f"{adapter_id}: runtime command failed: {runtime_e2e['version_command']}")
+                reports.append((adapter_id, "FAIL", output))
+            else:
+                reports.append((adapter_id, "PASS", output))
+        else:
+            reports.append((adapter_id, "STATIC", support_status))
+
+    for adapter_id, status, detail in reports:
+        print(f"[{status}] agent adapter {adapter_id}: {detail}")
+    for failure in failures:
+        print(f"[FAIL] agent adapter contract: {failure}")
+    if not failures:
+        print("[OK] agent adapter contracts synchronized")
     return failures
 
 
@@ -2991,12 +3171,14 @@ def cmd_verify(args):
     snippet_failures = check_snippets()
     architecture_failures = check_architecture_fact_source()
     release_readiness_failures = check_release_readiness_fact_source()
+    agent_adapter_failures = check_agent_adapter_contract()
     version_failures = check_version_consistency()
     all_items = (
         file_failures
         + snippet_failures
         + architecture_failures
         + release_readiness_failures
+        + agent_adapter_failures
         + version_failures
     )
 
@@ -7643,6 +7825,13 @@ def cmd_check_manifest_consistency(args):
         sys.exit(1)
 
 
+def cmd_check_agent_adapters(args):
+    """Check mainstream code agent adapter contracts and optional local runtimes."""
+    failures = check_agent_adapter_contract(run_runtime=getattr(args, "runtime", False))
+    if failures:
+        sys.exit(1)
+
+
 # ── Standalone CLI wrappers for new checks ────────────────────────
 
 def cmd_check_cross_references(args):
@@ -8025,6 +8214,12 @@ def main():
     # check-plugin-freshness
     subparsers.add_parser("check-plugin-freshness", help="Check if installed plugin is up to date with source")
 
+    # check-agent-adapters
+    caa_p = subparsers.add_parser("check-agent-adapters",
+                                  help="Check mainstream code agent adapter contracts")
+    caa_p.add_argument("--runtime", action="store_true",
+                       help="Also execute local runtime version commands for supported adapters")
+
     # e2e-check
     subparsers.add_parser("e2e-check", help="Run E2E governance verification against e2e-test-project")
 
@@ -8101,6 +8296,7 @@ def main():
         "check-governance": cmd_check_governance,
         "check-manifest-consistency": cmd_check_manifest_consistency,
         "check-plugin-freshness": cmd_check_plugin_freshness,
+        "check-agent-adapters": cmd_check_agent_adapters,
         "e2e-check": cmd_e2e_check,
         "check-cross-references": cmd_check_cross_references,
         "check-sequential-ids": cmd_check_sequential_ids,

@@ -681,6 +681,127 @@ class ReleaseReadinessFactSourceTests(unittest.TestCase):
             self.assertTrue(any("target directory structure repeats" in issue for issue in issues))
 
 
+class AgentAdapterContractTests(unittest.TestCase):
+    """FIX-071: mainstream code agent adapters must be explicit and runtime-aware."""
+
+    def _write_adapter(self, root, adapter_id, support_status="runtime-verified", extra=None):
+        adapter_dir = root / "adapters" / adapter_id
+        adapter_dir.mkdir(parents=True, exist_ok=True)
+        (adapter_dir / "README.md").write_text(f"# {adapter_id} Adapter\n", encoding="utf-8")
+        (adapter_dir / "launch.py").write_text(
+            f"print('== {adapter_id} Adapter Launcher ==')\n",
+            encoding="utf-8",
+        )
+        manifest = {
+            "adapter_id": adapter_id,
+            "workflow_id": "software-project-governance",
+            "entry_type": "thin-projection",
+            "support_status": support_status,
+            "supported_runtime": [adapter_id],
+            "trigger": ["before governance work"],
+            "inputs": ["skills/software-project-governance/SKILL.md"],
+            "outputs": [".governance/plan-tracker.md"],
+            "gate_behavior": {"on_fail": "block-next-stage", "required_action": "update-risk-or-decision-log"},
+            "validation": {"command": "python skills/software-project-governance/infra/verify_workflow.py", "required": True},
+            "native_entry": {"project_instruction_file": "AGENTS.md"},
+            "runtime_e2e": {
+                "e2e_level": "runtime-version-probe",
+                "command": adapter_id,
+                "version_command": f"{adapter_id} --version",
+                "verified_on": "2026-05-19",
+                "evidence": "runtime probe passed",
+            },
+            "launcher": f"adapters/{adapter_id}/launch.py",
+        }
+        if support_status == "not-supported-current-release":
+            manifest["unsupported_reason"] = "runtime unavailable"
+            manifest["no_full_coverage_claim"] = True
+            manifest["runtime_e2e"]["e2e_level"] = "unsupported"
+            manifest["runtime_e2e"]["verified_on"] = None
+            manifest["runtime_e2e"]["evidence"] = "not verified"
+        if extra:
+            manifest.update(extra)
+        (adapter_dir / "adapter-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    def _write_all_adapters(self, root):
+        for adapter_id in ["claude", "codex", "gemini"]:
+            self._write_adapter(root, adapter_id)
+        self._write_adapter(root, "opencode", support_status="not-supported-current-release")
+
+    def test_agent_adapter_contract_accepts_verified_and_explicit_unsupported(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_all_adapters(root)
+            self.assertEqual(vw.check_agent_adapter_contract(root=root), [])
+
+    def test_agent_adapter_contract_rejects_missing_opencode_assets(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            for adapter_id in ["claude", "codex", "gemini"]:
+                self._write_adapter(root, adapter_id)
+            issues = vw.check_agent_adapter_contract(root=root)
+            normalized = [issue.replace("\\", "/") for issue in issues]
+            self.assertTrue(any("adapters/opencode/README.md" in issue for issue in normalized))
+
+    def test_agent_adapter_contract_rejects_unsupported_without_no_full_coverage_claim(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_all_adapters(root)
+            self._write_adapter(
+                root,
+                "opencode",
+                support_status="not-supported-current-release",
+                extra={"no_full_coverage_claim": False},
+            )
+            issues = vw.check_agent_adapter_contract(root=root)
+            self.assertTrue(any("no_full_coverage_claim=true" in issue for issue in issues))
+
+    def test_agent_adapter_contract_rejects_malformed_runtime_e2e_without_crashing(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_all_adapters(root)
+            self._write_adapter(root, "gemini", extra={"runtime_e2e": "bad"})
+            issues = vw.check_agent_adapter_contract(root=root, run_runtime=True)
+            self.assertTrue(any("runtime_e2e command/version_command required" in issue for issue in issues))
+
+    def test_agent_adapter_runtime_checks_supported_commands_only(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_all_adapters(root)
+            with patch.object(vw.shutil, "which", return_value="fake"), patch.object(
+                vw, "_run_version_command", return_value=(0, "ok")
+            ):
+                self.assertEqual(vw.check_agent_adapter_contract(root=root, run_runtime=True), [])
+
+    def test_agent_adapter_runtime_rejects_missing_supported_command(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_all_adapters(root)
+
+            def fake_which(command):
+                return None if command == "gemini" else "fake"
+
+            with patch.object(vw.shutil, "which", side_effect=fake_which), patch.object(
+                vw, "_run_version_command", return_value=(0, "ok")
+            ):
+                issues = vw.check_agent_adapter_contract(root=root, run_runtime=True)
+            self.assertTrue(any("gemini: runtime command `gemini` not found" in issue for issue in issues))
+
+    def test_agent_adapter_runtime_rejects_failed_version_command(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_all_adapters(root)
+
+            def fake_version_command(command):
+                return (1, "boom") if command == "gemini --version" else (0, "ok")
+
+            with patch.object(vw.shutil, "which", return_value="fake"), patch.object(
+                vw, "_run_version_command", side_effect=fake_version_command
+            ):
+                issues = vw.check_agent_adapter_contract(root=root, run_runtime=True)
+            self.assertTrue(any("gemini: runtime command failed: gemini --version" in issue for issue in issues))
+
+
 class E2ECommandMatrixTests(unittest.TestCase):
     """FIX-060: e2e-check must execute real command proxies."""
 

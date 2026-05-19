@@ -1,0 +1,45 @@
+{
+  "adapter_id": "opencode",
+  "workflow_id": "software-project-governance",
+  "entry_type": "unsupported-projection",
+  "support_status": "not-supported-current-release",
+  "supported_runtime": ["opencode"],
+  "trigger": [
+    "When evaluating future opencode support",
+    "When preventing unsupported opencode coverage from being reported as complete"
+  ],
+  "inputs": [
+    "skills/software-project-governance/SKILL.md",
+    "skills/software-project-governance/core/stage-gates.md",
+    "skills/software-project-governance/core/lifecycle.md",
+    ".governance/plan-tracker.md"
+  ],
+  "outputs": [
+    ".governance/plan-tracker.md",
+    ".governance/evidence-log.md",
+    ".governance/decision-log.md",
+    ".governance/risk-log.md"
+  ],
+  "gate_behavior": {
+    "on_fail": "block-next-stage",
+    "required_action": "update-risk-or-decision-log"
+  },
+  "validation": {
+    "command": "python skills/software-project-governance/infra/verify_workflow.py check-agent-adapters --runtime",
+    "required": true
+  },
+  "native_entry": {
+    "project_instruction_file": "AGENTS.md",
+    "projection_rule": "Use only as a pointer to skills/software-project-governance/SKILL.md; do not duplicate workflow rules."
+  },
+  "unsupported_reason": "opencode command is not available in the current validation host; no real runtime E2E has passed.",
+  "no_full_coverage_claim": true,
+  "runtime_e2e": {
+    "e2e_level": "unsupported",
+    "command": "opencode",
+    "version_command": "opencode --version",
+    "verified_on": null,
+    "evidence": "Not verified. This adapter is explicitly unsupported until a real opencode runtime E2E passes."
+  },
+  "launcher": "adapters/opencode/launch.py"
+}

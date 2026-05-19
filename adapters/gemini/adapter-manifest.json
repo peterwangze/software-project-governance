@@ -1,12 +1,12 @@
 {
-  "adapter_id": "claude",
+  "adapter_id": "gemini",
   "workflow_id": "software-project-governance",
-  "entry_type": "half-executable",
+  "entry_type": "thin-projection",
   "support_status": "runtime-verified",
-  "supported_runtime": ["Claude Code", "Claude-compatible coding agents"],
+  "supported_runtime": ["Gemini CLI"],
   "trigger": [
-    "Before starting a software project task that changes workflow assets",
-    "When planning, reviewing, or validating project-governance work"
+    "Before starting a Gemini CLI session that changes workflow assets",
+    "When validating governance workflow behavior from a Gemini-compatible runtime"
   ],
   "inputs": [
     "skills/software-project-governance/SKILL.md",
@@ -29,14 +29,15 @@
     "required": true
   },
   "native_entry": {
-    "skill_path": "skills/software-project-governance/SKILL.md"
+    "project_context_file": "GEMINI.md",
+    "projection_rule": "GEMINI.md is a thin pointer to skills/software-project-governance/SKILL.md; it must not duplicate workflow rules."
   },
   "runtime_e2e": {
     "e2e_level": "runtime-version-probe",
-    "command": "claude",
-    "version_command": "claude --version",
+    "command": "gemini",
+    "version_command": "gemini --version",
     "verified_on": "2026-05-19",
-    "evidence": "Local Claude Code command returned version 2.1.123."
+    "evidence": "Local Gemini CLI command returned version 0.35.3."
   },
-  "launcher": "adapters/claude/launch.py"
+  "launcher": "adapters/gemini/launch.py"
 }

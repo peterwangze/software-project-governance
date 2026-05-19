@@ -228,10 +228,10 @@
 
 | 平台 | 状态 | adapter 目录 | plugin 目录 |
 |------|------|-------------|------------|
-| Claude Code | 主线（已实现，launcher 字段兼容由 FIX-071 收口） | `adapters/claude/` | `.claude-plugin/` |
-| Codex | 预研（样例，仍需运行时加载验证） | `adapters/codex/` | `.codex-plugin/` |
-| Gemini | 未完成（仅兼容分析文档） | `adapters/gemini/` | — |
-| opencode | 未实现（0.35.0 P0 适配缺口） | — | — |
+| Claude Code | runtime 已验证（`claude --version` PASS）；完整外部目标 E2E 由 FIX-074 继续推进 | `adapters/claude/` | `.claude-plugin/` |
+| Codex | runtime 已验证（`codex --version` PASS），且当前 Codex 会话已通过 `AGENTS.md` 使用治理 bootstrap 自迭代；完整外部目标 E2E 由 FIX-074 继续推进 | `adapters/codex/` | `.codex-plugin/` |
+| Gemini | runtime probe PASS（`gemini --version`）；使用最薄 `GEMINI.md` 指针投影，不提供独立 plugin marketplace；完整外部目标 E2E 由 FIX-074 继续推进 | `adapters/gemini/` | — |
+| opencode | 不支持当前版本：adapter 显式标记 unsupported，当前验证主机无 `opencode` 命令，未通过真实 runtime E2E，不得宣称全覆盖 | `adapters/opencode/` | — |
 | 通用 `.agents` marketplace | 兼容分析（文档/元数据） | — | `.agents/` |
 
 **新增平台的标准流程**：
@@ -371,12 +371,16 @@
 | `.claude-plugin/plugin.json` | Claude Code | plugin manifest |
 | `.claude-plugin/marketplace.json` | Claude Code | marketplace 元数据 |
 | `commands/governance-init.md` Step 7 | 所有平台 | bootstrap 模板（注入用户项目的 canonical source） |
-| `adapters/codex/adapter-manifest.json` | Codex | 预研 |
-| `adapters/codex/launch.py` | Codex | 预研 |
-| `adapters/codex/README.md` | Codex | 预研 |
+| `adapters/codex/adapter-manifest.json` | Codex | adapter 标准字段声明 + runtime E2E 元数据 |
+| `adapters/codex/launch.py` | Codex | 加载顺序验证 |
+| `adapters/codex/README.md` | Codex | 平台特定说明 |
 | `.codex-plugin/plugin.json` | Codex | plugin manifest |
-| `adapters/gemini/README.md` | Gemini | 兼容分析 |
-| `adapters/opencode/` | opencode | ⬜ 未实现（FIX-071） |
+| `adapters/gemini/adapter-manifest.json` | Gemini | adapter 标准字段声明 + runtime E2E 元数据 |
+| `adapters/gemini/launch.py` | Gemini | 加载顺序验证 |
+| `adapters/gemini/README.md` | Gemini | 平台特定说明 |
+| `adapters/opencode/adapter-manifest.json` | opencode | unsupported 状态声明，防止误报全覆盖 |
+| `adapters/opencode/launch.py` | opencode | 加载顺序验证 |
+| `adapters/opencode/README.md` | opencode | 平台特定说明 |
 | `.agents/plugins/marketplace.json` | 国内 Agent CLI | 兼容分析 |
 
 ## 需求拆解
@@ -495,6 +499,8 @@ adapters/                         ← 适配层（平台投影）
     launch.py
     README.md
   gemini/
+    adapter-manifest.json
+    launch.py
     README.md
   opencode/
     adapter-manifest.json

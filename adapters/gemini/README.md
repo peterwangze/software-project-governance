@@ -1,10 +1,18 @@
 # Gemini Adapter
 
-本文件作为 `OPS-001` 的正式输出，用于定义 `software-project-governance` workflow 在 Gemini 与后续国内 agent CLI 场景下的兼容路线、接入顺序与边界约束。
+本目录定义 `software-project-governance` workflow 在 Gemini CLI 场景下的最薄投影、运行时验证状态与边界约束。
 
 ## 当前定位
 
-当前阶段仍不直接实现完整 Gemini 适配，而是先形成一份可执行的兼容路线，确保后续扩展继续遵守 `PLAN-003` 的三层结构：
+当前阶段不复制第二套 workflow 规则，而是提供一组可复跑 adapter 资产：
+
+- `adapters/gemini/adapter-manifest.json`：声明 Gemini CLI 如何消费同一套 workflow 本体。
+- `adapters/gemini/launch.py`：输出 read order、native entry、runtime E2E 和 validation 命令。
+- `check-agent-adapters --runtime`：在真实 Gemini CLI 环境中验证 `gemini --version` 可执行。
+
+本机 2026-05-19 验证结果：`gemini --version` 返回 `0.35.3`。该结果只证明 Gemini CLI runtime 存在和 adapter contract 可被验证，不代表 Gemini 已拥有独立 plugin marketplace 分发。
+
+后续扩展必须继续遵守 `PLAN-003` 的三层结构：
 
 - 运行时本体层在 `skills/software-project-governance/`，设计时资产在 `project/workflows/software-project-governance/`
 - Gemini / 国内 agent CLI 只提供最薄投影层
@@ -47,8 +55,8 @@ Gemini 兼容路线按以下顺序推进：
    - 优先验证 MCP / custom commands / headless runner 的组合。
 2. 最薄项目投影
    - 如需要项目内显式绑定，仅保留 `GEMINI.md` 这类上下文指针，并指向 workflow 本体。
-3. 探索性样例
-   - `adapters/gemini/README.md` 继续作为对齐边界、记录约束和调试假设的样例入口。
+3. 最薄 adapter 资产
+   - `adapter-manifest.json` + `launch.py` 只声明如何消费已有 workflow 资产，并提供可复跑验证入口。
 4. 延后重实现
    - 在没有更多官方稳定能力依据前，不新增 repo-local Gemini 专有目录结构。
 
@@ -78,10 +86,11 @@ Gemini 兼容路线按以下顺序推进：
 
 ## 建议的最小验证顺序
 
-1. 先定义一个 Gemini 可调用的 external runner / command 验证样例，确认读取顺序与校验动作能否稳定表达。
-2. 再评估 MCP 是否适合承载结构化 Gate 检查、样例回写和验证能力。
-3. 如需项目级显式绑定，再补最薄 `GEMINI.md` 投影样例。
-4. 国内 agent CLI 后续沿相同顺序评估，不单独发明第二套产品形态。
+1. 运行 `python adapters/gemini/launch.py`，确认 adapter manifest 可被消费。
+2. 运行 `python skills/software-project-governance/infra/verify_workflow.py check-agent-adapters --runtime`，确认 Gemini CLI runtime 可被真实调用。
+3. 再评估 MCP 是否适合承载结构化 Gate 检查、样例回写和验证能力。
+4. 如需项目级显式绑定，再补最薄 `GEMINI.md` 投影样例。
+5. 国内 agent CLI 后续沿相同顺序评估，不单独发明第二套产品形态。
 
 ## 当前不做
 
@@ -91,6 +100,6 @@ Gemini 兼容路线按以下顺序推进：
 
 ## TODO
 
-- 为 Gemini 设计第一个最小可运行的 external runner / command 验证样例。
+- 在 FIX-074 中把 Gemini 从 `--version` runtime probe 推进到真实目标项目 cwd 的治理任务 E2E。
 - 在 `MAINT-003` 中把国内 agent CLI 的差异收敛成更细的兼容约束说明。
 - 待官方 extension 机制进一步稳定后，再判断是否值得新增产品化分发层。

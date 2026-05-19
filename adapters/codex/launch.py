@@ -10,6 +10,7 @@ def main():
     print("== Codex Adapter Launcher ==")
     print(f"workflow: {manifest['workflow_id']}")
     print(f"entry_type: {manifest['entry_type']}")
+    print(f"support_status: {manifest['support_status']}")
     print("trigger:")
     for item in manifest["trigger"]:
         print(f" - {item}")
@@ -22,6 +23,19 @@ def main():
     print("gate_behavior:")
     print(f" - on_fail: {manifest['gate_behavior']['on_fail']}")
     print(f" - required_action: {manifest['gate_behavior']['required_action']}")
+    print("native_entry:")
+    native_entry = manifest.get("native_entry")
+    if not isinstance(native_entry, dict) or not native_entry:
+        raise ValueError("adapter manifest must define a non-empty native_entry object")
+    for key in sorted(native_entry):
+        print(f" - {key}: {native_entry[key]}")
+    print("runtime_e2e:")
+    runtime_e2e = manifest.get("runtime_e2e")
+    if not isinstance(runtime_e2e, dict) or not runtime_e2e:
+        raise ValueError("adapter manifest must define a non-empty runtime_e2e object")
+    print(f" - e2e_level: {runtime_e2e['e2e_level']}")
+    print(f" - command: {runtime_e2e['command']}")
+    print(f" - version_command: {runtime_e2e['version_command']}")
     print("validation:")
     print(f" - command: {manifest['validation']['command']}")
 

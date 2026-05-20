@@ -19,6 +19,7 @@
 | TOOL-011 | 清理工具 | script | `infra/cleanup.py` | 插件升级后清理过期文件，或做 cleanup dry-run 时 | 维护 | 是 |
 | TOOL-012 | Git hooks 防护网 | hook | `infra/hooks/` | commit 前后执行治理门禁、证据检查、锁清理时 | 全部阶段 | 否（由 Git 自动触发） |
 | TOOL-013 | 交叉引用检查 | script | `infra/verify_workflow.py check-cross-references` | 路径迁移、文档/skill/agent 引用变更后 | 架构/维护 | 是 |
+| TOOL-014 | 真实 agent runtime E2E harness | script | `infra/verify_workflow.py agent-runtime-e2e` | Claude/Codex/Gemini/opencode 真实运行环境入口验证时 | 测试/发布/维护 | 是 |
 
 ## 工具详情
 
@@ -153,6 +154,18 @@
 - **依赖**：无外部依赖
 - **被以下子工作流使用**：架构设计（architecture）、维护（maintenance）
 
+### TOOL-014：真实 agent runtime E2E harness
+
+- **文件**：`infra/verify_workflow.py`
+- **子命令**：`agent-runtime-e2e [--target PATH] [--timeout SECONDS] [--agent claude|codex|gemini|opencode]`
+- **输入**：`project/e2e-test-project` 或指定 target cwd；本机 PATH 中的 Claude/Codex/Gemini/opencode CLI
+- **输出**：每个平台的 `PASS` / `BLOCKED` / `FAIL` 状态、执行命令、cwd、blocked_reason 和截断日志摘要
+- **触发条件**：主流 agent 适配状态刷新、发布前真实 runtime 验证、外部环境诊断
+- **依赖**：`project/e2e-test-project` 四平台 native entry fixture；对应 agent CLI 与本机认证/模型配置
+- **PASS schema**：真实 agent 输出必须包含 `E2E_PLATFORM=<platform>; E2E_AGENT=<workflow role>; E2E_STAGE=<current stage>; E2E_MODE=<trigger x permission>`；platform 必须匹配当前 CLI，workflow role/stage 不得为占位，mode 必须是合法触发模式 × 权限模式
+- **判定口径**：`BLOCKED` 表示环境或 agent runtime 配置阻塞，不等于 harness 失败；`FAIL` 表示未分类失败或结构化 PASS schema 不完整，需要修复 harness 或入口适配
+- **被以下子工作流使用**：测试（testing）、版本发布（release）、维护（maintenance）
+
 ## 工具与子工作流的关系矩阵
 
 | 工具 | 立项 | 调研 | 选型 | 环境 | 架构 | 开发 | 测试 | CI/CD | 发布 | 运营 | 维护 |
@@ -169,6 +182,7 @@
 | 清理工具 | | | | | | | | | | | ● |
 | Git hooks | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● |
 | 交叉引用检查 | | | | | ● | | | | | | ● |
+| 真实 agent runtime E2E | | | | | ○ | | ● | | ● | | ● |
 
 > ● 主要使用者  ○ 可选用
 

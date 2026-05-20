@@ -13,6 +13,7 @@ Run:
 import json
 import io
 import os
+import argparse
 import subprocess
 import sys
 import tempfile
@@ -1311,6 +1312,283 @@ class E2ECommandMatrixTests(unittest.TestCase):
         self.assertIn("AGENTS.md Codex/opencode native entry fixture", labels)
         self.assertIn("GEMINI.md native entry fixture", labels)
         self.assertIn("target workflow skill version", labels)
+
+
+class AgentRuntimeE2EHarnessTests(unittest.TestCase):
+    """FIX-076: real agent runtime E2E harness command matrix and schema."""
+
+    def test_agent_runtime_e2e_matrix_contains_four_platforms(self):
+        with tempfile.TemporaryDirectory() as td:
+            matrix = vw._agent_runtime_e2e_command_matrix(Path(td))
+
+        agents = {entry["agent"] for entry in matrix}
+        self.assertEqual(agents, {"claude", "codex", "gemini", "opencode"})
+        for entry in matrix:
+            self.assertIn("command", entry)
+            self.assertIn("validator", entry)
+            self.assertEqual(entry["cwd"], Path(td))
+
+    def test_agent_runtime_passed_validator_requires_complete_structured_response(self):
+        result = subprocess.CompletedProcess(
+            ["claude"],
+            0,
+            stdout="E2E_PLATFORM=claude; E2E_AGENT=coordinator; E2E_STAGE=维护; E2E_MODE=always-on x default-confirm\n",
+            stderr="",
+        )
+
+        ok, message = vw._validate_agent_runtime_e2e_passed("claude", result)
+
+        self.assertTrue(ok)
+        self.assertIn("E2E_PLATFORM=claude", message)
+        self.assertIn("E2E_AGENT=coordinator", message)
+        self.assertIn("E2E_STAGE=维护", message)
+        self.assertIn("E2E_MODE=always-on x default-confirm", message)
+
+    def test_agent_runtime_passed_validator_rejects_agent_as_legacy_platform_field(self):
+        result = subprocess.CompletedProcess(
+            ["claude"],
+            0,
+            stdout="E2E_AGENT=claude; E2E_STAGE=维护; E2E_MODE=always-on x default-confirm\n",
+            stderr="",
+        )
+
+        ok, message = vw._validate_agent_runtime_e2e_passed("claude", result)
+
+        self.assertFalse(ok)
+        self.assertIn("platform=claude", message)
+
+    def test_agent_runtime_passed_validator_accepts_fields_in_any_order(self):
+        result = subprocess.CompletedProcess(
+            ["claude"],
+            0,
+            stdout="E2E_AGENT=coordinator; E2E_PLATFORM=claude; E2E_MODE=silent-track x maximum-autonomy; E2E_STAGE=维护\n",
+            stderr="",
+        )
+
+        ok, message = vw._validate_agent_runtime_e2e_passed("claude", result)
+
+        self.assertTrue(ok)
+        self.assertIn("E2E_PLATFORM=claude", message)
+        self.assertIn("E2E_AGENT=coordinator", message)
+
+    def test_agent_runtime_passed_validator_accepts_opencode_json_text_event(self):
+        result = subprocess.CompletedProcess(
+            ["opencode"],
+            0,
+            stdout=(
+                '{"type":"text","part":{"text":"E2E_PLATFORM=opencode; '
+                'E2E_AGENT=Coordinator; E2E_STAGE=立项与目标定义; '
+                'E2E_MODE=always-on x default-confirm","time":123}}\n'
+            ),
+            stderr="",
+        )
+
+        ok, message = vw._validate_agent_runtime_e2e_passed("opencode", result)
+
+        self.assertTrue(ok)
+        self.assertIn("E2E_PLATFORM=opencode", message)
+        self.assertIn("E2E_AGENT=Coordinator", message)
+        self.assertIn("E2E_STAGE=立项与目标定义", message)
+        self.assertIn("E2E_MODE=always-on x default-confirm", message)
+        self.assertNotIn('","time"', message)
+
+    def test_agent_runtime_passed_validator_rejects_invalid_mode_values(self):
+        result = subprocess.CompletedProcess(
+            ["claude"],
+            0,
+            stdout="E2E_PLATFORM=claude; E2E_AGENT=coordinator; E2E_STAGE=维护; E2E_MODE=manual x default-confirm\n",
+            stderr="",
+        )
+
+        ok, message = vw._validate_agent_runtime_e2e_passed("claude", result)
+
+        self.assertFalse(ok)
+        self.assertIn("complete non-placeholder", message)
+
+    def test_agent_runtime_passed_validator_rejects_prompt_echo(self):
+        prompt_echo = vw._agent_runtime_e2e_prompt("codex")
+        result = subprocess.CompletedProcess(
+            ["codex"],
+            0,
+            stdout=prompt_echo,
+            stderr="",
+        )
+
+        ok, message = vw._validate_agent_runtime_e2e_passed("codex", result)
+
+        self.assertFalse(ok)
+        self.assertIn("non-placeholder", message)
+
+    def test_agent_runtime_passed_validator_rejects_agent_only_marker(self):
+        result = subprocess.CompletedProcess(
+            ["claude"],
+            0,
+            stdout="E2E_PLATFORM=claude; E2E_AGENT=coordinator\n",
+            stderr="",
+        )
+
+        ok, message = vw._validate_agent_runtime_e2e_passed("claude", result)
+
+        self.assertFalse(ok)
+        self.assertIn("complete non-placeholder", message)
+
+    def test_agent_runtime_e2e_classifies_gemini_auth_missing_as_blocked(self):
+        entry = next(
+            item for item in vw._agent_runtime_e2e_command_matrix(Path("."))
+            if item["agent"] == "gemini"
+        )
+        completed = subprocess.CompletedProcess(
+            entry["command"],
+            1,
+            stdout="",
+            stderr="GEMINI_API_KEY is not configured; please authenticate with Vertex or GCA",
+        )
+
+        result = vw._evaluate_agent_runtime_e2e_command(
+            entry,
+            runner=lambda command, timeout=120, cwd=None: completed,
+        )
+
+        self.assertEqual(result["status"], "BLOCKED")
+        self.assertIn("Gemini auth missing", result["blocked_reason"])
+
+    def test_agent_runtime_e2e_classifies_opencode_invalid_deepseek_model_as_blocked(self):
+        entry = next(
+            item for item in vw._agent_runtime_e2e_command_matrix(Path("."))
+            if item["agent"] == "opencode"
+        )
+        completed = subprocess.CompletedProcess(
+            entry["command"],
+            1,
+            stdout='{"error":"model deepseek-v4-pro[1m] is not supported"}',
+            stderr="DeepSeek 400 invalid model",
+        )
+
+        result = vw._evaluate_agent_runtime_e2e_command(
+            entry,
+            runner=lambda command, timeout=120, cwd=None: completed,
+        )
+
+        self.assertEqual(result["status"], "BLOCKED")
+        self.assertIn("opencode provider/model config invalid", result["blocked_reason"])
+
+    def test_agent_runtime_e2e_classifies_codex_timeout_as_blocked(self):
+        entry = next(
+            item for item in vw._agent_runtime_e2e_command_matrix(Path("."))
+            if item["agent"] == "codex"
+        )
+
+        def timeout_runner(command, timeout=120, cwd=None):
+            raise subprocess.TimeoutExpired(command, timeout, output="", stderr="timed out")
+
+        result = vw._evaluate_agent_runtime_e2e_command(
+            entry,
+            timeout=3,
+            runner=timeout_runner,
+        )
+
+        self.assertEqual(result["status"], "BLOCKED")
+        self.assertIn("timed out", result["blocked_reason"])
+
+    def test_agent_runtime_e2e_classifies_permission_error_as_blocked(self):
+        entry = next(
+            item for item in vw._agent_runtime_e2e_command_matrix(Path("."))
+            if item["agent"] == "codex"
+        )
+
+        def permission_runner(command, timeout=120, cwd=None):
+            raise PermissionError("access denied")
+
+        result = vw._evaluate_agent_runtime_e2e_command(
+            entry,
+            runner=permission_runner,
+        )
+
+        self.assertEqual(result["status"], "BLOCKED")
+        self.assertIn("permission/path resolution", result["blocked_reason"])
+
+    def test_agent_runtime_command_resolves_path_shims(self):
+        with patch.object(vw.shutil, "which", return_value=r"C:\tools\gemini.cmd"):
+            command = vw._resolve_agent_runtime_command(["gemini", "--version"])
+
+        self.assertEqual(command, [r"C:\tools\gemini.cmd", "--version"])
+
+    def test_agent_runtime_subprocess_timeout_calls_process_tree_cleanup(self):
+        class FakeProcess:
+            pid = 4242
+            returncode = None
+
+            def __init__(self):
+                self.calls = 0
+
+            def communicate(self, timeout=None):
+                self.calls += 1
+                if self.calls == 1:
+                    raise subprocess.TimeoutExpired(["codex"], timeout)
+                return "partial stdout", "partial stderr"
+
+        fake_process = FakeProcess()
+        with patch.object(vw, "_resolve_agent_runtime_command", side_effect=lambda command: command), patch.object(
+            vw.subprocess,
+            "Popen",
+            return_value=fake_process,
+        ), patch.object(vw, "_cleanup_agent_runtime_process_tree") as cleanup:
+            with self.assertRaises(subprocess.TimeoutExpired) as cm:
+                vw._run_agent_runtime_e2e_subprocess(["codex"], timeout=1, cwd=Path("."))
+
+        cleanup.assert_called_once_with(fake_process)
+        self.assertEqual(cm.exception.output, "partial stdout")
+        self.assertEqual(cm.exception.stderr, "partial stderr")
+
+    def test_agent_runtime_e2e_cli_summary_counts(self):
+        with tempfile.TemporaryDirectory() as td:
+            target = Path(td)
+            fake_results = [
+                {
+                    "agent": "claude",
+                    "label": "Claude",
+                    "status": "PASS",
+                    "exit_code": 0,
+                    "command": ["claude"],
+                    "cwd": target,
+                    "message": "ok",
+                    "blocked_reason": None,
+                    "log_summary": "E2E_PLATFORM=claude; E2E_AGENT=coordinator",
+                },
+                {
+                    "agent": "gemini",
+                    "label": "Gemini",
+                    "status": "BLOCKED",
+                    "exit_code": 1,
+                    "command": ["gemini"],
+                    "cwd": target,
+                    "message": "Gemini auth missing or not configured",
+                    "blocked_reason": "Gemini auth missing or not configured",
+                    "log_summary": "GEMINI_API_KEY missing",
+                },
+            ]
+            args = argparse.Namespace(
+                target=str(target),
+                timeout=9,
+                agent=None,
+            )
+            with patch.object(vw, "_agent_runtime_e2e_command_matrix", return_value=[
+                {"agent": "claude", "label": "Claude"},
+                {"agent": "gemini", "label": "Gemini"},
+            ]), patch.object(
+                vw,
+                "_evaluate_agent_runtime_e2e_command",
+                side_effect=fake_results,
+            ):
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    vw.cmd_agent_runtime_e2e(args)
+
+        text = output.getvalue()
+        self.assertIn("Agent Runtime E2E Harness", text)
+        self.assertIn("[PASS] claude", text)
+        self.assertIn("[BLOCKED] gemini", text)
+        self.assertIn("pass=1, blocked=1, fail=0, total=2", text)
 
 
 class GovernanceStatusContractTests(unittest.TestCase):

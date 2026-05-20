@@ -4,6 +4,8 @@ import re
 import argparse
 import json
 import locale
+import os
+import signal
 import subprocess
 import importlib.util
 import shutil
@@ -7852,6 +7854,93 @@ def _e2e_contract_checks():
     ]
 
 
+AGENT_RUNTIME_E2E_PLATFORMS = ("claude", "codex", "gemini", "opencode")
+
+
+def _agent_runtime_e2e_prompt(agent_id):
+    return (
+        "Read the local governance bootstrap and answer with exactly these "
+        f"machine-readable fields if the workflow is loaded: E2E_PLATFORM={agent_id}; "
+        "E2E_AGENT=<workflow role>; E2E_STAGE=<current stage>; "
+        "E2E_MODE=<trigger x permission>. "
+        "Do not modify files."
+    )
+
+
+def _agent_runtime_e2e_command_matrix(e2e_dir=None):
+    """Return real agent runtime E2E commands for mainstream code agents."""
+    e2e_dir = e2e_dir or ROOT / "project/e2e-test-project"
+    prompts = {
+        agent_id: _agent_runtime_e2e_prompt(agent_id)
+        for agent_id in AGENT_RUNTIME_E2E_PLATFORMS
+    }
+    return [
+        {
+            "agent": "claude",
+            "label": "Claude real agent target cwd",
+            "cwd": e2e_dir,
+            "command": [
+                "claude",
+                "-p",
+                prompts["claude"],
+                "--permission-mode",
+                "default",
+                "--allowedTools",
+                "Read",
+                "--output-format",
+                "text",
+            ],
+            "validator": _validate_agent_runtime_e2e_passed,
+        },
+        {
+            "agent": "codex",
+            "label": "Codex CLI headless target cwd",
+            "cwd": e2e_dir,
+            "command": [
+                "codex",
+                "exec",
+                "-C",
+                ".",
+                "-s",
+                "read-only",
+                "--ephemeral",
+                prompts["codex"],
+            ],
+            "validator": _validate_agent_runtime_e2e_passed,
+        },
+        {
+            "agent": "gemini",
+            "label": "Gemini CLI target cwd",
+            "cwd": e2e_dir,
+            "command": [
+                "gemini",
+                "--prompt",
+                prompts["gemini"],
+                "--approval-mode",
+                "plan",
+                "--output-format",
+                "text",
+            ],
+            "validator": _validate_agent_runtime_e2e_passed,
+        },
+        {
+            "agent": "opencode",
+            "label": "opencode CLI target cwd",
+            "cwd": e2e_dir,
+            "command": [
+                "opencode",
+                "run",
+                "--dir",
+                ".",
+                "--format",
+                "json",
+                prompts["opencode"],
+            ],
+            "validator": _validate_agent_runtime_e2e_passed,
+        },
+    ]
+
+
 def _run_e2e_subprocess(command, timeout=30, cwd=None):
     """Run a matrix command and return subprocess.CompletedProcess."""
     return subprocess.run(
@@ -7867,6 +7956,21 @@ def _run_e2e_subprocess(command, timeout=30, cwd=None):
 
 def _e2e_output(result):
     return (result.stdout or "") + "\n" + (result.stderr or "")
+
+
+def _truncate_log(text, limit=1200):
+    text = re.sub(r"\s+", " ", (text or "")).strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "...[truncated]"
+
+
+def _coerce_e2e_text(value):
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode(locale.getpreferredencoding(False), errors="replace")
+    return str(value)
 
 
 def _has_all(text, needles):
@@ -8097,6 +8201,362 @@ def _evaluate_e2e_contract_check(entry):
         "ok": ok,
         "message": f"{suffix}; {entry['reason']}",
     }
+
+
+def _validate_agent_runtime_e2e_passed(agent_id, result):
+    output = _e2e_output(result)
+    if result.returncode != 0:
+        return False, f"real agent exited with code {result.returncode}"
+
+    fields = _parse_agent_runtime_e2e_fields(output)
+    if not fields:
+        return False, "real agent output missing structured E2E_PLATFORM/E2E_AGENT/E2E_STAGE/E2E_MODE response"
+    for response in fields:
+        platform = response.get("E2E_PLATFORM", "")
+        workflow_agent = response.get("E2E_AGENT", "")
+        stage = response.get("E2E_STAGE", "")
+        mode = response.get("E2E_MODE", "")
+        if (
+            platform == agent_id
+            and _is_valid_agent_runtime_workflow_agent(workflow_agent)
+            and _is_non_placeholder_agent_runtime_value(stage)
+            and _is_valid_agent_runtime_mode(mode)
+        ):
+            return True, (
+                f"real agent output includes structured response: "
+                f"E2E_PLATFORM={platform}; E2E_AGENT={workflow_agent}; "
+                f"E2E_STAGE={stage}; E2E_MODE={mode}"
+            )
+    return False, (
+        "real agent output did not include a complete non-placeholder "
+        f"E2E response with platform={agent_id}"
+    )
+
+
+def _agent_runtime_e2e_candidate_texts(output):
+    """Return text payloads from agent output while preserving plain text logs."""
+    candidates = []
+    for line in (output or "").splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            event = json.loads(stripped)
+        except json.JSONDecodeError:
+            candidates.append(line)
+            continue
+        if not isinstance(event, dict):
+            candidates.append(line)
+            continue
+        extracted = False
+        part = event.get("part")
+        if isinstance(part, dict) and isinstance(part.get("text"), str):
+            candidates.append(part["text"])
+            extracted = True
+        if isinstance(event.get("text"), str):
+            candidates.append(event["text"])
+            extracted = True
+        if not extracted:
+            candidates.append(line)
+    return candidates or [output or ""]
+
+
+def _parse_agent_runtime_e2e_fields(output):
+    """Extract E2E field groups from semicolon/newline-delimited agent output."""
+    groups = []
+    current = {}
+    for candidate in _agent_runtime_e2e_candidate_texts(output):
+        for match in re.finditer(r"\b(E2E_PLATFORM|E2E_AGENT|E2E_STAGE|E2E_MODE)\s*=\s*([^;\r\n]+)", candidate or ""):
+            key, value = match.group(1), match.group(2).strip()
+            if key == "E2E_PLATFORM" and "E2E_PLATFORM" in current:
+                groups.append(current)
+                current = {}
+            current[key] = value
+            if {"E2E_PLATFORM", "E2E_AGENT", "E2E_STAGE", "E2E_MODE"}.issubset(current):
+                groups.append(current)
+                current = {}
+    if current:
+        groups.append(current)
+    return groups
+
+
+def _is_non_placeholder_agent_runtime_value(value):
+    value = (value or "").strip()
+    lowered = value.lower()
+    if not value:
+        return False
+    if value.startswith("<") and value.endswith(">"):
+        return False
+    placeholder_markers = ("placeholder", "current stage", "trigger x permission")
+    return not any(marker in lowered for marker in placeholder_markers)
+
+
+def _is_valid_agent_runtime_workflow_agent(value):
+    if not _is_non_placeholder_agent_runtime_value(value):
+        return False
+    return value.strip().lower() not in AGENT_RUNTIME_E2E_PLATFORMS
+
+
+def _is_valid_agent_runtime_mode(value):
+    if not _is_non_placeholder_agent_runtime_value(value):
+        return False
+    parts = [part.strip() for part in value.split(" x ")]
+    if len(parts) != 2 or not all(_is_non_placeholder_agent_runtime_value(part) for part in parts):
+        return False
+    trigger_mode, permission_mode = parts
+    return (
+        trigger_mode in {"always-on", "on-demand", "silent-track"}
+        and permission_mode in {"maximum-autonomy", "default-confirm"}
+    )
+
+
+def _classify_agent_runtime_blocked(agent_id, output="", exception=None):
+    """Return blocked_reason for known environment/runtime blockers."""
+    lowered = (output or "").lower()
+    if isinstance(exception, FileNotFoundError):
+        return f"{agent_id} runtime command not found on PATH"
+    if isinstance(exception, PermissionError):
+        return f"{agent_id} runtime command could not start due to OS permission/path resolution"
+    if agent_id == "codex" and isinstance(exception, subprocess.TimeoutExpired):
+        return "Codex CLI target-cwd command timed out"
+    if agent_id == "codex" and "timed out" in lowered:
+        return "Codex CLI target-cwd command timed out"
+    if agent_id == "gemini":
+        auth_markers = [
+            "gemini_api_key",
+            "api key",
+            "auth",
+            "authenticate",
+            "authentication",
+            "credential",
+            "login",
+            "vertex",
+            "gca",
+        ]
+        if any(marker in lowered for marker in auth_markers):
+            return "Gemini auth missing or not configured"
+    if agent_id == "opencode":
+        invalid_model_markers = [
+            "deepseek-v4-pro[1m]",
+            "invalid model",
+            "model not",
+            "unsupported model",
+            "not supported",
+        ]
+        if any(marker in lowered for marker in invalid_model_markers):
+            return "opencode provider/model config invalid"
+    return None
+
+
+def _resolve_agent_runtime_command(command):
+    """Resolve PATH/PATHEXT shims before Popen, especially npm .cmd shims on Windows."""
+    if not command:
+        return command
+    resolved = shutil.which(command[0])
+    if not resolved:
+        return command
+    return [resolved, *command[1:]]
+
+
+def _run_agent_runtime_e2e_subprocess(command, timeout=120, cwd=None):
+    command = _resolve_agent_runtime_command(command)
+    popen_kwargs = {}
+    if os.name != "nt":
+        popen_kwargs["start_new_session"] = True
+    process = subprocess.Popen(
+        command,
+        cwd=str(cwd or ROOT),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding=locale.getpreferredencoding(False),
+        errors="replace",
+        **popen_kwargs,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        _cleanup_agent_runtime_process_tree(process)
+        stdout, stderr = process.communicate()
+        raise subprocess.TimeoutExpired(
+            exc.cmd,
+            exc.timeout,
+            output=stdout,
+            stderr=stderr,
+        ) from exc
+    return subprocess.CompletedProcess(
+        command,
+        process.returncode,
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+
+def _cleanup_agent_runtime_process_tree(process):
+    """Best-effort cleanup for agent runtime shims and their child process trees."""
+    pid = getattr(process, "pid", None)
+    if not pid:
+        return
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=10,
+            )
+            return
+        except (subprocess.SubprocessError, OSError):
+            pass
+    else:
+        try:
+            os.killpg(pid, signal.SIGKILL)
+            return
+        except (OSError, ProcessLookupError):
+            pass
+    try:
+        process.kill()
+    except OSError:
+        pass
+
+
+def _evaluate_agent_runtime_e2e_command(
+    entry,
+    timeout=120,
+    runner=_run_agent_runtime_e2e_subprocess,
+):
+    """Execute one real agent runtime command and normalize pass/blocked/fail."""
+    agent_id = entry["agent"]
+    command = entry["command"]
+    cwd = entry.get("cwd")
+    try:
+        try:
+            result = runner(command, timeout=timeout, cwd=cwd)
+        except TypeError:
+            result = runner(command)
+    except subprocess.TimeoutExpired as exc:
+        output = _coerce_e2e_text(exc.stdout) + "\n" + _coerce_e2e_text(exc.stderr)
+        blocked_reason = _classify_agent_runtime_blocked(agent_id, output, exc)
+        status = "BLOCKED" if blocked_reason else "FAIL"
+        return {
+            "agent": agent_id,
+            "label": entry["label"],
+            "status": status,
+            "exit_code": None,
+            "command": command,
+            "cwd": cwd,
+            "message": blocked_reason or f"unclassified timeout: {exc}",
+            "blocked_reason": blocked_reason,
+            "log_summary": _truncate_log(output or str(exc)),
+        }
+    except (OSError, FileNotFoundError) as exc:
+        blocked_reason = _classify_agent_runtime_blocked(agent_id, "", exc)
+        status = "BLOCKED" if blocked_reason else "FAIL"
+        return {
+            "agent": agent_id,
+            "label": entry["label"],
+            "status": status,
+            "exit_code": None,
+            "command": command,
+            "cwd": cwd,
+            "message": blocked_reason or f"subprocess did not start: {exc}",
+            "blocked_reason": blocked_reason,
+            "log_summary": _truncate_log(str(exc)),
+        }
+
+    output = _e2e_output(result)
+    ok, message = entry["validator"](agent_id, result)
+    if ok:
+        return {
+            "agent": agent_id,
+            "label": entry["label"],
+            "status": "PASS",
+            "exit_code": result.returncode,
+            "command": command,
+            "cwd": cwd,
+            "message": message,
+            "blocked_reason": None,
+            "log_summary": _truncate_log(output),
+        }
+
+    blocked_reason = _classify_agent_runtime_blocked(agent_id, output)
+    if blocked_reason:
+        return {
+            "agent": agent_id,
+            "label": entry["label"],
+            "status": "BLOCKED",
+            "exit_code": result.returncode,
+            "command": command,
+            "cwd": cwd,
+            "message": blocked_reason,
+            "blocked_reason": blocked_reason,
+            "log_summary": _truncate_log(output),
+        }
+
+    return {
+        "agent": agent_id,
+        "label": entry["label"],
+        "status": "FAIL",
+        "exit_code": result.returncode,
+        "command": command,
+        "cwd": cwd,
+        "message": message,
+        "blocked_reason": None,
+        "log_summary": _truncate_log(output),
+    }
+
+
+def cmd_agent_runtime_e2e(args):
+    """Run real agent runtime E2E command matrix against e2e-test-project."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+    target = Path(getattr(args, "target", None) or ROOT / "project/e2e-test-project")
+    timeout = getattr(args, "timeout", 120)
+    requested_agents = set(getattr(args, "agent", None) or AGENT_RUNTIME_E2E_PLATFORMS)
+    matrix = [
+        entry for entry in _agent_runtime_e2e_command_matrix(target)
+        if entry["agent"] in requested_agents
+    ]
+    if not target.exists():
+        print(f"[FAIL] target not found: {target}")
+        sys.exit(1)
+
+    results = [
+        _evaluate_agent_runtime_e2e_command(entry, timeout=timeout)
+        for entry in matrix
+    ]
+
+    print("=== Agent Runtime E2E Harness ===")
+    print(f"Target: {target}")
+    print(f"Timeout: {timeout}s")
+    print("Schema: status in PASS/BLOCKED/FAIL; BLOCKED means known environment or agent-runtime configuration blocker.\n")
+
+    for result in results:
+        command = " ".join(str(part) for part in result["command"])
+        print(f"[{result['status']}] {result['agent']}: {result['label']} (exit={result['exit_code']})")
+        print(f"  cwd: {result['cwd']}")
+        print(f"  command: {command}")
+        print(f"  message: {result['message']}")
+        if result["blocked_reason"]:
+            print(f"  blocked_reason: {result['blocked_reason']}")
+        if result["log_summary"]:
+            print(f"  log_summary: {result['log_summary']}")
+
+    pass_count = sum(1 for r in results if r["status"] == "PASS")
+    blocked_count = sum(1 for r in results if r["status"] == "BLOCKED")
+    fail_count = sum(1 for r in results if r["status"] == "FAIL")
+    print(
+        "\n=== Result: "
+        f"pass={pass_count}, blocked={blocked_count}, fail={fail_count}, total={len(results)} ==="
+    )
+    if fail_count:
+        print("ACTION: Fix unclassified harness/runtime failures above.")
+        sys.exit(1)
+    print("Agent runtime E2E harness completed; blocked entries are environment/configuration evidence, not harness failures.")
 
 
 def cmd_e2e_check(_args):
@@ -8672,6 +9132,29 @@ def main():
     # e2e-check
     subparsers.add_parser("e2e-check", help="Run E2E governance verification against e2e-test-project")
 
+    # agent-runtime-e2e
+    are_p = subparsers.add_parser(
+        "agent-runtime-e2e",
+        help="Run real agent runtime E2E harness against e2e-test-project",
+    )
+    are_p.add_argument(
+        "--target",
+        default=str(ROOT / "project/e2e-test-project"),
+        help="Target project cwd for real agent runtime E2E commands",
+    )
+    are_p.add_argument(
+        "--timeout",
+        type=int,
+        default=120,
+        help="Per-agent command timeout in seconds",
+    )
+    are_p.add_argument(
+        "--agent",
+        action="append",
+        choices=AGENT_RUNTIME_E2E_PLATFORMS,
+        help="Limit to one agent; may be repeated. Defaults to all mainstream agents.",
+    )
+
     # check-cross-references (SYSGAP-008)
     xr_p = subparsers.add_parser("check-cross-references",
                                  help="Scan .md/.py files for dangling, deprecated, and circular path references")
@@ -8748,6 +9231,7 @@ def main():
         "check-agent-adapters": cmd_check_agent_adapters,
         "check-release": cmd_check_release,
         "e2e-check": cmd_e2e_check,
+        "agent-runtime-e2e": cmd_agent_runtime_e2e,
         "check-cross-references": cmd_check_cross_references,
         "check-sequential-ids": cmd_check_sequential_ids,
         "check-structural-validity": cmd_check_structural_validity,

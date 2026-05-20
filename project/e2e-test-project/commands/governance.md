@@ -12,7 +12,7 @@
 
 ### 铁律（违反 = 流程违规）
 
-1. **不直接修改产品代码**——Write/Edit/Bash 禁止用于产品代码（判定见下方边界表），代码留给 Developer
+1. **不直接修改产品代码**——Write/Edit/Bash 禁止用于产品代码（判定见下方边界表），代码留给 Developer/Governance Developer
 2. **任务通过 Agent 工具 spawn 角色 agent 执行**——你是 Coordinator，不是 Developer
 3. **Developer 不审查自己的代码，Reviewer 不修改代码**
 4. **所有用户交互通过 AskUserQuestion**——不输出内联文字问题（"要不要""是否""Should I"等）
@@ -22,17 +22,18 @@
 
 | 类型 | 路径模式 | 操作权限 |
 |------|---------|---------|
-| **产品代码** | `skills/**` `agents/**` `commands/**` `infra/**` `.claude-plugin/**` `.codex-plugin/**` `.agents/**` | MUST spawn Agent Team |
+| **产品代码** | `skills/**` `agents/**` `commands/**` `adapters/**` `infra/**` `.claude-plugin/**` `.codex-plugin/**` `.agents/**` | MUST spawn Agent Team |
 | **治理记录** | `.governance/**` `docs/**` `project/CHANGELOG.md` `project/references/**` | Coordinator 可直接写入 |
 
 判定依据是文件路径，不是修改复杂度。改一行 Python 和改一百行 Markdown 都是产品代码。
 
-### Agent Team 路由表（核心 8 条）
+### Agent Team 路由表（核心 9 条）
 
 | 任务类型 | 执行 Agent | 后置审查 |
 |---------|-----------|---------|
 | Debug/修 Bug | Developer + Maintenance | Code Reviewer |
 | 新功能/产品代码修改 | Developer | Code Reviewer |
+| 治理基础设施/工作流本体修改 | Governance Developer | Code Reviewer 或 Design Reviewer |
 | 架构/选型/设计 | Architect | Design Reviewer |
 | 需求分析/调研 | Analyst | Requirement Reviewer |
 | 测试设计/执行 | QA | Test Reviewer |
@@ -40,7 +41,7 @@
 | CI/部署 | DevOps | — |
 | 复盘/维护 | Maintenance | Retro Reviewer（如涉及规则变更） |
 
-完整路由表（16 行）见 `skills/software-project-governance/SKILL.md`。
+完整路由表（19 行）见 `skills/software-project-governance/SKILL.md`。
 
 ### Sub-agent 调度
 
@@ -252,6 +253,16 @@
    - B. 补全 plan-tracker 缺失结构（permission_mode、版本规划、需求跟踪矩阵、变更控制含快速通道）
    - C. Hook 存活检测——缺失则提示安装命令
    - D. 更新 `工作流版本` 为当前版本
+   - E. 持续归档触发检测与执行：
+     - 运行 `python skills/software-project-governance/infra/archive.py migrate --auto --dry-run` 检测四类触发器：
+       1. 首次迁移：`.governance/archive/index.md` 不存在 AND `plan-tracker.md` > 80 KB AND 已发布版本 ≥ 2
+       2. 发布强制：出现新的已发布版本后，除最新已发布版本外仍有未归档历史 task
+       3. task 增量：热文件中可归档 completed task 达到阈值
+       4. 90 天兜底：长期未归档但仍有可归档历史数据
+     - dry-run 报告需要归档 → 运行 `python skills/software-project-governance/infra/archive.py migrate --auto`，再运行 `python skills/software-project-governance/infra/verify_workflow.py check-archive-integrity`
+     - 归档成功 → 输出归档迁移摘要（格式: 📦 治理数据归档完成: 归档{N}个task→..., plan-tracker: {old}KB→{new}KB(-{pct}%)）
+     - 归档完整性失败 → 记录到 risk-log；发布/版本 bump 收尾场景 MUST 阻断完成
+     - 无可归档数据 → 跳过归档（不修改文件）
 4. 输出升级摘要面板
 
 **输出**：升级摘要（版本跨度 + 新增功能 + 已自动升级 + 需手动操作）

@@ -7770,6 +7770,27 @@ def _e2e_target_fixture_checks(e2e_dir):
             "needles": ["Governance Bootstrap", "SELF-CHECK", "AskUserQuestion"],
         },
         {
+            "label": "AGENTS.md Codex/opencode native entry fixture",
+            "path": e2e_dir / "AGENTS.md",
+            "needles": [
+                "Governance Bootstrap",
+                "SELF-CHECK",
+                "Codex",
+                "opencode",
+                "skills/software-project-governance/SKILL.md",
+            ],
+        },
+        {
+            "label": "GEMINI.md native entry fixture",
+            "path": e2e_dir / "GEMINI.md",
+            "needles": [
+                "Governance Bootstrap",
+                "SELF-CHECK",
+                "Gemini",
+                "skills/software-project-governance/SKILL.md",
+            ],
+        },
+        {
             "label": "tracked governance files",
             "paths": [
                 governance_dir / "plan-tracker.md",
@@ -7782,7 +7803,12 @@ def _e2e_target_fixture_checks(e2e_dir):
         {
             "label": "target plan-tracker project config",
             "path": governance_dir / "plan-tracker.md",
-            "needles": ["工作流版本", "操作权限模式", "default-confirm"],
+            "needles": ["工作流版本", "0.35.0", "操作权限模式", "default-confirm"],
+        },
+        {
+            "label": "target workflow skill version",
+            "path": e2e_dir / "skills" / "software-project-governance" / "SKILL.md",
+            "needles": ["version: 0.35.0", "Coordinator", "Agent Team"],
         },
         {
             "label": "target /governance route contract",

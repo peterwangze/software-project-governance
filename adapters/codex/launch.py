@@ -36,6 +36,14 @@ def main():
     print(f" - e2e_level: {runtime_e2e['e2e_level']}")
     print(f" - command: {runtime_e2e['command']}")
     print(f" - version_command: {runtime_e2e['version_command']}")
+    for key in ("target_cwd_e2e", "agent_runtime_e2e"):
+        block = runtime_e2e.get(key, {})
+        print(f" - {key}.status: {block.get('status')}")
+        if block.get("command"):
+            print(f" - {key}.command: {block['command']}")
+        if block.get("blocked_reason"):
+            print(f" - {key}.blocked_reason: {block['blocked_reason']}")
+    print(f" - full_e2e_verified: {runtime_e2e.get('full_e2e_verified')}")
     print("validation:")
     print(f" - command: {manifest['validation']['command']}")
 

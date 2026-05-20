@@ -29,7 +29,7 @@ Codex 加载 `skills/software-project-governance/SKILL.md` 作为自包含入口
 - `.agents/plugins/marketplace.json`：Codex/agent marketplace 索引。
 - `adapters/codex/adapter-manifest.json` + `launch.py`：可复跑的 adapter contract 和 runtime E2E 元数据。
 
-2026-05-19 本机验证结果：`codex --version` 返回 `codex-cli 0.125.0`，当前 Codex 会话已使用 `AGENTS.md` governance bootstrap 辅助本项目自身迭代。
+2026-05-20 本机验证结果：`codex --version` 返回 `codex-cli 0.125.0`，当前 Codex App 会话已使用 `AGENTS.md` governance bootstrap 辅助本项目自身迭代，并完成 FIX-072/FIX-073 的治理闭环、审查、门禁、提交和推送。单独的 `codex exec` 非交互命令在当前主机超时，因此 CLI headless E2E 仍作为阻塞信号记录，不覆盖 Codex App 真实会话证据。
 
 ## 历史入口约定（已废弃，仅供参考）
 

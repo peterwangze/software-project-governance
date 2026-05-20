@@ -1,8 +1,8 @@
 {
   "adapter_id": "opencode",
   "workflow_id": "software-project-governance",
-  "entry_type": "unsupported-projection",
-  "support_status": "not-supported-current-release",
+  "entry_type": "thin-projection",
+  "support_status": "runtime-verified",
   "supported_runtime": ["opencode"],
   "trigger": [
     "When evaluating future opencode support",
@@ -32,14 +32,26 @@
     "project_instruction_file": "AGENTS.md",
     "projection_rule": "Use only as a pointer to skills/software-project-governance/SKILL.md; do not duplicate workflow rules."
   },
-  "unsupported_reason": "opencode command is not available in the current validation host; no real runtime E2E has passed.",
   "no_full_coverage_claim": true,
   "runtime_e2e": {
-    "e2e_level": "unsupported",
+    "e2e_level": "real-agent-target-cwd",
     "command": "opencode",
     "version_command": "opencode --version",
-    "verified_on": null,
-    "evidence": "Not verified. This adapter is explicitly unsupported until a real opencode runtime E2E passes."
+    "verified_on": "2026-05-20",
+    "evidence": "Local opencode command returned version 1.15.5.",
+    "target_cwd_e2e": {
+      "status": "passed",
+      "command": "python skills/software-project-governance/infra/verify_workflow.py status",
+      "verified_on": "2026-05-20",
+      "evidence": "Executed from project/e2e-test-project cwd and returned Test Project status with default-confirm permission mode."
+    },
+    "agent_runtime_e2e": {
+      "status": "blocked",
+      "command": "opencode run --dir . --format json \"Read .governance/plan-tracker.md in the current working directory and answer exactly: E2E_STAGE=<current stage text>. Do not modify files.\"",
+      "blocked_reason": "opencode runtime is installed, but provider configuration sent an invalid model name to DeepSeek and returned HTTP 400 before task execution.",
+      "evidence": "Command returned APIError: supported model names are deepseek-v4-pro or deepseek-v4-flash, but configured request passed deepseek-v4-pro with a stray formatting suffix."
+    },
+    "full_e2e_verified": false
   },
   "launcher": "adapters/opencode/launch.py"
 }

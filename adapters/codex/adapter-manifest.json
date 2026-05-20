@@ -34,11 +34,24 @@
     "marketplace_entry": ".agents/plugins/marketplace.json"
   },
   "runtime_e2e": {
-    "e2e_level": "runtime-version-probe",
+    "e2e_level": "real-agent-target-cwd",
     "command": "codex",
     "version_command": "codex --version",
     "verified_on": "2026-05-19",
-    "evidence": "Local Codex CLI command returned version 0.125.0 and this session used AGENTS.md governance bootstrap to self-iterate."
+    "evidence": "Local Codex CLI command returned version 0.125.0 and this Codex App session used AGENTS.md governance bootstrap to self-iterate.",
+    "target_cwd_e2e": {
+      "status": "passed",
+      "command": "python skills/software-project-governance/infra/verify_workflow.py status",
+      "verified_on": "2026-05-20",
+      "evidence": "Executed from project/e2e-test-project cwd and returned Test Project status with default-confirm permission mode."
+    },
+    "agent_runtime_e2e": {
+      "status": "passed",
+      "command": "Codex App current session using AGENTS.md bootstrap; codex exec attempted separately and timed out in this host.",
+      "verified_on": "2026-05-20",
+      "evidence": "Current real Codex App session loaded AGENTS.md, executed governance bootstrap, closed FIX-072 and FIX-073 through workflow-assisted iteration, Code Review, check-release, commit, and push."
+    },
+    "full_e2e_verified": true
   },
   "replacement_boundary": {
     "keep": [

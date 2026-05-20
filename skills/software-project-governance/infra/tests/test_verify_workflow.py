@@ -710,6 +710,18 @@ class AgentAdapterContractTests(unittest.TestCase):
                 "version_command": f"{adapter_id} --version",
                 "verified_on": "2026-05-19",
                 "evidence": "runtime probe passed",
+                "target_cwd_e2e": {
+                    "status": "passed",
+                    "command": "python skills/software-project-governance/infra/verify_workflow.py status",
+                    "verified_on": "2026-05-20",
+                    "evidence": "target cwd status command passed",
+                },
+                "agent_runtime_e2e": {
+                    "status": "blocked",
+                    "blocked_reason": "real agent not invoked in this fixture",
+                    "evidence": "fixture documents blocked real agent E2E",
+                },
+                "full_e2e_verified": False,
             },
             "launcher": f"adapters/{adapter_id}/launch.py",
         }
@@ -719,6 +731,14 @@ class AgentAdapterContractTests(unittest.TestCase):
             manifest["runtime_e2e"]["e2e_level"] = "unsupported"
             manifest["runtime_e2e"]["verified_on"] = None
             manifest["runtime_e2e"]["evidence"] = "not verified"
+            manifest["runtime_e2e"]["target_cwd_e2e"] = {
+                "status": "unsupported",
+                "evidence": "not verified",
+            }
+            manifest["runtime_e2e"]["agent_runtime_e2e"] = {
+                "status": "unsupported",
+                "evidence": "not verified",
+            }
         if extra:
             manifest.update(extra)
         (adapter_dir / "adapter-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
@@ -763,6 +783,57 @@ class AgentAdapterContractTests(unittest.TestCase):
             self._write_adapter(root, "gemini", extra={"runtime_e2e": "bad"})
             issues = vw.check_agent_adapter_contract(root=root, run_runtime=True)
             self.assertTrue(any("runtime_e2e command/version_command required" in issue for issue in issues))
+
+    def test_agent_adapter_contract_requires_explicit_real_e2e_blocks(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_all_adapters(root)
+            self._write_adapter(
+                root,
+                "gemini",
+                extra={
+                    "runtime_e2e": {
+                        "e2e_level": "runtime-version-probe",
+                        "command": "gemini",
+                        "version_command": "gemini --version",
+                        "verified_on": "2026-05-20",
+                        "evidence": "version probe passed",
+                    }
+                },
+            )
+            issues = vw.check_agent_adapter_contract(root=root)
+            self.assertTrue(any("target_cwd_e2e must be an object" in issue for issue in issues))
+            self.assertTrue(any("agent_runtime_e2e must be an object" in issue for issue in issues))
+
+    def test_agent_adapter_contract_rejects_full_e2e_claim_without_passed_blocks(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_all_adapters(root)
+            self._write_adapter(
+                root,
+                "codex",
+                extra={"runtime_e2e": {
+                    "e2e_level": "runtime-version-probe",
+                    "command": "codex",
+                    "version_command": "codex --version",
+                    "verified_on": "2026-05-20",
+                    "evidence": "version probe passed",
+                    "target_cwd_e2e": {
+                        "status": "passed",
+                        "command": "python skills/software-project-governance/infra/verify_workflow.py status",
+                        "verified_on": "2026-05-20",
+                        "evidence": "target cwd passed",
+                    },
+                    "agent_runtime_e2e": {
+                        "status": "blocked",
+                        "blocked_reason": "timeout",
+                        "evidence": "codex exec timed out",
+                    },
+                    "full_e2e_verified": True,
+                }},
+            )
+            issues = vw.check_agent_adapter_contract(root=root)
+            self.assertTrue(any("full_e2e_verified=true requires" in issue for issue in issues))
 
     def test_agent_adapter_runtime_checks_supported_commands_only(self):
         with tempfile.TemporaryDirectory() as td:
@@ -1122,6 +1193,16 @@ class E2ECommandMatrixTests(unittest.TestCase):
                 "command": ["python", "verify_workflow.py", "verify"],
             },
         ]
+        fake_target_cwd_results = [
+            {
+                "label": "target-cwd /governance-status",
+                "kind": "target_cwd_command",
+                "status": "PASS",
+                "exit_code": 0,
+                "message": "target cwd status executed",
+                "command": ["python", "skills/software-project-governance/infra/verify_workflow.py", "status"],
+            }
+        ]
         fake_fixture_results = [
             {
                 "label": "target plan-tracker project config",
@@ -1131,7 +1212,8 @@ class E2ECommandMatrixTests(unittest.TestCase):
         ]
 
         with patch.object(vw, "_e2e_command_matrix", return_value=fake_entries), \
-             patch.object(vw, "_evaluate_e2e_command", side_effect=fake_results), \
+             patch.object(vw, "_evaluate_e2e_command", side_effect=fake_results + fake_target_cwd_results), \
+             patch.object(vw, "_e2e_target_cwd_command_matrix", return_value=[{"label": "target"}]), \
              patch.object(vw, "_e2e_target_fixture_checks", return_value=[{"label": "fixture"}]), \
              patch.object(vw, "_evaluate_e2e_target_fixture_check", side_effect=fake_fixture_results), \
              patch.object(vw, "_e2e_contract_checks", return_value=[]):
@@ -1141,9 +1223,11 @@ class E2ECommandMatrixTests(unittest.TestCase):
 
         text = output.getvalue()
         self.assertIn("Source CLI proxy command matrix", text)
+        self.assertIn("External target cwd command matrix", text)
         self.assertIn("Target fixture checks", text)
         self.assertIn("source_cli_proxy_pass=1", text)
         self.assertIn("expected_known_failure=1", text)
+        self.assertIn("target_cwd_pass=1", text)
         self.assertIn("target_fixture_pass=1", text)
         self.assertIn("contract_only=0", text)
         self.assertNotIn("executed_pass=", text)
@@ -1167,6 +1251,7 @@ class E2ECommandMatrixTests(unittest.TestCase):
 
         with patch.object(vw, "_e2e_command_matrix", return_value=[{"label": "pass"}]), \
              patch.object(vw, "_evaluate_e2e_command", return_value=fake_source), \
+             patch.object(vw, "_e2e_target_cwd_command_matrix", return_value=[]), \
              patch.object(vw, "_e2e_target_fixture_checks", return_value=[{"label": "fixture"}]), \
              patch.object(vw, "_evaluate_e2e_target_fixture_check", return_value=fake_fixture), \
              patch.object(vw, "_e2e_contract_checks", return_value=[]):

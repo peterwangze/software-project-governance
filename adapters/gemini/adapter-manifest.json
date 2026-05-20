@@ -33,11 +33,24 @@
     "projection_rule": "GEMINI.md is a thin pointer to skills/software-project-governance/SKILL.md; it must not duplicate workflow rules."
   },
   "runtime_e2e": {
-    "e2e_level": "runtime-version-probe",
+    "e2e_level": "real-agent-target-cwd",
     "command": "gemini",
     "version_command": "gemini --version",
     "verified_on": "2026-05-19",
-    "evidence": "Local Gemini CLI command returned version 0.35.3."
+    "evidence": "Local Gemini CLI command returned version 0.35.3.",
+    "target_cwd_e2e": {
+      "status": "passed",
+      "command": "python skills/software-project-governance/infra/verify_workflow.py status",
+      "verified_on": "2026-05-20",
+      "evidence": "Executed from project/e2e-test-project cwd and returned Test Project status with default-confirm permission mode."
+    },
+    "agent_runtime_e2e": {
+      "status": "blocked",
+      "command": "gemini --prompt \"Read .governance/plan-tracker.md in the current working directory and answer exactly: E2E_STAGE=<current stage text>. Do not modify files.\" --approval-mode plan --output-format text",
+      "blocked_reason": "Gemini CLI runtime is installed, but no auth method is configured in C:\\Users\\peter\\.gemini\\settings.json and no GEMINI_API_KEY / Vertex / GCA environment variable is present.",
+      "evidence": "Command exited non-zero with auth setup message before model execution."
+    },
+    "full_e2e_verified": false
   },
   "launcher": "adapters/gemini/launch.py"
 }

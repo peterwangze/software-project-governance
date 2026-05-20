@@ -34,8 +34,15 @@ def main():
     print(f" - command: {runtime_e2e['command']}")
     print(f" - version_command: {runtime_e2e['version_command']}")
     print(f" - evidence: {runtime_e2e['evidence']}")
-    print("unsupported_reason:")
-    print(f" - {manifest['unsupported_reason']}")
+    for key in ("target_cwd_e2e", "agent_runtime_e2e"):
+        block = runtime_e2e.get(key, {})
+        print(f" - {key}.status: {block.get('status')}")
+        if block.get("command"):
+            print(f" - {key}.command: {block['command']}")
+        if block.get("blocked_reason"):
+            print(f" - {key}.blocked_reason: {block['blocked_reason']}")
+    print(f" - full_e2e_verified: {runtime_e2e.get('full_e2e_verified')}")
+    print(f" - no_full_coverage_claim: {manifest.get('no_full_coverage_claim')}")
     print("gate_behavior:")
     print(f" - on_fail: {manifest['gate_behavior']['on_fail']}")
     print(f" - required_action: {manifest['gate_behavior']['required_action']}")

@@ -4,13 +4,16 @@ This directory is the opencode projection for `software-project-governance`.
 
 ## Current Status
 
-opencode is **not supported in this release**. The adapter is intentionally
-present as an explicit unsupported projection so the project does not claim
-mainstream agent coverage that has not been verified in a real runtime.
+opencode is **runtime-detected but not full-E2E verified in this release**.
+The adapter is intentionally explicit about this split so the project does not
+claim mainstream agent coverage beyond the evidence that actually passed.
 
-The current local validation host does not have an `opencode` command on PATH.
-`check-agent-adapters --runtime` must therefore report opencode as
-`UNSUPPORTED`, not `PASS`.
+The current local validation host has `opencode` on PATH and
+`opencode --version` returns `1.15.5`. A real `opencode run` target-cwd use case
+was attempted, but the configured provider returned HTTP 400 for an invalid
+DeepSeek model name before task execution. `check-agent-adapters --runtime`
+must therefore report the runtime version probe as PASS while the manifest keeps
+`runtime_e2e.agent_runtime_e2e.status=blocked` and `no_full_coverage_claim=true`.
 
 ## Native Entry
 
@@ -39,5 +42,5 @@ Runtime contract:
 python skills/software-project-governance/infra/verify_workflow.py check-agent-adapters --runtime
 ```
 
-Until opencode is installed and an end-to-end workflow use case passes in that
-runtime, this adapter remains explicitly unsupported.
+Until an `opencode run` workflow use case passes in the real runtime, this
+adapter must not be described as full-coverage verified.

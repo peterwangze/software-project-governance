@@ -1486,6 +1486,33 @@ def _run_version_command(command):
     return completed.returncode, output
 
 
+def _validate_runtime_e2e_block(root, manifest_path, runtime_e2e, field_name, allow_unsupported=False):
+    """Validate FIX-074 explicit E2E status blocks in adapter manifests."""
+    block = runtime_e2e.get(field_name)
+    if not isinstance(block, dict):
+        return [f"{_display_path(manifest_path, root)}: runtime_e2e.{field_name} must be an object"]
+
+    allowed_statuses = {"passed", "blocked"}
+    if allow_unsupported:
+        allowed_statuses.add("unsupported")
+
+    status = block.get("status")
+    failures = []
+    if status not in allowed_statuses:
+        failures.append(
+            f"{_display_path(manifest_path, root)}: runtime_e2e.{field_name}.status must be one of {sorted(allowed_statuses)}"
+        )
+    if not block.get("evidence"):
+        failures.append(f"{_display_path(manifest_path, root)}: runtime_e2e.{field_name}.evidence required")
+    if status == "passed" and (not block.get("command") or not block.get("verified_on")):
+        failures.append(
+            f"{_display_path(manifest_path, root)}: passed runtime_e2e.{field_name} requires command and verified_on"
+        )
+    if status == "blocked" and not block.get("blocked_reason"):
+        failures.append(f"{_display_path(manifest_path, root)}: blocked runtime_e2e.{field_name} requires blocked_reason")
+    return failures
+
+
 def check_agent_adapter_contract(root=None, run_runtime=False):
     """FIX-071: mainstream agent adapters must be explicit and not overclaim coverage."""
     root = root or ROOT
@@ -1525,6 +1552,7 @@ def check_agent_adapter_contract(root=None, run_runtime=False):
         support_status = manifest.get("support_status", "")
         runtime_e2e = manifest.get("runtime_e2e", {})
         native_entry = manifest.get("native_entry", {})
+        manifest_path = adapter_dir / "adapter-manifest.json"
         malformed_runtime_e2e = False
         if not isinstance(native_entry, dict) or not native_entry:
             failures.append(f"{_display_path(adapter_dir / 'adapter-manifest.json', root)}: native_entry must be non-empty")
@@ -1532,6 +1560,26 @@ def check_agent_adapter_contract(root=None, run_runtime=False):
             failures.append(f"{_display_path(adapter_dir / 'adapter-manifest.json', root)}: runtime_e2e command/version_command required")
             runtime_e2e = {}
             malformed_runtime_e2e = True
+        else:
+            failures.extend(
+                _validate_runtime_e2e_block(
+                    root, manifest_path, runtime_e2e, "target_cwd_e2e",
+                    allow_unsupported=(support_status == "not-supported-current-release"),
+                )
+            )
+            failures.extend(
+                _validate_runtime_e2e_block(
+                    root, manifest_path, runtime_e2e, "agent_runtime_e2e",
+                    allow_unsupported=(support_status == "not-supported-current-release"),
+                )
+            )
+            if runtime_e2e.get("full_e2e_verified") is True:
+                target_status = runtime_e2e.get("target_cwd_e2e", {}).get("status")
+                agent_status = runtime_e2e.get("agent_runtime_e2e", {}).get("status")
+                if target_status != "passed" or agent_status != "passed":
+                    failures.append(
+                        f"{_display_path(manifest_path, root)}: full_e2e_verified=true requires target_cwd_e2e and agent_runtime_e2e passed"
+                    )
 
         if support_status == "not-supported-current-release":
             if runtime_e2e.get("e2e_level") != "unsupported":
@@ -1555,9 +1603,9 @@ def check_agent_adapter_contract(root=None, run_runtime=False):
             )
             continue
 
-        if runtime_e2e.get("e2e_level") != "runtime-version-probe":
+        if runtime_e2e.get("e2e_level") not in ("runtime-version-probe", "real-agent-target-cwd"):
             failures.append(
-                f"{_display_path(adapter_dir / 'adapter-manifest.json', root)}: runtime-verified adapter runtime_e2e.e2e_level must be runtime-version-probe"
+                f"{_display_path(adapter_dir / 'adapter-manifest.json', root)}: runtime-verified adapter runtime_e2e.e2e_level must be runtime-version-probe or real-agent-target-cwd"
             )
         if not runtime_e2e.get("verified_on") or not runtime_e2e.get("evidence"):
             failures.append(
@@ -7674,6 +7722,44 @@ def _e2e_command_matrix():
     ]
 
 
+def _e2e_target_cwd_command_matrix(e2e_dir):
+    """Return executable commands that run from the external target cwd."""
+    target_verify_py = e2e_dir / "skills/software-project-governance/infra/verify_workflow.py"
+    target_cleanup_py = e2e_dir / "skills/software-project-governance/infra/cleanup.py"
+    python = sys.executable
+    return [
+        {
+            "label": "target-cwd /governance-status",
+            "kind": "target_cwd_command",
+            "cwd": e2e_dir,
+            "command": [python, str(target_verify_py.relative_to(e2e_dir)), "status"],
+            "validator": _validate_e2e_target_status,
+        },
+        {
+            "label": "target-cwd /governance-gate G1",
+            "kind": "target_cwd_command",
+            "cwd": e2e_dir,
+            "command": [python, str(target_verify_py.relative_to(e2e_dir)), "gate", "G1"],
+            "validator": _validate_e2e_gate_g1,
+        },
+        {
+            "label": "target-cwd /governance-gate G99",
+            "kind": "target_cwd_command",
+            "cwd": e2e_dir,
+            "command": [python, str(target_verify_py.relative_to(e2e_dir)), "gate", "G99"],
+            "validator": _validate_e2e_gate_g99,
+        },
+        {
+            "label": "target-cwd /governance-cleanup",
+            "kind": "target_cwd_command",
+            "cwd": e2e_dir,
+            "command": [python, str(target_cleanup_py.relative_to(e2e_dir)), "--dry-run", "--json"],
+            "validator": _validate_e2e_cleanup,
+            "accepted_exit_codes": {0, 1},
+        },
+    ]
+
+
 def _e2e_target_fixture_checks(e2e_dir):
     """Return direct checks against the tracked e2e-test-project fixture."""
     governance_dir = e2e_dir / ".governance"
@@ -7740,11 +7826,11 @@ def _e2e_contract_checks():
     ]
 
 
-def _run_e2e_subprocess(command, timeout=30):
+def _run_e2e_subprocess(command, timeout=30, cwd=None):
     """Run a matrix command and return subprocess.CompletedProcess."""
     return subprocess.run(
         command,
-        cwd=str(ROOT),
+        cwd=str(cwd or ROOT),
         capture_output=True,
         text=True,
         encoding=locale.getpreferredencoding(False),
@@ -7776,6 +7862,16 @@ def _validate_e2e_status(result):
         "permission_mode/操作权限模式, and a legal permission mode "
         "(maximum-autonomy or default-confirm)"
     )
+
+
+def _validate_e2e_target_status(result):
+    output = _e2e_output(result)
+    ok = (
+        result.returncode == 0
+        and _has_all(output, ["Project Overview", "Tasks", "Gate"])
+        and any(value in output for value in ("maximum-autonomy", "default-confirm"))
+    )
+    return ok, "target cwd status command returns project overview, tasks, gate, and a legal permission mode"
 
 
 def _validate_e2e_gate_g1(result):
@@ -7908,7 +8004,10 @@ def _validate_e2e_governance_proxy(result):
 def _evaluate_e2e_command(entry, runner=_run_e2e_subprocess):
     """Execute one E2E matrix entry and normalize its result."""
     try:
-        result = runner(entry["command"])
+        try:
+            result = runner(entry["command"], cwd=entry.get("cwd"))
+        except TypeError:
+            result = runner(entry["command"])
     except (OSError, subprocess.TimeoutExpired) as exc:
         return {
             "label": entry["label"],
@@ -7989,6 +8088,9 @@ def cmd_e2e_check(_args):
     source_cli_results = [
         _evaluate_e2e_command(entry) for entry in _e2e_command_matrix()
     ]
+    target_cwd_results = [
+        _evaluate_e2e_command(entry) for entry in _e2e_target_cwd_command_matrix(e2e_dir)
+    ]
     fixture_results = [
         _evaluate_e2e_target_fixture_check(entry)
         for entry in _e2e_target_fixture_checks(e2e_dir)
@@ -7999,12 +8101,24 @@ def cmd_e2e_check(_args):
 
     print("=== E2E Governance Verification ===")
     print(f"Target: {e2e_dir}")
-    print("Mode: source CLI proxy + target fixture checks; external target cwd execution is future work\n")
+    print("Mode: source CLI proxy + external target cwd execution + target fixture checks\n")
 
     print("--- Source CLI proxy command matrix ---")
     print(f"  cwd: {ROOT}")
     print("  note: verify_workflow.py is source-root bound; these are executable CLI proxies, not external-project cwd runs.")
     for result in source_cli_results:
+        command = " ".join(str(part) for part in result["command"])
+        print(
+            f"  [{result['status']}] {result['label']} "
+            f"(exit={result['exit_code']})"
+        )
+        print(f"      command: {command}")
+        print(f"      assert: {result['message']}")
+
+    print("\n--- External target cwd command matrix ---")
+    print(f"  cwd: {e2e_dir}")
+    print("  note: these commands execute the target project's own workflow copy from the target cwd.")
+    for result in target_cwd_results:
         command = " ".join(str(part) for part in result["command"])
         print(
             f"  [{result['status']}] {result['label']} "
@@ -8028,6 +8142,8 @@ def cmd_e2e_check(_args):
     passed = sum(1 for r in source_cli_results if r["status"] == "PASS")
     failed = sum(1 for r in source_cli_results if r["status"] == "FAIL")
     known = sum(1 for r in source_cli_results if r["status"] == "EXPECTED_KNOWN_FAILURE")
+    target_cwd_passed = sum(1 for r in target_cwd_results if r["status"] == "PASS")
+    target_cwd_failed = sum(1 for r in target_cwd_results if r["status"] == "FAIL")
     fixture_passed = sum(1 for r in fixture_results if r["status"] == "PASS")
     fixture_failed = sum(1 for r in fixture_results if r["status"] == "FAIL")
     contract_count = len(contract_results)
@@ -8037,13 +8153,14 @@ def cmd_e2e_check(_args):
         "\n=== Result: "
         f"source_cli_proxy_pass={passed}, source_cli_proxy_fail={failed}, "
         f"expected_known_failure={known}, "
+        f"target_cwd_pass={target_cwd_passed}, target_cwd_fail={target_cwd_failed}, "
         f"target_fixture_pass={fixture_passed}, target_fixture_fail={fixture_failed}, "
         f"contract_only={contract_count}, contract_check_failed={contract_failed} ==="
     )
-    if failed > 0 or fixture_failed > 0:
-        print("ACTION: Fix source CLI proxy or target fixture failures above.")
+    if failed > 0 or target_cwd_failed > 0 or fixture_failed > 0:
+        print("ACTION: Fix source CLI proxy, target cwd, or target fixture failures above.")
         sys.exit(1)
-    print("Source CLI proxy matrix and target fixture checks passed; runtime contracts reported separately.")
+    print("Source CLI proxy matrix, external target cwd commands, and target fixture checks passed; runtime contracts reported separately.")
 
 
 def cmd_check_manifest_consistency(args):

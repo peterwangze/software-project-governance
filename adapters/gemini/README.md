@@ -10,7 +10,7 @@
 - `adapters/gemini/launch.py`：输出 read order、native entry、runtime E2E 和 validation 命令。
 - `check-agent-adapters --runtime`：在真实 Gemini CLI 环境中验证 `gemini --version` 可执行。
 
-本机 2026-05-19 验证结果：`gemini --version` 返回 `0.35.3`。该结果只证明 Gemini CLI runtime 存在和 adapter contract 可被验证，不代表 Gemini 已拥有独立 plugin marketplace 分发。
+本机 2026-05-20 验证结果：`gemini --version` 返回 `0.35.3`，目标 cwd 的 Python 治理命令可运行；真实 Gemini agent 用例因本机未配置 Gemini 认证（settings.json/API key/Vertex/GCA 均缺失）而阻塞。该结果只证明 Gemini CLI runtime 存在和 adapter contract 可被验证，不代表 Gemini 已通过真实 agent E2E，也不代表 Gemini 已拥有独立 plugin marketplace 分发。
 
 后续扩展必须继续遵守 `PLAN-003` 的三层结构：
 
@@ -100,6 +100,6 @@ Gemini 兼容路线按以下顺序推进：
 
 ## TODO
 
-- 在 FIX-074 中把 Gemini 从 `--version` runtime probe 推进到真实目标项目 cwd 的治理任务 E2E。
+- 配置 Gemini CLI 认证后，复跑 FIX-074 记录的真实 agent 用例，把 `agent_runtime_e2e.status` 从 `blocked` 升级为 `passed`。
 - 在 `MAINT-003` 中把国内 agent CLI 的差异收敛成更细的兼容约束说明。
 - 待官方 extension 机制进一步稳定后，再判断是否值得新增产品化分发层。

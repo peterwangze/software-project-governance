@@ -2,6 +2,26 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.35.0] — 2026-05-20
+
+### 0.35.0 — 八维度复核收口：事实源、适配层、Agent 边界与 E2E 真实性
+
+AUDIT-100 八维度复核后的收口版本，覆盖架构事实源一致性、Agent Team 角色边界、主流 code agent 适配状态真实化、Skill/工具库收口、防跑偏看护强化，以及 E2E 从 source proxy 扩展到 external target cwd 与 agent runtime 分层。0.35.0 不声明 1.0.0 production-ready；1.0.0 仍需外部验证通过后再发布正式标签。
+
+### 架构与事实源
+- **AUDIT-100**: 八维度复核完成，形成 FIX-069~074 修复链和 RISK-030 风险处置。
+- **FIX-069**: 架构事实源状态收敛，`verify` 纳入 1.0.0 依赖链、路线图、需求矩阵、RISK-030 和 architecture.md 状态一致性检查。
+- **FIX-070**: Agent Team 角色边界收口，Governance Developer、具名 Reviewer、通信 I/O 和 Coordinator 单点写回边界进入文档与回归门禁。
+
+### 适配层与 E2E 真实性
+- **FIX-071**: Claude/Codex/Gemini/opencode adapter manifest、launcher、README 与 runtime probe 状态真实化；未验证平台不得宣称 full coverage。
+- **FIX-074**: `e2e-check` 新增 external target cwd 命令矩阵；adapter contract 强制 `target_cwd_e2e` 与 `agent_runtime_e2e` 双块，`full_e2e_verified=true` 不得绕过真实执行证据。Claude real agent target cwd PASS；Codex App workflow session PASS；Gemini/opencode agent runtime 当前 blocked 且不宣称 full coverage。
+
+### 工具化与防跑偏看护
+- **FIX-072**: `infra/TOOLS.md` 完整索引发布/适配/归档/清理/hooks/cross-reference 工具，`check-release` 子命令默认执行 verify、governance health、e2e 和 unittest execution gates。
+- **FIX-073**: 目标对齐、用户影响和审查覆盖检查纳入当前产品代码交付证据，避免 impact/review checks 因归档、证据类型或表结构漂移而空跑。
+- **RISK-030**: 0.35.0 修复链闭环后关闭；Gemini/opencode blocked 状态和 1.0.0 外部验证门槛继续显式保留。
+
 ## [0.34.0] — 2026-05-14
 
 ### 0.34.0 — 审查驱动质量回收 + plan-tracker 标准化

@@ -1588,6 +1588,195 @@ def _validate_codex_runtime_e2e_claim(root, manifest_path, runtime_e2e):
     return failures
 
 
+GEMINI_API_KEY_ENV_VARS = (
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+)
+
+GEMINI_VERTEX_CONFIG_ENV_VARS = (
+    "GOOGLE_GENAI_USE_VERTEXAI",
+    "GOOGLE_CLOUD_PROJECT",
+    "GOOGLE_CLOUD_LOCATION",
+)
+
+GEMINI_VERTEX_CREDENTIAL_ENV_VARS = (
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "GOOGLE_ADC_JSON",
+    "GOOGLE_CLOUD_ACCESS_TOKEN",
+)
+
+GEMINI_GCA_CONFIG_ENV_VARS = (
+    "GCA_AUTH_PROVIDER",
+)
+
+GEMINI_GCA_CREDENTIAL_ENV_VARS = (
+    "GCA_TOKEN",
+)
+
+GEMINI_AUTH_REMEDIATION = (
+    "Configure Gemini auth before full agent runtime E2E: set GEMINI_API_KEY "
+    "or GOOGLE_API_KEY, configure Vertex credentials (for example "
+    "GOOGLE_GENAI_USE_VERTEXAI with GOOGLE_CLOUD_PROJECT/LOCATION and ADC), "
+    "configure GCA auth, or login/configure Gemini CLI settings.json with an "
+    "auth provider/token type. Do not record secret values in manifests or logs."
+)
+
+
+def _gemini_settings_candidates(home=None):
+    home = Path(home) if home else Path.home()
+    return [
+        home / ".gemini" / "settings.json",
+        home / ".config" / "gemini" / "settings.json",
+    ]
+
+
+def _safe_env_present(name, env=None):
+    env = env if env is not None else os.environ
+    value = env.get(name)
+    return value is not None and str(value).strip() != ""
+
+
+def _detect_gemini_auth_from_settings(path):
+    try:
+        settings = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    auth_key_markers = ("auth", "credential", "token", "provider", "login")
+    provider_value_markers = ("oauth", "google", "vertex", "gca", "api_key", "apikey", "gemini")
+    stack = [settings]
+    while stack:
+        current = stack.pop()
+        if isinstance(current, dict):
+            for key, value in current.items():
+                key_text = str(key).lower()
+                if isinstance(value, (dict, list)):
+                    stack.append(value)
+                    continue
+                value_text = str(value).strip().lower()
+                if not value_text:
+                    continue
+                if any(marker in key_text for marker in auth_key_markers):
+                    if "token" in key_text:
+                        return f"settings:{path.name}:token_type"
+                    if any(marker in value_text for marker in provider_value_markers):
+                        return f"settings:{path.name}:auth_provider"
+                    return f"settings:{path.name}:auth_config"
+        elif isinstance(current, list):
+            stack.extend(current)
+    return None
+
+
+def _detect_gemini_env_auth_sources(env=None):
+    env = env if env is not None else os.environ
+    sources = []
+    for name in GEMINI_API_KEY_ENV_VARS:
+        if _safe_env_present(name, env):
+            sources.append(f"env:{name}")
+
+    vertex_enabled = str(env.get("GOOGLE_GENAI_USE_VERTEXAI", "")).strip().lower() in {"1", "true", "yes"}
+    vertex_has_project = _safe_env_present("GOOGLE_CLOUD_PROJECT", env)
+    vertex_has_location = _safe_env_present("GOOGLE_CLOUD_LOCATION", env)
+    vertex_credential_sources = [
+        name for name in GEMINI_VERTEX_CREDENTIAL_ENV_VARS
+        if _safe_env_present(name, env)
+    ]
+    if vertex_enabled and vertex_has_project and vertex_has_location and vertex_credential_sources:
+        sources.append("env:VERTEX:" + "+".join([
+            "GOOGLE_GENAI_USE_VERTEXAI",
+            "GOOGLE_CLOUD_PROJECT",
+            "GOOGLE_CLOUD_LOCATION",
+            *vertex_credential_sources,
+        ]))
+
+    gca_has_provider = _safe_env_present("GCA_AUTH_PROVIDER", env)
+    gca_credential_sources = [
+        name for name in GEMINI_GCA_CREDENTIAL_ENV_VARS
+        if _safe_env_present(name, env)
+    ]
+    if gca_has_provider and gca_credential_sources:
+        sources.append("env:GCA:GCA_AUTH_PROVIDER+" + "+".join(gca_credential_sources))
+    return sources
+
+
+def _gemini_auth_preflight(env=None, home=None, which=shutil.which, version_runner=_run_version_command):
+    env = env if env is not None else os.environ
+    result = {
+        "status": "BLOCKED",
+        "command": "python skills/software-project-governance/infra/verify_workflow.py gemini-auth-preflight",
+        "version_command": "gemini --version",
+        "cli_path": None,
+        "version": None,
+        "auth_sources": [],
+        "blocked_reason": None,
+        "remediation": GEMINI_AUTH_REMEDIATION,
+    }
+
+    cli_path = which("gemini")
+    if not cli_path:
+        result["blocked_reason"] = "Gemini CLI not found on PATH"
+        return result
+    result["cli_path"] = str(cli_path)
+
+    returncode, version_output = version_runner("gemini --version")
+    if returncode != 0:
+        result["blocked_reason"] = "Gemini CLI version command failed"
+        result["version"] = _truncate_log(version_output, limit=200)
+        return result
+    result["version"] = _truncate_log(version_output, limit=200)
+
+    result["auth_sources"].extend(_detect_gemini_env_auth_sources(env))
+
+    for path in _gemini_settings_candidates(home=home):
+        source = _detect_gemini_auth_from_settings(path)
+        if source:
+            result["auth_sources"].append(source)
+
+    if result["auth_sources"]:
+        result["status"] = "PASS"
+        result["blocked_reason"] = None
+    else:
+        result["blocked_reason"] = "Gemini auth missing or not configured"
+    return result
+
+
+def _validate_gemini_auth_preflight_claim(root, manifest_path, runtime_e2e):
+    display = _display_path(manifest_path, root)
+    preflight = runtime_e2e.get("auth_preflight")
+    if not isinstance(preflight, dict):
+        return [f"{display}: Gemini runtime_e2e.auth_preflight must be an object"]
+
+    failures = []
+    status = preflight.get("status")
+    if status not in {"passed", "blocked"}:
+        failures.append(f"{display}: Gemini runtime_e2e.auth_preflight.status must be passed or blocked")
+    if "gemini-auth-preflight" not in str(preflight.get("command", "")):
+        failures.append(f"{display}: Gemini auth_preflight.command must reference gemini-auth-preflight")
+    if not preflight.get("verified_on"):
+        failures.append(f"{display}: Gemini auth_preflight.verified_on required")
+    guidance_text = " ".join(
+        str(value or "")
+        for value in (
+            preflight.get("blocked_reason"),
+            preflight.get("remediation"),
+            runtime_e2e.get("agent_runtime_e2e", {}).get("blocked_reason")
+            if isinstance(runtime_e2e.get("agent_runtime_e2e"), dict) else "",
+        )
+    ).lower()
+    required_guidance = ("gemini_api_key", "google_api_key", "vertex", "gca", "settings")
+    missing = [marker for marker in required_guidance if marker not in guidance_text]
+    if missing:
+        failures.append(
+            f"{display}: Gemini blocked guidance must mention GEMINI_API_KEY / GOOGLE_API_KEY / Vertex / GCA / settings auth"
+        )
+    if status == "blocked":
+        if preflight.get("blocked_reason") != "Gemini auth missing or not configured":
+            failures.append(f"{display}: Gemini blocked auth_preflight requires exact auth missing blocked_reason")
+        if runtime_e2e.get("full_e2e_verified") is not False:
+            failures.append(f"{display}: Gemini blocked auth_preflight requires full_e2e_verified=false")
+    return failures
+
+
 def check_agent_adapter_contract(root=None, run_runtime=False):
     """FIX-071: mainstream agent adapters must be explicit and not overclaim coverage."""
     root = root or ROOT
@@ -1650,6 +1839,8 @@ def check_agent_adapter_contract(root=None, run_runtime=False):
             )
             if adapter_id == "codex":
                 failures.extend(_validate_codex_runtime_e2e_claim(root, manifest_path, runtime_e2e))
+            if adapter_id == "gemini":
+                failures.extend(_validate_gemini_auth_preflight_claim(root, manifest_path, runtime_e2e))
             if runtime_e2e.get("full_e2e_verified") is True:
                 target_status = runtime_e2e.get("target_cwd_e2e", {}).get("status")
                 agent_status = runtime_e2e.get("agent_runtime_e2e", {}).get("status")
@@ -8399,6 +8590,7 @@ def _classify_agent_runtime_blocked(agent_id, output="", exception=None):
     if agent_id == "gemini":
         auth_markers = [
             "gemini_api_key",
+            "google_api_key",
             "api key",
             "auth",
             "authenticate",
@@ -8409,7 +8601,10 @@ def _classify_agent_runtime_blocked(agent_id, output="", exception=None):
             "gca",
         ]
         if any(marker in lowered for marker in auth_markers):
-            return "Gemini auth missing or not configured"
+            return (
+                "Gemini auth missing or not configured; configure GEMINI_API_KEY, "
+                "GOOGLE_API_KEY, Vertex credentials, GCA auth, or Gemini settings auth."
+            )
     if agent_id == "opencode":
         invalid_model_markers = [
             "deepseek-v4-pro[1m]",
@@ -8632,6 +8827,34 @@ def cmd_agent_runtime_e2e(args):
         print("ACTION: Fix unclassified harness/runtime failures above.")
         sys.exit(1)
     print("Agent runtime E2E harness completed; blocked entries are environment/configuration evidence, not harness failures.")
+
+
+def cmd_gemini_auth_preflight(_args):
+    """Check Gemini CLI availability and authentication sources without leaking secrets."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+    result = _gemini_auth_preflight()
+    print("=== Gemini Auth Preflight ===")
+    print(f"status: {result['status']}")
+    print(f"command: {result['command']}")
+    print(f"version_command: {result['version_command']}")
+    print(f"cli_path: {result['cli_path'] or 'not found'}")
+    if result["version"]:
+        print(f"version: {result['version']}")
+    if result["auth_sources"]:
+        print("auth_sources:")
+        for source in result["auth_sources"]:
+            print(f" - {source}")
+    else:
+        print("auth_sources: none")
+    if result["blocked_reason"]:
+        print(f"blocked_reason: {result['blocked_reason']}")
+    print(f"remediation: {result['remediation']}")
+    if result["status"] != "PASS":
+        sys.exit(1)
 
 
 def cmd_e2e_check(_args):
@@ -9230,6 +9453,12 @@ def main():
         help="Limit to one agent; may be repeated. Defaults to all mainstream agents.",
     )
 
+    # gemini-auth-preflight
+    subparsers.add_parser(
+        "gemini-auth-preflight",
+        help="Check Gemini CLI PATH/version/auth sources without printing secrets",
+    )
+
     # check-cross-references (SYSGAP-008)
     xr_p = subparsers.add_parser("check-cross-references",
                                  help="Scan .md/.py files for dangling, deprecated, and circular path references")
@@ -9307,6 +9536,7 @@ def main():
         "check-release": cmd_check_release,
         "e2e-check": cmd_e2e_check,
         "agent-runtime-e2e": cmd_agent_runtime_e2e,
+        "gemini-auth-preflight": cmd_gemini_auth_preflight,
         "check-cross-references": cmd_check_cross_references,
         "check-sequential-ids": cmd_check_sequential_ids,
         "check-structural-validity": cmd_check_structural_validity,

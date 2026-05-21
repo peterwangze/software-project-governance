@@ -230,7 +230,7 @@
 |------|------|-------------|------------|
 | Claude Code | runtime/version probe PASS；真实 Claude Code agent 在 `project/e2e-test-project` 目标 cwd 读取治理计划并返回当前阶段；full E2E verified | `adapters/claude/` | `.claude-plugin/` |
 | Codex | runtime/version probe PASS；Codex App 当前工作流会话可证明本 Codex 桌面环境能接入 `AGENTS.md` bootstrap 辅助自身迭代，但不能替代 Codex CLI headless target-cwd full E2E；`codex exec` 在本机真实矩阵中 timeout，当前 CLI full coverage blocked | `adapters/codex/` | `.codex-plugin/` |
-| Gemini | runtime/version probe PASS；目标 cwd Python 治理命令 PASS；真实 Gemini agent 用例因本机未配置 Gemini auth 阻塞，不宣称 full E2E | `adapters/gemini/` | — |
+| Gemini | runtime/version probe PASS；目标 cwd Python 治理命令 PASS；`gemini-auth-preflight` 当前因缺少 GEMINI_API_KEY / GOOGLE_API_KEY / Vertex / GCA / settings auth BLOCKED；真实 Gemini agent auth missing/401，不是 workflow/fixture/`GEMINI.md` thin projection 失败；auth preflight PASS 前不宣称 full E2E | `adapters/gemini/` | — |
 | opencode | runtime/version probe PASS（`opencode --version`=1.15.5）；目标 cwd Python 治理命令 PASS；真实 `opencode run` 因 provider/model 配置错误阻塞，`no_full_coverage_claim=true` | `adapters/opencode/` | — |
 | 通用 `.agents` marketplace | 兼容分析（文档/元数据） | — | `.agents/` |
 
@@ -395,7 +395,7 @@
 | REQ-044 | 迁移 stages/ 和 commands/ 到能力层 skills/ | 大 | ⚠️ 部分完成：stage 已 skill 化；`commands/` 仍承担平台命令入口，是否迁移由 FIX-072 复核 |
 | REQ-045 | 分离核心层文件到 core/ 目录 | 中 | ✅ 已完成，交叉引用校验通过 |
 | REQ-046 | 建立基础设施层目录结构 infra/ | 小 | ✅ 已完成，hooks / verify / archive / cleanup 已归入 infra |
-| REQ-052 | 适配层正式纳入架构——adapter 标准字段 + 新增平台流程 | 小 | ⚠️ 部分完成：Claude/Codex/Gemini/opencode 均有 manifest+launcher+runtime contract；Gemini/opencode 真实 agent runtime E2E 仍 blocked，由 FIX-074 分层标注 |
+| REQ-052 | 适配层正式纳入架构——adapter 标准字段 + 新增平台流程 | 小 | ⚠️ 部分完成：Claude/Codex/Gemini/opencode 均有 manifest+launcher+runtime contract；Gemini 真实 agent runtime E2E 需先 auth preflight PASS，当前本机 BLOCKED 是 auth 缺失/401；opencode 状态由 FIX-079 继续同步 |
 
 ### P1（重要——可用性）
 
@@ -436,13 +436,13 @@
 12. ✅ Governance Developer 路由、可调用 SKILL、通信 I/O 和 Coordinator 单点写回边界已由 FIX-070 收口
 13. ✅ 建立 SKILL 分类索引；索引与 agent 调用覆盖由 FIX-072 复核
 14. ✅ adapter 标准字段文档化；Claude launcher 字段漂移由 FIX-071 修复
-15. ⚠️ 新增平台入口已形成 Claude/Codex/Gemini/opencode manifest + launcher + runtime contract；Gemini/opencode 的 agent runtime 用例保持 blocked 标注
+15. ⚠️ 新增平台入口已形成 Claude/Codex/Gemini/opencode manifest + launcher + runtime contract；Gemini 的 agent runtime 用例保持 auth BLOCKED，且 `GEMINI.md` 仍是 thin projection；opencode 状态由 FIX-079 继续同步
 
 ### Phase 5: 验证和发布（P2, 🔄 0.35.0 收口中）
 16. ✅ verify_workflow.py 适配当前结构
 17. ⚠️ adapter 标准字段校验已覆盖 runtime contract 分层；`full_e2e_verified` 不能绕过 target cwd + agent runtime 双块
 18. ⬜ 0.35.0 版本 bump + CHANGELOG
-19. ⚠️ E2E 记录已分层：source CLI proxy、目标 cwd Python 命令、agent runtime 状态分别记录；Gemini/opencode agent 用例仍是 blocked，不是 full coverage
+19. ⚠️ E2E 记录已分层：source CLI proxy、目标 cwd Python 命令、auth/provider preflight、agent runtime 状态分别记录；Gemini full E2E 必须先 auth preflight PASS，再由真实 agent target-cwd E2E 通过后才能声明
 
 ## 目标目录结构
 

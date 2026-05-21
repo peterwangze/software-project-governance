@@ -47,8 +47,16 @@
     "agent_runtime_e2e": {
       "status": "blocked",
       "command": "gemini --prompt \"Read .governance/plan-tracker.md in the current working directory and answer exactly: E2E_STAGE=<current stage text>. Do not modify files.\" --approval-mode plan --output-format text",
-      "blocked_reason": "Gemini CLI runtime is installed, but no auth method is configured in C:\\Users\\peter\\.gemini\\settings.json and no GEMINI_API_KEY / Vertex / GCA environment variable is present.",
-      "evidence": "Command exited non-zero with auth setup message before model execution."
+      "blocked_reason": "Gemini auth missing or not configured; configure GEMINI_API_KEY, GOOGLE_API_KEY, Vertex credentials, GCA auth, or Gemini settings auth before claiming full E2E.",
+      "evidence": "Command exited non-zero with auth missing/401 semantics before model execution."
+    },
+    "auth_preflight": {
+      "status": "blocked",
+      "command": "python skills/software-project-governance/infra/verify_workflow.py gemini-auth-preflight",
+      "verified_on": "2026-05-21",
+      "blocked_reason": "Gemini auth missing or not configured",
+      "evidence": "Local Gemini CLI is on PATH and `gemini --version` returns 0.35.3, but no recognized GEMINI_API_KEY, GOOGLE_API_KEY, Vertex, GCA, or Gemini settings auth source is configured on this host.",
+      "remediation": "Set GEMINI_API_KEY or GOOGLE_API_KEY, configure Vertex credentials, configure GCA auth, or login/configure Gemini CLI settings.json with an auth provider/token type; do not record secret values."
     },
     "full_e2e_verified": false
   },

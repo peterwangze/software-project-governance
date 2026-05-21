@@ -40,6 +40,15 @@ def main():
             print(f" - {key}.command: {block['command']}")
         if block.get("blocked_reason"):
             print(f" - {key}.blocked_reason: {block['blocked_reason']}")
+    auth_preflight = runtime_e2e.get("auth_preflight", {})
+    print(" - auth_preflight:")
+    print(f"   - status: {auth_preflight.get('status')}")
+    if auth_preflight.get("command"):
+        print(f"   - command: {auth_preflight['command']}")
+    if auth_preflight.get("blocked_reason"):
+        print(f"   - blocked_reason: {auth_preflight['blocked_reason']}")
+    if auth_preflight.get("remediation"):
+        print(f"   - remediation: {auth_preflight['remediation']}")
     print(f" - full_e2e_verified: {runtime_e2e.get('full_e2e_verified')}")
     print("gate_behavior:")
     print(f" - on_fail: {manifest['gate_behavior']['on_fail']}")

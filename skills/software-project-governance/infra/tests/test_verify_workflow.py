@@ -726,6 +726,19 @@ class AgentAdapterContractTests(unittest.TestCase):
             },
             "launcher": f"adapters/{adapter_id}/launch.py",
         }
+        if adapter_id == "gemini":
+            manifest["runtime_e2e"]["auth_preflight"] = {
+                "status": "blocked",
+                "command": "python skills/software-project-governance/infra/verify_workflow.py gemini-auth-preflight",
+                "verified_on": "2026-05-21",
+                "blocked_reason": "Gemini auth missing or not configured",
+                "evidence": "Gemini CLI present but no GEMINI_API_KEY, GOOGLE_API_KEY, Vertex, GCA, or settings auth source is configured.",
+                "remediation": "Set GEMINI_API_KEY or GOOGLE_API_KEY, configure Vertex credentials, configure GCA auth, or configure Gemini settings auth.",
+            }
+            manifest["runtime_e2e"]["agent_runtime_e2e"]["blocked_reason"] = (
+                "Gemini auth missing or not configured; configure GEMINI_API_KEY, "
+                "GOOGLE_API_KEY, Vertex credentials, GCA auth, or Gemini settings auth."
+            )
         if support_status == "not-supported-current-release":
             manifest["unsupported_reason"] = "runtime unavailable"
             manifest["no_full_coverage_claim"] = True
@@ -989,6 +1002,75 @@ class AgentAdapterContractTests(unittest.TestCase):
                 }},
             )
             self.assertEqual(vw.check_agent_adapter_contract(root=root), [])
+
+    def test_agent_adapter_contract_rejects_gemini_manifest_missing_auth_preflight(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_all_adapters(root)
+            runtime_e2e = {
+                "e2e_level": "real-agent-target-cwd",
+                "command": "gemini",
+                "version_command": "gemini --version",
+                "verified_on": "2026-05-21",
+                "evidence": "version probe passed",
+                "target_cwd_e2e": {
+                    "status": "passed",
+                    "command": "python skills/software-project-governance/infra/verify_workflow.py status",
+                    "verified_on": "2026-05-20",
+                    "evidence": "target cwd passed",
+                },
+                "agent_runtime_e2e": {
+                    "status": "blocked",
+                    "blocked_reason": "Gemini auth missing or not configured; configure GEMINI_API_KEY, GOOGLE_API_KEY, Vertex, GCA, or settings auth.",
+                    "evidence": "auth missing",
+                },
+                "full_e2e_verified": False,
+            }
+            self._write_adapter(root, "gemini", extra={"runtime_e2e": runtime_e2e})
+
+            issues = vw.check_agent_adapter_contract(root=root)
+
+            self.assertTrue(any("auth_preflight must be an object" in issue for issue in issues))
+
+    def test_agent_adapter_contract_rejects_gemini_blocked_guidance_without_auth_sources(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_all_adapters(root)
+            self._write_adapter(
+                root,
+                "gemini",
+                extra={"runtime_e2e": {
+                    "e2e_level": "real-agent-target-cwd",
+                    "command": "gemini",
+                    "version_command": "gemini --version",
+                    "verified_on": "2026-05-21",
+                    "evidence": "version probe passed",
+                    "target_cwd_e2e": {
+                        "status": "passed",
+                        "command": "python skills/software-project-governance/infra/verify_workflow.py status",
+                        "verified_on": "2026-05-20",
+                        "evidence": "target cwd passed",
+                    },
+                    "agent_runtime_e2e": {
+                        "status": "blocked",
+                        "blocked_reason": "Gemini auth missing or not configured",
+                        "evidence": "auth missing",
+                    },
+                    "auth_preflight": {
+                        "status": "blocked",
+                        "command": "python skills/software-project-governance/infra/verify_workflow.py gemini-auth-preflight",
+                        "verified_on": "2026-05-21",
+                        "blocked_reason": "Gemini auth missing or not configured",
+                        "evidence": "auth missing",
+                        "remediation": "login first",
+                    },
+                    "full_e2e_verified": False,
+                }},
+            )
+
+            issues = vw.check_agent_adapter_contract(root=root)
+
+            self.assertTrue(any("Gemini blocked guidance must mention" in issue for issue in issues))
 
     def test_agent_adapter_runtime_checks_supported_commands_only(self):
         with tempfile.TemporaryDirectory() as td:
@@ -1466,6 +1548,162 @@ class E2ECommandMatrixTests(unittest.TestCase):
         self.assertIn("AGENTS.md Codex/opencode native entry fixture", labels)
         self.assertIn("GEMINI.md native entry fixture", labels)
         self.assertIn("target workflow skill version", labels)
+
+
+class GeminiAuthPreflightTests(unittest.TestCase):
+    """FIX-078: Gemini auth preflight is reproducible and secret-safe."""
+
+    def test_gemini_auth_preflight_blocks_when_cli_missing(self):
+        result = vw._gemini_auth_preflight(
+            env={},
+            home=Path("missing-home"),
+            which=lambda command: None,
+            version_runner=lambda command: (0, "0.35.3"),
+        )
+
+        self.assertEqual(result["status"], "BLOCKED")
+        self.assertEqual(result["blocked_reason"], "Gemini CLI not found on PATH")
+
+    def test_gemini_auth_preflight_blocks_when_auth_missing_after_version_pass(self):
+        with tempfile.TemporaryDirectory() as td:
+            result = vw._gemini_auth_preflight(
+                env={},
+                home=Path(td),
+                which=lambda command: "gemini",
+                version_runner=lambda command: (0, "0.35.3"),
+            )
+
+        self.assertEqual(result["status"], "BLOCKED")
+        self.assertEqual(result["blocked_reason"], "Gemini auth missing or not configured")
+        self.assertIn("GEMINI_API_KEY", result["remediation"])
+        self.assertIn("GOOGLE_API_KEY", result["remediation"])
+        self.assertIn("Vertex", result["remediation"])
+        self.assertIn("GCA", result["remediation"])
+
+    def test_gemini_auth_preflight_passes_with_env_auth_without_secret_leak(self):
+        secret = "sk-super-secret-value"
+        result = vw._gemini_auth_preflight(
+            env={"GEMINI_API_KEY": secret},
+            home=Path("missing-home"),
+            which=lambda command: "gemini",
+            version_runner=lambda command: (0, "0.35.3"),
+        )
+
+        self.assertEqual(result["status"], "PASS")
+        self.assertIn("env:GEMINI_API_KEY", result["auth_sources"])
+        serialized = json.dumps(result)
+        self.assertNotIn(secret, serialized)
+
+    def test_gemini_auth_preflight_blocks_with_vertex_config_without_credentials(self):
+        config_only_envs = [
+            {"GOOGLE_CLOUD_PROJECT": "demo-project"},
+            {"GOOGLE_GENAI_USE_VERTEXAI": "true"},
+            {"GOOGLE_CLOUD_LOCATION": "us-central1"},
+            {
+                "GOOGLE_GENAI_USE_VERTEXAI": "true",
+                "GOOGLE_CLOUD_PROJECT": "demo-project",
+                "GOOGLE_CLOUD_LOCATION": "us-central1",
+            },
+        ]
+
+        for env in config_only_envs:
+            with self.subTest(env=env):
+                result = vw._gemini_auth_preflight(
+                    env=env,
+                    home=Path("missing-home"),
+                    which=lambda command: "gemini",
+                    version_runner=lambda command: (0, "0.35.3"),
+                )
+
+                self.assertEqual(result["status"], "BLOCKED")
+                self.assertEqual(result["blocked_reason"], "Gemini auth missing or not configured")
+                self.assertEqual(result["auth_sources"], [])
+
+    def test_gemini_auth_preflight_passes_with_complete_vertex_credentials_without_secret_leak(self):
+        secret = "ya29.secret-token"
+        result = vw._gemini_auth_preflight(
+            env={
+                "GOOGLE_GENAI_USE_VERTEXAI": "true",
+                "GOOGLE_CLOUD_PROJECT": "demo-project",
+                "GOOGLE_CLOUD_LOCATION": "us-central1",
+                "GOOGLE_CLOUD_ACCESS_TOKEN": secret,
+            },
+            home=Path("missing-home"),
+            which=lambda command: "gemini",
+            version_runner=lambda command: (0, "0.35.3"),
+        )
+
+        self.assertEqual(result["status"], "PASS")
+        self.assertIn(
+            "env:VERTEX:GOOGLE_GENAI_USE_VERTEXAI+GOOGLE_CLOUD_PROJECT+GOOGLE_CLOUD_LOCATION+GOOGLE_CLOUD_ACCESS_TOKEN",
+            result["auth_sources"],
+        )
+        self.assertNotIn(secret, json.dumps(result))
+
+    def test_gemini_auth_preflight_blocks_with_gca_provider_without_token(self):
+        result = vw._gemini_auth_preflight(
+            env={"GCA_AUTH_PROVIDER": "google"},
+            home=Path("missing-home"),
+            which=lambda command: "gemini",
+            version_runner=lambda command: (0, "0.35.3"),
+        )
+
+        self.assertEqual(result["status"], "BLOCKED")
+        self.assertEqual(result["auth_sources"], [])
+
+    def test_gemini_auth_preflight_passes_with_complete_gca_credentials_without_secret_leak(self):
+        secret = "gca-secret-token"
+        result = vw._gemini_auth_preflight(
+            env={"GCA_AUTH_PROVIDER": "google", "GCA_TOKEN": secret},
+            home=Path("missing-home"),
+            which=lambda command: "gemini",
+            version_runner=lambda command: (0, "0.35.3"),
+        )
+
+        self.assertEqual(result["status"], "PASS")
+        self.assertIn("env:GCA:GCA_AUTH_PROVIDER+GCA_TOKEN", result["auth_sources"])
+        self.assertNotIn(secret, json.dumps(result))
+
+    def test_gemini_auth_preflight_passes_with_settings_auth_provider(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            settings_dir = home / ".gemini"
+            settings_dir.mkdir()
+            (settings_dir / "settings.json").write_text(
+                json.dumps({"auth": {"provider": "oauth"}}),
+                encoding="utf-8",
+            )
+
+            result = vw._gemini_auth_preflight(
+                env={},
+                home=home,
+                which=lambda command: "gemini",
+                version_runner=lambda command: (0, "0.35.3"),
+            )
+
+        self.assertEqual(result["status"], "PASS")
+        self.assertIn("settings:settings.json:auth_provider", result["auth_sources"])
+
+    def test_gemini_auth_preflight_cli_output_does_not_print_secret(self):
+        secret = "secret-google-api-key"
+        with patch.object(vw, "_gemini_auth_preflight", return_value={
+            "status": "PASS",
+            "command": "python skills/software-project-governance/infra/verify_workflow.py gemini-auth-preflight",
+            "version_command": "gemini --version",
+            "cli_path": "gemini",
+            "version": "0.35.3",
+            "auth_sources": ["env:GOOGLE_API_KEY"],
+            "blocked_reason": None,
+            "remediation": "Set GOOGLE_API_KEY; do not print secret values.",
+        }):
+            output = io.StringIO()
+            with redirect_stdout(output):
+                vw.cmd_gemini_auth_preflight(argparse.Namespace())
+
+        text = output.getvalue()
+        self.assertIn("status: PASS", text)
+        self.assertIn("env:GOOGLE_API_KEY", text)
+        self.assertNotIn(secret, text)
 
 
 class AgentRuntimeE2EHarnessTests(unittest.TestCase):

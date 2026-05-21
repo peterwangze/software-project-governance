@@ -34,6 +34,15 @@ def main():
     print(f" - command: {runtime_e2e['command']}")
     print(f" - version_command: {runtime_e2e['version_command']}")
     print(f" - evidence: {runtime_e2e['evidence']}")
+    preflight = runtime_e2e.get("provider_model_preflight", {})
+    if preflight:
+        print(f" - provider_model_preflight.status: {preflight.get('status')}")
+        if preflight.get("command"):
+            print(f" - provider_model_preflight.command: {preflight['command']}")
+        if preflight.get("legal_models"):
+            print(f" - provider_model_preflight.legal_models: {', '.join(preflight['legal_models'])}")
+        if preflight.get("blocked_reason"):
+            print(f" - provider_model_preflight.blocked_reason: {preflight['blocked_reason']}")
     for key in ("target_cwd_e2e", "agent_runtime_e2e"):
         block = runtime_e2e.get(key, {})
         print(f" - {key}.status: {block.get('status')}")
@@ -42,7 +51,6 @@ def main():
         if block.get("blocked_reason"):
             print(f" - {key}.blocked_reason: {block['blocked_reason']}")
     print(f" - full_e2e_verified: {runtime_e2e.get('full_e2e_verified')}")
-    print(f" - no_full_coverage_claim: {manifest.get('no_full_coverage_claim')}")
     print("gate_behavior:")
     print(f" - on_fail: {manifest['gate_behavior']['on_fail']}")
     print(f" - required_action: {manifest['gate_behavior']['required_action']}")

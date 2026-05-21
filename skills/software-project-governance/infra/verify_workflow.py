@@ -287,18 +287,19 @@ PROJECTION_SNIPPETS = {
     ],
     ROOT / "adapters/opencode/README.md": [
         "opencode Adapter",
-        "not supported in this release",
+        "full target-cwd agent runtime E2E verified",
+        "opencode-provider-preflight",
         "check-agent-adapters --runtime",
     ],
     ROOT / "adapters/opencode/adapter-manifest.json": [
         "adapter_id",
-        "not-supported-current-release",
-        "no_full_coverage_claim",
-        "unsupported_reason",
+        "runtime-verified",
+        "provider_model_preflight",
+        "full_e2e_verified",
     ],
     ROOT / "adapters/opencode/launch.py": [
         "opencode Adapter Launcher",
-        "unsupported_reason",
+        "provider_model_preflight",
         "runtime_e2e",
     ],
     ROOT / ".claude-plugin/marketplace.json": [
@@ -1777,6 +1778,198 @@ def _validate_gemini_auth_preflight_claim(root, manifest_path, runtime_e2e):
     return failures
 
 
+OPENCODE_LEGAL_DEEPSEEK_MODELS = ("deepseek-v4-pro", "deepseek-v4-flash")
+
+OPENCODE_PROVIDER_MODEL_REMEDIATION = (
+    "Configure opencode with a supported DeepSeek model, for example "
+    "deepseek-v4-pro or deepseek-v4-flash. Remove ANSI escape/suffix residue "
+    "such as deepseek-v4-pro[1m]. Do not record provider API keys or secret "
+    "values in manifests, tests, docs, or logs."
+)
+
+
+def _run_opencode_probe_command(command, timeout=15):
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+            encoding=locale.getpreferredencoding(False),
+            errors="replace",
+            timeout=timeout,
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        return 1, str(exc)
+    return completed.returncode, _e2e_output(completed)
+
+
+def _opencode_config_candidates(home=None, root=None):
+    home = Path(home) if home else Path.home()
+    root = Path(root) if root else ROOT
+    return [
+        root / "opencode.json",
+        root / "opencode.jsonc",
+        root / "opencode.toml",
+        home / ".config" / "opencode" / "opencode.json",
+        home / ".config" / "opencode" / "opencode.jsonc",
+        home / ".config" / "opencode" / "opencode.toml",
+        home / ".opencode.json",
+    ]
+
+
+def _sanitize_opencode_probe_text(text):
+    sanitized = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "<ANSI>", text or "")
+    sanitized = re.sub(
+        r"(?i)(api[_-]?key|token|secret|authorization|bearer)\s*[:=]\s*['\"]?[^'\"\s,}]+",
+        r"\1=<redacted>",
+        sanitized,
+    )
+    sanitized = re.sub(r"\bsk-[A-Za-z0-9._-]+", "<redacted-secret>", sanitized)
+    return _truncate_log(sanitized, limit=500)
+
+
+def _opencode_model_scan(text):
+    raw = text or ""
+    lowered = raw.lower()
+    blocked_markers = []
+    if "\x1b" in raw:
+        blocked_markers.append("ANSI escape residue")
+    if re.search(r"deepseek-v4-(?:pro|flash)\[[0-9;?]*[a-zA-Z]", raw):
+        blocked_markers.append("ANSI suffix residue")
+    if "unsupported model" in lowered or "not supported" in lowered or "invalid model" in lowered:
+        blocked_markers.append("unsupported model output")
+
+    legal_models = [
+        model for model in OPENCODE_LEGAL_DEEPSEEK_MODELS
+        if re.search(rf"(?<![\w.-]){re.escape(model)}(?![\w.-])", raw)
+    ]
+    invalid_candidates = re.findall(r"deepseek-v4-(?:pro|flash)\[[^\s,;\"'}]+", raw)
+    return {
+        "legal_models": sorted(set(legal_models)),
+        "blocked_markers": sorted(set(blocked_markers)),
+        "invalid_candidates": sorted(set(invalid_candidates)),
+    }
+
+
+def _opencode_provider_model_preflight(
+    home=None,
+    root=None,
+    which=shutil.which,
+    version_runner=_run_version_command,
+    probe_runner=_run_opencode_probe_command,
+    config_candidates=None,
+):
+    result = {
+        "status": "BLOCKED",
+        "command": "python skills/software-project-governance/infra/verify_workflow.py opencode-provider-preflight",
+        "version_command": "opencode --version",
+        "cli_path": None,
+        "version": None,
+        "legal_models": [],
+        "model_sources": [],
+        "blocked_reason": None,
+        "remediation": OPENCODE_PROVIDER_MODEL_REMEDIATION,
+    }
+
+    cli_path = which("opencode")
+    if not cli_path:
+        result["blocked_reason"] = "opencode CLI not found on PATH"
+        return result
+    result["cli_path"] = str(cli_path)
+
+    returncode, version_output = version_runner("opencode --version")
+    if returncode != 0:
+        result["version"] = _sanitize_opencode_probe_text(version_output)
+        result["blocked_reason"] = "opencode CLI version command failed"
+        return result
+    result["version"] = _sanitize_opencode_probe_text(version_output)
+
+    scan_texts = []
+    for command in (["opencode", "models"], ["opencode", "model", "list"]):
+        code, output = probe_runner(command)
+        if output:
+            scan_texts.append((f"command:{' '.join(command)}", output))
+        if code == 0 and output:
+            break
+
+    paths = config_candidates
+    if paths is None:
+        paths = _opencode_config_candidates(home=home, root=root)
+    for path in paths:
+        path = Path(path)
+        try:
+            content = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        scan_texts.append((f"config:{path.name}", content))
+
+    blocked = []
+    for source, text in scan_texts:
+        scan = _opencode_model_scan(text)
+        for model in scan["legal_models"]:
+            if model not in result["legal_models"]:
+                result["legal_models"].append(model)
+        if scan["legal_models"]:
+            result["model_sources"].append(source)
+        if scan["blocked_markers"] or scan["invalid_candidates"]:
+            blocked.append(
+                f"{source}: "
+                + ", ".join(scan["blocked_markers"] + scan["invalid_candidates"])
+            )
+
+    result["legal_models"].sort()
+    if blocked:
+        result["blocked_reason"] = "opencode provider/model config invalid: " + "; ".join(blocked)
+        return result
+    if result["legal_models"]:
+        result["status"] = "PASS"
+        return result
+
+    result["blocked_reason"] = (
+        "opencode provider/model config missing supported DeepSeek model "
+        "(deepseek-v4-pro or deepseek-v4-flash)"
+    )
+    return result
+
+
+def _validate_opencode_provider_model_preflight_claim(root, manifest_path, runtime_e2e):
+    display = _display_path(manifest_path, root)
+    preflight = runtime_e2e.get("provider_model_preflight")
+    if not isinstance(preflight, dict):
+        return [f"{display}: opencode runtime_e2e.provider_model_preflight must be an object"]
+
+    failures = []
+    status = preflight.get("status")
+    if status not in {"passed", "blocked"}:
+        failures.append(f"{display}: opencode provider_model_preflight.status must be passed or blocked")
+    if "opencode-provider-preflight" not in str(preflight.get("command", "")):
+        failures.append(f"{display}: opencode provider_model_preflight.command must reference opencode-provider-preflight")
+    if not preflight.get("verified_on"):
+        failures.append(f"{display}: opencode provider_model_preflight.verified_on required")
+    models = preflight.get("legal_models")
+    if status == "passed":
+        if not isinstance(models, list) or not set(models).intersection(OPENCODE_LEGAL_DEEPSEEK_MODELS):
+            failures.append(f"{display}: opencode passed provider_model_preflight requires deepseek-v4-pro or deepseek-v4-flash")
+        agent_status = runtime_e2e.get("agent_runtime_e2e", {}).get("status")
+        if agent_status == "passed" and runtime_e2e.get("full_e2e_verified") is not True:
+            failures.append(f"{display}: opencode passed agent_runtime_e2e requires full_e2e_verified=true")
+    if status == "blocked" and runtime_e2e.get("full_e2e_verified") is not False:
+        failures.append(f"{display}: opencode blocked provider_model_preflight requires full_e2e_verified=false")
+
+    guidance_text = " ".join(
+        str(value or "")
+        for value in (
+            preflight.get("blocked_reason"),
+            preflight.get("remediation"),
+            preflight.get("evidence"),
+        )
+    ).lower()
+    if status == "blocked" and not all(marker in guidance_text for marker in OPENCODE_LEGAL_DEEPSEEK_MODELS):
+        failures.append(f"{display}: opencode blocked guidance must mention deepseek-v4-pro and deepseek-v4-flash")
+    return failures
+
+
 def check_agent_adapter_contract(root=None, run_runtime=False):
     """FIX-071: mainstream agent adapters must be explicit and not overclaim coverage."""
     root = root or ROOT
@@ -1841,6 +2034,8 @@ def check_agent_adapter_contract(root=None, run_runtime=False):
                 failures.extend(_validate_codex_runtime_e2e_claim(root, manifest_path, runtime_e2e))
             if adapter_id == "gemini":
                 failures.extend(_validate_gemini_auth_preflight_claim(root, manifest_path, runtime_e2e))
+            if adapter_id == "opencode":
+                failures.extend(_validate_opencode_provider_model_preflight_claim(root, manifest_path, runtime_e2e))
             if runtime_e2e.get("full_e2e_verified") is True:
                 target_status = runtime_e2e.get("target_cwd_e2e", {}).get("status")
                 agent_status = runtime_e2e.get("agent_runtime_e2e", {}).get("status")
@@ -1871,9 +2066,17 @@ def check_agent_adapter_contract(root=None, run_runtime=False):
             )
             continue
 
+        if manifest.get("no_full_coverage_claim") is True:
+            failures.append(
+                f"{_display_path(adapter_dir / 'adapter-manifest.json', root)}: runtime-verified adapter must not keep no_full_coverage_claim=true"
+            )
         if runtime_e2e.get("e2e_level") not in ("runtime-version-probe", "real-agent-target-cwd"):
             failures.append(
                 f"{_display_path(adapter_dir / 'adapter-manifest.json', root)}: runtime-verified adapter runtime_e2e.e2e_level must be runtime-version-probe or real-agent-target-cwd"
+            )
+        if manifest.get("no_full_coverage_claim") is True and runtime_e2e.get("full_e2e_verified") is True:
+            failures.append(
+                f"{_display_path(adapter_dir / 'adapter-manifest.json', root)}: no_full_coverage_claim=true conflicts with full_e2e_verified=true"
             )
         if not runtime_e2e.get("verified_on") or not runtime_e2e.get("evidence"):
             failures.append(
@@ -8606,6 +8809,16 @@ def _classify_agent_runtime_blocked(agent_id, output="", exception=None):
                 "GOOGLE_API_KEY, Vertex credentials, GCA auth, or Gemini settings auth."
             )
     if agent_id == "opencode":
+        if isinstance(exception, subprocess.TimeoutExpired):
+            return (
+                "opencode CLI target-cwd command timed out; increase timeout "
+                "or inspect partial tool use before classifying as provider/model invalid"
+            )
+        if "timed out" in lowered or "timeout" in lowered:
+            return (
+                "opencode CLI target-cwd command timed out; increase timeout "
+                "or inspect partial tool use before classifying as provider/model invalid"
+            )
         invalid_model_markers = [
             "deepseek-v4-pro[1m]",
             "invalid model",
@@ -8853,6 +9066,40 @@ def cmd_gemini_auth_preflight(_args):
     if result["blocked_reason"]:
         print(f"blocked_reason: {result['blocked_reason']}")
     print(f"remediation: {result['remediation']}")
+    if result["status"] != "PASS":
+        sys.exit(1)
+
+
+def cmd_opencode_provider_preflight(_args):
+    """Check opencode CLI and DeepSeek provider/model config without leaking secrets."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+    result = _opencode_provider_model_preflight()
+    print("=== opencode Provider/Model Preflight ===")
+    print(f"status: {result['status']}")
+    print(f"command: {result['command']}")
+    print(f"version_command: {result['version_command']}")
+    print(f"cli_path: {result['cli_path'] or 'not found'}")
+    if result["version"]:
+        print(f"version: {result['version']}")
+    if result["legal_models"]:
+        print("legal_models:")
+        for model in result["legal_models"]:
+            print(f" - {model}")
+    else:
+        print("legal_models: none")
+    if result["model_sources"]:
+        print("model_sources:")
+        for source in result["model_sources"]:
+            print(f" - {source}")
+    else:
+        print("model_sources: none")
+    if result["blocked_reason"]:
+        print(f"blocked_reason: {_sanitize_opencode_probe_text(result['blocked_reason'])}")
+    print(f"remediation: {_sanitize_opencode_probe_text(result['remediation'])}")
     if result["status"] != "PASS":
         sys.exit(1)
 
@@ -9459,6 +9706,12 @@ def main():
         help="Check Gemini CLI PATH/version/auth sources without printing secrets",
     )
 
+    # opencode-provider-preflight
+    subparsers.add_parser(
+        "opencode-provider-preflight",
+        help="Check opencode CLI PATH/version/provider model without printing secrets",
+    )
+
     # check-cross-references (SYSGAP-008)
     xr_p = subparsers.add_parser("check-cross-references",
                                  help="Scan .md/.py files for dangling, deprecated, and circular path references")
@@ -9537,6 +9790,7 @@ def main():
         "e2e-check": cmd_e2e_check,
         "agent-runtime-e2e": cmd_agent_runtime_e2e,
         "gemini-auth-preflight": cmd_gemini_auth_preflight,
+        "opencode-provider-preflight": cmd_opencode_provider_preflight,
         "check-cross-references": cmd_check_cross_references,
         "check-sequential-ids": cmd_check_sequential_ids,
         "check-structural-validity": cmd_check_structural_validity,

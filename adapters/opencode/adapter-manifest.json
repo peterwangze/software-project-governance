@@ -32,26 +32,36 @@
     "project_instruction_file": "AGENTS.md",
     "projection_rule": "Use only as a pointer to skills/software-project-governance/SKILL.md; do not duplicate workflow rules."
   },
-  "no_full_coverage_claim": true,
   "runtime_e2e": {
     "e2e_level": "real-agent-target-cwd",
     "command": "opencode",
     "version_command": "opencode --version",
-    "verified_on": "2026-05-20",
-    "evidence": "Local opencode command returned version 1.15.5.",
+    "verified_on": "2026-05-21",
+    "evidence": "Local opencode command returned version 1.15.5; provider/model preflight passed with supported DeepSeek models; real target-cwd opencode runtime E2E passed in the 90s timeout window.",
     "target_cwd_e2e": {
       "status": "passed",
       "command": "python skills/software-project-governance/infra/verify_workflow.py status",
       "verified_on": "2026-05-20",
       "evidence": "Executed from project/e2e-test-project cwd and returned Test Project status with default-confirm permission mode."
     },
-    "agent_runtime_e2e": {
-      "status": "blocked",
-      "command": "opencode run --dir . --format json \"Read .governance/plan-tracker.md in the current working directory and answer exactly: E2E_STAGE=<current stage text>. Do not modify files.\"",
-      "blocked_reason": "opencode runtime is installed, but provider configuration sent an invalid model name to DeepSeek and returned HTTP 400 before task execution.",
-      "evidence": "Command returned APIError: supported model names are deepseek-v4-pro or deepseek-v4-flash, but configured request passed deepseek-v4-pro with a stray formatting suffix."
+    "provider_model_preflight": {
+      "status": "passed",
+      "command": "python skills/software-project-governance/infra/verify_workflow.py opencode-provider-preflight",
+      "verified_on": "2026-05-21",
+      "legal_models": [
+        "deepseek-v4-flash",
+        "deepseek-v4-pro"
+      ],
+      "evidence": "Preflight verified opencode CLI PATH/version and a supported DeepSeek model configuration without recording API key values.",
+      "remediation": "Use deepseek-v4-pro or deepseek-v4-flash; remove invalid suffixes such as deepseek-v4-pro[1m] and ANSI escape residue."
     },
-    "full_e2e_verified": false
+    "agent_runtime_e2e": {
+      "status": "passed",
+      "command": "python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent opencode --timeout 90; opencode run --dir . --format json ...",
+      "verified_on": "2026-05-21",
+      "evidence": "Real opencode target-cwd E2E passed: opencode read project/e2e-test-project/.governance/plan-tracker.md and returned E2E_PLATFORM=opencode; E2E_AGENT=Coordinator; E2E_MODE=always-on x default-confirm."
+    },
+    "full_e2e_verified": true
   },
   "launcher": "adapters/opencode/launch.py"
 }

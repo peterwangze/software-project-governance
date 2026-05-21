@@ -4,16 +4,25 @@ This directory is the opencode projection for `software-project-governance`.
 
 ## Current Status
 
-opencode is **runtime-detected but not full-E2E verified in this release**.
-The adapter is intentionally explicit about this split so the project does not
-claim mainstream agent coverage beyond the evidence that actually passed.
+opencode is runtime-detected and full target-cwd agent runtime E2E verified in
+the current local validation host.
 
 The current local validation host has `opencode` on PATH and
-`opencode --version` returns `1.15.5`. A real `opencode run` target-cwd use case
-was attempted, but the configured provider returned HTTP 400 for an invalid
-DeepSeek model name before task execution. `check-agent-adapters --runtime`
-must therefore report the runtime version probe as PASS while the manifest keeps
-`runtime_e2e.agent_runtime_e2e.status=blocked` and `no_full_coverage_claim=true`.
+`opencode --version` returns `1.15.5`. The reproducible runtime command is:
+
+```bash
+python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent opencode --timeout 90
+```
+
+That command runs `opencode run` in `project/e2e-test-project`, where opencode
+reads `.governance/plan-tracker.md` from the target cwd and returns structured
+fields including `E2E_PLATFORM=opencode`, `E2E_AGENT=Coordinator`, and
+`E2E_MODE=always-on x default-confirm`.
+
+The earlier DeepSeek invalid model blocker is closed for this host. The adapter
+still keeps a provider/model preflight so future regressions such as
+`deepseek-v4-pro[1m]`, ANSI escape residue, or unsupported model output are
+classified as BLOCKED before any full coverage claim is accepted.
 
 ## Native Entry
 
@@ -39,8 +48,11 @@ python skills/software-project-governance/infra/verify_workflow.py check-agent-a
 Runtime contract:
 
 ```bash
+python skills/software-project-governance/infra/verify_workflow.py opencode-provider-preflight
+python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent opencode --timeout 90
 python skills/software-project-governance/infra/verify_workflow.py check-agent-adapters --runtime
 ```
 
-Until an `opencode run` workflow use case passes in the real runtime, this
-adapter must not be described as full-coverage verified.
+The 90 second timeout is the current stable window. Shorter runs may time out
+after partial tool use, so timeout output should be treated as a runtime window
+issue unless the provider/model preflight or logs show an explicit model error.

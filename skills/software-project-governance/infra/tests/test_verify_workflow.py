@@ -739,6 +739,35 @@ class AgentAdapterContractTests(unittest.TestCase):
                 "Gemini auth missing or not configured; configure GEMINI_API_KEY, "
                 "GOOGLE_API_KEY, Vertex credentials, GCA auth, or Gemini settings auth."
             )
+        if adapter_id == "opencode":
+            manifest["runtime_e2e"] = {
+                "e2e_level": "real-agent-target-cwd",
+                "command": "opencode",
+                "version_command": "opencode --version",
+                "verified_on": "2026-05-21",
+                "evidence": "Local opencode command returned version 1.15.5.",
+                "target_cwd_e2e": {
+                    "status": "passed",
+                    "command": "python skills/software-project-governance/infra/verify_workflow.py status",
+                    "verified_on": "2026-05-20",
+                    "evidence": "target cwd status command passed",
+                },
+                "provider_model_preflight": {
+                    "status": "passed",
+                    "command": "python skills/software-project-governance/infra/verify_workflow.py opencode-provider-preflight",
+                    "verified_on": "2026-05-21",
+                    "legal_models": ["deepseek-v4-pro", "deepseek-v4-flash"],
+                    "evidence": "opencode provider/model preflight found supported DeepSeek models.",
+                    "remediation": "Use deepseek-v4-pro or deepseek-v4-flash; remove ANSI suffix residue.",
+                },
+                "agent_runtime_e2e": {
+                    "status": "passed",
+                    "command": "python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent opencode --timeout 90; opencode run --dir . --format json ...",
+                    "verified_on": "2026-05-21",
+                    "evidence": "opencode run target-cwd PASS after reading .governance/plan-tracker.md and returning E2E_PLATFORM=opencode; E2E_AGENT=Coordinator; E2E_MODE=always-on x default-confirm.",
+                },
+                "full_e2e_verified": True,
+            }
         if support_status == "not-supported-current-release":
             manifest["unsupported_reason"] = "runtime unavailable"
             manifest["no_full_coverage_claim"] = True
@@ -758,9 +787,8 @@ class AgentAdapterContractTests(unittest.TestCase):
         (adapter_dir / "adapter-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
     def _write_all_adapters(self, root):
-        for adapter_id in ["claude", "codex", "gemini"]:
+        for adapter_id in ["claude", "codex", "gemini", "opencode"]:
             self._write_adapter(root, adapter_id)
-        self._write_adapter(root, "opencode", support_status="not-supported-current-release")
 
     def test_agent_adapter_contract_accepts_verified_and_explicit_unsupported(self):
         with tempfile.TemporaryDirectory() as td:
@@ -1002,6 +1030,86 @@ class AgentAdapterContractTests(unittest.TestCase):
                 }},
             )
             self.assertEqual(vw.check_agent_adapter_contract(root=root), [])
+
+    def test_agent_adapter_contract_accepts_opencode_real_runtime_passed_full_claim(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_all_adapters(root)
+
+            self.assertEqual(vw.check_agent_adapter_contract(root=root), [])
+
+    def test_agent_adapter_contract_rejects_opencode_passed_without_provider_preflight(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_all_adapters(root)
+            runtime_e2e = {
+                "e2e_level": "real-agent-target-cwd",
+                "command": "opencode",
+                "version_command": "opencode --version",
+                "verified_on": "2026-05-21",
+                "evidence": "version probe passed",
+                "target_cwd_e2e": {
+                    "status": "passed",
+                    "command": "python skills/software-project-governance/infra/verify_workflow.py status",
+                    "verified_on": "2026-05-20",
+                    "evidence": "target cwd passed",
+                },
+                "agent_runtime_e2e": {
+                    "status": "passed",
+                    "command": "python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent opencode --timeout 90; opencode run --dir . --format json ...",
+                    "verified_on": "2026-05-21",
+                    "evidence": "opencode run target-cwd PASS after reading AGENTS.md bootstrap",
+                },
+                "full_e2e_verified": True,
+            }
+            self._write_adapter(root, "opencode", extra={"runtime_e2e": runtime_e2e})
+
+            issues = vw.check_agent_adapter_contract(root=root)
+
+            self.assertTrue(any("provider_model_preflight must be an object" in issue for issue in issues))
+
+    def test_agent_adapter_contract_rejects_old_opencode_blocked_no_full_coverage_claim_fixture(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_all_adapters(root)
+            runtime_e2e = {
+                "e2e_level": "real-agent-target-cwd",
+                "command": "opencode",
+                "version_command": "opencode --version",
+                "verified_on": "2026-05-20",
+                "evidence": "Local opencode command returned version 1.15.5.",
+                "target_cwd_e2e": {
+                    "status": "passed",
+                    "command": "python skills/software-project-governance/infra/verify_workflow.py status",
+                    "verified_on": "2026-05-20",
+                    "evidence": "target cwd passed",
+                },
+                "provider_model_preflight": {
+                    "status": "blocked",
+                    "command": "python skills/software-project-governance/infra/verify_workflow.py opencode-provider-preflight",
+                    "verified_on": "2026-05-21",
+                    "blocked_reason": "opencode provider/model config invalid: deepseek-v4-pro[1m]",
+                    "evidence": "Supported names are deepseek-v4-pro and deepseek-v4-flash.",
+                    "remediation": "Use deepseek-v4-pro or deepseek-v4-flash.",
+                },
+                "agent_runtime_e2e": {
+                    "status": "blocked",
+                    "command": "opencode run --dir . --format json ...",
+                    "verified_on": "2026-05-20",
+                    "blocked_reason": "opencode provider/model config invalid",
+                    "evidence": "old blocked fixture",
+                },
+                "full_e2e_verified": False,
+            }
+            self._write_adapter(
+                root,
+                "opencode",
+                extra={"runtime_e2e": runtime_e2e, "no_full_coverage_claim": True},
+            )
+
+            issues = vw.check_agent_adapter_contract(root=root)
+
+            self.assertTrue(any("no_full_coverage_claim" in issue for issue in issues))
 
     def test_agent_adapter_contract_rejects_gemini_manifest_missing_auth_preflight(self):
         with tempfile.TemporaryDirectory() as td:
@@ -1703,6 +1811,93 @@ class GeminiAuthPreflightTests(unittest.TestCase):
         text = output.getvalue()
         self.assertIn("status: PASS", text)
         self.assertIn("env:GOOGLE_API_KEY", text)
+        self.assertNotIn(secret, text)
+
+
+class OpencodeProviderPreflightTests(unittest.TestCase):
+    """FIX-079: opencode provider/model preflight is reproducible and secret-safe."""
+
+    def test_opencode_provider_preflight_passes_with_legal_models(self):
+        result = vw._opencode_provider_model_preflight(
+            home=Path("missing-home"),
+            root=Path("missing-root"),
+            which=lambda command: "opencode",
+            version_runner=lambda command: (0, "1.15.5"),
+            probe_runner=lambda command: (
+                0,
+                "deepseek/deepseek-v4-pro\ndeepseek/deepseek-v4-flash\n",
+            ),
+            config_candidates=[],
+        )
+
+        self.assertEqual(result["status"], "PASS")
+        self.assertEqual(result["legal_models"], ["deepseek-v4-flash", "deepseek-v4-pro"])
+        self.assertIn("command:opencode models", result["model_sources"])
+
+    def test_opencode_provider_preflight_blocks_invalid_ansi_suffix(self):
+        result = vw._opencode_provider_model_preflight(
+            home=Path("missing-home"),
+            root=Path("missing-root"),
+            which=lambda command: "opencode",
+            version_runner=lambda command: (0, "1.15.5"),
+            probe_runner=lambda command: (0, "configured model: deepseek-v4-pro[1m]"),
+            config_candidates=[],
+        )
+
+        self.assertEqual(result["status"], "BLOCKED")
+        self.assertIn("opencode provider/model config invalid", result["blocked_reason"])
+        self.assertIn("deepseek-v4-pro[1m]", result["blocked_reason"])
+
+    def test_opencode_provider_preflight_blocks_unsupported_model_output(self):
+        result = vw._opencode_provider_model_preflight(
+            home=Path("missing-home"),
+            root=Path("missing-root"),
+            which=lambda command: "opencode",
+            version_runner=lambda command: (0, "1.15.5"),
+            probe_runner=lambda command: (1, "unsupported model: deepseek-v4-pro[1m]"),
+            config_candidates=[],
+        )
+
+        self.assertEqual(result["status"], "BLOCKED")
+        self.assertIn("unsupported model output", result["blocked_reason"])
+
+    def test_opencode_provider_preflight_does_not_leak_secret_values(self):
+        secret = "local-provider-secret-value"
+        result = vw._opencode_provider_model_preflight(
+            home=Path("missing-home"),
+            root=Path("missing-root"),
+            which=lambda command: "opencode",
+            version_runner=lambda command: (0, "1.15.5"),
+            probe_runner=lambda command: (
+                0,
+                f"api_key={secret}\nmodel=deepseek-v4-pro\n",
+            ),
+            config_candidates=[],
+        )
+
+        self.assertEqual(result["status"], "PASS")
+        self.assertNotIn(secret, json.dumps(result))
+
+    def test_opencode_provider_preflight_cli_output_does_not_print_secret(self):
+        secret = "local-output-secret-value"
+        with patch.object(vw, "_opencode_provider_model_preflight", return_value={
+            "status": "PASS",
+            "command": "python skills/software-project-governance/infra/verify_workflow.py opencode-provider-preflight",
+            "version_command": "opencode --version",
+            "cli_path": "opencode",
+            "version": "1.15.5",
+            "legal_models": ["deepseek-v4-pro"],
+            "model_sources": ["command:opencode models"],
+            "blocked_reason": None,
+            "remediation": f"Do not print secret={secret}.",
+        }):
+            output = io.StringIO()
+            with redirect_stdout(output):
+                vw.cmd_opencode_provider_preflight(argparse.Namespace())
+
+        text = output.getvalue()
+        self.assertIn("status: PASS", text)
+        self.assertIn("deepseek-v4-pro", text)
         self.assertNotIn(secret, text)
 
 

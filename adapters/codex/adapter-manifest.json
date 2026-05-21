@@ -46,12 +46,13 @@
       "evidence": "Executed from project/e2e-test-project cwd and returned Test Project status with default-confirm permission mode."
     },
     "agent_runtime_e2e": {
-      "status": "passed",
-      "command": "Codex App current session using AGENTS.md bootstrap; codex exec attempted separately and timed out in this host.",
-      "verified_on": "2026-05-20",
-      "evidence": "Current real Codex App session loaded AGENTS.md, executed governance bootstrap, closed FIX-072 and FIX-073 through workflow-assisted iteration, Code Review, check-release, commit, and push."
+      "status": "blocked",
+      "command": "python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent codex --timeout 90; codex exec -C . -s read-only --ephemeral \"Read the local governance bootstrap and answer with exactly these machine-readable fields if the workflow is loaded: E2E_PLATFORM=codex; E2E_AGENT=<workflow role>; E2E_STAGE=<current stage>; E2E_MODE=<trigger x permission>. Do not modify files.\"",
+      "verified_on": "2026-05-21",
+      "blocked_reason": "Codex CLI headless target-cwd E2E timed out in the real `codex exec` runtime.",
+      "evidence": "FIX-076 real agent runtime matrix reported Codex BLOCKED timeout while Claude/opencode passed and Gemini was blocked by auth; Codex App current workflow session is not accepted as a substitute for Codex CLI headless target-cwd full E2E."
     },
-    "full_e2e_verified": true
+    "full_e2e_verified": false
   },
   "replacement_boundary": {
     "keep": [

@@ -1515,6 +1515,79 @@ def _validate_runtime_e2e_block(root, manifest_path, runtime_e2e, field_name, al
     return failures
 
 
+def _validate_codex_runtime_e2e_claim(root, manifest_path, runtime_e2e):
+    """FIX-077: Codex full E2E must be real headless codex exec target-cwd evidence."""
+    agent_block = runtime_e2e.get("agent_runtime_e2e", {})
+    if not isinstance(agent_block, dict):
+        return []
+
+    status = agent_block.get("status")
+    full_e2e_verified = runtime_e2e.get("full_e2e_verified")
+    claim_text = " ".join(
+        str(value or "")
+        for value in (
+            agent_block.get("command"),
+            agent_block.get("evidence"),
+            agent_block.get("blocked_reason"),
+        )
+    ).lower()
+    app_session_markers = (
+        "codex app",
+        "current session",
+        "current workflow session",
+        "timeout attempted separately",
+        "attempted separately and timed out",
+    )
+    blocked_markers = (
+        "timed out",
+        "timeout",
+        "blocked",
+        "blocker",
+    )
+    target_cwd_markers = (
+        " -c ",
+        "\n-c ",
+        "\t-c ",
+        "target-cwd",
+        "target cwd",
+        "cwd",
+    )
+    headless_markers = (
+        "--ephemeral",
+        "read-only",
+        "read only",
+        "headless",
+    )
+    failures = []
+    display = _display_path(manifest_path, root)
+    if status == "passed":
+        if "codex exec" not in claim_text:
+            failures.append(
+                f"{display}: Codex agent_runtime_e2e.status=passed requires real codex exec evidence"
+            )
+        if not any(marker in claim_text for marker in target_cwd_markers):
+            failures.append(
+                f"{display}: Codex agent_runtime_e2e.status=passed requires target-cwd evidence"
+            )
+        if not any(marker in claim_text for marker in headless_markers):
+            failures.append(
+                f"{display}: Codex agent_runtime_e2e.status=passed requires headless/read-only/ephemeral evidence"
+            )
+        if any(marker in claim_text for marker in app_session_markers):
+            failures.append(
+                f"{display}: Codex agent_runtime_e2e.status=passed must be real codex exec target-cwd evidence, not Codex App/current session or separately timed-out CLI evidence"
+            )
+        if any(marker in claim_text for marker in blocked_markers):
+            failures.append(
+                f"{display}: Codex agent_runtime_e2e.status=passed must not include timeout/blocked evidence"
+            )
+    if status == "blocked" and full_e2e_verified is not False:
+        failures.append(
+            f"{display}: Codex blocked agent_runtime_e2e requires full_e2e_verified=false"
+        )
+    return failures
+
+
 def check_agent_adapter_contract(root=None, run_runtime=False):
     """FIX-071: mainstream agent adapters must be explicit and not overclaim coverage."""
     root = root or ROOT
@@ -1575,6 +1648,8 @@ def check_agent_adapter_contract(root=None, run_runtime=False):
                     allow_unsupported=(support_status == "not-supported-current-release"),
                 )
             )
+            if adapter_id == "codex":
+                failures.extend(_validate_codex_runtime_e2e_claim(root, manifest_path, runtime_e2e))
             if runtime_e2e.get("full_e2e_verified") is True:
                 target_status = runtime_e2e.get("target_cwd_e2e", {}).get("status")
                 agent_status = runtime_e2e.get("agent_runtime_e2e", {}).get("status")

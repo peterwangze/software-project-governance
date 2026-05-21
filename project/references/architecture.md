@@ -229,7 +229,7 @@
 | 平台 | 状态 | adapter 目录 | plugin 目录 |
 |------|------|-------------|------------|
 | Claude Code | runtime/version probe PASS；真实 Claude Code agent 在 `project/e2e-test-project` 目标 cwd 读取治理计划并返回当前阶段；full E2E verified | `adapters/claude/` | `.claude-plugin/` |
-| Codex | runtime/version probe PASS；当前 Codex App 会话已通过 `AGENTS.md` 使用治理 bootstrap 自迭代并完成 FIX-072/FIX-073 闭环；`codex exec` headless 在本机超时，作为 CLI headless 阻塞信号记录 | `adapters/codex/` | `.codex-plugin/` |
+| Codex | runtime/version probe PASS；Codex App 当前工作流会话可证明本 Codex 桌面环境能接入 `AGENTS.md` bootstrap 辅助自身迭代，但不能替代 Codex CLI headless target-cwd full E2E；`codex exec` 在本机真实矩阵中 timeout，当前 CLI full coverage blocked | `adapters/codex/` | `.codex-plugin/` |
 | Gemini | runtime/version probe PASS；目标 cwd Python 治理命令 PASS；真实 Gemini agent 用例因本机未配置 Gemini auth 阻塞，不宣称 full E2E | `adapters/gemini/` | — |
 | opencode | runtime/version probe PASS（`opencode --version`=1.15.5）；目标 cwd Python 治理命令 PASS；真实 `opencode run` 因 provider/model 配置错误阻塞，`no_full_coverage_claim=true` | `adapters/opencode/` | — |
 | 通用 `.agents` marketplace | 兼容分析（文档/元数据） | — | `.agents/` |

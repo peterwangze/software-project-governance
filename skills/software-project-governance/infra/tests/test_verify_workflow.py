@@ -836,6 +836,160 @@ class AgentAdapterContractTests(unittest.TestCase):
             issues = vw.check_agent_adapter_contract(root=root)
             self.assertTrue(any("full_e2e_verified=true requires" in issue for issue in issues))
 
+    def test_agent_adapter_contract_rejects_codex_app_session_as_passed_agent_e2e(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_all_adapters(root)
+            self._write_adapter(
+                root,
+                "codex",
+                extra={"runtime_e2e": {
+                    "e2e_level": "real-agent-target-cwd",
+                    "command": "codex",
+                    "version_command": "codex --version",
+                    "verified_on": "2026-05-21",
+                    "evidence": "version probe passed",
+                    "target_cwd_e2e": {
+                        "status": "passed",
+                        "command": "python skills/software-project-governance/infra/verify_workflow.py status",
+                        "verified_on": "2026-05-20",
+                        "evidence": "target cwd passed",
+                    },
+                    "agent_runtime_e2e": {
+                        "status": "passed",
+                        "command": "Codex App current session using AGENTS.md bootstrap; codex exec attempted separately and timed out in this host.",
+                        "verified_on": "2026-05-20",
+                        "evidence": "Current real Codex App session loaded AGENTS.md and closed workflow tasks.",
+                    },
+                    "full_e2e_verified": True,
+                }},
+            )
+            issues = vw.check_agent_adapter_contract(root=root)
+            self.assertTrue(any("must be real codex exec target-cwd evidence" in issue for issue in issues))
+
+    def test_agent_adapter_contract_rejects_generic_codex_agent_runtime_e2e_pass(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_all_adapters(root)
+            self._write_adapter(
+                root,
+                "codex",
+                extra={"runtime_e2e": {
+                    "e2e_level": "real-agent-target-cwd",
+                    "command": "codex",
+                    "version_command": "codex --version",
+                    "verified_on": "2026-05-21",
+                    "evidence": "version probe passed",
+                    "target_cwd_e2e": {
+                        "status": "passed",
+                        "command": "python skills/software-project-governance/infra/verify_workflow.py status",
+                        "verified_on": "2026-05-21",
+                        "evidence": "target cwd passed",
+                    },
+                    "agent_runtime_e2e": {
+                        "status": "passed",
+                        "command": "python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent codex",
+                        "verified_on": "2026-05-21",
+                        "evidence": "agent-runtime-e2e passed",
+                    },
+                    "full_e2e_verified": True,
+                }},
+            )
+            issues = vw.check_agent_adapter_contract(root=root)
+            self.assertTrue(any("requires real codex exec evidence" in issue for issue in issues))
+
+    def test_agent_adapter_contract_rejects_codex_exec_pass_with_blocked_evidence(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_all_adapters(root)
+            self._write_adapter(
+                root,
+                "codex",
+                extra={"runtime_e2e": {
+                    "e2e_level": "real-agent-target-cwd",
+                    "command": "codex",
+                    "version_command": "codex --version",
+                    "verified_on": "2026-05-21",
+                    "evidence": "version probe passed",
+                    "target_cwd_e2e": {
+                        "status": "passed",
+                        "command": "python skills/software-project-governance/infra/verify_workflow.py status",
+                        "verified_on": "2026-05-21",
+                        "evidence": "target cwd passed",
+                    },
+                    "agent_runtime_e2e": {
+                        "status": "passed",
+                        "command": "codex exec -C . -s read-only --ephemeral \"report governance status\"",
+                        "verified_on": "2026-05-21",
+                        "evidence": "codex exec target-cwd timed out before later being marked blocked",
+                    },
+                    "full_e2e_verified": True,
+                }},
+            )
+            issues = vw.check_agent_adapter_contract(root=root)
+            self.assertTrue(any("must not include timeout/blocked evidence" in issue for issue in issues))
+
+    def test_agent_adapter_contract_accepts_codex_exec_pass_with_agents_bootstrap_evidence(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_all_adapters(root)
+            self._write_adapter(
+                root,
+                "codex",
+                extra={"runtime_e2e": {
+                    "e2e_level": "real-agent-target-cwd",
+                    "command": "codex",
+                    "version_command": "codex --version",
+                    "verified_on": "2026-05-21",
+                    "evidence": "version probe passed",
+                    "target_cwd_e2e": {
+                        "status": "passed",
+                        "command": "python skills/software-project-governance/infra/verify_workflow.py status",
+                        "verified_on": "2026-05-21",
+                        "evidence": "target cwd passed",
+                    },
+                    "agent_runtime_e2e": {
+                        "status": "passed",
+                        "command": "codex exec -C project/e2e-test-project -s read-only --ephemeral \"report governance status\"",
+                        "verified_on": "2026-05-21",
+                        "evidence": "real codex exec target-cwd PASS after reading AGENTS.md bootstrap",
+                    },
+                    "full_e2e_verified": True,
+                }},
+            )
+            self.assertEqual(vw.check_agent_adapter_contract(root=root), [])
+
+    def test_agent_adapter_contract_accepts_codex_blocked_cli_e2e_without_full_claim(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_all_adapters(root)
+            self._write_adapter(
+                root,
+                "codex",
+                extra={"runtime_e2e": {
+                    "e2e_level": "real-agent-target-cwd",
+                    "command": "codex",
+                    "version_command": "codex --version",
+                    "verified_on": "2026-05-21",
+                    "evidence": "version probe passed",
+                    "target_cwd_e2e": {
+                        "status": "passed",
+                        "command": "python skills/software-project-governance/infra/verify_workflow.py status",
+                        "verified_on": "2026-05-20",
+                        "evidence": "target cwd passed",
+                    },
+                    "agent_runtime_e2e": {
+                        "status": "blocked",
+                        "command": "python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent codex --timeout 90; codex exec -C . -s read-only --ephemeral ...",
+                        "verified_on": "2026-05-21",
+                        "blocked_reason": "Codex CLI target-cwd timeout",
+                        "evidence": "real Codex CLI headless target-cwd command timed out",
+                    },
+                    "full_e2e_verified": False,
+                }},
+            )
+            self.assertEqual(vw.check_agent_adapter_contract(root=root), [])
+
     def test_agent_adapter_runtime_checks_supported_commands_only(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

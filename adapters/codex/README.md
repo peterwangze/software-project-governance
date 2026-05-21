@@ -29,7 +29,9 @@ Codex 加载 `skills/software-project-governance/SKILL.md` 作为自包含入口
 - `.agents/plugins/marketplace.json`：Codex/agent marketplace 索引。
 - `adapters/codex/adapter-manifest.json` + `launch.py`：可复跑的 adapter contract 和 runtime E2E 元数据。
 
-2026-05-20 本机验证结果：`codex --version` 返回 `codex-cli 0.125.0`，当前 Codex App 会话已使用 `AGENTS.md` governance bootstrap 辅助本项目自身迭代，并完成 FIX-072/FIX-073 的治理闭环、审查、门禁、提交和推送。单独的 `codex exec` 非交互命令在当前主机超时，因此 CLI headless E2E 仍作为阻塞信号记录，不覆盖 Codex App 真实会话证据。
+2026-05-21 本机验证结果：`codex --version` 返回 `codex-cli 0.125.0`。当前 Codex App 工作流会话已使用 `AGENTS.md` governance bootstrap 辅助本项目自身迭代，这只能证明本 Codex 桌面环境可以接入 workflow 并看护自身开发流程。
+
+Codex App 当前会话不能替代 Codex CLI headless target-cwd full E2E。主流 agent 适配的闭环标准必须通过真实环境 E2E 用例验证；Codex 适配的 full coverage 只接受 `codex exec` 在目标 cwd 中读取 `AGENTS.md` 并返回机器可读 E2E 字段。FIX-076 的真实矩阵中，`python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent codex --timeout 90` / `codex exec -C . -s read-only --ephemeral ...` 在本机超时，因此当前 Codex CLI full coverage 为 `blocked`，`full_e2e_verified=false`。闭环证据转入 FIX-077/FIX-076 evidence，直到真实 CLI target-cwd 用例通过前不得宣称 Codex full E2E verified。
 
 ## 历史入口约定（已废弃，仅供参考）
 

@@ -1633,12 +1633,12 @@ class E2ECommandMatrixTests(unittest.TestCase):
             for name in ("evidence-log.md", "decision-log.md", "risk-log.md", "session-snapshot.md"):
                 (governance_dir / name).write_text("# fixture\n", encoding="utf-8")
             (governance_dir / "plan-tracker.md").write_text(
-                "- **工作流版本**: 0.35.0\n"
+                "- **工作流版本**: 0.36.0\n"
                 "- **操作权限模式**: default-confirm\n",
                 encoding="utf-8",
             )
             (skill_dir / "SKILL.md").write_text(
-                "---\nversion: 0.35.0\n---\nCoordinator\nAgent Team\n",
+                "---\nversion: 0.36.0\n---\nCoordinator\nAgent Team\n",
                 encoding="utf-8",
             )
             (e2e_dir / "commands" / "governance.md").write_text(

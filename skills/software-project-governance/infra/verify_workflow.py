@@ -755,16 +755,16 @@ REQUIRED_SNIPPETS = {
         "## [0.5.0]",
     ],
     ROOT / ".claude-plugin/plugin.json": [
-        "0.35.0",
+        "0.36.0",
     ],
     ROOT / ".claude-plugin/marketplace.json": [
-        "0.35.0",
+        "0.36.0",
     ],
     ROOT / ".codex-plugin/plugin.json": [
-        "0.35.0",
+        "0.36.0",
     ],
     ROOT / "skills/software-project-governance/core/manifest.json": [
-        "0.35.0",
+        "0.36.0",
     ],
 }
 
@@ -8274,12 +8274,12 @@ def _e2e_target_fixture_checks(e2e_dir):
         {
             "label": "target plan-tracker project config",
             "path": governance_dir / "plan-tracker.md",
-            "needles": ["工作流版本", "0.35.0", "操作权限模式", "default-confirm"],
+            "needles": ["工作流版本", "0.36.0", "操作权限模式", "default-confirm"],
         },
         {
             "label": "target workflow skill version",
             "path": e2e_dir / "skills" / "software-project-governance" / "SKILL.md",
-            "needles": ["version: 0.35.0", "Coordinator", "Agent Team"],
+            "needles": ["version: 0.36.0", "Coordinator", "Agent Team"],
         },
         {
             "label": "target /governance route contract",

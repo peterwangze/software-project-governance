@@ -25,8 +25,8 @@
 | `project/e2e-test-project/AGENTS.md` | Codex/opencode native entry thin projection，指向 `skills/software-project-governance/SKILL.md` | target_fixture |
 | `project/e2e-test-project/GEMINI.md` | Gemini native entry thin projection，指向 `skills/software-project-governance/SKILL.md` | target_fixture |
 | `project/e2e-test-project/.governance/` | plan/evidence/decision/risk/session 五个 tracked fixture 文件存在 | target_fixture |
-| `project/e2e-test-project/.governance/plan-tracker.md` | `工作流版本` / `0.35.0` / `操作权限模式` / `default-confirm` | target_fixture |
-| `project/e2e-test-project/skills/software-project-governance/SKILL.md` | `version: 0.35.0` / `Coordinator` / `Agent Team` | target_fixture |
+| `project/e2e-test-project/.governance/plan-tracker.md` | `工作流版本` / `0.36.0` / `操作权限模式` / `default-confirm` | target_fixture |
+| `project/e2e-test-project/skills/software-project-governance/SKILL.md` | `version: 0.36.0` / `Coordinator` / `Agent Team` | target_fixture |
 | `project/e2e-test-project/commands/governance.md` | `Scenario F` / `AskUserQuestion` / `Coordinator` | target_fixture |
 
 ## 平台运行时 / 合同检查

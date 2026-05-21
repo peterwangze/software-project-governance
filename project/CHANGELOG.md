@@ -2,6 +2,29 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.36.0] — 2026-05-22
+
+### 0.36.0 — 真实 agent runtime E2E 闭环补强
+
+面向“主流 agent 适配闭环必须通过真实环境 E2E 用例验证”的补强版本，覆盖 Claude/Codex/Gemini/opencode 四平台真实命令矩阵、target fixture/native entry 升级、Codex CLI full coverage 防夸大、Gemini auth preflight、opencode provider/model preflight 与 90s target-cwd real runtime E2E PASS。
+
+### 新增
+- **FIX-075**: `project/e2e-test-project` 升级到当前 workflow 版本并补齐 `CLAUDE.md`、Codex/opencode `AGENTS.md`、Gemini `GEMINI.md` thin projection；`e2e-check` target fixture checks 扩展到 7 项。
+- **FIX-076**: 新增 `agent-runtime-e2e` 子命令，统一 Claude/Codex/Gemini/opencode 真实 runtime command matrix、PASS/BLOCKED/FAIL schema、timeout 进程树清理和 opencode JSON text event 解析。
+- **FIX-078**: 新增 `gemini-auth-preflight`，secret-safe 检测 Gemini CLI、version、API key、Vertex、GCA、settings auth 来源；缺凭据时输出机器可读 BLOCKED guidance。
+- **FIX-079**: 新增 `opencode-provider-preflight`，secret-safe 检测 opencode provider/model 配置，识别 `deepseek-v4-pro` / `deepseek-v4-flash`，阻断 invalid suffix、ANSI residue 和 unsupported model 回退。
+
+### 变更
+- **FIX-077**: Codex adapter 当前状态从 Codex App session full coverage 纠正为 CLI headless target-cwd `blocked` / `full_e2e_verified=false`；`check-agent-adapters` 要求 Codex full coverage 必须有真实 `codex exec` target-cwd headless 证据。
+- **FIX-078**: Gemini adapter 显式区分 runtime/version probe、auth preflight 和 real agent E2E；当前本机因 auth missing/401 保持 blocked，不宣称 full coverage。
+- **FIX-079**: opencode adapter 从旧 DeepSeek invalid model blocked 口径更新为 provider/model preflight PASS + `agent-runtime-e2e --agent opencode --timeout 90` real target-cwd PASS，`full_e2e_verified=true`。
+
+### 验证
+- `agent-runtime-e2e --timeout 90`: Claude PASS；opencode PASS；Codex BLOCKED timeout；Gemini BLOCKED auth；fail=0。
+- `check-agent-adapters --runtime`: Claude/Codex/Gemini/opencode runtime version probes PASS。
+- 完整 `test_verify_workflow.py` 回归达到 183/183 PASS。
+- 0.36.0 不声明 1.0.0 production-ready；Codex/Gemini 仍按真实阻塞状态记录，不宣称 full coverage。
+
 ## [0.35.0] — 2026-05-20
 
 ### 0.35.0 — 八维度复核收口：事实源、适配层、Agent 边界与 E2E 真实性

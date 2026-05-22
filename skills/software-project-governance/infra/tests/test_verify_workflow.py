@@ -706,6 +706,42 @@ class AgentAdapterContractTests(unittest.TestCase):
             "gate_behavior": {"on_fail": "block-next-stage", "required_action": "update-risk-or-decision-log"},
             "validation": {"command": "python skills/software-project-governance/infra/verify_workflow.py", "required": True},
             "native_entry": {"project_instruction_file": "AGENTS.md"},
+            "runtime_capabilities": {
+                "ask_user_question": {
+                    "status": "degraded",
+                    "evidence": "fixture has no native AskUserQuestion tool",
+                    "degraded_mode": "use platform interaction fallback and record degraded evidence",
+                },
+                "sub_agent": {
+                    "status": "degraded",
+                    "evidence": "fixture does not spawn real sub-agents",
+                    "degraded_mode": "use delegated reviewer evidence when available; otherwise block closure",
+                },
+                "tool_calling": {
+                    "status": "degraded",
+                    "evidence": "fixture command runner is host-mode dependent",
+                    "degraded_mode": "use local validation commands and do not claim native tool closure",
+                },
+                "browser": {
+                    "status": "degraded",
+                    "evidence": "browser availability is host/plugin dependent",
+                    "degraded_mode": "mark browser validation blocked when host browser tool is unavailable",
+                },
+                "mcp": {
+                    "status": "degraded",
+                    "evidence": "MCP availability is host configuration dependent",
+                    "degraded_mode": "use local scripts and record MCP unavailable when not configured",
+                },
+                "git_hooks": {
+                    "status": "native",
+                    "evidence": "fixture validates git hook files and hook behavior",
+                },
+                "workflow_closure": {
+                    "status": "degraded",
+                    "evidence": "fixture intentionally models non-native governance capabilities",
+                    "degraded_capabilities": ["ask_user_question", "sub_agent", "tool_calling", "browser", "mcp"],
+                },
+            },
             "runtime_e2e": {
                 "e2e_level": "runtime-version-probe",
                 "command": adapter_id,
@@ -728,6 +764,18 @@ class AgentAdapterContractTests(unittest.TestCase):
             "launcher": f"adapters/{adapter_id}/launch.py",
         }
         if adapter_id == "gemini":
+            manifest["runtime_capabilities"]["ask_user_question"]["status"] = "unsupported"
+            manifest["runtime_capabilities"]["ask_user_question"]["degraded_mode"] = (
+                "route interaction through the outer host conversation"
+            )
+            manifest["runtime_capabilities"]["sub_agent"]["status"] = "unsupported"
+            manifest["runtime_capabilities"]["sub_agent"]["degraded_mode"] = (
+                "require external reviewer evidence"
+            )
+            manifest["runtime_capabilities"]["browser"]["status"] = "unsupported"
+            manifest["runtime_capabilities"]["browser"]["degraded_mode"] = (
+                "mark browser validation blocked"
+            )
             manifest["runtime_e2e"]["auth_preflight"] = {
                 "status": "blocked",
                 "command": "python skills/software-project-governance/infra/verify_workflow.py gemini-auth-preflight",
@@ -740,7 +788,31 @@ class AgentAdapterContractTests(unittest.TestCase):
                 "Gemini auth missing or not configured; configure GEMINI_API_KEY, "
                 "GOOGLE_API_KEY, Vertex credentials, GCA auth, or Gemini settings auth."
             )
+        if adapter_id == "claude":
+            manifest["runtime_capabilities"]["sub_agent"] = {
+                "status": "native",
+                "evidence": "Claude Code supports Agent-style delegation used by the workflow.",
+            }
+            manifest["runtime_capabilities"]["tool_calling"] = {
+                "status": "native",
+                "evidence": "Claude Code runtime exposes filesystem/read tools and validation command execution.",
+            }
+            manifest["runtime_capabilities"]["workflow_closure"]["degraded_capabilities"] = [
+                "ask_user_question", "browser", "mcp"
+            ]
         if adapter_id == "opencode":
+            manifest["runtime_capabilities"]["ask_user_question"]["status"] = "unsupported"
+            manifest["runtime_capabilities"]["ask_user_question"]["degraded_mode"] = (
+                "route interaction through the outer host conversation"
+            )
+            manifest["runtime_capabilities"]["sub_agent"]["status"] = "unsupported"
+            manifest["runtime_capabilities"]["sub_agent"]["degraded_mode"] = (
+                "require external reviewer evidence"
+            )
+            manifest["runtime_capabilities"]["browser"]["status"] = "unsupported"
+            manifest["runtime_capabilities"]["browser"]["degraded_mode"] = (
+                "mark browser validation blocked"
+            )
             manifest["runtime_e2e"] = {
                 "e2e_level": "real-agent-target-cwd",
                 "command": "opencode",
@@ -826,6 +898,87 @@ class AgentAdapterContractTests(unittest.TestCase):
             self._write_adapter(root, "gemini", extra={"runtime_e2e": "bad"})
             issues = vw.check_agent_adapter_contract(root=root, run_runtime=True)
             self.assertTrue(any("runtime_e2e command/version_command required" in issue for issue in issues))
+
+    def test_agent_adapter_contract_requires_runtime_capabilities(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_all_adapters(root)
+            self._write_adapter(root, "codex", extra={"runtime_capabilities": {}})
+            issues = vw.check_agent_adapter_contract(root=root)
+            self.assertTrue(any("runtime_capabilities.ask_user_question must be an object" in issue for issue in issues))
+            self.assertTrue(any("runtime_capabilities.workflow_closure must be an object" in issue for issue in issues))
+
+    def test_agent_adapter_contract_rejects_full_closure_with_degraded_capability(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_all_adapters(root)
+            capabilities = {
+                "ask_user_question": {"status": "degraded", "evidence": "no native tool", "degraded_mode": "fallback"},
+                "sub_agent": {"status": "native", "evidence": "agent tool available"},
+                "tool_calling": {"status": "native", "evidence": "tools available"},
+                "browser": {"status": "native", "evidence": "browser available"},
+                "mcp": {"status": "native", "evidence": "mcp configured"},
+                "git_hooks": {"status": "native", "evidence": "hooks installed"},
+                "workflow_closure": {
+                    "status": "full",
+                    "evidence": "incorrect full claim",
+                    "degraded_capabilities": ["ask_user_question"],
+                },
+            }
+            self._write_adapter(root, "claude", extra={"runtime_capabilities": capabilities})
+            issues = vw.check_agent_adapter_contract(root=root)
+            self.assertTrue(any("workflow_closure.status=full conflicts" in issue for issue in issues))
+
+    def test_agent_adapter_contract_requires_degraded_mode_for_non_native_capability(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_all_adapters(root)
+            capabilities = {
+                "ask_user_question": {"status": "unsupported", "evidence": "not exposed"},
+                "sub_agent": {"status": "native", "evidence": "agent tool available"},
+                "tool_calling": {"status": "native", "evidence": "tools available"},
+                "browser": {"status": "native", "evidence": "browser available"},
+                "mcp": {"status": "native", "evidence": "mcp configured"},
+                "git_hooks": {"status": "native", "evidence": "hooks installed"},
+                "workflow_closure": {
+                    "status": "degraded",
+                    "evidence": "ask_user_question missing",
+                    "degraded_capabilities": ["ask_user_question"],
+                },
+            }
+            self._write_adapter(root, "gemini", extra={"runtime_capabilities": capabilities})
+            issues = vw.check_agent_adapter_contract(root=root)
+            self.assertTrue(any("runtime_capabilities.ask_user_question.degraded_mode required" in issue for issue in issues))
+
+    def test_agent_adapter_contract_rejects_codex_cli_tool_calling_overclaim(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_all_adapters(root)
+            capabilities = json.loads(
+                (root / "adapters" / "codex" / "adapter-manifest.json").read_text(encoding="utf-8")
+            )["runtime_capabilities"]
+            capabilities["tool_calling"] = {
+                "status": "native",
+                "evidence": "Codex App exposes shell and patch tools",
+            }
+            self._write_adapter(root, "codex", extra={"runtime_capabilities": capabilities})
+            issues = vw.check_agent_adapter_contract(root=root)
+            self.assertTrue(any("runtime_capabilities.tool_calling.status=native overclaims" in issue for issue in issues))
+
+    def test_agent_adapter_contract_rejects_opencode_read_e2e_as_native_tool_calling(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_all_adapters(root)
+            capabilities = json.loads(
+                (root / "adapters" / "opencode" / "adapter-manifest.json").read_text(encoding="utf-8")
+            )["runtime_capabilities"]
+            capabilities["tool_calling"] = {
+                "status": "native",
+                "evidence": "opencode read plan-tracker in target cwd",
+            }
+            self._write_adapter(root, "opencode", extra={"runtime_capabilities": capabilities})
+            issues = vw.check_agent_adapter_contract(root=root)
+            self.assertTrue(any("runtime_capabilities.tool_calling.status=native overclaims" in issue for issue in issues))
 
     def test_agent_adapter_contract_requires_explicit_real_e2e_blocks(self):
         with tempfile.TemporaryDirectory() as td:

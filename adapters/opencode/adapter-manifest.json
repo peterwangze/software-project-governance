@@ -32,6 +32,42 @@
     "project_instruction_file": "AGENTS.md",
     "projection_rule": "Use only as a pointer to skills/software-project-governance/SKILL.md; do not duplicate workflow rules."
   },
+  "runtime_capabilities": {
+    "ask_user_question": {
+      "status": "unsupported",
+      "evidence": "opencode target-cwd E2E passed for reading governance state, but no native AskUserQuestion-equivalent tool is verified.",
+      "degraded_mode": "Use the outer host conversation for interaction boundaries and record degraded evidence."
+    },
+    "sub_agent": {
+      "status": "unsupported",
+      "evidence": "opencode adapter has no verified sub-agent delegation path.",
+      "degraded_mode": "Do not claim Producer-Reviewer separation from opencode runtime alone; require external reviewer evidence."
+    },
+    "tool_calling": {
+      "status": "degraded",
+      "evidence": "Real opencode target-cwd E2E passed for reading governance state, but no file-edit or command-tool governance E2E has been verified.",
+      "degraded_mode": "Use opencode for read/load validation only; require external validation or future tool-use E2E before claiming native tool calling."
+    },
+    "browser": {
+      "status": "unsupported",
+      "evidence": "No browser automation path is verified for the opencode adapter.",
+      "degraded_mode": "Mark browser validation blocked or run it from another host adapter."
+    },
+    "mcp": {
+      "status": "degraded",
+      "evidence": "MCP availability depends on opencode host configuration and has not been verified here.",
+      "degraded_mode": "Use local scripts and record MCP unavailable when not configured."
+    },
+    "git_hooks": {
+      "status": "native",
+      "evidence": "Git hooks are repository-level controls and remain active for opencode-driven changes."
+    },
+    "workflow_closure": {
+      "status": "degraded",
+      "evidence": "opencode can load the workflow in target cwd, but interaction, sub-agent, browser, and MCP capabilities are not fully native.",
+      "degraded_capabilities": ["ask_user_question", "sub_agent", "tool_calling", "browser", "mcp"]
+    }
+  },
   "runtime_e2e": {
     "e2e_level": "real-agent-target-cwd",
     "command": "opencode",

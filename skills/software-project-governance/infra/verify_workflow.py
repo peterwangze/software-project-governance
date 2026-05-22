@@ -241,6 +241,7 @@ PROJECTION_SNIPPETS = {
         "workflow_id",
         "native_entry",
         "runtime_e2e",
+        "runtime_capabilities",
         "launcher",
     ],
     ROOT / "adapters/claude/launch.py": [
@@ -259,6 +260,7 @@ PROJECTION_SNIPPETS = {
         "workflow_id",
         "native_entry",
         "runtime_e2e",
+        "runtime_capabilities",
         "launcher",
     ],
     ROOT / "adapters/codex/launch.py": [
@@ -279,6 +281,7 @@ PROJECTION_SNIPPETS = {
         "support_status",
         "native_entry",
         "runtime_e2e",
+        "runtime_capabilities",
     ],
     ROOT / "adapters/gemini/launch.py": [
         "Gemini Adapter Launcher",
@@ -295,6 +298,7 @@ PROJECTION_SNIPPETS = {
         "adapter_id",
         "runtime-verified",
         "provider_model_preflight",
+        "runtime_capabilities",
         "full_e2e_verified",
     ],
     ROOT / "adapters/opencode/launch.py": [
@@ -1155,6 +1159,7 @@ ADAPTER_REQUIRED_KEYS = [
     "validation",
     "native_entry",
     "runtime_e2e",
+    "runtime_capabilities",
     "launcher",
 ]
 
@@ -1513,6 +1518,120 @@ def _validate_runtime_e2e_block(root, manifest_path, runtime_e2e, field_name, al
         )
     if status == "blocked" and not block.get("blocked_reason"):
         failures.append(f"{_display_path(manifest_path, root)}: blocked runtime_e2e.{field_name} requires blocked_reason")
+    return failures
+
+
+RUNTIME_CAPABILITY_KEYS = (
+    "ask_user_question",
+    "sub_agent",
+    "tool_calling",
+    "browser",
+    "mcp",
+    "git_hooks",
+)
+
+RUNTIME_CAPABILITY_STATUSES = {"native", "degraded", "unsupported"}
+
+ADAPTER_RUNTIME_CAPABILITY_POLICY = {
+    "claude": {
+        "ask_user_question": {"degraded"},
+        "sub_agent": {"native"},
+        "tool_calling": {"native"},
+        "browser": {"degraded"},
+        "mcp": {"degraded"},
+        "git_hooks": {"native"},
+    },
+    "codex": {
+        "ask_user_question": {"degraded"},
+        "sub_agent": {"degraded"},
+        "tool_calling": {"degraded"},
+        "browser": {"degraded"},
+        "mcp": {"degraded"},
+        "git_hooks": {"native"},
+    },
+    "gemini": {
+        "ask_user_question": {"unsupported"},
+        "sub_agent": {"unsupported"},
+        "tool_calling": {"degraded"},
+        "browser": {"unsupported"},
+        "mcp": {"degraded"},
+        "git_hooks": {"native"},
+    },
+    "opencode": {
+        "ask_user_question": {"unsupported"},
+        "sub_agent": {"unsupported"},
+        "tool_calling": {"degraded"},
+        "browser": {"unsupported"},
+        "mcp": {"degraded"},
+        "git_hooks": {"native"},
+    },
+}
+
+
+def _validate_runtime_capabilities(root, manifest_path, manifest):
+    """FIX-082: adapters must declare real host capabilities and degraded modes."""
+    display = _display_path(manifest_path, root)
+    capabilities = manifest.get("runtime_capabilities")
+    if not isinstance(capabilities, dict):
+        return [f"{display}: runtime_capabilities must be an object"]
+
+    failures = []
+    adapter_id = manifest.get("adapter_id")
+    capability_policy = ADAPTER_RUNTIME_CAPABILITY_POLICY.get(adapter_id, {})
+    for key in RUNTIME_CAPABILITY_KEYS:
+        block = capabilities.get(key)
+        if not isinstance(block, dict):
+            failures.append(f"{display}: runtime_capabilities.{key} must be an object")
+            continue
+        status = block.get("status")
+        if status not in RUNTIME_CAPABILITY_STATUSES:
+            failures.append(
+                f"{display}: runtime_capabilities.{key}.status must be one of {sorted(RUNTIME_CAPABILITY_STATUSES)}"
+            )
+        allowed_statuses = capability_policy.get(key)
+        if allowed_statuses and status not in allowed_statuses:
+            failures.append(
+                f"{display}: runtime_capabilities.{key}.status={status} overclaims adapter policy; "
+                f"allowed={sorted(allowed_statuses)}"
+            )
+        if not block.get("evidence"):
+            failures.append(f"{display}: runtime_capabilities.{key}.evidence required")
+        if status in {"degraded", "unsupported"} and not block.get("degraded_mode"):
+            failures.append(f"{display}: runtime_capabilities.{key}.degraded_mode required when status is {status}")
+
+    closure = capabilities.get("workflow_closure")
+    if not isinstance(closure, dict):
+        failures.append(f"{display}: runtime_capabilities.workflow_closure must be an object")
+        return failures
+
+    closure_status = closure.get("status")
+    if closure_status not in {"full", "degraded", "blocked"}:
+        failures.append(f"{display}: runtime_capabilities.workflow_closure.status must be full, degraded, or blocked")
+    if not closure.get("evidence"):
+        failures.append(f"{display}: runtime_capabilities.workflow_closure.evidence required")
+    degraded_capabilities = closure.get("degraded_capabilities")
+    non_native = [
+        key for key in RUNTIME_CAPABILITY_KEYS
+        if isinstance(capabilities.get(key), dict)
+        and capabilities[key].get("status") in {"degraded", "unsupported"}
+    ]
+    if non_native:
+        if closure_status == "full":
+            failures.append(f"{display}: workflow_closure.status=full conflicts with degraded/unsupported capabilities")
+        if not isinstance(degraded_capabilities, list):
+            failures.append(f"{display}: workflow_closure.degraded_capabilities must list non-native capabilities")
+        else:
+            missing = [key for key in non_native if key not in degraded_capabilities]
+            if missing:
+                failures.append(
+                    f"{display}: workflow_closure.degraded_capabilities missing {', '.join(missing)}"
+                )
+    elif closure_status != "full":
+        failures.append(f"{display}: workflow_closure.status must be full when all capabilities are native")
+
+    runtime_e2e = manifest.get("runtime_e2e")
+    if isinstance(runtime_e2e, dict) and runtime_e2e.get("full_e2e_verified") is False and closure_status == "full":
+        failures.append(f"{display}: workflow_closure.status=full requires full_e2e_verified=true or explicit degraded closure")
     return failures
 
 
@@ -2011,6 +2130,7 @@ def check_agent_adapter_contract(root=None, run_runtime=False):
         native_entry = manifest.get("native_entry", {})
         manifest_path = adapter_dir / "adapter-manifest.json"
         malformed_runtime_e2e = False
+        failures.extend(_validate_runtime_capabilities(root, manifest_path, manifest))
         if not isinstance(native_entry, dict) or not native_entry:
             failures.append(f"{_display_path(adapter_dir / 'adapter-manifest.json', root)}: native_entry must be non-empty")
         if not isinstance(runtime_e2e, dict) or not runtime_e2e.get("command") or not runtime_e2e.get("version_command"):

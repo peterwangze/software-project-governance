@@ -31,6 +31,40 @@
   "native_entry": {
     "skill_path": "skills/software-project-governance/SKILL.md"
   },
+  "runtime_capabilities": {
+    "ask_user_question": {
+      "status": "degraded",
+      "evidence": "Claude adapter can route user interaction through the host conversation, but this repository cannot prove a portable native AskUserQuestion tool across all Claude-compatible runtimes.",
+      "degraded_mode": "Use the host interaction channel and record degraded evidence when a native AskUserQuestion tool is unavailable."
+    },
+    "sub_agent": {
+      "status": "native",
+      "evidence": "Claude Code supports Agent-style delegation used by the workflow's Agent Team routing."
+    },
+    "tool_calling": {
+      "status": "native",
+      "evidence": "Claude Code runtime E2E uses filesystem/read tools and local validation commands."
+    },
+    "browser": {
+      "status": "degraded",
+      "evidence": "Browser automation depends on installed host/browser tooling, not the adapter entry itself.",
+      "degraded_mode": "Mark browser validation blocked or use an available browser plugin when the host exposes one."
+    },
+    "mcp": {
+      "status": "degraded",
+      "evidence": "MCP availability depends on user host configuration.",
+      "degraded_mode": "Use local scripts and record MCP unavailable when no MCP server is configured."
+    },
+    "git_hooks": {
+      "status": "native",
+      "evidence": "Workflow installs and validates pre-commit, commit-msg, and post-commit hooks."
+    },
+    "workflow_closure": {
+      "status": "degraded",
+      "evidence": "Entry and Agent Team routing are strong, but AskUserQuestion, browser, and MCP remain host-dependent.",
+      "degraded_capabilities": ["ask_user_question", "browser", "mcp"]
+    }
+  },
   "runtime_e2e": {
     "e2e_level": "real-agent-target-cwd",
     "command": "claude",

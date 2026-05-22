@@ -33,6 +33,42 @@
     "plugin_manifest": ".codex-plugin/plugin.json",
     "marketplace_entry": ".agents/plugins/marketplace.json"
   },
+  "runtime_capabilities": {
+    "ask_user_question": {
+      "status": "degraded",
+      "evidence": "Codex App may expose request_user_input only in specific collaboration modes; Codex CLI headless target-cwd E2E is currently blocked and cannot prove native AskUserQuestion.",
+      "degraded_mode": "Use the host conversation channel or block at interaction boundaries when no native AskUserQuestion tool is available."
+    },
+    "sub_agent": {
+      "status": "degraded",
+      "evidence": "This Codex App can discover optional multi-agent tooling, but Codex CLI headless runtime has not passed target-cwd Agent Team E2E.",
+      "degraded_mode": "Record degraded Agent Team evidence and require independent review evidence before product-code closure."
+    },
+    "tool_calling": {
+      "status": "degraded",
+      "evidence": "Codex App exposes local shell, patch, and validation tools, but Codex CLI headless target-cwd runtime has not passed full tool-use E2E.",
+      "degraded_mode": "Treat tool use as host-mode dependent; require local validation commands and do not claim Codex CLI tool closure until real CLI E2E passes."
+    },
+    "browser": {
+      "status": "degraded",
+      "evidence": "Browser automation is plugin/app dependent and not guaranteed by Codex CLI.",
+      "degraded_mode": "Use available Browser plugin or mark browser validation blocked."
+    },
+    "mcp": {
+      "status": "degraded",
+      "evidence": "MCP depends on configured servers in the host session.",
+      "degraded_mode": "Prefer local scripts when MCP servers are unavailable and record the degraded path."
+    },
+    "git_hooks": {
+      "status": "native",
+      "evidence": "Workflow hooks are installed and validated in the local git repository."
+    },
+    "workflow_closure": {
+      "status": "degraded",
+      "evidence": "Codex App can self-iterate with the workflow, but Codex CLI full target-cwd E2E is blocked and several governance capabilities are host-mode dependent.",
+      "degraded_capabilities": ["ask_user_question", "sub_agent", "tool_calling", "browser", "mcp"]
+    }
+  },
   "runtime_e2e": {
     "e2e_level": "real-agent-target-cwd",
     "command": "codex",

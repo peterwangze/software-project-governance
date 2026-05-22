@@ -32,6 +32,42 @@
     "project_context_file": "GEMINI.md",
     "projection_rule": "GEMINI.md is a thin pointer to skills/software-project-governance/SKILL.md; it must not duplicate workflow rules."
   },
+  "runtime_capabilities": {
+    "ask_user_question": {
+      "status": "unsupported",
+      "evidence": "Current Gemini CLI validation is blocked by auth and does not prove a native AskUserQuestion-equivalent tool.",
+      "degraded_mode": "Block interaction-boundary closure or route through the outer host conversation with degraded evidence."
+    },
+    "sub_agent": {
+      "status": "unsupported",
+      "evidence": "Current Gemini CLI adapter has no verified sub-agent delegation path.",
+      "degraded_mode": "Do not claim Producer-Reviewer separation from Gemini runtime alone; require external review evidence."
+    },
+    "tool_calling": {
+      "status": "degraded",
+      "evidence": "Gemini CLI tool access depends on auth and CLI configuration; current real runtime E2E is blocked by auth.",
+      "degraded_mode": "Use local validation scripts outside Gemini until auth and tool access pass runtime E2E."
+    },
+    "browser": {
+      "status": "unsupported",
+      "evidence": "No browser automation path is verified for the Gemini CLI adapter.",
+      "degraded_mode": "Mark browser validation blocked or run it from another host adapter."
+    },
+    "mcp": {
+      "status": "degraded",
+      "evidence": "MCP support depends on user Gemini CLI configuration and has not been verified in this adapter.",
+      "degraded_mode": "Use local scripts and record MCP unavailable when not configured."
+    },
+    "git_hooks": {
+      "status": "native",
+      "evidence": "Git hooks are repository-level controls independent of Gemini auth state."
+    },
+    "workflow_closure": {
+      "status": "degraded",
+      "evidence": "Gemini entry projection exists, but auth/runtime and Agent Team capabilities remain blocked or unverified.",
+      "degraded_capabilities": ["ask_user_question", "sub_agent", "tool_calling", "browser", "mcp"]
+    }
+  },
   "runtime_e2e": {
     "e2e_level": "real-agent-target-cwd",
     "command": "gemini",

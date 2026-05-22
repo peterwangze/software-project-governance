@@ -2,6 +2,28 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.37.0] — 2026-05-22
+
+### 0.37.0 — 事实依据看护 + CLAUDE.md 升级 hook 例外
+
+用户反馈驱动的可信度修复版本，覆盖“修改和检视必须基于可复查事实”的全流程看护，以及 `CLAUDE.md` 通过插件版本升级自动同步时被 pre-commit Step 6 误拦截的问题。
+
+### 新增
+- **FIX-080**: bootstrap、behavior protocol、change-impact checklist 和 reviewer skills 新增事实依据红线；产品代码证据必须包含 `事实依据:`。
+- **FIX-080**: `check-governance` 新增 Fact Grounding 检查，覆盖当前进行中版本的产品代码证据，阻断缺少事实依据或含风险措辞的闭环记录。
+- **FIX-080**: `commit-msg` Step 12 新增事实依据阻断，产品代码提交在缺少 evidence-log、缺少 `事实依据:` 或证据含风险措辞时失败。
+- **FIX-081**: `pre-commit` Step 6 新增合法 bootstrap self-upgrade 例外，允许插件版本升级同步 `CLAUDE.md`。
+
+### 变更
+- **FIX-081**: `CLAUDE.md` 升级例外收紧为真实版本转换：staged plan-tracker 工作流版本必须升级到 source `SKILL.md` version，HEAD 必须存在旧版本，staged `CLAUDE.md` 必须保留 bootstrap marker，且 bootstrap 区域之外内容不得变化。
+- **FIX-080**: release/design/code review skill 均要求审查结论基于文件、命令、测试、日志、用户输入或外部文档证据；未验证内容必须标注为 blocked/unknown，而不是作为完成事实。
+
+### 验证
+- `python -m unittest skills/software-project-governance/infra/tests/test_verify_workflow.py -k FactGrounding -v`: 7/7 PASS。
+- `python -m unittest skills/software-project-governance/infra/tests/test_verify_workflow.py -k PreCommitClaudeBootstrapUpgradeHookTests -v`: 5/5 PASS。
+- 完整 `test_verify_workflow.py` 回归达到 195/195 PASS。
+- `check-governance --fail-on-issues` PASS，Fact Grounding 当前版本证据通过。
+
 ## [0.36.0] — 2026-05-22
 
 ### 0.36.0 — 真实 agent runtime E2E 闭环补强

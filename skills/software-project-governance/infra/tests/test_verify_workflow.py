@@ -1634,12 +1634,12 @@ class E2ECommandMatrixTests(unittest.TestCase):
             for name in ("evidence-log.md", "decision-log.md", "risk-log.md", "session-snapshot.md"):
                 (governance_dir / name).write_text("# fixture\n", encoding="utf-8")
             (governance_dir / "plan-tracker.md").write_text(
-                "- **工作流版本**: 0.36.0\n"
+                "- **工作流版本**: 0.37.0\n"
                 "- **操作权限模式**: default-confirm\n",
                 encoding="utf-8",
             )
             (skill_dir / "SKILL.md").write_text(
-                "---\nversion: 0.36.0\n---\nCoordinator\nAgent Team\n",
+                "---\nversion: 0.37.0\n---\nCoordinator\nAgent Team\n",
                 encoding="utf-8",
             )
             (e2e_dir / "commands" / "governance.md").write_text(
@@ -3645,7 +3645,7 @@ class PreCommitClaudeBootstrapUpgradeHookTests(unittest.TestCase):
                     return str(candidate)
         return shutil.which("bash") or "bash"
 
-    def _run_hook(self, *, plan_version="0.36.0", initial_version="0.35.0",
+    def _run_hook(self, *, plan_version="0.37.0", initial_version="0.35.0",
                   stage_plan=True, change_outside_bootstrap=False):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -3655,7 +3655,7 @@ class PreCommitClaudeBootstrapUpgradeHookTests(unittest.TestCase):
 
             skill = root / "skills" / "software-project-governance" / "SKILL.md"
             skill.parent.mkdir(parents=True, exist_ok=True)
-            skill.write_text("---\nversion: 0.36.0\n---\n", encoding="utf-8")
+            skill.write_text("---\nversion: 0.37.0\n---\n", encoding="utf-8")
 
             claude = root / "CLAUDE.md"
             claude.write_text(
@@ -3717,7 +3717,7 @@ class PreCommitClaudeBootstrapUpgradeHookTests(unittest.TestCase):
             )
 
     def test_pre_commit_allows_claude_bootstrap_self_upgrade(self):
-        result = self._run_hook(plan_version="0.36.0", initial_version="0.35.0", stage_plan=True)
+        result = self._run_hook(plan_version="0.37.0", initial_version="0.35.0", stage_plan=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("bootstrap self-upgrade detected", result.stdout)
 
@@ -3732,13 +3732,13 @@ class PreCommitClaudeBootstrapUpgradeHookTests(unittest.TestCase):
         self.assertIn("BOOTSTRAP DISCIPLINE", result.stdout)
 
     def test_pre_commit_blocks_same_version_claude_change_with_plan_staged(self):
-        result = self._run_hook(plan_version="0.36.0", initial_version="0.36.0", stage_plan=True)
+        result = self._run_hook(plan_version="0.37.0", initial_version="0.37.0", stage_plan=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("BOOTSTRAP DISCIPLINE", result.stdout)
 
     def test_pre_commit_blocks_non_bootstrap_claude_change_during_upgrade(self):
         result = self._run_hook(
-            plan_version="0.36.0",
+            plan_version="0.37.0",
             initial_version="0.35.0",
             stage_plan=True,
             change_outside_bootstrap=True,

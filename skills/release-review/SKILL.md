@@ -46,6 +46,11 @@ description: 发布审查——对发布就绪状态进行独立审查。覆盖C
 4. **输出审查结论**：APPROVED / NEEDS_CHANGE / BLOCKED
 5. **返回 Coordinator**：审查报告 + 结论
 
+**事实依据红线**：
+- 发布 APPROVED 只能基于可复查事实：命令输出、CI/测试结果、tag/commit、release docs、风险/证据记录。
+- 未实际运行的检查 MUST 标为“未验证/待验证/BLOCKED”，不得写成通过。
+- 禁止用假设、猜测、推测、估计、编造或幻觉替代发布证据。
+
 ## 审查结论
 
 - **APPROVED**：发布就绪，可以执行

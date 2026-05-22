@@ -14,6 +14,7 @@ import json
 import io
 import os
 import argparse
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -3459,6 +3460,175 @@ class UserImpactTests(unittest.TestCase):
             self.assertEqual(len(r["entries"]), 1)
             self.assertEqual(r["entries"][0]["task_id"], "FIX-999")
             self.assertEqual(r["entries"][0]["status"], "FAIL")
+
+
+class FactGroundingTests(unittest.TestCase):
+    """FIX-080: current product-code evidence must carry fact grounding."""
+
+    def _setup(self, tmpdir, evidence_lines):
+        root = Path(tmpdir)
+        gov = root / ".governance"; gov.mkdir(parents=True, exist_ok=True)
+        sp = gov / "plan-tracker.md"
+        ep = gov / "evidence-log.md"
+        sp.write_text("\n".join([
+            "# 计划跟踪",
+            "## 项目配置",
+            "- **项目目标**: 提供一套完整的软件项目治理工作流插件",
+            "## 当前活跃事项",
+            "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+            "|--------|----|------|------|---------|---------|------|",
+            "| **P0** | FIX-080 | fact guard | 用户反馈 | 0.37.0 | tests | 🔄 进行中 |",
+            "## 版本规划",
+            "| 版本 | 状态 | 预计日期 | 核心范围 | 包含 Tier/Layer | 关键交付物 |",
+            "| 0.37.0 | 进行中 | 2026-05-22 | fact guard | FIX-080 | delivery |",
+        ]), encoding="utf-8")
+        ep.write_text("\n".join(evidence_lines), encoding="utf-8")
+        return sp, ep
+
+    def test_check_fact_grounding_requires_fact_basis(self):
+        with tempfile.TemporaryDirectory() as td:
+            sp, ep = self._setup(td, [
+                _impact_evidence_row(
+                    "EVD-080", "FIX-080",
+                    "目标对齐: 提升治理工作流证据可信度，避免无事实闭环。 "
+                    "用户影响: 获得=plugin update, 感知=CHANGELOG, 体验变化=否, 迁移指南=不需要",
+                    "skills/software-project-governance/infra/verify_workflow.py",
+                )
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_fact_grounding()
+            self.assertFalse(r["pass"])
+            self.assertEqual(r["entries"][0]["status"], "FAIL")
+            self.assertIn("缺少 事实依据", r["entries"][0]["issues"][0])
+
+    def test_check_fact_grounding_accepts_specific_facts(self):
+        with tempfile.TemporaryDirectory() as td:
+            sp, ep = self._setup(td, [
+                _impact_evidence_row(
+                    "EVD-081", "FIX-080",
+                    "事实依据: verify_workflow.py check_fact_grounding implementation and FactGroundingTests PASS. "
+                    "目标对齐: 提升治理工作流证据可信度，避免无事实闭环。 "
+                    "用户影响: 获得=plugin update, 感知=CHANGELOG, 体验变化=否, 迁移指南=不需要",
+                    "skills/software-project-governance/infra/verify_workflow.py",
+                )
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_fact_grounding()
+            self.assertTrue(r["pass"])
+            self.assertEqual(r["entries"][0]["status"], "PASS")
+            self.assertTrue(r["entries"][0]["has_fact_basis"])
+
+    def test_check_fact_grounding_rejects_speculation_terms(self):
+        with tempfile.TemporaryDirectory() as td:
+            sp, ep = self._setup(td, [
+                _impact_evidence_row(
+                    "EVD-082", "FIX-080",
+                    "事实依据: verify_workflow.py changed and targeted tests were run. "
+                    "我猜测这个已经完成。目标对齐: 提升治理工作流证据可信度，避免无事实闭环。 "
+                    "用户影响: 获得=plugin update, 感知=CHANGELOG, 体验变化=否, 迁移指南=不需要",
+                    "skills/software-project-governance/infra/verify_workflow.py",
+                )
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_fact_grounding()
+            self.assertFalse(r["pass"])
+            self.assertIn("含未落地推断词", r["entries"][0]["issues"][0])
+
+
+class CommitMsgFactGroundingHookTests(unittest.TestCase):
+    """FIX-080: commit-msg hook must block product commits without fact basis."""
+
+    def _bash(self):
+        if os.name == "nt":
+            candidates = [
+                Path(os.environ.get("ProgramFiles", "")) / "Git" / "bin" / "bash.exe",
+                Path(os.environ.get("ProgramFiles(x86)", "")) / "Git" / "bin" / "bash.exe",
+            ]
+            for candidate in candidates:
+                if candidate.exists():
+                    return str(candidate)
+        return shutil.which("bash") or "bash"
+
+    def _run_hook(self, evidence_text=None):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=root, check=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True)
+
+            gov = root / ".governance"
+            gov.mkdir(parents=True, exist_ok=True)
+            (gov / "plan-tracker.md").write_text("\n".join([
+                "# 计划跟踪",
+                "## 项目配置",
+                "- **项目目标**: 提供一套完整的软件项目治理工作流插件",
+                "## 当前活跃事项",
+                "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+                "|--------|----|------|------|---------|---------|------|",
+                "| **P0** | FIX-080 | fact guard | 用户反馈 | 0.37.0 | tests | 🔄 进行中 |",
+            ]), encoding="utf-8")
+            if evidence_text is not None:
+                (gov / "evidence-log.md").write_text(evidence_text, encoding="utf-8")
+
+            product_file = root / "skills" / "test" / "file.txt"
+            product_file.parent.mkdir(parents=True, exist_ok=True)
+            product_file.write_text("product change\n", encoding="utf-8")
+            subprocess.run(["git", "add", "skills/test/file.txt"], cwd=root, check=True)
+
+            msg = root / "COMMIT_EDITMSG"
+            msg.write_text("FIX-080: test fact grounding hook\n", encoding="utf-8")
+            hook = _INFRA_DIR / "hooks" / "commit-msg"
+            return subprocess.run(
+                [self._bash(), hook.as_posix(), msg.as_posix()],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+
+    def test_commit_msg_blocks_missing_evidence_log_for_product_code(self):
+        result = self._run_hook(evidence_text=None)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("evidence-log.md is missing", result.stdout)
+
+    def test_commit_msg_blocks_missing_fact_basis(self):
+        evidence = _impact_evidence_row(
+            "EVD-080", "FIX-080",
+            "目标对齐: 提升治理工作流证据可信度，避免无事实闭环。 "
+            "用户影响: 获得=plugin update, 感知=CHANGELOG, 体验变化=否, 迁移指南=不需要",
+            "skills/test/file.txt",
+        )
+        result = self._run_hook(evidence_text=evidence)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("has NO", result.stdout)
+        self.assertIn("事实依据", result.stdout)
+
+    def test_commit_msg_accepts_fact_basis(self):
+        evidence = _impact_evidence_row(
+            "EVD-081", "FIX-080",
+            "事实依据: commit-msg hook fixture staged skills/test/file.txt and evidence-log row. "
+            "目标对齐: 提升治理工作流证据可信度，避免无事实闭环。 "
+            "用户影响: 获得=plugin update, 感知=CHANGELOG, 体验变化=否, 迁移指南=不需要",
+            "skills/test/file.txt",
+        )
+        result = self._run_hook(evidence_text=evidence)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_commit_msg_blocks_ungrounded_language(self):
+        evidence = _impact_evidence_row(
+            "EVD-082", "FIX-080",
+            "事实依据: commit-msg hook fixture staged skills/test/file.txt and evidence-log row. "
+            "我猜测这个已经完成。目标对齐: 提升治理工作流证据可信度，避免无事实闭环。 "
+            "用户影响: 获得=plugin update, 感知=CHANGELOG, 体验变化=否, 迁移指南=不需要",
+            "skills/test/file.txt",
+        )
+        result = self._run_hook(evidence_text=evidence)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ungrounded speculation language", result.stdout)
 
 
 class ArchiveTriggerGapTests(unittest.TestCase):

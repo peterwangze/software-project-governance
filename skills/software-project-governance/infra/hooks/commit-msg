@@ -148,7 +148,7 @@ fi
 # BLOCKING if plan-tracker has 项目目标 but evidence-log has no 目标对齐: for task.
 if [ -n "$CHANGED_FILES" ] && [ "$IS_PRODUCT_CODE" -eq 1 ]; then
     if [ -f "$REPO_ROOT/.governance/plan-tracker.md" ] && [ -f "$REPO_ROOT/.governance/evidence-log.md" ]; then
-        HAS_PROJECT_GOAL=$(grep -c '\*\*项目目标\*\*:' "$REPO_ROOT/.governance/plan-tracker.md" 2>/dev/null || echo "0")
+        HAS_PROJECT_GOAL=$(grep -c '\*\*项目目标\*\*:' "$REPO_ROOT/.governance/plan-tracker.md" 2>/dev/null || true)
         if [ "$HAS_PROJECT_GOAL" -gt 0 ]; then
             # Check if evidence-log has 目标对齐: for this task
             if ! grep -E "^\| EVD-[^|]*\| $TASK_ID \|" "$REPO_ROOT/.governance/evidence-log.md" 2>/dev/null | grep -q "目标对齐[:：]"; then
@@ -207,7 +207,60 @@ if [ -n "$CHANGED_FILES" ] && [ "$IS_PRODUCT_CODE" -eq 1 ]; then
     fi
 fi
 
-# ── Step 12: Breaking Change Migration Guide BLOCK (SYSGAP-024) ──
+# ── Step 12: Fact Grounding BLOCK (FIX-080) ──
+# Only for product code changes. Checks evidence-log for 事实依据: field and
+# blocks obvious ungrounded closure language.
+if [ -n "$CHANGED_FILES" ] && [ "$IS_PRODUCT_CODE" -eq 1 ]; then
+    if [ ! -f "$REPO_ROOT/.governance/evidence-log.md" ]; then
+        echo ""
+        echo "╔══════════════════════════════════════════════════════════════╗"
+        echo "║  FACT GROUNDING BLOCKED: evidence-log.md is missing.        ║"
+        echo "║                                                            ║"
+        echo "║  Product-code commits MUST have persistent evidence with    ║"
+        echo "║  事实依据: before they can be committed.                   ║"
+        echo "║                                                            ║"
+        echo "║  Action: Create .governance/evidence-log.md and add         ║"
+        echo "║          事实依据: <files/commands/evidence> for this task. ║"
+        echo "║  Emergency bypass: git commit --no-verify                  ║"
+        echo "╚══════════════════════════════════════════════════════════════╝"
+        echo ""
+        exit 1
+    fi
+
+    TASK_EVD_LINES=$(grep -E "^\| EVD-[^|]*\| $TASK_ID \|" "$REPO_ROOT/.governance/evidence-log.md" 2>/dev/null || true)
+    if ! echo "$TASK_EVD_LINES" | grep -q "事实依据[:：]"; then
+        echo ""
+        echo "╔══════════════════════════════════════════════════════════════╗"
+        echo "║  FACT GROUNDING BLOCKED: Task '$TASK_ID' has NO             ║"
+        echo "║  fact basis (事实依据:) in evidence-log.                   ║"
+        echo "║                                                            ║"
+        echo "║  Every product-code delivery MUST cite persistent facts:    ║"
+        echo "║  files read, commands run, test output, logs, or docs.      ║"
+        echo "║                                                            ║"
+        echo "║  Action: Add 事实依据: <files/commands/evidence> to         ║"
+        echo "║          evidence-log entry for this task, then retry.      ║"
+        echo "║  Emergency bypass: git commit --no-verify                  ║"
+        echo "╚══════════════════════════════════════════════════════════════╝"
+        echo ""
+        exit 1
+    fi
+    if echo "$TASK_EVD_LINES" | grep -Eq "我[[:space:]]*(假设|猜测|推测|估计)|(大概|应该|可能)(已经|是|可以|完成|存在)|编造|幻觉"; then
+        echo ""
+        echo "╔══════════════════════════════════════════════════════════════╗"
+        echo "║  FACT GROUNDING BLOCKED: Task '$TASK_ID' evidence contains  ║"
+        echo "║  ungrounded speculation language.                          ║"
+        echo "║                                                            ║"
+        echo "║  Do not close work based on assumptions, guesses, or        ║"
+        echo "║  invented facts. Replace with verified facts or mark the    ║"
+        echo "║  item BLOCKED with evidence.                               ║"
+        echo "║  Emergency bypass: git commit --no-verify                  ║"
+        echo "╚══════════════════════════════════════════════════════════════╝"
+        echo ""
+        exit 1
+    fi
+fi
+
+# ── Step 13: Breaking Change Migration Guide BLOCK (SYSGAP-024) ──
 # Only for product code changes. If 体验变化=是 and 迁移指南=不需要 → BLOCKED.
 # Also BLOCKED if migration guide path provided but does not exist.
 if [ -n "$CHANGED_FILES" ] && [ "$IS_PRODUCT_CODE" -eq 1 ]; then

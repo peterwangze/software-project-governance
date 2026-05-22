@@ -5291,6 +5291,74 @@ def check_user_impact():
     return result
 
 
+# ── FIX-080: Fact Grounding Check ────────────────────────────────
+
+FACT_BASIS_RE = re.compile(
+    r'事实依据[:：]\s*(.+?)(?:\s*(?:目标对齐[:：]|用户影响[:：]|范围[:：]|依赖[:：]|架构影响[:：]|$))'
+)
+
+UNGROUNDED_CLAIM_RE = re.compile(
+    r"(?:我\s*)?(?:假设|猜测|推测|估计)|(?:大概|应该|可能)(?:已经|是|可以|完成|存在)|编造|幻觉"
+)
+
+
+def _current_release_impact_entries():
+    """Return impact/product-delivery entries for the active in-progress release.
+
+    FIX-080 avoids retroactively failing historical evidence that predates the
+    fact-grounding field. The commit hook enforces every new product-code commit;
+    check-governance enforces the active version row so future work cannot omit it.
+    """
+    release_task_ids = _current_release_task_ids()
+    if not release_task_ids:
+        return []
+    return [entry for entry in parse_impact_analysis_entries()
+            if entry["task_id"] in release_task_ids]
+
+
+def check_fact_grounding():
+    """FIX-080: Check current product-code evidence is grounded in facts."""
+    result = {
+        "entries": [],
+        "pass": True,
+    }
+
+    for entry in _current_release_impact_entries():
+        desc = entry["description"]
+        fact_match = FACT_BASIS_RE.search(desc)
+        fact_text = fact_match.group(1).strip() if fact_match else ""
+        fact_len = len(fact_text)
+        issues = []
+        status = "PASS"
+
+        if not fact_text:
+            issues.append("缺少 事实依据: 字段")
+            status = "FAIL"
+            result["pass"] = False
+        elif fact_len < 20:
+            issues.append("事实依据: 过短，需指向具体文件/命令/日志/测试输出")
+            status = "FAIL"
+            result["pass"] = False
+
+        speculative_match = UNGROUNDED_CLAIM_RE.search(desc)
+        if speculative_match:
+            issues.append(f"含未落地推断词: {speculative_match.group(0)}")
+            status = "FAIL"
+            result["pass"] = False
+
+        result["entries"].append({
+            "task_id": entry["task_id"],
+            "evd_id": entry["evd_id"],
+            "has_fact_basis": bool(fact_text),
+            "fact_len": fact_len,
+            "fact_text": fact_text[:80] + ("..." if fact_len > 80 else ""),
+            "status": status,
+            "issues": issues,
+        })
+
+    return result
+
+
 # ── SYSGAP-035: Agent Team Review Check (Check 18) ────────────────
 
 def _parse_review_covered_tasks(evidence_path=None, review_dir=None):
@@ -6551,8 +6619,28 @@ def cmd_check_governance(args):
     all_issues += ui_issues
     print("└──────────────────────────────────────────────────────┘")
 
-    # ── 18. Agent Team Review (SYSGAP-035) ──
-    print("\n┌─ Check 18: Agent Team Review ────────────────────────┐")
+    # ── 18. Fact Grounding (FIX-080) ──
+    print("\n┌─ Check 18: Fact Grounding (FIX-080) ─────────────────┐")
+    fg_result = check_fact_grounding()
+    fg_issues = 0
+    print(f"│  Current-release evidence entries: {len(fg_result['entries'])}")
+    if fg_result["entries"]:
+        for e in fg_result["entries"]:
+            if e["status"] == "FAIL":
+                fg_issues += 1
+                for issue in e["issues"]:
+                    print(f"│  [FAIL] {e['task_id']} ({e['evd_id']}): {issue}")
+            else:
+                print(f"│  [PASS] {e['task_id']} ({e['evd_id']}): 事实依据 {e['fact_len']} chars")
+    else:
+        print("│  [PASS] No current-release product evidence to check.")
+    if fg_issues == 0:
+        print("│  [PASS] Fact grounding check passed.")
+    all_issues += fg_issues
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 19. Agent Team Review (SYSGAP-035) ──
+    print("\n┌─ Check 19: Agent Team Review ────────────────────────┐")
     atr_result = check_agent_team_review()
     print(f"│  Product-code tasks (completed): {atr_result['total_tasks']}")
     print(f"│  Reviewed: {atr_result['reviewed']}")
@@ -6568,8 +6656,8 @@ def cmd_check_governance(args):
             print(f"│  [PASS] No product-code tasks to review.")
     print("└──────────────────────────────────────────────────────┘")
 
-    # ── 19. Agent Activation (SYSGAP-036) ──
-    print("\n┌─ Check 19: Agent Activation (Analyst/Architect) ─────┐")
+    # ── 20. Agent Activation (SYSGAP-036) ──
+    print("\n┌─ Check 20: Agent Activation (Analyst/Architect) ─────┐")
     aa_result = check_agent_activation()
     print(f"│  P0 cross-layer product tasks: {aa_result['total_p0_cross_layer']}")
     print(f"│  Analyst activated: {aa_result['analyst_activated']}")
@@ -6585,8 +6673,8 @@ def cmd_check_governance(args):
             print(f"│  [PASS] No P0 cross-layer product tasks to check.")
     print("└──────────────────────────────────────────────────────┘")
 
-    # ── 20. Review Debt (SYSGAP-042) ──
-    print("\n┌─ Check 20: Review Debt ─────────────────────────────┐")
+    # ── 21. Review Debt (SYSGAP-042) ──
+    print("\n┌─ Check 21: Review Debt ─────────────────────────────┐")
     rd_result = check_review_debt()
     print(f"│  Product-code tasks (all, with evidence): {rd_result['total_tasks']}")
     print(f"│  Review debt (have execution evidence, no review): {rd_result['review_debt_count']}")
@@ -6602,8 +6690,8 @@ def cmd_check_governance(args):
             print(f"│  [PASS] No product-code tasks to check.")
     print("└──────────────────────────────────────────────────────┘")
 
-    # ── 21. Review Coverage (FIX-037) ──
-    print("\n┌─ Check 21: Review Coverage (FIX-037) ────────────────┐")
+    # ── 22. Review Coverage (FIX-037) ──
+    print("\n┌─ Check 22: Review Coverage (FIX-037) ────────────────┐")
     rc_result = check_review_coverage()
     print(f"│  Product code tasks: {rc_result['total_tasks']}")
     print(f"│  Tasks with review evidence: {rc_result['reviewed']}")
@@ -6620,8 +6708,8 @@ def cmd_check_governance(args):
             print(f"│  [PASS] No product-code tasks to check.")
     print("└──────────────────────────────────────────────────────┘")
 
-    # ── 22. Profile Consistency (FIX-038) ──
-    print("\n┌─ Check 22: Profile Consistency (FIX-038) ────────────┐")
+    # ── 23. Profile Consistency (FIX-038) ──
+    print("\n┌─ Check 23: Profile Consistency (FIX-038) ────────────┐")
     pc_result = check_profile_consistency()
     print(f"│  Profile: {pc_result['profile']}")
     print(f"│  Gate table rows: {pc_result['gate_rows']} (expected: {pc_result['expected_gate_rows']})")
@@ -6637,8 +6725,8 @@ def cmd_check_governance(args):
         print(f"│  [PASS] Profile declaration matches actual structure.")
     print("└──────────────────────────────────────────────────────┘")
 
-    # ── 23. Version Consistency (FIX-052) ──
-    print("\n┌─ Check 23: Version Consistency (FIX-052) ───────────┐")
+    # ── 24. Version Consistency (FIX-052) ──
+    print("\n┌─ Check 24: Version Consistency (FIX-052) ───────────┐")
     vc_issues = check_version_consistency()
     vc_fail = [i for i in vc_issues if not i.startswith("[WARN]")]
     vc_warn = [i for i in vc_issues if i.startswith("[WARN]")]
@@ -6655,8 +6743,8 @@ def cmd_check_governance(args):
             print(f"│    - {w}")
     print("└──────────────────────────────────────────────────────┘")
 
-    # ── 24. Untracked Files Detection (FIX-057 Phase 2) ──
-    print("\n┌─ Check 24: Untracked Files ──────────────────────────┐")
+    # ── 25. Untracked Files Detection (FIX-057 Phase 2) ──
+    print("\n┌─ Check 25: Untracked Files ──────────────────────────┐")
     uf_result = check_untracked_files()
     if uf_result["pass"] is None:
         print(f"│  [INFO] Skipped: could not run git ls-files.")
@@ -6700,8 +6788,8 @@ def cmd_check_governance(args):
                 print(f"│    - {f}")
     print("└──────────────────────────────────────────────────────┘")
 
-    # ── 25. Agent Lock Consistency (FIX-056 Phase 2) ──
-    print("\n┌─ Check 25: Agent Lock Consistency (FIX-056) ─────────┐")
+    # ── 26. Agent Lock Consistency (FIX-056 Phase 2) ──
+    print("\n┌─ Check 26: Agent Lock Consistency (FIX-056) ─────────┐")
     al_result = check_agent_lock_consistency()
     al_issue_count = len(al_result.get("issues", []))
     al_blocking = [i for i in al_result.get("issues", []) if lock_issue_is_blocking(i)]
@@ -6723,8 +6811,8 @@ def cmd_check_governance(args):
                   f"{al_result['file_lock_count']} file lock(s).")
     print("└──────────────────────────────────────────────────────┘")
 
-    # ── 26. Archive Integrity (SYSGAP-030) ──
-    print("\n┌─ Check 26: Archive Integrity (SYSGAP-030) ───────────┐")
+    # ── 27. Archive Integrity (SYSGAP-030) ──
+    print("\n┌─ Check 27: Archive Integrity (SYSGAP-030) ───────────┐")
     ai_result = check_archive_integrity()
     print(f"│  Hot tasks (plan-tracker): {ai_result['hot_tasks']}")
     print(f"│  Archived tasks: {ai_result['total_archived_tasks']}")
@@ -6741,8 +6829,8 @@ def cmd_check_governance(args):
         print(f"│  [PASS] Archive integrity verified — {'no archive data' if ai_result['total_archived_tasks'] == 0 else f'{ai_result['total_expected']} total tasks, index consistent'}")
     print("└──────────────────────────────────────────────────────┘")
 
-    # ── 27. Governance Review Fallback Policy (FIX-061) ──
-    print("\n┌─ Check 27: Governance Review Fallback Policy ────────┐")
+    # ── 28. Governance Review Fallback Policy (FIX-061) ──
+    print("\n┌─ Check 28: Governance Review Fallback Policy ────────┐")
     gr_result = check_governance_review_fallback_policy()
     print(f"│  Command files checked: {gr_result['files_checked']}")
     if gr_result["optional_skipped"]:

@@ -167,6 +167,13 @@
 
 **Evidence log 字段**: 编号 | 任务ID | 阶段 | 证据类型 | 证据说明 | 证据位置 | 提交人 | 提交日期 | 关联Gate | 备注
 
+**产品代码证据说明字段（MANDATORY）**:
+- `事实依据:` MUST 引用可复查事实，如文件、命令、测试输出、日志路径或审查结论。
+- `结构化事实:` MUST 为单个 JSON object，至少包含 `commands`、`files_changed`、`diff_summary`、`review`。
+- `commands[]` MUST 记录 `cmd`、`exit_code`、`summary`，可选 `log_path`；不得记录 secret/token/password/API key 明文。
+- `files_changed` MUST 列出本事项实际产品代码路径；`diff_summary` MUST 概括关键 diff；`review` MUST 记录独立审查结论或 `NOT_REQUIRED` 快速通道。
+- `目标对齐:` MUST 说明变更如何服务项目目标；`用户影响:` MUST 包含 `获得=`、`感知=`、`体验变化=`、`迁移指南=`。
+
 **Decision log 字段**: 编号 | 日期 | 主题 | 背景 | 决策内容 | 备选方案 | 选择原因 | 影响范围 | 决策人 | 关联任务 | 后续动作
 
 **Risk log 字段**: 编号 | 日期 | 风险描述 | 阶段 | 触发条件 | 影响 | 严重级别 | Owner | 状态 | 缓解动作 | 截止日期 | 关联任务 | 备注

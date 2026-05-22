@@ -5139,6 +5139,51 @@ def _task_priority_from_table_parts(parts):
     return old_table_priority
 
 
+def _split_governance_table_row(line):
+    """Split a Markdown table row while preserving pipes inside JSON cells."""
+    parts = []
+    current = []
+    depth = 0
+    in_string = False
+    in_code_span = False
+    escape = False
+
+    for ch in line:
+        if ch == "`" and not in_string:
+            in_code_span = not in_code_span
+            current.append(ch)
+            continue
+
+        if in_string:
+            current.append(ch)
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+
+        if ch == '"':
+            in_string = True
+            current.append(ch)
+        elif ch in "{[":
+            depth += 1
+            current.append(ch)
+        elif ch in "}]":
+            if depth > 0:
+                depth -= 1
+            current.append(ch)
+        elif ch == "|" and depth == 0 and not in_code_span:
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(ch)
+
+    parts.append("".join(current))
+    return parts
+
+
 def parse_impact_analysis_entries():
     """Parse evidence-log entries that must carry goal/user impact guardrails.
 
@@ -5158,7 +5203,7 @@ def parse_impact_analysis_entries():
         line = line.strip()
         if not line.startswith("| EVD-"):
             continue
-        parts = [p.strip() for p in line.split("|")]
+        parts = [p.strip() for p in _split_governance_table_row(line)]
         if len(parts) < 8:
             continue
         evd_id = parts[1]
@@ -5169,9 +5214,14 @@ def parse_impact_analysis_entries():
 
         covered_ids = expand_task_ids(task_id) if task_id and re.search(r"[A-Z]+-\d+", task_id) else set()
         explicit_impact = evd_type == "影响分析"
+        product_delivery_by_path = _is_product_code_location(file_location)
+        product_delivery_by_current_task_type = (
+            bool(covered_ids & hot_task_ids)
+            and evd_type in {"实现", "修复", "修复闭环", "开发", "代码"}
+        )
         product_delivery = (
             bool(covered_ids & hot_task_ids)
-            and _is_product_code_location(file_location)
+            and (product_delivery_by_path or product_delivery_by_current_task_type)
             and not _is_review_evidence(task_id, evd_type)
             and not _is_audit_or_review_type(evd_type)
         )
@@ -5421,6 +5471,12 @@ UNGROUNDED_CLAIM_RE = re.compile(
     r"(?:我\s*)?(?:假设|猜测|推测|估计)|(?:大概|应该|可能)(?:已经|是|可以|完成|存在)|编造|幻觉"
 )
 
+SECRET_FIELD_RE = re.compile(r"(?:api[_-]?key|token|secret|password|passwd)", re.IGNORECASE)
+SECRET_ASSIGNMENT_RE = re.compile(
+    r"['\"]?(?:api[_-]?key|token|secret|password|passwd)['\"]?\s*[:=]\s*['\"]?[^\s,'\"}]+",
+    re.IGNORECASE,
+)
+
 
 def _current_release_impact_entries():
     """Return impact/product-delivery entries for the active in-progress release.
@@ -5474,6 +5530,162 @@ def check_fact_grounding():
             "fact_text": fact_text[:80] + ("..." if fact_len > 80 else ""),
             "status": status,
             "issues": issues,
+        })
+
+    return result
+
+
+# ── FIX-083: Structured Evidence Check ────────────────────────────
+
+def _extract_structured_fact_json(description):
+    """Extract the JSON object after `结构化事实:` without being confused by nested braces."""
+    markers = list(re.finditer(r"结构化事实[:：]", description))
+    if not markers:
+        return ""
+    first_non_json = ""
+    for marker in markers:
+        idx = marker.end()
+        while idx < len(description) and description[idx].isspace():
+            idx += 1
+        if idx < len(description) and description[idx] == "`":
+            idx += 1
+            while idx < len(description) and description[idx].isspace():
+                idx += 1
+        if idx >= len(description) or description[idx] != "{":
+            if not first_non_json:
+                first_non_json = description[idx:].strip()
+            continue
+        break
+    else:
+        return first_non_json
+
+    depth = 0
+    in_string = False
+    escape = False
+    for pos in range(idx, len(description)):
+        ch = description[pos]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return description[idx:pos + 1]
+    return description[idx:].strip()
+
+
+def _contains_secret_like(value):
+    """Return True when structured evidence appears to carry a raw secret."""
+    if isinstance(value, dict):
+        for key, child in value.items():
+            key_text = str(key)
+            if SECRET_FIELD_RE.search(key_text):
+                if child not in (None, "", "<redacted>", "REDACTED", "***", "***REDACTED***"):
+                    return True
+            if _contains_secret_like(child):
+                return True
+        return False
+    if isinstance(value, list):
+        return any(_contains_secret_like(item) for item in value)
+    if isinstance(value, str):
+        return bool(SECRET_ASSIGNMENT_RE.search(value))
+    return False
+
+
+def _validate_structured_fact_payload(payload):
+    issues = []
+    if not isinstance(payload, dict):
+        return ["结构化事实必须是 JSON object"]
+
+    commands = payload.get("commands")
+    if not isinstance(commands, list) or not commands:
+        issues.append("commands 必须是非空数组")
+    else:
+        for index, command in enumerate(commands, start=1):
+            if not isinstance(command, dict):
+                issues.append(f"commands[{index}] 必须是 object")
+                continue
+            cmd = command.get("cmd")
+            exit_code = command.get("exit_code")
+            summary = command.get("summary")
+            if not isinstance(cmd, str) or not cmd.strip():
+                issues.append(f"commands[{index}].cmd 必须是非空字符串")
+            if not isinstance(exit_code, int):
+                issues.append(f"commands[{index}].exit_code 必须是整数")
+            if not isinstance(summary, str) or len(summary.strip()) < 5:
+                issues.append(f"commands[{index}].summary 必须说明输出摘要")
+            log_path = command.get("log_path")
+            if log_path is not None and not isinstance(log_path, str):
+                issues.append(f"commands[{index}].log_path 必须是字符串")
+
+    files_changed = payload.get("files_changed")
+    if not isinstance(files_changed, list) or not files_changed or not all(isinstance(item, str) and item for item in files_changed):
+        issues.append("files_changed 必须是非空字符串数组")
+
+    diff_summary = payload.get("diff_summary")
+    if not isinstance(diff_summary, str) or len(diff_summary.strip()) < 10:
+        issues.append("diff_summary 必须说明文件 diff 摘要")
+
+    review = payload.get("review")
+    if not isinstance(review, dict):
+        issues.append("review 必须是 object")
+    else:
+        conclusion = review.get("conclusion")
+        reviewer = review.get("reviewer")
+        if conclusion not in {"APPROVED", "NEEDS_CHANGES", "BLOCKED", "NOT_REQUIRED"}:
+            issues.append("review.conclusion 必须是 APPROVED/NEEDS_CHANGES/BLOCKED/NOT_REQUIRED")
+        if not isinstance(reviewer, str) or not reviewer.strip():
+            issues.append("review.reviewer 必须是非空字符串")
+
+    if _contains_secret_like(payload):
+        issues.append("结构化事实疑似包含 secret/token/password 明文")
+    return issues
+
+
+def check_structured_evidence():
+    """FIX-083: Check current product-code evidence has machine-readable facts."""
+    result = {
+        "entries": [],
+        "pass": True,
+    }
+
+    for entry in _current_release_impact_entries():
+        desc = entry["description"]
+        raw_json = _extract_structured_fact_json(desc)
+        issues = []
+        status = "PASS"
+        payload = None
+
+        if not raw_json:
+            issues.append("缺少 结构化事实: JSON")
+        else:
+            try:
+                payload = json.loads(raw_json)
+                issues.extend(_validate_structured_fact_payload(payload))
+            except json.JSONDecodeError as exc:
+                issues.append(f"结构化事实 JSON 解析失败: {exc.msg}")
+
+        if issues:
+            status = "FAIL"
+            result["pass"] = False
+
+        result["entries"].append({
+            "task_id": entry["task_id"],
+            "evd_id": entry["evd_id"],
+            "has_structured_fact": bool(raw_json),
+            "status": status,
+            "issues": issues,
+            "commands": len(payload.get("commands", [])) if isinstance(payload, dict) and isinstance(payload.get("commands"), list) else 0,
+            "files_changed": len(payload.get("files_changed", [])) if isinstance(payload, dict) and isinstance(payload.get("files_changed"), list) else 0,
         })
 
     return result
@@ -6757,6 +6969,27 @@ def cmd_check_governance(args):
     if fg_issues == 0:
         print("│  [PASS] Fact grounding check passed.")
     all_issues += fg_issues
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 18b. Structured Evidence (FIX-083) ──
+    print("\n┌─ Check 18b: Structured Evidence (FIX-083) ───────────┐")
+    se_result = check_structured_evidence()
+    se_issues = 0
+    print(f"│  Current-release product evidence entries: {len(se_result['entries'])}")
+    if se_result["entries"]:
+        for e in se_result["entries"]:
+            if e["status"] == "FAIL":
+                se_issues += 1
+                for issue in e["issues"]:
+                    print(f"│  [FAIL] {e['task_id']} ({e['evd_id']}): {issue}")
+            else:
+                print(f"│  [PASS] {e['task_id']} ({e['evd_id']}): "
+                      f"{e['commands']} command(s), {e['files_changed']} file(s)")
+    else:
+        print("│  [PASS] No current-release product evidence to check.")
+    if se_issues == 0:
+        print("│  [PASS] Structured evidence check passed.")
+    all_issues += se_issues
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 19. Agent Team Review (SYSGAP-035) ──

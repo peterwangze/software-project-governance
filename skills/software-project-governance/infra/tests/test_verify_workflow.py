@@ -3691,6 +3691,200 @@ class FactGroundingTests(unittest.TestCase):
             self.assertIn("含未落地推断词", r["entries"][0]["issues"][0])
 
 
+class StructuredEvidenceTests(unittest.TestCase):
+    """FIX-083: current product-code evidence must carry machine-readable facts."""
+
+    def _setup(self, tmpdir, evidence_lines):
+        root = Path(tmpdir)
+        gov = root / ".governance"; gov.mkdir(parents=True, exist_ok=True)
+        sp = gov / "plan-tracker.md"
+        ep = gov / "evidence-log.md"
+        sp.write_text("\n".join([
+            "# 计划跟踪",
+            "## 项目配置",
+            "- **项目目标**: 提供一套完整的软件项目治理工作流插件",
+            "## 当前活跃事项",
+            "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+            "|--------|----|------|------|---------|---------|------|",
+            "| **P0** | FIX-083 | structured evidence | 用户反馈 | 0.38.0 | tests | 🔄 进行中 |",
+            "## 版本规划",
+            "| 版本 | 状态 | 预计日期 | 核心范围 | 包含 Tier/Layer | 关键交付物 |",
+            "| 0.38.0 | 进行中 | 2026-05-23 | structured evidence | FIX-083 | delivery |",
+        ]), encoding="utf-8")
+        ep.write_text("\n".join(evidence_lines), encoding="utf-8")
+        return sp, ep
+
+    def _payload(self, **overrides):
+        payload = {
+            "commands": [
+                {
+                    "cmd": "python skills/software-project-governance/infra/verify_workflow.py check-governance --fail-on-issues",
+                    "exit_code": 0,
+                    "summary": "Governance health passed with zero issues.",
+                    "log_path": "terminal output",
+                }
+            ],
+            "files_changed": [
+                "skills/software-project-governance/infra/verify_workflow.py",
+                "skills/software-project-governance/infra/tests/test_verify_workflow.py",
+            ],
+            "diff_summary": "Added structured evidence parsing and guardrail tests.",
+            "review": {"conclusion": "APPROVED", "reviewer": "Code Reviewer"},
+        }
+        payload.update(overrides)
+        return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+    def _row(self, structured_fact):
+        return _impact_evidence_row(
+            "EVD-083",
+            "FIX-083",
+            f"事实依据: structured evidence validation was implemented and tested. "
+            f"结构化事实: {structured_fact} "
+            f"目标对齐: 结构化证据让治理闭环从自然语言叙述变成可机器检查的事实链。 "
+            f"用户影响: 获得=plugin update, 感知=check-governance, 体验变化=正向, 迁移指南=不需要",
+            "skills/software-project-governance/infra/verify_workflow.py",
+        )
+
+    def _delivery_row(self, description, file_location="validation commands"):
+        return (
+            f"| EVD-085 | FIX-083 | 维护 | 修复闭环 | {description} | {file_location} | "
+            f"Developer | 2026-05-23 | G11 | 完成 |"
+        )
+
+    def test_structured_evidence_accepts_valid_payload(self):
+        with tempfile.TemporaryDirectory() as td:
+            sp, ep = self._setup(td, [self._row(self._payload())])
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_structured_evidence()
+            self.assertTrue(r["pass"])
+            self.assertEqual(r["entries"][0]["status"], "PASS")
+            self.assertEqual(r["entries"][0]["commands"], 1)
+
+    def test_structured_evidence_requires_payload(self):
+        with tempfile.TemporaryDirectory() as td:
+            sp, ep = self._setup(td, [_impact_evidence_row(
+                "EVD-084",
+                "FIX-083",
+                "事实依据: files and tests. 目标对齐: 结构化证据让治理闭环更可信。 "
+                "用户影响: 获得=plugin update, 感知=check-governance, 体验变化=正向, 迁移指南=不需要",
+                "skills/software-project-governance/infra/verify_workflow.py",
+            )])
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_structured_evidence()
+            self.assertFalse(r["pass"])
+            self.assertIn("缺少 结构化事实", r["entries"][0]["issues"][0])
+
+    def test_structured_evidence_rejects_missing_exit_code(self):
+        with tempfile.TemporaryDirectory() as td:
+            payload = json.loads(self._payload())
+            payload["commands"][0].pop("exit_code")
+            sp, ep = self._setup(td, [self._row(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))])
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_structured_evidence()
+            self.assertFalse(r["pass"])
+            self.assertTrue(any("exit_code" in issue for issue in r["entries"][0]["issues"]))
+
+    def test_structured_evidence_rejects_secret_like_values(self):
+        with tempfile.TemporaryDirectory() as td:
+            payload = json.loads(self._payload())
+            payload["secret"] = "abc123"
+            payload["commands"] = [{
+                "cmd": "curl https://example.test",
+                "exit_code": 0,
+                "summary": "token=abc123 was printed",
+            }]
+            sp, ep = self._setup(td, [self._row(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))])
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_structured_evidence()
+            self.assertFalse(r["pass"])
+            self.assertTrue(any("secret/token/password" in issue for issue in r["entries"][0]["issues"]))
+
+    def test_structured_evidence_checks_current_release_delivery_without_path_location(self):
+        with tempfile.TemporaryDirectory() as td:
+            description = (
+                f"事实依据: product-code delivery evidence used generic locations. "
+                f"结构化事实: {self._payload()} "
+                f"目标对齐: 结构化证据让当前版本产品代码闭环不能因证据位置笼统而空跑。 "
+                f"用户影响: 获得=plugin update, 感知=check-governance, 体验变化=正向, 迁移指南=不需要"
+            )
+            sp, ep = self._setup(td, [self._delivery_row(description)])
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_structured_evidence()
+            self.assertTrue(r["pass"])
+            self.assertEqual(len(r["entries"]), 1)
+            self.assertEqual(r["entries"][0]["task_id"], "FIX-083")
+
+    def test_structured_evidence_rejects_current_release_delivery_without_payload_even_when_location_is_generic(self):
+        with tempfile.TemporaryDirectory() as td:
+            description = (
+                "事实依据: product-code delivery evidence used generic locations. "
+                "目标对齐: 结构化证据让当前版本产品代码闭环不能因证据位置笼统而空跑。 "
+                "用户影响: 获得=plugin update, 感知=check-governance, 体验变化=正向, 迁移指南=不需要"
+            )
+            sp, ep = self._setup(td, [self._delivery_row(description)])
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_structured_evidence()
+            self.assertFalse(r["pass"])
+            self.assertIn("缺少 结构化事实", r["entries"][0]["issues"][0])
+
+    def test_structured_evidence_allows_shell_pipeline_inside_json_command(self):
+        with tempfile.TemporaryDirectory() as td:
+            payload = json.loads(self._payload())
+            payload["commands"][0]["cmd"] = "git diff --name-only | rg verify_workflow"
+            sp, ep = self._setup(td, [self._row(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))])
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_structured_evidence()
+            self.assertTrue(r["pass"])
+            self.assertEqual(r["entries"][0]["commands"], 1)
+
+    def test_structured_evidence_allows_markdown_code_pipe_before_json(self):
+        with tempfile.TemporaryDirectory() as td:
+            description = (
+                f"事实依据: reviewer covered Markdown inline `|` before structured JSON. "
+                f"结构化事实: {self._payload()} "
+                f"目标对齐: 结构化证据解析不能被证据说明里的 inline pipe 干扰。 "
+                f"用户影响: 获得=plugin update, 感知=check-governance, 体验变化=正向, 迁移指南=不需要"
+            )
+            sp, ep = self._setup(td, [self._delivery_row(description)])
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_structured_evidence()
+            self.assertTrue(r["pass"])
+            self.assertEqual(r["entries"][0]["commands"], 1)
+
+    def test_structured_evidence_extracts_nested_json_and_braces_in_strings(self):
+        with tempfile.TemporaryDirectory() as td:
+            payload = json.loads(self._payload())
+            payload["commands"][0]["summary"] = "Rendered output contained literal braces {ok} and nested metadata."
+            payload["metadata"] = {"nested": {"result": "passed"}}
+            sp, ep = self._setup(td, [self._row(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))])
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_structured_evidence()
+            self.assertTrue(r["pass"])
+
+    def test_structured_evidence_skips_inline_field_name_before_payload(self):
+        with tempfile.TemporaryDirectory() as td:
+            description = (
+                f"事实依据: docs mention `结构化事实:` before the payload. "
+                f"结构化事实: {self._payload()} "
+                f"目标对齐: 结构化证据解析应跳过说明文字中的字段名并读取真实 JSON。 "
+                f"用户影响: 获得=plugin update, 感知=check-governance, 体验变化=正向, 迁移指南=不需要"
+            )
+            sp, ep = self._setup(td, [self._delivery_row(description)])
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_structured_evidence()
+            self.assertTrue(r["pass"])
+
+
 class CommitMsgFactGroundingHookTests(unittest.TestCase):
     """FIX-080: commit-msg hook must block product commits without fact basis."""
 

@@ -3631,6 +3631,122 @@ class CommitMsgFactGroundingHookTests(unittest.TestCase):
         self.assertIn("ungrounded speculation language", result.stdout)
 
 
+class PreCommitClaudeBootstrapUpgradeHookTests(unittest.TestCase):
+    """FIX-081: pre-commit allows legitimate CLAUDE.md bootstrap self-upgrade."""
+
+    def _bash(self):
+        if os.name == "nt":
+            candidates = [
+                Path(os.environ.get("ProgramFiles", "")) / "Git" / "bin" / "bash.exe",
+                Path(os.environ.get("ProgramFiles(x86)", "")) / "Git" / "bin" / "bash.exe",
+            ]
+            for candidate in candidates:
+                if candidate.exists():
+                    return str(candidate)
+        return shutil.which("bash") or "bash"
+
+    def _run_hook(self, *, plan_version="0.36.0", initial_version="0.35.0",
+                  stage_plan=True, change_outside_bootstrap=False):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=root, check=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True)
+
+            skill = root / "skills" / "software-project-governance" / "SKILL.md"
+            skill.parent.mkdir(parents=True, exist_ok=True)
+            skill.write_text("---\nversion: 0.36.0\n---\n", encoding="utf-8")
+
+            claude = root / "CLAUDE.md"
+            claude.write_text(
+                "# Project\n\n"
+                "## Governance Bootstrap\n\n"
+                "old bootstrap\n\n"
+                "## 当前项目治理状态快速入口\n\n"
+                "- stable local content\n",
+                encoding="utf-8",
+            )
+
+            gov = root / ".governance"
+            gov.mkdir(parents=True, exist_ok=True)
+            (gov / "plan-tracker.md").write_text(
+                f"## 项目配置\n- **工作流版本**: {initial_version}\n",
+                encoding="utf-8",
+            )
+
+            subprocess.run(["git", "add", "CLAUDE.md", ".governance/plan-tracker.md",
+                            "skills/software-project-governance/SKILL.md"], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-m", "INIT-001: baseline"], cwd=root,
+                           check=True, capture_output=True, text=True)
+
+            if change_outside_bootstrap:
+                claude.write_text(
+                    "# Project changed directly\n\n"
+                    "## Governance Bootstrap\n\n"
+                    "updated bootstrap\n\n"
+                    "## 当前项目治理状态快速入口\n\n"
+                    "- stable local content\n",
+                    encoding="utf-8",
+                )
+            else:
+                claude.write_text(
+                    "# Project\n\n"
+                    "## Governance Bootstrap\n\n"
+                    "updated bootstrap\n\n"
+                    "## 当前项目治理状态快速入口\n\n"
+                    "- stable local content\n",
+                    encoding="utf-8",
+                )
+            (gov / "plan-tracker.md").write_text(
+                f"## 项目配置\n- **工作流版本**: {plan_version}\n- note: staged\n",
+                encoding="utf-8",
+            )
+
+            subprocess.run(["git", "add", "CLAUDE.md"], cwd=root, check=True)
+            if stage_plan:
+                subprocess.run(["git", "add", ".governance/plan-tracker.md"], cwd=root, check=True)
+
+            hook = _INFRA_DIR / "hooks" / "pre-commit"
+            return subprocess.run(
+                [self._bash(), hook.as_posix()],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+
+    def test_pre_commit_allows_claude_bootstrap_self_upgrade(self):
+        result = self._run_hook(plan_version="0.36.0", initial_version="0.35.0", stage_plan=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("bootstrap self-upgrade detected", result.stdout)
+
+    def test_pre_commit_blocks_direct_claude_change_without_plan_version(self):
+        result = self._run_hook(stage_plan=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("BOOTSTRAP DISCIPLINE", result.stdout)
+
+    def test_pre_commit_blocks_claude_upgrade_with_version_mismatch(self):
+        result = self._run_hook(plan_version="0.35.0", initial_version="0.34.0", stage_plan=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("BOOTSTRAP DISCIPLINE", result.stdout)
+
+    def test_pre_commit_blocks_same_version_claude_change_with_plan_staged(self):
+        result = self._run_hook(plan_version="0.36.0", initial_version="0.36.0", stage_plan=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("BOOTSTRAP DISCIPLINE", result.stdout)
+
+    def test_pre_commit_blocks_non_bootstrap_claude_change_during_upgrade(self):
+        result = self._run_hook(
+            plan_version="0.36.0",
+            initial_version="0.35.0",
+            stage_plan=True,
+            change_outside_bootstrap=True,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("BOOTSTRAP DISCIPLINE", result.stdout)
+
+
 class ArchiveTriggerGapTests(unittest.TestCase):
     """FIX-063: Check 26 exposes continuous archive trigger gaps."""
 

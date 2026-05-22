@@ -25,6 +25,62 @@ is_product_code() {
     return 1
 }
 
+is_claude_bootstrap_self_upgrade() {
+    local files="$1"
+
+    # Workflow developers changing the canonical template and dogfood
+    # CLAUDE.md together are already on the intended path.
+    if echo "$files" | grep -q "^commands/governance-init.md$"; then
+        return 0
+    fi
+
+    # User/plugin upgrade path: bootstrap self-upgrade updates CLAUDE.md plus
+    # plan-tracker workflow version. Allow it when the staged plan-tracker
+    # version matches the installed SKILL version and the staged CLAUDE.md
+    # still contains the governance bootstrap marker.
+    if ! echo "$files" | grep -q "^\.governance/plan-tracker.md$"; then
+        return 1
+    fi
+
+    local source_ver
+    source_ver=$(grep -E '^version:' "$REPO_ROOT/skills/software-project-governance/SKILL.md" 2>/dev/null | head -1 | sed 's/version:[[:space:]]*//')
+    [ -z "$source_ver" ] && return 1
+
+    if ! git show ":CLAUDE.md" 2>/dev/null | grep -q "## Governance Bootstrap"; then
+        return 1
+    fi
+
+    local staged_plan_ver
+    staged_plan_ver=$(git show ":.governance/plan-tracker.md" 2>/dev/null | grep -E "工作流版本" | head -1 | sed -E "s/.*工作流版本[^0-9]*([0-9]+\.[0-9]+\.[0-9]+).*/\1/")
+    if [ "$staged_plan_ver" != "$source_ver" ]; then
+        return 1
+    fi
+
+    local head_plan_ver
+    head_plan_ver=$(git show "HEAD:.governance/plan-tracker.md" 2>/dev/null | grep -E "工作流版本" | head -1 | sed -E "s/.*工作流版本[^0-9]*([0-9]+\.[0-9]+\.[0-9]+).*/\1/" || true)
+    if [ -z "$head_plan_ver" ] || [ "$head_plan_ver" = "$source_ver" ]; then
+        return 1
+    fi
+
+    local head_non_bootstrap
+    local staged_non_bootstrap
+    head_non_bootstrap=$(git show "HEAD:CLAUDE.md" 2>/dev/null | awk '
+        /^## Governance Bootstrap/ { in_bootstrap=1; next }
+        /^## 当前项目治理状态快速入口/ { in_bootstrap=0 }
+        !in_bootstrap { print }
+    ' || true)
+    staged_non_bootstrap=$(git show ":CLAUDE.md" 2>/dev/null | awk '
+        /^## Governance Bootstrap/ { in_bootstrap=1; next }
+        /^## 当前项目治理状态快速入口/ { in_bootstrap=0 }
+        !in_bootstrap { print }
+    ' || true)
+    if [ "$head_non_bootstrap" != "$staged_non_bootstrap" ]; then
+        return 1
+    fi
+
+    return 0
+}
+
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo ".")
 
 # --- Step 0: Hook self-upgrade check (FIX-046) ---
@@ -71,7 +127,9 @@ CHANGED_FILES=$(git diff --cached --name-only 2>/dev/null || true)
 # MUST first modify commands/governance-init.md Step 7 (canonical source), bump version,
 # then user /plugin update → bootstrap self-upgrade → CLAUDE.md synced.
 if git diff --cached --name-only 2>/dev/null | grep -q "^CLAUDE.md$"; then
-    if ! git diff --cached --name-only 2>/dev/null | grep -q "^commands/governance-init.md$"; then
+    if is_claude_bootstrap_self_upgrade "$CHANGED_FILES"; then
+        echo "✅ GOVERNANCE: CLAUDE.md bootstrap self-upgrade detected; Step 6 allowed."
+    else
         echo ""
         echo "╔══════════════════════════════════════════════════════════════╗"
         echo "║  BOOTSTRAP DISCIPLINE: CLAUDE.md modified directly.         ║"

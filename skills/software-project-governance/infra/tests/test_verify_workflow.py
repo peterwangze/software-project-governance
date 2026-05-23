@@ -3885,6 +3885,124 @@ class StructuredEvidenceTests(unittest.TestCase):
             self.assertTrue(r["pass"])
 
 
+class ExecutionPacketTests(unittest.TestCase):
+    """FIX-084: active P0/P1 tasks need short AI execution packets."""
+
+    def _setup_plan(self, tmpdir, rows):
+        root = Path(tmpdir)
+        gov = root / ".governance"; gov.mkdir(parents=True, exist_ok=True)
+        sp = gov / "plan-tracker.md"
+        sp.write_text("\n".join([
+            "# 计划跟踪",
+            "## 当前活跃事项",
+            "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+            "|--------|----|------|------|---------|---------|------|",
+            *rows,
+            "### 最近完成（本会话提交窗口）",
+            "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+            "| **P0** | FIX-000 | old | x | 0.1.0 | done | ✅ 已完成 |",
+        ]), encoding="utf-8")
+        return root, sp, gov / "execution-packets.json"
+
+    def test_execution_packet_missing_file_fails_for_active_p0_p1(self):
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P0** | FIX-084 | AI packet | DEC-068 | 0.38.0 | packet command | 📋 待启动 |",
+                "| **P2** | FIX-999 | optional | DEC-068 | 0.38.0 | optional | 📋 待启动 |",
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_execution_packets(packet_path)
+            self.assertFalse(r["pass"])
+            self.assertEqual(r["required_tasks"], ["FIX-084"])
+            self.assertEqual(r["missing"], ["FIX-084"])
+
+    def test_execution_packet_generated_payload_passes(self):
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P0** | FIX-084 | AI packet | DEC-068 | 0.38.0 | packet command | 📋 待启动 |",
+                "| **P1** | FIX-086 | projection sync | DEC-068 | 0.38.0 | sync guard | 🔄 进行中 |",
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                payload = vw.generate_execution_packets()
+            packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_execution_packets(packet_path)
+            self.assertTrue(r["pass"])
+            self.assertEqual(r["required_tasks"], ["FIX-084", "FIX-086"])
+            self.assertEqual([e["status"] for e in r["entries"]], ["PASS", "PASS"])
+
+    def test_execution_packet_invalid_schema_fails(self):
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P0** | FIX-084 | AI packet | DEC-068 | 0.38.0 | packet command | 📋 待启动 |",
+            ])
+            packet_path.write_text(json.dumps({
+                "version": 1,
+                "packets": {
+                    "FIX-084": {
+                        "task_id": "FIX-084",
+                        "goal": "implement packet check",
+                        "allowed_change_scope": ["any file"],
+                        "required_evidence": ["validation output only"],
+                        "next_commands": ["python -m unittest skills/software-project-governance/infra/tests/test_verify_workflow.py -v"],
+                        "done_definition": ["tests passed"],
+                    }
+                },
+            }), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_execution_packets(packet_path)
+            self.assertFalse(r["pass"])
+            issues = " ".join(r["entries"][0]["issues"])
+            self.assertIn("too broad", issues)
+            self.assertIn("事实依据", issues)
+            self.assertIn("independent review", issues)
+
+    def test_completed_tasks_do_not_require_execution_packet(self):
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P0** | FIX-084 | AI packet | DEC-068 | 0.38.0 | packet command | ✅ 已完成 |",
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_execution_packets(packet_path)
+            self.assertTrue(r["pass"])
+            self.assertEqual(r["required_tasks"], [])
+
+    def test_unfinished_status_still_requires_execution_packet(self):
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P0** | FIX-084 | AI packet | DEC-068 | 0.38.0 | packet command | 未完成 |",
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_execution_packets(packet_path)
+            self.assertFalse(r["pass"])
+            self.assertEqual(r["required_tasks"], ["FIX-084"])
+            self.assertEqual(r["missing"], ["FIX-084"])
+
+    def test_execution_packet_cli_reconfigures_stdout_for_unicode(self):
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P0** | FIX-084 | AI packet | DEC-068 | 0.38.0 | packet command | 📋 待启动 |",
+            ])
+            class FakeStdout(io.StringIO):
+                def __init__(self):
+                    super().__init__()
+                    self.reconfigured = False
+
+                def reconfigure(self, **kwargs):
+                    self.reconfigured = True
+                    self.kwargs = kwargs
+
+            fake_stdout = FakeStdout()
+            args = argparse.Namespace(write=False, task=["FIX-084"])
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EXECUTION_PACKET_PATH", packet_path), \
+                 patch.object(vw.sys, "stdout", fake_stdout):
+                vw.cmd_execution_packet(args)
+            self.assertTrue(fake_stdout.reconfigured)
+            self.assertEqual(fake_stdout.kwargs["encoding"], "utf-8")
+            self.assertIn("FIX-084", fake_stdout.getvalue())
+
+
 class CommitMsgFactGroundingHookTests(unittest.TestCase):
     """FIX-080: commit-msg hook must block product commits without fact basis."""
 

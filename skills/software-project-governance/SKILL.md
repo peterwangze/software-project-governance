@@ -217,6 +217,18 @@ Agent(
 
 Coordinator 执行行为约束，详见 `references/behavior-protocol.md`（M0-M9 强制性规则）。所有角色 Agent 必须遵守。
 
+## AI Execution Packet（0.38.0+）
+
+进入具体任务前，Coordinator MUST 优先读取 `.governance/execution-packets.json` 中当前 `TASK_ID` 的短执行包。短包优先级高于长篇背景材料，用于约束本任务的目标、允许改动范围、必需证据、下一命令和完成定义。
+
+如果活跃 P0/P1 任务缺少短包，先运行：
+
+```bash
+python skills/software-project-governance/infra/verify_workflow.py execution-packet --write
+```
+
+`check-governance` Check 18c 会阻断缺包、空包、范围过宽、缺少 `事实依据` / `结构化事实` / review 完成定义的执行包。Coordinator 不得把缺少短包的产品代码任务标记为闭环。
+
 ## Coordinator 参考知识（按需读取）
 
 ### 核心层

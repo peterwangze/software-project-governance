@@ -12,6 +12,7 @@ import shutil
 from datetime import datetime, date
 
 ROOT = Path(__file__).resolve().parents[3]
+EXECUTION_PACKET_PATH = ROOT / ".governance" / "execution-packets.json"
 
 
 def _display_path(path, root=None):
@@ -5184,6 +5185,86 @@ def _split_governance_table_row(line):
     return parts
 
 
+def _governance_table_cells(line):
+    cells = [p.strip() for p in _split_governance_table_row(line.strip())]
+    if cells and cells[0] == "":
+        cells = cells[1:]
+    if cells and cells[-1] == "":
+        cells = cells[:-1]
+    return cells
+
+
+def _is_incomplete_task_status(status):
+    if not status:
+        return True
+    normalized = status.strip()
+    incomplete_markers = ("未完成", "未发布", "进行中", "待启动", "待处理", "pending", "in progress")
+    if any(marker in normalized for marker in incomplete_markers):
+        return True
+    completed_markers = ("已完成", "✅", "已关闭", "已发布", "已终止", "终止", "取消", "废弃")
+    return not any(marker in normalized for marker in completed_markers)
+
+
+def parse_current_active_tasks():
+    """Parse hot active task rows from plan-tracker compact tables."""
+    if not SAMPLE_PATH.is_file():
+        return []
+    content = SAMPLE_PATH.read_text(encoding="utf-8")
+    tasks = []
+    in_active_section = False
+    for line in content.split("\n"):
+        if line.startswith("## 当前活跃事项"):
+            in_active_section = True
+            continue
+        if in_active_section and line.startswith("### 最近完成"):
+            break
+        if not in_active_section:
+            continue
+        stripped = line.strip()
+        if not stripped.startswith("|") or "---" in stripped:
+            continue
+        cells = _governance_table_cells(stripped)
+        if not cells or cells[0] in {"优先级", "任务ID"}:
+            continue
+        task_idx = next(
+            (idx for idx, cell in enumerate(cells)
+             if re.match(r"^(?:\*\*)?[A-Z]+-\d+(?:\*\*)?$", cell.strip())),
+            None,
+        )
+        if task_idx is None:
+            continue
+        task_id = cells[task_idx].strip().strip("*")
+        priority = ""
+        for cell in cells:
+            normalized = _normalize_priority(cell)
+            if normalized:
+                priority = normalized
+                break
+        status = cells[-1].strip() if cells else ""
+        title = cells[task_idx + 1].strip() if task_idx + 1 < len(cells) else ""
+        dependency = cells[task_idx + 2].strip() if task_idx + 2 < len(cells) else ""
+        target_version = cells[task_idx + 3].strip() if task_idx + 3 < len(cells) else ""
+        closure_path = cells[task_idx + 4].strip() if task_idx + 4 < len(cells) else ""
+        tasks.append({
+            "task_id": task_id,
+            "priority": priority,
+            "title": title,
+            "dependency": dependency,
+            "target_version": target_version,
+            "closure_path": closure_path,
+            "status": status,
+            "raw_line": stripped,
+        })
+    return tasks
+
+
+def _active_execution_packet_tasks():
+    return [
+        task for task in parse_current_active_tasks()
+        if task.get("priority") in {"P0", "P1"} and _is_incomplete_task_status(task.get("status", ""))
+    ]
+
+
 def parse_impact_analysis_entries():
     """Parse evidence-log entries that must carry goal/user impact guardrails.
 
@@ -5689,6 +5770,172 @@ def check_structured_evidence():
         })
 
     return result
+
+
+# ── FIX-084: AI Execution Packet Check ───────────────────────────
+
+EXECUTION_PACKET_REQUIRED_FIELDS = {
+    "task_id": str,
+    "goal": str,
+    "allowed_change_scope": list,
+    "required_evidence": list,
+    "next_commands": list,
+    "done_definition": list,
+}
+
+
+def _load_execution_packets(path=None):
+    packet_path = path or EXECUTION_PACKET_PATH
+    if not packet_path.is_file():
+        return {}, f"{packet_path} not found"
+    try:
+        data = json.loads(packet_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        return {}, f"invalid JSON: {exc.msg}"
+    if not isinstance(data, dict):
+        return {}, "execution packet root must be object"
+    packets = data.get("packets", data)
+    if not isinstance(packets, dict):
+        return {}, "packets must be object"
+    return packets, ""
+
+
+def _validate_execution_packet(task, packet):
+    issues = []
+    if not isinstance(packet, dict):
+        return ["packet must be object"]
+    for field, expected_type in EXECUTION_PACKET_REQUIRED_FIELDS.items():
+        value = packet.get(field)
+        if not isinstance(value, expected_type):
+            issues.append(f"{field} missing or invalid")
+            continue
+        if expected_type is str and not value.strip():
+            issues.append(f"{field} must be non-empty")
+        if expected_type is list and (
+            not value or not all(isinstance(item, str) and item.strip() for item in value)
+        ):
+            issues.append(f"{field} must be non-empty string array")
+    if packet.get("task_id") and packet.get("task_id") != task["task_id"]:
+        issues.append("task_id does not match active task")
+    allowed_text = " ".join(packet.get("allowed_change_scope", []))
+    if allowed_text and any(token in allowed_text.lower() for token in ("*", "any file", "all files", "whole repo")):
+        issues.append("allowed_change_scope is too broad")
+    required_text = " ".join(packet.get("required_evidence", []))
+    if required_text and "事实依据" not in required_text:
+        issues.append("required_evidence must mention 事实依据")
+    if required_text and "结构化事实" not in required_text:
+        issues.append("required_evidence must mention 结构化事实")
+    done_text = " ".join(packet.get("done_definition", []))
+    if done_text and not any(token in done_text for token in ("review", "Review", "审查", "APPROVED")):
+        issues.append("done_definition must include independent review or explicit review status")
+    return issues
+
+
+def build_execution_packet(task):
+    scope = task.get("closure_path") or task.get("title") or task["task_id"]
+    return {
+        "task_id": task["task_id"],
+        "priority": task.get("priority", ""),
+        "status": task.get("status", ""),
+        "goal": f"{task['task_id']} {task.get('title', '').strip()}",
+        "allowed_change_scope": [
+            f"Only change files required by this task row: {scope}",
+            "Keep unrelated refactors, release version bumps, and fixture sync out of this task unless listed in the task scope.",
+        ],
+        "required_evidence": [
+            "evidence-log entry with 事实依据, 目标对齐, 用户影响, and 结构化事实 JSON",
+            "validation commands with exit_code and concise output summary",
+            "independent review evidence or explicit degraded review evidence that does not claim full separation",
+        ],
+        "next_commands": [
+            "python -m unittest skills/software-project-governance/infra/tests/test_verify_workflow.py -v",
+            "python skills/software-project-governance/infra/verify_workflow.py check-governance --fail-on-issues",
+        ],
+        "done_definition": [
+            task.get("closure_path") or "Task closure path from plan-tracker is satisfied.",
+            "Code Reviewer or matching Reviewer has APPROVED the product-code change.",
+            "Commit and push are completed for this single task.",
+        ],
+        "source": "plan-tracker.md##当前活跃事项",
+    }
+
+
+def generate_execution_packets(existing=None):
+    generated = {}
+    existing = existing or {}
+    for task in _active_execution_packet_tasks():
+        packet = dict(existing.get(task["task_id"], {})) if isinstance(existing.get(task["task_id"]), dict) else {}
+        base = build_execution_packet(task)
+        base.update(packet)
+        base["task_id"] = task["task_id"]
+        base["priority"] = task.get("priority", base.get("priority", ""))
+        base["status"] = task.get("status", base.get("status", ""))
+        generated[task["task_id"]] = base
+    return {
+        "version": 1,
+        "generated_at": datetime.now().replace(microsecond=0).isoformat(),
+        "packets": generated,
+    }
+
+
+def check_execution_packets(packet_path=None):
+    result = {
+        "required_tasks": [],
+        "entries": [],
+        "missing": [],
+        "issues": [],
+        "pass": True,
+    }
+    tasks = _active_execution_packet_tasks()
+    result["required_tasks"] = [task["task_id"] for task in tasks]
+    if not tasks:
+        return result
+
+    packets, load_error = _load_execution_packets(packet_path)
+    if load_error:
+        result["pass"] = False
+        result["issues"].append(load_error)
+        result["missing"] = result["required_tasks"]
+        return result
+
+    for task in tasks:
+        task_id = task["task_id"]
+        packet = packets.get(task_id)
+        if packet is None:
+            result["pass"] = False
+            result["missing"].append(task_id)
+            result["entries"].append({"task_id": task_id, "status": "FAIL", "issues": ["missing execution packet"]})
+            continue
+        issues = _validate_execution_packet(task, packet)
+        status = "PASS" if not issues else "FAIL"
+        if issues:
+            result["pass"] = False
+        result["entries"].append({"task_id": task_id, "status": status, "issues": issues})
+    return result
+
+
+def cmd_execution_packet(args):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    packets, _ = _load_execution_packets()
+    payload = generate_execution_packets(existing=packets)
+    if args.task:
+        selected = {
+            tid: packet for tid, packet in payload["packets"].items()
+            if tid in set(args.task)
+        }
+        payload["packets"] = selected
+    if args.write:
+        EXECUTION_PACKET_PATH.parent.mkdir(parents=True, exist_ok=True)
+        EXECUTION_PACKET_PATH.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        print(f"[OK] wrote {len(payload['packets'])} execution packet(s) to {EXECUTION_PACKET_PATH}")
+    else:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
 # ── SYSGAP-035: Agent Team Review Check (Check 18) ────────────────
@@ -6990,6 +7237,28 @@ def cmd_check_governance(args):
     if se_issues == 0:
         print("│  [PASS] Structured evidence check passed.")
     all_issues += se_issues
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 18c. AI Execution Packet (FIX-084) ──
+    print("\n┌─ Check 18c: AI Execution Packet (FIX-084) ───────────┐")
+    xp_result = check_execution_packets()
+    xp_issues = 0
+    print(f"│  Required active P0/P1 packet(s): {len(xp_result['required_tasks'])}")
+    if xp_result["issues"]:
+        xp_issues += len(xp_result["issues"])
+        for issue in xp_result["issues"]:
+            print(f"│  [FAIL] {issue}")
+    for entry in xp_result["entries"]:
+        if entry["status"] == "FAIL":
+            xp_issues += 1
+            print(f"│  [FAIL] {entry['task_id']}: {', '.join(entry['issues'])}")
+        else:
+            print(f"│  [PASS] {entry['task_id']}: execution packet ready")
+    if not xp_result["required_tasks"]:
+        print("│  [PASS] No active P0/P1 tasks require execution packets.")
+    elif xp_issues == 0:
+        print("│  [PASS] Execution packet check passed.")
+    all_issues += xp_issues
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 19. Agent Team Review (SYSGAP-035) ──
@@ -10088,6 +10357,16 @@ def main():
     check_p.add_argument("--fail-on-issues", action="store_true",
                          help="Exit with non-zero code if issues found")
 
+    # execution-packet
+    xp_p = subparsers.add_parser(
+        "execution-packet",
+        help="Generate short AI execution packets for active P0/P1 tasks",
+    )
+    xp_p.add_argument("--write", action="store_true",
+                      help="Write .governance/execution-packets.json")
+    xp_p.add_argument("--task", action="append",
+                      help="Limit packet generation to a task id; may be repeated")
+
     # check-manifest-consistency
     cmc_p = subparsers.add_parser("check-manifest-consistency",
                                    help="Compare manifest.json canonical set against actual filesystem")
@@ -10224,6 +10503,7 @@ def main():
         "stage": cmd_stage,
         "stages": cmd_stages,
         "check-governance": cmd_check_governance,
+        "execution-packet": cmd_execution_packet,
         "check-manifest-consistency": cmd_check_manifest_consistency,
         "check-plugin-freshness": cmd_check_plugin_freshness,
         "check-agent-adapters": cmd_check_agent_adapters,

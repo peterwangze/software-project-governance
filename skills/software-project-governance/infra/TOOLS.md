@@ -20,6 +20,7 @@
 | TOOL-012 | Git hooks 防护网 | hook | `infra/hooks/` | commit 前后执行治理门禁、证据检查、锁清理时 | 全部阶段 | 否（由 Git 自动触发） |
 | TOOL-013 | 交叉引用检查 | script | `infra/verify_workflow.py check-cross-references` | 路径迁移、文档/skill/agent 引用变更后 | 架构/维护 | 是 |
 | TOOL-014 | 真实 agent runtime E2E harness | script | `infra/verify_workflow.py agent-runtime-e2e` | Claude/Codex/Gemini/opencode 真实运行环境入口验证时 | 测试/发布/维护 | 是 |
+| TOOL-015 | AI execution packet 生成与检查 | script | `infra/verify_workflow.py execution-packet` + `check-governance` Check 18c | 活跃 P0/P1 任务开始前生成短上下文执行包，提交前验证短包存在且字段有效 | 全部阶段 | 是 |
 
 ## 工具详情
 
@@ -166,6 +167,16 @@
 - **判定口径**：`BLOCKED` 表示环境或 agent runtime 配置阻塞，不等于 harness 失败；`FAIL` 表示未分类失败或结构化 PASS schema 不完整，需要修复 harness 或入口适配
 - **被以下子工作流使用**：测试（testing）、版本发布（release）、维护（maintenance）
 
+### TOOL-015：AI execution packet 生成与检查
+
+- **文件**：`infra/verify_workflow.py`
+- **子命令**：`execution-packet [--write] [--task TASK_ID]`
+- **输入**：`.governance/plan-tracker.md` 的 `## 当前活跃事项`
+- **输出**：`.governance/execution-packets.json`，包含每个活跃 P0/P1 任务的 `goal`、`allowed_change_scope`、`required_evidence`、`next_commands`、`done_definition`
+- **触发条件**：每个 P0/P1 任务启动前；`check-governance` Check 18c 发现缺包或短包无效时
+- **依赖**：`check-governance`、`core/templates/execution-packet.md`
+- **被以下子工作流使用**：全部阶段，尤其是维护、开发、发布
+
 ## 工具与子工作流的关系矩阵
 
 | 工具 | 立项 | 调研 | 选型 | 环境 | 架构 | 开发 | 测试 | CI/CD | 发布 | 运营 | 维护 |
@@ -183,6 +194,7 @@
 | Git hooks | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● |
 | 交叉引用检查 | | | | | ● | | | | | | ● |
 | 真实 agent runtime E2E | | | | | ○ | | ● | | ● | | ● |
+| AI execution packet | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● |
 
 > ● 主要使用者  ○ 可选用
 

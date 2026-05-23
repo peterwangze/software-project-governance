@@ -174,6 +174,14 @@
 - `files_changed` MUST 列出本事项实际产品代码路径；`diff_summary` MUST 概括关键 diff；`review` MUST 记录独立审查结论或 `NOT_REQUIRED` 快速通道。
 - `目标对齐:` MUST 说明变更如何服务项目目标；`用户影响:` MUST 包含 `获得=`、`感知=`、`体验变化=`、`迁移指南=`。
 
+**AI Execution Packet（MANDATORY, 0.38.0+）**:
+- 活跃 P0/P1 任务开始前 MUST 读取 `.governance/execution-packets.json` 中对应 `task_id` 的短包。
+- 短包 MUST 包含 `goal`、`allowed_change_scope`、`required_evidence`、`next_commands`、`done_definition`。
+- 缺少短包时先运行 `python skills/software-project-governance/infra/verify_workflow.py execution-packet --write` 生成，再按任务事实修订。
+- `allowed_change_scope` 不得写成全仓任意修改；超出短包范围的修改必须拆任务或更新 plan-tracker。
+- `required_evidence` 必须包含 `事实依据` 和 `结构化事实`；`done_definition` 必须包含独立审查或明确降级审查结论。
+- `check-governance` Check 18c 是系统级看护，缺包或短包字段无效不得闭环。
+
 **Decision log 字段**: 编号 | 日期 | 主题 | 背景 | 决策内容 | 备选方案 | 选择原因 | 影响范围 | 决策人 | 关联任务 | 后续动作
 
 **Risk log 字段**: 编号 | 日期 | 风险描述 | 阶段 | 触发条件 | 影响 | 严重级别 | Owner | 状态 | 缓解动作 | 截止日期 | 关联任务 | 备注

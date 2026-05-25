@@ -56,7 +56,7 @@
 - 审查结论写入 `.governance/evidence-log.md`（任务 ID 格式：`REVIEW-{type}-{date}`）
 - 如有 BLOCKING 问题 → 创建纠正任务到 `.governance/plan-tracker.md`
 - 如有风险发现 → 写入 `.governance/risk-log.md`
-- degraded evidence 只能作为阻塞证据记录，不得计入独立审查通过率或审查覆盖率
+- degraded evidence 只能作为阻塞证据记录，不得计入独立审查通过率或审查覆盖率；若使用 REVIEW 行记录，必须包含 `不构成独立审查`、`不得计入审查通过`、`不得解锁产品代码交付`，`check-governance` 会将其从审查覆盖中排除
 
 ## 输出格式
 

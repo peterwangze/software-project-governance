@@ -4718,6 +4718,72 @@ class AgentTeamReviewTests(unittest.TestCase):
             self.assertEqual(r["total_tasks"], 1)
             self.assertEqual(r["reviewed"], 1)
 
+    def test_check_agent_team_review_ignores_degraded_review_evidence(self):
+        """FIX-085: degraded runtime evidence must not unlock product-code closure."""
+        with tempfile.TemporaryDirectory() as td:
+            plan = "\n".join([
+                "# 计划跟踪",
+                "",
+                "## 当前活跃事项",
+                "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+                "|--------|----|------|------|---------|---------|------|",
+                "| **P0** | FIX-085 | degraded review guard | DEC-068 | 0.38.0 | tests | ✅ 已完成 |",
+            ])
+            evidence_rows = [
+                _evidence_row_generic(
+                    "EVD-085", "FIX-085",
+                    evd_type="实现",
+                    file_location="skills/software-project-governance/infra/verify_workflow.py",
+                ),
+                "| REVIEW-FIX-085 | FIX-085 | 维护 | 代码审查 | "
+                "Reviewer runtime 不可用，DEGRADED_EVIDENCE；"
+                "不构成独立审查，不得计入审查通过，不得解锁产品代码交付 | "
+                "runtime fallback | Coordinator | 2026-05-23 | G11 | DEGRADED_EVIDENCE |",
+            ]
+            sp, ep = self._setup(td, plan_lines=[plan], evidence_lines=evidence_rows)
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_agent_team_review()
+                coverage = vw._parse_review_covered_tasks()
+            self.assertFalse(r["pass"])
+            self.assertEqual(r["reviewed"], 0)
+            self.assertEqual(r["unreviewed"], 1)
+            self.assertIn("FIX-085", r["review_gap_tasks"])
+            self.assertEqual(coverage, {})
+            self.assertEqual(len(r["ignored_review_entries"]), 1)
+            self.assertIn("degraded", r["ignored_review_entries"][0]["reason"])
+
+    def test_check_agent_team_review_ignores_coordinator_self_review(self):
+        """FIX-085: Coordinator-authored REVIEW rows are not independent review."""
+        with tempfile.TemporaryDirectory() as td:
+            plan = "\n".join([
+                "# 计划跟踪",
+                "",
+                "## 当前活跃事项",
+                "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+                "|--------|----|------|------|---------|---------|------|",
+                "| **P0** | FIX-086 | self review guard | DEC-068 | 0.38.0 | tests | ✅ 已完成 |",
+            ])
+            evidence_rows = [
+                _evidence_row_generic(
+                    "EVD-086", "FIX-086",
+                    evd_type="实现",
+                    file_location="skills/software-project-governance/infra/verify_workflow.py",
+                ),
+                "| REVIEW-FIX-086 | FIX-086 | 维护 | 代码审查 | "
+                "Coordinator self-review APPROVED for FIX-086 | transcript | "
+                "Coordinator | 2026-05-23 | G11 | APPROVED |",
+            ]
+            sp, ep = self._setup(td, plan_lines=[plan], evidence_lines=evidence_rows)
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_agent_team_review()
+            self.assertFalse(r["pass"])
+            self.assertEqual(r["reviewed"], 0)
+            self.assertEqual(r["unreviewed"], 1)
+            self.assertIn("FIX-086", r["review_gap_tasks"])
+            self.assertIn("self-review", r["ignored_review_entries"][0]["reason"])
+
     def test_check_agent_team_review_does_not_count_audit_evidence_as_product_delivery(self):
         """FIX-073: audit/review evidence mentioning product files is not implementation debt."""
         with tempfile.TemporaryDirectory() as td:

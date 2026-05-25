@@ -5940,21 +5940,75 @@ def cmd_execution_packet(args):
 
 # ── SYSGAP-035: Agent Team Review Check (Check 18) ────────────────
 
-def _parse_review_covered_tasks(evidence_path=None, review_dir=None):
-    """Parse evidence-log and review-*.md files to find all tasks covered by reviews.
+DEGRADED_REVIEW_MARKERS = (
+    "不构成独立审查",
+    "不得计入审查通过",
+    "不得解锁",
+)
+REVIEWER_ROLE_MARKERS = (
+    "Reviewer",
+    "审查 Agent",
+    "审查Agent",
+    "审查人",
+    "复审",
+)
+SELF_REVIEW_AUTHOR_MARKERS = (
+    "Coordinator",
+    "Developer",
+    "Governance Developer",
+)
 
-    Returns dict: task_id -> list of review sources (evidence IDs or file names).
-    """
+
+def _review_text_is_degraded(text):
+    """Return True when a review-like row is only degraded/runtime evidence."""
+    if "DEGRADED_EVIDENCE" in text:
+        return True
+    return all(marker in text for marker in DEGRADED_REVIEW_MARKERS)
+
+
+def _review_text_has_reviewer_marker(text):
+    return any(marker in text for marker in REVIEWER_ROLE_MARKERS)
+
+
+def _review_entry_skip_reason(author, description, file_location, notes=""):
+    """Classify review-like evidence that must not count as independent review."""
+    combined = " ".join([author, description, file_location, notes])
+    if _review_text_is_degraded(combined):
+        return "degraded evidence does not count as independent review"
+
+    if (
+        any(marker in author for marker in SELF_REVIEW_AUTHOR_MARKERS)
+        and "Reviewer" not in author
+        and "审查" not in author
+    ):
+        return "self-review evidence does not count as independent review"
+
+    if not _review_text_has_reviewer_marker(combined):
+        return "review evidence lacks independent reviewer marker"
+
+    return ""
+
+
+def _parse_review_coverage_details(evidence_path=None, review_dir=None):
+    """Parse independent review coverage and ignored review-like entries."""
     covered = {}
+    ignored = []
     evidence_path = Path(evidence_path) if evidence_path is not None else EVIDENCE_PATH
     review_dir = Path(review_dir) if review_dir is not None else evidence_path.parent
 
     if not evidence_path.is_file():
-        return covered
+        return covered, ignored
 
     evidence_content = evidence_path.read_text(encoding="utf-8")
 
-    # 1. Scan evidence-log for REVIEW evidence entries
+    def add_coverage(source, raw_text):
+        for match in re.finditer(r"([A-Z]+-\d+(?:~\d+)?)", raw_text):
+            raw = match.group(1)
+            for inner_id in expand_task_ids(raw):
+                if not inner_id.startswith("REVIEW-"):
+                    covered.setdefault(inner_id, []).append(source)
+
+    # 1. Scan evidence-log for REVIEW evidence entries.
     for line in evidence_content.split("\n"):
         line = line.strip()
         if not (line.startswith("| EVD-") or line.startswith("| REVIEW-")):
@@ -5967,8 +6021,10 @@ def _parse_review_covered_tasks(evidence_path=None, review_dir=None):
         evd_type = parts[4] if len(parts) > 4 else ""
         description = parts[5] if len(parts) > 5 else ""
         file_location = parts[6] if len(parts) > 6 else ""
+        author = parts[7] if len(parts) > 7 else ""
+        notes = " ".join(parts[8:])
 
-        # REVIEW evidence: task ID starts with REVIEW- or type is Code Review/审查
+        # REVIEW evidence: task ID starts with REVIEW- or type is Code Review/审查.
         is_review_entry = (
             evd_id.startswith("REVIEW-")
             or raw_ids.startswith("REVIEW-")
@@ -5979,37 +6035,47 @@ def _parse_review_covered_tasks(evidence_path=None, review_dir=None):
         if not is_review_entry:
             continue
 
+        skip_reason = _review_entry_skip_reason(author, description, file_location, notes)
+        if skip_reason:
+            ignored.append({"source": evd_id, "reason": skip_reason, "task_ids": raw_ids})
+            continue
+
         for inner_id in expand_task_ids(raw_ids) if raw_ids and re.search(r"[A-Z]+-\d+", raw_ids) else []:
             if not inner_id.startswith("REVIEW-"):
                 covered.setdefault(inner_id, []).append(evd_id)
 
         if raw_ids.startswith("REVIEW-"):
-            # Extract covered task IDs from REVIEW- prefix
-            inner_tasks = raw_ids[len("REVIEW-"):]
-            for inner_id in expand_task_ids(inner_tasks):
-                covered.setdefault(inner_id, []).append(evd_id)
+            # Extract covered task IDs from REVIEW- prefix.
+            add_coverage(evd_id, raw_ids[len("REVIEW-"):])
 
-        # Check description and file_location for task references
-        combined = description + " " + file_location
-        for match in re.finditer(r"([A-Z]+-\d+(?:~\d+)?)", combined):
-            raw = match.group(1)
-            for inner_id in expand_task_ids(raw):
-                if not inner_id.startswith("REVIEW-"):
-                    covered.setdefault(inner_id, []).append(evd_id)
+        # Check description and file_location for task references.
+        add_coverage(evd_id, description + " " + file_location)
 
-    # 2. Scan review-*.md files for task references
+    # 2. Scan review-*.md files for task references.
     if review_dir.is_dir():
         for review_file in review_dir.glob("review-*.md"):
             try:
                 content = review_file.read_text(encoding="utf-8")
-                for match in re.finditer(r"([A-Z]+-\d+(?:~\d+)?)", content):
-                    raw = match.group(1)
-                    for inner_id in expand_task_ids(raw):
-                        if not inner_id.startswith("REVIEW-"):
-                            covered.setdefault(inner_id, []).append(review_file.name)
+                skip_reason = _review_entry_skip_reason("", content, review_file.name)
+                if skip_reason:
+                    ignored.append({
+                        "source": review_file.name,
+                        "reason": skip_reason,
+                        "task_ids": "",
+                    })
+                    continue
+                add_coverage(review_file.name, content)
             except (IOError, OSError):
                 pass
 
+    return covered, ignored
+
+def _parse_review_covered_tasks(evidence_path=None, review_dir=None):
+    """Parse evidence-log and review-*.md files to find all tasks covered by reviews.
+
+    Returns dict: task_id -> list of review sources (evidence IDs or file names).
+    """
+    covered, _ = _parse_review_coverage_details(evidence_path=evidence_path, review_dir=review_dir)
     return covered
 
 
@@ -6038,6 +6104,7 @@ def check_agent_team_review():
         "reviewed": 0,
         "unreviewed": 0,
         "review_gap_tasks": [],
+        "ignored_review_entries": [],
         "pass": True,
     }
 
@@ -6068,8 +6135,10 @@ def check_agent_team_review():
                 "evd_type": evd_type,
             })
 
-    # Build review coverage map
-    review_covered = _parse_review_covered_tasks()
+    # Build review coverage map. Degraded runtime evidence and self-review rows
+    # are retained as ignored diagnostics, but never unlock completed product work.
+    review_covered, ignored_reviews = _parse_review_coverage_details()
+    result["ignored_review_entries"] = ignored_reviews
 
     for task_id in sorted(completed):
         entries = task_file_locations.get(task_id, [])
@@ -7266,6 +7335,10 @@ def cmd_check_governance(args):
     atr_result = check_agent_team_review()
     print(f"│  Product-code tasks (completed): {atr_result['total_tasks']}")
     print(f"│  Reviewed: {atr_result['reviewed']}")
+    if atr_result.get("ignored_review_entries"):
+        print(f"│  Ignored degraded/self-review entries: {len(atr_result['ignored_review_entries'])}")
+        for entry in atr_result["ignored_review_entries"][:5]:
+            print(f"│    - {entry['source']}: {entry['reason']}")
     if atr_result["unreviewed"] > 0:
         all_issues += atr_result["unreviewed"]
         print(f"│  [FAIL] {atr_result['unreviewed']} product-code task(s) without review evidence:")

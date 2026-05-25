@@ -55,6 +55,7 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
 - spawn 前 MUST 检查 `.governance/agent-locks.json` 中的 `active_tasks`（task_id 去重）和 `file_locks`（文件路径冲突检测）——详见 behavior-protocol.md M7.6a
 - 调度 Agent 前 MUST 写入锁声明到 `agent-locks.json`（active_tasks + file_locks）——Agent 完成后 MUST 释放锁
 - 产品代码任务执行完成后 MUST 查询路由表"后置审查 Agent"列——非空则 MUST spawn 审查 Agent。跳过审查直接标记完成 = 流程违规
+- 若宿主无法提供真实 sub-agent/Reviewer 分离，MUST 显式进入 degraded mode：只能记录包含 `不构成独立审查`、`不得计入审查通过`、`不得解锁产品代码交付` 的降级证据；不得把 Coordinator/Developer 自审写成已通过审查，`check-governance` 会将降级证据和自审从审查覆盖率中排除。
 
 ### 产品代码 vs 治理记录边界
 

@@ -177,6 +177,16 @@
 - **依赖**：`check-governance`、`core/templates/execution-packet.md`
 - **被以下子工作流使用**：全部阶段，尤其是维护、开发、发布
 
+### TOOL-016：Projection sync guard
+
+- **文件**：`infra/verify_workflow.py`
+- **子命令**：`check-projection-sync [--fail-on-issues]`
+- **输入**：source `skills/**`、`commands/**`、`agents/**`；target fixture `project/e2e-test-project`；`.claude-plugin/plugin.json`、`.codex-plugin/plugin.json`、core manifest 和 target plan-tracker 版本声明
+- **输出**：source 版本、镜像文件检查数量、版本声明检查结果、target fixture drift/missing file/native entry marker 缺失问题
+- **触发条件**：修改 workflow source、target fixture、native entry、plugin manifest 后；发布前 release readiness 门禁
+- **依赖**：`check-governance` Check 28b、`check-release` projection sync detail、`project/e2e-test-project`
+- **被以下子工作流使用**：测试（testing）、发布（release）、维护（maintenance）
+
 ## 工具与子工作流的关系矩阵
 
 | 工具 | 立项 | 调研 | 选型 | 环境 | 架构 | 开发 | 测试 | CI/CD | 发布 | 运营 | 维护 |
@@ -195,6 +205,7 @@
 | 交叉引用检查 | | | | | ● | | | | | | ● |
 | 真实 agent runtime E2E | | | | | ○ | | ● | | ● | | ● |
 | AI execution packet | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● |
+| Projection sync guard | | | | | ○ | | ● | | ● | | ● |
 
 > ● 主要使用者  ○ 可选用
 

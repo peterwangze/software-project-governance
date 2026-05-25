@@ -1380,6 +1380,14 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
             patch.object(vw, "check_version_consistency", return_value=[]),
             patch.object(vw, "check_release_readiness_fact_source", return_value=[]),
             patch.object(vw, "check_agent_adapter_contract", return_value=[]),
+            patch.object(vw, "check_projection_sync", return_value={
+                "pass": True,
+                "issues": [],
+                "mirrors_checked": 3,
+                "mirrors_discovered": 3,
+                "mirrors_skipped_untracked": 0,
+                "source_version": "0.35.0",
+            }),
             patch.object(vw, "check_cross_references", return_value={
                 "dangling": [],
                 "deprecated": [],
@@ -1403,7 +1411,7 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
             changelog = Path(td) / "CHANGELOG.md"
             changelog.write_text("# Changelog\n\n## [0.35.0]\n", encoding="utf-8")
             patches = self._clean_release_patches()
-            with patches[0], patches[1], patches[2] as adapter_mock, patches[3], patches[4]:
+            with patches[0], patches[1], patches[2] as adapter_mock, patches[3], patches[4], patches[5]:
                 result = vw.check_release_readiness(
                     version="0.35.0",
                     require_changelog=True,
@@ -1418,7 +1426,7 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
             changelog = Path(td) / "CHANGELOG.md"
             changelog.write_text("# Changelog\n\n## [0.34.0]\n", encoding="utf-8")
             patches = self._clean_release_patches()
-            with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
                 result = vw.check_release_readiness(
                     version="0.35.0",
                     require_changelog=True,
@@ -1436,7 +1444,7 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
             "total_files_scanned": 1,
             "total_refs": 1,
         }
-        with patches[0], patches[1], patches[2], patch.object(vw, "check_cross_references", return_value=cross_ref_result), patches[4]:
+        with patches[0], patches[1], patches[2], patches[3], patch.object(vw, "check_cross_references", return_value=cross_ref_result), patches[5]:
             result = vw.check_release_readiness()
         self.assertFalse(result["pass"])
         self.assertTrue(any("dangling reference" in issue for issue in result["issues"]))
@@ -1455,7 +1463,7 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
                 "command": " ".join(str(part) for part in command),
             }
 
-        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
             result = vw.check_release_readiness(
                 run_execution_gates=True,
                 execution_gate_runner=fake_runner,
@@ -1477,7 +1485,7 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
                 "command": " ".join(str(part) for part in command),
             }
 
-        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
             result = vw.check_release_readiness(
                 run_execution_gates=True,
                 execution_gate_runner=fake_runner,
@@ -1485,6 +1493,144 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
 
         self.assertFalse(result["pass"])
         self.assertTrue(any("execution gate: unit tests" in issue for issue in result["issues"]))
+
+
+class ProjectionSyncTests(unittest.TestCase):
+    """FIX-086: source, target fixture, native entries, and plugin versions stay synchronized."""
+
+    def _write_projection_fixture(self, root, *, version="0.37.0", drift=False):
+        root = Path(root)
+        target = root / "project/e2e-test-project"
+        source_skill = root / "skills/software-project-governance"
+        target_skill = target / "skills/software-project-governance"
+
+        for path in [
+            source_skill,
+            target_skill,
+            root / "commands",
+            target / "commands",
+            root / "agents",
+            target / "agents",
+            root / ".claude-plugin",
+            root / ".codex-plugin",
+            target / ".governance",
+        ]:
+            path.mkdir(parents=True, exist_ok=True)
+
+        skill_text = f"---\nname: software-project-governance\nversion: {version}\n---\nCoordinator\n"
+        (source_skill / "SKILL.md").write_text(skill_text, encoding="utf-8")
+        (target_skill / "SKILL.md").write_text(
+            skill_text + ("drift\n" if drift else ""),
+            encoding="utf-8",
+        )
+
+        manifest = {"workflow": "software-project-governance", "version": version}
+        (source_skill / "core").mkdir(parents=True)
+        (target_skill / "core").mkdir(parents=True)
+        (source_skill / "core/manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        (target_skill / "core/manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        (root / ".claude-plugin/plugin.json").write_text(json.dumps({"version": version}), encoding="utf-8")
+        (root / ".codex-plugin/plugin.json").write_text(json.dumps({"version": version}), encoding="utf-8")
+
+        command_text = "# governance\nScenario F\n"
+        (root / "commands/governance.md").write_text(command_text, encoding="utf-8")
+        (target / "commands/governance.md").write_text(command_text, encoding="utf-8")
+        agent_text = "# Developer\n"
+        (root / "agents/developer.md").write_text(agent_text, encoding="utf-8")
+        (target / "agents/developer.md").write_text(agent_text, encoding="utf-8")
+
+        (target / ".governance/plan-tracker.md").write_text(
+            f"- **工作流版本**: {version}\n",
+            encoding="utf-8",
+        )
+        (target / "CLAUDE.md").write_text(
+            "Governance Bootstrap\nAskUserQuestion\n",
+            encoding="utf-8",
+        )
+        (target / "AGENTS.md").write_text(
+            "Governance Bootstrap\nCodex\nopencode\nskills/software-project-governance/SKILL.md\n",
+            encoding="utf-8",
+        )
+        (target / "GEMINI.md").write_text(
+            "Governance Bootstrap\nGemini\nskills/software-project-governance/SKILL.md\n",
+            encoding="utf-8",
+        )
+        return target
+
+    def test_projection_sync_passes_for_synced_fixture(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_projection_fixture(root)
+            result = vw.check_projection_sync(
+                root=root,
+                patterns=[
+                    "skills/software-project-governance/SKILL.md",
+                    "commands/*.md",
+                    "agents/*.md",
+                ],
+            )
+        self.assertTrue(result["pass"], result["issues"])
+        self.assertEqual(result["mirrors_checked"], 3)
+
+    def test_projection_sync_rejects_fixture_drift(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_projection_fixture(root, drift=True)
+            result = vw.check_projection_sync(
+                root=root,
+                patterns=["skills/software-project-governance/SKILL.md"],
+            )
+        self.assertFalse(result["pass"])
+        self.assertTrue(any("target fixture drift" in issue for issue in result["issues"]))
+
+    def test_projection_sync_rejects_plugin_version_drift(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_projection_fixture(root, version="0.37.0")
+            (root / ".codex-plugin/plugin.json").write_text(
+                json.dumps({"version": "0.36.0"}),
+                encoding="utf-8",
+            )
+            result = vw.check_projection_sync(
+                root=root,
+                patterns=["skills/software-project-governance/SKILL.md"],
+            )
+        self.assertFalse(result["pass"])
+        self.assertTrue(any("source Codex plugin" in issue for issue in result["issues"]))
+
+    def test_projection_sync_uses_tracked_target_scope_in_git_checkout(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_projection_fixture(root, version="0.37.0")
+            shutil.rmtree(root / "project/e2e-test-project/agents")
+            subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True, text=True)
+            subprocess.run(
+                [
+                    "git",
+                    "add",
+                    "project/e2e-test-project/skills/software-project-governance/SKILL.md",
+                    "project/e2e-test-project/commands/governance.md",
+                    "project/e2e-test-project/.governance/plan-tracker.md",
+                    "project/e2e-test-project/CLAUDE.md",
+                    "project/e2e-test-project/AGENTS.md",
+                    "project/e2e-test-project/GEMINI.md",
+                ],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            result = vw.check_projection_sync(
+                root=root,
+                patterns=[
+                    "skills/software-project-governance/SKILL.md",
+                    "commands/*.md",
+                    "agents/*.md",
+                ],
+            )
+        self.assertTrue(result["pass"], result["issues"])
+        self.assertEqual(result["mirrors_checked"], 2)
+        self.assertGreaterEqual(result["mirrors_skipped_untracked"], 1)
 
 
 class E2ECommandMatrixTests(unittest.TestCase):

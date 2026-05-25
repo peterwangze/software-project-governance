@@ -9,6 +9,7 @@ import signal
 import subprocess
 import importlib.util
 import shutil
+import hashlib
 from datetime import datetime, date
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -22,6 +23,10 @@ def _display_path(path, root=None):
         return path.relative_to(root)
     except ValueError:
         return path
+
+
+def _read_text_normalized(path):
+    return path.read_text(encoding="utf-8").replace("\r\n", "\n")
 
 
 # ── PLUGIN_SCOPE_DIRS (keep in sync with cleanup.py) ─────────────
@@ -2278,6 +2283,188 @@ def run_release_execution_gates(runner=_run_release_validation_command):
     return [runner(label, command) for label, command in commands]
 
 
+PROJECTION_SYNC_PATTERNS = (
+    "skills/*/SKILL.md",
+    "skills/software-project-governance/SKILL.md",
+    "skills/software-project-governance/core/**/*.md",
+    "skills/software-project-governance/core/**/*.json",
+    "skills/software-project-governance/infra/**/*.py",
+    "skills/software-project-governance/infra/**/*.md",
+    "skills/software-project-governance/infra/**/*.sh",
+    "skills/software-project-governance/infra/hooks/*",
+    "skills/software-project-governance/references/**/*.md",
+    "commands/*.md",
+    "agents/*.md",
+)
+
+
+def _extract_skill_version(path):
+    if not path.is_file():
+        return ""
+    content = path.read_text(encoding="utf-8")
+    match = re.search(r"^version:\s*([0-9]+\.[0-9]+\.[0-9]+)\s*$", content, re.MULTILINE)
+    return match.group(1) if match else ""
+
+
+def _extract_json_version(path):
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ""
+    return str(payload.get("version", "")).strip()
+
+
+def _extract_plan_workflow_version(path):
+    if not path.is_file():
+        return ""
+    content = path.read_text(encoding="utf-8")
+    match = re.search(r"工作流版本\*\*:\s*([0-9]+\.[0-9]+\.[0-9]+)", content)
+    if not match:
+        match = re.search(r"工作流版本.*?([0-9]+\.[0-9]+\.[0-9]+)", content)
+    return match.group(1) if match else ""
+
+
+def _projection_hash(path):
+    text = _read_text_normalized(path)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _projection_source_files(root, patterns=None):
+    root = Path(root)
+    patterns = patterns or PROJECTION_SYNC_PATTERNS
+    files = set()
+    for pattern in patterns:
+        for path in root.glob(pattern):
+            if not path.is_file():
+                continue
+            rel = path.relative_to(root).as_posix()
+            if "__pycache__" in rel or rel.endswith(".pyc"):
+                continue
+            files.add(rel)
+    return sorted(files)
+
+
+def _projection_target_tracked_files(root, target_dir):
+    """Return target fixture files tracked by git, or None outside a git checkout."""
+    root = Path(root)
+    target_dir = Path(target_dir)
+    if not (root / ".git").exists():
+        return None
+    try:
+        target_rel = target_dir.relative_to(root).as_posix()
+    except ValueError:
+        return None
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "--", target_rel],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    prefix = target_rel.rstrip("/") + "/"
+    tracked = set()
+    for line in result.stdout.splitlines():
+        item = line.strip().replace("\\", "/")
+        if item.startswith(prefix):
+            tracked.add(item[len(prefix):])
+    return tracked
+
+
+def _target_fixture_file_is_checkable(rel_path, target_tracked):
+    if target_tracked is None:
+        return True
+    return rel_path.replace("\\", "/") in target_tracked
+
+
+def check_projection_sync(root=None, target_dir=None, patterns=None):
+    """FIX-086: block release when source and target fixture projections drift."""
+    root = Path(root) if root is not None else ROOT
+    target_dir = Path(target_dir) if target_dir is not None else root / "project/e2e-test-project"
+    issues = []
+    version_checks = []
+    skipped_untracked = []
+    target_tracked = _projection_target_tracked_files(root, target_dir)
+
+    source_version = _extract_skill_version(root / "skills/software-project-governance/SKILL.md")
+    if not source_version:
+        issues.append("source skills/software-project-governance/SKILL.md missing frontmatter version")
+
+    version_sources = [
+        ("source core manifest", root / "skills/software-project-governance/core/manifest.json", _extract_json_version),
+        ("source Claude plugin", root / ".claude-plugin/plugin.json", _extract_json_version),
+        ("source Codex plugin", root / ".codex-plugin/plugin.json", _extract_json_version),
+        ("target workflow skill", target_dir / "skills/software-project-governance/SKILL.md", _extract_skill_version),
+        ("target plan-tracker", target_dir / ".governance/plan-tracker.md", _extract_plan_workflow_version),
+    ]
+    optional_target_version_sources = [
+        ("target core manifest", "skills/software-project-governance/core/manifest.json", _extract_json_version),
+    ]
+    for label, rel, extractor in optional_target_version_sources:
+        if _target_fixture_file_is_checkable(rel, target_tracked):
+            version_sources.append((label, target_dir / rel, extractor))
+        else:
+            skipped_untracked.append(rel)
+
+    for label, path, extractor in version_sources:
+        observed = extractor(path)
+        display = _display_path(path, root)
+        version_checks.append({
+            "label": label,
+            "path": display.as_posix() if isinstance(display, Path) else str(display),
+            "version": observed,
+        })
+        if not observed:
+            issues.append(f"{label}: missing version at {_display_path(path, root)}")
+        elif source_version and observed != source_version:
+            issues.append(f"{label}: version {observed} != source {source_version}")
+
+    mirrored_files = _projection_source_files(root, patterns=patterns)
+    compared = 0
+    for rel in mirrored_files:
+        if not _target_fixture_file_is_checkable(rel, target_tracked):
+            skipped_untracked.append(rel)
+            continue
+        source_path = root / rel
+        target_path = target_dir / rel
+        if not target_path.is_file():
+            issues.append(f"target fixture missing mirrored file: {rel}")
+            continue
+        compared += 1
+        if _projection_hash(source_path) != _projection_hash(target_path):
+            issues.append(f"target fixture drift: {rel}")
+
+    native_entry_checks = [
+        (target_dir / "CLAUDE.md", ("Governance Bootstrap", "AskUserQuestion")),
+        (target_dir / "AGENTS.md", ("Governance Bootstrap", "Codex", "opencode", "skills/software-project-governance/SKILL.md")),
+        (target_dir / "GEMINI.md", ("Governance Bootstrap", "Gemini", "skills/software-project-governance/SKILL.md")),
+    ]
+    for path, needles in native_entry_checks:
+        if not path.is_file():
+            issues.append(f"target native entry missing: {_display_path(path, root)}")
+            continue
+        content = path.read_text(encoding="utf-8")
+        missing = [needle for needle in needles if needle not in content]
+        if missing:
+            issues.append(f"target native entry {_display_path(path, root)} missing markers: {missing}")
+
+    return {
+        "pass": not issues,
+        "issues": issues,
+        "source_version": source_version,
+        "mirrors_checked": compared,
+        "mirrors_discovered": len(mirrored_files),
+        "mirrors_skipped_untracked": len(set(skipped_untracked)),
+        "version_checks": version_checks,
+    }
+
+
 def check_release_readiness(
     version=None,
     require_changelog=False,
@@ -2313,6 +2500,17 @@ def check_release_readiness(
         "runtime": run_runtime_adapters,
     }
     issues.extend(f"agent adapters: {issue}" for issue in adapter_issues)
+
+    projection_result = check_projection_sync()
+    details["projection_sync"] = {
+        "pass": projection_result["pass"],
+        "issues": projection_result["issues"],
+        "mirrors_checked": projection_result["mirrors_checked"],
+        "mirrors_discovered": projection_result["mirrors_discovered"],
+        "mirrors_skipped_untracked": projection_result["mirrors_skipped_untracked"],
+        "source_version": projection_result["source_version"],
+    }
+    issues.extend(f"projection sync: {issue}" for issue in projection_result["issues"])
 
     cross_ref_result = check_cross_references()
     cross_ref_issues = (
@@ -7542,6 +7740,24 @@ def cmd_check_governance(args):
         print("│  [PASS] Coordinator self-review fallback is not allowed.")
     print("└──────────────────────────────────────────────────────┘")
 
+    # ── 28b. Projection Sync Guard (FIX-086) ──
+    print("\n┌─ Check 28b: Projection Sync Guard (FIX-086) ─────────┐")
+    ps_result = check_projection_sync()
+    print(f"│  Source version: {ps_result['source_version'] or 'unknown'}")
+    print(f"│  Mirrored files checked: {ps_result['mirrors_checked']}")
+    if ps_result.get("mirrors_skipped_untracked"):
+        print(f"│  Untracked local projection copies skipped: {ps_result['mirrors_skipped_untracked']}")
+    if ps_result["issues"]:
+        all_issues += len(ps_result["issues"])
+        print(f"│  [FAIL] {len(ps_result['issues'])} projection sync issue(s):")
+        for issue in ps_result["issues"][:10]:
+            print(f"│    - {issue}")
+        if len(ps_result["issues"]) > 10:
+            print(f"│    ... and {len(ps_result['issues']) - 10} more")
+    else:
+        print("│  [PASS] Source, target fixture, native entries, and plugin versions are synchronized.")
+    print("└──────────────────────────────────────────────────────┘")
+
     # ── Summary ──
     print(f"\n┌─ Governance Health Summary ──────────────────────────┐")
     if all_issues == 0:
@@ -10392,6 +10608,35 @@ def cmd_check_version_consistency(_args):
     print()
 
 
+def cmd_check_projection_sync(args):
+    """Run projection/fixture sync guard independently."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    result = check_projection_sync()
+    print("\n=== Projection Sync Check ===")
+    print(f"  Source version: {result['source_version'] or 'unknown'}")
+    print(f"  Mirrored files checked: {result['mirrors_checked']}")
+    if result.get("mirrors_skipped_untracked"):
+        print(f"  Untracked local projection copies skipped: {result['mirrors_skipped_untracked']}")
+    if result["version_checks"]:
+        print("  Version checks:")
+        for item in result["version_checks"]:
+            print(f"    - {item['label']}: {item['version'] or 'missing'} ({item['path']})")
+    if result["issues"]:
+        print(f"\n  Result: FAILED — {len(result['issues'])} issue(s)")
+        for issue in result["issues"][:20]:
+            print(f"    - {issue}")
+        if len(result["issues"]) > 20:
+            print(f"    ... and {len(result['issues']) - 20} more")
+        if getattr(args, "fail_on_issues", False):
+            sys.exit(1)
+    else:
+        print("\n  Result: PASSED — projection files and version declarations are synchronized")
+    print()
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="verify_workflow",
@@ -10557,6 +10802,14 @@ def main():
     subparsers.add_parser("check-version-consistency",
                           help="Check version consistency across all declaration files")
 
+    # check-projection-sync (FIX-086)
+    cps_p = subparsers.add_parser(
+        "check-projection-sync",
+        help="Check source-to-target fixture projection and plugin version sync",
+    )
+    cps_p.add_argument("--fail-on-issues", action="store_true",
+                       help="Exit with non-zero code if projection drift is found")
+
     # check-locks (FIX-056 Phase 2)
     subparsers.add_parser("check-locks",
                           help="Check agent-locks.json consistency (FIX-056 Check 25)")
@@ -10594,6 +10847,7 @@ def main():
         "check-agent-team": cmd_check_agent_team,
         "check-review-debt": cmd_check_review_debt,
         "check-version-consistency": cmd_check_version_consistency,
+        "check-projection-sync": cmd_check_projection_sync,
         "check-locks": cmd_check_agent_locks,
         "check-archive-integrity": cmd_check_archive_integrity,
     }

@@ -4458,6 +4458,150 @@ class ProductSuccessContractTests(unittest.TestCase):
             self.assertTrue(any("process-only" in issue for issue in r["entries"][0]["issues"]))
 
 
+class ExecutableAcceptanceContractTests(unittest.TestCase):
+    """FIX-089: active P0/P1 tasks need runnable acceptance contracts."""
+
+    def _setup_plan(self, tmpdir, rows):
+        root = Path(tmpdir)
+        gov = root / ".governance"; gov.mkdir(parents=True, exist_ok=True)
+        sp = gov / "plan-tracker.md"
+        sp.write_text("\n".join([
+            "# 计划跟踪",
+            "## 当前活跃事项",
+            "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+            "|--------|----|------|------|---------|---------|------|",
+            *rows,
+            "### 最近完成（本会话提交窗口）",
+            "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+            "| **P0** | FIX-000 | old | x | 0.1.0 | done | ✅ 已完成 |",
+        ]), encoding="utf-8")
+        return root, sp, gov / "execution-packets.json"
+
+    def _valid_acceptance_contract(self):
+        return {
+            "scenario": "User-visible acceptance scenario proves an active task cannot close without runnable validation",
+            "command": "python skills/software-project-governance/infra/verify_workflow.py check-acceptance-contracts --fail-on-issues",
+            "expected_output": "Result: PASSED and active acceptance contracts are ready",
+            "last_run": {
+                "status": "PASS",
+                "exit_code": 0,
+                "summary": "Acceptance command passed for the active task fixture",
+            },
+            "demo_evidence": "CLI output shows PASS for the active task acceptance contract",
+        }
+
+    def test_generated_execution_packet_contains_failing_acceptance_scaffold(self):
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P0** | FIX-089 | Executable Acceptance Contract | FIX-088 | 0.39.0 | acceptance map | 📋 待启动 |",
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                payload = vw.generate_execution_packets()
+            packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_acceptance_contracts(packet_path)
+            self.assertFalse(r["pass"])
+            self.assertIn("acceptance_contract", payload["packets"]["FIX-089"])
+            self.assertTrue(any("non-placeholder" in issue for issue in r["entries"][0]["issues"]))
+
+    def test_explicit_acceptance_contract_passes(self):
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P0** | FIX-089 | Executable Acceptance Contract | FIX-088 | 0.39.0 | acceptance map | 📋 待启动 |",
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                payload = vw.generate_execution_packets()
+            payload["packets"]["FIX-089"]["acceptance_contract"] = self._valid_acceptance_contract()
+            packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_acceptance_contracts(packet_path)
+            self.assertTrue(r["pass"])
+
+    def test_missing_acceptance_contract_fails(self):
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P0** | FIX-089 | Executable Acceptance Contract | FIX-088 | 0.39.0 | acceptance map | 📋 待启动 |",
+            ])
+            packet_path.write_text(json.dumps({
+                "version": 1,
+                "packets": {"FIX-089": {"task_id": "FIX-089", "goal": "acceptance contract"}},
+            }), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_acceptance_contracts(packet_path)
+            self.assertFalse(r["pass"])
+            self.assertIn("missing acceptance_contract", r["entries"][0]["issues"])
+
+    def test_acceptance_contract_rejects_non_runnable_command(self):
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P0** | FIX-089 | Executable Acceptance Contract | FIX-088 | 0.39.0 | acceptance map | 📋 待启动 |",
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                payload = vw.generate_execution_packets()
+            payload["packets"]["FIX-089"]["acceptance_contract"] = self._valid_acceptance_contract()
+            payload["packets"]["FIX-089"]["acceptance_contract"]["command"] = "manual reviewer looks at the prose"
+            packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_acceptance_contracts(packet_path)
+            self.assertFalse(r["pass"])
+            self.assertTrue(any("runnable validation command" in issue for issue in r["entries"][0]["issues"]))
+
+    def test_acceptance_contract_rejects_review_check_keyword_bypass(self):
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P0** | FIX-089 | Executable Acceptance Contract | FIX-088 | 0.39.0 | acceptance map | 📋 待启动 |",
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                payload = vw.generate_execution_packets()
+            payload["packets"]["FIX-089"]["acceptance_contract"] = self._valid_acceptance_contract()
+            payload["packets"]["FIX-089"]["acceptance_contract"]["command"] = "review check passed in prose, no runnable command"
+            packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_acceptance_contracts(packet_path)
+            self.assertFalse(r["pass"])
+            self.assertTrue(any("runnable validation command" in issue for issue in r["entries"][0]["issues"]))
+
+    def test_acceptance_contract_rejects_failed_last_run(self):
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P0** | FIX-089 | Executable Acceptance Contract | FIX-088 | 0.39.0 | acceptance map | 📋 待启动 |",
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                payload = vw.generate_execution_packets()
+            payload["packets"]["FIX-089"]["acceptance_contract"] = self._valid_acceptance_contract()
+            payload["packets"]["FIX-089"]["acceptance_contract"]["last_run"] = {
+                "status": "FAIL",
+                "exit_code": 1,
+                "summary": "Command failed",
+            }
+            packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_acceptance_contracts(packet_path)
+            self.assertFalse(r["pass"])
+            issues = " ".join(r["entries"][0]["issues"])
+            self.assertIn("status must be PASS", issues)
+            self.assertIn("exit_code must be 0", issues)
+
+    def test_pending_acceptance_contract_allows_not_run_yet(self):
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P0** | FIX-090 | Quality Budget Gate | FIX-088 | 0.39.0 | quality budget | 📋 待实施 |",
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                payload = vw.generate_execution_packets()
+            contract = self._valid_acceptance_contract()
+            contract["last_run"] = {
+                "status": "NOT_RUN_YET",
+                "exit_code": None,
+                "summary": "Planned task has a concrete acceptance command but is not implemented yet",
+            }
+            payload["packets"]["FIX-090"]["acceptance_contract"] = contract
+            packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_acceptance_contracts(packet_path)
+            self.assertTrue(r["pass"])
+
+
 class CommitMsgFactGroundingHookTests(unittest.TestCase):
     """FIX-080: commit-msg hook must block product commits without fact basis."""
 

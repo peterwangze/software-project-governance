@@ -6350,6 +6350,104 @@ def check_product_success_contracts(packet_path=None):
     return result
 
 
+ACCEPTANCE_CONTRACT_REQUIRED_FIELDS = {
+    "scenario": str,
+    "command": str,
+    "expected_output": str,
+    "last_run": dict,
+    "demo_evidence": str,
+}
+
+ACCEPTANCE_RUNNABLE_COMMAND_RE = re.compile(
+    r"^\s*(?:(?:python|pytest|node|npm|pnpm|yarn|uv|bash|sh|make|go|cargo|npx|cmd|powershell|pwsh)\b|"
+    r"(?:\./|\.\\|skills/|skills\\|scripts/|scripts\\).+)",
+    re.IGNORECASE,
+)
+
+ACCEPTANCE_PASS_STATUSES = {"pass", "passed", "ok", "success", "通过"}
+ACCEPTANCE_NOT_RUN_STATUSES = {"not_run_yet", "not run yet", "pending", "planned", "待运行", "未运行"}
+
+
+def _is_meaningful_acceptance_text(value):
+    return _is_meaningful_product_success_text(value)
+
+
+def _is_acceptance_run_deferrable(task):
+    status = str(task.get("status", "")).strip().lower()
+    return any(marker in status for marker in ("待实施", "待启动", "pending", "planned"))
+
+
+def _validate_acceptance_contract(task, packet):
+    issues = []
+    contract = packet.get("acceptance_contract") if isinstance(packet, dict) else None
+    if not isinstance(contract, dict):
+        return ["missing acceptance_contract"]
+
+    for field, expected_type in ACCEPTANCE_CONTRACT_REQUIRED_FIELDS.items():
+        value = contract.get(field)
+        if not isinstance(value, expected_type):
+            issues.append(f"acceptance_contract.{field} missing or invalid")
+            continue
+        if expected_type is str and not _is_meaningful_acceptance_text(value):
+            issues.append(f"acceptance_contract.{field} must be specific and non-placeholder")
+
+    command = contract.get("command")
+    if isinstance(command, str) and _is_meaningful_acceptance_text(command):
+        if not ACCEPTANCE_RUNNABLE_COMMAND_RE.search(command):
+            issues.append("acceptance_contract.command must be a runnable validation command")
+
+    last_run = contract.get("last_run")
+    if isinstance(last_run, dict):
+        status = str(last_run.get("status", "")).strip().lower()
+        exit_code = last_run.get("exit_code")
+        summary = last_run.get("summary")
+        if status in ACCEPTANCE_NOT_RUN_STATUSES and _is_acceptance_run_deferrable(task):
+            if not _is_meaningful_acceptance_text(summary):
+                issues.append("acceptance_contract.last_run.summary must be specific and non-placeholder")
+            return issues
+        if PRODUCT_SUCCESS_PLACEHOLDER_RE.search(status) or status not in ACCEPTANCE_PASS_STATUSES:
+            issues.append("acceptance_contract.last_run.status must be PASS")
+        if not isinstance(exit_code, int) or exit_code != 0:
+            issues.append("acceptance_contract.last_run.exit_code must be 0")
+        if not _is_meaningful_acceptance_text(summary):
+            issues.append("acceptance_contract.last_run.summary must be specific and non-placeholder")
+
+    return issues
+
+
+def check_acceptance_contracts(packet_path=None):
+    """FIX-089: active P0/P1 tasks need runnable acceptance contracts."""
+    result = {
+        "required_tasks": [],
+        "entries": [],
+        "issues": [],
+        "pass": True,
+    }
+    tasks = _active_execution_packet_tasks()
+    result["required_tasks"] = [task["task_id"] for task in tasks]
+    if not tasks:
+        return result
+
+    packets, load_error = _load_execution_packets(packet_path)
+    if load_error:
+        result["pass"] = False
+        result["issues"].append(load_error)
+        return result
+
+    for task in tasks:
+        task_id = task["task_id"]
+        packet = packets.get(task_id)
+        if packet is None:
+            issues = ["missing execution packet"]
+        else:
+            issues = _validate_acceptance_contract(task, packet)
+        status = "PASS" if not issues else "FAIL"
+        if issues:
+            result["pass"] = False
+        result["entries"].append({"task_id": task_id, "status": status, "issues": issues})
+    return result
+
+
 def build_execution_packet(task):
     scope = task.get("closure_path") or task.get("title") or task["task_id"]
     task_label = f"{task['task_id']} {task.get('title', '').strip()}".strip()
@@ -6374,6 +6472,17 @@ def build_execution_packet(task):
                 "TO_BE_DEFINED: product success evidence is recorded with concrete facts.",
                 "TO_BE_DEFINED: independent review confirms the user outcome is not replaced by process completion.",
             ],
+        },
+        "acceptance_contract": {
+            "scenario": f"TO_BE_DEFINED: user-visible acceptance scenario for {task_label}",
+            "command": "TO_BE_DEFINED: runnable E2E, smoke, unit, or validation command",
+            "expected_output": "TO_BE_DEFINED: concrete pass output, assertion, or observable demo result",
+            "last_run": {
+                "status": "TO_BE_DEFINED",
+                "exit_code": None,
+                "summary": "TO_BE_DEFINED: last run output summary with evidence location",
+            },
+            "demo_evidence": "TO_BE_DEFINED: demo, CLI output, or artifact proving the scenario",
         },
         "allowed_change_scope": [
             f"Only change files required by this task row: {scope}",
@@ -7887,6 +7996,28 @@ def cmd_check_governance(args):
     elif psc_issues == 0:
         print("│  [PASS] Product success contract check passed.")
     all_issues += psc_issues
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 18e. Executable Acceptance Contract (FIX-089) ──
+    print("\n┌─ Check 18e: Executable Acceptance Contract (FIX-089) ┐")
+    accept_result = check_acceptance_contracts()
+    accept_issues = 0
+    print(f"│  Required active P0/P1 acceptance contract(s): {len(accept_result['required_tasks'])}")
+    if accept_result["issues"]:
+        accept_issues += len(accept_result["issues"])
+        for issue in accept_result["issues"]:
+            print(f"│  [FAIL] {issue}")
+    for entry in accept_result["entries"]:
+        if entry["status"] == "FAIL":
+            accept_issues += 1
+            print(f"│  [FAIL] {entry['task_id']}: {', '.join(entry['issues'])}")
+        else:
+            print(f"│  [PASS] {entry['task_id']}: acceptance contract ready")
+    if not accept_result["required_tasks"]:
+        print("│  [PASS] No active P0/P1 tasks require acceptance contracts.")
+    elif accept_issues == 0:
+        print("│  [PASS] Executable acceptance contract check passed.")
+    all_issues += accept_issues
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 19. Agent Team Review (SYSGAP-035) ──
@@ -11060,6 +11191,33 @@ def cmd_check_product_success_contracts(args):
     print()
 
 
+def cmd_check_acceptance_contracts(args):
+    """Run Executable Acceptance Contract guard independently."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    result = check_acceptance_contracts()
+    print("\n=== Executable Acceptance Contract Check ===")
+    print(f"  Required active P0/P1 acceptance contract(s): {len(result['required_tasks'])}")
+    issue_count = len(result["issues"])
+    for issue in result["issues"]:
+        print(f"  [FAIL] {issue}")
+    for entry in result["entries"]:
+        if entry["status"] == "FAIL":
+            issue_count += 1
+            print(f"  [FAIL] {entry['task_id']}: {', '.join(entry['issues'])}")
+        else:
+            print(f"  [PASS] {entry['task_id']}")
+    if issue_count:
+        print(f"\n  Result: FAILED — {issue_count} issue(s)")
+        if getattr(args, "fail_on_issues", False):
+            sys.exit(1)
+    else:
+        print("\n  Result: PASSED — executable acceptance contracts are ready")
+    print()
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="verify_workflow",
@@ -11249,6 +11407,14 @@ def main():
     cpsc_p.add_argument("--fail-on-issues", action="store_true",
                         help="Exit with non-zero code if a required contract is missing or incomplete")
 
+    # check-acceptance-contracts (FIX-089)
+    cac_p = subparsers.add_parser(
+        "check-acceptance-contracts",
+        help="Check executable acceptance contracts for active P0/P1 execution packets",
+    )
+    cac_p.add_argument("--fail-on-issues", action="store_true",
+                       help="Exit with non-zero code if a required acceptance contract is missing or incomplete")
+
     # check-locks (FIX-056 Phase 2)
     subparsers.add_parser("check-locks",
                           help="Check agent-locks.json consistency (FIX-056 Check 25)")
@@ -11289,6 +11455,7 @@ def main():
         "check-projection-sync": cmd_check_projection_sync,
         "check-hot-fact-source": cmd_check_hot_fact_source,
         "check-product-success-contracts": cmd_check_product_success_contracts,
+        "check-acceptance-contracts": cmd_check_acceptance_contracts,
         "check-locks": cmd_check_agent_locks,
         "check-archive-integrity": cmd_check_archive_integrity,
     }

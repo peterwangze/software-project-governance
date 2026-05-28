@@ -33,6 +33,17 @@
           "TO_BE_DEFINED: independent review confirms the user outcome is not replaced by process completion."
         ]
       },
+      "acceptance_contract": {
+        "scenario": "TO_BE_DEFINED: user-visible acceptance scenario for FIX-084",
+        "command": "TO_BE_DEFINED: runnable E2E, smoke, unit, or validation command",
+        "expected_output": "TO_BE_DEFINED: concrete pass output, assertion, or observable demo result",
+        "last_run": {
+          "status": "TO_BE_DEFINED",
+          "exit_code": null,
+          "summary": "TO_BE_DEFINED: last run output summary with evidence location"
+        },
+        "demo_evidence": "TO_BE_DEFINED: demo, CLI output, or artifact proving the scenario"
+      },
       "allowed_change_scope": [
         "Only change files required by this task row.",
         "Keep unrelated refactors and release version bumps out of this task."
@@ -68,3 +79,5 @@ python skills/software-project-governance/infra/verify_workflow.py execution-pac
 `check-governance` 的 Check 18c 会读取该文件。活跃 P0/P1 任务缺少执行包，或执行包缺少目标、允许改动范围、必需证据、下一命令、完成定义时，治理检查失败。
 
 `check-governance` 的 Check 18d 会检查 `product_success_contract`。活跃 P0/P1 任务必须把上述 `TO_BE_DEFINED` 草案替换为具体内容，声明用户、JTBD、非目标、成功指标、竞争基线和完成定义。成功指标必须至少包含一个用户可见结果和一个可运行验证信号，且不得只写 governance/check/review/evidence 等流程完成项。
+
+`check-governance` 的 Check 18e 会检查 `acceptance_contract`。活跃 P0/P1 任务必须把 `scenario`、`command`、`expected_output`、`last_run` 和 `demo_evidence` 替换为具体内容；`command` 必须是可运行验收/E2E/smoke/test/check 命令，`last_run.status` 必须为 PASS 且 `exit_code` 必须为 0。

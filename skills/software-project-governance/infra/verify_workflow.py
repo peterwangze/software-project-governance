@@ -6238,13 +6238,143 @@ def _validate_execution_packet(task, packet):
     return issues
 
 
+PRODUCT_SUCCESS_CONTRACT_REQUIRED_FIELDS = {
+    "user": str,
+    "job_to_be_done": str,
+    "non_goals": list,
+    "success_metrics": list,
+    "competitive_baseline": str,
+    "done_definition": list,
+}
+
+PRODUCT_SUCCESS_PLACEHOLDER_RE = re.compile(
+    r"(?:\b(?:todo|tbd|to_be_defined|n/?a|none|null|unknown)\b|待补|待定|暂无|占位)",
+    re.IGNORECASE,
+)
+PRODUCT_SUCCESS_PROCESS_ONLY_RE = re.compile(
+    r"(?:check-governance|verify_workflow|evidence-log|plan-tracker|review|commit|push|archive|"
+    r"治理|证据|归档|提交|审查|记录|hook)",
+    re.IGNORECASE,
+)
+PRODUCT_SUCCESS_USER_OUTCOME_RE = re.compile(
+    r"(?:user|customer|persona|outcome|value|usable|acceptance|scenario|quality|competitive|"
+    r"用户|客户|使用者|产品|体验|价值|可用|可见|验收|场景|质量|竞争)",
+    re.IGNORECASE,
+)
+PRODUCT_SUCCESS_RUNNABLE_RE = re.compile(
+    r"(?:e2e|test|unit|integration|fixture|ci|command|script|execute|run|pass|"
+    r"测试|验证|用例|命令|脚本|执行|通过)",
+    re.IGNORECASE,
+)
+
+
+def _is_meaningful_product_success_text(value):
+    return isinstance(value, str) and len(value.strip()) >= 8 and not PRODUCT_SUCCESS_PLACEHOLDER_RE.match(value)
+
+
+def _is_meaningful_product_success_list(value):
+    return (
+        isinstance(value, list)
+        and bool(value)
+        and all(_is_meaningful_product_success_text(item) for item in value)
+    )
+
+
+def _is_process_only_product_success_metric(value):
+    text = value.strip()
+    return bool(PRODUCT_SUCCESS_PROCESS_ONLY_RE.search(text))
+
+
+def _validate_product_success_contract(packet):
+    issues = []
+    contract = packet.get("product_success_contract") if isinstance(packet, dict) else None
+    if not isinstance(contract, dict):
+        return ["missing product_success_contract"]
+
+    for field, expected_type in PRODUCT_SUCCESS_CONTRACT_REQUIRED_FIELDS.items():
+        value = contract.get(field)
+        if not isinstance(value, expected_type):
+            issues.append(f"product_success_contract.{field} missing or invalid")
+            continue
+        if expected_type is str and not _is_meaningful_product_success_text(value):
+            issues.append(f"product_success_contract.{field} must be specific and non-placeholder")
+        if expected_type is list and not _is_meaningful_product_success_list(value):
+            issues.append(f"product_success_contract.{field} must be a non-empty specific string array")
+
+    success_metrics = contract.get("success_metrics")
+    if isinstance(success_metrics, list) and success_metrics:
+        process_only = [
+            metric for metric in success_metrics
+            if isinstance(metric, str) and _is_process_only_product_success_metric(metric)
+        ]
+        if process_only:
+            issues.append("product_success_contract.success_metrics must not contain process-only metrics")
+        if not any(isinstance(metric, str) and PRODUCT_SUCCESS_USER_OUTCOME_RE.search(metric) for metric in success_metrics):
+            issues.append("product_success_contract.success_metrics needs at least one user-visible outcome")
+        if not any(isinstance(metric, str) and PRODUCT_SUCCESS_RUNNABLE_RE.search(metric) for metric in success_metrics):
+            issues.append("product_success_contract.success_metrics needs at least one runnable validation signal")
+
+    return issues
+
+
+def check_product_success_contracts(packet_path=None):
+    """FIX-088: active P0/P1 tasks need explicit Product Success Contract fields."""
+    result = {
+        "required_tasks": [],
+        "entries": [],
+        "issues": [],
+        "pass": True,
+    }
+    tasks = _active_execution_packet_tasks()
+    result["required_tasks"] = [task["task_id"] for task in tasks]
+    if not tasks:
+        return result
+
+    packets, load_error = _load_execution_packets(packet_path)
+    if load_error:
+        result["pass"] = False
+        result["issues"].append(load_error)
+        return result
+
+    for task in tasks:
+        task_id = task["task_id"]
+        packet = packets.get(task_id)
+        if packet is None:
+            issues = ["missing execution packet"]
+        else:
+            issues = _validate_product_success_contract(packet)
+        status = "PASS" if not issues else "FAIL"
+        if issues:
+            result["pass"] = False
+        result["entries"].append({"task_id": task_id, "status": status, "issues": issues})
+    return result
+
+
 def build_execution_packet(task):
     scope = task.get("closure_path") or task.get("title") or task["task_id"]
+    task_label = f"{task['task_id']} {task.get('title', '').strip()}".strip()
     return {
         "task_id": task["task_id"],
         "priority": task.get("priority", ""),
         "status": task.get("status", ""),
-        "goal": f"{task['task_id']} {task.get('title', '').strip()}",
+        "goal": task_label,
+        "product_success_contract": {
+            "user": f"TO_BE_DEFINED: impacted persona for {task_label}",
+            "job_to_be_done": f"TO_BE_DEFINED: user job and desired outcome for {task_label}",
+            "non_goals": [
+                "TO_BE_DEFINED: explicit non-goal that protects the task from scope drift.",
+                "TO_BE_DEFINED: explicit non-goal that prevents process evidence from replacing product value.",
+            ],
+            "success_metrics": [
+                "TO_BE_DEFINED: user-visible outcome or acceptance scenario for this task.",
+                "TO_BE_DEFINED: runnable E2E, test, or command that proves the outcome.",
+            ],
+            "competitive_baseline": "TO_BE_DEFINED: mature-team or competing-product baseline this task must match.",
+            "done_definition": [
+                "TO_BE_DEFINED: product success evidence is recorded with concrete facts.",
+                "TO_BE_DEFINED: independent review confirms the user outcome is not replaced by process completion.",
+            ],
+        },
         "allowed_change_scope": [
             f"Only change files required by this task row: {scope}",
             "Keep unrelated refactors, release version bumps, and fixture sync out of this task unless listed in the task scope.",
@@ -7735,6 +7865,28 @@ def cmd_check_governance(args):
     elif xp_issues == 0:
         print("│  [PASS] Execution packet check passed.")
     all_issues += xp_issues
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 18d. Product Success Contract (FIX-088) ──
+    print("\n┌─ Check 18d: Product Success Contract (FIX-088) ──────┐")
+    psc_result = check_product_success_contracts()
+    psc_issues = 0
+    print(f"│  Required active P0/P1 contract(s): {len(psc_result['required_tasks'])}")
+    if psc_result["issues"]:
+        psc_issues += len(psc_result["issues"])
+        for issue in psc_result["issues"]:
+            print(f"│  [FAIL] {issue}")
+    for entry in psc_result["entries"]:
+        if entry["status"] == "FAIL":
+            psc_issues += 1
+            print(f"│  [FAIL] {entry['task_id']}: {', '.join(entry['issues'])}")
+        else:
+            print(f"│  [PASS] {entry['task_id']}: product success contract ready")
+    if not psc_result["required_tasks"]:
+        print("│  [PASS] No active P0/P1 tasks require product success contracts.")
+    elif psc_issues == 0:
+        print("│  [PASS] Product success contract check passed.")
+    all_issues += psc_issues
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 19. Agent Team Review (SYSGAP-035) ──
@@ -10881,6 +11033,33 @@ def cmd_check_hot_fact_source(args):
     print()
 
 
+def cmd_check_product_success_contracts(args):
+    """Run Product Success Contract guard independently."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    result = check_product_success_contracts()
+    print("\n=== Product Success Contract Check ===")
+    print(f"  Required active P0/P1 contract(s): {len(result['required_tasks'])}")
+    issue_count = len(result["issues"])
+    for issue in result["issues"]:
+        print(f"  [FAIL] {issue}")
+    for entry in result["entries"]:
+        if entry["status"] == "FAIL":
+            issue_count += 1
+            print(f"  [FAIL] {entry['task_id']}: {', '.join(entry['issues'])}")
+        else:
+            print(f"  [PASS] {entry['task_id']}")
+    if issue_count:
+        print(f"\n  Result: FAILED — {issue_count} issue(s)")
+        if getattr(args, "fail_on_issues", False):
+            sys.exit(1)
+    else:
+        print("\n  Result: PASSED — product success contracts are ready")
+    print()
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="verify_workflow",
@@ -11062,6 +11241,14 @@ def main():
     chfs_p.add_argument("--fail-on-issues", action="store_true",
                         help="Exit with non-zero code if hot fact-source drift is found")
 
+    # check-product-success-contracts (FIX-088)
+    cpsc_p = subparsers.add_parser(
+        "check-product-success-contracts",
+        help="Check Product Success Contract fields for active P0/P1 execution packets",
+    )
+    cpsc_p.add_argument("--fail-on-issues", action="store_true",
+                        help="Exit with non-zero code if a required contract is missing or incomplete")
+
     # check-locks (FIX-056 Phase 2)
     subparsers.add_parser("check-locks",
                           help="Check agent-locks.json consistency (FIX-056 Check 25)")
@@ -11101,6 +11288,7 @@ def main():
         "check-version-consistency": cmd_check_version_consistency,
         "check-projection-sync": cmd_check_projection_sync,
         "check-hot-fact-source": cmd_check_hot_fact_source,
+        "check-product-success-contracts": cmd_check_product_success_contracts,
         "check-locks": cmd_check_agent_locks,
         "check-archive-integrity": cmd_check_archive_integrity,
     }

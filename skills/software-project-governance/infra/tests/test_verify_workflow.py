@@ -4319,6 +4319,145 @@ class ExecutionPacketTests(unittest.TestCase):
             self.assertIn("FIX-084", fake_stdout.getvalue())
 
 
+class ProductSuccessContractTests(unittest.TestCase):
+    """FIX-088: active P0/P1 tasks need Product Success Contracts."""
+
+    def _setup_plan(self, tmpdir, rows):
+        root = Path(tmpdir)
+        gov = root / ".governance"; gov.mkdir(parents=True, exist_ok=True)
+        sp = gov / "plan-tracker.md"
+        sp.write_text("\n".join([
+            "# 计划跟踪",
+            "## 当前活跃事项",
+            "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+            "|--------|----|------|------|---------|---------|------|",
+            *rows,
+            "### 最近完成（本会话提交窗口）",
+            "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+            "| **P0** | FIX-000 | old | x | 0.1.0 | done | ✅ 已完成 |",
+        ]), encoding="utf-8")
+        return root, sp, gov / "execution-packets.json"
+
+    def _valid_contract(self):
+        return {
+            "user": "AI-assisted product owner using the governance workflow for release planning",
+            "job_to_be_done": "Keep AI coding work tied to explicit user outcomes before implementation starts",
+            "non_goals": [
+                "Do not expand the task into unrelated release automation changes",
+                "Do not treat evidence-log updates as a substitute for user-visible quality",
+            ],
+            "success_metrics": [
+                "User-visible acceptance scenario is captured for the active task before code changes continue",
+                "Runnable E2E validation command passes and proves the acceptance scenario is still satisfied",
+            ],
+            "competitive_baseline": "Mature software teams require explicit acceptance criteria and validation before implementation closure",
+            "done_definition": [
+                "Product success evidence is recorded with concrete facts",
+                "Independent review confirms the user outcome is not replaced by process completion",
+            ],
+        }
+
+    def test_generated_execution_packet_contains_failing_product_success_scaffold(self):
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P0** | FIX-088 | Product Success Contract | DEC-069 | 0.39.0 | template and check | 📋 待启动 |",
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                payload = vw.generate_execution_packets()
+            packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_product_success_contracts(packet_path)
+            self.assertFalse(r["pass"])
+            contract = payload["packets"]["FIX-088"]["product_success_contract"]
+            self.assertIn("user", contract)
+            self.assertIn("success_metrics", contract)
+            self.assertTrue(any("non-placeholder" in issue for issue in r["entries"][0]["issues"]))
+
+    def test_explicit_product_success_contract_passes(self):
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P0** | FIX-088 | Product Success Contract | DEC-069 | 0.39.0 | template and check | 📋 待启动 |",
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                payload = vw.generate_execution_packets()
+            payload["packets"]["FIX-088"]["product_success_contract"] = self._valid_contract()
+            packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_product_success_contracts(packet_path)
+            self.assertTrue(r["pass"])
+
+    def test_missing_product_success_contract_fails(self):
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P0** | FIX-088 | Product Success Contract | DEC-069 | 0.39.0 | template and check | 📋 待启动 |",
+            ])
+            packet_path.write_text(json.dumps({
+                "version": 1,
+                "packets": {
+                    "FIX-088": {
+                        "task_id": "FIX-088",
+                        "goal": "implement product success contract",
+                        "allowed_change_scope": ["limited scope"],
+                        "required_evidence": ["事实依据 and 结构化事实"],
+                        "next_commands": ["python test.py"],
+                        "done_definition": ["Review APPROVED"],
+                    }
+                },
+            }), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_product_success_contracts(packet_path)
+            self.assertFalse(r["pass"])
+            self.assertIn("missing product_success_contract", r["entries"][0]["issues"])
+
+    def test_product_success_contract_rejects_empty_metrics(self):
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P0** | FIX-088 | Product Success Contract | DEC-069 | 0.39.0 | template and check | 📋 待启动 |",
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                payload = vw.generate_execution_packets()
+            payload["packets"]["FIX-088"]["product_success_contract"] = self._valid_contract()
+            payload["packets"]["FIX-088"]["product_success_contract"]["success_metrics"] = []
+            packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_product_success_contracts(packet_path)
+            self.assertFalse(r["pass"])
+            self.assertTrue(any("success_metrics" in issue for issue in r["entries"][0]["issues"]))
+
+    def test_product_success_contract_rejects_placeholders(self):
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P0** | FIX-088 | Product Success Contract | DEC-069 | 0.39.0 | template and check | 📋 待启动 |",
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                payload = vw.generate_execution_packets()
+            payload["packets"]["FIX-088"]["product_success_contract"] = self._valid_contract()
+            payload["packets"]["FIX-088"]["product_success_contract"]["user"] = "TBD"
+            packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_product_success_contracts(packet_path)
+            self.assertFalse(r["pass"])
+            self.assertTrue(any("user" in issue for issue in r["entries"][0]["issues"]))
+
+    def test_product_success_contract_rejects_process_only_metrics(self):
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P0** | FIX-088 | Product Success Contract | DEC-069 | 0.39.0 | template and check | 📋 待启动 |",
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                payload = vw.generate_execution_packets()
+            payload["packets"]["FIX-088"]["product_success_contract"] = self._valid_contract()
+            payload["packets"]["FIX-088"]["product_success_contract"]["success_metrics"] = [
+                "check-governance --fail-on-issues passes",
+                "evidence-log includes review evidence",
+            ]
+            packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_product_success_contracts(packet_path)
+            self.assertFalse(r["pass"])
+            self.assertTrue(any("process-only" in issue for issue in r["entries"][0]["issues"]))
+
+
 class CommitMsgFactGroundingHookTests(unittest.TestCase):
     """FIX-080: commit-msg hook must block product commits without fact basis."""
 

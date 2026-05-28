@@ -16,6 +16,23 @@
       "priority": "P0",
       "status": "进行中",
       "goal": "FIX-084 AI execution packet",
+      "product_success_contract": {
+        "user": "TO_BE_DEFINED: impacted persona for FIX-084",
+        "job_to_be_done": "TO_BE_DEFINED: user job and desired outcome for FIX-084",
+        "non_goals": [
+          "TO_BE_DEFINED: explicit non-goal that protects scope.",
+          "TO_BE_DEFINED: explicit non-goal that prevents process evidence from replacing product value."
+        ],
+        "success_metrics": [
+          "TO_BE_DEFINED: user-visible outcome or acceptance scenario.",
+          "TO_BE_DEFINED: runnable E2E, test, or command that proves the outcome."
+        ],
+        "competitive_baseline": "TO_BE_DEFINED: mature-team or competing-product baseline this task must match.",
+        "done_definition": [
+          "TO_BE_DEFINED: product success evidence is recorded with concrete facts.",
+          "TO_BE_DEFINED: independent review confirms the user outcome is not replaced by process completion."
+        ]
+      },
       "allowed_change_scope": [
         "Only change files required by this task row.",
         "Keep unrelated refactors and release version bumps out of this task."
@@ -49,3 +66,5 @@ python skills/software-project-governance/infra/verify_workflow.py execution-pac
 ## 门禁
 
 `check-governance` 的 Check 18c 会读取该文件。活跃 P0/P1 任务缺少执行包，或执行包缺少目标、允许改动范围、必需证据、下一命令、完成定义时，治理检查失败。
+
+`check-governance` 的 Check 18d 会检查 `product_success_contract`。活跃 P0/P1 任务必须把上述 `TO_BE_DEFINED` 草案替换为具体内容，声明用户、JTBD、非目标、成功指标、竞争基线和完成定义。成功指标必须至少包含一个用户可见结果和一个可运行验证信号，且不得只写 governance/check/review/evidence 等流程完成项。

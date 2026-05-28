@@ -199,6 +199,16 @@
 - **依赖**：`check-governance` Check 28c、`check-release` hot fact source detail
 - **被以下子工作流使用**：发布（release）、维护（maintenance）
 
+### TOOL-018：Product Success Contract guard
+
+- **文件**：`infra/verify_workflow.py`
+- **子命令**：`check-product-success-contracts [--fail-on-issues]`
+- **输入**：`.governance/execution-packets.json` 中活跃 P0/P1 任务的 `product_success_contract`
+- **输出**：每个活跃任务的用户、JTBD、非目标、成功指标、竞争基线和完成定义完整性检查结果；拒绝占位草案和仅 governance/review/evidence 完成的流程型指标
+- **触发条件**：P0/P1 任务启动前、任务关闭前、发布前产品成功门禁复核时
+- **依赖**：`check-governance` Check 18d、`core/templates/product-success-contract.md`、`core/templates/execution-packet.md`
+- **被以下子工作流使用**：立项（initiation）、开发（development）、测试（testing）、发布（release）、维护（maintenance）
+
 ## 工具与子工作流的关系矩阵
 
 | 工具 | 立项 | 调研 | 选型 | 环境 | 架构 | 开发 | 测试 | CI/CD | 发布 | 运营 | 维护 |
@@ -219,6 +229,7 @@
 | AI execution packet | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● |
 | Projection sync guard | | | | | ○ | | ● | | ● | | ● |
 | Hot fact-source consistency guard | | | | | ○ | | | | ● | | ● |
+| Product Success Contract guard | ● | | | | ○ | ● | ● | | ● | | ● |
 
 > ● 主要使用者  ○ 可选用
 

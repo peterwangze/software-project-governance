@@ -1196,6 +1196,25 @@ def _markdown_section(content, heading):
     return "\n".join(lines[start:end])
 
 
+def _markdown_section_by_prefix(content, heading_prefix):
+    lines = content.splitlines()
+    for line_no, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped == heading_prefix:
+            return _markdown_section(content, heading_prefix)
+        if stripped.startswith(heading_prefix):
+            level = len(stripped) - len(stripped.lstrip("#"))
+            start = line_no + 1
+            end = len(lines)
+            heading_pattern = re.compile(r"^(#{1,%d})\s+" % level)
+            for idx in range(start, len(lines)):
+                if heading_pattern.match(lines[idx].strip()):
+                    end = idx
+                    break
+            return "\n".join(lines[start:end])
+    return ""
+
+
 def _markdown_table_cells(line):
     stripped = line.strip()
     if not stripped.startswith("|"):
@@ -1474,6 +1493,179 @@ def check_release_readiness_fact_source(
         print(f"[FAIL] release readiness fact source: {failure}")
     if not failures:
         print("[OK] release readiness fact source synchronized")
+    return failures
+
+
+FIX_087_ACTIVE_VERSION = ".".join(["0", "38", "0"])
+FIX_087_PREVIOUS_VERSION = ".".join(["0", "37", "0"])
+FIX_087_READINESS_VERSION = ".".join(["1", "0", "0"])
+FIX_087_ACTIVE_TASKS = ["FIX-082", "FIX-083", "FIX-084", "FIX-085", "FIX-086", "FIX-087", "REL-013"]
+FIX_087_ACTIVE_FIXES = ["FIX-082", "FIX-083", "FIX-084", "FIX-085", "FIX-086", "FIX-087"]
+FIX_087_REQ_TASKS = {
+    "REQ-070": ["FIX-082", "FIX-085"],
+    "REQ-071": ["FIX-083"],
+    "REQ-072": ["FIX-084"],
+    "REQ-073": ["FIX-086"],
+    "REQ-074": ["FIX-087"],
+}
+
+
+def _version_row_text(plan_content, version):
+    row = _find_table_row_by_first_cell(plan_content, version)
+    return " | ".join(row) if row else ""
+
+
+def _task_statuses_for_hot_source(plan_content, task_id, version=None):
+    statuses = []
+    for cells in _find_table_rows_with_cell(plan_content, task_id):
+        normalized = [_normalize_markdown_cell(cell) for cell in cells]
+        if len(normalized) >= 2 and normalized[1] == task_id:
+            if version and len(normalized) >= 5 and normalized[4] != version:
+                continue
+            statuses.append(cells[-1])
+    return statuses
+
+
+def _hot_task_is_delivered(plan_content, task_id, version=None):
+    statuses = _task_statuses_for_hot_source(plan_content, task_id, version=version)
+    return bool(statuses) and any(_status_cell_is_delivered(status) for status in statuses)
+
+
+def _hot_task_is_open(plan_content, task_id, version=None):
+    statuses = _task_statuses_for_hot_source(plan_content, task_id, version=version)
+    return bool(statuses) and any(not _status_cell_is_delivered(status) for status in statuses)
+
+
+def _line_mentions_completed_range_as_pending(line, completed_task_ids):
+    pending_markers = ["待实施", "待启动", "未完成", "待闭环"]
+    if not any(marker in line for marker in pending_markers):
+        return ""
+    for task_id in completed_task_ids:
+        if _contains_fix_token_or_range(line, task_id):
+            return task_id
+    return ""
+
+
+def _extract_task_ids(text):
+    return sorted(set(re.findall(r"\b(?:FIX|REL|AUDIT)-\d{3}\b", text)))
+
+
+def check_hot_fact_source_consistency(plan_tracker_path=None):
+    """FIX-087: keep plan-tracker hot sections aligned across active release facts."""
+    plan_tracker_path = plan_tracker_path or ROOT / ".governance/plan-tracker.md"
+    failures = []
+    plan_content = plan_tracker_path.read_text(encoding="utf-8")
+    rel_plan = _display_path(plan_tracker_path)
+
+    required_sections = [
+        "## 项目配置",
+        "## 项目总览",
+        "## 当前活跃事项",
+        "### 1.0.0 依赖链",
+        "## 版本规划",
+        "## 需求跟踪矩阵",
+    ]
+    sections = {heading: _markdown_section_by_prefix(plan_content, heading) for heading in required_sections}
+    for heading, content in sections.items():
+        if not content:
+            failures.append(f"{rel_plan}: missing hot fact-source section {heading}")
+
+    project_config = sections.get("## 项目配置", "")
+    overview = sections.get("## 项目总览", "")
+    active_items = sections.get("## 当前活跃事项", "")
+    dependency_chain = sections.get("### 1.0.0 依赖链", "")
+
+    active_row_text = _version_row_text(plan_content, FIX_087_ACTIVE_VERSION)
+    previous_row_text = _version_row_text(plan_content, FIX_087_PREVIOUS_VERSION)
+    readiness_row_text = _version_row_text(plan_content, FIX_087_READINESS_VERSION)
+
+    if not active_row_text:
+        failures.append(f"{rel_plan}: missing {FIX_087_ACTIVE_VERSION} roadmap row")
+    elif "进行中" not in active_row_text:
+        failures.append(f"{rel_plan}: {FIX_087_ACTIVE_VERSION} roadmap row must remain 进行中 before REL-013 release")
+    if not previous_row_text:
+        failures.append(f"{rel_plan}: missing {FIX_087_PREVIOUS_VERSION} roadmap row")
+    elif "已发布" not in previous_row_text:
+        failures.append(f"{rel_plan}: {FIX_087_PREVIOUS_VERSION} roadmap row must be 已发布")
+
+    for source_name, source in [
+        ("project config", project_config),
+        ("project overview", overview),
+        ("current active items", active_items),
+    ]:
+        if FIX_087_ACTIVE_VERSION not in source:
+            failures.append(f"{rel_plan}: {source_name} missing active version {FIX_087_ACTIVE_VERSION}")
+    if re.search(r"0\.38\.0[^。\n|]*已发布", project_config + "\n" + overview):
+        failures.append(f"{rel_plan}: hot sections overstate {FIX_087_ACTIVE_VERSION} as released before REL-013")
+
+    for task_id in FIX_087_ACTIVE_TASKS:
+        if not _task_statuses_for_hot_source(plan_content, task_id, version=FIX_087_ACTIVE_VERSION):
+            failures.append(f"{rel_plan}: active {FIX_087_ACTIVE_VERSION} task table missing {task_id}")
+        if active_row_text and not _contains_fix_token_or_range(active_row_text, task_id):
+            failures.append(f"{rel_plan}: {FIX_087_ACTIVE_VERSION} roadmap row missing active task {task_id}")
+
+    if not dependency_chain:
+        pass
+    else:
+        for token in [FIX_087_ACTIVE_VERSION, FIX_087_READINESS_VERSION, "RISK-033", "REL-013"]:
+            if token not in dependency_chain:
+                failures.append(f"{rel_plan}: {FIX_087_READINESS_VERSION} dependency chain missing active blocker token {token}")
+        if "不得打 1.0.0" not in dependency_chain and "不得推进 1.0.0" not in dependency_chain:
+            failures.append(f"{rel_plan}: {FIX_087_READINESS_VERSION} dependency chain missing blocking language for active release")
+        completed_active_fixes = [
+            task_id for task_id in FIX_087_ACTIVE_FIXES
+            if _hot_task_is_delivered(plan_content, task_id, version=FIX_087_ACTIVE_VERSION)
+        ]
+        for line in dependency_chain.splitlines():
+            stale_task = _line_mentions_completed_range_as_pending(line, completed_active_fixes)
+            if stale_task:
+                failures.append(
+                    f"{rel_plan}: dependency chain line marks completed {stale_task} as pending: {line.strip()}"
+                )
+
+    remaining_line = ""
+    for line in overview.splitlines():
+        if "RISK-033" in line and ("继续由" in line or "承载" in line):
+            remaining_line = line
+            break
+    if remaining_line:
+        remaining_text = remaining_line.split("RISK-033", 1)[1] if "RISK-033" in remaining_line else remaining_line
+        for task_id in _extract_task_ids(remaining_text):
+            if _hot_task_is_delivered(plan_content, task_id, version=FIX_087_ACTIVE_VERSION):
+                failures.append(f"{rel_plan}: project overview says completed {task_id} still carries RISK-033")
+    elif "RISK-033" in overview and "FIX-087" not in overview:
+        failures.append(f"{rel_plan}: project overview mentions RISK-033 but does not name remaining FIX-087")
+
+    for req_id, task_ids in FIX_087_REQ_TASKS.items():
+        req_row = _find_table_row_by_first_cell(plan_content, req_id)
+        if not req_row:
+            failures.append(f"{rel_plan}: requirement matrix missing {req_id}")
+            continue
+        if len(req_row) < 6:
+            failures.append(f"{rel_plan}: requirement matrix {req_id} row has too few columns")
+            continue
+        req_status = req_row[5]
+        linked = req_row[4] if len(req_row) > 4 else ""
+        for task_id in task_ids:
+            if task_id not in linked:
+                failures.append(f"{rel_plan}: requirement matrix {req_id} must reference {task_id}")
+        all_tasks_delivered = all(
+            _hot_task_is_delivered(plan_content, task_id, version=FIX_087_ACTIVE_VERSION)
+            for task_id in task_ids
+        )
+        any_task_open = any(
+            _hot_task_is_open(plan_content, task_id, version=FIX_087_ACTIVE_VERSION)
+            for task_id in task_ids
+        )
+        if all_tasks_delivered and not _status_cell_is_delivered(req_status):
+            failures.append(f"{rel_plan}: requirement matrix {req_id} is not delivered while {', '.join(task_ids)} are complete")
+        if any_task_open and _status_cell_is_delivered(req_status):
+            failures.append(f"{rel_plan}: requirement matrix {req_id} is delivered while linked task remains open")
+
+    for failure in failures:
+        print(f"[FAIL] hot fact-source consistency: {failure}")
+    if not failures:
+        print("[OK] hot fact-source consistency synchronized")
     return failures
 
 
@@ -2492,6 +2684,13 @@ def check_release_readiness(
         "issues": release_fact_issues,
     }
     issues.extend(f"release fact source: {issue}" for issue in release_fact_issues)
+
+    hot_fact_issues = check_hot_fact_source_consistency()
+    details["hot_fact_source"] = {
+        "pass": not hot_fact_issues,
+        "issues": hot_fact_issues,
+    }
+    issues.extend(f"hot fact source: {issue}" for issue in hot_fact_issues)
 
     adapter_issues = check_agent_adapter_contract(run_runtime=run_runtime_adapters)
     details["agent_adapters"] = {
@@ -7758,6 +7957,20 @@ def cmd_check_governance(args):
         print("│  [PASS] Source, target fixture, native entries, and plugin versions are synchronized.")
     print("└──────────────────────────────────────────────────────┘")
 
+    # ── 28c. Hot Fact-Source Consistency Guard (FIX-087) ──
+    print("\n┌─ Check 28c: Hot Fact-Source Consistency (FIX-087) ───┐")
+    hfs_issues = check_hot_fact_source_consistency()
+    if hfs_issues:
+        all_issues += len(hfs_issues)
+        print(f"│  [FAIL] {len(hfs_issues)} hot fact-source issue(s):")
+        for issue in hfs_issues[:10]:
+            print(f"│    - {issue}")
+        if len(hfs_issues) > 10:
+            print(f"│    ... and {len(hfs_issues) - 10} more")
+    else:
+        print("│  [PASS] Project config, overview, active items, roadmap, dependency chain, and requirement matrix are aligned.")
+    print("└──────────────────────────────────────────────────────┘")
+
     # ── Summary ──
     print(f"\n┌─ Governance Health Summary ──────────────────────────┐")
     if all_issues == 0:
@@ -10637,6 +10850,27 @@ def cmd_check_projection_sync(args):
     print()
 
 
+def cmd_check_hot_fact_source(args):
+    """Run hot fact-source consistency guard independently."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    issues = check_hot_fact_source_consistency()
+    print("\n=== Hot Fact-Source Consistency Check ===")
+    if issues:
+        print(f"  Result: FAILED — {len(issues)} issue(s)")
+        for issue in issues[:20]:
+            print(f"    - {issue}")
+        if len(issues) > 20:
+            print(f"    ... and {len(issues) - 20} more")
+        if getattr(args, "fail_on_issues", False):
+            sys.exit(1)
+    else:
+        print("  Result: PASSED — hot fact-source sections are synchronized")
+    print()
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="verify_workflow",
@@ -10810,6 +11044,14 @@ def main():
     cps_p.add_argument("--fail-on-issues", action="store_true",
                        help="Exit with non-zero code if projection drift is found")
 
+    # check-hot-fact-source (FIX-087)
+    chfs_p = subparsers.add_parser(
+        "check-hot-fact-source",
+        help="Check hot plan-tracker fact-source consistency across active release sections",
+    )
+    chfs_p.add_argument("--fail-on-issues", action="store_true",
+                        help="Exit with non-zero code if hot fact-source drift is found")
+
     # check-locks (FIX-056 Phase 2)
     subparsers.add_parser("check-locks",
                           help="Check agent-locks.json consistency (FIX-056 Check 25)")
@@ -10848,6 +11090,7 @@ def main():
         "check-review-debt": cmd_check_review_debt,
         "check-version-consistency": cmd_check_version_consistency,
         "check-projection-sync": cmd_check_projection_sync,
+        "check-hot-fact-source": cmd_check_hot_fact_source,
         "check-locks": cmd_check_agent_locks,
         "check-archive-integrity": cmd_check_archive_integrity,
     }

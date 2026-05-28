@@ -683,6 +683,126 @@ class ReleaseReadinessFactSourceTests(unittest.TestCase):
             self.assertTrue(any("target directory structure repeats" in issue for issue in issues))
 
 
+class HotFactSourceConsistencyTests(unittest.TestCase):
+    """FIX-087: plan-tracker hot sections must describe the same active release state."""
+
+    def _plan_content(self, *, dependency_line=None, overview_tail=None, fix087_status="📋 待启动", req074_status="📋 待实施"):
+        dependency_line = dependency_line or (
+            "0.38.0 FIX-082~086 已闭环，RISK-033 关闭前不得打 1.0.0\n"
+            "FIX-087 + REL-013 待闭环"
+        )
+        overview_tail = overview_tail or "RISK-033 继续由 FIX-087 承载"
+        rows = [
+            "| **P0** | FIX-082 | Runtime capability contract | AUDIT-102 | 0.38.0 | done | ✅ 已完成 (2026-05-23) |",
+            "| **P0** | FIX-083 | Structured evidence schema | AUDIT-102 | 0.38.0 | done | ✅ 已完成 (2026-05-23) |",
+            "| **P0** | FIX-084 | AI execution packet | AUDIT-102 | 0.38.0 | done | ✅ 已完成 (2026-05-23) |",
+            "| **P0** | FIX-085 | Agent Team degraded mode | AUDIT-102 | 0.38.0 | done | ✅ 已完成 (2026-05-25) |",
+            "| **P1** | FIX-086 | Projection sync guard | AUDIT-102 | 0.38.0 | done | ✅ 已完成 (2026-05-25) |",
+            f"| **P1** | FIX-087 | Hot fact-source consistency guard | AUDIT-102 | 0.38.0 | pending | {fix087_status} |",
+            "| **P0** | REL-013 | Release 0.38.0 | FIX-082~087 | 0.38.0 | pending | 📋 待启动 |",
+        ]
+        return (
+            "# 当前项目样例\n\n"
+            "## 项目配置\n\n"
+            "- **当前阶段**: 维护与演进 — 0.37.0 发布完成，0.38.0 AI 执行底座推进中，完成后再进入 1.0.0 外部验证准备\n\n"
+            "## 项目总览\n\n"
+            "| 项目 | 当前阶段 | 总任务数 | 已完成 | 阻塞中 | 关键风险数 | 最近 Gate 结论 | 最近复盘日期 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- | --- |\n"
+            f"| 项目管理工作流插件 | 维护（0.37.0 已发布，0.38.0 AI 执行底座推进中） | 204 | 190 | 0 | 1 | {overview_tail} | 2026-05-26 |\n\n"
+            "## 当前活跃事项\n\n"
+            "0.38.0 AI 执行底座推进中。\n\n"
+            "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- |\n"
+            + "\n".join(rows)
+            + "\n\n"
+            "### 1.0.0 依赖链\n\n"
+            "```\n"
+            "0.37.0 FIX-080~081 + REL-012 全部闭环，RISK-032 已关闭\n"
+            "    │\n"
+            "    ▼\n"
+            f"{dependency_line}\n"
+            "    │\n"
+            "    ▼\n"
+            "1.0.0 正式发布\n"
+            "```\n\n"
+            "## 版本规划\n\n"
+            "| 版本 | 状态 | 预计日期 | 核心范围 | 包含 Tier/Layer | 关键交付物 |\n"
+            "| --- | --- | --- | --- | --- | --- |\n"
+            "| **0.37.0** | **已发布** | **2026-05-22** | **事实依据看护** | **FIX-080(P0), FIX-081(P0), REL-012(P0)** | **tag v0.37.0** |\n"
+            "| **0.38.0** | **进行中** | **2026-05-23** | **AI 执行底座** | **AUDIT-102(P0), FIX-082~085(P0), FIX-086~087(P1), REL-013(P0)** | **能力契约、结构化证据、执行包、降级模式、投影同步、热区事实源一致性** |\n"
+            "| **1.0.0** | **预留** | **—** | **首次正式发布标签——仅当 0.38.0 FIX-082~087 全部闭环、RISK-033 关闭、外部验证通过后打 tag** | **—** | **不得绕过 AI 执行底座收口** |\n\n"
+            "## 需求跟踪矩阵\n\n"
+            "| 需求ID | 需求描述 | 来源 | 优先级 | 关联任务 | 当前状态 | 验证方式 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- |\n"
+            "| REQ-070 | 真实运行时能力 | AUDIT-102 | P0 | FIX-082, FIX-085 | ✅ 已交付 | 0.38.0 |\n"
+            "| REQ-071 | 结构化证据 | AUDIT-102 | P0 | FIX-083 | ✅ 已交付 | 0.38.0 |\n"
+            "| REQ-072 | AI execution packet | AUDIT-102 | P0 | FIX-084 | ✅ 已交付 | 0.38.0 |\n"
+            "| REQ-073 | projection sync | AUDIT-102 | P1 | FIX-086 | ✅ 已交付 | 0.38.0 |\n"
+            f"| REQ-074 | hot fact-source consistency | AUDIT-102 | P1 | FIX-087 | {req074_status} | 0.38.0 |\n"
+        )
+
+    def _write_plan(self, root, content):
+        path = Path(root) / "plan-tracker.md"
+        path.write_text(content, encoding="utf-8")
+        return path
+
+    def test_hot_fact_source_accepts_current_active_release_facts(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = self._write_plan(td, self._plan_content())
+            self.assertEqual(vw.check_hot_fact_source_consistency(path), [])
+
+    def test_hot_fact_source_rejects_stale_dependency_pending_range(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = self._write_plan(
+                td,
+                self._plan_content(
+                    dependency_line="0.38.0 FIX-082~087 + REL-013 待实施，RISK-033 关闭前不得打 1.0.0"
+                ),
+            )
+            issues = vw.check_hot_fact_source_consistency(path)
+            self.assertTrue(any("dependency chain line marks completed FIX-082 as pending" in issue for issue in issues))
+
+    def test_hot_fact_source_rejects_requirement_delivered_while_task_open(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = self._write_plan(td, self._plan_content(req074_status="✅ 已交付"))
+            issues = vw.check_hot_fact_source_consistency(path)
+            self.assertTrue(any("REQ-074 is delivered while linked task remains open" in issue for issue in issues))
+
+    def test_hot_fact_source_rejects_requirement_open_while_task_complete(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = self._write_plan(
+                td,
+                self._plan_content(fix087_status="✅ 已完成 (2026-05-26)", req074_status="📋 待实施"),
+            )
+            issues = vw.check_hot_fact_source_consistency(path)
+            self.assertTrue(any("REQ-074 is not delivered while FIX-087 are complete" in issue for issue in issues))
+
+    def test_hot_fact_source_rejects_overview_remaining_completed_task(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = self._write_plan(td, self._plan_content(overview_tail="RISK-033 继续由 FIX-086 承载"))
+            issues = vw.check_hot_fact_source_consistency(path)
+            self.assertTrue(any("project overview says completed FIX-086 still carries RISK-033" in issue for issue in issues))
+
+    def test_hot_fact_source_requires_active_blocker_in_dependency_chain(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = self._write_plan(
+                td,
+                self._plan_content(dependency_line="0.38.0 FIX-087 + REL-013 待闭环，完成后进入 1.0.0"),
+            )
+            issues = vw.check_hot_fact_source_consistency(path)
+            self.assertTrue(any("dependency chain missing active blocker token RISK-033" in issue for issue in issues))
+            self.assertTrue(any("dependency chain missing blocking language" in issue for issue in issues))
+
+    def test_hot_fact_source_requires_release_blocker_in_dependency_chain(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = self._write_plan(
+                td,
+                self._plan_content(dependency_line="0.38.0 FIX-087 待闭环，RISK-033 关闭前不得打 1.0.0"),
+            )
+            issues = vw.check_hot_fact_source_consistency(path)
+            self.assertTrue(any("dependency chain missing active blocker token REL-013" in issue for issue in issues))
+
+
 class AgentAdapterContractTests(unittest.TestCase):
     """FIX-071: mainstream code agent adapters must be explicit and runtime-aware."""
 
@@ -1379,6 +1499,7 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
         return [
             patch.object(vw, "check_version_consistency", return_value=[]),
             patch.object(vw, "check_release_readiness_fact_source", return_value=[]),
+            patch.object(vw, "check_hot_fact_source_consistency", return_value=[]),
             patch.object(vw, "check_agent_adapter_contract", return_value=[]),
             patch.object(vw, "check_projection_sync", return_value={
                 "pass": True,
@@ -1411,7 +1532,7 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
             changelog = Path(td) / "CHANGELOG.md"
             changelog.write_text("# Changelog\n\n## [0.35.0]\n", encoding="utf-8")
             patches = self._clean_release_patches()
-            with patches[0], patches[1], patches[2] as adapter_mock, patches[3], patches[4], patches[5]:
+            with patches[0], patches[1], patches[2], patches[3] as adapter_mock, patches[4], patches[5], patches[6]:
                 result = vw.check_release_readiness(
                     version="0.35.0",
                     require_changelog=True,
@@ -1426,7 +1547,7 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
             changelog = Path(td) / "CHANGELOG.md"
             changelog.write_text("# Changelog\n\n## [0.34.0]\n", encoding="utf-8")
             patches = self._clean_release_patches()
-            with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+            with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
                 result = vw.check_release_readiness(
                     version="0.35.0",
                     require_changelog=True,
@@ -1444,7 +1565,7 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
             "total_files_scanned": 1,
             "total_refs": 1,
         }
-        with patches[0], patches[1], patches[2], patches[3], patch.object(vw, "check_cross_references", return_value=cross_ref_result), patches[5]:
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patch.object(vw, "check_cross_references", return_value=cross_ref_result), patches[6]:
             result = vw.check_release_readiness()
         self.assertFalse(result["pass"])
         self.assertTrue(any("dangling reference" in issue for issue in result["issues"]))
@@ -1463,7 +1584,7 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
                 "command": " ".join(str(part) for part in command),
             }
 
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
             result = vw.check_release_readiness(
                 run_execution_gates=True,
                 execution_gate_runner=fake_runner,
@@ -1485,7 +1606,7 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
                 "command": " ".join(str(part) for part in command),
             }
 
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
             result = vw.check_release_readiness(
                 run_execution_gates=True,
                 execution_gate_runner=fake_runner,

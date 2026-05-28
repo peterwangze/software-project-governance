@@ -21,6 +21,8 @@
 | TOOL-013 | 交叉引用检查 | script | `infra/verify_workflow.py check-cross-references` | 路径迁移、文档/skill/agent 引用变更后 | 架构/维护 | 是 |
 | TOOL-014 | 真实 agent runtime E2E harness | script | `infra/verify_workflow.py agent-runtime-e2e` | Claude/Codex/Gemini/opencode 真实运行环境入口验证时 | 测试/发布/维护 | 是 |
 | TOOL-015 | AI execution packet 生成与检查 | script | `infra/verify_workflow.py execution-packet` + `check-governance` Check 18c | 活跃 P0/P1 任务开始前生成短上下文执行包，提交前验证短包存在且字段有效 | 全部阶段 | 是 |
+| TOOL-016 | Projection sync guard | script | `infra/verify_workflow.py check-projection-sync` + `check-governance` Check 28b | workflow source、target fixture、native entry、plugin manifest 变更后 | 测试/发布/维护 | 是 |
+| TOOL-017 | Hot fact-source consistency guard | script | `infra/verify_workflow.py check-hot-fact-source` + `check-governance` Check 28c | plan-tracker 热区项目配置、总览、活跃事项、路线图、依赖链和需求矩阵变更后 | 发布/维护 | 是 |
 
 ## 工具详情
 
@@ -187,6 +189,16 @@
 - **依赖**：`check-governance` Check 28b、`check-release` projection sync detail、`project/e2e-test-project`
 - **被以下子工作流使用**：测试（testing）、发布（release）、维护（maintenance）
 
+### TOOL-017：Hot fact-source consistency guard
+
+- **文件**：`infra/verify_workflow.py`
+- **子命令**：`check-hot-fact-source [--fail-on-issues]`
+- **输入**：`.governance/plan-tracker.md` 热区：项目配置、项目总览、当前活跃事项、`1.0.0 依赖链`、版本规划、需求跟踪矩阵
+- **输出**：版本阶段叙事、活跃 task 状态、依赖链 blocker、需求矩阵交付状态之间的不一致问题
+- **触发条件**：更新当前版本任务状态、路线图、1.0.0 依赖链、需求矩阵或发布前事实源复核时
+- **依赖**：`check-governance` Check 28c、`check-release` hot fact source detail
+- **被以下子工作流使用**：发布（release）、维护（maintenance）
+
 ## 工具与子工作流的关系矩阵
 
 | 工具 | 立项 | 调研 | 选型 | 环境 | 架构 | 开发 | 测试 | CI/CD | 发布 | 运营 | 维护 |
@@ -206,6 +218,7 @@
 | 真实 agent runtime E2E | | | | | ○ | | ● | | ● | | ● |
 | AI execution packet | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● |
 | Projection sync guard | | | | | ○ | | ● | | ● | | ● |
+| Hot fact-source consistency guard | | | | | ○ | | | | ● | | ● |
 
 > ● 主要使用者  ○ 可选用
 

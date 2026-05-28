@@ -2,6 +2,31 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.38.0] — 2026-05-28
+
+### 0.38.0 — AI 执行底座：能力契约、结构化证据、执行包与事实源一致性
+
+面向“AI 辅助人开发”场景的执行可靠性版本，把长规则遵从下沉为可检查的运行时能力契约、结构化证据、短执行包、Agent Team 降级模式、投影同步和热区事实源一致性。0.38.0 不声明 1.0.0 production-ready；1.0.0 仍需外部验证通过后再发布正式标签。
+
+### 新增
+- **FIX-082**: Claude/Codex/Gemini/opencode adapter manifest 新增 `runtime_capabilities`，声明 AskUserQuestion、sub-agent、tool、browser、MCP、git hook 和 workflow closure 的真实能力与降级模式。
+- **FIX-083**: `check-governance` 新增 Structured Evidence 检查，当前 release 产品代码证据必须包含 `结构化事实:` JSON，记录命令、退出码、摘要、文件 diff 和 review 结论。
+- **FIX-084**: 新增 `.governance/execution-packets.json`、`execution-packet` 子命令和 Check 18c，活跃 P0/P1 任务必须具备短上下文执行包。
+- **FIX-086**: 新增 `check-projection-sync`，发布前检查 source workflow、target fixture、native entry 和 plugin manifest 的版本与投影同步。
+- **FIX-087**: 新增 `check-hot-fact-source`，并接入 `check-governance` Check 28c 与 `check-release` hot fact source detail，阻断 0.37.0/0.38.0/1.0.0 热区叙事冲突。
+
+### 变更
+- **FIX-085**: Agent Team review coverage 排除 degraded evidence、Coordinator/Developer 自审和缺独立 Reviewer 标识的 review-like 记录；宿主无真实 sub-agent/Reviewer 分离时不得伪装完整闭环。
+- **FIX-086**: Projection sync release blocker 仅基于 git 可复现的 tracked target fixture；未跟踪 materialized projection copies 只作为 skipped diagnostics。
+- **FIX-087**: 1.0.0 依赖链必须保留 RISK-033、REL-013 和阻断语言；已完成 FIX range 不得继续写成待实施或待闭环。
+
+### 验证
+- 完整 `test_verify_workflow.py` 回归达到 229/229 PASS。
+- `check-governance --fail-on-issues` PASS，Check 18b、18c、28b、28c 均通过。
+- `check-release --version 0.38.0 --require-changelog --runtime-adapters` PASS。
+- `verify` PASS；`e2e-check` PASS；`check-agent-adapters --runtime` PASS。
+- Code Reviewer/Release Reviewer 均已 APPROVED。
+
 ## [0.37.0] — 2026-05-22
 
 ### 0.37.0 — 事实依据看护 + CLAUDE.md 升级 hook 例外

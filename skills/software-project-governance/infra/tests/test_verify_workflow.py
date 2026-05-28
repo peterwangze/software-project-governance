@@ -686,12 +686,27 @@ class ReleaseReadinessFactSourceTests(unittest.TestCase):
 class HotFactSourceConsistencyTests(unittest.TestCase):
     """FIX-087: plan-tracker hot sections must describe the same active release state."""
 
-    def _plan_content(self, *, dependency_line=None, overview_tail=None, fix087_status="📋 待启动", req074_status="📋 待实施"):
+    def _plan_content(
+        self,
+        *,
+        dependency_line=None,
+        overview_tail=None,
+        fix087_status="📋 待启动",
+        rel013_status="📋 待启动",
+        req074_status="📋 待实施",
+        roadmap_status="进行中",
+        project_stage=None,
+        overview_stage=None,
+        active_items_intro=None,
+    ):
         dependency_line = dependency_line or (
             "0.38.0 FIX-082~086 已闭环，RISK-033 关闭前不得打 1.0.0\n"
             "FIX-087 + REL-013 待闭环"
         )
         overview_tail = overview_tail or "RISK-033 继续由 FIX-087 承载"
+        project_stage = project_stage or "维护与演进 — 0.37.0 发布完成，0.38.0 AI 执行底座推进中，完成后再进入 1.0.0 外部验证准备"
+        overview_stage = overview_stage or "维护（0.37.0 已发布，0.38.0 AI 执行底座推进中）"
+        active_items_intro = active_items_intro or "0.38.0 AI 执行底座推进中。"
         rows = [
             "| **P0** | FIX-082 | Runtime capability contract | AUDIT-102 | 0.38.0 | done | ✅ 已完成 (2026-05-23) |",
             "| **P0** | FIX-083 | Structured evidence schema | AUDIT-102 | 0.38.0 | done | ✅ 已完成 (2026-05-23) |",
@@ -699,18 +714,18 @@ class HotFactSourceConsistencyTests(unittest.TestCase):
             "| **P0** | FIX-085 | Agent Team degraded mode | AUDIT-102 | 0.38.0 | done | ✅ 已完成 (2026-05-25) |",
             "| **P1** | FIX-086 | Projection sync guard | AUDIT-102 | 0.38.0 | done | ✅ 已完成 (2026-05-25) |",
             f"| **P1** | FIX-087 | Hot fact-source consistency guard | AUDIT-102 | 0.38.0 | pending | {fix087_status} |",
-            "| **P0** | REL-013 | Release 0.38.0 | FIX-082~087 | 0.38.0 | pending | 📋 待启动 |",
+            f"| **P0** | REL-013 | Release 0.38.0 | FIX-082~087 | 0.38.0 | pending | {rel013_status} |",
         ]
         return (
             "# 当前项目样例\n\n"
             "## 项目配置\n\n"
-            "- **当前阶段**: 维护与演进 — 0.37.0 发布完成，0.38.0 AI 执行底座推进中，完成后再进入 1.0.0 外部验证准备\n\n"
+            f"- **当前阶段**: {project_stage}\n\n"
             "## 项目总览\n\n"
             "| 项目 | 当前阶段 | 总任务数 | 已完成 | 阻塞中 | 关键风险数 | 最近 Gate 结论 | 最近复盘日期 |\n"
             "| --- | --- | --- | --- | --- | --- | --- | --- |\n"
-            f"| 项目管理工作流插件 | 维护（0.37.0 已发布，0.38.0 AI 执行底座推进中） | 204 | 190 | 0 | 1 | {overview_tail} | 2026-05-26 |\n\n"
+            f"| 项目管理工作流插件 | {overview_stage} | 204 | 190 | 0 | 1 | {overview_tail} | 2026-05-26 |\n\n"
             "## 当前活跃事项\n\n"
-            "0.38.0 AI 执行底座推进中。\n\n"
+            f"{active_items_intro}\n\n"
             "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |\n"
             "| --- | --- | --- | --- | --- | --- | --- |\n"
             + "\n".join(rows)
@@ -729,7 +744,7 @@ class HotFactSourceConsistencyTests(unittest.TestCase):
             "| 版本 | 状态 | 预计日期 | 核心范围 | 包含 Tier/Layer | 关键交付物 |\n"
             "| --- | --- | --- | --- | --- | --- |\n"
             "| **0.37.0** | **已发布** | **2026-05-22** | **事实依据看护** | **FIX-080(P0), FIX-081(P0), REL-012(P0)** | **tag v0.37.0** |\n"
-            "| **0.38.0** | **进行中** | **2026-05-23** | **AI 执行底座** | **AUDIT-102(P0), FIX-082~085(P0), FIX-086~087(P1), REL-013(P0)** | **能力契约、结构化证据、执行包、降级模式、投影同步、热区事实源一致性** |\n"
+            f"| **0.38.0** | **{roadmap_status}** | **2026-05-23** | **AI 执行底座** | **AUDIT-102(P0), FIX-082~085(P0), FIX-086~087(P1), REL-013(P0)** | **能力契约、结构化证据、执行包、降级模式、投影同步、热区事实源一致性** |\n"
             "| **1.0.0** | **预留** | **—** | **首次正式发布标签——仅当 0.38.0 FIX-082~087 全部闭环、RISK-033 关闭、外部验证通过后打 tag** | **—** | **不得绕过 AI 执行底座收口** |\n\n"
             "## 需求跟踪矩阵\n\n"
             "| 需求ID | 需求描述 | 来源 | 优先级 | 关联任务 | 当前状态 | 验证方式 |\n"
@@ -750,6 +765,40 @@ class HotFactSourceConsistencyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             path = self._write_plan(td, self._plan_content())
             self.assertEqual(vw.check_hot_fact_source_consistency(path), [])
+
+    def test_hot_fact_source_accepts_published_release_after_rel013(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = self._write_plan(
+                td,
+                self._plan_content(
+                    dependency_line="0.38.0 FIX-082~087 + REL-013 全部闭环，RISK-033 已关闭",
+                    overview_tail="RISK-033 已关闭，REL-013 已完成",
+                    fix087_status="✅ 已完成 (2026-05-28)",
+                    rel013_status="✅ 已完成 (2026-05-28)",
+                    req074_status="✅ 已交付",
+                    roadmap_status="已发布",
+                    project_stage="维护与演进 — 0.38.0 已发布，进入 1.0.0 外部验证准备",
+                    overview_stage="维护（0.38.0 已发布，1.0.0 外部验证准备）",
+                    active_items_intro="0.38.0 发布闭环完成，进入 1.0.0 外部验证准备。",
+                ),
+            )
+            self.assertEqual(vw.check_hot_fact_source_consistency(path), [])
+
+    def test_hot_fact_source_rejects_unclosed_risk_after_rel013(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = self._write_plan(
+                td,
+                self._plan_content(
+                    dependency_line="0.38.0 FIX-082~087 + REL-013 全部闭环，RISK-033 仍打开",
+                    overview_tail="RISK-033 仍打开，REL-013 已完成",
+                    fix087_status="✅ 已完成 (2026-05-28)",
+                    rel013_status="✅ 已完成 (2026-05-28)",
+                    req074_status="✅ 已交付",
+                    roadmap_status="已发布",
+                ),
+            )
+            issues = vw.check_hot_fact_source_consistency(path)
+            self.assertTrue(any("dependency chain still lacks RISK-033 closure" in issue for issue in issues))
 
     def test_hot_fact_source_rejects_stale_dependency_pending_range(self):
         with tempfile.TemporaryDirectory() as td:
@@ -2054,12 +2103,12 @@ class E2ECommandMatrixTests(unittest.TestCase):
             for name in ("evidence-log.md", "decision-log.md", "risk-log.md", "session-snapshot.md"):
                 (governance_dir / name).write_text("# fixture\n", encoding="utf-8")
             (governance_dir / "plan-tracker.md").write_text(
-                "- **工作流版本**: 0.37.0\n"
+                "- **工作流版本**: 0.38.0\n"
                 "- **操作权限模式**: default-confirm\n",
                 encoding="utf-8",
             )
             (skill_dir / "SKILL.md").write_text(
-                "---\nversion: 0.37.0\n---\nCoordinator\nAgent Team\n",
+                "---\nversion: 0.38.0\n---\nCoordinator\nAgent Team\n",
                 encoding="utf-8",
             )
             (e2e_dir / "commands" / "governance.md").write_text(

@@ -765,16 +765,16 @@ REQUIRED_SNIPPETS = {
         "## [0.5.0]",
     ],
     ROOT / ".claude-plugin/plugin.json": [
-        "0.37.0",
+        "0.38.0",
     ],
     ROOT / ".claude-plugin/marketplace.json": [
-        "0.37.0",
+        "0.38.0",
     ],
     ROOT / ".codex-plugin/plugin.json": [
-        "0.37.0",
+        "0.38.0",
     ],
     ROOT / "skills/software-project-governance/core/manifest.json": [
-        "0.37.0",
+        "0.38.0",
     ],
 }
 
@@ -1578,10 +1578,13 @@ def check_hot_fact_source_consistency(plan_tracker_path=None):
     active_row_text = _version_row_text(plan_content, FIX_087_ACTIVE_VERSION)
     previous_row_text = _version_row_text(plan_content, FIX_087_PREVIOUS_VERSION)
     readiness_row_text = _version_row_text(plan_content, FIX_087_READINESS_VERSION)
+    rel013_delivered = _hot_task_is_delivered(plan_content, "REL-013", version=FIX_087_ACTIVE_VERSION)
 
     if not active_row_text:
         failures.append(f"{rel_plan}: missing {FIX_087_ACTIVE_VERSION} roadmap row")
-    elif "进行中" not in active_row_text:
+    elif rel013_delivered and "已发布" not in active_row_text:
+        failures.append(f"{rel_plan}: {FIX_087_ACTIVE_VERSION} roadmap row must be 已发布 after REL-013 release")
+    elif not rel013_delivered and "进行中" not in active_row_text:
         failures.append(f"{rel_plan}: {FIX_087_ACTIVE_VERSION} roadmap row must remain 进行中 before REL-013 release")
     if not previous_row_text:
         failures.append(f"{rel_plan}: missing {FIX_087_PREVIOUS_VERSION} roadmap row")
@@ -1595,7 +1598,7 @@ def check_hot_fact_source_consistency(plan_tracker_path=None):
     ]:
         if FIX_087_ACTIVE_VERSION not in source:
             failures.append(f"{rel_plan}: {source_name} missing active version {FIX_087_ACTIVE_VERSION}")
-    if re.search(r"0\.38\.0[^。\n|]*已发布", project_config + "\n" + overview):
+    if not rel013_delivered and re.search(r"0\.38\.0[^。\n|]*已发布", project_config + "\n" + overview):
         failures.append(f"{rel_plan}: hot sections overstate {FIX_087_ACTIVE_VERSION} as released before REL-013")
 
     for task_id in FIX_087_ACTIVE_TASKS:
@@ -1610,7 +1613,11 @@ def check_hot_fact_source_consistency(plan_tracker_path=None):
         for token in [FIX_087_ACTIVE_VERSION, FIX_087_READINESS_VERSION, "RISK-033", "REL-013"]:
             if token not in dependency_chain:
                 failures.append(f"{rel_plan}: {FIX_087_READINESS_VERSION} dependency chain missing active blocker token {token}")
-        if "不得打 1.0.0" not in dependency_chain and "不得推进 1.0.0" not in dependency_chain:
+        if rel013_delivered:
+            risk033_lines = [line for line in dependency_chain.splitlines() if "RISK-033" in line]
+            if risk033_lines and not any("已关闭" in line for line in risk033_lines):
+                failures.append(f"{rel_plan}: {FIX_087_READINESS_VERSION} dependency chain still lacks RISK-033 closure after REL-013")
+        elif "不得打 1.0.0" not in dependency_chain and "不得推进 1.0.0" not in dependency_chain:
             failures.append(f"{rel_plan}: {FIX_087_READINESS_VERSION} dependency chain missing blocking language for active release")
         completed_active_fixes = [
             task_id for task_id in FIX_087_ACTIVE_FIXES
@@ -1628,7 +1635,10 @@ def check_hot_fact_source_consistency(plan_tracker_path=None):
         if "RISK-033" in line and ("继续由" in line or "承载" in line):
             remaining_line = line
             break
-    if remaining_line:
+    if rel013_delivered:
+        if "RISK-033" in overview and "已关闭" not in overview:
+            failures.append(f"{rel_plan}: project overview mentions RISK-033 after REL-013 but does not mark it closed")
+    elif remaining_line:
         remaining_text = remaining_line.split("RISK-033", 1)[1] if "RISK-033" in remaining_line else remaining_line
         for task_id in _extract_task_ids(remaining_text):
             if _hot_task_is_delivered(plan_content, task_id, version=FIX_087_ACTIVE_VERSION):
@@ -9486,12 +9496,12 @@ def _e2e_target_fixture_checks(e2e_dir):
         {
             "label": "target plan-tracker project config",
             "path": governance_dir / "plan-tracker.md",
-            "needles": ["工作流版本", "0.37.0", "操作权限模式", "default-confirm"],
+            "needles": ["工作流版本", "0.38.0", "操作权限模式", "default-confirm"],
         },
         {
             "label": "target workflow skill version",
             "path": e2e_dir / "skills" / "software-project-governance" / "SKILL.md",
-            "needles": ["version: 0.37.0", "Coordinator", "Agent Team"],
+            "needles": ["version: 0.38.0", "Coordinator", "Agent Team"],
         },
         {
             "label": "target /governance route contract",

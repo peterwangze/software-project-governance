@@ -98,6 +98,26 @@
         "status": "TO_BE_DEFINED",
         "evidence": "TO_BE_DEFINED: latest demo proof or planned evidence location"
       },
+      "interruption_policy": {
+        "mode": "critical-only: default execute routine reversible work and record assumptions when needed",
+        "critical_triggers": [
+          "Ask the user when product intent is unclear.",
+          "Ask the user when acceptance standard or done criteria are unclear.",
+          "Ask the user before irreversible, release, risk acceptance, external dependency, or mode change decisions."
+        ],
+        "auto_execute": [
+          "Run routine execution, local validation, focused code edits, and governance record updates when scope is known and reversible.",
+          "Commit and push normal single-task changes when validation, evidence, and review gates are satisfied."
+        ],
+        "assumption_record": {
+          "assumption": "TO_BE_DEFINED: default choice used for a reversible non-critical ambiguity",
+          "basis": "TO_BE_DEFINED: fact source or repository pattern supporting the default",
+          "reversibility": "TO_BE_DEFINED: why the choice can be changed without product damage",
+          "validation": "TO_BE_DEFINED: command or demo that will verify the assumption",
+          "rollback": "TO_BE_DEFINED: how to revert if the assumption is wrong"
+        },
+        "interruption_budget": "At most one user interruption per work unit unless a new critical trigger appears."
+      },
       "allowed_change_scope": [
         "Only change files required by this task row.",
         "Keep unrelated refactors and release version bumps out of this task."
@@ -139,3 +159,5 @@ python skills/software-project-governance/infra/verify_workflow.py execution-pac
 `check-governance` 的 Check 18f 会检查 `quality_budget`。活跃 P0/P1 任务必须覆盖 performance、reliability、security、accessibility、ux、maintainability 六个维度；每个维度必须有具体阈值、验证信号、状态和证据。已关闭或进行中任务必须为 PASS，或用 EXEMPT/not_applicable 并写清例外理由；待实施任务可以暂用 NOT_RUN_YET，但仍必须写清阈值、验证方式和证据计划。
 
 `check-governance` 的 Check 18g 会检查 `vertical_slice`。活跃 P0/P1 任务必须写清最小用户可见切片、可演示路径、范围边界、回滚方案、状态和证据；进行中或关闭任务必须为 PASS，待实施任务可以暂用 NOT_RUN_YET。只写内部技术层、全仓大改、人工审查通过或主观描述不能替代可演示切片。
+
+`check-governance` 的 Check 18i 会检查 `interruption_policy`。活跃 P0/P1 任务必须写清 critical-only 模式、product intent / acceptance standard / irreversible 等关键打断触发、可自动执行动作、assumption record 五字段和 interruption budget。非关键可逆不确定性必须记录假设后继续执行，不能把 routine work 交还给用户确认。

@@ -28,6 +28,7 @@
 | TOOL-020 | Quality Budget Gate | script | `infra/verify_workflow.py check-quality-budget` + `check-governance` Check 18f | P0/P1 任务启动和关闭前检查六维质量预算 | 开发/测试/CI/CD/发布/维护 | 是 |
 | TOOL-021 | Vertical Slice Delivery Packet guard | script | `infra/verify_workflow.py check-vertical-slices` + `check-governance` Check 18g | P0/P1 任务启动和关闭前检查用户可见切片、demo、scope guard 和 rollback | 开发/测试/发布/维护 | 是 |
 | TOOL-022 | Weak-LLM Deterministic Scaffold generator/check | script + template | `infra/verify_workflow.py generate-deterministic-scaffold` + `check-deterministic-scaffolds` + `check-governance` Check 18h | 弱 LLM 或新项目启动时生成 PRD-lite、验收、质量预算、垂直切片和 demo checklist 脚手架 | 立项/开发/测试/发布/维护 | 是 |
+| TOOL-023 | User Interruption Policy v2 guard | script + template | `infra/verify_workflow.py check-interruption-policy` + `check-governance` Check 18i | P0/P1 任务启动和关闭前检查 critical-only 打断边界、assumption record 和打断预算 | 立项/开发/测试/发布/维护 | 是 |
 
 ## 工具详情
 
@@ -84,7 +85,7 @@
 ### TOOL-006：校验脚本
 
 - **文件**：`infra/verify_workflow.py`
-- **子命令**：`verify`（全量校验）、`status`（治理状态摘要）、`gate <G1-G11>`（Gate 检查）、`gates`（全部 Gate 状态）、`stage <stage-id>`（阶段状态）、`stages`（全部阶段状态）、`check-governance --fail-on-issues`（治理健康检查）、`e2e-check`（E2E proxy + fixture 分层检查）、`check-version-consistency`、`check-manifest-consistency`、`check-deterministic-scaffolds`、`generate-deterministic-scaffold`、`check-locks`、`check-archive-integrity`
+- **子命令**：`verify`（全量校验）、`status`（治理状态摘要）、`gate <G1-G11>`（Gate 检查）、`gates`（全部 Gate 状态）、`stage <stage-id>`（阶段状态）、`stages`（全部阶段状态）、`check-governance --fail-on-issues`（治理健康检查）、`e2e-check`（E2E proxy + fixture 分层检查）、`check-version-consistency`、`check-manifest-consistency`、`check-deterministic-scaffolds`、`check-interruption-policy`、`generate-deterministic-scaffold`、`check-locks`、`check-archive-integrity`
 - **输入**：无（自动读取项目文件）
 - **输出**：校验结果（PASSED/FAILED）+ 治理状态摘要
 - **触发条件**：工作流资产变更后、Gate 检查时、定期巡检
@@ -254,6 +255,16 @@
 - **依赖**：`check-governance` Check 18h、`core/templates/deterministic-scaffolds/index.md`
 - **被以下子工作流使用**：立项（initiation）、开发（development）、测试（testing）、发布（release）、维护（maintenance）
 
+### TOOL-023：User Interruption Policy v2 guard
+
+- **文件**：`infra/verify_workflow.py` + `core/templates/user-interruption-policy.md` + `references/interaction-boundary.md`
+- **子命令**：`check-interruption-policy [--fail-on-issues]`；alias `check-user-interruption-policy [--fail-on-issues]`
+- **输入**：interaction boundary 规则、用户打断策略模板、`.governance/execution-packets.json` 中活跃 P0/P1 任务的 `interruption_policy`
+- **输出**：critical-only 策略完整性、产品意图/验收标准/不可逆决策分类 examples、assumption record 五字段和 interruption budget 检查结果
+- **触发条件**：P0/P1 任务启动前、任务关闭前、用户反馈打断过多或关键处漏问、发布前 0.39.0 产品成功门禁复核时
+- **依赖**：`check-governance` Check 18i、`core/templates/execution-packet.md`
+- **被以下子工作流使用**：立项（initiation）、开发（development）、测试（testing）、发布（release）、维护（maintenance）
+
 ## 工具与子工作流的关系矩阵
 
 | 工具 | 立项 | 调研 | 选型 | 环境 | 架构 | 开发 | 测试 | CI/CD | 发布 | 运营 | 维护 |
@@ -279,6 +290,7 @@
 | Quality Budget Gate | | | | | ○ | ● | ● | ● | ● | | ● |
 | Vertical Slice Delivery Packet guard | | | | | ○ | ● | ● | | ● | | ● |
 | Weak-LLM Deterministic Scaffold generator/check | ● | ○ | | | ○ | ● | ● | | ● | | ● |
+| User Interruption Policy v2 guard | ● | ○ | | | ○ | ● | ● | | ● | | ● |
 
 > ● 主要使用者  ○ 可选用
 

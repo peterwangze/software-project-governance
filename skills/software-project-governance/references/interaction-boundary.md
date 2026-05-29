@@ -10,6 +10,40 @@
 2. 需要提供**外部信息**（业务背景、用户画像、领域知识）
 3. 需要**审核确认**（架构方案、技术选型、发布决策）
 
+## User Interruption Policy v2
+
+FIX-093 将交互边界收敛为 **critical-only** 策略：用户注意力只用于产品方向和不可逆决策， routine execution 由 agent 自动执行并留下事实记录。该策略的目标是减少弱 LLM 把"礼貌确认"当成流程质量，同时避免跳过真正需要用户判断的节点。
+
+### Critical Triggers
+
+满足任一条件时 MUST 使用 AskUserQuestion：
+
+- **product intent** 不清楚：用户目标、目标用户、核心场景、范围边界或非目标缺失，继续执行会改变产品方向。
+- **acceptance standard** 不清楚：完成定义、验收命令、预期输出、demo 证据或质量阈值无法由现有事实推出。
+- **irreversible** 或高代价决策：破坏性文件/数据操作、发布 go/no-go、版本号升级、breaking change、风险接受、Gate 绕过、外部依赖/API/许可证/成本变化、profile/trigger/permission 模式变化。
+
+### Auto Execute Defaults
+
+以下动作默认自动执行，不打断用户：
+
+- 已在执行包范围内的代码/文档修改、测试、lint、build、fixture、局部重命名和格式化。
+- 治理记录更新、证据归档、Check/Gate 自评、单任务 commit、普通 push、tag 前准备和发布检查。
+- Reviewer 已给出明确 blocker 时的返工，以及本地验证失败后的可逆修复。
+
+### record_assumption
+
+当存在非关键、可逆、低成本的不确定性时，agent 不打断用户，必须记录 assumption record 后继续执行。记录包含：
+
+- `assumption`: 默认采用的假设。
+- `basis`: 支撑该假设的事实来源，例如相邻文件模式、执行包、已通过的决策或用户原话。
+- `reversibility`: 说明为何该选择可回滚或可局部调整。
+- `validation`: 用于验证该假设的命令、demo、测试或审查信号。
+- `rollback`: 假设错误时的回滚方式。
+
+### interruption_budget
+
+每个工作单元最多打断用户一次，除非出现新的 critical trigger。多个 critical trigger 必须批量合并为一次 AskUserQuestion，最多 3 个短问题；不得用"要不要继续"、"是否现在执行测试"、"需要我提交吗"打断已经授权的执行链。
+
 ## 交互类型分类
 
 ### 类型 A：自动执行（不中断用户）

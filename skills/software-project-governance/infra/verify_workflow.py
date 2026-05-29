@@ -14,6 +14,8 @@ from datetime import datetime, date
 
 ROOT = Path(__file__).resolve().parents[3]
 EXECUTION_PACKET_PATH = ROOT / ".governance" / "execution-packets.json"
+INTERACTION_BOUNDARY_PATH = ROOT / "skills/software-project-governance/references/interaction-boundary.md"
+USER_INTERRUPTION_POLICY_TEMPLATE_PATH = ROOT / "skills/software-project-governance/core/templates/user-interruption-policy.md"
 
 
 def _display_path(path, root=None):
@@ -6893,6 +6895,303 @@ def check_deterministic_scaffolds(scaffold_dir=None):
     return result
 
 
+# ── FIX-093: User Interruption Policy v2 ─────────────────────────
+
+INTERRUPTION_POLICY_REQUIRED_PHRASES = (
+    "User Interruption Policy v2",
+    "critical-only",
+    "product intent",
+    "acceptance standard",
+    "irreversible",
+    "record_assumption",
+    "interruption_budget",
+)
+
+INTERRUPTION_POLICY_REQUIRED_TEMPLATE_PHRASES = (
+    "interruption_policy:",
+    "critical_triggers:",
+    "auto_execute:",
+    "assumption_record:",
+    "interruption_budget:",
+)
+
+INTERRUPTION_POLICY_REQUIRED_ASSUMPTION_FIELDS = (
+    "assumption",
+    "basis",
+    "reversibility",
+    "validation",
+    "rollback",
+)
+INTERRUPTION_POLICY_PLACEHOLDER_RE = re.compile(
+    r"(?:\b(?:todo|tbd|to_be_defined|n/?a|none|null|unknown)\b|待补|待定|暂无|占位)",
+    re.IGNORECASE,
+)
+
+INTERRUPTION_POLICY_CRITICAL_TRIGGER_KEYS = (
+    "product_intent_unclear",
+    "acceptance_standard_unclear",
+    "irreversible",
+    "risk_acceptance",
+    "release_decision",
+    "external_dependency",
+    "mode_change",
+)
+INTERRUPTION_POLICY_PACKET_CRITICAL_SIGNALS = (
+    "product intent",
+    "acceptance",
+    "irreversible",
+    "release",
+    "risk acceptance",
+    "external dependency",
+    "mode change",
+)
+
+INTERRUPTION_POLICY_DEFAULT_EXAMPLES = [
+    {
+        "id": "product-intent-ambiguity",
+        "expected_action": "ask_user",
+        "decision": {"product_intent_unclear": True, "reversible": True},
+    },
+    {
+        "id": "acceptance-standard-ambiguity",
+        "expected_action": "ask_user",
+        "decision": {"acceptance_standard_unclear": True, "reversible": True},
+    },
+    {
+        "id": "irreversible-file-delete",
+        "expected_action": "ask_user",
+        "decision": {"irreversible": True, "destructive": True},
+    },
+    {
+        "id": "risk-acceptance",
+        "expected_action": "ask_user",
+        "decision": {"risk_acceptance": True, "reversible": False},
+    },
+    {
+        "id": "release-go-no-go",
+        "expected_action": "ask_user",
+        "decision": {"release_decision": True, "reversible": False},
+    },
+    {
+        "id": "new-external-dependency",
+        "expected_action": "ask_user",
+        "decision": {"external_dependency": True, "reversible": True},
+    },
+    {
+        "id": "mode-change",
+        "expected_action": "ask_user",
+        "decision": {"mode_change": True, "reversible": True},
+    },
+    {
+        "id": "routine-file-edit",
+        "expected_action": "auto_execute",
+        "decision": {"routine_execution": True, "reversible": True, "known_scope": True},
+    },
+    {
+        "id": "local-validation",
+        "expected_action": "auto_execute",
+        "decision": {"local_validation": True, "reversible": True, "known_scope": True},
+    },
+    {
+        "id": "governance-record-update",
+        "expected_action": "auto_execute",
+        "decision": {"governance_record_update": True, "reversible": True, "known_scope": True},
+    },
+    {
+        "id": "normal-commit-push",
+        "expected_action": "auto_execute",
+        "decision": {"commit_push": True, "reversible": True, "known_scope": True},
+    },
+    {
+        "id": "reversible-default-assumption",
+        "expected_action": "record_assumption",
+        "decision": {
+            "routine_execution": True,
+            "reversible": True,
+            "known_scope": False,
+            "assumption_record": {
+                "assumption": "Use existing repository style for naming and structure.",
+                "basis": "Nearby files show the prevailing pattern.",
+                "reversibility": "Can be renamed or reverted in one focused commit.",
+                "validation": "Run the focused test or checker after the edit.",
+                "rollback": "Revert the focused change if validation fails.",
+            },
+        },
+    },
+]
+
+
+def classify_user_interruption(decision):
+    """Return the required user-interruption action for a decision fact map."""
+    if not isinstance(decision, dict):
+        return "ask_user"
+    if any(bool(decision.get(key)) for key in INTERRUPTION_POLICY_CRITICAL_TRIGGER_KEYS):
+        return "ask_user"
+    if bool(decision.get("irreversible")) or bool(decision.get("destructive")):
+        return "ask_user"
+    if bool(decision.get("routine_execution")) or bool(decision.get("local_validation")) or bool(decision.get("governance_record_update")) or bool(decision.get("commit_push")):
+        if decision.get("known_scope", False) is True:
+            return "auto_execute"
+        return "record_assumption"
+    if decision.get("reversible", False) is True:
+        return "record_assumption"
+    return "ask_user"
+
+
+def _validate_assumption_record(record):
+    if not isinstance(record, dict):
+        return ["assumption_record missing or invalid"]
+    issues = []
+    for field in INTERRUPTION_POLICY_REQUIRED_ASSUMPTION_FIELDS:
+        value = record.get(field)
+        if not isinstance(value, str) or len(value.strip()) < 12:
+            issues.append(f"assumption_record.{field} missing or too short")
+        elif INTERRUPTION_POLICY_PLACEHOLDER_RE.search(value):
+            issues.append(f"assumption_record.{field} must not be placeholder text")
+    return issues
+
+
+def _validate_interruption_policy_examples(examples):
+    issues = []
+    seen_critical = set()
+    seen_auto = set()
+    seen_assumption = False
+    for example in examples:
+        if not isinstance(example, dict):
+            issues.append("policy example must be object")
+            continue
+        example_id = example.get("id", "<unknown>")
+        decision = example.get("decision")
+        expected = example.get("expected_action")
+        actual = classify_user_interruption(decision)
+        if actual != expected:
+            issues.append(f"{example_id}: expected {expected}, got {actual}")
+        if isinstance(decision, dict):
+            seen_critical.update(key for key in INTERRUPTION_POLICY_CRITICAL_TRIGGER_KEYS if decision.get(key))
+            if expected == "auto_execute":
+                if decision.get("routine_execution"):
+                    seen_auto.add("routine_execution")
+                if decision.get("local_validation"):
+                    seen_auto.add("local_validation")
+                if decision.get("governance_record_update"):
+                    seen_auto.add("governance_record_update")
+                if decision.get("commit_push"):
+                    seen_auto.add("commit_push")
+            if expected == "record_assumption":
+                seen_assumption = True
+                issues.extend(f"{example_id}: {issue}" for issue in _validate_assumption_record(decision.get("assumption_record")))
+
+    missing_critical = sorted(set(INTERRUPTION_POLICY_CRITICAL_TRIGGER_KEYS) - seen_critical)
+    if missing_critical:
+        issues.append(f"missing critical trigger examples: {', '.join(missing_critical)}")
+    required_auto = {"routine_execution", "local_validation", "governance_record_update", "commit_push"}
+    missing_auto = sorted(required_auto - seen_auto)
+    if missing_auto:
+        issues.append(f"missing auto-execute examples: {', '.join(missing_auto)}")
+    if not seen_assumption:
+        issues.append("missing record_assumption example")
+    return issues
+
+
+def _validate_packet_interruption_policy(packet, task_id):
+    policy = packet.get("interruption_policy") if isinstance(packet, dict) else None
+    if not isinstance(policy, dict):
+        return [f"{task_id}: missing interruption_policy"]
+    issues = []
+    mode = policy.get("mode")
+    if not isinstance(mode, str) or "critical" not in mode.lower():
+        issues.append(f"{task_id}: interruption_policy.mode must declare critical-only/default execute behavior")
+    for field in ("critical_triggers", "auto_execute", "assumption_record", "interruption_budget"):
+        if field not in policy:
+            issues.append(f"{task_id}: interruption_policy.{field} missing")
+    critical = policy.get("critical_triggers")
+    if not isinstance(critical, list) or not all(isinstance(item, str) and len(item.strip()) >= 8 for item in critical):
+        issues.append(f"{task_id}: interruption_policy.critical_triggers must be a non-empty string array")
+    else:
+        critical_text = " ".join(critical).lower()
+        for token in INTERRUPTION_POLICY_PACKET_CRITICAL_SIGNALS:
+            if token not in critical_text:
+                issues.append(f"{task_id}: interruption_policy.critical_triggers missing {token}")
+    auto_execute = policy.get("auto_execute")
+    if not isinstance(auto_execute, list) or not all(isinstance(item, str) and len(item.strip()) >= 8 for item in auto_execute):
+        issues.append(f"{task_id}: interruption_policy.auto_execute must be a non-empty string array")
+    else:
+        auto_text = " ".join(auto_execute).lower()
+        if "routine" not in auto_text or "record" not in auto_text:
+            issues.append(f"{task_id}: interruption_policy.auto_execute must cover routine execution and record updates")
+    issues.extend(f"{task_id}: {issue}" for issue in _validate_assumption_record(policy.get("assumption_record")))
+    budget = policy.get("interruption_budget")
+    if not isinstance(budget, str) or not re.search(r"(?:one|1|一次|single)", budget, re.IGNORECASE):
+        issues.append(f"{task_id}: interruption_policy.interruption_budget must limit interruptions per work unit")
+    return issues
+
+
+def check_interruption_policy(
+    interaction_boundary_path=None,
+    template_path=None,
+    packet_path=None,
+    examples=None,
+):
+    """FIX-093: verify critical-only user interruption policy and packet fields."""
+    boundary_path = Path(interaction_boundary_path) if interaction_boundary_path is not None else INTERACTION_BOUNDARY_PATH
+    policy_template_path = Path(template_path) if template_path is not None else USER_INTERRUPTION_POLICY_TEMPLATE_PATH
+    result = {
+        "examples": [],
+        "required_tasks": [],
+        "entries": [],
+        "issues": [],
+        "pass": True,
+    }
+
+    if not boundary_path.is_file():
+        result["issues"].append(f"missing interaction boundary policy: {boundary_path}")
+    else:
+        boundary_text = boundary_path.read_text(encoding="utf-8")
+        for phrase in INTERRUPTION_POLICY_REQUIRED_PHRASES:
+            if phrase not in boundary_text:
+                result["issues"].append(f"interaction boundary missing required phrase: {phrase}")
+
+    if not policy_template_path.is_file():
+        result["issues"].append(f"missing interruption policy template: {policy_template_path}")
+    else:
+        template_text = policy_template_path.read_text(encoding="utf-8")
+        for phrase in INTERRUPTION_POLICY_REQUIRED_TEMPLATE_PHRASES:
+            if phrase not in template_text:
+                result["issues"].append(f"interruption policy template missing required phrase: {phrase}")
+
+    example_list = examples if examples is not None else INTERRUPTION_POLICY_DEFAULT_EXAMPLES
+    example_issues = _validate_interruption_policy_examples(example_list)
+    for example in example_list:
+        decision = example.get("decision", {}) if isinstance(example, dict) else {}
+        result["examples"].append({
+            "id": example.get("id", "<unknown>") if isinstance(example, dict) else "<invalid>",
+            "expected_action": example.get("expected_action") if isinstance(example, dict) else None,
+            "actual_action": classify_user_interruption(decision),
+        })
+    result["issues"].extend(example_issues)
+
+    tasks = _active_execution_packet_tasks()
+    result["required_tasks"] = [task["task_id"] for task in tasks]
+    if tasks:
+        packets, load_error = _load_execution_packets(packet_path)
+        if load_error:
+            result["issues"].append(load_error)
+        else:
+            for task in tasks:
+                task_id = task["task_id"]
+                packet = packets.get(task_id)
+                if not isinstance(packet, dict):
+                    entry_issues = ["missing execution packet"]
+                else:
+                    entry_issues = _validate_packet_interruption_policy(packet, task_id)
+                status = "PASS" if not entry_issues else "FAIL"
+                result["entries"].append({"task_id": task_id, "status": status, "issues": entry_issues})
+
+    if result["issues"] or any(entry["status"] == "FAIL" for entry in result["entries"]):
+        result["pass"] = False
+    return result
+
+
 def build_execution_packet(task):
     scope = task.get("closure_path") or task.get("title") or task["task_id"]
     task_label = f"{task['task_id']} {task.get('title', '').strip()}".strip()
@@ -6948,6 +7247,26 @@ def build_execution_packet(task):
             "rollback_plan": "TO_BE_DEFINED: how to revert or disable the slice if validation fails",
             "status": "TO_BE_DEFINED",
             "evidence": "TO_BE_DEFINED: latest demo proof or planned evidence location",
+        },
+        "interruption_policy": {
+            "mode": "critical-only: default execute routine reversible work and record assumptions when needed",
+            "critical_triggers": [
+                "Ask the user when product intent is unclear.",
+                "Ask the user when acceptance standard or done criteria are unclear.",
+                "Ask the user before irreversible, release, risk acceptance, external dependency, or mode change decisions.",
+            ],
+            "auto_execute": [
+                "Run routine execution, local validation, focused code edits, and governance record updates when scope is known and reversible.",
+                "Commit and push normal single-task changes when validation, evidence, and review gates are satisfied.",
+            ],
+            "assumption_record": {
+                "assumption": "TO_BE_DEFINED: default choice used for a reversible non-critical ambiguity",
+                "basis": "TO_BE_DEFINED: fact source or repository pattern supporting the default",
+                "reversibility": "TO_BE_DEFINED: why the choice can be changed without product damage",
+                "validation": "TO_BE_DEFINED: command or demo that will verify the assumption",
+                "rollback": "TO_BE_DEFINED: how to revert if the assumption is wrong",
+            },
+            "interruption_budget": "At most one user interruption per work unit unless a new critical trigger appears.",
         },
         "allowed_change_scope": [
             f"Only change files required by this task row: {scope}",
@@ -8545,6 +8864,31 @@ def cmd_check_governance(args):
     if scaffold_issues == 0:
         print("│  [PASS] Deterministic scaffold check passed.")
     all_issues += scaffold_issues
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 18i. User Interruption Policy v2 (FIX-093) ──
+    print("\n┌─ Check 18i: User Interruption Policy v2 (FIX-093) ───┐")
+    interruption_result = check_interruption_policy()
+    interruption_issues = len(interruption_result["issues"])
+    print(f"│  Policy example(s): {len(interruption_result['examples'])}")
+    print(f"│  Active packet policy field(s): {len(interruption_result['required_tasks'])}")
+    for issue in interruption_result["issues"]:
+        print(f"│  [FAIL] {issue}")
+    for example in interruption_result["examples"]:
+        if example["actual_action"] == example["expected_action"]:
+            print(f"│  [PASS] {example['id']}: {example['actual_action']}")
+        else:
+            interruption_issues += 1
+            print(f"│  [FAIL] {example['id']}: expected {example['expected_action']}, got {example['actual_action']}")
+    for entry in interruption_result["entries"]:
+        if entry["status"] == "FAIL":
+            interruption_issues += 1
+            print(f"│  [FAIL] {entry['task_id']}: {', '.join(entry['issues'])}")
+        else:
+            print(f"│  [PASS] {entry['task_id']}: interruption policy ready")
+    if interruption_issues == 0:
+        print("│  [PASS] User interruption policy check passed.")
+    all_issues += interruption_issues
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 19. Agent Team Review (SYSGAP-035) ──
@@ -11826,6 +12170,40 @@ def cmd_check_deterministic_scaffolds(args):
     print()
 
 
+def cmd_check_interruption_policy(args):
+    """Run User Interruption Policy v2 guard independently."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    result = check_interruption_policy()
+    print("\n=== User Interruption Policy Check ===")
+    print(f"  Policy example(s): {len(result['examples'])}")
+    print(f"  Active packet policy field(s): {len(result['required_tasks'])}")
+    issue_count = len(result["issues"])
+    for issue in result["issues"]:
+        print(f"  [FAIL] {issue}")
+    for example in result["examples"]:
+        if example["actual_action"] == example["expected_action"]:
+            print(f"  [PASS] {example['id']}: {example['actual_action']}")
+        else:
+            issue_count += 1
+            print(f"  [FAIL] {example['id']}: expected {example['expected_action']}, got {example['actual_action']}")
+    for entry in result["entries"]:
+        if entry["status"] == "FAIL":
+            issue_count += 1
+            print(f"  [FAIL] {entry['task_id']}: {', '.join(entry['issues'])}")
+        else:
+            print(f"  [PASS] {entry['task_id']}: interruption policy ready")
+    if issue_count:
+        print(f"\n  Result: FAILED — {issue_count} issue(s)")
+        if getattr(args, "fail_on_issues", False):
+            sys.exit(1)
+    else:
+        print("\n  Result: PASSED — user interruption policy is ready")
+    print()
+
+
 def cmd_generate_deterministic_scaffold(args):
     """Render a deterministic scaffold template to stdout or a file."""
     try:
@@ -12068,6 +12446,15 @@ def main():
     cds_p.add_argument("--fail-on-issues", action="store_true",
                        help="Exit with non-zero code if a deterministic scaffold is missing or incomplete")
 
+    # check-interruption-policy (FIX-093)
+    cip_p = subparsers.add_parser(
+        "check-interruption-policy",
+        aliases=["check-user-interruption-policy"],
+        help="Check critical-only user interruption policy, examples, and execution packet fields",
+    )
+    cip_p.add_argument("--fail-on-issues", action="store_true",
+                       help="Exit with non-zero code if interruption policy is missing or incomplete")
+
     # generate-deterministic-scaffold (FIX-092)
     gds_p = subparsers.add_parser(
         "generate-deterministic-scaffold",
@@ -12123,6 +12510,8 @@ def main():
         "check-vertical-slices": cmd_check_vertical_slices,
         "check-deterministic-scaffolds": cmd_check_deterministic_scaffolds,
         "check-scaffold-templates": cmd_check_deterministic_scaffolds,
+        "check-interruption-policy": cmd_check_interruption_policy,
+        "check-user-interruption-policy": cmd_check_interruption_policy,
         "generate-deterministic-scaffold": cmd_generate_deterministic_scaffold,
         "check-locks": cmd_check_agent_locks,
         "check-archive-integrity": cmd_check_archive_integrity,

@@ -5154,6 +5154,137 @@ class DeterministicScaffoldTests(unittest.TestCase):
             vw.render_deterministic_scaffold("space-elevator")
 
 
+class InterruptionPolicyTests(unittest.TestCase):
+    """FIX-093: user interruption policy must be deterministic and packet-backed."""
+
+    def _valid_policy(self):
+        return {
+            "mode": "critical-only: default execute routine reversible work and record assumptions when needed",
+            "critical_triggers": [
+                "Ask the user when product intent is unclear.",
+                "Ask the user when acceptance standard or done criteria are unclear.",
+                "Ask the user before irreversible, release, risk acceptance, external dependency, or mode change decisions.",
+            ],
+            "auto_execute": [
+                "Run routine execution, local validation, focused code edits, and governance record updates when scope is known and reversible.",
+                "Commit and push normal single-task changes when validation, evidence, and review gates are satisfied.",
+            ],
+            "assumption_record": {
+                "assumption": "Use the repository's existing interaction boundary vocabulary for reversible policy wording.",
+                "basis": "The nearby interaction-boundary rules already define maximum-autonomy and default-confirm behavior.",
+                "reversibility": "The wording is isolated to one policy field and can be adjusted in a focused follow-up.",
+                "validation": "Run check-interruption-policy with fail-on-issues to classify examples and packet fields.",
+                "rollback": "Revert the focused policy field if validation or review finds the assumption wrong.",
+            },
+            "interruption_budget": "At most one user interruption per work unit unless a new critical trigger appears.",
+        }
+
+    def _write_fixture(self, td, policy=None):
+        root = Path(td)
+        boundary = root / "interaction-boundary.md"
+        boundary.write_text("\n".join([
+            "# 用户交互边界规则",
+            "## User Interruption Policy v2",
+            "critical-only policy protects product intent, acceptance standard, irreversible choices, record_assumption, and interruption_budget.",
+        ]), encoding="utf-8")
+        template = root / "user-interruption-policy.md"
+        template.write_text("\n".join([
+            "interruption_policy:",
+            "critical_triggers:",
+            "auto_execute:",
+            "assumption_record:",
+            "interruption_budget:",
+        ]), encoding="utf-8")
+        plan = root / "plan-tracker.md"
+        plan.write_text("\n".join([
+            "# Plan",
+            "## 当前活跃事项",
+            "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+            "|--------|----|------|------|---------|---------|------|",
+            "| **P1** | FIX-093 | User Interruption Policy v2 | FIX-092 | 0.39.0 | policy checker | 🔄 进行中 |",
+        ]), encoding="utf-8")
+        packet_path = root / "execution-packets.json"
+        packet_path.write_text(json.dumps({
+            "version": 1,
+            "packets": {
+                "FIX-093": {
+                    "task_id": "FIX-093",
+                    "interruption_policy": policy or self._valid_policy(),
+                }
+            },
+        }, ensure_ascii=False), encoding="utf-8")
+        return boundary, template, plan, packet_path
+
+    def test_real_interruption_policy_passes(self):
+        r = vw.check_interruption_policy()
+        self.assertTrue(r["pass"], r)
+
+    def test_missing_interaction_boundary_fails(self):
+        with tempfile.TemporaryDirectory() as td:
+            boundary, template, plan, packet_path = self._write_fixture(td)
+            with patch.object(vw, "SAMPLE_PATH", plan):
+                r = vw.check_interruption_policy(boundary.with_name("missing.md"), template, packet_path)
+            self.assertFalse(r["pass"])
+            self.assertTrue(any("missing interaction boundary" in issue for issue in r["issues"]))
+
+    def test_missing_v2_phrase_fails(self):
+        with tempfile.TemporaryDirectory() as td:
+            boundary, template, plan, packet_path = self._write_fixture(td)
+            boundary.write_text("# 用户交互边界规则\ncritical-only only\n", encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", plan):
+                r = vw.check_interruption_policy(boundary, template, packet_path)
+            self.assertFalse(r["pass"])
+            self.assertTrue(any("User Interruption Policy v2" in issue for issue in r["issues"]))
+
+    def test_critical_product_intent_asks_user(self):
+        action = vw.classify_user_interruption({"product_intent_unclear": True, "reversible": True})
+        self.assertEqual(action, "ask_user")
+
+    def test_routine_scoped_execution_auto_executes(self):
+        action = vw.classify_user_interruption({"routine_execution": True, "known_scope": True, "reversible": True})
+        self.assertEqual(action, "auto_execute")
+
+    def test_reversible_unknown_scope_records_assumption(self):
+        action = vw.classify_user_interruption({"routine_execution": True, "known_scope": False, "reversible": True})
+        self.assertEqual(action, "record_assumption")
+
+    def test_examples_detect_misclassified_critical_decision(self):
+        examples = list(vw.INTERRUPTION_POLICY_DEFAULT_EXAMPLES)
+        bad = dict(examples[0])
+        bad["expected_action"] = "auto_execute"
+        examples[0] = bad
+        issues = vw._validate_interruption_policy_examples(examples)
+        self.assertTrue(any("product-intent-ambiguity" in issue and "expected auto_execute" in issue for issue in issues))
+
+    def test_packet_rejects_placeholder_assumption_record(self):
+        with tempfile.TemporaryDirectory() as td:
+            policy = self._valid_policy()
+            policy["assumption_record"] = dict(policy["assumption_record"])
+            policy["assumption_record"]["basis"] = "TO_BE_DEFINED: later"
+            boundary, template, plan, packet_path = self._write_fixture(td, policy)
+            with patch.object(vw, "SAMPLE_PATH", plan):
+                r = vw.check_interruption_policy(boundary, template, packet_path)
+            self.assertFalse(r["pass"])
+            entry = r["entries"][0]
+            self.assertTrue(any("placeholder" in issue for issue in entry["issues"]))
+
+    def test_packet_requires_release_risk_external_and_mode_triggers(self):
+        with tempfile.TemporaryDirectory() as td:
+            policy = self._valid_policy()
+            policy["critical_triggers"] = [
+                "Ask the user when product intent is unclear.",
+                "Ask the user when acceptance standard or done criteria are unclear.",
+                "Ask the user before irreversible destructive decisions.",
+            ]
+            boundary, template, plan, packet_path = self._write_fixture(td, policy)
+            with patch.object(vw, "SAMPLE_PATH", plan):
+                r = vw.check_interruption_policy(boundary, template, packet_path)
+            self.assertFalse(r["pass"])
+            issues = r["entries"][0]["issues"]
+            for token in ("release", "risk acceptance", "external dependency", "mode change"):
+                self.assertTrue(any(token in issue for issue in issues), issues)
+
+
 class CommitMsgFactGroundingHookTests(unittest.TestCase):
     """FIX-080: commit-msg hook must block product commits without fact basis."""
 

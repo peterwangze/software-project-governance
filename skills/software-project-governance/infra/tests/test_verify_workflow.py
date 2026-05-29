@@ -5006,6 +5006,154 @@ class VerticalSliceTests(unittest.TestCase):
             self.assertTrue(any("review/prose-only" in issue for issue in r["entries"][0]["issues"]))
 
 
+class DeterministicScaffoldTests(unittest.TestCase):
+    """FIX-092: weak-LLM deterministic scaffolds need templates, generator, and checks."""
+
+    def _write_valid_scaffold_set(self, base):
+        base.mkdir(parents=True, exist_ok=True)
+        (base / "index.md").write_text("\n".join([
+            "# Weak-LLM Deterministic Scaffolds",
+            "Use generate-deterministic-scaffold to render templates.",
+            "- web-app.md",
+            "- cli-tool.md",
+            "- workflow-plugin.md",
+        ]), encoding="utf-8")
+        template = "\n".join([
+            "# Deterministic Scaffold: {name}",
+            "This substantial template helps a persona deliver a user visible scenario with acceptance, quality budget, demo checklist, and vertical slice evidence.",
+            "## Product Success Contract",
+            "- Persona: user who needs the governed workflow.",
+            "- JTBD: complete one scenario with a visible result and a reliable command output.",
+            "- Non-goal: process records are not product success.",
+            "- Success metric: user can run a command and observe the expected result without relying on a review note.",
+            "## PRD-lite",
+            "- Problem: weak models need paved paths that state the user problem before implementation starts.",
+            "- Workflow: run a fixture, inspect output, and record evidence for a user-visible scenario.",
+            "## Executable Acceptance",
+            "- `python skills/software-project-governance/infra/verify_workflow.py check-deterministic-scaffolds --fail-on-issues` validates the scaffold.",
+            "- Expected output: the command reports pass and demo evidence includes command, exit code, and artifact path.",
+            "## Quality Budget",
+            "- performance: bounded command runtime.",
+            "- reliability: positive and negative fixture tests.",
+            "- security: no secret output.",
+            "- accessibility: readable command output.",
+            "- ux: clear next action and stable labels.",
+            "- maintainability: focused files and tests.",
+            "## Vertical Slice",
+            "- User-visible slice: user runs the command and observes PASS.",
+            "- Demo path: runnable command output.",
+            "- Scope guard: one template, one fixture, and focused tests.",
+            "- Rollback plan: remove the template and command registration.",
+            "## Demo Checklist",
+            "- Command exits zero for valid fixture.",
+            "- Invalid fixture reports field names.",
+            "- Evidence includes command and exit code.",
+            "## Tooling",
+            "- `python skills/software-project-governance/infra/verify_workflow.py check-product-success-contracts --fail-on-issues`",
+            "- `python skills/software-project-governance/infra/verify_workflow.py check-acceptance-contracts --fail-on-issues`",
+            "- `python skills/software-project-governance/infra/verify_workflow.py check-quality-budget --fail-on-issues`",
+            "- `python skills/software-project-governance/infra/verify_workflow.py check-vertical-slices --fail-on-issues`",
+        ])
+        for scaffold_type in vw.DETERMINISTIC_SCAFFOLD_TYPES:
+            (base / f"{scaffold_type}.md").write_text(template.format(name=scaffold_type), encoding="utf-8")
+
+    def test_real_deterministic_scaffolds_pass(self):
+        r = vw.check_deterministic_scaffolds()
+        self.assertTrue(r["pass"], r)
+        self.assertEqual(len(r["entries"]), len(vw.DETERMINISTIC_SCAFFOLD_TYPES))
+
+    def test_missing_scaffold_directory_fails(self):
+        with tempfile.TemporaryDirectory() as td:
+            r = vw.check_deterministic_scaffolds(Path(td) / "missing")
+            self.assertFalse(r["pass"])
+            self.assertTrue(any("missing scaffold directory" in issue for issue in r["issues"]))
+
+    def test_missing_scaffold_file_fails(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td) / "scaffolds"
+            self._write_valid_scaffold_set(base)
+            (base / "cli-tool.md").unlink()
+            r = vw.check_deterministic_scaffolds(base)
+            self.assertFalse(r["pass"])
+            self.assertTrue(any(entry["scaffold_type"] == "cli-tool" and entry["status"] == "FAIL" for entry in r["entries"]))
+
+    def test_scaffold_missing_required_section_fails(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td) / "scaffolds"
+            self._write_valid_scaffold_set(base)
+            path = base / "web-app.md"
+            path.write_text(path.read_text(encoding="utf-8").replace("## Demo Checklist", "## Demo Notes"), encoding="utf-8")
+            r = vw.check_deterministic_scaffolds(base)
+            self.assertFalse(r["pass"])
+            web_entry = next(entry for entry in r["entries"] if entry["scaffold_type"] == "web-app")
+            self.assertTrue(any("Demo Checklist" in issue for issue in web_entry["issues"]))
+
+    def test_scaffold_rejects_review_prose_placeholders(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td) / "scaffolds"
+            self._write_valid_scaffold_set(base)
+            path = base / "workflow-plugin.md"
+            path.write_text(path.read_text(encoding="utf-8") + "\nreview says looks good\n", encoding="utf-8")
+            r = vw.check_deterministic_scaffolds(base)
+            self.assertFalse(r["pass"])
+            plugin_entry = next(entry for entry in r["entries"] if entry["scaffold_type"] == "workflow-plugin")
+            self.assertTrue(any("placeholders or review/prose-only" in issue for issue in plugin_entry["issues"]))
+
+    def test_scaffold_rejects_empty_heading_shell(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td) / "scaffolds"
+            self._write_valid_scaffold_set(base)
+            hollow = "\n".join([
+                "# Deterministic Scaffold: hollow",
+                "This file has many words but avoids real section content. " * 30,
+                "## Product Success Contract",
+                "## PRD-lite",
+                "## Executable Acceptance",
+                "- `python skills/software-project-governance/infra/verify_workflow.py check-deterministic-scaffolds --fail-on-issues`",
+                "## Quality Budget",
+                "performance reliability security accessibility ux maintainability",
+                "## Vertical Slice",
+                "## Demo Checklist",
+                "## Tooling",
+            ])
+            (base / "web-app.md").write_text(hollow, encoding="utf-8")
+            r = vw.check_deterministic_scaffolds(base)
+            self.assertFalse(r["pass"])
+            web_entry = next(entry for entry in r["entries"] if entry["scaffold_type"] == "web-app")
+            self.assertTrue(any("substantive scaffold bullets" in issue for issue in web_entry["issues"]))
+
+    def test_scaffold_rejects_reviewer_approved_prose_bypass(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td) / "scaffolds"
+            self._write_valid_scaffold_set(base)
+            path = base / "cli-tool.md"
+            path.write_text(path.read_text(encoding="utf-8") + "\nDemo Checklist: review passed and reviewer approved the scaffold prose.\n", encoding="utf-8")
+            r = vw.check_deterministic_scaffolds(base)
+            self.assertFalse(r["pass"])
+            cli_entry = next(entry for entry in r["entries"] if entry["scaffold_type"] == "cli-tool")
+            self.assertTrue(any("placeholders or review/prose-only" in issue for issue in cli_entry["issues"]))
+
+    def test_scaffold_rejects_entire_repository_scope(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td) / "scaffolds"
+            self._write_valid_scaffold_set(base)
+            path = base / "workflow-plugin.md"
+            path.write_text(path.read_text(encoding="utf-8") + "\nScope guard: the entire repository is in scope for broad changes.\n", encoding="utf-8")
+            r = vw.check_deterministic_scaffolds(base)
+            self.assertFalse(r["pass"])
+            plugin_entry = next(entry for entry in r["entries"] if entry["scaffold_type"] == "workflow-plugin")
+            self.assertTrue(any("whole-project/all-files" in issue for issue in plugin_entry["issues"]))
+
+    def test_generator_renders_known_scaffold(self):
+        content = vw.render_deterministic_scaffold("web-app")
+        self.assertIn("## Product Success Contract", content)
+        self.assertIn("## Demo Checklist", content)
+
+    def test_generator_rejects_unknown_scaffold_type(self):
+        with self.assertRaises(ValueError):
+            vw.render_deterministic_scaffold("space-elevator")
+
+
 class CommitMsgFactGroundingHookTests(unittest.TestCase):
     """FIX-080: commit-msg hook must block product commits without fact basis."""
 

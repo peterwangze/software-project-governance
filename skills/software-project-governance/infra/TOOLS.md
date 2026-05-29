@@ -27,6 +27,7 @@
 | TOOL-019 | Executable Acceptance Contract guard | script | `infra/verify_workflow.py check-acceptance-contracts` + `check-governance` Check 18e | P0/P1 任务启动和关闭前检查可运行验收契约 | 开发/测试/发布/维护 | 是 |
 | TOOL-020 | Quality Budget Gate | script | `infra/verify_workflow.py check-quality-budget` + `check-governance` Check 18f | P0/P1 任务启动和关闭前检查六维质量预算 | 开发/测试/CI/CD/发布/维护 | 是 |
 | TOOL-021 | Vertical Slice Delivery Packet guard | script | `infra/verify_workflow.py check-vertical-slices` + `check-governance` Check 18g | P0/P1 任务启动和关闭前检查用户可见切片、demo、scope guard 和 rollback | 开发/测试/发布/维护 | 是 |
+| TOOL-022 | Weak-LLM Deterministic Scaffold generator/check | script + template | `infra/verify_workflow.py generate-deterministic-scaffold` + `check-deterministic-scaffolds` + `check-governance` Check 18h | 弱 LLM 或新项目启动时生成 PRD-lite、验收、质量预算、垂直切片和 demo checklist 脚手架 | 立项/开发/测试/发布/维护 | 是 |
 
 ## 工具详情
 
@@ -83,7 +84,7 @@
 ### TOOL-006：校验脚本
 
 - **文件**：`infra/verify_workflow.py`
-- **子命令**：`verify`（全量校验）、`status`（治理状态摘要）、`gate <G1-G11>`（Gate 检查）、`gates`（全部 Gate 状态）、`stage <stage-id>`（阶段状态）、`stages`（全部阶段状态）、`check-governance --fail-on-issues`（治理健康检查）、`e2e-check`（E2E proxy + fixture 分层检查）、`check-version-consistency`、`check-manifest-consistency`、`check-locks`、`check-archive-integrity`
+- **子命令**：`verify`（全量校验）、`status`（治理状态摘要）、`gate <G1-G11>`（Gate 检查）、`gates`（全部 Gate 状态）、`stage <stage-id>`（阶段状态）、`stages`（全部阶段状态）、`check-governance --fail-on-issues`（治理健康检查）、`e2e-check`（E2E proxy + fixture 分层检查）、`check-version-consistency`、`check-manifest-consistency`、`check-deterministic-scaffolds`、`generate-deterministic-scaffold`、`check-locks`、`check-archive-integrity`
 - **输入**：无（自动读取项目文件）
 - **输出**：校验结果（PASSED/FAILED）+ 治理状态摘要
 - **触发条件**：工作流资产变更后、Gate 检查时、定期巡检
@@ -243,6 +244,16 @@
 - **依赖**：`check-governance` Check 18g、`core/templates/vertical-slice-delivery-packet.md`、`core/templates/execution-packet.md`
 - **被以下子工作流使用**：开发（development）、测试（testing）、发布（release）、维护（maintenance）
 
+### TOOL-022：Weak-LLM Deterministic Scaffold generator/check
+
+- **文件**：`infra/verify_workflow.py` + `core/templates/deterministic-scaffolds/`
+- **子命令**：`generate-deterministic-scaffold --type web-app|cli-tool|workflow-plugin [--output PATH]`；`check-deterministic-scaffolds [--fail-on-issues]`
+- **输入**：项目类型；scaffold 模板库中的 `index.md`、`web-app.md`、`cli-tool.md`、`workflow-plugin.md`
+- **输出**：可直接放入目标项目的 PRD-lite / Product Success Contract / Executable Acceptance / Quality Budget / Vertical Slice / Demo Checklist / Tooling 脚手架；模板完整性检查结果
+- **触发条件**：弱 LLM 执行新项目、常见项目类型启动、P0/P1 任务缺产品成功路径、发布前确认 0.39.0 产品成功门禁工具库完整性
+- **依赖**：`check-governance` Check 18h、`core/templates/deterministic-scaffolds/index.md`
+- **被以下子工作流使用**：立项（initiation）、开发（development）、测试（testing）、发布（release）、维护（maintenance）
+
 ## 工具与子工作流的关系矩阵
 
 | 工具 | 立项 | 调研 | 选型 | 环境 | 架构 | 开发 | 测试 | CI/CD | 发布 | 运营 | 维护 |
@@ -267,6 +278,7 @@
 | Executable Acceptance Contract guard | | | | | ○ | ● | ● | | ● | | ● |
 | Quality Budget Gate | | | | | ○ | ● | ● | ● | ● | | ● |
 | Vertical Slice Delivery Packet guard | | | | | ○ | ● | ● | | ● | | ● |
+| Weak-LLM Deterministic Scaffold generator/check | ● | ○ | | | ○ | ● | ● | | ● | | ● |
 
 > ● 主要使用者  ○ 可选用
 

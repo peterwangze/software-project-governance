@@ -6733,6 +6733,166 @@ def check_vertical_slices(packet_path=None):
     return result
 
 
+DETERMINISTIC_SCAFFOLD_DIR = ROOT / "skills/software-project-governance/core/templates/deterministic-scaffolds"
+DETERMINISTIC_SCAFFOLD_TYPES = ("web-app", "cli-tool", "workflow-plugin")
+DETERMINISTIC_SCAFFOLD_REQUIRED_SECTIONS = (
+    "## Product Success Contract",
+    "## PRD-lite",
+    "## Executable Acceptance",
+    "## Quality Budget",
+    "## Vertical Slice",
+    "## Demo Checklist",
+    "## Tooling",
+)
+DETERMINISTIC_SCAFFOLD_REQUIRED_QUALITY_DIMENSIONS = QUALITY_BUDGET_DIMENSIONS
+DETERMINISTIC_SCAFFOLD_COMMAND_RE = re.compile(
+    r"(?m)^\s*-\s*`(?:(?:python|pytest|node|npm|pnpm|yarn|uv|bash|sh|make|go|cargo|npx|powershell|pwsh)\b|"
+    r"(?:\./|\.\\|skills/|skills\\|scripts/|scripts\\).+)",
+    re.IGNORECASE,
+)
+DETERMINISTIC_SCAFFOLD_SIGNAL_RE = re.compile(
+    r"(?:persona|jtbd|job to be done|non-goal|success metric|acceptance|quality budget|demo checklist|"
+    r"vertical slice|rollback|PRD-lite|用户|验收|质量预算|演示|切片)",
+    re.IGNORECASE,
+)
+DETERMINISTIC_SCAFFOLD_WEAK_RE = re.compile(
+    r"(?:review says|review passed|reviewer approved|approved.*prose|looks good|manual review only|"
+    r"ship it|whatever|\bTODO\b|\bTBD\b|\bTO_BE_DEFINED\b|待补|待定|占位)",
+    re.IGNORECASE,
+)
+DETERMINISTIC_SCAFFOLD_BROAD_SCOPE_RE = re.compile(
+    r"(?:entire repository|whole repository|whole repo|full repo|entire repo|"
+    r"entire project|whole project|whole codebase|all files|everything|\*|全仓|整个项目|所有文件|全部重构|无边界)",
+    re.IGNORECASE,
+)
+DETERMINISTIC_SCAFFOLD_SECTION_SIGNALS = {
+    "## Product Success Contract": (
+        r"(?:persona|用户|使用者)",
+        r"(?:jtbd|job to be done|desired outcome|用户任务)",
+        r"(?:non-goal|out of scope|非目标)",
+        r"(?:success metric|metric|成功指标)",
+    ),
+    "## PRD-lite": (
+        r"(?:problem|问题)",
+        r"(?:workflow|scenario|user-visible|用户可见|流程|场景)",
+    ),
+    "## Executable Acceptance": (
+        r"(?:expected output|exit code|pass|通过|预期输出)",
+        r"(?:demo evidence|evidence|artifact|证据)",
+    ),
+    "## Quality Budget": tuple(DETERMINISTIC_SCAFFOLD_REQUIRED_QUALITY_DIMENSIONS),
+    "## Vertical Slice": (
+        r"(?:user-visible slice|user can|用户可见|用户)",
+        r"(?:demo path|demo|smoke|command|演示)",
+        r"(?:scope guard|scope|范围)",
+        r"(?:rollback|回滚)",
+    ),
+    "## Demo Checklist": (
+        r"(?:command|demo|evidence|exit code|artifact|演示|证据)",
+        r"(?:expected|visible|invalid|failure|result|预期|结果)",
+    ),
+    "## Tooling": (
+        r"(?:check-product-success-contracts|check-acceptance-contracts|check-quality-budget|check-vertical-slices|check-deterministic-scaffolds)",
+    ),
+}
+
+
+def _scaffold_dir(scaffold_dir=None):
+    return Path(scaffold_dir) if scaffold_dir is not None else DETERMINISTIC_SCAFFOLD_DIR
+
+
+def _scaffold_path(scaffold_type, scaffold_dir=None):
+    return _scaffold_dir(scaffold_dir) / f"{scaffold_type}.md"
+
+
+def render_deterministic_scaffold(scaffold_type, scaffold_dir=None):
+    """FIX-092: render a deterministic scaffold template by type."""
+    if scaffold_type not in DETERMINISTIC_SCAFFOLD_TYPES:
+        valid = ", ".join(DETERMINISTIC_SCAFFOLD_TYPES)
+        raise ValueError(f"unknown scaffold type '{scaffold_type}'. Valid types: {valid}")
+    path = _scaffold_path(scaffold_type, scaffold_dir)
+    if not path.exists():
+        raise FileNotFoundError(f"missing scaffold template: {path}")
+    return path.read_text(encoding="utf-8")
+
+
+def _extract_markdown_section_body(text, heading):
+    pattern = re.compile(rf"(?ms)^{re.escape(heading)}\s*\n(.*?)(?=^## |\Z)")
+    match = pattern.search(text)
+    return match.group(1).strip() if match else ""
+
+
+def _validate_deterministic_scaffold_text(scaffold_type, text):
+    issues = []
+    if not isinstance(text, str) or len(text.strip()) < 800:
+        return [f"{scaffold_type}: scaffold template must be substantial and non-empty"]
+    if DETERMINISTIC_SCAFFOLD_WEAK_RE.search(text):
+        issues.append(f"{scaffold_type}: scaffold must not contain placeholders or review/prose-only language")
+    for section in DETERMINISTIC_SCAFFOLD_REQUIRED_SECTIONS:
+        if section not in text:
+            issues.append(f"{scaffold_type}: missing section {section}")
+            continue
+        body = _extract_markdown_section_body(text, section)
+        bullets = re.findall(r"(?m)^\s*-\s+\S", body)
+        if len(body) < 120 or len(bullets) < 2:
+            issues.append(f"{scaffold_type}: section {section} must contain substantive scaffold bullets")
+        for signal in DETERMINISTIC_SCAFFOLD_SECTION_SIGNALS.get(section, ()):
+            if not re.search(signal, body, re.IGNORECASE):
+                issues.append(f"{scaffold_type}: section {section} missing required signal {signal}")
+    if not DETERMINISTIC_SCAFFOLD_COMMAND_RE.search(text):
+        issues.append(f"{scaffold_type}: missing runnable command bullet in backticks")
+    if not DETERMINISTIC_SCAFFOLD_SIGNAL_RE.search(text):
+        issues.append(f"{scaffold_type}: missing product success, acceptance, quality, demo, or slice signals")
+    lower_text = text.lower()
+    for dimension in DETERMINISTIC_SCAFFOLD_REQUIRED_QUALITY_DIMENSIONS:
+        if dimension not in lower_text:
+            issues.append(f"{scaffold_type}: missing quality dimension {dimension}")
+    if DETERMINISTIC_SCAFFOLD_BROAD_SCOPE_RE.search(text):
+        issues.append(f"{scaffold_type}: scaffold scope guard must not allow whole-project/all-files delivery")
+    return issues
+
+
+def check_deterministic_scaffolds(scaffold_dir=None):
+    """FIX-092: verify weak-LLM deterministic scaffold templates and generator index."""
+    base = _scaffold_dir(scaffold_dir)
+    result = {
+        "required_types": list(DETERMINISTIC_SCAFFOLD_TYPES),
+        "entries": [],
+        "issues": [],
+        "pass": True,
+    }
+    index_path = base / "index.md"
+    if not base.exists():
+        result["pass"] = False
+        result["issues"].append(f"missing scaffold directory: {base}")
+        return result
+    if not index_path.exists():
+        result["pass"] = False
+        result["issues"].append(f"missing scaffold index: {index_path}")
+        index_text = ""
+    else:
+        index_text = index_path.read_text(encoding="utf-8")
+        if "generate-deterministic-scaffold" not in index_text:
+            result["pass"] = False
+            result["issues"].append("scaffold index must document generate-deterministic-scaffold")
+        for scaffold_type in DETERMINISTIC_SCAFFOLD_TYPES:
+            if f"{scaffold_type}.md" not in index_text:
+                result["pass"] = False
+                result["issues"].append(f"scaffold index missing {scaffold_type}.md")
+
+    for scaffold_type in DETERMINISTIC_SCAFFOLD_TYPES:
+        path = _scaffold_path(scaffold_type, base)
+        if not path.exists():
+            issues = [f"missing scaffold template: {path}"]
+        else:
+            issues = _validate_deterministic_scaffold_text(scaffold_type, path.read_text(encoding="utf-8"))
+        status = "PASS" if not issues else "FAIL"
+        if issues:
+            result["pass"] = False
+        result["entries"].append({"scaffold_type": scaffold_type, "path": str(path), "status": status, "issues": issues})
+    return result
+
+
 def build_execution_packet(task):
     scope = task.get("closure_path") or task.get("title") or task["task_id"]
     task_label = f"{task['task_id']} {task.get('title', '').strip()}".strip()
@@ -8367,6 +8527,24 @@ def cmd_check_governance(args):
     elif slice_issues == 0:
         print("│  [PASS] Vertical slice check passed.")
     all_issues += slice_issues
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 18h. Weak-LLM Deterministic Scaffolds (FIX-092) ──
+    print("\n┌─ Check 18h: Weak-LLM Deterministic Scaffolds (FIX-092) ┐")
+    scaffold_result = check_deterministic_scaffolds()
+    scaffold_issues = len(scaffold_result["issues"])
+    print(f"│  Required scaffold type(s): {len(scaffold_result['required_types'])}")
+    for issue in scaffold_result["issues"]:
+        print(f"│  [FAIL] {issue}")
+    for entry in scaffold_result["entries"]:
+        if entry["status"] == "FAIL":
+            scaffold_issues += 1
+            print(f"│  [FAIL] {entry['scaffold_type']}: {', '.join(entry['issues'])}")
+        else:
+            print(f"│  [PASS] {entry['scaffold_type']}: deterministic scaffold ready")
+    if scaffold_issues == 0:
+        print("│  [PASS] Deterministic scaffold check passed.")
+    all_issues += scaffold_issues
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 19. Agent Team Review (SYSGAP-035) ──
@@ -11621,6 +11799,53 @@ def cmd_check_vertical_slices(args):
     print()
 
 
+def cmd_check_deterministic_scaffolds(args):
+    """Run Weak-LLM Deterministic Scaffold guard independently."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    result = check_deterministic_scaffolds()
+    print("\n=== Weak-LLM Deterministic Scaffold Check ===")
+    print(f"  Required scaffold type(s): {len(result['required_types'])}")
+    issue_count = len(result["issues"])
+    for issue in result["issues"]:
+        print(f"  [FAIL] {issue}")
+    for entry in result["entries"]:
+        if entry["status"] == "FAIL":
+            issue_count += 1
+            print(f"  [FAIL] {entry['scaffold_type']}: {', '.join(entry['issues'])}")
+        else:
+            print(f"  [PASS] {entry['scaffold_type']}")
+    if issue_count:
+        print(f"\n  Result: FAILED — {issue_count} issue(s)")
+        if getattr(args, "fail_on_issues", False):
+            sys.exit(1)
+    else:
+        print("\n  Result: PASSED — deterministic scaffolds are ready")
+    print()
+
+
+def cmd_generate_deterministic_scaffold(args):
+    """Render a deterministic scaffold template to stdout or a file."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    try:
+        content = render_deterministic_scaffold(args.type)
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"ERROR: {exc}")
+        sys.exit(1)
+    if getattr(args, "output", None):
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(content, encoding="utf-8")
+        print(f"Wrote deterministic scaffold: {output_path}")
+    else:
+        print(content, end="" if content.endswith("\n") else "\n")
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="verify_workflow",
@@ -11834,6 +12059,25 @@ def main():
     cvs_p.add_argument("--fail-on-issues", action="store_true",
                        help="Exit with non-zero code if a required vertical slice packet is missing or incomplete")
 
+    # check-deterministic-scaffolds (FIX-092)
+    cds_p = subparsers.add_parser(
+        "check-deterministic-scaffolds",
+        aliases=["check-scaffold-templates"],
+        help="Check weak-LLM deterministic scaffold templates and index",
+    )
+    cds_p.add_argument("--fail-on-issues", action="store_true",
+                       help="Exit with non-zero code if a deterministic scaffold is missing or incomplete")
+
+    # generate-deterministic-scaffold (FIX-092)
+    gds_p = subparsers.add_parser(
+        "generate-deterministic-scaffold",
+        help="Render a deterministic scaffold template by project type",
+    )
+    gds_p.add_argument("--type", required=True, choices=DETERMINISTIC_SCAFFOLD_TYPES,
+                       help="Scaffold type to render")
+    gds_p.add_argument("--output",
+                       help="Optional output file. Omit to print the scaffold to stdout")
+
     # check-locks (FIX-056 Phase 2)
     subparsers.add_parser("check-locks",
                           help="Check agent-locks.json consistency (FIX-056 Check 25)")
@@ -11877,6 +12121,9 @@ def main():
         "check-acceptance-contracts": cmd_check_acceptance_contracts,
         "check-quality-budget": cmd_check_quality_budget,
         "check-vertical-slices": cmd_check_vertical_slices,
+        "check-deterministic-scaffolds": cmd_check_deterministic_scaffolds,
+        "check-scaffold-templates": cmd_check_deterministic_scaffolds,
+        "generate-deterministic-scaffold": cmd_generate_deterministic_scaffold,
         "check-locks": cmd_check_agent_locks,
         "check-archive-integrity": cmd_check_archive_integrity,
     }

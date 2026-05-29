@@ -4602,6 +4602,231 @@ class ExecutableAcceptanceContractTests(unittest.TestCase):
             self.assertTrue(r["pass"])
 
 
+class QualityBudgetTests(unittest.TestCase):
+    """FIX-090: active P0/P1 tasks need measurable quality budgets."""
+
+    def _setup_plan(self, tmpdir, rows):
+        root = Path(tmpdir)
+        gov = root / ".governance"; gov.mkdir(parents=True, exist_ok=True)
+        sp = gov / "plan-tracker.md"
+        sp.write_text("\n".join([
+            "# 计划跟踪",
+            "## 当前活跃事项",
+            "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+            "|--------|----|------|------|---------|---------|------|",
+            *rows,
+            "### 最近完成（本会话提交窗口）",
+            "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+            "| **P0** | FIX-000 | old | x | 0.1.0 | done | ✅ 已完成 |",
+        ]), encoding="utf-8")
+        return root, sp, gov / "execution-packets.json"
+
+    def _valid_quality_budget(self, status="PASS"):
+        return {
+            "dimensions": {
+                dimension: {
+                    "threshold": f"{dimension} threshold protects the affected user outcome",
+                    "validation": "python skills/software-project-governance/infra/verify_workflow.py check-quality-budget --fail-on-issues",
+                    "status": status,
+                    "evidence": f"{dimension} evidence summary is recorded with a concrete result",
+                    "exception": "",
+                }
+                for dimension in vw.QUALITY_BUDGET_DIMENSIONS
+            }
+        }
+
+    def test_generated_execution_packet_contains_failing_quality_budget_scaffold(self):
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P0** | FIX-090 | Quality Budget Gate | FIX-088 | 0.39.0 | quality budget | 📋 待启动 |",
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                payload = vw.generate_execution_packets()
+            packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_quality_budget(packet_path)
+            self.assertFalse(r["pass"])
+            self.assertIn("quality_budget", payload["packets"]["FIX-090"])
+            self.assertTrue(any("non-placeholder" in issue or "status" in issue for issue in r["entries"][0]["issues"]))
+
+    def test_explicit_quality_budget_passes(self):
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P0** | FIX-090 | Quality Budget Gate | FIX-088 | 0.39.0 | quality budget | 📋 待启动 |",
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                payload = vw.generate_execution_packets()
+            payload["packets"]["FIX-090"]["quality_budget"] = self._valid_quality_budget()
+            packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_quality_budget(packet_path)
+            self.assertTrue(r["pass"])
+
+    def test_missing_quality_budget_fails(self):
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P0** | FIX-090 | Quality Budget Gate | FIX-088 | 0.39.0 | quality budget | 📋 待启动 |",
+            ])
+            packet_path.write_text(json.dumps({
+                "version": 1,
+                "packets": {"FIX-090": {"task_id": "FIX-090", "goal": "quality budget"}},
+            }), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_quality_budget(packet_path)
+            self.assertFalse(r["pass"])
+            self.assertIn("missing quality_budget", r["entries"][0]["issues"])
+
+    def test_quality_budget_rejects_missing_dimension(self):
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P0** | FIX-090 | Quality Budget Gate | FIX-088 | 0.39.0 | quality budget | 📋 待启动 |",
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                payload = vw.generate_execution_packets()
+            budget = self._valid_quality_budget()
+            del budget["dimensions"]["security"]
+            payload["packets"]["FIX-090"]["quality_budget"] = budget
+            packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_quality_budget(packet_path)
+            self.assertFalse(r["pass"])
+            self.assertTrue(any("missing dimension" in issue and "security" in issue for issue in r["entries"][0]["issues"]))
+
+    def test_quality_budget_rejects_invalid_dimension(self):
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P0** | FIX-090 | Quality Budget Gate | FIX-088 | 0.39.0 | quality budget | 📋 待启动 |",
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                payload = vw.generate_execution_packets()
+            budget = self._valid_quality_budget()
+            budget["dimensions"]["delight"] = {
+                "threshold": "Delight is not one of the required quality budget dimensions",
+                "validation": "python skills/software-project-governance/infra/verify_workflow.py check-quality-budget --fail-on-issues",
+                "status": "PASS",
+                "evidence": "Invalid dimension evidence should not be accepted",
+                "exception": "",
+            }
+            payload["packets"]["FIX-090"]["quality_budget"] = budget
+            packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_quality_budget(packet_path)
+            self.assertFalse(r["pass"])
+            self.assertTrue(any("dimension invalid" in issue and "delight" in issue for issue in r["entries"][0]["issues"]))
+
+    def test_quality_budget_list_form_passes(self):
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P0** | FIX-090 | Quality Budget Gate | FIX-088 | 0.39.0 | quality budget | 📋 待启动 |",
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                payload = vw.generate_execution_packets()
+            budget = self._valid_quality_budget()
+            budget["dimensions"] = [
+                {"dimension": dimension, **payload}
+                for dimension, payload in budget["dimensions"].items()
+            ]
+            payload["packets"]["FIX-090"]["quality_budget"] = budget
+            packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_quality_budget(packet_path)
+            self.assertTrue(r["pass"])
+
+    def test_quality_budget_rejects_failed_dimension_status(self):
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P0** | FIX-090 | Quality Budget Gate | FIX-088 | 0.39.0 | quality budget | 🔄 进行中 |",
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                payload = vw.generate_execution_packets()
+            budget = self._valid_quality_budget()
+            budget["dimensions"]["performance"]["status"] = "FAIL"
+            payload["packets"]["FIX-090"]["quality_budget"] = budget
+            packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_quality_budget(packet_path)
+            self.assertFalse(r["pass"])
+            self.assertTrue(any("performance.status" in issue for issue in r["entries"][0]["issues"]))
+
+    def test_quality_budget_exemption_requires_exception(self):
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P0** | FIX-090 | Quality Budget Gate | FIX-088 | 0.39.0 | quality budget | 🔄 进行中 |",
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                payload = vw.generate_execution_packets()
+            budget = self._valid_quality_budget()
+            budget["dimensions"]["accessibility"]["status"] = "EXEMPT"
+            payload["packets"]["FIX-090"]["quality_budget"] = budget
+            packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_quality_budget(packet_path)
+            self.assertFalse(r["pass"])
+            self.assertTrue(any("accessibility.exception" in issue for issue in r["entries"][0]["issues"]))
+
+    def test_in_progress_quality_budget_rejects_not_run_yet(self):
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P0** | FIX-090 | Quality Budget Gate | FIX-088 | 0.39.0 | quality budget | 🔄 进行中 |",
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                payload = vw.generate_execution_packets()
+            payload["packets"]["FIX-090"]["quality_budget"] = self._valid_quality_budget(status="NOT_RUN_YET")
+            packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_quality_budget(packet_path)
+            self.assertFalse(r["pass"])
+            self.assertTrue(any("status must be PASS" in issue for issue in r["entries"][0]["issues"]))
+
+    def test_waiting_to_start_quality_budget_rejects_not_run_yet(self):
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P0** | FIX-090 | Quality Budget Gate | FIX-088 | 0.39.0 | quality budget | 📋 待启动 |",
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                payload = vw.generate_execution_packets()
+            payload["packets"]["FIX-090"]["quality_budget"] = self._valid_quality_budget(status="NOT_RUN_YET")
+            packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_quality_budget(packet_path)
+            self.assertFalse(r["pass"])
+            self.assertTrue(any("status must be PASS" in issue for issue in r["entries"][0]["issues"]))
+
+    def test_quality_budget_rejects_review_prose_only_budget(self):
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P0** | FIX-090 | Quality Budget Gate | FIX-088 | 0.39.0 | quality budget | 🔄 进行中 |",
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                payload = vw.generate_execution_packets()
+            budget = self._valid_quality_budget()
+            for dimension in vw.QUALITY_BUDGET_DIMENSIONS:
+                budget["dimensions"][dimension]["threshold"] = "quality is okay"
+                budget["dimensions"][dimension]["validation"] = "review artifact says okay"
+                budget["dimensions"][dimension]["evidence"] = "review says good"
+            payload["packets"]["FIX-090"]["quality_budget"] = budget
+            packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_quality_budget(packet_path)
+            self.assertFalse(r["pass"])
+            issues = " ".join(r["entries"][0]["issues"])
+            self.assertIn("review/prose-only", issues)
+            self.assertIn("validation must include", issues)
+
+    def test_pending_quality_budget_allows_not_run_yet(self):
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P1** | FIX-091 | Vertical Slice Delivery Packets | FIX-090 | 0.39.0 | slices | 📋 待实施 |",
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                payload = vw.generate_execution_packets()
+            payload["packets"]["FIX-091"]["quality_budget"] = self._valid_quality_budget(status="NOT_RUN_YET")
+            packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_quality_budget(packet_path)
+            self.assertTrue(r["pass"])
+
+
 class CommitMsgFactGroundingHookTests(unittest.TestCase):
     """FIX-080: commit-msg hook must block product commits without fact basis."""
 

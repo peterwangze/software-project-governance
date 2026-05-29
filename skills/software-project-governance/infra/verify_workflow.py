@@ -6448,6 +6448,172 @@ def check_acceptance_contracts(packet_path=None):
     return result
 
 
+QUALITY_BUDGET_DIMENSIONS = (
+    "performance",
+    "reliability",
+    "security",
+    "accessibility",
+    "ux",
+    "maintainability",
+)
+QUALITY_BUDGET_PASS_STATUSES = {"pass", "passed", "ok", "success", "通过"}
+QUALITY_BUDGET_PENDING_STATUSES = {"not_run_yet", "not run yet", "pending", "planned", "待运行", "未运行"}
+QUALITY_BUDGET_EXEMPT_STATUSES = {"exempt", "exception", "waived", "not_applicable", "n/a", "豁免", "不适用"}
+QUALITY_BUDGET_VALIDATION_SIGNAL_RE = re.compile(
+    r"(?:"
+    r"python|pytest|node|npm|pnpm|yarn|uv|bash|sh|make|go|cargo|npx|cmd|powershell|pwsh|"
+    r"test|check|scan|lint|audit|metric|score|coverage|threshold|budget|lighthouse|axe|"
+    r"latency|p95|error rate|vulnerability|security|a11y|accessibility|maintainability|"
+    r"测试|检查|扫描|指标|分数|覆盖率|阈值|预算|延迟|错误率|漏洞|安全|可访问|可维护"
+    r")",
+    re.IGNORECASE,
+)
+QUALITY_BUDGET_WEAK_PROSE_RE = re.compile(
+    r"(?:"
+    r"quality is okay|quality is ok|looks fine|looks good|good enough|review says|review artifact|"
+    r"manual reviewer|manual review|prose|subjective|"
+    r"质量还行|看起来可以|人工看看|人工审查|审查通过|主观"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _normalize_quality_dimension_name(value):
+    text = str(value or "").strip().lower()
+    aliases = {
+        "perf": "performance",
+        "性能": "performance",
+        "可靠性": "reliability",
+        "安全": "security",
+        "安全性": "security",
+        "a11y": "accessibility",
+        "可访问性": "accessibility",
+        "无障碍": "accessibility",
+        "user_experience": "ux",
+        "user experience": "ux",
+        "用户体验": "ux",
+        "体验": "ux",
+        "maint": "maintainability",
+        "可维护性": "maintainability",
+        "维护性": "maintainability",
+    }
+    return aliases.get(text, text)
+
+
+def _quality_budget_dimensions(contract):
+    dimensions = contract.get("dimensions") if isinstance(contract, dict) else None
+    if isinstance(dimensions, dict):
+        rows = []
+        for name, payload in dimensions.items():
+            if isinstance(payload, dict):
+                row = dict(payload)
+                row.setdefault("dimension", name)
+                rows.append(row)
+            else:
+                rows.append({"dimension": name, "value": payload})
+        return rows
+    if isinstance(dimensions, list):
+        return dimensions
+    return None
+
+
+def _is_quality_budget_pending_allowed(task):
+    status = str(task.get("status", "")).strip().lower()
+    return "待实施" in status or "pending" in status or "planned" in status
+
+
+def _has_quality_validation_signal(value):
+    if not _is_meaningful_product_success_text(value):
+        return False
+    return bool(QUALITY_BUDGET_VALIDATION_SIGNAL_RE.search(value))
+
+
+def _is_weak_quality_prose(value):
+    return isinstance(value, str) and bool(QUALITY_BUDGET_WEAK_PROSE_RE.search(value))
+
+
+def _validate_quality_budget(task, packet):
+    issues = []
+    contract = packet.get("quality_budget") if isinstance(packet, dict) else None
+    if not isinstance(contract, dict):
+        return ["missing quality_budget"]
+
+    dimensions = _quality_budget_dimensions(contract)
+    if not isinstance(dimensions, list) or not dimensions:
+        return ["quality_budget.dimensions missing or invalid"]
+
+    seen = set()
+    for idx, item in enumerate(dimensions):
+        if not isinstance(item, dict):
+            issues.append(f"quality_budget.dimensions[{idx}] must be an object")
+            continue
+        dimension = _normalize_quality_dimension_name(item.get("dimension"))
+        if dimension not in QUALITY_BUDGET_DIMENSIONS:
+            issues.append(f"quality_budget dimension invalid: {item.get('dimension')}")
+            continue
+        seen.add(dimension)
+
+        for field in ("threshold", "validation", "evidence"):
+            if not _is_meaningful_product_success_text(item.get(field)):
+                issues.append(f"quality_budget.{dimension}.{field} must be specific and non-placeholder")
+            elif _is_weak_quality_prose(item.get(field)):
+                issues.append(f"quality_budget.{dimension}.{field} must not be review/prose-only quality evidence")
+
+        if not _has_quality_validation_signal(item.get("validation")):
+            issues.append(f"quality_budget.{dimension}.validation must include a runnable command, metric, or quality signal")
+
+        status = str(item.get("status", "")).strip().lower()
+        if PRODUCT_SUCCESS_PLACEHOLDER_RE.search(status):
+            issues.append(f"quality_budget.{dimension}.status must be PASS, NOT_RUN_YET, or EXEMPT")
+            continue
+        if status in QUALITY_BUDGET_EXEMPT_STATUSES:
+            if not _is_meaningful_product_success_text(item.get("exception")):
+                issues.append(f"quality_budget.{dimension}.exception must justify the exemption")
+            continue
+        if status in QUALITY_BUDGET_PENDING_STATUSES and _is_quality_budget_pending_allowed(task):
+            continue
+        if status not in QUALITY_BUDGET_PASS_STATUSES:
+            issues.append(f"quality_budget.{dimension}.status must be PASS or a justified EXEMPT status")
+
+    missing = [dim for dim in QUALITY_BUDGET_DIMENSIONS if dim not in seen]
+    if missing:
+        issues.append(f"quality_budget missing dimension(s): {', '.join(missing)}")
+    return issues
+
+
+def check_quality_budget(packet_path=None):
+    """FIX-090: active P0/P1 tasks need quality budget thresholds and evidence."""
+    result = {
+        "required_tasks": [],
+        "entries": [],
+        "issues": [],
+        "pass": True,
+    }
+    tasks = _active_execution_packet_tasks()
+    result["required_tasks"] = [task["task_id"] for task in tasks]
+    if not tasks:
+        return result
+
+    packets, load_error = _load_execution_packets(packet_path)
+    if load_error:
+        result["pass"] = False
+        result["issues"].append(load_error)
+        return result
+
+    for task in tasks:
+        task_id = task["task_id"]
+        packet = packets.get(task_id)
+        if packet is None:
+            issues = ["missing execution packet"]
+        else:
+            issues = _validate_quality_budget(task, packet)
+        status = "PASS" if not issues else "FAIL"
+        if issues:
+            result["pass"] = False
+        result["entries"].append({"task_id": task_id, "status": status, "issues": issues})
+    return result
+
+
 def build_execution_packet(task):
     scope = task.get("closure_path") or task.get("title") or task["task_id"]
     task_label = f"{task['task_id']} {task.get('title', '').strip()}".strip()
@@ -6483,6 +6649,18 @@ def build_execution_packet(task):
                 "summary": "TO_BE_DEFINED: last run output summary with evidence location",
             },
             "demo_evidence": "TO_BE_DEFINED: demo, CLI output, or artifact proving the scenario",
+        },
+        "quality_budget": {
+            "dimensions": {
+                dimension: {
+                    "threshold": f"TO_BE_DEFINED: minimum acceptable {dimension} threshold for {task_label}",
+                    "validation": f"TO_BE_DEFINED: command, check, metric source, or quality signal for {dimension}",
+                    "status": "TO_BE_DEFINED",
+                    "evidence": f"TO_BE_DEFINED: latest {dimension} result or planned evidence location",
+                    "exception": "",
+                }
+                for dimension in QUALITY_BUDGET_DIMENSIONS
+            }
         },
         "allowed_change_scope": [
             f"Only change files required by this task row: {scope}",
@@ -8018,6 +8196,28 @@ def cmd_check_governance(args):
     elif accept_issues == 0:
         print("│  [PASS] Executable acceptance contract check passed.")
     all_issues += accept_issues
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 18f. Quality Budget Gate (FIX-090) ──
+    print("\n┌─ Check 18f: Quality Budget Gate (FIX-090) ───────────┐")
+    quality_result = check_quality_budget()
+    quality_issues = 0
+    print(f"│  Required active P0/P1 quality budget(s): {len(quality_result['required_tasks'])}")
+    if quality_result["issues"]:
+        quality_issues += len(quality_result["issues"])
+        for issue in quality_result["issues"]:
+            print(f"│  [FAIL] {issue}")
+    for entry in quality_result["entries"]:
+        if entry["status"] == "FAIL":
+            quality_issues += 1
+            print(f"│  [FAIL] {entry['task_id']}: {', '.join(entry['issues'])}")
+        else:
+            print(f"│  [PASS] {entry['task_id']}: quality budget ready")
+    if not quality_result["required_tasks"]:
+        print("│  [PASS] No active P0/P1 tasks require quality budgets.")
+    elif quality_issues == 0:
+        print("│  [PASS] Quality budget check passed.")
+    all_issues += quality_issues
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 19. Agent Team Review (SYSGAP-035) ──
@@ -11218,6 +11418,33 @@ def cmd_check_acceptance_contracts(args):
     print()
 
 
+def cmd_check_quality_budget(args):
+    """Run Quality Budget Gate independently."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    result = check_quality_budget()
+    print("\n=== Quality Budget Check ===")
+    print(f"  Required active P0/P1 quality budget(s): {len(result['required_tasks'])}")
+    issue_count = len(result["issues"])
+    for issue in result["issues"]:
+        print(f"  [FAIL] {issue}")
+    for entry in result["entries"]:
+        if entry["status"] == "FAIL":
+            issue_count += 1
+            print(f"  [FAIL] {entry['task_id']}: {', '.join(entry['issues'])}")
+        else:
+            print(f"  [PASS] {entry['task_id']}")
+    if issue_count:
+        print(f"\n  Result: FAILED — {issue_count} issue(s)")
+        if getattr(args, "fail_on_issues", False):
+            sys.exit(1)
+    else:
+        print("\n  Result: PASSED — quality budgets are ready")
+    print()
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="verify_workflow",
@@ -11415,6 +11642,14 @@ def main():
     cac_p.add_argument("--fail-on-issues", action="store_true",
                        help="Exit with non-zero code if a required acceptance contract is missing or incomplete")
 
+    # check-quality-budget (FIX-090)
+    cqb_p = subparsers.add_parser(
+        "check-quality-budget",
+        help="Check quality budgets for active P0/P1 execution packets",
+    )
+    cqb_p.add_argument("--fail-on-issues", action="store_true",
+                       help="Exit with non-zero code if a required quality budget is missing or incomplete")
+
     # check-locks (FIX-056 Phase 2)
     subparsers.add_parser("check-locks",
                           help="Check agent-locks.json consistency (FIX-056 Check 25)")
@@ -11456,6 +11691,7 @@ def main():
         "check-hot-fact-source": cmd_check_hot_fact_source,
         "check-product-success-contracts": cmd_check_product_success_contracts,
         "check-acceptance-contracts": cmd_check_acceptance_contracts,
+        "check-quality-budget": cmd_check_quality_budget,
         "check-locks": cmd_check_agent_locks,
         "check-archive-integrity": cmd_check_archive_integrity,
     }

@@ -219,6 +219,16 @@
 - **依赖**：`check-governance` Check 18e、`core/templates/executable-acceptance-contract.md`、`core/templates/execution-packet.md`
 - **被以下子工作流使用**：开发（development）、测试（testing）、发布（release）、维护（maintenance）
 
+### TOOL-020：Quality Budget Gate
+
+- **文件**：`infra/verify_workflow.py`
+- **子命令**：`check-quality-budget [--fail-on-issues]`
+- **输入**：`.governance/execution-packets.json` 中活跃 P0/P1 任务的 `quality_budget`
+- **输出**：每个活跃任务的 performance、reliability、security、accessibility、ux、maintainability 六维质量预算检查结果；拒绝占位草案、缺维度、失败状态和无理由例外
+- **触发条件**：P0/P1 任务启动前、任务关闭前、发布前质量门禁复核时
+- **依赖**：`check-governance` Check 18f、`core/templates/quality-budget.md`、`core/templates/execution-packet.md`
+- **被以下子工作流使用**：开发（development）、测试（testing）、CI/CD、发布（release）、维护（maintenance）
+
 ## 工具与子工作流的关系矩阵
 
 | 工具 | 立项 | 调研 | 选型 | 环境 | 架构 | 开发 | 测试 | CI/CD | 发布 | 运营 | 维护 |
@@ -241,6 +251,7 @@
 | Hot fact-source consistency guard | | | | | ○ | | | | ● | | ● |
 | Product Success Contract guard | ● | | | | ○ | ● | ● | | ● | | ● |
 | Executable Acceptance Contract guard | | | | | ○ | ● | ● | | ● | | ● |
+| Quality Budget Gate | | | | | ○ | ● | ● | ● | ● | | ● |
 
 > ● 主要使用者  ○ 可选用
 

@@ -23,6 +23,10 @@
 | TOOL-015 | AI execution packet 生成与检查 | script | `infra/verify_workflow.py execution-packet` + `check-governance` Check 18c | 活跃 P0/P1 任务开始前生成短上下文执行包，提交前验证短包存在且字段有效 | 全部阶段 | 是 |
 | TOOL-016 | Projection sync guard | script | `infra/verify_workflow.py check-projection-sync` + `check-governance` Check 28b | workflow source、target fixture、native entry、plugin manifest 变更后 | 测试/发布/维护 | 是 |
 | TOOL-017 | Hot fact-source consistency guard | script | `infra/verify_workflow.py check-hot-fact-source` + `check-governance` Check 28c | plan-tracker 热区项目配置、总览、活跃事项、路线图、依赖链和需求矩阵变更后 | 发布/维护 | 是 |
+| TOOL-018 | Product Success Contract guard | script | `infra/verify_workflow.py check-product-success-contracts` + `check-governance` Check 18d | P0/P1 任务启动和关闭前检查产品成功契约 | 开发/测试/发布/维护 | 是 |
+| TOOL-019 | Executable Acceptance Contract guard | script | `infra/verify_workflow.py check-acceptance-contracts` + `check-governance` Check 18e | P0/P1 任务启动和关闭前检查可运行验收契约 | 开发/测试/发布/维护 | 是 |
+| TOOL-020 | Quality Budget Gate | script | `infra/verify_workflow.py check-quality-budget` + `check-governance` Check 18f | P0/P1 任务启动和关闭前检查六维质量预算 | 开发/测试/CI/CD/发布/维护 | 是 |
+| TOOL-021 | Vertical Slice Delivery Packet guard | script | `infra/verify_workflow.py check-vertical-slices` + `check-governance` Check 18g | P0/P1 任务启动和关闭前检查用户可见切片、demo、scope guard 和 rollback | 开发/测试/发布/维护 | 是 |
 
 ## 工具详情
 
@@ -229,6 +233,16 @@
 - **依赖**：`check-governance` Check 18f、`core/templates/quality-budget.md`、`core/templates/execution-packet.md`
 - **被以下子工作流使用**：开发（development）、测试（testing）、CI/CD、发布（release）、维护（maintenance）
 
+### TOOL-021：Vertical Slice Delivery Packet guard
+
+- **文件**：`infra/verify_workflow.py`
+- **子命令**：`check-vertical-slices [--fail-on-issues]`
+- **输入**：`.governance/execution-packets.json` 中活跃 P0/P1 任务的 `vertical_slice`
+- **输出**：每个活跃任务的用户可见切片、demo 路径、范围边界、回滚方案、状态和证据检查结果；拒绝占位草案、纯技术层切片、不可演示路径、全仓范围和 review/prose-only 证据
+- **触发条件**：P0/P1 任务启动前、任务关闭前、发布前垂直切片门禁复核时
+- **依赖**：`check-governance` Check 18g、`core/templates/vertical-slice-delivery-packet.md`、`core/templates/execution-packet.md`
+- **被以下子工作流使用**：开发（development）、测试（testing）、发布（release）、维护（maintenance）
+
 ## 工具与子工作流的关系矩阵
 
 | 工具 | 立项 | 调研 | 选型 | 环境 | 架构 | 开发 | 测试 | CI/CD | 发布 | 运营 | 维护 |
@@ -252,6 +266,7 @@
 | Product Success Contract guard | ● | | | | ○ | ● | ● | | ● | | ● |
 | Executable Acceptance Contract guard | | | | | ○ | ● | ● | | ● | | ● |
 | Quality Budget Gate | | | | | ○ | ● | ● | ● | ● | | ● |
+| Vertical Slice Delivery Packet guard | | | | | ○ | ● | ● | | ● | | ● |
 
 > ● 主要使用者  ○ 可选用
 

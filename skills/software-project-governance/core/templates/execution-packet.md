@@ -90,6 +90,14 @@
           }
         }
       },
+      "vertical_slice": {
+        "user_visible_slice": "TO_BE_DEFINED: smallest user-visible behavior or scenario this task will make usable",
+        "demo_path": "TO_BE_DEFINED: runnable demo, smoke test, URL, screenshot, or command proving the slice",
+        "scope_guard": "TO_BE_DEFINED: narrow files and behavior in scope for this slice only",
+        "rollback_plan": "TO_BE_DEFINED: how to revert or disable the slice if validation fails",
+        "status": "TO_BE_DEFINED",
+        "evidence": "TO_BE_DEFINED: latest demo proof or planned evidence location"
+      },
       "allowed_change_scope": [
         "Only change files required by this task row.",
         "Keep unrelated refactors and release version bumps out of this task."
@@ -129,3 +137,5 @@ python skills/software-project-governance/infra/verify_workflow.py execution-pac
 `check-governance` 的 Check 18e 会检查 `acceptance_contract`。活跃 P0/P1 任务必须把 `scenario`、`command`、`expected_output`、`last_run` 和 `demo_evidence` 替换为具体内容；`command` 必须是可运行验收/E2E/smoke/test/check 命令，`last_run.status` 必须为 PASS 且 `exit_code` 必须为 0。
 
 `check-governance` 的 Check 18f 会检查 `quality_budget`。活跃 P0/P1 任务必须覆盖 performance、reliability、security、accessibility、ux、maintainability 六个维度；每个维度必须有具体阈值、验证信号、状态和证据。已关闭或进行中任务必须为 PASS，或用 EXEMPT/not_applicable 并写清例外理由；待实施任务可以暂用 NOT_RUN_YET，但仍必须写清阈值、验证方式和证据计划。
+
+`check-governance` 的 Check 18g 会检查 `vertical_slice`。活跃 P0/P1 任务必须写清最小用户可见切片、可演示路径、范围边界、回滚方案、状态和证据；进行中或关闭任务必须为 PASS，待实施任务可以暂用 NOT_RUN_YET。只写内部技术层、全仓大改、人工审查通过或主观描述不能替代可演示切片。

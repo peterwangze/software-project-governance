@@ -6614,6 +6614,125 @@ def check_quality_budget(packet_path=None):
     return result
 
 
+VERTICAL_SLICE_REQUIRED_FIELDS = (
+    "user_visible_slice",
+    "demo_path",
+    "scope_guard",
+    "rollback_plan",
+    "status",
+    "evidence",
+)
+VERTICAL_SLICE_PASS_STATUSES = {"pass", "passed", "ok", "success", "通过"}
+VERTICAL_SLICE_PENDING_STATUSES = {"not_run_yet", "not run yet", "pending", "planned", "待运行", "未运行"}
+VERTICAL_SLICE_DEMO_SIGNAL_RE = re.compile(
+    r"(?:"
+    r"\b(?:python|pytest|node|npm|pnpm|yarn|uv|bash|sh|make|go|cargo|npx|powershell|pwsh|"
+    r"test|check|smoke|e2e|demo|browser|screenshot)\b|localhost|https?://|"
+    r"测试|检查|冒烟|演示|截图|浏览器|验收"
+    r")",
+    re.IGNORECASE,
+)
+VERTICAL_SLICE_USER_SIGNAL_RE = re.compile(
+    r"(?:user|persona|customer|operator|viewer|admin|用户|客户|使用者|操作者|可见|页面|命令输出|行为|场景)",
+    re.IGNORECASE,
+)
+VERTICAL_SLICE_BEHAVIOR_SIGNAL_RE = re.compile(
+    r"(?:\b(?:run|observe|see|click|open|use|complete|display|command output|scenario|page|form|result|pass)\b|"
+    r"运行|观察|看到|点击|打开|使用|完成|显示|命令输出|场景|页面|表单|结果|通过)",
+    re.IGNORECASE,
+)
+VERTICAL_SLICE_TECH_LAYER_RE = re.compile(
+    r"(?:repository|service layer|abstraction|refactor|backend|database|schema|dao|model layer|internal|"
+    r"技术层|服务层|抽象|重构|后端|数据库|数据表|内部)",
+    re.IGNORECASE,
+)
+VERTICAL_SLICE_BROAD_SCOPE_RE = re.compile(
+    r"(?:entire project|whole project|whole codebase|all files|everything|\*|全仓|整个项目|所有文件|全部重构|无边界)",
+    re.IGNORECASE,
+)
+VERTICAL_SLICE_WEAK_PROSE_RE = re.compile(
+    r"(?:review says|review artifact|manual review|looks good|looks fine|prose|subjective|审查通过|人工审查|看起来可以|主观)",
+    re.IGNORECASE,
+)
+
+
+def _is_vertical_slice_pending_allowed(task):
+    status = str(task.get("status", "")).strip().lower()
+    return "待实施" in status or "pending" in status or "planned" in status
+
+
+def _validate_vertical_slice(task, packet):
+    issues = []
+    contract = packet.get("vertical_slice") if isinstance(packet, dict) else None
+    if not isinstance(contract, dict):
+        return ["missing vertical_slice"]
+
+    for field in VERTICAL_SLICE_REQUIRED_FIELDS:
+        if field == "status":
+            continue
+        if not _is_meaningful_product_success_text(contract.get(field)):
+            issues.append(f"vertical_slice.{field} must be specific and non-placeholder")
+        elif _is_weak_quality_prose(contract.get(field)) or VERTICAL_SLICE_WEAK_PROSE_RE.search(str(contract.get(field))):
+            issues.append(f"vertical_slice.{field} must not be review/prose-only evidence")
+
+    user_slice = str(contract.get("user_visible_slice", ""))
+    if _is_meaningful_product_success_text(user_slice) and not VERTICAL_SLICE_USER_SIGNAL_RE.search(user_slice):
+        issues.append("vertical_slice.user_visible_slice must describe a user-observable behavior or scenario")
+    if VERTICAL_SLICE_TECH_LAYER_RE.search(user_slice) and not VERTICAL_SLICE_BEHAVIOR_SIGNAL_RE.search(user_slice):
+        issues.append("vertical_slice.user_visible_slice must not disguise a technical-layer change as a user-visible slice")
+
+    demo_path = str(contract.get("demo_path", ""))
+    if _is_meaningful_product_success_text(demo_path) and not VERTICAL_SLICE_DEMO_SIGNAL_RE.search(demo_path):
+        issues.append("vertical_slice.demo_path must include a runnable demo, smoke, test, check, URL, screenshot, or command signal")
+
+    scope_guard = str(contract.get("scope_guard", ""))
+    if VERTICAL_SLICE_BROAD_SCOPE_RE.search(scope_guard):
+        issues.append("vertical_slice.scope_guard must define a narrow slice boundary, not the whole project/codebase")
+
+    status = str(contract.get("status", "")).strip().lower()
+    if PRODUCT_SUCCESS_PLACEHOLDER_RE.search(status):
+        issues.append("vertical_slice.status must be PASS or NOT_RUN_YET for planned work")
+    elif status in VERTICAL_SLICE_PENDING_STATUSES and _is_vertical_slice_pending_allowed(task):
+        pass
+    elif status not in VERTICAL_SLICE_PASS_STATUSES:
+        issues.append("vertical_slice.status must be PASS unless the task is explicitly pending/planned")
+
+    return issues
+
+
+def check_vertical_slices(packet_path=None):
+    """FIX-091: active P0/P1 tasks need usable vertical-slice delivery packets."""
+    result = {
+        "required_tasks": [],
+        "entries": [],
+        "issues": [],
+        "pass": True,
+    }
+    tasks = _active_execution_packet_tasks()
+    result["required_tasks"] = [task["task_id"] for task in tasks]
+    if not tasks:
+        return result
+
+    packets, load_error = _load_execution_packets(packet_path)
+    if load_error:
+        result["pass"] = False
+        result["issues"].append(load_error)
+        return result
+
+    for task in tasks:
+        task_id = task["task_id"]
+        packet = packets.get(task_id)
+        if packet is None:
+            issues = ["missing execution packet"]
+        else:
+            issues = _validate_vertical_slice(task, packet)
+        status = "PASS" if not issues else "FAIL"
+        if issues:
+            result["pass"] = False
+        result["entries"].append({"task_id": task_id, "status": status, "issues": issues})
+    return result
+
+
 def build_execution_packet(task):
     scope = task.get("closure_path") or task.get("title") or task["task_id"]
     task_label = f"{task['task_id']} {task.get('title', '').strip()}".strip()
@@ -6661,6 +6780,14 @@ def build_execution_packet(task):
                 }
                 for dimension in QUALITY_BUDGET_DIMENSIONS
             }
+        },
+        "vertical_slice": {
+            "user_visible_slice": f"TO_BE_DEFINED: smallest user-visible slice for {task_label}",
+            "demo_path": "TO_BE_DEFINED: runnable demo, smoke test, URL, screenshot, or command proving the slice",
+            "scope_guard": f"TO_BE_DEFINED: files and behavior in scope for this slice only ({scope})",
+            "rollback_plan": "TO_BE_DEFINED: how to revert or disable the slice if validation fails",
+            "status": "TO_BE_DEFINED",
+            "evidence": "TO_BE_DEFINED: latest demo proof or planned evidence location",
         },
         "allowed_change_scope": [
             f"Only change files required by this task row: {scope}",
@@ -8218,6 +8345,28 @@ def cmd_check_governance(args):
     elif quality_issues == 0:
         print("│  [PASS] Quality budget check passed.")
     all_issues += quality_issues
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 18g. Vertical Slice Delivery Packets (FIX-091) ──
+    print("\n┌─ Check 18g: Vertical Slice Delivery Packets (FIX-091) ┐")
+    slice_result = check_vertical_slices()
+    slice_issues = 0
+    print(f"│  Required active P0/P1 vertical slice(s): {len(slice_result['required_tasks'])}")
+    if slice_result["issues"]:
+        slice_issues += len(slice_result["issues"])
+        for issue in slice_result["issues"]:
+            print(f"│  [FAIL] {issue}")
+    for entry in slice_result["entries"]:
+        if entry["status"] == "FAIL":
+            slice_issues += 1
+            print(f"│  [FAIL] {entry['task_id']}: {', '.join(entry['issues'])}")
+        else:
+            print(f"│  [PASS] {entry['task_id']}: vertical slice ready")
+    if not slice_result["required_tasks"]:
+        print("│  [PASS] No active P0/P1 tasks require vertical slices.")
+    elif slice_issues == 0:
+        print("│  [PASS] Vertical slice check passed.")
+    all_issues += slice_issues
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 19. Agent Team Review (SYSGAP-035) ──
@@ -11445,6 +11594,33 @@ def cmd_check_quality_budget(args):
     print()
 
 
+def cmd_check_vertical_slices(args):
+    """Run Vertical Slice Delivery Packet guard independently."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    result = check_vertical_slices()
+    print("\n=== Vertical Slice Check ===")
+    print(f"  Required active P0/P1 vertical slice(s): {len(result['required_tasks'])}")
+    issue_count = len(result["issues"])
+    for issue in result["issues"]:
+        print(f"  [FAIL] {issue}")
+    for entry in result["entries"]:
+        if entry["status"] == "FAIL":
+            issue_count += 1
+            print(f"  [FAIL] {entry['task_id']}: {', '.join(entry['issues'])}")
+        else:
+            print(f"  [PASS] {entry['task_id']}")
+    if issue_count:
+        print(f"\n  Result: FAILED — {issue_count} issue(s)")
+        if getattr(args, "fail_on_issues", False):
+            sys.exit(1)
+    else:
+        print("\n  Result: PASSED — vertical slice packets are ready")
+    print()
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="verify_workflow",
@@ -11650,6 +11826,14 @@ def main():
     cqb_p.add_argument("--fail-on-issues", action="store_true",
                        help="Exit with non-zero code if a required quality budget is missing or incomplete")
 
+    # check-vertical-slices (FIX-091)
+    cvs_p = subparsers.add_parser(
+        "check-vertical-slices",
+        help="Check vertical slice delivery packets for active P0/P1 execution packets",
+    )
+    cvs_p.add_argument("--fail-on-issues", action="store_true",
+                       help="Exit with non-zero code if a required vertical slice packet is missing or incomplete")
+
     # check-locks (FIX-056 Phase 2)
     subparsers.add_parser("check-locks",
                           help="Check agent-locks.json consistency (FIX-056 Check 25)")
@@ -11692,6 +11876,7 @@ def main():
         "check-product-success-contracts": cmd_check_product_success_contracts,
         "check-acceptance-contracts": cmd_check_acceptance_contracts,
         "check-quality-budget": cmd_check_quality_budget,
+        "check-vertical-slices": cmd_check_vertical_slices,
         "check-locks": cmd_check_agent_locks,
         "check-archive-integrity": cmd_check_archive_integrity,
     }

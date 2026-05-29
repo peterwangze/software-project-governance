@@ -4827,6 +4827,185 @@ class QualityBudgetTests(unittest.TestCase):
             self.assertTrue(r["pass"])
 
 
+class VerticalSliceTests(unittest.TestCase):
+    """FIX-091: active P0/P1 tasks need user-visible vertical slices."""
+
+    def _setup_plan(self, tmpdir, rows):
+        root = Path(tmpdir)
+        gov = root / ".governance"; gov.mkdir(parents=True, exist_ok=True)
+        sp = gov / "plan-tracker.md"
+        sp.write_text("\n".join([
+            "# 计划跟踪",
+            "## 当前活跃事项",
+            "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+            "|--------|----|------|------|---------|---------|------|",
+            *rows,
+            "### 最近完成（本会话提交窗口）",
+            "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+            "| **P0** | FIX-000 | old | x | 0.1.0 | done | ✅ 已完成 |",
+        ]), encoding="utf-8")
+        return root, sp, gov / "execution-packets.json"
+
+    def _valid_vertical_slice(self, status="PASS"):
+        return {
+            "user_visible_slice": "User can run the check-vertical-slices command and observe PASS for demo path, scope guard, and rollback plan",
+            "demo_path": "python skills/software-project-governance/infra/verify_workflow.py check-vertical-slices --fail-on-issues",
+            "scope_guard": "Only execution packet vertical_slice fields, Check 18g, CLI command, template docs, and regression tests are in scope",
+            "rollback_plan": "Revert the FIX-091 commit or remove Check 18g and the vertical_slice packet fields if validation fails",
+            "status": status,
+            "evidence": "VerticalSliceTests and check-vertical-slices output provide the demo proof",
+        }
+
+    def test_generated_execution_packet_contains_failing_vertical_slice_scaffold(self):
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P1** | FIX-091 | Vertical Slice Delivery Packets | FIX-090 | 0.39.0 | slices | 📋 待实施 |",
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                payload = vw.generate_execution_packets()
+            packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_vertical_slices(packet_path)
+            self.assertFalse(r["pass"])
+            self.assertIn("vertical_slice", payload["packets"]["FIX-091"])
+            self.assertTrue(any("non-placeholder" in issue for issue in r["entries"][0]["issues"]))
+
+    def test_explicit_vertical_slice_passes(self):
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P1** | FIX-091 | Vertical Slice Delivery Packets | FIX-090 | 0.39.0 | slices | 🔄 进行中 |",
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                payload = vw.generate_execution_packets()
+            payload["packets"]["FIX-091"]["vertical_slice"] = self._valid_vertical_slice()
+            packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_vertical_slices(packet_path)
+            self.assertTrue(r["pass"])
+
+    def test_missing_vertical_slice_fails(self):
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P1** | FIX-091 | Vertical Slice Delivery Packets | FIX-090 | 0.39.0 | slices | 🔄 进行中 |",
+            ])
+            packet_path.write_text(json.dumps({
+                "version": 1,
+                "packets": {"FIX-091": {"task_id": "FIX-091", "goal": "slice guard"}},
+            }), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_vertical_slices(packet_path)
+            self.assertFalse(r["pass"])
+            self.assertIn("missing vertical_slice", r["entries"][0]["issues"])
+
+    def test_vertical_slice_rejects_technical_layer_only_slice(self):
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P1** | FIX-091 | Vertical Slice Delivery Packets | FIX-090 | 0.39.0 | slices | 🔄 进行中 |",
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                payload = vw.generate_execution_packets()
+            contract = self._valid_vertical_slice()
+            contract["user_visible_slice"] = "Refactor internal repository abstraction and service layer"
+            payload["packets"]["FIX-091"]["vertical_slice"] = contract
+            packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_vertical_slices(packet_path)
+            self.assertFalse(r["pass"])
+            self.assertTrue(any("user-observable" in issue for issue in r["entries"][0]["issues"]))
+
+    def test_vertical_slice_rejects_user_named_technical_layer_slice(self):
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P1** | FIX-091 | Vertical Slice Delivery Packets | FIX-090 | 0.39.0 | slices | 🔄 进行中 |",
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                payload = vw.generate_execution_packets()
+            contract = self._valid_vertical_slice()
+            contract["user_visible_slice"] = "UserService repository abstraction and internal service layer refactor"
+            payload["packets"]["FIX-091"]["vertical_slice"] = contract
+            packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_vertical_slices(packet_path)
+            self.assertFalse(r["pass"])
+            self.assertTrue(any("technical-layer" in issue for issue in r["entries"][0]["issues"]))
+
+    def test_vertical_slice_rejects_non_runnable_demo_path(self):
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P1** | FIX-091 | Vertical Slice Delivery Packets | FIX-090 | 0.39.0 | slices | 🔄 进行中 |",
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                payload = vw.generate_execution_packets()
+            contract = self._valid_vertical_slice()
+            contract["demo_path"] = "Stakeholder will be told that the slice is good"
+            payload["packets"]["FIX-091"]["vertical_slice"] = contract
+            packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_vertical_slices(packet_path)
+            self.assertFalse(r["pass"])
+            self.assertTrue(any("demo_path" in issue for issue in r["entries"][0]["issues"]))
+
+    def test_vertical_slice_rejects_broad_scope_guard(self):
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P1** | FIX-091 | Vertical Slice Delivery Packets | FIX-090 | 0.39.0 | slices | 🔄 进行中 |",
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                payload = vw.generate_execution_packets()
+            contract = self._valid_vertical_slice()
+            contract["scope_guard"] = "All files and the whole codebase are in scope"
+            payload["packets"]["FIX-091"]["vertical_slice"] = contract
+            packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_vertical_slices(packet_path)
+            self.assertFalse(r["pass"])
+            self.assertTrue(any("whole project/codebase" in issue for issue in r["entries"][0]["issues"]))
+
+    def test_in_progress_vertical_slice_rejects_not_run_yet(self):
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P1** | FIX-091 | Vertical Slice Delivery Packets | FIX-090 | 0.39.0 | slices | 🔄 进行中 |",
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                payload = vw.generate_execution_packets()
+            payload["packets"]["FIX-091"]["vertical_slice"] = self._valid_vertical_slice(status="NOT_RUN_YET")
+            packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_vertical_slices(packet_path)
+            self.assertFalse(r["pass"])
+            self.assertTrue(any("status must be PASS" in issue for issue in r["entries"][0]["issues"]))
+
+    def test_pending_vertical_slice_allows_not_run_yet(self):
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P1** | FIX-092 | Weak-LLM Deterministic Scaffolds | FIX-091 | 0.39.0 | scaffolds | 📋 待实施 |",
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                payload = vw.generate_execution_packets()
+            payload["packets"]["FIX-092"]["vertical_slice"] = self._valid_vertical_slice(status="NOT_RUN_YET")
+            packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_vertical_slices(packet_path)
+            self.assertTrue(r["pass"])
+
+    def test_vertical_slice_rejects_review_prose_only_evidence(self):
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P1** | FIX-091 | Vertical Slice Delivery Packets | FIX-090 | 0.39.0 | slices | 🔄 进行中 |",
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                payload = vw.generate_execution_packets()
+            contract = self._valid_vertical_slice()
+            contract["demo_path"] = "review artifact says looks good"
+            contract["evidence"] = "review says the demo is fine"
+            payload["packets"]["FIX-091"]["vertical_slice"] = contract
+            packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_vertical_slices(packet_path)
+            self.assertFalse(r["pass"])
+            self.assertTrue(any("review/prose-only" in issue for issue in r["entries"][0]["issues"]))
+
+
 class CommitMsgFactGroundingHookTests(unittest.TestCase):
     """FIX-080: commit-msg hook must block product commits without fact basis."""
 

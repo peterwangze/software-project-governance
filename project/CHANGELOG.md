@@ -2,6 +2,32 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.39.0] — 2026-05-30
+
+### 0.39.0 — LLM 依赖降低与产品成功门禁
+
+面向“流程跑完但产品仍是低质半成品”的真实使用风险，把成熟软件公司的产品成功、验收、质量预算、小批量交付和 paved path 经验固化为可检查契约。0.39.0 不声明 1.0.0 production-ready；1.0.0 仍需外部验证通过后再发布正式标签。
+
+### 新增
+- **FIX-088**: 新增 Product Success Contract、`check-product-success-contracts` 和 Check 18d，要求 P0/P1 任务写明用户、JTBD、非目标、成功指标、竞争基线和完成定义。
+- **FIX-089**: 新增 Executable Acceptance Contract、`check-acceptance-contracts` 和 Check 18e，阻断缺少可运行验收命令、预期输出、last-run 结果或 demo 证据的闭环。
+- **FIX-090**: 新增 Quality Budget Gate、`check-quality-budget` 和 Check 18f，覆盖 performance、reliability、security、accessibility、ux、maintainability 六维阈值和证据。
+- **FIX-091**: 新增 Vertical Slice Delivery Packets、`check-vertical-slices` 和 Check 18g，要求大任务具备用户可见小切片、demo path、scope guard 和 rollback plan。
+- **FIX-092**: 新增 Weak-LLM Deterministic Scaffolds、`generate-deterministic-scaffold`、`check-deterministic-scaffolds`/`check-scaffold-templates` 和 Check 18h，提供 web-app、cli-tool、workflow-plugin 三类确定性脚手架。
+- **FIX-093**: 新增 User Interruption Policy v2、`check-interruption-policy`/`check-user-interruption-policy` 和 Check 18i，只在产品意图、验收标准、不可逆、发布、风险、外部依赖和模式变更处打断用户。
+
+### 变更
+- P0/P1 execution packet 扩展为产品成功、可执行验收、质量预算、垂直切片、用户打断策略的统一短上下文载体。
+- release gate 现在会联动 0.39.0 产品成功门禁，降低弱 LLM 仅凭治理文本和主观判断闭环的空间。
+- RISK-034 由 0.39.0 发布链路承载关闭；1.0.0 依赖链继续要求外部验证通过。
+
+### 验证
+- 完整 `test_verify_workflow.py` 回归达到 285/285 PASS。
+- `check-governance --fail-on-issues` PASS，Check 18d、18e、18f、18g、18h、18i 均通过。
+- `check-release --version 0.39.0 --require-changelog --runtime-adapters` PASS。
+- `verify` PASS；`e2e-check` PASS；`check-agent-adapters --runtime` PASS。
+- Code Reviewer/Release Reviewer 均已 APPROVED。
+
 ## [0.38.0] — 2026-05-28
 
 ### 0.38.0 — AI 执行底座：能力契约、结构化证据、执行包与事实源一致性

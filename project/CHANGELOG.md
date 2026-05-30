@@ -2,6 +2,23 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.40.0] — 2026-05-30
+
+### 0.40.0 — AI 指令精度收敛
+
+面向 AI 执行者读取 workflow 文本时的歧义风险，把角色、契约、skill、入口、路由和调度模板中的昵称、人设故事、PUA/味道注入、口号式方法论和无操作定义描述收敛为可执行职责、边界、证据要求和路由规则。0.40.0 不声明 1.0.0 production-ready；1.0.0 仍需外部验证通过后再发布正式标签。
+
+### 变更
+- **AUDIT-104**: 完成 AI-facing 文本审计，识别入口 SKILL、agents、references、commands、target fixture 和当前实际入口中的歧义文本类别。
+- **FIX-094**: 去人格化、去口号化并同步 source 与 target fixture；`methodology-routing` 改为任务类型、执行方法和证据要求映射；dispatch template 去掉 `agent_nickname`；failure modes 改为事实依据、完成定义和升级链。
+- 主入口 Agent 分发路由列从“核心方法论”改为“执行要求与证据”，部署、模糊任务和测试相关行改为可检查动作与证据。
+
+### 验证
+- 完整 `test_verify_workflow.py` 回归 285/285 PASS。
+- `verify` PASS；`e2e-check` PASS；`check-projection-sync --fail-on-issues` PASS；`check-governance --fail-on-issues` PASS。
+- `git diff --check` PASS，仅 CRLF warning。
+- Code Reviewer Copernicus 复审 APPROVED。
+
 ## [0.39.0] — 2026-05-30
 
 ### 0.39.0 — LLM 依赖降低与产品成功门禁

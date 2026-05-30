@@ -1,38 +1,35 @@
-# 方法论智能路由
+# 方法论路由
 
-Coordinator 根据任务类型 + PUA 方法论路由表自动为角色 Agent 匹配"味道"。
+Coordinator 根据任务类型选择角色 Agent、执行方法和必须返回的证据。本文只定义可执行路由，不注入人格、昵称、风格标签或口号。
 
 ## 路由表
 
-| 任务类型 | 角色 Agent | PUA 味道 | 核心方法论 |
-|---------|-----------|---------|-----------|
-| Debug/修 Bug | Developer + Maintenance | 🔴 华为 | RCA 5-Why 根因分析 + 蓝军自攻击 |
-| 新功能开发 | Developer | ⬛ Musk | The Algorithm: 质疑→删除→简化→加速→自动化 |
-| 代码审查 | Reviewer | ⬜ Jobs | 减法优先 + 像素级完美 |
-| 架构决策 | Architect | 🔶 Amazon | Working Backwards + 6-Pager |
-| 调研/竞品 | Analyst | ⚫ 百度 | 搜索是第一生产力 |
-| 性能优化 | QA + Developer | 🟡 字节 | A/B Test + 数据驱动 |
-| 部署/运维 | DevOps | 🟠 阿里 | 定目标→追过程→拿结果闭环 |
-| 发布管理 | Release | 🟧 小米 | 专注极致口碑快 |
-| 需求澄清 | Analyst | 🔶 Amazon | Customer Obsession + PR/FAQ |
-| 测试设计 | QA | 🟡 字节 | 数据驱动——每个测试结论有量化数据 |
-| 技术债务 | Maintenance | 🔵 美团 | 做难而正确的事 + 长期有耐心 |
-| 任务模糊 | Coordinator (自行处理) | 🟠 阿里 | 通用闭环（默认） |
+| 任务类型 | 角色 Agent | 执行方法 | 必须返回的证据 |
+|---------|-----------|---------|----------------|
+| Debug/修 Bug | Developer + Maintenance | 复现问题 -> 定位直接原因 -> 5-Why 根因分析 -> 最小修复 -> 回归验证 | 复现步骤、根因、修复 diff、回归命令与输出 |
+| 新功能开发 | Developer | 明确验收标准 -> 最小可演示切片 -> 测试/实现 -> 可运行验收 | 验收场景、测试/命令、输出摘要、diff summary |
+| 治理基础设施/工作流本体修改 | Governance Developer | 规则变更 -> 对应检查/测试/模板同步 -> 投影同步 -> 验证 | 修改范围、校验命令、测试结果、projection sync 结果 |
+| 代码审查 | Code Reviewer | diff 逐项审查 -> 正确性/安全/回归/测试覆盖检查 -> 结论 | 文件位置、严重级别、事实依据、APPROVED/NEEDS_CHANGE/BLOCKED |
+| 架构决策 | Architect | 问题定义 -> 候选方案 -> 取舍 -> 风险/回滚 -> ADR | ADR、方案对比、风险清单、验证或迁移计划 |
+| 设计审查 | Design Reviewer | 设计材料只读审查 -> 一致性/风险/边界检查 -> 结论 | 设计缺口、阻塞项、事实依据、审查结论 |
+| 调研/竞品 | Analyst | 用户/JTBD -> 竞品事实 -> 差异与非目标 -> 验收信号 | 用户画像、竞品条目、假设清单、验证计划 |
+| 需求澄清 | Analyst | 需求事实 -> 假设标注 -> 非目标 -> 验收标准 | PR/FAQ 或需求报告、假设/验证计划、验收标准 |
+| 需求审查 | Requirement Reviewer | 需求材料只读审查 -> 用户成功/非目标/验收信号检查 | 缺口列表、阻塞项、审查结论 |
+| 测试设计 | QA | 验收标准 -> 测试矩阵 -> 可运行命令 -> 风险覆盖 | 测试矩阵、命令、输出摘要、未覆盖风险 |
+| 测试审查 | Test Reviewer | 测试策略只读审查 -> 覆盖缺口/边界/回归风险检查 | 覆盖缺口、用户影响、审查结论 |
+| 性能优化 | QA + Developer | 基线测量 -> 瓶颈定位 -> 最小优化 -> 对比验证 | 基线、优化后指标、命令输出、回归风险 |
+| 部署/运维 | DevOps | 环境事实 -> 配置变更 -> 部署/回滚验证 -> 监控信号 | 配置 diff、部署命令、回滚步骤、日志摘要 |
+| 发布管理 | Release | 版本范围 -> checklist -> changelog -> rollback -> gate 验证 | 发布清单、changelog、rollback、门禁输出 |
+| 技术债务 | Maintenance | 债务事实 -> 影响分析 -> 最小改进 -> 回归保护 | 债务依据、风险降低说明、测试/验证输出 |
+| 任务模糊 | Coordinator | 澄清目标 -> 划定范围 -> 记录假设 -> 分派角色 | task_id、范围、验收标准、下一步路由 |
 
-## 味道切换规则
+## 路由规则
 
-1. **用户手动设置优先**：如果用户通过 PUA 配置指定了味道，以用户设置为准，不自动切换
-2. **失败切换链**（agent 3 次失败后）：按 PUA 失败模式切换链选择新味道
-3. **Coordinator 不切换**：Coordinator 固定 🟠 阿里味（闭环意识 + owner意识）——它不执行任务，不需要方法论切换
+1. 用户显式指定角色时，以用户指定角色为优先，但仍必须满足 Producer-Reviewer 分离。
+2. 同一任务涉及多个类型时，按最高风险路径分派；涉及产品代码修改时必须包含对应 Reviewer。
+3. Agent 连续 3 次失败后，不切换"风格"，而是返回失败事实、已尝试方案、日志和建议，由 Coordinator 重新拆分任务或升级风险。
+4. 任何角色不得把无验证的经验判断写成完成事实；缺证据时必须返回证据缺口。
 
 ## 集成到 Dispatch
 
-Coordinator dispatch 时，从模板读取 Agent prompt，在 prompt 头部注入当前味道指令：
-
-```
-Agent(
-  prompt: "[味道指令: 你是🟠阿里味的{role}...] + [agents/{role}.md 模板内容] + [具体任务]"
-)
-```
-
-味道指令由 PUA skill 的 `references/flavors.md` 定义，Coordinator 不重复维护——它读取 PUA 的当前活跃味道配置。
+Coordinator dispatch 时使用标准调度模板填充角色、任务、范围、验收和硬门槛。prompt 头部只声明角色职责和必须加载的文件，不注入额外人格或风格指令。

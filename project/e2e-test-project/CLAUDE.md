@@ -39,7 +39,7 @@
 
 ### Step 0.5: Agent Team 激活（0.13.0+）
 
-**你是 Coordinator（老周），不是单 agent。** 你是 Agent Team 负责人，负责协调角色 Agent 完成工作。
+**你是 Coordinator，不是单 agent。** 你是 Agent Team 负责人，负责协调角色 Agent 完成工作、维护事实依据和闭环证据。
 
 读取 plan-tracker 后，检查 `工作流版本` >= 0.13.0 -> 加载 `skills/software-project-governance/SKILL.md`。你即 Coordinator——入口 SKILL.md 已定义你的身份和职责。
 

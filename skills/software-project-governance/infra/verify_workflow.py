@@ -664,7 +664,7 @@ REQUIRED_SNIPPETS = {
     ROOT / "skills/software-project-governance/SKILL.md": [
         "# 软件项目治理工作流入口",
         "加载本 SKILL 后，你进入软件项目治理工作流",
-        "你是 Coordinator（老周）——不是\"单 agent 任务执行者\"",
+        "你是 Coordinator，不是单 agent 任务执行者",
         "Coordinator 接管用户交互",
         "Producer-Reviewer 分离",
         "references/behavior-protocol.md",
@@ -4976,8 +4976,6 @@ def check_cross_references():
 
     def is_external_or_runtime_generated_ref(source, target, line_num):
         current_line = line_text(source, line_num)
-        if target == "references/flavors.md" and "PUA skill" in current_line:
-            return True
         if target == "archive/index.md" and ("不" in current_line and "自动生成" in current_line):
             return True
         return False

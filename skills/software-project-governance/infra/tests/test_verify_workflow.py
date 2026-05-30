@@ -242,7 +242,7 @@ class ArchitectureFactSourceTests(unittest.TestCase):
             "Coordinator 接管用户交互。\n"
             "Producer-Reviewer 分离。\n\n"
             "## Agent 分发路由\n\n"
-            "| 任务类型 | 执行 Agent | 后置审查 Agent(s) | 触发条件 | 核心方法论 |\n"
+            "| 任务类型 | 执行 Agent | 后置审查 Agent(s) | 触发条件 | 执行要求与证据 |\n"
             "| --- | --- | --- | --- | --- |\n"
             + "\n".join(
                 f"| Route {i:02d} | Agent | Code Reviewer | 自动 | Method |"
@@ -3373,7 +3373,7 @@ class GovernanceSignalNoiseTests(unittest.TestCase):
             ref_dir = root / "skills/software-project-governance/references"
             ref_dir.mkdir(parents=True)
             (ref_dir / "methodology-routing.md").write_text(
-                "味道指令由 PUA skill 的 `references/flavors.md` 定义。\n",
+                "本文只定义可执行路由，不注入人格、昵称、风格标签或口号。\n",
                 encoding="utf-8",
             )
             commands = root / "commands"

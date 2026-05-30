@@ -1,15 +1,15 @@
 # Agent 调度模板
 
-Coordinator spawn sub-agent 时 MUST 使用本模板，**禁止**传自定义 prompt。只能填充模板中的 `{placeholder}` 占位符。
+Coordinator spawn sub-agent 时 MUST 使用本模板，**禁止**传自定义 prompt。只能填充模板中的 `{placeholder}` 占位符。模板只传递角色、任务、范围、验收和硬门槛，不传递昵称、人设、风格或口号。
 
 ## 模板
 
 ```
 ## 任务：{task_id} — {task_summary}
 
-你是 {agent_role}（{agent_nickname}）。在执行任务前，MUST 先加载两个文件：
+你是 {agent_role} Agent。在执行任务前，MUST 先加载两个文件：
 
-1. 角色定义：`{role_definition_path}`——理解你的身份、职责边界、硬门槛
+1. 角色定义：`{role_definition_path}`——理解你的职责边界、工具权限、硬门槛和输出格式
 2. 任务规范：`{task_skill_path}`——理解确定性执行步骤
 
 ## 任务上下文
@@ -60,6 +60,7 @@ Agent 返回结果后，Coordinator **MUST** 立即：
 - 不直接与用户交互（无 AskUserQuestion）
 - 不修改 .governance/ 治理记录
 - 不做最终决策（决策型任务只出方案）
+- 不把昵称、人设、风格或口号作为执行依据
 ```
 
 ## Coordinator 可填充的占位符
@@ -69,7 +70,6 @@ Agent 返回结果后，Coordinator **MUST** 立即：
 | `{task_id}` | 任务 ID | SYSGAP-030 |
 | `{task_summary}` | 一句话任务摘要 | 路由表 1:1→1:N 升级 |
 | `{agent_role}` | 角色名（英文） | Developer |
-| `{agent_nickname}` | 角色名（功能性描述，如 Developer、Code Reviewer） | Developer |
 | `{role_definition_path}` | 角色定义文件路径 | agents/developer.md |
 | `{task_skill_path}` | 任务 SKILL 文件路径 | skills/stage-development/SKILL.md |
 | `{task_description}` | 任务详细描述 | 修改 SKILL.md 路由表... |
@@ -97,7 +97,7 @@ Coordinator 在并行 spawn 多个 agent 前 **MUST** 校验：任意两个 agen
 ```
 Agent(
   subagent_type="general-purpose",
-  prompt="你是 {agent_role}（{agent_nickname}）。在执行任务前，MUST 先加载两个文件：\n\n1. 角色定义：{role_definition_path}\n2. 任务规范：{task_skill_path}\n\n## 任务：{task_id} — {task_summary}\n\n[填充模板其余部分...]"
+  prompt="你是 {agent_role} Agent。在执行任务前，MUST 先加载两个文件：\n\n1. 角色定义：{role_definition_path}\n2. 任务规范：{task_skill_path}\n\n## 任务：{task_id} — {task_summary}\n\n[填充模板其余部分...]"
 )
 ```
 
@@ -108,13 +108,13 @@ Agent(
 Coordinator spawn sub-agent 时 MUST 在用户可见输出中报告进度：
 
 ```
->> 派发 {功能性角色名} 执行 {TASK_ID}: {简短描述}...
+>> 派发 {agent_role} 执行 {TASK_ID}: {简短描述}...
 ```
 
 完成后报告结果：
 
 ```
-✅ {TASK_ID} 完成——{功能性角色名}: {关键成果摘要}
+✅ {TASK_ID} 完成——{agent_role}: {关键成果摘要}
 ```
 
 禁止静默 spawn——即 spawn agent 后不在用户侧输出任何进度信息。

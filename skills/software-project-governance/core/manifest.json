@@ -8,7 +8,6 @@
   "root_entries": {
     "files": [
       "README.md",
-      "CLAUDE.md",
       ".gitignore"
     ],
     "directories": []
@@ -69,7 +68,6 @@
     "description": "Files that exist only in the development repository, NOT shipped to end users via plugin installation.",
     "entries": [
       { "path": "project/", "type": "dir" },
-      { "path": ".governance/", "type": "dir" },
       { "path": ".git/", "type": "dir" },
       { "path": ".claude/", "type": "dir" },
       { "path": ".github/", "type": "dir" },
@@ -80,7 +78,6 @@
       "project/**/*.md",
       "project/**/*.yml",
       "project/**/*.json",
-      ".governance/*.md",
       ".github/workflows/*.yml",
       "tests/**/*.py",
       "docs/**/*.md"

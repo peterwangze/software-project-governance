@@ -443,7 +443,6 @@ WORKFLOW_SNIPPETS = {
 
 REQUIRED_SNIPPETS = {}
 REQUIRED_SNIPPETS.update(WORKFLOW_SNIPPETS)
-REQUIRED_SNIPPETS.update(PROJECT_FACT_SNIPPETS)
 REQUIRED_SNIPPETS.update(PROJECTION_SNIPPETS)
 
 REQUIRED_SNIPPETS = {
@@ -481,31 +480,6 @@ REQUIRED_SNIPPETS = {
         "## 终止原因",
         "## 降级后的资产定位",
         "## 新主线如何接管",
-    ],
-    ROOT / ".governance/plan-tracker.md": [
-        "## 项目配置",
-        "standard",
-        "always-on",
-        "## Gate 状态跟踪",
-        "## 项目总览",
-        "## 当前活跃事项",
-        "## 版本规划",
-        "## 需求跟踪矩阵",
-        "## 变更控制",
-        "操作权限模式",
-        "passed-on-entry",
-        "G11",
-    ],
-    ROOT / ".governance/decision-log.md": [
-        "DEC-001",
-        "DEC-035",
-    ],
-    ROOT / ".governance/risk-log.md": [
-        "RISK-",
-    ],
-    ROOT / ".governance/evidence-log.md": [
-        "EVD-001",
-        "EVD-051",
     ],
     ROOT / "project/workflows/software-project-governance/examples/current-project-sample.md": [
         "已迁移",
@@ -3578,6 +3552,8 @@ def parse_evidence_task_map():
 
 def parse_open_risks():
     """Return list of (risk_id, date_str) for open risks."""
+    if not RISK_PATH.is_file():
+        return []
     content = RISK_PATH.read_text(encoding="utf-8")
     risks = []
     for line in content.split("\n"):
@@ -4245,6 +4221,12 @@ def check_risk_escalation():
 
     Returns: dict with escalated risks list and summary stats.
     """
+    if not RISK_PATH.is_file():
+        return {
+            "escalated": [],
+            "total_open": 0,
+        }
+
     content = RISK_PATH.read_text(encoding="utf-8")
     today = date.today()
     escalated = []
@@ -4364,14 +4346,12 @@ def cmd_verify(args):
     file_failures = check_files()
     snippet_failures = check_snippets()
     architecture_failures = check_architecture_fact_source()
-    release_readiness_failures = check_release_readiness_fact_source()
     agent_adapter_failures = check_agent_adapter_contract()
     version_failures = check_version_consistency()
     all_items = (
         file_failures
         + snippet_failures
         + architecture_failures
-        + release_readiness_failures
         + agent_adapter_failures
         + version_failures
     )
@@ -4976,6 +4956,14 @@ def check_cross_references():
 
     def is_external_or_runtime_generated_ref(source, target, line_num):
         current_line = line_text(source, line_num)
+        if target.startswith(".governance/"):
+            return True
+        if target.startswith((
+            "project/e2e-test-project/agents/",
+            "project/e2e-test-project/commands/",
+            "project/e2e-test-project/skills/",
+        )):
+            return True
         if target == "archive/index.md" and ("不" in current_line and "自动生成" in current_line):
             return True
         return False

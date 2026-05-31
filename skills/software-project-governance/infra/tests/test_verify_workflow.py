@@ -166,6 +166,81 @@ class CanonicalSetTests(unittest.TestCase):
                 self.assertEqual(sum(1 for p in c if p == "docs/r.md"), 1)
 
 
+class CleanCheckoutBoundaryTests(unittest.TestCase):
+    """CI clean checkout must not require local runtime governance state."""
+
+    def test_canonical_manifest_does_not_require_root_claude_or_governance_runtime(self):
+        manifest_path = vw.ROOT / "skills/software-project-governance/core/manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+        self.assertNotIn("CLAUDE.md", manifest["root_entries"]["files"])
+        self.assertFalse(
+            any(entry.get("path") == ".governance/" for entry in manifest["repo_only"]["entries"])
+        )
+        self.assertNotIn(".governance/*.md", manifest["repo_only"]["glob_patterns"])
+
+    def test_default_snippets_do_not_require_local_governance_files(self):
+        governance_snippet_paths = [
+            str(path.relative_to(vw.ROOT)).replace("\\", "/")
+            for path in vw.REQUIRED_SNIPPETS
+            if str(path.relative_to(vw.ROOT)).replace("\\", "/").startswith(".governance/")
+        ]
+        self.assertEqual(governance_snippet_paths, [])
+
+    def test_default_verify_does_not_run_release_fact_source_health_check(self):
+        with patch.object(vw, "check_files", return_value=[]), \
+             patch.object(vw, "check_snippets", return_value=[]), \
+             patch.object(vw, "check_architecture_fact_source", return_value=[]), \
+             patch.object(
+                 vw,
+                 "check_release_readiness_fact_source",
+                 side_effect=AssertionError("default verify must stay product-only"),
+             ), \
+             patch.object(vw, "check_agent_adapter_contract", return_value=[]), \
+             patch.object(vw, "check_version_consistency", return_value=[]):
+            with redirect_stdout(io.StringIO()):
+                vw.cmd_verify(argparse.Namespace())
+
+    def test_missing_local_risk_log_is_empty_for_governance_health(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with patch.object(vw, "ROOT", root), \
+                 patch.object(vw, "RISK_PATH", root / ".governance/risk-log.md"):
+                self.assertEqual(vw.parse_open_risks(), [])
+                self.assertEqual(vw.check_risk_staleness()["total_open"], 0)
+                self.assertEqual(vw.check_risk_escalation()["total_open"], 0)
+
+    def test_cross_references_ignore_runtime_governance_paths_when_missing(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            commands = root / "commands"
+            commands.mkdir(parents=True)
+            (commands / "governance.md").write_text(
+                "Read `.governance/plan-tracker.md` and `.governance/evidence-log.md`.\n",
+                encoding="utf-8",
+            )
+
+            with patch.object(vw, "ROOT", root):
+                result = vw.check_cross_references()
+
+        self.assertEqual(result["dangling"], [])
+
+    def test_cross_references_ignore_materialized_e2e_projection_paths_when_missing(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            infra = root / "skills/software-project-governance/infra"
+            infra.mkdir(parents=True)
+            (infra / "verify_workflow.py").write_text(
+                'OPTIONAL = ROOT / "project/e2e-test-project/commands/governance-review.md"\n',
+                encoding="utf-8",
+            )
+
+            with patch.object(vw, "ROOT", root):
+                result = vw.check_cross_references()
+
+        self.assertEqual(result["dangling"], [])
+
+
 class FileExistenceTests(unittest.TestCase):
     """Test _check_file_exists() logic."""
 

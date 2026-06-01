@@ -20,6 +20,6 @@ jobs:
       - name: Verify manifest consistency
         run: python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues
       - name: Run unit tests
-        run: python -m pytest skills/software-project-governance/infra/tests/ -v
+        run: python -m unittest discover -s skills/software-project-governance/infra/tests -v
       - name: Verify cross-references
         run: python skills/software-project-governance/infra/verify_workflow.py check-cross-references

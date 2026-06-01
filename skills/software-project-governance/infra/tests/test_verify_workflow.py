@@ -169,6 +169,16 @@ class CanonicalSetTests(unittest.TestCase):
 class CleanCheckoutBoundaryTests(unittest.TestCase):
     """CI clean checkout must not require local runtime governance state."""
 
+    def test_verify_workflow_compiles_under_ci_interpreter(self):
+        result = subprocess.run(
+            [sys.executable, "-m", "py_compile", str(Path(vw.__file__))],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_canonical_manifest_does_not_require_root_claude_or_governance_runtime(self):
         manifest_path = vw.ROOT / "skills/software-project-governance/core/manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))

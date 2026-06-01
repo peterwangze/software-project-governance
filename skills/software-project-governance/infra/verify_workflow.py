@@ -9068,7 +9068,12 @@ def cmd_check_governance(args):
         for issue in ai_result["issues"]:
             print(f"│    - {issue}")
     else:
-        print(f"│  [PASS] Archive integrity verified — {'no archive data' if ai_result['total_archived_tasks'] == 0 else f'{ai_result['total_expected']} total tasks, index consistent'}")
+        archive_detail = (
+            "no archive data"
+            if ai_result["total_archived_tasks"] == 0
+            else f"{ai_result['total_expected']} total tasks, index consistent"
+        )
+        print(f"│  [PASS] Archive integrity verified — {archive_detail}")
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 28. Governance Review Fallback Policy (FIX-061) ──

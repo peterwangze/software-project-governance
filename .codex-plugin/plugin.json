@@ -40,6 +40,11 @@
       "Review this task for goal alignment, missing evidence, and overclaimed runtime support."
     ],
     "websiteURL": "https://github.com/peterwangze/software-project-governance",
-    "brandColor": "#2563EB"
+    "brandColor": "#2563EB",
+    "logo": "assets/logo.svg",
+    "composerIcon": "assets/composer-icon.svg",
+    "screenshots": [
+      "assets/governance-preview.svg"
+    ]
   }
 }

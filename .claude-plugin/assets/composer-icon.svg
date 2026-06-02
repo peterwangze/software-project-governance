@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+  <title id="title">Software Project Governance composer icon</title>
+  <desc id="desc">A compact gate check icon for governance prompts.</desc>
+  <rect width="128" height="128" rx="24" fill="#0F172A"/>
+  <path d="M32 88V34h64v54" fill="none" stroke="#94A3B8" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M46 66l14 14 34-40" fill="none" stroke="#38BDF8" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="32" cy="94" r="7" fill="#22C55E"/>
+  <circle cx="64" cy="94" r="7" fill="#EAB308"/>
+  <circle cx="96" cy="94" r="7" fill="#F97316"/>
+</svg>

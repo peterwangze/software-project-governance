@@ -24,7 +24,14 @@
         "quality-gates",
         "code-review",
         "agent-workflow"
-      ]
+      ],
+      "assets": {
+        "logo": "assets/logo.svg",
+        "composerIcon": "assets/composer-icon.svg",
+        "screenshots": [
+          "assets/governance-preview.svg"
+        ]
+      }
     }
   ]
 }

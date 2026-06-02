@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675" role="img" aria-labelledby="title desc">
+  <title id="title">Governance preview card</title>
+  <desc id="desc">A visual card showing evidence, risk, quality, and release readiness for AI coding delivery trust.</desc>
+  <rect width="1200" height="675" fill="#F8FAFC"/>
+  <rect x="72" y="72" width="1056" height="531" rx="8" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="2"/>
+  <text x="112" y="142" fill="#0F172A" font-family="Arial, sans-serif" font-size="44" font-weight="700">AI coding delivery trust layer</text>
+  <text x="112" y="184" fill="#475569" font-family="Arial, sans-serif" font-size="24">Goal alignment, reviewable facts, quality budgets, and release gates.</text>
+  <g transform="translate(112 246)">
+    <rect width="230" height="210" rx="8" fill="#EFF6FF" stroke="#BFDBFE"/>
+    <circle cx="50" cy="56" r="22" fill="#2563EB"/>
+    <path d="M40 56l9 9 19-23" fill="none" stroke="#FFFFFF" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="32" y="122" fill="#1E3A8A" font-family="Arial, sans-serif" font-size="30" font-weight="700">Evidence</text>
+    <text x="32" y="158" fill="#334155" font-family="Arial, sans-serif" font-size="18">Commands, diffs,</text>
+    <text x="32" y="182" fill="#334155" font-family="Arial, sans-serif" font-size="18">and review facts.</text>
+  </g>
+  <g transform="translate(382 246)">
+    <rect width="230" height="210" rx="8" fill="#FFF7ED" stroke="#FED7AA"/>
+    <path d="M50 32l32 58H18L50 32z" fill="#F97316"/>
+    <text x="47" y="77" text-anchor="middle" fill="#FFFFFF" font-family="Arial, sans-serif" font-size="34" font-weight="700">!</text>
+    <text x="32" y="122" fill="#9A3412" font-family="Arial, sans-serif" font-size="30" font-weight="700">Risk</text>
+    <text x="32" y="158" fill="#334155" font-family="Arial, sans-serif" font-size="18">Open issues stay</text>
+    <text x="32" y="182" fill="#334155" font-family="Arial, sans-serif" font-size="18">visible and dated.</text>
+  </g>
+  <g transform="translate(652 246)">
+    <rect width="230" height="210" rx="8" fill="#F0FDF4" stroke="#BBF7D0"/>
+    <path d="M28 66h28l10-32 16 64 12-32h28" fill="none" stroke="#16A34A" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="32" y="122" fill="#166534" font-family="Arial, sans-serif" font-size="30" font-weight="700">Quality</text>
+    <text x="32" y="158" fill="#334155" font-family="Arial, sans-serif" font-size="18">Budgets turn vague</text>
+    <text x="32" y="182" fill="#334155" font-family="Arial, sans-serif" font-size="18">quality into checks.</text>
+  </g>
+  <g transform="translate(922 246)">
+    <rect width="230" height="210" rx="8" fill="#F5F3FF" stroke="#DDD6FE"/>
+    <path d="M34 44h86v54H34z" fill="none" stroke="#7C3AED" stroke-width="8" stroke-linejoin="round"/>
+    <path d="M48 62h42M48 80h64" stroke="#7C3AED" stroke-width="7" stroke-linecap="round"/>
+    <text x="32" y="122" fill="#5B21B6" font-family="Arial, sans-serif" font-size="30" font-weight="700">Release</text>
+    <text x="32" y="158" fill="#334155" font-family="Arial, sans-serif" font-size="18">Gates separate</text>
+    <text x="32" y="182" fill="#334155" font-family="Arial, sans-serif" font-size="18">ready from hopeful.</text>
+  </g>
+  <path d="M192 514h816" stroke="#CBD5E1" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="192" cy="514" r="11" fill="#2563EB"/>
+  <circle cx="462" cy="514" r="11" fill="#F97316"/>
+  <circle cx="732" cy="514" r="11" fill="#16A34A"/>
+  <circle cx="1008" cy="514" r="11" fill="#7C3AED"/>
+  <text x="112" y="562" fill="#475569" font-family="Arial, sans-serif" font-size="20">Inspectable local workflow assets. Conservative runtime claims. No listing approval implied.</text>
+</svg>

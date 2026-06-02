@@ -1,5 +1,60 @@
 # Software Project Governance
 
+> AI coding delivery trust layer for evidence-backed planning, review, risk, quality, and release control.
+
+Software Project Governance helps AI coding agents keep delivery trustworthy while you stay focused on product and technical decisions. It is designed for marketplace reviewers, AI coding users, and teams who need a repeatable way to stop drift, missing evidence, weak review loops, and premature release claims.
+
+## Marketplace Review Ready
+
+Use this workflow when your AI coding setup needs:
+
+- **Evidence-backed delivery**: every meaningful task can carry facts about what changed, why it changed, how it was verified, and what remains risky.
+- **Gate and risk control**: stage gates, task status, risks, decisions, and release readiness stay connected instead of living in scattered chat memory.
+- **Reviewer separation with degraded-mode honesty**: the workflow distinguishes real independent review from degraded or environment-dependent execution, and does not present every agent as fully supported.
+- **5-minute orientation for new users**: start with `/governance`, initialize `.governance/`, then let the agent resume state, check gates, and surface only critical decisions.
+
+## Install Paths
+
+Claude Code:
+
+```bash
+/plugin marketplace add peterwangze/software-project-governance
+/plugin install software-project-governance@spg
+```
+
+Alternative Claude paths:
+
+```bash
+/plugin install https://github.com/peterwangze/software-project-governance.git
+git clone https://github.com/peterwangze/software-project-governance.git
+/plugin install /path/to/software-project-governance
+```
+
+Codex and other AI coding agents:
+
+- Use this repository as a consumable asset package.
+- Load `skills/software-project-governance/SKILL.md` when your environment supports skill/plugin loading.
+- Keep runtime expectations conservative: some agents or host environments may run in degraded, blocked, or environment-dependent mode until their native loading, tool, browser, AskUserQuestion, review, and git-hook capabilities are verified.
+
+## Trust and Data Boundary
+
+- The workflow writes project governance state to your project-local `.governance/` directory.
+- It uses local files, git hooks, validation scripts, and agent-readable skills to keep delivery facts inspectable.
+- The repository's own `.governance/` directory is a dogfood/sample runtime record, not a template to copy into your project.
+- Adapter and marketplace assets describe install and loading paths; they are not evidence of marketplace approval or universal runtime readiness.
+
+## 5-Minute Start
+
+1. Install through one of the paths above.
+2. Open your project root in your AI coding environment.
+3. Run `/governance`.
+4. Initialize `.governance/` when prompted.
+5. Continue coding; the workflow tracks evidence, gates, risks, and critical decision boundaries.
+
+For full Chinese installation details and daily usage guidance, continue below.
+
+## 中文详细说明
+
 > 让 coding agent 帮你看护项目质量——你只负责思考，过程管理全自动。
 
 ## 一句话说明

@@ -2,6 +2,22 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.40.1] — 2026-06-01
+
+### 0.40.1 — GitHub CI clean checkout hotfix
+
+面向 0.40.0 发布后的 GitHub Actions 失败，0.40.1 只承载 `FIX-095` 的 CI clean checkout 修复链正式版本化，不引入新功能。该版本把默认 CI 校验边界收敛为可追踪产品/repo 资产，避免依赖本机 `.governance/` 运行态或根入口文件，并保证 GitHub workflow 固定的 Python 3.11 环境可运行。
+
+### 修复
+- **FIX-095**: 默认 `verify` 不再依赖未跟踪的本地治理运行态或根入口文件；clean checkout 可复现。
+- **FIX-095**: 修复 Python 3.11 不能解析 nested f-string 的远端失败。
+- **FIX-095**: CI unit test step 改为标准库 `unittest discover`，避免 workflow 未安装 `pytest` 时失败，同时保持 360 个测试收集覆盖不降低。
+
+### 验证
+- GitHub Governance CI run `26754020310` 在 `c5f66206f8b8df968ea6c4f2b419c51dc95af5fd` 上 `completed/success`。
+- 最新 GitHub Governance CI run `26757836225` 在 `e882006d3343be291bb3f7f75a0f15862af981ae` 上 `completed/success`。
+- `check-release --version 0.40.1 --require-changelog --runtime-adapters` 作为发布门禁。
+
 ## [0.40.0] — 2026-05-30
 
 ### 0.40.0 — AI 指令精度收敛

@@ -2,6 +2,31 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.41.0] — 2026-06-02
+
+### 0.41.0 — Official Marketplace Readiness
+
+面向 Codex/Claude 官方目录可评审准备，0.41.0 将项目对外定位收敛为 AI coding delivery trust layer，并补齐 marketplace reviewer 能快速检查的 metadata、README 首屏、privacy/security 文档、submission checklist 和可追踪视觉资产。该版本是 readiness package，不声明官方收录、marketplace approval、1.0.0 production-ready 或 universal/full runtime support；RISK-036 继续打开，等待后续 0.42.0~0.46.0 与外部验证闭环。
+
+### 新增
+- **AUDIT-105**: 完成 official marketplace readiness gap analysis，拆解 0.41.0 可执行事项与非目标。
+- **FIX-096**: Codex/Claude plugin metadata 升级为官方评审友好的保守包信息；Codex manifest 增加 `skills` 与 `interface` metadata、capabilities、default prompts、logo/icon/preview references。
+- **FIX-097**: README 首屏改为英文 marketplace-review-ready positioning，突出 AI coding delivery trust layer、install paths、trust/data boundary 和 5-minute start。
+- **FIX-098**: 新增 privacy/security posture 与 submission checklist，说明 local data boundary、permissions and side effects、runtime capability honesty、No telemetry service 与 No official acceptance claim。
+- **FIX-099**: 新增 Codex/Claude plugin package 的 tracked SVG logo、composer icon 和 governance preview assets，并让 manifests 引用这些可检查资产。
+
+### 变更
+- `.codex-plugin/plugin.json`、`.claude-plugin/plugin.json`、`.claude-plugin/marketplace.json`、canonical manifest、source skill、hooks 和 target fixture/projection 版本声明同步到 0.41.0。
+- `docs/marketplace/submission-checklist-0.41.0.md` 从准备中清单更新为 0.41.0 pre-submission readiness checklist，保留 no-overclaim 和风险披露边界。
+
+### 验证
+- `check-version-consistency` PASS。
+- `verify` PASS。
+- `check-manifest-consistency` PASS。
+- `check-release --version 0.41.0 --require-changelog --runtime-adapters` PASS。
+- `check-governance --fail-on-issues` PASS。
+- `git diff --check` PASS。
+
 ## [0.40.1] — 2026-06-01
 
 ### 0.40.1 — GitHub CI clean checkout hotfix

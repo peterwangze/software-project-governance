@@ -1,15 +1,30 @@
 {
   "name": "spg",
-  "description": "Software Project Governance Workflow Plugin Marketplace",
+  "description": "Marketplace metadata for Software Project Governance, an AI coding delivery trust layer.",
   "owner": {
-    "name": "peterwangze"
+    "name": "peterwangze",
+    "url": "https://github.com/peterwangze"
   },
   "plugins": [
     {
       "name": "software-project-governance",
-      "description": "Software Project Governance Workflow - Automate process management for coding agents. Based on practices from Google, Amazon, Huawei, and ByteDance.",
+      "description": "AI coding delivery trust layer for governance-aware coding agents. Tracks goals, evidence, risks, quality budgets, and release readiness without making broad runtime claims.",
       "version": "0.40.1",
-      "source": "./"
+      "source": "./",
+      "homepage": "https://github.com/peterwangze/software-project-governance",
+      "repository": "https://github.com/peterwangze/software-project-governance",
+      "license": "UNLICENSED",
+      "keywords": [
+        "ai-coding",
+        "delivery-trust",
+        "governance",
+        "evidence",
+        "risk-management",
+        "release-readiness",
+        "quality-gates",
+        "code-review",
+        "agent-workflow"
+      ]
     }
   ]
 }

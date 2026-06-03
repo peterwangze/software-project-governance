@@ -3071,6 +3071,9 @@ class GovernanceStatusContractTests(unittest.TestCase):
             "marketplace approval",
             "universal/full runtime support",
             "1.0.0 production-ready",
+            "first-run-demo --assert-snapshot",
+            "demo/local-only",
+            "external credentials",
         ]
         for label, text in {
             "commands/governance-status.md": status_text,
@@ -3153,6 +3156,49 @@ class GovernanceStatusContractTests(unittest.TestCase):
         ]
         self.assertEqual([needle for needle in required if needle not in governance], [])
         self.assertEqual([needle for needle in required if needle not in init], [])
+
+
+class FirstRunDemoTests(unittest.TestCase):
+    """FIX-103: local demo harness asserts first happy path snapshot fields."""
+
+    def test_first_run_demo_assert_snapshot_passes(self):
+        args = argparse.Namespace(assert_snapshot=True)
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            vw.cmd_first_run_demo(args)
+
+        output = buf.getvalue()
+        self.assertIn("First-Run Demo Harness", output)
+        self.assertIn("First-Run Demo Result: PASSED", output)
+        for marker in [
+            "Delivery Trust Snapshot",
+            "Goal:",
+            "Stage:",
+            "Gate/setup status:",
+            "Risk:",
+            "Evidence:",
+            "Next action:",
+            "Preset guidance:",
+            "Question budget:",
+            "Verification signal:",
+            "No-overclaim boundary:",
+            "local/demo-only",
+            "no external credentials",
+            "no official approval",
+            "marketplace approval",
+            "universal/full runtime support",
+            "1.0.0 production-ready",
+        ]:
+            self.assertIn(marker, output)
+
+    def test_first_run_demo_assertion_reports_missing_field(self):
+        snapshot = vw.build_first_run_demo_snapshot()
+        snapshot.pop("Evidence")
+
+        missing = vw.assert_first_run_demo_snapshot(snapshot)
+
+        self.assertIn("Evidence", missing)
+        self.assertIn("Evidence:", missing)
 
 
 class GovernanceReviewFallbackPolicyTests(unittest.TestCase):

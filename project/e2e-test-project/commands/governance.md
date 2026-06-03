@@ -455,10 +455,11 @@ Next action: {next_action}
 Preset guidance: lite is the recommended first-run default; standard is for team delivery; strict is for regulated/high-risk work
 Question budget: no more than 3 non-critical questions before snapshot; deferred non-critical fields become assumptions
 Verification signal: {runnable_or_observable_signal}
-No-overclaim boundary: local snapshot only; no official approval, marketplace approval, universal/full runtime support, or 1.0.0 production-ready claim
+No-overclaim boundary: local/demo-only snapshot; no external credentials required; no official approval, marketplace approval, universal/full runtime support, or 1.0.0 production-ready claim
 ```
 
 Snapshot 是 `/governance` 或 `/governance-status` first-run/status path 的最小可观察交付信号；它必须在用户不阅读 `plan-tracker.md`、`evidence-log.md`、`risk-log.md` 或完整 SKILL 文件的情况下可见。
+本地 acceptance harness：`python skills/software-project-governance/infra/verify_workflow.py first-run-demo --assert-snapshot` MUST 可在 demo/local-only 范围运行，不需要 external credentials，并断言 Delivery Trust Snapshot 字段和 no-overclaim boundary。
 已有 `.governance/` 项目的 Scenario F 是 resume happy path，不得提示重新初始化；只有 `.governance/plan-tracker.md` 缺失时才进入初始化/接入错误路径。
 
 **输出模板**：参考 `commands/governance-status.md`，扩展含 permission_mode、版本新鲜度、最近活动，并应用上述折叠规则。

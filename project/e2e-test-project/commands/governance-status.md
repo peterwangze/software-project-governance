@@ -47,7 +47,8 @@
 - First-run preset guidance MUST 展示：`lite is the recommended first-run default`；`standard is for team delivery`；`strict is for regulated/high-risk work`。
 - Snapshot 前 MUST NOT 提超过 3 个 non-critical questions；剩余 deferred non-critical fields MUST 记录为 assumptions。
 - `Verification signal` MUST 是一个可运行或可观察的本地信号，例如 `python skills/software-project-governance/infra/verify_workflow.py status`。
-- `No-overclaim boundary` MUST 明确说明该 snapshot 只是本地治理状态信号，不声明 official approval、marketplace approval、universal/full runtime support 或 1.0.0 production-ready。
+- `No-overclaim boundary` MUST 明确说明该 snapshot 只是 demo/local-only 本地治理状态信号、不需要 external credentials，且不声明 official approval、marketplace approval、universal/full runtime support 或 1.0.0 production-ready。
+- 本地 acceptance harness：`python skills/software-project-governance/infra/verify_workflow.py first-run-demo --assert-snapshot` MUST 在 demo/local-only 范围断言 snapshot 字段，不需要 external credentials。
 
 ### Step 4: 按输出格式模板输出状态面板
 

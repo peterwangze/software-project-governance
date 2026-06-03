@@ -3211,13 +3211,13 @@ def parse_session_snapshot_carry_over_tasks(snapshot_path=None):
     return tasks
 
 
-def build_delivery_trust_snapshot(config=None, overview=None, gates=None, stats=None):
+def build_delivery_trust_snapshot(config=None, overview=None, gates=None, stats=None, resume=None):
     """Build the compact first-run trust signal shown by status output."""
     config = config or parse_project_config()
     overview = overview or parse_overview()
     gates = gates or parse_gate_status()
     stats = stats or parse_task_stats()
-    resume = parse_resume_state()
+    resume = resume or parse_resume_state()
 
     goal = (
         config.get("项目目标")
@@ -3281,10 +3281,104 @@ def build_delivery_trust_snapshot(config=None, overview=None, gates=None, stats=
         ),
         "Verification signal": "python skills/software-project-governance/infra/verify_workflow.py status",
         "No-overclaim boundary": (
-            "local snapshot only; no official approval, marketplace approval, "
+            "local/demo-only snapshot; no external credentials required; "
+            "no official approval, marketplace approval, "
             "universal/full runtime support, or 1.0.0 production-ready claim"
         ),
     }
+
+
+FIRST_RUN_DEMO_REQUIRED_FIELDS = [
+    "Resume state",
+    "Carry-over",
+    "Open risks",
+    "Hooks",
+    "Goal",
+    "Stage",
+    "Gate/setup status",
+    "Risk",
+    "Evidence",
+    "Next action",
+    "Preset guidance",
+    "Question budget",
+    "Verification signal",
+    "No-overclaim boundary",
+]
+
+FIRST_RUN_DEMO_REQUIRED_MARKERS = [
+    "Delivery Trust Snapshot",
+    "Goal:",
+    "Stage:",
+    "Gate/setup status:",
+    "Risk:",
+    "Evidence:",
+    "Next action:",
+    "Preset guidance:",
+    "lite is the recommended first-run default",
+    "standard is for team delivery",
+    "strict is for regulated/high-risk work",
+    "Question budget:",
+    "no more than 3 non-critical questions before snapshot",
+    "Verification signal:",
+    "No-overclaim boundary:",
+    "local/demo-only",
+    "no external credentials",
+    "no official approval",
+    "marketplace approval",
+    "universal/full runtime support",
+    "1.0.0 production-ready",
+]
+
+
+def render_delivery_trust_snapshot(snapshot):
+    """Render a snapshot with the same compact field labels used by status."""
+    lines = ["Delivery Trust Snapshot"]
+    lines.extend(f"{label}: {value}" for label, value in snapshot.items())
+    return "\n".join(lines)
+
+
+def build_first_run_demo_snapshot():
+    """Build the local/demo-only first happy path fixture for FIX-103."""
+    demo_config = {
+        "项目目标": "Demo project: see the delivery trust layer before reading full governance files",
+        "当前阶段": "First-run demo",
+    }
+    demo_overview = {
+        "project": "First-run demo fixture",
+        "current_stage": "First-run demo",
+        "total": "1",
+        "completed": "0",
+        "blocked": "0",
+        "risks": "1",
+        "latest_gate": "G0 setup ready",
+        "latest_retro": "N/A",
+    }
+    demo_gates = [{"gate": "G0", "status": "setup-ready", "date": "", "evidence": "local demo"}]
+    demo_stats = {"进行中": 1}
+    demo_resume = {
+        "state_exists": True,
+        "state_label": "First-run demo fixture (local/demo-only)",
+        "carry_over_count": 0,
+        "open_risk_count": 1,
+        "risk_details": "RISK-036 remains open; demo makes no approval or runtime support claims",
+        "hook_state": "not required for demo; local assertions only",
+        "next_action": "run the first user-visible task and attach runnable evidence",
+    }
+    return build_delivery_trust_snapshot(
+        demo_config,
+        demo_overview,
+        demo_gates,
+        demo_stats,
+        resume=demo_resume,
+    )
+
+
+def assert_first_run_demo_snapshot(snapshot, rendered_text=None):
+    """Return missing field/marker diagnostics for the local first-run demo."""
+    rendered_text = rendered_text if rendered_text is not None else render_delivery_trust_snapshot(snapshot)
+    missing_fields = [field for field in FIRST_RUN_DEMO_REQUIRED_FIELDS if not snapshot.get(field)]
+    missing_markers = [marker for marker in FIRST_RUN_DEMO_REQUIRED_MARKERS if marker not in rendered_text]
+    return missing_fields + missing_markers
 
 
 def parse_gate_detail(gate_id):
@@ -4688,6 +4782,27 @@ def cmd_status(args):
             date = g["date"] if g["date"] else ""
             print(f"│  {icon} {g['gate']:4s}  {g['status']:20s}  {date}")
         print("└──────────────────────────────────────────────────────┘")
+
+
+def cmd_first_run_demo(args):
+    """Run the local first happy path demo harness."""
+    snapshot = build_first_run_demo_snapshot()
+    rendered = render_delivery_trust_snapshot(snapshot)
+
+    print("== First-Run Demo Harness ==")
+    print("Scope: local/demo-only; no external credentials; no network or agent runtime required.")
+    print()
+    print(rendered)
+
+    if args.assert_snapshot:
+        missing = assert_first_run_demo_snapshot(snapshot, rendered)
+        if missing:
+            print("\n== First-Run Demo Result: FAILED ==")
+            for item in missing:
+                print(f"  - missing required snapshot field/marker: {item}")
+            sys.exit(1)
+        print("\n== First-Run Demo Result: PASSED ==")
+        print("Checked fields: " + ", ".join(FIRST_RUN_DEMO_REQUIRED_FIELDS))
 
 
 def cmd_gate(args):
@@ -12689,6 +12804,17 @@ def main():
     # e2e-check
     subparsers.add_parser("e2e-check", help="Run E2E governance verification against e2e-test-project")
 
+    # first-run-demo (FIX-103)
+    frd_p = subparsers.add_parser(
+        "first-run-demo",
+        help="Run the local first happy path demo harness",
+    )
+    frd_p.add_argument(
+        "--assert-snapshot",
+        action="store_true",
+        help="Assert required Delivery Trust Snapshot fields and no-overclaim markers",
+    )
+
     # agent-runtime-e2e
     are_p = subparsers.add_parser(
         "agent-runtime-e2e",
@@ -12877,6 +13003,7 @@ def main():
         "check-agent-adapters": cmd_check_agent_adapters,
         "check-release": cmd_check_release,
         "e2e-check": cmd_e2e_check,
+        "first-run-demo": cmd_first_run_demo,
         "agent-runtime-e2e": cmd_agent_runtime_e2e,
         "gemini-auth-preflight": cmd_gemini_auth_preflight,
         "opencode-provider-preflight": cmd_opencode_provider_preflight,

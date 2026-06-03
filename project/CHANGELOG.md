@@ -2,6 +2,31 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.42.0] — 2026-06-04
+
+### 0.42.0 — 5-Minute Success Path
+
+面向新用户首次接触时的 5 分钟成功路径，0.42.0 将 0.41.0 的 marketplace-ready 定位落到可感知的本地 trust signal：用户可以通过 `/governance` 或 status 输出看到 Delivery Trust Snapshot，并用本地 demo harness 验证 happy path。该版本是 5-minute success path release package，不声明 official approval、marketplace approval、universal/full runtime support 或 1.0.0 production-ready；RISK-036 继续打开，等待后续 0.43.0~0.46.0 与外部验证闭环。
+
+### 新增
+- **AUDIT-106**: 完成 5-minute success path 审计，定义 happy path、验收信号、最小切片和 no-overclaim 边界。
+- **FIX-100**: 新增 Delivery Trust Snapshot 垂直切片，让 status/governance 输出展示 goal、stage、gate、risk、evidence、next action、preset guidance 和 no-overclaim boundary。
+- **FIX-101**: 新增 existing-project resume happy path，已有治理状态会显示 resume state、carry-over、open risks、hooks 和 next action，而不是要求用户重学完整流程。
+- **FIX-102**: 新增 lite/standard/strict first-run preset guidance，帮助用户按项目复杂度选择首次运行路径。
+- **FIX-103**: 新增 `first-run-demo --assert-snapshot` 本地 demo harness，输出 Delivery Trust Snapshot 并断言 happy path 字段完整。
+- **FIX-104**: README 中英文 5-Minute Start 收敛到 first-success path，直接指向 Delivery Trust Snapshot 和本地 demo harness。
+
+### 变更
+- `.codex-plugin/plugin.json`、`.claude-plugin/plugin.json`、`.claude-plugin/marketplace.json`、canonical manifest、source skill、hooks 和 target fixture/projection 版本声明同步到 0.42.0。
+- Release gate expectations、target fixture plan-tracker 和 target workflow skill markers 更新为 0.42.0。
+- 0.42.0 release docs 新增 checklist、rollback plan 和 feature flag 状态，范围限定为 AUDIT-106、FIX-100、FIX-101、FIX-102、FIX-103、FIX-104 与 REL-018。
+
+### 验证
+- `check-version-consistency` PASS。
+- `check-release --version 0.42.0 --require-changelog --runtime-adapters` PASS。
+- `check-governance --fail-on-issues` PASS。
+- `git diff --check` PASS。
+
 ## [0.41.0] — 2026-06-02
 
 ### 0.41.0 — Official Marketplace Readiness

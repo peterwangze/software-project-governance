@@ -3021,17 +3021,108 @@ def parse_overview():
     return {}
 
 
+def _normalize_task_status(status_text):
+    """Map decorated plan-tracker status text to canonical task statuses."""
+    status_text = (status_text or "").strip()
+    for status in ("已完成", "进行中", "未开始", "已终止"):
+        if status in status_text:
+            return status
+    return None
+
+
 def parse_task_stats():
     """Count task statuses from sample tracking table."""
     content = SAMPLE_PATH.read_text(encoding="utf-8")
     stats = {"已完成": 0, "进行中": 0, "未开始": 0, "已终止": 0}
+    status_index = None
     for line in content.split("\n"):
-        parts = [p.strip() for p in line.split("|")]
-        if len(parts) >= 11:
-            status = parts[10] if len(parts) > 10 else ""
+        if not line.startswith("|"):
+            continue
+        parts = [p.strip() for p in line.split("|")[1:-1]]
+        if not parts:
+            continue
+        if "状态" in parts:
+            status_index = parts.index("状态")
+            continue
+        if all(set(p.strip()) <= {"-", " "} for p in parts):
+            continue
+        candidate_indices = []
+        if status_index is not None:
+            candidate_indices.append(status_index)
+        if len(parts) >= 10:
+            candidate_indices.append(9)
+        if len(parts) >= 7:
+            candidate_indices.append(6)
+        for candidate_index in candidate_indices:
+            status = _normalize_task_status(parts[candidate_index]) if candidate_index < len(parts) else None
             if status in stats:
                 stats[status] += 1
+                break
     return stats
+
+
+def build_delivery_trust_snapshot(config=None, overview=None, gates=None, stats=None):
+    """Build the compact first-run trust signal shown by status output."""
+    config = config or parse_project_config()
+    overview = overview or parse_overview()
+    gates = gates or parse_gate_status()
+    stats = stats or parse_task_stats()
+
+    goal = (
+        config.get("项目目标")
+        or config.get("Project Goal")
+        or config.get("project_goal")
+        or config.get("Project Name")
+        or overview.get("project")
+        or "Not recorded yet"
+    )
+    stage = overview.get("current_stage") or config.get("当前阶段") or "Not recorded yet"
+
+    latest_gate = overview.get("latest_gate") or ""
+    if latest_gate and latest_gate not in {"—", "-", "N/A"}:
+        gate_status = latest_gate
+    else:
+        first_pending = next((g for g in gates if g.get("status") == "pending"), None)
+        if first_pending:
+            gate_status = f"{first_pending['gate']} pending"
+        elif gates:
+            last_gate = gates[-1]
+            gate_status = f"{last_gate['gate']} {last_gate.get('status', 'N/A')}"
+        else:
+            gate_status = "setup status not recorded"
+
+    risk_count = str(overview.get("risks", "0") or "0")
+    risk = "no open risks yet" if risk_count in {"0", "0.0", "—", "-", "N/A"} else f"{risk_count} open risk(s)"
+
+    completed = str(overview.get("completed", "0") or "0")
+    total = str(overview.get("total", "0") or "0")
+    evidence = (
+        "no delivery evidence yet; first task must record runnable evidence"
+        if completed == "0"
+        else f"{completed}/{total} task(s) completed; verify evidence before closing work"
+    )
+
+    active_count = sum(stats.values()) - stats.get("已完成", 0) - stats.get("已终止", 0)
+    if active_count > 0:
+        next_action = "continue the active task and attach evidence before completion"
+    elif completed == "0":
+        next_action = "define the first user-visible task with acceptance and evidence"
+    else:
+        next_action = "pick the next task or run a gate check before release claims"
+
+    return {
+        "Goal": goal,
+        "Stage": stage,
+        "Gate/setup status": gate_status,
+        "Risk": risk,
+        "Evidence": evidence,
+        "Next action": next_action,
+        "Verification signal": "python skills/software-project-governance/infra/verify_workflow.py status",
+        "No-overclaim boundary": (
+            "local snapshot only; no official approval, marketplace approval, "
+            "universal/full runtime support, or 1.0.0 production-ready claim"
+        ),
+    }
 
 
 def parse_gate_detail(gate_id):
@@ -4381,6 +4472,7 @@ def cmd_status(args):
     gates = parse_gate_status()
     stats = parse_task_stats()
     permission_mode = config.get("操作权限模式", config.get("permission_mode", "N/A"))
+    trust_snapshot = build_delivery_trust_snapshot(config, overview, gates, stats)
 
     # Config section
     print("\n┌─ Project Config ────────────────────────────────────┐")
@@ -4410,6 +4502,12 @@ def cmd_status(args):
         print(f"│  Latest Gate: {overview.get('latest_gate', 'N/A')}")
         print(f"│  Last Retro: {overview.get('latest_retro', 'N/A')}")
         print("└──────────────────────────────────────────────────────┘")
+
+    # First-run trust signal
+    print("\n┌─ Delivery Trust Snapshot ───────────────────────────┐")
+    for label, value in trust_snapshot.items():
+        print(f"│  {label}: {value}")
+    print("└──────────────────────────────────────────────────────┘")
 
     # Task stats
     if any(stats.values()):
@@ -10601,6 +10699,17 @@ def _e2e_target_cwd_command_matrix(e2e_dir):
 def _e2e_target_fixture_checks(e2e_dir):
     """Return direct checks against the tracked e2e-test-project fixture."""
     governance_dir = e2e_dir / ".governance"
+    delivery_trust_needles = [
+        "Delivery Trust Snapshot",
+        "Goal",
+        "Stage",
+        "Gate/setup status",
+        "Risk",
+        "Evidence",
+        "Next action",
+        "Verification signal",
+        "No-overclaim boundary",
+    ]
     return [
         {
             "label": "CLAUDE.md bootstrap fixture",
@@ -10651,7 +10760,12 @@ def _e2e_target_fixture_checks(e2e_dir):
         {
             "label": "target /governance route contract",
             "path": e2e_dir / "commands" / "governance.md",
-            "needles": ["Scenario F", "AskUserQuestion", "Coordinator"],
+            "needles": ["Scenario F", "AskUserQuestion", "Coordinator", *delivery_trust_needles],
+        },
+        {
+            "label": "target /governance-status Delivery Trust Snapshot contract",
+            "path": e2e_dir / "commands" / "governance-status.md",
+            "needles": delivery_trust_needles,
         },
     ]
 
@@ -10684,8 +10798,30 @@ def _e2e_contract_checks():
             "label": "/governance route contract",
             "kind": "CONTRACT_CHECK",
             "path": ROOT / "commands/governance.md",
-            "needles": ["Scenario F", "状态面板"],
+            "needles": [
+                "Scenario F",
+                "状态面板",
+                "Delivery Trust Snapshot",
+                "No-overclaim boundary",
+            ],
             "reason": "Executable coverage comes from the Scenario F status proxy.",
+        },
+        {
+            "label": "/governance-status Delivery Trust Snapshot contract",
+            "kind": "CONTRACT_CHECK",
+            "path": ROOT / "commands/governance-status.md",
+            "needles": [
+                "Delivery Trust Snapshot",
+                "Goal",
+                "Stage",
+                "Gate/setup status",
+                "Risk",
+                "Evidence",
+                "Next action",
+                "Verification signal",
+                "No-overclaim boundary",
+            ],
+            "reason": "Status output is the runnable first-run snapshot signal.",
         },
     ]
 
@@ -10819,25 +10955,62 @@ def _validate_e2e_status(result):
     legal_permission_mode_present = any(
         value in output for value in ("maximum-autonomy", "default-confirm")
     )
+    snapshot_present = _has_all(
+        output,
+        [
+            "Delivery Trust Snapshot",
+            "Goal:",
+            "Stage:",
+            "Gate/setup status:",
+            "Risk:",
+            "Evidence:",
+            "Next action:",
+            "Verification signal:",
+            "No-overclaim boundary:",
+            "no official approval",
+            "marketplace approval",
+            "universal/full runtime support",
+            "1.0.0 production-ready",
+        ],
+    )
     ok = result.returncode == 0 and _has_all(
         output,
         ["Project Overview", "Tasks", "Gate"],
-    ) and labels_present and legal_permission_mode_present
+    ) and labels_present and legal_permission_mode_present and snapshot_present
     return ok, (
         "status output exposes Project Overview, Tasks, Gate, "
-        "permission_mode/操作权限模式, and a legal permission mode "
-        "(maximum-autonomy or default-confirm)"
+        "permission_mode/操作权限模式, a legal permission mode "
+        "(maximum-autonomy or default-confirm), and Delivery Trust Snapshot"
     )
 
 
 def _validate_e2e_target_status(result):
     output = _e2e_output(result)
+    snapshot_present = _has_all(
+        output,
+        [
+            "Delivery Trust Snapshot",
+            "Goal:",
+            "Stage:",
+            "Gate/setup status:",
+            "Risk:",
+            "Evidence:",
+            "Next action:",
+            "Verification signal:",
+            "No-overclaim boundary:",
+            "no official approval",
+            "marketplace approval",
+            "universal/full runtime support",
+            "1.0.0 production-ready",
+        ],
+    )
     ok = (
         result.returncode == 0
         and _has_all(output, ["Project Overview", "Tasks", "Gate"])
         and any(value in output for value in ("maximum-autonomy", "default-confirm"))
+        and snapshot_present
     )
-    return ok, "target cwd status command returns project overview, tasks, gate, and a legal permission mode"
+    return ok, "target cwd status command returns project overview, tasks, gate, legal permission mode, and Delivery Trust Snapshot"
 
 
 def _validate_e2e_gate_g1(result):
@@ -10962,9 +11135,12 @@ def _validate_e2e_governance_proxy(result):
         result.returncode == 0
         and "Project Overview" in output
         and "Gate Status" in output
+        and "Delivery Trust Snapshot" in output
+        and "No-overclaim boundary" in output
         and "Scenario F" in contract_text
+        and "Delivery Trust Snapshot" in contract_text
     )
-    return ok, "Scenario F proxy executed status and found /governance route contract"
+    return ok, "Scenario F proxy executed status and found /governance Delivery Trust Snapshot route contract"
 
 
 def _evaluate_e2e_command(entry, runner=_run_e2e_subprocess):

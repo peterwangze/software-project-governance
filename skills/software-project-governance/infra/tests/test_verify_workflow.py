@@ -1,7 +1,8 @@
 """Unit tests for verify_workflow.py — SYSGAP-016.
 
-Column format constraints (mandatory—must match parser hard-coded indices):
+Column format constraints (mandatory—must match parser expectations):
   - parse_completed_task_ids: >= 11 parts, status at parts[10]
+  - parse_task_stats: status column resolved from table header, with historical fallbacks
   - parse_evidence_task_ids:  | EVD-xxx | <TASK-ID-column> | ..., parts[2]
   - parse_open_risks:         >= 10 parts, status at parts[9]
   - parse_gate_status:        >= 5 parts (split[1:-1]), [0]=gate [2]=status
@@ -1891,12 +1892,34 @@ class ProjectionSyncTests(unittest.TestCase):
 class E2ECommandMatrixTests(unittest.TestCase):
     """FIX-060: e2e-check must execute real command proxies."""
 
+    def _status_stdout(self, permission_mode="maximum-autonomy"):
+        return "\n".join([
+            "Project Overview",
+            "Tasks",
+            "Gate",
+            f"Permission Mode (permission_mode / 操作权限模式): {permission_mode}",
+            "Delivery Trust Snapshot",
+            "Goal: test",
+            "Stage: 维护",
+            "Gate/setup status: G11 passed",
+            "Risk: no open risks yet",
+            "Evidence: no delivery evidence yet",
+            "Next action: continue the active task and attach evidence before completion",
+            "Verification signal: python skills/software-project-governance/infra/verify_workflow.py status",
+            (
+                "No-overclaim boundary: local snapshot only; no official approval, "
+                "marketplace approval, universal/full runtime support, or "
+                "1.0.0 production-ready claim"
+            ),
+            "",
+        ])
+
     def test_e2e_matrix_entry_invokes_subprocess(self):
         entry = vw._e2e_command_matrix()[0]
         completed = subprocess.CompletedProcess(
             entry["command"],
             0,
-            stdout="Project Overview\nTasks\nGate\npermission_mode\n操作权限模式\nmaximum-autonomy\n",
+            stdout=self._status_stdout(),
             stderr="",
         )
 
@@ -1932,7 +1955,7 @@ class E2ECommandMatrixTests(unittest.TestCase):
         completed = subprocess.CompletedProcess(
             entry["command"],
             0,
-            stdout="Project Overview\nTasks\nGate\npermission_mode\n操作权限模式\ndefault-confirm\n",
+            stdout=self._status_stdout("default-confirm"),
             stderr="",
         )
 
@@ -2196,8 +2219,23 @@ class E2ECommandMatrixTests(unittest.TestCase):
                 "---\nversion: 0.41.0\n---\nCoordinator\nAgent Team\n",
                 encoding="utf-8",
             )
+            trust_snapshot_contract = (
+                "Delivery Trust Snapshot\n"
+                "Goal\n"
+                "Stage\n"
+                "Gate/setup status\n"
+                "Risk\n"
+                "Evidence\n"
+                "Next action\n"
+                "Verification signal\n"
+                "No-overclaim boundary\n"
+            )
             (e2e_dir / "commands" / "governance.md").write_text(
-                "Scenario F\nAskUserQuestion\nCoordinator\n",
+                "Scenario F\nAskUserQuestion\nCoordinator\n" + trust_snapshot_contract,
+                encoding="utf-8",
+            )
+            (e2e_dir / "commands" / "governance-status.md").write_text(
+                trust_snapshot_contract,
                 encoding="utf-8",
             )
 
@@ -2773,6 +2811,60 @@ class GovernanceStatusContractTests(unittest.TestCase):
         output = buf.getvalue()
         self.assertIn("Permission Mode (permission_mode / 操作权限模式): maximum-autonomy", output)
         self.assertIn("Project Overview", output)
+        self.assertIn("Delivery Trust Snapshot", output)
+        self.assertIn("Goal: test", output)
+        self.assertIn("Stage: 维护", output)
+        self.assertIn("Gate/setup status: G11 通过", output)
+        self.assertIn("Risk: no open risks yet", output)
+        self.assertIn("Evidence: 1/1 task(s) completed; verify evidence before closing work", output)
+        self.assertIn(
+            "Verification signal: python skills/software-project-governance/infra/verify_workflow.py status",
+            output,
+        )
+        self.assertIn("No-overclaim boundary:", output)
+        self.assertIn("no official approval", output)
+        self.assertIn("marketplace approval", output)
+        self.assertIn("universal/full runtime support", output)
+        self.assertIn("1.0.0 production-ready", output)
+
+    def test_cmd_status_counts_active_seven_column_task_row(self):
+        plan = "\n".join([
+            "# 计划跟踪",
+            "",
+            "## 项目配置",
+            "- **项目目标**: test",
+            "- **Profile**: standard",
+            "- **触发模式**: always-on",
+            "- **操作权限模式**: maximum-autonomy",
+            "- **当前阶段**: 维护",
+            "",
+            "## Gate 状态跟踪",
+            "| Gate | 阶段转换 | 状态 | 通过日期 | 关键证据 |",
+            "| --- | --- | --- | --- | --- |",
+            "| G11 | → 下一轮 | passed | 2026-05-13 | done |",
+            "",
+            "## 项目总览",
+            "| 项目 | 当前阶段 | 总任务数 | 已完成 | 阻塞中 | 关键风险数 | 最近 Gate 结论 | 最近复盘日期 |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| Demo | 维护 | 1 | 0 | 0 | 1 | G11 通过 | 2026-05-13 |",
+            "",
+            "## 当前活跃事项",
+            "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+            "| --- | --- | --- | --- | --- | --- | --- |",
+            "| **P0** | FIX-100 | First-run Delivery Trust Snapshot vertical slice | AUDIT-106 | 0.42.0 | status snapshot | 🚧 进行中 |",
+        ])
+        with tempfile.TemporaryDirectory() as td:
+            sample = Path(td) / "plan-tracker.md"
+            sample.write_text(plan, encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sample):
+                stats = vw.parse_task_stats()
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    vw.cmd_status(None)
+
+        output = buf.getvalue()
+        self.assertEqual(stats["进行中"], 1)
+        self.assertIn("Next action: continue the active task and attach evidence before completion", output)
 
     def test_governance_status_docs_require_permission_mode(self):
         text = (vw.ROOT / "commands" / "governance-status.md").read_text(encoding="utf-8")
@@ -2785,6 +2877,69 @@ class GovernanceStatusContractTests(unittest.TestCase):
         ]
         missing = [needle for needle in required if needle not in text]
         self.assertEqual(missing, [])
+
+    def test_governance_status_docs_require_delivery_trust_snapshot_contract(self):
+        status_text = (vw.ROOT / "commands" / "governance-status.md").read_text(encoding="utf-8")
+        governance_text = (vw.ROOT / "commands" / "governance.md").read_text(encoding="utf-8")
+        fixture_status = (
+            vw.ROOT / "project" / "e2e-test-project" / "commands" / "governance-status.md"
+        ).read_text(encoding="utf-8")
+        fixture_governance = (
+            vw.ROOT / "project" / "e2e-test-project" / "commands" / "governance.md"
+        ).read_text(encoding="utf-8")
+
+        required = [
+            "Delivery Trust Snapshot",
+            "Goal",
+            "Stage",
+            "Gate/setup status",
+            "Risk",
+            "Evidence",
+            "Next action",
+            "Verification signal",
+            "No-overclaim boundary",
+            "official approval",
+            "marketplace approval",
+            "universal/full runtime support",
+            "1.0.0 production-ready",
+        ]
+        for label, text in {
+            "commands/governance-status.md": status_text,
+            "commands/governance.md": governance_text,
+            "project/e2e-test-project/commands/governance-status.md": fixture_status,
+            "project/e2e-test-project/commands/governance.md": fixture_governance,
+        }.items():
+            with self.subTest(label=label):
+                self.assertEqual([needle for needle in required if needle not in text], [])
+
+    def test_target_status_validator_requires_no_overclaim_denial_content(self):
+        base_output = (
+            "Project Overview\n"
+            "Tasks\n"
+            "Gate\n"
+            "Permission Mode (permission_mode / 操作权限模式): maximum-autonomy\n"
+            "Delivery Trust Snapshot\n"
+            "Goal: test\n"
+            "Stage: 维护\n"
+            "Gate/setup status: G11 passed\n"
+            "Risk: no open risks yet\n"
+            "Evidence: no delivery evidence yet\n"
+            "Next action: continue the active task and attach evidence before completion\n"
+            "Verification signal: python skills/software-project-governance/infra/verify_workflow.py status\n"
+            "No-overclaim boundary: local snapshot only\n"
+        )
+        missing_denials = subprocess.CompletedProcess(args=[], returncode=0, stdout=base_output, stderr="")
+        ok, _ = vw._validate_e2e_target_status(missing_denials)
+        self.assertFalse(ok)
+
+        full_output = (
+            base_output
+            + "no official approval, marketplace approval, universal/full runtime support, "
+            + "or 1.0.0 production-ready claim\n"
+        )
+        with_denials = subprocess.CompletedProcess(args=[], returncode=0, stdout=full_output, stderr="")
+        ok, _ = vw._validate_e2e_target_status(with_denials)
+        self.assertTrue(ok)
 
     def test_governance_scenario_c_matches_continuous_archive_step_e(self):
         governance = (vw.ROOT / "commands" / "governance.md").read_text(encoding="utf-8")

@@ -410,6 +410,7 @@ P1 (警告):
 **检测条件**：一切正常——`.governance/` 存在、健康、版本最新、无 snapshot、无异常
 
 **展示内容**（比 `governance-status` 更丰富）：
+- Delivery Trust Snapshot（Goal、Stage、Gate/setup status、Risk、Evidence、Next action、Verification signal、No-overclaim boundary）
 - 项目配置摘要（名称、profile、trigger_mode、permission_mode、版本、阶段）
 - Gate 状态表（G1-G11，含通过日期和关键证据）
 - 任务统计（总数/已完成/阻塞中/P0 待处理）
@@ -421,6 +422,7 @@ P1 (警告):
 **输出格式规则**：
 
 **始终展开（关键信息）**：
+- Delivery Trust Snapshot（first-run/status 可观察信号）
 - 项目配置摘要（名称、profile、trigger_mode、permission_mode、版本、阶段）
 - 任务统计（总数/已完成/阻塞中/P0 待处理）
 - 活跃风险（升级截止日期在 3 天内的标记）
@@ -432,6 +434,22 @@ P1 (警告):
 - 插件版本新鲜度 → `<details><summary>插件版本</summary>...版本信息...</details>`
 
 折叠原则：用户一眼看到项目健康摘要（配置 + 风险 + 下一步），细节按需展开。
+
+**Delivery Trust Snapshot 合约**：
+
+```
+Delivery Trust Snapshot
+Goal: {project_goal}
+Stage: {current_stage}
+Gate/setup status: {gate_or_setup_status}
+Risk: {risk_status}
+Evidence: {evidence_status}
+Next action: {next_action}
+Verification signal: {runnable_or_observable_signal}
+No-overclaim boundary: local snapshot only; no official approval, marketplace approval, universal/full runtime support, or 1.0.0 production-ready claim
+```
+
+Snapshot 是 `/governance` 或 `/governance-status` first-run/status path 的最小可观察交付信号；它必须在用户不阅读 `plan-tracker.md`、`evidence-log.md`、`risk-log.md` 或完整 SKILL 文件的情况下可见。
 
 **输出模板**：参考 `commands/governance-status.md`，扩展含 permission_mode、版本新鲜度、最近活动，并应用上述折叠规则。
 

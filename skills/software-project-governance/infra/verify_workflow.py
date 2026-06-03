@@ -2904,6 +2904,7 @@ SAMPLE_PATH = ROOT / ".governance/plan-tracker.md"
 GATES_PATH = ROOT / "skills/software-project-governance/core/stage-gates.md"
 LIFECYCLE_PATH = ROOT / "skills/software-project-governance/core/lifecycle.md"
 STAGE_SKILLS_ROOT = ROOT / "skills"
+SESSION_SNAPSHOT_PATH = ROOT / ".governance/session-snapshot.md"
 
 STAGE_ORDER = [
     "initiation", "research", "selection", "infrastructure",
@@ -3061,12 +3062,162 @@ def parse_task_stats():
     return stats
 
 
+def parse_resume_state():
+    """Summarize existing-project resume state from local governance files."""
+    governance_dir = SAMPLE_PATH.parent
+    state_exists = governance_dir.is_dir() and SAMPLE_PATH.is_file()
+    active_tasks = [
+        task for task in parse_current_active_tasks()
+        if _is_incomplete_task_status(task.get("status", ""))
+    ] if state_exists else []
+    if state_exists and not active_tasks:
+        active_tasks = parse_session_snapshot_carry_over_tasks()
+    open_risks = parse_open_risks() if state_exists else []
+    hook_paths = [
+        ROOT / ".git/hooks/pre-commit",
+        ROOT / ".git/hooks/commit-msg",
+        ROOT / ".git/hooks/post-commit",
+    ]
+    present_hooks = [path.name for path in hook_paths if path.is_file()]
+    missing_hooks = [path.name for path in hook_paths if not path.is_file()]
+
+    if open_risks:
+        risk_details = ", ".join(
+            f"{risk_id} opened {date_str}" for risk_id, date_str in open_risks[:3]
+        )
+        if len(open_risks) > 3:
+            risk_details += f", +{len(open_risks) - 3} more"
+    else:
+        risk_details = "none"
+
+    if missing_hooks:
+        hook_state = f"missing {', '.join(missing_hooks)}"
+    elif present_hooks:
+        hook_state = f"installed ({', '.join(present_hooks)})"
+    else:
+        hook_state = "not detected"
+
+    if active_tasks:
+        next_task = active_tasks[0]
+        next_action = (
+            f"resume {next_task['task_id']} and attach evidence before completion"
+        )
+    elif open_risks:
+        next_action = "review open risk before starting new work"
+    elif state_exists:
+        next_action = "pick the next task or run a gate check before release claims"
+    else:
+        next_action = "initialize governance before relying on resume state"
+
+    return {
+        "state_exists": state_exists,
+        "state_label": (
+            "Existing governance state detected"
+            if state_exists
+            else "No governance state detected"
+        ),
+        "carry_over_count": len(active_tasks),
+        "open_risk_count": len(open_risks),
+        "risk_details": risk_details,
+        "hook_state": hook_state,
+        "next_action": next_action,
+    }
+
+
+def parse_session_snapshot_carry_over_tasks(snapshot_path=None):
+    """Parse carry-over tasks from session-snapshot when active plan rows are absent."""
+    snapshot_path = Path(snapshot_path) if snapshot_path is not None else SESSION_SNAPSHOT_PATH
+    if not snapshot_path.is_file():
+        return []
+
+    content = snapshot_path.read_text(encoding="utf-8")
+    tasks = []
+    in_carry_section = False
+    header = []
+    for line in content.split("\n"):
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            section_title = stripped.lstrip("#").strip()
+            in_carry_section = section_title in {
+                "遗留任务",
+                "Carry-over tasks",
+                "Carry over tasks",
+                "Unfinished / deferred",
+                "未完成 / 已延期",
+            }
+            header = []
+            continue
+        if not in_carry_section:
+            continue
+        if stripped.startswith("|") and "---" not in stripped:
+            cells = _governance_table_cells(stripped)
+            if not cells:
+                continue
+            if any("任务" in cell or "Task" in cell for cell in cells):
+                header = cells
+                continue
+            task_idx = next(
+                (idx for idx, cell in enumerate(cells)
+                 if re.search(r"\b[A-Z]+-\d+\b", cell.strip("* "))),
+                None,
+            )
+            if task_idx is None:
+                continue
+            task_id = re.search(r"\b[A-Z]+-\d+\b", cells[task_idx]).group(0)
+            status = ""
+            if header:
+                status_idx = next(
+                    (idx for idx, cell in enumerate(header)
+                     if "状态" in cell or "status" in cell.lower()),
+                    None,
+                )
+                if status_idx is not None and status_idx < len(cells):
+                    status = cells[status_idx]
+            elif len(cells) > task_idx + 2:
+                status = cells[-1]
+            if not _is_incomplete_task_status(status):
+                continue
+            priority = ""
+            for cell in cells:
+                normalized = _normalize_priority(cell)
+                if normalized:
+                    priority = normalized
+                    break
+            title = cells[task_idx + 1].strip() if task_idx + 1 < len(cells) else ""
+            tasks.append({
+                "task_id": task_id,
+                "priority": priority,
+                "title": title,
+                "dependency": "",
+                "target_version": "",
+                "closure_path": "session-snapshot.md",
+                "status": status or "carry-over",
+                "raw_line": stripped,
+            })
+            continue
+        if stripped.startswith("-"):
+            task_match = re.search(r"\b([A-Z]+-\d+)\b", stripped)
+            if task_match and _is_incomplete_task_status(stripped):
+                tasks.append({
+                    "task_id": task_match.group(1),
+                    "priority": _normalize_priority(stripped) or "",
+                    "title": stripped.lstrip("- ").strip(),
+                    "dependency": "",
+                    "target_version": "",
+                    "closure_path": "session-snapshot.md",
+                    "status": "carry-over",
+                    "raw_line": stripped,
+                })
+    return tasks
+
+
 def build_delivery_trust_snapshot(config=None, overview=None, gates=None, stats=None):
     """Build the compact first-run trust signal shown by status output."""
     config = config or parse_project_config()
     overview = overview or parse_overview()
     gates = gates or parse_gate_status()
     stats = stats or parse_task_stats()
+    resume = parse_resume_state()
 
     goal = (
         config.get("项目目标")
@@ -3102,15 +3253,18 @@ def build_delivery_trust_snapshot(config=None, overview=None, gates=None, stats=
         else f"{completed}/{total} task(s) completed; verify evidence before closing work"
     )
 
-    active_count = sum(stats.values()) - stats.get("已完成", 0) - stats.get("已终止", 0)
-    if active_count > 0:
-        next_action = "continue the active task and attach evidence before completion"
+    if resume["state_exists"]:
+        next_action = resume["next_action"]
     elif completed == "0":
         next_action = "define the first user-visible task with acceptance and evidence"
     else:
         next_action = "pick the next task or run a gate check before release claims"
 
     return {
+        "Resume state": resume["state_label"],
+        "Carry-over": f"{resume['carry_over_count']} active task(s)",
+        "Open risks": f"{resume['open_risk_count']} open risk(s); {resume['risk_details']}",
+        "Hooks": resume["hook_state"],
         "Goal": goal,
         "Stage": stage,
         "Gate/setup status": gate_status,
@@ -10701,6 +10855,11 @@ def _e2e_target_fixture_checks(e2e_dir):
     governance_dir = e2e_dir / ".governance"
     delivery_trust_needles = [
         "Delivery Trust Snapshot",
+        "Resume state",
+        "Existing governance state detected",
+        "Carry-over",
+        "Open risks",
+        "Hooks",
         "Goal",
         "Stage",
         "Gate/setup status",
@@ -10812,6 +10971,11 @@ def _e2e_contract_checks():
             "path": ROOT / "commands/governance-status.md",
             "needles": [
                 "Delivery Trust Snapshot",
+                "Resume state",
+                "Existing governance state detected",
+                "Carry-over",
+                "Open risks",
+                "Hooks",
                 "Goal",
                 "Stage",
                 "Gate/setup status",
@@ -10959,6 +11123,11 @@ def _validate_e2e_status(result):
         output,
         [
             "Delivery Trust Snapshot",
+            "Resume state:",
+            "Existing governance state detected",
+            "Carry-over:",
+            "Open risks:",
+            "Hooks:",
             "Goal:",
             "Stage:",
             "Gate/setup status:",
@@ -10990,6 +11159,11 @@ def _validate_e2e_target_status(result):
         output,
         [
             "Delivery Trust Snapshot",
+            "Resume state:",
+            "Existing governance state detected",
+            "Carry-over:",
+            "Open risks:",
+            "Hooks:",
             "Goal:",
             "Stage:",
             "Gate/setup status:",
@@ -11136,11 +11310,16 @@ def _validate_e2e_governance_proxy(result):
         and "Project Overview" in output
         and "Gate Status" in output
         and "Delivery Trust Snapshot" in output
+        and "Existing governance state detected" in output
+        and "Carry-over:" in output
+        and "Open risks:" in output
+        and "Hooks:" in output
         and "No-overclaim boundary" in output
         and "Scenario F" in contract_text
         and "Delivery Trust Snapshot" in contract_text
+        and "Existing governance state detected" in contract_text
     )
-    return ok, "Scenario F proxy executed status and found /governance Delivery Trust Snapshot route contract"
+    return ok, "Scenario F proxy executed status and found /governance Delivery Trust Snapshot resume route contract"
 
 
 def _evaluate_e2e_command(entry, runner=_run_e2e_subprocess):

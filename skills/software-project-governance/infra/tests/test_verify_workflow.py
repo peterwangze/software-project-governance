@@ -1899,6 +1899,10 @@ class E2ECommandMatrixTests(unittest.TestCase):
             "Gate",
             f"Permission Mode (permission_mode / 操作权限模式): {permission_mode}",
             "Delivery Trust Snapshot",
+            "Resume state: Existing governance state detected",
+            "Carry-over: 1 active task(s)",
+            "Open risks: 1 open risk(s); RISK-036 opened 2026-06-01",
+            "Hooks: installed (pre-commit, commit-msg, post-commit)",
             "Goal: test",
             "Stage: 维护",
             "Gate/setup status: G11 passed",
@@ -2221,6 +2225,11 @@ class E2ECommandMatrixTests(unittest.TestCase):
             )
             trust_snapshot_contract = (
                 "Delivery Trust Snapshot\n"
+                "Resume state\n"
+                "Existing governance state detected\n"
+                "Carry-over\n"
+                "Open risks\n"
+                "Hooks\n"
                 "Goal\n"
                 "Stage\n"
                 "Gate/setup status\n"
@@ -2801,9 +2810,16 @@ class GovernanceStatusContractTests(unittest.TestCase):
             _task("FIX-064", status="已完成"),
         ])
         with tempfile.TemporaryDirectory() as td:
-            sample = Path(td) / "plan-tracker.md"
+            root = Path(td)
+            gov = root / ".governance"
+            gov.mkdir()
+            sample = gov / "plan-tracker.md"
+            risk_path = gov / "risk-log.md"
             sample.write_text(plan, encoding="utf-8")
-            with patch.object(vw, "SAMPLE_PATH", sample):
+            risk_path.write_text("# 当前项目风险记录\n", encoding="utf-8")
+            with patch.object(vw, "ROOT", root), \
+                 patch.object(vw, "SAMPLE_PATH", sample), \
+                 patch.object(vw, "RISK_PATH", risk_path):
                 buf = io.StringIO()
                 with redirect_stdout(buf):
                     vw.cmd_status(None)
@@ -2812,6 +2828,9 @@ class GovernanceStatusContractTests(unittest.TestCase):
         self.assertIn("Permission Mode (permission_mode / 操作权限模式): maximum-autonomy", output)
         self.assertIn("Project Overview", output)
         self.assertIn("Delivery Trust Snapshot", output)
+        self.assertIn("Resume state: Existing governance state detected", output)
+        self.assertIn("Carry-over: 0 active task(s)", output)
+        self.assertIn("Open risks: 0 open risk(s); none", output)
         self.assertIn("Goal: test", output)
         self.assertIn("Stage: 维护", output)
         self.assertIn("Gate/setup status: G11 通过", output)
@@ -2864,7 +2883,129 @@ class GovernanceStatusContractTests(unittest.TestCase):
 
         output = buf.getvalue()
         self.assertEqual(stats["进行中"], 1)
-        self.assertIn("Next action: continue the active task and attach evidence before completion", output)
+        self.assertIn("Carry-over: 1 active task(s)", output)
+        self.assertIn("Next action: resume FIX-100 and attach evidence before completion", output)
+
+    def test_cmd_status_outputs_existing_project_resume_markers(self):
+        plan = "\n".join([
+            "# 计划跟踪",
+            "",
+            "## 项目配置",
+            "- **项目目标**: resume happy path",
+            "- **Profile**: standard",
+            "- **触发模式**: always-on",
+            "- **操作权限模式**: default-confirm",
+            "- **当前阶段**: 维护",
+            "",
+            "## Gate 状态跟踪",
+            "| Gate | 阶段转换 | 状态 | 通过日期 | 关键证据 |",
+            "| --- | --- | --- | --- | --- |",
+            "| G11 | → 下一轮 | passed | 2026-06-03 | done |",
+            "",
+            "## 项目总览",
+            "| 项目 | 当前阶段 | 总任务数 | 已完成 | 阻塞中 | 关键风险数 | 最近 Gate 结论 | 最近复盘日期 |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| Demo | 维护 | 2 | 1 | 0 | 1 | G11 通过 | 2026-06-03 |",
+            "",
+            "## 当前活跃事项",
+            "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+            "| --- | --- | --- | --- | --- | --- | --- |",
+            "| **P0** | FIX-101 | Existing-project resume happy path | AUDIT-106 | 0.42.0 | status resume | 📋 待实施 |",
+        ])
+        risk = "\n".join([
+            "# 当前项目风险记录",
+            "| 编号 | 日期 | 风险/阻塞描述 | 所属阶段 | 触发条件 | 影响 | 严重级别 | Owner | 当前状态 | 缓解动作 | 截止日期 | 关联任务 | 备注 |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| RISK-036 | 2026-06-01 | adoption risk | 维护 | trigger | impact | 高 | Coordinator | 打开 | mitigate | 2026-06-15 | FIX-101 | note |",
+        ])
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gov = root / ".governance"
+            gov.mkdir()
+            sample = gov / "plan-tracker.md"
+            risk_path = gov / "risk-log.md"
+            sample.write_text(plan, encoding="utf-8")
+            risk_path.write_text(risk, encoding="utf-8")
+            for hook in ("pre-commit", "commit-msg", "post-commit"):
+                hook_path = root / ".git" / "hooks" / hook
+                hook_path.parent.mkdir(parents=True, exist_ok=True)
+                hook_path.write_text("#!/bin/sh\n", encoding="utf-8")
+
+            with patch.object(vw, "ROOT", root), \
+                 patch.object(vw, "SAMPLE_PATH", sample), \
+                 patch.object(vw, "RISK_PATH", risk_path):
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    vw.cmd_status(None)
+
+        output = buf.getvalue()
+        self.assertIn("Resume state: Existing governance state detected", output)
+        self.assertIn("Carry-over: 1 active task(s)", output)
+        self.assertIn("Open risks: 1 open risk(s); RISK-036 opened 2026-06-01", output)
+        self.assertIn("Hooks: installed (pre-commit, commit-msg, post-commit)", output)
+        self.assertIn("Next action: resume FIX-101 and attach evidence before completion", output)
+        self.assertNotIn("governance-init", output)
+        self.assertNotIn("reinitialize", output.lower())
+
+    def test_cmd_status_counts_session_snapshot_carry_over_when_active_rows_absent(self):
+        plan = "\n".join([
+            "# 计划跟踪",
+            "",
+            "## 项目配置",
+            "- **项目目标**: snapshot resume",
+            "- **Profile**: standard",
+            "- **触发模式**: always-on",
+            "- **操作权限模式**: maximum-autonomy",
+            "- **当前阶段**: 维护",
+            "",
+            "## Gate 状态跟踪",
+            "| Gate | 阶段转换 | 状态 | 通过日期 | 关键证据 |",
+            "| --- | --- | --- | --- | --- |",
+            "| G11 | → 下一轮 | passed | 2026-06-03 | done |",
+            "",
+            "## 项目总览",
+            "| 项目 | 当前阶段 | 总任务数 | 已完成 | 阻塞中 | 关键风险数 | 最近 Gate 结论 | 最近复盘日期 |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| Demo | 维护 | 2 | 1 | 0 | 0 | G11 通过 | 2026-06-03 |",
+            "",
+            "## 当前活跃事项",
+            "",
+            "暂无活跃事项。",
+        ])
+        snapshot = "\n".join([
+            "# 会话快照 — 2026-06-03",
+            "",
+            "## 遗留任务",
+            "| 任务 ID | 描述 | 完成百分比 | 阻塞原因 | 优先级 |",
+            "|---------|------|------------|----------|--------|",
+            "| FIX-101 | Existing-project resume happy path | 40% | reviewer findings | P0 |",
+            "",
+            "## 本轮已完成",
+            "- none",
+        ])
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gov = root / ".governance"
+            gov.mkdir()
+            sample = gov / "plan-tracker.md"
+            risk_path = gov / "risk-log.md"
+            snapshot_path = gov / "session-snapshot.md"
+            sample.write_text(plan, encoding="utf-8")
+            risk_path.write_text("# 当前项目风险记录\n", encoding="utf-8")
+            snapshot_path.write_text(snapshot, encoding="utf-8")
+            with patch.object(vw, "ROOT", root), \
+                 patch.object(vw, "SAMPLE_PATH", sample), \
+                 patch.object(vw, "RISK_PATH", risk_path), \
+                 patch.object(vw, "SESSION_SNAPSHOT_PATH", snapshot_path):
+                resume = vw.parse_resume_state()
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    vw.cmd_status(None)
+
+        output = buf.getvalue()
+        self.assertEqual(resume["carry_over_count"], 1)
+        self.assertIn("Carry-over: 1 active task(s)", output)
+        self.assertIn("Next action: resume FIX-101 and attach evidence before completion", output)
 
     def test_governance_status_docs_require_permission_mode(self):
         text = (vw.ROOT / "commands" / "governance-status.md").read_text(encoding="utf-8")
@@ -2890,6 +3031,11 @@ class GovernanceStatusContractTests(unittest.TestCase):
 
         required = [
             "Delivery Trust Snapshot",
+            "Resume state",
+            "Existing governance state detected",
+            "Carry-over",
+            "Open risks",
+            "Hooks",
             "Goal",
             "Stage",
             "Gate/setup status",
@@ -2919,6 +3065,10 @@ class GovernanceStatusContractTests(unittest.TestCase):
             "Gate\n"
             "Permission Mode (permission_mode / 操作权限模式): maximum-autonomy\n"
             "Delivery Trust Snapshot\n"
+            "Resume state: Existing governance state detected\n"
+            "Carry-over: 0 active task(s)\n"
+            "Open risks: 0 open risk(s); none\n"
+            "Hooks: installed (pre-commit, commit-msg, post-commit)\n"
             "Goal: test\n"
             "Stage: 维护\n"
             "Gate/setup status: G11 passed\n"
@@ -2940,6 +3090,27 @@ class GovernanceStatusContractTests(unittest.TestCase):
         with_denials = subprocess.CompletedProcess(args=[], returncode=0, stdout=full_output, stderr="")
         ok, _ = vw._validate_e2e_target_status(with_denials)
         self.assertTrue(ok)
+
+    def test_target_status_validator_requires_resume_markers(self):
+        output = (
+            "Project Overview\n"
+            "Tasks\n"
+            "Gate\n"
+            "Permission Mode (permission_mode / 操作权限模式): maximum-autonomy\n"
+            "Delivery Trust Snapshot\n"
+            "Goal: test\n"
+            "Stage: 维护\n"
+            "Gate/setup status: G11 passed\n"
+            "Risk: no open risks yet\n"
+            "Evidence: no delivery evidence yet\n"
+            "Next action: continue the active task and attach evidence before completion\n"
+            "Verification signal: python skills/software-project-governance/infra/verify_workflow.py status\n"
+            "No-overclaim boundary: local snapshot only; no official approval, marketplace approval, "
+            "universal/full runtime support, or 1.0.0 production-ready claim\n"
+        )
+        result = subprocess.CompletedProcess(args=[], returncode=0, stdout=output, stderr="")
+        ok, _ = vw._validate_e2e_target_status(result)
+        self.assertFalse(ok)
 
     def test_governance_scenario_c_matches_continuous_archive_step_e(self):
         governance = (vw.ROOT / "commands" / "governance.md").read_text(encoding="utf-8")

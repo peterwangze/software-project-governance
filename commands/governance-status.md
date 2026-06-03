@@ -19,12 +19,18 @@
   - 项目配置（项目名称、Profile、触发模式、操作权限模式 permission_mode、当前阶段）
   - Gate 状态跟踪表（G1~G11 各行的状态和通过日期）
   - 项目概览表（总任务数、已完成、阻塞中、关键风险数、最近 Gate 结论）
-- 读取 `.governance/risk-log.md`，统计状态为"活跃"的风险
+- 读取 `.governance/risk-log.md`，统计状态为"活跃"的风险并保留风险 ID/打开日期摘要
+- 检查 `.governance/session-snapshot.md` 和 `## 当前活跃事项`，提取 carry-over active task count
+- 检查 `.git/hooks/pre-commit`、`.git/hooks/commit-msg`、`.git/hooks/post-commit` 是否存在
 
 ### Step 3: 计算指标
 - 完成率 = 已完成 / 总任务数 × 100（总任务数为 0 时显示 "N/A"）
 - 未完成 P0 任务数 = 状态非"已完成"且优先级=P0 的任务数
 - 活跃风险数 = risk-log 中状态="活跃"的条目数
+- Existing governance state detected = `.governance/plan-tracker.md` 存在且可解析；已有治理状态时 MUST NOT 提示重新初始化
+- Carry-over = 当前活跃事项或 session snapshot 中仍未完成的任务数
+- Open risks = 活跃风险数量 + 风险 ID/日期摘要
+- Hooks = pre-commit、commit-msg、post-commit 的 installed/missing 状态
 
 ### Step 3.5: 插件版本新鲜度检查（用户视角——"我的工作流是最新的吗？"）
 - **IF** 项目根目录存在 `skills/software-project-governance/infra/verify_workflow.py` → 运行 `check-plugin-freshness`，捕获输出
@@ -35,7 +41,9 @@
 
 ### Step 3.6: Delivery Trust Snapshot
 - 输出一个 compact `Delivery Trust Snapshot`，作为 `/governance` Scenario F 的 first-run/status 可观察信号。
-- Snapshot MUST 包含：Goal、Stage、Gate/setup status、Risk、Evidence、Next action、Verification signal、No-overclaim boundary。
+- Snapshot MUST 包含：Resume state、Carry-over、Open risks、Hooks、Goal、Stage、Gate/setup status、Risk、Evidence、Next action、Verification signal、No-overclaim boundary。
+- 已有 `.governance/` 状态时，`Resume state` MUST 明确写出 `Existing governance state detected`，并展示 carry-over active task count、open risk count/details、hook state 和 next action。
+- 已有 `.governance/` 状态时，输出 MUST NOT 暗示或建议重新初始化；重新初始化提示只允许出现在 `.governance/plan-tracker.md` 缺失的错误路径。
 - `Verification signal` MUST 是一个可运行或可观察的本地信号，例如 `python skills/software-project-governance/infra/verify_workflow.py status`。
 - `No-overclaim boundary` MUST 明确说明该 snapshot 只是本地治理状态信号，不声明 official approval、marketplace approval、universal/full runtime support 或 1.0.0 production-ready。
 
@@ -60,7 +68,7 @@
 | last_gate_conclusion | 字符串 | 最近 Gate 结论 | "G11 通过" |
 | last_review_date | 字符串 | 最近复盘日期 | "2026-04-25" |
 | gate_status_table | 表格 | G1~G11 状态表 | 见模板 |
-| delivery_trust_snapshot | 面板 | Goal/Stage/Gate/setup status/Risk/Evidence/Next action/Verification signal/No-overclaim boundary | 见模板 |
+| delivery_trust_snapshot | 面板 | Resume state/Carry-over/Open risks/Hooks/Goal/Stage/Gate/setup status/Risk/Evidence/Next action/Verification signal/No-overclaim boundary | 见模板 |
 
 ### 输出模板
 
@@ -79,6 +87,10 @@
 │  最近复盘: {last_review_date}                        │
 ├─────────────────────────────────────────────────────┤
 │  Delivery Trust Snapshot                             │
+│  Resume state: Existing governance state detected    │
+│  Carry-over: {carry_over_count} active task(s)        │
+│  Open risks: {open_risk_count} open risk(s); {risk_details} │
+│  Hooks: {hook_state}                                 │
 │  Goal: {project_goal}                                │
 │  Stage: {current_stage}                              │
 │  Gate/setup status: {gate_or_setup_status}           │
@@ -115,7 +127,8 @@ Gate 状态列的合法值：
 - [ ] 所有必要字段均出现在输出中
 - [ ] 输出必须明确包含 `permission_mode` 或 `操作权限模式`，不得只依赖项目配置原始字段顺序偶然展示
 - [ ] 输出必须明确包含 `Delivery Trust Snapshot`
-- [ ] Delivery Trust Snapshot 必须包含 Goal、Stage、Gate/setup status、Risk、Evidence、Next action、Verification signal、No-overclaim boundary
+- [ ] Delivery Trust Snapshot 必须包含 Resume state、Existing governance state detected、Carry-over、Open risks、Hooks、Goal、Stage、Gate/setup status、Risk、Evidence、Next action、Verification signal、No-overclaim boundary
+- [ ] 已有 `.governance/` 项目不得提示重新初始化；必须给出 resume next action
 - [ ] No-overclaim boundary 必须避免声明 official approval、marketplace approval、universal/full runtime support 或 1.0.0 production-ready
 - [ ] completion_rate 为百分比字符串或 "N/A"
 - [ ] gate_status_table 恰好包含 G1 至 G11

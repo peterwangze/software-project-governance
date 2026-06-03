@@ -410,7 +410,8 @@ P1 (警告):
 **检测条件**：一切正常——`.governance/` 存在、健康、版本最新、无 snapshot、无异常
 
 **展示内容**（比 `governance-status` 更丰富）：
-- Delivery Trust Snapshot（Goal、Stage、Gate/setup status、Risk、Evidence、Next action、Verification signal、No-overclaim boundary）
+- Delivery Trust Snapshot（Resume state、Carry-over、Open risks、Hooks、Goal、Stage、Gate/setup status、Risk、Evidence、Next action、Verification signal、No-overclaim boundary）
+- Existing-project resume signal：已有 `.governance/` 状态时 MUST 明确显示 `Existing governance state detected`，展示 carry-over active task count、open risk count/details、hook state 和 next action
 - 项目配置摘要（名称、profile、trigger_mode、permission_mode、版本、阶段）
 - Gate 状态表（G1-G11，含通过日期和关键证据）
 - 任务统计（总数/已完成/阻塞中/P0 待处理）
@@ -439,6 +440,10 @@ P1 (警告):
 
 ```
 Delivery Trust Snapshot
+Resume state: Existing governance state detected
+Carry-over: {carry_over_count} active task(s)
+Open risks: {open_risk_count} open risk(s); {risk_details}
+Hooks: {hook_state}
 Goal: {project_goal}
 Stage: {current_stage}
 Gate/setup status: {gate_or_setup_status}
@@ -450,6 +455,7 @@ No-overclaim boundary: local snapshot only; no official approval, marketplace ap
 ```
 
 Snapshot 是 `/governance` 或 `/governance-status` first-run/status path 的最小可观察交付信号；它必须在用户不阅读 `plan-tracker.md`、`evidence-log.md`、`risk-log.md` 或完整 SKILL 文件的情况下可见。
+已有 `.governance/` 项目的 Scenario F 是 resume happy path，不得提示重新初始化；只有 `.governance/plan-tracker.md` 缺失时才进入初始化/接入错误路径。
 
 **输出模板**：参考 `commands/governance-status.md`，扩展含 permission_mode、版本新鲜度、最近活动，并应用上述折叠规则。
 

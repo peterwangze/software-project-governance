@@ -45,11 +45,27 @@ Codex and other AI coding agents:
 
 ## 5-Minute Start
 
+The first success path is intentionally small: get one local trust signal before learning the full governance model.
+
 1. Install through one of the paths above.
 2. Open your project root in your AI coding environment.
-3. Run `/governance`.
-4. Initialize `.governance/` when prompted.
-5. Continue coding; the workflow tracks evidence, gates, risks, and critical decision boundaries.
+3. Run `/governance`; if your environment exposes status directly, the same first signal is the status output.
+4. Look for the **Delivery Trust Snapshot**: goal, stage, gate/setup status, risk, evidence, next action, preset guidance, verification signal, and no-overclaim boundary.
+5. For a local demo-only check that needs no external credentials, run:
+
+```bash
+python skills/software-project-governance/infra/verify_workflow.py first-run-demo --assert-snapshot
+```
+
+The snapshot is the first trust signal: it proves the workflow can show what it knows, what remains missing, and the next evidence-backed action. It is not a claim of official approval, marketplace approval, universal/full runtime support, or 1.0.0 production-ready status.
+
+First-run preset guidance:
+
+| Preset | Use first when | What it optimizes for |
+|--------|----------------|-----------------------|
+| **lite** | You want the quickest first run or a personal/MVP project | Minimal questions and a fast snapshot |
+| **standard** | You are running team delivery or a normal product project | Balanced evidence, gates, risks, and review boundaries |
+| **strict** | You are in regulated, high-risk, or release-sensitive work | Stronger evidence and approval discipline |
 
 For full Chinese installation details and daily usage guidance, continue below.
 
@@ -148,9 +164,11 @@ Codex 入口采用**自包含 skill**：`skills/software-project-governance/SKIL
 
 ## 5 分钟开始
 
-### 第一步：初始化（必须）
+先拿到一个本地信任信号，再理解完整治理模型。最短 happy path 是：运行 `/governance` 或 status，看到 Delivery Trust Snapshot；再用本地 demo harness 复核这个首屏信号。
 
-**首次使用时，先初始化，再谈状态/校验/阶段检查。**
+### 第一步：看到 Delivery Trust Snapshot
+
+**首次使用时，先初始化并看到快照，再谈完整阶段、证据和发布治理。**
 
 在 Claude Code 中直接运行：
 
@@ -158,11 +176,31 @@ Codex 入口采用**自包含 skill**：`skills/software-project-governance/SKIL
 /governance
 ```
 
+如果你的环境能直接显示 status，status 输出里的 Delivery Trust Snapshot 也是同一个第一信号。它会用很短的字段告诉你：当前目标、阶段、Gate/setup 状态、风险、证据、下一步动作、预设建议、验证命令，以及不得过度宣称的边界。
+
 首次运行会自动检测到项目尚未初始化，引导你完成：
 1. 输入项目名称和目标
 2. 确认项目阶段（新项目/已有项目）
-3. 选择治理强度（轻量/标准/严格）
+3. 选择治理强度（lite/standard/strict）
 4. 自动创建 `.governance/` 治理文件
+
+### 第二步：跑本地 demo-only 验收
+
+这个 demo path 不需要 external credentials，也不访问外部服务；它只验证本地 first-run snapshot 是否具备必要字段：
+
+```bash
+python skills/software-project-governance/infra/verify_workflow.py first-run-demo --assert-snapshot
+```
+
+Delivery Trust Snapshot 是第一个 trust signal：它证明工作流能把“已知事实、缺失证据、下一步动作和边界声明”摆在你面前。它不是官方批准、marketplace approval、universal/full runtime support，也不是 1.0.0 production-ready 声明。
+
+首次预设建议：
+
+| 预设 | 首次适合 | 优化目标 |
+|------|----------|----------|
+| **lite** | 个人项目、MVP、想最快看到首个快照 | 少提问、快启动 |
+| **standard** | 团队项目、正式产品、常规交付 | 平衡证据、Gate、风险和审查边界 |
+| **strict** | 高风险、合规、发布敏感项目 | 更严格的证据和审批纪律 |
 
 如果你的环境暂不支持 slash command，就直接告诉 agent 以上信息，让它按 `skills/software-project-governance/SKILL.md` 的规则帮你初始化。
 

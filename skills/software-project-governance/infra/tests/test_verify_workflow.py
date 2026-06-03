@@ -3161,6 +3161,43 @@ class GovernanceStatusContractTests(unittest.TestCase):
 class FirstRunDemoTests(unittest.TestCase):
     """FIX-103: local demo harness asserts first happy path snapshot fields."""
 
+    def test_readme_first_success_path_mentions_demo_snapshot_and_boundaries(self):
+        readme = (vw.ROOT / "README.md").read_text(encoding="utf-8")
+
+        english_required = [
+            "## 5-Minute Start",
+            "The first success path is intentionally small",
+            "Delivery Trust Snapshot",
+            "python skills/software-project-governance/infra/verify_workflow.py first-run-demo --assert-snapshot",
+            "local demo-only check that needs no external credentials",
+            "The snapshot is the first trust signal",
+            "official approval",
+            "marketplace approval",
+            "universal/full runtime support",
+            "1.0.0 production-ready",
+            "**lite**",
+            "**standard**",
+            "**strict**",
+        ]
+        chinese_required = [
+            "## 5 分钟开始",
+            "先拿到一个本地信任信号",
+            "Delivery Trust Snapshot",
+            "first-run-demo --assert-snapshot",
+            "demo path 不需要 external credentials",
+            "第一个 trust signal",
+            "官方批准",
+            "marketplace approval",
+            "universal/full runtime support",
+            "1.0.0 production-ready",
+            "**lite**",
+            "**standard**",
+            "**strict**",
+        ]
+
+        self.assertEqual([needle for needle in english_required if needle not in readme], [])
+        self.assertEqual([needle for needle in chinese_required if needle not in readme], [])
+
     def test_first_run_demo_assert_snapshot_passes(self):
         args = argparse.Namespace(assert_snapshot=True)
         buf = io.StringIO()

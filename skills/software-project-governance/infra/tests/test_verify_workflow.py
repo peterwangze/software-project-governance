@@ -1909,6 +1909,8 @@ class E2ECommandMatrixTests(unittest.TestCase):
             "Risk: no open risks yet",
             "Evidence: no delivery evidence yet",
             "Next action: continue the active task and attach evidence before completion",
+            "Preset guidance: lite is the recommended first-run default; standard is for team delivery; strict is for regulated/high-risk work",
+            "Question budget: ask no more than 3 non-critical questions before snapshot; record deferred non-critical fields as assumptions",
             "Verification signal: python skills/software-project-governance/infra/verify_workflow.py status",
             (
                 "No-overclaim boundary: local snapshot only; no official approval, "
@@ -2236,6 +2238,14 @@ class E2ECommandMatrixTests(unittest.TestCase):
                 "Risk\n"
                 "Evidence\n"
                 "Next action\n"
+                "Preset guidance\n"
+                "lite is the recommended first-run default\n"
+                "standard is for team delivery\n"
+                "strict is for regulated/high-risk work\n"
+                "Question budget\n"
+                "no more than 3 non-critical questions before snapshot\n"
+                "deferred non-critical fields\n"
+                "assumptions\n"
                 "Verification signal\n"
                 "No-overclaim boundary\n"
             )
@@ -2836,6 +2846,11 @@ class GovernanceStatusContractTests(unittest.TestCase):
         self.assertIn("Gate/setup status: G11 通过", output)
         self.assertIn("Risk: no open risks yet", output)
         self.assertIn("Evidence: 1/1 task(s) completed; verify evidence before closing work", output)
+        self.assertIn("Preset guidance: lite is the recommended first-run default", output)
+        self.assertIn("standard is for team delivery", output)
+        self.assertIn("strict is for regulated/high-risk work", output)
+        self.assertIn("Question budget: ask no more than 3 non-critical questions before snapshot", output)
+        self.assertIn("record deferred non-critical fields as assumptions", output)
         self.assertIn(
             "Verification signal: python skills/software-project-governance/infra/verify_workflow.py status",
             output,
@@ -3042,6 +3057,14 @@ class GovernanceStatusContractTests(unittest.TestCase):
             "Risk",
             "Evidence",
             "Next action",
+            "Preset guidance",
+            "lite is the recommended first-run default",
+            "standard is for team delivery",
+            "strict is for regulated/high-risk work",
+            "Question budget",
+            "no more than 3 non-critical questions before snapshot",
+            "deferred non-critical fields",
+            "assumptions",
             "Verification signal",
             "No-overclaim boundary",
             "official approval",
@@ -3075,6 +3098,8 @@ class GovernanceStatusContractTests(unittest.TestCase):
             "Risk: no open risks yet\n"
             "Evidence: no delivery evidence yet\n"
             "Next action: continue the active task and attach evidence before completion\n"
+            "Preset guidance: lite is the recommended first-run default; standard is for team delivery; strict is for regulated/high-risk work\n"
+            "Question budget: no more than 3 non-critical questions before snapshot; deferred non-critical fields become assumptions\n"
             "Verification signal: python skills/software-project-governance/infra/verify_workflow.py status\n"
             "No-overclaim boundary: local snapshot only\n"
         )
@@ -3104,6 +3129,8 @@ class GovernanceStatusContractTests(unittest.TestCase):
             "Risk: no open risks yet\n"
             "Evidence: no delivery evidence yet\n"
             "Next action: continue the active task and attach evidence before completion\n"
+            "Preset guidance: lite is the recommended first-run default; standard is for team delivery; strict is for regulated/high-risk work\n"
+            "Question budget: no more than 3 non-critical questions before snapshot; deferred non-critical fields become assumptions\n"
             "Verification signal: python skills/software-project-governance/infra/verify_workflow.py status\n"
             "No-overclaim boundary: local snapshot only; no official approval, marketplace approval, "
             "universal/full runtime support, or 1.0.0 production-ready claim\n"

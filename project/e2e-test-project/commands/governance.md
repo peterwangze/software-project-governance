@@ -410,8 +410,10 @@ P1 (警告):
 **检测条件**：一切正常——`.governance/` 存在、健康、版本最新、无 snapshot、无异常
 
 **展示内容**（比 `governance-status` 更丰富）：
-- Delivery Trust Snapshot（Resume state、Carry-over、Open risks、Hooks、Goal、Stage、Gate/setup status、Risk、Evidence、Next action、Verification signal、No-overclaim boundary）
+- Delivery Trust Snapshot（Resume state、Carry-over、Open risks、Hooks、Goal、Stage、Gate/setup status、Risk、Evidence、Next action、Preset guidance、Question budget、Verification signal、No-overclaim boundary）
 - Existing-project resume signal：已有 `.governance/` 状态时 MUST 明确显示 `Existing governance state detected`，展示 carry-over active task count、open risk count/details、hook state 和 next action
+- First-run preset guidance：MUST 展示 `lite is the recommended first-run default`；`standard is for team delivery`；`strict is for regulated/high-risk work`
+- Question budget：Snapshot 前 MUST NOT 提超过 3 个 non-critical questions；deferred non-critical fields MUST 记录为 assumptions
 - 项目配置摘要（名称、profile、trigger_mode、permission_mode、版本、阶段）
 - Gate 状态表（G1-G11，含通过日期和关键证据）
 - 任务统计（总数/已完成/阻塞中/P0 待处理）
@@ -450,6 +452,8 @@ Gate/setup status: {gate_or_setup_status}
 Risk: {risk_status}
 Evidence: {evidence_status}
 Next action: {next_action}
+Preset guidance: lite is the recommended first-run default; standard is for team delivery; strict is for regulated/high-risk work
+Question budget: no more than 3 non-critical questions before snapshot; deferred non-critical fields become assumptions
 Verification signal: {runnable_or_observable_signal}
 No-overclaim boundary: local snapshot only; no official approval, marketplace approval, universal/full runtime support, or 1.0.0 production-ready claim
 ```

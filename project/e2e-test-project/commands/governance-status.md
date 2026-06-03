@@ -44,6 +44,8 @@
 - Snapshot MUST 包含：Resume state、Carry-over、Open risks、Hooks、Goal、Stage、Gate/setup status、Risk、Evidence、Next action、Verification signal、No-overclaim boundary。
 - 已有 `.governance/` 状态时，`Resume state` MUST 明确写出 `Existing governance state detected`，并展示 carry-over active task count、open risk count/details、hook state 和 next action。
 - 已有 `.governance/` 状态时，输出 MUST NOT 暗示或建议重新初始化；重新初始化提示只允许出现在 `.governance/plan-tracker.md` 缺失的错误路径。
+- First-run preset guidance MUST 展示：`lite is the recommended first-run default`；`standard is for team delivery`；`strict is for regulated/high-risk work`。
+- Snapshot 前 MUST NOT 提超过 3 个 non-critical questions；剩余 deferred non-critical fields MUST 记录为 assumptions。
 - `Verification signal` MUST 是一个可运行或可观察的本地信号，例如 `python skills/software-project-governance/infra/verify_workflow.py status`。
 - `No-overclaim boundary` MUST 明确说明该 snapshot 只是本地治理状态信号，不声明 official approval、marketplace approval、universal/full runtime support 或 1.0.0 production-ready。
 
@@ -68,7 +70,7 @@
 | last_gate_conclusion | 字符串 | 最近 Gate 结论 | "G11 通过" |
 | last_review_date | 字符串 | 最近复盘日期 | "2026-04-25" |
 | gate_status_table | 表格 | G1~G11 状态表 | 见模板 |
-| delivery_trust_snapshot | 面板 | Resume state/Carry-over/Open risks/Hooks/Goal/Stage/Gate/setup status/Risk/Evidence/Next action/Verification signal/No-overclaim boundary | 见模板 |
+| delivery_trust_snapshot | 面板 | Resume state/Carry-over/Open risks/Hooks/Goal/Stage/Gate/setup status/Risk/Evidence/Next action/Preset guidance/Question budget/Verification signal/No-overclaim boundary | 见模板 |
 
 ### 输出模板
 
@@ -97,6 +99,8 @@
 │  Risk: {risk_status}                                 │
 │  Evidence: {evidence_status}                         │
 │  Next action: {next_action}                          │
+│  Preset guidance: lite is the recommended first-run default; standard is for team delivery; strict is for regulated/high-risk work │
+│  Question budget: no more than 3 non-critical questions before snapshot; deferred non-critical fields become assumptions │
 │  Verification signal: {verification_signal}          │
 │  No-overclaim boundary: {no_overclaim_boundary}      │
 ├─────────────────────────────────────────────────────┤
@@ -127,8 +131,10 @@ Gate 状态列的合法值：
 - [ ] 所有必要字段均出现在输出中
 - [ ] 输出必须明确包含 `permission_mode` 或 `操作权限模式`，不得只依赖项目配置原始字段顺序偶然展示
 - [ ] 输出必须明确包含 `Delivery Trust Snapshot`
-- [ ] Delivery Trust Snapshot 必须包含 Resume state、Existing governance state detected、Carry-over、Open risks、Hooks、Goal、Stage、Gate/setup status、Risk、Evidence、Next action、Verification signal、No-overclaim boundary
+- [ ] Delivery Trust Snapshot 必须包含 Resume state、Existing governance state detected、Carry-over、Open risks、Hooks、Goal、Stage、Gate/setup status、Risk、Evidence、Next action、Preset guidance、Question budget、Verification signal、No-overclaim boundary
 - [ ] 已有 `.governance/` 项目不得提示重新初始化；必须给出 resume next action
+- [ ] First-run preset guidance 必须明确 `lite` 是首次运行推荐默认，`standard` 用于 team delivery，`strict` 用于 regulated/high-risk work
+- [ ] Snapshot 前不得提出超过 3 个 non-critical questions；deferred non-critical fields 必须记录为 assumptions
 - [ ] No-overclaim boundary 必须避免声明 official approval、marketplace approval、universal/full runtime support 或 1.0.0 production-ready
 - [ ] completion_rate 为百分比字符串或 "N/A"
 - [ ] gate_status_table 恰好包含 G1 至 G11

@@ -34,7 +34,7 @@ Codex and other AI coding agents:
 
 - Use this repository as a consumable asset package.
 - Load `skills/software-project-governance/SKILL.md` when your environment supports skill/plugin loading.
-- Keep runtime expectations conservative: some agents or host environments may run in degraded, blocked, or environment-dependent mode until their native loading, tool, browser, AskUserQuestion, review, and git-hook capabilities are verified.
+- Keep runtime expectations conservative: some agents or host environments may run in degraded, blocked, or environment-dependent mode until their native loading, tool, browser, AskUserQuestion, review, and git-hook capabilities are verified. See the public [runtime readiness matrix](docs/requirements/runtime-readiness-matrix-0.43.0.md).
 
 ## Trust and Data Boundary
 

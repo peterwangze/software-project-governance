@@ -73,8 +73,8 @@
     "e2e_level": "real-agent-target-cwd",
     "command": "codex",
     "version_command": "codex --version",
-    "verified_on": "2026-05-19",
-    "evidence": "Local Codex CLI command returned version 0.125.0 and this Codex App session used AGENTS.md governance bootstrap to self-iterate.",
+    "verified_on": "2026-06-04",
+    "evidence": "Local Codex CLI command returned version 0.125.0; this Codex App session used AGENTS.md governance bootstrap to self-iterate, but Codex CLI headless target-cwd full E2E remains blocked.",
     "target_cwd_e2e": {
       "status": "passed",
       "command": "python skills/software-project-governance/infra/verify_workflow.py status",
@@ -84,9 +84,9 @@
     "agent_runtime_e2e": {
       "status": "blocked",
       "command": "python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent codex --timeout 90; codex exec -C . -s read-only --ephemeral \"Read the local governance bootstrap and answer with exactly these machine-readable fields if the workflow is loaded: E2E_PLATFORM=codex; E2E_AGENT=<workflow role>; E2E_STAGE=<current stage>; E2E_MODE=<trigger x permission>. Do not modify files.\"",
-      "verified_on": "2026-05-21",
+      "verified_on": "2026-06-04",
       "blocked_reason": "Codex CLI headless target-cwd E2E timed out in the real `codex exec` runtime.",
-      "evidence": "FIX-076 real agent runtime matrix reported Codex BLOCKED timeout while Claude/opencode passed and Gemini was blocked by auth; Codex App current workflow session is not accepted as a substitute for Codex CLI headless target-cwd full E2E."
+      "evidence": "FIX-106 real agent runtime matrix reported Codex BLOCKED timeout while Claude/opencode passed and Gemini was blocked by auth; Codex CLI 0.125.0 log also reported PowerShell shell snapshot unsupported. Codex App current workflow session is not accepted as a substitute for Codex CLI headless target-cwd full E2E."
     },
     "full_e2e_verified": false
   },

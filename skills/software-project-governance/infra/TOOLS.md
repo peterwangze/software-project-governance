@@ -265,6 +265,16 @@
 - **依赖**：`check-governance` Check 18i、`core/templates/execution-packet.md`
 - **被以下子工作流使用**：立项（initiation）、开发（development）、测试（testing）、发布（release）、维护（maintenance）
 
+### TOOL-024：Runtime Readiness Matrix guard
+
+- **文件**：`infra/verify_workflow.py` + `docs/requirements/runtime-readiness-matrix-0.43.0.md`
+- **子命令**：`check-runtime-readiness-matrix [--fail-on-issues]`
+- **输入**：`adapters/claude|codex|gemini|opencode/adapter-manifest.json`、公开 runtime/readiness matrix 文档
+- **输出**：公开矩阵是否覆盖 Claude/Codex/Gemini/opencode/Cursor/Copilot，是否与 adapter manifest 的 PASS/BLOCKED/DEGRADED、version command、blocked reason、workflow closure 和 no-overclaim 边界一致
+- **触发条件**：更新 adapter runtime facts、发布 readiness 文档、0.43.0 Cross-Harness E2E Closure 或 release gate 前
+- **依赖**：`check-governance` Check 28d、`check-release` runtime readiness matrix detail、`check-agent-adapters --runtime`、`agent-runtime-e2e`
+- **被以下子工作流使用**：测试（testing）、发布（release）、维护（maintenance）
+
 ## 工具与子工作流的关系矩阵
 
 | 工具 | 立项 | 调研 | 选型 | 环境 | 架构 | 开发 | 测试 | CI/CD | 发布 | 运营 | 维护 |
@@ -291,6 +301,7 @@
 | Vertical Slice Delivery Packet guard | | | | | ○ | ● | ● | | ● | | ● |
 | Weak-LLM Deterministic Scaffold generator/check | ● | ○ | | | ○ | ● | ● | | ● | | ● |
 | User Interruption Policy v2 guard | ● | ○ | | | ○ | ● | ● | | ● | | ● |
+| Runtime Readiness Matrix guard | | | | | ○ | | ● | | ● | | ● |
 
 > ● 主要使用者  ○ 可选用
 

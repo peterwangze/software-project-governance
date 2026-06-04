@@ -69,8 +69,8 @@
     "e2e_level": "real-agent-target-cwd",
     "command": "claude",
     "version_command": "claude --version",
-    "verified_on": "2026-05-19",
-    "evidence": "Local Claude Code command returned version 2.1.123.",
+    "verified_on": "2026-06-04",
+    "evidence": "Local Claude Code command returned version 2.1.161.",
     "target_cwd_e2e": {
       "status": "passed",
       "command": "python skills/software-project-governance/infra/verify_workflow.py status",
@@ -80,8 +80,8 @@
     "agent_runtime_e2e": {
       "status": "passed",
       "command": "claude -p \"In this project, read .governance/plan-tracker.md and answer exactly: E2E_STAGE=<current stage text>. Do not modify files.\" --permission-mode default --allowedTools Read --output-format text",
-      "verified_on": "2026-05-20",
-      "evidence": "Real Claude Code runtime executed in project/e2e-test-project cwd and returned E2E_STAGE=立项与目标定义（第 1 阶段）."
+      "verified_on": "2026-06-04",
+      "evidence": "Real Claude Code runtime executed in project/e2e-test-project cwd and returned E2E_PLATFORM=claude; E2E_AGENT=Coordinator; E2E_MODE=always-on x default-confirm."
     },
     "full_e2e_verified": true
   },

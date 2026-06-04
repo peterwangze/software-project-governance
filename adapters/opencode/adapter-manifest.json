@@ -72,7 +72,7 @@
     "e2e_level": "real-agent-target-cwd",
     "command": "opencode",
     "version_command": "opencode --version",
-    "verified_on": "2026-05-21",
+    "verified_on": "2026-06-04",
     "evidence": "Local opencode command returned version 1.15.5; provider/model preflight passed with supported DeepSeek models; real target-cwd opencode runtime E2E passed in the 90s timeout window.",
     "target_cwd_e2e": {
       "status": "passed",
@@ -94,8 +94,8 @@
     "agent_runtime_e2e": {
       "status": "passed",
       "command": "python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent opencode --timeout 90; opencode run --dir . --format json ...",
-      "verified_on": "2026-05-21",
-      "evidence": "Real opencode target-cwd E2E passed: opencode read project/e2e-test-project/.governance/plan-tracker.md and returned E2E_PLATFORM=opencode; E2E_AGENT=Coordinator; E2E_MODE=always-on x default-confirm."
+      "verified_on": "2026-06-04",
+      "evidence": "Real opencode target-cwd E2E passed: opencode read project/e2e-test-project/AGENTS.md and .governance/plan-tracker.md and returned E2E_PLATFORM=opencode; E2E_AGENT=Coordinator; E2E_MODE=always-on x default-confirm."
     },
     "full_e2e_verified": true
   },

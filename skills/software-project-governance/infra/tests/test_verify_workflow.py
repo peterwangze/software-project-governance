@@ -1694,6 +1694,93 @@ class AgentAdapterContractTests(unittest.TestCase):
             self.assertTrue(any("gemini: runtime command failed: gemini --version" in issue for issue in issues))
 
 
+class RuntimeReadinessMatrixTests(unittest.TestCase):
+    """FIX-106: public runtime/readiness matrix must match adapter facts."""
+
+    def _copy_adapters(self, root):
+        shutil.copytree(vw.ROOT / "adapters", root / "adapters")
+
+    def _write_matrix(
+        self,
+        root,
+        *,
+        codex_status="BLOCKED",
+        cursor_status="RESEARCH_ONLY",
+        include_boundary=True,
+        include_runtime_result_table=False,
+    ):
+        docs_dir = root / "docs" / "requirements"
+        docs_dir.mkdir(parents=True, exist_ok=True)
+        boundary = (
+            "\nNo official approval. No marketplace approval. No universal/full runtime support. "
+            "RISK-036 remains open.\n"
+            if include_boundary
+            else "\nRISK-036 remains open.\n"
+        )
+        runtime_table = (
+            "\n## Current Real Runtime Result\n\n"
+            "| Agent | Real runtime result | Blocking or degraded reason |\n"
+            "| --- | --- | --- |\n"
+            "| codex | BLOCKED | Codex CLI target-cwd command timed out. |\n"
+            if include_runtime_result_table
+            else ""
+        )
+        content = (
+            "# Runtime Readiness Matrix 0.43.0\n\n"
+            "## Summary\n\n"
+            "| Agent | Public status | Workflow closure | Version command | Evidence and boundary |\n"
+            "| --- | --- | --- | --- | --- |\n"
+            "| claude | PASS | DEGRADED | claude --version | full_e2e_verified=true; agent_runtime_e2e passed; Claude Code real target cwd E2E passed. |\n"
+            f"| codex | {codex_status} | DEGRADED | codex --version | Codex CLI headless target-cwd E2E timed out in the real `codex exec` runtime. |\n"
+            "| gemini | BLOCKED | DEGRADED | gemini --version | Gemini auth missing or not configured; configure GEMINI_API_KEY / GOOGLE_API_KEY / Vertex / GCA / settings auth. |\n"
+            "| opencode | PASS | DEGRADED | opencode --version | full_e2e_verified=true; agent_runtime_e2e passed; opencode real target cwd E2E passed. |\n"
+            f"| cursor | {cursor_status} | NOT_RUNTIME_VERIFIED | manual research | Cursor entry is research-only; no adapter manifest or real target-cwd E2E evidence. |\n"
+            "| copilot | RESEARCH_ONLY | NOT_RUNTIME_VERIFIED | manual research | Copilot entry is research-only; no adapter manifest or real target-cwd E2E evidence. |\n"
+            f"{runtime_table}"
+            f"{boundary}"
+        )
+        (docs_dir / "runtime-readiness-matrix-0.43.0.md").write_text(content, encoding="utf-8")
+
+    def test_runtime_readiness_matrix_accepts_current_adapter_facts(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._copy_adapters(root)
+            self._write_matrix(root)
+            self.assertEqual(vw.check_runtime_readiness_matrix(root), [])
+
+    def test_runtime_readiness_matrix_rejects_codex_overclaim(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._copy_adapters(root)
+            self._write_matrix(root, codex_status="PASS")
+            issues = vw.check_runtime_readiness_matrix(root)
+            self.assertTrue(any("codex row must contain BLOCKED" in issue for issue in issues))
+
+    def test_runtime_readiness_matrix_summary_overclaim_not_masked_by_later_table(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._copy_adapters(root)
+            self._write_matrix(root, codex_status="PASS", include_runtime_result_table=True)
+            issues = vw.check_runtime_readiness_matrix(root)
+            self.assertTrue(any("codex row must contain BLOCKED" in issue for issue in issues))
+
+    def test_runtime_readiness_matrix_rejects_research_only_runtime_claim(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._copy_adapters(root)
+            self._write_matrix(root, cursor_status="PASS")
+            issues = vw.check_runtime_readiness_matrix(root)
+            self.assertTrue(any("cursor row must be RESEARCH_ONLY and NOT_RUNTIME_VERIFIED" in issue for issue in issues))
+
+    def test_runtime_readiness_matrix_requires_no_overclaim_boundary(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._copy_adapters(root)
+            self._write_matrix(root, include_boundary=False)
+            issues = vw.check_runtime_readiness_matrix(root)
+            self.assertTrue(any("missing no-overclaim boundary token `No official approval`" in issue for issue in issues))
+
+
 class ReleaseReadinessCommandTests(unittest.TestCase):
     """FIX-072: stage-release check-release must be backed by a real CLI command."""
 

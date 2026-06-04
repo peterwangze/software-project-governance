@@ -1743,6 +1743,121 @@ def _run_version_command(command):
     return completed.returncode, output
 
 
+RUNTIME_READINESS_MATRIX_PATH = ROOT / "docs/requirements/runtime-readiness-matrix-0.43.0.md"
+RUNTIME_MATRIX_AGENT_IDS = ["claude", "codex", "gemini", "opencode", "cursor", "copilot"]
+RUNTIME_MATRIX_RESEARCH_ONLY_IDS = ["cursor", "copilot"]
+
+
+def _parse_markdown_table_rows(content, section_title=None):
+    if section_title:
+        marker = f"## {section_title}"
+        start = content.find(marker)
+        if start == -1:
+            return []
+        next_start = content.find("\n## ", start + len(marker))
+        content = content[start:next_start if next_start != -1 else len(content)]
+    rows = []
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("|") or "---" in line:
+            continue
+        cells = [cell.strip() for cell in line.strip("|").split("|")]
+        if len(cells) >= 2:
+            rows.append(cells)
+    return rows
+
+
+def _matrix_status_for_manifest(manifest):
+    runtime_e2e = manifest.get("runtime_e2e", {}) if isinstance(manifest, dict) else {}
+    full = runtime_e2e.get("full_e2e_verified")
+    agent_status = runtime_e2e.get("agent_runtime_e2e", {}).get("status")
+    if full is True and agent_status == "passed":
+        return "PASS"
+    if agent_status == "blocked":
+        return "BLOCKED"
+    return "DEGRADED"
+
+
+def check_runtime_readiness_matrix(root=None):
+    """FIX-106: public runtime/readiness matrix must match adapter facts."""
+    root = root or ROOT
+    matrix_path = root / "docs/requirements/runtime-readiness-matrix-0.43.0.md"
+    failures = []
+    if not matrix_path.exists():
+        return [f"{_display_path(matrix_path, root)}: missing public runtime/readiness matrix"]
+
+    content = matrix_path.read_text(encoding="utf-8")
+    rows = _parse_markdown_table_rows(content, section_title="Summary")
+    if not rows:
+        failures.append(f"{_display_path(matrix_path, root)}: missing `## Summary` runtime/readiness table")
+    matrix = {}
+    for cells in rows:
+        agent_id = cells[0].lower().strip("`* ")
+        if agent_id in RUNTIME_MATRIX_AGENT_IDS:
+            matrix[agent_id] = " | ".join(cells)
+
+    for agent_id in RUNTIME_MATRIX_AGENT_IDS:
+        if agent_id not in matrix:
+            failures.append(f"{_display_path(matrix_path, root)}: missing matrix row for {agent_id}")
+
+    for adapter_id in MAINSTREAM_AGENT_ADAPTERS:
+        adapter_dir = root / "adapters" / adapter_id
+        manifest, manifest_failures = _load_adapter_manifest(adapter_dir)
+        failures.extend(manifest_failures)
+        if not manifest:
+            continue
+        row = matrix.get(adapter_id, "")
+        expected_status = _matrix_status_for_manifest(manifest)
+        if expected_status not in row:
+            failures.append(
+                f"{_display_path(matrix_path, root)}: {adapter_id} row must contain {expected_status} from adapter manifest"
+            )
+        runtime_e2e = manifest.get("runtime_e2e", {})
+        version_command = runtime_e2e.get("version_command", "")
+        if version_command and version_command not in row:
+            failures.append(
+                f"{_display_path(matrix_path, root)}: {adapter_id} row missing version command `{version_command}`"
+            )
+        agent_runtime = runtime_e2e.get("agent_runtime_e2e", {})
+        blocked_reason = agent_runtime.get("blocked_reason", "")
+        if expected_status == "BLOCKED" and blocked_reason:
+            reason_token = blocked_reason.split(";")[0].split(".")[0].strip()
+            if reason_token and reason_token not in row:
+                failures.append(
+                    f"{_display_path(matrix_path, root)}: {adapter_id} BLOCKED row missing blocked reason from manifest"
+                )
+        capabilities = manifest.get("runtime_capabilities", {})
+        closure = capabilities.get("workflow_closure", {})
+        closure_status = closure.get("status", "").upper()
+        if closure_status and closure_status not in row:
+            failures.append(
+                f"{_display_path(matrix_path, root)}: {adapter_id} row missing workflow_closure status {closure_status}"
+            )
+
+    for agent_id in RUNTIME_MATRIX_RESEARCH_ONLY_IDS:
+        row = matrix.get(agent_id, "")
+        if "RESEARCH_ONLY" not in row or "NOT_RUNTIME_VERIFIED" not in row:
+            failures.append(
+                f"{_display_path(matrix_path, root)}: {agent_id} row must be RESEARCH_ONLY and NOT_RUNTIME_VERIFIED"
+            )
+        forbidden = ["FULL_E2E", "UNIVERSAL", "OFFICIAL_APPROVAL", "MARKETPLACE_APPROVAL"]
+        for token in forbidden:
+            if token in row:
+                failures.append(f"{_display_path(matrix_path, root)}: {agent_id} row overclaims {token}")
+
+    required_boundary_tokens = [
+        "No official approval",
+        "No marketplace approval",
+        "No universal/full runtime support",
+        "RISK-036 remains open",
+    ]
+    for token in required_boundary_tokens:
+        if token not in content:
+            failures.append(f"{_display_path(matrix_path, root)}: missing no-overclaim boundary token `{token}`")
+
+    return failures
+
+
 def _validate_runtime_e2e_block(root, manifest_path, runtime_e2e, field_name, allow_unsupported=False):
     """Validate FIX-074 explicit E2E status blocks in adapter manifests."""
     block = runtime_e2e.get(field_name)
@@ -2742,6 +2857,13 @@ def check_release_readiness(
         "issues": hot_fact_issues,
     }
     issues.extend(f"hot fact source: {issue}" for issue in hot_fact_issues)
+
+    runtime_matrix_issues = check_runtime_readiness_matrix()
+    details["runtime_readiness_matrix"] = {
+        "pass": not runtime_matrix_issues,
+        "issues": runtime_matrix_issues,
+    }
+    issues.extend(f"runtime readiness matrix: {issue}" for issue in runtime_matrix_issues)
 
     adapter_issues = check_agent_adapter_contract(run_runtime=run_runtime_adapters)
     details["agent_adapters"] = {
@@ -9566,6 +9688,20 @@ def cmd_check_governance(args):
         print("│  [PASS] Project config, overview, active items, roadmap, dependency chain, and requirement matrix are aligned.")
     print("└──────────────────────────────────────────────────────┘")
 
+    # ── 28d. Runtime Readiness Matrix Guard (FIX-106) ──
+    print("\n┌─ Check 28d: Runtime Readiness Matrix (FIX-106) ──────┐")
+    rrm_issues = check_runtime_readiness_matrix()
+    if rrm_issues:
+        all_issues += len(rrm_issues)
+        print(f"│  [FAIL] {len(rrm_issues)} runtime/readiness matrix issue(s):")
+        for issue in rrm_issues[:10]:
+            print(f"│    - {issue}")
+        if len(rrm_issues) > 10:
+            print(f"│    ... and {len(rrm_issues) - 10} more")
+    else:
+        print("│  [PASS] Public runtime/readiness matrix matches adapter facts and no-overclaim boundaries.")
+    print("└──────────────────────────────────────────────────────┘")
+
     # ── Summary ──
     print(f"\n┌─ Governance Health Summary ──────────────────────────┐")
     if all_issues == 0:
@@ -12602,6 +12738,27 @@ def cmd_check_hot_fact_source(args):
     print()
 
 
+def cmd_check_runtime_readiness_matrix(args):
+    """Run public runtime/readiness matrix consistency guard."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    issues = check_runtime_readiness_matrix()
+    print("\n=== Runtime Readiness Matrix Check ===")
+    if issues:
+        print(f"  Result: FAILED — {len(issues)} issue(s)")
+        for issue in issues[:20]:
+            print(f"    - {issue}")
+        if len(issues) > 20:
+            print(f"    ... and {len(issues) - 20} more")
+        if getattr(args, "fail_on_issues", False):
+            sys.exit(1)
+    else:
+        print("  Result: PASSED — public runtime/readiness matrix matches adapter facts")
+    print()
+
+
 def cmd_check_product_success_contracts(args):
     """Run Product Success Contract guard independently."""
     try:
@@ -12983,6 +13140,14 @@ def main():
     chfs_p.add_argument("--fail-on-issues", action="store_true",
                         help="Exit with non-zero code if hot fact-source drift is found")
 
+    # check-runtime-readiness-matrix (FIX-106)
+    crrm_p = subparsers.add_parser(
+        "check-runtime-readiness-matrix",
+        help="Check public runtime/readiness matrix against adapter facts",
+    )
+    crrm_p.add_argument("--fail-on-issues", action="store_true",
+                        help="Exit with non-zero code if matrix facts drift from adapter manifests")
+
     # check-product-success-contracts (FIX-088)
     cpsc_p = subparsers.add_parser(
         "check-product-success-contracts",
@@ -13083,6 +13248,7 @@ def main():
         "check-version-consistency": cmd_check_version_consistency,
         "check-projection-sync": cmd_check_projection_sync,
         "check-hot-fact-source": cmd_check_hot_fact_source,
+        "check-runtime-readiness-matrix": cmd_check_runtime_readiness_matrix,
         "check-product-success-contracts": cmd_check_product_success_contracts,
         "check-acceptance-contracts": cmd_check_acceptance_contracts,
         "check-quality-budget": cmd_check_quality_budget,

@@ -1485,6 +1485,12 @@ FIX_087_REQ_TASKS = {
     "REQ-074": ["FIX-087"],
 }
 
+FIX_105_SNAPSHOT_RELEASE_VERSION_RE = re.compile(r"\|\s*\*\*(0\.\d+(?:\.\d+)?)\*\*\s*\|\s*\*\*已发布\*\*\s*\|\s*\*\*(\d{4}-\d{2}-\d{2})\*\*")
+FIX_105_PLAN_WORKFLOW_VERSION_RE = re.compile(r"\*\*工作流版本\*\*:\s*([0-9]+(?:\.[0-9]+){2})")
+FIX_105_SNAPSHOT_VERSION_RE = re.compile(r"\*\*工作流版本\*\*:\s*([0-9]+(?:\.[0-9]+){2})")
+FIX_105_SNAPSHOT_DATE_RE = re.compile(r"\*\*session_date\*\*:\s*(\d{4}-\d{2}-\d{2})")
+FIX_105_READINESS_RELEASE_BLOCKERS = ["REL-018", "REL-019"]
+
 
 def _version_row_text(plan_content, version):
     row = _find_table_row_by_first_cell(plan_content, version)
@@ -1526,12 +1532,68 @@ def _extract_task_ids(text):
     return sorted(set(re.findall(r"\b(?:FIX|REL|AUDIT)-\d{3}\b", text)))
 
 
+def _parse_iso_date(value):
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return None
+
+
+def _latest_published_release_fact(plan_content):
+    latest = None
+    for version, date_text in FIX_105_SNAPSHOT_RELEASE_VERSION_RE.findall(plan_content):
+        release_date = _parse_iso_date(date_text)
+        if release_date is None:
+            continue
+        fact = {"version": version, "date": release_date, "date_text": date_text}
+        if latest is None or release_date > latest["date"]:
+            latest = fact
+    return latest
+
+
+def _snapshot_fact_source_issues(plan_content, plan_tracker_path):
+    plan_version_match = FIX_105_PLAN_WORKFLOW_VERSION_RE.search(plan_content)
+    plan_version = plan_version_match.group(1) if plan_version_match else ""
+    latest_release = _latest_published_release_fact(plan_content)
+
+    snapshot_path = Path(plan_tracker_path).with_name("session-snapshot.md")
+    if not snapshot_path.exists():
+        return []
+
+    snapshot_content = snapshot_path.read_text(encoding="utf-8")
+    rel_snapshot = _display_path(snapshot_path)
+    issues = []
+
+    snapshot_version_match = FIX_105_SNAPSHOT_VERSION_RE.search(snapshot_content)
+    snapshot_version = snapshot_version_match.group(1) if snapshot_version_match else ""
+    if plan_version and snapshot_version and snapshot_version != plan_version:
+        issues.append(f"{rel_snapshot}: session snapshot workflow version {snapshot_version} does not match plan-tracker {plan_version}")
+    elif plan_version and not snapshot_version:
+        issues.append(f"{rel_snapshot}: session snapshot missing workflow version")
+
+    date_match = FIX_105_SNAPSHOT_DATE_RE.search(snapshot_content)
+    snapshot_date = _parse_iso_date(date_match.group(1)) if date_match else None
+    if latest_release and snapshot_date and snapshot_date < latest_release["date"]:
+        issues.append(
+            f"{rel_snapshot}: session snapshot date {date_match.group(1)} is older than latest published release "
+            f"{latest_release['version']} ({latest_release['date_text']})"
+        )
+    elif latest_release and snapshot_date is None:
+        issues.append(f"{rel_snapshot}: session snapshot missing parseable session_date")
+
+    if latest_release and latest_release["version"] not in snapshot_content:
+        issues.append(f"{rel_snapshot}: session snapshot missing latest published release {latest_release['version']}")
+
+    return issues
+
+
 def check_hot_fact_source_consistency(plan_tracker_path=None):
     """FIX-087: keep plan-tracker hot sections aligned across active release facts."""
     plan_tracker_path = plan_tracker_path or ROOT / ".governance/plan-tracker.md"
     failures = []
     plan_content = plan_tracker_path.read_text(encoding="utf-8")
     rel_plan = _display_path(plan_tracker_path)
+    failures.extend(_snapshot_fact_source_issues(plan_content, plan_tracker_path))
 
     required_sections = [
         "## 项目配置",
@@ -1589,6 +1651,9 @@ def check_hot_fact_source_consistency(plan_tracker_path=None):
         for token in [FIX_087_ACTIVE_VERSION, FIX_087_READINESS_VERSION, "RISK-033", "REL-013"]:
             if token not in dependency_chain:
                 failures.append(f"{rel_plan}: {FIX_087_READINESS_VERSION} dependency chain missing active blocker token {token}")
+        for token in FIX_105_READINESS_RELEASE_BLOCKERS:
+            if token in plan_content and token not in dependency_chain:
+                failures.append(f"{rel_plan}: {FIX_087_READINESS_VERSION} dependency chain missing readiness release blocker token {token}")
         if rel013_delivered:
             risk033_lines = [line for line in dependency_chain.splitlines() if "RISK-033" in line]
             if risk033_lines and not any("已关闭" in line for line in risk033_lines):

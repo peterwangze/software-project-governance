@@ -784,6 +784,8 @@ class HotFactSourceConsistencyTests(unittest.TestCase):
         project_stage=None,
         overview_stage=None,
         active_items_intro=None,
+        plan_version=None,
+        extra_roadmap_rows="",
     ):
         dependency_line = dependency_line or (
             "0.38.0 FIX-082~086 已闭环，RISK-033 关闭前不得打 1.0.0\n"
@@ -793,6 +795,7 @@ class HotFactSourceConsistencyTests(unittest.TestCase):
         project_stage = project_stage or "维护与演进 — 0.37.0 发布完成，0.38.0 AI 执行底座推进中，完成后再进入 1.0.0 外部验证准备"
         overview_stage = overview_stage or "维护（0.37.0 已发布，0.38.0 AI 执行底座推进中）"
         active_items_intro = active_items_intro or "0.38.0 AI 执行底座推进中。"
+        plan_version_line = f"- **工作流版本**: {plan_version}\n\n" if plan_version else ""
         rows = [
             "| **P0** | FIX-082 | Runtime capability contract | AUDIT-102 | 0.38.0 | done | ✅ 已完成 (2026-05-23) |",
             "| **P0** | FIX-083 | Structured evidence schema | AUDIT-102 | 0.38.0 | done | ✅ 已完成 (2026-05-23) |",
@@ -806,6 +809,7 @@ class HotFactSourceConsistencyTests(unittest.TestCase):
             "# 当前项目样例\n\n"
             "## 项目配置\n\n"
             f"- **当前阶段**: {project_stage}\n\n"
+            f"{plan_version_line}"
             "## 项目总览\n\n"
             "| 项目 | 当前阶段 | 总任务数 | 已完成 | 阻塞中 | 关键风险数 | 最近 Gate 结论 | 最近复盘日期 |\n"
             "| --- | --- | --- | --- | --- | --- | --- | --- |\n"
@@ -831,6 +835,7 @@ class HotFactSourceConsistencyTests(unittest.TestCase):
             "| --- | --- | --- | --- | --- | --- |\n"
             "| **0.37.0** | **已发布** | **2026-05-22** | **事实依据看护** | **FIX-080(P0), FIX-081(P0), REL-012(P0)** | **tag v0.37.0** |\n"
             f"| **0.38.0** | **{roadmap_status}** | **2026-05-23** | **AI 执行底座** | **AUDIT-102(P0), FIX-082~085(P0), FIX-086~087(P1), REL-013(P0)** | **能力契约、结构化证据、执行包、降级模式、投影同步、热区事实源一致性** |\n"
+            f"{extra_roadmap_rows}"
             "| **1.0.0** | **预留** | **—** | **首次正式发布标签——仅当 0.38.0 FIX-082~087 全部闭环、RISK-033 关闭、外部验证通过后打 tag** | **—** | **不得绕过 AI 执行底座收口** |\n\n"
             "## 需求跟踪矩阵\n\n"
             "| 需求ID | 需求描述 | 来源 | 优先级 | 关联任务 | 当前状态 | 验证方式 |\n"
@@ -845,6 +850,17 @@ class HotFactSourceConsistencyTests(unittest.TestCase):
     def _write_plan(self, root, content):
         path = Path(root) / "plan-tracker.md"
         path.write_text(content, encoding="utf-8")
+        return path
+
+    def _write_snapshot(self, root, *, version="0.42.0", session_date="2026-06-04", body="0.42.0 已发布"):
+        path = Path(root) / "session-snapshot.md"
+        path.write_text(
+            "# 会话快照\n\n"
+            f"- **session_date**: {session_date}\n"
+            f"- **工作流版本**: {version}\n\n"
+            f"{body}\n",
+            encoding="utf-8",
+        )
         return path
 
     def test_hot_fact_source_accepts_current_active_release_facts(self):
@@ -936,6 +952,57 @@ class HotFactSourceConsistencyTests(unittest.TestCase):
             )
             issues = vw.check_hot_fact_source_consistency(path)
             self.assertTrue(any("dependency chain missing active blocker token REL-013" in issue for issue in issues))
+
+    def test_hot_fact_source_rejects_stale_session_snapshot(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = self._write_plan(
+                td,
+                self._plan_content(
+                    plan_version="0.42.0",
+                    dependency_line="0.38.0 FIX-082~087 + REL-013 全部闭环，RISK-033 已关闭\nREL-018 与 REL-019 关闭前不得推进 1.0.0",
+                    extra_roadmap_rows=(
+                        "| **0.42.0** | **已发布** | **2026-06-04** | **5 分钟成功路径** | **REL-018(P0)** | **已发布** |\n"
+                        "| **0.43.0** | **规划** | **—** | **Cross-Harness E2E Closure** | **FIX-105(P1), REL-019(P0)** | **规划** |\n"
+                    ),
+                ),
+            )
+            self._write_snapshot(td, version="0.39.0", session_date="2026-05-29", body="0.39.0 已发布")
+            issues = vw.check_hot_fact_source_consistency(path)
+            self.assertTrue(any("session snapshot workflow version 0.39.0 does not match plan-tracker 0.42.0" in issue for issue in issues))
+            self.assertTrue(any("session snapshot date 2026-05-29 is older than latest published release 0.42.0" in issue for issue in issues))
+            self.assertTrue(any("session snapshot missing latest published release 0.42.0" in issue for issue in issues))
+
+    def test_hot_fact_source_accepts_current_session_snapshot(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = self._write_plan(
+                td,
+                self._plan_content(
+                    plan_version="0.42.0",
+                    dependency_line="0.38.0 FIX-082~087 + REL-013 全部闭环，RISK-033 已关闭\nREL-018 与 REL-019 关闭前不得推进 1.0.0",
+                    extra_roadmap_rows=(
+                        "| **0.42.0** | **已发布** | **2026-06-04** | **5 分钟成功路径** | **REL-018(P0)** | **已发布** |\n"
+                        "| **0.43.0** | **规划** | **—** | **Cross-Harness E2E Closure** | **FIX-105(P1), REL-019(P0)** | **规划** |\n"
+                    ),
+                ),
+            )
+            self._write_snapshot(td, version="0.42.0", session_date="2026-06-04", body="0.42.0 已发布；0.43.0 planned")
+            self.assertEqual(vw.check_hot_fact_source_consistency(path), [])
+
+    def test_hot_fact_source_requires_readiness_release_blockers_in_dependency_chain(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = self._write_plan(
+                td,
+                self._plan_content(
+                    dependency_line="0.38.0 FIX-082~087 + REL-013 全部闭环，RISK-033 已关闭\n0.43.0 关闭前不得推进 1.0.0",
+                    extra_roadmap_rows=(
+                        "| **0.42.0** | **已发布** | **2026-06-04** | **5 分钟成功路径** | **REL-018(P0)** | **已发布** |\n"
+                        "| **0.43.0** | **规划** | **—** | **Cross-Harness E2E Closure** | **FIX-105(P1), REL-019(P0)** | **规划** |\n"
+                    ),
+                ),
+            )
+            issues = vw.check_hot_fact_source_consistency(path)
+            self.assertTrue(any("dependency chain missing readiness release blocker token REL-018" in issue for issue in issues))
+            self.assertTrue(any("dependency chain missing readiness release blocker token REL-019" in issue for issue in issues))
 
 
 class AgentAdapterContractTests(unittest.TestCase):

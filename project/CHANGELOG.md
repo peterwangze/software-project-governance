@@ -2,6 +2,36 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.43.0] — 2026-06-05
+
+### 0.43.0 — Cross-Harness E2E Closure
+
+0.43.0 关闭 0.40.1~0.42.0 发布后复核发现：把跨会话恢复事实、主流 agent runtime/readiness 状态和 first-session measurement 边界转成 tracked artifacts 与机器检查。本 release 不声明 official approval、marketplace approval、universal/full runtime support、external first-session pilot success 或 1.0.0 production-ready；RISK-036 继续打开，后续 0.44.0~0.46.0 仍承载官方收录准备链。
+
+### 新增
+
+- **FIX-105**: `check-hot-fact-source` / `check-governance` 新增 session snapshot freshness 与 1.0.0 readiness blocker drift 检查，覆盖 REL-018/REL-019 dependency wording。
+- **FIX-106**: 新增公开 runtime/readiness matrix：`docs/requirements/runtime-readiness-matrix-0.43.0.md`；刷新 Claude/Codex/Gemini/opencode adapter facts；新增 `check-runtime-readiness-matrix` 与 Check 28d。
+- **FIX-107**: 新增 first-session measurement artifact：`docs/requirements/first-session-measurement-0.43.0.md`；README 增加 measured-state pointer；新增 `check-first-session-measurement`、Check 28e、release readiness detail 与 TOOL-025。
+- **REL-019**: 版本声明、CHANGELOG、release checklist、rollback plan、feature flag 状态、target fixture/projection version、hook versions 和 release gate expectation 同步到 0.43.0。
+
+### 验证
+
+- `check-runtime-readiness-matrix --fail-on-issues` PASS。
+- `check-first-session-measurement --fail-on-issues` PASS。
+- `first-run-demo --assert-snapshot` PASS。
+- 完整 unittest PASS：316/316。
+- `check-governance --fail-on-issues` PASS。
+- `check-release --version 0.43.0 --require-changelog --runtime-adapters` 作为 REL-019 发布门禁。
+
+### Runtime 与 Measurement 边界
+
+- Claude 与 opencode real target-cwd E2E 为 PASS，但 workflow closure 仍按宿主能力保持 DEGRADED 边界。
+- Codex real `codex exec` target-cwd E2E 在当前环境保持 BLOCKED，阻塞原因为 timeout。
+- Gemini 在当前环境因 auth 未配置保持 BLOCKED。
+- Cursor 与 GitHub Copilot 在本仓库保持 RESEARCH_ONLY / NOT_RUNTIME_VERIFIED。
+- First-session measured state 为 `local_demo=PASS`、`external_pilot=NOT_MEASURED`；local/demo-only proof 不是 external user success evidence。
+
 ## [0.42.0] — 2026-06-04
 
 ### 0.42.0 — 5-Minute Success Path

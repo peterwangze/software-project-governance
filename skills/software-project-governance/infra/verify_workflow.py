@@ -1746,6 +1746,8 @@ def _run_version_command(command):
 RUNTIME_READINESS_MATRIX_PATH = ROOT / "docs/requirements/runtime-readiness-matrix-0.43.0.md"
 RUNTIME_MATRIX_AGENT_IDS = ["claude", "codex", "gemini", "opencode", "cursor", "copilot"]
 RUNTIME_MATRIX_RESEARCH_ONLY_IDS = ["cursor", "copilot"]
+FIRST_SESSION_MEASUREMENT_PATH = ROOT / "docs/requirements/first-session-measurement-0.43.0.md"
+FIRST_SESSION_MEASUREMENT_ALLOWED_STATUSES = {"PASS", "BLOCKED", "NOT_MEASURED"}
 
 
 def _parse_markdown_table_rows(content, section_title=None):
@@ -1854,6 +1856,107 @@ def check_runtime_readiness_matrix(root=None):
     for token in required_boundary_tokens:
         if token not in content:
             failures.append(f"{_display_path(matrix_path, root)}: missing no-overclaim boundary token `{token}`")
+
+    return failures
+
+
+def check_first_session_measurement(root=None):
+    """FIX-107: separate local demo proof from external first-session measurement."""
+    root = root or ROOT
+    measurement_path = root / "docs/requirements/first-session-measurement-0.43.0.md"
+    failures = []
+    if not measurement_path.exists():
+        return [f"{_display_path(measurement_path, root)}: missing first-session measurement evidence"]
+
+    content = measurement_path.read_text(encoding="utf-8")
+    rows = _parse_markdown_table_rows(content, section_title="Measurement Status")
+    if not rows:
+        failures.append(f"{_display_path(measurement_path, root)}: missing `## Measurement Status` table")
+    measurement = {}
+    for cells in rows:
+        signal = cells[0].lower().strip("`* ")
+        if signal in {"local_demo", "external_pilot", "release_note_boundary"}:
+            measurement[signal] = cells
+
+    for signal in ("local_demo", "external_pilot", "release_note_boundary"):
+        if signal not in measurement:
+            failures.append(f"{_display_path(measurement_path, root)}: missing measurement row for {signal}")
+
+    local_row = " | ".join(measurement.get("local_demo", []))
+    if "PASS" not in local_row or "LOCAL_DEMO_ONLY" not in local_row:
+        failures.append(f"{_display_path(measurement_path, root)}: local_demo row must be PASS and LOCAL_DEMO_ONLY")
+    if "first-run-demo --assert-snapshot" not in local_row:
+        failures.append(f"{_display_path(measurement_path, root)}: local_demo row missing first-run-demo command")
+
+    external_cells = measurement.get("external_pilot", [])
+    external_status = external_cells[1].upper() if len(external_cells) > 1 else ""
+    external_row = " | ".join(external_cells)
+    external_lower = external_row.lower()
+    if external_status not in FIRST_SESSION_MEASUREMENT_ALLOWED_STATUSES:
+        failures.append(
+            f"{_display_path(measurement_path, root)}: external_pilot status must be one of "
+            f"{sorted(FIRST_SESSION_MEASUREMENT_ALLOWED_STATUSES)}"
+        )
+    if external_status == "PASS":
+        local_demo_tokens = ("LOCAL_DEMO_ONLY", "first-run-demo", "local demo")
+        if any(token.lower() in external_lower for token in local_demo_tokens):
+            failures.append(
+                f"{_display_path(measurement_path, root)}: external_pilot PASS cannot use local demo evidence"
+            )
+        if "4/5" not in external_row and "5/5" not in external_row:
+            failures.append(
+                f"{_display_path(measurement_path, root)}: external_pilot PASS requires at least 4/5 measured users"
+            )
+        pass_required_tokens = [
+            ("external pilot", "external pilot evidence"),
+            ("Delivery Trust Snapshot", "Delivery Trust Snapshot reached"),
+            ("within 5 minutes", "within 5 minutes"),
+            ("trust signal", "trust signal named"),
+            ("evidence", "evidence location"),
+        ]
+        for token, label in pass_required_tokens:
+            if token.lower() not in external_lower:
+                failures.append(
+                    f"{_display_path(measurement_path, root)}: external_pilot PASS requires {label}"
+                )
+        if "setup" not in external_lower and "resume" not in external_lower:
+            failures.append(
+                f"{_display_path(measurement_path, root)}: external_pilot PASS requires setup or resume path"
+            )
+        over_five = [
+            match.group(0)
+            for match in re.finditer(r"\b([6-9]|[1-9]\d+)\s+minutes?\b", external_lower)
+        ]
+        if over_five:
+            failures.append(
+                f"{_display_path(measurement_path, root)}: external_pilot PASS exceeds five-minute limit: {', '.join(over_five)}"
+            )
+    elif external_status == "NOT_MEASURED":
+        if "0/5" not in external_row:
+            failures.append(f"{_display_path(measurement_path, root)}: NOT_MEASURED external_pilot row must state 0/5 measured")
+        if "4/5" not in external_row or "within 5 minutes" not in external_row:
+            failures.append(
+                f"{_display_path(measurement_path, root)}: NOT_MEASURED external_pilot row must preserve 4/5 within 5 minutes target"
+            )
+    elif external_status == "BLOCKED" and "blocked" not in external_lower:
+        failures.append(f"{_display_path(measurement_path, root)}: BLOCKED external_pilot row requires blocked reason")
+
+    release_row = " | ".join(measurement.get("release_note_boundary", []))
+    if "PASS" not in release_row or "TEXT_GUARD" not in release_row:
+        failures.append(f"{_display_path(measurement_path, root)}: release_note_boundary row must be PASS and TEXT_GUARD")
+
+    required_tokens = [
+        "Do not convert local demo PASS into external pilot PASS",
+        "local_demo=PASS",
+        "external_pilot=NOT_MEASURED",
+        "No official approval",
+        "No marketplace approval",
+        "No universal/full runtime support",
+        "RISK-036 remains open",
+    ]
+    for token in required_tokens:
+        if token not in content:
+            failures.append(f"{_display_path(measurement_path, root)}: missing first-session boundary token `{token}`")
 
     return failures
 
@@ -2864,6 +2967,13 @@ def check_release_readiness(
         "issues": runtime_matrix_issues,
     }
     issues.extend(f"runtime readiness matrix: {issue}" for issue in runtime_matrix_issues)
+
+    first_session_issues = check_first_session_measurement()
+    details["first_session_measurement"] = {
+        "pass": not first_session_issues,
+        "issues": first_session_issues,
+    }
+    issues.extend(f"first-session measurement: {issue}" for issue in first_session_issues)
 
     adapter_issues = check_agent_adapter_contract(run_runtime=run_runtime_adapters)
     details["agent_adapters"] = {
@@ -9702,6 +9812,20 @@ def cmd_check_governance(args):
         print("│  [PASS] Public runtime/readiness matrix matches adapter facts and no-overclaim boundaries.")
     print("└──────────────────────────────────────────────────────┘")
 
+    # ── 28e. First-Session Measurement Guard (FIX-107) ──
+    print("\n┌─ Check 28e: First-Session Measurement (FIX-107) ─────┐")
+    fsm_issues = check_first_session_measurement()
+    if fsm_issues:
+        all_issues += len(fsm_issues)
+        print(f"│  [FAIL] {len(fsm_issues)} first-session measurement issue(s):")
+        for issue in fsm_issues[:10]:
+            print(f"│    - {issue}")
+        if len(fsm_issues) > 10:
+            print(f"│    ... and {len(fsm_issues) - 10} more")
+    else:
+        print("│  [PASS] Local demo proof is separated from external first-session measurement.")
+    print("└──────────────────────────────────────────────────────┘")
+
     # ── Summary ──
     print(f"\n┌─ Governance Health Summary ──────────────────────────┐")
     if all_issues == 0:
@@ -12759,6 +12883,27 @@ def cmd_check_runtime_readiness_matrix(args):
     print()
 
 
+def cmd_check_first_session_measurement(args):
+    """Run first-session measurement consistency guard."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    issues = check_first_session_measurement()
+    print("\n=== First-Session Measurement Check ===")
+    if issues:
+        print(f"  Result: FAILED — {len(issues)} issue(s)")
+        for issue in issues[:20]:
+            print(f"    - {issue}")
+        if len(issues) > 20:
+            print(f"    ... and {len(issues) - 20} more")
+        if getattr(args, "fail_on_issues", False):
+            sys.exit(1)
+    else:
+        print("  Result: PASSED — local demo proof is separated from external first-session measurement")
+    print()
+
+
 def cmd_check_product_success_contracts(args):
     """Run Product Success Contract guard independently."""
     try:
@@ -13148,6 +13293,14 @@ def main():
     crrm_p.add_argument("--fail-on-issues", action="store_true",
                         help="Exit with non-zero code if matrix facts drift from adapter manifests")
 
+    # check-first-session-measurement (FIX-107)
+    cfsm_p = subparsers.add_parser(
+        "check-first-session-measurement",
+        help="Check first-session measurement evidence against local-demo and external-pilot boundaries",
+    )
+    cfsm_p.add_argument("--fail-on-issues", action="store_true",
+                        help="Exit with non-zero code if measurement evidence overclaims external pilot status")
+
     # check-product-success-contracts (FIX-088)
     cpsc_p = subparsers.add_parser(
         "check-product-success-contracts",
@@ -13249,6 +13402,7 @@ def main():
         "check-projection-sync": cmd_check_projection_sync,
         "check-hot-fact-source": cmd_check_hot_fact_source,
         "check-runtime-readiness-matrix": cmd_check_runtime_readiness_matrix,
+        "check-first-session-measurement": cmd_check_first_session_measurement,
         "check-product-success-contracts": cmd_check_product_success_contracts,
         "check-acceptance-contracts": cmd_check_acceptance_contracts,
         "check-quality-budget": cmd_check_quality_budget,

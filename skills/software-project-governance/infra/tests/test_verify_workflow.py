@@ -1781,6 +1781,120 @@ class RuntimeReadinessMatrixTests(unittest.TestCase):
             self.assertTrue(any("missing no-overclaim boundary token `No official approval`" in issue for issue in issues))
 
 
+class FirstSessionMeasurementTests(unittest.TestCase):
+    """FIX-107: local demo proof must stay separate from external pilot measurement."""
+
+    def _write_measurement(
+        self,
+        root,
+        *,
+        external_status="NOT_MEASURED",
+        external_result=None,
+        external_boundary="Do not convert local demo PASS into external pilot PASS.",
+        footer="",
+        include_boundary=True,
+    ):
+        docs_dir = root / "docs" / "requirements"
+        docs_dir.mkdir(parents=True, exist_ok=True)
+        if external_result is None:
+            external_result = (
+                "0/5 external pilot users measured for 0.43.0 at this time. "
+                "Target remains 4/5 users completing setup or resume and naming one trust signal within 5 minutes."
+            )
+        boundary = (
+            "No official approval. No marketplace approval. No universal/full runtime support. RISK-036 remains open."
+            if include_boundary
+            else "RISK-036 remains open."
+        )
+        content = (
+            "# First-Session Measurement Evidence 0.43.0\n\n"
+            "## Measurement Status\n\n"
+            "| Signal | Status | Evidence scope | Current result | Boundary |\n"
+            "| --- | --- | --- | --- | --- |\n"
+            "| local_demo | PASS | LOCAL_DEMO_ONLY | `python skills/software-project-governance/infra/verify_workflow.py first-run-demo --assert-snapshot` passes locally and asserts Delivery Trust Snapshot fields. | Local demo-only proof; no external user success claim. |\n"
+            f"| external_pilot | {external_status} | EXTERNAL_PILOT_REQUIRED | {external_result} | {external_boundary} |\n"
+            f"| release_note_boundary | PASS | TEXT_GUARD | 0.43.0 release notes must publish local_demo=PASS and external_pilot=NOT_MEASURED unless timed pilot evidence is added before release. | {boundary} |\n"
+            f"{footer}\n"
+        )
+        (docs_dir / "first-session-measurement-0.43.0.md").write_text(content, encoding="utf-8")
+
+    def test_first_session_measurement_accepts_current_file(self):
+        self.assertEqual(vw.check_first_session_measurement(vw.ROOT), [])
+
+    def test_first_session_measurement_accepts_not_measured_external_pilot(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_measurement(root)
+            self.assertEqual(vw.check_first_session_measurement(root), [])
+
+    def test_first_session_measurement_rejects_external_pass_from_local_demo(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_measurement(
+                root,
+                external_status="PASS",
+                external_result="4/5 from local demo `first-run-demo --assert-snapshot` output.",
+            )
+            issues = vw.check_first_session_measurement(root)
+            self.assertTrue(any("external_pilot PASS cannot use local demo evidence" in issue for issue in issues))
+
+    def test_first_session_measurement_accepts_real_external_pass_semantics(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_measurement(
+                root,
+                external_status="PASS",
+                external_result=(
+                    "4/5 external pilot users completed setup or resume, reached the Delivery Trust Snapshot "
+                    "within 5 minutes, named one trust signal, and attached evidence at docs/pilot/run-001.md."
+                ),
+                external_boundary="External pilot evidence only.",
+                footer="Do not convert local demo PASS into external pilot PASS.",
+            )
+            self.assertEqual(vw.check_first_session_measurement(root), [])
+
+    def test_first_session_measurement_rejects_external_pass_over_five_minutes(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_measurement(
+                root,
+                external_status="PASS",
+                external_result=(
+                    "4/5 external pilot users completed setup and named one trust signal after 12 minutes; "
+                    "evidence at docs/pilot/run-001.md."
+                ),
+                external_boundary="External pilot evidence only.",
+                footer="Do not convert local demo PASS into external pilot PASS.",
+            )
+            issues = vw.check_first_session_measurement(root)
+            self.assertTrue(any("external_pilot PASS requires Delivery Trust Snapshot reached" in issue for issue in issues))
+            self.assertTrue(any("external_pilot PASS requires within 5 minutes" in issue for issue in issues))
+            self.assertTrue(any("external_pilot PASS exceeds five-minute limit: 12 minutes" in issue for issue in issues))
+
+    def test_first_session_measurement_rejects_external_pass_without_trust_signal(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_measurement(
+                root,
+                external_status="PASS",
+                external_result=(
+                    "4/5 external pilot users completed setup, reached the Delivery Trust Snapshot "
+                    "within 5 minutes, and attached evidence at docs/pilot/run-001.md."
+                ),
+                external_boundary="External pilot evidence only.",
+                footer="Do not convert local demo PASS into external pilot PASS.",
+            )
+            issues = vw.check_first_session_measurement(root)
+            self.assertTrue(any("external_pilot PASS requires trust signal named" in issue for issue in issues))
+
+    def test_first_session_measurement_requires_no_overclaim_boundary(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_measurement(root, include_boundary=False)
+            issues = vw.check_first_session_measurement(root)
+            self.assertTrue(any("missing first-session boundary token `No official approval`" in issue for issue in issues))
+
+
 class ReleaseReadinessCommandTests(unittest.TestCase):
     """FIX-072: stage-release check-release must be backed by a real CLI command."""
 

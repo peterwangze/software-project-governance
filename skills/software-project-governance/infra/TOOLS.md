@@ -275,6 +275,16 @@
 - **依赖**：`check-governance` Check 28d、`check-release` runtime readiness matrix detail、`check-agent-adapters --runtime`、`agent-runtime-e2e`
 - **被以下子工作流使用**：测试（testing）、发布（release）、维护（maintenance）
 
+### TOOL-025：First-Session Measurement guard
+
+- **文件**：`infra/verify_workflow.py` + `docs/requirements/first-session-measurement-0.43.0.md`
+- **子命令**：`check-first-session-measurement [--fail-on-issues]`
+- **输入**：first-session measurement evidence 文档中的 `Measurement Status` 表、local demo 命令和 external pilot 状态
+- **输出**：local_demo 是否只声明 LOCAL_DEMO_ONLY PASS，external_pilot 是否只使用 PASS/BLOCKED/NOT_MEASURED 且不把 `first-run-demo` local proof 包装成外部 pilot PASS，release note no-overclaim boundary 是否完整
+- **触发条件**：更新 5-minute first-session 证据、发布 0.43.0 release notes、外部 pilot 测量状态变化或 release gate 前
+- **依赖**：`check-governance` Check 28e、`check-release` first-session measurement detail、`first-run-demo --assert-snapshot`
+- **被以下子工作流使用**：测试（testing）、发布（release）、维护（maintenance）
+
 ## 工具与子工作流的关系矩阵
 
 | 工具 | 立项 | 调研 | 选型 | 环境 | 架构 | 开发 | 测试 | CI/CD | 发布 | 运营 | 维护 |
@@ -302,6 +312,7 @@
 | Weak-LLM Deterministic Scaffold generator/check | ● | ○ | | | ○ | ● | ● | | ● | | ● |
 | User Interruption Policy v2 guard | ● | ○ | | | ○ | ● | ● | | ● | | ● |
 | Runtime Readiness Matrix guard | | | | | ○ | | ● | | ● | | ● |
+| First-Session Measurement guard | | | | | ○ | | ● | | ● | | ● |
 
 > ● 主要使用者  ○ 可选用
 

@@ -59,6 +59,8 @@ python skills/software-project-governance/infra/verify_workflow.py first-run-dem
 
 The snapshot is the first trust signal: it proves the workflow can show what it knows, what remains missing, and the next evidence-backed action. It is not a claim of official approval, marketplace approval, universal/full runtime support, or 1.0.0 production-ready status.
 
+External first-session measurement is tracked separately from this local demo. The current 0.43.0 measured state is local_demo=PASS and external_pilot=NOT_MEASURED in the [first-session measurement evidence](docs/requirements/first-session-measurement-0.43.0.md).
+
 First-run preset guidance:
 
 | Preset | Use first when | What it optimizes for |
@@ -193,6 +195,8 @@ python skills/software-project-governance/infra/verify_workflow.py first-run-dem
 ```
 
 Delivery Trust Snapshot 是第一个 trust signal：它证明工作流能把“已知事实、缺失证据、下一步动作和边界声明”摆在你面前。它不是官方批准、marketplace approval、universal/full runtime support，也不是 1.0.0 production-ready 声明。
+
+外部 first-session measurement 与这个本地 demo 分开记录。当前 0.43.0 measured state 是 local_demo=PASS、external_pilot=NOT_MEASURED，见 [first-session measurement evidence](docs/requirements/first-session-measurement-0.43.0.md)。
 
 首次预设建议：
 

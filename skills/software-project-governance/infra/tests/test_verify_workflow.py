@@ -1895,6 +1895,166 @@ class FirstSessionMeasurementTests(unittest.TestCase):
             self.assertTrue(any("missing first-session boundary token `No official approval`" in issue for issue in issues))
 
 
+class GovernancePackTests(unittest.TestCase):
+    """FIX-108: governance packs must be registry-backed and machine-checkable."""
+
+    def _write_registry(self, root, mutate=None):
+        registry_path = root / "skills/software-project-governance/core/governance-packs.json"
+        registry_path.parent.mkdir(parents=True, exist_ok=True)
+        shared_file = root / "skills/software-project-governance/SKILL.md"
+        shared_file.parent.mkdir(parents=True, exist_ok=True)
+        shared_file.write_text("# Governance Skill\n", encoding="utf-8")
+        docs_file = root / "docs/requirements/composable-governance-packs-0.44.0.md"
+        docs_file.parent.mkdir(parents=True, exist_ok=True)
+        docs_file.write_text("# Packs\n", encoding="utf-8")
+
+        packs = []
+        for pack_id in vw.GOVERNANCE_PACK_IDS:
+            packs.append({
+                "id": pack_id,
+                "title": pack_id.replace("-", " ").title(),
+                "description": f"{pack_id} pack description.",
+                "default_profiles": ["standard"],
+                "capabilities": [f"{pack_id}_capability"],
+                "user_value": [f"{pack_id} user-visible value."],
+                "files": [
+                    {"path": "skills/software-project-governance/SKILL.md", "required": True},
+                    {"path": "docs/requirements/composable-governance-packs-0.44.0.md", "required": True},
+                ],
+                "checks": ["check-governance-packs"],
+                "validation_commands": [
+                    "python skills/software-project-governance/infra/verify_workflow.py check-governance-packs --fail-on-issues"
+                ],
+                "no_overclaim_boundary": [
+                    "Pack enabled does not mean release passed."
+                ],
+            })
+
+        data = {
+            "$schema": "https://example.com/software-project-governance/governance-packs-v1.json",
+            "schema_version": "1.0",
+            "workflow": "software-project-governance",
+            "workflow_version": "0.44.0",
+            "source_of_truth": True,
+            "pack_mode": "registry-first-no-physical-split",
+            "required_pack_ids": vw.GOVERNANCE_PACK_IDS,
+            "no_overclaim_boundary": [
+                "No official approval",
+                "No marketplace approval",
+                "No universal or full runtime support",
+                "RISK-036 remains open",
+            ],
+            "packs": packs,
+        }
+        if mutate:
+            mutate(data, root)
+        registry_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        return registry_path
+
+    def test_governance_pack_registry_accepts_current_file(self):
+        self.assertEqual(vw.check_governance_packs(vw.ROOT), [])
+
+    def test_governance_pack_registry_accepts_minimal_valid_registry(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_registry(root)
+            self.assertEqual(vw.check_governance_packs(root), [])
+
+    def test_governance_pack_registry_rejects_missing_required_pack(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data, _root):
+                data["packs"] = [p for p in data["packs"] if p["id"] != "enterprise"]
+
+            self._write_registry(root, mutate=mutate)
+            issues = vw.check_governance_packs(root)
+            self.assertTrue(any("missing required pack id(s): enterprise" in issue for issue in issues))
+
+    def test_governance_pack_registry_rejects_unknown_pack_id(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data, _root):
+                data["packs"][0]["id"] = "growth-hacking"
+
+            self._write_registry(root, mutate=mutate)
+            issues = vw.check_governance_packs(root)
+            self.assertTrue(any("unknown pack id" in issue for issue in issues))
+
+    def test_governance_pack_registry_rejects_missing_referenced_file(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data, _root):
+                data["packs"][0]["files"].append({
+                    "path": "skills/software-project-governance/core/missing-pack-file.md",
+                    "required": True,
+                })
+
+            self._write_registry(root, mutate=mutate)
+            issues = vw.check_governance_packs(root)
+            self.assertTrue(any("referenced file `skills/software-project-governance/core/missing-pack-file.md` does not exist" in issue for issue in issues))
+
+    def test_governance_pack_registry_rejects_missing_optional_referenced_file(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data, _root):
+                data["packs"][0]["files"].append({
+                    "path": "docs/requirements/optional-but-still-referenced.md",
+                    "required": False,
+                })
+
+            self._write_registry(root, mutate=mutate)
+            issues = vw.check_governance_packs(root)
+            self.assertTrue(any("referenced file `docs/requirements/optional-but-still-referenced.md` does not exist" in issue for issue in issues))
+
+    def test_governance_pack_registry_rejects_missing_required_field(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data, _root):
+                del data["packs"][0]["capabilities"]
+
+            self._write_registry(root, mutate=mutate)
+            issues = vw.check_governance_packs(root)
+            self.assertTrue(any("missing required field `capabilities`" in issue for issue in issues))
+
+    def test_governance_pack_registry_rejects_duplicate_pack_id(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data, _root):
+                data["packs"][1]["id"] = data["packs"][0]["id"]
+
+            self._write_registry(root, mutate=mutate)
+            issues = vw.check_governance_packs(root)
+            self.assertTrue(any("duplicate pack id `governance-core`" in issue for issue in issues))
+
+    def test_governance_pack_registry_rejects_unknown_check(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data, _root):
+                data["packs"][0]["checks"].append("check-imaginary-pack-state")
+
+            self._write_registry(root, mutate=mutate)
+            issues = vw.check_governance_packs(root)
+            self.assertTrue(any("unknown referenced check `check-imaginary-pack-state`" in issue for issue in issues))
+
+    def test_governance_pack_registry_rejects_overclaim_wording(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data, _root):
+                data["packs"][0]["description"] = "This pack is officially approved."
+
+            self._write_registry(root, mutate=mutate)
+            issues = vw.check_governance_packs(root)
+            self.assertTrue(any("forbidden overclaim wording `officially approved`" in issue for issue in issues))
+
+
 class ReleaseReadinessCommandTests(unittest.TestCase):
     """FIX-072: stage-release check-release must be backed by a real CLI command."""
 

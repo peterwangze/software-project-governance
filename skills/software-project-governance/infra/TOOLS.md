@@ -29,6 +29,9 @@
 | TOOL-021 | Vertical Slice Delivery Packet guard | script | `infra/verify_workflow.py check-vertical-slices` + `check-governance` Check 18g | P0/P1 任务启动和关闭前检查用户可见切片、demo、scope guard 和 rollback | 开发/测试/发布/维护 | 是 |
 | TOOL-022 | Weak-LLM Deterministic Scaffold generator/check | script + template | `infra/verify_workflow.py generate-deterministic-scaffold` + `check-deterministic-scaffolds` + `check-governance` Check 18h | 弱 LLM 或新项目启动时生成 PRD-lite、验收、质量预算、垂直切片和 demo checklist 脚手架 | 立项/开发/测试/发布/维护 | 是 |
 | TOOL-023 | User Interruption Policy v2 guard | script + template | `infra/verify_workflow.py check-interruption-policy` + `check-governance` Check 18i | P0/P1 任务启动和关闭前检查 critical-only 打断边界、assumption record 和打断预算 | 立项/开发/测试/发布/维护 | 是 |
+| TOOL-024 | Runtime Readiness Matrix guard | script + doc | `infra/verify_workflow.py check-runtime-readiness-matrix` + `check-governance` Check 28d | adapter runtime facts、公开 readiness matrix 或 release gate 变更后 | 测试/发布/维护 | 是 |
+| TOOL-025 | First-Session Measurement guard | script + doc | `infra/verify_workflow.py check-first-session-measurement` + `check-governance` Check 28e | local demo / external pilot 证据或 release note boundary 变更后 | 测试/发布/维护 | 是 |
+| TOOL-026 | Governance Pack Registry guard | script + registry | `infra/verify_workflow.py check-governance-packs` + `check-governance` Check 28f | composable governance pack registry、pack 文件/检查归属或 no-overclaim boundary 变更后 | 架构/测试/发布/维护 | 是 |
 
 ## 工具详情
 
@@ -284,6 +287,16 @@
 - **触发条件**：更新 5-minute first-session 证据、发布 0.43.0 release notes、外部 pilot 测量状态变化或 release gate 前
 - **依赖**：`check-governance` Check 28e、`check-release` first-session measurement detail、`first-run-demo --assert-snapshot`
 - **被以下子工作流使用**：测试（testing）、发布（release）、维护（maintenance）
+
+### TOOL-026：Governance Pack Registry guard
+
+- **文件**：`infra/verify_workflow.py` + `core/governance-packs.json`
+- **子命令**：`check-governance-packs [--fail-on-issues]`
+- **输入**：canonical governance pack registry 中的 pack ID、profile、capability、file reference、check reference、validation command 和 no-overclaim boundary
+- **输出**：`governance-core`、`quality-gates`、`release-governance`、`agent-team`、`enterprise` 是否完整；引用文件和引用检查是否存在；是否出现 official approval / marketplace approval / 1.0.0 production-ready 等过度声明
+- **触发条件**：新增或调整 composable governance pack、改变文件/检查归属、发布 0.44.0 pack boundary 或 release gate 前
+- **依赖**：`check-governance` Check 28f、`core/manifest.json`
+- **被以下子工作流使用**：架构设计（architecture）、测试（testing）、发布（release）、维护（maintenance）
 
 ## 工具与子工作流的关系矩阵
 

@@ -1748,6 +1748,82 @@ RUNTIME_MATRIX_AGENT_IDS = ["claude", "codex", "gemini", "opencode", "cursor", "
 RUNTIME_MATRIX_RESEARCH_ONLY_IDS = ["cursor", "copilot"]
 FIRST_SESSION_MEASUREMENT_PATH = ROOT / "docs/requirements/first-session-measurement-0.43.0.md"
 FIRST_SESSION_MEASUREMENT_ALLOWED_STATUSES = {"PASS", "BLOCKED", "NOT_MEASURED"}
+GOVERNANCE_PACKS_PATH = ROOT / "skills/software-project-governance/core/governance-packs.json"
+GOVERNANCE_PACK_IDS = [
+    "governance-core",
+    "quality-gates",
+    "release-governance",
+    "agent-team",
+    "enterprise",
+]
+GOVERNANCE_PACK_REQUIRED_FIELDS = [
+    "id",
+    "title",
+    "description",
+    "default_profiles",
+    "capabilities",
+    "user_value",
+    "files",
+    "checks",
+    "validation_commands",
+    "no_overclaim_boundary",
+]
+GOVERNANCE_PACK_PROFILE_IDS = {"lite", "standard", "strict"}
+GOVERNANCE_PACK_KNOWN_CHECKS = {
+    "verify",
+    "status",
+    "check-governance",
+    "check-manifest-consistency",
+    "check-agent-adapters",
+    "check-release",
+    "e2e-check",
+    "first-run-demo",
+    "agent-runtime-e2e",
+    "gemini-auth-preflight",
+    "opencode-provider-preflight",
+    "check-cross-references",
+    "check-sequential-ids",
+    "check-structural-validity",
+    "check-commit-scope",
+    "check-goal-alignment",
+    "check-user-impact",
+    "check-agent-team",
+    "check-review-debt",
+    "check-version-consistency",
+    "check-projection-sync",
+    "check-hot-fact-source",
+    "check-runtime-readiness-matrix",
+    "check-first-session-measurement",
+    "check-product-success-contracts",
+    "check-acceptance-contracts",
+    "check-quality-budget",
+    "check-vertical-slices",
+    "check-deterministic-scaffolds",
+    "check-scaffold-templates",
+    "check-interruption-policy",
+    "check-user-interruption-policy",
+    "generate-deterministic-scaffold",
+    "check-locks",
+    "check-archive-integrity",
+    "check-governance-packs",
+}
+GOVERNANCE_PACK_BOUNDARY_TOKENS = [
+    "No official approval",
+    "No marketplace approval",
+    "No universal or full runtime support",
+    "RISK-036 remains open",
+]
+GOVERNANCE_PACK_FORBIDDEN_OVERCLAIMS = [
+    "officially approved",
+    "official approval granted",
+    "marketplace approved",
+    "marketplace approval granted",
+    "universal runtime support is verified",
+    "full runtime support is verified",
+    "1.0.0 production-ready",
+    "pack enabled means release passed",
+    "pack enabled means governance review passed",
+]
 
 
 def _parse_markdown_table_rows(content, section_title=None):
@@ -1957,6 +2033,134 @@ def check_first_session_measurement(root=None):
     for token in required_tokens:
         if token not in content:
             failures.append(f"{_display_path(measurement_path, root)}: missing first-session boundary token `{token}`")
+
+    return failures
+
+
+def _governance_pack_text_values(value):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _governance_pack_text_values(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _governance_pack_text_values(item)
+
+
+def _governance_pack_file_path(entry):
+    if isinstance(entry, str):
+        return entry
+    if isinstance(entry, dict):
+        return entry.get("path")
+    return None
+
+
+def check_governance_packs(root=None):
+    """FIX-108: canonical governance pack registry must be factual and checkable."""
+    root = root or ROOT
+    registry_path = root / "skills/software-project-governance/core/governance-packs.json"
+    failures = []
+    display = _display_path(registry_path, root)
+    if not registry_path.exists():
+        return [f"{display}: missing governance pack registry"]
+
+    try:
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        return [f"{display}: invalid JSON: {exc}"]
+
+    if registry.get("workflow") != "software-project-governance":
+        failures.append(f"{display}: workflow must be software-project-governance")
+    if registry.get("source_of_truth") is not True:
+        failures.append(f"{display}: source_of_truth must be true")
+    if registry.get("pack_mode") != "registry-first-no-physical-split":
+        failures.append(f"{display}: pack_mode must be registry-first-no-physical-split")
+    for token in GOVERNANCE_PACK_BOUNDARY_TOKENS:
+        if token not in registry.get("no_overclaim_boundary", []):
+            failures.append(f"{display}: missing no-overclaim boundary token `{token}`")
+
+    required_pack_ids = registry.get("required_pack_ids")
+    if required_pack_ids != GOVERNANCE_PACK_IDS:
+        failures.append(f"{display}: required_pack_ids must be {GOVERNANCE_PACK_IDS}")
+
+    packs = registry.get("packs")
+    if not isinstance(packs, list) or not packs:
+        return failures + [f"{display}: packs must be a non-empty list"]
+
+    seen_ids = []
+    for pack in packs:
+        if not isinstance(pack, dict):
+            failures.append(f"{display}: each pack must be an object")
+            continue
+        pack_id = pack.get("id", "<missing>")
+        seen_ids.append(pack_id)
+        pack_label = f"{display}: pack {pack_id}"
+
+        for field in GOVERNANCE_PACK_REQUIRED_FIELDS:
+            if field not in pack:
+                failures.append(f"{pack_label}: missing required field `{field}`")
+
+        if pack_id not in GOVERNANCE_PACK_IDS:
+            failures.append(f"{pack_label}: unknown pack id")
+
+        for field in ("title", "description"):
+            if not isinstance(pack.get(field), str) or not pack.get(field, "").strip():
+                failures.append(f"{pack_label}: `{field}` must be a non-empty string")
+
+        profiles = pack.get("default_profiles")
+        if not isinstance(profiles, list) or not profiles:
+            failures.append(f"{pack_label}: default_profiles must be a non-empty list")
+        else:
+            invalid_profiles = [p for p in profiles if p not in GOVERNANCE_PACK_PROFILE_IDS]
+            if invalid_profiles:
+                failures.append(f"{pack_label}: unknown default_profiles {invalid_profiles}")
+
+        for field in ("capabilities", "user_value", "checks", "validation_commands", "no_overclaim_boundary"):
+            value = pack.get(field)
+            if not isinstance(value, list) or not all(isinstance(item, str) and item.strip() for item in value):
+                failures.append(f"{pack_label}: `{field}` must be a non-empty string list")
+
+        files = pack.get("files")
+        if not isinstance(files, list) or not files:
+            failures.append(f"{pack_label}: files must be a non-empty list")
+        else:
+            for entry in files:
+                rel_path = _governance_pack_file_path(entry)
+                if not isinstance(rel_path, str) or not rel_path.strip():
+                    failures.append(f"{pack_label}: file entry must contain non-empty path")
+                    continue
+                target = root / rel_path
+                if not target.exists():
+                    failures.append(f"{pack_label}: referenced file `{rel_path}` does not exist")
+
+        for check in pack.get("checks", []):
+            if check not in GOVERNANCE_PACK_KNOWN_CHECKS:
+                failures.append(f"{pack_label}: unknown referenced check `{check}`")
+
+        commands = pack.get("validation_commands", [])
+        for command in commands if isinstance(commands, list) else []:
+            if "verify_workflow.py" not in command and not command.startswith("python -m unittest"):
+                failures.append(f"{pack_label}: validation command must call verify_workflow.py or unittest: `{command}`")
+
+        boundary = " ".join(pack.get("no_overclaim_boundary", []))
+        if "does not" not in boundary.lower() and "not " not in boundary.lower():
+            failures.append(f"{pack_label}: no_overclaim_boundary must explicitly deny overclaim")
+
+    duplicates = sorted({pack_id for pack_id in seen_ids if seen_ids.count(pack_id) > 1})
+    for pack_id in duplicates:
+        failures.append(f"{display}: duplicate pack id `{pack_id}`")
+    missing_ids = [pack_id for pack_id in GOVERNANCE_PACK_IDS if pack_id not in seen_ids]
+    if missing_ids:
+        failures.append(f"{display}: missing required pack id(s): {', '.join(missing_ids)}")
+    unknown_ids = [pack_id for pack_id in seen_ids if pack_id not in GOVERNANCE_PACK_IDS]
+    if unknown_ids:
+        failures.append(f"{display}: unknown pack id(s): {', '.join(sorted(set(unknown_ids)))}")
+
+    all_text = "\n".join(_governance_pack_text_values(registry)).lower()
+    for phrase in GOVERNANCE_PACK_FORBIDDEN_OVERCLAIMS:
+        if phrase in all_text:
+            failures.append(f"{display}: forbidden overclaim wording `{phrase}`")
 
     return failures
 
@@ -9826,6 +10030,20 @@ def cmd_check_governance(args):
         print("│  [PASS] Local demo proof is separated from external first-session measurement.")
     print("└──────────────────────────────────────────────────────┘")
 
+    # ── 28f. Governance Pack Registry Guard (FIX-108) ──
+    print("\n┌─ Check 28f: Governance Pack Registry (FIX-108) ──────┐")
+    gp_issues = check_governance_packs()
+    if gp_issues:
+        all_issues += len(gp_issues)
+        print(f"│  [FAIL] {len(gp_issues)} governance pack registry issue(s):")
+        for issue in gp_issues[:10]:
+            print(f"│    - {issue}")
+        if len(gp_issues) > 10:
+            print(f"│    ... and {len(gp_issues) - 10} more")
+    else:
+        print("│  [PASS] Governance pack registry is complete, referenced, and no-overclaim safe.")
+    print("└──────────────────────────────────────────────────────┘")
+
     # ── Summary ──
     print(f"\n┌─ Governance Health Summary ──────────────────────────┐")
     if all_issues == 0:
@@ -12904,6 +13122,27 @@ def cmd_check_first_session_measurement(args):
     print()
 
 
+def cmd_check_governance_packs(args):
+    """Run governance pack registry consistency guard."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    issues = check_governance_packs()
+    print("\n=== Governance Pack Registry Check ===")
+    if issues:
+        print(f"  Result: FAILED — {len(issues)} issue(s)")
+        for issue in issues[:20]:
+            print(f"    - {issue}")
+        if len(issues) > 20:
+            print(f"    ... and {len(issues) - 20} more")
+        if getattr(args, "fail_on_issues", False):
+            sys.exit(1)
+    else:
+        print("  Result: PASSED — governance pack registry is complete and factual")
+    print()
+
+
 def cmd_check_product_success_contracts(args):
     """Run Product Success Contract guard independently."""
     try:
@@ -13301,6 +13540,14 @@ def main():
     cfsm_p.add_argument("--fail-on-issues", action="store_true",
                         help="Exit with non-zero code if measurement evidence overclaims external pilot status")
 
+    # check-governance-packs (FIX-108)
+    cgp_p = subparsers.add_parser(
+        "check-governance-packs",
+        help="Check canonical governance pack registry fields, references, and no-overclaim boundary",
+    )
+    cgp_p.add_argument("--fail-on-issues", action="store_true",
+                       help="Exit with non-zero code if pack registry is incomplete or overclaims")
+
     # check-product-success-contracts (FIX-088)
     cpsc_p = subparsers.add_parser(
         "check-product-success-contracts",
@@ -13403,6 +13650,7 @@ def main():
         "check-hot-fact-source": cmd_check_hot_fact_source,
         "check-runtime-readiness-matrix": cmd_check_runtime_readiness_matrix,
         "check-first-session-measurement": cmd_check_first_session_measurement,
+        "check-governance-packs": cmd_check_governance_packs,
         "check-product-success-contracts": cmd_check_product_success_contracts,
         "check-acceptance-contracts": cmd_check_acceptance_contracts,
         "check-quality-budget": cmd_check_quality_budget,

@@ -1,0 +1,223 @@
+{
+  "$schema": "https://example.com/software-project-governance/governance-packs-v1.json",
+  "schema_version": "1.0",
+  "workflow": "software-project-governance",
+  "workflow_version": "0.44.0",
+  "source_of_truth": true,
+  "pack_mode": "registry-first-no-physical-split",
+  "required_pack_ids": [
+    "governance-core",
+    "quality-gates",
+    "release-governance",
+    "agent-team",
+    "enterprise"
+  ],
+  "no_overclaim_boundary": [
+    "No official approval",
+    "No marketplace approval",
+    "No universal or full runtime support",
+    "No external first-session pilot success",
+    "RISK-036 remains open"
+  ],
+  "packs": [
+    {
+      "id": "governance-core",
+      "title": "Governance Core",
+      "description": "Bootstrap, hot fact sources, context resume, evidence discipline, and baseline status surfaces.",
+      "default_profiles": ["lite", "standard", "strict"],
+      "capabilities": [
+        "bootstrap_state_recovery",
+        "hot_fact_source_consistency",
+        "evidence_traceability",
+        "context_aware_resume"
+      ],
+      "user_value": [
+        "Resume unfinished work from facts instead of asking the user to restate context.",
+        "Keep project state, risks, evidence, and next action synchronized."
+      ],
+      "files": [
+        { "path": "skills/software-project-governance/SKILL.md", "required": true },
+        { "path": "skills/software-project-governance/core/protocol/", "required": true },
+        { "path": "skills/software-project-governance/references/interaction-boundary.md", "required": true },
+        { "path": "docs/requirements/composable-governance-packs-0.44.0.md", "required": false }
+      ],
+      "checks": [
+        "verify",
+        "status",
+        "check-governance",
+        "check-hot-fact-source",
+        "check-governance-packs"
+      ],
+      "validation_commands": [
+        "python skills/software-project-governance/infra/verify_workflow.py verify",
+        "python skills/software-project-governance/infra/verify_workflow.py check-governance --fail-on-issues",
+        "python skills/software-project-governance/infra/verify_workflow.py check-governance-packs --fail-on-issues"
+      ],
+      "no_overclaim_boundary": [
+        "Pack enabled does not mean governance review passed.",
+        "Pack registry facts must be backed by referenced files and checks."
+      ]
+    },
+    {
+      "id": "quality-gates",
+      "title": "Quality Gates",
+      "description": "Product success, executable acceptance, quality budget, vertical slice, and weak-LLM scaffolding guards.",
+      "default_profiles": ["standard", "strict"],
+      "capabilities": [
+        "product_success_contract",
+        "executable_acceptance_contract",
+        "quality_budget_gate",
+        "vertical_slice_delivery",
+        "deterministic_scaffold"
+      ],
+      "user_value": [
+        "Constrain AI implementation toward user-visible, testable outcomes.",
+        "Lower reliance on model judgment by requiring executable acceptance and quality signals."
+      ],
+      "files": [
+        { "path": "skills/software-project-governance/core/templates/product-success-contract.md", "required": true },
+        { "path": "skills/software-project-governance/core/templates/executable-acceptance-contract.md", "required": true },
+        { "path": "skills/software-project-governance/core/templates/quality-budget.md", "required": true },
+        { "path": "skills/software-project-governance/core/templates/vertical-slice-delivery-packet.md", "required": true },
+        { "path": "skills/software-project-governance/core/templates/deterministic-scaffolds/", "required": true }
+      ],
+      "checks": [
+        "check-product-success-contracts",
+        "check-acceptance-contracts",
+        "check-quality-budget",
+        "check-vertical-slices",
+        "check-deterministic-scaffolds",
+        "check-interruption-policy"
+      ],
+      "validation_commands": [
+        "python skills/software-project-governance/infra/verify_workflow.py check-product-success-contracts --fail-on-issues",
+        "python skills/software-project-governance/infra/verify_workflow.py check-acceptance-contracts --fail-on-issues",
+        "python skills/software-project-governance/infra/verify_workflow.py check-quality-budget --fail-on-issues",
+        "python skills/software-project-governance/infra/verify_workflow.py check-vertical-slices --fail-on-issues"
+      ],
+      "no_overclaim_boundary": [
+        "Passing quality gates does not prove product-market fit.",
+        "Scaffolds are starting constraints, not evidence that the product is complete."
+      ]
+    },
+    {
+      "id": "release-governance",
+      "title": "Release Governance",
+      "description": "Release readiness, version consistency, runtime readiness, first-session measurement, rollback, and changelog gates.",
+      "default_profiles": ["standard", "strict"],
+      "capabilities": [
+        "release_readiness",
+        "version_consistency",
+        "runtime_readiness_matrix",
+        "first_session_measurement",
+        "rollback_readiness"
+      ],
+      "user_value": [
+        "Keep release claims tied to verified commands and documented boundaries.",
+        "Prevent local/demo proof from being misrepresented as external success."
+      ],
+      "files": [
+        { "path": "skills/software-project-governance/infra/verify_workflow.py", "required": true },
+        { "path": "docs/requirements/runtime-readiness-matrix-0.43.0.md", "required": false },
+        { "path": "docs/requirements/first-session-measurement-0.43.0.md", "required": false },
+        { "path": "project/CHANGELOG.md", "required": false }
+      ],
+      "checks": [
+        "check-release",
+        "check-version-consistency",
+        "check-runtime-readiness-matrix",
+        "check-first-session-measurement",
+        "check-projection-sync"
+      ],
+      "validation_commands": [
+        "python skills/software-project-governance/infra/verify_workflow.py check-release --version 0.44.0 --require-changelog --runtime-adapters",
+        "python skills/software-project-governance/infra/verify_workflow.py check-runtime-readiness-matrix --fail-on-issues",
+        "python skills/software-project-governance/infra/verify_workflow.py check-first-session-measurement --fail-on-issues"
+      ],
+      "no_overclaim_boundary": [
+        "Release checks do not claim official approval.",
+        "Runtime readiness matrix states PASS/BLOCKED/DEGRADED facts only."
+      ]
+    },
+    {
+      "id": "agent-team",
+      "title": "Agent Team",
+      "description": "Coordinator, developer, reviewer, analyst, architect, QA, DevOps, release, and maintenance role separation.",
+      "default_profiles": ["standard", "strict"],
+      "capabilities": [
+        "role_routing",
+        "producer_reviewer_separation",
+        "review_debt_guard",
+        "degraded_mode_disclosure"
+      ],
+      "user_value": [
+        "Separate implementation from review when the host runtime supports it.",
+        "Expose degraded mode instead of pretending unavailable sub-agent capabilities exist."
+      ],
+      "files": [
+        { "path": "agents/", "required": true },
+        { "path": "skills/code-review/SKILL.md", "required": true },
+        { "path": "skills/design-review/SKILL.md", "required": true },
+        { "path": "skills/requirement-review/SKILL.md", "required": true },
+        { "path": "skills/test-review/SKILL.md", "required": true },
+        { "path": "skills/release-review/SKILL.md", "required": true }
+      ],
+      "checks": [
+        "check-agent-team",
+        "check-review-debt",
+        "check-agent-adapters",
+        "check-goal-alignment",
+        "check-user-impact"
+      ],
+      "validation_commands": [
+        "python skills/software-project-governance/infra/verify_workflow.py check-agent-team --fail-on-issues",
+        "python skills/software-project-governance/infra/verify_workflow.py check-review-debt --fail-on-issues",
+        "python skills/software-project-governance/infra/verify_workflow.py check-agent-adapters --runtime"
+      ],
+      "no_overclaim_boundary": [
+        "Degraded host runtimes must disclose missing sub-agent or AskUserQuestion capability.",
+        "A review-like note from the implementer is not independent review coverage."
+      ]
+    },
+    {
+      "id": "enterprise",
+      "title": "Enterprise",
+      "description": "Manifest, cleanup, archive integrity, adapter contracts, compliance evidence, and operational maintenance guards.",
+      "default_profiles": ["strict"],
+      "capabilities": [
+        "manifest_consistency",
+        "cleanup_boundary",
+        "archive_integrity",
+        "cross_reference_integrity",
+        "runtime_adapter_contract"
+      ],
+      "user_value": [
+        "Keep shipped plugin artifacts, cleanup behavior, and historical evidence auditable.",
+        "Make compliance and adapter claims reproducible from tracked files."
+      ],
+      "files": [
+        { "path": "skills/software-project-governance/core/manifest.json", "required": true },
+        { "path": "skills/software-project-governance/core/governance-packs.json", "required": true },
+        { "path": "skills/software-project-governance/infra/archive.py", "required": true },
+        { "path": "skills/software-project-governance/infra/TOOLS.md", "required": true },
+        { "path": "adapters/", "required": true }
+      ],
+      "checks": [
+        "check-manifest-consistency",
+        "check-archive-integrity",
+        "check-cross-references",
+        "check-sequential-ids",
+        "check-governance-packs"
+      ],
+      "validation_commands": [
+        "python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues",
+        "python skills/software-project-governance/infra/verify_workflow.py check-archive-integrity",
+        "python skills/software-project-governance/infra/verify_workflow.py check-cross-references --fail-on-issues"
+      ],
+      "no_overclaim_boundary": [
+        "Enterprise pack readiness does not mean marketplace approval.",
+        "Manifest coverage is artifact hygiene, not external certification."
+      ]
+    }
+  ]
+}

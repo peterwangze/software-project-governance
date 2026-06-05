@@ -18,6 +18,7 @@
     "entries": [
       { "path": "skills/software-project-governance/SKILL.md", "type": "file" },
       { "path": "skills/software-project-governance/core/", "type": "dir" },
+      { "path": "skills/software-project-governance/core/governance-packs.json", "type": "file" },
       { "path": "skills/software-project-governance/core/templates/", "type": "dir" },
       { "path": "skills/software-project-governance/core/protocol/", "type": "dir" },
       { "path": "skills/software-project-governance/infra/", "type": "dir" },

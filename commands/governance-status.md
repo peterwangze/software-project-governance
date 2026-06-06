@@ -41,14 +41,17 @@
 
 ### Step 3.6: Delivery Trust Snapshot
 - 输出一个 compact `Delivery Trust Snapshot`，作为 `/governance` Scenario F 的 first-run/status 可观察信号。
-- Snapshot MUST 包含：Resume state、Carry-over、Open risks、Hooks、Goal、Stage、Gate/setup status、Risk、Evidence、Next action、Verification signal、No-overclaim boundary。
+- Snapshot MUST 包含：Resume state、Carry-over、Open risks、Unfinished work、Source facts、Blocker state、Auto-continue、Interrupt boundary、Hooks、Goal、Stage、Gate/setup status、Risk、Evidence、Next action、Verification signal、No-overclaim boundary。
 - 已有 `.governance/` 状态时，`Resume state` MUST 明确写出 `Existing governance state detected`，并展示 carry-over active task count、open risk count/details、hook state 和 next action。
+- `Unfinished work` MUST come from recorded facts only: `.governance/plan-tracker.md` active rows/version roadmap, `.governance/session-snapshot.md` carry-over or next priorities, `.governance/risk-log.md`, and current local context. Every detected item MUST have `Source facts`; if no facts exist, output `not found` and `do not invent` new work.
+- `Blocker state` MUST distinguish no blocker recorded, open risk guard, and blocked facts. `Auto-continue` MUST be `yes` only when unfinished work is fact-backed and no blocker/critical decision boundary is recorded. `Interrupt boundary` MUST state when AskUserQuestion is required.
 - 已有 `.governance/` 状态时，输出 MUST NOT 暗示或建议重新初始化；重新初始化提示只允许出现在 `.governance/plan-tracker.md` 缺失的错误路径。
 - First-run preset guidance MUST 展示：`lite is the recommended first-run default`；`standard is for team delivery`；`strict is for regulated/high-risk work`。
 - Snapshot 前 MUST NOT 提超过 3 个 non-critical questions；剩余 deferred non-critical fields MUST 记录为 assumptions。
 - `Verification signal` MUST 是一个可运行或可观察的本地信号，例如 `python skills/software-project-governance/infra/verify_workflow.py status`。
 - `No-overclaim boundary` MUST 明确说明该 snapshot 只是 demo/local-only 本地治理状态信号、不需要 external credentials，且不声明 official approval、marketplace approval、universal/full runtime support 或 1.0.0 production-ready。
 - 本地 acceptance harness：`python skills/software-project-governance/infra/verify_workflow.py first-run-demo --assert-snapshot` MUST 在 demo/local-only 范围断言 snapshot 字段，不需要 external credentials。
+- Context acceptance harness：`python skills/software-project-governance/infra/verify_workflow.py governance-context --fixture project/e2e-test-project --fail-on-issues` MUST pass and MUST keep `not found` as a valid no-facts result without inventing unfinished work.
 
 ### Step 4: 按输出格式模板输出状态面板
 
@@ -71,7 +74,7 @@
 | last_gate_conclusion | 字符串 | 最近 Gate 结论 | "G11 通过" |
 | last_review_date | 字符串 | 最近复盘日期 | "2026-04-25" |
 | gate_status_table | 表格 | G1~G11 状态表 | 见模板 |
-| delivery_trust_snapshot | 面板 | Resume state/Carry-over/Open risks/Hooks/Goal/Stage/Gate/setup status/Risk/Evidence/Next action/Preset guidance/Question budget/Verification signal/No-overclaim boundary | 见模板 |
+| delivery_trust_snapshot | 面板 | Resume state/Carry-over/Open risks/Unfinished work/Source facts/Blocker state/Auto-continue/Interrupt boundary/Hooks/Goal/Stage/Gate/setup status/Risk/Evidence/Next action/Preset guidance/Question budget/Verification signal/No-overclaim boundary | 见模板 |
 
 ### 输出模板
 
@@ -93,6 +96,11 @@
 │  Resume state: Existing governance state detected    │
 │  Carry-over: {carry_over_count} active task(s)        │
 │  Open risks: {open_risk_count} open risk(s); {risk_details} │
+│  Unfinished work: {detected_item_or_not_found}        │
+│  Source facts: {fact_source_paths_and_rows}           │
+│  Blocker state: {blocker_state}                       │
+│  Auto-continue: {yes_or_no}                           │
+│  Interrupt boundary: {ask_user_question_boundary}     │
 │  Hooks: {hook_state}                                 │
 │  Goal: {project_goal}                                │
 │  Stage: {current_stage}                              │
@@ -132,7 +140,9 @@ Gate 状态列的合法值：
 - [ ] 所有必要字段均出现在输出中
 - [ ] 输出必须明确包含 `permission_mode` 或 `操作权限模式`，不得只依赖项目配置原始字段顺序偶然展示
 - [ ] 输出必须明确包含 `Delivery Trust Snapshot`
-- [ ] Delivery Trust Snapshot 必须包含 Resume state、Existing governance state detected、Carry-over、Open risks、Hooks、Goal、Stage、Gate/setup status、Risk、Evidence、Next action、Preset guidance、Question budget、Verification signal、No-overclaim boundary
+- [ ] Delivery Trust Snapshot 必须包含 Resume state、Existing governance state detected、Carry-over、Open risks、Unfinished work、Source facts、Blocker state、Auto-continue、Interrupt boundary、Hooks、Goal、Stage、Gate/setup status、Risk、Evidence、Next action、Preset guidance、Question budget、Verification signal、No-overclaim boundary
+- [ ] Unfinished work 必须基于 Source facts；无事实时必须输出 `not found` 和 `do not invent`
+- [ ] `python skills/software-project-governance/infra/verify_workflow.py governance-context --fixture project/e2e-test-project --fail-on-issues` 必须可通过
 - [ ] 已有 `.governance/` 项目不得提示重新初始化；必须给出 resume next action
 - [ ] First-run preset guidance 必须明确 `lite` 是首次运行推荐默认，`standard` 用于 team delivery，`strict` 用于 regulated/high-risk work
 - [ ] Snapshot 前不得提出超过 3 个 non-critical questions；deferred non-critical fields 必须记录为 assumptions

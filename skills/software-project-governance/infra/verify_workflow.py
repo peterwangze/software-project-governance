@@ -1772,6 +1772,7 @@ GOVERNANCE_PACK_PROFILE_IDS = {"lite", "standard", "strict"}
 GOVERNANCE_PACK_KNOWN_CHECKS = {
     "verify",
     "status",
+    "governance-context",
     "check-governance",
     "check-manifest-consistency",
     "check-agent-adapters",
@@ -1807,6 +1808,26 @@ GOVERNANCE_PACK_KNOWN_CHECKS = {
     "check-archive-integrity",
     "check-governance-packs",
 }
+GOVERNANCE_CONTEXT_REQUIRED_FIELDS = [
+    "status",
+    "detected_item",
+    "source_facts",
+    "blocker_state",
+    "next_action",
+    "auto_continue",
+    "interrupt_boundary",
+]
+GOVERNANCE_CONTEXT_SNAPSHOT_SECTIONS = {
+    "遗留任务",
+    "Carry-over tasks",
+    "Carry over tasks",
+    "Unfinished / deferred",
+    "未完成 / 已延期",
+    "下次会话优先级",
+    "Next priorities",
+    "Next session priorities",
+}
+GOVERNANCE_CONTEXT_BLOCKED_MARKERS = ("blocked", "阻塞", "卡住", "等待", "待确认")
 GOVERNANCE_PACK_BOUNDARY_TOKENS = [
     "No official approval",
     "No marketplace approval",
@@ -3563,6 +3584,345 @@ def parse_task_stats():
     return stats
 
 
+def _context_root(root=None):
+    return Path(root) if root is not None else ROOT
+
+
+def _context_file(root, relative_path):
+    return _context_root(root) / relative_path
+
+
+def _empty_governance_context(root=None):
+    root = _context_root(root)
+    checked = [
+        ".governance/plan-tracker.md",
+        ".governance/session-snapshot.md",
+        ".governance/risk-log.md",
+    ]
+    present = [path for path in checked if (root / path).is_file()]
+    source = (
+        "checked " + ", ".join(present)
+        if present
+        else "checked governance fact sources; no governance files found"
+    )
+    return {
+        "status": "NOT_FOUND",
+        "detected_item": "not found",
+        "source_facts": [f"{source}; no unfinished user work facts found"],
+        "blocker_state": "not found",
+        "next_action": "do not invent work; ask only at an interaction boundary or start from recorded plan",
+        "auto_continue": False,
+        "interrupt_boundary": "AskUserQuestion required before creating new work from assumptions",
+        "_items": [],
+    }
+
+
+def _context_task(item_id, title, status, source, raw_line, priority="", kind="task"):
+    title = re.sub(r"\s+", " ", (title or "").strip())
+    raw_line = re.sub(r"\s+", " ", (raw_line or "").strip())
+    return {
+        "task_id": item_id,
+        "priority": priority,
+        "title": title,
+        "status": status or "unfinished",
+        "source": source,
+        "raw_line": raw_line,
+        "kind": kind,
+    }
+
+
+def _extract_task_title_from_line(line, task_id):
+    cleaned = re.sub(r"^[\s\-\d.、]+", "", line or "")
+    cleaned = cleaned.replace("**", "").replace("`", "")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if task_id in cleaned:
+        return cleaned
+    return task_id
+
+
+def _parse_plan_context_tasks(root):
+    plan_path = _context_file(root, ".governance/plan-tracker.md")
+    if not plan_path.is_file():
+        return []
+    tasks = []
+    content = plan_path.read_text(encoding="utf-8")
+    in_active_section = False
+    in_roadmap = False
+    for line in content.split("\n"):
+        stripped = line.strip()
+        if stripped.startswith("## 当前活跃事项"):
+            in_active_section = True
+            in_roadmap = False
+            continue
+        if stripped.startswith("### 版本路线图"):
+            in_roadmap = True
+            in_active_section = False
+            continue
+        if in_active_section and stripped.startswith("### 最近完成"):
+            in_active_section = False
+        if in_roadmap and stripped.startswith("### ") and not stripped.startswith("### 版本路线图"):
+            in_roadmap = False
+
+        if in_active_section and stripped.startswith("|") and "---" not in stripped:
+            cells = _governance_table_cells(stripped)
+            if not cells or cells[0] in {"优先级", "任务ID"}:
+                continue
+            task_idx = next(
+                (idx for idx, cell in enumerate(cells)
+                 if re.match(r"^(?:\*\*)?[A-Z]+-\d+(?:\*\*)?$", cell.strip())),
+                None,
+            )
+            if task_idx is None:
+                continue
+            status = cells[-1].strip() if cells else ""
+            if not _is_incomplete_task_status(status):
+                continue
+            task_id = cells[task_idx].strip().strip("*")
+            priority = next((_normalize_priority(cell) for cell in cells if _normalize_priority(cell)), "")
+            title = cells[task_idx + 1].strip() if task_idx + 1 < len(cells) else task_id
+            tasks.append(_context_task(
+                task_id,
+                title,
+                status,
+                ".governance/plan-tracker.md ## 当前活跃事项",
+                stripped,
+                priority=priority,
+            ))
+            continue
+
+        if in_roadmap and stripped.startswith("|") and "---" not in stripped:
+            cells = _governance_table_cells(stripped)
+            if len(cells) < 5 or cells[0] in {"版本", "Version"}:
+                continue
+            row_status = cells[1]
+            if not _is_incomplete_task_status(row_status):
+                continue
+            task_cell = cells[4]
+            for match in re.finditer(r"\b([A-Z]+-\d+)(?:\([^)]*\))?(✅)?", task_cell):
+                if match.group(2):
+                    continue
+                task_id = match.group(1)
+                tasks.append(_context_task(
+                    task_id,
+                    f"{task_id} from active version {cells[0]} roadmap",
+                    row_status,
+                    ".governance/plan-tracker.md ### 版本路线图",
+                    stripped,
+                    priority="",
+                ))
+    return tasks
+
+
+def _parse_snapshot_context_tasks(root):
+    snapshot_path = _context_file(root, ".governance/session-snapshot.md")
+    if not snapshot_path.is_file():
+        return []
+    tasks = []
+    content = snapshot_path.read_text(encoding="utf-8")
+    current_section = ""
+    header = []
+    for line in content.split("\n"):
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            current_section = stripped.lstrip("#").strip()
+            header = []
+            continue
+        if current_section not in GOVERNANCE_CONTEXT_SNAPSHOT_SECTIONS:
+            continue
+        if not stripped or stripped.lower() == "none":
+            continue
+        if stripped.startswith("|") and "---" not in stripped:
+            cells = _governance_table_cells(stripped)
+            if not cells:
+                continue
+            if any("任务" in cell or "Task" in cell or "优先级" in cell for cell in cells):
+                header = cells
+                continue
+            task_idx = next(
+                (idx for idx, cell in enumerate(cells) if re.search(r"\b[A-Z]+-\d+\b", cell)),
+                None,
+            )
+            if task_idx is None:
+                continue
+            task_id = re.search(r"\b[A-Z]+-\d+\b", cells[task_idx]).group(0)
+            status = "carry-over"
+            if header:
+                status_idx = next(
+                    (idx for idx, cell in enumerate(header)
+                     if "状态" in cell or "status" in cell.lower() or "阻塞" in cell),
+                    None,
+                )
+                if status_idx is not None and status_idx < len(cells):
+                    status = cells[status_idx]
+            if not _is_incomplete_task_status(status):
+                continue
+            priority = next((_normalize_priority(cell) for cell in cells if _normalize_priority(cell)), "")
+            title = cells[task_idx + 1].strip() if task_idx + 1 < len(cells) else task_id
+            tasks.append(_context_task(
+                task_id,
+                title,
+                status,
+                f".governance/session-snapshot.md ## {current_section}",
+                stripped,
+                priority=priority,
+            ))
+            continue
+        task_match = re.search(r"\b([A-Z]+-\d+)\b", stripped)
+        if task_match:
+            task_id = task_match.group(1)
+            tasks.append(_context_task(
+                task_id,
+                _extract_task_title_from_line(stripped, task_id),
+                "carry-over",
+                f".governance/session-snapshot.md ## {current_section}",
+                stripped,
+                priority=_normalize_priority(stripped),
+            ))
+    return tasks
+
+
+def _parse_context_open_risks(root):
+    risk_path = _context_file(root, ".governance/risk-log.md")
+    if not risk_path.is_file():
+        return []
+    risks = []
+    for line in risk_path.read_text(encoding="utf-8").split("\n"):
+        stripped = line.strip()
+        if not stripped.startswith("| RISK-"):
+            continue
+        cells = _governance_table_cells(stripped)
+        if len(cells) < 9:
+            continue
+        status = cells[8]
+        if status != "打开":
+            continue
+        risks.append(_context_task(
+            cells[0],
+            cells[2] if len(cells) > 2 else cells[0],
+            status,
+            ".governance/risk-log.md",
+            stripped,
+            kind="risk",
+        ))
+    return risks
+
+
+def _dedupe_context_items(items):
+    seen = set()
+    deduped = []
+    for item in items:
+        key = (item.get("kind"), item.get("task_id"), item.get("source"))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
+def discover_governance_context(root=None):
+    """Discover unfinished user work from recorded facts only."""
+    root = _context_root(root)
+    items = _dedupe_context_items(
+        _parse_plan_context_tasks(root)
+        + _parse_snapshot_context_tasks(root)
+    )
+    risks = _parse_context_open_risks(root)
+    if not items:
+        context = _empty_governance_context(root)
+        if risks:
+            risk_ids = ", ".join(risk["task_id"] for risk in risks[:3])
+            context["blocker_state"] = f"open risk(s) recorded: {risk_ids}"
+            context["source_facts"].append(f".governance/risk-log.md: {risk_ids}")
+            context["_items"] = risks
+        return context
+
+    first = items[0]
+    blocked = [
+        item for item in items
+        if any(marker in item.get("status", "").lower() or marker in item.get("raw_line", "").lower()
+               for marker in GOVERNANCE_CONTEXT_BLOCKED_MARKERS)
+    ]
+    risk_text = ", ".join(risk["task_id"] for risk in risks[:3])
+    source_facts = [
+        f"{item['source']}: {item['task_id']} | {item['raw_line']}"
+        for item in items[:3]
+    ]
+    if risks:
+        source_facts.append(f".governance/risk-log.md: open risk(s) {risk_text}")
+
+    if blocked:
+        blocker_state = f"blocked fact recorded for {blocked[0]['task_id']}"
+        auto_continue = False
+        interrupt_boundary = "AskUserQuestion before continuing blocked work"
+    elif risks:
+        blocker_state = f"open risk guard present: {risk_text}"
+        auto_continue = False
+        interrupt_boundary = "AskUserQuestion or risk owner review required before auto-continuing risk-guarded work"
+    else:
+        blocker_state = "no blocker recorded in checked facts"
+        auto_continue = True
+        interrupt_boundary = "continue automatically until critical decision, blocker, review, or release boundary"
+
+    return {
+        "status": "FOUND",
+        "detected_item": f"{first['task_id']} - {first['title']}",
+        "source_facts": source_facts,
+        "blocker_state": blocker_state,
+        "next_action": f"resume {first['task_id']} from recorded facts and attach evidence before completion",
+        "auto_continue": auto_continue,
+        "interrupt_boundary": interrupt_boundary,
+        "_items": items + risks,
+    }
+
+
+def check_governance_context(root=None):
+    """FIX-112: context discovery must be factual and explicit about not-found."""
+    root = _context_root(root)
+    context = discover_governance_context(root)
+    failures = []
+    for field in GOVERNANCE_CONTEXT_REQUIRED_FIELDS:
+        if field not in context:
+            failures.append(f"governance context: missing `{field}`")
+    if context.get("status") not in {"FOUND", "NOT_FOUND"}:
+        failures.append("governance context: status must be FOUND or NOT_FOUND")
+    if context.get("status") == "FOUND" and not context.get("source_facts"):
+        failures.append("governance context: FOUND requires source facts")
+    blocker_state = context.get("blocker_state", "").lower()
+    if context.get("auto_continue") and (
+        "open risk" in blocker_state or "blocked fact" in blocker_state
+    ):
+        failures.append("governance context: blocker or open risk must disable auto-continue")
+    if context.get("status") == "NOT_FOUND":
+        if "not found" not in context.get("detected_item", "").lower():
+            failures.append("governance context: NOT_FOUND must explicitly say not found")
+        if context.get("auto_continue"):
+            failures.append("governance context: NOT_FOUND cannot auto-continue")
+
+    docs = [
+        root / "commands/governance.md",
+        root / "commands/governance-status.md",
+    ]
+    required_doc_tokens = [
+        "Unfinished work",
+        "Source facts",
+        "Blocker state",
+        "Auto-continue",
+        "Interrupt boundary",
+        "not found",
+        "do not invent",
+        "governance-context",
+    ]
+    for path in docs:
+        if not path.is_file():
+            failures.append(f"{_display_path(path, root)}: missing governance context contract doc")
+            continue
+        text = path.read_text(encoding="utf-8")
+        for token in required_doc_tokens:
+            if token not in text:
+                failures.append(f"{_display_path(path, root)}: missing context contract token `{token}`")
+    return failures
+
+
 def parse_resume_state():
     """Summarize existing-project resume state from local governance files."""
     governance_dir = SAMPLE_PATH.parent
@@ -3573,6 +3933,23 @@ def parse_resume_state():
     ] if state_exists else []
     if state_exists and not active_tasks:
         active_tasks = parse_session_snapshot_carry_over_tasks()
+    if SAMPLE_PATH.parent.name == ".governance":
+        context_root = SAMPLE_PATH.parent.parent
+    else:
+        context_root = SAMPLE_PATH.parent
+    context = discover_governance_context(context_root) if state_exists else _empty_governance_context(context_root)
+    if active_tasks and context.get("status") != "FOUND":
+        first = active_tasks[0]
+        context = {
+            "status": "FOUND",
+            "detected_item": f"{first['task_id']} - {first.get('title') or first['task_id']}",
+            "source_facts": [f"{_display_path(SAMPLE_PATH, context_root)}: {first.get('raw_line', first['task_id'])}"],
+            "blocker_state": "no blocker recorded in checked facts",
+            "next_action": f"resume {first['task_id']} from recorded facts and attach evidence before completion",
+            "auto_continue": True,
+            "interrupt_boundary": "continue automatically until critical decision, blocker, review, or release boundary",
+            "_items": active_tasks,
+        }
     open_risks = parse_open_risks() if state_exists else []
     hook_paths = [
         ROOT / ".git/hooks/pre-commit",
@@ -3622,6 +3999,7 @@ def parse_resume_state():
         "risk_details": risk_details,
         "hook_state": hook_state,
         "next_action": next_action,
+        "context": context,
     }
 
 
@@ -3719,6 +4097,7 @@ def build_delivery_trust_snapshot(config=None, overview=None, gates=None, stats=
     gates = gates or parse_gate_status()
     stats = stats or parse_task_stats()
     resume = resume or parse_resume_state()
+    context = resume.get("context") or discover_governance_context(ROOT)
 
     goal = (
         config.get("项目目标")
@@ -3765,6 +4144,11 @@ def build_delivery_trust_snapshot(config=None, overview=None, gates=None, stats=
         "Resume state": resume["state_label"],
         "Carry-over": f"{resume['carry_over_count']} active task(s)",
         "Open risks": f"{resume['open_risk_count']} open risk(s); {resume['risk_details']}",
+        "Unfinished work": context["detected_item"],
+        "Source facts": "; ".join(context["source_facts"][:3]),
+        "Blocker state": context["blocker_state"],
+        "Auto-continue": "yes" if context["auto_continue"] else "no",
+        "Interrupt boundary": context["interrupt_boundary"],
         "Hooks": resume["hook_state"],
         "Goal": goal,
         "Stage": stage,
@@ -3793,6 +4177,11 @@ FIRST_RUN_DEMO_REQUIRED_FIELDS = [
     "Resume state",
     "Carry-over",
     "Open risks",
+    "Unfinished work",
+    "Source facts",
+    "Blocker state",
+    "Auto-continue",
+    "Interrupt boundary",
     "Hooks",
     "Goal",
     "Stage",
@@ -3808,6 +4197,12 @@ FIRST_RUN_DEMO_REQUIRED_FIELDS = [
 
 FIRST_RUN_DEMO_REQUIRED_MARKERS = [
     "Delivery Trust Snapshot",
+    "Unfinished work:",
+    "Source facts:",
+    "Blocker state:",
+    "Auto-continue:",
+    "Interrupt boundary:",
+    "not found",
     "Goal:",
     "Stage:",
     "Gate/setup status:",
@@ -3864,6 +4259,16 @@ def build_first_run_demo_snapshot():
         "risk_details": "RISK-036 remains open; demo makes no approval or runtime support claims",
         "hook_state": "not required for demo; local assertions only",
         "next_action": "run the first user-visible task and attach runnable evidence",
+        "context": {
+            "status": "NOT_FOUND",
+            "detected_item": "not found in demo fixture",
+            "source_facts": ["demo fixture checked; no unfinished user work facts found"],
+            "blocker_state": "not found",
+            "next_action": "do not invent work; continue from the demo task only",
+            "auto_continue": False,
+            "interrupt_boundary": "AskUserQuestion required before creating new work from assumptions",
+            "_items": [],
+        },
     }
     return build_delivery_trust_snapshot(
         demo_config,
@@ -5224,6 +5629,10 @@ def cmd_verify(args):
 
 def cmd_status(args):
     """Show project status overview."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
     config = parse_project_config()
     overview = parse_overview()
     gates = parse_gate_status()
@@ -5281,8 +5690,46 @@ def cmd_status(args):
         for g in gates:
             icon = STATUS_ICONS.get(g["status"], "?")
             date = g["date"] if g["date"] else ""
-            print(f"│  {icon} {g['gate']:4s}  {g['status']:20s}  {date}")
+        print(f"│  {icon} {g['gate']:4s}  {g['status']:20s}  {date}")
         print("└──────────────────────────────────────────────────────┘")
+
+
+def cmd_governance_context(args):
+    """Show fact-based unfinished work handoff for /governance resume."""
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    fixture = getattr(args, "fixture", None)
+    root = ROOT
+    if fixture:
+        fixture_path = Path(fixture)
+        root = fixture_path if fixture_path.is_absolute() else ROOT / fixture_path
+
+    context = discover_governance_context(root)
+    print("== Governance Context Discovery ==")
+    print(f"Root: {_display_path(root, ROOT)}")
+    print(f"Status: {context['status']}")
+    print(f"Unfinished work: {context['detected_item']}")
+    print("Source facts:")
+    for fact in context["source_facts"]:
+        print(f"  - {fact}")
+    print(f"Blocker state: {context['blocker_state']}")
+    print(f"Next action: {context['next_action']}")
+    print(f"Auto-continue: {'yes' if context['auto_continue'] else 'no'}")
+    print(f"Interrupt boundary: {context['interrupt_boundary']}")
+    print(
+        "No-overclaim boundary: context discovery is a handoff signal only; "
+        "it does not mean quality, review, or release passed."
+    )
+
+    issues = check_governance_context(root)
+    if issues:
+        print("\n== Governance Context Result: FAILED ==")
+        for issue in issues:
+            print(f"  - {issue}")
+        if getattr(args, "fail_on_issues", False):
+            sys.exit(1)
+    else:
+        print("\n== Governance Context Result: PASSED ==")
 
 
 def cmd_first_run_demo(args):
@@ -10044,6 +10491,20 @@ def cmd_check_governance(args):
         print("│  [PASS] Governance pack registry is complete, referenced, and no-overclaim safe.")
     print("└──────────────────────────────────────────────────────┘")
 
+    # ── 28g. Governance Context Discovery Guard (FIX-112) ──
+    print("\n┌─ Check 28g: Governance Context Discovery (FIX-112) ──┐")
+    context_issues = check_governance_context()
+    if context_issues:
+        all_issues += len(context_issues)
+        print(f"│  [FAIL] {len(context_issues)} governance context issue(s):")
+        for issue in context_issues[:10]:
+            print(f"│    - {issue}")
+        if len(context_issues) > 10:
+            print(f"│    ... and {len(context_issues) - 10} more")
+    else:
+        print("│  [PASS] Governance context discovery is fact-based and not-found safe.")
+    print("└──────────────────────────────────────────────────────┘")
+
     # ── Summary ──
     print(f"\n┌─ Governance Health Summary ──────────────────────────┐")
     if all_issues == 0:
@@ -11525,6 +11986,11 @@ def _e2e_target_fixture_checks(e2e_dir):
         "Existing governance state detected",
         "Carry-over",
         "Open risks",
+        "Unfinished work",
+        "Source facts",
+        "Blocker state",
+        "Auto-continue",
+        "Interrupt boundary",
         "Hooks",
         "Goal",
         "Stage",
@@ -11650,6 +12116,11 @@ def _e2e_contract_checks():
                 "Existing governance state detected",
                 "Carry-over",
                 "Open risks",
+                "Unfinished work",
+                "Source facts",
+                "Blocker state",
+                "Auto-continue",
+                "Interrupt boundary",
                 "Hooks",
                 "Goal",
                 "Stage",
@@ -11767,7 +12238,7 @@ def _run_e2e_subprocess(command, timeout=30, cwd=None):
         cwd=str(cwd or ROOT),
         capture_output=True,
         text=True,
-        encoding=locale.getpreferredencoding(False),
+        encoding="utf-8",
         errors="replace",
         timeout=timeout,
     )
@@ -11810,6 +12281,11 @@ def _validate_e2e_status(result):
             "Existing governance state detected",
             "Carry-over:",
             "Open risks:",
+            "Unfinished work:",
+            "Source facts:",
+            "Blocker state:",
+            "Auto-continue:",
+            "Interrupt boundary:",
             "Hooks:",
             "Goal:",
             "Stage:",
@@ -11854,6 +12330,11 @@ def _validate_e2e_target_status(result):
             "Existing governance state detected",
             "Carry-over:",
             "Open risks:",
+            "Unfinished work:",
+            "Source facts:",
+            "Blocker state:",
+            "Auto-continue:",
+            "Interrupt boundary:",
             "Hooks:",
             "Goal:",
             "Stage:",
@@ -12012,10 +12493,17 @@ def _validate_e2e_governance_proxy(result):
         and "Existing governance state detected" in output
         and "Carry-over:" in output
         and "Open risks:" in output
+        and "Unfinished work:" in output
+        and "Source facts:" in output
+        and "Blocker state:" in output
+        and "Auto-continue:" in output
+        and "Interrupt boundary:" in output
         and "Hooks:" in output
         and "No-overclaim boundary" in output
         and "Scenario F" in contract_text
         and "Delivery Trust Snapshot" in contract_text
+        and "Unfinished work" in contract_text
+        and "Source facts" in contract_text
         and "Existing governance state detected" in contract_text
     )
     return ok, "Scenario F proxy executed status and found /governance Delivery Trust Snapshot resume route contract"
@@ -13345,6 +13833,18 @@ def main():
     # status
     subparsers.add_parser("status", help="Show project status overview")
 
+    # governance-context (FIX-112)
+    gctx_p = subparsers.add_parser(
+        "governance-context",
+        help="Discover unfinished user work from governance facts and print a resume handoff",
+    )
+    gctx_p.add_argument(
+        "--fixture",
+        help="Optional project root/fixture to inspect instead of the current repository",
+    )
+    gctx_p.add_argument("--fail-on-issues", action="store_true",
+                        help="Exit with non-zero code if the context contract is invalid")
+
     # gate <id>
     gate_p = subparsers.add_parser("gate", help="Show details for a specific Gate")
     gate_p.add_argument("gate_id", help="Gate ID (e.g. G3, 3, g5)")
@@ -13621,6 +14121,7 @@ def main():
     commands = {
         "verify": cmd_verify,
         "status": cmd_status,
+        "governance-context": cmd_governance_context,
         "gate": cmd_gate,
         "gate-check": cmd_gate_check,
         "gates": cmd_gates,

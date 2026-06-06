@@ -2055,6 +2055,145 @@ class GovernancePackTests(unittest.TestCase):
             self.assertTrue(any("forbidden overclaim wording `officially approved`" in issue for issue in issues))
 
 
+class GovernanceContextDiscoveryTests(unittest.TestCase):
+    """FIX-112: governance resume handoff must be fact-based and not-found safe."""
+
+    def _write_project(self, root, plan=None, snapshot=None, risk=None, docs=True):
+        gov = root / ".governance"
+        gov.mkdir(parents=True, exist_ok=True)
+        (gov / "plan-tracker.md").write_text(plan or "\n".join([
+            "# Plan",
+            "",
+            "## 项目配置",
+            "- **项目目标**: context test",
+            "- **操作权限模式**: maximum-autonomy",
+            "",
+            "## 项目总览",
+            "| 项目 | 当前阶段 | 总任务数 | 已完成 | 阻塞中 | 关键风险数 | 最近 Gate 结论 | 最近复盘日期 |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| Demo | 维护 | 1 | 0 | 0 | 0 | G11 passed | 2026-06-05 |",
+        ]), encoding="utf-8")
+        (gov / "session-snapshot.md").write_text(snapshot or "\n".join([
+            "# Session Snapshot",
+            "",
+            "## Carry-over Tasks",
+            "None",
+        ]), encoding="utf-8")
+        (gov / "risk-log.md").write_text(risk or "# Risk log\n", encoding="utf-8")
+        if docs:
+            commands = root / "commands"
+            commands.mkdir(parents=True, exist_ok=True)
+            contract = (
+                "Delivery Trust Snapshot\n"
+                "Unfinished work\n"
+                "Source facts\n"
+                "Blocker state\n"
+                "Auto-continue\n"
+                "Interrupt boundary\n"
+                "not found\n"
+                "do not invent\n"
+                "governance-context\n"
+            )
+            (commands / "governance.md").write_text(contract, encoding="utf-8")
+            (commands / "governance-status.md").write_text(contract, encoding="utf-8")
+
+    def test_discovers_next_priority_from_session_snapshot(self):
+        snapshot = "\n".join([
+            "# Session Snapshot",
+            "",
+            "## 下次会话优先级",
+            "1. 启动 FIX-112：Context-aware governance resume，继续从事实源承接。",
+        ])
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_project(root, snapshot=snapshot)
+
+            context = vw.discover_governance_context(root)
+
+        self.assertEqual(context["status"], "FOUND")
+        self.assertIn("FIX-112", context["detected_item"])
+        self.assertTrue(any("session-snapshot.md" in fact for fact in context["source_facts"]))
+        self.assertEqual(context["blocker_state"], "no blocker recorded in checked facts")
+        self.assertTrue(context["auto_continue"])
+
+    def test_no_facts_returns_not_found_without_invention(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_project(root)
+
+            context = vw.discover_governance_context(root)
+
+        self.assertEqual(context["status"], "NOT_FOUND")
+        self.assertIn("not found", context["detected_item"])
+        self.assertTrue(any("no unfinished user work facts found" in fact for fact in context["source_facts"]))
+        self.assertFalse(context["auto_continue"])
+        self.assertIn("AskUserQuestion", context["interrupt_boundary"])
+
+    def test_blocked_fact_disables_auto_continue(self):
+        snapshot = "\n".join([
+            "# Session Snapshot",
+            "",
+            "## Carry-over tasks",
+            "| Task ID | Description | Status | Priority |",
+            "| --- | --- | --- | --- |",
+            "| FIX-200 | blocked handoff | blocked waiting for user decision | P0 |",
+        ])
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_project(root, snapshot=snapshot)
+
+            context = vw.discover_governance_context(root)
+
+        self.assertEqual(context["status"], "FOUND")
+        self.assertIn("FIX-200", context["detected_item"])
+        self.assertIn("blocked fact", context["blocker_state"])
+        self.assertFalse(context["auto_continue"])
+        self.assertIn("AskUserQuestion", context["interrupt_boundary"])
+
+    def test_check_requires_source_facts_for_found_context(self):
+        broken_context = {
+            "status": "FOUND",
+            "detected_item": "FIX-999",
+            "source_facts": [],
+            "blocker_state": "no blocker recorded in checked facts",
+            "next_action": "resume FIX-999",
+            "auto_continue": True,
+            "interrupt_boundary": "continue automatically",
+        }
+        with patch.object(vw, "discover_governance_context", return_value=broken_context):
+            issues = vw.check_governance_context(vw.ROOT)
+
+        self.assertTrue(any("FOUND requires source facts" in issue for issue in issues))
+
+    def test_check_rejects_auto_continue_when_open_risk_guard_present(self):
+        broken_context = {
+            "status": "FOUND",
+            "detected_item": "FIX-999",
+            "source_facts": [".governance/risk-log.md: RISK-036"],
+            "blocker_state": "open risk guard present: RISK-036",
+            "next_action": "resume FIX-999",
+            "auto_continue": True,
+            "interrupt_boundary": "continue automatically",
+        }
+        with patch.object(vw, "discover_governance_context", return_value=broken_context):
+            issues = vw.check_governance_context(vw.ROOT)
+
+        self.assertTrue(any("open risk must disable auto-continue" in issue for issue in issues))
+
+    def test_governance_context_command_accepts_target_fixture_not_found(self):
+        args = argparse.Namespace(fixture="project/e2e-test-project", fail_on_issues=True)
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            vw.cmd_governance_context(args)
+
+        output = buf.getvalue()
+        self.assertIn("Governance Context Discovery", output)
+        self.assertIn("Status: NOT_FOUND", output)
+        self.assertIn("Unfinished work: not found", output)
+        self.assertIn("do not invent", output)
+        self.assertIn("Governance Context Result: PASSED", output)
+
+
 class ReleaseReadinessCommandTests(unittest.TestCase):
     """FIX-072: stage-release check-release must be backed by a real CLI command."""
 
@@ -2330,6 +2469,11 @@ class E2ECommandMatrixTests(unittest.TestCase):
             "Resume state: Existing governance state detected",
             "Carry-over: 1 active task(s)",
             "Open risks: 1 open risk(s); RISK-036 opened 2026-06-01",
+            "Unfinished work: FIX-112 - Context-aware governance resume",
+            "Source facts: .governance/session-snapshot.md ## 下次会话优先级: FIX-112",
+            "Blocker state: no blocker recorded in checked facts",
+            "Auto-continue: yes",
+            "Interrupt boundary: continue automatically until critical decision, blocker, review, or release boundary",
             "Hooks: installed (pre-commit, commit-msg, post-commit)",
             "Goal: test",
             "Stage: 维护",
@@ -2659,6 +2803,11 @@ class E2ECommandMatrixTests(unittest.TestCase):
                 "Existing governance state detected\n"
                 "Carry-over\n"
                 "Open risks\n"
+                "Unfinished work\n"
+                "Source facts\n"
+                "Blocker state\n"
+                "Auto-continue\n"
+                "Interrupt boundary\n"
                 "Hooks\n"
                 "Goal\n"
                 "Stage\n"
@@ -3269,6 +3418,11 @@ class GovernanceStatusContractTests(unittest.TestCase):
         self.assertIn("Resume state: Existing governance state detected", output)
         self.assertIn("Carry-over: 0 active task(s)", output)
         self.assertIn("Open risks: 0 open risk(s); none", output)
+        self.assertIn("Unfinished work: not found", output)
+        self.assertIn("Source facts:", output)
+        self.assertIn("Blocker state: not found", output)
+        self.assertIn("Auto-continue: no", output)
+        self.assertIn("Interrupt boundary: AskUserQuestion required", output)
         self.assertIn("Goal: test", output)
         self.assertIn("Stage: 维护", output)
         self.assertIn("Gate/setup status: G11 通过", output)
@@ -3327,6 +3481,8 @@ class GovernanceStatusContractTests(unittest.TestCase):
         output = buf.getvalue()
         self.assertEqual(stats["进行中"], 1)
         self.assertIn("Carry-over: 1 active task(s)", output)
+        self.assertIn("Unfinished work: FIX-100", output)
+        self.assertIn("Source facts:", output)
         self.assertIn("Next action: resume FIX-100 and attach evidence before completion", output)
 
     def test_cmd_status_outputs_existing_project_resume_markers(self):
@@ -3385,6 +3541,10 @@ class GovernanceStatusContractTests(unittest.TestCase):
         self.assertIn("Resume state: Existing governance state detected", output)
         self.assertIn("Carry-over: 1 active task(s)", output)
         self.assertIn("Open risks: 1 open risk(s); RISK-036 opened 2026-06-01", output)
+        self.assertIn("Unfinished work: FIX-101", output)
+        self.assertIn("Source facts:", output)
+        self.assertIn("Blocker state: open risk guard present: RISK-036", output)
+        self.assertIn("Auto-continue: no", output)
         self.assertIn("Hooks: installed (pre-commit, commit-msg, post-commit)", output)
         self.assertIn("Next action: resume FIX-101 and attach evidence before completion", output)
         self.assertNotIn("governance-init", output)
@@ -3448,6 +3608,8 @@ class GovernanceStatusContractTests(unittest.TestCase):
         output = buf.getvalue()
         self.assertEqual(resume["carry_over_count"], 1)
         self.assertIn("Carry-over: 1 active task(s)", output)
+        self.assertIn("Unfinished work: FIX-101", output)
+        self.assertIn("Source facts:", output)
         self.assertIn("Next action: resume FIX-101 and attach evidence before completion", output)
 
     def test_governance_status_docs_require_permission_mode(self):
@@ -3478,6 +3640,11 @@ class GovernanceStatusContractTests(unittest.TestCase):
             "Existing governance state detected",
             "Carry-over",
             "Open risks",
+            "Unfinished work",
+            "Source facts",
+            "Blocker state",
+            "Auto-continue",
+            "Interrupt boundary",
             "Hooks",
             "Goal",
             "Stage",
@@ -3500,6 +3667,9 @@ class GovernanceStatusContractTests(unittest.TestCase):
             "universal/full runtime support",
             "1.0.0 production-ready",
             "first-run-demo --assert-snapshot",
+            "governance-context",
+            "not found",
+            "do not invent",
             "demo/local-only",
             "external credentials",
         ]
@@ -3522,6 +3692,11 @@ class GovernanceStatusContractTests(unittest.TestCase):
             "Resume state: Existing governance state detected\n"
             "Carry-over: 0 active task(s)\n"
             "Open risks: 0 open risk(s); none\n"
+            "Unfinished work: not found\n"
+            "Source facts: checked .governance/plan-tracker.md; no unfinished user work facts found\n"
+            "Blocker state: not found\n"
+            "Auto-continue: no\n"
+            "Interrupt boundary: AskUserQuestion required before creating new work from assumptions\n"
             "Hooks: installed (pre-commit, commit-msg, post-commit)\n"
             "Goal: test\n"
             "Stage: 维护\n"
@@ -3637,6 +3812,12 @@ class FirstRunDemoTests(unittest.TestCase):
         self.assertIn("First-Run Demo Result: PASSED", output)
         for marker in [
             "Delivery Trust Snapshot",
+            "Unfinished work:",
+            "Source facts:",
+            "Blocker state:",
+            "Auto-continue:",
+            "Interrupt boundary:",
+            "not found",
             "Goal:",
             "Stage:",
             "Gate/setup status:",

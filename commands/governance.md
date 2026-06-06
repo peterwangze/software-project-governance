@@ -410,8 +410,9 @@ P1 (警告):
 **检测条件**：一切正常——`.governance/` 存在、健康、版本最新、无 snapshot、无异常
 
 **展示内容**（比 `governance-status` 更丰富）：
-- Delivery Trust Snapshot（Resume state、Carry-over、Open risks、Hooks、Goal、Stage、Gate/setup status、Risk、Evidence、Next action、Preset guidance、Question budget、Verification signal、No-overclaim boundary）
+- Delivery Trust Snapshot（Resume state、Carry-over、Open risks、Unfinished work、Source facts、Blocker state、Auto-continue、Interrupt boundary、Hooks、Goal、Stage、Gate/setup status、Risk、Evidence、Next action、Preset guidance、Question budget、Verification signal、No-overclaim boundary）
 - Existing-project resume signal：已有 `.governance/` 状态时 MUST 明确显示 `Existing governance state detected`，展示 carry-over active task count、open risk count/details、hook state 和 next action
+- Context-aware resume handoff：MUST run the same factual discovery contract as `python skills/software-project-governance/infra/verify_workflow.py governance-context --fixture project/e2e-test-project --fail-on-issues`。`Unfinished work` MUST be backed by `Source facts`; if no facts exist, output `not found` and `do not invent` new work.
 - First-run preset guidance：MUST 展示 `lite is the recommended first-run default`；`standard is for team delivery`；`strict is for regulated/high-risk work`
 - Question budget：Snapshot 前 MUST NOT 提超过 3 个 non-critical questions；deferred non-critical fields MUST 记录为 assumptions
 - 项目配置摘要（名称、profile、trigger_mode、permission_mode、版本、阶段）
@@ -445,6 +446,11 @@ Delivery Trust Snapshot
 Resume state: Existing governance state detected
 Carry-over: {carry_over_count} active task(s)
 Open risks: {open_risk_count} open risk(s); {risk_details}
+Unfinished work: {detected_item_or_not_found}
+Source facts: {plan_tracker_or_snapshot_or_risk_rows}
+Blocker state: {no_blocker_open_risk_or_blocked_fact}
+Auto-continue: {yes_or_no}
+Interrupt boundary: {critical_decision_blocker_review_or_release_boundary}
 Hooks: {hook_state}
 Goal: {project_goal}
 Stage: {current_stage}
@@ -460,6 +466,7 @@ No-overclaim boundary: local/demo-only snapshot; no external credentials require
 
 Snapshot 是 `/governance` 或 `/governance-status` first-run/status path 的最小可观察交付信号；它必须在用户不阅读 `plan-tracker.md`、`evidence-log.md`、`risk-log.md` 或完整 SKILL 文件的情况下可见。
 本地 acceptance harness：`python skills/software-project-governance/infra/verify_workflow.py first-run-demo --assert-snapshot` MUST 可在 demo/local-only 范围运行，不需要 external credentials，并断言 Delivery Trust Snapshot 字段和 no-overclaim boundary。
+Context acceptance harness：`python skills/software-project-governance/infra/verify_workflow.py governance-context --fixture project/e2e-test-project --fail-on-issues` MUST pass，并且 no-facts fixture 必须明确输出 `not found`；不得从假设中发明 unfinished work。
 已有 `.governance/` 项目的 Scenario F 是 resume happy path，不得提示重新初始化；只有 `.governance/plan-tracker.md` 缺失时才进入初始化/接入错误路径。
 
 **输出模板**：参考 `commands/governance-status.md`，扩展含 permission_mode、版本新鲜度、最近活动，并应用上述折叠规则。

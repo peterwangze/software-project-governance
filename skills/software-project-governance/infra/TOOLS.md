@@ -298,6 +298,16 @@
 - **依赖**：`check-governance` Check 28f、`core/manifest.json`
 - **被以下子工作流使用**：架构设计（architecture）、测试（testing）、发布（release）、维护（maintenance）
 
+### TOOL-027：Governance Context Discovery
+
+- **文件**：`infra/verify_workflow.py` + `/governance` 与 `/governance-status` command contracts
+- **子命令**：`governance-context [--fixture <project-root>] [--fail-on-issues]`
+- **输入**：`.governance/plan-tracker.md` active rows/version roadmap、`.governance/session-snapshot.md` carry-over/next priorities、`.governance/risk-log.md` open risks、目标项目命令契约文档
+- **输出**：fact-backed unfinished work handoff：detected item、source facts、blocker state、next action、auto-continue 和 interrupt boundary；无事实时明确 `not found` 且 `do not invent`
+- **触发条件**：`/governance`/status 恢复已有项目、跨会话继续工作、0.44.0 context-aware resume 验收或 release gate 前
+- **依赖**：`check-governance` Check 28g、Delivery Trust Snapshot、`first-run-demo --assert-snapshot`
+- **被以下子工作流使用**：立项（initiation）、测试（testing）、发布（release）、运营（operations）、维护（maintenance）
+
 ## 工具与子工作流的关系矩阵
 
 | 工具 | 立项 | 调研 | 选型 | 环境 | 架构 | 开发 | 测试 | CI/CD | 发布 | 运营 | 维护 |
@@ -326,6 +336,7 @@
 | User Interruption Policy v2 guard | ● | ○ | | | ○ | ● | ● | | ● | | ● |
 | Runtime Readiness Matrix guard | | | | | ○ | | ● | | ● | | ● |
 | First-Session Measurement guard | | | | | ○ | | ● | | ● | | ● |
+| Governance Context Discovery | ● | ○ | | | ○ | ○ | ● | | ● | ● | ● |
 
 > ● 主要使用者  ○ 可选用
 

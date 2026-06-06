@@ -2055,6 +2055,58 @@ class GovernancePackTests(unittest.TestCase):
             self.assertTrue(any("forbidden overclaim wording `officially approved`" in issue for issue in issues))
 
 
+class ReadmePackGuidanceTests(unittest.TestCase):
+    """FIX-109: README must map first-run profiles to governance packs without replacing profiles."""
+
+    def _write_readme(self, root, content):
+        readme = root / "README.md"
+        readme.write_text(content, encoding="utf-8")
+        return readme
+
+    def test_readme_pack_guidance_accepts_current_file(self):
+        self.assertEqual(vw.check_readme_pack_guidance(vw.ROOT), [])
+
+    def test_readme_pack_guidance_rejects_missing_profile_pack_boundary(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_readme(root, "\n".join([
+                "# Demo",
+                "First-run preset guidance:",
+                "| Preset | Default packs to start with |",
+                "| **lite** | `governance-core` |",
+                "| **standard** | `governance-core`, `quality-gates`, `release-governance`, `agent-team` |",
+                "| **strict** | `governance-core`, `quality-gates`, `release-governance`, `agent-team`, `enterprise` |",
+            ]))
+
+            issues = vw.check_readme_pack_guidance(root)
+            self.assertTrue(any("Packs are capability modules" in issue for issue in issues))
+
+    def test_readme_pack_guidance_rejects_pack_enabled_overclaim(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            current = (vw.ROOT / "README.md").read_text(encoding="utf-8")
+            self._write_readme(root, current + "\npack enabled means release passed\n")
+
+            issues = vw.check_readme_pack_guidance(root)
+            self.assertTrue(any("forbidden README pack overclaim `pack enabled means release passed`" in issue for issue in issues))
+
+    def test_readme_pack_guidance_rejects_direct_approval_and_runtime_overclaims(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            current = (vw.ROOT / "README.md").read_text(encoding="utf-8")
+            self._write_readme(
+                root,
+                current + "\nThis workflow is officially approved, marketplace approved, "
+                "universal runtime support is verified, and 1.0.0 production-ready.\n",
+            )
+
+            issues = vw.check_readme_pack_guidance(root)
+            self.assertTrue(any("forbidden README pack overclaim `officially approved`" in issue for issue in issues))
+            self.assertTrue(any("forbidden README pack overclaim `marketplace approved`" in issue for issue in issues))
+            self.assertTrue(any("forbidden README pack overclaim `universal runtime support is verified`" in issue for issue in issues))
+            self.assertTrue(any("forbidden README pack overclaim `1.0.0 production-ready`" in issue for issue in issues))
+
+
 class GovernanceContextDiscoveryTests(unittest.TestCase):
     """FIX-112: governance resume handoff must be fact-based and not-found safe."""
 

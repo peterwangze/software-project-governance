@@ -47,13 +47,15 @@
         "governance-context",
         "check-governance",
         "check-hot-fact-source",
-        "check-governance-packs"
+        "check-governance-packs",
+        "check-readme-pack-guidance"
       ],
       "validation_commands": [
         "python skills/software-project-governance/infra/verify_workflow.py verify",
         "python skills/software-project-governance/infra/verify_workflow.py governance-context --fixture project/e2e-test-project --fail-on-issues",
         "python skills/software-project-governance/infra/verify_workflow.py check-governance --fail-on-issues",
-        "python skills/software-project-governance/infra/verify_workflow.py check-governance-packs --fail-on-issues"
+        "python skills/software-project-governance/infra/verify_workflow.py check-governance-packs --fail-on-issues",
+        "python skills/software-project-governance/infra/verify_workflow.py check-readme-pack-guidance --fail-on-issues"
       ],
       "no_overclaim_boundary": [
         "Pack enabled does not mean governance review passed.",

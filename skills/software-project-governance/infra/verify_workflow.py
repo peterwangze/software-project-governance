@@ -1807,6 +1807,7 @@ GOVERNANCE_PACK_KNOWN_CHECKS = {
     "check-locks",
     "check-archive-integrity",
     "check-governance-packs",
+    "check-readme-pack-guidance",
 }
 GOVERNANCE_CONTEXT_REQUIRED_FIELDS = [
     "status",
@@ -1844,6 +1845,29 @@ GOVERNANCE_PACK_FORBIDDEN_OVERCLAIMS = [
     "1.0.0 production-ready",
     "pack enabled means release passed",
     "pack enabled means governance review passed",
+]
+README_PACK_GUIDANCE_REQUIRED_TOKENS = [
+    "Packs are capability modules; profiles are governance intensity presets.",
+    "Profiles stay `lite` / `standard` / `strict`",
+    "registry-first",
+    "no physical split",
+    "`governance-core`",
+    "`quality-gates`",
+    "`release-governance`",
+    "`agent-team`",
+    "`enterprise`",
+    "Pack membership is not completion evidence.",
+    "`pack enabled` does not mean task evidence exists",
+    "independent review passed",
+    "quality gates passed",
+    "release gates passed",
+    "official approval was granted",
+    "marketplace approval was granted",
+    "universal/full runtime support is verified",
+    "Pack 是能力模块，profile 是治理强度预设",
+    "profile 仍然只有 `lite` / `standard` / `strict`",
+    "Pack 归属不是完成证据",
+    "`pack enabled` 不等于任务证据存在",
 ]
 
 
@@ -2182,6 +2206,71 @@ def check_governance_packs(root=None):
     for phrase in GOVERNANCE_PACK_FORBIDDEN_OVERCLAIMS:
         if phrase in all_text:
             failures.append(f"{display}: forbidden overclaim wording `{phrase}`")
+
+    return failures
+
+
+def check_readme_pack_guidance(root=None):
+    """FIX-109: README first-run guidance must map profiles to packs without overclaim."""
+    root = root or ROOT
+    readme_path = root / "README.md"
+    display = _display_path(readme_path, root)
+    if not readme_path.exists():
+        return [f"{display}: missing README"]
+
+    content = readme_path.read_text(encoding="utf-8")
+    failures = []
+    for token in README_PACK_GUIDANCE_REQUIRED_TOKENS:
+        if token not in content:
+            failures.append(f"{display}: missing README pack guidance token `{token}`")
+
+    for pack_id in GOVERNANCE_PACK_IDS:
+        if f"`{pack_id}`" not in content:
+            failures.append(f"{display}: missing pack id `{pack_id}` in README guidance")
+
+    profile_rows = {
+        "**lite**": ["`governance-core`"],
+        "**standard**": ["`governance-core`", "`quality-gates`", "`release-governance`", "`agent-team`"],
+        "**strict**": ["`governance-core`", "`quality-gates`", "`release-governance`", "`agent-team`", "`enterprise`"],
+    }
+    readme_lines = content.splitlines()
+    for profile, pack_tokens in profile_rows.items():
+        matching_lines = [
+            line for line in readme_lines
+            if profile in line and all(pack_token in line for pack_token in pack_tokens)
+        ]
+        if not matching_lines:
+            failures.append(
+                f"{display}: profile {profile} guidance missing pack mapping {', '.join(pack_tokens)}"
+            )
+
+    forbidden_pack_enabled_claims = [
+        "pack enabled means release passed",
+        "pack enabled means governance review passed",
+        "pack enabled means quality gates passed",
+        "pack enabled means official approval",
+        "pack enabled means marketplace approval",
+        "pack enabled means universal runtime support",
+    ]
+    lower_content = content.lower()
+    for phrase in forbidden_pack_enabled_claims:
+        if phrase in lower_content:
+            failures.append(f"{display}: forbidden README pack overclaim `{phrase}`")
+
+    direct_claims = [
+        "officially approved",
+        "official approval granted",
+        "marketplace approved",
+        "marketplace approval granted",
+        "universal runtime support is verified",
+        "full runtime support is verified",
+        "1.0.0 production-ready",
+    ]
+    negation_markers = ("not", "no ", "does not", "do not", "is not", "isn't", "不是", "不等于", "不得", "不能", "未", "没有")
+    for phrase in direct_claims:
+        if any(phrase in line.lower() and not any(marker in line.lower() for marker in negation_markers)
+               for line in readme_lines):
+            failures.append(f"{display}: forbidden README pack overclaim `{phrase}`")
 
     return failures
 
@@ -10505,6 +10594,20 @@ def cmd_check_governance(args):
         print("│  [PASS] Governance context discovery is fact-based and not-found safe.")
     print("└──────────────────────────────────────────────────────┘")
 
+    # ── 28h. README Pack Guidance Guard (FIX-109) ──
+    print("\n┌─ Check 28h: README Pack Guidance (FIX-109) ──────────┐")
+    readme_pack_issues = check_readme_pack_guidance()
+    if readme_pack_issues:
+        all_issues += len(readme_pack_issues)
+        print(f"│  [FAIL] {len(readme_pack_issues)} README pack guidance issue(s):")
+        for issue in readme_pack_issues[:10]:
+            print(f"│    - {issue}")
+        if len(readme_pack_issues) > 10:
+            print(f"│    ... and {len(readme_pack_issues) - 10} more")
+    else:
+        print("│  [PASS] README maps first-run profiles to packs without replacing profiles or overclaiming.")
+    print("└──────────────────────────────────────────────────────┘")
+
     # ── Summary ──
     print(f"\n┌─ Governance Health Summary ──────────────────────────┐")
     if all_issues == 0:
@@ -13631,6 +13734,27 @@ def cmd_check_governance_packs(args):
     print()
 
 
+def cmd_check_readme_pack_guidance(args):
+    """Run README first-run profile-to-pack guidance guard."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    issues = check_readme_pack_guidance()
+    print("\n=== README Pack Guidance Check ===")
+    if issues:
+        print(f"  Result: FAILED — {len(issues)} issue(s)")
+        for issue in issues[:20]:
+            print(f"    - {issue}")
+        if len(issues) > 20:
+            print(f"    ... and {len(issues) - 20} more")
+        if getattr(args, "fail_on_issues", False):
+            sys.exit(1)
+    else:
+        print("  Result: PASSED — README maps first-run profiles to packs without overclaim")
+    print()
+
+
 def cmd_check_product_success_contracts(args):
     """Run Product Success Contract guard independently."""
     try:
@@ -14048,6 +14172,14 @@ def main():
     cgp_p.add_argument("--fail-on-issues", action="store_true",
                        help="Exit with non-zero code if pack registry is incomplete or overclaims")
 
+    # check-readme-pack-guidance (FIX-109)
+    crpg_p = subparsers.add_parser(
+        "check-readme-pack-guidance",
+        help="Check README first-run profile-to-pack guidance and no-overclaim boundary",
+    )
+    crpg_p.add_argument("--fail-on-issues", action="store_true",
+                        help="Exit with non-zero code if README pack guidance is incomplete or overclaims")
+
     # check-product-success-contracts (FIX-088)
     cpsc_p = subparsers.add_parser(
         "check-product-success-contracts",
@@ -14152,6 +14284,7 @@ def main():
         "check-runtime-readiness-matrix": cmd_check_runtime_readiness_matrix,
         "check-first-session-measurement": cmd_check_first_session_measurement,
         "check-governance-packs": cmd_check_governance_packs,
+        "check-readme-pack-guidance": cmd_check_readme_pack_guidance,
         "check-product-success-contracts": cmd_check_product_success_contracts,
         "check-acceptance-contracts": cmd_check_acceptance_contracts,
         "check-quality-budget": cmd_check_quality_budget,

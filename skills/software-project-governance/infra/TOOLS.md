@@ -308,6 +308,16 @@
 - **依赖**：`check-governance` Check 28g、Delivery Trust Snapshot、`first-run-demo --assert-snapshot`
 - **被以下子工作流使用**：立项（initiation）、测试（testing）、发布（release）、运营（operations）、维护（maintenance）
 
+### TOOL-028：README Pack Guidance guard
+
+- **文件**：`infra/verify_workflow.py` + `README.md` + `core/governance-packs.json`
+- **子命令**：`check-readme-pack-guidance [--fail-on-issues]`
+- **输入**：README first-run preset guidance、0.44.0 pack ID、profile vs pack 边界和 no-overclaim wording
+- **输出**：README 是否把 `lite`/`standard`/`strict` 映射到 `governance-core`、`quality-gates`、`release-governance`、`agent-team`、`enterprise`，并明确 packs 不替代 profiles、pack enabled 不等于 evidence/review/quality/release/approval/runtime PASS
+- **触发条件**：更新 README first-run 文案、调整 pack registry、发布 0.44.0 pack boundary 或 release gate 前
+- **依赖**：`check-governance` Check 28h、`check-governance-packs`
+- **被以下子工作流使用**：立项（initiation）、测试（testing）、发布（release）、维护（maintenance）
+
 ## 工具与子工作流的关系矩阵
 
 | 工具 | 立项 | 调研 | 选型 | 环境 | 架构 | 开发 | 测试 | CI/CD | 发布 | 运营 | 维护 |
@@ -337,6 +347,7 @@
 | Runtime Readiness Matrix guard | | | | | ○ | | ● | | ● | | ● |
 | First-Session Measurement guard | | | | | ○ | | ● | | ● | | ● |
 | Governance Context Discovery | ● | ○ | | | ○ | ○ | ● | | ● | ● | ● |
+| README Pack Guidance guard | ● | | | | ○ | | ● | | ● | | ● |
 
 > ● 主要使用者  ○ 可选用
 

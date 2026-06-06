@@ -32,6 +32,9 @@
 | TOOL-024 | Runtime Readiness Matrix guard | script + doc | `infra/verify_workflow.py check-runtime-readiness-matrix` + `check-governance` Check 28d | adapter runtime facts、公开 readiness matrix 或 release gate 变更后 | 测试/发布/维护 | 是 |
 | TOOL-025 | First-Session Measurement guard | script + doc | `infra/verify_workflow.py check-first-session-measurement` + `check-governance` Check 28e | local demo / external pilot 证据或 release note boundary 变更后 | 测试/发布/维护 | 是 |
 | TOOL-026 | Governance Pack Registry guard | script + registry | `infra/verify_workflow.py check-governance-packs` + `check-governance` Check 28f | composable governance pack registry、pack 文件/检查归属或 no-overclaim boundary 变更后 | 架构/测试/发布/维护 | 是 |
+| TOOL-027 | Governance Context Discovery | script + command contract | `infra/verify_workflow.py governance-context` + `check-governance` Check 28g | `/governance`/status 恢复已有项目、跨会话继续工作或 context-aware resume 验收时 | 立项/测试/发布/运营/维护 | 是 |
+| TOOL-028 | README Pack Guidance guard | script + README contract | `infra/verify_workflow.py check-readme-pack-guidance` + `check-governance` Check 28h | README first-run pack guidance、pack registry 或 no-overclaim boundary 变更后 | 立项/测试/发布/维护 | 是 |
+| TOOL-029 | Manifest Product Artifact guard | manifest + cleanup integration | `core/manifest.json` + `infra/cleanup.py` + `infra/verify_workflow.py check-manifest-consistency` | canonical product artifact、cleanup scope 或 pack registry shipping boundary 变更后 | 测试/发布/维护 | 是 |
 
 ## 工具详情
 
@@ -318,6 +321,16 @@
 - **依赖**：`check-governance` Check 28h、`check-governance-packs`
 - **被以下子工作流使用**：立项（initiation）、测试（testing）、发布（release）、维护（maintenance）
 
+### TOOL-029：Manifest Product Artifact guard
+
+- **文件**：`core/manifest.json` + `infra/cleanup.py` + `infra/verify_workflow.py`
+- **子命令**：`check-manifest-consistency [--fail-on-issues]`
+- **输入**：`canonical_product_artifacts.entries`、`cleanup_scope.directories`、tracked git file set、product file entries
+- **输出**：critical product artifact 是否显式声明为 product file、是否存在、是否由 git 跟踪、是否带验证命令；cleanup 扫描范围是否由 manifest 声明并与 verifier plugin scope 同步
+- **触发条件**：新增或迁移 pack registry、改变 manifest product entries、调整 cleanup scope、发布 0.44.0 pack boundary 或 release gate 前
+- **依赖**：`core/governance-packs.json`、`check-governance-packs`、`infra/cleanup.py`
+- **被以下子工作流使用**：测试（testing）、发布（release）、维护（maintenance）
+
 ## 工具与子工作流的关系矩阵
 
 | 工具 | 立项 | 调研 | 选型 | 环境 | 架构 | 开发 | 测试 | CI/CD | 发布 | 运营 | 维护 |
@@ -348,6 +361,7 @@
 | First-Session Measurement guard | | | | | ○ | | ● | | ● | | ● |
 | Governance Context Discovery | ● | ○ | | | ○ | ○ | ● | | ● | ● | ● |
 | README Pack Guidance guard | ● | | | | ○ | | ● | | ● | | ● |
+| Manifest Product Artifact guard | | | | | ○ | | ● | | ● | | ● |
 
 > ● 主要使用者  ○ 可选用
 

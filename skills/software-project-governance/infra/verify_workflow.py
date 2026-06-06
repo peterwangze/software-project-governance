@@ -841,6 +841,10 @@ def build_required_files_from_manifest(manifest_path=None):
                     rel = str(rp.relative_to(ROOT)).replace("\\", "/")
                     _add(rel)
 
+    for artifact in manifest.get("canonical_product_artifacts", {}).get("entries", []):
+        if artifact.get("type") == "file" and artifact.get("path"):
+            _add(artifact["path"], label=f"Canonical artifact: {artifact.get('id', artifact['path'])}")
+
     if result:
         print(f"[INFO] REQUIRED_FILES loaded from manifest.json ({len(result)} entries)")
     return result
@@ -891,7 +895,141 @@ def expand_manifest_to_canonical_set(manifest_path=None):
                     rel = str(rp.relative_to(ROOT)).replace("\\", "/")
                     canonical.add(rel)
 
+    for artifact in manifest.get("canonical_product_artifacts", {}).get("entries", []):
+        artifact_path = artifact.get("path")
+        if artifact.get("type") == "file" and artifact_path:
+            canonical.add(artifact_path)
+
     return canonical
+
+
+def _manifest_product_file_entries(manifest):
+    return {
+        entry.get("path")
+        for entry in manifest.get("product", {}).get("entries", [])
+        if entry.get("type") == "file" and entry.get("path")
+    }
+
+
+def _manifest_artifact_entries(manifest):
+    entries = manifest.get("canonical_product_artifacts", {}).get("entries")
+    return entries if isinstance(entries, list) else []
+
+
+def check_manifest_canonical_product_artifacts(manifest, manifest_path=None):
+    """FIX-110: critical product artifacts must be explicit, tracked, and validated."""
+    manifest_path = manifest_path or ROOT / "skills/software-project-governance/core/manifest.json"
+    display = _display_path(manifest_path)
+    failures = []
+
+    section = manifest.get("canonical_product_artifacts")
+    if not isinstance(section, dict):
+        return [f"{display}: missing canonical_product_artifacts section"]
+
+    entries = _manifest_artifact_entries(manifest)
+    if not entries:
+        return [f"{display}: canonical_product_artifacts.entries must be a non-empty list"]
+
+    product_file_entries = _manifest_product_file_entries(manifest)
+    tracked_files = _git_files(["ls-files", "--cached"])
+    artifact_by_id = {entry.get("id"): entry for entry in entries if isinstance(entry, dict)}
+
+    registry_entry = artifact_by_id.get("governance-pack-registry")
+    if not registry_entry:
+        failures.append(f"{display}: canonical product artifact `governance-pack-registry` is required")
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            failures.append(f"{display}: canonical product artifact entries must be objects")
+            continue
+        artifact_id = entry.get("id")
+        artifact_path = entry.get("path")
+        artifact_label = f"{display}: canonical product artifact `{artifact_id or '<missing>'}`"
+
+        for field in ("id", "path", "type", "required", "artifact_role", "validation_commands"):
+            if field not in entry:
+                failures.append(f"{artifact_label}: missing `{field}`")
+
+        if entry.get("type") != "file":
+            failures.append(f"{artifact_label}: type must be file")
+
+        if not isinstance(artifact_path, str) or not artifact_path.strip():
+            failures.append(f"{artifact_label}: path must be a non-empty string")
+            continue
+        artifact_path = artifact_path.replace("\\", "/")
+
+        if artifact_path.startswith(".governance/"):
+            failures.append(f"{artifact_label}: governance runtime files cannot be canonical product artifacts")
+
+        if artifact_path not in product_file_entries:
+            failures.append(f"{artifact_label}: path `{artifact_path}` must be an explicit product file entry")
+
+        if entry.get("required") is not True:
+            failures.append(f"{artifact_label}: required must be true")
+
+        if not (ROOT / artifact_path).is_file():
+            failures.append(f"{artifact_label}: path `{artifact_path}` is missing on disk")
+
+        if tracked_files is not None and artifact_path not in tracked_files:
+            failures.append(f"{artifact_label}: path `{artifact_path}` must be tracked by git")
+
+        commands = entry.get("validation_commands")
+        if not isinstance(commands, list) or not all(isinstance(cmd, str) and cmd.strip() for cmd in commands):
+            failures.append(f"{artifact_label}: validation_commands must be a non-empty string list")
+            continue
+
+        if artifact_id == "governance-pack-registry":
+            required_commands = ("check-governance-packs", "check-manifest-consistency")
+            for command_token in required_commands:
+                if not any(command_token in command for command in commands):
+                    failures.append(f"{artifact_label}: validation_commands must include `{command_token}`")
+
+    return failures
+
+
+def check_manifest_cleanup_scope(manifest, manifest_path=None):
+    """FIX-110: cleanup.py scan scope must be manifest-declared and verifier-synced."""
+    manifest_path = manifest_path or ROOT / "skills/software-project-governance/core/manifest.json"
+    display = _display_path(manifest_path)
+    section = manifest.get("cleanup_scope")
+    if not isinstance(section, dict):
+        return [f"{display}: missing cleanup_scope section"]
+
+    directories = section.get("directories")
+    if not isinstance(directories, list) or not all(isinstance(item, str) and item.strip() for item in directories):
+        return [f"{display}: cleanup_scope.directories must be a non-empty string list"]
+
+    normalized = {item.strip().replace("\\", "/") for item in directories}
+    if normalized != PLUGIN_SCOPE_DIRS:
+        return [
+            f"{display}: cleanup_scope.directories must match verifier plugin scope "
+            f"{sorted(PLUGIN_SCOPE_DIRS)}, got {sorted(normalized)}"
+        ]
+    return []
+
+
+def _manifest_requires_product_artifact_guards(manifest, manifest_path=None):
+    """Return whether FIX-110 manifest guards apply to this manifest.
+
+    Generic test fixtures may use a tiny manifest to exercise tracked-scope
+    behavior.  The product artifact and cleanup-scope guards are mandatory for
+    the real software-project-governance manifest, and for fixtures that
+    explicitly include either FIX-110 section.
+    """
+    manifest_path = manifest_path or ROOT / "skills/software-project-governance/core/manifest.json"
+    try:
+        is_real_manifest = (
+            Path(manifest_path).resolve()
+            == (ROOT / "skills/software-project-governance/core/manifest.json").resolve()
+        )
+    except OSError:
+        is_real_manifest = False
+    return (
+        is_real_manifest
+        or manifest.get("workflow") == "software-project-governance"
+        or "canonical_product_artifacts" in manifest
+        or "cleanup_scope" in manifest
+    )
 
 
 def scan_actual_files(exclude_patterns=None):
@@ -952,9 +1090,16 @@ def check_manifest_consistency(manifest_path=None):
         return {
             "missing": [],
             "untracked": [],
+            "artifact_issues": [],
+            "cleanup_scope_issues": [],
             "pass": None,
             "error": "manifest.json not found or unreadable",
         }
+
+    if manifest_path is None:
+        manifest_path = ROOT / "skills/software-project-governance/core/manifest.json"
+    with open(manifest_path, "r", encoding="utf-8") as f:
+        manifest = json.load(f)
 
     actual = scan_manifest_visible_files()
 
@@ -978,10 +1123,24 @@ def check_manifest_consistency(manifest_path=None):
             continue
         untracked_filtered.append(u)
 
+    if _manifest_requires_product_artifact_guards(manifest, manifest_path):
+        artifact_issues = check_manifest_canonical_product_artifacts(manifest, manifest_path)
+        cleanup_scope_issues = check_manifest_cleanup_scope(manifest, manifest_path)
+    else:
+        artifact_issues = []
+        cleanup_scope_issues = []
+
     return {
         "missing": missing,
         "untracked": untracked_filtered,
-        "pass": len(missing) == 0 and len(untracked_filtered) == 0,
+        "artifact_issues": artifact_issues,
+        "cleanup_scope_issues": cleanup_scope_issues,
+        "pass": (
+            len(missing) == 0
+            and len(untracked_filtered) == 0
+            and len(artifact_issues) == 0
+            and len(cleanup_scope_issues) == 0
+        ),
         "canonical_count": len(canonical_files),
         "actual_count": len(actual),
     }
@@ -2105,6 +2264,7 @@ def check_governance_packs(root=None):
     """FIX-108: canonical governance pack registry must be factual and checkable."""
     root = root or ROOT
     registry_path = root / "skills/software-project-governance/core/governance-packs.json"
+    manifest_path = root / "skills/software-project-governance/core/manifest.json"
     failures = []
     display = _display_path(registry_path, root)
     if not registry_path.exists():
@@ -2121,6 +2281,25 @@ def check_governance_packs(root=None):
         failures.append(f"{display}: source_of_truth must be true")
     if registry.get("pack_mode") != "registry-first-no-physical-split":
         failures.append(f"{display}: pack_mode must be registry-first-no-physical-split")
+
+    if not manifest_path.exists():
+        failures.append(f"{display}: core/manifest.json is required to make the pack registry a canonical product artifact")
+    else:
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            artifact_entries = _manifest_artifact_entries(manifest)
+            registry_artifacts = [
+                entry for entry in artifact_entries
+                if entry.get("id") == "governance-pack-registry"
+                and entry.get("path") == "skills/software-project-governance/core/governance-packs.json"
+            ]
+            if not registry_artifacts:
+                failures.append(
+                    f"{display}: core/manifest.json must declare governance-pack-registry as a canonical product artifact"
+                )
+        except json.JSONDecodeError as exc:
+            failures.append(f"{_display_path(manifest_path, root)}: invalid JSON: {exc}")
+
     for token in GOVERNANCE_PACK_BOUNDARY_TOKENS:
         if token not in registry.get("no_overclaim_boundary", []):
             failures.append(f"{display}: missing no-overclaim boundary token `{token}`")
@@ -13221,6 +13400,8 @@ def cmd_check_manifest_consistency(args):
 
     missing = result["missing"]
     untracked = result["untracked"]
+    artifact_issues = result.get("artifact_issues", [])
+    cleanup_scope_issues = result.get("cleanup_scope_issues", [])
 
     if missing:
         print(f"\n  [MISSING] {len(missing)} file(s) declared in manifest but absent:")
@@ -13231,6 +13412,16 @@ def cmd_check_manifest_consistency(args):
         print(f"\n  [UNTRACKED] {len(untracked)} file(s) present on disk but not in manifest:")
         for u in untracked:
             print(f"    - {u}")
+
+    if artifact_issues:
+        print(f"\n  [CANONICAL ARTIFACT] {len(artifact_issues)} issue(s):")
+        for issue in artifact_issues:
+            print(f"    - {issue}")
+
+    if cleanup_scope_issues:
+        print(f"\n  [CLEANUP SCOPE] {len(cleanup_scope_issues)} issue(s):")
+        for issue in cleanup_scope_issues:
+            print(f"    - {issue}")
 
     if result["pass"]:
         print(f"\n  [PASS] Manifest and filesystem are consistent.")

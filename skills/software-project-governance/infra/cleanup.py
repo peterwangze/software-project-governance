@@ -26,6 +26,7 @@ from typing import Dict, List, Optional, Set
 ERR_NOTHING_TO_CLEAN  = 1   # CLEANUP-ERR-002
 ERR_MANIFEST_NOT_FOUND = 2  # CLEANUP-ERR-003
 ERR_TARGET_NOT_FOUND   = 3  # CLEANUP-ERR-001
+ERR_INVALID_CLEANUP_SCOPE = 4  # CLEANUP-ERR-004
 
 
 # ─── Constants ────────────────────────────────────────────────
@@ -54,6 +55,54 @@ PLUGIN_SCOPE_DIRS = {
 
 
 # ─── Core functions ───────────────────────────────────────────
+
+def manifest_cleanup_scope_dirs(manifest: dict) -> Set[str]:
+    """Return cleanup scan roots declared by manifest.json.
+
+    The manifest is the canonical product artifact source.  A missing
+    cleanup_scope keeps backward compatibility by falling back to the historical
+    constant, but new manifests should declare the scope explicitly.
+    """
+    configured = manifest.get("cleanup_scope", {}).get("directories", [])
+    if not configured:
+        return set(PLUGIN_SCOPE_DIRS)
+
+    if not isinstance(configured, list):
+        print(
+            "[CLEANUP-ERR-004] cleanup_scope.directories must be a list.",
+            file=sys.stderr,
+        )
+        sys.exit(ERR_INVALID_CLEANUP_SCOPE)
+
+    normalized: Set[str] = set()
+    invalid: List[str] = []
+    for item in configured:
+        raw = str(item)
+        value = raw.strip().replace("\\", "/")
+        parts = [part for part in value.split("/") if part]
+        if (
+            not value
+            or value in {".", ".."}
+            or Path(value).is_absolute()
+            or value.startswith("/")
+            or value.startswith("//")
+            or any(part in {".", ".."} for part in parts)
+            or value not in PLUGIN_SCOPE_DIRS
+        ):
+            invalid.append(raw)
+            continue
+        normalized.add(value)
+
+    if invalid or not normalized:
+        print(
+            "[CLEANUP-ERR-004] Invalid cleanup_scope.directories: "
+            f"{', '.join(invalid) if invalid else '<empty>'}. "
+            f"Allowed values: {', '.join(sorted(PLUGIN_SCOPE_DIRS))}.",
+            file=sys.stderr,
+        )
+        sys.exit(ERR_INVALID_CLEANUP_SCOPE)
+
+    return normalized
 
 def load_manifest(path: Path) -> dict:
     """Load and parse manifest.json.
@@ -201,7 +250,7 @@ def expand_canonical(manifest: dict, root: Path) -> Set[str]:
     return canonical
 
 
-def scan_actual(root: Path, excludes: Set[str]) -> Set[str]:
+def scan_actual(root: Path, excludes: Set[str], scope_dirs: Optional[Set[str]] = None) -> Set[str]:
     """Scan only plugin-scope directories under *root* and return the set
     of relative file paths.
 
@@ -220,7 +269,7 @@ def scan_actual(root: Path, excludes: Set[str]) -> Set[str]:
         sys.exit(ERR_TARGET_NOT_FOUND)
 
     actual: Set[str] = set()
-    for scope_dir in PLUGIN_SCOPE_DIRS:
+    for scope_dir in sorted(scope_dirs or PLUGIN_SCOPE_DIRS):
         scope_path = root / scope_dir
         if not scope_path.exists() or not scope_path.is_dir():
             continue
@@ -262,7 +311,8 @@ def compute_redundant(manifest_path: Path, target_root: Path) -> dict:
     excludes = exc_entries | exc_user
 
     canonical = expand_canonical(manifest, target_root)
-    actual = scan_actual(target_root, excludes)
+    scope_dirs = manifest_cleanup_scope_dirs(manifest)
+    actual = scan_actual(target_root, excludes, scope_dirs)
 
     # Remove directory entries from canonical for diff purposes
     # (actual only contains files, so dirs in canonical would never match)
@@ -274,6 +324,7 @@ def compute_redundant(manifest_path: Path, target_root: Path) -> dict:
         "manifest_version": manifest.get("version", "unknown"),
         "total_actual": len(actual),
         "total_canonical": len(canonical_files),
+        "cleanup_scope_dirs": sorted(scope_dirs),
         "redundant_count": len(redundant),
         "redundant_files": redundant,
     }
@@ -446,6 +497,7 @@ def run_cleanup(
         "dry_run": dry_run,
         "total_actual_files": result["total_actual"],
         "total_canonical_files": result["total_canonical"],
+        "cleanup_scope_dirs": result["cleanup_scope_dirs"],
         "total_redundant": result["redundant_count"],
         "classification": {
             "P0_must_remove": len(classified.get("P0", [])),

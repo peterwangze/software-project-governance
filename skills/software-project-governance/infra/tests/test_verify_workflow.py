@@ -30,6 +30,7 @@ if str(_INFRA_DIR) not in sys.path:
     sys.path.insert(0, str(_INFRA_DIR))
 
 import verify_workflow as vw
+import cleanup as cleanup_mod
 
 
 # ────────────────────────────────────────────────────────────
@@ -189,6 +190,32 @@ class CleanCheckoutBoundaryTests(unittest.TestCase):
             any(entry.get("path") == ".governance/" for entry in manifest["repo_only"]["entries"])
         )
         self.assertNotIn(".governance/*.md", manifest["repo_only"]["glob_patterns"])
+
+    def test_canonical_manifest_declares_pack_registry_product_artifact(self):
+        manifest_path = vw.ROOT / "skills/software-project-governance/core/manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        artifact_entries = manifest["canonical_product_artifacts"]["entries"]
+
+        registry_artifact = [
+            entry for entry in artifact_entries
+            if entry.get("id") == "governance-pack-registry"
+        ]
+        self.assertEqual(len(registry_artifact), 1)
+        self.assertEqual(
+            registry_artifact[0]["path"],
+            "skills/software-project-governance/core/governance-packs.json",
+        )
+        self.assertTrue(registry_artifact[0]["required"])
+        self.assertIn(
+            "check-governance-packs",
+            " ".join(registry_artifact[0]["validation_commands"]),
+        )
+
+    def test_canonical_manifest_declares_cleanup_scope(self):
+        manifest_path = vw.ROOT / "skills/software-project-governance/core/manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(set(manifest["cleanup_scope"]["directories"]), vw.PLUGIN_SCOPE_DIRS)
 
     def test_default_snippets_do_not_require_local_governance_files(self):
         governance_snippet_paths = [
@@ -1898,9 +1925,47 @@ class FirstSessionMeasurementTests(unittest.TestCase):
 class GovernancePackTests(unittest.TestCase):
     """FIX-108: governance packs must be registry-backed and machine-checkable."""
 
-    def _write_registry(self, root, mutate=None):
+    def _write_pack_manifest(self, root, mutate=None):
+        manifest_path = root / "skills/software-project-governance/core/manifest.json"
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        data = {
+            "root_entries": {"files": [], "directories": []},
+            "product": {
+                "entries": [
+                    {
+                        "path": "skills/software-project-governance/core/governance-packs.json",
+                        "type": "file",
+                    }
+                ],
+                "glob_patterns": [],
+            },
+            "repo_only": {"entries": [], "glob_patterns": []},
+            "canonical_product_artifacts": {
+                "entries": [
+                    {
+                        "id": "governance-pack-registry",
+                        "path": "skills/software-project-governance/core/governance-packs.json",
+                        "type": "file",
+                        "required": True,
+                        "artifact_role": "pack-registry",
+                        "validation_commands": [
+                            "python skills/software-project-governance/infra/verify_workflow.py check-governance-packs --fail-on-issues",
+                            "python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues",
+                        ],
+                    }
+                ]
+            },
+            "cleanup_scope": {"directories": sorted(vw.PLUGIN_SCOPE_DIRS)},
+        }
+        if mutate:
+            mutate(data)
+        manifest_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        return manifest_path
+
+    def _write_registry(self, root, mutate=None, manifest_mutate=None):
         registry_path = root / "skills/software-project-governance/core/governance-packs.json"
         registry_path.parent.mkdir(parents=True, exist_ok=True)
+        self._write_pack_manifest(root, mutate=manifest_mutate)
         shared_file = root / "skills/software-project-governance/SKILL.md"
         shared_file.parent.mkdir(parents=True, exist_ok=True)
         shared_file.write_text("# Governance Skill\n", encoding="utf-8")
@@ -2053,6 +2118,17 @@ class GovernancePackTests(unittest.TestCase):
             self._write_registry(root, mutate=mutate)
             issues = vw.check_governance_packs(root)
             self.assertTrue(any("forbidden overclaim wording `officially approved`" in issue for issue in issues))
+
+    def test_governance_pack_registry_rejects_missing_manifest_artifact_binding(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def manifest_mutate(data):
+                data["canonical_product_artifacts"]["entries"] = []
+
+            self._write_registry(root, manifest_mutate=manifest_mutate)
+            issues = vw.check_governance_packs(root)
+            self.assertTrue(any("must declare governance-pack-registry" in issue for issue in issues))
 
 
 class ReadmePackGuidanceTests(unittest.TestCase):
@@ -4455,6 +4531,232 @@ class GovernanceSignalNoiseTests(unittest.TestCase):
 
         self.assertFalse(result["pass"])
         self.assertEqual(result["untracked"], ["tracked-extra.md"])
+
+    def test_manifest_rejects_missing_canonical_pack_registry_artifact(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            registry = root / "skills/software-project-governance/core/governance-packs.json"
+            registry.parent.mkdir(parents=True)
+            registry.write_text("{}", encoding="utf-8")
+            manifest = {
+                "root_entries": {"files": [], "directories": []},
+                "product": {
+                    "entries": [
+                        {
+                            "path": "skills/software-project-governance/core/governance-packs.json",
+                            "type": "file",
+                        }
+                    ],
+                    "glob_patterns": [],
+                },
+                "repo_only": {"entries": [], "glob_patterns": []},
+                "canonical_product_artifacts": {"entries": []},
+                "cleanup_scope": {"directories": sorted(vw.PLUGIN_SCOPE_DIRS)},
+            }
+            mp = root / "manifest.json"
+            mp.write_text(json.dumps(manifest), encoding="utf-8")
+
+            with patch.object(vw, "ROOT", root), \
+                 patch.object(vw, "_git_files", return_value={
+                     "skills/software-project-governance/core/governance-packs.json"
+                 }):
+                result = vw.check_manifest_consistency(mp)
+
+        self.assertFalse(result["pass"])
+        self.assertTrue(any("canonical_product_artifacts.entries" in issue for issue in result["artifact_issues"]))
+
+    def test_manifest_rejects_canonical_artifact_not_tracked_by_git(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            registry = root / "skills/software-project-governance/core/governance-packs.json"
+            registry.parent.mkdir(parents=True)
+            registry.write_text("{}", encoding="utf-8")
+            manifest = {
+                "root_entries": {"files": [], "directories": []},
+                "product": {
+                    "entries": [
+                        {
+                            "path": "skills/software-project-governance/core/governance-packs.json",
+                            "type": "file",
+                        }
+                    ],
+                    "glob_patterns": [],
+                },
+                "repo_only": {"entries": [], "glob_patterns": []},
+                "canonical_product_artifacts": {
+                    "entries": [
+                        {
+                            "id": "governance-pack-registry",
+                            "path": "skills/software-project-governance/core/governance-packs.json",
+                            "type": "file",
+                            "required": True,
+                            "artifact_role": "pack-registry",
+                            "validation_commands": [
+                                "python skills/software-project-governance/infra/verify_workflow.py check-governance-packs --fail-on-issues",
+                                "python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues",
+                            ],
+                        }
+                    ]
+                },
+                "cleanup_scope": {"directories": sorted(vw.PLUGIN_SCOPE_DIRS)},
+            }
+            mp = root / "manifest.json"
+            mp.write_text(json.dumps(manifest), encoding="utf-8")
+
+            with patch.object(vw, "ROOT", root), \
+                 patch.object(vw, "_git_files", return_value=set()):
+                result = vw.check_manifest_consistency(mp)
+
+        self.assertFalse(result["pass"])
+        self.assertTrue(any("must be tracked by git" in issue for issue in result["artifact_issues"]))
+
+    def test_manifest_rejects_canonical_artifact_not_explicit_product_file(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            registry = root / "skills/software-project-governance/core/governance-packs.json"
+            registry.parent.mkdir(parents=True)
+            registry.write_text("{}", encoding="utf-8")
+            manifest = {
+                "root_entries": {"files": [], "directories": []},
+                "product": {"entries": [], "glob_patterns": []},
+                "repo_only": {"entries": [], "glob_patterns": []},
+                "canonical_product_artifacts": {
+                    "entries": [
+                        {
+                            "id": "governance-pack-registry",
+                            "path": "skills/software-project-governance/core/governance-packs.json",
+                            "type": "file",
+                            "required": True,
+                            "artifact_role": "pack-registry",
+                            "validation_commands": [
+                                "python skills/software-project-governance/infra/verify_workflow.py check-governance-packs --fail-on-issues",
+                                "python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues",
+                            ],
+                        }
+                    ]
+                },
+                "cleanup_scope": {"directories": sorted(vw.PLUGIN_SCOPE_DIRS)},
+            }
+            mp = root / "manifest.json"
+            mp.write_text(json.dumps(manifest), encoding="utf-8")
+
+            with patch.object(vw, "ROOT", root), \
+                 patch.object(vw, "_git_files", return_value={
+                     "skills/software-project-governance/core/governance-packs.json"
+                 }):
+                result = vw.check_manifest_consistency(mp)
+
+        self.assertFalse(result["pass"])
+        self.assertTrue(any("must be an explicit product file entry" in issue for issue in result["artifact_issues"]))
+
+    def test_manifest_rejects_pack_registry_artifact_missing_validation_command(self):
+        for missing_command in ("check-governance-packs", "check-manifest-consistency"):
+            with self.subTest(missing_command=missing_command):
+                with tempfile.TemporaryDirectory() as td:
+                    root = Path(td)
+                    registry = root / "skills/software-project-governance/core/governance-packs.json"
+                    registry.parent.mkdir(parents=True)
+                    registry.write_text("{}", encoding="utf-8")
+                    commands = [
+                        "python skills/software-project-governance/infra/verify_workflow.py check-governance-packs --fail-on-issues",
+                        "python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues",
+                    ]
+                    commands = [command for command in commands if missing_command not in command]
+                    manifest = {
+                        "root_entries": {"files": [], "directories": []},
+                        "product": {
+                            "entries": [
+                                {
+                                    "path": "skills/software-project-governance/core/governance-packs.json",
+                                    "type": "file",
+                                }
+                            ],
+                            "glob_patterns": [],
+                        },
+                        "repo_only": {"entries": [], "glob_patterns": []},
+                        "canonical_product_artifacts": {
+                            "entries": [
+                                {
+                                    "id": "governance-pack-registry",
+                                    "path": "skills/software-project-governance/core/governance-packs.json",
+                                    "type": "file",
+                                    "required": True,
+                                    "artifact_role": "pack-registry",
+                                    "validation_commands": commands,
+                                }
+                            ]
+                        },
+                        "cleanup_scope": {"directories": sorted(vw.PLUGIN_SCOPE_DIRS)},
+                    }
+                    mp = root / "manifest.json"
+                    mp.write_text(json.dumps(manifest), encoding="utf-8")
+
+                    with patch.object(vw, "ROOT", root), \
+                         patch.object(vw, "_git_files", return_value={
+                             "skills/software-project-governance/core/governance-packs.json"
+                         }):
+                        result = vw.check_manifest_consistency(mp)
+
+                self.assertFalse(result["pass"])
+                self.assertTrue(
+                    any(
+                        f"validation_commands must include `{missing_command}`" in issue
+                        for issue in result["artifact_issues"]
+                    )
+                )
+
+    def _write_cleanup_manifest(self, root, scope_dirs):
+        manifest = {
+            "version": "test",
+            "root_entries": {"files": [], "directories": []},
+            "product": {"entries": [], "glob_patterns": []},
+            "repo_only": {"entries": [], "glob_patterns": []},
+            "cleanup_scope": {"directories": scope_dirs},
+            "exclude_from_cleanup": {"entries": [], "user_data_dirs": []},
+        }
+        manifest_path = root / "manifest.json"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        return manifest_path
+
+    def test_Cleanup_scope_rejects_invalid_dirs_before_scanning(self):
+        invalid_scopes = [
+            ["."],
+            [".."],
+            [""],
+            [str(Path(tempfile.gettempdir()).resolve())],
+            ["skills/../docs"],
+            ["docs"],
+        ]
+        for scope_dirs in invalid_scopes:
+            with self.subTest(scope_dirs=scope_dirs):
+                with tempfile.TemporaryDirectory() as td:
+                    root = Path(td)
+                    manifest_path = self._write_cleanup_manifest(root, scope_dirs)
+                    (root / "docs").mkdir()
+                    (root / "docs" / "user-file.md").write_text("must not scan", encoding="utf-8")
+
+                    with patch.object(
+                        cleanup_mod,
+                        "scan_actual",
+                        side_effect=AssertionError("scan_actual must not run for invalid cleanup scope"),
+                    ):
+                        with self.assertRaises(SystemExit) as cm:
+                            cleanup_mod.compute_redundant(manifest_path, root)
+
+                self.assertEqual(cm.exception.code, cleanup_mod.ERR_INVALID_CLEANUP_SCOPE)
+
+    def test_Cleanup_scope_accepts_allowed_subset(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            manifest_path = self._write_cleanup_manifest(root, ["skills"])
+            skills = root / "skills"
+            skills.mkdir()
+            (skills / "extra.md").write_text("redundant", encoding="utf-8")
+
+            result = cleanup_mod.compute_redundant(manifest_path, root)
+
+        self.assertEqual(result["cleanup_scope_dirs"], ["skills"])
+        self.assertEqual(result["redundant_files"], ["skills/extra.md"])
 
     def test_archive_completed_missing_evidence_is_info_but_hot_missing_fails(self):
         with tempfile.TemporaryDirectory() as td:

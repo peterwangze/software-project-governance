@@ -65,6 +65,23 @@
     ]
   },
 
+  "canonical_product_artifacts": {
+    "description": "Critical product artifacts that must remain tracked, shipped, and covered by manifest and cleanup checks.",
+    "entries": [
+      {
+        "id": "governance-pack-registry",
+        "path": "skills/software-project-governance/core/governance-packs.json",
+        "type": "file",
+        "required": true,
+        "artifact_role": "pack-registry",
+        "validation_commands": [
+          "python skills/software-project-governance/infra/verify_workflow.py check-governance-packs --fail-on-issues",
+          "python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues"
+        ]
+      }
+    ]
+  },
+
   "repo_only": {
     "description": "Files that exist only in the development repository, NOT shipped to end users via plugin installation.",
     "entries": [
@@ -82,6 +99,19 @@
       ".github/workflows/*.yml",
       "tests/**/*.py",
       "docs/**/*.md"
+    ]
+  },
+
+  "cleanup_scope": {
+    "description": "Top-level plugin directories that cleanup.py may scan for redundant product artifacts. User project files outside this scope are never cleanup candidates.",
+    "directories": [
+      "skills",
+      "agents",
+      "commands",
+      "adapters",
+      ".claude-plugin",
+      ".codex-plugin",
+      ".agents"
     ]
   },
 

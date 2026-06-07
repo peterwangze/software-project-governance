@@ -2450,7 +2450,7 @@ def check_governance_packs(root=None):
 
     all_text_lines = "\n".join(_governance_pack_text_values(registry)).splitlines()
     for phrase in GOVERNANCE_PACK_FORBIDDEN_OVERCLAIMS:
-        if any(phrase in line.lower() and not _line_has_negation(line) for line in all_text_lines):
+        if any(phrase in line.lower() and not _line_has_scoped_claim_negation(line, phrase) for line in all_text_lines):
             failures.append(f"{display}: forbidden overclaim wording `{phrase}`")
 
     return failures
@@ -2512,37 +2512,165 @@ def check_readme_pack_guidance(root=None):
         "full runtime support is verified",
         "1.0.0 production-ready",
     ]
-    negation_markers = ("not", "no ", "does not", "do not", "is not", "isn't", "不是", "不等于", "不得", "不能", "未", "没有")
     for phrase in direct_claims:
-        if any(phrase in line.lower() and not any(marker in line.lower() for marker in negation_markers)
+        if any(phrase in line.lower() and not _line_has_scoped_claim_negation(line, phrase)
                for line in readme_lines):
             failures.append(f"{display}: forbidden README pack overclaim `{phrase}`")
 
     return failures
 
 
-def _line_has_negation(line):
-    negation_markers = (
+def _claim_clause_bounds(text, start, end):
+    separators = ";；.!?！？|:："
+    clause_start = 0
+    for index in range(start - 1, -1, -1):
+        if text[index] in separators:
+            clause_start = index + 1
+            break
+
+    clause_end = len(text)
+    for index in range(end, len(text)):
+        if text[index] in separators:
+            clause_end = index
+            break
+
+    return clause_start, clause_end
+
+
+def _word_count(text):
+    return len(re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]+", text.lower()))
+
+
+def _marker_positions(text, markers):
+    lower = text.lower()
+    positions = []
+    for marker in markers:
+        marker_lower = marker.lower()
+        if re.search(r"[a-z0-9]", marker_lower):
+            pattern = rf"(?<![a-z0-9]){re.escape(marker_lower)}(?![a-z0-9])"
+            positions.extend((match.start(), match.end(), marker_lower) for match in re.finditer(pattern, lower))
+        else:
+            start = lower.find(marker_lower)
+            while start != -1:
+                positions.append((start, start + len(marker_lower), marker_lower))
+                start = lower.find(marker_lower, start + len(marker_lower))
+    return positions
+
+
+def _line_has_scoped_claim_negation(line, phrase):
+    """Return true only when every claim occurrence is negated in its local clause."""
+    lower = line.lower()
+    phrase_lower = phrase.lower()
+    noun_claim_terms = (
+        "official approval",
+        "marketplace approval",
+        "universal runtime support",
+        "full runtime support",
+        "universal/full runtime support",
+        "1.0.0 production-ready",
+        "1.0.0 production-ready claim",
+    )
+    direct_pre_markers = (
         "not",
-        "no ",
+        "no",
         "does not",
         "do not",
         "is not",
         "are not",
         "isn't",
+        "doesn't",
+        "don't",
         "不是",
         "不等于",
         "不得",
         "不能",
         "不声明",
-        "avoid",
-        "avoids",
-        "避免",
         "未",
         "没有",
     )
-    lower = line.lower()
-    return any(marker in lower for marker in negation_markers)
+    predicate_markers = (
+        "does not claim",
+        "do not claim",
+        "not claim",
+        "does not mean",
+        "do not mean",
+        "doesn't mean",
+        "don't mean",
+        "is not",
+        "are not",
+        "isn't",
+        "no",
+        "不是",
+        "不等于",
+        "不替代",
+        "不得",
+        "不能",
+        "不声明",
+        "未",
+        "没有",
+        "avoid",
+        "avoids",
+        "避免",
+    )
+    post_markers = (
+        "is not",
+        "are not",
+        "isn't",
+        "not claimed",
+        "not verified",
+        "not proof",
+        "不是",
+        "不等于",
+        "不得",
+        "不能",
+        "不声明",
+        "未",
+        "没有",
+    )
+
+    matches = list(re.finditer(re.escape(phrase_lower), lower))
+    if not matches:
+        return False
+
+    for match in matches:
+        clause_start, clause_end = _claim_clause_bounds(lower, match.start(), match.end())
+        clause = lower[clause_start:clause_end]
+        rel_start = match.start() - clause_start
+        rel_end = match.end() - clause_start
+        prefix = clause[:rel_start]
+        suffix = clause[rel_end:]
+
+        negated = False
+        for marker_start, marker_end, _marker in _marker_positions(prefix[-96:], direct_pre_markers):
+            between = prefix[-96:][marker_end:]
+            if not re.search(r"[,;；.!?！？|:：]", between) and _word_count(between) <= 2:
+                negated = True
+                break
+
+        if not negated:
+            for marker_start, marker_end, marker in _marker_positions(prefix, predicate_markers):
+                between = prefix[marker_end:]
+                if marker == "no":
+                    if phrase_lower not in noun_claim_terms:
+                        continue
+                    if not any(other_claim in between for other_claim in noun_claim_terms):
+                        continue
+                if _word_count(between) <= 36:
+                    negated = True
+                    break
+
+        if not negated:
+            suffix_head = suffix[:96]
+            for marker_start, marker_end, _marker in _marker_positions(suffix_head, post_markers):
+                between = suffix_head[:marker_start]
+                if not re.search(r"[,;；.!?！？|:：]", between) and _word_count(between) <= 3:
+                    negated = True
+                    break
+
+        if not negated:
+            return False
+
+    return True
 
 
 def _append_pack_overclaim_issues(failures, path, content, root):
@@ -2550,7 +2678,7 @@ def _append_pack_overclaim_issues(failures, path, content, root):
     lines = content.splitlines()
     for phrase in GOVERNANCE_PACK_STATUS_FORBIDDEN_OVERCLAIMS:
         for line in lines:
-            if phrase in line.lower() and not _line_has_negation(line):
+            if phrase in line.lower() and not _line_has_scoped_claim_negation(line, phrase):
                 failures.append(f"{display}: forbidden pack status overclaim `{phrase}`")
                 break
 
@@ -2565,7 +2693,7 @@ def _append_pack_overclaim_issues(failures, path, content, root):
     ]
     for phrase in direct_claims:
         for line in lines:
-            if phrase in line.lower() and not _line_has_negation(line):
+            if phrase in line.lower() and not _line_has_scoped_claim_negation(line, phrase):
                 failures.append(f"{display}: forbidden pack status overclaim `{phrase}`")
                 break
 

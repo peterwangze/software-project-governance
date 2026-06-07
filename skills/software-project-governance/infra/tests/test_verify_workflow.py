@@ -2165,6 +2165,35 @@ class GovernancePackTests(unittest.TestCase):
             issues = vw.check_governance_packs(root)
             self.assertTrue(any("forbidden overclaim wording `officially approved`" in issue for issue in issues))
 
+    def test_governance_pack_registry_rejects_unrelated_negation_masking_direct_claim(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data, _root):
+                data["packs"][0]["description"] = "No official approval, marketplace approved."
+
+            self._write_registry(root, mutate=mutate)
+            issues = vw.check_governance_packs(root)
+            self.assertTrue(any("forbidden overclaim wording `marketplace approved`" in issue for issue in issues))
+
+    def test_governance_pack_registry_accepts_scoped_boundary_negations(self):
+        self.assertTrue(vw._line_has_scoped_claim_negation(
+            "No official approval, marketplace approval, universal/full runtime support, or 1.0.0 production-ready claim",
+            "marketplace approval",
+        ))
+        self.assertTrue(vw._line_has_scoped_claim_negation(
+            "No official approval. No marketplace approval.",
+            "marketplace approval",
+        ))
+        self.assertTrue(vw._line_has_scoped_claim_negation(
+            "do not claim marketplace approval",
+            "marketplace approval",
+        ))
+        self.assertFalse(vw._line_has_scoped_claim_negation(
+            "No official approval, marketplace approved.",
+            "marketplace approved",
+        ))
+
     def test_governance_pack_registry_rejects_missing_manifest_artifact_binding(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -2227,6 +2256,15 @@ class ReadmePackGuidanceTests(unittest.TestCase):
             self.assertTrue(any("forbidden README pack overclaim `marketplace approved`" in issue for issue in issues))
             self.assertTrue(any("forbidden README pack overclaim `universal runtime support is verified`" in issue for issue in issues))
             self.assertTrue(any("forbidden README pack overclaim `1.0.0 production-ready`" in issue for issue in issues))
+
+    def test_readme_pack_guidance_rejects_unrelated_negation_masking_direct_claim(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            current = (vw.ROOT / "README.md").read_text(encoding="utf-8")
+            self._write_readme(root, current + "\nNo official approval, marketplace approved.\n")
+
+            issues = vw.check_readme_pack_guidance(root)
+            self.assertTrue(any("forbidden README pack overclaim `marketplace approved`" in issue for issue in issues))
 
 
 class GovernancePackStatusTests(unittest.TestCase):
@@ -2300,6 +2338,19 @@ class GovernancePackStatusTests(unittest.TestCase):
 
             issues = vw.check_governance_pack_status(root)
             self.assertTrue(any("forbidden pack status overclaim `pack enabled means release gates passed`" in issue for issue in issues))
+
+    def test_governance_pack_status_rejects_unrelated_negation_masking_direct_claim(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_valid_pack_status_project(root)
+            path = root / "docs/requirements/composable-governance-packs-0.44.0.md"
+            path.write_text(
+                path.read_text(encoding="utf-8") + "\nNo official approval, marketplace approved.\n",
+                encoding="utf-8",
+            )
+
+            issues = vw.check_governance_pack_status(root)
+            self.assertTrue(any("forbidden pack status overclaim `marketplace approved`" in issue for issue in issues))
 
     def test_governance_pack_status_rejects_weakened_status_boundary_even_when_release_doc_is_strong(self):
         with tempfile.TemporaryDirectory() as td:

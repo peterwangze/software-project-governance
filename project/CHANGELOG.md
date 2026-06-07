@@ -2,6 +2,34 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.44.1] — 2026-06-07
+
+### 0.44.1 — Patch Release: no-overclaim 与 context fact coverage
+
+0.44.1 是 0.44.x patch release，发布 FIX-113 和 FIX-114：修复 0.43.0~0.44.0 post-review 发现的 no-overclaim false-pass 与 governance-context fact coverage 缺口。本 release 不改变 pack semantics、不进行物理拆包、不改变 runtime/readiness matrix 或 first-session measurement 状态；不声明 official approval、marketplace approval、universal/full runtime support、external first-session pilot success、Codex Desktop marketplace-management E2E PASS 或 1.0.0 production-ready。RISK-036 继续打开，0.45.0~0.46.0 仍承载评测、Desktop marketplace E2E 与官方提交准备链。
+
+### 修复
+
+- **FIX-113**: no-overclaim direct-claim 检查改为 claim-scoped negation，防止 `No physical split; marketplace approved.` 这类同一行无关否定词掩盖 official approval、marketplace approval、universal/full runtime support、external first-session pilot success 或 1.0.0 production-ready 的肯定式越界声明。
+- **FIX-114**: governance context discovery 补齐 evidence-log 与 root-scoped git fact discovery，避免把历史 completed/approved/closed/resolved evidence 或父仓库 dirty state 发明成当前 unfinished work，同时让真实 evidence/git/recent work facts 能进入 context handoff。
+- **REL-021**: 版本声明、CHANGELOG、release checklist、rollback plan、feature flag 状态、target fixture/projection 版本、hook @version、pack registry workflow version 与 release validation command 同步到 0.44.1。
+
+### 验证
+
+- FIX-113 commit `777bd66758cb6515c488c2eac25dde5f7a7ddd1b` 已推送且 GitHub Governance CI success。
+- FIX-114 commit `fa4f2d115a762afe8c92f7debea0cfa8f89beed9` 已推送且 GitHub Governance CI success。
+- `check-version-consistency` 作为 REL-021 版本一致性门禁。
+- `check-release --version 0.44.1 --require-changelog --runtime-adapters --skip-execution-gates` 作为 REL-021 发布门禁。
+- `python -m unittest skills/software-project-governance/infra/tests/test_verify_workflow.py -k ProjectionSync -v` 作为投影同步回归。
+- `git diff --check` 作为 whitespace 门禁。
+
+### Release 边界
+
+- 0.44.1 只准备 patch release package，不包含 commit、tag、push。
+- Pack enabled / pack membership 仍不是任务证据、独立审查、质量门禁、发布门禁、official approval、marketplace approval、universal/full runtime support 或 1.0.0 production-ready 证明。
+- `governance-core` context resume 只基于事实源承接 unfinished work；没有事实时不得编造。
+- 0.44.1 不改变 0.43.0 runtime/readiness matrix 和 first-session measurement 事实边界：外部 first-session pilot 仍未被本 release 声明为成功。
+
 ## [0.44.0] — 2026-06-07
 
 ### 0.44.0 — Composable Governance Packs

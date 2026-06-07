@@ -2045,7 +2045,7 @@ class GovernancePackTests(unittest.TestCase):
             "$schema": "https://example.com/software-project-governance/governance-packs-v1.json",
             "schema_version": "1.0",
             "workflow": "software-project-governance",
-            "workflow_version": "0.44.0",
+            "workflow_version": "0.44.1",
             "source_of_truth": True,
             "pack_mode": "registry-first-no-physical-split",
             "required_pack_ids": vw.GOVERNANCE_PACK_IDS,
@@ -2706,6 +2706,7 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
                 "total_expected": 0,
                 "pending_archive_tasks": 0,
             }),
+            patch.object(vw, "check_release_docs_coverage", return_value=[]),
         ]
 
     def _apply_release_patches(self, patches):
@@ -2746,6 +2747,231 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
                 )
             self.assertFalse(result["pass"])
             self.assertTrue(any("missing changelog entry ## [0.35.0]" in issue for issue in result["issues"]))
+
+    def test_release_docs_coverage_requires_versioned_docs(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            manifest_dir = root / "skills/software-project-governance/core"
+            manifest_dir.mkdir(parents=True)
+            (manifest_dir / "manifest.json").write_text(
+                json.dumps({
+                    "root_entries": {"files": [], "directories": []},
+                    "product": {"entries": [], "glob_patterns": []},
+                    "repo_only": {"entries": [], "glob_patterns": []},
+                }),
+                encoding="utf-8",
+            )
+            with patch.object(vw, "_git_files", return_value=set()):
+                issues = vw.check_release_docs_coverage("0.44.1", root=root)
+
+        self.assertTrue(any("release-checklist-0.44.1.md" in issue for issue in issues))
+        self.assertTrue(any("feature-flags-0.44.1.md" in issue for issue in issues))
+        self.assertTrue(any("rollback-plan-0.44.1.md" in issue for issue in issues))
+
+    def test_release_docs_coverage_requires_tracked_and_boundary_docs(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            manifest_dir = root / "skills/software-project-governance/core"
+            manifest_dir.mkdir(parents=True)
+            release_dir = root / "docs/release"
+            release_dir.mkdir(parents=True)
+            doc_names = [
+                "release-checklist-0.44.1.md",
+                "feature-flags-0.44.1.md",
+                "rollback-plan-0.44.1.md",
+            ]
+            for doc_name in doc_names:
+                (release_dir / doc_name).write_text(
+                    "0.44.1\n"
+                    "No official approval, marketplace approval, universal/full runtime support, "
+                    "external first-session pilot success. RISK-036 remains open.\n",
+                    encoding="utf-8",
+                )
+            (manifest_dir / "manifest.json").write_text(
+                json.dumps({
+                    "root_entries": {"files": [], "directories": []},
+                    "product": {
+                        "entries": [
+                            {"path": f"docs/release/{doc_name}", "type": "file"}
+                            for doc_name in doc_names
+                        ],
+                        "glob_patterns": [],
+                    },
+                    "repo_only": {"entries": [], "glob_patterns": []},
+                }),
+                encoding="utf-8",
+            )
+            with patch.object(vw, "_git_files", return_value=set()):
+                issues = vw.check_release_docs_coverage("0.44.1", root=root)
+
+        self.assertTrue(any("must be tracked by git" in issue for issue in issues))
+
+    def test_release_docs_coverage_rejects_positive_overclaim_wording(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            manifest_dir = root / "skills/software-project-governance/core"
+            manifest_dir.mkdir(parents=True)
+            release_dir = root / "docs/release"
+            release_dir.mkdir(parents=True)
+            doc_names = [
+                "release-checklist-0.44.1.md",
+                "feature-flags-0.44.1.md",
+                "rollback-plan-0.44.1.md",
+            ]
+            overclaim_lines = [
+                "Official approval granted for 0.44.1.",
+                "Marketplace approval approved for 0.44.1.",
+                "Universal runtime support is verified and full runtime support is supported.",
+                "Universal/full runtime support verified.",
+                "Universal/full runtime support supported.",
+                "Universal runtime support verified.",
+                "Universal runtime support supported.",
+                "Full runtime support verified.",
+                "Full runtime support supported.",
+                "External first-session pilot success passed.",
+                "Codex Desktop marketplace-management E2E PASS.",
+                "1.0.0 production-ready.",
+                "RISK-036 closed.",
+            ]
+            for doc_name in doc_names:
+                (release_dir / doc_name).write_text(
+                    "0.44.1\n"
+                    "No-overclaim boundary: no official approval, marketplace approval, "
+                    "universal/full runtime support, external first-session pilot success. "
+                    "RISK-036 remains open.\n"
+                    + "\n".join(overclaim_lines)
+                    + "\n",
+                    encoding="utf-8",
+                )
+            (manifest_dir / "manifest.json").write_text(
+                json.dumps({
+                    "root_entries": {"files": [], "directories": []},
+                    "product": {
+                        "entries": [
+                            {"path": f"docs/release/{doc_name}", "type": "file"}
+                            for doc_name in doc_names
+                        ],
+                        "glob_patterns": [],
+                    },
+                    "repo_only": {"entries": [], "glob_patterns": []},
+                }),
+                encoding="utf-8",
+            )
+            tracked = {f"docs/release/{doc_name}" for doc_name in doc_names}
+            with patch.object(vw, "_git_files", return_value=tracked):
+                issues = vw.check_release_docs_coverage("0.44.1", root=root)
+
+        for phrase in (
+            "official approval granted",
+            "marketplace approval approved",
+            "universal runtime support is verified",
+            "full runtime support is supported",
+            "universal/full runtime support verified",
+            "universal/full runtime support supported",
+            "universal runtime support verified",
+            "universal runtime support supported",
+            "full runtime support verified",
+            "full runtime support supported",
+            "external first-session pilot success",
+            "codex desktop marketplace-management e2e pass",
+            "1.0.0 production-ready",
+            "risk-036 closed",
+        ):
+            self.assertTrue(
+                any(f"forbidden release docs overclaim `{phrase}`" in issue for issue in issues),
+                phrase,
+            )
+
+    def test_release_docs_coverage_allows_no_overclaim_boundary_wording(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            manifest_dir = root / "skills/software-project-governance/core"
+            manifest_dir.mkdir(parents=True)
+            release_dir = root / "docs/release"
+            release_dir.mkdir(parents=True)
+            doc_names = [
+                "release-checklist-0.44.1.md",
+                "feature-flags-0.44.1.md",
+                "rollback-plan-0.44.1.md",
+            ]
+            for doc_name in doc_names:
+                (release_dir / doc_name).write_text(
+                    "0.44.1\n"
+                    "No-overclaim boundary: no official approval, marketplace approval, "
+                    "universal/full runtime support, external first-session pilot success, "
+                    "Codex Desktop marketplace-management E2E PASS, or 1.0.0 production-ready claim. "
+                    "RISK-036 remains open.\n",
+                    encoding="utf-8",
+                )
+            (manifest_dir / "manifest.json").write_text(
+                json.dumps({
+                    "root_entries": {"files": [], "directories": []},
+                    "product": {
+                        "entries": [
+                            {"path": f"docs/release/{doc_name}", "type": "file"}
+                            for doc_name in doc_names
+                        ],
+                        "glob_patterns": [],
+                    },
+                    "repo_only": {"entries": [], "glob_patterns": []},
+                }),
+                encoding="utf-8",
+            )
+            tracked = {f"docs/release/{doc_name}" for doc_name in doc_names}
+            with patch.object(vw, "_git_files", return_value=tracked):
+                issues = vw.check_release_docs_coverage("0.44.1", root=root)
+
+        self.assertEqual([], issues)
+
+    def test_release_docs_coverage_allows_rollback_guard_wording(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            manifest_dir = root / "skills/software-project-governance/core"
+            manifest_dir.mkdir(parents=True)
+            release_dir = root / "docs/release"
+            release_dir.mkdir(parents=True)
+            docs = {
+                "release-checklist-0.44.1.md": (
+                    "0.44.1\n"
+                    "No official approval, marketplace approval, universal/full runtime support, "
+                    "external first-session pilot success. RISK-036 remains open.\n"
+                ),
+                "feature-flags-0.44.1.md": (
+                    "0.44.1\n"
+                    "No official approval, marketplace approval, universal/full runtime support, "
+                    "external first-session pilot success. RISK-036 remains open.\n"
+                ),
+                "rollback-plan-0.44.1.md": (
+                    "0.44.1\n"
+                    "No official approval, marketplace approval, universal/full runtime support, "
+                    "external first-session pilot success. RISK-036 remains open.\n"
+                    "- 0.44.1 release docs or CHANGELOG 声明 official approval, marketplace approval, "
+                    "universal/full runtime support, external first-session pilot success, "
+                    "Codex Desktop marketplace-management E2E PASS, or 1.0.0 production-ready.\n"
+                    "- 发布提交混入 Codex Desktop marketplace-management E2E PASS 或 1.0.0 changes.\n"
+                ),
+            }
+            for doc_name, content in docs.items():
+                (release_dir / doc_name).write_text(content, encoding="utf-8")
+            (manifest_dir / "manifest.json").write_text(
+                json.dumps({
+                    "root_entries": {"files": [], "directories": []},
+                    "product": {
+                        "entries": [
+                            {"path": f"docs/release/{doc_name}", "type": "file"}
+                            for doc_name in docs
+                        ],
+                        "glob_patterns": [],
+                    },
+                    "repo_only": {"entries": [], "glob_patterns": []},
+                }),
+                encoding="utf-8",
+            )
+            tracked = {f"docs/release/{doc_name}" for doc_name in docs}
+            with patch.object(vw, "_git_files", return_value=tracked):
+                issues = vw.check_release_docs_coverage("0.44.1", root=root)
+
+        self.assertEqual([], issues)
 
     def test_check_release_readiness_fails_on_cross_reference_issues(self):
         patches = self._clean_release_patches()
@@ -3282,12 +3508,12 @@ class E2ECommandMatrixTests(unittest.TestCase):
             for name in ("evidence-log.md", "decision-log.md", "risk-log.md", "session-snapshot.md"):
                 (governance_dir / name).write_text("# fixture\n", encoding="utf-8")
             (governance_dir / "plan-tracker.md").write_text(
-                "- **工作流版本**: 0.44.0\n"
+                "- **工作流版本**: 0.44.1\n"
                 "- **操作权限模式**: default-confirm\n",
                 encoding="utf-8",
             )
             (skill_dir / "SKILL.md").write_text(
-                "---\nversion: 0.44.0\n---\nCoordinator\nAgent Team\n",
+                "---\nversion: 0.44.1\n---\nCoordinator\nAgent Team\n",
                 encoding="utf-8",
             )
             trust_snapshot_contract = (

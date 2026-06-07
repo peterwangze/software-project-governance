@@ -741,16 +741,16 @@ REQUIRED_SNIPPETS = {
         "## [0.5.0]",
     ],
     ROOT / ".claude-plugin/plugin.json": [
-        "0.44.0",
+        "0.44.1",
     ],
     ROOT / ".claude-plugin/marketplace.json": [
-        "0.44.0",
+        "0.44.1",
     ],
     ROOT / ".codex-plugin/plugin.json": [
-        "0.44.0",
+        "0.44.1",
     ],
     ROOT / "skills/software-project-governance/core/manifest.json": [
-        "0.44.0",
+        "0.44.1",
     ],
 }
 
@@ -2567,8 +2567,14 @@ def _line_has_scoped_claim_negation(line, phrase):
         "universal runtime support",
         "full runtime support",
         "universal/full runtime support",
+        "external first-session pilot success",
+        "external first-session pilot pass",
+        "external first-session pilot passed",
+        "codex desktop marketplace-management e2e pass",
+        "codex desktop marketplace-management e2e passed",
         "1.0.0 production-ready",
         "1.0.0 production-ready claim",
+        "risk-036 closed",
     )
     direct_pre_markers = (
         "not",
@@ -3529,6 +3535,100 @@ def run_release_execution_gates(runner=_run_release_validation_command):
     return [runner(label, command) for label, command in commands]
 
 
+def _release_docs_line_has_guard_context(label, line):
+    if label != "rollback plan":
+        return False
+    lower = line.lower()
+    return (
+        ("release docs" in lower and "changelog" in lower and "声明" in lower)
+        or "发布提交混入" in lower
+    )
+
+
+def check_release_docs_coverage(version, root=None):
+    """REL-021: versioned release docs must be present, tracked, and conservative."""
+    root = Path(root) if root is not None else ROOT
+    issues = []
+    if not version or not re.fullmatch(r"\d+\.\d+\.\d+", version):
+        return issues
+
+    release_docs = [
+        ("release checklist", f"docs/release/release-checklist-{version}.md"),
+        ("feature flags", f"docs/release/feature-flags-{version}.md"),
+        ("rollback plan", f"docs/release/rollback-plan-{version}.md"),
+    ]
+    tracked_files = _git_files(["ls-files", "--cached"])
+    manifest_result = check_manifest_consistency(root / "skills/software-project-governance/core/manifest.json")
+    manifest_missing = set(manifest_result.get("missing", [])) if manifest_result.get("pass") is not None else set()
+    manifest_untracked = set(manifest_result.get("untracked", [])) if manifest_result.get("pass") is not None else set()
+    boundary_needles = [
+        "official approval",
+        "marketplace approval",
+        "universal/full runtime support",
+        "external first-session pilot success",
+        "RISK-036",
+    ]
+    forbidden_positive_claims = [
+        "official approval granted",
+        "official approval approved",
+        "officially approved",
+        "marketplace approval granted",
+        "marketplace approval approved",
+        "marketplace approved",
+        "universal runtime support is verified",
+        "universal runtime support is supported",
+        "universal runtime support verified",
+        "universal runtime support supported",
+        "full runtime support is verified",
+        "full runtime support is supported",
+        "full runtime support verified",
+        "full runtime support supported",
+        "universal/full runtime support is verified",
+        "universal/full runtime support is supported",
+        "universal/full runtime support verified",
+        "universal/full runtime support supported",
+        "external first-session pilot success",
+        "external first-session pilot pass",
+        "external first-session pilot passed",
+        "codex desktop marketplace-management e2e pass",
+        "codex desktop marketplace-management e2e passed",
+        "1.0.0 production-ready",
+        "risk-036 closed",
+    ]
+
+    for label, rel_path in release_docs:
+        path = root / rel_path
+        display = _display_path(path, root)
+        if not path.is_file():
+            issues.append(f"{display}: missing {label} for release {version}")
+            continue
+        if tracked_files is not None and rel_path not in tracked_files:
+            issues.append(f"{display}: {label} must be tracked by git")
+        if rel_path in manifest_missing:
+            issues.append(f"{display}: {label} is declared in manifest but missing from tracked files")
+        if rel_path in manifest_untracked:
+            issues.append(f"{display}: {label} exists but is not covered by manifest")
+
+        content = path.read_text(encoding="utf-8")
+        if version not in content:
+            issues.append(f"{display}: {label} missing release version {version}")
+        lower_content = content.lower()
+        missing_needles = [needle for needle in boundary_needles if needle.lower() not in lower_content]
+        if missing_needles:
+            issues.append(f"{display}: {label} missing conservative boundary tokens: {', '.join(missing_needles)}")
+        for phrase in forbidden_positive_claims:
+            for line in content.splitlines():
+                if (
+                    phrase in line.lower()
+                    and not _line_has_scoped_claim_negation(line, phrase)
+                    and not _release_docs_line_has_guard_context(label, line)
+                ):
+                    issues.append(f"{display}: {label} forbidden release docs overclaim `{phrase}`")
+                    break
+
+    return issues
+
+
 PROJECTION_SYNC_PATTERNS = (
     "skills/*/SKILL.md",
     "skills/software-project-governance/SKILL.md",
@@ -3812,6 +3912,14 @@ def check_release_readiness(
         "pending_archive_tasks": archive_result.get("pending_archive_tasks", 0),
     }
     issues.extend(f"archive integrity: {issue}" for issue in archive_issues)
+
+    release_docs_issues = check_release_docs_coverage(version)
+    details["release_docs"] = {
+        "pass": not release_docs_issues,
+        "issues": release_docs_issues,
+        "version": version,
+    }
+    issues.extend(f"release docs: {issue}" for issue in release_docs_issues)
 
     execution_gate_results = []
     execution_gate_issues = []
@@ -12914,12 +13022,12 @@ def _e2e_target_fixture_checks(e2e_dir):
         {
             "label": "target plan-tracker project config",
             "path": governance_dir / "plan-tracker.md",
-            "needles": ["工作流版本", "0.44.0", "操作权限模式", "default-confirm"],
+            "needles": ["工作流版本", "0.44.1", "操作权限模式", "default-confirm"],
         },
         {
             "label": "target workflow skill version",
             "path": e2e_dir / "skills" / "software-project-governance" / "SKILL.md",
-            "needles": ["version: 0.44.0", "Coordinator", "Agent Team"],
+            "needles": ["version: 0.44.1", "Coordinator", "Agent Team"],
         },
         {
             "label": "target /governance route contract",

@@ -2419,7 +2419,7 @@ class GovernancePackStatusTests(unittest.TestCase):
 class GovernanceContextDiscoveryTests(unittest.TestCase):
     """FIX-112: governance resume handoff must be fact-based and not-found safe."""
 
-    def _write_project(self, root, plan=None, snapshot=None, risk=None, docs=True):
+    def _write_project(self, root, plan=None, snapshot=None, risk=None, evidence=None, docs=True):
         gov = root / ".governance"
         gov.mkdir(parents=True, exist_ok=True)
         (gov / "plan-tracker.md").write_text(plan or "\n".join([
@@ -2440,6 +2440,7 @@ class GovernanceContextDiscoveryTests(unittest.TestCase):
             "## Carry-over Tasks",
             "None",
         ]), encoding="utf-8")
+        (gov / "evidence-log.md").write_text(evidence or "# Evidence log\n", encoding="utf-8")
         (gov / "risk-log.md").write_text(risk or "# Risk log\n", encoding="utf-8")
         if docs:
             commands = root / "commands"
@@ -2490,6 +2491,95 @@ class GovernanceContextDiscoveryTests(unittest.TestCase):
         self.assertFalse(context["auto_continue"])
         self.assertIn("AskUserQuestion", context["interrupt_boundary"])
 
+    def test_discovers_evidence_log_only_unfinished_fact(self):
+        evidence = "\n".join([
+            "# Evidence log",
+            "| 编号 | 对应任务 ID | 阶段 | 证据类型 | 证据说明 | 证据位置 | 提交人 | 提交日期 | 关联 Gate | 备注 |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| EVD-999 | FIX-314 | 维护 | carry-over | FIX-314 next action: resume parser coverage; 未完成 | local evidence | Developer | 2026-06-07 | G11 | 进行中 |",
+        ])
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_project(root, evidence=evidence)
+
+            context = vw.discover_governance_context(root)
+
+        self.assertEqual(context["status"], "FOUND")
+        self.assertIn("FIX-314", context["detected_item"])
+        self.assertEqual(context["_items"][0]["task_id"], "FIX-314")
+        self.assertTrue(any("evidence-log.md" in fact for fact in context["source_facts"]))
+        self.assertTrue(context["auto_continue"])
+
+    def test_completed_evidence_with_historical_blocked_pending_words_is_not_unfinished(self):
+        evidence = "\n".join([
+            "# Evidence log",
+            "| 编号 | 对应任务 ID | 阶段 | 证据类型 | 证据说明 | 证据位置 | 提交人 | 提交日期 | 关联 Gate | 备注 |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| EVD-997 | FIX-316 | 维护 | 修复闭环 | FIX-316 completed: blocked then resolved; pending issue fixed; next action no longer needed | local evidence | Developer | 2026-06-07 | G11 | 完成 / APPROVED / closed |",
+        ])
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_project(root, evidence=evidence)
+
+            context = vw.discover_governance_context(root)
+
+        self.assertEqual(context["status"], "NOT_FOUND")
+        self.assertNotIn("FIX-316", context["detected_item"])
+
+    def test_discovers_git_status_product_file_uncommitted_work(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_project(root)
+            subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True, text=True)
+            product_file = root / "skills" / "demo" / "tool.py"
+            product_file.parent.mkdir(parents=True, exist_ok=True)
+            product_file.write_text("print('work')\n", encoding="utf-8")
+
+            context = vw.discover_governance_context(root)
+
+        self.assertEqual(context["status"], "FOUND")
+        self.assertIn("GIT-WORKTREE", context["detected_item"])
+        self.assertTrue(any("git status --short" in fact for fact in context["source_facts"]))
+        self.assertIn("skills/demo/tool.py", " ".join(context["source_facts"]))
+        self.assertTrue(context["auto_continue"])
+
+    def test_git_status_does_not_walk_up_to_parent_repo_for_child_fixture(self):
+        with tempfile.TemporaryDirectory() as td:
+            parent = Path(td)
+            subprocess.run(["git", "init"], cwd=parent, check=True, capture_output=True, text=True)
+            child = parent / "fixture"
+            self._write_project(child)
+            product_file = parent / "skills" / "demo" / "dirty.py"
+            product_file.parent.mkdir(parents=True, exist_ok=True)
+            product_file.write_text("print('parent dirty')\n", encoding="utf-8")
+
+            context = vw.discover_governance_context(child)
+
+        self.assertEqual(context["status"], "NOT_FOUND")
+        self.assertNotIn("GIT-WORKTREE", context["detected_item"])
+
+    def test_clean_recent_commit_without_unfinished_facts_stays_not_found(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_project(root)
+            subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=root, check=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True)
+            subprocess.run(["git", "add", ".governance", "commands"], cwd=root, check=True)
+            subprocess.run(
+                ["git", "commit", "-m", "FIX-000: clean baseline"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            context = vw.discover_governance_context(root)
+
+        self.assertEqual(context["status"], "NOT_FOUND")
+        self.assertTrue(any("git log --oneline -5" in fact for fact in context["source_facts"]))
+        self.assertFalse(context["auto_continue"])
+
     def test_blocked_fact_disables_auto_continue(self):
         snapshot = "\n".join([
             "# Session Snapshot",
@@ -2510,6 +2600,28 @@ class GovernanceContextDiscoveryTests(unittest.TestCase):
         self.assertIn("blocked fact", context["blocker_state"])
         self.assertFalse(context["auto_continue"])
         self.assertIn("AskUserQuestion", context["interrupt_boundary"])
+
+    def test_open_risk_with_found_item_disables_auto_continue(self):
+        evidence = "\n".join([
+            "# Evidence log",
+            "| EVD-998 | FIX-315 | 维护 | carry-over | FIX-315 next action: resume source facts | local evidence | Developer | 2026-06-07 | G11 | 进行中 |",
+        ])
+        risk = "\n".join([
+            "# Risk log",
+            "| 编号 | 日期 | 风险/阻塞描述 | 所属阶段 | 触发条件 | 影响 | 严重级别 | Owner | 当前状态 | 缓解动作 | 截止日期 | 关联任务 | 备注 |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| RISK-999 | 2026-06-07 | open guard | 维护 | trigger | impact | 高 | Coordinator | 打开 | mitigate | 2026-06-15 | FIX-315 | note |",
+        ])
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_project(root, evidence=evidence, risk=risk)
+
+            context = vw.discover_governance_context(root)
+
+        self.assertEqual(context["status"], "FOUND")
+        self.assertIn("FIX-315", context["detected_item"])
+        self.assertIn("open risk guard", context["blocker_state"])
+        self.assertFalse(context["auto_continue"])
 
     def test_check_requires_source_facts_for_found_context(self):
         broken_context = {
@@ -2542,10 +2654,13 @@ class GovernanceContextDiscoveryTests(unittest.TestCase):
         self.assertTrue(any("open risk must disable auto-continue" in issue for issue in issues))
 
     def test_governance_context_command_accepts_target_fixture_not_found(self):
-        args = argparse.Namespace(fixture="project/e2e-test-project", fail_on_issues=True)
-        buf = io.StringIO()
-        with redirect_stdout(buf):
-            vw.cmd_governance_context(args)
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_project(root)
+            args = argparse.Namespace(fixture=str(root), fail_on_issues=True)
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                vw.cmd_governance_context(args)
 
         output = buf.getvalue()
         self.assertIn("Governance Context Discovery", output)

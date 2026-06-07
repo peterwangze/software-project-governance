@@ -4170,9 +4170,18 @@ def _empty_governance_context(root=None):
     checked = [
         ".governance/plan-tracker.md",
         ".governance/session-snapshot.md",
+        ".governance/evidence-log.md",
         ".governance/risk-log.md",
     ]
-    present = [path for path in checked if (root / path).is_file()]
+    if _is_context_git_repo_root(root):
+        checked.extend([
+            "git status --short",
+            "git log --oneline -5",
+        ])
+    present = [
+        path for path in checked
+        if path.startswith("git ") or (root / path).is_file()
+    ]
     source = (
         "checked " + ", ".join(present)
         if present
@@ -4354,6 +4363,245 @@ def _parse_snapshot_context_tasks(root):
     return tasks
 
 
+GOVERNANCE_CONTEXT_EVIDENCE_UNFINISHED_MARKERS = (
+    "进行中",
+    "未完成",
+    "carry-over",
+    "next action",
+    "resume",
+    "阻塞",
+    "blocked",
+    "待确认",
+    "待处理",
+    "待启动",
+    "pending",
+    "in progress",
+)
+
+GOVERNANCE_CONTEXT_EVIDENCE_CLOSED_MARKERS = (
+    "已完成",
+    "完成",
+    "闭环",
+    "已关闭",
+    "关闭",
+    "approved",
+    "closed",
+    "resolved",
+)
+
+GOVERNANCE_CONTEXT_EVIDENCE_TASK_HEADERS = (
+    "对应任务",
+    "任务id",
+    "任务 id",
+    "关联任务",
+    "task id",
+)
+
+GOVERNANCE_CONTEXT_EVIDENCE_STATE_HEADERS = (
+    "状态",
+    "备注",
+    "证据类型",
+    "status",
+    "note",
+    "remark",
+    "type",
+)
+
+
+def _evidence_header_index(header, header_markers):
+    for idx, cell in enumerate(header or []):
+        normalized = re.sub(r"\s+", " ", cell.strip().lower())
+        compact = normalized.replace(" ", "")
+        for marker in header_markers:
+            marker_lower = marker.lower()
+            marker_compact = marker_lower.replace(" ", "")
+            if marker_lower in normalized or marker_compact in compact:
+                return idx
+    return None
+
+
+def _extract_evidence_task_id(task_cell):
+    task_ids = re.findall(r"\b([A-Z]+-\d+)\b", task_cell or "")
+    for task_id in task_ids:
+        if not task_id.startswith("EVD-"):
+            return task_id
+    return None
+
+
+def _evidence_state_cells(cells, header):
+    state_indices = []
+    if header:
+        for idx, cell in enumerate(header):
+            normalized = re.sub(r"\s+", " ", cell.strip().lower())
+            compact = normalized.replace(" ", "")
+            if any(
+                marker.lower() in normalized or marker.lower().replace(" ", "") in compact
+                for marker in GOVERNANCE_CONTEXT_EVIDENCE_STATE_HEADERS
+            ):
+                state_indices.append(idx)
+    else:
+        # Canonical evidence rows are:
+        # 编号 | 对应任务 ID | 阶段 | 证据类型 | ... | 关联 Gate | 备注
+        state_indices.extend(idx for idx in (3, 9, 10) if idx < len(cells))
+    return [cells[idx] for idx in state_indices if idx < len(cells)]
+
+
+def _is_closed_evidence_state(text):
+    lowered = (text or "").lower()
+    if "未完成" in lowered:
+        return False
+    return any(marker in lowered for marker in GOVERNANCE_CONTEXT_EVIDENCE_CLOSED_MARKERS)
+
+
+def _is_active_evidence_state(text):
+    lowered = (text or "").lower()
+    return any(marker.lower() in lowered for marker in GOVERNANCE_CONTEXT_EVIDENCE_UNFINISHED_MARKERS)
+
+
+def _parse_evidence_context_tasks(root):
+    evidence_path = _context_file(root, ".governance/evidence-log.md")
+    if not evidence_path.is_file():
+        return []
+    tasks = []
+    header = []
+    for line in evidence_path.read_text(encoding="utf-8").split("\n"):
+        stripped = line.strip()
+        if not stripped or "---" in stripped:
+            continue
+        if not stripped.startswith("|"):
+            continue
+        cells = _governance_table_cells(stripped)
+        if not cells:
+            continue
+        if cells[0] in {"编号", "Evidence ID"} or any("对应任务" in cell or "Task ID" in cell for cell in cells):
+            header = cells
+            continue
+        task_idx = _evidence_header_index(header, GOVERNANCE_CONTEXT_EVIDENCE_TASK_HEADERS)
+        if task_idx is None and len(cells) > 1 and re.match(r"^EVD-\d+\b", cells[0]):
+            task_idx = 1
+        if task_idx is None or task_idx >= len(cells):
+            continue
+        task_id = _extract_evidence_task_id(cells[task_idx])
+        if not task_id:
+            continue
+        state_cells = _evidence_state_cells(cells, header)
+        state_text = " | ".join(state_cells)
+        if any(_is_closed_evidence_state(cell) for cell in state_cells):
+            continue
+        if not any(_is_active_evidence_state(cell) for cell in state_cells):
+            continue
+        lowered = state_text.lower()
+        status = "unfinished evidence fact"
+        if any(marker in lowered for marker in ("阻塞", "blocked", "待确认")):
+            status = "blocked evidence fact"
+        elif any(marker in lowered for marker in ("carry-over", "resume", "next action")):
+            status = "carry-over evidence fact"
+        tasks.append(_context_task(
+            task_id,
+            _extract_task_title_from_line(stripped, task_id),
+            status,
+            ".governance/evidence-log.md",
+            stripped,
+            priority=_normalize_priority(stripped),
+        ))
+    return tasks
+
+
+def _context_git_toplevel(root):
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def _is_context_git_repo_root(root):
+    toplevel = _context_git_toplevel(root)
+    if not toplevel:
+        return False
+    try:
+        return Path(toplevel).resolve() == Path(root).resolve()
+    except OSError:
+        return False
+
+
+def _run_context_git(root, args):
+    if not _is_context_git_repo_root(root):
+        return None
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(root)] + args,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout
+
+
+def _is_context_product_file(path):
+    normalized = (path or "").strip().replace("\\", "/")
+    if not normalized or normalized.startswith(".governance/"):
+        return False
+    if "/" not in normalized and normalized in PLATFORM_ENTRY_FILES:
+        return True
+    return any(normalized == pattern.rstrip("/") or normalized.startswith(pattern) for pattern in PRODUCT_CODE_PATTERNS)
+
+
+def _parse_git_status_context_tasks(root):
+    stdout = _run_context_git(root, ["status", "--short", "--untracked-files=all"])
+    if stdout is None:
+        return []
+    product_lines = []
+    for raw_line in stdout.splitlines():
+        line = raw_line.rstrip()
+        if not line:
+            continue
+        path_part = line[3:] if len(line) > 3 else line
+        if " -> " in path_part:
+            path_part = path_part.split(" -> ", 1)[1]
+        path_part = path_part.strip().strip('"').replace("\\", "/")
+        if _is_context_product_file(path_part):
+            product_lines.append(line.strip())
+    if not product_lines:
+        return []
+    raw_summary = "; ".join(product_lines[:5])
+    return [_context_task(
+        "GIT-WORKTREE",
+        f"uncommitted product file changes ({len(product_lines)} file(s))",
+        "uncommitted product work",
+        "git status --short",
+        raw_summary,
+        kind="git",
+    )]
+
+
+def _parse_recent_commit_context_facts(root, limit=5):
+    stdout = _run_context_git(root, ["log", "--oneline", f"-{limit}"])
+    if stdout is None:
+        return []
+    facts = []
+    for line in stdout.splitlines():
+        stripped = line.strip()
+        if stripped:
+            facts.append(stripped)
+    return facts
+
+
 def _parse_context_open_risks(root):
     risk_path = _context_file(root, ".governance/risk-log.md")
     if not risk_path.is_file():
@@ -4395,9 +4643,12 @@ def _dedupe_context_items(items):
 def discover_governance_context(root=None):
     """Discover unfinished user work from recorded facts only."""
     root = _context_root(root)
+    recent_commit_facts = _parse_recent_commit_context_facts(root)
     items = _dedupe_context_items(
         _parse_plan_context_tasks(root)
         + _parse_snapshot_context_tasks(root)
+        + _parse_evidence_context_tasks(root)
+        + _parse_git_status_context_tasks(root)
     )
     risks = _parse_context_open_risks(root)
     if not items:
@@ -4407,6 +4658,8 @@ def discover_governance_context(root=None):
             context["blocker_state"] = f"open risk(s) recorded: {risk_ids}"
             context["source_facts"].append(f".governance/risk-log.md: {risk_ids}")
             context["_items"] = risks
+        if recent_commit_facts:
+            context["source_facts"].append(f"git log --oneline -5: {recent_commit_facts[0]}")
         return context
 
     first = items[0]
@@ -4422,6 +4675,8 @@ def discover_governance_context(root=None):
     ]
     if risks:
         source_facts.append(f".governance/risk-log.md: open risk(s) {risk_text}")
+    if recent_commit_facts:
+        source_facts.append(f"git log --oneline -5: {recent_commit_facts[0]}")
 
     if blocked:
         blocker_state = f"blocked fact recorded for {blocked[0]['task_id']}"

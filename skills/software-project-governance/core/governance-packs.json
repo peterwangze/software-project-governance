@@ -48,14 +48,16 @@
         "check-governance",
         "check-hot-fact-source",
         "check-governance-packs",
-        "check-readme-pack-guidance"
+        "check-readme-pack-guidance",
+        "check-governance-pack-status"
       ],
       "validation_commands": [
         "python skills/software-project-governance/infra/verify_workflow.py verify",
         "python skills/software-project-governance/infra/verify_workflow.py governance-context --fixture project/e2e-test-project --fail-on-issues",
         "python skills/software-project-governance/infra/verify_workflow.py check-governance --fail-on-issues",
         "python skills/software-project-governance/infra/verify_workflow.py check-governance-packs --fail-on-issues",
-        "python skills/software-project-governance/infra/verify_workflow.py check-readme-pack-guidance --fail-on-issues"
+        "python skills/software-project-governance/infra/verify_workflow.py check-readme-pack-guidance --fail-on-issues",
+        "python skills/software-project-governance/infra/verify_workflow.py check-governance-pack-status --fail-on-issues"
       ],
       "no_overclaim_boundary": [
         "Pack enabled does not mean governance review passed.",
@@ -131,16 +133,19 @@
         "check-version-consistency",
         "check-runtime-readiness-matrix",
         "check-first-session-measurement",
-        "check-projection-sync"
+        "check-projection-sync",
+        "check-governance-pack-status"
       ],
       "validation_commands": [
         "python skills/software-project-governance/infra/verify_workflow.py check-release --version 0.44.0 --require-changelog --runtime-adapters",
         "python skills/software-project-governance/infra/verify_workflow.py check-runtime-readiness-matrix --fail-on-issues",
-        "python skills/software-project-governance/infra/verify_workflow.py check-first-session-measurement --fail-on-issues"
+        "python skills/software-project-governance/infra/verify_workflow.py check-first-session-measurement --fail-on-issues",
+        "python skills/software-project-governance/infra/verify_workflow.py check-governance-pack-status --fail-on-issues"
       ],
       "no_overclaim_boundary": [
         "Release checks do not claim official approval.",
-        "Runtime readiness matrix states PASS/BLOCKED/DEGRADED facts only."
+        "Runtime readiness matrix states PASS/BLOCKED/DEGRADED facts only.",
+        "Pack enabled does not mean task evidence, independent review, quality gates, release gates, official approval, marketplace approval, universal/full runtime support, or 1.0.0 production-ready."
       ]
     },
     {

@@ -75,8 +75,23 @@ This slice is enough for users and reviewers to see modular boundaries while avo
 | FIX-112 | P0 | Context-aware governance resume. | `/governance`/status explores current context and turns unfinished user work into a concrete handoff: detected item, source facts, blocker state, next action, and whether it can auto-continue without interrupting the user. Implemented as `governance-context`/TOOL-027 and `check-governance` Check 28g; no facts must produce `not found` and `do not invent`. | `python -m unittest skills/software-project-governance/infra/tests/test_verify_workflow.py -k GovernanceContextDiscovery -v`; `python skills/software-project-governance/infra/verify_workflow.py governance-context --fixture project/e2e-test-project --fail-on-issues`; `python skills/software-project-governance/infra/verify_workflow.py check-governance --fail-on-issues` |
 | FIX-109 | P0 | README and first-run pack guidance. | README maps lite/standard/strict to `governance-core`, `quality-gates`, `release-governance`, `agent-team`, and `enterprise` without replacing profiles. | `python -m unittest skills/software-project-governance/infra/tests/test_verify_workflow.py -k ReadmePackGuidance -v`; `python skills/software-project-governance/infra/verify_workflow.py check-readme-pack-guidance --fail-on-issues`; `python skills/software-project-governance/infra/verify_workflow.py check-governance --fail-on-issues` |
 | FIX-110 | P1 | Manifest and cleanup integration. | `core/manifest.json` declares `governance-pack-registry` in `canonical_product_artifacts`, keeps `governance-packs.json` as an explicit product file, and declares cleanup scope so cleanup and manifest checks keep the registry shipped and git-tracked. | `python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues`; `python skills/software-project-governance/infra/verify_workflow.py verify`; `python skills/software-project-governance/infra/verify_workflow.py check-governance-packs --fail-on-issues` |
-| FIX-111 | P1 | Pack-aware status/release docs boundary. | Status or docs can summarize enabled/default packs and release docs include pack boundary/no-overclaim wording. | `python -m unittest skills.software-project-governance.infra.tests.test_verify_workflow -k GovernancePackStatus -v`; `python skills/software-project-governance/infra/verify_workflow.py check-release --version 0.44.0 --require-changelog --runtime-adapters` |
+| FIX-111 | P1 | Pack-aware status/release docs boundary. | Status or docs can summarize enabled/default packs and release docs include pack boundary/no-overclaim wording. | `python -m unittest skills/software-project-governance/infra/tests/test_verify_workflow.py -k GovernancePackStatus -v`; `python skills/software-project-governance/infra/verify_workflow.py check-governance-pack-status --fail-on-issues`; `python skills/software-project-governance/infra/verify_workflow.py check-governance --fail-on-issues` |
 | REL-020 | P0 | Release 0.44.0. | Version bump, changelog, release docs, release review, commit, push, tag, and CI success. | `python skills/software-project-governance/infra/verify_workflow.py check-release --version 0.44.0 --require-changelog --runtime-adapters`; `python -m unittest skills/software-project-governance/infra/tests/test_verify_workflow.py -v` |
+
+## Pack boundary/no-overclaim detail
+
+Release readiness and `check-release` must report pack boundary as a detail, not as approval. Packs are capability modules; profiles are governance intensity presets. Pack membership is not task evidence.
+
+`pack enabled` does not mean task evidence exists.
+`pack enabled` does not mean independent review passed.
+`pack enabled` does not mean quality gates passed.
+`pack enabled` does not mean release gates passed.
+`pack enabled` does not mean official approval was granted.
+`pack enabled` does not mean marketplace approval was granted.
+`pack enabled` does not mean universal/full runtime support is verified.
+`pack enabled` does not mean 1.0.0 production-ready.
+
+The release-governance pack can own release checks, changelog checks, rollback readiness, runtime matrix and first-session measurement guards, but it cannot convert pack membership into release evidence. Release evidence still comes from the explicit release checklist, validation command output, independent review, changelog/version facts, quality gates where applicable, and conservative RISK-036 boundary language.
 
 ## Acceptance Signals
 

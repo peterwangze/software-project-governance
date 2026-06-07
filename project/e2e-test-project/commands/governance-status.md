@@ -41,12 +41,13 @@
 
 ### Step 3.6: Delivery Trust Snapshot
 - 输出一个 compact `Delivery Trust Snapshot`，作为 `/governance` Scenario F 的 first-run/status 可观察信号。
-- Snapshot MUST 包含：Resume state、Carry-over、Open risks、Unfinished work、Source facts、Blocker state、Auto-continue、Interrupt boundary、Hooks、Goal、Stage、Gate/setup status、Risk、Evidence、Next action、Verification signal、No-overclaim boundary。
+- Snapshot MUST 包含：Resume state、Carry-over、Open risks、Unfinished work、Source facts、Blocker state、Auto-continue、Interrupt boundary、Hooks、Goal、Stage、Gate/setup status、Risk、Evidence、Next action、Pack summary、Default packs、Enabled packs、Pack boundary、Verification signal、No-overclaim boundary。
 - 已有 `.governance/` 状态时，`Resume state` MUST 明确写出 `Existing governance state detected`，并展示 carry-over active task count、open risk count/details、hook state 和 next action。
 - `Unfinished work` MUST come from recorded facts only: `.governance/plan-tracker.md` active rows/version roadmap, `.governance/session-snapshot.md` carry-over or next priorities, `.governance/risk-log.md`, and current local context. Every detected item MUST have `Source facts`; if no facts exist, output `not found` and `do not invent` new work.
 - `Blocker state` MUST distinguish no blocker recorded, open risk guard, and blocked facts. `Auto-continue` MUST be `yes` only when unfinished work is fact-backed and no blocker/critical decision boundary is recorded. `Interrupt boundary` MUST state when AskUserQuestion is required.
 - 已有 `.governance/` 状态时，输出 MUST NOT 暗示或建议重新初始化；重新初始化提示只允许出现在 `.governance/plan-tracker.md` 缺失的错误路径。
 - First-run preset guidance MUST 展示：`lite is the recommended first-run default`；`standard is for team delivery`；`strict is for regulated/high-risk work`。
+- Pack summary MUST 展示：`Packs are capability modules; profiles are governance intensity presets.`；Default packs MUST 至少列出 `governance-core`、`quality-gates`、`release-governance`、`agent-team`、`enterprise`；Enabled packs MUST 来自 profile/default pack summary 或明确显示 unknown/not configured；Pack boundary MUST 说明 pack membership/`pack enabled` 不是 task evidence、independent review、quality gates、release gates、official approval、marketplace approval、universal/full runtime support 或 1.0.0 production-ready proof。
 - Snapshot 前 MUST NOT 提超过 3 个 non-critical questions；剩余 deferred non-critical fields MUST 记录为 assumptions。
 - `Verification signal` MUST 是一个可运行或可观察的本地信号，例如 `python skills/software-project-governance/infra/verify_workflow.py status`。
 - `No-overclaim boundary` MUST 明确说明该 snapshot 只是 demo/local-only 本地治理状态信号、不需要 external credentials，且不声明 official approval、marketplace approval、universal/full runtime support 或 1.0.0 production-ready。
@@ -74,7 +75,7 @@
 | last_gate_conclusion | 字符串 | 最近 Gate 结论 | "G11 通过" |
 | last_review_date | 字符串 | 最近复盘日期 | "2026-04-25" |
 | gate_status_table | 表格 | G1~G11 状态表 | 见模板 |
-| delivery_trust_snapshot | 面板 | Resume state/Carry-over/Open risks/Unfinished work/Source facts/Blocker state/Auto-continue/Interrupt boundary/Hooks/Goal/Stage/Gate/setup status/Risk/Evidence/Next action/Preset guidance/Question budget/Verification signal/No-overclaim boundary | 见模板 |
+| delivery_trust_snapshot | 面板 | Resume state/Carry-over/Open risks/Unfinished work/Source facts/Blocker state/Auto-continue/Interrupt boundary/Hooks/Goal/Stage/Gate/setup status/Risk/Evidence/Next action/Preset guidance/Question budget/Pack summary/Default packs/Enabled packs/Pack boundary/Verification signal/No-overclaim boundary | 见模板 |
 
 ### 输出模板
 
@@ -110,6 +111,10 @@
 │  Next action: {next_action}                          │
 │  Preset guidance: lite is the recommended first-run default; standard is for team delivery; strict is for regulated/high-risk work │
 │  Question budget: no more than 3 non-critical questions before snapshot; deferred non-critical fields become assumptions │
+│  Pack summary: Packs are capability modules; profiles are governance intensity presets. │
+│  Default packs: lite -> `governance-core`; standard -> `governance-core`, `quality-gates`, `release-governance`, `agent-team`; strict -> `governance-core`, `quality-gates`, `release-governance`, `agent-team`, `enterprise` │
+│  Enabled packs: {enabled_pack_summary_or_unknown}       │
+│  Pack boundary: pack membership and `pack enabled` are not task evidence, independent review, quality gates, release gates, official approval, marketplace approval, universal/full runtime support, or 1.0.0 production-ready proof │
 │  Verification signal: {verification_signal}          │
 │  No-overclaim boundary: {no_overclaim_boundary}      │
 ├─────────────────────────────────────────────────────┤
@@ -140,11 +145,13 @@ Gate 状态列的合法值：
 - [ ] 所有必要字段均出现在输出中
 - [ ] 输出必须明确包含 `permission_mode` 或 `操作权限模式`，不得只依赖项目配置原始字段顺序偶然展示
 - [ ] 输出必须明确包含 `Delivery Trust Snapshot`
-- [ ] Delivery Trust Snapshot 必须包含 Resume state、Existing governance state detected、Carry-over、Open risks、Unfinished work、Source facts、Blocker state、Auto-continue、Interrupt boundary、Hooks、Goal、Stage、Gate/setup status、Risk、Evidence、Next action、Preset guidance、Question budget、Verification signal、No-overclaim boundary
+- [ ] Delivery Trust Snapshot 必须包含 Resume state、Existing governance state detected、Carry-over、Open risks、Unfinished work、Source facts、Blocker state、Auto-continue、Interrupt boundary、Hooks、Goal、Stage、Gate/setup status、Risk、Evidence、Next action、Preset guidance、Question budget、Pack summary、Default packs、Enabled packs、Pack boundary、Verification signal、No-overclaim boundary
 - [ ] Unfinished work 必须基于 Source facts；无事实时必须输出 `not found` 和 `do not invent`
 - [ ] `python skills/software-project-governance/infra/verify_workflow.py governance-context --fixture project/e2e-test-project --fail-on-issues` 必须可通过
 - [ ] 已有 `.governance/` 项目不得提示重新初始化；必须给出 resume next action
 - [ ] First-run preset guidance 必须明确 `lite` 是首次运行推荐默认，`standard` 用于 team delivery，`strict` 用于 regulated/high-risk work
+- [ ] Pack summary 必须明确 `Packs are capability modules; profiles are governance intensity presets.`，并至少展示 `governance-core`、`quality-gates`、`release-governance`、`agent-team`、`enterprise`
+- [ ] Pack boundary 必须明确 pack membership/`pack enabled` 不等于 task evidence、independent review、quality gates、release gates、official approval、marketplace approval、universal/full runtime support 或 1.0.0 production-ready
 - [ ] Snapshot 前不得提出超过 3 个 non-critical questions；deferred non-critical fields 必须记录为 assumptions
 - [ ] No-overclaim boundary 必须避免声明 official approval、marketplace approval、universal/full runtime support 或 1.0.0 production-ready
 - [ ] completion_rate 为百分比字符串或 "N/A"

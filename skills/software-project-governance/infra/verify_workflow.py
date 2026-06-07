@@ -1967,7 +1967,74 @@ GOVERNANCE_PACK_KNOWN_CHECKS = {
     "check-archive-integrity",
     "check-governance-packs",
     "check-readme-pack-guidance",
+    "check-governance-pack-status",
 }
+GOVERNANCE_PACK_STATUS_DOC_PATHS = [
+    "commands/governance-status.md",
+    "commands/governance.md",
+    "project/e2e-test-project/commands/governance-status.md",
+    "project/e2e-test-project/commands/governance.md",
+]
+GOVERNANCE_PACK_STATUS_REQUIRED_TOKENS = [
+    "Pack summary",
+    "Default packs",
+    "Enabled packs",
+    "Pack boundary",
+    "Packs are capability modules; profiles are governance intensity presets.",
+    "`governance-core`",
+    "`quality-gates`",
+    "`release-governance`",
+    "`agent-team`",
+    "`enterprise`",
+]
+GOVERNANCE_PACK_STATUS_BOUNDARY_TOKENS = [
+    "pack membership",
+    "pack enabled",
+    "task evidence",
+    "independent review",
+    "quality gates",
+    "release gates",
+    "official approval",
+    "marketplace approval",
+    "universal/full runtime support",
+    "1.0.0 production-ready",
+]
+GOVERNANCE_PACK_RELEASE_BOUNDARY_PATH = "docs/requirements/composable-governance-packs-0.44.0.md"
+GOVERNANCE_PACK_RELEASE_BOUNDARY_TOKENS = [
+    "Pack boundary/no-overclaim detail",
+    "Pack membership is not task evidence.",
+    "`pack enabled` does not mean task evidence exists.",
+    "`pack enabled` does not mean independent review passed.",
+    "`pack enabled` does not mean quality gates passed.",
+    "`pack enabled` does not mean release gates passed.",
+    "`pack enabled` does not mean official approval was granted.",
+    "`pack enabled` does not mean marketplace approval was granted.",
+    "`pack enabled` does not mean universal/full runtime support is verified.",
+    "`pack enabled` does not mean 1.0.0 production-ready.",
+]
+GOVERNANCE_PACK_STATUS_FORBIDDEN_OVERCLAIMS = [
+    "pack enabled means task evidence exists",
+    "pack enabled means independent review passed",
+    "pack enabled means quality gates passed",
+    "pack enabled means release gates passed",
+    "pack enabled means official approval",
+    "pack enabled means marketplace approval",
+    "pack enabled means universal runtime support",
+    "pack enabled means full runtime support",
+    "pack enabled means 1.0.0 production-ready",
+    "pack membership means task evidence exists",
+    "pack membership means independent review passed",
+    "pack membership means quality gates passed",
+    "pack membership means release gates passed",
+    "pack membership means official approval",
+    "pack membership means marketplace approval",
+    "pack membership means universal runtime support",
+    "pack membership means full runtime support",
+    "pack membership means 1.0.0 production-ready",
+    "pack membership is completion evidence",
+    "pack membership is task evidence",
+    "pack enabled is task evidence",
+]
 GOVERNANCE_CONTEXT_REQUIRED_FIELDS = [
     "status",
     "detected_item",
@@ -2381,9 +2448,9 @@ def check_governance_packs(root=None):
     if unknown_ids:
         failures.append(f"{display}: unknown pack id(s): {', '.join(sorted(set(unknown_ids)))}")
 
-    all_text = "\n".join(_governance_pack_text_values(registry)).lower()
+    all_text_lines = "\n".join(_governance_pack_text_values(registry)).splitlines()
     for phrase in GOVERNANCE_PACK_FORBIDDEN_OVERCLAIMS:
-        if phrase in all_text:
+        if any(phrase in line.lower() and not _line_has_negation(line) for line in all_text_lines):
             failures.append(f"{display}: forbidden overclaim wording `{phrase}`")
 
     return failures
@@ -2450,6 +2517,103 @@ def check_readme_pack_guidance(root=None):
         if any(phrase in line.lower() and not any(marker in line.lower() for marker in negation_markers)
                for line in readme_lines):
             failures.append(f"{display}: forbidden README pack overclaim `{phrase}`")
+
+    return failures
+
+
+def _line_has_negation(line):
+    negation_markers = (
+        "not",
+        "no ",
+        "does not",
+        "do not",
+        "is not",
+        "are not",
+        "isn't",
+        "不是",
+        "不等于",
+        "不得",
+        "不能",
+        "不声明",
+        "avoid",
+        "avoids",
+        "避免",
+        "未",
+        "没有",
+    )
+    lower = line.lower()
+    return any(marker in lower for marker in negation_markers)
+
+
+def _append_pack_overclaim_issues(failures, path, content, root):
+    display = _display_path(path, root)
+    lines = content.splitlines()
+    for phrase in GOVERNANCE_PACK_STATUS_FORBIDDEN_OVERCLAIMS:
+        for line in lines:
+            if phrase in line.lower() and not _line_has_negation(line):
+                failures.append(f"{display}: forbidden pack status overclaim `{phrase}`")
+                break
+
+    direct_claims = [
+        "officially approved",
+        "official approval granted",
+        "marketplace approved",
+        "marketplace approval granted",
+        "universal runtime support is verified",
+        "full runtime support is verified",
+        "1.0.0 production-ready",
+    ]
+    for phrase in direct_claims:
+        for line in lines:
+            if phrase in line.lower() and not _line_has_negation(line):
+                failures.append(f"{display}: forbidden pack status overclaim `{phrase}`")
+                break
+
+
+def _append_missing_status_boundary_issues(failures, path, content, root):
+    display = _display_path(path, root)
+    boundary_lines = [line for line in content.splitlines() if "Pack boundary:" in line]
+    if not boundary_lines:
+        failures.append(f"{display}: missing status pack boundary line")
+        return
+
+    for index, line in enumerate(boundary_lines, start=1):
+        lower = line.lower()
+        for token in GOVERNANCE_PACK_STATUS_BOUNDARY_TOKENS:
+            if token not in lower:
+                failures.append(
+                    f"{display}: status pack boundary line {index} missing token `{token}`"
+                )
+
+
+def check_governance_pack_status(root=None):
+    """FIX-111: status and release surfaces must disclose pack boundaries without overclaim."""
+    root = root or ROOT
+    failures = []
+
+    for rel_path in GOVERNANCE_PACK_STATUS_DOC_PATHS:
+        path = root / rel_path
+        display = _display_path(path, root)
+        if not path.exists():
+            failures.append(f"{display}: missing pack-aware status contract")
+            continue
+        content = path.read_text(encoding="utf-8")
+        for token in GOVERNANCE_PACK_STATUS_REQUIRED_TOKENS:
+            if token not in content:
+                failures.append(f"{display}: missing pack-aware status token `{token}`")
+        _append_missing_status_boundary_issues(failures, path, content, root)
+        _append_pack_overclaim_issues(failures, path, content, root)
+
+    release_path = root / GOVERNANCE_PACK_RELEASE_BOUNDARY_PATH
+    release_display = _display_path(release_path, root)
+    if not release_path.exists():
+        failures.append(f"{release_display}: missing release pack boundary document")
+    else:
+        release_content = release_path.read_text(encoding="utf-8")
+        for token in GOVERNANCE_PACK_RELEASE_BOUNDARY_TOKENS:
+            if token not in release_content:
+                failures.append(f"{release_display}: missing release pack boundary token `{token}`")
+        _append_pack_overclaim_issues(failures, release_path, release_content, root)
 
     return failures
 
@@ -3467,6 +3631,19 @@ def check_release_readiness(
         "issues": first_session_issues,
     }
     issues.extend(f"first-session measurement: {issue}" for issue in first_session_issues)
+
+    pack_status_issues = check_governance_pack_status()
+    details["governance_pack_status"] = {
+        "pass": not pack_status_issues,
+        "issues": pack_status_issues,
+        "boundary": (
+            "packs are capability modules; profiles are intensity presets; "
+            "pack enabled or membership is not task evidence, independent review, "
+            "quality gate, release gate, official approval, marketplace approval, "
+            "universal/full runtime support, or 1.0.0 production-ready proof"
+        ),
+    }
+    issues.extend(f"governance pack status: {issue}" for issue in pack_status_issues)
 
     adapter_issues = check_agent_adapter_contract(run_runtime=run_runtime_adapters)
     details["agent_adapters"] = {
@@ -10787,6 +10964,20 @@ def cmd_check_governance(args):
         print("│  [PASS] README maps first-run profiles to packs without replacing profiles or overclaiming.")
     print("└──────────────────────────────────────────────────────┘")
 
+    # ── 28i. Governance Pack Status/Release Boundary Guard (FIX-111) ──
+    print("\n┌─ Check 28i: Governance Pack Status Boundary (FIX-111) ┐")
+    pack_status_issues = check_governance_pack_status()
+    if pack_status_issues:
+        all_issues += len(pack_status_issues)
+        print(f"│  [FAIL] {len(pack_status_issues)} governance pack status/release issue(s):")
+        for issue in pack_status_issues[:10]:
+            print(f"│    - {issue}")
+        if len(pack_status_issues) > 10:
+            print(f"│    ... and {len(pack_status_issues) - 10} more")
+    else:
+        print("│  [PASS] Status and release surfaces expose pack boundaries without overclaiming.")
+    print("└──────────────────────────────────────────────────────┘")
+
     # ── Summary ──
     print(f"\n┌─ Governance Health Summary ──────────────────────────┐")
     if all_issues == 0:
@@ -13462,6 +13653,8 @@ def cmd_check_release(args):
     for label, detail in result["details"].items():
         status = "PASS" if detail["pass"] else "FAIL"
         print(f"  [{status}] {label.replace('_', ' ')}")
+        if detail.get("boundary"):
+            print(f"    boundary: {detail['boundary']}")
         for gate_result in detail.get("results", []):
             gate_status = "PASS" if gate_result["pass"] else "FAIL"
             exit_code = gate_result["exit_code"]
@@ -13946,6 +14139,27 @@ def cmd_check_readme_pack_guidance(args):
     print()
 
 
+def cmd_check_governance_pack_status(args):
+    """Run pack-aware status and release boundary guard."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    issues = check_governance_pack_status()
+    print("\n=== Governance Pack Status Boundary Check ===")
+    if issues:
+        print(f"  Result: FAILED — {len(issues)} issue(s)")
+        for issue in issues[:20]:
+            print(f"    - {issue}")
+        if len(issues) > 20:
+            print(f"    ... and {len(issues) - 20} more")
+        if getattr(args, "fail_on_issues", False):
+            sys.exit(1)
+    else:
+        print("  Result: PASSED — status and release surfaces expose pack boundaries without overclaim")
+    print()
+
+
 def cmd_check_product_success_contracts(args):
     """Run Product Success Contract guard independently."""
     try:
@@ -14371,6 +14585,14 @@ def main():
     crpg_p.add_argument("--fail-on-issues", action="store_true",
                         help="Exit with non-zero code if README pack guidance is incomplete or overclaims")
 
+    # check-governance-pack-status (FIX-111)
+    cgps_p = subparsers.add_parser(
+        "check-governance-pack-status",
+        help="Check status/release pack summary boundaries and no-overclaim wording",
+    )
+    cgps_p.add_argument("--fail-on-issues", action="store_true",
+                        help="Exit with non-zero code if status or release pack boundaries are incomplete")
+
     # check-product-success-contracts (FIX-088)
     cpsc_p = subparsers.add_parser(
         "check-product-success-contracts",
@@ -14476,6 +14698,7 @@ def main():
         "check-first-session-measurement": cmd_check_first_session_measurement,
         "check-governance-packs": cmd_check_governance_packs,
         "check-readme-pack-guidance": cmd_check_readme_pack_guidance,
+        "check-governance-pack-status": cmd_check_governance_pack_status,
         "check-product-success-contracts": cmd_check_product_success_contracts,
         "check-acceptance-contracts": cmd_check_acceptance_contracts,
         "check-quality-budget": cmd_check_quality_budget,

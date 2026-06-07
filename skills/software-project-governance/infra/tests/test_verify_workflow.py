@@ -20,7 +20,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import ExitStack, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -2183,6 +2183,142 @@ class ReadmePackGuidanceTests(unittest.TestCase):
             self.assertTrue(any("forbidden README pack overclaim `1.0.0 production-ready`" in issue for issue in issues))
 
 
+class GovernancePackStatusTests(unittest.TestCase):
+    """FIX-111: status and release surfaces must expose pack boundaries without overclaim."""
+
+    def _write_valid_pack_status_project(self, root):
+        root = Path(root)
+        status_text = "\n".join([
+            "# governance-status",
+            "",
+            "Delivery Trust Snapshot",
+            "Pack summary: Packs are capability modules; profiles are governance intensity presets.",
+            "Default packs: lite -> `governance-core`; standard -> `governance-core`, `quality-gates`, `release-governance`, `agent-team`; strict -> `governance-core`, `quality-gates`, `release-governance`, `agent-team`, `enterprise`.",
+            "Enabled packs: derive from the selected profile or explicit pack registry facts; show unknown when not configured.",
+            "Pack boundary: pack membership and `pack enabled` are not task evidence, independent review, quality gates, release gates, official approval, marketplace approval, universal/full runtime support, or 1.0.0 production-ready proof.",
+        ])
+        governance_text = status_text + "\nScenario F uses the same Pack summary fields.\n"
+        for rel_path, content in {
+            "commands/governance-status.md": status_text,
+            "commands/governance.md": governance_text,
+            "project/e2e-test-project/commands/governance-status.md": status_text,
+            "project/e2e-test-project/commands/governance.md": governance_text,
+        }.items():
+            path = root / rel_path
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+
+        release_doc = root / "docs/requirements/composable-governance-packs-0.44.0.md"
+        release_doc.parent.mkdir(parents=True, exist_ok=True)
+        release_doc.write_text("\n".join([
+            "# Pack release boundary",
+            "",
+            "## Pack boundary/no-overclaim detail",
+            "",
+            "Pack membership is not task evidence.",
+            "`pack enabled` does not mean task evidence exists.",
+            "`pack enabled` does not mean independent review passed.",
+            "`pack enabled` does not mean quality gates passed.",
+            "`pack enabled` does not mean release gates passed.",
+            "`pack enabled` does not mean official approval was granted.",
+            "`pack enabled` does not mean marketplace approval was granted.",
+            "`pack enabled` does not mean universal/full runtime support is verified.",
+            "`pack enabled` does not mean 1.0.0 production-ready.",
+        ]), encoding="utf-8")
+
+    def test_governance_pack_status_accepts_current_files(self):
+        self.assertEqual(vw.check_governance_pack_status(vw.ROOT), [])
+
+    def test_governance_pack_status_rejects_missing_status_pack_field(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_valid_pack_status_project(root)
+            status_path = root / "commands/governance-status.md"
+            status_path.write_text(
+                status_path.read_text(encoding="utf-8").replace("Pack summary", "Capability summary"),
+                encoding="utf-8",
+            )
+
+            issues = vw.check_governance_pack_status(root)
+            self.assertTrue(any("missing pack-aware status token `Pack summary`" in issue for issue in issues))
+
+    def test_governance_pack_status_rejects_pack_enabled_overclaim(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_valid_pack_status_project(root)
+            path = root / "docs/requirements/composable-governance-packs-0.44.0.md"
+            path.write_text(
+                path.read_text(encoding="utf-8") + "\npack enabled means release gates passed\n",
+                encoding="utf-8",
+            )
+
+            issues = vw.check_governance_pack_status(root)
+            self.assertTrue(any("forbidden pack status overclaim `pack enabled means release gates passed`" in issue for issue in issues))
+
+    def test_governance_pack_status_rejects_weakened_status_boundary_even_when_release_doc_is_strong(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_valid_pack_status_project(root)
+            strong_boundary = (
+                "Pack boundary: pack membership and `pack enabled` are not task evidence, independent review, "
+                "quality gates, release gates, official approval, marketplace approval, "
+                "universal/full runtime support, or 1.0.0 production-ready proof."
+            )
+            weak_boundary = "Pack boundary: pack membership is not completion evidence."
+            for rel_path in vw.GOVERNANCE_PACK_STATUS_DOC_PATHS:
+                path = root / rel_path
+                path.write_text(path.read_text(encoding="utf-8").replace(strong_boundary, weak_boundary), encoding="utf-8")
+
+            issues = vw.check_governance_pack_status(root)
+            self.assertTrue(any("status pack boundary line 1 missing token `task evidence`" in issue for issue in issues))
+            self.assertTrue(any("status pack boundary line 1 missing token `independent review`" in issue for issue in issues))
+            self.assertTrue(any("status pack boundary line 1 missing token `quality gates`" in issue for issue in issues))
+            self.assertTrue(any("status pack boundary line 1 missing token `release gates`" in issue for issue in issues))
+            self.assertTrue(any("status pack boundary line 1 missing token `official approval`" in issue for issue in issues))
+            self.assertTrue(any("status pack boundary line 1 missing token `marketplace approval`" in issue for issue in issues))
+            self.assertTrue(any("status pack boundary line 1 missing token `universal/full runtime support`" in issue for issue in issues))
+            self.assertTrue(any("status pack boundary line 1 missing token `1.0.0 production-ready`" in issue for issue in issues))
+
+    def test_governance_pack_status_rejects_weak_template_boundary_even_with_strong_contract_line(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_valid_pack_status_project(root)
+            strong_boundary = (
+                "Pack boundary: pack membership and `pack enabled` are not task evidence, independent review, "
+                "quality gates, release gates, official approval, marketplace approval, "
+                "universal/full runtime support, or 1.0.0 production-ready proof."
+            )
+            weak_template_boundary = "Pack boundary: pack membership is not completion evidence."
+            for rel_path in vw.GOVERNANCE_PACK_STATUS_DOC_PATHS:
+                path = root / rel_path
+                content = path.read_text(encoding="utf-8")
+                path.write_text(
+                    "\n".join([content, strong_boundary, weak_template_boundary]),
+                    encoding="utf-8",
+                )
+
+            issues = vw.check_governance_pack_status(root)
+            self.assertTrue(any("status pack boundary line 3 missing token `pack enabled`" in issue for issue in issues))
+            self.assertTrue(any("status pack boundary line 3 missing token `task evidence`" in issue for issue in issues))
+            self.assertTrue(any("status pack boundary line 3 missing token `independent review`" in issue for issue in issues))
+            self.assertTrue(any("status pack boundary line 3 missing token `quality gates`" in issue for issue in issues))
+            self.assertTrue(any("status pack boundary line 3 missing token `release gates`" in issue for issue in issues))
+            self.assertTrue(any("status pack boundary line 3 missing token `official approval`" in issue for issue in issues))
+            self.assertTrue(any("status pack boundary line 3 missing token `marketplace approval`" in issue for issue in issues))
+            self.assertTrue(any("status pack boundary line 3 missing token `universal/full runtime support`" in issue for issue in issues))
+            self.assertTrue(any("status pack boundary line 3 missing token `1.0.0 production-ready`" in issue for issue in issues))
+
+    def test_governance_pack_status_rejects_missing_release_boundary(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_valid_pack_status_project(root)
+            path = root / "docs/requirements/composable-governance-packs-0.44.0.md"
+            path.write_text(path.read_text(encoding="utf-8").replace("`pack enabled` does not mean release gates passed.", ""), encoding="utf-8")
+
+            issues = vw.check_governance_pack_status(root)
+            self.assertTrue(any("missing release pack boundary token ``pack enabled` does not mean release gates passed.`" in issue for issue in issues))
+
+
 class GovernanceContextDiscoveryTests(unittest.TestCase):
     """FIX-112: governance resume handoff must be fact-based and not-found safe."""
 
@@ -2330,6 +2466,9 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
             patch.object(vw, "check_version_consistency", return_value=[]),
             patch.object(vw, "check_release_readiness_fact_source", return_value=[]),
             patch.object(vw, "check_hot_fact_source_consistency", return_value=[]),
+            patch.object(vw, "check_runtime_readiness_matrix", return_value=[]),
+            patch.object(vw, "check_first_session_measurement", return_value=[]),
+            patch.object(vw, "check_governance_pack_status", return_value=[]),
             patch.object(vw, "check_agent_adapter_contract", return_value=[]),
             patch.object(vw, "check_projection_sync", return_value={
                 "pass": True,
@@ -2357,12 +2496,18 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
             }),
         ]
 
+    def _apply_release_patches(self, patches):
+        stack = ExitStack()
+        mocks = [stack.enter_context(patch_item) for patch_item in patches]
+        return stack, mocks
+
     def test_check_release_readiness_passes_when_all_underlying_checks_pass(self):
         with tempfile.TemporaryDirectory() as td:
             changelog = Path(td) / "CHANGELOG.md"
             changelog.write_text("# Changelog\n\n## [0.35.0]\n", encoding="utf-8")
             patches = self._clean_release_patches()
-            with patches[0], patches[1], patches[2], patches[3] as adapter_mock, patches[4], patches[5], patches[6]:
+            stack, mocks = self._apply_release_patches(patches)
+            with stack:
                 result = vw.check_release_readiness(
                     version="0.35.0",
                     require_changelog=True,
@@ -2370,14 +2515,18 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
                     changelog_path=changelog,
                 )
             self.assertTrue(result["pass"])
+            adapter_mock = mocks[6]
             adapter_mock.assert_called_once_with(run_runtime=True)
+            self.assertIn("governance_pack_status", result["details"])
+            self.assertIn("pack enabled", result["details"]["governance_pack_status"]["boundary"])
 
     def test_check_release_readiness_requires_changelog_version_when_requested(self):
         with tempfile.TemporaryDirectory() as td:
             changelog = Path(td) / "CHANGELOG.md"
             changelog.write_text("# Changelog\n\n## [0.34.0]\n", encoding="utf-8")
             patches = self._clean_release_patches()
-            with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
+            stack, _mocks = self._apply_release_patches(patches)
+            with stack:
                 result = vw.check_release_readiness(
                     version="0.35.0",
                     require_changelog=True,
@@ -2395,7 +2544,9 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
             "total_files_scanned": 1,
             "total_refs": 1,
         }
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patch.object(vw, "check_cross_references", return_value=cross_ref_result), patches[6]:
+        patches[8] = patch.object(vw, "check_cross_references", return_value=cross_ref_result)
+        stack, _mocks = self._apply_release_patches(patches)
+        with stack:
             result = vw.check_release_readiness()
         self.assertFalse(result["pass"])
         self.assertTrue(any("dangling reference" in issue for issue in result["issues"]))
@@ -2414,7 +2565,8 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
                 "command": " ".join(str(part) for part in command),
             }
 
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
+        stack, _mocks = self._apply_release_patches(patches)
+        with stack:
             result = vw.check_release_readiness(
                 run_execution_gates=True,
                 execution_gate_runner=fake_runner,
@@ -2436,7 +2588,8 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
                 "command": " ".join(str(part) for part in command),
             }
 
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
+        stack, _mocks = self._apply_release_patches(patches)
+        with stack:
             result = vw.check_release_readiness(
                 run_execution_gates=True,
                 execution_gate_runner=fake_runner,

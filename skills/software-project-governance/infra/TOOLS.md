@@ -35,6 +35,7 @@
 | TOOL-027 | Governance Context Discovery | script + command contract | `infra/verify_workflow.py governance-context` + `check-governance` Check 28g | `/governance`/status 恢复已有项目、跨会话继续工作或 context-aware resume 验收时 | 立项/测试/发布/运营/维护 | 是 |
 | TOOL-028 | README Pack Guidance guard | script + README contract | `infra/verify_workflow.py check-readme-pack-guidance` + `check-governance` Check 28h | README first-run pack guidance、pack registry 或 no-overclaim boundary 变更后 | 立项/测试/发布/维护 | 是 |
 | TOOL-029 | Manifest Product Artifact guard | manifest + cleanup integration | `core/manifest.json` + `infra/cleanup.py` + `infra/verify_workflow.py check-manifest-consistency` | canonical product artifact、cleanup scope 或 pack registry shipping boundary 变更后 | 测试/发布/维护 | 是 |
+| TOOL-030 | Governance Pack Status Boundary guard | script + command contract + release detail | `infra/verify_workflow.py check-governance-pack-status` + `check-governance` Check 28i + `check-release` governance pack status detail | `/governance`/status Delivery Trust Snapshot pack summary、default/enabled pack wording 或 release pack no-overclaim boundary 变更后 | 测试/发布/维护 | 是 |
 
 ## 工具详情
 
@@ -91,7 +92,7 @@
 ### TOOL-006：校验脚本
 
 - **文件**：`infra/verify_workflow.py`
-- **子命令**：`verify`（全量校验）、`status`（治理状态摘要）、`gate <G1-G11>`（Gate 检查）、`gates`（全部 Gate 状态）、`stage <stage-id>`（阶段状态）、`stages`（全部阶段状态）、`check-governance --fail-on-issues`（治理健康检查）、`e2e-check`（E2E proxy + fixture 分层检查）、`check-version-consistency`、`check-manifest-consistency`、`check-deterministic-scaffolds`、`check-interruption-policy`、`generate-deterministic-scaffold`、`check-locks`、`check-archive-integrity`
+- **子命令**：`verify`（全量校验）、`status`（治理状态摘要）、`gate <G1-G11>`（Gate 检查）、`gates`（全部 Gate 状态）、`stage <stage-id>`（阶段状态）、`stages`（全部阶段状态）、`check-governance --fail-on-issues`（治理健康检查）、`e2e-check`（E2E proxy + fixture 分层检查）、`check-version-consistency`、`check-manifest-consistency`、`check-governance-packs`、`check-readme-pack-guidance`、`check-governance-pack-status`、`check-deterministic-scaffolds`、`check-interruption-policy`、`generate-deterministic-scaffold`、`check-locks`、`check-archive-integrity`
 - **输入**：无（自动读取项目文件）
 - **输出**：校验结果（PASSED/FAILED）+ 治理状态摘要
 - **触发条件**：工作流资产变更后、Gate 检查时、定期巡检
@@ -331,6 +332,16 @@
 - **依赖**：`core/governance-packs.json`、`check-governance-packs`、`infra/cleanup.py`
 - **被以下子工作流使用**：测试（testing）、发布（release）、维护（maintenance）
 
+### TOOL-030：Governance Pack Status Boundary guard
+
+- **文件**：`infra/verify_workflow.py` + source/fixture `/governance-status` and `/governance` command contracts + `docs/requirements/composable-governance-packs-0.44.0.md`
+- **子命令**：`check-governance-pack-status [--fail-on-issues]`
+- **输入**：Delivery Trust Snapshot pack summary/default packs/enabled packs/pack boundary contract，以及 0.44.0 release pack boundary/no-overclaim detail
+- **输出**：status/release surfaces 是否说明 packs 是 capability modules、profiles 是 intensity presets；是否展示 `governance-core`、`quality-gates`、`release-governance`、`agent-team`、`enterprise`；是否阻断 pack enabled/pack membership 被宣称为 evidence、review、quality gate、release gate、official approval、marketplace approval、universal/full runtime support 或 1.0.0 production-ready
+- **触发条件**：修改 `/governance`、`/governance-status`、0.44.0 pack requirements、release readiness/check-release detail 或 pack boundary wording 后
+- **依赖**：`check-governance` Check 28i、`check-release` governance pack status detail、`core/governance-packs.json`
+- **被以下子工作流使用**：测试（testing）、发布（release）、维护（maintenance）
+
 ## 工具与子工作流的关系矩阵
 
 | 工具 | 立项 | 调研 | 选型 | 环境 | 架构 | 开发 | 测试 | CI/CD | 发布 | 运营 | 维护 |
@@ -362,6 +373,7 @@
 | Governance Context Discovery | ● | ○ | | | ○ | ○ | ● | | ● | ● | ● |
 | README Pack Guidance guard | ● | | | | ○ | | ● | | ● | | ● |
 | Manifest Product Artifact guard | | | | | ○ | | ● | | ● | | ● |
+| Governance Pack Status Boundary guard | | | | | ○ | | ● | | ● | | ● |
 
 > ● 主要使用者  ○ 可选用
 

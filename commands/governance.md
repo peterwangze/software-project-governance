@@ -410,10 +410,11 @@ P1 (警告):
 **检测条件**：一切正常——`.governance/` 存在、健康、版本最新、无 snapshot、无异常
 
 **展示内容**（比 `governance-status` 更丰富）：
-- Delivery Trust Snapshot（Resume state、Carry-over、Open risks、Unfinished work、Source facts、Blocker state、Auto-continue、Interrupt boundary、Hooks、Goal、Stage、Gate/setup status、Risk、Evidence、Next action、Preset guidance、Question budget、Verification signal、No-overclaim boundary）
+- Delivery Trust Snapshot（Resume state、Carry-over、Open risks、Unfinished work、Source facts、Blocker state、Auto-continue、Interrupt boundary、Hooks、Goal、Stage、Gate/setup status、Risk、Evidence、Next action、Preset guidance、Question budget、Pack summary、Default packs、Enabled packs、Pack boundary、Verification signal、No-overclaim boundary）
 - Existing-project resume signal：已有 `.governance/` 状态时 MUST 明确显示 `Existing governance state detected`，展示 carry-over active task count、open risk count/details、hook state 和 next action
 - Context-aware resume handoff：MUST run the same factual discovery contract as `python skills/software-project-governance/infra/verify_workflow.py governance-context --fixture project/e2e-test-project --fail-on-issues`。`Unfinished work` MUST be backed by `Source facts`; if no facts exist, output `not found` and `do not invent` new work.
 - First-run preset guidance：MUST 展示 `lite is the recommended first-run default`；`standard is for team delivery`；`strict is for regulated/high-risk work`
+- Pack summary：MUST 展示 `Packs are capability modules; profiles are governance intensity presets.`；Default packs MUST 至少展示 `governance-core`、`quality-gates`、`release-governance`、`agent-team`、`enterprise`；Enabled packs MUST 从 profile/default pack summary 或 registry facts 得出，无法得出时显示 unknown/not configured；Pack boundary MUST 说明 pack membership/`pack enabled` 不替代 task evidence、independent review、quality gates、release gates、official approval、marketplace approval、universal/full runtime support 或 1.0.0 production-ready
 - Question budget：Snapshot 前 MUST NOT 提超过 3 个 non-critical questions；deferred non-critical fields MUST 记录为 assumptions
 - 项目配置摘要（名称、profile、trigger_mode、permission_mode、版本、阶段）
 - Gate 状态表（G1-G11，含通过日期和关键证据）
@@ -460,6 +461,10 @@ Evidence: {evidence_status}
 Next action: {next_action}
 Preset guidance: lite is the recommended first-run default; standard is for team delivery; strict is for regulated/high-risk work
 Question budget: no more than 3 non-critical questions before snapshot; deferred non-critical fields become assumptions
+Pack summary: Packs are capability modules; profiles are governance intensity presets.
+Default packs: lite -> `governance-core`; standard -> `governance-core`, `quality-gates`, `release-governance`, `agent-team`; strict -> `governance-core`, `quality-gates`, `release-governance`, `agent-team`, `enterprise`
+Enabled packs: {enabled_pack_summary_or_unknown}
+Pack boundary: pack membership and `pack enabled` are not task evidence, independent review, quality gates, release gates, official approval, marketplace approval, universal/full runtime support, or 1.0.0 production-ready proof
 Verification signal: {runnable_or_observable_signal}
 No-overclaim boundary: local/demo-only snapshot; no external credentials required; no official approval, marketplace approval, universal/full runtime support, or 1.0.0 production-ready claim
 ```

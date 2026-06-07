@@ -225,6 +225,52 @@ class CleanCheckoutBoundaryTests(unittest.TestCase):
         ]
         self.assertEqual(governance_snippet_paths, [])
 
+    def test_version_consistency_fails_when_required_snippets_block_missing(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "skills/software-project-governance/infra").mkdir(parents=True)
+            (root / "skills/software-project-governance/core").mkdir(parents=True)
+            (root / ".claude-plugin").mkdir()
+            (root / ".codex-plugin").mkdir()
+            (root / "project").mkdir()
+
+            (root / "skills/software-project-governance/SKILL.md").write_text(
+                "---\nversion: 9.9.9\n---\n",
+                encoding="utf-8",
+            )
+            (root / "skills/software-project-governance/core/manifest.json").write_text(
+                json.dumps({"version": "9.9.9"}),
+                encoding="utf-8",
+            )
+            (root / ".claude-plugin/plugin.json").write_text(
+                json.dumps({"version": "9.9.9"}),
+                encoding="utf-8",
+            )
+            (root / ".claude-plugin/marketplace.json").write_text(
+                json.dumps({"plugins": [{"version": "9.9.9"}]}),
+                encoding="utf-8",
+            )
+            (root / ".codex-plugin/plugin.json").write_text(
+                json.dumps({"version": "9.9.9"}),
+                encoding="utf-8",
+            )
+            (root / "project/CHANGELOG.md").write_text(
+                "## [9.9.9]\n",
+                encoding="utf-8",
+            )
+            (root / "skills/software-project-governance/infra/verify_workflow.py").write_text(
+                "REQUIRED_SNIPPETS = {'x': ['9.8.7']}\n# sentinel missing\n",
+                encoding="utf-8",
+            )
+
+            with patch.object(vw, "ROOT", root):
+                issues = vw.check_version_consistency()
+
+        self.assertTrue(
+            any("REQUIRED_SNIPPETS block not found" in issue for issue in issues),
+            issues,
+        )
+
     def test_default_verify_does_not_run_release_fact_source_health_check(self):
         with patch.object(vw, "check_files", return_value=[]), \
              patch.object(vw, "check_snippets", return_value=[]), \
@@ -3070,12 +3116,12 @@ class E2ECommandMatrixTests(unittest.TestCase):
             for name in ("evidence-log.md", "decision-log.md", "risk-log.md", "session-snapshot.md"):
                 (governance_dir / name).write_text("# fixture\n", encoding="utf-8")
             (governance_dir / "plan-tracker.md").write_text(
-                "- **工作流版本**: 0.43.0\n"
+                "- **工作流版本**: 0.44.0\n"
                 "- **操作权限模式**: default-confirm\n",
                 encoding="utf-8",
             )
             (skill_dir / "SKILL.md").write_text(
-                "---\nversion: 0.43.0\n---\nCoordinator\nAgent Team\n",
+                "---\nversion: 0.44.0\n---\nCoordinator\nAgent Team\n",
                 encoding="utf-8",
             )
             trust_snapshot_contract = (

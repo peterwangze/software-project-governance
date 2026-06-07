@@ -2,6 +2,40 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.44.0] — 2026-06-07
+
+### 0.44.0 — Composable Governance Packs
+
+0.44.0 将治理能力从单一整包叙事推进为 registry-first 的 Composable Governance Packs：先建立可检查的 pack registry、README 首跑映射、manifest/cleanup 保护、上下文恢复能力和 status/release 边界，而不进行物理拆包。现有 `lite` / `standard` / `strict` profiles 保持为治理强度预设；packs 是能力模块。 本 release 不声明 official approval、marketplace approval、universal/full runtime support、external first-session pilot success、Codex Desktop marketplace-management E2E PASS 或 1.0.0 production-ready；RISK-036 继续打开，0.45.0~0.46.0 仍承载评测、Desktop marketplace E2E 与官方提交准备链。
+
+### 新增
+
+- **AUDIT-108**: 完成 0.44.0 Composable Governance Packs 需求拆解，确定 registry-first/no physical split 最小切片，并规划 `governance-core`、`quality-gates`、`release-governance`、`agent-team`、`enterprise` 五类能力包。
+- **AUDIT-109 / FIX-112**: 新增 context-aware governance resume：`governance-context`、`/governance`/status contract、target fixture 与 Check 28g 基于 plan/session/risk/evidence/git facts 发现 unfinished work；无事实时必须输出 `not found` / `do not invent`。
+- **FIX-108**: 新增 canonical `skills/software-project-governance/core/governance-packs.json`、`check-governance-packs`、Check 28f 与 TOOL-026，阻断缺字段、未知/重复 pack、缺引用文件、未知检查和 pack overclaim。
+- **FIX-109**: README 中英文 5-Minute Start 新增 packs vs profiles 说明和首跑映射：lite -> `governance-core`；standard -> `governance-core` / `quality-gates` / `release-governance` / `agent-team`；strict -> 五个 pack 全部启用。
+- **FIX-110**: `core/manifest.json` 将 pack registry 声明为 canonical product artifact，并新增 manifest/cleanup scope guard 与 TOOL-029，防止 registry 漏发、未跟踪或被 cleanup 范围漂移误删。
+- **FIX-111**: `/governance`、`/governance-status` 与 release readiness 新增 Pack summary、Default packs、Enabled packs、Pack boundary；新增 `check-governance-pack-status`、Check 28i 与 TOOL-030，逐行阻断把 pack membership/enablement 包装成任务证据、审查通过、质量门禁、发布门禁、官方/市场批准、全量 runtime 支持或 1.0.0 readiness。
+- **REL-020**: 版本声明、CHANGELOG、release checklist、rollback plan、feature flag 状态、target fixture/projection 版本和 hook @version 同步到 0.44.0。
+
+### 验证
+
+- `check-governance-packs --fail-on-issues` PASS。
+- `governance-context --fixture project/e2e-test-project --fail-on-issues` PASS。
+- `check-readme-pack-guidance --fail-on-issues` PASS。
+- `check-manifest-consistency --fail-on-issues` PASS。
+- `check-governance-pack-status --fail-on-issues` PASS。
+- 完整 unittest PASS：351/351。
+- `check-governance --fail-on-issues` PASS。
+- `check-version-consistency` 与 `check-release --version 0.44.0 --require-changelog --runtime-adapters` 作为 REL-020 发布门禁。
+
+### Pack 与 Release 边界
+
+- 0.44.0 是 registry-first/no physical split；安装包仍向后兼容现有入口。
+- Pack enabled / pack membership 不是任务证据、独立审查、质量门禁、发布门禁、official approval、marketplace approval、universal/full runtime support 或 1.0.0 production-ready 证明。
+- `governance-core` 的 context resume 只基于事实源承接 unfinished work；没有事实时不得编造。
+- 0.44.0 不改变 0.43.0 runtime/readiness matrix 和 first-session measurement 事实边界：外部 first-session pilot 仍未被本 release 声明为成功。
+
 ## [0.43.0] — 2026-06-05
 
 ### 0.43.0 — Cross-Harness E2E Closure

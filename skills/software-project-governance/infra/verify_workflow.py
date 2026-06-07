@@ -741,16 +741,16 @@ REQUIRED_SNIPPETS = {
         "## [0.5.0]",
     ],
     ROOT / ".claude-plugin/plugin.json": [
-        "0.43.0",
+        "0.44.0",
     ],
     ROOT / ".claude-plugin/marketplace.json": [
-        "0.43.0",
+        "0.44.0",
     ],
     ROOT / ".codex-plugin/plugin.json": [
-        "0.43.0",
+        "0.44.0",
     ],
     ROOT / "skills/software-project-governance/core/manifest.json": [
-        "0.43.0",
+        "0.44.0",
     ],
 }
 
@@ -5775,11 +5775,20 @@ def check_version_consistency():
     # These must match the source of truth.
     snippet_self_path = ROOT / "skills/software-project-governance/infra/verify_workflow.py"
     snippet_self_content = snippet_self_path.read_text(encoding="utf-8")
-    # Match only bare quoted version strings like "0.26.0" (excludes
-    # CHANGELOG entries like "## [0.7.1]" which use a different format)
-    # Exclude comment lines to avoid matching example versions in comments
-    non_comment_lines = [l for l in snippet_self_content.split('\n') if not l.strip().startswith('#')]
+    # Match only version literals in REQUIRED_SNIPPETS. Historical artifact
+    # paths and fixture needles intentionally keep their original versions.
+    snippets_match = re.search(
+        r"REQUIRED_SNIPPETS\s*=\s*\{(?P<body>.*?)\n\}\n\n\n# ── Manifest-based REQUIRED_FILES builder",
+        snippet_self_content,
+        re.S,
+    )
+    if not snippets_match:
+        issues.append("[FAIL] verify_workflow.py snippet: REQUIRED_SNIPPETS block not found")
+        snippet_search_text = ""
+    else:
+        snippet_search_text = snippets_match.group("body")
     snippet_versions = set()
+    non_comment_lines = [l for l in snippet_search_text.split('\n') if not l.strip().startswith('#')]
     for line in non_comment_lines:
         snippet_versions.update(re.findall(r'"(\d+\.\d+\.\d+)"', line))
     for sv in snippet_versions:
@@ -12522,12 +12531,12 @@ def _e2e_target_fixture_checks(e2e_dir):
         {
             "label": "target plan-tracker project config",
             "path": governance_dir / "plan-tracker.md",
-            "needles": ["工作流版本", "0.43.0", "操作权限模式", "default-confirm"],
+            "needles": ["工作流版本", "0.44.0", "操作权限模式", "default-confirm"],
         },
         {
             "label": "target workflow skill version",
             "path": e2e_dir / "skills" / "software-project-governance" / "SKILL.md",
-            "needles": ["version: 0.43.0", "Coordinator", "Agent Team"],
+            "needles": ["version: 0.44.0", "Coordinator", "Agent Team"],
         },
         {
             "label": "target /governance route contract",

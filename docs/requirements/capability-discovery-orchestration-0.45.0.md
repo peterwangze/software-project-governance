@@ -91,6 +91,28 @@ It does not need to own every implementation capability:
 
 0.45.0 should prove that the workflow can discover and explain capability choices. It does not need to fully automate every chosen external capability.
 
+## FIX-115 Capability Context Contract
+
+`capability-context [--fixture <project-root>] [--fail-on-issues]` is a read-only diagnostic command. It emits a capability selection trace for the current repository or fixture without writing files, installing packages, invoking browser state, calling network APIs, committing, pushing, or claiming that an external capability was executed.
+
+Required output fields:
+
+| Field | Contract |
+| --- | --- |
+| `scenario` | The capability selection scenario being diagnosed. FIX-115 uses `capability-context`. |
+| `host_id` | The detected local host/project surface, backed by package metadata, entry files, or an explicit fixture fallback. |
+| `available_capabilities` | Candidate capabilities supported by local source facts. Catalog-only or runtime-status fact sources must remain `DEGRADED` unless separate runtime execution evidence exists. |
+| `selected_capability` | The selected read-only diagnostic path for this scenario, including `status`, `selection_reason`, and local source facts. |
+| `source_facts` | Files or observed local facts that justify the host, candidates, selection, and unavailable preferred paths. |
+| `rejected_alternatives` | Better or possible options that are blocked, not found, not supported, outside scope, or too risky. |
+| `degradation` | `AVAILABLE`, `DEGRADED`, or `BLOCKED` result for the selection trace. Preferred capability unavailable facts must produce `DEGRADED`, `BLOCKED`, `NOT_SUPPORTED`, or `NOT_FOUND` rather than pretending success. |
+| `side_effect_boundary` | Read-only local inspection boundary and explicit non-effects. |
+| `validation_command` | Exact command for checking the trace: `python skills/software-project-governance/infra/verify_workflow.py capability-context --fail-on-issues`. |
+| `review_requirement` | Product-code closure still requires independent Code Reviewer approval; the diagnostic output is not self-review. |
+| `no_overclaim_boundary` | Explicitly forbids automatic global best-tool selection, treating a catalog entry as runtime PASS, treating runtime readiness facts as selected capability execution, and treating diagnostic selection trace as successful external execution. |
+
+FIX-115 intentionally does not implement the full external registry. That belongs to FIX-116. When `skills/software-project-governance/core/capability-registry.json` is absent, the trace must select a local diagnostic fallback and mark the result `DEGRADED` rather than claiming automatic global best-tool selection.
+
 ## 0.46.0 Scope
 
 0.46.0 should connect the capability model to ecosystem and official-submission materials.

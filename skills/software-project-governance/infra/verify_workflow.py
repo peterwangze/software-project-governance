@@ -2,6 +2,7 @@ from pathlib import Path
 import sys
 import re
 import argparse
+import ast
 import json
 import locale
 import os
@@ -2055,6 +2056,36 @@ GOVERNANCE_CONTEXT_SNAPSHOT_SECTIONS = {
     "Next session priorities",
 }
 GOVERNANCE_CONTEXT_BLOCKED_MARKERS = ("blocked", "阻塞", "卡住", "等待", "待确认")
+CAPABILITY_CONTEXT_REQUIRED_FIELDS = [
+    "scenario",
+    "host_id",
+    "available_capabilities",
+    "selected_capability",
+    "source_facts",
+    "rejected_alternatives",
+    "degradation",
+    "side_effect_boundary",
+    "validation_command",
+    "review_requirement",
+    "no_overclaim_boundary",
+]
+CAPABILITY_CONTEXT_ALLOWED_STATUSES = {
+    "AVAILABLE",
+    "BLOCKED",
+    "DEGRADED",
+    "NOT_SUPPORTED",
+    "NOT_FOUND",
+    "RESEARCH_ONLY",
+}
+CAPABILITY_CONTEXT_DEGRADED_STATUSES = {"BLOCKED", "DEGRADED", "NOT_SUPPORTED", "NOT_FOUND"}
+CAPABILITY_CONTEXT_DOC_PATH = Path("docs/requirements/capability-discovery-orchestration-0.45.0.md")
+CAPABILITY_CONTEXT_TOOLS_PATH = Path("skills/software-project-governance/infra/TOOLS.md")
+CAPABILITY_CONTEXT_NO_OVERCLAIM_TOKENS = [
+    "automatic global best-tool selection",
+    "catalog entry",
+    "runtime PASS",
+    "diagnostic selection trace",
+]
 GOVERNANCE_PACK_BOUNDARY_TOKENS = [
     "No official approval",
     "No marketplace approval",
@@ -4307,6 +4338,280 @@ def _empty_governance_context(root=None):
     }
 
 
+def _capability_context_path(root, relative_path):
+    return _context_root(root) / relative_path
+
+
+def _capability_file_fact(root, relative_path, label):
+    path = _capability_context_path(root, relative_path)
+    if path.is_file():
+        return True, f"{relative_path.as_posix()}: {label} present"
+    return False, f"{relative_path.as_posix()}: {label} missing"
+
+
+def _capability_text_contains(root, relative_path, token):
+    path = _capability_context_path(root, relative_path)
+    if not path.is_file():
+        return False
+    return token in path.read_text(encoding="utf-8")
+
+
+def _capability_cli_registration_fact(root, relative_path):
+    path = _capability_context_path(root, relative_path)
+    if not path.is_file():
+        return False, f"{relative_path.as_posix()}: `capability-context` CLI registration missing (file not found)"
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except SyntaxError as exc:
+        return False, f"{relative_path.as_posix()}: `capability-context` CLI registration unreadable ({exc})"
+
+    top_level_functions = [
+        node for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+    ]
+    has_handler = any(node.name == "cmd_capability_context" for node in top_level_functions)
+    main_functions = [node for node in top_level_functions if node.name == "main"]
+    main_node = main_functions[0] if main_functions else None
+    main_body = list(ast.walk(main_node)) if main_node is not None else []
+
+    has_parser = any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "add_parser"
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+        and node.args[0].value == "capability-context"
+        for node in main_body
+    )
+    has_dispatch = False
+    for node in main_body:
+        if isinstance(node, ast.Dict):
+            for key, value in zip(node.keys, node.values):
+                if (
+                    isinstance(key, ast.Constant)
+                    and key.value == "capability-context"
+                    and isinstance(value, ast.Name)
+                    and value.id == "cmd_capability_context"
+                ):
+                    has_dispatch = True
+                    break
+        elif (
+            isinstance(node, ast.Assign)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "cmd_capability_context"
+        ):
+            for target in node.targets:
+                if (
+                    isinstance(target, ast.Subscript)
+                    and isinstance(target.slice, ast.Constant)
+                    and target.slice.value == "capability-context"
+                ):
+                    has_dispatch = True
+                    break
+
+    registered = has_handler and has_parser and has_dispatch
+    detail = (
+        f"{relative_path.as_posix()}: `capability-context` CLI registration "
+        f"top_level_handler={'yes' if has_handler else 'no'}, "
+        f"main={'yes' if main_node is not None else 'no'}, "
+        f"main_subparser={'yes' if has_parser else 'no'}, "
+        f"main_dispatch={'yes' if has_dispatch else 'no'}"
+    )
+    return registered, detail
+
+
+def _capability_host_id(root):
+    root = _context_root(root)
+    host_facts = []
+    if (root / ".codex-plugin/plugin.json").is_file():
+        host_facts.append(".codex-plugin/plugin.json")
+    if (root / ".claude-plugin/plugin.json").is_file():
+        host_facts.append(".claude-plugin/plugin.json")
+    if (root / "AGENTS.md").is_file():
+        host_facts.append("AGENTS.md")
+    if (root / "skills/software-project-governance/SKILL.md").is_file():
+        host_facts.append("software-project-governance skill")
+    if not host_facts:
+        return "local-fixture", ["no host package metadata found; treating target as local fixture"]
+    return "local-governance-repository", [f"host metadata: {', '.join(host_facts)}"]
+
+
+def discover_capability_context(root=None):
+    """Build a fact-backed capability selection trace for the current host."""
+    root = _context_root(root)
+    host_id, host_facts = _capability_host_id(root)
+    verify_rel = Path("skills/software-project-governance/infra/verify_workflow.py")
+    req_rel = CAPABILITY_CONTEXT_DOC_PATH
+    tools_rel = CAPABILITY_CONTEXT_TOOLS_PATH
+    packs_rel = Path("skills/software-project-governance/core/governance-packs.json")
+    runtime_rel = Path("docs/requirements/runtime-readiness-matrix-0.43.0.md")
+    marketplace_rel = Path("docs/requirements/codex-desktop-marketplace-e2e-0.45.0.md")
+    future_registry_rel = Path("skills/software-project-governance/core/capability-registry.json")
+
+    verify_exists, verify_fact = _capability_file_fact(root, verify_rel, "local verification script")
+    req_exists, req_fact = _capability_file_fact(root, req_rel, "0.45.0 capability contract")
+    tools_exists, tools_fact = _capability_file_fact(root, tools_rel, "tool index")
+    packs_exists, packs_fact = _capability_file_fact(root, packs_rel, "internal governance pack registry")
+    runtime_exists, runtime_fact = _capability_file_fact(root, runtime_rel, "runtime/readiness fact matrix")
+    marketplace_exists, marketplace_fact = _capability_file_fact(root, marketplace_rel, "Codex Desktop marketplace-management E2E plan")
+    future_registry_exists, future_registry_fact = _capability_file_fact(root, future_registry_rel, "external capability registry")
+    command_registered, command_fact = _capability_cli_registration_fact(root, verify_rel)
+    tools_registered = _capability_text_contains(root, tools_rel, "TOOL-031")
+
+    source_facts = [
+        *host_facts,
+        verify_fact,
+        req_fact,
+        tools_fact,
+        packs_fact,
+        runtime_fact,
+        marketplace_fact,
+        future_registry_fact,
+    ]
+    source_facts.append(command_fact)
+    source_facts.append(
+        f"{tools_rel.as_posix()}: TOOL-031 {'registered' if tools_registered else 'not found'}"
+    )
+
+    available_capabilities = []
+    if verify_exists:
+        available_capabilities.append({
+            "capability_id": "local.capability-context.cli",
+            "kind": "script",
+            "host_surface": "local shell",
+            "scenario": "capability-context",
+            "status": "AVAILABLE" if command_registered else "DEGRADED",
+            "source_facts": [verify_fact, source_facts[-2]],
+            "selection_reason": "read-only diagnostic can emit the required selection trace from local project facts",
+            "side_effect_boundary": "read-only local files; no writes, network, package install, browser state, or external API calls",
+            "validation_command": "python skills/software-project-governance/infra/verify_workflow.py capability-context --fail-on-issues",
+        })
+    if packs_exists:
+        available_capabilities.append({
+            "capability_id": "internal.governance-packs.catalog",
+            "kind": "fallback",
+            "host_surface": "local repository",
+            "scenario": "governance-pack-boundary",
+            "status": "DEGRADED",
+            "availability_scope": "catalog-only internal governance capability facts; not runtime PASS",
+            "source_facts": [packs_fact],
+            "selection_reason": "useful as a boundary fact source, but not an external capability selector",
+            "side_effect_boundary": "read-only local registry inspection",
+            "validation_command": "python skills/software-project-governance/infra/verify_workflow.py check-governance-packs --fail-on-issues",
+        })
+    if runtime_exists:
+        available_capabilities.append({
+            "capability_id": "runtime.readiness-matrix.fact-source",
+            "kind": "fallback",
+            "host_surface": "local repository",
+            "scenario": "runtime-readiness-facts",
+            "status": "DEGRADED",
+            "availability_scope": "runtime status evidence only; not selected capability execution",
+            "source_facts": [runtime_fact],
+            "selection_reason": "useful for host status facts, but not proof that a tool was executed for this scenario",
+            "side_effect_boundary": "read-only public matrix inspection",
+            "validation_command": "python skills/software-project-governance/infra/verify_workflow.py check-runtime-readiness-matrix --fail-on-issues",
+        })
+
+    preferred_status = "AVAILABLE" if future_registry_exists else "NOT_FOUND"
+    rejected_alternatives = [
+        {
+            "capability_id": "external.capability-registry",
+            "kind": "tool",
+            "host_surface": "future 0.45.0 registry",
+            "status": preferred_status,
+            "source_facts": [future_registry_fact],
+            "rejection_reason": (
+                "FIX-116 registry exists but is outside FIX-115 selection scope"
+                if future_registry_exists
+                else "preferred external capability registry is not implemented in FIX-115"
+            ),
+        },
+        {
+            "capability_id": "host.automatic-best-tool-selection",
+            "kind": "host_builtin",
+            "host_surface": "unspecified host",
+            "status": "NOT_SUPPORTED",
+            "source_facts": ["no source fact in this repository proves automatic global best-tool selection"],
+            "rejection_reason": "would overclaim beyond the diagnostic selection trace contract",
+        },
+        {
+            "capability_id": "codex-desktop.marketplace-management-e2e",
+            "kind": "plugin",
+            "host_surface": "Codex Desktop",
+            "status": "BLOCKED" if marketplace_exists else "NOT_FOUND",
+            "source_facts": [marketplace_fact],
+            "rejection_reason": "marketplace management E2E is planned separately and cannot be treated as available capability execution",
+        },
+    ]
+
+    if verify_exists and command_registered:
+        selected = {
+            "capability_id": "local.capability-context.cli",
+            "kind": "script",
+            "host_surface": "local shell",
+            "status": "DEGRADED" if preferred_status != "AVAILABLE" else "AVAILABLE",
+            "selection_reason": (
+                "selected as a read-only fallback because the preferred external capability registry is unavailable"
+                if preferred_status != "AVAILABLE"
+                else "selected because local command is available for this diagnostic scenario"
+            ),
+            "source_facts": [verify_fact, source_facts[-2]],
+        }
+        degradation_status = "DEGRADED" if preferred_status != "AVAILABLE" else "AVAILABLE"
+        degradation_reason = (
+            "preferred external capability registry is unavailable; using local diagnostic fallback"
+            if preferred_status != "AVAILABLE"
+            else "no degradation required for the diagnostic command"
+        )
+    elif verify_exists:
+        selected = {
+            "capability_id": "local.verify-workflow.script",
+            "kind": "script",
+            "host_surface": "local shell",
+            "status": "DEGRADED",
+            "selection_reason": "`verify_workflow.py` exists but this fixture lacks a registered `capability-context` command",
+            "source_facts": [verify_fact, source_facts[-2]],
+        }
+        degradation_status = "DEGRADED"
+        degradation_reason = "local verification script exists, but the preferred command is not registered"
+    else:
+        selected = {
+            "capability_id": "manual.blocked-fallback",
+            "kind": "fallback",
+            "host_surface": "manual inspection",
+            "status": "BLOCKED",
+            "selection_reason": "no local capability-context command or verification script was found in the target fixture",
+            "source_facts": [verify_fact],
+        }
+        degradation_status = "BLOCKED"
+        degradation_reason = "preferred and fallback diagnostic capabilities are unavailable"
+
+    return {
+        "scenario": "capability-context",
+        "host_id": host_id,
+        "available_capabilities": available_capabilities,
+        "selected_capability": selected,
+        "source_facts": source_facts,
+        "rejected_alternatives": rejected_alternatives,
+        "degradation": {
+            "status": degradation_status,
+            "reason": degradation_reason,
+            "fallback": selected["capability_id"],
+        },
+        "side_effect_boundary": "read-only diagnostic; reads local project files only and performs no writes, commits, network calls, package installs, browser actions, or API calls",
+        "validation_command": "python skills/software-project-governance/infra/verify_workflow.py capability-context --fail-on-issues",
+        "review_requirement": "FIX-115 product-code closure still requires independent Code Reviewer approval; this command output is not self-review",
+        "no_overclaim_boundary": [
+            "Do not claim automatic global best-tool selection.",
+            "Do not treat a catalog entry as runtime PASS.",
+            "Do not treat runtime readiness facts as selected capability execution.",
+            "Do not treat diagnostic selection trace as successful external execution.",
+            "Report BLOCKED, DEGRADED, NOT_SUPPORTED, or NOT_FOUND when preferred capability facts are unavailable.",
+        ],
+    }
+
+
 def _context_task(item_id, title, status, source, raw_line, priority="", kind="task"):
     title = re.sub(r"\s+", " ", (title or "").strip())
     raw_line = re.sub(r"\s+", " ", (raw_line or "").strip())
@@ -4856,6 +5161,133 @@ def check_governance_context(root=None):
         for token in required_doc_tokens:
             if token not in text:
                 failures.append(f"{_display_path(path, root)}: missing context contract token `{token}`")
+    return failures
+
+
+def check_capability_context(root=None):
+    """FIX-115: capability selection trace must be fact-backed and no-overclaim safe."""
+    root = _context_root(root)
+    context = discover_capability_context(root)
+    failures = []
+    for field in CAPABILITY_CONTEXT_REQUIRED_FIELDS:
+        if field not in context:
+            failures.append(f"capability context: missing `{field}`")
+
+    source_facts = context.get("source_facts", [])
+    if not isinstance(source_facts, list) or not source_facts:
+        failures.append("capability context: source_facts must be a non-empty list")
+
+    selected = context.get("selected_capability", {})
+    if not isinstance(selected, dict):
+        failures.append("capability context: selected_capability must be an object")
+        selected = {}
+    selected_status = selected.get("status")
+    if selected_status not in CAPABILITY_CONTEXT_ALLOWED_STATUSES:
+        failures.append("capability context: selected_capability.status must be a known capability status")
+    if not selected.get("source_facts"):
+        failures.append("capability context: selected_capability requires source_facts")
+    selected_id = selected.get("capability_id", "")
+    selected_text = json.dumps(selected, ensure_ascii=False).lower()
+    if (
+        selected_status == "AVAILABLE"
+        and any(token in selected_id for token in ("catalog", "registry", "readiness-matrix"))
+    ):
+        failures.append("capability context: catalog or runtime fact-source cannot be selected as AVAILABLE runtime PASS")
+    if selected_status == "AVAILABLE" and (
+        "catalog-only" in selected_text or "not runtime pass" in selected_text
+    ):
+        failures.append("capability context: catalog-only fact cannot be treated as AVAILABLE")
+
+    available = context.get("available_capabilities", [])
+    if not isinstance(available, list):
+        failures.append("capability context: available_capabilities must be a list")
+        available = []
+    if not available and selected_status not in CAPABILITY_CONTEXT_DEGRADED_STATUSES:
+        failures.append("capability context: no available capabilities requires blocked/degraded selected status")
+    for index, capability in enumerate(available, start=1):
+        if not isinstance(capability, dict):
+            failures.append(f"capability context: available_capabilities[{index}] must be an object")
+            continue
+        status = capability.get("status")
+        if status not in CAPABILITY_CONTEXT_ALLOWED_STATUSES:
+            failures.append(f"capability context: {capability.get('capability_id', index)} has unknown status `{status}`")
+        if not capability.get("source_facts"):
+            failures.append(f"capability context: {capability.get('capability_id', index)} missing source_facts")
+        capability_text = json.dumps(capability, ensure_ascii=False).lower()
+        if status == "AVAILABLE" and (
+            "catalog-only" in capability_text
+            or "not runtime pass" in capability_text
+            or "runtime status evidence only" in capability_text
+        ):
+            failures.append(f"capability context: {capability.get('capability_id', index)} treats catalog/runtime facts as AVAILABLE")
+
+    rejected = context.get("rejected_alternatives", [])
+    if not isinstance(rejected, list) or not rejected:
+        failures.append("capability context: rejected_alternatives must be a non-empty list")
+        rejected = []
+    if not any(item.get("status") in CAPABILITY_CONTEXT_DEGRADED_STATUSES for item in rejected if isinstance(item, dict)):
+        failures.append("capability context: rejected_alternatives must include blocked/degraded/unavailable alternatives")
+    if not any("automatic" in json.dumps(item, ensure_ascii=False).lower() for item in rejected if isinstance(item, dict)):
+        failures.append("capability context: rejected_alternatives must reject automatic best-tool selection overclaim")
+
+    degradation = context.get("degradation", {})
+    if not isinstance(degradation, dict):
+        failures.append("capability context: degradation must be an object")
+        degradation = {}
+    degradation_status = degradation.get("status")
+    if degradation_status not in CAPABILITY_CONTEXT_ALLOWED_STATUSES:
+        failures.append("capability context: degradation.status must be a known capability status")
+    preferred_unavailable = any(
+        isinstance(item, dict)
+        and item.get("capability_id") == "external.capability-registry"
+        and item.get("status") in CAPABILITY_CONTEXT_DEGRADED_STATUSES
+        for item in rejected
+    )
+    if preferred_unavailable and degradation_status not in CAPABILITY_CONTEXT_DEGRADED_STATUSES:
+        failures.append("capability context: unavailable preferred capability must produce degraded or blocked status")
+
+    boundary_text = " ".join(context.get("no_overclaim_boundary", []))
+    for token in CAPABILITY_CONTEXT_NO_OVERCLAIM_TOKENS:
+        if token not in boundary_text:
+            failures.append(f"capability context: no_overclaim_boundary missing `{token}`")
+    if not any(
+        "`capability-context` CLI registration" in fact
+        and "top_level_handler=yes" in fact
+        and "main=yes" in fact
+        and "main_subparser=yes" in fact
+        and "main_dispatch=yes" in fact
+        for fact in source_facts
+    ):
+        failures.append("capability context: missing actual capability-context CLI registration facts")
+    if "read-only" not in context.get("side_effect_boundary", "").lower():
+        failures.append("capability context: side_effect_boundary must state read-only behavior")
+    if "capability-context" not in context.get("validation_command", ""):
+        failures.append("capability context: validation_command must name capability-context")
+    if "independent Code Reviewer" not in context.get("review_requirement", ""):
+        failures.append("capability context: review_requirement must preserve independent review")
+
+    docs = [
+        root / CAPABILITY_CONTEXT_DOC_PATH,
+        root / CAPABILITY_CONTEXT_TOOLS_PATH,
+    ]
+    required_doc_tokens = [
+        "capability-context",
+        "source_facts",
+        "rejected_alternatives",
+        "degradation",
+        "side_effect_boundary",
+        "validation_command",
+        "review_requirement",
+        "no_overclaim_boundary",
+    ]
+    for path in docs:
+        if not path.is_file():
+            failures.append(f"{_display_path(path, root)}: missing capability context contract doc")
+            continue
+        text = path.read_text(encoding="utf-8")
+        for token in required_doc_tokens:
+            if token not in text:
+                failures.append(f"{_display_path(path, root)}: missing capability context token `{token}`")
     return failures
 
 
@@ -6675,6 +7107,62 @@ def cmd_governance_context(args):
             sys.exit(1)
     else:
         print("\n== Governance Context Result: PASSED ==")
+
+
+def cmd_capability_context(args):
+    """Show fact-backed capability context and selection trace."""
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    fixture = getattr(args, "fixture", None)
+    root = ROOT
+    if fixture:
+        fixture_path = Path(fixture)
+        root = fixture_path if fixture_path.is_absolute() else ROOT / fixture_path
+
+    context = discover_capability_context(root)
+    print("== Capability Context Selection Trace ==")
+    print(f"Root: {_display_path(root, ROOT)}")
+    print(f"scenario: {context['scenario']}")
+    print(f"host_id: {context['host_id']}")
+    print("available_capabilities:")
+    for capability in context["available_capabilities"]:
+        print(
+            f"  - {capability['capability_id']} "
+            f"({capability['kind']}, {capability['status']}): {capability['selection_reason']}"
+        )
+    selected = context["selected_capability"]
+    print("selected_capability:")
+    print(f"  capability_id: {selected['capability_id']}")
+    print(f"  kind: {selected['kind']}")
+    print(f"  host_surface: {selected['host_surface']}")
+    print(f"  status: {selected['status']}")
+    print(f"  selection_reason: {selected['selection_reason']}")
+    print("source_facts:")
+    for fact in context["source_facts"]:
+        print(f"  - {fact}")
+    print("rejected_alternatives:")
+    for alternative in context["rejected_alternatives"]:
+        print(
+            f"  - {alternative['capability_id']} "
+            f"({alternative['status']}): {alternative['rejection_reason']}"
+        )
+    print(f"degradation: {context['degradation']['status']} - {context['degradation']['reason']}")
+    print(f"side_effect_boundary: {context['side_effect_boundary']}")
+    print(f"validation_command: {context['validation_command']}")
+    print(f"review_requirement: {context['review_requirement']}")
+    print("no_overclaim_boundary:")
+    for boundary in context["no_overclaim_boundary"]:
+        print(f"  - {boundary}")
+
+    issues = check_capability_context(root)
+    if issues:
+        print("\n== Capability Context Result: FAILED ==")
+        for issue in issues:
+            print(f"  - {issue}")
+        if getattr(args, "fail_on_issues", False):
+            sys.exit(1)
+    else:
+        print("\n== Capability Context Result: PASSED ==")
 
 
 def cmd_first_run_demo(args):
@@ -11478,6 +11966,20 @@ def cmd_check_governance(args):
         print("│  [PASS] Status and release surfaces expose pack boundaries without overclaiming.")
     print("└──────────────────────────────────────────────────────┘")
 
+    # ── 28j. Capability Context Selection Trace Guard (FIX-115) ──
+    print("\n┌─ Check 28j: Capability Context Trace (FIX-115) ──────┐")
+    capability_context_issues = check_capability_context()
+    if capability_context_issues:
+        all_issues += len(capability_context_issues)
+        print(f"│  [FAIL] {len(capability_context_issues)} capability context issue(s):")
+        for issue in capability_context_issues[:10]:
+            print(f"│    - {issue}")
+        if len(capability_context_issues) > 10:
+            print(f"│    ... and {len(capability_context_issues) - 10} more")
+    else:
+        print("│  [PASS] Capability selection trace is fact-backed, degraded-safe, and no-overclaim safe.")
+    print("└──────────────────────────────────────────────────────┘")
+
     # ── Summary ──
     print(f"\n┌─ Governance Health Summary ──────────────────────────┐")
     if all_issues == 0:
@@ -14874,6 +15376,18 @@ def main():
     gctx_p.add_argument("--fail-on-issues", action="store_true",
                         help="Exit with non-zero code if the context contract is invalid")
 
+    # capability-context (FIX-115)
+    capctx_p = subparsers.add_parser(
+        "capability-context",
+        help="Print fact-backed host capability context and selection trace",
+    )
+    capctx_p.add_argument(
+        "--fixture",
+        help="Optional project root/fixture to inspect instead of the current repository",
+    )
+    capctx_p.add_argument("--fail-on-issues", action="store_true",
+                          help="Exit with non-zero code if the capability context contract is invalid")
+
     # gate <id>
     gate_p = subparsers.add_parser("gate", help="Show details for a specific Gate")
     gate_p.add_argument("gate_id", help="Gate ID (e.g. G3, 3, g5)")
@@ -15167,6 +15681,7 @@ def main():
         "verify": cmd_verify,
         "status": cmd_status,
         "governance-context": cmd_governance_context,
+        "capability-context": cmd_capability_context,
         "gate": cmd_gate,
         "gate-check": cmd_gate_check,
         "gates": cmd_gates,

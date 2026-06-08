@@ -342,6 +342,17 @@
 - **依赖**：`check-governance` Check 28i、`check-release` governance pack status detail、`core/governance-packs.json`
 - **被以下子工作流使用**：测试（testing）、发布（release）、维护（maintenance）
 
+### TOOL-031：Capability Context Selection Trace
+
+- **文件**：`infra/verify_workflow.py` + `docs/requirements/capability-discovery-orchestration-0.45.0.md`
+- **子命令**：`capability-context [--fixture <project-root>] [--fail-on-issues]`
+- **输入**：当前项目或 fixture 的 host/package/entry 文件事实、`verify_workflow.py` 命令注册事实、runtime readiness matrix、governance pack registry、Codex Desktop marketplace-management E2E 规划文档，以及未来 FIX-116 external capability registry 是否存在
+- **输出**：`scenario`、`host_id`、`available_capabilities`、`selected_capability`、`source_facts`、`rejected_alternatives`、`degradation`、`side_effect_boundary`、`validation_command`、`review_requirement`、`no_overclaim_boundary`
+- **触发条件**：0.45.0 FIX-115 capability context/selection trace 验收、受限环境能力选择诊断、后续 FIX-116/FIX-117/REL-022 release gate 前
+- **依赖**：`check-governance` Check 28j、`check-runtime-readiness-matrix`、`check-governance-packs`
+- **边界**：read-only diagnostic；不得声明 automatic global best-tool selection；不得把 catalog entry 当 runtime PASS；不得把 diagnostic selection trace 当 successful external execution；preferred capability 不可用时必须输出 `BLOCKED`、`DEGRADED`、`NOT_SUPPORTED` 或 `NOT_FOUND`
+- **被以下子工作流使用**：调研（research）、架构设计（architecture）、开发（development）、测试（testing）、发布（release）、维护（maintenance）
+
 ## 工具与子工作流的关系矩阵
 
 | 工具 | 立项 | 调研 | 选型 | 环境 | 架构 | 开发 | 测试 | CI/CD | 发布 | 运营 | 维护 |
@@ -374,6 +385,7 @@
 | README Pack Guidance guard | ● | | | | ○ | | ● | | ● | | ● |
 | Manifest Product Artifact guard | | | | | ○ | | ● | | ● | | ● |
 | Governance Pack Status Boundary guard | | | | | ○ | | ● | | ● | | ● |
+| Capability Context Selection Trace | | ● | | | ● | ● | ● | | ● | | ● |
 
 > ● 主要使用者  ○ 可选用
 

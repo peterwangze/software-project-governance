@@ -2670,6 +2670,193 @@ class GovernanceContextDiscoveryTests(unittest.TestCase):
         self.assertIn("Governance Context Result: PASSED", output)
 
 
+class CapabilityContextTests(unittest.TestCase):
+    """FIX-115: capability context trace must be fact-backed and degraded-safe."""
+
+    def _write_project(self, root, command_registered=True, tool_registered=True, future_registry=False, comment_only=False, example_only=False):
+        verify_path = root / "skills/software-project-governance/infra/verify_workflow.py"
+        verify_path.parent.mkdir(parents=True, exist_ok=True)
+        if command_registered:
+            verify_text = "\n".join([
+                "import argparse",
+                "",
+                "def cmd_capability_context(args):",
+                "    pass",
+                "",
+                "def main():",
+                "    parser = argparse.ArgumentParser()",
+                "    subparsers = parser.add_subparsers(dest='command')",
+                "    subparsers.add_parser('capability-context', help='trace')",
+                "    commands = {'capability-context': cmd_capability_context}",
+                "    return commands",
+                "",
+            ])
+        elif example_only:
+            verify_text = "\n".join([
+                "import argparse",
+                "",
+                "def cmd_capability_context(args):",
+                "    pass",
+                "",
+                "def example_only():",
+                "    parser = argparse.ArgumentParser()",
+                "    subparsers = parser.add_subparsers(dest='command')",
+                "    subparsers.add_parser('capability-context', help='trace')",
+                "    commands = {'capability-context': cmd_capability_context}",
+                "    return commands",
+                "",
+                "def main():",
+                "    return None",
+                "",
+            ])
+        elif comment_only:
+            verify_text = "def main():\n    pass\n\n# capability-context mentioned in docs only\n"
+        else:
+            verify_text = "def main():\n    pass\n"
+        verify_path.write_text(verify_text, encoding="utf-8")
+
+        skill_path = root / "skills/software-project-governance/SKILL.md"
+        skill_path.write_text("---\nname: software-project-governance\n---\n", encoding="utf-8")
+
+        packs_path = root / "skills/software-project-governance/core/governance-packs.json"
+        packs_path.parent.mkdir(parents=True, exist_ok=True)
+        packs_path.write_text('{"packs":[]}\n', encoding="utf-8")
+
+        runtime_path = root / "docs/requirements/runtime-readiness-matrix-0.43.0.md"
+        runtime_path.parent.mkdir(parents=True, exist_ok=True)
+        runtime_path.write_text("# Runtime matrix\n", encoding="utf-8")
+
+        marketplace_path = root / "docs/requirements/codex-desktop-marketplace-e2e-0.45.0.md"
+        marketplace_path.write_text("# Marketplace E2E\n", encoding="utf-8")
+
+        req_path = root / "docs/requirements/capability-discovery-orchestration-0.45.0.md"
+        req_path.write_text("\n".join([
+            "# Capability Discovery",
+            "capability-context",
+            "source_facts",
+            "rejected_alternatives",
+            "degradation",
+            "side_effect_boundary",
+            "validation_command",
+            "review_requirement",
+            "no_overclaim_boundary",
+        ]), encoding="utf-8")
+
+        tools_path = root / "skills/software-project-governance/infra/TOOLS.md"
+        tools_text = "\n".join([
+            "# Tools",
+            "TOOL-031" if tool_registered else "TOOL-030",
+            "capability-context",
+            "source_facts",
+            "rejected_alternatives",
+            "degradation",
+            "side_effect_boundary",
+            "validation_command",
+            "review_requirement",
+            "no_overclaim_boundary",
+        ])
+        tools_path.write_text(tools_text, encoding="utf-8")
+
+        if future_registry:
+            future_path = root / "skills/software-project-governance/core/capability-registry.json"
+            future_path.write_text('{"capabilities":[]}\n', encoding="utf-8")
+
+    def test_current_repository_capability_context_passes(self):
+        issues = vw.check_capability_context(vw.ROOT)
+        self.assertEqual([], issues)
+
+    def test_discovers_degraded_local_fallback_when_registry_missing(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_project(root)
+
+            context = vw.discover_capability_context(root)
+
+        self.assertEqual(context["scenario"], "capability-context")
+        self.assertEqual(context["selected_capability"]["capability_id"], "local.capability-context.cli")
+        self.assertEqual(context["degradation"]["status"], "DEGRADED")
+        self.assertTrue(any("capability-registry.json" in fact and "missing" in fact for fact in context["source_facts"]))
+        self.assertTrue(any(item["status"] == "NOT_FOUND" for item in context["rejected_alternatives"]))
+        self.assertIn("read-only", context["side_effect_boundary"].lower())
+
+    def test_comment_only_capability_context_does_not_register_cli(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_project(root, command_registered=False, comment_only=True)
+
+            context = vw.discover_capability_context(root)
+            issues = vw.check_capability_context(root)
+            args = argparse.Namespace(fixture=str(root), fail_on_issues=True)
+
+            self.assertNotEqual(context["selected_capability"]["capability_id"], "local.capability-context.cli")
+            self.assertEqual(context["selected_capability"]["status"], "DEGRADED")
+            self.assertTrue(any("main_subparser=no" in fact and "main_dispatch=no" in fact for fact in context["source_facts"]))
+            self.assertTrue(any("missing actual capability-context CLI registration facts" in issue for issue in issues))
+            with self.assertRaises(SystemExit) as raised:
+                with redirect_stdout(io.StringIO()):
+                    vw.cmd_capability_context(args)
+            self.assertNotEqual(0, raised.exception.code)
+
+    def test_unused_example_only_registration_does_not_register_cli(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_project(root, command_registered=False, example_only=True)
+
+            context = vw.discover_capability_context(root)
+            issues = vw.check_capability_context(root)
+            args = argparse.Namespace(fixture=str(root), fail_on_issues=True)
+
+            self.assertNotEqual(context["selected_capability"]["capability_id"], "local.capability-context.cli")
+            self.assertEqual(context["selected_capability"]["status"], "DEGRADED")
+            self.assertTrue(any("top_level_handler=yes" in fact and "main_subparser=no" in fact for fact in context["source_facts"]))
+            self.assertTrue(any("main_dispatch=no" in fact for fact in context["source_facts"]))
+            self.assertTrue(any("missing actual capability-context CLI registration facts" in issue for issue in issues))
+            with self.assertRaises(SystemExit) as raised:
+                with redirect_stdout(io.StringIO()):
+                    vw.cmd_capability_context(args)
+            self.assertNotEqual(0, raised.exception.code)
+
+    def test_check_rejects_catalog_or_runtime_available_overclaim(self):
+        broken_context = {
+            "scenario": "capability-context",
+            "host_id": "fixture",
+            "available_capabilities": [{
+                "capability_id": "internal.governance-packs.catalog",
+                "kind": "fallback",
+                "status": "AVAILABLE",
+                "source_facts": ["core/governance-packs.json present"],
+                "availability_scope": "catalog-only; not runtime PASS",
+            }],
+            "selected_capability": {
+                "capability_id": "internal.governance-packs.catalog",
+                "kind": "fallback",
+                "status": "AVAILABLE",
+                "source_facts": ["core/governance-packs.json present"],
+            },
+            "source_facts": ["fact"],
+            "rejected_alternatives": [{
+                "capability_id": "host.automatic-best-tool-selection",
+                "status": "NOT_SUPPORTED",
+                "rejection_reason": "automatic best-tool selection overclaim",
+            }],
+            "degradation": {"status": "AVAILABLE", "reason": "none"},
+            "side_effect_boundary": "read-only",
+            "validation_command": "python verify_workflow.py capability-context --fail-on-issues",
+            "review_requirement": "requires independent Code Reviewer approval",
+            "no_overclaim_boundary": [
+                "automatic global best-tool selection",
+                "catalog entry",
+                "runtime PASS",
+                "diagnostic selection trace",
+            ],
+        }
+        with patch.object(vw, "discover_capability_context", return_value=broken_context):
+            issues = vw.check_capability_context(vw.ROOT)
+
+        self.assertTrue(any("catalog or runtime fact-source cannot be selected as AVAILABLE runtime PASS" in issue for issue in issues))
+        self.assertTrue(any("treats catalog/runtime facts as AVAILABLE" in issue for issue in issues))
+
+
 class ReleaseReadinessCommandTests(unittest.TestCase):
     """FIX-072: stage-release check-release must be backed by a real CLI command."""
 

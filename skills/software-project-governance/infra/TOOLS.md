@@ -36,6 +36,8 @@
 | TOOL-028 | README Pack Guidance guard | script + README contract | `infra/verify_workflow.py check-readme-pack-guidance` + `check-governance` Check 28h | README first-run pack guidance、pack registry 或 no-overclaim boundary 变更后 | 立项/测试/发布/维护 | 是 |
 | TOOL-029 | Manifest Product Artifact guard | manifest + cleanup integration | `core/manifest.json` + `infra/cleanup.py` + `infra/verify_workflow.py check-manifest-consistency` | canonical product artifact、cleanup scope 或 pack registry shipping boundary 变更后 | 测试/发布/维护 | 是 |
 | TOOL-030 | Governance Pack Status Boundary guard | script + command contract + release detail | `infra/verify_workflow.py check-governance-pack-status` + `check-governance` Check 28i + `check-release` governance pack status detail | `/governance`/status Delivery Trust Snapshot pack summary、default/enabled pack wording 或 release pack no-overclaim boundary 变更后 | 测试/发布/维护 | 是 |
+| TOOL-031 | Capability Context Selection Trace | script + command contract | `infra/verify_workflow.py capability-context` + `check-governance` Check 28j | 0.45.0 capability context/selection trace、受限环境能力选择诊断或 release gate 前 | 调研/架构/开发/测试/发布/维护 | 是 |
+| TOOL-032 | Capability Registry guard | script + registry | `infra/verify_workflow.py check-capability-registry` + `check-governance` Check 28k | external capability registry、plugin/skill/tool/MCP/browser/sub-agent/script/fallback catalog 或 no-overclaim boundary 变更后 | 调研/架构/测试/发布/维护 | 是 |
 
 ## 工具详情
 
@@ -92,7 +94,7 @@
 ### TOOL-006：校验脚本
 
 - **文件**：`infra/verify_workflow.py`
-- **子命令**：`verify`（全量校验）、`status`（治理状态摘要）、`gate <G1-G11>`（Gate 检查）、`gates`（全部 Gate 状态）、`stage <stage-id>`（阶段状态）、`stages`（全部阶段状态）、`check-governance --fail-on-issues`（治理健康检查）、`e2e-check`（E2E proxy + fixture 分层检查）、`check-version-consistency`、`check-manifest-consistency`、`check-governance-packs`、`check-readme-pack-guidance`、`check-governance-pack-status`、`check-deterministic-scaffolds`、`check-interruption-policy`、`generate-deterministic-scaffold`、`check-locks`、`check-archive-integrity`
+- **子命令**：`verify`（全量校验）、`status`（治理状态摘要）、`gate <G1-G11>`（Gate 检查）、`gates`（全部 Gate 状态）、`stage <stage-id>`（阶段状态）、`stages`（全部阶段状态）、`check-governance --fail-on-issues`（治理健康检查）、`e2e-check`（E2E proxy + fixture 分层检查）、`check-version-consistency`、`check-manifest-consistency`、`check-governance-packs`、`check-capability-registry`、`check-readme-pack-guidance`、`check-governance-pack-status`、`capability-context`、`check-deterministic-scaffolds`、`check-interruption-policy`、`generate-deterministic-scaffold`、`check-locks`、`check-archive-integrity`
 - **输入**：无（自动读取项目文件）
 - **输出**：校验结果（PASSED/FAILED）+ 治理状态摘要
 - **触发条件**：工作流资产变更后、Gate 检查时、定期巡检
@@ -352,6 +354,17 @@
 - **依赖**：`check-governance` Check 28j、`check-runtime-readiness-matrix`、`check-governance-packs`
 - **边界**：read-only diagnostic；不得声明 automatic global best-tool selection；不得把 catalog entry 当 runtime PASS；不得把 diagnostic selection trace 当 successful external execution；preferred capability 不可用时必须输出 `BLOCKED`、`DEGRADED`、`NOT_SUPPORTED` 或 `NOT_FOUND`
 - **被以下子工作流使用**：调研（research）、架构设计（architecture）、开发（development）、测试（testing）、发布（release）、维护（maintenance）
+
+### TOOL-032：Capability Registry guard
+
+- **文件**：`infra/verify_workflow.py` + `core/capability-registry.json`
+- **子命令**：`check-capability-registry [--fail-on-issues]`
+- **输入**：canonical capability registry 中的 plugin、skill、tool、MCP、browser、sub-agent、script、fallback 条目；每条的 `kind`、`host_surface`、`scenarios`、`status`、`source_facts`、`validation_command`、`side_effect_boundary`、`no_overclaim_boundary`
+- **输出**：registry 是否 registry-first 且不做物理插件拆分；是否覆盖所需 kind；是否缺 source facts / validation command / side effect boundary；是否把 catalog entry 当 runtime PASS 或 external capability available；是否把 governance packs 混同为 external capability；是否出现 official/marketplace/universal/automatic best-tool/1.0.0 overclaim
+- **触发条件**：新增或调整外部 capability catalog、引用 host tools / adapter manifests / plugin manifests / fallback 路径、发布 0.45.0 capability discovery 边界或 release gate 前
+- **依赖**：`check-governance` Check 28k、`core/manifest.json`、TOOL-031
+- **边界**：catalog membership is not runtime PASS；registry 是 capability fact source，不执行 plugin install、MCP call、browser action、sub-agent spawn、network call 或 external API；governance packs 保持 internal capability modules，不等同 external plugin/skill/tool availability
+- **被以下子工作流使用**：调研（research）、架构设计（architecture）、测试（testing）、发布（release）、维护（maintenance）
 
 ## 工具与子工作流的关系矩阵
 

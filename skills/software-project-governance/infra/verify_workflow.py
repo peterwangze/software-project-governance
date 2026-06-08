@@ -938,6 +938,9 @@ def check_manifest_canonical_product_artifacts(manifest, manifest_path=None):
     registry_entry = artifact_by_id.get("governance-pack-registry")
     if not registry_entry:
         failures.append(f"{display}: canonical product artifact `governance-pack-registry` is required")
+    capability_registry_entry = artifact_by_id.get("capability-registry")
+    if not capability_registry_entry:
+        failures.append(f"{display}: canonical product artifact `capability-registry` is required")
 
     for entry in entries:
         if not isinstance(entry, dict):
@@ -981,6 +984,11 @@ def check_manifest_canonical_product_artifacts(manifest, manifest_path=None):
 
         if artifact_id == "governance-pack-registry":
             required_commands = ("check-governance-packs", "check-manifest-consistency")
+            for command_token in required_commands:
+                if not any(command_token in command for command in commands):
+                    failures.append(f"{artifact_label}: validation_commands must include `{command_token}`")
+        if artifact_id == "capability-registry":
+            required_commands = ("check-capability-registry", "check-manifest-consistency")
             for command_token in required_commands:
                 if not any(command_token in command for command in commands):
                     failures.append(f"{artifact_label}: validation_commands must include `{command_token}`")
@@ -1909,6 +1917,7 @@ RUNTIME_MATRIX_RESEARCH_ONLY_IDS = ["cursor", "copilot"]
 FIRST_SESSION_MEASUREMENT_PATH = ROOT / "docs/requirements/first-session-measurement-0.43.0.md"
 FIRST_SESSION_MEASUREMENT_ALLOWED_STATUSES = {"PASS", "BLOCKED", "NOT_MEASURED"}
 GOVERNANCE_PACKS_PATH = ROOT / "skills/software-project-governance/core/governance-packs.json"
+CAPABILITY_REGISTRY_PATH = ROOT / "skills/software-project-governance/core/capability-registry.json"
 GOVERNANCE_PACK_IDS = [
     "governance-core",
     "quality-gates",
@@ -1969,6 +1978,7 @@ GOVERNANCE_PACK_KNOWN_CHECKS = {
     "check-governance-packs",
     "check-readme-pack-guidance",
     "check-governance-pack-status",
+    "check-capability-registry",
 }
 GOVERNANCE_PACK_STATUS_DOC_PATHS = [
     "commands/governance-status.md",
@@ -2085,6 +2095,77 @@ CAPABILITY_CONTEXT_NO_OVERCLAIM_TOKENS = [
     "catalog entry",
     "runtime PASS",
     "diagnostic selection trace",
+]
+CAPABILITY_REGISTRY_ALLOWED_KINDS = {
+    "plugin",
+    "skill",
+    "tool",
+    "mcp",
+    "browser",
+    "sub_agent",
+    "script",
+    "fallback",
+}
+CAPABILITY_REGISTRY_ALLOWED_STATUSES = {
+    "AVAILABLE",
+    "BLOCKED",
+    "DEGRADED",
+    "NOT_SUPPORTED",
+    "NOT_FOUND",
+    "RESEARCH_ONLY",
+}
+CAPABILITY_REGISTRY_REQUIRED_FIELDS = [
+    "capability_id",
+    "kind",
+    "host_surface",
+    "scenarios",
+    "status",
+    "source_facts",
+    "validation_command",
+    "side_effect_boundary",
+    "no_overclaim_boundary",
+]
+CAPABILITY_REGISTRY_REQUIRED_KINDS = {
+    "plugin",
+    "skill",
+    "tool",
+    "mcp",
+    "browser",
+    "sub_agent",
+    "script",
+    "fallback",
+}
+CAPABILITY_REGISTRY_BOUNDARY_TOKENS = [
+    "Catalog entry does not mean runtime PASS.",
+    "Catalog entry does not mean external capability available.",
+    "Governance packs are internal capability modules, not external plugins, skills, tools, MCP servers, browser tools, sub-agents, scripts, or fallbacks.",
+    "Do not claim automatic best-tool selection.",
+    "Do not claim universal plugin/skill/tool availability.",
+    "Do not claim official approval.",
+    "Do not claim marketplace approval.",
+    "Do not claim 1.0.0 production-ready.",
+]
+CAPABILITY_REGISTRY_FORBIDDEN_OVERCLAIMS = [
+    "catalog entry means runtime pass",
+    "catalog entry is runtime pass",
+    "catalog entry means external capability available",
+    "catalog entry is external capability available",
+    "external capability available by catalog",
+    "governance pack is external capability",
+    "governance packs are external capabilities",
+    "governance pack plugin",
+    "governance pack tool",
+    "governance pack mcp",
+    "automatic best-tool selection",
+    "automatically selects the best tool",
+    "universal plugin availability",
+    "universal skill availability",
+    "universal tool availability",
+    "officially approved",
+    "official approval granted",
+    "marketplace approved",
+    "marketplace approval granted",
+    "1.0.0 production-ready",
 ]
 GOVERNANCE_PACK_BOUNDARY_TOKENS = [
     "No official approval",
@@ -2356,6 +2437,143 @@ def _governance_pack_file_path(entry):
     if isinstance(entry, dict):
         return entry.get("path")
     return None
+
+
+def _capability_registry_text_values(value):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _capability_registry_text_values(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _capability_registry_text_values(item)
+
+
+def _is_valid_string_list(value):
+    return isinstance(value, list) and bool(value) and all(isinstance(item, str) and item.strip() for item in value)
+
+
+def check_capability_registry(root=None):
+    """FIX-116: external capability registry must be factual and no-overclaim safe."""
+    root = root or ROOT
+    registry_path = root / "skills/software-project-governance/core/capability-registry.json"
+    manifest_path = root / "skills/software-project-governance/core/manifest.json"
+    failures = []
+    display = _display_path(registry_path, root)
+    if not registry_path.exists():
+        return [f"{display}: missing capability registry"]
+
+    try:
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        return [f"{display}: invalid JSON: {exc}"]
+
+    if registry.get("workflow") != "software-project-governance":
+        failures.append(f"{display}: workflow must be software-project-governance")
+    if registry.get("source_of_truth") is not True:
+        failures.append(f"{display}: source_of_truth must be true")
+    if registry.get("registry_mode") != "registry-first-no-physical-plugin-split":
+        failures.append(f"{display}: registry_mode must be registry-first-no-physical-plugin-split")
+
+    allowed_kinds = registry.get("allowed_kinds")
+    if set(allowed_kinds or []) != CAPABILITY_REGISTRY_ALLOWED_KINDS:
+        failures.append(f"{display}: allowed_kinds must be {sorted(CAPABILITY_REGISTRY_ALLOWED_KINDS)}")
+    allowed_statuses = registry.get("allowed_statuses")
+    if set(allowed_statuses or []) != CAPABILITY_REGISTRY_ALLOWED_STATUSES:
+        failures.append(f"{display}: allowed_statuses must be {sorted(CAPABILITY_REGISTRY_ALLOWED_STATUSES)}")
+
+    boundary = registry.get("no_overclaim_boundary", [])
+    if not _is_valid_string_list(boundary):
+        failures.append(f"{display}: no_overclaim_boundary must be a non-empty string list")
+        boundary = []
+    for token in CAPABILITY_REGISTRY_BOUNDARY_TOKENS:
+        if token not in boundary:
+            failures.append(f"{display}: missing no-overclaim boundary token `{token}`")
+
+    if not manifest_path.exists():
+        failures.append(f"{display}: core/manifest.json is required to make the capability registry a canonical product artifact")
+    else:
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            artifact_entries = _manifest_artifact_entries(manifest)
+            registry_artifacts = [
+                entry for entry in artifact_entries
+                if isinstance(entry, dict)
+                and entry.get("id") == "capability-registry"
+                and entry.get("path") == "skills/software-project-governance/core/capability-registry.json"
+            ]
+            if not registry_artifacts:
+                failures.append(
+                    f"{display}: core/manifest.json must declare capability-registry as a canonical product artifact"
+                )
+        except json.JSONDecodeError as exc:
+            failures.append(f"{_display_path(manifest_path, root)}: invalid JSON: {exc}")
+
+    capabilities = registry.get("capabilities")
+    if not isinstance(capabilities, list) or not capabilities:
+        return failures + [f"{display}: capabilities must be a non-empty list"]
+
+    seen_ids = []
+    seen_kinds = set()
+    for capability in capabilities:
+        if not isinstance(capability, dict):
+            failures.append(f"{display}: each capability must be an object")
+            continue
+        capability_id = capability.get("capability_id", "<missing>")
+        seen_ids.append(capability_id)
+        label = f"{display}: capability {capability_id}"
+
+        for field in CAPABILITY_REGISTRY_REQUIRED_FIELDS:
+            if field not in capability:
+                failures.append(f"{label}: missing required field `{field}`")
+
+        kind = capability.get("kind")
+        seen_kinds.add(kind)
+        if kind not in CAPABILITY_REGISTRY_ALLOWED_KINDS:
+            failures.append(f"{label}: unknown kind `{kind}`")
+
+        status = capability.get("status")
+        if status not in CAPABILITY_REGISTRY_ALLOWED_STATUSES:
+            failures.append(f"{label}: unknown status `{status}`")
+
+        for field in ("capability_id", "host_surface", "validation_command", "side_effect_boundary"):
+            if not isinstance(capability.get(field), str) or not capability.get(field, "").strip():
+                failures.append(f"{label}: `{field}` must be a non-empty string")
+
+        for field in ("scenarios", "source_facts", "no_overclaim_boundary"):
+            if not _is_valid_string_list(capability.get(field)):
+                failures.append(f"{label}: `{field}` must be a non-empty string list")
+
+        command = capability.get("validation_command", "")
+        if isinstance(command, str) and command.strip():
+            if "verify_workflow.py" not in command:
+                failures.append(f"{label}: validation_command must use verify_workflow.py")
+            if "check-capability-registry" not in command and kind in {"mcp", "script"}:
+                failures.append(f"{label}: validation_command for {kind} must include check-capability-registry")
+        boundary_text = " ".join(capability.get("no_overclaim_boundary", []))
+        if "Catalog entry" not in boundary_text and "not" not in boundary_text.lower() and "Do not" not in boundary_text:
+            failures.append(f"{label}: no_overclaim_boundary must explicitly prevent overclaim")
+
+        capability_text = " ".join(_capability_registry_text_values(capability)).lower()
+        if kind == "fallback" and "governance pack" in capability_text and status == "AVAILABLE":
+            failures.append(f"{label}: fallback capability must not use governance pack catalog as external availability")
+
+    missing_kinds = sorted(CAPABILITY_REGISTRY_REQUIRED_KINDS - seen_kinds)
+    if missing_kinds:
+        failures.append(f"{display}: missing required kind(s): {', '.join(missing_kinds)}")
+    duplicates = sorted({item for item in seen_ids if seen_ids.count(item) > 1})
+    for capability_id in duplicates:
+        failures.append(f"{display}: duplicate capability_id `{capability_id}`")
+
+    text_values = list(_capability_registry_text_values(registry))
+    for text in text_values:
+        lowered = text.lower()
+        for phrase in CAPABILITY_REGISTRY_FORBIDDEN_OVERCLAIMS:
+            if phrase in lowered and not _line_has_scoped_claim_negation(text, phrase):
+                failures.append(f"{display}: forbidden capability overclaim `{phrase}`")
+
+    return failures
 
 
 def check_governance_packs(root=None):
@@ -4513,7 +4731,30 @@ def discover_capability_context(root=None):
             "validation_command": "python skills/software-project-governance/infra/verify_workflow.py check-runtime-readiness-matrix --fail-on-issues",
         })
 
-    preferred_status = "AVAILABLE" if future_registry_exists else "NOT_FOUND"
+    registry_issues = check_capability_registry(root) if future_registry_exists else []
+    preferred_status = "DEGRADED" if future_registry_exists else "NOT_FOUND"
+    registry_reason = (
+        "FIX-116 registry exists as a catalog fact source; catalog membership is not runtime PASS"
+        if future_registry_exists and not registry_issues
+        else (
+            "FIX-116 registry exists but validator found issues; cannot use it as a trusted catalog"
+            if future_registry_exists
+            else "preferred external capability registry is not implemented in FIX-115"
+        )
+    )
+    if future_registry_exists:
+        available_capabilities.append({
+            "capability_id": "external.capability-registry.catalog",
+            "kind": "tool",
+            "host_surface": "local repository",
+            "scenario": "capability-registry",
+            "status": "DEGRADED",
+            "availability_scope": "catalog-only external capability facts; not runtime PASS and not proof external capability is available",
+            "source_facts": [future_registry_fact],
+            "selection_reason": "registry can inform candidate discovery, but selection still requires runtime facts and no-overclaim boundary",
+            "side_effect_boundary": "read-only registry inspection; no plugin install, MCP call, browser action, sub-agent spawn, network call, or external execution",
+            "validation_command": "python skills/software-project-governance/infra/verify_workflow.py check-capability-registry --fail-on-issues",
+        })
     rejected_alternatives = [
         {
             "capability_id": "external.capability-registry",
@@ -4521,11 +4762,7 @@ def discover_capability_context(root=None):
             "host_surface": "future 0.45.0 registry",
             "status": preferred_status,
             "source_facts": [future_registry_fact],
-            "rejection_reason": (
-                "FIX-116 registry exists but is outside FIX-115 selection scope"
-                if future_registry_exists
-                else "preferred external capability registry is not implemented in FIX-115"
-            ),
+            "rejection_reason": registry_reason,
         },
         {
             "capability_id": "host.automatic-best-tool-selection",
@@ -4550,19 +4787,19 @@ def discover_capability_context(root=None):
             "capability_id": "local.capability-context.cli",
             "kind": "script",
             "host_surface": "local shell",
-            "status": "DEGRADED" if preferred_status != "AVAILABLE" else "AVAILABLE",
+            "status": "DEGRADED" if preferred_status != "NOT_FOUND" else "DEGRADED",
             "selection_reason": (
-                "selected as a read-only fallback because the preferred external capability registry is unavailable"
-                if preferred_status != "AVAILABLE"
-                else "selected because local command is available for this diagnostic scenario"
+                "selected as a read-only fallback; registry presence informs catalog facts but is not runtime PASS"
+                if preferred_status != "NOT_FOUND"
+                else "selected as a read-only fallback because the preferred external capability registry is unavailable"
             ),
             "source_facts": [verify_fact, source_facts[-2]],
         }
-        degradation_status = "DEGRADED" if preferred_status != "AVAILABLE" else "AVAILABLE"
+        degradation_status = "DEGRADED"
         degradation_reason = (
-            "preferred external capability registry is unavailable; using local diagnostic fallback"
-            if preferred_status != "AVAILABLE"
-            else "no degradation required for the diagnostic command"
+            "capability registry exists only as a catalog fact source; using local diagnostic fallback without runtime PASS"
+            if preferred_status != "NOT_FOUND"
+            else "preferred external capability registry is unavailable; using local diagnostic fallback"
         )
     elif verify_exists:
         selected = {
@@ -11980,6 +12217,20 @@ def cmd_check_governance(args):
         print("│  [PASS] Capability selection trace is fact-backed, degraded-safe, and no-overclaim safe.")
     print("└──────────────────────────────────────────────────────┘")
 
+    # ── 28k. Capability Registry Guard (FIX-116) ──
+    print("\n┌─ Check 28k: Capability Registry (FIX-116) ───────────┐")
+    capability_registry_issues = check_capability_registry()
+    if capability_registry_issues:
+        all_issues += len(capability_registry_issues)
+        print(f"│  [FAIL] {len(capability_registry_issues)} capability registry issue(s):")
+        for issue in capability_registry_issues[:10]:
+            print(f"│    - {issue}")
+        if len(capability_registry_issues) > 10:
+            print(f"│    ... and {len(capability_registry_issues) - 10} more")
+    else:
+        print("│  [PASS] Capability registry separates catalog facts from runtime PASS and governance packs.")
+    print("└──────────────────────────────────────────────────────┘")
+
     # ── Summary ──
     print(f"\n┌─ Governance Health Summary ──────────────────────────┐")
     if all_issues == 0:
@@ -15120,6 +15371,27 @@ def cmd_check_governance_packs(args):
     print()
 
 
+def cmd_check_capability_registry(args):
+    """Run external capability registry consistency guard."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    issues = check_capability_registry()
+    print("\n=== Capability Registry Check ===")
+    if issues:
+        print(f"  Result: FAILED — {len(issues)} issue(s)")
+        for issue in issues[:20]:
+            print(f"    - {issue}")
+        if len(issues) > 20:
+            print(f"    ... and {len(issues) - 20} more")
+        if getattr(args, "fail_on_issues", False):
+            sys.exit(1)
+    else:
+        print("  Result: PASSED — capability registry is factual and no-overclaim safe")
+    print()
+
+
 def cmd_check_readme_pack_guidance(args):
     """Run README first-run profile-to-pack guidance guard."""
     try:
@@ -15591,6 +15863,14 @@ def main():
     cgp_p.add_argument("--fail-on-issues", action="store_true",
                        help="Exit with non-zero code if pack registry is incomplete or overclaims")
 
+    # check-capability-registry (FIX-116)
+    ccr_p = subparsers.add_parser(
+        "check-capability-registry",
+        help="Check canonical external capability registry fields, sources, validation, and no-overclaim boundary",
+    )
+    ccr_p.add_argument("--fail-on-issues", action="store_true",
+                       help="Exit with non-zero code if capability registry is incomplete or overclaims")
+
     # check-readme-pack-guidance (FIX-109)
     crpg_p = subparsers.add_parser(
         "check-readme-pack-guidance",
@@ -15712,6 +15992,7 @@ def main():
         "check-runtime-readiness-matrix": cmd_check_runtime_readiness_matrix,
         "check-first-session-measurement": cmd_check_first_session_measurement,
         "check-governance-packs": cmd_check_governance_packs,
+        "check-capability-registry": cmd_check_capability_registry,
         "check-readme-pack-guidance": cmd_check_readme_pack_guidance,
         "check-governance-pack-status": cmd_check_governance_pack_status,
         "check-product-success-contracts": cmd_check_product_success_contracts,

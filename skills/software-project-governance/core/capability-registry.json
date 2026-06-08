@@ -1,0 +1,205 @@
+{
+  "$schema": "https://example.com/software-project-governance/capability-registry-v1.json",
+  "schema_version": "1.0",
+  "workflow": "software-project-governance",
+  "workflow_version": "0.44.1",
+  "source_of_truth": true,
+  "registry_mode": "registry-first-no-physical-plugin-split",
+  "purpose": "Catalog host and external capability options with source facts, validation commands, side-effect boundaries, and no-overclaim boundaries. Catalog membership is not runtime PASS.",
+  "allowed_kinds": [
+    "plugin",
+    "skill",
+    "tool",
+    "mcp",
+    "browser",
+    "sub_agent",
+    "script",
+    "fallback"
+  ],
+  "allowed_statuses": [
+    "AVAILABLE",
+    "BLOCKED",
+    "DEGRADED",
+    "NOT_SUPPORTED",
+    "NOT_FOUND",
+    "RESEARCH_ONLY"
+  ],
+  "no_overclaim_boundary": [
+    "Catalog entry does not mean runtime PASS.",
+    "Catalog entry does not mean external capability available.",
+    "Governance packs are internal capability modules, not external plugins, skills, tools, MCP servers, browser tools, sub-agents, scripts, or fallbacks.",
+    "Do not claim automatic best-tool selection.",
+    "Do not claim universal plugin/skill/tool availability.",
+    "Do not claim official approval.",
+    "Do not claim marketplace approval.",
+    "Do not claim 1.0.0 production-ready."
+  ],
+  "capabilities": [
+    {
+      "capability_id": "codex.desktop.plugin-manifest",
+      "kind": "plugin",
+      "host_surface": "Codex Desktop",
+      "scenarios": [
+        "plugin metadata inspection",
+        "marketplace-management planning"
+      ],
+      "status": "DEGRADED",
+      "source_facts": [
+        ".codex-plugin/plugin.json exists as local plugin metadata",
+        ".agents/plugins/marketplace.json exists as personal marketplace metadata",
+        "docs/requirements/codex-desktop-marketplace-e2e-0.45.0.md states Desktop marketplace-management E2E is still planned"
+      ],
+      "validation_command": "python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues",
+      "side_effect_boundary": "Read-only manifest inspection only; no plugin install, enable, disable, upgrade, uninstall, network call, marketplace submission, or Desktop session mutation.",
+      "no_overclaim_boundary": [
+        "Local plugin manifest presence is not Codex Desktop marketplace-management E2E PASS.",
+        "Catalog entry does not mean external capability available.",
+        "Do not claim marketplace approval."
+      ]
+    },
+    {
+      "capability_id": "software-project-governance.skill-entry",
+      "kind": "skill",
+      "host_surface": "host skill loader",
+      "scenarios": [
+        "governance bootstrap",
+        "capability context diagnostics"
+      ],
+      "status": "AVAILABLE",
+      "source_facts": [
+        "skills/software-project-governance/SKILL.md is the workflow entry",
+        "skills/software-project-governance/core/governance-packs.json defines internal governance pack boundaries"
+      ],
+      "validation_command": "python skills/software-project-governance/infra/verify_workflow.py verify",
+      "side_effect_boundary": "Skill loading is instruction/context consumption; it does not install external packages, mutate browser state, or prove any external runtime capability.",
+      "no_overclaim_boundary": [
+        "Skill entry availability is not universal host skill availability.",
+        "Governance packs are internal capability modules, not external capability availability."
+      ]
+    },
+    {
+      "capability_id": "verify-workflow.capability-context-tool",
+      "kind": "tool",
+      "host_surface": "local shell",
+      "scenarios": [
+        "capability context trace",
+        "governance health validation"
+      ],
+      "status": "AVAILABLE",
+      "source_facts": [
+        "skills/software-project-governance/infra/verify_workflow.py registers capability-context",
+        "skills/software-project-governance/infra/TOOLS.md includes TOOL-031"
+      ],
+      "validation_command": "python skills/software-project-governance/infra/verify_workflow.py capability-context --fail-on-issues",
+      "side_effect_boundary": "Read-only local diagnostics; no writes, commits, pushes, network calls, package installs, browser actions, or external API calls.",
+      "no_overclaim_boundary": [
+        "Diagnostic selection trace is not successful external execution.",
+        "Catalog entry does not mean runtime PASS."
+      ]
+    },
+    {
+      "capability_id": "host.mcp.connectors",
+      "kind": "mcp",
+      "host_surface": "host MCP runtime",
+      "scenarios": [
+        "external data lookup",
+        "workspace resource access"
+      ],
+      "status": "RESEARCH_ONLY",
+      "source_facts": [
+        "No repository fact proves a portable MCP server is installed or reachable for every host",
+        "skills/software-project-governance/infra/TOOLS.md indexes local workflow tools instead of MCP server manifests"
+      ],
+      "validation_command": "python skills/software-project-governance/infra/verify_workflow.py check-capability-registry --fail-on-issues",
+      "side_effect_boundary": "No MCP calls are made by registry validation; future MCP use must declare server, auth, data access, network, and write boundaries.",
+      "no_overclaim_boundary": [
+        "RESEARCH_ONLY MCP catalog entry is not runtime PASS.",
+        "Do not claim universal MCP availability."
+      ]
+    },
+    {
+      "capability_id": "browser.in-app-or-chrome-control",
+      "kind": "browser",
+      "host_surface": "Browser plugin or Chrome plugin",
+      "scenarios": [
+        "local web UI verification",
+        "browser screenshot validation"
+      ],
+      "status": "DEGRADED",
+      "source_facts": [
+        "Host may expose browser control through enabled plugins, but this repository does not ship a browser runtime",
+        "docs/requirements/runtime-readiness-matrix-0.43.0.md separates runtime facts from universal support claims"
+      ],
+      "validation_command": "python skills/software-project-governance/infra/verify_workflow.py check-runtime-readiness-matrix --fail-on-issues",
+      "side_effect_boundary": "Browser use may navigate pages and mutate browser/session state; registry validation does not open browsers or use logged-in sessions.",
+      "no_overclaim_boundary": [
+        "Browser catalog entry is not proof a browser plugin is available in the current host.",
+        "Do not claim universal/full runtime support."
+      ]
+    },
+    {
+      "capability_id": "agent-team.governance-developer",
+      "kind": "sub_agent",
+      "host_surface": "Agent Team orchestration",
+      "scenarios": [
+        "workflow infrastructure modification",
+        "validator and manifest updates"
+      ],
+      "status": "DEGRADED",
+      "source_facts": [
+        "agents/governance-developer.md defines the Governance Developer role",
+        "skills/software-project-governance/SKILL.md states unavailable true sub-agent separation must be recorded as degraded evidence"
+      ],
+      "validation_command": "python skills/software-project-governance/infra/verify_workflow.py check-agent-team --fail-on-issues",
+      "side_effect_boundary": "Sub-agent work may edit workflow product files only within assigned scope; degraded host execution must not be counted as independent review.",
+      "no_overclaim_boundary": [
+        "Sub-agent catalog entry does not prove host-native sub-agent availability.",
+        "Developer self-review is not independent review."
+      ]
+    },
+    {
+      "capability_id": "script.verify-workflow",
+      "kind": "script",
+      "host_surface": "local shell",
+      "scenarios": [
+        "registry validation",
+        "manifest validation",
+        "release readiness"
+      ],
+      "status": "AVAILABLE",
+      "source_facts": [
+        "skills/software-project-governance/infra/verify_workflow.py exists",
+        "skills/software-project-governance/infra/TOOLS.md indexes verify_workflow.py as TOOL-006"
+      ],
+      "validation_command": "python skills/software-project-governance/infra/verify_workflow.py check-capability-registry --fail-on-issues",
+      "side_effect_boundary": "Local validator execution reads repository files and may run local subprocess checks only when explicit subcommands request them; registry check itself performs no writes.",
+      "no_overclaim_boundary": [
+        "Local script availability is not external tool availability.",
+        "Catalog entry does not mean runtime PASS."
+      ]
+    },
+    {
+      "capability_id": "fallback.local-diagnostic-readonly",
+      "kind": "fallback",
+      "host_surface": "local repository",
+      "scenarios": [
+        "restricted host",
+        "missing plugin",
+        "missing MCP",
+        "missing browser",
+        "blocked sub-agent"
+      ],
+      "status": "AVAILABLE",
+      "source_facts": [
+        "capability-context command can emit DEGRADED or BLOCKED traces from local files",
+        "docs/requirements/capability-discovery-orchestration-0.45.0.md requires restricted environments to output BLOCKED, DEGRADED, NOT_SUPPORTED, or NOT_FOUND when facts require it"
+      ],
+      "validation_command": "python skills/software-project-governance/infra/verify_workflow.py capability-context --fail-on-issues",
+      "side_effect_boundary": "Read-only fallback; no external execution, install, network, browser, commit, push, or API side effects.",
+      "no_overclaim_boundary": [
+        "Fallback availability is not proof that preferred external capability executed.",
+        "Do not treat diagnostic selection trace as successful external execution."
+      ]
+    }
+  ]
+}

@@ -85,7 +85,7 @@ It does not need to own every implementation capability:
 | --- | --- | --- | --- | --- |
 | AUDIT-111 | P1 | This architecture and implementation evolution analysis. | Gap analysis exists, maps current facts to REQ-093/FIX-115~117/FIX-118/REL-022, and preserves no-overclaim boundaries. | `python skills/software-project-governance/infra/verify_workflow.py check-governance --fail-on-issues` |
 | FIX-115 | P0 | Capability context and selection trace contract. | Add a fact-backed contract and diagnostic command such as `capability-context` that outputs host constraints, available capabilities, selected path, rejected alternatives, fallback, validation, and no-overclaim boundary. | `python -m unittest skills/software-project-governance/infra/tests/test_verify_workflow.py -k CapabilityContext -v`; `python skills/software-project-governance/infra/verify_workflow.py capability-context --fail-on-issues`; `python skills/software-project-governance/infra/verify_workflow.py check-governance --fail-on-issues` |
-| FIX-116 | P1 | External capability catalog/registry. | Add a registry that references governance packs, TOOLS.md, adapter manifests, plugin manifests, host tools, and fallback paths without confusing internal packs with external capabilities. Validator rejects missing source facts, unknown kinds, missing validation commands, or overclaim wording. | `python -m unittest skills/software-project-governance/infra/tests/test_verify_workflow.py -k CapabilityRegistry -v`; `python skills/software-project-governance/infra/verify_workflow.py check-capability-registry --fail-on-issues` |
+| FIX-116 | P1 | External capability catalog/registry. | Add canonical `core/capability-registry.json` and `check-capability-registry` / Check 28k. Registry references governance packs, TOOLS.md, adapter manifests, plugin manifests, host tools, MCP/browser/sub-agent surfaces, scripts, and fallback paths without confusing internal packs with external capabilities. Validator rejects missing source facts, unknown kinds, missing validation commands, missing side-effect boundaries, catalog entry runtime PASS/external availability overclaims, governance pack confusion, official/marketplace/universal/automatic best-tool/1.0.0 overclaim wording. | `python -m unittest skills/software-project-governance/infra/tests/test_verify_workflow.py -k CapabilityRegistry -v`; `python skills/software-project-governance/infra/verify_workflow.py check-capability-registry --fail-on-issues`; `python skills/software-project-governance/infra/verify_workflow.py capability-context --fail-on-issues`; `python skills/software-project-governance/infra/verify_workflow.py check-governance --fail-on-issues` |
 | FIX-117 | P1 | Restricted-environment benchmark fixtures. | Add fixtures for no network, no plugin install, no MCP, no browser, no sub-agent, local skill only, Codex CLI blocked, and Gemini auth blocked; selection trace must produce PASS/BLOCKED/DEGRADED/NOT_SUPPORTED without inventing unavailable capability. | `python -m unittest skills/software-project-governance/infra/tests/test_verify_workflow.py -k CapabilitySelection -v`; `python skills/software-project-governance/infra/verify_workflow.py check-host-capability-context --fail-on-issues` |
 | REL-022 | P0 | Release 0.45.0. | 0.45.0 release docs include governance eval/benchmark, Codex Desktop marketplace-management E2E result or blocked status, and capability discovery/selection boundary. | `python skills/software-project-governance/infra/verify_workflow.py check-release --version 0.45.0 --require-changelog --runtime-adapters`; `python -m unittest skills/software-project-governance/infra/tests/test_verify_workflow.py -v` |
 
@@ -112,6 +112,28 @@ Required output fields:
 | `no_overclaim_boundary` | Explicitly forbids automatic global best-tool selection, treating a catalog entry as runtime PASS, treating runtime readiness facts as selected capability execution, and treating diagnostic selection trace as successful external execution. |
 
 FIX-115 intentionally does not implement the full external registry. That belongs to FIX-116. When `skills/software-project-governance/core/capability-registry.json` is absent, the trace must select a local diagnostic fallback and mark the result `DEGRADED` rather than claiming automatic global best-tool selection.
+
+## FIX-116 Capability Registry Contract
+
+`skills/software-project-governance/core/capability-registry.json` is the canonical registry-first external capability catalog. It does not physically split plugins or install host capabilities. It records which plugin, skill, tool, MCP connector, browser path, sub-agent surface, script, or fallback may be considered for a scenario, and what evidence boundary applies before that capability can influence a task.
+
+Required registry entry fields:
+
+| Field | Contract |
+| --- | --- |
+| `capability_id` | Stable ID for a catalog entry. |
+| `kind` | One of `plugin`, `skill`, `tool`, `mcp`, `browser`, `sub_agent`, `script`, or `fallback`; governance pack is not a valid external capability kind. |
+| `host_surface` | Host or surface where the capability might be used, such as Codex Desktop, host skill loader, local shell, MCP runtime, browser plugin, Chrome plugin, or Agent Team orchestration. |
+| `scenarios` | Scenario list where this capability can be considered. |
+| `status` | One of `AVAILABLE`, `BLOCKED`, `DEGRADED`, `NOT_SUPPORTED`, `NOT_FOUND`, or `RESEARCH_ONLY`; status is catalog status, not runtime PASS. |
+| `source_facts` | Non-empty facts from governance packs, `TOOLS.md`, adapter manifests, plugin manifests, host tools, docs, or local files. |
+| `validation_command` | Exact command that checks this catalog entry or its fact source. |
+| `side_effect_boundary` | Explicit statement of read/write, network, browser state, install, API, commit, push, or external-system effects. |
+| `no_overclaim_boundary` | Explicit statements preventing catalog/runtime/availability/approval/production-ready overclaims. |
+
+`check-capability-registry [--fail-on-issues]` is the acceptance guard. It fails on unknown `kind`, missing `source_facts`, missing `validation_command`, missing `side_effect_boundary`, catalog entry being treated as runtime PASS or external capability available, governance pack vs external capability confusion, and official approval / marketplace approval / universal plugin-skill-tool availability / automatic best-tool selection / 1.0.0 production-ready claims.
+
+FIX-116 also updates `capability-context`: when `capability-registry.json` exists, the selected trace may report registry catalog status as `DEGRADED` or available as a fact source, but must not select the registry as runtime PASS or claim an external capability was executed. The local diagnostic fallback remains the selected execution path until a later task proves host runtime availability with direct source facts.
 
 ## 0.46.0 Scope
 

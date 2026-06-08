@@ -2857,6 +2857,183 @@ class CapabilityContextTests(unittest.TestCase):
         self.assertTrue(any("treats catalog/runtime facts as AVAILABLE" in issue for issue in issues))
 
 
+class CapabilityRegistryTests(unittest.TestCase):
+    """FIX-116: external capability catalog must be factual and separate from governance packs."""
+
+    def _write_manifest(self, root, mutate=None):
+        manifest_path = root / "skills/software-project-governance/core/manifest.json"
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        data = {
+            "workflow": "software-project-governance",
+            "root_entries": {"files": [], "directories": []},
+            "product": {
+                "entries": [
+                    {
+                        "path": "skills/software-project-governance/core/capability-registry.json",
+                        "type": "file",
+                    }
+                ],
+                "glob_patterns": [],
+            },
+            "repo_only": {"entries": [], "glob_patterns": []},
+            "canonical_product_artifacts": {
+                "entries": [
+                    {
+                        "id": "governance-pack-registry",
+                        "path": "skills/software-project-governance/core/governance-packs.json",
+                        "type": "file",
+                        "required": True,
+                        "artifact_role": "pack-registry",
+                        "validation_commands": [
+                            "python skills/software-project-governance/infra/verify_workflow.py check-governance-packs --fail-on-issues",
+                            "python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues",
+                        ],
+                    },
+                    {
+                        "id": "capability-registry",
+                        "path": "skills/software-project-governance/core/capability-registry.json",
+                        "type": "file",
+                        "required": True,
+                        "artifact_role": "external-capability-registry",
+                        "validation_commands": [
+                            "python skills/software-project-governance/infra/verify_workflow.py check-capability-registry --fail-on-issues",
+                            "python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues",
+                        ],
+                    },
+                ]
+            },
+            "cleanup_scope": {"directories": sorted(vw.PLUGIN_SCOPE_DIRS)},
+        }
+        if mutate:
+            mutate(data)
+        manifest_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        return manifest_path
+
+    def _capability(self, capability_id, kind, status="DEGRADED"):
+        return {
+            "capability_id": capability_id,
+            "kind": kind,
+            "host_surface": f"{kind} host",
+            "scenarios": [f"{kind} scenario"],
+            "status": status,
+            "source_facts": [f"{kind} source fact"],
+            "validation_command": (
+                "python skills/software-project-governance/infra/verify_workflow.py "
+                "check-capability-registry --fail-on-issues"
+            ),
+            "side_effect_boundary": "Read-only registry validation; no external side effects.",
+            "no_overclaim_boundary": [
+                "Catalog entry does not mean runtime PASS.",
+                "Catalog entry does not mean external capability available.",
+            ],
+        }
+
+    def _write_registry(self, root, mutate=None, manifest_mutate=None):
+        registry_path = root / "skills/software-project-governance/core/capability-registry.json"
+        registry_path.parent.mkdir(parents=True, exist_ok=True)
+        self._write_manifest(root, mutate=manifest_mutate)
+        capabilities = [
+            self._capability("fixture.plugin", "plugin", status="DEGRADED"),
+            self._capability("fixture.skill", "skill", status="AVAILABLE"),
+            self._capability("fixture.tool", "tool", status="AVAILABLE"),
+            self._capability("fixture.mcp", "mcp", status="RESEARCH_ONLY"),
+            self._capability("fixture.browser", "browser", status="NOT_SUPPORTED"),
+            self._capability("fixture.sub-agent", "sub_agent", status="DEGRADED"),
+            self._capability("fixture.script", "script", status="AVAILABLE"),
+            self._capability("fixture.fallback", "fallback", status="AVAILABLE"),
+        ]
+        data = {
+            "$schema": "https://example.com/software-project-governance/capability-registry-v1.json",
+            "schema_version": "1.0",
+            "workflow": "software-project-governance",
+            "workflow_version": "0.44.1",
+            "source_of_truth": True,
+            "registry_mode": "registry-first-no-physical-plugin-split",
+            "allowed_kinds": sorted(vw.CAPABILITY_REGISTRY_ALLOWED_KINDS),
+            "allowed_statuses": sorted(vw.CAPABILITY_REGISTRY_ALLOWED_STATUSES),
+            "no_overclaim_boundary": [
+                "Catalog entry does not mean runtime PASS.",
+                "Catalog entry does not mean external capability available.",
+                "Governance packs are internal capability modules, not external plugins, skills, tools, MCP servers, browser tools, sub-agents, scripts, or fallbacks.",
+                "Do not claim automatic best-tool selection.",
+                "Do not claim universal plugin/skill/tool availability.",
+                "Do not claim official approval.",
+                "Do not claim marketplace approval.",
+                "Do not claim 1.0.0 production-ready.",
+            ],
+            "capabilities": capabilities,
+        }
+        if mutate:
+            mutate(data)
+        registry_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        return registry_path
+
+    def test_capability_registry_accepts_current_file(self):
+        self.assertEqual(vw.check_capability_registry(vw.ROOT), [])
+
+    def test_capability_registry_accepts_minimal_valid_registry(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_registry(root)
+            self.assertEqual(vw.check_capability_registry(root), [])
+
+    def test_capability_registry_rejects_missing_source_facts(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data):
+                data["capabilities"][0]["source_facts"] = []
+
+            self._write_registry(root, mutate=mutate)
+            issues = vw.check_capability_registry(root)
+            self.assertTrue(any("`source_facts` must be a non-empty string list" in issue for issue in issues))
+
+    def test_capability_registry_rejects_unknown_kind(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data):
+                data["capabilities"][0]["kind"] = "governance_pack"
+
+            self._write_registry(root, mutate=mutate)
+            issues = vw.check_capability_registry(root)
+            self.assertTrue(any("unknown kind `governance_pack`" in issue for issue in issues))
+
+    def test_capability_registry_rejects_missing_validation_command(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data):
+                data["capabilities"][0]["validation_command"] = ""
+
+            self._write_registry(root, mutate=mutate)
+            issues = vw.check_capability_registry(root)
+            self.assertTrue(any("`validation_command` must be a non-empty string" in issue for issue in issues))
+
+    def test_capability_registry_rejects_catalog_runtime_pass_overclaim(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data):
+                data["capabilities"][0]["status"] = "AVAILABLE"
+                data["capabilities"][0]["source_facts"].append("Catalog entry means runtime PASS.")
+
+            self._write_registry(root, mutate=mutate)
+            issues = vw.check_capability_registry(root)
+            self.assertTrue(any("forbidden capability overclaim `catalog entry means runtime pass`" in issue for issue in issues))
+
+    def test_capability_registry_rejects_governance_pack_confusion(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data):
+                data["capabilities"][0]["source_facts"].append("governance pack is external capability")
+
+            self._write_registry(root, mutate=mutate)
+            issues = vw.check_capability_registry(root)
+            self.assertTrue(any("forbidden capability overclaim `governance pack is external capability`" in issue for issue in issues))
+
+
 class ReleaseReadinessCommandTests(unittest.TestCase):
     """FIX-072: stage-release check-release must be backed by a real CLI command."""
 

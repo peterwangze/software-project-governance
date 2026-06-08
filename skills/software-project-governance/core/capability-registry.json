@@ -2,7 +2,7 @@
   "$schema": "https://example.com/software-project-governance/capability-registry-v1.json",
   "schema_version": "1.0",
   "workflow": "software-project-governance",
-  "workflow_version": "0.44.1",
+  "workflow_version": "0.45.0",
   "source_of_truth": true,
   "registry_mode": "registry-first-no-physical-plugin-split",
   "purpose": "Catalog host and external capability options with source facts, validation commands, side-effect boundaries, and no-overclaim boundaries. Catalog membership is not runtime PASS.",

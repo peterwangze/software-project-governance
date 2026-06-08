@@ -2,7 +2,7 @@
   "$schema": "https://example.com/software-project-governance/governance-packs-v1.json",
   "schema_version": "1.0",
   "workflow": "software-project-governance",
-  "workflow_version": "0.44.1",
+  "workflow_version": "0.45.0",
   "source_of_truth": true,
   "pack_mode": "registry-first-no-physical-split",
   "required_pack_ids": [
@@ -137,7 +137,7 @@
         "check-governance-pack-status"
       ],
       "validation_commands": [
-        "python skills/software-project-governance/infra/verify_workflow.py check-release --version 0.44.1 --require-changelog --runtime-adapters",
+        "python skills/software-project-governance/infra/verify_workflow.py check-release --version 0.45.0 --require-changelog --runtime-adapters",
         "python skills/software-project-governance/infra/verify_workflow.py check-runtime-readiness-matrix --fail-on-issues",
         "python skills/software-project-governance/infra/verify_workflow.py check-first-session-measurement --fail-on-issues",
         "python skills/software-project-governance/infra/verify_workflow.py check-governance-pack-status --fail-on-issues"

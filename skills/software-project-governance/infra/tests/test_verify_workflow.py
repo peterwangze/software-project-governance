@@ -3433,6 +3433,49 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
 
         self.assertTrue(any("must be tracked by git" in issue for issue in issues))
 
+    def test_release_docs_coverage_does_not_accept_untracked_other_candidates(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            manifest_dir = root / "skills/software-project-governance/core"
+            manifest_dir.mkdir(parents=True)
+            release_dir = root / "docs/release"
+            release_dir.mkdir(parents=True)
+            doc_names = [
+                "release-checklist-0.44.1.md",
+                "feature-flags-0.44.1.md",
+                "rollback-plan-0.44.1.md",
+            ]
+            for doc_name in doc_names:
+                (release_dir / doc_name).write_text(
+                    "0.44.1\n"
+                    "No official approval, marketplace approval, universal/full runtime support, "
+                    "external first-session pilot success. RISK-036 remains open.\n",
+                    encoding="utf-8",
+                )
+            (manifest_dir / "manifest.json").write_text(
+                json.dumps({
+                    "root_entries": {"files": [], "directories": []},
+                    "product": {
+                        "entries": [
+                            {"path": f"docs/release/{doc_name}", "type": "file"}
+                            for doc_name in doc_names
+                        ],
+                        "glob_patterns": [],
+                    },
+                    "repo_only": {"entries": [], "glob_patterns": []},
+                }),
+                encoding="utf-8",
+            )
+
+            def fake_git_files(args):
+                self.assertNotIn("--others", args)
+                return set()
+
+            with patch.object(vw, "_git_files", side_effect=fake_git_files):
+                issues = vw.check_release_docs_coverage("0.44.1", root=root)
+
+        self.assertTrue(any("must be tracked by git" in issue for issue in issues))
+
     def test_release_docs_coverage_rejects_positive_overclaim_wording(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -3457,6 +3500,27 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
                 "Full runtime support supported.",
                 "External first-session pilot success passed.",
                 "Codex Desktop marketplace-management E2E PASS.",
+                "Automatic best-tool selection PASS.",
+                "Automatic best-tool selection is passed.",
+                "Automatic best-tool selection passed.",
+                "Automatic best-tool selection is available.",
+                "Automatic best-tool selection available.",
+                "Automatic best-tool selection is verified.",
+                "Automatic best-tool selection verified.",
+                "Universal plugin/skill/tool availability PASS.",
+                "Universal plugin/skill/tool availability is passed.",
+                "Universal plugin/skill/tool availability passed.",
+                "Universal plugin/skill/tool availability is available.",
+                "Universal plugin/skill/tool availability available.",
+                "Universal plugin/skill/tool availability is verified.",
+                "Universal plugin/skill/tool availability verified.",
+                "Catalog entry runtime PASS.",
+                "Catalog entry runtime is passed.",
+                "Catalog entry runtime passed.",
+                "Catalog entry runtime is available.",
+                "Catalog entry runtime available.",
+                "Catalog entry runtime is verified.",
+                "Catalog entry runtime verified.",
                 "1.0.0 production-ready.",
                 "RISK-036 closed.",
             ]
@@ -3501,6 +3565,27 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
             "full runtime support supported",
             "external first-session pilot success",
             "codex desktop marketplace-management e2e pass",
+            "automatic best-tool selection pass",
+            "automatic best-tool selection is passed",
+            "automatic best-tool selection passed",
+            "automatic best-tool selection is available",
+            "automatic best-tool selection available",
+            "automatic best-tool selection is verified",
+            "automatic best-tool selection verified",
+            "universal plugin/skill/tool availability pass",
+            "universal plugin/skill/tool availability is passed",
+            "universal plugin/skill/tool availability passed",
+            "universal plugin/skill/tool availability is available",
+            "universal plugin/skill/tool availability available",
+            "universal plugin/skill/tool availability is verified",
+            "universal plugin/skill/tool availability verified",
+            "catalog entry runtime pass",
+            "catalog entry runtime is passed",
+            "catalog entry runtime passed",
+            "catalog entry runtime is available",
+            "catalog entry runtime available",
+            "catalog entry runtime is verified",
+            "catalog entry runtime verified",
             "1.0.0 production-ready",
             "risk-036 closed",
         ):
@@ -3526,7 +3611,9 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
                     "0.44.1\n"
                     "No-overclaim boundary: no official approval, marketplace approval, "
                     "universal/full runtime support, external first-session pilot success, "
-                    "Codex Desktop marketplace-management E2E PASS, or 1.0.0 production-ready claim. "
+                    "Codex Desktop marketplace-management E2E PASS, automatic best-tool selection, "
+                    "universal plugin/skill/tool availability, catalog entry runtime PASS, "
+                    "or 1.0.0 production-ready claim. "
                     "RISK-036 remains open.\n",
                     encoding="utf-8",
                 )
@@ -3599,6 +3686,224 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
                 issues = vw.check_release_docs_coverage("0.44.1", root=root)
 
         self.assertEqual([], issues)
+
+    def test_codex_desktop_marketplace_report_requires_blocked_matrix(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            report = root / "docs/requirements/codex-desktop-marketplace-e2e-0.45.0.md"
+            report.parent.mkdir(parents=True)
+            report.write_text(
+                "# Codex Desktop Marketplace-Management E2E Report\n"
+                "## Result Matrix\n"
+                "| Lifecycle step | 0.45.0 result | Evidence status | Exact missing Desktop evidence |\n"
+                "| --- | --- | --- | --- |\n"
+                "| Codex Desktop version and environment capture | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Marketplace add | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Plugin install | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Plugin enable | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Plugin visibility with display name, description, icon, and preview | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Skill discovery | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Governance status | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Upgrade or reinstall | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Disable, uninstall, or rollback | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "No official approval. No marketplace approval. No universal/full runtime support. "
+                "No external first-session pilot success. "
+                "No Codex Desktop marketplace-management E2E PASS. "
+                "No 1.0.0 production-ready.\n",
+                encoding="utf-8",
+            )
+
+            issues = vw.check_codex_desktop_marketplace_e2e_report(root=root)
+
+        self.assertEqual([], issues)
+
+    def test_codex_desktop_marketplace_report_accepts_expanded_blocked_matrix(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            report = root / "docs/requirements/codex-desktop-marketplace-e2e-0.45.0.md"
+            report.parent.mkdir(parents=True)
+            report.write_text(
+                "# Codex Desktop Marketplace-Management E2E Report\n"
+                "## Result Matrix\n"
+                "| Lifecycle step | 0.45.0 result | Evidence status | Exact missing Desktop evidence |\n"
+                "| --- | --- | --- | --- |\n"
+                "| Codex Desktop version and environment capture | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Marketplace add or local marketplace registration | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Plugin install from Codex Desktop | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Plugin enable from Codex Desktop | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Plugin visibility with display name, description, icon, and preview | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Skill discovery or invocation | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Governance status or Delivery Trust Snapshot from a real project | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Upgrade or reinstall after manifest version change | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Disable, uninstall, or rollback | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Official/public marketplace approval | BLOCKED | NOT_SUPPORTED | No approval evidence. |\n"
+                "No official approval. No marketplace approval. No universal/full runtime support. "
+                "No external first-session pilot success. "
+                "No Codex Desktop marketplace-management E2E PASS. "
+                "No 1.0.0 production-ready.\n",
+                encoding="utf-8",
+            )
+
+            issues = vw.check_codex_desktop_marketplace_e2e_report(root=root)
+
+        self.assertEqual([], issues)
+
+    def test_codex_desktop_marketplace_report_current_real_report_passes(self):
+        report = vw.ROOT / "docs/requirements/codex-desktop-marketplace-e2e-0.45.0.md"
+        if not report.is_file():
+            self.skipTest("0.45.0 Codex Desktop marketplace report is not present")
+
+        issues = vw.check_codex_desktop_marketplace_e2e_report(root=vw.ROOT)
+
+        self.assertEqual([], issues)
+
+    def test_codex_desktop_marketplace_report_rejects_lifecycle_pass(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            report = root / "docs/requirements/codex-desktop-marketplace-e2e-0.45.0.md"
+            report.parent.mkdir(parents=True)
+            report.write_text(
+                "# Codex Desktop Marketplace-Management E2E Report\n"
+                "## Result Matrix\n"
+                "| Lifecycle step | 0.45.0 result | Evidence status | Exact missing Desktop evidence |\n"
+                "| --- | --- | --- | --- |\n"
+                "| Marketplace add | PASS | NOT_RUN | Manifest exists. |\n"
+                "| Plugin install | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Plugin enable | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Skill discovery | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Governance status | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Upgrade or reinstall | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Disable, uninstall, or rollback | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "No official approval. No marketplace approval. No universal/full runtime support. "
+                "No external first-session pilot success. "
+                "No Codex Desktop marketplace-management E2E PASS. "
+                "No 1.0.0 production-ready.\n",
+                encoding="utf-8",
+            )
+
+            issues = vw.check_codex_desktop_marketplace_e2e_report(root=root)
+
+        self.assertTrue(any("must not be PASS" in issue for issue in issues))
+
+    def test_codex_desktop_marketplace_report_rejects_allowlist_marker_pass_abuse(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            report = root / "docs/requirements/codex-desktop-marketplace-e2e-0.45.0.md"
+            report.parent.mkdir(parents=True)
+            report.write_text(
+                "# Codex Desktop Marketplace-Management E2E Report\n"
+                "## Result Matrix\n"
+                "| Lifecycle step | 0.45.0 result | Evidence status | Exact missing Desktop evidence |\n"
+                "| --- | --- | --- | --- |\n"
+                "| Marketplace add | PASS | NOT_RUN | CDX-DESKTOP-002 manifest exists. |\n"
+                "| Plugin install | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Plugin enable | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Skill discovery | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Governance status | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Upgrade or reinstall | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Disable, uninstall, or rollback | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "No official approval. No marketplace approval. No universal/full runtime support. "
+                "No external first-session pilot success. "
+                "No Codex Desktop marketplace-management E2E PASS. "
+                "No 1.0.0 production-ready.\n",
+                encoding="utf-8",
+            )
+
+            issues = vw.check_codex_desktop_marketplace_e2e_report(root=root)
+
+        self.assertTrue(any("marketplace add" in issue and "must be BLOCKED" in issue for issue in issues))
+
+    def test_codex_desktop_marketplace_report_rejects_expanded_ready_status(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            report = root / "docs/requirements/codex-desktop-marketplace-e2e-0.45.0.md"
+            report.parent.mkdir(parents=True)
+            report.write_text(
+                "# Codex Desktop Marketplace-Management E2E Report\n"
+                "## Result Matrix\n"
+                "| Lifecycle step | 0.45.0 result | Evidence status | Exact missing Desktop evidence |\n"
+                "| --- | --- | --- | --- |\n"
+                "| Codex Desktop version and environment capture | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Marketplace add or local marketplace registration | READY | NOT_RUN | No Desktop evidence. |\n"
+                "| Plugin install from Codex Desktop | BLOCKED | READY | No Desktop evidence. |\n"
+                "| Plugin enable from Codex Desktop | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Plugin visibility with display name, description, icon, and preview | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Skill discovery or invocation | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Governance status or Delivery Trust Snapshot from a real project | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Upgrade or reinstall after manifest version change | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Disable, uninstall, or rollback | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Official/public marketplace approval | BLOCKED | NOT_SUPPORTED | No approval evidence. |\n"
+                "No official approval. No marketplace approval. No universal/full runtime support. "
+                "No external first-session pilot success. "
+                "No Codex Desktop marketplace-management E2E PASS. "
+                "No 1.0.0 production-ready.\n",
+                encoding="utf-8",
+            )
+
+            issues = vw.check_codex_desktop_marketplace_e2e_report(root=root)
+
+        self.assertTrue(any("marketplace add or local marketplace registration" in issue and "must be BLOCKED" in issue for issue in issues))
+        self.assertTrue(any("plugin install from codex desktop" in issue and "must be NOT_RUN" in issue for issue in issues))
+
+    def test_codex_desktop_marketplace_report_rejects_positive_non_pass_status(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            report = root / "docs/requirements/codex-desktop-marketplace-e2e-0.45.0.md"
+            report.parent.mkdir(parents=True)
+            report.write_text(
+                "# Codex Desktop Marketplace-Management E2E Report\n"
+                "## Result Matrix\n"
+                "| Lifecycle step | 0.45.0 result | Evidence status | Exact missing Desktop evidence |\n"
+                "| --- | --- | --- | --- |\n"
+                "| Marketplace add | READY | NOT_RUN | No Desktop evidence. |\n"
+                "| Plugin install | SUPPORTED | NOT_RUN | No Desktop evidence. |\n"
+                "| Plugin enable | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Skill discovery | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Governance status | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Upgrade or reinstall | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Disable, uninstall, or rollback | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "## Acceptance Criteria\n"
+                "- Future PASS requires real Desktop lifecycle evidence.\n"
+                "No official approval. No marketplace approval. No universal/full runtime support. "
+                "No external first-session pilot success. "
+                "No Codex Desktop marketplace-management E2E PASS. "
+                "No 1.0.0 production-ready.\n",
+                encoding="utf-8",
+            )
+
+            issues = vw.check_codex_desktop_marketplace_e2e_report(root=root)
+
+        self.assertTrue(any("marketplace add" in issue and "must be BLOCKED" in issue for issue in issues))
+        self.assertTrue(any("plugin install" in issue and "must be BLOCKED" in issue for issue in issues))
+        self.assertTrue(any("PASS/READY/SUPPORTED" in issue for issue in issues))
+
+    def test_codex_desktop_marketplace_report_rejects_missing_not_run(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            report = root / "docs/requirements/codex-desktop-marketplace-e2e-0.45.0.md"
+            report.parent.mkdir(parents=True)
+            report.write_text(
+                "# Codex Desktop Marketplace-Management E2E Report\n"
+                "## Result Matrix\n"
+                "| Lifecycle step | 0.45.0 result | Evidence status | Exact missing Desktop evidence |\n"
+                "| --- | --- | --- | --- |\n"
+                "| Marketplace add | BLOCKED | READY | No Desktop evidence. |\n"
+                "| Plugin install | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Plugin enable | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Skill discovery | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Governance status | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Upgrade or reinstall | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "| Disable, uninstall, or rollback | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+                "No official approval. No marketplace approval. No universal/full runtime support. "
+                "No external first-session pilot success. "
+                "No Codex Desktop marketplace-management E2E PASS. "
+                "No 1.0.0 production-ready.\n",
+                encoding="utf-8",
+            )
+
+            issues = vw.check_codex_desktop_marketplace_e2e_report(root=root)
+
+        self.assertTrue(any("marketplace add" in issue and "must be NOT_RUN" in issue for issue in issues))
 
     def test_check_release_readiness_fails_on_cross_reference_issues(self):
         patches = self._clean_release_patches()
@@ -4135,12 +4440,12 @@ class E2ECommandMatrixTests(unittest.TestCase):
             for name in ("evidence-log.md", "decision-log.md", "risk-log.md", "session-snapshot.md"):
                 (governance_dir / name).write_text("# fixture\n", encoding="utf-8")
             (governance_dir / "plan-tracker.md").write_text(
-                "- **工作流版本**: 0.44.1\n"
+                "- **工作流版本**: 0.45.0\n"
                 "- **操作权限模式**: default-confirm\n",
                 encoding="utf-8",
             )
             (skill_dir / "SKILL.md").write_text(
-                "---\nversion: 0.44.1\n---\nCoordinator\nAgent Team\n",
+                "---\nversion: 0.45.0\n---\nCoordinator\nAgent Team\n",
                 encoding="utf-8",
             )
             trust_snapshot_contract = (

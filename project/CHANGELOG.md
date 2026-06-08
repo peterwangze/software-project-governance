@@ -2,6 +2,39 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.45.0] — 2026-06-08
+
+### 0.45.0 — Governance Eval & Benchmark + Capability Discovery
+
+0.45.0 发布 Governance Eval & Benchmark + Capability Discovery：把 capability context trace、external capability registry、restricted-environment benchmark fixtures 和 Codex Desktop marketplace-management E2E report boundary 纳入 release package。本 release 不声明 official approval、marketplace approval、universal/full runtime support、external first-session pilot success、Codex Desktop marketplace-management E2E PASS、automatic best-tool selection、universal plugin/skill/tool availability、catalog entry runtime PASS 或 1.0.0 production-ready。RISK-036 继续打开，0.46.0 official submission materials 必须消费本 release 的 blocked Desktop E2E 事实和 capability selection 证据。
+
+### 新增
+
+- **FIX-115**: 新增 `capability-context [--fixture <project-root>] [--fail-on-issues]`、fact-backed capability selection trace、TOOL-031 和 Check 28j；输出 scenario、host facts、available capabilities、selected capability、rejected alternatives、degradation、side-effect boundary、validation command、review requirement 和 no-overclaim boundary。
+- **FIX-116**: 新增 canonical `skills/software-project-governance/core/capability-registry.json`、`check-capability-registry`、TOOL-032、Check 28k 和 manifest canonical artifact coverage；registry 记录 plugin/skill/tool/MCP/browser/sub-agent/script/fallback 候选能力，但 catalog membership 不是 runtime PASS。
+- **FIX-117**: 新增 `check-host-capability-context`、TOOL-033、Check 28l 和 restricted-environment benchmark fixtures，覆盖 no network、no plugin install、no MCP、no browser、no sub-agent、local skill only、Codex CLI blocked、Gemini auth blocked。
+- **REL-022**: 新增 0.45.0 release checklist、feature flags、rollback plan、Governance Eval & Benchmark report 和 Codex Desktop marketplace-management E2E result matrix。
+
+### 变更
+
+- 版本声明同步到 0.45.0：source SKILL、canonical manifest、Claude/Codex plugin metadata、marketplace metadata、governance pack registry、capability registry、hook @version、target fixture skill 和 target fixture plan tracker。
+- `check-release --version 0.45.0 --require-changelog --runtime-adapters` 要求 release docs 存在、被 manifest 覆盖、保留 conservative no-overclaim boundary，并对 0.45.0 Codex Desktop marketplace-management report 执行 no-PASS-without-real-evidence guard。
+
+### 验证
+
+- `python skills/software-project-governance/infra/verify_workflow.py check-version-consistency`
+- `python skills/software-project-governance/infra/verify_workflow.py check-release --version 0.45.0 --require-changelog --runtime-adapters`
+- `python -m unittest skills/software-project-governance/infra/tests/test_verify_workflow.py -v`
+- `python skills/software-project-governance/infra/verify_workflow.py check-governance --fail-on-issues`
+- `python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues`
+- `git diff --check`
+
+### 发布边界
+
+- Codex Desktop marketplace-management lifecycle is **BLOCKED / NOT_RUN** in this release because no real Desktop add/install/enable/invoke/upgrade/uninstall evidence was executed or captured.
+- No official approval, marketplace approval, universal/full runtime support, external first-session pilot success, Codex Desktop marketplace-management E2E PASS, automatic best-tool selection, universal plugin/skill/tool availability, catalog entry runtime PASS, or 1.0.0 production-ready claim.
+- 0.45.0 release package does not include commit, tag, or push.
+
 ## [0.44.1] — 2026-06-07
 
 ### 0.44.1 — Patch Release: no-overclaim 与 context fact coverage

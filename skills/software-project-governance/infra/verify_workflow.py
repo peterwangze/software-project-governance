@@ -742,16 +742,16 @@ REQUIRED_SNIPPETS = {
         "## [0.5.0]",
     ],
     ROOT / ".claude-plugin/plugin.json": [
-        "0.44.1",
+        "0.45.0",
     ],
     ROOT / ".claude-plugin/marketplace.json": [
-        "0.44.1",
+        "0.45.0",
     ],
     ROOT / ".codex-plugin/plugin.json": [
-        "0.44.1",
+        "0.45.0",
     ],
     ROOT / "skills/software-project-governance/core/manifest.json": [
-        "0.44.1",
+        "0.45.0",
     ],
 }
 
@@ -2904,6 +2904,20 @@ def _line_has_scoped_claim_negation(line, phrase):
         "external first-session pilot passed",
         "codex desktop marketplace-management e2e pass",
         "codex desktop marketplace-management e2e passed",
+        "automatic best-tool selection",
+        "automatic best-tool selection pass",
+        "automatic best-tool selection passed",
+        "automatic best-tool selection available",
+        "automatic best-tool selection verified",
+        "universal plugin/skill/tool availability",
+        "universal plugin/skill/tool availability pass",
+        "universal plugin/skill/tool availability passed",
+        "universal plugin/skill/tool availability available",
+        "universal plugin/skill/tool availability verified",
+        "catalog entry runtime pass",
+        "catalog entry runtime passed",
+        "catalog entry runtime available",
+        "catalog entry runtime verified",
         "1.0.0 production-ready",
         "1.0.0 production-ready claim",
         "risk-036 closed",
@@ -3873,8 +3887,133 @@ def _release_docs_line_has_guard_context(label, line):
     lower = line.lower()
     return (
         ("release docs" in lower and "changelog" in lower and "声明" in lower)
+        or ("release docs" in lower and "claim" in lower)
+        or ("requirement reports" in lower and "claim" in lower)
         or "发布提交混入" in lower
+        or "release package mixes" in lower
     )
+
+
+def check_codex_desktop_marketplace_e2e_report(root=None):
+    """REL-022: 0.45.0 Desktop marketplace lifecycle must not overclaim PASS."""
+    root = Path(root) if root is not None else ROOT
+    rel_path = "docs/requirements/codex-desktop-marketplace-e2e-0.45.0.md"
+    path = root / rel_path
+    display = _display_path(path, root)
+    issues = []
+
+    if not path.is_file():
+        return [f"{display}: missing Codex Desktop marketplace-management E2E report"]
+
+    content = path.read_text(encoding="utf-8")
+    lower_content = content.lower()
+    required_tokens = [
+        "result matrix",
+        "blocked",
+        "not_run",
+        "exact missing desktop evidence",
+        "no official approval",
+        "no marketplace approval",
+        "no universal/full runtime support",
+        "no external first-session pilot success",
+        "no codex desktop marketplace-management e2e pass",
+        "no 1.0.0 production-ready",
+    ]
+    for token in required_tokens:
+        if token not in lower_content:
+            issues.append(f"{display}: missing Codex Desktop report token `{token}`")
+
+    lifecycle_steps = [
+        ("desktop environment capture", ("codex desktop version", "environment capture")),
+        ("marketplace add", ("marketplace add", "local marketplace registration")),
+        ("plugin install", ("plugin install", "install from codex desktop")),
+        ("plugin enable", ("plugin enable", "enable from codex desktop")),
+        ("plugin visibility", ("plugin visibility", "display name", "preview")),
+        ("skill discovery", ("skill discovery", "skill invocation", "invocation")),
+        ("governance status", ("governance status", "delivery trust snapshot")),
+        ("upgrade or reinstall", ("upgrade or reinstall", "manifest version change")),
+        ("disable, uninstall, or rollback", ("disable, uninstall", "uninstall", "rollback")),
+    ]
+    for step, aliases in lifecycle_steps:
+        if not any(alias in lower_content for alias in aliases):
+            issues.append(f"{display}: missing lifecycle step `{step}`")
+
+    matrix_rows = []
+    for line in content.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("|") or not stripped.endswith("|"):
+            continue
+        cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+        if len(cells) < 4:
+            continue
+        step = " ".join(cells[0].lower().split())
+        result = " ".join(cells[1].upper().split())
+        evidence_status = " ".join(cells[2].upper().split())
+        matrix_rows.append((step, result, evidence_status, stripped))
+
+    def find_matrix_row(aliases):
+        for step, result, evidence_status, row in matrix_rows:
+            if any(alias in step for alias in aliases):
+                return step, result, evidence_status, row
+        return None
+
+    for step, aliases in lifecycle_steps:
+        matrix_row = find_matrix_row(aliases)
+        if matrix_row is None:
+            continue
+        row_step, result, evidence_status, row = matrix_row
+        if result != "BLOCKED":
+            issues.append(
+                f"{display}: lifecycle row `{row_step}` must be BLOCKED until real Desktop evidence exists; got `{result}`"
+            )
+        if evidence_status != "NOT_RUN":
+            issues.append(
+                f"{display}: lifecycle row `{row_step}` evidence status must be NOT_RUN until real Desktop evidence exists; got `{evidence_status}`"
+            )
+        if re.search(r"\|\s*(pass|ready|supported)\s*\|", row, flags=re.IGNORECASE):
+            issues.append(f"{display}: Desktop marketplace lifecycle row `{row_step}` must not claim PASS/READY/SUPPORTED")
+
+    official_row = find_matrix_row(("official/public marketplace approval", "official marketplace approval", "public marketplace approval"))
+    if official_row is not None:
+        row_step, result, evidence_status, row = official_row
+        if result != "BLOCKED":
+            issues.append(
+                f"{display}: lifecycle row `{row_step}` must be BLOCKED until official/public marketplace evidence exists; got `{result}`"
+            )
+        if evidence_status not in {"NOT_SUPPORTED", "NOT_RUN"}:
+            issues.append(
+                f"{display}: lifecycle row `{row_step}` evidence status must be NOT_SUPPORTED or NOT_RUN until official/public marketplace evidence exists; got `{evidence_status}`"
+            )
+        if re.search(r"\|\s*(pass|ready|supported)\s*\|", row, flags=re.IGNORECASE):
+            issues.append(f"{display}: Desktop marketplace approval row `{row_step}` must not claim PASS/READY/SUPPORTED")
+
+    in_acceptance_criteria = False
+    for line in content.splitlines():
+        heading = re.match(r"^(#+)\s*(.+?)\s*$", line.strip())
+        if heading:
+            heading_text = heading.group(2).strip().lower()
+            in_acceptance_criteria = heading_text.startswith("acceptance criteria")
+        normalized = " ".join(line.strip().lower().split())
+        if not normalized or "pass" not in normalized:
+            continue
+        if in_acceptance_criteria:
+            continue
+        if "no codex desktop marketplace-management e2e pass" in normalized:
+            continue
+        if "not desktop marketplace e2e pass" in normalized:
+            continue
+        if "not desktop marketplace-management e2e pass" in normalized:
+            continue
+        if "no manifest/catalog/asset presence as lifecycle pass" in normalized:
+            continue
+        if re.search(r"\|\s*pass\s*\|", normalized):
+            issues.append(f"{display}: Desktop marketplace lifecycle must not be PASS without real Desktop evidence")
+            break
+        if "codex desktop marketplace-management e2e pass" in normalized and not _line_has_scoped_claim_negation(line, "codex desktop marketplace-management e2e pass"):
+            issues.append(f"{display}: forbidden Codex Desktop marketplace-management E2E PASS overclaim")
+            break
+
+    return issues
 
 
 def check_release_docs_coverage(version, root=None):
@@ -3924,6 +4063,27 @@ def check_release_docs_coverage(version, root=None):
         "external first-session pilot passed",
         "codex desktop marketplace-management e2e pass",
         "codex desktop marketplace-management e2e passed",
+        "automatic best-tool selection pass",
+        "automatic best-tool selection is passed",
+        "automatic best-tool selection passed",
+        "automatic best-tool selection is available",
+        "automatic best-tool selection available",
+        "automatic best-tool selection is verified",
+        "automatic best-tool selection verified",
+        "universal plugin/skill/tool availability pass",
+        "universal plugin/skill/tool availability is passed",
+        "universal plugin/skill/tool availability passed",
+        "universal plugin/skill/tool availability is available",
+        "universal plugin/skill/tool availability available",
+        "universal plugin/skill/tool availability is verified",
+        "universal plugin/skill/tool availability verified",
+        "catalog entry runtime pass",
+        "catalog entry runtime is passed",
+        "catalog entry runtime passed",
+        "catalog entry runtime is available",
+        "catalog entry runtime available",
+        "catalog entry runtime is verified",
+        "catalog entry runtime verified",
         "1.0.0 production-ready",
         "risk-036 closed",
     ]
@@ -3957,6 +4117,9 @@ def check_release_docs_coverage(version, root=None):
                 ):
                     issues.append(f"{display}: {label} forbidden release docs overclaim `{phrase}`")
                     break
+
+    if version == "0.45.0":
+        issues.extend(check_codex_desktop_marketplace_e2e_report(root=root))
 
     return issues
 
@@ -14241,12 +14404,12 @@ def _e2e_target_fixture_checks(e2e_dir):
         {
             "label": "target plan-tracker project config",
             "path": governance_dir / "plan-tracker.md",
-            "needles": ["工作流版本", "0.44.1", "操作权限模式", "default-confirm"],
+            "needles": ["工作流版本", "0.45.0", "操作权限模式", "default-confirm"],
         },
         {
             "label": "target workflow skill version",
             "path": e2e_dir / "skills" / "software-project-governance" / "SKILL.md",
-            "needles": ["version: 0.44.1", "Coordinator", "Agent Team"],
+            "needles": ["version: 0.45.0", "Coordinator", "Agent Team"],
         },
         {
             "label": "target /governance route contract",

@@ -3,7 +3,7 @@
 # Runs BEFORE every git commit. BLOCKS commits that don't meet governance criteria.
 # Handles FILE-DEPENDENT checks only. Message-dependent checks are in commit-msg (FIX-047).
 # Design assumption: agent WILL NOT follow rules voluntarily. System MUST enforce.
-# @version: 0.44.1
+# @version: 0.45.0
 
 set -e
 

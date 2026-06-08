@@ -38,6 +38,7 @@
 | TOOL-030 | Governance Pack Status Boundary guard | script + command contract + release detail | `infra/verify_workflow.py check-governance-pack-status` + `check-governance` Check 28i + `check-release` governance pack status detail | `/governance`/status Delivery Trust Snapshot pack summary、default/enabled pack wording 或 release pack no-overclaim boundary 变更后 | 测试/发布/维护 | 是 |
 | TOOL-031 | Capability Context Selection Trace | script + command contract | `infra/verify_workflow.py capability-context` + `check-governance` Check 28j | 0.45.0 capability context/selection trace、受限环境能力选择诊断或 release gate 前 | 调研/架构/开发/测试/发布/维护 | 是 |
 | TOOL-032 | Capability Registry guard | script + registry | `infra/verify_workflow.py check-capability-registry` + `check-governance` Check 28k | external capability registry、plugin/skill/tool/MCP/browser/sub-agent/script/fallback catalog 或 no-overclaim boundary 变更后 | 调研/架构/测试/发布/维护 | 是 |
+| TOOL-033 | Host Capability Context benchmark | script + benchmark/diagnostic | `infra/verify_workflow.py check-host-capability-context` + `check-governance` Check 28l | FIX-117 restricted-environment fixtures、no network/no plugin install/no MCP/no browser/no sub-agent/local skill only/Codex CLI blocked/Gemini auth blocked 诊断或 release gate 前 | 调研/架构/测试/发布/维护 | 是 |
 
 ## 工具详情
 
@@ -94,7 +95,7 @@
 ### TOOL-006：校验脚本
 
 - **文件**：`infra/verify_workflow.py`
-- **子命令**：`verify`（全量校验）、`status`（治理状态摘要）、`gate <G1-G11>`（Gate 检查）、`gates`（全部 Gate 状态）、`stage <stage-id>`（阶段状态）、`stages`（全部阶段状态）、`check-governance --fail-on-issues`（治理健康检查）、`e2e-check`（E2E proxy + fixture 分层检查）、`check-version-consistency`、`check-manifest-consistency`、`check-governance-packs`、`check-capability-registry`、`check-readme-pack-guidance`、`check-governance-pack-status`、`capability-context`、`check-deterministic-scaffolds`、`check-interruption-policy`、`generate-deterministic-scaffold`、`check-locks`、`check-archive-integrity`
+- **子命令**：`verify`（全量校验）、`status`（治理状态摘要）、`gate <G1-G11>`（Gate 检查）、`gates`（全部 Gate 状态）、`stage <stage-id>`（阶段状态）、`stages`（全部阶段状态）、`check-governance --fail-on-issues`（治理健康检查）、`e2e-check`（E2E proxy + fixture 分层检查）、`check-version-consistency`、`check-manifest-consistency`、`check-governance-packs`、`check-capability-registry`、`check-host-capability-context`、`check-readme-pack-guidance`、`check-governance-pack-status`、`capability-context`、`check-deterministic-scaffolds`、`check-interruption-policy`、`generate-deterministic-scaffold`、`check-locks`、`check-archive-integrity`
 - **输入**：无（自动读取项目文件）
 - **输出**：校验结果（PASSED/FAILED）+ 治理状态摘要
 - **触发条件**：工作流资产变更后、Gate 检查时、定期巡检
@@ -366,6 +367,17 @@
 - **边界**：catalog membership is not runtime PASS；registry 是 capability fact source，不执行 plugin install、MCP call、browser action、sub-agent spawn、network call 或 external API；governance packs 保持 internal capability modules，不等同 external plugin/skill/tool availability
 - **被以下子工作流使用**：调研（research）、架构设计（architecture）、测试（testing）、发布（release）、维护（maintenance）
 
+### TOOL-033：Host Capability Context benchmark
+
+- **文件**：`infra/verify_workflow.py` + `docs/requirements/capability-discovery-orchestration-0.45.0.md`
+- **子命令**：`check-host-capability-context [--fixture <project-root>] [--fail-on-issues]`
+- **输入**：当前项目或测试 fixture 的 capability registry/catalog facts、local skill/script facts、runtime readiness facts，以及 no network、no plugin install、no MCP、no browser、no sub-agent、local skill only、Codex CLI blocked、Gemini auth blocked 等受限环境场景
+- **输出**：restricted host capability context 是否覆盖 8 个场景；每个场景是否给出 `source_facts`、`selected_capability`、降级边界、`validation_command` 与 no-overclaim boundary；是否阻断 blocked/degraded/catalog fact 被包装成 runtime PASS/AVAILABLE、automatic best-tool selection 或 universal plugin availability
+- **触发条件**：FIX-117 restricted-environment fixtures、capability discovery/orchestration release gate、受限宿主诊断或 no-overclaim boundary 变更后
+- **依赖**：`check-governance` Check 28l、TOOL-031、TOOL-032、runtime readiness matrix
+- **边界**：benchmark/diagnostic only；not external execution；not Desktop marketplace E2E PASS；不执行 network、plugin install、MCP call、browser action、sub-agent spawn、Codex CLI runtime 或 Gemini auth flow；blocked capability is not runtime PASS；catalog fact is not runtime PASS
+- **被以下子工作流使用**：调研（research）、架构设计（architecture）、测试（testing）、发布（release）、维护（maintenance）
+
 ## 工具与子工作流的关系矩阵
 
 | 工具 | 立项 | 调研 | 选型 | 环境 | 架构 | 开发 | 测试 | CI/CD | 发布 | 运营 | 维护 |
@@ -398,6 +410,7 @@
 | README Pack Guidance guard | ● | | | | ○ | | ● | | ● | | ● |
 | Manifest Product Artifact guard | | | | | ○ | | ● | | ● | | ● |
 | Governance Pack Status Boundary guard | | | | | ○ | | ● | | ● | | ● |
+| Host Capability Context benchmark | | ● | | | ○ | | ● | | ● | | ● |
 | Capability Context Selection Trace | | ● | | | ● | ● | ● | | ● | | ● |
 
 > ● 主要使用者  ○ 可选用

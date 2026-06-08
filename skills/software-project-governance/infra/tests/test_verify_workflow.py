@@ -3034,6 +3034,269 @@ class CapabilityRegistryTests(unittest.TestCase):
             self.assertTrue(any("forbidden capability overclaim `governance pack is external capability`" in issue for issue in issues))
 
 
+class CapabilitySelectionTests(unittest.TestCase):
+    """FIX-117: restricted host capability selection must degrade honestly."""
+
+    def _write_project(self, root, mutate_docs=None, runtime_blocked=True):
+        verify_path = root / "skills/software-project-governance/infra/verify_workflow.py"
+        verify_path.parent.mkdir(parents=True, exist_ok=True)
+        verify_path.write_text("def main():\n    pass\n", encoding="utf-8")
+
+        skill_path = root / "skills/software-project-governance/SKILL.md"
+        skill_path.write_text("---\nname: software-project-governance\n---\n", encoding="utf-8")
+
+        tools_path = root / "skills/software-project-governance/infra/TOOLS.md"
+        tools_text = "\n".join([
+            "# Tools",
+            "TOOL-033",
+            "check-host-capability-context",
+            "FIX-117",
+            "benchmark/diagnostic",
+            "not external execution",
+            "not Desktop marketplace E2E PASS",
+            "no network",
+            "no plugin install",
+            "no MCP",
+            "no browser",
+            "no sub-agent",
+            "local skill only",
+            "Codex CLI blocked",
+            "Gemini auth blocked",
+        ])
+        tools_path.write_text(tools_text, encoding="utf-8")
+
+        req_path = root / "docs/requirements/capability-discovery-orchestration-0.45.0.md"
+        req_path.parent.mkdir(parents=True, exist_ok=True)
+        req_text = "\n".join([
+            "# Capability Discovery",
+            "FIX-117",
+            "TOOL-033",
+            "check-host-capability-context",
+            "benchmark/diagnostic",
+            "not external execution",
+            "not Desktop marketplace E2E PASS",
+            "no network",
+            "no plugin install",
+            "no MCP",
+            "no browser",
+            "no sub-agent",
+            "local skill only",
+            "Codex CLI blocked",
+            "Gemini auth blocked",
+        ])
+        if mutate_docs:
+            req_text, tools_text = mutate_docs(req_text, tools_text)
+            req_path.write_text(req_text, encoding="utf-8")
+            tools_path.write_text(tools_text, encoding="utf-8")
+        else:
+            req_path.write_text(req_text, encoding="utf-8")
+
+        if runtime_blocked:
+            runtime_path = root / "docs/requirements/runtime-readiness-matrix-0.43.0.md"
+            runtime_path.write_text(
+                "| codex | BLOCKED | Codex CLI blocked timeout |\n"
+                "| gemini | BLOCKED | Gemini auth blocked missing/401 |\n",
+                encoding="utf-8",
+            )
+
+        registry_path = root / "skills/software-project-governance/core/capability-registry.json"
+        registry_path.parent.mkdir(parents=True, exist_ok=True)
+        registry = {
+            "capabilities": [
+                {"capability_id": "fallback.local-diagnostic-readonly", "kind": "fallback"},
+                {"capability_id": "software-project-governance.skill-entry", "kind": "skill"},
+                {"capability_id": "verify-workflow.capability-context-tool", "kind": "tool"},
+                {"capability_id": "host.mcp.connectors", "kind": "mcp"},
+                {"capability_id": "browser.in-app-or-chrome-control", "kind": "browser"},
+                {"capability_id": "agent-team.governance-developer", "kind": "sub_agent"},
+                {"capability_id": "codex.desktop.plugin-manifest", "kind": "plugin"},
+            ]
+        }
+        registry_path.write_text(json.dumps(registry, indent=2), encoding="utf-8")
+
+    def test_current_repository_host_capability_context_passes(self):
+        self.assertEqual(vw.check_host_capability_context(vw.ROOT), [])
+
+    def test_restricted_fixture_covers_required_degradation_scenarios(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_project(root)
+
+            context = vw.discover_host_capability_context(root)
+            issues = vw.check_host_capability_context(root)
+
+        self.assertEqual([], issues)
+        scenarios = {item["scenario_id"]: item for item in context["restricted_scenarios"]}
+        for scenario_id in vw.HOST_CAPABILITY_CONTEXT_SCENARIOS:
+            self.assertIn(scenario_id, scenarios)
+        self.assertEqual("DEGRADED", scenarios["no_network"]["status"])
+        self.assertEqual("DEGRADED", scenarios["no_plugin_install"]["status"])
+        self.assertEqual("NOT_SUPPORTED", scenarios["no_mcp"]["status"])
+        self.assertEqual("NOT_SUPPORTED", scenarios["no_browser"]["status"])
+        self.assertEqual("DEGRADED", scenarios["no_sub_agent"]["status"])
+        self.assertEqual("PASS", scenarios["local_skill_only"]["status"])
+        self.assertEqual("BLOCKED", scenarios["codex_cli_blocked"]["status"])
+        self.assertEqual("BLOCKED", scenarios["gemini_auth_blocked"]["status"])
+        self.assertTrue(all("check-host-capability-context" in item["validation_command"] for item in scenarios.values()))
+        self.assertIn("not external execution", " ".join(context["no_overclaim_boundary"]))
+
+    def test_command_accepts_restricted_fixture(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_project(root)
+            args = argparse.Namespace(fixture=str(root), fail_on_issues=True)
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                vw.cmd_check_host_capability_context(args)
+
+        output = buf.getvalue()
+        self.assertIn("Host Capability Context Check", output)
+        self.assertIn("no_network: DEGRADED", output)
+        self.assertIn("codex_cli_blocked: BLOCKED", output)
+        self.assertIn("gemini_auth_blocked: BLOCKED", output)
+        self.assertIn("Result: PASSED", output)
+
+    def test_rejects_missing_runtime_blocked_source_facts(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_project(root, runtime_blocked=False)
+
+            context = vw.discover_host_capability_context(root)
+            issues = vw.check_host_capability_context(root)
+
+        self.assertIn(
+            "runtime readiness facts: Codex CLI runtime evidence missing",
+            context["source_facts"],
+        )
+        self.assertIn(
+            "runtime readiness facts: Gemini auth evidence missing",
+            context["source_facts"],
+        )
+        self.assertFalse(any(fact == "runtime readiness facts: Codex CLI blocked" for fact in context["source_facts"]))
+        self.assertFalse(any(fact == "runtime readiness facts: Gemini auth blocked" for fact in context["source_facts"]))
+        self.assertTrue(any("missing Codex CLI blocked source fact" in issue for issue in issues))
+        self.assertTrue(any("missing Gemini auth blocked source fact" in issue for issue in issues))
+        self.assertTrue(any("scenario codex_cli_blocked: missing direct blocked runtime source fact" in issue for issue in issues))
+        self.assertTrue(any("scenario gemini_auth_blocked: missing direct blocked runtime source fact" in issue for issue in issues))
+
+    def test_rejects_blocked_capability_declared_runtime_pass(self):
+        broken_context = {
+            "scenario": "restricted-environment-capability-selection",
+            "host_id": "fixture",
+            "benchmark_kind": "benchmark/diagnostic fixture; not external execution",
+            "source_facts": ["runtime readiness facts: Codex CLI blocked", "runtime readiness facts: Gemini auth blocked"],
+            "restricted_scenarios": [{
+                "scenario_id": "codex_cli_blocked",
+                "constraint": "Codex CLI blocked",
+                "preferred_capability": "codex.cli.headless-runtime",
+                "selected_capability": "codex.cli.headless-runtime",
+                "status": "PASS",
+                "degradation_boundary": "blocked capability runtime PASS",
+                "validation_command": "python skills/software-project-governance/infra/verify_workflow.py check-host-capability-context --fail-on-issues",
+                "source_facts": ["Codex CLI blocked"],
+                "no_overclaim_boundary": ["runtime PASS"],
+            }],
+            "side_effect_boundary": "read-only no network plugin install MCP browser sub-agent",
+            "validation_command": "python skills/software-project-governance/infra/verify_workflow.py check-host-capability-context --fail-on-issues",
+            "review_requirement": "requires independent Code Reviewer approval",
+            "no_overclaim_boundary": [
+                "benchmark/diagnostic",
+                "not external execution",
+                "not Desktop marketplace E2E PASS",
+                "blocked capability is not runtime PASS",
+                "catalog fact is not runtime PASS",
+                "Do not claim automatic best-tool selection.",
+                "Do not claim universal plugin availability.",
+            ],
+        }
+        with patch.object(vw, "discover_host_capability_context", return_value=broken_context):
+            issues = vw.check_host_capability_context(vw.ROOT)
+
+        self.assertTrue(any("restricted scenario must be blocked/degraded" in issue for issue in issues))
+        self.assertTrue(any("forbidden overclaim `blocked capability runtime pass`" in issue for issue in issues))
+
+    def test_rejects_missing_degradation_boundary(self):
+        context = vw.discover_host_capability_context(vw.ROOT)
+        context["restricted_scenarios"] = [dict(item) for item in context["restricted_scenarios"]]
+        del context["restricted_scenarios"][0]["degradation_boundary"]
+        with patch.object(vw, "discover_host_capability_context", return_value=context):
+            issues = vw.check_host_capability_context(vw.ROOT)
+
+        self.assertTrue(any("missing `degradation_boundary`" in issue for issue in issues))
+
+    def test_rejects_missing_validation_command(self):
+        context = vw.discover_host_capability_context(vw.ROOT)
+        context["restricted_scenarios"] = [dict(item) for item in context["restricted_scenarios"]]
+        context["restricted_scenarios"][0]["validation_command"] = ""
+        context["validation_command"] = ""
+        with patch.object(vw, "discover_host_capability_context", return_value=context):
+            issues = vw.check_host_capability_context(vw.ROOT)
+
+        self.assertTrue(any("validation_command must name check-host-capability-context" in issue for issue in issues))
+
+    def test_rejects_automatic_best_tool_selection_claim(self):
+        context = vw.discover_host_capability_context(vw.ROOT)
+        context["restricted_scenarios"] = [dict(item) for item in context["restricted_scenarios"]]
+        context["restricted_scenarios"][0]["degradation_boundary"] = "automatically selects the best tool"
+        with patch.object(vw, "discover_host_capability_context", return_value=context):
+            issues = vw.check_host_capability_context(vw.ROOT)
+
+        self.assertTrue(any("forbidden overclaim `automatically selects the best tool`" in issue for issue in issues))
+
+    def test_rejects_universal_plugin_availability_claim(self):
+        context = vw.discover_host_capability_context(vw.ROOT)
+        context["restricted_scenarios"] = [dict(item) for item in context["restricted_scenarios"]]
+        context["restricted_scenarios"][0]["source_facts"] = ["universal plugin availability"]
+        with patch.object(vw, "discover_host_capability_context", return_value=context):
+            issues = vw.check_host_capability_context(vw.ROOT)
+
+        self.assertTrue(any("forbidden overclaim `universal plugin availability`" in issue for issue in issues))
+
+    def test_rejects_fix117_forbidden_positive_overclaims(self):
+        context = vw.discover_host_capability_context(vw.ROOT)
+        context["restricted_scenarios"] = [dict(item) for item in context["restricted_scenarios"]]
+        context["restricted_scenarios"][0]["source_facts"] = [
+            "Codex Desktop marketplace-management E2E PASS",
+            "official approval granted",
+            "officially approved",
+            "marketplace approval granted",
+            "marketplace approved",
+            "successful external execution",
+            "1.0.0 production-ready",
+        ]
+        with patch.object(vw, "discover_host_capability_context", return_value=context):
+            issues = vw.check_host_capability_context(vw.ROOT)
+
+        expected = [
+            "codex desktop marketplace-management e2e pass",
+            "official approval granted",
+            "officially approved",
+            "marketplace approval granted",
+            "marketplace approved",
+            "successful external execution",
+            "external execution",
+            "1.0.0 production-ready",
+        ]
+        for phrase in expected:
+            self.assertTrue(
+                any(f"forbidden overclaim `{phrase}`" in issue for issue in issues),
+                f"missing overclaim issue for {phrase}: {issues}",
+            )
+
+    def test_allows_negated_fix117_boundary_phrasing(self):
+        context = vw.discover_host_capability_context(vw.ROOT)
+        context["restricted_scenarios"] = [dict(item) for item in context["restricted_scenarios"]]
+        context["restricted_scenarios"][0]["source_facts"] = [
+            "not external execution",
+            "not Desktop marketplace E2E PASS",
+        ]
+        with patch.object(vw, "discover_host_capability_context", return_value=context):
+            issues = vw.check_host_capability_context(vw.ROOT)
+
+        self.assertFalse(any("forbidden overclaim `external execution`" in issue for issue in issues))
+        self.assertFalse(any("forbidden overclaim `desktop marketplace e2e pass`" in issue for issue in issues))
+
+
 class ReleaseReadinessCommandTests(unittest.TestCase):
     """FIX-072: stage-release check-release must be backed by a real CLI command."""
 

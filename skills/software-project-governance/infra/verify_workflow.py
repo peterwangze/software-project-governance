@@ -1979,6 +1979,7 @@ GOVERNANCE_PACK_KNOWN_CHECKS = {
     "check-readme-pack-guidance",
     "check-governance-pack-status",
     "check-capability-registry",
+    "check-host-capability-context",
 }
 GOVERNANCE_PACK_STATUS_DOC_PATHS = [
     "commands/governance-status.md",
@@ -2167,6 +2168,88 @@ CAPABILITY_REGISTRY_FORBIDDEN_OVERCLAIMS = [
     "marketplace approval granted",
     "1.0.0 production-ready",
 ]
+HOST_CAPABILITY_CONTEXT_REQUIRED_FIELDS = [
+    "scenario",
+    "host_id",
+    "benchmark_kind",
+    "source_facts",
+    "restricted_scenarios",
+    "side_effect_boundary",
+    "validation_command",
+    "review_requirement",
+    "no_overclaim_boundary",
+]
+HOST_CAPABILITY_CONTEXT_SCENARIOS = {
+    "no_network",
+    "no_plugin_install",
+    "no_mcp",
+    "no_browser",
+    "no_sub_agent",
+    "local_skill_only",
+    "codex_cli_blocked",
+    "gemini_auth_blocked",
+}
+HOST_CAPABILITY_CONTEXT_REQUIRED_SCENARIO_FIELDS = [
+    "scenario_id",
+    "constraint",
+    "preferred_capability",
+    "selected_capability",
+    "degradation_boundary",
+    "validation_command",
+    "source_facts",
+    "no_overclaim_boundary",
+]
+HOST_CAPABILITY_CONTEXT_ALLOWED_STATUSES = {
+    "PASS",
+    "AVAILABLE",
+    "BLOCKED",
+    "DEGRADED",
+    "NOT_SUPPORTED",
+    "NOT_FOUND",
+    "RESEARCH_ONLY",
+}
+HOST_CAPABILITY_CONTEXT_UNAVAILABLE_STATUSES = {
+    "BLOCKED",
+    "DEGRADED",
+    "NOT_SUPPORTED",
+    "NOT_FOUND",
+    "RESEARCH_ONLY",
+}
+HOST_CAPABILITY_CONTEXT_BOUNDARY_TOKENS = [
+    "benchmark/diagnostic",
+    "not external execution",
+    "not Desktop marketplace E2E PASS",
+    "blocked capability is not runtime PASS",
+    "catalog fact is not runtime PASS",
+    "Do not claim automatic best-tool selection.",
+    "Do not claim universal plugin availability.",
+]
+HOST_CAPABILITY_CONTEXT_FORBIDDEN_OVERCLAIMS = [
+    "blocked capability runtime pass",
+    "blocked capability is runtime pass",
+    "blocked capability is available",
+    "degraded capability runtime pass",
+    "catalog fact runtime pass",
+    "catalog fact is runtime pass",
+    "codex desktop marketplace-management e2e pass",
+    "desktop marketplace e2e pass",
+    "officially approved",
+    "official approval granted",
+    "marketplace approved",
+    "marketplace approval granted",
+    "external execution",
+    "successful external execution",
+    "automatic best-tool selection",
+    "automatically selects the best tool",
+    "universal plugin availability",
+    "universal plugin available",
+    "universal plugins available",
+    "1.0.0 production-ready",
+]
+HOST_CAPABILITY_CONTEXT_REQUIRED_BLOCKED_FACTS = {
+    "codex_cli_blocked": "runtime readiness facts: Codex CLI blocked",
+    "gemini_auth_blocked": "runtime readiness facts: Gemini auth blocked",
+}
 GOVERNANCE_PACK_BOUNDARY_TOKENS = [
     "No official approval",
     "No marketplace approval",
@@ -4847,6 +4930,375 @@ def discover_capability_context(root=None):
             "Report BLOCKED, DEGRADED, NOT_SUPPORTED, or NOT_FOUND when preferred capability facts are unavailable.",
         ],
     }
+
+
+def _host_capability_source_fact(root, relative_path, present_label, missing_label):
+    path = _capability_context_path(root, Path(relative_path))
+    if path.is_file():
+        return True, f"{relative_path}: {present_label}"
+    return False, f"{relative_path}: {missing_label}"
+
+
+def _host_context_registry_capabilities(root):
+    registry_path = _capability_context_path(root, Path("skills/software-project-governance/core/capability-registry.json"))
+    if not registry_path.is_file():
+        return [], [f"{_display_path(registry_path, root)}: capability registry missing"]
+    try:
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        return [], [f"{_display_path(registry_path, root)}: invalid JSON: {exc}"]
+    capabilities = registry.get("capabilities", [])
+    if not isinstance(capabilities, list):
+        return [], [f"{_display_path(registry_path, root)}: capabilities is not a list"]
+    return [cap for cap in capabilities if isinstance(cap, dict)], [
+        f"{_display_path(registry_path, root)}: capability registry loaded as catalog facts only"
+    ]
+
+
+def _host_context_capability(capabilities, kind=None, capability_id=None):
+    for capability in capabilities:
+        if capability_id and capability.get("capability_id") == capability_id:
+            return capability
+        if kind and capability.get("kind") == kind:
+            return capability
+    return None
+
+
+def _host_context_fact_contains(root, relative_path, tokens):
+    path = _capability_context_path(root, Path(relative_path))
+    if not path.is_file():
+        return False
+    text = path.read_text(encoding="utf-8").lower()
+    return all(token.lower() in text for token in tokens)
+
+
+def _host_restricted_scenario(
+    scenario_id,
+    constraint,
+    preferred,
+    selected,
+    status,
+    reason,
+    source_facts,
+    validation_command,
+):
+    return {
+        "scenario_id": scenario_id,
+        "constraint": constraint,
+        "preferred_capability": preferred,
+        "selected_capability": selected,
+        "status": status,
+        "degradation_boundary": reason,
+        "validation_command": validation_command,
+        "source_facts": source_facts,
+        "no_overclaim_boundary": [
+            "blocked capability is not runtime PASS",
+            "catalog fact is not runtime PASS",
+            "diagnostic trace is not external execution",
+        ],
+    }
+
+
+def discover_host_capability_context(root=None):
+    """FIX-117: build restricted-environment capability benchmark facts."""
+    root = _context_root(root)
+    host_id, host_facts = _capability_host_id(root)
+    capabilities, registry_facts = _host_context_registry_capabilities(root)
+    verify_exists, verify_fact = _host_capability_source_fact(
+        root,
+        "skills/software-project-governance/infra/verify_workflow.py",
+        "local validator present",
+        "local validator missing",
+    )
+    skill_exists, skill_fact = _host_capability_source_fact(
+        root,
+        "skills/software-project-governance/SKILL.md",
+        "local workflow skill present",
+        "local workflow skill missing",
+    )
+    tools_exists, tools_fact = _host_capability_source_fact(
+        root,
+        "skills/software-project-governance/infra/TOOLS.md",
+        "tool index present",
+        "tool index missing",
+    )
+    req_exists, req_fact = _host_capability_source_fact(
+        root,
+        "docs/requirements/capability-discovery-orchestration-0.45.0.md",
+        "FIX-117 contract doc present",
+        "FIX-117 contract doc missing",
+    )
+    codex_blocked = _host_context_fact_contains(
+        root,
+        "docs/requirements/runtime-readiness-matrix-0.43.0.md",
+        ["codex", "blocked"],
+    ) or _host_context_fact_contains(
+        root,
+        "adapters/codex/adapter-manifest.json",
+        ["blocked", "codex cli"],
+    )
+    gemini_auth_blocked = _host_context_fact_contains(
+        root,
+        "docs/requirements/runtime-readiness-matrix-0.43.0.md",
+        ["gemini", "auth"],
+    ) or _host_context_fact_contains(
+        root,
+        "adapters/gemini/adapter-manifest.json",
+        ["auth", "blocked"],
+    )
+    codex_fact = (
+        "runtime readiness facts: Codex CLI blocked"
+        if codex_blocked
+        else "runtime readiness facts: Codex CLI runtime evidence missing"
+    )
+    gemini_fact = (
+        "runtime readiness facts: Gemini auth blocked"
+        if gemini_auth_blocked
+        else "runtime readiness facts: Gemini auth evidence missing"
+    )
+
+    fallback = _host_context_capability(capabilities, capability_id="fallback.local-diagnostic-readonly")
+    local_skill = _host_context_capability(capabilities, capability_id="software-project-governance.skill-entry")
+    local_script = _host_context_capability(capabilities, capability_id="verify-workflow.capability-context-tool")
+    mcp = _host_context_capability(capabilities, kind="mcp")
+    browser = _host_context_capability(capabilities, kind="browser")
+    sub_agent = _host_context_capability(capabilities, kind="sub_agent")
+    plugin = _host_context_capability(capabilities, kind="plugin")
+
+    fallback_id = fallback.get("capability_id", "fallback.local-diagnostic-readonly") if fallback else "fallback.local-diagnostic-readonly"
+    script_id = local_script.get("capability_id", "verify-workflow.capability-context-tool") if local_script else "verify-workflow.capability-context-tool"
+    skill_id = local_skill.get("capability_id", "software-project-governance.skill-entry") if local_skill else "software-project-governance.skill-entry"
+
+    validation = "python skills/software-project-governance/infra/verify_workflow.py check-host-capability-context --fail-on-issues"
+    scenarios = [
+        _host_restricted_scenario(
+            "no_network",
+            "Network access is unavailable or not allowed for capability selection.",
+            "network.external-lookup",
+            fallback_id,
+            "DEGRADED",
+            "Use local registry/context facts only; do not call external APIs or treat missing network as PASS.",
+            [verify_fact, *registry_facts, "host constraint: no network"],
+            validation,
+        ),
+        _host_restricted_scenario(
+            "no_plugin_install",
+            "Plugin installation, enable, disable, upgrade, or uninstall is unavailable.",
+            plugin.get("capability_id", "codex.desktop.plugin-manifest") if plugin else "codex.desktop.plugin-manifest",
+            fallback_id,
+            "DEGRADED",
+            "Inspect manifest/catalog facts only; do not claim Desktop marketplace-management E2E PASS.",
+            [tools_fact, "host constraint: no plugin install"],
+            validation,
+        ),
+        _host_restricted_scenario(
+            "no_mcp",
+            "No MCP server is installed or reachable in the current host.",
+            mcp.get("capability_id", "host.mcp.connectors") if mcp else "host.mcp.connectors",
+            fallback_id,
+            "NOT_SUPPORTED",
+            "Report MCP as unavailable and use local diagnostic fallback.",
+            [*registry_facts, "host constraint: no MCP"],
+            validation,
+        ),
+        _host_restricted_scenario(
+            "no_browser",
+            "Browser automation is not available or not allowed.",
+            browser.get("capability_id", "browser.in-app-or-chrome-control") if browser else "browser.in-app-or-chrome-control",
+            fallback_id,
+            "NOT_SUPPORTED",
+            "Do not open browser state; use local text and registry facts.",
+            [*registry_facts, "host constraint: no browser"],
+            validation,
+        ),
+        _host_restricted_scenario(
+            "no_sub_agent",
+            "Host-native sub-agent separation is unavailable.",
+            sub_agent.get("capability_id", "agent-team.governance-developer") if sub_agent else "agent-team.governance-developer",
+            script_id,
+            "DEGRADED",
+            "Record degraded execution; do not count self-review as independent review.",
+            [*registry_facts, "host constraint: no sub-agent"],
+            validation,
+        ),
+        _host_restricted_scenario(
+            "local_skill_only",
+            "Only the local workflow skill and local validator are available.",
+            skill_id,
+            script_id if verify_exists else skill_id,
+            "PASS" if skill_exists and verify_exists else "DEGRADED",
+            "Local skill and script may be used for diagnostics, but this is not external capability execution.",
+            [skill_fact, verify_fact, "host constraint: local skill only"],
+            validation,
+        ),
+        _host_restricted_scenario(
+            "codex_cli_blocked",
+            "Codex CLI headless target-cwd runtime is blocked.",
+            "codex.cli.headless-runtime",
+            fallback_id,
+            "BLOCKED",
+            "Codex App/session or plugin metadata cannot substitute for Codex CLI runtime PASS.",
+            [codex_fact],
+            validation,
+        ),
+        _host_restricted_scenario(
+            "gemini_auth_blocked",
+            "Gemini CLI authentication is missing or blocked.",
+            "gemini.cli.runtime",
+            fallback_id,
+            "BLOCKED",
+            "Gemini version or thin projection cannot substitute for authenticated runtime PASS.",
+            [gemini_fact],
+            validation,
+        ),
+    ]
+
+    return {
+        "scenario": "restricted-environment-capability-selection",
+        "host_id": host_id,
+        "benchmark_kind": "benchmark/diagnostic fixture; not external execution",
+        "source_facts": [
+            *host_facts,
+            *registry_facts,
+            verify_fact,
+            skill_fact,
+            tools_fact,
+            req_fact,
+            codex_fact,
+            gemini_fact,
+        ],
+        "restricted_scenarios": scenarios,
+        "side_effect_boundary": "read-only benchmark/diagnostic; no network, plugin install, MCP call, browser action, sub-agent spawn, Codex CLI execution, Gemini auth flow, commits, pushes, or external APIs",
+        "validation_command": validation,
+        "review_requirement": "FIX-117 closure still requires independent Code Reviewer approval; benchmark output is not self-review",
+        "no_overclaim_boundary": [
+            "FIX-117 fixture is benchmark/diagnostic, not external execution.",
+            "FIX-117 fixture is not Desktop marketplace E2E PASS.",
+            "blocked capability is not runtime PASS.",
+            "catalog fact is not runtime PASS.",
+            "Do not claim automatic best-tool selection.",
+            "Do not claim universal plugin availability.",
+        ],
+    }
+
+
+def _host_context_values(value):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _host_context_values(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _host_context_values(item)
+
+
+def check_host_capability_context(root=None):
+    """FIX-117: restricted host benchmark must degrade honestly."""
+    root = _context_root(root)
+    context = discover_host_capability_context(root)
+    failures = []
+    for field in HOST_CAPABILITY_CONTEXT_REQUIRED_FIELDS:
+        if field not in context:
+            failures.append(f"host capability context: missing `{field}`")
+
+    source_facts = context.get("source_facts", [])
+    if not _is_valid_string_list(source_facts):
+        failures.append("host capability context: source_facts must be a non-empty string list")
+
+    scenarios = context.get("restricted_scenarios", [])
+    if not isinstance(scenarios, list) or not scenarios:
+        failures.append("host capability context: restricted_scenarios must be a non-empty list")
+        scenarios = []
+
+    seen = set()
+    for scenario in scenarios:
+        if not isinstance(scenario, dict):
+            failures.append("host capability context: restricted_scenarios entries must be objects")
+            continue
+        scenario_id = scenario.get("scenario_id", "<missing>")
+        seen.add(scenario_id)
+        label = f"host capability context: scenario {scenario_id}"
+        for field in HOST_CAPABILITY_CONTEXT_REQUIRED_SCENARIO_FIELDS:
+            if field not in scenario:
+                failures.append(f"{label}: missing `{field}`")
+        status = scenario.get("status")
+        if status not in HOST_CAPABILITY_CONTEXT_ALLOWED_STATUSES:
+            failures.append(f"{label}: unknown status `{status}`")
+        if scenario_id != "local_skill_only" and status not in HOST_CAPABILITY_CONTEXT_UNAVAILABLE_STATUSES:
+            failures.append(f"{label}: restricted scenario must be blocked/degraded/not-supported/not-found")
+        if scenario_id == "local_skill_only" and status not in {"PASS", "AVAILABLE", "DEGRADED"}:
+            failures.append(f"{label}: local_skill_only must remain local PASS/AVAILABLE or DEGRADED")
+        if scenario.get("selected_capability") == scenario.get("preferred_capability") and status in HOST_CAPABILITY_CONTEXT_UNAVAILABLE_STATUSES:
+            failures.append(f"{label}: unavailable preferred capability cannot be selected")
+        if not _is_valid_string_list(scenario.get("source_facts")):
+            failures.append(f"{label}: source_facts must be a non-empty string list")
+        if "check-host-capability-context" not in scenario.get("validation_command", ""):
+            failures.append(f"{label}: validation_command must name check-host-capability-context")
+        scenario_boundary = " ".join(scenario.get("no_overclaim_boundary", []))
+        if "runtime PASS" not in scenario_boundary and "external execution" not in scenario_boundary:
+            failures.append(f"{label}: no_overclaim_boundary must prevent runtime/external execution overclaim")
+        required_blocked_fact = HOST_CAPABILITY_CONTEXT_REQUIRED_BLOCKED_FACTS.get(scenario_id)
+        if required_blocked_fact and required_blocked_fact not in scenario.get("source_facts", []):
+            failures.append(f"{label}: missing direct blocked runtime source fact `{required_blocked_fact}`")
+
+    missing = sorted(HOST_CAPABILITY_CONTEXT_SCENARIOS - seen)
+    if missing:
+        failures.append(f"host capability context: missing restricted scenario(s): {', '.join(missing)}")
+
+    boundary_text = " ".join(context.get("no_overclaim_boundary", []))
+    for token in HOST_CAPABILITY_CONTEXT_BOUNDARY_TOKENS:
+        if token not in boundary_text:
+            failures.append(f"host capability context: no_overclaim_boundary missing `{token}`")
+    if "read-only" not in context.get("side_effect_boundary", "").lower():
+        failures.append("host capability context: side_effect_boundary must state read-only behavior")
+    for token in ("network", "plugin install", "MCP", "browser", "sub-agent"):
+        if token.lower() not in context.get("side_effect_boundary", "").lower():
+            failures.append(f"host capability context: side_effect_boundary missing `{token}`")
+    if "check-host-capability-context" not in context.get("validation_command", ""):
+        failures.append("host capability context: validation_command must name check-host-capability-context")
+    if "independent Code Reviewer" not in context.get("review_requirement", ""):
+        failures.append("host capability context: review_requirement must preserve independent review")
+    if HOST_CAPABILITY_CONTEXT_REQUIRED_BLOCKED_FACTS["codex_cli_blocked"] not in source_facts:
+        failures.append("host capability context: missing Codex CLI blocked source fact")
+    if HOST_CAPABILITY_CONTEXT_REQUIRED_BLOCKED_FACTS["gemini_auth_blocked"] not in source_facts:
+        failures.append("host capability context: missing Gemini auth blocked source fact")
+
+    for text in _host_context_values(context):
+        lowered = text.lower()
+        for phrase in HOST_CAPABILITY_CONTEXT_FORBIDDEN_OVERCLAIMS:
+            if phrase in lowered and not _line_has_scoped_claim_negation(text, phrase):
+                failures.append(f"host capability context: forbidden overclaim `{phrase}`")
+
+    docs = [
+        root / CAPABILITY_CONTEXT_DOC_PATH,
+        root / CAPABILITY_CONTEXT_TOOLS_PATH,
+    ]
+    required_doc_tokens = [
+        "check-host-capability-context",
+        "TOOL-033",
+        "FIX-117",
+        "benchmark/diagnostic",
+        "not external execution",
+        "not Desktop marketplace E2E PASS",
+        "no network",
+        "no plugin install",
+        "no MCP",
+        "no browser",
+        "no sub-agent",
+        "local skill only",
+        "Codex CLI blocked",
+        "Gemini auth blocked",
+    ]
+    for path in docs:
+        if not path.is_file():
+            failures.append(f"{_display_path(path, root)}: missing FIX-117 host capability contract doc")
+            continue
+        text = path.read_text(encoding="utf-8")
+        for token in required_doc_tokens:
+            if token not in text:
+                failures.append(f"{_display_path(path, root)}: missing FIX-117 token `{token}`")
+    return failures
 
 
 def _context_task(item_id, title, status, source, raw_line, priority="", kind="task"):
@@ -12231,6 +12683,20 @@ def cmd_check_governance(args):
         print("│  [PASS] Capability registry separates catalog facts from runtime PASS and governance packs.")
     print("└──────────────────────────────────────────────────────┘")
 
+    # ── 28l. Restricted Host Capability Context Guard (FIX-117) ──
+    print("\n┌─ Check 28l: Restricted Host Capability Context (FIX-117) ┐")
+    host_capability_issues = check_host_capability_context()
+    if host_capability_issues:
+        all_issues += len(host_capability_issues)
+        print(f"│  [FAIL] {len(host_capability_issues)} restricted host capability issue(s):")
+        for issue in host_capability_issues[:10]:
+            print(f"│    - {issue}")
+        if len(host_capability_issues) > 10:
+            print(f"│    ... and {len(host_capability_issues) - 10} more")
+    else:
+        print("│  [PASS] Restricted-environment capability context degrades honestly without runtime PASS overclaim.")
+    print("└──────────────────────────────────────────────────────────┘")
+
     # ── Summary ──
     print(f"\n┌─ Governance Health Summary ──────────────────────────┐")
     if all_issues == 0:
@@ -15392,6 +15858,46 @@ def cmd_check_capability_registry(args):
     print()
 
 
+def cmd_check_host_capability_context(args):
+    """Run restricted host capability context benchmark guard."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    fixture = getattr(args, "fixture", None)
+    root = ROOT
+    if fixture:
+        fixture_path = Path(fixture)
+        root = fixture_path if fixture_path.is_absolute() else ROOT / fixture_path
+
+    context = discover_host_capability_context(root)
+    issues = check_host_capability_context(root)
+    print("\n=== Host Capability Context Check ===")
+    print(f"  Root: {_display_path(root, ROOT)}")
+    print(f"  Scenario: {context['scenario']}")
+    print(f"  Benchmark kind: {context['benchmark_kind']}")
+    print("  Restricted scenarios:")
+    for scenario in context["restricted_scenarios"]:
+        print(
+            f"    - {scenario['scenario_id']}: {scenario['status']} "
+            f"selected={scenario['selected_capability']} "
+            f"preferred={scenario['preferred_capability']}"
+        )
+    print(f"  Side-effect boundary: {context['side_effect_boundary']}")
+    print(f"  Validation command: {context['validation_command']}")
+    if issues:
+        print(f"  Result: FAILED — {len(issues)} issue(s)")
+        for issue in issues[:20]:
+            print(f"    - {issue}")
+        if len(issues) > 20:
+            print(f"    ... and {len(issues) - 20} more")
+        if getattr(args, "fail_on_issues", False):
+            sys.exit(1)
+    else:
+        print("  Result: PASSED — restricted host capability context is benchmark/diagnostic and no-overclaim safe")
+    print()
+
+
 def cmd_check_readme_pack_guidance(args):
     """Run README first-run profile-to-pack guidance guard."""
     try:
@@ -15871,6 +16377,18 @@ def main():
     ccr_p.add_argument("--fail-on-issues", action="store_true",
                        help="Exit with non-zero code if capability registry is incomplete or overclaims")
 
+    # check-host-capability-context (FIX-117)
+    chc_p = subparsers.add_parser(
+        "check-host-capability-context",
+        help="Check restricted-environment capability selection benchmark facts and no-overclaim boundary",
+    )
+    chc_p.add_argument(
+        "--fixture",
+        help="Optional project root/fixture to inspect instead of the current repository",
+    )
+    chc_p.add_argument("--fail-on-issues", action="store_true",
+                       help="Exit with non-zero code if restricted host capability context is incomplete or overclaims")
+
     # check-readme-pack-guidance (FIX-109)
     crpg_p = subparsers.add_parser(
         "check-readme-pack-guidance",
@@ -15993,6 +16511,7 @@ def main():
         "check-first-session-measurement": cmd_check_first_session_measurement,
         "check-governance-packs": cmd_check_governance_packs,
         "check-capability-registry": cmd_check_capability_registry,
+        "check-host-capability-context": cmd_check_host_capability_context,
         "check-readme-pack-guidance": cmd_check_readme_pack_guidance,
         "check-governance-pack-status": cmd_check_governance_pack_status,
         "check-product-success-contracts": cmd_check_product_success_contracts,

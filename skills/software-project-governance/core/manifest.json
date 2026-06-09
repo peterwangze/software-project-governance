@@ -37,7 +37,15 @@
       { "path": ".agents/", "type": "dir" },
       { "path": "docs/release/release-checklist-0.45.0.md", "type": "file" },
       { "path": "docs/release/feature-flags-0.45.0.md", "type": "file" },
-      { "path": "docs/release/rollback-plan-0.45.0.md", "type": "file" }
+      { "path": "docs/release/rollback-plan-0.45.0.md", "type": "file" },
+      { "path": "docs/marketplace/official-submission-0.46.0.md", "type": "file" },
+      { "path": "docs/marketplace/ecosystem-positioning-0.46.0.md", "type": "file" },
+      { "path": "docs/marketplace/comparison-0.46.0.md", "type": "file" },
+      { "path": "docs/marketplace/migration-guide-0.46.0.md", "type": "file" },
+      { "path": "docs/marketplace/examples-0.46.0.md", "type": "file" },
+      { "path": "docs/release/release-checklist-0.46.0.md", "type": "file" },
+      { "path": "docs/release/feature-flags-0.46.0.md", "type": "file" },
+      { "path": "docs/release/rollback-plan-0.46.0.md", "type": "file" }
     ],
     "glob_patterns": [
       "skills/software-project-governance/core/**/*.md",

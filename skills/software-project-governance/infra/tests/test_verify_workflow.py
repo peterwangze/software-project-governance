@@ -3905,6 +3905,257 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
 
         self.assertTrue(any("marketplace add" in issue and "must be NOT_RUN" in issue for issue in issues))
 
+    def _write_fix118_docs(self, root, *, mutate=None):
+        root = Path(root)
+        docs = {
+            "docs/marketplace/official-submission-0.46.0.md": (
+                "# Official Submission Ecosystem Positioning - 0.46.0\n"
+                "This package positions the workflow as a governance trust layer that "
+                "orchestrates external capabilities. It does not replace Superpowers, "
+                "Agent Skills, MCP servers, browser tools, or host-native plugins.\n"
+                "FIX-115 capability-context --fail-on-issues. "
+                "FIX-116 capability-registry.json and check-capability-registry --fail-on-issues. "
+                "FIX-117 check-host-capability-context --fail-on-issues. "
+                "docs/requirements/capability-discovery-orchestration-0.45.0.md. "
+                "docs/requirements/governance-eval-benchmark-0.45.0.md. "
+                "Codex Desktop marketplace-management remains BLOCKED / NOT_RUN via "
+                "docs/requirements/codex-desktop-marketplace-e2e-0.45.0.md. "
+                "check-release --version 0.46.0 --require-changelog --runtime-adapters.\n"
+                "No official approval. No marketplace approval. No universal/full runtime support. "
+                "No external first-session pilot success. No Codex Desktop marketplace-management E2E PASS. "
+                "No automatic best-tool selection. No universal plugin/skill/tool availability. "
+                "No catalog entry runtime PASS. No 1.0.0 production-ready.\n"
+            ),
+            "docs/marketplace/ecosystem-positioning-0.46.0.md": (
+                "# Ecosystem Positioning - 0.46.0\n"
+                "The governance trust layer orchestrates external capabilities and complements "
+                "Superpowers, Agent Skills, MCP, browser tools, and host-native plugins. "
+                "FIX-115, FIX-116, FIX-117, docs/requirements/capability-discovery-orchestration-0.45.0.md, "
+                "docs/requirements/governance-eval-benchmark-0.45.0.md, and BLOCKED / NOT_RUN Desktop facts.\n"
+                "No official approval. No marketplace approval. No universal/full runtime support. "
+                "No external first-session pilot success. No Codex Desktop marketplace-management E2E PASS. "
+                "No automatic best-tool selection. No universal plugin/skill/tool availability. "
+                "No catalog entry runtime PASS. No 1.0.0 production-ready.\n"
+            ),
+            "docs/marketplace/comparison-0.46.0.md": (
+                "# Ecosystem Comparison - 0.46.0\n"
+                "Superpowers, Agent Skills, MCP, browser tools, host-native plugins, scripts, and fallbacks "
+                "are complementary external capabilities. The governance trust layer orchestrates external "
+                "capabilities without replacing them. FIX-115, FIX-116, FIX-117, "
+                "docs/requirements/capability-discovery-orchestration-0.45.0.md, "
+                "docs/requirements/governance-eval-benchmark-0.45.0.md, and BLOCKED / NOT_RUN Desktop facts are preserved.\n"
+                "No official approval. No marketplace approval. No universal/full runtime support. "
+                "No external first-session pilot success. No Codex Desktop marketplace-management E2E PASS. "
+                "No automatic best-tool selection. No universal plugin/skill/tool availability. "
+                "No catalog entry runtime PASS. No 1.0.0 production-ready.\n"
+            ),
+            "docs/marketplace/migration-guide-0.46.0.md": (
+                "# Migration Guide - 0.46.0\n"
+                "Keep Superpowers, Agent Skills, MCP servers, browser tools, and host-native plugins. "
+                "Add this governance trust layer to orchestrates external capabilities through evidence, "
+                "side-effect boundaries, validation, and review. FIX-115, FIX-116, FIX-117, "
+                "docs/requirements/capability-discovery-orchestration-0.45.0.md, "
+                "docs/requirements/governance-eval-benchmark-0.45.0.md, and BLOCKED / NOT_RUN.\n"
+                "No official approval. No marketplace approval. No universal/full runtime support. "
+                "No external first-session pilot success. No Codex Desktop marketplace-management E2E PASS. "
+                "No automatic best-tool selection. No universal plugin/skill/tool availability. "
+                "No catalog entry runtime PASS. No 1.0.0 production-ready.\n"
+            ),
+            "docs/marketplace/examples-0.46.0.md": (
+                "# Ecosystem Examples - 0.46.0\n"
+                "Examples consume FIX-115, FIX-116, FIX-117, capability-registry.json, "
+                "docs/requirements/capability-discovery-orchestration-0.45.0.md, "
+                "docs/requirements/governance-eval-benchmark-0.45.0.md, "
+                "and Codex Desktop marketplace-management BLOCKED / NOT_RUN facts. "
+                "They show the governance trust layer orchestrates external capabilities.\n"
+                "No official approval. No marketplace approval. No universal/full runtime support. "
+                "No external first-session pilot success. No Codex Desktop marketplace-management E2E PASS. "
+                "No automatic best-tool selection. No universal plugin/skill/tool availability. "
+                "No catalog entry runtime PASS. No 1.0.0 production-ready.\n"
+            ),
+            "docs/release/release-checklist-0.46.0.md": (
+                "# Release Checklist - 0.46.0\n"
+                "FIX-118 official submission ecosystem docs consume FIX-115, FIX-116, FIX-117, "
+                "capability-context --fail-on-issues, check-capability-registry --fail-on-issues, "
+                "check-host-capability-context --fail-on-issues, "
+                "docs/requirements/codex-desktop-marketplace-e2e-0.45.0.md, "
+                "docs/requirements/capability-discovery-orchestration-0.45.0.md, "
+                "docs/requirements/governance-eval-benchmark-0.45.0.md, and "
+                "check-release --version 0.46.0 --require-changelog --runtime-adapters. "
+                "The governance trust layer orchestrates external capabilities.\n"
+                "No official approval. No marketplace approval. No universal/full runtime support. "
+                "No external first-session pilot success. No Codex Desktop marketplace-management E2E PASS. "
+                "No automatic best-tool selection. No universal plugin/skill/tool availability. "
+                "No catalog entry runtime PASS. No 1.0.0 production-ready. RISK-036 remains open.\n"
+            ),
+            "docs/release/feature-flags-0.46.0.md": (
+                "# Feature Flags - 0.46.0\n"
+                "Documentation guard only for governance trust layer positioning that orchestrates external capabilities. "
+                "FIX-115, FIX-116, FIX-117, docs/requirements/capability-discovery-orchestration-0.45.0.md, "
+                "docs/requirements/governance-eval-benchmark-0.45.0.md, and BLOCKED / NOT_RUN.\n"
+                "No official approval. No marketplace approval. No universal/full runtime support. "
+                "No external first-session pilot success. No Codex Desktop marketplace-management E2E PASS. "
+                "No automatic best-tool selection. No universal plugin/skill/tool availability. "
+                "No catalog entry runtime PASS. No 1.0.0 production-ready. RISK-036 remains open.\n"
+            ),
+            "docs/release/rollback-plan-0.46.0.md": (
+                "# Rollback Plan - 0.46.0\n"
+                "Rollback if release docs, requirement reports, or CHANGELOG claim official approval, "
+                "marketplace approval, universal/full runtime support, external first-session pilot success, "
+                "Codex Desktop marketplace-management E2E PASS, automatic best-tool selection, "
+                "universal plugin/skill/tool availability, catalog entry runtime PASS, or 1.0.0 production-ready. "
+                "The governance trust layer orchestrates external capabilities. FIX-115, FIX-116, FIX-117, "
+                "docs/requirements/capability-discovery-orchestration-0.45.0.md, "
+                "docs/requirements/governance-eval-benchmark-0.45.0.md, and BLOCKED / NOT_RUN.\n"
+                "No official approval. No marketplace approval. No universal/full runtime support. "
+                "No external first-session pilot success. No Codex Desktop marketplace-management E2E PASS. "
+                "No automatic best-tool selection. No universal plugin/skill/tool availability. "
+                "No catalog entry runtime PASS. No 1.0.0 production-ready. RISK-036 remains open.\n"
+            ),
+        }
+        if mutate:
+            docs = mutate(docs)
+        for rel_path, content in docs.items():
+            path = root / rel_path
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+        report = root / "docs/requirements/codex-desktop-marketplace-e2e-0.45.0.md"
+        report.parent.mkdir(parents=True, exist_ok=True)
+        report.write_text(
+            "# Codex Desktop Marketplace-Management E2E Report\n"
+            "## Result Matrix\n"
+            "| Lifecycle step | 0.45.0 result | Evidence status | Exact missing Desktop evidence |\n"
+            "| --- | --- | --- | --- |\n"
+            "| Codex Desktop version and environment capture | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+            "| Marketplace add or local marketplace registration | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+            "| Plugin install from Codex Desktop | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+            "| Plugin enable from Codex Desktop | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+            "| Plugin visibility with display name, description, icon, and preview | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+            "| Skill discovery or invocation | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+            "| Governance status or Delivery Trust Snapshot from a real project | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+            "| Upgrade or reinstall after manifest version change | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+            "| Disable, uninstall, or rollback | BLOCKED | NOT_RUN | No Desktop evidence. |\n"
+            "| Official/public marketplace approval | BLOCKED | NOT_SUPPORTED | No approval evidence. |\n"
+            "No official approval. No marketplace approval. No universal/full runtime support. "
+            "No external first-session pilot success. No Codex Desktop marketplace-management E2E PASS. "
+            "No 1.0.0 production-ready.\n",
+            encoding="utf-8",
+        )
+        manifest = root / "skills/software-project-governance/core/manifest.json"
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        manifest.write_text(
+            json.dumps({
+                "root_entries": {"files": [], "directories": []},
+                "product": {
+                    "entries": [{"path": rel_path, "type": "file"} for rel_path in docs],
+                    "glob_patterns": [],
+                },
+                "repo_only": {"entries": [], "glob_patterns": []},
+            }),
+            encoding="utf-8",
+        )
+        return set(docs)
+
+    def test_official_submission_ecosystem_current_docs_pass(self):
+        tracked = set(vw._git_files(["ls-files", "--cached"]) or set())
+        tracked.update(vw.OFFICIAL_SUBMISSION_DOC_PATHS)
+        tracked.update(vw.OFFICIAL_SUBMISSION_RELEASE_DOC_PATHS)
+        with patch.object(vw, "_git_files", return_value=tracked):
+            issues = vw.check_official_submission_ecosystem(root=vw.ROOT)
+
+        self.assertEqual([], issues)
+
+    def test_official_submission_ecosystem_accepts_bounded_docs(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            tracked = self._write_fix118_docs(root)
+            with patch.object(vw, "_git_files", return_value=tracked):
+                issues = vw.check_official_submission_ecosystem(root=root)
+
+        self.assertEqual([], issues)
+
+    def test_official_submission_ecosystem_allows_legal_marketplace_boundary(self):
+        def mutate(docs):
+            docs["docs/marketplace/comparison-0.46.0.md"] += "\nNo marketplace approval.\n"
+            return docs
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            tracked = self._write_fix118_docs(root, mutate=mutate)
+            with patch.object(vw, "_git_files", return_value=tracked):
+                issues = vw.check_official_submission_ecosystem(root=root)
+
+        self.assertEqual([], issues)
+
+    def test_official_submission_ecosystem_rejects_same_line_negation_masking(self):
+        def mutate(docs):
+            docs["docs/marketplace/comparison-0.46.0.md"] += (
+                "\nNo marketplace approved for local catalog; marketplace approved for all hosts.\n"
+            )
+            return docs
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            tracked = self._write_fix118_docs(root, mutate=mutate)
+            with patch.object(vw, "_git_files", return_value=tracked):
+                issues = vw.check_official_submission_ecosystem(root=root)
+
+        self.assertTrue(any("marketplace approved" in issue for issue in issues))
+
+    def test_official_submission_ecosystem_allows_legal_catalog_boundary(self):
+        self.assertTrue(
+            vw._official_submission_line_has_safe_negation(
+                "No catalog entry runtime PASS.",
+                "catalog entry runtime pass",
+            )
+        )
+
+    def test_official_submission_ecosystem_requires_045_evidence_consumption(self):
+        def mutate(docs):
+            return {path: content.replace("FIX-117", "restricted benchmark") for path, content in docs.items()}
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            tracked = self._write_fix118_docs(root, mutate=mutate)
+            with patch.object(vw, "_git_files", return_value=tracked):
+                issues = vw.check_official_submission_ecosystem(root=root)
+
+        self.assertTrue(any("FIX-117" in issue for issue in issues))
+
+    def test_official_submission_ecosystem_rejects_positive_overclaim(self):
+        def mutate(docs):
+            docs["docs/marketplace/comparison-0.46.0.md"] += (
+                "\nNo official approval, marketplace approved for all hosts.\n"
+            )
+            return docs
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            tracked = self._write_fix118_docs(root, mutate=mutate)
+            with patch.object(vw, "_git_files", return_value=tracked):
+                issues = vw.check_official_submission_ecosystem(root=root)
+
+        self.assertTrue(any("marketplace approved" in issue for issue in issues))
+
+    def test_official_submission_ecosystem_rejects_replacement_positioning(self):
+        def mutate(docs):
+            docs["docs/marketplace/migration-guide-0.46.0.md"] += "\nThis replaces Superpowers and Agent Skills.\n"
+            return docs
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            tracked = self._write_fix118_docs(root, mutate=mutate)
+            with patch.object(vw, "_git_files", return_value=tracked):
+                issues = vw.check_official_submission_ecosystem(root=root)
+
+        self.assertTrue(any("replaces superpowers" in issue for issue in issues))
+
+    def test_check_release_docs_coverage_046_runs_official_submission_guard(self):
+        with patch.object(vw, "check_official_submission_ecosystem", return_value=["missing ecosystem boundary"]):
+            issues = vw.check_release_docs_coverage("0.46.0", root=vw.ROOT)
+
+        self.assertTrue(any("missing ecosystem boundary" in issue for issue in issues))
+
     def test_check_release_readiness_fails_on_cross_reference_issues(self):
         patches = self._clean_release_patches()
         cross_ref_result = {

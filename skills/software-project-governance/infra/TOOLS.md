@@ -39,6 +39,7 @@
 | TOOL-031 | Capability Context Selection Trace | script + command contract | `infra/verify_workflow.py capability-context` + `check-governance` Check 28j | 0.45.0 capability context/selection trace、受限环境能力选择诊断或 release gate 前 | 调研/架构/开发/测试/发布/维护 | 是 |
 | TOOL-032 | Capability Registry guard | script + registry | `infra/verify_workflow.py check-capability-registry` + `check-governance` Check 28k | external capability registry、plugin/skill/tool/MCP/browser/sub-agent/script/fallback catalog 或 no-overclaim boundary 变更后 | 调研/架构/测试/发布/维护 | 是 |
 | TOOL-033 | Host Capability Context benchmark | script + benchmark/diagnostic | `infra/verify_workflow.py check-host-capability-context` + `check-governance` Check 28l | FIX-117 restricted-environment fixtures、no network/no plugin install/no MCP/no browser/no sub-agent/local skill only/Codex CLI blocked/Gemini auth blocked 诊断或 release gate 前 | 调研/架构/测试/发布/维护 | 是 |
+| TOOL-034 | Official Submission Ecosystem guard | script + submission docs contract | `infra/verify_workflow.py check-official-submission-ecosystem` + `check-governance` Check 28m + `check-release --version 0.46.0` release docs detail | 0.46.0 official submission docs、ecosystem positioning、comparison、migration guide、examples 或 no-overclaim boundary 变更后 | 调研/发布/维护 | 是 |
 
 ## 工具详情
 
@@ -95,7 +96,7 @@
 ### TOOL-006：校验脚本
 
 - **文件**：`infra/verify_workflow.py`
-- **子命令**：`verify`（全量校验）、`status`（治理状态摘要）、`gate <G1-G11>`（Gate 检查）、`gates`（全部 Gate 状态）、`stage <stage-id>`（阶段状态）、`stages`（全部阶段状态）、`check-governance --fail-on-issues`（治理健康检查）、`e2e-check`（E2E proxy + fixture 分层检查）、`check-version-consistency`、`check-manifest-consistency`、`check-governance-packs`、`check-capability-registry`、`check-host-capability-context`、`check-readme-pack-guidance`、`check-governance-pack-status`、`capability-context`、`check-deterministic-scaffolds`、`check-interruption-policy`、`generate-deterministic-scaffold`、`check-locks`、`check-archive-integrity`
+- **子命令**：`verify`（全量校验）、`status`（治理状态摘要）、`gate <G1-G11>`（Gate 检查）、`gates`（全部 Gate 状态）、`stage <stage-id>`（阶段状态）、`stages`（全部阶段状态）、`check-governance --fail-on-issues`（治理健康检查）、`e2e-check`（E2E proxy + fixture 分层检查）、`check-version-consistency`、`check-manifest-consistency`、`check-governance-packs`、`check-capability-registry`、`check-host-capability-context`、`check-official-submission-ecosystem`、`check-readme-pack-guidance`、`check-governance-pack-status`、`capability-context`、`check-deterministic-scaffolds`、`check-interruption-policy`、`generate-deterministic-scaffold`、`check-locks`、`check-archive-integrity`
 - **输入**：无（自动读取项目文件）
 - **输出**：校验结果（PASSED/FAILED）+ 治理状态摘要
 - **触发条件**：工作流资产变更后、Gate 检查时、定期巡检
@@ -377,6 +378,17 @@
 - **依赖**：`check-governance` Check 28l、TOOL-031、TOOL-032、runtime readiness matrix
 - **边界**：benchmark/diagnostic only；not external execution；not Desktop marketplace E2E PASS；不执行 network、plugin install、MCP call、browser action、sub-agent spawn、Codex CLI runtime 或 Gemini auth flow；blocked capability is not runtime PASS；catalog fact is not runtime PASS
 - **被以下子工作流使用**：调研（research）、架构设计（architecture）、测试（testing）、发布（release）、维护（maintenance）
+
+### TOOL-034：Official Submission Ecosystem guard
+
+- **文件**：`infra/verify_workflow.py` + `docs/marketplace/official-submission-0.46.0.md` + `docs/marketplace/ecosystem-positioning-0.46.0.md` + `docs/marketplace/comparison-0.46.0.md` + `docs/marketplace/migration-guide-0.46.0.md` + `docs/marketplace/examples-0.46.0.md`
+- **子命令**：`check-official-submission-ecosystem [--fail-on-issues]`
+- **输入**：0.46.0 official submission ecosystem docs、ecosystem comparison、migration guide、examples、official-submission release-surface boundary docs、0.45.0 capability-context evidence、capability registry、restricted-environment benchmark 和 Codex Desktop marketplace-management BLOCKED / NOT_RUN report
+- **输出**：official submission materials 是否说明 workflow 是 governance trust layer、orchestrates external capabilities、complements Superpowers/Agent Skills/MCP/browser tools/host-native plugins；是否消费 FIX-115/FIX-116/FIX-117 与 0.45.0 Desktop BLOCKED/NOT_RUN 证据；是否阻断 official approval、marketplace approval、universal/full runtime support、external first-session pilot success、Codex Desktop marketplace-management E2E PASS、automatic best-tool selection、universal plugin/skill/tool availability、catalog entry runtime PASS、1.0.0 production-ready 和 replacement overclaim
+- **触发条件**：0.46.0 official submission materials、ecosystem positioning、migration guide、examples、release docs 或 no-overclaim boundary 变更后
+- **依赖**：`check-governance` Check 28m、`check-release --version 0.46.0` release docs detail、TOOL-031、TOOL-032、TOOL-033
+- **边界**：documentation/release guard only；not official submission approval；not marketplace approval；not Desktop marketplace-management E2E PASS；not automatic best-tool selection；not universal plugin/skill/tool availability；not catalog entry runtime PASS；not 1.0.0 production-ready
+- **被以下子工作流使用**：调研（research）、发布（release）、维护（maintenance）
 
 ## 工具与子工作流的关系矩阵
 

@@ -1,25 +1,65 @@
 # Claude Adapter
 
-> **已废弃（Deprecated）**：本目录是早期的 repo-local 探索性样例，已被 Claude Code 官方插件系统取代。
-> 新的正式入口请使用：
-> - **自包含插件**：`skills/software-project-governance/SKILL.md`（内嵌核心规则 + `references/` 按需加载）
-> - **插件市场**：`.claude-plugin/marketplace.json` + `plugin.json`
-> - **交互命令**：`/governance:governance-init`、`/governance:governance-status`、`/governance:governance-gate`、`/governance:governance-verify`
-> - **活跃数据源**：`.governance/`（plan-tracker、evidence-log、decision-log、risk-log）
->
-> 本目录保留仅作为历史参考，不再继续扩展。下方"入口约定"和"执行要求"描述的是早期 repo-local 多文件读取模式，与当前自包含插件架构不一致，请以 SKILL.md 为准。
+This directory records the Claude Code loading path for `software-project-governance`.
 
-本目录定义 `software-project-governance` workflow 在 Claude 场景下的消费方式（历史）。
+Claude Code is a Tier 1 loading target in 0.47.0. The current user-facing path is the plugin marketplace package that loads the self-contained workflow skill:
+
+- marketplace root: `.claude-plugin/marketplace.json`
+- plugin manifest: `.claude-plugin/plugin.json`
+- workflow entry: `skills/software-project-governance/SKILL.md`
+- runtime records: the target project's `.governance/`
 
 ## 适配目标
 
 让 Claude 类 coding agent 在执行软件项目任务时，优先读取统一规则与模板，而不是直接自由发挥。
 
-## 当前有效入口
+## Load
 
-Claude Code 通过插件市场加载 `skills/software-project-governance/SKILL.md` 作为自包含入口，该文件依赖：
-- `skills/software-project-governance/references/` — 按需读取的参考规则
-- 用户项目的 `.governance/` — 活跃治理记录
+Recommended Claude Code install path:
+
+```bash
+/plugin marketplace add peterwangze/software-project-governance
+/plugin install software-project-governance@spg
+```
+
+Alternative local or URL install paths:
+
+```bash
+/plugin install https://github.com/peterwangze/software-project-governance.git
+git clone https://github.com/peterwangze/software-project-governance.git
+/plugin install /path/to/software-project-governance
+```
+
+After install, open the target project root and run `/governance` to initialize or resume project-local governance state. Do not copy this repository's sample `.governance/` directory into another project.
+
+## Verify
+
+Static adapter contract:
+
+```bash
+python adapters/claude/launch.py
+python skills/software-project-governance/infra/verify_workflow.py check-agent-adapters
+```
+
+Runtime adapter contract:
+
+```bash
+python skills/software-project-governance/infra/verify_workflow.py check-agent-adapters --runtime
+```
+
+2026-05-20 本机验证结果：`claude --version` 返回 `2.1.123 (Claude Code)`；`claude -p ...` 在 `project/e2e-test-project` 目标 cwd 中读取 `.governance/plan-tracker.md` 并返回当前阶段。该结果证明 Claude Code runtime 与目标 cwd 只读治理用例已真实通过。
+
+## Boundary
+
+Claude Code local runtime evidence is PASS/DEGRADED. That means the target-cwd read use case passed locally while workflow closure still depends on host capabilities such as AskUserQuestion, reviewer separation, git hooks, and release gates.
+
+This adapter does not claim official approval, marketplace approval, universal/full runtime support, or 1.0.0 production-ready status. Plugin install success is not task evidence, independent review evidence, quality gate success, or release approval.
+
+## Current Effective Entry
+
+Claude Code loads `skills/software-project-governance/SKILL.md` as the self-contained entry. That file depends on:
+- `skills/software-project-governance/references/` — on-demand reference rules
+- the target project's `.governance/` — active governance records
 
 下方旧入口约定已废弃，不要执行。
 
@@ -37,14 +77,6 @@ Claude Code 通过插件市场加载 `skills/software-project-governance/SKILL.m
 ```
 
 </details>
-
-## 原生 skill 入口
-
-当前仓库提供 Claude 原生入口：
-
-- `skills/software-project-governance/SKILL.md`：自包含插件 skill（通过插件市场安装）
-
-2026-05-20 本机验证结果：`claude --version` 返回 `2.1.123 (Claude Code)`；`claude -p ...` 在 `project/e2e-test-project` 目标 cwd 中读取 `.governance/plan-tracker.md` 并返回当前阶段。该结果证明 Claude Code runtime 与目标 cwd 只读治理用例已真实通过。
 
 ## 半可执行入口
 

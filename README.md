@@ -13,7 +13,28 @@ Use this workflow when your AI coding setup needs:
 - **Reviewer separation with degraded-mode honesty**: the workflow distinguishes real independent review from degraded or environment-dependent execution, and does not present every agent as fully supported.
 - **5-minute orientation for new users**: start with `/governance`, initialize `.governance/`, then let the agent resume state, check gates, and surface only critical decisions.
 
-## Install Paths
+## Mainstream Agent Loading
+
+0.47.0 makes the current loading paths explicit for mainstream AI coding agents. This is loading readiness, not official approval, marketplace approval, universal/full runtime support, or Codex Desktop marketplace-management E2E PASS. See the 0.47.0 scope note in [docs/requirements/mainstream-agent-loading-0.47.0.md](docs/requirements/mainstream-agent-loading-0.47.0.md) and the public runtime facts in [docs/requirements/runtime-readiness-matrix-0.43.0.md](docs/requirements/runtime-readiness-matrix-0.43.0.md).
+
+Tier 1 loading guide:
+
+| Agent | Load or install path | First verification | Current boundary |
+| --- | --- | --- | --- |
+| Claude Code | Add this repo as a Claude plugin marketplace, then install `software-project-governance@spg`. | `python adapters/claude/launch.py` and `python skills/software-project-governance/infra/verify_workflow.py check-agent-adapters --runtime` | Claude target-cwd read use case is PASS/DEGRADED in local evidence. This is not official marketplace approval. |
+| Codex | Use `.agents/plugins/marketplace.json`, `.codex-plugin/plugin.json`, `AGENTS.md`, and `skills/software-project-governance/SKILL.md` as the Codex plugin/project guidance package. | `python C:\Users\peter\.codex\skills\.system\plugin-creator\scripts\validate_plugin.py .` and `python adapters/codex/launch.py` | Codex Desktop/App dogfood and manifest validation are available; Codex CLI full target-cwd E2E remains BLOCKED/DEGRADED until `agent-runtime-e2e --agent codex` passes. |
+| Gemini CLI | Use a thin `GEMINI.md` project context pointer to `skills/software-project-governance/SKILL.md`; custom commands, MCP, and extensions remain separate extension points. | `python adapters/gemini/launch.py`, then `python skills/software-project-governance/infra/verify_workflow.py gemini-auth-preflight` | Gemini CLI exists locally, but auth preflight is BLOCKED and full agent E2E is not passed. No Gemini plugin marketplace claim. |
+| opencode | Use `AGENTS.md` or configured opencode instructions to point at `skills/software-project-governance/SKILL.md`. | `python skills/software-project-governance/infra/verify_workflow.py opencode-provider-preflight` and `python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent opencode --timeout 90` | opencode target-cwd runtime E2E is PASS/DEGRADED in local evidence; provider/model preflight still guards future regressions. |
+
+Tier 2 compatibility and research rows:
+
+| Agent | Loading surface to watch | 0.47.0 status |
+| --- | --- | --- |
+| Cursor | Project/user/team rules and `AGENTS.md` style project instructions | Compatibility reference only; no adapter manifest or runtime PASS. |
+| GitHub Copilot coding agent | Repository custom instructions and `AGENTS.md` custom instructions | Compatibility reference only; no adapter manifest or runtime PASS. |
+| Cline | Markdown rules such as Cline rules files | Compatibility reference only; no adapter manifest or runtime PASS. |
+| Windsurf/Cascade | Workspace rules and memories | Compatibility reference only; no adapter manifest or runtime PASS. |
+| Kiro | Workspace steering files such as `.kiro/steering/` | Compatibility reference only; no adapter manifest or runtime PASS. |
 
 Claude Code:
 
@@ -30,11 +51,22 @@ git clone https://github.com/peterwangze/software-project-governance.git
 /plugin install /path/to/software-project-governance
 ```
 
-Codex and other AI coding agents:
+Codex personal marketplace package:
 
-- Use this repository as a consumable asset package.
-- Load `skills/software-project-governance/SKILL.md` when your environment supports skill/plugin loading.
-- Keep runtime expectations conservative: some agents or host environments may run in degraded, blocked, or environment-dependent mode until their native loading, tool, browser, AskUserQuestion, review, and git-hook capabilities are verified. See the public [runtime readiness matrix](docs/requirements/runtime-readiness-matrix-0.43.0.md).
+```bash
+python -m json.tool .agents/plugins/marketplace.json
+python -m json.tool .codex-plugin/plugin.json
+python C:\Users\peter\.codex\skills\.system\plugin-creator\scripts\validate_plugin.py .
+```
+
+Gemini and opencode thin project projections:
+
+```bash
+python adapters/gemini/launch.py
+python adapters/opencode/launch.py
+```
+
+For every agent, load `skills/software-project-governance/SKILL.md` as the workflow entry and let runtime records live in the target project's `.governance/` directory. Adapter and marketplace assets describe install and loading paths; they are not evidence of marketplace approval or universal runtime readiness.
 
 ## Trust and Data Boundary
 
@@ -133,18 +165,45 @@ Codex 入口采用**自包含 skill**：`skills/software-project-governance/SKIL
 
 首次进入后，优先完成初始化，再开始日常使用。没有初始化时，不建议直接运行状态类命令。 
 
-### 其他 agent（Gemini、国内 agent CLI 等）
+### Gemini CLI
 
-**这里当前提供的是兼容方向，不是“已经验证完毕、可直接照抄”的统一安装说明。**
+Gemini 当前走最薄项目投影，不维护第二套 workflow 规则。项目入口建议使用 `GEMINI.md` 指向：
 
-如果某个 agent 支持加载单个 skill / command / plugin 入口，可以优先尝试：
-1. 加载 `skills/software-project-governance/SKILL.md`
-2. 允许该入口按需读取同目录 `references/`
-3. 让治理记录写回你项目根目录的 `.governance/`
+```text
+skills/software-project-governance/SKILL.md
+```
 
-如果某个 agent 还不支持这种方式，再退回 external runner / MCP / custom command 等兼容路线。详细兼容原则和限制见 `adapters/gemini/README.md`。
+验证顺序：
 
-请注意：Gemini 和国内 agent CLI 当前是**兼容研究 + 路线定义已完成**，但最小验证仍在后续计划中（见 `MAINT-007`）。不要把这部分内容理解为“现在已经存在一套与 Claude Code 同等级的一键安装入口”。
+```bash
+python adapters/gemini/launch.py
+python skills/software-project-governance/infra/verify_workflow.py gemini-auth-preflight
+python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent gemini
+```
+
+当前边界：本机 Gemini CLI runtime 存在，但 auth preflight 为 BLOCKED，真实 agent target-cwd E2E 尚未 PASS。不要把 `GEMINI.md` 投影写成 Gemini plugin marketplace 或 full runtime support。
+
+### opencode
+
+opencode 当前使用 `AGENTS.md` 或平台配置的 instruction file 指向同一个 skill 入口：
+
+```text
+skills/software-project-governance/SKILL.md
+```
+
+验证顺序：
+
+```bash
+python adapters/opencode/launch.py
+python skills/software-project-governance/infra/verify_workflow.py opencode-provider-preflight
+python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent opencode --timeout 90
+```
+
+当前边界：本机 opencode target-cwd E2E 为 PASS/DEGRADED；provider/model preflight 仍然必须保留，避免未来把 provider 配置错误包装成 workflow failure 或 universal support。
+
+### 兼容观察平台（Cursor、Copilot coding agent、Cline、Windsurf/Cascade、Kiro）
+
+这些平台在 0.47.0 只作为 compatibility/research rows。它们都有自己的 rules、custom instructions、memories 或 steering surface，可作为后续薄投影候选；但当前没有 adapter manifest、没有 target-cwd E2E、没有 runtime PASS。不要把这些兼容方向理解为“现在已经存在与 Claude Code 同等级的一键安装入口”。
 
 `SKILL.md` 不是“要求 agent 顺序扫描整个仓库根目录”的索引文件；它是**自包含入口**，只依赖：
 - `skills/software-project-governance/SKILL.md`（入口，内嵌核心规则）

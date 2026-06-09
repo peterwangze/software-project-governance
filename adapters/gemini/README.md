@@ -2,6 +2,8 @@
 
 本目录定义 `software-project-governance` workflow 在 Gemini CLI 场景下的最薄投影、运行时验证状态与边界约束。
 
+Gemini CLI is a Tier 1 loading guide target in 0.47.0. The current loading model is a thin `GEMINI.md` project context pointer to the shared workflow entry, not a separate Gemini-specific workflow implementation.
+
 ## 当前定位
 
 当前阶段不复制第二套 workflow 规则，而是提供一组可复跑 adapter 资产：
@@ -11,9 +13,48 @@
 - `check-agent-adapters --runtime`：在真实 Gemini CLI 环境中验证 `gemini --version` 可执行。
 - `gemini-auth-preflight`：在不打印 secret 的前提下检查 Gemini CLI PATH、`gemini --version` 和可识别认证来源。
 
+## Load
+
+In a Gemini CLI project, keep the native project context file thin:
+
+```text
+GEMINI.md
+  -> skills/software-project-governance/SKILL.md
+```
+
+The `GEMINI.md` projection should tell Gemini to load the workflow skill, follow its bootstrap, and write active governance state to the target project's `.governance/` directory. It must not duplicate the workflow rules, gate logic, evidence schema, or release policy.
+
+Gemini custom commands, MCP servers, headless runner, and extensions are separate extension points. They can wrap or expose governance actions later, but the 0.47.0 loading guide keeps the repo-local projection to `GEMINI.md` plus the shared skill entry.
+
+## Verify
+
+Static adapter contract:
+
+```bash
+python adapters/gemini/launch.py
+python skills/software-project-governance/infra/verify_workflow.py check-agent-adapters
+```
+
+Authentication preflight:
+
+```bash
+python skills/software-project-governance/infra/verify_workflow.py gemini-auth-preflight
+```
+
+Full target-cwd E2E gate, only after auth preflight passes:
+
+```bash
+python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent gemini
+python skills/software-project-governance/infra/verify_workflow.py check-agent-adapters --runtime
+```
+
+## Boundary
+
 本机 2026-05-21 验证结果：`gemini --version` 返回 `0.35.3`，目标 cwd 的 Python 治理命令可运行；`gemini-auth-preflight` 当前为 `BLOCKED`，因为本机没有可识别的 `GEMINI_API_KEY`、`GOOGLE_API_KEY`、Vertex、GCA 或 Gemini `settings.json` auth provider/token 类型字段。真实 Gemini agent 用例返回 auth missing/401 语义，因此当前 blocked 是认证缺失，不是 workflow、fixture 或 `GEMINI.md` 投影失败。该结果只证明 Gemini CLI runtime 存在和 adapter contract 可被验证，不代表 Gemini 已通过真实 agent E2E，也不代表 Gemini 已拥有独立 plugin marketplace 分发。
 
 Gemini full E2E 的升级顺序必须是：先让 `python skills/software-project-governance/infra/verify_workflow.py gemini-auth-preflight` 返回 `PASS`，再复跑 `python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent gemini`。只有真实 Gemini agent 在 `project/e2e-test-project` target cwd 读取 `GEMINI.md` thin projection 并返回结构化 E2E 字段后，才能把 `agent_runtime_e2e.status` 和 `full_e2e_verified` 升级为 passed/true。
+
+This adapter does not claim official approval, marketplace approval, Gemini plugin marketplace support, universal/full runtime support, or 1.0.0 production-ready status.
 
 后续扩展必须继续遵守 `PLAN-003` 的三层结构：
 

@@ -1,21 +1,63 @@
 # Codex Adapter
 
-> **已废弃（Deprecated）**：本目录是早期的 repo-local 探索性样例，已被 Codex 官方插件系统取代。
-> 新的正式入口请使用：
-> - **自包含插件**：`skills/software-project-governance/SKILL.md`（内嵌核心规则 + `references/` 按需加载 + `stages/` 子工作流和 skills）
-> - **Codex 插件**：`.codex-plugin/plugin.json` + `skills/software-project-governance/SKILL.md`
-> - **Codex 市场**：`.agents/plugins/marketplace.json`
-> - **活跃数据源**：`.governance/`（plan-tracker、evidence-log、decision-log、risk-log）
->
-> 本目录保留仅作为历史参考，不再继续扩展。**不要按下方旧入口约定执行**——那是 repo-local 多文件预加载模式，与当前自包含插件架构冲突。
+This directory records the Codex loading path for `software-project-governance`.
 
-本目录定义 `software-project-governance` workflow 在 Codex CLI 场景下的消费方式（历史 adapter + 当前 Codex 插件投影）。
+Codex is a Tier 1 loading target in 0.47.0. The current repository provides a Codex plugin/project guidance package:
+
+- personal marketplace root: `.agents/plugins/marketplace.json`
+- plugin manifest: `.codex-plugin/plugin.json`
+- project bootstrap: `AGENTS.md`
+- workflow entry: `skills/software-project-governance/SKILL.md`
+- runtime records: the target project's `.governance/`
 
 ## 适配目标
 
 让 Codex 类 coding agent 在执行项目任务时，以统一流程资产为约束，避免直接基于临时上下文做局部最优决策。
 
-## 当前有效入口（与自包含架构一致）
+## Load
+
+Use this repository as a Codex plugin and project guidance package. The manifest path chain is:
+
+```text
+.agents/plugins/marketplace.json
+  -> .codex-plugin/plugin.json
+  -> skills/software-project-governance/SKILL.md
+```
+
+For project-level guidance, `AGENTS.md` bootstraps the Coordinator and points to the same workflow entry. In Codex Desktop/App contexts that support plugin marketplace loading, add the local/personal marketplace file according to the host UI or command surface, then enable the `software-project-governance` plugin from that marketplace.
+
+If the Codex environment cannot consume `.codex-plugin/plugin.json` directly, keep the repo as a skill/plugin asset package and load `skills/software-project-governance/SKILL.md` through the host-supported skill or project instruction mechanism.
+
+## Verify
+
+Codex plugin and marketplace assets:
+
+```bash
+python -m json.tool .agents/plugins/marketplace.json
+python -m json.tool .codex-plugin/plugin.json
+python C:\Users\peter\.codex\skills\.system\plugin-creator\scripts\validate_plugin.py .
+```
+
+Static adapter contract:
+
+```bash
+python adapters/codex/launch.py
+python skills/software-project-governance/infra/verify_workflow.py check-agent-adapters
+```
+
+CLI target-cwd E2E gate:
+
+```bash
+python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent codex --timeout 90
+```
+
+## Boundary
+
+2026-06-10 local evidence supports Codex manifest and personal marketplace JSON validation. Current Codex App dogfood proves this desktop session can read `AGENTS.md` and help govern this repository's own development flow.
+
+That does not prove Codex Desktop marketplace add/install/enable/upgrade/uninstall lifecycle E2E, official approval, marketplace approval, or universal/full runtime support. Codex CLI target-cwd full E2E remains BLOCKED/DEGRADED until `agent-runtime-e2e --agent codex` passes in the target cwd with machine-readable fields.
+
+## Current Effective Entry
 
 Codex 加载 `skills/software-project-governance/SKILL.md` 作为自包含入口，该文件依赖：
 - `skills/software-project-governance/references/` — 按需读取的参考规则

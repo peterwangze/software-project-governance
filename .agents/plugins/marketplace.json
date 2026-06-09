@@ -1,9 +1,20 @@
 {
+  "name": "software-project-governance",
+  "interface": {
+    "displayName": "Software Project Governance"
+  },
   "plugins": [
     {
       "name": "software-project-governance",
-      "source": "./",
-      "manifest": ".codex-plugin/plugin.json"
+      "source": {
+        "source": "local",
+        "path": "./"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Development"
     }
   ]
 }

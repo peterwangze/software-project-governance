@@ -41,10 +41,10 @@
     ],
     "websiteURL": "https://github.com/peterwangze/software-project-governance",
     "brandColor": "#2563EB",
-    "logo": "assets/logo.svg",
-    "composerIcon": "assets/composer-icon.svg",
+    "logo": ".codex-plugin/assets/logo.svg",
+    "composerIcon": ".codex-plugin/assets/composer-icon.svg",
     "screenshots": [
-      "assets/governance-preview.svg"
+      ".codex-plugin/assets/governance-preview.svg"
     ]
   }
 }

@@ -4102,6 +4102,21 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
 
         self.assertTrue(any("marketplace approved" in issue for issue in issues))
 
+    def test_official_submission_ecosystem_rejects_release_docs_claim_in_marketplace_doc(self):
+        def mutate(docs):
+            docs["docs/marketplace/comparison-0.46.0.md"] += (
+                "\nThe release docs claim marketplace approved for all hosts.\n"
+            )
+            return docs
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            tracked = self._write_fix118_docs(root, mutate=mutate)
+            with patch.object(vw, "_git_files", return_value=tracked):
+                issues = vw.check_official_submission_ecosystem(root=root)
+
+        self.assertTrue(any("marketplace approved" in issue for issue in issues))
+
     def test_official_submission_ecosystem_allows_legal_catalog_boundary(self):
         self.assertTrue(
             vw._official_submission_line_has_safe_negation(

@@ -4131,7 +4131,10 @@ def check_official_submission_ecosystem(root=None):
                     continue
                 if _official_submission_line_has_safe_negation(line, phrase):
                     continue
-                if _release_docs_line_has_guard_context("rollback plan", line):
+                if (
+                    rel_path == "docs/release/rollback-plan-0.46.0.md"
+                    and _release_docs_line_has_guard_context("rollback plan", line)
+                ):
                     continue
                 issues.append(f"{display}: forbidden official submission overclaim `{phrase}`")
                 break

@@ -2,6 +2,37 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.46.0] — 2026-06-09
+
+### 0.46.0 — Ecosystem & Official Submission Positioning
+
+0.46.0 发布 Ecosystem & Official Submission 定位包：把 0.45.0 的 capability context selection trace、external capability registry、restricted-environment benchmark fixtures、Governance Eval & Benchmark report 和 Codex Desktop marketplace-management BLOCKED/NOT_RUN 结果消费进官方提交材料、生态定位页、对比页、迁移指南、示例和 release checks。本 release 将 workflow 定位为 governance trust layer：负责编排、记录和审查外部 plugin/skill/tool/MCP/browser/host-native capability 的选择与降级边界，而不是替代 Superpowers、Agent Skills、MCP servers、browser tools、host-native plugins 或其他生态能力。
+
+### 新增
+
+- **FIX-118**: 新增 `docs/marketplace/official-submission-0.46.0.md`、`ecosystem-positioning-0.46.0.md`、`comparison-0.46.0.md`、`migration-guide-0.46.0.md` 和 `examples-0.46.0.md`，说明互补定位、迁移路径、受限环境选择示例和官方提交边界。
+- **TOOL-034**: 新增 `check-official-submission-ecosystem [--fail-on-issues]`、`check-governance` Check 28m 和 `check-release --version 0.46.0` release-doc detail，确定性阻断官方提交/生态材料缺失 0.45.0 证据消费或出现越界声明。
+- **REL-023**: 新增 0.46.0 release checklist、feature flags 和 rollback plan，覆盖官方提交材料、ecosystem boundary、validator、manifest coverage 和 no-overclaim release boundary。
+
+### 变更
+
+- 版本声明同步到 0.46.0：source SKILL、canonical manifest、Claude/Codex plugin metadata、Claude marketplace metadata、hook @version、target fixture skill 和 target fixture plan tracker。
+- `check-release --version 0.46.0 --require-changelog --runtime-adapters` 要求 0.46.0 官方提交生态材料被 git 跟踪、被 manifest 覆盖、保留 conservative no-overclaim boundary，并消费 0.45.0 capability selection trace、capability registry、restricted benchmark 与 Codex Desktop marketplace-management BLOCKED/NOT_RUN evidence。
+
+### 验证
+
+- `python -m unittest skills/software-project-governance/infra/tests/test_verify_workflow.py -k official_submission -v`
+- `python skills/software-project-governance/infra/verify_workflow.py check-official-submission-ecosystem --fail-on-issues`
+- `python skills/software-project-governance/infra/verify_workflow.py check-version-consistency`
+- `python skills/software-project-governance/infra/verify_workflow.py check-release --version 0.46.0 --require-changelog --runtime-adapters --skip-execution-gates`
+- `git diff --check`
+
+### 发布边界
+
+- No official approval, marketplace approval, universal/full runtime support, external first-session pilot success, Codex Desktop marketplace-management E2E PASS, automatic best-tool selection, universal plugin/skill/tool availability, catalog entry runtime PASS, or 1.0.0 production-ready claim.
+- Codex Desktop marketplace-management lifecycle remains **BLOCKED / NOT_RUN** until real Desktop add/install/enable/invoke/upgrade/uninstall evidence is captured or the official submission package explicitly preserves the blocked status.
+- 0.46.0 release package does not include commit, tag, push, official submission, or marketplace approval.
+
 ## [0.45.0] — 2026-06-08
 
 ### 0.45.0 — Governance Eval & Benchmark + Capability Discovery

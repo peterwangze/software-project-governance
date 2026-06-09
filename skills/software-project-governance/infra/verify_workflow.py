@@ -742,16 +742,16 @@ REQUIRED_SNIPPETS = {
         "## [0.5.0]",
     ],
     ROOT / ".claude-plugin/plugin.json": [
-        "0.45.0",
+        "0.46.0",
     ],
     ROOT / ".claude-plugin/marketplace.json": [
-        "0.45.0",
+        "0.46.0",
     ],
     ROOT / ".codex-plugin/plugin.json": [
-        "0.45.0",
+        "0.46.0",
     ],
     ROOT / "skills/software-project-governance/core/manifest.json": [
-        "0.45.0",
+        "0.46.0",
     ],
 }
 
@@ -14513,6 +14513,13 @@ def _e2e_target_cwd_command_matrix(e2e_dir):
 def _e2e_target_fixture_checks(e2e_dir):
     """Return direct checks against the tracked e2e-test-project fixture."""
     governance_dir = e2e_dir / ".governance"
+    plan_tracker_path = governance_dir / "plan-tracker.md"
+    target_skill_path = e2e_dir / "skills" / "software-project-governance" / "SKILL.md"
+    target_version = (
+        _extract_plan_workflow_version(plan_tracker_path)
+        or _extract_skill_version(target_skill_path)
+        or _extract_skill_version(ROOT / "skills/software-project-governance/SKILL.md")
+    )
     delivery_trust_needles = [
         "Delivery Trust Snapshot",
         "Resume state",
@@ -14581,13 +14588,13 @@ def _e2e_target_fixture_checks(e2e_dir):
         },
         {
             "label": "target plan-tracker project config",
-            "path": governance_dir / "plan-tracker.md",
-            "needles": ["工作流版本", "0.45.0", "操作权限模式", "default-confirm"],
+            "path": plan_tracker_path,
+            "needles": ["工作流版本", target_version, "操作权限模式", "default-confirm"],
         },
         {
             "label": "target workflow skill version",
-            "path": e2e_dir / "skills" / "software-project-governance" / "SKILL.md",
-            "needles": ["version: 0.45.0", "Coordinator", "Agent Team"],
+            "path": target_skill_path,
+            "needles": [f"version: {target_version}", "Coordinator", "Agent Team"],
         },
         {
             "label": "target /governance route contract",

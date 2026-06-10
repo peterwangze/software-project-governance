@@ -15,7 +15,7 @@ Use this workflow when your AI coding setup needs:
 
 ## 1.0.0 Readiness Boundary
 
-0.48.0 reconciles the path toward 1.0.0, but it is not the 1.0.0 release. It records the readiness gap analysis, legacy requirement reconciliation, final command E2E ledger, and governance health release-gate repair. RISK-036 remains open until external validation, Codex Desktop marketplace-management disposition, official submission bundle review, and final release boundary checks are complete.
+0.49.0 packages External Validation and Official Submission Closure evidence, but it is not the 1.0.0 release. It records two real external-project smoke attempts, the FIX-128 empty-governance-ID guard, Codex CLI marketplace source sync evidence, and the final official-submission candidate bundle review. RISK-036 remains open: external validation is still partial/blocked, Codex Desktop marketplace-management lifecycle remains BLOCKED/NOT_RUN, no official approval, no marketplace approval, and 1.0.0 remains blocked until final release criteria are satisfied.
 
 ## Mainstream Agent Loading
 

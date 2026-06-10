@@ -2,6 +2,40 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.49.0] — 2026-06-11
+
+### 0.49.0 — External Validation and Official Submission Closure
+
+0.49.0 发布 External Validation and Official Submission Closure：把 VAL-001、VAL-002、FIX-126 与 FIX-128 的保守证据打包为 pre-1.0.0 release package。该版本记录两个真实外部项目 smoke、Codex CLI marketplace source sync、official-submission candidate bundle final review 和外部新项目空治理 ID 崩溃修复，同时明确 external validation 仍未 full PASS，Codex Desktop marketplace-management lifecycle 仍为 BLOCKED/NOT_RUN，RISK-036 remains open，0.49.0 不是 1.0.0。
+
+### 新增
+
+- **VAL-001**: 新增 `docs/requirements/external-project-validation-0.49.0.md`，记录 `pallets/click` 与 `psf/requests` 真实公开仓库 target-cwd smoke；`status`、`gate G1` 与 `governance-context` 可运行，但完整治理健康仍因临时部分安装缺 README/docs/adapters、无 owner/user pilot、无 full Agent Team E2E 而不标记 external validation PASS。
+- **VAL-002**: 新增 `docs/requirements/codex-desktop-marketplace-lifecycle-0.49.0.md`，记录 Codex CLI `codex-cli 0.125.0`、marketplace `add`/`upgrade`/`remove` command surface 和 configured source sync；该证据只证明 CLI marketplace source sync，不证明 Desktop UI install/enable/visibility/invocation/upgrade/uninstall lifecycle。
+- **FIX-126**: 新增 `docs/requirements/official-submission-final-bundle-review-0.49.0.md`，把 0.46.0 marketplace submission materials、0.47.0 loading guidance、0.48.0 readiness reconciliation、VAL-001、VAL-002 与 FIX-128 收口为 conservative official-submission candidate bundle review。
+- **REL-026**: 新增 0.49.0 release checklist、feature flags、rollback plan、manifest coverage 和 release boundary。
+
+### 变更
+
+- **FIX-128**: 外部新项目空 DEC/EVD/RISK 序列不再让 `check-governance --fail-on-issues` 在 Check 13 崩溃；空序列输出 `no entries found`，DEC/RISK gaps 与当前 completed missing evidence 仍保持阻断，EVD gaps/orphans/historical missing evidence 保持 info-only。
+- 版本声明同步到 0.49.0：source SKILL、canonical manifest、Claude/Codex plugin metadata、Claude marketplace metadata、hook @version、target fixture skill 和 target fixture plan tracker。
+- README 的 1.0.0 Readiness Boundary 更新为 0.49.0 evidence package，明确外部验证、Desktop lifecycle、official approval/marketplace approval 与 RISK-036 仍未关闭。
+- `verify_workflow.py` REQUIRED_SNIPPETS 版本字面量更新为 0.49.0。
+
+### 验证
+
+- `python skills/software-project-governance/infra/verify_workflow.py check-version-consistency`
+- `python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues`
+- `python skills/software-project-governance/infra/verify_workflow.py check-release --version 0.49.0 --require-changelog --runtime-adapters`
+- `python -m unittest skills/software-project-governance/infra/tests/test_verify_workflow.py -v`
+- `git diff --check`
+
+### 发布边界
+
+- No official approval, marketplace approval, universal/full runtime support, external validation PASS, Codex Desktop marketplace-management E2E PASS, Desktop lifecycle E2E PASS, automatic best-tool selection, universal plugin/skill/tool availability, catalog entry runtime PASS, or 1.0.0 production-ready claim.
+- RISK-036 remains open. 0.49.0 consumes VAL-001, VAL-002, FIX-126, and FIX-128 as conservative evidence only.
+- 0.49.0 release package does not include commit, push, tag, official submission, official approval, marketplace approval, RISK-036 closure, or 1.0.0 release approval.
+
 ## [0.48.0] — 2026-06-10
 
 ### 0.48.0 — 1.0.0 Readiness Reconciliation

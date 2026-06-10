@@ -38,14 +38,14 @@ The current release state is healthy through 0.47.0, but the formal 1.0.0 claim 
 | Mainstream entry matrix | PASS with boundaries | 0.47.0 provides Tier 1 and Tier 2 loading guidance and guard coverage. | Keep no-overclaim boundary. |
 | Capability selection trace | PASS with boundaries | 0.45.0/0.46.0 prove diagnostic selection trace and registry use without automatic best-tool claims. | Keep no-overclaim boundary. |
 | Legacy 1.0.0 requirement rows | RECONCILED_BY_FIX-124 | Several pre-0.35 rows still say pending or downgraded to 1.0.0 despite later architecture, guard, adapter, and docs work. | `docs/requirements/legacy-requirement-reconciliation-0.48.0.md` maps each row to ABSORBED, SUPERSEDED, STILL_BLOCKING, or NEEDS_FINAL_LEDGER. |
-| Command E2E validation | NEEDS_RECONCILIATION | REQ-058 remains pending while later e2e and release gates exist; final 1.0.0 evidence still needs a clean full command matrix statement. | FIX-125 / 0.48.0: final command E2E and release-gate evidence ledger. |
+| Command E2E validation | LEDGER_CREATED_BY_FIX-125 | REQ-058 remains pending while later e2e and release gates exist; final 1.0.0 evidence still needs a clean full command matrix statement. | `docs/requirements/final-command-e2e-ledger-0.48.0.md` records the final command ledger and opens FIX-127 for the remaining governance-health release-gate failure. |
 | RISK-036 closure | BLOCKED | Closure criteria are not fully satisfied because external validation and Desktop lifecycle evidence remain open. | REL-026 / 1.0.0 only after closure criteria are satisfied. |
 
 ## Planned Pre-1.0.0 Versions
 
 | Version | Purpose | Required items |
 | --- | --- | --- |
-| 0.48.0 | 1.0.0 readiness reconciliation | AUDIT-113, FIX-124 legacy requirement matrix/dependency-chain reconciliation, FIX-125 final command E2E evidence ledger, REL-025 release package. |
+| 0.48.0 | 1.0.0 readiness reconciliation | AUDIT-113, FIX-124 legacy requirement matrix/dependency-chain reconciliation, FIX-125 final command E2E evidence ledger, FIX-127 governance-health release-gate repair, REL-025 release package. |
 | 0.49.0 | external validation and official submission closure | VAL-001 external project validations, VAL-002 Desktop marketplace lifecycle or blocked carry-forward, FIX-126 final official submission bundle review, REL-026 release package. |
 | 1.0.0 | formal release tag | No feature work; only after RISK-036 is closed or release criteria are updated with explicit conservative evidence and approval in governance records. |
 

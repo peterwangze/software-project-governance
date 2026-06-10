@@ -241,9 +241,14 @@ PROJECTION_SNIPPETS = {
         "已迁移",
     ],
     ROOT / "adapters/claude/README.md": [
-        "已废弃（Deprecated）",
-        "历史入口约定（已废弃，仅供参考）",
+        "Tier 1",
+        "## Load",
+        "## Verify",
+        "## Boundary",
+        "skills/software-project-governance/SKILL.md",
         "python adapters/claude/launch.py",
+        "check-agent-adapters",
+        "check-agent-adapters --runtime",
     ],
     ROOT / "adapters/claude/adapter-manifest.json": [
         "adapter_id",
@@ -260,9 +265,16 @@ PROJECTION_SNIPPETS = {
         "validation",
     ],
     ROOT / "adapters/codex/README.md": [
-        "已废弃（Deprecated）",
-        "历史入口约定（已废弃，仅供参考）",
+        "Tier 1",
+        "## Load",
+        "## Verify",
+        "## Boundary",
+        "skills/software-project-governance/SKILL.md",
+        ".codex-plugin/plugin.json",
+        ".agents/plugins/marketplace.json",
         "python adapters/codex/launch.py",
+        "check-agent-adapters",
+        "agent-runtime-e2e --agent codex",
     ],
     ROOT / "adapters/codex/adapter-manifest.json": [
         "adapter_id",
@@ -585,9 +597,14 @@ REQUIRED_SNIPPETS = {
         "UPDATE-ERR-001",
     ],
     ROOT / "adapters/claude/README.md": [
-        "已废弃（Deprecated）",
-        "历史入口约定（已废弃，仅供参考）",
+        "Tier 1",
+        "## Load",
+        "## Verify",
+        "## Boundary",
+        "skills/software-project-governance/SKILL.md",
         "python adapters/claude/launch.py",
+        "check-agent-adapters",
+        "check-agent-adapters --runtime",
     ],
     ROOT / "adapters/claude/adapter-manifest.json": [
         "adapter_id",
@@ -602,9 +619,16 @@ REQUIRED_SNIPPETS = {
         "validation",
     ],
     ROOT / "adapters/codex/README.md": [
-        "已废弃（Deprecated）",
-        "历史入口约定（已废弃，仅供参考）",
+        "Tier 1",
+        "## Load",
+        "## Verify",
+        "## Boundary",
+        "skills/software-project-governance/SKILL.md",
+        ".codex-plugin/plugin.json",
+        ".agents/plugins/marketplace.json",
         "python adapters/codex/launch.py",
+        "check-agent-adapters",
+        "agent-runtime-e2e --agent codex",
     ],
     ROOT / "adapters/codex/adapter-manifest.json": [
         "adapter_id",
@@ -742,16 +766,16 @@ REQUIRED_SNIPPETS = {
         "## [0.5.0]",
     ],
     ROOT / ".claude-plugin/plugin.json": [
-        "0.46.0",
+        "0.47.0",
     ],
     ROOT / ".claude-plugin/marketplace.json": [
-        "0.46.0",
+        "0.47.0",
     ],
     ROOT / ".codex-plugin/plugin.json": [
-        "0.46.0",
+        "0.47.0",
     ],
     ROOT / "skills/software-project-governance/core/manifest.json": [
-        "0.46.0",
+        "0.47.0",
     ],
 }
 
@@ -4772,6 +4796,31 @@ def check_release_docs_coverage(version, root=None):
         issues.extend(check_codex_desktop_marketplace_e2e_report(root=root))
     if version == "0.46.0":
         issues.extend(check_official_submission_ecosystem(root=root))
+    if version == "0.47.0":
+        mainstream_issues = check_mainstream_agent_loading(root=root)
+        issues.extend(f"0.47.0 mainstream loading detail: {issue}" for issue in mainstream_issues)
+        required_tokens = [
+            "Mainstream Agent Loading Readiness",
+            "AUDIT-112",
+            "FIX-123",
+            "FIX-121",
+            "FIX-122",
+            "REL-024",
+            "Check 28n",
+            "TOOL-035",
+            "check-mainstream-agent-loading",
+            "check-release --version 0.47.0 --require-changelog --runtime-adapters",
+            "Tier 2",
+        ]
+        combined_release_docs = []
+        for _label, rel_path in release_docs:
+            path = root / rel_path
+            if path.is_file():
+                combined_release_docs.append(path.read_text(encoding="utf-8"))
+        combined_text = "\n".join(combined_release_docs)
+        for token in required_tokens:
+            if token not in combined_text:
+                issues.append(f"0.47.0 release docs missing mainstream loading token `{token}`")
 
     return issues
 

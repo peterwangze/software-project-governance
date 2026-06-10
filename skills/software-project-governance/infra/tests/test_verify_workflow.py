@@ -225,6 +225,41 @@ class CleanCheckoutBoundaryTests(unittest.TestCase):
         ]
         self.assertEqual(governance_snippet_paths, [])
 
+    def test_claude_codex_adapter_snippets_require_tier1_loading_guides(self):
+        expected = {
+            "adapters/claude/README.md": [
+                "Tier 1",
+                "## Load",
+                "## Verify",
+                "## Boundary",
+                "skills/software-project-governance/SKILL.md",
+                "python adapters/claude/launch.py",
+                "check-agent-adapters",
+                "check-agent-adapters --runtime",
+            ],
+            "adapters/codex/README.md": [
+                "Tier 1",
+                "## Load",
+                "## Verify",
+                "## Boundary",
+                "skills/software-project-governance/SKILL.md",
+                ".codex-plugin/plugin.json",
+                ".agents/plugins/marketplace.json",
+                "python adapters/codex/launch.py",
+                "check-agent-adapters",
+                "agent-runtime-e2e --agent codex",
+            ],
+        }
+
+        for rel_path, tokens in expected.items():
+            path = vw.ROOT / rel_path
+            for snippet_block in (vw.PROJECTION_SNIPPETS, vw.REQUIRED_SNIPPETS):
+                snippets = snippet_block[path]
+                self.assertNotIn("已废弃（Deprecated）", snippets)
+                self.assertNotIn("历史入口约定（已废弃，仅供参考）", snippets)
+                for token in tokens:
+                    self.assertIn(token, snippets)
+
     def test_version_consistency_fails_when_required_snippets_block_missing(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -4336,6 +4371,12 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
             issues = vw.check_release_docs_coverage("0.46.0", root=vw.ROOT)
 
         self.assertTrue(any("missing ecosystem boundary" in issue for issue in issues))
+
+    def test_check_release_docs_coverage_047_runs_mainstream_loading_guard(self):
+        with patch.object(vw, "check_mainstream_agent_loading", return_value=["missing mainstream loading boundary"]):
+            issues = vw.check_release_docs_coverage("0.47.0", root=vw.ROOT)
+
+        self.assertTrue(any("missing mainstream loading boundary" in issue for issue in issues))
 
     def test_check_release_readiness_fails_on_cross_reference_issues(self):
         patches = self._clean_release_patches()

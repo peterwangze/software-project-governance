@@ -2,6 +2,40 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.47.0] — 2026-06-10
+
+### 0.47.0 — Mainstream Agent Loading Readiness
+
+0.47.0 发布 Mainstream Agent Loading Readiness：把 Codex、Claude Code、Gemini CLI、opencode 作为 Tier 1 loading guide 目标，把 Cursor、GitHub Copilot coding agent、Cline、Windsurf/Cascade、Kiro 保持为 Tier 2 compatibility/research rows，并用 Check 28n / TOOL-035 防止加载指南、source citations、validation commands 和 no-overclaim boundary 漂移。本 release package 同时披露 tag 范围内已完成的 FIX-120 `0.46.0-post` Codex marketplace root schema hotfix，作为 FIX-123 和 0.47.0 Codex loading readiness 的 carried-forward prerequisite，而不是 0.47.0 新主线功能。
+
+### 新增
+
+- **AUDIT-112**: 新增 `docs/requirements/mainstream-agent-loading-0.47.0.md`，调研主流 agent 加载入口并规划 0.47.0 范围。
+- **FIX-120 (carried-forward `0.46.0-post` prerequisite)**: 披露 `.agents/plugins/marketplace.json` 已修复 Codex marketplace root schema（top-level `name`、Codex entry `source` object、policy/category metadata），为后续 Codex manifest asset path validation 和 loading guide 提供前置 schema 基础；该 hotfix 不声明 Codex Desktop marketplace lifecycle E2E PASS。
+- **FIX-123**: 修复 Codex manifest asset paths，使 `.codex-plugin/plugin.json` 在 repo-root marketplace source 下引用 `.codex-plugin/assets/*.svg`。
+- **FIX-121**: README 与 Tier 1 adapter READMEs 新增 Mainstream Agent Loading 指南、验证命令和运行时边界。
+- **FIX-122 / TOOL-035**: 新增 `check-mainstream-agent-loading [--fail-on-issues]`、`check-governance` Check 28n 和 MainstreamAgentLoading 回归测试，阻断 Tier 2 runtime PASS、approval、universal/full runtime support、Desktop marketplace E2E PASS、automatic best-tool selection、catalog runtime PASS 和 1.0.0 overclaim。
+- **REL-024**: 新增 0.47.0 release checklist、feature flags、rollback plan、manifest coverage 和 release-doc mainstream loading detail。
+
+### 变更
+
+- 版本声明同步到 0.47.0：source SKILL、canonical manifest、Claude/Codex plugin metadata、Claude marketplace metadata、hook @version、target fixture skill 和 target fixture plan tracker。
+- `check-release --version 0.47.0 --require-changelog --runtime-adapters` 要求 0.47.0 release docs 存在、被 manifest 覆盖、保留 conservative no-overclaim boundary，并运行 mainstream loading release detail。
+
+### 验证
+
+- `python skills/software-project-governance/infra/verify_workflow.py check-release --version 0.47.0 --require-changelog --runtime-adapters --skip-execution-gates`
+- `python skills/software-project-governance/infra/verify_workflow.py check-version-consistency`
+- `python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues`
+- `python -m unittest skills/software-project-governance/infra/tests/test_verify_workflow.py -k MainstreamAgentLoading -v`
+- `python -m unittest skills/software-project-governance/infra/tests/test_verify_workflow.py -k ReleaseReadiness -v`
+
+### 发布边界
+
+- No official approval, marketplace approval, universal/full runtime support, external first-session pilot success, Codex Desktop marketplace-management E2E PASS, automatic best-tool selection, universal plugin/skill/tool availability, catalog entry runtime PASS, or 1.0.0 production-ready claim.
+- Tier 2 rows remain compatibility/research only until native entry projection and target-cwd E2E evidence exist.
+- 0.47.0 release package does not include commit, tag, push, official submission, or marketplace approval.
+
 ## [0.46.0] — 2026-06-09
 
 ### 0.46.0 — Ecosystem & Official Submission Positioning

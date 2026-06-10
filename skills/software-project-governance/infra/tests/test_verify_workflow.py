@@ -6953,6 +6953,41 @@ class GovernanceSignalNoiseTests(unittest.TestCase):
         self.assertEqual(evidence_issues[0]["type"], "evidence_col_mismatch")
         self.assertEqual(evidence_issues[0]["severity"], "WARN")
 
+    def test_warn_only_structural_issues_do_not_block_governance_health(self):
+        issues = [
+            {
+                "type": "evidence_col_mismatch",
+                "severity": "WARN",
+                "file": ".governance/evidence-log.md",
+                "line": 2,
+                "detail": "EVD-002: 11 columns (expected 10)",
+            },
+            {
+                "type": "historical_archive_residue",
+                "severity": "INFO",
+                "file": ".governance/archive/index.md",
+                "detail": "archived residue",
+            },
+        ]
+
+        self.assertEqual(vw.blocking_structural_issues(issues), [])
+
+    def test_error_structural_issues_block_governance_health(self):
+        error_issue = {
+            "type": "file_missing",
+            "file": ".governance/decision-log.md",
+            "detail": "decision-log.md not found",
+        }
+        warn_issue = {
+            "type": "evidence_col_mismatch",
+            "severity": "WARN",
+            "file": ".governance/evidence-log.md",
+            "line": 2,
+            "detail": "EVD-002: 11 columns (expected 10)",
+        }
+
+        self.assertEqual(vw.blocking_structural_issues([warn_issue, error_issue]), [error_issue])
+
     def test_untracked_root_agents_is_actionable_entry_surface(self):
         completed = subprocess.CompletedProcess(
             args=["git"],

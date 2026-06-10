@@ -147,6 +147,16 @@ def lock_issue_is_blocking(issue):
     return issue_type in BLOCKING_LOCK_ISSUE_TYPES or normalized in BLOCKING_LOCK_ISSUE_TYPES
 
 
+def structural_issue_is_blocking(issue):
+    """Return True when a structural validity issue should fail governance health."""
+    severity = str(issue.get("severity", "ERROR")).upper()
+    return severity not in {"INFO", "WARN", "WARNING"}
+
+
+def blocking_structural_issues(issues):
+    return [issue for issue in issues if structural_issue_is_blocking(issue)]
+
+
 REQUIRED_FILES = {
     "README": ROOT / "README.md",
     "Workflow Schema": ROOT / "skills/software-project-governance/core/protocol/workflow-schema.md",
@@ -12886,11 +12896,17 @@ def cmd_check_governance(args):
     print("\n┌─ Check 14: Structural Validity ──────────────────────┐")
     sv_issues = check_structural_validity()
     if sv_issues:
-        blocking_sv = [i for i in sv_issues if i.get("severity") != "INFO"]
-        info_sv = [i for i in sv_issues if i.get("severity") == "INFO"]
+        blocking_sv = blocking_structural_issues(sv_issues)
         all_issues += len(blocking_sv)
-        label = "WARN" if blocking_sv else "INFO"
-        print(f"│  [{label}] {len(sv_issues)} structural issue(s):")
+        warn_sv = [
+            i for i in sv_issues
+            if str(i.get("severity", "")).upper() in {"WARN", "WARNING"}
+        ]
+        label = "WARN" if warn_sv else "INFO"
+        if blocking_sv:
+            label = "FAIL"
+        print(f"│  [{label}] {len(sv_issues)} structural issue(s) "
+              f"({len(blocking_sv)} blocking):")
         for v in sv_issues[:10]:
             detail = v.get("detail", "")
             ftype = v.get("type", "unknown")
@@ -12899,7 +12915,7 @@ def cmd_check_governance(args):
             print(f"│    - [{ftype}] {ffile}{line_info}: {detail}")
         if len(sv_issues) > 10:
             print(f"│    ... and {len(sv_issues) - 10} more")
-        if info_sv and not blocking_sv:
+        if not blocking_sv:
             print("│  [PASS] No actionable structural issues in current hot schema.")
     else:
         print(f"│  [PASS] All governance files have valid structure.")

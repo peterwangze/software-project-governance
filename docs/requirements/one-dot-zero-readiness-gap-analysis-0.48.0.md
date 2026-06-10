@@ -37,7 +37,7 @@ The current release state is healthy through 0.47.0, but the formal 1.0.0 claim 
 | Codex Desktop marketplace-management E2E | BLOCKED | Real Desktop add/install/enable/invoke/upgrade/uninstall evidence is absent. | VAL-002 / 0.49.0: run Desktop lifecycle E2E if environment allows, or preserve blocked status in submission and release docs. |
 | Mainstream entry matrix | PASS with boundaries | 0.47.0 provides Tier 1 and Tier 2 loading guidance and guard coverage. | Keep no-overclaim boundary. |
 | Capability selection trace | PASS with boundaries | 0.45.0/0.46.0 prove diagnostic selection trace and registry use without automatic best-tool claims. | Keep no-overclaim boundary. |
-| Legacy 1.0.0 requirement rows | NEEDS_RECONCILIATION | Several pre-0.35 rows still say pending or downgraded to 1.0.0 despite later architecture, guard, adapter, and docs work. | FIX-124 / 0.48.0: reconcile requirement matrix and dependency chain. |
+| Legacy 1.0.0 requirement rows | RECONCILED_BY_FIX-124 | Several pre-0.35 rows still say pending or downgraded to 1.0.0 despite later architecture, guard, adapter, and docs work. | `docs/requirements/legacy-requirement-reconciliation-0.48.0.md` maps each row to ABSORBED, SUPERSEDED, STILL_BLOCKING, or NEEDS_FINAL_LEDGER. |
 | Command E2E validation | NEEDS_RECONCILIATION | REQ-058 remains pending while later e2e and release gates exist; final 1.0.0 evidence still needs a clean full command matrix statement. | FIX-125 / 0.48.0: final command E2E and release-gate evidence ledger. |
 | RISK-036 closure | BLOCKED | Closure criteria are not fully satisfied because external validation and Desktop lifecycle evidence remain open. | REL-026 / 1.0.0 only after closure criteria are satisfied. |
 

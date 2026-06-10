@@ -395,6 +395,8 @@ Coordinator 接收用户需求
 | **0.9.0** | 全角色覆盖 | 8 角色全部落地 + 方法论路由 + 治理模型完整迁移 | 2026-05-30 |
 | **1.0.0** | 生产就绪 | 外部验证 + 完整文档 + 迁移指南 + 旧模型废弃通知 | 2026-06-15 |
 
+> 2026-06-10 reconciliation note: this table is a historical architecture plan from 2026-04-30. Current release planning is governed by `.governance/plan-tracker.md` and `docs/requirements/legacy-requirement-reconciliation-0.48.0.md`. Later 0.35.0-0.47.0 releases absorbed or superseded several early Agent Team rows without a breaking Phase-Gate schema rewrite. 1.0.0 remains blocked by RISK-036, external project validation, final command E2E ledger, and official-submission/Desktop lifecycle boundaries.
+
 ### 6.2 0.8.0 — Agent Team 基础架构
 
 **目标**：建立 Agent Team 的最小可行架构——Coordinator + 3 个核心角色 + Task-Gate 模型。
@@ -461,20 +463,30 @@ Coordinator 接收用户需求
 - 迁移指南和用户文档完备
 - 首次正式语义化版本发布
 
+### 6.5 2026-06-10 状态对账
+
+本章早期 REQ-014/016/017/018/019/027/028/030/031/032/033 与 REQ-058 的原始措辞已由后续版本重新分解。当前判定以 `docs/requirements/legacy-requirement-reconciliation-0.48.0.md` 为准：
+
+- 已吸收：Task-level evidence、Agent Team role boundary、review coverage、runtime capability、structured evidence、execution packet、hot fact-source、context resume、packs、mainstream loading guidance。
+- 已改向：不在 1.0.0 前强制进行破坏性 Phase-Gate schema rewrite；profiles 继续表示治理强度，packs 表示能力模块。
+- 仍阻塞：REQ-029 两个外部项目验证、REQ-033/REQ-058 的最终 command E2E ledger、RISK-036 关闭、Codex Desktop marketplace-management lifecycle PASS 或保守 blocked carry-forward。
+
+因此，本文件不应被解读为 1.0.0 当前可发布，或官方/市场批准、全量 runtime 支持、Desktop lifecycle PASS 的证据。
+
 ## 7. 与 superpowers 的对标分析
 
 | 维度 | superpowers | 本项目目标 | 对标差距 |
 |------|-----------|----------|---------|
-| **可组合 skill** | 14 个独立 skill，按需加载 | 8 个角色 agent skill，按需触发 | 待建设——当前是串行阶段模型 |
-| **HARD GATE** | 阻断型门禁（下一个动作前必须满足条件） | Task-Gate 阻断型门禁 | 已有基础（pre-commit hook 阻断），需从 Phase 级别拆到 Task 级别 |
-| **Subagent-driven dev** | 每任务 fresh subagent + 两阶段审查 | 不同角色 agent 执行/审查分离 | 待建设——当前同一 agent 做所有事 |
+| **可组合 skill** | 14 个独立 skill，按需加载 | Composable governance packs + role skills | 0.44.0 已采用 registry-first packs；不是物理拆包完成声明 |
+| **HARD GATE** | 阻断型门禁（下一个动作前必须满足条件） | Task-level evidence + release/check-governance gates | 0.35.0-0.47.0 已补多层 guard；仍需 1.0.0 final ledger |
+| **Subagent-driven dev** | 每任务 fresh subagent + 两阶段审查 | 不同角色 agent 执行/审查分离 | 已有运行时能力契约与 degraded mode；宿主不支持时不得伪装完整分离 |
 | **Brainstorming 前置** | 编码前强制 Socratic 设计澄清 | Coordinator 在分发前执行 M5 AskUserQuestion | 已有 M5 协议，需 Coordinator 集成 |
 | **TDD Iron Law** | 测试前写的代码必须删除 | Developer Agent 强制执行 TDD 顺序 | 已有 M7.5 任务前协议，需 Developer Agent 化 |
 | **Systematic debugging** | 3 次失败→停止→质疑架构 | 各 agent 内的韧性协议 + Coordinator 升级路径 | 已有 PUA 失败切换链，需集成 |
 | **Verification before completion** | 声称完成前 fresh 运行验证 | M7.4 evidence + check-governance | 已有——M7.4 协议即 verification-before-completion |
 | **1% Rule** | 1% 可能适用就必须调用 | Coordinator 的路由判断标准 | 已有 M1 任务匹配协议，需升级为 1% Rule |
 
-**superpowers 对标结论**：本项目的 M7.4/M7.5/M5 协议层已经覆盖了 superpowers 的核心概念（verification-before-completion、task 前协议、用户交互规范）。差距在于：(1) **可组合性**——当前是串行阶段而非独立 skill，(2) **角色分离**——缺少 Producer-Reviewer 分离，(3) **Agent Team 编排**——缺少 Coordinator 角色。
+**superpowers 对标结论（2026-06-10 修订）**：本项目的 M7.4/M7.5/M5 协议层、runtime capability contract、Agent Team degraded mode、governance packs、capability discovery、official submission positioning 和 mainstream loading guidance 已覆盖早期主要架构缺口的一部分。剩余差距不应写成“串行阶段模型未建设”，而应写成 RISK-036 下的外部验证、Desktop lifecycle、final command E2E ledger 和官方提交边界。
 
 ## 8. 迁移策略
 

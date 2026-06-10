@@ -6434,6 +6434,35 @@ class GovernanceIntegrationTests(unittest.TestCase):
                 except Exception as exc:
                     self.fail(f"check_gate_consistency raised: {exc}")
 
+    def test_check_governance_check13_empty_governance_logs_do_not_crash(self):
+        """FIX-128: Check 13 tolerates newly initialized projects with empty logs."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gov = root / ".governance"
+            gov.mkdir(parents=True)
+            (gov / "plan-tracker.md").write_text("# Plan tracker\n", encoding="utf-8")
+            (gov / "decision-log.md").write_text("# Decision log\n", encoding="utf-8")
+            (gov / "evidence-log.md").write_text("# Evidence log\n", encoding="utf-8")
+            (gov / "risk-log.md").write_text("# Risk log\n", encoding="utf-8")
+
+            with patch.object(vw, "ROOT", root), \
+                 patch.object(vw, "SAMPLE_PATH", gov / "plan-tracker.md"), \
+                 patch.object(vw, "EVIDENCE_PATH", gov / "evidence-log.md"), \
+                 patch.object(vw, "RISK_PATH", gov / "risk-log.md"):
+                result = vw.check_sequential_ids()
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    issue_count = vw._print_sequential_id_check(result)
+
+        self.assertEqual(result["dec_ids"], [])
+        self.assertEqual(result["evd_ids"], [])
+        self.assertEqual(result["risk_ids"], [])
+        self.assertEqual(issue_count, 0)
+        text = output.getvalue()
+        self.assertIn("DEC-IDs: no entries found.", text)
+        self.assertIn("EVD-IDs: no entries found.", text)
+        self.assertIn("RISK-IDs: no entries found.", text)
+
 
 class GovernanceSignalNoiseTests(unittest.TestCase):
     """FIX-066: governance checks keep signal while suppressing historical noise."""

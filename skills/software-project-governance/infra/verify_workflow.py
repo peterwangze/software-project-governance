@@ -9520,6 +9520,63 @@ def check_sequential_ids():
     }
 
 
+def _format_id_sequence_status(prefix, ids):
+    """Return a compact, empty-safe ID range summary."""
+    if not ids:
+        return f"{prefix}-IDs: no entries found."
+    return f"{prefix}-IDs: {ids[0]:03d}-{ids[-1]:03d} ({len(ids)} entries, no gaps)"
+
+
+def _print_sequential_id_check(si_result):
+    """Print Check 13 details and return the blocking issue count."""
+    issue_count = 0
+    if si_result["dec_gaps"]:
+        issue_count += 1
+        print(f"│  [WARN] DEC-ID gaps: missing {si_result['dec_gaps']}")
+    else:
+        print(f"│  [PASS] {_format_id_sequence_status('DEC', si_result['dec_ids'])}")
+
+    if si_result["evd_gaps"]:
+        print(f"│  [INFO] EVD-ID gaps: missing {si_result['evd_gaps']} "
+              f"(historical archive residue)")
+    else:
+        print(f"│  [PASS] {_format_id_sequence_status('EVD', si_result['evd_ids'])}")
+
+    if si_result["risk_gaps"]:
+        issue_count += 1
+        print(f"│  [WARN] RISK-ID gaps: missing {si_result['risk_gaps']}")
+    else:
+        print(f"│  [PASS] {_format_id_sequence_status('RISK', si_result['risk_ids'])}")
+
+    # Orphan cross-references: info-only — these are historical cleanup residues
+    # (old task IDs removed from plan-tracker during intentional cleanup, not errors)
+    orphans = (si_result.get("orphan_evidence_refs", []) +
+               si_result.get("orphan_decision_refs", []) +
+               si_result.get("orphan_risk_refs", []))
+    if orphans:
+        print(f"│  [INFO] {len(orphans)} cross-reference(s) to non-existent task ID(s)"
+              f" (historical cleanup residue): {orphans[:10]}")
+        if len(orphans) > 10:
+            print(f"│         ... and {len(orphans) - 10} more")
+    else:
+        print(f"│  [PASS] All cross-referenced task IDs exist in plan-tracker.")
+
+    missing_evd = si_result.get("completed_missing_evidence", [])
+    if missing_evd:
+        issue_count += len(missing_evd)
+        print(f"│  [WARN] {len(missing_evd)} completed task(s) without evidence: {missing_evd[:10]}")
+    else:
+        print(f"│  [PASS] All completed tasks have evidence entries.")
+
+    historical_missing_evd = si_result.get("historical_completed_missing_evidence", [])
+    if historical_missing_evd:
+        print(f"│  [INFO] {len(historical_missing_evd)} archived completed task(s) "
+              f"without evidence (historical residue): {historical_missing_evd[:10]}")
+    if issue_count == 0:
+        print(f"│  [PASS] All ID sequences are clean.")
+    return issue_count
+
+
 # ── SYSGAP-010: Structural Validity Checking ─────────────────────
 
 def check_structural_validity():
@@ -12840,56 +12897,7 @@ def cmd_check_governance(args):
     # ── 13. Sequential ID Checking (SYSGAP-009) ──
     print("\n┌─ Check 13: Sequential ID Checking ───────────────────┐")
     si_result = check_sequential_ids()
-    si_issue_count = 0
-    # DEC gaps
-    if si_result["dec_gaps"]:
-        si_issue_count += 1
-        all_issues += 1
-        print(f"│  [WARN] DEC-ID gaps: missing {si_result['dec_gaps']}")
-    else:
-        print(f"│  [PASS] DEC-IDs: {si_result['dec_ids'][0]:03d}-{si_result['dec_ids'][-1]:03d} ({len(si_result['dec_ids'])} entries, no gaps)")
-    # EVD gaps
-    if si_result["evd_gaps"]:
-        print(f"│  [INFO] EVD-ID gaps: missing {si_result['evd_gaps']} "
-              f"(historical archive residue)")
-    else:
-        print(f"│  [PASS] EVD-IDs: {si_result['evd_ids'][0]:03d}-{si_result['evd_ids'][-1]:03d} ({len(si_result['evd_ids'])} entries, no gaps)")
-    # RISK gaps
-    if si_result["risk_gaps"]:
-        si_issue_count += 1
-        all_issues += 1
-        print(f"│  [WARN] RISK-ID gaps: missing {si_result['risk_gaps']}")
-    else:
-        if si_result["risk_ids"]:
-            print(f"│  [PASS] RISK-IDs: {si_result['risk_ids'][0]:03d}-{si_result['risk_ids'][-1]:03d} ({len(si_result['risk_ids'])} entries, no gaps)")
-        else:
-            print(f"│  [PASS] RISK-IDs: no entries found.")
-    # Orphan cross-references: info-only — these are historical cleanup residues
-    # (old task IDs removed from plan-tracker during intentional cleanup, not errors)
-    orphans = (si_result.get("orphan_evidence_refs", []) +
-               si_result.get("orphan_decision_refs", []) +
-               si_result.get("orphan_risk_refs", []))
-    if orphans:
-        print(f"│  [INFO] {len(orphans)} cross-reference(s) to non-existent task ID(s)"
-              f" (historical cleanup residue): {orphans[:10]}")
-        if len(orphans) > 10:
-            print(f"│         ... and {len(orphans) - 10} more")
-    else:
-        print(f"│  [PASS] All cross-referenced task IDs exist in plan-tracker.")
-    # Completed tasks without evidence
-    missing_evd = si_result.get("completed_missing_evidence", [])
-    if missing_evd:
-        si_issue_count += len(missing_evd)
-        all_issues += len(missing_evd)
-        print(f"│  [WARN] {len(missing_evd)} completed task(s) without evidence: {missing_evd[:10]}")
-    else:
-        print(f"│  [PASS] All completed tasks have evidence entries.")
-    historical_missing_evd = si_result.get("historical_completed_missing_evidence", [])
-    if historical_missing_evd:
-        print(f"│  [INFO] {len(historical_missing_evd)} archived completed task(s) "
-              f"without evidence (historical residue): {historical_missing_evd[:10]}")
-    if si_issue_count == 0:
-        print(f"│  [PASS] All ID sequences are clean.")
+    all_issues += _print_sequential_id_check(si_result)
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 14. Structural Validity Checking (SYSGAP-010) ──

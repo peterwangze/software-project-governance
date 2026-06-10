@@ -40,6 +40,7 @@
 | TOOL-032 | Capability Registry guard | script + registry | `infra/verify_workflow.py check-capability-registry` + `check-governance` Check 28k | external capability registry、plugin/skill/tool/MCP/browser/sub-agent/script/fallback catalog 或 no-overclaim boundary 变更后 | 调研/架构/测试/发布/维护 | 是 |
 | TOOL-033 | Host Capability Context benchmark | script + benchmark/diagnostic | `infra/verify_workflow.py check-host-capability-context` + `check-governance` Check 28l | FIX-117 restricted-environment fixtures、no network/no plugin install/no MCP/no browser/no sub-agent/local skill only/Codex CLI blocked/Gemini auth blocked 诊断或 release gate 前 | 调研/架构/测试/发布/维护 | 是 |
 | TOOL-034 | Official Submission Ecosystem guard | script + submission docs contract | `infra/verify_workflow.py check-official-submission-ecosystem` + `check-governance` Check 28m + `check-release --version 0.46.0` release docs detail | 0.46.0 official submission docs、ecosystem positioning、comparison、migration guide、examples 或 no-overclaim boundary 变更后 | 调研/发布/维护 | 是 |
+| TOOL-035 | Mainstream Agent Loading guard | script + README/adapter docs contract | `infra/verify_workflow.py check-mainstream-agent-loading` + `check-governance` Check 28n | 0.47.0 README mainstream loading matrix、Tier 1 adapter loading guide、Tier 2 compatibility/research rows 或 no-overclaim boundary 变更后 | 调研/测试/发布/维护 | 是 |
 
 ## 工具详情
 
@@ -390,6 +391,17 @@
 - **边界**：documentation/release guard only；not official submission approval；not marketplace approval；not Desktop marketplace-management E2E PASS；not automatic best-tool selection；not universal plugin/skill/tool availability；not catalog entry runtime PASS；not 1.0.0 production-ready
 - **被以下子工作流使用**：调研（research）、发布（release）、维护（maintenance）
 
+### TOOL-035：Mainstream Agent Loading guard
+
+- **文件**：`infra/verify_workflow.py` + `README.md` + `adapters/claude/README.md` + `adapters/codex/README.md` + `adapters/gemini/README.md` + `adapters/opencode/README.md` + `docs/requirements/mainstream-agent-loading-0.47.0.md`
+- **子命令**：`check-mainstream-agent-loading [--fail-on-issues]`
+- **输入**：0.47.0 mainstream agent loading requirements、README Tier 1/Tier 2 loading matrix、Claude/Codex/Gemini/opencode adapter loading guides、source citations、validation commands、runtime/readiness and no-overclaim boundary text
+- **输出**：加载说明是否覆盖 Codex、Claude Code、Gemini CLI、opencode；compatibility/research rows 是否覆盖 Cursor、GitHub Copilot coding agent、Cline、Windsurf/Cascade、Kiro；requirements row 是否带 source URL；Tier 2 是否保持 RESEARCH_ONLY / NOT_RUNTIME_VERIFIED；是否阻断 official approval、marketplace approval、universal/full runtime support、Desktop marketplace-management E2E PASS、automatic best-tool selection、catalog runtime PASS、1.0.0 production-ready 等越界声明
+- **触发条件**：0.47.0 loading/readme/adapter docs、mainstream agent compatibility matrix、validation commands 或 no-overclaim wording 变更后
+- **依赖**：`check-governance` Check 28n、`check-agent-adapters`、TOOL-024、TOOL-034、RISK-036
+- **边界**：documentation/adapter contract guard only；not official approval；not marketplace approval；not universal/full runtime support；not Codex Desktop marketplace-management E2E PASS；not automatic best-tool selection；not catalog entry runtime PASS；not 1.0.0 production-ready
+- **被以下子工作流使用**：调研（research）、测试（testing）、发布（release）、维护（maintenance）
+
 ## 工具与子工作流的关系矩阵
 
 | 工具 | 立项 | 调研 | 选型 | 环境 | 架构 | 开发 | 测试 | CI/CD | 发布 | 运营 | 维护 |
@@ -424,6 +436,9 @@
 | Governance Pack Status Boundary guard | | | | | ○ | | ● | | ● | | ● |
 | Host Capability Context benchmark | | ● | | | ○ | | ● | | ● | | ● |
 | Capability Context Selection Trace | | ● | | | ● | ● | ● | | ● | | ● |
+| Capability Registry guard | | ● | | | ● | | ● | | ● | | ● |
+| Official Submission Ecosystem guard | | ● | | | ○ | | ● | | ● | | ● |
+| Mainstream Agent Loading guard | | ● | | | ○ | | ● | | ● | | ● |
 
 > ● 主要使用者  ○ 可选用
 

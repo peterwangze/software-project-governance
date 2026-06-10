@@ -1914,6 +1914,159 @@ def _run_version_command(command):
 RUNTIME_READINESS_MATRIX_PATH = ROOT / "docs/requirements/runtime-readiness-matrix-0.43.0.md"
 RUNTIME_MATRIX_AGENT_IDS = ["claude", "codex", "gemini", "opencode", "cursor", "copilot"]
 RUNTIME_MATRIX_RESEARCH_ONLY_IDS = ["cursor", "copilot"]
+MAINSTREAM_AGENT_LOADING_DOC_PATH = ROOT / "docs/requirements/mainstream-agent-loading-0.47.0.md"
+MAINSTREAM_AGENT_LOADING_REQUIRED_DOCS = [
+    "README.md",
+    "adapters/claude/README.md",
+    "adapters/codex/README.md",
+    "adapters/gemini/README.md",
+    "adapters/opencode/README.md",
+    "docs/requirements/mainstream-agent-loading-0.47.0.md",
+]
+MAINSTREAM_AGENT_LOADING_TIER1 = [
+    "Codex",
+    "Claude Code",
+    "Gemini CLI",
+    "opencode",
+]
+MAINSTREAM_AGENT_LOADING_TIER2 = [
+    "Cursor",
+    "GitHub Copilot coding agent",
+    "Cline",
+    "Windsurf/Cascade",
+    "Kiro",
+]
+MAINSTREAM_AGENT_LOADING_ADAPTERS = {
+    "claude": {
+        "display": "Claude Code",
+        "path": "adapters/claude/README.md",
+        "tokens": [
+            "Tier 1",
+            "Load",
+            "Verify",
+            "Boundary",
+            "skills/software-project-governance/SKILL.md",
+            "python adapters/claude/launch.py",
+            "check-agent-adapters",
+            "check-agent-adapters --runtime",
+        ],
+    },
+    "codex": {
+        "display": "Codex",
+        "path": "adapters/codex/README.md",
+        "tokens": [
+            "Tier 1",
+            "Load",
+            "Verify",
+            "Boundary",
+            "skills/software-project-governance/SKILL.md",
+            ".codex-plugin/plugin.json",
+            ".agents/plugins/marketplace.json",
+            "python adapters/codex/launch.py",
+            "check-agent-adapters",
+            "agent-runtime-e2e --agent codex",
+        ],
+    },
+    "gemini": {
+        "display": "Gemini CLI",
+        "path": "adapters/gemini/README.md",
+        "tokens": [
+            "Tier 1",
+            "Load",
+            "Verify",
+            "Boundary",
+            "GEMINI.md",
+            "skills/software-project-governance/SKILL.md",
+            "python adapters/gemini/launch.py",
+            "gemini-auth-preflight",
+            "agent-runtime-e2e --agent gemini",
+        ],
+    },
+    "opencode": {
+        "display": "opencode",
+        "path": "adapters/opencode/README.md",
+        "tokens": [
+            "Tier 1",
+            "Load",
+            "Verification",
+            "Boundary",
+            "AGENTS.md",
+            "skills/software-project-governance/SKILL.md",
+            "python adapters/opencode/launch.py",
+            "opencode-provider-preflight",
+            "agent-runtime-e2e --agent opencode",
+        ],
+    },
+}
+MAINSTREAM_AGENT_LOADING_README_TOKENS = [
+    "Mainstream Agent Loading",
+    "Tier 1 loading guide",
+    "Tier 2 compatibility and research rows",
+    "docs/requirements/mainstream-agent-loading-0.47.0.md",
+    "check-agent-adapters --runtime",
+]
+MAINSTREAM_AGENT_LOADING_REQUIREMENTS_TOKENS = [
+    "Mainstream Agent Loading Readiness 0.47.0",
+    "Official Surface Findings",
+    "Current Repository Facts",
+    "FIX-122",
+    "check-mainstream-agent-loading --fail-on-issues",
+    "No-Overclaim Boundary",
+    "RESEARCH_ONLY / NOT_RUNTIME_VERIFIED",
+]
+MAINSTREAM_AGENT_LOADING_BOUNDARY_TOKENS = [
+    "No official approval",
+    "No marketplace approval",
+    "No universal/full runtime support",
+    "No Codex Desktop marketplace-management E2E PASS",
+    "RISK-036 remains open",
+]
+MAINSTREAM_AGENT_LOADING_FORBIDDEN_CLAIM_TERMS = [
+    "official approval",
+    "marketplace approval",
+    "universal/full runtime support",
+    "universal runtime support",
+    "full runtime support",
+    "codex desktop marketplace-management e2e pass",
+    "desktop marketplace e2e pass",
+]
+MAINSTREAM_AGENT_LOADING_FORBIDDEN_OVERCLAIMS = [
+    "tier 2 runtime pass",
+    "tier 2 runtime passed",
+    "tier 2 runtime verified",
+    "tier 2 target-cwd e2e pass",
+    "tier 2 target-cwd e2e passed",
+    "cursor runtime pass",
+    "github copilot coding agent runtime pass",
+    "copilot coding agent runtime pass",
+    "cline runtime pass",
+    "windsurf/cascade runtime pass",
+    "windsurf runtime pass",
+    "cascade runtime pass",
+    "kiro runtime pass",
+    "official approval granted",
+    "officially approved",
+    "marketplace approval granted",
+    "marketplace approved",
+    "universal runtime support is verified",
+    "universal runtime support verified",
+    "full runtime support is verified",
+    "full runtime support verified",
+    "universal/full runtime support is verified",
+    "universal/full runtime support verified",
+    "codex desktop marketplace-management e2e pass",
+    "codex desktop marketplace-management e2e passed",
+    "desktop marketplace e2e pass",
+    "desktop marketplace e2e passed",
+    "automatic best-tool selection",
+    "automatically selects the best tool",
+    "catalog runtime pass",
+    "catalog runtime passed",
+    "catalog entry runtime pass",
+    "catalog entry runtime passed",
+    "1.0.0 production-ready",
+    "risk-036 closed",
+]
 FIRST_SESSION_MEASUREMENT_PATH = ROOT / "docs/requirements/first-session-measurement-0.43.0.md"
 FIRST_SESSION_MEASUREMENT_ALLOWED_STATUSES = {"PASS", "BLOCKED", "NOT_MEASURED"}
 GOVERNANCE_PACKS_PATH = ROOT / "skills/software-project-governance/core/governance-packs.json"
@@ -1981,6 +2134,7 @@ GOVERNANCE_PACK_KNOWN_CHECKS = {
     "check-capability-registry",
     "check-host-capability-context",
     "check-official-submission-ecosystem",
+    "check-mainstream-agent-loading",
 }
 GOVERNANCE_PACK_STATUS_DOC_PATHS = [
     "commands/governance-status.md",
@@ -2928,6 +3082,337 @@ def check_readme_pack_guidance(root=None):
         if any(phrase in line.lower() and not _line_has_scoped_claim_negation(line, phrase)
                for line in readme_lines):
             failures.append(f"{display}: forbidden README pack overclaim `{phrase}`")
+
+    return failures
+
+
+def _mainstream_loading_line_has_safe_negation(lines, index, phrase):
+    line = lines[index]
+    lower_line = line.lower()
+    phrase_lower = phrase.lower()
+    phrase_positions = [match.start() for match in re.finditer(re.escape(phrase_lower), lower_line)]
+    if not phrase_positions:
+        return False
+    clause_separators = ";；.!?！？|:："
+    list_item_separators = ",，、;" + clause_separators
+    positive_claim_markers = (
+        " exists",
+        " exist",
+        " is ",
+        " are ",
+        " available",
+        " verified",
+        " granted",
+        " approved",
+        " supported",
+        " passed",
+        " enabled",
+        " for all",
+        " across all",
+        " production-ready",
+        " ready",
+    )
+    strong_negation_markers = (
+        "does not claim",
+        "do not claim",
+        "does not prove",
+        "do not prove",
+        "does not mean",
+        "do not mean",
+        "doesn't mean",
+        "don't mean",
+        "is not a claim of",
+        "it is not a claim of",
+        "not a claim of",
+        "is not evidence of",
+        "are not evidence of",
+        "not evidence of",
+        "without",
+    )
+    weak_negation_markers = (
+        "not",
+        "no",
+    )
+
+    def list_negation_covers_phrase(phrase_index):
+        prefix = lower_line[:phrase_index]
+        marker_hits = []
+        for marker in strong_negation_markers + weak_negation_markers:
+            marker_start = prefix.rfind(marker)
+            if marker_start != -1:
+                marker_hits.append((marker_start, marker_start + len(marker), marker))
+        if not marker_hits:
+            return False
+
+        _marker_start, marker_end, marker = max(marker_hits, key=lambda hit: (hit[1], hit[0]))
+        candidate_prefix = lower_line[marker_end:phrase_index]
+        reduced_prefix = candidate_prefix
+        for claim_term in sorted(MAINSTREAM_AGENT_LOADING_FORBIDDEN_CLAIM_TERMS, key=len, reverse=True):
+            reduced_prefix = reduced_prefix.replace(claim_term, "")
+        for overclaim in sorted(MAINSTREAM_AGENT_LOADING_FORBIDDEN_OVERCLAIMS, key=len, reverse=True):
+            reduced_prefix = reduced_prefix.replace(overclaim, "")
+        reduced_prefix = re.sub(r"\b(and|or)\b", "", reduced_prefix)
+        reduced_prefix = re.sub(r"[\s,，、/]+", "", reduced_prefix)
+        if reduced_prefix:
+            return False
+
+        phrase_end = phrase_index + len(phrase_lower)
+        suffix_end_candidates = [
+            lower_line.find(separator, phrase_end)
+            for separator in list_item_separators
+            if lower_line.find(separator, phrase_end) != -1
+        ]
+        suffix_end = min(suffix_end_candidates) if suffix_end_candidates else len(lower_line)
+        local_suffix = lower_line[phrase_end:suffix_end]
+        strong_negation = marker in strong_negation_markers
+        if not strong_negation and any(marker in f" {local_suffix} " for marker in positive_claim_markers):
+            return False
+        reduced_suffix = local_suffix
+        for claim_term in sorted(MAINSTREAM_AGENT_LOADING_FORBIDDEN_CLAIM_TERMS, key=len, reverse=True):
+            reduced_suffix = reduced_suffix.replace(claim_term, "")
+        for overclaim in sorted(MAINSTREAM_AGENT_LOADING_FORBIDDEN_OVERCLAIMS, key=len, reverse=True):
+            reduced_suffix = reduced_suffix.replace(overclaim, "")
+        if strong_negation:
+            reduced_suffix = re.sub(
+                r"\b(is|are|was|were|be|been|being|status|claim|proof|evidence|"
+                r"verified|granted|approved|supported|ready|available|passed)\b",
+                "",
+                reduced_suffix,
+            )
+        reduced_suffix = re.sub(r"\b(and|or)\b", "", reduced_suffix)
+        reduced_suffix = re.sub(r"[\s,，、/]+", "", reduced_suffix)
+        return not reduced_suffix
+
+    safe_occurrences = 0
+    for phrase_index in phrase_positions:
+        clause_start = max((lower_line.rfind(separator, 0, phrase_index) for separator in clause_separators), default=-1) + 1
+        clause_end_candidates = [
+            lower_line.find(separator, phrase_index + len(phrase_lower))
+            for separator in clause_separators
+            if lower_line.find(separator, phrase_index + len(phrase_lower)) != -1
+        ]
+        clause_end = min(clause_end_candidates) if clause_end_candidates else len(lower_line)
+        local_clause = lower_line[clause_start:clause_end]
+        local_prefix = lower_line[clause_start:phrase_index]
+        if any(marker in local_prefix for marker in strong_negation_markers):
+            safe_occurrences += 1
+            continue
+        if re.search(r"\bnot(?:\s+[a-z0-9/-]+){0,3}\s+$", local_prefix):
+            safe_occurrences += 1
+            continue
+        if any(
+            marker in local_clause
+            for marker in (
+                f"no {phrase_lower}",
+                f"not {phrase_lower}",
+                f"do not claim {phrase_lower}",
+                f"does not claim {phrase_lower}",
+                f"without {phrase_lower}",
+                f"avoid {phrase_lower}",
+                f"not a claim of {phrase_lower}",
+                f"not evidence of {phrase_lower}",
+            )
+        ):
+            safe_occurrences += 1
+            continue
+        zh_clause_start = max(
+            (lower_line.rfind(separator, 0, phrase_index) for separator in "；。！？|:："),
+            default=-1,
+        ) + 1
+        zh_local_prefix = lower_line[zh_clause_start:phrase_index]
+        if any(marker in zh_local_prefix for marker in ("不要", "不得", "不能", "不是", "不代表", "不等于")):
+            safe_occurrences += 1
+            continue
+        if (
+            phrase_lower in MAINSTREAM_AGENT_LOADING_FORBIDDEN_CLAIM_TERMS
+            or phrase_lower in MAINSTREAM_AGENT_LOADING_FORBIDDEN_OVERCLAIMS
+        ) and list_negation_covers_phrase(phrase_index):
+            safe_occurrences += 1
+            continue
+    previous_non_empty = []
+    for previous in reversed(lines[max(0, index - 10):index]):
+        if previous.strip():
+            previous_non_empty.append(previous.strip().lower())
+        if len(previous_non_empty) >= 2:
+            break
+    if any(
+        previous.endswith("is not:")
+        or previous.endswith("it is not:")
+        or previous.endswith("are not:")
+        or previous.endswith("not:")
+        for previous in previous_non_empty
+    ):
+        return True
+    if line.lstrip().startswith("-"):
+        prior_block = "\n".join(lines[max(0, index - 12):index]).lower()
+        if "it is not:" in prior_block or "is not:" in prior_block or "are not:" in prior_block:
+            return True
+    return safe_occurrences == len(phrase_positions)
+
+
+def _append_mainstream_loading_overclaim_issues(failures, path, content, root):
+    display = _display_path(path, root)
+    lines = content.splitlines()
+    for term in MAINSTREAM_AGENT_LOADING_FORBIDDEN_CLAIM_TERMS:
+        for index, line in enumerate(lines):
+            lower_line = line.lower()
+            if (
+                term in {"universal runtime support", "full runtime support"}
+                and "universal/full runtime support" in lower_line
+                and _mainstream_loading_line_has_safe_negation(lines, index, "universal/full runtime support")
+            ):
+                continue
+            if term in lower_line and not _mainstream_loading_line_has_safe_negation(lines, index, term):
+                failures.append(f"{display}: forbidden mainstream agent loading claim `{term}`")
+                break
+    for phrase in MAINSTREAM_AGENT_LOADING_FORBIDDEN_OVERCLAIMS:
+        for index, line in enumerate(lines):
+            lower_line = line.lower()
+            if phrase in lower_line and not _mainstream_loading_line_has_safe_negation(lines, index, phrase):
+                failures.append(f"{display}: forbidden mainstream agent loading overclaim `{phrase}`")
+                break
+
+    tier2_needles = [agent.lower() for agent in MAINSTREAM_AGENT_LOADING_TIER2]
+    for line in lines:
+        lower = line.lower()
+        if not any(agent in lower for agent in tier2_needles):
+            continue
+        if "pass" not in lower and "verified" not in lower and "available" not in lower:
+            continue
+        safe_research_boundary = (
+            "no runtime pass" in lower
+            or "no adapter manifest or runtime pass" in lower
+            or "no adapter manifest and no runtime pass" in lower
+            or "do not" in lower and "claim runtime pass" in lower
+            or "not_runtime_verified" in lower
+            or "not runtime verified" in lower
+            or "not runtime pass" in lower
+            or "research_only" in lower
+            or "research-only" in lower
+        )
+        if safe_research_boundary:
+            continue
+        if _line_has_scoped_claim_negation(line, "runtime pass"):
+            continue
+        failures.append(f"{display}: Tier 2 row must not claim runtime PASS/verified/available: {line.strip()}")
+
+
+def _append_mainstream_loading_common_doc_issues(failures, path, content, root, *, require_boundary=True):
+    display = _display_path(path, root)
+    if "Mainstream Agent Loading" not in content and "Tier 1" not in content:
+        failures.append(f"{display}: missing mainstream agent loading guidance")
+    if require_boundary:
+        lower_content = content.lower()
+        for token in (
+            "official approval",
+            "marketplace approval",
+            "universal/full runtime support",
+            "codex desktop marketplace-management e2e pass",
+        ):
+            if token not in lower_content:
+                failures.append(f"{display}: missing mainstream loading boundary phrase `{token}`")
+
+
+def check_mainstream_agent_loading(root=None):
+    """FIX-122: README and adapter loading guidance must stay synchronized and no-overclaim safe."""
+    root = Path(root) if root is not None else ROOT
+    failures = []
+    contents = {}
+
+    for rel_path in MAINSTREAM_AGENT_LOADING_REQUIRED_DOCS:
+        path = root / rel_path
+        display = _display_path(path, root)
+        if not path.is_file():
+            failures.append(f"{display}: missing mainstream agent loading artifact")
+            continue
+        content = path.read_text(encoding="utf-8")
+        contents[rel_path] = content
+        _append_mainstream_loading_overclaim_issues(failures, path, content, root)
+
+    readme_rel = "README.md"
+    readme_content = contents.get(readme_rel, "")
+    if readme_content:
+        readme_path = root / readme_rel
+        _append_mainstream_loading_common_doc_issues(failures, readme_path, readme_content, root)
+        for token in MAINSTREAM_AGENT_LOADING_README_TOKENS:
+            if token not in readme_content:
+                failures.append(f"{_display_path(readme_path, root)}: missing README mainstream loading token `{token}`")
+        for agent in MAINSTREAM_AGENT_LOADING_TIER1 + MAINSTREAM_AGENT_LOADING_TIER2:
+            if agent not in readme_content:
+                failures.append(f"{_display_path(readme_path, root)}: missing mainstream agent row/token `{agent}`")
+        for agent in MAINSTREAM_AGENT_LOADING_TIER2:
+            rows = [line for line in readme_content.splitlines() if agent.lower() in line.lower()]
+            if not rows:
+                continue
+            joined = " ".join(rows).lower()
+            if "compatibility reference only" not in joined or "no adapter manifest" not in joined or "runtime pass" not in joined:
+                failures.append(
+                    f"{_display_path(readme_path, root)}: Tier 2 row for {agent} must say compatibility reference only, no adapter manifest, and no runtime PASS"
+                )
+
+    requirements_rel = "docs/requirements/mainstream-agent-loading-0.47.0.md"
+    requirements_content = contents.get(requirements_rel, "")
+    if requirements_content:
+        requirements_path = root / requirements_rel
+        _append_mainstream_loading_common_doc_issues(failures, requirements_path, requirements_content, root)
+        for token in MAINSTREAM_AGENT_LOADING_REQUIREMENTS_TOKENS:
+            if token not in requirements_content:
+                failures.append(
+                    f"{_display_path(requirements_path, root)}: missing mainstream loading requirements token `{token}`"
+                )
+        for agent in MAINSTREAM_AGENT_LOADING_TIER1 + MAINSTREAM_AGENT_LOADING_TIER2:
+            if agent not in requirements_content:
+                failures.append(f"{_display_path(requirements_path, root)}: missing requirements row/token `{agent}`")
+
+        official_rows = _parse_markdown_table_rows(requirements_content, section_title="Official Surface Findings")
+        official_agents = {}
+        for cells in official_rows:
+            agent = cells[0].strip("`* ")
+            if agent in MAINSTREAM_AGENT_LOADING_TIER1 + MAINSTREAM_AGENT_LOADING_TIER2:
+                official_agents[agent] = cells
+        for agent in MAINSTREAM_AGENT_LOADING_TIER1 + MAINSTREAM_AGENT_LOADING_TIER2:
+            cells = official_agents.get(agent)
+            if not cells:
+                failures.append(f"{_display_path(requirements_path, root)}: missing Official Surface Findings row for {agent}")
+                continue
+            row_text = " | ".join(cells)
+            if "https://" not in row_text:
+                failures.append(f"{_display_path(requirements_path, root)}: {agent} row missing source citation URL")
+            if agent in MAINSTREAM_AGENT_LOADING_TIER2:
+                row_lower = row_text.lower()
+                denies_runtime = (
+                    "no runtime pass" in row_lower
+                    or "no adapter manifest or runtime pass" in row_lower
+                    or "no adapter manifest and runtime pass" in row_lower
+                    or "not runtime verified" in row_lower
+                    or "not_runtime_verified" in row_lower
+                    or ("do not" in row_lower and "claim runtime pass" in row_lower)
+                )
+                if "compatibility row only" not in row_lower or not denies_runtime:
+                    failures.append(
+                        f"{_display_path(requirements_path, root)}: {agent} row must be compatibility-only and deny runtime PASS"
+                    )
+
+    for adapter_id, spec in MAINSTREAM_AGENT_LOADING_ADAPTERS.items():
+        rel_path = spec["path"]
+        content = contents.get(rel_path, "")
+        if not content:
+            continue
+        path = root / rel_path
+        display = _display_path(path, root)
+        for token in spec["tokens"]:
+            if token not in content:
+                failures.append(f"{display}: {adapter_id} adapter README missing token `{token}`")
+        boundary_lower = content.lower()
+        for token in ("official approval", "marketplace approval", "universal/full runtime support"):
+            if token not in boundary_lower:
+                failures.append(f"{display}: {adapter_id} adapter README missing boundary phrase `{token}`")
+        if adapter_id in {"codex", "gemini"} and (
+            "blocked" not in boundary_lower or "e2e" not in boundary_lower
+        ):
+            failures.append(f"{display}: {adapter_id} adapter README must preserve BLOCKED/DEGRADED runtime boundary")
+        if adapter_id in {"claude", "opencode"} and "pass/degraded" not in boundary_lower:
+            failures.append(f"{display}: {adapter_id} adapter README must preserve PASS/DEGRADED runtime boundary")
 
     return failures
 
@@ -13041,6 +13526,20 @@ def cmd_check_governance(args):
         print("│  [PASS] Official submission docs position governance as ecosystem trust layer without overclaim.")
     print("└──────────────────────────────────────────────────────┘")
 
+    # ── 28n. Mainstream Agent Loading Guard (FIX-122) ──
+    print("\n┌─ Check 28n: Mainstream Agent Loading (FIX-122) ──────┐")
+    mainstream_loading_issues = check_mainstream_agent_loading()
+    if mainstream_loading_issues:
+        all_issues += len(mainstream_loading_issues)
+        print(f"│  [FAIL] {len(mainstream_loading_issues)} mainstream agent loading issue(s):")
+        for issue in mainstream_loading_issues[:10]:
+            print(f"│    - {issue}")
+        if len(mainstream_loading_issues) > 10:
+            print(f"│    ... and {len(mainstream_loading_issues) - 10} more")
+    else:
+        print("│  [PASS] README, Tier 1 adapters, and 0.47.0 requirements keep loading guidance synchronized.")
+    print("└──────────────────────────────────────────────────────┘")
+
     # ── Summary ──
     print(f"\n┌─ Governance Health Summary ──────────────────────────┐")
     if all_issues == 0:
@@ -16270,6 +16769,27 @@ def cmd_check_official_submission_ecosystem(args):
     print()
 
 
+def cmd_check_mainstream_agent_loading(args):
+    """Run FIX-122 mainstream agent loading guidance guard."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    issues = check_mainstream_agent_loading()
+    print("\n=== Mainstream Agent Loading Check ===")
+    if issues:
+        print(f"  Result: FAILED — {len(issues)} issue(s)")
+        for issue in issues[:20]:
+            print(f"    - {issue}")
+        if len(issues) > 20:
+            print(f"    ... and {len(issues) - 20} more")
+        if getattr(args, "fail_on_issues", False):
+            sys.exit(1)
+    else:
+        print("  Result: PASSED — mainstream loading guidance is synchronized and no-overclaim safe")
+    print()
+
+
 def cmd_check_readme_pack_guidance(args):
     """Run README first-run profile-to-pack guidance guard."""
     try:
@@ -16769,6 +17289,14 @@ def main():
     cose_p.add_argument("--fail-on-issues", action="store_true",
                        help="Exit with non-zero code if official submission ecosystem docs are incomplete or overclaim")
 
+    # check-mainstream-agent-loading (FIX-122)
+    cmal_p = subparsers.add_parser(
+        "check-mainstream-agent-loading",
+        help="Check 0.47.0 mainstream agent loading guidance and no-overclaim boundary",
+    )
+    cmal_p.add_argument("--fail-on-issues", action="store_true",
+                        help="Exit with non-zero code if mainstream loading docs are incomplete or overclaim")
+
     # check-readme-pack-guidance (FIX-109)
     crpg_p = subparsers.add_parser(
         "check-readme-pack-guidance",
@@ -16893,6 +17421,7 @@ def main():
         "check-capability-registry": cmd_check_capability_registry,
         "check-host-capability-context": cmd_check_host_capability_context,
         "check-official-submission-ecosystem": cmd_check_official_submission_ecosystem,
+        "check-mainstream-agent-loading": cmd_check_mainstream_agent_loading,
         "check-readme-pack-guidance": cmd_check_readme_pack_guidance,
         "check-governance-pack-status": cmd_check_governance_pack_status,
         "check-product-success-contracts": cmd_check_product_success_contracts,

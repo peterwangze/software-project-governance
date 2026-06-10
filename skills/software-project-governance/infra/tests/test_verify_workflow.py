@@ -1854,6 +1854,172 @@ class RuntimeReadinessMatrixTests(unittest.TestCase):
             self.assertTrue(any("missing no-overclaim boundary token `No official approval`" in issue for issue in issues))
 
 
+class MainstreamAgentLoadingTests(unittest.TestCase):
+    """FIX-122: mainstream agent loading docs must stay synchronized and no-overclaim safe."""
+
+    def _copy_current_docs(self, root):
+        for rel_path in vw.MAINSTREAM_AGENT_LOADING_REQUIRED_DOCS:
+            source = vw.ROOT / rel_path
+            target = root / rel_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+
+    def _mutate_file(self, root, rel_path, mutate):
+        path = root / rel_path
+        path.write_text(mutate(path.read_text(encoding="utf-8")), encoding="utf-8")
+
+    def test_mainstream_agent_loading_accepts_current_docs(self):
+        self.assertEqual(vw.check_mainstream_agent_loading(vw.ROOT), [])
+
+    def test_mainstream_agent_loading_accepts_copied_current_docs(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._copy_current_docs(root)
+            self.assertEqual(vw.check_mainstream_agent_loading(root), [])
+
+    def test_mainstream_agent_loading_rejects_missing_tier1_adapter_doc(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._copy_current_docs(root)
+            (root / "adapters/gemini/README.md").unlink()
+
+            issues = vw.check_mainstream_agent_loading(root)
+
+        self.assertTrue(any("adapters\\gemini\\README.md: missing mainstream agent loading artifact" in issue or
+                            "adapters/gemini/README.md: missing mainstream agent loading artifact" in issue
+                            for issue in issues))
+
+    def test_mainstream_agent_loading_rejects_missing_source_citation(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._copy_current_docs(root)
+            self._mutate_file(
+                root,
+                "docs/requirements/mainstream-agent-loading-0.47.0.md",
+                lambda text: text.replace("https://cursor.com/docs/rules", "Cursor rules docs"),
+            )
+
+            issues = vw.check_mainstream_agent_loading(root)
+
+        self.assertTrue(any("Cursor row missing source citation URL" in issue for issue in issues))
+
+    def test_mainstream_agent_loading_rejects_tier2_runtime_pass_claim(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._copy_current_docs(root)
+            self._mutate_file(
+                root,
+                "README.md",
+                lambda text: text.replace(
+                    "Compatibility reference only; no adapter manifest or runtime PASS.",
+                    "Compatibility reference only; runtime PASS verified.",
+                    1,
+                ),
+            )
+
+            issues = vw.check_mainstream_agent_loading(root)
+
+        self.assertTrue(any("Tier 2 row must not claim runtime PASS" in issue for issue in issues))
+
+    def test_mainstream_agent_loading_rejects_unrelated_negation_masking_direct_claim(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._copy_current_docs(root)
+            self._mutate_file(
+                root,
+                "README.md",
+                lambda text: text + "\nNo official approval, marketplace approved for all hosts.\n",
+            )
+
+            issues = vw.check_mainstream_agent_loading(root)
+
+        self.assertTrue(any("marketplace approved" in issue for issue in issues))
+
+    def test_mainstream_agent_loading_rejects_comma_split_claim_term_after_no_boundary(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._copy_current_docs(root)
+            self._mutate_file(
+                root,
+                "README.md",
+                lambda text: text + "\nNo official approval, marketplace approval exists for all hosts.\n",
+            )
+
+            issues = vw.check_mainstream_agent_loading(root)
+
+        self.assertTrue(any("marketplace approval" in issue for issue in issues))
+
+    def test_mainstream_agent_loading_rejects_positive_approval_support_claims(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._copy_current_docs(root)
+            self._mutate_file(
+                root,
+                "README.md",
+                lambda text: text + (
+                    "\nThis project has official approval, received marketplace approval, "
+                    "and provides universal/full runtime support.\n"
+                ),
+            )
+
+            issues = vw.check_mainstream_agent_loading(root)
+
+        self.assertTrue(any("official approval" in issue for issue in issues))
+        self.assertTrue(any("marketplace approval" in issue for issue in issues))
+        self.assertTrue(any("universal/full runtime support" in issue for issue in issues))
+
+    def test_mainstream_agent_loading_rejects_positive_desktop_e2e_claim(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._copy_current_docs(root)
+            self._mutate_file(
+                root,
+                "README.md",
+                lambda text: text + "\nCodex Desktop marketplace-management E2E PASS is available.\n",
+            )
+
+            issues = vw.check_mainstream_agent_loading(root)
+
+        self.assertTrue(any("codex desktop marketplace-management e2e pass" in issue.lower() for issue in issues))
+
+    def test_mainstream_agent_loading_rejects_unrelated_chinese_negation_masking(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._copy_current_docs(root)
+            self._mutate_file(
+                root,
+                "README.md",
+                lambda text: text + "\n不要看旧文档；this project has official approval.\n",
+            )
+
+            issues = vw.check_mainstream_agent_loading(root)
+
+        self.assertTrue(any("official approval" in issue for issue in issues))
+
+    def test_mainstream_agent_loading_rejects_unrelated_english_negation_masking(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._copy_current_docs(root)
+            self._mutate_file(
+                root,
+                "README.md",
+                lambda text: text + "\nNo official approval in old notes; this project has marketplace approval.\n",
+            )
+
+            issues = vw.check_mainstream_agent_loading(root)
+
+        self.assertTrue(any("marketplace approval" in issue for issue in issues))
+
+    def test_mainstream_agent_loading_cli_is_registered(self):
+        self.assertIs(vw.cmd_check_mainstream_agent_loading, vw.cmd_check_mainstream_agent_loading)
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._copy_current_docs(root)
+            with patch.object(vw, "ROOT", root), redirect_stdout(io.StringIO()) as stdout:
+                vw.cmd_check_mainstream_agent_loading(argparse.Namespace(fail_on_issues=True))
+        self.assertIn("Result: PASSED", stdout.getvalue())
+
+
 class FirstSessionMeasurementTests(unittest.TestCase):
     """FIX-107: local demo proof must stay separate from external pilot measurement."""
 

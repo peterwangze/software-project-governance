@@ -13,6 +13,10 @@ Use this workflow when your AI coding setup needs:
 - **Reviewer separation with degraded-mode honesty**: the workflow distinguishes real independent review from degraded or environment-dependent execution, and does not present every agent as fully supported.
 - **5-minute orientation for new users**: start with `/governance`, initialize `.governance/`, then let the agent resume state, check gates, and surface only critical decisions.
 
+## 1.0.0 Readiness Boundary
+
+0.48.0 reconciles the path toward 1.0.0, but it is not the 1.0.0 release. It records the readiness gap analysis, legacy requirement reconciliation, final command E2E ledger, and governance health release-gate repair. RISK-036 remains open until external validation, Codex Desktop marketplace-management disposition, official submission bundle review, and final release boundary checks are complete.
+
 ## Mainstream Agent Loading
 
 0.47.0 makes the current loading paths explicit for mainstream AI coding agents. This is loading readiness, not official approval, marketplace approval, universal/full runtime support, or Codex Desktop marketplace-management E2E PASS. See the 0.47.0 scope note in [docs/requirements/mainstream-agent-loading-0.47.0.md](docs/requirements/mainstream-agent-loading-0.47.0.md) and the public runtime facts in [docs/requirements/runtime-readiness-matrix-0.43.0.md](docs/requirements/runtime-readiness-matrix-0.43.0.md).

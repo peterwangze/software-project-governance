@@ -2,6 +2,41 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.48.0] — 2026-06-10
+
+### 0.48.0 — 1.0.0 Readiness Reconciliation
+
+0.48.0 发布 1.0.0 Readiness Reconciliation：把用户要求推进到 1.0.0 的大目标拆成可验证的 pre-1.0.0 发布链。该版本确认 1.0.0 当前不可发布，完成 readiness gap analysis、legacy requirement reconciliation、final command E2E ledger 和 governance health release-gate false blocker 修复，并把外部验证、Codex Desktop marketplace-management disposition、official submission bundle final review 和 RISK-036 open-risk disposition 保守移交到 0.49.0 或后续正式发布边界。
+
+### 新增
+
+- **AUDIT-113**: 新增 `docs/requirements/one-dot-zero-readiness-gap-analysis-0.48.0.md`，确认当前没有 `v1.0.0` tag，RISK-036 仍打开，缺少两个外部项目验证、Desktop marketplace-management lifecycle PASS 或保守 blocked disposition、final official submission bundle review。
+- **FIX-124**: 新增 `docs/requirements/legacy-requirement-reconciliation-0.48.0.md`，把旧 1.0.0 降级需求映射为 absorbed、superseded、still blocking 或 needs final ledger，避免历史路线图误导当前正式发布边界。
+- **FIX-125**: 新增 `docs/requirements/final-command-e2e-ledger-0.48.0.md`，集中记录 source proxy、target cwd、target fixture、runtime readiness、mainstream loading、capability context、official submission guard 和 agent-runtime E2E 事实，同时诚实暴露 release-gate blocker。
+- **FIX-127**: 修复 governance health release gate 中 historical hot evidence structural WARN 被 `--fail-on-issues` 误当成 blocking issue 的问题；WARN-only structural validity 继续打印但不阻断 governance health，缺省 ERROR 仍阻断。
+- **REL-025**: 新增 0.48.0 release checklist、feature flags、rollback plan、manifest coverage 和 release boundary。
+
+### 变更
+
+- 版本声明同步到 0.48.0：source SKILL、canonical manifest、Claude/Codex plugin metadata、Claude marketplace metadata、hook @version、target fixture skill 和 target fixture plan tracker。
+- README 新增 1.0.0 Readiness Boundary，明确 0.48.0 不是 1.0.0 正式发布。
+- `check-release --version 0.48.0 --require-changelog --runtime-adapters` 走通用 release docs coverage、version consistency、manifest consistency、governance health、E2E 和 unit execution gates。
+
+### 验证
+
+- `python -m unittest skills/software-project-governance/infra/tests/test_verify_workflow.py -v`
+- `python skills/software-project-governance/infra/verify_workflow.py check-governance --fail-on-issues`
+- `python skills/software-project-governance/infra/verify_workflow.py check-version-consistency`
+- `python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues`
+- `python skills/software-project-governance/infra/verify_workflow.py check-release --version 0.48.0 --require-changelog --runtime-adapters`
+- `git diff --check`
+
+### 发布边界
+
+- No official approval, marketplace approval, universal/full runtime support, external first-session pilot success, Codex Desktop marketplace-management E2E PASS, automatic best-tool selection, universal plugin/skill/tool availability, catalog entry runtime PASS, or 1.0.0 production-ready claim.
+- RISK-036 remains open. VAL-001, VAL-002, FIX-126, REL-026, final official submission bundle review, external validation completion, and Desktop marketplace-management disposition are not included in 0.48.0.
+- 0.48.0 release package does not include commit, tag, push, official submission, marketplace approval, or 1.0.0 release approval.
+
 ## [0.47.0] — 2026-06-10
 
 ### 0.47.0 — Mainstream Agent Loading Readiness

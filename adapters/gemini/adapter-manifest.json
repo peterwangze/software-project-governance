@@ -35,7 +35,7 @@
   "runtime_capabilities": {
     "ask_user_question": {
       "status": "unsupported",
-      "evidence": "Current Gemini CLI validation is blocked by auth and does not prove a native AskUserQuestion-equivalent tool.",
+      "evidence": "Gemini CLI target-cwd read E2E passed on 2026-06-11, but that read-only runtime check does not prove a native AskUserQuestion-equivalent tool.",
       "degraded_mode": "Block interaction-boundary closure or route through the outer host conversation with degraded evidence."
     },
     "sub_agent": {
@@ -45,8 +45,8 @@
     },
     "tool_calling": {
       "status": "degraded",
-      "evidence": "Gemini CLI tool access depends on auth and CLI configuration; current real runtime E2E is blocked by auth.",
-      "degraded_mode": "Use local validation scripts outside Gemini until auth and tool access pass runtime E2E."
+      "evidence": "Gemini CLI target-cwd read E2E passed on 2026-06-11 with configured CLI auth and headless workspace trust; broader tool access remains CLI-configuration dependent.",
+      "degraded_mode": "Use local validation scripts outside Gemini when tool access is not configured or not needed."
     },
     "browser": {
       "status": "unsupported",
@@ -64,7 +64,7 @@
     },
     "workflow_closure": {
       "status": "degraded",
-      "evidence": "Gemini entry projection exists, but auth/runtime and Agent Team capabilities remain blocked or unverified.",
+      "evidence": "Gemini entry projection and target-cwd read E2E passed on 2026-06-11; Agent Team, browser, MCP, and interactive governance capabilities remain host-dependent or unverified.",
       "degraded_capabilities": ["ask_user_question", "sub_agent", "tool_calling", "browser", "mcp"]
     }
   },
@@ -72,8 +72,8 @@
     "e2e_level": "real-agent-target-cwd",
     "command": "gemini",
     "version_command": "gemini --version",
-    "verified_on": "2026-06-04",
-    "evidence": "Local Gemini CLI command returned version 0.35.3.",
+    "verified_on": "2026-06-11",
+    "evidence": "Local Gemini CLI command returned version 0.46.0; real target-cwd read E2E passed with GEMINI_CLI_TRUST_WORKSPACE=true set for the headless run.",
     "target_cwd_e2e": {
       "status": "passed",
       "command": "python skills/software-project-governance/infra/verify_workflow.py status",
@@ -81,21 +81,20 @@
       "evidence": "Executed from project/e2e-test-project cwd and returned Test Project status with default-confirm permission mode."
     },
     "agent_runtime_e2e": {
-      "status": "blocked",
-      "command": "gemini --prompt \"Read .governance/plan-tracker.md in the current working directory and answer exactly: E2E_STAGE=<current stage text>. Do not modify files.\" --approval-mode plan --output-format text",
-      "verified_on": "2026-06-04",
-      "blocked_reason": "Gemini auth missing or not configured; configure GEMINI_API_KEY, GOOGLE_API_KEY, Vertex credentials, GCA auth, or Gemini settings auth before claiming full E2E.",
-      "evidence": "FIX-106 real agent runtime matrix command exited non-zero with auth missing/401 semantics before model execution."
+      "status": "passed",
+      "command": "GEMINI_CLI_TRUST_WORKSPACE=true python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent gemini --timeout 180; gemini --prompt \"Read the local governance bootstrap and answer with exactly these machine-readable fields if the workflow is loaded: E2E_PLATFORM=gemini; E2E_AGENT=<workflow role>; E2E_STAGE=<current stage>; E2E_MODE=<trigger x permission>. Do not modify files.\" --approval-mode plan --output-format text",
+      "verified_on": "2026-06-11",
+      "evidence": "Real Gemini CLI target-cwd PASS from project/e2e-test-project after setting headless workspace trust; output included E2E_PLATFORM=gemini, E2E_AGENT=Coordinator, E2E_STAGE=initiation, E2E_MODE=always-on x default-confirm."
     },
     "auth_preflight": {
       "status": "blocked",
       "command": "python skills/software-project-governance/infra/verify_workflow.py gemini-auth-preflight",
-      "verified_on": "2026-05-21",
+      "verified_on": "2026-06-11",
       "blocked_reason": "Gemini auth missing or not configured",
-      "evidence": "Local Gemini CLI is on PATH and `gemini --version` returns 0.35.3, but no recognized GEMINI_API_KEY, GOOGLE_API_KEY, Vertex, GCA, or Gemini settings auth source is configured on this host.",
+      "evidence": "Static secret-safe auth source probing did not find GEMINI_API_KEY, GOOGLE_API_KEY, complete Vertex credentials, complete GCA auth, or Gemini settings auth source fields on this host. Real Gemini CLI runtime E2E still passed with host-managed CLI auth and GEMINI_CLI_TRUST_WORKSPACE=true; no secret values were printed or recorded.",
       "remediation": "Set GEMINI_API_KEY or GOOGLE_API_KEY, configure Vertex credentials, configure GCA auth, or login/configure Gemini CLI settings.json with an auth provider/token type; do not record secret values."
     },
-    "full_e2e_verified": false
+    "full_e2e_verified": true
   },
   "launcher": "adapters/gemini/launch.py"
 }

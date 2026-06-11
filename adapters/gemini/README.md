@@ -41,18 +41,18 @@ Authentication preflight:
 python skills/software-project-governance/infra/verify_workflow.py gemini-auth-preflight
 ```
 
-Full target-cwd E2E gate, only after auth preflight passes:
+Full target-cwd E2E gate for headless automation:
 
 ```bash
-python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent gemini
+GEMINI_CLI_TRUST_WORKSPACE=true python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent gemini --timeout 180
 python skills/software-project-governance/infra/verify_workflow.py check-agent-adapters --runtime
 ```
 
 ## Boundary
 
-本机 2026-05-21 验证结果：`gemini --version` 返回 `0.35.3`，目标 cwd 的 Python 治理命令可运行；`gemini-auth-preflight` 当前为 `BLOCKED`，因为本机没有可识别的 `GEMINI_API_KEY`、`GOOGLE_API_KEY`、Vertex、GCA 或 Gemini `settings.json` auth provider/token 类型字段。真实 Gemini agent 用例返回 auth missing/401 语义，因此当前 blocked 是认证缺失，不是 workflow、fixture 或 `GEMINI.md` 投影失败。该结果只证明 Gemini CLI runtime 存在和 adapter contract 可被验证，不代表 Gemini 已通过真实 agent E2E，也不代表 Gemini 已拥有独立 plugin marketplace 分发。
+本机 2026-06-11 验证结果：`gemini --version` 返回 `0.46.0`，设置 `GEMINI_CLI_TRUST_WORKSPACE=true` 后，真实 Gemini CLI target-cwd E2E 为 PASS/DEGRADED，输出包含 `E2E_PLATFORM=gemini`、`E2E_AGENT=Coordinator`、`E2E_STAGE=initiation`、`E2E_MODE=always-on x default-confirm`。该结果证明 Gemini CLI 可以通过 `GEMINI.md` thin projection 读取治理 bootstrap；它不代表 Gemini 已拥有独立 plugin marketplace 分发，也不代表 AskUserQuestion、Agent Team、browser、MCP 或 broader tool-use closure 已完成。
 
-Gemini full E2E 的升级顺序必须是：先让 `python skills/software-project-governance/infra/verify_workflow.py gemini-auth-preflight` 返回 `PASS`，再复跑 `python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent gemini`。只有真实 Gemini agent 在 `project/e2e-test-project` target cwd 读取 `GEMINI.md` thin projection 并返回结构化 E2E 字段后，才能把 `agent_runtime_e2e.status` 和 `full_e2e_verified` 升级为 passed/true。
+Gemini headless E2E 需要信任目标目录：使用 `GEMINI_CLI_TRUST_WORKSPACE=true`、`--skip-trust` 或先在交互模式中信任目录。静态 `gemini-auth-preflight` 仍用于 secret-safe 发现 CLI 和常见 auth sources；如果本地 auth 由 Gemini CLI/host 自身托管，preflight 可能无法展示具体 secret source，但真实 E2E PASS 是更强的运行时证据。
 
 This adapter does not claim official approval, marketplace approval, Gemini plugin marketplace support, universal/full runtime support, or 1.0.0 production-ready status.
 
@@ -131,8 +131,8 @@ Gemini 兼容路线按以下顺序推进：
 ## 建议的最小验证顺序
 
 1. 运行 `python adapters/gemini/launch.py`，确认 adapter manifest 可被消费。
-2. 运行 `python skills/software-project-governance/infra/verify_workflow.py gemini-auth-preflight`，确认 Gemini CLI 和认证来源均可用。
-3. 运行 `python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent gemini`，确认真实 Gemini agent target-cwd E2E 通过。
+2. 运行 `python skills/software-project-governance/infra/verify_workflow.py gemini-auth-preflight`，确认 Gemini CLI 和常见认证来源状态；不记录 secret。
+3. 运行 `GEMINI_CLI_TRUST_WORKSPACE=true python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent gemini --timeout 180`，确认真实 Gemini agent target-cwd E2E 通过。
 4. 运行 `python skills/software-project-governance/infra/verify_workflow.py check-agent-adapters --runtime`，确认 adapter contract 和 runtime probe 同步。
 5. 再评估 MCP 是否适合承载结构化 Gate 检查、样例回写和验证能力。
 6. 如需项目级显式绑定，继续保持最薄 `GEMINI.md` 投影样例。
@@ -146,6 +146,5 @@ Gemini 兼容路线按以下顺序推进：
 
 ## TODO
 
-- 配置 Gemini CLI 认证后，先让 `gemini-auth-preflight` PASS，再复跑真实 agent 用例，把 `agent_runtime_e2e.status` 从 `blocked` 升级为 `passed`。
 - 在 `MAINT-003` 中把国内 agent CLI 的差异收敛成更细的兼容约束说明。
 - 待官方 extension 机制进一步稳定后，再判断是否值得新增产品化分发层。

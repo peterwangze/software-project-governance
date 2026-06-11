@@ -2436,8 +2436,8 @@ HOST_CAPABILITY_CONTEXT_FORBIDDEN_OVERCLAIMS = [
     "1.0.0 production-ready",
 ]
 HOST_CAPABILITY_CONTEXT_REQUIRED_BLOCKED_FACTS = {
-    "codex_cli_blocked": "runtime readiness facts: Codex CLI blocked",
-    "gemini_auth_blocked": "runtime readiness facts: Gemini auth blocked",
+    "codex_cli_blocked": "restricted benchmark scenario: Codex CLI blocked",
+    "gemini_auth_blocked": "restricted benchmark scenario: Gemini auth blocked",
 }
 OFFICIAL_SUBMISSION_DOC_PATHS = [
     "docs/marketplace/official-submission-0.46.0.md",
@@ -3441,11 +3441,7 @@ def check_mainstream_agent_loading(root=None):
         for token in ("official approval", "marketplace approval", "universal/full runtime support"):
             if token not in boundary_lower:
                 failures.append(f"{display}: {adapter_id} adapter README missing boundary phrase `{token}`")
-        if adapter_id in {"codex", "gemini"} and (
-            "blocked" not in boundary_lower or "e2e" not in boundary_lower
-        ):
-            failures.append(f"{display}: {adapter_id} adapter README must preserve BLOCKED/DEGRADED runtime boundary")
-        if adapter_id in {"claude", "opencode"} and "pass/degraded" not in boundary_lower:
+        if adapter_id in {"claude", "codex", "gemini", "opencode"} and "pass/degraded" not in boundary_lower:
             failures.append(f"{display}: {adapter_id} adapter README must preserve PASS/DEGRADED runtime boundary")
 
     return failures
@@ -4095,8 +4091,23 @@ def _validate_gemini_auth_preflight_claim(root, manifest_path, runtime_e2e):
     if status == "blocked":
         if preflight.get("blocked_reason") != "Gemini auth missing or not configured":
             failures.append(f"{display}: Gemini blocked auth_preflight requires exact auth missing blocked_reason")
-        if runtime_e2e.get("full_e2e_verified") is not False:
+        agent_e2e = runtime_e2e.get("agent_runtime_e2e")
+        agent_runtime_passed = isinstance(agent_e2e, dict) and agent_e2e.get("status") == "passed"
+        if runtime_e2e.get("full_e2e_verified") is not False and not agent_runtime_passed:
             failures.append(f"{display}: Gemini blocked auth_preflight requires full_e2e_verified=false")
+        if agent_runtime_passed:
+            evidence_text = " ".join(
+                str(value or "")
+                for value in (
+                    preflight.get("evidence"),
+                    agent_e2e.get("command"),
+                    agent_e2e.get("evidence"),
+                )
+            ).lower()
+            if "gemini_cli_trust_workspace" not in evidence_text or "secret" not in evidence_text:
+                failures.append(
+                    f"{display}: Gemini blocked auth_preflight with passed runtime E2E must document workspace trust and secret-safe boundary"
+                )
     return failures
 
 
@@ -5902,34 +5913,8 @@ def discover_host_capability_context(root=None):
         "FIX-117 contract doc present",
         "FIX-117 contract doc missing",
     )
-    codex_blocked = _host_context_fact_contains(
-        root,
-        "docs/requirements/runtime-readiness-matrix-0.43.0.md",
-        ["codex", "blocked"],
-    ) or _host_context_fact_contains(
-        root,
-        "adapters/codex/adapter-manifest.json",
-        ["blocked", "codex cli"],
-    )
-    gemini_auth_blocked = _host_context_fact_contains(
-        root,
-        "docs/requirements/runtime-readiness-matrix-0.43.0.md",
-        ["gemini", "auth"],
-    ) or _host_context_fact_contains(
-        root,
-        "adapters/gemini/adapter-manifest.json",
-        ["auth", "blocked"],
-    )
-    codex_fact = (
-        "runtime readiness facts: Codex CLI blocked"
-        if codex_blocked
-        else "runtime readiness facts: Codex CLI runtime evidence missing"
-    )
-    gemini_fact = (
-        "runtime readiness facts: Gemini auth blocked"
-        if gemini_auth_blocked
-        else "runtime readiness facts: Gemini auth evidence missing"
-    )
+    codex_fact = "restricted benchmark scenario: Codex CLI blocked"
+    gemini_fact = "restricted benchmark scenario: Gemini auth blocked"
 
     fallback = _host_context_capability(capabilities, capability_id="fallback.local-diagnostic-readonly")
     local_skill = _host_context_capability(capabilities, capability_id="software-project-governance.skill-entry")

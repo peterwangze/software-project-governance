@@ -26,8 +26,8 @@ Tier 1 loading guide:
 | Agent | Load or install path | First verification | Current boundary |
 | --- | --- | --- | --- |
 | Claude Code | Add this repo as a Claude plugin marketplace, then install `software-project-governance@spg`. | `python adapters/claude/launch.py` and `python skills/software-project-governance/infra/verify_workflow.py check-agent-adapters --runtime` | Claude target-cwd read use case is PASS/DEGRADED in local evidence. This is not official marketplace approval. |
-| Codex | Use `.agents/plugins/marketplace.json`, `.codex-plugin/plugin.json`, `AGENTS.md`, and `skills/software-project-governance/SKILL.md` as the Codex plugin/project guidance package. | `python C:\Users\peter\.codex\skills\.system\plugin-creator\scripts\validate_plugin.py .` and `python adapters/codex/launch.py` | Codex Desktop/App dogfood and manifest validation are available; Codex CLI full target-cwd E2E remains BLOCKED/DEGRADED until `agent-runtime-e2e --agent codex` passes. |
-| Gemini CLI | Use a thin `GEMINI.md` project context pointer to `skills/software-project-governance/SKILL.md`; custom commands, MCP, and extensions remain separate extension points. | `python adapters/gemini/launch.py`, then `python skills/software-project-governance/infra/verify_workflow.py gemini-auth-preflight` | Gemini CLI exists locally, but auth preflight is BLOCKED and full agent E2E is not passed. No Gemini plugin marketplace claim. |
+| Codex | Use `.agents/plugins/marketplace.json`, `.codex-plugin/plugin.json`, `AGENTS.md`, and `skills/software-project-governance/SKILL.md` as the Codex plugin/project guidance package. | `python C:\Users\peter\.codex\skills\.system\plugin-creator\scripts\validate_plugin.py .`, `python adapters/codex/launch.py`, and `python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent codex --timeout 180` | Codex CLI headless target-cwd read E2E is PASS/DEGRADED as of 2026-06-11. This is still not Codex Desktop marketplace-management lifecycle PASS. |
+| Gemini CLI | Use a thin `GEMINI.md` project context pointer to `skills/software-project-governance/SKILL.md`; custom commands, MCP, and extensions remain separate extension points. | `python adapters/gemini/launch.py`, then `GEMINI_CLI_TRUST_WORKSPACE=true python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent gemini --timeout 180` | Gemini CLI target-cwd read E2E is PASS/DEGRADED as of 2026-06-11 when headless workspace trust is enabled. No Gemini plugin marketplace claim. |
 | opencode | Use `AGENTS.md` or configured opencode instructions to point at `skills/software-project-governance/SKILL.md`. | `python skills/software-project-governance/infra/verify_workflow.py opencode-provider-preflight` and `python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent opencode --timeout 90` | opencode target-cwd runtime E2E is PASS/DEGRADED in local evidence; provider/model preflight still guards future regressions. |
 
 Tier 2 compatibility and research rows:
@@ -182,10 +182,10 @@ skills/software-project-governance/SKILL.md
 ```bash
 python adapters/gemini/launch.py
 python skills/software-project-governance/infra/verify_workflow.py gemini-auth-preflight
-python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent gemini
+GEMINI_CLI_TRUST_WORKSPACE=true python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent gemini --timeout 180
 ```
 
-当前边界：本机 Gemini CLI runtime 存在，但 auth preflight 为 BLOCKED，真实 agent target-cwd E2E 尚未 PASS。不要把 `GEMINI.md` 投影写成 Gemini plugin marketplace 或 full runtime support。
+当前边界：本机 Gemini CLI target-cwd read E2E 已在 2026-06-11 PASS/DEGRADED；headless 自动化需要设置 `GEMINI_CLI_TRUST_WORKSPACE=true` 或通过交互式信任当前目录。不要把 `GEMINI.md` 投影写成 Gemini plugin marketplace、official approval、marketplace approval 或 universal/full runtime support。
 
 ### opencode
 

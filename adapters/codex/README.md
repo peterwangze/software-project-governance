@@ -48,14 +48,14 @@ python skills/software-project-governance/infra/verify_workflow.py check-agent-a
 CLI target-cwd E2E gate:
 
 ```bash
-python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent codex --timeout 90
+python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent codex --timeout 180
 ```
 
 ## Boundary
 
-2026-06-10 local evidence supports Codex manifest and personal marketplace JSON validation. Current Codex App dogfood proves this desktop session can read `AGENTS.md` and help govern this repository's own development flow.
+2026-06-11 local evidence supports Codex manifest validation, personal marketplace JSON validation, and Codex CLI headless target-cwd read E2E. The runtime command returned machine-readable fields from `project/e2e-test-project`: `E2E_PLATFORM=codex`, `E2E_AGENT=Coordinator`, and `E2E_MODE=always-on x default-confirm`.
 
-That does not prove Codex Desktop marketplace add/install/enable/upgrade/uninstall lifecycle E2E, official approval, marketplace approval, or universal/full runtime support. Codex CLI target-cwd full E2E remains BLOCKED/DEGRADED until `agent-runtime-e2e --agent codex` passes in the target cwd with machine-readable fields.
+That does not prove Codex Desktop marketplace add/install/enable/upgrade/uninstall lifecycle E2E, official approval, marketplace approval, or universal/full runtime support. Codex CLI read E2E is PASS/DEGRADED; interaction boundaries, Agent Team separation, browser/MCP availability, and broader tool-use closure remain host-dependent.
 
 ## Current Effective Entry
 
@@ -71,9 +71,9 @@ Codex 加载 `skills/software-project-governance/SKILL.md` 作为自包含入口
 - `.agents/plugins/marketplace.json`：Codex/agent marketplace 索引。
 - `adapters/codex/adapter-manifest.json` + `launch.py`：可复跑的 adapter contract 和 runtime E2E 元数据。
 
-2026-05-21 本机验证结果：`codex --version` 返回 `codex-cli 0.125.0`。当前 Codex App 工作流会话已使用 `AGENTS.md` governance bootstrap 辅助本项目自身迭代，这只能证明本 Codex 桌面环境可以接入 workflow 并看护自身开发流程。
+2026-06-11 本机验证结果：`codex --version` 返回 `codex-cli 0.125.0`，`python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent codex --timeout 180` 在 `project/e2e-test-project` 中 PASS，返回机器可读 E2E 字段。
 
-Codex App 当前会话不能替代 Codex CLI headless target-cwd full E2E。主流 agent 适配的闭环标准必须通过真实环境 E2E 用例验证；Codex 适配的 full coverage 只接受 `codex exec` 在目标 cwd 中读取 `AGENTS.md` 并返回机器可读 E2E 字段。FIX-076 的真实矩阵中，`python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent codex --timeout 90` / `codex exec -C . -s read-only --ephemeral ...` 在本机超时，因此当前 Codex CLI full coverage 为 `blocked`，`full_e2e_verified=false`。闭环证据转入 FIX-077/FIX-076 evidence，直到真实 CLI target-cwd 用例通过前不得宣称 Codex full E2E verified。
+Codex App 当前会话仍不能替代 Codex Desktop marketplace-management lifecycle evidence。主流 agent 适配的 read target-cwd 闭环标准已经由真实 `codex exec` 用例验证；下一层边界仍是 Desktop add/install/enable/invoke/upgrade/uninstall、官方批准、市场批准和非 read-only 能力闭环。
 
 ## 历史入口约定（已废弃，仅供参考）
 

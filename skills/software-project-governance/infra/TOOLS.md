@@ -38,7 +38,7 @@
 | TOOL-030 | Governance Pack Status Boundary guard | script + command contract + release detail | `infra/verify_workflow.py check-governance-pack-status` + `check-governance` Check 28i + `check-release` governance pack status detail | `/governance`/status Delivery Trust Snapshot pack summary、default/enabled pack wording 或 release pack no-overclaim boundary 变更后 | 测试/发布/维护 | 是 |
 | TOOL-031 | Capability Context Selection Trace | script + command contract | `infra/verify_workflow.py capability-context` + `check-governance` Check 28j | 0.45.0 capability context/selection trace、受限环境能力选择诊断或 release gate 前 | 调研/架构/开发/测试/发布/维护 | 是 |
 | TOOL-032 | Capability Registry guard | script + registry | `infra/verify_workflow.py check-capability-registry` + `check-governance` Check 28k | external capability registry、plugin/skill/tool/MCP/browser/sub-agent/script/fallback catalog 或 no-overclaim boundary 变更后 | 调研/架构/测试/发布/维护 | 是 |
-| TOOL-033 | Host Capability Context benchmark | script + benchmark/diagnostic | `infra/verify_workflow.py check-host-capability-context` + `check-governance` Check 28l | FIX-117 restricted-environment fixtures、no network/no plugin install/no MCP/no browser/no sub-agent/local skill only/Codex CLI blocked/Gemini auth blocked 诊断或 release gate 前 | 调研/架构/测试/发布/维护 | 是 |
+| TOOL-033 | Host Capability Context benchmark | script + benchmark/diagnostic | `infra/verify_workflow.py check-host-capability-context` + `check-governance` Check 28l | FIX-117 restricted-environment fixtures、no network/no plugin install/no MCP/no browser/no sub-agent/local skill only、simulated Codex CLI blocked/Gemini auth blocked 诊断或 release gate 前 | 调研/架构/测试/发布/维护 | 是 |
 | TOOL-034 | Official Submission Ecosystem guard | script + submission docs contract | `infra/verify_workflow.py check-official-submission-ecosystem` + `check-governance` Check 28m + `check-release --version 0.46.0` release docs detail | 0.46.0 official submission docs、ecosystem positioning、comparison、migration guide、examples 或 no-overclaim boundary 变更后 | 调研/发布/维护 | 是 |
 | TOOL-035 | Mainstream Agent Loading guard | script + README/adapter docs contract | `infra/verify_workflow.py check-mainstream-agent-loading` + `check-governance` Check 28n | 0.47.0 README mainstream loading matrix、Tier 1 adapter loading guide、Tier 2 compatibility/research rows 或 no-overclaim boundary 变更后 | 调研/测试/发布/维护 | 是 |
 
@@ -373,7 +373,7 @@
 
 - **文件**：`infra/verify_workflow.py` + `docs/requirements/capability-discovery-orchestration-0.45.0.md`
 - **子命令**：`check-host-capability-context [--fixture <project-root>] [--fail-on-issues]`
-- **输入**：当前项目或测试 fixture 的 capability registry/catalog facts、local skill/script facts、runtime readiness facts，以及 no network、no plugin install、no MCP、no browser、no sub-agent、local skill only、Codex CLI blocked、Gemini auth blocked 等受限环境场景
+- **输入**：当前项目或测试 fixture 的 capability registry/catalog facts、local skill/script facts、runtime readiness facts，以及 no network、no plugin install、no MCP、no browser、no sub-agent、local skill only、simulated Codex CLI blocked、simulated Gemini auth blocked 等受限环境场景
 - **输出**：restricted host capability context 是否覆盖 8 个场景；每个场景是否给出 `source_facts`、`selected_capability`、降级边界、`validation_command` 与 no-overclaim boundary；是否阻断 blocked/degraded/catalog fact 被包装成 runtime PASS/AVAILABLE、automatic best-tool selection 或 universal plugin availability
 - **触发条件**：FIX-117 restricted-environment fixtures、capability discovery/orchestration release gate、受限宿主诊断或 no-overclaim boundary 变更后
 - **依赖**：`check-governance` Check 28l、TOOL-031、TOOL-032、runtime readiness matrix

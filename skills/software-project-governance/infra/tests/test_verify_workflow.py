@@ -1764,6 +1764,88 @@ class AgentAdapterContractTests(unittest.TestCase):
 
             self.assertTrue(any("Gemini blocked guidance must mention" in issue for issue in issues))
 
+    def test_agent_adapter_contract_allows_gemini_static_auth_blocked_when_runtime_e2e_passed(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_all_adapters(root)
+            self._write_adapter(
+                root,
+                "gemini",
+                extra={"runtime_e2e": {
+                    "e2e_level": "real-agent-target-cwd",
+                    "command": "gemini",
+                    "version_command": "gemini --version",
+                    "verified_on": "2026-06-11",
+                    "evidence": "version probe passed",
+                    "target_cwd_e2e": {
+                        "status": "passed",
+                        "command": "python skills/software-project-governance/infra/verify_workflow.py status",
+                        "verified_on": "2026-05-20",
+                        "evidence": "target cwd passed",
+                    },
+                    "agent_runtime_e2e": {
+                        "status": "passed",
+                        "command": "GEMINI_CLI_TRUST_WORKSPACE=true python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent gemini --timeout 180",
+                        "verified_on": "2026-06-11",
+                        "evidence": "Real Gemini CLI target-cwd read E2E passed with GEMINI_CLI_TRUST_WORKSPACE=true.",
+                    },
+                    "auth_preflight": {
+                        "status": "blocked",
+                        "command": "python skills/software-project-governance/infra/verify_workflow.py gemini-auth-preflight",
+                        "verified_on": "2026-06-11",
+                        "blocked_reason": "Gemini auth missing or not configured",
+                        "evidence": "Static secret-safe source probing did not find GEMINI_API_KEY, GOOGLE_API_KEY, Vertex, GCA, or settings auth; runtime E2E used host-managed auth without recording secret values.",
+                        "remediation": "Set GEMINI_API_KEY or GOOGLE_API_KEY, configure Vertex credentials, configure GCA auth, or configure Gemini settings auth.",
+                    },
+                    "full_e2e_verified": True,
+                }},
+            )
+
+            issues = vw.check_agent_adapter_contract(root=root)
+
+            self.assertEqual([], issues)
+
+    def test_agent_adapter_contract_rejects_gemini_static_auth_blocked_runtime_pass_without_secret_boundary(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_all_adapters(root)
+            self._write_adapter(
+                root,
+                "gemini",
+                extra={"runtime_e2e": {
+                    "e2e_level": "real-agent-target-cwd",
+                    "command": "gemini",
+                    "version_command": "gemini --version",
+                    "verified_on": "2026-06-11",
+                    "evidence": "version probe passed",
+                    "target_cwd_e2e": {
+                        "status": "passed",
+                        "command": "python skills/software-project-governance/infra/verify_workflow.py status",
+                        "verified_on": "2026-05-20",
+                        "evidence": "target cwd passed",
+                    },
+                    "agent_runtime_e2e": {
+                        "status": "passed",
+                        "command": "gemini --prompt ...",
+                        "verified_on": "2026-06-11",
+                        "evidence": "runtime passed",
+                    },
+                    "auth_preflight": {
+                        "status": "blocked",
+                        "command": "python skills/software-project-governance/infra/verify_workflow.py gemini-auth-preflight",
+                        "verified_on": "2026-06-11",
+                        "blocked_reason": "Gemini auth missing or not configured",
+                        "evidence": "Static auth source missing; runtime passed.",
+                        "remediation": "Set GEMINI_API_KEY or GOOGLE_API_KEY, configure Vertex credentials, configure GCA auth, or configure Gemini settings auth.",
+                    },
+                    "full_e2e_verified": True,
+                }},
+            )
+
+            issues = vw.check_agent_adapter_contract(root=root)
+
+            self.assertTrue(any("workspace trust and secret-safe boundary" in issue for issue in issues))
+
     def test_agent_adapter_runtime_checks_supported_commands_only(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -1812,7 +1894,8 @@ class RuntimeReadinessMatrixTests(unittest.TestCase):
         self,
         root,
         *,
-        codex_status="BLOCKED",
+        codex_status="PASS",
+        gemini_status="PASS",
         cursor_status="RESEARCH_ONLY",
         include_boundary=True,
         include_runtime_result_table=False,
@@ -1829,7 +1912,7 @@ class RuntimeReadinessMatrixTests(unittest.TestCase):
             "\n## Current Real Runtime Result\n\n"
             "| Agent | Real runtime result | Blocking or degraded reason |\n"
             "| --- | --- | --- |\n"
-            "| codex | BLOCKED | Codex CLI target-cwd command timed out. |\n"
+            "| codex | PASS | Codex CLI target-cwd read E2E passed. |\n"
             if include_runtime_result_table
             else ""
         )
@@ -1839,8 +1922,8 @@ class RuntimeReadinessMatrixTests(unittest.TestCase):
             "| Agent | Public status | Workflow closure | Version command | Evidence and boundary |\n"
             "| --- | --- | --- | --- | --- |\n"
             "| claude | PASS | DEGRADED | claude --version | full_e2e_verified=true; agent_runtime_e2e passed; Claude Code real target cwd E2E passed. |\n"
-            f"| codex | {codex_status} | DEGRADED | codex --version | Codex CLI headless target-cwd E2E timed out in the real `codex exec` runtime. |\n"
-            "| gemini | BLOCKED | DEGRADED | gemini --version | Gemini auth missing or not configured; configure GEMINI_API_KEY / GOOGLE_API_KEY / Vertex / GCA / settings auth. |\n"
+            f"| codex | {codex_status} | DEGRADED | codex --version | full_e2e_verified=true; real codex exec target-cwd read E2E passed. |\n"
+            f"| gemini | {gemini_status} | DEGRADED | gemini --version | full_e2e_verified=true; Gemini target-cwd read E2E passed with headless workspace trust. |\n"
             "| opencode | PASS | DEGRADED | opencode --version | full_e2e_verified=true; agent_runtime_e2e passed; opencode real target cwd E2E passed. |\n"
             f"| cursor | {cursor_status} | NOT_RUNTIME_VERIFIED | manual research | Cursor entry is research-only; no adapter manifest or real target-cwd E2E evidence. |\n"
             "| copilot | RESEARCH_ONLY | NOT_RUNTIME_VERIFIED | manual research | Copilot entry is research-only; no adapter manifest or real target-cwd E2E evidence. |\n"
@@ -1856,21 +1939,29 @@ class RuntimeReadinessMatrixTests(unittest.TestCase):
             self._write_matrix(root)
             self.assertEqual(vw.check_runtime_readiness_matrix(root), [])
 
-    def test_runtime_readiness_matrix_rejects_codex_overclaim(self):
+    def test_runtime_readiness_matrix_rejects_stale_codex_blocked_status(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             self._copy_adapters(root)
-            self._write_matrix(root, codex_status="PASS")
+            self._write_matrix(root, codex_status="BLOCKED")
             issues = vw.check_runtime_readiness_matrix(root)
-            self.assertTrue(any("codex row must contain BLOCKED" in issue for issue in issues))
+            self.assertTrue(any("codex row must contain PASS" in issue for issue in issues))
+
+    def test_runtime_readiness_matrix_rejects_stale_gemini_blocked_status(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._copy_adapters(root)
+            self._write_matrix(root, gemini_status="BLOCKED")
+            issues = vw.check_runtime_readiness_matrix(root)
+            self.assertTrue(any("gemini row must contain PASS" in issue for issue in issues))
 
     def test_runtime_readiness_matrix_summary_overclaim_not_masked_by_later_table(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             self._copy_adapters(root)
-            self._write_matrix(root, codex_status="PASS", include_runtime_result_table=True)
+            self._write_matrix(root, codex_status="BLOCKED", include_runtime_result_table=True)
             issues = vw.check_runtime_readiness_matrix(root)
-            self.assertTrue(any("codex row must contain BLOCKED" in issue for issue in issues))
+            self.assertTrue(any("codex row must contain PASS" in issue for issue in issues))
 
     def test_runtime_readiness_matrix_rejects_research_only_runtime_claim(self):
         with tempfile.TemporaryDirectory() as td:
@@ -3261,8 +3352,8 @@ class CapabilitySelectionTests(unittest.TestCase):
             "no browser",
             "no sub-agent",
             "local skill only",
-            "Codex CLI blocked",
-            "Gemini auth blocked",
+            "restricted benchmark scenario: Codex CLI blocked",
+            "restricted benchmark scenario: Gemini auth blocked",
         ])
         tools_path.write_text(tools_text, encoding="utf-8")
 
@@ -3282,8 +3373,8 @@ class CapabilitySelectionTests(unittest.TestCase):
             "no browser",
             "no sub-agent",
             "local skill only",
-            "Codex CLI blocked",
-            "Gemini auth blocked",
+            "restricted benchmark scenario: Codex CLI blocked",
+            "restricted benchmark scenario: Gemini auth blocked",
         ])
         if mutate_docs:
             req_text, tools_text = mutate_docs(req_text, tools_text)
@@ -3357,7 +3448,7 @@ class CapabilitySelectionTests(unittest.TestCase):
         self.assertIn("gemini_auth_blocked: BLOCKED", output)
         self.assertIn("Result: PASSED", output)
 
-    def test_rejects_missing_runtime_blocked_source_facts(self):
+    def test_restricted_blocked_scenarios_no_longer_depend_on_live_runtime_matrix(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             self._write_project(root, runtime_blocked=False)
@@ -3365,27 +3456,22 @@ class CapabilitySelectionTests(unittest.TestCase):
             context = vw.discover_host_capability_context(root)
             issues = vw.check_host_capability_context(root)
 
+        self.assertEqual([], issues)
         self.assertIn(
-            "runtime readiness facts: Codex CLI runtime evidence missing",
+            "restricted benchmark scenario: Codex CLI blocked",
             context["source_facts"],
         )
         self.assertIn(
-            "runtime readiness facts: Gemini auth evidence missing",
+            "restricted benchmark scenario: Gemini auth blocked",
             context["source_facts"],
         )
-        self.assertFalse(any(fact == "runtime readiness facts: Codex CLI blocked" for fact in context["source_facts"]))
-        self.assertFalse(any(fact == "runtime readiness facts: Gemini auth blocked" for fact in context["source_facts"]))
-        self.assertTrue(any("missing Codex CLI blocked source fact" in issue for issue in issues))
-        self.assertTrue(any("missing Gemini auth blocked source fact" in issue for issue in issues))
-        self.assertTrue(any("scenario codex_cli_blocked: missing direct blocked runtime source fact" in issue for issue in issues))
-        self.assertTrue(any("scenario gemini_auth_blocked: missing direct blocked runtime source fact" in issue for issue in issues))
 
     def test_rejects_blocked_capability_declared_runtime_pass(self):
         broken_context = {
             "scenario": "restricted-environment-capability-selection",
             "host_id": "fixture",
             "benchmark_kind": "benchmark/diagnostic fixture; not external execution",
-            "source_facts": ["runtime readiness facts: Codex CLI blocked", "runtime readiness facts: Gemini auth blocked"],
+            "source_facts": ["restricted benchmark scenario: Codex CLI blocked", "restricted benchmark scenario: Gemini auth blocked"],
             "restricted_scenarios": [{
                 "scenario_id": "codex_cli_blocked",
                 "constraint": "Codex CLI blocked",

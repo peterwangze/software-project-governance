@@ -2,7 +2,7 @@
 # commit-msg governance hook — installed by software-project-governance
 # Runs AFTER prepare-commit-msg, so $1 reliably contains the current commit message.
 # Handles message-dependent checks that pre-commit cannot do (architectural fix: FIX-047).
-# @version: 0.49.0
+# @version: 0.50.0
 
 set -e
 

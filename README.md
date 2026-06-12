@@ -15,7 +15,7 @@ Use this workflow when your AI coding setup needs:
 
 ## 1.0.0 Readiness Boundary
 
-0.49.0 packages External Validation and Official Submission Closure evidence, but it is not the 1.0.0 release. It records two real external-project smoke attempts, the FIX-128 empty-governance-ID guard, Codex CLI marketplace source sync evidence, and the final official-submission candidate bundle review. RISK-036 remains open: external validation is still partial/blocked, Codex Desktop marketplace-management lifecycle remains BLOCKED/NOT_RUN, no official approval, no marketplace approval, and 1.0.0 remains blocked until final release criteria are satisfied.
+0.50.0 packages the Mainstream Agent E2E Risk Release evidence, but it is not the 1.0.0 release. It records the post-configuration real target-cwd read E2E result for Codex, Claude Code, Gemini CLI, and opencode: `pass=4, blocked=0, fail=0, total=4`. RISK-036 remains open: external validation is still partial/blocked, Codex Desktop marketplace-management lifecycle remains BLOCKED/NOT_RUN or awaiting conservative disposition, no official approval, no marketplace approval, and 1.0.0 remains blocked until final release criteria are satisfied.
 
 ## Mainstream Agent Loading
 

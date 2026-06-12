@@ -2,6 +2,37 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.50.0] — 2026-06-12
+
+### 0.50.0 — Mainstream Agent E2E Risk Release
+
+0.50.0 发布 Mainstream Agent E2E Risk Release：把 FIX-129 的四平台真实 target-cwd read E2E 证据打包为版本化 release package。该版本记录用户完成 Codex、Claude Code、Gemini CLI 和 opencode 配置后，最终 runtime harness 返回 `pass=4, blocked=0, fail=0, total=4`；同时继续明确这只是主流 agent read/bootstrap E2E 分项风险释放，不关闭 RISK-036，不代表 official approval、marketplace approval、external validation PASS、Codex Desktop lifecycle PASS 或 1.0.0 readiness。
+
+### 新增
+
+- **REL-027**: 新增 0.50.0 release checklist、feature flags、rollback plan、manifest coverage 和 release boundary。
+- **FIX-129 evidence package**: 0.50.0 release docs 消费 `docs/requirements/mainstream-agent-e2e-risk-release-0.50.0.md`，把四个平台的 target-cwd read E2E PASS/DEGRADED 事实版本化。
+
+### 变更
+
+- 版本声明同步到 0.50.0：source SKILL、canonical manifest、Claude/Codex plugin metadata、Claude marketplace metadata、hook @version、target fixture skill 和 target fixture plan tracker。
+- README 的 1.0.0 Readiness Boundary 更新为 0.50.0 evidence package，明确四平台 read E2E 已通过，但外部验证、Desktop lifecycle、official approval/marketplace approval 与 RISK-036 仍未关闭。
+- `verify_workflow.py` REQUIRED_SNIPPETS 版本字面量更新为 0.50.0。
+
+### 验证
+
+- `python skills/software-project-governance/infra/verify_workflow.py check-version-consistency`
+- `python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues`
+- `python skills/software-project-governance/infra/verify_workflow.py check-release --version 0.50.0 --require-changelog --runtime-adapters`
+- `python -m unittest skills/software-project-governance/infra/tests/test_verify_workflow.py -v`
+- `git diff --check`
+
+### 发布边界
+
+- No official approval, marketplace approval, universal/full runtime support, external validation PASS, Codex Desktop marketplace-management E2E PASS, Desktop lifecycle E2E PASS, automatic best-tool selection, universal plugin/skill/tool availability, catalog entry runtime PASS, or 1.0.0 production-ready claim.
+- RISK-036 remains open. 0.50.0 consumes FIX-129 as mainstream agent target-cwd read E2E sub-risk release evidence only.
+- 0.50.0 release package does not include official submission, official approval, marketplace approval, RISK-036 closure, or 1.0.0 release approval.
+
 ## [0.49.0] — 2026-06-11
 
 ### 0.49.0 — External Validation and Official Submission Closure

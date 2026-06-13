@@ -6872,6 +6872,135 @@ class GovernanceIntegrationTests(unittest.TestCase):
         self.assertIn("RISK-IDs: no entries found.", text)
 
 
+class ExternalProjectValidationHarnessTests(unittest.TestCase):
+    """FIX-131: external validation runs in a temporary workspace with conservative boundaries."""
+
+    def test_external_validation_rejects_missing_or_empty_target(self):
+        with tempfile.TemporaryDirectory() as td:
+            empty = Path(td) / "empty"
+            empty.mkdir()
+            result = vw.run_external_project_validation(empty)
+
+        self.assertFalse(result["pass"])
+        self.assertEqual(result["surface_files"], 0)
+        self.assertIn("target must be an existing directory", result["issues"][0])
+        self.assertIn("No official approval", result["no_overclaim_boundary"])
+        self.assertIn("No 1.0.0 production-ready", result["no_overclaim_boundary"])
+
+    def test_external_validation_rejects_workspace_parent_inside_target(self):
+        with tempfile.TemporaryDirectory() as td:
+            target = Path(td) / "target"
+            nested = target / "nested"
+            nested.mkdir(parents=True)
+            (target / "app.py").write_text("print('external')\n", encoding="utf-8")
+
+            result_same = vw.run_external_project_validation(target, workspace_parent=target)
+            result_nested = vw.run_external_project_validation(target, workspace_parent=nested)
+
+        self.assertFalse(result_same["pass"])
+        self.assertFalse(result_nested["pass"])
+        self.assertIn("must not be the target directory", result_same["issues"][0])
+        self.assertIn("must not be the target directory", result_nested["issues"][0])
+
+    def test_external_validation_runs_expected_command_matrix_without_mutating_target(self):
+        calls = []
+        with tempfile.TemporaryDirectory() as td:
+            target = Path(td) / "target"
+            target.mkdir()
+            marker = target / "app.py"
+            marker.write_text("print('external')\n", encoding="utf-8")
+
+            def fake_copy(workspace):
+                (workspace / "README.md").write_text("surface\n", encoding="utf-8")
+                return ["README.md"]
+
+            def fake_prepare(workspace):
+                calls.append(("prepare", workspace.exists()))
+
+            def fake_run(workspace, args, timeout=120):
+                calls.append(("run", tuple(args), timeout, workspace.exists()))
+                return {"args": list(args), "exit_code": 0, "stdout_tail": "ok", "stderr_tail": ""}
+
+            with patch.object(vw, "_copy_external_validation_surface", side_effect=fake_copy), \
+                 patch.object(vw, "_prepare_external_validation_git", side_effect=fake_prepare), \
+                 patch.object(vw, "_run_external_validation_command", side_effect=fake_run), \
+                 patch.object(vw, "_extract_skill_version", return_value="0.50.1"):
+                result = vw.run_external_project_validation(target, timeout=7)
+
+            self.assertTrue(result["pass"])
+            self.assertEqual(result["surface_files"], 1)
+            self.assertEqual(marker.read_text(encoding="utf-8"), "print('external')\n")
+            self.assertEqual(
+                [call[1] for call in calls if call[0] == "run"],
+                [tuple(args) for _label, args in vw.EXTERNAL_PROJECT_VALIDATION_COMMANDS],
+            )
+            self.assertTrue(all(call[2] == 7 for call in calls if call[0] == "run"))
+            self.assertIn("No external validation full PASS", result["no_overclaim_boundary"])
+            self.assertIn("No RISK-036 closure", result["no_overclaim_boundary"])
+
+    def test_external_validation_writes_minimal_governance_records(self):
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Path(td)
+            facts = {
+                "target": "C:/external/project",
+                "exists": True,
+                "is_dir": True,
+                "file_count": 1,
+                "sample_files": ["src/app.py"],
+            }
+            with patch.object(vw, "_extract_skill_version", return_value="0.50.1"):
+                vw._write_external_validation_governance(workspace, facts)
+
+            plan = (workspace / ".governance/plan-tracker.md").read_text(encoding="utf-8")
+            target_json = json.loads(
+                (workspace / ".governance/external-validation-target.json").read_text(encoding="utf-8")
+            )
+
+        self.assertIn("## 项目配置", plan)
+        self.assertIn("## Gate 状态跟踪", plan)
+        self.assertIn("工作流版本**: 0.50.1", plan)
+        self.assertEqual(target_json["sample_files"], ["src/app.py"])
+
+    def test_external_validation_profile_skips_product_hot_fact_history(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gov = root / ".governance"
+            gov.mkdir()
+            plan = gov / "plan-tracker.md"
+            plan.write_text(vw._external_validation_plan_tracker("0.50.1"), encoding="utf-8")
+            (gov / "external-validation-target.json").write_text("{}", encoding="utf-8")
+            output = io.StringIO()
+            with patch.object(vw, "ROOT", root), redirect_stdout(output):
+                issues = vw.check_hot_fact_source_consistency(plan)
+
+        self.assertEqual(issues, [])
+        self.assertIn("external validation temporary workspace", output.getvalue())
+
+    def test_hot_fact_skip_requires_external_validation_sentinel(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gov = root / ".governance"
+            gov.mkdir()
+            plan = gov / "plan-tracker.md"
+            plan.write_text(vw._external_validation_plan_tracker("0.50.1"), encoding="utf-8")
+            output = io.StringIO()
+            with patch.object(vw, "ROOT", root), redirect_stdout(output):
+                issues = vw.check_hot_fact_source_consistency(plan)
+
+        self.assertNotEqual(issues, [])
+        self.assertNotIn("skipped for external validation", output.getvalue())
+
+    def test_external_validation_command_timeout_is_structured_failure(self):
+        timeout = subprocess.TimeoutExpired(["python", "x.py"], timeout=3, output="partial\n", stderr="slow\n")
+        with tempfile.TemporaryDirectory() as td, \
+             patch.object(vw.subprocess, "run", side_effect=timeout):
+            result = vw._run_external_validation_command(Path(td), ["check-governance"], timeout=3)
+
+        self.assertEqual(result["exit_code"], 124)
+        self.assertIn("partial", result["stdout_tail"])
+        self.assertIn("timed out", result["stderr_tail"])
+
+
 class GovernanceSignalNoiseTests(unittest.TestCase):
     """FIX-066: governance checks keep signal while suppressing historical noise."""
 

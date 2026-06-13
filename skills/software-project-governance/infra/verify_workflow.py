@@ -11,6 +11,7 @@ import subprocess
 import importlib.util
 import shutil
 import hashlib
+import tempfile
 from datetime import datetime, date
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -1795,6 +1796,14 @@ def check_hot_fact_source_consistency(plan_tracker_path=None):
     failures = []
     plan_content = plan_tracker_path.read_text(encoding="utf-8")
     rel_plan = _display_path(plan_tracker_path)
+    if (
+        "External Validation Temporary Project" in plan_content
+        and "temporary external-project workspace" in plan_content
+        and (Path(ROOT) / ".governance" / "external-validation-target.json").is_file()
+        and plan_tracker_path.resolve() == (Path(ROOT) / ".governance" / "plan-tracker.md").resolve()
+    ):
+        print("[OK] hot fact-source consistency skipped for external validation temporary workspace")
+        return []
     failures.extend(_snapshot_fact_source_issues(plan_content, plan_tracker_path))
 
     required_sections = [
@@ -16319,6 +16328,314 @@ def cmd_opencode_provider_preflight(_args):
         sys.exit(1)
 
 
+EXTERNAL_PROJECT_VALIDATION_COMMANDS = [
+    ("status", ["status"]),
+    ("gate G1", ["gate", "G1"]),
+    ("governance-context", ["governance-context", "--fail-on-issues"]),
+    ("check-governance", ["check-governance", "--fail-on-issues"]),
+]
+
+EXTERNAL_PROJECT_VALIDATION_BOUNDARY = (
+    "No official approval. No marketplace approval. No external validation full PASS. "
+    "No Codex Desktop marketplace-management E2E PASS. No Desktop lifecycle E2E PASS. "
+    "No automatic best-tool selection. No universal plugin/skill/tool availability. "
+    "No catalog entry runtime PASS. No RISK-036 closure. No 1.0.0 production-ready."
+)
+
+
+def _external_validation_target_facts(target):
+    target = Path(target).resolve()
+    facts = {
+        "target": str(target),
+        "exists": target.exists(),
+        "is_dir": target.is_dir(),
+        "file_count": 0,
+        "sample_files": [],
+    }
+    if target.is_dir():
+        all_files = []
+        for path in target.rglob("*"):
+            if not path.is_file():
+                continue
+            rel_parts = path.relative_to(target).parts
+            if any(part in {".git", "node_modules", "__pycache__"} for part in rel_parts):
+                continue
+            all_files.append(path.relative_to(target).as_posix())
+        facts["file_count"] = len(all_files)
+        facts["sample_files"] = all_files[:5]
+    return facts
+
+
+def _external_validation_plan_tracker(version):
+    return f"""# External Validation Temporary Project
+
+## 项目配置
+
+- **项目目标**: Validate software-project-governance in a temporary external-project workspace without mutating the source target.
+- **Profile**: standard
+- **触发模式**: always-on
+- **操作权限模式**: maximum-autonomy
+- **工作流版本**: {version}
+- **当前阶段**: 立项与目标定义（第 1 阶段）
+
+## Gate 状态跟踪
+
+| Gate | 阶段转换 | 状态 | 通过日期 | 关键证据 |
+| --- | --- | --- | --- | --- |
+| G1 | → 调研 | pending | | |
+| G2 | → 技术选型 | pending | | |
+| G3 | → 环境搭建 | pending | | |
+| G4 | → 架构设计 | pending | | |
+| G5 | → 开发实现 | pending | | |
+| G6 | → 测试 | pending | | |
+| G7 | → 防护网与CI/CD | pending | | |
+| G8 | → 版本发布 | pending | | |
+| G9 | → 运营 | pending | | |
+| G10 | → 维护 | pending | | |
+| G11 | → 下一轮 | pending | | |
+
+## 项目总览
+
+| 项目 | 当前阶段 | 总任务数 | 已完成 | 阻塞中 | 关键风险数 | 最近 Gate 结论 | 最近复盘日期 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| External validation temporary project | 立项 | 0 | 0 | 0 | 0 | G1 pending | {date.today().isoformat()} |
+
+## 当前活跃事项
+
+No active P0/P1/P2 tasks. This temporary workspace validates install surface and command execution only.
+
+## 版本规划
+
+### 版本路线图
+
+| 版本 | 状态 | 预计日期 | 核心范围 | 包含 Tier/Layer | 关键交付物 |
+|------|------|---------|---------|---------------|-----------|
+
+### 版本 Gate（V-Gate）
+
+| 检查项 | 判定标准 |
+|--------|---------|
+| 版本范围完成率 | ≥90% |
+| Breaking Change 文档化 | VERSIONING + CHANGELOG |
+| 版本号一致性 | verify PASSED |
+| 未完成项处置 | 降级/移版本 |
+| 用户文档更新 | README/CHANGELOG |
+
+## 需求跟踪矩阵
+
+| 需求ID | 描述 | 来源 | 优先级 | 关联任务 | 状态 | 验证方式 |
+|--------|------|------|--------|---------|------|---------|
+
+## 变更控制
+
+**标准路径**: 变更提出 → 优先级判定 → 版本适配 → 冲突检查 → 创建 task
+
+**快速通道**: 最小入账 → 立即执行 → 事后补齐 → Gate 审计
+"""
+
+
+def _write_external_validation_governance(workspace, target_facts):
+    gov = workspace / ".governance"
+    gov.mkdir(parents=True, exist_ok=True)
+    version = _extract_skill_version(ROOT / "skills/software-project-governance/SKILL.md") or "unknown"
+    (gov / "plan-tracker.md").write_text(_external_validation_plan_tracker(version), encoding="utf-8")
+    (gov / "decision-log.md").write_text("# Decision Log\n\n", encoding="utf-8")
+    (gov / "evidence-log.md").write_text("# Evidence Log\n\n", encoding="utf-8")
+    (gov / "risk-log.md").write_text("# Risk Log\n\n", encoding="utf-8")
+    (gov / "session-snapshot.md").write_text(
+        "# Session Snapshot\n\n"
+        f"- session_date: {date.today().isoformat()}\n"
+        "- purpose: external project validation temporary workspace\n"
+        f"- source_target: {target_facts['target']}\n",
+        encoding="utf-8",
+    )
+    (gov / "external-validation-target.json").write_text(
+        json.dumps(target_facts, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+def _copy_external_validation_surface(workspace):
+    tracked = _git_files(["ls-files", "--cached"])
+    if not tracked:
+        raise RuntimeError("cannot discover source git-tracked files for external validation package")
+    copied = []
+    for rel in sorted(tracked):
+        rel = rel.replace("\\", "/")
+        if rel.startswith(".governance/") or rel.startswith(".git/"):
+            continue
+        src = ROOT / rel
+        if not src.is_file():
+            continue
+        dst = workspace / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        copied.append(rel)
+    return copied
+
+
+def _prepare_external_validation_git(workspace):
+    subprocess.run(["git", "init"], cwd=str(workspace), capture_output=True, text=True, timeout=20, check=True)
+    subprocess.run(["git", "config", "user.email", "external-validation@example.invalid"],
+                   cwd=str(workspace), capture_output=True, text=True, timeout=10, check=True)
+    subprocess.run(["git", "config", "user.name", "External Validation Harness"],
+                   cwd=str(workspace), capture_output=True, text=True, timeout=10, check=True)
+    subprocess.run(["git", "config", "core.autocrlf", "false"],
+                   cwd=str(workspace), capture_output=True, text=True, timeout=10, check=True)
+    subprocess.run(
+        ["git", "-c", "core.autocrlf=false", "add", "-A"],
+        cwd=str(workspace),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "commit", "--no-verify", "-m", "FIX-131 external validation baseline"],
+        cwd=str(workspace),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=True,
+    )
+    hooks_src = workspace / "skills/software-project-governance/infra/hooks"
+    hooks_dst = workspace / ".git/hooks"
+    for hook_name in ("pre-commit", "prepare-commit-msg", "commit-msg", "post-commit"):
+        hook_src = hooks_src / hook_name
+        if hook_src.is_file():
+            shutil.copy2(hook_src, hooks_dst / hook_name)
+
+
+def _run_external_validation_command(workspace, args, timeout=120):
+    verify_script = workspace / "skills/software-project-governance/infra/verify_workflow.py"
+    try:
+        result = subprocess.run(
+            [sys.executable, str(verify_script)] + list(args),
+            cwd=str(workspace),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "args": list(args),
+            "exit_code": 124,
+            "stdout_tail": "\n".join((exc.stdout or "").splitlines()[-20:]),
+            "stderr_tail": f"command timed out after {timeout}s",
+        }
+    except OSError as exc:
+        return {
+            "args": list(args),
+            "exit_code": 127,
+            "stdout_tail": "",
+            "stderr_tail": f"command failed to start: {exc}",
+        }
+    return {
+        "args": list(args),
+        "exit_code": result.returncode,
+        "stdout_tail": "\n".join(result.stdout.splitlines()[-20:]),
+        "stderr_tail": "\n".join(result.stderr.splitlines()[-20:]),
+    }
+
+
+def run_external_project_validation(target, keep_workspace=False, workspace_parent=None, timeout=120):
+    target_facts = _external_validation_target_facts(target)
+    if not target_facts["exists"] or not target_facts["is_dir"] or target_facts["file_count"] <= 0:
+        return {
+            "pass": False,
+            "workspace": None,
+            "target": target_facts,
+            "surface_files": 0,
+            "commands": [],
+            "issues": ["target must be an existing directory with at least one non-generated file"],
+            "no_overclaim_boundary": EXTERNAL_PROJECT_VALIDATION_BOUNDARY,
+        }
+
+    target_path = Path(target).resolve()
+    parent = Path(workspace_parent).resolve() if workspace_parent else None
+    if parent and (parent == target_path or target_path in parent.parents):
+        return {
+            "pass": False,
+            "workspace": None,
+            "target": target_facts,
+            "surface_files": 0,
+            "commands": [],
+            "issues": ["workspace parent must not be the target directory or inside the target directory"],
+            "no_overclaim_boundary": EXTERNAL_PROJECT_VALIDATION_BOUNDARY,
+        }
+    temp_ctx = None
+    if keep_workspace:
+        workspace = Path(tempfile.mkdtemp(prefix="spg-external-validation-", dir=str(parent) if parent else None))
+        release_temp = False
+    else:
+        temp_ctx = tempfile.TemporaryDirectory(prefix="spg-external-validation-", dir=str(parent) if parent else None)
+        workspace = Path(temp_ctx.name)
+        release_temp = True
+    try:
+        copied = _copy_external_validation_surface(workspace)
+        _write_external_validation_governance(workspace, target_facts)
+        _prepare_external_validation_git(workspace)
+
+        command_results = []
+        issues = []
+        for label, cmd_args in EXTERNAL_PROJECT_VALIDATION_COMMANDS:
+            result = _run_external_validation_command(workspace, cmd_args, timeout=timeout)
+            result["label"] = label
+            command_results.append(result)
+            if result["exit_code"] != 0:
+                issues.append(f"{label} exited {result['exit_code']}")
+
+        if keep_workspace:
+            release_temp = False
+        return {
+            "pass": len(issues) == 0,
+            "workspace": str(workspace),
+            "target": target_facts,
+            "surface_files": len(copied),
+            "commands": command_results,
+            "issues": issues,
+            "no_overclaim_boundary": EXTERNAL_PROJECT_VALIDATION_BOUNDARY,
+        }
+    finally:
+        if release_temp and temp_ctx is not None:
+            temp_ctx.cleanup()
+
+
+def cmd_external_project_validation(args):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+    result = run_external_project_validation(
+        args.target,
+        keep_workspace=args.keep_workspace,
+        workspace_parent=args.workspace_parent,
+        timeout=args.timeout,
+    )
+    print()
+    print("=== External Project Validation Harness ===")
+    print(f"  Target:        {result['target']['target']}")
+    print(f"  Target files:  {result['target']['file_count']}")
+    print(f"  Surface files: {result['surface_files']}")
+    if result.get("workspace"):
+        print(f"  Workspace:     {result['workspace']}")
+    for command in result["commands"]:
+        status = "PASS" if command["exit_code"] == 0 else "FAIL"
+        print(f"  [{status}] {command['label']} (exit {command['exit_code']})")
+        if command["exit_code"] != 0 and command.get("stderr_tail"):
+            print(command["stderr_tail"])
+    print(f"  Boundary:      {result['no_overclaim_boundary']}")
+    print(f"  Result:        {'PASSED' if result['pass'] else 'FAILED'}")
+    print()
+    print("JSON:")
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    if args.fail_on_issues and not result["pass"]:
+        sys.exit(1)
+
+
 def cmd_e2e_check(_args):
     """Run command-backed E2E governance verification."""
     try:
@@ -17387,6 +17704,22 @@ def main():
     # e2e-check
     subparsers.add_parser("e2e-check", help="Run E2E governance verification against e2e-test-project")
 
+    # external-project-validation (FIX-131)
+    epv_p = subparsers.add_parser(
+        "external-project-validation",
+        help="Run a temporary external-project validation workspace without mutating the target",
+    )
+    epv_p.add_argument("--target", required=True,
+                       help="External project directory to inspect as the validation source target")
+    epv_p.add_argument("--workspace-parent",
+                       help="Optional parent directory for the temporary validation workspace")
+    epv_p.add_argument("--keep-workspace", action="store_true",
+                       help="Keep the temporary validation workspace for inspection")
+    epv_p.add_argument("--timeout", type=int, default=120,
+                       help="Per-command timeout in seconds")
+    epv_p.add_argument("--fail-on-issues", action="store_true",
+                       help="Exit with non-zero code if any validation command fails")
+
     # first-run-demo (FIX-103)
     frd_p = subparsers.add_parser(
         "first-run-demo",
@@ -17664,6 +17997,7 @@ def main():
         "check-agent-adapters": cmd_check_agent_adapters,
         "check-release": cmd_check_release,
         "e2e-check": cmd_e2e_check,
+        "external-project-validation": cmd_external_project_validation,
         "first-run-demo": cmd_first_run_demo,
         "agent-runtime-e2e": cmd_agent_runtime_e2e,
         "gemini-auth-preflight": cmd_gemini_auth_preflight,

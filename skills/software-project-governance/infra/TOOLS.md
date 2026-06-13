@@ -41,6 +41,7 @@
 | TOOL-033 | Host Capability Context benchmark | script + benchmark/diagnostic | `infra/verify_workflow.py check-host-capability-context` + `check-governance` Check 28l | FIX-117 restricted-environment fixtures、no network/no plugin install/no MCP/no browser/no sub-agent/local skill only、simulated Codex CLI blocked/Gemini auth blocked 诊断或 release gate 前 | 调研/架构/测试/发布/维护 | 是 |
 | TOOL-034 | Official Submission Ecosystem guard | script + submission docs contract | `infra/verify_workflow.py check-official-submission-ecosystem` + `check-governance` Check 28m + `check-release --version 0.46.0` release docs detail | 0.46.0 official submission docs、ecosystem positioning、comparison、migration guide、examples 或 no-overclaim boundary 变更后 | 调研/发布/维护 | 是 |
 | TOOL-035 | Mainstream Agent Loading guard | script + README/adapter docs contract | `infra/verify_workflow.py check-mainstream-agent-loading` + `check-governance` Check 28n | 0.47.0 README mainstream loading matrix、Tier 1 adapter loading guide、Tier 2 compatibility/research rows 或 no-overclaim boundary 变更后 | 调研/测试/发布/维护 | 是 |
+| TOOL-036 | External Project Validation harness | script + temporary workspace | `infra/verify_workflow.py external-project-validation --target <path> --fail-on-issues` | 1.0.0 前外部项目验证、VAL-001 复跑、真实外部 target 的完整 workflow surface 验证 | 测试/发布/维护 | 是 |
 
 ## 工具详情
 
@@ -97,7 +98,7 @@
 ### TOOL-006：校验脚本
 
 - **文件**：`infra/verify_workflow.py`
-- **子命令**：`verify`（全量校验）、`status`（治理状态摘要）、`gate <G1-G11>`（Gate 检查）、`gates`（全部 Gate 状态）、`stage <stage-id>`（阶段状态）、`stages`（全部阶段状态）、`check-governance --fail-on-issues`（治理健康检查）、`e2e-check`（E2E proxy + fixture 分层检查）、`check-version-consistency`、`check-manifest-consistency`、`check-governance-packs`、`check-capability-registry`、`check-host-capability-context`、`check-official-submission-ecosystem`、`check-readme-pack-guidance`、`check-governance-pack-status`、`capability-context`、`check-deterministic-scaffolds`、`check-interruption-policy`、`generate-deterministic-scaffold`、`check-locks`、`check-archive-integrity`
+- **子命令**：`verify`（全量校验）、`status`（治理状态摘要）、`gate <G1-G11>`（Gate 检查）、`gates`（全部 Gate 状态）、`stage <stage-id>`（阶段状态）、`stages`（全部阶段状态）、`check-governance --fail-on-issues`（治理健康检查）、`e2e-check`（E2E proxy + fixture 分层检查）、`external-project-validation --target <path> --fail-on-issues`（外部项目临时验证 workspace）、`check-version-consistency`、`check-manifest-consistency`、`check-governance-packs`、`check-capability-registry`、`check-host-capability-context`、`check-official-submission-ecosystem`、`check-readme-pack-guidance`、`check-governance-pack-status`、`capability-context`、`check-deterministic-scaffolds`、`check-interruption-policy`、`generate-deterministic-scaffold`、`check-locks`、`check-archive-integrity`
 - **输入**：无（自动读取项目文件）
 - **输出**：校验结果（PASSED/FAILED）+ 治理状态摘要
 - **触发条件**：工作流资产变更后、Gate 检查时、定期巡检
@@ -402,6 +403,17 @@
 - **边界**：documentation/adapter contract guard only；not official approval；not marketplace approval；not universal/full runtime support；not Codex Desktop marketplace-management E2E PASS；not automatic best-tool selection；not catalog entry runtime PASS；not 1.0.0 production-ready
 - **被以下子工作流使用**：调研（research）、测试（testing）、发布（release）、维护（maintenance）
 
+### TOOL-036：External Project Validation harness
+
+- **文件**：`infra/verify_workflow.py`
+- **子命令**：`external-project-validation --target <path> [--workspace-parent <path>] [--keep-workspace] [--timeout N] [--fail-on-issues]`
+- **输入**：真实外部项目目录、当前仓库 git-tracked workflow surface、生成的临时 `.governance/` 最小记录
+- **输出**：临时 validation workspace、复制的 surface 文件数、`status`、`gate G1`、`governance-context --fail-on-issues`、`check-governance --fail-on-issues` 结果和 JSON 摘要
+- **触发条件**：VAL-001 复跑、1.0.0 前外部验证、外部新项目 install-surface regression、release gate 前需要机器可复跑外部 target 证据
+- **依赖**：当前 git-tracked source surface、`check-governance`、`governance-context`、`core/manifest.json`
+- **边界**：temporary workspace only；不修改 `--target`；不是 official approval；不是 marketplace approval；不是 external validation full PASS；不是 Desktop lifecycle E2E PASS；不关闭 RISK-036；不是 1.0.0 production-ready
+- **被以下子工作流使用**：测试（testing）、发布（release）、维护（maintenance）
+
 ## 工具与子工作流的关系矩阵
 
 | 工具 | 立项 | 调研 | 选型 | 环境 | 架构 | 开发 | 测试 | CI/CD | 发布 | 运营 | 维护 |
@@ -439,6 +451,7 @@
 | Capability Registry guard | | ● | | | ● | | ● | | ● | | ● |
 | Official Submission Ecosystem guard | | ● | | | ○ | | ● | | ● | | ● |
 | Mainstream Agent Loading guard | | ● | | | ○ | | ● | | ● | | ● |
+| External Project Validation harness | | | | | | | ● | | ● | | ● |
 
 > ● 主要使用者  ○ 可选用
 

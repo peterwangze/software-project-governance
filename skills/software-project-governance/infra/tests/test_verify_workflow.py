@@ -3628,6 +3628,73 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
         mocks = [stack.enter_context(patch_item) for patch_item in patches]
         return stack, mocks
 
+    def _write_one_dot_zero_fact_sources(
+        self,
+        root,
+        *,
+        risk_status="打开",
+        external_full_pass=False,
+        official_approved=False,
+        desktop_disposition=True,
+        risk_log_text=None,
+        external_text=None,
+        desktop_text=None,
+    ):
+        root = Path(root)
+        governance_dir = root / ".governance"
+        governance_dir.mkdir(parents=True)
+        (governance_dir / "risk-log.md").write_text(
+            risk_log_text
+            if risk_log_text is not None
+            else (
+                "| 编号 | 日期 | 风险/阻塞描述 | 所属阶段 | 触发条件 | 影响 | 严重级别 | Owner | 当前状态 | 缓解动作 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
+                f"| RISK-036 | 2026-06-09 | adoption risk | 维护 | trigger | impact | 高 | Coordinator | {risk_status} | mitigation |\n"
+            ),
+            encoding="utf-8",
+        )
+
+        requirements_dir = root / "docs/requirements"
+        requirements_dir.mkdir(parents=True)
+        external_text = external_text if external_text is not None else (
+            "# External Project Validation Report - 1.0.0\n"
+            "External project validation full PASS. Two external project validations full PASS.\n"
+            if external_full_pass
+            else "# External Project Validation Report - 0.49.0\n"
+            "VAL-001 is not a full PASS. No external project validation PASS.\n"
+        )
+        (requirements_dir / "external-project-validation-0.49.0.md").write_text(
+            external_text,
+            encoding="utf-8",
+        )
+
+        official_text = (
+            "# Official Submission Result - 1.0.0\n"
+            "Official submission result: APPROVED. Official approval granted.\n"
+            if official_approved
+            else "# Official Submission Final Bundle Review - 0.49.0\n"
+            "This review does not report any official response. No official approval. "
+            "Official result is NOT_AVAILABLE.\n"
+        )
+        (requirements_dir / "official-submission-final-bundle-review-0.49.0.md").write_text(
+            official_text,
+            encoding="utf-8",
+        )
+
+        desktop_text = desktop_text if desktop_text is not None else (
+            "# Codex Desktop Marketplace Lifecycle Review - 0.49.0\n"
+            "VAL-002 is not a Codex Desktop marketplace-management E2E PASS. "
+            "This report keeps RISK-036 open and keeps 1.0.0 blocked; "
+            "it must carry forward the Desktop lifecycle blocker unless direct evidence exists.\n"
+            if desktop_disposition
+            else "# Codex Desktop Marketplace Lifecycle Review - 0.49.0\n"
+            "CLI marketplace source sync only.\n"
+        )
+        (requirements_dir / "codex-desktop-marketplace-lifecycle-0.49.0.md").write_text(
+            desktop_text,
+            encoding="utf-8",
+        )
+
     def test_check_release_readiness_passes_when_all_underlying_checks_pass(self):
         with tempfile.TemporaryDirectory() as td:
             changelog = Path(td) / "CHANGELOG.md"
@@ -3646,6 +3713,7 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
             adapter_mock.assert_called_once_with(run_runtime=True)
             self.assertIn("governance_pack_status", result["details"])
             self.assertIn("pack enabled", result["details"]["governance_pack_status"]["boundary"])
+            self.assertFalse(result["details"]["one_dot_zero_blockers"]["required"])
 
     def test_check_release_readiness_requires_changelog_version_when_requested(self):
         with tempfile.TemporaryDirectory() as td:
@@ -3661,6 +3729,205 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
                 )
             self.assertFalse(result["pass"])
             self.assertTrue(any("missing changelog entry ## [0.35.0]" in issue for issue in result["issues"]))
+
+    def test_check_release_readiness_fails_one_dot_zero_on_blockers_even_when_release_docs_pass(self):
+        with tempfile.TemporaryDirectory() as td:
+            changelog = Path(td) / "CHANGELOG.md"
+            changelog.write_text("# Changelog\n\n## [1.0.0]\n", encoding="utf-8")
+            patches = self._clean_release_patches()
+            patches.append(patch.object(
+                vw,
+                "check_one_dot_zero_release_blockers",
+                return_value=[
+                    "RISK-036 is open; 1.0.0 release is blocked until the risk is closed",
+                    "external validation full PASS is missing",
+                    "official submission result or approval evidence is missing",
+                ],
+            ))
+            stack, _mocks = self._apply_release_patches(patches)
+            with stack:
+                result = vw.check_release_readiness(
+                    version="1.0.0",
+                    require_changelog=True,
+                    changelog_path=changelog,
+                )
+
+        self.assertFalse(result["pass"])
+        self.assertTrue(result["details"]["release_docs"]["pass"])
+        self.assertFalse(result["details"]["one_dot_zero_blockers"]["pass"])
+        self.assertTrue(result["details"]["one_dot_zero_blockers"]["required"])
+        self.assertTrue(any("1.0.0 blocker: RISK-036 is open" in issue for issue in result["issues"]))
+
+    def test_check_release_readiness_does_not_apply_one_dot_zero_blockers_to_patch_releases(self):
+        for version in ("0.50.0", "0.50.1"):
+            with self.subTest(version=version):
+                with tempfile.TemporaryDirectory() as td:
+                    changelog = Path(td) / "CHANGELOG.md"
+                    changelog.write_text(f"# Changelog\n\n## [{version}]\n", encoding="utf-8")
+                    patches = self._clean_release_patches()
+                    stack, _mocks = self._apply_release_patches(patches)
+                    with stack:
+                        result = vw.check_release_readiness(
+                            version=version,
+                            require_changelog=True,
+                            changelog_path=changelog,
+                        )
+
+                self.assertTrue(result["pass"])
+                self.assertFalse(result["details"]["one_dot_zero_blockers"]["required"])
+                self.assertTrue(result["details"]["one_dot_zero_blockers"]["pass"])
+
+    def test_one_dot_zero_blocker_helper_reports_current_conservative_blockers(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_one_dot_zero_fact_sources(root)
+            issues = vw.check_one_dot_zero_release_blockers(root=root)
+
+        self.assertTrue(any("RISK-036 is not explicitly closed" in issue for issue in issues))
+        self.assertTrue(any("external validation full PASS is missing" in issue for issue in issues))
+        self.assertTrue(any("official submission result or approval evidence is missing" in issue for issue in issues))
+        self.assertFalse(any("Codex Desktop lifecycle PASS or explicit conservative disposition" in issue for issue in issues))
+
+    def test_one_dot_zero_external_validation_rejects_negated_full_pass_evidence(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_one_dot_zero_fact_sources(
+                root,
+                risk_status="已关闭",
+                official_approved=True,
+                desktop_disposition=True,
+                external_text=(
+                    "# External Project Validation Report - 1.0.0\n"
+                    "No external project validation full PASS evidence is available.\n"
+                ),
+            )
+            issues = vw.check_one_dot_zero_release_blockers(root=root)
+
+        self.assertTrue(any("external validation full PASS" in issue for issue in issues))
+
+    def test_one_dot_zero_desktop_lifecycle_rejects_missing_pass_without_disposition(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_one_dot_zero_fact_sources(
+                root,
+                risk_status="已关闭",
+                external_full_pass=True,
+                official_approved=True,
+                desktop_disposition=False,
+                desktop_text=(
+                    "# Codex Desktop Marketplace Lifecycle Review - 1.0.0\n"
+                    "Desktop lifecycle PASS is missing.\n"
+                ),
+            )
+            issues = vw.check_one_dot_zero_release_blockers(root=root)
+
+        self.assertTrue(any("Codex Desktop lifecycle PASS or explicit conservative disposition" in issue for issue in issues))
+
+    def test_one_dot_zero_external_validation_rejects_structured_negative_pass_values(self):
+        variants = (
+            "External project validation full PASS: NO.\n",
+            "External project validation full PASS = false.\n",
+            "External project validation full PASS: fail.\n",
+            "External project validation full PASS: failed.\n",
+            "External project validation full PASS: blocked.\n",
+            "External project validation full PASS: not_run.\n",
+            "External project validation full PASS: missing.\n",
+            "External project validation full PASS: unavailable.\n",
+        )
+        for external_line in variants:
+            with self.subTest(external_line=external_line.strip()):
+                with tempfile.TemporaryDirectory() as td:
+                    root = Path(td)
+                    self._write_one_dot_zero_fact_sources(
+                        root,
+                        risk_status="已关闭",
+                        official_approved=True,
+                        desktop_disposition=True,
+                        external_text=(
+                            "# External Project Validation Report - 1.0.0\n"
+                            f"{external_line}"
+                        ),
+                    )
+                    issues = vw.check_one_dot_zero_release_blockers(root=root)
+
+                self.assertTrue(any("external validation full PASS" in issue for issue in issues))
+
+    def test_one_dot_zero_desktop_lifecycle_rejects_structured_negative_pass_values(self):
+        variants = (
+            "Desktop lifecycle PASS: NO.\n",
+            "Desktop lifecycle PASS = false.\n",
+            "Desktop lifecycle PASS: fail.\n",
+            "Desktop lifecycle PASS: failed.\n",
+            "Desktop lifecycle PASS: blocked.\n",
+            "Desktop lifecycle PASS: not_run.\n",
+            "Desktop lifecycle PASS: missing.\n",
+            "Desktop lifecycle PASS: unavailable.\n",
+        )
+        for desktop_line in variants:
+            with self.subTest(desktop_line=desktop_line.strip()):
+                with tempfile.TemporaryDirectory() as td:
+                    root = Path(td)
+                    self._write_one_dot_zero_fact_sources(
+                        root,
+                        risk_status="已关闭",
+                        external_full_pass=True,
+                        official_approved=True,
+                        desktop_disposition=False,
+                        desktop_text=(
+                            "# Codex Desktop Marketplace Lifecycle Review - 1.0.0\n"
+                            f"{desktop_line}"
+                        ),
+                    )
+                    issues = vw.check_one_dot_zero_release_blockers(root=root)
+
+                self.assertTrue(any("Codex Desktop lifecycle PASS or explicit conservative disposition" in issue for issue in issues))
+
+    def test_one_dot_zero_risk_status_must_be_explicitly_closed(self):
+        fixtures = {
+            "missing_status_column": (
+                "| 编号 | 当前状态 |\n"
+                "| --- | --- |\n"
+                "| RISK-036 | 打开 |\n"
+            ),
+            "unknown_status": (
+                "| 编号 | 日期 | 风险/阻塞描述 | 所属阶段 | 触发条件 | 影响 | 严重级别 | Owner | 当前状态 | 缓解动作 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
+                "| RISK-036 | 2026-06-09 | adoption risk | 维护 | trigger | impact | 高 | Coordinator | pending review | mitigation |\n"
+            ),
+            "blocking_status": (
+                "| 编号 | 日期 | 风险/阻塞描述 | 所属阶段 | 触发条件 | 影响 | 严重级别 | Owner | 当前状态 | 缓解动作 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
+                "| RISK-036 | 2026-06-09 | adoption risk | 维护 | trigger | impact | 高 | Coordinator | blocking | mitigation |\n"
+            ),
+        }
+        for name, risk_log_text in fixtures.items():
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as td:
+                    root = Path(td)
+                    self._write_one_dot_zero_fact_sources(
+                        root,
+                        external_full_pass=True,
+                        official_approved=True,
+                        desktop_disposition=True,
+                        risk_log_text=risk_log_text,
+                    )
+                    issues = vw.check_one_dot_zero_release_blockers(root=root)
+
+                self.assertTrue(any("RISK-036 is not explicitly closed" in issue for issue in issues))
+
+    def test_one_dot_zero_blocker_helper_accepts_satisfied_fixture(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_one_dot_zero_fact_sources(
+                root,
+                risk_status="已关闭",
+                external_full_pass=True,
+                official_approved=True,
+                desktop_disposition=True,
+            )
+            issues = vw.check_one_dot_zero_release_blockers(root=root)
+
+        self.assertEqual([], issues)
 
     def test_release_docs_coverage_requires_versioned_docs(self):
         with tempfile.TemporaryDirectory() as td:
@@ -3880,6 +4147,61 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
                 any(f"forbidden release docs overclaim `{phrase}`" in issue for issue in issues),
                 phrase,
             )
+
+    def test_release_docs_coverage_rejects_positive_claim_with_unrelated_status_negation(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            manifest_dir = root / "skills/software-project-governance/core"
+            manifest_dir.mkdir(parents=True)
+            release_dir = root / "docs/release"
+            release_dir.mkdir(parents=True)
+            doc_names = [
+                "release-checklist-0.44.1.md",
+                "feature-flags-0.44.1.md",
+                "rollback-plan-0.44.1.md",
+            ]
+            for doc_name in doc_names:
+                (release_dir / doc_name).write_text(
+                    "0.44.1\n"
+                    "No-overclaim boundary: no official approval, marketplace approval, "
+                    "universal/full runtime support, external first-session pilot success. "
+                    "RISK-036 remains open.\n"
+                    "Official approval granted but Desktop lifecycle blocked.\n"
+                    "Marketplace approval granted but external validation missing.\n",
+                    encoding="utf-8",
+                )
+            (manifest_dir / "manifest.json").write_text(
+                json.dumps({
+                    "root_entries": {"files": [], "directories": []},
+                    "product": {
+                        "entries": [
+                            {"path": f"docs/release/{doc_name}", "type": "file"}
+                            for doc_name in doc_names
+                        ],
+                        "glob_patterns": [],
+                    },
+                    "repo_only": {"entries": [], "glob_patterns": []},
+                }),
+                encoding="utf-8",
+            )
+            tracked = {f"docs/release/{doc_name}" for doc_name in doc_names}
+            with patch.object(vw, "_git_files", return_value=tracked):
+                issues = vw.check_release_docs_coverage("0.44.1", root=root)
+
+        self.assertTrue(
+            any("forbidden release docs overclaim `official approval granted`" in issue for issue in issues)
+        )
+        self.assertTrue(
+            any("forbidden release docs overclaim `marketplace approval granted`" in issue for issue in issues)
+        )
+        self.assertFalse(vw._line_has_scoped_claim_negation(
+            "Official approval granted but Desktop lifecycle blocked.",
+            "official approval granted",
+        ))
+        self.assertFalse(vw._line_has_scoped_claim_negation(
+            "Marketplace approval granted but external validation missing.",
+            "marketplace approval granted",
+        ))
 
     def test_release_docs_coverage_allows_no_overclaim_boundary_wording(self):
         with tempfile.TemporaryDirectory() as td:

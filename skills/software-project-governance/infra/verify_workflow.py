@@ -4846,6 +4846,201 @@ def check_release_docs_coverage(version, root=None):
     return issues
 
 
+def _markdown_table_row_by_first_cell(content, first_cell):
+    for line in content.splitlines():
+        cells = _split_markdown_table_row(line)
+        if cells and cells[0].strip() == first_cell:
+            return cells
+    return None
+
+
+def _contains_unnegated_phrase(content, phrases):
+    for line in content.splitlines():
+        lower_line = line.lower()
+        for phrase in phrases:
+            phrase_lower = phrase.lower()
+            if (
+                phrase_lower in lower_line
+                and not _line_has_scoped_claim_negation(line, phrase_lower)
+                and not _line_has_structured_status_negation(line, phrase_lower)
+            ):
+                return True
+    return False
+
+
+def _line_has_structured_status_negation(line, phrase):
+    lower = line.lower()
+    negated_values = (
+        "no",
+        "false",
+        "fail",
+        "failed",
+        "blocked",
+        "not_run",
+        "not run",
+        "missing",
+        "unavailable",
+        "not_available",
+        "not available",
+    )
+    value_pattern = "|".join(re.escape(value) for value in negated_values)
+    for match in re.finditer(re.escape(phrase.lower()), lower):
+        suffix = lower[match.end():match.end() + 96]
+        if re.match(rf"\s*(?:[:=：|]\s*)+(?:status\s*)?(?:{value_pattern})(?![a-z0-9_-])", suffix):
+            return True
+        if re.match(rf"\s+(?:is|are)\s+(?:{value_pattern})(?![a-z0-9_-])", suffix):
+            return True
+    return False
+
+
+def _risk_status_is_closed(status):
+    normalized = status.strip().strip("*`").lower()
+    return normalized in {
+        "已关闭",
+        "关闭",
+        "closed",
+        "resolved",
+        "closed/resolved",
+        "resolved/closed",
+    } or normalized.startswith("已关闭 ") or normalized.startswith("closed ")
+
+
+def check_one_dot_zero_release_blockers(
+    root=None,
+    risk_log_path=None,
+    external_validation_path=None,
+    official_submission_path=None,
+    desktop_lifecycle_path=None,
+):
+    """FIX-130: hard-block 1.0.0 while final release evidence remains insufficient."""
+    root = Path(root) if root is not None else ROOT
+    risk_log_path = Path(risk_log_path) if risk_log_path is not None else root / ".governance/risk-log.md"
+    external_validation_path = (
+        Path(external_validation_path)
+        if external_validation_path is not None
+        else root / "docs/requirements/external-project-validation-0.49.0.md"
+    )
+    official_submission_path = (
+        Path(official_submission_path)
+        if official_submission_path is not None
+        else root / "docs/requirements/official-submission-final-bundle-review-0.49.0.md"
+    )
+    desktop_lifecycle_path = (
+        Path(desktop_lifecycle_path)
+        if desktop_lifecycle_path is not None
+        else root / "docs/requirements/codex-desktop-marketplace-lifecycle-0.49.0.md"
+    )
+
+    issues = []
+
+    if not risk_log_path.is_file():
+        issues.append(f"{_display_path(risk_log_path, root)}: missing RISK-036 status for 1.0.0 release")
+    else:
+        risk_content = risk_log_path.read_text(encoding="utf-8")
+        risk_row = _markdown_table_row_by_first_cell(risk_content, "RISK-036")
+        if risk_row is None:
+            issues.append(f"{_display_path(risk_log_path, root)}: missing RISK-036 row for 1.0.0 release")
+        else:
+            status = risk_row[8].strip() if len(risk_row) > 8 else ""
+            if not _risk_status_is_closed(status):
+                status_detail = status or "missing/unknown"
+                issues.append(
+                    "RISK-036 is not explicitly closed "
+                    f"(`{status_detail}`); 1.0.0 release is blocked until the risk is closed"
+                )
+
+    if not external_validation_path.is_file():
+        issues.append(f"{_display_path(external_validation_path, root)}: missing external validation fact source")
+    else:
+        external_content = external_validation_path.read_text(encoding="utf-8")
+        external_lower = external_content.lower()
+        external_blocked_tokens = [
+            "not a full pass",
+            "no external project validation pass",
+            "no external project validation full pass",
+            "no external validation pass",
+            "no external validation full pass",
+            "external validation still未 full pass",
+            "external validation full pass is missing",
+            "missing external validation full pass",
+            "still not full pass",
+            "partial / blocked",
+            "partial/blocked",
+        ]
+        external_pass_tokens = [
+            "external validation full pass",
+            "external project validation full pass",
+            "two external project validations full pass",
+            "2 external project validations full pass",
+        ]
+        has_positive_external_pass = _contains_unnegated_phrase(external_content, external_pass_tokens)
+        if any(token in external_lower for token in external_blocked_tokens):
+            issues.append(
+                f"{_display_path(external_validation_path, root)}: external validation full PASS is missing"
+            )
+        elif not has_positive_external_pass:
+            issues.append(
+                f"{_display_path(external_validation_path, root)}: missing explicit external validation full PASS evidence"
+            )
+
+    if not official_submission_path.is_file():
+        issues.append(f"{_display_path(official_submission_path, root)}: missing official submission result fact source")
+    else:
+        official_content = official_submission_path.read_text(encoding="utf-8")
+        official_lower = official_content.lower()
+        official_blocked_tokens = [
+            "does not report any official response",
+            "no official approval",
+            "no marketplace approval",
+            "not_available",
+            "official result is not_available",
+            "missing official submission result",
+            "missing official approval",
+            "without official approval",
+        ]
+        official_positive_tokens = [
+            "official submission result: approved",
+            "official submission result approved",
+            "official approval granted",
+            "officially approved",
+            "marketplace approval granted",
+        ]
+        has_positive_official_result = _contains_unnegated_phrase(official_content, official_positive_tokens)
+        if any(token in official_lower for token in official_blocked_tokens):
+            issues.append(
+                f"{_display_path(official_submission_path, root)}: official submission result or approval evidence is missing"
+            )
+        elif not has_positive_official_result:
+            issues.append(
+                f"{_display_path(official_submission_path, root)}: missing explicit official submission result or approval evidence"
+            )
+
+    if not desktop_lifecycle_path.is_file():
+        issues.append(f"{_display_path(desktop_lifecycle_path, root)}: missing Codex Desktop lifecycle fact source")
+    else:
+        desktop_content = desktop_lifecycle_path.read_text(encoding="utf-8")
+        desktop_lower = desktop_content.lower()
+        desktop_pass = _contains_unnegated_phrase(desktop_content, [
+            "codex desktop marketplace-management e2e pass",
+            "desktop lifecycle e2e pass",
+            "desktop lifecycle pass",
+        ])
+        conservative_disposition = any(token in desktop_lower for token in [
+            "conservative blocked carry-forward",
+            "conservative blocked carry forward",
+            "carry forward the desktop lifecycle blocker",
+            "keeps 1.0.0 blocked",
+            "desktop ui install/enable/invoke/upgrade/uninstall remains blocked/not_run",
+            "desktop lifecycle remains blocked/not_run",
+        ])
+        if not desktop_pass and not conservative_disposition:
+            issues.append(
+                f"{_display_path(desktop_lifecycle_path, root)}: Codex Desktop lifecycle PASS or explicit conservative disposition is missing"
+            )
+
+    return issues
+
+
 PROJECTION_SYNC_PATTERNS = (
     "skills/*/SKILL.md",
     "skills/software-project-governance/SKILL.md",
@@ -5137,6 +5332,17 @@ def check_release_readiness(
         "version": version,
     }
     issues.extend(f"release docs: {issue}" for issue in release_docs_issues)
+
+    one_dot_zero_blocker_issues = []
+    if version == "1.0.0":
+        one_dot_zero_blocker_issues = check_one_dot_zero_release_blockers()
+        issues.extend(f"1.0.0 blocker: {issue}" for issue in one_dot_zero_blocker_issues)
+    details["one_dot_zero_blockers"] = {
+        "pass": not one_dot_zero_blocker_issues,
+        "issues": one_dot_zero_blocker_issues,
+        "required": version == "1.0.0",
+        "version": version,
+    }
 
     execution_gate_results = []
     execution_gate_issues = []

@@ -2,6 +2,32 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.50.1] - 2026-06-13
+
+### 0.50.1 - 1.0.0 Release Gate Blocker Guard
+
+0.50.1 发布 REL-028 patch release package：把 FIX-130 的 1.0.0 release gate blocker guard 版本化。该版本确保 `check-release --version 1.0.0 --require-changelog --runtime-adapters` 不会因为缺少 1.0.0 release docs/changelog 而掩盖真实硬阻塞；输出必须显式报告 RISK-036、外部验证 full PASS、official submission result/approval、Codex Desktop lifecycle PASS 或明确保守处置等 blocker。
+
+### Changed
+
+- **REL-028**: 新增 0.50.1 release checklist、feature flags、rollback plan、manifest coverage 和 release boundary。
+- **FIX-130 release gate guard**: 0.50.1 release package 消费 `check_one_dot_zero_release_blockers()`，保留 patch release 可发布，同时要求 1.0.0 release gate 在证据不足时显式失败。
+- 版本声明同步到 0.50.1：source SKILL、canonical manifest、Claude/Codex plugin metadata、Claude marketplace metadata、hook @version、target fixture skill、target fixture plan tracker、root plan tracker、CHANGELOG 和 `verify_workflow.py` REQUIRED_SNIPPETS。
+- README 的 1.0.0 Readiness Boundary 更新为 0.50.1 guard package，同时保留 0.50.0 四平台 target-cwd read E2E 证据范围。
+
+### Validation
+
+- `python skills/software-project-governance/infra/verify_workflow.py check-version-consistency`
+- `python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues`
+- `python skills/software-project-governance/infra/verify_workflow.py check-release --version 0.50.1 --require-changelog --runtime-adapters`
+- `python skills/software-project-governance/infra/verify_workflow.py check-release --version 1.0.0 --require-changelog --runtime-adapters` (expected FAIL with explicit blockers)
+- `git diff --check`
+
+### Boundary
+
+- RISK-036 remains open. 0.50.1 releases only the 1.0.0 release gate blocker guard.
+- 0.50.1 release package does not include official submission approval, marketplace approval, external validation full PASS, Codex Desktop lifecycle PASS, RISK-036 closure, or 1.0.0 production-ready approval.
+
 ## [0.50.0] — 2026-06-12
 
 ### 0.50.0 — Mainstream Agent E2E Risk Release

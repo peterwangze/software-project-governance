@@ -15,7 +15,7 @@ Use this workflow when your AI coding setup needs:
 
 ## 1.0.0 Readiness Boundary
 
-0.50.0 packages the Mainstream Agent E2E Risk Release evidence, but it is not the 1.0.0 release. It records the post-configuration real target-cwd read E2E result for Codex, Claude Code, Gemini CLI, and opencode: `pass=4, blocked=0, fail=0, total=4`. RISK-036 remains open: external validation is still partial/blocked, Codex Desktop marketplace-management lifecycle remains BLOCKED/NOT_RUN or awaiting conservative disposition, no official approval, no marketplace approval, and 1.0.0 remains blocked until final release criteria are satisfied.
+0.50.1 packages the 1.0.0 Release Gate Blocker Guard, but it is not the 1.0.0 release. It keeps `check-release --version 1.0.0` blocked with explicit RISK-036, external validation, official submission result/approval, and Codex Desktop lifecycle blockers instead of allowing missing release docs to hide those hard stops. 0.50.0 remains the mainstream agent read E2E evidence package: Codex, Claude Code, Gemini CLI, and opencode returned `pass=4, blocked=0, fail=0, total=4` for the target-cwd read use case. RISK-036 remains open: no official approval, no marketplace approval, no external validation full PASS, no Codex Desktop lifecycle PASS, no RISK-036 closure, and no 1.0.0 production-ready claim.
 
 ## Mainstream Agent Loading
 

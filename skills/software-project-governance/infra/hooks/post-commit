@@ -7,6 +7,113 @@ set -e
 
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo ".")
 
+resolve_spg_home_candidate() {
+    local candidate="$1"
+    [ -n "$candidate" ] || return 1
+
+    if [ -f "$candidate/SKILL.md" ] && [ -d "$candidate/infra/hooks" ]; then
+        echo "$candidate"
+        return 0
+    fi
+
+    if [ -f "$candidate/skills/software-project-governance/SKILL.md" ]; then
+        echo "$candidate/skills/software-project-governance"
+        return 0
+    fi
+
+    return 1
+}
+
+find_spg_home() {
+    local resolved
+    for candidate in \
+        "$SOFTWARE_PROJECT_GOVERNANCE_HOME" \
+        "$SPG_HOME" \
+        "$REPO_ROOT/skills/software-project-governance"
+    do
+        resolved=$(resolve_spg_home_candidate "$candidate" 2>/dev/null || true)
+        if [ -n "$resolved" ]; then
+            echo "$resolved"
+            return 0
+        fi
+    done
+
+    local base
+    local found
+    for base in \
+        "$HOME/.claude/plugins/cache" \
+        "$HOME/.codex/plugins/cache" \
+        "$XDG_CACHE_HOME/claude/plugins/cache" \
+        "$XDG_CACHE_HOME/codex/plugins/cache"
+    do
+        [ -d "$base" ] || continue
+        found=$(find "$base" -path "*/skills/software-project-governance/SKILL.md" -type f 2>/dev/null | sort -V 2>/dev/null | tail -n 1)
+        if [ -z "$found" ]; then
+            found=$(find "$base" -path "*/skills/software-project-governance/SKILL.md" -type f 2>/dev/null | sort | tail -n 1)
+        fi
+        if [ -n "$found" ]; then
+            dirname "$found"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+normalize_existing_path() {
+    local path="$1"
+    local dir
+    local base
+    [ -n "$path" ] || return 1
+
+    dir=$(dirname "$path")
+    base=$(basename "$path")
+    if [ -d "$dir" ]; then
+        (cd "$dir" 2>/dev/null && printf '%s/%s\n' "$(pwd -P)" "$base")
+        return $?
+    fi
+
+    if command -v realpath >/dev/null 2>&1; then
+        realpath "$path" 2>/dev/null && return 0
+    fi
+
+    return 1
+}
+
+SPG_RESOLVED_HOME=$(find_spg_home 2>/dev/null || true)
+
+# --- Step 0: Hook self-upgrade check (FIX-046/FIX-132) ---
+# Installed hooks may live in external projects without a repo-local
+# skills/software-project-governance copy. Resolve source from explicit env,
+# repo-local install, or common plugin cache locations before comparing.
+# Only the actual installed .git/hooks copy may self-upgrade. Source hooks may
+# be run through relative paths during tests or development and must not be
+# overwritten by another installed/cache runtime.
+HOOK_NAME=$(basename "$0")
+SOURCE_HOOK=""
+if [ -n "$SPG_RESOLVED_HOME" ]; then
+    SOURCE_HOOK="$SPG_RESOLVED_HOME/infra/hooks/$HOOK_NAME"
+fi
+SELF_HOOK=$(normalize_existing_path "$0" 2>/dev/null || printf '%s\n' "$0")
+GIT_HOOK_PATH=$(git rev-parse --git-path "hooks/$HOOK_NAME" 2>/dev/null || true)
+INSTALLED_HOOK=""
+if [ -n "$GIT_HOOK_PATH" ]; then
+    INSTALLED_HOOK=$(normalize_existing_path "$GIT_HOOK_PATH" 2>/dev/null || true)
+fi
+SOURCE_HOOK_REAL=""
+if [ -n "$SOURCE_HOOK" ]; then
+    SOURCE_HOOK_REAL=$(normalize_existing_path "$SOURCE_HOOK" 2>/dev/null || true)
+fi
+SOURCE_HOOK_PATH="${SOURCE_HOOK_REAL:-$SOURCE_HOOK}"
+if [ -n "$INSTALLED_HOOK" ] && [ "$SELF_HOOK" = "$INSTALLED_HOOK" ] && [ -f "$SOURCE_HOOK_PATH" ] && [ "$SELF_HOOK" != "$SOURCE_HOOK_PATH" ]; then
+    if ! cmp -s "$SELF_HOOK" "$SOURCE_HOOK_PATH" 2>/dev/null; then
+        SOURCE_VER=$(grep '@version:' "$SOURCE_HOOK" 2>/dev/null | head -1 | sed 's/.*@version: *//')
+        cp "$SOURCE_HOOK_PATH" "$SELF_HOOK" 2>/dev/null && \
+            echo "🔄 GOVERNANCE: Hook '$HOOK_NAME' self-upgraded to v${SOURCE_VER:-?}. Restarting with latest version..." && \
+            exec "$SELF_HOOK" "$@"
+    fi
+fi
+
 # --- Step 1: Extract task ID from commit message ---
 COMMIT_MSG=$(git log -1 --format=%B)
 TASK_ID=$(echo "$COMMIT_MSG" | grep -oE '[A-Z]+-[0-9]+' | head -1)
@@ -58,9 +165,16 @@ if [ -n "$TASK_ID" ] && [ -f "$REPO_ROOT/.governance/plan-tracker.md" ]; then
 fi
 
 # --- Step 4: Quick governance summary ---
+VERIFY_WORKFLOW=""
 if [ -f "$REPO_ROOT/scripts/verify_workflow.py" ]; then
+    VERIFY_WORKFLOW="$REPO_ROOT/scripts/verify_workflow.py"
+elif [ -n "$SPG_RESOLVED_HOME" ] && [ -f "$SPG_RESOLVED_HOME/infra/verify_workflow.py" ]; then
+    VERIFY_WORKFLOW="$SPG_RESOLVED_HOME/infra/verify_workflow.py"
+fi
+
+if [ -n "$VERIFY_WORKFLOW" ]; then
     echo "--- Governance Quick Check ---"
-    python "$REPO_ROOT/scripts/verify_workflow.py" check-governance 2>/dev/null | \
+    python "$VERIFY_WORKFLOW" check-governance 2>/dev/null | \
         grep -E "(Check [0-9]|PASS|WARN|issued)" | head -12
     echo "-------------------------------"
 fi

@@ -254,12 +254,13 @@
    - C. Hook 存活检测——缺失则提示安装命令
    - D. 更新 `工作流版本` 为当前版本
    - E. 持续归档触发检测与执行：
-     - 运行 `python skills/software-project-governance/infra/archive.py migrate --auto --dry-run` 检测四类触发器：
+     - 先解析 `WORKFLOW_HOME`（优先 `SOFTWARE_PROJECT_GOVERNANCE_HOME` / `SPG_HOME`，其次项目内 `skills/software-project-governance`，再查找已安装插件 cache 中包含 `skills/software-project-governance/SKILL.md` 的目录）
+     - 运行 `python "$WORKFLOW_HOME/infra/archive.py" migrate --auto --dry-run` 检测四类触发器：
        1. 首次迁移：`.governance/archive/index.md` 不存在 AND `plan-tracker.md` > 80 KB AND 已发布版本 ≥ 2
        2. 发布强制：出现新的已发布版本后，除最新已发布版本外仍有未归档历史 task
        3. task 增量：热文件中可归档 completed task 达到阈值
        4. 90 天兜底：长期未归档但仍有可归档历史数据
-     - dry-run 报告需要归档 → 运行 `python skills/software-project-governance/infra/archive.py migrate --auto`，再运行 `python skills/software-project-governance/infra/verify_workflow.py check-archive-integrity`
+     - dry-run 报告需要归档 → 运行 `python "$WORKFLOW_HOME/infra/archive.py" migrate --auto`，再运行 `python "$WORKFLOW_HOME/infra/verify_workflow.py" check-archive-integrity`
      - 归档成功 → 输出归档迁移摘要（格式: 📦 治理数据归档完成: 归档{N}个task→..., plan-tracker: {old}KB→{new}KB(-{pct}%)）
      - 归档完整性失败 → 记录到 risk-log；发布/版本 bump 收尾场景 MUST 阻断完成
      - 无可归档数据 → 跳过归档（不修改文件）
@@ -349,7 +350,7 @@
 **P1 — 警告级（治理退化但未完全失效）**：
 | 检查项 | 检测方法 |
 |--------|---------|
-| 证据缺口 | `python skills/software-project-governance/infra/verify_workflow.py check-governance` Check 1 |
+| 证据缺口 | 解析 `WORKFLOW_HOME` 后运行 `python "$WORKFLOW_HOME/infra/verify_workflow.py" check-governance` Check 1 |
 | Gate 不一致 | Check 3 |
 | 过期风险 | Check 2 + Check 8 |
 | 过期任务 deadline | Check 9 |
@@ -381,7 +382,7 @@ P1 (警告):
 
 按用户选择执行：
 
-- **Hooks 缺失**: `cp skills/software-project-governance/infra/hooks/pre-commit .git/hooks/pre-commit && cp skills/software-project-governance/infra/hooks/commit-msg .git/hooks/commit-msg && cp skills/software-project-governance/infra/hooks/post-commit .git/hooks/post-commit`
+- **Hooks 缺失**: 先解析 `WORKFLOW_HOME`，再执行 `cp "$WORKFLOW_HOME/infra/hooks/pre-commit" .git/hooks/pre-commit && cp "$WORKFLOW_HOME/infra/hooks/commit-msg" .git/hooks/commit-msg && cp "$WORKFLOW_HOME/infra/hooks/post-commit" .git/hooks/post-commit`
 - **plan-tracker 损坏**: 尝试从 markdown 表格结构恢复；失败则从 profile 模板重建（保留 evidence-log/decision-log/risk-log）
 - **文件缺失**: 从 `core/templates/` 复制模板
 - **证据缺口**: 创建占位证据条目（标记"补录——需用户确认"）
@@ -412,7 +413,7 @@ P1 (警告):
 **展示内容**（比 `governance-status` 更丰富）：
 - Delivery Trust Snapshot（Resume state、Carry-over、Open risks、Unfinished work、Source facts、Blocker state、Auto-continue、Interrupt boundary、Hooks、Goal、Stage、Gate/setup status、Risk、Evidence、Next action、Preset guidance、Question budget、Pack summary、Default packs、Enabled packs、Pack boundary、Verification signal、No-overclaim boundary）
 - Existing-project resume signal：已有 `.governance/` 状态时 MUST 明确显示 `Existing governance state detected`，展示 carry-over active task count、open risk count/details、hook state 和 next action
-- Context-aware resume handoff：MUST run the same factual discovery contract as `python skills/software-project-governance/infra/verify_workflow.py governance-context --fixture project/e2e-test-project --fail-on-issues`。`Unfinished work` MUST be backed by `Source facts`; if no facts exist, output `not found` and `do not invent` new work.
+- Context-aware resume handoff：MUST run the same factual discovery contract as `python "$WORKFLOW_HOME/infra/verify_workflow.py" governance-context --fixture project/e2e-test-project --fail-on-issues` after resolving `WORKFLOW_HOME`。`Unfinished work` MUST be backed by `Source facts`; if no facts exist, output `not found` and `do not invent` new work.
 - First-run preset guidance：MUST 展示 `lite is the recommended first-run default`；`standard is for team delivery`；`strict is for regulated/high-risk work`
 - Pack summary：MUST 展示 `Packs are capability modules; profiles are governance intensity presets.`；Default packs MUST 至少展示 `governance-core`、`quality-gates`、`release-governance`、`agent-team`、`enterprise`；Enabled packs MUST 从 profile/default pack summary 或 registry facts 得出，无法得出时显示 unknown/not configured；Pack boundary MUST 说明 pack membership/`pack enabled` 不替代 task evidence、independent review、quality gates、release gates、official approval、marketplace approval、universal/full runtime support 或 1.0.0 production-ready
 - Question budget：Snapshot 前 MUST NOT 提超过 3 个 non-critical questions；deferred non-critical fields MUST 记录为 assumptions
@@ -470,8 +471,8 @@ No-overclaim boundary: local/demo-only snapshot; no external credentials require
 ```
 
 Snapshot 是 `/governance` 或 `/governance-status` first-run/status path 的最小可观察交付信号；它必须在用户不阅读 `plan-tracker.md`、`evidence-log.md`、`risk-log.md` 或完整 SKILL 文件的情况下可见。
-本地 acceptance harness：`python skills/software-project-governance/infra/verify_workflow.py first-run-demo --assert-snapshot` MUST 可在 demo/local-only 范围运行，不需要 external credentials，并断言 Delivery Trust Snapshot 字段和 no-overclaim boundary。
-Context acceptance harness：`python skills/software-project-governance/infra/verify_workflow.py governance-context --fixture project/e2e-test-project --fail-on-issues` MUST pass，并且 no-facts fixture 必须明确输出 `not found`；不得从假设中发明 unfinished work。
+本地 acceptance harness：解析 `WORKFLOW_HOME` 后运行 `python "$WORKFLOW_HOME/infra/verify_workflow.py" first-run-demo --assert-snapshot` MUST 可在 demo/local-only 范围运行，不需要 external credentials，并断言 Delivery Trust Snapshot 字段和 no-overclaim boundary。
+Context acceptance harness：解析 `WORKFLOW_HOME` 后运行 `python "$WORKFLOW_HOME/infra/verify_workflow.py" governance-context --fixture project/e2e-test-project --fail-on-issues` MUST pass，并且 no-facts fixture 必须明确输出 `not found`；不得从假设中发明 unfinished work。
 已有 `.governance/` 项目的 Scenario F 是 resume happy path，不得提示重新初始化；只有 `.governance/plan-tracker.md` 缺失时才进入初始化/接入错误路径。
 
 **输出模板**：参考 `commands/governance-status.md`，扩展含 permission_mode、版本新鲜度、最近活动，并应用上述折叠规则。
@@ -599,4 +600,4 @@ Context acceptance harness：`python skills/software-project-governance/infra/ve
 
 ### 不变
 - `skills/software-project-governance/core/onboarding.md`——Scenario B 的参考协议
-- `skills/software-project-governance/infra/verify_workflow.py`——Scenario E 的诊断引擎
+- `"$WORKFLOW_HOME/infra/verify_workflow.py"`——Scenario E 的诊断引擎（先解析 `WORKFLOW_HOME`）

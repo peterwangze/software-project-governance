@@ -40,10 +40,11 @@
 - **IF** 最后更新日期距今 ≤ 7 天 → PASS
 
 ### Step 6: workflow 仓库专属检查（类别 E — 仅当适用时）
-- **IF** 项目根目录存在 `skills/software-project-governance/infra/verify_workflow.py` → 执行 `python skills/software-project-governance/infra/verify_workflow.py`，捕获输出和退出码
+- 先解析 `WORKFLOW_HOME`：优先 `SOFTWARE_PROJECT_GOVERNANCE_HOME` / `SPG_HOME`，其次项目内 `skills/software-project-governance`，再查找已安装插件 cache 中包含 `skills/software-project-governance/SKILL.md` 的目录
+- **IF** `"${WORKFLOW_HOME}"/infra/verify_workflow.py` 存在 → 执行 `python "$WORKFLOW_HOME/infra/verify_workflow.py"`，捕获输出和退出码
   - **IF** 退出码 = 0 → PASS
   - **ELSE** → 记录为 `workflow_verify_failed`，附带脚本输出
-- **IF** 不存在 → 跳过此检查
+- **IF** 无法解析到 `"${WORKFLOW_HOME}"/infra/verify_workflow.py` → 记录为 `workflow_runtime_not_located`（WARN），提示设置 `SOFTWARE_PROJECT_GOVERNANCE_HOME` 或刷新插件；不得把 repo-local `skills/` 缺失误判为 workflow 不可验证
 
 ### Step 7: 汇总并输出健康报告
 

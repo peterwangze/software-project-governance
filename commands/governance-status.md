@@ -33,10 +33,11 @@
 - Hooks = pre-commit、commit-msg、post-commit 的 installed/missing 状态
 
 ### Step 3.5: 插件版本新鲜度检查（用户视角——"我的工作流是最新的吗？"）
-- **IF** 项目根目录存在 `skills/software-project-governance/infra/verify_workflow.py` → 运行 `check-plugin-freshness`，捕获输出
+- 先解析 `WORKFLOW_HOME`：优先 `SOFTWARE_PROJECT_GOVERNANCE_HOME` / `SPG_HOME`，其次项目内 `skills/software-project-governance`，再查找已安装插件 cache 中包含 `skills/software-project-governance/SKILL.md` 的目录
+- **IF** `"${WORKFLOW_HOME}"/infra/verify_workflow.py` 存在 → 运行 `check-plugin-freshness`，捕获输出
   - **IF** 状态为 OUTDATED → 在状态面板底部输出更新提醒（版本差距 + commits behind + 操作指引）
   - **IF** 状态为 UP TO DATE → 在状态面板底部简短确认 ✅
-- **IF** 不存在 `skills/software-project-governance/infra/verify_workflow.py` → 跳过（外部项目通过插件市场安装，无法直接运行脚本）
+- **IF** 无法解析到 `"${WORKFLOW_HOME}"/infra/verify_workflow.py` → 不声称脚本不可用；输出 `plugin runtime not located` 并提示设置 `SOFTWARE_PROJECT_GOVERNANCE_HOME` 或执行插件刷新
   - 提醒用户：`运行 /plugin update 或 /reload-plugins 获取最新版本`
 
 ### Step 3.6: Delivery Trust Snapshot
@@ -49,10 +50,10 @@
 - First-run preset guidance MUST 展示：`lite is the recommended first-run default`；`standard is for team delivery`；`strict is for regulated/high-risk work`。
 - Pack summary MUST 展示：`Packs are capability modules; profiles are governance intensity presets.`；Default packs MUST 至少列出 `governance-core`、`quality-gates`、`release-governance`、`agent-team`、`enterprise`；Enabled packs MUST 来自 profile/default pack summary 或明确显示 unknown/not configured；Pack boundary MUST 说明 pack membership/`pack enabled` 不是 task evidence、independent review、quality gates、release gates、official approval、marketplace approval、universal/full runtime support 或 1.0.0 production-ready proof。
 - Snapshot 前 MUST NOT 提超过 3 个 non-critical questions；剩余 deferred non-critical fields MUST 记录为 assumptions。
-- `Verification signal` MUST 是一个可运行或可观察的本地信号，例如 `python skills/software-project-governance/infra/verify_workflow.py status`。
+- `Verification signal` MUST 是一个可运行或可观察的本地信号，例如 `python "$WORKFLOW_HOME/infra/verify_workflow.py" status`；如果只能观察插件加载状态，必须明确 `WORKFLOW_HOME` 未解析。
 - `No-overclaim boundary` MUST 明确说明该 snapshot 只是 demo/local-only 本地治理状态信号、不需要 external credentials，且不声明 official approval、marketplace approval、universal/full runtime support 或 1.0.0 production-ready。
-- 本地 acceptance harness：`python skills/software-project-governance/infra/verify_workflow.py first-run-demo --assert-snapshot` MUST 在 demo/local-only 范围断言 snapshot 字段，不需要 external credentials。
-- Context acceptance harness：`python skills/software-project-governance/infra/verify_workflow.py governance-context --fixture project/e2e-test-project --fail-on-issues` MUST pass and MUST keep `not found` as a valid no-facts result without inventing unfinished work.
+- 本地 acceptance harness：解析 `WORKFLOW_HOME` 后运行 `python "$WORKFLOW_HOME/infra/verify_workflow.py" first-run-demo --assert-snapshot` MUST 在 demo/local-only 范围断言 snapshot 字段，不需要 external credentials。
+- Context acceptance harness：解析 `WORKFLOW_HOME` 后运行 `python "$WORKFLOW_HOME/infra/verify_workflow.py" governance-context --fixture project/e2e-test-project --fail-on-issues` MUST pass and MUST keep `not found` as a valid no-facts result without inventing unfinished work.
 
 ### Step 4: 按输出格式模板输出状态面板
 
@@ -147,7 +148,7 @@ Gate 状态列的合法值：
 - [ ] 输出必须明确包含 `Delivery Trust Snapshot`
 - [ ] Delivery Trust Snapshot 必须包含 Resume state、Existing governance state detected、Carry-over、Open risks、Unfinished work、Source facts、Blocker state、Auto-continue、Interrupt boundary、Hooks、Goal、Stage、Gate/setup status、Risk、Evidence、Next action、Preset guidance、Question budget、Pack summary、Default packs、Enabled packs、Pack boundary、Verification signal、No-overclaim boundary
 - [ ] Unfinished work 必须基于 Source facts；无事实时必须输出 `not found` 和 `do not invent`
-- [ ] `python skills/software-project-governance/infra/verify_workflow.py governance-context --fixture project/e2e-test-project --fail-on-issues` 必须可通过
+- [ ] 解析 `WORKFLOW_HOME` 后运行 `python "$WORKFLOW_HOME/infra/verify_workflow.py" governance-context --fixture project/e2e-test-project --fail-on-issues` 必须可通过
 - [ ] 已有 `.governance/` 项目不得提示重新初始化；必须给出 resume next action
 - [ ] First-run preset guidance 必须明确 `lite` 是首次运行推荐默认，`standard` 用于 team delivery，`strict` 用于 regulated/high-risk work
 - [ ] Pack summary 必须明确 `Packs are capability modules; profiles are governance intensity presets.`，并至少展示 `governance-core`、`quality-gates`、`release-governance`、`agent-team`、`enterprise`

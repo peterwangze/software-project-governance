@@ -9575,6 +9575,175 @@ class PreCommitClaudeBootstrapUpgradeHookTests(unittest.TestCase):
         self.assertIn("BOOTSTRAP DISCIPLINE", result.stdout)
 
 
+class ExternalInstalledRuntimePathResolverTests(unittest.TestCase):
+    """FIX-132: hooks and native commands must work without repo-local skills/."""
+
+    def _bash(self):
+        if os.name == "nt":
+            candidates = [
+                Path(os.environ.get("ProgramFiles", "")) / "Git" / "bin" / "bash.exe",
+                Path(os.environ.get("ProgramFiles(x86)", "")) / "Git" / "bin" / "bash.exe",
+            ]
+            for candidate in candidates:
+                if candidate.exists():
+                    return str(candidate)
+        return shutil.which("bash") or "bash"
+
+    def _init_target_repo(self, root: Path) -> None:
+        root.mkdir()
+        subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True, text=True)
+        gov = root / ".governance"
+        gov.mkdir(parents=True)
+        (gov / "plan-tracker.md").write_text("## 项目配置\n- **工作流版本**: 0.50.2\n", encoding="utf-8")
+
+    def _write_source_home(self, source_home: Path, hook_name: str = "pre-commit") -> Path:
+        source_hooks = source_home / "infra" / "hooks"
+        source_hooks.mkdir(parents=True)
+        (source_home / "SKILL.md").write_text("---\nversion: 0.50.2\n---\n", encoding="utf-8")
+        shutil.copyfile(_INFRA_DIR / "hooks" / hook_name, source_hooks / hook_name)
+        return source_hooks / hook_name
+
+    def test_pre_commit_self_upgrade_uses_explicit_installed_workflow_home(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "target"
+            self._init_target_repo(root)
+
+            source_home = Path(td) / "installed" / "skills" / "software-project-governance"
+            source_hook = self._write_source_home(source_home)
+
+            installed_hook = root / ".git" / "hooks" / "pre-commit"
+            shutil.copyfile(_INFRA_DIR / "hooks" / "pre-commit", installed_hook)
+            installed_hook.write_text(
+                installed_hook.read_text(encoding="utf-8") + "\n# stale installed copy\n",
+                encoding="utf-8",
+            )
+
+            env = os.environ.copy()
+            env["SOFTWARE_PROJECT_GOVERNANCE_HOME"] = source_home.as_posix()
+            result = subprocess.run(
+                [self._bash(), installed_hook.as_posix()],
+                cwd=root,
+                env=env,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("self-upgraded", result.stdout)
+            self.assertFalse((root / "skills" / "software-project-governance").exists())
+            self.assertEqual(
+                installed_hook.read_text(encoding="utf-8"),
+                source_hook.read_text(encoding="utf-8"),
+            )
+
+    def test_pre_commit_self_upgrade_discovers_plugin_cache_without_repo_local_skills(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "target"
+            self._init_target_repo(root)
+
+            fake_home = Path(td) / "home"
+            source_home = (
+                fake_home
+                / ".claude"
+                / "plugins"
+                / "cache"
+                / "openai-bundled"
+                / "software-project-governance"
+                / "0.50.2"
+                / "skills"
+                / "software-project-governance"
+            )
+            source_hook = self._write_source_home(source_home)
+
+            installed_hook = root / ".git" / "hooks" / "pre-commit"
+            shutil.copyfile(_INFRA_DIR / "hooks" / "pre-commit", installed_hook)
+            installed_hook.write_text(
+                installed_hook.read_text(encoding="utf-8") + "\n# stale cache-discovered copy\n",
+                encoding="utf-8",
+            )
+
+            env = os.environ.copy()
+            env.pop("SOFTWARE_PROJECT_GOVERNANCE_HOME", None)
+            env.pop("SPG_HOME", None)
+            env.pop("XDG_CACHE_HOME", None)
+            env["HOME"] = fake_home.as_posix()
+            result = subprocess.run(
+                [self._bash(), installed_hook.as_posix()],
+                cwd=root,
+                env=env,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("self-upgraded", result.stdout)
+            self.assertFalse((root / "skills" / "software-project-governance").exists())
+            self.assertEqual(installed_hook.read_text(encoding="utf-8"), source_hook.read_text(encoding="utf-8"))
+
+    def test_pre_commit_source_hook_run_by_relative_path_is_not_overwritten(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "target"
+            self._init_target_repo(root)
+
+            project_source_home = root / "skills" / "software-project-governance"
+            project_source_hook = self._write_source_home(project_source_home)
+            marker = "\n# local source hook marker must remain\n"
+            project_source_hook.write_text(project_source_hook.read_text(encoding="utf-8") + marker, encoding="utf-8")
+
+            external_source_home = Path(td) / "external" / "skills" / "software-project-governance"
+            external_source_hook = self._write_source_home(external_source_home)
+            external_source_hook.write_text(
+                external_source_hook.read_text(encoding="utf-8") + "\n# external source hook marker\n",
+                encoding="utf-8",
+            )
+
+            env = os.environ.copy()
+            env["SOFTWARE_PROJECT_GOVERNANCE_HOME"] = external_source_home.as_posix()
+            result = subprocess.run(
+                [self._bash(), "skills/software-project-governance/infra/hooks/pre-commit"],
+                cwd=root,
+                env=env,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertNotIn("self-upgraded", result.stdout)
+            self.assertIn(marker.strip(), project_source_hook.read_text(encoding="utf-8"))
+            self.assertNotEqual(
+                project_source_hook.read_text(encoding="utf-8"),
+                external_source_hook.read_text(encoding="utf-8"),
+            )
+
+    def test_hooks_contain_external_runtime_resolver(self):
+        for hook_name in ("pre-commit", "commit-msg", "post-commit"):
+            text = (_INFRA_DIR / "hooks" / hook_name).read_text(encoding="utf-8")
+            self.assertIn("SOFTWARE_PROJECT_GOVERNANCE_HOME", text, hook_name)
+            self.assertIn("SPG_HOME", text, hook_name)
+            self.assertIn(".claude/plugins/cache", text, hook_name)
+            self.assertIn("SPG_RESOLVED_HOME/infra/hooks", text, hook_name)
+            self.assertIn("git rev-parse --git-path", text, hook_name)
+            self.assertNotIn("IS_SOURCE_HOOK", text, hook_name)
+
+    def test_governance_commands_do_not_emit_repo_local_hook_install_only(self):
+        for rel in (
+            "commands/governance-init.md",
+            "commands/governance.md",
+            "commands/governance-status.md",
+            "commands/governance-verify.md",
+        ):
+            text = (vw.ROOT / rel).read_text(encoding="utf-8")
+            self.assertIn("WORKFLOW_HOME", text, rel)
+            self.assertNotIn("cp skills/software-project-governance/infra/hooks", text, rel)
+            self.assertNotIn("python skills/software-project-governance/infra/verify_workflow.py", text, rel)
+
+
 class ArchiveTriggerGapTests(unittest.TestCase):
     """FIX-063: Check 26 exposes continuous archive trigger gaps."""
 

@@ -1,15 +1,17 @@
 #!/bin/bash
 # prepare-commit-msg governance hook
-# Saves the commit message so pre-commit can read it (Windows git bash workaround)
-# On Windows, git commit -m doesn't pass $1 to pre-commit.
+# Does not persist commit messages for pre-commit.
+# pre-commit runs before this hook, so a bridge file would be stale by design.
+# commit-msg reads the final current message from $1 and is authoritative.
 # @version: 0.50.2
 
-COMMIT_MSG_FILE="$1"
+set -e
+
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo ".")
 
-if [ -n "$COMMIT_MSG_FILE" ] && [ -f "$COMMIT_MSG_FILE" ]; then
-    # Save a copy that pre-commit can read
-    cp "$COMMIT_MSG_FILE" "$REPO_ROOT/.git/GOV_COMMIT_MSG" 2>/dev/null
+GOV_COMMIT_MSG_PATH=$(git rev-parse --git-path GOV_COMMIT_MSG 2>/dev/null || true)
+if [ -n "$GOV_COMMIT_MSG_PATH" ]; then
+    rm -f "$GOV_COMMIT_MSG_PATH" 2>/dev/null || true
 fi
 
 exit 0

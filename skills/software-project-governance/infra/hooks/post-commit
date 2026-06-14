@@ -119,9 +119,12 @@ fi
 COMMIT_MSG=$(git log -1 --format=%B)
 TASK_ID=$(echo "$COMMIT_MSG" | grep -oE '[A-Z]+-[0-9]+' | head -1)
 
-# FIX-044: Safety net — cleanup stale GOV_COMMIT_MSG if pre-commit was skipped.
-# This prevents the next commit's pre-commit from reading an expired task ID.
-rm -f "$REPO_ROOT/.git/GOV_COMMIT_MSG" 2>/dev/null
+# FIX-044/FIX-133: Safety net — cleanup legacy GOV_COMMIT_MSG bridge state.
+# Current message checks never read this file; commit-msg is authoritative via $1.
+GOV_COMMIT_MSG_PATH=$(git rev-parse --git-path GOV_COMMIT_MSG 2>/dev/null || true)
+if [ -n "$GOV_COMMIT_MSG_PATH" ]; then
+    rm -f "$GOV_COMMIT_MSG_PATH" 2>/dev/null || true
+fi
 
 # --- Step 2: Check task traceability ---
 if [ -z "$TASK_ID" ]; then

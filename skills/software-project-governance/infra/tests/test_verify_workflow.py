@@ -9443,13 +9443,18 @@ class CommitMsgFactGroundingHookTests(unittest.TestCase):
         self.assertIn("事实依据", result.stdout)
 
     def test_commit_msg_accepts_fact_basis(self):
-        evidence = _impact_evidence_row(
-            "EVD-081", "FIX-080",
-            "事实依据: commit-msg hook fixture staged skills/test/file.txt and evidence-log row. "
-            "目标对齐: 提升治理工作流证据可信度，避免无事实闭环。 "
-            "用户影响: 获得=plugin update, 感知=CHANGELOG, 体验变化=否, 迁移指南=不需要",
-            "skills/test/file.txt",
-        )
+        evidence = "\n".join([
+            _impact_evidence_row(
+                "EVD-081", "FIX-080",
+                "事实依据: commit-msg hook fixture staged skills/test/file.txt and evidence-log row. "
+                "目标对齐: 提升治理工作流证据可信度，避免无事实闭环。 "
+                "用户影响: 获得=plugin update, 感知=CHANGELOG, 体验变化=否, 迁移指南=不需要",
+                "skills/test/file.txt",
+            ),
+            "| REVIEW-FIX-080 | FIX-080 | 审查 | 代码审查 | "
+            "Code Reviewer approved fact grounding hook fixture. | "
+            "skills/test/file.txt | Code Reviewer | 2026-05-02 | G11 | APPROVED |",
+        ])
         result = self._run_hook(evidence_text=evidence)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
@@ -9464,6 +9469,288 @@ class CommitMsgFactGroundingHookTests(unittest.TestCase):
         result = self._run_hook(evidence_text=evidence)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("ungrounded speculation language", result.stdout)
+
+
+class CommitMessageSourceHardeningTests(unittest.TestCase):
+    """FIX-133: stale message files must not drive strong hook semantics."""
+
+    def _bash(self):
+        if os.name == "nt":
+            candidates = [
+                Path(os.environ.get("ProgramFiles", "")) / "Git" / "bin" / "bash.exe",
+                Path(os.environ.get("ProgramFiles(x86)", "")) / "Git" / "bin" / "bash.exe",
+            ]
+            for candidate in candidates:
+                if candidate.exists():
+                    return str(candidate)
+        return shutil.which("bash") or "bash"
+
+    def _env(self):
+        env = os.environ.copy()
+        env["SOFTWARE_PROJECT_GOVERNANCE_HOME"] = _INFRA_DIR.parent.as_posix()
+        return env
+
+    def _git_path(self, root: Path, name: str) -> Path:
+        result = subprocess.run(
+            ["git", "rev-parse", "--git-path", name],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return root / result.stdout.strip()
+
+    def _init_repo(self, root: Path, *, with_evidence=True, review_status=None):
+        subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True, text=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=root, check=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True)
+
+        gov = root / ".governance"
+        gov.mkdir(parents=True, exist_ok=True)
+        (gov / "plan-tracker.md").write_text("\n".join([
+            "# 计划跟踪",
+            "## 项目配置",
+            "- **项目目标**: 提供一套完整的软件项目治理工作流插件",
+            "## 当前活跃事项",
+            "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+            "|--------|----|------|------|---------|---------|------|",
+            "| **P0** | FIX-133 | hook message source hardening | RISK-036 | 0.50.3 | tests | 🔄 进行中 |",
+            "| **P0** | FIX-999 | stale previous task | RISK-036 | 0.50.3 | tests | 🔄 进行中 |",
+        ]), encoding="utf-8")
+        evidence_rows = []
+        if with_evidence:
+            evidence_rows.append(_impact_evidence_row(
+                "EVD-133",
+                "FIX-133",
+                "事实依据: hook fixture staged skills/test/file.txt and ran commit-msg from the actual message file. "
+                "目标对齐: 修复 git commit -m 下 stale commit message source 导致治理 hook 误判的问题。 "
+                "用户影响: 获得=plugin update, 感知=commit hook no stale block, 体验变化=否, 迁移指南=不需要",
+                "skills/test/file.txt",
+            ))
+        if review_status is not None:
+            evidence_rows.append(
+                "| REVIEW-FIX-133 | FIX-133 | 审查 | 代码审查 | "
+                f"Code Reviewer returned {review_status} for FIX-133 hook message source hardening. | "
+                f"skills/test/file.txt | Code Reviewer | 2026-06-14 | G11 | {review_status} |"
+            )
+        if evidence_rows:
+            (gov / "evidence-log.md").write_text("\n".join(evidence_rows), encoding="utf-8")
+
+    def _stage_product_change(self, root: Path, content="product change\n"):
+        product_file = root / "skills" / "test" / "file.txt"
+        product_file.parent.mkdir(parents=True, exist_ok=True)
+        product_file.write_text(content, encoding="utf-8")
+        subprocess.run(["git", "add", "skills/test/file.txt"], cwd=root, check=True)
+
+    def _install_hook(self, root: Path, hook_name: str):
+        target = root / ".git" / "hooks" / hook_name
+        shutil.copyfile(_INFRA_DIR / "hooks" / hook_name, target)
+        target.chmod(0o755)
+        return target
+
+    def _install_hooks(self, root: Path):
+        for hook_name in ("pre-commit", "prepare-commit-msg", "commit-msg", "post-commit"):
+            self._install_hook(root, hook_name)
+
+    def test_pre_commit_ignores_stale_commit_editmsg_for_review_blocking(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._init_repo(root, with_evidence=False)
+            self._stage_product_change(root)
+            self._git_path(root, "COMMIT_EDITMSG").write_text(
+                "FIX-999: stale message should not require review\n",
+                encoding="utf-8",
+            )
+            self._git_path(root, "GOV_COMMIT_MSG").write_text(
+                "FIX-999: stale bridge message should be cleared\n",
+                encoding="utf-8",
+            )
+
+            hook = _INFRA_DIR / "hooks" / "pre-commit"
+            result = subprocess.run(
+                [self._bash(), hook.as_posix()],
+                cwd=root,
+                env=self._env(),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertNotIn("M7.4 BLOCKED", result.stdout)
+            self.assertFalse(self._git_path(root, "GOV_COMMIT_MSG").exists())
+
+    def test_git_commit_m_requires_review_evidence_for_product_code(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._init_repo(root)
+            self._install_hooks(root)
+            self._stage_product_change(root)
+            self._git_path(root, "COMMIT_EDITMSG").write_text(
+                "FIX-999: stale old task must not be the commit-msg source\n",
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                ["git", "commit", "-m", "FIX-133: harden commit message source"],
+                cwd=root,
+                env=self._env(),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            output = result.stdout + result.stderr
+            self.assertIn("M7.4 BLOCKED", output)
+            self.assertIn("FIX-133", output)
+            self.assertFalse(self._git_path(root, "GOV_COMMIT_MSG").exists())
+
+    def test_git_commit_m_rejects_failed_review_evidence_for_product_code(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._init_repo(root, review_status="NEEDS_CHANGE")
+            self._install_hooks(root)
+            self._stage_product_change(root)
+            self._git_path(root, "COMMIT_EDITMSG").write_text(
+                "FIX-999: stale approved-looking message must not help\n",
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                ["git", "commit", "-m", "FIX-133: harden commit message source"],
+                cwd=root,
+                env=self._env(),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            output = result.stdout + result.stderr
+            self.assertIn("M7.4 BLOCKED", output)
+            self.assertIn("FIX-133", output)
+
+    def test_git_commit_m_uses_current_message_when_commit_editmsg_is_stale(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._init_repo(root, review_status="APPROVED")
+            self._install_hooks(root)
+            self._stage_product_change(root)
+            self._git_path(root, "COMMIT_EDITMSG").write_text(
+                "FIX-999: stale message should not drive this commit\n",
+                encoding="utf-8",
+            )
+            self._git_path(root, "GOV_COMMIT_MSG").write_text(
+                "FIX-999: stale bridge message should be cleared\n",
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                ["git", "commit", "-m", "FIX-133: harden commit message source"],
+                cwd=root,
+                env=self._env(),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            subject = subprocess.run(
+                ["git", "log", "-1", "--format=%s"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            self.assertEqual(subject, "FIX-133: harden commit message source")
+            self.assertFalse(self._git_path(root, "GOV_COMMIT_MSG").exists())
+
+    def test_commit_msg_uses_only_actual_message_file_not_stale_commit_editmsg(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._init_repo(root)
+            self._stage_product_change(root)
+            self._git_path(root, "COMMIT_EDITMSG").write_text(
+                "FIX-133: stale approved-looking message\n",
+                encoding="utf-8",
+            )
+            self._git_path(root, "GOV_COMMIT_MSG").write_text(
+                "FIX-133: stale bridge message\n",
+                encoding="utf-8",
+            )
+            actual_msg = root / "actual-message.txt"
+            actual_msg.write_text("missing task id despite stale files\n", encoding="utf-8")
+
+            hook = _INFRA_DIR / "hooks" / "commit-msg"
+            result = subprocess.run(
+                [self._bash(), hook.as_posix(), actual_msg.as_posix()],
+                cwd=root,
+                env=self._env(),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("NO task ID", result.stdout)
+            self.assertFalse(self._git_path(root, "GOV_COMMIT_MSG").exists())
+
+    def test_prepare_commit_msg_does_not_persist_gov_commit_msg_bridge(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._init_repo(root)
+            stale_bridge = self._git_path(root, "GOV_COMMIT_MSG")
+            stale_bridge.write_text("FIX-999: stale bridge\n", encoding="utf-8")
+            actual_msg = root / "message.txt"
+            actual_msg.write_text("FIX-133: current prepared message\n", encoding="utf-8")
+
+            hook = _INFRA_DIR / "hooks" / "prepare-commit-msg"
+            result = subprocess.run(
+                [self._bash(), hook.as_posix(), actual_msg.as_posix(), "message"],
+                cwd=root,
+                env=self._env(),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertFalse(stale_bridge.exists())
+
+    def test_post_commit_removes_legacy_gov_commit_msg_bridge(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._init_repo(root)
+            subprocess.run(
+                ["git", "commit", "--allow-empty", "-m", "FIX-133: baseline", "--no-verify"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            stale_bridge = self._git_path(root, "GOV_COMMIT_MSG")
+            stale_bridge.write_text("FIX-999: stale bridge\n", encoding="utf-8")
+
+            hook = _INFRA_DIR / "hooks" / "post-commit"
+            result = subprocess.run(
+                [self._bash(), hook.as_posix()],
+                cwd=root,
+                env=self._env(),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertFalse(stale_bridge.exists())
 
 
 class PreCommitClaudeBootstrapUpgradeHookTests(unittest.TestCase):

@@ -25,6 +25,14 @@ is_product_code() {
     return 1
 }
 
+has_approved_review_evidence() {
+    local task_id="$1"
+    local evidence_file="$REPO_ROOT/.governance/evidence-log.md"
+    [ -f "$evidence_file" ] || return 1
+
+    grep -Eq "^\|[[:space:]]*REVIEW-[^|]*$task_id[^|]*\|[[:space:]]*$task_id[[:space:]]*\|.*\|[[:space:]]*(APPROVED|通过|批准)[[:space:]]*\|[[:space:]]*$" "$evidence_file" 2>/dev/null
+}
+
 resolve_spg_home_candidate() {
     local candidate="$1"
     [ -n "$candidate" ] || return 1
@@ -196,18 +204,24 @@ if [ ! -f "$REPO_ROOT/.governance/plan-tracker.md" ]; then
     exit 0
 fi
 
-# --- Best-effort commit message read (for Steps 7 and 9 task ID extraction) ---
-# FIX-047: pre-commit runs BEFORE prepare-commit-msg, so message reading is
-# unreliable. commit-msg hook handles all message-dependent checks reliably.
-# Here we try best-effort — if message is unavailable, Steps 7/9 skip gracefully.
+# --- Clear legacy commit-message bridge state (FIX-133) ---
+# pre-commit runs before prepare-commit-msg, so any persisted GOV_COMMIT_MSG
+# would be from an older attempt. It is never a valid source for current
+# message semantics.
+GOV_COMMIT_MSG_PATH=$(git rev-parse --git-path GOV_COMMIT_MSG 2>/dev/null || true)
+if [ -n "$GOV_COMMIT_MSG_PATH" ]; then
+    rm -f "$GOV_COMMIT_MSG_PATH" 2>/dev/null || true
+fi
+
+# --- Best-effort direct message read (for Steps 7 and 9 task ID extraction) ---
+# FIX-047/FIX-133: pre-commit runs BEFORE prepare-commit-msg, so persisted
+# message files such as .git/COMMIT_EDITMSG and .git/GOV_COMMIT_MSG may be
+# stale. commit-msg handles all message-dependent strong checks from $1.
+# Only a message file passed directly to this hook is considered; otherwise
+# Steps 7/9 skip gracefully.
 COMMIT_MSG=""
-# Source 1: explicit file argument (works for 'git commit' with editor)
 if [ -n "$1" ] && [ -f "$1" ]; then
     COMMIT_MSG=$(cat "$1" 2>/dev/null || true)
-fi
-# Source 2: git's commit message file (best-effort, may be stale)
-if [ -z "$COMMIT_MSG" ] && [ -f "$REPO_ROOT/.git/COMMIT_EDITMSG" ]; then
-    COMMIT_MSG=$(cat "$REPO_ROOT/.git/COMMIT_EDITMSG" 2>/dev/null || true)
 fi
 FIRST_LINE=$(echo "$COMMIT_MSG" | head -1)
 
@@ -279,13 +293,7 @@ if [ -n "$STEP7_TASK_ID" ]; then
         esac
 
         if [ "$NEEDS_REVIEW" -eq 1 ]; then
-            HAS_REVIEW_EVD=0
-            if [ -f "$REPO_ROOT/.governance/evidence-log.md" ]; then
-                HAS_REVIEW_EVD=$(grep -cE "REVIEW-.*$STEP7_TASK_ID" "$REPO_ROOT/.governance/evidence-log.md" 2>/dev/null || echo "0")
-                HAS_REVIEW_EVD=$(echo "$HAS_REVIEW_EVD" | tr -d '\r' | head -1)
-                [ -z "$HAS_REVIEW_EVD" ] && HAS_REVIEW_EVD=0
-            fi
-            if [ "$HAS_REVIEW_EVD" -eq 0 ]; then
+            if ! has_approved_review_evidence "$STEP7_TASK_ID"; then
                 # Format changed files list (first 5, with ellipsis if more)
                 PC_FILES=$(echo "$CHANGED_FILES_STEP7" | head -5 | tr '\n' ' ')
                 PC_FILE_COUNT=$(echo "$CHANGED_FILES_STEP7" | grep -c . 2>/dev/null || echo "0")

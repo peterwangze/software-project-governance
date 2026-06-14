@@ -6882,6 +6882,23 @@ class GovernanceIntegrationTests(unittest.TestCase):
 class ExternalProjectValidationHarnessTests(unittest.TestCase):
     """FIX-131: external validation runs in a temporary workspace with conservative boundaries."""
 
+    def _target_file_snapshot(self, root):
+        snapshot = {}
+        for path in sorted(Path(root).rglob("*")):
+            if path.is_file():
+                snapshot[path.relative_to(root).as_posix()] = path.read_bytes()
+        return snapshot
+
+    def _patch_external_validation_commands(self):
+        def fake_copy(workspace):
+            (workspace / "README.md").write_text("surface\n", encoding="utf-8")
+            return ["README.md"]
+
+        def fake_run(workspace, args, timeout=120):
+            return {"args": list(args), "exit_code": 0, "stdout_tail": "ok", "stderr_tail": ""}
+
+        return fake_copy, fake_run
+
     def test_external_validation_rejects_missing_or_empty_target(self):
         with tempfile.TemporaryDirectory() as td:
             empty = Path(td) / "empty"
@@ -7006,6 +7023,75 @@ class ExternalProjectValidationHarnessTests(unittest.TestCase):
         self.assertEqual(result["exit_code"], 124)
         self.assertIn("partial", result["stdout_tail"])
         self.assertIn("timed out", result["stderr_tail"])
+
+    def test_external_validation_reports_target_native_diagnostics_without_mutating_target(self):
+        with tempfile.TemporaryDirectory() as td:
+            target = Path(td) / "target"
+            target.mkdir()
+            subprocess.run(["git", "init"], cwd=target, check=True, capture_output=True, text=True)
+            (target / "AGENTS.md").write_text(
+                "Run python skills/software-project-governance/infra/verify_workflow.py verify\n"
+                "Install with cp skills/software-project-governance/infra/hooks/pre-commit .git/hooks/pre-commit\n",
+                encoding="utf-8",
+            )
+            (target / ".git/hooks/pre-commit").write_text(
+                "#!/bin/bash\n"
+                "# @version: 0.1.0\n"
+                "SOURCE_HOOK=\"$REPO_ROOT/skills/software-project-governance/infra/hooks/pre-commit\"\n"
+                "COMMIT_MSG=$(cat \"$REPO_ROOT/.git/COMMIT_EDITMSG\")\n"
+                "BRIDGE=$(cat \"$REPO_ROOT/.git/GOV_COMMIT_MSG\")\n",
+                encoding="utf-8",
+            )
+            before = self._target_file_snapshot(target)
+
+            fake_copy, fake_run = self._patch_external_validation_commands()
+            with patch.object(vw, "_copy_external_validation_surface", side_effect=fake_copy), \
+                 patch.object(vw, "_prepare_external_validation_git"), \
+                 patch.object(vw, "_run_external_validation_command", side_effect=fake_run), \
+                 patch.object(vw, "_extract_skill_version", return_value="0.50.2"):
+                result = vw.run_external_project_validation(target, timeout=5)
+
+            after = self._target_file_snapshot(target)
+            issue_text = "\n".join(result["issues"])
+            diagnostics = result["target_diagnostics"]
+
+        self.assertEqual(after, before)
+        self.assertFalse(result["pass"])
+        self.assertTrue(any(d["category"] == "target-native-entry" and d["path"] == "AGENTS.md" for d in diagnostics))
+        self.assertIn("target-native-entry AGENTS.md", issue_text)
+        self.assertIn(".git/hooks/commit-msg", issue_text)
+        self.assertIn(".git/hooks/post-commit", issue_text)
+        self.assertIn("installed hook @version=0.1.0", issue_text)
+        self.assertIn("legacy pre-commit uses COMMIT_EDITMSG or GOV_COMMIT_MSG", issue_text)
+        self.assertIn("pre-commit self-upgrade source hardcodes repo-local", issue_text)
+
+    def test_external_validation_accepts_current_target_hooks_and_safe_native_entries(self):
+        with tempfile.TemporaryDirectory() as td:
+            target = Path(td) / "target"
+            target.mkdir()
+            subprocess.run(["git", "init"], cwd=target, check=True, capture_output=True, text=True)
+            (target / "AGENTS.md").write_text(
+                "Use WORKFLOW_HOME to locate the installed governance runtime.\n",
+                encoding="utf-8",
+            )
+            for hook_name in vw.EXTERNAL_PROJECT_REQUIRED_INSTALLED_HOOKS:
+                shutil.copyfile(_INFRA_DIR / "hooks" / hook_name, target / ".git/hooks" / hook_name)
+            before = self._target_file_snapshot(target)
+
+            fake_copy, fake_run = self._patch_external_validation_commands()
+            with patch.object(vw, "_copy_external_validation_surface", side_effect=fake_copy), \
+                 patch.object(vw, "_prepare_external_validation_git"), \
+                 patch.object(vw, "_run_external_validation_command", side_effect=fake_run), \
+                 patch.object(vw, "_extract_skill_version", return_value="0.50.2"):
+                result = vw.run_external_project_validation(target, timeout=5)
+
+            after = self._target_file_snapshot(target)
+
+        self.assertEqual(after, before)
+        self.assertTrue(result["pass"])
+        self.assertEqual(result["issues"], [])
+        self.assertFalse([item for item in result["target_diagnostics"] if item["status"] == "FAIL"])
+        self.assertTrue(any(item["path"] == ".git/hooks/pre-commit" for item in result["target_diagnostics"]))
 
 
 class GovernanceSignalNoiseTests(unittest.TestCase):

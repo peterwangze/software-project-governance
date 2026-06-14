@@ -16347,6 +16347,35 @@ EXTERNAL_PROJECT_VALIDATION_BOUNDARY = (
     "No catalog entry runtime PASS. No RISK-036 closure. No 1.0.0 production-ready."
 )
 
+EXTERNAL_PROJECT_NATIVE_ENTRY_FILES = (
+    "AGENTS.md",
+    "CLAUDE.md",
+    "GEMINI.md",
+    ".cursorrules",
+    ".cursor/rules",
+    ".github/copilot-instructions.md",
+)
+
+EXTERNAL_PROJECT_NATIVE_ENTRY_PATTERNS = (
+    (
+        "repo-local workflow home",
+        re.compile(r"(?<![A-Z0-9_])skills/software-project-governance/", re.I),
+        "hardcodes repo-local skills/software-project-governance/ instead of installed workflow home",
+    ),
+    (
+        "repo-local verify command",
+        re.compile(r"\bpython(?:3)?\s+skills/software-project-governance/infra/verify_workflow\.py\b", re.I),
+        "hardcodes python skills/software-project-governance/infra/verify_workflow.py",
+    ),
+    (
+        "repo-local hook install command",
+        re.compile(r"\bcp\s+skills/software-project-governance/infra/hooks/", re.I),
+        "hardcodes cp skills/software-project-governance/infra/hooks... hook install path",
+    ),
+)
+
+EXTERNAL_PROJECT_REQUIRED_INSTALLED_HOOKS = ("pre-commit", "commit-msg", "post-commit")
+
 
 def _external_validation_target_facts(target):
     target = Path(target).resolve()
@@ -16369,6 +16398,237 @@ def _external_validation_target_facts(target):
         facts["file_count"] = len(all_files)
         facts["sample_files"] = all_files[:5]
     return facts
+
+
+def _external_validation_target_relpath(target, path):
+    try:
+        return Path(path).resolve().relative_to(Path(target).resolve()).as_posix()
+    except (OSError, ValueError):
+        return str(path)
+
+
+def _external_validation_diagnostic(status, category, path, message, line=None):
+    diagnostic = {
+        "status": status,
+        "category": category,
+        "path": path,
+        "message": message,
+    }
+    if line is not None:
+        diagnostic["line"] = line
+    return diagnostic
+
+
+def _external_validation_first_match_line(content, pattern):
+    for index, line in enumerate(content.splitlines(), start=1):
+        if pattern.search(line):
+            return index
+    return None
+
+
+def _external_validation_read_text(path):
+    try:
+        return path.read_text(encoding="utf-8", errors="replace"), None
+    except OSError as exc:
+        return None, str(exc)
+
+
+def _external_validation_native_entry_paths(target):
+    target = Path(target).resolve()
+    paths = []
+    for rel in EXTERNAL_PROJECT_NATIVE_ENTRY_FILES:
+        path = target / rel
+        if path.is_file():
+            paths.append(path)
+        elif path.is_dir():
+            for child in sorted(path.rglob("*")):
+                if child.is_file():
+                    paths.append(child)
+    return paths
+
+
+def _external_validation_native_entry_diagnostics(target):
+    target = Path(target).resolve()
+    diagnostics = []
+    for path in _external_validation_native_entry_paths(target):
+        rel = _external_validation_target_relpath(target, path)
+        content, error = _external_validation_read_text(path)
+        if content is None:
+            diagnostics.append(_external_validation_diagnostic(
+                "FAIL",
+                "target-native-entry",
+                rel,
+                f"cannot read platform/native entry file: {error}",
+            ))
+            continue
+        matched = False
+        for label, pattern, message in EXTERNAL_PROJECT_NATIVE_ENTRY_PATTERNS:
+            line = _external_validation_first_match_line(content, pattern)
+            if line is None:
+                continue
+            matched = True
+            diagnostics.append(_external_validation_diagnostic(
+                "FAIL",
+                "target-native-entry",
+                rel,
+                f"{label}: {message}",
+                line=line,
+            ))
+        if not matched:
+            diagnostics.append(_external_validation_diagnostic(
+                "PASS",
+                "target-native-entry",
+                rel,
+                "no repo-local workflow path assumptions detected",
+            ))
+    if not diagnostics:
+        diagnostics.append(_external_validation_diagnostic(
+            "INFO",
+            "target-native-entry",
+            ".",
+            "no platform/native entry files detected",
+        ))
+    return diagnostics
+
+
+def _external_validation_hook_version(content):
+    match = re.search(r"@version:\s*([0-9]+\.[0-9]+\.[0-9]+)", content)
+    return match.group(1) if match else None
+
+
+def _external_validation_canonical_hook_text(hook_name):
+    hook_path = ROOT / "skills/software-project-governance/infra/hooks" / hook_name
+    if not hook_path.is_file():
+        return None
+    return hook_path.read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n")
+
+
+def _external_validation_hook_sha(content):
+    return hashlib.sha256(content.replace("\r\n", "\n").encode("utf-8")).hexdigest()
+
+
+def _external_validation_pre_commit_uses_legacy_message_source(content):
+    patterns = (
+        r"\b(cat|grep|sed|awk|head|tail)\b[^\n]*(COMMIT_EDITMSG|GOV_COMMIT_MSG)",
+        r"\b(read)\b[^\n]*(COMMIT_EDITMSG|GOV_COMMIT_MSG)",
+        r"(COMMIT_MSG(?!_PATH)|COMMIT_MESSAGE(?!_PATH)|MESSAGE_TEXT|TASK_ID|TASK_PREFIX)[A-Za-z0-9_]*=.*(COMMIT_EDITMSG|GOV_COMMIT_MSG)",
+    )
+    for pattern in patterns:
+        if re.search(pattern, content):
+            return True
+    return False
+
+
+def _external_validation_pre_commit_uses_repo_local_self_upgrade(content):
+    has_resolved_home_upgrade = "SPG_RESOLVED_HOME/infra/hooks" in content
+    if has_resolved_home_upgrade:
+        return False
+    return bool(re.search(
+        r"(SOURCE_HOOK|cp|HOOK_SOURCE|LATEST_HOOK)[^\n]*skills/software-project-governance/infra/hooks",
+        content,
+    ))
+
+
+def _external_validation_hook_diagnostics(target):
+    target = Path(target).resolve()
+    git_dir = target / ".git"
+    if not git_dir.is_dir():
+        return [_external_validation_diagnostic(
+            "INFO",
+            "target-installed-hook",
+            ".git/hooks",
+            "target is not a git worktree; installed hook checks skipped",
+        )]
+
+    diagnostics = []
+    hooks_dir = git_dir / "hooks"
+    for hook_name in EXTERNAL_PROJECT_REQUIRED_INSTALLED_HOOKS:
+        rel = f".git/hooks/{hook_name}"
+        installed_hook = hooks_dir / hook_name
+        if not installed_hook.is_file():
+            diagnostics.append(_external_validation_diagnostic(
+                "FAIL",
+                "target-installed-hook",
+                rel,
+                "required governance hook is missing from target .git/hooks",
+            ))
+            continue
+
+        installed_text, error = _external_validation_read_text(installed_hook)
+        if installed_text is None:
+            diagnostics.append(_external_validation_diagnostic(
+                "FAIL",
+                "target-installed-hook",
+                rel,
+                f"cannot read installed governance hook: {error}",
+            ))
+            continue
+        installed_text = installed_text.replace("\r\n", "\n")
+        source_text = _external_validation_canonical_hook_text(hook_name)
+        if source_text is None:
+            diagnostics.append(_external_validation_diagnostic(
+                "FAIL",
+                "target-installed-hook",
+                rel,
+                "canonical governance hook source is missing from validation package",
+            ))
+            continue
+
+        installed_version = _external_validation_hook_version(installed_text) or "unknown"
+        source_version = _external_validation_hook_version(source_text) or "unknown"
+        if installed_version != source_version:
+            diagnostics.append(_external_validation_diagnostic(
+                "FAIL",
+                "target-installed-hook",
+                rel,
+                f"installed hook @version={installed_version}, expected={source_version}",
+            ))
+        elif _external_validation_hook_sha(installed_text) != _external_validation_hook_sha(source_text):
+            diagnostics.append(_external_validation_diagnostic(
+                "FAIL",
+                "target-installed-hook",
+                rel,
+                "installed hook content differs from canonical governance hook source",
+            ))
+        else:
+            diagnostics.append(_external_validation_diagnostic(
+                "PASS",
+                "target-installed-hook",
+                rel,
+                f"installed hook matches canonical source @version={source_version}",
+            ))
+
+        if hook_name == "pre-commit":
+            if _external_validation_pre_commit_uses_legacy_message_source(installed_text):
+                diagnostics.append(_external_validation_diagnostic(
+                    "FAIL",
+                    "target-installed-hook",
+                    rel,
+                    "legacy pre-commit uses COMMIT_EDITMSG or GOV_COMMIT_MSG as a semantic message source",
+                ))
+            if _external_validation_pre_commit_uses_repo_local_self_upgrade(installed_text):
+                diagnostics.append(_external_validation_diagnostic(
+                    "FAIL",
+                    "target-installed-hook",
+                    rel,
+                    "pre-commit self-upgrade source hardcodes repo-local skills/software-project-governance/infra/hooks",
+                ))
+    return diagnostics
+
+
+def _external_validation_target_native_diagnostics(target):
+    return (
+        _external_validation_native_entry_diagnostics(target)
+        + _external_validation_hook_diagnostics(target)
+    )
+
+
+def _external_validation_diagnostic_issues(diagnostics):
+    return [
+        f"{item['category']} {item['path']}: {item['message']}"
+        for item in diagnostics
+        if item.get("status") == "FAIL"
+    ]
 
 
 def _external_validation_plan_tracker(version):
@@ -16552,6 +16812,7 @@ def run_external_project_validation(target, keep_workspace=False, workspace_pare
             "pass": False,
             "workspace": None,
             "target": target_facts,
+            "target_diagnostics": [],
             "surface_files": 0,
             "commands": [],
             "issues": ["target must be an existing directory with at least one non-generated file"],
@@ -16559,12 +16820,14 @@ def run_external_project_validation(target, keep_workspace=False, workspace_pare
         }
 
     target_path = Path(target).resolve()
+    target_diagnostics = _external_validation_target_native_diagnostics(target_path)
     parent = Path(workspace_parent).resolve() if workspace_parent else None
     if parent and (parent == target_path or target_path in parent.parents):
         return {
             "pass": False,
             "workspace": None,
             "target": target_facts,
+            "target_diagnostics": target_diagnostics,
             "surface_files": 0,
             "commands": [],
             "issues": ["workspace parent must not be the target directory or inside the target directory"],
@@ -16584,7 +16847,7 @@ def run_external_project_validation(target, keep_workspace=False, workspace_pare
         _prepare_external_validation_git(workspace)
 
         command_results = []
-        issues = []
+        issues = _external_validation_diagnostic_issues(target_diagnostics)
         for label, cmd_args in EXTERNAL_PROJECT_VALIDATION_COMMANDS:
             result = _run_external_validation_command(workspace, cmd_args, timeout=timeout)
             result["label"] = label
@@ -16598,6 +16861,7 @@ def run_external_project_validation(target, keep_workspace=False, workspace_pare
             "pass": len(issues) == 0,
             "workspace": str(workspace),
             "target": target_facts,
+            "target_diagnostics": target_diagnostics,
             "surface_files": len(copied),
             "commands": command_results,
             "issues": issues,
@@ -16627,6 +16891,14 @@ def cmd_external_project_validation(args):
     print(f"  Surface files: {result['surface_files']}")
     if result.get("workspace"):
         print(f"  Workspace:     {result['workspace']}")
+    if result.get("target_diagnostics"):
+        print("  Target-native diagnostics:")
+        for item in result["target_diagnostics"]:
+            line = f":{item['line']}" if "line" in item else ""
+            print(
+                f"    [{item['status']}] {item['category']} "
+                f"{item['path']}{line} - {item['message']}"
+            )
     for command in result["commands"]:
         status = "PASS" if command["exit_code"] == 0 else "FAIL"
         print(f"  [{status}] {command['label']} (exit {command['exit_code']})")

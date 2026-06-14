@@ -15,7 +15,7 @@ Use this workflow when your AI coding setup needs:
 
 ## 1.0.0 Readiness Boundary
 
-0.50.1 packages the 1.0.0 Release Gate Blocker Guard, but it is not the 1.0.0 release. It keeps `check-release --version 1.0.0` blocked with explicit RISK-036, external validation, official submission result/approval, and Codex Desktop lifecycle blockers instead of allowing missing release docs to hide those hard stops. 0.50.0 remains the mainstream agent read E2E evidence package: Codex, Claude Code, Gemini CLI, and opencode returned `pass=4, blocked=0, fail=0, total=4` for the target-cwd read use case. RISK-036 remains open: no official approval, no marketplace approval, no external validation full PASS, no Codex Desktop lifecycle PASS, no RISK-036 closure, and no 1.0.0 production-ready claim.
+0.50.2 packages the external project validation harness, but it is not the 1.0.0 release. It adds `external-project-validation --target <path>` so an external target can be checked from an isolated temporary workspace without mutating that target. 0.50.1 remains the 1.0.0 Release Gate Blocker Guard, and 0.50.0 remains the mainstream agent read E2E evidence package. RISK-036 remains open: no official approval, no marketplace approval, no two-real-project external validation full PASS, no Codex Desktop lifecycle PASS, no RISK-036 closure, and no 1.0.0 production-ready claim.
 
 ## Mainstream Agent Loading
 

@@ -2,6 +2,30 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.50.2] - 2026-06-13
+
+### 0.50.2 - External Project Validation Harness
+
+0.50.2 发布 REL-029 patch release package：把 FIX-131 的 external project validation harness 版本化。该版本新增 `external-project-validation --target <path>`，在隔离临时工作区复制 workflow surface、生成最小治理记录、安装 hooks，并运行 status/G1/governance-context/check-governance 矩阵；target 目录保持只读，不被 harness 写入。
+
+### Added
+
+- **REL-029**: 新增 0.50.2 release checklist、feature flags、rollback plan、manifest coverage 和 release boundary。
+- **FIX-131 external validation harness**: 新增 `external-project-validation` CLI、temporary workspace builder、generated external validation governance profile、hook installation、command matrix execution、target mutation boundary、workspace-parent containment guard、sentinel-scoped hot fact-source skip 和 timeout/OSError structured failure。
+- **TOOL-036**: 在 `infra/TOOLS.md` 中登记 External Project Validation harness。
+
+### Validation
+
+- `python -m unittest skills/software-project-governance/infra/tests/test_verify_workflow.py -k ExternalProjectValidationHarnessTests -v`
+- `python skills/software-project-governance/infra/verify_workflow.py external-project-validation --target <temp-target> --fail-on-issues --timeout 120`
+- `python -m unittest skills/software-project-governance/infra/tests/test_verify_workflow.py -v`
+- `python skills/software-project-governance/infra/verify_workflow.py check-release --version 0.50.2 --require-changelog --runtime-adapters`
+
+### Boundary
+
+- RISK-036 remains open. 0.50.2 releases only the validation harness, not two real external project full PASS evidence.
+- 0.50.2 release package does not include official submission approval, marketplace approval, external validation full PASS for two real projects, Codex Desktop lifecycle PASS, RISK-036 closure, or 1.0.0 production-ready approval.
+
 ## [0.50.1] - 2026-06-13
 
 ### 0.50.1 - 1.0.0 Release Gate Blocker Guard

@@ -127,6 +127,7 @@ if [ -n "$INSTALLED_HOOK" ] && [ "$SELF_HOOK" = "$INSTALLED_HOOK" ] && [ -f "$SO
     if ! cmp -s "$SELF_HOOK" "$SOURCE_HOOK_PATH" 2>/dev/null; then
         SOURCE_VER=$(grep '@version:' "$SOURCE_HOOK" 2>/dev/null | head -1 | sed 's/.*@version: *//')
         cp "$SOURCE_HOOK_PATH" "$SELF_HOOK" 2>/dev/null && \
+            chmod +x "$SELF_HOOK" 2>/dev/null && \
             echo "🔄 GOVERNANCE: Hook '$HOOK_NAME' self-upgraded to v${SOURCE_VER:-?}. Restarting with latest version..." && \
             exec "$SELF_HOOK" "$@"
     fi

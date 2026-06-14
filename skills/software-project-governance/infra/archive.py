@@ -1100,14 +1100,18 @@ def rollback_last_migration():
         if d.exists():
             for f in d.glob("*.md"):
                 if f.name != ".gitkeep":
-                    recent_files.append((f.stat().st_mtime, subdir, f))
+                    stat_result = f.stat()
+                    incremental_priority = 1 if "-incremental-" in f.name else 0
+                    recent_files.append(
+                        (stat_result.st_mtime_ns, incremental_priority, f.name, subdir, f)
+                    )
 
     if not recent_files:
         result["details"] = "没有找到归档文件，无法回滚。"
         return result
 
     recent_files.sort(reverse=True)
-    mtime, subdir, archive_file = recent_files[0]
+    _mtime_ns, _incremental_priority, _name, subdir, archive_file = recent_files[0]
 
     migration_files = _get_migration_archive_group(subdir, archive_file)
     result["rolled_back_files"] = [

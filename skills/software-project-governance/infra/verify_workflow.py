@@ -24,9 +24,14 @@ def _display_path(path, root=None):
     """Return repo-relative path when possible, without Path.is_relative_to()."""
     root = root or ROOT
     try:
-        return path.relative_to(root)
-    except ValueError:
+        path_abs = os.path.abspath(os.fspath(path))
+        root_abs = os.path.abspath(os.fspath(root))
+        common = os.path.commonpath([path_abs, root_abs])
+        if os.path.normcase(common) == os.path.normcase(root_abs):
+            return Path(os.path.relpath(path_abs, root_abs))
+    except (OSError, TypeError, ValueError):
         return path
+    return path
 
 
 def _read_text_normalized(path):

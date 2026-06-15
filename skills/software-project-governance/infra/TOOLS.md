@@ -43,6 +43,7 @@
 | TOOL-035 | Mainstream Agent Loading guard | script + README/adapter docs contract | `infra/verify_workflow.py check-mainstream-agent-loading` + `check-governance` Check 28n | 0.47.0 README mainstream loading matrix、Tier 1 adapter loading guide、Tier 2 compatibility/research rows 或 no-overclaim boundary 变更后 | 调研/测试/发布/维护 | 是 |
 | TOOL-036 | External Project Validation harness | script + temporary workspace | `infra/verify_workflow.py external-project-validation --target <path> --fail-on-issues` | 1.0.0 前外部项目验证、VAL-001 复跑、真实外部 target 的完整 workflow surface 验证 | 测试/发布/维护 | 是 |
 | TOOL-037 | Dynamic Lifecycle Registry guard | script + registry | `infra/verify_workflow.py check-lifecycle-registry` + `core/lifecycle-registry.json` | 0.51.0 lifecycle registry、classic-phase-gate 兼容 preset、flow unit schema 或 schema-only/no-overclaim 边界变更后 | 架构/测试/发布/维护 | 是 |
+| TOOL-038 | Flow Unit Runtime hot-state guard | script + optional hot state | `infra/verify_workflow.py check-flow-unit-runtime [--fixture <path>] --fail-on-issues` + optional `.governance/flow-unit-runtime.json` | 0.52.0 flow-unit runtime visibility、active lanes、per-unit gate state、loop counters、blocked downstream units 或 rollup status 变更后 | 架构/测试/发布/维护 | 是 |
 
 ## 工具详情
 
@@ -426,6 +427,17 @@
 - **边界**：schema-only registry；不激活 flow-unit runtime；不迁移项目；不替代 classic G1-G11；不关闭 RISK-036/RISK-037；不是 1.0.0 production-ready
 - **被以下子工作流使用**：架构设计（architecture）、测试（testing）、发布（release）、维护（maintenance）
 
+### TOOL-038：Flow Unit Runtime hot-state guard
+
+- **文件**：`infra/verify_workflow.py`
+- **子命令**：`check-flow-unit-runtime [--fixture <path>] [--fail-on-issues]`
+- **输入**：可选热状态文件 `.governance/flow-unit-runtime.json`，包含 `workflow_model`、`flow_units`、`active_lanes`、per-unit `gate_state`、`loop_state.loop_count`、`blocked_downstream_units`、`rollup_status` 和 no-overclaim boundary；文件缺失时安全通过并报告 NOT_FOUND。
+- **输出**：flow-unit runtime hot-state 检查结果，展示 workflow model、active lanes、rollup status、blocked downstream units 和 loop counters。
+- **触发条件**：0.52.0 flow-unit runtime visibility、status/context output、python_game 多章节热状态、dependency blocking 或 loop counter 语义变更后。
+- **依赖**：`check-lifecycle-registry`、classic G1-G11 vocabulary、optional hot project state。
+- **边界**：runtime visibility only；不激活 declarative gate engine；不迁移项目；classic G1-G11 保持兼容；不关闭 RISK-036/RISK-037；不是 1.0.0 production-ready。
+- **被以下子工作流使用**：架构设计（architecture）、测试（testing）、发布（release）、维护（maintenance）
+
 ## 工具与子工作流的关系矩阵
 
 | 工具 | 立项 | 调研 | 选型 | 环境 | 架构 | 开发 | 测试 | CI/CD | 发布 | 运营 | 维护 |
@@ -465,6 +477,7 @@
 | Mainstream Agent Loading guard | | ● | | | ○ | | ● | | ● | | ● |
 | External Project Validation harness | | | | | | | ● | | ● | | ● |
 | Dynamic Lifecycle Registry guard | | | | | ● | | ● | | ● | | ● |
+| Flow Unit Runtime hot-state guard | | | | | ● | | ● | | ● | | ● |
 
 > ● 主要使用者  ○ 可选用
 

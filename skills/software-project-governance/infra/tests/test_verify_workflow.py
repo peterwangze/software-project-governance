@@ -3602,6 +3602,296 @@ class LifecycleRegistryTests(unittest.TestCase):
             self.assertTrue(any("forbidden lifecycle overclaim `1.0.0 production-ready`" in issue for issue in issues))
 
 
+class FlowUnitRuntimeTests(unittest.TestCase):
+    """FIX-136: optional flow-unit runtime hot state is visibility-only."""
+
+    def _unit(self, idx, lane, stage, *, deps=None, blockers=None, loop_count=0, gate_status=None):
+        return {
+            "flow_unit_id": f"game.chapter.{idx:02d}",
+            "title": f"Chapter {idx}",
+            "unit_type": "chapter",
+            "project_type": "game",
+            "lifecycle_mode": "dynamic-flow-gate",
+            "current_stage": stage,
+            "current_subphase": "backlog" if lane == "backlog" else lane,
+            "gate_lane": lane,
+            "gate_references": ["G5"] if lane == "backlog" else ["G6", "G7"],
+            "allowed_next_transitions": ["classic-G5"],
+            "dependencies": deps or [],
+            "blockers": blockers or [],
+            "evidence_refs": [],
+            "loop_state": {
+                "active_loop": loop_count > 0,
+                "loop_count": loop_count,
+                "last_loop_type": "defect-rework" if loop_count else None,
+            },
+            "runtime_status_source": "hot-project-state",
+            "gate_state": {"status": gate_status or lane},
+        }
+
+    def _runtime(self, mutate=None):
+        units = [
+            self._unit(1, "released", "operations", gate_status="released"),
+            self._unit(2, "testing", "testing", deps=["game.chapter.01"], loop_count=1, gate_status="testing"),
+            self._unit(3, "development", "development", deps=["game.chapter.02"], gate_status="in-progress"),
+        ]
+        for idx in range(4, 11):
+            units.append(self._unit(idx, "backlog", "architecture", deps=[f"game.chapter.{idx - 1:02d}"], gate_status="backlog"))
+        data = {
+            "schema_version": "1.0",
+            "workflow_model": "dynamic-flow-gate",
+            "default_lifecycle_mode": "classic-phase-gate",
+            "runtime_scope": "runtime-visibility-only",
+            "runtime_status_source": "hot-project-state",
+            "declarative_gate_engine": False,
+            "project_migration": False,
+            "active_lanes": {
+                "released": ["game.chapter.01"],
+                "testing": ["game.chapter.02"],
+                "development": ["game.chapter.03"],
+                "backlog": [f"game.chapter.{idx:02d}" for idx in range(4, 11)],
+            },
+            "blocked_downstream_units": [],
+            "rollup_status": "chapter 1 released; chapter 2 testing; chapter 3 development; chapter 4-10 backlog",
+            "flow_units": units,
+            "no_overclaim_boundary": [
+                "Flow-unit runtime is runtime visibility only.",
+                "Flow-unit runtime does not activate declarative gate engine.",
+                "Flow-unit runtime does not migrate projects.",
+                "Classic G1-G11 remains compatible.",
+                "Flow-unit runtime does not close RISK-036.",
+                "Flow-unit runtime does not close RISK-037.",
+                "Flow-unit runtime does not claim 1.0.0 production-ready.",
+            ],
+        }
+        if mutate:
+            mutate(data)
+        return data
+
+    def _write_runtime(self, root, mutate=None, raw=None):
+        path = root / ".governance/flow-unit-runtime.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if raw is not None:
+            path.write_text(raw, encoding="utf-8")
+        else:
+            path.write_text(json.dumps(self._runtime(mutate), indent=2), encoding="utf-8")
+        return path
+
+    def test_flow_unit_runtime_missing_file_is_safe(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self.assertEqual(vw.check_flow_unit_runtime(root), [])
+            context = vw.discover_flow_unit_runtime_context(root)
+            self.assertEqual(context["status"], "NOT_FOUND")
+
+    def test_flow_unit_runtime_accepts_python_game_distribution(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_runtime(root)
+            self.assertEqual(vw.check_flow_unit_runtime(root), [])
+            context = vw.discover_flow_unit_runtime_context(root)
+            self.assertEqual(context["workflow_model"], "dynamic-flow-gate")
+            self.assertEqual(context["active_lanes"]["released"], ["game.chapter.01"])
+            self.assertEqual(context["active_lanes"]["testing"], ["game.chapter.02"])
+            self.assertEqual(context["active_lanes"]["development"], ["game.chapter.03"])
+            self.assertEqual(context["active_lanes"]["backlog"], [f"game.chapter.{idx:02d}" for idx in range(4, 11)])
+            self.assertIn("chapter 1 released", context["rollup_status"])
+
+    def test_flow_unit_runtime_dependency_blocking_only_downstream(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data):
+                data["flow_units"][2]["blockers"] = ["missing implementation evidence"]
+                data["flow_units"][2]["gate_state"]["status"] = "blocked"
+                data["blocked_downstream_units"] = ["game.chapter.04"]
+
+            self._write_runtime(root, mutate=mutate)
+            self.assertEqual(vw.check_flow_unit_runtime(root), [])
+            context = vw.discover_flow_unit_runtime_context(root)
+            self.assertEqual(context["blocked_downstream_units"], ["game.chapter.04"])
+            self.assertNotIn("game.chapter.02", context["blocked_downstream_units"])
+
+    def test_flow_unit_runtime_rejects_sibling_completion_implied_by_bad_blocking(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data):
+                data["flow_units"][2]["blockers"] = ["blocked"]
+                data["flow_units"][2]["gate_state"]["status"] = "blocked"
+                data["blocked_downstream_units"] = ["game.chapter.02", "game.chapter.04"]
+
+            self._write_runtime(root, mutate=mutate)
+            issues = vw.check_flow_unit_runtime(root)
+            self.assertTrue(any("only declared downstream dependents" in issue for issue in issues))
+
+    def test_flow_unit_runtime_loop_counters_are_reported_and_validated(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_runtime(root)
+            context = vw.discover_flow_unit_runtime_context(root)
+            self.assertEqual(context["loop_counters"]["game.chapter.02"], 1)
+
+            def mutate(data):
+                data["flow_units"][1]["loop_state"]["loop_count"] = -1
+
+            self._write_runtime(root, mutate=mutate)
+            issues = vw.check_flow_unit_runtime(root)
+            self.assertTrue(any("loop_state.loop_count must be a non-negative integer" in issue for issue in issues))
+
+    def test_flow_unit_runtime_malformed_nested_state_fails_closed_without_discovery_crash(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data):
+                data["flow_units"][1]["gate_state"] = "testing"
+                data["flow_units"][2]["loop_state"]["loop_count"] = "many"
+
+            self._write_runtime(root, mutate=mutate)
+            context = vw.discover_flow_unit_runtime_context(root)
+            self.assertEqual(context["status"], "FOUND")
+            self.assertEqual(context["loop_counters"]["game.chapter.03"], 0)
+            issues = vw.check_flow_unit_runtime(root)
+            self.assertTrue(any("gate_state must be an object" in issue for issue in issues))
+            self.assertTrue(any("loop_state.loop_count must be a non-negative integer" in issue for issue in issues))
+
+    def test_flow_unit_runtime_preserves_classic_and_no_overclaim_boundary(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data):
+                data["default_lifecycle_mode"] = "dynamic-flow-gate"
+                data["declarative_gate_engine"] = True
+                data["no_overclaim_boundary"].append("RISK-037 closed and 1.0.0 production-ready.")
+
+            self._write_runtime(root, mutate=mutate)
+            issues = vw.check_flow_unit_runtime(root)
+            self.assertTrue(any("default_lifecycle_mode must preserve classic-phase-gate" in issue for issue in issues))
+            self.assertTrue(any("declarative_gate_engine must be false" in issue for issue in issues))
+            self.assertTrue(any("forbidden flow-unit runtime overclaim `risk-037 closed`" in issue for issue in issues))
+            self.assertTrue(any("forbidden flow-unit runtime overclaim `1.0.0 production-ready`" in issue for issue in issues))
+
+    def test_flow_unit_runtime_rejects_equivalent_risk_closure_overclaims(self):
+        variants = [
+            ("RISK-037 is closed.", "risk-037 closed"),
+            ("Closed RISK-037 after runtime work.", "risk-037 closed"),
+            ("RISK-037 closure achieved.", "risk-037 closure achieved"),
+            ("RISK-036 is closed.", "risk-036 closed"),
+            ("Closed RISK-036 after external validation.", "risk-036 closed"),
+            ("RISK-036 closure achieved.", "risk-036 closure achieved"),
+        ]
+        for wording, expected in variants:
+            with self.subTest(wording=wording):
+                with tempfile.TemporaryDirectory() as td:
+                    root = Path(td)
+
+                    def mutate(data, wording=wording):
+                        data["rollup_status"] = wording
+
+                    self._write_runtime(root, mutate=mutate)
+                    issues = vw.check_flow_unit_runtime(root)
+                    self.assertTrue(
+                        any(f"forbidden flow-unit runtime overclaim `{expected}`" in issue for issue in issues),
+                        issues,
+                    )
+
+    def test_flow_unit_runtime_preserves_scoped_risk_closure_negation(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data):
+                data["rollup_status"] = (
+                    "Flow-unit runtime does not claim RISK-037 is closed; "
+                    "it does not claim closed RISK-036 evidence."
+                )
+
+            self._write_runtime(root, mutate=mutate)
+            issues = vw.check_flow_unit_runtime(root)
+            self.assertFalse(any("forbidden flow-unit runtime overclaim `risk-037" in issue for issue in issues))
+            self.assertFalse(any("forbidden flow-unit runtime overclaim `risk-036" in issue for issue in issues))
+
+    def test_flow_unit_runtime_invalid_schema_fails_closed(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_runtime(root, raw=json.dumps([]))
+            issues = vw.check_flow_unit_runtime(root)
+            self.assertEqual(len(issues), 1)
+            self.assertTrue(issues[0].endswith("flow-unit runtime root must be an object"))
+            context = vw.discover_flow_unit_runtime_context(root)
+            self.assertEqual(context["status"], "INVALID")
+            self.assertIn("root must be an object", " ".join(context["source_facts"]))
+
+    def test_flow_unit_runtime_command_fails_closed_for_non_object_root_without_crash(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_runtime(root, raw=json.dumps([]))
+            args = argparse.Namespace(fixture=str(root), fail_on_issues=True)
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                with self.assertRaises(SystemExit) as cm:
+                    vw.cmd_check_flow_unit_runtime(args)
+            self.assertEqual(cm.exception.code, 1)
+            output = buf.getvalue()
+            self.assertIn("Runtime state: INVALID", output)
+            self.assertIn("flow-unit runtime root must be an object", output)
+
+    def test_flow_unit_runtime_command_fails_closed_for_non_string_boundary_item_without_crash(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data):
+                data["no_overclaim_boundary"].append({"bad": "state"})
+
+            self._write_runtime(root, mutate=mutate)
+            args = argparse.Namespace(fixture=str(root), fail_on_issues=True)
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                with self.assertRaises(SystemExit) as cm:
+                    vw.cmd_check_flow_unit_runtime(args)
+            self.assertEqual(cm.exception.code, 1)
+            output = buf.getvalue()
+            self.assertIn("Runtime state: FOUND", output)
+            self.assertIn("no_overclaim_boundary must be a non-empty string list", output)
+
+    def test_governance_context_ignores_malformed_flow_runtime_without_crash(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_runtime(root, raw=json.dumps([]))
+            context = vw.discover_governance_context(root)
+            self.assertIn(context["status"], {"FOUND", "NOT_FOUND"})
+            self.assertIsNone(context.get("flow_unit_runtime"))
+
+    def test_governance_context_keeps_malformed_boundary_runtime_visible_without_crash(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data):
+                data["no_overclaim_boundary"].append(42)
+
+            self._write_runtime(root, mutate=mutate)
+            context = vw.discover_governance_context(root)
+            self.assertIn(context["status"], {"FOUND", "NOT_FOUND"})
+            flow_context = context.get("flow_unit_runtime")
+            self.assertIsNotNone(flow_context)
+            self.assertEqual(flow_context["status"], "FOUND")
+            self.assertIn("runtime visibility only", flow_context["no_overclaim_boundary"])
+            issues = vw.check_flow_unit_runtime(root)
+            self.assertTrue(any("no_overclaim_boundary must be a non-empty string list" in issue for issue in issues))
+
+    def test_flow_unit_runtime_command_reports_context(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_runtime(root)
+            args = argparse.Namespace(fixture=str(root), fail_on_issues=True)
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                vw.cmd_check_flow_unit_runtime(args)
+            output = buf.getvalue()
+            self.assertIn("Flow Unit Runtime Check", output)
+            self.assertIn("Workflow model: dynamic-flow-gate", output)
+            self.assertIn("Result: PASSED", output)
+
+
 class CapabilitySelectionTests(unittest.TestCase):
     """FIX-117: restricted host capability selection must degrade honestly."""
 

@@ -2130,6 +2130,41 @@ CAPABILITY_REGISTRY_PATH = ROOT / "skills/software-project-governance/core/capab
 LIFECYCLE_REGISTRY_PATH = ROOT / "skills/software-project-governance/core/lifecycle-registry.json"
 LIFECYCLE_REGISTRY_ACTIVE_MODE = "classic-phase-gate"
 LIFECYCLE_REGISTRY_DYNAMIC_MODE = "dynamic-flow-gate"
+FLOW_UNIT_RUNTIME_STATE_REL = Path(".governance/flow-unit-runtime.json")
+FLOW_UNIT_RUNTIME_SCOPE = "runtime-visibility-only"
+FLOW_UNIT_RUNTIME_ALLOWED_SOURCES = {
+    "hot-project-state",
+    "runtime-visibility-only",
+    "example-runtime-fixture",
+}
+FLOW_UNIT_RUNTIME_ALLOWED_GATE_STATUSES = {
+    "backlog",
+    "pending",
+    "not-started",
+    "in-progress",
+    "testing",
+    "passed",
+    "released",
+    "blocked",
+}
+FLOW_UNIT_RUNTIME_BOUNDARY_TOKENS = [
+    "runtime visibility only",
+    "does not activate declarative gate engine",
+    "does not migrate projects",
+    "classic G1-G11 remains compatible",
+    "does not close RISK-036",
+    "does not close RISK-037",
+    "does not claim 1.0.0 production-ready",
+]
+FLOW_UNIT_RUNTIME_FORBIDDEN_OVERCLAIMS = [
+    ("risk-036 closed", re.compile(r"\brisk-036\b[^\n.;|]{0,48}\bclosed\b")),
+    ("risk-036 closed", re.compile(r"\bclosed\b[^\n.;|]{0,48}\brisk-036\b")),
+    ("risk-036 closure achieved", re.compile(r"\brisk-036\b[^\n.;|]{0,48}\bclosure\s+achieved\b")),
+    ("risk-037 closed", re.compile(r"\brisk-037\b[^\n.;|]{0,48}\bclosed\b")),
+    ("risk-037 closed", re.compile(r"\bclosed\b[^\n.;|]{0,48}\brisk-037\b")),
+    ("risk-037 closure achieved", re.compile(r"\brisk-037\b[^\n.;|]{0,48}\bclosure\s+achieved\b")),
+    ("1.0.0 production-ready", re.compile(r"\b1\.0\.0\s+production-ready\b")),
+]
 LIFECYCLE_REGISTRY_GATES = [f"G{i}" for i in range(1, 12)]
 LIFECYCLE_REGISTRY_STAGE_IDS = [
     "initiation",
@@ -2240,6 +2275,7 @@ GOVERNANCE_PACK_KNOWN_CHECKS = {
     "check-governance-pack-status",
     "check-capability-registry",
     "check-lifecycle-registry",
+    "check-flow-unit-runtime",
     "check-host-capability-context",
     "check-official-submission-ecosystem",
     "check-mainstream-agent-loading",
@@ -3378,6 +3414,256 @@ def check_lifecycle_registry(root=None):
         if "1.0.0 production-ready" in lowered and not _line_has_scoped_claim_negation(text, "1.0.0 production-ready"):
             failures.append(f"{display}: forbidden lifecycle overclaim `1.0.0 production-ready`")
 
+    return failures
+
+
+def _flow_unit_runtime_path(root=None):
+    return (root or ROOT) / FLOW_UNIT_RUNTIME_STATE_REL
+
+
+def _load_flow_unit_runtime(root=None):
+    root = root or ROOT
+    runtime_path = _flow_unit_runtime_path(root)
+    display = _display_path(runtime_path, root)
+    if not runtime_path.exists():
+        return None, [f"{display}: NOT_FOUND safe; flow-unit runtime hot state is optional"]
+    try:
+        state = json.loads(runtime_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        return None, [f"{display}: invalid JSON: {exc}"]
+    if not isinstance(state, dict):
+        return None, [f"{display}: flow-unit runtime root must be an object"]
+    return state, []
+
+
+def _flow_runtime_text_values(value):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _flow_runtime_text_values(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _flow_runtime_text_values(item)
+
+
+def _flow_runtime_boundary_display(value):
+    if isinstance(value, list):
+        return "; ".join(item for item in value if isinstance(item, str))
+    return str(value or "")
+
+
+def discover_flow_unit_runtime_context(root=None):
+    """Return visibility-only flow-unit context from optional hot project state."""
+    root = root or ROOT
+    runtime_path = _flow_unit_runtime_path(root)
+    state, load_issues = _load_flow_unit_runtime(root)
+    if state is None:
+        return {
+            "status": "NOT_FOUND" if load_issues and "NOT_FOUND safe" in load_issues[0] else "INVALID",
+            "path": str(_display_path(runtime_path, root)),
+            "workflow_model": "classic-phase-gate",
+            "active_lanes": {},
+            "rollup_status": "not found",
+            "blocked_downstream_units": [],
+            "loop_counters": {},
+            "source_facts": load_issues,
+            "no_overclaim_boundary": "runtime visibility only; classic G1-G11 remains compatible",
+        }
+
+    flow_units = state.get("flow_units", [])
+    if not isinstance(flow_units, list):
+        flow_units = []
+    active_lanes = {}
+    loop_counters = {}
+    blocked_downstream = []
+    unit_ids = {
+        unit.get("flow_unit_id")
+        for unit in flow_units
+        if isinstance(unit, dict) and unit.get("flow_unit_id")
+    }
+    directly_blocked = {
+        unit.get("flow_unit_id")
+        for unit in flow_units
+        if isinstance(unit, dict)
+        and unit.get("flow_unit_id")
+        and (
+            unit.get("blockers")
+            or (
+                isinstance(unit.get("gate_state"), dict)
+                and unit.get("gate_state", {}).get("status") == "blocked"
+            )
+        )
+    }
+    for unit in flow_units:
+        if not isinstance(unit, dict):
+            continue
+        unit_id = unit.get("flow_unit_id")
+        lane = unit.get("gate_lane")
+        if unit_id and lane:
+            active_lanes.setdefault(lane, []).append(unit_id)
+        loop_state = unit.get("loop_state") if isinstance(unit.get("loop_state"), dict) else {}
+        if unit_id:
+            loop_count = loop_state.get("loop_count", 0)
+            if isinstance(loop_count, bool):
+                loop_counters[unit_id] = 0
+            elif isinstance(loop_count, int):
+                loop_counters[unit_id] = loop_count
+            elif isinstance(loop_count, str) and loop_count.strip().isdigit():
+                loop_counters[unit_id] = int(loop_count.strip())
+            else:
+                loop_counters[unit_id] = 0
+        deps = unit.get("dependencies") if isinstance(unit.get("dependencies"), list) else []
+        if unit_id and any(dep in directly_blocked for dep in deps):
+            blocked_downstream.append(unit_id)
+
+    declared_blocked = state.get("blocked_downstream_units")
+    blocked_downstream_units = declared_blocked if isinstance(declared_blocked, list) else blocked_downstream
+    return {
+        "status": "FOUND",
+        "path": str(_display_path(runtime_path, root)),
+        "workflow_model": state.get("workflow_model", ""),
+        "active_lanes": active_lanes,
+        "rollup_status": state.get("rollup_status", ""),
+        "blocked_downstream_units": blocked_downstream_units,
+        "loop_counters": loop_counters,
+        "source_facts": [
+            f"{_display_path(runtime_path, root)}: {len(unit_ids)} flow unit(s), "
+            f"{len(active_lanes)} active lane(s)"
+        ],
+        "no_overclaim_boundary": _flow_runtime_boundary_display(state.get("no_overclaim_boundary")),
+    }
+
+
+def check_flow_unit_runtime(root=None):
+    """FIX-136: validate optional flow-unit hot state without activating gate engine."""
+    root = root or ROOT
+    runtime_path = _flow_unit_runtime_path(root)
+    display = _display_path(runtime_path, root)
+    state, load_issues = _load_flow_unit_runtime(root)
+    if state is None:
+        return [] if load_issues and "NOT_FOUND safe" in load_issues[0] else load_issues
+
+    failures = []
+    if state.get("schema_version") not in {"1.0", 1}:
+        failures.append(f"{display}: schema_version must be 1.0")
+    if state.get("runtime_scope") != FLOW_UNIT_RUNTIME_SCOPE:
+        failures.append(f"{display}: runtime_scope must be {FLOW_UNIT_RUNTIME_SCOPE}")
+    if state.get("workflow_model") not in {LIFECYCLE_REGISTRY_ACTIVE_MODE, LIFECYCLE_REGISTRY_DYNAMIC_MODE}:
+        failures.append(f"{display}: workflow_model must be classic-phase-gate or dynamic-flow-gate")
+    if state.get("default_lifecycle_mode") != LIFECYCLE_REGISTRY_ACTIVE_MODE:
+        failures.append(f"{display}: default_lifecycle_mode must preserve {LIFECYCLE_REGISTRY_ACTIVE_MODE}")
+    if state.get("declarative_gate_engine") is not False:
+        failures.append(f"{display}: declarative_gate_engine must be false for runtime visibility only")
+    if state.get("project_migration") is not False:
+        failures.append(f"{display}: project_migration must be false for runtime visibility only")
+    if state.get("runtime_status_source") not in FLOW_UNIT_RUNTIME_ALLOWED_SOURCES:
+        failures.append(f"{display}: runtime_status_source must be a declared hot-state/runtime-visibility source")
+
+    boundary = state.get("no_overclaim_boundary")
+    if not _is_valid_string_list(boundary):
+        failures.append(f"{display}: no_overclaim_boundary must be a non-empty string list")
+        boundary = []
+    boundary_text = " ".join(boundary).lower()
+    for token in FLOW_UNIT_RUNTIME_BOUNDARY_TOKENS:
+        if token.lower() not in boundary_text:
+            failures.append(f"{display}: missing flow-unit runtime boundary token `{token}`")
+
+    flow_units = state.get("flow_units")
+    if not isinstance(flow_units, list) or not flow_units:
+        failures.append(f"{display}: flow_units must be a non-empty list")
+        flow_units = []
+    seen = []
+    unit_by_id = {}
+    directly_blocked = set()
+    for unit in flow_units:
+        if not isinstance(unit, dict):
+            failures.append(f"{display}: each flow unit must be an object")
+            continue
+        unit_id = unit.get("flow_unit_id")
+        label = f"{display}: flow unit {unit_id or '<missing>'}"
+        if not isinstance(unit_id, str) or not unit_id.strip():
+            failures.append(f"{label}: flow_unit_id must be a non-empty string")
+            continue
+        seen.append(unit_id)
+        unit_by_id[unit_id] = unit
+        for field in LIFECYCLE_REGISTRY_REQUIRED_FLOW_FIELDS:
+            if field not in unit:
+                failures.append(f"{label}: missing required field `{field}`")
+        if unit.get("lifecycle_mode") not in {LIFECYCLE_REGISTRY_ACTIVE_MODE, LIFECYCLE_REGISTRY_DYNAMIC_MODE}:
+            failures.append(f"{label}: lifecycle_mode must be classic-phase-gate or dynamic-flow-gate")
+        if unit.get("current_stage") not in LIFECYCLE_REGISTRY_STAGE_IDS:
+            failures.append(f"{label}: current_stage must reference classic stage vocabulary")
+        if not isinstance(unit.get("gate_lane"), str) or not unit.get("gate_lane"):
+            failures.append(f"{label}: gate_lane must be a non-empty string")
+        gate_refs = unit.get("gate_references")
+        if not _is_valid_string_list(gate_refs):
+            failures.append(f"{label}: gate_references must be a non-empty string list")
+        else:
+            for gate_id in gate_refs:
+                if gate_id not in LIFECYCLE_REGISTRY_GATES:
+                    failures.append(f"{label}: unknown gate reference `{gate_id}`")
+        for field in ("dependencies", "blockers", "evidence_refs"):
+            if not isinstance(unit.get(field), list):
+                failures.append(f"{label}: {field} must be a list")
+        loop_state = unit.get("loop_state")
+        if not isinstance(loop_state, dict):
+            failures.append(f"{label}: loop_state must be an object")
+        else:
+            loop_count = loop_state.get("loop_count")
+            if (
+                isinstance(loop_count, bool)
+                or not isinstance(loop_count, int)
+                or loop_count < 0
+            ):
+                failures.append(f"{label}: loop_state.loop_count must be a non-negative integer")
+        gate_state = unit.get("gate_state")
+        if not isinstance(gate_state, dict):
+            failures.append(f"{label}: gate_state must be an object")
+        elif gate_state.get("status") not in FLOW_UNIT_RUNTIME_ALLOWED_GATE_STATUSES:
+            failures.append(f"{label}: gate_state.status is not allowed")
+        if unit.get("blockers") or (isinstance(gate_state, dict) and gate_state.get("status") == "blocked"):
+            directly_blocked.add(unit_id)
+
+    duplicates = sorted({unit_id for unit_id in seen if seen.count(unit_id) > 1})
+    for unit_id in duplicates:
+        failures.append(f"{display}: duplicate flow_unit_id `{unit_id}`")
+    for unit_id, unit in unit_by_id.items():
+        for dep in unit.get("dependencies", []) if isinstance(unit.get("dependencies"), list) else []:
+            if dep not in unit_by_id:
+                failures.append(f"{display}: flow unit {unit_id} has unknown dependency `{dep}`")
+
+    context = discover_flow_unit_runtime_context(root)
+    declared_lanes = state.get("active_lanes")
+    if declared_lanes is not None and declared_lanes != context["active_lanes"]:
+        failures.append(f"{display}: active_lanes must match flow_units by gate_lane")
+    expected_blocked_downstream = sorted([
+        unit_id for unit_id, unit in unit_by_id.items()
+        if any(dep in directly_blocked for dep in unit.get("dependencies", []))
+    ])
+    declared_blocked_downstream = state.get("blocked_downstream_units")
+    if not isinstance(declared_blocked_downstream, list):
+        failures.append(f"{display}: blocked_downstream_units must be a list")
+        declared_blocked_downstream = []
+    if sorted(declared_blocked_downstream) != expected_blocked_downstream:
+        failures.append(f"{display}: blocked_downstream_units must include only declared downstream dependents")
+    if any(unit_id in declared_blocked_downstream for unit_id in directly_blocked):
+        failures.append(f"{display}: directly blocked units must not be listed as downstream")
+    rollup_status = state.get("rollup_status")
+    if not isinstance(rollup_status, str) or not rollup_status.strip():
+        failures.append(f"{display}: rollup_status must be a non-empty string")
+    for text in _flow_runtime_text_values(state):
+        lowered = text.lower()
+        for label, pattern in FLOW_UNIT_RUNTIME_FORBIDDEN_OVERCLAIMS:
+            for match in pattern.finditer(lowered):
+                matched_claim = text[match.start():match.end()]
+                if not _line_has_scoped_claim_negation(text, matched_claim):
+                    failures.append(f"{display}: forbidden flow-unit runtime overclaim `{label}`")
+                    break
+        if "declarative gate engine active" in lowered:
+            failures.append(f"{display}: forbidden declarative gate engine activation wording")
+        if "sibling completion implied" in lowered:
+            failures.append(f"{display}: sibling completion must not be implied")
     return failures
 
 
@@ -7264,6 +7550,7 @@ def _dedupe_context_items(items):
 def discover_governance_context(root=None):
     """Discover unfinished user work from recorded facts only."""
     root = _context_root(root)
+    flow_context = discover_flow_unit_runtime_context(root)
     recent_commit_facts = _parse_recent_commit_context_facts(root)
     items = _dedupe_context_items(
         _parse_plan_context_tasks(root)
@@ -7281,6 +7568,12 @@ def discover_governance_context(root=None):
             context["_items"] = risks
         if recent_commit_facts:
             context["source_facts"].append(f"git log --oneline -5: {recent_commit_facts[0]}")
+        if flow_context["status"] == "FOUND":
+            context["source_facts"].append(
+                f"{flow_context['path']}: flow-unit lanes {flow_context['active_lanes']}; "
+                f"rollup {flow_context['rollup_status']}"
+            )
+            context["flow_unit_runtime"] = flow_context
         return context
 
     first = items[0]
@@ -7298,6 +7591,11 @@ def discover_governance_context(root=None):
         source_facts.append(f".governance/risk-log.md: open risk(s) {risk_text}")
     if recent_commit_facts:
         source_facts.append(f"git log --oneline -5: {recent_commit_facts[0]}")
+    if flow_context["status"] == "FOUND":
+        source_facts.append(
+            f"{flow_context['path']}: flow-unit lanes {flow_context['active_lanes']}; "
+            f"blocked downstream {flow_context['blocked_downstream_units']}"
+        )
 
     if blocked:
         blocker_state = f"blocked fact recorded for {blocked[0]['task_id']}"
@@ -7321,6 +7619,7 @@ def discover_governance_context(root=None):
         "auto_continue": auto_continue,
         "interrupt_boundary": interrupt_boundary,
         "_items": items + risks,
+        "flow_unit_runtime": flow_context if flow_context["status"] == "FOUND" else None,
     }
 
 
@@ -7674,6 +7973,7 @@ def build_delivery_trust_snapshot(config=None, overview=None, gates=None, stats=
     stats = stats or parse_task_stats()
     resume = resume or parse_resume_state()
     context = resume.get("context") or discover_governance_context(ROOT)
+    flow_context = context.get("flow_unit_runtime") or discover_flow_unit_runtime_context(ROOT)
 
     goal = (
         config.get("项目目标")
@@ -7729,6 +8029,12 @@ def build_delivery_trust_snapshot(config=None, overview=None, gates=None, stats=
         "Goal": goal,
         "Stage": stage,
         "Gate/setup status": gate_status,
+        "Flow-unit lanes": (
+            f"{flow_context['active_lanes']}; rollup={flow_context['rollup_status']}; "
+            f"blocked_downstream={flow_context['blocked_downstream_units']}"
+            if flow_context.get("status") == "FOUND"
+            else "not found"
+        ),
         "Risk": risk,
         "Evidence": evidence,
         "Next action": next_action,
@@ -18033,6 +18339,41 @@ def cmd_check_lifecycle_registry(args):
     print()
 
 
+def cmd_check_flow_unit_runtime(args):
+    """Run optional flow-unit runtime hot-state guard."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    fixture = getattr(args, "fixture", None)
+    root = ROOT
+    if fixture:
+        fixture_path = Path(fixture)
+        root = fixture_path if fixture_path.is_absolute() else ROOT / fixture_path
+    context = discover_flow_unit_runtime_context(root)
+    issues = check_flow_unit_runtime(root)
+    print("\n=== Flow Unit Runtime Check ===")
+    print(f"  Root: {_display_path(root, ROOT)}")
+    print(f"  Runtime state: {context['status']} ({context['path']})")
+    print(f"  Workflow model: {context['workflow_model']}")
+    print(f"  Active lanes: {context['active_lanes']}")
+    print(f"  Rollup status: {context['rollup_status']}")
+    print(f"  Blocked downstream units: {context['blocked_downstream_units']}")
+    print(f"  Loop counters: {context['loop_counters']}")
+    print(f"  Boundary: {context['no_overclaim_boundary']}")
+    if issues:
+        print(f"  Result: FAILED — {len(issues)} issue(s)")
+        for issue in issues[:20]:
+            print(f"    - {issue}")
+        if len(issues) > 20:
+            print(f"    ... and {len(issues) - 20} more")
+        if getattr(args, "fail_on_issues", False):
+            sys.exit(1)
+    else:
+        print("  Result: PASSED — flow-unit runtime hot state is visibility-only or safely absent")
+    print()
+
+
 def cmd_check_host_capability_context(args):
     """Run restricted host capability context benchmark guard."""
     try:
@@ -18618,6 +18959,18 @@ def main():
     clr_p.add_argument("--fail-on-issues", action="store_true",
                        help="Exit with non-zero code if lifecycle registry is incomplete or activates runtime behavior")
 
+    # check-flow-unit-runtime (FIX-136)
+    cfur_p = subparsers.add_parser(
+        "check-flow-unit-runtime",
+        help="Check optional flow-unit runtime hot state without activating declarative gates",
+    )
+    cfur_p.add_argument(
+        "--fixture",
+        help="Optional project root/fixture to inspect instead of the current repository",
+    )
+    cfur_p.add_argument("--fail-on-issues", action="store_true",
+                        help="Exit with non-zero code if flow-unit runtime hot state is invalid")
+
     # check-host-capability-context (FIX-117)
     chc_p = subparsers.add_parser(
         "check-host-capability-context",
@@ -18770,6 +19123,7 @@ def main():
         "check-governance-packs": cmd_check_governance_packs,
         "check-capability-registry": cmd_check_capability_registry,
         "check-lifecycle-registry": cmd_check_lifecycle_registry,
+        "check-flow-unit-runtime": cmd_check_flow_unit_runtime,
         "check-host-capability-context": cmd_check_host_capability_context,
         "check-official-submission-ecosystem": cmd_check_official_submission_ecosystem,
         "check-mainstream-agent-loading": cmd_check_mainstream_agent_loading,

@@ -15,7 +15,7 @@ Use this workflow when your AI coding setup needs:
 
 ## 1.0.0 Readiness Boundary
 
-0.50.2 packages the external project validation harness, but it is not the 1.0.0 release. It adds `external-project-validation --target <path>` so an external target can be checked from an isolated temporary workspace without mutating that target. 0.50.1 remains the 1.0.0 Release Gate Blocker Guard, and 0.50.0 remains the mainstream agent read E2E evidence package. RISK-036 remains open: no official approval, no marketplace approval, no two-real-project external validation full PASS, no Codex Desktop lifecycle PASS, no RISK-036 closure, and no 1.0.0 production-ready claim.
+0.50.3 packages the External Installed Runtime Field Repair scope, but it is not the 1.0.0 release. It includes FIX-132 installed runtime path resolution, FIX-133 commit message source hardening, FIX-134 target-native external validation diagnostics, and VAL-003/VAL-004 diagnostic archives for shitu and python_game. Those two external validations are FAIL/PARTIAL diagnostics, not full PASS evidence. 0.50.2 remains the external validation harness package, 0.50.1 remains the 1.0.0 Release Gate Blocker Guard, and RISK-036 remains open: no official approval, no marketplace approval, no two-real-project external validation full PASS, no Codex Desktop lifecycle PASS, no RISK-036 closure, and no 1.0.0 production-ready claim.
 
 ## Mainstream Agent Loading
 

@@ -2,6 +2,36 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.50.3] - 2026-06-15
+
+### 0.50.3 - External Installed Runtime Field Repair
+
+0.50.3 发布 REL-030 conservative patch release package：把 FIX-132、FIX-133、FIX-134、VAL-003 和 VAL-004 纳入同一版本边界。该版本修复外部安装态 runtime 路径解析和 hook commit message source 风险，并把 external-project-validation 扩展到 target-native diagnostics；shitu 与 python_game 两个真实外部目标只归档为 FAIL/PARTIAL diagnostic，不构成 external validation full PASS。
+
+### Changed
+
+- **FIX-132 external installed runtime path resolver**: hooks 和 governance command templates 解析 `SOFTWARE_PROJECT_GOVERNANCE_HOME` / `SPG_HOME`、repo-local install 或全局 plugin cache，不再只依赖目标仓库内的 repo-local `skills/software-project-governance/`。
+- **FIX-133 hook message source hardening**: pre-commit 不再使用 stale `.git/COMMIT_EDITMSG` / `.git/GOV_COMMIT_MSG` 作为当前提交消息语义来源；commit-msg 继续以实际消息文件为权威来源。
+- **FIX-134 target-native field checks**: `external-project-validation --target` 报告目标原生入口 repo-local path assumption、installed hook version/content drift、legacy stale message source 和 repo-local self-upgrade source diagnostics。
+- **REL-030**: 新增 0.50.3 release checklist、feature flags、rollback plan、manifest coverage、README readiness boundary 和 release no-overclaim boundary。
+
+### Validation Archives
+
+- **VAL-003 shitu**: `D:\AI\agent\claude\coding\android\shitu` enhanced validation returned exit 1 and is archived as FAIL/PARTIAL diagnostic. It found `CLAUDE.md` repo-local path / verify / hook-copy assumptions plus installed hook drift and legacy pre-commit message-source semantics. Target files were not mutated.
+- **VAL-004 python_game**: `D:\AI\agent\claude\coding\python_game` enhanced validation returned exit 1 and is archived as FAIL/PARTIAL diagnostic. Native `CLAUDE.md` passed the repo-local path check, but installed hooks remained at 0.49.0 and pre-commit retained legacy message-source / self-upgrade semantics. Target files were not mutated.
+
+### Validation
+
+- `python skills/software-project-governance/infra/verify_workflow.py check-version-consistency`
+- `python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues`
+- `python skills/software-project-governance/infra/verify_workflow.py check-release --version 0.50.3 --require-changelog --runtime-adapters`
+- `git diff --check`
+
+### Boundary
+
+- RISK-036 remains open. 0.50.3 releases field repairs and diagnostic archives, not two real external project full PASS evidence.
+- 0.50.3 release package does not include official submission approval, marketplace approval, two-real-project external validation full PASS, Codex Desktop lifecycle PASS, RISK-036 closure, or 1.0.0 production-ready approval.
+
 ## [0.50.2] - 2026-06-13
 
 ### 0.50.2 - External Project Validation Harness

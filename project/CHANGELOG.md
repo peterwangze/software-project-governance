@@ -2,6 +2,37 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.52.0] - 2026-06-15
+
+### 0.52.0 - Flow Unit Runtime Visibility
+
+0.52.0 发布 REL-032 Flow Unit Runtime Visibility release package：把 FIX-136 optional flow-unit hot-state visibility 版本化。该版本新增 `.governance/flow-unit-runtime.json` 的可选热状态校验、`check-flow-unit-runtime` CLI，以及 governance context/status 对 flow-unit lanes、per-unit gate_state、loop counters、blocked downstream units 和 rollup status 的只读可见性。
+
+### Added
+
+- **FIX-136 flow-unit runtime visibility**: 新增 optional `.governance/flow-unit-runtime.json` hot-state validator；缺失时 NOT_FOUND safe，格式错误或越界声明 fail-closed。
+- **Flow-unit context/status facts**: governance context/status discovery 可以展示 active lanes、per-unit gate_state、loop counters、blocked downstream units 和 rollup status。
+- **CLI guard**: `check-flow-unit-runtime [--fixture <path>] [--fail-on-issues]` 用于验证 visibility-only hot state 和 no-overclaim 边界。
+- **REL-032**: 新增 0.52.0 release checklist、feature flags、rollback plan、manifest coverage、README readiness boundary 和 release no-overclaim boundary。
+
+### Changed
+
+- 版本声明同步到 0.52.0：source SKILL、canonical manifest、Claude/Codex plugin metadata、Claude marketplace metadata、hook @version、target fixture skill、CHANGELOG 和 `verify_workflow.py` REQUIRED_SNIPPETS。
+- README 的 1.0.0 Readiness Boundary 更新为 0.52.0 Flow Unit Runtime Visibility package，明确 RISK-036/RISK-037 继续打开。
+
+### Validation
+
+- `python skills/software-project-governance/infra/verify_workflow.py check-version-consistency`
+- `python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues`
+- `python skills/software-project-governance/infra/verify_workflow.py check-flow-unit-runtime --fail-on-issues`
+- `python skills/software-project-governance/infra/verify_workflow.py check-release --version 0.52.0 --require-changelog --runtime-adapters`
+- `git diff --check`
+
+### Boundary
+
+- RISK-036 remains open. 0.52.0 does not include official approval, marketplace approval, two-real-project external validation full PASS, Codex Desktop lifecycle PASS, RISK-036 closure, or 1.0.0 production-ready approval.
+- RISK-037 remains open. 0.52.0 releases optional runtime visibility only; it does not activate a declarative gate engine, does not migrate projects, does not make dynamic-flow-gate the default, does not close RISK-037, and does not claim dynamic lifecycle readiness.
+
 ## [0.51.0] - 2026-06-15
 
 ### 0.51.0 - Dynamic Lifecycle Spec Schema-Only Release

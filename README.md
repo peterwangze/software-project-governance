@@ -15,7 +15,7 @@ Use this workflow when your AI coding setup needs:
 
 ## 1.0.0 Readiness Boundary
 
-0.50.3 packages the External Installed Runtime Field Repair scope, but it is not the 1.0.0 release. It includes FIX-132 installed runtime path resolution, FIX-133 commit message source hardening, FIX-134 target-native external validation diagnostics, and VAL-003/VAL-004 diagnostic archives for shitu and python_game. Those two external validations are FAIL/PARTIAL diagnostics, not full PASS evidence. 0.50.2 remains the external validation harness package, 0.50.1 remains the 1.0.0 Release Gate Blocker Guard, and RISK-036 remains open: no official approval, no marketplace approval, no two-real-project external validation full PASS, no Codex Desktop lifecycle PASS, no RISK-036 closure, and no 1.0.0 production-ready claim.
+0.51.0 packages the Dynamic Lifecycle Spec schema-only release scope, but it is not the 1.0.0 release. It versions FIX-135 lifecycle registry/schema/validator/docs: `classic-phase-gate` remains the active/default compatibility preset, `dynamic-flow-gate` remains inactive schema-only, and the python_game 10-chapter example is example data only. 0.51.0 does not activate flow-unit runtime, does not migrate projects, does not replace classic G1-G11 behavior, and does not declare 1.0.0 readiness. RISK-036 and RISK-037 remain open: no official approval, no marketplace approval, no two-real-project external validation full PASS, no Codex Desktop lifecycle PASS, no RISK-036 closure, no RISK-037 closure, and no 1.0.0 production-ready claim.
 
 ## Mainstream Agent Loading
 

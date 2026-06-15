@@ -2,6 +2,35 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.51.0] - 2026-06-15
+
+### 0.51.0 - Dynamic Lifecycle Spec Schema-Only Release
+
+0.51.0 发布 REL-031 schema-only release package：把 FIX-135 dynamic lifecycle registry 版本化为 registry/schema/validator/docs。该版本保留 `classic-phase-gate` 作为 active/default compatibility preset，把 `dynamic-flow-gate` 明确为 inactive schema-only mode，并提供 python_game 10 章节示例数据来表达不同章节处于 released/testing/development/backlog 的状态。
+
+### Added
+
+- **FIX-135 lifecycle registry**: `skills/software-project-governance/core/lifecycle-registry.json` 登记 classic stage vocabulary、subphase vocabulary、G1-G11 gate references、allowed transitions、loop policy、flow unit schema、project type hooks 和 python_game 10-chapter example data。
+- **Lifecycle validator**: `check-lifecycle-registry` 校验 registry 保持 schema-only、classic-compatible，并阻断 runtime activation、dynamic mode active/default、project type default drift、non-object root crash 和 no-overclaim 文案漂移。
+- **REL-031**: 新增 0.51.0 release checklist、feature flags、rollback plan、manifest coverage、README readiness boundary 和 release no-overclaim boundary。
+
+### Changed
+
+- 版本声明同步到 0.51.0：source SKILL、canonical manifest、Claude/Codex plugin metadata、Claude marketplace metadata、hook @version、target fixture skill、target fixture plan tracker、CHANGELOG 和 `verify_workflow.py` REQUIRED_SNIPPETS。
+- README 的 1.0.0 Readiness Boundary 更新为 0.51.0 Dynamic Lifecycle Spec schema-only package，明确 RISK-036/RISK-037 继续打开。
+
+### Validation
+
+- `python skills/software-project-governance/infra/verify_workflow.py check-version-consistency`
+- `python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues`
+- `python skills/software-project-governance/infra/verify_workflow.py check-release --version 0.51.0 --require-changelog --runtime-adapters`
+- `git diff --check`
+
+### Boundary
+
+- RISK-036 remains open. 0.51.0 does not include official approval, marketplace approval, two-real-project external validation full PASS, Codex Desktop lifecycle PASS, RISK-036 closure, or 1.0.0 production-ready approval.
+- RISK-037 remains open. 0.51.0 releases registry/schema/validator/docs only; it does not activate flow-unit runtime, does not migrate projects, does not replace classic G1-G11 behavior, and does not claim dynamic lifecycle runtime readiness.
+
 ## [0.50.3] - 2026-06-15
 
 ### 0.50.3 - External Installed Runtime Field Repair

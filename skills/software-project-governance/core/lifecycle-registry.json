@@ -1,0 +1,1002 @@
+{
+  "$schema": "https://example.com/software-project-governance/lifecycle-registry-v1.json",
+  "schema_version": "1.0",
+  "workflow": "software-project-governance",
+  "workflow_version": "0.50.3",
+  "introduced_for": "0.51.0",
+  "source_of_truth": true,
+  "registry_mode": "schema-only-no-runtime-activation",
+  "active_lifecycle_mode": "classic-phase-gate",
+  "default_lifecycle_mode": "classic-phase-gate",
+  "runtime_activation": {
+    "flow_unit_status_runtime": false,
+    "project_migration": false,
+    "declarative_gate_engine": false,
+    "release_bump": false
+  },
+  "no_overclaim_boundary": [
+    "Schema-only registry does not activate flow-unit runtime behavior.",
+    "Schema-only registry does not migrate projects.",
+    "Schema-only registry does not replace classic G1-G11 behavior.",
+    "Schema-only registry does not close RISK-036.",
+    "Schema-only registry does not close RISK-037.",
+    "Schema-only registry does not claim 1.0.0 production-ready."
+  ],
+  "lifecycle_modes": [
+    {
+      "id": "classic-phase-gate",
+      "title": "Classic Phase-Gate",
+      "status": "active-compatibility-preset",
+      "active": true,
+      "default": true,
+      "compatibility_preset": true,
+      "runtime_behavior": "existing-g1-g11",
+      "flow_unit_behavior": "not-active",
+      "stage_sequence": [
+        "initiation",
+        "research",
+        "selection",
+        "infrastructure",
+        "architecture",
+        "development",
+        "testing",
+        "ci-cd",
+        "release",
+        "operations",
+        "maintenance"
+      ],
+      "gate_sequence": [
+        "G1",
+        "G2",
+        "G3",
+        "G4",
+        "G5",
+        "G6",
+        "G7",
+        "G8",
+        "G9",
+        "G10",
+        "G11"
+      ]
+    },
+    {
+      "id": "dynamic-flow-gate",
+      "title": "Dynamic Flow-Gate",
+      "status": "schema-only-inactive",
+      "active": false,
+      "default": false,
+      "compatibility_preset": false,
+      "runtime_behavior": "declared-only",
+      "flow_unit_behavior": "schema-only",
+      "stage_sequence": [
+        "initiation",
+        "research",
+        "selection",
+        "infrastructure",
+        "architecture",
+        "development",
+        "testing",
+        "ci-cd",
+        "release",
+        "operations",
+        "maintenance"
+      ],
+      "gate_sequence": [
+        "G1",
+        "G2",
+        "G3",
+        "G4",
+        "G5",
+        "G6",
+        "G7",
+        "G8",
+        "G9",
+        "G10",
+        "G11"
+      ]
+    }
+  ],
+  "stage_vocabulary": [
+    {
+      "id": "initiation",
+      "number": 1,
+      "label": "Initiation and goal definition",
+      "gate_out": "G1",
+      "allowed_subphases": [
+        "project-charter",
+        "scope-boundary",
+        "risk-baseline"
+      ]
+    },
+    {
+      "id": "research",
+      "number": 2,
+      "label": "Research and competitive analysis",
+      "gate_out": "G2",
+      "allowed_subphases": [
+        "market-research",
+        "technical-research",
+        "user-research"
+      ]
+    },
+    {
+      "id": "selection",
+      "number": 3,
+      "label": "Technical selection and solution preview",
+      "gate_out": "G3",
+      "allowed_subphases": [
+        "candidate-evaluation",
+        "poc",
+        "decision-record"
+      ]
+    },
+    {
+      "id": "infrastructure",
+      "number": 4,
+      "label": "Environment and infrastructure",
+      "gate_out": "G4",
+      "allowed_subphases": [
+        "dev-environment",
+        "repo-setup",
+        "ci-baseline"
+      ]
+    },
+    {
+      "id": "architecture",
+      "number": 5,
+      "label": "Architecture design",
+      "gate_out": "G5",
+      "allowed_subphases": [
+        "backlog",
+        "chapter-brief",
+        "story-outline",
+        "technical-design",
+        "design-review"
+      ]
+    },
+    {
+      "id": "development",
+      "number": 6,
+      "label": "Development implementation",
+      "gate_out": "G6",
+      "allowed_subphases": [
+        "implementation",
+        "playable-slice",
+        "code-review",
+        "unit-smoke"
+      ]
+    },
+    {
+      "id": "testing",
+      "number": 7,
+      "label": "Testing and quality assurance",
+      "gate_out": "G7",
+      "allowed_subphases": [
+        "test-plan",
+        "quality-validation",
+        "regression",
+        "release-candidate"
+      ]
+    },
+    {
+      "id": "ci-cd",
+      "number": 8,
+      "label": "Safety net and CI/CD",
+      "gate_out": "G8",
+      "allowed_subphases": [
+        "automation",
+        "quality-gate",
+        "deployment-pipeline"
+      ]
+    },
+    {
+      "id": "release",
+      "number": 9,
+      "label": "Release",
+      "gate_out": "G9",
+      "allowed_subphases": [
+        "release-plan",
+        "release-candidate",
+        "released",
+        "rollback-ready"
+      ]
+    },
+    {
+      "id": "operations",
+      "number": 10,
+      "label": "Operations and feedback",
+      "gate_out": "G10",
+      "allowed_subphases": [
+        "released",
+        "operations-feedback",
+        "telemetry",
+        "user-feedback"
+      ]
+    },
+    {
+      "id": "maintenance",
+      "number": 11,
+      "label": "Maintenance and evolution",
+      "gate_out": "G11",
+      "allowed_subphases": [
+        "maintenance-fix",
+        "loop-rework",
+        "retrospective",
+        "next-round-planning"
+      ]
+    }
+  ],
+  "subphase_vocabulary": [
+    {
+      "id": "backlog",
+      "label": "Backlog or not yet scheduled"
+    },
+    {
+      "id": "chapter-brief",
+      "label": "Chapter brief and scope"
+    },
+    {
+      "id": "story-outline",
+      "label": "Story outline"
+    },
+    {
+      "id": "technical-design",
+      "label": "Technical design"
+    },
+    {
+      "id": "implementation",
+      "label": "Implementation"
+    },
+    {
+      "id": "playable-slice",
+      "label": "Playable slice"
+    },
+    {
+      "id": "test-plan",
+      "label": "Test plan"
+    },
+    {
+      "id": "quality-validation",
+      "label": "Quality validation"
+    },
+    {
+      "id": "release-candidate",
+      "label": "Release candidate"
+    },
+    {
+      "id": "released",
+      "label": "Released"
+    },
+    {
+      "id": "operations-feedback",
+      "label": "Operations feedback"
+    },
+    {
+      "id": "maintenance-fix",
+      "label": "Maintenance fix"
+    },
+    {
+      "id": "loop-rework",
+      "label": "Loop rework"
+    },
+    {
+      "id": "blocked",
+      "label": "Blocked"
+    }
+  ],
+  "gate_references": [
+    {
+      "gate_id": "G1",
+      "from_stage": "initiation",
+      "to_stage": "research",
+      "source": "skills/software-project-governance/core/stage-gates.md#G1"
+    },
+    {
+      "gate_id": "G2",
+      "from_stage": "research",
+      "to_stage": "selection",
+      "source": "skills/software-project-governance/core/stage-gates.md#G2"
+    },
+    {
+      "gate_id": "G3",
+      "from_stage": "selection",
+      "to_stage": "infrastructure",
+      "source": "skills/software-project-governance/core/stage-gates.md#G3"
+    },
+    {
+      "gate_id": "G4",
+      "from_stage": "infrastructure",
+      "to_stage": "architecture",
+      "source": "skills/software-project-governance/core/stage-gates.md#G4"
+    },
+    {
+      "gate_id": "G5",
+      "from_stage": "architecture",
+      "to_stage": "development",
+      "source": "skills/software-project-governance/core/stage-gates.md#G5"
+    },
+    {
+      "gate_id": "G6",
+      "from_stage": "development",
+      "to_stage": "testing",
+      "source": "skills/software-project-governance/core/stage-gates.md#G6"
+    },
+    {
+      "gate_id": "G7",
+      "from_stage": "testing",
+      "to_stage": "ci-cd",
+      "source": "skills/software-project-governance/core/stage-gates.md#G7"
+    },
+    {
+      "gate_id": "G8",
+      "from_stage": "ci-cd",
+      "to_stage": "release",
+      "source": "skills/software-project-governance/core/stage-gates.md#G8"
+    },
+    {
+      "gate_id": "G9",
+      "from_stage": "release",
+      "to_stage": "operations",
+      "source": "skills/software-project-governance/core/stage-gates.md#G9"
+    },
+    {
+      "gate_id": "G10",
+      "from_stage": "operations",
+      "to_stage": "maintenance",
+      "source": "skills/software-project-governance/core/stage-gates.md#G10"
+    },
+    {
+      "gate_id": "G11",
+      "from_stage": "maintenance",
+      "to_stage": "initiation",
+      "source": "skills/software-project-governance/core/stage-gates.md#G11"
+    }
+  ],
+  "allowed_transitions": [
+    {
+      "id": "classic-G1",
+      "from_stage": "initiation",
+      "to_stage": "research",
+      "gate_references": [
+        "G1"
+      ],
+      "transition_type": "classic-forward"
+    },
+    {
+      "id": "classic-G2",
+      "from_stage": "research",
+      "to_stage": "selection",
+      "gate_references": [
+        "G2"
+      ],
+      "transition_type": "classic-forward"
+    },
+    {
+      "id": "classic-G3",
+      "from_stage": "selection",
+      "to_stage": "infrastructure",
+      "gate_references": [
+        "G3"
+      ],
+      "transition_type": "classic-forward"
+    },
+    {
+      "id": "classic-G4",
+      "from_stage": "infrastructure",
+      "to_stage": "architecture",
+      "gate_references": [
+        "G4"
+      ],
+      "transition_type": "classic-forward"
+    },
+    {
+      "id": "classic-G5",
+      "from_stage": "architecture",
+      "to_stage": "development",
+      "gate_references": [
+        "G5"
+      ],
+      "transition_type": "classic-forward"
+    },
+    {
+      "id": "classic-G6",
+      "from_stage": "development",
+      "to_stage": "testing",
+      "gate_references": [
+        "G6"
+      ],
+      "transition_type": "classic-forward"
+    },
+    {
+      "id": "classic-G7",
+      "from_stage": "testing",
+      "to_stage": "ci-cd",
+      "gate_references": [
+        "G7"
+      ],
+      "transition_type": "classic-forward"
+    },
+    {
+      "id": "classic-G8",
+      "from_stage": "ci-cd",
+      "to_stage": "release",
+      "gate_references": [
+        "G8"
+      ],
+      "transition_type": "classic-forward"
+    },
+    {
+      "id": "classic-G9",
+      "from_stage": "release",
+      "to_stage": "operations",
+      "gate_references": [
+        "G9"
+      ],
+      "transition_type": "classic-forward"
+    },
+    {
+      "id": "classic-G10",
+      "from_stage": "operations",
+      "to_stage": "maintenance",
+      "gate_references": [
+        "G10"
+      ],
+      "transition_type": "classic-forward"
+    },
+    {
+      "id": "classic-G11",
+      "from_stage": "maintenance",
+      "to_stage": "initiation",
+      "gate_references": [
+        "G11"
+      ],
+      "transition_type": "classic-next-round"
+    },
+    {
+      "id": "testing-to-development-rework",
+      "from_stage": "testing",
+      "to_stage": "development",
+      "gate_references": [
+        "G7"
+      ],
+      "transition_type": "flow-unit-loop"
+    },
+    {
+      "id": "release-to-testing-rework",
+      "from_stage": "release",
+      "to_stage": "testing",
+      "gate_references": [
+        "G9"
+      ],
+      "transition_type": "flow-unit-loop"
+    },
+    {
+      "id": "operations-feedback-to-maintenance-loop",
+      "from_stage": "operations",
+      "to_stage": "maintenance",
+      "gate_references": [
+        "G10",
+        "G11"
+      ],
+      "transition_type": "flow-unit-feedback-loop"
+    }
+  ],
+  "loop_policy": {
+    "scope": "per-flow-unit",
+    "runtime_activation": false,
+    "allowed_loop_types": [
+      "validation-retry",
+      "defect-rework",
+      "release-candidate-fix",
+      "operations-feedback",
+      "maintenance-follow-up"
+    ],
+    "blocked_dependency_rule": "A blocked flow unit blocks only declared downstream dependents.",
+    "sibling_completion_rule": "Passing one flow unit gate does not imply sibling flow units have passed.",
+    "loop_counter_policy": "schema-only-recorded-by-future-runtime"
+  },
+  "flow_unit_schema": {
+    "schema_only": true,
+    "status_activation": "not-active-in-0.51.0",
+    "required_fields": [
+      "flow_unit_id",
+      "title",
+      "unit_type",
+      "project_type",
+      "lifecycle_mode",
+      "current_stage",
+      "current_subphase",
+      "gate_lane",
+      "gate_references",
+      "allowed_next_transitions",
+      "dependencies",
+      "blockers",
+      "evidence_refs",
+      "loop_state",
+      "runtime_status_source"
+    ],
+    "optional_fields": [
+      "owner",
+      "risk_level",
+      "quality_budget",
+      "acceptance_template",
+      "rollup_weight",
+      "release_target"
+    ],
+    "allowed_unit_types": [
+      "chapter",
+      "level",
+      "asset",
+      "engine-system",
+      "story",
+      "module",
+      "screen",
+      "api-surface",
+      "command",
+      "adapter",
+      "skill",
+      "manifest",
+      "script",
+      "job",
+      "release-candidate",
+      "hotfix"
+    ],
+    "allowed_gate_lanes": [
+      "backlog",
+      "design",
+      "development",
+      "testing",
+      "release-candidate",
+      "released",
+      "operations-feedback",
+      "maintenance",
+      "blocked"
+    ],
+    "field_definitions": {
+      "flow_unit_id": "Stable machine-readable id, for example game.chapter.03.",
+      "current_stage": "One of the stage_vocabulary ids.",
+      "current_subphase": "One of the declared subphase ids.",
+      "gate_references": "Classic G1-G11 gate references that frame the evidence expectations.",
+      "runtime_status_source": "Must say example-data-only or future-runtime; 0.51.0 uses example-data-only."
+    }
+  },
+  "project_type_hooks": {
+    "game": {
+      "unit_templates": [
+        "chapter",
+        "level",
+        "asset",
+        "engine-system"
+      ],
+      "default_flow_unit_type": "chapter",
+      "stage_hooks": {
+        "architecture": [
+          "chapter-brief",
+          "story-outline",
+          "technical-design"
+        ],
+        "development": [
+          "implementation",
+          "playable-slice"
+        ],
+        "testing": [
+          "playable-smoke",
+          "narrative-continuity",
+          "performance-budget",
+          "regression"
+        ],
+        "release": [
+          "release-candidate",
+          "release-notes"
+        ],
+        "operations": [
+          "operations-feedback",
+          "defect-budget"
+        ]
+      },
+      "gate_hooks": {
+        "chapter_design": [
+          "G5"
+        ],
+        "chapter_development": [
+          "G6"
+        ],
+        "chapter_testing": [
+          "G7"
+        ],
+        "chapter_release": [
+          "G8",
+          "G9"
+        ],
+        "chapter_feedback": [
+          "G10",
+          "G11"
+        ]
+      }
+    },
+    "web-app": {
+      "unit_templates": [
+        "story",
+        "module",
+        "release-candidate"
+      ],
+      "default_flow_unit_type": "story",
+      "stage_hooks": {
+        "architecture": [
+          "user-flow",
+          "api-contract"
+        ],
+        "testing": [
+          "e2e",
+          "accessibility",
+          "security"
+        ]
+      }
+    },
+    "mobile-app": {
+      "unit_templates": [
+        "story",
+        "screen",
+        "release-candidate"
+      ],
+      "default_flow_unit_type": "story",
+      "stage_hooks": {
+        "testing": [
+          "device-matrix",
+          "offline-behavior",
+          "store-readiness"
+        ]
+      }
+    },
+    "library": {
+      "unit_templates": [
+        "module",
+        "api-surface",
+        "release-candidate"
+      ],
+      "default_flow_unit_type": "module",
+      "stage_hooks": {
+        "release": [
+          "semver",
+          "docs",
+          "downstream-tests"
+        ]
+      }
+    },
+    "cli-tool": {
+      "unit_templates": [
+        "command",
+        "module",
+        "release-candidate"
+      ],
+      "default_flow_unit_type": "command",
+      "stage_hooks": {
+        "testing": [
+          "command-matrix",
+          "stderr-contract",
+          "exit-codes"
+        ]
+      }
+    },
+    "ai-agent-plugin": {
+      "unit_templates": [
+        "adapter",
+        "skill",
+        "manifest",
+        "release-candidate"
+      ],
+      "default_flow_unit_type": "skill",
+      "stage_hooks": {
+        "testing": [
+          "runtime-e2e",
+          "projection-sync",
+          "no-overclaim"
+        ]
+      }
+    },
+    "internal-script": {
+      "unit_templates": [
+        "script",
+        "job"
+      ],
+      "default_flow_unit_type": "script",
+      "stage_hooks": {
+        "testing": [
+          "dry-run",
+          "rollback",
+          "idempotency"
+        ]
+      }
+    }
+  },
+  "examples": [
+    {
+      "id": "python_game_10_chapters",
+      "project_id": "python_game",
+      "project_type": "game",
+      "lifecycle_mode": "dynamic-flow-gate",
+      "schema_only": true,
+      "runtime_activation": false,
+      "source_context": "2026-06-15 external validation feedback; illustrative data only.",
+      "rollup_summary": "Game project is in active build while chapter flow units are distributed across operations, testing, development, and backlog lanes.",
+      "flow_units": [
+        {
+          "flow_unit_id": "game.chapter.01",
+          "title": "Chapter 1",
+          "unit_type": "chapter",
+          "project_type": "game",
+          "lifecycle_mode": "dynamic-flow-gate",
+          "current_stage": "operations",
+          "current_subphase": "operations-feedback",
+          "gate_lane": "released",
+          "gate_references": [
+            "G6",
+            "G7",
+            "G9",
+            "G10"
+          ],
+          "allowed_next_transitions": [
+            "operations-feedback-to-maintenance-loop"
+          ],
+          "dependencies": [],
+          "blockers": [],
+          "evidence_refs": [],
+          "loop_state": {
+            "active_loop": false,
+            "loop_count": 0,
+            "last_loop_type": null
+          },
+          "runtime_status_source": "example-data-only"
+        },
+        {
+          "flow_unit_id": "game.chapter.02",
+          "title": "Chapter 2",
+          "unit_type": "chapter",
+          "project_type": "game",
+          "lifecycle_mode": "dynamic-flow-gate",
+          "current_stage": "testing",
+          "current_subphase": "release-candidate",
+          "gate_lane": "testing",
+          "gate_references": [
+            "G6",
+            "G7",
+            "G9"
+          ],
+          "allowed_next_transitions": [
+            "classic-G7",
+            "release-to-testing-rework"
+          ],
+          "dependencies": [
+            "game.chapter.01"
+          ],
+          "blockers": [],
+          "evidence_refs": [],
+          "loop_state": {
+            "active_loop": false,
+            "loop_count": 0,
+            "last_loop_type": null
+          },
+          "runtime_status_source": "example-data-only"
+        },
+        {
+          "flow_unit_id": "game.chapter.03",
+          "title": "Chapter 3",
+          "unit_type": "chapter",
+          "project_type": "game",
+          "lifecycle_mode": "dynamic-flow-gate",
+          "current_stage": "development",
+          "current_subphase": "implementation",
+          "gate_lane": "development",
+          "gate_references": [
+            "G5",
+            "G6"
+          ],
+          "allowed_next_transitions": [
+            "classic-G6",
+            "testing-to-development-rework"
+          ],
+          "dependencies": [
+            "game.chapter.02"
+          ],
+          "blockers": [],
+          "evidence_refs": [],
+          "loop_state": {
+            "active_loop": false,
+            "loop_count": 0,
+            "last_loop_type": null
+          },
+          "runtime_status_source": "example-data-only"
+        },
+        {
+          "flow_unit_id": "game.chapter.04",
+          "title": "Chapter 4",
+          "unit_type": "chapter",
+          "project_type": "game",
+          "lifecycle_mode": "dynamic-flow-gate",
+          "current_stage": "architecture",
+          "current_subphase": "backlog",
+          "gate_lane": "backlog",
+          "gate_references": [
+            "G5"
+          ],
+          "allowed_next_transitions": [
+            "classic-G5"
+          ],
+          "dependencies": [
+            "game.chapter.03"
+          ],
+          "blockers": [],
+          "evidence_refs": [],
+          "loop_state": {
+            "active_loop": false,
+            "loop_count": 0,
+            "last_loop_type": null
+          },
+          "runtime_status_source": "example-data-only"
+        },
+        {
+          "flow_unit_id": "game.chapter.05",
+          "title": "Chapter 5",
+          "unit_type": "chapter",
+          "project_type": "game",
+          "lifecycle_mode": "dynamic-flow-gate",
+          "current_stage": "architecture",
+          "current_subphase": "backlog",
+          "gate_lane": "backlog",
+          "gate_references": [
+            "G5"
+          ],
+          "allowed_next_transitions": [
+            "classic-G5"
+          ],
+          "dependencies": [
+            "game.chapter.04"
+          ],
+          "blockers": [],
+          "evidence_refs": [],
+          "loop_state": {
+            "active_loop": false,
+            "loop_count": 0,
+            "last_loop_type": null
+          },
+          "runtime_status_source": "example-data-only"
+        },
+        {
+          "flow_unit_id": "game.chapter.06",
+          "title": "Chapter 6",
+          "unit_type": "chapter",
+          "project_type": "game",
+          "lifecycle_mode": "dynamic-flow-gate",
+          "current_stage": "architecture",
+          "current_subphase": "backlog",
+          "gate_lane": "backlog",
+          "gate_references": [
+            "G5"
+          ],
+          "allowed_next_transitions": [
+            "classic-G5"
+          ],
+          "dependencies": [
+            "game.chapter.05"
+          ],
+          "blockers": [],
+          "evidence_refs": [],
+          "loop_state": {
+            "active_loop": false,
+            "loop_count": 0,
+            "last_loop_type": null
+          },
+          "runtime_status_source": "example-data-only"
+        },
+        {
+          "flow_unit_id": "game.chapter.07",
+          "title": "Chapter 7",
+          "unit_type": "chapter",
+          "project_type": "game",
+          "lifecycle_mode": "dynamic-flow-gate",
+          "current_stage": "architecture",
+          "current_subphase": "backlog",
+          "gate_lane": "backlog",
+          "gate_references": [
+            "G5"
+          ],
+          "allowed_next_transitions": [
+            "classic-G5"
+          ],
+          "dependencies": [
+            "game.chapter.06"
+          ],
+          "blockers": [],
+          "evidence_refs": [],
+          "loop_state": {
+            "active_loop": false,
+            "loop_count": 0,
+            "last_loop_type": null
+          },
+          "runtime_status_source": "example-data-only"
+        },
+        {
+          "flow_unit_id": "game.chapter.08",
+          "title": "Chapter 8",
+          "unit_type": "chapter",
+          "project_type": "game",
+          "lifecycle_mode": "dynamic-flow-gate",
+          "current_stage": "architecture",
+          "current_subphase": "backlog",
+          "gate_lane": "backlog",
+          "gate_references": [
+            "G5"
+          ],
+          "allowed_next_transitions": [
+            "classic-G5"
+          ],
+          "dependencies": [
+            "game.chapter.07"
+          ],
+          "blockers": [],
+          "evidence_refs": [],
+          "loop_state": {
+            "active_loop": false,
+            "loop_count": 0,
+            "last_loop_type": null
+          },
+          "runtime_status_source": "example-data-only"
+        },
+        {
+          "flow_unit_id": "game.chapter.09",
+          "title": "Chapter 9",
+          "unit_type": "chapter",
+          "project_type": "game",
+          "lifecycle_mode": "dynamic-flow-gate",
+          "current_stage": "architecture",
+          "current_subphase": "backlog",
+          "gate_lane": "backlog",
+          "gate_references": [
+            "G5"
+          ],
+          "allowed_next_transitions": [
+            "classic-G5"
+          ],
+          "dependencies": [
+            "game.chapter.08"
+          ],
+          "blockers": [],
+          "evidence_refs": [],
+          "loop_state": {
+            "active_loop": false,
+            "loop_count": 0,
+            "last_loop_type": null
+          },
+          "runtime_status_source": "example-data-only"
+        },
+        {
+          "flow_unit_id": "game.chapter.10",
+          "title": "Chapter 10",
+          "unit_type": "chapter",
+          "project_type": "game",
+          "lifecycle_mode": "dynamic-flow-gate",
+          "current_stage": "architecture",
+          "current_subphase": "backlog",
+          "gate_lane": "backlog",
+          "gate_references": [
+            "G5"
+          ],
+          "allowed_next_transitions": [
+            "classic-G5"
+          ],
+          "dependencies": [
+            "game.chapter.09"
+          ],
+          "blockers": [],
+          "evidence_refs": [],
+          "loop_state": {
+            "active_loop": false,
+            "loop_count": 0,
+            "last_loop_type": null
+          },
+          "runtime_status_source": "example-data-only"
+        }
+      ]
+    }
+  ]
+}

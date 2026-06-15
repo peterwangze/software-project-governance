@@ -42,6 +42,7 @@
 | TOOL-034 | Official Submission Ecosystem guard | script + submission docs contract | `infra/verify_workflow.py check-official-submission-ecosystem` + `check-governance` Check 28m + `check-release --version 0.46.0` release docs detail | 0.46.0 official submission docs、ecosystem positioning、comparison、migration guide、examples 或 no-overclaim boundary 变更后 | 调研/发布/维护 | 是 |
 | TOOL-035 | Mainstream Agent Loading guard | script + README/adapter docs contract | `infra/verify_workflow.py check-mainstream-agent-loading` + `check-governance` Check 28n | 0.47.0 README mainstream loading matrix、Tier 1 adapter loading guide、Tier 2 compatibility/research rows 或 no-overclaim boundary 变更后 | 调研/测试/发布/维护 | 是 |
 | TOOL-036 | External Project Validation harness | script + temporary workspace | `infra/verify_workflow.py external-project-validation --target <path> --fail-on-issues` | 1.0.0 前外部项目验证、VAL-001 复跑、真实外部 target 的完整 workflow surface 验证 | 测试/发布/维护 | 是 |
+| TOOL-037 | Dynamic Lifecycle Registry guard | script + registry | `infra/verify_workflow.py check-lifecycle-registry` + `core/lifecycle-registry.json` | 0.51.0 lifecycle registry、classic-phase-gate 兼容 preset、flow unit schema 或 schema-only/no-overclaim 边界变更后 | 架构/测试/发布/维护 | 是 |
 
 ## 工具详情
 
@@ -98,7 +99,7 @@
 ### TOOL-006：校验脚本
 
 - **文件**：`infra/verify_workflow.py`
-- **子命令**：`verify`（全量校验）、`status`（治理状态摘要）、`gate <G1-G11>`（Gate 检查）、`gates`（全部 Gate 状态）、`stage <stage-id>`（阶段状态）、`stages`（全部阶段状态）、`check-governance --fail-on-issues`（治理健康检查）、`e2e-check`（E2E proxy + fixture 分层检查）、`external-project-validation --target <path> --fail-on-issues`（外部项目临时验证 workspace）、`check-version-consistency`、`check-manifest-consistency`、`check-governance-packs`、`check-capability-registry`、`check-host-capability-context`、`check-official-submission-ecosystem`、`check-readme-pack-guidance`、`check-governance-pack-status`、`capability-context`、`check-deterministic-scaffolds`、`check-interruption-policy`、`generate-deterministic-scaffold`、`check-locks`、`check-archive-integrity`
+- **子命令**：`verify`（全量校验）、`status`（治理状态摘要）、`gate <G1-G11>`（Gate 检查）、`gates`（全部 Gate 状态）、`stage <stage-id>`（阶段状态）、`stages`（全部阶段状态）、`check-governance --fail-on-issues`（治理健康检查）、`e2e-check`（E2E proxy + fixture 分层检查）、`external-project-validation --target <path> --fail-on-issues`（外部项目临时验证 workspace）、`check-version-consistency`、`check-manifest-consistency`、`check-governance-packs`、`check-capability-registry`、`check-lifecycle-registry`、`check-host-capability-context`、`check-official-submission-ecosystem`、`check-readme-pack-guidance`、`check-governance-pack-status`、`capability-context`、`check-deterministic-scaffolds`、`check-interruption-policy`、`generate-deterministic-scaffold`、`check-locks`、`check-archive-integrity`
 - **输入**：无（自动读取项目文件）
 - **输出**：校验结果（PASSED/FAILED）+ 治理状态摘要
 - **触发条件**：工作流资产变更后、Gate 检查时、定期巡检
@@ -414,6 +415,17 @@
 - **边界**：temporary workspace only；不修改 `--target`；不是 official approval；不是 marketplace approval；不是 external validation full PASS；不是 Desktop lifecycle E2E PASS；不关闭 RISK-036；不是 1.0.0 production-ready
 - **被以下子工作流使用**：测试（testing）、发布（release）、维护（maintenance）
 
+### TOOL-037：Dynamic Lifecycle Registry guard
+
+- **文件**：`infra/verify_workflow.py` + `core/lifecycle-registry.json`
+- **子命令**：`check-lifecycle-registry [--fail-on-issues]`
+- **输入**：canonical lifecycle registry 中的 `active_lifecycle_mode`、`default_lifecycle_mode`、classic/dynamic lifecycle modes、stage/subphase vocabulary、loop policy、allowed transitions、gate references、project type hooks、flow unit schema，以及 `python_game_10_chapters` example data
+- **输出**：active/default lifecycle mode 是否仍为 `classic-phase-gate`；dynamic-flow-gate 是否保持 schema-only inactive；flow unit schema 是否覆盖必需字段；python_game 10 章节是否以数据表达 chapter 1 released、chapter 2 testing、chapter 3 development、chapter 4-10 backlog；是否阻断 RISK-037 closure 或 1.0.0 readiness overclaim
+- **触发条件**：新增或调整 lifecycle registry、flow-unit schema、project-type hooks、stage/subphase vocabulary、loop policy、allowed transitions、gate references 或 schema-only release boundary 后
+- **依赖**：`core/manifest.json`、`check-manifest-consistency`、classic G1-G11 `core/stage-gates.md`
+- **边界**：schema-only registry；不激活 flow-unit runtime；不迁移项目；不替代 classic G1-G11；不关闭 RISK-036/RISK-037；不是 1.0.0 production-ready
+- **被以下子工作流使用**：架构设计（architecture）、测试（testing）、发布（release）、维护（maintenance）
+
 ## 工具与子工作流的关系矩阵
 
 | 工具 | 立项 | 调研 | 选型 | 环境 | 架构 | 开发 | 测试 | CI/CD | 发布 | 运营 | 维护 |
@@ -452,6 +464,7 @@
 | Official Submission Ecosystem guard | | ● | | | ○ | | ● | | ● | | ● |
 | Mainstream Agent Loading guard | | ● | | | ○ | | ● | | ● | | ● |
 | External Project Validation harness | | | | | | | ● | | ● | | ● |
+| Dynamic Lifecycle Registry guard | | | | | ● | | ● | | ● | | ● |
 
 > ● 主要使用者  ○ 可选用
 

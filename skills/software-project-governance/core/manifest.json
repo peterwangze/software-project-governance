@@ -20,6 +20,7 @@
       { "path": "skills/software-project-governance/core/", "type": "dir" },
       { "path": "skills/software-project-governance/core/governance-packs.json", "type": "file" },
       { "path": "skills/software-project-governance/core/capability-registry.json", "type": "file" },
+      { "path": "skills/software-project-governance/core/lifecycle-registry.json", "type": "file" },
       { "path": "skills/software-project-governance/core/templates/", "type": "dir" },
       { "path": "skills/software-project-governance/core/protocol/", "type": "dir" },
       { "path": "skills/software-project-governance/infra/", "type": "dir" },
@@ -117,6 +118,17 @@
         "artifact_role": "external-capability-registry",
         "validation_commands": [
           "python skills/software-project-governance/infra/verify_workflow.py check-capability-registry --fail-on-issues",
+          "python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues"
+        ]
+      },
+      {
+        "id": "lifecycle-registry",
+        "path": "skills/software-project-governance/core/lifecycle-registry.json",
+        "type": "file",
+        "required": true,
+        "artifact_role": "dynamic-lifecycle-registry",
+        "validation_commands": [
+          "python skills/software-project-governance/infra/verify_workflow.py check-lifecycle-registry --fail-on-issues",
           "python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues"
         ]
       }

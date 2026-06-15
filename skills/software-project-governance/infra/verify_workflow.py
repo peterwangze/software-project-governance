@@ -981,6 +981,9 @@ def check_manifest_canonical_product_artifacts(manifest, manifest_path=None):
     capability_registry_entry = artifact_by_id.get("capability-registry")
     if not capability_registry_entry:
         failures.append(f"{display}: canonical product artifact `capability-registry` is required")
+    lifecycle_registry_entry = artifact_by_id.get("lifecycle-registry")
+    if not lifecycle_registry_entry:
+        failures.append(f"{display}: canonical product artifact `lifecycle-registry` is required")
 
     for entry in entries:
         if not isinstance(entry, dict):
@@ -1029,6 +1032,11 @@ def check_manifest_canonical_product_artifacts(manifest, manifest_path=None):
                     failures.append(f"{artifact_label}: validation_commands must include `{command_token}`")
         if artifact_id == "capability-registry":
             required_commands = ("check-capability-registry", "check-manifest-consistency")
+            for command_token in required_commands:
+                if not any(command_token in command for command in commands):
+                    failures.append(f"{artifact_label}: validation_commands must include `{command_token}`")
+        if artifact_id == "lifecycle-registry":
+            required_commands = ("check-lifecycle-registry", "check-manifest-consistency")
             for command_token in required_commands:
                 if not any(command_token in command for command in commands):
                     failures.append(f"{artifact_label}: validation_commands must include `{command_token}`")
@@ -2119,6 +2127,57 @@ FIRST_SESSION_MEASUREMENT_PATH = ROOT / "docs/requirements/first-session-measure
 FIRST_SESSION_MEASUREMENT_ALLOWED_STATUSES = {"PASS", "BLOCKED", "NOT_MEASURED"}
 GOVERNANCE_PACKS_PATH = ROOT / "skills/software-project-governance/core/governance-packs.json"
 CAPABILITY_REGISTRY_PATH = ROOT / "skills/software-project-governance/core/capability-registry.json"
+LIFECYCLE_REGISTRY_PATH = ROOT / "skills/software-project-governance/core/lifecycle-registry.json"
+LIFECYCLE_REGISTRY_ACTIVE_MODE = "classic-phase-gate"
+LIFECYCLE_REGISTRY_DYNAMIC_MODE = "dynamic-flow-gate"
+LIFECYCLE_REGISTRY_GATES = [f"G{i}" for i in range(1, 12)]
+LIFECYCLE_REGISTRY_STAGE_IDS = [
+    "initiation",
+    "research",
+    "selection",
+    "infrastructure",
+    "architecture",
+    "development",
+    "testing",
+    "ci-cd",
+    "release",
+    "operations",
+    "maintenance",
+]
+LIFECYCLE_REGISTRY_REQUIRED_FLOW_FIELDS = [
+    "flow_unit_id",
+    "title",
+    "unit_type",
+    "project_type",
+    "lifecycle_mode",
+    "current_stage",
+    "current_subphase",
+    "gate_lane",
+    "gate_references",
+    "allowed_next_transitions",
+    "dependencies",
+    "blockers",
+    "evidence_refs",
+    "loop_state",
+    "runtime_status_source",
+]
+LIFECYCLE_REGISTRY_REQUIRED_PROJECT_TYPES = {
+    "game",
+    "web-app",
+    "mobile-app",
+    "library",
+    "cli-tool",
+    "ai-agent-plugin",
+    "internal-script",
+}
+LIFECYCLE_REGISTRY_BOUNDARY_TOKENS = [
+    "does not activate flow-unit runtime behavior",
+    "does not migrate projects",
+    "does not replace classic G1-G11 behavior",
+    "does not close RISK-036",
+    "does not close RISK-037",
+    "does not claim 1.0.0 production-ready",
+]
 GOVERNANCE_PACK_IDS = [
     "governance-core",
     "quality-gates",
@@ -2180,6 +2239,7 @@ GOVERNANCE_PACK_KNOWN_CHECKS = {
     "check-readme-pack-guidance",
     "check-governance-pack-status",
     "check-capability-registry",
+    "check-lifecycle-registry",
     "check-host-capability-context",
     "check-official-submission-ecosystem",
     "check-mainstream-agent-loading",
@@ -2937,6 +2997,386 @@ def check_capability_registry(root=None):
         for phrase in CAPABILITY_REGISTRY_FORBIDDEN_OVERCLAIMS:
             if phrase in lowered and not _line_has_scoped_claim_negation(text, phrase):
                 failures.append(f"{display}: forbidden capability overclaim `{phrase}`")
+
+    return failures
+
+
+def _lifecycle_registry_text_values(value):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _lifecycle_registry_text_values(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _lifecycle_registry_text_values(item)
+
+
+def _load_lifecycle_registry(root=None):
+    root = root or ROOT
+    registry_path = root / "skills/software-project-governance/core/lifecycle-registry.json"
+    display = _display_path(registry_path, root)
+    if not registry_path.exists():
+        return None, [f"{display}: missing lifecycle registry"]
+    try:
+        return json.loads(registry_path.read_text(encoding="utf-8")), []
+    except json.JSONDecodeError as exc:
+        return None, [f"{display}: invalid JSON: {exc}"]
+
+
+def _lifecycle_registry_manifest_issues(root, registry_path, display):
+    manifest_path = root / "skills/software-project-governance/core/manifest.json"
+    if not manifest_path.exists():
+        return [f"{display}: core/manifest.json is required to make the lifecycle registry a canonical product artifact"]
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        return [f"{_display_path(manifest_path, root)}: invalid JSON: {exc}"]
+    artifact_entries = _manifest_artifact_entries(manifest)
+    registry_artifacts = [
+        entry for entry in artifact_entries
+        if isinstance(entry, dict)
+        and entry.get("id") == "lifecycle-registry"
+        and entry.get("path") == "skills/software-project-governance/core/lifecycle-registry.json"
+    ]
+    if not registry_artifacts:
+        return [f"{display}: core/manifest.json must declare lifecycle-registry as a canonical product artifact"]
+    return []
+
+
+def check_lifecycle_registry(root=None):
+    """FIX-135: dynamic lifecycle registry must remain schema-only and classic-compatible."""
+    root = root or ROOT
+    registry_path = root / "skills/software-project-governance/core/lifecycle-registry.json"
+    display = _display_path(registry_path, root)
+    registry, load_issues = _load_lifecycle_registry(root)
+    if load_issues:
+        return load_issues
+
+    failures = []
+    if not isinstance(registry, dict):
+        return [f"{display}: lifecycle registry root must be an object"]
+
+    if registry.get("workflow") != "software-project-governance":
+        failures.append(f"{display}: workflow must be software-project-governance")
+    if registry.get("source_of_truth") is not True:
+        failures.append(f"{display}: source_of_truth must be true")
+    if registry.get("registry_mode") != "schema-only-no-runtime-activation":
+        failures.append(f"{display}: registry_mode must be schema-only-no-runtime-activation")
+    if registry.get("active_lifecycle_mode") != LIFECYCLE_REGISTRY_ACTIVE_MODE:
+        failures.append(f"{display}: active_lifecycle_mode must be {LIFECYCLE_REGISTRY_ACTIVE_MODE}")
+    if registry.get("default_lifecycle_mode") != LIFECYCLE_REGISTRY_ACTIVE_MODE:
+        failures.append(f"{display}: default_lifecycle_mode must be {LIFECYCLE_REGISTRY_ACTIVE_MODE}")
+
+    runtime_activation = registry.get("runtime_activation")
+    if not isinstance(runtime_activation, dict):
+        failures.append(f"{display}: runtime_activation must be an object")
+        runtime_activation = {}
+    for field in ("flow_unit_status_runtime", "project_migration", "declarative_gate_engine", "release_bump"):
+        if runtime_activation.get(field) is not False:
+            failures.append(f"{display}: runtime_activation.{field} must be false for schema-only 0.51.0")
+
+    boundary = registry.get("no_overclaim_boundary")
+    if not _is_valid_string_list(boundary):
+        failures.append(f"{display}: no_overclaim_boundary must be a non-empty string list")
+        boundary = []
+    boundary_text = " ".join(boundary).lower()
+    for token in LIFECYCLE_REGISTRY_BOUNDARY_TOKENS:
+        if token.lower() not in boundary_text:
+            failures.append(f"{display}: missing lifecycle no-overclaim boundary token `{token}`")
+
+    failures.extend(_lifecycle_registry_manifest_issues(root, registry_path, display))
+
+    lifecycle_modes = registry.get("lifecycle_modes")
+    if not isinstance(lifecycle_modes, list) or not lifecycle_modes:
+        failures.append(f"{display}: lifecycle_modes must be a non-empty list")
+        lifecycle_modes = []
+    mode_by_id = {mode.get("id"): mode for mode in lifecycle_modes if isinstance(mode, dict)}
+    classic = mode_by_id.get(LIFECYCLE_REGISTRY_ACTIVE_MODE)
+    if not classic:
+        failures.append(f"{display}: lifecycle_modes must include classic-phase-gate")
+    else:
+        if classic.get("active") is not True:
+            failures.append(f"{display}: classic-phase-gate.active must be true")
+        if classic.get("default") is not True:
+            failures.append(f"{display}: classic-phase-gate.default must be true")
+        if classic.get("compatibility_preset") is not True:
+            failures.append(f"{display}: classic-phase-gate.compatibility_preset must be true")
+        if classic.get("runtime_behavior") != "existing-g1-g11":
+            failures.append(f"{display}: classic-phase-gate.runtime_behavior must be existing-g1-g11")
+        if classic.get("flow_unit_behavior") != "not-active":
+            failures.append(f"{display}: classic-phase-gate.flow_unit_behavior must be not-active")
+        if classic.get("stage_sequence") != LIFECYCLE_REGISTRY_STAGE_IDS:
+            failures.append(f"{display}: classic-phase-gate.stage_sequence must preserve classic stage order")
+        if classic.get("gate_sequence") != LIFECYCLE_REGISTRY_GATES:
+            failures.append(f"{display}: classic-phase-gate.gate_sequence must preserve G1-G11 order")
+    dynamic = mode_by_id.get(LIFECYCLE_REGISTRY_DYNAMIC_MODE)
+    if not dynamic:
+        failures.append(f"{display}: lifecycle_modes must include dynamic-flow-gate as inactive schema")
+    else:
+        if dynamic.get("active") is not False:
+            failures.append(f"{display}: dynamic-flow-gate.active must be false in 0.51.0")
+        if dynamic.get("default") is not False:
+            failures.append(f"{display}: dynamic-flow-gate.default must be false in 0.51.0")
+        if dynamic.get("flow_unit_behavior") != "schema-only":
+            failures.append(f"{display}: dynamic-flow-gate.flow_unit_behavior must be schema-only")
+    active_modes = [mode.get("id") for mode in lifecycle_modes if isinstance(mode, dict) and mode.get("active") is True]
+    default_modes = [mode.get("id") for mode in lifecycle_modes if isinstance(mode, dict) and mode.get("default") is True]
+    if active_modes != [LIFECYCLE_REGISTRY_ACTIVE_MODE]:
+        failures.append(f"{display}: exactly one active mode is required: {LIFECYCLE_REGISTRY_ACTIVE_MODE}")
+    if default_modes != [LIFECYCLE_REGISTRY_ACTIVE_MODE]:
+        failures.append(f"{display}: exactly one default mode is required: {LIFECYCLE_REGISTRY_ACTIVE_MODE}")
+
+    stage_vocabulary = registry.get("stage_vocabulary")
+    if not isinstance(stage_vocabulary, list):
+        failures.append(f"{display}: stage_vocabulary must be a list")
+        stage_vocabulary = []
+    stage_ids = [stage.get("id") for stage in stage_vocabulary if isinstance(stage, dict)]
+    if stage_ids != LIFECYCLE_REGISTRY_STAGE_IDS:
+        failures.append(f"{display}: stage_vocabulary must preserve the 11 classic stage ids in order")
+    stage_id_set = set(stage_ids)
+    for index, stage in enumerate(stage_vocabulary, start=1):
+        if not isinstance(stage, dict):
+            failures.append(f"{display}: each stage_vocabulary entry must be an object")
+            continue
+        label = f"{display}: stage {stage.get('id', '<missing>')}"
+        if stage.get("number") != index:
+            failures.append(f"{label}: number must be {index}")
+        expected_gate = f"G{index}"
+        if stage.get("gate_out") != expected_gate:
+            failures.append(f"{label}: gate_out must be {expected_gate}")
+        if not _is_valid_string_list(stage.get("allowed_subphases")):
+            failures.append(f"{label}: allowed_subphases must be a non-empty string list")
+
+    subphase_vocabulary = registry.get("subphase_vocabulary")
+    if not isinstance(subphase_vocabulary, list) or not subphase_vocabulary:
+        failures.append(f"{display}: subphase_vocabulary must be a non-empty list")
+        subphase_vocabulary = []
+    subphase_ids = {
+        item.get("id") for item in subphase_vocabulary
+        if isinstance(item, dict) and item.get("id")
+    }
+    for required_subphase in ("backlog", "implementation", "release-candidate", "released", "operations-feedback"):
+        if required_subphase not in subphase_ids:
+            failures.append(f"{display}: missing required subphase `{required_subphase}`")
+
+    gate_references = registry.get("gate_references")
+    if not isinstance(gate_references, list):
+        failures.append(f"{display}: gate_references must be a list")
+        gate_references = []
+    gate_ids = [gate.get("gate_id") for gate in gate_references if isinstance(gate, dict)]
+    if gate_ids != LIFECYCLE_REGISTRY_GATES:
+        failures.append(f"{display}: gate_references must cover G1-G11 in order")
+    gate_id_set = set(gate_ids)
+    for gate in gate_references:
+        if not isinstance(gate, dict):
+            failures.append(f"{display}: each gate_references entry must be an object")
+            continue
+        gate_label = f"{display}: gate reference {gate.get('gate_id', '<missing>')}"
+        if gate.get("from_stage") not in stage_id_set:
+            failures.append(f"{gate_label}: from_stage must reference stage_vocabulary")
+        if gate.get("to_stage") not in stage_id_set:
+            failures.append(f"{gate_label}: to_stage must reference stage_vocabulary")
+        if "stage-gates.md" not in str(gate.get("source", "")):
+            failures.append(f"{gate_label}: source must reference stage-gates.md")
+
+    allowed_transitions = registry.get("allowed_transitions")
+    if not isinstance(allowed_transitions, list) or not allowed_transitions:
+        failures.append(f"{display}: allowed_transitions must be a non-empty list")
+        allowed_transitions = []
+    transition_ids = []
+    for transition in allowed_transitions:
+        if not isinstance(transition, dict):
+            failures.append(f"{display}: each allowed_transitions entry must be an object")
+            continue
+        transition_id = transition.get("id", "<missing>")
+        transition_ids.append(transition_id)
+        label = f"{display}: transition {transition_id}"
+        if transition.get("from_stage") not in stage_id_set:
+            failures.append(f"{label}: from_stage must reference stage_vocabulary")
+        if transition.get("to_stage") not in stage_id_set:
+            failures.append(f"{label}: to_stage must reference stage_vocabulary")
+        refs = transition.get("gate_references")
+        if not _is_valid_string_list(refs):
+            failures.append(f"{label}: gate_references must be a non-empty string list")
+        else:
+            for gate_id in refs:
+                if gate_id not in gate_id_set:
+                    failures.append(f"{label}: unknown gate reference `{gate_id}`")
+        if not isinstance(transition.get("transition_type"), str) or not transition.get("transition_type", "").strip():
+            failures.append(f"{label}: transition_type must be a non-empty string")
+
+    loop_policy = registry.get("loop_policy")
+    if not isinstance(loop_policy, dict):
+        failures.append(f"{display}: loop_policy must be an object")
+        loop_policy = {}
+    if loop_policy.get("scope") != "per-flow-unit":
+        failures.append(f"{display}: loop_policy.scope must be per-flow-unit")
+    if loop_policy.get("runtime_activation") is not False:
+        failures.append(f"{display}: loop_policy.runtime_activation must be false in schema-only 0.51.0")
+    if not _is_valid_string_list(loop_policy.get("allowed_loop_types")):
+        failures.append(f"{display}: loop_policy.allowed_loop_types must be a non-empty string list")
+    for field in ("blocked_dependency_rule", "sibling_completion_rule", "loop_counter_policy"):
+        if not isinstance(loop_policy.get(field), str) or not loop_policy.get(field, "").strip():
+            failures.append(f"{display}: loop_policy.{field} must be a non-empty string")
+
+    flow_unit_schema = registry.get("flow_unit_schema")
+    if not isinstance(flow_unit_schema, dict):
+        failures.append(f"{display}: flow_unit_schema must be an object")
+        flow_unit_schema = {}
+    if flow_unit_schema.get("schema_only") is not True:
+        failures.append(f"{display}: flow_unit_schema.schema_only must be true")
+    if flow_unit_schema.get("status_activation") != "not-active-in-0.51.0":
+        failures.append(f"{display}: flow_unit_schema.status_activation must be not-active-in-0.51.0")
+    required_fields = flow_unit_schema.get("required_fields")
+    if not isinstance(required_fields, list):
+        failures.append(f"{display}: flow_unit_schema.required_fields must be a list")
+        required_fields = []
+    for field in LIFECYCLE_REGISTRY_REQUIRED_FLOW_FIELDS:
+        if field not in required_fields:
+            failures.append(f"{display}: flow_unit_schema.required_fields missing `{field}`")
+    allowed_unit_types = set(flow_unit_schema.get("allowed_unit_types") or [])
+    for unit_type in ("chapter", "engine-system", "story", "module", "release-candidate", "hotfix"):
+        if unit_type not in allowed_unit_types:
+            failures.append(f"{display}: flow_unit_schema.allowed_unit_types missing `{unit_type}`")
+    allowed_gate_lanes = set(flow_unit_schema.get("allowed_gate_lanes") or [])
+    for lane in ("backlog", "design", "development", "testing", "release-candidate", "released", "operations-feedback"):
+        if lane not in allowed_gate_lanes:
+            failures.append(f"{display}: flow_unit_schema.allowed_gate_lanes missing `{lane}`")
+
+    project_type_hooks = registry.get("project_type_hooks")
+    if not isinstance(project_type_hooks, dict):
+        failures.append(f"{display}: project_type_hooks must be an object")
+        project_type_hooks = {}
+    missing_project_types = sorted(LIFECYCLE_REGISTRY_REQUIRED_PROJECT_TYPES - set(project_type_hooks))
+    if missing_project_types:
+        failures.append(f"{display}: missing project_type_hooks for {', '.join(missing_project_types)}")
+    for project_type, hooks in project_type_hooks.items():
+        hook_label = f"{display}: project_type_hooks.{project_type}"
+        if not isinstance(hooks, dict):
+            failures.append(f"{hook_label} must be an object")
+            continue
+        unit_templates = hooks.get("unit_templates")
+        if not _is_valid_string_list(unit_templates):
+            failures.append(f"{hook_label}.unit_templates must be a non-empty string list")
+            continue
+        default_flow_unit_type = hooks.get("default_flow_unit_type")
+        if default_flow_unit_type not in unit_templates:
+            failures.append(
+                f"{hook_label}.default_flow_unit_type must be included in unit_templates"
+            )
+        if default_flow_unit_type not in allowed_unit_types:
+            failures.append(
+                f"{hook_label}.default_flow_unit_type must be declared in flow_unit_schema.allowed_unit_types"
+            )
+        for unit_template in unit_templates:
+            if unit_template not in allowed_unit_types:
+                failures.append(
+                    f"{hook_label}.unit_templates includes undeclared unit type `{unit_template}`"
+                )
+    game_hooks = project_type_hooks.get("game", {})
+    if isinstance(game_hooks, dict):
+        if "chapter" not in game_hooks.get("unit_templates", []):
+            failures.append(f"{display}: game project_type_hooks must include chapter unit template")
+        game_gate_text = " ".join(_lifecycle_registry_text_values(game_hooks))
+        for gate_id in ("G6", "G7", "G9"):
+            if gate_id not in game_gate_text:
+                failures.append(f"{display}: game project_type_hooks must reference {gate_id}")
+    else:
+        failures.append(f"{display}: project_type_hooks.game must be an object")
+
+    examples = registry.get("examples")
+    if not isinstance(examples, list) or not examples:
+        failures.append(f"{display}: examples must be a non-empty list")
+        examples = []
+    example_by_id = {
+        example.get("id"): example
+        for example in examples
+        if isinstance(example, dict)
+    }
+    python_game = example_by_id.get("python_game_10_chapters")
+    if not python_game:
+        failures.append(f"{display}: examples must include python_game_10_chapters")
+    else:
+        if python_game.get("schema_only") is not True:
+            failures.append(f"{display}: python_game_10_chapters.schema_only must be true")
+        if python_game.get("runtime_activation") is not False:
+            failures.append(f"{display}: python_game_10_chapters.runtime_activation must be false")
+        if python_game.get("project_type") != "game":
+            failures.append(f"{display}: python_game_10_chapters.project_type must be game")
+        flow_units = python_game.get("flow_units")
+        if not isinstance(flow_units, list):
+            failures.append(f"{display}: python_game_10_chapters.flow_units must be a list")
+            flow_units = []
+        chapter_ids = [f"game.chapter.{i:02d}" for i in range(1, 11)]
+        seen_flow_unit_ids = [
+            unit.get("flow_unit_id")
+            for unit in flow_units
+            if isinstance(unit, dict)
+        ]
+        if seen_flow_unit_ids != chapter_ids:
+            failures.append(f"{display}: python_game_10_chapters must define game.chapter.01 through game.chapter.10 in order")
+        lane_by_id = {
+            unit.get("flow_unit_id"): unit.get("gate_lane")
+            for unit in flow_units
+            if isinstance(unit, dict)
+        }
+        expected_lanes = {
+            "game.chapter.01": "released",
+            "game.chapter.02": "testing",
+            "game.chapter.03": "development",
+            **{f"game.chapter.{i:02d}": "backlog" for i in range(4, 11)},
+        }
+        if lane_by_id != expected_lanes:
+            failures.append(f"{display}: python_game_10_chapters lanes must model chapter 1 released, chapter 2 testing, chapter 3 development, chapter 4-10 backlog")
+        for unit in flow_units:
+            if not isinstance(unit, dict):
+                failures.append(f"{display}: each python_game flow unit must be an object")
+                continue
+            unit_label = f"{display}: flow unit {unit.get('flow_unit_id', '<missing>')}"
+            for field in LIFECYCLE_REGISTRY_REQUIRED_FLOW_FIELDS:
+                if field not in unit:
+                    failures.append(f"{unit_label}: missing required field `{field}`")
+            if unit.get("unit_type") not in allowed_unit_types:
+                failures.append(f"{unit_label}: unit_type must be declared in flow_unit_schema.allowed_unit_types")
+            if unit.get("project_type") != "game":
+                failures.append(f"{unit_label}: project_type must be game")
+            if unit.get("current_stage") not in stage_id_set:
+                failures.append(f"{unit_label}: current_stage must reference stage_vocabulary")
+            if unit.get("current_subphase") not in subphase_ids:
+                failures.append(f"{unit_label}: current_subphase must reference subphase_vocabulary")
+            if unit.get("gate_lane") not in allowed_gate_lanes:
+                failures.append(f"{unit_label}: gate_lane must be declared in flow_unit_schema.allowed_gate_lanes")
+            gate_refs = unit.get("gate_references")
+            if not _is_valid_string_list(gate_refs):
+                failures.append(f"{unit_label}: gate_references must be a non-empty string list")
+            else:
+                for gate_id in gate_refs:
+                    if gate_id not in gate_id_set:
+                        failures.append(f"{unit_label}: unknown gate reference `{gate_id}`")
+            next_transitions = unit.get("allowed_next_transitions")
+            if not _is_valid_string_list(next_transitions):
+                failures.append(f"{unit_label}: allowed_next_transitions must be a non-empty string list")
+            else:
+                for transition_id in next_transitions:
+                    if transition_id not in transition_ids:
+                        failures.append(f"{unit_label}: unknown transition `{transition_id}`")
+            for field in ("dependencies", "blockers", "evidence_refs"):
+                if not isinstance(unit.get(field), list):
+                    failures.append(f"{unit_label}: {field} must be a list")
+            if not isinstance(unit.get("loop_state"), dict):
+                failures.append(f"{unit_label}: loop_state must be an object")
+            if unit.get("runtime_status_source") != "example-data-only":
+                failures.append(f"{unit_label}: runtime_status_source must be example-data-only in schema-only 0.51.0")
+
+    for text in _lifecycle_registry_text_values(registry):
+        lowered = text.lower()
+        if "flow-unit runtime behavior active" in lowered:
+            failures.append(f"{display}: forbidden lifecycle runtime activation wording")
+        if "risk-037 closed" in lowered and not _line_has_scoped_claim_negation(text, "risk-037 closed"):
+            failures.append(f"{display}: forbidden lifecycle overclaim `RISK-037 closed`")
+        if "1.0.0 production-ready" in lowered and not _line_has_scoped_claim_negation(text, "1.0.0 production-ready"):
+            failures.append(f"{display}: forbidden lifecycle overclaim `1.0.0 production-ready`")
 
     return failures
 
@@ -17566,6 +18006,33 @@ def cmd_check_capability_registry(args):
     print()
 
 
+def cmd_check_lifecycle_registry(args):
+    """Run dynamic lifecycle registry schema-only consistency guard."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    registry, load_issues = _load_lifecycle_registry()
+    active_mode = registry.get("active_lifecycle_mode", "<unreadable>") if isinstance(registry, dict) else "<unreadable>"
+    default_mode = registry.get("default_lifecycle_mode", "<unreadable>") if isinstance(registry, dict) else "<unreadable>"
+    issues = load_issues or check_lifecycle_registry()
+    print("\n=== Lifecycle Registry Check ===")
+    print(f"  Active lifecycle mode: {active_mode}")
+    print(f"  Default lifecycle mode: {default_mode}")
+    print("  Runtime behavior: schema-only; flow-unit runtime is not activated")
+    if issues:
+        print(f"  Result: FAILED — {len(issues)} issue(s)")
+        for issue in issues[:20]:
+            print(f"    - {issue}")
+        if len(issues) > 20:
+            print(f"    ... and {len(issues) - 20} more")
+        if getattr(args, "fail_on_issues", False):
+            sys.exit(1)
+    else:
+        print("  Result: PASSED — lifecycle registry is schema-only and classic-phase-gate remains active")
+    print()
+
+
 def cmd_check_host_capability_context(args):
     """Run restricted host capability context benchmark guard."""
     try:
@@ -18143,6 +18610,14 @@ def main():
     ccr_p.add_argument("--fail-on-issues", action="store_true",
                        help="Exit with non-zero code if capability registry is incomplete or overclaims")
 
+    # check-lifecycle-registry (FIX-135)
+    clr_p = subparsers.add_parser(
+        "check-lifecycle-registry",
+        help="Check dynamic lifecycle registry schema while keeping classic-phase-gate active",
+    )
+    clr_p.add_argument("--fail-on-issues", action="store_true",
+                       help="Exit with non-zero code if lifecycle registry is incomplete or activates runtime behavior")
+
     # check-host-capability-context (FIX-117)
     chc_p = subparsers.add_parser(
         "check-host-capability-context",
@@ -18294,6 +18769,7 @@ def main():
         "check-first-session-measurement": cmd_check_first_session_measurement,
         "check-governance-packs": cmd_check_governance_packs,
         "check-capability-registry": cmd_check_capability_registry,
+        "check-lifecycle-registry": cmd_check_lifecycle_registry,
         "check-host-capability-context": cmd_check_host_capability_context,
         "check-official-submission-ecosystem": cmd_check_official_submission_ecosystem,
         "check-mainstream-agent-loading": cmd_check_mainstream_agent_loading,

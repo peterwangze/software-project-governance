@@ -211,6 +211,25 @@ class CleanCheckoutBoundaryTests(unittest.TestCase):
             " ".join(registry_artifact[0]["validation_commands"]),
         )
 
+    def test_canonical_manifest_declares_lifecycle_registry_product_artifact(self):
+        manifest_path = vw.ROOT / "skills/software-project-governance/core/manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        artifact_entries = manifest["canonical_product_artifacts"]["entries"]
+
+        registry_artifact = [
+            entry for entry in artifact_entries
+            if entry.get("id") == "lifecycle-registry"
+        ]
+        self.assertEqual(len(registry_artifact), 1)
+        self.assertEqual(
+            registry_artifact[0]["path"],
+            "skills/software-project-governance/core/lifecycle-registry.json",
+        )
+        self.assertTrue(registry_artifact[0]["required"])
+        commands = " ".join(registry_artifact[0]["validation_commands"])
+        self.assertIn("check-lifecycle-registry", commands)
+        self.assertIn("check-manifest-consistency", commands)
+
     def test_canonical_manifest_declares_cleanup_scope(self):
         manifest_path = vw.ROOT / "skills/software-project-governance/core/manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -3324,6 +3343,263 @@ class CapabilityRegistryTests(unittest.TestCase):
             self._write_registry(root, mutate=mutate)
             issues = vw.check_capability_registry(root)
             self.assertTrue(any("forbidden capability overclaim `governance pack is external capability`" in issue for issue in issues))
+
+
+class LifecycleRegistryTests(unittest.TestCase):
+    """FIX-135: dynamic lifecycle registry is schema-only and classic-compatible."""
+
+    def _write_manifest(self, root, mutate=None):
+        manifest_path = root / "skills/software-project-governance/core/manifest.json"
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        data = {
+            "workflow": "software-project-governance",
+            "root_entries": {"files": [], "directories": []},
+            "product": {
+                "entries": [
+                    {
+                        "path": "skills/software-project-governance/core/lifecycle-registry.json",
+                        "type": "file",
+                    }
+                ],
+                "glob_patterns": [],
+            },
+            "repo_only": {"entries": [], "glob_patterns": []},
+            "canonical_product_artifacts": {
+                "entries": [
+                    {
+                        "id": "governance-pack-registry",
+                        "path": "skills/software-project-governance/core/governance-packs.json",
+                        "type": "file",
+                        "required": True,
+                        "artifact_role": "pack-registry",
+                        "validation_commands": [
+                            "python skills/software-project-governance/infra/verify_workflow.py check-governance-packs --fail-on-issues",
+                            "python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues",
+                        ],
+                    },
+                    {
+                        "id": "capability-registry",
+                        "path": "skills/software-project-governance/core/capability-registry.json",
+                        "type": "file",
+                        "required": True,
+                        "artifact_role": "external-capability-registry",
+                        "validation_commands": [
+                            "python skills/software-project-governance/infra/verify_workflow.py check-capability-registry --fail-on-issues",
+                            "python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues",
+                        ],
+                    },
+                    {
+                        "id": "lifecycle-registry",
+                        "path": "skills/software-project-governance/core/lifecycle-registry.json",
+                        "type": "file",
+                        "required": True,
+                        "artifact_role": "dynamic-lifecycle-registry",
+                        "validation_commands": [
+                            "python skills/software-project-governance/infra/verify_workflow.py check-lifecycle-registry --fail-on-issues",
+                            "python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues",
+                        ],
+                    },
+                ]
+            },
+            "cleanup_scope": {"directories": sorted(vw.PLUGIN_SCOPE_DIRS)},
+        }
+        if mutate:
+            mutate(data)
+        manifest_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        return manifest_path
+
+    def _write_registry(self, root, mutate=None, manifest_mutate=None):
+        registry_path = root / "skills/software-project-governance/core/lifecycle-registry.json"
+        registry_path.parent.mkdir(parents=True, exist_ok=True)
+        self._write_manifest(root, mutate=manifest_mutate)
+        data = json.loads(vw.LIFECYCLE_REGISTRY_PATH.read_text(encoding="utf-8"))
+        if mutate:
+            mutate(data)
+        registry_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        return registry_path
+
+    def test_lifecycle_registry_accepts_current_file(self):
+        self.assertEqual(vw.check_lifecycle_registry(vw.ROOT), [])
+
+    def test_lifecycle_registry_accepts_minimal_copied_valid_registry(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_registry(root)
+            self.assertEqual(vw.check_lifecycle_registry(root), [])
+
+    def test_command_reports_active_classic_phase_gate(self):
+        args = argparse.Namespace(fail_on_issues=True)
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            vw.cmd_check_lifecycle_registry(args)
+
+        output = buf.getvalue()
+        self.assertIn("Lifecycle Registry Check", output)
+        self.assertIn("Active lifecycle mode: classic-phase-gate", output)
+        self.assertIn("Default lifecycle mode: classic-phase-gate", output)
+        self.assertIn("Result: PASSED", output)
+
+    def test_lifecycle_registry_rejects_runtime_activation(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data):
+                data["runtime_activation"]["flow_unit_status_runtime"] = True
+
+            self._write_registry(root, mutate=mutate)
+            issues = vw.check_lifecycle_registry(root)
+            self.assertTrue(any("runtime_activation.flow_unit_status_runtime must be false" in issue for issue in issues))
+
+    def test_lifecycle_registry_rejects_dynamic_mode_as_active(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data):
+                data["active_lifecycle_mode"] = "dynamic-flow-gate"
+                data["lifecycle_modes"][0]["active"] = False
+                data["lifecycle_modes"][1]["active"] = True
+
+            self._write_registry(root, mutate=mutate)
+            issues = vw.check_lifecycle_registry(root)
+            self.assertTrue(any("active_lifecycle_mode must be classic-phase-gate" in issue for issue in issues))
+            self.assertTrue(any("dynamic-flow-gate.active must be false" in issue for issue in issues))
+
+    def test_lifecycle_registry_rejects_missing_classic_gate(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data):
+                data["lifecycle_modes"][0]["gate_sequence"].remove("G11")
+
+            self._write_registry(root, mutate=mutate)
+            issues = vw.check_lifecycle_registry(root)
+            self.assertTrue(any("classic-phase-gate.gate_sequence must preserve G1-G11 order" in issue for issue in issues))
+
+    def test_lifecycle_registry_rejects_missing_flow_unit_schema_field(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data):
+                data["flow_unit_schema"]["required_fields"].remove("gate_references")
+
+            self._write_registry(root, mutate=mutate)
+            issues = vw.check_lifecycle_registry(root)
+            self.assertTrue(any("flow_unit_schema.required_fields missing `gate_references`" in issue for issue in issues))
+
+    def test_lifecycle_registry_rejects_missing_project_type_hook(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data):
+                del data["project_type_hooks"]["game"]
+
+            self._write_registry(root, mutate=mutate)
+            issues = vw.check_lifecycle_registry(root)
+            self.assertTrue(any("missing project_type_hooks for game" in issue for issue in issues))
+
+    def test_lifecycle_registry_rejects_undeclared_project_type_unit_template(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data):
+                data["flow_unit_schema"]["allowed_unit_types"].remove("screen")
+
+            self._write_registry(root, mutate=mutate)
+            issues = vw.check_lifecycle_registry(root)
+            self.assertTrue(any(
+                "project_type_hooks.mobile-app.unit_templates includes undeclared unit type `screen`" in issue
+                for issue in issues
+            ))
+
+    def test_lifecycle_registry_rejects_project_type_default_not_in_unit_templates(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data):
+                data["project_type_hooks"]["ai-agent-plugin"]["default_flow_unit_type"] = "module"
+
+            self._write_registry(root, mutate=mutate)
+            issues = vw.check_lifecycle_registry(root)
+            self.assertTrue(any(
+                "project_type_hooks.ai-agent-plugin.default_flow_unit_type must be included in unit_templates" in issue
+                for issue in issues
+            ))
+
+    def test_lifecycle_registry_rejects_project_type_default_not_allowed_unit_type(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data):
+                data["project_type_hooks"]["internal-script"]["unit_templates"].append("task")
+                data["project_type_hooks"]["internal-script"]["default_flow_unit_type"] = "task"
+
+            self._write_registry(root, mutate=mutate)
+            issues = vw.check_lifecycle_registry(root)
+            self.assertTrue(any(
+                "project_type_hooks.internal-script.default_flow_unit_type must be declared in flow_unit_schema.allowed_unit_types" in issue
+                for issue in issues
+            ))
+
+    def test_lifecycle_registry_reports_non_object_root_as_schema_issue(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            registry_path = root / "skills/software-project-governance/core/lifecycle-registry.json"
+            registry_path.parent.mkdir(parents=True, exist_ok=True)
+            self._write_manifest(root)
+            registry_path.write_text(json.dumps([]), encoding="utf-8")
+
+            issues = vw.check_lifecycle_registry(root)
+
+            self.assertEqual(len(issues), 1)
+            self.assertTrue(issues[0].endswith("lifecycle registry root must be an object"))
+
+    def test_lifecycle_registry_rejects_python_game_missing_chapter(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data):
+                data["examples"][0]["flow_units"] = data["examples"][0]["flow_units"][:-1]
+
+            self._write_registry(root, mutate=mutate)
+            issues = vw.check_lifecycle_registry(root)
+            self.assertTrue(any("must define game.chapter.01 through game.chapter.10" in issue for issue in issues))
+
+    def test_lifecycle_registry_rejects_python_game_wrong_lane(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data):
+                data["examples"][0]["flow_units"][2]["gate_lane"] = "testing"
+
+            self._write_registry(root, mutate=mutate)
+            issues = vw.check_lifecycle_registry(root)
+            self.assertTrue(any("chapter 3 development" in issue for issue in issues))
+
+    def test_lifecycle_registry_rejects_missing_manifest_artifact_binding(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def manifest_mutate(data):
+                data["canonical_product_artifacts"]["entries"] = [
+                    entry for entry in data["canonical_product_artifacts"]["entries"]
+                    if entry["id"] != "lifecycle-registry"
+                ]
+
+            self._write_registry(root, manifest_mutate=manifest_mutate)
+            issues = vw.check_lifecycle_registry(root)
+            self.assertTrue(any("must declare lifecycle-registry" in issue for issue in issues))
+
+    def test_lifecycle_registry_rejects_readiness_overclaim(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data):
+                data["examples"][0]["rollup_summary"] += " RISK-037 closed and 1.0.0 production-ready."
+
+            self._write_registry(root, mutate=mutate)
+            issues = vw.check_lifecycle_registry(root)
+            self.assertTrue(any("forbidden lifecycle overclaim `RISK-037 closed`" in issue for issue in issues))
+            self.assertTrue(any("forbidden lifecycle overclaim `1.0.0 production-ready`" in issue for issue in issues))
 
 
 class CapabilitySelectionTests(unittest.TestCase):

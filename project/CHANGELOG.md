@@ -2,6 +2,36 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.54.1] - 2026-06-16
+
+### 0.54.1 - Governance Hook Nested Plugin Hotfix
+
+0.54.1 发布 REL-036 governance hook hotfix release package：把已完成并审查通过的 FIX-140 版本化为 patch release。该版本只包装 nested plugin/workflow product path detection 与 commit-msg dated evidence row matching hotfix，不改变 0.55.0 Dynamic Lifecycle migration/external validation 规划，不修改 hook 修复逻辑本身，不关闭 RISK-036/RISK-037。
+
+### Fixed
+
+- **FIX-140 nested plugin product path detection**: governance hooks 已能识别根目录产品段和 nested plugin/workflow 产品段，并显式排除 `.governance/**`，避免插件内产品代码提交绕过看护。
+- **FIX-140 dated evidence row matching**: `commit-msg` 证据行匹配兼容 `EVD | TASK_ID` 与 `EVD | date | TASK_ID` 两类格式，避免带日期证据行误阻断已审查提交。
+
+### Changed
+
+- **REL-036**: 新增 0.54.1 release checklist、feature flags、rollback plan、manifest coverage、README readiness boundary 和 release no-overclaim boundary。
+- 版本声明同步到 0.54.1：source SKILL、canonical manifest、Claude/Codex plugin metadata、Claude marketplace metadata、hook @version、target fixture skill/plan、CHANGELOG、README 和 `verify_workflow.py` REQUIRED_SNIPPETS。
+- README 的 1.0.0 Readiness Boundary 更新为 0.54.1 hook hotfix package，明确 RISK-036/RISK-037 继续打开。
+
+### Validation
+
+- `python skills/software-project-governance/infra/verify_workflow.py check-version-consistency`
+- `python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues`
+- `python skills/software-project-governance/infra/verify_workflow.py check-governance --fail-on-issues`
+- `python skills/software-project-governance/infra/verify_workflow.py check-release --version 0.54.1 --require-changelog --runtime-adapters`
+- `git diff --check`
+
+### Boundary
+
+- RISK-036 remains open. 0.54.1 does not include official approval, marketplace approval, two-real-project external validation full PASS, Codex Desktop lifecycle PASS, project migration, RISK-036 closure, or 1.0.0 production-ready approval.
+- RISK-037 remains open. 0.54.1 is a hook hotfix patch only; it does not change 0.55.0 migration/external validation planning, does not migrate projects, does not make dynamic-flow-gate the default, does not change registry automation command execution, does not close RISK-037, and does not claim dynamic lifecycle readiness.
+
 ## [0.54.0] - 2026-06-16
 
 ### 0.54.0 - Declarative Gate Engine Classic Registry Execution

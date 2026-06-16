@@ -2,6 +2,38 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.53.0] - 2026-06-16
+
+### 0.53.0 - Project-Type Gate Presets
+
+0.53.0 发布 REL-033 Project-Type Gate Presets release package：把 FIX-137 project-type gate presets 版本化为 lifecycle registry preset data、TOOL-039 guard、release docs 和 metadata。该版本覆盖 game、web-app、mobile-app、library、cli-tool、ai-agent-plugin、internal-script，并为每类声明 profile/project-type 正交边界、default packs、quality budget、acceptance templates、release checks、gate policy 和 gate standards。
+
+### Added
+
+- **FIX-137 project-type gate presets**: `project_type_gate_presets` 已覆盖 game/web-app/mobile-app/library/cli-tool/ai-agent-plugin/internal-script；game 标准覆盖 chapter、level、asset、narrative、playability，library 标准覆盖 api、semver、docs、downstream-tests。
+- **TOOL-039 Project-Type Gate Presets guard**: `check-lifecycle-registry --fail-on-issues` 校验 preset 完整性、preset/hook 对应、default flow unit type、profile/project-type 正交、game/library 必需标准和 no-overclaim variants。
+- **LifecycleRegistry coverage**: FIX-137 证据记录 LifecycleRegistryTests 28/28 PASS，支撑 release package 版本化。
+- **REL-033**: 新增 0.53.0 release checklist、feature flags、rollback plan、manifest coverage、README readiness boundary 和 release no-overclaim boundary。
+
+### Changed
+
+- 版本声明同步到 0.53.0：source SKILL、canonical manifest、Claude/Codex plugin metadata、Claude marketplace metadata、hook @version、target fixture skill/plan、CHANGELOG、README 和 `verify_workflow.py` REQUIRED_SNIPPETS。
+- README 的 1.0.0 Readiness Boundary 更新为 0.53.0 Project-Type Gate Presets package，明确 RISK-036/RISK-037 继续打开。
+
+### Validation
+
+- `python skills/software-project-governance/infra/verify_workflow.py check-version-consistency`
+- `python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues`
+- `python skills/software-project-governance/infra/verify_workflow.py check-lifecycle-registry --fail-on-issues`
+- `python skills/software-project-governance/infra/verify_workflow.py check-governance --fail-on-issues`
+- `python skills/software-project-governance/infra/verify_workflow.py check-release --version 0.53.0 --require-changelog --runtime-adapters`
+- `git diff --check`
+
+### Boundary
+
+- RISK-036 remains open. 0.53.0 does not include official approval, marketplace approval, two-real-project external validation full PASS, Codex Desktop lifecycle PASS, RISK-036 closure, or 1.0.0 production-ready approval.
+- RISK-037 remains open. 0.53.0 releases project-type preset data and guard coverage only; it does not activate a declarative gate engine, does not migrate projects, does not make dynamic-flow-gate the default, does not close RISK-037, and does not claim dynamic lifecycle readiness.
+
 ## [0.52.0] - 2026-06-15
 
 ### 0.52.0 - Flow Unit Runtime Visibility

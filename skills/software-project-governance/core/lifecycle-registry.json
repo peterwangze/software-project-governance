@@ -13,17 +13,19 @@
     "flow_unit_status_runtime": false,
     "project_migration": false,
     "declarative_gate_engine": false,
+    "classic_registry_execution": true,
     "release_bump": false
   },
   "no_overclaim_boundary": [
-    "Project-type gate preset registry does not activate flow-unit runtime behavior.",
-    "Project-type gate preset registry does not migrate projects.",
-    "Project-type gate preset registry does not replace classic G1-G11 behavior.",
-    "Project-type gate preset registry does not activate declarative gate engine.",
-    "Project-type gate preset registry does not make dynamic-flow-gate the default lifecycle mode.",
-    "Project-type gate preset registry does not close RISK-036.",
-    "Project-type gate preset registry does not close RISK-037.",
-    "Project-type gate preset registry does not claim 1.0.0 production-ready."
+    "Declarative gate engine registry enables classic G1-G11 registry execution only.",
+    "Declarative gate engine registry does not activate flow-unit runtime behavior.",
+    "Declarative gate engine registry does not migrate projects.",
+    "Declarative gate engine registry preserves classic G1-G11 behavior.",
+    "Declarative gate engine registry automation commands are metadata only and are not executed by gate judgment.",
+    "Declarative gate engine registry does not make dynamic-flow-gate the default lifecycle mode.",
+    "Declarative gate engine registry does not close RISK-036.",
+    "Declarative gate engine registry does not close RISK-037.",
+    "Declarative gate engine registry does not claim 1.0.0 production-ready."
   ],
   "lifecycle_modes": [
     {
@@ -1742,5 +1744,698 @@
         }
       ]
     }
+  },
+  "gate_execution_registry": {
+    "introduced_for": "0.54.0",
+    "status": "active-classic-compatibility",
+    "classic_registry_execution": true,
+    "execution_scope": "classic-g1-g11-only",
+    "automation_commands_are_metadata_only": true,
+    "project_migration": false,
+    "dynamic_flow_gate_default": false,
+    "notes": "auto_judge_gate reads this registry for classic G1-G11 check execution. Project-type overrides are metadata and validation contracts only; they do not migrate projects or activate dynamic-flow-gate as default.",
+    "gate_checks": [
+      {
+        "gate_id": "G1",
+        "required_artifacts": [
+          ".governance/plan-tracker.md"
+        ],
+        "checks": [
+          {
+            "check_id": "quantifiable_metrics",
+            "label": "项目目标可衡量",
+            "executor": "function",
+            "severity": "high",
+            "function": "check_quantifiable_metrics"
+          },
+          {
+            "check_id": "scope_boundary",
+            "label": "范围边界清晰",
+            "executor": "function",
+            "severity": "medium",
+            "function": "check_scope_boundary"
+          },
+          {
+            "check_id": "stakeholders",
+            "label": "关键干系人已识别",
+            "executor": "function",
+            "severity": "medium",
+            "function": "check_stakeholders"
+          },
+          {
+            "check_id": "out_of_scope",
+            "label": "明確的『不做什麼』清單",
+            "executor": "function",
+            "severity": "medium",
+            "function": "check_out_of_scope"
+          }
+        ],
+        "evidence_query": {
+          "source": "hot governance files plus archive-aware evidence where supported",
+          "fields": [
+            "goal",
+            "scope",
+            "stakeholders",
+            "out_of_scope"
+          ],
+          "archive_aware": false
+        },
+        "automation_command": {
+          "command": "python skills/software-project-governance/infra/verify_workflow.py gate G1",
+          "execution_policy": "metadata-only-not-executed-by-gate-judgment",
+          "side_effect_boundary": "Declared for operator visibility only; auto_judge_gate must not execute shell commands from registry."
+        },
+        "human_confirmation_policy": {
+          "needs_human_when": "scope, stakeholder, or out-of-scope facts remain ambiguous",
+          "confirmation_required_for_override": true
+        },
+        "severity": "high",
+        "project_type_overrides": {
+          "game": {
+            "additional_required_artifacts": [
+              "chapter list or vertical slice scope"
+            ],
+            "severity_override": "high"
+          },
+          "library": {
+            "additional_required_artifacts": [
+              "public API scope or non-public-change statement"
+            ],
+            "severity_override": "high"
+          }
+        }
+      },
+      {
+        "gate_id": "G2",
+        "required_artifacts": [
+          "project/workflows/software-project-governance/research/"
+        ],
+        "checks": [
+          {
+            "check_id": "research_doc_count",
+            "label": "调研覆盖技术/市场/用户三维度",
+            "executor": "snippet_in_file",
+            "severity": "medium",
+            "path": "project/workflows/software-project-governance/research/company-practices.md",
+            "snippet": "## "
+          },
+          {
+            "check_id": "competitor_analysis",
+            "label": "竞争格局清晰（竞品≥3×≥4维度）",
+            "executor": "file_exists",
+            "severity": "medium",
+            "path": "project/workflows/software-project-governance/research/agent-integration-models.md"
+          },
+          {
+            "check_id": "data_support",
+            "label": "关键发现有数据支撑",
+            "executor": "research_doc_count",
+            "severity": "medium",
+            "path": "project/workflows/software-project-governance/research",
+            "min_count": 4,
+            "message": "research/ 目录含多份调研文档，数据来源可追溯",
+            "failure_message": "research/ 调研文档不足 4 份"
+          },
+          {
+            "check_id": "constraints",
+            "label": "技术可行性约束已识别",
+            "executor": "snippet_in_file",
+            "severity": "medium",
+            "path": ".governance/risk-log.md",
+            "snippet": "RISK-"
+          }
+        ],
+        "evidence_query": {
+          "source": "hot governance files plus archive-aware evidence where supported",
+          "fields": [
+            "research_docs",
+            "competitive_analysis",
+            "technical_constraints"
+          ],
+          "archive_aware": false
+        },
+        "automation_command": {
+          "command": "python skills/software-project-governance/infra/verify_workflow.py gate G2",
+          "execution_policy": "metadata-only-not-executed-by-gate-judgment",
+          "side_effect_boundary": "Declared for operator visibility only; auto_judge_gate must not execute shell commands from registry."
+        },
+        "human_confirmation_policy": {
+          "needs_human_when": "research evidence is incomplete",
+          "confirmation_required_for_override": true
+        },
+        "severity": "medium",
+        "project_type_overrides": {}
+      },
+      {
+        "gate_id": "G3",
+        "required_artifacts": [
+          ".governance/decision-log.md"
+        ],
+        "checks": [
+          {
+            "check_id": "candidate_count",
+            "label": "评估了至少2个候选方案",
+            "executor": "snippet_in_file",
+            "severity": "high",
+            "path": ".governance/decision-log.md",
+            "snippet": "备选方案"
+          },
+          {
+            "check_id": "criteria_defined",
+            "label": "评估标准事先定义",
+            "executor": "snippet_in_file",
+            "severity": "high",
+            "path": "skills/software-project-governance/core/protocol/plugin-contract.md",
+            "snippet": "准入标准"
+          },
+          {
+            "check_id": "decision_reason",
+            "label": "选择原因已留痕",
+            "executor": "snippet_in_file",
+            "severity": "high",
+            "path": ".governance/decision-log.md",
+            "snippet": "选择原因"
+          },
+          {
+            "check_id": "poc_validation",
+            "label": "关键风险已通过PoC验证",
+            "executor": "snippet_in_file",
+            "severity": "medium",
+            "path": "skills/software-project-governance/core/protocol/headless-runner-sample.md",
+            "snippet": "## 目标"
+          }
+        ],
+        "evidence_query": {
+          "source": "hot governance files plus archive-aware evidence where supported",
+          "fields": [
+            "candidate_evaluations",
+            "decision_reason",
+            "poc_validation"
+          ],
+          "archive_aware": false
+        },
+        "automation_command": {
+          "command": "python skills/software-project-governance/infra/verify_workflow.py gate G3",
+          "execution_policy": "metadata-only-not-executed-by-gate-judgment",
+          "side_effect_boundary": "Declared for operator visibility only; auto_judge_gate must not execute shell commands from registry."
+        },
+        "human_confirmation_policy": {
+          "needs_human_when": "option comparison or PoC evidence is incomplete",
+          "confirmation_required_for_override": true
+        },
+        "severity": "high",
+        "project_type_overrides": {}
+      },
+      {
+        "gate_id": "G4",
+        "required_artifacts": [
+          "skills/software-project-governance/infra/verify_workflow.py"
+        ],
+        "checks": [
+          {
+            "check_id": "environment",
+            "label": "开发环境可复现",
+            "executor": "file_exists",
+            "severity": "medium",
+            "path": "skills/software-project-governance/infra/verify_workflow.py"
+          },
+          {
+            "check_id": "required_files",
+            "label": "仓库结构符合约定",
+            "executor": "function",
+            "severity": "high",
+            "function": "check_all_required_files_exist"
+          },
+          {
+            "check_id": "ci",
+            "label": "基础CI可运行",
+            "executor": "file_exists",
+            "severity": "medium",
+            "path": "skills/software-project-governance/infra/verify_workflow.py"
+          },
+          {
+            "check_id": "collaboration",
+            "label": "协作规范已建立",
+            "executor": "snippet_in_file",
+            "severity": "medium",
+            "path": "skills/software-project-governance/SKILL.md",
+            "snippet": "MUST"
+          }
+        ],
+        "evidence_query": {
+          "source": "hot governance files plus archive-aware evidence where supported",
+          "fields": [
+            "reproducible_environment",
+            "repo_structure",
+            "ci",
+            "collaboration_rules"
+          ],
+          "archive_aware": false
+        },
+        "automation_command": {
+          "command": "python skills/software-project-governance/infra/verify_workflow.py gate G4",
+          "execution_policy": "metadata-only-not-executed-by-gate-judgment",
+          "side_effect_boundary": "Declared for operator visibility only; auto_judge_gate must not execute shell commands from registry."
+        },
+        "human_confirmation_policy": {
+          "needs_human_when": "environment setup or collaboration facts are ambiguous",
+          "confirmation_required_for_override": true
+        },
+        "severity": "medium",
+        "project_type_overrides": {}
+      },
+      {
+        "gate_id": "G5",
+        "required_artifacts": [
+          "skills/software-project-governance/core/protocol/plugin-contract.md"
+        ],
+        "checks": [
+          {
+            "check_id": "nfr",
+            "label": "架构满足非功能性需求",
+            "executor": "snippet_in_file",
+            "severity": "high",
+            "path": "skills/software-project-governance/core/protocol/plugin-contract.md",
+            "snippet": "冲击场景"
+          },
+          {
+            "check_id": "boundaries",
+            "label": "模块划分清晰、职责单一",
+            "executor": "snippet_in_file",
+            "severity": "medium",
+            "path": "skills/main-workflow/SKILL.md",
+            "snippet": "## "
+          },
+          {
+            "check_id": "interfaces",
+            "label": "关键接口已定义",
+            "executor": "snippet_in_file",
+            "severity": "high",
+            "path": "skills/software-project-governance/core/protocol/command-schema.md",
+            "snippet": "Input Parameters"
+          },
+          {
+            "check_id": "tech_review",
+            "label": "经过技术评审",
+            "executor": "snippet_in_file",
+            "severity": "medium",
+            "path": "skills/tech-review/SKILL.md",
+            "snippet": "评审"
+          },
+          {
+            "check_id": "design_detail",
+            "label": "详细设计覆盖核心模块",
+            "executor": "snippet_in_file",
+            "severity": "medium",
+            "path": "skills/stage-architecture/SKILL.md",
+            "snippet": "## "
+          }
+        ],
+        "evidence_query": {
+          "source": "hot governance files plus archive-aware evidence where supported",
+          "fields": [
+            "architecture_nfrs",
+            "module_boundaries",
+            "interfaces",
+            "tech_review"
+          ],
+          "archive_aware": false
+        },
+        "automation_command": {
+          "command": "python skills/software-project-governance/infra/verify_workflow.py gate G5",
+          "execution_policy": "metadata-only-not-executed-by-gate-judgment",
+          "side_effect_boundary": "Declared for operator visibility only; auto_judge_gate must not execute shell commands from registry."
+        },
+        "human_confirmation_policy": {
+          "needs_human_when": "architecture or detailed design coverage is incomplete",
+          "confirmation_required_for_override": true
+        },
+        "severity": "high",
+        "project_type_overrides": {}
+      },
+      {
+        "gate_id": "G6",
+        "required_artifacts": [
+          "skills/software-project-governance/infra/verify_workflow.py"
+        ],
+        "checks": [
+          {
+            "check_id": "progress",
+            "label": "核心功能按设计实现",
+            "executor": "completed_ratio",
+            "severity": "high",
+            "min_ratio": 0.5
+          },
+          {
+            "check_id": "coverage",
+            "label": "单元测试覆盖达标（standard: ≥70%）",
+            "executor": "file_exists",
+            "severity": "medium",
+            "path": "skills/software-project-governance/infra/verify_workflow.py"
+          },
+          {
+            "check_id": "code_review",
+            "label": "Code Review 遗留项关闭",
+            "executor": "evidence_mentions",
+            "severity": "medium",
+            "keyword": "code-review-standard"
+          },
+          {
+            "check_id": "integration",
+            "label": "集成验证通过",
+            "executor": "file_exists",
+            "severity": "high",
+            "path": "skills/software-project-governance/infra/verify_workflow.py"
+          }
+        ],
+        "evidence_query": {
+          "source": "hot governance files plus archive-aware evidence where supported",
+          "fields": [
+            "implementation_progress",
+            "tests",
+            "review",
+            "integration"
+          ],
+          "archive_aware": false
+        },
+        "automation_command": {
+          "command": "python skills/software-project-governance/infra/verify_workflow.py gate G6",
+          "execution_policy": "metadata-only-not-executed-by-gate-judgment",
+          "side_effect_boundary": "Declared for operator visibility only; auto_judge_gate must not execute shell commands from registry."
+        },
+        "human_confirmation_policy": {
+          "needs_human_when": "implementation or review evidence is partial",
+          "confirmation_required_for_override": true
+        },
+        "severity": "high",
+        "project_type_overrides": {}
+      },
+      {
+        "gate_id": "G7",
+        "required_artifacts": [
+          "skills/software-project-governance/infra/verify_workflow.py"
+        ],
+        "checks": [
+          {
+            "check_id": "defects",
+            "label": "关键缺陷已关闭",
+            "executor": "function",
+            "severity": "critical",
+            "function": "check_risk_has_closed"
+          },
+          {
+            "check_id": "regression",
+            "label": "回归测试通过",
+            "executor": "file_exists",
+            "severity": "high",
+            "path": "skills/software-project-governance/infra/verify_workflow.py"
+          },
+          {
+            "check_id": "performance",
+            "label": "性能指标达标",
+            "executor": "constant_result",
+            "severity": "medium",
+            "result": "NEEDS_HUMAN",
+            "message": "无性能测试基础设施——需人工确认性能指标"
+          },
+          {
+            "check_id": "security",
+            "label": "安全测试覆盖关键风险",
+            "executor": "evidence_mentions",
+            "severity": "high",
+            "keyword": "RISK-"
+          }
+        ],
+        "evidence_query": {
+          "source": "hot governance files plus archive-aware evidence where supported",
+          "fields": [
+            "defects_closed",
+            "regression",
+            "performance",
+            "security"
+          ],
+          "archive_aware": false
+        },
+        "automation_command": {
+          "command": "python skills/software-project-governance/infra/verify_workflow.py gate G7",
+          "execution_policy": "metadata-only-not-executed-by-gate-judgment",
+          "side_effect_boundary": "Declared for operator visibility only; auto_judge_gate must not execute shell commands from registry."
+        },
+        "human_confirmation_policy": {
+          "needs_human_when": "quality evidence is incomplete",
+          "confirmation_required_for_override": true
+        },
+        "severity": "critical",
+        "project_type_overrides": {
+          "game": {
+            "additional_required_artifacts": [
+              "playability smoke evidence",
+              "narrative continuity evidence"
+            ],
+            "severity_override": "critical"
+          },
+          "library": {
+            "additional_required_artifacts": [
+              "public API tests",
+              "downstream compatibility evidence"
+            ],
+            "severity_override": "critical"
+          }
+        }
+      },
+      {
+        "gate_id": "G8",
+        "required_artifacts": [
+          "skills/software-project-governance/infra/verify_workflow.py"
+        ],
+        "checks": [
+          {
+            "check_id": "ci_stability",
+            "label": "CI 流水线稳定（最近运行成功率 ≥ 80%）",
+            "executor": "file_exists",
+            "severity": "medium",
+            "path": "skills/software-project-governance/infra/verify_workflow.py"
+          },
+          {
+            "check_id": "automation",
+            "label": "自动化测试覆盖核心路径",
+            "executor": "snippet_in_file",
+            "severity": "medium",
+            "path": "skills/software-project-governance/infra/verify_workflow.py",
+            "snippet": "def check_"
+          },
+          {
+            "check_id": "quality_gate",
+            "label": "质量门禁生效",
+            "executor": "snippet_in_file",
+            "severity": "medium",
+            "path": "skills/software-project-governance/infra/verify_workflow.py",
+            "snippet": "check-governance"
+          },
+          {
+            "check_id": "deployment_docs",
+            "label": "部署流程文档化",
+            "executor": "file_exists",
+            "severity": "medium",
+            "path": "skills/stage-release/SKILL.md"
+          }
+        ],
+        "evidence_query": {
+          "source": "hot governance files plus archive-aware evidence where supported",
+          "fields": [
+            "ci_stability",
+            "automation",
+            "quality_gate",
+            "deployment_docs"
+          ],
+          "archive_aware": false
+        },
+        "automation_command": {
+          "command": "python skills/software-project-governance/infra/verify_workflow.py gate G8",
+          "execution_policy": "metadata-only-not-executed-by-gate-judgment",
+          "side_effect_boundary": "Declared for operator visibility only; auto_judge_gate must not execute shell commands from registry."
+        },
+        "human_confirmation_policy": {
+          "needs_human_when": "CI or deployment evidence is incomplete",
+          "confirmation_required_for_override": true
+        },
+        "severity": "medium",
+        "project_type_overrides": {}
+      },
+      {
+        "gate_id": "G9",
+        "required_artifacts": [
+          "project/CHANGELOG.md"
+        ],
+        "checks": [
+          {
+            "check_id": "release_scope",
+            "label": "发布范围明确（版本号/范围/时间窗口）",
+            "executor": "snippet_in_file",
+            "severity": "high",
+            "path": "project/CHANGELOG.md",
+            "snippet": "## [0."
+          },
+          {
+            "check_id": "changelog",
+            "label": "变更日志完整",
+            "executor": "file_exists",
+            "severity": "high",
+            "path": "project/CHANGELOG.md"
+          },
+          {
+            "check_id": "rollback",
+            "label": "回滚方案已验证",
+            "executor": "constant_result",
+            "severity": "medium",
+            "result": "NEEDS_HUMAN",
+            "message": "无回滚测试环境——需人工确认回滚方案"
+          },
+          {
+            "check_id": "post_release_validation",
+            "label": "发布后验证已定义",
+            "executor": "file_exists",
+            "severity": "medium",
+            "path": "skills/release-checklist/SKILL.md"
+          }
+        ],
+        "evidence_query": {
+          "source": "hot governance files plus archive-aware evidence where supported",
+          "fields": [
+            "release_scope",
+            "changelog",
+            "rollback",
+            "post_release_validation"
+          ],
+          "archive_aware": false
+        },
+        "automation_command": {
+          "command": "python skills/software-project-governance/infra/verify_workflow.py gate G9",
+          "execution_policy": "metadata-only-not-executed-by-gate-judgment",
+          "side_effect_boundary": "Declared for operator visibility only; auto_judge_gate must not execute shell commands from registry."
+        },
+        "human_confirmation_policy": {
+          "needs_human_when": "rollback or release validation evidence is missing",
+          "confirmation_required_for_override": true
+        },
+        "severity": "high",
+        "project_type_overrides": {}
+      },
+      {
+        "gate_id": "G10",
+        "required_artifacts": [
+          ".governance/evidence-log.md"
+        ],
+        "checks": [
+          {
+            "check_id": "operation_data",
+            "label": "收集到真实运营数据",
+            "executor": "function",
+            "severity": "high",
+            "function": "check_g10_real_operation_data"
+          },
+          {
+            "check_id": "feedback",
+            "label": "用户反馈已归档",
+            "executor": "function",
+            "severity": "high",
+            "function": "check_g10_feedback_archived_classified"
+          },
+          {
+            "check_id": "issue_severity",
+            "label": "关键问题已识别分类",
+            "executor": "function",
+            "severity": "high",
+            "function": "check_g10_issue_list_severity_status"
+          },
+          {
+            "check_id": "optimization_items",
+            "label": "优化方向已明确",
+            "executor": "function",
+            "severity": "medium",
+            "function": "check_g10_executable_optimization_items"
+          }
+        ],
+        "evidence_query": {
+          "source": "hot governance files plus archive-aware evidence where supported",
+          "fields": [
+            "operation_data",
+            "feedback",
+            "issue_severity",
+            "optimization_items"
+          ],
+          "archive_aware": true
+        },
+        "automation_command": {
+          "command": "python skills/software-project-governance/infra/verify_workflow.py gate G10",
+          "execution_policy": "metadata-only-not-executed-by-gate-judgment",
+          "side_effect_boundary": "Declared for operator visibility only; auto_judge_gate must not execute shell commands from registry."
+        },
+        "human_confirmation_policy": {
+          "needs_human_when": "operational evidence is incomplete",
+          "confirmation_required_for_override": true
+        },
+        "severity": "high",
+        "project_type_overrides": {}
+      },
+      {
+        "gate_id": "G11",
+        "required_artifacts": [
+          ".governance/evidence-log.md",
+          ".governance/plan-tracker.md"
+        ],
+        "checks": [
+          {
+            "check_id": "retro",
+            "label": "复盘完成（含目标回顾/结果评估/原因分析/经验沉淀）",
+            "executor": "function",
+            "severity": "high",
+            "function": "check_g11_retro_complete"
+          },
+          {
+            "check_id": "backfill",
+            "label": "经验回灌到规则和模板",
+            "executor": "function",
+            "severity": "high",
+            "function": "check_g11_rules_templates_backfilled"
+          },
+          {
+            "check_id": "next_round",
+            "label": "下轮方向已明确（计划中的下一轮/活跃 P0）",
+            "executor": "function",
+            "severity": "high",
+            "function": "check_g11_next_round_direction"
+          },
+          {
+            "check_id": "version_consistency",
+            "label": "版本化记录已更新",
+            "executor": "function",
+            "severity": "medium",
+            "function": "check_version_consistency_heuristic"
+          }
+        ],
+        "evidence_query": {
+          "source": "hot governance files plus archive-aware evidence where supported",
+          "fields": [
+            "retro",
+            "backfill",
+            "next_round",
+            "version_consistency"
+          ],
+          "archive_aware": true
+        },
+        "automation_command": {
+          "command": "python skills/software-project-governance/infra/verify_workflow.py gate G11",
+          "execution_policy": "metadata-only-not-executed-by-gate-judgment",
+          "side_effect_boundary": "Declared for operator visibility only; auto_judge_gate must not execute shell commands from registry."
+        },
+        "human_confirmation_policy": {
+          "needs_human_when": "retro or next-round evidence is incomplete",
+          "confirmation_required_for_override": true
+        },
+        "severity": "high",
+        "project_type_overrides": {}
+      }
+    ]
   }
 }

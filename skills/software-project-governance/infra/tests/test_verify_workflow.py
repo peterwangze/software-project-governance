@@ -3507,6 +3507,267 @@ class LifecycleRegistryTests(unittest.TestCase):
         self.assertIn("playability", {item["standard_id"] for item in presets["game"]["gate_standards"]})
         self.assertIn("downstream-tests", {item["standard_id"] for item in presets["library"]["gate_standards"]})
 
+    def test_lifecycle_registry_accepts_gate_execution_registry_contract(self):
+        data = json.loads(vw.LIFECYCLE_REGISTRY_PATH.read_text(encoding="utf-8"))
+        runtime_activation = data["runtime_activation"]
+        registry = data["gate_execution_registry"]
+
+        self.assertFalse(runtime_activation["declarative_gate_engine"])
+        self.assertTrue(runtime_activation["classic_registry_execution"])
+        self.assertTrue(registry["classic_registry_execution"])
+        self.assertEqual(registry["execution_scope"], "classic-g1-g11-only")
+        self.assertTrue(registry["automation_commands_are_metadata_only"])
+        self.assertFalse(registry["project_migration"])
+        self.assertFalse(registry["dynamic_flow_gate_default"])
+        self.assertEqual([item["gate_id"] for item in registry["gate_checks"]], vw.LIFECYCLE_REGISTRY_GATES)
+        for gate_entry in registry["gate_checks"]:
+            for field in (
+                "required_artifacts",
+                "checks",
+                "evidence_query",
+                "automation_command",
+                "human_confirmation_policy",
+                "severity",
+                "project_type_overrides",
+            ):
+                self.assertIn(field, gate_entry)
+
+    def test_lifecycle_registry_preserves_classic_gate_check_contract_parity(self):
+        data = json.loads(vw.LIFECYCLE_REGISTRY_PATH.read_text(encoding="utf-8"))
+        behavior_keys = (
+            "label",
+            "executor",
+            "function",
+            "path",
+            "snippet",
+            "min_ratio",
+            "min_count",
+            "keyword",
+            "result",
+            "message",
+            "failure_message",
+        )
+        contract_by_gate = {
+            gate["gate_id"]: [
+                {key: check[key] for key in behavior_keys if key in check}
+                for check in gate["checks"]
+            ]
+            for gate in data["gate_execution_registry"]["gate_checks"]
+        }
+
+        self.assertEqual(contract_by_gate, {
+            "G1": [
+                {"label": "项目目标可衡量", "executor": "function", "function": "check_quantifiable_metrics"},
+                {"label": "范围边界清晰", "executor": "function", "function": "check_scope_boundary"},
+                {"label": "关键干系人已识别", "executor": "function", "function": "check_stakeholders"},
+                {"label": "明確的『不做什麼』清單", "executor": "function", "function": "check_out_of_scope"},
+            ],
+            "G2": [
+                {
+                    "label": "调研覆盖技术/市场/用户三维度",
+                    "executor": "snippet_in_file",
+                    "path": "project/workflows/software-project-governance/research/company-practices.md",
+                    "snippet": "## ",
+                },
+                {
+                    "label": "竞争格局清晰（竞品≥3×≥4维度）",
+                    "executor": "file_exists",
+                    "path": "project/workflows/software-project-governance/research/agent-integration-models.md",
+                },
+                {
+                    "label": "关键发现有数据支撑",
+                    "executor": "research_doc_count",
+                    "path": "project/workflows/software-project-governance/research",
+                    "min_count": 4,
+                    "message": "research/ 目录含多份调研文档，数据来源可追溯",
+                    "failure_message": "research/ 调研文档不足 4 份",
+                },
+                {
+                    "label": "技术可行性约束已识别",
+                    "executor": "snippet_in_file",
+                    "path": ".governance/risk-log.md",
+                    "snippet": "RISK-",
+                },
+            ],
+            "G3": [
+                {"label": "评估了至少2个候选方案", "executor": "snippet_in_file", "path": ".governance/decision-log.md", "snippet": "备选方案"},
+                {
+                    "label": "评估标准事先定义",
+                    "executor": "snippet_in_file",
+                    "path": "skills/software-project-governance/core/protocol/plugin-contract.md",
+                    "snippet": "准入标准",
+                },
+                {"label": "选择原因已留痕", "executor": "snippet_in_file", "path": ".governance/decision-log.md", "snippet": "选择原因"},
+                {
+                    "label": "关键风险已通过PoC验证",
+                    "executor": "snippet_in_file",
+                    "path": "skills/software-project-governance/core/protocol/headless-runner-sample.md",
+                    "snippet": "## 目标",
+                },
+            ],
+            "G4": [
+                {
+                    "label": "开发环境可复现",
+                    "executor": "file_exists",
+                    "path": "skills/software-project-governance/infra/verify_workflow.py",
+                },
+                {"label": "仓库结构符合约定", "executor": "function", "function": "check_all_required_files_exist"},
+                {
+                    "label": "基础CI可运行",
+                    "executor": "file_exists",
+                    "path": "skills/software-project-governance/infra/verify_workflow.py",
+                },
+                {
+                    "label": "协作规范已建立",
+                    "executor": "snippet_in_file",
+                    "path": "skills/software-project-governance/SKILL.md",
+                    "snippet": "MUST",
+                },
+            ],
+            "G5": [
+                {
+                    "label": "架构满足非功能性需求",
+                    "executor": "snippet_in_file",
+                    "path": "skills/software-project-governance/core/protocol/plugin-contract.md",
+                    "snippet": "冲击场景",
+                },
+                {"label": "模块划分清晰、职责单一", "executor": "snippet_in_file", "path": "skills/main-workflow/SKILL.md", "snippet": "## "},
+                {
+                    "label": "关键接口已定义",
+                    "executor": "snippet_in_file",
+                    "path": "skills/software-project-governance/core/protocol/command-schema.md",
+                    "snippet": "Input Parameters",
+                },
+                {"label": "经过技术评审", "executor": "snippet_in_file", "path": "skills/tech-review/SKILL.md", "snippet": "评审"},
+                {"label": "详细设计覆盖核心模块", "executor": "snippet_in_file", "path": "skills/stage-architecture/SKILL.md", "snippet": "## "},
+            ],
+            "G6": [
+                {"label": "核心功能按设计实现", "executor": "completed_ratio", "min_ratio": 0.5},
+                {
+                    "label": "单元测试覆盖达标（standard: ≥70%）",
+                    "executor": "file_exists",
+                    "path": "skills/software-project-governance/infra/verify_workflow.py",
+                },
+                {"label": "Code Review 遗留项关闭", "executor": "evidence_mentions", "keyword": "code-review-standard"},
+                {
+                    "label": "集成验证通过",
+                    "executor": "file_exists",
+                    "path": "skills/software-project-governance/infra/verify_workflow.py",
+                },
+            ],
+            "G7": [
+                {"label": "关键缺陷已关闭", "executor": "function", "function": "check_risk_has_closed"},
+                {
+                    "label": "回归测试通过",
+                    "executor": "file_exists",
+                    "path": "skills/software-project-governance/infra/verify_workflow.py",
+                },
+                {
+                    "label": "性能指标达标",
+                    "executor": "constant_result",
+                    "result": "NEEDS_HUMAN",
+                    "message": "无性能测试基础设施——需人工确认性能指标",
+                },
+                {"label": "安全测试覆盖关键风险", "executor": "evidence_mentions", "keyword": "RISK-"},
+            ],
+            "G8": [
+                {
+                    "label": "CI 流水线稳定（最近运行成功率 ≥ 80%）",
+                    "executor": "file_exists",
+                    "path": "skills/software-project-governance/infra/verify_workflow.py",
+                },
+                {
+                    "label": "自动化测试覆盖核心路径",
+                    "executor": "snippet_in_file",
+                    "path": "skills/software-project-governance/infra/verify_workflow.py",
+                    "snippet": "def check_",
+                },
+                {
+                    "label": "质量门禁生效",
+                    "executor": "snippet_in_file",
+                    "path": "skills/software-project-governance/infra/verify_workflow.py",
+                    "snippet": "check-governance",
+                },
+                {"label": "部署流程文档化", "executor": "file_exists", "path": "skills/stage-release/SKILL.md"},
+            ],
+            "G9": [
+                {"label": "发布范围明确（版本号/范围/时间窗口）", "executor": "snippet_in_file", "path": "project/CHANGELOG.md", "snippet": "## [0."},
+                {"label": "变更日志完整", "executor": "file_exists", "path": "project/CHANGELOG.md"},
+                {
+                    "label": "回滚方案已验证",
+                    "executor": "constant_result",
+                    "result": "NEEDS_HUMAN",
+                    "message": "无回滚测试环境——需人工确认回滚方案",
+                },
+                {"label": "发布后验证已定义", "executor": "file_exists", "path": "skills/release-checklist/SKILL.md"},
+            ],
+            "G10": [
+                {"label": "收集到真实运营数据", "executor": "function", "function": "check_g10_real_operation_data"},
+                {"label": "用户反馈已归档", "executor": "function", "function": "check_g10_feedback_archived_classified"},
+                {"label": "关键问题已识别分类", "executor": "function", "function": "check_g10_issue_list_severity_status"},
+                {"label": "优化方向已明确", "executor": "function", "function": "check_g10_executable_optimization_items"},
+            ],
+            "G11": [
+                {"label": "复盘完成（含目标回顾/结果评估/原因分析/经验沉淀）", "executor": "function", "function": "check_g11_retro_complete"},
+                {"label": "经验回灌到规则和模板", "executor": "function", "function": "check_g11_rules_templates_backfilled"},
+                {
+                    "label": "下轮方向已明确（计划中的下一轮/活跃 P0）",
+                    "executor": "function",
+                    "function": "check_g11_next_round_direction",
+                },
+                {"label": "版本化记录已更新", "executor": "function", "function": "check_version_consistency_heuristic"},
+            ],
+        })
+
+    def test_lifecycle_registry_rejects_gate_execution_registry_boundary_drift(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data):
+                data["runtime_activation"]["classic_registry_execution"] = False
+                data["gate_execution_registry"]["classic_registry_execution"] = False
+                data["gate_execution_registry"]["dynamic_flow_gate_default"] = True
+                data["gate_execution_registry"]["project_migration"] = True
+
+            self._write_registry(root, mutate=mutate)
+            issues = vw.check_lifecycle_registry(root)
+            self.assertTrue(any("runtime_activation.classic_registry_execution must be true" in issue for issue in issues))
+            self.assertTrue(any("gate_execution_registry.classic_registry_execution must be true" in issue for issue in issues))
+            self.assertTrue(any("gate_execution_registry.dynamic_flow_gate_default must be false" in issue for issue in issues))
+            self.assertTrue(any("gate_execution_registry.project_migration must be false" in issue for issue in issues))
+
+    def test_lifecycle_registry_rejects_unknown_project_type_override(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data):
+                data["gate_execution_registry"]["gate_checks"][0]["project_type_overrides"]["unknown-type"] = {
+                    "severity_override": "high"
+                }
+
+            self._write_registry(root, mutate=mutate)
+            issues = vw.check_lifecycle_registry(root)
+            self.assertTrue(any("project_type_overrides unknown project type `unknown-type`" in issue for issue in issues))
+
+    def test_lifecycle_registry_rejects_malformed_project_type_override_check(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data):
+                data["gate_execution_registry"]["gate_checks"][0]["project_type_overrides"]["game"]["additional_checks"] = [
+                    {
+                        "check_id": "bad_override_check",
+                        "label": "Bad override check",
+                        "executor": "shell",
+                        "severity": "urgent",
+                    }
+                ]
+
+            self._write_registry(root, mutate=mutate)
+            issues = vw.check_lifecycle_registry(root)
+            self.assertTrue(any("additional_checks.bad_override_check.executor has unknown value `shell`" in issue for issue in issues))
+            self.assertTrue(any("additional_checks.bad_override_check.severity must be one of" in issue for issue in issues))
+
     def test_lifecycle_registry_rejects_missing_project_type_gate_preset(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -3737,6 +3998,7 @@ class LifecycleRegistryTests(unittest.TestCase):
         cases = [
             ("declarative gate engine is active", "declarative gate engine active"),
             ("declarative gate engine activated", "declarative gate engine active"),
+            ("activates the declarative gate engine", "declarative gate engine active"),
             ("dynamic-flow-gate is the default lifecycle mode", "dynamic-flow-gate default"),
             ("dynamic-flow-gate is now default", "dynamic-flow-gate default"),
         ]
@@ -10972,6 +11234,53 @@ class GateAutoJudgmentEvidenceQualityTests(unittest.TestCase):
 
     def _patch_governance_paths(self, sp, ep, rp):
         return patch.multiple(vw, SAMPLE_PATH=sp, EVIDENCE_PATH=ep, RISK_PATH=rp)
+
+    def test_auto_judge_gate_reads_registry_check_definitions(self):
+        """FIX-138: gate judgment is registry-backed for classic G1-G11."""
+        data = json.loads(vw.LIFECYCLE_REGISTRY_PATH.read_text(encoding="utf-8"))
+        data["gate_execution_registry"]["gate_checks"][0]["checks"] = [
+            {
+                "check_id": "registry_sentinel",
+                "label": "Registry sentinel check",
+                "executor": "constant_result",
+                "severity": "low",
+                "result": "PASS",
+                "message": "registry path executed",
+            }
+        ]
+        data["gate_execution_registry"]["gate_checks"][0]["automation_command"]["command"] = (
+            "python -c \"raise SystemExit(99)\""
+        )
+
+        with patch.object(vw, "_load_lifecycle_registry", return_value=(data, [])):
+            result = vw.auto_judge_gate("G1")
+
+        self.assertEqual(result["overall"], "passed")
+        self.assertEqual(result["items"], [{
+            "check": "Registry sentinel check",
+            "result": "PASS",
+            "detail": "registry path executed",
+        }])
+
+    def test_auto_judge_gate_blocks_malformed_registry_checks_before_execution(self):
+        """FIX-138 review rework: runtime path validates registry contract fail-closed."""
+        cases = [
+            ("non-list checks", {"not": "a list"}, "checks must be a non-empty list"),
+            ("malformed check entry", ["bad-check"], "checks entries must be objects"),
+        ]
+        for label, checks_value, expected_detail in cases:
+            with self.subTest(label=label):
+                data = json.loads(vw.LIFECYCLE_REGISTRY_PATH.read_text(encoding="utf-8"))
+                data["gate_execution_registry"]["gate_checks"][0]["checks"] = checks_value
+
+                with patch.object(vw, "_load_lifecycle_registry", return_value=(data, [])):
+                    result = vw.auto_judge_gate("G1")
+
+                self.assertEqual(result["overall"], "blocked")
+                self.assertEqual(result["items"][0]["check"], "Gate execution registry contract")
+                self.assertEqual(result["items"][0]["result"], "FAIL")
+                self.assertIn(expected_detail, result["items"][0]["detail"])
+                self.assertIn("registry validation failed", result["summary"])
 
     def test_g10_weak_proxies_do_not_pass(self):
         """复盘/DEC/P0 alone are not credible G10 operation evidence."""

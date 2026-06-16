@@ -45,6 +45,7 @@
 | TOOL-037 | Dynamic Lifecycle Registry guard | script + registry | `infra/verify_workflow.py check-lifecycle-registry` + `core/lifecycle-registry.json` | 0.51.0 lifecycle registry、classic-phase-gate 兼容 preset、flow unit schema 或 schema-only/no-overclaim 边界变更后 | 架构/测试/发布/维护 | 是 |
 | TOOL-038 | Flow Unit Runtime hot-state guard | script + optional hot state | `infra/verify_workflow.py check-flow-unit-runtime [--fixture <path>] --fail-on-issues` + optional `.governance/flow-unit-runtime.json` | 0.52.0 flow-unit runtime visibility、active lanes、per-unit gate state、loop counters、blocked downstream units 或 rollup status 变更后 | 架构/测试/发布/维护 | 是 |
 | TOOL-039 | Project-Type Gate Presets guard | script + registry presets | `infra/verify_workflow.py check-lifecycle-registry --fail-on-issues` + `core/lifecycle-registry.json` `project_type_gate_presets` | 0.53.0 project type gate presets、profile/project-type 正交边界、默认 packs、质量预算、验收模板、release checks、gate policy 或 gate standards 变更后 | 架构/测试/发布/维护 | 是 |
+| TOOL-040 | Classic Gate Execution Registry guard | script + registry execution metadata | `infra/verify_workflow.py check-lifecycle-registry --fail-on-issues` + `infra/verify_workflow.py gate-check <G1-G11>` + `core/lifecycle-registry.json` `gate_execution_registry` | 0.54.0 classic G1-G11 registry execution、gate checks、evidence query、automation metadata、human-confirmation policy、severity 或 project-type overrides 变更后 | 架构/测试/发布/维护 | 是 |
 
 ## 工具详情
 
@@ -101,7 +102,7 @@
 ### TOOL-006：校验脚本
 
 - **文件**：`infra/verify_workflow.py`
-- **子命令**：`verify`（全量校验）、`status`（治理状态摘要）、`gate <G1-G11>`（Gate 检查）、`gates`（全部 Gate 状态）、`stage <stage-id>`（阶段状态）、`stages`（全部阶段状态）、`check-governance --fail-on-issues`（治理健康检查）、`e2e-check`（E2E proxy + fixture 分层检查）、`external-project-validation --target <path> --fail-on-issues`（外部项目临时验证 workspace）、`check-version-consistency`、`check-manifest-consistency`、`check-governance-packs`、`check-capability-registry`、`check-lifecycle-registry`、`check-host-capability-context`、`check-official-submission-ecosystem`、`check-readme-pack-guidance`、`check-governance-pack-status`、`capability-context`、`check-deterministic-scaffolds`、`check-interruption-policy`、`generate-deterministic-scaffold`、`check-locks`、`check-archive-integrity`
+- **子命令**：`verify`（全量校验）、`status`（治理状态摘要）、`gate <G1-G11>`（Gate 详情）、`gate-check <G1-G11>`（registry-backed Gate 自动判定）、`gates`（全部 Gate 状态）、`stage <stage-id>`（阶段状态）、`stages`（全部阶段状态）、`check-governance --fail-on-issues`（治理健康检查）、`e2e-check`（E2E proxy + fixture 分层检查）、`external-project-validation --target <path> --fail-on-issues`（外部项目临时验证 workspace）、`check-version-consistency`、`check-manifest-consistency`、`check-governance-packs`、`check-capability-registry`、`check-lifecycle-registry`、`check-host-capability-context`、`check-official-submission-ecosystem`、`check-readme-pack-guidance`、`check-governance-pack-status`、`capability-context`、`check-deterministic-scaffolds`、`check-interruption-policy`、`generate-deterministic-scaffold`、`check-locks`、`check-archive-integrity`
 - **输入**：无（自动读取项目文件）
 - **输出**：校验结果（PASSED/FAILED）+ 治理状态摘要
 - **触发条件**：工作流资产变更后、Gate 检查时、定期巡检
@@ -450,6 +451,17 @@
 - **边界**：preset data contract only；classic-phase-gate 保持 active/default；dynamic-flow-gate 保持 inactive/schema-only；不激活 declarative gate engine；不迁移项目；不把 dynamic-flow-gate 设为默认；不关闭 RISK-036/RISK-037；不是 1.0.0 production-ready。
 - **被以下子工作流使用**：架构设计（architecture）、测试（testing）、发布（release）、维护（maintenance）
 
+### TOOL-040：Classic Gate Execution Registry guard
+
+- **文件**：`infra/verify_workflow.py` + `core/lifecycle-registry.json`
+- **子命令**：`check-lifecycle-registry [--fail-on-issues]`；运行时检查使用 `gate-check <G1-G11>`
+- **输入**：canonical lifecycle registry 中的 `gate_execution_registry`，覆盖 G1-G11 的 `required_artifacts`、`checks`、`evidence_query`、`automation_command`、`human_confirmation_policy`、`severity` 和 `project_type_overrides`。
+- **输出**：`classic_registry_execution` 是否启用；G1-G11 是否按顺序完整声明；check executor/function/severity 是否可识别；project-type override 是否只引用已声明项目类型并 fail-closed；automation command 是否仅作为 metadata 且不由 gate judgment 执行。
+- **触发条件**：0.54.0 classic G1-G11 registry execution、`auto_judge_gate` 判定路径、gate/check metadata 或 project-type override schema 变更后。
+- **依赖**：TOOL-037、TOOL-039、`core/stage-gates.md`、`check-manifest-consistency`。
+- **边界**：classic registry execution only；`runtime_activation.declarative_gate_engine` 保持 false；不激活 flow-unit runtime；不迁移项目；不把 dynamic-flow-gate 设为默认；不执行 registry 中声明的 automation command；不关闭 RISK-036/RISK-037；不是 1.0.0 production-ready。
+- **被以下子工作流使用**：架构设计（architecture）、测试（testing）、发布（release）、维护（maintenance）
+
 ## 工具与子工作流的关系矩阵
 
 | 工具 | 立项 | 调研 | 选型 | 环境 | 架构 | 开发 | 测试 | CI/CD | 发布 | 运营 | 维护 |
@@ -490,6 +502,7 @@
 | External Project Validation harness | | | | | | | ● | | ● | | ● |
 | Dynamic Lifecycle Registry guard | | | | | ● | | ● | | ● | | ● |
 | Flow Unit Runtime hot-state guard | | | | | ● | | ● | | ● | | ● |
+| Classic Gate Execution Registry guard | | | | | ● | | ● | ● | ● | | ● |
 
 > ● 主要使用者  ○ 可选用
 

@@ -2235,10 +2235,11 @@ LIFECYCLE_REGISTRY_REQUIRED_LIBRARY_STANDARDS = {
     "downstream-tests",
 }
 LIFECYCLE_REGISTRY_BOUNDARY_TOKENS = [
+    "classic G1-G11 registry execution",
     "does not activate flow-unit runtime behavior",
     "does not migrate projects",
-    "does not replace classic G1-G11 behavior",
-    "does not activate declarative gate engine",
+    "preserves classic G1-G11 behavior",
+    "automation commands are metadata only",
     "does not make dynamic-flow-gate the default lifecycle mode",
     "does not close RISK-036",
     "does not close RISK-037",
@@ -2247,7 +2248,11 @@ LIFECYCLE_REGISTRY_BOUNDARY_TOKENS = [
 LIFECYCLE_REGISTRY_FORBIDDEN_OVERCLAIMS = [
     (
         "declarative gate engine active",
-        re.compile(r"\bdeclarative\s+gate\s+engine\s+(?:is\s+|now\s+)?(?:active|activated)\b"),
+        re.compile(r"\bdeclarative\s+gate\s+engine\s+(?:is\s+)?active\b"),
+    ),
+    (
+        "declarative gate engine active",
+        re.compile(r"\bdeclarative\s+gate\s+engine\s+activated\b"),
     ),
     (
         "declarative gate engine active",
@@ -2266,6 +2271,65 @@ LIFECYCLE_REGISTRY_FORBIDDEN_OVERCLAIMS = [
         re.compile(r"\bdefault\s+lifecycle\s+mode\s+(?:is\s+|now\s+)?dynamic-flow-gate\b"),
     ),
 ]
+LIFECYCLE_REGISTRY_RUNTIME_ACTIVATION_EXPECTED = {
+    "flow_unit_status_runtime": False,
+    "project_migration": False,
+    "declarative_gate_engine": False,
+    "classic_registry_execution": True,
+    "release_bump": False,
+}
+GATE_EXECUTION_REGISTRY_REQUIRED_FIELDS = {
+    "introduced_for",
+    "status",
+    "classic_registry_execution",
+    "execution_scope",
+    "automation_commands_are_metadata_only",
+    "project_migration",
+    "dynamic_flow_gate_default",
+    "gate_checks",
+}
+GATE_EXECUTION_REQUIRED_FIELDS = {
+    "gate_id",
+    "required_artifacts",
+    "checks",
+    "evidence_query",
+    "automation_command",
+    "human_confirmation_policy",
+    "severity",
+    "project_type_overrides",
+}
+GATE_EXECUTION_CHECK_REQUIRED_FIELDS = {
+    "check_id",
+    "label",
+    "executor",
+    "severity",
+}
+GATE_EXECUTION_ALLOWED_SEVERITIES = {"critical", "high", "medium", "low"}
+GATE_EXECUTION_ALLOWED_EXECUTORS = {
+    "function",
+    "file_exists",
+    "snippet_in_file",
+    "completed_ratio",
+    "research_doc_count",
+    "constant_result",
+    "evidence_mentions",
+}
+GATE_EXECUTION_ALLOWED_FUNCTIONS = {
+    "check_quantifiable_metrics",
+    "check_scope_boundary",
+    "check_stakeholders",
+    "check_out_of_scope",
+    "check_all_required_files_exist",
+    "check_g10_real_operation_data",
+    "check_g10_feedback_archived_classified",
+    "check_g10_issue_list_severity_status",
+    "check_g10_executable_optimization_items",
+    "check_g11_retro_complete",
+    "check_g11_rules_templates_backfilled",
+    "check_g11_next_round_direction",
+    "check_risk_has_closed",
+    "check_version_consistency_heuristic",
+}
 GOVERNANCE_PACK_IDS = [
     "governance-core",
     "quality-gates",
@@ -3133,6 +3197,179 @@ def _lifecycle_registry_manifest_issues(root, registry_path, display):
     return []
 
 
+def _gate_execution_check_definition_issues(check, check_label):
+    failures = []
+    if not isinstance(check, dict):
+        return [f"{check_label} must be an object"]
+    missing_check_fields = sorted(GATE_EXECUTION_CHECK_REQUIRED_FIELDS - set(check))
+    for field in missing_check_fields:
+        failures.append(f"{check_label}: missing required field `{field}`")
+    if not isinstance(check.get("check_id"), str) or not check.get("check_id", "").strip():
+        failures.append(f"{check_label}.check_id must be a non-empty string")
+    if not isinstance(check.get("label"), str) or not check.get("label", "").strip():
+        failures.append(f"{check_label}.label must be a non-empty string")
+    executor = check.get("executor")
+    if executor not in GATE_EXECUTION_ALLOWED_EXECUTORS:
+        failures.append(f"{check_label}.executor has unknown value `{executor}`")
+    if check.get("severity") not in GATE_EXECUTION_ALLOWED_SEVERITIES:
+        failures.append(f"{check_label}.severity must be one of {sorted(GATE_EXECUTION_ALLOWED_SEVERITIES)}")
+    if executor == "function" and check.get("function") not in GATE_EXECUTION_ALLOWED_FUNCTIONS:
+        failures.append(f"{check_label}.function has unknown value `{check.get('function')}`")
+    if executor in {"file_exists", "snippet_in_file"} and not isinstance(check.get("path"), str):
+        failures.append(f"{check_label}.path must be declared for {executor}")
+    if executor == "snippet_in_file" and not isinstance(check.get("snippet"), str):
+        failures.append(f"{check_label}.snippet must be declared for snippet_in_file")
+    if executor == "completed_ratio" and not isinstance(check.get("min_ratio"), (int, float)):
+        failures.append(f"{check_label}.min_ratio must be numeric for completed_ratio")
+    if executor == "research_doc_count" and not isinstance(check.get("min_count"), int):
+        failures.append(f"{check_label}.min_count must be integer for research_doc_count")
+    if executor == "constant_result":
+        if check.get("result") not in {"PASS", "FAIL", "NEEDS_HUMAN"}:
+            failures.append(f"{check_label}.result must be PASS/FAIL/NEEDS_HUMAN")
+        if not isinstance(check.get("message"), str) or not check.get("message", "").strip():
+            failures.append(f"{check_label}.message must be a non-empty string")
+    if executor == "evidence_mentions" and not isinstance(check.get("keyword"), str):
+        failures.append(f"{check_label}.keyword must be declared for evidence_mentions")
+    return failures
+
+
+def _check_gate_execution_registry(registry, display, gate_id_set, project_type_hooks):
+    failures = []
+    gate_execution_registry = registry.get("gate_execution_registry")
+    if not isinstance(gate_execution_registry, dict):
+        return [f"{display}: gate_execution_registry must be an object"]
+
+    missing_fields = sorted(GATE_EXECUTION_REGISTRY_REQUIRED_FIELDS - set(gate_execution_registry))
+    for field in missing_fields:
+        failures.append(f"{display}: gate_execution_registry missing required field `{field}`")
+    if gate_execution_registry.get("status") != "active-classic-compatibility":
+        failures.append(f"{display}: gate_execution_registry.status must be active-classic-compatibility")
+    if gate_execution_registry.get("classic_registry_execution") is not True:
+        failures.append(f"{display}: gate_execution_registry.classic_registry_execution must be true")
+    if gate_execution_registry.get("execution_scope") != "classic-g1-g11-only":
+        failures.append(f"{display}: gate_execution_registry.execution_scope must be classic-g1-g11-only")
+    if gate_execution_registry.get("automation_commands_are_metadata_only") is not True:
+        failures.append(f"{display}: gate_execution_registry.automation_commands_are_metadata_only must be true")
+    if gate_execution_registry.get("project_migration") is not False:
+        failures.append(f"{display}: gate_execution_registry.project_migration must be false")
+    if gate_execution_registry.get("dynamic_flow_gate_default") is not False:
+        failures.append(f"{display}: gate_execution_registry.dynamic_flow_gate_default must be false")
+
+    gate_checks = gate_execution_registry.get("gate_checks")
+    if not isinstance(gate_checks, list):
+        failures.append(f"{display}: gate_execution_registry.gate_checks must be a list")
+        gate_checks = []
+    gate_ids = [item.get("gate_id") for item in gate_checks if isinstance(item, dict)]
+    if gate_ids != LIFECYCLE_REGISTRY_GATES:
+        failures.append(f"{display}: gate_execution_registry.gate_checks must cover G1-G11 in order")
+
+    project_type_keys = set(project_type_hooks) if isinstance(project_type_hooks, dict) else set()
+    for gate_entry in gate_checks:
+        if not isinstance(gate_entry, dict):
+            failures.append(f"{display}: gate_execution_registry.gate_checks entries must be objects")
+            continue
+        gate_id = gate_entry.get("gate_id", "<missing>")
+        gate_label = f"{display}: gate_execution_registry.{gate_id}"
+        missing = sorted(GATE_EXECUTION_REQUIRED_FIELDS - set(gate_entry))
+        for field in missing:
+            failures.append(f"{gate_label}: missing required field `{field}`")
+        if gate_id not in gate_id_set:
+            failures.append(f"{gate_label}: gate_id must reference gate_references")
+        if not _is_valid_string_list(gate_entry.get("required_artifacts")):
+            failures.append(f"{gate_label}.required_artifacts must be a non-empty string list")
+        if not isinstance(gate_entry.get("evidence_query"), dict):
+            failures.append(f"{gate_label}.evidence_query must be an object")
+        automation_command = gate_entry.get("automation_command")
+        if not isinstance(automation_command, dict):
+            failures.append(f"{gate_label}.automation_command must be metadata object")
+            automation_command = {}
+        else:
+            command_text = automation_command.get("command")
+            if not isinstance(command_text, str) or not command_text.strip():
+                failures.append(f"{gate_label}.automation_command.command must be a non-empty metadata string")
+            if automation_command.get("execution_policy") != "metadata-only-not-executed-by-gate-judgment":
+                failures.append(f"{gate_label}.automation_command.execution_policy must be metadata-only-not-executed-by-gate-judgment")
+        human_policy = gate_entry.get("human_confirmation_policy")
+        if not isinstance(human_policy, dict):
+            failures.append(f"{gate_label}.human_confirmation_policy must be an object")
+            human_policy = {}
+        else:
+            if "needs_human_when" not in human_policy:
+                failures.append(f"{gate_label}.human_confirmation_policy missing `needs_human_when`")
+            if not isinstance(human_policy.get("confirmation_required_for_override", False), bool):
+                failures.append(f"{gate_label}.human_confirmation_policy.confirmation_required_for_override must be boolean")
+        if gate_entry.get("severity") not in GATE_EXECUTION_ALLOWED_SEVERITIES:
+            failures.append(f"{gate_label}.severity must be one of {sorted(GATE_EXECUTION_ALLOWED_SEVERITIES)}")
+
+        checks = gate_entry.get("checks")
+        if not isinstance(checks, list) or not checks:
+            failures.append(f"{gate_label}.checks must be a non-empty list")
+            checks = []
+        seen_check_ids = []
+        for check in checks:
+            if not isinstance(check, dict):
+                failures.append(f"{gate_label}.checks entries must be objects")
+                continue
+            check_id = check.get("check_id", "<missing>")
+            seen_check_ids.append(check_id)
+            check_label = f"{gate_label}.checks.{check_id}"
+            failures.extend(_gate_execution_check_definition_issues(check, check_label))
+        duplicate_checks = sorted({check_id for check_id in seen_check_ids if seen_check_ids.count(check_id) > 1})
+        for check_id in duplicate_checks:
+            failures.append(f"{gate_label}.checks duplicate check_id `{check_id}`")
+
+        overrides = gate_entry.get("project_type_overrides")
+        if not isinstance(overrides, dict):
+            failures.append(f"{gate_label}.project_type_overrides must be an object")
+            overrides = {}
+        unknown_overrides = sorted(set(overrides) - project_type_keys)
+        for project_type in unknown_overrides:
+            failures.append(f"{gate_label}.project_type_overrides unknown project type `{project_type}`")
+        for project_type, override in overrides.items():
+            override_label = f"{gate_label}.project_type_overrides.{project_type}"
+            if not isinstance(override, dict):
+                failures.append(f"{override_label} must be an object")
+                continue
+            if "additional_required_artifacts" in override and not isinstance(override.get("additional_required_artifacts"), list):
+                failures.append(f"{override_label}.additional_required_artifacts must be a string list")
+            elif "additional_required_artifacts" in override and not _is_valid_string_list(override.get("additional_required_artifacts")):
+                failures.append(f"{override_label}.additional_required_artifacts must be a non-empty string list")
+            if "additional_checks" in override:
+                additional_checks = override.get("additional_checks")
+                if not isinstance(additional_checks, list):
+                    failures.append(f"{override_label}.additional_checks must be a list")
+                else:
+                    for index, check in enumerate(additional_checks):
+                        if not isinstance(check, dict):
+                            failures.append(f"{override_label}.additional_checks entries must be objects")
+                            continue
+                        check_id = check.get("check_id", f"index_{index}")
+                        failures.extend(_gate_execution_check_definition_issues(
+                            check,
+                            f"{override_label}.additional_checks.{check_id}",
+                        ))
+            if "severity_override" in override and override.get("severity_override") not in GATE_EXECUTION_ALLOWED_SEVERITIES:
+                failures.append(f"{override_label}.severity_override must be one of {sorted(GATE_EXECUTION_ALLOWED_SEVERITIES)}")
+
+    return failures
+
+
+def _gate_execution_registry_contract_issues(registry, display):
+    gate_references = registry.get("gate_references")
+    if isinstance(gate_references, list):
+        gate_id_set = {
+            gate.get("gate_id")
+            for gate in gate_references
+            if isinstance(gate, dict) and isinstance(gate.get("gate_id"), str)
+        }
+    else:
+        gate_id_set = set()
+    project_type_hooks = registry.get("project_type_hooks")
+    if not isinstance(project_type_hooks, dict):
+        project_type_hooks = {}
+    return _check_gate_execution_registry(registry, display, gate_id_set, project_type_hooks)
+
+
 def check_lifecycle_registry(root=None):
     """FIX-135: dynamic lifecycle registry must remain schema-only and classic-compatible."""
     root = root or ROOT
@@ -3161,9 +3398,12 @@ def check_lifecycle_registry(root=None):
     if not isinstance(runtime_activation, dict):
         failures.append(f"{display}: runtime_activation must be an object")
         runtime_activation = {}
-    for field in ("flow_unit_status_runtime", "project_migration", "declarative_gate_engine", "release_bump"):
-        if runtime_activation.get(field) is not False:
-            failures.append(f"{display}: runtime_activation.{field} must be false for schema-only 0.51.0")
+    for field, expected in LIFECYCLE_REGISTRY_RUNTIME_ACTIVATION_EXPECTED.items():
+        if runtime_activation.get(field) is not expected:
+            if expected is False:
+                failures.append(f"{display}: runtime_activation.{field} must be false for schema-only dynamic lifecycle runtime")
+            else:
+                failures.append(f"{display}: runtime_activation.{field} must be true for classic G1-G11 registry execution")
 
     boundary = registry.get("no_overclaim_boundary")
     if not _is_valid_string_list(boundary):
@@ -3350,6 +3590,8 @@ def check_lifecycle_registry(root=None):
         failures.append(f"{display}: missing project_type_gate_presets for {', '.join(missing_preset_project_types)}")
     if set(project_type_gate_presets) != set(project_type_hooks):
         failures.append(f"{display}: project_type_gate_presets keys must match project_type_hooks keys")
+
+    failures.extend(_check_gate_execution_registry(registry, display, gate_id_set, project_type_hooks))
 
     for project_type, hooks in project_type_hooks.items():
         hook_label = f"{display}: project_type_hooks.{project_type}"
@@ -15158,6 +15400,52 @@ def _check_version_consistency_heuristic():
         return "NEEDS_HUMAN", f"版本检查异常: {e}"
 
 
+def _gate_check_result_from_definition(check_definition):
+    executor = check_definition.get("executor")
+    if executor == "function":
+        function_map = {
+            "check_quantifiable_metrics": "_check_quantifiable_metrics",
+            "check_scope_boundary": "_check_scope_boundary",
+            "check_stakeholders": "_check_stakeholders",
+            "check_out_of_scope": "_check_out_of_scope",
+            "check_all_required_files_exist": "_check_all_required_files_exist",
+            "check_g10_real_operation_data": "_check_g10_real_operation_data",
+            "check_g10_feedback_archived_classified": "_check_g10_feedback_archived_classified",
+            "check_g10_issue_list_severity_status": "_check_g10_issue_list_severity_status",
+            "check_g10_executable_optimization_items": "_check_g10_executable_optimization_items",
+            "check_g11_retro_complete": "_check_g11_retro_complete",
+            "check_g11_rules_templates_backfilled": "_check_g11_rules_templates_backfilled",
+            "check_g11_next_round_direction": "_check_g11_next_round_direction",
+            "check_risk_has_closed": "_check_risk_has_closed",
+            "check_version_consistency_heuristic": "_check_version_consistency_heuristic",
+        }
+        fn = globals().get(function_map.get(check_definition.get("function"), ""))
+        if not callable(fn):
+            return "FAIL", f"未知检查函数 `{check_definition.get('function')}`"
+        return fn()
+    if executor == "file_exists":
+        return _check_file_exists(check_definition.get("path", ""), check_definition["label"])
+    if executor == "snippet_in_file":
+        return _check_snippet_in_file(
+            check_definition.get("path", ""),
+            check_definition.get("snippet", ""),
+            check_definition["label"],
+        )
+    if executor == "completed_ratio":
+        return _check_completed_ratio(check_definition.get("min_ratio", 0.5))
+    if executor == "research_doc_count":
+        path = ROOT / check_definition.get("path", "project/workflows/software-project-governance/research")
+        min_count = check_definition.get("min_count", 0)
+        if path.exists() and len(list(path.glob("*.md"))) >= min_count:
+            return "PASS", check_definition.get("message", "research docs count satisfied")
+        return "FAIL", check_definition.get("failure_message", f"{path} 文档数量不足")
+    if executor == "constant_result":
+        return check_definition.get("result", "NEEDS_HUMAN"), check_definition.get("message", "")
+    if executor == "evidence_mentions":
+        return _check_evidence_mentions(check_definition.get("keyword", ""), check_definition["label"])
+    return "FAIL", f"未知 executor `{executor}`"
+
+
 def auto_judge_gate(gate_id):
     """Auto-judge a specific Gate based on available evidence.
 
@@ -15172,146 +15460,35 @@ def auto_judge_gate(gate_id):
     if not detail:
         return {"error": f"Gate {gate_id} not found", "items": []}
 
-    # ── Gate-specific heuristics ──
-    gate_heuristics = {
-        "G1": [
-            ("项目目标可衡量", _check_quantifiable_metrics),
-            ("范围边界清晰", _check_scope_boundary),
-            ("关键干系人已识别", _check_stakeholders),
-            ("明確的『不做什麼』清單", _check_out_of_scope),
-        ],
-        "G2": [
-            ("调研覆盖技术/市场/用户三维度",
-             lambda: _check_snippet_in_file(
-                 "project/workflows/software-project-governance/research/company-practices.md",
-                 "## ", "调研文档含多维度章节")),
-            ("竞争格局清晰（竞品≥3×≥4维度）",
-             lambda: _check_file_exists(
-                 "project/workflows/software-project-governance/research/agent-integration-models.md",
-                 "竞争分析/竞品对比")),
-            ("关键发现有数据支撑",
-             lambda: ("PASS", "research/ 目录含多份调研文档，数据来源可追溯")
-             if len(list((ROOT / "project/workflows/software-project-governance/research").glob("*.md"))) >= 4
-             else ("FAIL", "research/ 调研文档不足 4 份")),
-            ("技术可行性约束已识别",
-             lambda: _check_snippet_in_file(
-                 ".governance/risk-log.md", "RISK-", "风险记录含技术约束")),
-        ],
-        "G3": [
-            ("评估了至少2个候选方案",
-             lambda: _check_snippet_in_file(
-                 ".governance/decision-log.md", "备选方案", "决策记录含备选方案")),
-            ("评估标准事先定义",
-             lambda: _check_snippet_in_file(
-                 "skills/software-project-governance/core/protocol/plugin-contract.md", "准入标准", "评估标准/准入标准已定义")),
-            ("选择原因已留痕",
-             lambda: _check_snippet_in_file(
-                 ".governance/decision-log.md", "选择原因", "决策记录含选择原因")),
-            ("关键风险已通过PoC验证",
-             lambda: _check_snippet_in_file(
-                 "skills/software-project-governance/core/protocol/headless-runner-sample.md", "## 目标", "PoC/验证样例存在")),
-        ],
-        "G4": [
-            ("开发环境可复现",
-             lambda: _check_file_exists("skills/software-project-governance/infra/verify_workflow.py", "一键验证脚本")),
-            ("仓库结构符合约定",
-             lambda: _check_all_required_files_exist()),
-            ("基础CI可运行",
-             lambda: _check_file_exists("skills/software-project-governance/infra/verify_workflow.py", "CI/验证脚本")),
-            ("协作规范已建立",
-             lambda: _check_snippet_in_file(
-                 "skills/software-project-governance/SKILL.md", "MUST", "行为协议含强制规范")),
-        ],
-        "G5": [
-            ("架构满足非功能性需求",
-             lambda: _check_snippet_in_file(
-                 "skills/software-project-governance/core/protocol/plugin-contract.md", "冲击场景", "非功能需求/冲击场景已定义")),
-            ("模块划分清晰、职责单一",
-             lambda: _check_snippet_in_file(
-                 "skills/main-workflow/SKILL.md", "## ", "模块划分/分层架构已定义")),
-            ("关键接口已定义",
-             lambda: _check_snippet_in_file(
-                 "skills/software-project-governance/core/protocol/command-schema.md", "Input Parameters", "接口/命令schema已定义")),
-            ("经过技术评审",
-             lambda: _check_snippet_in_file(
-                 "skills/tech-review/SKILL.md",
-                 "评审", "技术评审checklist存在")),
-            ("详细设计覆盖核心模块",
-             lambda: _check_snippet_in_file(
-                 "skills/stage-architecture/SKILL.md",
-                 "## ", "架构设计子工作流存在")),
-        ],
-        "G6": [
-            ("核心功能按设计实现",
-             lambda: _check_completed_ratio(0.5)),
-            ("单元测试覆盖达标（standard: ≥70%）",
-             lambda: _check_file_exists("skills/software-project-governance/infra/verify_workflow.py", "验证脚本作为测试覆盖代理")),
-            ("Code Review 遗留项关闭",
-             lambda: _check_evidence_mentions("code-review-standard", "Code Review")),
-            ("集成验证通过",
-             lambda: ("PASS", "verify_workflow.py 可作为集成验证代理——脚本存在且可运行")
-             if (ROOT / "skills/software-project-governance/infra/verify_workflow.py").exists()
-             else ("FAIL", "verify_workflow.py 不存在")),
-        ],
-        "G7": [
-            ("关键缺陷已关闭",
-             lambda: _check_risk_has_closed("关键缺陷")),
-            ("回归测试通过",
-             lambda: _check_file_exists("skills/software-project-governance/infra/verify_workflow.py", "验证脚本作为回归测试代理")),
-            ("性能指标达标",
-             lambda: ("NEEDS_HUMAN", "无性能测试基础设施——需人工确认性能指标")),
-            ("安全测试覆盖关键风险",
-             lambda: _check_evidence_mentions("RISK-", "安全/风险")),
-        ],
-        "G8": [
-            ("CI 流水线稳定（最近运行成功率 ≥ 80%）",
-             lambda: _check_file_exists("skills/software-project-governance/infra/verify_workflow.py", "验证脚本作为 CI 代理——存在即可运行")),
-            ("自动化测试覆盖核心路径",
-             lambda: _check_snippet_in_file(
-                 "skills/software-project-governance/infra/verify_workflow.py", "def check_", "验证脚本含多项自动化检查")),
-            ("质量门禁生效",
-             lambda: _check_snippet_in_file(
-                 "skills/software-project-governance/infra/verify_workflow.py", "check-governance", "check-governance 作为质量门禁")),
-            ("部署流程文档化",
-             lambda: _check_file_exists(
-                 "skills/stage-release/SKILL.md",
-                 "发布阶段子工作流")),
-        ],
-        "G9": [
-            ("发布范围明确（版本号/范围/时间窗口）",
-             lambda: _check_snippet_in_file("project/CHANGELOG.md", "## [0.", "CHANGELOG 含版本发布条目")),
-            ("变更日志完整",
-             lambda: _check_file_exists("project/CHANGELOG.md", "CHANGELOG 存在")),
-            ("回滚方案已验证",
-             lambda: ("NEEDS_HUMAN", "无回滚测试环境——需人工确认回滚方案")),
-            ("发布后验证已定义",
-             lambda: _check_file_exists(
-                 "skills/release-checklist/SKILL.md",
-                 "发布 checklist")),
-        ],
-        "G10": [
-            ("收集到真实运营数据",
-             lambda: _check_g10_real_operation_data()),
-            ("用户反馈已归档",
-             lambda: _check_g10_feedback_archived_classified()),
-            ("关键问题已识别分类",
-             lambda: _check_g10_issue_list_severity_status()),
-            ("优化方向已明确",
-             lambda: _check_g10_executable_optimization_items()),
-        ],
-        "G11": [
-            ("复盘完成（含目标回顾/结果评估/原因分析/经验沉淀）",
-             lambda: _check_g11_retro_complete()),
-            ("经验回灌到规则和模板",
-             lambda: _check_g11_rules_templates_backfilled()),
-            ("下轮方向已明确（计划中的下一轮/活跃 P0）",
-             lambda: _check_g11_next_round_direction()),
-            ("版本化记录已更新",
-             lambda: _check_version_consistency_heuristic()),
-        ],
-    }
+    registry, registry_issues = _load_lifecycle_registry()
+    if registry_issues or not isinstance(registry, dict):
+        return {"error": f"Lifecycle registry unavailable for {gate_id}", "items": []}
+    registry_display = _display_path(LIFECYCLE_REGISTRY_PATH, ROOT)
+    registry_contract_issues = _gate_execution_registry_contract_issues(registry, registry_display)
+    if registry_contract_issues:
+        detail_text = "; ".join(registry_contract_issues[:3])
+        if len(registry_contract_issues) > 3:
+            detail_text += f"; ... ({len(registry_contract_issues)} total issues)"
+        return {
+            "gate": gate_id,
+            "title": detail["title"],
+            "overall": "blocked",
+            "items": [{
+                "check": "Gate execution registry contract",
+                "result": "FAIL",
+                "detail": detail_text,
+            }],
+            "summary": f"registry validation failed: {len(registry_contract_issues)} issue(s)",
+        }
 
-    heuristics = gate_heuristics.get(gate_id, [])
+    gate_registry = registry.get("gate_execution_registry", {})
+    gate_checks = gate_registry.get("gate_checks", []) if isinstance(gate_registry, dict) else []
+    gate_entry = next(
+        (item for item in gate_checks if isinstance(item, dict) and item.get("gate_id") == gate_id),
+        None,
+    )
+    if not gate_entry:
+        return {"error": f"Gate {gate_id} not found in execution registry", "items": []}
 
     # ── Execute auto-judgment ──
     items = []
@@ -15319,14 +15496,14 @@ def auto_judge_gate(gate_id):
     fail_count = 0
     human_count = 0
 
-    for check_label, judge_fn in heuristics:
+    for check_definition in gate_entry.get("checks", []):
         try:
-            result, message = judge_fn()
+            result, message = _gate_check_result_from_definition(check_definition)
         except Exception as e:
             result, message = "FAIL", f"判定异常: {e}"
 
         items.append({
-            "check": check_label,
+            "check": check_definition.get("label", check_definition.get("check_id", "<missing>")),
             "result": result,
             "detail": message,
         })

@@ -2,6 +2,38 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.54.0] - 2026-06-16
+
+### 0.54.0 - Declarative Gate Engine Classic Registry Execution
+
+0.54.0 发布 REL-034 Declarative Gate Engine release package：把 FIX-138 classic registry-backed gate execution 版本化为 lifecycle registry gate execution metadata、TOOL-040 guard、release docs 和 metadata。该版本让 classic G1-G11 gate judgment 从 lifecycle registry 的 `gate_execution_registry` 读取 required artifacts、checks、evidence query、human confirmation policy、severity 和 project-type override metadata，同时保持 automation commands 为 metadata。
+
+### Added
+
+- **FIX-138 classic registry-backed gate execution**: `gate_execution_registry` 覆盖 classic G1-G11 required artifacts、checks、evidence query、automation command metadata、human confirmation policy、severity 和 project-type override metadata。
+- **Registry-backed gate judgment**: `auto_judge_gate()` 已改为读取 registry definitions，并在运行前 fail-closed 校验 registry contract。
+- **TOOL-040 Declarative Gate Engine guard**: `check-lifecycle-registry --fail-on-issues` 校验 gate execution registry 完整性、executor 合法性、evidence query、override contract、malformed checks runtime fail-closed behavior 和 no-overclaim boundaries。
+- **REL-034**: 新增 0.54.0 release checklist、feature flags、rollback plan、manifest coverage、README readiness boundary 和 release no-overclaim boundary。
+
+### Changed
+
+- 版本声明同步到 0.54.0：source SKILL、canonical manifest、Claude/Codex plugin metadata、Claude marketplace metadata、hook @version、target fixture skill/plan、CHANGELOG、README 和 `verify_workflow.py` REQUIRED_SNIPPETS。
+- README 的 1.0.0 Readiness Boundary 更新为 0.54.0 Declarative Gate Engine classic registry execution package，明确 RISK-036/RISK-037 继续打开。
+
+### Validation
+
+- `python skills/software-project-governance/infra/verify_workflow.py check-version-consistency`
+- `python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues`
+- `python skills/software-project-governance/infra/verify_workflow.py check-lifecycle-registry --fail-on-issues`
+- `python skills/software-project-governance/infra/verify_workflow.py check-governance --fail-on-issues`
+- `python skills/software-project-governance/infra/verify_workflow.py check-release --version 0.54.0 --require-changelog --runtime-adapters`
+- `git diff --check`
+
+### Boundary
+
+- RISK-036 remains open. 0.54.0 does not include official approval, marketplace approval, two-real-project external validation full PASS, Codex Desktop lifecycle PASS, RISK-036 closure, or 1.0.0 production-ready approval.
+- RISK-037 remains open. 0.54.0 releases classic registry-backed gate judgment only; it does not migrate projects, does not make dynamic-flow-gate the default, does not execute registry automation commands as part of gate judgment, does not close RISK-037, and does not claim dynamic lifecycle readiness.
+
 ## [0.53.0] - 2026-06-16
 
 ### 0.53.0 - Project-Type Gate Presets

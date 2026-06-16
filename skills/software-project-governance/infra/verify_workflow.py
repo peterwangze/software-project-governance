@@ -2205,13 +2205,66 @@ LIFECYCLE_REGISTRY_REQUIRED_PROJECT_TYPES = {
     "ai-agent-plugin",
     "internal-script",
 }
+LIFECYCLE_REGISTRY_REQUIRED_PRESET_FIELDS = {
+    "profile_intensity_boundary",
+    "default_packs",
+    "quality_budget",
+    "acceptance_templates",
+    "release_checks",
+    "gate_policy",
+    "gate_standards",
+}
+LIFECYCLE_REGISTRY_GATE_POLICY_REQUIRED_FIELDS = {
+    "can_skip_stages",
+    "can_merge_stages",
+    "stage_skip_requires",
+    "blocked_dependency_rule",
+    "sibling_completion_rule",
+}
+LIFECYCLE_REGISTRY_REQUIRED_GAME_STANDARDS = {
+    "chapter",
+    "level",
+    "asset",
+    "narrative",
+    "playability",
+}
+LIFECYCLE_REGISTRY_REQUIRED_LIBRARY_STANDARDS = {
+    "api",
+    "semver",
+    "docs",
+    "downstream-tests",
+}
 LIFECYCLE_REGISTRY_BOUNDARY_TOKENS = [
     "does not activate flow-unit runtime behavior",
     "does not migrate projects",
     "does not replace classic G1-G11 behavior",
+    "does not activate declarative gate engine",
+    "does not make dynamic-flow-gate the default lifecycle mode",
     "does not close RISK-036",
     "does not close RISK-037",
     "does not claim 1.0.0 production-ready",
+]
+LIFECYCLE_REGISTRY_FORBIDDEN_OVERCLAIMS = [
+    (
+        "declarative gate engine active",
+        re.compile(r"\bdeclarative\s+gate\s+engine\s+(?:is\s+|now\s+)?(?:active|activated)\b"),
+    ),
+    (
+        "declarative gate engine active",
+        re.compile(r"\b(?:activate|activates|activated|activating)\s+(?:the\s+)?declarative\s+gate\s+engine\b"),
+    ),
+    (
+        "dynamic-flow-gate default",
+        re.compile(r"\bdynamic-flow-gate\s+(?:is\s+)?(?:now\s+)?(?:the\s+)?default(?:\s+lifecycle\s+mode)?\b"),
+    ),
+    (
+        "dynamic-flow-gate default",
+        re.compile(r"\b(?:make|makes|made|making)\s+dynamic-flow-gate\s+(?:the\s+)?default(?:\s+lifecycle\s+mode)?\b"),
+    ),
+    (
+        "dynamic-flow-gate default",
+        re.compile(r"\bdefault\s+lifecycle\s+mode\s+(?:is\s+|now\s+)?dynamic-flow-gate\b"),
+    ),
 ]
 GOVERNANCE_PACK_IDS = [
     "governance-core",
@@ -3284,9 +3337,20 @@ def check_lifecycle_registry(root=None):
     if not isinstance(project_type_hooks, dict):
         failures.append(f"{display}: project_type_hooks must be an object")
         project_type_hooks = {}
-    missing_project_types = sorted(LIFECYCLE_REGISTRY_REQUIRED_PROJECT_TYPES - set(project_type_hooks))
-    if missing_project_types:
-        failures.append(f"{display}: missing project_type_hooks for {', '.join(missing_project_types)}")
+    missing_hook_project_types = sorted(LIFECYCLE_REGISTRY_REQUIRED_PROJECT_TYPES - set(project_type_hooks))
+    if missing_hook_project_types:
+        failures.append(f"{display}: missing project_type_hooks for {', '.join(missing_hook_project_types)}")
+
+    project_type_gate_presets = registry.get("project_type_gate_presets")
+    if not isinstance(project_type_gate_presets, dict):
+        failures.append(f"{display}: project_type_gate_presets must be an object")
+        project_type_gate_presets = {}
+    missing_preset_project_types = sorted(LIFECYCLE_REGISTRY_REQUIRED_PROJECT_TYPES - set(project_type_gate_presets))
+    if missing_preset_project_types:
+        failures.append(f"{display}: missing project_type_gate_presets for {', '.join(missing_preset_project_types)}")
+    if set(project_type_gate_presets) != set(project_type_hooks):
+        failures.append(f"{display}: project_type_gate_presets keys must match project_type_hooks keys")
+
     for project_type, hooks in project_type_hooks.items():
         hook_label = f"{display}: project_type_hooks.{project_type}"
         if not isinstance(hooks, dict):
@@ -3310,16 +3374,108 @@ def check_lifecycle_registry(root=None):
                 failures.append(
                     f"{hook_label}.unit_templates includes undeclared unit type `{unit_template}`"
                 )
-    game_hooks = project_type_hooks.get("game", {})
-    if isinstance(game_hooks, dict):
-        if "chapter" not in game_hooks.get("unit_templates", []):
-            failures.append(f"{display}: game project_type_hooks must include chapter unit template")
-        game_gate_text = " ".join(_lifecycle_registry_text_values(game_hooks))
-        for gate_id in ("G6", "G7", "G9"):
-            if gate_id not in game_gate_text:
-                failures.append(f"{display}: game project_type_hooks must reference {gate_id}")
-    else:
-        failures.append(f"{display}: project_type_hooks.game must be an object")
+
+    for project_type, preset in project_type_gate_presets.items():
+        preset_label = f"{display}: project_type_gate_presets.{project_type}"
+        hooks = project_type_hooks.get(project_type, {})
+        if not isinstance(preset, dict):
+            failures.append(f"{preset_label} must be an object")
+            continue
+        missing_fields = sorted(LIFECYCLE_REGISTRY_REQUIRED_PRESET_FIELDS - set(preset))
+        for field in missing_fields:
+            failures.append(f"{preset_label}: missing required field `{field}`")
+
+        boundary_text = preset.get("profile_intensity_boundary")
+        if not isinstance(boundary_text, str) or not boundary_text.strip():
+            failures.append(f"{preset_label}.profile_intensity_boundary must be a non-empty string")
+        else:
+            lowered_boundary = boundary_text.lower()
+            if "project type" not in lowered_boundary or "profile" not in lowered_boundary or "orthogonal" not in lowered_boundary:
+                failures.append(
+                    f"{preset_label}.profile_intensity_boundary must state project type and profile are orthogonal"
+                )
+
+        for field in ("default_packs", "acceptance_templates", "release_checks"):
+            if not _is_valid_string_list(preset.get(field)):
+                failures.append(f"{preset_label}.{field} must be a non-empty string list")
+        if "governance-core" not in preset.get("default_packs", []):
+            failures.append(f"{preset_label}.default_packs must include governance-core")
+
+        quality_budget = preset.get("quality_budget")
+        if not isinstance(quality_budget, dict) or not quality_budget:
+            failures.append(f"{preset_label}.quality_budget must be a non-empty object")
+        else:
+            for key, value in quality_budget.items():
+                if not isinstance(key, str) or not key.strip() or not isinstance(value, str) or not value.strip():
+                    failures.append(f"{preset_label}.quality_budget entries must be non-empty strings")
+
+        gate_policy = preset.get("gate_policy")
+        if not isinstance(gate_policy, dict):
+            failures.append(f"{preset_label}.gate_policy must be an object")
+            gate_policy = {}
+        for field in sorted(LIFECYCLE_REGISTRY_GATE_POLICY_REQUIRED_FIELDS):
+            if field not in gate_policy:
+                failures.append(f"{preset_label}.gate_policy missing `{field}`")
+        if not isinstance(gate_policy.get("can_skip_stages", []), list):
+            failures.append(f"{preset_label}.gate_policy.can_skip_stages must be a list")
+        if not isinstance(gate_policy.get("can_merge_stages", []), list):
+            failures.append(f"{preset_label}.gate_policy.can_merge_stages must be a list")
+        for field in ("stage_skip_requires", "blocked_dependency_rule", "sibling_completion_rule"):
+            if not isinstance(gate_policy.get(field), str) or not gate_policy.get(field, "").strip():
+                failures.append(f"{preset_label}.gate_policy.{field} must be a non-empty string")
+
+        preset_unit_templates = preset.get("unit_templates")
+        if not _is_valid_string_list(preset_unit_templates):
+            failures.append(f"{preset_label}.unit_templates must be a non-empty string list")
+            preset_unit_templates = []
+        elif isinstance(hooks, dict) and _is_valid_string_list(hooks.get("unit_templates")) and preset_unit_templates != hooks.get("unit_templates"):
+            failures.append(f"{preset_label}.unit_templates must match project_type_hooks.{project_type}.unit_templates")
+        default_flow_unit_type = preset.get("default_flow_unit_type")
+        if isinstance(hooks, dict) and hooks.get("default_flow_unit_type") and default_flow_unit_type != hooks.get("default_flow_unit_type"):
+            failures.append(f"{preset_label}.default_flow_unit_type must match project_type_hooks.{project_type}.default_flow_unit_type")
+        if default_flow_unit_type not in preset_unit_templates:
+            failures.append(f"{preset_label}.default_flow_unit_type must be included in unit_templates")
+        if default_flow_unit_type not in allowed_unit_types:
+            failures.append(f"{preset_label}.default_flow_unit_type must be declared in flow_unit_schema.allowed_unit_types")
+        for unit_template in preset_unit_templates:
+            if unit_template not in allowed_unit_types:
+                failures.append(f"{preset_label}.unit_templates includes undeclared unit type `{unit_template}`")
+
+        gate_standards = preset.get("gate_standards")
+        if not isinstance(gate_standards, list) or not gate_standards:
+            failures.append(f"{preset_label}.gate_standards must be a non-empty list")
+            gate_standards = []
+        standard_ids = set()
+        for standard in gate_standards:
+            if not isinstance(standard, dict):
+                failures.append(f"{preset_label}.gate_standards entries must be objects")
+                continue
+            standard_id = standard.get("standard_id")
+            if not isinstance(standard_id, str) or not standard_id.strip():
+                failures.append(f"{preset_label}.gate_standards entry missing standard_id")
+            else:
+                standard_ids.add(standard_id)
+            gate_refs = standard.get("gate_references")
+            if not _is_valid_string_list(gate_refs):
+                failures.append(f"{preset_label}.gate_standards.{standard_id}.gate_references must be a non-empty string list")
+            else:
+                for gate_id in gate_refs:
+                    if gate_id not in gate_id_set:
+                        failures.append(f"{preset_label}.gate_standards.{standard_id}: unknown gate reference `{gate_id}`")
+            if not _is_valid_string_list(standard.get("required_evidence")):
+                failures.append(f"{preset_label}.gate_standards.{standard_id}.required_evidence must be a non-empty string list")
+        if project_type == "game":
+            missing_standards = sorted(LIFECYCLE_REGISTRY_REQUIRED_GAME_STANDARDS - standard_ids)
+            if missing_standards:
+                failures.append(
+                    f"{preset_label}.gate_standards missing game standards: {', '.join(missing_standards)}"
+                )
+        if project_type == "library":
+            missing_standards = sorted(LIFECYCLE_REGISTRY_REQUIRED_LIBRARY_STANDARDS - standard_ids)
+            if missing_standards:
+                failures.append(
+                    f"{preset_label}.gate_standards missing library standards: {', '.join(missing_standards)}"
+                )
 
     examples = registry.get("examples")
     if not isinstance(examples, list) or not examples:
@@ -3409,10 +3565,15 @@ def check_lifecycle_registry(root=None):
         lowered = text.lower()
         if "flow-unit runtime behavior active" in lowered:
             failures.append(f"{display}: forbidden lifecycle runtime activation wording")
-        if "risk-037 closed" in lowered and not _line_has_scoped_claim_negation(text, "risk-037 closed"):
-            failures.append(f"{display}: forbidden lifecycle overclaim `RISK-037 closed`")
-        if "1.0.0 production-ready" in lowered and not _line_has_scoped_claim_negation(text, "1.0.0 production-ready"):
-            failures.append(f"{display}: forbidden lifecycle overclaim `1.0.0 production-ready`")
+        for label, pattern in LIFECYCLE_REGISTRY_FORBIDDEN_OVERCLAIMS:
+            for match in pattern.finditer(lowered):
+                matched_text = text[match.start():match.end()]
+                if not _line_has_scoped_claim_negation(text, matched_text):
+                    failures.append(f"{display}: forbidden lifecycle overclaim `{label}`")
+                    break
+        for label, pattern in FLOW_UNIT_RUNTIME_FORBIDDEN_OVERCLAIMS:
+            if pattern.search(lowered) and not _line_has_scoped_claim_negation(text, label):
+                failures.append(f"{display}: forbidden lifecycle overclaim `{label}`")
 
     return failures
 
@@ -4256,6 +4417,11 @@ def _line_has_scoped_claim_negation(line, phrase):
         "1.0.0 production-ready",
         "1.0.0 production-ready claim",
         "risk-036 closed",
+        "risk-037 closed",
+        "risk-036 closure achieved",
+        "risk-037 closure achieved",
+        "declarative gate engine active",
+        "dynamic-flow-gate default",
     )
     direct_pre_markers = (
         "not",

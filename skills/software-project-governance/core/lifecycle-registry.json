@@ -4,6 +4,7 @@
   "workflow": "software-project-governance",
   "workflow_version": "0.50.3",
   "introduced_for": "0.51.0",
+  "project_type_gate_presets_introduced_for": "0.53.0",
   "source_of_truth": true,
   "registry_mode": "schema-only-no-runtime-activation",
   "active_lifecycle_mode": "classic-phase-gate",
@@ -15,12 +16,14 @@
     "release_bump": false
   },
   "no_overclaim_boundary": [
-    "Schema-only registry does not activate flow-unit runtime behavior.",
-    "Schema-only registry does not migrate projects.",
-    "Schema-only registry does not replace classic G1-G11 behavior.",
-    "Schema-only registry does not close RISK-036.",
-    "Schema-only registry does not close RISK-037.",
-    "Schema-only registry does not claim 1.0.0 production-ready."
+    "Project-type gate preset registry does not activate flow-unit runtime behavior.",
+    "Project-type gate preset registry does not migrate projects.",
+    "Project-type gate preset registry does not replace classic G1-G11 behavior.",
+    "Project-type gate preset registry does not activate declarative gate engine.",
+    "Project-type gate preset registry does not make dynamic-flow-gate the default lifecycle mode.",
+    "Project-type gate preset registry does not close RISK-036.",
+    "Project-type gate preset registry does not close RISK-037.",
+    "Project-type gate preset registry does not claim 1.0.0 production-ready."
   ],
   "lifecycle_modes": [
     {
@@ -717,7 +720,7 @@
       "lifecycle_mode": "dynamic-flow-gate",
       "schema_only": true,
       "runtime_activation": false,
-      "source_context": "2026-06-15 external validation feedback; illustrative data only.",
+      "source_context": "2026-06-15 external validation feedback; illustrative data only. Project-type presets remain data contracts only.",
       "rollup_summary": "Game project is in active build while chapter flow units are distributed across operations, testing, development, and backlog lanes.",
       "flow_units": [
         {
@@ -998,5 +1001,746 @@
         }
       ]
     }
-  ]
+  ],
+  "project_type_gate_presets": {
+    "game": {
+      "profile_intensity_boundary": "Project type selects domain gate standards and default artifacts; profile intensity remains orthogonal and only adjusts governance depth such as evidence volume, reviewer strictness, and interruption budget.",
+      "default_flow_unit_type": "chapter",
+      "unit_templates": [
+        "chapter",
+        "level",
+        "asset",
+        "engine-system"
+      ],
+      "default_packs": [
+        "governance-core",
+        "quality-gates",
+        "release-governance"
+      ],
+      "quality_budget": {
+        "playability_smoke": "Each playable slice has deterministic launch, core loop, save/load or retry path, and regression smoke evidence.",
+        "performance_budget": "Scene/frame pacing budget is stated per target platform and checked before release candidate.",
+        "asset_budget": "New art/audio/data assets list source, license, size/performance impact, and fallback behavior.",
+        "narrative_continuity": "Chapter or level changes preserve story continuity, state transitions, and prior released content."
+      },
+      "acceptance_templates": [
+        "playable-slice-acceptance",
+        "chapter-brief-acceptance",
+        "level-smoke-acceptance",
+        "asset-integration-acceptance",
+        "narrative-continuity-acceptance"
+      ],
+      "release_checks": [
+        "playable build launches from a clean checkout",
+        "chapter/level smoke path passes",
+        "asset manifest and licensing facts are recorded",
+        "save/load or retry path is verified when relevant",
+        "known defects and rollback path are documented"
+      ],
+      "gate_policy": {
+        "can_skip_stages": [
+          "research",
+          "selection"
+        ],
+        "can_merge_stages": [
+          [
+            "architecture",
+            "development"
+          ],
+          [
+            "testing",
+            "ci-cd"
+          ]
+        ],
+        "stage_skip_requires": "Skip or merge only when the chapter/level/asset has explicit acceptance evidence and no upstream dependency blocker.",
+        "blocked_dependency_rule": "A blocked chapter, level, asset, or engine-system blocks only declared downstream dependents.",
+        "sibling_completion_rule": "Passing one chapter or level does not imply sibling chapters, levels, assets, or systems have passed."
+      },
+      "gate_standards": [
+        {
+          "standard_id": "chapter",
+          "gate_references": [
+            "G5",
+            "G6",
+            "G7",
+            "G9"
+          ],
+          "required_evidence": [
+            "chapter brief",
+            "playable slice evidence",
+            "regression result",
+            "release or rollback note"
+          ]
+        },
+        {
+          "standard_id": "level",
+          "gate_references": [
+            "G5",
+            "G6",
+            "G7"
+          ],
+          "required_evidence": [
+            "level objective",
+            "mechanics smoke",
+            "difficulty/playability check"
+          ]
+        },
+        {
+          "standard_id": "asset",
+          "gate_references": [
+            "G4",
+            "G6",
+            "G7"
+          ],
+          "required_evidence": [
+            "asset source/license",
+            "integration proof",
+            "performance or size impact"
+          ]
+        },
+        {
+          "standard_id": "narrative",
+          "gate_references": [
+            "G5",
+            "G7",
+            "G10"
+          ],
+          "required_evidence": [
+            "story outline",
+            "continuity review",
+            "player feedback or defect triage"
+          ]
+        },
+        {
+          "standard_id": "playability",
+          "gate_references": [
+            "G6",
+            "G7",
+            "G9"
+          ],
+          "required_evidence": [
+            "core loop smoke",
+            "input/control verification",
+            "release candidate playtest"
+          ]
+        }
+      ]
+    },
+    "web-app": {
+      "profile_intensity_boundary": "Project type selects domain gate standards and default artifacts; profile intensity remains orthogonal and only adjusts governance depth such as evidence volume, reviewer strictness, and interruption budget.",
+      "default_flow_unit_type": "story",
+      "unit_templates": [
+        "story",
+        "module",
+        "release-candidate"
+      ],
+      "default_packs": [
+        "governance-core",
+        "quality-gates",
+        "release-governance"
+      ],
+      "quality_budget": {
+        "accessibility": "Keyboard, focus, contrast, labels, and responsive layout evidence are required for user-facing slices.",
+        "security": "Auth, input validation, secret handling, and dependency risk are checked for changed surfaces.",
+        "performance": "Critical page or API latency budgets are stated and smoke-tested before release.",
+        "reliability": "Error states, loading states, and rollback or feature flag behavior are documented."
+      },
+      "acceptance_templates": [
+        "user-story-acceptance",
+        "api-contract-acceptance",
+        "e2e-smoke-acceptance",
+        "accessibility-acceptance"
+      ],
+      "release_checks": [
+        "clean checkout build/test passes",
+        "critical user flow E2E passes",
+        "accessibility smoke passes",
+        "security-sensitive changes reviewed",
+        "rollback or feature flag path exists"
+      ],
+      "gate_policy": {
+        "can_skip_stages": [
+          "research"
+        ],
+        "can_merge_stages": [
+          [
+            "development",
+            "testing"
+          ],
+          [
+            "ci-cd",
+            "release"
+          ]
+        ],
+        "stage_skip_requires": "Skip only for small vertical slices with existing architecture and unchanged risk profile.",
+        "blocked_dependency_rule": "A blocked story blocks only declared downstream stories/modules/release candidates.",
+        "sibling_completion_rule": "Passing one story does not imply adjacent screens, APIs, or modules have passed."
+      },
+      "gate_standards": [
+        {
+          "standard_id": "user-flow",
+          "gate_references": [
+            "G5",
+            "G6",
+            "G7"
+          ],
+          "required_evidence": [
+            "scenario acceptance",
+            "responsive UI evidence",
+            "E2E or smoke path"
+          ]
+        },
+        {
+          "standard_id": "api-contract",
+          "gate_references": [
+            "G5",
+            "G6",
+            "G7"
+          ],
+          "required_evidence": [
+            "request/response contract",
+            "error handling",
+            "integration test"
+          ]
+        },
+        {
+          "standard_id": "accessibility",
+          "gate_references": [
+            "G6",
+            "G7"
+          ],
+          "required_evidence": [
+            "keyboard/focus/contrast evidence",
+            "screen-reader label review"
+          ]
+        },
+        {
+          "standard_id": "security",
+          "gate_references": [
+            "G5",
+            "G7",
+            "G8"
+          ],
+          "required_evidence": [
+            "threat note for changed surface",
+            "secret/input validation check",
+            "dependency scan or rationale"
+          ]
+        }
+      ]
+    },
+    "mobile-app": {
+      "profile_intensity_boundary": "Project type selects domain gate standards and default artifacts; profile intensity remains orthogonal and only adjusts governance depth such as evidence volume, reviewer strictness, and interruption budget.",
+      "default_flow_unit_type": "story",
+      "unit_templates": [
+        "story",
+        "screen",
+        "release-candidate"
+      ],
+      "default_packs": [
+        "governance-core",
+        "quality-gates",
+        "release-governance"
+      ],
+      "quality_budget": {
+        "device_matrix": "Representative device/OS matrix and emulator or physical-device evidence are recorded.",
+        "offline_behavior": "Offline, reconnect, permissions, and storage behavior are validated where touched.",
+        "store_readiness": "Store metadata, privacy, signing, and release channel checks are explicit before release.",
+        "performance": "Startup, memory, and interaction latency budgets are checked for affected screens."
+      },
+      "acceptance_templates": [
+        "mobile-story-acceptance",
+        "screen-state-acceptance",
+        "device-matrix-smoke",
+        "store-readiness-acceptance"
+      ],
+      "release_checks": [
+        "target platform build passes",
+        "device matrix smoke passes",
+        "permission/privacy checks recorded",
+        "offline/reconnect path covered when relevant",
+        "store/release channel checklist ready"
+      ],
+      "gate_policy": {
+        "can_skip_stages": [
+          "research"
+        ],
+        "can_merge_stages": [
+          [
+            "architecture",
+            "development"
+          ],
+          [
+            "testing",
+            "ci-cd"
+          ]
+        ],
+        "stage_skip_requires": "Skip only for isolated screens/stories with unchanged platform permissions and release channel.",
+        "blocked_dependency_rule": "A blocked screen/story blocks only declared downstream screens/stories/release candidates.",
+        "sibling_completion_rule": "Passing one platform or screen does not imply other platforms or screens have passed."
+      },
+      "gate_standards": [
+        {
+          "standard_id": "screen",
+          "gate_references": [
+            "G5",
+            "G6",
+            "G7"
+          ],
+          "required_evidence": [
+            "screen states",
+            "navigation behavior",
+            "device smoke evidence"
+          ]
+        },
+        {
+          "standard_id": "device-matrix",
+          "gate_references": [
+            "G7",
+            "G8"
+          ],
+          "required_evidence": [
+            "OS/device list",
+            "pass/fail matrix",
+            "known unsupported cases"
+          ]
+        },
+        {
+          "standard_id": "permissions-privacy",
+          "gate_references": [
+            "G5",
+            "G7",
+            "G9"
+          ],
+          "required_evidence": [
+            "permission rationale",
+            "privacy data handling note",
+            "store compliance check"
+          ]
+        },
+        {
+          "standard_id": "offline-sync",
+          "gate_references": [
+            "G6",
+            "G7"
+          ],
+          "required_evidence": [
+            "offline scenario",
+            "reconnect behavior",
+            "data consistency evidence"
+          ]
+        }
+      ]
+    },
+    "library": {
+      "profile_intensity_boundary": "Project type selects domain gate standards and default artifacts; profile intensity remains orthogonal and only adjusts governance depth such as evidence volume, reviewer strictness, and interruption budget.",
+      "default_flow_unit_type": "module",
+      "unit_templates": [
+        "module",
+        "api-surface",
+        "release-candidate"
+      ],
+      "default_packs": [
+        "governance-core",
+        "quality-gates",
+        "release-governance"
+      ],
+      "quality_budget": {
+        "api_stability": "Public API changes identify compatibility impact and migration notes when needed.",
+        "semver_discipline": "Version bump rationale maps to breaking, feature, fix, or docs-only impact.",
+        "docs_examples": "Public API docs and executable examples are updated with changed behavior.",
+        "downstream_confidence": "At least one downstream fixture, consumer test, or compatibility rationale exists for public changes."
+      },
+      "acceptance_templates": [
+        "api-contract-acceptance",
+        "semver-impact-acceptance",
+        "docs-example-acceptance",
+        "downstream-consumer-acceptance"
+      ],
+      "release_checks": [
+        "unit and public API tests pass",
+        "semver impact is recorded",
+        "docs/examples updated",
+        "downstream tests or compatibility rationale pass",
+        "package metadata and changelog ready"
+      ],
+      "gate_policy": {
+        "can_skip_stages": [
+          "research",
+          "selection"
+        ],
+        "can_merge_stages": [
+          [
+            "development",
+            "testing"
+          ]
+        ],
+        "stage_skip_requires": "Skip only for internal-only changes or documented public API no-op changes.",
+        "blocked_dependency_rule": "A blocked API surface blocks dependent modules, releases, and downstream fixtures only when declared.",
+        "sibling_completion_rule": "Passing one module does not imply all public APIs or downstream consumers have passed."
+      },
+      "gate_standards": [
+        {
+          "standard_id": "api",
+          "gate_references": [
+            "G5",
+            "G6",
+            "G7"
+          ],
+          "required_evidence": [
+            "public API contract",
+            "compatibility impact",
+            "API tests"
+          ]
+        },
+        {
+          "standard_id": "semver",
+          "gate_references": [
+            "G5",
+            "G9"
+          ],
+          "required_evidence": [
+            "version bump rationale",
+            "breaking-change flag",
+            "changelog entry"
+          ]
+        },
+        {
+          "standard_id": "docs",
+          "gate_references": [
+            "G6",
+            "G7",
+            "G9"
+          ],
+          "required_evidence": [
+            "reference docs",
+            "example usage",
+            "docs build or lint result"
+          ]
+        },
+        {
+          "standard_id": "downstream-tests",
+          "gate_references": [
+            "G7",
+            "G8",
+            "G9"
+          ],
+          "required_evidence": [
+            "consumer fixture",
+            "integration result",
+            "compatibility exception if skipped"
+          ]
+        }
+      ]
+    },
+    "cli-tool": {
+      "profile_intensity_boundary": "Project type selects domain gate standards and default artifacts; profile intensity remains orthogonal and only adjusts governance depth such as evidence volume, reviewer strictness, and interruption budget.",
+      "default_flow_unit_type": "command",
+      "unit_templates": [
+        "command",
+        "module",
+        "release-candidate"
+      ],
+      "default_packs": [
+        "governance-core",
+        "quality-gates",
+        "release-governance"
+      ],
+      "quality_budget": {
+        "command_contract": "Command syntax, stdout/stderr, exit codes, and config/env behavior are stable and tested.",
+        "error_diagnostics": "Common failure modes produce actionable diagnostics without hiding non-zero failures.",
+        "idempotency": "Repeated runs, dry-run mode, and partial failure behavior are documented when applicable.",
+        "packaging": "Install, upgrade, and shell/platform expectations are checked before release."
+      },
+      "acceptance_templates": [
+        "command-matrix-acceptance",
+        "exit-code-acceptance",
+        "stderr-contract-acceptance",
+        "install-smoke-acceptance"
+      ],
+      "release_checks": [
+        "command matrix passes",
+        "help/version output works",
+        "exit code contract verified",
+        "install or packaging smoke passes",
+        "rollback/uninstall guidance exists if applicable"
+      ],
+      "gate_policy": {
+        "can_skip_stages": [
+          "research"
+        ],
+        "can_merge_stages": [
+          [
+            "development",
+            "testing"
+          ],
+          [
+            "ci-cd",
+            "release"
+          ]
+        ],
+        "stage_skip_requires": "Skip only for non-user-visible command internals with unchanged command contract.",
+        "blocked_dependency_rule": "A blocked command blocks declared dependent commands/modules/release candidates only.",
+        "sibling_completion_rule": "Passing one command does not imply all commands or shells have passed."
+      },
+      "gate_standards": [
+        {
+          "standard_id": "command-contract",
+          "gate_references": [
+            "G5",
+            "G6",
+            "G7"
+          ],
+          "required_evidence": [
+            "usage contract",
+            "stdout/stderr expectations",
+            "exit code tests"
+          ]
+        },
+        {
+          "standard_id": "config-env",
+          "gate_references": [
+            "G5",
+            "G7"
+          ],
+          "required_evidence": [
+            "config/env matrix",
+            "missing/invalid diagnostics",
+            "secret handling check"
+          ]
+        },
+        {
+          "standard_id": "idempotency-dry-run",
+          "gate_references": [
+            "G6",
+            "G7"
+          ],
+          "required_evidence": [
+            "dry-run output",
+            "repeat-run result",
+            "partial failure behavior"
+          ]
+        },
+        {
+          "standard_id": "packaging-install",
+          "gate_references": [
+            "G8",
+            "G9"
+          ],
+          "required_evidence": [
+            "install smoke",
+            "version output",
+            "rollback/uninstall note"
+          ]
+        }
+      ]
+    },
+    "ai-agent-plugin": {
+      "profile_intensity_boundary": "Project type selects domain gate standards and default artifacts; profile intensity remains orthogonal and only adjusts governance depth such as evidence volume, reviewer strictness, and interruption budget.",
+      "default_flow_unit_type": "skill",
+      "unit_templates": [
+        "adapter",
+        "skill",
+        "manifest",
+        "release-candidate"
+      ],
+      "default_packs": [
+        "governance-core",
+        "quality-gates",
+        "release-governance",
+        "agent-team"
+      ],
+      "quality_budget": {
+        "runtime_truthfulness": "Adapter/runtime matrices distinguish PASS, BLOCKED, DEGRADED, and NOT_RUNTIME_VERIFIED.",
+        "projection_sync": "Source, target fixture, manifests, hooks, and native entries stay synchronized.",
+        "no_overclaim": "Docs and release notes do not claim unavailable approvals, marketplace status, universal support, risk closure, or 1.0.0 readiness.",
+        "host_capability": "Host skill/plugin/tool/MCP/browser/sub-agent availability is discovered and degraded explicitly."
+      },
+      "acceptance_templates": [
+        "adapter-runtime-acceptance",
+        "skill-behavior-acceptance",
+        "manifest-consistency-acceptance",
+        "no-overclaim-acceptance"
+      ],
+      "release_checks": [
+        "manifest consistency passes",
+        "projection sync passes where relevant",
+        "runtime/readiness matrix is current",
+        "no-overclaim checks pass",
+        "rollback/install guidance exists"
+      ],
+      "gate_policy": {
+        "can_skip_stages": [
+          "research"
+        ],
+        "can_merge_stages": [
+          [
+            "testing",
+            "ci-cd"
+          ]
+        ],
+        "stage_skip_requires": "Skip only when adapter surface and host capability are unchanged and existing runtime evidence remains current.",
+        "blocked_dependency_rule": "A blocked adapter/skill/manifest blocks only declared downstream adapters, docs, and releases.",
+        "sibling_completion_rule": "Passing one host adapter does not imply other host adapters have passed."
+      },
+      "gate_standards": [
+        {
+          "standard_id": "adapter-runtime",
+          "gate_references": [
+            "G5",
+            "G7",
+            "G8"
+          ],
+          "required_evidence": [
+            "host capability probe",
+            "runtime E2E or blocked reason",
+            "readiness matrix update"
+          ]
+        },
+        {
+          "standard_id": "skill-contract",
+          "gate_references": [
+            "G5",
+            "G6",
+            "G7"
+          ],
+          "required_evidence": [
+            "trigger rules",
+            "deterministic steps",
+            "behavior tests or acceptance evidence"
+          ]
+        },
+        {
+          "standard_id": "manifest",
+          "gate_references": [
+            "G4",
+            "G8",
+            "G9"
+          ],
+          "required_evidence": [
+            "manifest schema check",
+            "asset/path validation",
+            "install or packaging boundary"
+          ]
+        },
+        {
+          "standard_id": "no-overclaim",
+          "gate_references": [
+            "G7",
+            "G9",
+            "G11"
+          ],
+          "required_evidence": [
+            "forbidden claim scan",
+            "risk boundary text",
+            "release review evidence"
+          ]
+        }
+      ]
+    },
+    "internal-script": {
+      "profile_intensity_boundary": "Project type selects domain gate standards and default artifacts; profile intensity remains orthogonal and only adjusts governance depth such as evidence volume, reviewer strictness, and interruption budget.",
+      "default_flow_unit_type": "script",
+      "unit_templates": [
+        "script",
+        "job"
+      ],
+      "default_packs": [
+        "governance-core",
+        "quality-gates"
+      ],
+      "quality_budget": {
+        "dry_run": "Scripts with side effects expose dry-run or equivalent preview unless explicitly impossible.",
+        "rollback": "Rollback, restore, or no-op recovery behavior is stated for destructive or external effects.",
+        "idempotency": "Repeated execution behavior and partial failure handling are documented.",
+        "scope_control": "Target path, environment, and side-effect boundaries are explicit."
+      },
+      "acceptance_templates": [
+        "dry-run-acceptance",
+        "idempotency-acceptance",
+        "side-effect-boundary-acceptance",
+        "rollback-acceptance"
+      ],
+      "release_checks": [
+        "dry-run or preview evidence exists",
+        "target scope guard verified",
+        "idempotency or repeat-run behavior checked",
+        "rollback/no-op recovery documented",
+        "logs or diagnostics are actionable"
+      ],
+      "gate_policy": {
+        "can_skip_stages": [
+          "research",
+          "selection",
+          "release"
+        ],
+        "can_merge_stages": [
+          [
+            "architecture",
+            "development"
+          ],
+          [
+            "testing",
+            "ci-cd"
+          ]
+        ],
+        "stage_skip_requires": "Skip only for local/internal scripts with bounded side effects and explicit operator acceptance.",
+        "blocked_dependency_rule": "A blocked script/job blocks only declared downstream jobs or automation chains.",
+        "sibling_completion_rule": "Passing one script does not imply sibling jobs or environments have passed."
+      },
+      "gate_standards": [
+        {
+          "standard_id": "dry-run",
+          "gate_references": [
+            "G5",
+            "G6",
+            "G7"
+          ],
+          "required_evidence": [
+            "preview output",
+            "target scope",
+            "operator-visible diff or summary"
+          ]
+        },
+        {
+          "standard_id": "rollback",
+          "gate_references": [
+            "G5",
+            "G7",
+            "G9"
+          ],
+          "required_evidence": [
+            "restore path",
+            "failure mode note",
+            "manual recovery command if needed"
+          ]
+        },
+        {
+          "standard_id": "idempotency",
+          "gate_references": [
+            "G6",
+            "G7"
+          ],
+          "required_evidence": [
+            "repeat-run result",
+            "partial failure behavior",
+            "state cleanup evidence"
+          ]
+        },
+        {
+          "standard_id": "side-effect-scope",
+          "gate_references": [
+            "G4",
+            "G5",
+            "G7"
+          ],
+          "required_evidence": [
+            "path/env guard",
+            "external service boundary",
+            "confirmation rule"
+          ]
+        }
+      ]
+    }
+  }
 }

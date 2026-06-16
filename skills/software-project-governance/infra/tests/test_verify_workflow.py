@@ -3497,6 +3497,64 @@ class LifecycleRegistryTests(unittest.TestCase):
             issues = vw.check_lifecycle_registry(root)
             self.assertTrue(any("missing project_type_hooks for game" in issue for issue in issues))
 
+    def test_lifecycle_registry_accepts_project_type_gate_presets(self):
+        data = json.loads(vw.LIFECYCLE_REGISTRY_PATH.read_text(encoding="utf-8"))
+        presets = data["project_type_gate_presets"]
+
+        self.assertEqual(set(presets), vw.LIFECYCLE_REGISTRY_REQUIRED_PROJECT_TYPES)
+        self.assertEqual(presets["game"]["default_flow_unit_type"], "chapter")
+        self.assertEqual(presets["library"]["default_flow_unit_type"], "module")
+        self.assertIn("playability", {item["standard_id"] for item in presets["game"]["gate_standards"]})
+        self.assertIn("downstream-tests", {item["standard_id"] for item in presets["library"]["gate_standards"]})
+
+    def test_lifecycle_registry_rejects_missing_project_type_gate_preset(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data):
+                del data["project_type_gate_presets"]["game"]
+
+            self._write_registry(root, mutate=mutate)
+            issues = vw.check_lifecycle_registry(root)
+            self.assertTrue(any("missing project_type_gate_presets for game" in issue for issue in issues))
+            self.assertTrue(any("project_type_gate_presets keys must match project_type_hooks keys" in issue for issue in issues))
+
+    def test_lifecycle_registry_rejects_preset_without_hook_counterpart(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data):
+                del data["project_type_hooks"]["library"]
+
+            self._write_registry(root, mutate=mutate)
+            issues = vw.check_lifecycle_registry(root)
+            self.assertTrue(any("missing project_type_hooks for library" in issue for issue in issues))
+            self.assertTrue(any("project_type_gate_presets keys must match project_type_hooks keys" in issue for issue in issues))
+
+    def test_lifecycle_registry_rejects_missing_preset_required_field(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data):
+                del data["project_type_gate_presets"]["web-app"]["quality_budget"]
+
+            self._write_registry(root, mutate=mutate)
+            issues = vw.check_lifecycle_registry(root)
+            self.assertTrue(any("project_type_gate_presets.web-app: missing required field `quality_budget`" in issue for issue in issues))
+
+    def test_lifecycle_registry_rejects_profile_boundary_without_orthogonal(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data):
+                data["project_type_gate_presets"]["mobile-app"]["profile_intensity_boundary"] = (
+                    "Mobile projects use strict profile presets."
+                )
+
+            self._write_registry(root, mutate=mutate)
+            issues = vw.check_lifecycle_registry(root)
+            self.assertTrue(any("profile_intensity_boundary must state project type and profile are orthogonal" in issue for issue in issues))
+
     def test_lifecycle_registry_rejects_undeclared_project_type_unit_template(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -3508,6 +3566,24 @@ class LifecycleRegistryTests(unittest.TestCase):
             issues = vw.check_lifecycle_registry(root)
             self.assertTrue(any(
                 "project_type_hooks.mobile-app.unit_templates includes undeclared unit type `screen`" in issue
+                for issue in issues
+            ))
+
+    def test_lifecycle_registry_rejects_preset_default_not_in_hook_templates(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data):
+                data["project_type_gate_presets"]["cli-tool"]["unit_templates"] = ["module", "release-candidate"]
+
+            self._write_registry(root, mutate=mutate)
+            issues = vw.check_lifecycle_registry(root)
+            self.assertTrue(any(
+                "project_type_gate_presets.cli-tool.unit_templates must match project_type_hooks.cli-tool.unit_templates" in issue
+                for issue in issues
+            ))
+            self.assertTrue(any(
+                "project_type_gate_presets.cli-tool.default_flow_unit_type must be included in unit_templates" in issue
                 for issue in issues
             ))
 
@@ -3539,6 +3615,45 @@ class LifecycleRegistryTests(unittest.TestCase):
                 "project_type_hooks.internal-script.default_flow_unit_type must be declared in flow_unit_schema.allowed_unit_types" in issue
                 for issue in issues
             ))
+
+    def test_lifecycle_registry_rejects_game_missing_required_gate_standard(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data):
+                data["project_type_gate_presets"]["game"]["gate_standards"] = [
+                    item for item in data["project_type_gate_presets"]["game"]["gate_standards"]
+                    if item["standard_id"] != "playability"
+                ]
+
+            self._write_registry(root, mutate=mutate)
+            issues = vw.check_lifecycle_registry(root)
+            self.assertTrue(any("gate_standards missing game standards: playability" in issue for issue in issues))
+
+    def test_lifecycle_registry_rejects_library_missing_required_gate_standard(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data):
+                data["project_type_gate_presets"]["library"]["gate_standards"] = [
+                    item for item in data["project_type_gate_presets"]["library"]["gate_standards"]
+                    if item["standard_id"] != "downstream-tests"
+                ]
+
+            self._write_registry(root, mutate=mutate)
+            issues = vw.check_lifecycle_registry(root)
+            self.assertTrue(any("gate_standards missing library standards: downstream-tests" in issue for issue in issues))
+
+    def test_lifecycle_registry_rejects_gate_standard_unknown_gate(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data):
+                data["project_type_gate_presets"]["library"]["gate_standards"][0]["gate_references"].append("G12")
+
+            self._write_registry(root, mutate=mutate)
+            issues = vw.check_lifecycle_registry(root)
+            self.assertTrue(any("unknown gate reference `G12`" in issue for issue in issues))
 
     def test_lifecycle_registry_reports_non_object_root_as_schema_issue(self):
         with tempfile.TemporaryDirectory() as td:
@@ -3598,8 +3713,59 @@ class LifecycleRegistryTests(unittest.TestCase):
 
             self._write_registry(root, mutate=mutate)
             issues = vw.check_lifecycle_registry(root)
-            self.assertTrue(any("forbidden lifecycle overclaim `RISK-037 closed`" in issue for issue in issues))
+            self.assertTrue(any("forbidden lifecycle overclaim `risk-037 closed`" in issue for issue in issues))
             self.assertTrue(any("forbidden lifecycle overclaim `1.0.0 production-ready`" in issue for issue in issues))
+
+    def test_lifecycle_registry_rejects_preset_no_overclaim_variants(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data):
+                data["project_type_gate_presets"]["ai-agent-plugin"]["release_checks"].append(
+                    "declarative gate engine active; dynamic-flow-gate default; RISK-036 closure achieved."
+                )
+                data["runtime_activation"]["project_migration"] = True
+
+            self._write_registry(root, mutate=mutate)
+            issues = vw.check_lifecycle_registry(root)
+            self.assertTrue(any("runtime_activation.project_migration must be false" in issue for issue in issues))
+            self.assertTrue(any("forbidden lifecycle overclaim `declarative gate engine active`" in issue for issue in issues))
+            self.assertTrue(any("forbidden lifecycle overclaim `dynamic-flow-gate default`" in issue for issue in issues))
+            self.assertTrue(any("forbidden lifecycle overclaim `risk-036 closure achieved`" in issue for issue in issues))
+
+    def test_lifecycle_registry_rejects_lifecycle_overclaim_regex_variants(self):
+        cases = [
+            ("declarative gate engine is active", "declarative gate engine active"),
+            ("declarative gate engine activated", "declarative gate engine active"),
+            ("dynamic-flow-gate is the default lifecycle mode", "dynamic-flow-gate default"),
+            ("dynamic-flow-gate is now default", "dynamic-flow-gate default"),
+        ]
+        for wording, label in cases:
+            with self.subTest(wording=wording):
+                with tempfile.TemporaryDirectory() as td:
+                    root = Path(td)
+
+                    def mutate(data):
+                        data["project_type_gate_presets"]["ai-agent-plugin"]["release_checks"].append(wording)
+
+                    self._write_registry(root, mutate=mutate)
+                    issues = vw.check_lifecycle_registry(root)
+                    self.assertTrue(any(f"forbidden lifecycle overclaim `{label}`" in issue for issue in issues))
+
+    def test_lifecycle_registry_preserves_scoped_lifecycle_overclaim_negation(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def mutate(data):
+                data["project_type_gate_presets"]["ai-agent-plugin"]["release_checks"].extend([
+                    "This does not mean the declarative gate engine is active.",
+                    "This does not make dynamic-flow-gate the default lifecycle mode.",
+                    "The declarative gate engine activated claim is not verified.",
+                    "This does not mean dynamic-flow-gate is now default.",
+                ])
+
+            self._write_registry(root, mutate=mutate)
+            self.assertEqual(vw.check_lifecycle_registry(root), [])
 
 
 class FlowUnitRuntimeTests(unittest.TestCase):

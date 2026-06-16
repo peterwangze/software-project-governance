@@ -44,6 +44,7 @@
 | TOOL-036 | External Project Validation harness | script + temporary workspace | `infra/verify_workflow.py external-project-validation --target <path> --fail-on-issues` | 1.0.0 前外部项目验证、VAL-001 复跑、真实外部 target 的完整 workflow surface 验证 | 测试/发布/维护 | 是 |
 | TOOL-037 | Dynamic Lifecycle Registry guard | script + registry | `infra/verify_workflow.py check-lifecycle-registry` + `core/lifecycle-registry.json` | 0.51.0 lifecycle registry、classic-phase-gate 兼容 preset、flow unit schema 或 schema-only/no-overclaim 边界变更后 | 架构/测试/发布/维护 | 是 |
 | TOOL-038 | Flow Unit Runtime hot-state guard | script + optional hot state | `infra/verify_workflow.py check-flow-unit-runtime [--fixture <path>] --fail-on-issues` + optional `.governance/flow-unit-runtime.json` | 0.52.0 flow-unit runtime visibility、active lanes、per-unit gate state、loop counters、blocked downstream units 或 rollup status 变更后 | 架构/测试/发布/维护 | 是 |
+| TOOL-039 | Project-Type Gate Presets guard | script + registry presets | `infra/verify_workflow.py check-lifecycle-registry --fail-on-issues` + `core/lifecycle-registry.json` `project_type_gate_presets` | 0.53.0 project type gate presets、profile/project-type 正交边界、默认 packs、质量预算、验收模板、release checks、gate policy 或 gate standards 变更后 | 架构/测试/发布/维护 | 是 |
 
 ## 工具详情
 
@@ -436,6 +437,17 @@
 - **触发条件**：0.52.0 flow-unit runtime visibility、status/context output、python_game 多章节热状态、dependency blocking 或 loop counter 语义变更后。
 - **依赖**：`check-lifecycle-registry`、classic G1-G11 vocabulary、optional hot project state。
 - **边界**：runtime visibility only；不激活 declarative gate engine；不迁移项目；classic G1-G11 保持兼容；不关闭 RISK-036/RISK-037；不是 1.0.0 production-ready。
+- **被以下子工作流使用**：架构设计（architecture）、测试（testing）、发布（release）、维护（maintenance）
+
+### TOOL-039：Project-Type Gate Presets guard
+
+- **文件**：`infra/verify_workflow.py` + `core/lifecycle-registry.json`
+- **子命令**：`check-lifecycle-registry [--fail-on-issues]`
+- **输入**：canonical lifecycle registry 中的 `project_type_hooks` 与 `project_type_gate_presets`，覆盖 game、web-app、mobile-app、library、cli-tool、ai-agent-plugin、internal-script；每个 preset 的 profile 正交边界、默认 packs、质量预算、验收模板、release checks、gate policy 和 gate standards。
+- **输出**：required project types 是否完整；preset 是否有 hook 对应项；default flow unit type 是否同时属于 preset/hook templates 和 `flow_unit_schema.allowed_unit_types`；profile/project-type 是否声明正交；game 是否覆盖 chapter/level/asset/narrative/playability gate standards；library 是否覆盖 api/semver/docs/downstream-tests gate standards；no-overclaim 文本是否阻断 declarative gate engine、项目迁移、dynamic default、RISK-036/RISK-037 closure 和 1.0.0 readiness。
+- **触发条件**：0.53.0 project-type gate presets、项目类型默认 packs、质量预算、验收模板、release checks、gate policy、gate standards 或 profile/project-type 正交边界变更后。
+- **依赖**：TOOL-037、`core/manifest.json`、classic G1-G11 `core/stage-gates.md`、`check-manifest-consistency`。
+- **边界**：preset data contract only；classic-phase-gate 保持 active/default；dynamic-flow-gate 保持 inactive/schema-only；不激活 declarative gate engine；不迁移项目；不把 dynamic-flow-gate 设为默认；不关闭 RISK-036/RISK-037；不是 1.0.0 production-ready。
 - **被以下子工作流使用**：架构设计（architecture）、测试（testing）、发布（release）、维护（maintenance）
 
 ## 工具与子工作流的关系矩阵

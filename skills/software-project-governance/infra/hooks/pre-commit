@@ -18,7 +18,9 @@ is_product_code() {
     while IFS= read -r file; do
         [ -z "$file" ] && continue
         case "$file" in
-            skills/*|agents/*|commands/*|core/*|infra/*|references/*|adapters/*|.claude-plugin/*|.codex-plugin/*|.agents/*)
+            .governance|.governance/*)
+                continue ;;
+            skills/*|agents/*|commands/*|core/*|infra/*|references/*|adapters/*|.claude-plugin/*|.codex-plugin/*|.agents/*|*/skills/*|*/agents/*|*/commands/*|*/core/*|*/infra/*|*/references/*|*/adapters/*|*/.claude-plugin/*|*/.codex-plugin/*|*/.agents/*)
                 return 0 ;;
         esac
     done <<< "$files"

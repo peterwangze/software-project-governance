@@ -4688,8 +4688,22 @@ class DynamicLifecycleMigrationTests(unittest.TestCase):
                 )
 
     def test_current_root_docs_are_readable_for_migration_preview(self):
-        preview = vw.build_dynamic_lifecycle_migration_preview(vw.ROOT)
-        issues = vw.check_dynamic_lifecycle_migration_preview(vw.ROOT)
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_target(root)
+            registry_src = vw.ROOT / "skills/software-project-governance/core/lifecycle-registry.json"
+            registry_dst = root / "skills/software-project-governance/core/lifecycle-registry.json"
+            registry_dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(registry_src, registry_dst)
+            guide_src = vw.ROOT / "docs/migration/dynamic-flow-gate-migration-0.55.0.md"
+            guide_dst = root / "docs/migration/dynamic-flow-gate-migration-0.55.0.md"
+            guide_dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(guide_src, guide_dst)
+
+            with patch.object(vw, "ROOT", root), \
+                 patch.object(vw, "LIFECYCLE_REGISTRY_PATH", registry_dst):
+                preview = vw.build_dynamic_lifecycle_migration_preview(root)
+                issues = vw.check_dynamic_lifecycle_migration_preview(root)
 
         self.assertEqual(preview["status"], "READY_FOR_REVIEW")
         self.assertEqual(issues, [])

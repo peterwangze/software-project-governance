@@ -1,6 +1,6 @@
 {
   "name": "software-project-governance",
-  "version": "0.54.1",
+  "version": "0.54.2",
   "description": "AI coding delivery trust layer for governance-aware coding agents. Tracks goals, evidence, risks, quality budgets, and release readiness without making broad runtime claims.",
   "author": {
     "name": "peterwangze",

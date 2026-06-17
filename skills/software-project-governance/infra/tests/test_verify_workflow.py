@@ -3063,12 +3063,36 @@ class GovernanceFastStartTests(unittest.TestCase):
         ):
             text = (vw.ROOT / rel).read_text(encoding="utf-8")
             with self.subTest(rel=rel):
-                self.assertIn('python "$WORKFLOW_HOME/infra/verify_workflow.py" governance-fast-start --json', text)
+                self.assertIn("同一插件包内的 `skills/software-project-governance` skill", text)
+                self.assertIn(
+                    'python "<已加载插件包>/skills/software-project-governance/infra/verify_workflow.py" governance-fast-start --json',
+                    text,
+                )
                 self.assertIn("full_skill_load_required", text)
                 self.assertIn("不得读取或搜索 `skills/software-project-governance/SKILL.md`", text)
                 self.assertIn("完整路由表（19 行）", text)
                 self.assertIn("状态面板", text)
                 self.assertLess(len(text.splitlines()), 140)
+
+    def test_governance_fast_start_contract_does_not_require_preset_workflow_home(self):
+        for rel in (
+            "commands/governance.md",
+            "project/e2e-test-project/commands/governance.md",
+        ):
+            text = (vw.ROOT / rel).read_text(encoding="utf-8")
+            contract = text.split("## Fast-Start Contract", 1)[1].split("## 默认 Scenario F 输出", 1)[0]
+            first_step = contract.split("2. 运行：", 1)[0]
+            with self.subTest(rel=rel):
+                self.assertIn("来自已加载插件", first_step)
+                self.assertIn("不得要求用户预设", first_step)
+                self.assertNotIn("优先 `SOFTWARE_PROJECT_GOVERNANCE_HOME`", contract)
+                self.assertNotIn("其次 `SPG_HOME`", contract)
+                self.assertNotIn("解析 `WORKFLOW_HOME`", first_step)
+                self.assertNotIn('python "$WORKFLOW_HOME/infra/verify_workflow.py" governance-fast-start --json', contract)
+                self.assertIn("repo-local/dev/diagnostic fallback", contract)
+                self.assertIn("环境变量只是诊断兜底，不是 fast-start 前置条件", contract)
+                fallback = contract.split("3. repo-local/dev/diagnostic fallback", 1)[1]
+                self.assertLess(fallback.find("项目内 `skills/software-project-governance`"), fallback.find("SOFTWARE_PROJECT_GOVERNANCE_HOME"))
 
 
 class CapabilityContextTests(unittest.TestCase):

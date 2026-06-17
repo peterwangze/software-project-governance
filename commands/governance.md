@@ -1,23 +1,20 @@
 # /governance — 确定性快速入口
 
-`/governance` 是用户手动进入治理面板的统一入口。默认路径必须先走脚本、低 token、确定性：先运行一个只读 CLI，展示紧凑状态，再只基于记录事实继续推进。
+`/governance` 是用户手动进入治理面板的统一入口。默认路径必须使用已加载插件同包的 `software-project-governance` skill，低 token、确定性：先运行 skill 内部只读 CLI，展示紧凑状态，再只基于记录事实继续推进。
 
 ## Fast-Start Contract
 
-1. 解析 `WORKFLOW_HOME`，不得让 LLM 在长文档中搜索入口路径：
-   - 优先 `SOFTWARE_PROJECT_GOVERNANCE_HOME`
-   - 其次 `SPG_HOME`
-   - 其次使用宿主暴露的已安装 plugin/runtime metadata
-   - 最后回退到项目内 `skills/software-project-governance`
+1. 当 `/governance` 命令来自已加载插件时，必须直接使用同一插件包内的 `skills/software-project-governance` skill。不得让 LLM 搜索入口路径，也不得要求用户预设 `WORKFLOW_HOME`、`SOFTWARE_PROJECT_GOVERNANCE_HOME` 或 `SPG_HOME`。
 2. 运行：
 
 ```bash
-python "$WORKFLOW_HOME/infra/verify_workflow.py" governance-fast-start --json
+python "<已加载插件包>/skills/software-project-governance/infra/verify_workflow.py" governance-fast-start --json
 ```
 
-3. 解析 JSON envelope。字段包括 `scenario`、`trigger_mode`、`permission_mode`、`workflow_version`、`current_stage`、`gate_status`、`open_risk_count`、`carry_over_count`、`unfinished_work`、`source_facts`、`blocker_state`、`auto_continue`、`interrupt_boundary`、`hook_state`、`next_action`、`workflow_home`、`skill_entry_path`、`full_skill_load_required`、`full_skill_load_reason`、`no_overclaim_boundary`。
-4. 默认 Scenario F/status/resume 路径不得读取或搜索 `skills/software-project-governance/SKILL.md`。`skill_entry_path` 只是后续升级路径事实，不是默认要加载的文件。
-5. 只有 `full_skill_load_required=true`，或用户明确要求初始化、升级、诊断、深度路由细节、角色 Agent 分发规则时，才加载 `skill_entry_path` 或长场景参考。
+3. repo-local/dev/diagnostic fallback 才允许解析运行时路径：先使用宿主暴露的已安装 plugin/runtime metadata；再使用项目内 `skills/software-project-governance`；最后才读取 `SOFTWARE_PROJECT_GOVERNANCE_HOME`、`SPG_HOME` 或 `WORKFLOW_HOME` 作为人工诊断线索。环境变量只是诊断兜底，不是 fast-start 前置条件。
+4. 解析 JSON envelope。字段包括 `scenario`、`trigger_mode`、`permission_mode`、`workflow_version`、`current_stage`、`gate_status`、`open_risk_count`、`carry_over_count`、`unfinished_work`、`source_facts`、`blocker_state`、`auto_continue`、`interrupt_boundary`、`hook_state`、`next_action`、`workflow_home`、`skill_entry_path`、`full_skill_load_required`、`full_skill_load_reason`、`no_overclaim_boundary`。
+5. 默认 Scenario F/status/resume 路径不得读取或搜索 `skills/software-project-governance/SKILL.md`。`skill_entry_path` 只是后续升级路径事实，不是默认要加载的文件。
+6. 只有 `full_skill_load_required=true`，或用户明确要求初始化、升级、诊断、深度路由细节、角色 Agent 分发规则时，才加载 `skill_entry_path` 或长场景参考。
 
 ## 默认 Scenario F 输出
 
@@ -54,7 +51,7 @@ python "$WORKFLOW_HOME/infra/verify_workflow.py" governance-fast-start --json
 
 ## 按需升级参考
 
-工作流升级路径仍归 `/governance-init` 与完整 `SKILL.md` 处理；默认 fast-start 不展开细节。若进入升级路径，仍需覆盖持续归档触发检测与执行：先运行 `python "$WORKFLOW_HOME/infra/archive.py" migrate --auto --dry-run`，需要归档时运行 `python "$WORKFLOW_HOME/infra/archive.py" migrate --auto`，随后运行 `python "$WORKFLOW_HOME/infra/verify_workflow.py" check-archive-integrity`。归档完整性失败时，发布/版本 bump 收尾场景 MUST 阻断完成；无可归档数据时跳过归档。
+工作流升级路径仍归 `/governance-init` 与完整 `SKILL.md` 处理；默认 fast-start 不展开细节。若进入升级路径，仍需覆盖持续归档触发检测与执行：从已加载 skill 目录运行 `python "<已加载插件包>/skills/software-project-governance/infra/archive.py" migrate --auto --dry-run`，需要归档时运行 `python "<已加载插件包>/skills/software-project-governance/infra/archive.py" migrate --auto`，随后运行 `python "<已加载插件包>/skills/software-project-governance/infra/verify_workflow.py" check-archive-integrity`。归档完整性失败时，发布/版本 bump 收尾场景 MUST 阻断完成；无可归档数据时跳过归档。
 
 ## Coordinator 边界
 
@@ -77,7 +74,7 @@ No-overclaim boundary: `/governance` fast-start 只是本地 hot-state routing s
 本地验收信号：
 
 ```bash
-python "$WORKFLOW_HOME/infra/verify_workflow.py" governance-fast-start --json
-python "$WORKFLOW_HOME/infra/verify_workflow.py" governance-context --fail-on-issues
-python "$WORKFLOW_HOME/infra/verify_workflow.py" first-run-demo --assert-snapshot
+python "<已加载插件包>/skills/software-project-governance/infra/verify_workflow.py" governance-fast-start --json
+python "<已加载插件包>/skills/software-project-governance/infra/verify_workflow.py" governance-context --fail-on-issues
+python "<已加载插件包>/skills/software-project-governance/infra/verify_workflow.py" first-run-demo --assert-snapshot
 ```

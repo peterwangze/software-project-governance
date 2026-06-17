@@ -8490,6 +8490,197 @@ def discover_governance_context(root=None):
     }
 
 
+def _fast_start_project_config(root):
+    plan_path = _context_file(root, ".governance/plan-tracker.md")
+    config = {}
+    if not plan_path.is_file():
+        return config
+    in_section = False
+    for line in plan_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if stripped == "## 项目配置":
+            in_section = True
+            continue
+        if in_section and stripped.startswith("## "):
+            break
+        if not in_section:
+            continue
+        match = re.match(r"- \*\*(.+?)\*\*:\s*(.+)", stripped)
+        if match:
+            config[match.group(1)] = match.group(2)
+    return config
+
+
+def _fast_start_overview(root):
+    plan_path = _context_file(root, ".governance/plan-tracker.md")
+    if not plan_path.is_file():
+        return {}
+    in_section = False
+    for line in plan_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if stripped == "## 项目总览":
+            in_section = True
+            continue
+        if in_section and stripped.startswith("## "):
+            break
+        if not in_section or not stripped.startswith("|"):
+            continue
+        cells = _governance_table_cells(stripped)
+        if len(cells) >= 8 and cells[0] != "项目" and not all(set(cell) <= {"-", " "} for cell in cells):
+            return {
+                "project": cells[0],
+                "current_stage": cells[1],
+                "total": cells[2],
+                "completed": cells[3],
+                "blocked": cells[4],
+                "risks": cells[5],
+                "latest_gate": cells[6],
+                "latest_retro": cells[7],
+            }
+    return {}
+
+
+def _fast_start_gate_status(root):
+    overview = _fast_start_overview(root)
+    latest_gate = overview.get("latest_gate")
+    if latest_gate and latest_gate not in {"—", "-", "N/A"}:
+        return latest_gate
+
+    plan_path = _context_file(root, ".governance/plan-tracker.md")
+    if not plan_path.is_file():
+        return "not initialized"
+    gates = []
+    in_section = False
+    for line in plan_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if stripped == "## Gate 状态跟踪":
+            in_section = True
+            continue
+        if in_section and stripped.startswith("## "):
+            break
+        if not in_section or not stripped.startswith("|"):
+            continue
+        cells = _governance_table_cells(stripped)
+        if len(cells) >= 5 and cells[0] != "Gate" and not all(set(cell) <= {"-", " "} for cell in cells):
+            gates.append({"gate": cells[0], "status": cells[2], "date": cells[3]})
+    first_pending = next((gate for gate in gates if gate["status"] == "pending"), None)
+    if first_pending:
+        return f"{first_pending['gate']} pending"
+    if gates:
+        last = gates[-1]
+        return f"{last['gate']} {last['status']}"
+    return "setup status not recorded"
+
+
+def _fast_start_hook_state(root):
+    hook_paths = [
+        _context_file(root, ".git/hooks/pre-commit"),
+        _context_file(root, ".git/hooks/commit-msg"),
+        _context_file(root, ".git/hooks/post-commit"),
+    ]
+    missing = [path.name for path in hook_paths if not path.is_file()]
+    present = [path.name for path in hook_paths if path.is_file()]
+    if missing:
+        return f"missing {', '.join(missing)}"
+    if present:
+        return f"installed ({', '.join(present)})"
+    return "not detected"
+
+
+def _fast_start_scalar(value, default="unknown", limit=180):
+    text = str(value or default).strip()
+    if not text:
+        text = default
+    if len(text) > limit:
+        return text[: limit - 1].rstrip() + "…"
+    return text
+
+
+def _fast_start_mode_value(value, default="unknown"):
+    text = str(value or default).strip()
+    for marker in ("（", "("):
+        if marker in text:
+            text = text.split(marker, 1)[0].strip()
+    return _fast_start_scalar(text, default=default, limit=80)
+
+
+def discover_governance_fast_start(root=None):
+    """Return a compact, deterministic /governance startup envelope.
+
+    This path is intentionally bounded: it reads only hot governance facts and
+    returns the canonical SKILL.md path as data. It does not search for or load
+    SKILL.md before the first interactive governance screen.
+    """
+    root = _context_root(root)
+    workflow_home = Path(__file__).resolve().parent.parent
+    plan_path = _context_file(root, ".governance/plan-tracker.md")
+    governance_exists = plan_path.is_file()
+    config = _fast_start_project_config(root)
+    overview = _fast_start_overview(root)
+    context = discover_governance_context(root) if governance_exists else _empty_governance_context(root)
+    risks = _parse_context_open_risks(root) if governance_exists else []
+    work_items = [
+        item for item in context.get("_items", [])
+        if item.get("kind") not in {"risk"} and item.get("task_id") != "GIT-WORKTREE"
+    ]
+
+    if not governance_exists:
+        visible_entries = [entry for entry in root.iterdir()] if root.exists() else []
+        scenario = "B_EXISTING_PROJECT_ONBOARDING" if visible_entries else "A_NEW_PROJECT_INIT"
+        full_skill_load_required = True
+        full_skill_load_reason = "governance is not initialized; run init/onboarding flow"
+        next_action = "initialize governance before relying on resume state"
+    else:
+        scenario = "F_STATUS_FAST_PATH"
+        full_skill_load_required = False
+        full_skill_load_reason = (
+            "not required for default status/resume; load only for init/update/diagnose/deep details"
+        )
+        next_action = context.get("next_action") or (
+            "review open risk before starting new work" if risks else "pick the next task or run a gate check before release claims"
+        )
+
+    return {
+        "schema": "software-project-governance/governance-fast-start.v1",
+        "root": str(_display_path(root, ROOT)),
+        "scenario": scenario,
+        "trigger_mode": _fast_start_mode_value(config.get("触发模式") or config.get("trigger_mode")),
+        "permission_mode": _fast_start_mode_value(config.get("操作权限模式") or config.get("permission_mode")),
+        "workflow_version": _fast_start_mode_value(config.get("工作流版本") or config.get("workflow_version")),
+        "current_stage": _fast_start_scalar(
+            overview.get("current_stage") or config.get("当前阶段"),
+            default="not initialized",
+            limit=220,
+        ),
+        "gate_status": _fast_start_scalar(_fast_start_gate_status(root), default="not initialized", limit=220),
+        "open_risk_count": len(risks),
+        "carry_over_count": len(work_items),
+        "unfinished_work": _fast_start_scalar(context.get("detected_item"), default="not found", limit=220),
+        "source_facts": [
+            _fast_start_scalar(fact, default="not found", limit=260)
+            for fact in context.get("source_facts", [])[:3]
+        ],
+        "blocker_state": _fast_start_scalar(context.get("blocker_state"), default="not found", limit=180),
+        "auto_continue": bool(context.get("auto_continue", False)),
+        "interrupt_boundary": _fast_start_scalar(
+            context.get("interrupt_boundary"),
+            default="AskUserQuestion required before creating new work from assumptions",
+            limit=220,
+        ),
+        "hook_state": _fast_start_hook_state(root),
+        "next_action": _fast_start_scalar(next_action, default="pick next action from recorded facts", limit=220),
+        "workflow_home": str(workflow_home),
+        "skill_entry_path": str(workflow_home / "SKILL.md"),
+        "full_skill_load_required": full_skill_load_required,
+        "full_skill_load_reason": full_skill_load_reason,
+        "no_overclaim_boundary": (
+            "fast-start is a local hot-state routing signal only; it does not prove task evidence, "
+            "independent review, quality gates, release gates, official approval, marketplace approval, "
+            "universal/full runtime support, external validation full PASS, or 1.0.0 production-ready"
+        ),
+    }
+
+
 def check_governance_context(root=None):
     """FIX-112: context discovery must be factual and explicit about not-found."""
     root = _context_root(root)
@@ -10488,6 +10679,52 @@ def cmd_governance_context(args):
             sys.exit(1)
     else:
         print("\n== Governance Context Result: PASSED ==")
+
+
+def cmd_governance_fast_start(args):
+    """Print the deterministic, low-token /governance startup envelope."""
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    fixture = getattr(args, "fixture", None)
+    root = ROOT
+    if fixture:
+        fixture_path = Path(fixture)
+        root = fixture_path if fixture_path.is_absolute() else ROOT / fixture_path
+
+    envelope = discover_governance_fast_start(root)
+    if getattr(args, "json", False):
+        print(json.dumps(envelope, ensure_ascii=False, indent=2))
+        return
+
+    print("== Governance Fast Start ==")
+    for key in (
+        "scenario",
+        "trigger_mode",
+        "permission_mode",
+        "workflow_version",
+        "current_stage",
+        "gate_status",
+        "open_risk_count",
+        "carry_over_count",
+        "unfinished_work",
+        "blocker_state",
+        "auto_continue",
+        "interrupt_boundary",
+        "hook_state",
+        "next_action",
+        "workflow_home",
+        "skill_entry_path",
+        "full_skill_load_required",
+        "full_skill_load_reason",
+        "no_overclaim_boundary",
+    ):
+        value = envelope.get(key)
+        if isinstance(value, bool):
+            value = "yes" if value else "no"
+        print(f"{key}: {value}")
+    print("source_facts:")
+    for fact in envelope.get("source_facts", []):
+        print(f"  - {fact}")
 
 
 def cmd_capability_context(args):
@@ -19536,6 +19773,21 @@ def main():
     gctx_p.add_argument("--fail-on-issues", action="store_true",
                         help="Exit with non-zero code if the context contract is invalid")
 
+    # governance-fast-start (FIX-143)
+    gfs_p = subparsers.add_parser(
+        "governance-fast-start",
+        help="Print a compact deterministic startup envelope for /governance",
+    )
+    gfs_p.add_argument(
+        "--fixture",
+        help="Optional project root/fixture to inspect instead of the current repository",
+    )
+    gfs_p.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON for slash-command routing",
+    )
+
     # capability-context (FIX-115)
     capctx_p = subparsers.add_parser(
         "capability-context",
@@ -19937,6 +20189,7 @@ def main():
         "verify": cmd_verify,
         "status": cmd_status,
         "governance-context": cmd_governance_context,
+        "governance-fast-start": cmd_governance_fast_start,
         "capability-context": cmd_capability_context,
         "gate": cmd_gate,
         "gate-check": cmd_gate_check,

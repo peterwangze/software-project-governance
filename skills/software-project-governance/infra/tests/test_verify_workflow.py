@@ -2981,6 +2981,96 @@ class GovernanceContextDiscoveryTests(unittest.TestCase):
         self.assertIn("Governance Context Result: PASSED", output)
 
 
+class GovernanceFastStartTests(unittest.TestCase):
+    """FIX-143: /governance startup must be deterministic and low-token."""
+
+    def _write_project(self, root):
+        gov = root / ".governance"
+        gov.mkdir(parents=True, exist_ok=True)
+        (gov / "plan-tracker.md").write_text("\n".join([
+            "# Plan",
+            "",
+            "## 项目配置",
+            "- **项目目标**: fast start test",
+            "- **触发模式**: always-on",
+            "- **操作权限模式**: maximum-autonomy",
+            "- **工作流版本**: 0.55.0",
+            "- **当前阶段**: 维护",
+            "",
+            "## Gate 状态跟踪",
+            "| Gate | 阶段转换 | 状态 | 通过日期 | 关键证据 |",
+            "| --- | --- | --- | --- | --- |",
+            "| G11 | → 下一轮 | passed | 2026-06-17 | done |",
+            "",
+            "## 项目总览",
+            "| 项目 | 当前阶段 | 总任务数 | 已完成 | 阻塞中 | 关键风险数 | 最近 Gate 结论 | 最近复盘日期 |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| Demo | 维护 | 2 | 1 | 0 | 1 | G11 通过 | 2026-06-17 |",
+            "",
+            "## 当前活跃事项",
+            "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+            "| --- | --- | --- | --- | --- | --- | --- |",
+            "| **P0** | FIX-143 | Fast governance startup | REQ-101 | 0.55.0 | fast-start | 🚧 进行中 |",
+        ]), encoding="utf-8")
+        (gov / "risk-log.md").write_text("\n".join([
+            "# Risks",
+            "| 风险ID | 日期 | 风险描述 | 影响 | 概率 | 缓解措施 | 负责人 | 截止日期 | 当前状态 |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| RISK-999 | 2026-06-17 | startup slow | high | medium | fast path | owner | 2026-06-20 | 打开 |",
+        ]), encoding="utf-8")
+        (gov / "evidence-log.md").write_text("# Evidence\n", encoding="utf-8")
+
+    def test_fast_start_envelope_is_compact_and_does_not_require_skill_load_for_status(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_project(root)
+
+            envelope = vw.discover_governance_fast_start(root)
+
+        self.assertEqual(envelope["schema"], "software-project-governance/governance-fast-start.v1")
+        self.assertEqual(envelope["scenario"], "F_STATUS_FAST_PATH")
+        self.assertEqual(envelope["trigger_mode"], "always-on")
+        self.assertEqual(envelope["permission_mode"], "maximum-autonomy")
+        self.assertEqual(envelope["workflow_version"], "0.55.0")
+        self.assertEqual(envelope["gate_status"], "G11 通过")
+        self.assertEqual(envelope["open_risk_count"], 1)
+        self.assertEqual(envelope["carry_over_count"], 1)
+        self.assertIn("FIX-143", envelope["unfinished_work"])
+        self.assertFalse(envelope["full_skill_load_required"])
+        self.assertTrue(envelope["skill_entry_path"].replace("\\", "/").endswith("skills/software-project-governance/SKILL.md"))
+        self.assertLess(len(json.dumps(envelope, ensure_ascii=False)), 5000)
+        self.assertIn("local hot-state routing signal only", envelope["no_overclaim_boundary"])
+
+    def test_fast_start_json_command_outputs_parseable_envelope(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_project(root)
+            args = argparse.Namespace(fixture=str(root), json=True)
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                vw.cmd_governance_fast_start(args)
+
+        payload = json.loads(buf.getvalue())
+        self.assertEqual(payload["scenario"], "F_STATUS_FAST_PATH")
+        self.assertFalse(payload["full_skill_load_required"])
+        self.assertIn("workflow_home", payload)
+        self.assertIn("skill_entry_path", payload)
+
+    def test_governance_command_docs_require_fast_start_before_skill_loading(self):
+        for rel in (
+            "commands/governance.md",
+            "project/e2e-test-project/commands/governance.md",
+        ):
+            text = (vw.ROOT / rel).read_text(encoding="utf-8")
+            with self.subTest(rel=rel):
+                self.assertIn('python "$WORKFLOW_HOME/infra/verify_workflow.py" governance-fast-start --json', text)
+                self.assertIn("full_skill_load_required", text)
+                self.assertIn("不得读取或搜索 `skills/software-project-governance/SKILL.md`", text)
+                self.assertIn("完整路由表（19 行）", text)
+                self.assertIn("状态面板", text)
+                self.assertLess(len(text.splitlines()), 140)
+
+
 class CapabilityContextTests(unittest.TestCase):
     """FIX-115: capability context trace must be fact-backed and degraded-safe."""
 

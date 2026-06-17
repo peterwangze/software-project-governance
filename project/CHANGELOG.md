@@ -2,6 +2,44 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.54.3] - 2026-06-17
+
+### 0.54.3 - Governance Same-Package Skill Fast-Start Hotfix
+
+0.54.3 发布 REL-038 governance same-package skill fast-start hotfix release package：把已完成、审查通过并推送的 FIX-144 版本化为 patch release。该版本修复 0.54.2 更新后 `/governance` 仍把空 `SOFTWARE_PROJECT_GOVERNANCE_HOME`、`SPG_HOME`、`WORKFLOW_HOME` 当作启动阻塞的问题，让用户通过正常 plugin update 拿到同包 skill 直达入口。
+
+### Fixed
+
+- **FIX-144**: `/governance` Fast-Start Contract 改为：当命令来自已加载插件时，直接使用同一插件包内的 `skills/software-project-governance` skill，并从 `<已加载插件包>/skills/software-project-governance/infra/verify_workflow.py` 运行 `governance-fast-start --json`。
+- 环境变量 `SOFTWARE_PROJECT_GOVERNANCE_HOME`、`SPG_HOME`、`WORKFLOW_HOME` 降级为 repo-local/dev/diagnostic fallback 的最后人工诊断线索，不再是 loaded-plugin fast-start 前置条件。
+- 回归测试拒绝旧 `$WORKFLOW_HOME/infra/verify_workflow.py` fast-start 命令、拒绝 env priority wording，并断言 repo-local fallback 先于 env fallback。
+
+### Added
+
+- **REL-038**: 新增 0.54.3 release checklist、feature flags、rollback plan、manifest coverage、README readiness boundary 和 release no-overclaim boundary。
+
+### Changed
+
+- `/governance` source 与 target fixture 文档同步到 same-package skill fast-start contract，明确禁止在 loaded-plugin default path 上通过 LLM 搜索入口 `SKILL.md`。
+- 版本声明同步到 0.54.3：source SKILL、canonical manifest、Claude/Codex plugin metadata、Claude marketplace metadata、hook @version、target fixture skill/plan、CHANGELOG、README 和 `verify_workflow.py` REQUIRED_SNIPPETS。
+- README 的 1.0.0 Readiness Boundary 更新为 0.54.3 same-package skill fast-start hotfix package，明确 RISK-036/RISK-037 继续打开。
+
+### Validation
+
+- `python -m unittest skills/software-project-governance/infra/tests/test_verify_workflow.py -k GovernanceFastStart -v`
+- `python skills/software-project-governance/infra/verify_workflow.py governance-fast-start --json`
+- `python skills/software-project-governance/infra/verify_workflow.py check-projection-sync --fail-on-issues`
+- `python skills/software-project-governance/infra/verify_workflow.py e2e-check`
+- `python skills/software-project-governance/infra/verify_workflow.py check-cross-references --fail-on-issues`
+- `python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues`
+- `python skills/software-project-governance/infra/verify_workflow.py check-governance --fail-on-issues`
+- `python skills/software-project-governance/infra/verify_workflow.py check-release --version 0.54.3 --require-changelog --runtime-adapters`
+
+### Boundaries
+
+- RISK-036 remains open. 0.54.3 does not include official approval, marketplace approval, two-real-project external validation full PASS, Codex Desktop lifecycle PASS, project migration, RISK-036 closure, or 1.0.0 production-ready approval.
+- RISK-037 remains open. 0.54.3 is a fast-start hotfix only; it does not change 0.55.0 migration/external validation planning, does not migrate projects, does not make dynamic-flow-gate the default, does not change registry automation command execution, does not close RISK-037, and does not claim dynamic lifecycle readiness.
+
 ## [0.54.2] - 2026-06-17
 
 ### 0.54.2 - Governance Fast-Start UX Patch

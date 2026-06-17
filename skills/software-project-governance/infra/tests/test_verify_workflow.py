@@ -7891,10 +7891,10 @@ class GovernanceStatusContractTests(unittest.TestCase):
 
         required = [
             "持续归档触发检测与执行",
-            "WORKFLOW_HOME",
-            '`python "$WORKFLOW_HOME/infra/archive.py" migrate --auto --dry-run`',
-            '`python "$WORKFLOW_HOME/infra/archive.py" migrate --auto`',
-            '`python "$WORKFLOW_HOME/infra/verify_workflow.py" check-archive-integrity`',
+            "已加载 skill 目录",
+            'python "<已加载插件包>/skills/software-project-governance/infra/archive.py" migrate --auto --dry-run',
+            'python "<已加载插件包>/skills/software-project-governance/infra/archive.py" migrate --auto',
+            'python "<已加载插件包>/skills/software-project-governance/infra/verify_workflow.py" check-archive-integrity',
             "发布/版本 bump 收尾场景 MUST 阻断完成",
             "无可归档数据",
         ]
@@ -7903,6 +7903,9 @@ class GovernanceStatusContractTests(unittest.TestCase):
         forbidden = [
             "python skills/software-project-governance/infra/archive.py",
             "python skills/software-project-governance/infra/verify_workflow.py check-archive-integrity",
+            '`python "$WORKFLOW_HOME/infra/archive.py" migrate --auto --dry-run`',
+            '`python "$WORKFLOW_HOME/infra/archive.py" migrate --auto`',
+            '`python "$WORKFLOW_HOME/infra/verify_workflow.py" check-archive-integrity`',
         ]
         self.assertEqual([needle for needle in forbidden if needle in governance], [])
         self.assertEqual([needle for needle in forbidden if needle in init], [])

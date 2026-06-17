@@ -2165,6 +2165,32 @@ FLOW_UNIT_RUNTIME_FORBIDDEN_OVERCLAIMS = [
     ("risk-037 closure achieved", re.compile(r"\brisk-037\b[^\n.;|]{0,48}\bclosure\s+achieved\b")),
     ("1.0.0 production-ready", re.compile(r"\b1\.0\.0\s+production-ready\b")),
 ]
+DYNAMIC_LIFECYCLE_MIGRATION_GUIDE_REL = Path("docs/migration/dynamic-flow-gate-migration-0.55.0.md")
+DYNAMIC_LIFECYCLE_MIGRATION_BOUNDARY_TOKENS = [
+    "classic-phase-gate remains active/default",
+    "dynamic-flow-gate is opt-in",
+    "plan-tracker is preserved",
+    "evidence-log is preserved",
+    "dry-run is read-only",
+    "does not close RISK-036",
+    "does not close RISK-037",
+    "does not claim 1.0.0 production-ready",
+]
+DYNAMIC_LIFECYCLE_MIGRATION_FORBIDDEN_OVERCLAIMS = [
+    ("dynamic-flow-gate default", re.compile(r"\bdynamic-flow-gate\s+(?:is\s+)?(?:now\s+)?default\b")),
+    ("dynamic-flow-gate default", re.compile(r"\bdynamic-flow-gate\s+is\s+the\s+default\s+lifecycle\s+mode\b")),
+    ("classic project invalid", re.compile(r"\bclassic(?:-phase-gate)?\s+projects?\s+(?:are|is)\s+invalid\b")),
+    ("migration applied", re.compile(r"\bmigration\s+(?:is\s+)?applied\b")),
+    ("external validation full PASS", re.compile(r"\bexternal\s+validation\s+full\s+pass\b")),
+    ("official approval", re.compile(r"\bofficial\s+approval\b")),
+    ("marketplace approval", re.compile(r"\bmarketplace\s+approval\b")),
+    ("Codex Desktop lifecycle PASS", re.compile(r"\bcodex\s+desktop\s+lifecycle\s+pass\b")),
+    ("risk-036 closed", re.compile(r"\brisk-036\b[^\n.;|]{0,48}\bclosed\b")),
+    ("risk-036 closed", re.compile(r"\bclosed\b[^\n.;|]{0,48}\brisk-036\b")),
+    ("risk-037 closed", re.compile(r"\brisk-037\b[^\n.;|]{0,48}\bclosed\b")),
+    ("risk-037 closed", re.compile(r"\bclosed\b[^\n.;|]{0,48}\brisk-037\b")),
+    ("1.0.0 production-ready", re.compile(r"\b1\.0\.0\s+production-ready\b")),
+]
 LIFECYCLE_REGISTRY_GATES = [f"G{i}" for i in range(1, 12)]
 LIFECYCLE_REGISTRY_STAGE_IDS = [
     "initiation",
@@ -4070,6 +4096,410 @@ def check_flow_unit_runtime(root=None):
     return failures
 
 
+def _dynamic_migration_target_root(target):
+    target_path = Path(target)
+    return target_path if target_path.is_absolute() else ROOT / target_path
+
+
+def _file_sha256(path):
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _parse_plan_workflow_model(plan_text):
+    config_match = re.search(
+        r"(?ms)^##\s+项目配置\s*$"
+        r"(?P<section>.*?)(?=^##\s+|\Z)",
+        plan_text,
+    )
+    config_section = config_match.group("section") if config_match else ""
+    explicit_model_fields = (
+        "workflow_model",
+        "workflow model",
+        "current_workflow_model",
+        "active_workflow_model",
+        "lifecycle_model",
+        "current_lifecycle_model",
+        "active_lifecycle_model",
+        "工作流模型",
+        "当前工作流模型",
+        "生命周期模型",
+        "当前生命周期模型",
+    )
+    for line in config_section.splitlines():
+        lowered = line.lower()
+        if not any(field in lowered for field in explicit_model_fields):
+            continue
+
+        field_value = lowered
+        for separator in (":", "：", "="):
+            if separator in field_value:
+                field_value = field_value.split(separator, 1)[1]
+                break
+        field_value = re.split(r"[;；#]", field_value, maxsplit=1)[0].strip()
+        if LIFECYCLE_REGISTRY_ACTIVE_MODE in field_value:
+            return LIFECYCLE_REGISTRY_ACTIVE_MODE
+        if LIFECYCLE_REGISTRY_DYNAMIC_MODE in field_value:
+            return LIFECYCLE_REGISTRY_DYNAMIC_MODE
+
+    if (
+        "## Gate 状态跟踪" in plan_text
+        or "## gate 状态跟踪" in plan_text
+        or re.search(r"(?mi)^\|\s*Gate\s*\|", plan_text)
+    ):
+        return LIFECYCLE_REGISTRY_ACTIVE_MODE
+    return "unknown"
+
+
+def _count_evidence_rows(evidence_text):
+    count = 0
+    for line in evidence_text.splitlines():
+        cells = _split_markdown_table_row(line)
+        if cells and re.match(r"^(?:EVD-\d+|REVIEW-[A-Z]+-\d+)", cells[0]):
+            count += 1
+    return count
+
+
+def _migration_guide_issues(root=None):
+    root = root or ROOT
+    guide_path = root / DYNAMIC_LIFECYCLE_MIGRATION_GUIDE_REL
+    display = _display_path(guide_path, root)
+    if not guide_path.exists():
+        return [f"{display}: missing 0.55.0 dynamic lifecycle migration guide"]
+    content = guide_path.read_text(encoding="utf-8")
+    lowered = content.lower()
+    failures = []
+    for token in DYNAMIC_LIFECYCLE_MIGRATION_BOUNDARY_TOKENS:
+        if token.lower() not in lowered:
+            failures.append(f"{display}: missing migration guide boundary token `{token}`")
+    failures.extend(
+        f"{display}: {issue}"
+        for issue in _dynamic_migration_forbidden_text_issues(content, "forbidden migration guide")
+    )
+    return failures
+
+
+def _dynamic_migration_forbidden_text_issues(text, source_label):
+    failures = []
+    for line in str(text).splitlines():
+        if _dynamic_migration_line_is_conservative(line):
+            continue
+        lowered_line = line.lower()
+        for label, pattern in DYNAMIC_LIFECYCLE_MIGRATION_FORBIDDEN_OVERCLAIMS:
+            for match in pattern.finditer(lowered_line):
+                matched_claim = line[match.start():match.end()]
+                clause_start, clause_end = _claim_clause_bounds(lowered_line, match.start(), match.end())
+                claim_clause = line[clause_start:clause_end]
+                if _line_has_scoped_claim_negation(claim_clause, matched_claim):
+                    continue
+                if _line_has_scoped_claim_negation(line, matched_claim):
+                    continue
+                if _dynamic_migration_clause_is_conservative(claim_clause):
+                    continue
+                if not _line_has_scoped_claim_negation(claim_clause, matched_claim):
+                    failures.append(f"{source_label} overclaim `{label}`")
+                    break
+            if failures and failures[-1] == f"{source_label} overclaim `{label}`":
+                break
+    return failures
+
+
+def _dynamic_migration_line_is_conservative(line):
+    lower = line.lower()
+    conservative_markers = (
+        "no-overclaim",
+        "fail-closed",
+        "review",
+        "reviewer",
+        "审查",
+        "复审",
+        "事实依据",
+        "blocked/not_supported",
+        "blocked / not_supported",
+        "not supported",
+        "not_supported",
+        "not run",
+        "not_run",
+        "blocked",
+        "fail",
+        "false-pass",
+        "false pass",
+        "例子",
+        "example",
+        "examples",
+        "variant",
+        "variants",
+        "回归",
+        "保守",
+    )
+    if any(marker in lower for marker in conservative_markers):
+        return True
+    return False
+
+
+def _dynamic_migration_clause_is_conservative(clause):
+    lower = clause.lower()
+    conservative_markers = (
+        "不声明",
+        "不关闭",
+        "不迁移",
+        "不激活",
+        "不替代",
+        "不把 dynamic-flow-gate 设为默认",
+        "不把 dynamic-flow-gate 设为 default",
+        "不把 dynamic-flow-gate 设为 the default",
+        "does not claim official approval",
+        "does not claim marketplace approval",
+        "does not claim external validation full pass",
+        "does not claim codex desktop lifecycle pass",
+        "do not claim official approval",
+        "do not claim marketplace approval",
+        "do not claim external validation full pass",
+        "do not claim codex desktop lifecycle pass",
+        "does not close",
+        "do not close",
+        "blocked/not_supported",
+        "blocked / not_supported",
+        "not supported",
+        "not_supported",
+        "not run",
+        "not_run",
+        "fail-closed",
+        "fail closed",
+        "no-overclaim",
+        "review",
+        "reviewer",
+        "example",
+        "examples",
+        "variant",
+        "variants",
+        "false-pass",
+        "false pass",
+        "漏掉",
+        "发现",
+        "回归",
+        "still need official approval",
+        "still need marketplace approval",
+        "still require official approval",
+        "still require marketplace approval",
+        "仍需官方提交结果",
+        "仍需外部验证",
+        "仍需 official approval",
+        "仍需 marketplace approval",
+        "不声明 official approval",
+        "不声明 marketplace approval",
+        "不声明 external validation full pass",
+        "不声明 codex desktop lifecycle pass",
+        "继续打开",
+        "保守处置",
+        "保守边界",
+        "暂不关闭",
+        "remains open",
+        "remains blocked",
+        "pending",
+        "awaiting",
+    )
+    if any(marker in lower for marker in conservative_markers):
+        if any(
+            phrase in lower
+            for phrase in (
+                "external validation full pass",
+                "official approval",
+                "marketplace approval",
+                "codex desktop lifecycle pass",
+                "risk-036",
+                "risk-037",
+            )
+        ):
+            return False
+        return True
+    return False
+
+
+def build_dynamic_lifecycle_migration_preview(target=None):
+    """FIX-139: build a read-only classic -> dynamic migration preview."""
+    root = _dynamic_migration_target_root(target or ROOT)
+    plan_path = root / ".governance/plan-tracker.md"
+    evidence_path = root / ".governance/evidence-log.md"
+    registry, registry_issues = _load_lifecycle_registry(ROOT)
+    runtime_context = discover_flow_unit_runtime_context(root)
+
+    preview = {
+        "command": "dynamic-lifecycle-migration",
+        "target": str(root),
+        "mode": "dry-run",
+        "dry_run": True,
+        "write_operations": [],
+        "workflow_model": {
+            "current": "unknown",
+            "target": LIFECYCLE_REGISTRY_DYNAMIC_MODE,
+            "active_default_remains": LIFECYCLE_REGISTRY_ACTIVE_MODE,
+            "dynamic_opt_in": True,
+        },
+        "flow_units": {
+            "source": "none",
+            "count": 0,
+            "active_lanes": {},
+            "preview_units": [],
+        },
+        "evidence_preservation": {
+            "plan_tracker": {
+                "path": str(_display_path(plan_path, root)),
+                "exists": plan_path.exists(),
+                "preserved": plan_path.exists(),
+            },
+            "evidence_log": {
+                "path": str(_display_path(evidence_path, root)),
+                "exists": evidence_path.exists(),
+                "preserved": evidence_path.exists(),
+            },
+            "evidence_rows": 0,
+            "hashes": {},
+        },
+        "blocked_checks": [],
+        "warnings": [],
+        "no_overclaim_boundaries": [
+            "classic-phase-gate remains active/default",
+            "dynamic-flow-gate is opt-in",
+            "dry-run is read-only and does not modify target",
+            "plan-tracker is preserved",
+            "evidence-log is preserved",
+            "does not close RISK-036",
+            "does not close RISK-037",
+            "does not claim 1.0.0 production-ready",
+        ],
+        "migration_plan": [],
+    }
+
+    if registry_issues:
+        preview["blocked_checks"].extend(registry_issues)
+    elif isinstance(registry, dict):
+        if registry.get("active_lifecycle_mode") != LIFECYCLE_REGISTRY_ACTIVE_MODE:
+            preview["blocked_checks"].append("lifecycle registry active mode is not classic-phase-gate")
+        if registry.get("default_lifecycle_mode") != LIFECYCLE_REGISTRY_ACTIVE_MODE:
+            preview["blocked_checks"].append("lifecycle registry default mode is not classic-phase-gate")
+        modes = {
+            mode.get("id"): mode for mode in registry.get("lifecycle_modes", [])
+            if isinstance(mode, dict)
+        }
+        dynamic = modes.get(LIFECYCLE_REGISTRY_DYNAMIC_MODE, {})
+        if dynamic.get("default") is not False or dynamic.get("active") is not False:
+            preview["blocked_checks"].append("dynamic-flow-gate must remain inactive/default=false until explicit opt-in")
+
+    if not plan_path.exists():
+        preview["blocked_checks"].append("missing .governance/plan-tracker.md")
+    else:
+        plan_text = plan_path.read_text(encoding="utf-8")
+        preview["workflow_model"]["current"] = _parse_plan_workflow_model(plan_text)
+        preview["evidence_preservation"]["hashes"]["plan_tracker_sha256"] = _file_sha256(plan_path)
+        preview["blocked_checks"].extend(
+            _dynamic_migration_forbidden_text_issues(plan_text, "plan-tracker forbidden migration")
+        )
+
+    if not evidence_path.exists():
+        preview["blocked_checks"].append("missing .governance/evidence-log.md")
+    else:
+        evidence_text = evidence_path.read_text(encoding="utf-8")
+        evidence_rows = _count_evidence_rows(evidence_text)
+        preview["evidence_preservation"]["evidence_rows"] = evidence_rows
+        preview["evidence_preservation"]["hashes"]["evidence_log_sha256"] = _file_sha256(evidence_path)
+        preview["blocked_checks"].extend(
+            _dynamic_migration_forbidden_text_issues(evidence_text, "evidence-log forbidden migration")
+        )
+        if evidence_rows == 0:
+            preview["blocked_checks"].append("evidence-log has no parseable evidence rows")
+
+    if runtime_context["status"] == "FOUND":
+        active_lanes = runtime_context.get("active_lanes", {})
+        preview["flow_units"]["source"] = runtime_context["path"]
+        preview["flow_units"]["active_lanes"] = active_lanes
+        preview["flow_units"]["count"] = sum(len(units) for units in active_lanes.values())
+        preview["flow_units"]["preview_units"] = [
+            {"flow_unit_id": unit_id, "gate_lane": lane}
+            for lane, units in active_lanes.items()
+            for unit_id in units
+        ]
+    elif isinstance(registry, dict):
+        examples = registry.get("examples", [])
+        python_game = next(
+            (item for item in examples if isinstance(item, dict) and item.get("id") == "python_game_10_chapters"),
+            None,
+        )
+        if isinstance(python_game, dict):
+            units = python_game.get("flow_units", [])
+            preview["flow_units"]["source"] = "lifecycle-registry example python_game_10_chapters"
+            preview["flow_units"]["count"] = len(units) if isinstance(units, list) else 0
+            lanes = {}
+            for unit in units if isinstance(units, list) else []:
+                if isinstance(unit, dict):
+                    lanes.setdefault(unit.get("gate_lane", "unknown"), []).append(unit.get("flow_unit_id"))
+            preview["flow_units"]["active_lanes"] = lanes
+            preview["flow_units"]["preview_units"] = [
+                {"flow_unit_id": unit.get("flow_unit_id"), "gate_lane": unit.get("gate_lane")}
+                for unit in units if isinstance(unit, dict)
+            ]
+
+    preview["migration_plan"] = [
+        {
+            "step": "inventory",
+            "action": "Read plan-tracker, evidence-log, lifecycle registry, and optional flow-unit runtime.",
+            "write": False,
+        },
+        {
+            "step": "preserve",
+            "action": "Keep existing plan-tracker and evidence-log as source evidence; record hashes in preview.",
+            "write": False,
+        },
+        {
+            "step": "opt-in",
+            "action": "Prepare dynamic-flow-gate target model only for explicit future opt-in.",
+            "write": False,
+        },
+        {
+            "step": "review",
+            "action": "Require human review and separate follow-up before any real migration writes.",
+            "write": False,
+        },
+    ]
+    preview["status"] = "BLOCKED" if preview["blocked_checks"] else "READY_FOR_REVIEW"
+    return preview
+
+
+def check_dynamic_lifecycle_migration_preview(target=None):
+    preview = build_dynamic_lifecycle_migration_preview(target)
+    failures = []
+    failures.extend(_migration_guide_issues(ROOT))
+    if preview.get("dry_run") is not True:
+        failures.append("migration preview must be dry_run=true")
+    if preview.get("write_operations") != []:
+        failures.append("migration preview must not declare write operations")
+    workflow_model = preview.get("workflow_model", {})
+    if workflow_model.get("active_default_remains") != LIFECYCLE_REGISTRY_ACTIVE_MODE:
+        failures.append("migration preview must keep classic-phase-gate as active/default")
+    if workflow_model.get("target") != LIFECYCLE_REGISTRY_DYNAMIC_MODE:
+        failures.append("migration preview target must be dynamic-flow-gate")
+    if workflow_model.get("dynamic_opt_in") is not True:
+        failures.append("migration preview must state dynamic-flow-gate is opt-in")
+    preservation = preview.get("evidence_preservation", {})
+    if not preservation.get("plan_tracker", {}).get("preserved"):
+        failures.append("migration preview must preserve plan-tracker")
+    if not preservation.get("evidence_log", {}).get("preserved"):
+        failures.append("migration preview must preserve evidence-log")
+    boundaries = " ".join(preview.get("no_overclaim_boundaries", [])).lower()
+    for token in DYNAMIC_LIFECYCLE_MIGRATION_BOUNDARY_TOKENS:
+        if token.lower() not in boundaries:
+            failures.append(f"migration preview missing no-overclaim boundary token `{token}`")
+    for text in _flow_runtime_text_values(preview):
+        failures.extend(
+            _dynamic_migration_forbidden_text_issues(text, "migration preview forbidden")
+        )
+    failures.extend(preview.get("blocked_checks", []))
+    return failures
+
+
 def check_governance_packs(root=None):
     """FIX-108: canonical governance pack registry must be factual and checkable."""
     root = root or ROOT
@@ -4397,7 +4827,7 @@ def _mainstream_loading_line_has_safe_negation(lines, index, phrase):
             default=-1,
         ) + 1
         zh_local_prefix = lower_line[zh_clause_start:phrase_index]
-        if any(marker in zh_local_prefix for marker in ("不要", "不得", "不能", "不是", "不代表", "不等于")):
+        if any(marker in zh_local_prefix for marker in ("不要", "不得", "不能", "不是", "不声明", "不代表", "不等于")):
             safe_occurrences += 1
             continue
         if (
@@ -4607,6 +5037,18 @@ def _claim_clause_bounds(text, start, end):
     return clause_start, clause_end
 
 
+def _claim_local_window(text, start, end):
+    clause_start, clause_end = _claim_clause_bounds(text, start, end)
+    clause = text[clause_start:clause_end]
+    rel_start = start - clause_start
+    rel_end = end - clause_start
+    prefix = clause[:rel_start]
+    suffix = clause[rel_end:]
+    prefix = re.split(r"[;；.!?！？|:：]", prefix)[-1]
+    suffix = re.split(r"[;；.!?！？|:：]", suffix, maxsplit=1)[0]
+    return prefix, suffix
+
+
 def _word_count(text):
     return len(re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]+", text.lower()))
 
@@ -4681,7 +5123,11 @@ def _line_has_scoped_claim_negation(line, phrase):
         "不能",
         "不声明",
         "未",
+        "未发现",
         "没有",
+        "明确否定",
+        "阻断",
+        "拦截",
     )
     predicate_markers = (
         "does not claim",
@@ -4702,10 +5148,14 @@ def _line_has_scoped_claim_negation(line, phrase):
         "不能",
         "不声明",
         "未",
+        "未发现",
         "没有",
         "avoid",
         "avoids",
         "避免",
+        "明确否定",
+        "阻断",
+        "拦截",
     )
     post_markers = (
         "is not",
@@ -4721,6 +5171,19 @@ def _line_has_scoped_claim_negation(line, phrase):
         "不声明",
         "未",
         "没有",
+        "不可用",
+        "不可发布",
+        "仍不可用",
+        "仍不可发布",
+        "保守处置",
+        "继续保留",
+        "继续打开",
+        "仍打开",
+        "仍需",
+        "阻断",
+        "拦截",
+        "过度声明",
+        "肯定式过度声明",
     )
 
     matches = list(re.finditer(re.escape(phrase_lower), lower))
@@ -4728,16 +5191,12 @@ def _line_has_scoped_claim_negation(line, phrase):
         return False
 
     for match in matches:
-        clause_start, clause_end = _claim_clause_bounds(lower, match.start(), match.end())
-        clause = lower[clause_start:clause_end]
-        rel_start = match.start() - clause_start
-        rel_end = match.end() - clause_start
-        prefix = clause[:rel_start]
-        suffix = clause[rel_end:]
+        prefix, suffix = _claim_local_window(lower, match.start(), match.end())
 
         negated = False
-        for marker_start, marker_end, _marker in _marker_positions(prefix[-96:], direct_pre_markers):
-            between = prefix[-96:][marker_end:]
+        prefix_window = prefix[-96:]
+        for marker_start, marker_end, _marker in _marker_positions(prefix_window, direct_pre_markers):
+            between = prefix_window[marker_end:]
             if not re.search(r"[,;；.!?！？|:：]", between) and _word_count(between) <= 2:
                 negated = True
                 break
@@ -18717,6 +19176,28 @@ def cmd_check_flow_unit_runtime(args):
     print()
 
 
+def cmd_dynamic_lifecycle_migration(args):
+    """Print a read-only classic -> dynamic lifecycle migration preview."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    if not getattr(args, "dry_run", False):
+        print("ERROR: dynamic-lifecycle-migration requires explicit --dry-run; --apply remains blocked")
+        sys.exit(1)
+    if getattr(args, "apply", False):
+        print("ERROR: dynamic-lifecycle-migration is dry-run only in 0.55.0; --apply is blocked")
+        sys.exit(1)
+    preview = build_dynamic_lifecycle_migration_preview(getattr(args, "target", None))
+    issues = check_dynamic_lifecycle_migration_preview(getattr(args, "target", None))
+    preview["validation_issues"] = issues
+    if issues:
+        preview["status"] = "BLOCKED"
+    print(json.dumps(preview, ensure_ascii=False, indent=2))
+    if issues and getattr(args, "fail_on_issues", False):
+        sys.exit(1)
+
+
 def cmd_check_host_capability_context(args):
     """Run restricted host capability context benchmark guard."""
     try:
@@ -19314,6 +19795,30 @@ def main():
     cfur_p.add_argument("--fail-on-issues", action="store_true",
                         help="Exit with non-zero code if flow-unit runtime hot state is invalid")
 
+    # dynamic-lifecycle-migration (FIX-139)
+    dlm_p = subparsers.add_parser(
+        "dynamic-lifecycle-migration",
+        aliases=["dynamic-flow-gate-migration"],
+        help="Print a read-only classic-phase-gate to dynamic-flow-gate migration preview",
+    )
+    dlm_p.add_argument(
+        "--target",
+        required=True,
+        help="Project root/fixture to inspect without mutating it",
+    )
+    dlm_p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required in 0.55.0; prints a structured migration preview only",
+    )
+    dlm_p.add_argument(
+        "--apply",
+        action="store_true",
+        help="Blocked in 0.55.0; no write path is implemented",
+    )
+    dlm_p.add_argument("--fail-on-issues", action="store_true",
+                       help="Exit with non-zero code if preview is blocked")
+
     # check-host-capability-context (FIX-117)
     chc_p = subparsers.add_parser(
         "check-host-capability-context",
@@ -19467,6 +19972,8 @@ def main():
         "check-capability-registry": cmd_check_capability_registry,
         "check-lifecycle-registry": cmd_check_lifecycle_registry,
         "check-flow-unit-runtime": cmd_check_flow_unit_runtime,
+        "dynamic-lifecycle-migration": cmd_dynamic_lifecycle_migration,
+        "dynamic-flow-gate-migration": cmd_dynamic_lifecycle_migration,
         "check-host-capability-context": cmd_check_host_capability_context,
         "check-official-submission-ecosystem": cmd_check_official_submission_ecosystem,
         "check-mainstream-agent-loading": cmd_check_mainstream_agent_loading,

@@ -79,7 +79,8 @@
       { "path": "docs/release/rollback-plan-0.54.0.md", "type": "file" },
       { "path": "docs/release/release-checklist-0.54.1.md", "type": "file" },
       { "path": "docs/release/feature-flags-0.54.1.md", "type": "file" },
-      { "path": "docs/release/rollback-plan-0.54.1.md", "type": "file" }
+      { "path": "docs/release/rollback-plan-0.54.1.md", "type": "file" },
+      { "path": "docs/migration/dynamic-flow-gate-migration-0.55.0.md", "type": "file" }
     ],
     "glob_patterns": [
       "skills/software-project-governance/core/**/*.md",

@@ -4320,6 +4320,492 @@ class FlowUnitRuntimeTests(unittest.TestCase):
             self.assertIn("Result: PASSED", output)
 
 
+class DynamicLifecycleMigrationTests(unittest.TestCase):
+    """FIX-139: migration preview is read-only, structured, and conservative."""
+
+    def _unit(self, idx, lane, stage, *, deps=None, gate_status=None):
+        return {
+            "flow_unit_id": f"game.chapter.{idx:02d}",
+            "title": f"Chapter {idx}",
+            "unit_type": "chapter",
+            "project_type": "game",
+            "lifecycle_mode": "dynamic-flow-gate",
+            "current_stage": stage,
+            "current_subphase": "backlog" if lane == "backlog" else lane,
+            "gate_lane": lane,
+            "gate_references": ["G5"] if lane == "backlog" else ["G6", "G7"],
+            "allowed_next_transitions": ["classic-G5"],
+            "dependencies": deps or [],
+            "blockers": [],
+            "evidence_refs": ["EVD-001"],
+            "loop_state": {
+                "active_loop": False,
+                "loop_count": 0,
+                "last_loop_type": None,
+            },
+            "runtime_status_source": "hot-project-state",
+            "gate_state": {"status": gate_status or lane},
+        }
+
+    def _runtime(self, mutate=None):
+        units = [
+            self._unit(1, "released", "operations", gate_status="released"),
+            self._unit(2, "testing", "testing", deps=["game.chapter.01"], gate_status="testing"),
+            self._unit(3, "development", "development", deps=["game.chapter.02"], gate_status="in-progress"),
+        ]
+        for idx in range(4, 11):
+            units.append(self._unit(idx, "backlog", "architecture", deps=[f"game.chapter.{idx - 1:02d}"], gate_status="backlog"))
+        data = {
+            "schema_version": "1.0",
+            "workflow_model": "dynamic-flow-gate",
+            "default_lifecycle_mode": "classic-phase-gate",
+            "runtime_scope": "runtime-visibility-only",
+            "runtime_status_source": "hot-project-state",
+            "declarative_gate_engine": False,
+            "project_migration": False,
+            "active_lanes": {
+                "released": ["game.chapter.01"],
+                "testing": ["game.chapter.02"],
+                "development": ["game.chapter.03"],
+                "backlog": [f"game.chapter.{idx:02d}" for idx in range(4, 11)],
+            },
+            "blocked_downstream_units": [],
+            "rollup_status": "chapter 1 released; chapter 2 testing; chapter 3 development; chapter 4-10 backlog",
+            "flow_units": units,
+            "no_overclaim_boundary": [
+                "Flow-unit runtime is runtime visibility only.",
+                "Flow-unit runtime does not activate declarative gate engine.",
+                "Flow-unit runtime does not migrate projects.",
+                "Classic G1-G11 remains compatible.",
+                "Flow-unit runtime does not close RISK-036.",
+                "Flow-unit runtime does not close RISK-037.",
+                "Flow-unit runtime does not claim 1.0.0 production-ready.",
+            ],
+        }
+        if mutate:
+            mutate(data)
+        return data
+
+    def _write_target(self, root, *, runtime=True, evidence=True, plan_extra="", evidence_text=None):
+        gov = root / ".governance"
+        gov.mkdir(parents=True, exist_ok=True)
+        (gov / "plan-tracker.md").write_text(
+            "\n".join([
+                "# Plan",
+                "## 项目配置",
+                "- workflow_model: classic-phase-gate",
+                "## Gate 状态跟踪",
+                "| Gate | 阶段转换 | 状态 |",
+                "| --- | --- | --- |",
+                "| G11 | next | passed |",
+                plan_extra,
+            ]),
+            encoding="utf-8",
+        )
+        if evidence:
+            (gov / "evidence-log.md").write_text(
+                evidence_text or "| EVD-001 | FIX-139 | preview evidence |",
+                encoding="utf-8",
+            )
+        if runtime:
+            (gov / "flow-unit-runtime.json").write_text(
+                json.dumps(self._runtime(), indent=2),
+                encoding="utf-8",
+            )
+
+    def test_python_game_chapter_fixture_preview(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_target(root)
+
+            preview = vw.build_dynamic_lifecycle_migration_preview(root)
+
+        self.assertEqual(preview["status"], "READY_FOR_REVIEW")
+        self.assertTrue(preview["dry_run"])
+        self.assertEqual(preview["workflow_model"]["target"], "dynamic-flow-gate")
+        self.assertEqual(preview["workflow_model"]["active_default_remains"], "classic-phase-gate")
+        self.assertEqual(preview["flow_units"]["count"], 10)
+        self.assertEqual(preview["flow_units"]["active_lanes"]["released"], ["game.chapter.01"])
+        self.assertEqual(preview["flow_units"]["active_lanes"]["testing"], ["game.chapter.02"])
+        self.assertEqual(preview["flow_units"]["active_lanes"]["development"], ["game.chapter.03"])
+        self.assertEqual(preview["flow_units"]["active_lanes"]["backlog"], [f"game.chapter.{idx:02d}" for idx in range(4, 11)])
+        self.assertEqual(preview["blocked_checks"], [])
+
+    def test_classic_only_valid_project_uses_registry_example_preview(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_target(root, runtime=False)
+
+            preview = vw.build_dynamic_lifecycle_migration_preview(root)
+
+        self.assertEqual(preview["status"], "READY_FOR_REVIEW")
+        self.assertEqual(preview["workflow_model"]["current"], "classic-phase-gate")
+        self.assertEqual(preview["flow_units"]["source"], "lifecycle-registry example python_game_10_chapters")
+        self.assertEqual(preview["flow_units"]["count"], 10)
+        self.assertTrue(preview["evidence_preservation"]["plan_tracker"]["preserved"])
+        self.assertTrue(preview["evidence_preservation"]["evidence_log"]["preserved"])
+
+    def test_history_mentions_dynamic_but_explicit_classic_keeps_current_classic(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_target(
+                root,
+                plan_extra="\n".join([
+                    "0.55.0 Dynamic Lifecycle + Flow-Gate migration/external validation 规划已入账。",
+                    "- workflow_model: classic-phase-gate",
+                    "- history mentions dynamic-flow-gate but it is only planning text",
+                ]),
+            )
+
+            preview = vw.build_dynamic_lifecycle_migration_preview(root)
+
+        self.assertEqual(preview["workflow_model"]["current"], "classic-phase-gate")
+        self.assertNotEqual(preview["workflow_model"]["current"], "dynamic-flow-gate")
+
+    def test_same_explicit_model_line_dynamic_opt_in_keeps_current_classic(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_target(root)
+            plan_path = root / ".governance/plan-tracker.md"
+            plan_text = plan_path.read_text(encoding="utf-8")
+            plan_path.write_text(
+                plan_text.replace(
+                    "- workflow_model: classic-phase-gate",
+                    "- workflow_model: classic-phase-gate; dynamic-flow-gate is opt-in",
+                ),
+                encoding="utf-8",
+            )
+
+            preview = vw.build_dynamic_lifecycle_migration_preview(root)
+
+        self.assertEqual(preview["workflow_model"]["current"], "classic-phase-gate")
+        self.assertNotEqual(preview["workflow_model"]["current"], "dynamic-flow-gate")
+
+    def test_gate_status_tracking_without_explicit_dynamic_keeps_current_classic(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_target(
+                root,
+                plan_extra="\n".join([
+                    "0.55.0 Dynamic Lifecycle + Flow-Gate migration/external validation 规划已入账。",
+                    "Gate 状态跟踪: G11 passed; classic-phase-gate remains active/default.",
+                ]),
+            )
+
+            preview = vw.build_dynamic_lifecycle_migration_preview(root)
+
+        self.assertEqual(preview["workflow_model"]["current"], "classic-phase-gate")
+        self.assertNotEqual(preview["workflow_model"]["current"], "dynamic-flow-gate")
+
+    def test_missing_evidence_log_fails_closed(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_target(root, evidence=False)
+
+            preview = vw.build_dynamic_lifecycle_migration_preview(root)
+            issues = vw.check_dynamic_lifecycle_migration_preview(root)
+
+        self.assertEqual(preview["status"], "BLOCKED")
+        self.assertTrue(any("missing .governance/evidence-log.md" in issue for issue in preview["blocked_checks"]))
+        self.assertTrue(any("missing .governance/evidence-log.md" in issue for issue in issues))
+
+    def test_dry_run_command_does_not_write_target(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_target(root)
+            before = {
+                str(path.relative_to(root)): (path.stat().st_mtime_ns, path.read_bytes())
+                for path in root.rglob("*")
+                if path.is_file()
+            }
+            args = argparse.Namespace(target=str(root), dry_run=True, apply=False, fail_on_issues=True)
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                vw.cmd_dynamic_lifecycle_migration(args)
+            after = {
+                str(path.relative_to(root)): (path.stat().st_mtime_ns, path.read_bytes())
+                for path in root.rglob("*")
+                if path.is_file()
+            }
+
+        output = json.loads(buf.getvalue())
+        self.assertEqual(output["status"], "READY_FOR_REVIEW")
+        self.assertEqual(before, after)
+        self.assertEqual(output["write_operations"], [])
+
+    def test_missing_dry_run_flag_exits_closed(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_target(root)
+            args = argparse.Namespace(target=str(root), dry_run=False, apply=False, fail_on_issues=True)
+            buf = io.StringIO()
+
+            with redirect_stdout(buf), self.assertRaises(SystemExit) as ctx:
+                vw.cmd_dynamic_lifecycle_migration(args)
+
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertIn("requires explicit --dry-run", buf.getvalue())
+
+    def test_apply_flag_remains_blocked_even_with_dry_run(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_target(root)
+            args = argparse.Namespace(target=str(root), dry_run=True, apply=True, fail_on_issues=True)
+            buf = io.StringIO()
+
+            with redirect_stdout(buf), self.assertRaises(SystemExit) as ctx:
+                vw.cmd_dynamic_lifecycle_migration(args)
+
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertIn("--apply is blocked", buf.getvalue())
+
+    def test_dynamic_default_overclaim_is_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_target(root, plan_extra="dynamic-flow-gate is now default")
+
+            issues = vw.check_dynamic_lifecycle_migration_preview(root)
+
+        self.assertTrue(any("dynamic-flow-gate default" in issue for issue in issues))
+
+    def test_migration_specific_no_overclaim_blocks_validation_approval_and_lifecycle_pass(self):
+        cases = [
+            ("external validation full PASS", "external validation full PASS"),
+            ("official approval", "official approval"),
+            ("marketplace approval", "marketplace approval"),
+            ("Codex Desktop lifecycle PASS", "Codex Desktop lifecycle PASS"),
+        ]
+        for label, phrase in cases:
+            with self.subTest(label=label):
+                with tempfile.TemporaryDirectory() as td:
+                    root = Path(td)
+                    self._write_target(root, plan_extra=phrase)
+
+                    issues = vw.check_dynamic_lifecycle_migration_preview(root)
+
+                self.assertTrue(
+                    any(label in issue for issue in issues),
+                    f"missing migration no-overclaim issue for {label}: {issues}",
+                )
+
+    def test_mixed_clause_positive_claim_is_blocked_in_plan_and_evidence(self):
+        cases = [
+            (
+                "plan-tracker",
+                {"plan_extra": "No official approval; external validation full PASS"},
+            ),
+            (
+                "evidence-log",
+                {"evidence_text": "| EVD-001 | FIX-139 | No official approval; external validation full PASS |"},
+            ),
+        ]
+        for label, kwargs in cases:
+            with self.subTest(label=label):
+                with tempfile.TemporaryDirectory() as td:
+                    root = Path(td)
+                    self._write_target(root, **kwargs)
+
+                    preview = vw.build_dynamic_lifecycle_migration_preview(root)
+                    issues = vw.check_dynamic_lifecycle_migration_preview(root)
+
+                self.assertEqual(preview["status"], "BLOCKED")
+                self.assertTrue(
+                    any("external validation full PASS" in issue for issue in preview["blocked_checks"]),
+                    f"missing blocked preview issue for mixed clause {label}: {preview['blocked_checks']}",
+                )
+                self.assertTrue(
+                    any("external validation full PASS" in issue for issue in issues),
+                    f"missing validation issue for mixed clause {label}: {issues}",
+                )
+
+    def test_realistic_conservative_boundary_wording_is_not_blocked(self):
+        cases = [
+            (
+                "plan-tracker",
+                {
+                    "plan_extra": "\n".join([
+                        "仍需 external validation full PASS、官方提交结果/批准证据、Codex Desktop lifecycle PASS 或明确保守处置，以及 RISK-036/RISK-037 关闭后再发布正式标签。",
+                        "该事项不声明 official approval、marketplace approval、external validation full PASS、Codex Desktop lifecycle PASS 或 1.0.0 readiness。",
+                    ]),
+                },
+            ),
+            (
+                "evidence-log",
+                {
+                    "evidence_text": "\n".join([
+                        "| EVD-001 | FIX-139 | 仍需 external validation full PASS、官方提交结果/批准证据、Codex Desktop lifecycle PASS 或明确保守处置。 |",
+                        "| EVD-002 | FIX-139 | 不声明 official approval、marketplace approval、external validation full PASS、Codex Desktop lifecycle PASS 或 1.0.0 readiness。 |",
+                    ]),
+                },
+            ),
+        ]
+        for label, kwargs in cases:
+            with self.subTest(label=label):
+                with tempfile.TemporaryDirectory() as td:
+                    root = Path(td)
+                    self._write_target(root, **kwargs)
+
+                    preview = vw.build_dynamic_lifecycle_migration_preview(root)
+                    issues = vw.check_dynamic_lifecycle_migration_preview(root)
+
+                self.assertEqual(preview["status"], "READY_FOR_REVIEW")
+                self.assertEqual(issues, [])
+
+    def test_mixed_clause_negation_does_not_protect_followup_overclaim(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_target(root, plan_extra="No official approval; external validation full PASS")
+
+            preview = vw.build_dynamic_lifecycle_migration_preview(root)
+            issues = vw.check_dynamic_lifecycle_migration_preview(root)
+
+        self.assertEqual(preview["status"], "BLOCKED")
+        self.assertTrue(any("external validation full PASS" in issue for issue in preview["blocked_checks"]))
+        self.assertTrue(any("external validation full PASS" in issue for issue in issues))
+
+    def test_negation_does_not_protect_independent_followup_claim(self):
+        cases = [
+            (
+                "plan-tracker",
+                {"plan_extra": "No official approval; external validation full PASS"},
+            ),
+            (
+                "evidence-log",
+                {"evidence_text": "| EVD-001 | FIX-139 | No official approval; external validation full PASS |"},
+            ),
+        ]
+        for label, kwargs in cases:
+            with self.subTest(label=label):
+                with tempfile.TemporaryDirectory() as td:
+                    root = Path(td)
+                    self._write_target(root, **kwargs)
+
+                    issues = vw.check_dynamic_lifecycle_migration_preview(root)
+
+                self.assertTrue(
+                    any("external validation full PASS" in issue for issue in issues),
+                    f"mixed clause follow-up claim should be blocked for {label}: {issues}",
+                )
+
+    def test_current_root_docs_are_readable_for_migration_preview(self):
+        preview = vw.build_dynamic_lifecycle_migration_preview(vw.ROOT)
+        issues = vw.check_dynamic_lifecycle_migration_preview(vw.ROOT)
+
+        self.assertEqual(preview["status"], "READY_FOR_REVIEW")
+        self.assertEqual(issues, [])
+
+    def test_migration_preview_allows_review_and_fail_closed_history_language(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_target(
+                root,
+                plan_extra="\n".join([
+                    "review confirmed blocked/not_supported Desktop lifecycle matrix and no-overclaim guard.",
+                    "Code Reviewer approved the fail-closed example and variant regressions.",
+                ]),
+                evidence_text="\n".join([
+                    "| EVD-001 | FIX-139 | review confirmed blocked/not_supported Desktop lifecycle matrix and no-overclaim guard. |",
+                    "| EVD-002 | FIX-139 | Code Reviewer approved the fail-closed example and variant regressions. |",
+                ]),
+            )
+
+            preview = vw.build_dynamic_lifecycle_migration_preview(root)
+            issues = vw.check_dynamic_lifecycle_migration_preview(root)
+
+        self.assertEqual(preview["status"], "READY_FOR_REVIEW")
+        self.assertEqual(issues, [])
+
+    def test_migration_preview_allows_review_documentation_hits_in_root_files(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_target(
+                root,
+                plan_extra="review confirms blocked marketplace approval wording is only historical evidence.",
+                evidence_text="| EVD-001 | FIX-139 | review confirms blocked marketplace approval wording is only historical evidence. |",
+            )
+
+            preview = vw.build_dynamic_lifecycle_migration_preview(root)
+            issues = vw.check_dynamic_lifecycle_migration_preview(root)
+
+        self.assertEqual(preview["status"], "READY_FOR_REVIEW")
+        self.assertEqual(issues, [])
+
+    def test_migration_preview_command_requires_explicit_dry_run(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_target(root)
+            args = argparse.Namespace(target=str(root), dry_run=False, apply=False, fail_on_issues=True)
+            buf = io.StringIO()
+
+            with redirect_stdout(buf), self.assertRaises(SystemExit) as ctx:
+                vw.cmd_dynamic_lifecycle_migration(args)
+
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertIn("requires explicit --dry-run", buf.getvalue())
+
+    def test_evidence_log_overclaims_block_migration_preview(self):
+        cases = [
+            ("external validation full PASS", "external validation full PASS"),
+            ("official approval", "official approval"),
+            ("marketplace approval", "marketplace approval"),
+            ("Codex Desktop lifecycle PASS", "Codex Desktop lifecycle PASS"),
+        ]
+        for label, phrase in cases:
+            with self.subTest(label=label):
+                with tempfile.TemporaryDirectory() as td:
+                    root = Path(td)
+                    self._write_target(
+                        root,
+                        evidence_text=f"| EVD-001 | FIX-139 | {phrase} |",
+                    )
+
+                    preview = vw.build_dynamic_lifecycle_migration_preview(root)
+                    issues = vw.check_dynamic_lifecycle_migration_preview(root)
+
+                self.assertEqual(preview["status"], "BLOCKED")
+                self.assertTrue(
+                    any("evidence-log forbidden migration" in issue and label in issue for issue in preview["blocked_checks"]),
+                    f"missing evidence-log blocked check for {label}: {preview['blocked_checks']}",
+                )
+                self.assertTrue(
+                    any("evidence-log forbidden migration" in issue and label in issue for issue in issues),
+                    f"missing evidence-log validation issue for {label}: {issues}",
+                )
+
+    def test_migration_specific_no_overclaim_allows_blocker_boundary_wording(self):
+        blocker_line = (
+            "当前结论仍为 1.0.0 不可发布：RISK-036 继续打开，"
+            "两个真实外部项目 full PASS、Codex Desktop lifecycle PASS/保守处置、"
+            "official approval 与 marketplace approval 仍不可用。"
+        )
+
+        issues = vw._dynamic_migration_forbidden_text_issues(blocker_line, "migration preview forbidden")
+
+        self.assertEqual(issues, [])
+
+    def test_evidence_log_scoped_negation_and_blocker_wording_do_not_block_preview(self):
+        evidence_text = (
+            "| EVD-001 | FIX-139 | No external validation full PASS, no official approval, "
+            "no marketplace approval, and no Codex Desktop lifecycle PASS. |\n"
+            "| EVD-002 | FIX-139 | 当前结论仍为 1.0.0 不可发布：两个真实外部项目 full PASS、"
+            "Codex Desktop lifecycle PASS/保守处置、official approval 与 marketplace approval 仍不可用。 |\n"
+            "| EVD-003 | FIX-139 | validator 阻断 official approval、marketplace approval 与 "
+            "1.0.0 production-ready 等过度声明。 |\n"
+            "| EVD-004 | FIX-139 | 未发现 official approval、marketplace approval、"
+            "1.0.0 production-ready、RISK-036 resolved/closed 等肯定式过度声明。 |"
+        )
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_target(root, evidence_text=evidence_text)
+
+            preview = vw.build_dynamic_lifecycle_migration_preview(root)
+            issues = vw.check_dynamic_lifecycle_migration_preview(root)
+
+        self.assertEqual(preview["status"], "READY_FOR_REVIEW")
+        self.assertFalse(any("evidence-log forbidden migration" in issue for issue in preview["blocked_checks"]))
+        self.assertFalse(any("evidence-log forbidden migration" in issue for issue in issues))
+
+
 class CapabilitySelectionTests(unittest.TestCase):
     """FIX-117: restricted host capability selection must degrade honestly."""
 

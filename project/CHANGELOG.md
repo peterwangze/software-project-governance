@@ -2,6 +2,37 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.55.1] - 2026-06-21
+
+### 0.55.1 - Web Console CLI/Client Entry Patch
+
+0.55.1 发布 REL-039 Web console CLI/client entry patch：把已完成并审查通过的 FIX-148 版本化。该版本让 CLI/客户端用户可以通过 `web-console --status` 发现本地 Web companion dashboard，并通过 `web-console --start [--install]` 启动它；同时保持 Web 只是本地状态/配置可视化 companion，不替代 `/governance`、不执行 agent 任务、不声明 Desktop embedded UI 或 marketplace lifecycle PASS。
+
+### Included
+
+- **FIX-148 Web console CLI/client entry redesign**: 新增 `web-console --status/--start/--install/--open`，README/TOOLS 改为 CLI 入口优先，Web 首屏和移动端突出 CLI companion 与启动命令。
+- **Fail-closed identity probing**: `web/index.html` 新增 SPG identity meta，`verify_workflow.py` 只在页面含 SPG identity 时认定 dashboard running；非 SPG 服务占用端口时报告 `occupied` 并阻断 `--start`。
+- **Mobile entry usability**: Web 首屏移动端压缩 topbar/nav/entry，使 Start/Copy 操作在 390x844 首屏内可见。
+- **REL-039**: 新增 0.55.1 release checklist、feature flags、rollback plan、manifest coverage、README readiness boundary 和 release no-overclaim boundary。
+
+### Release Sync
+
+- 版本声明同步到 0.55.1：source SKILL、canonical manifest、Claude/Codex plugin metadata、Claude marketplace metadata、hook `@version`、target fixture skill/plan、CHANGELOG、README 和 `verify_workflow.py` REQUIRED_SNIPPETS。
+- README 的 1.0.0 Readiness Boundary 更新为 0.55.1 Web console entry patch + 0.55.0 migration preview/external validation archive，继续保留 `classic-phase-gate` 默认、`dynamic-flow-gate` inactive/non-default opt-in preview。
+
+### Verification
+
+- `python skills/software-project-governance/infra/verify_workflow.py check-version-consistency`
+- `python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues`
+- `python skills/software-project-governance/infra/verify_workflow.py check-governance --fail-on-issues`
+- `python skills/software-project-governance/infra/verify_workflow.py check-release --version 0.55.1 --require-changelog --runtime-adapters`
+
+### Boundaries
+
+- RISK-036 remains open. 0.55.1 does not include official approval, marketplace approval, two-real-project external validation full PASS, Codex Desktop lifecycle PASS, RISK-036 closure, or 1.0.0 production-ready approval.
+- RISK-037 remains open. 0.55.1 does not implement an apply/write path, does not migrate projects, does not make `dynamic-flow-gate` the default, does not claim non-game preset generalization complete, does not close RISK-037, and does not claim dynamic lifecycle readiness.
+- Web console remains an optional local companion dashboard. It does not replace CLI/client execution, does not execute agent tasks, does not silently install dependencies, and is not a Desktop embedded UI lifecycle PASS.
+
 ## [0.55.0] - 2026-06-20
 
 ### 0.55.0 - Dynamic Lifecycle Migration Preview and External Validation Archive

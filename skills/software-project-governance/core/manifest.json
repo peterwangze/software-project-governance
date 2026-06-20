@@ -162,7 +162,8 @@
       { "path": ".claude/", "type": "dir" },
       { "path": ".github/", "type": "dir" },
       { "path": "tests/", "type": "dir" },
-      { "path": "docs/", "type": "dir" }
+      { "path": "docs/", "type": "dir" },
+      { "path": "web/", "type": "dir" }
     ],
     "glob_patterns": [
       "project/**/*.md",
@@ -170,7 +171,13 @@
       "project/**/*.json",
       ".github/workflows/*.yml",
       "tests/**/*.py",
-      "docs/**/*.md"
+      "docs/**/*.md",
+      "web/.gitignore",
+      "web/index.html",
+      "web/package.json",
+      "web/package-lock.json",
+      "web/public/*.svg",
+      "web/src/**/*"
     ]
   },
 

@@ -97,6 +97,28 @@ The snapshot is the first trust signal: it proves the workflow can show what it 
 
 External first-session measurement is tracked separately from this local demo. The current 0.43.0 measured state is local_demo=PASS and external_pilot=NOT_MEASURED in the [first-session measurement evidence](docs/requirements/first-session-measurement-0.43.0.md).
 
+## Optional Local Web Console
+
+The primary user interface remains your AI coding CLI or client: Claude Code, Codex, Gemini CLI, opencode, or another agent host. The `web/` console is an optional local companion view for users who want a cleaner status surface while still driving work from the CLI/client.
+
+Use it for local configuration, current status, evidence/risk scanning, and advanced maintenance visibility. It does not replace `/governance`, does not auto-run agent tasks, and is not evidence of Codex Desktop marketplace-management lifecycle PASS.
+
+Run it from this repository checkout:
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
+Then open the local URL printed by Vite, usually:
+
+```text
+http://127.0.0.1:5173/
+```
+
+In a CLI/client session, the convenient invocation is to ask the agent to start the local Web console from the repository root. The agent should run `cd web && npm run dev` and report the local URL. Keep daily decisions and task execution in the CLI/client; use the Web console as a readable local dashboard.
+
 First-run preset guidance:
 
 | Preset | Use first when | What it optimizes for |
@@ -131,6 +153,33 @@ For full Chinese installation details and daily usage guidance, continue below.
 - 风险、决策、计划变更——**全程留痕，可复盘**
 
 你不需要手动维护项目文档、不需要记住"上次做到哪了"、不需要提醒自己"该做 code review 了"。
+
+## 可选本地 Web 控制台
+
+当前主交互界面仍然是 CLI 或客户端：Claude Code、Codex、Gemini CLI、opencode 等。`web/` 是可选的本地伴随控制台，用来把常用本地配置、状态、证据和风险以更清晰的浏览器界面展示出来。
+
+推荐用法：
+
+- 日常推进任务、确认决策、执行 `/governance` 仍在 CLI/客户端里完成。
+- Web 控制台用于查看 Local Setup、Status、Evidence & Risks。
+- Remote Validation、Release、Maintenance 属于 Advanced 高阶区，不放在首屏干扰普通用户。
+- 这不是 Codex Desktop 内嵌 UI，也不是 marketplace lifecycle PASS 证据。
+
+从当前仓库启动：
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
+然后打开 Vite 输出的本地地址，通常是：
+
+```text
+http://127.0.0.1:5173/
+```
+
+在 Codex/Claude 这类客户端里，更方便的方式是直接让 agent 在仓库根目录启动本地 Web 控制台；agent 会运行 `cd web && npm run dev` 并返回本地 URL。CLI/客户端负责执行，Web 控制台负责看状态。
 
 ## 安装
 

@@ -474,6 +474,17 @@
 - **边界**：dry-run only；必须显式传入 `--dry-run`；不修改 target；classic-phase-gate remains active/default；dynamic-flow-gate is opt-in；plan-tracker is preserved；evidence-log is preserved；不关闭 RISK-036/RISK-037；不声明 external validation full PASS、official approval、marketplace approval、Codex Desktop lifecycle PASS 或 1.0.0 production-ready。
 - **被以下子工作流使用**：架构设计（architecture）、测试（testing）、发布（release）、维护（maintenance）
 
+### TOOL-042：Local Web Console launcher
+
+- **文件**：`infra/verify_workflow.py` + repo-only `web/`
+- **子命令**：`web-console --status`；`web-console --start [--install] [--open] [--host 127.0.0.1] [--port 5173]`
+- **输入**：当前仓库中的 `web/package.json`、本机 `npm`、可选 `web/node_modules`
+- **输出**：Web console 可用性、推荐 CLI/client 调用命令、本地 URL；`--start` 后台启动 Vite dev server 并写入 `web/web-dev.log` 与 `.spg-web-console.pid`
+- **触发条件**：用户希望从 CLI/客户端打开可视化状态面板、查看本地配置、状态、证据/风险或高级维护入口时
+- **依赖**：repo-only `web/` React/Vite console、`npm`、`check-manifest-consistency`
+- **边界**：local companion dashboard only；主交互仍在 CLI/agent client；不替代 `/governance`；不自动执行 agent 任务；不是 Codex Desktop 内嵌 UI、marketplace lifecycle PASS、official approval 或 1.0.0 readiness 证据。
+- **被以下子工作流使用**：立项（initiation）、测试（testing）、运营（operations）、维护（maintenance）
+
 ## 工具与子工作流的关系矩阵
 
 | 工具 | 立项 | 调研 | 选型 | 环境 | 架构 | 开发 | 测试 | CI/CD | 发布 | 运营 | 维护 |
@@ -516,6 +527,7 @@
 | Flow Unit Runtime hot-state guard | | | | | ● | | ● | | ● | | ● |
 | Classic Gate Execution Registry guard | | | | | ● | | ● | ● | ● | | ● |
 | Dynamic Lifecycle Migration dry-run preview | | | | | ● | | ● | | ● | | ● |
+| Local Web Console launcher | ● | | | | | | ● | | | ● | ● |
 
 > ● 主要使用者  ○ 可选用
 

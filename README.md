@@ -103,21 +103,31 @@ The primary user interface remains your AI coding CLI or client: Claude Code, Co
 
 Use it for local configuration, current status, evidence/risk scanning, and advanced maintenance visibility. It does not replace `/governance`, does not auto-run agent tasks, and is not evidence of Codex Desktop marketplace-management lifecycle PASS.
 
-Run it from this repository checkout:
+Discover it from the same CLI/client path:
 
 ```bash
-cd web
-npm install
-npm run dev
+python skills/software-project-governance/infra/verify_workflow.py web-console --status
 ```
 
-Then open the local URL printed by Vite, usually:
+Start it from this repository checkout:
+
+```bash
+python skills/software-project-governance/infra/verify_workflow.py web-console --start
+```
+
+On a first checkout, include dependency installation explicitly:
+
+```bash
+python skills/software-project-governance/infra/verify_workflow.py web-console --start --install
+```
+
+Then open the local URL printed by the command, usually:
 
 ```text
 http://127.0.0.1:5173/
 ```
 
-In a CLI/client session, the convenient invocation is to ask the agent to start the local Web console from the repository root. The agent should run `cd web && npm run dev` and report the local URL. Keep daily decisions and task execution in the CLI/client; use the Web console as a readable local dashboard.
+In a CLI/client session, the convenient invocation is to ask the agent to start the local Web console from the repository root. The agent should run `python skills/software-project-governance/infra/verify_workflow.py web-console --start` and report the local URL. Keep daily decisions and task execution in the CLI/client; use the Web console as a readable local dashboard.
 
 First-run preset guidance:
 
@@ -165,21 +175,31 @@ For full Chinese installation details and daily usage guidance, continue below.
 - Remote Validation、Release、Maintenance 属于 Advanced 高阶区，不放在首屏干扰普通用户。
 - 这不是 Codex Desktop 内嵌 UI，也不是 marketplace lifecycle PASS 证据。
 
+从同一个 CLI/客户端入口发现：
+
+```bash
+python skills/software-project-governance/infra/verify_workflow.py web-console --status
+```
+
 从当前仓库启动：
 
 ```bash
-cd web
-npm install
-npm run dev
+python skills/software-project-governance/infra/verify_workflow.py web-console --start
 ```
 
-然后打开 Vite 输出的本地地址，通常是：
+首次 checkout 如未安装前端依赖，显式加 `--install`：
+
+```bash
+python skills/software-project-governance/infra/verify_workflow.py web-console --start --install
+```
+
+然后打开命令输出的本地地址，通常是：
 
 ```text
 http://127.0.0.1:5173/
 ```
 
-在 Codex/Claude 这类客户端里，更方便的方式是直接让 agent 在仓库根目录启动本地 Web 控制台；agent 会运行 `cd web && npm run dev` 并返回本地 URL。CLI/客户端负责执行，Web 控制台负责看状态。
+在 Codex/Claude 这类客户端里，更方便的方式是直接让 agent 在仓库根目录启动本地 Web 控制台；agent 会运行 `python skills/software-project-governance/infra/verify_workflow.py web-console --start` 并返回本地 URL。CLI/客户端负责执行，Web 控制台负责看状态。
 
 ## 安装
 

@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import {
   Activity,
   AlertTriangle,
+  ArrowUpRight,
   Boxes,
   Check,
   ChevronRight,
@@ -28,6 +29,9 @@ import {
   Wrench
 } from 'lucide-react';
 import './styles.css';
+
+const webConsoleCommand = 'python skills/software-project-governance/infra/verify_workflow.py web-console --start';
+const webConsoleUrl = 'http://127.0.0.1:5173/';
 
 const localChecks = [
   { label: 'Project root', value: '~/projects/ai-code-assistant', state: 'ready', icon: FolderGit2 },
@@ -87,6 +91,7 @@ function App() {
       <Sidebar activeRoute={activeRoute} onRouteChange={setActiveRoute} />
       <main className="workspace">
         <TopBar routeTitle={routeTitle} />
+        <MobileNav activeRoute={activeRoute} onRouteChange={setActiveRoute} />
         {activeRoute === 'local' && <LocalSetup onAdvanced={() => setActiveRoute('advanced')} />}
         {activeRoute === 'status' && <StatusPage />}
         {activeRoute === 'evidence' && <EvidencePage />}
@@ -94,7 +99,6 @@ function App() {
           <AdvancedPage active={advancedRoute} onChange={setAdvancedRoute} />
         )}
       </main>
-      <MobileNav activeRoute={activeRoute} onRouteChange={setActiveRoute} />
     </div>
   );
 }
@@ -206,6 +210,7 @@ function LocalSetup({ onAdvanced }) {
   return (
     <section className="page-grid">
       <div className="content-stack primary-stack">
+        <EntryPanel />
         <Panel title="Local configuration" action="All local checks passed">
           <div className="check-list">
             {localChecks.map((item) => (
@@ -232,6 +237,57 @@ function LocalSetup({ onAdvanced }) {
             <ChevronRight size={18} />
           </button>
         </Panel>
+      </div>
+    </section>
+  );
+}
+
+function EntryPanel() {
+  const [copied, setCopied] = useState(null);
+  const copyValue = async (value, type) => {
+    setCopied(type);
+    window.setTimeout(() => setCopied(null), 1800);
+    try {
+      await navigator.clipboard.writeText(value);
+    } catch {
+      // Local dashboard fallback: the command/URL remains visible even if clipboard is blocked.
+    }
+  };
+
+  return (
+    <section className="entry-panel" aria-labelledby="entry-title">
+      <div className="entry-copy">
+        <span className="entry-source">Opened from CLI / Client</span>
+        <h2 id="entry-title">Companion dashboard for local governance status</h2>
+        <p>
+          Keep task execution, decisions and agent actions in your CLI or client. Use this
+          Web console to scan local setup, status, evidence and risks without digging
+          through long command output.
+        </p>
+      </div>
+      <div className="entry-actions">
+        <div className="entry-command">
+          <Terminal size={17} />
+          <code>{webConsoleCommand}</code>
+        </div>
+        <div className="entry-action-row">
+          <button
+            className="primary-action compact"
+            type="button"
+            onClick={() => copyValue(webConsoleCommand, 'command')}
+          >
+            <Play size={18} />
+            {copied === 'command' ? 'Command copied' : 'Start from CLI'}
+          </button>
+          <button
+            className="secondary-action compact"
+            type="button"
+            onClick={() => copyValue(webConsoleUrl, 'url')}
+          >
+            <ArrowUpRight size={17} />
+            {copied === 'url' ? 'URL copied' : 'Copy URL'}
+          </button>
+        </div>
       </div>
     </section>
   );
@@ -400,6 +456,10 @@ function VerifyPanel() {
       <div className="command-box">
         <Terminal size={17} />
         <code>python ... verify_workflow.py status</code>
+      </div>
+      <div className="command-box secondary-command">
+        <Terminal size={17} />
+        <code>python ... verify_workflow.py web-console --status</code>
       </div>
       <button className="primary-action" type="button">
         <Play size={18} />

@@ -12,6 +12,9 @@ import importlib.util
 import shutil
 import hashlib
 import tempfile
+import time
+import urllib.request
+import webbrowser
 from datetime import datetime, date
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -19511,6 +19514,190 @@ def cmd_generate_deterministic_scaffold(args):
         print(content, end="" if content.endswith("\n") else "\n")
 
 
+def _web_console_url(host="127.0.0.1", port=5173):
+    return f"http://{host}:{port}/"
+
+
+def _web_console_is_live(url, timeout=1.5):
+    return _web_console_probe(url, timeout=timeout)["state"] == "running"
+
+
+def _web_console_probe(url, timeout=1.5):
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            body = response.read(65536).decode("utf-8", errors="replace")
+            if 'name="spg-web-console"' in body and "software-project-governance" in body:
+                return {"state": "running", "status": response.status}
+            return {"state": "occupied", "status": response.status}
+    except Exception as exc:
+        return {"state": "not_running", "error": str(exc)}
+
+
+def _web_console_paths():
+    web_dir = ROOT / "web"
+    return {
+        "web_dir": web_dir,
+        "package_json": web_dir / "package.json",
+        "node_modules": web_dir / "node_modules",
+        "log": web_dir / "web-dev.log",
+        "pid": web_dir / ".spg-web-console.pid",
+    }
+
+
+def _write_web_console_process(paths, process):
+    try:
+        paths["pid"].write_text(str(process.pid), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def cmd_web_console(args):
+    """Expose the optional local Web console through the primary CLI/client path."""
+    paths = _web_console_paths()
+    url = _web_console_url(args.host, args.port)
+
+    print("Software Project Governance Web Console")
+    print("Role: optional local companion dashboard")
+    print("Primary interface remains: CLI / agent client")
+    print(f"URL: {url}")
+    print(f"Web directory: {_display_path(paths['web_dir'])}")
+    probe = _web_console_probe(url)
+
+    if not paths["package_json"].is_file():
+        print("\nStatus: unavailable")
+        print("Reason: web/package.json is missing in this checkout.")
+        print("Boundary: this command does not replace /governance or run agent tasks.")
+        if args.fail_on_issues:
+            sys.exit(1)
+        return
+
+    if args.status and not args.start:
+        if probe["state"] == "occupied":
+            print("\nStatus: port occupied by a non-SPG service")
+            print("Action: choose another port with --port, or stop the service using this port.")
+            if args.fail_on_issues:
+                sys.exit(1)
+            return
+        print("\nStatus:", "running" if probe["state"] == "running" else "not running")
+        print("\nRecommended client invocation:")
+        print(
+            "python skills/software-project-governance/infra/verify_workflow.py "
+            "web-console --start"
+        )
+        print("\nFirst run with dependency install:")
+        print(
+            "python skills/software-project-governance/infra/verify_workflow.py "
+            "web-console --start --install"
+        )
+        print("\nBoundary: use the Web console for status visibility; keep execution in the CLI/client.")
+        return
+
+    if not args.start:
+        if probe["state"] == "occupied":
+            print("\nStatus: port occupied by a non-SPG service")
+            print("Use --port to select another local port.")
+            if args.fail_on_issues:
+                sys.exit(1)
+            return
+        print("\nStatus:", "running" if probe["state"] == "running" else "not running")
+        print("Use --start to launch the local Web console.")
+        return
+
+    if probe["state"] == "occupied":
+        print("\nStatus: blocked")
+        print("Reason: the target port is serving a non-SPG page.")
+        print("Action: use --port to select another local port, or stop the other service.")
+        if args.fail_on_issues:
+            sys.exit(1)
+        return
+
+    if probe["state"] == "running":
+        print("\nStatus: already running")
+        if args.open:
+            webbrowser.open(url)
+        return
+
+    npm = shutil.which("npm")
+    if not npm:
+        print("\nStatus: blocked")
+        print("Reason: npm was not found on PATH.")
+        if args.fail_on_issues:
+            sys.exit(1)
+        return
+
+    if not paths["node_modules"].is_dir():
+        if not args.install:
+            print("\nStatus: blocked")
+            print("Reason: web/node_modules is missing.")
+            print("First run command:")
+            print(
+                "python skills/software-project-governance/infra/verify_workflow.py "
+                "web-console --start --install"
+            )
+            if args.fail_on_issues:
+                sys.exit(1)
+            return
+        print("\nInstalling web dependencies with npm install...")
+        install_result = subprocess.run([npm, "install"], cwd=paths["web_dir"])
+        if install_result.returncode != 0:
+            print("Status: blocked")
+            print(f"Reason: npm install exited {install_result.returncode}.")
+            if args.fail_on_issues:
+                sys.exit(install_result.returncode)
+            return
+
+    command = [
+        npm,
+        "run",
+        "dev",
+        "--",
+        "--host",
+        args.host,
+        "--port",
+        str(args.port),
+    ]
+
+    if args.foreground:
+        print("\nStatus: starting in foreground")
+        print("Stop with Ctrl+C.")
+        os.execvpe(command[0], command, os.environ)
+
+    log_handle = paths["log"].open("a", encoding="utf-8")
+    log_handle.write(f"\n--- web-console start {datetime.now().isoformat(timespec='seconds')} ---\n")
+    log_handle.flush()
+
+    popen_kwargs = {
+        "cwd": paths["web_dir"],
+        "stdout": log_handle,
+        "stderr": subprocess.STDOUT,
+        "stdin": subprocess.DEVNULL,
+    }
+    if os.name == "nt":
+        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        popen_kwargs["start_new_session"] = True
+
+    process = subprocess.Popen(command, **popen_kwargs)
+    _write_web_console_process(paths, process)
+
+    for _ in range(30):
+        if _web_console_is_live(url):
+            print("\nStatus: running")
+            print(f"PID: {process.pid}")
+            print(f"Log: {_display_path(paths['log'])}")
+            if args.open:
+                webbrowser.open(url)
+            return
+        time.sleep(0.5)
+
+    print("\nStatus: starting")
+    print(f"PID: {process.pid}")
+    print(f"Log: {_display_path(paths['log'])}")
+    print("The server did not respond within 15 seconds; check the log above.")
+    if args.fail_on_issues:
+        sys.exit(1)
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="verify_workflow",
@@ -19639,6 +19826,28 @@ def main():
         action="store_true",
         help="Assert required Delivery Trust Snapshot fields and no-overclaim markers",
     )
+
+    # web-console (FIX-148)
+    wc_p = subparsers.add_parser(
+        "web-console",
+        help="Discover or launch the optional local Web console from the CLI/client path",
+    )
+    wc_p.add_argument("--status", action="store_true",
+                      help="Print Web console availability and recommended invocation without starting it")
+    wc_p.add_argument("--start", action="store_true",
+                      help="Start the local Web console and print its URL")
+    wc_p.add_argument("--install", action="store_true",
+                      help="Run npm install first when web/node_modules is missing")
+    wc_p.add_argument("--foreground", action="store_true",
+                      help="Run the Vite dev server in the foreground instead of backgrounding it")
+    wc_p.add_argument("--open", action="store_true",
+                      help="Open the Web console URL in the default browser after start or reuse")
+    wc_p.add_argument("--host", default="127.0.0.1",
+                      help="Host passed to Vite (default: 127.0.0.1)")
+    wc_p.add_argument("--port", type=int, default=5173,
+                      help="Port passed to Vite (default: 5173)")
+    wc_p.add_argument("--fail-on-issues", action="store_true",
+                      help="Exit with non-zero code when the console cannot be started")
 
     # agent-runtime-e2e
     are_p = subparsers.add_parser(
@@ -19952,6 +20161,7 @@ def main():
         "e2e-check": cmd_e2e_check,
         "external-project-validation": cmd_external_project_validation,
         "first-run-demo": cmd_first_run_demo,
+        "web-console": cmd_web_console,
         "agent-runtime-e2e": cmd_agent_runtime_e2e,
         "gemini-auth-preflight": cmd_gemini_auth_preflight,
         "opencode-provider-preflight": cmd_opencode_provider_preflight,

@@ -2,6 +2,37 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.55.0] - 2026-06-20
+
+### 0.55.0 - Dynamic Lifecycle Migration Preview and External Validation Archive
+
+0.55.0 发布 REL-035 Dynamic Lifecycle migration/external validation package：把已完成并审查通过的 FIX-139 dry-run-only migration preview、VAL-005 python_game validation archive、VAL-006 shitu non-game validation archive 版本化。该版本发布迁移预览和保守外部验证事实，不迁移项目、不把 `dynamic-flow-gate` 设为默认、不关闭 RISK-036/RISK-037、不声明 external validation full PASS 或 1.0.0 readiness。
+
+### Added
+
+- **FIX-139 Dynamic lifecycle migration preview**: 新增 `dynamic-lifecycle-migration --target <path> --dry-run` / `dynamic-flow-gate-migration` 只读预览、0.55.0 migration guide、TOOL-041、manifest coverage 和 dry-run fail-closed 边界。
+- **VAL-005 python_game validation archive**: 真实 `python_game` 目标 dry-run preview `READY_FOR_REVIEW`，保留 plan/evidence hash，10 个 chapter flow units 覆盖 released/testing/development/backlog；installed-state full PASS 被 `CLAUDE.md:32` repo-local workflow home assumption 阻断。
+- **VAL-006 shitu non-game validation archive**: 真实 Android/Kotlin `shitu` 目标 dry-run preview `READY_FOR_REVIEW`，保留 plan/evidence hash 与 89 条 evidence rows；非 game preset 泛化仍 PARTIAL，因为 flow units 仍来自 `python_game_10_chapters` 示例，installed-state validation 被 native entry/hook drift 阻断。
+- **REL-035**: 新增 0.55.0 release checklist、feature flags、rollback plan、manifest coverage、README readiness boundary 和 release no-overclaim boundary。
+
+### Changed
+
+- 版本声明同步到 0.55.0：source SKILL、canonical manifest、Claude/Codex plugin metadata、Claude marketplace metadata、hook `@version`、target fixture skill/plan、CHANGELOG、README 和 `verify_workflow.py` REQUIRED_SNIPPETS。
+- README 的 1.0.0 Readiness Boundary 更新为 0.55.0 migration preview + external validation archive，明确 `classic-phase-gate` 仍为默认、`dynamic-flow-gate` 仍为 inactive/non-default opt-in preview。
+
+### Validation
+
+- `python skills/software-project-governance/infra/verify_workflow.py check-version-consistency`
+- `python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues`
+- `python skills/software-project-governance/infra/verify_workflow.py check-governance --fail-on-issues`
+- `python skills/software-project-governance/infra/verify_workflow.py check-release --version 0.55.0 --require-changelog --runtime-adapters`
+- `git diff --check`
+
+### Boundary
+
+- RISK-036 remains open. 0.55.0 does not include official approval, marketplace approval, two-real-project external validation full PASS, Codex Desktop lifecycle PASS, RISK-036 closure, or 1.0.0 production-ready approval.
+- RISK-037 remains open. 0.55.0 releases a dry-run migration preview and validation archives only; it does not implement an apply/write path, does not migrate projects, does not make `dynamic-flow-gate` the default, does not claim non-game preset generalization complete, does not close RISK-037, and does not claim dynamic lifecycle readiness.
+
 ## [0.54.1] - 2026-06-16
 
 ### 0.54.1 - Governance Hook Nested Plugin Hotfix

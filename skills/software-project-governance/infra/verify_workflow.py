@@ -19563,12 +19563,34 @@ def cmd_web_console(args):
     print(f"Web directory: {_display_path(paths['web_dir'])}")
     probe = _web_console_probe(url)
 
+    if args.summary_link and args.start:
+        print("\nStatus: blocked")
+        print("Reason: --summary-link is read-only and cannot be combined with --start.")
+        print("Boundary: summaries may report Web console status, but must not start the service.")
+        if args.fail_on_issues:
+            sys.exit(1)
+        return
+
     if not paths["package_json"].is_file():
         print("\nStatus: unavailable")
         print("Reason: web/package.json is missing in this checkout.")
-        print("Boundary: this command does not replace /governance or run agent tasks.")
+        print("Boundary: this command does not replace /governance, start services by default, or run agent tasks.")
         if args.fail_on_issues:
             sys.exit(1)
+        return
+
+    if args.summary_link:
+        if probe["state"] == "running":
+            print(f"\nWeb console: {url} (optional local companion dashboard)")
+        elif probe["state"] == "occupied":
+            print(f"\nWeb console: unavailable at {url} (port is occupied by a non-SPG service).")
+            print("Manual start command: python skills/software-project-governance/infra/verify_workflow.py web-console --start --port <free-port>")
+            if args.fail_on_issues:
+                sys.exit(1)
+        else:
+            print("\nWeb console: not running.")
+            print("Manual start command: python skills/software-project-governance/infra/verify_workflow.py web-console --start")
+        print("Boundary: summary link only; no Web service was started.")
         return
 
     if args.status and not args.start:
@@ -19579,7 +19601,7 @@ def cmd_web_console(args):
                 sys.exit(1)
             return
         print("\nStatus:", "running" if probe["state"] == "running" else "not running")
-        print("\nRecommended client invocation:")
+        print("\nManual start command (only when explicitly requested):")
         print(
             "python skills/software-project-governance/infra/verify_workflow.py "
             "web-console --start"
@@ -19589,7 +19611,7 @@ def cmd_web_console(args):
             "python skills/software-project-governance/infra/verify_workflow.py "
             "web-console --start --install"
         )
-        print("\nBoundary: use the Web console for status visibility; keep execution in the CLI/client.")
+        print("\nBoundary: /governance and summaries may report this link/status; they must not start the Web service unless explicitly requested.")
         return
 
     if not args.start:
@@ -19600,7 +19622,7 @@ def cmd_web_console(args):
                 sys.exit(1)
             return
         print("\nStatus:", "running" if probe["state"] == "running" else "not running")
-        print("Use --start to launch the local Web console.")
+        print("Manual start command: python skills/software-project-governance/infra/verify_workflow.py web-console --start")
         return
 
     if probe["state"] == "occupied":
@@ -19833,7 +19855,9 @@ def main():
         help="Discover or launch the optional local Web console from the CLI/client path",
     )
     wc_p.add_argument("--status", action="store_true",
-                      help="Print Web console availability and recommended invocation without starting it")
+                      help="Print Web console availability and manual start command without starting it")
+    wc_p.add_argument("--summary-link", action="store_true",
+                      help="Print a no-side-effect Web console footer for task/session summaries")
     wc_p.add_argument("--start", action="store_true",
                       help="Start the local Web console and print its URL")
     wc_p.add_argument("--install", action="store_true",

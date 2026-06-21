@@ -109,6 +109,12 @@ Discover it from the same CLI/client path:
 python skills/software-project-governance/infra/verify_workflow.py web-console --status
 ```
 
+Print the no-side-effect footer that agents should append after a task, phase, or session summary:
+
+```bash
+python skills/software-project-governance/infra/verify_workflow.py web-console --summary-link
+```
+
 Start it from this repository checkout:
 
 ```bash
@@ -127,7 +133,7 @@ Then open the local URL printed by the command, usually:
 http://127.0.0.1:5173/
 ```
 
-In a CLI/client session, the convenient invocation is to ask the agent to start the local Web console from the repository root. The agent should run `python skills/software-project-governance/infra/verify_workflow.py web-console --start` and report the local URL. Keep daily decisions and task execution in the CLI/client; use the Web console as a readable local dashboard.
+In a CLI/client session, `/governance` does not start the Web console by default. After a task, phase, or session summary, the agent should append the read-only `web-console --summary-link` result: it reports the local URL if the console is already running, or the manual start command if it is not. Ask explicitly when you want the agent to run `web-console --start`. Keep daily decisions and task execution in the CLI/client; use the Web console as a readable local dashboard.
 
 First-run preset guidance:
 
@@ -181,6 +187,12 @@ For full Chinese installation details and daily usage guidance, continue below.
 python skills/software-project-governance/infra/verify_workflow.py web-console --status
 ```
 
+阶段性任务或 session 总结之后，agent 应追加这个无副作用入口：
+
+```bash
+python skills/software-project-governance/infra/verify_workflow.py web-console --summary-link
+```
+
 从当前仓库启动：
 
 ```bash
@@ -199,7 +211,7 @@ python skills/software-project-governance/infra/verify_workflow.py web-console -
 http://127.0.0.1:5173/
 ```
 
-在 Codex/Claude 这类客户端里，更方便的方式是直接让 agent 在仓库根目录启动本地 Web 控制台；agent 会运行 `python skills/software-project-governance/infra/verify_workflow.py web-console --start` 并返回本地 URL。CLI/客户端负责执行，Web 控制台负责看状态。
+在 Codex/Claude 这类客户端里，手动执行 `/governance` 不会默认启动 Web 服务。阶段性任务完成或 session 收尾时，agent 应该在总结之后追加 `web-console --summary-link` 的只读结果：如果 Web 控制台已经运行，就给出本地链接；如果未运行，只给出手动启动命令。只有当你明确要求启动 Web 控制台、打开浏览器或启动服务时，agent 才会运行 `web-console --start`。CLI/客户端负责执行，Web 控制台负责看状态。
 
 ## 安装
 

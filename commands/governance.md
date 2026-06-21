@@ -80,6 +80,18 @@
 - Bootstrap 是"最小存活检查"——不依赖 SKILL.md，必定生效
 - SKILL.md 是"完整 Coordinator 注入"——后台自动，用户无感
 - `/governance` 是"用户按钮"——需要交互时用户主动使用，同时也是 Coordinator 激活的兜底（安装后首次 session 中途使用）
+- `/governance` MUST NOT 默认启动 Web console、本地 dev server、`web-console --start`、`npm run dev` 或任何长期运行服务；它只允许展示只读状态、恢复路径和下一步行动
+
+### Web console 入口边界
+
+Web console 是可选的本地伴随状态面板，不是 `/governance` 的默认副作用。
+
+- 手动执行 `/governance` 时，MUST NOT 自动启动 Web 服务。
+- 阶段性任务完成、工作单元收尾或 session 总结之后，MAY 在总结末尾追加一个只读 Web console 入口。
+- 追加入口时优先使用 `python skills/software-project-governance/infra/verify_workflow.py web-console --summary-link`；该命令只报告本地 URL、未运行状态或手动启动命令，不启动服务。
+- 如果 Web console 已运行，总结末尾显示：`Web console: http://127.0.0.1:5173/ (optional local companion dashboard)`。
+- 如果 Web console 未运行，总结末尾显示：`Web console: not running. Manual start command: python skills/software-project-governance/infra/verify_workflow.py web-console --start`。
+- 只有当用户明确要求启动 Web console、打开浏览器或启动服务时，才允许运行 `web-console --start`、`--open` 或 `npm run dev`。
 
 ## 决策树（自动分类）
 
@@ -514,6 +526,8 @@ Context acceptance harness：解析 `WORKFLOW_HOME` 后运行 `python "$WORKFLOW
 ```
 
 **关键原则**：用户运行 `/governance` 不是为了看面板，是为了推进项目。面板是信息，引导是行动。
+
+**Web 入口原则**：`/governance` 的行动引导不得通过默认启动 Web 服务完成。阶段性任务或 session 收尾时，可以在总结之后追加 `web-console --summary-link` 的只读结果，让用户看到已运行的本地链接，或看到手动启动命令；服务启动必须来自用户的显式请求。
 
 ---
 

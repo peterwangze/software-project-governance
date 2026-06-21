@@ -2,6 +2,40 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.55.2] - 2026-06-21
+
+### 0.55.2 - Web Console Passive Summary Entry Patch
+
+0.55.2 发布 REL-040 Web console passive summary entry patch：把已完成并审查通过的 FIX-149 版本化。该版本让阶段性任务、工作单元或 session 总结可以追加 `web-console --summary-link` 的只读结果；如果 Web console 已运行则报告本地 URL，如果未运行则只报告手动启动命令。手动执行 `/governance` 不会默认启动 Web console、Vite dev server、`npm run dev` 或 `web-console --start`。
+
+### Added
+
+- **FIX-149 Web console passive summary entry**: 新增 `web-console --summary-link`，作为 task/phase/session summary footer 的无副作用入口。
+- **Summary-start conflict guard**: `web-console --summary-link --start --fail-on-issues` 在启动逻辑前阻断，避免 summary footer 意外启动服务。
+- **REL-040**: 新增 0.55.2 release checklist、feature flags、rollback plan、manifest coverage、README readiness boundary 和 release no-overclaim boundary。
+
+### Changed
+
+- `/governance` source 与 target fixture 明确禁止默认启动 Web/Vite/npm dev server，并要求 summary footer 使用解析后的 `WORKFLOW_HOME` 路径，而不是 repo-local `python skills/...` 命令。
+- README 与 TOOL-042 将 `--start` 统一表述为用户明确要求时才运行的手动/显式启动路径。
+- 版本声明同步到 0.55.2：source SKILL、canonical manifest、Claude/Codex plugin metadata、Claude marketplace metadata、hook `@version`、target fixture skill/plan、CHANGELOG、README 和 `verify_workflow.py` REQUIRED_SNIPPETS。
+
+### Verification
+
+- `python -m py_compile skills/software-project-governance/infra/verify_workflow.py`
+- `python skills/software-project-governance/infra/verify_workflow.py web-console --summary-link --port 59997`
+- `python skills/software-project-governance/infra/verify_workflow.py web-console --summary-link --start --fail-on-issues --port 59997`
+- `python -m unittest discover -s skills/software-project-governance/infra/tests -v`
+- `python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues`
+- `python skills/software-project-governance/infra/verify_workflow.py check-governance --fail-on-issues`
+- `python skills/software-project-governance/infra/verify_workflow.py check-release --version 0.55.2 --require-changelog --runtime-adapters`
+
+### Boundaries
+
+- RISK-036 remains open. 0.55.2 does not include official approval, marketplace approval, two real external projects full PASS, Codex Desktop lifecycle PASS, RISK-036 closure, or 1.0.0 production-ready approval.
+- RISK-037 remains open. 0.55.2 does not implement an apply/write path, does not migrate projects, does not make `dynamic-flow-gate` the default, does not claim non-game preset generalization complete, does not close RISK-037, and does not claim dynamic lifecycle readiness.
+- Web remains an optional local companion dashboard. It does not replace CLI/client execution or `/governance`, does not execute agent tasks, and does not start by default from manual `/governance`.
+
 ## [0.55.1] - 2026-06-21
 
 ### 0.55.1 - Web Console CLI/Client Entry Patch

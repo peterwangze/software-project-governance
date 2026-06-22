@@ -19555,6 +19555,8 @@ def cmd_web_console(args):
     """Expose the optional local Web console through the primary CLI/client path."""
     paths = _web_console_paths()
     url = _web_console_url(args.host, args.port)
+    if getattr(args, "governance_entry", False):
+        args.start = True
 
     print("Software Project Governance Web Console")
     print("Role: optional local companion dashboard")
@@ -19565,8 +19567,8 @@ def cmd_web_console(args):
 
     if args.summary_link and args.start:
         print("\nStatus: blocked")
-        print("Reason: --summary-link is read-only and cannot be combined with --start.")
-        print("Boundary: summaries may report Web console status, but must not start the service.")
+        print("Reason: --summary-link is read-only and cannot be combined with a start path.")
+        print("Boundary: summaries may report Web console status, while manual /governance uses --governance-entry to start or reuse it.")
         if args.fail_on_issues:
             sys.exit(1)
         return
@@ -19574,7 +19576,7 @@ def cmd_web_console(args):
     if not paths["package_json"].is_file():
         print("\nStatus: unavailable")
         print("Reason: web/package.json is missing in this checkout.")
-        print("Boundary: this command does not replace /governance, start services by default, or run agent tasks.")
+        print("Boundary: this command does not replace /governance or run agent tasks.")
         if args.fail_on_issues:
             sys.exit(1)
         return
@@ -19601,7 +19603,7 @@ def cmd_web_console(args):
                 sys.exit(1)
             return
         print("\nStatus:", "running" if probe["state"] == "running" else "not running")
-        print("\nManual start command (only when explicitly requested):")
+        print("\nManual start command:")
         print(
             "python skills/software-project-governance/infra/verify_workflow.py "
             "web-console --start"
@@ -19611,7 +19613,12 @@ def cmd_web_console(args):
             "python skills/software-project-governance/infra/verify_workflow.py "
             "web-console --start --install"
         )
-        print("\nBoundary: /governance and summaries may report this link/status; they must not start the Web service unless explicitly requested.")
+        print("\n/governance entry command:")
+        print(
+            "python skills/software-project-governance/infra/verify_workflow.py "
+            "web-console --governance-entry"
+        )
+        print("\nBoundary: manual /governance starts or reuses the Web console for follow-up UI interaction; task/session summaries remain read-only with --summary-link.")
         return
 
     if not args.start:
@@ -19635,6 +19642,8 @@ def cmd_web_console(args):
 
     if probe["state"] == "running":
         print("\nStatus: already running")
+        if getattr(args, "governance_entry", False):
+            print("Entry: manual /governance reused the running Web console.")
         if args.open:
             webbrowser.open(url)
         return
@@ -19656,6 +19665,8 @@ def cmd_web_console(args):
                 "python skills/software-project-governance/infra/verify_workflow.py "
                 "web-console --start --install"
             )
+            if getattr(args, "governance_entry", False):
+                print("Governance entry: default start attempted; dependency install still requires explicit --install.")
             if args.fail_on_issues:
                 sys.exit(1)
             return
@@ -19699,7 +19710,10 @@ def cmd_web_console(args):
     else:
         popen_kwargs["start_new_session"] = True
 
-    process = subprocess.Popen(command, **popen_kwargs)
+    try:
+        process = subprocess.Popen(command, **popen_kwargs)
+    finally:
+        log_handle.close()
     _write_web_console_process(paths, process)
 
     for _ in range(30):
@@ -19858,6 +19872,8 @@ def main():
                       help="Print Web console availability and manual start command without starting it")
     wc_p.add_argument("--summary-link", action="store_true",
                       help="Print a no-side-effect Web console footer for task/session summaries")
+    wc_p.add_argument("--governance-entry", action="store_true",
+                      help="Start or reuse the local Web console for a manual /governance invocation")
     wc_p.add_argument("--start", action="store_true",
                       help="Start the local Web console and print its URL")
     wc_p.add_argument("--install", action="store_true",

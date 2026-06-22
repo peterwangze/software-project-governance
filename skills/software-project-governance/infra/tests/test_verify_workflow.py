@@ -11822,6 +11822,135 @@ class ExternalInstalledRuntimePathResolverTests(unittest.TestCase):
             self.assertNotIn("python skills/software-project-governance/infra/verify_workflow.py", text, rel)
 
 
+class WebConsoleGovernanceEntryTests(unittest.TestCase):
+    """FIX-150: manual /governance starts or reuses the local Web console."""
+
+    def _args(self, **overrides):
+        args = {
+            "host": "127.0.0.1",
+            "port": 59997,
+            "status": False,
+            "summary_link": False,
+            "governance_entry": False,
+            "start": False,
+            "install": False,
+            "foreground": False,
+            "open": False,
+            "fail_on_issues": False,
+        }
+        args.update(overrides)
+        return argparse.Namespace(**args)
+
+    def _run(self, args, root, probe=None):
+        stdout = io.StringIO()
+        patches = [patch.object(vw, "ROOT", root)]
+        if probe is not None:
+            patches.append(patch.object(vw, "_web_console_probe", return_value=probe))
+        with ExitStack() as stack:
+            for ctx in patches:
+                stack.enter_context(ctx)
+            with redirect_stdout(stdout):
+                vw.cmd_web_console(args)
+        return stdout.getvalue()
+
+    def test_governance_entry_reuses_running_console(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            web = root / "web"
+            web.mkdir()
+            (web / "package.json").write_text("{}", encoding="utf-8")
+
+            output = self._run(
+                self._args(governance_entry=True),
+                root,
+                {"state": "running", "status": 200},
+            )
+
+        self.assertIn("Status: already running", output)
+        self.assertIn("manual /governance reused the running Web console", output)
+
+    def test_governance_entry_attempts_start_but_requires_explicit_install(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            web = root / "web"
+            web.mkdir()
+            (web / "package.json").write_text("{}", encoding="utf-8")
+
+            output = self._run(
+                self._args(governance_entry=True),
+                root,
+                {"state": "not_running", "error": "connection refused"},
+            )
+
+        self.assertIn("Status: blocked", output)
+        self.assertIn("web/node_modules is missing", output)
+        self.assertIn("default start attempted", output)
+        self.assertIn("web-console --start --install", output)
+
+    def test_governance_entry_fail_closed_when_port_occupied(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            web = root / "web"
+            web.mkdir()
+            (web / "package.json").write_text("{}", encoding="utf-8")
+
+            output = self._run(
+                self._args(governance_entry=True),
+                root,
+                {"state": "occupied", "status": 200},
+            )
+
+        self.assertIn("Status: blocked", output)
+        self.assertIn("target port is serving a non-SPG page", output)
+        self.assertIn("use --port", output)
+
+    def test_governance_entry_starts_background_server_when_ready(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            web = root / "web"
+            web.mkdir()
+            (web / "package.json").write_text("{}", encoding="utf-8")
+            (web / "node_modules").mkdir()
+
+            probes = iter([
+                {"state": "not_running", "error": "connection refused"},
+                {"state": "running", "status": 200},
+            ])
+
+            class FakeProcess:
+                pid = 4242
+
+            with patch.object(vw.shutil, "which", return_value="npm"), \
+                 patch.object(vw.subprocess, "Popen", return_value=FakeProcess()) as popen, \
+                 patch.object(vw.time, "sleep", return_value=None), \
+                 patch.object(vw, "_web_console_probe", side_effect=lambda *_args, **_kwargs: next(probes)):
+                stdout = io.StringIO()
+                with patch.object(vw, "ROOT", root), redirect_stdout(stdout):
+                    vw.cmd_web_console(self._args(governance_entry=True))
+                output = stdout.getvalue()
+
+        self.assertIn("Status: running", output)
+        self.assertIn("PID: 4242", output)
+        popen.assert_called_once()
+
+    def test_summary_link_cannot_use_governance_entry_start_path(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            web = root / "web"
+            web.mkdir()
+            (web / "package.json").write_text("{}", encoding="utf-8")
+
+            output = self._run(
+                self._args(summary_link=True, governance_entry=True),
+                root,
+                {"state": "not_running", "error": "connection refused"},
+            )
+
+        self.assertIn("Status: blocked", output)
+        self.assertIn("--summary-link is read-only", output)
+        self.assertIn("manual /governance uses --governance-entry", output)
+
+
 class ArchiveTriggerGapTests(unittest.TestCase):
     """FIX-063: Check 26 exposes continuous archive trigger gaps."""
 

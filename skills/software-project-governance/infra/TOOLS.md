@@ -477,12 +477,12 @@
 ### TOOL-042：Local Web Console launcher
 
 - **文件**：`infra/verify_workflow.py` + repo-only `web/`
-- **子命令**：`web-console --status`；`web-console --summary-link`；`web-console --start [--install] [--open] [--host 127.0.0.1] [--port 5173]`
+- **子命令**：`web-console --status`；`web-console --governance-entry`；`web-console --summary-link`；`web-console --start [--install] [--open] [--host 127.0.0.1] [--port 5173]`
 - **输入**：当前仓库中的 `web/package.json`、本机 `npm`、可选 `web/node_modules`
-- **输出**：Web console 可用性、手动启动命令、本地 URL；`--summary-link` 输出阶段/session 总结可追加的只读入口且不启动服务；`--start` 后台启动 Vite dev server 并写入 `web/web-dev.log` 与 `.spg-web-console.pid`
-- **触发条件**：用户希望从 CLI/客户端打开可视化状态面板、查看本地配置、状态、证据/风险或高级维护入口时
+- **输出**：Web console 可用性、启动/复用结果、手动启动命令、本地 URL；`--governance-entry` 是手动 `/governance` 默认入口，启动或复用本地 Web UI；`--summary-link` 输出阶段/session 总结可追加的只读入口且不启动服务；`--start` 后台启动 Vite dev server 并写入 `web/web-dev.log` 与 `.spg-web-console.pid`
+- **触发条件**：用户手动执行 `/governance`，或希望从 CLI/客户端打开可视化状态面板、查看本地配置、状态、证据/风险或高级维护入口时
 - **依赖**：repo-only `web/` React/Vite console、`npm`、`check-manifest-consistency`
-- **边界**：local companion dashboard only；主交互仍在 CLI/agent client；不替代 `/governance`；手动 `/governance` 不默认启动 Web 服务；阶段/session 总结只追加 `--summary-link` 只读入口；只有用户明确要求启动时才运行 `--start`；不自动执行 agent 任务；不是 Codex Desktop 内嵌 UI、marketplace lifecycle PASS、official approval 或 1.0.0 readiness 证据。
+- **边界**：local companion dashboard only；主交互仍在 CLI/agent client；手动 `/governance` 默认启动或复用 Web console，便于后续 Web UI 交互；阶段/session 总结只追加 `--summary-link` 只读入口；缺少依赖时不静默安装，提示显式 `--install`；不自动执行 agent 任务；不是 Codex Desktop 内嵌 UI、marketplace lifecycle PASS、official approval 或 1.0.0 readiness 证据。
 - **被以下子工作流使用**：立项（initiation）、测试（testing）、运营（operations）、维护（maintenance）
 
 ## 工具与子工作流的关系矩阵

@@ -15,7 +15,7 @@ Use this workflow when your AI coding setup needs:
 
 ## 1.0.0 Readiness Boundary
 
-0.55.2 packages the 0.55.0 Dynamic Lifecycle migration preview and external validation archive, the 0.55.1 Web console CLI/client entry patch, and the FIX-149 passive Web summary entry patch. It is not the 1.0.0 release. The release keeps the dry-run-only `dynamic-lifecycle-migration --target <path> --dry-run` preview, the migration guide, the `python_game` chapter-flow validation archive, and the `shitu` non-game validation archive from 0.55.0. 0.55.1 added `web-console --status` and `web-console --start [--install]`; 0.55.2 adds `web-console --summary-link` so task, phase, and session summaries can report the local Web console link or manual start command without starting services. Manual `/governance` must not start Web, Vite, `npm run dev`, or `web-console --start` by default. `classic-phase-gate` remains the active/default compatibility preset, `dynamic-flow-gate` remains inactive/non-default and opt-in only, and no project is migrated by this release. The external validations remain intentionally conservative: both dry-run previews reached `READY_FOR_REVIEW`, but installed-state validation still has target-native blockers, and non-game preset generalization remains partial because `shitu` preview flow units still come from the `python_game_10_chapters` example. RISK-036 and RISK-037 remain open: no official approval, no marketplace approval, no two-real-project external validation full PASS, no Codex Desktop lifecycle PASS, no project migration, no RISK-036 closure, no RISK-037 closure, and no 1.0.0 production-ready claim.
+0.55.2 packages the 0.55.0 Dynamic Lifecycle migration preview and external validation archive, the 0.55.1 Web console CLI/client entry patch, and the FIX-149 passive Web summary entry patch. It is not the 1.0.0 release. The release keeps the dry-run-only `dynamic-lifecycle-migration --target <path> --dry-run` preview, the migration guide, the `python_game` chapter-flow validation archive, and the `shitu` non-game validation archive from 0.55.0. 0.55.1 added `web-console --status` and `web-console --start [--install]`; 0.55.2 added `web-console --summary-link` for read-only task, phase, and session summaries. Current mainline behavior restores the intended product entry: manual `/governance` should start or reuse the local Web console through `web-console --governance-entry`, then report the URL so users can continue in the Web UI. `classic-phase-gate` remains the active/default compatibility preset, `dynamic-flow-gate` remains inactive/non-default and opt-in only, and no project is migrated by this release. The external validations remain intentionally conservative: both dry-run previews reached `READY_FOR_REVIEW`, but installed-state validation still has target-native blockers, and non-game preset generalization remains partial because `shitu` preview flow units still come from the `python_game_10_chapters` example. RISK-036 and RISK-037 remain open: no official approval, no marketplace approval, no two-real-project external validation full PASS, no Codex Desktop lifecycle PASS, no project migration, no RISK-036 closure, no RISK-037 closure, and no 1.0.0 production-ready claim.
 
 ## Mainstream Agent Loading
 
@@ -109,6 +109,12 @@ Discover it from the same CLI/client path:
 python skills/software-project-governance/infra/verify_workflow.py web-console --status
 ```
 
+Manual `/governance` is the default user entry into the Web UI. It should start or reuse the local console and print the URL:
+
+```bash
+python skills/software-project-governance/infra/verify_workflow.py web-console --governance-entry
+```
+
 Print the no-side-effect footer that agents should append after a task, phase, or session summary:
 
 ```bash
@@ -133,7 +139,7 @@ Then open the local URL printed by the command, usually:
 http://127.0.0.1:5173/
 ```
 
-In a CLI/client session, `/governance` does not start the Web console by default. After a task, phase, or session summary, the agent should append the read-only `web-console --summary-link` result: it reports the local URL if the console is already running, or the manual start command if it is not. Ask explicitly when you want the agent to run `web-console --start`. Keep daily decisions and task execution in the CLI/client; use the Web console as a readable local dashboard.
+In a CLI/client session, manual `/governance` starts or reuses the Web console by default so the user can keep interacting through a readable local dashboard. If dependencies are missing on first use, run the explicit install path shown by the CLI. After a task, phase, or session summary, the agent should append the read-only `web-console --summary-link` result: it reports the local URL if the console is already running, or the manual start command if it is not. Keep execution authority in the CLI/client; use the Web console for status, local configuration, and follow-up interaction.
 
 First-run preset guidance:
 
@@ -187,6 +193,12 @@ For full Chinese installation details and daily usage guidance, continue below.
 python skills/software-project-governance/infra/verify_workflow.py web-console --status
 ```
 
+用户手动执行 `/governance` 是默认进入 Web UI 的入口。它应该启动或复用本地控制台，并输出 URL：
+
+```bash
+python skills/software-project-governance/infra/verify_workflow.py web-console --governance-entry
+```
+
 阶段性任务或 session 总结之后，agent 应追加这个无副作用入口：
 
 ```bash
@@ -211,7 +223,7 @@ python skills/software-project-governance/infra/verify_workflow.py web-console -
 http://127.0.0.1:5173/
 ```
 
-在 Codex/Claude 这类客户端里，手动执行 `/governance` 不会默认启动 Web 服务。阶段性任务完成或 session 收尾时，agent 应该在总结之后追加 `web-console --summary-link` 的只读结果：如果 Web 控制台已经运行，就给出本地链接；如果未运行，只给出手动启动命令。只有当你明确要求启动 Web 控制台、打开浏览器或启动服务时，agent 才会运行 `web-console --start`。CLI/客户端负责执行，Web 控制台负责看状态。
+在 Codex/Claude 这类客户端里，手动执行 `/governance` 默认应启动或复用 Web 控制台，并给出本地 URL，方便后续用 Web UI 查看状态和继续交互。首次使用如果缺少依赖，按 CLI 输出的一次性 `--install` 路径安装。阶段性任务完成或 session 收尾时，agent 应该在总结之后追加 `web-console --summary-link` 的只读结果：如果 Web 控制台已经运行，就给出本地链接；如果未运行，只给出手动启动命令。CLI/客户端负责执行，Web 控制台负责状态、配置与后续交互。
 
 ## 安装
 

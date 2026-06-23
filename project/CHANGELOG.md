@@ -2,6 +2,42 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.55.3] - 2026-06-22
+
+### 0.55.3 - Web Console Governance Entry Correction Patch
+
+0.55.3 发布 REL-041 Web console governance-entry correction patch：把已完成并审查通过的 FIX-150 版本化。该版本纠正 0.55.2 对用户意图的误解：用户手动执行 `/governance` 时，产品应该默认启动或复用本地 Web console，并输出 URL，方便后续使用 Web UI 查看工作流状态和继续交互。阶段性任务、工作单元或 session 总结仍只追加 `web-console --summary-link` 的只读结果，不额外启动服务。
+
+### Added
+
+- **FIX-150 Web console governance-entry correction**: 新增 `web-console --governance-entry`，作为手动 `/governance` 的默认 Web UI 启动/复用入口。
+- **Governance-entry regression coverage**: 新增 focused tests 覆盖已运行复用、缺依赖显式 `--install`、非 SPG 端口占用 fail-closed、真实 start path 和 summary-link/start conflict。
+- **REL-041**: 新增 0.55.3 release checklist、feature flags、rollback plan、manifest coverage、README readiness boundary 和 release no-overclaim boundary。
+
+### Changed
+
+- `/governance` source 与 target fixture 改为 SHOULD 在解析 `WORKFLOW_HOME` 后运行 `web-console --governance-entry`，启动或复用本地 Web console 并输出 URL。
+- README 与 TOOL-042 将 manual `/governance` 表述为默认 Web UI 入口；`web-console --summary-link` 仍只用于 task/phase/session summary footer。
+- `web-console --status` 输出新增 `/governance entry command`，同时保留手动 start/install 命令。
+- 版本声明同步到 0.55.3：source SKILL、canonical manifest、Claude/Codex plugin metadata、Claude marketplace metadata、hook `@version`、target fixture skill/plan、CHANGELOG、README 和 `verify_workflow.py` REQUIRED_SNIPPETS。
+
+### Verification
+
+- `python -m py_compile skills/software-project-governance/infra/verify_workflow.py`
+- `python -m unittest skills.software-project-governance.infra.tests.test_verify_workflow.WebConsoleGovernanceEntryTests -v`
+- `python -m unittest discover -s skills/software-project-governance/infra/tests -v`
+- `python skills/software-project-governance/infra/verify_workflow.py web-console --governance-entry --port 59997 --fail-on-issues`
+- `python skills/software-project-governance/infra/verify_workflow.py web-console --summary-link --port 59997`
+- `python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues`
+- `python skills/software-project-governance/infra/verify_workflow.py check-governance --fail-on-issues`
+- `python skills/software-project-governance/infra/verify_workflow.py check-release --version 0.55.3 --require-changelog --runtime-adapters`
+
+### Boundaries
+
+- RISK-036 remains open. 0.55.3 does not include official approval, marketplace approval, two real external projects full PASS, Codex Desktop lifecycle PASS, RISK-036 closure, or 1.0.0 production-ready approval.
+- RISK-037 remains open. 0.55.3 does not implement an apply/write path, does not migrate projects, does not make `dynamic-flow-gate` the default, does not claim non-game preset generalization complete, does not close RISK-037, and does not claim dynamic lifecycle readiness.
+- Web remains an optional local companion dashboard. Manual `/governance` may start or reuse it, but Web does not replace CLI/client execution, does not execute agent tasks, does not silently install dependencies, and summary footer mode remains read-only.
+
 ## [0.55.2] - 2026-06-21
 
 ### 0.55.2 - Web Console Passive Summary Entry Patch

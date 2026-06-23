@@ -8,7 +8,8 @@
   "root_entries": {
     "files": [
       "README.md",
-      ".gitignore"
+      ".gitignore",
+      "package.json"
     ],
     "directories": []
   },
@@ -35,6 +36,9 @@
       { "path": "adapters/", "type": "dir" },
       { "path": ".claude-plugin/", "type": "dir" },
       { "path": ".codex-plugin/", "type": "dir" },
+      { "path": ".zcode-plugin/", "type": "dir" },
+      { "path": ".zcode-plugin/plugin.json", "type": "file" },
+      { "path": ".zcode-plugin/assets/", "type": "dir" },
       { "path": ".agents/", "type": "dir" },
       { "path": "docs/release/release-checklist-0.45.0.md", "type": "file" },
       { "path": "docs/release/feature-flags-0.45.0.md", "type": "file" },
@@ -120,6 +124,8 @@
       "adapters/*/launch.py",
       ".claude-plugin/*.json",
       ".codex-plugin/*.json",
+      ".zcode-plugin/*.json",
+      ".zcode-plugin/assets/*",
       ".agents/plugins/*.json"
     ]
   },
@@ -199,6 +205,7 @@
       "adapters",
       ".claude-plugin",
       ".codex-plugin",
+      ".zcode-plugin",
       ".agents"
     ]
   },

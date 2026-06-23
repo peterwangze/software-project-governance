@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Software Project Governance logo</title>
+  <desc id="desc">A shield and check mark representing evidence-backed delivery governance.</desc>
+  <rect width="256" height="256" rx="32" fill="#F8FAFC"/>
+  <path d="M128 24 208 56v62c0 56-32 98-80 118-48-20-80-62-80-118V56l80-32z" fill="#2563EB"/>
+  <path d="M128 42 190 67v51c0 45-25 78-62 96-37-18-62-51-62-96V67l62-25z" fill="#FFFFFF" opacity=".14"/>
+  <path d="M92 128l24 24 58-66" fill="none" stroke="#FFFFFF" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M80 184h96" stroke="#0F172A" stroke-width="10" stroke-linecap="round" opacity=".18"/>
+</svg>

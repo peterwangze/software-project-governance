@@ -2,6 +2,36 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.56.0] - 2026-06-24
+
+### 0.56.0 - zcode Plugin Marketplace Adapter Patch
+
+0.56.0 发布 REL-042 zcode plugin marketplace adapter patch：把已完成、审查通过并经运行时验证的 AUDIT-118 版本化。该版本新增 zcode 原生插件市场格式适配产物，并验证本插件能以 zcode 原生格式加载到本机 zcode 运行。这是向 zcode 官方插件市场提交的基础工作，但 0.56.0 本身不提交到官方市场、不声明 marketplace approval。Web console governance-entry、summary-link read-only 行为、动态生命周期边界均不变。
+
+### Added
+
+- **AUDIT-118 zcode plugin marketplace adapter**: 新增 `.zcode-plugin/plugin.json`（zcode 原生插件清单，字段对齐官方 superpowers/restore-legacy-sessions/skill-creator）+ `.zcode-plugin/assets/{logo,composer-icon,governance-preview}.svg` 品牌资产。
+- **Top-level `package.json`**: `@zcode/software-project-governance-plugin` npm 包标识，对齐官方 `@zcode/<name>-plugin` scope。
+- **`project/zcode-local-load.py` local load tool**: 忠实移植 zcode 运行时种子 hash 算法（`rdt`/`sCr`），提供 `load/--verify/--reload/--unload` 幂等操作 + 备份回滚；实测对官方 skill-creator 字节级复现种子 hash。
+- **0.56.0 release docs**: 新增 release checklist、feature flags、rollback plan，并纳入 manifest 覆盖。
+
+### Changed
+
+- `skills/software-project-governance/core/manifest.json` 在 product.entries/glob_patterns/cleanup_scope/root_entries 四处登记 `.zcode-plugin/` 与顶层 `package.json`。
+- `verify_workflow.py` 与 `cleanup.py` 的 `PLUGIN_SCOPE_DIRS` 同步新增 `.zcode-plugin`；`verify_workflow.py` REQUIRED_SNIPPETS 补充 `.zcode-plugin/plugin.json` 与 `package.json` 版本断言。
+- 版本声明同步到 0.56.0：source SKILL、canonical manifest、Claude/Codex/zcode plugin metadata、Claude marketplace metadata、顶层 package.json、hook `@version`、target fixture skill/plan、CHANGELOG、README 和 `verify_workflow.py` REQUIRED_SNIPPETS。
+
+### Verification
+
+- `check-manifest-consistency --fail-on-issues` PASS（Canonical/Actual 一致，含 `.zcode-plugin` 覆盖）。
+- `check-version-consistency` PASS（11+ 文件版本声明一致为 0.56.0）。
+- 本机加载四项产物就绪（缓存/seed/marketplace/config），运行时验证通过（EVD-610：用户重启 zcode 后 `/governance` 被本插件消费，Coordinator 激活，Web console 启动）。
+- Code Reviewer APPROVED（P0 无；P1 marketplace 重启覆盖风险已用 `--verify`/`--reload` 工具化解决；P2 算法忠实化与拼写已修正）。
+
+### Boundary
+
+RISK-036 与 RISK-037 保持打开。0.56.0 仅证明本插件能本机 zcode 加载运行，不声明 official approval、marketplace approval（zcode 官方市场收录）、universal runtime support、external validation full PASS、Codex Desktop lifecycle PASS、RISK closure 或 1.0.0 readiness。已知限制：手动模拟种子输出依赖 zcode 当前内部逻辑；zcode 升级若改变种子流程，本加载方式可能失效（缓解：`--verify` 复查 + `--reload` 恢复）。
+
 ## [0.55.3] - 2026-06-22
 
 ### 0.55.3 - Web Console Governance Entry Correction Patch

@@ -20,6 +20,7 @@
 | TD-008 | 2026-06-25 | REQ-101 | PRODUCT_CODE_PATTERNS 重复定义——verify_workflow.py:11666 与 :14064 各定义一次，潜在可变状态冲突 | P2 | 同名常量二次赋值，后定义覆盖前定义，维护易出错 | 0.59.0（manifest 域拆分时合并） | OPEN | archguard-design-0.58.0.md §2.1 重复定义检测 |
 | TD-009 | 2026-06-25 | REQ-101 | evidence-log 列规范不统一——表无显式 schema 表头，各 EVD 条目列数不一（EVD-618 10列、EVD-619 12列、REVIEW-REL-043 10列），check-governance 标为非 blocking WARN | P2 | 结构不一致影响机器解析，长期累积可读性下降 | 待评估（ArchGuard check-structural-validity 可扩展） | OPEN | check-governance Check 28 structural WARN |
 | TD-010 | 2026-06-25 | REQ-101 | governance-context 启发式误报——把 0.54.2 已撤回版本路线图行（含 FIX-143/REL-037/AUDIT-115 token）误识别为 unfinished work，实为 RISK-038 已关闭的历史失败链 | P2 | 恢复路径误报待办任务，干扰 Scenario D 会话恢复判断 | 待评估（governance-context 检测器需排除"已撤回/失效"版本） | OPEN | governance-context 输出；RISK-038 已关闭 |
+| TD-011 | 2026-06-25 | REQ-101 | 发布流程遗漏"更新路线图状态"——0.57.0 发布后 plan-tracker 版本路线图 0.57.0 行仍标记"规划"，导致 check 28c hot-fact-source 一致性告警（_latest_published_release_fact 正则匹配"已发布"状态，0.57.0 未匹配使 0.56.1 被误判为最新发布）。release-checklist 未明确列"发布后更新 plan-tracker 路线图状态为已发布"步骤 | P2 | 发布流程依赖人工记忆更新路线图状态，易遗漏；check 28c 能事后捕获但属被动告警 | 待评估（release-checklist 模板 + verify_workflow check-release 应增加"路线图状态一致性"前置检查） | OPEN | check 28c FIX-105_SNAPSHOT_RELEASE_VERSION_RE；0.57.0 发布后 check-governance 1 issue 已修复 |
 
 ---
 

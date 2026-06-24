@@ -9,7 +9,8 @@
     "files": [
       "README.md",
       ".gitignore",
-      "package.json"
+      "package.json",
+      "LICENSE"
     ],
     "directories": []
   },
@@ -48,6 +49,9 @@
       { "path": "docs/marketplace/comparison-0.46.0.md", "type": "file" },
       { "path": "docs/marketplace/migration-guide-0.46.0.md", "type": "file" },
       { "path": "docs/marketplace/examples-0.46.0.md", "type": "file" },
+      { "path": "docs/marketplace/zcode-local-load-0.56.0.md", "type": "file" },
+      { "path": "docs/marketplace/claude-code-submission-0.56.0.md", "type": "file" },
+      { "path": "docs/marketplace/official-readiness-gap-analysis-0.56.0.md", "type": "file" },
       { "path": "docs/release/release-checklist-0.46.0.md", "type": "file" },
       { "path": "docs/release/feature-flags-0.46.0.md", "type": "file" },
       { "path": "docs/release/rollback-plan-0.46.0.md", "type": "file" },
@@ -126,6 +130,7 @@
       "adapters/*/adapter-manifest.json",
       "adapters/*/launch.py",
       ".claude-plugin/*.json",
+      ".claude-plugin/assets/*",
       ".codex-plugin/*.json",
       ".zcode-plugin/*.json",
       ".zcode-plugin/assets/*",

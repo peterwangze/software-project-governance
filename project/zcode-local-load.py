@@ -72,7 +72,7 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 PLUGIN_NAME = "software-project-governance"
-PLUGIN_VERSION = "0.56.1"
+PLUGIN_VERSION = "0.57.0"
 MARKETPLACE = "zcode-plugins-official"
 
 REPO_ROOT = Path(__file__).resolve().parent.parent

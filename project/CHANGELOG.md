@@ -2,6 +2,27 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.57.0] - 2026-06-25
+
+### 0.57.0 - Architecture Degradation Audit Archive
+
+0.57.0 是文档/治理记录专用版本，承载 AUDIT-121 全项目架构腐化深度审视归档。该版本**无功能代码变更**——只改版本号字符串断言和新增诊断文档/治理记录。新增诊断报告 `docs/requirements/architecture-degradation-audit-0.57.0.md`（F1-F6 六项腐化事实：verify_workflow.py God Module 20,294 行/439 def+class/54 CLI 子命令；缺失现代工程基础设施 src/lint/type/package；source/projection 双写差异 6,128 行；命令面冗余；自演进遗留物堆积；架构腐化看护缺口根因），新增技术债登记表 `skills/software-project-governance/core/technical-debt-ledger.md`（TD-001~006），清理根目录遗留物（`nul` + `_fix_030_reconstruct.py`）。规划后续 0.58.0 ArchGuard 独立能力版本 + 0.59.0~0.64.0 verify_workflow.py 渐进式按域拆分。该版本不修改 verify_workflow.py 功能代码、不实现 ArchGuard、不拆分任何模块、不引入 lint/type 基础设施、不关闭 RISK-036/RISK-037/RISK-039、不声明 1.0.0 readiness。
+
+### Added
+- `docs/requirements/architecture-degradation-audit-0.57.0.md` — AUDIT-121 全项目架构腐化深度审视诊断报告（F1-F6 事实清单 + 影响分析 + 重构路线图）
+- `skills/software-project-governance/core/technical-debt-ledger.md` — 技术债登记表 TD-001~006（ArchGuard 0.58.0 将消费）
+- `docs/release/release-checklist-0.57.0.md`、`docs/release/feature-flags-0.57.0.md`、`docs/release/rollback-plan-0.57.0.md` — 0.57.0 release docs（含 no-overclaim boundary）
+- DEC-083（架构审视三项决策）、RISK-039（架构腐化看护缺口）、EVD-619（AUDIT-121 证据）入账
+- plan-tracker 版本路线图扩展 0.57.0~0.64.0 + 活跃事项 + 风险数（2→3）
+
+### Changed
+- 版本声明 bump 0.56.1 → 0.57.0：SKILL.md、core/manifest.json、4 个 plugin metadata（Claude/Codex/zcode/marketplace）、顶层 package.json、4 个 source hooks + 4 个 installed hooks @version、zcode-local-load.py、verify_workflow.py REQUIRED_SNIPPETS（6 处版本断言）、README readiness boundary、e2e-test-project projection（SKILL.md + plan-tracker）
+- 发现并修复 hooks 内容漂移：4 个已安装 .git/hooks 长期未跟随源更新（post-commit 停在 0.32.0），从 0.57.0 源全覆盖对齐（含 self-upgrade 机制，未来 commit 自动保持同步）
+
+### Removed
+- `nul`（根目录，Windows 设备名误创建的未跟踪文件，189 字节，无引用）
+- `_fix_030_reconstruct.py`（根目录，FIX-030 一次性重构脚本残留，90 行，FIX-030 早已完成）
+
 ## [0.56.1] - 2026-06-24
 
 ### 0.56.1 - Web Console Real-Data Dashboard Patch

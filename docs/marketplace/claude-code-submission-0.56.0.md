@@ -41,12 +41,12 @@ The registry is `.claude-plugin/marketplace.json` with `name: "spg"`, an `owner`
 
 | # | Requirement | Status | Notes |
 | --- | --- | --- | --- |
-| 1 | Open-source license | PASS (0.56.0) | `LICENSE` (MIT), `plugin.json`/`marketplace.json`/`package.json` license = `MIT`. Aligns with `superpowers` (MIT). Previously `UNLICENSED`; fixed in this submission prep. |
+| 1 | Open-source license | PASS (0.56.0) | `LICENSE` (MIT), `plugin.json`/`marketplace.json`/`package.json` license = `MIT`. Aligns with `superpowers` (MIT). `UNLICENSED` → `MIT` since 0.56.0. |
 | 2 | Plugin structure `.claude-plugin/` | PASS | `.claude-plugin/plugin.json` + `marketplace.json` + `assets/`. |
 | 3 | Marketplace registry `plugins[]` + `owner` | PASS | `.claude-plugin/marketplace.json` has owner + plugins[0] with source, version, license. |
 | 4 | Skills/commands/agents entry points | PASS | `skills/` (main SKILL + role/stage skills), `commands/` (8 governance commands), `agents/` definitions. |
-| 5 | README with install + trust guidance | PARTIAL | README has Tier 1 install paths and Chinese + English sections. Confirm the English first viewport clearly states the value proposition before final submission. |
-| 6 | README install path verified | PENDING | `/plugin marketplace add peterwangze/software-project-governance` shorthand should be verified against the target Claude Code version; add a raw-URL fallback if needed. |
+| 5 | README with install + trust guidance | PASS | README opens with an English first viewport: title, "AI coding delivery trust layer" tagline, and a value-proposition paragraph. Tier 1 install paths and a `/plugin marketplace add` code block are present. |
+| 6 | README install path verified | PASS (documented) | README documents `/plugin marketplace add peterwangze/software-project-governance` and `/plugin install software-project-governance@spg`. Runtime verification against a target Claude Code version remains a pre-submit user step; a raw-URL fallback can be added if the shorthand is not resolved by a given Claude Code version. |
 | 7 | Local validation before install | PASS | `verify_workflow.py` governance/manifest/version checks PASS; release gate PASS for 0.56.0. |
 | 8 | Privacy/security boundary doc | PASS | `docs/marketplace/privacy-security.md` exists. |
 | 9 | No overclaim | PASS | README + release docs consistently state no official/marketplace approval, no universal runtime support. |

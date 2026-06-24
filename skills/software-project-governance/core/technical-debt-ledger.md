@@ -15,7 +15,11 @@
 | TD-003 | 2026-06-24 | AUDIT-121 | source/projection 双写——verify_workflow.py source(20294) vs projection(14166) 差异 6128 行需 check-projection-sync 人工盯防；archive/cleanup/test 同样双写 | P1 | 双重维护成本、projection 漂移风险、fixture 体积膨胀 | 0.64.0（改为生成时投影） | OPEN | F3, DEC-083 |
 | TD-004 | 2026-06-24 | AUDIT-121 | 命令面冗余——commands/ 下 8 文件 2232 行，7 个是 /governance 重复入口 | P2 | 文档维护冗余（已知平台能力缺口，非本项目可独立解决） | 等待上游能力补齐（AUDIT-120/DEC-082） | DEFERRED | F4, AUDIT-120, DEC-082 |
 | TD-005 | 2026-06-24 | AUDIT-121 | 自演进遗留物堆积——根目录游离脚本、Windows 误创建文件、docs/release 累积 105 文件无归档机制 | P1 | 仓库根污染、历史发布文档无归档、清理看护盲区 | 0.57.0（部分闭环） | PARTIAL | F5；nul + _fix_030_reconstruct.py 已清理；docs/release 归档待 ArchGuard check-technical-debt |
-| TD-006 | 2026-06-24 | AUDIT-121 | 架构腐化看护缺口——28 check 全是结构/事后/自觉型，0 个 check 守护模块大小/重复/复杂度/技术债；verify_workflow.py 膨胀到 2 万行触发零告警 | P0 | 工作流无法看护自身及宿主项目工程健康；1.0.0 可信度根部裂痕 | 0.58.0（ArchGuard 独立能力） | OPEN | F6, DEC-083, RISK-039 |
+| TD-006 | 2026-06-24 | AUDIT-121 | 架构腐化看护缺口——28 check 全是结构/事后/自觉型，0 个 check 守护模块大小/重复/复杂度/技术债；verify_workflow.py 膨胀到 2 万行触发零告警 | P0 | 工作流无法看护自身及宿主项目工程健康；1.0.0 可信度根部裂痕 | 0.58.0（ArchGuard 独立能力） | IN_PROGRESS | F6, DEC-083, RISK-039；0.58.0 ArchGuard 设计已启动（REQ-101，docs/requirements/archguard-design-0.58.0.md） |
+| TD-007 | 2026-06-25 | AUDIT-121(发现)/REQ-101(纳入) | hooks 内容漂移检测缺口——bootstrap 只检测 .git/hooks 是否存在，不检测内容与源一致性；实测 4 个已安装 hooks 全部漂移（post-commit 停在 0.32.0，缺 self-upgrade 机制） | P1 | 已安装 hooks 静默落后于源，治理约束实际未生效而不告警 | 0.58.0（ArchGuard check-technical-debt 含 hooks drift 检测） | OPEN | AUDIT-121 hooks 漂移修复记录；archguard-design-0.58.0.md §2.3 |
+| TD-008 | 2026-06-25 | REQ-101 | PRODUCT_CODE_PATTERNS 重复定义——verify_workflow.py:11666 与 :14064 各定义一次，潜在可变状态冲突 | P2 | 同名常量二次赋值，后定义覆盖前定义，维护易出错 | 0.59.0（manifest 域拆分时合并） | OPEN | archguard-design-0.58.0.md §2.1 重复定义检测 |
+| TD-009 | 2026-06-25 | REQ-101 | evidence-log 列规范不统一——表无显式 schema 表头，各 EVD 条目列数不一（EVD-618 10列、EVD-619 12列、REVIEW-REL-043 10列），check-governance 标为非 blocking WARN | P2 | 结构不一致影响机器解析，长期累积可读性下降 | 待评估（ArchGuard check-structural-validity 可扩展） | OPEN | check-governance Check 28 structural WARN |
+| TD-010 | 2026-06-25 | REQ-101 | governance-context 启发式误报——把 0.54.2 已撤回版本路线图行（含 FIX-143/REL-037/AUDIT-115 token）误识别为 unfinished work，实为 RISK-038 已关闭的历史失败链 | P2 | 恢复路径误报待办任务，干扰 Scenario D 会话恢复判断 | 待评估（governance-context 检测器需排除"已撤回/失效"版本） | OPEN | governance-context 输出；RISK-038 已关闭 |
 
 ---
 

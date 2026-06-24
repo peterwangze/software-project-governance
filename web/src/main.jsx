@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   Activity,
@@ -9,7 +9,6 @@ import {
   ChevronRight,
   CircleHelp,
   ClipboardList,
-  Cloud,
   Code2,
   Database,
   FileCheck2,
@@ -33,43 +32,6 @@ import './styles.css';
 const webConsoleCommand = 'python skills/software-project-governance/infra/verify_workflow.py web-console --start';
 const webConsoleUrl = 'http://127.0.0.1:5173/';
 
-const localChecks = [
-  { label: 'Project root', value: '~/projects/ai-code-assistant', state: 'ready', icon: FolderGit2 },
-  { label: 'Governance config', value: '.governance/plan-tracker.md', state: 'ready', icon: ClipboardList },
-  { label: 'Evidence store', value: '.governance/evidence-log.md', state: 'ready', icon: Database },
-  { label: 'Git hooks', value: '.git/hooks', state: 'ready', icon: KeyRound },
-  { label: 'Runtime policy', value: 'standard / always-on', state: 'ready', icon: Shield },
-  { label: 'Agent rules', value: 'AGENTS.md', state: 'ready', icon: Code2 }
-];
-
-const snapshotItems = [
-  { label: 'Gate G11 passed', detail: 'No blocking stage issue', tone: 'success', value: 'Passed', icon: Shield },
-  { label: 'Risks open', detail: 'Two tracked boundaries remain', tone: 'warning', value: '2', icon: AlertTriangle },
-  { label: 'Evidence fresh', detail: 'Updated in the last session', tone: 'success', value: 'Fresh', icon: FileCheck2 }
-];
-
-const evidenceRows = [
-  { type: 'Evidence', item: 'REL-035 release closure', status: 'Pass', updated: '2 min ago', tone: 'success' },
-  { type: 'Risk', item: 'RISK-037 dynamic lifecycle readiness', status: 'Open', updated: '1 hr ago', tone: 'warning' },
-  { type: 'Evidence', item: 'VAL-006 non-game validation', status: 'Partial', updated: 'Today', tone: 'neutral' },
-  { type: 'Evidence', item: 'VAL-005 python_game validation', status: 'Partial', updated: 'Today', tone: 'neutral' },
-  { type: 'Risk', item: 'RISK-036 marketplace readiness', status: 'Open', updated: '4 days ago', tone: 'warning' }
-];
-
-const statusTimeline = [
-  { label: 'Bootstrap', value: 'Loaded', tone: 'success' },
-  { label: 'Gate', value: 'G11 passed', tone: 'success' },
-  { label: 'Hooks', value: 'Installed', tone: 'success' },
-  { label: 'Risks', value: '2 open', tone: 'warning' },
-  { label: 'Release', value: '0.55.0', tone: 'success' }
-];
-
-const advancedRoutes = [
-  { label: 'Remote Validation', icon: Globe2, detail: 'External target checks', value: '2 partial' },
-  { label: 'Release', icon: Rocket, detail: 'Version gates and tags', value: '0.55.0' },
-  { label: 'Maintenance', icon: Wrench, detail: 'Archive, cleanup, repairs', value: 'Ready' }
-];
-
 const routeConfig = [
   { id: 'local', label: 'Local Setup', icon: Home },
   { id: 'status', label: 'Status', icon: Gauge },
@@ -77,33 +39,109 @@ const routeConfig = [
   { id: 'advanced', label: 'Advanced', icon: Boxes }
 ];
 
+const advancedRoutes = [
+  { label: 'Remote Validation', icon: Globe2, detail: 'External target checks (dry-run only)', value: 'Partial' },
+  { label: 'Release', icon: Rocket, detail: 'Version gates and tags (CLI-managed)', value: 'CLI only' },
+  { label: 'Maintenance', icon: Wrench, detail: 'Archive, cleanup, repairs (CLI-managed)', value: 'CLI only' }
+];
+
 function App() {
   const [activeRoute, setActiveRoute] = useState('local');
   const [advancedRoute, setAdvancedRoute] = useState('Remote Validation');
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [notice, setNotice] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const refresh = useCallback(async () => {
+    setRefreshing(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/governance', { cache: 'no-store' });
+      if (!res.ok) throw new Error(`API ${res.status}`);
+      const json = await res.json();
+      setData(json);
+      if (json.error) setError(json.error);
+    } catch (e) {
+      setError(`Cannot reach local API server: ${e.message}. Start it with: python web/server.py`);
+      setData(null);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const showNotice = useCallback((msg) => {
+    setNotice(msg);
+    window.setTimeout(() => setNotice(null), 4000);
+  }, []);
 
   const routeTitle = useMemo(() => {
     if (activeRoute === 'advanced') return advancedRoute;
     return routeConfig.find((route) => route.id === activeRoute)?.label ?? 'Local Setup';
   }, [activeRoute, advancedRoute]);
 
+  if (loading) {
+    return (
+      <div className="app">
+        <div className="loading-state">
+          <Activity size={28} className="spin" />
+          <p>Loading local governance status…</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="app">
-      <Sidebar activeRoute={activeRoute} onRouteChange={setActiveRoute} />
+      <Sidebar
+        activeRoute={activeRoute}
+        onRouteChange={setActiveRoute}
+        onNotice={showNotice}
+      />
       <main className="workspace">
-        <TopBar routeTitle={routeTitle} />
+        <TopBar routeTitle={routeTitle} data={data} onNotice={showNotice} />
         <MobileNav activeRoute={activeRoute} onRouteChange={setActiveRoute} />
-        {activeRoute === 'local' && <LocalSetup onAdvanced={() => setActiveRoute('advanced')} />}
-        {activeRoute === 'status' && <StatusPage />}
-        {activeRoute === 'evidence' && <EvidencePage />}
+        {error && (
+          <div className="error-banner" role="alert">
+            <AlertTriangle size={18} />
+            <span>{error}</span>
+            <button className="link-action" type="button" onClick={refresh}>
+              <Activity size={16} /> Retry
+            </button>
+          </div>
+        )}
+        {notice && (
+          <div className="notice-banner" role="status">
+            <CircleHelp size={18} />
+            <span>{notice}</span>
+          </div>
+        )}
+        {activeRoute === 'local' && (
+          <LocalSetup
+            data={data}
+            onAdvanced={() => setActiveRoute('advanced')}
+            onRefresh={refresh}
+            refreshing={refreshing}
+            onNavigate={setActiveRoute}
+          />
+        )}
+        {activeRoute === 'status' && <StatusPage data={data} onRefresh={refresh} refreshing={refreshing} />}
+        {activeRoute === 'evidence' && <EvidencePage data={data} />}
         {activeRoute === 'advanced' && (
-          <AdvancedPage active={advancedRoute} onChange={setAdvancedRoute} />
+          <AdvancedPage active={advancedRoute} onChange={setAdvancedRoute} onNotice={showNotice} />
         )}
       </main>
     </div>
   );
 }
 
-function Sidebar({ activeRoute, onRouteChange }) {
+function Sidebar({ activeRoute, onRouteChange, onNotice }) {
   return (
     <aside className="sidebar">
       <div className="window-dots" aria-hidden="true">
@@ -139,11 +177,19 @@ function Sidebar({ activeRoute, onRouteChange }) {
         />
       </div>
       <div className="sidebar-spacer" />
-      <button className="utility-button" type="button">
+      <button
+        className="utility-button"
+        type="button"
+        onClick={() => onNotice('Settings: this is a read-only local dashboard. Project configuration is edited via the CLI (plan-tracker.md) or your agent client.')}
+      >
         <Settings size={18} />
         Settings
       </button>
-      <button className="utility-button" type="button">
+      <button
+        className="utility-button"
+        type="button"
+        onClick={() => onNotice('Help: run /governance in your CLI/agent client for full interactive governance. This Web console is a read-only companion view of local status.')}
+      >
         <CircleHelp size={18} />
         Help
       </button>
@@ -169,22 +215,27 @@ function NavButton({ route, active, onClick }) {
   );
 }
 
-function TopBar({ routeTitle }) {
+function TopBar({ routeTitle, data, onNotice }) {
+  const projectName = data?.project_name ?? '—';
   return (
     <header className="topbar">
       <div className="project-select">
         <span>Current project</span>
-        <button type="button">
+        <button type="button" onClick={() => onNotice(`Project root: ${data?.project_root ?? 'unknown'}`)}>
           <Laptop size={17} />
-          ai-code-assistant
+          {projectName}
           <ChevronRight size={16} />
         </button>
       </div>
       <div className="top-status">
         <StatusMetric label="Environment" value="Local" tone="success" />
-        <StatusMetric label="Governance mode" value="Enforced" tone="success" />
-        <StatusMetric label="Last verified" value="2 min ago" tone="success" />
-        <button className="secondary-action" type="button">
+        <StatusMetric label="Release" value={data?.release_version ?? '—'} tone="success" />
+        <StatusMetric label="Open risks" value={String(data?.open_risks?.length ?? 0)} tone="warning" />
+        <button
+          className="secondary-action"
+          type="button"
+          onClick={() => onNotice('Project settings are managed via the CLI (plan-tracker.md, risk-log.md) and your agent client. This dashboard is read-only.')}
+        >
           <SlidersHorizontal size={17} />
           Project settings
         </button>
@@ -206,32 +257,46 @@ function StatusMetric({ label, value, tone }) {
   );
 }
 
-function LocalSetup({ onAdvanced }) {
+function LocalSetup({ data, onAdvanced, onRefresh, refreshing, onNavigate }) {
+  const localChecks = useMemo(() => {
+    if (!data) return [];
+    return [
+      { label: 'Project root', value: data.project_root ?? '—', state: 'ready', icon: FolderGit2 },
+      { label: 'Release version', value: data.release_version ?? '—', state: 'ready', icon: Code2 },
+      { label: 'Workflow version', value: data.workflow_version ?? '—', state: 'ready', icon: Shield },
+      { label: 'Trigger mode', value: data.trigger_mode ?? '—', state: 'ready', icon: Activity },
+      { label: 'Permission mode', value: data.permission_mode ?? '—', state: 'ready', icon: KeyRound },
+      { label: 'Profile', value: data.profile ?? '—', state: 'ready', icon: ClipboardList },
+      { label: 'Governance config', value: '.governance/plan-tracker.md', state: 'ready', icon: ClipboardList },
+      { label: 'Evidence store', value: '.governance/evidence-log.md', state: 'ready', icon: Database }
+    ];
+  }, [data]);
+
   return (
     <section className="page-grid">
       <div className="content-stack primary-stack">
         <EntryPanel />
-        <Panel title="Local configuration" action="All local checks passed">
+        <Panel title="Local configuration" action={data ? `${data.evidence_count ?? 0} evidence records` : 'Loading'}>
           <div className="check-list">
             {localChecks.map((item) => (
               <CheckRow key={item.label} item={item} />
             ))}
           </div>
           <div className="panel-footer">
-            <button className="link-action" type="button">
-              <Activity size={17} />
-              Re-scan configuration
+            <button className="link-action" type="button" onClick={onRefresh} disabled={refreshing}>
+              <Activity size={17} className={refreshing ? 'spin' : ''} />
+              {refreshing ? 'Re-scanning…' : 'Re-scan configuration'}
             </button>
           </div>
         </Panel>
-        <EvidenceTable compact={false} />
+        <EvidenceTable compact={false} data={data} onNavigate={onNavigate} />
       </div>
       <div className="content-stack side-stack">
-        <SnapshotPanel />
-        <EnvironmentPanel />
-        <VerifyPanel />
+        <SnapshotPanel data={data} onNavigate={onNavigate} />
+        <EnvironmentPanel data={data} />
+        <VerifyPanel onRefresh={onRefresh} refreshing={refreshing} />
         <Panel title="Advanced" className="quiet-panel">
-          <p className="muted">Remote validation, release and maintenance tools.</p>
+          <p className="muted">Remote validation, release and maintenance tools (read-only summary; actions run in CLI).</p>
           <button className="wide-button" type="button" onClick={onAdvanced}>
             Open advanced
             <ChevronRight size={18} />
@@ -277,7 +342,7 @@ function EntryPanel() {
             onClick={() => copyValue(webConsoleCommand, 'command')}
           >
             <Play size={18} />
-            {copied === 'command' ? 'Command copied' : 'Start from CLI'}
+            {copied === 'command' ? 'Command copied' : 'Copy start command'}
           </button>
           <button
             className="secondary-action compact"
@@ -293,14 +358,29 @@ function EntryPanel() {
   );
 }
 
-function StatusPage() {
+function StatusPage({ data, onRefresh, refreshing }) {
+  const timeline = useMemo(() => {
+    if (!data) return [];
+    const gates = data.gates ?? [];
+    const latestGate = gates.length ? gates[gates.length - 1] : null;
+    const overview = data.overview ?? {};
+    return [
+      { label: 'Project', value: data.project_name ?? '—', tone: 'success' },
+      { label: 'Release version', value: data.release_version ?? '—', tone: 'success' },
+      { label: 'Stage', value: overview.current_stage ? String(overview.current_stage).slice(0, 40) : '—', tone: 'success' },
+      { label: 'Latest gate', value: latestGate ? `${latestGate.gate} ${latestGate.status}` : '—', tone: latestGate?.status === 'passed' ? 'success' : 'warning' },
+      { label: 'Tasks', value: overview.completed && overview.total ? `${overview.completed}/${overview.total}` : '—', tone: 'success' },
+      { label: 'Open risks', value: String(data.open_risks?.length ?? 0), tone: data.open_risks?.length ? 'warning' : 'success' }
+    ];
+  }, [data]);
+
   return (
     <section className="page-grid status-layout">
       <div className="content-stack primary-stack">
-        <SnapshotPanel expanded />
+        <SnapshotPanel expanded data={data} />
         <Panel title="Governance timeline">
           <div className="timeline">
-            {statusTimeline.map((item) => (
+            {timeline.map((item) => (
               <div className="timeline-row" key={item.label}>
                 <span className={`status-dot ${item.tone}`} />
                 <span>{item.label}</span>
@@ -309,29 +389,54 @@ function StatusPage() {
             ))}
           </div>
         </Panel>
+        <Panel title="Gate status (G1–G11)">
+          <div className="timeline">
+            {(data?.gates ?? []).map((g) => (
+              <div className="timeline-row" key={g.gate}>
+                <span className={`status-dot ${g.status === 'passed' || g.status === 'passed-on-entry' ? 'success' : 'warning'}`} />
+                <span>{g.gate}</span>
+                <strong>{g.status} · {g.date}</strong>
+              </div>
+            ))}
+            {!(data?.gates?.length) && <p className="muted">No gate data.</p>}
+          </div>
+        </Panel>
       </div>
       <div className="content-stack side-stack">
-        <VerifyPanel />
-        <EnvironmentPanel />
+        <VerifyPanel onRefresh={onRefresh} refreshing={refreshing} />
+        <EnvironmentPanel data={data} />
       </div>
     </section>
   );
 }
 
-function EvidencePage() {
+function EvidencePage({ data }) {
   return (
     <section className="single-page">
-      <EvidenceTable compact={false} />
+      <EvidenceTable compact={false} data={data} onNavigate={() => {}} />
       <div className="evidence-summary">
-        <MetricCard label="Evidence records" value="592" tone="success" />
-        <MetricCard label="Open risks" value="2" tone="warning" />
-        <MetricCard label="Review coverage" value="100%" tone="success" />
+        <MetricCard label="Evidence records" value={String(data?.evidence_count ?? 0)} tone="success" />
+        <MetricCard label="Open risks" value={String(data?.open_risks?.length ?? 0)} tone="warning" />
+        <MetricCard label="Gates tracked" value={String(data?.gates?.length ?? 0)} tone="success" />
       </div>
+      {(data?.open_risks?.length ?? 0) > 0 && (
+        <Panel title="Open risks">
+          <div className="timeline">
+            {data.open_risks.map((r) => (
+              <div className="timeline-row" key={r.id}>
+                <span className="status-dot warning" />
+                <span>{r.id}</span>
+                <strong>{r.deadline ? `deadline ${r.deadline}` : 'open'} · {r.description.slice(0, 60)}</strong>
+              </div>
+            ))}
+          </div>
+        </Panel>
+      )}
     </section>
   );
 }
 
-function AdvancedPage({ active, onChange }) {
+function AdvancedPage({ active, onChange, onNotice }) {
   const selected = advancedRoutes.find((route) => route.label === active) ?? advancedRoutes[0];
   const SelectedIcon = selected.icon;
   return (
@@ -363,9 +468,19 @@ function AdvancedPage({ active, onChange }) {
           </div>
         </div>
         <div className="advanced-list">
-          <AdvancedRow label="Remote target" value="python_game / shitu" />
-          <AdvancedRow label="Boundary" value="Partial validation only" />
-          <AdvancedRow label="Next gate" value="RISK-036 / RISK-037" />
+          <AdvancedRow label="Execution surface" value="CLI / agent client (not this dashboard)" />
+          <AdvancedRow label="Boundary" value="Read-only summary here; actions run in CLI" />
+          <AdvancedRow label="Open risks" value="RISK-036 / RISK-037" />
+        </div>
+        <div className="panel-footer">
+          <button
+            className="link-action"
+            type="button"
+            onClick={() => onNotice('Advanced actions (release, archive, remote validation) are run from the CLI. This dashboard only summarizes their status.')}
+          >
+            <CircleHelp size={17} />
+            Why CLI only?
+          </button>
         </div>
       </Panel>
     </section>
@@ -390,7 +505,7 @@ function CheckRow({ item }) {
     <div className="check-row">
       <Icon size={18} />
       <span>{item.label}</span>
-      <code>{item.value}</code>
+      <code>{String(item.value).length > 60 ? `${String(item.value).slice(0, 57)}…` : item.value}</code>
       <span className="check-state">
         <Check size={15} />
       </span>
@@ -398,11 +513,43 @@ function CheckRow({ item }) {
   );
 }
 
-function SnapshotPanel({ expanded = false }) {
+function SnapshotPanel({ expanded = false, data, onNavigate }) {
+  const items = useMemo(() => {
+    if (!data) return [];
+    const gates = data.gates ?? [];
+    const latestGate = gates.length ? gates[gates.length - 1] : null;
+    const gatePassed = latestGate?.status === 'passed';
+    const riskCount = data.open_risks?.length ?? 0;
+    const evCount = data.evidence_count ?? 0;
+    return [
+      {
+        label: latestGate ? `Gate ${latestGate.gate} ${latestGate.status}` : 'Gate status',
+        detail: gatePassed ? 'No blocking stage issue' : 'Gate not passed',
+        tone: gatePassed ? 'success' : 'warning',
+        value: gatePassed ? 'Passed' : 'Review',
+        icon: Shield
+      },
+      {
+        label: 'Risks open',
+        detail: riskCount ? `${riskCount} tracked boundary(ies) remain` : 'No open risks',
+        tone: riskCount ? 'warning' : 'success',
+        value: String(riskCount),
+        icon: AlertTriangle
+      },
+      {
+        label: 'Evidence',
+        detail: evCount ? `${evCount} records in evidence-log` : 'No evidence',
+        tone: 'success',
+        value: evCount ? 'Tracked' : 'Empty',
+        icon: FileCheck2
+      }
+    ];
+  }, [data]);
+
   return (
     <Panel title="Delivery Trust Snapshot" className={expanded ? 'snapshot expanded' : 'snapshot'}>
       <div className="snapshot-list">
-        {snapshotItems.map((item) => {
+        {items.map((item) => {
           const Icon = item.icon;
           return (
             <div className="snapshot-row" key={item.label}>
@@ -415,8 +562,9 @@ function SnapshotPanel({ expanded = false }) {
             </div>
           );
         })}
+        {items.length === 0 && <p className="muted">Loading snapshot…</p>}
       </div>
-      <button className="link-row" type="button">
+      <button className="link-row" type="button" onClick={() => onNavigate?.('status')}>
         View full status
         <ChevronRight size={18} />
       </button>
@@ -424,33 +572,32 @@ function SnapshotPanel({ expanded = false }) {
   );
 }
 
-function EnvironmentPanel() {
-  const rows = [
-    ['OS', 'Windows 11'],
-    ['Runtime', 'Node.js 24.13'],
-    ['Git', 'master clean'],
-    ['Disk', 'Local'],
-    ['Connectivity', 'Optional']
-  ];
+function EnvironmentPanel({ data }) {
+  const rows = useMemo(() => {
+    const base = [
+      ['Project root', data?.project_root ?? '—'],
+      ['Project name', data?.project_name ?? '—'],
+      ['Trigger mode', data?.trigger_mode ?? '—'],
+      ['Permission mode', data?.permission_mode ?? '—'],
+      ['Profile', data?.profile ?? '—']
+    ];
+    return base;
+  }, [data]);
   return (
     <Panel title="Local environment">
       <div className="key-value-list">
         {rows.map(([label, value]) => (
           <div className="key-value" key={label}>
             <span>{label}</span>
-            <strong>{value}</strong>
+            <strong>{String(value).length > 50 ? `${String(value).slice(0, 47)}…` : value}</strong>
           </div>
         ))}
       </div>
-      <button className="link-row" type="button">
-        Environment details
-        <ChevronRight size={18} />
-      </button>
     </Panel>
   );
 }
 
-function VerifyPanel() {
+function VerifyPanel({ onRefresh, refreshing }) {
   return (
     <Panel title="Verify locally">
       <div className="command-box">
@@ -461,34 +608,36 @@ function VerifyPanel() {
         <Terminal size={17} />
         <code>python ... verify_workflow.py web-console --status</code>
       </div>
-      <button className="primary-action" type="button">
-        <Play size={18} />
-        Run checks
+      <button className="primary-action" type="button" onClick={onRefresh} disabled={refreshing}>
+        <Activity size={18} className={refreshing ? 'spin' : ''} />
+        {refreshing ? 'Refreshing…' : 'Refresh data'}
       </button>
     </Panel>
   );
 }
 
-function EvidenceTable({ compact }) {
+function EvidenceTable({ compact, data, onNavigate }) {
+  const rows = data?.recent_evidence ?? [];
   return (
     <Panel title="Recent evidence & risks" className="table-panel">
       <div className="table-header">
-        <span>Type</span>
-        <span>Item</span>
+        <span>ID</span>
+        <span>Task</span>
         <span>Status</span>
-        <span>Updated</span>
+        <span>Date</span>
       </div>
       <div className="table-body">
-        {evidenceRows.slice(0, compact ? 3 : evidenceRows.length).map((row) => (
-          <div className="table-row" key={row.item}>
-            <span>{row.type}</span>
-            <strong>{row.item}</strong>
-            <span className={`value-chip ${row.tone}`}>{row.status}</span>
-            <span>{row.updated}</span>
+        {rows.slice(0, compact ? 3 : rows.length).map((row) => (
+          <div className="table-row" key={row.id}>
+            <span>{row.id}</span>
+            <strong>{row.task}</strong>
+            <span className={`value-chip ${row.status === '完成' || row.status === 'Pass' ? 'success' : 'neutral'}`}>{row.status}</span>
+            <span>{row.date}</span>
           </div>
         ))}
+        {rows.length === 0 && <p className="muted">No recent evidence.</p>}
       </div>
-      <button className="link-row" type="button">
+      <button className="link-row" type="button" onClick={() => onNavigate?.('evidence')}>
         Open Evidence & Risks
         <ChevronRight size={18} />
       </button>

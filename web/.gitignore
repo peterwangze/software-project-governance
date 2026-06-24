@@ -2,3 +2,5 @@ node_modules/
 dist/
 web-dev.log
 .spg-web-console.pid
+.api-server.log
+.api-server.pid

@@ -19686,6 +19686,40 @@ def cmd_web_console(args):
                 sys.exit(install_result.returncode)
             return
 
+    api_server_script = ROOT / "web" / "server.py"
+    api_port = args.port + 1 if args.port != 5173 else 5174
+    api_started = False
+    if api_server_script.is_file():
+        api_log = paths["web_dir"] / ".api-server.log"
+        api_log_handle = api_log.open("a", encoding="utf-8")
+        api_log_handle.write(
+            f"\n--- api-server start {datetime.now().isoformat(timespec='seconds')} ---\n"
+        )
+        api_log_handle.flush()
+        api_popen_kwargs = {
+            "cwd": str(ROOT),
+            "stdout": api_log_handle,
+            "stderr": subprocess.STDOUT,
+            "stdin": subprocess.DEVNULL,
+        }
+        if os.name == "nt":
+            api_popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            api_popen_kwargs["start_new_session"] = True
+        try:
+            api_process = subprocess.Popen(
+                [sys.executable, str(api_server_script), "--port", str(api_port)],
+                **api_popen_kwargs,
+            )
+            api_started = True
+            (paths["web_dir"] / ".api-server.pid").write_text(str(api_process.pid), encoding="utf-8")
+        except Exception as exc_api:  # pragma: no cover - defensive
+            print(f"\nNote: local API server could not start ({exc_api}); the dashboard will run without live data.")
+        finally:
+            api_log_handle.close()
+    else:
+        print("\nNote: web/server.py not found; the dashboard will run without live data.")
+
     command = [
         npm,
         "run",
@@ -19728,6 +19762,9 @@ def cmd_web_console(args):
             print("\nStatus: running")
             print(f"PID: {process.pid}")
             print(f"Log: {_display_path(paths['log'])}")
+            if api_started:
+                print(f"Local API server: http://127.0.0.1:{api_port}/api/governance (live governance data)")
+                print(f"API PID: {api_process.pid} (stop: taskkill /PID {api_process.pid} /F on Windows)")
             if args.open:
                 webbrowser.open(url)
             return

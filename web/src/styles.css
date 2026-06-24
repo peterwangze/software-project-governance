@@ -1027,3 +1027,71 @@ button {
     color: var(--blue);
   }
 }
+
+/* --- Data-driven states (loading / error / notice / spin) --- */
+
+.loading-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  min-height: 60vh;
+  color: var(--slate-500, #64748b);
+  font-size: 14px;
+}
+
+.loading-state svg,
+.spin {
+  animation: spg-spin 0.9s linear infinite;
+}
+
+@keyframes spg-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.error-banner,
+.notice-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 16px;
+  padding: 12px 16px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.error-banner {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #991b1b;
+}
+
+.notice-banner {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  color: #1e3a8a;
+}
+
+.error-banner .link-action {
+  margin-left: auto;
+  color: #991b1b;
+}
+
+.check-row code,
+.key-value strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 320px;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}

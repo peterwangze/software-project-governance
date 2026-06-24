@@ -1,10 +1,9 @@
 {
   "$schema": "https://example.com/manifest-schema-v1.json",
   "workflow": "software-project-governance",
-  "version": "0.56.0",
+  "version": "0.56.1",
   "description": "Canonical file manifest. All entries define files/directories/patterns that SHOULD exist after plugin installation or repo checkout. The single source of truth for cleanup and verification.",
   "source_of_truth": true,
-
   "root_entries": {
     "files": [
       "README.md",
@@ -14,96 +13,365 @@
     ],
     "directories": []
   },
-
   "product": {
     "description": "Files shipped to end users via plugin installation.",
     "entries": [
-      { "path": "skills/software-project-governance/SKILL.md", "type": "file" },
-      { "path": "skills/software-project-governance/core/", "type": "dir" },
-      { "path": "skills/software-project-governance/core/governance-packs.json", "type": "file" },
-      { "path": "skills/software-project-governance/core/capability-registry.json", "type": "file" },
-      { "path": "skills/software-project-governance/core/lifecycle-registry.json", "type": "file" },
-      { "path": "skills/software-project-governance/core/templates/", "type": "dir" },
-      { "path": "skills/software-project-governance/core/protocol/", "type": "dir" },
-      { "path": "skills/software-project-governance/infra/", "type": "dir" },
-      { "path": "skills/software-project-governance/infra/hooks/", "type": "dir" },
-      { "path": "skills/software-project-governance/infra/TOOLS.md", "type": "file" },
-      { "path": "skills/software-project-governance/infra/verify_workflow.py", "type": "file" },
-      { "path": "skills/software-project-governance/infra/verify-e2e.sh", "type": "file" },
-      { "path": "skills/software-project-governance/infra/archive.py", "type": "file" },
-      { "path": "skills/software-project-governance/references/", "type": "dir" },
-      { "path": "agents/", "type": "dir" },
-      { "path": "commands/", "type": "dir" },
-      { "path": "adapters/", "type": "dir" },
-      { "path": ".claude-plugin/", "type": "dir" },
-      { "path": ".codex-plugin/", "type": "dir" },
-      { "path": ".zcode-plugin/", "type": "dir" },
-      { "path": ".zcode-plugin/plugin.json", "type": "file" },
-      { "path": ".zcode-plugin/assets/", "type": "dir" },
-      { "path": ".agents/", "type": "dir" },
-      { "path": "docs/release/release-checklist-0.45.0.md", "type": "file" },
-      { "path": "docs/release/feature-flags-0.45.0.md", "type": "file" },
-      { "path": "docs/release/rollback-plan-0.45.0.md", "type": "file" },
-      { "path": "docs/marketplace/official-submission-0.46.0.md", "type": "file" },
-      { "path": "docs/marketplace/ecosystem-positioning-0.46.0.md", "type": "file" },
-      { "path": "docs/marketplace/comparison-0.46.0.md", "type": "file" },
-      { "path": "docs/marketplace/migration-guide-0.46.0.md", "type": "file" },
-      { "path": "docs/marketplace/examples-0.46.0.md", "type": "file" },
-      { "path": "docs/marketplace/zcode-local-load-0.56.0.md", "type": "file" },
-      { "path": "docs/marketplace/claude-code-submission-0.56.0.md", "type": "file" },
-      { "path": "docs/marketplace/official-readiness-gap-analysis-0.56.0.md", "type": "file" },
-      { "path": "docs/release/release-checklist-0.46.0.md", "type": "file" },
-      { "path": "docs/release/feature-flags-0.46.0.md", "type": "file" },
-      { "path": "docs/release/rollback-plan-0.46.0.md", "type": "file" },
-      { "path": "docs/release/release-checklist-0.47.0.md", "type": "file" },
-      { "path": "docs/release/feature-flags-0.47.0.md", "type": "file" },
-      { "path": "docs/release/rollback-plan-0.47.0.md", "type": "file" },
-      { "path": "docs/release/release-checklist-0.48.0.md", "type": "file" },
-      { "path": "docs/release/feature-flags-0.48.0.md", "type": "file" },
-      { "path": "docs/release/rollback-plan-0.48.0.md", "type": "file" },
-      { "path": "docs/release/release-checklist-0.49.0.md", "type": "file" },
-      { "path": "docs/release/feature-flags-0.49.0.md", "type": "file" },
-      { "path": "docs/release/rollback-plan-0.49.0.md", "type": "file" },
-      { "path": "docs/release/release-checklist-0.50.0.md", "type": "file" },
-      { "path": "docs/release/feature-flags-0.50.0.md", "type": "file" },
-      { "path": "docs/release/rollback-plan-0.50.0.md", "type": "file" },
-      { "path": "docs/release/release-checklist-0.50.2.md", "type": "file" },
-      { "path": "docs/release/feature-flags-0.50.2.md", "type": "file" },
-      { "path": "docs/release/rollback-plan-0.50.2.md", "type": "file" },
-      { "path": "docs/release/release-checklist-0.50.3.md", "type": "file" },
-      { "path": "docs/release/feature-flags-0.50.3.md", "type": "file" },
-      { "path": "docs/release/rollback-plan-0.50.3.md", "type": "file" },
-      { "path": "docs/release/release-checklist-0.51.0.md", "type": "file" },
-      { "path": "docs/release/feature-flags-0.51.0.md", "type": "file" },
-      { "path": "docs/release/rollback-plan-0.51.0.md", "type": "file" },
-      { "path": "docs/release/release-checklist-0.52.0.md", "type": "file" },
-      { "path": "docs/release/feature-flags-0.52.0.md", "type": "file" },
-      { "path": "docs/release/rollback-plan-0.52.0.md", "type": "file" },
-      { "path": "docs/release/release-checklist-0.53.0.md", "type": "file" },
-      { "path": "docs/release/feature-flags-0.53.0.md", "type": "file" },
-      { "path": "docs/release/rollback-plan-0.53.0.md", "type": "file" },
-      { "path": "docs/release/release-checklist-0.54.0.md", "type": "file" },
-      { "path": "docs/release/feature-flags-0.54.0.md", "type": "file" },
-      { "path": "docs/release/rollback-plan-0.54.0.md", "type": "file" },
-      { "path": "docs/release/release-checklist-0.54.1.md", "type": "file" },
-      { "path": "docs/release/feature-flags-0.54.1.md", "type": "file" },
-      { "path": "docs/release/rollback-plan-0.54.1.md", "type": "file" },
-      { "path": "docs/release/release-checklist-0.55.0.md", "type": "file" },
-      { "path": "docs/release/feature-flags-0.55.0.md", "type": "file" },
-      { "path": "docs/release/rollback-plan-0.55.0.md", "type": "file" },
-      { "path": "docs/release/release-checklist-0.55.1.md", "type": "file" },
-      { "path": "docs/release/feature-flags-0.55.1.md", "type": "file" },
-      { "path": "docs/release/rollback-plan-0.55.1.md", "type": "file" },
-      { "path": "docs/release/release-checklist-0.55.2.md", "type": "file" },
-      { "path": "docs/release/feature-flags-0.55.2.md", "type": "file" },
-      { "path": "docs/release/rollback-plan-0.55.2.md", "type": "file" },
-      { "path": "docs/release/release-checklist-0.55.3.md", "type": "file" },
-      { "path": "docs/release/feature-flags-0.55.3.md", "type": "file" },
-      { "path": "docs/release/rollback-plan-0.55.3.md", "type": "file" },
-      { "path": "docs/release/release-checklist-0.56.0.md", "type": "file" },
-      { "path": "docs/release/feature-flags-0.56.0.md", "type": "file" },
-      { "path": "docs/release/rollback-plan-0.56.0.md", "type": "file" },
-      { "path": "docs/migration/dynamic-flow-gate-migration-0.55.0.md", "type": "file" }
+      {
+        "path": "skills/software-project-governance/SKILL.md",
+        "type": "file"
+      },
+      {
+        "path": "skills/software-project-governance/core/",
+        "type": "dir"
+      },
+      {
+        "path": "skills/software-project-governance/core/governance-packs.json",
+        "type": "file"
+      },
+      {
+        "path": "skills/software-project-governance/core/capability-registry.json",
+        "type": "file"
+      },
+      {
+        "path": "skills/software-project-governance/core/lifecycle-registry.json",
+        "type": "file"
+      },
+      {
+        "path": "skills/software-project-governance/core/templates/",
+        "type": "dir"
+      },
+      {
+        "path": "skills/software-project-governance/core/protocol/",
+        "type": "dir"
+      },
+      {
+        "path": "skills/software-project-governance/infra/",
+        "type": "dir"
+      },
+      {
+        "path": "skills/software-project-governance/infra/hooks/",
+        "type": "dir"
+      },
+      {
+        "path": "skills/software-project-governance/infra/TOOLS.md",
+        "type": "file"
+      },
+      {
+        "path": "skills/software-project-governance/infra/verify_workflow.py",
+        "type": "file"
+      },
+      {
+        "path": "skills/software-project-governance/infra/verify-e2e.sh",
+        "type": "file"
+      },
+      {
+        "path": "skills/software-project-governance/infra/archive.py",
+        "type": "file"
+      },
+      {
+        "path": "skills/software-project-governance/references/",
+        "type": "dir"
+      },
+      {
+        "path": "agents/",
+        "type": "dir"
+      },
+      {
+        "path": "commands/",
+        "type": "dir"
+      },
+      {
+        "path": "adapters/",
+        "type": "dir"
+      },
+      {
+        "path": ".claude-plugin/",
+        "type": "dir"
+      },
+      {
+        "path": ".codex-plugin/",
+        "type": "dir"
+      },
+      {
+        "path": ".zcode-plugin/",
+        "type": "dir"
+      },
+      {
+        "path": ".zcode-plugin/plugin.json",
+        "type": "file"
+      },
+      {
+        "path": ".zcode-plugin/assets/",
+        "type": "dir"
+      },
+      {
+        "path": ".agents/",
+        "type": "dir"
+      },
+      {
+        "path": "docs/release/release-checklist-0.45.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/feature-flags-0.45.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/rollback-plan-0.45.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/marketplace/official-submission-0.46.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/marketplace/ecosystem-positioning-0.46.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/marketplace/comparison-0.46.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/marketplace/migration-guide-0.46.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/marketplace/examples-0.46.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/marketplace/zcode-local-load-0.56.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/marketplace/claude-code-submission-0.56.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/marketplace/official-readiness-gap-analysis-0.56.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/release-checklist-0.46.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/feature-flags-0.46.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/rollback-plan-0.46.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/release-checklist-0.47.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/feature-flags-0.47.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/rollback-plan-0.47.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/release-checklist-0.48.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/feature-flags-0.48.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/rollback-plan-0.48.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/release-checklist-0.49.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/feature-flags-0.49.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/rollback-plan-0.49.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/release-checklist-0.50.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/feature-flags-0.50.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/rollback-plan-0.50.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/release-checklist-0.50.2.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/feature-flags-0.50.2.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/rollback-plan-0.50.2.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/release-checklist-0.50.3.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/feature-flags-0.50.3.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/rollback-plan-0.50.3.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/release-checklist-0.51.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/feature-flags-0.51.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/rollback-plan-0.51.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/release-checklist-0.52.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/feature-flags-0.52.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/rollback-plan-0.52.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/release-checklist-0.53.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/feature-flags-0.53.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/rollback-plan-0.53.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/release-checklist-0.54.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/feature-flags-0.54.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/rollback-plan-0.54.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/release-checklist-0.54.1.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/feature-flags-0.54.1.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/rollback-plan-0.54.1.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/release-checklist-0.55.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/feature-flags-0.55.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/rollback-plan-0.55.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/release-checklist-0.55.1.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/feature-flags-0.55.1.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/rollback-plan-0.55.1.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/release-checklist-0.55.2.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/feature-flags-0.55.2.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/rollback-plan-0.55.2.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/release-checklist-0.55.3.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/feature-flags-0.55.3.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/rollback-plan-0.55.3.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/release-checklist-0.56.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/feature-flags-0.56.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/rollback-plan-0.56.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/migration/dynamic-flow-gate-migration-0.55.0.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/release-checklist-0.56.1.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/feature-flags-0.56.1.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/rollback-plan-0.56.1.md",
+        "type": "file"
+      }
     ],
     "glob_patterns": [
       "skills/software-project-governance/core/**/*.md",
@@ -137,7 +405,6 @@
       ".agents/plugins/*.json"
     ]
   },
-
   "canonical_product_artifacts": {
     "description": "Critical product artifacts that must remain tracked, shipped, and covered by manifest and cleanup checks.",
     "entries": [
@@ -176,17 +443,37 @@
       }
     ]
   },
-
   "repo_only": {
     "description": "Files that exist only in the development repository, NOT shipped to end users via plugin installation.",
     "entries": [
-      { "path": "project/", "type": "dir" },
-      { "path": ".git/", "type": "dir" },
-      { "path": ".claude/", "type": "dir" },
-      { "path": ".github/", "type": "dir" },
-      { "path": "tests/", "type": "dir" },
-      { "path": "docs/", "type": "dir" },
-      { "path": "web/", "type": "dir" }
+      {
+        "path": "project/",
+        "type": "dir"
+      },
+      {
+        "path": ".git/",
+        "type": "dir"
+      },
+      {
+        "path": ".claude/",
+        "type": "dir"
+      },
+      {
+        "path": ".github/",
+        "type": "dir"
+      },
+      {
+        "path": "tests/",
+        "type": "dir"
+      },
+      {
+        "path": "docs/",
+        "type": "dir"
+      },
+      {
+        "path": "web/",
+        "type": "dir"
+      }
     ],
     "glob_patterns": [
       "project/**/*.md",
@@ -205,7 +492,6 @@
       "web/src/**/*"
     ]
   },
-
   "cleanup_scope": {
     "description": "Top-level plugin directories that cleanup.py may scan for redundant product artifacts. User project files outside this scope are never cleanup candidates.",
     "directories": [
@@ -219,7 +505,6 @@
       ".agents"
     ]
   },
-
   "exclude_from_cleanup": {
     "description": "Paths NEVER considered redundant, even if not in the manifest above. These are user-generated or external.",
     "entries": [

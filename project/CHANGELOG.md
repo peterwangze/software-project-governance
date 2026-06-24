@@ -2,6 +2,38 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.56.1] - 2026-06-24
+
+### 0.56.1 - Web Console Real-Data Dashboard Patch
+
+0.56.1 发布 REL-043 Web console real-data dashboard patch：把已完成、审查通过并经运行时验证的 FIX-151 版本化。该版本修复 Web console 从 100% 硬编码 mock 改为真实数据驱动，解决用户报告的 Project root 假数据和按键无功能问题。Web console 保持只读本地 dashboard 边界不变。
+
+### Added
+
+- **`web/server.py` local API server**: 轻量 stdlib-only Python HTTP server，复用 verify_workflow.py 的 parse 函数读真实 `.governance/` 文件，提供 `/api/governance` JSON 端点 + serve dist 静态文件。
+- **`web/vite.config.js`**: Vite 配置 + `/api` proxy 到 API server（dev 模式），无新 npm 依赖。
+- **0.56.1 release docs**: 新增 release checklist、feature flags、rollback plan。
+
+### Changed
+
+- **`web/src/main.jsx` refactored to real-data driven**: 删除所有硬编码 mock 常量数组，改为 `fetch('/api/governance')` 真实数据驱动；Project root/project_name/version/gates/evidence/risks 全部来自真实 governance 文件；loading/error/refreshing/notice 状态完整。
+- **所有按键功能修复**: 17 个 button 全部有明确 onClick（refresh 刷新数据、navigate 切换路由、notice 显示说明），不能执行的诚实标注 read-only/CLI-only。
+- **`cmd_web_console` updated**: 启动 Vite 前后台启动 API server（PID 记录 + 停止提示）。
+- **`web/src/styles.css`**: 追加 loading/error/notice/spin 状态类。
+- 版本声明同步到 0.56.1。
+
+### Verification
+
+- `npm run build` PASS（1700 modules，dist 生成）。
+- `check-manifest-consistency --fail-on-issues` PASS（web/server.py + vite.config.js 在 repo_only 登记）。
+- live API 验证：`GET /api/governance` 返回真实数据（project_name=project_management_workflow、release_version=0.56.0、gates=11、evidence_count=595、open_risks=RISK-036/037 真实 deadline）。
+- 重启验证通过：API server (5174) + Vite proxy (5173/api) + 前端渲染真实数据三层链路全通。
+- Code Reviewer APPROVED（无 P0/P1，3 个 P2 已处理）。
+
+### Boundary
+
+RISK-036 与 RISK-037 保持打开。Web console 仍是只读本地 dashboard（不执行 agent/release/approval 动作），不声明 official approval、marketplace approval、universal runtime support 或 1.0.0 readiness。
+
 ## [0.56.0] - 2026-06-24
 
 ### 0.56.0 - zcode Plugin Marketplace Adapter Patch

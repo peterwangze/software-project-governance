@@ -1,0 +1,47 @@
+{
+  "$schema": "architecture-health-v1.json",
+  "version": "1.0",
+  "description": "Declarative architecture health budget. ArchGuard reads this to calibrate thresholds.",
+  "module_size": {
+    "warn_lines": 2000,
+    "error_lines": 5000,
+    "target_lines": 1500,
+    "exclusions": [
+      {"path": "**/tests/**", "reason": "test files exempted from size limits"},
+      {"path": "**/test_*.py", "reason": "test files exempted from size limits"}
+    ]
+  },
+  "function_size": {
+    "warn_lines": 200,
+    "error_lines": 500,
+    "target_lines": 100
+  },
+  "module_constants": {
+    "warn_count": 150,
+    "error_count": 300,
+    "detect_duplicates": true
+  },
+  "duplicate_code": {
+    "warn_pct": 60,
+    "error_pct": 80,
+    "normalize_line_endings": true,
+    "ignore_whitespace": true,
+    "source_projection_pairs": "auto-from-manifest"
+  },
+  "complexity": {
+    "enabled": false,
+    "warn_cyclomatic": 15,
+    "error_cyclomatic": 30,
+    "note": "AST-based complexity deferred to 0.59.0+; 0.58.0 uses line-based proxy"
+  },
+  "technical_debt": {
+    "root_residue_patterns": ["_fix_*", "_tmp_*", "debug_*", "scratch_*"],
+    "release_docs_archive_threshold_versions": 30,
+    "hooks_drift_detection": true,
+    "ledger_cross_validate": true
+  },
+  "gate_integration": {
+    "fatal_on_error": false,
+    "note": "0.58.0 first release: WARN/ERROR are advisory, do not block release gate. Future versions may enable fatal."
+  }
+}

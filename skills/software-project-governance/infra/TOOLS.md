@@ -47,6 +47,10 @@
 | TOOL-039 | Project-Type Gate Presets guard | script + registry presets | `infra/verify_workflow.py check-lifecycle-registry --fail-on-issues` + `core/lifecycle-registry.json` `project_type_gate_presets` | 0.53.0 project type gate presets、profile/project-type 正交边界、默认 packs、质量预算、验收模板、release checks、gate policy 或 gate standards 变更后 | 架构/测试/发布/维护 | 是 |
 | TOOL-040 | Classic Gate Execution Registry guard | script + registry execution metadata | `infra/verify_workflow.py check-lifecycle-registry --fail-on-issues` + `infra/verify_workflow.py gate-check <G1-G11>` + `core/lifecycle-registry.json` `gate_execution_registry` | 0.54.0 classic G1-G11 registry execution、gate checks、evidence query、automation metadata、human-confirmation policy、severity 或 project-type overrides 变更后 | 架构/测试/发布/维护 | 是 |
 | TOOL-041 | Dynamic Lifecycle Migration dry-run preview | script + migration guide | `infra/verify_workflow.py dynamic-lifecycle-migration --target <path> --dry-run` + `docs/migration/dynamic-flow-gate-migration-0.55.0.md` | 0.55.0 classic-phase-gate 到 dynamic-flow-gate 的只读迁移预览、plan/evidence 保留检查、blocked checks 和 no-overclaim boundary 验证后 | 架构/测试/发布/维护 | 是 |
+| TOOL-043 | ArchGuard Architecture Health | CLI check (advisory) | `infra/verify_workflow.py check-architecture-health` + `core/architecture-health.json` | 0.58.0 模块/函数/模块常量大小阈值 + 重复常量检测（3 级 PASS/WARN/ERROR，advisory 不阻断 release） | 架构/维护 | 是 |
+| TOOL-044 | ArchGuard Duplicate Code | CLI check (advisory) | `infra/verify_workflow.py check-duplicate-code` | 0.58.0 source/projection 语义重复检测（normalize 换行符 + 忽略空白，避免 CRLF/LF 误判） | 架构/维护 | 是 |
+| TOOL-045 | ArchGuard Technical Debt | CLI check (advisory) | `infra/verify_workflow.py check-technical-debt` + `core/technical-debt-ledger.md` | 0.58.0 根目录游离脚本/历史 release 文档/hooks 内容漂移/技术债登记交叉验证 | 维护 | 是 |
+| TOOL-046 | ArchGuard Complexity | CLI check (advisory) | `infra/verify_workflow.py check-complexity` | 0.58.0 圈复杂度（line-based proxy，AST 留 0.59.0+），advisory | 架构/维护 | 是 |
 
 ## 工具详情
 
@@ -484,6 +488,50 @@
 - **依赖**：repo-only `web/` React/Vite console、`npm`、`check-manifest-consistency`
 - **边界**：local companion dashboard only；主交互仍在 CLI/agent client；手动 `/governance` 默认启动或复用 Web console，便于后续 Web UI 交互；阶段/session 总结只追加 `--summary-link` 只读入口；缺少依赖时不静默安装，提示显式 `--install`；不自动执行 agent 任务；不是 Codex Desktop 内嵌 UI、marketplace lifecycle PASS、official approval 或 1.0.0 readiness 证据。
 - **被以下子工作流使用**：立项（initiation）、测试（testing）、运营（operations）、维护（maintenance）
+
+### TOOL-043：ArchGuard Architecture Health check
+
+- **文件**：`infra/verify_workflow.py`（`check_architecture_health`）+ `core/architecture-health.json`
+- **子命令**：`check-architecture-health [--fail-on-issues]`
+- **输入**：仓库下 `.py/.js/.ts` 文件 + `core/architecture-health.json` 声明式阈值预算
+- **输出**：3 级（PASS/WARN/ERROR）发现清单——module_size（文件行数）、function_size（Python AST 函数行数）、module_constants（模块常量计数）、duplicate_constant（重复定义如 PRODUCT_CODE_PATTERNS）
+- **触发条件**：大型项目持续演进中需要看模块/函数膨胀信号时；CI/本地一键扫描
+- **依赖**：`core/architecture-health.json`（manifest 双重登记）、Python `ast`
+- **边界**：0.58.0 advisory-only（`gate_integration.fatal_on_error=false`）——WARN/ERROR 告警但不阻断 release gate；test 文件（`**/tests/**`、`**/test_*.py`）按 schema exclusion 豁免；不重写代码，仅诊断。
+- **被以下子工作流使用**：架构（architecture）、维护（maintenance）
+
+### TOOL-044：ArchGuard Duplicate Code check
+
+- **文件**：`infra/verify_workflow.py`（`check_duplicate_code`）
+- **子命令**：`check-duplicate-code [--fail-on-issues]`
+- **输入**：source（`skills/software-project-governance/infra/*.py`）与 projection（`project/e2e-test-project/.../infra/*.py`）文件对
+- **输出**：每对的重复率（duplicate_pct）+ 阈值分级（WARN≥60%/ERROR≥80%）
+- **触发条件**：监控 source/projection 双写腐化、评估拆分收益时
+- **依赖**：`core/architecture-health.json` 的 `duplicate_code` 段
+- **边界**：**MUST normalize 换行符**（CRLF→LF）+ 忽略空白——否则 source(CRLF) vs projection(LF) 会误判 100% 差异；advisory-only。
+- **被以下子工作流使用**：架构（architecture）、维护（maintenance）
+
+### TOOL-045：ArchGuard Technical Debt check
+
+- **文件**：`infra/verify_workflow.py`（`check_technical_debt`，复用 `_external_validation_read_text`/`_external_validation_canonical_hook_text`）+ `core/technical-debt-ledger.md`
+- **子命令**：`check-technical-debt [--fail-on-issues]`
+- **输入**：根目录文件、`docs/release/` 版本数、`infra/hooks/*` vs `.git/hooks/*`、`core/technical-debt-ledger.md`
+- **输出**：root_residue（游离脚本）、release_docs_versions（历史文档版本数）、hooks_drift（源 vs 已安装内容漂移）、ledger_no_carrying_version（OPEN/IN_PROGRESS 项无承载版本）
+- **触发条件**：定期技术债巡检、发布前 hooks 一致性检查
+- **依赖**：`core/technical-debt-ledger.md`（manifest 登记）、`core/architecture-health.json`
+- **边界**：advisory-only；hooks 漂移检测复用既有 helper（G9 约束）不重复实现；不自动清理游离脚本。
+- **被以下子工作流使用**：维护（maintenance）
+
+### TOOL-046：ArchGuard Complexity check
+
+- **文件**：`infra/verify_workflow.py`（`check_complexity`）
+- **子命令**：`check-complexity [--fail-on-issues]`
+- **输入**：`core/architecture-health.json` 的 `complexity` 段
+- **输出**：0.58.0 `enabled=false` 时返回 line-based proxy 提示；启用时复用 architecture-health 函数行数数据作为圈复杂度代理
+- **触发条件**：评估函数复杂度（0.59.0+ 启用 AST 圈复杂度后）
+- **依赖**：`core/architecture-health.json`
+- **边界**：0.58.0 line-based proxy（AST 圈复杂度留 0.59.0+）；advisory-only。
+- **被以下子工作流使用**：架构（architecture）、维护（maintenance）
 
 ## 工具与子工作流的关系矩阵
 

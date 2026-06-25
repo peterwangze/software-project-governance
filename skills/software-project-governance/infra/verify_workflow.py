@@ -12,6 +12,7 @@ import importlib.util
 import shutil
 import hashlib
 import tempfile
+import fnmatch
 import time
 import urllib.request
 import webbrowser
@@ -15441,6 +15442,74 @@ def cmd_check_governance(args):
         print("│  [PASS] README, Tier 1 adapters, and 0.47.0 requirements keep loading guidance synchronized.")
     print("└──────────────────────────────────────────────────────┘")
 
+    # ── 28o. ArchGuard Architecture Health (REQ-101 / FIX-152) ──
+    # G7: advisory-only in 0.58.0. Findings are reported but MUST NOT increment
+    # all_issues (which would flip the gate). Only fatal-on-error ERRORs count.
+    print("\n┌─ Check 28o: Architecture Health (ArchGuard/REQ-101) ┐")
+    arch = check_architecture_health()
+    if arch.get("error"):
+        print(f"│  [SKIP] {arch['error']}")
+    else:
+        s = arch["summary"]
+        fatal = bool(arch.get("fatal_on_error"))
+        print(f"│  Module/function/constant: {s['errors']} ERROR, {s['warnings']} WARN")
+        for f in arch["findings"][:8]:
+            loc = f.get("path", "")
+            extra = f.get("name") or f.get("count") or f.get("lines", "")
+            print(f"│    [{f['severity']}] {f['check']}: {loc} {extra}".rstrip())
+        if len(arch["findings"]) > 8:
+            print(f"│    ... and {len(arch['findings']) - 8} more")
+        if s["errors"] and not fatal:
+            print("│  [ADVISORY] fatal_on_error=false — does not block release")
+        elif s["errors"] and fatal:
+            all_issues += s["errors"]
+            print("│  [FATAL] fatal_on_error=true — counting toward gate")
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 28p. ArchGuard Duplicate Code (REQ-101 / FIX-152) ──
+    print("\n┌─ Check 28p: Duplicate Code (ArchGuard/REQ-101) ─────┐")
+    dup = check_duplicate_code()
+    if dup.get("error"):
+        print(f"│  [SKIP] {dup['error']}")
+    else:
+        s = dup["summary"]
+        print(f"│  source/projection pairs checked: {dup.get('pairs_checked', 0)}")
+        for f in dup["findings"][:8]:
+            print(f"│    [{f['severity']}] {f['check']}: {f.get('path','')} dup={f.get('duplicate_pct','')}%")
+        if s["errors"] or s["warnings"]:
+            print(f"│  {s['errors']} ERROR, {s['warnings']} WARN (advisory)")
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 28q. ArchGuard Technical Debt (REQ-101 / FIX-152) ──
+    # Includes hooks content drift (reuses _external_validation_* helpers, G9).
+    print("\n┌─ Check 28q: Technical Debt (ArchGuard/REQ-101) ─────┐")
+    debt = check_technical_debt()
+    if debt.get("error"):
+        print(f"│  [SKIP] {debt['error']}")
+    else:
+        s = debt["summary"]
+        print(f"│  residue/docs/hooks-drift/ledger: {s['errors']} ERROR, {s['warnings']} WARN")
+        for f in debt["findings"][:8]:
+            loc = f.get("path") or f.get("hook") or f.get("ledger_id") or ""
+            print(f"│    [{f['severity']}] {f['check']}: {loc}".rstrip())
+        if len(debt["findings"]) > 8:
+            print(f"│    ... and {len(debt['findings']) - 8} more")
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 28r. ArchGuard Complexity (REQ-101 / FIX-152) ──
+    print("\n┌─ Check 28r: Complexity (ArchGuard/REQ-101) ─────────┐")
+    cx = check_complexity()
+    if cx.get("error"):
+        print(f"│  [SKIP] {cx['error']}")
+    elif not cx.get("enabled", False):
+        print(f"│  [INFO] disabled — {cx.get('note','line-based proxy; see check-architecture-health')}")
+    else:
+        s = cx["summary"]
+        print(f"│  complexity proxy: {s['errors']} ERROR, {s['warnings']} WARN")
+        for f in cx["findings"][:8]:
+            print(f"│    [{f['severity']}] {f.get('name','')} ({f.get('path','')})".rstrip())
+    print("└──────────────────────────────────────────────────────┘")
+
     # ── Summary ──
     print(f"\n┌─ Governance Health Summary ──────────────────────────┐")
     if all_issues == 0:
@@ -18054,11 +18123,429 @@ def _external_validation_hook_version(content):
     return match.group(1) if match else None
 
 
-def _external_validation_canonical_hook_text(hook_name):
-    hook_path = ROOT / "skills/software-project-governance/infra/hooks" / hook_name
+def _external_validation_canonical_hook_text(hook_name, root=None):
+    base = Path(root) if root is not None else ROOT
+    hook_path = base / "skills/software-project-governance/infra/hooks" / hook_name
     if not hook_path.is_file():
         return None
     return hook_path.read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n")
+
+
+# ── ArchGuard architecture-health stewardship (REQ-101 / FIX-152 / 0.58.0) ──────
+# Four self-contained check_* helpers. Advisory-only in 0.58.0
+# (gate_integration.fatal_on_error=false). Designed self-contained
+# (signature ``root=None``) so they are the first candidates to extract
+# in the 0.59.0+ per-domain split. See docs/requirements/archguard-design-0.58.0.md
+# and its §7 design-review appendix for the G6/G7/G8/G9 constraints honored here.
+
+ARCHGUARD_SCHEMA_REL = "skills/software-project-governance/core/architecture-health.json"
+ARCHGUARD_LEDGER_REL = "skills/software-project-governance/core/technical-debt-ledger.md"
+ARCHGUARD_HOOKS_REL = "skills/software-project-governance/infra/hooks"
+ARCHGUARD_DEFAULT_ROOT_RESIDUE = ("_fix_*", "_tmp_*", "debug_*", "scratch_*")
+
+
+def _archguard_load_schema(root=None):
+    """Load architecture-health.json; return (schema_dict, error_str_or_None)."""
+    root = Path(root) if root is not None else ROOT
+    schema_path = root / ARCHGUARD_SCHEMA_REL
+    if not schema_path.is_file():
+        return None, f"missing schema: {_display_path(schema_path, root)}"
+    try:
+        return json.loads(schema_path.read_text(encoding="utf-8")), None
+    except (ValueError, OSError) as exc:
+        return None, f"invalid schema {schema_path}: {exc}"
+
+
+def _archguard_severity(count, warn, error):
+    if error is not None and count >= error:
+        return "ERROR"
+    if warn is not None and count >= warn:
+        return "WARN"
+    return None
+
+
+def _archguard_excluded(rel_path, exclusions):
+    """True if rel_path matches any exclusion glob (fnmatch, supports ** segments)."""
+    posix = str(rel_path).replace("\\", "/")
+    for entry in exclusions or []:
+        pat = entry.get("path") if isinstance(entry, dict) else entry
+        if not pat:
+            continue
+        # Support a leading **/ by also matching the basename segment.
+        if fnmatch.fnmatch(posix, pat):
+            return True
+        if pat.startswith("**/"):
+            base = pat[3:]
+            if fnmatch.fnmatch(Path(posix).name, base):
+                return True
+            if fnmatch.fnmatch(posix, base):
+                return True
+        # segment-agnostic match: any path containing a segment matching the bare glob
+        bare = pat.replace("**/", "").replace("/**", "")
+        if bare and any(fnmatch.fnmatch(seg, bare) for seg in posix.split("/")):
+            return True
+    return False
+
+
+def _archguard_iter_code_files(root, extensions=(".py", ".js", ".ts")):
+    """Yield (rel_path, abs_path) for code files under root, skipping noise dirs."""
+    root = Path(root)
+    skip_dirs = {".git", "node_modules", "__pycache__", ".venv", "venv", ".pytest_cache"}
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in skip_dirs]
+        for name in filenames:
+            if name.endswith(extensions):
+                abs_path = Path(dirpath) / name
+                yield abs_path.relative_to(root), abs_path
+
+
+def check_architecture_health(root=None, schema=None):
+    """REQ-101 ArchGuard check 1: module/function/constant size + duplicate constants."""
+    root = Path(root) if root is not None else ROOT
+    if schema is None:
+        schema, err = _archguard_load_schema(root)
+        if schema is None:
+            return {"error": err, "findings": [], "summary": {"errors": 0, "warnings": 0}}
+    ms = schema.get("module_size", {})
+    fs = schema.get("function_size", {})
+    mc = schema.get("module_constants", {})
+    gate = schema.get("gate_integration", {})
+    exclusions = ms.get("exclusions", [])
+    ms_warn, ms_error = ms.get("warn_lines"), ms.get("error_lines")
+    fn_warn, fn_error = fs.get("warn_lines"), fs.get("error_lines")
+    c_warn, c_error = mc.get("warn_count"), mc.get("error_count")
+    detect_dup = bool(mc.get("detect_duplicates"))
+
+    findings = []
+    const_re = re.compile(r"^[A-Z][A-Z0-9_]+ *=")
+
+    for rel, abs_path in _archguard_iter_code_files(root):
+        try:
+            text = abs_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        lines = text.splitlines()
+        n_lines = len(lines)
+
+        # module size (only when not excluded)
+        if not _archguard_excluded(rel, exclusions):
+            sev = _archguard_severity(n_lines, ms_warn, ms_error)
+            if sev:
+                findings.append({
+                    "check": "module_size", "severity": sev,
+                    "path": str(rel), "lines": n_lines,
+                })
+
+        # Python-only: function size via ast + module constants + duplicate constants
+        if str(rel).endswith(".py"):
+            # function sizes
+            try:
+                tree = ast.parse(text)
+            except SyntaxError:
+                tree = None
+            if tree is not None:
+                for node in ast.walk(tree):
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.end_lineno:
+                        fn_lines = node.end_lineno - node.lineno + 1
+                        sev = _archguard_severity(fn_lines, fn_warn, fn_error)
+                        if sev:
+                            findings.append({
+                                "check": "function_size", "severity": sev,
+                                "path": str(rel), "name": node.name,
+                                "lines": fn_lines, "lineno": node.lineno,
+                            })
+            # module constants + duplicates
+            const_names = {}  # name -> first line
+            dup_names = {}    # name -> list of lines
+            for idx, line in enumerate(lines, start=1):
+                m = const_re.match(line)
+                if not m:
+                    continue
+                name = m.group(0).split("=")[0].strip()
+                if name not in const_names:
+                    const_names[name] = idx
+                else:
+                    dup_names.setdefault(name, [const_names[name]]).append(idx)
+            if const_names:
+                sev = _archguard_severity(len(const_names), c_warn, c_error)
+                if sev:
+                    findings.append({
+                        "check": "module_constants", "severity": sev,
+                        "path": str(rel), "count": len(const_names),
+                    })
+            if detect_dup:
+                for name, ln_list in dup_names.items():
+                    findings.append({
+                        "check": "duplicate_constant", "severity": "ERROR",
+                        "path": str(rel), "name": name, "lines": ln_list,
+                    })
+
+    errors = sum(1 for f in findings if f["severity"] == "ERROR")
+    warnings = sum(1 for f in findings if f["severity"] == "WARN")
+    return {
+        "findings": findings,
+        "summary": {"errors": errors, "warnings": warnings},
+        "schema_version": schema.get("version"),
+        "fatal_on_error": bool(gate.get("fatal_on_error", False)),
+    }
+
+
+def _archguard_normalized_lines(text, normalize_le=True, ignore_ws=True):
+    """Normalize text to a list of content lines (the CRLF/whitespace-safe comparator)."""
+    if normalize_le:
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+    out = []
+    for ln in text.split("\n"):
+        if ignore_ws:
+            compact = re.sub(r"\s+", "", ln)
+            if not compact:
+                continue
+            out.append(compact)
+        else:
+            if not ln.strip():
+                continue
+            out.append(ln)
+    return out
+
+
+def _archguard_source_projection_pairs(root):
+    """Return [(source_rel, source_abs, projection_abs), ...] for source/projection dup check.
+
+    Derives pairs from the e2e-test-project projection tree: for each infra/*.py under
+    the source skills tree, look for the mirrored file under the projection copy.
+    """
+    root = Path(root)
+    src_base = root / "skills/software-project-governance/infra"
+    proj_base = root / "project/e2e-test-project/skills/software-project-governance/infra"
+    pairs = []
+    if not src_base.is_dir() or not proj_base.is_dir():
+        return pairs
+    for py in sorted(src_base.glob("*.py")):
+        candidate = proj_base / py.name
+        if candidate.is_file():
+            pairs.append((py.relative_to(root), py, candidate))
+    return pairs
+
+
+def check_duplicate_code(root=None, schema=None):
+    """REQ-101 ArchGuard check 2: source/projection semantic duplicate.
+
+    MUST normalize line endings + ignore whitespace, otherwise CRLF(source) vs
+    LF(projection) yields a false ~100% diff.
+    """
+    root = Path(root) if root is not None else ROOT
+    if schema is None:
+        schema, err = _archguard_load_schema(root)
+        if schema is None:
+            return {"error": err, "findings": [], "pairs_checked": 0,
+                    "summary": {"errors": 0, "warnings": 0}}
+    dc = schema.get("duplicate_code", {})
+    warn_pct = dc.get("warn_pct", 60)
+    error_pct = dc.get("error_pct", 80)
+    normalize_le = bool(dc.get("normalize_line_endings", True))
+    ignore_ws = bool(dc.get("ignore_whitespace", True))
+
+    findings = []
+    pairs = _archguard_source_projection_pairs(root)
+    for rel, src_abs, proj_abs in pairs:
+        try:
+            src_text = src_abs.read_text(encoding="utf-8", errors="replace")
+            proj_text = proj_abs.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        src_lines = set(_archguard_normalized_lines(src_text, normalize_le, ignore_ws))
+        proj_lines = set(_archguard_normalized_lines(proj_text, normalize_le, ignore_ws))
+        denom = max(len(src_lines), len(proj_lines)) or 1
+        diff_count = len(src_lines.symmetric_difference(proj_lines))
+        duplicate_pct = round((1 - diff_count / denom) * 100, 1)
+        sev = None
+        if duplicate_pct >= error_pct:
+            sev = "ERROR"
+        elif duplicate_pct >= warn_pct:
+            sev = "WARN"
+        if sev:
+            findings.append({
+                "check": "duplicate_code", "severity": sev, "path": str(rel),
+                "source_lines": len(src_lines), "projection_lines": len(proj_lines),
+                "duplicate_pct": duplicate_pct,
+            })
+    errors = sum(1 for f in findings if f["severity"] == "ERROR")
+    warnings = sum(1 for f in findings if f["severity"] == "WARN")
+    return {
+        "findings": findings, "pairs_checked": len(pairs),
+        "summary": {"errors": errors, "warnings": warnings},
+    }
+
+
+def check_technical_debt(root=None, schema=None):
+    """REQ-101 ArchGuard check 3: root residue / release docs / hooks drift / ledger cross-validate.
+
+    G9: hooks-drift MUST reuse ``_external_validation_read_text`` and
+    ``_external_validation_canonical_hook_text`` — do not reimplement.
+    """
+    root = Path(root) if root is not None else ROOT
+    if schema is None:
+        schema, err = _archguard_load_schema(root)
+        if schema is None:
+            return {"error": err, "findings": [],
+                    "summary": {"errors": 0, "warnings": 0,
+                                "open_items": 0, "deferred_items": 0}}
+    td = schema.get("technical_debt", {})
+    findings = []
+
+    # 1. root-directory residue scripts
+    patterns = td.get("root_residue_patterns") or list(ARCHGUARD_DEFAULT_ROOT_RESIDUE)
+    for entry in sorted(os.listdir(root)) if os.path.isdir(root) else []:
+        for pat in patterns:
+            if fnmatch.fnmatch(entry, pat):
+                findings.append({
+                    "check": "root_residue", "severity": "WARN",
+                    "path": entry, "pattern": pat,
+                })
+                break
+
+    # 2. historical release docs version count
+    threshold = td.get("release_docs_archive_threshold_versions", 30)
+    release_dir = root / "docs/release"
+    versions = set()
+    if release_dir.is_dir():
+        for child in release_dir.iterdir():
+            # collect version-like tokens from filenames (e.g. 0.57.0)
+            m = re.search(r"(\d+\.\d+\.\d+)", child.name)
+            if m:
+                versions.add(m.group(1))
+    if len(versions) >= threshold:
+        findings.append({
+            "check": "release_docs_versions", "severity": "WARN",
+            "path": str(release_dir.relative_to(root)) if release_dir.is_dir() else "docs/release",
+            "versions": len(versions), "threshold": threshold,
+        })
+
+    # 3. hooks content drift (G9: reuse existing helpers)
+    if td.get("hooks_drift_detection", True):
+        hooks_src_dir = root / ARCHGUARD_HOOKS_REL
+        git_hooks_dir = root / ".git/hooks"
+        if hooks_src_dir.is_dir():
+            for hook_name in sorted(p.name for p in hooks_src_dir.iterdir() if p.is_file()):
+                installed = git_hooks_dir / hook_name
+                if not installed.is_file():
+                    findings.append({
+                        "check": "hooks_drift", "severity": "WARN",
+                        "hook": hook_name, "reason": "not installed in .git/hooks",
+                    })
+                    continue
+                installed_text, read_err = _external_validation_read_text(installed)
+                if installed_text is None:
+                    findings.append({
+                        "check": "hooks_drift", "severity": "WARN",
+                        "hook": hook_name, "reason": f"cannot read installed: {read_err}",
+                    })
+                    continue
+                installed_text = installed_text.replace("\r\n", "\n")
+                source_text = _external_validation_canonical_hook_text(hook_name, root=root)
+                if source_text is None:
+                    findings.append({
+                        "check": "hooks_drift", "severity": "WARN",
+                        "hook": hook_name, "reason": "canonical source missing",
+                    })
+                elif source_text != installed_text:
+                    findings.append({
+                        "check": "hooks_drift", "severity": "WARN",
+                        "hook": hook_name, "reason": "source != installed content",
+                    })
+
+    # 4. technical-debt ledger cross-validation
+    open_items = deferred_items = 0
+    if td.get("ledger_cross_validate", True):
+        ledger_path = root / ARCHGUARD_LEDGER_REL
+        if ledger_path.is_file():
+            try:
+                ledger_text = ledger_path.read_text(encoding="utf-8")
+                # Restrict to the 登记项 section so other tables are not parsed.
+                rows = _parse_markdown_table_rows(ledger_text, section_title="登记项")
+            except OSError:
+                rows = []
+            # _parse_markdown_table_rows returns list-of-cell-lists. The first surviving
+            # row is the header (e.g. 债务 ID | ... | 承载版本 | 状态 | ...).
+            header = rows[0] if rows else []
+            norm_header = [h.strip().replace(" ", "") for h in header]
+            idx_status = norm_header.index("状态") if "状态" in norm_header else None
+            idx_carry = norm_header.index("承载版本") if "承载版本" in norm_header else None
+            idx_id = norm_header.index("债务ID") if "债务ID" in norm_header else 0
+            for cells in rows[1:]:
+                def _cell(i):
+                    return cells[i].strip() if (i is not None and i < len(cells)) else ""
+                status = _cell(idx_status)
+                carrying = _cell(idx_carry)
+                tid = _cell(idx_id) or "?"
+                if status in ("OPEN", "IN_PROGRESS"):
+                    open_items += 1
+                    if not carrying or carrying in ("待评估", "TBD", "N/A"):
+                        findings.append({
+                            "check": "ledger_no_carrying_version", "severity": "WARN",
+                            "ledger_id": tid, "status": status,
+                            "reason": "OPEN/IN_PROGRESS without 承载版本",
+                        })
+                elif status == "DEFERRED":
+                    deferred_items += 1
+
+    errors = sum(1 for f in findings if f["severity"] == "ERROR")
+    warnings = sum(1 for f in findings if f["severity"] == "WARN")
+    return {
+        "findings": findings,
+        "summary": {"errors": errors, "warnings": warnings,
+                    "open_items": open_items, "deferred_items": deferred_items},
+    }
+
+
+def check_complexity(root=None, schema=None):
+    """REQ-101 ArchGuard check 4: complexity. 0.58.0 uses a line-based proxy.
+
+    AST cyclomatic complexity is deferred to 0.59.0+ (complexity.enabled=false).
+    The line-based proxy reuses function-length data from architecture-health.
+    """
+    root = Path(root) if root is not None else ROOT
+    if schema is None:
+        schema, err = _archguard_load_schema(root)
+        if schema is None:
+            return {"error": err, "findings": [],
+                    "summary": {"errors": 0, "warnings": 0},
+                    "enabled": False}
+    cx = schema.get("complexity", {})
+    enabled = bool(cx.get("enabled", False))
+    if not enabled:
+        return {
+            "enabled": False,
+            "findings": [],
+            "summary": {"errors": 0, "warnings": 0},
+            "note": cx.get("note") or "AST complexity deferred; 0.58.0 uses line-based proxy — see check-architecture-health",
+        }
+    # When enabled (future 0.59.0+), repurpose the architecture-health function-size
+    # data as a line-based proxy for cyclomatic complexity.
+    arch = check_architecture_health(root=root, schema=schema)
+    warn_n = cx.get("warn_cyclomatic", 15)
+    error_n = cx.get("error_cyclomatic", 30)
+    findings = []
+    for f in arch.get("findings", []):
+        if f.get("check") != "function_size":
+            continue
+        n = f.get("lines", 0)
+        sev = _archguard_severity(n, warn_n, error_n)
+        if sev:
+            findings.append({
+                "check": "complexity_proxy", "severity": sev,
+                "path": f.get("path"), "name": f.get("name"),
+                "lines": n, "lineno": f.get("lineno"),
+            })
+    errors = sum(1 for f in findings if f["severity"] == "ERROR")
+    warnings = sum(1 for f in findings if f["severity"] == "WARN")
+    return {
+        "enabled": True, "findings": findings,
+        "summary": {"errors": errors, "warnings": warnings},
+    }
+
+
+
 
 
 def _external_validation_hook_sha(content):
@@ -19290,6 +19777,125 @@ def cmd_check_mainstream_agent_loading(args):
     print()
 
 
+# ── ArchGuard command handlers (REQ-101 / FIX-152 / 0.58.0, advisory-only) ─────
+# 3-level PASS/WARN/ERROR model. G7: WARN/ERROR are advisory and do NOT fail the
+# command (exit 0) unless gate_integration.fatal_on_error is true AND there are
+# ERROR-level findings.
+
+def _archguard_print_findings(title, result, hint_key="check"):
+    """Render a 3-level ArchGuard result; return (errors, warnings)."""
+    s = result.get("summary", {}) or {}
+    errors = int(s.get("errors", 0))
+    warnings = int(s.get("warnings", 0))
+    for f in result.get("findings", [])[:25]:
+        sev = f.get("severity", "?")
+        extra = ""
+        for k in ("lines", "count", "duplicate_pct", "versions"):
+            if k in f:
+                extra = f" {k}={f[k]}"
+                break
+        loc = f.get("path") or f.get("hook") or f.get("ledger_id") or ""
+        detail = f.get("name") or f.get("reason") or f.get("pattern") or ""
+        print(f"  [{sev}] {f.get(hint_key, '?')}: {loc} {detail}{extra}".rstrip())
+    more = len(result.get("findings", [])) - 25
+    if more > 0:
+        print(f"    ... and {more} more")
+    return errors, warnings
+
+
+def cmd_check_architecture_health(args):
+    """Run REQ-101 ArchGuard module/function/constant-size guard (advisory in 0.58.0)."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    result = check_architecture_health()
+    print("\n=== Architecture Health Check (ArchGuard) ===")
+    if result.get("error"):
+        print(f"  [ERROR] {result['error']}")
+        if getattr(args, "fail_on_issues", False):
+            sys.exit(1)
+        print()
+        return
+    errors, warnings = _archguard_print_findings("Architecture Health", result)
+    fatal = bool(result.get("fatal_on_error"))
+    print(f"\n  Result: ISSUES FOUND — {errors} ERROR, {warnings} WARN"
+          + (" (advisory — does not block release)" if not fatal else ""))
+    if getattr(args, "fail_on_issues", False) and fatal and errors > 0:
+        sys.exit(1)
+    print()
+
+
+def cmd_check_duplicate_code(args):
+    """Run REQ-101 ArchGuard source/projection duplicate-code guard (advisory in 0.58.0)."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    result = check_duplicate_code()
+    print("\n=== Duplicate Code Check (ArchGuard) ===")
+    if result.get("error"):
+        print(f"  [ERROR] {result['error']}")
+        if getattr(args, "fail_on_issues", False):
+            sys.exit(1)
+        print()
+        return
+    errors, warnings = _archguard_print_findings("Duplicate Code", result)
+    print(f"\n  Pairs checked: {result.get('pairs_checked', 0)}")
+    print(f"  Result: ISSUES FOUND — {errors} ERROR, {warnings} WARN")
+    if getattr(args, "fail_on_issues", False) and errors > 0:
+        sys.exit(1)
+    print()
+
+
+def cmd_check_technical_debt(args):
+    """Run REQ-101 ArchGuard technical-debt guard (residue/docs/hooks-drift/ledger; advisory)."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    result = check_technical_debt()
+    print("\n=== Technical Debt Check (ArchGuard) ===")
+    if result.get("error"):
+        print(f"  [ERROR] {result['error']}")
+        if getattr(args, "fail_on_issues", False):
+            sys.exit(1)
+        print()
+        return
+    errors, warnings = _archguard_print_findings("Technical Debt", result)
+    s = result.get("summary", {}) or {}
+    print(f"\n  Ledger: {s.get('open_items', 0)} OPEN/IN_PROGRESS, {s.get('deferred_items', 0)} DEFERRED")
+    print(f"  Result: ISSUES FOUND — {errors} ERROR, {warnings} WARN")
+    if getattr(args, "fail_on_issues", False) and errors > 0:
+        sys.exit(1)
+    print()
+
+
+def cmd_check_complexity(args):
+    """Run REQ-101 ArchGuard complexity guard (line-based proxy in 0.58.0; advisory)."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    result = check_complexity()
+    print("\n=== Complexity Check (ArchGuard) ===")
+    if result.get("error"):
+        print(f"  [ERROR] {result['error']}")
+        if getattr(args, "fail_on_issues", False):
+            sys.exit(1)
+        print()
+        return
+    if not result.get("enabled", False):
+        print(f"  [INFO] complexity disabled — {result.get('note', 'line-based proxy; see check-architecture-health')}")
+        print()
+        return
+    errors, warnings = _archguard_print_findings("Complexity", result)
+    print(f"\n  Result: ISSUES FOUND — {errors} ERROR, {warnings} WARN")
+    if getattr(args, "fail_on_issues", False) and errors > 0:
+        sys.exit(1)
+    print()
+
+
 def cmd_check_readme_pack_guidance(args):
     """Run README first-run profile-to-pack guidance guard."""
     try:
@@ -20148,6 +20754,39 @@ def main():
     crpg_p.add_argument("--fail-on-issues", action="store_true",
                         help="Exit with non-zero code if README pack guidance is incomplete or overclaims")
 
+    # check-architecture-health (REQ-101 / FIX-152 / ArchGuard)
+    cah_p = subparsers.add_parser(
+        "check-architecture-health",
+        help="ArchGuard: module/function/constant-size + duplicate-constant guard (advisory in 0.58.0)",
+    )
+    cah_p.add_argument("--fail-on-issues", action="store_true",
+                       help="Exit non-zero only if gate_integration.fatal_on_error is true and ERRORs found")
+
+    # check-duplicate-code (REQ-101 / FIX-152 / ArchGuard)
+    cdc_p = subparsers.add_parser(
+        "check-duplicate-code",
+        help="ArchGuard: source/projection duplicate-code guard (advisory in 0.58.0)",
+    )
+    cdc_p.add_argument("--fail-on-issues", action="store_true",
+                       help="Exit non-zero only if gate_integration.fatal_on_error is true and ERRORs found")
+
+    # check-technical-debt (REQ-101 / FIX-152 / ArchGuard)
+    ctd_p = subparsers.add_parser(
+        "check-technical-debt",
+        help="ArchGuard: root residue / release docs / hooks-drift / ledger cross-validation (advisory)",
+    )
+    ctd_p.add_argument("--fail-on-issues", action="store_true",
+                       help="Exit non-zero only if gate_integration.fatal_on_error is true and ERRORs found")
+
+    # check-complexity (REQ-101 / FIX-152 / ArchGuard)
+    ccx_p = subparsers.add_parser(
+        "check-complexity",
+        help="ArchGuard: complexity guard (line-based proxy in 0.58.0; advisory)",
+    )
+    ccx_p.add_argument("--fail-on-issues", action="store_true",
+                       help="Exit non-zero only if gate_integration.fatal_on_error is true and ERRORs found")
+
+
     # check-governance-pack-status (FIX-111)
     cgps_p = subparsers.add_parser(
         "check-governance-pack-status",
@@ -20272,6 +20911,10 @@ def main():
         "check-official-submission-ecosystem": cmd_check_official_submission_ecosystem,
         "check-mainstream-agent-loading": cmd_check_mainstream_agent_loading,
         "check-readme-pack-guidance": cmd_check_readme_pack_guidance,
+        "check-architecture-health": cmd_check_architecture_health,
+        "check-duplicate-code": cmd_check_duplicate_code,
+        "check-technical-debt": cmd_check_technical_debt,
+        "check-complexity": cmd_check_complexity,
         "check-governance-pack-status": cmd_check_governance_pack_status,
         "check-product-success-contracts": cmd_check_product_success_contracts,
         "check-acceptance-contracts": cmd_check_acceptance_contracts,

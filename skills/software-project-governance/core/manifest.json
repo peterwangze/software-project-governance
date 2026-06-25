@@ -37,6 +37,14 @@
         "type": "file"
       },
       {
+        "path": "skills/software-project-governance/core/architecture-health.json",
+        "type": "file"
+      },
+      {
+        "path": "skills/software-project-governance/core/technical-debt-ledger.md",
+        "type": "file"
+      },
+      {
         "path": "skills/software-project-governance/core/templates/",
         "type": "dir"
       },
@@ -450,6 +458,17 @@
         "artifact_role": "dynamic-lifecycle-registry",
         "validation_commands": [
           "python skills/software-project-governance/infra/verify_workflow.py check-lifecycle-registry --fail-on-issues",
+          "python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues"
+        ]
+      },
+      {
+        "id": "architecture-health-budget",
+        "path": "skills/software-project-governance/core/architecture-health.json",
+        "type": "file",
+        "required": true,
+        "artifact_role": "architecture-health-budget",
+        "validation_commands": [
+          "python skills/software-project-governance/infra/verify_workflow.py check-architecture-health --fail-on-issues",
           "python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues"
         ]
       }

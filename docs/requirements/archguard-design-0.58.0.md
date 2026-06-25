@@ -5,7 +5,7 @@
 > **来源**: AUDIT-121 F6（架构腐化看护缺口根因）、DEC-083
 > **日期**: 2026-06-25
 > **性质**: 设计文档（治理记录范畴）。本文档定义 ArchGuard 的 check 项、阈值、schema、告警级别和实施约束；产品代码实现由 0.58.0 开发阶段 spawn Governance Developer 执行。
-> **数据基础**: 2026-06-25 Explore agent 在 commit `2e19dbf` 基线采集的真实校准数据（遵循 AUDIT-117 前提事实约束纪律）
+> **数据基础**: 2026-06-25 Explore agent 在 commit `2e19dbd` 基线采集的真实校准数据（遵循 AUDIT-117 前提事实约束纪律）
 
 ---
 
@@ -25,7 +25,7 @@
 
 ## 1. 阈值校准数据基线（事实）
 
-基于 2026-06-25 Explore agent 采集（commit `2e19dbf`）：
+基于 2026-06-25 Explore agent 采集（commit `2e19dbd`）：
 
 | 维度 | 实测值 | 含义 |
 | --- | --- | --- |
@@ -47,7 +47,7 @@
 - 【推测】拆分目标：单文件 <1,500 行（verify_workflow.py 拆分后各域模块应达此值）
 
 **函数复杂度**：现有最差 1,065 行。
-- ERROR：函数 ≥500 行（当前 2 个：cmd_check_governance 1065、_run_version_command 806）
+- ERROR：函数 ≥500 行（当前 4 个：cmd_check_governance 1065、_run_version_command 805、blocking_structural_issues 644、main 513）
 - WARN：函数 ≥200 行（当前 9 个触发）
 - 【推测】健康目标：函数 <100 行
 
@@ -283,7 +283,7 @@ RISK-039 关闭需要：
 
 ## 6. 证据索引
 
-阈值校准数据来源（2026-06-25 Explore agent 实测）：
+阈值校准数据来源（2026-06-25 Explore agent 实测，2026-06-25 设计复核 Explore agent 在 HEAD `7952311` 复验）：
 - 单文件行数：`find . -name "*.py" ... | xargs wc -l | sort -rn`
 - 函数行数：`grep -nE "^def |^class "` + 起止行计算
 - source/projection 重复：`diff -w`（normalize 空白后）语义差异 6586/20294 = 32.5%
@@ -292,4 +292,30 @@ RISK-039 关闭需要：
 
 ---
 
-*本文档为 REQ-101 / 0.58.0 ArchGuard 设计归档。实现阶段（0.58.0 开发）spawn Governance Developer 依据本文档编码，后置 Code Reviewer 审查。*
+## 7. 设计复核附录（2026-06-25，实现前独立只读复核）
+
+**复核方**：ZCode Explore sub-agent（独立于原作者，HEAD `7952311`）
+**结论**：**READY WITH MINOR GAPS**——校准数据在 HEAD 复验仍然成立（6 项中 4 项精确匹配、2 项 rounding 内一致），实现模式清晰且有先例可循（Check 28a~28n 块结构、CLI dispatch dict、`core/*.json` registry manifest 登记模式），§2.4 复杂度延后到 0.59.0+ 的 line-based proxy 在 0.58.0 可接受，§5"自包含模块设计以便后续抽离"经核对现有 `check_*` helper 签名确认可行。
+
+### 已修正（Must-fix，事实准确性）
+- **G1**：基线 commit hash `2e19dbf` → `2e19dbd`（原为笔误，全文 2 处已改）。
+- **G2**：§1 "函数 ≥500 行 = 2 个" 实测为 **4 个**（已补 `blocking_structural_issues:644`、`main:513`）。
+
+### 实现阶段 MUST 遵循的约束（交给 Governance Developer）
+- **G6**：新增的 `core/architecture-health.json` **MUST** 登记到 `core/manifest.json` 的 `canonical_product_artifacts.entries[]`（含 `artifact_role` + `validation_commands`），参照 `governance-packs.json` 先例。否则 `check-manifest-consistency` 与 Check 28b projection-sync 会把它标记为孤儿 artifact。设计 §5 item 2 "manifest 声明" 须落实为此具体段落。
+- **G7**：ArchGuard 引入 **3 级 PASS/WARN/ERROR** 模型，这是 net-new 能力——现有 `cmd_check_governance` 只有 `[PASS]/[FAIL]` + `all_issues` 计数，**不足以**承载 WARN/ERROR 区分。实现时须显式实现分级逻辑，并尊重 §3 `gate_integration.fatal_on_error:false`（0.58.0 advisory-only）。
+- **G8**：`core/technical-debt-ledger.md`（28q ledger cross-validation 读取对象）目前**未**在 manifest 中。建议登记为 `repo_only`，否则 `check-manifest-consistency` 可能误报。
+- **G9**：28q hooks-drift 检测应**复用** `verify_workflow.py:18096~18121` 已有的 `_external_validation_read_text` 与 hook 文本比较逻辑（当前服务于 `external-project-validation`），不要重新实现。
+
+### Nice-to-fix（非阻塞）
+- **G5**：§3 "类似 quality-budget" 类比不精确——实际无 `core/quality-budget.json` 声明式文件。准确的先例是 `governance-packs.json` / `capability-registry.json` / `lifecycle-registry.json`。
+- **G3/G4**：§1 ≥100 行函数数实测 45（非 46）；439 = 438 def + 1 class，措辞可澄清。均为计数边界差异，不影响阈值。
+
+### 已确认的 enablement（无问题）
+- `core/technical-debt-ledger.md` 存在且结构完备（11 项 TD-001~011），28q cross-validation 可直接读取 `状态` / `承载版本` 字段。
+- CLI 子命令注册为机械操作（`add_parser` + dispatch dict entry + `cmd_check_*` 函数）。
+- §2.4 complexity `enabled:false` + line-based proxy 是 0.58.0 安全默认，不阻塞实现。
+
+---
+
+*本文档为 REQ-101 / 0.58.0 ArchGuard 设计归档。实现阶段（0.58.0 开发）spawn Governance Developer 依据本文档 + 第 7 节实现约束编码，后置 Code Reviewer 审查。*

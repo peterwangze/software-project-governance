@@ -2,6 +2,38 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.58.0] - 2026-06-25
+
+### 0.58.0 - ArchGuard Architecture Health Stewardship (advisory-only)
+
+0.58.0 把 AUDIT-121 F6 架构腐化看护缺口从设计变为可运行产品能力——交付 **ArchGuard**：4 个可独立调用的架构健康 check 命令，让采用本工作流的大型项目在零外部依赖下持续守护架构健康。ArchGuard 守护自身：对 verify_workflow.py（约 2 万行 God Module）触发 module_size ERROR、对 PRODUCT_CODE_PATTERNS 重复定义触发 duplicate_constant ERROR。
+
+**advisory-only 边界**：0.58.0 `gate_integration.fatal_on_error=false`，ArchGuard 的 WARN/ERROR 告警但不阻断 release gate——先观测后收紧，未来版本可启用 fatal。这是 DEC-083 规划的"0.58.0 作为独立产品能力版本交付 ArchGuard，阈值保守默认不阻断现有 release gate，可复用于其他大型项目"。
+
+设计先行（REQ-101/DEC-084），实现前经独立只读复核（EVD-621 READY WITH MINOR GAPS），实现经事后 Explore 只读审查 APPROVED（REVIEW-FIX-152，DEC-085 授权降级 SoD）。约束合规：G6 manifest 双重登记、G7 advisory 不递增 all_issues、G8 ledger 登记、G9 hooks-drift 复用既有 helper（root-leak 已修复+回归测试）。
+
+### Added
+- **ArchGuard 4 check 命令**（`check-architecture-health` / `check-duplicate-code` / `check-technical-debt` / `check-complexity`，advisory-only）——模块/函数/常量大小阈值检测（AST）、source/projection 语义重复检测（normalize CRLF+忽略空白）、技术债巡检（游离脚本/release文档/hooks漂移/ledger交叉验证）、复杂度 line-based proxy
+- `skills/software-project-governance/core/architecture-health.json` — 声明式架构健康阈值预算 schema（module_size/function_size/module_constants/duplicate_code/complexity/technical_debt/gate_integration）
+- `skills/software-project-governance/infra/tests/test_architecture_health.py` — 14 个 unittest（覆盖 module/function/常量大小、重复常量、CRLF 归一化、空白忽略、ledger 交叉验证、hooks 漂移含 G9 root-isolation 回归、G7 advisory、真实 God Module 触发）
+- Check 28o~28r 接入 `cmd_check_governance`（3 级 PASS/WARN/ERROR，advisory 不阻断）
+- TOOL-043~046（TOOLS.md）
+
+### Changed
+- `skills/software-project-governance/infra/verify_workflow.py` 新增 4 个 self-contained `check_*` 函数 + 4 个 `cmd_check_*` handler + CLI subparser + dispatch dict（+~647 行）
+- `skills/software-project-governance/core/manifest.json` — G6 双重登记 architecture-health.json（product.entries + canonical_product_artifacts）+ G8 technical-debt-ledger.md 登记
+- 版本号全量同步 0.57.0→0.58.0（SKILL.md/plugin.json/marketplace.json/codex-plugin/manifest/hooks/REQUIRED_SNIPPETS/target fixture）
+
+### Known Issues (advisory, non-blocking)
+- **TD-012**：`check_duplicate_code` 用"归一化行集合对称差"而非设计 §2.2 的"行计数 diff"计算 duplicate_pct——重复样板行去重使数值偏高于 diff 校准基线。0.59.0+ 承载
+- **TD-013**：`check-architecture-health` 全仓库扫描含 `project/e2e-test-project/` projection 副本，导致 module_size/function_size 发现计数虚高（source + projection 双计）。0.59.0+ 承载
+
+### Boundaries
+- **不关闭** RISK-036（官方收录准备）/ RISK-037（动态生命周期）/ RISK-039（架构腐化看护——核心缓解 ArchGuard 已就绪，关闭需外部宿主项目验证）
+- **不声明** 1.0.0 production-ready / official approval / marketplace approval / universal runtime support
+- 0.58.0 ArchGuard 是 advisory-only（fatal_on_error=false），不阻断现有 release gate
+- DEC-085 降级 SoD 诚实标注：主 agent 直接实现 + 事后 Explore 只读审查（当前 harness 仅只读 Explore sub-agent），不如标准先审后合
+
 ## [0.57.0] - 2026-06-25
 
 ### 0.57.0 - Architecture Degradation Audit Archive

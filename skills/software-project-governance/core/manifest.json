@@ -69,6 +69,14 @@
         "type": "file"
       },
       {
+        "path": "skills/software-project-governance/infra/checks/__init__.py",
+        "type": "file"
+      },
+      {
+        "path": "skills/software-project-governance/infra/checks/manifest.py",
+        "type": "file"
+      },
+      {
         "path": "skills/software-project-governance/infra/verify-e2e.sh",
         "type": "file"
       },

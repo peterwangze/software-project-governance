@@ -2,6 +2,43 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.60.0] - 2026-06-26
+
+### 0.60.0 - verify_workflow.py Incremental Split Phase 2 (capability-registry domain)
+
+0.60.0 落地 DEC-083 路线图第 (3) 项：verify_workflow.py 渐进式按 check 域拆分的第二步。抽出 **capability-registry 域**（check_capability_registry + _capability_registry_text_values + cmd + 7 CAPABILITY_REGISTRY_* 常量，304 行）到新 `infra/checks/capability_registry.py` 模块，verify_workflow.py 退化为薄入口委托——20,516 → **20,321**（净减 **−195 行**）。两轮累计净减 **616 行**（20,937 → 20,321）。
+
+这是 ArchGuard（0.58.0 advisory）**连续第二次实战守护真实重构**：拆分后 capability_registry.py 零 ERROR/WARN，verify_workflow.py 净减——进一步证明 advisory 能力对真实重构有效（RISK-039 自验证证据增强）。与 Phase 1 manifest 域完美同构（registry schema 校验模式），方法论连续验证成功。
+
+设计先行（REQ-103/AUDIT-123，Explore 实测 4 候选域选 capability-registry），实现经 DEC-087 授权主 agent 直写（沿用 DEC-085/086）+ 事后 Explore 只读审查 APPROVED（REVIEW-FIX-154）。54 个 CLI 命令契约零变化。
+
+### Added
+- `skills/software-project-governance/infra/checks/capability_registry.py` — capability-registry 域迁入（check_capability_registry + _capability_registry_text_values + cmd_check_capability_registry + 7 CAPABILITY_REGISTRY_* 常量，304 行）
+
+### Changed
+- `skills/software-project-governance/infra/verify_workflow.py` — 删除迁出函数/常量定义（净减 195 行）、加 `from checks.capability_registry import ...` 薄入口委托（含常量 re-export 保测试兼容）、dispatch/argparse/governance-pack Check 28k 注册全保留
+- `skills/software-project-governance/core/manifest.json` — 登记 `infra/checks/capability_registry.py`（type:file）
+- 版本号全量同步 0.59.0→0.60.0（SKILL.md/plugin.json×4/marketplace.json/package.json/manifest.json/hooks×4 @version/REQUIRED_SNIPPETS×6/target fixture）
+
+### Design Decisions (D1~D5, REQ-103)
+- **D1** 7 个 CAPABILITY_REGISTRY_* 常量全迁 capability_registry.py（含死常量 CAPABILITY_REGISTRY_PATH 改纯字符串清理）
+- **D2** 通用 helper（`_is_valid_string_list` 21 处 / `_line_has_scoped_claim_negation` 18 处）留 verify_workflow.py
+- **D3** `_manifest_artifact_entries` 用延迟 import（设计原定顶层 import，实测引发循环，改函数内延迟）
+- **D4** `cmd_check_capability_registry` 迁移 capability_registry.py
+- **D5** 沿用 Phase 1 `_vw()` 延迟 import 模式（含 _VW_CACHE 缓存）
+
+### Known Issues (non-blocking)
+- 2 个 pytest（`test_cmd_status_outputs_stable_permission_mode_line` / `test_real_interruption_policy_passes`）因读取 `.governance/plan-tracker.md`（gitignored 实时状态）含 in-flight 任务而失败——预先存在的测试隔离缺陷，非本次重构回归，REL-046 任务关闭后自动修复
+- P2（不阻断）：延迟 import 在直接脚本运行时产生双模块实例（与 Phase 1 同，留 common 模块化时消除）
+
+### Boundaries
+- **只拆 capability-registry 域**——其它 check 域留 0.61.0~0.64.0（agent/runtime 成对、lifecycle-registry、governance-pack 等）
+- **不引入** src/pyproject.toml/ruff/mypy（F2 留 0.64.0）
+- **不关闭** RISK-039（拆分 Phase 2/6 非全部完成，且关闭需外部宿主验证）
+- **不关闭** RISK-036/RISK-037
+- **不声明** 1.0.0 production-ready / official approval / marketplace approval / universal runtime support
+- DEC-087 降级 SoD 诚实标注：主 agent 直接实现 + 事后 Explore 只读审查
+
 ## [0.59.0] - 2026-06-26
 
 ### 0.59.0 - verify_workflow.py Incremental Split Phase 1 (manifest domain)

@@ -2,6 +2,44 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.59.0] - 2026-06-26
+
+### 0.59.0 - verify_workflow.py Incremental Split Phase 1 (manifest domain)
+
+0.59.0 落地 DEC-083 路线图第 (3) 项：verify_workflow.py 渐进式按 check 域拆分的第一步。抽出 **manifest 域**（A 组 12 函数 ~401 行）到新 `infra/checks/manifest.py` 模块，verify_workflow.py 退化为薄入口委托——God Module 首次实质性缩减（20,937 → 20,516，净减 **−421 行**）。这是 ArchGuard（0.58.0 advisory）**首次实战守护真实重构**：拆分后 manifest.py 零 ERROR/WARN，verify_workflow.py 净减——证明 advisory 能力对真实重构有效（RISK-039 部分自验证证据）。
+
+设计先行（REQ-102/AUDIT-122，Explore 实测勘察定边界），实现经 DEC-086 授权主 agent 直写（沿用 DEC-085，当前 harness 仅只读 Explore sub-agent）+ 事后 Explore 只读审查 APPROVED（REVIEW-FIX-153）。54 个 CLI 命令契约零变化。
+
+### Added
+- `skills/software-project-governance/infra/checks/` — 新建 check 域子包（为 0.60.0~0.64.0 各域预留位置）
+- `skills/software-project-governance/infra/checks/__init__.py` — 包标记 + 用途 docstring
+- `skills/software-project-governance/infra/checks/manifest.py` — manifest 域 12 函数迁入（build_required_files_from_manifest / expand_manifest_to_canonical_set / _path_to_label / _manifest_product_file_entries / _manifest_artifact_entries / check_manifest_canonical_product_artifacts / check_manifest_cleanup_scope / _manifest_requires_product_artifact_guards / scan_actual_files / scan_manifest_visible_files / check_manifest_consistency / cmd_check_manifest_consistency），含 `_vw()` 延迟 import（带 _VW_CACHE 缓存）规避循环依赖
+
+### Changed
+- `skills/software-project-governance/infra/verify_workflow.py` — 删除 12 个迁出函数定义（净减 421 行）、加 `from checks.manifest import ...` 薄入口委托、dispatch/argparse/governance-pack 注册全保留、Check 24 REQUIRED_SNIPPETS 正则适配新结构锚点（`\n{2,}# ── Manifest`，未削弱守护）
+- `skills/software-project-governance/core/manifest.json` — 登记 `infra/checks/__init__.py` + `infra/checks/manifest.py`（type:file）
+- 版本号全量同步 0.58.0→0.59.0（SKILL.md/plugin.json×4/marketplace.json/package.json/manifest.json/hooks×4 @version/REQUIRED_SNIPPETS×6/target fixture SKILL.md + plan-tracker/snapshot）
+
+### Design Decisions (D1~D6, REQ-102)
+- **D1** `PLUGIN_SCOPE_DIRS` 留 verify_workflow.py（plugin-scope 域未拆，避免反向依赖）
+- **D2** `_manifest_artifact_entries` 迁 manifest.py，3 个 registry 域改 import 共享（跨域依赖显式化）
+- **D3** `REQUIRED_FILES`/`OPTIONAL_PROJECTION_FILES` 留 verify_workflow.py（files-check 域消费方语义）
+- **D4** Check 11 打印段留 cmd_verify（编排逻辑，不撕裂）
+- **D5** `cmd_check_manifest_consistency` 迁 manifest.py
+- **D6** 新建 `infra/checks/` 子包
+
+### Known Issues (non-blocking)
+- 2 个 pytest（`test_cmd_status_outputs_stable_permission_mode_line` / `test_real_interruption_policy_passes`）因读取 `.governance/plan-tracker.md`（gitignored 实时状态）含 in-flight 任务而失败——预先存在的测试隔离缺陷，非本次重构回归，REL-045 任务关闭后自动修复
+- P2（不阻断）：`_vw()` 延迟 import 在直接脚本运行时产生 verify_workflow 双模块实例（`__main__` + `verify_workflow`）——当前能跑通，留 0.60.0+ 抽 common 模块时改单向顶层 import 消除
+
+### Boundaries
+- **只拆 manifest 域**——其它 check 域（release/governance/agent/capability 等）留 0.60.0~0.64.0
+- **不引入** src/pyproject.toml/ruff/mypy 等现代工程基础设施（F2 留 0.64.0）
+- **不关闭** RISK-039（拆分 Phase 1/6 非全部完成，且关闭需 1 个外部宿主项目验证 ArchGuard）
+- **不关闭** RISK-036/RISK-037
+- **不声明** 1.0.0 production-ready / official approval / marketplace approval / universal runtime support
+- DEC-086 降级 SoD 诚实标注：主 agent 直接实现 + 事后 Explore 只读审查（当前 harness 仅只读 Explore sub-agent），不如标准先审后合
+
 ## [0.58.0] - 2026-06-25
 
 ### 0.58.0 - ArchGuard Architecture Health Stewardship (advisory-only)

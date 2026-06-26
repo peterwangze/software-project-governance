@@ -59,4 +59,4 @@ python skills/software-project-governance/infra/verify_workflow.py check-version
 
 ## 6. Boundaries (no-overclaim)
 
-No official approval. No marketplace approval. No universal/full runtime support. No external validation. Rollback is a local git operation; it does not constitute any external reliability claim. DEC-086 degraded SoD honestly noted.
+No official approval. No marketplace approval (zcode or otherwise). No universal/full runtime support. No external first-session pilot success. No external validation. No RISK-036 closure (RISK-036 remains open). No RISK-037 closure. No RISK-039 closure (Phase 1/6; closure needs external host validation). No 1.0.0 readiness / production-ready claim. Rollback is a local git operation; it does not constitute any external reliability claim. DEC-086 degraded SoD honestly noted.

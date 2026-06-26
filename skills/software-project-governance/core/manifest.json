@@ -77,6 +77,10 @@
         "type": "file"
       },
       {
+        "path": "skills/software-project-governance/infra/checks/capability_registry.py",
+        "type": "file"
+      },
+      {
         "path": "skills/software-project-governance/infra/verify-e2e.sh",
         "type": "file"
       },

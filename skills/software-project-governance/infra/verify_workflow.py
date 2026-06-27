@@ -364,33 +364,8 @@ PROJECTION_SNIPPETS = {
     ],
 }
 
-PROJECT_FACT_SNIPPETS = {
-    ROOT / ".governance/plan-tracker.md": [
-        "## 项目配置",
-        "standard",
-        "always-on",
-        "## Gate 状态跟踪",
-        "## 项目总览",
-        "## 当前活跃事项",
-        "## 版本规划",
-        "## 需求跟踪矩阵",
-        "## 变更控制",
-        "操作权限模式",
-        "passed-on-entry",
-        "G11",
-    ],
-    ROOT / ".governance/decision-log.md": [
-        "DEC-001",
-        "DEC-035",
-    ],
-    ROOT / ".governance/risk-log.md": [
-        "RISK-",
-    ],
-    ROOT / ".governance/evidence-log.md": [
-        "EVD-001",
-        "EVD-051",
-    ],
-}
+# PROJECT_FACT_SNIPPETS removed in 0.61.0 Step A (FIX-155a) — confirmed dead code
+# (zero references across skills/ tests/ project/, only its definition existed).
 
 WORKFLOW_SNIPPETS = {
     ROOT / "README.md": [

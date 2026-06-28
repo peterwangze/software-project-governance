@@ -14929,6 +14929,25 @@ def cmd_check_governance(args):
             print(f"│    [{f['severity']}] {f.get('name','')} ({f.get('path','')})".rstrip())
     print("└──────────────────────────────────────────────────────┘")
 
+    # ── 28s. Governance Data Size (FIX-160 / ArchGuard) ──
+    # Advisory: guards RISK-039 governance data bloat. Inherits
+    # gate_integration.fatal_on_error=false — does NOT increment all_issues.
+    print("\n┌─ Check 28s: Governance Data Size (FIX-160) ─────────┐")
+    gds = check_governance_data_size()
+    if gds.get("error"):
+        print(f"│  [SKIP] {gds['error']}")
+    elif not gds.get("enabled", False):
+        print(f"│  [INFO] disabled — {gds.get('note','')}")
+    else:
+        s = gds["summary"]
+        print(f"│  governance files: {s['errors']} ERROR, {s['warnings']} WARN")
+        for f in gds["findings"][:8]:
+            b = f.get("bytes", 0)
+            print(f"│    [{f['severity']}] {f.get('path','')} {b} bytes ({b/1024:.1f} KB)".rstrip())
+        if (s["errors"] or s["warnings"]):
+            print("│  (advisory — fatal_on_error=false; does not block release)")
+    print("└──────────────────────────────────────────────────────┘")
+
     # ── Summary ──
     print(f"\n┌─ Governance Health Summary ──────────────────────────┐")
     if all_issues == 0:
@@ -17964,6 +17983,57 @@ def check_complexity(root=None, schema=None):
     }
 
 
+def check_governance_data_size(root=None, schema=None):
+    """FIX-160: ArchGuard check 5 — governance data volume threshold.
+
+    Guards RISK-039 (governance data bloat) directly. Scans the governance
+    hot files (plan-tracker / evidence-log / decision-log / risk-log) declared
+    in architecture-health.json `governance_data_size.files` and emits a
+    WARN/ERROR finding when a file exceeds warn_bytes / error_bytes. The
+    error threshold (250KB) is set just below the 256KB agent single-read
+    limit so the warning fires before a governance file becomes unreadable.
+
+    Advisory by default (inherits gate_integration.fatal_on_error=false).
+    """
+    root = Path(root) if root is not None else ROOT
+    if schema is None:
+        schema, err = _archguard_load_schema(root)
+        if schema is None:
+            return {"error": err, "findings": [],
+                    "summary": {"errors": 0, "warnings": 0},
+                    "enabled": False}
+    gds = schema.get("governance_data_size", {})
+    enabled = bool(gds.get("enabled", True))
+    if not enabled:
+        return {
+            "enabled": False, "findings": [],
+            "summary": {"errors": 0, "warnings": 0},
+            "note": gds.get("note") or "governance_data_size disabled",
+        }
+    warn_bytes = gds.get("warn_bytes", 200000)
+    error_bytes = gds.get("error_bytes", 250000)
+    files = gds.get("files", [])
+    findings = []
+    for rel in files:
+        path = root / rel
+        if not path.exists():
+            continue
+        size = path.stat().st_size
+        sev = _archguard_severity(size, warn_bytes, error_bytes)
+        if sev:
+            findings.append({
+                "check": "governance_data_size", "severity": sev,
+                "path": rel, "bytes": size,
+                "reason": f"{size} bytes ({size/1024:.1f} KB) exceeds {sev.lower()}_bytes={warn_bytes if sev=='WARN' else error_bytes}",
+            })
+    errors = sum(1 for f in findings if f["severity"] == "ERROR")
+    warnings = sum(1 for f in findings if f["severity"] == "WARN")
+    return {
+        "enabled": True, "findings": findings,
+        "summary": {"errors": errors, "warnings": warnings},
+    }
+
+
 
 
 
@@ -19149,7 +19219,7 @@ def _archguard_print_findings(title, result, hint_key="check"):
     for f in result.get("findings", [])[:25]:
         sev = f.get("severity", "?")
         extra = ""
-        for k in ("lines", "count", "duplicate_pct", "versions"):
+        for k in ("lines", "count", "duplicate_pct", "versions", "bytes"):
             if k in f:
                 extra = f" {k}={f[k]}"
                 break
@@ -19250,6 +19320,35 @@ def cmd_check_complexity(args):
         return
     errors, warnings = _archguard_print_findings("Complexity", result)
     print(f"\n  Result: ISSUES FOUND — {errors} ERROR, {warnings} WARN")
+    if getattr(args, "fail_on_issues", False) and errors > 0:
+        sys.exit(1)
+    print()
+
+
+def cmd_check_governance_data_size(args):
+    """FIX-160: Run governance data volume threshold guard (advisory)."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    result = check_governance_data_size()
+    print("\n=== Governance Data Size Check (ArchGuard/FIX-160) ===")
+    if result.get("error"):
+        print(f"  [ERROR] {result['error']}")
+        if getattr(args, "fail_on_issues", False):
+            sys.exit(1)
+        print()
+        return
+    if not result.get("enabled", False):
+        print(f"  [INFO] governance_data_size disabled — {result.get('note', '')}")
+        print()
+        return
+    errors, warnings = _archguard_print_findings("GovernanceDataSize", result)
+    if errors or warnings:
+        print(f"\n  Result: ISSUES FOUND — {errors} ERROR, {warnings} WARN")
+        print("  (advisory — fatal_on_error=false; see architecture-health.json governance_data_size)")
+    else:
+        print("\n  Result: PASSED — all governance files within size budget")
     if getattr(args, "fail_on_issues", False) and errors > 0:
         sys.exit(1)
     print()
@@ -20145,6 +20244,14 @@ def main():
     ccx_p.add_argument("--fail-on-issues", action="store_true",
                        help="Exit non-zero only if gate_integration.fatal_on_error is true and ERRORs found")
 
+    # check-governance-data-size (FIX-160 / ArchGuard)
+    gds_p = subparsers.add_parser(
+        "check-governance-data-size",
+        help="ArchGuard: governance data volume threshold (FIX-160; advisory)",
+    )
+    gds_p.add_argument("--fail-on-issues", action="store_true",
+                       help="Exit non-zero only if gate_integration.fatal_on_error is true and ERRORs found")
+
 
     # check-governance-pack-status (FIX-111)
     cgps_p = subparsers.add_parser(
@@ -20274,6 +20381,7 @@ def main():
         "check-duplicate-code": cmd_check_duplicate_code,
         "check-technical-debt": cmd_check_technical_debt,
         "check-complexity": cmd_check_complexity,
+        "check-governance-data-size": cmd_check_governance_data_size,
         "check-governance-pack-status": cmd_check_governance_pack_status,
         "check-product-success-contracts": cmd_check_product_success_contracts,
         "check-acceptance-contracts": cmd_check_acceptance_contracts,

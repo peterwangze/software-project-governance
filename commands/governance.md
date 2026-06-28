@@ -370,6 +370,7 @@ Web console 是可选的本地伴随状态面板，也是用户手动 `/governan
 | 过期风险 | Check 2 + Check 8 |
 | 过期任务 deadline | Check 9 |
 | Commit 无 task ID | Check 7 |
+| **归档失效（FIX-159/160）** | Check 28s `check-governance-data-size`：plan-tracker/evidence-log/decision-log/risk-log 超 200KB(WARN)/250KB(ERROR) 但 `archive.py migrate --auto --dry-run` 报无可归档 = 异常（膨胀未被归档守护）|
 
 ### Step E2: 展示诊断面板
 

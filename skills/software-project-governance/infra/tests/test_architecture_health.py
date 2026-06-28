@@ -36,6 +36,9 @@ SCHEMA_JSON = """{
   "technical_debt": {"root_residue_patterns": ["_fix_*", "_tmp_*", "debug_*", "scratch_*"],
     "release_docs_archive_threshold_versions": 30,
     "hooks_drift_detection": true, "ledger_cross_validate": true},
+  "governance_data_size": {"enabled": true,
+    "files": [".governance/plan-tracker.md", ".governance/evidence-log.md"],
+    "warn_bytes": 200000, "error_bytes": 250000, "note": "FIX-160 test"},
   "gate_integration": {"fatal_on_error": false, "note": "advisory"}
 }
 """
@@ -269,6 +272,68 @@ class RealCodebaseIntegrationTest(unittest.TestCase):
                     and "e2e-test-project" not in f.get("path", "")]
         self.assertTrue(vw_finds, "ArchGuard must flag the real verify_workflow.py module size")
         self.assertEqual(vw_finds[0]["severity"], "ERROR")
+
+
+class GovernanceDataSizeTest(unittest.TestCase):
+    """FIX-160: governance data volume threshold check."""
+
+    def test_error_when_file_exceeds_error_bytes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _make_repo(tmp)
+            gov = root / ".governance"
+            gov.mkdir(parents=True, exist_ok=True)
+            # 260KB file > error_bytes 250000
+            (gov / "plan-tracker.md").write_text("x" * 260000, encoding="utf-8")
+            result = vw.check_governance_data_size(root=root)
+            finds = [f for f in result["findings"] if f["check"] == "governance_data_size"]
+            self.assertTrue(any(f["severity"] == "ERROR" for f in finds))
+            self.assertEqual(result["summary"]["errors"], 1)
+
+    def test_warn_when_file_between_warn_and_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _make_repo(tmp)
+            gov = root / ".governance"
+            gov.mkdir(parents=True, exist_ok=True)
+            # 220KB: > warn 200000 but < error 250000
+            (gov / "plan-tracker.md").write_text("x" * 220000, encoding="utf-8")
+            result = vw.check_governance_data_size(root=root)
+            finds = [f for f in result["findings"] if f["check"] == "governance_data_size"]
+            self.assertTrue(any(f["severity"] == "WARN" for f in finds))
+            self.assertEqual(result["summary"]["errors"], 0)
+            self.assertEqual(result["summary"]["warnings"], 1)
+
+    def test_pass_when_file_under_warn_bytes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _make_repo(tmp)
+            gov = root / ".governance"
+            gov.mkdir(parents=True, exist_ok=True)
+            # 100KB < warn 200000
+            (gov / "plan-tracker.md").write_text("x" * 100000, encoding="utf-8")
+            result = vw.check_governance_data_size(root=root)
+            self.assertEqual(result["summary"]["errors"], 0)
+            self.assertEqual(result["summary"]["warnings"], 0)
+            self.assertEqual(result["findings"], [])
+
+    def test_schema_missing_returns_error_not_crash(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _make_repo(tmp)
+            # Corrupt schema: remove governance_data_size key by writing minimal schema
+            (root / "skills/software-project-governance/core/architecture-health.json").write_text(
+                '{"version":"1.0","gate_integration":{"fatal_on_error":false}}', encoding="utf-8")
+            result = vw.check_governance_data_size(root=root)
+            # No governance_data_size section → defaults empty → enabled=True, no findings
+            self.assertEqual(result["summary"]["errors"], 0)
+
+    def test_disabled_returns_note(self):
+        schema = {
+            "governance_data_size": {"enabled": False, "note": "off"},
+            "gate_integration": {"fatal_on_error": False},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _make_repo(tmp)
+            result = vw.check_governance_data_size(root=root, schema=schema)
+            self.assertFalse(result["enabled"])
+            self.assertEqual(result["findings"], [])
 
 
 if __name__ == "__main__":

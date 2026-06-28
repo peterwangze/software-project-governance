@@ -147,6 +147,12 @@ def _find_version_sections(content):
             # The format is "|" followed by hyphens (optional colons) separated by "|"
             if stripped.startswith("|") and re.match(r"^\|[\s\-:|\t]+\|$", stripped):
                 current_section["separator_line"] = i
+                # FIX-158: capture the header row (line before separator) so we
+                # can locate the 状态 column dynamically (not hardcoded to col 10).
+                if i > 0 and current_section["header_line"] is None:
+                    prev = lines[i - 1].strip()
+                    if prev.startswith("|"):
+                        current_section["header_line"] = lines[i - 1]
                 continue
             if stripped.startswith("|") and current_section["separator_line"] is not None:
                 # This is a table row - check if it's a task row
@@ -176,6 +182,7 @@ def _find_version_sections(content):
             header_seen = False
             table_started = False
             sample_tasks = []
+            sample_header_line = None  # FIX-158: capture header for status column
 
             for j in range(i + 1, len(lines)):
                 sl = lines[j].strip()
@@ -188,11 +195,13 @@ def _find_version_sections(content):
                 if sl.startswith('### '):
                     header_seen = False
                     table_started = False
+                    sample_header_line = None
                     continue
 
                 if not table_started:
                     if sl.startswith('|') and 'ID' in sl and '状态' in sl:
                         header_seen = True
+                        sample_header_line = lines[j]  # FIX-158: capture header row
                         continue
                     if header_seen and sl.startswith('|') and '---' in sl:
                         table_started = True
@@ -201,7 +210,10 @@ def _find_version_sections(content):
 
                 if table_started:
                     if not sl.startswith('|'):
-                        # End of current sub-table, keep scanning for next sub-table
+                        # End of current sub-table, keep scanning for next sub-table.
+                        # FIX-158: do NOT reset sample_header_line here — the
+                        # captured header is still needed for status parsing of
+                        # already-collected tasks.
                         table_started = False
                         header_seen = False
                         continue
@@ -232,7 +244,7 @@ def _find_version_sections(content):
                     "end_line": i,
                     "task_lines": sample_tasks,
                     "table_started": True,
-                    "header_line": None,
+                    "header_line": sample_header_line,  # FIX-158
                     "separator_line": None,
                     "sample_table": True,
                 })
@@ -241,35 +253,166 @@ def _find_version_sections(content):
     return sections, lines
 
 
-def _parse_task_status(line):
-    """Extract status from a task table row. Status is at the 10th column (index 10).
+def _find_status_column(header_line):
+    """FIX-158: find the column index of the 状态 (status) cell in a table header.
+
+    Returns the 0-based index among data cells, or None if not found.
+    Handles all three table layouts:
+      - 7-col priority table: '| 优先级 | ID | ... | 状态 |' → status last
+      - 10-col version section: '| 任务ID | 描述 | ... | 状态 |' → col 9
+      - 20-col sample table: '| ID | 阶段 | ... | 状态 | ... |' → col 9
+    """
+    if not header_line or not header_line.strip().startswith("|"):
+        return None
+    parts = [p.strip() for p in header_line.split("|")]
+    data_cells = parts[1:-1] if len(parts) >= 2 else parts
+    for idx, cell in enumerate(data_cells):
+        if cell == "状态":
+            return idx
+    return None
+
+
+def _parse_task_status(line, status_col=None):
+    """Extract status from a task table row.
+
+    FIX-158: status column is no longer hardcoded to parts[10]. Real plan-tracker
+    uses a 7-column table (| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |)
+    where status is the last data column. Legacy version-section tables use a
+    10-column format and the 20-column sample table puts 状态 in column 10.
+
+    Args:
+        line: the markdown table row
+        status_col: optional explicit column index (0-based among data cells).
+                    If None, defaults to the last data column (safe for 7-col
+                    priority tables; callers that know the table is 10/20-col
+                    should pass status_col explicitly or use _find_status_column).
 
     Strips leading/trailing emoji, symbols, spaces, and format characters
     to handle patterns like "✅ 已完成", "⏳ 进行中", "🚧 阻塞中",
     "已完成 ✅". Preserves all text characters (CJK, Latin, Cyrillic, etc).
     """
     parts = [p.strip() for p in line.split("|")]
-    if len(parts) >= 11:
-        status = parts[10]
-        # Strip leading emoji/symbol/space/format characters only
-        # (not all non-CJK — preserve Latin/Cyrillic/etc text)
-        while status:
-            cat = unicodedata.category(status[0])
-            # So=Symbol_Other (emoji, etc), Sk=Modifier_Symbol, Sc=Currency_Symbol,
-            # Sm=Math_Symbol, Zs=Space_Separator, Cf=Format
-            if cat in ('So', 'Sk', 'Sc', 'Sm', 'Zs', 'Cf'):
-                status = status[1:].strip()
-            else:
-                break
-        # Also strip trailing emoji/symbols
-        while status:
-            cat = unicodedata.category(status[-1])
-            if cat in ('So', 'Sk', 'Sc', 'Sm', 'Zs', 'Cf'):
-                status = status[:-1].strip()
-            else:
-                break
-        return status
-    return None
+    # parts[0] and parts[-1] are empty (leading/trailing |). Data cells are parts[1:-1].
+    data_parts = parts[1:-1] if len(parts) >= 2 else parts
+    if len(data_parts) < 2:
+        return None
+
+    if status_col is None:
+        # Default: last data column (7-col priority table puts status last)
+        status = data_parts[-1]
+    elif status_col < len(data_parts):
+        status = data_parts[status_col]
+    else:
+        # Fallback to last column if requested col out of range
+        status = data_parts[-1]
+    # Strip leading emoji/symbol/space/format characters only
+    # (not all non-CJK — preserve Latin/Cyrillic/etc text)
+    while status:
+        cat = unicodedata.category(status[0])
+        # So=Symbol_Other (emoji, etc), Sk=Modifier_Symbol, Sc=Currency_Symbol,
+        # Sm=Math_Symbol, Zs=Space_Separator, Cf=Format
+        if cat in ('So', 'Sk', 'Sc', 'Sm', 'Zs', 'Cf'):
+            status = status[1:].strip()
+        else:
+            break
+    # Also strip trailing emoji/symbols
+    while status:
+        cat = unicodedata.category(status[-1])
+        if cat in ('So', 'Sk', 'Sc', 'Sm', 'Zs', 'Cf'):
+            status = status[:-1].strip()
+        else:
+            break
+    return status
+
+
+def _task_status_is_archivable(status):
+    """FIX-158: determine whether a task status means the task is completed/archivable.
+
+    Real plan-tracker uses many ✅-variants beyond strict "已完成":
+    已发布, 保守闭环, 完成候选, 发布候选完成, 已交付, 调查完成, 诊断完成,
+    设计完成, 实现完成, 发布完成, 已撤回/失效, 调研归档, 审视归档, etc.
+    All of these indicate the task is closed and can be archived.
+    Open states (进行中, 待启动, 停滞, 阻塞, 待) must NOT be archived.
+    """
+    if not status:
+        return False
+    # Open/pending markers — never archive
+    open_markers = ("进行中", "待启动", "停滞", "阻塞", "待决", "待定", "未完成", "TO_BE")
+    if any(m in status for m in open_markers):
+        return False
+    # Closed/delivered markers — archivable
+    closed_markers = (
+        "✅", "已完成", "已交付", "已发布", "保守闭环", "完成候选",
+        "发布候选完成", "调查完成", "诊断完成", "设计完成", "实现完成",
+        "发布完成", "已撤回", "失效", "调研归档", "审视归档", "归档",
+    )
+    return any(m in status for m in closed_markers)
+
+
+def _parse_priority_table_tasks(content):
+    """FIX-158: parse the '### 优先级一览' / '### 最近完成' priority tables.
+
+    Real plan-tracker stores ALL tasks in non-version sections like
+    '### 优先级一览' with a 7-column format:
+        | 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |
+        | **P0** | FIX-084 | ... | ... | 0.38.0 | ... | ✅ 已完成 |
+    ID is in column 2 (index 1), target version in column 5 (index 4),
+    status in the last column. This format was invisible to the original
+    archive engine (which required ID in column 1 and version section headers).
+
+    Returns list of (line_index, original_line, task_id, target_version, status).
+    """
+    lines = content.split("\n")
+    tasks = []
+    # Scan for priority-table-like sections: the real plan-tracker 7-col format
+    # '| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |' where 优先级
+    # is the FIRST cell and ID is the SECOND cell. We match this specific layout
+    # (not the legacy 10-col '| 任务ID | 描述 | 优先级 | ... |' where 优先级 is
+    # in the middle) to avoid double-counting version-section tasks.
+    in_priority_table = False
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        # Detect priority table header: first data cell is 优先级, second is ID
+        if stripped.startswith("|"):
+            cells = [c.strip() for c in stripped.split("|")]
+            data_cells = cells[1:-1] if len(cells) >= 2 else cells
+            if (len(data_cells) >= 2
+                    and data_cells[0] == "优先级"
+                    and data_cells[1] == "ID"):
+                in_priority_table = True
+                continue
+        # Reset on section heading or non-table line
+        if stripped.startswith("###") or stripped.startswith("##"):
+            in_priority_table = False
+            continue
+        if not in_priority_table:
+            continue
+        # Skip separator row
+        if re.match(r"^\|[\s\-:|\t]+\|$", stripped):
+            continue
+        if not stripped.startswith("|"):
+            in_priority_table = False
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        data_parts = parts[1:-1] if len(parts) >= 2 else parts
+        # Need at least: priority, ID, ... , status (7 cols typical)
+        if len(data_parts) < 3:
+            continue
+        # ID is in column 2 (data_parts[1]); strip markdown bold
+        raw_id = data_parts[1]
+        task_id = re.sub(r"[`*]", "", raw_id).strip()
+        if not re.match(r"^[A-Z]+-\d+$", task_id):
+            continue
+        # Target version in column 5 (data_parts[4]) if present
+        target_version = ""
+        if len(data_parts) >= 5:
+            target_version = re.sub(r"[`*]", "", data_parts[4]).strip()
+        # Status is last data column
+        status = data_parts[-1]
+        tasks.append((i, line, task_id, target_version, status))
+    return tasks
+
+
 
 
 # ── Archive File Management ────────────────────────────────────────
@@ -442,11 +585,14 @@ def migrate_by_version(version_start, version_end, dry_run=False, migrate_eviden
     archive_body_lines = []
 
     for section in sections:
+        # FIX-158: locate 状态 column from this section's header row (dynamic,
+        # not hardcoded). Falls back to last column if header not captured.
+        sec_status_col = _find_status_column(section.get("header_line") or "")
         if _version_in_range(section["version"], version_start, version_end):
             # Check each task in this section
             for line_idx, line, task_id in section["task_lines"]:
-                status = _parse_task_status(line)
-                if status == "已完成":
+                status = _parse_task_status(line, status_col=sec_status_col)
+                if _task_status_is_archivable(status):
                     if task_id in already_archived_tasks:
                         continue
                     archived_task_lines.append((line_idx, line, task_id, section["version"]))
@@ -458,6 +604,28 @@ def migrate_by_version(version_start, version_end, dry_run=False, migrate_eviden
             # Tasks in non-matching sections remain in hot file
             for _line_idx, _line, task_id in section["task_lines"]:
                 result["tasks_remaining"] += 1
+
+    # FIX-158: Also scan the priority table (### 优先级一览) which holds ALL tasks
+    # in real plan-tracker, grouped by the row's "目标版本" column rather than by
+    # version section headers. This makes the archive engine see tasks that were
+    # previously invisible (the root cause of AUDIT-125 "无可归档数据").
+    priority_tasks = _parse_priority_table_tasks(content)
+    for line_idx, line, task_id, target_version, status in priority_tasks:
+        if task_id in already_archived_tasks or task_id in archived_tasks:
+            continue
+        # Only consider tasks whose target version is in range (matching the
+        # version-section behavior). Out-of-range tasks are left alone and not
+        # counted as remaining (they belong to other version ranges).
+        if not target_version:
+            continue
+        if not _version_in_range(target_version, version_start, version_end):
+            continue
+        if not _task_status_is_archivable(status):
+            result["tasks_remaining"] += 1
+            continue
+        archived_task_lines.append((line_idx, line, task_id, target_version))
+        archived_tasks.add(task_id)
+        archive_body_lines.append((target_version, line))
 
     result["tasks_archived"] = len(archived_tasks)
 
@@ -630,11 +798,34 @@ def _extract_tasks_from_archive_file(filepath):
 
         # Parse task table rows
         stripped = line.strip()
+        # FIX-158: support two table formats:
+        #   (a) legacy 10-col with ID in column 1: "| TASKID-NNN | desc | ..."
+        #   (b) 7-col priority table with ID in column 2: "| **P0** | TASKID-NNN | ..."
+        # Try col-1 first (legacy), then col-2 (priority table).
         m = re.match(r"\|\s*([A-Z]+-\d+)\s*\|", stripped)
+        col_offset = 0
+        if not m:
+            m = re.match(r"\|\s*\*{0,2}[Pp][0-9]\*{0,2}\s*\|\s*([A-Z]+-\d+)\s*\|", stripped)
+            col_offset = 1  # status column shifts by 1 when ID is in col 2
         if m:
             task_id = m.group(1)
-            status = _parse_task_status(stripped)
-            results.append((task_id, status, current_version or "unknown"))
+            # For the 7-col format, status is the last data column; for 10-col
+            # legacy it was parts[10]. _parse_task_status defaults to last column
+            # which works for both 7-col archive rows. Pass explicit col only if
+            # we detect the legacy 10-col layout (>= 10 data cells).
+            parts = [p.strip() for p in stripped.split("|")]
+            data_cells = parts[1:-1] if len(parts) >= 2 else parts
+            if len(data_cells) >= 10:
+                status = _parse_task_status(stripped, status_col=9)
+            else:
+                status = _parse_task_status(stripped)
+            # version may be in the 目标版本 column for 7-col format
+            version = current_version or "unknown"
+            if col_offset and len(data_cells) >= 5:
+                tv = re.sub(r"[`*]", "", data_cells[4]).strip()
+                if re.match(r"^\d+\.\d+\.\d+$", tv):
+                    version = tv
+            results.append((task_id, status, version))
 
     return results
 
@@ -1358,10 +1549,12 @@ def analyze_auto_archive_candidates():
     pre_check = migrate_by_version(version_start, version_end, dry_run=True)
     result["tasks_archived"] = pre_check.get("tasks_archived", 0)
 
-    if result["tasks_archived"] == 0:
-        result["skipped"] = True
-        result["reason"] = f"归档范围 v{version_start}~v{version_end} 内无可归档数据"
-        return result
+    # FIX-158: do NOT early-return when tasks_archived==0. The original code
+    # returned here, which made release_forced / fallback_90d dead code
+    # (AUDIT-125 root cause #2). Triggers must be evaluated regardless of
+    # task count, because release_forced depends only on index_exists and
+    # fallback_90d depends only on dates. We record a note instead of skipping.
+    no_archivable_tasks = result["tasks_archived"] == 0
 
     if (
         not result["index_exists"]
@@ -1389,6 +1582,14 @@ def analyze_auto_archive_candidates():
         result["reason"] = (
             "归档触发条件未满足"
             f"（tasks={result['tasks_archived']}, plan={result['plan_tracker_size']} bytes）"
+        )
+    elif no_archivable_tasks:
+        # Triggers fire but there's nothing to archive (e.g. all tasks already
+        # archived, or parsing found 0). Report honestly rather than silently skip.
+        result["skipped"] = True
+        result["reason"] = (
+            f"归档范围 v{version_start}~v{version_end} 触发器满足（{', '.join(result['triggers'])}）"
+            "但无可归档数据——可能已全部归档或格式未被识别"
         )
     return result
 

@@ -2054,10 +2054,110 @@ Content after sample table.
         self.assertIn("TASK-004", task_ids)
         self.assertIn("TASK-005", task_ids)
 
-        # Verify completed count
+        # Verify completed count (FIX-158: status column now dynamic via header)
+        status_col = archive._find_status_column(sample.get("header_line") or "")
         completed = sum(1 for _, line, _ in sample["task_lines"]
-                       if archive._parse_task_status(line) == "已完成")
+                       if archive._parse_task_status(line, status_col=status_col) == "已完成")
         self.assertEqual(completed, 4, "TASK-001,002,003,005 completed; TASK-004 in progress")
+
+
+class TestPriorityTableArchive(unittest.TestCase):
+    """FIX-158: tests for the 7-column priority table format (ID in col 2,
+    target version in col 5, status last) and the dynamic status-column
+    detection that fixed AUDIT-125 '无可归档数据'."""
+
+    def setUp(self):
+        import archive  # noqa: F401  (module-level sys.path injection applies)
+        self.archive = archive
+
+    def test_find_status_column_priority_table(self):
+        """7-col priority table: 状态 is the last column (index 6)."""
+        header = "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |"
+        self.assertEqual(self.archive._find_status_column(header), 6)
+
+    def test_find_status_column_legacy_10col(self):
+        """Legacy 10-col version-section table: 状态 at index 9."""
+        header = "| 任务ID | 描述 | 优先级 | 依赖 | 目标版本 | 负责人 | 审查人 | 审查类型 | 闭环路径 | 状态 |"
+        self.assertEqual(self.archive._find_status_column(header), 9)
+
+    def test_find_status_column_sample_20col(self):
+        """20-col sample table: 状态 at index 9."""
+        header = "| ID | 阶段 | 任务项 | 目标/预期结果 | 输入 | 输出 | Owner (DRI) | 协同角色 | Escalation | 状态 | 优先级 | 计划开始 | 计划完成 | 实际完成 | Gate | 验收标准 | 证据 | 风险/偏差 | 纠偏动作 | 备注 |"
+        self.assertEqual(self.archive._find_status_column(header), 9)
+
+    def test_find_status_column_none_cases(self):
+        """None header, empty, non-table, and no-状态 header all return None."""
+        self.assertIsNone(self.archive._find_status_column(None))
+        self.assertIsNone(self.archive._find_status_column(""))
+        self.assertIsNone(self.archive._find_status_column("not a table"))
+        self.assertIsNone(self.archive._find_status_column("| A | B | C |"))
+
+    def test_parse_priority_table_tasks_7col(self):
+        """Parse the real 7-col priority table: ID in col 2, version in col 5."""
+        content = "\n".join([
+            "## 当前活跃事项",
+            "",
+            "### 优先级一览",
+            "",
+            "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+            "|--------|----|------|------|---------|---------|------|",
+            "| **P0** | FIX-084 | Active task | — | 0.38.0 | TBD | ✅ 已完成 |",
+            "| **P1** | FIX-085 | Pending task | FIX-084 | 0.38.0 | TBD | ⏳ 进行中 |",
+            "| **P0** | REL-013 | Release | FIX-084 | 0.38.0 | TBD | ✅ 已发布 |",
+            "",
+            "### 1.0.0 依赖链",
+        ])
+        tasks = self.archive._parse_priority_table_tasks(content)
+        self.assertEqual(len(tasks), 3)
+        ids = [t[2] for t in tasks]
+        self.assertIn("FIX-084", ids)
+        self.assertIn("FIX-085", ids)
+        self.assertIn("REL-013", ids)
+        # Version classification from col 5
+        fix084 = next(t for t in tasks if t[2] == "FIX-084")
+        self.assertEqual(fix084[3], "0.38.0")
+        self.assertEqual(fix084[4], "✅ 已完成")
+
+    def test_parse_priority_table_tasks_ignores_legacy_10col(self):
+        """Must NOT pick up the legacy 10-col '| 任务ID | 描述 | 优先级 |...' format
+        (where 优先级 is in the middle, not the first cell)."""
+        content = "\n".join([
+            "### v0.11.0",
+            "| 任务ID | 描述 | 优先级 | 依赖 | 目标版本 | 负责人 | 审查人 | 审查类型 | 闭环路径 | 状态 |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| FIX-001 | desc | P1 | — | 1.0.0 | 阿速 | — | Reviewer | TBD | 已完成 |",
+        ])
+        tasks = self.archive._parse_priority_table_tasks(content)
+        self.assertEqual(len(tasks), 0, "Legacy 10-col table must not be parsed as priority table")
+
+    def test_task_status_is_archivable_variants(self):
+        """Closed/delivered ✅-variants are archivable; open/pending are not."""
+        archivable = [
+            "✅ 已完成", "✅ 已发布", "✅ 保守闭环 / 未满足 full PASS",
+            "✅ 完成候选", "✅ 发布候选完成", "已交付", "调查完成",
+            "诊断完成", "✅ 已撤回/失效", "✅ Phase 1 完成 (2026-06-28)",
+        ]
+        not_archivable = [
+            "⏳ 进行中", "⏳ 待启动 (依赖 FIX-157)", "⏸ 停滞待重新评估",
+            "🚧 阻塞中", "待决", "未完成", "TO_BE_DEFINED",
+        ]
+        for s in archivable:
+            self.assertTrue(self.archive._task_status_is_archivable(s), f"should be archivable: {s}")
+        for s in not_archivable:
+            self.assertFalse(self.archive._task_status_is_archivable(s), f"should NOT be archivable: {s}")
+
+    def test_task_status_is_archivable_no_false_positive_on_completed(self):
+        """'已完成' must be archivable, and substring '待' must not falsely match it."""
+        self.assertTrue(self.archive._task_status_is_archivable("已完成"))
+        self.assertFalse(self.archive._task_status_is_archivable("待启动"))
+
+    def test_parse_task_status_dynamic_col(self):
+        """Status extraction uses the passed status_col, not a hardcoded column."""
+        # 7-col row: status is last data cell
+        row7 = "| **P0** | FIX-084 | desc | — | 0.38.0 | TBD | ✅ 已完成 |"
+        self.assertEqual(self.archive._parse_task_status(row7, status_col=6), "已完成")
+        # Without status_col, defaults to last column (correct for 7-col)
+        self.assertEqual(self.archive._parse_task_status(row7), "已完成")
 
 
 if __name__ == "__main__":

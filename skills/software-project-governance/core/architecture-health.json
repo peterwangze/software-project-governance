@@ -40,6 +40,18 @@
     "hooks_drift_detection": true,
     "ledger_cross_validate": true
   },
+  "governance_data_size": {
+    "enabled": true,
+    "files": [
+      ".governance/plan-tracker.md",
+      ".governance/evidence-log.md",
+      ".governance/decision-log.md",
+      ".governance/risk-log.md"
+    ],
+    "warn_bytes": 200000,
+    "error_bytes": 250000,
+    "note": "FIX-160: governance data volume threshold. Warn at 200KB, error at 250KB (below the 256KB agent single-read limit so the warning fires before the file becomes unreadable). Drives check-governance-data-size."
+  },
   "gate_integration": {
     "fatal_on_error": false,
     "note": "0.58.0 first release: WARN/ERROR are advisory, do not block release gate. Future versions may enable fatal."

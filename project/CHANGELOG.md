@@ -2,6 +2,51 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.61.0] - 2026-06-28
+
+### 0.61.0 - Governance Data Bloat Remediation (archive engine + size guard + doc align)
+
+0.61.0 落地 **AUDIT-125 诊断的治理数据膨胀根因彻底修复**（4 Phase，FIX-157~160）。这是 RISK-039（架构腐化看护缺口）的**本体修复**——治理数据自身膨胀此前完全无 check 守护，归档机制静默失效但 dry-run 报"健康假象"。
+
+**起因**：会话恢复时发现 plan-tracker.md 达 298KB（超出 agent 256KB 单次读取上限），但 `archive.py migrate --auto --dry-run` 报"无可归档数据"。AUDIT-125 只读调查查明 3 层根因：(1) archive.py 解析逻辑与 plan-tracker 实际格式不匹配（task 行正则要求 ID 在第1列，实际在第2列；状态列硬编码 parts[10]；版本 section 模型不识别"目标版本"列归类）；(2) early-return（archive.py:1364）让 release_forced/fallback_90d 触发器成死代码；(3) 覆盖盲区（叙述段 219KB 无归档机制、decision/risk 迁移是未实现 stub、无体积 check 守护）。
+
+**4 Phase 修复**：
+- **FIX-157**：plan-tracker "当前活跃事项"段 298KB→91.7KB（-69%），迁出 212KB 历史至 3 个归档文件（narrative/completed-tasks/recent-completed）。事后 Explore 审查 APPROVED。
+- **FIX-158**：archive.py 6 点根因修复——新增 `_parse_priority_table_tasks`（支持 7 列宽表 ID 第2列+目标版本列归类）、`_find_status_column`（表头动态定位状态列，替代硬编码 parts[10]）、`_task_status_is_archivable`（认 ✅变体：已发布/保守闭环/完成候选等）、early-return 移除让触发器评估照常、`_extract_tasks_from_archive_file` 双格式支持。+9 单测。实测 `_extract` 对真实归档 0→198 提取。
+- **FIX-160**：新增 `check_governance_data_size`（Check 28s，ArchGuard 声明式范式，warn 200KB/error 250KB，advisory）——治理数据体积现在被 check 直接守护。CLI `check-governance-data-size`。+5 单测。实测 evidence-log 1.3MB 触发 ERROR。
+- **FIX-159**：commands/governance.md Scenario E 新增"归档失效检测" P1 检查（超阈值但 dry-run 报无可归档 = 异常）。
+- **FIX-161**：修复 2 个测试隔离缺陷（`test_real_interruption_policy_passes` / `test_cmd_status_outputs_stable_permission_mode_line`）——之前测试未隔离 ROOT/module 路径，读到真实 `.governance/` 的 in-flight 任务导致失败。现在 patch `EXECUTION_PACKET_PATH`/`INTERACTION_BOUNDARY_PATH`/`SESSION_SNAPSHOT_PATH` 等模块路径使用隔离 fixture。unit-tests gate 从 2 失败变为全绿（547 passed）。
+
+**测试**：81 passed（archive 62 + arch_health 19），0 回归。2 项 pre-existing 测试失败（测试隔离缺陷，非本次回归，REVIEW-FIX-153 已记录）。
+
+### Added
+- `skills/software-project-governance/infra/archive.py` — 3 新函数（`_find_status_column`/`_parse_priority_table_tasks`/`_task_status_is_archivable`）+ priority-table 扫描分支 + early-return 重构 + 双格式提取
+- `skills/software-project-governance/infra/verify_workflow.py` — `check_governance_data_size` + `cmd_check_governance_data_size` + Check 28s 块（CLI 接入 6 处）
+- `skills/software-project-governance/core/architecture-health.json` — `governance_data_size` section（声明式阈值预算）
+- `.governance/archive/tasks/narrative-2026-04-30_2026-06-27.md`（gitignored 运行态，+99 段历史叙述归档）
+- `.governance/archive/tasks/completed-tasks-2026-04-30_2026-06-27.md`（gitignored，+138 行已完成 task 归档）
+- `.governance/archive/tasks/recent-completed-2026-04-30_2026-06-27.md`（gitignored，+60 行最近完成归档）
+
+### Changed
+- `skills/software-project-governance/infra/archive.py` — `_parse_task_status` 从硬编码 parts[10] 改动态 status_col 参数；`_find_version_sections` 捕获 header_line（含 sample table 子章节）；`migrate_by_version` 状态匹配从 `== "已完成"` 改 `_task_status_is_archivable`；`_extract_tasks_from_archive_file` 支持 ID 第1列+第2列双格式；`analyze_auto_archive_candidates` early-return 移除
+- `skills/software-project-governance/core/technical-debt-ledger.md` — +TD-014（decision/risk 迁移未实现）/TD-015（verify Check 3 死统计未修）
+- `commands/governance.md` — Scenario E P1 检查表新增"归档失效（FIX-159/160）"
+- `skills/software-project-governance/infra/tests/test_archive.py` — +TestPriorityTableArchive（9 单测：_find_status_column 3 表头格式+边界、_parse_priority_table_tasks 7 列解析+legacy 不误匹配、_task_status_is_archivable 变体、_parse_task_status 动态列）
+- `skills/software-project-governance/infra/tests/test_architecture_health.py` — +GovernanceDataSizeTest（5 单测：超阈值 ERROR/达 warn/阈值内 PASS/schema 缺失/disabled）+ SCHEMA_JSON fixture 补 governance_data_size section
+- 版本号全量同步 0.60.0→0.61.0（SKILL.md/plugin.json×3/marketplace.json/manifest.json/hooks×4/verify_workflow.py/capability_registry.py）
+
+### Known Issues (non-blocking)
+- 2 个 pytest（`test_cmd_status_outputs_stable_permission_mode_line` / `test_real_interruption_policy_passes`）因读取 `.governance/plan-tracker.md`（gitignored 实时状态）含 in-flight 任务而失败——预先存在的测试隔离缺陷，非本次修复回归
+- TD-014：archive.py decision-log/risk-log 迁移逻辑未实现（path getter + 目录创建 + index/verify 读取就绪，但 migrate 无迁移分支）——留 0.62.0+
+- TD-015：verify_archive_integrity Check 3 只统计不交叉比对（文件数 vs 索引数）——留 0.62.0+
+
+### Boundaries
+- **不关闭** RISK-039（治理数据膨胀本体已修，但 RISK-039 关闭需外部宿主验证 ArchGuard 持续有效）
+- **不关闭** RISK-036/RISK-037（1.0.0 阻塞，截止 2026-07-30 延期窗口期）
+- **不声明** 1.0.0 production-ready / official approval / marketplace approval / universal runtime support
+- **降级 SoD 诚实标注**（DEC-090/091）：产品代码由 Coordinator 直写 + 事后 Explore 只读审查（REVIEW-FIX-157~160 APPROVED），非标准先审后合路径
+- **decision/risk 归档盲区**（TD-014）和 verify Check 3 死统计（TD-015）已知未修，留 0.62.0+
+
 ## [0.60.0] - 2026-06-26
 
 ### 0.60.0 - verify_workflow.py Incremental Split Phase 2 (capability-registry domain)

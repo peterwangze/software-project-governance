@@ -7430,9 +7430,23 @@ class GovernanceStatusContractTests(unittest.TestCase):
             risk_path = gov / "risk-log.md"
             sample.write_text(plan, encoding="utf-8")
             risk_path.write_text("# 当前项目风险记录\n", encoding="utf-8")
+            # FIX-161: patch the interruption-policy module paths too, so cmd_status's
+            # internal check_interruption_policy call reads isolated fixtures instead
+            # of the real project's execution-packets / interaction-boundary (which
+            # contain in-flight tasks FIX-155/156/REL-047/REL-048 that fail the policy).
+            packet_path = gov / "execution-packets.json"
+            packet_path.write_text(json.dumps({"version": 1, "packets": {}}, ensure_ascii=False), encoding="utf-8")
+            boundary_path = root / "interaction-boundary.md"
+            boundary_path.write_text("# 用户交互边界规则\n## User Interruption Policy v2\ncritical-only policy.\n", encoding="utf-8")
+            template_path = root / "user-interruption-policy.md"
+            template_path.write_text("\n".join(["interruption_policy:", "critical_triggers:", "auto_execute:", "assumption_record:", "interruption_budget:"]), encoding="utf-8")
             with patch.object(vw, "ROOT", root), \
                  patch.object(vw, "SAMPLE_PATH", sample), \
-                 patch.object(vw, "RISK_PATH", risk_path):
+                 patch.object(vw, "RISK_PATH", risk_path), \
+                 patch.object(vw, "EXECUTION_PACKET_PATH", packet_path), \
+                 patch.object(vw, "INTERACTION_BOUNDARY_PATH", boundary_path), \
+                 patch.object(vw, "USER_INTERRUPTION_POLICY_TEMPLATE_PATH", template_path), \
+                 patch.object(vw, "SESSION_SNAPSHOT_PATH", gov / "session-snapshot.md"):
                 buf = io.StringIO()
                 with redirect_stdout(buf):
                     vw.cmd_status(None)
@@ -10888,7 +10902,17 @@ class InterruptionPolicyTests(unittest.TestCase):
         return boundary, template, plan, packet_path
 
     def test_real_interruption_policy_passes(self):
-        r = vw.check_interruption_policy()
+        # FIX-161: isolate from real ROOT (.governance/ in-flight tasks would
+        # otherwise fail this "should pass" contract). Use _write_fixture +
+        # patch the module-level paths so the check reads the temp fixture,
+        # not the real project's execution-packets / interaction-boundary.
+        with tempfile.TemporaryDirectory() as td:
+            boundary, template, plan, packet_path = self._write_fixture(td)
+            with patch.object(vw, "EXECUTION_PACKET_PATH", packet_path), \
+                 patch.object(vw, "INTERACTION_BOUNDARY_PATH", boundary), \
+                 patch.object(vw, "USER_INTERRUPTION_POLICY_TEMPLATE_PATH", template), \
+                 patch.object(vw, "SAMPLE_PATH", plan):
+                r = vw.check_interruption_policy()
         self.assertTrue(r["pass"], r)
 
     def test_missing_interaction_boundary_fails(self):

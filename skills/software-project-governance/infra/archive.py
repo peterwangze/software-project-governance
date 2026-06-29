@@ -1576,21 +1576,23 @@ def analyze_auto_archive_candidates():
         result["triggers"].append("fallback_90d")
 
     result["triggers"] = sorted(set(result["triggers"]))
-    result["should_archive"] = bool(result["triggers"])
+    # FIX-158: should_archive requires BOTH a trigger AND archivable tasks.
+    # A trigger firing with zero archivable tasks (e.g. all already archived)
+    # is NOT an actionable archive signal — reporting it as should_archive=True
+    # would make check-archive-integrity perpetually flag a clean state.
+    result["should_archive"] = bool(result["triggers"]) and not no_archivable_tasks
     if not result["should_archive"]:
         result["skipped"] = True
-        result["reason"] = (
-            "归档触发条件未满足"
-            f"（tasks={result['tasks_archived']}, plan={result['plan_tracker_size']} bytes）"
-        )
-    elif no_archivable_tasks:
-        # Triggers fire but there's nothing to archive (e.g. all tasks already
-        # archived, or parsing found 0). Report honestly rather than silently skip.
-        result["skipped"] = True
-        result["reason"] = (
-            f"归档范围 v{version_start}~v{version_end} 触发器满足（{', '.join(result['triggers'])}）"
-            "但无可归档数据——可能已全部归档或格式未被识别"
-        )
+        if result["triggers"] and no_archivable_tasks:
+            result["reason"] = (
+                f"归档范围 v{version_start}~v{version_end} 触发器满足（{', '.join(result['triggers'])}）"
+                "但无可归档数据——可能已全部归档或格式未被识别"
+            )
+        else:
+            result["reason"] = (
+                "归档触发条件未满足"
+                f"（tasks={result['tasks_archived']}, plan={result['plan_tracker_size']} bytes）"
+            )
     return result
 
 def migrate_auto(dry_run=False):

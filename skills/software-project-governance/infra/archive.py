@@ -89,15 +89,36 @@ def _parse_version_from_title(title_line):
 
 
 def _version_to_tuple(version_str):
-    """Convert '0.11.0' to (0, 11, 0) for comparison."""
-    parts = version_str.split(".")
-    return tuple(int(p) for p in parts)
+    """Convert '0.11.0' to (0, 11, 0) for comparison.
+
+    FIX-162: defensive against non-semver strings (e.g. '未规划版本',
+    '1.0.0', empty). Returns None for non-parseable input so callers can
+    treat it as out-of-range.
+    """
+    if not version_str:
+        return None
+    # Extract the first x.y.z token if the string has extra text
+    m = re.search(r"\b(\d+)\.(\d+)\.(\d+)\b", version_str)
+    if not m:
+        return None
+    return tuple(int(p) for p in m.groups())
 
 
 def _version_in_range(version_str, start, end):
-    """Check if version_str is in [start, end] inclusive."""
+    """Check if version_str is in [start, end] inclusive.
+
+    FIX-162: returns False for non-parseable version_str (None tuple) so
+    tasks/decisions with placeholder versions (e.g. '未规划版本') are never
+    matched into an archive range.
+    """
     vt = _version_to_tuple(version_str)
-    return _version_to_tuple(start) <= vt <= _version_to_tuple(end)
+    if vt is None:
+        return False
+    st = _version_to_tuple(start)
+    et = _version_to_tuple(end)
+    if st is None or et is None:
+        return False
+    return st <= vt <= et
 
 
 def _find_version_sections(content):
@@ -543,6 +564,134 @@ def _build_archive_header(version_start, version_end, category, entry_count,
     return "\n".join(lines) + "\n"
 
 
+def _entry_version_for_archive(line, task_versions):
+    """FIX-162: extract the version to classify a decision/risk row under.
+
+    Decision-log and risk-log rows reference task IDs in their cells. We pick the
+    first referenced task that is in task_versions (task_id -> version dict) to
+    determine the version. Returns a version string, or None if no related task
+    is being archived (the row is not ready to migrate).
+    """
+    for m in re.finditer(r"\b([A-Z]+-\d+)\b", line):
+        tid = m.group(1)
+        if tid in task_versions:
+            return task_versions[tid]
+    return None
+
+
+# ── Decision / Risk Migration (FIX-162 / TD-014) ───────────────────
+
+
+def _migrate_decisions(version_start, version_end, task_versions, dry_run=False):
+    """FIX-162: migrate decision-log rows whose related tasks have been archived.
+
+    Decision-log format: '| DEC-{n} | date | title | context | decision | ... |'
+    The 'related' column references task IDs. A row migrates if it references a
+    task in task_versions AND that version is in [version_start, version_end].
+    Writes archived rows to archive/decisions/decisions-v{range}.md in the format
+    '## DEC-{n}: {title}' that build_index expects. Returns count migrated.
+    """
+    dlog = _decision_log()
+    if not dlog.exists():
+        return 0
+    content = dlog.read_text(encoding="utf-8")
+    lines = content.split("\n")
+
+    kept_lines = []
+    archived = []  # (dec_id, title, version, original_line)
+    for line in lines:
+        stripped = line.strip()
+        if not stripped.startswith("| DEC-"):
+            kept_lines.append(line)
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        dec_id = parts[1] if len(parts) > 1 else ""
+        title = parts[3] if len(parts) > 3 else ""
+        if not (dec_id and re.match(r"DEC-\d+", dec_id)):
+            kept_lines.append(line)
+            continue
+        ver = _entry_version_for_archive(line, task_versions)
+        if ver and _version_in_range(ver, version_start, version_end):
+            archived.append((dec_id, title, ver, line))
+        else:
+            kept_lines.append(line)
+
+    if not archived:
+        return 0
+    if dry_run:
+        return len(archived)
+
+    _ensure_archive_dirs()
+    archive_body = []
+    for dec_id, title, ver, line in archived:
+        # build_index expects '## DEC-{n}: {title}' header for indexing.
+        archive_body.append(f"## {dec_id}: {title}")
+        archive_body.append("")
+        archive_body.append(f"- 归档版本: v{ver}（关联 task 已归档）")
+        archive_body.append("")
+        # FIX-162 review P2-1: preserve the full original decision row (9+ cols:
+        # 背景/决策内容/备选/原因/影响/决策人/关联任务/后续动作) for fidelity,
+        # consistent with how risks preserve their original rows.
+        archive_body.append("> 原始决策记录（完整字段）：")
+        archive_body.append(f"> {line.strip()}")
+        archive_body.append("")
+    # Write per-range archive file
+    archive_path = _archive_dir() / "decisions" / f"decisions-v{version_start}-{version_end}.md"
+    header = _build_archive_header(version_start, version_end, "decisions", len(archived),
+                                   prev_file=None, next_file=None)
+    _write_archive_file(archive_path, header, archive_body)
+    # Rewrite decision-log without migrated rows
+    dlog.write_text("\n".join(kept_lines), encoding="utf-8")
+    return len(archived)
+
+
+def _migrate_risks(version_start, version_end, task_versions, dry_run=False):
+    """FIX-162: migrate risk-log rows whose related tasks have been archived.
+
+    Risk-log format: '| RISK-{n} | date | desc | impact | ... |'
+    Same related-task logic as decisions. Writes archived rows to
+    archive/risks/risks-v{range}.md preserving the table-row format that
+    build_index expects ('| RISK-{n} | desc | ... |'). Returns count migrated.
+    """
+    rlog = _risk_log()
+    if not rlog.exists():
+        return 0
+    content = rlog.read_text(encoding="utf-8")
+    lines = content.split("\n")
+
+    kept_lines = []
+    archived = []  # (original_line, version)
+    for line in lines:
+        stripped = line.strip()
+        if not stripped.startswith("| RISK-"):
+            kept_lines.append(line)
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        risk_id = parts[1] if len(parts) > 1 else ""
+        if not (risk_id and re.match(r"RISK-\d+", risk_id)):
+            kept_lines.append(line)
+            continue
+        ver = _entry_version_for_archive(line, task_versions)
+        if ver and _version_in_range(ver, version_start, version_end):
+            archived.append((line, ver))
+        else:
+            kept_lines.append(line)
+
+    if not archived:
+        return 0
+    if dry_run:
+        return len(archived)
+
+    _ensure_archive_dirs()
+    archive_body = [line for line, _ver in archived]
+    archive_path = _archive_dir() / "risks" / f"risks-v{version_start}-{version_end}.md"
+    header = _build_archive_header(version_start, version_end, "risks", len(archived),
+                                   prev_file=None, next_file=None)
+    _write_archive_file(archive_path, header, archive_body)
+    rlog.write_text("\n".join(kept_lines), encoding="utf-8")
+    return len(archived)
+
+
 # ── Core Migration ─────────────────────────────────────────────────
 
 def migrate_by_version(version_start, version_end, dry_run=False, migrate_evidence=True):
@@ -564,6 +713,8 @@ def migrate_by_version(version_start, version_end, dry_run=False, migrate_eviden
         "tasks_archived": 0,
         "tasks_remaining": 0,
         "evidence_archived": 0,
+        "decisions_archived": 0,
+        "risks_archived": 0,
         "archive_files_created": [],
         "details": "",
     }
@@ -628,6 +779,35 @@ def migrate_by_version(version_start, version_end, dry_run=False, migrate_eviden
         archive_body_lines.append((target_version, line))
 
     result["tasks_archived"] = len(archived_tasks)
+
+    # FIX-162 (TD-014): build task_versions lookup (this-run + already-archived
+    # historical tasks) so decision/risk migration can proceed even when the
+    # current run archives zero new tasks but historical tasks exist.
+    task_versions = {}
+    for _idx, _line, _tid, _ver in archived_task_lines:
+        task_versions.setdefault(_tid, _ver)
+    # Also include already-archived tasks (from prior runs) so decisions/risks
+    # referencing fully-historical tasks migrate even on a fresh run.
+    try:
+        for f in sorted((_archive_dir() / "tasks").glob("*.md")):
+            if f.name == ".gitkeep":
+                continue
+            for task_id, _status, version in _extract_tasks_from_archive_file(f):
+                if task_id and version and version != "unknown":
+                    task_versions.setdefault(task_id, version)
+    except Exception:
+        pass
+
+    # FIX-162 (TD-014): migrate decision-log and risk-log entries whose related
+    # tasks have been archived. Runs even when tasks_archived==0, as long as
+    # historical tasks exist in archive/tasks/. dry_run only reports counts.
+    if migrate_evidence and task_versions:
+        result["decisions_archived"] = _migrate_decisions(
+            version_start, version_end, task_versions, dry_run
+        )
+        result["risks_archived"] = _migrate_risks(
+            version_start, version_end, task_versions, dry_run
+        )
 
     if result["tasks_archived"] == 0:
         result["success"] = True
@@ -769,6 +949,9 @@ def migrate_by_version(version_start, version_end, dry_run=False, migrate_eviden
 
             # Update evidence-log.md
             _evidence_log().write_text("\n".join(ev_kept_lines), encoding="utf-8")
+
+    # (FIX-162 decision/risk migration already executed above, before the
+    # tasks_archived==0 early-return, so it runs even with no new tasks.)
 
     result["success"] = True
     result["details"] = (f"Archived {result['tasks_archived']} tasks "
@@ -1142,24 +1325,69 @@ def verify_archive_integrity():
         for f in sorted(unreferenced):
             result["issues"].append(f"归档文件未在索引中记录: {f}")
 
-    # Check 3: Extract IDs from archive files and count
-    total_in_files = 0
+    # Check 3: Extract IDs from archive files and count, per-category
+    # FIX-163 (TD-015) + FIX-162 coupling fix: count must be symmetric per
+    # category (tasks/evidence/decisions/risks) so that migrating decisions/risks
+    # (FIX-162) does not create a false mismatch. Each category's file count is
+    # compared against its index count independently.
+    file_counts = {"tasks": 0, "evidence": 0, "decisions": 0, "risks": 0}
     for subdir, f in archive_files:
         if subdir == "tasks":
-            total_in_files += len(_extract_tasks_from_archive_file(f))
+            file_counts["tasks"] += len(_extract_tasks_from_archive_file(f))
         elif subdir == "evidence":
-            total_in_files += len(_extract_evidence_from_archive_file(f))
+            file_counts["evidence"] += len(_extract_evidence_from_archive_file(f))
+        elif subdir == "decisions":
+            # decisions are stored as '## DEC-NNN:' headers
+            content = f.read_text(encoding="utf-8") if f.exists() else ""
+            file_counts["decisions"] += len(re.findall(r"^##\s+DEC-\d+", content, re.MULTILINE))
+        elif subdir == "risks":
+            content = f.read_text(encoding="utf-8") if f.exists() else ""
+            file_counts["risks"] += sum(
+                1 for line in content.split("\n")
+                if line.strip().startswith("| RISK-") and re.match(r"\|\s*RISK-\d+", line.strip())
+            )
 
-    result["total_archived_tasks"] = total_in_files
+    result["total_archived_tasks"] = file_counts["tasks"] + file_counts["evidence"]
 
-    # Count index entries
-    total_in_index = 0
+    # Count index entries per-category. The index has separate sections
+    # (## Task 索引 / ## Evidence 索引 / ## Decision 索引 / ## Risk 索引).
+    index_counts = {"tasks": 0, "evidence": 0, "decisions": 0, "risks": 0}
+    current_section = None
+    section_map = {
+        "Task 索引": "tasks", "任务索引": "tasks",
+        "Evidence 索引": "evidence", "证据索引": "evidence",
+        "Decision 索引": "decisions", "决策索引": "decisions",
+        "Risk 索引": "risks", "风险索引": "risks",
+    }
     for line in index_lines:
         stripped = line.strip()
-        if stripped.startswith("| ") and re.match(r"\|\s*[A-Z]+-\d+", stripped):
-            total_in_index += 1
+        # Detect section headers (## Task 索引, etc.)
+        if stripped.startswith("## "):
+            for key, cat in section_map.items():
+                if key in stripped:
+                    current_section = cat
+                    break
+            else:
+                current_section = None
+            continue
+        # Count ID rows under the current section
+        if current_section and stripped.startswith("| ") and re.match(r"\|\s*[A-Z]+-\d+", stripped):
+            index_counts[current_section] += 1
 
-    result["total_index_entries"] = total_in_index
+    result["total_index_entries"] = sum(index_counts.values())
+
+    # FIX-163 (TD-015): cross-check per-category. Flag any category where
+    # file count != index count (drift detection). Per-category avoids the
+    # FIX-162 coupling false-positive (decisions/risks counted on both sides).
+    for cat in ("tasks", "evidence", "decisions", "risks"):
+        if file_counts[cat] != index_counts[cat]:
+            result["pass"] = False
+            result["issues"].append(
+                f"Archive/index count mismatch (Check 3, category={cat}): "
+                f"archive files contain {file_counts[cat]} but index.md "
+                f"has {index_counts[cat]}. Run `archive.py build-index` to "
+                f"rebuild the index, then re-verify."
+            )
 
     return result
 

@@ -874,6 +874,81 @@ class TestArchiveVerifyIntegrity(unittest.TestCase):
 
         self.assertTrue(result["pass"])
 
+    def test_verify_detects_index_count_mismatch(self):
+        """FIX-163 (TD-015): Check 3 must flag when archive-file entry count
+        != index entry count (silent drift detection). Previously Check 3 only
+        counted both but never compared, so drift went undetected."""
+        import archive
+
+        # Add an archive task file with an extractable entry (10-col format,
+        # ID in col 1) WITHOUT a corresponding index row -> drift.
+        tasks_arch = self.archive_dir / "tasks"
+        drift_file = tasks_arch / "drift-v0.5.0.md"
+        drift_file.write_text(
+            "# 归档\n\n### v0.5.0\n"
+            "| 任务ID | 描述 | 优先级 | 依赖 | 目标版本 | 负责人 | 审查人 | 审查类型 | 闭环路径 | 状态 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
+            "| DRIFT-001 | drift | P1 | — | 0.5.0 | owner | reviewer | review | path | 已完成 |\n",
+            encoding="utf-8"
+        )
+        # Create an index.md that does NOT reference DRIFT-001 (so index count=0,
+        # but file count=1 -> mismatch detected by Check 3).
+        index_file = self.archive_dir / "index.md"
+        index_file.write_text(
+            "# 归档索引\n\n## Task 索引\n\n"
+            "| Task ID | 状态 | 版本 | 归档文件 |\n"
+            "|---------|------|------|---------|\n",
+            encoding="utf-8"
+        )
+        with patch.object(archive, 'ROOT', self.root):
+            result = archive.verify_archive_integrity()
+
+        self.assertFalse(result["pass"], "must flag count mismatch")
+        self.assertTrue(any("mismatch" in i.lower() or "count" in i.lower() for i in result["issues"]),
+                        f"issues should mention count mismatch: {result['issues']}")
+
+    def test_verify_check3_symmetric_with_decisions_risks(self):
+        """FIX-162 + FIX-163 coupling regression guard: when decisions/risks
+        are migrated (archive/decisions + archive/risks have files AND index
+        has matching DEC/RISK rows), Check 3 must NOT false-positive a count
+        mismatch. The per-category comparison keeps tasks/evidence/decisions/
+        risks counts symmetric on both sides."""
+        import archive
+
+        # decisions archive file with 2 DEC headers
+        (self.archive_dir / "decisions" / "decisions-v0.1.0-0.59.0.md").write_text(
+            "## DEC-001: Old\n\n- 归档版本: v0.38.0\n\n"
+            "## DEC-002: Older\n\n- 归档版本: v0.38.0\n",
+            encoding="utf-8"
+        )
+        # risks archive file with 2 RISK rows
+        (self.archive_dir / "risks" / "risks-v0.1.0-0.59.0.md").write_text(
+            "# 归档风险\n\n| RISK-001 | desc |\n| RISK-002 | desc2 |\n",
+            encoding="utf-8"
+        )
+        # index.md with balanced DEC (2) + RISK (2) rows in their sections.
+        # Also reference the archive files so Check 2 doesn't trip.
+        (self.archive_dir / "index.md").write_text(
+            "# 归档索引\n\n"
+            "## Task 索引\n\n| Task ID | 状态 | 版本 | 归档文件 |\n\n"
+            "## Evidence 索引\n\n| EVD ID | 归档文件 |\n\n"
+            "## Decision 索引\n\n"
+            "| DEC ID | 归档文件 |\n"
+            "| DEC-001 | archive/decisions/decisions-v0.1.0-0.59.0.md |\n"
+            "| DEC-002 | archive/decisions/decisions-v0.1.0-0.59.0.md |\n\n"
+            "## Risk 索引\n\n"
+            "| RISK ID | 归档文件 |\n"
+            "| RISK-001 | archive/risks/risks-v0.1.0-0.59.0.md |\n"
+            "| RISK-002 | archive/risks/risks-v0.1.0-0.59.0.md |\n",
+            encoding="utf-8"
+        )
+        with patch.object(archive, 'ROOT', self.root):
+            result = archive.verify_archive_integrity()
+        # Check 3 specifically must not flag a count mismatch (the coupling bug)
+        check3_issues = [i for i in result["issues"] if "mismatch" in i.lower() or "count" in i.lower()]
+        self.assertEqual(check3_issues, [],
+                         f"Check 3 must be symmetric for decisions/risks (no false mismatch): {check3_issues}")
+
 
 class TestBackwardCompatibility(unittest.TestCase):
     """Test that behavior is unchanged when archive/ directory doesn't exist."""
@@ -2158,6 +2233,111 @@ class TestPriorityTableArchive(unittest.TestCase):
         self.assertEqual(self.archive._parse_task_status(row7, status_col=6), "已完成")
         # Without status_col, defaults to last column (correct for 7-col)
         self.assertEqual(self.archive._parse_task_status(row7), "已完成")
+
+
+class TestDecisionRiskMigration(unittest.TestCase):
+    """FIX-162 (TD-014): decision-log and risk-log migration when related
+    tasks have been archived."""
+
+    def setUp(self):
+        import archive
+        self.archive = archive
+
+    def _make_decision_log(self, gov, rows):
+        lines = ["# 决策记录", ""]
+        for dec_id, date, title, related in rows:
+            lines.append(f"| {dec_id} | {date} | {title} | ctx | decision | alt | reason | impact | owner | {related} | scope |")
+        (gov / "decision-log.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def _make_risk_log(self, gov, rows):
+        lines = ["# 风险记录", ""]
+        for risk_id, date, desc, related in rows:
+            lines.append(f"| {risk_id} | {date} | {desc} | impact | mitigation | open | 2026-09-30 | {related} |")
+        (gov / "risk-log.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def _make_archived_tasks(self, gov, tasks):
+        """Create an archive/tasks file with completed historical tasks."""
+        arch = gov / "archive" / "tasks"
+        arch.mkdir(parents=True, exist_ok=True)
+        lines = [
+            "# 归档 Task 表 — v0.1.0 ~ v0.59.0",
+            "",
+            "### v0.38.0",
+            "| 任务ID | 描述 | 优先级 | 依赖 | 目标版本 | 负责人 | 审查人 | 审查类型 | 闭环路径 | 状态 |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        ]
+        for tid, version in tasks:
+            lines.append(f"| {tid} | desc | P1 | — | {version} | owner | reviewer | review | path | 已完成 |")
+        (arch / "legacy-v0.38.0.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def test_decision_migrates_when_related_task_archived(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            gov = Path(tmp) / ".governance"
+            gov.mkdir()
+            self._make_decision_log(gov, [
+                ("DEC-001", "2026-05-01", "Old decision", "FIX-084, REL-013"),
+                ("DEC-050", "2026-06-28", "Active decision", "FIX-157, REL-048"),
+            ])
+            self._make_archived_tasks(gov, [("FIX-084", "0.38.0"), ("REL-013", "0.38.0")])
+            with patch.object(self.archive, "ROOT", Path(tmp)):
+                # DEC-001 references archived FIX-084 (v0.38.0, in range) -> migrates
+                # DEC-050 references FIX-157 (not in archive) -> stays
+                count = self.archive._migrate_decisions("0.1.0", "0.59.0", {"FIX-084": "0.38.0", "REL-013": "0.38.0"}, dry_run=False)
+                self.assertEqual(count, 1)
+                # Decision-log should now have only DEC-050
+                kept = (gov / "decision-log.md").read_text(encoding="utf-8")
+                self.assertIn("DEC-050", kept)
+                self.assertNotIn("DEC-001", kept)
+                # Archive file written with ## DEC-001: title format
+                arch = (gov / "archive" / "decisions" / "decisions-v0.1.0-0.59.0.md").read_text(encoding="utf-8")
+                self.assertIn("## DEC-001: Old decision", arch)
+
+    def test_decision_not_migrated_when_no_related_task_archived(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            gov = Path(tmp) / ".governance"
+            gov.mkdir()
+            self._make_decision_log(gov, [
+                ("DEC-050", "2026-06-28", "Active decision", "FIX-157, REL-048"),
+            ])
+            with patch.object(self.archive, "ROOT", Path(tmp)):
+                count = self.archive._migrate_decisions("0.1.0", "0.59.0", {"FIX-084": "0.38.0"}, dry_run=False)
+                self.assertEqual(count, 0)
+                kept = (gov / "decision-log.md").read_text(encoding="utf-8")
+                self.assertIn("DEC-050", kept)
+
+    def test_risk_migrates_when_related_task_archived(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            gov = Path(tmp) / ".governance"
+            gov.mkdir()
+            self._make_risk_log(gov, [
+                ("RISK-001", "2026-04-01", "Old risk", "FIX-084"),
+                ("RISK-039", "2026-06-24", "Active risk", "AUDIT-121"),
+            ])
+            with patch.object(self.archive, "ROOT", Path(tmp)):
+                count = self.archive._migrate_risks("0.1.0", "0.59.0", {"FIX-084": "0.38.0"}, dry_run=False)
+                self.assertEqual(count, 1)
+                kept = (gov / "risk-log.md").read_text(encoding="utf-8")
+                self.assertIn("RISK-039", kept)
+                self.assertNotIn("RISK-001", kept)
+                arch = (gov / "archive" / "risks" / "risks-v0.1.0-0.59.0.md").read_text(encoding="utf-8")
+                self.assertIn("| RISK-001 |", arch)
+
+    def test_version_to_tuple_handles_non_semver(self):
+        """FIX-162: defensive parsing of placeholder versions. Extracts semver
+        if present, returns None only when no x.y.z token exists at all."""
+        self.assertIsNone(self.archive._version_to_tuple("未规划版本"))
+        self.assertIsNone(self.archive._version_to_tuple(""))
+        self.assertIsNone(self.archive._version_to_tuple("TBD"))
+        self.assertEqual(self.archive._version_to_tuple("0.38.0"), (0, 38, 0))
+        # extracts semver from text when one is present
+        self.assertEqual(self.archive._version_to_tuple("未规划版本（0.61.0）"), (0, 61, 0))
+        self.assertEqual(self.archive._version_to_tuple("release 1.2.3 candidate"), (1, 2, 3))
+
+    def test_version_in_range_handles_none(self):
+        self.assertFalse(self.archive._version_in_range("未规划版本", "0.1.0", "0.59.0"))
+        self.assertFalse(self.archive._version_in_range("", "0.1.0", "0.59.0"))
+        self.assertTrue(self.archive._version_in_range("0.38.0", "0.1.0", "0.59.0"))
+        self.assertFalse(self.archive._version_in_range("1.0.0", "0.1.0", "0.59.0"))
 
 
 if __name__ == "__main__":

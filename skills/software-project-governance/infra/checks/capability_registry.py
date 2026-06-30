@@ -1,4 +1,4 @@
-"""Capability-registry domain checks — extracted from verify_workflow.py in 0.61.0.
+"""Capability-registry domain checks — extracted from verify_workflow.py in 0.61.1.
 
 Scope (DEC-083 Phase 2 / REQ-103): capability-registry.json schema validation
 (FIX-116). Same registry-schema-check pattern as the manifest domain
@@ -9,7 +9,7 @@ that verify_workflow.py can import this module at load time without an import
 cycle. _manifest_artifact_entries is imported directly from the sibling
 checks.manifest module (Phase 1) since it is a cross-domain registry helper.
 
-See docs/requirements/verify-workflow-split-phase2-capability-registry-0.61.0.md
+See docs/requirements/verify-workflow-split-phase2-capability-registry-0.61.1.md
 for the design and the line-number baseline used during extraction.
 """
 
@@ -18,7 +18,7 @@ import json
 
 # NOTE: _manifest_artifact_entries is imported lazily inside the check function
 # (see check_capability_registry) rather than at module top level. The top-level
-# import was rejected during 0.61.0 because it triggered a circular import
+# import was rejected during 0.61.1 because it triggered a circular import
 # (verify_workflow -> checks.capability_registry -> checks.manifest, while
 # verify_workflow was still initializing). Deferring it to call time breaks the
 # cycle, matching the _vw() deferred-access pattern already used here.

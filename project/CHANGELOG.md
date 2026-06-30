@@ -2,6 +2,32 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.61.1] - 2026-06-30
+
+### 0.61.1 - Patch: archive engine decision/risk migration + verify cross-check (TD-014/015)
+
+0.61.1 是 0.61.0 的补丁版本，兑现 0.61.0 遗留的两个技术债：TD-014（archive.py decision/risk 迁移逻辑未实现）和 TD-015（verify_archive_integrity Check 3 死统计）。这两个是 AUDIT-125 治理数据膨胀修复的覆盖盲区残留——decision-log/risk-log 此前永不归档、归档完整性检查不交叉比对。
+
+### Added
+- `skills/software-project-governance/infra/archive.py` — 新增 `_migrate_decisions`（archive.py:585-647）、`_migrate_risks`（archive.py:650-686）、`_entry_version_for_archive`（archive.py:567-579）helper。按 task_id→version lookup（this-run archived + 已归档历史 task）扫描 decision-log/risk-log 行，引用已归档 task 且版本在范围的行迁出到 archive/decisions、archive/risks。dry-run 对真实数据：**29 decisions + 11 risks 可迁出**。
+- `skills/software-project-governance/infra/tests/test_archive.py` — +TestDecisionRiskMigration（5 测试：decision 迁移/不迁移/risk 迁移/_version_to_tuple 防御/_version_in_range None）+ test_verify_check3_symmetric_with_decisions_risks（耦合回归 guard）
+
+### Changed
+- `skills/software-project-governance/infra/archive.py` — `_version_to_tuple` 改用 re.search 提取 x.y.z token（对"未规划版本"返回 None，对"未规划版本（0.61.0）"返回 (0,61,0) 合理）；`_version_in_range` 处理 None 返回 False；verify_archive_integrity Check 3 从只统计改为 **per-category 对称交叉比对**（tasks/evidence/decisions/risks 各自比对，任一 category 文件数≠索引数则 FAIL）
+- `skills/software-project-governance/core/technical-debt-ledger.md` — TD-014/TD-015 标记 RESOLVED
+- 版本号全量同步 0.61.0→0.61.1（13 文件）
+
+### Fixed
+- **FIX-162/163 耦合回归**（审查员发现的 P0）：FIX-163 Check 3 原本 total_in_files 只算 tasks+evidence、total_in_index 算全部 ID，FIX-162 真实迁移 decisions/risks 后 verify 必假阳性。改为 per-category 对称计数修复。新增 test_verify_check3_symmetric_with_decisions_risks 守护。
+- **FIX-162 decision 保真**（审查员 P2-1）：decision 迁移原只保留 dec_id+title（丢 9 列核心字段），改为同时保留原始 `| DEC-... |` 整行作为附录（与 risks 一致）
+
+### Boundaries
+- **不关闭** RISK-039（治理数据膨胀本体已修，但 RISK-039 关闭需外部宿主验证）
+- **不关闭** RISK-036/RISK-037（1.0.0 阻塞）
+- **不声明** 1.0.0 production-ready / official approval / marketplace approval / universal runtime support
+- **降级 SoD 诚实标注**（DEC-090/091）：产品代码由 Coordinator 直写 + 事后 Explore 审查（REVIEW-FIX-162/163 APPROVED）
+- **P2-2 留 follow-up**：多 task 混合引用、dry_run 写隔离、版本超上界 3 个测试场景未补（审查员 P2-2，非阻断）
+
 ## [0.61.0] - 2026-06-28
 
 ### 0.61.0 - Governance Data Bloat Remediation (archive engine + size guard + doc align)

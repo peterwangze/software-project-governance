@@ -3,7 +3,7 @@
 # Does not persist commit messages for pre-commit.
 # pre-commit runs before this hook, so a bridge file would be stale by design.
 # commit-msg reads the final current message from $1 and is authoritative.
-# @version: 0.61.0
+# @version: 0.61.1
 
 set -e
 

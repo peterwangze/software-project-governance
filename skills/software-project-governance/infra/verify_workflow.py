@@ -364,7 +364,7 @@ PROJECTION_SNIPPETS = {
     ],
 }
 
-# PROJECT_FACT_SNIPPETS removed in 0.61.0 Step A (FIX-155a) — confirmed dead code
+# PROJECT_FACT_SNIPPETS removed in 0.61.1 Step A (FIX-155a) — confirmed dead code
 # (zero references across skills/ tests/ project/, only its definition existed).
 
 WORKFLOW_SNIPPETS = {
@@ -762,22 +762,22 @@ REQUIRED_SNIPPETS = {
         "## [0.5.0]",
     ],
     ROOT / ".claude-plugin/plugin.json": [
-        "0.61.0",
+        "0.61.1",
     ],
     ROOT / ".claude-plugin/marketplace.json": [
-        "0.61.0",
+        "0.61.1",
     ],
     ROOT / ".codex-plugin/plugin.json": [
-        "0.61.0",
+        "0.61.1",
     ],
     ROOT / ".zcode-plugin/plugin.json": [
-        "0.61.0",
+        "0.61.1",
     ],
     ROOT / "package.json": [
-        "0.61.0",
+        "0.61.1",
     ],
     ROOT / "skills/software-project-governance/core/manifest.json": [
-        "0.61.0",
+        "0.61.1",
     ],
 }
 
@@ -806,7 +806,7 @@ from checks.manifest import (  # noqa: E402
     cmd_check_manifest_consistency,
 )
 
-# ── Capability-registry domain (extracted to infra/checks/capability_registry.py in 0.61.0) ──
+# ── Capability-registry domain (extracted to infra/checks/capability_registry.py in 0.61.1) ──
 # DEC-083 Phase 2 / REQ-103: the capability-registry check domain (capability-
 # registry.json schema validation, FIX-116) now lives in checks.capability_registry.
 # Same registry-schema-check pattern as the manifest domain (Phase 1). Thin
@@ -2161,7 +2161,7 @@ CAPABILITY_CONTEXT_NO_OVERCLAIM_TOKENS = [
     "runtime PASS",
     "diagnostic selection trace",
 ]
-# CAPABILITY_REGISTRY_* constants moved to checks/capability_registry.py in 0.61.0
+# CAPABILITY_REGISTRY_* constants moved to checks/capability_registry.py in 0.61.1
 # (DEC-083 Phase 2 / REQ-103) and re-exported via the top-level import above so
 # existing references (including test fixtures) keep working unchanged.
 HOST_CAPABILITY_CONTEXT_REQUIRED_FIELDS = [
@@ -2602,7 +2602,7 @@ def _is_valid_string_list(value):
 
 
 # _capability_registry_text_values + check_capability_registry moved to
-# checks/capability_registry.py in 0.61.0 (DEC-083 Phase 2 / REQ-103) and
+# checks/capability_registry.py in 0.61.1 (DEC-083 Phase 2 / REQ-103) and
 # re-exported via the top-level import.
 
 
@@ -19036,7 +19036,7 @@ def cmd_check_governance_packs(args):
     print()
 
 
-# cmd_check_capability_registry moved to checks/capability_registry.py in 0.61.0
+# cmd_check_capability_registry moved to checks/capability_registry.py in 0.61.1
 # (DEC-083 Phase 2 / REQ-103) and re-exported via the top-level import.
 
 

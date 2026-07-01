@@ -251,6 +251,7 @@ OPTIONAL_PROJECTION_FILES = {
     "Chrys Adapter": ROOT / "adapters/chrys/README.md",
     "Chrys Adapter Manifest": ROOT / "adapters/chrys/adapter-manifest.json",
     "Chrys Launcher": ROOT / "adapters/chrys/launch.py",
+    "Chrys Plugin Definition": ROOT / ".chrys-plugin/plugin.json",
     "Claude Plugin Marketplace": ROOT / ".claude-plugin/marketplace.json",
     "Claude Plugin Definition": ROOT / ".claude-plugin/plugin.json",
     "Codex Plugin Definition": ROOT / ".codex-plugin/plugin.json",
@@ -383,6 +384,10 @@ PROJECTION_SNIPPETS = {
         "skills",
     ],
     ROOT / ".codex-plugin/plugin.json": [
+        "software-project-governance",
+        "skills",
+    ],
+    ROOT / ".chrys-plugin/plugin.json": [
         "software-project-governance",
         "skills",
     ],
@@ -6243,6 +6248,7 @@ def check_projection_sync(root=None, target_dir=None, patterns=None):
         ("source core manifest", root / "skills/software-project-governance/core/manifest.json", _extract_json_version),
         ("source Claude plugin", root / ".claude-plugin/plugin.json", _extract_json_version),
         ("source Codex plugin", root / ".codex-plugin/plugin.json", _extract_json_version),
+        ("source Chrys plugin", root / ".chrys-plugin/plugin.json", _extract_json_version),
         ("target workflow skill", target_dir / "skills/software-project-governance/SKILL.md", _extract_skill_version),
         ("target plan-tracker", target_dir / ".governance/plan-tracker.md", _extract_plan_workflow_version),
     ]

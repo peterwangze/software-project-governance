@@ -1,6 +1,6 @@
 ---
 name: software-project-governance
-version: 0.61.1
+version: 0.61.2
 description: 软件项目治理工作流——加载后主 agent 即 Coordinator。用户入口：/governance（一条命令覆盖全部场景）
 ---
 

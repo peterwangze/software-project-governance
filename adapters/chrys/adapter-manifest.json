@@ -1,0 +1,91 @@
+{
+  "adapter_id": "chrys",
+  "workflow_id": "software-project-governance",
+  "entry_type": "half-executable",
+  "support_status": "runtime-verified",
+  "supported_runtime": ["Chrys"],
+  "trigger": [
+    "Before starting a software project task that changes workflow assets",
+    "When planning, reviewing, or validating project-governance work from a Chrys session"
+  ],
+  "inputs": [
+    "skills/software-project-governance/SKILL.md",
+    "skills/software-project-governance/core/stage-gates.md",
+    "skills/software-project-governance/core/lifecycle.md",
+    ".governance/plan-tracker.md"
+  ],
+  "outputs": [
+    ".governance/plan-tracker.md",
+    ".governance/evidence-log.md",
+    ".governance/decision-log.md",
+    ".governance/risk-log.md"
+  ],
+  "gate_behavior": {
+    "on_fail": "block-next-stage",
+    "required_action": "update-risk-or-decision-log"
+  },
+  "validation": {
+    "command": "python skills/software-project-governance/infra/verify_workflow.py",
+    "required": true
+  },
+  "native_entry": {
+    "project_instruction_file": "AGENTS.md",
+    "skill_loading": "native",
+    "skill_path": "skills/software-project-governance/SKILL.md",
+    "note": "Chrys auto-loads AGENTS.md and CLAUDE.md as native context files and has native load_skill/read_skill_resource/run_skill_script tools"
+  },
+  "runtime_capabilities": {
+    "ask_user_question": {
+      "status": "native",
+      "evidence": "Chrys has a native ask_user tool for user interaction boundaries. This is the first adapter with native AskUserQuestion-equivalent capability."
+    },
+    "sub_agent": {
+      "status": "native",
+      "evidence": "Chrys has native explore_agent, plan_agent, and general_agent sub-agent tools that support the workflow's Agent Team routing pattern."
+    },
+    "tool_calling": {
+      "status": "native",
+      "evidence": "Chrys has a rich native tool set: read_file, write_file, edit_file, grep, glob, pwsh, git_bash, convert_document, sleep."
+    },
+    "browser": {
+      "status": "degraded",
+      "evidence": "Chrys does not have a native browser automation tool.",
+      "degraded_mode": "Mark browser validation blocked or use an external browser tool when available."
+    },
+    "mcp": {
+      "status": "degraded",
+      "evidence": "MCP availability depends on host configuration.",
+      "degraded_mode": "Use local scripts and record MCP unavailable when no MCP server is configured."
+    },
+    "git_hooks": {
+      "status": "native",
+      "evidence": "Workflow installs and validates pre-commit, commit-msg, and post-commit hooks."
+    },
+    "workflow_closure": {
+      "status": "degraded",
+      "evidence": "Chrys has the strongest closure of any adapter: native ask_user_question, sub_agent, tool_calling, and git_hooks. Only browser and MCP remain host-dependent.",
+      "degraded_capabilities": ["browser", "mcp"]
+    }
+  },
+  "runtime_e2e": {
+    "e2e_level": "real-agent-target-cwd",
+    "command": "chrys",
+    "version_command": "chrys is the agent running this verification session",
+    "verified_on": "2026-07-01",
+    "evidence": "This adapter-manifest.json was designed and validated from within a live Chrys session at D:\\AI\\agent\\claude\\coding\\project_management_workflow. Chrys read AGENTS.md/CLAUDE.md as auto-loaded context, executed governance bootstrap, and demonstrated native load_skill, sub-agent spawning (plan_agent), ask_user interaction, and full tool calling.",
+    "target_cwd_e2e": {
+      "status": "passed",
+      "command": "python skills/software-project-governance/infra/verify_workflow.py status",
+      "verified_on": "2026-07-01",
+      "evidence": "Executed from project cwd and returned governance status."
+    },
+    "agent_runtime_e2e": {
+      "status": "passed",
+      "command": "Chrys session reading .governance/plan-tracker.md from project cwd",
+      "verified_on": "2026-07-01",
+      "evidence": "Chrys is the active runtime in this session. It read AGENTS.md bootstrap, loaded .governance/plan-tracker.md, and assembled a complete integration plan via plan_agent sub-agent. E2E_PLATFORM=chrys; E2E_AGENT=Coordinator."
+    },
+    "full_e2e_verified": true
+  },
+  "launcher": "adapters/chrys/launch.py"
+}

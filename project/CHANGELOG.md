@@ -2,6 +2,26 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.61.2] - 2026-07-01
+
+### Added
+- Chrys agent adapter (`adapters/chrys/`) — new Tier 1 agent platform with native ask_user_question, sub_agent, and tool_calling support. Chrys is the first adapter with native AskUserQuestion-equivalent capability.
+- Chrys entries in README Tier 1 loading guide, SKILL.md adapter table, core/manifest.md supported_agents, mainstream-agent-loading-0.47.0.md, and runtime-readiness-matrix-0.43.0.md.
+- Chrys validation in verify_workflow.py (MAINSTREAM_AGENT_ADAPTERS, ADAPTER_RUNTIME_CAPABILITY_POLICY, PROJECTION_SNIPPETS, OPTIONAL_PROJECTION_FILES, MAINSTREAM_AGENT_LOADING_TIER1, MAINSTREAM_AGENT_LOADING_REQUIRED_DOCS, MAINSTREAM_AGENT_LOADING_ADAPTERS, RUNTIME_MATRIX_AGENT_IDS).
+- AGENTS.md title updated to acknowledge Chrys alongside Codex.
+
+### Changed
+- verify_workflow.py agent adapter contract check now validates 5 adapters (was 4).
+- opencode added to supported_agents in core/manifest.md and SKILL.md adapter table (pre-existing omission fixed alongside Chrys addition).
+
+### Fixed
+- (none)
+
+### Upgrade Notes
+- No breaking changes. All existing adapter contracts unchanged.
+- Chrys adapter is runtime-verified from live Chrys session on 2026-07-01.
+- verify output: 653 tests passed, check-agent-adapters 5/5 synchronized, check-mainstream-agent-loading PASSED.
+
 ## [0.61.1] - 2026-06-30
 
 ### 0.61.1 - Patch: archive engine decision/risk migration + verify cross-check (TD-014/015)

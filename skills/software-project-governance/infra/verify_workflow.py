@@ -248,6 +248,9 @@ OPTIONAL_PROJECTION_FILES = {
     "opencode Adapter": ROOT / "adapters/opencode/README.md",
     "opencode Adapter Manifest": ROOT / "adapters/opencode/adapter-manifest.json",
     "opencode Launcher": ROOT / "adapters/opencode/launch.py",
+    "Chrys Adapter": ROOT / "adapters/chrys/README.md",
+    "Chrys Adapter Manifest": ROOT / "adapters/chrys/adapter-manifest.json",
+    "Chrys Launcher": ROOT / "adapters/chrys/launch.py",
     "Claude Plugin Marketplace": ROOT / ".claude-plugin/marketplace.json",
     "Claude Plugin Definition": ROOT / ".claude-plugin/plugin.json",
     "Codex Plugin Definition": ROOT / ".codex-plugin/plugin.json",
@@ -347,6 +350,30 @@ PROJECTION_SNIPPETS = {
         "opencode Adapter Launcher",
         "provider_model_preflight",
         "runtime_e2e",
+    ],
+    ROOT / "adapters/chrys/README.md": [
+        "Tier 1",
+        "## Load",
+        "## Verify",
+        "## Boundary",
+        "skills/software-project-governance/SKILL.md",
+        "python adapters/chrys/launch.py",
+        "check-agent-adapters",
+        "check-agent-adapters --runtime",
+    ],
+    ROOT / "adapters/chrys/adapter-manifest.json": [
+        "adapter_id",
+        "workflow_id",
+        "native_entry",
+        "runtime_e2e",
+        "runtime_capabilities",
+        "launcher",
+    ],
+    ROOT / "adapters/chrys/launch.py": [
+        "Chrys Adapter Launcher",
+        "native_entry",
+        "read_order",
+        "validation",
     ],
     ROOT / ".claude-plugin/marketplace.json": [
         "software-project-governance",
@@ -762,22 +789,22 @@ REQUIRED_SNIPPETS = {
         "## [0.5.0]",
     ],
     ROOT / ".claude-plugin/plugin.json": [
-        "0.61.1",
+        "0.61.2",
     ],
     ROOT / ".claude-plugin/marketplace.json": [
-        "0.61.1",
+        "0.61.2",
     ],
     ROOT / ".codex-plugin/plugin.json": [
-        "0.61.1",
+        "0.61.2",
     ],
     ROOT / ".zcode-plugin/plugin.json": [
-        "0.61.1",
+        "0.61.2",
     ],
     ROOT / "package.json": [
-        "0.61.1",
+        "0.61.2",
     ],
     ROOT / "skills/software-project-governance/core/manifest.json": [
-        "0.61.1",
+        "0.61.2",
     ],
 }
 
@@ -966,7 +993,7 @@ REQ_059_RELEASE_BLOCKERS = [
 ]
 FIX_069_RELEASE_VERSION = "0." + "35.0"
 FIX_069_READINESS_VERSION = "1." + "0.0"
-MAINSTREAM_AGENT_ADAPTERS = ["claude", "codex", "gemini", "opencode"]
+MAINSTREAM_AGENT_ADAPTERS = ["claude", "codex", "gemini", "opencode", "chrys"]
 ADAPTER_REQUIRED_KEYS = [
     "adapter_id",
     "workflow_id",
@@ -1591,7 +1618,7 @@ def _run_version_command(command):
 
 
 RUNTIME_READINESS_MATRIX_PATH = ROOT / "docs/requirements/runtime-readiness-matrix-0.43.0.md"
-RUNTIME_MATRIX_AGENT_IDS = ["claude", "codex", "gemini", "opencode", "cursor", "copilot"]
+RUNTIME_MATRIX_AGENT_IDS = ["claude", "codex", "gemini", "opencode", "chrys", "cursor", "copilot"]
 RUNTIME_MATRIX_RESEARCH_ONLY_IDS = ["cursor", "copilot"]
 MAINSTREAM_AGENT_LOADING_DOC_PATH = ROOT / "docs/requirements/mainstream-agent-loading-0.47.0.md"
 MAINSTREAM_AGENT_LOADING_REQUIRED_DOCS = [
@@ -1600,6 +1627,7 @@ MAINSTREAM_AGENT_LOADING_REQUIRED_DOCS = [
     "adapters/codex/README.md",
     "adapters/gemini/README.md",
     "adapters/opencode/README.md",
+    "adapters/chrys/README.md",
     "docs/requirements/mainstream-agent-loading-0.47.0.md",
 ]
 MAINSTREAM_AGENT_LOADING_TIER1 = [
@@ -1607,6 +1635,7 @@ MAINSTREAM_AGENT_LOADING_TIER1 = [
     "Claude Code",
     "Gemini CLI",
     "opencode",
+    "Chrys",
 ]
 MAINSTREAM_AGENT_LOADING_TIER2 = [
     "Cursor",
@@ -1674,6 +1703,21 @@ MAINSTREAM_AGENT_LOADING_ADAPTERS = {
             "python adapters/opencode/launch.py",
             "opencode-provider-preflight",
             "agent-runtime-e2e --agent opencode",
+        ],
+    },
+    "chrys": {
+        "display": "Chrys",
+        "path": "adapters/chrys/README.md",
+        "tokens": [
+            "Tier 1",
+            "Load",
+            "Verify",
+            "Boundary",
+            "AGENTS.md",
+            "skills/software-project-governance/SKILL.md",
+            "python adapters/chrys/launch.py",
+            "check-agent-adapters",
+            "check-agent-adapters --runtime",
         ],
     },
 }
@@ -4794,6 +4838,14 @@ ADAPTER_RUNTIME_CAPABILITY_POLICY = {
         "sub_agent": {"unsupported"},
         "tool_calling": {"degraded"},
         "browser": {"unsupported"},
+        "mcp": {"degraded"},
+        "git_hooks": {"native"},
+    },
+    "chrys": {
+        "ask_user_question": {"native"},
+        "sub_agent": {"native"},
+        "tool_calling": {"native"},
+        "browser": {"degraded"},
         "mcp": {"degraded"},
         "git_hooks": {"native"},
     },

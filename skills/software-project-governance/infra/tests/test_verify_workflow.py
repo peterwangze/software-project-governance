@@ -1237,6 +1237,32 @@ class AgentAdapterContractTests(unittest.TestCase):
                 "Gemini auth missing or not configured; configure GEMINI_API_KEY, "
                 "GOOGLE_API_KEY, Vertex credentials, GCA auth, or Gemini settings auth."
             )
+        if adapter_id == "chrys":
+            manifest["runtime_capabilities"]["ask_user_question"] = {
+                "status": "native",
+                "evidence": "Chrys has a native ask_user tool.",
+            }
+            manifest["runtime_capabilities"]["sub_agent"] = {
+                "status": "native",
+                "evidence": "Chrys has native explore_agent, plan_agent, and general_agent tools.",
+            }
+            manifest["runtime_capabilities"]["tool_calling"] = {
+                "status": "native",
+                "evidence": "Chrys has a rich native tool set.",
+            }
+            manifest["runtime_capabilities"]["workflow_closure"]["degraded_capabilities"] = [
+                "browser", "mcp"
+            ]
+            manifest["runtime_e2e"]["version_command"] = (
+                "chrys is the agent running this verification session"
+            )
+            manifest["runtime_e2e"]["full_e2e_verified"] = True
+            manifest["runtime_e2e"]["agent_runtime_e2e"] = {
+                "status": "passed",
+                "command": "Chrys session reading .governance/plan-tracker.md from project cwd",
+                "verified_on": "2026-07-01",
+                "evidence": "Chrys is the active runtime in this session.",
+            }
         if adapter_id == "claude":
             manifest["runtime_capabilities"]["sub_agent"] = {
                 "status": "native",
@@ -1309,7 +1335,7 @@ class AgentAdapterContractTests(unittest.TestCase):
         (adapter_dir / "adapter-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
     def _write_all_adapters(self, root):
-        for adapter_id in ["claude", "codex", "gemini", "opencode"]:
+        for adapter_id in ["claude", "codex", "gemini", "opencode", "chrys"]:
             self._write_adapter(root, adapter_id)
 
     def test_agent_adapter_contract_accepts_verified_and_explicit_unsupported(self):
@@ -1932,6 +1958,9 @@ class RuntimeReadinessMatrixTests(unittest.TestCase):
             "| Agent | Real runtime result | Blocking or degraded reason |\n"
             "| --- | --- | --- |\n"
             "| codex | PASS | Codex CLI target-cwd read E2E passed. |\n"
+            "| gemini | PASS | Gemini target-cwd read E2E passed with headless workspace trust. |\n"
+            "| opencode | PASS | opencode real target cwd E2E passed. |\n"
+            "| chrys | PASS | Chrys session executed from project cwd. |\n"
             if include_runtime_result_table
             else ""
         )
@@ -1944,6 +1973,7 @@ class RuntimeReadinessMatrixTests(unittest.TestCase):
             f"| codex | {codex_status} | DEGRADED | codex --version | full_e2e_verified=true; real codex exec target-cwd read E2E passed. |\n"
             f"| gemini | {gemini_status} | DEGRADED | gemini --version | full_e2e_verified=true; Gemini target-cwd read E2E passed with headless workspace trust. |\n"
             "| opencode | PASS | DEGRADED | opencode --version | full_e2e_verified=true; agent_runtime_e2e passed; opencode real target cwd E2E passed. |\n"
+            "| chrys | PASS | DEGRADED | chrys is the agent running this verification session | full_e2e_verified=true; agent_runtime_e2e passed; Chrys is the active runtime in this session. |\n"
             f"| cursor | {cursor_status} | NOT_RUNTIME_VERIFIED | manual research | Cursor entry is research-only; no adapter manifest or real target-cwd E2E evidence. |\n"
             "| copilot | RESEARCH_ONLY | NOT_RUNTIME_VERIFIED | manual research | Copilot entry is research-only; no adapter manifest or real target-cwd E2E evidence. |\n"
             f"{runtime_table}"

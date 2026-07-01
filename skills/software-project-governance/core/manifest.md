@@ -7,7 +7,7 @@
 - `id`: `software-project-governance`
 - `name`: 软件项目治理工作流
 - `goal`: 将大型软件公司的项目管理经验沉淀为可被 coding agent 消费的项目治理 workflow plugin/skill
-- `supported_agents`: `Claude`, `Codex`, `Gemini`
+- `supported_agents`: `Claude`, `Codex`, `Gemini`, `opencode`, `Chrys`
 - `planned_agents`: `国内主流 agent CLI`
 
 ## 核心能力

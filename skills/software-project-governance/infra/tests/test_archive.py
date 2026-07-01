@@ -1139,7 +1139,7 @@ class TestArchiveRollback(unittest.TestCase):
         self.assertEqual(result["evidence_archived"], 1)
 
         task_file = self.archive_dir / "tasks" / "v0.10.0~v0.10.0.md"
-        evidence_file = self.archive_dir / "evidence" / "v0.10.0~v0.10.0.md"
+        evidence_file = self.archive_dir / "evidence" / "evidence-v0.10.0-0.10.0.md"
         self.assertTrue(task_file.exists())
         self.assertTrue(evidence_file.exists())
 
@@ -1150,7 +1150,8 @@ class TestArchiveRollback(unittest.TestCase):
         self.assertIn("| EVD-002 |", ev_after_migrate)
 
         # Force the evidence archive to be the newest file.  The rollback must
-        # still find and process the same-name task archive.
+        # still find and group both files (different names now, but the same
+        # version range — grouped via the FIX-164 range fallback).
         newer = task_file.stat().st_mtime + 10
         os.utime(evidence_file, (newer, newer))
 
@@ -1162,7 +1163,7 @@ class TestArchiveRollback(unittest.TestCase):
             set(rollback["rolled_back_files"]),
             {
                 "archive/tasks/v0.10.0~v0.10.0.md",
-                "archive/evidence/v0.10.0~v0.10.0.md",
+                "archive/evidence/evidence-v0.10.0-0.10.0.md",
             },
         )
         self.assertFalse(task_file.exists())
@@ -2270,6 +2271,23 @@ class TestDecisionRiskMigration(unittest.TestCase):
             lines.append(f"| {tid} | desc | P1 | — | {version} | owner | reviewer | review | path | 已完成 |")
         (arch / "legacy-v0.38.0.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
+    def _make_evidence_log(self, gov, rows):
+        """FIX-164: create an evidence-log with the given EVD rows.
+
+        rows: list of (evd_id, task_ids, summary). task_ids is the 关联 Task
+        column value (may be comma-separated).
+        """
+        lines = [
+            "# 证据记录", "",
+            "| 证据ID | 关联Task | 摘要 | 日期 | 类型 | 产出 | 负责人 | 审查人 | 审查结果 | 备注 |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        ]
+        for evd_id, task_ids, summary in rows:
+            lines.append(
+                f"| {evd_id} | {task_ids} | {summary} | 2026-05-01 | 代码 | src/ | 阿速 | 老赵 | 通过 | — |"
+            )
+        (gov / "evidence-log.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
     def test_decision_migrates_when_related_task_archived(self):
         with tempfile.TemporaryDirectory() as tmp:
             gov = Path(tmp) / ".governance"
@@ -2321,6 +2339,80 @@ class TestDecisionRiskMigration(unittest.TestCase):
                 self.assertNotIn("RISK-001", kept)
                 arch = (gov / "archive" / "risks" / "risks-v0.1.0-0.59.0.md").read_text(encoding="utf-8")
                 self.assertIn("| RISK-001 |", arch)
+
+    def test_migrate_evidence_with_only_historical_tasks(self):
+        """FIX-164 regression guard: evidence migrates even when ZERO tasks are
+        archived this run, as long as the referenced tasks exist in
+        archive/tasks/ (historical). This is the exact bug being fixed — the old
+        inline block was gated by the this-run `archived_tasks` set (empty here)
+        and so never ran, letting evidence-log bloat."""
+        with tempfile.TemporaryDirectory() as tmp:
+            gov = Path(tmp) / ".governance"
+            gov.mkdir()
+            self._make_evidence_log(gov, [
+                ("EVD-001", "FIX-084", "Evidence for fully-archived task"),
+                ("EVD-002", "REL-013", "Evidence for another archived task"),
+                ("EVD-050", "FIX-157", "Evidence for a LIVE task — must stay"),
+            ])
+            # No plan-tracker tasks at all this run → archived_tasks would be ∅.
+            # But historical tasks exist in archive/tasks/.
+            self._make_archived_tasks(gov, [("FIX-084", "0.38.0"), ("REL-013", "0.38.0")])
+            task_versions = {"FIX-084": "0.38.0", "REL-013": "0.38.0"}
+            with patch.object(self.archive, "ROOT", Path(tmp)):
+                count = self.archive._migrate_evidence(
+                    "0.1.0", "0.59.0", task_versions, dry_run=False
+                )
+            self.assertEqual(count, 2)  # EVD-001 + EVD-002 migrate; EVD-050 stays
+            kept = (gov / "evidence-log.md").read_text(encoding="utf-8")
+            self.assertIn("EVD-050", kept)
+            self.assertNotIn("EVD-001", kept)
+            self.assertNotIn("EVD-002", kept)
+            arch = (gov / "archive" / "evidence"
+                    / "evidence-v0.1.0-0.59.0.md").read_text(encoding="utf-8")
+            self.assertIn("| EVD-001 |", arch)
+            self.assertIn("| EVD-002 |", arch)
+
+    def test_migrate_evidence_preserves_mixed_refs(self):
+        """FIX-164: an EVD row referencing one archived + one live task is NOT
+        migrated (kept). An EVD row referencing two archived tasks IS migrated.
+        This guards the ev_task_ids.issubset(task_versions) semantics."""
+        with tempfile.TemporaryDirectory() as tmp:
+            gov = Path(tmp) / ".governance"
+            gov.mkdir()
+            self._make_evidence_log(gov, [
+                ("EVD-010", "FIX-084, FIX-157", "mixed archived+live — keep"),
+                ("EVD-011", "FIX-084, REL-013", "both archived — migrate"),
+            ])
+            self._make_archived_tasks(gov, [("FIX-084", "0.38.0"), ("REL-013", "0.38.0")])
+            task_versions = {"FIX-084": "0.38.0", "REL-013": "0.38.0"}
+            with patch.object(self.archive, "ROOT", Path(tmp)):
+                count = self.archive._migrate_evidence(
+                    "0.1.0", "0.59.0", task_versions, dry_run=False
+                )
+            self.assertEqual(count, 1)  # only EVD-011
+            kept = (gov / "evidence-log.md").read_text(encoding="utf-8")
+            self.assertIn("EVD-010", kept)
+            self.assertNotIn("EVD-011", kept)
+
+    def test_migrate_evidence_dry_run_no_write(self):
+        """FIX-164: dry_run returns the count and writes nothing."""
+        with tempfile.TemporaryDirectory() as tmp:
+            gov = Path(tmp) / ".governance"
+            gov.mkdir()
+            self._make_evidence_log(gov, [
+                ("EVD-001", "FIX-084", "archivable evidence"),
+            ])
+            self._make_archived_tasks(gov, [("FIX-084", "0.38.0")])
+            task_versions = {"FIX-084": "0.38.0"}
+            with patch.object(self.archive, "ROOT", Path(tmp)):
+                count = self.archive._migrate_evidence(
+                    "0.1.0", "0.59.0", task_versions, dry_run=True
+                )
+            self.assertEqual(count, 1)
+            self.assertFalse((gov / "archive" / "evidence"
+                              / "evidence-v0.1.0-0.59.0.md").exists())
+            kept = (gov / "evidence-log.md").read_text(encoding="utf-8")
+            self.assertIn("EVD-001", kept)
 
     def test_version_to_tuple_handles_non_semver(self):
         """FIX-162: defensive parsing of placeholder versions. Extracts semver

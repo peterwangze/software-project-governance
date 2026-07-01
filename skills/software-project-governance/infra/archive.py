@@ -489,16 +489,22 @@ def _parse_archive_version_range(filename):
     """Parse archive filename into (version_start, version_end).
 
     Supports both base archive files (vX~vY.md) and independent incremental
-    archive files (vX~vY-incremental-YYYYMMDD-N.md).
+    archive files (vX~vY-incremental-YYYYMMDD-N.md). FIX-164 also supports
+    category-prefixed names (evidence-vX-Y.md, decisions-vX-Y.md,
+    risks-vX-Y.md) produced by the per-category migration functions.
     """
     match = re.match(
         r"^v(\d+\.\d+\.\d+)~v(\d+\.\d+\.\d+)"
         r"(?:-incremental-\d{8}-\d+)?\.md$",
         filename,
     )
-    if not match:
-        return None
-    return match.group(1), match.group(2)
+    if match:
+        return match.group(1), match.group(2)
+    # FIX-164: category-prefixed names like evidence-v0.10.0-0.10.0.md
+    m2 = re.match(r"^[a-z]+-v(\d+\.\d+\.\d+)-(\d+\.\d+\.\d+)\.md$", filename)
+    if m2:
+        return m2.group(1), m2.group(2)
+    return None
 
 
 def _version_still_covered_by_task_archive(version_str, excluding_file):
@@ -692,6 +698,83 @@ def _migrate_risks(version_start, version_end, task_versions, dry_run=False):
     return len(archived)
 
 
+def _migrate_evidence(version_start, version_end, task_versions, dry_run=False):
+    """FIX-164: migrate evidence-log rows whose related tasks have been archived.
+
+    Evidence-log format: '| EVD-{n} | 关联Task | 摘要 | 日期 | 类型 | ... |'
+    parts[2] is the 关联 Task column and may contain comma-separated task IDs.
+    A row migrates only if ALL its referenced task IDs are in task_versions
+    (this-run archived + historical archived tasks merged from archive/tasks/)
+    AND the resolved version is in [version_start, version_end]. This mirrors
+    the FIX-162 decision/risk logic and closes the gap where the old inline
+    evidence block was gated by the this-run `archived_tasks` set — which is
+    empty when all in-range tasks are already pre-archived — and so never ran,
+    letting evidence-log.md bloat past the Check 28s ERROR threshold.
+
+    Writes archived rows to archive/evidence/evidence-v{range}.md preserving
+    the original table rows verbatim (same fidelity as risks). Returns count
+    migrated.
+    """
+    elog = _evidence_log()
+    if not elog.exists():
+        return 0
+    content = elog.read_text(encoding="utf-8")
+    lines = content.split("\n")
+
+    kept_lines = []
+    archived = []  # (original_line, version)
+    for line in lines:
+        stripped = line.strip()
+        if not stripped.startswith("| EVD-"):
+            kept_lines.append(line)
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        evd_id = parts[1] if len(parts) > 1 else ""
+        if not (evd_id and re.match(r"EVD-\d+", evd_id)):
+            kept_lines.append(line)
+            continue
+        # parts[2] = 关联 Task column; may be comma-separated multiple IDs.
+        raw_task_ids = parts[2] if len(parts) > 2 else ""
+        ev_task_ids = set()
+        for tid in raw_task_ids.split(","):
+            tid = tid.strip()
+            if tid and re.match(r"[A-Z]+-\d+", tid):
+                ev_task_ids.add(tid)
+        # Migrate only when ALL referenced tasks are archived (subset), then
+        # confirm at least one resolved version is in range. This keeps the
+        # original ev_task_ids.issubset(...) semantics but uses task_versions
+        # (this-run + historical) instead of the empty this-run set.
+        if not ev_task_ids or not ev_task_ids.issubset(task_versions):
+            kept_lines.append(line)
+            continue
+        ver = None
+        for tid in ev_task_ids:
+            v = task_versions.get(tid)
+            if v and _version_in_range(v, version_start, version_end):
+                ver = v
+                break
+        if ver:
+            archived.append((line, ver))
+        else:
+            kept_lines.append(line)
+
+    if not archived:
+        return 0
+    if dry_run:
+        return len(archived)
+
+    _ensure_archive_dirs()
+    archive_body = ["| 证据ID | 关联Task | 摘要 | 日期 | 类型 | 产出 | 负责人 | 审查人 | 审查结果 | 备注 |",
+                    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
+    archive_body.extend(line for line, _ver in archived)
+    archive_path = _archive_dir() / "evidence" / f"evidence-v{version_start}-{version_end}.md"
+    header = _build_archive_header(version_start, version_end, "evidence", len(archived),
+                                   prev_file=None, next_file=None)
+    _write_archive_file(archive_path, header, archive_body)
+    elog.write_text("\n".join(kept_lines), encoding="utf-8")
+    return len(archived)
+
+
 # ── Core Migration ─────────────────────────────────────────────────
 
 def migrate_by_version(version_start, version_end, dry_run=False, migrate_evidence=True):
@@ -798,14 +881,18 @@ def migrate_by_version(version_start, version_end, dry_run=False, migrate_eviden
     except Exception:
         pass
 
-    # FIX-162 (TD-014): migrate decision-log and risk-log entries whose related
-    # tasks have been archived. Runs even when tasks_archived==0, as long as
-    # historical tasks exist in archive/tasks/. dry_run only reports counts.
+    # FIX-162 (TD-014) / FIX-164: migrate decision-log, risk-log and
+    # evidence-log entries whose related tasks have been archived. Runs even
+    # when tasks_archived==0, as long as historical tasks exist in
+    # archive/tasks/. dry_run only reports counts.
     if migrate_evidence and task_versions:
         result["decisions_archived"] = _migrate_decisions(
             version_start, version_end, task_versions, dry_run
         )
         result["risks_archived"] = _migrate_risks(
+            version_start, version_end, task_versions, dry_run
+        )
+        result["evidence_archived"] = _migrate_evidence(
             version_start, version_end, task_versions, dry_run
         )
 
@@ -855,6 +942,9 @@ def migrate_by_version(version_start, version_end, dry_run=False, migrate_eviden
     if dry_run:
         result["success"] = True
         result["details"] = (f"Dry-run: would archive {result['tasks_archived']} tasks "
+                            f"({result['decisions_archived']} decisions, "
+                            f"{result['risks_archived']} risks, "
+                            f"{result['evidence_archived']} evidence) "
                             f"from v{version_start}~v{version_end} to {archive_filename}")
         result["archive_files_created"] = [archive_filename]
         return result
@@ -895,63 +985,9 @@ def migrate_by_version(version_start, version_end, dry_run=False, migrate_eviden
     if not dry_run:
         _plan_tracker().write_text("\n".join(final_lines), encoding="utf-8")
 
-    # Migrate evidence if requested
-    if migrate_evidence and archived_tasks and _evidence_log().exists():
-        ev_content = _evidence_log().read_text(encoding="utf-8")
-        ev_lines = ev_content.split("\n")
-
-        ev_archived_lines = []
-        ev_archived_count = 0
-        ev_kept_lines = []
-
-        for i, line in enumerate(ev_lines):
-            stripped = line.strip()
-            if not stripped.startswith("| EVD-"):
-                ev_kept_lines.append(line)
-                continue
-
-            parts = [p.strip() for p in line.split("|")]
-            if len(parts) >= 3:
-                raw_task_ids = parts[2]
-                # Check if this evidence is for an archived task
-                ev_task_ids = set()
-                for tid in raw_task_ids.split(","):
-                    tid = tid.strip()
-                    if tid and re.match(r"[A-Z]+-\d+", tid):
-                        ev_task_ids.add(tid)
-
-                if ev_task_ids and ev_task_ids.issubset(archived_tasks):
-                    ev_archived_lines.append(line)
-                    ev_archived_count += 1
-                    continue
-
-            ev_kept_lines.append(line)
-
-        if ev_archived_count > 0:
-            # Create evidence archive file
-            ev_archive_filename = archive_filename
-            ev_archive_path = _archive_dir() / "evidence" / ev_archive_filename
-
-            ev_archive_body = []
-            if ev_archived_lines:
-                ev_archive_body.append("| 证据ID | 关联Task | 摘要 | 日期 | 类型 | 产出 | 负责人 | 审查人 | 审查结果 | 备注 |")
-                ev_archive_body.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
-                ev_archive_body.extend(ev_archived_lines)
-
-            ev_header = _build_archive_header(
-                version_start, version_end, "evidence",
-                ev_archived_count,
-            )
-
-            _write_archive_file(ev_archive_path, ev_header, ev_archive_body)
-            result["archive_files_created"].append(f"archive/evidence/{ev_archive_filename}")
-            result["evidence_archived"] = ev_archived_count
-
-            # Update evidence-log.md
-            _evidence_log().write_text("\n".join(ev_kept_lines), encoding="utf-8")
-
-    # (FIX-162 decision/risk migration already executed above, before the
-    # tasks_archived==0 early-return, so it runs even with no new tasks.)
+    # (FIX-162 decision/risk + FIX-164 evidence migration already executed
+    # above, before the tasks_archived==0 early-return, so it runs even with
+    # no new tasks.)
 
     result["success"] = True
     result["details"] = (f"Archived {result['tasks_archived']} tasks "
@@ -1401,15 +1437,53 @@ def _get_migration_archive_group(subdir, archive_file):
     filename in sibling directories.  Rollback therefore treats those same-name
     files as one migration unit while still supporting older task-only or
     evidence-only archives.
+
+    FIX-164: since evidence files are now named evidence-vX-Y.md (matching the
+    FIX-162 decisions/risks convention) while task files stay vX~vY.md, the
+    same-name fast path no longer matches them. Fall back to grouping by
+    parsed version range so a single rollback undoes the whole migration.
     """
-    group = []
+    same_name_group = []
     for candidate_subdir in ["tasks", "evidence"]:
         candidate = _archive_dir() / candidate_subdir / archive_file.name
         if candidate.exists() and candidate.is_file() and candidate.name != ".gitkeep":
-            group.append((candidate_subdir, candidate))
+            same_name_group.append((candidate_subdir, candidate))
 
-    if group:
-        return group
+    # Only treat same-name matching as authoritative when it grouped files
+    # across BOTH categories (a real same-name pair). When only the input file
+    # itself matches its own name, fall through to the range-based fallback so
+    # the differently-named sibling gets rolled back too.
+    if len(same_name_group) >= 2:
+        return same_name_group
+
+    # FIX-164: fall back to grouping by version range so evidence files named
+    # evidence-vX-Y.md roll back together with task files vX~vY.md. This ONLY
+    # groups across the task/evidence categories for a NON-incremental base
+    # migration — independent incremental archive files
+    # (vX~vY-incremental-DATE-N.md) share the same range but are separate
+    # migration units and must NOT be grouped with the base.
+    target_range = _parse_archive_version_range(archive_file.name)
+    is_incremental = "-incremental-" in archive_file.name
+    if target_range and not is_incremental:
+        group = list(same_name_group)  # include any same-name hits (input file)
+        input_category = subdir
+        for candidate_subdir in ["tasks", "evidence"]:
+            if candidate_subdir == input_category:
+                continue  # only look across categories (the differently-named sibling)
+            d = _archive_dir() / candidate_subdir
+            if not d.exists():
+                continue
+            for f in d.glob("*.md"):
+                if f.name == ".gitkeep" or "-incremental-" in f.name:
+                    continue
+                rng = _parse_archive_version_range(f.name)
+                if rng and rng == target_range:
+                    entry = (candidate_subdir, f)
+                    if entry not in group:
+                        group.append(entry)
+        if len(group) >= 2:
+            return group
+
     return [(subdir, archive_file)]
 
 
@@ -1738,6 +1812,9 @@ def analyze_auto_archive_candidates():
         "versions_archived": [],
         "versions_range": None,
         "tasks_archived": 0,
+        "evidence_archived": 0,
+        "decisions_archived": 0,
+        "risks_archived": 0,
         "plan_tracker_size": 0,
         "published_count": 0,
         "index_exists": False,
@@ -1777,12 +1854,22 @@ def analyze_auto_archive_candidates():
     pre_check = migrate_by_version(version_start, version_end, dry_run=True)
     result["tasks_archived"] = pre_check.get("tasks_archived", 0)
 
+    # FIX-164: a run is actionable if ANY category has migratable data — not
+    # just tasks. All in-range tasks may be pre-archived (tasks_archived==0)
+    # while evidence/decisions/risks referencing those historical tasks still
+    # need migrating. This was the evidence-log bloat root cause.
+    result["evidence_archived"] = pre_check.get("evidence_archived", 0)
+    result["decisions_archived"] = pre_check.get("decisions_archived", 0)
+    result["risks_archived"] = pre_check.get("risks_archived", 0)
+    migratable_total = (result["tasks_archived"] + result["evidence_archived"]
+                        + result["decisions_archived"] + result["risks_archived"])
+
     # FIX-158: do NOT early-return when tasks_archived==0. The original code
     # returned here, which made release_forced / fallback_90d dead code
     # (AUDIT-125 root cause #2). Triggers must be evaluated regardless of
     # task count, because release_forced depends only on index_exists and
     # fallback_90d depends only on dates. We record a note instead of skipping.
-    no_archivable_tasks = result["tasks_archived"] == 0
+    no_archivable_tasks = migratable_total == 0
 
     if (
         not result["index_exists"]
@@ -1819,7 +1906,8 @@ def analyze_auto_archive_candidates():
         else:
             result["reason"] = (
                 "归档触发条件未满足"
-                f"（tasks={result['tasks_archived']}, plan={result['plan_tracker_size']} bytes）"
+                f"（tasks={result['tasks_archived']}, evidence={result['evidence_archived']}, "
+                f"plan={result['plan_tracker_size']} bytes）"
             )
     return result
 
@@ -1870,6 +1958,9 @@ def migrate_auto(dry_run=False):
     result["versions_archived"] = analysis.get("versions_archived", [])
     result["versions_range"] = analysis.get("versions_range")
     result["tasks_archived"] = analysis.get("tasks_archived", 0)
+    result["evidence_archived"] = analysis.get("evidence_archived", 0)
+    result["decisions_archived"] = analysis.get("decisions_archived", 0)
+    result["risks_archived"] = analysis.get("risks_archived", 0)
     result["triggers"] = analysis.get("triggers", [])
 
     if analysis.get("skipped") or not analysis.get("should_archive"):
@@ -1884,7 +1975,10 @@ def migrate_auto(dry_run=False):
     if dry_run:
         result["success"] = True
         result["details"] = (
-            f"Dry-run: 将归档 {result['tasks_archived']} 个 task "
+            f"Dry-run: 将归档 {result['tasks_archived']} 个 task, "
+            f"{result['evidence_archived']} 条证据, "
+            f"{result['decisions_archived']} 条决策, "
+            f"{result['risks_archived']} 条风险 "
             f"(v{version_start}~v{version_end}); "
             f"triggers={','.join(result['triggers'])}"
         )

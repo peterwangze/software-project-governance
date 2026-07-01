@@ -2,6 +2,33 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.62.0] - 2026-07-01
+
+### 0.62.0 — zcode 插件市场适配(废弃逆向 local-load 机制)
+
+0.62.0 把 zcode 的适配方式从"逆向工程硬编码植入本地安装"改为"通过 zcode 新版插件市场原生安装"。zcode 新版运行时已支持完整的市场链(`addMarketplace`/`installMarketplacePlugin`/`clonePluginSource`/`known_marketplaces.json`),接受 `{source:"github",repo}` 源,与 Claude Code 市场协议同构。0.56.0 的逆向 seed-hash 工具因此废弃。
+
+### Added
+- `.claude-plugin/marketplace.json` 的 `source` 字段从本地相对路径 `"./"` 改为结构化 github 对象 `{"source":"github","repo":"peterwangze/software-project-governance"}`——与 zcode 新版运行时 `resolveGitPluginSource` 接受的格式、Claude 官方市场格式一致。
+- `docs/marketplace/zcode-marketplace-install.md`——新版市场安装文档(两步:`/plugin marketplace add` + `/plugin install`),含从 0.56.0 local-load 迁移指引。
+- README Tier 1 加载表新增 zcode 行(走 marketplace 协议);中文安装段新增 zcode 小节。
+
+### Changed
+- zcode 安装路径统一为 marketplace 协议(`/plugin marketplace add peterwangze/software-project-governance` + `/plugin install software-project-governance@spg`),zcode 与 Claude Code 共享同一协议。
+- `docs/marketplace/zcode-local-load-0.56.0.md` 顶部加 DEPRECATED 横幅,指向新文档(保留为历史记录)。
+- `docs/marketplace/official-readiness-gap-analysis-0.56.0.md` 与 `docs/release/feature-flags-0.56.0.md` 加 0.62.0 更新注记(local-load 机制已废弃)。
+
+### Removed
+- `project/zcode-local-load.py`(20KB 逆向 seed-hash 工具)。verify_workflow.py 不引用、无测试引用,删除零代码破坏。该工具逆向 `D:\app\zcode\resources\glm\zcode.cjs` 的 `rdt()`/`sCr()` 算法绕过 `isSeedCurrent`,是脆弱的运行时耦合(DEC-093)。
+
+### Fixed
+- (none)
+
+### Upgrade Notes
+- **无破坏性变更**。已用 0.56.0 local-load 装上本地 zcode 的安装不受影响(zcode 不主动 re-seed 第三方插件);新装一律走 marketplace。
+- 这是**协议一致性安装**,不是 zcode 官方收录或审核批准。RISK-036(官方收录准备)继续打开。
+- verify 输出:check-version-consistency 仅 plan-tracker 本地滞后(WARN,非阻塞)、check-agent-adapters 5/5、全量测试绿。
+
 ## [0.61.2] - 2026-07-01
 
 ### Added

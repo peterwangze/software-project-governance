@@ -1,5 +1,15 @@
 # zcode Local Load Readiness - 0.56.0
 
+> **⚠️ DEPRECATED in 0.62.0 (DEC-093, FIX-167).** The `project/zcode-local-load.py`
+> tool this document describes has been removed. Newer zcode runtime versions ship
+> a full marketplace chain (`addMarketplace` / `installMarketplacePlugin` /
+> `clonePluginSource` / `known_marketplaces.json`) that accepts
+> `{source:"github",repo:"owner/repo"}` sources, making the reverse-engineered
+> seed-hash loader obsolete and a fragile coupling. Use the marketplace install
+> procedure in [`zcode-marketplace-install.md`](./zcode-marketplace-install.md)
+> instead. This file is retained as a historical record of the 0.56.0 mechanism
+> and its honest limits; it is not an active install path.
+
 Version target: 0.56.0
 
 Related task: AUDIT-118

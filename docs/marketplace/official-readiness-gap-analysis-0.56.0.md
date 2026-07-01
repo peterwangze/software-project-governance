@@ -1,5 +1,14 @@
 # Official Readiness Gap Analysis - 0.56.0
 
+> **ℹ️ Updated in 0.62.0 (FIX-167, DEC-093).** The zcode distribution note in
+> Criterion 1 ("zcode has no public submission channel") reflected the 0.56.0
+> reality. As of 0.62.0, zcode runtime ships a marketplace chain and this plugin
+> installs via the shared Claude/zcode marketplace protocol
+> (`/plugin marketplace add peterwangze/software-project-governance`). See
+> [`zcode-marketplace-install.md`](./zcode-marketplace-install.md). The 0.56.0
+> table rows below remain unchanged as a historical baseline; "no zcode official
+> approval / no curated listing" still holds.
+
 Date: 2026-06-24
 
 Task: AUDIT-119

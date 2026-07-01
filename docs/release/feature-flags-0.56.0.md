@@ -1,5 +1,12 @@
 # Feature Flags - 0.56.0
 
+> **ℹ️ Updated in 0.62.0 (FIX-167, DEC-093).** The `project/zcode-local-load.py`
+> dev tool listed below was **removed** in 0.62.0 — zcode's newer runtime ships a
+> marketplace chain and this plugin now installs via the shared
+> Claude/zcode marketplace protocol. See
+> [`docs/marketplace/zcode-marketplace-install.md`](../marketplace/zcode-marketplace-install.md).
+> The 0.56.0 table below is unchanged as a historical baseline.
+
 **Version**: 0.56.0
 
 REL-042 / 0.56.0 publishes the zcode plugin marketplace adapter patch. It adds the zcode native plugin surface and a local load tool so the plugin can run in the local zcode installation, without changing Web console entry, dynamic lifecycle, or CLI/client execution.

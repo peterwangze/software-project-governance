@@ -6392,6 +6392,7 @@ class ProjectionSyncTests(unittest.TestCase):
             target / "agents",
             root / ".claude-plugin",
             root / ".codex-plugin",
+            root / ".chrys-plugin",
             target / ".governance",
         ]:
             path.mkdir(parents=True, exist_ok=True)
@@ -6410,6 +6411,7 @@ class ProjectionSyncTests(unittest.TestCase):
         (target_skill / "core/manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
         (root / ".claude-plugin/plugin.json").write_text(json.dumps({"version": version}), encoding="utf-8")
         (root / ".codex-plugin/plugin.json").write_text(json.dumps({"version": version}), encoding="utf-8")
+        (root / ".chrys-plugin/plugin.json").write_text(json.dumps({"version": version}), encoding="utf-8")
 
         command_text = "# governance\nScenario F\n"
         (root / "commands/governance.md").write_text(command_text, encoding="utf-8")

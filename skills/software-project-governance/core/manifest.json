@@ -125,6 +125,14 @@
         "type": "dir"
       },
       {
+        "path": ".chrys-plugin/",
+        "type": "dir"
+      },
+      {
+        "path": ".chrys-plugin/plugin.json",
+        "type": "file"
+      },
+      {
         "path": ".agents/",
         "type": "dir"
       },
@@ -593,6 +601,7 @@
       ".claude-plugin",
       ".codex-plugin",
       ".zcode-plugin",
+      ".chrys-plugin",
       ".agents"
     ]
   },

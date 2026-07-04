@@ -2,6 +2,52 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.63.0] - 2026-07-04
+
+### 0.63.0 — Coordinator 检视循环协议修复 + verify Check 29/30（FIX-173/174）+ archive 引擎修复（FIX-168/170/171/172）
+
+0.63.0 修复 Coordinator 检视循环三行为缺陷（用户反馈：忽略 AskUserQuestion / 不发起检视 / 不复审循环），协议层（FIX-173）+ verify 基础设施层（FIX-174）双落地。同时发布 0.62.0 后累积的 4 个 archive 引擎/CI 修复（FIX-168/170/171/172，原未单独发版）。
+
+经 Architect v2 + Design Reviewer round2 APPROVED + AUDIT-128 诊断 + 用户 3 决策。Code Reviewer R0 APPROVED 6/6（FIX-173）+ R0→R1 闭环（FIX-174）。
+
+### Added
+- **Check 29（M5 运行时扫描）** — verify_workflow.py `check_m5_runtime_triggers`：best-effort 扫描 behavior-protocol.md M5.1b 运行时确定性触发器（T1 裸问句收尾+词集 / T2 编号选项菜单+选择词邻近上下文），检测"段尾问号或选项菜单但无 AskUserQuestion"违规。advisory，无语料降级 no-verdict。
+- **Check 30（复审终态校验）** — verify_workflow.py `check_review_closure`：校验 M7.4 step 4.6 review 闭环状态机——每条 REVIEW 证据须收敛到 APPROVED(✓) 或 BLOCKED(✗→escalation)，不得停留中间态；含熔断（最大 3 轮）+ degraded 限额（≤2 次）+ 向后兼容（裸 REVIEW-{id}=R0 / 旧 review-{id}-v*.md→UNKNOWN）。
+- **M5.1b 确定性触发器** — behavior-protocol.md：运行时确定性触发器定义（问号主信号 + 词集辅 + 4 类豁免区）。
+- **M5.4b 纯通知结构性定义** — behavior-protocol.md：N1 无问号 / N2 无编号选项 / N3 ℹ️/📢/> 注：/>> 派发 前缀。⚠️ **behavior change**——既有 SHOULD 收紧为 MUST。
+- **M7.4 step 4.5b（spawn 守卫，DIFF-GATED）** — behavior-protocol.md：产品代码 diff + 路由表后置审查 Agent + 无 REVIEW 证据 → BLOCKING。3 类豁免。
+- **M7.4 step 4.6（Review 闭环状态机）** — behavior-protocol.md：C1-C7 强制条款（NEEDS_CHANGE 必须 spawn 复审 / 复审引用前轮 / 熔断 3 轮 / 终态仅 APPROVED 与 BLOCKED / round 由 evidence-log 派生并行安全）+ degraded 限额 + escalation 4 选项。
+- **methodology-routing.md 后置审查列** — 路由表 4→6 列重构，新增"后置审查 Agent(s)"+"触发条件"列对齐 SKILL.md，保留"执行方法"列。
+- **agent-communication-protocol.md Review 处理流程** — Review 结论 Coordinator 处理流程表 + 复审协议 4 条 MUST + escalation 上下文区分 + REVIEW-{id}-R{n} 字段约定。
+- **6 Reviewer agent + developer.md 复审协议** — code/design/requirement/test/release/retro reviewer + developer 注入复审协议（逐条比对前轮 findings + round 号 + 不看前轮不得 APPROVED）。
+- **FIX-174 单测** — test_verify_workflow.py +580 行（Check 21 强化 / Check 29 / Check 30 覆盖）。
+
+### Changed
+- ⚠️ **behavior change — M5.4 "纯通知"收紧为 MUST（behavior-protocol.md M5.4b）**：既有 SHOULD 升级为结构性硬定义（N1 无问号 / N2 无编号 / N3 通知前缀）。违反任一 → 不得援引 M5.4 跳过 AskUserQuestion。既有"输出通知。不需要 AskUserQuestion"须加 ℹ️ 前缀且不含问号。
+- **Check 21 强化** — verify_workflow.py `check_review_debt` → `review_spawn_gap`（三源交叉：产品代码 diff ∧ 路由表后置审查 Agent ∧ 无 REVIEW 证据）+ degraded fuse（同 task ≥3 → FAIL）。
+- **verify_workflow.py Check 18-27 编号漂移系统性修正** — 52 行无逻辑改动，函数头/docstring/子命令/print/help 标签全部对齐主运行 cmd_check_governance。
+
+### Fixed
+- **FIX-173 / 问题 1（忽略 AskUserQuestion）** — M5.1b 确定性触发器 + Check 29 运行时扫描。
+- **FIX-173 / 问题 2（不发起检视）** — M7.4 step 4.5b spawn 守卫 + methodology-routing.md 后置审查列 + Check 21/30 强制。
+- **FIX-173 / 问题 3（不复审循环）** — M7.4 step 4.6 闭环状态机（C1-C7 + 熔断 + degraded 限额）+ 6 Reviewer agent 复审协议 + Check 30 终态校验。
+- **FIX-168** — CI manifest-consistency 失败修复（Chrys adapter 遗漏 5 个 manifest/scope 同步点）。
+- **FIX-170** — archive.py `_migrate_risks`/`_migrate_decisions` 增加状态过滤，跳过 OPEN/活跃状态条目（AUDIT-127 根因）。
+- **FIX-171** — evidence 迁移 subset gate 放宽（忽略 RISK/DEC/REVIEW 跨实体引用）+ legacy 版本解析 + 路线图修正（AUDIT-126 根因 B）。
+- **FIX-172** — archive migrate body-write 数据丢失修复（FIX-158 回归，priority-table task 的 target_version 永不匹配 section → body 空 + 行被删）。
+
+### Migration Notes
+- ⚠️ **M5.4 收紧（behavior change）**：升级后"纯通知"段必须以 ℹ️ / 📢 / > 注： / >> 派发 之一开头，且不得含问号、不得含编号选项列表。否则判非纯通知 → 必须 AskUserQuestion。既有无前缀裸通知加前缀即可合规。
+- **Check 29/30 是 advisory**：Check 29 best-effort runtime scan，非产品代码硬 gate；Check 30 针对 governance 证据。
+- 版本号全量同步 0.62.0→0.63.0（17 文件）。
+
+### Boundaries
+- **不关闭** RISK-036（官方收录准备）/ RISK-037（1.0.0 阻塞）/ RISK-039（架构腐化看护，本体已修但需外部宿主验证）。
+- **不声明** 1.0.0 production-ready / official approval / marketplace approval / universal runtime support。
+- **0.62.0..0.63.0 含 4 个 pre-release fix**（FIX-168/170/171/172），原未单独发版，本次一并发布。
+- **版本号占用声明**：0.63.0 原规划为"verify_workflow.py 拆分 Phase 5"（DEC-088 路线图），本次占用为"协议层+verify check 闭环"主题，拆分 Phase 5 顺延到 0.65.0+。
+- **降级 SoD（DEC-090/091）**：本版本产品代码由 Coordinator 降级 Developer + 只读 Explore Code Reviewer（FIX-173/174 已 R0 APPROVED）；FX-175 release 评估由 Coordinator spawn Release Agent + 独立 Release Reviewer R0→R1 审查。
+
 ## [0.62.0] - 2026-07-01
 
 ### 0.62.0 — zcode 插件市场适配(废弃逆向 local-load 机制)

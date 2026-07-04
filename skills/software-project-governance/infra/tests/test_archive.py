@@ -2251,9 +2251,26 @@ class TestDecisionRiskMigration(unittest.TestCase):
         (gov / "decision-log.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     def _make_risk_log(self, gov, rows):
-        lines = ["# 风险记录", ""]
-        for risk_id, date, desc, related in rows:
-            lines.append(f"| {risk_id} | {date} | {desc} | impact | mitigation | open | 2026-09-30 | {related} |")
+        """Create a risk-log.md mirroring the real 13-column format.
+
+        rows: list of (risk_id, date, desc, related[, status]).
+        status defaults to '已关闭' (closed) so a risk is migratable by default;
+        pass '打开' / '缓解中' to model an OPEN/active risk that must stay hot
+        (FIX-170). The header includes a '当前状态' column so the archive engine
+        can locate the status cell dynamically.
+        """
+        lines = [
+            "# 风险记录", "",
+            "| 编号 | 日期 | 风险/阻塞描述 | 所属阶段 | 触发条件 | 影响 | 严重级别 | Owner | 当前状态 | 缓解动作 | 截止日期 | 关联任务 | 备注 |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        ]
+        for row in rows:
+            risk_id, date, desc, related = row[0], row[1], row[2], row[3]
+            status = row[4] if len(row) > 4 else "已关闭"
+            lines.append(
+                f"| {risk_id} | {date} | {desc} | 维护 | 触发 | 影响 | 中 "
+                f"| Owner | {status} | 缓解动作 | 2026-09-30 | {related} | 备注 |"
+            )
         (gov / "risk-log.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     def _make_archived_tasks(self, gov, tasks):
@@ -2324,6 +2341,8 @@ class TestDecisionRiskMigration(unittest.TestCase):
                 self.assertIn("DEC-050", kept)
 
     def test_risk_migrates_when_related_task_archived(self):
+        """A CLOSED risk whose related task is archived migrates to the archive;
+        a risk referencing a still-live task stays (regardless of status)."""
         with tempfile.TemporaryDirectory() as tmp:
             gov = Path(tmp) / ".governance"
             gov.mkdir()
@@ -2339,6 +2358,139 @@ class TestDecisionRiskMigration(unittest.TestCase):
                 self.assertNotIn("RISK-001", kept)
                 arch = (gov / "archive" / "risks" / "risks-v0.1.0-0.59.0.md").read_text(encoding="utf-8")
                 self.assertIn("| RISK-001 |", arch)
+
+    def test_risk_status_closed_markers(self):
+        """FIX-170 (AUDIT-127): _is_risk_closed detects the closed-status
+        variants seen in the real risk-log, including decorated forms."""
+        header = ("| 编号 | 日期 | 风险/阻塞描述 | 所属阶段 | 触发条件 | 影响 "
+                  "| 严重级别 | Owner | 当前状态 | 缓解动作 | 截止日期 | 关联任务 | 备注 |")
+        closed_rows = [
+            "| RISK-005 | 2026-04-18 | x | y | z | w | 中 | O | 已关闭 | m | d | t | n |",
+            "| RISK-006 | 2026-04-18 | x | y | z | w | 中 | O | **已关闭** | m | d | t | n |",
+            "| RISK-007 | 2026-04-18 | x | y | z | w | 中 | O | 已关闭 (2026-05-05) | m | d | t | n |",
+            "| RISK-008 | 2026-04-18 | x | y | z | w | 中 | O | closed | m | d | t | n |",
+        ]
+        for row in closed_rows:
+            self.assertTrue(self.archive._is_risk_closed(row, header),
+                            f"should be closed: {row}")
+
+    def test_risk_status_open_markers_stay_hot(self):
+        """FIX-170 (AUDIT-127): open/active status markers keep a risk in the hot
+        file even when its related task is archived (the AUDIT-127 regression)."""
+        header = ("| 编号 | 日期 | 风险/阻塞描述 | 所属阶段 | 触发条件 | 影响 "
+                  "| 严重级别 | Owner | 当前状态 | 缓解动作 | 截止日期 | 关联任务 | 备注 |")
+        open_rows = [
+            "| RISK-036 | 2026-06-23 | x | y | z | w | 高 | O | 打开 | m | d | t | n |",
+            "| RISK-024 | 2026-04-28 | x | y | z | w | 高 | O | 缓解中 | m | d | t | n |",
+            "| RISK-002 | 2026-04-17 | x | y | z | w | 中 | O | 缓解完成 | m | d | t | n |",
+            "| RISK-099 | 2026-04-17 | x | y | z | w | 中 | O | Open | m | d | t | n |",
+        ]
+        for row in open_rows:
+            self.assertFalse(self.archive._is_risk_closed(row, header),
+                             f"should NOT be closed: {row}")
+
+    def test_risk_open_not_migrated_despite_archived_related_task(self):
+        """FIX-170 (AUDIT-127) regression: the exact bug — RISK-036/037/039 were
+        OPEN 1.0.0 hard blockers whose related tasks fell in the v0.1.0~0.59.0
+        range and got migrated OUT of the hot risk-log. After the fix, an OPEN
+        risk with an archived related task stays in the hot file, while a CLOSED
+        risk with the same related task migrates. Both rows are in-range."""
+        with tempfile.TemporaryDirectory() as tmp:
+            gov = Path(tmp) / ".governance"
+            gov.mkdir()
+            self._make_risk_log(gov, [
+                # OPEN risk, related task FIX-084 (v0.38.0, in range) — must stay.
+                ("RISK-036", "2026-06-23", "OPEN 1.0.0 blocker", "FIX-084", "打开"),
+                # CLOSED risk, same related task, in range — migrates.
+                ("RISK-001", "2026-04-01", "Old closed risk", "FIX-084", "已关闭"),
+            ])
+            task_versions = {"FIX-084": "0.38.0"}
+            with patch.object(self.archive, "ROOT", Path(tmp)):
+                count = self.archive._migrate_risks(
+                    "0.1.0", "0.59.0", task_versions, dry_run=False
+                )
+            # Only the closed risk migrates.
+            self.assertEqual(count, 1)
+            kept = (gov / "risk-log.md").read_text(encoding="utf-8")
+            # OPEN risk MUST remain in the hot risk-log.
+            self.assertIn("| RISK-036 |", kept)
+            # Closed risk is removed from hot and written to archive.
+            self.assertNotIn("| RISK-001 |", kept)
+            arch = (gov / "archive" / "risks"
+                    / "risks-v0.1.0-0.59.0.md").read_text(encoding="utf-8")
+            self.assertIn("| RISK-001 |", arch)
+            self.assertNotIn("RISK-036", arch)
+
+    def test_risk_open_kept_hot_via_migrate_auto(self):
+        """FIX-170 end-to-end via migrate_auto: an OPEN risk referenced by an
+        archived task survives a full --auto run in the hot risk-log."""
+        with tempfile.TemporaryDirectory() as tmp:
+            gov = Path(tmp) / ".governance"
+            gov.mkdir()
+            (gov / "archive").mkdir()
+            for sub in ["tasks", "evidence", "decisions", "risks"]:
+                (gov / "archive" / sub).mkdir()
+            roadmap = [
+                ("0.10.0", "已发布"),
+                ("0.11.0", "已发布"),
+                ("0.12.0", "已发布"),
+            ]
+            tasks = [
+                ("v0.10.0 — Initial", [
+                    ("FIX-001", "已完成", "Fix bug 1", "—"),
+                ]),
+                ("v0.11.0 — Early fixes", [
+                    ("FIX-002", "已完成", "Fix bug 2", "—"),
+                ]),
+                ("v0.12.0 — Latest", [
+                    ("FIX-003", "进行中", "Fix bug 3", "—"),
+                ]),
+            ]
+            _make_plan_tracker_with_roadmap(gov, roadmap, tasks)
+            _pad_plan_tracker(gov)
+            # Risk-log: OPEN risk referencing an in-range archived task + closed.
+            self._make_risk_log(gov, [
+                ("RISK-036", "2026-06-23", "OPEN blocker", "FIX-001", "打开"),
+                ("RISK-001", "2026-04-01", "Old closed", "FIX-001", "已关闭"),
+            ])
+
+            with patch.object(self.archive, "ROOT", Path(tmp)):
+                result = self.archive.migrate_auto(dry_run=False)
+
+            self.assertTrue(result["success"])
+            kept = (gov / "risk-log.md").read_text(encoding="utf-8")
+            # OPEN risk survives in hot file.
+            self.assertIn("| RISK-036 |", kept)
+            # Closed risk migrated out of hot file.
+            self.assertNotIn("| RISK-001 |", kept)
+            # The closed risk lands in the single risks archive file written.
+            risk_archives = sorted((gov / "archive" / "risks").glob("*.md"))
+            self.assertEqual(len(risk_archives), 1)
+            arch = risk_archives[0].read_text(encoding="utf-8")
+            self.assertIn("| RISK-001 |", arch)
+            self.assertNotIn("RISK-036", arch)
+
+    def test_risk_status_column_aware_not_whole_row(self):
+        """FIX-170 column-aware guard: an OPEN risk whose mitigation/notes cells
+        contain the words '关闭'/'关闭标准'/'不关闭' must NOT be detected as
+        closed. A whole-row substring scan would false-positive here (this is
+        the real RISK-036 mitigation text)."""
+        header = ("| 编号 | 日期 | 风险/阻塞描述 | 所属阶段 | 触发条件 | 影响 "
+                  "| 严重级别 | Owner | 当前状态 | 缓解动作 | 截止日期 | 关联任务 | 备注 |")
+        tricky = ("| RISK-036 | 2026-06-23 | desc | 维护 | trig | impact | 高 "
+                  "| Coord | 打开 | 此风险关闭标准不变，不关闭本风险 "
+                  "| 2026-07-30 | DEC-072 | 关闭标准 |")
+        self.assertFalse(self.archive._is_risk_closed(tricky, header),
+                         "OPEN risk with '关闭' in mitigation must stay hot")
+
+    def test_risk_status_missing_column_keeps_hot(self):
+        """FIX-170 conservative default: if no status column can be located in
+        the header, the row is treated as NOT closed (kept hot) rather than
+        riskily migrating an unknown-status risk."""
+        # Header with no 状态 cell at all.
+        header = "| 编号 | 日期 | 描述 | 影响 |"
+        row = "| RISK-001 | 2026-04-01 | x | y |"
+        self.assertFalse(self.archive._is_risk_closed(row, header))
 
     def test_migrate_evidence_with_only_historical_tasks(self):
         """FIX-164 regression guard: evidence migrates even when ZERO tasks are

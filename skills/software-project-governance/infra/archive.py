@@ -585,6 +585,96 @@ def _entry_version_for_archive(line, task_versions):
     return None
 
 
+# ── Risk status filtering (FIX-170 / AUDIT-127) ────────────────────
+
+# Closed/done status markers — a risk is migratable ONLY if its status cell
+# contains one of these substrings. Keep conservative: an unknown status is
+# treated as open and stays in the hot risk-log.
+_RISK_CLOSED_MARKERS = (
+    "已关闭", "关闭", "closed", "Close",
+)
+# Active/open status markers — any of these in the status cell forces the row
+# to stay in the hot risk-log regardless of version-range membership.
+_RISK_OPEN_MARKERS = (
+    "打开", "缓解中", "缓解完成", "活跃", "active", "Open", "进行中", "待",
+)
+
+
+def _risk_log_status_column(header_line):
+    """FIX-170: find the column index of the risk status cell.
+
+    The risk-log header uses '当前状态' (not bare '状态'), so
+    _find_status_column() — which matches the cell exactly == '状态' — misses it
+    and returns None. This helper matches any header cell containing '状态'
+    (e.g. '当前状态', '状态'), returning the 0-based data-cell index, or None.
+    """
+    if not header_line or not header_line.strip().startswith("|"):
+        return None
+    parts = [p.strip() for p in header_line.split("|")]
+    data_cells = parts[1:-1] if len(parts) >= 2 else parts
+    for idx, cell in enumerate(data_cells):
+        if cell == "状态" or "状态" in cell:
+            return idx
+    return None
+
+
+def _find_risk_log_header(lines):
+    """FIX-170: return the risk-log table header line (the row containing
+    '当前状态' or '状态' that precedes the '| RISK-' data rows).
+
+    Scans for the markdown table header row of the risk-log table. Returns the
+    header line string, or None if not found. Used by _is_risk_closed() to
+    locate the status column dynamically.
+    """
+    candidate = None
+    for line in lines:
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            continue
+        if re.match(r"^\|[\s\-:|\t]+\|$", stripped):
+            # separator row; the header is the line just before it — we'll
+            # have captured it as `candidate` on the previous iteration if it
+            # contained 状态.
+            continue
+        if "状态" in stripped and "编号" in stripped:
+            candidate = line
+            continue
+        # First data row | RISK-... : stop; candidate holds the header.
+        if stripped.startswith("| RISK-"):
+            break
+    return candidate
+
+
+def _is_risk_closed(row, header_line):
+    """FIX-170: a risk-log row is migratable only if its status indicates closure.
+
+    The status cell is located dynamically via the risk-log header (the real
+    risk-log uses a '当前状态' column; risk_id is in column 1). This is
+    COLUMN-AWARE on purpose: a whole-row substring scan would false-positive,
+    because the mitigation ('缓解动作') and notes ('备注') cells of OPEN risks
+    routinely contain words like '关闭标准', '不关闭本风险', '关闭标准不变'.
+
+    Conservative default: if the status column cannot be located, or the status
+    cell is blank/ambiguous, the row is treated as NOT closed (kept hot).
+    """
+    status_col = _risk_log_status_column(header_line)
+    parts = [p.strip() for p in row.split("|")]
+    data_parts = parts[1:-1] if len(parts) >= 2 else parts
+    if status_col is not None and status_col < len(data_parts):
+        status = data_parts[status_col]
+    else:
+        # No reliable status column → cannot prove closure → keep hot.
+        return False
+    if not status:
+        return False
+    # Open markers take precedence (an '已关闭' string containing no open
+    # marker still matches closed below; but a cell like '打开' must never
+    # migrate even if '关闭' appears elsewhere — it never does in the cell).
+    if any(m in status for m in _RISK_OPEN_MARKERS):
+        return False
+    return any(m in status for m in _RISK_CLOSED_MARKERS)
+
+
 # ── Decision / Risk Migration (FIX-162 / TD-014) ───────────────────
 
 
@@ -596,7 +686,18 @@ def _migrate_decisions(version_start, version_end, task_versions, dry_run=False)
     task in task_versions AND that version is in [version_start, version_end].
     Writes archived rows to archive/decisions/decisions-v{range}.md in the format
     '## DEC-{n}: {title}' that build_index expects. Returns count migrated.
+
+    FIX-170 note: unlike _migrate_risks, decisions have NO status column — the
+    decision-log is an append-only historical record (columns: 编号/日期/主题/
+    背景/决策内容/备选/选择原因/影响范围/决策人/关联任务/后续动作). There is no
+    accepted/active vs superseded/withdrawn signal to gate on, and a row's text
+    routinely contains words like '失效'/'停滞' describing decisions about OTHER
+    items, so whole-row marker scanning would be unsafe. The version-range
+    membership test (related task already archived) is therefore the only sound
+    migration gate for decisions. This is consistent with the AUDIT-127 root
+    cause, which was exclusively a risk-log regression (OPEN risks migrated).
     """
+
     dlog = _decision_log()
     if not dlog.exists():
         return 0
@@ -658,12 +759,23 @@ def _migrate_risks(version_start, version_end, task_versions, dry_run=False):
     Same related-task logic as decisions. Writes archived rows to
     archive/risks/risks-v{range}.md preserving the table-row format that
     build_index expects ('| RISK-{n} | desc | ... |'). Returns count migrated.
+
+    FIX-170 (AUDIT-127): in-range risk rows are migrated ONLY if their status
+    cell indicates closure (已关闭/closed). OPEN/active risks (打开/缓解中/...)
+    are NEVER migrated out of the hot risk-log, even when a related task has
+    been archived — the hot risk-log is the single source of truth for active
+    risks. See _is_risk_closed() for the column-aware status detection.
     """
     rlog = _risk_log()
     if not rlog.exists():
         return 0
     content = rlog.read_text(encoding="utf-8")
     lines = content.split("\n")
+
+    # FIX-170: capture the table header line so _is_risk_closed can locate the
+    # '当前状态' column dynamically (the real risk-log does NOT put 状态 last,
+    # and the column position varies across fixtures).
+    risk_header = _find_risk_log_header(lines)
 
     kept_lines = []
     archived = []  # (original_line, version)
@@ -679,6 +791,11 @@ def _migrate_risks(version_start, version_end, task_versions, dry_run=False):
             continue
         ver = _entry_version_for_archive(line, task_versions)
         if ver and _version_in_range(ver, version_start, version_end):
+            # FIX-170: status gate — only migrate CLOSED risks. OPEN risks
+            # stay in the hot file regardless of version-range membership.
+            if not _is_risk_closed(line, risk_header):
+                kept_lines.append(line)
+                continue
             archived.append((line, ver))
         else:
             kept_lines.append(line)

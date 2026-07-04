@@ -13435,6 +13435,169 @@ def check_agent_activation():
 
 # ── SYSGAP-042: Review Debt Check (Check 21) ─────────────────────
 
+# FIX-174 (DEC-094): Check 21 strengthening — review_spawn_gap + degraded fuse.
+# Three-source cross check (M7.4 step 4.5b DIFF-GATED spawn guard):
+#   Source A: git diff product-code paths (PRODUCT_CODE_PATTERNS below)
+#   Source B: SKILL.md § Agent dispatch routing table "后置审查 Agent(s)" column
+#   Source C: evidence-log REVIEW-{task_id} APPROVED coverage
+# FAIL: A∧B∧¬C  (product code diff + routing requires post-review + no APPROVED review)
+# FAIL: same task_id degraded count ≥ 3 (DEC-094 §3.3 + step 4.6 fuse)
+
+ROUTING_FILE_CANDIDATES = [
+    "skills/software-project-governance/references/methodology-routing.md",
+    "skills/software-project-governance/SKILL.md",
+]
+
+# Markers that mark a REVIEW evidence row as "degraded mode" (DEC-090 three-word set).
+DEGRADED_MARKERS = ("degraded", "coordinator-降级", "sod-降级")
+
+# Fuse threshold (DEC-094 §3.3 + behavior-protocol.md M7.4 step 4.6 degraded limit).
+DEGRADED_FUSE_THRESHOLD = 3
+
+
+def _parse_routing_post_review_table():
+    """Parse the "后置审查 Agent(s)" column from the routing table.
+
+    Returns dict: task_type -> post_review_agents_string (raw cell value, stripped).
+    Reads methodology-routing.md first (authoritative method-layer table), then
+    SKILL.md § Agent dispatch routing as fallback. Em-dash "—" cells are preserved
+    verbatim so callers can distinguish "no post review" (—) from absent rows.
+    """
+    table = {}
+    for rel in ROUTING_FILE_CANDIDATES:
+        path = ROOT / rel
+        if not path.is_file():
+            continue
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (IOError, OSError):
+            continue
+        # Detect header row that contains "后置审查" so we locate the column index.
+        lines = content.splitlines()
+        header_idx = None
+        post_col = None
+        type_col = 0
+        for i, line in enumerate(lines):
+            if "|" not in line or "后置审查" not in line:
+                continue
+            cells = [c.strip() for c in line.split("|")]
+            # Locate the "后置审查" cell index and the "任务类型" cell index.
+            for j, cell in enumerate(cells):
+                if "后置审查" in cell:
+                    post_col = j
+                if "任务类型" in cell:
+                    type_col = j
+            if post_col is not None:
+                header_idx = i
+                break
+        if header_idx is None or post_col is None:
+            continue
+        for line in lines[header_idx + 1:]:
+            stripped = line.strip()
+            if not stripped.startswith("|") or "---" in stripped:
+                # blank line or separator row ends this table block
+                if stripped and not stripped.startswith("|"):
+                    break
+                continue
+            cells = [c.strip() for c in line.split("|")]
+            if len(cells) <= max(type_col, post_col):
+                continue
+            task_type = cells[type_col]
+            post_agents = cells[post_col]
+            if not task_type or task_type.startswith("---"):
+                continue
+            # First file wins per task_type (methodology-routing.md is authoritative).
+            table.setdefault(task_type, post_agents)
+    return table
+
+
+def _routing_post_review_for_task_type(task_type, routing_table=None):
+    """Return the post-review Agent(s) cell for a task type, or '' if unknown.
+
+    The routing table is matched by substring containment (the plan-tracker
+    task type strings are free-form, e.g. "新功能开发" may appear as the exact
+    row label, while "治理基础设施/工作流本体修改" is one row). We pick the
+    longest routing-table key that is contained in the task_type (or vice-versa)
+    so multi-keyword types resolve correctly.
+    """
+    if routing_table is None:
+        routing_table = _parse_routing_post_review_table()
+    if not task_type:
+        return ""
+    best_key = None
+    for key in routing_table:
+        if not key:
+            continue
+        if key == task_type:
+            best_key = key
+            break
+        if key and (key in task_type or task_type in key):
+            if best_key is None or len(key) > len(best_key):
+                best_key = key
+    if best_key is None:
+        return ""
+    return routing_table[best_key]
+
+
+def _is_post_review_exempt(post_review_cell):
+    """Return True iff the routing cell marks this task type as no-post-review.
+
+    Exempt cells are em-dash "—" (possibly with surrounding whitespace) or empty.
+    """
+    if not post_review_cell:
+        return True
+    cell = post_review_cell.strip()
+    # em-dash variants (—, --, -) and the literal "无" marker
+    return cell in ("—", "--", "-", "无", "—（无）") or cell.startswith("—")
+
+
+def _count_degraded_reviews_for_task(task_id, evidence_content):
+    """Count REVIEW evidence rows for task_id that are tagged degraded.
+
+    A REVIEW row is counted as degraded ONLY when a degraded marker
+    (DEC-090 three-word set) appears as a structural tag — i.e. in the
+    author / notes / conclusion metadata columns or as an explicit tag like
+    `degraded:` / `[degraded]` / `(coordinator-降级)` — NOT when the marker
+    merely appears inside the free-text description column (parts[5]).
+
+    This avoids false positives where a legitimately APPROVED independent
+    review's description happens to discuss product runtime wording such as
+    "degraded / blocked / environment-dependent".
+
+    Per behavior-protocol.md M7.4 step 4.6 degraded limit + DEC-090.
+    """
+    count = 0
+    # Explicit-tag patterns: marker used as a structural label, not prose.
+    explicit_tag_re = re.compile(
+        r"(?:degraded|coordinator-降级|sod-降级)\s*[:：\]\)]"
+        r"|\[(?:degraded|coordinator-降级|sod-降级)\]"
+        r"|\((?:degraded|coordinator-降级|sod-降级)\)",
+        re.IGNORECASE,
+    )
+    for line in evidence_content.split("\n"):
+        line = line.strip()
+        if not (line.startswith("| REVIEW-") or line.startswith("| EVD-")):
+            continue
+        # Must reference this task (raw ids column or description mentions REVIEW-{task_id})
+        if task_id not in line:
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) < 8:
+            continue
+        # description column is parts[5] — excluded from marker scan to avoid
+        # prose false positives. Scan author (parts[7]) + tail notes (parts[9+]).
+        metadata = " ".join(parts[7:8]) + " " + " ".join(parts[9:])
+        tail = " ".join(parts[8:])
+        is_degraded = False
+        if explicit_tag_re.search(tail):
+            is_degraded = True
+        elif any(marker in metadata for marker in DEGRADED_MARKERS):
+            is_degraded = True
+        if is_degraded:
+            count += 1
+    return count
+
+
 def check_review_debt():
     """SYSGAP-042: Check 21 — Review debt.
 
@@ -13457,6 +13620,11 @@ def check_review_debt():
         "total_tasks": 0,
         "review_debt_count": 0,
         "review_debt_tasks": [],
+        # FIX-174 (DEC-094): spawn-gap & degraded-fuse violations (subset of
+        # review_debt_tasks; tracked separately so callers can show distinct
+        # diagnostic reasons).
+        "spawn_gap_tasks": [],
+        "degraded_fuse_tasks": [],
         "pass": True,
     }
 
@@ -13526,16 +13694,126 @@ def check_review_debt():
 
         result["total_tasks"] += 1
 
+        # FIX-174 (DEC-094): degraded-fuse check — even tasks WITH review
+        # coverage must FAIL when the same task_id accumulated ≥ 3 degraded
+        # REVIEW rows (DEC-090 three-marker set, behavior-protocol M7.4 step
+        # 4.6 degraded limit). Count is derived from evidence-log only.
+        degraded_count = _count_degraded_reviews_for_task(task_id, evidence_content)
+        if degraded_count >= DEGRADED_FUSE_THRESHOLD:
+            result["degraded_fuse_tasks"].append(task_id)
+
         # Check for review evidence
         if task_id in review_covered:
+            # Has review — no debt. But degraded-fuse violations above still
+            # contribute to the FAIL verdict via degraded_fuse_tasks.
             continue  # Has review — no debt
 
-        # No review evidence found — this is review debt
+        # No review evidence found — this is review debt.
+        # For product-code tasks the routing table (methodology-routing.md /
+        # SKILL.md § Agent dispatch routing) always mandates a non-— post
+        # review agent (every product-code row has Code Reviewer / Design
+        # Reviewer / etc.), so the absence of REVIEW coverage is exactly the
+        # M7.4 step 4.5b DIFF-GATED spawn-gap violation (source A∧B∧¬C).
         result["review_debt_count"] += 1
         result["review_debt_tasks"].append(task_id)
+        result["spawn_gap_tasks"].append(task_id)
 
-    result["pass"] = result["review_debt_count"] == 0
+    result["pass"] = (
+        result["review_debt_count"] == 0
+        and len(result["degraded_fuse_tasks"]) == 0
+    )
     return result
+
+
+def check_review_spawn_gap(task_id, git_diff_paths, routing_post_review,
+                           review_entries, evidence_degraded_count=0):
+    """FIX-174 (DEC-094): pure three-source spawn-gap judge for fixture tests.
+
+    Mirrors the M7.4 step 4.5b DIFF-GATED spawn guard logic in a side-effect-
+    free form so AUDIT-128 fixtures (FIX21-*) can exercise the exact verdict
+    without spinning up real plan-tracker / evidence-log / git state.
+
+    Sources:
+      A (git_diff_paths): iterable of repo-relative file paths touched.
+      B (routing_post_review): raw routing-table cell value for this task type
+         (e.g. "Code Reviewer" or "—"). Empty/— = exempt.
+      C (review_entries): iterable of review entry dicts with a "conclusion"
+         key. An APPROVED entry satisfies source C.
+      evidence_degraded_count: number of degraded REVIEW rows already in the
+         evidence-log for this task (drives the DEC-094 §3.3 fuse).
+
+    Returns dict: {result, reason, source_a, source_b, source_c, degraded_count}
+      result ∈ {"FAIL", "PASS"}
+    """
+    product_code_patterns = [
+        "skills/", "agents/", "infra/", "commands/",
+        "adapters/", ".claude-plugin/", ".codex-plugin/", ".agents/",
+        "project/",
+    ]
+    # Governance-record paths that never trigger the spawn guard (exemptions).
+    exempt_prefixes = (".governance/", "docs/", "project/CHANGELOG.md")
+
+    # Source A: any touched path is product code (and not pure governance).
+    def _is_product_code(p):
+        norm = p.replace("\\", "/")
+        if any(norm.startswith(ex) or ex in norm for ex in exempt_prefixes):
+            return False
+        return any(pat in norm for pat in product_code_patterns)
+
+    source_a = any(_is_product_code(p) for p in (git_diff_paths or []))
+
+    # Source B: routing table mandates a post-review agent (non-—, non-empty).
+    source_b = not _is_post_review_exempt(routing_post_review)
+
+    # Source C: at least one APPROVED review entry exists.
+    source_c = any(
+        str(e.get("conclusion", "")).strip().upper() == "APPROVED"
+        for e in (review_entries or [])
+    )
+
+    degraded_count = int(evidence_degraded_count or 0)
+
+    # DEC-094 §3.3 + step 4.6 degraded fuse: ≥ 3 degraded reviews → FAIL.
+    if degraded_count >= DEGRADED_FUSE_THRESHOLD:
+        return {
+            "result": "FAIL",
+            "reason": f"degraded count = {degraded_count} ≥ {DEGRADED_FUSE_THRESHOLD} "
+                      f"— repeated degradation bypassing review, force FAIL",
+            "source_a": source_a,
+            "source_b": source_b,
+            "source_c": source_c,
+            "degraded_count": degraded_count,
+        }
+
+    # Three-source spawn gap: A ∧ B ∧ ¬C → FAIL.
+    if source_a and source_b and not source_c:
+        return {
+            "result": "FAIL",
+            "reason": "product-code diff + routing requires post-review + "
+                      "no APPROVED REVIEW evidence = review_spawn_gap",
+            "source_a": source_a,
+            "source_b": source_b,
+            "source_c": source_c,
+            "degraded_count": degraded_count,
+        }
+
+    # Otherwise PASS. Pick the most informative PASS reason.
+    if not source_a:
+        reason = "source A not satisfied — no product-code diff (governance-only)"
+    elif _is_post_review_exempt(routing_post_review):
+        reason = "source B exempt — routing '后置审查 Agent(s)' cell is —"
+    elif source_c:
+        reason = "source C satisfied — APPROVED REVIEW evidence present"
+    else:
+        reason = "no spawn-gap violation"
+    return {
+        "result": "PASS",
+        "reason": reason,
+        "source_a": source_a,
+        "source_b": source_b,
+        "source_c": source_c,
+        "degraded_count": degraded_count,
+    }
 
 
 # ── FIX-037: Review Coverage Check (Check 22) ──────────────────────
@@ -13870,6 +14148,787 @@ def check_governance_review_fallback_policy(required_paths=None, optional_paths=
 
     result["pass"] = len(result["issues"]) == 0
     return result
+
+
+# ── FIX-174 (DEC-094): Check 29 — M5 runtime triggers ─────────────
+# Best-effort runtime scan for behavior-protocol.md M5.1b (RUNTIME-DETERMINISTIC
+# triggers) + M5.4b (notification structure). Detects Coordinator outputs that
+# end in a bare question or contain an option menu without an AskUserQuestion
+# tool call. Falls back to "no-verdict" when no corpus source is available.
+
+# M5.1b T1 question-word set (behavior-protocol.md L301). The protocol lists a
+# non-exhaustive exemplar set; we widen it to common Coordinator bare-question
+# phrasings so the deterministic T1 trigger has high recall on real outputs.
+# FIX-174 R1 (P1-4): the set is tightened to remove wildcard-equivalent terms
+# that matched nearly any Chinese sentence. "吗？"/"吗?" were dropped (any
+# question ends in them — they are functionally the question mark itself, which
+# T1 already gates on), as was "是不是" (also opens declarative sentences) and
+# "可以吗"/"好吗？" (over-broad). T1 is a two-condition trigger — question-mark
+# ending AND a set hit — so each retained word must carry discriminative signal
+# beyond "is this a question".
+M5_QUESTION_WORDS = (
+    "要继续吗", "需要我", "要不要", "是否继续", "Shall I", "Should I",
+    "Do you want", "要做我", "继续?", "继续？", "确认?", "确认？",
+    "请问", "要不要我", "是否需要",
+)
+
+# M5.1b T2 option-menu markers. The protocol (behavior-protocol.md L305) names
+# an explicit enumerated list — (1)/(2)/(a)/(b) — so the parenthesised-marker
+# character class is restricted to digits 1-9 and letters a-d only. The earlier
+# `[1-9a-z]` class over-matched: it accepted any single letter, e.g. the plural
+# marker "(s)" in "Agent(s)", producing false-positive T2 hits on prose that
+# merely mentions a parenthesised letter.
+# Multi-line numbered-list markers ("1. ", circled ①) are retained but anchored
+# to line starts so they only match genuine list items, not in-sentence "1.".
+M5_OPTION_MENU_RE = re.compile(
+    r"\(\s*[1-9]\s*\)|\(\s*[a-d]\s*\)|^\s*[1-9]\.\s|^\s*[①②③④⑤⑥⑦⑧⑨⑩]\s*",
+    re.MULTILINE | re.IGNORECASE,
+)
+M5_CHOICE_CONTEXT_WORDS = ("选择", "choose", "select", "选项", "倾向", "方案")
+# FIX-174 R1 (P0-1): T2 choice-context words must be co-located with the
+# option-menu markers, not anywhere in the segment. We define "co-located" as
+# within the same prose paragraph OR within a ±N-line window around each marker.
+# This kills false positives where descriptive "(1)(2)(3)" enumerate bullets in
+# one paragraph and an unrelated "选项" word appears dozens of lines away.
+_M5_T2_PROXIMITY_LINES = 6
+
+# M5.4b notification prefixes (N3).
+M5_NOTIFICATION_PREFIXES = ("ℹ️", "📢", "> 注：", ">> 派发", ">注：", "> 注:", ">>派发")
+
+
+def _strip_code_fences_and_tables(text):
+    """Strip ``` fenced code blocks and | table rows from prose text.
+
+    Returns a list of surviving prose lines (each a non-empty stripped line).
+    Used by the M5 runtime scanner so question marks inside code/tables do
+    not trip the T1 / T2 triggers (behavior-protocol.md M5.1b exemption zone).
+    """
+    prose_lines = []
+    in_fence = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        # Toggle fenced-code state on ``` boundaries (allow leading whitespace).
+        if stripped.startswith("```") or stripped == "```":
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        # Skip 4-space indented code blocks.
+        if line.startswith("    ") and stripped:
+            continue
+        # Skip markdown table rows.
+        if stripped.startswith("|") and stripped.endswith("|"):
+            continue
+        if not stripped:
+            continue
+        prose_lines.append(line)
+    return prose_lines
+
+
+def _segment_final_prose(text):
+    """Return the last non-empty prose paragraph (after stripping code/tables).
+
+    A "paragraph" is the maximal run of surviving prose lines separated by the
+    code/table/blank boundaries removed by _strip_code_fences_and_tables.
+    The last paragraph is what M5.1b T1 inspects (final-segment question).
+    """
+    prose_lines = _strip_code_fences_and_tables(text)
+    if not prose_lines:
+        return ""
+    # Group into paragraphs by adjacency in the ORIGINAL text. Simpler & robust:
+    # treat contiguous surviving lines as one paragraph; the last group wins.
+    paragraphs = []
+    current = []
+    # Re-walk original text to preserve adjacency.
+    in_fence = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("```") or stripped == "```":
+            in_fence = not in_fence
+            if current:
+                paragraphs.append("\n".join(current))
+                current = []
+            continue
+        if in_fence:
+            continue
+        if line.startswith("    ") and stripped:
+            if current:
+                paragraphs.append("\n".join(current))
+                current = []
+            continue
+        if stripped.startswith("|") and stripped.endswith("|"):
+            if current:
+                paragraphs.append("\n".join(current))
+                current = []
+            continue
+        if not stripped:
+            if current:
+                paragraphs.append("\n".join(current))
+                current = []
+            continue
+        current.append(line)
+    if current:
+        paragraphs.append("\n".join(current))
+    if not paragraphs:
+        return ""
+    return paragraphs[-1]
+
+
+def _t2_has_proximate_choice_context(prose_text):
+    """FIX-174 R1 (P0-1): choice-context word must be co-located with an
+    option-menu marker, not anywhere in the whole segment.
+
+    Returns True iff at least one M5_OPTION_MENU_RE match has a
+    M5_CHOICE_CONTEXT_WORDS hit on the SAME line as the marker OR within a
+    ±_M5_T2_PROXIMITY_LINES line window. Rejects the "descriptive (1)(2)(3)
+    bullets here + unrelated '选项' word dozens of lines away" false positive.
+
+    We deliberately measure proximity in raw line distance rather than
+    "same paragraph", because bullet-dense markdown produces very large
+    paragraphs where a co-located word can sit 15+ lines from the marker.
+
+    `prose_text` is the segment text with code fences/tables already stripped.
+    """
+    if not prose_text:
+        return False
+    lines = prose_text.splitlines()
+    n_lines = len(lines)
+    # Pre-compute the line index of each choice-context word occurrence.
+    word_lines = []
+    for w in M5_CHOICE_CONTEXT_WORDS:
+        start = 0
+        while True:
+            idx = prose_text.find(w, start)
+            if idx < 0:
+                break
+            word_lines.append(prose_text.count("\n", 0, idx))
+            start = idx + len(w)
+    if not word_lines:
+        return False
+    for m in M5_OPTION_MENU_RE.finditer(prose_text):
+        match_line = prose_text.count("\n", 0, m.start())
+        for wl in word_lines:
+            if abs(wl - match_line) <= _M5_T2_PROXIMITY_LINES:
+                return True
+    return False
+
+
+def check_m5_runtime_triggers(text=None, contains_askuserquestion=False,
+                              corpus_sources=None):
+    """FIX-174 (DEC-094): Check 29 — M5 runtime trigger scan.
+
+    Implements behavior-protocol.md M5.1b (T1 bare-question / T2 option-menu
+    triggers) and M5.4b (notification-prefix WARN). When `text` is supplied
+    directly, scans that assistant-message segment. When `text` is None, the
+    check reads corpus sources (session-snapshot.md prose, evidence-log
+    "事实依据" fields) and degrades to "no-verdict" when none are available
+    (P1-b: do not FAIL in a corpus-less environment).
+
+    Args:
+      text: optional assistant-message segment string to scan directly.
+      contains_askuserquestion: whether the segment carried an AskUserQuestion
+        tool call (True suppresses T1/T2 violations).
+      corpus_sources: optional list of (source_label, segment_text, has_tool)
+        tuples used when text is None.
+
+    Returns dict: {verdict, reason, violations, warnings, scanned_segments}
+      verdict ∈ {"FAIL", "PASS", "WARN", "no-verdict", "skip"}
+    """
+    result = {
+        "verdict": "skip",
+        "reason": "",
+        "violations": [],
+        "warnings": [],
+        "scanned_segments": 0,
+    }
+
+    # Build the work list: [(label, segment, has_tool), ...].
+    if text is not None:
+        segments = [("inline", text, bool(contains_askuserquestion))]
+    elif corpus_sources:
+        segments = list(corpus_sources)
+    else:
+        # Discover corpus from governance runtime files (best-effort).
+        segments = []
+        snapshot = ROOT / ".governance/session-snapshot.md"
+        if snapshot.is_file():
+            try:
+                segments.append(("session-snapshot", snapshot.read_text(encoding="utf-8"), False))
+            except (IOError, OSError):
+                pass
+        if EVIDENCE_PATH.is_file():
+            try:
+                ev = EVIDENCE_PATH.read_text(encoding="utf-8")
+                # Extract "事实依据:" field text from evidence rows.
+                fact_lines = [
+                    line for line in ev.splitlines()
+                    if "事实依据" in line or "事实:" in line
+                ]
+                if fact_lines:
+                    segments.append(("evidence-log-facts", "\n".join(fact_lines), False))
+            except (IOError, OSError):
+                pass
+
+    if not segments:
+        # P1-b corpus-less degradation: no verdict, formal definition only.
+        result["verdict"] = "no-verdict"
+        result["reason"] = (
+            "no corpus source available — M5 runtime scan degrades to no-verdict "
+            "(behavior-protocol.md M5.1b/M5.4b formal definition applies but no "
+            "assistant text to scan)"
+        )
+        return result
+
+    violations = []
+    warnings = []
+    for label, segment_text, has_tool in segments:
+        result["scanned_segments"] += 1
+        if has_tool:
+            # AskUserQuestion present in this segment → no M5.1b violation.
+            continue
+        if not segment_text or not segment_text.strip():
+            continue
+
+        final_para = _segment_final_prose(segment_text)
+        final_para_stripped = final_para.strip()
+
+        # T1: final prose segment ends with a question mark AND hits a question word.
+        ends_with_question = bool(final_para_stripped) and final_para_stripped[-1] in ("？", "?")
+        if ends_with_question and any(w in final_para_stripped for w in M5_QUESTION_WORDS):
+            violations.append({
+                "trigger": "T1",
+                "source": label,
+                "reason": "final prose segment ends with a question mark and hits "
+                          "a question-word set entry, with no AskUserQuestion tool call",
+            })
+            continue
+
+        # T2: option-menu markers + co-located choice-context words, no tool.
+        # FIX-174 R1 (P0-1): "上下文含" (protocol M5.1b L306) means same-segment
+        # AND near the marker, NOT anywhere in the whole segment. Whole-segment
+        # matching produced false positives on descriptive "(1)(2)(3)" bullets
+        # with an unrelated "选项" word far away (e.g. session-snapshot prose).
+        full_prose = "\n".join(_strip_code_fences_and_tables(segment_text))
+        has_option_menu = bool(M5_OPTION_MENU_RE.search(full_prose))
+        has_choice_context = has_option_menu and _t2_has_proximate_choice_context(full_prose)
+        if has_option_menu and has_choice_context:
+            violations.append({
+                "trigger": "T2",
+                "source": label,
+                "reason": "option-menu markers + choice-context words present "
+                          "with no AskUserQuestion tool call",
+            })
+            continue
+
+        # M5.4b: notification without prefix → WARN (only if no T1/T2 violation).
+        if final_para_stripped:
+            has_notification_prefix = any(
+                final_para_stripped.startswith(p) for p in M5_NOTIFICATION_PREFIXES
+            )
+            if not has_notification_prefix:
+                warnings.append({
+                    "trigger": "M5.4b",
+                    "source": label,
+                    "reason": "prose segment lacks a notification prefix "
+                              "(ℹ️ / 📢 / > 注： / >> 派发) — suspected untagged notification",
+                })
+
+    result["violations"] = violations
+    result["warnings"] = warnings
+    if violations:
+        result["verdict"] = "FAIL"
+        triggers = ", ".join(sorted({v["trigger"] for v in violations}))
+        result["reason"] = (
+            f"M5 runtime violation(s): {triggers} — bare question / option menu "
+            f"without AskUserQuestion (behavior-protocol.md M5.1b)"
+        )
+    elif warnings:
+        result["verdict"] = "WARN"
+        result["reason"] = (
+            f"{len(warnings)} M5.4b notification-prefix WARN(s) — not blocking"
+        )
+    else:
+        result["verdict"] = "PASS"
+        result["reason"] = (
+            "no M5 runtime triggers fired — segments comply with M5.1b/M5.4b"
+        )
+    return result
+
+
+# ── FIX-174 (DEC-094): Check 30 — review closure state machine ────
+# Validates behavior-protocol.md M7.4 step 4.6 review-closure state machine:
+# V1 terminal-state legality, V2 round continuity, V3 fuse (MAX_ROUNDS=3),
+# V4 APPROVED traceability. Backward-compat: bare REVIEW-{id} = R0.
+
+REVIEW_MAX_ROUNDS = 3  # behavior-protocol.md M7.4 step 4.6 (C3) fuse.
+
+# Terminal conclusions per M7.4 step 4.6 (C4): only APPROVED / BLOCKED are
+# legitimate terminal states; NEEDS_CHANGE is always an intermediate state.
+_REVIEW_TERMINAL_CONCLUSIONS = ("APPROVED", "BLOCKED")
+
+_REVIEW_ID_RE = re.compile(r"^REVIEW-([A-Z]+-\d+)(?:-R(\d+))?$")
+_LEGACY_REVIEW_FILE_RE = re.compile(r"^review-([A-Z]+-\d+)-v\d+\.md$", re.IGNORECASE)
+
+# FIX-174 R1 (P0-2): date from which REVIEW-{id}-R{n} round-numbered naming
+# became the enforced convention (FIX-173 normalized the evidence protocol,
+# agent-communication-protocol.md L317-318). Sequences whose evidence predates
+# this and mix bare REVIEW-{id} (R0) with R{n}-numbered rounds are historical
+# naming residue, not a real round-continuity breach — V2 downgrades to WARN.
+FIX173_NAMING_NORMALIZATION_DATE = date(2026, 7, 4)
+
+
+def _normalize_review_round(raw_id):
+    """Return (task_id, round) tuple for a REVIEW-{id}[-R{n}] identifier.
+
+    Bare REVIEW-{id} → (id, 0). REVIEW-{id}-R{n} → (id, n).
+    Returns (None, None) if the id does not match the canonical shape.
+    """
+    if not raw_id:
+        return (None, None)
+    m = _REVIEW_ID_RE.match(raw_id.strip())
+    if not m:
+        return (None, None)
+    task_id = m.group(1)
+    round_str = m.group(2)
+    round_n = int(round_str) if round_str is not None else 0
+    return (task_id, round_n)
+
+
+def _build_review_sequence(review_entries, legacy_files=None):
+    """Build per-task_id ordered review sequences from raw entry dicts.
+
+    review_entries: iterable of dicts with at least {"id", "task_ref",
+      "conclusion"}. id may be REVIEW-{id} or REVIEW-{id}-R{n}. An optional
+      "date" field (ISO YYYY-MM-DD) records the evidence-row date so the V2
+      historical-naming exemption (FIX-174 R1 P0-2) can tell pre-FIX-173
+      residue from a real round-continuity breach.
+    legacy_files: iterable of dicts {"file": "review-{id}-v*.md", "task_ref"}.
+      These are tagged UNKNOWN (no round inference, P1-c backward compat).
+
+    Returns dict: task_id -> {
+        "rounds": {round_int: {"id":..., "conclusion":...}},
+        "max_round": int,
+        "has_unknown_legacy": bool,
+        "naming_migrated": bool,   # FIX-174 R1 (P0-2): mixes bare REVIEW-{id}
+                                   # (round 0) with R{n}-numbered rounds (n>=2)
+        "min_evidence_date": date|None,
+    }
+    """
+    sequences = {}
+    for entry in review_entries or []:
+        raw_id = entry.get("id", "")
+        task_ref = entry.get("task_ref", "")
+        conclusion = str(entry.get("conclusion", "")).strip().upper()
+        entry_date = entry.get("date")
+        task_id, round_n = _normalize_review_round(raw_id)
+        if task_id is None:
+            # Unparseable id — fall back to task_ref if present, round unknown.
+            if not task_ref:
+                continue
+            seq = sequences.setdefault(task_ref, {"rounds": {}, "max_round": -1,
+                                                  "has_unknown_legacy": True,
+                                                  "naming_migrated": False,
+                                                  "min_evidence_date": None})
+            seq["has_unknown_legacy"] = True
+            continue
+        seq = sequences.setdefault(task_id, {"rounds": {}, "max_round": -1,
+                                             "has_unknown_legacy": False,
+                                             "naming_migrated": False,
+                                             "min_evidence_date": None})
+        if round_n in seq["rounds"]:
+            # Duplicate round — keep the most-terminal conclusion.
+            existing = seq["rounds"][round_n]["conclusion"]
+            if existing not in _REVIEW_TERMINAL_CONCLUSIONS and conclusion in _REVIEW_TERMINAL_CONCLUSIONS:
+                seq["rounds"][round_n] = {"id": raw_id, "conclusion": conclusion,
+                                          "round_explicit": bool(_REVIEW_ID_RE.match(raw_id)
+                                                                 and _REVIEW_ID_RE.match(raw_id).group(2))}
+        else:
+            m = _REVIEW_ID_RE.match(raw_id)
+            round_explicit = bool(m and m.group(2) is not None)
+            seq["rounds"][round_n] = {"id": raw_id, "conclusion": conclusion,
+                                      "round_explicit": round_explicit}
+        seq["max_round"] = max(seq["max_round"], round_n)
+        # Track naming migration + earliest evidence date for the V2 historical
+        # exemption (FIX-174 R1 P0-2). A round-0 entry is "bare" when its id
+        # carried no explicit -R{n} suffix (the pre-FIX-173 convention).
+        if entry_date:
+            parsed = _parse_iso_date(entry_date) if isinstance(entry_date, str) else entry_date
+            if parsed is not None:
+                cur = seq["min_evidence_date"]
+                if cur is None or parsed < cur:
+                    seq["min_evidence_date"] = parsed
+
+    # naming_migrated: the sequence mixes a bare round-0 entry with at least
+    # one R{n}-numbered round (n >= 2). That signature only arises when review
+    # evidence straddles the FIX-173 naming normalization boundary.
+    for seq in sequences.values():
+        rounds = seq["rounds"]
+        if 0 in rounds and any(r >= 2 for r in rounds):
+            bare_r0 = not rounds[0].get("round_explicit", False)
+            if bare_r0:
+                seq["naming_migrated"] = True
+
+    for lf in legacy_files or []:
+        task_ref = lf.get("task_ref", "")
+        if not task_ref:
+            continue
+        seq = sequences.setdefault(task_ref, {"rounds": {}, "max_round": -1,
+                                              "has_unknown_legacy": False,
+                                              "naming_migrated": False,
+                                              "min_evidence_date": None})
+        seq["has_unknown_legacy"] = True
+
+    return sequences
+
+
+def check_review_closure(review_sequence=None, plan_tracker_completed=None,
+                         routing_table=None, legacy_files=None):
+    """FIX-174 (DEC-094): Check 30 — review closure state-machine validation.
+
+    Implements behavior-protocol.md M7.4 step 4.6 (C1-C7) + DEC-090 degraded
+    fuse. Validates V1-V4 over an explicit review_sequence (fixture path) or,
+    when called with no args, scans the live evidence-log + plan-tracker.
+
+    Args (fixture path — preferred for AUDIT-128 tests):
+      review_sequence: list of dicts {"id", "task_ref", "conclusion", ...}
+      plan_tracker_completed: dict {task_id: True} marking tasks the plan
+        tracker has marked "已完成" — needed for V1 broken-chain detection.
+      routing_table: optional dict task_type -> post-review cell. When a task
+        type is exempt (—) V1 NEEDS_CHANGE terminal is allowed.
+      legacy_files: optional list of {"file","task_ref"} dicts for pre-R{n}
+        review-{id}-v*.md files. Tagged UNKNOWN/WARN, no round inference.
+
+    Returns dict: {verdict, reason, violations, warnings, tasks_checked}
+      verdict ∈ {"FAIL", "PASS", "WARN", "no-verdict"}
+    """
+    result = {
+        "verdict": "no-verdict",
+        "reason": "",
+        "violations": [],
+        "warnings": [],
+        "tasks_checked": 0,
+    }
+
+    if review_sequence is not None:
+        sequences = _build_review_sequence(review_sequence,
+                                           legacy_files=legacy_files)
+        completed = set((plan_tracker_completed or {}).keys())
+    else:
+        # Live scan: gather REVIEW-{id}[-R{n}] evidence rows + review-*.md files.
+        sequences, completed = _collect_live_review_sequences()
+
+    if not sequences:
+        result["verdict"] = "no-verdict"
+        result["reason"] = (
+            "no review evidence found — Check 30 has nothing to validate"
+        )
+        return result
+
+    if routing_table is None:
+        routing_table = _parse_routing_post_review_table()
+
+    for task_id, seq in sorted(sequences.items()):
+        result["tasks_checked"] += 1
+        rounds = seq["rounds"]
+        max_round = seq["max_round"]
+
+        # Backward-compat legacy files → WARN only (P1-c).
+        if seq.get("has_unknown_legacy") and not rounds:
+            result["warnings"].append({
+                "rule": "COMPAT",
+                "task_id": task_id,
+                "reason": "legacy review-{id}-v*.md file(s) present — round "
+                          "inference skipped, tagged UNKNOWN",
+            })
+            continue
+
+        if not rounds:
+            continue
+
+        # V2: round continuity — R0..R{max} must all exist (no skipped rounds).
+        expected_rounds = set(range(0, max_round + 1))
+        missing_rounds = expected_rounds - set(rounds.keys())
+        if missing_rounds:
+            # FIX-174 R1 (P0-2): historical-naming exemption. Sequences that
+            # mix a bare REVIEW-{id} (round 0, pre-FIX-173 convention) with an
+            # R{n}-numbered round (n >= 2) and whose evidence predates the
+            # FIX-173 naming normalization are historical residue, not a real
+            # round-continuity breach. Downgrade FAIL → WARN so CI is not
+            # permanently red on legacy data (e.g. FIX-071: R0 2026-05-15 +
+            # R2 2026-05-19, missing R1 from before the convention existed).
+            naming_migrated = bool(seq.get("naming_migrated"))
+            ev_date = seq.get("min_evidence_date")
+            pre_normalization = (
+                ev_date is not None and ev_date < FIX173_NAMING_NORMALIZATION_DATE
+            )
+            if naming_migrated and pre_normalization:
+                result["warnings"].append({
+                    "rule": "V2",
+                    "task_id": task_id,
+                    "reason": f"round continuity broken — missing R{sorted(missing_rounds)} "
+                              f"— historical naming residue (bare REVIEW-{{id}} + R{{n}} mix, "
+                              f"evidence pre-dates FIX-173 normalization {ev_date}); downgraded",
+                })
+                continue
+            result["violations"].append({
+                "rule": "V2",
+                "task_id": task_id,
+                "reason": f"round continuity broken — missing R{sorted(missing_rounds)}",
+            })
+            continue
+
+        terminal = rounds[max_round]["conclusion"]
+
+        # V3: fuse compliance (MAX_ROUNDS=3). Evaluated before V1 because a
+        # fuse breach past MAX_ROUNDS is a more specific / actionable verdict
+        # than the generic NEEDS_CHANGE-non-terminal signal (both apply, but
+        # the fix is escalation to BLOCKED, not just re-spawning).
+        if max_round > REVIEW_MAX_ROUNDS:
+            if terminal == "NEEDS_CHANGE":
+                result["violations"].append({
+                    "rule": "V3",
+                    "task_id": task_id,
+                    "reason": f"round {max_round} > fuse {REVIEW_MAX_ROUNDS} and "
+                              f"R{max_round}=NEEDS_CHANGE — must escalate to BLOCKED",
+                })
+                continue
+            elif terminal == "APPROVED":
+                # C5: round>3 APPROVED only allowed with explicit "接受降级"
+                # escalation decision. We cannot see escalation here, so WARN.
+                result["warnings"].append({
+                    "rule": "V3",
+                    "task_id": task_id,
+                    "reason": f"round {max_round} > fuse {REVIEW_MAX_ROUNDS} but "
+                              f"R{max_round}=APPROVED — possible marginal pass, "
+                              f"confirm escalation accepted degraded",
+                })
+                # fall through to V4 traceability check
+
+        # V1: terminal state legality. The highest round's conclusion must be
+        # APPROVED or BLOCKED, UNLESS the task type is routing-exempt (—).
+        is_exempt = _task_routing_exempt(task_id, routing_table)
+        if terminal not in _REVIEW_TERMINAL_CONCLUSIONS and not is_exempt:
+            # NEEDS_CHANGE (or other) is not a legitimate terminal state.
+            # If the plan-tracker marked this task completed → broken chain.
+            if task_id in completed:
+                result["violations"].append({
+                    "rule": "V1",
+                    "task_id": task_id,
+                    "reason": f"R{max_round}={terminal} is non-terminal but task "
+                              f"is marked completed — review chain broken",
+                })
+            else:
+                # Task not yet completed: NEEDS_CHANGE mid-flight is fine.
+                result["warnings"].append({
+                    "rule": "V1",
+                    "task_id": task_id,
+                    "reason": f"R{max_round}={terminal} non-terminal — task not "
+                              f"yet completed, re-spawn expected",
+                })
+            continue
+
+        # V4: APPROVED traceability — terminal APPROVED must have a real R{n}
+        # entry whose conclusion is APPROVED (trivially true here since
+        # `terminal` came from rounds[max_round]).
+        if terminal == "APPROVED":
+            if rounds[max_round]["conclusion"] != "APPROVED":
+                result["violations"].append({
+                    "rule": "V4",
+                    "task_id": task_id,
+                    "reason": f"task marked APPROVED but R{max_round} conclusion "
+                              f"is {rounds[max_round]['conclusion']}",
+                })
+
+    if result["violations"]:
+        result["verdict"] = "FAIL"
+        rules = ", ".join(sorted({v["rule"] for v in result["violations"]}))
+        result["reason"] = (
+            f"review-closure violations: {rules} — M7.4 step 4.6 state machine"
+        )
+    elif result["warnings"]:
+        result["verdict"] = "WARN"
+        result["reason"] = (
+            f"{len(result['warnings'])} review-closure WARN(s) — non-blocking"
+        )
+    else:
+        result["verdict"] = "PASS"
+        result["reason"] = (
+            "all review sequences comply with M7.4 step 4.6 closure state machine"
+        )
+    return result
+
+
+def _evidence_task_type_index():
+    """FIX-174 R1 (P0-3): map task_id -> joined type+description text scanned
+    from the evidence-log, so _task_routing_exempt can heuristically infer a
+    task's type when the plan-tracker has no type column.
+
+    Only work-delivery rows (evd_id starting with EVD-) contribute. We
+    deliberately skip REVIEW-* rows: a REVIEW-{id} row's type cell carries the
+    *reviewer's* activity label (e.g. "代码审查"), not the task's own type, so
+    including it would mis-classify every reviewed task as a review-type task.
+
+    Returns dict task_id -> str (the concatenation of the row's type cell and
+    description cell, lowercased). Best-effort: returns {} on read failure.
+    """
+    index = {}
+    if not EVIDENCE_PATH.is_file():
+        return index
+    try:
+        content = EVIDENCE_PATH.read_text(encoding="utf-8")
+    except (IOError, OSError):
+        return index
+    for line in content.split("\n"):
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            continue
+        parts = [p.strip() for p in stripped.split("|")]
+        if len(parts) < 6:
+            continue
+        evd_id = parts[1]
+        # Skip review-evidence rows — their type cell is the reviewer activity,
+        # not the task's own type (see docstring).
+        if evd_id.upper().startswith("REVIEW-"):
+            continue
+        raw_ids = parts[2]
+        type_cell = parts[3] if len(parts) > 3 else ""
+        desc_cell = parts[4] if len(parts) > 4 else ""
+        for tid in re.findall(r"[A-Z]+-\d+", raw_ids):
+            blob = f"{type_cell} {desc_cell}".strip().lower()
+            if blob:
+                index.setdefault(tid, "")
+                if blob not in index[tid]:
+                    index[tid] = (index[tid] + " " + blob).strip()
+    return index
+
+
+def _task_routing_exempt(task_id, routing_table):
+    """FIX-174 R1 (P0-3): heuristic — is this task's type routing-exempt (—)?
+
+    The plan-tracker has no task-type column, so the routing cell cannot be
+    looked up directly. We infer the task type from the evidence-log row
+    (its type + description cells) and check whether any exempt task-type
+    label — i.e. a routing-table key whose "后置审查 Agent(s)" cell is — —
+    appears in that text. Pure review-type tasks (代码审查 / 设计审查 /
+    需求审查 / 测试审查 / 发布审查 / 复盘审查 / 需求澄清 / 任务模糊 /
+    性能优化 / 部署/运维) have no post-review agent, so a NEEDS_CHANGE
+    terminal is legitimate (the review itself IS the deliverable).
+
+    Returns True if the inferred task type matches an exempt routing key.
+    """
+    if not routing_table:
+        return False
+    # Collect the exempt routing keys (post-review cell == —).
+    exempt_types = {t for t, cell in routing_table.items()
+                    if _is_post_review_exempt(cell)}
+    if not exempt_types:
+        return False
+    blob = _evidence_task_type_index().get(task_id, "")
+    if not blob:
+        return False
+    for etype in exempt_types:
+        if etype and etype.lower() in blob:
+            return True
+    return False
+
+
+def _collect_live_review_sequences():
+    """Scan evidence-log + .governance/review-*.md for review sequences.
+
+    Returns (sequences_dict, completed_set).
+    """
+    review_entries = []
+    legacy_files = []
+    completed = set()
+
+    # Plan-tracker: collect completed task ids.
+    if SAMPLE_PATH.is_file():
+        try:
+            completed = parse_completed_task_ids()
+        except Exception:
+            completed = set()
+
+    # Evidence-log: REVIEW-{id}[-R{n}] rows.
+    if EVIDENCE_PATH.is_file():
+        try:
+            content = EVIDENCE_PATH.read_text(encoding="utf-8")
+        except (IOError, OSError):
+            content = ""
+        for line in content.split("\n"):
+            stripped = line.strip()
+            if not stripped.startswith("|"):
+                continue
+            parts = [p.strip() for p in stripped.split("|")]
+            if len(parts) < 8:
+                continue
+            evd_id = parts[1]
+            raw_ids = parts[2]
+            conclusion = ""
+            # Conclusion often lives in notes / tail columns as APPROVED etc.
+            for part in parts[3:]:
+                if part.upper() in ("APPROVED", "NEEDS_CHANGE", "BLOCKED"):
+                    conclusion = part.upper()
+                    break
+            # FIX-174 R1 (P0-2): pull the row's ISO date so the V2 historical
+            # exemption can tell pre-FIX-173 naming residue from a real breach.
+            row_date = ""
+            for part in parts[3:]:
+                m_date = re.match(r"^(\d{4}-\d{2}-\d{2})$", part)
+                if m_date:
+                    row_date = m_date.group(1)
+                    break
+            # Match REVIEW-{id}[-R{n}] shape in evd_id or raw_ids.
+            candidate_ids = []
+            for cand in (evd_id, raw_ids):
+                for m in re.finditer(r"REVIEW-[A-Z]+-\d+(?:-R\d+)?", cand):
+                    candidate_ids.append(m.group(0))
+            if not candidate_ids:
+                continue
+            for cid in candidate_ids:
+                task_id, _round = _normalize_review_round(cid)
+                if task_id is None:
+                    continue
+                review_entries.append({
+                    "id": cid,
+                    "task_ref": task_id,
+                    "conclusion": conclusion or "NEEDS_CHANGE",
+                    "date": row_date,
+                })
+
+    # .governance/review-*.md files.
+    gov_dir = ROOT / ".governance"
+    if gov_dir.is_dir():
+        for rf in gov_dir.glob("review-*.md"):
+            name = rf.name
+            m_legacy = _LEGACY_REVIEW_FILE_RE.match(name)
+            if m_legacy:
+                legacy_files.append({"file": name, "task_ref": m_legacy.group(1)})
+                continue
+            # New-format review-{id}-R{n}.md or review-{id}.md.
+            m_new = re.match(r"^review-([A-Z]+-\d+)(?:-R(\d+))?\.md$", name, re.IGNORECASE)
+            if not m_new:
+                continue
+            task_id = m_new.group(1)
+            round_n = int(m_new.group(2)) if m_new.group(2) else 0
+            # Read conclusion from file content.
+            conclusion = "NEEDS_CHANGE"
+            try:
+                fc = rf.read_text(encoding="utf-8")
+                if "APPROVED" in fc.upper():
+                    conclusion = "APPROVED"
+                elif "BLOCKED" in fc.upper():
+                    conclusion = "BLOCKED"
+            except (IOError, OSError):
+                pass
+            cid = f"REVIEW-{task_id}-R{round_n}" if round_n else f"REVIEW-{task_id}"
+            review_entries.append({
+                "id": cid,
+                "task_ref": task_id,
+                "conclusion": conclusion,
+            })
+
+    sequences = _build_review_sequence(review_entries, legacy_files=legacy_files)
+    return sequences, completed
 
 
 def cmd_check_governance(args):
@@ -14555,17 +15614,25 @@ def cmd_check_governance(args):
             print(f"│  [PASS] No P0 cross-layer product tasks to check.")
     print("└──────────────────────────────────────────────────────┘")
 
-    # ── 21. Review Debt (SYSGAP-042) ──
-    print("\n┌─ Check 21: Review Debt ─────────────────────────────┐")
+    # ── 21. Review Debt + Spawn Gap (SYSGAP-042 + FIX-174) ──
+    print("\n┌─ Check 21: Review Debt / Spawn Gap (FIX-174) ───────┐")
     rd_result = check_review_debt()
     print(f"│  Product-code tasks (all, with evidence): {rd_result['total_tasks']}")
     print(f"│  Review debt (have execution evidence, no review): {rd_result['review_debt_count']}")
+    # FIX-174 (DEC-094): spawn-gap (M7.4 step 4.5b) + degraded-fuse (step 4.6).
     if rd_result["review_debt_count"] > 0:
         all_issues += rd_result["review_debt_count"]
         print(f"│  [FAIL] {rd_result['review_debt_count']} product-code task(s) with review debt:")
         for tid in rd_result["review_debt_tasks"]:
             print(f"│    - {tid}")
-    else:
+    if rd_result.get("degraded_fuse_tasks"):
+        fuse_count = len(rd_result["degraded_fuse_tasks"])
+        all_issues += fuse_count
+        print(f"│  [FAIL] {fuse_count} task(s) hit degraded-fuse "
+              f"(≥{DEGRADED_FUSE_THRESHOLD} degraded reviews, M7.4 step 4.6):")
+        for tid in rd_result["degraded_fuse_tasks"]:
+            print(f"│    - {tid}")
+    if rd_result["review_debt_count"] == 0 and not rd_result.get("degraded_fuse_tasks"):
         if rd_result["total_tasks"] > 0:
             print(f"│  [PASS] All product-code tasks have review evidence.")
         else:
@@ -15005,6 +16072,46 @@ def cmd_check_governance(args):
             print(f"│    [{f['severity']}] {f.get('path','')} {b} bytes ({b/1024:.1f} KB)".rstrip())
         if (s["errors"] or s["warnings"]):
             print("│  (advisory — fatal_on_error=false; does not block release)")
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 29. M5 Runtime Triggers (FIX-174 / DEC-094) ──
+    # Best-effort scan of session-snapshot / evidence-log corpus. Falls back to
+    # no-verdict when no corpus is available (P1-b). Does not over-claim in CI.
+    print("\n┌─ Check 29: M5 Runtime Triggers (FIX-174) ───────────┐")
+    m5rt = check_m5_runtime_triggers()
+    print(f"│  Scanned segments: {m5rt['scanned_segments']}")
+    print(f"│  Verdict: {m5rt['verdict']}")
+    if m5rt["violations"]:
+        all_issues += len(m5rt["violations"])
+        print(f"│  [FAIL] {len(m5rt['violations'])} M5 runtime violation(s):")
+        for v in m5rt["violations"]:
+            print(f"│    - [{v['trigger']}] {v['source']}: {v['reason']}")
+    elif m5rt["warnings"]:
+        print(f"│  [WARN] {len(m5rt['warnings'])} M5.4b notification-prefix WARN(s):")
+        for w in m5rt["warnings"]:
+            print(f"│    - [{w['trigger']}] {w['source']}: {w['reason']}")
+    else:
+        print(f"│  [{m5rt['verdict']}] {m5rt['reason']}")
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 30. Review Closure State Machine (FIX-174 / DEC-094) ──
+    # Validates M7.4 step 4.6 closure: V1 terminal legality, V2 round
+    # continuity, V3 fuse (MAX_ROUNDS=3), V4 APPROVED traceability.
+    print("\n┌─ Check 30: Review Closure State Machine (FIX-174) ──┐")
+    rc30 = check_review_closure()
+    print(f"│  Tasks with review sequences: {rc30['tasks_checked']}")
+    print(f"│  Verdict: {rc30['verdict']}")
+    if rc30["violations"]:
+        all_issues += len(rc30["violations"])
+        print(f"│  [FAIL] {len(rc30['violations'])} closure violation(s):")
+        for v in rc30["violations"]:
+            print(f"│    - [{v['rule']}] {v.get('task_id','')}: {v['reason']}")
+    elif rc30["warnings"]:
+        print(f"│  [WARN] {len(rc30['warnings'])} closure WARN(s):")
+        for w in rc30["warnings"]:
+            print(f"│    - [{w['rule']}] {w.get('task_id','')}: {w['reason']}")
+    else:
+        print(f"│  [{rc30['verdict']}] {rc30['reason']}")
     print("└──────────────────────────────────────────────────────┘")
 
     # ── Summary ──
@@ -18931,7 +20038,7 @@ def cmd_check_review_debt(args):
     except Exception:
         pass
 
-    print("\n=== Check 21: Review Debt (SYSGAP-042) ===")
+    print("\n=== Check 21: Review Debt / Spawn Gap (SYSGAP-042 + FIX-174) ===")
     rd_result = check_review_debt()
     print(f"  Product-code tasks (all, with evidence): {rd_result['total_tasks']}")
     print(f"  Review debt (have execution evidence, no review): {rd_result['review_debt_count']}")
@@ -18939,13 +20046,22 @@ def cmd_check_review_debt(args):
         print(f"  [FAIL] {rd_result['review_debt_count']} product-code task(s) with review debt:")
         for tid in rd_result["review_debt_tasks"]:
             print(f"    - {tid}")
-    else:
+    if rd_result.get("degraded_fuse_tasks"):
+        print(f"  [FAIL] {len(rd_result['degraded_fuse_tasks'])} task(s) hit degraded-fuse "
+              f"(≥{DEGRADED_FUSE_THRESHOLD} degraded reviews, M7.4 step 4.6):")
+        for tid in rd_result["degraded_fuse_tasks"]:
+            print(f"    - {tid}")
+    if rd_result["review_debt_count"] == 0 and not rd_result.get("degraded_fuse_tasks"):
         if rd_result["total_tasks"] > 0:
             print(f"  [PASS] All product-code tasks have review evidence.")
         else:
             print(f"  [PASS] No product-code tasks to check.")
     print()
-    if args.fail_on_issues and rd_result["review_debt_count"] > 0:
+    has_fail = (
+        rd_result["review_debt_count"] > 0
+        or bool(rd_result.get("degraded_fuse_tasks"))
+    )
+    if args.fail_on_issues and has_fail:
         sys.exit(1)
 
 

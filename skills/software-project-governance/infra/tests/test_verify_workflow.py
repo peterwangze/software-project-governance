@@ -12806,5 +12806,585 @@ class AgentActivationTests(unittest.TestCase):
                 self.assertEqual(r["analyst_bypassed"], 0)
 
 
+# ────────────────────────────────────────────────────────────
+# FIX-174 (DEC-094): Check 21 spawn-gap / Check 29 M5 runtime
+# / Check 30 review-closure — AUDIT-128 fixture-driven tests.
+# ────────────────────────────────────────────────────────────
+
+class CheckReviewSpawnGapTests(unittest.TestCase):
+    """FIX-174 (DEC-094): Check 21 three-source spawn-gap judge.
+
+    Mirrors AUDIT-128-fixture.md Check 21 cases (FIX21-*). Exercises
+    vw.check_review_spawn_gap() — the pure three-source judge extracted
+    from check_review_debt() for fixture-testability.
+    """
+
+    def test_fix21_vio_1_product_diff_no_review_fails(self):
+        """FIX21-VIO-1: product-code diff + routing requires review + no REVIEW → FAIL."""
+        r = vw.check_review_spawn_gap(
+            task_id="FIX-200",
+            git_diff_paths=[
+                "skills/software-project-governance/infra/verify_workflow.py",
+                "skills/software-project-governance/SKILL.md",
+            ],
+            routing_post_review="Code Reviewer",
+            review_entries=[],
+            evidence_degraded_count=0,
+        )
+        self.assertEqual(r["result"], "FAIL")
+        self.assertTrue(r["source_a"])
+        self.assertTrue(r["source_b"])
+        self.assertFalse(r["source_c"])
+        self.assertIn("spawn_gap", r["reason"])
+
+    def test_fix21_pass_a_approved_review_passes(self):
+        """FIX21-PASS-A: APPROVED REVIEW evidence present → PASS."""
+        r = vw.check_review_spawn_gap(
+            task_id="FIX-201",
+            git_diff_paths=["skills/software-project-governance/infra/archive.py"],
+            routing_post_review="Code Reviewer",
+            review_entries=[{"id": "REVIEW-FIX-201", "conclusion": "APPROVED"}],
+            evidence_degraded_count=0,
+        )
+        self.assertEqual(r["result"], "PASS")
+        self.assertTrue(r["source_c"])
+
+    def test_fix21_pass_b_governance_only_exempt(self):
+        """FIX21-PASS-B: .governance/ paths are not product code → PASS."""
+        r = vw.check_review_spawn_gap(
+            task_id="FIX-202",
+            git_diff_paths=[
+                ".governance/plan-tracker.md",
+                ".governance/evidence-log.md",
+            ],
+            routing_post_review="—",
+            review_entries=[],
+            evidence_degraded_count=0,
+        )
+        self.assertEqual(r["result"], "PASS")
+        self.assertFalse(r["source_a"])
+
+    def test_fix21_pass_c_routing_exempt(self):
+        """FIX21-PASS-C: routing cell is — → PASS (source B exempt)."""
+        r = vw.check_review_spawn_gap(
+            task_id="FIX-203",
+            git_diff_paths=["skills/software-project-governance/SKILL.md"],
+            routing_post_review="—",
+            review_entries=[],
+            evidence_degraded_count=0,
+        )
+        self.assertEqual(r["result"], "PASS")
+        self.assertTrue(r["source_a"])  # touches product code
+        # source_b is False because cell is exempt
+        self.assertFalse(r["source_b"])
+
+    def test_fix21_deg_3_degraded_fuse_fails(self):
+        """FIX21-DEG-3: 3 degraded reviews → FAIL (DEC-094 §3.3 fuse)."""
+        r = vw.check_review_spawn_gap(
+            task_id="FIX-204",
+            git_diff_paths=["skills/software-project-governance/infra/verify_workflow.py"],
+            routing_post_review="Code Reviewer",
+            review_entries=[{"conclusion": "NEEDS_CHANGE"}],
+            evidence_degraded_count=3,
+        )
+        self.assertEqual(r["result"], "FAIL")
+        self.assertEqual(r["degraded_count"], 3)
+        self.assertIn("degraded", r["reason"].lower())
+
+    def test_fix21_deg_2_under_threshold_passes(self):
+        """FIX-174 R1 (P1-5): control case for FIX21-DEG-3. A degraded count
+        of 2 is below the DEC-094 §3.3 fuse threshold (3), so it must NOT trip
+        the fuse. The verdict depends on the three-source logic instead — here
+        source C is satisfied (an APPROVED review exists) → PASS.
+
+        Without this control the DEG-3 test cannot distinguish "fuse fires at
+        exactly the threshold" from "fuse fires on any degraded count > 0".
+        """
+        r = vw.check_review_spawn_gap(
+            task_id="FIX-204B",
+            git_diff_paths=["skills/software-project-governance/infra/verify_workflow.py"],
+            routing_post_review="Code Reviewer",
+            review_entries=[{"id": "REVIEW-FIX-204B", "conclusion": "APPROVED"}],
+            evidence_degraded_count=2,
+        )
+        # Below threshold → no fuse FAIL; source C satisfied → PASS.
+        self.assertEqual(r["result"], "PASS")
+        self.assertEqual(r["degraded_count"], 2)
+        # The reason must reflect source-C satisfaction, NOT a fuse trip.
+        self.assertNotIn("fuse", r["reason"].lower())
+        self.assertTrue(r["source_c"])
+
+
+class CheckReviewDebtDegradedFuseTests(unittest.TestCase):
+    """FIX-174: check_review_debt() degraded-fuse integration (live evidence-log)."""
+
+    def _setup(self, tmpdir, plan="", evidence=""):
+        root = Path(tmpdir)
+        gov = root / ".governance"
+        gov.mkdir(parents=True, exist_ok=True)
+        sp = gov / "plan-tracker.md"
+        ep = gov / "evidence-log.md"
+        sp.write_text(plan, encoding="utf-8")
+        ep.write_text(evidence, encoding="utf-8")
+        return sp, ep
+
+    def test_check_review_debt_flags_degraded_fuse_at_threshold(self):
+        """≥3 degraded-tagged REVIEW rows for a product-code task → fuse FAIL."""
+        with tempfile.TemporaryDirectory() as td:
+            plan = "\n".join([
+                "# 计划跟踪",
+                "",
+                "## 任务跟踪",
+                _TASK_COLS,
+                _TASK_SEP,
+                _task("FIX-204", "已完成"),
+            ])
+            # Degraded markers must appear as STRUCTURAL TAGS (in notes column
+            # or as explicit `[degraded]` labels), not inside the free-text
+            # description, to avoid false positives on legitimately APPROVED
+            # reviews whose prose discusses product runtime wording.
+            evidence_rows = [
+                _evidence_row_generic(
+                    "EVD-204", "FIX-204",
+                    evd_type="实现",
+                    file_location="skills/software-project-governance/infra/verify_workflow.py",
+                    author="Developer",
+                ),
+                # 3 degraded REVIEW rows — markers in the notes tail (parts[9+]).
+                "| REVIEW-FIX-204-R0 | FIX-204 | 审查 | Code Review | "
+                "round 0 review | transcript | Code Reviewer (Explore) | "
+                "2026-07-04 | G11 | APPROVED | [degraded] round 0 |",
+                "| REVIEW-FIX-204-R1 | FIX-204 | 审查 | Code Review | "
+                "round 1 review | transcript | Code Reviewer (Explore) | "
+                "2026-07-04 | G11 | NEEDS_CHANGE | [coordinator-降级] round 1 |",
+                "| REVIEW-FIX-204-R2 | FIX-204 | 审查 | Code Review | "
+                "round 2 review | transcript | Code Reviewer (Explore) | "
+                "2026-07-04 | G11 | NEEDS_CHANGE | [sod-降级] round 2 |",
+            ]
+            sp, ep = self._setup(td, plan=plan, evidence="\n".join(evidence_rows))
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_review_debt()
+            self.assertFalse(r["pass"])
+            self.assertIn("FIX-204", r["degraded_fuse_tasks"])
+
+    def test_check_review_debt_does_not_false_positive_on_prose_degraded(self):
+        """Description prose mentioning 'degraded' must NOT trip the fuse."""
+        with tempfile.TemporaryDirectory() as td:
+            plan = "\n".join([
+                "# 计划跟踪",
+                "",
+                "## 任务跟踪",
+                _TASK_COLS,
+                _TASK_SEP,
+                _task("FIX-205", "已完成"),
+            ])
+            # The word "degraded" appears in DESCRIPTION prose only (runtime
+            # wording), but the review is a legitimate APPROVED independent
+            # review — must NOT trip the fuse.
+            evidence_rows = [
+                _evidence_row_generic(
+                    "EVD-205", "FIX-205",
+                    evd_type="实现",
+                    file_location="skills/software-project-governance/infra/verify_workflow.py",
+                    author="Developer",
+                ),
+                "| REVIEW-FIX-205 | FIX-205 | 审查 | Code Review | "
+                "Code Reviewer Raman read-only review APPROVED. Runtime wording "
+                "is degraded / blocked / environment-dependent conservative. | "
+                "transcript | Code Reviewer Raman | 2026-07-04 | G11 | APPROVED |",
+            ]
+            sp, ep = self._setup(td, plan=plan, evidence="\n".join(evidence_rows))
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_review_debt()
+            # No degraded-fuse false positive, no review debt.
+            self.assertEqual(r["degraded_fuse_tasks"], [])
+            self.assertEqual(r["review_debt_count"], 0)
+
+
+class CheckM5RuntimeTriggersTests(unittest.TestCase):
+    """FIX-174 (DEC-094): Check 29 — M5 runtime trigger scan.
+
+    Mirrors AUDIT-128-fixture.md Check 29 cases (FIX29-*). Exercises
+    vw.check_m5_runtime_triggers() with inline assistant-message segments.
+    """
+
+    def test_fix29_vio_t1_bare_question_fails(self):
+        """FIX29-VIO-T1: segment ends with '？' + question word, no AskUserQuestion → FAIL."""
+        text = (
+            "我已经分析了路由表的对齐情况，发现 methodology-routing.md 缺少"
+            "“后置审查 Agent(s)”列。\n请问您希望我现在就开始修复吗？"
+        )
+        r = vw.check_m5_runtime_triggers(text=text, contains_askuserquestion=False)
+        self.assertEqual(r["verdict"], "FAIL")
+        triggers = {v["trigger"] for v in r["violations"]}
+        self.assertIn("T1", triggers)
+
+    def test_fix29_t1_declarative_is_not_question_passes(self):
+        """FIX-174 R1 (P1-4): '是不是' opens declarative sentences too, so it
+        was removed from M5_QUESTION_WORDS. A sentence ending in '？' that
+        relies solely on the removed '是不是' wildcard term must NOT fire T1
+        — T1 requires a discriminative question-word hit, not just any
+        question-flavoured character.
+        """
+        # Ends in ？, contains the old '是不是' term, but NO retained
+        # question-word → under the tightened set this must NOT trigger T1.
+        text = "这件事是不是已经符合预期？"
+        r = vw.check_m5_runtime_triggers(text=text, contains_askuserquestion=False)
+        self.assertNotIn("T1", {v["trigger"] for v in r["violations"]})
+
+    def test_fix29_vio_t2_option_menu_fails(self):
+        """FIX29-VIO-T2: numbered option menu + choice context, no AskUserQuestion → FAIL."""
+        text = (
+            "关于 Check 编号方案，有几种选择：\n"
+            "1. 复用 Check 21（强化 review_debt）\n"
+            "2. 新增 Check 29（独立 M5 运行时）\n"
+            "3. 两者都做\n"
+            "您倾向哪种方案？"
+        )
+        r = vw.check_m5_runtime_triggers(text=text, contains_askuserquestion=False)
+        self.assertEqual(r["verdict"], "FAIL")
+        triggers = {v["trigger"] for v in r["violations"]}
+        # T2 (option menu) is the core trigger; T1 may also fire due to the
+        # trailing question mark.
+        self.assertTrue(triggers & {"T1", "T2"})
+
+    def test_fix29_fp_descriptive_bullets_far_choice_word_passes(self):
+        """FIX-174 R1 (P0-1): descriptive (1)(2)(3) bullets + an unrelated
+        '选项' word dozens of lines away MUST NOT fire T2. Reproduces the
+        session-snapshot false positive — descriptive enumeration of
+        Coordinator defects plus an '选项' word in an unrelated roadmap note.
+        """
+        # 10+ lines separate the descriptive (1)(2)(3) from the lone '选项'.
+        text = (
+            "用户反馈 Coordinator 三个行为缺陷：\n"
+            "- (1) 忽略 AskUserQuestion 直接内联提问\n"
+            "- (2) 修改后不主动发起检视\n"
+            "- (3) 检视后不复审循环\n"
+            "\n"
+            "## 本轮核心成就\n"
+            "诊断切片完成，编号漂移核实确认 v2 主张成立。\n"
+            "经 Architect v1 到 Design Reviewer round1 再到 v2，最终 APPROVED。\n"
+            "11 文件 +247/-50 改动已 commit（commit 20bdc53）。\n"
+            "路由表 4 列重构为 6 列，新增后置审查 Agent(s) 列。\n"
+            "6 个 Reviewer agent 各加复审协议 4 条 MUST 条款。\n"
+            "verify_workflow.py 52 行编号漂移系统性修正（~22 处）。\n"
+            "\n"
+            "## 遗留任务\n"
+            "### 1. FIX-174\n"
+            "- Check 29 新增：M5 运行时扫描（T1 问句收尾/T2 选项菜单无工具）\n"
+            "- Check 30 新增：复审终态校验\n"
+            "\n"
+            "以上是核实结果，继续执行任务 2。"
+        )
+        r = vw.check_m5_runtime_triggers(text=text, contains_askuserquestion=False)
+        self.assertNotIn("T2", {v["trigger"] for v in r["violations"]})
+
+    def test_fix29_fp_paren_letter_plural_passes(self):
+        """FIX-174 R1 (P0-1): the parenthesised-marker regex must not match
+        arbitrary single letters such as '(s)' in 'Agent(s)'. A narrowed
+        class (digits 1-9 / letters a-d) is required by behavior-protocol.md
+        M5.1b T2 L305.
+        """
+        # 'Agent(s)' must not register as an option-menu marker even with a
+        # nearby '选择' word — '(s)' is a plural, not an option.
+        text = (
+            "路由表后置审查 Agent(s) 列对齐完成。\n"
+            "请用户在下一个关键决策点做选择。"
+        )
+        r = vw.check_m5_runtime_triggers(text=text, contains_askuserquestion=False)
+        self.assertNotIn("T2", {v["trigger"] for v in r["violations"]})
+
+    def test_fix29_vio_t2_inline_parens_with_choice_fails(self):
+        """FIX-174 R1 (P0-1): genuine inline option menu '(1)…(2)…' with a
+        co-located '选择' word still fires T2 (no false negative regression).
+        """
+        text = (
+            "我来提供几个选项：(1) 方案A (2) 方案B (3) 方案C。\n"
+            "请你选择其中一个。"
+        )
+        r = vw.check_m5_runtime_triggers(text=text, contains_askuserquestion=False)
+        self.assertEqual(r["verdict"], "FAIL")
+        self.assertIn("T2", {v["trigger"] for v in r["violations"]})
+
+    def test_fix29_pass_info_notification_passes(self):
+        """FIX29-PASS-INFO: ℹ️ prefix pure notification, no question mark → PASS."""
+        text = (
+            "ℹ️ 已完成 AUDIT-128 诊断切片任务 1：编号漂移核实确认 v2 主张成立。"
+            "继续执行任务 2。"
+        )
+        r = vw.check_m5_runtime_triggers(text=text, contains_askuserquestion=False)
+        self.assertEqual(r["verdict"], "PASS")
+        self.assertEqual(len(r["violations"]), 0)
+
+    def test_fix29_edge_code_block_question_exempt(self):
+        """FIX29-EDGE-CODE: question marks inside ``` fences are exempt; prose question still fires."""
+        text = (
+            "以下是路由表表头对照：\n"
+            "```markdown\n"
+            "| 任务类型 | 执行 Agent | 后置审查 Agent(s) | 触发条件 |\n"
+            "```\n"
+            "注意 SKILL.md 多了一列。是否需要我继续？\n"
+            "```python\n"
+            "if x is not None:  # 这里问号是注释吗？不，是冒号\n"
+            "    return x?\n"
+            "```"
+        )
+        r = vw.check_m5_runtime_triggers(text=text, contains_askuserquestion=False)
+        # The trailing prose question '是否需要我继续？' is a T1 violation;
+        # the in-fence question marks must NOT suppress it.
+        self.assertEqual(r["verdict"], "FAIL")
+        triggers = {v["trigger"] for v in r["violations"]}
+        self.assertIn("T1", triggers)
+
+    def test_fix29_edge_table_row_question_exempt(self):
+        """FIX29-EDGE-TABLE: question marks inside | table rows are exempt; prose question still fires."""
+        text = (
+            "Check 编号现状表：\n"
+            "| Check | 名称 | 是否漂移？ |\n"
+            "|-------|------|----------|\n"
+            "| 20 | Agent Activation | 否 |\n"
+            "| 21 | Review Debt | 是 |\n"
+            "\n"
+            "以上是核实结果。需要我进入任务 2 吗？"
+        )
+        r = vw.check_m5_runtime_triggers(text=text, contains_askuserquestion=False)
+        # Table-row '是否漂移？' must be exempt; final prose '需要我进入任务 2 吗？' fires T1.
+        self.assertEqual(r["verdict"], "FAIL")
+        triggers = {v["trigger"] for v in r["violations"]}
+        self.assertIn("T1", triggers)
+
+    def test_check29_no_corpus_degrades_to_no_verdict(self):
+        """P1-b: no corpus source available → no-verdict (does not FAIL)."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gov = root / ".governance"
+            gov.mkdir(parents=True, exist_ok=True)
+            # No session-snapshot.md, no evidence-log facts.
+            with patch.object(vw, "ROOT", root), \
+                 patch.object(vw, "EVIDENCE_PATH", gov / "evidence-log.md"):
+                r = vw.check_m5_runtime_triggers()
+            self.assertEqual(r["verdict"], "no-verdict")
+
+
+class CheckReviewClosureTests(unittest.TestCase):
+    """FIX-174 (DEC-094): Check 30 — review closure state-machine validation.
+
+    Mirrors AUDIT-128-fixture.md Check 30 cases (FIX30-*). Exercises
+    vw.check_review_closure() with explicit review_sequence fixtures.
+    """
+
+    def test_fix30_pass_r0_approved(self):
+        """FIX30-PASS-R0-APPROVED: R0=APPROVED terminal → PASS."""
+        seq = [{"id": "REVIEW-FIX-205", "task_ref": "FIX-205",
+                "reviewer": "Code Reviewer Noether", "conclusion": "APPROVED"}]
+        r = vw.check_review_closure(
+            review_sequence=seq,
+            plan_tracker_completed={"FIX-205": True},
+        )
+        self.assertEqual(r["verdict"], "PASS")
+        self.assertEqual(len(r["violations"]), 0)
+
+    def test_fix30_pass_r0n_r1a(self):
+        """FIX30-PASS-R0N-R1A: R0=NEEDS_CHANGE → R1=APPROVED → PASS."""
+        seq = [
+            {"id": "REVIEW-FIX-206", "task_ref": "FIX-206",
+             "reviewer": "Code Reviewer Bernoulli", "conclusion": "NEEDS_CHANGE"},
+            {"id": "REVIEW-FIX-206-R1", "task_ref": "FIX-206",
+             "reviewer": "Code Reviewer Bernoulli", "conclusion": "APPROVED"},
+        ]
+        r = vw.check_review_closure(
+            review_sequence=seq,
+            plan_tracker_completed={"FIX-206": True},
+        )
+        self.assertEqual(r["verdict"], "PASS")
+        self.assertEqual(len(r["violations"]), 0)
+
+    def test_fix30_vio_broken_chain(self):
+        """FIX30-VIO-BROKEN-CHAIN: R0=NEEDS_CHANGE, no R1, task marked done → FAIL (V1)."""
+        seq = [{"id": "REVIEW-FIX-207", "task_ref": "FIX-207",
+                "reviewer": "Code Reviewer Aquinas", "conclusion": "NEEDS_CHANGE"}]
+        r = vw.check_review_closure(
+            review_sequence=seq,
+            plan_tracker_completed={"FIX-207": True},
+        )
+        self.assertEqual(r["verdict"], "FAIL")
+        rules = {v["rule"] for v in r["violations"]}
+        self.assertIn("V1", rules)
+
+    def test_fix30_vio_fuse(self):
+        """FIX30-VIO-FUSE: R4=NEEDS_CHANGE past MAX_ROUNDS=3 + task done → FAIL (V3)."""
+        seq = [
+            {"id": "REVIEW-FIX-208", "conclusion": "NEEDS_CHANGE"},
+            {"id": "REVIEW-FIX-208-R1", "conclusion": "NEEDS_CHANGE"},
+            {"id": "REVIEW-FIX-208-R2", "conclusion": "NEEDS_CHANGE"},
+            {"id": "REVIEW-FIX-208-R3", "conclusion": "NEEDS_CHANGE"},
+            {"id": "REVIEW-FIX-208-R4", "conclusion": "NEEDS_CHANGE"},
+        ]
+        r = vw.check_review_closure(
+            review_sequence=seq,
+            plan_tracker_completed={"FIX-208": True},
+        )
+        self.assertEqual(r["verdict"], "FAIL")
+        rules = {v["rule"] for v in r["violations"]}
+        self.assertIn("V3", rules)
+
+    def test_fix30_compat_legacy_warns_not_fails(self):
+        """FIX30-COMPAT-LEGACY: bare REVIEW + legacy v2 file → WARN (UNKNOWN), not FAIL."""
+        seq = [{"id": "REVIEW-FIX-209", "task_ref": "FIX-209",
+                "conclusion": "APPROVED"}]
+        r = vw.check_review_closure(
+            review_sequence=seq,
+            plan_tracker_completed={"FIX-209": True},
+            legacy_files=[{"file": "review-FIX-210-v2.md", "task_ref": "FIX-210"}],
+        )
+        # FIX-209 is PASS (R0 APPROVED); FIX-210 legacy → WARN. Overall WARN.
+        self.assertEqual(r["verdict"], "WARN")
+        self.assertEqual(len(r["violations"]), 0)
+        compat_warns = [w for w in r["warnings"] if w["rule"] == "COMPAT"]
+        self.assertTrue(compat_warns)
+        self.assertEqual(compat_warns[0]["task_id"], "FIX-210")
+
+    def test_fix30_round_continuity_violation(self):
+        """V2: jumping from R0 to R2 (missing R1) → FAIL.
+
+        Note: no `date` field → not flagged as historical residue → FAIL.
+        """
+        seq = [
+            {"id": "REVIEW-FIX-211", "task_ref": "FIX-211", "conclusion": "NEEDS_CHANGE"},
+            {"id": "REVIEW-FIX-211-R2", "task_ref": "FIX-211", "conclusion": "APPROVED"},
+        ]
+        r = vw.check_review_closure(
+            review_sequence=seq,
+            plan_tracker_completed={"FIX-211": True},
+        )
+        self.assertEqual(r["verdict"], "FAIL")
+        rules = {v["rule"] for v in r["violations"]}
+        self.assertIn("V2", rules)
+
+    def test_fix30_v2_historical_naming_residue_downgrades_to_warn(self):
+        """FIX-174 R1 (P0-2): bare REVIEW-{id} (R0) + R2 with a pre-FIX-173
+        evidence date is historical naming residue, not a real breach → WARN,
+        not a permanent CI FAIL. Reproduces FIX-071 (R0 2026-05-15 + R2
+        2026-05-19, R1 missing because round-numbered naming post-dated the
+        FIX-173 normalization).
+        """
+        seq = [
+            {"id": "REVIEW-FIX-220", "task_ref": "FIX-220",
+             "conclusion": "APPROVED", "date": "2026-05-15"},
+            {"id": "REVIEW-FIX-220-R2", "task_ref": "FIX-220",
+             "conclusion": "APPROVED", "date": "2026-05-19"},
+        ]
+        r = vw.check_review_closure(
+            review_sequence=seq,
+            plan_tracker_completed={"FIX-220": True},
+        )
+        # Downgraded to WARN — no V2 violation, a V2 WARN instead.
+        self.assertEqual(r["verdict"], "WARN")
+        v2_violations = [v for v in r["violations"] if v["rule"] == "V2"]
+        self.assertEqual(v2_violations, [])
+        v2_warns = [w for w in r["warnings"] if w["rule"] == "V2"]
+        self.assertTrue(v2_warns)
+        self.assertEqual(v2_warns[0]["task_id"], "FIX-220")
+        self.assertIn("historical", v2_warns[0]["reason"].lower())
+
+    def test_fix30_v2_post_normalization_gap_still_fails(self):
+        """FIX-174 R1 (P0-2): a round gap with evidence AFTER the FIX-173
+        normalization date is a real breach, not historical residue → FAIL.
+        Guards against the exemption masking genuinely broken sequences.
+        """
+        seq = [
+            {"id": "REVIEW-FIX-221", "task_ref": "FIX-221",
+             "conclusion": "NEEDS_CHANGE", "date": "2026-07-10"},
+            {"id": "REVIEW-FIX-221-R2", "task_ref": "FIX-221",
+             "conclusion": "APPROVED", "date": "2026-07-12"},
+        ]
+        r = vw.check_review_closure(
+            review_sequence=seq,
+            plan_tracker_completed={"FIX-221": True},
+        )
+        self.assertEqual(r["verdict"], "FAIL")
+        rules = {v["rule"] for v in r["violations"]}
+        self.assertIn("V2", rules)
+
+    def test_task_routing_exempt_pure_review_type_returns_true(self):
+        """FIX-174 R1 (P0-3): a task whose EVD-row type is a pure review type
+        (e.g. '代码审查') is routing-exempt — its REVIEW NEEDS_CHANGE terminal
+        is legitimate because the review itself is the deliverable.
+        """
+        routing = {"新功能开发": "Code Reviewer", "代码审查": "—"}
+        with tempfile.TemporaryDirectory() as td:
+            ep = Path(td) / "evidence-log.md"
+            ep.write_text(
+                "| EVD-900 | FIX-230 | 代码审查 | 该任务就是一次代码审查 | x | y | 2026-07-04 | G | 完成 |\n",
+                encoding="utf-8",
+            )
+            with patch.object(vw, "EVIDENCE_PATH", ep):
+                self.assertTrue(vw._task_routing_exempt("FIX-230", routing))
+
+    def test_task_routing_exempt_work_task_returns_false(self):
+        """FIX-174 R1 (P0-3): a normal work task ('修复闭环') that a
+        REVIEW-{id} row happens to *review* must NOT inherit the reviewer's
+        '代码审查' type label — REVIEW rows are excluded from the type index.
+        """
+        routing = {"新功能开发": "Code Reviewer", "代码审查": "—"}
+        with tempfile.TemporaryDirectory() as td:
+            ep = Path(td) / "evidence-log.md"
+            ep.write_text(
+                # EVD work row types FIX-231 as a normal maintenance fix;
+                # the REVIEW row labels the *activity* '代码审查' and must
+                # not flip FIX-231 to exempt.
+                "| EVD-901 | FIX-231 | 修复闭环 | 实现新功能 | x | y | 2026-07-04 | G | 完成 |\n"
+                "| REVIEW-FIX-231 | FIX-231 | 代码审查 | Code Reviewer 审查 | x | y | 2026-07-04 | G | APPROVED |\n",
+                encoding="utf-8",
+            )
+            with patch.object(vw, "EVIDENCE_PATH", ep):
+                self.assertFalse(vw._task_routing_exempt("FIX-231", routing))
+
+    def test_fix30_v1_exemption_for_pure_review_task(self):
+        """FIX-174 R1 (P0-3): a pure review-type task ending in
+        NEEDS_CHANGE is V1-exempt — no broken-chain FAIL (live-scan path).
+        """
+        routing = {"新功能开发": "Code Reviewer", "代码审查": "—"}
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gov = root / ".governance"
+            gov.mkdir(parents=True, exist_ok=True)
+            sp = gov / "plan-tracker.md"
+            ep = gov / "evidence-log.md"
+            sp.write_text("# plan\n", encoding="utf-8")
+            ep.write_text(
+                "| EVD-902 | FIX-232 | 代码审查 | 该任务是一次代码审查 | x | y | 2026-07-04 | G | 完成 |\n"
+                "| REVIEW-FIX-232 | FIX-232 | 代码审查 | Reviewer NEEDS_CHANGE | x | y | 2026-07-04 | G | NEEDS_CHANGE |\n",
+                encoding="utf-8",
+            )
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep), \
+                 patch.object(vw, "ROOT", root), \
+                 patch.object(vw, "parse_completed_task_ids", return_value={"FIX-232"}):
+                r = vw.check_review_closure(routing_table=routing)
+            # FIX-232 is exempt → no V1 violation despite NEEDS_CHANGE terminal.
+            v1 = [v for v in r["violations"] if v["rule"] == "V1"
+                  and v["task_id"] == "FIX-232"]
+            self.assertEqual(v1, [])
+
+    def test_fix30_no_review_evidence_no_verdict(self):
+        """No review_sequence and no live evidence → no-verdict."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gov = root / ".governance"
+            gov.mkdir(parents=True, exist_ok=True)
+            sp = gov / "plan-tracker.md"
+            ep = gov / "evidence-log.md"
+            sp.write_text("# empty", encoding="utf-8")
+            ep.write_text("# empty", encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep), \
+                 patch.object(vw, "ROOT", root):
+                r = vw.check_review_closure()
+            self.assertEqual(r["verdict"], "no-verdict")
+
+
 if __name__ == "__main__":
     unittest.main()

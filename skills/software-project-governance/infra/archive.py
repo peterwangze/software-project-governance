@@ -1118,25 +1118,63 @@ def migrate_by_version(version_start, version_end, dry_run=False, migrate_eviden
     prev_file = existing_names[-1] if existing_names else None
 
     # Build archive body with version sections
-    # Group archived tasks by version
+    # Group archived tasks by version.
+    #
+    # FIX-172 (DATA-LOSS bug): the body write MUST be UNCONDITIONAL — every task
+    # in `archive_body_lines` has to land in the archive file. `archive_body_lines`
+    # is populated from TWO sources (see above): (1) version-section tasks, whose
+    # version matches a section header, and (2) priority-table tasks found via
+    # `_parse_priority_table_tasks`, whose target_version (e.g. '0.61.0') does NOT
+    # match any version-section header in the real plan-tracker (which only has a
+    # `### 1.0.0 依赖链` section). The previous implementation gated the whole
+    # block on `if section:` — so for every priority-table task `section` was
+    # None, the task lines were NEVER appended to `archive_lines`, yet the
+    # deletion step below removed them from plan-tracker unconditionally. Result:
+    # an archive file with only a header and zero task rows = DATA LOSS
+    # (production incident on `archive.py migrate --auto` -> v0.1.0~v0.61.2.md,
+    # 346 bytes, 10 task rows vanished). This was a FIX-158 regression: FIX-158
+    # added the priority-table scan but did not update this write path. The fix
+    # makes the write unconditional; `section` only decides whether to emit the
+    # original section title or a synthesized one, never whether to persist data.
     tasks_by_version = {}
     for version, line in archive_body_lines:
         tasks_by_version.setdefault(version, []).append(line)
 
+    # Sort key: parseable semver tuples sort ascending; non-parseable versions
+    # (—, 未规划版本, unknown, empty) sort LAST under a single catch-all bucket so
+    # they are never dropped. `_version_to_tuple` returns None for those; we map
+    # None to a sentinel that compares greater than any real (major, minor, patch)
+    # so Python's sort never tries to order None against tuples (TypeError).
+    _ARCHIVE_SORT_SENTINEL = (float("inf"), 0, 0)
+
+    def _archive_sort_key(version):
+        vt = _version_to_tuple(version)
+        return vt if vt is not None else _ARCHIVE_SORT_SENTINEL
+
     archive_lines = []
-    for version in sorted(tasks_by_version.keys(),
-                          key=lambda v: _version_to_tuple(v)):
-        # Find the original section title
+    for version in sorted(tasks_by_version.keys(), key=_archive_sort_key):
+        # Find the original section title (version-section tasks only).
         section = next((s for s in sections if s["version"] == version), None)
         if section:
-            archive_lines.append("")
-            archive_lines.append(section["title"])
-            # Use a standard table header
-            archive_lines.append("| 任务ID | 描述 | 优先级 | 依赖 | 目标版本 | 负责人 | 审查人 | 审查类型 | 闭环路径 | 状态 |")
-            archive_lines.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
-            for line in tasks_by_version[version]:
-                archive_lines.append(line)
-            archive_lines.append("")
+            title = section["title"]
+        elif _version_to_tuple(version) is not None:
+            # Priority-table task whose version has no matching section header.
+            # Emit a synthesized, human-readable title so the archive stays
+            # grouped without dropping the rows (the data-loss root cause).
+            title = f"### v{version}（优先级表归档）"
+        else:
+            # Non-parseable version (—, 未规划版本, unknown, empty). Group all of
+            # them under one catch-all bucket at the end so real archived tasks
+            # are never silently dropped.
+            title = "### 未版本化归档任务"
+        archive_lines.append("")
+        archive_lines.append(title)
+        # Use a standard table header
+        archive_lines.append("| 任务ID | 描述 | 优先级 | 依赖 | 目标版本 | 负责人 | 审查人 | 审查类型 | 闭环路径 | 状态 |")
+        archive_lines.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
+        for line in tasks_by_version[version]:
+            archive_lines.append(line)
+        archive_lines.append("")
 
     # Build header
     header = _build_archive_header(

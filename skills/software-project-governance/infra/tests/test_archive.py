@@ -629,6 +629,97 @@ class TestArchiveMigrateByVersion(unittest.TestCase):
             result_ck = archive.migrate_by_version("0.23.0", "0.23.0", dry_run=True)
             self.assertEqual(result_ck["tasks_archived"], 2)  # 2 completed [x], 1 [ ] skipped
 
+    def test_migrate_priority_table_tasks_writes_to_archive_body(self):
+        """FIX-172 regression guard: priority-table tasks MUST be written to the
+        archive file body, even when there is NO matching `### <version>` section.
+
+        Root cause of the data-loss bug (FIX-158 regression): the body-write loop
+        gated each version group on `if section:` (a matching version section
+        existed). Tasks found via `_parse_priority_table_tasks` carry a target
+        version (e.g. '0.61.0') that does NOT match any version-section header in
+        the real plan-tracker (which only has `### 1.0.0 依赖链`). So `section`
+        was None for every priority-table task, the task lines were NEVER appended
+        to `archive_lines`, and the deletion step still removed them from
+        plan-tracker -> the archive file body was empty -> DATA LOSS.
+
+        This test mirrors the real plan-tracker layout: archivable tasks live ONLY
+        in `### 优先级一览` (7-col table) with target_version='0.61.0', and the
+        only version section is `### 1.0.0 依赖链` (zero overlap). On the buggy
+        code the archive file body is empty (only a header) -> assertion fails.
+        After FIX-172 the body is non-empty and contains the task IDs.
+        """
+        import archive
+
+        # Build a plan-tracker that mirrors the real one: tasks ONLY in the
+        # priority table, with a target version (0.61.0) that has NO matching
+        # `### 0.61.0` version section. The only version section is 1.0.0.
+        lines = [
+            "# 当前项目样例",
+            "",
+            "## 项目配置",
+            "- **工作流版本**: 0.61.0",
+            "",
+            "## 当前活跃事项",
+            "",
+            "### 优先级一览",
+            "",
+            "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+            "|--------|----|------|------|---------|---------|------|",
+            "| **P0** | FIX-172 | Priority-table task A | — | 0.61.0 | TBD | ✅ 已完成 |",
+            "| **P1** | FIX-173 | Priority-table task B | FIX-172 | 0.61.0 | TBD | ✅ 已完成 |",
+            "| **P0** | FIX-199 | Out-of-range task | — | 0.99.0 | TBD | ✅ 已完成 |",
+            "",
+            "### 1.0.0 依赖链",
+            "",
+            "| 任务ID | 描述 | 优先级 | 依赖 | 目标版本 | 负责人 | 审查人 | 审查类型 | 闭环路径 | 状态 |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| REL-100 | Future release | P1 | — | 1.0.0 | 阿速 | — | Code Reviewer | TBD | ⏳ 进行中 |",
+            "",
+        ]
+        (self.gov_dir / "plan-tracker.md").write_text(
+            "\n".join(lines), encoding="utf-8"
+        )
+        # An evidence-log is required so the migration's evidence step does not
+        # choke on a missing file; no entries reference our tasks.
+        _make_evidence_log(self.gov_dir, [])
+
+        with patch.object(archive, "ROOT", self.root):
+            result = archive.migrate_by_version(
+                "0.1.0", "0.61.0", dry_run=False
+            )
+
+        # 1. tasks_archived >= 1 (both FIX-172 and FIX-173 are in range & done)
+        self.assertTrue(result["success"], f"migration failed: {result}")
+        self.assertGreaterEqual(result["tasks_archived"], 1)
+        # Specifically FIX-172 and FIX-173 should be archived; FIX-199 (0.99.0)
+        # is out of range and REL-100 (1.0.0 / 进行中) is not archivable.
+        self.assertEqual(result["tasks_archived"], 2)
+
+        # 2. THE core assertion: the archive file body must be NON-EMPTY and
+        #    contain the task IDs. On the buggy code the body is empty (header
+        #    only) -> these assertions fail.
+        task_files = [
+            f for f in (self.archive_dir / "tasks").glob("*.md")
+            if f.name != ".gitkeep"
+        ]
+        self.assertEqual(len(task_files), 1, "exactly one archive file expected")
+        body = task_files[0].read_text(encoding="utf-8")
+        self.assertIn("FIX-172", body, "priority-table task missing from archive body")
+        self.assertIn("FIX-173", body, "priority-table task missing from archive body")
+        self.assertNotIn("FIX-199", body, "out-of-range task leaked into archive")
+        # Sanity: body is not just the header (must contain a task row line).
+        self.assertIn("| FIX-172 |", body)
+
+        # 3. The archived tasks must have been removed from plan-tracker.
+        remaining = (self.gov_dir / "plan-tracker.md").read_text(encoding="utf-8")
+        self.assertNotIn("FIX-172", remaining,
+                         "archived task still present in plan-tracker")
+        self.assertNotIn("FIX-173", remaining,
+                         "archived task still present in plan-tracker")
+        # Out-of-range / in-progress tasks must remain.
+        self.assertIn("FIX-199", remaining)
+        self.assertIn("REL-100", remaining)
+
 
 class TestArchiveBuildIndex(unittest.TestCase):
     """Test build_index function."""

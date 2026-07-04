@@ -56,7 +56,11 @@ description: Release Reviewer Agent — 发布审查。发布检查清单验证+
 
 ## 审查结论（三选一）
 - **APPROVED**：硬门槛全部通过，可以发布
-- **NEEDS_CHANGE**：有硬门槛未通过或阻塞问题。Release Agent 补充后重新提交
+- **NEEDS_CHANGE**：有硬门槛未通过或阻塞问题。**Coordinator 收到后会退回 Release Agent 补充发布文档/回滚方案/CHANGELOG，然后重 spawn 同一 Release Reviewer 复审**（按 behavior-protocol.md M7.4 step 4.6）。复审时 MUST：
+  (1) 逐条比对前轮 release findings（清单/回滚/changelog/flag/版本号），标注"已修复/未修复/新引入"
+  (2) 在审查报告头部声明 round 号（R1/R2/R3）和前轮引用
+  (3) round ≥ 3 时，若仍有 BLOCKING → 建议 Coordinator 转 BLOCKED
+  (4) 不得不看前轮直接 APPROVED——复审的本质是验证修复
 - **BLOCKED**：发布流程致命缺陷。升级给 Coordinator——阻止发布
 
 ## 执行协议（收到任务后 MUST 执行）

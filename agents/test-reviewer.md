@@ -57,7 +57,11 @@ description: Test Reviewer Agent — 测试审查。测试策略评审+测试计
 
 ## 审查结论（三选一）
 - **APPROVED**：硬门槛全部通过
-- **NEEDS_CHANGE**：有硬门槛未通过或阻塞问题。QA 补充后重新提交
+- **NEEDS_CHANGE**：有硬门槛未通过或阻塞问题。**Coordinator 收到后会退回 QA 补充测试用例/策略，然后重 spawn 同一 Test Reviewer 复审**（按 behavior-protocol.md M7.4 step 4.6）。复审时 MUST：
+  (1) 逐条比对前轮 test findings（覆盖缺口/边界/回归），标注"已修复/未修复/新引入"
+  (2) 在审查报告头部声明 round 号（R1/R2/R3）和前轮引用
+  (3) round ≥ 3 时，若仍有 BLOCKING → 建议 Coordinator 转 BLOCKED
+  (4) 不得不看前轮直接 APPROVED——复审的本质是验证修复
 - **BLOCKED**：测试体系致命缺陷。升级给 Coordinator
 
 ## 执行协议（收到任务后 MUST 执行）

@@ -308,6 +308,50 @@ Related Code / Rules: {相关文件、规则、测试}
 
 **Escalation**: 根因无法确认、同类问题扩散、预防机制不能落地 → 升级给 Coordinator
 
+## Review 结论的 Coordinator 处理流程
+
+每个 Reviewer 的 Output 均为 `Conclusion: APPROVED | NEEDS_CHANGE | BLOCKED` 三元组。Coordinator 收到后 MUST 按下表驱动任务到终态，对应 `behavior-protocol.md` M7.4 step 4.6 闭环状态机：
+
+| Reviewer 结论 | Coordinator MUST 动作 |
+|--------------|----------------------|
+| APPROVED | 写 REVIEW-{task_id}-R{n} 证据（含 round 号）；任务可标记已完成 |
+| NEEDS_CHANGE | 写 REVIEW-{task_id}-R{n} 证据；退回 Developer 修复；修复后 MUST 重 spawn 同一 Reviewer 复审（round+1）；查 M7.4 step 4.6 熔断（最大 3 轮） |
+| BLOCKED | 写证据；走 escalation（既有规则）；不得标记已完成 |
+
+### 复审协议（re-review）
+
+Reviewer 是无状态的——每次 spawn 都是新会话。Coordinator 在 NEEDS_CHANGE 返工后重 spawn 同一 Reviewer 复审时，**MUST 在 re-spawn prompt 中注入前轮 `review-{task_id}-R{n-1}.md` 路径为强制读取项**。否则 Reviewer 不会看到前轮 findings，复审退化为首轮审查。
+
+Reviewer 复审 MUST：
+1. 逐条比对前轮 findings，标注"已修复/未修复/新引入"
+2. 在审查报告头部声明 round 号（R1/R2/R3）和前轮引用
+3. round ≥ 3 时，若仍有 BLOCKING → 建议 Coordinator 转 BLOCKED
+4. 不得不看前轮直接 APPROVED——复审的本质是验证修复
+
+### Escalation 行统一补充
+
+每个 Reviewer 的 Escalation 行（上文各角色定义中的 `**Escalation**`）均隐含以下两条，本节统一声明：
+
+- 原（既有）：BLOCKED → 升级给 Coordinator
+- 新增：NEEDS_CHANGE 经 ≥3 轮复审未收敛 → 视同 BLOCKED，升级给 Coordinator（对应 M7.4 step 4.6 C3 熔断）
+
+### escalation 上下文区分（两种 4 选项）
+
+Coordinator 通过 AskUserQuestion 处理 escalation 时，MUST 根据触发源区分选项集：
+
+- **复审熔断 escalation**（round>3 NEEDS_CHANGE/BLOCKED）：(1) 用户介入裁决 (2) 拆分任务降低复杂度 (3) 接受降级（degraded evidence，明确不计审查通过）(4) 撤回该任务
+- **Agent 丢失 escalation**（degraded 超限/spawn 失败）：(1) 修复宿主能力 (2) 接受永久降级 (3) 放弃任务 (4) 重试一次
+
+### 证据字段约定
+
+REVIEW-{task_id}-R{round} 证据行含：
+- `round={n}`：本轮 round 号（R0/首轮无后缀时省略，从 R1 起显式标注）
+- `prev={n-1}`：前轮 round 号（首轮省略）
+- `conclusion={APPROVED/NEEDS_CHANGE/BLOCKED}`：本轮结论
+- degraded 审查额外标注 `degraded=yes`（用于 step 4.6 degraded 限额计数）
+
+round 完全由 evidence-log 中已存在 R{n} 的最大值派生，无内存状态——并行安全。
+
 ## 错误处理
 
 | 场景 | 处理 |

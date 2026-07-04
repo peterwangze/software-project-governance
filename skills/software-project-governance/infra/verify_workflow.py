@@ -13037,7 +13037,7 @@ def cmd_execution_packet(args):
         print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
-# ── SYSGAP-035: Agent Team Review Check (Check 18) ────────────────
+# ── SYSGAP-035: Agent Team Review Check (Check 19) ────────────────
 
 DEGRADED_REVIEW_MARKERS = (
     "不构成独立审查",
@@ -13179,7 +13179,7 @@ def _parse_review_covered_tasks(evidence_path=None, review_dir=None):
 
 
 def check_agent_team_review():
-    """SYSGAP-035: Check 18 — Agent Team review completeness.
+    """SYSGAP-035: Check 19 — Agent Team review completeness.
 
     For completed tasks involving product code changes, verify that an
     independent code review was performed. Review evidence is identified
@@ -13263,10 +13263,10 @@ def check_agent_team_review():
     return result
 
 
-# ── SYSGAP-036: Agent Activation Check (Check 19) ────────────────
+# ── SYSGAP-036: Agent Activation Check (Check 20) ────────────────
 
 def check_agent_activation():
-    """SYSGAP-036: Check 19 — Analyst/Architect activation for P0 cross-layer tasks.
+    """SYSGAP-036: Check 20 — Analyst/Architect activation for P0 cross-layer tasks.
 
     For P0 tasks involving >= 2 architecture layers of product code change,
     verify that Analyst/Architect agents were activated for impact analysis.
@@ -13433,10 +13433,10 @@ def check_agent_activation():
     return result
 
 
-# ── SYSGAP-042: Review Debt Check (Check 20) ─────────────────────
+# ── SYSGAP-042: Review Debt Check (Check 21) ─────────────────────
 
 def check_review_debt():
-    """SYSGAP-042: Check 20 — Review debt.
+    """SYSGAP-042: Check 21 — Review debt.
 
     Check all product-code tasks for review debt: tasks that have execution
     evidence in evidence-log but lack corresponding review evidence.
@@ -13538,7 +13538,7 @@ def check_review_debt():
     return result
 
 
-# ── FIX-037: Review Coverage Check (Check 21) ──────────────────────
+# ── FIX-037: Review Coverage Check (Check 22) ──────────────────────
 
 PRODUCT_CODE_PATTERNS = [
     "skills/", "agents/", "infra/", "commands/",
@@ -13548,7 +13548,7 @@ PRODUCT_CODE_PATTERNS = [
 
 
 def check_review_coverage():
-    """FIX-037: Check 21 — Review coverage for product code tasks.
+    """FIX-037: Check 22 — Review coverage for product code tasks.
 
     Counts product code tasks (excluding P2 priority) and verifies what
     fraction has review evidence. Uses _parse_review_covered_tasks() to
@@ -13647,7 +13647,7 @@ def check_review_coverage():
     return result
 
 
-# ── FIX-038: Profile Consistency Check (Check 22) ──────────────────
+# ── FIX-038: Profile Consistency Check (Check 23) ──────────────────
 
 # Per-profile expectations (from core/profiles.md)
 _PROFILE_GATE_COUNT = {
@@ -13663,7 +13663,7 @@ _PROFILE_TASK_COLUMNS = {
 
 
 def check_profile_consistency():
-    """FIX-038: Check 22 — Profile consistency between declaration and actual structure.
+    """FIX-038: Check 23 — Profile consistency between declaration and actual structure.
 
     Validates:
       a. Gate table row count matches profile expectation
@@ -15767,8 +15767,8 @@ def check_agent_locks_format():
 
     Returns a list of WARN-level issue dicts.  Empty list = clean.
     This check is informational-only (WARN) -- format corruption does not block commit.
-    Used as a helper by check_agent_lock_consistency() (Check 25, FIX-056 Phase 2).
-    Phase 1 format-only check has been subsumed into the full Check 25.
+    Used as a helper by check_agent_lock_consistency() (Check 26, FIX-056 Phase 2).
+    Phase 1 format-only check has been subsumed into the full Check 26.
     """
     import json
 
@@ -16071,7 +16071,7 @@ def check_agent_lock_consistency():
 # ── SYSGAP-030: Archive Integrity Check ────────────────────────────
 
 def check_archive_integrity():
-    """Check 26: Verify archive integrity.
+    """Check 27: Verify archive integrity.
 
     Checks:
       1. archive/index.md referenced archive files all exist
@@ -16261,7 +16261,7 @@ def cmd_check_agent_locks(_args):
 
 
 def cmd_check_archive_integrity(_args):
-    """Standalone subcommand: check-archive-integrity — Check 26."""
+    """Standalone subcommand: check-archive-integrity — Check 27."""
     try:
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     except Exception:
@@ -16269,7 +16269,7 @@ def cmd_check_archive_integrity(_args):
 
     result = check_archive_integrity()
     print()
-    print("=== Archive Integrity Check (SYSGAP-030 Check 26) ===")
+    print("=== Archive Integrity Check (SYSGAP-030 Check 27) ===")
     print(f"  Hot tasks (plan-tracker): {result['hot_tasks']}")
     print(f"  Archived tasks: {result['total_archived_tasks']}")
     print(f"  Index entries: {result['index_entries']}")
@@ -18870,7 +18870,7 @@ def cmd_check_user_impact(args):
 # ── SYSGAP-037: check-agent-team subcommand ──────────────────────
 
 def cmd_check_agent_team(args):
-    """Run Check 18 (Agent Team Review) + Check 19 (Agent Activation) together."""
+    """Run Check 19 (Agent Team Review) + Check 20 (Agent Activation) together."""
     try:
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     except Exception:
@@ -18878,8 +18878,8 @@ def cmd_check_agent_team(args):
 
     issues = 0
 
-    # Check 18: Agent Team Review
-    print("\n=== Check 18: Agent Team Review (SYSGAP-035) ===")
+    # Check 19: Agent Team Review
+    print("\n=== Check 19: Agent Team Review (SYSGAP-035) ===")
     atr_result = check_agent_team_review()
     print(f"  Product-code tasks (completed): {atr_result['total_tasks']}")
     print(f"  Reviewed: {atr_result['reviewed']}")
@@ -18894,8 +18894,8 @@ def cmd_check_agent_team(args):
         else:
             print(f"  [PASS] No product-code tasks to review.")
 
-    # Check 19: Agent Activation
-    print("\n=== Check 19: Agent Activation (SYSGAP-036) ===")
+    # Check 20: Agent Activation
+    print("\n=== Check 20: Agent Activation (SYSGAP-036) ===")
     aa_result = check_agent_activation()
     print(f"  P0 cross-layer product tasks: {aa_result['total_p0_cross_layer']}")
     print(f"  Analyst activated: {aa_result['analyst_activated']}")
@@ -18925,13 +18925,13 @@ def cmd_check_agent_team(args):
 # ── SYSGAP-042: check-review-debt subcommand ──────────────────────
 
 def cmd_check_review_debt(args):
-    """Run Check 20: Review Debt independently."""
+    """Run Check 21: Review Debt independently."""
     try:
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     except Exception:
         pass
 
-    print("\n=== Check 20: Review Debt (SYSGAP-042) ===")
+    print("\n=== Check 21: Review Debt (SYSGAP-042) ===")
     rd_result = check_review_debt()
     print(f"  Product-code tasks (all, with evidence): {rd_result['total_tasks']}")
     print(f"  Review debt (have execution evidence, no review): {rd_result['review_debt_count']}")
@@ -20129,13 +20129,13 @@ def main():
 
     # check-agent-team (SYSGAP-037)
     cat_p = subparsers.add_parser("check-agent-team",
-                                  help="Run Agent Team integrity checks (Check 18 + Check 19)")
+                                  help="Run Agent Team integrity checks (Check 19 + Check 20)")
     cat_p.add_argument("--fail-on-issues", action="store_true",
                        help="Exit with non-zero code if issues found")
 
     # check-review-debt (SYSGAP-042)
     crd_p = subparsers.add_parser("check-review-debt",
-                                  help="Run review debt check (Check 20)")
+                                  help="Run review debt check (Check 21)")
     crd_p.add_argument("--fail-on-issues", action="store_true",
                       help="Exit with non-zero code if review debt found")
 
@@ -20382,11 +20382,11 @@ def main():
 
     # check-locks (FIX-056 Phase 2)
     subparsers.add_parser("check-locks",
-                          help="Check agent-locks.json consistency (FIX-056 Check 25)")
+                          help="Check agent-locks.json consistency (FIX-056 Check 26)")
 
     # check-archive-integrity (SYSGAP-030)
     subparsers.add_parser("check-archive-integrity",
-                          help="Check archive integrity (SYSGAP-030 Check 26)")
+                          help="Check archive integrity (SYSGAP-030 Check 27)")
 
     args = parser.parse_args()
 

@@ -2566,6 +2566,183 @@ class TestDecisionRiskMigration(unittest.TestCase):
             kept = (gov / "evidence-log.md").read_text(encoding="utf-8")
             self.assertIn("EVD-001", kept)
 
+    def test_migrate_evidence_ignores_cross_entity_refs(self):
+        """FIX-171 (AUDIT-126 root cause B) core regression: an EVD row that
+        references an archived task-family ID PLUS cross-entity refs (RISK-/DEC-)
+        must MIGRATE — the cross-entity refs are descriptive context and must NOT
+        gate the subset check. Before the fix this row was blocked forever because
+        RISK-/DEC- are structurally never in task_versions.
+
+        Also guards the preserved mixed-ref semantic: a second row referencing one
+        archived + one LIVE task-family ID still does NOT migrate."""
+        with tempfile.TemporaryDirectory() as tmp:
+            gov = Path(tmp) / ".governance"
+            gov.mkdir()
+            self._make_evidence_log(gov, [
+                # Row 1: archived FIX-084 + cross-entity RISK-036/DEC-072 → migrates.
+                ("EVD-100", "FIX-084, RISK-036, DEC-072", "archived task + cross-entity refs"),
+                # Row 2: archived FIX-084 + LIVE FIX-157 → stays (mixed-ref guard).
+                ("EVD-101", "FIX-084, FIX-157", "archived + live task-family — keep"),
+            ])
+            self._make_archived_tasks(gov, [("FIX-084", "0.38.0")])
+            task_versions = {"FIX-084": "0.38.0"}  # FIX-157 deliberately absent (live)
+            with patch.object(self.archive, "ROOT", Path(tmp)):
+                count = self.archive._migrate_evidence(
+                    "0.1.0", "0.59.0", task_versions, dry_run=False
+                )
+            self.assertEqual(count, 1)  # only EVD-100 migrates
+            kept = (gov / "evidence-log.md").read_text(encoding="utf-8")
+            self.assertNotIn("EVD-100", kept)   # migrated out
+            self.assertIn("EVD-101", kept)      # mixed-ref → kept hot
+            arch = (gov / "archive" / "evidence"
+                    / "evidence-v0.1.0-0.59.0.md").read_text(encoding="utf-8")
+            self.assertIn("| EVD-100 |", arch)
+            self.assertNotIn("EVD-101", arch)
+
+    def test_migrate_evidence_only_cross_entity_refs_stays(self):
+        """FIX-171 (AUDIT-126): an EVD row referencing ONLY cross-entity IDs
+        (no task-family ID at all) is ambiguous — no version can be resolved —
+        so it is KEPT hot rather than riskily migrating an unversionable row."""
+        with tempfile.TemporaryDirectory() as tmp:
+            gov = Path(tmp) / ".governance"
+            gov.mkdir()
+            self._make_evidence_log(gov, [
+                ("EVD-200", "RISK-036, DEC-072", "cross-entity only — no task-family ref"),
+            ])
+            self._make_archived_tasks(gov, [("FIX-084", "0.38.0")])
+            task_versions = {"FIX-084": "0.38.0"}
+            with patch.object(self.archive, "ROOT", Path(tmp)):
+                count = self.archive._migrate_evidence(
+                    "0.1.0", "0.59.0", task_versions, dry_run=False
+                )
+            self.assertEqual(count, 0)  # nothing migrates
+            kept = (gov / "evidence-log.md").read_text(encoding="utf-8")
+            self.assertIn("EVD-200", kept)  # stays hot
+
+    def test_is_task_family_id_classification(self):
+        """FIX-171: _is_task_family_id correctly distinguishes task-family
+        prefixes (can be tasks) from cross-entity prefixes (never tasks)."""
+        # task-family prefixes → True
+        for tid in ("FIX-084", "REL-013", "AUDIT-126", "REQ-082", "SYSGAP-030",
+                    "TD-014", "MAINT-002", "FMT-008", "DIAG-003", "DESIGN-002"):
+            self.assertTrue(self.archive._is_task_family_id(tid),
+                            f"should be task-family: {tid}")
+        # cross-entity prefixes → False
+        for tid in ("RISK-036", "DEC-072", "REVIEW-001", "EVD-650", "TIER-001",
+                    "CONSTRAINT-001", "TOOL-001", "ADR-006"):
+            self.assertFalse(self.archive._is_task_family_id(tid),
+                             f"should be cross-entity: {tid}")
+
+    def test_extract_tasks_from_legacy_filename_version(self):
+        """FIX-171 (AUDIT-126 factor C): an archive file named legacy-v0.10.0.md
+        with NO in-file `### v0.10.0` title header must still yield version
+        "0.10.0" (parsed from the filename) instead of "unknown"."""
+        with tempfile.TemporaryDirectory() as tmp:
+            gov = Path(tmp) / ".governance"
+            arch = gov / "archive" / "tasks"
+            arch.mkdir(parents=True, exist_ok=True)
+            # legacy file with a task row but NO version title header
+            (arch / "legacy-v0.10.0.md").write_text(
+                "# 归档 Task 表 — v0.10.0 遗留收编\n\n"
+                "| 任务ID | 描述 | 优先级 | 依赖 | 目标版本 | 负责人 | 审查人 | 审查类型 | 闭环路径 | 状态 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
+                "| FIX-010 | legacy task | P1 | — | 0.10.0 | owner | reviewer | review | path | 已完成 |\n",
+                encoding="utf-8",
+            )
+            results = self.archive._extract_tasks_from_archive_file(
+                arch / "legacy-v0.10.0.md"
+            )
+            self.assertEqual(len(results), 1)
+            task_id, status, version = results[0]
+            self.assertEqual(task_id, "FIX-010")
+            self.assertEqual(version, "0.10.0")  # from filename, not "unknown"
+
+    def test_extract_tasks_range_filename_version(self):
+        """FIX-171 (AUDIT-126 factor C): a range file named v0.1.0~v0.31.0.md
+        with no in-file title header yields the range START version "0.1.0"
+        (the conservative lower-bound label; _version_in_range handles membership
+        regardless of which bound is used)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            arch = Path(tmp) / "archive" / "tasks"
+            arch.mkdir(parents=True, exist_ok=True)
+            (arch / "v0.1.0~v0.31.0.md").write_text(
+                "# 归档 Task 表 — v0.1.0 ~ v0.31.0\n\n"
+                "| 任务ID | 描述 | 优先级 | 依赖 | 目标版本 | 负责人 | 审查人 | 审查类型 | 闭环路径 | 状态 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
+                "| FIX-020 | range-file task | P1 | — | 0.5.0 | owner | reviewer | review | path | 已完成 |\n",
+                encoding="utf-8",
+            )
+            results = self.archive._extract_tasks_from_archive_file(
+                arch / "v0.1.0~v0.31.0.md"
+            )
+            self.assertEqual(len(results), 1)
+            task_id, status, version = results[0]
+            self.assertEqual(task_id, "FIX-020")
+            self.assertEqual(version, "0.1.0")  # range start, not "unknown"
+
+    def test_extract_tasks_date_named_file_stays_unknown(self):
+        """FIX-171 guard: date-named files (completed-tasks-YYYY-MM-DD_...md)
+        are NOT version-scoped — the filename fallback returns None and the
+        version stays "unknown" (current behavior), since these files legitimately
+        span many versions with no single version label."""
+        with tempfile.TemporaryDirectory() as tmp:
+            arch = Path(tmp) / "archive" / "tasks"
+            arch.mkdir(parents=True, exist_ok=True)
+            (arch / "completed-tasks-2026-04-30_2026-06-27.md").write_text(
+                "# 归档 Task 表 — 历史已完成事项\n\n"
+                "| 任务ID | 描述 | 优先级 | 依赖 | 目标版本 | 负责人 | 审查人 | 审查类型 | 闭环路径 | 状态 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
+                "| FIX-030 | date-file task | P1 | — | 0.40.0 | owner | reviewer | review | path | 已完成 |\n",
+                encoding="utf-8",
+            )
+            results = self.archive._extract_tasks_from_archive_file(
+                arch / "completed-tasks-2026-04-30_2026-06-27.md"
+            )
+            self.assertEqual(len(results), 1)
+            task_id, status, version = results[0]
+            self.assertEqual(task_id, "FIX-030")
+            self.assertEqual(version, "unknown")  # date-named → no version label
+
+    def test_version_from_archive_filename_helper(self):
+        """FIX-171: direct unit tests for _version_from_archive_filename covering
+        all three naming families (single-version, range, date-named)."""
+        from pathlib import Path
+        self.assertEqual(
+            self.archive._version_from_archive_filename(Path("legacy-v0.10.0.md")),
+            "0.10.0",
+        )
+        self.assertEqual(
+            self.archive._version_from_archive_filename(Path("v0.1.0~v0.31.0.md")),
+            "0.1.0",  # range start
+        )
+        self.assertEqual(
+            self.archive._version_from_archive_filename(Path("v0.10.0~v0.10.0.md")),
+            "0.10.0",
+        )
+        # incremental range file → still returns start
+        self.assertEqual(
+            self.archive._version_from_archive_filename(
+                Path("v0.10.0~v0.12.0-incremental-20260513-2.md")
+            ),
+            "0.10.0",
+        )
+        # date-named / narrative / recent-completed → None
+        self.assertIsNone(
+            self.archive._version_from_archive_filename(
+                Path("completed-tasks-2026-04-30_2026-06-27.md")
+            )
+        )
+        self.assertIsNone(
+            self.archive._version_from_archive_filename(
+                Path("narrative-2026-04-30_2026-06-27.md")
+            )
+        )
+        self.assertIsNone(
+            self.archive._version_from_archive_filename(
+                Path("recent-completed-2026-04-30_2026-06-27.md")
+            )
+        )
+
     def test_version_to_tuple_handles_non_semver(self):
         """FIX-162: defensive parsing of placeholder versions. Extracts semver
         if present, returns None only when no x.y.z token exists at all."""

@@ -675,6 +675,65 @@ def _is_risk_closed(row, header_line):
     return any(m in status for m in _RISK_CLOSED_MARKERS)
 
 
+# ── Evidence task-family classification (FIX-171 / AUDIT-126) ───────
+
+# FIX-171: task-family ID prefixes — these are the only prefixes that can appear
+# as Task IDs in plan-tracker (and therefore as keys in task_versions). The
+# evidence-log's 关联 Task cell routinely mixes task-family IDs (e.g. FIX-084,
+# REL-013) with CROSS-ENTITY reference IDs (e.g. RISK-036, DEC-072, REQ-082)
+# that are descriptive context, not tasks. The old _migrate_evidence subset gate
+# required ALL referenced IDs to be in task_versions, which is structurally
+# impossible for cross-entity refs → 129 in-range EVD rows were blocked forever
+# (AUDIT-126 root cause B). This classification lets the gate consider only
+# task-family refs.
+#
+# Conservative selection rationale: when uncertain whether a prefix is
+# task-family, INCLUDE it. A non-task ID that happens to be in this set simply
+# won't match anything in task_versions (no false migration). The prefixes that
+# must NOT be here — because they are NEVER task IDs and WOULD wrongly gate —
+# are listed explicitly in _CROSS_ENTITY_PREFIXES for documentation; the
+# task-family set is the positive allow-list and everything else is treated as
+# cross-entity by _is_task_family_id.
+#
+# The set below was derived from the real governance data: prefixes that appear
+# as Task IDs in plan-tracker table rows OR in archive/tasks/ files
+# (FIX, REL, AUDIT, REQ, SYSGAP, TD, MAINT, FMT, DIAG, DESIGN, VAL, CLEANUP,
+# PRINCIPLE, ...). REQ is included even though it also names a requirement
+# entity (REQ-082), because REQ-NNN rows can legitimately be tasks too.
+_TASK_FAMILY_PREFIXES = frozenset({
+    "FIX", "REL", "AUDIT", "REQ", "FMT", "DIAG", "MAINT", "SYSGAP", "TD",
+    "DESIGN", "VAL", "CLEANUP", "PRINCIPLE", "TASK", "RESEARCH", "ACCEPT",
+    "INIT", "PLAN",
+})
+
+# Cross-entity prefixes — these are NEVER task IDs and must never gate evidence
+# migration (AUDIT-126 root cause B). Kept for documentation / clarity; the
+# allow-list above is authoritative and everything not in it is cross-entity.
+_CROSS_ENTITY_PREFIXES = frozenset({
+    "RISK", "DEC", "REVIEW", "EVD", "TIER", "CONSTRAINT", "TOOL", "ADR",
+})
+
+
+def _is_task_family_id(task_id):
+    """FIX-171 (AUDIT-126): return True if task_id's prefix is a task-family prefix.
+
+    A task-family ID is one that can appear as a Task ID in plan-tracker and
+    therefore can resolve to a version in task_versions (FIX-/REL-/AUDIT-/REQ-/
+    SYSGAP-/TD-/MAINT-/FMT-/DIAG-/...). Cross-entity refs (RISK-/DEC-/REVIEW-/
+    EVD-/TIER-/CONSTRAINT-/TOOL-/ADR-) are descriptive context in an evidence
+    row's 关联 Task cell, never tasks, and must NOT gate evidence migration.
+
+    Args:
+        task_id: an ID string of the form PREFIX-NNN (caller pre-validates the
+                 shape; this function only inspects the prefix).
+
+    Returns:
+        True if the prefix is in _TASK_FAMILY_PREFIXES, False otherwise.
+    """
+    prefix = task_id.split("-", 1)[0]
+    return prefix in _TASK_FAMILY_PREFIXES
+
+
 # ── Decision / Risk Migration (FIX-162 / TD-014) ───────────────────
 
 
@@ -820,13 +879,28 @@ def _migrate_evidence(version_start, version_end, task_versions, dry_run=False):
 
     Evidence-log format: '| EVD-{n} | 关联Task | 摘要 | 日期 | 类型 | ... |'
     parts[2] is the 关联 Task column and may contain comma-separated task IDs.
-    A row migrates only if ALL its referenced task IDs are in task_versions
-    (this-run archived + historical archived tasks merged from archive/tasks/)
-    AND the resolved version is in [version_start, version_end]. This mirrors
-    the FIX-162 decision/risk logic and closes the gap where the old inline
-    evidence block was gated by the this-run `archived_tasks` set — which is
-    empty when all in-range tasks are already pre-archived — and so never ran,
-    letting evidence-log.md bloat past the Check 28s ERROR threshold.
+    A row migrates only if ALL its referenced TASK-FAMILY IDs are in
+    task_versions (this-run archived + historical archived tasks merged from
+    archive/tasks/) AND the resolved version is in [version_start, version_end].
+    This mirrors the FIX-162 decision/risk logic and closes the gap where the
+    old inline evidence block was gated by the this-run `archived_tasks` set —
+    which is empty when all in-range tasks are already pre-archived — and so
+    never ran, letting evidence-log.md bloat past the Check 28s ERROR threshold.
+
+    FIX-171 (AUDIT-126 root cause B): the 关联 Task cell routinely mixes
+    task-family IDs (FIX-/REL-/AUDIT-/...) with CROSS-ENTITY reference IDs
+    (RISK-/DEC-/REVIEW-/REQ-as-requirement/...). The previous gate required
+    ALL referenced IDs (including cross-entity) to be in task_versions, which
+    is structurally impossible — cross-entity refs are never tasks and never
+    appear in task_versions — so any EVD row listing a RISK/DEC reference was
+    blocked from migration forever (129 in-range rows per AUDIT-126). The gate
+    now considers only task-family IDs via _is_task_family_id(); cross-entity
+    refs are descriptive context and do not gate migration.
+
+    Mixed-ref semantics preserved (test_migrate_evidence_preserves_mixed_refs):
+    an EVD referencing one archived + one LIVE task-family ID still does NOT
+    migrate (the live task-family ID fails the subset). The fix only stops
+    CROSS-ENTITY refs from breaking the subset check.
 
     Writes archived rows to archive/evidence/evidence-v{range}.md preserving
     the original table rows verbatim (same fidelity as risks). Returns count
@@ -850,22 +924,37 @@ def _migrate_evidence(version_start, version_end, task_versions, dry_run=False):
         if not (evd_id and re.match(r"EVD-\d+", evd_id)):
             kept_lines.append(line)
             continue
-        # parts[2] = 关联 Task column; may be comma-separated multiple IDs.
+        # parts[2] = 关联 Task column; may be comma-separated multiple IDs that
+        # mix task-family (FIX-/REL-/...) and cross-entity (RISK-/DEC-/...) refs.
         raw_task_ids = parts[2] if len(parts) > 2 else ""
         ev_task_ids = set()
         for tid in raw_task_ids.split(","):
             tid = tid.strip()
             if tid and re.match(r"[A-Z]+-\d+", tid):
                 ev_task_ids.add(tid)
-        # Migrate only when ALL referenced tasks are archived (subset), then
-        # confirm at least one resolved version is in range. This keeps the
-        # original ev_task_ids.issubset(...) semantics but uses task_versions
-        # (this-run + historical) instead of the empty this-run set.
-        if not ev_task_ids or not ev_task_ids.issubset(task_versions):
+        # FIX-171 (AUDIT-126): split into task-family IDs (which can resolve to
+        # a version in task_versions) and cross-entity refs (which cannot, by
+        # definition, and must NOT gate migration — they are descriptive context
+        # like "this evidence also relates to RISK-036"). The old single-set
+        # subset gate `ev_task_ids.issubset(task_versions)` failed whenever any
+        # cross-entity ref was present, blocking 129 in-range EVD rows.
+        task_family_ids = {tid for tid in ev_task_ids if _is_task_family_id(tid)}
+        # cross-entity refs (ev_task_ids - task_family_ids) are intentionally
+        # NOT used for gating or version resolution; kept as descriptive context.
+        # Migrate only when ALL TASK-FAMILY referenced IDs are archived (subset),
+        # then confirm at least one resolved version is in range.
+        #
+        # An EVD with ONLY cross-entity refs and NO task-family ID is ambiguous:
+        # we cannot resolve a version for it (no task-family ref to look up in
+        # task_versions), so it is KEPT hot rather than riskily migrating an
+        # unversionable row (test_migrate_evidence_only_cross_entity_refs_stays).
+        if not task_family_ids or not task_family_ids.issubset(task_versions):
             kept_lines.append(line)
             continue
         ver = None
-        for tid in ev_task_ids:
+        # Iterate task-family IDs only — cross-entity refs have no entry in
+        # task_versions by definition, so they can never resolve a version.
+        for tid in task_family_ids:
             v = task_versions.get(tid)
             if v and _version_in_range(v, version_start, version_end):
                 ver = v
@@ -1114,16 +1203,71 @@ def migrate_by_version(version_start, version_end, dry_run=False, migrate_eviden
 
 # ── Index Building ─────────────────────────────────────────────────
 
+def _version_from_archive_filename(filepath):
+    """FIX-171 (AUDIT-126 factor C): best-effort parse of a version label from
+    an archive file's NAME, used as a fallback when the file has no in-file
+    `### vX.Y.Z` title header.
+
+    Legacy archive files in this repo fall into three naming families:
+      - version-scoped single-version: `legacy-v0.10.0.md` → "0.10.0"
+      - version-scoped RANGE:          `v0.1.0~v0.31.0.md` → "0.1.0" (the START
+        / lower bound — see note below)
+      - date-named (NOT version-scoped): `completed-tasks-YYYY-MM-DD_YYYY-MM-DD.md`,
+        `narrative-...md`, `recent-completed-...md` → None (these legitimately
+        span many versions and have no single version label; current_version
+        falls through to "unknown", preserving prior behavior).
+
+    Range-file note: `task_versions` maps a single version per task ID. For a
+    range file we conservatively label every task with the range START (lower
+    bound). This is safe because the downstream `_version_in_range` membership
+    test compares the labeled version against the migration range — and the
+    range start is always inside `[start, end]` for any range that includes the
+    file's own span. Labeling with the lower bound (rather than, say, "unknown")
+    is strictly an improvement: it lets historical tasks from range files
+    participate in the task_versions lookup instead of being silently dropped
+    (AUDIT-126 found 66 such tasks dropped as version="unknown").
+
+    Args:
+        filepath: a pathlib.Path to the archive file.
+
+    Returns:
+        A version string like "0.10.0", or None if the filename is not
+        version-scoped (date-named or unrecognized).
+    """
+    name = filepath.name
+    # Single-version legacy file: legacy-v0.10.0.md → "0.10.0"
+    m = re.match(r"^legacy-v(\d+\.\d+\.\d+)\.md$", name)
+    if m:
+        return m.group(1)
+    # Range file: v0.1.0~v0.31.0.md → start "0.1.0" (lower bound; see docstring).
+    # Also matches single-version range v0.10.0~v0.10.0.md → "0.10.0".
+    m = re.match(r"^v(\d+\.\d+\.\d+)~v(\d+\.\d+\.\d+)(?:-incremental-\d{8}-\d+)?\.md$", name)
+    if m:
+        return m.group(1)
+    return None
+
+
 def _extract_tasks_from_archive_file(filepath):
     """Extract task IDs and statuses from an archive file.
 
     Returns list of (task_id, status, version_str) tuples.
+
+    FIX-171 (AUDIT-126 factor C): when a file has no in-file `### vX.Y.Z`
+    title header (legacy files like legacy-v0.10.0.md), the version is now
+    derived from the FILENAME via _version_from_archive_filename as a fallback,
+    instead of unconditionally defaulting to "unknown". This recovers ~66
+    historical tasks that were previously dropped from the task_versions lookup
+    (and thus blocked decision/risk/evidence migration referencing them).
     """
     if not filepath.exists():
         return []
     content = filepath.read_text(encoding="utf-8")
     results = []
     current_version = None
+    # FIX-171: pre-compute the filename-derived version once. It is only used
+    # when an in-file `### vX.Y.Z` header has NOT been seen (current_version is
+    # None at the row). In-file headers always take precedence.
+    filename_version = _version_from_archive_filename(filepath)
 
     for line in content.split("\n"):
         # Detect version section headers
@@ -1156,7 +1300,7 @@ def _extract_tasks_from_archive_file(filepath):
             else:
                 status = _parse_task_status(stripped)
             # version may be in the 目标版本 column for 7-col format
-            version = current_version or "unknown"
+            version = current_version or filename_version or "unknown"
             if col_offset and len(data_cells) >= 5:
                 tv = re.sub(r"[`*]", "", data_cells[4]).strip()
                 if re.match(r"^\d+\.\d+\.\d+$", tv):

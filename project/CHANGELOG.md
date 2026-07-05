@@ -2,6 +2,36 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.63.2] - 2026-07-05
+
+### 0.63.2 — Check 29 auto-discovery 排除 session-snapshot 误报修复（FIX-178）
+
+0.63.2 发布 FX-179 patch：把 FIX-178（Check 29 `check_m5_runtime_triggers` 的 auto-discovery 模式把 `session-snapshot.md` 事后记录文件误判为 agent 运行时输出，对 snapshot 中合法的编号步骤/选项记录误报 T2 FAIL）版本化为 patch release。纯 bug fix，无 behavior change、无新能力、无 breaking change、无 migration 影响。FIX-178 已通过 Code Reviewer APPROVED（6/6 checklist，0 P0/P1）+ 真实数据验证（check-governance Check 29 FAIL→PASS）。
+
+经 DEC-090/091 降级 SoD 沿用——产品代码由 Coordinator spawn Governance Developer + 只读 Explore Code Reviewer，本 release 评估由 Coordinator spawn Release Agent + 独立 Release Reviewer R0 审查。
+
+### Fixed
+- **FIX-178 — Check 29 auto-discovery 排除 session-snapshot（误报修复）**：`verify_workflow.py check_m5_runtime_triggers`（行 ~14316）在 `text=None` auto-discovery 模式下原本把 `session-snapshot.md` 当作一段运行时段扫描（`has_tool=False` 硬编码）。但 session-snapshot 是**事后记录文件**（snapshot 格式规范要求会话末尾写入；其结构化字段可能合法地含编号步骤引用与选择/选项/计划词汇），不是 agent 运行时输出。T2 启发式无法区分"被记录的菜单"与"运行时菜单"，于是 snapshot 里的合法记录（如"第(1)(2)步…第(3)步"引用 + 邻近选择词汇）触发 T2 且无 AskUserQuestion 工具调用 → check-governance Check 29 持续 FAIL。**方案 A 修复（从 auto-discovery 中剔除 session-snapshot）**：(1) `check_m5_runtime_triggers` auto-discovery 分支不再把 session-snapshot 作为 segment 添加，只扫描 evidence-log "事实依据"字段（真正的 agent 输出摘要）；(2) 函数契约不变——调用方仍可显式经 `corpus_sources=[('session-snapshot', text, False)]` 扫描 snapshot（向后兼容）；(3) docstring + 内联注释更新说明 FIX-178 设计决策。**检测能力完整保留**：inline `text=` 路径（真正的运行时扫描入口）逐字节未改；12 个既有 FIX-29 系列测试全部 PASS；新增反向保护回归测试 `test_fix178_detection_capability_preserved_on_fake_runtime_output` 构造真实违规（选项菜单 + 选择词 + 无工具调用）断言 FAIL+T2，证明检测未被削弱。
+
+### Changed
+- 版本声明同步到 0.63.2：source SKILL、canonical manifest、Claude/Codex/Zcode/Chrys plugin metadata、Claude marketplace metadata、package.json、4 hook @version、verify_workflow.py `REQUIRED_SNIPPETS`、CHANGELOG、plan-tracker 工作流版本指针 + 路线图。
+
+### Migration Notes
+- **无 migration 影响**：纯 bug fix，收紧 Check 29 auto-discovery 的扫描源（不再扫事后记录文件），检测能力完整保留。inline `text=` 运行时扫描路径零改动。
+
+### Validation
+- `python skills/software-project-governance/infra/verify_workflow.py check-version-consistency` — PASSED（所有版本声明一致）。
+- `python skills/software-project-governance/infra/verify_workflow.py check-release --version 0.63.2 --require-changelog --runtime-adapters` — baseline-consistent with 0.63.1。
+- `python skills/software-project-governance/infra/verify_workflow.py check-archive-integrity` — baseline-consistent。
+- `python skills/software-project-governance/infra/verify_workflow.py check-governance` — Check 29 PASS（FIX-178 修复有效，Scanned segments 2→1，Verdict FAIL→PASS）。
+- test_verify_workflow.py 579 passed / 64 subtests passed；infra suite 702 passed / 64 subtests passed（无回归）。
+
+### Boundaries
+- **不关闭** RISK-039（架构腐化看护——需外部宿主验证）。
+- **不声明** 1.0.0 production-ready / official approval / marketplace approval / universal runtime support（1.0.0 阻塞 RISK-036/037/039 + 外部验证）。
+- **纯 bug fix，无 behavior change**：Check 29 auto-discovery 扫描源收紧，inline 运行时扫描路径零改动、检测能力完整保留（反向保护测试守卫）。无用户可感知行为变化、无协议层改动、无新 Check、无新能力声明。降级 SoD（DEC-090/091）沿用。
+- **PATCH 版本号选择理由**：FIX-178 是单一 Check 29 auto-discovery 误报修复，与 0.63.1（FIX-176 archive bug fix）/ 0.54.1（FIX-140 hotfix patch）PATCH 先例同构——纯 bug fix、无 behavior change、无新能力。0.63.0 的 MINOR 升级因 M5.4 收紧是 behavior change，本次无此类变更。不占用路线图预留号（0.64.0/0.65.0 不变）。
+
 ## [0.63.1] - 2026-07-05
 
 ### 0.63.1 — archive 引擎 build_index 非结构化归档登记修复（FIX-176）

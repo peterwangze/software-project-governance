@@ -2,6 +2,35 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.63.1] - 2026-07-05
+
+### 0.63.1 — archive 引擎 build_index 非结构化归档登记修复（FIX-176）
+
+0.63.1 发布 FX-177 patch：把 FIX-176（archive 引擎 `build_index` 不登记 narrative/recent-completed 类非结构化归档文件）版本化为 patch release。纯 bug fix，无 behavior change、无新能力、无 breaking change、无 migration 影响。FIX-176 已通过 Code Reviewer APPROVED（6/6 checklist，0 P0/P1）+ 真实数据验证（archive-integrity 双重 PASS）。
+
+经 DEC-090/091 降级 SoD 沿用——产品代码由 Coordinator spawn Governance Developer + 只读 Explore Code Reviewer，本 release 评估由 Coordinator spawn Release Agent + 独立 Release Reviewer R0→R1 审查。
+
+### Fixed
+- **FIX-176 — archive build_index 登记非结构化归档文件**：`archive.py build_index()`（行 1389-1540）原本只从归档文件**内容**提取条目生成 index 行（tasks 用 `_extract_tasks_from_archive_file` 从表格行、evidence 用 EVD ID、decisions 用 `## DEC-` 头、risks 用 `| RISK-` 行），`narrative-*.md`/`recent-completed-*.md` 是自由叙述类归档文件（无 task 表行、无 DEC 头、无 RISK 行）→ build_index 不为它们生成任何 index 条目 → rebuild 后变 orphan → `verify_archive_integrity` Check 2（每个 archive 文件必须被 index 引用）FAIL。FIX-169 曾手动登记 narrative，但 build_index rebuild 会丢失该手动条目。**方案 A 修复**：(1) 新增 `_UNSTRUCTURED_ARCHIVE_PREFIXES` 元组 + 3 个 helper（`_is_unstructured_archive_file`/`_unstructured_archive_kind`/`_unstructured_archive_description`，基于文件名前缀匹配 + 从 frontmatter 防御性解析描述）；(2) `build_index()` 加 `elif _is_unstructured_archive_file(f)` 分支登记到 `narrative_entries`；(3) index.md 在 Risk 索引后追加 `## 非结构化归档` section（三列表 `| 归档文件 | 类型 | 描述 |`）；(4) `verify_archive_integrity._parse_index_section` 加 `"非结构化归档"` 分支并入 `all_index_refs`；(5) Check 3 per-category 计数双重保险不污染（新 section 不在 `section_map` + narrative 行不匹配 `[A-Z]+-\d+` 正则）。**避免重复登记**：含 60 行 task 表格的 `recent-completed-*.md` 走结构化分支，不进 narrative_entries。
+
+### Changed
+- 版本声明同步到 0.63.1：source SKILL、canonical manifest、Claude/Codex/Zcode/Chrys plugin metadata、Claude marketplace metadata、package.json、4 hook @version、verify_workflow.py `REQUIRED_SNIPPETS`、CHANGELOG、plan-tracker 工作流版本指针 + 路线图。
+
+### Migration Notes
+- **无 migration 影响**：纯 bug fix，修复归档引擎覆盖盲区（让 build_index 正确登记非结构化归档文件，不再误报 orphan），无 breaking change。下次 `archive.py migrate --auto` 运行时 build_index 会自动重建 index.md 含新 section。
+
+### Validation
+- `python skills/software-project-governance/infra/verify_workflow.py check-version-consistency` — PASSED（所有版本声明一致）。
+- `python skills/software-project-governance/infra/verify_workflow.py check-release --version 0.63.1 --require-changelog --runtime-adapters` — baseline-consistent with 0.63.0。
+- `python skills/software-project-governance/infra/verify_workflow.py check-archive-integrity` — PASS。
+- test_archive.py 89 passed（86 baseline + 3 new FAIL-on-buggy/PASS-after-fix），infra suite 700 passed（0 regressions）。
+
+### Boundaries
+- **不关闭** RISK-039（架构腐化看护——本体已修，build_index 治标自动化，但 RISK-039 需外部宿主验证）。
+- **不声明** 1.0.0 production-ready / official approval / marketplace approval / universal runtime support（1.0.0 阻塞 RISK-036/037/039 + 外部验证，DEC-095 已记录）。
+- **纯 bug fix，无 behavior change**：archive 引擎覆盖盲区补全，无用户可感知行为变化、无协议层改动、无新 Check、无新能力声明。降级 SoD（DEC-090/091）沿用。
+- **PATCH 版本号选择理由**：FIX-176 是单一 archive 引擎 bug 修复，与 0.54.1（FIX-140 hotfix patch）先例同构——纯 bug fix、无 behavior change、无新能力。0.63.0 的 MINOR 升级因 M5.4 收紧是 behavior change，本次无此类变更。
+
 ## [0.63.0] - 2026-07-04
 
 ### 0.63.0 — Coordinator 检视循环协议修复 + verify Check 29/30（FIX-173/174）+ archive 引擎修复（FIX-168/170/171/172）

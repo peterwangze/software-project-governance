@@ -14320,9 +14320,19 @@ def check_m5_runtime_triggers(text=None, contains_askuserquestion=False,
     Implements behavior-protocol.md M5.1b (T1 bare-question / T2 option-menu
     triggers) and M5.4b (notification-prefix WARN). When `text` is supplied
     directly, scans that assistant-message segment. When `text` is None, the
-    check reads corpus sources (session-snapshot.md prose, evidence-log
-    "事实依据" fields) and degrades to "no-verdict" when none are available
-    (P1-b: do not FAIL in a corpus-less environment).
+    check reads corpus sources (evidence-log "事实依据" fields) and degrades to
+    "no-verdict" when none are available (P1-b: do not FAIL in a corpus-less
+    environment).
+
+    FIX-178: session-snapshot.md is intentionally NOT scanned in auto-discovery
+    mode. It is a post-hoc record file (the snapshot format spec mandates it be
+    written at session end and may legitimately contain numbered step references
+    and choice vocabulary in its structured fields — e.g. 下次会话优先级 ordered
+    lists, 待确认决策 entries), not agent runtime output. Scanning it produced
+    structural false positives — legitimate records (e.g. "第(1)(2)步…第(3)步"
+    step references plus nearby "选择/方案/选项" words) read by the T2 heuristic
+    as a runtime option menu with no AskUserQuestion. Auto-discovery now reads
+    only evidence-log "事实依据" fields (genuine agent-output summaries).
 
     Args:
       text: optional assistant-message segment string to scan directly.
@@ -14349,13 +14359,17 @@ def check_m5_runtime_triggers(text=None, contains_askuserquestion=False,
         segments = list(corpus_sources)
     else:
         # Discover corpus from governance runtime files (best-effort).
+        # FIX-178: session-snapshot.md is deliberately excluded from
+        # auto-discovery. It is a post-hoc RECORD file (the snapshot format spec
+        # mandates it be written at session end; its structured fields may
+        # legitimately contain numbered step references and choice vocabulary),
+        # not agent runtime output. Scanning it produced structural false
+        # positives — legitimate records (e.g. "第(1)(2)步…第(3)步" step
+        # references + nearby "选择/方案/选项" vocabulary) tripped T2 because
+        # the runtime heuristic cannot distinguish a recorded menu from a
+        # runtime menu. Only evidence-log
+        # "事实依据" fields (genuine agent-output summaries) are scanned.
         segments = []
-        snapshot = ROOT / ".governance/session-snapshot.md"
-        if snapshot.is_file():
-            try:
-                segments.append(("session-snapshot", snapshot.read_text(encoding="utf-8"), False))
-            except (IOError, OSError):
-                pass
         if EVIDENCE_PATH.is_file():
             try:
                 ev = EVIDENCE_PATH.read_text(encoding="utf-8")

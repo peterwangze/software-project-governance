@@ -13167,6 +13167,79 @@ class CheckM5RuntimeTriggersTests(unittest.TestCase):
                 r = vw.check_m5_runtime_triggers()
             self.assertEqual(r["verdict"], "no-verdict")
 
+    def test_fix178_snapshot_not_scanned_no_false_positive(self):
+        """FIX-178 (FIX-29 self-reference FP): session-snapshot.md is a
+        post-hoc RECORD file (snapshot format spec requires it to transcribe
+        AskUserQuestion option menus for cross-session resumption), not agent
+        runtime output. A snapshot that legitimately contains option-menu
+        records (descriptive step references like "第(1)(2)步…第(3)步" with
+        nearby "选择/方案/选项" vocabulary) MUST NOT trip T2 in auto-discovery.
+
+        Reproduces the live false positive (was FAIL with the un-fixed
+        verify_workflow.py). After FIX-178 the snapshot is excluded from
+        auto-discovery, so the only corpus source is evidence-log-facts (which
+        is empty here) → degrades to no-verdict.
+        """
+        # Mirrors the real session-snapshot.md structure that tripped T2:
+        # descriptive "(1)(2)(3)" step refs + co-located choice vocabulary.
+        snapshot_text = (
+            "# 会话快照 — 2026-07-05\n\n"
+            "## 状态修正\n"
+            "原标记\"进行中\"，第(1)(2)步 2026-07-03 已完成，第(3)步由 FIX-176 自动化。\n"
+            "\n"
+            "## 本会话 commit 链\n"
+            "用户 /governance 选择\"执行 archive 真实归档运行\"。\n"
+            "\n"
+            "## 遗留任务\n"
+            "1. RISK-036/RISK-037 推进\n"
+            "2. P2 改进\n"
+            "3. 拆分 Phase 5\n"
+        )
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gov = root / ".governance"
+            gov.mkdir(parents=True, exist_ok=True)
+            (gov / "session-snapshot.md").write_text(snapshot_text, encoding="utf-8")
+            # evidence-log exists but has no 事实依据 fact rows.
+            (gov / "evidence-log.md").write_text(
+                "# Evidence Log\n\n(placeholder, no fact rows)\n",
+                encoding="utf-8",
+            )
+            with patch.object(vw, "ROOT", root), \
+                 patch.object(vw, "EVIDENCE_PATH", gov / "evidence-log.md"):
+                r = vw.check_m5_runtime_triggers()
+            # FIX-178: snapshot is not scanned, evidence-log has no fact rows
+            # → no-verdict (NOT FAIL). The session-snapshot segment must not
+            # appear in any violation.
+            self.assertNotEqual(r["verdict"], "FAIL")
+            for v in r["violations"]:
+                self.assertNotIn("session-snapshot", v.get("source", ""))
+
+    def test_fix178_detection_capability_preserved_on_fake_runtime_output(self):
+        """FIX-178 reverse-protection: dropping session-snapshot from
+        auto-discovery MUST NOT weaken Check 29's detection of a genuine
+        runtime violation. A fake agent runtime assistant-message that emits an
+        inline option menu + choice context with no AskUserQuestion tool call
+        must STILL trip T2.
+
+        Exercises the inline-text path (the real runtime scan path) so the
+        detection capability is verified independently of which corpus files
+        auto-discovery reads.
+        """
+        # Genuine runtime option menu: numbered options + "选择" + trailing
+        # question, no AskUserQuestion tool call. Must FAIL.
+        text = (
+            "下一步有这些选项：\n"
+            "(1) 推进 RISK-036/037\n"
+            "(2) 处理 Check 29 自我指涉误报\n"
+            "(3) 拆分 Phase 5\n"
+            "你倾向选择哪个方案？"
+        )
+        r = vw.check_m5_runtime_triggers(text=text, contains_askuserquestion=False)
+        self.assertEqual(r["verdict"], "FAIL")
+        triggers = {v["trigger"] for v in r["violations"]}
+        self.assertIn("T2", triggers)
+
 
 class CheckReviewClosureTests(unittest.TestCase):
     """FIX-174 (DEC-094): Check 30 — review closure state-machine validation.

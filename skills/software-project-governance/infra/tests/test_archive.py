@@ -807,6 +807,74 @@ class TestArchiveBuildIndex(unittest.TestCase):
         self.assertEqual(result["task_entries"], 0)
         self.assertEqual(result["evidence_entries"], 0)
 
+    def test_build_index_registers_unstructured_narrative_file(self):
+        """FIX-176 regression: a task-archive file whose body is free narrative
+        prose (no extractable task-table rows, filename matches narrative-* or
+        recent-completed-*) must still be registered in the index under a
+        dedicated 非结构化归档 section. Without the fix, build_index() drops the
+        file entirely and verify_archive_integrity Check 2 then flags it as an
+        orphan (FAIL-on-buggy)."""
+        import archive
+
+        # Structured task archive file (yields 1 task row).
+        (self.archive_dir / "tasks" / "v0.1.0~v0.2.0.md").write_text(
+            "# 归档\n\n### v0.1.0\n"
+            "| 任务ID | 描述 | 优先级 | 依赖 | 目标版本 | 负责人 | 审查人 | 审查类型 | 闭环路径 | 状态 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
+            "| FIX-001 | d | P1 | — | 0.1.0 | o | r | rt | p | 已完成 |\n",
+            encoding="utf-8",
+        )
+        # Non-structured narrative file (free prose, no task rows). Mirrors the
+        # real archive/tasks/narrative-2026-04-30_2026-06-27.md header format.
+        (self.archive_dir / "tasks" / "narrative-2026-04-30_2026-06-27.md").write_text(
+            "# 归档叙述段 — 历史活跃事项（2026-04-30 ~ 2026-06-27）\n"
+            "\n"
+            "- **归档日期**: 2026-06-28（FIX-157）\n"
+            "- **归档范围**: plan-tracker 段中已闭环历史事项叙述\n"
+            "- **条目数**: 98 段\n"
+            "\n"
+            "**2026-06-26 某事项叙述**：自由文本，无 task 表格行。\n",
+            encoding="utf-8",
+        )
+
+        with patch.object(archive, 'ROOT', self.root):
+            result = archive.build_index()
+
+        # Result reports the narrative registration.
+        self.assertEqual(result["task_entries"], 1)
+        self.assertEqual(result["narrative_entries"], 1)
+
+        index_path = self.archive_dir / "index.md"
+        content = index_path.read_text(encoding="utf-8")
+        # New dedicated section exists.
+        self.assertIn("## 非结构化归档", content)
+        # The narrative file is referenced in the index.
+        rel = "archive/tasks/narrative-2026-04-30_2026-06-27.md"
+        self.assertIn(rel, content)
+        # Date range extracted from filename appears in the description column.
+        self.assertIn("2026-04-30~2026-06-27", content)
+        # The structured task row is unchanged in the Task section.
+        self.assertIn("FIX-001", content)
+
+    def test_build_index_unstructured_recent_completed_without_table(self):
+        """FIX-176: a recent-completed-* file with no task table (pure pointer
+        file) is also registered as non-structured. (When it DOES contain a
+        task table it is handled by the normal structured path, not here.)"""
+        import archive
+
+        (self.archive_dir / "tasks" / "recent-completed-2026-04-30_2026-06-27.md").write_text(
+            "# 归档 Task 表 — 最近完成\n"
+            "- **归档范围**: 提交窗口\n"
+            "\n> 仅指针，无表格。\n",
+            encoding="utf-8",
+        )
+        with patch.object(archive, 'ROOT', self.root):
+            result = archive.build_index()
+        self.assertEqual(result["narrative_entries"], 1)
+        content = (self.archive_dir / "index.md").read_text(encoding="utf-8")
+        self.assertIn("archive/tasks/recent-completed-2026-04-30_2026-06-27.md", content)
+        self.assertIn("## 非结构化归档", content)
+
 
 class TestArchiveVerifyIntegrity(unittest.TestCase):
     """Test verify_archive_integrity function."""
@@ -1039,6 +1107,49 @@ class TestArchiveVerifyIntegrity(unittest.TestCase):
         check3_issues = [i for i in result["issues"] if "mismatch" in i.lower() or "count" in i.lower()]
         self.assertEqual(check3_issues, [],
                          f"Check 3 must be symmetric for decisions/risks (no false mismatch): {check3_issues}")
+
+    def test_verify_passes_after_build_index_with_narrative_file(self):
+        """FIX-176 end-to-end regression: after build_index() rebuilds the
+        index from scratch, a non-structured narrative-* task-archive file
+        must NOT be flagged as an orphan by verify_archive_integrity. On the
+        unpatched archive.py, build_index() drops the narrative file and
+        verify_archive_integrity() fails Check 2 with
+        '归档文件未在索引中记录: archive/tasks/narrative-...md' (FAIL-on-buggy),
+        and after the fix both build_index + verify pass cleanly."""
+        import archive
+
+        # One structured task archive + one narrative (free-prose) archive.
+        (self.archive_dir / "tasks" / "v0.1.0~v0.2.0.md").write_text(
+            "# 归档\n\n### v0.1.0\n"
+            "| 任务ID | 描述 | 优先级 | 依赖 | 目标版本 | 负责人 | 审查人 | 审查类型 | 闭环路径 | 状态 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
+            "| FIX-001 | d | P1 | — | 0.1.0 | o | r | rt | p | 已完成 |\n",
+            encoding="utf-8",
+        )
+        (self.archive_dir / "tasks" / "narrative-2026-04-30_2026-06-27.md").write_text(
+            "# 归档叙述段 — 历史活跃事项（2026-04-30 ~ 2026-06-27）\n"
+            "\n"
+            "- **归档范围**: 已闭环历史事项叙述\n"
+            "- **条目数**: 5 段\n"
+            "\n"
+            "**2026-06-26 某事项**：自由叙述文本，无 task 表格行。\n",
+            encoding="utf-8",
+        )
+
+        with patch.object(archive, 'ROOT', self.root):
+            archive.build_index()  # rebuild index from scratch
+            result = archive.verify_archive_integrity()
+
+        self.assertTrue(
+            result["pass"],
+            f"verify should pass after rebuild with a narrative file: {result['issues']}",
+        )
+        self.assertEqual(result["issues"], [])
+        # No orphan complaint in particular.
+        self.assertFalse(
+            any("narrative" in i for i in result["issues"]),
+            f"narrative file must not be flagged as orphan: {result['issues']}",
+        )
 
 
 class TestBackwardCompatibility(unittest.TestCase):

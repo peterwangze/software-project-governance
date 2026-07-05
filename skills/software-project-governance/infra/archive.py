@@ -1372,6 +1372,80 @@ def _extract_evidence_from_archive_file(filepath):
     return results
 
 
+# FIX-176: helpers for registering non-structured archive files (free-prose
+# archives like narrative-* / recent-completed-* that contain no extractable
+# task/evidence/decision/risk rows). Such files must still be referenced by
+# the index so verify_archive_integrity Check 2 does not flag them as orphans.
+
+# Filename prefixes that mark a task-archive file as non-structured (its body
+# is free narrative prose, not a task table). Listed in the order they should
+# be checked; the first match wins for kind labeling.
+_UNSTRUCTURED_ARCHIVE_PREFIXES = (
+    ("narrative-", "叙述段"),
+    ("recent-completed-", "滚动指针"),
+)
+
+
+def _is_unstructured_archive_file(filepath):
+    """Return True if a task-archive file is a non-structured (free-prose) file.
+
+    Used by build_index() to decide whether a task-archive file that yielded no
+    extractable task rows should be registered in the 非结构化归档 index section
+    rather than dropped (which would make it an orphan for verify Check 2).
+    Detection is filename-prefix based so it is robust to content drift.
+    """
+    name = filepath.name
+    return any(name.startswith(prefix) for prefix, _ in _UNSTRUCTURED_ARCHIVE_PREFIXES)
+
+
+def _unstructured_archive_kind(filepath):
+    """Return a short Chinese kind label for a non-structured archive file."""
+    name = filepath.name
+    for prefix, kind in _UNSTRUCTURED_ARCHIVE_PREFIXES:
+        if name.startswith(prefix):
+            return kind
+    return "非结构化"
+
+
+def _unstructured_archive_description(filepath):
+    """Build a short human-readable description for a non-structured archive file.
+
+    Pulls the date range from the filename (e.g. ``2026-04-30_2026-06-27``) and,
+    when available, the ``- **归档范围**:**`` or ``- **条目数**:**`` line from the
+    file header. Falls back to the title line. Kept defensive: any parse miss
+    yields a generic non-empty description so the index row is never blank.
+    """
+    name = filepath.name
+    stem = filepath.stem
+    # Date range like "...-2026-04-30_2026-06-27" -> "2026-04-30~2026-06-27"
+    m = re.search(r"(\d{4}-\d{2}-\d{2})_(\d{4}-\d{2}-\d{2})", stem)
+    date_range = f"{m.group(1)}~{m.group(2)}" if m else ""
+
+    scope = ""
+    count = ""
+    title = ""
+    if filepath.exists():
+        try:
+            content = filepath.read_text(encoding="utf-8")
+        except OSError:
+            content = ""
+        for line in content.split("\n")[:15]:
+            stripped = line.strip()
+            if not scope and stripped.startswith("- **归档范围**:"):
+                scope = stripped.split(":", 1)[1].strip().lstrip("*").strip()
+            elif not count and stripped.startswith("- **条目数**:"):
+                count = stripped.split(":", 1)[1].strip().lstrip("*").strip()
+            elif not title and stripped.startswith("# "):
+                title = stripped[2:].strip()
+
+    parts = []
+    if date_range:
+        parts.append(date_range)
+    body = scope or count or title or "非结构化归档文件"
+    parts.append(body)
+    return " ".join(parts)
+
+
 def _get_archived_task_ids():
     """Return task IDs already present in archive task files."""
     archived = set()
@@ -1402,22 +1476,38 @@ def build_index():
         "evidence_entries": 0,
         "decision_entries": 0,
         "risk_entries": 0,
+        "narrative_entries": 0,
     }
 
     _ensure_archive_dirs()
 
     # Collect task entries
     task_entries = []
+    # FIX-176: unstructured task-archive files (narrative-*, recent-completed-*,
+    # and any future free-prose archive) yield no task-table rows, so they would
+    # otherwise become orphans that fail verify_archive_integrity Check 2. Track
+    # such files here so they can be registered in a dedicated index section.
+    narrative_entries = []
     for f in sorted((_archive_dir() / "tasks").glob("*.md")):
         if f.name == ".gitkeep":
             continue
         rel_path = f"archive/tasks/{f.name}"
-        for task_id, status, version in _extract_tasks_from_archive_file(f):
-            task_entries.append({
-                "id": task_id,
-                "status": status or "?",
-                "version": version,
+        rows = _extract_tasks_from_archive_file(f)
+        if rows:
+            for task_id, status, version in rows:
+                task_entries.append({
+                    "id": task_id,
+                    "status": status or "?",
+                    "version": version,
+                    "file": rel_path,
+                })
+        elif _is_unstructured_archive_file(f):
+            # FIX-176: register non-table archive file (e.g. narrative-*) so it
+            # is referenced by the index and not flagged as an orphan.
+            narrative_entries.append({
                 "file": rel_path,
+                "kind": _unstructured_archive_kind(f),
+                "description": _unstructured_archive_description(f),
             })
 
     # Collect evidence entries
@@ -1473,6 +1563,7 @@ def build_index():
     result["evidence_entries"] = len(evidence_entries)
     result["decision_entries"] = len(decision_entries)
     result["risk_entries"] = len(risk_entries)
+    result["narrative_entries"] = len(narrative_entries)
 
     # Build index.md content
     index_lines = [
@@ -1531,6 +1622,26 @@ def build_index():
     for entry in risk_entries:
         index_lines.append(
             f"| {entry['id']} | {entry['description']} | {entry['file']} |"
+        )
+
+    # FIX-176: 非结构化归档小节——登记不含可索引 task/evidence/decision/risk
+    # 行的自由叙述类归档文件（如 narrative-*、recent-completed-* 中无表格的），
+    # 使 verify_archive_integrity 的 Check 2（每个归档文件须被索引引用）能识别它们，
+    # 不再误报 orphan。该小节不参与 Check 3 的分类计数漂移检测。
+    index_lines.extend([
+        "",
+        "## 非结构化归档",
+        "",
+        "> 以下文件是归档目录中不含可索引条目（task/evidence/decision/risk 行）的",
+        "> 自由叙述类文件，仅在此登记以满足归档完整性（每个归档 .md 须被索引引用）。",
+        "",
+        "| 归档文件 | 类型 | 描述 |",
+        "|---------|------|------|",
+    ])
+
+    for entry in narrative_entries:
+        index_lines.append(
+            f"| {entry['file']} | {entry['kind']} | {entry['description']} |"
         )
 
     index_lines.append("")
@@ -1631,6 +1742,10 @@ def verify_archive_integrity():
             elif section_name == "Risk 索引":
                 if len(parts) >= 4:
                     refs.add(parts[3])
+            elif section_name == "非结构化归档":
+                # FIX-176: file is in column 1 (| 归档文件 | 类型 | 描述 |)
+                if len(parts) >= 2:
+                    refs.add(parts[1])
 
         return refs
 
@@ -1638,8 +1753,14 @@ def verify_archive_integrity():
     index_evidence_refs = _parse_index_section(index_lines, "Evidence 索引")
     index_decision_refs = _parse_index_section(index_lines, "Decision 索引")
     index_risk_refs = _parse_index_section(index_lines, "Risk 索引")
+    # FIX-176: also collect references from the non-structured archive section
+    # so free-prose files (narrative-*, etc.) count as "referenced" for Check 2.
+    index_narrative_refs = _parse_index_section(index_lines, "非结构化归档")
 
-    all_index_refs = index_task_refs | index_evidence_refs | index_decision_refs | index_risk_refs
+    all_index_refs = (
+        index_task_refs | index_evidence_refs | index_decision_refs
+        | index_risk_refs | index_narrative_refs
+    )
 
     # Check 1: Every referenced archive file exists
     for ref in all_index_refs:

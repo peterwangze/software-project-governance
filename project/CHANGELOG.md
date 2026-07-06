@@ -2,6 +2,37 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.63.3] - 2026-07-06
+
+### 0.63.3 — e2e fixture SKILL.md adapter 表结构对齐（FIX-180）
+
+0.63.3 发布 FX-181 patch：把 FIX-180（e2e fixture `project/e2e-test-project/skills/software-project-governance/SKILL.md` 的 adapter 表缺 opencode + Chrys 两行，导致 `check-projection-sync` 持续报 "target fixture drift: skills/software-project-governance/SKILL.md" FAIL）版本化为 patch release。纯 bug fix，**只影响 e2e 测试数据、不影响运行时行为**，无 behavior change、无新能力、无 breaking change、无 migration 影响。FIX-180 已通过 Code Reviewer APPROVED（6/6 checklist，0 P0/P1/P2）+ projection-sync FAIL→PASS + 702 测试全绿。
+
+经 DEC-090/091 降级 SoD 沿用——产品代码由 Coordinator spawn Governance Developer + 只读 Explore Code Reviewer，本 release 评估由 Coordinator spawn Release Agent + 独立 Release Reviewer R0 审查。
+
+### Fixed
+- **FIX-180 — e2e fixture SKILL.md adapter 表对齐 opencode + Chrys（projection-sync FAIL 修复）**：source `skills/software-project-governance/SKILL.md` 的 agent adapter 表含 6 行（Claude Code/Codex/Gemini/opencode/Chrys/国内 Agent CLI），但 e2e fixture `project/e2e-test-project/skills/software-project-governance/SKILL.md` 只有 4 行——0.61.2 引入 Chrys 集成（opencode + Chrys 行）时 fixture 未对齐，造成 fixture 与 source 的 adapter 表结构漂移。这使 `check-projection-sync`（Check 28）持续报 "target fixture drift" FAIL，在 FX-175/177/179 Release Reviewer R0 中被标记为超出 PATCH 范围的 pre-existing 结构性漂移。**修复**：在 fixture SKILL.md 的 adapter 表 Gemini 行后、国内 Agent CLI 行前补入 opencode + Chrys 两行，byte-for-byte 与 source 一致（单文件 +2 行，无 source 改动）。projection-sync FAIL→PASS。
+
+### Changed
+- 版本声明同步到 0.63.3：source SKILL、canonical manifest、Claude/Codex/Zcode/Chrys plugin metadata、Claude marketplace metadata、package.json、4 hook @version、verify_workflow.py `REQUIRED_SNIPPETS`、CHANGELOG、plan-tracker 工作流版本指针 + 路线图。
+- e2e fixture 版本指针同步：`project/e2e-test-project/skills/software-project-governance/SKILL.md` + `project/e2e-test-project/.governance/plan-tracker.md` 的版本指针 0.63.2→0.63.3（与 FX-177/179 先例一致）。
+
+### Migration Notes
+- **无 migration 影响**：纯 e2e fixture 对齐（补 2 行 adapter 表），不影响运行时行为、协议层或检测能力。无用户可感知变化。
+
+### Validation
+- `python skills/software-project-governance/infra/verify_workflow.py check-version-consistency` — PASSED（所有版本声明一致）。
+- `python skills/software-project-governance/infra/verify_workflow.py check-release --version 0.63.3 --require-changelog --runtime-adapters` — baseline-consistent with 0.63.2（FAIL 项 pre-existing，非本次引入）。
+- `python skills/software-project-governance/infra/verify_workflow.py check-projection-sync` — PASSED（FIX-180 核心交付：4 mirrored files, no drift）。
+- `python skills/software-project-governance/infra/verify_workflow.py check-archive-integrity` — PASS。
+- infra suite 702 passed / 64 subtests passed（FIX-180 commit 已验证，无回归）。
+
+### Boundaries
+- **不关闭** RISK-039（架构腐化看护——需外部宿主验证）。
+- **不声明** 1.0.0 production-ready / official approval / marketplace approval / universal runtime support（1.0.0 阻塞 RISK-036/037/039 + 外部验证）。
+- **纯 bug fix，无 behavior change**：仅 e2e fixture adapter 表补 2 行（对齐 source），无运行时行为变化、无协议层改动、无新 Check、无新能力声明。降级 SoD（DEC-090/091）沿用。
+- **PATCH 版本号选择理由**：FIX-180 是单一 e2e fixture 对齐修复（解除 projection-sync FAIL），与 0.63.2（FIX-178）/ 0.63.1（FIX-176）/ 0.54.1（FIX-140）PATCH 先例同构——纯 bug fix、无 behavior change、无新能力。这是连续第 3 个 patch（0.63.1/0.63.2/0.63.3），但每个都是独立的 bug fix，符合 SemVer PATCH 语义。不占用路线图预留号（0.64.0/0.65.0 不变）。
+
 ## [0.63.2] - 2026-07-05
 
 ### 0.63.2 — Check 29 auto-discovery 排除 session-snapshot 误报修复（FIX-178）

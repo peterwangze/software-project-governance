@@ -273,6 +273,8 @@ python skills/software-project-governance/infra/verify_workflow.py execution-pac
 | Claude Code | `adapters/claude/` | `.claude-plugin/` |
 | Codex | `adapters/codex/` | `.codex-plugin/` |
 | Gemini | `adapters/gemini/` | — |
+| opencode | `adapters/opencode/` | — |
+| Chrys | `adapters/chrys/` | — |
 | 国内 Agent CLI | — | `.agents/` |
 
 > 仓库根目录的 `平台原生入口文件` 不是产品资产——它是当前仓库使用 Claude Code 开发的临时文件。

@@ -9501,6 +9501,12 @@ def check_version_consistency():
         ".claude-plugin/plugin.json": ROOT / ".claude-plugin/plugin.json",
         ".claude-plugin/marketplace.json": ROOT / ".claude-plugin/marketplace.json",
         ".codex-plugin/plugin.json": ROOT / ".codex-plugin/plugin.json",
+        # FIX-182: close the VERSION_FILES coverage blind spot — the repo
+        # ships four plugin.json manifest dirs (Claude/Codex/Zcode/Chrys).
+        # Without these two entries, a version bump that forgot .zcode-plugin
+        # or .chrys-plugin would slip past this loop undetected.
+        ".zcode-plugin/plugin.json": ROOT / ".zcode-plugin/plugin.json",
+        ".chrys-plugin/plugin.json": ROOT / ".chrys-plugin/plugin.json",
     }
 
     issues = []
@@ -20091,7 +20097,7 @@ def cmd_check_version_consistency(_args):
 
     print("\n=== Version Consistency Check ===")
     print(f"  Source of truth: skills/software-project-governance/SKILL.md")
-    print(f"  Files checked: 11 (SKILL.md, manifest.json, 3 plugin.json, CHANGELOG, plan-tracker, 4 hooks)")
+    print(f"  Files checked: 13 (SKILL.md, manifest.json, marketplace.json, 4 plugin.json, CHANGELOG, plan-tracker, 4 hooks)")
 
     fail_items = [i for i in issues if not i.startswith("[WARN]")]
     warn_items = [i for i in issues if i.startswith("[WARN]")]

@@ -286,6 +286,10 @@ class CleanCheckoutBoundaryTests(unittest.TestCase):
             (root / "skills/software-project-governance/core").mkdir(parents=True)
             (root / ".claude-plugin").mkdir()
             (root / ".codex-plugin").mkdir()
+            # FIX-182: every VERSION_FILES plugin.json dir must be present so
+            # this test isolates the REQUIRED_SNIPPETS failure it targets.
+            (root / ".zcode-plugin").mkdir()
+            (root / ".chrys-plugin").mkdir()
             (root / "project").mkdir()
 
             (root / "skills/software-project-governance/SKILL.md").write_text(
@@ -308,6 +312,14 @@ class CleanCheckoutBoundaryTests(unittest.TestCase):
                 json.dumps({"version": "9.9.9"}),
                 encoding="utf-8",
             )
+            (root / ".zcode-plugin/plugin.json").write_text(
+                json.dumps({"version": "9.9.9"}),
+                encoding="utf-8",
+            )
+            (root / ".chrys-plugin/plugin.json").write_text(
+                json.dumps({"version": "9.9.9"}),
+                encoding="utf-8",
+            )
             (root / "project/CHANGELOG.md").write_text(
                 "## [9.9.9]\n",
                 encoding="utf-8",
@@ -324,6 +336,119 @@ class CleanCheckoutBoundaryTests(unittest.TestCase):
             any("REQUIRED_SNIPPETS block not found" in issue for issue in issues),
             issues,
         )
+
+    def test_fix182_version_files_covers_zcode_and_chrys_plugin(self):
+        """FIX-182: VERSION_FILES must include .zcode-plugin and .chrys-plugin.
+
+        The repo ships four plugin.json manifest dirs (Claude/Codex/Zcode/
+        Chrys). Before FIX-182 only three were in VERSION_FILES, so a version
+        bump that forgot .zcode-plugin or .chrys-plugin would slip past
+        check_version_consistency undetected — a real coverage blind spot.
+
+        This test:
+          * PASS-after-fix — the real check_version_consistency() detects a
+            drifted .zcode-plugin/plugin.json and reports a [FAIL] issue
+            naming .zcode-plugin.
+          * FAIL-on-buggy — re-running the same VERSION_FILES loop with the
+            pre-FIX-182 (3-entry plugin) dict does NOT detect the drift,
+            which is exactly the blind spot the fix closes.
+        """
+        import re as _re
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            for d in (
+                "skills/software-project-governance/infra",
+                "skills/software-project-governance/core",
+                "skills/software-project-governance/infra/hooks",
+                ".claude-plugin", ".codex-plugin",
+                ".zcode-plugin", ".chrys-plugin", "project",
+            ):
+                (root / d).mkdir(parents=True)
+
+            truth = "9.9.9"
+            (root / "skills/software-project-governance/SKILL.md").write_text(
+                f"---\nversion: {truth}\n---\n", encoding="utf-8")
+            (root / "skills/software-project-governance/core/manifest.json").write_text(
+                json.dumps({"version": truth}), encoding="utf-8")
+            for name in (".claude-plugin", ".codex-plugin"):
+                (root / name / "plugin.json").write_text(
+                    json.dumps({"version": truth}), encoding="utf-8")
+            (root / ".claude-plugin/marketplace.json").write_text(
+                json.dumps({"plugins": [{"version": truth}]}), encoding="utf-8")
+            # FIX-182 target: .zcode-plugin drifts away from the source of truth.
+            (root / ".zcode-plugin/plugin.json").write_text(
+                json.dumps({"version": "0.0.1"}), encoding="utf-8")
+            (root / ".chrys-plugin/plugin.json").write_text(
+                json.dumps({"version": truth}), encoding="utf-8")
+            (root / "project/CHANGELOG.md").write_text(
+                f"## [{truth}]\n", encoding="utf-8")
+            (root / "skills/software-project-governance/infra/verify_workflow.py").write_text(
+                f"REQUIRED_SNIPPETS = {{'x': ['{truth}']}}\n\n\n# ── Manifest sentinel\n",
+                encoding="utf-8")
+            for hook in ("pre-commit", "commit-msg", "post-commit",
+                         "prepare-commit-msg"):
+                (root / f"skills/software-project-governance/infra/hooks/{hook}"
+                 ).write_text(f"# @version: {truth}\n", encoding="utf-8")
+
+            with patch.object(vw, "ROOT", root):
+                # ── PASS-after-fix ──
+                issues = vw.check_version_consistency()
+                zcode_fails = [
+                    i for i in issues
+                    if i.startswith("[FAIL]") and ".zcode-plugin" in i
+                ]
+                self.assertTrue(
+                    zcode_fails,
+                    "check_version_consistency must detect .zcode-plugin drift; "
+                    f"got issues={issues}",
+                )
+
+                # ── FAIL-on-buggy ──
+                # Replay the pre-FIX-182 VERSION_FILES (no zcode/chrys entries)
+                # through the *same* detection loop to demonstrate the blind
+                # spot the fix closes: the drift is silently missed.
+                buggy_version_files = {
+                    "SKILL.md (source of truth)":
+                        root / "skills/software-project-governance/SKILL.md",
+                    "manifest.json":
+                        root / "skills/software-project-governance/core/manifest.json",
+                    ".claude-plugin/plugin.json":
+                        root / ".claude-plugin/plugin.json",
+                    ".claude-plugin/marketplace.json":
+                        root / ".claude-plugin/marketplace.json",
+                    ".codex-plugin/plugin.json":
+                        root / ".codex-plugin/plugin.json",
+                }
+                versions = {}
+                for label, path in buggy_version_files.items():
+                    content = path.read_text(encoding="utf-8")
+                    if path.suffix == ".json":
+                        data = json.loads(content)
+                        if "version" in data:
+                            ver = data["version"]
+                        elif "plugins" in data and data["plugins"]:
+                            ver = data["plugins"][0].get("version", "NOT FOUND")
+                        else:
+                            ver = "NOT FOUND"
+                    else:
+                        m = _re.search(
+                            r"(?:`?\*{0,2}version\*{0,2}`?\s*[:=]\s*`?)(\d+\.\d+\.\d+)",
+                            content,
+                        )
+                        ver = m.group(1) if m else "NOT FOUND"
+                    versions[label] = ver
+                source_version = versions.get("SKILL.md (source of truth)")
+                buggy_issues = [
+                    f"[FAIL] {label}: version={ver}, expected={source_version}"
+                    for label, ver in versions.items()
+                    if label != "SKILL.md (source of truth)" and ver != source_version
+                ]
+                self.assertFalse(
+                    any(".zcode-plugin" in i for i in buggy_issues),
+                    "pre-FIX-182 dict must NOT cover .zcode-plugin (the blind spot); "
+                    f"got={buggy_issues}",
+                )
 
     def test_default_verify_does_not_run_release_fact_source_health_check(self):
         with patch.object(vw, "check_files", return_value=[]), \

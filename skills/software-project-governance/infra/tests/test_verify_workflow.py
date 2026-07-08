@@ -12204,6 +12204,207 @@ class ArchiveTriggerGapTests(unittest.TestCase):
 
 
 # ────────────────────────────────────────────────────────────
+# FIX-184 (DEC-090/091 P2-1): Check 27 delegates Check 1+2 to
+# archive.verify_archive_integrity() instead of a duplicate parser.
+# ────────────────────────────────────────────────────────────
+
+class Check27DelegationTests(unittest.TestCase):
+    """FIX-184: Check 27 must delegate index parsing to archive module.
+
+    Regression coverage for the legacy buggy parser flaws:
+      - matched any `## ` header containing "索引" (missed `## 非结构化归档`)
+      - never reset `in_section` on a new `## ` header (over-match)
+      - greedy `archive/` scan anywhere in the line
+    """
+
+    def _write_index(self, gov, task_ref=None, narrative_ref=None,
+                     extra_sections=""):
+        """Write an index.md mirroring the real archive index layout.
+
+        Section headers must use the exact names archive.py parses by:
+        `## Task 索引`, `## 非结构化归档`, etc.
+        """
+        lines = ["# 归档索引", "", "---", ""]
+        if task_ref is not None:
+            lines += [
+                "## Task 索引",
+                "",
+                "| Task ID | 状态 | 版本 | 归档文件 |",
+                "|---------|------|------|---------|",
+                f"| FIX-001 | 已完成 | 0.10.0 | {task_ref} |",
+                "",
+            ]
+        if narrative_ref is not None:
+            lines += [
+                "## 非结构化归档",
+                "",
+                "| 归档文件 | 类型 | 描述 |",
+                "|---------|------|------|",
+                f"| {narrative_ref} | 叙述段 | historical narrative |",
+                "",
+            ]
+        if extra_sections:
+            lines += [extra_sections, ""]
+        (gov / "archive" / "index.md").write_text("\n".join(lines), encoding="utf-8")
+
+    def _make_archive_file(self, gov, rel, content="# archived\n"):
+        """Create an archive .md file at gov/archive/<rel minus 'archive/'>."""
+        target = gov / rel  # rel already like 'archive/tasks/foo.md'
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+
+    def test_narrative_section_file_not_flagged_as_orphan(self):
+        """The case the OLD buggy parser handled only by accident.
+
+        A `## 非结构化归档` section references a narrative archive file.
+        The archive module parser finds it by exact section name; Check 27
+        must report pass=True with no orphan / non-existent-file issue.
+        """
+        import archive
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gov = root / ".governance"
+            (gov / "archive" / "tasks").mkdir(parents=True)
+            narrative = "archive/tasks/narrative-2026-01-01_2026-01-31.md"
+            self._make_archive_file(gov, narrative)
+            self._write_index(gov, narrative_ref=narrative)
+
+            with patch.object(archive, "ROOT", root), \
+                 patch.object(vw, "ROOT", root), \
+                 patch.object(vw, "SAMPLE_PATH", gov / "plan-tracker.md"), \
+                 patch.object(vw, "_load_archive_module", return_value=archive):
+                result = vw.check_archive_integrity()
+
+            # No Check 1 (non-existent) or Check 2 (orphan) issues.
+            orphan_issues = [
+                i for i in result["issues"]
+                if "orphan" in i.lower() or "not in index" in i.lower()
+                or "non-existent" in i.lower() or "不存在" in i or "未在索引" in i
+            ]
+            self.assertEqual(orphan_issues, [], f"unexpected orphan issues: {orphan_issues}")
+            # index_entries counts ID-prefixed rows (Task/Evidence/Decision/
+            # Risk 索引). The narrative section row is a file reference, not
+            # an ID row, so it contributes 0 — but the file is still treated
+            # as referenced (no orphan). This is the exact behavior the
+            # legacy parser achieved only by accident.
+            self.assertEqual(result["index_entries"], 0)
+
+    def test_buggy_overmatch_no_longer_false_positives(self):
+        """FAIL-on-buggy: legacy parser's never-reset in_section over-match.
+
+        Layout:
+          ## Task 索引  -> references archive/tasks/real.md (exists)
+          ## 杂项备注    -> a TABLE row mentioning 'archive/tasks/decoy-....md'
+
+        The legacy parser, once it entered the Task 索引 section, never
+        reset `in_section` (no `else: in_section = False`). It kept scanning
+        table rows in the later `## 杂项备注` section and greedily collected
+        'archive/tasks/decoy-does-not-exist.md'. Check 1 then flagged the
+        decoy as a non-existent file (false positive).
+
+        The delegating path parses sections by exact name and resets state
+        on each new `## ` header, so the decoy row under an unrelated
+        `## 杂项备注` header is ignored — no false issue.
+        """
+        import archive
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gov = root / ".governance"
+            (gov / "archive" / "tasks").mkdir(parents=True)
+            real_ref = "archive/tasks/completed-tasks-2026-01.md"
+            self._make_archive_file(gov, real_ref)
+            # A later non-index section with a table row whose cell mentions
+            # an archive/ path that does NOT exist on disk. The legacy parser
+            # (never resetting in_section) greedily scans this row.
+            extra = (
+                "## 杂项备注\n\n"
+                "| 备注 | 路径 |\n"
+                "|------|------|\n"
+                "| old | archive/tasks/decoy-does-not-exist.md |\n"
+            )
+            self._write_index(gov, task_ref=real_ref, extra_sections=extra)
+
+            with patch.object(archive, "ROOT", root), \
+                 patch.object(vw, "ROOT", root), \
+                 patch.object(vw, "SAMPLE_PATH", gov / "plan-tracker.md"), \
+                 patch.object(vw, "_load_archive_module", return_value=archive):
+                result = vw.check_archive_integrity()
+
+            # The decoy path must NOT be flagged as a non-existent reference.
+            decoy_issues = [
+                i for i in result["issues"] if "decoy-does-not-exist" in i
+            ]
+            self.assertEqual(decoy_issues, [],
+                             f"delegating parser over-matched decoy row: {decoy_issues}")
+            # And the real file must not be flagged as orphan.
+            orphan_issues = [
+                i for i in result["issues"]
+                if "not in index" in i.lower() or "未在索引" in i
+            ]
+            self.assertEqual(orphan_issues, [], f"real file flagged as orphan: {orphan_issues}")
+
+            # Cross-check: the LEGACY fallback parser WOULD false-positive on
+            # this same fixture, proving the test exercises the actual bug.
+            with patch.object(vw, "ROOT", root), \
+                 patch.object(vw, "SAMPLE_PATH", gov / "plan-tracker.md"), \
+                 patch.object(vw, "_load_archive_module", return_value=None):
+                legacy_result = vw.check_archive_integrity()
+            self.assertTrue(
+                any("decoy-does-not-exist" in i for i in legacy_result["issues"]),
+                "legacy parser did not reproduce the over-match bug; "
+                "test fixture no longer exercises FIX-184 regression"
+            )
+
+    def test_legacy_fallback_path_still_works(self):
+        """When archive module is None, Check 27 falls back to the legacy
+        inline parser and still catches a genuine orphan archive file."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gov = root / ".governance"
+            (gov / "archive" / "tasks").mkdir(parents=True)
+            real_ref = "archive/tasks/completed-tasks-2026-01.md"
+            self._make_archive_file(gov, real_ref)
+            # A second archive file NOT referenced in the index.
+            orphan_ref = "archive/tasks/orphan.md"
+            self._make_archive_file(gov, orphan_ref)
+            self._write_index(gov, task_ref=real_ref)
+
+            with patch.object(vw, "ROOT", root), \
+                 patch.object(vw, "SAMPLE_PATH", gov / "plan-tracker.md"), \
+                 patch.object(vw, "_load_archive_module", return_value=None):
+                result = vw.check_archive_integrity()
+
+            self.assertFalse(result["pass"])
+            self.assertTrue(any("orphan.md" in i for i in result["issues"]),
+                            f"legacy fallback missed orphan: {result['issues']}")
+
+    def test_delegation_flags_missing_referenced_file(self):
+        """Delegating path still detects a referenced-but-missing file
+        (Check 1) via archive.verify_archive_integrity()."""
+        import archive
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gov = root / ".governance"
+            (gov / "archive" / "tasks").mkdir(parents=True)
+            # Index references a file that does NOT exist on disk.
+            missing_ref = "archive/tasks/ghost.md"
+            self._write_index(gov, task_ref=missing_ref)
+
+            with patch.object(archive, "ROOT", root), \
+                 patch.object(vw, "ROOT", root), \
+                 patch.object(vw, "SAMPLE_PATH", gov / "plan-tracker.md"), \
+                 patch.object(vw, "_load_archive_module", return_value=archive):
+                result = vw.check_archive_integrity()
+
+            self.assertFalse(result["pass"])
+            self.assertTrue(any("ghost.md" in i for i in result["issues"]),
+                            f"delegating path missed missing ref: {result['issues']}")
+
+
+# ────────────────────────────────────────────────────────────
 # SYSGAP-039: Agent Team Review + Agent Activation regression tests
 # ────────────────────────────────────────────────────────────
 

@@ -17197,6 +17197,42 @@ def check_agent_lock_consistency():
 
 # ── SYSGAP-030: Archive Integrity Check ────────────────────────────
 
+def _legacy_parse_index_refs(index_lines):
+    """FIX-184: preserved inline index-file-reference parser.
+
+    Used only as a fallback when archive.verify_archive_integrity() cannot
+    be invoked (archive module failed to load). Reproduces the original
+    Check 27 parser verbatim, including its known limitations (does not
+    reset `in_section` on a new `## ` header; matches any header
+    containing "索引"). Prefer archive.verify_archive_integrity() which
+    parses each section by exact name and correctly resets state.
+
+    Returns the set of `archive/...` references found in index rows.
+    """
+    indexed_files = set()
+    in_section = False
+    table_started = False
+    for line in index_lines:
+        stripped = line.strip()
+        if stripped.startswith("## ") and "索引" in stripped:
+            in_section = True
+            table_started = False
+            continue
+        if not in_section:
+            continue
+        if "|---" in stripped:
+            table_started = True
+            continue
+        if not table_started or not stripped.startswith("| "):
+            continue
+
+        parts = [p.strip() for p in line.split("|")]
+        for part in parts:
+            if part.startswith("archive/"):
+                indexed_files.add(part)
+    return indexed_files
+
+
 def check_archive_integrity():
     """Check 27: Verify archive integrity.
 
@@ -17269,56 +17305,69 @@ def check_archive_integrity():
         result["total_expected"] = result["hot_tasks"]
         return result
 
-    # Parse index to get referenced archive files
+    # ── FIX-184 (DEC-090/091 P2-1): delegate Check 1 + Check 2 ──
+    # The index↔archive-file consistency checks are now delegated to
+    # archive.py verify_archive_integrity(), whose _parse_index_section()
+    # correctly resets `in_section` on a new `## ` header and parses each
+    # section by exact name (including `## 非结构化归档`, which the legacy
+    # parser here matched only by accident). When the archive module is
+    # unavailable, fall back to the preserved inline parser
+    # _legacy_parse_index_refs() to avoid behavior loss.
     index_content = archive_index.read_text(encoding="utf-8")
     index_lines = index_content.split("\n")
 
-    # Extract archive file references from index
-    indexed_files = set()
-    in_section = False
-    table_started = False
-    for line in index_lines:
-        stripped = line.strip()
-        if stripped.startswith("## ") and "索引" in stripped:
-            in_section = True
-            table_started = False
-            continue
-        if not in_section:
-            continue
-        if "|---" in stripped:
-            table_started = True
-            continue
-        if not table_started or not stripped.startswith("| "):
-            continue
+    archived_integrity = None
+    if archive_module is not None:
+        try:
+            archived_integrity = archive_module.verify_archive_integrity()
+        except Exception as exc:  # pragma: no cover — defensive
+            result["issues"].append(
+                f"archive.verify_archive_integrity() raised; using legacy "
+                f"index parser fallback. Error: {exc}"
+            )
+            archived_integrity = None
 
-        # Parse row for archive file reference
-        parts = [p.strip() for p in line.split("|")]
-        for part in parts:
-            if part.startswith("archive/"):
-                indexed_files.add(part)
-
-    # Check 1: All indexed files exist
-    for ref in sorted(indexed_files):
-        filepath = ROOT / ".governance" / ref
-        if not filepath.exists():
+    if archived_integrity is not None:
+        # Check 1 + Check 2 (index↔file consistency) come from the archive
+        # module. Merge pass/issues into Check 27's result.
+        if not archived_integrity.get("pass", True):
             result["pass"] = False
-            result["issues"].append(f"Index references non-existent file: {ref}")
+            for issue in archived_integrity.get("issues", []):
+                if issue not in result["issues"]:
+                    result["issues"].append(issue)
+        # total_index_entries is the authoritative index-row count across
+        # all indexed sections (Task/Evidence/Decision/Risk 索引). Use it
+        # for Check 27's index_entries field.
+        result["index_entries"] = archived_integrity.get("total_index_entries", 0)
+    else:
+        # Legacy fallback: original inline parser (kept verbatim so behavior
+        # is preserved if archive.py fails to load). Known limitation — does
+        # not reset `in_section` and matches any `## ` header containing
+        # "索引"; `## 非结构化归档` is only matched incidentally.
+        indexed_files = _legacy_parse_index_refs(index_lines)
 
-    # Check 2: All archive files are in the index
-    actual_archive_files = set()
-    for d in [archive_tasks_dir, archive_evidence_dir]:
-        if d.exists():
-            for f in d.glob("*.md"):
-                if f.name == ".gitkeep":
-                    continue
-                rel = str(f.relative_to(ROOT / ".governance")).replace("\\", "/")
-                actual_archive_files.add(rel)
+        # Check 1: All indexed files exist
+        for ref in sorted(indexed_files):
+            filepath = ROOT / ".governance" / ref
+            if not filepath.exists():
+                result["pass"] = False
+                result["issues"].append(f"Index references non-existent file: {ref}")
 
-    unindexed = actual_archive_files - indexed_files
-    if unindexed:
-        result["pass"] = False
-        for f in sorted(unindexed):
-            result["issues"].append(f"Archive file not in index: {f}")
+        # Check 2: All archive files are in the index
+        actual_archive_files = set()
+        for d in [archive_tasks_dir, archive_evidence_dir]:
+            if d.exists():
+                for f in d.glob("*.md"):
+                    if f.name == ".gitkeep":
+                        continue
+                    rel = str(f.relative_to(ROOT / ".governance")).replace("\\", "/")
+                    actual_archive_files.add(rel)
+
+        unindexed = actual_archive_files - indexed_files
+        if unindexed:
+            result["pass"] = False
+            for f in sorted(unindexed):
+                result["issues"].append(f"Archive file not in index: {f}")
 
     # Check 3: Task count conservation
     # Count hot file tasks
@@ -17350,13 +17399,16 @@ def check_archive_integrity():
                     archived_count += 1
     result["total_archived_tasks"] = archived_count
 
-    # Count index entries
-    index_entry_count = 0
-    for line in index_lines:
-        stripped = line.strip()
-        if stripped.startswith("| ") and re.match(r"\|\s*[A-Z]+-\d+", stripped):
-            index_entry_count += 1
-    result["index_entries"] = index_entry_count
+    # Count index entries — only in the legacy fallback path. When the
+    # archive module supplied archived_integrity, index_entries was already
+    # set from verify_archive_integrity()'s authoritative total_index_entries.
+    if archived_integrity is None:
+        index_entry_count = 0
+        for line in index_lines:
+            stripped = line.strip()
+            if stripped.startswith("| ") and re.match(r"\|\s*[A-Z]+-\d+", stripped):
+                index_entry_count += 1
+        result["index_entries"] = index_entry_count
 
     result["total_expected"] = hot_tasks + archived_count
 

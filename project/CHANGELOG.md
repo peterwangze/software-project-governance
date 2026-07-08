@@ -2,6 +2,37 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.63.4] - 2026-07-07
+
+### 0.63.4 — check_version_consistency VERSION_FILES 覆盖盲区修复（FIX-182）
+
+0.63.4 发布 FX-183 patch：把 FIX-182（`check_version_consistency` 的 `VERSION_FILES` 字典只覆盖 3/4 plugin.json 目录——缺 `.zcode-plugin/plugin.json` 和 `.chrys-plugin/plugin.json`，打印串硬编码 "3 plugin.json" 但实际有 4 个 plugin.json 目录）版本化为 patch release。FX-181 Release Reviewer R0 独立发现的覆盖盲区。纯 bug fix，**只影响检查工具的覆盖范围、不影响运行时行为**，无 behavior change、无新能力、无 breaking change、无 migration 影响。FIX-182 已通过 Code Reviewer APPROVED（6/6 checklist，0 P0/P1/P2；打印串 N=13 独立核实）+ 703 测试全绿。
+
+经 DEC-090/091 降级 SoD 沿用——产品代码由 Coordinator spawn Governance Developer + 只读 Explore Code Reviewer，本 release 评估由 Coordinator spawn Release Agent + 独立 Release Reviewer R0 审查。
+
+### Fixed
+- **FIX-182 — check_version_consistency VERSION_FILES 覆盖全部 4 个 plugin.json（zcode + chrys 覆盖盲区修复）**：`verify_workflow.py check_version_consistency`（行 ~9480）的 `VERSION_FILES` 字典原本只覆盖 3 个 plugin 相关文件（`.claude-plugin/plugin.json` + `marketplace.json` + `.codex-plugin/plugin.json`），缺 `.zcode-plugin/plugin.json` 和 `.chrys-plugin/plugin.json`。打印串（行 ~20100）硬编码 "11 files, 3 plugin.json" 但项目实际有 4 个 plugin.json 目录（Claude/Codex/Zcode/Chrys）。影响：若未来 release 漏更新 `.zcode-plugin` 或 `.chrys-plugin` 的 plugin.json version，`VERSION_FILES` 循环不会检测到（`REQUIRED_SNIPPETS` snippet self-check 只扫 `verify_workflow.py` 内嵌字面量，不检查实际 plugin.json 文件内容——真实覆盖盲区）。本次无实际漂移（手动核实 + projection-sync 兜底），但未来潜在风险。**修复**：(1) `VERSION_FILES` 补 `.zcode-plugin/plugin.json` 和 `.chrys-plugin/plugin.json` 两个条目；(2) 打印串修正为 "13 files (SKILL.md, manifest.json, marketplace.json, 4 plugin.json, CHANGELOG, plan-tracker, 4 hooks)"（N=13 = VERSION_FILES 7 + CHANGELOG 1 + plan-tracker 1 + HOOK_FILES 4）；(3) 新增回归测试 `test_fix182_version_files_covers_zcode_and_chrys_plugin`：PASS-after-fix 调真实 `check_version_consistency` 构造 `.zcode-plugin` version 漂移断言检测到；FAIL-on-buggy 自包含回放演示 pre-fix 5-entry dict 盲区。
+
+### Changed
+- 版本声明同步到 0.63.4：source SKILL、canonical manifest、Claude/Codex/Zcode/Chrys plugin metadata、Claude marketplace metadata、package.json、4 hook @version、verify_workflow.py `REQUIRED_SNIPPETS`、CHANGELOG、plan-tracker 工作流版本指针 + 路线图。
+- e2e fixture 版本指针同步：`project/e2e-test-project/skills/software-project-governance/SKILL.md` + `project/e2e-test-project/.governance/plan-tracker.md` 的版本指针 0.63.3→0.63.4（与 FX-177/179/181 先例一致）。
+
+### Migration Notes
+- **无 migration 影响**：纯检查工具覆盖范围修复（VERSION_FILES 补 2 条目 + 打印串修正），不影响运行时行为、协议层或检测能力。无用户可感知变化。
+
+### Validation
+- `python skills/software-project-governance/infra/verify_workflow.py check-version-consistency` — PASSED（Files checked: 13, 4 plugin.json, all 0.63.4）。
+- `python skills/software-project-governance/infra/verify_workflow.py check-release --version 0.63.4 --require-changelog --runtime-adapters` — baseline-consistent with 0.63.3（FAIL 项 pre-existing，非本次引入）。
+- `python skills/software-project-governance/infra/verify_workflow.py check-projection-sync` — PASSED（4 mirrored files, no drift）。
+- `python skills/software-project-governance/infra/verify_workflow.py check-archive-integrity` — PASS。
+- infra suite 703 passed / 64 subtests passed（FIX-182 commit 已验证，无回归）。
+
+### Boundaries
+- **不关闭** RISK-039（架构腐化看护——需外部宿主验证）。
+- **不声明** 1.0.0 production-ready / official approval / marketplace approval / universal runtime support（1.0.0 阻塞 RISK-036/037/039 + 外部验证）。
+- **纯 bug fix，无 behavior change**：仅 `check_version_consistency` 工具覆盖范围修复（VERSION_FILES 补 2 条目 + 打印串修正），无运行时行为变化、无协议层改动、无新 Check、无新能力声明。降级 SoD（DEC-090/091）沿用。
+- **PATCH 版本号选择理由**：FIX-182 是单一检查工具覆盖盲区修复，与 0.63.3（FIX-180）/ 0.63.2（FIX-178）/ 0.63.1（FIX-176）/ 0.54.1（FIX-140）PATCH 先例同构——纯 bug fix、无 behavior change、无新能力。这是连续第 4 个 patch（0.63.1/0.63.2/0.63.3/0.63.4），但每个都是独立的 bug fix，符合 SemVer PATCH 语义。不占用路线图预留号（0.64.0/0.65.0 不变）。
+
 ## [0.63.3] - 2026-07-06
 
 ### 0.63.3 — e2e fixture SKILL.md adapter 表结构对齐（FIX-180）

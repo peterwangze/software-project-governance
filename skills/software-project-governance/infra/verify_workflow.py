@@ -17320,7 +17320,7 @@ def check_archive_integrity():
     if archive_module is not None:
         try:
             archived_integrity = archive_module.verify_archive_integrity()
-        except Exception as exc:  # pragma: no cover — defensive
+        except Exception as exc:
             result["issues"].append(
                 f"archive.verify_archive_integrity() raised; using legacy "
                 f"index parser fallback. Error: {exc}"

@@ -12403,6 +12403,66 @@ class Check27DelegationTests(unittest.TestCase):
             self.assertTrue(any("ghost.md" in i for i in result["issues"]),
                             f"delegating path missed missing ref: {result['issues']}")
 
+    def test_exception_fallback_runs_legacy_parser(self):
+        """FIX-185: when archive.verify_archive_integrity() raises, Check 27
+        must append the exception-fallback message and still run the legacy
+        inline parser fallback so Check 1/2 remain effective.
+
+        This covers the `except Exception` branch in check_archive_integrity()
+        (the defensive try/except wrapping the delegation call). The fixture
+        is one where the legacy parser CAN produce a result — an index.md
+        referencing one real archive file plus an orphan archive file not in
+        the index — so the fallback path is actually exercised and an orphan
+        is detected.
+        """
+        import archive
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gov = root / ".governance"
+            (gov / "archive" / "tasks").mkdir(parents=True)
+            real_ref = "archive/tasks/completed-tasks-2026-01.md"
+            self._make_archive_file(gov, real_ref)
+            # A second archive file NOT referenced in the index — the legacy
+            # fallback parser must detect it as an orphan (Check 2).
+            orphan_ref = "archive/tasks/orphan.md"
+            self._make_archive_file(gov, orphan_ref)
+            self._write_index(gov, task_ref=real_ref)
+
+            with patch.object(archive, "ROOT", root), \
+                 patch.object(vw, "ROOT", root), \
+                 patch.object(vw, "SAMPLE_PATH", gov / "plan-tracker.md"), \
+                 patch.object(vw, "_load_archive_module", return_value=archive), \
+                 patch.object(
+                     archive, "verify_archive_integrity",
+                     side_effect=RuntimeError("simulated archive failure")):
+                result = vw.check_archive_integrity()
+
+            # The exception-fallback message must be recorded.
+            self.assertTrue(
+                any("archive.verify_archive_integrity() raised; using legacy "
+                    "index parser fallback" in i for i in result["issues"]),
+                f"missing exception-fallback message: {result['issues']}"
+            )
+            # The simulated exception repr must be carried in the message.
+            self.assertTrue(
+                any("simulated archive failure" in i for i in result["issues"]),
+                f"missing exception detail in fallback message: {result['issues']}"
+            )
+            # The legacy fallback ran: Check 2 still detected the orphan file.
+            self.assertFalse(result["pass"])
+            self.assertTrue(
+                any("orphan.md" in i for i in result["issues"]),
+                f"legacy fallback did not detect orphan: {result['issues']}"
+            )
+            # And the real referenced file was not flagged as non-existent
+            # (Check 1 via the legacy parser saw it on disk).
+            self.assertFalse(
+                any("non-existent" in i.lower() or "不存在" in i
+                    for i in result["issues"]),
+                f"legacy fallback false-flagged real ref: {result['issues']}"
+            )
+
 
 # ────────────────────────────────────────────────────────────
 # SYSGAP-039: Agent Team Review + Agent Activation regression tests

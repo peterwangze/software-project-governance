@@ -86,41 +86,31 @@
 
 Web console 是可选的本地伴随状态面板，也是用户手动 `/governance` 后的默认可视化入口。
 
-- 手动执行 `/governance` 时，SHOULD 在解析 `WORKFLOW_HOME` 后运行 `python "$WORKFLOW_HOME/infra/verify_workflow.py" web-console --governance-entry`，启动或复用本地 Web console，并把 URL 输出给用户。
+> 路径约定：以下 `web-console` 命令中的 `<plugin_home>` 由 `resolve_entry.py` 提供（DEC-096）。`/governance` 的第一动作是运行 `python <plugin_home>/infra/resolve_entry.py --json`；`resolved_root_ok=false` 时 MUST STOP 并展示 diagnostic，不启动 Web console。
+
+- 手动执行 `/governance` 时，SHOULD 运行 `python <plugin_home>/infra/verify_workflow.py web-console --governance-entry`，启动或复用本地 Web console，并把 URL 输出给用户。
 - 如果 Web console 已运行，`/governance` 复用已有服务，不重复启动。
 - 如果端口被非 SPG 服务占用，MUST fail-closed 并提示换端口，不能把其它服务当成治理 Web UI。
-- 如果首次使用且缺少 `web/node_modules`，MUST 告知一次性命令 `python "$WORKFLOW_HOME/infra/verify_workflow.py" web-console --start --install`；不得在没有明确安装路径的情况下伪装为已启动。
+- 如果首次使用且缺少 `web/node_modules`，MUST 告知一次性命令 `python <plugin_home>/infra/verify_workflow.py web-console --start --install`；不得在没有明确安装路径的情况下伪装为已启动。
 - 阶段性任务完成、工作单元收尾或 session 总结之后，MAY 在总结末尾追加一个只读 Web console 入口。
-- 追加入口时优先在解析 `WORKFLOW_HOME` 后使用 `python "$WORKFLOW_HOME/infra/verify_workflow.py" web-console --summary-link`；该命令只报告本地 URL、未运行状态或手动启动命令，不启动服务。
+- 追加入口时优先运行 `python <plugin_home>/infra/verify_workflow.py web-console --summary-link`；该命令只报告本地 URL、未运行状态或手动启动命令，不启动服务。
 - 如果 Web console 已运行，总结末尾显示：`Web console: http://127.0.0.1:5173/ (optional local companion dashboard)`。
-- 如果 Web console 未运行，总结末尾显示：`Web console: not running. Manual start command: python "$WORKFLOW_HOME/infra/verify_workflow.py" web-console --start`。
+- 如果 Web console 未运行，总结末尾显示：`Web console: not running. Manual start command: python <plugin_home>/infra/verify_workflow.py web-console --start`。
 - Summary footer 仍然只读；不得把 `--summary-link` 和启动路径混用。
 
-## 决策树（自动分类）
+## 决策树（自动分类——deterministic，DEC-096）
 
-```
-/governance
-        │
-        ▼
-  [Check 1] .governance/ 存在？
-        │
-        ├── NO ──► [Check 1a] 项目有文件（非空目录）？
-        │               │
-        │               ├── YES → SCENARIO B: 半途接入
-        │               └── NO  → SCENARIO A: 全新项目初始化
-        │
-        └── YES ──► [Check 2] .governance/session-snapshot.md 存在
-                        AND 日期在 24h 内？
-                        │
-                        ├── YES → SCENARIO D: 会话恢复
-                        └── NO  → [Check 3] 异常检测
-                                      │
-                                      ├── YES → SCENARIO E: 异常恢复
-                                      └── NO  → [Check 4] 工作流版本 < 安装版本？
-                                                    │
-                                                    ├── YES → SCENARIO C: 工作流升级
-                                                    └── NO  → SCENARIO F: 状态展示
-```
+**MUST 先运行 `python <plugin_home>/infra/resolve_entry.py --json`**（`<plugin_home>` 由 resolve_entry.py 自定位；本命令第一动作）。读取 `scenario_hint`（A..F）并按对应 Scenario 分支：
+
+- `resolved_root_ok == false` → **STOP**，展示 `diagnostic`，不呈现任何治理状态（DEC-080 / RISK-038 fail-closed）。
+- `scenario_hint == "A"` → Scenario A（全新项目初始化）
+- `scenario_hint == "B"` → Scenario B（半途接入）
+- `scenario_hint == "C"` → Scenario C（工作流版本落后——`active_version` 来自 SKILL.md frontmatter，权威）
+- `scenario_hint == "D"` → Scenario D（会话恢复，snapshot fresh）
+- `scenario_hint == "E"` → Scenario E（异常恢复）
+- `scenario_hint == "F"` → Scenario F（状态展示）
+
+版本/异常/新鲜度等判定逻辑已下沉到 `resolve_entry.py` 的 `detect_scenario()` 纯函数（`infra/resolve_entry.py:196-227`）；本命令不再在 prose 里 stat 文件或比较版本号——旧 ASCII 判定树已删除（与 `detect_scenario` 重复的确定性逻辑，Code Reviewer R0 P2-1）。
 
 ---
 
@@ -258,24 +248,23 @@ Web console 是可选的本地伴随状态面板，也是用户手动 `/governan
 
 ## Scenario C: 工作流升级
 
-**检测条件**：`工作流版本` < 安装版本
+**检测条件**：`resolve_entry.py` 输出 `scenario_hint == "C"`——即 `.governance/` 存在、无异常、且 host `工作流版本` < `active_version`（`active_version` 来自 SKILL.md frontmatter，权威；DEC-096）。不再由本命令在 prose 中比较版本号。
 
 **流程**：
-1. 读取版本差距（plan-tracker vs SKILL.md）
+1. 从 resolve_entry envelope 读取 `active_version`（权威）与 plan-tracker 记录版本，计算版本差距
 2. 提取 CHANGELOG delta（从 plan-tracker 版本到当前版本）
 3. 自动升级序列：
    - A. 替换 平台原生入口文件 bootstrap 段为最新模板（保留 profile 差异化）
    - B. 补全 plan-tracker 缺失结构（permission_mode、版本规划、需求跟踪矩阵、变更控制含快速通道）
-   - C. Hook 存活检测——缺失则提示安装命令
-   - D. 更新 `工作流版本` 为当前版本
-   - E. 持续归档触发检测与执行：
-     - 先解析 `WORKFLOW_HOME`（优先 `SOFTWARE_PROJECT_GOVERNANCE_HOME` / `SPG_HOME`，其次项目内 `skills/software-project-governance`，再查找已安装插件 cache 中包含 `skills/software-project-governance/SKILL.md` 的目录）
-     - 运行 `python "$WORKFLOW_HOME/infra/archive.py" migrate --auto --dry-run` 检测四类触发器：
+   - C. Hook 存活检测——缺失则提示安装命令（hook 路径用 `<plugin_home>/infra/hooks/*`）
+   - D. 更新 `工作流版本` 为 `active_version`
+   - E. 持续归档触发检测与执行（`<plugin_home>` 来自 resolve_entry.py，取代 `$WORKFLOW_HOME` 路径考古）：
+     - 运行 `python <plugin_home>/infra/archive.py migrate --auto --dry-run` 检测四类触发器：
        1. 首次迁移：`.governance/archive/index.md` 不存在 AND `plan-tracker.md` > 80 KB AND 已发布版本 ≥ 2
        2. 发布强制：出现新的已发布版本后，除最新已发布版本外仍有未归档历史 task
        3. task 增量：热文件中可归档 completed task 达到阈值
        4. 90 天兜底：长期未归档但仍有可归档历史数据
-     - dry-run 报告需要归档 → 运行 `python "$WORKFLOW_HOME/infra/archive.py" migrate --auto`，再运行 `python "$WORKFLOW_HOME/infra/verify_workflow.py" check-archive-integrity`
+     - dry-run 报告需要归档 → 运行 `python <plugin_home>/infra/archive.py migrate --auto`，再运行 `python <plugin_home>/infra/verify_workflow.py check-archive-integrity`
      - 归档成功 → 输出归档迁移摘要（格式: 📦 治理数据归档完成: 归档{N}个task→..., plan-tracker: {old}KB→{new}KB(-{pct}%)）
      - 归档完整性失败 → 记录到 risk-log；发布/版本 bump 收尾场景 MUST 阻断完成
      - 无可归档数据 → 跳过归档（不修改文件）
@@ -365,7 +354,7 @@ Web console 是可选的本地伴随状态面板，也是用户手动 `/governan
 **P1 — 警告级（治理退化但未完全失效）**：
 | 检查项 | 检测方法 |
 |--------|---------|
-| 证据缺口 | 解析 `WORKFLOW_HOME` 后运行 `python "$WORKFLOW_HOME/infra/verify_workflow.py" check-governance` Check 1 |
+| 证据缺口 | 运行 `python <plugin_home>/infra/verify_workflow.py check-governance` Check 1（`<plugin_home>` 来自 resolve_entry.py） |
 | Gate 不一致 | Check 3 |
 | 过期风险 | Check 2 + Check 8 |
 | 过期任务 deadline | Check 9 |
@@ -398,7 +387,7 @@ P1 (警告):
 
 按用户选择执行：
 
-- **Hooks 缺失**: 先解析 `WORKFLOW_HOME`，再执行 `cp "$WORKFLOW_HOME/infra/hooks/pre-commit" .git/hooks/pre-commit && cp "$WORKFLOW_HOME/infra/hooks/commit-msg" .git/hooks/commit-msg && cp "$WORKFLOW_HOME/infra/hooks/post-commit" .git/hooks/post-commit`
+- **Hooks 缺失**: 运行 `python <plugin_home>/infra/resolve_entry.py --json` 拿到 `plugin_home`，再执行 `cp "<plugin_home>/infra/hooks/pre-commit" .git/hooks/pre-commit && cp "<plugin_home>/infra/hooks/commit-msg" .git/hooks/commit-msg && cp "<plugin_home>/infra/hooks/post-commit" .git/hooks/post-commit`
 - **plan-tracker 损坏**: 尝试从 markdown 表格结构恢复；失败则从 profile 模板重建（保留 evidence-log/decision-log/risk-log）
 - **文件缺失**: 从 `core/templates/` 复制模板
 - **证据缺口**: 创建占位证据条目（标记"补录——需用户确认"）
@@ -429,7 +418,7 @@ P1 (警告):
 **展示内容**（比 `governance-status` 更丰富）：
 - Delivery Trust Snapshot（Resume state、Carry-over、Open risks、Unfinished work、Source facts、Blocker state、Auto-continue、Interrupt boundary、Hooks、Goal、Stage、Gate/setup status、Risk、Evidence、Next action、Preset guidance、Question budget、Pack summary、Default packs、Enabled packs、Pack boundary、Verification signal、No-overclaim boundary）
 - Existing-project resume signal：已有 `.governance/` 状态时 MUST 明确显示 `Existing governance state detected`，展示 carry-over active task count、open risk count/details、hook state 和 next action
-- Context-aware resume handoff：MUST run the same factual discovery contract as `python "$WORKFLOW_HOME/infra/verify_workflow.py" governance-context --fixture project/e2e-test-project --fail-on-issues` after resolving `WORKFLOW_HOME`。`Unfinished work` MUST be backed by `Source facts`; if no facts exist, output `not found` and `do not invent` new work.
+- Context-aware resume handoff：MUST run the same factual discovery contract as `python <plugin_home>/infra/verify_workflow.py governance-context --fixture project/e2e-test-project --fail-on-issues`（`<plugin_home>` 来自 resolve_entry.py，先 resolve 后 verify）。`Unfinished work` MUST be backed by `Source facts`; if no facts exist, output `not found` and `do not invent` new work.
 - First-run preset guidance：MUST 展示 `lite is the recommended first-run default`；`standard is for team delivery`；`strict is for regulated/high-risk work`
 - Pack summary：MUST 展示 `Packs are capability modules; profiles are governance intensity presets.`；Default packs MUST 至少展示 `governance-core`、`quality-gates`、`release-governance`、`agent-team`、`enterprise`；Enabled packs MUST 从 profile/default pack summary 或 registry facts 得出，无法得出时显示 unknown/not configured；Pack boundary MUST 说明 pack membership/`pack enabled` 不替代 task evidence、independent review、quality gates、release gates、official approval、marketplace approval、universal/full runtime support 或 1.0.0 production-ready
 - Question budget：Snapshot 前 MUST NOT 提超过 3 个 non-critical questions；deferred non-critical fields MUST 记录为 assumptions
@@ -487,8 +476,8 @@ No-overclaim boundary: local/demo-only snapshot; no external credentials require
 ```
 
 Snapshot 是 `/governance` 或 `/governance-status` first-run/status path 的最小可观察交付信号；它必须在用户不阅读 `plan-tracker.md`、`evidence-log.md`、`risk-log.md` 或完整 SKILL 文件的情况下可见。
-本地 acceptance harness：解析 `WORKFLOW_HOME` 后运行 `python "$WORKFLOW_HOME/infra/verify_workflow.py" first-run-demo --assert-snapshot` MUST 可在 demo/local-only 范围运行，不需要 external credentials，并断言 Delivery Trust Snapshot 字段和 no-overclaim boundary。
-Context acceptance harness：解析 `WORKFLOW_HOME` 后运行 `python "$WORKFLOW_HOME/infra/verify_workflow.py" governance-context --fixture project/e2e-test-project --fail-on-issues` MUST pass，并且 no-facts fixture 必须明确输出 `not found`；不得从假设中发明 unfinished work。
+本地 acceptance harness：运行 `python <plugin_home>/infra/verify_workflow.py first-run-demo --assert-snapshot` MUST 可在 demo/local-only 范围运行，不需要 external credentials，并断言 Delivery Trust Snapshot 字段和 no-overclaim boundary（`<plugin_home>` 来自 resolve_entry.py）。
+Context acceptance harness：运行 `python <plugin_home>/infra/verify_workflow.py governance-context --fixture project/e2e-test-project --fail-on-issues` MUST pass，并且 no-facts fixture 必须明确输出 `not found`；不得从假设中发明 unfinished work。
 已有 `.governance/` 项目的 Scenario F 是 resume happy path，不得提示重新初始化；只有 `.governance/plan-tracker.md` 缺失时才进入初始化/接入错误路径。
 
 **输出模板**：参考 `commands/governance-status.md`，扩展含 permission_mode、版本新鲜度、最近活动，并应用上述折叠规则。
@@ -600,7 +589,7 @@ Context acceptance harness：解析 `WORKFLOW_HOME` 后运行 `python "$WORKFLOW
 | GOV-ERR-001 | `.governance/` 不存在但用户拒绝初始化 | 停止，告知用户需初始化 |
 | GOV-ERR-002 | plan-tracker.md 损坏且无法修复 | 停止，建议手动检查或重建 |
 | GOV-ERR-003 | git hooks 缺失且无法安装（非 git 项目） | 降级模式——session 级检查 |
-| GOV-ERR-004 | 版本降级（安装版本 < 记录版本） | 警告，建议更新插件 |
+| GOV-ERR-004 | 版本降级（安装版本 < 记录版本） | 警告，建议更新插件。注：resolve_entry.py 只检测升级（host_v < active_version → scenario C）；降级检测由 LLM-side 比对 active_version 与 plan-tracker 记录版本完成——resolver 不覆盖此路径 |
 
 ---
 
@@ -618,4 +607,4 @@ Context acceptance harness：解析 `WORKFLOW_HOME` 后运行 `python "$WORKFLOW
 
 ### 不变
 - `skills/software-project-governance/core/onboarding.md`——Scenario B 的参考协议
-- `"$WORKFLOW_HOME/infra/verify_workflow.py"`——Scenario E 的诊断引擎（先解析 `WORKFLOW_HOME`）
+- `"<plugin_home>/infra/verify_workflow.py"`——Scenario E 的诊断引擎（`<plugin_home>` 来自 `resolve_entry.py`，先 resolve 后 verify）

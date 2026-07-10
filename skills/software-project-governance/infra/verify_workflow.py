@@ -20572,6 +20572,40 @@ def cmd_check_loop_health(args):
     print()
 
 
+def _format_rollup(result):
+    """Format loop_state rollup for CLI display (FX-193 helper)."""
+    print("\n=== Loop State Rollup (per-flow-unit) ===")
+    units = result.get("units", [])
+    if not units:
+        print(f"  {result.get('message', 'No flow units found.')}")
+    else:
+        print(f"  {'Unit':<30} {'Tier':<10} {'Round':<8} {'Phase':<10} {'Gate':<15} {'Fuse':<6}")
+        print(f"  {'-'*30} {'-'*10} {'-'*8} {'-'*10} {'-'*15} {'-'*6}")
+        for u in units:
+            tier = u.get("active_loop_tier") or "?"
+            phase = u.get("agent_phase") or "?"
+            gate = u.get("last_gate_result") or "?"
+            print(f"  {u['flow_unit_id']:<30} {tier:<10} "
+                  f"{u.get('loop_count', 0):<8} {phase:<10} "
+                  f"{gate:<15} {'!' if u.get('fuse_tripped') else 'ok':<6}")
+    summary = result.get("summary", {})
+    print(f"\n  Total units: {summary.get('total_units', 0)} | "
+          f"Active loops: {summary.get('active_loops', 0)} | "
+          f"By tier: {summary.get('by_tier', {})}")
+    print(f"  No global stage: {result.get('no_global_stage', True)}")
+    print()
+
+
+def cmd_loop_rollup(args):
+    """Thin entry — delegates to loop_engine.rollup_loop_state (FX-193)."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    from loop_engine import rollup_loop_state
+    _format_rollup(rollup_loop_state(getattr(args, "target", None)))
+
+
 def cmd_check_duplicate_code(args):
     """Run REQ-101 ArchGuard source/projection duplicate-code guard (advisory in 0.58.0)."""
     try:
@@ -21585,6 +21619,14 @@ def main():
     clh_p.add_argument("--fail-on-issues", action="store_true",
                        help="Exit non-zero if any blocking (FAIL) findings are present")
 
+    # loop-rollup (FX-193 — per-flow-unit loop_state rollup; RISK-037 criterion 2)
+    lr_p = subparsers.add_parser(
+        "loop-rollup",
+        help="Per-flow-unit loop_state rollup (replaces single 当前阶段; 0.65.0)",
+    )
+    lr_p.add_argument("--target", default=None,
+                      help="Host project root (defaults to verify_workflow ROOT)")
+
     # check-duplicate-code (REQ-101 / FIX-152 / ArchGuard)
     cdc_p = subparsers.add_parser(
         "check-duplicate-code",
@@ -21745,6 +21787,7 @@ def main():
         "check-readme-pack-guidance": cmd_check_readme_pack_guidance,
         "check-architecture-health": cmd_check_architecture_health,
         "check-loop-health": cmd_check_loop_health,
+        "loop-rollup": cmd_loop_rollup,
         "check-duplicate-code": cmd_check_duplicate_code,
         "check-technical-debt": cmd_check_technical_debt,
         "check-complexity": cmd_check_complexity,

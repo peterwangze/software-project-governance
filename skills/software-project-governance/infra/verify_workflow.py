@@ -20350,16 +20350,31 @@ def cmd_check_flow_unit_runtime(args):
 
 
 def cmd_dynamic_lifecycle_migration(args):
-    """Print a read-only classic -> dynamic lifecycle migration preview."""
+    """Classic -> loop-engineering migration entry (FX-191 restructure).
+
+    FX-191 inverts the control flow so ``--apply`` is checked FIRST and
+    delegates to ``loop_migration.apply_migration`` (ADR §7.2). The
+    ``--dry-run`` path is preserved byte-identical (delegates to
+    ``build_dynamic_lifecycle_migration_preview``). Both blocking guards
+    from 0.55.0 are removed: ``--apply`` now reaches the new write path
+    instead of ``sys.exit(1)``.
+    """
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
-    if not getattr(args, "dry_run", False):
-        print("ERROR: dynamic-lifecycle-migration requires explicit --dry-run; --apply remains blocked")
-        sys.exit(1)
+    # FX-191: --apply now delegates to loop_migration (ADR §7.2). Checked
+    # BEFORE the --dry-run requirement so --apply reaches the write path.
     if getattr(args, "apply", False):
-        print("ERROR: dynamic-lifecycle-migration is dry-run only in 0.55.0; --apply is blocked")
+        from loop_migration import apply_migration  # deferred import (FX-191)
+        result = apply_migration(target_root=getattr(args, "target", None))
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        if not result.get("applied"):
+            sys.exit(1)
+        return
+    # --dry-run path (preserved, unchanged from 0.55.0).
+    if not getattr(args, "dry_run", False):
+        print("ERROR: dynamic-lifecycle-migration requires explicit --dry-run or --apply")
         sys.exit(1)
     preview = build_dynamic_lifecycle_migration_preview(getattr(args, "target", None))
     issues = check_dynamic_lifecycle_migration_preview(getattr(args, "target", None))
@@ -20369,6 +20384,41 @@ def cmd_dynamic_lifecycle_migration(args):
     print(json.dumps(preview, ensure_ascii=False, indent=2))
     if issues and getattr(args, "fail_on_issues", False):
         sys.exit(1)
+
+
+def cmd_loop_engineering_migration(args):
+    """Thin entry for loop-engineering migration (FX-191).
+
+    User-facing command that routes ``--apply`` / ``--rollback`` / dry-run
+    to the loop_migration module. Kept thin (<=20 lines) — all logic lives
+    in loop_migration.
+    """
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    from loop_migration import apply_migration, rollback_migration, preview_migration
+    if getattr(args, "apply", False):
+        result = apply_migration(
+            target_root=getattr(args, "target", None),
+            project_type=getattr(args, "project_type", None),
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        if not result.get("applied"):
+            sys.exit(1)
+    elif getattr(args, "rollback", False):
+        result = rollback_migration(
+            target_root=getattr(args, "target", None),
+            version=getattr(args, "version", None),
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        if not result.get("rolled_back"):
+            sys.exit(1)
+    else:  # dry-run / preview
+        result = preview_migration(target_root=getattr(args, "target", None))
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        if result.get("validation_issues") and getattr(args, "fail_on_issues", False):
+            sys.exit(1)
 
 
 def cmd_check_host_capability_context(args):
@@ -21418,10 +21468,48 @@ def main():
     dlm_p.add_argument(
         "--apply",
         action="store_true",
-        help="Blocked in 0.55.0; no write path is implemented",
+        help="FX-191: delegates to loop_migration.apply_migration (writes runtime.json + evidence row, backs up first)",
     )
     dlm_p.add_argument("--fail-on-issues", action="store_true",
                        help="Exit with non-zero code if preview is blocked")
+
+    # loop-engineering-migration (FX-191)
+    lem_p = subparsers.add_parser(
+        "loop-engineering-migration",
+        help="Apply / rollback / preview classic -> loop-engineering migration (0.65.0)",
+    )
+    lem_p.add_argument(
+        "--target",
+        default=None,
+        help="Host project root to migrate (defaults to cwd).",
+    )
+    lem_p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print a read-only preview (default when no mode flag is given).",
+    )
+    lem_p.add_argument(
+        "--apply",
+        action="store_true",
+        help="Apply the migration: backs up plan-tracker + evidence-log, writes runtime.json, appends MIGRATION row.",
+    )
+    lem_p.add_argument(
+        "--rollback",
+        action="store_true",
+        help="Roll back the most recent migration (or --version): restores files, removes runtime.json, appends ROLLBACK row.",
+    )
+    lem_p.add_argument(
+        "--version",
+        default=None,
+        help="Select a specific migration version to roll back.",
+    )
+    lem_p.add_argument(
+        "--project-type",
+        default=None,
+        help="Project type for flow-unit derivation (apply only): game/cli-tool/library/web-app/mobile-app/ai-agent-plugin/internal-script.",
+    )
+    lem_p.add_argument("--fail-on-issues", action="store_true",
+                       help="Exit with non-zero code if dry-run preview is blocked")
 
     # check-host-capability-context (FIX-117)
     chc_p = subparsers.add_parser(
@@ -21620,6 +21708,7 @@ def main():
         "check-flow-unit-runtime": cmd_check_flow_unit_runtime,
         "dynamic-lifecycle-migration": cmd_dynamic_lifecycle_migration,
         "dynamic-flow-gate-migration": cmd_dynamic_lifecycle_migration,
+        "loop-engineering-migration": cmd_loop_engineering_migration,
         "check-host-capability-context": cmd_check_host_capability_context,
         "check-official-submission-ecosystem": cmd_check_official_submission_ecosystem,
         "check-mainstream-agent-loading": cmd_check_mainstream_agent_loading,

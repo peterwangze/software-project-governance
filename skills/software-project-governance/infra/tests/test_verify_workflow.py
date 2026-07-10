@@ -4701,18 +4701,36 @@ class DynamicLifecycleMigrationTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 1)
         self.assertIn("requires explicit --dry-run", buf.getvalue())
 
-    def test_apply_flag_remains_blocked_even_with_dry_run(self):
+    def test_apply_flag_now_delegates_to_loop_migration(self):
+        """FX-191: --apply is unblocked — it delegates to loop_migration.
+
+        Previously (0.55.0) --apply exited with '--apply is blocked'. FX-191
+        inverts the control flow: --apply reaches apply_migration and writes
+        a runtime.json + MIGRATION evidence row. The target here already
+        carries a flow-unit-runtime.json (from _write_target's default), so
+        this verifies the migration overwrites cleanly (kill-mid-write
+        recovery path).
+        """
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             self._write_target(root)
             args = argparse.Namespace(target=str(root), dry_run=True, apply=True, fail_on_issues=True)
             buf = io.StringIO()
 
-            with redirect_stdout(buf), self.assertRaises(SystemExit) as ctx:
+            with redirect_stdout(buf):
                 vw.cmd_dynamic_lifecycle_migration(args)
 
-        self.assertEqual(ctx.exception.code, 1)
-        self.assertIn("--apply is blocked", buf.getvalue())
+            # Assertions run INSIDE the with-block so the temp dir is still
+            # present for the filesystem checks below.
+            output = json.loads(buf.getvalue())
+            self.assertTrue(output["applied"], f"apply should succeed; got: {output}")
+            self.assertEqual(output["workflow_model"]["new"], "loop-engineering")
+            self.assertTrue(output["flow_units_derived"] >= 1)
+            # Backup must exist on disk.
+            self.assertTrue((root / ".governance" / "archive").is_dir())
+            # MIGRATION evidence row must be appended.
+            evidence_text = (root / ".governance" / "evidence-log.md").read_text(encoding="utf-8")
+            self.assertIn("MIGRATION-0.65.0", evidence_text)
 
     def test_dynamic_default_overclaim_is_blocked(self):
         with tempfile.TemporaryDirectory() as td:

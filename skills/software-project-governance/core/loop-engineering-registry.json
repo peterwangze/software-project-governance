@@ -1,0 +1,219 @@
+{
+  "$schema": "https://example.com/software-project-governance/loop-engineering-registry-v1.json",
+  "schema_version": "1.0",
+  "workflow": "software-project-governance",
+  "workflow_version": "0.65.0",
+  "introduced_for": "0.65.0",
+  "requires_lifecycle_registry_min_version": "1.0",
+  "source_of_truth": true,
+  "registry_mode": "schema-only-no-runtime-activation",
+  "workflow_model": "loop-engineering",
+  "no_overclaim_boundary": [
+    "Loop-engineering registry is schema/declaration only; it declares the loop topology, fuses, and pause points.",
+    "Loop-engineering registry does not activate any runtime loop instrumentation in 0.65.0.",
+    "Loop-engineering registry does not modify the classic G1-G11 gate judgment behavior.",
+    "Loop-engineering registry does not auto-fire any back-edge; every back-edge requires explicit authorization.",
+    "Loop-engineering registry does not close RISK-037 (loop-engineering completeness); this slice (FX-188) declares the registry and a read-only loader only.",
+    "Loop-engineering registry does not claim 1.0.0 production-ready."
+  ],
+  "loop_gate_semantics": [
+    {
+      "gate_id": "G1",
+      "loop_role": "loop-setup",
+      "enclosing_loop": "none",
+      "on_fail": "escalate-directly",
+      "fuse_ref": "none"
+    },
+    {
+      "gate_id": "G2",
+      "loop_role": "loop-body",
+      "loop_role_note": "primary role recorded; ADR §4 also lists loop-entry-gate (secondary, implied by setup-loop position)",
+      "enclosing_loop": "setup",
+      "on_fail": "iterate-enclosing-loop",
+      "fuse_ref": "FUSE-SETUP-DEFAULT"
+    },
+    {
+      "gate_id": "G3",
+      "loop_role": "loop-body",
+      "loop_role_note": "primary role recorded; ADR §4 also lists loop-exit-gate (secondary, implied by setup-loop position)",
+      "enclosing_loop": "setup",
+      "on_fail": "iterate-enclosing-loop",
+      "fuse_ref": "FUSE-SETUP-DEFAULT"
+    },
+    {
+      "gate_id": "G4",
+      "loop_role": "loop-exit-gate",
+      "enclosing_loop": "setup",
+      "on_fail": "iterate-enclosing-loop",
+      "fuse_ref": "FUSE-SETUP-DEFAULT"
+    },
+    {
+      "gate_id": "G5",
+      "loop_role": "loop-entry-gate",
+      "enclosing_loop": "middle",
+      "on_fail": "iterate-enclosing-loop",
+      "fuse_ref": "FUSE-MIDDLE-DEFAULT"
+    },
+    {
+      "gate_id": "G6",
+      "loop_role": "loop-body",
+      "loop_role_note": "primary role recorded; ADR §4 also lists loop-exit-gate (secondary, implied by inner-loop position)",
+      "enclosing_loop": "inner",
+      "on_fail": "iterate-enclosing-loop",
+      "fuse_ref": "FUSE-INNER-DEFAULT"
+    },
+    {
+      "gate_id": "G7",
+      "loop_role": "loop-body",
+      "loop_role_note": "primary role recorded; ADR §4 also lists loop-exit-gate (secondary, implied by inner-loop position)",
+      "enclosing_loop": "inner",
+      "on_fail": "iterate-enclosing-loop",
+      "fuse_ref": "FUSE-INNER-DEFAULT"
+    },
+    {
+      "gate_id": "G8",
+      "loop_role": "loop-body",
+      "enclosing_loop": "middle",
+      "on_fail": "iterate-enclosing-loop",
+      "fuse_ref": "FUSE-MIDDLE-DEFAULT"
+    },
+    {
+      "gate_id": "G9",
+      "loop_role": "loop-exit-gate",
+      "loop_role_note": "primary role recorded; ADR §4 also lists loop-entry-gate (secondary, implied by middle-loop position)",
+      "enclosing_loop": "middle",
+      "on_fail": "iterate-enclosing-loop",
+      "fuse_ref": "FUSE-MIDDLE-DEFAULT"
+    },
+    {
+      "gate_id": "G10",
+      "loop_role": "loop-body",
+      "enclosing_loop": "outer",
+      "on_fail": "iterate-enclosing-loop",
+      "fuse_ref": "FUSE-OUTER-DEFAULT"
+    },
+    {
+      "gate_id": "G11",
+      "loop_role": "loop-exit-gate",
+      "enclosing_loop": "outer",
+      "on_fail": "iterate-enclosing-loop",
+      "fuse_ref": "FUSE-OUTER-DEFAULT"
+    }
+  ],
+  "loop_fuses": {
+    "FUSE-SETUP-DEFAULT": {
+      "loop_tier": "setup",
+      "max_rounds": 2,
+      "escalation_exit": "initiation-re-scope"
+    },
+    "FUSE-INNER-DEFAULT": {
+      "loop_tier": "inner",
+      "max_rounds": 5,
+      "escalation_exit": "askuser-escalation"
+    },
+    "FUSE-MIDDLE-DEFAULT": {
+      "loop_tier": "middle",
+      "max_rounds": 3,
+      "escalation_exit": "askuser-escalation"
+    },
+    "FUSE-OUTER-DEFAULT": {
+      "loop_tier": "outer",
+      "max_rounds": 2,
+      "escalation_exit": "strategy-review"
+    }
+  },
+  "pause_points": {
+    "PP-Plan-Approve": {
+      "location": "between plan and act phases",
+      "trigger": "scope-change or architecture-decision or release-decision",
+      "velocity_cost_ms": null,
+      "velocity_cost_justification": "Plan Mode human approval is the highest-value checkpoint; it prevents expensive rework when the agent's plan diverges from user intent. The cost of a 30s-2min human review is justified by preventing hours of wrong-direction work.",
+      "active": true
+    },
+    "PP-Reflect-SelfReview": {
+      "location": "between implement and code-review gate",
+      "trigger": "before submitting to Reviewer agent",
+      "velocity_cost_ms": null,
+      "velocity_cost_justification": "Self-review before sending to Reviewer reduces review rounds (M7.4 §4.6 cost). One extra reflection pass costs seconds but saves full review-cycle latency.",
+      "active": true
+    },
+    "PP-Fuse-Escalate": {
+      "location": "when loop fuse trips (MAX_ROUNDS exceeded)",
+      "trigger": "fuse-tripped in any loop tier",
+      "velocity_cost_ms": null,
+      "velocity_cost_justification": "Fuse escalation requires human decision on whether to continue iterating or change direction. Mandatory because fuse-trip indicates the loop is not converging — continuing automatically would waste resources.",
+      "active": true
+    },
+    "PP-Release-Gate": {
+      "location": "at release-exit gate (G9)",
+      "trigger": "release-candidate ready for release-review",
+      "velocity_cost_ms": null,
+      "velocity_cost_justification": "Release is an irreversible outward-facing action (per Coordinator boundary rules). Human/Reviewer confirmation is mandatory before any release.",
+      "active": true
+    },
+    "PP-Back-Edge-Design-Replan": {
+      "location": "release-to-design-replan back-edge",
+      "trigger": "G9 fail + G5 concurrence + design-rooted cause",
+      "velocity_cost_ms": null,
+      "velocity_cost_justification": "A full Middle-loop restart (release back to architecture) is the most expensive back-edge. Explicit human authorization is required because the cost of unnecessary restart far exceeds the cost of the pause.",
+      "active": true
+    }
+  },
+  "agent_intrinsic_loop": {
+    "name": "AgentIntrinsicLoop",
+    "phases": [
+      "plan",
+      "act",
+      "observe",
+      "reflect"
+    ],
+    "active_loop_tier_values": [
+      "setup",
+      "inner",
+      "middle",
+      "outer"
+    ],
+    "loop_state_fields": [
+      "active_loop",
+      "active_loop_tier",
+      "loop_count",
+      "last_loop_type",
+      "agent_phase",
+      "iteration_within_inner",
+      "pause_points_active",
+      "last_gate_result",
+      "fuse"
+    ],
+    "governance_model": "pause-points-inserted-at-defined-checkpoints; each pause must justify velocity cost",
+    "no_overclaim": "schema-declaration-only; no runtime agent-loop instrumentation in 0.65.0"
+  },
+  "back_edges": {
+    "release-to-design-replan": {
+      "from_stage": "release",
+      "to_stage": "architecture",
+      "gate_references": [
+        "G9",
+        "G5"
+      ],
+      "transition_type": "flow-unit-middle-loop-iteration",
+      "auto_fire": false,
+      "trigger": {
+        "requires_all_of": [
+          {
+            "gate": "G9",
+            "result": "fail",
+            "evidence": "release-review findings recorded"
+          },
+          {
+            "gate": "G5",
+            "concurrence": "design-review concurs the root cause is design-level (architecture/selection), recorded in G5 findings, NOT merely a build/test/release defect"
+          },
+          {
+            "pause_point": "PP-Fuse-Escalate",
+            "human_approval": "explicit human authorization to restart the Middle loop from design"
+          }
+        ]
+      }
+    }
+  }
+}

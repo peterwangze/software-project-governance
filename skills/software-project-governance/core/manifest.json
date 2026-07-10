@@ -37,6 +37,10 @@
         "type": "file"
       },
       {
+        "path": "skills/software-project-governance/core/loop-engineering-registry.json",
+        "type": "file"
+      },
+      {
         "path": "skills/software-project-governance/core/architecture-health.json",
         "type": "file"
       },
@@ -526,6 +530,16 @@
         "artifact_role": "dynamic-lifecycle-registry",
         "validation_commands": [
           "python skills/software-project-governance/infra/verify_workflow.py check-lifecycle-registry --fail-on-issues",
+          "python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues"
+        ]
+      },
+      {
+        "id": "loop-engineering-registry",
+        "path": "skills/software-project-governance/core/loop-engineering-registry.json",
+        "type": "file",
+        "required": true,
+        "artifact_role": "loop-engineering-registry",
+        "validation_commands": [
           "python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues"
         ]
       },

@@ -7,6 +7,14 @@ description: 发布审查——对发布就绪状态进行独立审查。覆盖C
 
 本 SKILL 用于 CI/CD（stage-cicd）和版本发布（stage-release）阶段的独立发布审查。由 Reviewer Agent 执行。
 
+## Loop Role (0.65.0)
+
+**Gate semantic:** `loop-exit-gate` for the **Middle loop** AND `loop-entry-gate` for the **Outer loop** (operate → measure → maintain/retro).
+
+This review certifies a Middle loop's **EXIT** — the flow unit is releasable — and simultaneously the **ENTRY** into the Outer loop's operate-measure phase. A gate that FAILS does not fail a stage; it triggers the `release-to-testing-rework` back-edge, returning the work into the testing sub-loop (and from there the Inner loop), incrementing `loop_count`. Only when `loop_count` exceeds the Middle fuse does the failed gate escalate instead of iterating.
+
+Per ADR §3.5 (loop-engineering-architecture-0.65.0). See `references/loop-role-mapping.md` for the complete gate-as-loop-exit mapping.
+
 ## 审查对象
 
 | 产出物 | 来源阶段 | 审查重点 |

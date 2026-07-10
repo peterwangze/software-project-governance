@@ -7,6 +7,14 @@ description: 设计审查——对技术选型、系统设计、ADR 进行独立
 
 本 SKILL 用于技术选型（stage-selection）、基础设施（stage-infra）和架构设计（stage-architecture）阶段的独立设计审查。由 Reviewer Agent 执行。
 
+## Loop Role (0.65.0)
+
+**Gate semantic:** `loop-entry-gate` for the **Middle loop** (design → development → testing → release per flow unit).
+
+This review certifies a Middle loop's **ENTRY** — the design converges and the team can begin building this flow unit. A gate that FAILS does not fail a stage — the design sub-loop iterates (re-design against the findings), incrementing the Middle loop's `loop_count`. The design gate does not fail the project; it only certifies that the Middle loop may BEGIN. Only when `loop_count` exceeds the Middle fuse does the failed gate escalate instead of iterating.
+
+Per ADR §3.5 (loop-engineering-architecture-0.65.0). See `references/loop-role-mapping.md` for the complete gate-as-loop-exit mapping.
+
 ## 审查对象
 
 | 产出物 | 来源阶段 | 审查重点 |

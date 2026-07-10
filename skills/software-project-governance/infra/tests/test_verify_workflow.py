@@ -7948,10 +7948,10 @@ class GovernanceStatusContractTests(unittest.TestCase):
 
         required = [
             "持续归档触发检测与执行",
-            "WORKFLOW_HOME",
-            '`python "$WORKFLOW_HOME/infra/archive.py" migrate --auto --dry-run`',
-            '`python "$WORKFLOW_HOME/infra/archive.py" migrate --auto`',
-            '`python "$WORKFLOW_HOME/infra/verify_workflow.py" check-archive-integrity`',
+            "plugin_home",
+            '`python <plugin_home>/infra/archive.py migrate --auto --dry-run`',
+            '`python <plugin_home>/infra/archive.py migrate --auto`',
+            '`python <plugin_home>/infra/verify_workflow.py check-archive-integrity`',
             "发布/版本 bump 收尾场景 MUST 阻断完成",
             "无可归档数据",
         ]
@@ -11998,7 +11998,7 @@ class ExternalInstalledRuntimePathResolverTests(unittest.TestCase):
             "commands/governance-verify.md",
         ):
             text = (vw.ROOT / rel).read_text(encoding="utf-8")
-            self.assertIn("WORKFLOW_HOME", text, rel)
+            self.assertIn("plugin_home", text, rel)
             self.assertNotIn("cp skills/software-project-governance/infra/hooks", text, rel)
             self.assertNotIn("python skills/software-project-governance/infra/verify_workflow.py", text, rel)
 

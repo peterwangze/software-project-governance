@@ -2,6 +2,41 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.64.0] - 2026-07-09
+
+### 0.64.0 — 入口确定性重构（resolve_entry.py 双 root 模型 + WORKFLOW_HOME 消除 + 版本权威源切换）（MINOR，DEC-096）
+
+0.64.0 是 MINOR——入口架构级重构（非纯 bug fix）。用户反馈 `/governance` 入口三大缺陷：(1) 版本激活探测不自洽（安装 0.63.4 实际激活 0.54.1）；(2) 依赖未定义的 `WORKFLOW_HOME` 环境变量（全仓 grep 零设置点）；(3) 入口靠 LLM 推理，启动成本 5min+/十万 token。本 release 用确定性解析器替换 LLM 概率推理，并把版本权威源从滞后的 `installed_plugins.json` 切到 SKILL.md frontmatter。**避免 0.54.2/0.54.3 回归（DEC-080/RISK-038）的关键设计**：双 root 模型——PLUGIN_HOME（从 `__file__` 推导，仅定位可执行文件+读 SKILL frontmatter active_version 权威源）vs HOST_PROJECT_ROOT（从 cwd/平台/显式 `--project-root` 解析读事实源，绝不从 `__file__` 推导）+ fail-closed。RISK-040（双 root 发散测试 + 真实宿主项目验证）已 PASSED——验证在独立 host project/e2e-test-project 上（scenario_hint=F there vs D in dev repo，证明读 host 不读 plugin-self）。经 DEC-090/091 降级 SoD 沿用——产品代码由 Coordinator spawn Governance Developer + 只读 Code Reviewer，本 release 评估由 Coordinator spawn Release Agent + 独立 Release Reviewer R0 审查。
+
+### Added
+- **AUDIT-129 — `/governance` 入口确定性重构诊断 ADR**（commit 77df046）：基于本会话入口架构深度探索（Explore sub-agent 全映射入口设计：版本检测三机制/WORKFLOW_HOME 14 处引用/三层入口 prose/manifest 结构）+ 0.54.2/0.54.3 失败链考古（RISK-038/AUDIT-115/EVD-577~587/DEC-080），产出入口架构 ADR（docs/）。核心结论：三缺陷同根——确定性工作（路径/版本/状态）与语义工作（场景判断）混淆且全部以自然语言编码交由 LLM 概率执行。关键设计约束（DEC-080/RISK-038）：双 root 分离——PLUGIN_HOME vs HOST_PROJECT_ROOT 绝不混用。详见 EVD-668, DEC-096。
+- **FX-130 — resolve_entry.py 确定性入口解析器 + 20 测试**（commit c7a9942）：新增 `infra/resolve_entry.py`（352 行纯 stdlib，不 import verify_workflow）+ `infra/tests/test_resolve_entry.py`（328 行 20 测试）。双 root 模型（DEC-080/RISK-038 C1-C4 全满足）：PLUGIN_HOME=Path(__file__).resolve().parent.parent（仅定位可执行文件+读 SKILL frontmatter active_version 权威源）；HOST_PROJECT_ROOT 从 --project-root/cwd 解析（绝不从 __file__）；fail-closed（root 不可解→resolved_root_ok=false+diagnostic+安全默认，事实读取块结构性不可达）。输出 12 字段 JSON。RISK-040 C3 发散测试（0.54.2/0.54.3 缺失的）：两独立 temp dir + 9.9.9 vs 1.2.3 版本断言 + 插件自身 .governance/ 种入断言不泄漏。Code Reviewer R0 APPROVED_WITH_NOTES（6/6，0 P0/P1，4 P2）。详见 EVD-669。
+
+### Changed
+- **FX-131 — 入口 prose 重构 + WORKFLOW_HOME 消除 + 版本权威源切换**（commit d70b9f3）：4 commands root + 4 e2e mirror + AGENTS.md 接入 resolve_entry.py。**WORKFLOW_HOME 消除**：commands/ 44→5（全说明性注释零活跃考古）+ canonical 4 层优先级 resolve 块全删。**决策树收敛**：governance.md 25 行 ASCII 树→scenario_hint 指针（resolved_root_ok==false fail-closed）。**版本权威源切换**：版本比较→scenario_hint=="C"（active_version SKILL frontmatter）；GOV-ERR-004 降级检测保留 LLM 侧。**check_plugin_freshness 降 advisory**（governance-status Step 3.5，函数保留不删）。check-projection-sync PASSED。Code Reviewer R0 APPROVED_WITH_NOTES（7/7，0 P0/P1，3 P2）。详见 EVD-670。
+- **RISK-040 — 双 root 发散测试 + 真实宿主项目验证 PASSED**：验证在独立 host project/e2e-test-project 上——scenario_hint=F there vs D in dev repo，证明 resolve_entry.py 读 host 不读 plugin-self。关闭标准满足（双 root 发散测试 + 真实宿主项目验证 + fail-closed + 独立审查）。
+- 版本声明同步到 0.64.0：source SKILL、canonical manifest、Claude/Codex/Zcode/Chrys plugin metadata、Claude marketplace metadata、package.json、4 hook @version、verify_workflow.py `REQUIRED_SNIPPETS`、CHANGELOG、plan-tracker 工作流版本指针 + 路线图。
+- e2e fixture 版本指针同步：`project/e2e-test-project/skills/software-project-governance/SKILL.md` + `project/e2e-test-project/.governance/plan-tracker.md` 的版本指针 0.63.4→0.64.0。
+
+### Migration Notes
+- **版本权威源切换（行为变更）**：激活版本权威源从 `installed_plugins.json`（可能滞后的元数据）切到 SKILL.md frontmatter `version` 字段。用户无需手动操作——resolve_entry.py 自动从 SKILL frontmatter 读取 active_version。
+- **WORKFLOW_HOME 消除**：未定义的环境变量依赖全部删除。如有用户曾手动设置 `WORKFLOW_HOME`（非推荐），不再被读取——改用 resolve_entry.py 的 `--project-root` 或 cwd。
+- **非 breaking change**：resolve_entry.py 输出 JSON 供 LLM 消费，向后兼容现有 `.governance/` 结构；SKILL.md frontmatter `version` 字段原本就存在（0.63.4 起即如此）。
+- **避免 0.54.2/0.54.3 回归（DEC-080/RISK-038）**：双 root 模型确保 PLUGIN_HOME（从 `__file__` 推导）绝不用于读事实源——HOST_PROJECT_ROOT 始终从 cwd/平台解析。RISK-040 发散测试守卫此不变量。
+
+### Validation
+- `python skills/software-project-governance/infra/verify_workflow.py check-version-consistency` — PASSED（Files checked: 13, all 0.64.0）。
+- `python skills/software-project-governance/infra/verify_workflow.py check-projection-sync` — PASSED。
+- `python skills/software-project-governance/infra/verify_workflow.py check-release --version 0.64.0 --require-changelog` — PASSED。
+- `python skills/software-project-governance/infra/verify_workflow.py check-archive-integrity` — PASSED。
+- **RISK-040 真实宿主项目验证 PASSED**（project/e2e-test-project，独立 host，scenario_hint=F vs dev repo D）。
+- resolve_entry.py test suite 20 passed（FX-130 commit 已验证）。
+
+### Boundaries
+- **不关闭** RISK-039（架构腐化看护——需外部宿主验证）。RISK-040 关闭标准满足但不自动关闭（独立 Release Reviewer R0 确认）。
+- **不声明** 1.0.0 production-ready / official approval / marketplace approval / universal runtime support（1.0.0 阻塞 RISK-036/037/039 + 外部验证）。
+- **MINOR 版本号选择理由**：0.64.0 是入口架构级重构（新增 resolve_entry.py 能力 + 行为变更：版本权威源切换 + WORKFLOW_HOME 消除），非纯 bug fix。与 0.63.0（MINOR，Coordinator 检视循环协议修复 + verify Check 29/30）MINOR 先例同构。占用路线图预留号 0.64.0（DEC-096：原预留给 verify_workflow.py 拆分 Phase 6 顺延到 0.66.0）。
+
 ## [0.63.4] - 2026-07-07
 
 ### 0.63.4 — check_version_consistency VERSION_FILES 覆盖盲区修复（FIX-182）

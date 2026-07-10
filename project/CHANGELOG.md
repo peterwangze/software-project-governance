@@ -2,6 +2,47 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.65.0] - 2026-07-10
+
+### Loop-Engineering Workflow Refactor (DEC-097/098/099, RISK-037)
+
+**Major architectural evolution:** the linear G1-G11 stage model is superseded by a three-tier nested loop model (Outer/Middle/Inner) with AI's Plan-Act-Observe-Reflect cycle as a first-class citizen. Classic G1-G11 gates are preserved as loop-exit/entry certifications (DEC-098 criterion-4 compatibility).
+
+#### New Modules (FX-188~FX-194, 7 implementation slices)
+- **`core/loop-engineering-registry.json`** (FX-188): loop_gate_semantics G1-G11, PausePoints, LoopFuses, back-edges
+- **`infra/loop_engine.py`** extensions (FX-189/193): loop_state activation, stateless round derivation (sacred parallel-safe property), fuse generalization (setup=2/inner=5/middle=3/outer=2), per-flow-unit rollup view
+- **`infra/flow_unit_derive.py`** (FX-190): target-derived flow-unit generation — closes VAL-006 gap (non-game targets now derivable)
+- **`infra/loop_migration.py`** (FX-191): `--apply` + `--rollback` with SHA-256 backup, manifest-verified hash integrity, collision-safe naming, 5 fail-closed cases, RISK-040 divergence guard
+- **`infra/loop_health.py`** (FX-192): velocity-justification enforcement (Part 1 BLOCKING) + cost-exceedance advisory (Part 2) + DORA bridge metrics
+
+#### New CLI Commands
+- `loop-engineering-migration --apply/--rollback/--dry-run`: migrate classic-phase-gate → loop-engineering
+- `check-loop-health`: velocity justification + DORA metrics (advisory-only, not blocking Check 28)
+- `loop-rollup`: per-flow-unit loop_state view (resolves RISK-037 criterion 2 — no more single global stage)
+
+#### Semantic Updates
+- 7 review skills (requirement/design/tech/code/test/release/retro-review) re-labeled with loop-role semantics (ADR §3.5)
+- `cmd_dynamic_lifecycle_migration` --apply path unblocked (was sys.exit(1) in 0.55.0)
+
+#### Backward Compatibility
+- Classic-phase-gate execution unchanged
+- Rollback path fully restores pre-migration state (DEC-098 criterion-4)
+- advisory-only checks don't block release gate
+
+### RISK-037 Progress (1.0.0 hard blocker)
+- Criterion 2 (plan-tracker rollup): IMPL-MET (FX-193)
+- Criterion 4 (gate engine classic compat): IMPL-MET (FX-188 + FX-194)
+- Criterion 5 (loop runtime activation): IMPL-MET (FX-189)
+- Criterion 6 (apply path): IMPL-MET (FX-191)
+- Criterion 8 (non-game generalization): IMPL-MET (FX-190)
+- Criteria 5/7/8 external validation: still pending (not closed by 0.65.0)
+
+### Tests
+- 827 infra tests + 82 subtests passing
+- Sacred property tests: stateless round derivation parallel-safety proven
+- VAL-006 closure test: cli-tool 3 commands → 3 units (3 fixture forms)
+- Data integrity: manifest-verified backup, tamper detection, rollback totality
+
 ## [0.64.1] - 2026-07-10
 
 ### 0.64.1 — marketplace.json source 改回 "./" 恢复本地/离线安装能力（FIX-186）（PATCH）

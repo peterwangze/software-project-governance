@@ -9,11 +9,8 @@
     {
       "name": "software-project-governance",
       "description": "AI coding delivery trust layer for governance-aware coding agents. Tracks goals, evidence, risks, quality budgets, and release readiness without making broad runtime claims.",
-      "version": "0.64.0",
-      "source": {
-        "source": "github",
-        "repo": "peterwangze/software-project-governance"
-      },
+      "version": "0.64.1",
+      "source": "./",
       "homepage": "https://github.com/peterwangze/software-project-governance",
       "repository": "https://github.com/peterwangze/software-project-governance",
       "license": "MIT",

@@ -2,6 +2,22 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.64.1] - 2026-07-10
+
+### 0.64.1 — marketplace.json source 改回 "./" 恢复本地/离线安装能力（FIX-186）（PATCH）
+
+0.64.1 是 PATCH——修复 0.62.0 引入的离线安装回归。用户反馈：在网络受限环境，下载 zip 后解压到本地目录，通过 `/plugin marketplace add <本地目录>` + `/plugin install` 安装时，install 仍访问 GitHub 导致失败。根因：0.62.0（REL-051/DEC-093）为适配 zcode marketplace 把 `.claude-plugin/marketplace.json` 的插件 source 从 `"./"`（相对路径，读本地 marketplace 目录）改成 `{"source":"github","repo":"peterwangze/software-project-governance"}`（git source，install 时 clone GitHub）。Claude Code/zcode 的 `/plugin install` 按 marketplace.json 的 source 字段决定取插件内容——`github` source 触发联网 clone，`"./"` 读取本地目录。修复：source 改回 `"./"`（恢复 0.61.2 配置），保留 repository/homepage 做元信息。zcode 调查确认 `"./"` 兼容（zcode marketplace add 支持 local path + 复用 Claude marketplace 协议）。
+
+### Fixed
+- **FIX-186 — marketplace.json source `"./"` 恢复**：`.claude-plugin/marketplace.json` 插件 source 从 `{"source":"github","repo":"..."}` 改回 `"./"`（相对路径指向 marketplace 根）。插件是单仓自包含（skills/commands/agents/adapters 在仓根），`"./"` 让 install 读取本地 marketplace 目录而非联网 clone。影响：本地 add + install 全程不联网（恢复 0.61.2 之前能力）；远程 `/plugin marketplace add owner/repo` 仍可工作（clone 整个仓后 `"./"` 指向 clone 目录根）。
+
+### Changed
+- 版本声明同步到 0.64.1：4 plugin.json、marketplace.json、package.json、SKILL.md、manifest.json、verify_workflow.py REQUIRED_SNIPPETS、4 hook @version + e2e fixture 版本指针。
+
+### Migration Notes
+- **行为变更（breaking）**：`/plugin install https://github.com/peterwangze/software-project-governance.git` 直接 git-URL 安装路径不再可用（source 不再是 github 对象）。标准 `/plugin marketplace add` + `/plugin install software-project-governance@spg` 在所有场景（本地/远程/离线）都工作。
+- **离线/网络受限环境**：下载 zip → 解压到本地目录 → `/plugin marketplace add <本地目录路径>` → `/plugin install software-project-governance@spg`——全程不联网。
+
 ## [0.64.0] - 2026-07-09
 
 ### 0.64.0 — 入口确定性重构（resolve_entry.py 双 root 模型 + WORKFLOW_HOME 消除 + 版本权威源切换）（MINOR，DEC-096）

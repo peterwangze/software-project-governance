@@ -2091,6 +2091,7 @@ GOVERNANCE_PACK_KNOWN_CHECKS = {
     "check-capability-registry",
     "check-lifecycle-registry",
     "check-flow-unit-runtime",
+    "check-loop-health",
     "check-host-capability-context",
     "check-official-submission-ecosystem",
     "check-mainstream-agent-loading",
@@ -20552,6 +20553,25 @@ def cmd_check_architecture_health(args):
     print()
 
 
+def cmd_check_loop_health(args):
+    """Thin entry — delegates to infra/loop_health.py (0.65.0 loop-engineering)."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    from loop_health import check_loop_health
+    result = check_loop_health(getattr(args, "target", None))
+    print("\n=== Loop Health Check (velocity + latency) ===")
+    findings = result.get("findings", [])
+    for f in findings[:25]:
+        print(f"  [{f.get('severity','?')}] {f.get('pause_point','')}: {f.get('message','')}")
+    blocking = [f for f in findings if f.get("severity") == "FAIL"]
+    print(f"\n  Result: {len(blocking)} BLOCKING, {len(findings)-len(blocking)} advisory")
+    if blocking and getattr(args, "fail_on_issues", False):
+        sys.exit(1)
+    print()
+
+
 def cmd_check_duplicate_code(args):
     """Run REQ-101 ArchGuard source/projection duplicate-code guard (advisory in 0.58.0)."""
     try:
@@ -21555,6 +21575,16 @@ def main():
     cah_p.add_argument("--fail-on-issues", action="store_true",
                        help="Exit non-zero only if gate_integration.fatal_on_error is true and ERRORs found")
 
+    # check-loop-health (FX-192 / ADR §9.5 — advisory-only, NOT a Check 28 sub-item)
+    clh_p = subparsers.add_parser(
+        "check-loop-health",
+        help="Loop-engineering velocity/latency health (ADR §9.5; advisory in 0.65.0)",
+    )
+    clh_p.add_argument("--target", default=None,
+                       help="Host project root (defaults to verify_workflow ROOT)")
+    clh_p.add_argument("--fail-on-issues", action="store_true",
+                       help="Exit non-zero if any blocking (FAIL) findings are present")
+
     # check-duplicate-code (REQ-101 / FIX-152 / ArchGuard)
     cdc_p = subparsers.add_parser(
         "check-duplicate-code",
@@ -21714,6 +21744,7 @@ def main():
         "check-mainstream-agent-loading": cmd_check_mainstream_agent_loading,
         "check-readme-pack-guidance": cmd_check_readme_pack_guidance,
         "check-architecture-health": cmd_check_architecture_health,
+        "check-loop-health": cmd_check_loop_health,
         "check-duplicate-code": cmd_check_duplicate_code,
         "check-technical-debt": cmd_check_technical_debt,
         "check-complexity": cmd_check_complexity,

@@ -1,43 +1,47 @@
-# Loop Role Mapping — Review Skills (0.65.0)
+# 审查 SKILL 循环角色映射
 
-This document is the **single source of truth** for how each review skill's gate is re-labeled under the loop-engineering architecture. It carries DEC-097 part 1 ("the loop is the ONLY model") into the skill layer: a review skill's gate is no longer a "stage inspection" — it is a **loop-exit / loop-entry certification**.
+版本背景：本映射随 0.65.0 的 loop-engineering 架构引入；本文档标题与七个审查 SKILL 的 `## 循环角色` 一样是稳定语义，不随版本号更新。
 
-Per ADR §3.5 (loop-engineering-architecture-0.65.0). See `docs/requirements/loop-engineering-architecture-0.65.0-proposed.md` §3.5 and §4 for the authoritative stage-by-stage mapping.
+本文档是七个审查 SKILL 在 loop-engineering 架构下 gate 语义的单一事实源。DEC-097 的第一部分规定“loop 是唯一模型”：审查 SKILL 的 gate 不再是“检查某个阶段”，而是对循环退出或进入条件的认证。
 
-## Why this exists
+依据 ADR §3.5（`docs/requirements/loop-engineering-architecture-0.65.0-proposed.md` 的 §3.5 与 §4 是逐阶段映射的权威来源）。
 
-In 0.51.0-0.55.0 the seven review skills described their gate as "inspect stage X." Under 0.65.0 that semantic is retired. Each review skill now certifies a specific loop's exit or entry. A gate that FAILS does not fail a stage — it **returns the work into its enclosing loop for another iteration**, increments the loop's `loop_count`, and the agent loop re-Plans against the findings. Only when `loop_count` exceeds the fuse (MAX_ROUNDS) does the failed gate escalate instead of iterating.
+## 为什么需要此映射
 
-## Vocabulary (ADR §4)
+在 0.51.0-0.55.0，七个审查 SKILL 将 gate 描述为“检查阶段 X”。0.65.0 已废弃该语义：每个审查 SKILL 都认证一个确定的循环退出或进入条件。审查失败不会终止阶段；它会将工作返回所属循环继续迭代、递增该循环的 `loop_count`，并由 agent 依据发现重新 Plan。只有 `loop_count` 超过对应 fuse（`MAX_ROUNDS`）时，失败才升级而不是继续迭代。
 
-"Role" uses exactly four values:
+## 术语（ADR §4）
 
-- **loop-setup** — one-time / non-iterative prep (initiation is the sole non-loop).
-- **loop-body** — the work that iterates.
-- **loop-exit-gate** — certifies a loop's exit condition.
-- **loop-entry-gate** — certifies entry into the next loop.
+“角色”只使用以下四个值：
 
-## The 7 review skills → loop role (ADR §3.5)
+- `loop-setup`：一次性、非迭代的准备；立项是唯一的非循环。
+- `loop-body`：循环内反复执行的工作。
+- `loop-exit-gate`：认证循环的退出条件。
+- `loop-entry-gate`：认证进入下一个循环的条件。
 
-| Skill | Old semantic ("inspect stage") | New loop role | Loop it certifies | What "certifying this gate" means |
-|-------|-------------------------------|---------------|-------------------|------------------------------------|
-| `requirement-review` | inspect 立项 artifacts | `loop-setup` (+ loop-entry-gate for first Middle) | (non-loop: initiation) | Certify initiation setup is complete. This is the loop-entry gate for the setup-loop, which precedes the first Middle loop. NOT iterative. |
-| `design-review` | inspect architecture stage | `loop-entry-gate` | Middle (entry) | Certify a Middle loop's ENTRY — design converges, can begin building this flow unit. On failure the design sub-loop iterates (re-design); it does not fail the project. |
-| `tech-review` | inspect technical selection / design quality | `loop-entry-gate` | Middle (entry, technical depth) | Certify a Middle loop's design sub-iteration converged — risk-driven depth verified (PoC, alternatives, blue-army challenge). |
-| `code-review` | inspect development stage | `loop-exit-gate` | Inner (exit) | Certify an Inner loop's EXIT — the slice/commit is mergeable. On failure the Inner loop iterates (rework → re-review). Fuse: Inner max_rounds=5. |
-| `test-review` | inspect testing stage | `loop-body` + `loop-exit-gate` | Middle (body, quality) | Certify a Middle loop's quality sub-iteration converged — defects closed, regression pass. On failure → `testing-to-development-rework` back-edge returns work to the Inner loop. |
-| `release-review` | inspect release stage | `loop-exit-gate` (Middle) / `loop-entry-gate` (Outer) | Middle (exit) / Outer (entry) | Certify a Middle loop's EXIT — flow unit releasable — AND entry to the Outer loop's operate-measure phase. On failure → `release-to-testing-rework` back-edge returns to the testing sub-loop. |
-| `retro-review` | inspect maintenance stage | `loop-exit-gate` | Outer (exit) | Certify an Outer loop's iteration CONVERGED — learnings backfilled, next round direction set. On failure → `operations-feedback-to-maintenance-loop` back-edge keeps the Outer loop iterating. |
+## 七个审查 SKILL 的循环角色（ADR §3.5）
 
-## The load-bearing rule
+| SKILL | 旧语义（检查阶段） | 新循环角色 | 认证的循环 | gate 认证的含义 |
+|---|---|---|---|---|
+| `requirement-review` | 检查立项产出物 | `loop-setup`（并作为第一个 Middle 的 `loop-entry-gate`） | 立项（非循环） | 认证立项准备已完成，是 setup-loop 的进入门，位于第一个 Middle loop 之前；本身不迭代。 |
+| `design-review` | 检查架构阶段 | `loop-entry-gate` | Middle（进入） | 认证 Middle loop 的进入条件：设计收敛，可以开始构建当前 flow unit；失败时在设计子循环中重新设计，不终止项目。 |
+| `tech-review` | 检查技术选型或设计质量 | `loop-entry-gate` | Middle（进入，技术深度） | 认证 Middle loop 的设计子迭代已收敛：PoC、备选方案和蓝军挑战已验证风险驱动的深度。 |
+| `code-review` | 检查开发阶段 | `loop-exit-gate` | Inner（退出） | 认证 Inner loop 的退出条件：切片或提交可合并；失败时在 Inner loop 中返工并复审；Inner `max_rounds=5`。 |
+| `test-review` | 检查测试阶段 | `loop-body` + `loop-exit-gate` | Middle（主体，质量） | 认证 Middle loop 的质量子迭代已收敛：缺陷关闭、回归通过；失败经 `testing-to-development-rework` 返回 Inner loop。 |
+| `release-review` | 检查发布阶段 | `loop-exit-gate`（Middle）/`loop-entry-gate`（Outer） | Middle（退出）/ Outer（进入） | 认证 Middle loop 的退出条件（flow unit 可发布）以及 Outer loop 的运营度量进入条件；失败经 `release-to-testing-rework` 返回测试子循环。 |
+| `retro-review` | 检查维护阶段 | `loop-exit-gate` | Outer（退出） | 认证 Outer loop 的迭代收敛：经验回灌、下一轮方向确定；失败经 `operations-feedback-to-maintenance-loop` 使 Outer loop 继续迭代。 |
 
-> A gate that FAILS does not fail a stage. It **returns the work into its enclosing loop for another iteration**, increments the loop's `loop_count`, and the agent loop re-Plans against the findings. Only when `loop_count` exceeds the fuse (§8) does the failed gate escalate instead of iterating.
+## 可执行审查契约
 
-This is why "a gate without a loop on each side is a wall": in the old linear model a failed G6 left the project stuck between "development" and "testing" with no defined next action. In the loop model, a failed code-review gate means the Inner loop iterates (agent Reflects on findings, re-Plans, re-Acts) until LGTM or fuse.
+1. Reviewer 只审查并输出结论，不修改产品代码；修复由所属循环中的实现角色完成。
+2. Reviewer 输出 `APPROVED`、`NEEDS_CHANGE` 或 `BLOCKED`。`NEEDS_CHANGE` 不是终态：Coordinator 必须将工作返回所属循环，完成返工后发起下一轮复审。
+3. 审查终态写入证据记录，并由 Check 30 的复审链消费。只有 `APPROVED` 或 `BLOCKED` 可以结束复审链；超过 Check 30 复审 fuse 的 `NEEDS_CHANGE` 必须升级为 `BLOCKED`。
+4. 循环失败仍遵从各自的 loop fuse：只有 `loop_count` 超过对应 fuse，才从循环迭代升级为阻断或升级处理。
 
-## Related
+## 相关依据
 
-- ADR §3.5 — Gate-as-loop-exit semantics (`docs/requirements/loop-engineering-architecture-0.65.0-proposed.md`).
-- ADR §4 — full G1-G11 stage → loop-role mapping table.
-- ADR §3.3 — the setup-loop (research / selection / infrastructure) and `MAX_SETUP_ROUNDS=2`.
-- ADR §8 — the loop fuses (MAX_ROUNDS per loop tier).
+- ADR §3.5：gate 作为循环退出/进入语义。
+- ADR §4：完整 G1-G11 stage 到 loop-role 映射表。
+- ADR §3.3：setup-loop（调研、选型、基础设施）及 `MAX_SETUP_ROUNDS=2`。
+- ADR §8：各循环层级的 loop fuse（`MAX_ROUNDS`）。
+- Check 30：`verify_workflow.py` 的复审终态状态机，消费审查链并校验轮次连续性、fuse 与终态合法性。

@@ -7,13 +7,17 @@ description: 设计审查——对技术选型、系统设计、ADR 进行独立
 
 本 SKILL 用于技术选型（stage-selection）、基础设施（stage-infra）和架构设计（stage-architecture）阶段的独立设计审查。由 Reviewer Agent 执行。
 
-## Loop Role (0.65.0)
+## 循环角色
 
-**Gate semantic:** `loop-entry-gate` for the **Middle loop** (design → development → testing → release per flow unit).
+版本背景：本循环语义于 0.65.0 引入；本标题是稳定规范，不随版本号变更。
 
-This review certifies a Middle loop's **ENTRY** — the design converges and the team can begin building this flow unit. A gate that FAILS does not fail a stage — the design sub-loop iterates (re-design against the findings), incrementing the Middle loop's `loop_count`. The design gate does not fail the project; it only certifies that the Middle loop may BEGIN. Only when `loop_count` exceeds the Middle fuse does the failed gate escalate instead of iterating.
+**Gate 语义：** 每个 flow unit 的 Middle loop 的 `loop-entry-gate`（设计 → 开发 → 测试 → 发布）。本审查认证 Middle loop 的**进入条件**：设计已收敛，可以开始构建该 flow unit；它不代表项目通过，只认证 Middle loop 可以开始。
 
-Per ADR §3.5 (loop-engineering-architecture-0.65.0). See `references/loop-role-mapping.md` for the complete gate-as-loop-exit mapping.
+审查失败不会终止阶段；它会将工作返回所属循环（Middle loop 的设计子循环）继续迭代（依据发现重新设计），并递增 `loop_count`。只有当 `loop_count` 超过 Middle fuse 时，失败才升级而不是继续迭代。
+
+Reviewer 只审查并输出结论，不修改产品代码。Reviewer 必须输出 `APPROVED`、`NEEDS_CHANGE` 或 `BLOCKED`；`NEEDS_CHANGE` 不是终态，Coordinator 必须在返工后发起下一轮复审。终态证据由 Check 30 的复审链消费：仅 `APPROVED` 或 `BLOCKED` 可结束链路，超过复审 fuse 的 `NEEDS_CHANGE` 必须升级为 `BLOCKED`。
+
+依据 ADR §3.5（loop-engineering-architecture-0.65.0）。完整映射见 [共享循环角色映射](../software-project-governance/references/loop-role-mapping.md)。
 
 ## 审查对象
 

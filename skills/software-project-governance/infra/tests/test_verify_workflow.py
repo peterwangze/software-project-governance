@@ -13912,6 +13912,53 @@ class CheckReviewClosureTests(unittest.TestCase):
 
 
 # ────────────────────────────────────────────────────────────
+# FIX-191: seven review SKILL loop-role documentation contract.
+# ────────────────────────────────────────────────────────────
+
+class LoopRoleSkillConsistencyTests(unittest.TestCase):
+    """Stable titles, references, and executable reviewer semantics stay aligned."""
+
+    def _copy_loop_role_fixture(self, root):
+        source_root = vw.ROOT
+        paths = [
+            source_root / "skills/software-project-governance/references/loop-role-mapping.md",
+            *[
+                source_root / "skills" / skill_name / "SKILL.md"
+                for skill_name in vw.LOOP_ROLE_SKILL_CONTRACTS
+            ],
+        ]
+        for source in paths:
+            target = root / source.relative_to(source_root)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+
+    def test_loop_role_skill_contract_passes_for_all_seven_skills(self):
+        result = vw.check_loop_role_skill_consistency()
+        self.assertTrue(result["passed"], result["issues"])
+        self.assertEqual(result["skills_checked"], 7)
+
+    def test_loop_role_skill_contract_rejects_unresolvable_mapping_reference(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._copy_loop_role_fixture(root)
+            skill_path = root / "skills/code-review/SKILL.md"
+            content = skill_path.read_text(encoding="utf-8")
+            skill_path.write_text(
+                content.replace(
+                    "../software-project-governance/references/loop-role-mapping.md",
+                    "../software-project-governance/references/missing-loop-role-mapping.md",
+                ),
+                encoding="utf-8",
+            )
+
+            result = vw.check_loop_role_skill_consistency(root=root)
+
+        self.assertFalse(result["passed"])
+        self.assertTrue(any("no resolvable shared loop-role mapping reference" in issue
+                            for issue in result["issues"]))
+
+
+# ────────────────────────────────────────────────────────────
 # FIX-187: dual-root model — plugin-root != host-root.
 # Regression for the 0.54.2/0.54.3 / RISK-038 failure mode where
 # ROOT was derived from __file__ and pointed the governance FACTS

@@ -7,13 +7,17 @@ description: 发布审查——对发布就绪状态进行独立审查。覆盖C
 
 本 SKILL 用于 CI/CD（stage-cicd）和版本发布（stage-release）阶段的独立发布审查。由 Reviewer Agent 执行。
 
-## Loop Role (0.65.0)
+## 循环角色
 
-**Gate semantic:** `loop-exit-gate` for the **Middle loop** AND `loop-entry-gate` for the **Outer loop** (operate → measure → maintain/retro).
+版本背景：本循环语义于 0.65.0 引入；本标题是稳定规范，不随版本号变更。
 
-This review certifies a Middle loop's **EXIT** — the flow unit is releasable — and simultaneously the **ENTRY** into the Outer loop's operate-measure phase. A gate that FAILS does not fail a stage; it triggers the `release-to-testing-rework` back-edge, returning the work into the testing sub-loop (and from there the Inner loop), incrementing `loop_count`. Only when `loop_count` exceeds the Middle fuse does the failed gate escalate instead of iterating.
+**Gate 语义：** Middle loop 的 `loop-exit-gate`，同时也是 Outer loop 的 `loop-entry-gate`（运营 → 度量 → 维护/复盘）。本审查认证 Middle loop 的**退出条件**：flow unit 可发布；同时认证进入 Outer loop 的运营度量阶段。
 
-Per ADR §3.5 (loop-engineering-architecture-0.65.0). See `references/loop-role-mapping.md` for the complete gate-as-loop-exit mapping.
+审查失败不会终止阶段；它会经 `release-to-testing-rework` 返回所属循环（测试子循环，并可回到 Inner loop）继续迭代，并递增 `loop_count`。只有当 `loop_count` 超过 Middle fuse 时，失败才升级而不是继续迭代。
+
+Reviewer 只审查并输出结论，不修改产品代码。Reviewer 必须输出 `APPROVED`、`NEEDS_CHANGE` 或 `BLOCKED`；`NEEDS_CHANGE` 不是终态，Coordinator 必须在返工后发起下一轮复审。终态证据由 Check 30 的复审链消费：仅 `APPROVED` 或 `BLOCKED` 可结束链路，超过复审 fuse 的 `NEEDS_CHANGE` 必须升级为 `BLOCKED`。
+
+依据 ADR §3.5（loop-engineering-architecture-0.65.0）。完整映射见 [共享循环角色映射](../software-project-governance/references/loop-role-mapping.md)。
 
 ## 审查对象
 

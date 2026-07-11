@@ -1043,6 +1043,122 @@ def check_snippets():
     return failures
 
 
+# ── FIX-191: review SKILL loop-role contract ─────────────────────
+# These contracts keep the seven review SKILLs mechanically aligned with the
+# shared mapping without changing the loop runtime or review responsibilities.
+LOOP_ROLE_SKILL_CONTRACTS = {
+    "requirement-review": {
+        "role_tokens": ("`loop-setup`", "`loop-entry-gate`"),
+        "failure_token": "返回所属循环（setup-loop）",
+    },
+    "design-review": {
+        "role_tokens": ("`loop-entry-gate`", "Middle loop"),
+        "failure_token": "返回所属循环（Middle loop 的设计子循环）",
+    },
+    "tech-review": {
+        "role_tokens": ("`loop-entry-gate`", "技术深度子迭代"),
+        "failure_token": "返回所属循环（Middle loop 的设计子循环）",
+    },
+    "code-review": {
+        "role_tokens": ("`loop-exit-gate`", "Inner loop"),
+        "failure_token": "返回所属循环（Inner loop）",
+    },
+    "test-review": {
+        "role_tokens": ("`loop-body` + `loop-exit-gate`", "testing-to-development-rework"),
+        "failure_token": "返回所属循环（Inner loop）",
+    },
+    "release-review": {
+        "role_tokens": ("`loop-exit-gate`", "`loop-entry-gate`", "release-to-testing-rework"),
+        "failure_token": "返回所属循环（测试子循环，并可回到 Inner loop）",
+    },
+    "retro-review": {
+        "role_tokens": ("`loop-exit-gate`", "Outer loop", "operations-feedback-to-maintenance-loop"),
+        "failure_token": "返回所属循环（Outer loop）",
+    },
+}
+
+LOOP_ROLE_SHARED_SEMANTIC_TOKENS = (
+    "版本背景：本循环语义于 0.65.0 引入",
+    "审查失败不会终止阶段",
+    "并递增 `loop_count`",
+    "Reviewer 只审查并输出结论，不修改产品代码",
+    "`APPROVED`、`NEEDS_CHANGE` 或 `BLOCKED`",
+    "`NEEDS_CHANGE` 不是终态",
+    "Check 30 的复审链消费",
+    "仅 `APPROVED` 或 `BLOCKED` 可结束链路",
+    "超过复审 fuse 的 `NEEDS_CHANGE` 必须升级为 `BLOCKED`",
+)
+
+
+def check_loop_role_skill_consistency(root=None):
+    """Validate the seven review SKILL loop-role documentation contract.
+
+    The check is intentionally documentation-only: it verifies stable section
+    titles, resolvable shared-mapping references, role-specific semantics, and
+    the executable review/failure contract. It neither reads nor changes loop
+    runtime state or review data formats.
+    """
+    root = Path(root) if root is not None else ROOT
+    mapping_path = root / "skills/software-project-governance/references/loop-role-mapping.md"
+    issues = []
+
+    if not mapping_path.is_file():
+        return {
+            "passed": False,
+            "skills_checked": 0,
+            "issues": [f"missing shared loop-role mapping: {_display_path(mapping_path, root)}"],
+        }
+
+    mapping_text = _read_text_normalized(mapping_path)
+    for token in ("# 审查 SKILL 循环角色映射", "## 可执行审查契约"):
+        if token not in mapping_text:
+            issues.append(f"shared mapping missing required token: {token}")
+
+    for skill_name, contract in LOOP_ROLE_SKILL_CONTRACTS.items():
+        skill_path = root / "skills" / skill_name / "SKILL.md"
+        display_path = _display_path(skill_path, root)
+        if not skill_path.is_file():
+            issues.append(f"missing review SKILL: {display_path}")
+            continue
+
+        content = _read_text_normalized(skill_path)
+        headings = re.findall(r"^##\s+循环角色\s*$", content, flags=re.MULTILINE)
+        if len(headings) != 1:
+            issues.append(f"{display_path}: expected exactly one stable '## 循环角色' heading")
+        if re.search(r"^##\s+循环角色\s*\([^)]*\)", content, flags=re.MULTILINE):
+            issues.append(f"{display_path}: loop-role heading must not carry a version")
+        if re.search(r"^##\s+Loop Role", content, flags=re.MULTILINE):
+            issues.append(f"{display_path}: legacy English Loop Role heading remains")
+
+        references = re.findall(r"\[[^\]]+\]\(([^)]+)\)", content)
+        expected_mapping = mapping_path.resolve()
+        resolves_to_mapping = any(
+            (skill_path.parent / reference).resolve() == expected_mapping
+            for reference in references
+        )
+        if not resolves_to_mapping:
+            issues.append(f"{display_path}: no resolvable shared loop-role mapping reference")
+
+        for token in contract["role_tokens"]:
+            if token not in content:
+                issues.append(f"{display_path}: missing role token: {token}")
+        if contract["failure_token"] not in content:
+            issues.append(f"{display_path}: missing enclosing-loop failure return semantics")
+        for token in LOOP_ROLE_SHARED_SEMANTIC_TOKENS:
+            if token not in content:
+                issues.append(f"{display_path}: missing executable review contract token: {token}")
+
+        mapping_row = f"| `{skill_name}` |"
+        if mapping_row not in mapping_text:
+            issues.append(f"shared mapping missing row for {skill_name}")
+
+    return {
+        "passed": not issues,
+        "skills_checked": len(LOOP_ROLE_SKILL_CONTRACTS),
+        "issues": issues,
+    }
+
+
 def _extract_markdown_table_rows_after_heading(content, heading):
     """Return data rows from the first markdown table after a heading."""
     lines = content.splitlines()
@@ -10019,12 +10135,16 @@ def cmd_verify(args):
     architecture_failures = check_architecture_fact_source()
     agent_adapter_failures = check_agent_adapter_contract()
     version_failures = check_version_consistency()
+    loop_role_result = check_loop_role_skill_consistency()
+    loop_role_failures = [f"[FAIL] loop-role SKILL consistency: {issue}"
+                          for issue in loop_role_result["issues"]]
     all_items = (
         file_failures
         + snippet_failures
         + architecture_failures
         + agent_adapter_failures
         + version_failures
+        + loop_role_failures
     )
 
     # Separate WARN (non-blocking drift) from FAIL (hard gate)
@@ -20036,6 +20156,19 @@ def cmd_check_cross_references(args):
         sys.exit(1)
 
 
+def cmd_check_loop_role_skills(_args):
+    """CLI wrapper for the FIX-191 review SKILL loop-role contract."""
+    result = check_loop_role_skill_consistency()
+    print("=== Review SKILL Loop-Role Consistency Check ===")
+    print(f"  Skills checked: {result['skills_checked']}")
+    if result["issues"]:
+        print(f"  [FAIL] {len(result['issues'])} issue(s):")
+        for issue in result["issues"]:
+            print(f"    - {issue}")
+        sys.exit(1)
+    print("  [PASS] All review SKILL loop-role contracts are consistent.")
+
+
 def cmd_check_sequential_ids(args):
     """CLI wrapper for sequential ID checking (SYSGAP-009)."""
     try:
@@ -21568,6 +21701,11 @@ def main(argv=None):
     xr_p.add_argument("--fail-on-issues", action="store_true",
                       help="Exit with non-zero code if issues found")
 
+    subparsers.add_parser(
+        "check-loop-role-skills",
+        help="Validate the seven review SKILL loop-role documentation contracts",
+    )
+
     # check-sequential-ids (SYSGAP-009)
     si_p = subparsers.add_parser("check-sequential-ids",
                                  help="Verify ID continuity and cross-reference integrity in governance records")
@@ -21946,6 +22084,7 @@ def main(argv=None):
         "gemini-auth-preflight": cmd_gemini_auth_preflight,
         "opencode-provider-preflight": cmd_opencode_provider_preflight,
         "check-cross-references": cmd_check_cross_references,
+        "check-loop-role-skills": cmd_check_loop_role_skills,
         "check-sequential-ids": cmd_check_sequential_ids,
         "check-structural-validity": cmd_check_structural_validity,
         "check-commit-scope": cmd_check_commit_scope,

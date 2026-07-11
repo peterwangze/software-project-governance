@@ -2,6 +2,38 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.65.3] - 2026-07-11
+
+### 0.65.3 - release lineage/tag gate 与 marketplace source 事实修复 (PATCH)
+
+0.65.3 是 PATCH 发布包，版本化 FIX-192 对发布边界和 marketplace source 事实的修复。它为后续发布增加 candidate/released 双模式 lineage 校验，记录 0.62.0~0.65.2 的发布链路审计，并明确本地、离线、远程 marketplace 与 direct git URL 的支持边界。它不创建或回补历史 tag，也不实现 0.66.0 规划的完整 declarative release ledger。
+
+### Added
+
+- **FIX-192 - release lineage fail-closed 门禁**（commit `1c734c7`）：`check-release` 新增 `--lineage-mode candidate|released`。candidate 模式用于 release commit/tag 产生前的候选包，不证明 tag 已存在；released 模式要求显式 `--release-commit`，并验证本地 `vX.Y.Z`、release commit 与远端 tag 指向一致。
+- lineage Git 查询使用 `HOST_PROJECT_ROOT`，remote 只接受安全配置名；查询前验证 remote 存在，并使用 `GIT_TERMINAL_PROMPT=0`、15 秒 timeout 和脱敏诊断。URL、userinfo、option-like、unknown remote 或无法解析的 commit/tag 均 fail-closed。
+- 新增 `docs/release/release-lineage-audit-0.65.3.md`：审计 0.62.0~0.65.2 的 release commit、本地/远端 tag 与 release docs provenance。0.62.0~0.63.4 的 18 份历史三件套均明确标为 `BACKFILLED`，但未创建历史 tag。
+- 新增 `docs/marketplace/marketplace-source-matrix-0.65.3.md`：区分 local marketplace add + install、offline zip/package、remote marketplace clone/add 后使用 `source: "./"`，以及 0.64.1+ 当前不支持 direct git URL 的契约边界。
+
+### Changed
+
+- 版本声明同步到 0.65.3：source SKILL、canonical manifest、Claude/Codex/Zcode/Chrys plugin metadata、Claude marketplace metadata、package.json、四个 source hooks，以及 e2e fixture 指针。
+- 发布流程明确要求候选态使用 `--lineage-mode candidate`；release commit 创建且 tag 推送后，必须使用 `--lineage-mode released --release-commit <commit>` 复验本地与远端不可变锚点。
+
+### Validation
+
+- FIX-192 独立 Code Review：R0/R1 为 `NEEDS_CHANGE`，分别发现 source/direct-URL/timeout 与 credential diagnostic 问题；R2 为 `APPROVED`，`unresolved_blockers=0`。
+- Focused validation：53/53 PASS。
+- Full unit suite：609/610；唯一失败为既有 Check 13 fixture 隔离问题。该结果不是全绿，不得包装为 full-suite PASS。
+- 发布候选执行：`check-version-consistency`、`check-projection-sync`、`check-hot-fact-source --fail-on-issues`、`check-archive-integrity`、`check-release --version 0.65.3 --require-changelog --skip-execution-gates --lineage-mode candidate`、`verify` 与 `git diff --check`。
+
+### Boundaries
+
+- Candidate lineage 明确不要求也不证明 `v0.65.3` 已存在；只有 release commit/tag 创建并推送后，released lineage 复验才能证明完整链路。
+- 不回补 0.63.0~0.65.0 的历史缺失 tag；任何回补必须先有独立治理决策批准 version-to-commit 映射。
+- 不声明 zcode official approval、zcode marketplace approval、curated listing、universal/full runtime support 或 external first-session pilot success。
+- 不关闭 RISK-036、RISK-037、RISK-039、RISK-040 或 RISK-041，也不声明 1.0.0 production-ready。
+
 ## [0.65.2] - 2026-07-11
 
 ### 0.65.2 - SKILL Loop Role 与审查终态规范一致性修复 (PATCH)

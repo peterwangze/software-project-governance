@@ -2,6 +2,39 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.66.0] - 2026-07-11
+
+### 0.66.0 - Declarative release ledger、完整版本投影与 Phase 6（MINOR）
+
+0.66.0 是 MINOR 发布：新增每版本不可变 release manifest、Git 实时 lineage、完整 artifact projection generator 和 `verify_workflow.py` Phase 6 真拆分。它把 0.55.3 后审计暴露的 tag、发布文档 provenance 与版本投影漂移问题转化为可执行、fail-closed、可回滚的机器门禁，同时保持 0.65.3 `check-release` CLI 兼容。
+
+### Added
+
+- **Declarative release ledger**：新增 `core/release-ledger.schema.json`、0.62.0~0.65.3 historical manifests、0.66.0 native manifest、append-only event/effective-state 模型，以及 `release-ledger` CLI。Native release 要求 candidate commit、唯一单父 candidate-to-released transition、本地 tag 和选定 remote tag 全链路一致。
+- **完整 artifact projection generator**：`core/version-projections.json` 以 SKILL frontmatter 为唯一 active-version authority，覆盖 byte-copy、structured JSON 和 transformed text 投影；`release-projection --write` 使用预生成、symlink/path/JSON pointer/inventory 校验、原子替换和 rollback journal，失败时恢复原字节。
+- **Phase 6 真拆分**：release、commit、version 和 projection 检查移入 `infra/release/` 与 `infra/checks/`，通过 root/Git runner/clock/timeout/context 注入运行，不 import 或 re-export `verify_workflow.py`。
+- **可选质量工具探测**：`quality-tools` 对 Ruff/mypy 返回 `PASS`、`NOT_RUN` 或 `FAIL`；两者不是运行时依赖，未安装不会被包装为 PASS。
+
+### Changed
+
+- 版本声明由权威 SKILL frontmatter 推进到 0.66.0，并通过 projection registry 同步 canonical manifest、Claude/Codex/Zcode/Chrys metadata、package.json、四个 hooks 和 e2e fixture。
+- 发布工作流新增 declarative ledger、projection check/write 和 optional quality-tool 边界；候选 commit 与 release transition commit 分离，避免 release commit 自引用。
+- 0.62.0~0.65.3 historical manifests 只提供 `HISTORICAL_ONLY` 信任，不把缺失历史 tag 包装为 native lineage PASS。
+
+### Validation
+
+- FEAT-001 Code Review R3：`APPROVED`，`unresolved_blockers=0`。
+- QA R1：PASS；Test Review R1：`APPROVED_WITH_NOTES`，`unresolved_blockers=0`。
+- Full suite：882 tests 中 880 PASS、1 Windows real-symlink SKIP、1 个既有 Check 13 fixture isolation failure。该结果不是全绿。
+- Focused release-ledger/projection/Phase 6 validation：29 total = 28 PASS + 1 Windows real-symlink SKIP；compatibility：70/70 PASS。
+- Ruff 与 mypy：`NOT_RUN`，未安装；不作为运行时依赖或通过证据。
+
+### Boundaries
+
+- 本候选的 committed parent 必须精确为 `8bd283c2f77cf49a3ec17a7f58c823c2ecc46ddd`；最终 commit/tag/push 后仍需运行 remote ledger 与 released-lineage 复验。
+- 不回补任何历史 tag，不关闭 RISK-039 或 RISK-041，不声明 zcode official approval、marketplace approval、curated listing、universal/full runtime support 或 1.0.0 production readiness。
+- 0.66.0 不引入 breaking runtime API；MINOR bump 来自新增可调用 CLI、ledger schema、projection workflow 与 Phase 6 模块能力。
+
 ## [0.65.3] - 2026-07-11
 
 ### 0.65.3 - release lineage/tag gate 与 marketplace source 事实修复 (PATCH)

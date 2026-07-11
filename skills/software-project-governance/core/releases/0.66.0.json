@@ -1,14 +1,29 @@
 {
   "schema_version": 1,
   "version": "0.66.0",
-  "lifecycle_state": "candidate",
+  "lifecycle_state": "released",
   "provenance": "native",
   "artifacts": {
     "changelog": "project/CHANGELOG.md",
-    "release_docs": ["docs/architecture/ADR-010-declarative-release-manifests.md"],
+    "release_docs": [
+      "docs/architecture/ADR-010-declarative-release-manifests.md",
+      "docs/release/release-checklist-0.66.0.md",
+      "docs/release/feature-flags-0.66.0.md",
+      "docs/release/rollback-plan-0.66.0.md"
+    ],
     "review_evidence": [".governance/evidence-log.md"]
   },
   "trust": {"candidate_commit": {"derivation": "git_commit_adding_path"}},
-  "events": [],
-  "effective_state": {"lifecycle_state": "candidate", "withdrawn": false, "amendments": []}
+  "events": [
+    {
+      "id": "release-0.66.0",
+      "type": "candidate_to_released",
+      "recorded_at": "2026-07-11T13:11:35Z",
+      "claims": {
+        "candidate_parent_commit": "8bd283c2f77cf49a3ec17a7f58c823c2ecc46ddd"
+      },
+      "integrity": "sha256:dcbc23c910658262f9194db90081b3c48b13e6cf3e917cbece38d0aa554f4fda"
+    }
+  ],
+  "effective_state": {"lifecycle_state": "released", "withdrawn": false, "amendments": []}
 }

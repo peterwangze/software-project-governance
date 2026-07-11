@@ -185,6 +185,14 @@
         "type": "file"
       },
       {
+        "path": "docs/marketplace/marketplace-source-matrix-0.65.3.md",
+        "type": "file"
+      },
+      {
+        "path": "docs/release/release-lineage-audit-0.65.3.md",
+        "type": "file"
+      },
+      {
         "path": "docs/release/release-checklist-0.46.0.md",
         "type": "file"
       },

@@ -3,6 +3,7 @@
 **Version**: 0.63.4 (patch)
 **Release**: check_version_consistency VERSION_FILES 覆盖盲区修复（FIX-182）
 **Date**: 2026-07-07
+**Documentation provenance**: BACKFILLED on 2026-07-08 by DOC-001 (commit `7792b4e`); not created at release time.
 
 ## Feature Flag Inventory
 

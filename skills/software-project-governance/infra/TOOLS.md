@@ -127,12 +127,12 @@
 ### TOOL-008：发布就绪检查
 
 - **文件**：`infra/verify_workflow.py`
-- **子命令**：`check-release [--version X.Y.Z] [--require-changelog] [--runtime-adapters] [--skip-execution-gates]`
-- **输入**：可选版本号；可选要求 CHANGELOG 已包含该版本；可选本机 agent runtime probe；默认执行发布门禁命令
-- **输出**：发布就绪检查结果（PASSED/FAILED）+ 版本一致性、release fact source、agent adapter、交叉引用、归档完整性、`verify`、`check-governance --fail-on-issues`、`e2e-check`、unittest 分项结果
+- **子命令**：`check-release [--version X.Y.Z] [--require-changelog] [--runtime-adapters] [--skip-execution-gates] [--lineage-mode candidate|released] [--release-commit COMMIT] [--lineage-remote REMOTE]`
+- **输入**：可选版本号；可选要求 CHANGELOG 已包含该版本；可选本机 agent runtime probe；默认执行发布门禁命令。`candidate` 是提交/tag 创建前的兼容模式；`released` 要求显式 release commit，并验证本地 tag、tag 指向和 remote tag 状态。
+- **输出**：发布就绪检查结果（PASSED/FAILED）+ 版本一致性、release fact source、release lineage、agent adapter、交叉引用、归档完整性、`verify`、`check-governance --fail-on-issues`、`e2e-check`、unittest 分项结果
 - **触发条件**：`stage-release` 执行发布 checklist 时；0.35.0 及后续版本发布前
 - **依赖**：`check_version_consistency()`、`check_release_readiness_fact_source()`、`check_agent_adapter_contract()`、`check_cross_references()`、`check_archive_integrity()`、`verify_workflow.py verify`、`check-governance --fail-on-issues`、`e2e-check`、`python -m unittest skills/software-project-governance/infra/tests/test_verify_workflow.py -v`
-- **降级口径**：`--skip-execution-gates` 仅用于诊断静态聚合，不作为正式发布 checklist 通过证据。
+- **降级口径**：`--skip-execution-gates` 仅用于诊断静态聚合，不作为正式发布 checklist 通过证据；`candidate` 通过也不证明 tag 已创建或推送，发布完成后必须以 `--lineage-mode released --release-commit <commit>` 复验。
 - **被以下子工作流使用**：版本发布（release）
 
 ### TOOL-009：主流 agent adapter 检查

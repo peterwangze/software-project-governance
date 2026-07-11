@@ -6583,6 +6583,9 @@ def check_release_readiness(
     changelog_path=None,
     run_execution_gates=False,
     execution_gate_runner=_run_release_validation_command,
+    lineage_mode="candidate",
+    release_commit=None,
+    lineage_remote="origin",
 ):
     """FIX-072: aggregate release gate scripts behind the stage-release check-release command."""
     issues = []
@@ -6686,6 +6689,15 @@ def check_release_readiness(
     }
     issues.extend(f"release docs: {issue}" for issue in release_docs_issues)
 
+    lineage_result = check_release_lineage(
+        version=version,
+        mode=lineage_mode,
+        release_commit=release_commit,
+        remote=lineage_remote,
+    )
+    details["release_lineage"] = lineage_result
+    issues.extend(f"release lineage: {issue}" for issue in lineage_result["issues"])
+
     one_dot_zero_blocker_issues = []
     if version == "1.0.0":
         one_dot_zero_blocker_issues = check_one_dot_zero_release_blockers()
@@ -6738,6 +6750,119 @@ def check_release_readiness(
         "issues": issues,
         "details": details,
     }
+
+
+GIT_LINEAGE_TIMEOUT_SECONDS = 15
+GIT_REMOTE_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,127}\Z")
+
+
+def _run_git_lineage(args, root=None):
+    root = Path(root or HOST_PROJECT_ROOT)
+    env = os.environ.copy()
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=GIT_LINEAGE_TIMEOUT_SECONDS,
+            env=env,
+        )
+    except subprocess.TimeoutExpired:
+        return 124, "", f"git command timed out after {GIT_LINEAGE_TIMEOUT_SECONDS}s"
+    except OSError as exc:
+        return 125, "", f"git command could not be started ({type(exc).__name__})"
+    return result.returncode, result.stdout.strip(), result.stderr.strip()
+
+
+def _validated_git_remote_name(remote):
+    """Return a safe Git remote name; URLs, options, and control/whitespace input are rejected."""
+    if not isinstance(remote, str) or not GIT_REMOTE_NAME_RE.fullmatch(remote):
+        return None
+    if ".." in remote or "//" in remote:
+        return None
+    return remote
+
+
+def check_release_lineage(version, mode="candidate", release_commit=None, remote="origin", root=None):
+    """FIX-192: validate candidate or completed release tag lineage without mutating git state."""
+    issues = []
+    safe_remote = _validated_git_remote_name(remote)
+    if safe_remote is None:
+        issues.append("lineage remote must be a configured Git remote name")
+    result = {
+        "pass": True,
+        "issues": issues,
+        "mode": mode,
+        "version": version,
+        "release_commit": release_commit,
+        "remote": safe_remote,
+        "tag": f"v{version}" if version else None,
+    }
+    if mode not in {"candidate", "released"}:
+        issues.append(f"unsupported lineage mode `{mode}`; expected candidate or released")
+    if mode == "candidate":
+        result["boundary"] = (
+            "candidate mode intentionally does not require a tag before the release commit exists; "
+            "rerun with --lineage-mode released --release-commit <commit> after tag creation and push"
+        )
+        result["pass"] = not issues
+        return result
+    if not version:
+        issues.append("released lineage mode requires --version")
+    if not release_commit:
+        issues.append("released lineage mode requires --release-commit")
+    if issues:
+        result["pass"] = False
+        return result
+
+    root = Path(root or HOST_PROJECT_ROOT)
+    tag = f"v{version}"
+    rc, expected_commit, stderr = _run_git_lineage(["rev-parse", f"{release_commit}^{{commit}}"], root)
+    if rc != 0:
+        issues.append(f"release commit `{release_commit}` cannot be resolved: {stderr or 'git rev-parse failed'}")
+        result["pass"] = False
+        return result
+    result["expected_commit"] = expected_commit
+
+    rc, local_commit, _stderr = _run_git_lineage(["rev-parse", f"refs/tags/{tag}^{{commit}}"], root)
+    if rc != 0:
+        issues.append(f"local tag `{tag}` does not exist")
+    elif local_commit != expected_commit:
+        issues.append(f"local tag `{tag}` points to {local_commit}, expected {expected_commit}")
+    result["local_tag_commit"] = local_commit if rc == 0 else None
+
+    rc, _remote_url, _stderr = _run_git_lineage(["remote", "get-url", safe_remote], root)
+    if rc != 0:
+        issues.append(f"configured Git remote `{safe_remote}` was not found")
+        result["remote_tag_commit"] = None
+        result["pass"] = False
+        return result
+
+    rc, remote_output, _stderr = _run_git_lineage(
+        ["ls-remote", "--tags", safe_remote, f"refs/tags/{tag}", f"refs/tags/{tag}^{{}}"],
+        root,
+    )
+    remote_refs = {}
+    if rc == 0:
+        for line in remote_output.splitlines():
+            parts = line.split()
+            if len(parts) == 2:
+                remote_refs[parts[1]] = parts[0]
+    remote_commit = remote_refs.get(f"refs/tags/{tag}^{{}}") or remote_refs.get(f"refs/tags/{tag}")
+    if rc != 0:
+        issues.append(f"remote tag lookup failed for `{safe_remote}`: git ls-remote returned no verified result")
+    elif not remote_commit:
+        issues.append(f"remote `{safe_remote}` is missing tag `{tag}`")
+    elif remote_commit != expected_commit:
+        issues.append(f"remote tag `{safe_remote}/{tag}` points to {remote_commit}, expected {expected_commit}")
+    result["remote_tag_commit"] = remote_commit
+    result["pass"] = not issues
+    return result
 
 
 def check_architecture_fact_source(
@@ -20252,6 +20377,9 @@ def cmd_check_release(args):
         require_changelog=getattr(args, "require_changelog", False),
         run_runtime_adapters=getattr(args, "runtime_adapters", False),
         run_execution_gates=not skip_execution_gates,
+        lineage_mode=getattr(args, "lineage_mode", "candidate"),
+        release_commit=getattr(args, "release_commit", None),
+        lineage_remote=getattr(args, "lineage_remote", "origin"),
     )
     print()
     print("=== Release Readiness Check ===")
@@ -20259,6 +20387,7 @@ def cmd_check_release(args):
         print(f"  Version: {args.version}")
     print(f"  Runtime adapters: {'enabled' if getattr(args, 'runtime_adapters', False) else 'static'}")
     print(f"  Execution gates: {'skipped' if skip_execution_gates else 'enabled'}")
+    print(f"  Lineage mode: {getattr(args, 'lineage_mode', 'candidate')}")
     for label, detail in result["details"].items():
         status = "PASS" if detail["pass"] else "FAIL"
         print(f"  [{status}] {label.replace('_', ' ')}")
@@ -21770,6 +21899,12 @@ def main(argv=None):
                       help="Also execute local runtime version commands for supported adapters")
     cr_p.add_argument("--skip-execution-gates", action="store_true",
                       help="Diagnostic only: skip verify/check-governance/e2e/unit-test execution gates")
+    cr_p.add_argument("--lineage-mode", choices=("candidate", "released"), default="candidate",
+                      help="candidate skips pre-tag validation; released requires local and remote tag lineage")
+    cr_p.add_argument("--release-commit",
+                      help="Expected release commit (required when --lineage-mode released)")
+    cr_p.add_argument("--lineage-remote", default="origin",
+                      help="Git remote whose release tag must match (default: origin)")
 
     # e2e-check
     subparsers.add_parser("e2e-check", help="Run E2E governance verification against e2e-test-project")

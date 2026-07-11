@@ -3,6 +3,7 @@
 **Version**: 0.63.0 (minor)
 **Release**: Coordinator 检视循环协议修复 + verify Check 29/30（FIX-173/174）+ archive 引擎修复（FIX-168/170/171/172）
 **Date**: 2026-07-04
+**Documentation provenance**: BACKFILLED on 2026-07-08 by DOC-001 (commit `7792b4e`); not created at release time.
 
 ## 1. Release Scope
 

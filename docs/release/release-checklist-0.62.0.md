@@ -3,6 +3,7 @@
 **Version**: 0.62.0 (minor)
 **Release**: zcode 插件市场适配（废弃逆向 local-load 机制）
 **Date**: 2026-07-01
+**Documentation provenance**: BACKFILLED on 2026-07-08 by DOC-001 (commit `7792b4e`); not created at release time.
 
 ## 1. Release Scope
 

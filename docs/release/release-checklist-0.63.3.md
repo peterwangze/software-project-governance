@@ -3,6 +3,7 @@
 **Version**: 0.63.3 (patch)
 **Release**: e2e fixture SKILL.md adapter 表结构对齐（FIX-180）
 **Date**: 2026-07-06
+**Documentation provenance**: BACKFILLED on 2026-07-08 by DOC-001 (commit `7792b4e`); not created at release time.
 
 ## 1. Release Scope
 

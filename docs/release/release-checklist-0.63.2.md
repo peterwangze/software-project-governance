@@ -3,6 +3,7 @@
 **Version**: 0.63.2 (patch)
 **Release**: Check 29 auto-discovery 排除 session-snapshot 误报修复（FIX-178）
 **Date**: 2026-07-05
+**Documentation provenance**: BACKFILLED on 2026-07-08 by DOC-001 (commit `7792b4e`); not created at release time.
 
 ## 1. Release Scope
 

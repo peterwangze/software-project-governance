@@ -3,6 +3,7 @@
 **Version**: 0.63.1 (patch)
 **Release**: archive 引擎 build_index 非结构化归档登记修复（FIX-176）
 **Date**: 2026-07-05
+**Documentation provenance**: BACKFILLED on 2026-07-08 by DOC-001 (commit `7792b4e`); not created at release time.
 
 ## Feature Flag Inventory
 

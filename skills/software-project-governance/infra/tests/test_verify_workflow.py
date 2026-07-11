@@ -5295,6 +5295,155 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
         mocks = [stack.enter_context(patch_item) for patch_item in patches]
         return stack, mocks
 
+    def _init_lineage_repo(self, root):
+        root = Path(root)
+        remote = root / "remote.git"
+        work = root / "work"
+        subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+        subprocess.run(["git", "init", str(work)], check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "fix192@example.invalid"], cwd=work, check=True)
+        subprocess.run(["git", "config", "user.name", "FIX-192"], cwd=work, check=True)
+        (work / "release.txt").write_text("first\n", encoding="utf-8")
+        subprocess.run(["git", "add", "release.txt"], cwd=work, check=True)
+        subprocess.run(["git", "commit", "-m", "first"], cwd=work, check=True, capture_output=True)
+        first = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=work, check=True, capture_output=True, text=True
+        ).stdout.strip()
+        (work / "release.txt").write_text("second\n", encoding="utf-8")
+        subprocess.run(["git", "commit", "-am", "second"], cwd=work, check=True, capture_output=True)
+        second = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=work, check=True, capture_output=True, text=True
+        ).stdout.strip()
+        subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=work, check=True)
+        return work, first, second
+
+    def test_release_lineage_candidate_mode_does_not_require_precreated_tag(self):
+        result = vw.check_release_lineage("0.65.3", mode="candidate")
+        self.assertTrue(result["pass"])
+        self.assertIn("does not require a tag", result["boundary"])
+
+    def test_release_lineage_released_mode_requires_local_tag(self):
+        with tempfile.TemporaryDirectory() as td:
+            work, _first, second = self._init_lineage_repo(td)
+            result = vw.check_release_lineage("0.65.3", mode="released", release_commit=second, root=work)
+        self.assertFalse(result["pass"])
+        self.assertTrue(any("local tag `v0.65.3` does not exist" in issue for issue in result["issues"]))
+
+    def test_release_lineage_released_mode_rejects_wrong_local_tag_commit(self):
+        with tempfile.TemporaryDirectory() as td:
+            work, first, second = self._init_lineage_repo(td)
+            subprocess.run(["git", "tag", "v0.65.3", first], cwd=work, check=True)
+            result = vw.check_release_lineage("0.65.3", mode="released", release_commit=second, root=work)
+        self.assertFalse(result["pass"])
+        self.assertTrue(any("local tag `v0.65.3` points to" in issue for issue in result["issues"]))
+
+    def test_release_lineage_released_mode_requires_remote_tag(self):
+        with tempfile.TemporaryDirectory() as td:
+            work, _first, second = self._init_lineage_repo(td)
+            subprocess.run(["git", "tag", "v0.65.3", second], cwd=work, check=True)
+            result = vw.check_release_lineage("0.65.3", mode="released", release_commit=second, root=work)
+        self.assertFalse(result["pass"])
+        self.assertTrue(any("remote `origin` is missing tag `v0.65.3`" in issue for issue in result["issues"]))
+
+    def test_release_lineage_released_mode_rejects_remote_tag_mismatch(self):
+        with tempfile.TemporaryDirectory() as td:
+            work, first, second = self._init_lineage_repo(td)
+            subprocess.run(
+                ["git", "push", "origin", f"{first}:refs/tags/v0.65.3"],
+                cwd=work,
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(["git", "tag", "v0.65.3", second], cwd=work, check=True)
+            result = vw.check_release_lineage("0.65.3", mode="released", release_commit=second, root=work)
+        self.assertFalse(result["pass"])
+        self.assertTrue(any("remote tag `origin/v0.65.3` points to" in issue for issue in result["issues"]))
+
+    def test_release_lineage_released_mode_accepts_matching_local_and_remote_tag(self):
+        with tempfile.TemporaryDirectory() as td:
+            work, _first, second = self._init_lineage_repo(td)
+            subprocess.run(["git", "tag", "v0.65.3", second], cwd=work, check=True)
+            subprocess.run(["git", "push", "origin", "v0.65.3"], cwd=work, check=True, capture_output=True)
+            result = vw.check_release_lineage("0.65.3", mode="released", release_commit=second, root=work)
+        self.assertTrue(result["pass"])
+
+    def test_release_lineage_defaults_to_host_project_root_not_plugin_root(self):
+        with tempfile.TemporaryDirectory() as td:
+            work, _first, second = self._init_lineage_repo(td)
+            subprocess.run(["git", "tag", "v0.65.3", second], cwd=work, check=True)
+            subprocess.run(["git", "push", "origin", "v0.65.3"], cwd=work, check=True, capture_output=True)
+            plugin_root = Path(td) / "installed-plugin-cache"
+            plugin_root.mkdir()
+            with patch.object(vw, "ROOT", plugin_root), patch.object(vw, "HOST_PROJECT_ROOT", work):
+                result = vw.check_release_lineage("0.65.3", mode="released", release_commit=second)
+        self.assertTrue(result["pass"])
+
+    def test_git_lineage_runner_disables_prompts_and_times_out_fail_closed(self):
+        with patch.object(vw.subprocess, "run", side_effect=subprocess.TimeoutExpired(["git", "ls-remote"], 15)) as run:
+            rc, stdout, stderr = vw._run_git_lineage(["ls-remote", "--tags", "origin"])
+        self.assertEqual(rc, 124)
+        self.assertEqual(stdout, "")
+        self.assertEqual(stderr, "git command timed out after 15s")
+        self.assertEqual(run.call_args.kwargs["timeout"], 15)
+        self.assertEqual(run.call_args.kwargs["env"]["GIT_TERMINAL_PROMPT"], "0")
+
+    def test_git_lineage_runner_sanitizes_startup_exception(self):
+        secret = "https://user:secret@example.invalid/repo.git"
+        with patch.object(vw.subprocess, "run", side_effect=OSError(secret)):
+            rc, stdout, stderr = vw._run_git_lineage(["ls-remote", "--tags", "origin"])
+        self.assertEqual((rc, stdout), (125, ""))
+        self.assertNotIn("secret", stderr)
+        self.assertEqual(stderr, "git command could not be started (OSError)")
+
+    def test_release_lineage_remote_timeout_is_failure_without_credential_output(self):
+        commit = "a" * 40
+        with patch.object(
+            vw,
+            "_run_git_lineage",
+            side_effect=[
+                (0, commit, ""),
+                (0, commit, ""),
+                (0, "https://example.invalid/repo.git", ""),
+                (124, "", "https://user:secret@example.invalid/repo.git timed out"),
+            ],
+        ):
+            result = vw.check_release_lineage("0.65.3", mode="released", release_commit=commit)
+        self.assertFalse(result["pass"])
+        self.assertTrue(any("remote tag lookup failed" in issue for issue in result["issues"]))
+        self.assertNotIn("secret", " ".join(result["issues"]))
+
+    def test_release_lineage_rejects_credential_url_without_leaking_or_running_git(self):
+        secret = "R1-SECRET"
+        remote = f"https://user:{secret}@example.invalid/repo.git"
+        with patch.object(vw, "_run_git_lineage") as run:
+            result = vw.check_release_lineage("0.65.3", mode="released", release_commit="HEAD", remote=remote)
+        self.assertFalse(result["pass"])
+        self.assertIsNone(result["remote"])
+        self.assertNotIn(secret, repr(result))
+        self.assertEqual(result["issues"], ["lineage remote must be a configured Git remote name"])
+        run.assert_not_called()
+
+    def test_release_lineage_rejects_option_like_remote_without_running_git(self):
+        with patch.object(vw, "_run_git_lineage") as run:
+            result = vw.check_release_lineage(
+                "0.65.3", mode="released", release_commit="HEAD", remote="--upload-pack=malicious"
+            )
+        self.assertFalse(result["pass"])
+        self.assertIsNone(result["remote"])
+        self.assertEqual(result["issues"], ["lineage remote must be a configured Git remote name"])
+        run.assert_not_called()
+
+    def test_release_lineage_rejects_unknown_configured_remote_name(self):
+        with tempfile.TemporaryDirectory() as td:
+            work, _first, second = self._init_lineage_repo(td)
+            subprocess.run(["git", "tag", "v0.65.3", second], cwd=work, check=True)
+            result = vw.check_release_lineage(
+                "0.65.3", mode="released", release_commit=second, remote="unknown-safe-name", root=work
+            )
+        self.assertFalse(result["pass"])
+        self.assertEqual(result["remote"], "unknown-safe-name")
+        self.assertTrue(any("configured Git remote `unknown-safe-name` was not found" in issue for issue in result["issues"]))
+
     def _write_one_dot_zero_fact_sources(
         self,
         root,

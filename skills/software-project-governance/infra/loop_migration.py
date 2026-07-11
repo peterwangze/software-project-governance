@@ -25,10 +25,9 @@ risk on ``plan-tracker.md`` and ``evidence-log.md``. The safety contract is:
   that accidentally read/wrote PLUGIN_HOME/.governance/ would corrupt the
   plugin's own evidence store.
 
-  resolve_entry and flow_unit_derive are imported at module top-level because
-  they are PEERS (pure stdlib, no verify_workflow dependency). verify_workflow
-  is imported DEFERRED (function-local) ONLY for the preview path — this
-  avoids any import cycle.
+  resolve_entry, flow_unit_derive, and the canonical runtime validator are
+  PEERS with no verify_workflow dependency. This module never imports the CLI
+  adapter; preview remains a local read-only compatibility envelope.
 
 **Anchors (same as resolve_entry.py / loop_engine.py / flow_unit_derive.py):**
   PLUGIN_HOME = Path(__file__).resolve().parent.parent
@@ -40,8 +39,10 @@ Usage:
 
 import hashlib
 import json
+import os
 import re
 import shutil
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -58,6 +59,7 @@ from resolve_entry import resolve_host_root, read_active_version  # noqa: E402
 
 # flow_unit_derive is also a peer (pure stdlib). Used for step 5 of apply.
 from flow_unit_derive import derive_flow_units  # noqa: E402
+from checks.flow_unit_runtime import validate_flow_unit_runtime_payload  # noqa: E402
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -424,6 +426,131 @@ def _append_evidence_row(host_root, row_text):
         evidence_path.write_text(line, encoding="utf-8")
 
 
+def _atomic_replace_bytes(path, content):
+    """Replace one file atomically with prebuilt bytes."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_name, path)
+    except Exception:
+        try:
+            os.unlink(temp_name)
+        except OSError:
+            pass
+        raise
+
+
+def _commit_runtime_and_evidence(runtime_path, runtime_bytes, evidence_path,
+                                 evidence_bytes, backup_dir):
+    """Commit runtime then evidence, compensating byte-exactly on failure."""
+    runtime_existed = runtime_path.is_file()
+    runtime_before = runtime_path.read_bytes() if runtime_existed else None
+    evidence_before = evidence_path.read_bytes()
+    try:
+        (backup_dir / "runtime.before").write_bytes(runtime_before or b"")
+        (backup_dir / "evidence.before").write_bytes(evidence_before)
+    except OSError as exc:
+        return {
+            "state": "FAIL",
+            "issues": ["transaction snapshot failed: {0}".format(type(exc).__name__)],
+        }
+    try:
+        _atomic_replace_bytes(runtime_path, runtime_bytes)
+        _atomic_replace_bytes(evidence_path, evidence_bytes)
+        runtime_readback = runtime_path.read_bytes()
+        evidence_readback = evidence_path.read_bytes()
+        post_issues = []
+        if runtime_readback != runtime_bytes:
+            post_issues.append("runtime post-write readback differs from committed bytes")
+        if evidence_readback != evidence_bytes:
+            post_issues.append("evidence post-write readback differs from committed bytes")
+        try:
+            runtime_state = json.loads(runtime_readback.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as readback_exc:
+            runtime_state = None
+            post_issues.append(
+                "runtime post-write readback is invalid JSON: {0}".format(
+                    type(readback_exc).__name__
+                )
+            )
+        if runtime_state is not None:
+            post_issues.extend(validate_flow_unit_runtime_payload(runtime_state, str(runtime_path)))
+        try:
+            evidence_text = evidence_readback.decode("utf-8")
+        except UnicodeDecodeError as readback_exc:
+            post_issues.append(
+                "evidence post-write readback is invalid UTF-8: {0}".format(
+                    type(readback_exc).__name__
+                )
+            )
+        else:
+            if _count_evidence_rows(evidence_text) == 0:
+                post_issues.append("evidence post-write validation found no parseable rows")
+        if post_issues:
+            raise RuntimeError("post-write validation failed: " + "; ".join(post_issues))
+        return {"state": "PASS"}
+    except Exception as exc:
+        recovery_issues = []
+        try:
+            if runtime_existed:
+                _atomic_replace_bytes(runtime_path, runtime_before)
+            elif runtime_path.exists():
+                runtime_path.unlink()
+        except Exception as recovery_exc:
+            recovery_issues.append(
+                "runtime recovery failed: {0}".format(type(recovery_exc).__name__)
+            )
+        try:
+            _atomic_replace_bytes(evidence_path, evidence_before)
+        except Exception as recovery_exc:
+            recovery_issues.append(
+                "evidence recovery failed: {0}".format(type(recovery_exc).__name__)
+            )
+        if recovery_issues:
+            journal = backup_dir / "recovery-journal.json"
+            journal_payload = {
+                "state": "BLOCKED",
+                "runtime_path": str(runtime_path),
+                "runtime_existed": runtime_existed,
+                "evidence_path": str(evidence_path),
+                "commit_error": type(exc).__name__,
+                "recovery_issues": recovery_issues,
+                "runtime_backup": "runtime.before",
+                "evidence_backup": "evidence.before",
+            }
+            result = {
+                "state": "BLOCKED",
+                "issues": recovery_issues,
+                "backup_dir": str(backup_dir),
+                "available_backups": ["runtime.before", "evidence.before"],
+            }
+            try:
+                journal.write_text(
+                    json.dumps(journal_payload, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+            except OSError as journal_exc:
+                result["journal"] = None
+                result["journal_persisted"] = False
+                result["issues"] = recovery_issues + [
+                    "recovery journal write failed: {0}".format(type(journal_exc).__name__)
+                ]
+            else:
+                result["journal"] = str(journal)
+                result["journal_persisted"] = True
+            return result
+        return {
+            "state": "FAIL",
+            "issues": [
+                "commit failed: {0}: {1}".format(type(exc).__name__, str(exc))
+            ],
+        }
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # APPLY (ADR §7.2 — 9 steps)
 # ═══════════════════════════════════════════════════════════════════════════
@@ -572,27 +699,7 @@ def apply_migration(target_root=None, project_type=None, plugin_home=None):
                 )
             ))
 
-    # ── Step 4: backup BOTH files BEFORE any write ──────────────────────
-    # If the backup fails (disk full, permissions), we abort WITHOUT having
-    # touched the live files. This is the core data-loss guard.
-    try:
-        backup_dir, backup_hashes = _backup_governance_files(
-            host_root, MIGRATION_VERSION
-        )
-    except OSError as exc:
-        return dict(base_result, aborted_reason=(
-            "backup failed ({0}); aborting BEFORE any write to live files. "
-            "No data loss possible — live files untouched.".format(exc)
-        ))
-
-    # The backup_hashes are the authoritative BEFORE hashes (computed from
-    # the on-disk backup copy). Keep them as the "before" record.
-    hashes = {
-        "plan_tracker_before": backup_hashes["plan_tracker_sha256"],
-        "evidence_log_before": backup_hashes["evidence_log_sha256"],
-    }
-
-    # ── Step 5: derive flow units from target state (VAL-006) ───────────
+    # ── Step 4: derive and validate the complete payload in memory ──────
     chosen_project_type = project_type or "ai-agent-plugin"
     try:
         flow_units = derive_flow_units(
@@ -601,10 +708,9 @@ def apply_migration(target_root=None, project_type=None, plugin_home=None):
         )
     except Exception as exc:  # defensive: derive_flow_units must not raise
         return dict(base_result, aborted_reason=(
-            "flow-unit derivation raised ({0}); aborting after backup. "
-            "Live files NOT yet modified — runtime.json not written. "
-            "Backup at {1} is restorable via --rollback.".format(exc, backup_dir)
-        ), backup_dir=str(backup_dir), hashes=hashes)
+            "flow-unit derivation raised ({0}); aborting before any host write. "
+            "No backup, runtime, or evidence file was created.".format(exc)
+        ))
 
     # ── Fail-closed: derived flow units = 0 ─────────────────────────────
     # (FX-190's fallback prevents this in practice, but we guard anyway so a
@@ -612,16 +718,9 @@ def apply_migration(target_root=None, project_type=None, plugin_home=None):
     if not flow_units:
         return dict(base_result, aborted_reason=(
             "derived flow units = 0; refusing to write an empty runtime. "
-            "Live files NOT modified. Backup at {0} is restorable via "
-            "--rollback.".format(backup_dir)
-        ), backup_dir=str(backup_dir), hashes=hashes)
+            "No host write performed."
+        ))
 
-    # =====================================================================
-    # FROM HERE ON: WRITE PHASE. Backup is complete and verified on disk;
-    # any failure in steps 6-8 leaves a restorable backup at backup_dir.
-    # =====================================================================
-
-    # ── Step 6 + 7: set workflow_model: loop-engineering + write runtime.json
     runtime_payload = {
         "workflow_model": WORKFLOW_MODEL_NEW,
         "migration_version": MIGRATION_VERSION,
@@ -633,26 +732,37 @@ def apply_migration(target_root=None, project_type=None, plugin_home=None):
         ),
     }
     runtime_path = _runtime_path(host_root)
-    # Atomic-ish write: write the whole payload at once. If a prior corrupt
-    # runtime.json exists (kill-mid-write recovery), this overwrites it
-    # cleanly with valid JSON.
+    validation_issues = validate_flow_unit_runtime_payload(
+        runtime_payload, str(runtime_path)
+    )
+    if validation_issues:
+        return dict(
+            base_result,
+            aborted_reason=(
+                "planned loop-engineering runtime is incompatible with the "
+                "current canonical visibility-v1 contract; no host write performed"
+            ),
+            validation_issues=validation_issues,
+            workflow_model={"prior": prior_model, "new": WORKFLOW_MODEL_NEW},
+            flow_units_derived=len(flow_units),
+        )
+
+    # ── Step 5: backup live governance facts after validation ───────────
     try:
-        runtime_path.parent.mkdir(parents=True, exist_ok=True)
-        runtime_path.write_text(
-            json.dumps(runtime_payload, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
+        backup_dir, backup_hashes = _backup_governance_files(
+            host_root, MIGRATION_VERSION
         )
     except OSError as exc:
         return dict(base_result, aborted_reason=(
-            "runtime.json write failed ({0}); backup at {1} is restorable "
-            "via --rollback. Live plan-tracker/evidence-log NOT yet modified.".format(
-                exc, backup_dir
-            )
-        ), backup_dir=str(backup_dir), hashes=hashes,
-           workflow_model={"prior": prior_model, "new": WORKFLOW_MODEL_NEW})
+            "backup failed ({0}); aborting before live commit. "
+            "Live files untouched.".format(exc)
+        ))
+    hashes = {
+        "plan_tracker_before": backup_hashes["plan_tracker_sha256"],
+        "evidence_log_before": backup_hashes["evidence_log_sha256"],
+    }
 
-    # ── Step 8: write migration record to evidence-log ──────────────────
-    # Format: | MIGRATION-{version} | FX-191 | migrated {prior} -> loop-engineering | backup={backup_dir} |
+    # ── Steps 6-8: compensating runtime + evidence transaction ──────────
     migration_row = (
         "| MIGRATION-{ver} | FX-191 | migrated {prior} -> {new_model} | "
         "backup={backup} |".format(
@@ -662,15 +772,28 @@ def apply_migration(target_root=None, project_type=None, plugin_home=None):
             backup=backup_dir.name,
         )
     )
-    try:
-        _append_evidence_row(host_root, migration_row)
-    except OSError as exc:
-        return dict(base_result, aborted_reason=(
-            "evidence-row append failed ({0}); runtime.json was written at "
-            "{1} but evidence log could not be updated. Backup at {2} is "
-            "restorable via --rollback.".format(exc, runtime_path, backup_dir)
-        ), backup_dir=str(backup_dir), hashes=hashes,
-           workflow_model={"prior": prior_model, "new": WORKFLOW_MODEL_NEW})
+    evidence_after_text = evidence_text
+    if evidence_after_text and not evidence_after_text.endswith("\n"):
+        evidence_after_text += "\n"
+    evidence_after_text += migration_row.rstrip("\n") + "\n"
+    transaction = _commit_runtime_and_evidence(
+        runtime_path,
+        (json.dumps(runtime_payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8"),
+        evidence_path,
+        evidence_after_text.encode("utf-8"),
+        backup_dir,
+    )
+    if transaction["state"] != "PASS":
+        return dict(
+            base_result,
+            state=transaction["state"],
+            aborted_reason="migration commit failed; compensation attempted",
+            recovery_issues=transaction.get("issues", []),
+            recovery_journal=transaction.get("journal"),
+            backup_dir=str(backup_dir),
+            hashes=hashes,
+            workflow_model={"prior": prior_model, "new": WORKFLOW_MODEL_NEW},
+        )
 
     # Record the AFTER hashes (post-write) for the audit trail.
     hashes["plan_tracker_after"] = _file_sha256(plan_path)
@@ -893,36 +1016,27 @@ def rollback_migration(target_root=None, version=None, plugin_home=None):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# PREVIEW (delegates to verify_workflow's existing dry-run builder)
+# PREVIEW (read-only compatibility envelope)
 # ═══════════════════════════════════════════════════════════════════════════
 
 
 def preview_migration(target_root=None, plugin_home=None):
-    """Dry-run preview — delegates to the existing dynamic-lifecycle preview.
-
-    This preserves the existing ``--dry-run`` behavior byte-for-byte: it calls
-    ``verify_workflow.build_dynamic_lifecycle_migration_preview`` (deferred
-    import to avoid a cycle) and returns that preview dict unchanged.
-
-    The preview is READ-ONLY: it never writes. ``validation_issues`` from
-    ``check_dynamic_lifecycle_migration_preview`` are attached so the caller
-    can gate on them (``--fail-on-issues``).
+    """Return the same read-only preview authority exposed by the CLI adapter.
 
     Args:
-        target_root: Host project root (str/Path). If None, the preview
-            builder uses its own default (verify_workflow.ROOT).
+        target_root: Host project root (str/Path), or None.
         plugin_home: Reserved for symmetry; currently unused.
 
     Returns:
-        The preview dict from build_dynamic_lifecycle_migration_preview,
-        with ``validation_issues`` attached.
+        A compatibility-shaped preview. Apply performs the authoritative
+        canonical payload validation before any host write.
     """
-    # Deferred import: verify_workflow is heavy and we must not create a
-    # top-level import cycle. preview is the only path that needs it.
-    import verify_workflow as vw  # noqa: WPS433 deferred import
-
-    preview = vw.build_dynamic_lifecycle_migration_preview(target_root)
-    issues = vw.check_dynamic_lifecycle_migration_preview(target_root)
+    from verify_workflow import (  # deferred to keep module import acyclic
+        build_dynamic_lifecycle_migration_preview,
+        check_dynamic_lifecycle_migration_preview,
+    )
+    preview = build_dynamic_lifecycle_migration_preview(target_root)
+    issues = check_dynamic_lifecycle_migration_preview(target_root)
     preview["validation_issues"] = issues
     if issues:
         preview["status"] = "BLOCKED"
@@ -981,3 +1095,7 @@ if __name__ == "__main__":  # pragma: no cover - manual CLI smoke
     else:
         result = preview_migration(target_root=args.target)
     print(json.dumps(result, ensure_ascii=False, indent=2))
+    if ((args.apply and not result.get("applied"))
+            or (args.rollback and not result.get("rolled_back"))
+            or (not args.apply and not args.rollback and result.get("validation_issues"))):
+        raise SystemExit(1)

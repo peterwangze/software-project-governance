@@ -151,6 +151,10 @@
         "type": "file"
       },
       {
+        "path": "skills/software-project-governance/infra/checks/flow_unit_runtime.py",
+        "type": "file"
+      },
+      {
         "path": "skills/software-project-governance/infra/verify-e2e.sh",
         "type": "file"
       },

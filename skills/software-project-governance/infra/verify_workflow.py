@@ -19,6 +19,14 @@ import webbrowser
 from datetime import datetime, date
 
 from checks import commit as commit_checks
+from checks.flow_unit_runtime import (
+    ALLOWED_GATE_STATUSES as FLOW_UNIT_RUNTIME_ALLOWED_GATE_STATUSES,
+    ALLOWED_SOURCES as FLOW_UNIT_RUNTIME_ALLOWED_SOURCES,
+    BOUNDARY_TOKENS as FLOW_UNIT_RUNTIME_BOUNDARY_TOKENS,
+    FORBIDDEN_OVERCLAIMS as FLOW_UNIT_RUNTIME_FORBIDDEN_OVERCLAIMS,
+    RUNTIME_SCOPE as FLOW_UNIT_RUNTIME_SCOPE,
+    validate_flow_unit_runtime_payload,
+)
 from checks import projection as projection_checks
 from checks import version as version_checks
 from release.context import RepositoryContext
@@ -2071,40 +2079,6 @@ LIFECYCLE_REGISTRY_PATH = ROOT / "skills/software-project-governance/core/lifecy
 LIFECYCLE_REGISTRY_ACTIVE_MODE = "classic-phase-gate"
 LIFECYCLE_REGISTRY_DYNAMIC_MODE = "dynamic-flow-gate"
 FLOW_UNIT_RUNTIME_STATE_REL = Path(".governance/flow-unit-runtime.json")
-FLOW_UNIT_RUNTIME_SCOPE = "runtime-visibility-only"
-FLOW_UNIT_RUNTIME_ALLOWED_SOURCES = {
-    "hot-project-state",
-    "runtime-visibility-only",
-    "example-runtime-fixture",
-}
-FLOW_UNIT_RUNTIME_ALLOWED_GATE_STATUSES = {
-    "backlog",
-    "pending",
-    "not-started",
-    "in-progress",
-    "testing",
-    "passed",
-    "released",
-    "blocked",
-}
-FLOW_UNIT_RUNTIME_BOUNDARY_TOKENS = [
-    "runtime visibility only",
-    "does not activate declarative gate engine",
-    "does not migrate projects",
-    "classic G1-G11 remains compatible",
-    "does not close RISK-036",
-    "does not close RISK-037",
-    "does not claim 1.0.0 production-ready",
-]
-FLOW_UNIT_RUNTIME_FORBIDDEN_OVERCLAIMS = [
-    ("risk-036 closed", re.compile(r"\brisk-036\b[^\n.;|]{0,48}\bclosed\b")),
-    ("risk-036 closed", re.compile(r"\bclosed\b[^\n.;|]{0,48}\brisk-036\b")),
-    ("risk-036 closure achieved", re.compile(r"\brisk-036\b[^\n.;|]{0,48}\bclosure\s+achieved\b")),
-    ("risk-037 closed", re.compile(r"\brisk-037\b[^\n.;|]{0,48}\bclosed\b")),
-    ("risk-037 closed", re.compile(r"\bclosed\b[^\n.;|]{0,48}\brisk-037\b")),
-    ("risk-037 closure achieved", re.compile(r"\brisk-037\b[^\n.;|]{0,48}\bclosure\s+achieved\b")),
-    ("1.0.0 production-ready", re.compile(r"\b1\.0\.0\s+production-ready\b")),
-]
 DYNAMIC_LIFECYCLE_MIGRATION_GUIDE_REL = Path("docs/migration/dynamic-flow-gate-migration-0.55.0.md")
 DYNAMIC_LIFECYCLE_MIGRATION_BOUNDARY_TOKENS = [
     "classic-phase-gate remains active/default",
@@ -3717,128 +3691,7 @@ def check_flow_unit_runtime(root=None):
     state, load_issues = _load_flow_unit_runtime(root)
     if state is None:
         return [] if load_issues and "NOT_FOUND safe" in load_issues[0] else load_issues
-
-    failures = []
-    if state.get("schema_version") not in {"1.0", 1}:
-        failures.append(f"{display}: schema_version must be 1.0")
-    if state.get("runtime_scope") != FLOW_UNIT_RUNTIME_SCOPE:
-        failures.append(f"{display}: runtime_scope must be {FLOW_UNIT_RUNTIME_SCOPE}")
-    if state.get("workflow_model") not in {LIFECYCLE_REGISTRY_ACTIVE_MODE, LIFECYCLE_REGISTRY_DYNAMIC_MODE}:
-        failures.append(f"{display}: workflow_model must be classic-phase-gate or dynamic-flow-gate")
-    if state.get("default_lifecycle_mode") != LIFECYCLE_REGISTRY_ACTIVE_MODE:
-        failures.append(f"{display}: default_lifecycle_mode must preserve {LIFECYCLE_REGISTRY_ACTIVE_MODE}")
-    if state.get("declarative_gate_engine") is not False:
-        failures.append(f"{display}: declarative_gate_engine must be false for runtime visibility only")
-    if state.get("project_migration") is not False:
-        failures.append(f"{display}: project_migration must be false for runtime visibility only")
-    if state.get("runtime_status_source") not in FLOW_UNIT_RUNTIME_ALLOWED_SOURCES:
-        failures.append(f"{display}: runtime_status_source must be a declared hot-state/runtime-visibility source")
-
-    boundary = state.get("no_overclaim_boundary")
-    if not _is_valid_string_list(boundary):
-        failures.append(f"{display}: no_overclaim_boundary must be a non-empty string list")
-        boundary = []
-    boundary_text = " ".join(boundary).lower()
-    for token in FLOW_UNIT_RUNTIME_BOUNDARY_TOKENS:
-        if token.lower() not in boundary_text:
-            failures.append(f"{display}: missing flow-unit runtime boundary token `{token}`")
-
-    flow_units = state.get("flow_units")
-    if not isinstance(flow_units, list) or not flow_units:
-        failures.append(f"{display}: flow_units must be a non-empty list")
-        flow_units = []
-    seen = []
-    unit_by_id = {}
-    directly_blocked = set()
-    for unit in flow_units:
-        if not isinstance(unit, dict):
-            failures.append(f"{display}: each flow unit must be an object")
-            continue
-        unit_id = unit.get("flow_unit_id")
-        label = f"{display}: flow unit {unit_id or '<missing>'}"
-        if not isinstance(unit_id, str) or not unit_id.strip():
-            failures.append(f"{label}: flow_unit_id must be a non-empty string")
-            continue
-        seen.append(unit_id)
-        unit_by_id[unit_id] = unit
-        for field in LIFECYCLE_REGISTRY_REQUIRED_FLOW_FIELDS:
-            if field not in unit:
-                failures.append(f"{label}: missing required field `{field}`")
-        if unit.get("lifecycle_mode") not in {LIFECYCLE_REGISTRY_ACTIVE_MODE, LIFECYCLE_REGISTRY_DYNAMIC_MODE}:
-            failures.append(f"{label}: lifecycle_mode must be classic-phase-gate or dynamic-flow-gate")
-        if unit.get("current_stage") not in LIFECYCLE_REGISTRY_STAGE_IDS:
-            failures.append(f"{label}: current_stage must reference classic stage vocabulary")
-        if not isinstance(unit.get("gate_lane"), str) or not unit.get("gate_lane"):
-            failures.append(f"{label}: gate_lane must be a non-empty string")
-        gate_refs = unit.get("gate_references")
-        if not _is_valid_string_list(gate_refs):
-            failures.append(f"{label}: gate_references must be a non-empty string list")
-        else:
-            for gate_id in gate_refs:
-                if gate_id not in LIFECYCLE_REGISTRY_GATES:
-                    failures.append(f"{label}: unknown gate reference `{gate_id}`")
-        for field in ("dependencies", "blockers", "evidence_refs"):
-            if not isinstance(unit.get(field), list):
-                failures.append(f"{label}: {field} must be a list")
-        loop_state = unit.get("loop_state")
-        if not isinstance(loop_state, dict):
-            failures.append(f"{label}: loop_state must be an object")
-        else:
-            loop_count = loop_state.get("loop_count")
-            if (
-                isinstance(loop_count, bool)
-                or not isinstance(loop_count, int)
-                or loop_count < 0
-            ):
-                failures.append(f"{label}: loop_state.loop_count must be a non-negative integer")
-        gate_state = unit.get("gate_state")
-        if not isinstance(gate_state, dict):
-            failures.append(f"{label}: gate_state must be an object")
-        elif gate_state.get("status") not in FLOW_UNIT_RUNTIME_ALLOWED_GATE_STATUSES:
-            failures.append(f"{label}: gate_state.status is not allowed")
-        if unit.get("blockers") or (isinstance(gate_state, dict) and gate_state.get("status") == "blocked"):
-            directly_blocked.add(unit_id)
-
-    duplicates = sorted({unit_id for unit_id in seen if seen.count(unit_id) > 1})
-    for unit_id in duplicates:
-        failures.append(f"{display}: duplicate flow_unit_id `{unit_id}`")
-    for unit_id, unit in unit_by_id.items():
-        for dep in unit.get("dependencies", []) if isinstance(unit.get("dependencies"), list) else []:
-            if dep not in unit_by_id:
-                failures.append(f"{display}: flow unit {unit_id} has unknown dependency `{dep}`")
-
-    context = discover_flow_unit_runtime_context(root)
-    declared_lanes = state.get("active_lanes")
-    if declared_lanes is not None and declared_lanes != context["active_lanes"]:
-        failures.append(f"{display}: active_lanes must match flow_units by gate_lane")
-    expected_blocked_downstream = sorted([
-        unit_id for unit_id, unit in unit_by_id.items()
-        if any(dep in directly_blocked for dep in unit.get("dependencies", []))
-    ])
-    declared_blocked_downstream = state.get("blocked_downstream_units")
-    if not isinstance(declared_blocked_downstream, list):
-        failures.append(f"{display}: blocked_downstream_units must be a list")
-        declared_blocked_downstream = []
-    if sorted(declared_blocked_downstream) != expected_blocked_downstream:
-        failures.append(f"{display}: blocked_downstream_units must include only declared downstream dependents")
-    if any(unit_id in declared_blocked_downstream for unit_id in directly_blocked):
-        failures.append(f"{display}: directly blocked units must not be listed as downstream")
-    rollup_status = state.get("rollup_status")
-    if not isinstance(rollup_status, str) or not rollup_status.strip():
-        failures.append(f"{display}: rollup_status must be a non-empty string")
-    for text in _flow_runtime_text_values(state):
-        lowered = text.lower()
-        for label, pattern in FLOW_UNIT_RUNTIME_FORBIDDEN_OVERCLAIMS:
-            for match in pattern.finditer(lowered):
-                matched_claim = text[match.start():match.end()]
-                if not _line_has_scoped_claim_negation(text, matched_claim):
-                    failures.append(f"{display}: forbidden flow-unit runtime overclaim `{label}`")
-                    break
-        if "declarative gate engine active" in lowered:
-            failures.append(f"{display}: forbidden declarative gate engine activation wording")
-        if "sibling completion implied" in lowered:
-            failures.append(f"{display}: sibling completion must not be implied")
-    return failures
+    return validate_flow_unit_runtime_payload(state, str(display))
 
 
 def _dynamic_migration_target_root(target):
@@ -20729,7 +20582,7 @@ def cmd_loop_engineering_migration(args):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
-    from loop_migration import apply_migration, rollback_migration, preview_migration
+    from loop_migration import apply_migration, rollback_migration
     if getattr(args, "apply", False):
         result = apply_migration(
             target_root=getattr(args, "target", None),
@@ -20747,7 +20600,12 @@ def cmd_loop_engineering_migration(args):
         if not result.get("rolled_back"):
             sys.exit(1)
     else:  # dry-run / preview
-        result = preview_migration(target_root=getattr(args, "target", None))
+        result = build_dynamic_lifecycle_migration_preview(
+            getattr(args, "target", None)
+        )
+        result["validation_issues"] = check_dynamic_lifecycle_migration_preview(
+            getattr(args, "target", None)
+        )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         if result.get("validation_issues") and getattr(args, "fail_on_issues", False):
             sys.exit(1)

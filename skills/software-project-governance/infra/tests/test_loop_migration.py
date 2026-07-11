@@ -27,10 +27,12 @@ or:
 
 import hashlib
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _HERE = Path(__file__).resolve().parent
 _INFRA_DIR = _HERE.parent
@@ -97,6 +99,12 @@ def _sha256_bytes(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def _apply_with_future_contract(*args, **kwargs):
+    """Exercise legacy transaction/rollback tests after a simulated validator pass."""
+    with mock.patch.object(lm, "validate_flow_unit_runtime_payload", return_value=[]):
+        return lm.apply_migration(*args, **kwargs)
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # APPLY tests
 # ═══════════════════════════════════════════════════════════════════════════
@@ -111,7 +119,7 @@ class TestApplyMigration(unittest.TestCase):
             root = Path(td)
             _write_host(root)
 
-            result = lm.apply_migration(target_root=str(root))
+            result = _apply_with_future_contract(target_root=str(root))
 
             self.assertTrue(result["applied"], f"apply failed: {result}")
             self.assertEqual(result["workflow_model"]["new"], "loop-engineering")
@@ -163,7 +171,7 @@ class TestApplyMigration(unittest.TestCase):
             _write_host(root)
 
             # First apply: succeeds, writes runtime.json + 1 backup + 1 MIGRATION row.
-            first = lm.apply_migration(target_root=str(root))
+            first = _apply_with_future_contract(target_root=str(root))
             self.assertTrue(first["applied"], f"first apply failed: {first}")
             self.assertTrue(
                 (root / ".governance" / "flow-unit-runtime.json").is_file()
@@ -196,7 +204,7 @@ class TestApplyMigration(unittest.TestCase):
             root = Path(td)
             _write_host(root)
 
-            result = lm.apply_migration(target_root=str(root))
+            result = _apply_with_future_contract(target_root=str(root))
             self.assertTrue(result["applied"])
 
             backup_dir = Path(result["backup_dir"])
@@ -230,7 +238,7 @@ class TestApplyMigration(unittest.TestCase):
             (gov / "evidence-log.md").write_text(CLASSIC_EVIDENCE_LOG, encoding="utf-8")
             # No plan-tracker.
 
-            result = lm.apply_migration(target_root=str(root))
+            result = _apply_with_future_contract(target_root=str(root))
 
             self.assertFalse(result["applied"])
             self.assertIn("plan-tracker", result["aborted_reason"].lower())
@@ -285,13 +293,14 @@ class TestApplyMigration(unittest.TestCase):
             self.assertNotEqual(str(root), str(PLUGIN_HOME))
 
             result = lm.apply_migration(target_root=str(root))
-            self.assertTrue(result["applied"])
+            self.assertFalse(result["applied"])
             # Result target MUST be the host, never the plugin.
             self.assertEqual(str(Path(result["target"])), str(root.resolve()))
 
-            # runtime.json + archive land in the HOST .governance/.
-            self.assertTrue((root / ".governance" / "flow-unit-runtime.json").is_file())
-            self.assertTrue((root / ".governance" / "archive").is_dir())
+            # Current contract rejects the loop payload before any HOST write.
+            self.assertIn("validation_issues", result)
+            self.assertFalse((root / ".governance" / "flow-unit-runtime.json").is_file())
+            self.assertFalse((root / ".governance" / "archive").is_dir())
 
         # PLUGIN's .governance/ must be untouched (no new runtime.json/archive).
         self.assertEqual(
@@ -366,7 +375,7 @@ class TestRollbackMigration(unittest.TestCase):
             evidence_hash_before = _sha256_bytes(evidence_before)
 
             # Apply.
-            apply_result = lm.apply_migration(target_root=str(root))
+            apply_result = _apply_with_future_contract(target_root=str(root))
             self.assertTrue(apply_result["applied"])
             self.assertTrue((root / ".governance" / "flow-unit-runtime.json").is_file())
 
@@ -397,7 +406,7 @@ class TestRollbackMigration(unittest.TestCase):
             root = Path(td)
             _write_host(root)
 
-            apply_result = lm.apply_migration(target_root=str(root))
+            apply_result = _apply_with_future_contract(target_root=str(root))
             self.assertTrue(apply_result["applied"])
 
             # Tamper the backup's plan-tracker.
@@ -427,14 +436,14 @@ class TestRollbackMigration(unittest.TestCase):
             _write_host(root)
 
             # First apply + rollback (leaves backup #1).
-            r1 = lm.apply_migration(target_root=str(root))
+            r1 = _apply_with_future_contract(target_root=str(root))
             self.assertTrue(r1["applied"])
             lm.rollback_migration(target_root=str(root))
 
             # Second apply (leaves backup #2). Note: after rollback the
             # plan-tracker is restored to classic, so re-apply is allowed
             # (idempotency guard sees classic, not loop-engineering).
-            r2 = lm.apply_migration(target_root=str(root))
+            r2 = _apply_with_future_contract(target_root=str(root))
             self.assertTrue(r2["applied"])
 
             # Two backups exist. Rollback by explicit version targets 0.65.0.
@@ -443,6 +452,197 @@ class TestRollbackMigration(unittest.TestCase):
 
             result = lm.rollback_migration(target_root=str(root), version="0.65.0")
             self.assertTrue(result["rolled_back"])
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# FIX-195 containment and compensating transaction tests
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestMigrationContainment(unittest.TestCase):
+    def test_current_loop_payload_fails_before_any_host_write(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_host(root)
+            plan = (root / ".governance/plan-tracker.md").read_bytes()
+            evidence = (root / ".governance/evidence-log.md").read_bytes()
+
+            result = lm.apply_migration(target_root=str(root))
+
+            self.assertFalse(result["applied"])
+            self.assertGreater(len(result["validation_issues"]), 0)
+            self.assertEqual((root / ".governance/plan-tracker.md").read_bytes(), plan)
+            self.assertEqual((root / ".governance/evidence-log.md").read_bytes(), evidence)
+            self.assertFalse((root / ".governance/flow-unit-runtime.json").exists())
+            self.assertFalse((root / ".governance/archive").exists())
+
+    def test_current_loop_payload_preserves_existing_runtime_bytes(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            original = b'{"legacy":true}\r\n'
+            _write_host(root)
+            runtime = root / ".governance/flow-unit-runtime.json"
+            runtime.write_bytes(original)
+
+            result = lm.apply_migration(target_root=str(root))
+
+            self.assertFalse(result["applied"])
+            self.assertIn("validation_issues", result)
+            self.assertEqual(runtime.read_bytes(), original)
+            self.assertFalse((root / ".governance/archive").exists())
+
+
+class TestCompensatingTransaction(unittest.TestCase):
+    def _paths(self, root, runtime_before=None):
+        gov = root / ".governance"
+        gov.mkdir(parents=True)
+        runtime = gov / "flow-unit-runtime.json"
+        if runtime_before is not None:
+            runtime.write_bytes(runtime_before)
+        evidence = gov / "evidence-log.md"
+        evidence.write_bytes(b"evidence-before\r\n")
+        backup = gov / "archive/test"
+        backup.mkdir(parents=True)
+        return runtime, evidence, backup
+
+    def _evidence_failure(self):
+        original = lm._atomic_replace_bytes
+        calls = {"count": 0}
+
+        def injected(path, content):
+            calls["count"] += 1
+            if calls["count"] == 2:
+                original(path, content)
+                raise OSError("injected evidence commit failure")
+            return original(path, content)
+        return injected
+
+    def test_evidence_failure_removes_new_runtime_and_restores_evidence(self):
+        with tempfile.TemporaryDirectory() as td:
+            runtime, evidence, backup = self._paths(Path(td))
+            with mock.patch.object(lm, "_atomic_replace_bytes", side_effect=self._evidence_failure()):
+                result = lm._commit_runtime_and_evidence(
+                    runtime, b"runtime-new\n", evidence, b"evidence-after\n", backup
+                )
+            self.assertEqual(result["state"], "FAIL")
+            self.assertFalse(runtime.exists())
+            self.assertEqual(evidence.read_bytes(), b"evidence-before\r\n")
+
+    def test_evidence_failure_restores_existing_runtime_byte_exact(self):
+        with tempfile.TemporaryDirectory() as td:
+            before = b"runtime-before\r\n"
+            runtime, evidence, backup = self._paths(Path(td), before)
+            with mock.patch.object(lm, "_atomic_replace_bytes", side_effect=self._evidence_failure()):
+                result = lm._commit_runtime_and_evidence(
+                    runtime, b"runtime-new\n", evidence, b"evidence-after\n", backup
+                )
+            self.assertEqual(result["state"], "FAIL")
+            self.assertEqual(runtime.read_bytes(), before)
+            self.assertEqual(evidence.read_bytes(), b"evidence-before\r\n")
+
+    def test_recovery_failure_is_blocked_with_diagnostic_journal(self):
+        with tempfile.TemporaryDirectory() as td:
+            runtime, evidence, backup = self._paths(Path(td), b"runtime-before\n")
+            original = lm._atomic_replace_bytes
+            calls = {"count": 0}
+
+            def injected(path, content):
+                calls["count"] += 1
+                if calls["count"] in {2, 3}:
+                    raise OSError("injected commit/recovery failure")
+                return original(path, content)
+
+            with mock.patch.object(lm, "_atomic_replace_bytes", side_effect=injected):
+                result = lm._commit_runtime_and_evidence(
+                    runtime, b"runtime-new\n", evidence, b"evidence-after\n", backup
+                )
+            self.assertEqual(result["state"], "BLOCKED")
+            journal = Path(result["journal"])
+            self.assertTrue(journal.is_file())
+            payload = json.loads(journal.read_text(encoding="utf-8"))
+            self.assertEqual(payload["state"], "BLOCKED")
+            self.assertTrue((backup / "runtime.before").is_file())
+            self.assertTrue((backup / "evidence.before").is_file())
+
+    def test_recovery_and_journal_failure_returns_structured_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            runtime, evidence, backup = self._paths(Path(td), b"runtime-before\n")
+            original = lm._atomic_replace_bytes
+            calls = {"count": 0}
+
+            def injected(path, content):
+                calls["count"] += 1
+                if calls["count"] in {2, 3}:
+                    raise OSError("injected commit/recovery failure")
+                return original(path, content)
+
+            with mock.patch.object(lm, "_atomic_replace_bytes", side_effect=injected), \
+                    mock.patch.object(Path, "write_text", side_effect=OSError("journal unavailable")):
+                result = lm._commit_runtime_and_evidence(
+                    runtime, b"{}\n", evidence, b"| EVD | FIX-195 | row |\n", backup
+                )
+            self.assertEqual(result["state"], "BLOCKED")
+            self.assertIsNone(result["journal"])
+            self.assertFalse(result["journal_persisted"])
+            self.assertEqual(result["backup_dir"], str(backup))
+            self.assertEqual(result["available_backups"], ["runtime.before", "evidence.before"])
+            self.assertTrue(any("journal write failed" in issue for issue in result["issues"]))
+            self.assertTrue((backup / "runtime.before").is_file())
+            self.assertTrue((backup / "evidence.before").is_file())
+
+    def test_post_write_mutation_is_compensated_from_disk_readback(self):
+        with tempfile.TemporaryDirectory() as td:
+            before = b"runtime-before\r\n"
+            runtime, evidence, backup = self._paths(Path(td), before)
+            original = lm._atomic_replace_bytes
+            calls = {"count": 0}
+
+            def mutate_after_commit(path, content):
+                calls["count"] += 1
+                original(path, content)
+                if calls["count"] == 2:
+                    runtime.write_bytes(b"post-write-mutation\n")
+
+            with mock.patch.object(lm, "_atomic_replace_bytes", side_effect=mutate_after_commit), \
+                    mock.patch.object(lm, "validate_flow_unit_runtime_payload", return_value=[]):
+                result = lm._commit_runtime_and_evidence(
+                    runtime, b"{}\n", evidence, b"| EVD | FIX-195 | row |\n", backup
+                )
+            self.assertEqual(result["state"], "FAIL")
+            self.assertTrue(any("post-write validation failed" in issue for issue in result["issues"]))
+            self.assertEqual(runtime.read_bytes(), before)
+            self.assertEqual(evidence.read_bytes(), b"evidence-before\r\n")
+
+    def test_post_canonical_validation_failure_is_compensated(self):
+        with tempfile.TemporaryDirectory() as td:
+            runtime, evidence, backup = self._paths(Path(td))
+            with mock.patch.object(
+                lm, "validate_flow_unit_runtime_payload",
+                return_value=["injected post-validation failure"],
+            ):
+                result = lm._commit_runtime_and_evidence(
+                    runtime, b"{}\n", evidence, b"| EVD | FIX-195 | row |\n", backup
+                )
+            self.assertEqual(result["state"], "FAIL")
+            self.assertTrue(any("injected post-validation failure" in issue for issue in result["issues"]))
+            self.assertFalse(runtime.exists())
+            self.assertEqual(evidence.read_bytes(), b"evidence-before\r\n")
+
+    def test_retry_after_compensation_adds_evidence_once(self):
+        with tempfile.TemporaryDirectory() as td:
+            runtime, evidence, backup = self._paths(Path(td))
+            with mock.patch.object(lm, "_atomic_replace_bytes", side_effect=self._evidence_failure()):
+                first = lm._commit_runtime_and_evidence(
+                    runtime, b"runtime-new\n", evidence, b"base\nMIGRATION\n", backup
+                )
+            self.assertEqual(first["state"], "FAIL")
+            with mock.patch.object(lm, "validate_flow_unit_runtime_payload", return_value=[]):
+                second = lm._commit_runtime_and_evidence(
+                    runtime, b"{}\n", evidence,
+                    b"| MIGRATION-0.66.1 | FIX-195 | row |\n", backup
+                )
+            self.assertEqual(second["state"], "PASS")
+            self.assertEqual(evidence.read_text(encoding="utf-8").count("MIGRATION"), 1)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -483,6 +683,25 @@ class TestPreviewMigration(unittest.TestCase):
                 (root / ".governance" / "evidence-log.md").read_text(encoding="utf-8"),
             )
 
+    def test_invalid_target_preview_reports_authority_diagnostics(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            result = lm.preview_migration(target_root=str(root))
+            self.assertEqual(result["status"], "BLOCKED")
+            self.assertTrue(result["validation_issues"])
+            self.assertTrue(any("missing .governance" in issue for issue in result["validation_issues"]))
+
+    def test_standalone_invalid_preview_exits_nonzero_with_diagnostic(self):
+        with tempfile.TemporaryDirectory() as td:
+            completed = subprocess.run(
+                [sys.executable, str(Path(lm.__file__)), "--target", td, "--dry-run"],
+                capture_output=True, text=True, encoding="utf-8", check=False,
+            )
+            self.assertEqual(completed.returncode, 1, completed.stdout + completed.stderr)
+            output = json.loads(completed.stdout)
+            self.assertEqual(output["status"], "BLOCKED")
+            self.assertTrue(output["validation_issues"])
+
 
 class TestVerifyWorkflowIntegration(unittest.TestCase):
     """verify_workflow.py command-dispatch integration (FX-191 restructure)."""
@@ -502,12 +721,29 @@ class TestVerifyWorkflowIntegration(unittest.TestCase):
                 version=None, project_type=None, dry_run=False, fail_on_issues=False,
             )
             buf = io.StringIO()
-            with redirect_stdout(buf):
+            with redirect_stdout(buf), self.assertRaises(SystemExit) as ctx:
                 vw.cmd_loop_engineering_migration(args)
 
             output = json.loads(buf.getvalue())
-            self.assertTrue(output["applied"])
+            self.assertEqual(ctx.exception.code, 1)
+            self.assertFalse(output["applied"])
+            self.assertIn("validation_issues", output)
             self.assertEqual(output["workflow_model"]["new"], "loop-engineering")
+
+    def test_standalone_apply_exits_nonzero_without_writes(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_host(root)
+            completed = subprocess.run(
+                [sys.executable, str(Path(lm.__file__)), "--target", str(root), "--apply"],
+                capture_output=True, text=True, encoding="utf-8", check=False,
+            )
+            self.assertEqual(completed.returncode, 1, completed.stdout + completed.stderr)
+            output = json.loads(completed.stdout)
+            self.assertFalse(output["applied"])
+            self.assertIn("validation_issues", output)
+            self.assertFalse((root / ".governance/archive").exists())
+            self.assertFalse((root / ".governance/flow-unit-runtime.json").exists())
 
     def test_cmd_loop_engineering_migration_rollback_dispatches(self):
         """cmd_loop_engineering_migration routes --rollback to loop_migration."""
@@ -519,7 +755,7 @@ class TestVerifyWorkflowIntegration(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             _write_host(root)
-            lm.apply_migration(target_root=str(root))  # set up a migration
+            _apply_with_future_contract(target_root=str(root))  # set up transaction fixture
 
             args = argparse.Namespace(
                 target=str(root), apply=False, rollback=True,
@@ -547,12 +783,13 @@ class TestVerifyWorkflowIntegration(unittest.TestCase):
                 target=str(root), apply=True, dry_run=False, fail_on_issues=False,
             )
             buf = io.StringIO()
-            with redirect_stdout(buf):
-                # Must NOT raise SystemExit (the old behavior).
+            with redirect_stdout(buf), self.assertRaises(SystemExit) as ctx:
                 vw.cmd_dynamic_lifecycle_migration(args)
 
             output = json.loads(buf.getvalue())
-            self.assertTrue(output["applied"])
+            self.assertEqual(ctx.exception.code, 1)
+            self.assertFalse(output["applied"])
+            self.assertIn("validation_issues", output)
             self.assertEqual(output["command"], "loop-engineering-migration")
 
     def test_dynamic_lifecycle_missing_flags_still_exits_closed(self):

@@ -4267,6 +4267,18 @@ class FlowUnitRuntimeTests(unittest.TestCase):
             context = vw.discover_flow_unit_runtime_context(root)
             self.assertEqual(context["status"], "NOT_FOUND")
 
+    def test_flow_unit_runtime_cli_adapter_uses_canonical_leaf(self):
+        from checks.flow_unit_runtime import validate_flow_unit_runtime_payload
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            path = self._write_runtime(root, mutate=lambda data: data.pop("runtime_scope"))
+            display = vw._display_path(path, root)
+            expected = validate_flow_unit_runtime_payload(self._runtime(
+                lambda data: data.pop("runtime_scope")
+            ), str(display))
+            self.assertEqual(vw.check_flow_unit_runtime(root), expected)
+
     def test_flow_unit_runtime_accepts_python_game_distribution(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -4392,6 +4404,25 @@ class FlowUnitRuntimeTests(unittest.TestCase):
             issues = vw.check_flow_unit_runtime(root)
             self.assertFalse(any("forbidden flow-unit runtime overclaim `risk-037" in issue for issue in issues))
             self.assertFalse(any("forbidden flow-unit runtime overclaim `risk-036" in issue for issue in issues))
+
+    def test_flow_unit_runtime_legacy_negation_corpus_matches_canonical_leaf(self):
+        from checks.flow_unit_runtime import validate_flow_unit_runtime_payload
+
+        corpus = [
+            "RISK-037 is closed is not claimed.",
+            "Closed RISK-036 is not verified.",
+            "RISK-036 closure achieved is not proof.",
+            "RISK-037 closure achieved 仍打开。",
+        ]
+        for wording in corpus:
+            with self.subTest(wording=wording), tempfile.TemporaryDirectory() as td:
+                root = Path(td)
+                payload = self._runtime(lambda data: data.update(rollup_status=wording))
+                direct_issues = validate_flow_unit_runtime_payload(payload, "shared-corpus")
+                self._write_runtime(root, mutate=lambda data: data.update(rollup_status=wording))
+                adapter_issues = vw.check_flow_unit_runtime(root)
+                self.assertFalse(any("forbidden flow-unit runtime overclaim" in issue for issue in direct_issues))
+                self.assertFalse(any("forbidden flow-unit runtime overclaim" in issue for issue in adapter_issues))
 
     def test_flow_unit_runtime_invalid_schema_fails_closed(self):
         with tempfile.TemporaryDirectory() as td:

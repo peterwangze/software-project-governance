@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "authority": {
+    "kind": "skill_frontmatter_version",
+    "path": "skills/software-project-governance/SKILL.md"
+  },
+  "validation_inventories": [
+    {"id": "required-snippets", "source": "skills/software-project-governance/infra/verify_workflow.py", "symbol": "REQUIRED_SNIPPETS"},
+    {"id": "fixture-mirror-patterns", "source": "skills/software-project-governance/infra/verify_workflow.py", "symbol": "PROJECTION_SYNC_PATTERNS"}
+  ],
+  "projections": [
+    {"id": "fixture-skill", "kind": "byte_copy", "source": "skills/software-project-governance/SKILL.md", "target": "project/e2e-test-project/skills/software-project-governance/SKILL.md"},
+    {"id": "core-manifest", "kind": "structured_json", "target": "skills/software-project-governance/core/manifest.json", "pointer": "/version"},
+    {"id": "claude-plugin", "kind": "structured_json", "target": ".claude-plugin/plugin.json", "pointer": "/version"},
+    {"id": "claude-marketplace", "kind": "structured_json", "target": ".claude-plugin/marketplace.json", "pointer": "/plugins/0/version"},
+    {"id": "codex-plugin", "kind": "structured_json", "target": ".codex-plugin/plugin.json", "pointer": "/version"},
+    {"id": "zcode-plugin", "kind": "structured_json", "target": ".zcode-plugin/plugin.json", "pointer": "/version"},
+    {"id": "chrys-plugin", "kind": "structured_json", "target": ".chrys-plugin/plugin.json", "pointer": "/version"},
+    {"id": "package", "kind": "structured_json", "target": "package.json", "pointer": "/version"},
+    {"id": "fixture-plan", "kind": "transformed_text", "target": "project/e2e-test-project/.governance/plan-tracker.md", "pattern": "(?m)(\\*\\*工作流版本:\\s*)[0-9]+\\.[0-9]+\\.[0-9]+", "replacement": "\\g<1>{version}", "count": 1},
+    {"id": "hook-pre-commit", "kind": "transformed_text", "target": "skills/software-project-governance/infra/hooks/pre-commit", "pattern": "(?m)^# @version: [0-9]+\\.[0-9]+\\.[0-9]+$", "replacement": "# @version: {version}", "count": 1},
+    {"id": "hook-commit-msg", "kind": "transformed_text", "target": "skills/software-project-governance/infra/hooks/commit-msg", "pattern": "(?m)^# @version: [0-9]+\\.[0-9]+\\.[0-9]+$", "replacement": "# @version: {version}", "count": 1},
+    {"id": "hook-post-commit", "kind": "transformed_text", "target": "skills/software-project-governance/infra/hooks/post-commit", "pattern": "(?m)^# @version: [0-9]+\\.[0-9]+\\.[0-9]+$", "replacement": "# @version: {version}", "count": 1},
+    {"id": "hook-prepare-commit-msg", "kind": "transformed_text", "target": "skills/software-project-governance/infra/hooks/prepare-commit-msg", "pattern": "(?m)^# @version: [0-9]+\\.[0-9]+\\.[0-9]+$", "replacement": "# @version: {version}", "count": 1}
+  ]
+}

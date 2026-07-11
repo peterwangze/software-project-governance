@@ -4,11 +4,69 @@
   "version": "0.65.3",
   "description": "Canonical file manifest. All entries define files/directories/patterns that SHOULD exist after plugin installation or repo checkout. The single source of truth for cleanup and verification.",
   "source_of_truth": true,
+  "release_projection_contract": {
+    "projection_ids": [
+      "fixture-skill",
+      "core-manifest",
+      "claude-plugin",
+      "claude-marketplace",
+      "codex-plugin",
+      "zcode-plugin",
+      "chrys-plugin",
+      "package",
+      "fixture-plan",
+      "hook-pre-commit",
+      "hook-commit-msg",
+      "hook-post-commit",
+      "hook-prepare-commit-msg"
+    ],
+    "projection_kinds": [
+      "byte_copy",
+      "structured_json",
+      "transformed_text"
+    ],
+    "validation_inventories": [
+      {
+        "id": "required-snippets",
+        "source": "skills/software-project-governance/infra/verify_workflow.py",
+        "symbol": "REQUIRED_SNIPPETS",
+        "value_type": "dict",
+        "min_entries": 40,
+        "required_members": [
+          "Producer-Reviewer 分离",
+          "## 输入参数",
+          "# 软件项目治理工作流入口"
+        ]
+      },
+      {
+        "id": "fixture-mirror-patterns",
+        "source": "skills/software-project-governance/infra/verify_workflow.py",
+        "symbol": "PROJECTION_SYNC_PATTERNS",
+        "value_type": "sequence",
+        "min_entries": 11,
+        "member_match": "exact",
+        "required_members": [
+          "skills/*/SKILL.md",
+          "skills/software-project-governance/SKILL.md",
+          "skills/software-project-governance/core/**/*.md",
+          "skills/software-project-governance/core/**/*.json",
+          "skills/software-project-governance/infra/**/*.py",
+          "skills/software-project-governance/infra/**/*.md",
+          "skills/software-project-governance/infra/**/*.sh",
+          "skills/software-project-governance/infra/hooks/*",
+          "skills/software-project-governance/references/**/*.md",
+          "commands/*.md",
+          "agents/*.md"
+        ]
+      }
+    ]
+  },
   "root_entries": {
     "files": [
       "README.md",
       ".gitignore",
       "package.json",
+      "pyproject.toml",
       "LICENSE"
     ],
     "directories": []
@@ -46,6 +104,14 @@
       },
       {
         "path": "skills/software-project-governance/core/technical-debt-ledger.md",
+        "type": "file"
+      },
+      {
+        "path": "skills/software-project-governance/core/release-ledger.schema.json",
+        "type": "file"
+      },
+      {
+        "path": "skills/software-project-governance/core/version-projections.json",
         "type": "file"
       },
       {
@@ -559,6 +625,28 @@
         "artifact_role": "architecture-health-budget",
         "validation_commands": [
           "python skills/software-project-governance/infra/verify_workflow.py check-architecture-health --fail-on-issues",
+          "python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues"
+        ]
+      },
+      {
+        "id": "release-ledger-schema",
+        "path": "skills/software-project-governance/core/release-ledger.schema.json",
+        "type": "file",
+        "required": true,
+        "artifact_role": "release-ledger-schema",
+        "validation_commands": [
+          "python skills/software-project-governance/infra/verify_workflow.py release-ledger --no-remote",
+          "python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues"
+        ]
+      },
+      {
+        "id": "version-projections",
+        "path": "skills/software-project-governance/core/version-projections.json",
+        "type": "file",
+        "required": true,
+        "artifact_role": "artifact-projection-registry",
+        "validation_commands": [
+          "python skills/software-project-governance/infra/verify_workflow.py release-projection",
           "python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues"
         ]
       }

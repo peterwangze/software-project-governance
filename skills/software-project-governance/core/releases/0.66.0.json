@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "version": "0.66.0",
+  "lifecycle_state": "candidate",
+  "provenance": "native",
+  "artifacts": {
+    "changelog": "project/CHANGELOG.md",
+    "release_docs": ["docs/architecture/ADR-010-declarative-release-manifests.md"],
+    "review_evidence": [".governance/evidence-log.md"]
+  },
+  "trust": {"candidate_commit": {"derivation": "git_commit_adding_path"}},
+  "events": [],
+  "effective_state": {"lifecycle_state": "candidate", "withdrawn": false, "amendments": []}
+}

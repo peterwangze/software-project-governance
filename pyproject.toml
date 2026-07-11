@@ -1,0 +1,16 @@
+[tool.ruff]
+target-version = "py39"
+line-length = 120
+extend-exclude = ["project/e2e-test-project"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.mypy]
+python_version = "3.9"
+check_untyped_defs = true
+warn_unused_ignores = true
+exclude = ["project/e2e-test-project"]
+
+# Ruff and mypy are optional progressive checks. They are not runtime
+# dependencies and MUST be reported as NOT_RUN when unavailable.

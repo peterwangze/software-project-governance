@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/peterwangze/software-project-governance/release-ledger.schema.json",
+  "title": "Software Project Governance release manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "version",
+    "lifecycle_state",
+    "provenance",
+    "artifacts",
+    "trust",
+    "events",
+    "effective_state"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "lifecycle_state": {"enum": ["candidate", "released"]},
+    "provenance": {"enum": ["native", "historical_backfill"]},
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["changelog", "release_docs", "review_evidence"],
+      "properties": {
+        "changelog": {"type": "string", "minLength": 1},
+        "release_docs": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1},
+        "review_evidence": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1}
+      }
+    },
+    "trust": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "candidate_commit": {"$ref": "#/$defs/commitRef"},
+        "original_release_commit": {"$ref": "#/$defs/commitRef"},
+        "backfill_commit": {"$ref": "#/$defs/commitRef"},
+        "document_contemporaneity": {"enum": ["contemporaneous", "backfilled_after_release"]},
+        "tag_disposition": {"enum": ["verified_present", "missing_requires_decision", "created_by_decision"]},
+        "tag_decision": {"type": ["string", "null"], "pattern": "^DEC-[0-9]+$"}
+      }
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "type", "recorded_at", "claims", "integrity"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "type": {"enum": ["candidate_to_released", "amendment", "withdrawal"]},
+          "recorded_at": {"type": "string", "format": "date-time"},
+          "claims": {"type": "object"},
+          "integrity": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+        }
+      }
+    },
+    "effective_state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lifecycle_state", "withdrawn", "amendments"],
+      "properties": {
+        "lifecycle_state": {"enum": ["candidate", "released"]},
+        "withdrawn": {"type": "boolean"},
+        "amendments": {"type": "array", "items": {"type": "object"}}
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"provenance": {"const": "native"}}, "required": ["provenance"]},
+      "then": {"properties": {"trust": {"required": ["candidate_commit"]}}}
+    },
+    {
+      "if": {"properties": {"provenance": {"const": "historical_backfill"}}, "required": ["provenance"]},
+      "then": {"properties": {"trust": {"required": ["original_release_commit", "backfill_commit", "document_contemporaneity", "tag_disposition", "tag_decision"]}}}
+    },
+    {
+      "if": {"properties": {"trust": {"properties": {"tag_disposition": {"enum": ["verified_present", "missing_requires_decision"]}}, "required": ["tag_disposition"]}}},
+      "then": {"properties": {"trust": {"properties": {"tag_decision": {"type": "null"}}}}}
+    },
+    {
+      "if": {"properties": {"trust": {"properties": {"tag_disposition": {"const": "created_by_decision"}}, "required": ["tag_disposition"]}}},
+      "then": {"properties": {"trust": {"properties": {"tag_decision": {"type": "string", "pattern": "^DEC-[0-9]+$"}}, "required": ["tag_decision"]}}}
+    }
+  ],
+  "$defs": {
+    "commitRef": {
+      "oneOf": [
+        {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["derivation"],
+          "properties": {"derivation": {"const": "git_commit_adding_path"}}
+        }
+      ]
+    }
+  }
+}

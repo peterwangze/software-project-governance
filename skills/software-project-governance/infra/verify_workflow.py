@@ -18,6 +18,14 @@ import urllib.request
 import webbrowser
 from datetime import datetime, date
 
+from checks import commit as commit_checks
+from checks import projection as projection_checks
+from checks import version as version_checks
+from release.context import RepositoryContext
+from release.ledger import validate_release_ledger
+from release.projection import check_projections, write_projections
+from release.quality import probe_quality_tools
+
 ROOT = Path(__file__).resolve().parents[3]
 INTERACTION_BOUNDARY_PATH = ROOT / "skills/software-project-governance/references/interaction-boundary.md"
 USER_INTERRUPTION_POLICY_TEMPLATE_PATH = ROOT / "skills/software-project-governance/core/templates/user-interruption-policy.md"
@@ -6494,86 +6502,13 @@ def _target_fixture_file_is_checkable(rel_path, target_tracked):
 
 
 def check_projection_sync(root=None, target_dir=None, patterns=None):
-    """FIX-086: block release when source and target fixture projections drift."""
-    root = Path(root) if root is not None else ROOT
-    target_dir = Path(target_dir) if target_dir is not None else root / "project/e2e-test-project"
-    issues = []
-    version_checks = []
-    skipped_untracked = []
-    target_tracked = _projection_target_tracked_files(root, target_dir)
+    """Delegate projection compatibility checks to the Phase 6 module."""
+    return projection_checks.check_projection_sync(
+        Path(root) if root is not None else ROOT,
+        Path(target_dir) if target_dir is not None else None,
+        patterns,
+    )
 
-    source_version = _extract_skill_version(root / "skills/software-project-governance/SKILL.md")
-    if not source_version:
-        issues.append("source skills/software-project-governance/SKILL.md missing frontmatter version")
-
-    version_sources = [
-        ("source core manifest", root / "skills/software-project-governance/core/manifest.json", _extract_json_version),
-        ("source Claude plugin", root / ".claude-plugin/plugin.json", _extract_json_version),
-        ("source Codex plugin", root / ".codex-plugin/plugin.json", _extract_json_version),
-        ("source Chrys plugin", root / ".chrys-plugin/plugin.json", _extract_json_version),
-        ("target workflow skill", target_dir / "skills/software-project-governance/SKILL.md", _extract_skill_version),
-        ("target plan-tracker", target_dir / ".governance/plan-tracker.md", _extract_plan_workflow_version),
-    ]
-    optional_target_version_sources = [
-        ("target core manifest", "skills/software-project-governance/core/manifest.json", _extract_json_version),
-    ]
-    for label, rel, extractor in optional_target_version_sources:
-        if _target_fixture_file_is_checkable(rel, target_tracked):
-            version_sources.append((label, target_dir / rel, extractor))
-        else:
-            skipped_untracked.append(rel)
-
-    for label, path, extractor in version_sources:
-        observed = extractor(path)
-        display = _display_path(path, root)
-        version_checks.append({
-            "label": label,
-            "path": display.as_posix() if isinstance(display, Path) else str(display),
-            "version": observed,
-        })
-        if not observed:
-            issues.append(f"{label}: missing version at {_display_path(path, root)}")
-        elif source_version and observed != source_version:
-            issues.append(f"{label}: version {observed} != source {source_version}")
-
-    mirrored_files = _projection_source_files(root, patterns=patterns)
-    compared = 0
-    for rel in mirrored_files:
-        if not _target_fixture_file_is_checkable(rel, target_tracked):
-            skipped_untracked.append(rel)
-            continue
-        source_path = root / rel
-        target_path = target_dir / rel
-        if not target_path.is_file():
-            issues.append(f"target fixture missing mirrored file: {rel}")
-            continue
-        compared += 1
-        if _projection_hash(source_path) != _projection_hash(target_path):
-            issues.append(f"target fixture drift: {rel}")
-
-    native_entry_checks = [
-        (target_dir / "CLAUDE.md", ("Governance Bootstrap", "AskUserQuestion")),
-        (target_dir / "AGENTS.md", ("Governance Bootstrap", "Codex", "opencode", "skills/software-project-governance/SKILL.md")),
-        (target_dir / "GEMINI.md", ("Governance Bootstrap", "Gemini", "skills/software-project-governance/SKILL.md")),
-    ]
-    for path, needles in native_entry_checks:
-        if not path.is_file():
-            issues.append(f"target native entry missing: {_display_path(path, root)}")
-            continue
-        content = path.read_text(encoding="utf-8")
-        missing = [needle for needle in needles if needle not in content]
-        if missing:
-            issues.append(f"target native entry {_display_path(path, root)} missing markers: {missing}")
-
-    return {
-        "pass": not issues,
-        "issues": issues,
-        "source_version": source_version,
-        "mirrors_checked": compared,
-        "mirrors_discovered": len(mirrored_files),
-        "mirrors_skipped_untracked": len(set(skipped_untracked)),
-        "version_checks": version_checks,
-    }
 
 
 def check_release_readiness(
@@ -6789,80 +6724,17 @@ def _validated_git_remote_name(remote):
 
 
 def check_release_lineage(version, mode="candidate", release_commit=None, remote="origin", root=None):
-    """FIX-192: validate candidate or completed release tag lineage without mutating git state."""
-    issues = []
-    safe_remote = _validated_git_remote_name(remote)
-    if safe_remote is None:
-        issues.append("lineage remote must be a configured Git remote name")
-    result = {
-        "pass": True,
-        "issues": issues,
-        "mode": mode,
-        "version": version,
-        "release_commit": release_commit,
-        "remote": safe_remote,
-        "tag": f"v{version}" if version else None,
-    }
-    if mode not in {"candidate", "released"}:
-        issues.append(f"unsupported lineage mode `{mode}`; expected candidate or released")
-    if mode == "candidate":
-        result["boundary"] = (
-            "candidate mode intentionally does not require a tag before the release commit exists; "
-            "rerun with --lineage-mode released --release-commit <commit> after tag creation and push"
-        )
-        result["pass"] = not issues
-        return result
-    if not version:
-        issues.append("released lineage mode requires --version")
-    if not release_commit:
-        issues.append("released lineage mode requires --release-commit")
-    if issues:
-        result["pass"] = False
-        return result
-
-    root = Path(root or HOST_PROJECT_ROOT)
-    tag = f"v{version}"
-    rc, expected_commit, stderr = _run_git_lineage(["rev-parse", f"{release_commit}^{{commit}}"], root)
-    if rc != 0:
-        issues.append(f"release commit `{release_commit}` cannot be resolved: {stderr or 'git rev-parse failed'}")
-        result["pass"] = False
-        return result
-    result["expected_commit"] = expected_commit
-
-    rc, local_commit, _stderr = _run_git_lineage(["rev-parse", f"refs/tags/{tag}^{{commit}}"], root)
-    if rc != 0:
-        issues.append(f"local tag `{tag}` does not exist")
-    elif local_commit != expected_commit:
-        issues.append(f"local tag `{tag}` points to {local_commit}, expected {expected_commit}")
-    result["local_tag_commit"] = local_commit if rc == 0 else None
-
-    rc, _remote_url, _stderr = _run_git_lineage(["remote", "get-url", safe_remote], root)
-    if rc != 0:
-        issues.append(f"configured Git remote `{safe_remote}` was not found")
-        result["remote_tag_commit"] = None
-        result["pass"] = False
-        return result
-
-    rc, remote_output, _stderr = _run_git_lineage(
-        ["ls-remote", "--tags", safe_remote, f"refs/tags/{tag}", f"refs/tags/{tag}^{{}}"],
-        root,
+    """Delegate release lineage checks while preserving the 0.65.3 API."""
+    return commit_checks.check_release_lineage(
+        version,
+        mode=mode,
+        release_commit=release_commit,
+        remote=remote,
+        root=Path(root or HOST_PROJECT_ROOT),
+        git=lambda args, git_root, _timeout: _run_git_lineage(args, git_root),
+        timeout=GIT_LINEAGE_TIMEOUT_SECONDS,
     )
-    remote_refs = {}
-    if rc == 0:
-        for line in remote_output.splitlines():
-            parts = line.split()
-            if len(parts) == 2:
-                remote_refs[parts[1]] = parts[0]
-    remote_commit = remote_refs.get(f"refs/tags/{tag}^{{}}") or remote_refs.get(f"refs/tags/{tag}")
-    if rc != 0:
-        issues.append(f"remote tag lookup failed for `{safe_remote}`: git ls-remote returned no verified result")
-    elif not remote_commit:
-        issues.append(f"remote `{safe_remote}` is missing tag `{tag}`")
-    elif remote_commit != expected_commit:
-        issues.append(f"remote tag `{safe_remote}/{tag}` points to {remote_commit}, expected {expected_commit}")
-    result["remote_tag_commit"] = remote_commit
-    result["pass"] = not issues
-    return result
+
 
 
 def check_architecture_fact_source(
@@ -9889,179 +9761,9 @@ def check_tier_audit_completeness():
 
 
 def check_version_consistency():
-    """Check version consistency across all declaration locations (SYSGAP-020).
+    """Delegate version consistency checks to the Phase 6 module."""
+    return version_checks.check_version_consistency(ROOT, GOVERNANCE_DIR.parent)
 
-    Source of truth: skills/software-project-governance/SKILL.md frontmatter.
-
-    Checks performed:
-      1. Version declaration files (manifest.json, plugin.json x2,
-         marketplace.json, codex plugin.json) all match SKILL.md version.
-      2. verify_workflow.py hardcoded snippet versions match SKILL.md.
-      3. CHANGELOG.md latest entry version matches SKILL.md.          (FAIL)
-      4. plan-tracker.md workflow version matches SKILL.md.          (WARN)
-
-    Returns: list of issue strings. Items prefixed with [WARN] indicate
-    non-blocking drift (e.g., local plan-tracker lagging behind plugin version).
-    Items prefixed with [FAIL] or [MISMATCH] are hard failures.
-    """
-    import json
-
-    VERSION_FILES = {
-        "SKILL.md (source of truth)": ROOT / "skills/software-project-governance/SKILL.md",
-        "manifest.json": ROOT / "skills/software-project-governance/core/manifest.json",
-        ".claude-plugin/plugin.json": ROOT / ".claude-plugin/plugin.json",
-        ".claude-plugin/marketplace.json": ROOT / ".claude-plugin/marketplace.json",
-        ".codex-plugin/plugin.json": ROOT / ".codex-plugin/plugin.json",
-        # FIX-182: close the VERSION_FILES coverage blind spot — the repo
-        # ships four plugin.json manifest dirs (Claude/Codex/Zcode/Chrys).
-        # Without these two entries, a version bump that forgot .zcode-plugin
-        # or .chrys-plugin would slip past this loop undetected.
-        ".zcode-plugin/plugin.json": ROOT / ".zcode-plugin/plugin.json",
-        ".chrys-plugin/plugin.json": ROOT / ".chrys-plugin/plugin.json",
-    }
-
-    issues = []
-    versions = {}
-
-    for label, path in VERSION_FILES.items():
-        if not path.exists():
-            issues.append(f"[FAIL] {label}: {path} not found")
-            continue
-
-        content = path.read_text(encoding="utf-8")
-
-        if path.suffix == ".json":
-            try:
-                data = json.loads(content)
-                if "version" in data:
-                    ver = data["version"]
-                elif "plugins" in data and len(data["plugins"]) > 0:
-                    ver = data["plugins"][0].get("version", "NOT FOUND")
-                else:
-                    ver = "NOT FOUND"
-            except json.JSONDecodeError:
-                issues.append(f"[FAIL] {label}: invalid JSON")
-                continue
-        else:
-            # Markdown files: look for version in frontmatter or inline
-            match = re.search(r"(?:`?\*{0,2}version\*{0,2}`?\s*[:=]\s*`?)(\d+\.\d+\.\d+)", content)
-            if match:
-                ver = match.group(1)
-            else:
-                ver = "NOT FOUND"
-
-        versions[label] = ver
-
-    # Determine source version
-    source_version = versions.get("SKILL.md (source of truth)")
-    if not source_version or source_version == "NOT FOUND":
-        issues.append("[FAIL] Cannot determine source version from SKILL.md")
-        # Attempt fallback: extract any semver from SKILL.md content
-        skill_path = ROOT / "skills/software-project-governance/SKILL.md"
-        if skill_path.exists():
-            skill_text = skill_path.read_text(encoding="utf-8")
-            fallback = re.search(r'(\d+\.\d+\.\d+)', skill_text)
-            if fallback:
-                source_version = fallback.group(1)
-        if not source_version:
-            return issues
-
-    # Check file consistency
-    for label, ver in versions.items():
-        if label == "SKILL.md (source of truth)":
-            continue
-        if ver != source_version:
-            issues.append(
-                f"[FAIL] {label}: version={ver}, expected={source_version}"
-            )
-
-    # ── Check verify_workflow.py snippet versions ──
-    # The REQUIRED_SNIPPETS dict in this file hardcodes version strings
-    # for plugin.json, marketplace.json, codex plugin.json, and manifest.json.
-    # These must match the source of truth.
-    snippet_self_path = ROOT / "skills/software-project-governance/infra/verify_workflow.py"
-    snippet_self_content = snippet_self_path.read_text(encoding="utf-8")
-    # Match only version literals in REQUIRED_SNIPPETS. Historical artifact
-    # paths and fixture needles intentionally keep their original versions.
-    # The block-end anchor tolerates the 0.59.0 refactor (DEC-083 Phase 1):
-    # the manifest builder functions moved to checks/manifest.py, so the
-    # trailing structural comment is now the manifest-domain import block
-    # rather than the in-file REQUIRED_FILES builder comment.
-    snippets_match = re.search(
-        r"REQUIRED_SNIPPETS\s*=\s*\{(?P<body>.*?)\n\}\n{2,}# ── Manifest",
-        snippet_self_content,
-        re.S,
-    )
-    if not snippets_match:
-        issues.append("[FAIL] verify_workflow.py snippet: REQUIRED_SNIPPETS block not found")
-        snippet_search_text = ""
-    else:
-        snippet_search_text = snippets_match.group("body")
-    snippet_versions = set()
-    non_comment_lines = [l for l in snippet_search_text.split('\n') if not l.strip().startswith('#')]
-    for line in non_comment_lines:
-        snippet_versions.update(re.findall(r'"(\d+\.\d+\.\d+)"', line))
-    for sv in snippet_versions:
-        if sv != source_version:
-            issues.append(
-                f"[FAIL] verify_workflow.py snippet: hardcoded version={sv}, expected={source_version}"
-            )
-            break  # One mismatch is enough to signal the issue
-
-    # ── Check CHANGELOG latest entry ──
-    changelog_path = ROOT / "project/CHANGELOG.md"
-    if changelog_path.exists():
-        changelog_content = changelog_path.read_text(encoding="utf-8")
-        # Extract first ## [X.Y.Z] entry (latest version)
-        changelog_match = re.search(r'##\s*\[(\d+\.\d+\.\d+)\]', changelog_content)
-        if changelog_match:
-            changelog_version = changelog_match.group(1)
-            if changelog_version != source_version:
-                issues.append(
-                    f"[FAIL] CHANGELOG.md latest entry: version=[{changelog_version}], expected=[{source_version}]"
-                )
-        else:
-            issues.append("[FAIL] CHANGELOG.md: no version entry found (expected ## [X.Y.Z])")
-    else:
-        issues.append("[FAIL] CHANGELOG.md: file not found")
-
-    # ── Check plan-tracker workflow version (WARN only) ──
-    plan_tracker_path = GOVERNANCE_DIR / "plan-tracker.md"
-    if plan_tracker_path.exists():
-        plan_content = plan_tracker_path.read_text(encoding="utf-8")
-        # Match: **工作流版本**: X.Y.Z
-        pt_match = re.search(r'工作流版本[**:\s]+(\d+\.\d+\.\d+)', plan_content)
-        if pt_match:
-            pt_version = pt_match.group(1)
-            if pt_version != source_version:
-                # WARN — plan-tracker is a local file, may lag behind plugin version
-                issues.append(
-                    f"[WARN] plan-tracker.md 工作流版本={pt_version}, expected={source_version} "
-                    f"(plan-tracker is local, may lag — not a blocker)"
-                )
-        # Missing version field or missing file: not an error (CI edge case)
-
-    # ── Check hook @version tags ──
-    HOOK_FILES = {
-        "hooks/pre-commit": ROOT / "skills/software-project-governance/infra/hooks/pre-commit",
-        "hooks/commit-msg": ROOT / "skills/software-project-governance/infra/hooks/commit-msg",
-        "hooks/post-commit": ROOT / "skills/software-project-governance/infra/hooks/post-commit",
-        "hooks/prepare-commit-msg": ROOT / "skills/software-project-governance/infra/hooks/prepare-commit-msg",
-    }
-    for label, path in HOOK_FILES.items():
-        if not path.exists():
-            issues.append(f"[FAIL] {label}: {path} not found")
-            continue
-        content = path.read_text(encoding="utf-8")
-        hook_match = re.search(r'@version:\s*(\d+\.\d+\.\d+)', content)
-        if hook_match:
-            hook_ver = hook_match.group(1)
-            if hook_ver != source_version:
-                issues.append(f"[FAIL] {label}: @version={hook_ver}, expected={source_version}")
-        else:
-            issues.append(f"[FAIL] {label}: no @version tag found")
-
-    return issues
 
 
 def check_commit_task_references(limit=20):
@@ -20794,6 +20496,41 @@ def cmd_check_projection_sync(args):
     print()
 
 
+def cmd_release_ledger(args):
+    """Validate declarative per-version release manifests and live Git facts."""
+    result = validate_release_ledger(
+        RepositoryContext(HOST_PROJECT_ROOT, timeout=getattr(args, "timeout", 15)),
+        manifests_dir=PLUGIN_ROOT / "skills/software-project-governance/core/releases",
+        version=getattr(args, "version", None),
+        remote=getattr(args, "remote", "origin"),
+        verify_remote=not getattr(args, "no_remote", False),
+    ).as_dict()
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    if result["state"] != "PASS":
+        sys.exit({"FAIL": 1, "UNKNOWN": 2, "BLOCKED": 3}.get(result["state"], 1))
+
+
+def cmd_release_projection(args):
+    """Check or atomically write declared artifact projections."""
+    config = Path(args.config).resolve() if getattr(args, "config", None) else None
+    result = (
+        write_projections(PLUGIN_ROOT, config)
+        if getattr(args, "write", False)
+        else check_projections(PLUGIN_ROOT, config)
+    ).as_dict()
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    if result["state"] != "PASS":
+        sys.exit({"FAIL": 1, "UNKNOWN": 2, "BLOCKED": 3}.get(result["state"], 1))
+
+
+def cmd_quality_tools(_args):
+    """Report optional ruff/mypy availability without overclaiming PASS."""
+    result = probe_quality_tools()
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    if result["state"] == "FAIL":
+        sys.exit(1)
+
+
 def cmd_check_hot_fact_source(args):
     """Run hot fact-source consistency guard independently."""
     try:
@@ -21906,6 +21643,23 @@ def main(argv=None):
     cr_p.add_argument("--lineage-remote", default="origin",
                       help="Git remote whose release tag must match (default: origin)")
 
+    ledger_p = subparsers.add_parser(
+        "release-ledger",
+        help="Validate declarative release manifests and live Git lineage facts",
+    )
+    ledger_p.add_argument("--version", help="Validate only one release manifest")
+    ledger_p.add_argument("--remote", default="origin", help="Configured Git remote name")
+    ledger_p.add_argument("--no-remote", action="store_true", help="Skip remote tag verification")
+    ledger_p.add_argument("--timeout", type=int, default=15, help="Git command timeout in seconds")
+
+    projection_p = subparsers.add_parser(
+        "release-projection",
+        help="Check declared projections, or write all projections atomically",
+    )
+    projection_p.add_argument("--write", action="store_true", help="Atomically write projections; default is check-only")
+    projection_p.add_argument("--config", help="Optional projection config path")
+    subparsers.add_parser("quality-tools", help="Probe optional ruff/mypy tools as PASS/NOT_RUN/FAIL")
+
     # e2e-check
     subparsers.add_parser("e2e-check", help="Run E2E governance verification against e2e-test-project")
 
@@ -22378,6 +22132,9 @@ def main(argv=None):
         "check-plugin-freshness": cmd_check_plugin_freshness,
         "check-agent-adapters": cmd_check_agent_adapters,
         "check-release": cmd_check_release,
+        "release-ledger": cmd_release_ledger,
+        "release-projection": cmd_release_projection,
+        "quality-tools": cmd_quality_tools,
         "e2e-check": cmd_e2e_check,
         "external-project-validation": cmd_external_project_validation,
         "first-run-demo": cmd_first_run_demo,

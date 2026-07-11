@@ -51,6 +51,9 @@
 | TOOL-044 | ArchGuard Duplicate Code | CLI check (advisory) | `infra/verify_workflow.py check-duplicate-code` | 0.58.0 source/projection 语义重复检测（normalize 换行符 + 忽略空白，避免 CRLF/LF 误判） | 架构/维护 | 是 |
 | TOOL-045 | ArchGuard Technical Debt | CLI check (advisory) | `infra/verify_workflow.py check-technical-debt` + `core/technical-debt-ledger.md` | 0.58.0 根目录游离脚本/历史 release 文档/hooks 内容漂移/技术债登记交叉验证 | 维护 | 是 |
 | TOOL-046 | ArchGuard Complexity | CLI check (advisory) | `infra/verify_workflow.py check-complexity` | 0.58.0 圈复杂度（line-based proxy，AST 留 0.59.0+），advisory | 架构/维护 | 是 |
+| TOOL-047 | Declarative Release Ledger | schema + CLI | `core/releases/` + `infra/verify_workflow.py release-ledger` | 候选/发布 commit、tag、remote、historical trust 与 artifact ledger 验证 | 发布/维护 | 是 |
+| TOOL-048 | Artifact Projection Generator | registry + CLI | `core/version-projections.json` + `infra/verify_workflow.py release-projection [--write]` | SKILL frontmatter 版本投影检查与原子写入 | 发布/维护 | 是 |
+| TOOL-049 | Optional Quality Tool Probe | CLI probe | `infra/verify_workflow.py quality-tools` | Ruff/mypy 可用性与版本探测，结构化 PASS/NOT_RUN/FAIL | 开发/测试/发布/维护 | 是 |
 
 ## 工具详情
 
@@ -500,6 +503,29 @@
 - **边界**：0.58.0 advisory-only（`gate_integration.fatal_on_error=false`）——WARN/ERROR 告警但不阻断 release gate；test 文件（`**/tests/**`、`**/test_*.py`）按 schema exclusion 豁免；不重写代码，仅诊断。
 - **被以下子工作流使用**：架构（architecture）、维护（maintenance）
 
+### TOOL-047：Declarative Release Ledger
+
+- **事实源**：`core/releases/<version>.json`，schema 为 `core/release-ledger.schema.json`
+- **子命令**：`release-ledger [--version X.Y.Z] [--remote origin] [--no-remote]`
+- **状态**：`PASS=0`、`FAIL=1`、`UNKNOWN=2`、`BLOCKED=3`
+- **边界**：historical backfill 永不等价于 native PASS；缺失历史 tag 只记录 `missing_requires_decision`，不得自动创建
+- **被以下子工作流使用**：发布（release）、维护（maintenance）
+
+### TOOL-048：Artifact Projection Generator
+
+- **事实源**：`skills/software-project-governance/SKILL.md` frontmatter version
+- **检查**：`release-projection`，默认只读
+- **写入**：`release-projection --write`，预生成并全量校验后原子替换；失败按 rollback journal 恢复
+- **安全**：拒绝绝对路径、`..`、symlink traversal、重复 target、缺失 JSON pointer 和替换计数漂移
+- **被以下子工作流使用**：发布（release）、维护（maintenance）
+
+### TOOL-049：Optional Quality Tool Probe
+
+- **子命令**：`quality-tools`
+- **输出**：Ruff/mypy 各自 `PASS`、`NOT_RUN` 或 `FAIL`，以及 `runtime_dependency=false`
+- **边界**：未安装必须为 `NOT_RUN`；不安装依赖，不把未运行写成 PASS
+- **被以下子工作流使用**：开发、测试、发布、维护
+
 ### TOOL-044：ArchGuard Duplicate Code check
 
 - **文件**：`infra/verify_workflow.py`（`check_duplicate_code`）
@@ -576,6 +602,9 @@
 | Classic Gate Execution Registry guard | | | | | ● | | ● | ● | ● | | ● |
 | Dynamic Lifecycle Migration dry-run preview | | | | | ● | | ● | | ● | | ● |
 | Local Web Console launcher | ● | | | | | | ● | | | ● | ● |
+| Declarative Release Ledger | | | | | ● | | ● | | ● | | ● |
+| Artifact Projection Generator | | | | | ● | ● | ● | | ● | | ● |
+| Optional Quality Tool Probe | | | | | | ● | ● | | ● | | ● |
 
 > ● 主要使用者  ○ 可选用
 

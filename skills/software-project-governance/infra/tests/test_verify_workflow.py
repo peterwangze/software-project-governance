@@ -8677,7 +8677,8 @@ class ExternalProjectValidationHarnessTests(unittest.TestCase):
             plan.write_text(vw._external_validation_plan_tracker("0.50.1"), encoding="utf-8")
             (gov / "external-validation-target.json").write_text("{}", encoding="utf-8")
             output = io.StringIO()
-            with patch.object(vw, "ROOT", root), redirect_stdout(output):
+            with patch.object(vw, "ROOT", root), \
+                 patch.object(vw, "SAMPLE_PATH", plan), redirect_stdout(output):
                 issues = vw.check_hot_fact_source_consistency(plan)
 
         self.assertEqual(issues, [])
@@ -9287,7 +9288,9 @@ class GovernanceSignalNoiseTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch.object(vw, "ROOT", root):
+            with patch.object(vw, "ROOT", root), \
+                 patch.object(vw, "HOST_PROJECT_ROOT", root), \
+                 patch.object(vw, "GOVERNANCE_DIR", gov):
                 issues = vw.check_structural_validity()
 
         evidence_issues = [i for i in issues if i.get("file") == ".governance/evidence-log.md"]
@@ -9385,7 +9388,9 @@ class GovernanceSignalNoiseTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch.object(vw, "ROOT", root):
+            with patch.object(vw, "ROOT", root), \
+                 patch.object(vw, "HOST_PROJECT_ROOT", root), \
+                 patch.object(vw, "GOVERNANCE_DIR", gov):
                 result = vw.check_agent_lock_consistency()
 
         self.assertFalse(any(i["type"] == "task_not_in_plan" for i in result["issues"]))
@@ -12449,6 +12454,8 @@ class Check27DelegationTests(unittest.TestCase):
 
             with patch.object(archive, "ROOT", root), \
                  patch.object(vw, "ROOT", root), \
+                 patch.object(vw, "HOST_PROJECT_ROOT", root), \
+                 patch.object(vw, "GOVERNANCE_DIR", gov), \
                  patch.object(vw, "SAMPLE_PATH", gov / "plan-tracker.md"), \
                  patch.object(vw, "_load_archive_module", return_value=archive), \
                  patch.object(
@@ -13861,6 +13868,167 @@ class CheckReviewClosureTests(unittest.TestCase):
                  patch.object(vw, "ROOT", root):
                 r = vw.check_review_closure()
             self.assertEqual(r["verdict"], "no-verdict")
+
+
+# ────────────────────────────────────────────────────────────
+# FIX-187: dual-root model — plugin-root != host-root.
+# Regression for the 0.54.2/0.54.3 / RISK-038 failure mode where
+# ROOT was derived from __file__ and pointed the governance FACTS
+# (SAMPLE_PATH / GOVERNANCE_DIR) at the plugin cache, where no
+# .governance/ exists → Check 1/2 read empty project, Check 3 crashed
+# with FileNotFoundError on the plugin-cache plan-tracker.
+# ────────────────────────────────────────────────────────────
+
+_DUAL_ROOT_PLAN_TRACKER = """# Plan Tracker
+
+## Gate 状态跟踪
+
+| Gate | transition | status | date | evidence |
+| --- | --- | --- | --- | --- |
+| G0 | init->research | passed | 2026-07-01 | EVD-001 |
+
+## 项目配置
+
+- **项目**: dual-root regression
+"""
+
+
+class DualRootModelTests(unittest.TestCase):
+    """FIX-187 — plugin-root and host-root diverge in a real install."""
+
+    def _build_plugin_and_host(self, tmp, host_has_governance=True):
+        """Build a fake plugin tree + a separate host project tree.
+
+        Returns (plugin_root, host_root) where plugin_root mimics the
+        per-version cache layout (skills/, core/) and host_root is the
+        project being governed (with/without .governance/).
+        """
+        plugin_root = Path(tmp) / "plugin-cache"
+        plugin_root.mkdir(parents=True)
+        # Minimal plugin asset layout so PLUGIN_ROOT derivations land here.
+        skills = plugin_root / "skills"
+        spg = skills / "software-project-governance"
+        core = spg / "core"
+        core.mkdir(parents=True)
+        (core / "stage-gates.md").write_text("# stage-gates", encoding="utf-8")
+        (core / "lifecycle.md").write_text("# lifecycle", encoding="utf-8")
+        (skills / "stage-initiation").mkdir(parents=True)
+        (skills / "stage-initiation" / "SKILL.md").write_text("# init", encoding="utf-8")
+
+        host_root = Path(tmp) / "host-project"
+        host_root.mkdir(parents=True)
+        if host_has_governance:
+            gov = host_root / ".governance"
+            gov.mkdir()
+            (gov / "plan-tracker.md").write_text(
+                _DUAL_ROOT_PLAN_TRACKER, encoding="utf-8"
+            )
+        return plugin_root, host_root
+
+    def test_resolve_host_root_uses_resolve_entry(self):
+        """_resolve_host_root must consult resolve_entry (RISK-040)."""
+        with tempfile.TemporaryDirectory() as td:
+            plugin_root, host_root = self._build_plugin_and_host(td)
+            # resolve_host_root(None) returns cwd; patch it to the host.
+            with patch("resolve_entry.resolve_host_root", return_value=host_root):
+                resolved = vw._resolve_host_root()
+            self.assertEqual(resolved, host_root)
+
+    def test_resolve_host_root_fallback_on_failure(self):
+        """When resolve_entry raises, fall back to legacy parents[3] (ROOT)."""
+        with patch("resolve_entry.resolve_host_root", side_effect=RuntimeError):
+            resolved = vw._resolve_host_root()
+        # Fallback MUST equal the legacy plugin root (dogfood-mode compat).
+        self.assertEqual(resolved, vw.ROOT)
+
+    def test_sample_path_points_at_host_not_plugin(self):
+        """The crash in Check 3 was SAMPLE_PATH resolving to plugin cache.
+
+        With plugin-root != host-root, SAMPLE_PATH MUST point at the host
+        plan-tracker; it MUST NOT live under the plugin cache tree.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            plugin_root, host_root = self._build_plugin_and_host(td)
+            with patch("resolve_entry.resolve_host_root", return_value=host_root):
+                host_root_resolved = vw._resolve_host_root()
+                sample = host_root_resolved / ".governance" / "plan-tracker.md"
+            # Host plan-tracker exists, plugin-cache one does NOT.
+            self.assertTrue(sample.is_file(),
+                            f"host plan-tracker missing at {sample}")
+            plugin_sample = plugin_root / ".governance" / "plan-tracker.md"
+            self.assertFalse(plugin_sample.exists(),
+                             "plugin cache must NOT have a .governance/plan-tracker.md")
+            # SAMPLE_PATH construction mirrors the module-level constant.
+            self.assertEqual(
+                host_root_resolved / ".governance" / "plan-tracker.md",
+                sample,
+            )
+
+    def test_governance_dir_resolves_to_host(self):
+        """GOVERNANCE_DIR-derived fact paths must resolve under host root."""
+        with tempfile.TemporaryDirectory() as td:
+            plugin_root, host_root = self._build_plugin_and_host(td)
+            with patch("resolve_entry.resolve_host_root", return_value=host_root), \
+                 patch.object(vw, "HOST_PROJECT_ROOT", host_root), \
+                 patch.object(vw, "GOVERNANCE_DIR", host_root / ".governance"):
+                self.assertTrue(vw.GOVERNANCE_DIR.is_dir())
+                self.assertEqual(
+                    vw.GOVERNANCE_DIR,
+                    host_root / ".governance",
+                )
+                # Must NOT be under the plugin cache.
+                self.assertNotIn(
+                    str(plugin_root),
+                    str(vw.GOVERNANCE_DIR),
+                )
+
+    def test_plugin_assets_stay_on_plugin_root(self):
+        """Plugin assets (GATES_PATH/LIFECYCLE_PATH/STAGE_SKILLS_ROOT) MUST
+        stay on PLUGIN_ROOT even when host-root diverges. They are plugin
+        assets, not host facts."""
+        with tempfile.TemporaryDirectory() as td:
+            plugin_root, host_root = self._build_plugin_and_host(td)
+            with patch("resolve_entry.resolve_host_root", return_value=host_root), \
+                 patch.object(vw, "HOST_PROJECT_ROOT", host_root):
+                # PLUGIN_ROOT derives from PLUGIN_HOME (plugin-side __file__),
+                # independent of host root.
+                plugin_root_resolved = vw.PLUGIN_ROOT
+                host_root_resolved = vw.HOST_PROJECT_ROOT
+            # Plugin and host MUST diverge in this scenario.
+            self.assertNotEqual(plugin_root_resolved, host_root_resolved)
+            # All plugin assets live under PLUGIN_ROOT.
+            for asset in (vw.GATES_PATH, vw.LIFECYCLE_PATH, vw.STAGE_SKILLS_ROOT):
+                self.assertTrue(
+                    str(asset).startswith(str(plugin_root_resolved)),
+                    f"{asset} not under plugin root {plugin_root_resolved}",
+                )
+                # And must NOT be under the host root.
+                self.assertFalse(
+                    str(asset).startswith(str(host_root_resolved)),
+                    f"{asset} wrongly resolved under host root "
+                    f"{host_root_resolved}",
+                )
+
+    def test_parse_gate_status_no_crash_on_host_root(self):
+        """The original crash: parse_gate_status() read plugin-cache
+        plan-tracker (non-existent) and raised FileNotFoundError. With
+        SAMPLE_PATH patched to the host plan-tracker it must return real
+        gate rows instead of crashing."""
+        with tempfile.TemporaryDirectory() as td:
+            plugin_root, host_root = self._build_plugin_and_host(td)
+            host_sample = host_root / ".governance" / "plan-tracker.md"
+            with patch.object(vw, "SAMPLE_PATH", host_sample):
+                gates = vw.parse_gate_status()
+            # Exactly one gate row defined in _DUAL_ROOT_PLAN_TRACKER.
+            self.assertEqual(len(gates), 1)
+            self.assertEqual(gates[0]["gate"], "G0")
+            self.assertEqual(gates[0]["status"], "passed")
+
+    def test_plugin_root_equals_legacy_root_in_dogfood(self):
+        """In dogfood mode (plugin installed == repo), PLUGIN_ROOT must
+        equal the legacy ROOT (parents[3]) so existing checks are
+        unaffected."""
+        self.assertEqual(vw.PLUGIN_ROOT, vw.ROOT)
 
 
 if __name__ == "__main__":

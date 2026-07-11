@@ -19,9 +19,73 @@ import webbrowser
 from datetime import datetime, date
 
 ROOT = Path(__file__).resolve().parents[3]
-EXECUTION_PACKET_PATH = ROOT / ".governance" / "execution-packets.json"
 INTERACTION_BOUNDARY_PATH = ROOT / "skills/software-project-governance/references/interaction-boundary.md"
 USER_INTERRUPTION_POLICY_TEMPLATE_PATH = ROOT / "skills/software-project-governance/core/templates/user-interruption-policy.md"
+
+
+# ── Dual-root model (DEC-080 / RISK-038 / FIX-187) ─────────────────────────
+# The plugin now installs under a per-version cache dir (e.g.
+# .../software-project-governance/0.65.0/) that is NOT the host project.
+# Deriving the governance facts root from ``__file__`` (the legacy
+# ``ROOT = parents[3]``) therefore points at the plugin cache, where no
+# ``.governance/`` exists — that is the 0.54.2/0.54.3 regression and the
+# crash in check-governance Check 3.
+#
+#   PLUGIN_ROOT        — where the plugin's OWN assets live (skills/,
+#                        core/, commands/, README.md, manifest.json).
+#                        REQUIRED_FILES / GATES_PATH / LIFECYCLE_PATH /
+#                        STAGE_SKILLS_ROOT are plugin assets and must
+#                        resolve here. ``ROOT`` (parents[3]) is already
+#                        this in a versioned install, so ROOT is kept as
+#                        the plugin root for backward compatibility.
+#
+#   HOST_PROJECT_ROOT  — the project being governed; where the real
+#                        .governance/ facts live (plan-tracker.md,
+#                        evidence-log.md, session-snapshot.md,
+#                        execution-packets.json). This MUST come from
+#                        resolve_entry (cwd / --project-root), NEVER from
+#                        __file__. On failure we fall back to the legacy
+#                        parents[3] so dogfood mode (plugin-root ==
+#                        host-root) keeps working.
+def _resolve_plugin_root():
+    """Deferred resolve of PLUGIN_ROOT via resolve_entry.PLUGIN_HOME.
+
+    Falls back to the legacy ``parents[3]`` plugin root (== ROOT) when
+    resolve_entry cannot be imported (e.g. minimal packaging), so the
+    plugin always knows where its own assets are.
+    """
+    try:
+        from resolve_entry import PLUGIN_HOME  # peer import (no cycle)
+        return Path(PLUGIN_HOME).parent.parent  # parents[2] of infra/
+    except Exception:
+        return ROOT
+
+
+def _resolve_host_root():
+    """Deferred resolve of HOST_PROJECT_ROOT via resolve_entry.
+
+    Priority mirrors resolve_entry.resolve_host_root: explicit cwd ->
+    os.getcwd(). On any failure (resolve_entry missing, cwd unusable)
+    we fall back to the legacy ``parents[3]`` so dogfood mode keeps
+    working — this is the backward-compat path, not a security decision
+    here (resolve_entry itself is fail-closed for the /governance entry).
+    """
+    try:
+        from resolve_entry import resolve_host_root  # peer import (no cycle)
+        host = resolve_host_root(None)
+        if host is not None:
+            return Path(host)
+    except Exception:
+        pass
+    return ROOT
+
+
+PLUGIN_ROOT = _resolve_plugin_root()
+HOST_PROJECT_ROOT = _resolve_host_root()
+
+# Governance FACTS live in the host project, never in the plugin cache.
+GOVERNANCE_DIR = HOST_PROJECT_ROOT / ".governance"
+EXECUTION_PACKET_PATH = GOVERNANCE_DIR / "execution-packets.json"
 
 
 def _display_path(path, root=None):
@@ -182,10 +246,10 @@ REQUIRED_FILES = {
     "Evidence Template": ROOT / "skills/software-project-governance/core/templates/evidence-log.md",
     "Decision Template": ROOT / "skills/software-project-governance/core/templates/decision-log.md",
     "Risk Template": ROOT / "skills/software-project-governance/core/templates/risk-log.md",
-    "Governance Plan Tracker": ROOT / ".governance/plan-tracker.md",
-    "Governance Evidence Log": ROOT / ".governance/evidence-log.md",
-    "Governance Decision Log": ROOT / ".governance/decision-log.md",
-    "Governance Risk Log": ROOT / ".governance/risk-log.md",
+    "Governance Plan Tracker": GOVERNANCE_DIR / "plan-tracker.md",
+    "Governance Evidence Log": GOVERNANCE_DIR / "evidence-log.md",
+    "Governance Decision Log": GOVERNANCE_DIR / "decision-log.md",
+    "Governance Risk Log": GOVERNANCE_DIR / "risk-log.md",
     "Skill Main Workflow Entry": ROOT / "skills/main-workflow/SKILL.md",
     "Skill Tools Index": ROOT / "skills/software-project-governance/infra/TOOLS.md",
     "Core Stage Gates": ROOT / "skills/software-project-governance/core/stage-gates.md",
@@ -1253,9 +1317,9 @@ def check_release_readiness_fact_source(
     evidence_log_path=None,
 ):
     """FIX-069: keep release blockers, requirements, and readiness facts aligned."""
-    plan_tracker_path = plan_tracker_path or ROOT / ".governance/plan-tracker.md"
+    plan_tracker_path = plan_tracker_path or GOVERNANCE_DIR / "plan-tracker.md"
     architecture_path = architecture_path or ROOT / "project/references/architecture.md"
-    evidence_log_path = evidence_log_path or ROOT / ".governance/evidence-log.md"
+    evidence_log_path = evidence_log_path or GOVERNANCE_DIR / "evidence-log.md"
 
     failures = []
     plan_content = plan_tracker_path.read_text(encoding="utf-8")
@@ -1461,15 +1525,16 @@ def _snapshot_fact_source_issues(plan_content, plan_tracker_path):
 
 def check_hot_fact_source_consistency(plan_tracker_path=None):
     """FIX-087: keep plan-tracker hot sections aligned across active release facts."""
-    plan_tracker_path = plan_tracker_path or ROOT / ".governance/plan-tracker.md"
+    plan_tracker_path = plan_tracker_path or _governance_dir() / "plan-tracker.md"
     failures = []
     plan_content = plan_tracker_path.read_text(encoding="utf-8")
     rel_plan = _display_path(plan_tracker_path)
+    _gov = _governance_dir()
     if (
         "External Validation Temporary Project" in plan_content
         and "temporary external-project workspace" in plan_content
-        and (Path(ROOT) / ".governance" / "external-validation-target.json").is_file()
-        and plan_tracker_path.resolve() == (Path(ROOT) / ".governance" / "plan-tracker.md").resolve()
+        and (_gov / "external-validation-target.json").is_file()
+        and plan_tracker_path.resolve() == (_gov / "plan-tracker.md").resolve()
     ):
         print("[OK] hot fact-source consistency skipped for external validation temporary workspace")
         return []
@@ -6619,11 +6684,29 @@ def check_architecture_fact_source(
 
 # ── Markdown parsing helpers ─────────────────────────────────────
 
-SAMPLE_PATH = ROOT / ".governance/plan-tracker.md"
-GATES_PATH = ROOT / "skills/software-project-governance/core/stage-gates.md"
-LIFECYCLE_PATH = ROOT / "skills/software-project-governance/core/lifecycle.md"
-STAGE_SKILLS_ROOT = ROOT / "skills"
-SESSION_SNAPSHOT_PATH = ROOT / ".governance/session-snapshot.md"
+# Governance FACTS (plan-tracker / session-snapshot) live in the HOST
+# project .governance/, never in the plugin cache (FIX-187 / DEC-080).
+SAMPLE_PATH = HOST_PROJECT_ROOT / ".governance" / "plan-tracker.md"
+SESSION_SNAPSHOT_PATH = HOST_PROJECT_ROOT / ".governance" / "session-snapshot.md"
+
+
+def _governance_dir():
+    """Dynamic governance dir — tracks SAMPLE_PATH.parent at call time.
+
+    Tests patch SAMPLE_PATH (e.g. to a tempdir); this helper makes every
+    runtime governance-path read follow that patch, so GOVERNANCE_DIR no
+    longer needs to be patched separately. Module-level constants derived
+    from GOVERNANCE_DIR (EVIDENCE_PATH / RISK_PATH / ARCHIVE_*) are kept
+    for backward-compat but runtime code SHOULD call this helper.
+    """
+    return SAMPLE_PATH.parent
+
+
+# Plugin ASSETS (stage-gates / lifecycle / stage skills) live with the
+# plugin, so they resolve against PLUGIN_ROOT.
+GATES_PATH = PLUGIN_ROOT / "skills" / "software-project-governance" / "core" / "stage-gates.md"
+LIFECYCLE_PATH = PLUGIN_ROOT / "skills" / "software-project-governance" / "core" / "lifecycle.md"
+STAGE_SKILLS_ROOT = PLUGIN_ROOT / "skills"
 
 STAGE_ORDER = [
     "initiation", "research", "selection", "infrastructure",
@@ -8616,14 +8699,19 @@ def list_available_stages():
 
 
 # ── Governance health check parsers ─────────────────────────────
+# These derive from SAMPLE_PATH.parent (== GOVERNANCE_DIR) rather than the
+# module-level GOVERNANCE_DIR constant so that tests which patch SAMPLE_PATH
+# (and thereby its parent) correctly redirect all governance-fact reads.
+# SAMPLE_PATH itself is HOST_PROJECT_ROOT / ".governance" / "plan-tracker.md",
+# so SAMPLE_PATH.parent is exactly the host project's governance dir.
 
-EVIDENCE_PATH = ROOT / ".governance/evidence-log.md"
-RISK_PATH = ROOT / ".governance/risk-log.md"
-ARCHIVE_INDEX_PATH = ROOT / ".governance/archive/index.md"
-ARCHIVE_TASKS_DIR = ROOT / ".governance/archive/tasks"
-ARCHIVE_EVIDENCE_DIR = ROOT / ".governance/archive/evidence"
-ARCHIVE_DECISIONS_DIR = ROOT / ".governance/archive/decisions"
-ARCHIVE_RISKS_DIR = ROOT / ".governance/archive/risks"
+EVIDENCE_PATH = SAMPLE_PATH.parent / "evidence-log.md"
+RISK_PATH = SAMPLE_PATH.parent / "risk-log.md"
+ARCHIVE_INDEX_PATH = SAMPLE_PATH.parent / "archive" / "index.md"
+ARCHIVE_TASKS_DIR = SAMPLE_PATH.parent / "archive" / "tasks"
+ARCHIVE_EVIDENCE_DIR = SAMPLE_PATH.parent / "archive" / "evidence"
+ARCHIVE_DECISIONS_DIR = SAMPLE_PATH.parent / "archive" / "decisions"
+ARCHIVE_RISKS_DIR = SAMPLE_PATH.parent / "archive" / "risks"
 
 
 def _load_archive_module():
@@ -8635,7 +8723,9 @@ def _load_archive_module():
         return None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    module.ROOT = ROOT
+    # archive.py reads governance FACTS (.governance/...) — point it at the
+    # host project, not the plugin cache (FIX-187 / DEC-080 dual-root).
+    module.ROOT = HOST_PROJECT_ROOT
     return module
 
 
@@ -8650,8 +8740,8 @@ class GovernanceDataSource:
                  archive_root=None, decision_path=None, risk_path=None):
         self.sample_path = Path(sample_path) if sample_path is not None else SAMPLE_PATH
         self.evidence_path = Path(evidence_path) if evidence_path is not None else EVIDENCE_PATH
-        self.decision_path = Path(decision_path) if decision_path is not None else ROOT / ".governance/decision-log.md"
-        self.risk_path = Path(risk_path) if risk_path is not None else ROOT / ".governance/risk-log.md"
+        self.decision_path = Path(decision_path) if decision_path is not None else GOVERNANCE_DIR / "decision-log.md"
+        self.risk_path = Path(risk_path) if risk_path is not None else GOVERNANCE_DIR / "risk-log.md"
 
         if archive_root is not None:
             self.archive_root = Path(archive_root)
@@ -8674,7 +8764,7 @@ class GovernanceDataSource:
         for path in (self.sample_path, self.evidence_path):
             if path.name in {"plan-tracker.md", "evidence-log.md"}:
                 return path.parent
-        return ROOT / ".governance"
+        return GOVERNANCE_DIR
 
     def _has_archive(self):
         """Check if archive directory exists and has content."""
@@ -9262,7 +9352,7 @@ def check_protocol_compliance():
                 })
 
     # ── Evidence Format Check: evidence entries with missing required fields ──
-    evidence_path = ROOT / ".governance" / "evidence-log.md"
+    evidence_path = GOVERNANCE_DIR / "evidence-log.md"
     if evidence_path.is_file():
         ev_content = evidence_path.read_text(encoding="utf-8")
         for line in ev_content.split("\n"):
@@ -9305,7 +9395,7 @@ def check_protocol_compliance():
 
 def check_evidence_quality():
     """Check evidence quality: session context references, circular refs, empty output claims."""
-    evidence_path = ROOT / ".governance" / "evidence-log.md"
+    evidence_path = GOVERNANCE_DIR / "evidence-log.md"
     issues = {
         "session_context": [],      # 会话上下文 references
         "circular_refs": [],        # 循环引用
@@ -9616,7 +9706,7 @@ def check_version_consistency():
         issues.append("[FAIL] CHANGELOG.md: file not found")
 
     # ── Check plan-tracker workflow version (WARN only) ──
-    plan_tracker_path = ROOT / ".governance/plan-tracker.md"
+    plan_tracker_path = GOVERNANCE_DIR / "plan-tracker.md"
     if plan_tracker_path.exists():
         plan_content = plan_tracker_path.read_text(encoding="utf-8")
         # Match: **工作流版本**: X.Y.Z
@@ -10749,9 +10839,9 @@ def check_sequential_ids():
             expected = num + 1
         return gaps
 
-    dec_path = ROOT / ".governance/decision-log.md"
-    evd_path = ROOT / ".governance/evidence-log.md"
-    risk_path = ROOT / ".governance/risk-log.md"
+    dec_path = GOVERNANCE_DIR / "decision-log.md"
+    evd_path = GOVERNANCE_DIR / "evidence-log.md"
+    risk_path = GOVERNANCE_DIR / "risk-log.md"
 
     # Use GovernanceDataSource for archive-aware ID collection.
     # Falls back to hot-file-only when archive/index.md does not exist.
@@ -10907,7 +10997,7 @@ def check_structural_validity():
     issues = []
 
     # ── 1. plan-tracker.md table column consistency ──
-    pt_path = ROOT / ".governance/plan-tracker.md"
+    pt_path = GOVERNANCE_DIR / "plan-tracker.md"
     if pt_path.is_file():
         pt_content = pt_path.read_text(encoding="utf-8")
         # Find all markdown tables: contiguous |...| lines after a header row
@@ -10956,7 +11046,7 @@ def check_structural_validity():
         })
 
     # ── 2. evidence-log.md column count consistency ──
-    evd_path = ROOT / ".governance/evidence-log.md"
+    evd_path = GOVERNANCE_DIR / "evidence-log.md"
     if evd_path.is_file():
         evd_content = evd_path.read_text(encoding="utf-8")
         evd_lines = evd_content.split("\n")
@@ -10986,7 +11076,7 @@ def check_structural_validity():
         })
 
     # ── 3. decision-log.md ADR required fields ──
-    dec_path = ROOT / ".governance/decision-log.md"
+    dec_path = GOVERNANCE_DIR / "decision-log.md"
     required_decision_fields = ["日期", "状态", "决策", "原因"]
     if dec_path.is_file():
         dec_content = dec_path.read_text(encoding="utf-8")
@@ -14917,7 +15007,7 @@ def _collect_live_review_sequences():
                 })
 
     # .governance/review-*.md files.
-    gov_dir = ROOT / ".governance"
+    gov_dir = GOVERNANCE_DIR
     if gov_dir.is_dir():
         for rf in gov_dir.glob("review-*.md"):
             name = rf.name
@@ -16184,7 +16274,7 @@ def _check_all_required_files_exist():
 
 def _check_governance_file_exists(filename):
     """Check if a governance file exists and has content."""
-    path = ROOT / ".governance" / filename
+    path = GOVERNANCE_DIR / filename
     if path.is_file() and path.stat().st_size > 0:
         return "PASS", f".governance/{filename} 存在且非空"
     return "FAIL", f".governance/{filename} 不存在或为空"
@@ -16901,7 +16991,7 @@ def check_agent_locks_format():
     import json
 
     issues = []
-    locks_path = ROOT / ".governance" / "agent-locks.json"
+    locks_path = GOVERNANCE_DIR / "agent-locks.json"
 
     # ── Existence check ──
     if not locks_path.is_file():
@@ -17039,7 +17129,7 @@ def check_agent_lock_consistency():
         "issues": [],
     }
 
-    locks_path = ROOT / ".governance" / "agent-locks.json"
+    locks_path = GOVERNANCE_DIR / "agent-locks.json"
 
     # ── Format check (Phase 1, reused) ──
     fmt_issues = check_agent_locks_format()
@@ -17087,7 +17177,7 @@ def check_agent_lock_consistency():
     # ── Load plan-tracker task IDs ──
     plan_task_ids = set()
     try:
-        pt_path = ROOT / ".governance" / "plan-tracker.md"
+        pt_path = GOVERNANCE_DIR / "plan-tracker.md"
         if pt_path.is_file():
             pt_content = pt_path.read_text(encoding="utf-8")
             # Match task IDs in any table cell.  Active task tables often use
@@ -17257,9 +17347,9 @@ def check_archive_integrity():
         "archive_triggers": [],
     }
 
-    archive_index = ROOT / ".governance/archive/index.md"
-    archive_tasks_dir = ROOT / ".governance/archive/tasks"
-    archive_evidence_dir = ROOT / ".governance/archive/evidence"
+    archive_index = _governance_dir() / "archive" / "index.md"
+    archive_tasks_dir = _governance_dir() / "archive" / "tasks"
+    archive_evidence_dir = _governance_dir() / "archive" / "evidence"
 
     archive_module = _load_archive_module()
     if archive_module is not None:
@@ -17349,19 +17439,20 @@ def check_archive_integrity():
 
         # Check 1: All indexed files exist
         for ref in sorted(indexed_files):
-            filepath = ROOT / ".governance" / ref
+            filepath = GOVERNANCE_DIR / ref
             if not filepath.exists():
                 result["pass"] = False
                 result["issues"].append(f"Index references non-existent file: {ref}")
 
         # Check 2: All archive files are in the index
         actual_archive_files = set()
+        gov_dir = _governance_dir()
         for d in [archive_tasks_dir, archive_evidence_dir]:
             if d.exists():
                 for f in d.glob("*.md"):
                     if f.name == ".gitkeep":
                         continue
-                    rel = str(f.relative_to(ROOT / ".governance")).replace("\\", "/")
+                    rel = str(f.relative_to(gov_dir)).replace("\\", "/")
                     actual_archive_files.add(rel)
 
         unindexed = actual_archive_files - indexed_files

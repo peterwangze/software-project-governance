@@ -1,4 +1,4 @@
-# ADR-008: Task ID Naming Convention
+# ADR-009: Task ID Naming Convention
 
 > **Status**: Proposed (pending DEC-100 adoption)
 > **Date**: 2026-07-11

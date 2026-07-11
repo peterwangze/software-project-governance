@@ -13711,6 +13711,128 @@ class CheckReviewClosureTests(unittest.TestCase):
         self.assertEqual(r["verdict"], "PASS")
         self.assertEqual(len(r["violations"]), 0)
 
+    def test_fix193_live_review_state_parsing_and_closure(self):
+        """FIX-193: live evidence preserves pass/non-pass review conclusions.
+
+        APPROVED_WITH_NOTES is a valid terminal approval. APPROVED and BLOCKED
+        remain valid terminals, while both NEEDS_CHANGE spellings remain
+        non-terminal and therefore fail for completed tasks.
+        """
+        cases = (
+            ("APPROVED_WITH_NOTES", "APPROVED_WITH_NOTES", "PASS"),
+            ("APPROVED", "APPROVED", "PASS"),
+            ("NEEDS_CHANGE", "NEEDS_CHANGE", "FAIL"),
+            ("NEEDS_CHANGES", "NEEDS_CHANGE", "FAIL"),
+            ("BLOCKED", "BLOCKED", "FAIL"),
+            ("MALFORMED", "UNKNOWN", "FAIL"),
+        )
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gov = root / ".governance"
+            gov.mkdir()
+            sample = gov / "plan-tracker.md"
+            evidence = gov / "evidence-log.md"
+            sample.write_text("# plan\n", encoding="utf-8")
+            for index, (recorded, expected, verdict) in enumerate(cases):
+                task_id = f"FIX-{240 + index}"
+                review_id = f"REVIEW-{task_id}-R0"
+                blocker_fact = "unresolved_blockers=0" if recorded == "APPROVED_WITH_NOTES" else ""
+                evidence.write_text(
+                    f"| {review_id} | {task_id} | 代码审查 | review | x | y | "
+                    f"2026-07-11 | G11 | {recorded} | {blocker_fact} |\n",
+                    encoding="utf-8",
+                )
+                with self.subTest(recorded=recorded), \
+                     patch.object(vw, "SAMPLE_PATH", sample), \
+                     patch.object(vw, "EVIDENCE_PATH", evidence), \
+                     patch.object(vw, "GOVERNANCE_DIR", gov), \
+                     patch.object(vw, "parse_completed_task_ids", return_value={task_id}):
+                    sequences, completed = vw._collect_live_review_sequences()
+                    conclusion = sequences[task_id]["rounds"][0]["conclusion"]
+                    self.assertEqual(conclusion, expected)
+                    result = vw.check_review_closure(
+                        review_sequence=[{
+                            "id": review_id,
+                            "task_ref": task_id,
+                            "conclusion": conclusion,
+                            "unresolved_blockers_fields": [blocker_fact],
+                        }],
+                        plan_tracker_completed={tid: True for tid in completed},
+                    )
+                    self.assertEqual(result["verdict"], verdict)
+                    if verdict == "FAIL":
+                        self.assertIn("V1", {v["rule"] for v in result["violations"]})
+                    else:
+                        self.assertEqual(result["violations"], [])
+
+    def test_fix193_review_report_parser_prefers_explicit_conclusion(self):
+        report = """# Review
+Available outputs: APPROVED / APPROVED_WITH_NOTES / NEEDS_CHANGE / BLOCKED
+**审查结论**: **APPROVED_WITH_NOTES（保留两项非阻塞备注）**
+unresolved_blockers=0
+"""
+        self.assertEqual(
+            vw._extract_review_conclusion_from_text(report),
+            "APPROVED_WITH_NOTES",
+        )
+        self.assertEqual(
+            vw._extract_review_conclusion_from_text("审查结论: MAYBE"),
+            "UNKNOWN",
+        )
+
+    def test_fix193_approval_with_notes_requires_zero_blocker_fact(self):
+        cases = (
+            ("zero", ["unresolved_blockers=0"], "PASS"),
+            ("missing", [], "FAIL"),
+            ("nonzero", ["unresolved_blockers=2"], "FAIL"),
+            ("invalid", ["unresolved_blockers=unknown"], "FAIL"),
+            ("conflict", ["unresolved_blockers=0", "unresolved_blockers=1"], "FAIL"),
+            ("prose-only", ["No blocking findings remain."], "FAIL"),
+        )
+        for label, fields, verdict in cases:
+            with self.subTest(label=label):
+                result = vw.check_review_closure(
+                    review_sequence=[{
+                        "id": "REVIEW-FIX-249",
+                        "task_ref": "FIX-249",
+                        "conclusion": "APPROVED_WITH_NOTES",
+                        "unresolved_blockers_fields": fields,
+                    }],
+                    plan_tracker_completed={"FIX-249": True},
+                )
+                self.assertEqual(result["verdict"], verdict)
+                v5 = [v for v in result["violations"] if v["rule"] == "V5"]
+                self.assertEqual(bool(v5), verdict == "FAIL")
+
+    def test_fix193_approved_remains_compatible_without_blocker_fact(self):
+        result = vw.check_review_closure(
+            review_sequence=[{
+                "id": "REVIEW-FIX-250",
+                "task_ref": "FIX-250",
+                "conclusion": "APPROVED",
+            }],
+            plan_tracker_completed={"FIX-250": True},
+        )
+        self.assertEqual(result["verdict"], "PASS")
+
+    def test_fix193_behavior_protocol_allows_blocker_free_approval_with_notes(self):
+        protocol = (
+            vw.ROOT
+            / "skills/software-project-governance/references/behavior-protocol.md"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("获得后置审查 Agent 的 APPROVED 结论之前", protocol)
+        self.assertNotIn("只有审查 APPROVED 后", protocol)
+        self.assertIn(
+            "获得后置审查 Agent 的 `APPROVED`，或带 `unresolved_blockers=0` "
+            "可机读事实且无矛盾的 `APPROVED_WITH_NOTES` 结论之前",
+            protocol,
+        )
+        self.assertIn(
+            "只有审查结论为 `APPROVED`，或带 `unresolved_blockers=0` "
+            "可机读事实且无矛盾的 `APPROVED_WITH_NOTES` 后",
+            protocol,
+        )
+
     def test_fix30_pass_r0n_r1a(self):
         """FIX30-PASS-R0N-R1A: R0=NEEDS_CHANGE → R1=APPROVED → PASS."""
         seq = [
@@ -13906,6 +14028,7 @@ class CheckReviewClosureTests(unittest.TestCase):
             ep.write_text("# empty", encoding="utf-8")
             with patch.object(vw, "SAMPLE_PATH", sp), \
                  patch.object(vw, "EVIDENCE_PATH", ep), \
+                 patch.object(vw, "GOVERNANCE_DIR", gov), \
                  patch.object(vw, "ROOT", root):
                 r = vw.check_review_closure()
             self.assertEqual(r["verdict"], "no-verdict")
@@ -13956,6 +14079,25 @@ class LoopRoleSkillConsistencyTests(unittest.TestCase):
         self.assertFalse(result["passed"])
         self.assertTrue(any("no resolvable shared loop-role mapping reference" in issue
                             for issue in result["issues"]))
+
+    def test_fix193_loop_role_contract_rejects_approval_with_notes_drift(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._copy_loop_role_fixture(root)
+            skill_path = root / "skills/code-review/SKILL.md"
+            content = skill_path.read_text(encoding="utf-8")
+            skill_path.write_text(
+                content.replace(
+                    "`APPROVED_WITH_NOTES` 是保留备注的通过终态",
+                    "`APPROVED_WITH_NOTES` 是非终态",
+                ),
+                encoding="utf-8",
+            )
+
+            result = vw.check_loop_role_skill_consistency(root=root)
+
+        self.assertFalse(result["passed"])
+        self.assertTrue(any("APPROVED_WITH_NOTES" in issue for issue in result["issues"]))
 
 
 # ────────────────────────────────────────────────────────────

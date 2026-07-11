@@ -933,22 +933,22 @@ REQUIRED_SNIPPETS = {
         "## [0.5.0]",
     ],
     ROOT / ".claude-plugin/plugin.json": [
-        "0.65.1",
+        "0.65.2",
     ],
     ROOT / ".claude-plugin/marketplace.json": [
-        "0.65.1",
+        "0.65.2",
     ],
     ROOT / ".codex-plugin/plugin.json": [
-        "0.65.1",
+        "0.65.2",
     ],
     ROOT / ".zcode-plugin/plugin.json": [
-        "0.65.1",
+        "0.65.2",
     ],
     ROOT / "package.json": [
-        "0.65.1",
+        "0.65.2",
     ],
     ROOT / "skills/software-project-governance/core/manifest.json": [
-        "0.65.1",
+        "0.65.2",
     ],
 }
 
@@ -1082,10 +1082,15 @@ LOOP_ROLE_SHARED_SEMANTIC_TOKENS = (
     "审查失败不会终止阶段",
     "并递增 `loop_count`",
     "Reviewer 只审查并输出结论，不修改产品代码",
-    "`APPROVED`、`NEEDS_CHANGE` 或 `BLOCKED`",
-    "`NEEDS_CHANGE` 不是终态",
+    "`APPROVED`、`APPROVED_WITH_NOTES`、`NEEDS_CHANGE` 或 `BLOCKED`",
+    "`APPROVED_WITH_NOTES` 是保留备注的通过终态",
+    "不得包含未解决的 BLOCKING finding",
+    "`unresolved_blockers=0`",
+    "`NEEDS_CHANGE`（及兼容输入 `NEEDS_CHANGES`）不是终态",
     "Check 30 的复审链消费",
-    "仅 `APPROVED` 或 `BLOCKED` 可结束链路",
+    "`APPROVED` 与 `APPROVED_WITH_NOTES` 可以通过并结束复审链",
+    "`BLOCKED` 结束链路但不是通过",
+    "未知或格式错误结论必须 fail-closed",
     "超过复审 fuse 的 `NEEDS_CHANGE` 必须升级为 `BLOCKED`",
 )
 
@@ -14767,9 +14772,16 @@ def check_m5_runtime_triggers(text=None, contains_askuserquestion=False,
 
 REVIEW_MAX_ROUNDS = 3  # behavior-protocol.md M7.4 step 4.6 (C3) fuse.
 
-# Terminal conclusions per M7.4 step 4.6 (C4): only APPROVED / BLOCKED are
-# legitimate terminal states; NEEDS_CHANGE is always an intermediate state.
-_REVIEW_TERMINAL_CONCLUSIONS = ("APPROVED", "BLOCKED")
+# Terminal conclusions per M7.4 step 4.6 (C4): APPROVED_WITH_NOTES is an
+# approved terminal state. NEEDS_CHANGE(S) remains an intermediate state.
+_REVIEW_APPROVAL_CONCLUSIONS = ("APPROVED", "APPROVED_WITH_NOTES")
+_REVIEW_TERMINAL_CONCLUSIONS = (*_REVIEW_APPROVAL_CONCLUSIONS, "BLOCKED")
+_REVIEW_NON_TERMINAL_ALIASES = {"NEEDS_CHANGES": "NEEDS_CHANGE"}
+
+_UNRESOLVED_BLOCKERS_KEY_RE = re.compile(
+    r"(?<![A-Za-z0-9_])unresolved_blockers(?![A-Za-z0-9_])",
+    re.IGNORECASE,
+)
 
 _REVIEW_ID_RE = re.compile(r"^REVIEW-([A-Z]+-\d+)(?:-R(\d+))?$")
 _LEGACY_REVIEW_FILE_RE = re.compile(r"^review-([A-Z]+-\d+)-v\d+\.md$", re.IGNORECASE)
@@ -14780,6 +14792,122 @@ _LEGACY_REVIEW_FILE_RE = re.compile(r"^review-([A-Z]+-\d+)-v\d+\.md$", re.IGNORE
 # this and mix bare REVIEW-{id} (R0) with R{n}-numbered rounds are historical
 # naming residue, not a real round-continuity breach — V2 downgrades to WARN.
 FIX173_NAMING_NORMALIZATION_DATE = date(2026, 7, 4)
+
+
+def _normalize_review_conclusion(value):
+    """Return a recognized review state, normalizing only plural NEEDS_CHANGE."""
+    normalized = str(value or "").strip().upper()
+    normalized = _REVIEW_NON_TERMINAL_ALIASES.get(normalized, normalized)
+    if normalized in (*_REVIEW_TERMINAL_CONCLUSIONS, "NEEDS_CHANGE"):
+        return normalized
+    return ""
+
+
+def _extract_review_conclusion_from_text(text):
+    """Extract one explicit review conclusion; ambiguous/malformed text is UNKNOWN."""
+    upper = str(text or "").upper()
+    status_pattern = r"(APPROVED_WITH_NOTES|APPROVED|NEEDS_CHANGES?|BLOCKED)"
+    explicit = re.findall(
+        rf"(?:审查结论|评审结论|REVIEW CONCLUSION|CONCLUSION)\**\s*[:：]\s*\**\s*{status_pattern}(?![A-Z_])",
+        upper,
+    )
+    candidates = explicit or re.findall(
+        rf"(?<![A-Z_]){status_pattern}(?![A-Z_])",
+        upper,
+    )
+    normalized = {_normalize_review_conclusion(candidate) for candidate in candidates}
+    normalized.discard("")
+    return normalized.pop() if len(normalized) == 1 else "UNKNOWN"
+
+
+def _parse_unresolved_blockers_fields(fields):
+    """Parse structured ``unresolved_blockers=<count>`` tokens.
+
+    Each item is treated as an independent table column or report line.  The
+    parser deliberately does not infer blocker state from prose such as
+    ``blocking finding``.  Duplicate equal values are accepted; malformed
+    tokens or differing duplicate values are fail-closed.
+    """
+    values = []
+    invalid_tokens = []
+    for raw_field in fields or []:
+        field = str(raw_field or "")
+        for key_match in _UNRESOLVED_BLOCKERS_KEY_RE.finditer(field):
+            tail = field[key_match.end():]
+            value_match = re.match(r"\s*=\s*([^\s,;|`*]+)", tail)
+            if not value_match:
+                invalid_tokens.append(field[key_match.start():].strip())
+                continue
+            raw_value = value_match.group(1)
+            if not re.fullmatch(r"\d+", raw_value):
+                invalid_tokens.append(
+                    f"unresolved_blockers={raw_value}"
+                )
+                continue
+            values.append(int(raw_value))
+
+    if invalid_tokens:
+        return {
+            "status": "invalid",
+            "value": None,
+            "values": values,
+            "invalid_tokens": invalid_tokens,
+        }
+    if not values:
+        return {
+            "status": "missing",
+            "value": None,
+            "values": [],
+            "invalid_tokens": [],
+        }
+    if len(set(values)) != 1:
+        return {
+            "status": "conflict",
+            "value": None,
+            "values": values,
+            "invalid_tokens": [],
+        }
+    return {
+        "status": "valid",
+        "value": values[0],
+        "values": values,
+        "invalid_tokens": [],
+    }
+
+
+def _merge_unresolved_blocker_evidence(left, right):
+    """Merge blocker facts from duplicate evidence for the same round."""
+    left = left or _parse_unresolved_blockers_fields([])
+    right = right or _parse_unresolved_blockers_fields([])
+    if left["status"] == "missing":
+        return right
+    if right["status"] == "missing":
+        return left
+    fields = [f"unresolved_blockers={value}" for value in left.get("values", [])]
+    fields.extend(
+        f"unresolved_blockers={value}" for value in right.get("values", [])
+    )
+    fields.extend(left.get("invalid_tokens", []))
+    fields.extend(right.get("invalid_tokens", []))
+    return _parse_unresolved_blockers_fields(fields)
+
+
+def _entry_unresolved_blocker_evidence(entry):
+    """Normalize fixture/live-entry blocker evidence into parser output."""
+    evidence = entry.get("blocker_evidence")
+    if isinstance(evidence, dict) and "status" in evidence:
+        return evidence
+    if "unresolved_blockers_fields" in entry:
+        return _parse_unresolved_blockers_fields(
+            entry.get("unresolved_blockers_fields")
+        )
+    if "unresolved_blockers" not in entry:
+        return _parse_unresolved_blockers_fields([])
+    raw = entry.get("unresolved_blockers")
+    values = raw if isinstance(raw, (list, tuple)) else [raw]
+    return _parse_unresolved_blockers_fields(
+        [f"unresolved_blockers={value}" for value in values]
+    )
 
 
 def _normalize_review_round(raw_id):
@@ -14823,7 +14951,9 @@ def _build_review_sequence(review_entries, legacy_files=None):
     for entry in review_entries or []:
         raw_id = entry.get("id", "")
         task_ref = entry.get("task_ref", "")
-        conclusion = str(entry.get("conclusion", "")).strip().upper()
+        raw_conclusion = str(entry.get("conclusion", "")).strip().upper()
+        conclusion = _normalize_review_conclusion(raw_conclusion) or raw_conclusion or "UNKNOWN"
+        blocker_evidence = _entry_unresolved_blocker_evidence(entry)
         entry_date = entry.get("date")
         task_id, round_n = _normalize_review_round(raw_id)
         if task_id is None:
@@ -14843,14 +14973,22 @@ def _build_review_sequence(review_entries, legacy_files=None):
         if round_n in seq["rounds"]:
             # Duplicate round — keep the most-terminal conclusion.
             existing = seq["rounds"][round_n]["conclusion"]
+            seq["rounds"][round_n]["blocker_evidence"] = (
+                _merge_unresolved_blocker_evidence(
+                    seq["rounds"][round_n].get("blocker_evidence"),
+                    blocker_evidence,
+                )
+            )
             if existing not in _REVIEW_TERMINAL_CONCLUSIONS and conclusion in _REVIEW_TERMINAL_CONCLUSIONS:
                 seq["rounds"][round_n] = {"id": raw_id, "conclusion": conclusion,
+                                          "blocker_evidence": seq["rounds"][round_n]["blocker_evidence"],
                                           "round_explicit": bool(_REVIEW_ID_RE.match(raw_id)
                                                                  and _REVIEW_ID_RE.match(raw_id).group(2))}
         else:
             m = _REVIEW_ID_RE.match(raw_id)
             round_explicit = bool(m and m.group(2) is not None)
             seq["rounds"][round_n] = {"id": raw_id, "conclusion": conclusion,
+                                      "blocker_evidence": blocker_evidence,
                                       "round_explicit": round_explicit}
         seq["max_round"] = max(seq["max_round"], round_n)
         # Track naming migration + earliest evidence date for the V2 historical
@@ -14997,7 +15135,7 @@ def check_review_closure(review_sequence=None, plan_tracker_completed=None,
                               f"R{max_round}=NEEDS_CHANGE — must escalate to BLOCKED",
                 })
                 continue
-            elif terminal == "APPROVED":
+            elif terminal in _REVIEW_APPROVAL_CONCLUSIONS:
                 # C5: round>3 APPROVED only allowed with explicit "接受降级"
                 # escalation decision. We cannot see escalation here, so WARN.
                 result["warnings"].append({
@@ -15010,8 +15148,16 @@ def check_review_closure(review_sequence=None, plan_tracker_completed=None,
                 # fall through to V4 traceability check
 
         # V1: terminal state legality. The highest round's conclusion must be
-        # APPROVED or BLOCKED, UNLESS the task type is routing-exempt (—).
+        # an approved state or BLOCKED, UNLESS the task type is routing-exempt (—).
         is_exempt = _task_routing_exempt(task_id, routing_table)
+        if terminal == "BLOCKED":
+            result["violations"].append({
+                "rule": "V1",
+                "task_id": task_id,
+                "reason": f"R{max_round}=BLOCKED closes the chain for escalation "
+                          "but is not an approval",
+            })
+            continue
         if terminal not in _REVIEW_TERMINAL_CONCLUSIONS and not is_exempt:
             # NEEDS_CHANGE (or other) is not a legitimate terminal state.
             # If the plan-tracker marked this task completed → broken chain.
@@ -15032,11 +15178,32 @@ def check_review_closure(review_sequence=None, plan_tracker_completed=None,
                 })
             continue
 
-        # V4: APPROVED traceability — terminal APPROVED must have a real R{n}
-        # entry whose conclusion is APPROVED (trivially true here since
-        # `terminal` came from rounds[max_round]).
-        if terminal == "APPROVED":
-            if rounds[max_round]["conclusion"] != "APPROVED":
+        # V5: APPROVED_WITH_NOTES requires a machine-readable proof that no
+        # unresolved blocking finding remains.  Prose is intentionally not
+        # accepted; only the structured unresolved_blockers=0 token passes.
+        if terminal == "APPROVED_WITH_NOTES":
+            blocker_evidence = rounds[max_round].get("blocker_evidence") or {}
+            blocker_status = blocker_evidence.get("status", "missing")
+            blocker_value = blocker_evidence.get("value")
+            if blocker_status != "valid" or blocker_value != 0:
+                detail = blocker_status
+                if blocker_status == "valid":
+                    detail = f"value={blocker_value}"
+                elif blocker_evidence.get("values"):
+                    detail = f"{blocker_status}, values={blocker_evidence['values']}"
+                result["violations"].append({
+                    "rule": "V5",
+                    "task_id": task_id,
+                    "reason": f"R{max_round}=APPROVED_WITH_NOTES requires exactly "
+                              f"unresolved_blockers=0; got {detail}",
+                })
+                continue
+
+        # V4: approval traceability — a terminal approval must have a real
+        # R{n} approval entry (trivially true here since `terminal` came from
+        # rounds[max_round]).
+        if terminal in _REVIEW_APPROVAL_CONCLUSIONS:
+            if rounds[max_round]["conclusion"] not in _REVIEW_APPROVAL_CONCLUSIONS:
                 result["violations"].append({
                     "rule": "V4",
                     "task_id": task_id,
@@ -15169,10 +15336,10 @@ def _collect_live_review_sequences():
             evd_id = parts[1]
             raw_ids = parts[2]
             conclusion = ""
-            # Conclusion often lives in notes / tail columns as APPROVED etc.
+            # Conclusion often lives in notes / tail columns.
             for part in parts[3:]:
-                if part.upper() in ("APPROVED", "NEEDS_CHANGE", "BLOCKED"):
-                    conclusion = part.upper()
+                conclusion = _normalize_review_conclusion(part)
+                if conclusion:
                     break
             # FIX-174 R1 (P0-2): pull the row's ISO date so the V2 historical
             # exemption can tell pre-FIX-173 naming residue from a real breach.
@@ -15196,7 +15363,8 @@ def _collect_live_review_sequences():
                 review_entries.append({
                     "id": cid,
                     "task_ref": task_id,
-                    "conclusion": conclusion or "NEEDS_CHANGE",
+                    "conclusion": conclusion or "UNKNOWN",
+                    "blocker_evidence": _parse_unresolved_blockers_fields(parts[3:]),
                     "date": row_date,
                 })
 
@@ -15216,20 +15384,19 @@ def _collect_live_review_sequences():
             task_id = m_new.group(1)
             round_n = int(m_new.group(2)) if m_new.group(2) else 0
             # Read conclusion from file content.
-            conclusion = "NEEDS_CHANGE"
+            conclusion = "UNKNOWN"
             try:
                 fc = rf.read_text(encoding="utf-8")
-                if "APPROVED" in fc.upper():
-                    conclusion = "APPROVED"
-                elif "BLOCKED" in fc.upper():
-                    conclusion = "BLOCKED"
+                conclusion = _extract_review_conclusion_from_text(fc)
+                blocker_evidence = _parse_unresolved_blockers_fields(fc.splitlines())
             except (IOError, OSError):
-                pass
+                blocker_evidence = _parse_unresolved_blockers_fields([])
             cid = f"REVIEW-{task_id}-R{round_n}" if round_n else f"REVIEW-{task_id}"
             review_entries.append({
                 "id": cid,
                 "task_ref": task_id,
                 "conclusion": conclusion,
+                "blocker_evidence": blocker_evidence,
             })
 
     sequences = _build_review_sequence(review_entries, legacy_files=legacy_files)

@@ -2,6 +2,40 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.65.2] - 2026-07-11
+
+### 0.65.2 - SKILL Loop Role 与审查终态规范一致性修复 (PATCH)
+
+0.65.2 是 PATCH 发布包，收口 AUDIT-132 发现的 review SKILL Loop Role 表达与可执行语义问题，并修复发布审查 R0 暴露的 Check 30 审查终态协议不一致。它不改变 loop runtime、迁移数据格式或既有 P0-P3 审查职责。
+
+### Fixed
+
+- **FIX-191 - review SKILL Loop Role 规范化**（commit `35e13bd`）：7 个 review SKILL 统一使用稳定中文标题 `## 循环角色`；版本信息移至正文，避免把发布版本写入通用规范标题。
+- 修复 Loop Role mapping 的相对引用，并明确失败结果回到所属 loop/fuse、Reviewer 不直接修改产品代码，以及终态由 Check 30 与复审链消费。
+- 新增 fail-closed `check-loop-role-skills` 校验及正/负例覆盖，能拒绝缺失文件、错误标题、坏引用与缺失关键语义。
+- **FIX-193 - Check 30 四态协议与 blocker 证据门禁**：统一 Check 30、M7.4、Agent 通信/路由、共享 mapping 与 7 个 review SKILL 的审查终态契约。`APPROVED_WITH_NOTES` 仅在存在唯一且无矛盾的结构化 `unresolved_blockers=0` 时通过；`APPROVED` 保持兼容；`BLOCKED` 可闭合审查链但不构成通过；`NEEDS_CHANGE(S)`、unknown 和 malformed evidence 均 fail-closed。
+- **REL-055 R0 阻断闭环**：发布审查 R0 的 `NEEDS_CHANGE` 已通过 FIX-193 R0-R3 独立复审链解决，R3 Code Review 为 `APPROVED`。live Check 30 当前为 WARN，且无 V5/closure violations；7 条历史 `APPROVED_WITH_NOTES` evidence marker 已补充 `unresolved_blockers=0`。
+
+### Changed
+
+- 版本声明同步到 0.65.2：source SKILL、canonical manifest、Claude/Codex/Zcode/Chrys plugin metadata、Claude marketplace metadata、package.json、四个 source hooks，以及 e2e fixture 指针。
+
+### Validation
+
+- `python skills/software-project-governance/infra/verify_workflow.py check-version-consistency`
+- `python skills/software-project-governance/infra/verify_workflow.py check-projection-sync`
+- `python skills/software-project-governance/infra/verify_workflow.py check-hot-fact-source --fail-on-issues`
+- `python skills/software-project-governance/infra/verify_workflow.py check-loop-role-skills`
+- `python skills/software-project-governance/infra/verify_workflow.py check-release --version 0.65.2 --require-changelog --skip-execution-gates`
+- `git diff --check`
+
+### Known Release-Gate Conditions
+
+- `check-release` 的 archive trigger gap 仍是既有失败，未被包装为 PASS。
+- 当前其余 governance health 仍有 43 issues，未由本 PATCH 关闭或包装为健康全绿。
+- FIX-193 后未获得新的全量单测全绿证据；已验证的是 CheckReviewClosureTests 17/17、R2 focused 19/19 与 Loop Role 7/7。不得用 focused PASS 替代未验证的 full-suite 结论。
+- 本发布包不回补历史 tag，不声明 zcode 官方 marketplace approval，不关闭 RISK-036、RISK-037、RISK-039、RISK-040 或 RISK-041，也不声明 1.0.0 readiness。
+
 ## [0.65.1] - 2026-07-11
 
 ### 0.65.1 — 证据可信度 + post-0.65.0 hotfix 收口（PATCH）

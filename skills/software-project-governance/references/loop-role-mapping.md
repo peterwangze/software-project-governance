@@ -34,8 +34,8 @@
 ## 可执行审查契约
 
 1. Reviewer 只审查并输出结论，不修改产品代码；修复由所属循环中的实现角色完成。
-2. Reviewer 输出 `APPROVED`、`NEEDS_CHANGE` 或 `BLOCKED`。`NEEDS_CHANGE` 不是终态：Coordinator 必须将工作返回所属循环，完成返工后发起下一轮复审。
-3. 审查终态写入证据记录，并由 Check 30 的复审链消费。只有 `APPROVED` 或 `BLOCKED` 可以结束复审链；超过 Check 30 复审 fuse 的 `NEEDS_CHANGE` 必须升级为 `BLOCKED`。
+2. Reviewer 输出 `APPROVED`、`APPROVED_WITH_NOTES`、`NEEDS_CHANGE` 或 `BLOCKED`。`APPROVED_WITH_NOTES` 是保留备注的通过终态，只能用于没有未解决 BLOCKING finding 的审查；其审查输出与 REVIEW 证据 MUST 包含独立结构字段 `unresolved_blockers=0`，字段缺失、非零、非法或重复矛盾时不得通过。自然语言中偶然出现的 `blocking` 不构成该事实。`NEEDS_CHANGE`（及兼容输入 `NEEDS_CHANGES`）不是终态：Coordinator 必须将工作返回所属循环，完成返工后发起下一轮复审。
+3. 审查结论写入证据记录，并由 Check 30 的复审链消费。`APPROVED` 与 `APPROVED_WITH_NOTES` 可以通过并结束复审链；`BLOCKED` 结束链路但不是通过，必须 escalation；`NEEDS_CHANGE(S)`、未知或格式错误结论必须 fail-closed。超过 Check 30 复审 fuse 的 `NEEDS_CHANGE` 必须升级为 `BLOCKED`。
 4. 循环失败仍遵从各自的 loop fuse：只有 `loop_count` 超过对应 fuse，才从循环迭代升级为阻断或升级处理。
 
 ## 相关依据

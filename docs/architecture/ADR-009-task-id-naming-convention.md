@@ -24,7 +24,7 @@ The project has accumulated 12+ task ID prefixes (FIX, FX, REL, AUDIT, REQ, VAL,
 | Prefix | Domain | Semantic | Example |
 |--------|--------|----------|---------|
 | **FIX** | Bug fix | Product code defect repair (root-cause fix, not feature) | FIX-170 (archive engine state filter) |
-| **FX** | Feature execution | Version-sliced architecture/feature implementation slice with explicit release carrying (Slice N of M, Release Reviewer) | FX-188~194 (0.65.0 loop-engineering 7 slices) |
+| **FEAT** | Feature | Version-sliced architecture/feature implementation slice with explicit release carrying (Slice N of M, Release Reviewer) | (replaces deprecated FX; future use) |
 | **REL** | Release | Version publication task (CHANGELOG + version sync + release docs) | REL-053 (release 0.65.0) |
 | **AUDIT** | Audit | Diagnostic/investigation task (read-only Analyst/Explore, produces finding) | AUDIT-130 (loop-engineering ADR) |
 | **REQ** | Requirement | Requirement analysis / competitive research / needs definition | REQ-101 |
@@ -34,14 +34,17 @@ The project has accumulated 12+ task ID prefixes (FIX, FX, REL, AUDIT, REQ, VAL,
 | **SYSGAP** | System gap | Systemic governance gap identification (feeds improvement backlog) | SYSGAP-030 |
 | **TD** | Tech debt | Tech-debt item (tracked, may not be versioned) | TD-014 |
 | **COORD** | Coordinator | Coordinator internal task (reserved, currently unused) | — |
+| ~~FX~~ | ~~Deprecated~~ | ~~Version-sliced implementation slice (FX-130~194, 2026-07-04~07-10)~~ | ~~Deprecated DEC-101: no defined abbreviation meaning; replaced by FEAT. Historical FX-130~194 tasks remain valid as committed, but no new FX tasks.~~ |
 
-**FX vs FIX disambiguation rule**:
+**FEAT vs FIX disambiguation rule**:
 - **FIX** = reactive repair of an existing defect (something is broken)
-- **FX** = proactive feature/architecture implementation slice (building something new, version-carried, multi-slice)
+- **FEAT** = proactive feature/architecture implementation slice (building something new, version-carried, multi-slice)
 
-**FX vs REL disambiguation rule**:
-- **FX** = implementation slice within a version (one of N slices, has Developer work + Code Reviewer)
+**FEAT vs REL disambiguation rule**:
+- **FEAT** = implementation slice within a version (one of N slices, has Developer work + Code Reviewer)
 - **REL** = the release publication itself (version bump + CHANGELOG + release docs + Release Reviewer)
+
+**FX deprecation (DEC-101)**: FX prefix had no defined abbreviation meaning (full-repo grep for "FX 缩写"/"FX 代表"/"FX 全称" returned zero hits). FX-130~194 (12 tasks, 2026-07-04~07-10) remain valid as committed history; no new FX tasks. The "version-sliced implementation slice" role is now served by FEAT (feature, semantically clear).
 
 ### 2.2 Number-space uniqueness (mandatory)
 

@@ -32,10 +32,14 @@
 python skills/software-project-governance/infra/verify_workflow.py check-version-consistency
 → Result: PASSED (13 files, all 0.65.0)
 python skills/software-project-governance/infra/verify_workflow.py check-projection-sync — PASS
-python skills/software-project-governance/infra/verify_workflow.py check-archive-integrity — PASS
+python skills/software-project-governance/infra/verify_workflow.py check-archive-integrity — FAIL at release review (pre-existing archive trigger gap, accepted as non-blocking for REL-053; see EVD-684 and REVIEW-REL-053-R0)
 ```
 
 Review evidence: FX-188~FX-194 each with independent Code Review R0 (7 slices). Test suite: 827 infra tests + 82 subtests passing. Sacred property tests: stateless round derivation parallel-safety proven. VAL-006 closure test: cli-tool 3 commands → 3 units (3 fixture forms). Data integrity: manifest-verified backup, tamper detection, rollback totality. 降级 SoD (DEC-090/091) — Coordinator spawn Release Agent + independent Release Reviewer R0.
+
+### FIX-190 evidence correction (2026-07-11)
+
+The original checklist line incorrectly recorded `check-archive-integrity — PASS`. The authoritative release evidence for REL-053 is EVD-684 plus REVIEW-REL-053-R0: archive integrity was a pre-existing FAIL during release review and was explicitly treated as a non-blocking P2/out-of-scope condition for 0.65.0. This correction preserves the release boundary instead of retroactively upgrading 0.65.0 to a fully clean archive gate.
 
 ### RISK-037 Progress (1.0.0 hard blocker)
 

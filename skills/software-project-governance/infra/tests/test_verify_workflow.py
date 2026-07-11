@@ -11550,6 +11550,47 @@ class CommitMessageSourceHardeningTests(unittest.TestCase):
             self.assertIn("M7.4 BLOCKED", output)
             self.assertIn("FIX-133", output)
 
+    def test_git_commit_m_accepts_approved_with_notes_review_evidence(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._init_repo(root, review_status="APPROVED_WITH_NOTES")
+            self._install_hooks(root)
+            self._stage_product_change(root)
+
+            result = subprocess.run(
+                ["git", "commit", "-m", "FIX-133: harden commit message source"],
+                cwd=root,
+                env=self._env(),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_git_commit_m_rejects_other_non_approved_review_statuses(self):
+        for status in ("NEEDS_CHANGES", "BLOCKED"):
+            with self.subTest(status=status):
+                with tempfile.TemporaryDirectory() as td:
+                    root = Path(td)
+                    self._init_repo(root, review_status=status)
+                    self._install_hooks(root)
+                    self._stage_product_change(root)
+
+                    result = subprocess.run(
+                        ["git", "commit", "-m", "FIX-133: harden commit message source"],
+                        cwd=root,
+                        env=self._env(),
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                    )
+
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("M7.4 BLOCKED", result.stdout + result.stderr)
+
     def test_git_commit_m_uses_current_message_when_commit_editmsg_is_stale(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -14029,6 +14070,68 @@ class DualRootModelTests(unittest.TestCase):
         equal the legacy ROOT (parents[3]) so existing checks are
         unaffected."""
         self.assertEqual(vw.PLUGIN_ROOT, vw.ROOT)
+
+
+class ProjectRootExplicitCliTests(unittest.TestCase):
+    """FIX-188 — explicit --project-root must override import-time cwd facts."""
+
+    def _write_governance(self, root, task_id):
+        gov = root / ".governance"
+        gov.mkdir(parents=True, exist_ok=True)
+        (gov / "plan-tracker.md").write_text(
+            "\n".join([
+                "# Plan Tracker",
+                "",
+                "## 项目配置",
+                "- **Profile**: standard",
+                "",
+                "## Gate 状态跟踪",
+                "| Gate | 阶段转换 | 状态 | 通过日期 | 关键证据 |",
+                "| --- | --- | --- | --- | --- |",
+                "| G1 | 立项 | passed | 2026-07-11 | EVD-001 |",
+                "",
+                "## 任务跟踪",
+                _TASK_COLS,
+                _TASK_SEP,
+                _task(task_id, "已完成"),
+            ]),
+            encoding="utf-8",
+        )
+        (gov / "evidence-log.md").write_text("", encoding="utf-8")
+        (gov / "decision-log.md").write_text("", encoding="utf-8")
+        (gov / "risk-log.md").write_text("", encoding="utf-8")
+        return gov
+
+    def test_check_governance_project_root_subprocess_reads_host_governance(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            host_root = base / "host-project"
+            cwd_root = base / "plugin-or-other-cwd"
+            host_root.mkdir()
+            cwd_root.mkdir()
+            self._write_governance(host_root, "HOST-188")
+            self._write_governance(cwd_root, "CWD-188")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(_INFRA_DIR / "verify_workflow.py"),
+                    "check-governance",
+                    "--project-root",
+                    str(host_root),
+                ],
+                cwd=cwd_root,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=60,
+            )
+
+            output = result.stdout + result.stderr
+            self.assertIn("HOST-188", output)
+            self.assertNotIn("CWD-188", output)
+            self.assertNotIn("FileNotFoundError", output)
 
 
 if __name__ == "__main__":

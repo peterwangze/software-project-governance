@@ -88,6 +88,80 @@ GOVERNANCE_DIR = HOST_PROJECT_ROOT / ".governance"
 EXECUTION_PACKET_PATH = GOVERNANCE_DIR / "execution-packets.json"
 
 
+def _extract_project_root_arg(argv):
+    """Extract --project-root from argv no matter where the user places it.
+
+    ``argparse`` only accepts global options before the subcommand, but the
+    workflow entry commonly invokes commands as:
+
+        check-governance --project-root <host>
+
+    Keep that spelling backward-compatible by stripping the option before
+    subparser parsing and applying the host-root override afterward.
+    """
+    filtered = []
+    project_root = None
+    iterator = iter(range(len(argv)))
+    for index in iterator:
+        value = argv[index]
+        if value == "--project-root":
+            try:
+                project_root = argv[index + 1]
+            except IndexError:
+                raise ValueError("--project-root requires a path")
+            next(iterator, None)
+        elif value.startswith("--project-root="):
+            project_root = value.split("=", 1)[1]
+        else:
+            filtered.append(value)
+    return project_root, filtered
+
+
+def _apply_project_root_override(project_root):
+    """Rebind host-governance fact paths to an explicit project root.
+
+    This does not move plugin assets.  ``ROOT`` / ``PLUGIN_ROOT`` continue to
+    identify the installed workflow package; only host facts under
+    ``<project-root>/.governance`` are rebound.
+    """
+    global HOST_PROJECT_ROOT, GOVERNANCE_DIR, EXECUTION_PACKET_PATH
+    global SAMPLE_PATH, SESSION_SNAPSHOT_PATH, EVIDENCE_PATH, RISK_PATH
+    global ARCHIVE_INDEX_PATH, ARCHIVE_TASKS_DIR, ARCHIVE_EVIDENCE_DIR
+    global ARCHIVE_DECISIONS_DIR, ARCHIVE_RISKS_DIR
+
+    host_root = Path(project_root).expanduser().resolve()
+    HOST_PROJECT_ROOT = host_root
+    GOVERNANCE_DIR = HOST_PROJECT_ROOT / ".governance"
+    EXECUTION_PACKET_PATH = GOVERNANCE_DIR / "execution-packets.json"
+
+    if "SAMPLE_PATH" in globals():
+        SAMPLE_PATH = GOVERNANCE_DIR / "plan-tracker.md"
+    if "SESSION_SNAPSHOT_PATH" in globals():
+        SESSION_SNAPSHOT_PATH = GOVERNANCE_DIR / "session-snapshot.md"
+    if "EVIDENCE_PATH" in globals():
+        EVIDENCE_PATH = GOVERNANCE_DIR / "evidence-log.md"
+    if "RISK_PATH" in globals():
+        RISK_PATH = GOVERNANCE_DIR / "risk-log.md"
+    if "ARCHIVE_INDEX_PATH" in globals():
+        ARCHIVE_INDEX_PATH = GOVERNANCE_DIR / "archive" / "index.md"
+    if "ARCHIVE_TASKS_DIR" in globals():
+        ARCHIVE_TASKS_DIR = GOVERNANCE_DIR / "archive" / "tasks"
+    if "ARCHIVE_EVIDENCE_DIR" in globals():
+        ARCHIVE_EVIDENCE_DIR = GOVERNANCE_DIR / "archive" / "evidence"
+    if "ARCHIVE_DECISIONS_DIR" in globals():
+        ARCHIVE_DECISIONS_DIR = GOVERNANCE_DIR / "archive" / "decisions"
+    if "ARCHIVE_RISKS_DIR" in globals():
+        ARCHIVE_RISKS_DIR = GOVERNANCE_DIR / "archive" / "risks"
+
+    if "REQUIRED_FILES" in globals():
+        REQUIRED_FILES.update({
+            "Governance Plan Tracker": GOVERNANCE_DIR / "plan-tracker.md",
+            "Governance Evidence Log": GOVERNANCE_DIR / "evidence-log.md",
+            "Governance Decision Log": GOVERNANCE_DIR / "decision-log.md",
+            "Governance Risk Log": GOVERNANCE_DIR / "risk-log.md",
+        })
+
+
 def _display_path(path, root=None):
     """Return repo-relative path when possible, without Path.is_relative_to()."""
     root = root or ROOT
@@ -859,22 +933,22 @@ REQUIRED_SNIPPETS = {
         "## [0.5.0]",
     ],
     ROOT / ".claude-plugin/plugin.json": [
-        "0.65.0",
+        "0.65.1",
     ],
     ROOT / ".claude-plugin/marketplace.json": [
-        "0.65.0",
+        "0.65.1",
     ],
     ROOT / ".codex-plugin/plugin.json": [
-        "0.65.0",
+        "0.65.1",
     ],
     ROOT / ".zcode-plugin/plugin.json": [
-        "0.65.0",
+        "0.65.1",
     ],
     ROOT / "package.json": [
-        "0.65.0",
+        "0.65.1",
     ],
     ROOT / "skills/software-project-governance/core/manifest.json": [
-        "0.65.0",
+        "0.65.1",
     ],
 }
 
@@ -21284,10 +21358,24 @@ def cmd_web_console(args):
         sys.exit(1)
 
 
-def main():
+def main(argv=None):
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    try:
+        explicit_project_root, parser_argv = _extract_project_root_arg(raw_argv)
+    except ValueError as exc:
+        print(f"verify_workflow: error: {exc}", file=sys.stderr)
+        sys.exit(2)
+
     parser = argparse.ArgumentParser(
         prog="verify_workflow",
         description="Software Project Governance CLI",
+    )
+    parser.add_argument(
+        "--project-root",
+        help=(
+            "Host project root whose .governance facts should be read. "
+            "May also be placed after the subcommand."
+        ),
     )
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
@@ -21827,7 +21915,12 @@ def main():
     subparsers.add_parser("check-archive-integrity",
                           help="Check archive integrity (SYSGAP-030 Check 27)")
 
-    args = parser.parse_args()
+    args = parser.parse_args(parser_argv)
+    if args.project_root and explicit_project_root is None:
+        explicit_project_root = args.project_root
+    args.project_root = explicit_project_root
+    if explicit_project_root is not None:
+        _apply_project_root_override(explicit_project_root)
 
     commands = {
         "verify": cmd_verify,

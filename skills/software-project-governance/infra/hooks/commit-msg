@@ -2,7 +2,7 @@
 # commit-msg governance hook — installed by software-project-governance
 # Runs AFTER prepare-commit-msg, so $1 reliably contains the current commit message.
 # Handles message-dependent checks that pre-commit cannot do (architectural fix: FIX-047).
-# @version: 0.65.0
+# @version: 0.65.1
 
 set -e
 
@@ -52,7 +52,7 @@ has_approved_review_evidence() {
     local evidence_file="$REPO_ROOT/.governance/evidence-log.md"
     [ -f "$evidence_file" ] || return 1
 
-    grep -Eq "^\|[[:space:]]*REVIEW-[^|]*$task_id[^|]*\|[[:space:]]*$task_id[[:space:]]*\|.*\|[[:space:]]*(APPROVED|通过|批准)[[:space:]]*\|[[:space:]]*$" "$evidence_file" 2>/dev/null
+    grep -Eq "^\|[[:space:]]*REVIEW-[^|]*$task_id[^|]*\|[[:space:]]*$task_id[[:space:]]*\|.*\|[[:space:]]*(APPROVED_WITH_NOTES|APPROVED|通过|批准)[[:space:]]*\|[[:space:]]*$" "$evidence_file" 2>/dev/null
 }
 
 resolve_spg_home_candidate() {

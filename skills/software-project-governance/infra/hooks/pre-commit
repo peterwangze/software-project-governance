@@ -3,7 +3,7 @@
 # Runs BEFORE every git commit. BLOCKS commits that don't meet governance criteria.
 # Handles FILE-DEPENDENT checks only. Message-dependent checks are in commit-msg (FIX-047).
 # Design assumption: agent WILL NOT follow rules voluntarily. System MUST enforce.
-# @version: 0.65.0
+# @version: 0.65.1
 
 set -e
 
@@ -32,7 +32,7 @@ has_approved_review_evidence() {
     local evidence_file="$REPO_ROOT/.governance/evidence-log.md"
     [ -f "$evidence_file" ] || return 1
 
-    grep -Eq "^\|[[:space:]]*REVIEW-[^|]*$task_id[^|]*\|[[:space:]]*$task_id[[:space:]]*\|.*\|[[:space:]]*(APPROVED|通过|批准)[[:space:]]*\|[[:space:]]*$" "$evidence_file" 2>/dev/null
+    grep -Eq "^\|[[:space:]]*REVIEW-[^|]*$task_id[^|]*\|[[:space:]]*$task_id[[:space:]]*\|.*\|[[:space:]]*(APPROVED_WITH_NOTES|APPROVED|通过|批准)[[:space:]]*\|[[:space:]]*$" "$evidence_file" 2>/dev/null
 }
 
 resolve_spg_home_candidate() {

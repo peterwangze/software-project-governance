@@ -2,6 +2,33 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.65.1] - 2026-07-11
+
+### 0.65.1 — 证据可信度 + post-0.65.0 hotfix 收口（PATCH）
+
+0.65.1 是 PATCH 发布包：不引入新 loop-engineering 能力、不实现 0.65.2/0.65.3 的 SKILL Loop Role 或 tag-gate 机制，只把 0.65.0 后发现的证据口径、入口双 root、hook 审查状态兼容和 release-lineage 风险记录收口为一个可安装版本。
+
+### Fixed
+- **FIX-187 — 双 root crash 修复**（commit `407b74c`）：修复入口双 root 场景中 host/project root 解析导致的崩溃风险，保持 PLUGIN_HOME 与 HOST_PROJECT_ROOT 分离的 DEC-096 边界。
+- **FIX-188 — 显式 `--project-root` 覆盖 + hook `APPROVED_WITH_NOTES` 兼容**：`verify_workflow.py` 支持在子命令后传入 `--project-root <host>` 并重新绑定 host `.governance` 事实路径；pre-commit / commit-msg hook 接受独立审查结论 `APPROVED_WITH_NOTES`，避免 REL-053 这类真实 review evidence 被误挡。
+- **FIX-190 — 0.65.0 release checklist / session snapshot 证据口径修正**：纠正 0.65.0 发布资产中把 `check-archive-integrity` 写成 PASS 的错误口径；权威口径是 REL-053 审查时存在 pre-existing archive integrity FAIL，作为 non-blocking P2 / out-of-scope 处理，不追溯包装成全绿。
+
+### Changed
+- **AUDIT-132 / RISK-041 — 0.55.3 后质量审计与 release-lineage 风险归档**：把 0.55.3 后 release-lineage / tag 缺口作为显式风险边界记录进入 0.65.1 发布叙述；本版本不回补历史 tag、不创建 0.65.1 tag、不关闭 RISK-041。
+- 版本声明同步到 0.65.1：source SKILL、canonical manifest、Claude/Codex/Zcode/Chrys plugin metadata、Claude marketplace metadata、package.json、4 hook `@version`、`verify_workflow.py` REQUIRED_SNIPPETS，以及 e2e fixture 指针（`project/e2e-test-project/skills/software-project-governance/SKILL.md` + `project/e2e-test-project/.governance/plan-tracker.md`）。
+
+### Validation
+- `python skills/software-project-governance/infra/verify_workflow.py check-version-consistency`
+- `python skills/software-project-governance/infra/verify_workflow.py check-projection-sync`
+- `python skills/software-project-governance/infra/verify_workflow.py check-hot-fact-source --fail-on-issues`
+- `python skills/software-project-governance/infra/verify_workflow.py check-release --version 0.65.1 --require-changelog`
+- `git diff --check`
+
+### Boundaries
+- No git tag created. No commit or push performed by the release package preparation step.
+- No official approval, marketplace approval, universal/full runtime support, external first-session pilot success, RISK closure, or 1.0.0 readiness is claimed.
+- Pre-existing archive/tag/lineage failures remain visible and must be reported honestly by release checks.
+
 ## [0.65.0] - 2026-07-10
 
 ### Loop-Engineering Workflow Refactor (DEC-097/098/099, RISK-037)

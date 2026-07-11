@@ -25,11 +25,15 @@ or:
     python -m unittest skills.software-project-governance.infra.tests.test_loop_health -v
 """
 
+import argparse
+import io
 import json
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 _HERE = Path(__file__).resolve().parent
 _INFRA_DIR = _HERE.parent
@@ -70,6 +74,15 @@ def _write_registry(host_root, pause_points):
     (core / "loop-engineering-registry.json").write_text(
         json.dumps(_make_registry(pause_points), indent=2), encoding="utf-8"
     )
+    return host_root
+
+
+def _write_raw_registry(host_root, content):
+    """Write an exact registry payload for authority-negative tests."""
+    core = host_root / "core"
+    core.mkdir(parents=True, exist_ok=True)
+    path = core / "loop-engineering-registry.json"
+    path.write_text(content, encoding="utf-8")
     return host_root
 
 
@@ -357,17 +370,104 @@ class CheckLoopHealthEnvelopeTests(unittest.TestCase):
         self.assertIn("advisory_count", result["summary"])
         self.assertIsInstance(result["no_overclaim_boundary"], str)
 
-    def test_envelope_fail_closed_on_corrupt_registry(self):
-        """A corrupt registry path → fail-closed, never raises (empty Part 1)."""
-        # Point plugin_home at a temp dir with NO registry → loader returns None.
+    def test_envelope_fail_closed_on_missing_registry_authority(self):
+        """A missing registry produces a blocking authority diagnostic."""
         with tempfile.TemporaryDirectory() as td:
             result = lh.check_loop_health(
                 target=str(Path(td)),
                 plugin_home=str(Path(td)),  # no core/loop-engineering-registry.json
             )
-        # Part 1 fail-closed → no findings; Part 2/DORA no runtime → empty.
-        self.assertEqual(result["findings"], [])
-        self.assertEqual(result["summary"]["blocking_count"], 0)
+        self.assertGreater(result["summary"]["blocking_count"], 0)
+        self.assertEqual(result["findings"][0]["severity"], "FAIL")
+        self.assertEqual(result["findings"][0]["pause_point"], "registry-authority")
+        self.assertIn(
+            "missing loop-engineering registry", result["findings"][0]["message"]
+        )
+
+    def test_envelope_fail_closed_on_invalid_json_registry(self):
+        """Invalid JSON authority is blocking and preserves its diagnostic."""
+        with tempfile.TemporaryDirectory() as td:
+            home = _write_raw_registry(Path(td), "{not-json")
+            result = lh.check_loop_health(target=str(Path(td)), plugin_home=home)
+        self.assertGreater(result["summary"]["blocking_count"], 0)
+        self.assertIn("invalid JSON", result["findings"][0]["message"])
+
+    def test_envelope_fail_closed_on_non_object_registry(self):
+        """A valid JSON non-object cannot serve as registry authority."""
+        with tempfile.TemporaryDirectory() as td:
+            home = _write_raw_registry(Path(td), "[]")
+            result = lh.check_loop_health(target=str(Path(td)), plugin_home=home)
+        self.assertGreater(result["summary"]["blocking_count"], 0)
+        self.assertIn("registry root must be an object", result["findings"][0]["message"])
+
+    def test_envelope_fail_closed_on_invalid_pause_points(self):
+        """The authority requires pause_points to be an object."""
+        with tempfile.TemporaryDirectory() as td:
+            home = _write_raw_registry(Path(td), json.dumps({"pause_points": []}))
+            result = lh.check_loop_health(target=str(Path(td)), plugin_home=home)
+        self.assertGreater(result["summary"]["blocking_count"], 0)
+        self.assertIn("pause_points must be an object", result["findings"][0]["message"])
+
+    def test_envelope_fail_closed_on_empty_pause_points(self):
+        """An empty pause-point authority must not pass vacuously."""
+        with tempfile.TemporaryDirectory() as td:
+            home = _write_raw_registry(Path(td), json.dumps({"pause_points": {}}))
+            result = lh.check_loop_health(target=str(Path(td)), plugin_home=home)
+        self.assertGreater(result["summary"]["blocking_count"], 0)
+        self.assertIn("pause_points must not be empty", result["findings"][0]["message"])
+
+    def test_envelope_fail_closed_on_non_object_pause_point_entry(self):
+        """Every pause_points member must be a structured authority entry."""
+        with tempfile.TemporaryDirectory() as td:
+            home = _write_raw_registry(
+                Path(td), json.dumps({"pause_points": {"PP-Bad": "not-an-object"}})
+            )
+            result = lh.check_loop_health(target=str(Path(td)), plugin_home=home)
+        self.assertGreater(result["summary"]["blocking_count"], 0)
+        self.assertIn("entry PP-Bad must be an object", result["findings"][0]["message"])
+
+    def test_envelope_fail_closed_when_loader_returns_data_and_issues(self):
+        """Loader diagnostics remain blocking even when parsed data is usable."""
+        registry = _make_registry({"PP-Active-OK": _PP_ACTIVE_OK})
+        with patch.object(
+            lh, "load_loop_registry", return_value=(registry, ["authority checksum mismatch"])
+        ):
+            result = lh.check_loop_health(plugin_home=PLUGIN_HOME)
+        self.assertGreater(result["summary"]["blocking_count"], 0)
+        self.assertIn("authority checksum mismatch", result["findings"][0]["message"])
+
+    def test_envelope_fail_closed_on_pause_point_missing_active(self):
+        """A PausePoint without an explicit active boolean is invalid authority."""
+        entry = dict(_PP_ACTIVE_OK)
+        entry.pop("active")
+        with tempfile.TemporaryDirectory() as td:
+            home = _write_registry(Path(td), {"PP-Missing-Active": entry})
+            result = lh.check_loop_health(target=str(Path(td)), plugin_home=home)
+        self.assertGreater(result["summary"]["blocking_count"], 0)
+        self.assertIn("active as a boolean", result["findings"][0]["message"])
+
+    def test_envelope_fail_closed_on_pause_point_string_active(self):
+        """Truth-like strings cannot substitute for the authority's boolean field."""
+        entry = dict(_PP_ACTIVE_OK, active="false")
+        with tempfile.TemporaryDirectory() as td:
+            home = _write_registry(Path(td), {"PP-String-Active": entry})
+            result = lh.check_loop_health(target=str(Path(td)), plugin_home=home)
+        self.assertGreater(result["summary"]["blocking_count"], 0)
+        self.assertIn("active as a boolean", result["findings"][0]["message"])
+
+    def test_cli_fail_on_issues_exits_nonzero_for_authority_failure(self):
+        """The unchanged verify_workflow adapter consumes authority FAIL findings."""
+        import verify_workflow as vw
+
+        with tempfile.TemporaryDirectory() as td:
+            args = argparse.Namespace(target=str(Path(td)), fail_on_issues=True)
+            output = io.StringIO()
+            with patch.object(loop_engine, "PLUGIN_HOME", Path(td)):
+                with redirect_stdout(output), self.assertRaises(SystemExit) as raised:
+                    vw.cmd_check_loop_health(args)
+        self.assertEqual(raised.exception.code, 1)
+        self.assertIn("registry-authority", output.getvalue())
+        self.assertIn("1 BLOCKING", output.getvalue())
 
 
 if __name__ == "__main__":

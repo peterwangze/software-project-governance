@@ -17,8 +17,9 @@ Outputs evidence type: LOOP-HEALTH-{flow_unit_id}-velocity
 **Advisory-only status (0.65.0):** this is a STANDALONE CLI
 (``check-loop-health``). It is NOT wired into Check 28 (check-governance) and
 MUST NOT appear as a blocking sub-item of that gate. ``check_loop_health``
-never raises on corrupt/missing inputs — it returns safe defaults (fail-closed
-for Part 1, no-findings for Part 2/DORA when runtime data is absent).
+never raises on corrupt/missing inputs. Missing or invalid registry authority
+produces a blocking Part 1 finding, while absent runtime data remains an empty
+Part 2/DORA result.
 """
 
 import json
@@ -81,8 +82,9 @@ def _check_velocity_justification(plugin_home=None):
     ``velocity_cost_justification`` is a non-empty string. Missing/blank
     justification on an active PP is a protocol violation (DEC-097 part 2).
 
-    Fail-closed: a missing or corrupt registry returns no findings (the loader
-    already records its own diagnostic; this function never raises).
+    Fail-closed: a missing, corrupt, or structurally invalid registry produces
+    a blocking authority finding. Optional runtime absence is handled
+    separately and does not affect this authority check.
 
     Args:
         plugin_home: Optional plugin-home override forwarded to the loader.
@@ -92,18 +94,67 @@ def _check_velocity_justification(plugin_home=None):
         ``{"severity": "FAIL", "pause_point": pp_id, "message": ...}``.
     """
     findings = []
-    data, _issues = load_loop_registry(plugin_home)
+    data, issues = load_loop_registry(plugin_home)
+    for issue in issues:
+        if issue:
+            findings.append({
+                "severity": "FAIL",
+                "pause_point": "registry-authority",
+                "message": (
+                    "Loop registry authority unavailable or invalid: {0}"
+                ).format(issue),
+            })
     if not isinstance(data, dict):
-        # Fail-closed: corrupt/missing registry — loader reports; we return [].
-        return findings
+        if findings:
+            return findings
+        return [{
+            "severity": "FAIL",
+            "pause_point": "registry-authority",
+            "message": (
+                "Loop registry authority unavailable or invalid: "
+                "loop-engineering registry root must be an object"
+            ),
+        }]
     pause_points = data.get("pause_points")
     if not isinstance(pause_points, dict):
-        return findings
+        return [{
+            "severity": "FAIL",
+            "pause_point": "registry-authority",
+            "message": (
+                "Loop registry authority invalid: pause_points must be an object"
+            ),
+        }]
+    if not pause_points:
+        return [{
+            "severity": "FAIL",
+            "pause_point": "registry-authority",
+            "message": (
+                "Loop registry authority invalid: pause_points must not be empty"
+            ),
+        }]
     for pp_id, entry in pause_points.items():
         if not isinstance(entry, dict):
+            findings.append({
+                "severity": "FAIL",
+                "pause_point": "registry-authority",
+                "message": (
+                    "Loop registry authority invalid: pause_points entry {0} "
+                    "must be an object"
+                ).format(pp_id),
+            })
+            continue
+        if "active" not in entry or not isinstance(entry.get("active"), bool):
+            findings.append({
+                "severity": "FAIL",
+                "pause_point": "registry-authority",
+                "message": (
+                    "Loop registry authority invalid: pause_points entry {0} "
+                    "must declare active as a boolean"
+                ).format(pp_id),
+            })
             continue
         # Only ACTIVE PausePoints are subject to the justification rule.
-        if not entry.get("active", False):
+        if not entry["active"]:
             continue
         justification = entry.get("velocity_cost_justification")
         if not isinstance(justification, str) or not justification.strip():
@@ -291,7 +342,8 @@ def check_loop_health(
     Advisory-only in 0.65.0: the ``velocity_check_blocking`` flag defaults to
     ``False`` (Part 2 findings are ADVISORY). It is NOT wired into Check 28.
 
-    Never raises: corrupt/missing registry or runtime yields safe defaults.
+    Never raises: corrupt/missing registry yields a blocking authority finding;
+    missing runtime yields safe empty Part 2/DORA results.
 
     Args:
         target: Optional host project root (path or str). Used to locate

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "version": "0.66.1",
-  "lifecycle_state": "candidate",
+  "lifecycle_state": "released",
   "provenance": "native",
   "artifacts": {
     "changelog": "project/CHANGELOG.md",
@@ -11,6 +11,15 @@
     "review_evidence": [".governance/evidence-log.md"]
   },
   "trust": {"candidate_commit": {"derivation": "git_commit_adding_path"}},
-  "events": [],
-  "effective_state": {"lifecycle_state": "candidate", "withdrawn": false, "amendments": []}
+  "events": [
+    {
+      "id": "release-0.66.1",
+      "type": "candidate_to_released",
+      "recorded_at": "2026-07-17T16:00:00Z",
+      "claims": {
+        "candidate_parent_commit": "41340265252d0a878d9c22c21b2a29b37a344044"
+      }
+    }
+  ],
+  "effective_state": {"lifecycle_state": "released", "withdrawn": false, "amendments": []}
 }

@@ -50,3 +50,7 @@ If the 7 review-skill re-labels cause confusion without functional regression:
 ### No-overclaim boundaries
 
 No official approval. No marketplace approval. No universal/full runtime support. No external first-session pilot success. No RISK-036/037/039 closure (RISK-037 IMPL-MET progress, external validation pending). No 1.0.0 readiness. Rollback plan covers the regression scenarios specific to this release (migration corruption / parallel-safety regression / classic-compat break). Loop-engineering modules are additive (opt-in migration), so rollback is low-risk — classic-phase-gate execution is never forced to migrate. The `loop_migration.py --rollback` path is the primary safety mechanism (DEC-098 criterion-4: rollback restores totality, hash-verified).
+
+<!-- loop-runtime-superseding:{"schema_version":"1.0","notice_id":"LRC-ROLLBACK-0650","effective_version":"0.66.1","supersedes_claim_ids":["LRC-HIST-ROLLBACK-001"],"authority_ids":["AUDIT-133","EVD-707","DEC-104"],"classification":{"runtime_activation":"NOT_MET","migration_validity":"NOT_MET","criteria_2_3_4_5_6":"PARTIAL","criterion_7":"NOT_PROVEN","criterion_8":"MET-NARROW","capability":"experimental_scaffolding"},"open_risks":["RISK-037","RISK-042"]} -->
+
+Current interpretation: containment and rollback assets do not prove runtime activation. The current migration proposal is rejected by the canonical runtime validator before live writes.

@@ -800,3 +800,9 @@ This revision addresses the 3 P1 findings from REVIEW-AUDIT-130-R0. The P0 (crit
 ---
 
 *End of ADR (R0.1). P0 resolved via DEC-098; 3 P1 findings addressed. Ready for Design Reviewer R1 pressure-testing per §12.*
+
+<!-- loop-runtime-superseding:{"schema_version":"1.0","notice_id":"LRC-ARCH-0650","effective_version":"0.66.1","supersedes_claim_ids":["LRC-HIST-ARCH-001"],"authority_ids":["AUDIT-133","EVD-707","DEC-104"],"classification":{"runtime_activation":"NOT_MET","migration_validity":"NOT_MET","criteria_2_3_4_5_6":"PARTIAL","criterion_7":"NOT_PROVEN","criterion_8":"MET-NARROW","capability":"experimental_scaffolding"},"open_risks":["RISK-037","RISK-042"]} -->
+
+Current interpretation: this document remains the historical 0.65.0 target architecture.
+<!-- loop-runtime-target:{"claim_id":"LRC-ARCH-PLANNED-001","target_version":"0.68.0","status":"planned_not_active"} -->
+Its generic persisted back-edges, loop counters, fuses, PARO transitions and automatic escalation are planned-not-active until the 0.68.0 execution chain is implemented and independently validated.

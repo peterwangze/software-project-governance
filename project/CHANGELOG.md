@@ -2,6 +2,11 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.66.1] - 2026-07-17
+
+### 0.66.1 - Loop runtime containment hotfix（PATCH）
+
+AUDIT-133 审计判定 Loop Engineering runtime activation 为 NOT_MET。0.66.1 把该审计结论固化为机器可校验的 fail-closed semantic claim gate（Check 31 + check-loop-runtime-claims CLI），防止 capability overclaim。所有 7 个 review SKILL 和 loop-role-mapping 的 overclaim 语句改为诚实的 experimental scaffolding 表述。loop_migration.py apply 路径由 FIX-195 canonical validator fail-closed 保护。性能门槛经 DEC-119 调整为绝对 8.0s（6 轮优化证明 paired improvement 数学不可达成）。RISK-037/RISK-042 保持打开。
 ## [0.66.0] - 2026-07-11
 
 ### 0.66.0 - Declarative release ledger、完整版本投影与 Phase 6（MINOR）
@@ -2164,3 +2169,9 @@ verify_workflow.py 从"文件存在性检查"升级为"语义一致性检查"—
 - 3 种项目 Profile（lightweight/standard/strict）
 - 中途接入协议（onboarding）
 - 交互边界规则
+
+<!-- loop-runtime-superseding:{"schema_version":"1.0","notice_id":"LRC-CHANGELOG-0661","effective_version":"0.66.1","supersedes_claim_ids":["LRC-HIST-CHANGELOG-001"],"authority_ids":["AUDIT-133","EVD-707","DEC-104"],"classification":{"runtime_activation":"NOT_MET","migration_validity":"NOT_MET","criteria_2_3_4_5_6":"PARTIAL","criterion_7":"NOT_PROVEN","criterion_8":"MET-NARROW","capability":"experimental_scaffolding"},"open_risks":["RISK-037","RISK-042"]} -->
+
+## 0.66.1 Loop capability correction
+
+AUDIT-133 supersedes the current interpretation of the 0.65.0 Loop claims. Loop Engineering is experimental scaffolding: runtime activation and migration validity are NOT_MET; criteria 2/3/4/5/6 are PARTIAL; criterion 7 is NOT_PROVEN; criterion 8 is MET-NARROW. RISK-037 and RISK-042 remain open. Historical release statements above remain records of what was asserted and tested at that time.

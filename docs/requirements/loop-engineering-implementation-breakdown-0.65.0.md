@@ -464,3 +464,7 @@ This means 0.65.0 is all-or-nearly-all: the only slice with declared deferral ro
 |------|---------|--------|--------|
 | 2026-07-10 | 0.1 | Initial implementation breakdown (Architect output, design-only; no code) | Architect |
 | 2026-07-10 | 0.2 | Accuracy fixes per Design Reviewer P1/P2 findings: P1-1 ArchGuard ≤20-line enforcement restated as Code-Review-enforced (§3.2 item 3, §4.2, §1.2 build-order 6); P1-2 `cmd_dynamic_lifecycle_migration` two-guard restructure (§1.5 table + closing para, §4.1, FX-191 Delivers + Modules-touched); P1-3 `cmd_check_manifest_consistency` precedent reframed (§1.1 intro, §4 intro, Appendix); P2 line-drift fixed (`GOVERNANCE_PACK_KNOWN_CHECKS` 2395→2051 ×2; `resolve_entry.py` docstring "lines 26-27"→"line 27" ×2; `_vw()` pattern 31-46→23-43). No slice/scope/design changes. | Architect |
+
+<!-- loop-runtime-superseding:{"schema_version":"1.0","notice_id":"LRC-BREAKDOWN-0650","effective_version":"0.66.1","supersedes_claim_ids":["LRC-HIST-BREAKDOWN-001"],"authority_ids":["AUDIT-133","EVD-707","DEC-104"],"classification":{"runtime_activation":"NOT_MET","migration_validity":"NOT_MET","criteria_2_3_4_5_6":"PARTIAL","criterion_7":"NOT_PROVEN","criterion_8":"MET-NARROW","capability":"experimental_scaffolding"},"open_risks":["RISK-037","RISK-042"]} -->
+
+Current interpretation: completion of the listed implementation slices produced experimental scaffolding and review-chain enforcement, not the complete persisted Loop runtime described by the target breakdown.

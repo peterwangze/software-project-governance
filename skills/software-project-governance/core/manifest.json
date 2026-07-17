@@ -1,7 +1,7 @@
 {
   "$schema": "https://example.com/manifest-schema-v1.json",
   "workflow": "software-project-governance",
-  "version": "0.66.0",
+  "version": "0.66.1",
   "description": "Canonical file manifest. All entries define files/directories/patterns that SHOULD exist after plugin installation or repo checkout. The single source of truth for cleanup and verification.",
   "source_of_truth": true,
   "release_projection_contract": {
@@ -99,6 +99,14 @@
         "type": "file"
       },
       {
+        "path": "skills/software-project-governance/core/loop-runtime-claim-allowlist.json",
+        "type": "file"
+      },
+      {
+        "path": "skills/software-project-governance/core/loop-runtime-claim-authority.json",
+        "type": "file"
+      },
+      {
         "path": "skills/software-project-governance/core/architecture-health.json",
         "type": "file"
       },
@@ -152,6 +160,10 @@
       },
       {
         "path": "skills/software-project-governance/infra/checks/flow_unit_runtime.py",
+        "type": "file"
+      },
+      {
+        "path": "skills/software-project-governance/infra/checks/loop_runtime_claims.py",
         "type": "file"
       },
       {
@@ -618,6 +630,28 @@
         "required": true,
         "artifact_role": "loop-engineering-registry",
         "validation_commands": [
+          "python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues"
+        ]
+      },
+      {
+        "id": "loop-runtime-claim-policy",
+        "path": "skills/software-project-governance/core/loop-runtime-claim-allowlist.json",
+        "type": "file",
+        "required": true,
+        "artifact_role": "loop-runtime-claim-policy",
+        "validation_commands": [
+          "python skills/software-project-governance/infra/verify_workflow.py check-loop-runtime-claims --product-root . --project-root .",
+          "python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues"
+        ]
+      },
+      {
+        "id": "loop-runtime-claim-authority",
+        "path": "skills/software-project-governance/core/loop-runtime-claim-authority.json",
+        "type": "file",
+        "required": true,
+        "artifact_role": "loop-runtime-claim-authority",
+        "validation_commands": [
+          "python skills/software-project-governance/infra/verify_workflow.py check-loop-runtime-claims --product-root . --project-root .",
           "python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues"
         ]
       },

@@ -130,3 +130,7 @@ This restores plan-tracker.md + evidence-log.md from backup (SHA-256 verified), 
 - Implementation: FX-188~FX-194, REL-053 (commit 0ac878e)
 - Historical: VAL-005 (EVD-589, python_game), VAL-006 (EVD-590, shitu dry-run)
 - Task: VAL-007 (plan-tracker 优先级表)
+
+<!-- loop-runtime-superseding:{"schema_version":"1.0","notice_id":"LRC-SHITU-0650","effective_version":"0.66.1","supersedes_claim_ids":["LRC-HIST-SHITU-001"],"authority_ids":["AUDIT-133","EVD-707","DEC-104"],"classification":{"runtime_activation":"NOT_MET","migration_validity":"NOT_MET","criteria_2_3_4_5_6":"PARTIAL","criterion_7":"NOT_PROVEN","criterion_8":"MET-NARROW","capability":"experimental_scaffolding"},"open_risks":["RISK-037","RISK-042"]} -->
+
+Current interpretation: the command output above is preserved byte-for-byte as historical test evidence. It does not prove multi-unit production execution, installed-state full PASS, valid migration apply, or external effectiveness.

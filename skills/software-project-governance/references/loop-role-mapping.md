@@ -2,13 +2,16 @@
 
 版本背景：本映射随 0.65.0 的 loop-engineering 架构引入；本文档标题与七个审查 SKILL 的 `## 循环角色` 一样是稳定语义，不随版本号更新。
 
-本文档是七个审查 SKILL 在 loop-engineering 架构下 gate 语义的单一事实源。DEC-097 的第一部分规定“loop 是唯一模型”：审查 SKILL 的 gate 不再是“检查某个阶段”，而是对循环退出或进入条件的认证。
+本文档是七个审查 SKILL 的目标 Loop 角色映射事实源。依据 AUDIT-133、EVD-707 与 DEC-104，0.66.1 的 Loop Engineering 定位是 **experimental scaffolding**：runtime activation 为 NOT_MET，migration validity 为 NOT_MET。角色映射不表示持久化 Loop runtime 已激活。
 
 依据 ADR §3.5（`docs/requirements/loop-engineering-architecture-0.65.0-proposed.md` 的 §3.5 与 §4 是逐阶段映射的权威来源）。
 
 ## 为什么需要此映射
 
-在 0.51.0-0.55.0，七个审查 SKILL 将 gate 描述为“检查阶段 X”。0.65.0 已废弃该语义：每个审查 SKILL 都认证一个确定的循环退出或进入条件。审查失败不会终止阶段；它会将工作返回所属循环继续迭代、递增该循环的 `loop_count`，并由 agent 依据发现重新 Plan。只有 `loop_count` 超过对应 fuse（`MAX_ROUNDS`）时，失败才升级而不是继续迭代。
+在 0.51.0-0.55.0，七个审查 SKILL 将 gate 描述为“检查阶段 X”。0.65.0 引入了目标 Loop 角色词汇，但后续审计未证明通用持久化回边、per-unit `loop_count`、tier fuse、PARO transition 或自动升级已经接入生产执行链。当前可执行范围仅是 Coordinator M7.4 的返工/复审，以及 Check 30 对复审链的校验。
+
+<!-- loop-runtime-target:{"claim_id":"LRC-MAPPING-PLANNED-001","target_version":"0.68.0","status":"planned_not_active"} -->
+通用持久化 back-edge、flow-unit `loop_count`、tier fuse、PARO transition 与 automatic escalation 是 0.68.0 planned-not-active 行为。
 
 ## 术语（ADR §4）
 
@@ -35,8 +38,8 @@
 
 1. Reviewer 只审查并输出结论，不修改产品代码；修复由所属循环中的实现角色完成。
 2. Reviewer 输出 `APPROVED`、`APPROVED_WITH_NOTES`、`NEEDS_CHANGE` 或 `BLOCKED`。`APPROVED_WITH_NOTES` 是保留备注的通过终态，只能用于没有未解决 BLOCKING finding 的审查；其审查输出与 REVIEW 证据 MUST 包含独立结构字段 `unresolved_blockers=0`，字段缺失、非零、非法或重复矛盾时不得通过。自然语言中偶然出现的 `blocking` 不构成该事实。`NEEDS_CHANGE`（及兼容输入 `NEEDS_CHANGES`）不是终态：Coordinator 必须将工作返回所属循环，完成返工后发起下一轮复审。
-3. 审查结论写入证据记录，并由 Check 30 的复审链消费。`APPROVED` 与 `APPROVED_WITH_NOTES` 可以通过并结束复审链；`BLOCKED` 结束链路但不是通过，必须 escalation；`NEEDS_CHANGE(S)`、未知或格式错误结论必须 fail-closed。超过 Check 30 复审 fuse 的 `NEEDS_CHANGE` 必须升级为 `BLOCKED`。
-4. 循环失败仍遵从各自的 loop fuse：只有 `loop_count` 超过对应 fuse，才从循环迭代升级为阻断或升级处理。
+3. 审查结论写入证据记录，并由 Check 30 的复审链消费。`APPROVED` 与 `APPROVED_WITH_NOTES` 可以通过并结束复审链；`BLOCKED` 结束链路但不是通过；`NEEDS_CHANGE(S)`、未知或格式错误结论必须 fail-closed。超过 Check 30 复审轮次限制的 `NEEDS_CHANGE` 由 Coordinator 升级为 `BLOCKED`。
+4. 第 3 条是当前已执行的审查链事实；它不能作为通用 Loop runtime、持久化 `loop_count`、tier fuse 或 PARO 自动转换已实现的证据。
 
 ## 相关依据
 

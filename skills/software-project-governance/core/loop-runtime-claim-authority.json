@@ -1,0 +1,33 @@
+{
+  "schema_version": "1.0",
+  "effective_version": "0.66.1",
+  "capability": "experimental_scaffolding",
+  "runtime_activation": "NOT_MET",
+  "migration_validity": "NOT_MET",
+  "criteria_2_3_4_5_6": "PARTIAL",
+  "criterion_7": "NOT_PROVEN",
+  "criterion_8": "MET-NARROW",
+  "authority_ids": ["AUDIT-133", "EVD-707", "DEC-104"],
+  "open_risks": ["RISK-037", "RISK-042"],
+  "policy_sha256": "e11af88d2367c21206300c77a5dba3ce5f718e9f37880b5a7055ddcd4dfd277e",
+  "source_records": [
+    {
+      "record_id": "DEC-104",
+      "path": ".governance/decision-log.md",
+      "line_prefix": "| DEC-104 |",
+      "sha256": "7666ace742ebc8691356ea53b884163ffafc25dd8545d7e6b680786461f6db11"
+    },
+    {
+      "record_id": "EVD-707",
+      "path": ".governance/evidence-log.md",
+      "line_prefix": "| EVD-707 |",
+      "sha256": "8aa48e272d6e627cdb64d5eb443215a584e5d0fc6cdfbb5fa329a93dfeb68e69"
+    },
+    {
+      "record_id": "AUDIT-133",
+      "path": ".governance/plan-tracker.md",
+      "line_prefix": "| **P0** | AUDIT-133 |",
+      "sha256": "c3fbd2e490f8871a39e63a7c2db750ee71bd0d8f9550b83f4442344532c08adb"
+    }
+  ]
+}

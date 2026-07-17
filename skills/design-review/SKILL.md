@@ -11,9 +11,12 @@ description: 设计审查——对技术选型、系统设计、ADR 进行独立
 
 版本背景：本循环语义于 0.65.0 引入；本标题是稳定规范，不随版本号变更。
 
-**Gate 语义：** 每个 flow unit 的 Middle loop 的 `loop-entry-gate`（设计 → 开发 → 测试 → 发布）。本审查认证 Middle loop 的**进入条件**：设计已收敛，可以开始构建该 flow unit；它不代表项目通过，只认证 Middle loop 可以开始。
+**角色映射：** 在目标 Loop 模型中，本审查对应 flow unit Middle loop 的 `loop-entry-gate`。0.66.1 的当前运行能力仍是 experimental scaffolding；该映射不表示持久化 Loop runtime 已激活。
 
-审查失败不会终止阶段；它会将工作返回所属循环（Middle loop 的设计子循环）继续迭代（依据发现重新设计），并递增 `loop_count`。只有当 `loop_count` 超过 Middle fuse 时，失败才升级而不是继续迭代。
+当前可执行行为仅为 Coordinator M7.4 的 `NEEDS_CHANGE -> 返工 -> 复审`，以及 Check 30 对复审链终态、轮次连续性和熔断结果的校验。
+
+<!-- loop-runtime-target:{"claim_id":"LRC-DESIGN-PLANNED-001","target_version":"0.68.0","status":"planned_not_active"} -->
+持久化 back-edge、flow-unit `loop_count`、Middle fuse、PARO transition 与自动升级属于 0.68.0 规划，当前不生效。
 
 Reviewer 只审查并输出结论，不修改产品代码。Reviewer 必须输出 `APPROVED`、`APPROVED_WITH_NOTES`、`NEEDS_CHANGE` 或 `BLOCKED`；`APPROVED_WITH_NOTES` 是保留备注的通过终态，只能用于没有未解决 BLOCKING finding 的审查，不得包含未解决的 BLOCKING finding。`APPROVED_WITH_NOTES` 的审查输出与 REVIEW 证据 MUST 包含独立结构字段 `unresolved_blockers=0`；字段缺失、非零、非法或重复矛盾时不得通过，自然语言中偶然出现的 `blocking` 不构成该事实。`NEEDS_CHANGE`（及兼容输入 `NEEDS_CHANGES`）不是终态，Coordinator 必须在返工后发起下一轮复审。终态证据由 Check 30 的复审链消费：`APPROVED` 与 `APPROVED_WITH_NOTES` 可以通过并结束复审链；`BLOCKED` 结束链路但不是通过，必须 escalation；`NEEDS_CHANGE(S)`、未知或格式错误结论必须 fail-closed。超过复审 fuse 的 `NEEDS_CHANGE` 必须升级为 `BLOCKED`。
 

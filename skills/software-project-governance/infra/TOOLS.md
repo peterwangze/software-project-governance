@@ -526,6 +526,17 @@
 - **边界**：未安装必须为 `NOT_RUN`；不安装依赖，不把未运行写成 PASS
 - **被以下子工作流使用**：开发、测试、发布、维护
 
+### TOOL-050：Loop Runtime Claim Gate
+
+- **文件**：`infra/checks/loop_runtime_claims.py`、`core/loop-runtime-claim-allowlist.json`、`core/loop-runtime-claim-authority.json`
+- **子命令**：`check-loop-runtime-claims --product-root <path> --project-root <host> [--scan-mode product_release|installed_host]`
+- **输入**：产品根下 `docs/`、`project/`、`skills/` 的全部 Markdown/Python/JSON 候选，以及显式 host root 的四个热治理文件
+- **输出**：完整 inventory digest、解析/semantic-unit 数量、notice/fingerprint 计数、typed blocking findings、zero skip/truncate 计数
+- **触发条件**：Loop capability wording、review SKILL、历史 0.65.0 解释、policy/authority、发布候选变化后；作为 `check-governance` Check 31 和 release gate 的阻断检查
+- **依赖**：packaged policy/authority、AUDIT-133、EVD-707、DEC-104；stdlib-only scanner leaf
+- **边界**：只证明 capability claim 与当前证据一致；不激活 Loop runtime、不修复 migration contract、不关闭 RISK-037/RISK-042；无 accept-current/refresh/auto-update
+- **被以下子工作流使用**：架构、开发、测试、发布、维护
+
 ### TOOL-044：ArchGuard Duplicate Code check
 
 - **文件**：`infra/verify_workflow.py`（`check_duplicate_code`）

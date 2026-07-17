@@ -57,3 +57,9 @@ invalid target therefore returns diagnostics and a non-zero standalone exit.
 - No Loop Engineering execution-engine activation.
 - No relaxation or duplication of visibility-v1 validation.
 - No RISK-037 or RISK-042 closure.
+- Loop Engineering remains experimental scaffolding in 0.66.1. Persisted
+  back-edges, per-unit loop counters, tier fuses, PARO transitions and
+  automatic escalation are planned for 0.68.0 and are not active now.
+- Release validation includes the fail-closed `check-loop-runtime-claims`
+  command. Missing policy/authority, parser ambiguity, incomplete inventory,
+  historical notice drift, and unsupported affirmative claims block release.

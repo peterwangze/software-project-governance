@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """
-Loop-engineering migration — FX-191 (0.65.0 loop-engineering, slice 4).
+Loop-engineering migration containment — FX-191/FIX-195.
+
+The 0.66.1 implementation is experimental scaffolding. Its current payload is
+rejected by the canonical runtime validator before live writes; this module
+does not activate the planned persisted Loop runtime.
 
 Implements the ``--apply`` (ADR §7.2) and ``--rollback`` (ADR §7.3) paths for
 the classic-G1-G11 → loop-engineering migration.
@@ -675,7 +679,8 @@ def apply_migration(target_root=None, project_type=None, plugin_home=None):
         ))
 
     # ── Fail-closed: idempotency (runtime.json already at target version) ──
-    # The runtime.json is the AUTHORITATIVE marker of a completed migration.
+    # A future contract-valid runtime.json is the idempotency marker. The
+    # current proposal is not contract-valid and cannot reach this state.
     # The plan-tracker is NOT consulted here: apply NEVER modifies the
     # plan-tracker, so a plan-tracker-based guard could never fire on
     # double-apply (the tracker retains its original "classic-phase-gate"

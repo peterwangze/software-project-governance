@@ -53,3 +53,7 @@ The original checklist line incorrectly recorded `check-archive-integrity — PA
 ### Boundaries (no-overclaim)
 
 No official approval. No marketplace approval. No universal/full runtime support. No external validation full PASS. No external first-session pilot success. No RISK-036 closure. No RISK-037 closure (IMPL-MET criteria progress, external validation pending). No RISK-039 closure. No 1.0.0 readiness. This is a MINOR loop-engineering workflow refactor: 5 new modules + 3 new CLI commands + semantic re-labeling. Non-breaking to classic-phase-gate execution (backward compatible, migration is opt-in).
+
+<!-- loop-runtime-superseding:{"schema_version":"1.0","notice_id":"LRC-RELEASE-CHECKLIST-0650","effective_version":"0.66.1","supersedes_claim_ids":["LRC-HIST-RELEASE-CHECKLIST-001"],"authority_ids":["AUDIT-133","EVD-707","DEC-104"],"classification":{"runtime_activation":"NOT_MET","migration_validity":"NOT_MET","criteria_2_3_4_5_6":"PARTIAL","criterion_7":"NOT_PROVEN","criterion_8":"MET-NARROW","capability":"experimental_scaffolding"},"open_risks":["RISK-037","RISK-042"]} -->
+
+Current interpretation: checklist completion records the 0.65.0 release process, not an active Loop runtime. AUDIT-133 found runtime activation and migration validity NOT_MET.

@@ -22,6 +22,7 @@ import tempfile
 import unittest
 from contextlib import ExitStack, redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 _HERE = Path(__file__).resolve().parent
@@ -31,6 +32,60 @@ if str(_INFRA_DIR) not in sys.path:
 
 import verify_workflow as vw
 import cleanup as cleanup_mod
+
+
+class LoopRuntimeClaimAdapterTests(unittest.TestCase):
+    """FIX-197 thin verify_workflow adapter coverage."""
+
+    def test_claim_command_emits_complete_pass_report(self):
+        completed = subprocess.run(
+            [sys.executable, str(_INFRA_DIR / "verify_workflow.py"),
+             "check-loop-runtime-claims", "--product-root", str(_INFRA_DIR.parents[2]),
+             "--project-root", str(_INFRA_DIR.parents[2])],
+            capture_output=True, text=True, encoding="utf-8", timeout=15,
+        )
+        self.assertEqual(0, completed.returncode, completed.stderr)
+        payload = json.loads(completed.stdout)
+        self.assertEqual("PASS", payload["verdict"])
+        self.assertEqual(payload["inventory"]["candidate_count"], payload["parsed_candidates"])
+        self.assertEqual(0, payload["skipped_candidates"])
+        self.assertEqual(0, payload["truncated_candidates"])
+
+    def test_governance_and_release_use_explicit_three_root_modes(self):
+        installed = vw._loop_runtime_claim_context("installed_host")
+        release = vw._loop_runtime_claim_context("product_release")
+        self.assertEqual("installed_host", installed.scan_mode)
+        self.assertEqual("product_release", release.scan_mode)
+        for context in (installed, release):
+            self.assertEqual(vw.PLUGIN_ROOT, context.product_root)
+            self.assertEqual(vw.PLUGIN_ROOT / "skills/software-project-governance", context.plugin_home)
+            self.assertEqual(vw.HOST_PROJECT_ROOT, context.host_root)
+
+    def test_identity_attestation_pending_keeps_aggregate_gate_non_green(self):
+        report = SimpleNamespace(
+            verdict="PASS",
+            findings=[],
+            inventory=SimpleNamespace(inventory_sha256="abc", candidate_count=3),
+            parsed_candidates=3,
+            skipped_candidates=0,
+            truncated_candidates=0,
+        )
+        detail = vw._loop_runtime_claim_gate_detail(report)
+        self.assertFalse(detail["pass"])
+        self.assertEqual([vw.IDENTITY_ATTESTATION_PENDING], detail["issues"])
+        self.assertIn("identity_verdict=PENDING", detail["boundary"])
+
+    def test_standalone_semantic_command_does_not_require_identity(self):
+        report = SimpleNamespace(verdict="PASS", as_dict=lambda: {"verdict": "PASS"})
+        args = SimpleNamespace(
+            product_root=str(_INFRA_DIR.parents[2]),
+            claim_project_root=str(_INFRA_DIR.parents[2]),
+            scan_mode="product_release",
+        )
+        output = io.StringIO()
+        with patch.object(vw, "scan_loop_runtime_claims", return_value=report), redirect_stdout(output):
+            vw.cmd_check_loop_runtime_claims(args)
+        self.assertEqual({"verdict": "PASS"}, json.loads(output.getvalue()))
 
 
 # ────────────────────────────────────────────────────────────
@@ -4732,36 +4787,30 @@ class DynamicLifecycleMigrationTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 1)
         self.assertIn("requires explicit --dry-run", buf.getvalue())
 
-    def test_apply_flag_now_delegates_to_loop_migration(self):
-        """FX-191: --apply is unblocked — it delegates to loop_migration.
-
-        Previously (0.55.0) --apply exited with '--apply is blocked'. FX-191
-        inverts the control flow: --apply reaches apply_migration and writes
-        a runtime.json + MIGRATION evidence row. The target here already
-        carries a flow-unit-runtime.json (from _write_target's default), so
-        this verifies the migration overwrites cleanly (kill-mid-write
-        recovery path).
-        """
+    def test_apply_flag_delegates_and_current_payload_fails_before_writes(self):
+        """FIX-195: delegation remains, but the current payload fails closed."""
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             self._write_target(root)
+            runtime_path = root / ".governance" / "flow-unit-runtime.json"
+            runtime_before = runtime_path.read_bytes()
+            evidence_path = root / ".governance" / "evidence-log.md"
+            evidence_before = evidence_path.read_bytes()
             args = argparse.Namespace(target=str(root), dry_run=True, apply=True, fail_on_issues=True)
             buf = io.StringIO()
 
-            with redirect_stdout(buf):
+            with redirect_stdout(buf), self.assertRaises(SystemExit) as ctx:
                 vw.cmd_dynamic_lifecycle_migration(args)
 
-            # Assertions run INSIDE the with-block so the temp dir is still
-            # present for the filesystem checks below.
             output = json.loads(buf.getvalue())
-            self.assertTrue(output["applied"], f"apply should succeed; got: {output}")
+            self.assertEqual(1, ctx.exception.code)
+            self.assertFalse(output["applied"])
+            self.assertTrue(output["validation_issues"])
             self.assertEqual(output["workflow_model"]["new"], "loop-engineering")
             self.assertTrue(output["flow_units_derived"] >= 1)
-            # Backup must exist on disk.
-            self.assertTrue((root / ".governance" / "archive").is_dir())
-            # MIGRATION evidence row must be appended.
-            evidence_text = (root / ".governance" / "evidence-log.md").read_text(encoding="utf-8")
-            self.assertIn("MIGRATION-0.65.0", evidence_text)
+            self.assertEqual(runtime_before, runtime_path.read_bytes())
+            self.assertEqual(evidence_before, evidence_path.read_bytes())
+            self.assertFalse((root / ".governance" / "archive").exists())
 
     def test_dynamic_default_overclaim_is_blocked(self):
         with tempfile.TemporaryDirectory() as td:
@@ -8724,6 +8773,7 @@ class GovernanceIntegrationTests(unittest.TestCase):
             (gov / "risk-log.md").write_text("# Risk log\n", encoding="utf-8")
 
             with patch.object(vw, "ROOT", root), \
+                 patch.object(vw, "GOVERNANCE_DIR", gov), \
                  patch.object(vw, "SAMPLE_PATH", gov / "plan-tracker.md"), \
                  patch.object(vw, "EVIDENCE_PATH", gov / "evidence-log.md"), \
                  patch.object(vw, "RISK_PATH", gov / "risk-log.md"):

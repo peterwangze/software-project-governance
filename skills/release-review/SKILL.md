@@ -11,9 +11,12 @@ description: 发布审查——对发布就绪状态进行独立审查。覆盖C
 
 版本背景：本循环语义于 0.65.0 引入；本标题是稳定规范，不随版本号变更。
 
-**Gate 语义：** Middle loop 的 `loop-exit-gate`，同时也是 Outer loop 的 `loop-entry-gate`（运营 → 度量 → 维护/复盘）。本审查认证 Middle loop 的**退出条件**：flow unit 可发布；同时认证进入 Outer loop 的运营度量阶段。
+**角色映射：** 在目标 Loop 模型中，本审查对应 Middle loop 的 `loop-exit-gate` 与 Outer loop 的 `loop-entry-gate`。0.66.1 的当前运行能力仍是 experimental scaffolding；该映射不表示持久化 Loop runtime 已激活。
 
-审查失败不会终止阶段；它会经 `release-to-testing-rework` 返回所属循环（测试子循环，并可回到 Inner loop）继续迭代，并递增 `loop_count`。只有当 `loop_count` 超过 Middle fuse 时，失败才升级而不是继续迭代。
+当前可执行行为仅为 Coordinator M7.4 的 `NEEDS_CHANGE -> 返工 -> 复审`，以及 Check 30 对复审链终态、轮次连续性和熔断结果的校验。
+
+<!-- loop-runtime-target:{"claim_id":"LRC-RELEASE-PLANNED-001","target_version":"0.68.0","status":"planned_not_active"} -->
+持久化 `release-to-testing-rework` back-edge、flow-unit `loop_count`、Middle fuse、PARO transition 与自动升级属于 0.68.0 规划，当前不生效。
 
 Reviewer 只审查并输出结论，不修改产品代码。Reviewer 必须输出 `APPROVED`、`APPROVED_WITH_NOTES`、`NEEDS_CHANGE` 或 `BLOCKED`；`APPROVED_WITH_NOTES` 是保留备注的通过终态，只能用于没有未解决 BLOCKING finding 的审查，不得包含未解决的 BLOCKING finding。`APPROVED_WITH_NOTES` 的审查输出与 REVIEW 证据 MUST 包含独立结构字段 `unresolved_blockers=0`；字段缺失、非零、非法或重复矛盾时不得通过，自然语言中偶然出现的 `blocking` 不构成该事实。`NEEDS_CHANGE`（及兼容输入 `NEEDS_CHANGES`）不是终态，Coordinator 必须在返工后发起下一轮复审。终态证据由 Check 30 的复审链消费：`APPROVED` 与 `APPROVED_WITH_NOTES` 可以通过并结束复审链；`BLOCKED` 结束链路但不是通过，必须 escalation；`NEEDS_CHANGE(S)`、未知或格式错误结论必须 fail-closed。超过复审 fuse 的 `NEEDS_CHANGE` 必须升级为 `BLOCKED`。
 

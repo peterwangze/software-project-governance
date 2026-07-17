@@ -29,6 +29,11 @@ from checks.flow_unit_runtime import (
 )
 from checks import projection as projection_checks
 from checks import version as version_checks
+from checks.loop_runtime_claims import ClaimScanContext, scan_loop_runtime_claims
+
+IDENTITY_ATTESTATION_PENDING = (
+    "IDENTITY_ATTESTATION_PENDING: independent source identity and final-candidate attestation remain FIX-200 work"
+)
 from release.context import RepositoryContext
 from release.ledger import validate_release_ledger
 from release.projection import check_projections, write_projections
@@ -949,22 +954,22 @@ REQUIRED_SNIPPETS = {
         "## [0.5.0]",
     ],
     ROOT / ".claude-plugin/plugin.json": [
-        "0.66.0",
+        "0.66.1",
     ],
     ROOT / ".claude-plugin/marketplace.json": [
-        "0.66.0",
+        "0.66.1",
     ],
     ROOT / ".codex-plugin/plugin.json": [
-        "0.66.0",
+        "0.66.1",
     ],
     ROOT / ".zcode-plugin/plugin.json": [
-        "0.66.0",
+        "0.66.1",
     ],
     ROOT / "package.json": [
-        "0.66.0",
+        "0.66.1",
     ],
     ROOT / "skills/software-project-governance/core/manifest.json": [
-        "0.66.0",
+        "0.66.1",
     ],
 }
 
@@ -1095,8 +1100,12 @@ LOOP_ROLE_SKILL_CONTRACTS = {
 
 LOOP_ROLE_SHARED_SEMANTIC_TOKENS = (
     "版本背景：本循环语义于 0.65.0 引入",
-    "审查失败不会终止阶段",
-    "并递增 `loop_count`",
+    "experimental scaffolding",
+    "M7.4",
+    "`NEEDS_CHANGE -> 返工 -> 复审`",
+    '"target_version":"0.68.0"',
+    '"status":"planned_not_active"',
+    "当前不生效",
     "Reviewer 只审查并输出结论，不修改产品代码",
     "`APPROVED`、`APPROVED_WITH_NOTES`、`NEEDS_CHANGE` 或 `BLOCKED`",
     "`APPROVED_WITH_NOTES` 是保留备注的通过终态",
@@ -1163,8 +1172,6 @@ def check_loop_role_skill_consistency(root=None):
         for token in contract["role_tokens"]:
             if token not in content:
                 issues.append(f"{display_path}: missing role token: {token}")
-        if contract["failure_token"] not in content:
-            issues.append(f"{display_path}: missing enclosing-loop failure return semantics")
         for token in LOOP_ROLE_SHARED_SEMANTIC_TOKENS:
             if token not in content:
                 issues.append(f"{display_path}: missing executable review contract token: {token}")
@@ -16266,6 +16273,24 @@ def cmd_check_governance(args):
         print(f"│  [{rc30['verdict']}] {rc30['reason']}")
     print("└──────────────────────────────────────────────────────┘")
 
+    # ── 31. Loop Runtime Claim Gate (FIX-197 / DEC-106) ──
+    print("\n┌─ Check 31: Loop Runtime Claim Gate (FIX-197) ───────┐")
+    claim_report = scan_loop_runtime_claims(_loop_runtime_claim_context("installed_host"))
+    print(f"│  Verdict: {claim_report.verdict}")
+    print(f"│  Candidates: {claim_report.inventory.candidate_count}; parsed: {claim_report.parsed_candidates}")
+    print(f"│  Inventory: {claim_report.inventory.inventory_sha256}")
+    if claim_report.findings:
+        all_issues += len(claim_report.findings)
+        for finding in claim_report.findings[:20]:
+            print(f"│  [FAIL] {finding.code}: {finding.normalized_path} {finding.message}")
+        if len(claim_report.findings) > 20:
+            print(f"│  [FAIL] ... {len(claim_report.findings) - 20} more finding(s)")
+    else:
+        print("│  [PASS] complete semantic inventory; zero skip/truncate")
+    all_issues += 1
+    print(f"│  [FAIL] {IDENTITY_ATTESTATION_PENDING}")
+    print("└──────────────────────────────────────────────────────┘")
+
     # ── Summary ──
     print(f"\n┌─ Governance Health Summary ──────────────────────────┐")
     if all_issues == 0:
@@ -19919,6 +19944,36 @@ def cmd_check_agent_adapters(args):
         sys.exit(1)
 
 
+def _loop_runtime_claim_context(scan_mode):
+    """Build the explicit three-root claim context for governance and release gates."""
+    return ClaimScanContext(
+        product_root=PLUGIN_ROOT,
+        plugin_home=PLUGIN_ROOT / "skills/software-project-governance",
+        host_root=HOST_PROJECT_ROOT,
+        scan_mode=scan_mode,
+    )
+
+
+def _loop_runtime_claim_gate_detail(claim_report):
+    """Aggregate semantic evidence while keeping identity authorization pending."""
+    issues = [
+        f"{finding.code}: {finding.normalized_path} {finding.message}"
+        for finding in claim_report.findings
+    ]
+    issues.append(IDENTITY_ATTESTATION_PENDING)
+    return {
+        "pass": False,
+        "issues": issues,
+        "boundary": (
+            f"semantic_verdict={claim_report.verdict}; identity_verdict=PENDING; "
+            f"inventory={claim_report.inventory.inventory_sha256}; "
+            f"candidates={claim_report.inventory.candidate_count}; "
+            f"parsed={claim_report.parsed_candidates}; skip={claim_report.skipped_candidates}; "
+            f"truncate={claim_report.truncated_candidates}"
+        ),
+    }
+
+
 def cmd_check_release(args):
     """Run release readiness checks used by the stage-release workflow."""
     try:
@@ -19936,6 +19991,11 @@ def cmd_check_release(args):
         release_commit=getattr(args, "release_commit", None),
         lineage_remote=getattr(args, "lineage_remote", "origin"),
     )
+    claim_report = scan_loop_runtime_claims(_loop_runtime_claim_context("product_release"))
+    claim_gate = _loop_runtime_claim_gate_detail(claim_report)
+    result["details"]["loop_runtime_claim_gate"] = claim_gate
+    result["issues"].extend(claim_gate["issues"])
+    result["pass"] = False
     print()
     print("=== Release Readiness Check ===")
     if getattr(args, "version", None):
@@ -20018,6 +20078,26 @@ def cmd_check_loop_role_skills(_args):
             print(f"    - {issue}")
         sys.exit(1)
     print("  [PASS] All review SKILL loop-role contracts are consistent.")
+
+
+def cmd_check_loop_runtime_claims(args):
+    """Run the FIX-197 blocking claim gate and emit a stable JSON report."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    product_root = Path(args.product_root or ROOT).resolve()
+    host_root = Path(args.claim_project_root or HOST_PROJECT_ROOT).resolve()
+    plugin_home = (PLUGIN_ROOT / "skills/software-project-governance").resolve()
+    report = scan_loop_runtime_claims(ClaimScanContext(
+        product_root=product_root,
+        plugin_home=plugin_home,
+        host_root=host_root,
+        scan_mode=args.scan_mode,
+    ))
+    print(json.dumps(report.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+    if report.verdict != "PASS":
+        sys.exit(1)
 
 
 def cmd_check_sequential_ids(args):
@@ -20535,21 +20615,19 @@ def cmd_check_flow_unit_runtime(args):
 
 
 def cmd_dynamic_lifecycle_migration(args):
-    """Classic -> loop-engineering migration entry (FX-191 restructure).
+    """Classic -> loop-engineering migration entry (FX-191/FIX-195).
 
-    FX-191 inverts the control flow so ``--apply`` is checked FIRST and
-    delegates to ``loop_migration.apply_migration`` (ADR §7.2). The
-    ``--dry-run`` path is preserved byte-identical (delegates to
-    ``build_dynamic_lifecycle_migration_preview``). Both blocking guards
-    from 0.55.0 are removed: ``--apply`` now reaches the new write path
-    instead of ``sys.exit(1)``.
+    ``--apply`` delegates to ``loop_migration.apply_migration``. FIX-195 then
+    validates the proposed payload before any host write; the current
+    experimental-scaffolding payload is rejected by the canonical validator
+    and this command exits non-zero. The ``--dry-run`` preview is preserved.
     """
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
-    # FX-191: --apply now delegates to loop_migration (ADR §7.2). Checked
-    # BEFORE the --dry-run requirement so --apply reaches the write path.
+    # Delegate before the preview guard. FIX-195 keeps the current proposal
+    # fail-closed in apply_migration before any host write.
     if getattr(args, "apply", False):
         from loop_migration import apply_migration  # deferred import (FX-191)
         result = apply_migration(target_root=getattr(args, "target", None))
@@ -21850,6 +21928,20 @@ def main(argv=None):
     clh_p.add_argument("--fail-on-issues", action="store_true",
                        help="Exit non-zero if any blocking (FAIL) findings are present")
 
+    # check-loop-runtime-claims (FIX-197 / DEC-106 — release blocking)
+    clrc_p = subparsers.add_parser(
+        "check-loop-runtime-claims",
+        help="Fail-closed semantic Loop runtime capability claim gate",
+    )
+    clrc_p.add_argument("--product-root", default=None,
+                        help="Product repository or installed plugin root")
+    clrc_p.add_argument("--project-root", dest="claim_project_root", default=None,
+                        help="Explicit governed host root")
+    clrc_p.add_argument("--scan-mode", choices=("product_release", "installed_host"),
+                        default="product_release")
+    clrc_p.add_argument("--fail-on-issues", action="store_true",
+                        help="Compatibility flag; blocking semantic findings always exit non-zero")
+
     # loop-rollup (FX-193 — per-flow-unit loop_state rollup; RISK-037 criterion 2)
     lr_p = subparsers.add_parser(
         "loop-rollup",
@@ -22027,6 +22119,7 @@ def main(argv=None):
         "check-readme-pack-guidance": cmd_check_readme_pack_guidance,
         "check-architecture-health": cmd_check_architecture_health,
         "check-loop-health": cmd_check_loop_health,
+        "check-loop-runtime-claims": cmd_check_loop_runtime_claims,
         "loop-rollup": cmd_loop_rollup,
         "check-duplicate-code": cmd_check_duplicate_code,
         "check-technical-debt": cmd_check_technical_debt,

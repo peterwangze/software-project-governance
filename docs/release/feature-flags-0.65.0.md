@@ -30,3 +30,7 @@ This release introduces the loop-engineering capability layer with **no runtime 
 ## No-overclaim boundaries
 
 No official approval. No marketplace approval. No universal/full runtime support. No external first-session pilot success. No RISK-036 closure. No RISK-037 closure (criteria 2/4/5/6/8 IMPL-MET, but external validation of criteria 5/7/8 still pending — not closed by 0.65.0). No RISK-039 closure. No 1.0.0 readiness. This is a loop-engineering workflow refactor (MINOR): 5 new modules + 3 new CLI commands + semantic re-labeling. Non-breaking to classic-phase-gate execution (backward compatible, migration is opt-in).
+
+<!-- loop-runtime-superseding:{"schema_version":"1.0","notice_id":"LRC-FEATURE-FLAGS-0650","effective_version":"0.66.1","supersedes_claim_ids":["LRC-HIST-FEATURE-FLAGS-001"],"authority_ids":["AUDIT-133","EVD-707","DEC-104"],"classification":{"runtime_activation":"NOT_MET","migration_validity":"NOT_MET","criteria_2_3_4_5_6":"PARTIAL","criterion_7":"NOT_PROVEN","criterion_8":"MET-NARROW","capability":"experimental_scaffolding"},"open_risks":["RISK-037","RISK-042"]} -->
+
+Current interpretation: the 0.65.0 switches expose experimental scaffolding only. They do not activate a persisted Loop runtime or make the migration payload valid.

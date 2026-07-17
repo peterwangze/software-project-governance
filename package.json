@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@zcode/software-project-governance-plugin",
-  "version": "0.66.0",
+  "version": "0.66.1",
   "private": true,
   "license": "MIT",
   "description": "AI coding delivery trust layer for governance-aware coding agents — zcode plugin packaging. The plugin surface lives in skills/ and commands/; this file only provides the npm package identity expected by the zcode plugin host."

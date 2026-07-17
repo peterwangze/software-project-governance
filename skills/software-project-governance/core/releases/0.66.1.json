@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "version": "0.66.1",
+  "lifecycle_state": "candidate",
+  "provenance": "native",
+  "artifacts": {
+    "changelog": "project/CHANGELOG.md",
+    "release_docs": [
+      "docs/migration/loop-engineering-runtime-contract-migration-0.66.1.md"
+    ],
+    "review_evidence": [".governance/evidence-log.md"]
+  },
+  "trust": {"candidate_commit": {"derivation": "git_commit_adding_path"}},
+  "events": [],
+  "effective_state": {"lifecycle_state": "candidate", "withdrawn": false, "amendments": []}
+}

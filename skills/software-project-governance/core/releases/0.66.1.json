@@ -8,18 +8,30 @@
     "release_docs": [
       "docs/migration/loop-engineering-runtime-contract-migration-0.66.1.md"
     ],
-    "review_evidence": [".governance/evidence-log.md"]
+    "review_evidence": [
+      ".governance/evidence-log.md"
+    ]
   },
-  "trust": {"candidate_commit": {"derivation": "git_commit_adding_path"}},
+  "trust": {
+    "candidate_commit": {
+      "derivation": "git_commit_adding_path"
+    }
+  },
   "events": [
     {
       "id": "release-0.66.1",
       "type": "candidate_to_released",
       "recorded_at": "2026-07-17T16:00:00Z",
       "claims": {
-        "candidate_parent_commit": "41340265252d0a878d9c22c21b2a29b37a344044"
-      }
+        "candidate_parent_commit": "41340265252d0a878d9c22c21b2a29b37a344044",
+        "integrity": "sha256:558b3804cc4e8c0014ffe1bf6589039e3d0c2385310e63383638a4bf21f255ba"
+      },
+      "integrity": "sha256:558b3804cc4e8c0014ffe1bf6589039e3d0c2385310e63383638a4bf21f255ba"
     }
   ],
-  "effective_state": {"lifecycle_state": "released", "withdrawn": false, "amendments": []}
+  "effective_state": {
+    "lifecycle_state": "released",
+    "withdrawn": false,
+    "amendments": []
+  }
 }

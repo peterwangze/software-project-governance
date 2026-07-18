@@ -167,6 +167,14 @@
         "type": "file"
       },
       {
+        "path": "skills/software-project-governance/infra/checks/loop_runtime_claim_attestation.py",
+        "type": "file"
+      },
+      {
+        "path": "skills/software-project-governance/infra/tests/test_loop_runtime_claim_attestation.py",
+        "type": "file"
+      },
+      {
         "path": "skills/software-project-governance/infra/verify-e2e.sh",
         "type": "file"
       },
@@ -652,6 +660,17 @@
         "artifact_role": "loop-runtime-claim-authority",
         "validation_commands": [
           "python skills/software-project-governance/infra/verify_workflow.py check-loop-runtime-claims --product-root . --project-root .",
+          "python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues"
+        ]
+      },
+      {
+        "id": "loop-runtime-identity-attestor",
+        "path": "skills/software-project-governance/infra/checks/loop_runtime_claim_attestation.py",
+        "type": "file",
+        "required": true,
+        "artifact_role": "loop-runtime-identity-attestor",
+        "validation_commands": [
+          "python -m unittest discover -s skills/software-project-governance/infra/tests -p test_loop_runtime_claim_attestation.py -v",
           "python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues"
         ]
       },

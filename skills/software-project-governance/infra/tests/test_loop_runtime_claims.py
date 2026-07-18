@@ -516,6 +516,11 @@ class LoopRuntimeClaimTests(unittest.TestCase):
         )
         policy = {
             "schema_version": "1.0", "notice_schema_version": "1.0",
+            "root_source_contract": {
+                "schema_version": "loop-root-source/v1",
+                "roles": ["product_root", "plugin_home", "host_root"],
+                "required_file_type": "regular",
+            },
             "required_paths": [{"root_owner": "product_root", "path": "docs/history.md", "required": True}],
             "historical_claims": [{
                 "normalized_relative_path": "docs/history.md", "claim_id": "HIST-1",
@@ -540,6 +545,11 @@ class LoopRuntimeClaimTests(unittest.TestCase):
             "migration_validity": "NOT_MET", "criteria_2_3_4_5_6": "PARTIAL",
             "criterion_7": "NOT_PROVEN", "criterion_8": "MET-NARROW",
             "identity_attestation": "IDENTITY_ATTESTATION_PENDING",
+            "identity_contract": "loop-identity-attestation/v1",
+            "aggregate_contract": "loop-claim-aggregate/v1",
+            "identity_scope": "FIXTURE_ONLY",
+            "release_authorized": False,
+            "performance_budget_status": "PERFORMANCE_BUDGET_PENDING",
             "authority_ids": ["AUDIT-133", "EVD-707", "DEC-104"],
             "open_risks": ["RISK-037", "RISK-042"], "policy_sha256": _policy_digest(policy),
             "source_records": [{

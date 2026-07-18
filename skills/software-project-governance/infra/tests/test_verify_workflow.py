@@ -13,6 +13,7 @@ Run:
 
 import json
 import io
+import hashlib
 import os
 import argparse
 import shutil
@@ -86,6 +87,174 @@ class LoopRuntimeClaimAdapterTests(unittest.TestCase):
         with patch.object(vw, "scan_loop_runtime_claims", return_value=report), redirect_stdout(output):
             vw.cmd_check_loop_runtime_claims(args)
         self.assertEqual({"verdict": "PASS"}, json.loads(output.getvalue()))
+
+
+class FIX200ScopedAttestationRehearsalTests(unittest.TestCase):
+    """FIX-216 preserves the architecture-named scoped rehearsal entry."""
+
+    @staticmethod
+    def _i1(phase="staged_index", sha=None):
+        empty = hashlib.sha256(b"").hexdigest()
+        empty_list = hashlib.sha256(b"[]").hexdigest()
+        git_binding = lambda role: {
+            "role": role,
+            "repository_identity": {
+                "schema_version": "loop-git-repository-tree/v1",
+                "object_format": "sha1",
+                "repository_root_tree_oid": "1" * 40,
+            },
+            "tree_prefix": "" if role == "product_root" else "skills/software-project-governance",
+            "selected_tree_oid": "2" * 40,
+            "records_digest": empty,
+        }
+        return {
+            "schema_version": "loop-identity-attestation/v1",
+            "phase": phase,
+            "scan_mode": "product_release",
+            "subject": {"kind": "index", "sha": None} if phase == "staged_index"
+                       else {"kind": "commit", "sha": sha},
+            "bindings": {
+                "product_root": git_binding("product_root"),
+                "plugin_home": git_binding("plugin_home"),
+                "host_root": {
+                    "role": "host_root",
+                    "schema_version": "loop-immutable-workspace-snapshot/v1",
+                    "manifest_digest": empty_list,
+                    "bytes_digest": empty,
+                    "records": [],
+                },
+            },
+            "source_envelope_sha256": empty,
+            "required_paths_digest": empty,
+            "accounting_contract": "loop-semantic-accounting/v1",
+            "accounting": {"record_count": 0, "payload_bytes": 0,
+                           "record_digest": empty, "aggregate_digest": empty},
+            "identity_verdict": "PASS",
+            "created_at": "2026-07-18T00:00:00Z",
+        }
+
+    @staticmethod
+    def _semantic():
+        empty = hashlib.sha256(b"").hexdigest()
+        return {
+            "schema_version": "loop-semantic-claim-report/v1",
+            "scan_mode": "product_release",
+            "semantic_verdict": "PASS",
+            "source_envelope_sha256": empty,
+            "scanner_inventory_digest": empty,
+            "accounting_contract": "loop-semantic-accounting/v1",
+            "accounting": {"record_count": 0, "payload_bytes": 0,
+                           "record_digest": empty, "aggregate_digest": empty},
+            "controls": {"policy_sha256": empty, "authority_sha256": empty},
+            "findings": [],
+        }
+
+    @staticmethod
+    def _args(root, *, write=None, compare=None, product_ref=":index", plugin_ref=":index"):
+        (root / "repo").mkdir(parents=True, exist_ok=True)
+        (root / "host").mkdir(parents=True, exist_ok=True)
+        return SimpleNamespace(
+            scan_mode="product_release", product_git_repo=str(root / "repo"),
+            product_git_ref=product_ref, product_prefix="",
+            plugin_git_repo=str(root / "repo"), plugin_git_ref=plugin_ref,
+            plugin_prefix="skills/software-project-governance",
+            host_root=str(root / "host"), snapshot_dir=str(root / "snapshots"),
+            write_attestation=str(write) if write else None,
+            compare_attestation=str(compare) if compare else None,
+            require_identity=True, fixture_only=True, fail_on_issues=True,
+        )
+
+    def _adapter_patches(self, root, i1):
+        product = root / "materialized-product"
+        plugin = root / "materialized-plugin"
+        product.mkdir(exist_ok=True)
+        (plugin / "core").mkdir(parents=True, exist_ok=True)
+        (plugin / "core/loop-runtime-claim-allowlist.json").write_text(
+            '{"required_paths":[]}\n', encoding="utf-8"
+        )
+        report = SimpleNamespace(
+            verdict="PASS", findings=[], as_s1_dict=lambda: self._semantic()
+        )
+        return ExitStack(), product, plugin, report
+
+    def test_atomic_fixture_write_is_visible_and_non_authorizing(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            artifact = root / "FIX-216-index.json"
+            args = self._args(root, write=artifact)
+            stack, product, plugin, report = self._adapter_patches(root, self._i1())
+            output = io.StringIO()
+            with stack, \
+                    patch.object(vw, "materialize_loop_runtime_git_root", side_effect=[product, plugin]) as materialize, \
+                    patch.object(vw, "attest_explicit_sources", return_value=self._i1()), \
+                    patch.object(vw, "scan_loop_runtime_claims", return_value=report), \
+                    patch.object(vw, "write_attestation", return_value="a" * 64), \
+                    redirect_stdout(output):
+                vw._cmd_check_loop_runtime_claims_identity(args)
+            self.assertNotIn("allow_tree", materialize.call_args_list[0].kwargs)
+            self.assertIs(materialize.call_args_list[1].kwargs["allow_tree"], True)
+        payload = json.loads(output.getvalue())
+        self.assertEqual("PASS", payload["verdict"])
+        self.assertTrue(payload["fixture_only"])
+        self.assertFalse(payload["release_authorized"])
+        self.assertFalse(payload["authorized"])
+        self.assertEqual("PENDING", payload["performance_budget_status"])
+        self.assertNotIn("fixture_only", payload["identity_attestation"])
+
+    def test_atomic_fixture_compare_consumes_staged_artifact_and_verified_commit(self):
+        commit = "1" * 40
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            artifact = root / "FIX-216-index.json"
+            artifact.write_text("{}\n", encoding="utf-8")
+            final = self._i1("candidate_commit", commit)
+            args = self._args(
+                root, compare=artifact, product_ref=commit, plugin_ref=commit,
+            )
+            stack, product, plugin, report = self._adapter_patches(root, final)
+            output = io.StringIO()
+            transition = {
+                "schema_version": "loop-claim-aggregate/v1", "phase": "candidate",
+                "fixture_only": True, "release_authorized": False, "authorized": False,
+                "verdict": "PASS", "issues": [],
+                "staged_attestation_sha256": "a" * 64,
+                "candidate_attestation_sha256": "b" * 64,
+            }
+            completed = SimpleNamespace(returncode=0, stdout=commit + "\n", stderr="")
+            with stack, \
+                    patch.object(vw.subprocess, "run", return_value=completed), \
+                    patch.object(vw, "materialize_loop_runtime_git_root", side_effect=[product, plugin]), \
+                    patch.object(vw, "attest_explicit_sources", return_value=final), \
+                    patch.object(vw, "scan_loop_runtime_claims", return_value=report), \
+                    patch.object(vw, "load_attestation", return_value=self._i1()), \
+                    patch.object(vw, "compare_identity_attestations", return_value=transition) as compare_mock, \
+                    redirect_stdout(output):
+                vw._cmd_check_loop_runtime_claims_identity(args)
+            compare_mock.assert_called_once()
+            self.assertEqual(commit, compare_mock.call_args.kwargs["verified_fixture_commit"])
+        payload = json.loads(output.getvalue())
+        self.assertEqual("PASS", payload["transition"]["verdict"])
+        self.assertFalse(payload["authorized"])
+
+    def test_fixture_only_is_mandatory_and_full_release_gate_is_not_called(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            args = self._args(root, write=root / "index.json")
+            args.fixture_only = False
+            with patch.object(vw, "cmd_check_release") as release_mock, \
+                    self.assertRaisesRegex(vw.IdentityAttestationError, "FIXTURE_ONLY_REQUIRED"):
+                vw._cmd_check_loop_runtime_claims_identity(args)
+            release_mock.assert_not_called()
+            args.fixture_only = True
+            args.write_attestation = str(root / "host" / "inside-source.json")
+            with self.assertRaisesRegex(vw.IdentityAttestationError, "ROOT_SOURCE_AMBIGUOUS"):
+                vw._cmd_check_loop_runtime_claims_identity(args)
+
+    def test_identity_mode_requires_exactly_one_persistence_operation(self):
+        with tempfile.TemporaryDirectory() as td:
+            args = self._args(Path(td))
+            with self.assertRaisesRegex(vw.IdentityAttestationError, "SCHEMA_MISSING"):
+                vw._cmd_check_loop_runtime_claims_identity(args)
 
 
 # ────────────────────────────────────────────────────────────

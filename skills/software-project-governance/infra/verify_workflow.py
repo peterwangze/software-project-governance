@@ -29,7 +29,20 @@ from checks.flow_unit_runtime import (
 )
 from checks import projection as projection_checks
 from checks import version as version_checks
-from checks.loop_runtime_claims import ClaimScanContext, scan_loop_runtime_claims
+from checks.loop_runtime_claims import (
+    ClaimScanContext,
+    materialize_loop_runtime_git_root,
+    scan_loop_runtime_claims,
+)
+from checks.loop_runtime_claim_attestation import (
+    IdentityAttestationError,
+    aggregate_claim_reports,
+    attest_explicit_sources,
+    canonical_json_bytes as canonical_attestation_json_bytes,
+    compare_identity_attestations,
+    load_attestation,
+    write_attestation,
+)
 
 IDENTITY_ATTESTATION_PENDING = (
     "IDENTITY_ATTESTATION_PENDING: independent source identity and final-candidate attestation remain FIX-200 work"
@@ -20086,6 +20099,31 @@ def cmd_check_loop_runtime_claims(args):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
+    identity_options = (
+        "product_git_repo", "product_git_ref", "product_prefix",
+        "plugin_git_repo", "plugin_git_ref", "plugin_prefix",
+        "host_root", "snapshot_dir", "write_attestation", "compare_attestation",
+    )
+    identity_requested = bool(getattr(args, "require_identity", False) or any(
+        getattr(args, option, None) not in (None, "") for option in identity_options
+    ))
+    if identity_requested:
+        try:
+            _cmd_check_loop_runtime_claims_identity(args)
+        except IdentityAttestationError as exc:
+            payload = {
+                "schema_version": "loop-claim-aggregate/v1",
+                "fixture_only": bool(getattr(args, "fixture_only", False)),
+                "release_authorized": False,
+                "authorized": False,
+                "verdict": "FAIL" if exc.code != "UNKNOWN" else "UNKNOWN",
+                "issues": [exc.code],
+                "detail": exc.detail,
+            }
+            sys.stdout.write(canonical_attestation_json_bytes(payload).decode("utf-8"))
+            sys.exit(1)
+        return
+
     product_root = Path(args.product_root or ROOT).resolve()
     host_root = Path(args.claim_project_root or HOST_PROJECT_ROOT).resolve()
     plugin_home = (PLUGIN_ROOT / "skills/software-project-governance").resolve()
@@ -20098,6 +20136,151 @@ def cmd_check_loop_runtime_claims(args):
     print(json.dumps(report.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
     if report.verdict != "PASS":
         sys.exit(1)
+
+
+def _cmd_check_loop_runtime_claims_identity(args):
+    """FIX-216 thin explicit-source identity orchestration."""
+    required_names = (
+        "product_git_repo", "product_git_ref", "plugin_git_repo", "plugin_git_ref",
+        "host_root", "snapshot_dir",
+    )
+    missing = [name for name in required_names if not getattr(args, name, None)]
+    if missing:
+        raise IdentityAttestationError("SCHEMA_MISSING", ",".join(missing))
+    if getattr(args, "scan_mode", None) != "product_release":
+        raise IdentityAttestationError("PHASE_DRIFT", "identity requires product_release")
+    if not getattr(args, "fixture_only", False):
+        raise IdentityAttestationError("FIXTURE_ONLY_REQUIRED", "real C is REL-063-owned")
+    write_path = getattr(args, "write_attestation", None)
+    compare_path = getattr(args, "compare_attestation", None)
+    if bool(write_path) == bool(compare_path):
+        raise IdentityAttestationError(
+            "SCHEMA_MISSING", "exactly one of --write-attestation/--compare-attestation is required"
+        )
+    artifact_path = Path(write_path or compare_path).absolute()
+    for source_value in (args.product_git_repo, args.plugin_git_repo, args.host_root):
+        source_root = Path(source_value).resolve(strict=True)
+        if artifact_path == source_root or source_root in artifact_path.parents \
+                or artifact_path in source_root.parents:
+            raise IdentityAttestationError(
+                "ROOT_SOURCE_AMBIGUOUS", "attestation artifact must be outside every scanned root"
+            )
+    product_ref = args.product_git_ref
+    plugin_ref = args.plugin_git_ref
+    if write_path:
+        if product_ref != ":index":
+            raise IdentityAttestationError("PHASE_DRIFT", "write phase requires product index")
+        phase = "staged_index"
+        subject = {"kind": "index", "sha": None}
+        snapshot_label = "staged-index"
+    else:
+        if product_ref == ":index" or plugin_ref == ":index":
+            raise IdentityAttestationError("PHASE_DRIFT", "compare phase forbids index bindings")
+        completed = subprocess.run(
+            ["git", "-C", str(Path(args.product_git_repo)), "rev-parse", "--verify",
+             f"{product_ref}^{{commit}}"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+        )
+        if completed.returncode:
+            raise IdentityAttestationError("ROOT_SOURCE_UNAVAILABLE", completed.stderr.strip())
+        candidate_sha = completed.stdout.strip()
+        if not re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", candidate_sha):
+            raise IdentityAttestationError("UNKNOWN", "fixture commit OID invalid")
+        phase = "candidate_commit"
+        subject = {"kind": "commit", "sha": candidate_sha}
+        snapshot_label = f"candidate-{candidate_sha}"
+
+    with tempfile.TemporaryDirectory(prefix="fix216-scanner-") as temp_value:
+        temporary = Path(temp_value)
+        product_root = materialize_loop_runtime_git_root(
+            Path(args.product_git_repo), product_ref, getattr(args, "product_prefix", ""),
+            temporary / "product",
+        )
+        plugin_home = materialize_loop_runtime_git_root(
+            Path(args.plugin_git_repo), plugin_ref, getattr(args, "plugin_prefix", ""),
+            temporary / "plugin", allow_tree=True,
+        )
+        try:
+            policy = json.loads(
+                (plugin_home / "core/loop-runtime-claim-allowlist.json").read_text(encoding="utf-8")
+            )
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise IdentityAttestationError("ROOT_SOURCE_UNAVAILABLE", f"policy: {exc}") from exc
+        required_rows = policy.get("required_paths")
+        if not isinstance(required_rows, list):
+            raise IdentityAttestationError("SCHEMA_MISSING", "required_paths")
+        required_paths = []
+        for row in required_rows:
+            if not isinstance(row, dict) or set(row) != {"root_owner", "path", "required"} \
+                    or row.get("required") is not True:
+                raise IdentityAttestationError("SCHEMA_UNKNOWN", "required_paths row")
+            required_paths.append((row.get("root_owner"), row.get("path")))
+        snapshot_leaf = Path(args.snapshot_dir) / snapshot_label
+        identity_report = attest_explicit_sources(
+            product_git_repo=args.product_git_repo,
+            product_git_ref=product_ref,
+            product_prefix=getattr(args, "product_prefix", ""),
+            plugin_git_repo=args.plugin_git_repo,
+            plugin_git_ref=plugin_ref,
+            plugin_prefix=getattr(args, "plugin_prefix", ""),
+            host_root=args.host_root,
+            snapshot_dir=snapshot_leaf,
+            required_paths=required_paths,
+            phase=phase,
+            subject=subject,
+            scan_mode="product_release",
+        )
+        scanner_report = scan_loop_runtime_claims(ClaimScanContext(
+            product_root=product_root,
+            plugin_home=plugin_home,
+            host_root=snapshot_leaf,
+            scan_mode="product_release",
+        ))
+        semantic_report = scanner_report.as_s1_dict()
+        aggregate = aggregate_claim_reports(
+            semantic_report, identity_report, fixture_only=True,
+            performance_budget_status="PENDING",
+        )
+        transition = None
+        if write_path:
+            attestation_sha256 = write_attestation(write_path, identity_report)
+        else:
+            staged = load_attestation(compare_path)
+            transition = compare_identity_attestations(
+                staged, identity_report, fixture_only=True,
+                verified_fixture_commit=candidate_sha,
+            )
+            attestation_sha256 = hashlib.sha256(
+                canonical_attestation_json_bytes(staged)
+            ).hexdigest()
+        issues = list(aggregate["issues"])
+        issues.extend(
+            f"{finding.code}:{finding.normalized_path}" for finding in scanner_report.findings
+        )
+        if transition is not None:
+            issues.extend(transition["issues"])
+        non_authorizing = {"PERFORMANCE_BUDGET_PENDING"}
+        blocking = [issue for issue in dict.fromkeys(issues) if issue not in non_authorizing]
+        verdict = "PASS" if scanner_report.verdict == "PASS" \
+            and identity_report["identity_verdict"] == "PASS" and not blocking else "FAIL"
+        payload = {
+            "schema_version": "loop-claim-aggregate/v1",
+            "phase": phase,
+            "fixture_only": True,
+            "release_authorized": False,
+            "authorized": False,
+            "performance_budget_status": "PENDING",
+            "verdict": verdict,
+            "issues": list(dict.fromkeys(issues)),
+            "attestation_sha256": attestation_sha256,
+            "semantic_report": semantic_report,
+            "identity_attestation": identity_report,
+            "aggregate": aggregate,
+            "transition": transition,
+        }
+        sys.stdout.write(canonical_attestation_json_bytes(payload).decode("utf-8"))
+        if verdict != "PASS":
+            sys.exit(1)
 
 
 def cmd_check_sequential_ids(args):
@@ -21941,6 +22124,31 @@ def main(argv=None):
                         default="product_release")
     clrc_p.add_argument("--fail-on-issues", action="store_true",
                         help="Compatibility flag; blocking semantic findings always exit non-zero")
+    clrc_p.add_argument("--product-git-repo", default=None,
+                        help="Explicit product Git repository for FIX-216 identity mode")
+    clrc_p.add_argument("--product-git-ref", default=None,
+                        help="Exact product commit or :index")
+    clrc_p.add_argument("--product-prefix", default="",
+                        help="Normalized product tree prefix")
+    clrc_p.add_argument("--plugin-git-repo", default=None,
+                        help="Explicit plugin Git repository for FIX-216 identity mode")
+    clrc_p.add_argument("--plugin-git-ref", default=None,
+                        help="Exact plugin commit or :index")
+    clrc_p.add_argument("--plugin-prefix", default="",
+                        help="Normalized plugin tree prefix")
+    clrc_p.add_argument("--host-root", default=None,
+                        help="Explicit host workspace root to snapshot")
+    clrc_p.add_argument("--snapshot-dir", default=None,
+                        help="Artifact parent outside all scanned roots")
+    attestation_mode = clrc_p.add_mutually_exclusive_group()
+    attestation_mode.add_argument("--write-attestation", default=None,
+                                  help="Write exact staged-index I1 artifact")
+    attestation_mode.add_argument("--compare-attestation", default=None,
+                                  help="Compare exact candidate tree with staged I1 artifact")
+    clrc_p.add_argument("--require-identity", action="store_true",
+                        help="Require FIX-216 independent identity aggregation")
+    clrc_p.add_argument("--fixture-only", action="store_true",
+                        help="Mark disposable FIX-216 evidence non-authorizing")
 
     # loop-rollup (FX-193 — per-flow-unit loop_state rollup; RISK-037 criterion 2)
     lr_p = subparsers.add_parser(

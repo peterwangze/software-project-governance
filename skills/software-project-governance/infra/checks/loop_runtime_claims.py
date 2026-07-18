@@ -9,6 +9,7 @@ import json
 import os
 import re
 import stat
+import subprocess
 import tokenize
 import unicodedata
 from dataclasses import dataclass, field
@@ -100,7 +101,7 @@ REQUIRED_HISTORICAL_IDS = {
     "LRC-HIST-ROLLBACK-001", "LRC-HIST-ARCH-001", "LRC-HIST-BREAKDOWN-001", "LRC-HIST-SHITU-001",
 }
 REQUIRED_SOURCE_IDS = {"DEC-104", "EVD-707", "AUDIT-133"}
-REQUIRED_POLICY_SHA256 = "d8aeeb210fae02c452ec1eac88d3b5bf627afe7717b2da8b1b46abb318440f3d"
+REQUIRED_POLICY_SHA256 = "621637524f3c7e7585d04e075720ef7c710c69f7be3aafed32c3bbff5b45280b"
 REQUIRED_SOURCE_RECORDS = {
     "DEC-104": (".governance/decision-log.md", "| DEC-104 |", "7666ace742ebc8691356ea53b884163ffafc25dd8545d7e6b680786461f6db11"),
     "EVD-707": (".governance/evidence-log.md", "| EVD-707 |", "8aa48e272d6e627cdb64d5eb443215a584e5d0fc6cdfbb5fa329a93dfeb68e69"),
@@ -121,9 +122,11 @@ REQUIRED_PATHS = {
     "product_root:skills/software-project-governance/core/loop-runtime-claim-authority.json",
     "product_root:skills/software-project-governance/core/manifest.json",
     "product_root:skills/software-project-governance/infra/checks/loop_runtime_claims.py",
+    "product_root:skills/software-project-governance/infra/checks/loop_runtime_claim_attestation.py",
     "product_root:skills/software-project-governance/infra/verify_workflow.py",
     "product_root:skills/software-project-governance/infra/loop_migration.py",
     "product_root:skills/software-project-governance/infra/tests/test_loop_runtime_claims.py",
+    "product_root:skills/software-project-governance/infra/tests/test_loop_runtime_claim_attestation.py",
     "product_root:skills/software-project-governance/infra/tests/test_verify_workflow.py",
     "product_root:skills/software-project-governance/infra/TOOLS.md",
     "product_root:project/CHANGELOG.md",
@@ -1087,6 +1090,12 @@ def _policy_digest(policy: dict[str, Any]) -> str:
 
 def _validate_policy(policy: dict[str, Any]) -> list[Finding]:
     findings: list[Finding] = []
+    if policy.get("root_source_contract") != {
+        "schema_version": "loop-root-source/v1",
+        "roles": ["product_root", "plugin_home", "host_root"],
+        "required_file_type": "regular",
+    }:
+        findings.append(_finding("POLICY_SCHEMA", "policy", "root source contract drift"))
     required_sets = ("required_paths", "historical_claims", "active_surface_rules")
     for key in required_sets:
         value = policy.get(key)
@@ -1184,6 +1193,11 @@ def _validate_authority(authority: dict[str, Any], policy: dict[str, Any]) -> li
         "criterion_8": "MET-NARROW", "authority_ids": ["AUDIT-133", "EVD-707", "DEC-104"],
         "open_risks": ["RISK-037", "RISK-042"],
         "identity_attestation": IDENTITY_ATTESTATION_PENDING,
+        "identity_contract": "loop-identity-attestation/v1",
+        "aggregate_contract": "loop-claim-aggregate/v1",
+        "identity_scope": "FIXTURE_ONLY",
+        "release_authorized": False,
+        "performance_budget_status": "PERFORMANCE_BUDGET_PENDING",
     }
     findings = [_finding("AUTHORITY_DRIFT", "authority", f"{key} drift")
                 for key, value in expected.items() if authority.get(key) != value]
@@ -1247,6 +1261,104 @@ def _owner_roots(context: ClaimScanContext) -> list[tuple[str, Path, tuple[str, 
     if context.host_root is not None and (context.host_root / ".governance").is_dir():
         roots.append(("host_root", context.host_root, HOT_PATHS))
     return roots
+
+
+def materialize_loop_runtime_git_root(repository: Path, git_ref: str, tree_prefix: str,
+                                      destination: Path, *, allow_tree: bool = False) -> Path:
+    """Independently materialize one exact Git index/commit prefix for scanning.
+
+    This is scanner-owned acquisition code.  The identity attestor neither
+    imports nor calls it, preserving the independent-enumerator boundary.
+    """
+    repository = Path(repository).resolve(strict=True)
+    destination = Path(destination)
+    if destination.exists():
+        raise ValueError("ROOT_SOURCE_AMBIGUOUS: materialization destination exists")
+    normalized_prefix = tree_prefix.replace("\\", "/")
+    prefix = PurePosixPath(normalized_prefix)
+    if normalized_prefix and (
+        prefix.is_absolute() or prefix.as_posix() != normalized_prefix
+        or any(part in {"", ".", ".."} for part in prefix.parts)
+    ):
+        raise ValueError("ROOT_SOURCE_AMBIGUOUS: invalid tree prefix")
+
+    def git(*args: str, input_bytes: bytes | None = None) -> bytes:
+        completed = subprocess.run(
+            ["git", "-C", str(repository), *args], input=input_bytes,
+            capture_output=True, check=False,
+        )
+        if completed.returncode:
+            detail = completed.stderr.decode("utf-8", errors="replace").strip()
+            raise ValueError(f"ROOT_SOURCE_UNAVAILABLE: {detail or 'git command failed'}")
+        return completed.stdout
+
+    if git_ref == ":index":
+        root_tree = git("write-tree").decode("ascii").strip()
+    else:
+        if not git_ref or git_ref.startswith("-"):
+            raise ValueError("ROOT_SOURCE_AMBIGUOUS: invalid Git ref")
+        try:
+            commit = git("rev-parse", "--verify", f"{git_ref}^{{commit}}").decode("ascii").strip()
+        except ValueError:
+            if not allow_tree:
+                raise
+            root_tree = git("rev-parse", "--verify", f"{git_ref}^{{tree}}").decode("ascii").strip()
+        else:
+            root_tree = git("rev-parse", "--verify", f"{commit}^{{tree}}").decode("ascii").strip()
+    listing = git("ls-tree", "-r", "-z", "--full-tree", root_tree, "--", normalized_prefix or ".")
+    destination.mkdir(parents=True)
+    prefix_token = normalized_prefix + "/" if normalized_prefix else ""
+    seen: set[str] = set()
+    descriptors: list[tuple[str, str, PurePosixPath]] = []
+    for row in listing.split(b"\0"):
+        if not row:
+            continue
+        try:
+            metadata, path_bytes = row.split(b"\t", 1)
+            mode_text, object_type, oid = metadata.decode("ascii").split(" ")
+            full_path = unicodedata.normalize("NFC", path_bytes.decode("utf-8", errors="strict"))
+        except (UnicodeError, ValueError) as exc:
+            raise ValueError("ROOT_SOURCE_UNAVAILABLE: invalid ls-tree row") from exc
+        if object_type != "blob" or mode_text not in {"100644", "100755"}:
+            raise ValueError(f"REQUIRED_PATH_NOT_REGULAR: {full_path}")
+        if prefix_token and not full_path.startswith(prefix_token):
+            raise ValueError(f"ROOT_SOURCE_AMBIGUOUS: {full_path}")
+        relative = full_path[len(prefix_token):] if prefix_token else full_path
+        pure = PurePosixPath(relative)
+        if pure.is_absolute() or any(part in {"", ".", ".."} for part in pure.parts):
+            raise ValueError(f"ROOT_SOURCE_AMBIGUOUS: {relative}")
+        folded = pure.as_posix().casefold()
+        if folded in seen:
+            raise ValueError(f"PATH_CASE_COLLISION: {relative}")
+        seen.add(folded)
+        descriptors.append((mode_text, oid, pure))
+    request = ("\n".join(oid for _mode, oid, _pure in descriptors) + "\n").encode("ascii")
+    response = git("cat-file", "--batch", input_bytes=request) if descriptors else b""
+    cursor = 0
+    for mode_text, expected_oid, pure in descriptors:
+        line_end = response.find(b"\n", cursor)
+        if line_end < 0:
+            raise ValueError("ROOT_SOURCE_UNAVAILABLE: truncated cat-file header")
+        try:
+            oid, object_type, size_text = response[cursor:line_end].decode("ascii").split(" ")
+            size = int(size_text)
+        except (UnicodeError, ValueError) as exc:
+            raise ValueError("ROOT_SOURCE_UNAVAILABLE: invalid cat-file header") from exc
+        if oid != expected_oid or object_type != "blob" or size < 0:
+            raise ValueError("ROOT_SOURCE_UNAVAILABLE: cat-file identity drift")
+        start, end = line_end + 1, line_end + 1 + size
+        if end >= len(response) or response[end:end + 1] != b"\n":
+            raise ValueError("ROOT_SOURCE_UNAVAILABLE: truncated cat-file body")
+        body = response[start:end]
+        cursor = end + 1
+        target = destination.joinpath(*pure.parts)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(body)
+        if mode_text == "100755":
+            target.chmod(target.stat().st_mode | stat.S_IXUSR)
+    if cursor != len(response):
+        raise ValueError("ROOT_SOURCE_UNAVAILABLE: unexpected cat-file bytes")
+    return destination.resolve(strict=True)
 
 
 def _inventory_digest(candidates: Iterable[Candidate]) -> str:

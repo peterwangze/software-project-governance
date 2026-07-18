@@ -8,9 +8,14 @@
   "criterion_7": "NOT_PROVEN",
   "criterion_8": "MET-NARROW",
   "identity_attestation": "IDENTITY_ATTESTATION_PENDING",
+  "identity_contract": "loop-identity-attestation/v1",
+  "aggregate_contract": "loop-claim-aggregate/v1",
+  "identity_scope": "FIXTURE_ONLY",
+  "release_authorized": false,
+  "performance_budget_status": "PERFORMANCE_BUDGET_PENDING",
   "authority_ids": ["AUDIT-133", "EVD-707", "DEC-104"],
   "open_risks": ["RISK-037", "RISK-042"],
-  "policy_sha256": "d8aeeb210fae02c452ec1eac88d3b5bf627afe7717b2da8b1b46abb318440f3d",
+  "policy_sha256": "621637524f3c7e7585d04e075720ef7c710c69f7be3aafed32c3bbff5b45280b",
   "source_records": [
     {
       "record_id": "DEC-104",

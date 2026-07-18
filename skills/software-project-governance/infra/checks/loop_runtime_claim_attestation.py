@@ -281,10 +281,12 @@ def _repository_root(repo_value: str | os.PathLike[str]) -> Path:
     return root
 
 
-def _resolve_git_tree(repo: Path, ref: str, *, allow_tree: bool) -> tuple[str, str, str]:
+def _resolve_git_tree(repo: Path, ref: str, *, allow_tree: bool) \
+        -> tuple[str, str, str, str | None]:
     object_format = _git_text(repo, "rev-parse", "--show-object-format")
     if object_format not in {"sha1", "sha256"}:
         raise IdentityAttestationError("SCHEMA_UNKNOWN", f"object format {object_format}")
+    resolved_commit: str | None = None
     if ref == ":index":
         root_tree = _git_text(repo, "write-tree")
         source_kind = "index"
@@ -297,6 +299,9 @@ def _resolve_git_tree(repo: Path, ref: str, *, allow_tree: bool) -> tuple[str, s
         )
         if commit_probe.returncode == 0:
             commit = commit_probe.stdout.decode("ascii", errors="strict").strip()
+            if not HEX_OID_RE.fullmatch(commit):
+                raise IdentityAttestationError("ROOT_SOURCE_UNAVAILABLE", "invalid commit OID")
+            resolved_commit = commit
             root_tree = _git_text(repo, "rev-parse", "--verify", f"{commit}^{{tree}}")
             source_kind = "commit"
         elif allow_tree:
@@ -307,7 +312,7 @@ def _resolve_git_tree(repo: Path, ref: str, *, allow_tree: bool) -> tuple[str, s
             raise IdentityAttestationError("ROOT_SOURCE_UNAVAILABLE", detail or "commit unavailable")
     if not HEX_OID_RE.fullmatch(root_tree):
         raise IdentityAttestationError("ROOT_SOURCE_UNAVAILABLE", "invalid root tree OID")
-    return object_format, root_tree, source_kind
+    return object_format, root_tree, source_kind, resolved_commit
 
 
 def _git_records(repo: Path, root_tree: str, prefix: str, role: str) -> tuple[list[_Record], str]:
@@ -355,10 +360,10 @@ def _record_projection(record: _Record, *, include_oid: bool) -> dict[str, Any]:
 
 
 def _git_binding(repo_value: str | os.PathLike[str], ref: str, prefix_value: str,
-                 role: str) -> tuple[dict[str, Any], list[_Record], str]:
+                 role: str) -> tuple[dict[str, Any], list[_Record], str, str | None]:
     repo = _repository_root(repo_value)
     prefix = _safe_prefix(prefix_value)
-    object_format, root_tree, source_kind = _resolve_git_tree(
+    object_format, root_tree, source_kind, resolved_commit = _resolve_git_tree(
         repo, ref, allow_tree=role == "plugin_home"
     )
     records, selected_tree = _git_records(repo, root_tree, prefix, role)
@@ -374,7 +379,7 @@ def _git_binding(repo_value: str | os.PathLike[str], ref: str, prefix_value: str
         "selected_tree_oid": selected_tree,
         "records_digest": _digest_json(record_rows),
     }
-    return binding, records, source_kind
+    return binding, records, source_kind, resolved_commit
 
 
 def _snapshot_host(root_value: str | os.PathLike[str], snapshot_value: str | os.PathLike[str],
@@ -963,7 +968,8 @@ def _required_records(required_paths: Iterable[tuple[str, str]],
     return rows
 
 
-def _validate_phase_subject(phase: str, subject: dict[str, Any], source_kinds: Sequence[str]) -> None:
+def _validate_phase_subject(phase: str, subject: dict[str, Any], source_kinds: Sequence[str],
+                            product_commit: str | None) -> None:
     if phase == "staged_index":
         if subject != {"kind": "index", "sha": None} \
                 or source_kinds[0] != "index" or source_kinds[1] not in {"index", "commit", "tree"}:
@@ -975,6 +981,10 @@ def _validate_phase_subject(phase: str, subject: dict[str, Any], source_kinds: S
             raise IdentityAttestationError("PHASE_DRIFT", "candidate_commit subject")
         if source_kinds[0] != "commit" or source_kinds[1] not in {"commit", "tree"}:
             raise IdentityAttestationError("PHASE_DRIFT", "candidate_commit requires commit bindings")
+        if product_commit != sha:
+            raise IdentityAttestationError(
+                "SUBJECT_MISMATCH", "candidate subject does not match resolved product commit"
+            )
     else:
         raise IdentityAttestationError("PHASE_DRIFT", phase)
 
@@ -999,11 +1009,14 @@ def attest_explicit_sources(*, product_git_repo: str | os.PathLike[str], product
             raise IdentityAttestationError(
                 "ROOT_SOURCE_AMBIGUOUS", "snapshot must be outside every scanned root"
             )
-    product_binding, product_records, product_kind = _git_binding(
+    product_binding, product_records, product_kind, product_commit = _git_binding(
         product_repository_root, product_git_ref, product_prefix, "product_root"
     )
-    plugin_binding, plugin_records, plugin_kind = _git_binding(
+    plugin_binding, plugin_records, plugin_kind, _plugin_commit = _git_binding(
         plugin_repository_root, plugin_git_ref, plugin_prefix, "plugin_home"
+    )
+    _validate_phase_subject(
+        phase, subject, (product_kind, plugin_kind), product_commit
     )
     authority_records = [record for record in plugin_records if record.path == AUTHORITY_PATH]
     if len(authority_records) != 1:
@@ -1020,7 +1033,6 @@ def attest_explicit_sources(*, product_git_repo: str | os.PathLike[str], product
     host_binding, host_records = _snapshot_host(
         host_repository_root, snapshot_dir, extra_host_paths
     )
-    _validate_phase_subject(phase, subject, (product_kind, plugin_kind))
     candidates = _candidate_records(product_records, host_records)
     accounting, _summaries = _independent_accounting(candidates)
     required = _required_records(required_paths, {

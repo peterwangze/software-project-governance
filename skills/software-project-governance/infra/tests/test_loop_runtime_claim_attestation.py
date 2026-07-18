@@ -100,6 +100,31 @@ class ExplicitSourceFixture:
         _git(self.repo, "commit", "-qm", "fixture")
         return _git(self.repo, "rev-parse", "HEAD")
 
+    def commit_same_tree(self) -> str:
+        _git(self.repo, "commit", "--allow-empty", "-qm", "same tree, new commit")
+        return _git(self.repo, "rev-parse", "HEAD")
+
+    def candidate_envelope(self, *, product_ref: str, subject_sha: str,
+                           snapshot: Path, plugin_ref: str | None = None) -> dict:
+        return {
+            "product_git_repo": self.repo,
+            "product_git_ref": product_ref,
+            "product_prefix": "",
+            "plugin_git_repo": self.repo,
+            "plugin_git_ref": plugin_ref or product_ref,
+            "plugin_prefix": "skills/software-project-governance",
+            "host_root": self.host,
+            "snapshot_dir": snapshot,
+            "required_paths": (
+                ("product_root", "docs/claim.md"),
+                ("plugin_home", "core/loop-runtime-claim-allowlist.json"),
+                ("host_root", ".governance/plan-tracker.md"),
+            ),
+            "phase": "candidate_commit",
+            "subject": {"kind": "commit", "sha": subject_sha},
+            "created_at": "2026-07-18T00:00:01Z",
+        }
+
     def attest_commit(self, commit: str, *, snapshot: Path | None = None) -> dict:
         return lra.attest_explicit_sources(
             product_git_repo=self.repo,
@@ -209,6 +234,91 @@ class IndependentAttestorTests(unittest.TestCase):
             )
         self.assertEqual("PASS", result["verdict"])
         self.assertEqual(plugin_tree, index["bindings"]["plugin_home"]["selected_tree_oid"])
+
+    def test_candidate_leaf_rejects_same_tree_different_subject_commit(self):
+        with tempfile.TemporaryDirectory() as td:
+            fixture = ExplicitSourceFixture(Path(td))
+            commit_a = fixture.commit()
+            commit_b = fixture.commit_same_tree()
+            tree_a = _git(fixture.repo, "rev-parse", f"{commit_a}^{{tree}}")
+            tree_b = _git(fixture.repo, "rev-parse", f"{commit_b}^{{tree}}")
+            self.assertNotEqual(commit_a, commit_b)
+            self.assertEqual(tree_a, tree_b)
+
+            forged = fixture.candidate_envelope(
+                product_ref=commit_a, subject_sha=commit_b,
+                snapshot=fixture.root / "artifacts" / "leaf-forged",
+            )
+            with self.assertRaisesRegex(lra.IdentityAttestationError, "SUBJECT_MISMATCH"):
+                lra.attest_explicit_sources(**forged)
+
+            exact = lra.attest_explicit_sources(**fixture.candidate_envelope(
+                product_ref=commit_a, subject_sha=commit_a,
+                snapshot=fixture.root / "artifacts" / "leaf-exact",
+            ))
+            self.assertEqual({"kind": "commit", "sha": commit_a}, exact["subject"])
+
+            product_tree = fixture.candidate_envelope(
+                product_ref=tree_a, subject_sha=commit_a, plugin_ref=commit_a,
+                snapshot=fixture.root / "artifacts" / "product-tree",
+            )
+            with self.assertRaisesRegex(lra.IdentityAttestationError, "ROOT_SOURCE_UNAVAILABLE"):
+                lra.attest_explicit_sources(**product_tree)
+
+    def test_architecture_entry_rejects_same_tree_different_subject_commit(self):
+        with tempfile.TemporaryDirectory() as td:
+            fixture = ExplicitSourceFixture(Path(td))
+            commit_a = fixture.commit()
+            commit_b = fixture.commit_same_tree()
+            self.assertEqual(
+                _git(fixture.repo, "rev-parse", f"{commit_a}^{{tree}}"),
+                _git(fixture.repo, "rev-parse", f"{commit_b}^{{tree}}"),
+            )
+            forged = fixture.candidate_envelope(
+                product_ref=commit_a, subject_sha=commit_b,
+                snapshot=fixture.root / "artifacts" / "entry-forged",
+            )
+            with self.assertRaisesRegex(lra.IdentityAttestationError, "SUBJECT_MISMATCH"):
+                lra.attest_loop_runtime_identity(None, forged)
+
+    def test_transition_never_accepts_same_tree_substituted_subject(self):
+        with tempfile.TemporaryDirectory() as td:
+            fixture = ExplicitSourceFixture(Path(td))
+            staged = fixture.attest_index()
+            commit_a = fixture.commit()
+            commit_b = fixture.commit_same_tree()
+            self.assertEqual(
+                _git(fixture.repo, "rev-parse", f"{commit_a}^{{tree}}"),
+                _git(fixture.repo, "rev-parse", f"{commit_b}^{{tree}}"),
+            )
+            forged_envelope = fixture.candidate_envelope(
+                product_ref=commit_a, subject_sha=commit_b,
+                snapshot=fixture.root / "artifacts" / "transition-forged",
+            )
+            try:
+                forged = lra.attest_explicit_sources(**forged_envelope)
+            except lra.IdentityAttestationError as exc:
+                self.assertEqual("SUBJECT_MISMATCH", exc.code)
+            else:
+                result = lra.compare_identity_attestations(
+                    staged, forged, fixture_only=True, verified_fixture_commit=commit_b,
+                )
+                self.assertEqual("FAIL", result["verdict"])
+                self.assertIn("SUBJECT_MISMATCH", result["issues"])
+
+            exact = lra.attest_explicit_sources(**fixture.candidate_envelope(
+                product_ref=commit_a, subject_sha=commit_a,
+                snapshot=fixture.root / "artifacts" / "transition-exact",
+            ))
+            substituted = lra.compare_identity_attestations(
+                staged, exact, fixture_only=True, verified_fixture_commit=commit_b,
+            )
+            self.assertEqual("FAIL", substituted["verdict"])
+            self.assertIn("FIXTURE_COMMIT_UNVERIFIED", substituted["issues"])
+            accepted = lra.compare_identity_attestations(
+                staged, exact, fixture_only=True, verified_fixture_commit=commit_a,
+            )
+            self.assertEqual("PASS", accepted["verdict"])
 
     def test_stale_index_attestation_is_rejected_after_staged_mutation(self):
         with tempfile.TemporaryDirectory() as td:

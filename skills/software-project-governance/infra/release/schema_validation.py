@@ -1,6 +1,7 @@
 """Dependency-free fail-closed validator for the release manifest schema."""
 
 from datetime import datetime
+import json
 import re
 from typing import Any, Dict, List
 
@@ -84,6 +85,13 @@ def validate_schema(instance: Any, schema: Dict[str, Any]) -> List[str]:
         if isinstance(value, list):
             if len(value) < int(rule.get("minItems", 0)):
                 local.append(f"{path}: array is shorter than minItems")
+            if rule.get("uniqueItems") is True:
+                identities = [
+                    json.dumps(item, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                    for item in value
+                ]
+                if len(identities) != len(set(identities)):
+                    local.append(f"{path}: array items must be unique")
             item_rule = rule.get("items")
             if isinstance(item_rule, dict):
                 for index, item in enumerate(value):

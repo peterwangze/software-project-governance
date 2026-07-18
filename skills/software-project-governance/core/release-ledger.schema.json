@@ -15,7 +15,7 @@
     "effective_state"
   ],
   "properties": {
-    "schema_version": {"const": 1},
+    "schema_version": {"type": "integer", "const": 1},
     "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
     "lifecycle_state": {"enum": ["candidate", "released"]},
     "provenance": {"enum": ["native", "historical_backfill"]},
@@ -63,14 +63,25 @@
       "properties": {
         "lifecycle_state": {"enum": ["candidate", "released"]},
         "withdrawn": {"type": "boolean"},
-        "amendments": {"type": "array", "items": {"type": "object"}}
+        "amendments": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        }
       }
     }
   },
   "allOf": [
     {
       "if": {"properties": {"provenance": {"const": "native"}}, "required": ["provenance"]},
-      "then": {"properties": {"trust": {"required": ["candidate_commit"]}}}
+      "then": {
+        "properties": {
+          "trust": {
+            "required": ["candidate_commit"],
+            "properties": {"candidate_commit": {"$ref": "#/$defs/derivedCommit"}}
+          }
+        }
+      }
     },
     {
       "if": {"properties": {"provenance": {"const": "historical_backfill"}}, "required": ["provenance"]},
@@ -86,15 +97,16 @@
     }
   ],
   "$defs": {
+    "derivedCommit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["derivation"],
+      "properties": {"derivation": {"const": "git_commit_adding_path"}}
+    },
     "commitRef": {
       "oneOf": [
         {"type": "string", "pattern": "^[0-9a-f]{40}$"},
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["derivation"],
-          "properties": {"derivation": {"const": "git_commit_adding_path"}}
-        }
+        {"$ref": "#/$defs/derivedCommit"}
       ]
     }
   }

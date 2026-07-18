@@ -7,6 +7,15 @@ from typing import Any, Dict, List
 VALID_STATES = {"PASS", "FAIL", "UNKNOWN", "BLOCKED"}
 
 
+class ManifestFormatError(ValueError):
+    """Fail-closed release-manifest byte/JSON contract violation."""
+
+    def __init__(self, code: str, detail: str) -> None:
+        self.code = code
+        self.detail = detail
+        super().__init__(f"{code}: {detail}")
+
+
 @dataclass
 class CheckResult:
     state: str

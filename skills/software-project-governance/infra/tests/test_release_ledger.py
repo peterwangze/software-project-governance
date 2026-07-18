@@ -1,4 +1,5 @@
 import ast
+import hashlib
 import json
 from pathlib import Path
 import os
@@ -15,7 +16,7 @@ if str(INFRA) not in sys.path:
 
 from checks.commit import check_release_lineage
 from release.context import RepositoryContext
-from release.ledger import event_integrity, validate_release_ledger
+from release.ledger import derive_effective_state, event_integrity, validate_release_ledger
 from release.projection import build_projection_plan, check_projections, write_projections
 from release.schema_validation import validate_schema
 from release.quality import probe_quality_tools
@@ -28,6 +29,40 @@ def git(root, *args):
     if result.returncode != 0:
         raise AssertionError(result.stderr)
     return result.stdout.strip()
+
+
+def canonical_json_bytes(value):
+    return (
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+def write_manifest(path, payload):
+    path.write_bytes(canonical_json_bytes(payload))
+
+
+def independent_event_identities(events):
+    rows = []
+    for event in events:
+        payload = {key: value for key, value in event.items() if key != "integrity"}
+        digest = hashlib.sha256(
+            json.dumps(
+                payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        ).hexdigest()
+        rows.append({"id": event["id"], "integrity": f"sha256:{digest}"})
+    return rows
 
 
 class TempRepoMixin:
@@ -54,6 +89,205 @@ class TempRepoMixin:
 
 
 class ReleaseLedgerTests(unittest.TestCase, TempRepoMixin):
+    def test_strict_canonical_manifest_bytes_fail_closed(self):
+        from release.ledger import parse_canonical_manifest_bytes
+
+        payload = {"schema_version": 1, "version": "0.66.1"}
+        self.assertEqual(payload, parse_canonical_manifest_bytes(canonical_json_bytes(payload)))
+        invalid = (
+            (b'{"schema_version":1,"schema_version":1}\n', "DUPLICATE"),
+            (b'{"measurement":NaN}\n', "TYPE_DRIFT"),
+            (b'{ "schema_version":1 }\n', "CANONICAL_BYTES"),
+            ('{"value":"e\u0301"}\n'.encode("utf-8"), "CANONICAL_BYTES"),
+            (b'\xef\xbb\xbf{"schema_version":1}\n', "CANONICAL_BYTES"),
+        )
+        for raw, code in invalid:
+            with self.subTest(code=code), self.assertRaisesRegex(ValueError, code):
+                parse_canonical_manifest_bytes(raw)
+
+    def test_effective_state_uses_append_only_amendment_ids(self):
+        manifest = {
+            "lifecycle_state": "released",
+            "events": [
+                {
+                    "id": "amend-integrity",
+                    "type": "amendment",
+                    "recorded_at": "2026-07-18T00:00:00Z",
+                    "claims": {"corrects_event_id": "release"},
+                },
+                {
+                    "id": "withdraw-untrusted",
+                    "type": "withdrawal",
+                    "recorded_at": "2026-07-18T00:00:01Z",
+                    "claims": {"trust_status": "untrusted"},
+                },
+            ],
+        }
+        self.assertEqual(
+            {
+                "lifecycle_state": "released",
+                "withdrawn": True,
+                "amendments": ["amend-integrity"],
+            },
+            derive_effective_state(manifest),
+        )
+
+    def test_schema_requires_string_amendment_identities(self):
+        schema = json.loads(
+            (INFRA.parent / "core/release-ledger.schema.json").read_text(encoding="utf-8")
+        )
+        event = {
+            "id": "amend-integrity",
+            "type": "amendment",
+            "recorded_at": "2026-07-18T00:00:00Z",
+            "claims": {"corrects_event_id": "release"},
+        }
+        event["integrity"] = event_integrity(event)
+        payload = {
+            "schema_version": 1,
+            "version": "0.66.1",
+            "lifecycle_state": "candidate",
+            "provenance": "native",
+            "artifacts": {"changelog": "x", "release_docs": ["x"], "review_evidence": ["x"]},
+            "trust": {"candidate_commit": {"derivation": "git_commit_adding_path"}},
+            "events": [event],
+            "effective_state": {
+                "lifecycle_state": "candidate",
+                "withdrawn": False,
+                "amendments": ["amend-integrity"],
+            },
+        }
+        self.assertEqual([], validate_schema(payload, schema))
+        payload["effective_state"]["amendments"].append("amend-integrity")
+        self.assertTrue(
+            any("must be unique" in issue for issue in validate_schema(payload, schema))
+        )
+
+    def test_event_integrity_self_reference_is_explicitly_rejected(self):
+        from release.ledger import _validate_events
+
+        event = {
+            "id": "release",
+            "type": "candidate_to_released",
+            "recorded_at": "2026-07-17T16:00:00Z",
+            "claims": {"candidate_parent_commit": "a" * 40},
+        }
+        event["integrity"] = event_integrity(event)
+        event["claims"]["integrity"] = event["integrity"]
+        issues, _events = _validate_events([event])
+        self.assertTrue(any("self-reference" in issue for issue in issues), issues)
+
+    def test_duplicate_event_and_wrong_effective_state_fail_closed(self):
+        from release.ledger import _validate_events
+
+        event = {
+            "id": "amend",
+            "type": "amendment",
+            "recorded_at": "2026-07-18T00:00:00Z",
+            "claims": {"corrects_event_id": "release"},
+        }
+        event["integrity"] = event_integrity(event)
+        issues, _events = _validate_events([event, event])
+        self.assertTrue(any("duplicate event id" in issue for issue in issues), issues)
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self.init_repo(root)
+            releases = root / "releases"
+            releases.mkdir()
+            payload = {
+                "schema_version": 1,
+                "version": "0.66.0",
+                "lifecycle_state": "candidate",
+                "provenance": "native",
+                "artifacts": self.artifacts(),
+                "trust": {"candidate_commit": {"derivation": "git_commit_adding_path"}},
+                "events": [event],
+                "effective_state": {
+                    "lifecycle_state": "candidate",
+                    "withdrawn": False,
+                    "amendments": [],
+                },
+            }
+            write_manifest(releases / "0.66.0.json", payload)
+            git(root, "add", ".")
+            git(root, "commit", "-m", "candidate")
+            result = validate_release_ledger(
+                RepositoryContext(root), manifests_dir=releases, verify_remote=False
+            )
+            self.assertEqual("FAIL", result.state)
+            self.assertTrue(
+                any("effective_state does not match" in issue for issue in result.issues),
+                result.issues,
+            )
+
+    def test_product_0661_incident_is_canonical_append_only_withdrawn_untrusted(self):
+        root = INFRA.parents[2]
+        releases = INFRA.parent / "core/releases"
+        path = releases / "0.66.1.json"
+        raw = path.read_bytes()
+        manifest = json.loads(raw.decode("utf-8"))
+        self.assertEqual(canonical_json_bytes(manifest), raw)
+        self.assertEqual(
+            [
+                "release-0.66.1",
+                "amend-0.66.1-integrity",
+                "withdraw-0.66.1-untrusted",
+            ],
+            [event["id"] for event in manifest["events"]],
+        )
+        release_event = manifest["events"][0]
+        self.assertEqual(
+            {
+                "candidate_parent_commit": "41340265252d0a878d9c22c21b2a29b37a344044",
+                "integrity": "sha256:558b3804cc4e8c0014ffe1bf6589039e3d0c2385310e63383638a4bf21f255ba",
+            },
+            release_event["claims"],
+        )
+        self.assertNotEqual(release_event["claims"]["integrity"], release_event["integrity"])
+        self.assertEqual(independent_event_identities(manifest["events"]), [
+            {"id": event["id"], "integrity": event["integrity"]}
+            for event in manifest["events"]
+        ])
+        self.assertEqual(
+            {
+                "lifecycle_state": "released",
+                "withdrawn": True,
+                "amendments": ["amend-0.66.1-integrity"],
+            },
+            manifest["effective_state"],
+        )
+        result = validate_release_ledger(
+            RepositoryContext(root), manifests_dir=releases, version="0.66.1", verify_remote=False
+        )
+        self.assertEqual("PASS", result.state, result.issues)
+        facts = result.facts["manifests"][0]
+        self.assertTrue(facts["withdrawn"])
+        self.assertEqual("WITHDRAWN_UNTRUSTED", facts["trust_level"])
+        self.assertFalse(facts["release_authorized"])
+        self.assertFalse((releases / "0.66.2.json").exists())
+
+    def test_production_path_ledger_extraction_matches_golden(self):
+        from release.ledger import extract_native_event_identities
+
+        manifest = json.loads(
+            (INFRA.parent / "core/releases/0.66.1.json").read_text(encoding="utf-8")
+        )
+        production = extract_native_event_identities(manifest)
+        golden = independent_event_identities(manifest["events"])
+        self.assertEqual(golden, production)
+        self.assertEqual(
+            [
+                "release-0.66.1",
+                "amend-0.66.1-integrity",
+                "withdraw-0.66.1-untrusted",
+            ],
+            [row["id"] for row in production],
+        )
+        drifted = json.loads(json.dumps(golden))
+        drifted[-1]["integrity"] = "sha256:" + "0" * 64
+        self.assertNotEqual(production, drifted)
+
     def test_runtime_schema_validation_fail_closed_matrix(self):
         schema=json.loads((INFRA.parent/"core/release-ledger.schema.json").read_text(encoding="utf-8"))
         base={"schema_version":1,"version":"0.66.0","lifecycle_state":"candidate","provenance":"native",
@@ -66,6 +300,7 @@ class ReleaseLedgerTests(unittest.TestCase, TempRepoMixin):
         item=json.loads(json.dumps(base)); item["version"]="not-semver"; variants.append(item)
         item=json.loads(json.dumps(base)); item["schema_version"]="1"; variants.append(item)
         item=json.loads(json.dumps(base)); item["trust"]={}; variants.append(item)
+        item=json.loads(json.dumps(base)); item["trust"]["candidate_commit"]="a"*40; variants.append(item)
         item=json.loads(json.dumps(base)); item["events"]=[{"id":"x","type":"amendment","recorded_at":"bad",
                                                            "claims":[],"integrity":"sha256:"+"0"*64}]; variants.append(item)
         for payload in variants:
@@ -104,7 +339,7 @@ class ReleaseLedgerTests(unittest.TestCase, TempRepoMixin):
                 "events": [],
                 "effective_state": {"lifecycle_state": "released", "withdrawn": False, "amendments": []},
             }
-            (releases / "0.62.0.json").write_text(json.dumps(payload), encoding="utf-8")
+            write_manifest(releases / "0.62.0.json", payload)
             git(root, "add", ".")
             git(root, "commit", "-m", "backfill")
             result = validate_release_ledger(RepositoryContext(root), manifests_dir=releases, verify_remote=False)
@@ -124,7 +359,7 @@ class ReleaseLedgerTests(unittest.TestCase, TempRepoMixin):
                           "document_contemporaneity": "backfilled_after_release"},
                 "events": [], "effective_state": {"lifecycle_state": "released", "withdrawn": False, "amendments": []},
             }
-            (releases / "0.62.0.json").write_text(json.dumps(payload), encoding="utf-8")
+            write_manifest(releases / "0.62.0.json", payload)
             git(root, "add", "."); git(root, "commit", "-m", "backfill")
             result = validate_release_ledger(RepositoryContext(root), manifests_dir=releases, verify_remote=False)
             self.assertEqual(result.state, "FAIL")
@@ -139,13 +374,13 @@ class ReleaseLedgerTests(unittest.TestCase, TempRepoMixin):
                      "backfill_commit":{"derivation":"git_commit_adding_path"},"document_contemporaneity":"contemporaneous",
                      "tag_disposition":"created_by_decision","tag_decision":"DEC-999"},"events":[],
                      "effective_state":{"lifecycle_state":"released","withdrawn":False,"amendments":[]}}
-            (releases/"0.62.0.json").write_text(json.dumps(payload),encoding="utf-8")
+            write_manifest(releases / "0.62.0.json", payload)
             git(root,"add","."); git(root,"commit","-m","backfill")
             rejected=validate_release_ledger(RepositoryContext(root),manifests_dir=releases,verify_remote=False)
             self.assertEqual(rejected.state,"FAIL")
             self.assertTrue(any("does not prove" in issue for issue in rejected.issues))
             payload["trust"]["tag_decision"]="DEC-123"
-            (releases/"0.62.0.json").write_text(json.dumps(payload),encoding="utf-8")
+            write_manifest(releases / "0.62.0.json", payload)
             decision_log=root/".governance/decision-log.md"
             valid_record={"decision_id":"DEC-123","action":"approved","version":"0.62.0","commit":original,
                           "tag":"v0.62.0","status":"approved"}
@@ -190,7 +425,7 @@ class ReleaseLedgerTests(unittest.TestCase, TempRepoMixin):
                 "artifacts": self.artifacts(), "trust": {"candidate_commit": {"derivation": "git_commit_adding_path"}},
                 "events": [], "effective_state": {"lifecycle_state": "candidate", "withdrawn": False, "amendments": []},
             }
-            manifest.write_text(json.dumps(candidate), encoding="utf-8")
+            write_manifest(manifest, candidate)
             git(root, "add", "."); git(root, "commit", "-m", "candidate")
             candidate_commit = git(root, "rev-parse", "HEAD")
             candidate_result = validate_release_ledger(RepositoryContext(root), manifests_dir=releases, verify_remote=False)
@@ -202,7 +437,7 @@ class ReleaseLedgerTests(unittest.TestCase, TempRepoMixin):
             candidate["lifecycle_state"] = "released"
             candidate["events"] = [event]
             candidate["effective_state"]["lifecycle_state"] = "released"
-            manifest.write_text(json.dumps(candidate), encoding="utf-8")
+            write_manifest(manifest, candidate)
             git(root, "add", "."); git(root, "commit", "-m", "release")
             release_commit = git(root, "rev-parse", "HEAD")
             git(root, "tag", "-a", "v0.66.0", "-m", "release")
@@ -219,14 +454,14 @@ class ReleaseLedgerTests(unittest.TestCase, TempRepoMixin):
             candidate = {"schema_version":1,"version":"0.66.0","lifecycle_state":"candidate","provenance":"native",
                          "artifacts":self.artifacts(),"trust":{"candidate_commit":{"derivation":"git_commit_adding_path"}},
                          "events":[],"effective_state":{"lifecycle_state":"candidate","withdrawn":False,"amendments":[]}}
-            manifest.write_text(json.dumps(candidate), encoding="utf-8")
+            write_manifest(manifest, candidate)
             git(root,"add","."); git(root,"commit","-m","candidate")
             (root / "intermediate").write_text("x", encoding="utf-8")
             git(root,"add","."); git(root,"commit","-m","intermediate")
             event={"id":"r","type":"candidate_to_released","recorded_at":"2026-07-11T12:00:00Z","claims":{}}
             event["integrity"]=event_integrity(event)
             candidate["lifecycle_state"]="released"; candidate["events"]=[event]; candidate["effective_state"]["lifecycle_state"]="released"
-            manifest.write_text(json.dumps(candidate), encoding="utf-8")
+            write_manifest(manifest, candidate)
             git(root,"add","."); git(root,"commit","-m","release")
             result=validate_release_ledger(RepositoryContext(root), manifests_dir=releases, verify_remote=False)
             self.assertEqual(result.state,"FAIL")
@@ -242,14 +477,14 @@ class ReleaseLedgerTests(unittest.TestCase, TempRepoMixin):
             payload={"schema_version":1,"version":"0.66.0","lifecycle_state":"candidate","provenance":"native",
                      "artifacts":self.artifacts(),"trust":{"candidate_commit":{"derivation":"git_commit_adding_path"}},
                      "events":events,"effective_state":{"lifecycle_state":"candidate","withdrawn":False,
-                                                        "amendments":[{"id":"b"},{"id":"a"}]}}
-            (releases/"0.66.0.json").write_text(json.dumps(payload),encoding="utf-8")
+                                                        "amendments":["b","a"]}}
+            write_manifest(releases / "0.66.0.json", payload)
             git(root,"add","."); git(root,"commit","-m","candidate")
             result=validate_release_ledger(RepositoryContext(root), manifests_dir=releases, verify_remote=False)
             self.assertEqual(result.state,"FAIL")
             self.assertTrue(any("stable" in issue for issue in result.issues))
             payload["events"][0]["claims"]={"tampered":True}
-            (releases/"0.66.0.json").write_text(json.dumps(payload),encoding="utf-8")
+            write_manifest(releases / "0.66.0.json", payload)
             result=validate_release_ledger(RepositoryContext(root), manifests_dir=releases, verify_remote=False)
             self.assertTrue(any("integrity hash mismatch" in issue for issue in result.issues))
 
@@ -261,12 +496,12 @@ class ReleaseLedgerTests(unittest.TestCase, TempRepoMixin):
             candidate={"schema_version":1,"version":"0.66.0","lifecycle_state":"candidate","provenance":"native",
                        "artifacts":self.artifacts(),"trust":{"candidate_commit":{"derivation":"git_commit_adding_path"}},
                        "events":[],"effective_state":{"lifecycle_state":"candidate","withdrawn":False,"amendments":[]}}
-            manifest.write_text(json.dumps(candidate),encoding="utf-8")
+            write_manifest(manifest, candidate)
             git(source,"add","."); git(source,"commit","-m","candidate"); candidate_commit=git(source,"rev-parse","HEAD")
             event={"id":"r","type":"candidate_to_released","recorded_at":"2026-07-11T12:00:00Z","claims":{}}
             event["integrity"]=event_integrity(event)
             candidate["lifecycle_state"]="released"; candidate["events"]=[event]; candidate["effective_state"]["lifecycle_state"]="released"
-            manifest.write_text(json.dumps(candidate),encoding="utf-8")
+            write_manifest(manifest, candidate)
             git(source,"add","."); git(source,"commit","-m","release")
             shallow=parent/"shallow"
             git(parent,"clone","--depth","1",source.as_uri(),str(shallow))
@@ -473,17 +708,19 @@ class ProjectionTests(unittest.TestCase):
                 result=check_projections(root,root/"config.json")
                 self.assertEqual(result.state,"BLOCKED",result.issues)
 
-    @unittest.skipUnless(hasattr(os, "symlink"), "symlink unsupported")
     def test_symlink_target_is_blocked(self):
         with tempfile.TemporaryDirectory() as td:
             root=Path(td); self.fixture(root)
-            real=root/"real.json"; real.write_text('{"version":"0.0.0"}',encoding="utf-8")
-            (root/"target.json").unlink()
-            try:
-                os.symlink(real,root/"target.json")
-            except OSError:
-                self.skipTest("symlink creation not permitted")
-            self.assertEqual(check_projections(root,root/"config.json").state,"BLOCKED")
+            target=root/"target.json"
+            original_is_symlink=Path.is_symlink
+
+            def injected_is_symlink(path):
+                if path == target:
+                    return True
+                return original_is_symlink(path)
+
+            with mock.patch.object(Path,"is_symlink",autospec=True,side_effect=injected_is_symlink):
+                self.assertEqual(check_projections(root,root/"config.json").state,"BLOCKED")
 
     def test_symlink_parent_fact_blocks_build_check_and_write_portably(self):
         with tempfile.TemporaryDirectory() as td:

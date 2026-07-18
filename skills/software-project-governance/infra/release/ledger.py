@@ -4,14 +4,16 @@ from hashlib import sha256
 import json
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional
+import unicodedata
 
 from .context import RepositoryContext
 from .git_facts import commit_adding_path, is_shallow, resolve_commit, tag_facts
-from .model import CheckResult
+from .model import CheckResult, ManifestFormatError
 from .schema_validation import validate_schema
 
 
 SCHEMA_MAJOR = 1
+CANONICAL_MANIFEST_MIN_VERSION = (0, 66, 1)
 LIFECYCLE_STATES = {"candidate", "released"}
 PROVENANCE_STATES = {"native", "historical_backfill"}
 DecisionResolver = Callable[[str, str, str], bool]
@@ -56,13 +58,104 @@ def default_decision_resolver(context: RepositoryContext) -> DecisionResolver:
     return resolve
 
 
+def _reject_json_constant(value: str) -> None:
+    raise ManifestFormatError("TYPE_DRIFT", f"non-finite JSON number `{value}` is forbidden")
+
+
+def _duplicate_safe_object(pairs: List[tuple[str, Any]]) -> Dict[str, Any]:
+    result: Dict[str, Any] = {}
+    normalized_keys = set()
+    for key, value in pairs:
+        normalized = unicodedata.normalize("NFC", key)
+        if normalized in normalized_keys:
+            raise ManifestFormatError("DUPLICATE", f"duplicate JSON member `{normalized}`")
+        normalized_keys.add(normalized)
+        result[key] = value
+    return result
+
+
+def _normalize_nfc(value: Any) -> Any:
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return unicodedata.normalize("NFC", value)
+    if isinstance(value, list):
+        return [_normalize_nfc(item) for item in value]
+    if isinstance(value, dict):
+        result = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise ManifestFormatError("TYPE_DRIFT", "JSON object keys must be strings")
+            result[unicodedata.normalize("NFC", key)] = _normalize_nfc(item)
+        return result
+    raise ManifestFormatError("TYPE_DRIFT", f"unsupported JSON value type `{type(value).__name__}`")
+
+
+def canonical_json_bytes(value: Any) -> bytes:
+    """Return strict L1 canonical document bytes, including one trailing LF."""
+
+    normalized = _normalize_nfc(value)
+    try:
+        text = json.dumps(
+            normalized,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ManifestFormatError("TYPE_DRIFT", str(exc)) from exc
+    return f"{text}\n".encode("utf-8")
+
+
+def _parse_manifest_bytes(raw: bytes) -> Any:
+    if raw.startswith(b"\xef\xbb\xbf"):
+        raise ManifestFormatError("CANONICAL_BYTES", "UTF-8 BOM is forbidden")
+    try:
+        text = raw.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise ManifestFormatError("CANONICAL_BYTES", "manifest is not strict UTF-8") from exc
+    try:
+        return json.loads(
+            text,
+            object_pairs_hook=_duplicate_safe_object,
+            parse_constant=_reject_json_constant,
+        )
+    except ManifestFormatError:
+        raise
+    except json.JSONDecodeError as exc:
+        raise ManifestFormatError("CANONICAL_BYTES", "manifest is not valid JSON") from exc
+
+
+def parse_canonical_manifest_bytes(raw: bytes) -> Any:
+    manifest = _parse_manifest_bytes(raw)
+    if raw != canonical_json_bytes(manifest):
+        raise ManifestFormatError(
+            "CANONICAL_BYTES",
+            "manifest must use NFC, sorted keys, compact separators, and one trailing LF",
+        )
+    return manifest
+
+
 def _canonical(value: Any) -> bytes:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    # Event integrity predates the document-byte contract and excludes its LF.
+    return canonical_json_bytes(value)[:-1]
 
 
 def event_integrity(event: Dict[str, Any]) -> str:
     payload = {key: value for key, value in event.items() if key != "integrity"}
     return f"sha256:{sha256(_canonical(payload)).hexdigest()}"
+
+
+def extract_native_event_identities(manifest: Dict[str, Any]) -> List[Dict[str, str]]:
+    """Extract deterministic L1 event identities from a valid native ledger."""
+
+    if manifest.get("provenance") != "native":
+        raise ManifestFormatError("PHASE_DRIFT", "event identity extraction requires native provenance")
+    issues, events = _validate_events(manifest.get("events"))
+    if issues:
+        raise ManifestFormatError("DIGEST_MISMATCH", "; ".join(issues))
+    return [{"id": event["id"], "integrity": event_integrity(event)} for event in events]
 
 
 def _derive_ref(
@@ -93,19 +186,37 @@ def _validate_events(events: object) -> tuple[List[str], List[Dict[str, Any]]]:
     normalized: List[Dict[str, Any]] = []
     ids = set()
     sort_keys = []
+
+    def contains_integrity(value: Any, expected: object) -> bool:
+        if value == expected:
+            return True
+        if isinstance(value, dict):
+            return any(contains_integrity(item, expected) for item in value.values())
+        if isinstance(value, list):
+            return any(contains_integrity(item, expected) for item in value)
+        return False
+
     for index, event in enumerate(events):
         if not isinstance(event, dict):
             issues.append(f"events[{index}] must be an object")
             continue
+        expected_fields = {"id", "type", "recorded_at", "claims", "integrity"}
+        if set(event) != expected_fields:
+            issues.append(f"events[{index}] must contain exactly the L1 event fields")
         event_id = event.get("id")
         if not isinstance(event_id, str) or not event_id:
             issues.append(f"events[{index}].id must be non-empty")
         elif event_id in ids:
             issues.append(f"duplicate event id `{event_id}`")
-        ids.add(event_id)
+        else:
+            ids.add(event_id)
         if event.get("type") not in {"candidate_to_released", "amendment", "withdrawal"}:
             issues.append(f"events[{index}].type is unsupported")
-        if event.get("integrity") != event_integrity(event):
+        declared_integrity = event.get("integrity")
+        payload = {key: value for key, value in event.items() if key != "integrity"}
+        if isinstance(declared_integrity, str) and contains_integrity(payload, declared_integrity):
+            issues.append(f"events[{index}] integrity self-reference is forbidden")
+        if declared_integrity != event_integrity(event):
             issues.append(f"events[{index}] integrity hash mismatch")
         sort_keys.append((str(event.get("recorded_at", "")), str(event_id or "")))
         normalized.append(event)
@@ -125,7 +236,7 @@ def derive_effective_state(manifest: Dict[str, Any]) -> Dict[str, Any]:
         if event_type == "candidate_to_released":
             state["lifecycle_state"] = "released"
         elif event_type == "amendment":
-            state["amendments"].append(event.get("claims", {}))
+            state["amendments"].append(event.get("id"))
         elif event_type == "withdrawal":
             state["withdrawn"] = True
     return state
@@ -183,9 +294,15 @@ def validate_manifest(
     issues: List[str] = []
     facts: Dict[str, Any] = {"path": path.relative_to(context.root).as_posix()}
     try:
-        manifest = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        raw = path.read_bytes()
+        manifest = _parse_manifest_bytes(raw)
+    except OSError as exc:
         return CheckResult("FAIL", [f"cannot read release manifest: {type(exc).__name__}"], facts)
+    except ManifestFormatError as exc:
+        return CheckResult("FAIL", [str(exc)], facts)
+
+    if not isinstance(manifest, dict):
+        return CheckResult("FAIL", ["TYPE_DRIFT: release manifest must be an object"], facts)
 
     schema_version = manifest.get("schema_version")
     if not isinstance(schema_version, int) or schema_version != SCHEMA_MAJOR:
@@ -203,6 +320,14 @@ def validate_manifest(
         return CheckResult("FAIL", schema_issues, facts)
 
     version = manifest.get("version")
+    version_parts = tuple(int(part) for part in version.split("."))
+    # Earlier ledger files are immutable historical inputs; strict bytes begin
+    # at the repaired native 0.66.1 boundary and remain mandatory thereafter.
+    if version_parts >= CANONICAL_MANIFEST_MIN_VERSION:
+        try:
+            parse_canonical_manifest_bytes(raw)
+        except ManifestFormatError as exc:
+            return CheckResult("FAIL", [str(exc)], facts)
     lifecycle = manifest.get("lifecycle_state")
     provenance = manifest.get("provenance")
     if path.stem != version:
@@ -214,6 +339,13 @@ def validate_manifest(
     event_issues, events = _validate_events(manifest.get("events"))
     issues.extend(event_issues)
     effective = derive_effective_state(manifest)
+    facts["effective_state"] = effective
+    facts["withdrawn"] = effective["withdrawn"]
+    facts["release_authorized"] = False
+    if not event_issues and provenance == "native":
+        identities = extract_native_event_identities(manifest)
+        facts["event_identities"] = identities
+        facts["event_identity_digest"] = sha256(canonical_json_bytes(identities)).hexdigest()
     if manifest.get("effective_state") != effective:
         issues.append("effective_state does not match append-only events")
     artifacts = manifest.get("artifacts")
@@ -286,6 +418,11 @@ def validate_manifest(
                 issues.append(f"historical tag disposition is stale: local tag v{version} now exists")
         facts["trust_level"] = "HISTORICAL_ONLY"
     elif provenance == "native":
+        facts["trust_level"] = (
+            "WITHDRAWN_UNTRUSTED"
+            if effective["withdrawn"]
+            else ("NATIVE_CANDIDATE" if lifecycle == "candidate" else "NATIVE_RELEASED")
+        )
         candidate = _derive_ref(context, trust.get("candidate_commit"), manifest_rel, "candidate_commit")
         if candidate.state == "UNKNOWN":
             return CheckResult("UNKNOWN", candidate.issues, facts)

@@ -12,10 +12,11 @@ import sys
 import tempfile
 import time
 import tracemalloc
+import unicodedata
 import unittest
 from datetime import datetime, timedelta, timezone
 from collections import Counter
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from unittest.mock import patch
 
 _HERE = Path(__file__).resolve().parent
@@ -57,6 +58,7 @@ FIX215_MUTABLE_PATHS = (
     "skills/software-project-governance/core/task-gate-model.md",
     "project/e2e-test-project/skills/software-project-governance/core/task-gate-model.md",
 )
+_FIX215_TIMING_ROOTS = None
 
 
 def _canonical_json_bytes(value):
@@ -142,14 +144,55 @@ def _validate_fix215_timing_report(report, *, expected_subject, expected_command
     return list(dict.fromkeys(codes))
 
 
-def _host_identity():
+def _host_identity(project_root):
+    project_root = Path(project_root)
+    source_records = []
+    codes = []
+    try:
+        resolved_root = project_root.resolve(strict=True)
+    except OSError:
+        resolved_root = project_root.resolve()
+        codes.append("HOST_SOURCE_MISSING")
+    for relative_path in lrc.HOT_PATHS:
+        target = project_root / relative_path
+        try:
+            resolved = target.resolve(strict=True)
+            resolved.relative_to(resolved_root)
+            if target.is_symlink() or not resolved.is_file():
+                raise OSError("host source is not a safe regular file")
+            raw = resolved.read_bytes()
+            source_records.append({
+                "path": relative_path,
+                "raw_bytes": len(raw),
+                "sha256": hashlib.sha256(raw).hexdigest(),
+            })
+        except (OSError, ValueError):
+            source_records.append({"path": relative_path, "state": "UNAVAILABLE"})
+            codes.append("HOST_SOURCE_MISSING")
     facts = {
         "machine": platform.machine(),
         "node": platform.node(),
         "platform": platform.platform(),
         "python": platform.python_version(),
+        "host_sources": source_records,
     }
-    return hashlib.sha256(_canonical_json_bytes(facts)[:-1]).hexdigest()
+    identity = hashlib.sha256(_canonical_json_bytes(facts)[:-1]).hexdigest()
+    return identity, list(dict.fromkeys(codes))
+
+
+def _real_repository_roots():
+    if _FIX215_TIMING_ROOTS is None:
+        product_root = _INFRA.parents[2]
+        project_root = product_root
+    else:
+        product_root, project_root = _FIX215_TIMING_ROOTS
+    product_root = Path(product_root)
+    project_root = Path(project_root)
+    return (
+        product_root,
+        product_root / "skills/software-project-governance",
+        project_root,
+    )
 
 
 def _command_sha256(tokens):
@@ -179,6 +222,71 @@ def _emit_fix215_gate(codes):
     }, sort_keys=True, separators=(",", ":")), file=sys.stderr)
 
 
+def _subject_candidate_oids(product_root, subject):
+    listed = subprocess.run(
+        ["git", "ls-tree", "-r", "-z", subject, "--", "docs", "project", "skills"],
+        cwd=product_root, capture_output=True,
+    )
+    if listed.returncode != 0:
+        return None, ["SUBJECT_INPUT_INVENTORY_UNKNOWN"]
+    object_ids = {}
+    try:
+        records = [record for record in listed.stdout.split(b"\0") if record]
+        for record in records:
+            metadata, encoded_path = record.split(b"\t", 1)
+            mode, object_type, object_id = metadata.decode("ascii").split()
+            path = unicodedata.normalize("NFC", encoded_path.decode("utf-8"))
+            if PurePosixPath(path).suffix.lower() not in lrc.SUPPORTED_EXTENSIONS:
+                continue
+            if object_type != "blob" or mode not in {"100644", "100755"} or path in object_ids:
+                return None, ["SUBJECT_INPUT_INVENTORY_MISMATCH"]
+            object_ids[path] = object_id
+    except (UnicodeDecodeError, ValueError):
+        return None, ["SUBJECT_INPUT_INVENTORY_UNKNOWN"]
+    return object_ids, []
+
+
+def _verify_exact_subject_candidate_closure(product_root, subject):
+    expected, expected_codes = _subject_candidate_oids(product_root, subject)
+    if expected_codes:
+        return expected_codes
+    plugin_home = product_root / "skills/software-project-governance"
+    inventory, inventory_findings = enumerate_candidates(
+        ClaimScanContext(product_root, plugin_home, None, "product_release"), ScanLimits()
+    )
+    if inventory_findings:
+        return ["SUBJECT_INPUT_INVENTORY_MISMATCH"]
+    actual = {
+        candidate.normalized_path: candidate.raw
+        for candidate in inventory.files
+        if candidate.root_owner == "product_root"
+    }
+    canonical_path = FIX215_MUTABLE_PATHS[4]
+    projection_path = FIX215_MUTABLE_PATHS[5]
+    if expected is None or canonical_path not in expected:
+        return ["SUBJECT_INPUT_INVENTORY_MISMATCH"]
+    if projection_path in expected or projection_path not in actual:
+        return ["SUBJECT_INPUT_INVENTORY_MISMATCH"]
+    if set(actual) != set(expected) | {projection_path}:
+        return ["SUBJECT_INPUT_INVENTORY_MISMATCH"]
+    tracked_diff = subprocess.run(
+        [
+            "git", "diff", "--quiet", "--no-ext-diff", subject, "--",
+            "docs", "project", "skills",
+        ],
+        cwd=product_root, capture_output=True,
+    )
+    if tracked_diff.returncode == 1:
+        return ["SUBJECT_INPUT_INVENTORY_MISMATCH"]
+    if tracked_diff.returncode != 0:
+        return ["SUBJECT_INPUT_INVENTORY_UNKNOWN"]
+    if actual[projection_path] != actual[canonical_path]:
+        return ["SUBJECT_PROJECTION_MISMATCH"]
+    if actual[canonical_path].count(b"IDENTITY_ATTESTATION_PENDING") != 1:
+        return ["IDENTITY_PENDING_DRIFT"]
+    return []
+
+
 def _resolve_clean_fix215_subject(product_root, requested):
     if not isinstance(requested, str) or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", requested):
         return None, ["SUBJECT_FORMAT_INVALID"]
@@ -197,33 +305,23 @@ def _resolve_clean_fix215_subject(product_root, requested):
     )
     if head.returncode != 0 or head.stdout.strip().lower() != subject:
         return None, ["SUBJECT_NOT_HEAD"]
-    dirty = subprocess.run(
-        ["git", "status", "--porcelain=v1", "--untracked-files=all", "--", *FIX215_MUTABLE_PATHS],
-        cwd=product_root, capture_output=True, text=True, encoding="utf-8",
-    )
-    if dirty.returncode != 0:
-        return None, ["SUBJECT_STATUS_UNKNOWN"]
-    if dirty.stdout.strip():
-        return None, ["SUBJECT_WORKTREE_MISMATCH"]
-    canonical = product_root / FIX215_MUTABLE_PATHS[4]
-    projection = product_root / FIX215_MUTABLE_PATHS[5]
-    try:
-        canonical_bytes = canonical.read_bytes()
-        projection_bytes = projection.read_bytes()
-    except OSError:
-        return None, ["SUBJECT_PROJECTION_MISSING"]
-    if canonical_bytes != projection_bytes:
-        return None, ["SUBJECT_PROJECTION_MISMATCH"]
-    if canonical_bytes.count(b"IDENTITY_ATTESTATION_PENDING") != 1:
-        return None, ["IDENTITY_PENDING_DRIFT"]
+    closure_codes = _verify_exact_subject_candidate_closure(product_root, subject)
+    if closure_codes:
+        return None, closure_codes
     return subject, []
 
 
-def _run_fix215_suite():
-    stream = io.StringIO()
-    suite = unittest.defaultTestLoader.loadTestsFromModule(sys.modules[__name__])
-    result = unittest.TextTestRunner(stream=stream, verbosity=0).run(suite)
-    return result, stream.getvalue()
+def _run_fix215_suite(product_root, project_root):
+    global _FIX215_TIMING_ROOTS
+    prior_roots = _FIX215_TIMING_ROOTS
+    _FIX215_TIMING_ROOTS = (Path(product_root), Path(project_root))
+    try:
+        stream = io.StringIO()
+        suite = unittest.defaultTestLoader.loadTestsFromModule(sys.modules[__name__])
+        result = unittest.TextTestRunner(stream=stream, verbosity=0).run(suite)
+        return result, stream.getvalue()
+    finally:
+        _FIX215_TIMING_ROOTS = prior_roots
 
 
 def _fix215_invocation(args, subject, product_root, project_root, report_path):
@@ -240,7 +338,8 @@ def _fix215_invocation(args, subject, product_root, project_root, report_path):
     ]
 
 
-def _write_fix215_provisional_failure(args, report_path, product_root, project_root, codes):
+def _write_fix215_provisional_failure(
+        args, report_path, product_root, project_root, host_identity, codes):
     observed_at = datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
     invocation = _fix215_invocation(args, args.subject, product_root, project_root, report_path)
     report = {
@@ -248,7 +347,7 @@ def _write_fix215_provisional_failure(args, report_path, product_root, project_r
         "fixture_only": False,
         "subject_sha": args.subject,
         "command_sha256": _command_sha256(invocation),
-        "host_identity": _host_identity(),
+        "host_identity": host_identity,
         "started_at": observed_at,
         "ended_at": observed_at,
         "elapsed_seconds": 0.0,
@@ -284,13 +383,19 @@ def _fix215_timing_main(argv):
     if not args.require_tests_complete or args.require_skip_count != 0:
         _emit_fix215_gate(["TEST_COMPLETENESS_CONTRACT_DRIFT"])
         return 2
+    host_identity, host_codes = _host_identity(project_root)
+    if host_codes:
+        _write_fix215_provisional_failure(
+            args, report_path, product_root, project_root, host_identity, host_codes
+        )
+        return 3
     subject, subject_codes = _resolve_clean_fix215_subject(product_root, args.subject)
     if subject_codes:
         _write_fix215_provisional_failure(
-            args, report_path, product_root, project_root, subject_codes
+            args, report_path, product_root, project_root, host_identity, subject_codes
         )
         return 3
-    result, transcript = _run_fix215_suite()
+    result, transcript = _run_fix215_suite(product_root, project_root)
     skip_count = len(result.skipped)
     if not result.wasSuccessful() or result.testsRun <= 0 or skip_count != args.require_skip_count:
         _emit_fix215_gate([
@@ -298,6 +403,12 @@ def _fix215_timing_main(argv):
         ])
         print(transcript, file=sys.stderr)
         return 4
+    pre_scan_codes = _verify_exact_subject_candidate_closure(product_root, subject)
+    if pre_scan_codes:
+        _write_fix215_provisional_failure(
+            args, report_path, product_root, project_root, host_identity, pre_scan_codes
+        )
+        return 3
     scanner_command = [
         sys.executable,
         "skills/software-project-governance/infra/verify_workflow.py",
@@ -329,7 +440,7 @@ def _fix215_timing_main(argv):
         "fixture_only": False,
         "subject_sha": subject,
         "command_sha256": _command_sha256(invocation),
-        "host_identity": _host_identity(),
+        "host_identity": host_identity,
         "started_at": started_at.isoformat(timespec="microseconds").replace("+00:00", "Z"),
         "ended_at": ended_at.isoformat(timespec="microseconds").replace("+00:00", "Z"),
         "elapsed_seconds": elapsed,
@@ -345,10 +456,20 @@ def _fix215_timing_main(argv):
     }
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_bytes(_canonical_json_bytes(report))
-    codes = _validate_fix215_timing_report(
+    final_closure_codes = _verify_exact_subject_candidate_closure(product_root, subject)
+    final_host_identity, final_host_codes = _host_identity(project_root)
+    codes = list(final_closure_codes)
+    if final_closure_codes:
+        report["verdict"] = "FAIL"
+        report_path.write_bytes(_canonical_json_bytes(report))
+    if final_host_codes or final_host_identity != host_identity:
+        report["verdict"] = "FAIL"
+        codes.append("HOST_SOURCE_CHANGED")
+        report_path.write_bytes(_canonical_json_bytes(report))
+    codes.extend(_validate_fix215_timing_report(
         report, expected_subject=subject, expected_command_sha256=_command_sha256(invocation),
-        expected_host_identity=_host_identity(), now=ended_at,
-    )
+        expected_host_identity=host_identity, now=ended_at,
+    ))
     if codes:
         _emit_fix215_gate(codes)
         return 5
@@ -763,11 +884,11 @@ class LoopRuntimeClaimTests(unittest.TestCase):
         })
 
     def test_real_repository_inventory_complete_and_within_budget(self):
-        repo = _INFRA.parents[2]
-        plugin = _INFRA.parent
-        report = scan_loop_runtime_claims(ClaimScanContext(repo, plugin, repo, "product_release"))
+        product_root, plugin, project_root = _real_repository_roots()
+        context = ClaimScanContext(product_root, plugin, project_root, "product_release")
+        report = scan_loop_runtime_claims(context)
         tracemalloc.start()
-        memory_report = scan_loop_runtime_claims(ClaimScanContext(repo, plugin, repo, "product_release"))
+        memory_report = scan_loop_runtime_claims(context)
         _, peak = tracemalloc.get_traced_memory()
         tracemalloc.stop()
         self.assertEqual("PASS", report.verdict, report.findings[:5])
@@ -833,12 +954,12 @@ class LoopRuntimePerformanceAndGoldenTests(unittest.TestCase):
     def test_former_46_locator_ledger(self):
         import checks.loop_runtime_claims as lrc
 
-        repo = _INFRA.parents[2]
-        policy = json.loads((_INFRA.parent / "core/loop-runtime-claim-allowlist.json").read_text(encoding="utf-8"))
+        product_root, plugin, project_root = _real_repository_roots()
+        policy = json.loads((plugin / "core/loop-runtime-claim-allowlist.json").read_text(encoding="utf-8"))
         units = []
         for path in sorted({item[0] for item in FORMER_46_GOLDEN}):
             owner = "host_root" if path.startswith(".governance/") else "product_root"
-            target = repo / path
+            target = (project_root if owner == "host_root" else product_root) / path
             raw = target.read_bytes()
             candidate = lrc.Candidate(
                 owner, path, target, lrc.SUPPORTED_EXTENSIONS[target.suffix], raw, len(raw),
@@ -910,8 +1031,8 @@ class LoopRuntimePerformanceAndGoldenTests(unittest.TestCase):
         import checks.loop_runtime_claims as lrc
         import statistics
 
-        repo = _INFRA.parents[2]
-        context = lrc.ClaimScanContext(repo, _INFRA.parent, repo, "product_release")
+        product_root, plugin, project_root = _real_repository_roots()
+        context = lrc.ClaimScanContext(product_root, plugin, project_root, "product_release")
         elapsed = []
         identities = []
         finding_snapshots = []
@@ -1235,6 +1356,116 @@ class LoopRuntimeFix199ContractTests(unittest.TestCase):
 
 
 class LoopRuntimeFix215ContractTests(unittest.TestCase):
+    def test_host_identity_binds_explicit_hot_governance_sources(self):
+        stack = tempfile.TemporaryDirectory()
+        self.addCleanup(stack.cleanup)
+        first = Path(stack.name) / "first-host"
+        second = Path(stack.name) / "second-host"
+        for root in (first, second):
+            for relative_path in lrc.HOT_PATHS:
+                target = root / relative_path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(f"{relative_path}: frozen\n", encoding="utf-8")
+        first_identity, first_codes = _host_identity(first)
+        second_identity, second_codes = _host_identity(second)
+        self.assertEqual([], first_codes)
+        self.assertEqual([], second_codes)
+        self.assertEqual(first_identity, second_identity)
+        changed = second / lrc.HOT_PATHS[2]
+        changed.write_text("different external authority\n", encoding="utf-8")
+        changed_identity, changed_codes = _host_identity(second)
+        self.assertEqual([], changed_codes)
+        self.assertNotEqual(first_identity, changed_identity)
+
+    def test_timing_real_repository_roots_are_explicitly_bound(self):
+        product = Path("explicit-product-root")
+        project = Path("explicit-project-root")
+        with patch.object(
+            sys.modules[__name__], "_FIX215_TIMING_ROOTS", (product, project)
+        ):
+            actual_product, actual_plugin, actual_host = _real_repository_roots()
+        self.assertEqual(product, actual_product)
+        self.assertEqual(product / "skills/software-project-governance", actual_plugin)
+        self.assertEqual(project, actual_host)
+
+    def test_exact_subject_candidate_closure_rejects_dirty_untracked_and_ignored_inputs(self):
+        stack = tempfile.TemporaryDirectory()
+        self.addCleanup(stack.cleanup)
+        product = Path(stack.name) / "product"
+        product.mkdir()
+
+        def git(*tokens):
+            return subprocess.run(
+                ["git", *tokens], cwd=product, check=True, capture_output=True,
+                text=True, encoding="utf-8",
+            ).stdout.strip()
+
+        git("init", "--quiet")
+        git("config", "user.email", "fix215@example.invalid")
+        git("config", "user.name", "FIX-215 fixture")
+        (product / ".gitignore").write_text(
+            "skills/ignored.py\n**/__pycache__/\n"
+            "project/e2e-test-project/skills/\n",
+            encoding="utf-8",
+        )
+        base = product / "docs/base.md"
+        canonical = product / FIX215_MUTABLE_PATHS[4]
+        base.parent.mkdir(parents=True)
+        canonical.parent.mkdir(parents=True)
+        base.write_text("immutable subject input\n", encoding="utf-8")
+        canonical.write_text("IDENTITY_ATTESTATION_PENDING\n", encoding="utf-8")
+        git("add", ".")
+        git("commit", "--quiet", "-m", "FIX-215 closure fixture")
+        subject = git("rev-parse", "HEAD")
+
+        projection = product / FIX215_MUTABLE_PATHS[5]
+        projection.parent.mkdir(parents=True)
+        projection.write_bytes(canonical.read_bytes())
+        expected, expected_codes = _subject_candidate_oids(product, subject)
+        inventory, inventory_findings = enumerate_candidates(
+            ClaimScanContext(
+                product, product / "skills/software-project-governance", None,
+                "product_release",
+            ),
+            ScanLimits(),
+        )
+        actual = {item.normalized_path: item.raw for item in inventory.files}
+        self.assertEqual([], expected_codes)
+        self.assertEqual([], inventory_findings)
+        self.assertEqual(set(expected) | {FIX215_MUTABLE_PATHS[5]}, set(actual))
+        self.assertEqual((subject, []), _resolve_clean_fix215_subject(product, subject))
+
+        pycache = product / "skills/__pycache__/fixture.pyc"
+        pycache.parent.mkdir(parents=True)
+        pycache.write_bytes(b"not a scanner candidate")
+        self.assertEqual((subject, []), _resolve_clean_fix215_subject(product, subject))
+        pycache.unlink()
+
+        mutations = {
+            "tracked_dirty": (base, b"dirty subject bytes\n"),
+            "untracked_architecture": (
+                product / "docs/architecture/release-incident-recovery-0.66.2.md",
+                b"untracked recovery architecture\n",
+            ),
+            "ignored_python": (product / "skills/ignored.py", b"IGNORED = True\n"),
+            "untracked_json": (product / "project/untracked.json", b"{}\n"),
+        }
+        original_base = base.read_bytes()
+        for name, (target, payload) in mutations.items():
+            with self.subTest(name=name):
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(payload)
+                if name == "ignored_python":
+                    relative = target.relative_to(product).as_posix()
+                    self.assertEqual(relative, git("check-ignore", "--", relative))
+                resolved, codes = _resolve_clean_fix215_subject(product, subject)
+                self.assertIsNone(resolved)
+                self.assertEqual(["SUBJECT_INPUT_INVENTORY_MISMATCH"], codes)
+                if target == base:
+                    target.write_bytes(original_base)
+                else:
+                    target.unlink()
+
     def test_semantic_line_locator_survives_line_insertions_and_rejects_duplicates(self):
         fixture = LoopRuntimeClaimTests()
         stack, product, plugin, host, policy, authority = fixture._roots()
@@ -1272,9 +1503,9 @@ class LoopRuntimeFix215ContractTests(unittest.TestCase):
         self.assertIn("AUTHORITY_DRIFT", {finding.code for finding in missing.findings})
         self.assertEqual("FAIL", missing.as_s1_dict()["semantic_verdict"])
 
-        repo = _INFRA.parents[2]
-        canonical = repo / "skills/software-project-governance/core/task-gate-model.md"
-        projection = repo / "project/e2e-test-project/skills/software-project-governance/core/task-gate-model.md"
+        product_root, _, _ = _real_repository_roots()
+        canonical = product_root / "skills/software-project-governance/core/task-gate-model.md"
+        projection = product_root / "project/e2e-test-project/skills/software-project-governance/core/task-gate-model.md"
         canonical_bytes = canonical.read_bytes()
         projection_bytes = projection.read_bytes()
         self.assertEqual(canonical_bytes, projection_bytes)
@@ -1355,6 +1586,7 @@ class LoopRuntimeFix215ContractTests(unittest.TestCase):
         ))
         mutations = {
             "SCHEMA_MISSING": lambda item: item.pop("raw_exit"),
+            "SCHEMA_UNKNOWN": lambda item: item.update(unexpected="forbidden"),
             "SUBJECT_MISMATCH": lambda item: item.update(subject_sha="d" * 40),
             "COMMAND_MISMATCH": lambda item: item.update(command_sha256="d" * 64),
             "HOST_MISMATCH": lambda item: item.update(host_identity="d" * 64),

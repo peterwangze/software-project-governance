@@ -105,6 +105,47 @@ class ReleaseLedgerTests(unittest.TestCase, TempRepoMixin):
             with self.subTest(code=code), self.assertRaisesRegex(ValueError, code):
                 parse_canonical_manifest_bytes(raw)
 
+    def test_public_ledger_decoder_limits_are_typed_without_partial_facts(self):
+        cases = (
+            (
+                "oversized_integer",
+                b'{"schema_version":' + b"9" * 5000 + b'}\n',
+                "TYPE_DRIFT",
+            ),
+            (
+                "decoder_recursion",
+                (
+                    "[" * 20000
+                    + "0"
+                    + "]" * 20000
+                    + "\n"
+                ).encode("utf-8"),
+                "CANONICAL_BYTES",
+            ),
+        )
+        for label, raw, code in cases:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as td:
+                root = Path(td)
+                releases = root / "releases"
+                releases.mkdir()
+                (releases / "0.66.1.json").write_bytes(raw)
+                result = validate_release_ledger(
+                    RepositoryContext(root),
+                    manifests_dir=releases,
+                    version="0.66.1",
+                    verify_remote=False,
+                )
+                self.assertEqual("FAIL", result.state)
+                self.assertTrue(any(code in issue for issue in result.issues), result.issues)
+                manifest_result = result.facts["manifests"][0]
+                self.assertEqual(
+                    {"state", "pass", "issues", "path"},
+                    set(manifest_result),
+                )
+                self.assertNotIn("event_identities", manifest_result)
+                self.assertNotIn("effective_state", manifest_result)
+                self.assertNotIn("withdrawn", manifest_result)
+
     def test_effective_state_uses_append_only_amendment_ids(self):
         manifest = {
             "lifecycle_state": "released",

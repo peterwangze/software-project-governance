@@ -125,6 +125,14 @@ def _parse_manifest_bytes(raw: bytes) -> Any:
         raise
     except json.JSONDecodeError as exc:
         raise ManifestFormatError("CANONICAL_BYTES", "manifest is not valid JSON") from exc
+    except RecursionError as exc:
+        raise ManifestFormatError(
+            "CANONICAL_BYTES", "JSON nesting exceeds decoder limits"
+        ) from exc
+    except ValueError as exc:
+        raise ManifestFormatError(
+            "TYPE_DRIFT", "JSON scalar exceeds decoder limits"
+        ) from exc
 
 
 def parse_canonical_manifest_bytes(raw: bytes) -> Any:

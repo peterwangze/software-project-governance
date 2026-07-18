@@ -1,14 +1,19 @@
 """FIX-197 fail-closed semantic claim-gate tests."""
 
+import argparse
 import hashlib
+import io
 import json
 import os
+import platform
+import re
 import subprocess
 import sys
 import tempfile
 import time
 import tracemalloc
 import unittest
+from datetime import datetime, timedelta, timezone
 from collections import Counter
 from pathlib import Path
 from unittest.mock import patch
@@ -36,6 +41,326 @@ ACTIVE_RULES = [
     {"claim_class": name, "claim_id": claim_id, "status": "forbidden_current"}
     for name, claim_id in lrc.REQUIRED_RULES.items()
 ]
+
+FIX215_TIMING_SCHEMA = "fix215.scanner-timing-report.v1"
+FIX215_TIMING_KEYS = {
+    "schema_version", "fixture_only", "subject_sha", "command_sha256", "host_identity",
+    "started_at", "ended_at", "elapsed_seconds", "raw_exit", "test_count", "skip_count",
+    "legacy_limit_seconds", "legacy_evidence_rejected", "limit_seconds_exclusive",
+    "semantic_verdict", "timing_verdict", "verdict",
+}
+FIX215_MUTABLE_PATHS = (
+    "skills/software-project-governance/core/loop-runtime-claim-allowlist.json",
+    "skills/software-project-governance/core/loop-runtime-claim-authority.json",
+    "skills/software-project-governance/infra/checks/loop_runtime_claims.py",
+    "skills/software-project-governance/infra/tests/test_loop_runtime_claims.py",
+    "skills/software-project-governance/core/task-gate-model.md",
+    "project/e2e-test-project/skills/software-project-governance/core/task-gate-model.md",
+)
+
+
+def _canonical_json_bytes(value):
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
+
+
+def _parse_utc(value):
+    if not isinstance(value, str) or not value.endswith("Z"):
+        raise ValueError("UTC timestamp must end in Z")
+    parsed = datetime.fromisoformat(value[:-1] + "+00:00")
+    if parsed.tzinfo != timezone.utc:
+        raise ValueError("UTC timestamp required")
+    return parsed
+
+
+def _validate_fix215_timing_report(report, *, expected_subject, expected_command_sha256,
+                                   expected_host_identity, now=None):
+    codes = []
+    if not isinstance(report, dict):
+        return ["TYPE_DRIFT"]
+    missing = FIX215_TIMING_KEYS - set(report)
+    unknown = set(report) - FIX215_TIMING_KEYS
+    if missing:
+        codes.append("SCHEMA_MISSING")
+    if unknown:
+        codes.append("SCHEMA_UNKNOWN")
+    if report.get("schema_version") != FIX215_TIMING_SCHEMA:
+        codes.append("SCHEMA_VERSION_DRIFT")
+    if report.get("fixture_only") is not False:
+        codes.append("FIXTURE_ONLY_FORBIDDEN")
+    if report.get("subject_sha") != expected_subject:
+        codes.append("SUBJECT_MISMATCH")
+    if report.get("command_sha256") != expected_command_sha256:
+        codes.append("COMMAND_MISMATCH")
+    if report.get("host_identity") != expected_host_identity:
+        codes.append("HOST_MISMATCH")
+    raw_exit = report.get("raw_exit")
+    test_count = report.get("test_count")
+    skip_count = report.get("skip_count")
+    elapsed = report.get("elapsed_seconds")
+    if isinstance(raw_exit, bool) or not isinstance(raw_exit, int):
+        codes.append("TYPE_DRIFT")
+    elif raw_exit != 0:
+        codes.append("SCANNER_NONZERO")
+    if isinstance(test_count, bool) or not isinstance(test_count, int):
+        codes.append("TYPE_DRIFT")
+    elif test_count <= 0:
+        codes.append("TESTS_INCOMPLETE")
+    if isinstance(skip_count, bool) or not isinstance(skip_count, int):
+        codes.append("TYPE_DRIFT")
+    elif skip_count != 0:
+        codes.append("UNEXPECTED_SKIP")
+    if report.get("legacy_limit_seconds") != 5.0 or report.get("legacy_evidence_rejected") is not True:
+        codes.append("LEGACY_EVIDENCE_NOT_REJECTED")
+    if report.get("limit_seconds_exclusive") != 8.0:
+        codes.append("TIMING_LIMIT_DRIFT")
+    if isinstance(elapsed, bool) or not isinstance(elapsed, (int, float)):
+        codes.append("TYPE_DRIFT")
+    elif elapsed < 0 or elapsed >= 8.0:
+        codes.append("TIMING_LIMIT_EXCEEDED")
+    semantic = report.get("semantic_verdict")
+    if semantic == "UNKNOWN":
+        codes.append("SEMANTIC_UNKNOWN")
+    elif semantic != "PASS":
+        codes.append("SEMANTIC_NOT_PASS")
+    if report.get("timing_verdict") != "PASS":
+        codes.append("TIMING_NOT_PASS")
+    if report.get("verdict") != "PASS":
+        codes.append("VERDICT_NOT_PASS")
+    try:
+        started = _parse_utc(report.get("started_at"))
+        ended = _parse_utc(report.get("ended_at"))
+        current = now or datetime.now(timezone.utc)
+        if started > ended or ended > current + timedelta(seconds=5):
+            codes.append("TIME_ORDER_INVALID")
+        if current - ended > timedelta(minutes=5):
+            codes.append("STALE_EVIDENCE")
+        if isinstance(elapsed, (int, float)) and not isinstance(elapsed, bool):
+            if abs((ended - started).total_seconds() - elapsed) > 0.25:
+                codes.append("ELAPSED_MISMATCH")
+    except (TypeError, ValueError):
+        codes.append("TIME_INVALID")
+    return list(dict.fromkeys(codes))
+
+
+def _host_identity():
+    facts = {
+        "machine": platform.machine(),
+        "node": platform.node(),
+        "platform": platform.platform(),
+        "python": platform.python_version(),
+    }
+    return hashlib.sha256(_canonical_json_bytes(facts)[:-1]).hexdigest()
+
+
+def _command_sha256(tokens):
+    return hashlib.sha256(_canonical_json_bytes(list(tokens))[:-1]).hexdigest()
+
+
+def _fix215_parser():
+    parser = argparse.ArgumentParser(add_help=True)
+    parser.add_argument("--fix215-qa-timing", action="store_true", required=True)
+    parser.add_argument("--subject", required=True)
+    parser.add_argument("--product-root", required=True)
+    parser.add_argument("--project-root", required=True)
+    parser.add_argument("--scan-mode", choices=("product_release", "installed_host"), required=True)
+    parser.add_argument("--limit-seconds-exclusive", type=float, required=True)
+    parser.add_argument("--reject-legacy-limit-seconds", type=float, required=True)
+    parser.add_argument("--require-tests-complete", action="store_true")
+    parser.add_argument("--require-skip-count", type=int, required=True)
+    parser.add_argument("--write-report", required=True)
+    return parser
+
+
+def _emit_fix215_gate(codes):
+    print(json.dumps({
+        "schema_version": "fix215.scanner-timing-gate.v1",
+        "gate_codes": list(codes),
+        "verdict": "FAIL",
+    }, sort_keys=True, separators=(",", ":")), file=sys.stderr)
+
+
+def _resolve_clean_fix215_subject(product_root, requested):
+    if not isinstance(requested, str) or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", requested):
+        return None, ["SUBJECT_FORMAT_INVALID"]
+    resolved = subprocess.run(
+        ["git", "rev-parse", "--verify", f"{requested}^{{commit}}"], cwd=product_root,
+        capture_output=True, text=True, encoding="utf-8",
+    )
+    if resolved.returncode != 0:
+        return None, ["SUBJECT_UNRESOLVED"]
+    subject = resolved.stdout.strip().lower()
+    if subject != requested:
+        return None, ["SUBJECT_MISMATCH"]
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=product_root,
+        capture_output=True, text=True, encoding="utf-8",
+    )
+    if head.returncode != 0 or head.stdout.strip().lower() != subject:
+        return None, ["SUBJECT_NOT_HEAD"]
+    dirty = subprocess.run(
+        ["git", "status", "--porcelain=v1", "--untracked-files=all", "--", *FIX215_MUTABLE_PATHS],
+        cwd=product_root, capture_output=True, text=True, encoding="utf-8",
+    )
+    if dirty.returncode != 0:
+        return None, ["SUBJECT_STATUS_UNKNOWN"]
+    if dirty.stdout.strip():
+        return None, ["SUBJECT_WORKTREE_MISMATCH"]
+    canonical = product_root / FIX215_MUTABLE_PATHS[4]
+    projection = product_root / FIX215_MUTABLE_PATHS[5]
+    try:
+        canonical_bytes = canonical.read_bytes()
+        projection_bytes = projection.read_bytes()
+    except OSError:
+        return None, ["SUBJECT_PROJECTION_MISSING"]
+    if canonical_bytes != projection_bytes:
+        return None, ["SUBJECT_PROJECTION_MISMATCH"]
+    if canonical_bytes.count(b"IDENTITY_ATTESTATION_PENDING") != 1:
+        return None, ["IDENTITY_PENDING_DRIFT"]
+    return subject, []
+
+
+def _run_fix215_suite():
+    stream = io.StringIO()
+    suite = unittest.defaultTestLoader.loadTestsFromModule(sys.modules[__name__])
+    result = unittest.TextTestRunner(stream=stream, verbosity=0).run(suite)
+    return result, stream.getvalue()
+
+
+def _fix215_invocation(args, subject, product_root, project_root, report_path):
+    return [
+        "python", "-X", "utf8",
+        "skills/software-project-governance/infra/tests/test_loop_runtime_claims.py",
+        "--fix215-qa-timing", "--subject", subject,
+        "--product-root", str(product_root), "--project-root", str(project_root),
+        "--scan-mode", args.scan_mode,
+        "--limit-seconds-exclusive", "8.0",
+        "--reject-legacy-limit-seconds", "5.0",
+        "--require-tests-complete", "--require-skip-count", "0",
+        "--write-report", str(report_path),
+    ]
+
+
+def _write_fix215_provisional_failure(args, report_path, product_root, project_root, codes):
+    observed_at = datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+    invocation = _fix215_invocation(args, args.subject, product_root, project_root, report_path)
+    report = {
+        "schema_version": FIX215_TIMING_SCHEMA,
+        "fixture_only": False,
+        "subject_sha": args.subject,
+        "command_sha256": _command_sha256(invocation),
+        "host_identity": _host_identity(),
+        "started_at": observed_at,
+        "ended_at": observed_at,
+        "elapsed_seconds": 0.0,
+        "raw_exit": 3,
+        "test_count": 0,
+        "skip_count": 0,
+        "legacy_limit_seconds": 5.0,
+        "legacy_evidence_rejected": True,
+        "limit_seconds_exclusive": 8.0,
+        "semantic_verdict": "UNKNOWN",
+        "timing_verdict": "UNKNOWN",
+        "verdict": "FAIL",
+    }
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_bytes(_canonical_json_bytes(report))
+    _emit_fix215_gate(codes)
+
+
+def _fix215_timing_main(argv):
+    args = _fix215_parser().parse_args(argv)
+    product_root = Path(args.product_root).resolve()
+    project_root = Path(args.project_root).resolve()
+    report_path = Path(args.write_report).resolve()
+    temp_root = Path(tempfile.gettempdir()).resolve()
+    try:
+        report_path.relative_to(temp_root)
+    except ValueError:
+        _emit_fix215_gate(["REPORT_PATH_NOT_VERIFIED_TEMP"])
+        return 2
+    if args.limit_seconds_exclusive != 8.0 or args.reject_legacy_limit_seconds != 5.0:
+        _emit_fix215_gate(["TIMING_LIMIT_DRIFT"])
+        return 2
+    if not args.require_tests_complete or args.require_skip_count != 0:
+        _emit_fix215_gate(["TEST_COMPLETENESS_CONTRACT_DRIFT"])
+        return 2
+    subject, subject_codes = _resolve_clean_fix215_subject(product_root, args.subject)
+    if subject_codes:
+        _write_fix215_provisional_failure(
+            args, report_path, product_root, project_root, subject_codes
+        )
+        return 3
+    result, transcript = _run_fix215_suite()
+    skip_count = len(result.skipped)
+    if not result.wasSuccessful() or result.testsRun <= 0 or skip_count != args.require_skip_count:
+        _emit_fix215_gate([
+            "TESTS_INCOMPLETE" if not result.wasSuccessful() or result.testsRun <= 0 else "UNEXPECTED_SKIP"
+        ])
+        print(transcript, file=sys.stderr)
+        return 4
+    scanner_command = [
+        sys.executable,
+        "skills/software-project-governance/infra/verify_workflow.py",
+        "check-loop-runtime-claims",
+        "--product-root", str(product_root),
+        "--project-root", str(project_root),
+        "--scan-mode", args.scan_mode,
+        "--fail-on-issues",
+    ]
+    invocation = _fix215_invocation(args, subject, product_root, project_root, report_path)
+    started_at = datetime.now(timezone.utc)
+    started = time.perf_counter()
+    completed = subprocess.run(
+        scanner_command, cwd=product_root, capture_output=True, text=True, encoding="utf-8"
+    )
+    elapsed = time.perf_counter() - started
+    ended_at = datetime.now(timezone.utc)
+    try:
+        scanner_payload = json.loads(completed.stdout)
+        semantic_verdict = scanner_payload.get(
+            "semantic_verdict", scanner_payload.get("verdict", "UNKNOWN")
+        )
+    except (json.JSONDecodeError, AttributeError):
+        semantic_verdict = "UNKNOWN"
+    timing_verdict = "PASS" if elapsed < args.limit_seconds_exclusive else "FAIL"
+    verdict = "PASS" if completed.returncode == 0 and semantic_verdict == "PASS" and timing_verdict == "PASS" else "FAIL"
+    report = {
+        "schema_version": FIX215_TIMING_SCHEMA,
+        "fixture_only": False,
+        "subject_sha": subject,
+        "command_sha256": _command_sha256(invocation),
+        "host_identity": _host_identity(),
+        "started_at": started_at.isoformat(timespec="microseconds").replace("+00:00", "Z"),
+        "ended_at": ended_at.isoformat(timespec="microseconds").replace("+00:00", "Z"),
+        "elapsed_seconds": elapsed,
+        "raw_exit": completed.returncode,
+        "test_count": result.testsRun,
+        "skip_count": skip_count,
+        "legacy_limit_seconds": 5.0,
+        "legacy_evidence_rejected": True,
+        "limit_seconds_exclusive": 8.0,
+        "semantic_verdict": semantic_verdict,
+        "timing_verdict": timing_verdict,
+        "verdict": verdict,
+    }
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_bytes(_canonical_json_bytes(report))
+    codes = _validate_fix215_timing_report(
+        report, expected_subject=subject, expected_command_sha256=_command_sha256(invocation),
+        expected_host_identity=_host_identity(), now=ended_at,
+    )
+    if codes:
+        _emit_fix215_gate(codes)
+        return 5
+    print(report_path)
+    return 0
+
+
+def _fix215_cli_or_unittest():
+    if "--fix215-qa-timing" in sys.argv[1:]:
+        return _fix215_timing_main(sys.argv[1:])
+    program = unittest.main(exit=False)
+    return 0 if program.result.wasSuccessful() else 1
 
 
 class LoopRuntimeClaimTests(unittest.TestCase):
@@ -93,6 +418,7 @@ class LoopRuntimeClaimTests(unittest.TestCase):
             "capability": "experimental_scaffolding", "runtime_activation": "NOT_MET",
             "migration_validity": "NOT_MET", "criteria_2_3_4_5_6": "PARTIAL",
             "criterion_7": "NOT_PROVEN", "criterion_8": "MET-NARROW",
+            "identity_attestation": "IDENTITY_ATTESTATION_PENDING",
             "authority_ids": ["AUDIT-133", "EVD-707", "DEC-104"],
             "open_risks": ["RISK-037", "RISK-042"], "policy_sha256": _policy_digest(policy),
             "source_records": [{
@@ -387,12 +713,20 @@ class LoopRuntimeClaimTests(unittest.TestCase):
         try:
             os.symlink(target, alias, target_is_directory=True)
         except OSError as exc:
-            self.skipTest(f"directory symlink unavailable: {exc}")
+            if os.name != "nt":
+                self.fail(f"directory symlink unavailable: {exc}")
+            completed = subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(alias), str(target)],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(0, completed.returncode, completed.stderr or completed.stdout)
         _, error = _safe_join(product, "docs/alias/claim.md")
         self.assertIsNotNone(error)
 
-    @unittest.skipUnless(os.name == "nt", "Windows junction mutation")
     def test_intermediate_windows_junction_segment_is_rejected(self):
+        if os.name != "nt":
+            self.assertNotEqual("nt", os.name)
+            return
         stack, product, _, _, _, _ = self._roots()
         self.addCleanup(stack.cleanup)
         target = product.parent / "junction-target"
@@ -400,8 +734,7 @@ class LoopRuntimeClaimTests(unittest.TestCase):
         (target / "claim.md").write_text("ordinary text\n", encoding="utf-8")
         alias = product / "docs/junction"
         completed = subprocess.run(["cmd", "/c", "mklink", "/J", str(alias), str(target)], capture_output=True, text=True)
-        if completed.returncode != 0:
-            self.skipTest(completed.stderr or completed.stdout)
+        self.assertEqual(0, completed.returncode, completed.stderr or completed.stdout)
         try:
             _, error = _safe_join(product, "docs/junction/claim.md")
             self.assertIsNotNone(error)
@@ -442,10 +775,6 @@ class LoopRuntimeClaimTests(unittest.TestCase):
         self.assertEqual(report.inventory.inventory_sha256, report.final_inventory_sha256)
         self.assertLess(peak, 256 * 1024 * 1024)
         self.assertEqual("PASS", memory_report.verdict)
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 # The exact 46 units diagnosed by MAINTENANCE-FIX-197-R1.  This is a
@@ -903,3 +1232,152 @@ class LoopRuntimeFix199ContractTests(unittest.TestCase):
         matches, findings = lrc._historical_consumption([first, second], {"historical_claims": [entry]})
         self.assertEqual(0, matches)
         self.assertIn("HISTORICAL_ENTRY_MULTIPLE", {finding.code for finding in findings})
+
+
+class LoopRuntimeFix215ContractTests(unittest.TestCase):
+    def test_semantic_line_locator_survives_line_insertions_and_rejects_duplicates(self):
+        fixture = LoopRuntimeClaimTests()
+        stack, product, plugin, host, policy, authority = fixture._roots()
+        self.addCleanup(stack.cleanup)
+        self.addCleanup(fixture.doCleanups)
+        entry = policy["historical_claims"][0]
+        payload_digest = entry["claim_payload_sha256"]
+        entry["locator"] = {
+            "kind": "line",
+            "selector_sha256": payload_digest,
+            "ordinal": 1,
+        }
+        with patch.object(lrc, "REQUIRED_POLICY_SHA256", _policy_digest(policy)):
+            fixture._write_controls(plugin, policy, authority)
+            history = product / "docs/history.md"
+            history.write_text("# inserted release heading\n\n" + history.read_text(encoding="utf-8"), encoding="utf-8")
+            moved = fixture._scan(product, plugin, host)
+            self.assertEqual("PASS", moved.verdict, moved.findings)
+
+            history.write_text(
+                history.read_text(encoding="utf-8") + entry["claim_payload"] + "\n",
+                encoding="utf-8",
+            )
+            duplicate = fixture._scan(product, plugin, host)
+            self.assertIn("LOCATOR_AMBIGUOUS", {finding.code for finding in duplicate.findings})
+
+    def test_identity_pending_is_required_and_task_gate_projections_are_byte_identical(self):
+        fixture = LoopRuntimeClaimTests()
+        stack, product, plugin, host, policy, authority = fixture._roots()
+        self.addCleanup(stack.cleanup)
+        self.addCleanup(fixture.doCleanups)
+        authority.pop("identity_attestation")
+        fixture._write_controls(plugin, policy, authority)
+        missing = fixture._scan(product, plugin, host)
+        self.assertIn("AUTHORITY_DRIFT", {finding.code for finding in missing.findings})
+        self.assertEqual("FAIL", missing.as_s1_dict()["semantic_verdict"])
+
+        repo = _INFRA.parents[2]
+        canonical = repo / "skills/software-project-governance/core/task-gate-model.md"
+        projection = repo / "project/e2e-test-project/skills/software-project-governance/core/task-gate-model.md"
+        canonical_bytes = canonical.read_bytes()
+        projection_bytes = projection.read_bytes()
+        self.assertEqual(canonical_bytes, projection_bytes)
+        self.assertEqual(1, canonical_bytes.count(b"IDENTITY_ATTESTATION_PENDING"))
+
+    def test_s1_report_is_canonical_exact_and_keeps_identity_pending(self):
+        fixture = LoopRuntimeClaimTests()
+        stack, product, plugin, host, _, authority = fixture._roots()
+        self.addCleanup(stack.cleanup)
+        self.addCleanup(fixture.doCleanups)
+        authority["identity_attestation"] = "IDENTITY_ATTESTATION_PENDING"
+        (plugin / "core/loop-runtime-claim-authority.json").write_text(
+            json.dumps(authority), encoding="utf-8"
+        )
+        report = fixture._scan(product, plugin, host)
+        payload = report.as_s1_dict()
+        self.assertEqual({
+            "schema_version", "scan_mode", "semantic_verdict", "source_envelope_sha256",
+            "scanner_inventory_digest", "accounting_contract", "accounting", "controls", "findings",
+        }, set(payload))
+        self.assertEqual("loop-semantic-claim-report/v1", payload["schema_version"])
+        self.assertEqual("product_release", payload["scan_mode"])
+        self.assertEqual("PASS", payload["semantic_verdict"])
+        self.assertRegex(payload["source_envelope_sha256"], r"^[0-9a-f]{64}$")
+        self.assertRegex(payload["scanner_inventory_digest"], r"^[0-9a-f]{64}$")
+        self.assertEqual("loop-semantic-accounting/v1", payload["accounting_contract"])
+        self.assertEqual({"record_count", "payload_bytes", "record_digest", "aggregate_digest"}, set(payload["accounting"]))
+        self.assertEqual({"policy_sha256", "authority_sha256"}, set(payload["controls"]))
+        encoded = lrc.scan_report_json(ClaimScanContext(product, plugin, host, "product_release")).encode("utf-8")
+        self.assertTrue(encoded.endswith(b"\n"))
+        self.assertFalse(encoded.endswith(b"\n\n"))
+        self.assertEqual(
+            json.dumps(json.loads(encoded), ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n",
+            encoded,
+        )
+
+    def test_s1_negative_findings_are_typed_and_use_object_or_null_locators(self):
+        fixture = LoopRuntimeClaimTests()
+        stack, product, plugin, host, _, authority = fixture._roots()
+        self.addCleanup(stack.cleanup)
+        self.addCleanup(fixture.doCleanups)
+        authority["identity_attestation"] = "IDENTITY_ATTESTATION_PENDING"
+        (plugin / "core/loop-runtime-claim-authority.json").write_text(json.dumps(authority), encoding="utf-8")
+        (product / "docs/new.md").write_text("Loop scheduler is operational.\n", encoding="utf-8")
+        payload = fixture._scan(product, plugin, host).as_s1_dict()
+        self.assertEqual("FAIL", payload["semantic_verdict"])
+        self.assertTrue(payload["findings"])
+        self.assertEqual({"code", "root_owner", "path", "locator", "detail"}, set(payload["findings"][0]))
+        self.assertTrue(all(item["locator"] is None or isinstance(item["locator"], dict) for item in payload["findings"]))
+
+    def test_timing_report_validator_rejects_every_typed_no_go(self):
+        now = datetime.now(timezone.utc)
+        subject = "a" * 40
+        command_sha = "b" * 64
+        host_identity = "c" * 64
+        valid = {
+            "schema_version": "fix215.scanner-timing-report.v1",
+            "fixture_only": False,
+            "subject_sha": subject,
+            "command_sha256": command_sha,
+            "host_identity": host_identity,
+            "started_at": (now - timedelta(seconds=1)).isoformat().replace("+00:00", "Z"),
+            "ended_at": now.isoformat().replace("+00:00", "Z"),
+            "elapsed_seconds": 1.0,
+            "raw_exit": 0,
+            "test_count": 1,
+            "skip_count": 0,
+            "legacy_limit_seconds": 5.0,
+            "legacy_evidence_rejected": True,
+            "limit_seconds_exclusive": 8.0,
+            "semantic_verdict": "PASS",
+            "timing_verdict": "PASS",
+            "verdict": "PASS",
+        }
+        self.assertEqual([], _validate_fix215_timing_report(
+            valid, expected_subject=subject, expected_command_sha256=command_sha,
+            expected_host_identity=host_identity, now=now,
+        ))
+        mutations = {
+            "SCHEMA_MISSING": lambda item: item.pop("raw_exit"),
+            "SUBJECT_MISMATCH": lambda item: item.update(subject_sha="d" * 40),
+            "COMMAND_MISMATCH": lambda item: item.update(command_sha256="d" * 64),
+            "HOST_MISMATCH": lambda item: item.update(host_identity="d" * 64),
+            "SCANNER_NONZERO": lambda item: item.update(raw_exit=1),
+            "TESTS_INCOMPLETE": lambda item: item.update(test_count=0),
+            "UNEXPECTED_SKIP": lambda item: item.update(skip_count=1),
+            "LEGACY_EVIDENCE_NOT_REJECTED": lambda item: item.update(legacy_evidence_rejected=False),
+            "SEMANTIC_UNKNOWN": lambda item: item.update(semantic_verdict="UNKNOWN"),
+            "TIMING_LIMIT_EXCEEDED": lambda item: item.update(elapsed_seconds=8.0),
+            "STALE_EVIDENCE": lambda item: item.update(
+                ended_at=(now - timedelta(minutes=10)).isoformat().replace("+00:00", "Z")
+            ),
+        }
+        for expected, mutate in mutations.items():
+            with self.subTest(expected=expected):
+                candidate = json.loads(json.dumps(valid))
+                mutate(candidate)
+                codes = _validate_fix215_timing_report(
+                    candidate, expected_subject=subject, expected_command_sha256=command_sha,
+                    expected_host_identity=host_identity, now=now,
+                )
+                self.assertIn(expected, codes)
+
+
+if __name__ == "__main__":
+    raise SystemExit(_fix215_cli_or_unittest())

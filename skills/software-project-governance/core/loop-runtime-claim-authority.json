@@ -7,9 +7,10 @@
   "criteria_2_3_4_5_6": "PARTIAL",
   "criterion_7": "NOT_PROVEN",
   "criterion_8": "MET-NARROW",
+  "identity_attestation": "IDENTITY_ATTESTATION_PENDING",
   "authority_ids": ["AUDIT-133", "EVD-707", "DEC-104"],
   "open_risks": ["RISK-037", "RISK-042"],
-  "policy_sha256": "e11af88d2367c21206300c77a5dba3ce5f718e9f37880b5a7055ddcd4dfd277e",
+  "policy_sha256": "d8aeeb210fae02c452ec1eac88d3b5bf627afe7717b2da8b1b46abb318440f3d",
   "source_records": [
     {
       "record_id": "DEC-104",

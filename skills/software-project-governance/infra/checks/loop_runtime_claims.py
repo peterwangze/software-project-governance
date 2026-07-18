@@ -20,6 +20,8 @@ POLICY_RELATIVE_PATH = PurePosixPath("core/loop-runtime-claim-allowlist.json")
 AUTHORITY_RELATIVE_PATH = PurePosixPath("core/loop-runtime-claim-authority.json")
 SUPPORTED_EXTENSIONS = {".md": "markdown", ".py": "python", ".json": "json"}
 SEMANTIC_ACCOUNTING_CONTRACT = "loop-semantic-accounting/v1"
+SEMANTIC_REPORT_SCHEMA = "loop-semantic-claim-report/v1"
+IDENTITY_ATTESTATION_PENDING = "IDENTITY_ATTESTATION_PENDING"
 ROOT_ROLE_ORDER = {"product_root": 0, "plugin_home": 1, "host_root": 2}
 HOT_PATHS = (
     ".governance/plan-tracker.md",
@@ -98,7 +100,7 @@ REQUIRED_HISTORICAL_IDS = {
     "LRC-HIST-ROLLBACK-001", "LRC-HIST-ARCH-001", "LRC-HIST-BREAKDOWN-001", "LRC-HIST-SHITU-001",
 }
 REQUIRED_SOURCE_IDS = {"DEC-104", "EVD-707", "AUDIT-133"}
-REQUIRED_POLICY_SHA256 = "e11af88d2367c21206300c77a5dba3ce5f718e9f37880b5a7055ddcd4dfd277e"
+REQUIRED_POLICY_SHA256 = "d8aeeb210fae02c452ec1eac88d3b5bf627afe7717b2da8b1b46abb318440f3d"
 REQUIRED_SOURCE_RECORDS = {
     "DEC-104": (".governance/decision-log.md", "| DEC-104 |", "7666ace742ebc8691356ea53b884163ffafc25dd8545d7e6b680786461f6db11"),
     "EVD-707": (".governance/evidence-log.md", "| EVD-707 |", "8aa48e272d6e627cdb64d5eb443215a584e5d0fc6cdfbb5fa329a93dfeb68e69"),
@@ -230,7 +232,7 @@ class Finding:
     message: str
     root_owner: str = ""
     normalized_path: str = ""
-    locator: str = ""
+    locator: Any = None
     authority_version: str = ""
     claim_id: str = ""
     classification: str = ""
@@ -239,6 +241,7 @@ class Finding:
 @dataclass
 class ClaimScanReport:
     verdict: str
+    scan_mode: str = "product_release"
     inventory: CandidateInventory = field(default_factory=CandidateInventory)
     parsed_candidates: int = 0
     semantic_units: int = 0
@@ -255,8 +258,72 @@ class ClaimScanReport:
     semantic_accounting_contract: str = SEMANTIC_ACCOUNTING_CONTRACT
     semantic_accounting_by_path: dict[str, dict[str, Any]] = field(default_factory=dict)
     semantic_accounting_sha256: str = ""
+    source_envelope_sha256: str = field(default_factory=lambda: hashlib.sha256(b"").hexdigest())
+    policy_sha256: str = field(default_factory=lambda: hashlib.sha256(b"").hexdigest())
+    authority_sha256: str = field(default_factory=lambda: hashlib.sha256(b"").hexdigest())
+
+    def _semantic_verdict(self) -> str:
+        if self.verdict == "PASS":
+            return "NOT_APPLICABLE" if self.host_state == "UNINITIALIZED" else "PASS"
+        if any(
+            finding.code == "UNKNOWN"
+            or finding.code.endswith("_UNKNOWN")
+            or "UNAVAILABLE" in finding.code
+            or finding.code in {"ROOT_RESOLUTION_ERROR", "AUTHORITY_SOURCE_ROOT_MISSING"}
+            for finding in self.findings
+        ):
+            return "UNKNOWN"
+        return "FAIL"
+
+    @staticmethod
+    def _report_locator(locator: Any) -> dict[str, Any] | None:
+        if locator in (None, ""):
+            return None
+        if isinstance(locator, dict):
+            return locator
+        return {"semantic_locator": str(locator)}
+
+    def as_s1_dict(self) -> dict[str, Any]:
+        record_digest_input = [
+            {
+                "path": path,
+                "record_sha256": summary.get("record_sha256", ""),
+                "unit_count": summary.get("unit_count", 0),
+                "payload_bytes": summary.get("payload_bytes", 0),
+            }
+            for path, summary in sorted(self.semantic_accounting_by_path.items())
+        ]
+        record_digest = _sha_text(json.dumps(
+            record_digest_input, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ))
+        return {
+            "schema_version": SEMANTIC_REPORT_SCHEMA,
+            "scan_mode": self.scan_mode,
+            "semantic_verdict": self._semantic_verdict(),
+            "source_envelope_sha256": self.source_envelope_sha256,
+            "scanner_inventory_digest": self.inventory.inventory_sha256 or hashlib.sha256(b"").hexdigest(),
+            "accounting_contract": SEMANTIC_ACCOUNTING_CONTRACT,
+            "accounting": {
+                "record_count": self.semantic_units,
+                "payload_bytes": self.semantic_payload_bytes,
+                "record_digest": record_digest,
+                "aggregate_digest": self.semantic_accounting_sha256 or hashlib.sha256(b"").hexdigest(),
+            },
+            "controls": {
+                "policy_sha256": self.policy_sha256,
+                "authority_sha256": self.authority_sha256,
+            },
+            "findings": [{
+                "code": finding.code,
+                "root_owner": finding.root_owner,
+                "path": finding.normalized_path,
+                "locator": self._report_locator(finding.locator),
+                "detail": f"{finding.claim_id}: {finding.message}" if finding.claim_id else finding.message,
+            } for finding in self.findings],
+        }
 
     def as_dict(self) -> dict[str, Any]:
+        """Preserve the existing CLI JSON surface; S1 is emitted explicitly."""
         return {
             "verdict": self.verdict,
             "inventory": {
@@ -941,7 +1008,7 @@ def _python_semantic_units_from_accounting(candidate: Candidate,
 
 
 def _finding(code: str, stage: str, message: str, candidate: Candidate | None = None,
-             locator: str = "", authority_version: str = "", claim_id: str = "",
+             locator: Any = None, authority_version: str = "", claim_id: str = "",
              classification: str = "") -> Finding:
     return Finding(code, stage, message,
                    candidate.root_owner if candidate else "",
@@ -1047,6 +1114,18 @@ def _validate_policy(policy: dict[str, Any]) -> list[Finding]:
         locator = entry.get("locator")
         if not isinstance(locator, dict) or locator.get("kind") not in {"line", "heading_block", "record", "fence"}:
             findings.append(_finding("LOCATOR_SCHEMA", "policy", "unsupported historical locator"))
+        elif locator.get("kind") == "line":
+            legacy_keys = frozenset({"kind", "line_number", "ordinal"})
+            semantic_keys = frozenset({"kind", "selector_sha256", "ordinal"})
+            locator_keys = frozenset(locator)
+            if locator_keys not in {legacy_keys, semantic_keys}:
+                findings.append(_finding("LOCATOR_SCHEMA", "policy", "line locator fields must be exact"))
+            elif locator_keys == semantic_keys and (
+                not re.fullmatch(r"[0-9a-f]{64}", str(locator.get("selector_sha256", "")))
+                or locator.get("selector_sha256") != entry.get("locator_sha256")
+                or locator.get("ordinal") != 1
+            ):
+                findings.append(_finding("LOCATOR_SCHEMA", "policy", "semantic line selector must bind locator digest and ordinal 1"))
         if not isinstance(entry.get("claim_payload"), str) or not entry.get("claim_payload"):
             findings.append(_finding("CLAIM_PAYLOAD_EMPTY", "policy", "claim_payload is required"))
         for key in ("locator_sha256", "claim_payload_sha256"):
@@ -1104,6 +1183,7 @@ def _validate_authority(authority: dict[str, Any], policy: dict[str, Any]) -> li
         "criteria_2_3_4_5_6": "PARTIAL", "criterion_7": "NOT_PROVEN",
         "criterion_8": "MET-NARROW", "authority_ids": ["AUDIT-133", "EVD-707", "DEC-104"],
         "open_risks": ["RISK-037", "RISK-042"],
+        "identity_attestation": IDENTITY_ATTESTATION_PENDING,
     }
     findings = [_finding("AUTHORITY_DRIFT", "authority", f"{key} drift")
                 for key, value in expected.items() if authority.get(key) != value]
@@ -1174,6 +1254,38 @@ def _inventory_digest(candidates: Iterable[Candidate]) -> str:
         f"{c.root_owner}\x1f{c.normalized_path}\x1f{c.sha256}\x1f{c.raw_bytes}\n" for c in candidates
     )
     return hashlib.sha256(records.encode("utf-8")).hexdigest()
+
+
+def _scanner_source_envelope_sha256(scan_mode: str, inventory: CandidateInventory,
+                                    policy_sha256: str, authority_sha256: str) -> str:
+    role_records: dict[str, list[dict[str, Any]]] = {role: [] for role in ROOT_ROLE_ORDER}
+    for candidate in inventory.files:
+        role_records[candidate.root_owner].append({
+            "path": candidate.normalized_path,
+            "raw_bytes": candidate.raw_bytes,
+            "sha256": candidate.sha256,
+        })
+    bindings = []
+    for role in sorted(ROOT_ROLE_ORDER, key=ROOT_ROLE_ORDER.get):
+        records = role_records[role]
+        if role == "plugin_home":
+            records = [
+                *records,
+                {"path": POLICY_RELATIVE_PATH.as_posix(), "sha256": policy_sha256},
+                {"path": AUTHORITY_RELATIVE_PATH.as_posix(), "sha256": authority_sha256},
+            ]
+        records_digest = _sha_text(json.dumps(
+            records, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ))
+        bindings.append({"role": role, "records_digest": records_digest})
+    envelope = {
+        "schema_version": "loop-semantic-source-envelope/v1",
+        "scan_mode": scan_mode,
+        "bindings": bindings,
+    }
+    return _sha_text(json.dumps(
+        envelope, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ))
 
 
 def _scandir_paths(root: Path, start: Path, owner: str, findings: list[Finding]) -> list[Path]:
@@ -2169,15 +2281,25 @@ def _resolve_locator(text: str, locator: dict[str, Any]) -> tuple[Optional[str],
     kind = locator.get("kind")
     lines = text.split("\n")
     if kind == "line":
+        selector_sha256 = locator.get("selector_sha256")
+        if selector_sha256 is not None:
+            if not re.fullmatch(r"[0-9a-f]{64}", str(selector_sha256)) or locator.get("ordinal", 1) != 1:
+                return None, "LOCATOR_SCHEMA: semantic line selector requires 64hex and ordinal 1"
+            matches = [line for line in lines if _sha_text(line) == selector_sha256]
+            if not matches:
+                return None, "LOCATOR_UNRESOLVED: semantic line selector matched zero lines"
+            if len(matches) != 1:
+                return None, f"LOCATOR_AMBIGUOUS: semantic line selector matched {len(matches)} lines"
+            return matches[0], None
         number = locator.get("line_number")
         if not isinstance(number, int) or number < 1 or number > len(lines):
-            return None, "line locator unresolved"
+            return None, "LOCATOR_UNRESOLVED: line locator unresolved"
         return lines[number - 1], None
     if kind == "heading_block":
         level, heading, ordinal = locator.get("heading_level"), locator.get("heading_text"), locator.get("ordinal", 1)
         matches = [i for i, line in enumerate(lines) if line == f"{'#' * level} {heading}"] if isinstance(level, int) else []
         if len(matches) < ordinal or ordinal < 1:
-            return None, "heading locator unresolved"
+            return None, "LOCATOR_UNRESOLVED: heading locator unresolved"
         start = matches[ordinal - 1]
         end = len(lines)
         for i in range(start + 1, len(lines)):
@@ -2190,16 +2312,16 @@ def _resolve_locator(text: str, locator: dict[str, Any]) -> tuple[Optional[str],
         record_id, ordinal = locator.get("record_id"), locator.get("ordinal", 1)
         matches = [line for line in lines if line.startswith(f"| {record_id} |")]
         if len(matches) < ordinal or ordinal < 1:
-            return None, "record locator unresolved"
+            return None, "LOCATOR_UNRESOLVED: record locator unresolved"
         return matches[ordinal - 1], None
     if kind == "fence":
         language, ordinal = locator.get("language", ""), locator.get("ordinal", 1)
         pattern = re.compile(rf"^```{re.escape(language)}\s*$.*?^```\s*$", re.MULTILINE | re.DOTALL)
         matches = pattern.findall(text)
         if len(matches) < ordinal or ordinal < 1:
-            return None, "fence locator unresolved"
+            return None, "LOCATOR_UNRESOLVED: fence locator unresolved"
         return matches[ordinal - 1], None
-    return None, "unsupported locator"
+    return None, "LOCATOR_SCHEMA: unsupported locator"
 
 
 def _validate_historical_and_notices(context: ClaimScanContext, policy: dict[str, Any],
@@ -2248,16 +2370,30 @@ def _validate_historical_and_notices(context: ClaimScanContext, policy: dict[str
         text = _canonical_text(candidate.raw)
         entity, error = _resolve_locator(text, entry.get("locator", {}))
         if error:
-            findings.append(_finding("LOCATOR_UNRESOLVED", "policy", error, candidate, claim_id=entry.get("claim_id", "")))
+            code, _, detail = error.partition(":")
+            findings.append(_finding(
+                code if code.startswith("LOCATOR_") else "LOCATOR_UNRESOLVED",
+                "policy", detail.strip() or error, candidate,
+                locator=entry.get("locator"), claim_id=entry.get("claim_id", ""),
+            ))
             continue
         if _sha_text(entity) != entry.get("locator_sha256"):
-            findings.append(_finding("LOCATOR_DIGEST_DRIFT", "policy", "locator digest drift", candidate))
+            findings.append(_finding(
+                "LOCATOR_DIGEST_DRIFT", "policy", "locator digest drift", candidate,
+                locator=entry.get("locator"), claim_id=entry.get("claim_id", ""),
+            ))
         payload = unicodedata.normalize("NFC", entry.get("claim_payload", ""))
         if _sha_text(payload) != entry.get("claim_payload_sha256"):
-            findings.append(_finding("CLAIM_PAYLOAD_DIGEST_DRIFT", "policy", "policy payload digest drift", candidate))
+            findings.append(_finding(
+                "CLAIM_PAYLOAD_DIGEST_DRIFT", "policy", "policy payload digest drift", candidate,
+                locator=entry.get("locator"), claim_id=entry.get("claim_id", ""),
+            ))
         occurrence = entity.count(payload)
         if occurrence != entry.get("occurrence_count"):
-            findings.append(_finding("CLAIM_OCCURRENCE_DRIFT", "policy", f"expected {entry.get('occurrence_count')}, found {occurrence}", candidate))
+            findings.append(_finding(
+                "CLAIM_OCCURRENCE_DRIFT", "policy", f"expected {entry.get('occurrence_count')}, found {occurrence}", candidate,
+                locator=entry.get("locator"), claim_id=entry.get("claim_id", ""),
+            ))
         notice_tuple = seen_notices.get(entry.get("notice_id"))
         if not notice_tuple:
             findings.append(_finding("NOTICE_MISSING", "policy", "bound notice missing", candidate))
@@ -2367,7 +2503,7 @@ def _bind_planned_markers(units: list[SemanticUnit], policy: dict[str, Any]) -> 
 
 def _historical_unit_key(unit: SemanticUnit, entry: dict[str, Any]) -> bool:
     locator = entry.get("locator", {})
-    if locator.get("kind") == "line":
+    if locator.get("kind") == "line" and "selector_sha256" not in locator:
         return unit.source_span[0] == locator.get("line_number") and unit.raw_text_sha256 == entry.get("claim_payload_sha256")
     return unit.raw_text_sha256 == entry.get("claim_payload_sha256")
 
@@ -2601,7 +2737,7 @@ def _recheck_inventory(context: ClaimScanContext, inventory: CandidateInventory,
 
 def scan_loop_runtime_claims(context: ClaimScanContext, *, limits: ScanLimits | None = None) -> ClaimScanReport:
     limits = limits or ScanLimits()
-    report = ClaimScanReport("BLOCKED")
+    report = ClaimScanReport("BLOCKED", scan_mode=context.scan_mode)
     if context.scan_mode not in {"product_release", "installed_host"}:
         report.findings.append(_finding("SCAN_MODE_INVALID", "context", context.scan_mode))
         return report
@@ -2612,6 +2748,10 @@ def scan_loop_runtime_claims(context: ClaimScanContext, *, limits: ScanLimits | 
     report.findings.extend(policy_errors + authority_errors)
     if not policy or not authority:
         return report
+    report.policy_sha256 = _policy_digest(policy)
+    report.authority_sha256 = _sha_text(json.dumps(
+        authority, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ))
     report.findings.extend(_validate_policy(policy))
     report.findings.extend(_validate_authority(authority, policy))
     report.findings.extend(_validate_source_records(context, authority))
@@ -2619,6 +2759,9 @@ def scan_loop_runtime_claims(context: ClaimScanContext, *, limits: ScanLimits | 
 
     inventory, enumeration_errors = enumerate_candidates(context, limits)
     report.inventory = inventory
+    report.source_envelope_sha256 = _scanner_source_envelope_sha256(
+        context.scan_mode, inventory, report.policy_sha256, report.authority_sha256
+    )
     report.findings.extend(enumeration_errors)
     if enumeration_errors:
         return report
@@ -2708,4 +2851,7 @@ def scan_loop_runtime_claims(context: ClaimScanContext, *, limits: ScanLimits | 
 
 
 def scan_report_json(context: ClaimScanContext, *, limits: ScanLimits | None = None) -> str:
-    return json.dumps(scan_loop_runtime_claims(context, limits=limits).as_dict(), ensure_ascii=False, sort_keys=True)
+    return json.dumps(
+        scan_loop_runtime_claims(context, limits=limits).as_s1_dict(),
+        ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    ) + "\n"

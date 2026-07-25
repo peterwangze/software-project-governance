@@ -2,6 +2,12 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.66.3] - 2026-07-23
+
+### 0.66.3 - 0.66.2 release docs content fix（PATCH）
+
+0.66.2 已发布（HEAD=T=`f859bb6`，tag v0.66.2），但 `check-release` 的 release docs 门禁有 3 项 FAIL：0.66.2 的 release-checklist/feature-flags/rollback-plan 边界文案（1）缺失 `RISK-036` 边界 token（`boundary_needles` 要求），且（2）使用过于冗长的否定语句使 `_line_has_scoped_claim_negation` 对 "external first-session pilot success" 等短语返回 False。0.66.3 是文档修复 PATCH：三份 0.66.3 release docs 改用 0.65.3 验证通过的紧凑边界模板（含 `RISK-036` token 且否定可被检测），使 release docs 门禁完全转绿、RISK-043 可关闭。版本投影同步 0.66.2 -> 0.66.3（plugins/marketplace/package.json/SKILL/manifest/plan-tracker/4 hooks/`verify_workflow.py` REQUIRED_SNIPPETS 版本钉）。无任何 runtime/逻辑/产品行为变更。DEC-131 授权。
+
 ## [0.66.2] - 2026-07-23
 
 ### 0.66.2 - 0.66.1 发布事故补偿与可信 lineage 恢复（PATCH）

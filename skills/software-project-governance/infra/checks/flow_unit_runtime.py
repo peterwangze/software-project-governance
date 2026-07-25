@@ -3,6 +3,15 @@
 This stdlib-only leaf is shared by the CLI adapter and migration writer.  It
 intentionally validates the existing visibility contract; loop-engineering
 activation belongs to the later runtime-contract migration.
+
+**Version routing (FEAT-002, ADR-013 / 0.67.0):** ``validate_flow_unit_runtime_payload``
+below is the BYTE-FROZEN visibility-v1 validator (the 0.52.0/0.66.1 containment
+boundary). It is preserved unchanged — do not modify its logic. The
+:func:`validate_flow_unit_runtime_payload_dispatch` entry point at the bottom of
+this file routes a payload on ``schema_version``: ``"1.0"`` (or absent) → this
+v1 validator (unchanged); ``"2.0"`` → the new v2 validator in
+``flow_unit_runtime_v2.py``; anything else → fail. v1 and v2 coexist; no
+installed state is broken.
 """
 
 import re
@@ -283,3 +292,70 @@ def validate_flow_unit_runtime_payload(state, display=".governance/flow-unit-run
         if "sibling completion implied" in lowered:
             failures.append(f"{display}: sibling completion must not be implied")
     return failures
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# FEAT-002 (ADR-013 / 0.67.0) — Version router.
+#
+# ``validate_flow_unit_runtime_payload`` ABOVE is the byte-frozen visibility-v1
+# validator (the 0.52.0/0.66.1 containment boundary). FEAT-002 does NOT modify
+# it. This dispatcher is the ONLY addition: it reads ``schema_version`` and
+# routes a payload to the correct validator. v1 (``"1.0"`` or absent) → v1
+# validator UNCHANGED; v2 (``"2.0"``) → the new v2 validator in
+# ``flow_unit_runtime_v2.py``; unknown → fail. Both validators return the same
+# ``list[str]`` shape (empty ⇒ valid), so callers see a uniform interface.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def validate_flow_unit_runtime_payload_dispatch(state, display=".governance/flow-unit-runtime.json", plugin_home=None):
+    """Route a flow-unit runtime payload to the version-correct validator.
+
+    Reads ``schema_version`` from ``state`` and dispatches:
+
+      - ``"1.0"`` (or absent / non-string) → :func:`validate_flow_unit_runtime_payload`
+        (the byte-frozen visibility-v1 validator, UNCHANGED).
+      - ``"2.0"`` → :func:`flow_unit_runtime_v2.validate_flow_unit_runtime_payload_v2`
+        (the new Loop Runtime Contract v2 validator).
+      - any other value → a single-element failure list (fail-closed).
+
+    Returns a ``list[str]`` of failures (empty ⇒ valid), matching the shape both
+    validators already return. This dispatcher never raises.
+
+    Args:
+        state: the in-memory flow-unit runtime payload dict.
+        display: the display path used in failure messages.
+        plugin_home: optional plugin-home override (forwarded to the v2
+            validator's schema loader; accepted by v1 for API symmetry and
+            ignored by v1, which does not load a schema).
+
+    Returns:
+        list[str]: empty if the payload is valid under its declared version;
+        otherwise one specific failure string per violation.
+    """
+    if not isinstance(state, dict):
+        # Non-dict root: route to v1, which already produces the canonical
+        # "root must be an object" failure. (v2 would produce the equivalent.)
+        return validate_flow_unit_runtime_payload(state, display)
+
+    schema_version = state.get("schema_version")
+
+    # v1: schema_version "1.0" OR absent (legacy visibility payloads). Routed
+    # to the byte-frozen v1 validator UNCHANGED.
+    if schema_version == "2.0":
+        # Deferred import to keep v1 byte-frozen and avoid importing the v2
+        # module (and transitively the contract schema loader) when only v1 is
+        # needed. The v2 validator is a peer module in the same ``checks``
+        # package, so the import uses the package-qualified path (same
+        # convention as loop_migration.py / verify_workflow.py importing v1).
+        from checks.flow_unit_runtime_v2 import validate_flow_unit_runtime_payload_v2  # noqa: WPS433
+        return validate_flow_unit_runtime_payload_v2(state, display, plugin_home)
+
+    if schema_version in ("1.0", 1) or schema_version is None:
+        return validate_flow_unit_runtime_payload(state, display)
+
+    # Unknown schema_version → fail-closed. Do NOT silently route to v1 (a
+    # future "3.0" must not be validated by either v1 or v2 by accident).
+    return [
+        f"{display}: unsupported schema_version `{schema_version}` "
+        f"(expected '1.0' for visibility-v1 or '2.0' for loop-runtime-contract/v2)"
+    ]

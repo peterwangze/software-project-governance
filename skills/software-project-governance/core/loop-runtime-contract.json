@@ -1,0 +1,155 @@
+{
+  "$schema": "https://example.com/software-project-governance/loop-runtime-contract-v2.json",
+  "schema_version": "2.0",
+  "contract_id": "loop-runtime-contract/v2",
+  "introduced_for": "0.67.0",
+  "workflow": "software-project-governance",
+  "source_of_truth": true,
+  "runtime_scope": "loop-engineering-runtime",
+  "workflow_model": "loop-engineering",
+  "status_source": "loop-runtime-contract-v2",
+
+  "_contract_note": "Canonical versioned Loop Runtime Contract for 0.67.0 (FEAT-002, ADR-013). This file is the SINGLE source of truth for the v2 runtime payload shape. The writer (loop_migration), v2 validator (checks/flow_unit_runtime_v2.py), reader (loop_engine.rollup_loop_state), and health (loop_health) each load this schema and conform. The v1 visibility contract (schema_version 1.0) routes to the existing checks/flow_unit_runtime.validate_flow_unit_runtime_payload UNCHANGED — this file does not modify v1. RISK-037 and RISK-042 remain open: this contract does NOT activate any runtime execution engine (that is FEAT-005~007, 0.68.0).",
+
+  "_design_review_notes": {
+    "F1_loop_state_shape": "Design Review F1 (P2, non-blocking): the dormant writer today emits the 3-field FX-190 derive shape {active_loop, loop_count, last_loop_type}. The 9-field loop_state_fields list below is the v2 TARGET shape (set by FEAT-004 canonical initial state when a unit is activated). This is correct: v2 is the new shape, and the v2 validator requires all 9 fields present on every unit.",
+    "F2_sha_text_path": "Design Review F2 (P2, non-blocking): the NFC-normalize-then-sha256 idiom this contract's consumers reuse lives at infra/checks/loop_runtime_claims.py:_sha_text (the full path includes the /checks/ segment). Any FEAT-003 plan-hash implementation should import/copy the idiom from there.",
+    "F3_plan_hash_basename": "Design Review F3 (P2, non-blocking): migration_plan_hash is structural+basename identity, NOT full-path identity. project_id is derived from target_root basename, so two genuinely distinct projects that share a directory basename AND identical derived unit structure produce the same plan_hash. This is acceptable for the REL-059 dry-run/apply identity invariant (same target -> same hash is guaranteed) and is documented here so the no_overclaim boundary is not over-read as a full-path guarantee."
+  },
+
+  "required_top_level_fields": [
+    "schema_version",
+    "runtime_contract",
+    "runtime_scope",
+    "workflow_model",
+    "contract_source",
+    "migration_version",
+    "migration_plan_hash",
+    "migration_timestamp",
+    "decomposition_confirmed",
+    "flow_units",
+    "no_overclaim_boundary"
+  ],
+
+  "required_per_unit_fields": [
+    "flow_unit_id",
+    "title",
+    "unit_type",
+    "project_type",
+    "derivation_reason",
+    "loop_state",
+    "gate_state",
+    "runtime_status",
+    "dependencies",
+    "blockers"
+  ],
+
+  "allowed_gate_statuses": [
+    "pending",
+    "in-progress",
+    "passed",
+    "failed",
+    "blocked",
+    "escalated",
+    "withdrawn"
+  ],
+
+  "allowed_loop_tiers": [
+    "setup",
+    "inner",
+    "middle",
+    "outer"
+  ],
+
+  "allowed_agent_phases": [
+    "plan",
+    "act",
+    "observe",
+    "reflect"
+  ],
+
+  "allowed_runtime_statuses": [
+    "active",
+    "dormant",
+    "blocked",
+    "withdrawn"
+  ],
+
+  "loop_state_fields": [
+    "active_loop",
+    "active_loop_tier",
+    "loop_count",
+    "last_loop_type",
+    "agent_phase",
+    "iteration_within_inner",
+    "pause_points_active",
+    "last_gate_result",
+    "fuse"
+  ],
+
+  "gate_state_fields": [
+    "status",
+    "gate_id",
+    "last_result",
+    "evidence_refs"
+  ],
+
+  "required_top_level_field_shapes": {
+    "schema_version": {"type": "string", "value": "2.0"},
+    "runtime_contract": {"type": "string", "value": "loop-runtime-contract/v2"},
+    "runtime_scope": {"type": "string", "value": "loop-engineering-runtime"},
+    "workflow_model": {"type": "string", "value": "loop-engineering"},
+    "contract_source": {"type": "string", "value": "loop-runtime-contract-v2"},
+    "migration_version": {"type": "string", "note": "e.g. 0.67.0 — non-empty"},
+    "migration_plan_hash": {"type": "string", "note": "64-hex SHA-256 from FEAT-003 build_migration_plan. FEAT-002 validator checks presence + shape (64 lowercase hex); the re-derivation parity check is FEAT-003."},
+    "migration_timestamp": {"type": "string", "note": "ISO-8601 UTC, non-empty"},
+    "decomposition_confirmed": {"type": "boolean", "value": true, "note": "FEAT-004 hook: v2 payload may only be written if decomposition was confirmed. false/absent fails validation. FEAT-002 validator enforces this now."},
+    "flow_units": {"type": "array", "note": "non-empty; each per required_per_unit_fields"},
+    "no_overclaim_boundary": {"type": "array", "note": "non-empty string list containing every mandatory token in no_overclaim_boundary_mandatory_tokens"}
+  },
+
+  "required_per_unit_field_shapes": {
+    "flow_unit_id": {"type": "string", "note": "non-empty, unique within payload"},
+    "title": {"type": "string", "note": "non-empty"},
+    "unit_type": {"type": "string", "note": "project-type-derived (chapter/command/story/module/...)"},
+    "project_type": {"type": "string", "note": "one of the 7 presets; non-empty"},
+    "derivation_reason": {"type": "string", "note": "non-empty. The fallback single-unit reason is 'no-decomposable-structure-found' (explicit, never silent). The reserved token 'example-fixture' MUST pair with runtime_status 'dormant' (FEAT-004 AUDIT-133 guard)."},
+    "loop_state": {"type": "object", "note": "the 9-field FX-189 shape (see loop_state_fields), initialized per FEAT-004"},
+    "gate_state": {"type": "object", "note": "{status, gate_id, last_result, evidence_refs}; status from allowed_gate_statuses; gate_id is the current loop-role gate (G1-G11 mapped via loop_gate_semantics); last_result UNIFIED with loop_state.last_gate_result"},
+    "runtime_status": {"type": "string", "note": "one of allowed_runtime_statuses. FEAT-004 guard: active requires loop_state.active_loop:true; dormant requires active_loop:false (bidirectional implication, validator-enforced)."},
+    "dependencies": {"type": "array", "note": "strings; valid flow_unit_ids"},
+    "blockers": {"type": "array", "note": "strings; active blockers"}
+  },
+
+  "invariants": {
+    "last_gate_result_unification": "loop_state.last_gate_result MUST equal gate_state.last_result (the single gate result driving iterate-vs-escalate). FEAT-002 unification — validator-enforced.",
+    "runtime_status_active_loop_bidirectional": "runtime_status:active IMPLIES loop_state.active_loop:true AND runtime_status:dormant IMPLIES loop_state.active_loop:false. Bidirectional implication; FEAT-004 guard against dormant-masquerading-as-active; validator-enforced in FEAT-002.",
+    "decomposition_confirmed_required": "decomposition_confirmed MUST be true for a v2 payload. FEAT-004 hook enforced by the v2 validator in FEAT-002.",
+    "example_fixture_not_active": "If derivation_reason is 'example-fixture' (reserved token), runtime_status MUST be 'dormant'. FEAT-004 AUDIT-133 guard; the v2 validator enforces it."
+  },
+
+  "no_overclaim_boundary_mandatory_tokens": [
+    "does not activate execution engine",
+    "RISK-037 remains open",
+    "RISK-042 remains open"
+  ],
+
+  "v1_compatibility": {
+    "schema_version_1_0_routes_to": "checks/flow_unit_runtime.validate_flow_unit_runtime_payload",
+    "note": "schema_version '1.0' (or absent) routes to the existing visibility-v1 validator UNCHANGED. The v1 validator is byte-frozen (the 0.52.0/0.66.1 containment boundary); FEAT-002 adds a version router at the entry point but does NOT modify validate_flow_unit_runtime_payload logic. Classic/dynamic installations keep producing v1; no installed v1 payload is invalidated.",
+    "v1_runtime_scope": "runtime-visibility-only",
+    "v1_workflow_models": ["classic-phase-gate", "dynamic-flow-gate"]
+  },
+
+  "no_overclaim_boundary": [
+    "Loop Runtime Contract v2 is the canonical versioned contract schema for 0.67.0 (FEAT-002).",
+    "Loop Runtime Contract v2 does not activate execution engine; the persisted PARO state machine and production gate back-edge/fuse are FEAT-005~007 (0.68.0).",
+    "Loop Runtime Contract v2 does not close RISK-037; loop-engineering runtime activation remains scoped to contract + planner + initial state, not execution.",
+    "Loop Runtime Contract v2 does not close RISK-042; external effectiveness is not proven until 0.69.0 (VAL-008/VAL-009).",
+    "RISK-037 remains open until the 0.68.0 execution engine and 0.69.0 external validation are both complete.",
+    "RISK-042 remains open until 0.69.0 external validation (VAL-008/VAL-009).",
+    "Loop Runtime Contract v2 does not modify the v1 visibility validator (checks/flow_unit_runtime.py); v1 is byte-frozen as the 0.52.0/0.66.1 containment boundary.",
+    "Loop Runtime Contract v2 does not change the loop runtime claim scanner policy (ADR-011/012); new v2 surfaces comply with the existing claim contract at write time.",
+    "Loop Runtime Contract v2 does not claim 1.0.0 production-ready."
+  ]
+}

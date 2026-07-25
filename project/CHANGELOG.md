@@ -2,6 +2,31 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.67.0] - 2026-07-23
+
+### 0.67.0 - canonical Loop Runtime Contract + shared migration planner + decomposition confirmation（MINOR）
+
+0.67.0 是 MINOR 发布，完成 FEAT-002~004：建立规范化的 Loop Runtime Contract 与共享迁移规划器，并锁定分解确认与规范初始 gate 状态。三者合起来把 Loop runtime 的字段、schema 版本、plan identity 与初始状态收敛为机器可校验的单一契约，但**不激活运行时执行引擎**（执行引擎为 0.68.0，RISK-037/RISK-042 保持打开）。新增 104 个测试，0 P0；FEAT-002~004 均独立 Code Review APPROVED。版本投影 0.66.3 -> 0.67.0 全 PASS（M-set，纯字符串替换：plugins/marketplace/package.json/SKILL/manifest/plan-tracker/4 hooks/`verify_workflow.py` REQUIRED_SNIPPETS 版本钉）。
+
+### Added
+
+- **FEAT-002 canonical Loop Runtime Contract**：新增 `core/loop-runtime-contract.json` v2 schema 与 `flow_unit_runtime_v2.py` validator（452 行），writer/validator/reader/rollup/health 共用单一契约和 schema version；`flow_unit_runtime.py` v1 字节冻结（byte-frozen containment boundary，FIX-195 containment 完整），新增 +76 行版本路由。消除 workflow_model、gate state、status source、rollup 字段漂移；v1/v2 drift parity 9/9 match，无回归。
+- **FEAT-003 shared migration planner + immutable plan hash**：抽取纯 `build_migration_plan()` 函数（purity 16-thread CONFIRMED）；`MigrationPlan` 为 frozen/immutable，`plan_hash` = 8 结构字段 SHA-256 NFC；dry-run 与 apply 序列化同一 plan，apply 只验证并执行该 plan；同 target 的 unit IDs/count/project_type/gate schema 必须一致。FIX-195 containment 字节完整。
+- **FEAT-004 decomposition confirmation + canonical initial gate state**：`confirm_decomposition` 全逻辑（候选验证 + operator 确认 + hash 重算）；`plan_to_payload` 产生规范初始状态（dormant/pending gate/example-fixture guard）；heuristic derivation 保持 advisory；激活前确认 flow-unit 分解，**不允许 dormant/example-data-only 冒充 active**（dormant-as-active 不可表达）。
+
+### Validation
+
+- FEAT-002 Code Review：APPROVED_WITH_NOTES，0 blocker；40 测试通过。
+- FEAT-003 Code Review：APPROVED，0 blocker（purity 16-thread CONFIRMED，FIX-195 containment byte-intact）；28+68 regression 通过。
+- FEAT-004 Code Review：APPROVED_WITH_NOTES，0 blocker；36+96 regression 通过。
+- 共 104 个新测试，0 P0。preview/apply plan hash 相同，apply 前后 validator PASS；双 unit 可持不同 gate/phase。
+
+### Boundaries
+
+- 0.67.0 **does not activate execution engine**（运行时执行引擎为 0.68.0）。Loop Engineering runtime 仍 NOT_MET，**RISK-037 remains open**，**RISK-042 remains open**。
+- 不声明 zcode official approval、marketplace approval、curated listing、universal/full runtime support、external first-session pilot success，不关闭 RISK-036/RISK-037/RISK-039/RISK-040/RISK-041/RISK-042，不声明 1.0.0 production-ready。
+- MINOR bump 来自新增可执行契约/规划器/分解确认能力，不引入 breaking runtime API。
+
 ## [0.66.3] - 2026-07-23
 
 ### 0.66.3 - 0.66.2 release docs content fix（PATCH）

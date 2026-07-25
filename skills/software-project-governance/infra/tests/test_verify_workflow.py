@@ -4956,30 +4956,40 @@ class DynamicLifecycleMigrationTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 1)
         self.assertIn("requires explicit --dry-run", buf.getvalue())
 
-    def test_apply_flag_delegates_and_current_payload_fails_before_writes(self):
-        """FIX-195: delegation remains, but the current payload fails closed."""
+    def test_apply_flag_delegates_and_writes_after_confirmation(self):
+        """FIX-195 delegation remains; FEAT-004 makes apply confirm the
+        decomposition internally and write a v2-valid runtime.json.
+
+        The apply now SUCCEEDS (exit 0) — it confirms the full derived set,
+        writes runtime.json + backup, and appends a MIGRATION row. The
+        delegation from cmd_dynamic_lifecycle_migration --apply to
+        loop_migration.apply_migration is unchanged."""
+        from checks import flow_unit_runtime_v2
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             self._write_target(root)
             runtime_path = root / ".governance" / "flow-unit-runtime.json"
-            runtime_before = runtime_path.read_bytes()
             evidence_path = root / ".governance" / "evidence-log.md"
-            evidence_before = evidence_path.read_bytes()
             args = argparse.Namespace(target=str(root), dry_run=True, apply=True, fail_on_issues=True)
             buf = io.StringIO()
 
-            with redirect_stdout(buf), self.assertRaises(SystemExit) as ctx:
+            # FEAT-004: apply succeeds → no SystemExit raised (exit 0).
+            with redirect_stdout(buf):
                 vw.cmd_dynamic_lifecycle_migration(args)
 
             output = json.loads(buf.getvalue())
-            self.assertEqual(1, ctx.exception.code)
-            self.assertFalse(output["applied"])
-            self.assertTrue(output["validation_issues"])
+            self.assertTrue(output["applied"])
+            self.assertTrue(output.get("decomposition_confirmed"))
             self.assertEqual(output["workflow_model"]["new"], "loop-engineering")
             self.assertTrue(output["flow_units_derived"] >= 1)
-            self.assertEqual(runtime_before, runtime_path.read_bytes())
-            self.assertEqual(evidence_before, evidence_path.read_bytes())
-            self.assertFalse((root / ".governance" / "archive").exists())
+            # runtime.json now exists (written) and passes the v2 validator.
+            self.assertTrue(runtime_path.is_file())
+            runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
+            issues = flow_unit_runtime_v2.validate_flow_unit_runtime_payload_v2(runtime)
+            self.assertEqual(issues, [],
+                             f"persisted runtime must pass v2 completely; got {issues}")
+            self.assertTrue((root / ".governance" / "archive").exists())
+            self.assertIn("MIGRATION-", evidence_path.read_text(encoding="utf-8"))
 
     def test_dynamic_default_overclaim_is_blocked(self):
         with tempfile.TemporaryDirectory() as td:

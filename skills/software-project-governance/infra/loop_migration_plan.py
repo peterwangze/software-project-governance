@@ -22,11 +22,13 @@ does NOT import ``verify_workflow`` or ``loop_migration`` (avoids the cycle,
 same discipline as ``loop_engine``/``loop_health``).
 
 **Decomposition (ADR §5):** :func:`build_migration_plan` always returns a plan
-with ``decomposition_confirmed=False``. :func:`confirm_decomposition` is the
-FEAT-004 hook that flips the flag; FEAT-003 provides only the stub. A v2
-payload built from an unconfirmed plan fails the v2 validator's
-``decomposition_confirmed`` requirement — that is the executable containment
-guard until FEAT-004.
+with ``decomposition_confirmed=False``. :func:`confirm_decomposition` (FEAT-004)
+is the real confirmation gate: it validates the candidate set, applies the
+operator's ``approved_unit_ids`` subset as an explicit decision, and recomputes
+``plan_hash`` over the confirmed unit set. A v2 payload built from an
+unconfirmed plan fails the v2 validator's ``decomposition_confirmed``
+requirement — that is the executable containment guard for any caller that
+skips confirmation.
 
 Usage:
     from loop_migration_plan import (
@@ -550,11 +552,77 @@ def _dormant_initial_loop_state():
     }
 
 
-def _initial_gate_state():
-    """Return the canonical initial gate_state for a dormant unit (ADR §5.3)."""
+def _load_loop_gate_semantics(plugin_home=None):
+    """Return the registry's ``loop_gate_semantics`` list (fail-closed → []).
+
+    Used by :func:`_entry_gate_for_tier` to resolve the canonical entry gate
+    for a unit's tier (ADR §5.3). A missing/corrupt registry yields an empty
+    list, in which case ``_entry_gate_for_tier`` falls back to ``G1`` so the
+    payload still carries a non-empty gate_id (the validator's hard floor).
+    """
+    home = Path(plugin_home) if plugin_home is not None else PLUGIN_HOME
+    registry_path = home / _LOOP_ENGINEERING_REGISTRY_REL
+    try:
+        data = json.loads(registry_path.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            sem = data.get("loop_gate_semantics")
+            if isinstance(sem, list):
+                return sem
+    except (OSError, json.JSONDecodeError):
+        pass
+    return []
+
+
+def _entry_gate_for_tier(tier, semantics, default="G1"):
+    """Resolve the entry gate id for a unit's tier from loop_gate_semantics.
+
+    ADR §5.3: ``gate_state.gate_id`` is the entry gate for the unit's tier.
+    The entry gate is the ``loop-entry-gate`` (or, for the setup tier, the
+    ``loop-setup`` gate G1 whose ``enclosing_loop`` is ``"none"``) whose
+    ``enclosing_loop`` matches ``tier``. Falls back to ``default`` (G1) when
+    the registry has no matching entry gate — the validator's hard floor is a
+    non-empty gate_id, and G1 is the setup-tier entry that always exists.
+    """
+    if not isinstance(tier, str) or not tier or not semantics:
+        return default
+    tier_lower = tier.lower()
+    # The setup tier's entry gate is the loop-setup gate (G1, enclosing none).
+    # The other tiers' entry gate is the loop-entry-gate whose enclosing_loop
+    # matches the tier.
+    setup_match = None
+    entry_match = None
+    for gate in semantics:
+        if not isinstance(gate, dict):
+            continue
+        role = gate.get("loop_role")
+        enclosing = gate.get("enclosing_loop")
+        if not isinstance(enclosing, str):
+            continue
+        if role == "loop-setup" and enclosing == "none":
+            setup_match = gate.get("gate_id")
+        if (role == "loop-entry-gate"
+                and enclosing.lower() == tier_lower):
+            entry_match = gate.get("gate_id")
+    if tier_lower == "setup":
+        if isinstance(setup_match, str) and setup_match:
+            return setup_match
+        # No loop-setup gate recorded — the inner/middle entry gate for the
+        # enclosing setup loop (G2..G4) is the next-best fallback if present.
+        return default
+    if isinstance(entry_match, str) and entry_match:
+        return entry_match
+    return default
+
+
+def _initial_gate_state(gate_id="G1"):
+    """Return the canonical initial gate_state for a dormant unit (ADR §5.3).
+
+    ``gate_id`` is the entry gate for the unit's tier (resolved via
+    :func:`_entry_gate_for_tier`); defaults to ``G1`` (the setup-tier entry).
+    """
     return {
         "status": "pending",
-        "gate_id": "G1",  # setup-tier entry gate; validator requires non-empty
+        "gate_id": gate_id,
         "last_result": None,
         "evidence_refs": [],
     }
@@ -615,11 +683,24 @@ def plan_to_payload(plan, *, migration_version=None, migration_timestamp=None,
         from datetime import datetime, timezone
         migration_timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+    # Load the registry's loop_gate_semantics once (ADR §5.3) so each unit's
+    # gate_state.gate_id resolves to the entry gate for its entry_tier. A
+    # missing/corrupt registry falls back to G1 (fail-closed but deterministic).
+    gate_semantics = _load_loop_gate_semantics(plugin_home)
+
     units = []
     for up in plan.units:
         deps = list(up.dependencies) if isinstance(up.dependencies, tuple) else []
         loop_state = _dormant_initial_loop_state()
-        gate_state = _initial_gate_state()
+        gate_id = _entry_gate_for_tier(up.entry_tier, gate_semantics)
+        gate_state = _initial_gate_state(gate_id)
+        # FEAT-004 §5.3: runtime_status is EXPLICIT. Migration activation uses
+        # "dormant" because the execution engine is 0.68.0 (RISK-037/042 open) —
+        # units are confirmed but not yet executing. This makes the AUDIT-133
+        # example-fixture guard automatic (an example-fixture unit is dormant,
+        # never active) and satisfies the runtime_status⇔active_loop implication
+        # (dormant → active_loop:false, set in _dormant_initial_loop_state).
+        runtime_status = "dormant"
         units.append({
             "flow_unit_id": up.flow_unit_id,
             "title": up.title,
@@ -628,7 +709,7 @@ def plan_to_payload(plan, *, migration_version=None, migration_timestamp=None,
             "derivation_reason": up.derivation_reason,
             "loop_state": loop_state,
             "gate_state": gate_state,
-            "runtime_status": "dormant",  # FEAT-003 builds dormant units only
+            "runtime_status": runtime_status,
             "dependencies": deps,
             "blockers": [],
         })
@@ -649,36 +730,184 @@ def plan_to_payload(plan, *, migration_version=None, migration_timestamp=None,
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# confirm_decomposition — the FEAT-004 hook (stub; ADR §4.5, §5.2)
+# confirm_decomposition — the FEAT-004 confirmation gate (ADR §4.5, §5.2)
 # ═══════════════════════════════════════════════════════════════════════════
 
 
 def confirm_decomposition(plan, *, approved_unit_ids=None, options=None):
     """Return a NEW :class:`MigrationPlan` with ``decomposition_confirmed=True``.
 
-    FEAT-004 owns the full confirmation step (candidate-set validation, operator
-    approval filtering, recomputed hash over the confirmed unit set — ADR §5.2).
-    FEAT-003 provides ONLY this stub: it flips the flag via
-    ``dataclasses.replace`` and leaves the unit set + hash UNCHANGED.
+    FEAT-004 (ADR §5.2): this is the REAL confirmation step — the candidate set
+    is validated, the operator's approval (``approved_unit_ids``) is applied as
+    an explicit decision, and ``plan_hash`` is RECOMPUTED over the confirmed
+    unit set. FEAT-003 only provided the flag-flip stub; this function makes
+    confirmation a load-bearing gate.
 
-    ``decomposition_confirmed`` is EXCLUDED from the plan hash (ADR §4.2), so
-    flipping the flag does NOT change ``plan_hash`` — the dry-run/apply identity
-    invariant holds across the confirmation boundary. FEAT-004 will recompute
-    the hash when the confirmed unit set differs from the candidate set.
+    The confirmation contract:
+
+      1. **Validate the candidate set** (the units already on ``plan``) — no
+         duplicate IDs, no unknown dependencies, at least one unit, and every
+         unit has a non-empty ``derivation_reason``. Any violation raises
+         ``ValueError`` (matches the planner's error style, e.g.
+         ``_resolve_target_root``).
+      2. **Apply operator confirmation** — if ``approved_unit_ids`` is supplied,
+         the confirmed unit set is the intersection with the candidate set, IN
+         operator order; dependencies are filtered to the remaining set. If
+         ``None``, the full derived set is confirmed wholesale. Either way this
+         is an EXPLICIT decision (never a silent default).
+      3. **Recompute ``plan_hash``** — the confirmed unit set may differ from
+         the candidate set when ``approved_unit_ids`` filters it; the
+         dry-run/apply invariant applies to the CONFIRMED plan (ADR §5.2), so
+         the hash must reflect the confirmed set. When ``approved_unit_ids`` is
+         ``None`` the unit set is unchanged → the hash is unchanged (this is
+         correct and testable: ``decomposition_confirmed`` is excluded from the
+         hash, ADR §4.2).
 
     Args:
-        plan: A :class:`MigrationPlan` (unconfirmed).
-        approved_unit_ids: Reserved for FEAT-004 (operator-approved subset).
-            Ignored by this stub.
-        options: Reserved for FEAT-004.
+        plan: A :class:`MigrationPlan` (typically unconfirmed, but a confirmed
+            plan may be re-confirmed).
+        approved_unit_ids: Optional iterable of operator-approved ``flow_unit_id``
+            strings. When ``None`` the full candidate set is confirmed. When
+            supplied, the confirmed plan contains EXACTLY these IDs (any
+            candidate id absent from the list is dropped; ids in the list that
+            are not candidates raise ``ValueError`` — the operator cannot
+            approve units the planner never derived).
+        options: Reserved for future use (signature stability).
 
     Returns:
         A new frozen :class:`MigrationPlan` identical to ``plan`` except
-        ``decomposition_confirmed=True``. ``plan_hash`` is unchanged.
+        ``decomposition_confirmed=True``, possibly a filtered ``units`` /
+        ``unit_ids`` / ``unit_count``, and ``plan_hash`` recomputed over the
+        confirmed unit set.
+
+    Raises:
+        ValueError: on any candidate-set violation (duplicate IDs, unknown
+            dependency, empty set, empty derivation_reason), or if
+            ``approved_unit_ids`` references ids that are not candidates.
     """
-    # approved_unit_ids / options are accepted for FEAT-004 signature stability
-    # but intentionally unused here (FEAT-003 stub).
-    return _dc_replace(plan, decomposition_confirmed=True)
+    # ── Step 1: validate the candidate set already on the plan ────────────
+    # Duplicate IDs — the candidate planner already dedupes, but confirm is a
+    # standalone gate so a hand-constructed (or future-regressed) plan cannot
+    # slip a duplicate through.
+    candidate_ids = [u.flow_unit_id for u in plan.units]
+    seen = set()
+    for uid in candidate_ids:
+        if uid in seen:
+            raise ValueError(
+                "confirm_decomposition: duplicate candidate flow_unit_id {0!r}".format(uid)
+            )
+        seen.add(uid)
+    candidate_id_set = seen
+
+    if plan.unit_count == 0 or not candidate_ids:
+        raise ValueError(
+            "confirm_decomposition: cannot confirm an empty unit set "
+            "(at least one unit is required)"
+        )
+
+    # Every unit must carry a non-empty derivation_reason (the v2 validator
+    # requires it; confirm is the gate that enforces it before apply).
+    for u in plan.units:
+        if not isinstance(u.derivation_reason, str) or not u.derivation_reason.strip():
+            raise ValueError(
+                "confirm_decomposition: unit {0!r} has an empty derivation_reason".format(
+                    u.flow_unit_id
+                )
+            )
+
+    # Every dependency must reference a known candidate id (no dangling edges).
+    for u in plan.units:
+        for dep in u.dependencies:
+            if dep not in candidate_id_set:
+                raise ValueError(
+                    "confirm_decomposition: unit {0!r} has unknown dependency {1!r} "
+                    "(not a candidate flow_unit_id)".format(u.flow_unit_id, dep)
+                )
+
+    # ── Step 2: apply operator confirmation (explicit decision) ───────────
+    if approved_unit_ids is None:
+        # Full derived set confirmed wholesale — units + unit_ids unchanged.
+        confirmed_units = plan.units
+        confirmed_ids = plan.unit_ids
+    else:
+        # Normalize the operator's list (drop empties, dedupe preserving order).
+        approved_list = []
+        approved_seen = set()
+        for raw in approved_unit_ids:
+            if not isinstance(raw, str) or not raw.strip():
+                raise ValueError(
+                    "confirm_decomposition: approved_unit_ids must be non-empty strings"
+                )
+            raw = raw.strip()
+            if raw in approved_seen:
+                raise ValueError(
+                    "confirm_decomposition: duplicate approved_unit_ids entry {0!r}".format(raw)
+                )
+            approved_seen.add(raw)
+            approved_list.append(raw)
+
+        if not approved_list:
+            raise ValueError(
+                "confirm_decomposition: approved_unit_ids is empty "
+                "(at least one unit is required)"
+            )
+
+        # The operator may only approve units the planner actually derived.
+        unknown_approved = [aid for aid in approved_list if aid not in candidate_id_set]
+        if unknown_approved:
+            raise ValueError(
+                "confirm_decomposition: approved_unit_ids references unknown "
+                "flow_unit_id(s) {0} (not in the candidate set)".format(unknown_approved)
+            )
+
+        # Build the confirmed unit list in operator order, filtering dependencies
+        # to the remaining set so the confirmed plan has no dangling edges.
+        approved_set = set(approved_list)
+        by_id = {u.flow_unit_id: u for u in plan.units}
+        confirmed_units_list = []
+        for aid in approved_list:
+            base = by_id[aid]
+            filtered_deps = tuple(d for d in base.dependencies if d in approved_set)
+            confirmed_units_list.append(
+                _dc_replace(base, dependencies=filtered_deps)
+            )
+        confirmed_units = tuple(confirmed_units_list)
+        confirmed_ids = tuple(approved_list)
+
+    confirmed_count = len(confirmed_units)
+
+    # ── Step 3: recompute plan_hash over the CONFIRMED unit set ───────────
+    # ADR §5.2: the dry-run/apply invariant applies to the CONFIRMED plan. When
+    # approved_unit_ids filters the set, the hash MUST change to reflect the
+    # confirmed structure. When approved_unit_ids is None the unit set (and thus
+    # the hash) is unchanged — decomposition_confirmed is excluded from the
+    # hash (ADR §4.2), so flipping the flag alone never perturbs it.
+    confirmed_hash = compute_plan_hash(
+        contract_id=plan.contract_id,
+        project_id=plan.project_id,
+        project_type=plan.project_type,
+        schema_version=plan.schema_version,
+        unit_count=confirmed_count,
+        unit_ids=confirmed_ids,
+        workflow_model_new=plan.workflow_model_new,
+        gate_schema=plan.gate_schema,
+    )
+
+    return MigrationPlan(
+        schema_version=plan.schema_version,
+        contract_id=plan.contract_id,
+        target_root=plan.target_root,
+        project_type=plan.project_type,
+        project_id=plan.project_id,
+        workflow_model_prior=plan.workflow_model_prior,
+        workflow_model_new=plan.workflow_model_new,
+        unit_ids=confirmed_ids,
+        unit_count=confirmed_count,
+        units=confirmed_units,
+        gate_schema=plan.gate_schema,
+        decomposition_confirmed=True,
+        plan_hash=confirmed_hash,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════

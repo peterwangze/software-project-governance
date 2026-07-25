@@ -70,10 +70,14 @@ from checks.flow_unit_runtime import validate_flow_unit_runtime_payload  # noqa:
 # the REL-059 dry-run/apply identity invariant executable: the same pure
 # function derives both the preview's plan and the apply's re-derived plan, so
 # they cannot disagree (the AUDIT-133 21/19 validator drift is eliminated).
+# FEAT-004: confirm_decomposition is the real confirmation gate the apply path
+# invokes before plan_to_payload (a v2 payload may only be written from a
+# CONFIRMED plan, ADR §5.2).
 from loop_migration_plan import (  # noqa: E402
     build_migration_plan,
     plan_to_payload,
     plan_as_dict,
+    confirm_decomposition,
     MigrationPlanOptions,
 )
 
@@ -614,7 +618,7 @@ def _commit_runtime_and_evidence(runtime_path, runtime_bytes, evidence_path,
 
 
 def apply_migration(target_root=None, project_type=None, plugin_home=None,
-                    expected_plan_hash=None):
+                    expected_plan_hash=None, approved_unit_ids=None):
     """Execute the classic → loop-engineering migration (ADR §7.2, 9 steps).
 
     This is a read-then-write operation with data-loss risk. The safety
@@ -632,10 +636,20 @@ def apply_migration(target_root=None, project_type=None, plugin_home=None,
       - HOST_PROJECT_ROOT unresolvable (RISK-040 C4)
       - Target already claims loop-engineering active (idempotency)
       - Derived flow units = 0 (FX-190 fallback prevents this; guarded anyway)
+      - plan_hash mismatch (expected_plan_hash supplied and disagrees)
+      - FEAT-004: decomposition confirmation fails (bad candidate set, or
+        approved_unit_ids references unknown ids) — abort BEFORE any write
 
     On fail-closed, NOTHING is written — no backup dir, no runtime.json, no
     evidence row. The caller (cmd_*) inspects ``result["applied"]`` and
     exits non-zero when False.
+
+    FEAT-004 (ADR §5.2): apply CONFIRMS the decomposition before building the
+    payload. With ``approved_unit_ids=None`` the full derived set is confirmed
+    wholesale; with an explicit list only those units are written. Confirmation
+    runs AFTER the plan-hash verification (so the hash check still anchors the
+    candidate plan) and BEFORE ``plan_to_payload`` (so the persisted payload is
+    always built from a CONFIRMED plan and passes the v2 validator).
 
     Args:
         target_root: Explicit host project root (str/Path). If None, resolved
@@ -653,7 +667,16 @@ def apply_migration(target_root=None, project_type=None, plugin_home=None,
             re-derived ``plan_hash`` equals this value; a mismatch fail-closes
             BEFORE any write (no backup, no runtime, no evidence row). This is
             the executable REL-059 invariant: the dry-run's serialized plan and
-            the apply's re-derived plan MUST have identical structure.
+            the apply's re-derived plan MUST have identical structure. NOTE:
+            this hash is the CANDIDATE plan's hash (pre-confirmation); a subset
+            ``approved_unit_ids`` produces a DIFFERENT confirmed plan_hash, which
+            is reported in the result but is not subject to this check (the
+            operator approves a subset, deliberately changing the structure).
+        approved_unit_ids: Optional iterable of operator-approved
+            ``flow_unit_id`` strings (FEAT-004). When ``None`` the full derived
+            set is confirmed wholesale; when supplied only those units are
+            written (dependencies filtered to the remaining set). Unknown ids
+            or an empty list fail-closed before any write.
 
     Returns:
         A result dict. On success::
@@ -669,6 +692,7 @@ def apply_migration(target_root=None, project_type=None, plugin_home=None,
                            "evidence_log_before": ..., "evidence_log_after": ...},
                 "flow_units_derived": N,
                 "evidence_row": "MIGRATION-{version}",
+                "plan_hash": "<confirmed plan hash>",
                 "no_overclaim_boundary": "..."
             }
 
@@ -799,7 +823,9 @@ def apply_migration(target_root=None, project_type=None, plugin_home=None,
     # If a hash was supplied (the dry-run's serialized plan_hash), assert the
     # re-derived plan's hash equals it. A mismatch means the dry-run and apply
     # disagree on structure → fail-closed BEFORE any write. This is the
-    # executable REL-059 dry-run/apply identity invariant.
+    # executable REL-059 dry-run/apply identity invariant. This anchors the
+    # CANDIDATE plan (pre-confirmation); the confirmed plan's hash may differ
+    # when approved_unit_ids filters the set, and is reported in the result.
     if expected_plan_hash is not None and plan.plan_hash != expected_plan_hash:
         return dict(base_result, aborted_reason=(
             "plan_hash mismatch: expected {0} but re-derived {1}; the dry-run "
@@ -808,15 +834,36 @@ def apply_migration(target_root=None, project_type=None, plugin_home=None,
             )
         ))
 
-    # ── Build the v2 runtime payload from the plan (ADR §4.4) ───────────
-    # plan_to_payload bridges the plan → v2 contract payload. The v2 validator
-    # then enforces the FEAT-002 contract §3.2/3.3/3.4 invariants. FEAT-003
-    # builds an UNCONFIRMED plan (decomposition_confirmed=False), so the v2
-    # validator rejects the payload here — fail-closed, no write (this is the
-    # FEAT-004 containment guard: a v2 payload may only be written after
-    # confirm_decomposition, which FEAT-003 deliberately does not call).
+    # ── FEAT-004: confirm the decomposition (ADR §5.2) ──────────────────
+    # The apply path MUST confirm the plan before building the payload — a v2
+    # payload may only be written from a CONFIRMED plan (the v2 validator's
+    # decomposition_confirmed requirement is the executable containment guard).
+    # With approved_unit_ids=None the full derived set is confirmed wholesale;
+    # with an explicit list only those units survive. Any confirmation failure
+    # (bad candidate set, unknown approved ids, empty set) fail-closes BEFORE
+    # any write — no backup, no runtime, no evidence row. FIX-195 containment
+    # is preserved: the backup/commit/compensation scaffolding below is
+    # UNCHANGED; this confirmation sits between the hash check and
+    # plan_to_payload, both of which precede the backup step.
+    try:
+        confirmed_plan = confirm_decomposition(
+            plan, approved_unit_ids=approved_unit_ids,
+        )
+    except ValueError as exc:
+        return dict(base_result, aborted_reason=(
+            "decomposition confirmation failed ({0}); the candidate set is "
+            "invalid or the approved_unit_ids are inconsistent. No host write "
+            "performed.".format(exc)
+        ), workflow_model={"prior": plan.workflow_model_prior, "new": WORKFLOW_MODEL_NEW},
+           flow_units_derived=plan.unit_count, plan_hash=plan.plan_hash)
+
+    # ── Build the v2 runtime payload from the CONFIRMED plan (ADR §5.3) ─
+    # plan_to_payload bridges the confirmed plan → v2 contract payload. The v2
+    # validator then enforces the FEAT-002 contract §3.2/3.3/3.4 invariants.
+    # Because the plan is confirmed, the payload's decomposition_confirmed is
+    # true and the v2 validator passes (the containment guard is satisfied).
     runtime_payload = plan_to_payload(
-        plan, migration_version=MIGRATION_VERSION,
+        confirmed_plan, migration_version=MIGRATION_VERSION,
         migration_timestamp=_now_iso(), plugin_home=plugin_home,
     )
     runtime_path = _runtime_path(host_root)
@@ -829,13 +876,13 @@ def apply_migration(target_root=None, project_type=None, plugin_home=None,
             aborted_reason=(
                 "planned loop-engineering runtime is incompatible with the "
                 "v2 Loop Runtime Contract; no host write performed "
-                "(FEAT-003 builds an unconfirmed plan; the v2 validator "
-                "requires decomposition_confirmed=true, which is FEAT-004)"
+                "(decomposition was confirmed but the v2 validator rejected "
+                "the payload)"
             ),
             validation_issues=validation_issues,
             workflow_model={"prior": plan.workflow_model_prior, "new": WORKFLOW_MODEL_NEW},
-            flow_units_derived=plan.unit_count,
-            plan_hash=plan.plan_hash,
+            flow_units_derived=confirmed_plan.unit_count,
+            plan_hash=confirmed_plan.plan_hash,
         )
 
     # The flow_units count used downstream (audit trail) comes from the plan.
@@ -887,7 +934,7 @@ def apply_migration(target_root=None, project_type=None, plugin_home=None,
             backup_dir=str(backup_dir),
             hashes=hashes,
             workflow_model={"prior": prior_model, "new": WORKFLOW_MODEL_NEW},
-            plan_hash=plan.plan_hash,
+            plan_hash=confirmed_plan.plan_hash,
         )
 
     # Record the AFTER hashes (post-write) for the audit trail.
@@ -905,7 +952,8 @@ def apply_migration(target_root=None, project_type=None, plugin_home=None,
         "hashes": hashes,
         "flow_units_derived": len(flow_units),
         "evidence_row": "MIGRATION-{0}".format(MIGRATION_VERSION),
-        "plan_hash": plan.plan_hash,
+        "plan_hash": confirmed_plan.plan_hash,
+        "decomposition_confirmed": True,
         "no_overclaim_boundary": (
             "runtime visibility only; classic G1-G11 remains compatible via rollback"
         ),
@@ -1218,6 +1266,11 @@ if __name__ == "__main__":  # pragma: no cover - manual CLI smoke
         "--expected-plan-hash", default=None,
         help="Apply-path plan hash verification (FEAT-003, ADR §4.4). Fail-closed on mismatch.",
     )
+    parser.add_argument(
+        "--approve-unit", dest="approved_unit_ids", action="append", default=None,
+        help=("FEAT-004: restrict the applied plan to this operator-approved "
+              "flow_unit_id (repeatable). Omit to confirm the full derived set."),
+    )
     args = parser.parse_args()
 
     try:
@@ -1234,6 +1287,7 @@ if __name__ == "__main__":  # pragma: no cover - manual CLI smoke
         result = apply_migration(
             target_root=args.target, project_type=args.project_type,
             expected_plan_hash=args.expected_plan_hash,
+            approved_unit_ids=args.approved_unit_ids,
         )
     else:
         result = preview_migration(

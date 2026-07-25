@@ -100,16 +100,14 @@ def _sha256_bytes(data):
 
 
 def _apply_with_future_contract(*args, **kwargs):
-    """Exercise legacy transaction/rollback tests after a simulated validator pass.
+    """Exercise the FIX-195 transaction/rollback tests with the validator mocked to pass.
 
-    FEAT-003: apply now derives a v2 payload and routes it through the
-    version-aware ``_validate_runtime_payload`` dispatch (v2 → the FEAT-002 v2
-    validator, which rejects an unconfirmed plan). To keep the FIX-195
-    transaction/rollback tests focused on the backup/commit/compensation
-    scaffolding (their actual subject), this helper mocks the version-aware
-    dispatch to pass — simulating the FEAT-004 future where a confirmed plan
-    clears the v2 contract. The containment tests that call ``apply_migration``
-    directly (no helper) still exercise the real fail-closed path.
+    FEAT-004 landed the confirmation step: apply now confirms the decomposition
+    internally and produces a v2-valid payload that PASSES the real validator.
+    The mock here is therefore belt-and-braces (a no-op on a confirmed plan)
+    — retained so the transaction/rollback tests below stay focused on the
+    backup/commit/compensation scaffolding (their actual subject) even if a
+    future contract tightening temporarily rejects the dormant initial state.
     """
     with mock.patch.object(lm, "_validate_runtime_payload", return_value=[]):
         return lm.apply_migration(*args, **kwargs)
@@ -290,6 +288,10 @@ class TestApplyMigration(unittest.TestCase):
         read/wrote PLUGIN_HOME/.governance/ would corrupt the plugin's own
         evidence store. We prove the runtime.json + archive land in the HOST
         dir and the PLUGIN's .governance/ is untouched.
+
+        FEAT-004: apply now succeeds (confirms the full set and writes a
+        v2-valid runtime.json). The divergence guard is proven by the writes
+        landing in the HOST dir, not by a fail-closed abort.
         """
         plugin_gov = PLUGIN_HOME / ".governance"
         # Snapshot whether the plugin's .governance/flow-unit-runtime.json +
@@ -303,14 +305,14 @@ class TestApplyMigration(unittest.TestCase):
             self.assertNotEqual(str(root), str(PLUGIN_HOME))
 
             result = lm.apply_migration(target_root=str(root))
-            self.assertFalse(result["applied"])
+            # FEAT-004: apply confirms the full set and succeeds.
+            self.assertTrue(result["applied"])
             # Result target MUST be the host, never the plugin.
             self.assertEqual(str(Path(result["target"])), str(root.resolve()))
 
-            # Current contract rejects the loop payload before any HOST write.
-            self.assertIn("validation_issues", result)
-            self.assertFalse((root / ".governance" / "flow-unit-runtime.json").is_file())
-            self.assertFalse((root / ".governance" / "archive").is_dir())
+            # The runtime.json + archive land in the HOST dir.
+            self.assertTrue((root / ".governance" / "flow-unit-runtime.json").is_file())
+            self.assertTrue((root / ".governance" / "archive").is_dir())
 
         # PLUGIN's .governance/ must be untouched (no new runtime.json/archive).
         self.assertEqual(
@@ -470,23 +472,35 @@ class TestRollbackMigration(unittest.TestCase):
 
 
 class TestMigrationContainment(unittest.TestCase):
-    def test_current_loop_payload_fails_before_any_host_write(self):
+    """FEAT-004: apply now confirms the decomposition internally and writes a
+    v2-valid runtime.json. The FIX-195 containment surface (no partial writes,
+    backup-before-write, byte-exact restore) is still verified here and in
+    TestFix195ContainmentPreserved in test_loop_decomposition.py."""
+
+    def test_apply_writes_v2_valid_runtime_with_backup(self):
+        """FEAT-004: apply succeeds and writes a v2-valid runtime.json whose
+        payload passes the v2 validator completely, plus a backup dir."""
+        from checks import flow_unit_runtime_v2
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             _write_host(root)
-            plan = (root / ".governance/plan-tracker.md").read_bytes()
-            evidence = (root / ".governance/evidence-log.md").read_bytes()
 
             result = lm.apply_migration(target_root=str(root))
 
-            self.assertFalse(result["applied"])
-            self.assertGreater(len(result["validation_issues"]), 0)
-            self.assertEqual((root / ".governance/plan-tracker.md").read_bytes(), plan)
-            self.assertEqual((root / ".governance/evidence-log.md").read_bytes(), evidence)
-            self.assertFalse((root / ".governance/flow-unit-runtime.json").exists())
-            self.assertFalse((root / ".governance/archive").exists())
+            self.assertTrue(result["applied"])
+            self.assertTrue(result.get("decomposition_confirmed"))
+            runtime_path = root / ".governance" / "flow-unit-runtime.json"
+            self.assertTrue(runtime_path.is_file())
+            runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
+            issues = flow_unit_runtime_v2.validate_flow_unit_runtime_payload_v2(runtime)
+            self.assertEqual(issues, [],
+                             f"persisted runtime must pass v2 completely; got {issues}")
+            self.assertTrue((root / ".governance" / "archive").is_dir())
 
-    def test_current_loop_payload_preserves_existing_runtime_bytes(self):
+    def test_apply_preserves_existing_runtime_bytes_on_confirm_failure(self):
+        """A confirmation failure (bad approved_unit_ids) must NOT touch a
+        pre-existing runtime.json and must not create a backup — proving the
+        fail-closed path still preserves bytes when confirmation rejects."""
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             original = b'{"legacy":true}\r\n'
@@ -494,10 +508,12 @@ class TestMigrationContainment(unittest.TestCase):
             runtime = root / ".governance/flow-unit-runtime.json"
             runtime.write_bytes(original)
 
-            result = lm.apply_migration(target_root=str(root))
+            result = lm.apply_migration(
+                target_root=str(root), approved_unit_ids=["does.not.exist"],
+            )
 
             self.assertFalse(result["applied"])
-            self.assertIn("validation_issues", result)
+            self.assertIn("confirmation failed", result["aborted_reason"])
             self.assertEqual(runtime.read_bytes(), original)
             self.assertFalse((root / ".governance/archive").exists())
 
@@ -717,7 +733,10 @@ class TestVerifyWorkflowIntegration(unittest.TestCase):
     """verify_workflow.py command-dispatch integration (FX-191 restructure)."""
 
     def test_cmd_loop_engineering_migration_apply_dispatches(self):
-        """cmd_loop_engineering_migration routes --apply to loop_migration."""
+        """cmd_loop_engineering_migration routes --apply to loop_migration.
+
+        FEAT-004: apply succeeds (exits 0) and writes a v2-valid runtime.json
+        after confirming the decomposition."""
         import argparse
         import io
         from contextlib import redirect_stdout
@@ -731,16 +750,19 @@ class TestVerifyWorkflowIntegration(unittest.TestCase):
                 version=None, project_type=None, dry_run=False, fail_on_issues=False,
             )
             buf = io.StringIO()
-            with redirect_stdout(buf), self.assertRaises(SystemExit) as ctx:
+            # FEAT-004: apply succeeds → no SystemExit raised (exit 0).
+            with redirect_stdout(buf):
                 vw.cmd_loop_engineering_migration(args)
 
             output = json.loads(buf.getvalue())
-            self.assertEqual(ctx.exception.code, 1)
-            self.assertFalse(output["applied"])
-            self.assertIn("validation_issues", output)
+            self.assertTrue(output["applied"])
+            self.assertTrue(output.get("decomposition_confirmed"))
             self.assertEqual(output["workflow_model"]["new"], "loop-engineering")
+            self.assertTrue((root / ".governance" / "flow-unit-runtime.json").is_file())
 
-    def test_standalone_apply_exits_nonzero_without_writes(self):
+    def test_standalone_apply_succeeds_and_writes(self):
+        """FEAT-004: the standalone CLI apply now exits 0 and writes a
+        v2-valid runtime.json (decomposition confirmed internally)."""
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             _write_host(root)
@@ -748,12 +770,12 @@ class TestVerifyWorkflowIntegration(unittest.TestCase):
                 [sys.executable, str(Path(lm.__file__)), "--target", str(root), "--apply"],
                 capture_output=True, text=True, encoding="utf-8", check=False,
             )
-            self.assertEqual(completed.returncode, 1, completed.stdout + completed.stderr)
+            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
             output = json.loads(completed.stdout)
-            self.assertFalse(output["applied"])
-            self.assertIn("validation_issues", output)
-            self.assertFalse((root / ".governance/archive").exists())
-            self.assertFalse((root / ".governance/flow-unit-runtime.json").exists())
+            self.assertTrue(output["applied"])
+            self.assertTrue(output.get("decomposition_confirmed"))
+            self.assertTrue((root / ".governance/archive").is_dir())
+            self.assertTrue((root / ".governance/flow-unit-runtime.json").is_file())
 
     def test_cmd_loop_engineering_migration_rollback_dispatches(self):
         """cmd_loop_engineering_migration routes --rollback to loop_migration."""
@@ -780,7 +802,10 @@ class TestVerifyWorkflowIntegration(unittest.TestCase):
             self.assertFalse((root / ".governance" / "flow-unit-runtime.json").is_file())
 
     def test_dynamic_lifecycle_apply_now_unblocked(self):
-        """dynamic-lifecycle-migration --apply delegates to loop_migration (FX-191)."""
+        """dynamic-lifecycle-migration --apply delegates to loop_migration (FX-191).
+
+        FEAT-004: apply succeeds (no SystemExit) and writes a v2-valid
+        runtime.json after confirming the decomposition."""
         import argparse
         import io
         from contextlib import redirect_stdout
@@ -793,13 +818,12 @@ class TestVerifyWorkflowIntegration(unittest.TestCase):
                 target=str(root), apply=True, dry_run=False, fail_on_issues=False,
             )
             buf = io.StringIO()
-            with redirect_stdout(buf), self.assertRaises(SystemExit) as ctx:
+            # FEAT-004: apply succeeds → no SystemExit raised (exit 0).
+            with redirect_stdout(buf):
                 vw.cmd_dynamic_lifecycle_migration(args)
 
             output = json.loads(buf.getvalue())
-            self.assertEqual(ctx.exception.code, 1)
-            self.assertFalse(output["applied"])
-            self.assertIn("validation_issues", output)
+            self.assertTrue(output["applied"])
             self.assertEqual(output["command"], "loop-engineering-migration")
 
     def test_dynamic_lifecycle_missing_flags_still_exits_closed(self):

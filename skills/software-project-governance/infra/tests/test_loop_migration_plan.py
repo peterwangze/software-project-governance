@@ -384,7 +384,14 @@ class TestDryRunApplyIdentity(unittest.TestCase):
 
     def test_dry_run_and_apply_share_plan_hash(self):
         """preview_migration and apply against the same fixture derive an
-        identical plan_hash — the executable REL-059 invariant."""
+        identical plan_hash — the executable REL-059 invariant.
+
+        FEAT-004: apply now CONFIRMS the full derived set (the dry-run's
+        candidate plan) before writing. Full-set confirmation keeps the hash
+        unchanged (decomposition_confirmed is excluded; same units, ADR §4.2),
+        so the apply's reported plan_hash still equals the dry-run's hash. The
+        apply now SUCCEEDS (writes a v2-valid runtime.json) — that is the
+        intended FEAT-004 behavior."""
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             _write_host(root)
@@ -394,18 +401,17 @@ class TestDryRunApplyIdentity(unittest.TestCase):
             self.assertIsNotNone(preview["plan_hash"])
             self.assertIsNotNone(preview["migration_plan"])
 
-            # Apply RE-DERIVES the plan (fail-closed on the unconfirmed plan,
-            # but still reports the re-derived plan_hash before aborting).
+            # Apply RE-DERIVES the plan, confirms the full set, and writes.
             apply_result = lm.apply_migration(target_root=str(root))
 
             self.assertEqual(preview["plan_hash"], apply_result["plan_hash"],
-                             "dry-run and apply must derive the identical plan_hash")
-            self.assertFalse(apply_result["applied"],
-                             "unconfirmed plan must fail-closed (no write)")
-            self.assertFalse((root / ".governance" / "flow-unit-runtime.json").is_file(),
-                             "apply must not write on a fail-closed abort")
-            self.assertFalse((root / ".governance" / "archive").is_dir(),
-                             "apply must not create a backup on a fail-closed abort")
+                             "dry-run and apply must derive the identical plan_hash "
+                             "(full-set confirm keeps the hash)")
+            self.assertTrue(apply_result["applied"],
+                            "FEAT-004: apply confirms the full set and succeeds")
+            self.assertTrue(apply_result.get("decomposition_confirmed"))
+            self.assertTrue((root / ".governance" / "flow-unit-runtime.json").is_file(),
+                            "apply writes a v2-valid runtime.json")
 
     def test_dry_run_does_not_write(self):
         """The dry-run path performs NO writes (no runtime.json, no archive)."""
@@ -468,9 +474,11 @@ class TestApplyHashVerification(unittest.TestCase):
 
     def test_matching_expected_hash_proceeds_past_hash_check(self):
         """When expected_plan_hash matches, the hash check passes and apply
-        proceeds to the (still fail-closed) v2 validation of the unconfirmed
-        plan. The abort reason is the v2 decomposition_confirmed failure, NOT
-        a hash mismatch — proving the hash check is a real gate, not a no-op."""
+        proceeds past it — FEAT-004 then confirms the full set and SUCCEEDS
+        (writes a v2-valid runtime.json). That the apply gets far enough to
+        write proves the matching-hash gate is a real gate, not a no-op (a
+        mismatched hash fail-closes with no write, covered by
+        test_mismatched_expected_hash_fails_closed_no_write above)."""
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             _write_host(root)
@@ -481,12 +489,11 @@ class TestApplyHashVerification(unittest.TestCase):
             result = lm.apply_migration(
                 target_root=str(root), expected_plan_hash=real_hash,
             )
-            self.assertFalse(result["applied"])
-            # Past the hash gate → fails closed on the v2 contract instead.
+            # Past the hash gate → confirmation + write succeeds.
+            self.assertTrue(result["applied"])
             self.assertNotIn("plan_hash mismatch", result.get("aborted_reason", ""))
-            self.assertIn("v2 Loop Runtime Contract", result["aborted_reason"])
-            self.assertGreater(len(result["validation_issues"]), 0)
-            self.assertFalse((root / ".governance" / "flow-unit-runtime.json").is_file())
+            self.assertTrue(result.get("decomposition_confirmed"))
+            self.assertTrue((root / ".governance" / "flow-unit-runtime.json").is_file())
 
 
 # ═══════════════════════════════════════════════════════════════════════════

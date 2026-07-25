@@ -65,6 +65,25 @@ from resolve_entry import resolve_host_root, read_active_version  # noqa: E402
 from flow_unit_derive import derive_flow_units  # noqa: E402
 from checks.flow_unit_runtime import validate_flow_unit_runtime_payload  # noqa: E402
 
+# FEAT-003 shared migration planner (ADR §4). Both dry-run (preview_migration)
+# and apply (apply_migration) call build_migration_plan — this is what makes
+# the REL-059 dry-run/apply identity invariant executable: the same pure
+# function derives both the preview's plan and the apply's re-derived plan, so
+# they cannot disagree (the AUDIT-133 21/19 validator drift is eliminated).
+from loop_migration_plan import (  # noqa: E402
+    build_migration_plan,
+    plan_to_payload,
+    plan_as_dict,
+    MigrationPlanOptions,
+)
+
+# FEAT-002 v2 contract validator (the byte-frozen v1 validator above is
+# preserved). The apply path validates the v2 payload via this validator
+# BEFORE any write (fail-closed, preserves FIX-195 containment). Imported
+# lazily inside _validate_runtime_payload (version-aware dispatch) so a
+# missing/renamed v2 module cannot break the v1 containment path at import.
+_V2_VALIDATOR = None  # populated lazily; see _validate_runtime_payload
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Constants
@@ -150,6 +169,40 @@ def _resolve_host_root(target_root, plugin_home=None):
         return candidate
     # No explicit target: delegate to resolve_entry (which tries cwd).
     return resolve_host_root(None)
+
+
+def _validate_runtime_payload(state, display):
+    """Version-aware runtime payload validation (FEAT-002 routing).
+
+    Routes on ``state.schema_version``: ``"2.0"`` → the FEAT-002 v2 validator;
+    ``"1.0"`` / absent → the byte-frozen v1 validator (unchanged). Mirrors
+    :func:`checks.flow_unit_runtime.validate_flow_unit_runtime_payload_dispatch`
+    but is used here as the post-write readback validator inside the FIX-195
+    compensating transaction primitive, so a confirmed v2 payload written by
+    FEAT-004 is validated by the v2 contract (not rejected by the v1 shape).
+
+    Returns a list of failure strings (empty ⇒ valid), never raises. The v2
+    validator is imported lazily so a v2-module import failure cannot break the
+    v1 containment path at module-load time.
+    """
+    if isinstance(state, dict) and state.get("schema_version") == "2.0":
+        global _V2_VALIDATOR
+        if _V2_VALIDATOR is None:
+            try:
+                from checks.flow_unit_runtime_v2 import (
+                    validate_flow_unit_runtime_payload_v2,
+                )
+                _V2_VALIDATOR = validate_flow_unit_runtime_payload_v2
+            except ImportError:
+                # v2 validator unavailable — fail-closed (the payload claims v2
+                # but we cannot validate it). This never silently passes.
+                return [
+                    "{0}: v2 schema_version claimed but v2 validator unavailable".format(
+                        display
+                    )
+                ]
+        return _V2_VALIDATOR(state, display)
+    return validate_flow_unit_runtime_payload(state, display)
 
 
 def _gov_dir(host_root):
@@ -482,7 +535,7 @@ def _commit_runtime_and_evidence(runtime_path, runtime_bytes, evidence_path,
                 )
             )
         if runtime_state is not None:
-            post_issues.extend(validate_flow_unit_runtime_payload(runtime_state, str(runtime_path)))
+            post_issues.extend(_validate_runtime_payload(runtime_state, str(runtime_path)))
         try:
             evidence_text = evidence_readback.decode("utf-8")
         except UnicodeDecodeError as readback_exc:
@@ -560,7 +613,8 @@ def _commit_runtime_and_evidence(runtime_path, runtime_bytes, evidence_path,
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-def apply_migration(target_root=None, project_type=None, plugin_home=None):
+def apply_migration(target_root=None, project_type=None, plugin_home=None,
+                    expected_plan_hash=None):
     """Execute the classic → loop-engineering migration (ADR §7.2, 9 steps).
 
     This is a read-then-write operation with data-loss risk. The safety
@@ -593,6 +647,13 @@ def apply_migration(target_root=None, project_type=None, plugin_home=None):
             fallback path).
         plugin_home: Optional override for the flow_unit_derive registry
             lookup. Mainly for tests.
+        expected_plan_hash: Optional 64-hex plan hash for apply-path hash
+            verification (FEAT-003, ADR §4.4). When supplied, the apply path
+            re-derives the plan via :func:`build_migration_plan` and asserts the
+            re-derived ``plan_hash`` equals this value; a mismatch fail-closes
+            BEFORE any write (no backup, no runtime, no evidence row). This is
+            the executable REL-059 invariant: the dry-run's serialized plan and
+            the apply's re-derived plan MUST have identical structure.
 
     Returns:
         A result dict. On success::
@@ -704,40 +765,62 @@ def apply_migration(target_root=None, project_type=None, plugin_home=None):
                 )
             ))
 
-    # ── Step 4: derive and validate the complete payload in memory ──────
+    # ── Step 4: build the migration plan via the PURE planner (FEAT-003) ──
+    # ADR §4.4: apply RE-DERIVES the plan via build_migration_plan (the same
+    # pure function the dry-run uses). The plan-derivation interior (resolve
+    # root, read plan-tracker, derive units, build payload) is extracted into
+    # the planner; the backup/commit/compensation scaffolding below (steps 5+)
+    # is UNCHANGED. This is what eliminates the AUDIT-133 dry-run/apply drift:
+    # both paths call the same function, so they cannot disagree.
     chosen_project_type = project_type or "ai-agent-plugin"
+    apply_options = MigrationPlanOptions(expected_plan_hash=expected_plan_hash)
     try:
-        flow_units = derive_flow_units(
+        plan = build_migration_plan(
             str(host_root), chosen_project_type,
             plan_tracker_text=plan_text, plugin_home=plugin_home,
+            options=apply_options,
         )
-    except Exception as exc:  # defensive: derive_flow_units must not raise
+    except Exception as exc:  # defensive: the planner must not raise
         return dict(base_result, aborted_reason=(
-            "flow-unit derivation raised ({0}); aborting before any host write. "
-            "No backup, runtime, or evidence file was created.".format(exc)
+            "migration plan derivation raised ({0}); aborting before any host "
+            "write. No backup, runtime, or evidence file was created.".format(exc)
         ))
 
     # ── Fail-closed: derived flow units = 0 ─────────────────────────────
     # (FX-190's fallback prevents this in practice, but we guard anyway so a
     # future regression can never produce an empty runtime.)
-    if not flow_units:
+    if plan.unit_count == 0:
         return dict(base_result, aborted_reason=(
             "derived flow units = 0; refusing to write an empty runtime. "
             "No host write performed."
         ))
 
-    runtime_payload = {
-        "workflow_model": WORKFLOW_MODEL_NEW,
-        "migration_version": MIGRATION_VERSION,
-        "migration_timestamp": _now_iso(),
-        "source": "runtime-activation",
-        "flow_units": flow_units,
-        "no_overclaim_boundary": (
-            "runtime visibility only; classic G1-G11 remains compatible via rollback"
-        ),
-    }
+    # ── FEAT-003: apply-path hash verification (ADR §4.4) ───────────────
+    # If a hash was supplied (the dry-run's serialized plan_hash), assert the
+    # re-derived plan's hash equals it. A mismatch means the dry-run and apply
+    # disagree on structure → fail-closed BEFORE any write. This is the
+    # executable REL-059 dry-run/apply identity invariant.
+    if expected_plan_hash is not None and plan.plan_hash != expected_plan_hash:
+        return dict(base_result, aborted_reason=(
+            "plan_hash mismatch: expected {0} but re-derived {1}; the dry-run "
+            "and apply plans disagree on structure. No write performed.".format(
+                expected_plan_hash, plan.plan_hash
+            )
+        ))
+
+    # ── Build the v2 runtime payload from the plan (ADR §4.4) ───────────
+    # plan_to_payload bridges the plan → v2 contract payload. The v2 validator
+    # then enforces the FEAT-002 contract §3.2/3.3/3.4 invariants. FEAT-003
+    # builds an UNCONFIRMED plan (decomposition_confirmed=False), so the v2
+    # validator rejects the payload here — fail-closed, no write (this is the
+    # FEAT-004 containment guard: a v2 payload may only be written after
+    # confirm_decomposition, which FEAT-003 deliberately does not call).
+    runtime_payload = plan_to_payload(
+        plan, migration_version=MIGRATION_VERSION,
+        migration_timestamp=_now_iso(), plugin_home=plugin_home,
+    )
     runtime_path = _runtime_path(host_root)
-    validation_issues = validate_flow_unit_runtime_payload(
+    validation_issues = _validate_runtime_payload(
         runtime_payload, str(runtime_path)
     )
     if validation_issues:
@@ -745,12 +828,18 @@ def apply_migration(target_root=None, project_type=None, plugin_home=None):
             base_result,
             aborted_reason=(
                 "planned loop-engineering runtime is incompatible with the "
-                "current canonical visibility-v1 contract; no host write performed"
+                "v2 Loop Runtime Contract; no host write performed "
+                "(FEAT-003 builds an unconfirmed plan; the v2 validator "
+                "requires decomposition_confirmed=true, which is FEAT-004)"
             ),
             validation_issues=validation_issues,
-            workflow_model={"prior": prior_model, "new": WORKFLOW_MODEL_NEW},
-            flow_units_derived=len(flow_units),
+            workflow_model={"prior": plan.workflow_model_prior, "new": WORKFLOW_MODEL_NEW},
+            flow_units_derived=plan.unit_count,
+            plan_hash=plan.plan_hash,
         )
+
+    # The flow_units count used downstream (audit trail) comes from the plan.
+    flow_units = runtime_payload["flow_units"]
 
     # ── Step 5: backup live governance facts after validation ───────────
     try:
@@ -798,6 +887,7 @@ def apply_migration(target_root=None, project_type=None, plugin_home=None):
             backup_dir=str(backup_dir),
             hashes=hashes,
             workflow_model={"prior": prior_model, "new": WORKFLOW_MODEL_NEW},
+            plan_hash=plan.plan_hash,
         )
 
     # Record the AFTER hashes (post-write) for the audit trail.
@@ -815,6 +905,7 @@ def apply_migration(target_root=None, project_type=None, plugin_home=None):
         "hashes": hashes,
         "flow_units_derived": len(flow_units),
         "evidence_row": "MIGRATION-{0}".format(MIGRATION_VERSION),
+        "plan_hash": plan.plan_hash,
         "no_overclaim_boundary": (
             "runtime visibility only; classic G1-G11 remains compatible via rollback"
         ),
@@ -1025,16 +1116,33 @@ def rollback_migration(target_root=None, version=None, plugin_home=None):
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-def preview_migration(target_root=None, plugin_home=None):
-    """Return the same read-only preview authority exposed by the CLI adapter.
+def preview_migration(target_root=None, plugin_home=None, project_type=None):
+    """Return the read-only migration preview (ADR §4.4 dry-run path).
+
+    FEAT-003 (ADR §4.4): the dry-run now derives the migration plan via the
+    SAME pure :func:`build_migration_plan` the apply path uses, serializes it
+    (including ``plan_hash``), and validates the resulting v2 payload via the
+    v2 validator. This is the REL-059 dry-run/apply identity invariant made
+    executable: the preview's plan_hash is the hash apply re-derives and
+    verifies (when ``expected_plan_hash`` is supplied).
+
+    The plan + plan_hash + v2 validation are attached to the preview result
+    alongside the legacy ``verify_workflow`` preview shape (preserved for
+    backward compatibility with the CLI adapter + existing callers). The dry
+    run performs NO writes.
 
     Args:
         target_root: Host project root (str/Path), or None.
-        plugin_home: Reserved for symmetry; currently unused.
+        plugin_home: Reserved for symmetry; forwarded to the planner.
+        project_type: Optional project type for unit derivation. If None,
+            defaults to ``"ai-agent-plugin"`` inside the planner.
 
     Returns:
-        A compatibility-shaped preview. Apply performs the authoritative
-        canonical payload validation before any host write.
+        A preview dict. The legacy shape (``command``, ``mode``, ``dry_run``,
+        ``write_operations``, ``validation_issues``, ``no_overclaim_boundaries``)
+        is preserved; FEAT-003 adds ``migration_plan`` (the serialized plan
+        including ``plan_hash``), ``plan_hash``, and ``v2_validation_issues``
+        (the v2 validator's verdict on the plan-derived payload).
     """
     from verify_workflow import (  # deferred to keep module import acyclic
         build_dynamic_lifecycle_migration_preview,
@@ -1045,6 +1153,31 @@ def preview_migration(target_root=None, plugin_home=None):
     preview["validation_issues"] = issues
     if issues:
         preview["status"] = "BLOCKED"
+
+    # ── FEAT-003: derive the migration plan (the SAME pure function apply uses)
+    # and attach the serialized plan + plan_hash + v2 validation verdict. This
+    # is the dry-run/apply identity surface: the operator can read plan_hash
+    # from the dry-run and pass it to apply as expected_plan_hash (ADR §4.4).
+    migration_plan = None
+    plan_hash = None
+    v2_validation_issues = []
+    try:
+        plan = build_migration_plan(
+            target_root, project_type, plugin_home=plugin_home,
+        )
+        migration_plan = plan_as_dict(plan)
+        plan_hash = plan.plan_hash
+        # Validate the plan-derived v2 payload (advisory here — no writes).
+        payload = plan_to_payload(plan, plugin_home=plugin_home)
+        v2_validation_issues = _validate_runtime_payload(
+            payload, ".governance/flow-unit-runtime.json"
+        )
+    except (ValueError, Exception) as exc:  # planner fail-closed → report
+        preview["plan_derivation_error"] = str(exc)
+
+    preview["migration_plan"] = migration_plan
+    preview["plan_hash"] = plan_hash
+    preview["v2_validation_issues"] = v2_validation_issues
     return preview
 
 
@@ -1081,6 +1214,10 @@ if __name__ == "__main__":  # pragma: no cover - manual CLI smoke
         "--dry-run", action="store_true",
         help="Print a read-only preview (no writes).",
     )
+    parser.add_argument(
+        "--expected-plan-hash", default=None,
+        help="Apply-path plan hash verification (FEAT-003, ADR §4.4). Fail-closed on mismatch.",
+    )
     args = parser.parse_args()
 
     try:
@@ -1096,9 +1233,12 @@ if __name__ == "__main__":  # pragma: no cover - manual CLI smoke
     elif args.apply:
         result = apply_migration(
             target_root=args.target, project_type=args.project_type,
+            expected_plan_hash=args.expected_plan_hash,
         )
     else:
-        result = preview_migration(target_root=args.target)
+        result = preview_migration(
+            target_root=args.target, project_type=args.project_type,
+        )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     if ((args.apply and not result.get("applied"))
             or (args.rollback and not result.get("rolled_back"))

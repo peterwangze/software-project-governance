@@ -100,8 +100,18 @@ def _sha256_bytes(data):
 
 
 def _apply_with_future_contract(*args, **kwargs):
-    """Exercise legacy transaction/rollback tests after a simulated validator pass."""
-    with mock.patch.object(lm, "validate_flow_unit_runtime_payload", return_value=[]):
+    """Exercise legacy transaction/rollback tests after a simulated validator pass.
+
+    FEAT-003: apply now derives a v2 payload and routes it through the
+    version-aware ``_validate_runtime_payload`` dispatch (v2 → the FEAT-002 v2
+    validator, which rejects an unconfirmed plan). To keep the FIX-195
+    transaction/rollback tests focused on the backup/commit/compensation
+    scaffolding (their actual subject), this helper mocks the version-aware
+    dispatch to pass — simulating the FEAT-004 future where a confirmed plan
+    clears the v2 contract. The containment tests that call ``apply_migration``
+    directly (no helper) still exercise the real fail-closed path.
+    """
+    with mock.patch.object(lm, "_validate_runtime_payload", return_value=[]):
         return lm.apply_migration(*args, **kwargs)
 
 

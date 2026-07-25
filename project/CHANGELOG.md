@@ -2,6 +2,12 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.66.2] - 2026-07-23
+
+### 0.66.2 - 0.66.1 发布事故补偿与可信 lineage 恢复（PATCH）
+
+0.66.1 commits 已到达 origin/master 但独立 post-release 审查发现发布阻塞（远端 v0.66.1 tag 缺失、release docs/manifest transition/semantic identity gate 非绿）。0.66.2 是非破坏性补偿发布：保留 0.66.1 历史为 incident（withdrawn/untrusted），通过三个串行精确-subject slice（FIX-215 semantic historical ownership + FIX-216 independent three-root identity attestation + FIX-217 native incident ledger repair）建立可信 lineage，再以 REL-063 创建 candidate C + manifest-only transition T + annotated v0.66.2 tag。新增 `verify_rel063_evidence.py` 证据门禁验证器（pre_c/candidate/full 三相 + atomic rehearsal + 13-row ownership matrix）。RISK-043（发布事故）在独立 Release Review 与 released-lineage 全绿后关闭。Loop Engineering runtime activation 仍 NOT_MET，RISK-037/RISK-042 保持打开。
+
 ## [0.66.1] - 2026-07-17
 
 ### 0.66.1 - Loop runtime containment hotfix（PATCH）

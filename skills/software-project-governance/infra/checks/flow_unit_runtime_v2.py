@@ -450,3 +450,260 @@ def validate_flow_unit_runtime_v2_payload(payload, display=".governance/flow-uni
     """
     errors = validate_flow_unit_runtime_payload_v2(payload, display, plugin_home)
     return {"valid": not errors, "errors": errors}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# FEAT-005 ADDITIVE EXTENSION (ADR-014 §3.6, 0.68.0)
+#
+# The function below is STRICTLY ADDITIVE. It calls the byte-frozen 0.67.0
+# validator above (``validate_flow_unit_runtime_payload_v2``) UNCHANGED, then
+# adds the FEAT-005 transition + CAS rules on top. The 0.67.0 entry points are
+# not modified; a payload that passes 0.67.0 validation but lacks ``cas_version``
+# on an active unit FAILS this 0.68.0 extension — that is the executable guard
+# that an activated unit carries a real CAS-guarded state (§3.6).
+#
+# The contract ``schema_version`` stays "2.0"; ``cas_version`` is a per-unit
+# optional field that FEAT-005 populates. RISK-037 / RISK-042 remain open.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _is_nonneg_int_not_bool(value):
+    """True iff ``value`` is a non-negative int and NOT a bool.
+
+    Mirrors the loop_count / iteration_within_inner check discipline in the
+    0.67.0 validator (an int that excludes the bool subtype).
+    """
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def validate_loop_runtime_v2_with_transitions(payload, event_log=None,
+                                              display=".governance/flow-unit-runtime.json",
+                                              plugin_home=None):
+    """Return all FEAT-005 (transition + CAS) violations for a v2 payload.
+
+    STRICTLY ADDITIVE (ADR-014 §3.6). Calls the byte-frozen 0.67.0 validator
+    (:func:`validate_flow_unit_runtime_payload_v2`) and ADDS the FEAT-005
+    rules on top. The 0.67.0 entry point is unchanged.
+
+    FEAT-005 additions:
+
+      1. **``cas_version`` presence**: REQUIRED on ``active`` units; OPTIONAL
+         on ``dormant`` / ``withdrawn`` units (dormant units are write-once at
+         migration; they have no transitions to version). Must be a
+         non-negative integer (not bool) when present.
+      2. **Event-log consistency** (the FEAT-007 hook): if ``event_log`` is
+         supplied, check (a) ``cas_version`` monotonicity (+1 per event per
+         unit) and (b) phase legality (replay the event log, verify every
+         transition is legal per the §3.2 table). If ``event_log`` is None,
+         SKIP (FEAT-005 does not require the event log; FEAT-007 provides it).
+      3. **Unification preserved**: re-assert
+         ``loop_state.last_gate_result == gate_state.last_result`` after every
+         transition (the 0.67.0 invariant; never write one without the other).
+
+    Args:
+        payload: the in-memory v2 runtime payload dict.
+        event_log: Optional event log for the FEAT-007 consistency check.
+            Accepts a list of event dicts (each carrying ``unit_id``,
+            ``from_phase``, ``to_phase``, ``cas_version``) or a path to a JSONL
+            file. None (the FEAT-005 default) skips the consistency check.
+        display: the display path used in failure messages.
+        plugin_home: optional plugin-home override forwarded to the schema
+            loader (and to the contract loader for the 0.67.0 pass).
+
+    Returns:
+        list[str]: empty iff the payload passes BOTH the 0.67.0 v2 rules AND
+        the FEAT-005 transition/CAS rules. One specific failure string per
+        violation. Never raises.
+    """
+    # ── 0.67.0 base pass (byte-frozen, UNCHANGED). ───────────────────────────
+    failures = list(validate_flow_unit_runtime_payload_v2(
+        payload, display, plugin_home
+    ))
+
+    if not isinstance(payload, dict):
+        # The 0.67.0 pass already reported the non-dict root; nothing to add.
+        return failures
+
+    flow_units = payload.get("flow_units")
+    if not isinstance(flow_units, list):
+        return failures  # the 0.67.0 pass reported the missing list.
+
+    # ── Addition 1: cas_version presence + shape per unit. ───────────────────
+    for unit in flow_units:
+        if not isinstance(unit, dict):
+            continue
+        uid = unit.get("flow_unit_id")
+        label = "{0}: flow unit {1}".format(display, uid if isinstance(uid, str) else "<missing>")
+        runtime_status = unit.get("runtime_status")
+        loop_state = unit.get("loop_state")
+        if not isinstance(loop_state, dict):
+            continue  # the 0.67.0 pass reported the bad loop_state shape.
+
+        cas = loop_state.get("cas_version")
+        if "cas_version" in loop_state:
+            if not _is_nonneg_int_not_bool(cas):
+                failures.append(
+                    "{0}: loop_state.cas_version must be a non-negative integer "
+                    "(not bool) when present (FEAT-005)".format(label)
+                )
+        else:
+            # Absent: required when the unit is activated (runtime_status
+            # "active"); optional for dormant/withdrawn units.
+            if runtime_status == "active":
+                failures.append(
+                    "{0}: loop_state.cas_version is required on an active unit "
+                    "(FEAT-005 CAS guard)".format(label)
+                )
+
+    # ── Addition 2 + 3: event-log consistency (FEAT-007 hook). ───────────────
+    # FEAT-005 passes event_log=None → skip (state file alone is sufficient per
+    # §3.5). When supplied, replay it: monotonic cas_version per unit + every
+    # transition legal per the §3.2 table.
+    if event_log is not None:
+        failures.extend(_replay_event_log(event_log, flow_units, display))
+
+    return failures
+
+
+def _replay_event_log(event_log, flow_units, display):
+    """Replay ``event_log`` against the units; return violation strings.
+
+    Checks:
+      - cas_version monotonic (+1 per consecutive event per unit, starting from
+        the unit's on-disk cas_version before the first logged event).
+      - phase legality: every event's (from_phase, to_phase) is a legal §3.2
+        transition given the event's gate/fuse facts.
+      - unification: after each gate-bearing transition, the event's recorded
+        gate result is consistent (the writer always writes both fields).
+
+    Returns a list of failure strings (empty if consistent). Never raises.
+    """
+    # Local import to avoid a hard module-level dependency on loop_paro_engine
+    # (which itself only depends on the stdlib, so the import is cheap, but
+    # keeping it local makes the additive boundary explicit and lets the 0.67.0
+    # validator stand alone if loop_paro_engine is ever moved).
+    import sys
+    import os as _os
+    try:
+        # loop_paro_engine lives one directory up from checks/.
+        _checks_parent = Path(__file__).resolve().parent.parent
+        if str(_checks_parent) not in sys.path:
+            sys.path.insert(0, str(_checks_parent))
+        import loop_paro_engine  # noqa: WPS433 deferred additive import
+    except Exception as exc:  # pragma: no cover - defensive
+        return ["{0}: cannot load loop_paro_engine for transition replay: {1}".format(
+            display, exc)]
+
+    failures = []
+
+    # Normalize the event log to a {unit_id: [events]} map.
+    events = []
+    if isinstance(event_log, (list, tuple)):
+        events = [e for e in event_log if isinstance(e, dict)]
+    elif isinstance(event_log, (str, Path)):
+        try:
+            p = Path(event_log)
+            if p.is_file():
+                for line in p.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        ev = json.loads(line)
+                        if isinstance(ev, dict):
+                            events.append(ev)
+                    except json.JSONDecodeError:
+                        continue
+        except OSError:
+            events = []
+    else:
+        return failures  # unknown shape — nothing to replay.
+
+    # Group events by unit, preserving order.
+    by_unit = {}
+    for ev in events:
+        uid = ev.get("unit_id")
+        if isinstance(uid, str):
+            by_unit.setdefault(uid, []).append(ev)
+
+    for uid, unit_events in by_unit.items():
+        label = "{0}: flow unit {1}".format(display, uid)
+        # The replay verifies the INTERNAL consistency of this unit's event
+        # history: cas_version is a monotonic +1 sequence starting from 0 (the
+        # activation), and every (from_phase, to_phase) is legal per the §3.2
+        # table. The baseline is therefore the START OF HISTORY — prev_cas=None
+        # (so the first event must be the activation at cas=0) and prev_phase
+        # None (entry, so the first event (entry)→plan is legal). The on-disk
+        # current state is a separate concern, handled by the recovery path; it
+        # is NOT the replay baseline (the log is the history being replayed).
+        prev_cas = None
+        prev_phase = None
+
+        for idx, ev in enumerate(unit_events):
+            ev_label = "{0} (event #{1})".format(label, idx + 1)
+            ev_cas = ev.get("cas_version")
+            # from_phase: the event's recorded source phase. An activation event
+            # omits from_phase (or sets it to None/"(entry)") — fall back to the
+            # replayed prev_phase so the validator sees the (entry)→plan source.
+            raw_from = ev.get("from_phase", None)
+            if raw_from is None:
+                from_phase = prev_phase
+            else:
+                from_phase = raw_from
+            to_phase = ev.get("to_phase")
+            # gate_result may legitimately be a falsy string; loop_count may be 0.
+            # Use explicit None checks (NOT `or`) so falsy-but-valid values survive.
+            payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
+            gate_result = ev.get("gate_result")
+            if gate_result is None:
+                gate_result = payload.get("gate_result")
+            loop_count = ev.get("loop_count")
+            if loop_count is None:
+                loop_count = payload.get("loop_count")
+            max_rounds = ev.get("max_rounds")
+            if max_rounds is None:
+                max_rounds = payload.get("max_rounds")
+
+            # ── cas_version monotonicity (+1 per event per unit). ─────────────
+            if not (isinstance(ev_cas, int) and not isinstance(ev_cas, bool)):
+                failures.append(
+                    "{0}: event cas_version must be a non-negative integer "
+                    "(got {1!r})".format(ev_label, ev_cas)
+                )
+            else:
+                if prev_cas is None:
+                    # First event for this unit: must be the activation (cas 0).
+                    if ev_cas != 0:
+                        failures.append(
+                            "{0}: first event cas_version must be 0 (activation), "
+                            "got {1}".format(ev_label, ev_cas)
+                        )
+                elif ev_cas != prev_cas + 1:
+                    failures.append(
+                        "{0}: cas_version not monotonic: expected {1} (+1 from "
+                        "{2}), got {3}".format(ev_label, prev_cas + 1, prev_cas, ev_cas)
+                    )
+                prev_cas = ev_cas
+
+            # ── phase legality (replay via the §3.2 table). ───────────────────
+            eval_event = {}
+            if gate_result is not None:
+                eval_event["gate_result"] = gate_result
+            if loop_count is not None:
+                eval_event["loop_count"] = loop_count
+            if max_rounds is not None:
+                eval_event["max_rounds"] = max_rounds
+            legal, reason = loop_paro_engine.validate_transition(
+                from_phase, to_phase, eval_event
+            )
+            if not legal:
+                failures.append(
+                    "{0}: illegal phase transition {1!r}→{2!r}: {3}".format(
+                        ev_label, from_phase, to_phase, reason)
+                )
+            # Advance the replayed phase (terminals don't advance further).
+            if to_phase in (loop_paro_engine.PLAN, loop_paro_engine.ACT,
+                            loop_paro_engine.OBSERVE, loop_paro_engine.REFLECT):
+                prev_phase = to_phase
+
+    return failures

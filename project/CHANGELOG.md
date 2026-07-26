@@ -2,6 +2,32 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.69.0] - 2026-07-26
+
+### 0.69.0 - production telemetry + honest DORA metrics + dogfood/external validation proof（MINOR）
+
+0.69.0 是 MINOR 发布，完成 FEAT-008 + VAL-008 + VAL-009：从 0.68.0 可执行 Loop Engine 的事件日志产出诚实 flow/DORA 遥测（`loop_telemetry.py` 纯函数 `compute_metrics` + `MetricValue` + `MetricsReport`，unknown-when-insufficient + anti-proxy），并在两个独立验证场景证明引擎真实运行——VAL-008 dogfood（3 单元多 tier/依赖阻塞/restart/fuse/rollback 全链，修复 DEFECT-1/2 后 28 PASS / 0 FAIL / 1 INFO）与 VAL-009 shitu 首个外部类型执行（preview/apply plan_hash identity、v2 validator、真实 flow-unit 推导、native entry、CAS 写盘、PASS 含两个非阻塞缺陷如实归档）。但**不关闭 RISK-037/RISK-042**：第二个外部类型验证仍待完成。新增 29 个 telemetry 测试 + VAL-008/009 全链验证，FEAT-008 独立 Code Review APPROVED_WITH_NOTES / 0 blocker。版本投影 0.68.0 -> 0.69.0 全 PASS（M-set，纯字符串替换：plugins/marketplace/package.json/SKILL/manifest/plan-tracker/4 hooks/`verify_workflow.py` REQUIRED_SNIPPETS 版本钉）。
+
+### Added
+
+- **FEAT-008 production telemetry + honest DORA metrics**：新增 `loop_telemetry.py` 纯函数 `compute_metrics`（pure，从事件日志计算 flow lead time / DORA deployment frequency / lead time / change fail / MTTR / fuse trips），`MetricValue` + `MetricsReport` 类型化输出；unknown-when-insufficient（证据不足时显式 `unknown`，不编造数值）+ anti-proxy（不把活动/计划当成功）。`loop_health.py` `_compute_dora_metrics` 重命名为 `_dora_metrics_legacy_proxy` 并标注 deprecated，新增 advisory `telemetry` key；`verify_workflow.py` 新增 `cmd_loop_telemetry` CLI 入口。29 个新测试覆盖 purity / unknown-when-insufficient / anti-proxy。
+- **VAL-008 dogfood 验证 PASS**：`val008_dogfood_driver.py` 在 `tempfile.TemporaryDirectory` 隔离工作区驱动 3 单元（middle `feature-auth` + inner `auth-login-form`/`auth-token-refresh`，依赖链）走 plan→activate→forward PARO→gate-fail back-edges→fuse trip→system block→restart recovery→telemetry→rollback。修复 DEFECT-1（`loop_gate_processor._event()` 现含全部 REQUIRED_FIELDS，事件通过 `validate_event`）+ DEFECT-2（`fuse_trip` payload 携带持久化 `loop_count`，telemetry iteration_count 正确）。**28 PASS / 0 FAIL / 1 INFO**（修复前 26 PASS / 2 FAIL）。211 loop tests + 2 subtests 通过，0 回归。
+- **VAL-009 shitu 外部验证 PASS（首个类型）**：在真实外部项目 shitu（Android/Kotlin mobile-app，HEAD `c037a04`）执行 0.68.0/0.69.0 引擎：`build_migration_plan(shitu,"mobile-app")` + `confirm_decomposition` + `plan_to_payload`（v2 validator PASS）+ 真实 flow-unit 推导（mobile-app derive PASS）+ native entry 解析 + preview/apply plan_hash identity（REL-059/REL-060）+ `activate_unit`/`apply_transition` CAS 写盘（post-transition v2 validator PASS）+ v1/classic-gate rollback。**Overall verdict PASS**（含两个非阻塞缺陷如实归档：shitu 既存 VAL-007 @0.65.0 artifact 在 v1/v2 validator FAIL，属外部既有债务非引擎缺陷）。这是首个真实外部类型执行；第二个外部类型仍待完成以完全关闭 RISK-037/042。
+
+### Validation
+
+- FEAT-008 Code Review：APPROVED_WITH_NOTES，0 blocker（P0=0）；honesty 契约 purity/unknown-when-insufficient/anti-proxy 独立对源验证（非仅测试）；设计权威 ADR-015（review APPROVED_WITH_NOTES / 0）。
+- VAL-008 dogfood：28 PASS / 0 FAIL / 1 INFO（DEFECT-1/2 修复后）；211 loop tests + 2 subtests 通过，0 回归。
+- VAL-009 shitu：Overall verdict PASS（含两个非阻塞缺陷如实归档）；preview/apply plan_hash identity、v2 validator、真实 flow-unit 推导、CAS 写盘全 PASS。
+- 共 29 个新 telemetry 测试 + VAL-008/009 全链验证，0 P0。
+
+### Boundaries
+
+- 0.69.0 **RISK-037/042 remain open**（second external type validation pending for closure）。Loop Engineering runtime 仍 NOT_MET。
+- 0.69.0 **does not close RISK-037/RISK-042**（second external type validation pending）。
+- 不声明 zcode official approval、marketplace approval、curated listing、universal/full runtime support、external first-session pilot success，不关闭 RISK-036/RISK-037/RISK-039/RISK-040/RISK-041/RISK-042，不声明 1.0.0 production-ready。
+- MINOR bump 来自新增 telemetry 能力 + dogfood/外部验证证明，不引入 breaking runtime API。
+
 ## [0.68.0] - 2026-07-23
 
 ### 0.68.0 - executable Loop Engine（MINOR）

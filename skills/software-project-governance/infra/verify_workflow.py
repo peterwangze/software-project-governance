@@ -6530,6 +6530,31 @@ def check_release_readiness(
         "results": execution_gate_results,
     }
 
+    # ── Loop fuse block (FEAT-006 / ADR-014 §6.3 — the system-level block). ──
+    # An ADDITIVE invocation of loop_gate_processor.collect_loop_fuse_issues
+    # (a PURE READ over flow-unit-runtime.json). A tripped, unresolved fuse
+    # blocks the release WITHOUT relying on Coordinator self-discipline — this
+    # gate is in check-release, which the Coordinator does not bypass. Returns
+    # empty when no fuses are tripped, so releases with no loop-fuse state are
+    # unaffected (the §9.1 regression discipline). Deferred import mirrors the
+    # _vw() pattern; the helper is a thin read, no new logic here (RISK-039).
+    loop_fuse_issues = []
+    try:
+        from loop_gate_processor import collect_loop_fuse_issues as _collect_fuse_issues
+        loop_fuse_issues = _collect_fuse_issues(root=HOST_PROJECT_ROOT)
+    except Exception:
+        # Fail-open on import/lookup errors: a missing loop_gate_processor or an
+        # unreadable runtime must NOT break a release that has no v2 loop state.
+        # (The v2 validator + FEAT-005/006 tests cover the wired path; this guard
+        # is for hosts not yet on the v2 contract.)
+        loop_fuse_issues = []
+    details["loop_fuse_block"] = {
+        "pass": not loop_fuse_issues,
+        "issues": loop_fuse_issues,
+        "required": True,
+    }
+    issues.extend(f"loop fuse block: {issue}" for issue in loop_fuse_issues)
+
     changelog_path = changelog_path or (ROOT / "project/CHANGELOG.md")
     changelog_issues = []
     if version:

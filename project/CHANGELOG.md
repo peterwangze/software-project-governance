@@ -2,6 +2,32 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.68.0] - 2026-07-23
+
+### 0.68.0 - executable Loop Engine（MINOR）
+
+0.68.0 是 MINOR 发布，完成 FEAT-005~007：构建可执行 Loop Engine 的持久化 PARO 状态机 + 生产 gate back-edge/fuse/escalation + 重启安全 append-only 事件日志。三者合起来把 Loop runtime 从"规范契约"推进到"可执行引擎"：状态机以 CAS 写盘持久化、gate 失败触发 back-edge→round→fuse→escalation→system-level block、事件日志跨进程锁 + 单调性/合法性校验保证重启一致性。但**不关闭 RISK-037/RISK-042**（外部验证在 0.69.0）；执行引擎激活，但运行时完备性仍需 0.69.0 dogfood + 外部验证。新增 159 个测试，0 P0；FEAT-005~007 均独立 Code Review APPROVED。版本投影 0.67.0 -> 0.68.0 全 PASS（M-set，纯字符串替换：plugins/marketplace/package.json/SKILL/manifest/plan-tracker/4 hooks/`verify_workflow.py` REQUIRED_SNIPPETS 版本钉）。
+
+### Added
+
+- **FEAT-005 persistent PARO state machine + CAS**：`loop_paro_engine.py` 新增 `validate_transition`（6 legal + 3 terminal）+ `apply_transition` CAS writer + `activate_unit` + `recover_state`；`flow_unit_runtime_v2.py` +257/0 `validate_loop_runtime_v2_with_transitions`（0.67.0 byte-frozen 完整）。CAS threading 12-thread 1-success/11-conflict 60x stable；fuse boundary >max_rounds。
+- **FEAT-006 production gate back-edge/fuse/escalation + system-level fuse block**：`loop_gate_processor.py` 新增 `process_gate_result` terminal processor + `loop_fuse_check` pure read + `collect_loop_fuse_issues`；`verify_workflow.py` +25/0 `check_release_readiness` fuse check（system-level block，非 Coordinator advisory）。端到端 gate fail→back-edge→round→fuse→escalation→block；`loop_fuse_check` pure read CONFIRMED。
+- **FEAT-007 restart-safe event log + dependency blocking + WIP**：`loop_event_log.py` append-only JSONL event log（14 types，cross-process lock，monotonicity/legality checks）；`loop_admission.py` dependency blocking + WIP budget（setup=1/inner=5/middle=2/outer=1）；`loop_paro_engine.py` + `loop_gate_processor.py` additive event_log hook（state-first/event-second，backward compat）。multi-process 4×100=400 0 loss win32，restart consistency CONFIRMED。
+
+### Validation
+
+- FEAT-005 Code Review：APPROVE，0 blocker（CAS threading 12-thread 1-success/11-conflict 60x stable；fuse boundary >max_rounds）；61 新 + 104 regression 通过。
+- FEAT-006 Code Review：APPROVED_WITH_NOTES，0 blocker（`loop_fuse_check` pure read CONFIRMED，端到端 gate fail→back-edge→round→fuse→escalation→block）；45 新 + 101 regression 通过。
+- FEAT-007 Code Review：APPROVED_WITH_NOTES，0 blocker（multi-process 4×100=400 0 loss win32，restart consistency CONFIRMED）；53 新 + 146 regression 通过。
+- 共 159 个新测试，0 P0。
+
+### Boundaries
+
+- 0.68.0 **执行引擎激活，但运行时完备性仍需 0.69.0 dogfood + 外部验证**。Loop Engineering runtime 仍 NOT_MET，**RISK-037 remains open**，**RISK-042 remains open**。
+- 0.68.0 **does not close RISK-037/RISK-042**（外部验证在 0.69.0）。
+- 不声明 zcode official approval、marketplace approval、curated listing、universal/full runtime support、external first-session pilot success，不关闭 RISK-036/RISK-037/RISK-039/RISK-040/RISK-041/RISK-042，不声明 1.0.0 production-ready。
+- MINOR bump 来自新增可执行 Loop Engine 能力（持久化状态机 + 生产 gate fuse + 重启安全事件日志），不引入 breaking runtime API。
+
 ## [0.67.0] - 2026-07-23
 
 ### 0.67.0 - canonical Loop Runtime Contract + shared migration planner + decomposition confirmation（MINOR）

@@ -2,6 +2,34 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.70.0] - 2026-07-26
+
+### 0.70.0 - verify_workflow Phase 5 extraction（MINOR）
+
+0.70.0 是 MINOR 发布，完成 FEAT-009：把 `verify_workflow.py` 的 evidence/risk/review 三个检查域真实抽取到 `checks/evidence_domain.py`（402 行，12 域函数）、`checks/risk_domain.py`（212 行，4 域函数）、`checks/review_domain.py`（2127 行，30 域函数），`verify_workflow.py` 由 22468 行降至 20183 行（净 −2285，真实抽取经 DEC-088 校验——函数体迁移而非 re-export 伪装，仅保留薄入口 re-export）。行为等价性由独立 byte-diff 验证：抽取前后 `check-governance` 最终 Result 行逐字节相同（两侧均 134 issues），626 tests + 82 subtests 抽取前后完全一致，0 回归。这是 DEC-104 路线图最后一段（原 0.67.0 verify Phase 5 顺延到 0.70.0），也是 RISK-039（架构腐化看护）关闭标准之一——verify_workflow.py 按域拆分退化为薄入口。但**不关闭 RISK-036/RISK-039/RISK-040/RISK-041**：RISK-039 关闭还需 ArchGuard 在外部宿主项目验证、source/projection 双写消除与技术债登记闭环；RISK-036 需官方市场操作（本地无法完成）。FEAT-009 独立 Code Review APPROVED_WITH_NOTES / 0 blocker，ADR-016 设计 Design Review APPROVED_WITH_NOTES / 0。版本投影 0.69.0 -> 0.70.0 全 PASS（M-set，纯字符串替换：plugins/marketplace/package.json/SKILL/manifest/plan-tracker/4 hooks/`verify_workflow.py` REQUIRED_SNIPPETS 版本钉）。
+
+### Added
+
+- **FEAT-009 verify_workflow Phase 5 extraction**：新增 `checks/evidence_domain.py`（402 行，14 函数：12 域函数 Check 1/1b/6/6b + `_vw` + `_resolve_shared`）、`checks/risk_domain.py`（212 行，6 函数：4 域函数 Check 2/8 + `_vw` + `_resolve_shared`）、`checks/review_domain.py`（2127 行，36 函数：30 域函数 Check 18/18b/21/21b/22/29/30 + 常量块 + `_vw` + `_resolve_shared`）。`verify_workflow.py` 22468→20183 行（git diff stat: +250 / −2535），仅保留薄 re-export 入口与 `sys.modules["verify_workflow"] = sys.modules["__main__"]` aliasing guard（与 Phase 1 manifest / Phase 2 capability_registry 先例一致）。KEEP rule + deferred `_vw()` pattern 正确实现。
+- **行为等价性独立验证**：byte-diff 抽取前后 `check-governance` 输出——最终 Result 行逐字节相同（134 issues 两侧），626 tests + 82 subtests 抽取前后完全一致，0 回归。`check-governance` 134 issues 与 baseline 相同（非新增缺陷）。
+- **DEC-104 路线图最后一段完成**：原 0.67.0 verify_workflow Phase 5 经 DEC-104 顺延到 0.70.0，至此 DEC-104 runtime-first 修复路线（0.66.1~0.70.0）全部段完成。RISK-039（架构腐化看护）关闭标准之一（verify_workflow.py 按域拆分退化为薄入口）由此推进，但 RISK-039 整体仍打开（还需 ArchGuard 外部验证 + 双写消除 + 技术债闭环）。
+- 版本声明与 e2e fixture 指针从 0.69.0 推进到 0.70.0（M-set：plugins、marketplace、package.json、source/e2e SKILL frontmatter、manifest、plan-tracker、四个 source hooks，以及 `verify_workflow.py` 的 `REQUIRED_SNIPPETS` 版本钉）。
+- `project/CHANGELOG.md` 新增 0.70.0 条目。
+
+### Validation
+
+- FEAT-009 Code Review：APPROVED_WITH_NOTES，0 blocker（P0=0，P1=0）；真实抽取经独立验证（函数体迁移而非 re-export 伪装，仅薄 re-export 残留）；行为等价性由 byte-diff `check-governance` 输出最终 Result 行逐字节相同确认（134 issues 两侧）；626 tests + 82 subtests 抽取前后一致，0 回归。
+- ADR-016 设计 Design Review：APPROVED_WITH_NOTES / 0（`review-ADR-016-DESIGN-R0.md`）。
+- 抽取符合 DEC-088（禁止以 re-export 伪装 God module 拆分），与 Phase 1（manifest）/ Phase 2（capability_registry）先例一致。
+- 共 626 tests + 82 subtests，0 P0。
+
+### Boundaries
+
+- 0.70.0 **RISK-036/039/040/041 remain open**。RISK-039 关闭标准之一（verify_workflow.py 按域拆分）由此推进，但整体仍打开（还需 ArchGuard 外部宿主项目验证 + source/projection 双写消除 + 技术债登记闭环）。
+- 0.70.0 **does not close RISK-036/RISK-039/RISK-040/RISK-041**（official marketplace / ArchGuard external validation / entry determinism host validation / release lineage historical tags 各自独立关闭标准未满足）。
+- 不声明 zcode official approval、marketplace approval、curated listing、universal/full runtime support、external first-session pilot success，不关闭 RISK-036/RISK-039/RISK-040/RISK-041，不声明 1.0.0 production-ready。
+- MINOR bump 来自 verify_workflow.py 按域拆分（evidence/risk/review extraction），不引入 breaking runtime API；行为等价性经 byte-diff 验证 0 回归。
+
 ## [0.69.0] - 2026-07-26
 
 ### 0.69.0 - production telemetry + honest DORA metrics + dogfood/external validation proof（MINOR）

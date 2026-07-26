@@ -259,6 +259,35 @@ class DoraMetricsTests(unittest.TestCase):
         self.assertEqual(metrics["deployment_frequency"], 3)
         self.assertAlmostEqual(metrics["change_failure_rate"], 0.4)
 
+    def test_legacy_proxy_renamed_and_deprecated_in_envelope(self):
+        """0.69.0 (ADR-015 §7.3): the legacy DORA key is renamed to
+        ``dora_metrics_legacy_proxy`` and wrapped with a deprecation flag; the
+        new honest ``telemetry`` key is present. The legacy proxy function body
+        is NOT deleted (two-release deprecation: demoted 0.69.0, removed 0.70.0).
+        """
+        runtime = {"dora": {"total_loops": 5, "fuse_trips": 2,
+                            "release_gate_passes": 3}}
+        with tempfile.TemporaryDirectory() as td:
+            home = _write_registry(Path(td), {"PP-Active-OK": _PP_ACTIVE_OK})
+            result = lh.check_loop_health(
+                target=str(Path(td)), plugin_home=home,
+            )
+        # Old key name is GONE (renamed, not duplicated).
+        self.assertNotIn("dora_metrics", result)
+        # New wrapped legacy key carries the metrics + deprecation markers.
+        legacy = result["dora_metrics_legacy_proxy"]
+        self.assertTrue(legacy["deprecated"])
+        self.assertIn("deprecation_note", legacy)
+        self.assertIn("0.70.0", legacy["deprecation_note"])
+        # The proxy body is behavior-identical: no runtime → empty metrics dict.
+        self.assertEqual(legacy["metrics"], {})  # no runtime data in temp dir
+        # The honest telemetry key is present and advisory (no event log →
+        # unavailable, but the key exists and never blocks).
+        self.assertIn("telemetry", result)
+        self.assertEqual(result["telemetry"]["status"], "unavailable")
+        # Backwards-compat alias: the old function name still resolves.
+        self.assertIs(lh._compute_dora_metrics, lh._dora_metrics_legacy_proxy)
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Graceful absence — runtime.json missing never crashes
@@ -289,8 +318,12 @@ class GracefulAbsenceTests(unittest.TestCase):
             [f for f in findings if f["severity"] == "ADVISORY"], [],
             f"absent runtime must yield no advisory findings: {findings}",
         )
-        # DORA returned an empty dict (no runtime data).
-        self.assertEqual(result["dora_metrics"], {})
+        # Legacy DORA proxy returned empty metrics (no runtime data); the key
+        # was renamed to ``dora_metrics_legacy_proxy`` in 0.69.0 (ADR-015 §7.3)
+        # and wraps the metrics under a deprecation envelope.
+        legacy = result["dora_metrics_legacy_proxy"]
+        self.assertTrue(legacy["deprecated"])
+        self.assertEqual(legacy["metrics"], {})
         # Summary counts are sane.
         self.assertEqual(result["summary"]["blocking_count"], 0)
         self.assertEqual(result["summary"]["advisory_count"], 0)
@@ -354,7 +387,8 @@ class CheckLoopHealthEnvelopeTests(unittest.TestCase):
     """The top-level envelope composes Part 1 + Part 2 + DORA + summary."""
 
     def test_envelope_shape_and_keys(self):
-        """The result envelope exposes findings / dora_metrics / summary / boundary."""
+        """The result envelope exposes findings / dora_metrics_legacy_proxy /
+        telemetry / summary / boundary (0.69.0 renamed the DORA key, ADR-015 §7.3)."""
         with tempfile.TemporaryDirectory() as td:
             home = _write_registry(Path(td), {"PP-Active-OK": _PP_ACTIVE_OK})
             result = lh.check_loop_health(
@@ -362,10 +396,11 @@ class CheckLoopHealthEnvelopeTests(unittest.TestCase):
                 plugin_home=home,
             )
 
-        for key in ("findings", "dora_metrics", "summary", "no_overclaim_boundary"):
+        for key in ("findings", "dora_metrics_legacy_proxy", "telemetry",
+                    "summary", "no_overclaim_boundary"):
             self.assertIn(key, result, f"envelope missing key: {key}")
         self.assertIsInstance(result["findings"], list)
-        self.assertIsInstance(result["dora_metrics"], dict)
+        self.assertIsInstance(result["dora_metrics_legacy_proxy"], dict)
         self.assertIn("blocking_count", result["summary"])
         self.assertIn("advisory_count", result["summary"])
         self.assertIsInstance(result["no_overclaim_boundary"], str)

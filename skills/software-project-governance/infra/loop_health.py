@@ -260,11 +260,42 @@ def _check_velocity_exceedance(
 # ═══════════════════════════════════════════════════════════════════════════
 # DORA bridge (§3.6) — deployment frequency / change failure rate advisory.
 # Needs runtime.json; returns empty metrics when runtime data is absent.
+#
+# DEPRECATED in 0.69.0 (ADR-015 §7.3). This is the AUDIT-133-forbidden proxy:
+# ``deployment_frequency = release_gate_passes`` (release count as deployment
+# frequency) and ``change_failure_rate = fuse_trips / total_loops`` (fuse ratio
+# as CFR, with total LOOPS not completed UNITS in the denominator). It is NOT
+# deleted in 0.69.0 (two-release deprecation: demoted here, removed in 0.70.0)
+# — deletion would be a behavior change to ``check-loop-health`` output that
+# downstream readers may parse. The honest replacement is
+# :mod:`infra.loop_telemetry` (``compute_metrics``), surfaced via the advisory
+# ``telemetry`` key below. Do NOT consume ``dora_metrics_legacy_proxy`` for new
+# logic; consume ``telemetry.dora`` instead.
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-def _compute_dora_metrics(runtime_data):
-    """Compute advisory DORA-bridge metrics from runtime data (ADR §3.6).
+def _dora_metrics_legacy_proxy(runtime_data):
+    """[DEPRECATED 0.69.0; removed in 0.70.0] Compute the legacy DORA proxy.
+
+    This is the AUDIT-133-forbidden proxy FEAT-008 (ADR-015) replaces. It is
+    retained verbatim (behavior-identical to the pre-0.69.0
+    ``_compute_dora_metrics``) so existing ``check-loop-health`` consumers that
+    read the ``dora_metrics_legacy_proxy`` key keep working for one release
+    cycle. New consumers MUST use :mod:`loop_telemetry.compute_metrics`
+    instead, surfaced on this envelope under the ``telemetry`` key.
+
+    The honesty defects this function carries (and that the telemetry module
+    corrects):
+
+      - ``deployment_frequency`` is set to ``release_gate_passes`` — a RELEASE
+        count, not a unit-completion (loop_exit) count. Telemetry's
+        ``deployment_frequency`` counts ``loop_exit`` events and is labeled
+        "unit-completion frequency".
+      - ``change_failure_rate`` = ``fuse_trips / total_loops`` — denominator is
+        total LOOPS, not completed UNITS. A unit that iterates 5x then exits is
+        one success, not 5. Telemetry's CFR denominator is terminal-event
+        units. Returning ``None`` on /0 instead of an explicit ``unknown``
+        status collapses "no data" with "zero failures".
 
     Derives, when the data is present:
       - ``change_failure_rate``: fraction of loops that tripped a fuse
@@ -327,6 +358,67 @@ def _compute_dora_metrics(runtime_data):
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+def _resolve_event_log_path(root=None):
+    """Resolve the loop-event-log.jsonl path for the same host root as runtime.
+
+    Mirrors :func:`verify_workflow._flow_unit_runtime_path`'s root resolution so
+    the advisory telemetry reads the SAME host's event log the runtime came
+    from (RISK-040: HOST_PROJECT_ROOT, never PLUGIN_HOME). Returns a Path or
+    None when verify_workflow's loader is unavailable. Never raises.
+    """
+    try:
+        vw = _vw()
+        base = vw._flow_unit_runtime_path(root).parent  # <root>/.governance/
+    except Exception:  # pragma: no cover - defensive (vw loader shape changed)
+        return None
+    return Path(base) / "loop-event-log.jsonl"
+
+
+def _compute_advisory_telemetry(root=None, window="30d"):
+    """Compute the advisory telemetry envelope (FEAT-008, ADR-015 §7.2).
+
+    Reads ``loop-event-log.jsonl`` via :func:`loop_event_log.read_events` and
+    computes :func:`loop_telemetry.compute_metrics`. This is ADVISORY only — it
+    appears in ``check-loop-health`` output but has no FAIL severity and cannot
+    block a release/gate. Wrapped in try/except so an absent/corrupt log or any
+    unexpected error yields ``{"status": "unavailable", ...}`` rather than a
+    crash (FIX-196 fail-closed discipline on authority is preserved separately
+    by Part 1; telemetry absence is NOT an authority failure).
+
+    Args:
+        root: host project root (path or str). Defaults to verify_workflow ROOT.
+        window: the telemetry window (default ``"30d"``).
+
+    Returns:
+        dict with the telemetry report's flow/dora/scope_note, or
+        ``{"status": "unavailable", "reason": ...}`` on any failure.
+    """
+    try:
+        from loop_event_log import read_events
+        from loop_telemetry import compute_metrics
+        log_path = _resolve_event_log_path(root)
+        if log_path is None or not Path(log_path).is_file():
+            return {
+                "status": "unavailable",
+                "reason": "event log absent or unreadable",
+            }
+        events = read_events(log_path=log_path)
+        report = compute_metrics(events, window=window)
+        return {
+            "status": "available",
+            "flow": report.flow,
+            "dora": report.dora,
+            "scope_note": report.scope_note,
+            "window": report.window,
+            "diagnostics": report.diagnostics,
+        }
+    except Exception as exc:  # pragma: no cover - defensive; telemetry is advisory
+        return {
+            "status": "unavailable",
+            "reason": "telemetry computation error: {0}".format(exc),
+        }
+
+
 def check_loop_health(
     target=None,
     velocity_check_blocking=False,
@@ -338,12 +430,20 @@ def check_loop_health(
       1. Part 1 (BLOCKING) — active PP velocity justification, registry-only.
       2. Part 2 (ADVISORY) — sustained measured-cost exceedance, runtime-only.
       3. DORA bridge — deployment frequency / change failure rate, runtime-only.
+         [DEPRECATED 0.69.0 as ``dora_metrics_legacy_proxy``; see §7.3. The
+         honest DORA metrics are the advisory ``telemetry`` key (FEAT-008).]
 
     Advisory-only in 0.65.0: the ``velocity_check_blocking`` flag defaults to
     ``False`` (Part 2 findings are ADVISORY). It is NOT wired into Check 28.
 
+    The ``telemetry`` key (0.69.0) is ADVISORY and non-blocking — it gives
+    visibility into the honest flow/DORA metrics without making telemetry a
+    gate (ADR-015 §7.2). The legacy ``dora_metrics_legacy_proxy`` key is
+    preserved for one release cycle (removed in 0.70.0, ADR-015 §7.3).
+
     Never raises: corrupt/missing registry yields a blocking authority finding;
-    missing runtime yields safe empty Part 2/DORA results.
+    missing runtime yields safe empty Part 2/DORA results; missing/unreadable
+    event log yields ``telemetry={"status":"unavailable"}``.
 
     Args:
         target: Optional host project root (path or str). Used to locate
@@ -356,7 +456,11 @@ def check_loop_health(
     Returns:
         dict with:
           - ``findings``: list of finding dicts (severity / pause_point / message).
-          - ``dora_metrics``: computed DORA metrics (may be empty).
+          - ``dora_metrics_legacy_proxy``: the DEPRECATED legacy DORA proxy
+            (AUDIT-133-forbidden; kept for one release cycle). Carries a
+            ``deprecated`` flag + ``deprecation_note``.
+          - ``telemetry``: the ADVISORY honest telemetry (FEAT-008); never
+            blocks; ``{"status":"unavailable"}`` on absent event log.
           - ``summary``: ``{"blocking_count", "advisory_count"}``.
           - ``no_overclaim_boundary``: human-readable scope statement.
     """
@@ -370,14 +474,45 @@ def check_loop_health(
             runtime_data, blocking=velocity_check_blocking
         )
     )
-    dora_metrics = _compute_dora_metrics(runtime_data)
+    # Legacy DORA proxy — DEPRECATED (ADR-015 §7.3). The try/except reports the
+    # deprecation in-place of the fabricated values when the proxy raises, so a
+    # consumer reading ``dora_metrics_legacy_proxy`` never sees the proxy's
+    # numbers presented as authoritative DORA. The honest metrics are in the
+    # advisory ``telemetry`` key below.
+    try:
+        legacy_proxy = _dora_metrics_legacy_proxy(runtime_data)
+        legacy_deprecated = True
+        legacy_note = (
+            "DEPRECATED in 0.69.0; removed in 0.70.0. Replaced by telemetry.dora "
+            "(loop_telemetry.compute_metrics). The values here are the "
+            "AUDIT-133-forbidden proxy (release count as deployment frequency; "
+            "fuse_trips/total_loops as CFR with LOOPS not UNITS in the "
+            "denominator). Use telemetry.dora for honest metrics."
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        legacy_proxy = {}
+        legacy_deprecated = True
+        legacy_note = (
+            "legacy DORA proxy deprecated, use loop-telemetry (compute_metrics); "
+            "proxy raised: {0}".format(exc)
+        )
+    dora_metrics_legacy_proxy = {
+        "metrics": legacy_proxy,
+        "deprecated": legacy_deprecated,
+        "deprecation_note": legacy_note,
+    }
+
+    # Advisory telemetry (FEAT-008, ADR-015 §7.2) — honest metrics from the
+    # event log. Non-blocking; never fails the health check.
+    telemetry = _compute_advisory_telemetry(root=target)
 
     blocking_count = sum(1 for f in findings if f.get("severity") == "FAIL")
     advisory_count = sum(1 for f in findings if f.get("severity") != "FAIL")
 
     return {
         "findings": findings,
-        "dora_metrics": dora_metrics,
+        "dora_metrics_legacy_proxy": dora_metrics_legacy_proxy,
+        "telemetry": telemetry,
         "summary": {
             "blocking_count": blocking_count,
             "advisory_count": advisory_count,
@@ -386,9 +521,17 @@ def check_loop_health(
             "Loop-health Check is advisory-only in 0.65.0; Part 1 (velocity "
             "justification) is the only blocking rule; Part 2 (exceedance) and "
             "DORA metrics require runtime data and fire only when present. "
-            "Standalone CLI — NOT a sub-item of Check 28."
+            "Standalone CLI — NOT a sub-item of Check 28. The 0.69.0 "
+            "``telemetry`` key is advisory honest metrics (FEAT-008); "
+            "``dora_metrics_legacy_proxy`` is deprecated."
         ),
     }
+
+
+# Backwards-compat alias for the pre-0.69.0 name (ADR-015 §7.3 keeps the
+# function body behavior-identical; tests/consumers that referenced
+# ``_compute_dora_metrics`` continue to work during the deprecation window).
+_compute_dora_metrics = _dora_metrics_legacy_proxy
 
 
 if __name__ == "__main__":  # pragma: no cover - manual CLI smoke
@@ -423,14 +566,27 @@ if __name__ == "__main__":  # pragma: no cover - manual CLI smoke
     print("\n  Result: {0} BLOCKING, {1} advisory".format(
         summary.get("blocking_count", 0), summary.get("advisory_count", 0)
     ))
-    dora = result.get("dora_metrics") or {}
+    dora_legacy = result.get("dora_metrics_legacy_proxy") or {}
+    dora = dora_legacy.get("metrics") or {}
     if dora:
         cfr = dora.get("change_failure_rate")
         cfr_disp = "n/a" if cfr is None else "{0:.2f}".format(cfr)
-        print("  DORA: deployments={0} fuse_trips={1} CFR={2}".format(
+        print("  DORA [LEGACY PROXY, deprecated]: deployments={0} fuse_trips={1} CFR={2}".format(
             dora.get("release_gate_passes", 0),
             dora.get("fuse_trips", 0),
             cfr_disp,
+        ))
+    telemetry = result.get("telemetry") or {}
+    if telemetry.get("status") == "available":
+        td = telemetry.get("dora", {})
+        cfr2 = td.get("change_failure_rate")
+        cfr2_val = cfr2.value if hasattr(cfr2, "value") else None
+        cfr2_disp = cfr2_val if cfr2_val is not None else "unknown"
+        df = td.get("deployment_frequency")
+        df_val = df.value if hasattr(df, "value") else None
+        df_disp = df_val if df_val is not None else "unknown"
+        print("  Telemetry [FEAT-008, honest]: unit-completions={0} CFR={1} window={2}".format(
+            df_disp, cfr2_disp, telemetry.get("window"),
         ))
     print()
     if args.fail_on_issues and summary.get("blocking_count", 0) > 0:

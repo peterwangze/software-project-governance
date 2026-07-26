@@ -21071,6 +21071,55 @@ def _format_rollup(result):
     print()
 
 
+def _format_telemetry(report, json_out=False):
+    """Format a loop_telemetry MetricsReport for CLI display (FEAT-008 helper).
+
+    The human-readable form prints ``status: value`` per metric so ``unknown``
+    is visually distinct from ``0``. The JSON form serializes the report to a
+    plain dict (MetricValue dataclasses → dict). Pure presentation only.
+    """
+    import dataclasses as _dc
+    print("\n=== Loop Telemetry (honest flow/DORA from event log) ===")
+    if json_out:
+        def _mv_dict(mv):
+            return {
+                "name": mv.name, "status": mv.status, "value": mv.value,
+                "unit": mv.unit, "sample_size": mv.sample_size,
+                "reason": mv.reason, "window": mv.window,
+                "percentiles": mv.percentiles,
+            }
+        payload = {
+            "window": report.window, "computed_at": report.computed_at,
+            "flow": {k: _mv_dict(v) for k, v in report.flow.items()},
+            "dora": {k: _mv_dict(v) for k, v in report.dora.items()},
+            "units_considered": report.units_considered,
+            "event_count": report.event_count,
+            "diagnostics": report.diagnostics,
+            "scope_note": report.scope_note,
+        }
+        print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+        return
+    print(f"  Window: {report.window} | units: {report.units_considered} "
+          f"| events: {report.event_count} | open_fuse_trips: "
+          f"{report.diagnostics.get('open_fuse_trips', 0)}")
+    for section, label in (("flow", "Flow"), ("dora", "DORA (loop-scoped)")):
+        print(f"\n  --- {label} metrics ---")
+        for name, mv in getattr(report, section).items():
+            if mv.status == "measured":
+                val = mv.value
+                if isinstance(val, dict):
+                    val = "median={0:.1f} p90={1:.1f} n={2}".format(
+                        val.get("median", 0), val.get("p90", 0),
+                        val.get("sample_size", 0))
+                elif isinstance(val, float):
+                    val = "{0:.4g}".format(val)
+                print(f"    {name}: {val} ({mv.unit}, n={mv.sample_size})")
+            else:
+                print(f"    {name}: UNKNOWN — {mv.reason}")
+    print(f"\n  Scope: {report.scope_note}")
+    print()
+
+
 def cmd_loop_rollup(args):
     """Thin entry — delegates to loop_engine.rollup_loop_state (FX-193)."""
     try:
@@ -21079,6 +21128,31 @@ def cmd_loop_rollup(args):
         pass
     from loop_engine import rollup_loop_state
     _format_rollup(rollup_loop_state(getattr(args, "target", None)))
+
+
+def cmd_loop_telemetry(args):
+    """Thin entry — delegates to infra/loop_telemetry.py (0.69.0 telemetry).
+
+    Reads the event log via loop_event_log.read_events (RISK-040 HOST_PROJECT_ROOT,
+    never PLUGIN_HOME) and delegates to loop_telemetry.compute_metrics. All logic
+    lives in the pure module; this entry is argparse glue + 2 delegated calls
+    (RISK-039 thin-entry discipline).
+    """
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    from loop_event_log import read_events
+    from loop_telemetry import compute_metrics
+    from resolve_entry import resolve_host_root
+    root = getattr(args, "target", None) or resolve_host_root(None)
+    log_path = Path(root) / ".governance" / "loop-event-log.jsonl" if root else None
+    events = read_events(log_path=log_path) if log_path else []
+    win = getattr(args, "window", None)
+    # "all" maps to None (all-time) for the pure compute_metrics API.
+    window = None if win in (None, "all") else win
+    report = compute_metrics(events, window=window)
+    _format_telemetry(report, json_out=getattr(args, "json", False))
 
 
 def cmd_check_duplicate_code(args):
@@ -22183,6 +22257,19 @@ def main(argv=None):
     lr_p.add_argument("--target", default=None,
                       help="Host project root (defaults to verify_workflow ROOT)")
 
+    # loop-telemetry (FEAT-008 / ADR-015 — honest flow/DORA from event log; 0.69.0)
+    lt_p = subparsers.add_parser(
+        "loop-telemetry",
+        help="Honest flow/DORA metrics from loop-event-log.jsonl (ADR-015; 0.69.0)",
+    )
+    lt_p.add_argument("--target", default=None,
+                      help="Host project root (defaults to HOST_PROJECT_ROOT; RISK-040)")
+    lt_p.add_argument("--window", choices=("all", "7d", "30d", "90d"),
+                      default="all",
+                      help="Time window relative to the latest event timestamp (default all)")
+    lt_p.add_argument("--json", action="store_true",
+                      help="Emit machine-readable JSON instead of human-readable text")
+
     # check-duplicate-code (REQ-101 / FIX-152 / ArchGuard)
     cdc_p = subparsers.add_parser(
         "check-duplicate-code",
@@ -22354,6 +22441,7 @@ def main(argv=None):
         "check-loop-health": cmd_check_loop_health,
         "check-loop-runtime-claims": cmd_check_loop_runtime_claims,
         "loop-rollup": cmd_loop_rollup,
+        "loop-telemetry": cmd_loop_telemetry,
         "check-duplicate-code": cmd_check_duplicate_code,
         "check-technical-debt": cmd_check_technical_debt,
         "check-complexity": cmd_check_complexity,

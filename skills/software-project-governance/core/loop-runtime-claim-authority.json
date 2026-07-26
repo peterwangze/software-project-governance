@@ -15,7 +15,7 @@
   "performance_budget_status": "PERFORMANCE_BUDGET_PENDING",
   "authority_ids": ["AUDIT-133", "EVD-707", "DEC-104"],
   "open_risks": ["RISK-037", "RISK-042"],
-  "policy_sha256": "621637524f3c7e7585d04e075720ef7c710c69f7be3aafed32c3bbff5b45280b",
+  "policy_sha256": "3e22d0bd4c2df1d2d7bfafe88210447b94481d339d1494974aa0f398a7aa2122",
   "source_records": [
     {
       "record_id": "DEC-104",

@@ -72,6 +72,8 @@
     {"claim_id":"LRC-TECH-PLANNED-001","claim_classes":["persisted_back_edge","flow_unit_loop_count","tier_fuse","paro_transition","automatic_escalation"]},
     {"claim_id":"LRC-TEST-PLANNED-001","claim_classes":["persisted_back_edge","flow_unit_loop_count","tier_fuse","paro_transition","automatic_escalation"]},
     {"claim_id":"LRC-MAPPING-PLANNED-001","claim_classes":["persisted_back_edge","flow_unit_loop_count","tier_fuse","paro_transition","automatic_escalation"]},
-    {"claim_id":"LRC-ARCH-PLANNED-001","claim_classes":["persisted_back_edge","flow_unit_loop_count","tier_fuse","paro_transition","automatic_escalation"]}
+    {"claim_id":"LRC-ARCH-PLANNED-001","claim_classes":["persisted_back_edge","flow_unit_loop_count","tier_fuse","paro_transition","automatic_escalation"]},
+    {"claim_id":"LRC-EXEC-PLANNED-001","claim_classes":["persisted_back_edge","flow_unit_loop_count","tier_fuse","paro_transition","automatic_escalation"]},
+    {"claim_id":"LRC-TELEMETRY-PLANNED-001","claim_classes":["persisted_back_edge","flow_unit_loop_count","tier_fuse","paro_transition","automatic_escalation"]}
   ]
 }

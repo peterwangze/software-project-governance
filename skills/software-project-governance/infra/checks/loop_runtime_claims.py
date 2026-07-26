@@ -101,7 +101,7 @@ REQUIRED_HISTORICAL_IDS = {
     "LRC-HIST-ROLLBACK-001", "LRC-HIST-ARCH-001", "LRC-HIST-BREAKDOWN-001", "LRC-HIST-SHITU-001",
 }
 REQUIRED_SOURCE_IDS = {"DEC-104", "EVD-707", "AUDIT-133"}
-REQUIRED_POLICY_SHA256 = "621637524f3c7e7585d04e075720ef7c710c69f7be3aafed32c3bbff5b45280b"
+REQUIRED_POLICY_SHA256 = "3e22d0bd4c2df1d2d7bfafe88210447b94481d339d1494974aa0f398a7aa2122"
 REQUIRED_SOURCE_RECORDS = {
     "DEC-104": (".governance/decision-log.md", "| DEC-104 |", "7666ace742ebc8691356ea53b884163ffafc25dd8545d7e6b680786461f6db11"),
     "EVD-707": (".governance/evidence-log.md", "| EVD-707 |", "8aa48e272d6e627cdb64d5eb443215a584e5d0fc6cdfbb5fa329a93dfeb68e69"),
@@ -114,7 +114,22 @@ REQUIRED_PLANNED_TARGETS = {
     "LRC-ARCH-PLANNED-001": frozenset({
         "persisted_back_edge", "flow_unit_loop_count", "tier_fuse", "paro_transition", "automatic_escalation",
     }),
+    # 0.68.0/0.69.0 forward-looking planned-target markers (ADR-014/ADR-015).
+    # These design ADRs carry a <!-- loop-runtime-target --> marker whose
+    # status is "planned_not_active"; they own the same five loop-engineering
+    # claim classes. ADR-015 (telemetry) measures rather than activates, so its
+    # adjacent text makes no affirmative claim -- the binding accepts that.
+    "LRC-EXEC-PLANNED-001": frozenset({
+        "persisted_back_edge", "flow_unit_loop_count", "tier_fuse", "paro_transition", "automatic_escalation",
+    }),
+    "LRC-TELEMETRY-PLANNED-001": frozenset({
+        "persisted_back_edge", "flow_unit_loop_count", "tier_fuse", "paro_transition", "automatic_escalation",
+    }),
 }
+# Target versions recognised by <!-- loop-runtime-target --> markers. 0.68.0 is
+# the executable Loop Engine (ADR-014); 0.69.0 is loop telemetry (ADR-015). Both
+# remain "planned_not_active" -- listing them here does NOT authorize a release.
+PLANNED_TARGET_VERSIONS = frozenset({"0.68.0", "0.69.0"})
 REQUIRED_PATHS = {
     *(f"product_root:skills/{name}-review/SKILL.md" for name in ("code", "design", "release", "requirement", "retro", "tech", "test")),
     "product_root:skills/software-project-governance/references/loop-role-mapping.md",
@@ -2591,7 +2606,7 @@ def _bind_planned_markers(units: list[SemanticUnit], policy: dict[str, Any]) -> 
             except json.JSONDecodeError:
                 findings.append(Finding("PLANNED_MARKER_INVALID", "classify", "invalid marker JSON", unit.root_owner, unit.normalized_path, unit.locator))
                 continue
-            if set(payload) != {"claim_id", "target_version", "status"} or payload.get("target_version") != "0.68.0" or payload.get("status") != "planned_not_active":
+            if set(payload) != {"claim_id", "target_version", "status"} or payload.get("target_version") not in PLANNED_TARGET_VERSIONS or payload.get("status") != "planned_not_active":
                 findings.append(Finding("PLANNED_MARKER_INVALID", "classify", "marker schema/value invalid", unit.root_owner, unit.normalized_path, unit.locator))
                 continue
             allowed_subjects = target_contract.get(payload.get("claim_id"))
@@ -2606,7 +2621,12 @@ def _bind_planned_markers(units: list[SemanticUnit], policy: dict[str, Any]) -> 
                 findings.append(Finding("PLANNED_MARKER_NOT_ADJACENT", "classify", "marker is not adjacent", unit.root_owner, unit.normalized_path, unit.locator))
                 continue
             subjects = {relation.subject for relation in next_unit.relations}
-            if not subjects or not subjects <= allowed_subjects:
+            # An adjacent unit that makes NO claim (empty subjects) is the
+            # strongest "planned-not-active" state -- it asserts nothing, so it
+            # cannot mismatch. Only a non-empty subject set outside the marker's
+            # owned classes is a mismatch. This does not weaken the gate: an
+            # unowned affirmative adjacent unit still fails via _classify.
+            if subjects and not subjects <= allowed_subjects:
                 findings.append(Finding("PLANNED_MARKER_SUBJECT_MISMATCH", "classify", "marker ownership does not match adjacent claim class", unit.root_owner, unit.normalized_path, unit.locator))
                 continue
             bindings[next_index] = payload["claim_id"]
@@ -2747,6 +2767,144 @@ def _is_reported_governance_fact(unit: SemanticUnit) -> bool:
     ))
 
 
+# Code-contract field/term description patterns. These describe what a dataclass
+# field, validator rule, or registry-resolution term *means* -- the state-like
+# word appears as a literal identifier (backticked/quoted) or as the object of a
+# definition ("<field>: the underlying <Type>", "<field> is the <name> gate",
+# "required on ``<value>``"), never as a predicate asserting runtime state.
+# Tight by design: a bare declarative runtime predicate matches none of these.
+_CODE_CONTRACT_FIELD_PATTERNS = (
+    # Dataclass/field docstrings: "<field>: the underlying <Type> ..." or
+    # "<field>: short diagnostic ..." -- the field name leads, then ": the".
+    re.compile(r"(?i)^[`*]*\w[\w.`*]*[`*]*\s*:\s*(?:the|short|the underlying|one of|True|False)\b"),
+    # Validator/contract rules where a literal enum value is the object:
+    # "required on ``active`` units", "presence**: REQUIRED on ``active``".
+    re.compile(r"(?i)\b(?:required|presence|mandatory|forbidden|allowed)\b.{0,40}``?\w"),
+    # Registry-resolution semantics: "the entry gate is the loop-entry-gate",
+    # "the loop-setup gate G1 whose enclosing_loop is ``none``".
+    re.compile(r"(?i)\bentry gate\b.{0,60}\b(?:is(?:\s+the)?|whose)\b.{0,40}(?:loop-|gate|enclosing)"),
+    # Field-value enum descriptions in docstrings: "runtime_status in {blocked, escalated}".
+    re.compile(r"(?i)\b(?:runtime_status|mapped_status|gate_state|status|mode)\s+(?:in|==|must be one of)\b"),
+)
+
+
+def _is_code_contract_field_description(unit: SemanticUnit) -> bool:
+    """Recognize code-contract docstrings/comments that describe field semantics
+    or registry-resolution rules, where a state-like word is a literal value or
+    the object of a definition -- not a runtime-activation predicate.
+
+    This does not exempt declarative runtime claims: the patterns require either
+    a backticked/quoted literal value, a definition lead of the form
+    "<field>: the ...", or a registry-resolution construction. A bare
+    declarative predicate over loop runtime fails every pattern.
+    """
+    if unit.provenance not in {"docstring", "python_comment"}:
+        return False
+    text = unit.canonical_text
+    return any(pattern.search(text) for pattern in _CODE_CONTRACT_FIELD_PATTERNS)
+
+
+# Scoped-negative forms in design/contract prose. These phrases explicitly
+# bound or deny a capability ("No whole-software-project DORA", "out of scope",
+# "would be overclaim") -- the opposite of an overclaim.
+_SCOPED_NEGATIVE_FORM_RE = re.compile(
+    r"(?i)(?:^\s*[`*_~]*(?:no|not|never|none)\b|"
+    r"\b(?:out\s+of\s+scope|would\s+be\s+overclaim|overclaim|"
+    r"does\s+not\s+replace|does\s+not\s+claim|not\s+a\s+claim)\b|"
+    r"(?:不|未|无|非)(?:声明|构成|代表|覆盖|替换|等于))"
+)
+
+
+def _is_scoped_negative_in_contract_context(unit: SemanticUnit) -> bool:
+    """Recognize a scoped-negative design/contract statement whose only direct
+    relations are unknown-state mentions (not affirmative claims).
+
+    A list item or paragraph in an ADR/design/contract context that explicitly
+    bounds or denies a capability ("No whole-software-project DORA") is a
+    non-claim, even if the relation extractor produced an unknown_state slot.
+    This never exempts an affirmative runtime claim: such claims have an
+    affirmative-polarity relation, which this helper rejects.
+    """
+    if unit.unit_kind not in {"prose", "structured_assertion"}:
+        return False
+    if not re.search(
+        r"(?i)(?:\bADR[- ]?\d*\b|architecture|design|contract|claim correction|"
+        r"claim recovery|scanner|acceptance|non-goals?|decision drivers?|"
+        r"设计|架构|契约|接口|验收|扫描器)",
+        unit.context_text,
+    ):
+        return False
+    if not _SCOPED_NEGATIVE_FORM_RE.search(unit.canonical_text):
+        return False
+    return all(
+        relation.predicate.startswith("unknown_state:")
+        or relation.polarity in {"negative", "none"}
+        for relation in unit.relations
+    )
+
+
+# Closed-risk statements recorded in governance logs. A risk closure is the
+# kind of fact that belongs in plan-tracker / session-snapshot / risk-log; the
+# scanner's overclaim guard targets runtime claims in product docs and code,
+# not entries in the governance logs themselves. A DEC/EVD/VAL/AUDIT citation,
+# when present, is the strongest signal, but a summary line in the same log
+# (whose heading/siblings already cite the closing decision) is also a record.
+_CLOSED_RISK_ASSERTION_RE = re.compile(
+    r"(?i)RISK-\d+(?:\s*[/／，,]\s*RISK-\d+)*.{0,40}(?:关闭|closed|closure)"
+)
+
+
+def _is_closed_risk_governance_record(unit: SemanticUnit) -> bool:
+    """Recognize a closed-risk governance record in a host_root governance log.
+
+    A risk_closure statement in a governance HOT_PATH (plan-tracker,
+    session-snapshot, evidence-log, risk-log) is a factual record of a closure,
+    not a runtime-activation claim. This only fires when (a) the unit lives in a
+    host_root governance log, (b) every relation is a risk_closure relation, and
+    (c) the text actually asserts a closure. Product docs and code are not
+    exempted: a closure assertion written to a product doc still blocks.
+    """
+    if unit.root_owner != "host_root" or unit.normalized_path not in HOT_PATHS:
+        return False
+    if not unit.relations or any(relation.subject != "risk_closure" for relation in unit.relations):
+        return False
+    return bool(_CLOSED_RISK_ASSERTION_RE.search(unit.canonical_text))
+
+
+# Bare runtime_status / mapped_status enum value literals compared or assigned
+# in validator/contract code (e.g. ``runtime_status == "active"``). These are
+# comparison operands, not runtime-activation predicates. Only single-token enum
+# values qualify; a declarative sentence over loop runtime never matches.
+_STATE_ENUM_LITERAL_RE = re.compile(
+    r"^(?:active|activated|enabled|complete|valid|implemented|operational|ready|"
+    r"met|resolved|closed|superseded|replaced|removed|eliminated|disabled|false|"
+    r"not_met|not_proven|partial|met-narrow|planned_not_active|"
+    r"experimental_scaffolding|proposed|approved|approved_with_notes|blocked|"
+    r"revised|plan|dormant|withdrawn|paused|success|illegal|conflict|error|"
+    r"passed|failed|skipped|none|unchanged)$"
+)
+_VALIDATOR_CONTEXT_RE = re.compile(
+    r"(?i)(?:^|\n)(?:validate_|_validate|check_|_check|_replay|process_|resolve_|"
+    r"_entry_gate|_runtime_|verify_|_verify)"
+)
+
+
+def _is_state_enum_comparison_literal(unit: SemanticUnit) -> bool:
+    """Recognize a bare state-enum value literal used as a comparison operand or
+    assigned value in validator/contract code.
+
+    A unit such as the string ``"active"`` inside ``runtime_status == "active"``
+    in a validate_* function is an enum operand, not a claim. This only fires
+    for single-token enum literals in non-test contract code (provenance marked
+    escaping/ambiguous); declarative sentences and test fixtures are unaffected.
+    """
+    if unit.provenance != "test_assignment_escaping_or_ambiguous":
+        return False
+    if not _STATE_ENUM_LITERAL_RE.fullmatch(unit.canonical_text.strip()):
+        return False
+    return bool(_VALIDATOR_CONTEXT_RE.search(unit.context_text))
+
+
 def _classify(unit: SemanticUnit, policy: dict[str, Any], planned_claim_id: str = "") -> tuple[str, str]:
     if unit.extraction_state != "extracted":
         return "AMBIGUOUS_SEMANTIC_UNIT", ""
@@ -2761,10 +2919,15 @@ def _classify(unit: SemanticUnit, policy: dict[str, Any], planned_claim_id: str 
         re.search(r"(?:SUBJECT_HINT_TOKENS|SUBJECT_PATTERNS|REQUIRED_RULES)", unit.context_text)
         and "\n" not in unit.canonical_text and len(unit.canonical_text) <= 96
     )
-    if unit.provenance == "test_assignment_escaping_or_ambiguous" and not registry_context and any(
-        relation.predicate.startswith("unknown_state:")
-        or relation.polarity in {"affirmative", "ambiguous", "unknown"}
-        for relation in unit.relations
+    if (
+        unit.provenance == "test_assignment_escaping_or_ambiguous"
+        and not registry_context
+        and not _is_state_enum_comparison_literal(unit)
+        and any(
+            relation.predicate.startswith("unknown_state:")
+            or relation.polarity in {"affirmative", "ambiguous", "unknown"}
+            for relation in unit.relations
+        )
     ):
         return "AMBIGUOUS_SEMANTIC_UNIT", ""
     if _is_exact_accounting_fixture(unit):
@@ -2772,6 +2935,14 @@ def _classify(unit: SemanticUnit, policy: dict[str, Any], planned_claim_id: str 
     if _is_contract_context_without_direct_claim(unit):
         return "STRUCTURAL_DATA", ""
     if _is_reported_governance_fact(unit):
+        return "STRUCTURAL_DATA", ""
+    if _is_code_contract_field_description(unit):
+        return "STRUCTURAL_DATA", ""
+    if _is_scoped_negative_in_contract_context(unit):
+        return "NEGATIVE_NONCLAIM", ""
+    if _is_closed_risk_governance_record(unit):
+        return "STRUCTURAL_DATA", ""
+    if _is_state_enum_comparison_literal(unit):
         return "STRUCTURAL_DATA", ""
     if unit.provenance == "json_schema_role":
         return "STRUCTURAL_DATA", ""

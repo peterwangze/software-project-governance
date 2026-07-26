@@ -669,7 +669,7 @@ def process_gate_result(
                 unit_id, "fuse_trip", gate_id, tier, actor, evidence_ref,
                 cas_version=None,
                 payload={
-                    "tier": tier, "loop_count": new_loop_count,
+                    "tier": tier, "loop_count": loop_count,
                     "max_rounds": max_rounds,
                     "escalation_exit": (
                         loop_engine.get_fuse(fuse_ref, plugin_home=plugin_home) or {}
@@ -832,9 +832,18 @@ def _gate_status_for(mapped, decision):
 
 
 def _event(unit_id, event_type, gate_id, tier, actor, evidence_ref, *,
-           cas_version, payload):
-    """Build one event dict for the GateOutcome.events list (§5.1 envelope)."""
+           cas_version, payload, from_phase=None, to_phase=None, from_version=None):
+    """Build one event dict for the GateOutcome.events list (§5.1 envelope).
+
+    Includes all loop_event_log.REQUIRED_FIELDS so the event passes
+    validate_event. ``from_phase``/``to_phase`` describe the PARO phase
+    transition this event represents (e.g. back_edge: reflect→plan).
+    """
+    import uuid
+    from datetime import datetime, timezone
     ev = {
+        "event_id": "evt-" + uuid.uuid4().hex[:16],
+        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "unit_id": unit_id,
         "event_type": event_type,
         "gate_id": gate_id,
@@ -842,6 +851,9 @@ def _event(unit_id, event_type, gate_id, tier, actor, evidence_ref, *,
         "actor": actor,
         "evidence_ref": evidence_ref,
         "cas_version": cas_version,
+        "from_version": from_version,
+        "from_phase": from_phase,
+        "to_phase": to_phase,
         "payload": payload if isinstance(payload, dict) else {},
     }
     return ev

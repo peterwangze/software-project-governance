@@ -404,6 +404,8 @@ def process_gate_result(
     plugin_home=None,
     runtime_file=None,
     max_retries=0,
+    event_log=None,
+    event_log_path=None,
 ):
     """Process a flow-unit gate result and drive the PARO state machine (§4.1).
 
@@ -451,6 +453,15 @@ def process_gate_result(
         max_retries: CAS retry budget on CONFLICT (forwarded to
             :func:`apply_transition`). Default 0 = fail-closed on first
             conflict.
+        event_log: FEAT-007 hook. Accepts None (skip append — FEAT-006 default,
+            events still returned in :attr:`GateOutcome.events`), True
+            (default log path under the runtime file's host root), a str/Path
+            (explicit log path), or a callable (custom sink). When provided,
+            the gate_result / back_edge / fuse_trip / loop_exit / unit_blocked
+            events are appended to the audit log AFTER the CAS write commits
+            (state-first/event-second ordering, §5.2 point 3). Best-effort: a
+            lost event is recoverable via §3.5 phase_recovery.
+        event_log_path: DEPRECATED alias for passing a path via ``event_log``.
 
     Returns:
         GateOutcome. Never raises — all failure modes (unit not active,
@@ -769,6 +780,18 @@ def process_gate_result(
         for ev in events:
             ev["cas_version"] = committed_cas
             ev["from_version"] = transition.from_cas_version
+        # ── FEAT-007: state-first/event-second (ADR-014 §5.2 point 3). ───────
+        # The CAS write committed (above); now append the FEAT-006 gate events
+        # to the audit log. The events were NOT passed to apply_transition
+        # (FEAT-006 owns the gate/back_edge/fuse_trip/loop_exit/unit_blocked
+        # events; FEAT-005's writer would double-record a bare back_edge).
+        # Best-effort: a lost event is recoverable via the §3.5 phase_recovery
+        # path; it does NOT roll back the committed state.
+        if events:
+            _append_gate_events(
+                events, event_log=event_log, event_log_path=event_log_path,
+                runtime_path=runtime_path, actor=actor,
+            )
         # new_agent_phase / new_loop_count from the committed unit (authoritative).
         final_phase = _loop_state_of(committed_unit).get("agent_phase") if committed_unit else target_phase
         final_count = _loop_state_of(committed_unit).get("loop_count") if committed_unit else None
@@ -822,6 +845,64 @@ def _event(unit_id, event_type, gate_id, tier, actor, evidence_ref, *,
         "payload": payload if isinstance(payload, dict) else {},
     }
     return ev
+
+
+def _append_gate_events(events, *, event_log, event_log_path, runtime_path, actor):
+    """Append FEAT-006 gate events to the FEAT-007 log (state-first/event-second).
+
+    Best-effort: invoked AFTER the CAS write committed (§5.2 point 3). A lost
+    event is recoverable via the §3.5 phase_recovery path on restart; it does
+    NOT roll back the committed state. Never raises.
+
+    Accepts the same ``event_log`` shapes as
+    :func:`loop_paro_engine.apply_transition`:
+      - None → skip (FEAT-006 default; events are still returned in GateOutcome).
+      - True → the default log path under the runtime file's host root.
+      - a str/Path → that explicit path.
+      - a callable → custom sink (one event dict per call).
+    """
+    if not events:
+        return
+    # Resolve the sink.
+    sink = None
+    if event_log is None and event_log_path is None:
+        return
+    if callable(event_log):
+        sink = event_log
+    else:
+        try:
+            import loop_event_log  # deferred: FEAT-007 peer module
+        except Exception:  # pragma: no cover - defensive
+            return
+        if event_log is True:
+            host_root = Path(runtime_path).resolve().parent
+            log_path = host_root / loop_event_log.EVENT_LOG_FILENAME
+        elif isinstance(event_log, (str, Path)):
+            log_path = Path(event_log)
+        elif event_log_path is not None:
+            log_path = Path(event_log_path)
+        else:
+            return
+
+        def _sink(ev):
+            loop_event_log.append_event(ev, log_path=log_path)
+        sink = _sink
+
+    for ev in events:
+        # Ensure generated-default fields (event_id/timestamp) are present.
+        if not ev.get("event_id") or not ev.get("timestamp"):
+            try:
+                import loop_event_log as _lel
+                if not ev.get("event_id"):
+                    ev["event_id"] = _lel.new_event_id()
+                if not ev.get("timestamp"):
+                    ev["timestamp"] = _lel.now_timestamp()
+            except Exception:  # pragma: no cover - defensive
+                pass
+        try:
+            sink(ev)
+        except Exception:  # pragma: no cover - best-effort; never roll back state
+            return
 
 
 # ═══════════════════════════════════════════════════════════════════════════

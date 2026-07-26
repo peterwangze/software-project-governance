@@ -570,6 +570,110 @@ def _cas_version_of(unit):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# FEAT-007 event-log append hook (state-first/event-second, ADR-014 §5.2.3)
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Maps the §3.2 event-type LABEL (returned by validate_transition, e.g.
+# "phase_transition", "back_edge+gate_result") to the single §5.1 event_type
+# enum value to record. The validate_transition labels carry compound suffixes
+# (e.g. "+gate_result") for transitions that combine a phase move and a gate
+# result; the event log records the canonical enum value, and the FEAT-006
+# gate processor appends any additional gate_result event separately.
+_TRANSITION_EVENT_TYPE = {
+    "phase_enter": "phase_enter",
+    "phase_transition": "phase_transition",
+    "phase_transition+gate_result": "phase_transition",
+    "back_edge+gate_result": "back_edge",
+    "gate_result+loop_exit": "loop_exit",
+    "fuse_trip+gate_result": "fuse_trip",
+    "unit_withdrawn": "unit_withdrawn",
+}
+
+
+def _resolve_event_log_sink(event_log, event_log_path, runtime_path):
+    """Normalize the FEAT-007 event_log argument to a callable sink or None.
+
+    Accepts:
+      - None → None (skip; FEAT-005 default).
+      - True → the default loop_event_log.append_event bound to the runtime
+        file's host root (``<runtime_path parent>/.governance/
+        loop-event-log.jsonl``). This is the convenient "just turn it on"
+        form for callers that have the runtime path.
+      - a str/Path → append_event bound to that path.
+      - a callable → returned as-is (custom sink; tests use this).
+    Returns ``(sink_callable, log_path_or_None)``. Never raises.
+    """
+    if event_log is None and event_log_path is None:
+        return None, None
+    # A callable sink — used by tests / custom sinks.
+    if callable(event_log):
+        return event_log, None
+    try:
+        import loop_event_log  # deferred: FEAT-007 peer module
+    except Exception:  # pragma: no cover - defensive (loop_event_log always present)
+        return None, None
+    # Resolve the log path.
+    if event_log is True:
+        # Default: <runtime_file parent>/.governance/loop-event-log.jsonl.
+        # runtime_path's parent IS .governance already, so go one level up for
+        # the host root then back into .governance/ (handles both shapes).
+        host_root = Path(runtime_path).resolve().parent
+        log_path = host_root / loop_event_log.EVENT_LOG_FILENAME
+    elif isinstance(event_log, (str, Path)):
+        log_path = Path(event_log)
+    elif event_log_path is not None:
+        log_path = Path(event_log_path)
+    else:
+        return None, None
+
+    def _sink(event_dict):
+        loop_event_log.append_event(event_dict, log_path=log_path)
+    return _sink, log_path
+
+
+def _maybe_append_transition_event(event_log, event_log_path, *, unit_id,
+                                    event_type_label, cas_version, from_version,
+                                    from_phase, to_phase, actor, event,
+                                    runtime_path, loop_count=None, tier=None,
+                                    force_event_type=None):
+    """Append the FEAT-007 transition event when ``event_log`` is configured.
+
+    State-first/event-second ordering is the CALLER's responsibility: this is
+    invoked AFTER the atomic state write committed. Best-effort: a lost event
+    (e.g. an I/O error here) is recoverable via the §3.5 phase_recovery path
+    on restart — it does NOT roll back the committed state. Never raises.
+    """
+    sink, _ = _resolve_event_log_sink(event_log, event_log_path, runtime_path)
+    if sink is None:
+        return
+    event_type = force_event_type or _TRANSITION_EVENT_TYPE.get(event_type_label)
+    if event_type is None:
+        # Unknown label — fall back to a generic phase_transition record so the
+        # audit trail never loses an event (the monotonicity check will still
+        # hold on cas_version/from_version).
+        event_type = "phase_transition"
+    try:
+        import loop_event_log  # deferred peer import
+        ev = loop_event_log.build_event(
+            unit_id, event_type,
+            cas_version=cas_version, from_version=from_version,
+            actor=actor if actor else "loop_paro_engine",
+            from_phase=from_phase, to_phase=to_phase,
+            tier=tier,
+            payload={
+                "reason": (event.get("reason") if isinstance(event, dict) else None),
+                "loop_count": loop_count,
+            },
+        )
+        sink(ev)
+    except Exception:  # pragma: no cover - best-effort; never roll back state
+        # A lost event is recoverable via restart's phase_recovery synthesis
+        # (§3.5). Do NOT raise — the state write already committed.
+        return
+
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Side-effect computation (§3.2) — pure: given an old unit + event, new unit
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -676,7 +780,8 @@ def _apply_side_effects(unit, to_phase, event, *, is_activation, loop_count,
 
 
 def apply_transition(unit_id, to_phase, event=None, *, runtime_file,
-                     side_effects=None, max_retries=0):
+                     side_effects=None, max_retries=0, event_log=None,
+                     event_log_path=None, actor=None):
     """Apply a CAS-guarded PARO phase transition for ``unit_id``.
 
     Implements the §3.3 CAS protocol: READ → VALIDATE → COMPUTE → atomic WRITE
@@ -692,6 +797,16 @@ def apply_transition(unit_id, to_phase, event=None, *, runtime_file,
     FEAT-006 adding evidence_refs / pause points) and must return the (possibly
     mutated) unit dict. It is the extension hook for the gate processor.
 
+    **FEAT-007 event-log hook (additive, ADR-014 §5.2 point 3):** when
+    ``event_log`` is provided, a transition event is appended to the event log
+    AFTER the atomic state write commits — state-first/event-second ordering.
+    A crash between the two leaves a committed state with a missing event;
+    :func:`recover_state` detects this (on-disk version > last logged) and
+    synthesizes a ``phase_recovery`` event (§3.5). When ``event_log`` is None
+    (the FEAT-005 default — the event log is FEAT-007), no event is appended;
+    the existing behavior is byte-identical. The append is best-effort: a lost
+    event is recoverable; it does NOT roll back the committed state.
+
     Args:
         unit_id: The flow_unit_id to transition.
         to_phase: The target phase (``plan|act|observe|reflect|exit|escalate|
@@ -706,6 +821,21 @@ def apply_transition(unit_id, to_phase, event=None, *, runtime_file,
             conflict. Retries re-validate against the fresh on-disk version, so
             a retried transition commits at a higher cas_version only if it is
             still legal from the new state.
+        event_log: FEAT-007 hook. Accepts:
+            - None (skip append — FEAT-005 default, byte-identical behavior);
+            - True (append to the default log path under the runtime file's
+              host root, i.e. ``<runtime_file parent>/.governance/
+              loop-event-log.jsonl``);
+            - a path (str/Path) to a JSONL event log file;
+            - a callable ``(event_dict) -> None`` (custom sink, used by tests).
+            The appended event is the §5.1 envelope (event_id, timestamp,
+            unit_id, event_type, cas_version, from_version, from_phase,
+            to_phase, actor, payload).
+        event_log_path: DEPRECATED alias for passing a path via ``event_log``;
+            kept for call-site readability. When both are given, ``event_log``
+            wins.
+        actor: the actor string recorded on the appended event (default
+            ``"loop_paro_engine"``).
 
     Returns:
         TransitionResult. Never raises on transition/CAS outcomes — unexpected
@@ -841,6 +971,22 @@ def apply_transition(unit_id, to_phase, event=None, *, runtime_file,
                 )
             _atomic_replace_bytes(runtime_path, new_bytes)
 
+        # ── FEAT-007: state-first/event-second (ADR-014 §5.2 point 3). ───────
+        # The state file is committed (above) BEFORE the event is appended. A
+        # crash between the two leaves a committed state with a missing event;
+        # recover_state detects this (on-disk > last logged) and synthesizes a
+        # phase_recovery event (§3.5). Best-effort: a lost event does NOT roll
+        # back the committed state.
+        _maybe_append_transition_event(
+            event_log, event_log_path,
+            unit_id=unit_id, event_type_label=event_type,
+            cas_version=new_unit_cas, from_version=expected_version,
+            from_phase=from_phase, to_phase=to_phase,
+            actor=actor, event=event, runtime_path=runtime_path,
+            loop_count=_loop_state_of(new_unit).get("loop_count"),
+            tier=_loop_state_of(new_unit).get("active_loop_tier"),
+        )
+
         return TransitionResult(
             status=STATUS_SUCCESS, unit_id=unit_id, to_phase=to_phase,
             from_phase=from_phase, from_cas_version=expected_version,
@@ -855,7 +1001,8 @@ def apply_transition(unit_id, to_phase, event=None, *, runtime_file,
 
 
 def activate_unit(unit_id, *, runtime_file, tier, fuse_max_rounds,
-                  side_effects=None, max_retries=0):
+                  side_effects=None, max_retries=0, event_log=None,
+                  event_log_path=None, actor=None):
     """Activate a dormant flow unit: the ``(entry) → plan`` transition.
 
     Sets ``agent_phase = plan``, ``loop_count = 0``, ``fuse.tripped = false``,
@@ -878,6 +1025,12 @@ def activate_unit(unit_id, *, runtime_file, tier, fuse_max_rounds,
         fuse_max_rounds: Integer written to ``fuse.max_rounds``.
         side_effects: Optional ``(new_unit, event) -> new_unit`` callable.
         max_retries: CAS retry budget on conflict (default 0).
+        event_log: FEAT-007 hook (see :func:`apply_transition`). When provided,
+            a ``phase_enter`` event is appended AFTER the activation commits.
+            None (default) → no append (byte-identical to FEAT-005).
+        event_log_path: DEPRECATED alias (see :func:`apply_transition`).
+        actor: the actor string recorded on the appended event (default
+            ``"loop_paro_engine"``).
 
     Returns:
         TransitionResult (status SUCCESS / CONFLICT / ERROR). On success
@@ -990,6 +1143,18 @@ def activate_unit(unit_id, *, runtime_file, tier, fuse_max_rounds,
                     ),
                 )
             _atomic_replace_bytes(runtime_path, new_bytes)
+
+        # ── FEAT-007: state-first/event-second (ADR-014 §5.2 point 3). ───────
+        # Append the phase_enter event AFTER the activation commits.
+        _maybe_append_transition_event(
+            event_log, event_log_path,
+            unit_id=unit_id, event_type_label="phase_enter",
+            cas_version=0, from_version=None,
+            from_phase=None, to_phase=PLAN,
+            actor=actor, event={"entry_tier": tier},
+            runtime_path=runtime_path,
+            loop_count=0, tier=tier, force_event_type="phase_enter",
+        )
 
         return TransitionResult(
             status=STATUS_SUCCESS, unit_id=unit_id, to_phase=PLAN,

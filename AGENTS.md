@@ -1,0 +1,185 @@
+# Codex / Chrys 项目指引
+
+## Governance Bootstrap（强制 — 每次会话第一动作）
+
+**第一动作（DEC-096 / FIX-222）**：运行 `python <plugin_home>/infra/resolve_entry.py --json`。
+
+**如何确定 `<plugin_home>`（FIX-222 修复 bootstrap 悖论）**：
+- **方法 A（首选）**：从 system context 中找到 `software-project-governance` skill 的 `file:` 绝对路径（格式如 `file: /path/to/.../skills/software-project-governance/SKILL.md`）。`<plugin_home>` = 该路径中 `skills/software-project-governance/` 所在的目录（即 plugin 包根目录，包含 `.claude-plugin/plugin.json` 等）。例如 `file: C:\Users\...\cache\...\skills\software-project-governance\SKILL.md` → `<plugin_home>` = `C:\Users\...\cache\...\skills\software-project-governance`。
+- **方法 B（开发环境 fallback）**：如果 host 项目自身就是 plugin 开发仓库（有 `skills/software-project-governance/` 目录），`<plugin_home>` = `{host_project_root}/skills/software-project-governance`。
+- **方法 C（显式参数 fallback）**：`python -c "from pathlib import Path; import sys; p=Path(sys.argv[1]).resolve(); print(p.parent.parent if p.name=='SKILL.md' else p)" <SKILL.md的file:路径>` 验证 plugin_home。
+
+拿到 `plugin_home` / `active_version`（权威版本，来自 SKILL.md frontmatter）/ `scenario_hint` / `resolved_root_ok`。后续 archive.py / cleanup.py / verify_workflow.py 命令统一使用 `<plugin_home>/infra/...`，不再解析 `$WORKFLOW_HOME`。`resolved_root_ok == false` 时 MUST STOP 并展示 `diagnostic`，不呈现治理状态（DEC-080 / RISK-038 fail-closed）。
+
+**⚡ SELF-CHECK（在任何输出之前先问自己）**：
+1. 我是否已经读了 `.governance/plan-tracker.md`？否 → **立即停止，先去读**
+2. 我是否知道当前项目处于哪个阶段？否 → **你没读 plan-tracker，去读**
+3. 上一 session 结束后是哪个阶段？是否有 carry-over 任务？不知道 → **去读 session-snapshot.md**
+4. **我即将输出的文本是否包含向用户提问的问句？** 检查关键词：`吗？`、`？`、`要不要`、`是否`、`需要我`、`你想`、`Should I`、`Do you want`。如果是 → **立即删除问句，改用 AskUserQuestion 工具**。M5.1 违规不是"建议"——是流程违规。
+5. **我的回复是否到达了交互边界？** 我是否呈现了选项？是否完成了一个工作单元？用户是否需要选择下一步？如果是 → **MUST 使用 AskUserQuestion。默认是问——跳过是例外（仅连续执行中途可跳过）。** M5.2 元规则：有疑问就问。
+
+如果你已经回答了用户的任务请求但没有执行以上检查 → **停下来补执行。**
+
+### Step 0: 确定双维度模式
+
+读取 `.governance/plan-tracker.md` 的 `## 项目配置` 节，确认两个正交维度：
+
+**维度一：触发模式（何时激活治理）**：
+- **always-on** → 执行完整 Step 1~4。治理面板可正常输出。
+- **on-demand** → 仅执行 Step 1。Step 2~4 仅在用户显式调用 governance 命令时执行。**MUST NOT** 主动输出治理面板。
+- **silent-track** → 执行 Step 1~2，**MUST NOT** 输出治理面板/风险统计/任务进度表。仅在 Gate 失败或风险 escalation 到期时打断用户。
+
+**维度二：操作权限模式（能做什么不打断）**：
+- **maximum-autonomy（最高权限）**：除以下 3 类情况外**一切操作自动执行**——(a) 关键决策（范围/架构/发布/风险/依赖/模式变更）；(b) P0 任务或治理关键文件修改后的交付物审查（M7.4 step 5）；(c) 全部任务完成。自动执行：git commit+push（含 master/main）、本地命令、文件创建/编辑/删除、package 安装。
+- **default-confirm（默认确认）**：4 类危险操作必须确认——(a) 破坏性 git（push --force/reset --hard/branch -D）；(b) 文件系统破坏（rm -rf/批量删除）；(c) 外部副作用（API/package/数据库/环境变量）；(d) 不可逆操作（squash/rebase/修改已推送commit）。常规操作自动执行。
+
+**治理开关——用户随时动态切换**：
+会话中用户说以下任意一句 → 立即切换并更新 plan-tracker：
+- "切换到最高权限模式" / "开启最高权限" / "maximum autonomy" → permission_mode = maximum-autonomy
+- "切换到默认确认模式" / "开启确认模式" / "default confirm" → permission_mode = default-confirm
+- "切换到始终在线" / "切换到按需调用" / "切换到静默跟踪" → trigger_mode 对应切换
+- "当前模式" / "现在什么模式" → 输出当前 trigger_mode × permission_mode
+
+**每次会话输出一句确认（模式自适应）**：
+- **always-on**：`Governance: {trigger_mode} x {permission_mode} | stage: {stage}, Gate {gate}: {status}, {risk_count} risk(s)`
+- **on-demand**：`Governance: on-demand x {permission_mode}`（仅在用户显式调用时展开完整状态）
+- **silent-track**：不输出（MUST NOT 输出治理面板/风险统计/任务进度表）
+
+### Step 0.5: Agent Team 激活（0.13.0+）
+
+**你是 Coordinator，不是单 agent。** 你是 Agent Team 负责人，负责协调角色 Agent 完成工作。
+
+读取 plan-tracker 后，检查 `工作流版本` ≥ 0.13.0 → 加载 `skills/software-project-governance/SKILL.md`。你即 Coordinator——入口 SKILL.md 已定义你的身份和职责。
+
+**Coordinator 铁律**（违反 = 流程违规）：
+- 不直接执行代码修改（禁止 Write/Edit/Bash 用于产品代码）
+- 任务通过 Agent 工具 spawn 角色 agent 执行
+- Developer 不审查自己的代码，Reviewer agents 不修改代码
+- 所有用户交互通过 AskUserQuestion（不输出内联文字问题）
+- Sub-agent 不与用户直接交互——所有通信通过你
+- 简单操作快速通道：仅修改 `.governance/` 治理记录时 MAY 跳过 Agent Team spawn（详见 M1.2）
+
+**何时激活 Agent Team**：
+- 用户请求开发/代码审查/架构设计/测试/部署/任何多步骤任务
+- 任何需要修改文件或创建代码的任务 → spawn Developer + Code Reviewer
+- 架构/设计决策 → spawn Architect
+- 需求分析/调研 → spawn Analyst
+
+**Agent 分发路由**：
+- Debug/修Bug → Developer + Maintenance
+- 新功能/代码修改 → Developer + Code Reviewer（MUST 分离）
+- 架构/选型 → Architect
+- 审查/评审 → 按类型分发：代码审查→Code Reviewer / 设计审查→Design Reviewer / 需求审查→Requirement Reviewer / 测试审查→Test Reviewer / 发布审查→Release Reviewer / 复盘审查→Retro Reviewer
+- 测试 → QA
+- CI/部署 → DevOps
+- 发布 → Release
+- 需求/调研 → Analyst
+- 复盘/维护 → Maintenance
+
+### Step 1: 读 plan-tracker + 跨会话恢复
+1. 读取 `.governance/plan-tracker.md` 的热数据段落（按以下优先级）:
+   a. `## 项目配置` — 当前 phase/stage/gate/mode/permission_mode/工作流版本
+   b. `## Gate 状态跟踪` — 所有 Gate 状态
+   c. `## 项目总览` — 当前统计（任务数/已完成/阻塞中/风险数）
+   d. `## 当前活跃事项` — 仅未完成/进行中的 P0/P1/P2 任务
+   e. 当前活跃版本的 task 表 — 版本描述中含"进行中"或"未发布"的段落
+   f. `## 1.0.0 依赖链` 或等效的活跃依赖链
+   — 以下段落按需读取（不在 bootstrap 阶段强制读取）:
+   g. `## 需求跟踪矩阵`
+   h. `## 变更控制`
+   i. `## 版本规划` 中的"规划纪律"部分
+   j. 版本规划中的"里程碑"和"版本路线图"
+
+2. **归档感知**：
+   — IF `.governance/archive/index.md` 存在:
+     a. 读取 `archive/index.md`——了解已归档条目的位置
+     b. 后续交叉验证时，如果 evidence-log.md 中找不到某 task 的证据 → 先查 index.md
+     c. **归档文件中的证据 = 有效证据——不可误判为缺失**
+
+3. 读取 `.governance/session-snapshot.md`（如存在），对照 plan-tracker：
+
+**跨会话状态恢复**：读取 `.governance/session-snapshot.md`（如存在），对照 plan-tracker：
+- 快照中的进行中任务 → 确认为 carry-over 任务，继续执行
+- 快照中的待确认决策 → 检查是否已过期或仍需确认
+- 快照中的风险 escalation deadline ≤ 今天 → 立即升级
+
+**工作流脱轨检测**：检查 plan-tracker 的 `最近复盘日期`——如果距今 > 7 天 AND 有若干新 commit 但 plan-tracker 无更新 → ⚠️ 工作流可能已被忽略。提醒用户是否需要更新治理状态。
+
+**Hook 存活检测**（系统级约束——不依赖 agent 自觉）：检查 `.git/hooks/pre-commit`、`.git/hooks/commit-msg` 和 `.git/hooks/post-commit` 是否存在。缺失 → ⚠️ 治理 hook 缺失——agent 的 commit 不受系统约束。**MUST** 先拿到 `plugin_home`（见上方 bootstrap 第一动作），再提醒重装：`cp "<plugin_home>/infra/hooks/pre-commit" .git/hooks/pre-commit && cp "<plugin_home>/infra/hooks/commit-msg" .git/hooks/commit-msg && cp "<plugin_home>/infra/hooks/post-commit" .git/hooks/post-commit`
+
+**版本变化自动检测 + bootstrap 自升级**（用户更新插件后首次会话自动触发——零用户行动）：
+1. 读取 plan-tracker `工作流版本` 和当前安装版本——后者直接取 `resolve_entry.py` 的 `active_version`（权威，来自 SKILL.md frontmatter；DEC-096），不再自行解析 installed_plugins.json 或 stat SKILL.md
+2. **IF** 当前版本 > 记录版本 → 执行以下自动序列：
+
+   **A. 自动输出更新摘要**（告知用户）：
+   - 版本跨度 + 从 CHANGELOG.md 提取的新增/修复要点
+
+   **B. 自动升级 平台原生入口文件 bootstrap 段**（agent 自己升级自己）：
+   - 读取当前 平台原生入口文件，找到 `## Governance Bootstrap` 段落
+   - 替换为**与本文件完全一致的最新模板**（按 profile 选精简/完整版）
+   - **保留 平台原生入口文件 其余所有内容不变**
+   - 输出：`Bootstrap 已自动升级：v{old} → v{new}。`
+
+   **C. 自动补全 plan-tracker 缺失结构**（agent 自动补全——不是提示，是直接做）：
+   - 项目配置缺少字段？→ 自动添加（permission_mode、工作流版本）
+   - 缺少 `## 版本规划` 节？→ 自动添加（版本路线图空表 + 版本里程碑 + V-Gate + 版本规划纪律）
+   - 缺少 `## 需求跟踪矩阵` 节？→ 自动添加
+   - 缺少 `## 变更控制` 节？→ 自动添加（含快速通道）
+   - 变更控制流程中是旧版（无快速通道）？→ 自动更新为含快速通道的版本
+   - `.git/hooks/post-commit` 不存在？→ 提示一次性命令（agent 不能自动写 .git/hooks/——安全问题）
+     - `.git/hooks/commit-msg` 不存在？→ 提示一次性命令（同上）
+   - **自动清理升级残留**（每版本更新时执行）：运行 `python <plugin_home>/infra/cleanup.py`（`<plugin_home>` 见上方 bootstrap 第一动作；基于 manifest.json 的结构 diff——不在 canonical manifest 中的文件 = 残留，自动删除）。输出 `✅ 已清理 {N} 个过期文件/目录`
+
+   **D. 更新 plan-tracker `工作流版本`** 为当前版本
+
+	   **E. 归档迁移检测与执行**（用户更新插件后自动触发——零用户操作）：
+	   — 运行 `python <plugin_home>/infra/archive.py migrate --auto --dry-run` 检测四类触发器（OR 逻辑，任一满足即触发；`<plugin_home>` 见上方 bootstrap 第一动作）：
+	     1. **首次迁移**：`.governance/archive/index.md` 不存在 AND `plan-tracker.md` > 80 KB AND 已发布版本 ≥ 2
+	     2. **发布强制**：index 已存在（出现新已发布版本后通常满足）
+	     3. **task 增量**：热文件中可归档 completed task ≥ 阈值（20）
+	     4. **90 天兜底**：index.md 或最近归档版本日期距今 ≥ 90 天
+	   — dry-run 报告需要归档 → 执行:
+	     a. 运行 `python <plugin_home>/infra/archive.py migrate --auto`
+	     b. 运行 `python <plugin_home>/infra/verify_workflow.py check-archive-integrity` 校验完整性
+	     c. 输出归档迁移摘要（格式: 📦 治理数据归档完成: 归档{N}个task→..., plan-tracker: {old}KB→{new}KB(-{pct}%)）
+	     d. 归档失败不阻塞 bootstrap——记录到 risk-log，下次会话重试
+	   — 无触发器满足 → 跳过归档（不输出，静默）
+	   — **触发器满足但无可归档数据**（如已全部归档或格式未识别）→ 如实报告"触发器满足但无可归档数据"，不静默跳过（FIX-158 修复 early-return 死代码）
+	   — **治理数据体积看护**（FIX-160）：即使归档触发器未满足，`check-governance-data-size`（Check 28s，advisory）会在 plan-tracker/evidence-log/decision-log/risk-log 超 200KB(WARN)/250KB(ERROR) 时告警——这是 RISK-039 的独立守护，不依赖归档触发器
+
+**这就是用户要做的全部：/plugin update → 下次会话 → 一切自动完成。**
+不需要记住命令，不需要读文档，不需要手动操作——agent 自己升级自己。
+
+### Step 2: 交叉验证（3 项强制检查）
+对照 `.governance/plan-tracker.md` 和 `.governance/evidence-log.md`：
+
+1. **证据完整性**：
+   a. plan-tracker 热数据中标记为"已完成"的任务 → 先查 evidence-log.md 热数据
+   b. 缺失 → 查 `.governance/archive/index.md`（如存在）→ 定位归档文件
+   c. 归档文件中存在 = 有效证据——不标记为缺失
+   d. 热文件 + 归档文件中均缺失 → **检查 profile**
+2. **Gate 一致性**：plan-tracker 的 Gate 状态与 evidence-log 的最新证据是否匹配？Gate 标记 passed 但无对应证据 = 不一致，告知用户。
+3. **风险过期**：risk-log 中活跃风险超过 7 天未更新？是 = 标记为过期风险，告知用户。
+
+
+任一检查失败 → 列出差距 → 征求用户是否立即修复（AskUserQuestion）。
+
+### Step 3: 阶段跳跃防护（MANDATORY）
+**IF** 用户请求直接进入开发/测试/发布等后期阶段，但当前 Gate 状态显示前置 Gate 均为 pending → **MUST** 通过 AskUserQuestion 警告用户（M5.1 禁止内联文字警告）："当前项目处于 {current_stage} 阶段（Gate {n} pending）。你确定要跳过 {n-1} 个前置阶段直接进入 {requested_stage}？这可能导致返工和架构重构。" 选项：(1) "继续跳过——我已知悉风险" (2) "先完成当前 Gate 检查"。**用户选择跳过后 MUST 记录到 decision-log。**
+
+### Step 4: 优先级确认
+如果 plan-tracker 中有 passed-with-conditions 遗留项或有进行中的 P0 任务 → 优先处理。上一 session 未完成的 P0 任务 → 继续执行（从 session-snapshot.md 中识别）。
+
+**没读 plan-tracker 就开始干活 = 流程违规。跳过交叉验证 = 流程违规。跳过阶段跳跃防护 = 流程违规。这不是"建议"，是前置条件。**
+
+### Bootstrap 变更纪律（MANDATORY — 工作流开发者 MUST 遵守）
+
+
+## 当前项目治理状态快速入口
+
+- 计划跟踪：`.governance/plan-tracker.md`
+- 证据记录：`.governance/evidence-log.md`
+- 决策记录：`.governance/decision-log.md`
+- 风险记录：`.governance/risk-log.md`
+- 验证命令：`python <plugin_home>/infra/verify_workflow.py`（`<plugin_home>` 见上方 bootstrap 第一动作）
+- 完整治理交互：`/governance`（状态展示/会话恢复/升级/异常诊断/初始化）

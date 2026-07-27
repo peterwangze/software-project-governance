@@ -513,15 +513,23 @@ Agent 从项目 profile 推断模式。用户可随时通过说"仅在关键决�
 
    强制条款（MUST）：
      (C1) NEEDS_CHANGE 后，Coordinator MUST spawn 同一 Reviewer 复审（round 递增）。不得跳过复审直接标记完成。
-     (C2) 复审 MUST 引用前轮 REVIEW-{task_id}-R{n-1} 的 findings，逐条给出"已修复/未修复/新引入"判定。
+     (C2) 复审 MUST 引用前轮 REVIEW-{task_id}-R{n-1} 的 findings，逐条给出”已修复/未修复/新引入”判定。
           re-spawn prompt MUST 注入 review-{id}-R{n-1}.md 路径为强制读取项（Reviewer 无状态，不注入就会不看前轮）。
      (C3) 熔断：最大复审轮次 = 3。
           - round ≤ 3 且 NEEDS_CHANGE → 继续返工
-          - round > 3 仍 NEEDS_CHANGE → MUST 转 BLOCKED，走 escalation（不得无限循环，不得在第 4 轮"勉强 APPROVED"）
-     (C4) `APPROVED` 与 `APPROVED_WITH_NOTES` 是通过终态（✓）；后者必须保留备注，并在本轮审查输出与 REVIEW 证据中包含独立结构字段 `unresolved_blockers=0`。字段缺失、非零、非法或重复矛盾均必须 fail-closed；自然语言中偶然出现的 `blocking` 不构成该事实。`BLOCKED` 是闭链终态（✗ → escalation），但不是通过态。`NEEDS_CHANGE`、`NEEDS_CHANGES`、未知或格式错误结论均为非通过，必须 fail-closed。“审查拒绝”是中间态，不得作为任务最终状态。
-     (C5) round>3 的 `APPROVED` 或 `APPROVED_WITH_NOTES` 仅在 escalation 中用户明确"接受降级"后才允许记为 WARN 终态；否则强制 BLOCKED。
+          - round > 3 仍 NEEDS_CHANGE → MUST 转 BLOCKED，走 escalation（不得无限循环，不得在第 4 轮”勉强 APPROVED”）
+     (C4) `APPROVED` 与 `APPROVED_WITH_NOTES` 是通过终态（✓）；后者必须保留备注，并在本轮审查输出与 REVIEW 证据中包含独立结构字段 `unresolved_blockers=0`。字段缺失、非零、非法或重复矛盾均必须 fail-closed；自然语言中偶然出现的 `blocking` 不构成该事实。`BLOCKED` 是闭链终态（✗ → escalation），但不是通过态。`NEEDS_CHANGE`、`NEEDS_CHANGES`、未知或格式错误结论均为非通过，必须 fail-closed。”审查拒绝”是中间态，不得作为任务最终状态。
+     (C5) round>3 的 `APPROVED` 或 `APPROVED_WITH_NOTES` 仅在 escalation 中用户明确”接受降级”后才允许记为 WARN 终态；否则强制 BLOCKED。
      (C6) 每轮复审的证据编号：REVIEW-{task_id}-R1 / -R2 / -R3（向后兼容：无后缀 = R0/首轮）。
      (C7) round 完全由 evidence-log 中已存在 R{n} 的最大值派生，无内存状态，并行安全。
+
+   **FIX-224 确定性触发器（M5.1b 风格——不依赖 Coordinator 自觉）**：
+     当 Coordinator 收到 Reviewer 的审查结论时，MUST 检测以下触发条件并执行对应动作，不得跳过：
+     - **T1（NEEDS_CHANGE 触发复审）**：审查结论含 `NEEDS_CHANGE`（含变体 `NEEDS_CHANGES`）且 round < 3 → **MUST** 立即 spawn 同一 Reviewer 复审（round+1），注入前轮 review 报告路径。不得在此处输出任何”是否需要复审”的问句——复审是强制的，不是可选的。
+     - **T2（NEEDS_CHANGE 触发熔断）**：审查结论含 `NEEDS_CHANGE` 且 round ≥ 3 → **MUST** 转 BLOCKED + escalation AskUserQuestion。
+     - **T3（APPROVED 终态）**：审查结论含 `APPROVED` 或 `APPROVED_WITH_NOTES`（含 `unresolved_blockers=0`） → 审查通过终态，可继续 step 5 commit。
+     - **T4（BLOCKED 终态）**：审查结论含 `BLOCKED` → escalation AskUserQuestion。
+     - **违反检测**：Check 21（review_spawn_gap）和 Check 30（review_closure）会检测 evidence-log 中 `NEEDS_CHANGE` 后无对应 R{n+1} 的记录——如果 Coordinator 跳过了 T1 复审，Check 会 FAIL。
 
    degraded mode 限额（DEC-090 降级 SoD + AUDIT-128 用户决策）：
      - 同一 task_id 累计 degraded 审查 ≤ 2 次
@@ -541,7 +549,11 @@ Agent 从项目 profile 推断模式。用户可随时通过说"仅在关键决�
      例如: "SYSGAP-002 + SYSGAP-004 + SYSGAP-005: behavior-protocol.md M7.4/M7.5 增强（三个任务共享同一文件的修改范围）"
    - **禁止**"顺带"/"also"/"顺便"关键词——commit 只做它声称做的事
    - 如果多个独立变更 → 拆分为独立 commit，每 commit 对应单个 task
-6. **继续** — 按 M7 执行连续性继续 plan-tracker 中下一个最高优先级任务。当且仅当下一个任务选择涉及关键决策（M5.3）时 → 使用 AskUserQuestion。否则 → 自主执行。
+6. **继续（FIX-223 增强版）** — 任务完成后 MUST 执行下一步推荐流程，不得直接结束会话或停止交互：
+   - **a. 依赖分析**：读 plan-tracker 优先级表的 `依赖` 列，识别刚完成任务解除阻塞了哪些后续任务（即依赖中包含刚完成任务 ID 的任务）。如果存在 `task-priority-analysis` 子命令（FIX-226），运行它获取推荐。
+   - **b. 推荐下一步**：从 unblocked 任务 + 当前最高优先级未完成任务中，结合版本依赖链和当前项目阶段，选择最合理的 1~3 个候选下一步。
+   - **c. 呈现给用户**：通过 AskUserQuestion 呈现候选下一步（选项包括推荐项 + "自主执行推荐项" + "暂停"）。当且仅当推荐项涉及关键决策（M5.3）时强制 AskUserQuestion；否则可自主执行推荐项并在完成后再次推荐。
+   - **d. 不得直接结束**：除非 plan-tracker 中无未完成任务，或用户明确选择"暂停"，否则 MUST NOT 在任务完成后直接结束会话。
 
 **跳过任何步骤 = 协议违规。** Agent **MUST NOT** 在未完成全部 6 个步骤的情况下声明任务"已完成"。
 

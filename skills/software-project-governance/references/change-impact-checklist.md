@@ -10,12 +10,20 @@
 
 ## Step 2: 依赖分析
 
+### 2a: 代码级依赖
 - [ ] 哪些文件引用了被修改的文件？（grep 搜索被修改文件的路径，列出引用者）
 - [ ] 哪些 agent 依赖被修改的行为？（检查 SKILL.md Agent 分发路由表、agent 角色定义文件）
 - [ ] 哪些 SKILL 引用被修改的内容？（检查 skills/*/SKILL.md 中的路径引用）
 - [ ] 哪些 verify_workflow.py 检查项依赖被修改的文件？（检查 REQUIRED_FILES dict）
 - [ ] 哪些 bootstrap 模板引用了被修改的文件？（检查 commands/governance-init.md Step 7）
 - [ ] 哪些 plugin 包文件依赖被修改的路径？（检查 .claude-plugin/plugin.json、.codex-plugin/plugin.json）
+
+### 2b: 任务级依赖（FIX-229 新增）
+- [ ] 本次变更属于哪个任务？该任务在 plan-tracker 的 `依赖` 列声明了哪些前置任务？
+- [ ] 前置任务是否全部完成？（运行 `task-priority-analysis` 确认 unblocked 状态）
+- [ ] 本次变更是否解除阻塞了后续任务？（检查 plan-tracker 中依赖包含本任务 ID 的任务）
+- [ ] 本次变更是否与当前 in-flight 任务冲突？（检查是否有其他 ⏳/🚧 任务修改相同文件）
+- [ ] 新任务的优先级是否高于当前 in-flight 任务？如是 → MUST 通过 AskUserQuestion 确认是否抢占
 
 ## Step 3: 用户影响分析
 

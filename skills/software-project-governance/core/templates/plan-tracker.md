@@ -6,6 +6,8 @@
 
 - **Profile**: `<lightweight / standard / strict>` — 选择依据见下方说明
 - **触发模式**: `<always-on / on-demand / silent-track>`
+- **操作权限模式**: `<maximum-autonomy / default-confirm>`
+- **工作流版本**: `<active_version from resolve_entry.py>`
 - **当前阶段**: `<对照 lifecycle.md 声明当前阶段>`
 - **接入方式**: `<从立项开始 / 中途接入>`
 
@@ -46,9 +48,11 @@
 
 ## 样例跟踪表
 
-| ID | 阶段 | 任务项 | 目标/预期结果 | 输入 | 输出 | Owner (DRI) | 协同角色 | Escalation | 状态 | 优先级 | 计划开始 | 计划完成 | 实际完成 | Gate | 验收标准 | 证据 | 风险/偏差 | 纠偏动作 | 备注 |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| INIT-001 | 立项 | `<填写任务>` | `<填写结果>` | `<前置输入>` | `<交付输出>` | `<owner>` | `<协同人>` | `<escalation>` | 未开始 | P0 | `<YYYY-MM-DD>` | `<YYYY-MM-DD>` | | G1 | `<完成定义>` | `<链接或文件路径>` | `<偏差>` | `<动作>` | `<备注>` |
+| 优先级 | ID | 任务项 | 依赖 | 目标版本 | 状态 |
+| --- | --- | --- | --- | --- | --- |
+| P0 | INIT-001 | `<填写任务>` | — | `<版本>` | 未开始 |
+
+> **依赖列格式（FIX-225）**：逗号分隔的 task ID（如 `FIX-162,DEC-090`）。`—` 表示无依赖。task-family 前缀（FIX/REL/AUDIT/REQ/SYSGAP/FEAT/VAL 等）是可解析的依赖 ID；cross-entity 引用（RISK/DEC/EVD 等）是描述性上下文，不阻塞执行。`task-priority-analysis` 工具（FIX-226）用此列计算 blocked/unblocked 状态。
 
 ## 使用规则
 

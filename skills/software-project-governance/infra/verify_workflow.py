@@ -17410,11 +17410,15 @@ No active P0/P1/P2 tasks. This temporary workspace validates install surface and
 | 需求ID | 描述 | 来源 | 优先级 | 关联任务 | 状态 | 验证方式 |
 |--------|------|------|--------|---------|------|---------|
 
-## 变更控制
+## 变更控制（临时任务纳入机制）
 
-**标准路径**: 变更提出 → 优先级判定 → 版本适配 → 冲突检查 → 创建 task
+### 标准路径（FIX-228 实质化）
+变更提出 → **依赖分析**（运行 `task-priority-analysis`，检查新任务是否阻塞/被阻塞） → **优先级判定**（P0/P1/P2，结合当前 in-flight 任务和版本依赖链） → **冲突检查**（是否与 in-flight 任务修改相同文件） → **版本适配**（确定目标版本） → 创建 task → 执行
 
-**快速通道**: 最小入账 → 立即执行 → 事后补齐 → Gate 审计
+### 快速通道（仅限治理记录范畴——.governance/ 文件修改）
+最小入账（plan-tracker 加行） → 立即执行 → 事后补齐（evidence-log + check-governance） → Gate 审计
+
+> **FIX-228 规则**：快速通道仅适用于 `.governance/` 治理记录修改（不涉及产品代码）。任何涉及产品代码（skills/**）的新任务 MUST 走标准路径——依赖分析 + 优先级判定 + 冲突检查不得跳过。
 """
 
 
@@ -18870,6 +18874,35 @@ def cmd_loop_telemetry(args):
     _format_telemetry(report, json_out=getattr(args, "json", False))
 
 
+def cmd_task_priority_analysis(args):
+    """Thin entry — delegates to infra/task_priority.py (FIX-226 / 0.71.0).
+
+    Reads .governance/plan-tracker.md via HOST_PROJECT_ROOT (never PLUGIN_HOME;
+    RISK-040 dual-root discipline) and delegates parse → compute → format to the
+    pure task_priority module. All logic lives there; this entry is argparse
+    glue + I/O (RISK-039 thin-entry discipline). Exits non-zero on a missing
+    plan-tracker, a parse error, or a dependency cycle (the cycle is still
+    printed so the user can see it before the non-zero exit).
+    """
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    from task_priority import parse_task_dependencies, compute_unblocked_tasks, format_report
+    pt = SAMPLE_PATH  # HOST_PROJECT_ROOT / ".governance" / "plan-tracker.md"
+    if not pt.exists():
+        print(f"task-priority-analysis: plan-tracker.md not found at {pt}", file=sys.stderr)
+        sys.exit(2)
+    try:
+        report = compute_unblocked_tasks(parse_task_dependencies(pt.read_text(encoding="utf-8")))
+    except Exception as exc:  # parse failure surface — keep entry thin, no recovery here
+        print(f"task-priority-analysis: parse error: {exc}", file=sys.stderr)
+        sys.exit(2)
+    print(format_report(report))
+    if report.cycles:
+        sys.exit(1)
+
+
 def cmd_check_duplicate_code(args):
     """Run REQ-101 ArchGuard source/projection duplicate-code guard (advisory in 0.58.0)."""
     try:
@@ -20094,6 +20127,12 @@ def main(argv=None):
     subparsers.add_parser("check-archive-integrity",
                           help="Check archive integrity (SYSGAP-030 Check 27)")
 
+    # task-priority-analysis (FIX-226 / AUDIT-141 / DEC-134)
+    subparsers.add_parser(
+        "task-priority-analysis",
+        help="Parse plan-tracker dependencies, build DAG, recommend next task (FIX-226)",
+    )
+
     args = parser.parse_args(parser_argv)
     if args.project_root and explicit_project_root is None:
         explicit_project_root = args.project_root
@@ -20173,6 +20212,7 @@ def main(argv=None):
         "generate-deterministic-scaffold": cmd_generate_deterministic_scaffold,
         "check-locks": cmd_check_agent_locks,
         "check-archive-integrity": cmd_check_archive_integrity,
+        "task-priority-analysis": cmd_task_priority_analysis,
     }
 
     cmd = args.command or "verify"

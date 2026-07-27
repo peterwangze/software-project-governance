@@ -544,14 +544,14 @@ class LoopRuntimeClaimTests(unittest.TestCase):
             "capability": "experimental_scaffolding", "runtime_activation": "NOT_MET",
             "migration_validity": "NOT_MET", "criteria_2_3_4_5_6": "PARTIAL",
             "criterion_7": "NOT_PROVEN", "criterion_8": "MET-NARROW",
-            "identity_attestation": "IDENTITY_ATTESTATION_PENDING",
+            "identity_attestation": "IDENTITY_ATTESTATION_FIXTURE_PASS",
             "identity_contract": "loop-identity-attestation/v1",
             "aggregate_contract": "loop-claim-aggregate/v1",
             "identity_scope": "FIXTURE_ONLY",
             "release_authorized": False,
             "performance_budget_status": "PERFORMANCE_BUDGET_PENDING",
             "authority_ids": ["AUDIT-133", "EVD-707", "DEC-104"],
-            "open_risks": ["RISK-037", "RISK-042"], "policy_sha256": _policy_digest(policy),
+            "open_risks": [], "policy_sha256": _policy_digest(policy),
             "source_records": [{
                 "record_id": "TEST-AUTHORITY", "path": ".governance/plan-tracker.md",
                 "line_prefix": "| TEST-AUTHORITY |",
@@ -1526,7 +1526,6 @@ class LoopRuntimeFix215ContractTests(unittest.TestCase):
         stack, product, plugin, host, _, authority = fixture._roots()
         self.addCleanup(stack.cleanup)
         self.addCleanup(fixture.doCleanups)
-        authority["identity_attestation"] = "IDENTITY_ATTESTATION_PENDING"
         (plugin / "core/loop-runtime-claim-authority.json").write_text(
             json.dumps(authority), encoding="utf-8"
         )
@@ -1557,7 +1556,6 @@ class LoopRuntimeFix215ContractTests(unittest.TestCase):
         stack, product, plugin, host, _, authority = fixture._roots()
         self.addCleanup(stack.cleanup)
         self.addCleanup(fixture.doCleanups)
-        authority["identity_attestation"] = "IDENTITY_ATTESTATION_PENDING"
         (plugin / "core/loop-runtime-claim-authority.json").write_text(json.dumps(authority), encoding="utf-8")
         (product / "docs/new.md").write_text("Loop scheduler is operational.\n", encoding="utf-8")
         payload = fixture._scan(product, plugin, host).as_s1_dict()

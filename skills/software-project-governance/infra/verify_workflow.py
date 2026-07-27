@@ -14076,8 +14076,15 @@ def cmd_check_governance(args):
             print(f"│  [FAIL] ... {len(claim_report.findings) - 20} more finding(s)")
     else:
         print("│  [PASS] complete semantic inventory; zero skip/truncate")
-    all_issues += 1
-    print(f"│  [FAIL] {IDENTITY_ATTESTATION_PENDING}")
+    identity = _run_identity_attestation_fixture_only()
+    identity_verdict = identity["verdict"]
+    if identity_verdict == "PASS":
+        print(f"│  [PASS] identity attestation (fixture_only staged_index): {identity_verdict}")
+    else:
+        all_issues += len(identity["issues"])
+        for issue in identity["issues"]:
+            print(f"│  [FAIL] {issue}")
+    print(f"│  identity_verdict={identity_verdict}; phase={identity['phase']}")
     print("└──────────────────────────────────────────────────────┘")
 
     # ── Summary ──
@@ -17747,18 +17754,104 @@ def _loop_runtime_claim_context(scan_mode):
     )
 
 
+def _run_identity_attestation_fixture_only():
+    """Run the independent three-root identity attestation in fixture_only mode.
+
+    FIX-200: the governance (and release) gate must run the real identity
+    attestation instead of hard-coding ``IDENTITY_ATTESTATION_PENDING``.  In a
+    governance check there is no release candidate commit, so the attestation
+    runs as a ``staged_index`` fixture (mirroring the release gate's
+    ``write_path=None`` + ``compare_path=None`` rehearsal path) over the current
+    Git index of the product and plugin roots.
+
+    Returns a dict with ``verdict`` (``"PASS"`` on success, otherwise the real
+    failure verdict), ``issues`` (list of human-readable identity issue
+    strings, empty when the verdict is PASS), and ``phase``.  Any failure to
+    build the attestation (missing files, attestation module issues) degrades
+    gracefully to the legacy PENDING behaviour with the underlying error
+    message, so the governance check never crashes on identity work.
+    """
+    plugin_home = PLUGIN_ROOT / "skills/software-project-governance"
+    policy_path = plugin_home / "core/loop-runtime-claim-allowlist.json"
+    try:
+        policy = json.loads(policy_path.read_text(encoding="utf-8"))
+        required_rows = policy.get("required_paths")
+        if not isinstance(required_rows, list):
+            raise IdentityAttestationError("SCHEMA_MISSING", "required_paths")
+        required_paths = [
+            (row.get("root_owner"), row.get("path"))
+            for row in required_rows
+        ]
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        return {
+            "verdict": "PENDING",
+            "phase": "staged_index",
+            "issues": [f"{IDENTITY_ATTESTATION_PENDING} (policy load failed: {exc})"],
+        }
+    except IdentityAttestationError as exc:
+        return {
+            "verdict": "PENDING",
+            "phase": "staged_index",
+            "issues": [f"{IDENTITY_ATTESTATION_PENDING} ({exc.code}: {exc.detail})"],
+        }
+
+    with tempfile.TemporaryDirectory(prefix="fix200-identity-") as temp_value:
+        snapshot_dir = Path(temp_value) / "snapshot"
+        try:
+            identity_report = attest_explicit_sources(
+                product_git_repo=str(PLUGIN_ROOT),
+                product_git_ref=":index",
+                product_prefix="",
+                plugin_git_repo=str(PLUGIN_ROOT),
+                plugin_git_ref=":index",
+                plugin_prefix="skills/software-project-governance",
+                host_root=str(HOST_PROJECT_ROOT),
+                snapshot_dir=str(snapshot_dir),
+                required_paths=required_paths,
+                phase="staged_index",
+                subject={"kind": "index", "sha": None},
+                scan_mode="product_release",
+            )
+        except IdentityAttestationError as exc:
+            return {
+                "verdict": "FAIL",
+                "phase": "staged_index",
+                "issues": [f"IDENTITY_ATTESTATION_FAIL: {exc.code}: {exc.detail}"],
+            }
+        except Exception as exc:  # graceful degradation: never crash the gate
+            return {
+                "verdict": "PENDING",
+                "phase": "staged_index",
+                "issues": [f"{IDENTITY_ATTESTATION_PENDING} (builder error: {type(exc).__name__}: {exc})"],
+            }
+    verdict = identity_report.get("identity_verdict", "UNKNOWN")
+    issues: list[str] = []
+    if verdict != "PASS":
+        issues.append(f"IDENTITY_ATTESTATION_{verdict}: independent source identity attestation did not pass")
+    return {"verdict": verdict, "phase": identity_report.get("phase", "staged_index"), "issues": issues}
+
+
 def _loop_runtime_claim_gate_detail(claim_report):
-    """Aggregate semantic evidence while keeping identity authorization pending."""
+    """Aggregate semantic evidence with a real identity attestation verdict.
+
+    FIX-200: instead of unconditionally appending the hard-coded
+    ``IDENTITY_ATTESTATION_PENDING`` issue, run the fixture-only identity
+    attestation and reflect its real verdict.  Only when the attestation does
+    not pass (or degrades to PENDING on builder error) is an identity issue
+    appended.
+    """
     issues = [
         f"{finding.code}: {finding.normalized_path} {finding.message}"
         for finding in claim_report.findings
     ]
-    issues.append(IDENTITY_ATTESTATION_PENDING)
+    identity = _run_identity_attestation_fixture_only()
+    identity_verdict = identity["verdict"]
+    issues.extend(identity["issues"])
     return {
-        "pass": False,
+        "pass": claim_report.verdict == "PASS" and identity_verdict == "PASS",
         "issues": issues,
         "boundary": (
-            f"semantic_verdict={claim_report.verdict}; identity_verdict=PENDING; "
+            f"semantic_verdict={claim_report.verdict}; identity_verdict={identity_verdict}; "
             f"inventory={claim_report.inventory.inventory_sha256}; "
             f"candidates={claim_report.inventory.candidate_count}; "
             f"parsed={claim_report.parsed_candidates}; skip={claim_report.skipped_candidates}; "

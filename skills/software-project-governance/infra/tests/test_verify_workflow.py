@@ -62,7 +62,11 @@ class LoopRuntimeClaimAdapterTests(unittest.TestCase):
             self.assertEqual(vw.PLUGIN_ROOT / "skills/software-project-governance", context.plugin_home)
             self.assertEqual(vw.HOST_PROJECT_ROOT, context.host_root)
 
-    def test_identity_attestation_pending_keeps_aggregate_gate_non_green(self):
+    def test_identity_attestation_verdict_drives_aggregate_gate(self):
+        """FIX-200: the gate runs the real identity attestation instead of
+        hard-coding IDENTITY_ATTESTATION_PENDING.  A PASS attestation with a
+        PASS semantic report yields a green gate; a non-PASS attestation
+        appends the real identity issue and fails the gate."""
         report = SimpleNamespace(
             verdict="PASS",
             findings=[],
@@ -71,10 +75,24 @@ class LoopRuntimeClaimAdapterTests(unittest.TestCase):
             skipped_candidates=0,
             truncated_candidates=0,
         )
-        detail = vw._loop_runtime_claim_gate_detail(report)
+        pass_result = {"verdict": "PASS", "phase": "staged_index", "issues": []}
+        with patch.object(vw, "_run_identity_attestation_fixture_only", return_value=pass_result):
+            detail = vw._loop_runtime_claim_gate_detail(report)
+        self.assertTrue(detail["pass"])
+        self.assertEqual([], detail["issues"])
+        self.assertIn("identity_verdict=PASS", detail["boundary"])
+
+        fail_result = {
+            "verdict": "FAIL", "phase": "staged_index",
+            "issues": ["IDENTITY_ATTESTATION_FAIL: REQUIRED_ROOT_UNAVAILABLE: missing"],
+        }
+        with patch.object(vw, "_run_identity_attestation_fixture_only", return_value=fail_result):
+            detail = vw._loop_runtime_claim_gate_detail(report)
         self.assertFalse(detail["pass"])
-        self.assertEqual([vw.IDENTITY_ATTESTATION_PENDING], detail["issues"])
-        self.assertIn("identity_verdict=PENDING", detail["boundary"])
+        self.assertIn("IDENTITY_ATTESTATION_FAIL: REQUIRED_ROOT_UNAVAILABLE: missing", detail["issues"])
+        self.assertIn("identity_verdict=FAIL", detail["boundary"])
+        # The hard-coded PENDING string must never appear for a real verdict.
+        self.assertNotIn(vw.IDENTITY_ATTESTATION_PENDING, detail["issues"])
 
     def test_standalone_semantic_command_does_not_require_identity(self):
         report = SimpleNamespace(verdict="PASS", as_dict=lambda: {"verdict": "PASS"})

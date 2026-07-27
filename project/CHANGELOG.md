@@ -2,6 +2,39 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.71.0] - 2026-07-27
+
+### 0.71.0 - systematic UX fixes for entry/loop/task-planning（MINOR）
+
+0.71.0 是 MINOR 发布，完成 FIX-222~229 系统化 UX 修复：针对用户反馈的真实治理断裂——bootstrap 入口鸡生蛋（SYSGAP-047）、task-completion 推荐机械取最高优先级不分析依赖（AUDIT-140）、任务依赖与优先级系统三重断裂（AUDIT-141）。三份独立分析报告（sysgap-047/audit-140/audit-141）先定位根因，再分别修复：(1) 入口——AGENTS.md bootstrap 第一动作增加 3 方法定位 plugin_home（file: 路径推导 / dev fallback / 显式参数），消除 `<plugin_home>` 鸡生蛋（FIX-222）；(2) 循环——M7.4 step 6 + interaction-boundary.md:217 把 task-completion 从"机械取最高优先级"改为"依赖分析→推荐 next→AskUserQuestion"（FIX-223），step 4.6 增加 T1-T4 确定性 review 复审触发器（NEEDS_CHANGE→MUST 复审不问、APPROVED→终态、BLOCKED→escalation，FIX-224）；(3) 任务规划——plan-tracker 模板升级（`依赖` 列机器可解析格式 + `workflow_model`/`permission_mode` 字段，FIX-225），新增 `task_priority.py` 纯 DAG 解析器 + `compute_unblocked_tasks` + 环检测 + `task-priority-analysis` CLI 子命令（57 测试，FIX-226），behavior-protocol 依赖分析替代机械最高优先级（FIX-227），change-control stub 实质化为依赖分析+优先级+冲突检查（产品代码强制，FIX-228），change-impact-checklist 增加任务级依赖/冲突分析段（FIX-229）。但**不关闭 RISK-036/RISK-039/RISK-040/RISK-041**：这四个风险各自独立关闭标准（官方市场操作 / ArchGuard 外部验证 / 入口确定性宿主验证 / release-lineage 历史 tag 处置）未满足。版本投影 0.70.0 -> 0.71.0 全 PASS（M-set，纯字符串替换：plugins/marketplace/package.json/SKILL/manifest/plan-tracker/4 hooks/`verify_workflow.py` REQUIRED_SNIPPETS 版本钉）。
+
+### Added
+
+- **FIX-222 bootstrap 入口确定性**：`AGENTS.md` bootstrap 第一动作增加 3 方法定位 plugin_home——(a) 平台 skill `file:` 路径推导（最可靠，主流平台支持）、(b) dev fallback（开发环境 `skills/` 目录）、(c) 显式参数（用户传入）。所有原 `<plugin_home>` 引用从"来自 resolve_entry.py"改为"见上方 bootstrap 第一动作"，消除鸡生蛋（需先知道 plugin_home 才能运行获取 plugin_home 的脚本）。SYSGAP-047 分析报告归档 `docs/requirements/sysgap-047-entry-bootstrap-paradox-0.71.0.md`。
+- **FIX-223 task-completion 依赖分析推荐**：`behavior-protocol.md` M7.4 step 6 增强——task 完成后 MUST 运行依赖分析（`task-priority-analysis`）→ 推荐下一可执行任务 → 用 AskUserQuestion 呈现 → 不得直接结束。`interaction-boundary.md:217` 同步修正，从"机械取最高优先级未完成"改为"依赖分析推荐"。AUDIT-140 分析报告归档 `docs/requirements/audit-140-loop-runtime-wiring-gap-0.71.0.md`。
+- **FIX-224 review 复审确定性触发器**：M7.4 step 4.6 增加 T1-T4 确定性触发器——T1（NEEDS_CHANGE 且 round<3 → MUST 立即 spawn 同一 Reviewer 复审，round+1，不输出"是否需要复审"问句）、T2（APPROVED/APPROVED_WITH_NOTES → 通过终态，后者 `unresolved_blockers=0`）、T3（BLOCKED → escalation 闭链终态）、T4（round>3 仍 NEEDS_CHANGE → MUST 转 BLOCKED，不得无限循环）。Check 21/30 违反检测同步说明。
+- **FIX-225 plan-tracker 模板结构化依赖**：`core/templates/plan-tracker.md` 升级——新增 `workflow_model`/`permission_mode` 配置字段、`依赖` 列从自由文本升级为机器可解析格式（逗号分隔 task ID）、依赖格式规范说明。任务行新增结构化依赖数据，使机器可建依赖图。
+- **FIX-226 task-priority-analysis 工具**：新增 `infra/task_priority.py`（861 行）纯 DAG 解析器——`parse_task_dependencies`（从 plan-tracker 解析 task 表为 DAG，区分 task-family vs cross-entity 引用，遵循 FIX-171 先例）+ `compute_unblocked_tasks`（计算无未完成依赖的可执行任务）+ 环检测（cycle detection，避免循环依赖死锁）+ `format_report`（人类可读报告）。`verify_workflow.py` 新增 `task-priority-analysis` CLI 子命令（薄入口，逻辑全在纯模块）。57 个测试覆盖解析/计算/环检测/CLI。
+- **FIX-227 behavior-protocol 依赖分析替代机械优先级**：behavior-protocol M7.4 step 6 + interaction-boundary.md:217 依赖分析替代机械最高优先级（与 FIX-223 同 commit，此 FIX 显式登记行为协议修订范畴）。
+- **FIX-228 change-control 实质化**：`change-control` reference 从 2 行 stub 升级为实质步骤——变更提出 → **依赖分析**（运行 `task-priority-analysis`，检查新任务是否阻塞/被阻塞）→ **优先级判定**（P0/P1/P2，结合 in-flight 任务与版本依赖链）→ **冲突检查**（是否与 in-flight 任务修改相同文件）→ **版本适配** → 创建 task → 执行。产品代码变更 MUST 走完整依赖分析+优先级+冲突检查。
+- **FIX-229 change-impact-checklist 任务级分析**：`change-impact-checklist.md` 新增 2b 任务级依赖/冲突分析段——产品代码变更必须在影响评估中包含任务级依赖图分析与跨任务冲突检查。
+- 版本声明与 e2e fixture 指针从 0.70.0 推进到 0.71.0（M-set：plugins、marketplace、package.json、source/e2e SKILL frontmatter、manifest、plan-tracker、四个 source hooks，以及 `verify_workflow.py` 的 `REQUIRED_SNIPPETS` 版本钉）。
+- `project/CHANGELOG.md` 新增 0.71.0 条目。
+
+### Validation
+
+- DEC-134 授权（FIX-222~229 系统化 UX 修复），EVD-852。
+- `task_priority.py` 57 个测试覆盖 DAG 解析 / unblocked 计算 / 环检测 / CLI 全 PASS。
+- 3 份独立分析报告（sysgap-047/audit-140/audit-141）先定位根因再修复，遵循治理改进"分析先行"原则。
+- `check-version-consistency` PASS（13 文件版本声明一致）；`check-projection-sync` PASS（13 投影同步）。
+
+### Boundaries
+
+- 0.71.0 **RISK-036/039/040/041 remain open**。系统化 UX 修复推进入口确定性与任务规划可用性，但这四个风险各自独立关闭标准（官方市场操作 / ArchGuard 外部宿主验证 / 入口确定性宿主验证 / release-lineage 历史 tag 处置）均未满足。
+- 0.71.0 **does not close RISK-036/RISK-039/RISK-040/RISK-041**（official marketplace / ArchGuard external validation / entry determinism host validation / release lineage historical tags 各自独立关闭标准未满足）。
+- 不声明 zcode official approval、marketplace approval、curated listing、universal/full runtime support、external first-session pilot success，不关闭 RISK-036/RISK-039/RISK-040/RISK-041，不声明 1.0.0 production-ready。
+- MINOR bump 来自系统化 UX 修复（入口/循环/任务规划），不引入 breaking runtime API。
+
 ## [0.70.0] - 2026-07-26
 
 ### 0.70.0 - verify_workflow Phase 5 extraction（MINOR）

@@ -32,7 +32,9 @@ has_approved_review_evidence() {
     local evidence_file="$REPO_ROOT/.governance/evidence-log.md"
     [ -f "$evidence_file" ] || return 1
 
-    grep -Eq "^\|[[:space:]]*REVIEW-[^|]*$task_id[^|]*\|[[:space:]]*$task_id[[:space:]]*\|.*\|[[:space:]]*(APPROVED_WITH_NOTES|APPROVED|通过|批准)[[:space:]]*\|[[:space:]]*$" "$evidence_file" 2>/dev/null
+    # LC_ALL=C: multibyte locale (e.g. LC_CTYPE=C.UTF-8) 下 4 字节 UTF-8/emoji 会使
+    # [^|]*/.* 字符类遍历失败导致假阴性；LC_ALL=C 强制字节模式，结果 locale 无关（FIX-239）。
+    LC_ALL=C grep -Eq "^\|[[:space:]]*REVIEW-[^|]*$task_id[^|]*\|[[:space:]]*$task_id[[:space:]]*\|.*\|[[:space:]]*(APPROVED_WITH_NOTES|APPROVED|通过|批准)[[:space:]]*\|[[:space:]]*$" "$evidence_file" 2>/dev/null
 }
 
 resolve_spg_home_candidate() {
@@ -134,13 +136,15 @@ is_claude_bootstrap_self_upgrade() {
     fi
 
     local staged_plan_ver
-    staged_plan_ver=$(git show ":.governance/plan-tracker.md" 2>/dev/null | grep -E "工作流版本" | head -1 | sed -E "s/.*工作流版本[^0-9]*([0-9]+\.[0-9]+\.[0-9]+).*/\1/")
+    # LC_ALL=C: multibyte locale 下 4 字节 emoji 会污染 sed 版本提取输出（残留字节），
+    # 强制字节模式保证版本提取干净（FIX-239）。
+    staged_plan_ver=$(git show ":.governance/plan-tracker.md" 2>/dev/null | grep -E "工作流版本" | head -1 | LC_ALL=C sed -E "s/.*工作流版本[^0-9]*([0-9]+\.[0-9]+\.[0-9]+).*/\1/")
     if [ "$staged_plan_ver" != "$source_ver" ]; then
         return 1
     fi
 
     local head_plan_ver
-    head_plan_ver=$(git show "HEAD:.governance/plan-tracker.md" 2>/dev/null | grep -E "工作流版本" | head -1 | sed -E "s/.*工作流版本[^0-9]*([0-9]+\.[0-9]+\.[0-9]+).*/\1/" || true)
+    head_plan_ver=$(git show "HEAD:.governance/plan-tracker.md" 2>/dev/null | grep -E "工作流版本" | head -1 | LC_ALL=C sed -E "s/.*工作流版本[^0-9]*([0-9]+\.[0-9]+\.[0-9]+).*/\1/" || true)
     if [ -z "$head_plan_ver" ] || [ "$head_plan_ver" = "$source_ver" ]; then
         return 1
     fi

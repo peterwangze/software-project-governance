@@ -2,7 +2,7 @@
 # AUDIT-140: Loop Engineering 生产接线缺口——process_gate_result 调用点仍为 0
 
 > **触发**: 用户反馈"Developer 修改检视意见之后未触发复审" + "单点任务完成后直接结束未衔接后续推荐"
-> **关联**: AUDIT-133（原"call sites = 0"发现）, FEAT-006（gate processor 实现）, ADR-014 §6（四接线点设计）, RISK-042（已关闭 DEC-133——可能需修正）, DEC-104
+> **关联**: AUDIT-133（原"call sites = 0"发现）, FEAT-006（gate processor 实现）, ADR-014 §6（四接线点设计）, RISK-042（评估详见 §1.4）, DEC-104
 
 ## 1. 核心发现
 

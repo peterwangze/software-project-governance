@@ -19011,9 +19011,21 @@ def cmd_task_priority_analysis(args):
     Reads .governance/plan-tracker.md via HOST_PROJECT_ROOT (never PLUGIN_HOME;
     RISK-040 dual-root discipline) and delegates parse → compute → format to the
     pure task_priority module. All logic lives there; this entry is argparse
-    glue + I/O (RISK-039 thin-entry discipline). Exits non-zero on a missing
-    plan-tracker, a parse error, or a dependency cycle (the cycle is still
-    printed so the user can see it before the non-zero exit).
+    glue + I/O (RISK-039 thin-entry discipline). Exits non-zero (2) on a
+    missing plan-tracker or a parse error.
+
+    Cycle tolerance (FIX-237.2/237.3): a dependency cycle is a WARNING, not an
+    ERROR — the report is always printed (best-effort analysis) with a
+    ``CYCLE DETECTED (WARNING)`` banner, and the default exit code is 0 (the
+    cycle no longer blocks the analysis output). Pass ``--strict`` to restore
+    the previous fail-closed behavior: exit 1 when the dependency graph
+    contains a cycle.
+
+    Published-version filtering (FIX-237.1/237.2): no released-version
+    parameter is needed — the 237.1 drift backfill marks published tasks ✅ in
+    the plan-tracker and ``_status_is_completed`` excludes them from
+    Unblocked / Recommended next; release rows with a terminal marker
+    (⛔/⏸/🚧/🛑/📋/…) are likewise excluded by the third-class status filter.
     """
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -19030,7 +19042,9 @@ def cmd_task_priority_analysis(args):
         print(f"task-priority-analysis: parse error: {exc}", file=sys.stderr)
         sys.exit(2)
     print(format_report(report))
-    if report.cycles:
+    # Cycle tolerance (FIX-237.3): default exit 0 + WARN banner; `--strict`
+    # restores the previous fail-closed exit 1 on a cycle.
+    if getattr(args, "strict", False) and report.cycles:
         sys.exit(1)
 
 
@@ -20259,9 +20273,15 @@ def main(argv=None):
                           help="Check archive integrity (SYSGAP-030 Check 27)")
 
     # task-priority-analysis (FIX-226 / AUDIT-141 / DEC-134)
-    subparsers.add_parser(
+    tpa_p = subparsers.add_parser(
         "task-priority-analysis",
         help="Parse plan-tracker dependencies, build DAG, recommend next task (FIX-226)",
+    )
+    tpa_p.add_argument(
+        "--strict",
+        action="store_true",
+        help="Exit 1 when the dependency graph contains a cycle (default: "
+             "exit 0 + WARNING banner; FIX-237.3 cycle tolerance)",
     )
 
     args = parser.parse_args(parser_argv)

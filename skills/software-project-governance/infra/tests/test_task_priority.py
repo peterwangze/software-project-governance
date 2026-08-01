@@ -10,6 +10,10 @@ analysis tool. The single most important properties proven here:
     task-family IDs (FIX/REL/AUDIT/REQ/...) block.
   - **Status semantics** — ✅ = completed; any other emoji (⏳/🔴/🚧/⛔/⏸) =
     active, and active tasks block their dependents.
+  - **Third-class status filter** — only ⏳ (pending) rows and rows WITHOUT a
+    leading status marker may enter Unblocked / Recommended next; ⛔/⏸/🔴/🚧
+    terminal rows are excluded even when dependency-satisfied (FIX-237.2 /
+    ADR-017 §4.4 P1-3).
   - **Unblocked** — a not-completed task whose ALL task-family deps are
     completed (or which has none) is unblocked / ready to work.
   - **Blocked** — a not-completed task with ≥1 incomplete task-family dep is
@@ -18,6 +22,8 @@ analysis tool. The single most important properties proven here:
     target version then task ID, is the top pick.
   - **Cycle detection** — a dependency cycle (A→B→A) is detected and reported
     without infinite-looping; the report still produces best-effort analysis.
+    A cycle is a WARNING (``cycle_warning`` flag + WARN banner), never an
+    ERROR exit (FIX-237.2 cycle tolerance).
   - **Robustness** — the parser survives the malformed real-world rows:
     duplicated leading ``**P0**`` cells, free-prose 闭环路径 cells containing
     literal ``|``, ``—`` empty deps, and blank lines inside a table.
@@ -31,6 +37,8 @@ Run:
 """
 
 import sys
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -61,10 +69,10 @@ from task_priority import (  # noqa: E402  (import after sys.path setup)
 #   FIX-102 DONE-B   : ✅ completed, depended-on by READY     → completed (unblocks READY)
 #   FIX-103 READY    : ⏳ pending, single dep on DONE-B (✅)   → unblocked (dep satisfied)
 #   FIX-104 NODEPS   : ⏳ pending, — deps                     → unblocked (no deps)
-#   FIX-105 BLOCKER  : 🔴 active (no task deps itself)         → unblocked (no deps; 🔴 is just a label,
-#                                              NOT a dependency block — per spec, unblocked is about
-#                                              dependency satisfaction, not status emoji). Acts as a
-#                                              blocking SOURCE for FIX-106/FIX-109.
+#   FIX-105 BLOCKER  : 🔴 blocked-marker row (no task deps itself) → NOT
+#                                              unblocked (third-class status filter: 🔴 leading marker
+#                                              = non-executable candidate, ADR-017 §4.4 P1-3). Still
+#                                              acts as a blocking SOURCE for FIX-106/FIX-109.
 #   FIX-106 READY2   : ⏳ pending, dep on FIX-105 (🔴)        → blocked (FIX-105 not completed)
 #   FIX-107 XENTITY  : ⏳ pending, ONLY cross-entity refs      → unblocked (cross-entity never blocks)
 #   FIX-108 MIXED    : ⏳ pending, one ✅ task dep + RISK ref   → unblocked (task dep done, RISK ignored)
@@ -228,11 +236,13 @@ class TestComputeUnblocked(unittest.TestCase):
 
     def test_unblocked_includes_no_deps_and_satisfied_deps(self):
         unblocked_ids = {t.task_id for t in self.report.unblocked}
-        # Unblocked (not completed + all task-family deps satisfied or none):
-        #   FIX-103 (dep FIX-102 ✅), FIX-104 (no deps), FIX-105 (no deps;
-        #     🔴 is a status label, NOT a dependency block), FIX-107 (only
+        # Unblocked (not completed + all task-family deps satisfied or none
+        # + status candidate-eligible):
+        #   FIX-103 (dep FIX-102 ✅), FIX-104 (no deps), FIX-107 (only
         #     cross-entity refs), FIX-108 (FIX-102 ✅ + RISK ignored).
-        self.assertEqual(unblocked_ids, {"FIX-103", "FIX-104", "FIX-105", "FIX-107", "FIX-108"})
+        # FIX-105 (🔴) is NOT unblocked — the third-class status filter
+        # excludes it even though its dependencies are satisfied.
+        self.assertEqual(unblocked_ids, {"FIX-103", "FIX-104", "FIX-107", "FIX-108"})
 
     def test_blocked_lists_specific_blocking_deps(self):
         blocked_by_id = {bt.task.task_id: bt for bt in self.report.blocked}
@@ -272,12 +282,13 @@ class TestRecommendedNext(unittest.TestCase):
 
     def test_recommended_next_sorted_by_priority(self):
         report = compute_unblocked_tasks(parse_task_dependencies(_SAMPLE_TABLE))
-        # Unblocked set: FIX-103(P0,0.2.0), FIX-104(P2,0.3.0), FIX-105(P2,0.2.0),
+        # Unblocked set: FIX-103(P0,0.2.0), FIX-104(P2,0.3.0),
         #                FIX-107(P1,0.4.0), FIX-108(P2,0.4.0).
+        # FIX-105 (🔴) is filtered out by the third-class status filter.
         # Sorted by priority then version: P0→FIX-103; P1→FIX-107;
-        #   P2→FIX-105(0.2.0) < FIX-104(0.3.0) < FIX-108(0.4.0).
+        #   P2→FIX-104(0.3.0) < FIX-108(0.4.0).
         ids = [t.task_id for t in report.recommended_next]
-        self.assertEqual(ids, ["FIX-103", "FIX-107", "FIX-105", "FIX-104", "FIX-108"])
+        self.assertEqual(ids, ["FIX-103", "FIX-107", "FIX-104", "FIX-108"])
 
     def test_top_pick_is_first(self):
         report = compute_unblocked_tasks(parse_task_dependencies(_SAMPLE_TABLE))
@@ -600,6 +611,271 @@ class TestPurityContract(unittest.TestCase):
         # entries the module pulled in via its own imports (best-effort).
         for name in ("re", "unicodedata", "dataclasses"):
             self.assertIn(name, sys.modules)
+
+
+# ─── Fixture: third-class status filter named cases (FIX-237.2 / ADR-017) ────
+#
+# Every non-control row has NO dependencies (—) so the ONLY reason it is not
+# unblocked is the third-class status filter: rows whose status leading marker
+# is ⛔/⏸/🔴/🚧 are non-executable candidates even when dependency-satisfied.
+# Named cases mirror the live plan-tracker rows that previously polluted the
+# Unblocked list (AUDIT-142 diagnosis R0 实测, ADR-017 §4.4 P1-3):
+#   SYSGAP-046 (🚧 historical in-progress terminal), FIX-197 (⏸ SPLIT_TO),
+#   REL-058 (⛔ BLOCKED), AUDIT-136 (⛔ BLOCKED_REVIEW_FUSE),
+#   FIX-203 (⛔ BLOCKED_PERFORMANCE), FIX-105 (🔴 blocked).
+# Controls: FIX-777 (⏳ pending → eligible), FIX-778 (✅ completed → excluded
+# via _status_is_completed, never reaches the candidate filter).
+_NON_EXECUTABLE_TABLE = """\
+# Non-executable status fixtures
+
+### 优先级一览
+
+| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |
+|--------|----|------|------|---------|---------|------|
+| **P1** | SYSGAP-046 | historical in-progress terminal (named case) | — | 0.65.3 | closed | 🚧 前向门禁完成，历史处置待 DEC (2026-07-11) |
+| **P0** | FIX-197 | split/held terminal (named case) | — | 0.66.1 | closed | ⏸ SPLIT_TO FIX-199/FIX-200 (2026-07-13) |
+| **P0** | REL-058 | blocked release incident (named case) | — | 0.66.1 | closed | ⛔ BLOCKED — release incident (2026-07-17) |
+| **P0** | AUDIT-136 | blocked review fuse (named case) | — | 0.66.2（暂定） | closed | ⛔ BLOCKED_REVIEW_FUSE——已拆分至 AUDIT-137/138 |
+| **P1** | FIX-203 | blocked performance terminal | — | 0.66.1 | closed | ⛔ BLOCKED_PERFORMANCE |
+| **P2** | FIX-105 | 🔴 blocked-marker row | — | 0.2.0 | open | 🔴 阻塞 |
+| **P0** | FIX-777 | pending control row | — | 0.3.0 | open | ⏳ 待执行 |
+| **P2** | FIX-778 | completed control row | — | 0.1.0 | closed | ✅ 完成 (2026-01-01) |
+"""
+
+
+class TestThirdClassStatusFilter(unittest.TestCase):
+    """Third-class status filter — ⛔/⏸/🔴/🚧 rows never enter unblocked / next.
+
+    FIX-237.2 / ADR-017 §4.4 P1-3: dependency satisfaction alone no longer
+    makes a row an executable candidate. The status leading marker must be ⏳
+    (pending/active) or absent (unmarked plain-text status). Terminal /
+    non-executable markers (⛔ blocked, ⏸ split/held, 🔴 blocked, 🚧 historical
+    in-progress) are excluded even when dependency-satisfied.
+    """
+
+    def setUp(self):
+        self.tasks = parse_task_dependencies(_NON_EXECUTABLE_TABLE)
+        self.report = compute_unblocked_tasks(self.tasks)
+        self.unblocked_ids = {t.task_id for t in self.report.unblocked}
+        self.recommended_ids = [t.task_id for t in self.report.recommended_next]
+        self.excluded_ids = {t.task_id for t in self.report.non_executable}
+        self.completed_ids = {t.task_id for t in self.report.completed}
+
+    def test_named_non_executable_rows_excluded_from_unblocked(self):
+        for tid in ("SYSGAP-046", "FIX-197", "REL-058", "AUDIT-136", "FIX-203", "FIX-105"):
+            self.assertNotIn(tid, self.unblocked_ids, f"{tid} must not be unblocked")
+
+    def test_named_non_executable_rows_excluded_from_recommended(self):
+        for tid in ("SYSGAP-046", "FIX-197", "REL-058", "AUDIT-136", "FIX-203", "FIX-105"):
+            self.assertNotIn(tid, self.recommended_ids, f"{tid} must not be recommended")
+
+    def test_only_pending_control_is_unblocked(self):
+        self.assertEqual(self.unblocked_ids, {"FIX-777"})
+        self.assertEqual(self.recommended_ids, ["FIX-777"])
+
+    def test_non_executable_bucket_reports_excluded_rows(self):
+        self.assertEqual(self.excluded_ids, {"SYSGAP-046", "FIX-197", "REL-058", "AUDIT-136", "FIX-203", "FIX-105"})
+
+    def test_pending_row_still_eligible(self):
+        self.assertIn("FIX-777", self.unblocked_ids)
+        self.assertIn("FIX-777", self.recommended_ids)
+
+    def test_completed_row_still_excluded_by_is_completed(self):
+        self.assertIn("FIX-778", self.completed_ids)
+        self.assertNotIn("FIX-778", self.unblocked_ids)
+        self.assertNotIn("FIX-778", self.recommended_ids)
+        self.assertNotIn("FIX-778", self.excluded_ids)
+
+    def test_unmarked_plain_status_is_eligible(self):
+        # A status cell with no leading emoji marker (plain text) is eligible.
+        t = TaskDep("FIX-780", "P0", "待执行", (), (), "0.1.0")
+        report = compute_unblocked_tasks([t])
+        self.assertEqual([x.task_id for x in report.unblocked], ["FIX-780"])
+        self.assertEqual(report.non_executable, [])
+        self.assertEqual(report.recommended_next[0].task_id, "FIX-780")
+
+    def test_marked_blocked_row_with_blocking_deps_remains_blocked(self):
+        # A ⛔ row whose task-family dep is unknown cannot be proven complete →
+        # it stays in the Blocked list (dependency fact); blocked takes
+        # precedence over the non-executable bucket.
+        t = TaskDep("REL-900", "P0", "⛔ BLOCKED_BY FIX-999", ("FIX-999",), (), "0.1.0")
+        report = compute_unblocked_tasks([t])
+        self.assertEqual(len(report.blocked), 1)
+        self.assertEqual(report.blocked[0].task.task_id, "REL-900")
+        self.assertEqual(report.non_executable, [])
+        self.assertEqual(report.unblocked, [])
+
+    def test_clipboard_queued_marker_is_non_candidate(self):
+        # 📋 待启动 (queued-not-executable) — a leading marker that is not ⏳
+        # is non-candidate even with no dependencies (FIX-237.3 P3-2).
+        t = TaskDep("FIX-781", "P0", "📋 待启动", (), (), "0.1.0")
+        report = compute_unblocked_tasks([t])
+        self.assertEqual([x.task_id for x in report.non_executable], ["FIX-781"])
+        self.assertEqual(report.unblocked, [])
+
+    def test_stop_marker_is_non_candidate(self):
+        # 🛑 stopped — a leading marker that is not ⏳ is non-candidate
+        # (FIX-237.3 P3-2).
+        t = TaskDep("FIX-782", "P0", "🛑 停止", (), (), "0.1.0")
+        report = compute_unblocked_tasks([t])
+        self.assertEqual([x.task_id for x in report.non_executable], ["FIX-782"])
+        self.assertEqual(report.unblocked, [])
+
+    def test_empty_status_cell_is_eligible(self):
+        # Empty status cell → no leading marker → eligible (dependency
+        # analysis decides; FIX-237.3 P3-2).
+        t = TaskDep("FIX-783", "P0", "", (), (), "0.1.0")
+        report = compute_unblocked_tasks([t])
+        self.assertEqual([x.task_id for x in report.unblocked], ["FIX-783"])
+        self.assertEqual(report.non_executable, [])
+
+    def test_format_excluded_section_lists_filtered_rows(self):
+        out = format_report(self.report)
+        self.assertIn("Excluded (non-executable status)", out)
+        self.assertIn("`REL-058`", out)
+        self.assertIn("`SYSGAP-046`", out)
+        # The Unblocked section itself must not contain the filtered rows.
+        unblocked_section = out.split("## Unblocked (ready to work)", 1)[1].split("## Excluded (non-executable status)", 1)[0]
+        self.assertNotIn("REL-058", unblocked_section)
+        self.assertNotIn("FIX-197", unblocked_section)
+        self.assertIn("`FIX-777`", unblocked_section)
+
+
+class TestCycleWarning(unittest.TestCase):
+    """Cycle tolerance — cycles are a WARN, not an ERROR (FIX-237.2).
+
+    The dependency graph may still contain a cycle (or a future one); the
+    report must keep the cycle list for visibility but expose a
+    ``cycle_warning`` flag and format a WARNING banner — the analysis output
+    is best-effort and must not be blocked by the cycle.
+    """
+
+    def test_cycle_warning_flag_set_when_cycles_present(self):
+        a = TaskDep("FIX-A", "P0", "⏳", ("FIX-B",), (), "0.1.0")
+        b = TaskDep("FIX-B", "P0", "⏳", ("FIX-A",), (), "0.1.0")
+        report = compute_unblocked_tasks([a, b])
+        self.assertTrue(report.cycle_warning)
+        self.assertTrue(len(report.cycles) >= 1)
+
+    def test_cycle_warning_flag_false_when_acyclic(self):
+        report = compute_unblocked_tasks(parse_task_dependencies(_SAMPLE_TABLE))
+        self.assertFalse(report.cycle_warning)
+
+    def test_cycle_banner_is_warning_not_error(self):
+        a = TaskDep("FIX-A", "P0", "⏳", ("FIX-B",), (), "0.1.0")
+        b = TaskDep("FIX-B", "P0", "⏳", ("FIX-A",), (), "0.1.0")
+        out = format_report(compute_unblocked_tasks([a, b]))
+        self.assertIn("CYCLE DETECTED (WARNING)", out)
+        self.assertNotIn("(ERROR)", out)
+        # The cycle members are still listed (visibility preserved).
+        self.assertIn("FIX-A", out)
+        self.assertIn("FIX-B", out)
+
+    def test_cycle_does_not_block_best_effort_unblocked(self):
+        a = TaskDep("FIX-A", "P0", "⏳", ("FIX-B",), (), "0.1.0")
+        b = TaskDep("FIX-B", "P0", "⏳", ("FIX-A",), (), "0.1.0")
+        c = TaskDep("FIX-C", "P1", "⏳", (), (), "0.2.0")
+        report = compute_unblocked_tasks([a, b, c])
+        self.assertTrue(report.cycle_warning)
+        unblocked_ids = {t.task_id for t in report.unblocked}
+        self.assertIn("FIX-C", unblocked_ids)
+
+
+class TestBackwardCompatibility(unittest.TestCase):
+    """New report fields must not break existing consumers (FIX-237.2)."""
+
+    def test_new_fields_default_on_plain_constructor(self):
+        report = PriorityReport()
+        self.assertEqual(report.non_executable, [])
+        self.assertFalse(report.cycle_warning)
+
+    def test_old_style_keyword_constructor_still_works(self):
+        report = PriorityReport(
+            completed=[], blocked=[], unblocked=[], recommended_next=[],
+            total=0, dependency_graph={}, cycles=[],
+        )
+        self.assertEqual(report.non_executable, [])
+        self.assertFalse(report.cycle_warning)
+
+
+# ─── CLI integration fixtures (FIX-237.3 P2-1) ──────────────────────────────
+#
+# These tables are written to a TEMPORARY project root (never the real
+# .governance/) and read by ``verify_workflow.py task-priority-analysis
+# --project-root <tmp>`` via subprocess.
+_CYCLIC_CLI_TABLE = """\
+# Priority fixture with a dependency cycle (FIX-237.3 CLI test)
+
+### 优先级一览
+
+| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |
+|--------|----|------|------|---------|---------|------|
+| **P0** | FIX-991 | cycle node a | FIX-992 | 0.1.0 | open | ⏳ 待执行 |
+| **P0** | FIX-992 | cycle node b | FIX-991 | 0.1.0 | open | ⏳ 待执行 |
+| **P1** | FIX-993 | independent task | — | 0.2.0 | open | ⏳ 待执行 |
+"""
+
+_ACYCLIC_CLI_TABLE = """\
+# Priority fixture without a cycle (FIX-237.3 CLI test)
+
+### 优先级一览
+
+| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |
+|--------|----|------|------|---------|---------|------|
+| **P0** | FIX-991 | depends on b | FIX-992 | 0.1.0 | open | ⏳ 待执行 |
+| **P0** | FIX-992 | leaf task | — | 0.1.0 | open | ⏳ 待执行 |
+| **P1** | FIX-993 | independent task | — | 0.2.0 | open | ⏳ 待执行 |
+"""
+
+
+class TestTaskPriorityCliCycleTolerance(unittest.TestCase):
+    """CLI integration — cycle tolerance (FIX-237.3 P2-1).
+
+    These are subprocess-level integration tests: they run ``verify_workflow.py
+    task-priority-analysis --project-root <temp>`` against a TEMPORARY fixture
+    plan-tracker (the real ``.governance/`` is never touched). The CLI must
+    exit 0 with a CYCLE DETECTED (WARNING) banner by default when the
+    dependency graph contains a cycle, and exit 1 only under ``--strict``.
+    """
+
+    _CLI = Path(__file__).resolve().parent.parent / "verify_workflow.py"
+
+    def _run_cli(self, project_root, extra=()):
+        return subprocess.run(
+            [sys.executable, str(self._CLI), "task-priority-analysis",
+             "--project-root", str(project_root), *extra],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=120,
+        )
+
+    def _write_fixture(self, table):
+        tmp = tempfile.TemporaryDirectory(prefix="spg-tpa-cli-")
+        gov = Path(tmp.name) / ".governance"
+        gov.mkdir(parents=True, exist_ok=True)
+        (gov / "plan-tracker.md").write_text(table, encoding="utf-8")
+        self.addCleanup(tmp.cleanup)
+        return tmp.name
+
+    def test_cycle_defaults_to_exit_0_with_warning_banner(self):
+        root = self._write_fixture(_CYCLIC_CLI_TABLE)
+        proc = self._run_cli(root)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("CYCLE DETECTED (WARNING)", proc.stdout)
+        self.assertNotIn("(ERROR)", proc.stdout)
+        # Best-effort analysis still produced (independent task present).
+        self.assertIn("`FIX-993`", proc.stdout)
+
+    def test_cycle_strict_preserves_exit_1(self):
+        root = self._write_fixture(_CYCLIC_CLI_TABLE)
+        proc = self._run_cli(root, ("--strict",))
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("CYCLE DETECTED (WARNING)", proc.stdout)
+
+    def test_acyclic_fixture_exits_0_without_banner(self):
+        root = self._write_fixture(_ACYCLIC_CLI_TABLE)
+        proc = self._run_cli(root)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertNotIn("CYCLE DETECTED", proc.stdout)
 
 
 if __name__ == "__main__":

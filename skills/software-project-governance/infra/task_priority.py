@@ -12,6 +12,20 @@ free-text with no machine-parseable graph and no "what's unblocked" computation,
 so the behavior protocol could not honor its own rule (analyze dependencies
 before recommending next steps). This tool provides that analysis.
 
+**Third-class status filter (FIX-237.2 / ADR-017 §4.4 P1-3):** dependency
+satisfaction alone does NOT make a row an executable candidate. Only rows whose
+status leading marker is ⏳ (pending/active) — or which have no leading status
+marker at all — may enter ``Unblocked`` / ``Recommended next``. Rows with a
+terminal / non-executable leading marker (⛔ blocked, ⏸ split/held, 🔴 blocked,
+🚧 historical in-progress, 🛑 stopped, 📋 queued, ✅ completed) are excluded
+even when dependency-satisfied and reported in a separate ``non_executable``
+bucket.
+
+**Cycle tolerance (FIX-237.2):** a dependency cycle is a WARNING, not an ERROR.
+The report keeps the cycle list for visibility, sets the ``cycle_warning``
+flag, formats a ``CYCLE DETECTED (WARNING)`` banner, and still produces the
+best-effort analysis.
+
 **Purity contract (load-bearing):** this module imports ONLY the Python
 standard library. The compute functions (:func:`parse_task_dependencies`,
 :func:`compute_unblocked_tasks`, :func:`format_report`) perform NO file I/O and
@@ -153,6 +167,53 @@ def _status_is_completed(status_cell: str) -> bool:
     which means the task still blocks its dependents.
     """
     return _COMPLETED_EMOJI in status_cell
+
+
+# Third-class status filter (FIX-237.2 / ADR-017 §4.4 P1-3).
+#
+# A row may enter "Unblocked (ready to work)" / "Recommended next" ONLY when
+# its status leading marker is ⏳ (pending/active) or the cell has no leading
+# marker. Terminal / non-executable markers are excluded even when the row's
+# dependencies are satisfied, because the status records a deliberate stop
+# (blocked / split / held / historical in-progress terminal / completed) that
+# dependency analysis cannot override.
+#
+# The marker set reuses the module's existing status classification
+# (_ACTIVE_STATUS_HINTS) minus ⏳, plus ✅ (defense-in-depth — completed rows
+# are excluded upstream by _status_is_completed and never reach this
+# predicate) and 📋 (待启动 queued rows, which are not yet executable).
+_NON_CANDIDATE_MARKERS = frozenset(
+    {marker for marker in _ACTIVE_STATUS_HINTS if marker != "⏳"}
+) | {"✅", "📋"}
+
+
+def _status_is_candidate_eligible(status_cell: str) -> bool:
+    """Return True if the status cell permits the row to be an executable candidate.
+
+    Third-class status filter (FIX-237.2 / ADR-017 §4.4 P1-3): a not-completed
+    row whose dependencies are all satisfied may enter the unblocked /
+    recommended-next candidate lists ONLY when its status leading marker is ⏳
+    (pending/active) or the cell has no leading status marker. Rows whose
+    leading marker is terminal / non-executable (⛔ ⏸ 🔴 🚧 🛑 📋 ✅) are
+    non-candidates even when dependency-satisfied.
+
+    Completed rows (✅) are excluded upstream by :func:`_status_is_completed`
+    and never reach this predicate; the ✅ branch here is defense-in-depth.
+
+    Args:
+        status_cell: the RAW status cell text (e.g. ``"⏳ 待执行"``).
+
+    Returns:
+        True when the row may be an executable candidate, False otherwise.
+    """
+    s = status_cell.strip()
+    if not s:
+        # Empty / no status → no leading marker → eligible (the dependency
+        # analysis decides candidacy).
+        return True
+    if s.startswith("⏳"):
+        return True
+    return not s.startswith(tuple(_NON_CANDIDATE_MARKERS))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -330,10 +391,21 @@ class PriorityReport:
         total: total number of tasks parsed.
         dependency_graph: ``{task_id: (task_family_dependency_ids, ...)}`` for
             every parsed task. Useful for downstream tooling / visualization.
+        non_executable: tasks that are NOT completed, have ALL task-family
+            dependencies satisfied (or none), but are excluded from the
+            unblocked / recommended-next candidates by the third-class status
+            filter (leading marker ⛔/⏸/🔴/🚧/🛑/📋/✅ — FIX-237.2 / ADR-017
+            §4.4 P1-3). Reported separately so filtered rows stay visible.
         cycles: list of cycles detected in the dependency graph (each a tuple
             of task IDs forming the cycle, e.g. ``("FIX-A","FIX-B","FIX-A")``).
             Empty when the graph is acyclic. When non-empty, the report is still
-            produced but :func:`format_report` flags it as an error.
+            produced and :func:`format_report` flags it as a WARNING (cycle
+            tolerance — FIX-237.2).
+        cycle_warning: True when the dependency graph contains at least one
+            cycle. This is a WARN flag, never an ERROR: the analysis output is
+            best-effort and is not blocked by the cycle. Downstream consumers
+            (e.g. the CLI exit code) should switch on this flag once they stop
+            treating cycles as fatal (verify_workflow.py integration).
     """
 
     completed: list = field(default_factory=list)
@@ -343,6 +415,8 @@ class PriorityReport:
     total: int = 0
     dependency_graph: dict = field(default_factory=dict)
     cycles: list = field(default_factory=list)  # list[tuple]
+    non_executable: list = field(default_factory=list)  # list[TaskDep]
+    cycle_warning: bool = False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -673,9 +747,16 @@ def compute_unblocked_tasks(tasks: list) -> PriorityReport:
              that is not provably completed (either the dep is in the table
              with non-✅ status, OR the dep is missing from the table —
              fail-closed: an unknown task-family ID cannot be proven done).
-           - ``unblocked`` — not completed AND all task-family dependencies
-             are completed (or it has no task-family dependencies).
+           - ``non_executable`` — not completed, all task-family dependencies
+             are completed (or none), but the status leading marker is
+             terminal / non-executable (⛔/⏸/🔴/🚧/🛑/📋/✅) — the third-class
+             status filter (FIX-237.2 / ADR-017 §4.4 P1-3). Reported separately
+             so filtered rows stay visible.
+           - ``unblocked`` — not completed, all task-family dependencies are
+             completed (or it has none), AND the status leading marker is ⏳
+             or absent (status candidate-eligible).
       5. ``recommended_next`` = ``unblocked`` sorted by priority then version.
+      6. ``cycle_warning`` = whether any cycle was detected (WARN, not ERROR).
 
     Cross-entity refs (RISK/DEC/REVIEW/...) are never dependencies in the
     graph and never block (FIX-171 precedent).
@@ -693,6 +774,7 @@ def compute_unblocked_tasks(tasks: list) -> PriorityReport:
     completed: list = []
     blocked: list = []
     unblocked: list = []
+    non_executable: list = []
 
     for t in tasks:
         if t.is_completed():
@@ -709,8 +791,13 @@ def compute_unblocked_tasks(tasks: list) -> PriorityReport:
             blocking.append(dep)
         if blocking:
             blocked.append(BlockedTask(task=t, blocking_dependencies=tuple(blocking)))
-        else:
-            unblocked.append(t)
+            continue
+        # Dependency-satisfied (or no deps): the third-class status gate
+        # decides executable candidacy (FIX-237.2 / ADR-017 §4.4 P1-3).
+        if not _status_is_candidate_eligible(t.status):
+            non_executable.append(t)
+            continue
+        unblocked.append(t)
 
     recommended = sorted(unblocked, key=_priority_sort_key)
 
@@ -722,6 +809,8 @@ def compute_unblocked_tasks(tasks: list) -> PriorityReport:
         total=len(tasks),
         dependency_graph=graph,
         cycles=cycles,
+        non_executable=non_executable,
+        cycle_warning=bool(cycles),
     )
 
 
@@ -766,9 +855,12 @@ def format_report(report: PriorityReport) -> str:
       2. ``Recommended next`` (the highest-priority unblocked task(s)) — this is
          the answer to "what should I work on next?".
       3. ``Unblocked`` (all ready-to-work tasks, priority-ordered).
-      4. ``Blocked`` (tasks with their specific blocking dependencies).
-      5. ``Completed`` (already-done tasks — for context; truncated to 20).
-      6. ``Cycles`` — ERROR banner if the dependency graph has a cycle.
+      4. ``Excluded`` (dependency-satisfied rows filtered out by the third-class
+         status filter — ⛔/⏸/🔴/🚧/🛑/📋/✅ leading markers).
+      5. ``Blocked`` (tasks with their specific blocking dependencies).
+      6. ``Completed`` (already-done tasks — for context; truncated to 20).
+      7. ``Cycles`` — WARNING banner (not ERROR) if the dependency graph has a
+         cycle (cycle tolerance, FIX-237.2).
 
     The output is plain markdown (no ANSI color) so it renders identically in a
     terminal, a pipe, or a file.
@@ -780,17 +872,20 @@ def format_report(report: PriorityReport) -> str:
         f"Total: **{report.total}** tasks — "
         f"{len(report.completed)} completed, "
         f"{len(report.unblocked)} unblocked, "
-        f"{len(report.blocked)} blocked."
+        f"{len(report.blocked)} blocked, "
+        f"{len(report.non_executable)} non-executable."
     )
     lines.append("")
 
     if report.cycles:
-        lines.append("## ⚠️ CYCLE DETECTED (ERROR)")
+        lines.append("## ⚠️ CYCLE DETECTED (WARNING)")
         lines.append("")
         lines.append(
             "The dependency graph contains a cycle. The analysis below is "
-            "best-effort; the cycle must be resolved (a task should not "
-            "depend, directly or transitively, on itself)."
+            "best-effort; the cycle should be resolved (a task should not "
+            "depend, directly or transitively, on itself). This is a WARNING "
+            "and does not block the analysis output (FIX-237.2 cycle "
+            "tolerance)."
         )
         lines.append("")
         for cyc in report.cycles:
@@ -814,6 +909,22 @@ def format_report(report: PriorityReport) -> str:
     lines.append("")
     if report.unblocked:
         for t in report.unblocked:
+            lines.append(_format_task_line(t))
+    else:
+        lines.append("_None._")
+    lines.append("")
+
+    lines.append("## Excluded (non-executable status)")
+    lines.append("")
+    if report.non_executable:
+        lines.append(
+            "_Dependency-satisfied rows excluded from Unblocked / Recommended "
+            "next: their status leading marker is terminal / non-executable "
+            "(⛔/⏸/🔴/🚧/🛑/📋/✅) even though their dependencies are met "
+            "(FIX-237.2 / ADR-017 §4.4 P1-3)._"
+        )
+        lines.append("")
+        for t in report.non_executable:
             lines.append(_format_task_line(t))
     else:
         lines.append("_None._")

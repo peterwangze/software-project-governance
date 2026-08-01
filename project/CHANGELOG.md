@@ -2,6 +2,36 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.72.0] - 2026-08-01
+
+### 0.72.0 - Check 31 安装态消解打包 + release lineage 多版本授权 + 0.64.x docs 债务（MINOR）
+
+0.72.0 是 MINOR 发布，把 HEAD `e2537c0` 上四个已合入 commit 打包成发布候选（FIX-200 / FIX-230 / AUDIT-140 / FIX-231），并同步版本投影与 release 文档。发布目标：安装包 Check 31 安装态 finding（EVD-853，0.71.0 插件包内 audit-140 旧措辞）随 `/plugin update` 消解。但**不关闭 RISK-036/RISK-039**：官方市场操作（Codex Desktop marketplace E2E / 官方提交包）与 ArchGuard 外部宿主验证各自独立关闭标准未满足；RISK-040/041 已由 DEC-135/DEC-137 关闭（本版本不重开）。版本投影 0.71.0 -> 0.72.0 全 PASS（M-set：13 projections + `verify_workflow.py` REQUIRED_SNIPPETS 6 版本钉）。
+
+### Added
+
+- **FIX-200 identity attestation gate**：`verify_workflow.py` `_loop_runtime_claim_gate_detail` 运行真实 `build_identity_attestation`（替代硬编码 `IDENTITY_ATTESTATION_PENDING`）；`core/loop-runtime-claim-authority.json` 同步（`identity_attestation` -> FIXTURE_PASS、`open_risks` -> []，RISK-037/042 已按 DEC-133 关闭）；`checks/loop_runtime_claims.py` 期望值同步；测试覆盖真实 identity verdict PASS/FAIL 路径。Check 31 identity_verdict=PASS；Check 31 残余 BLOCKED 仅为安装包 audit-140 旧措辞（EVD-853，本发布消解）。
+- **FIX-230 release-ledger 多版本 tag 授权解析器**：`infra/release/ledger.py` 解析器按 `(decision_id, version, commit)` 三元组匹配（TDD）；8 个历史 `core/releases` manifest（0.63.0/0.63.1/0.63.2/0.63.3/0.63.4/0.64.0/0.64.1/0.65.0）回补 `tag_disposition=created_by_decision` / `tag_decision=DEC-136`；`test_release_ledger.py` +67 行（2 新测试）。RISK-041 关闭标准（DEC-137）最后一段（历史 tag 处置）闭环，EVD-859。
+- **AUDIT-140 claim-scanner-safe 措辞**：`docs/requirements/audit-140-loop-runtime-wiring-gap-0.71.0.md` 自然语言措辞调整为 claim-scanner-safe，仓库侧 Check 31 的 UNSUPPORTED_AFFIRMATIVE 消除（EVD-858）。
+- **FIX-231 0.64.x release docs 边界 token**：`docs/release/release-checklist-0.64.1.md`、`docs/release/rollback-plan-0.64.0.md`、`docs/release/rollback-plan-0.64.1.md` 补齐保守边界表述（DOC-001 回补 gap 闭环，EVD-863）。
+- 版本声明与 e2e fixture 指针从 0.71.0 推进到 0.72.0（M-set：plugins、marketplace、package.json、source/e2e SKILL frontmatter、manifest、plan-tracker、四个 source hooks，以及 `verify_workflow.py` 的 `REQUIRED_SNIPPETS` 版本钉）。
+- `project/CHANGELOG.md` 新增 0.72.0 条目。
+
+### Validation
+
+- REL-065（用户授权 "0.72.0 发布 + 0.64.x docs 债务"）。
+- FIX-200：identity attestation 测试覆盖真实 verdict PASS/FAIL；Check 31 identity_verdict=PASS。
+- FIX-230：ledger 解析器 TDD + 2 新测试（+67 行；39 测 38 PASS + 1 既有 0.66.2 FAIL）；8 个历史 manifest 回补并校验（DEC-136 / EVD-859）。
+- AUDIT-140：仓库侧 Check 31 unblock（EVD-858）；FIX-231：DOC-001 gap 闭环（EVD-863）。
+- `check-version-consistency` PASS（13 文件版本声明一致）；`check-projection-sync` PASS（13 投影同步）；release docs 三件套含 5 个保守边界 needle 且 0 个未否定 forbidden claim。
+
+### Boundaries
+
+- 0.72.0 **RISK-036/RISK-039 remain open**。Check 31 安装态消解（EVD-853）推进风险看护，但这两个风险各自独立关闭标准（官方市场操作 / ArchGuard 外部宿主验证）未满足。
+- 0.72.0 **does not close RISK-036/RISK-039**（official marketplace / ArchGuard external validation 各自独立关闭标准未满足）；RISK-040/041 已由 DEC-135/DEC-137 关闭，本版本不重开。
+- 不声明 official approval、marketplace approval、curated listing、universal/full runtime support、external first-session pilot success，不关闭 RISK-036/RISK-039，不声明 1.0.0 production-ready。
+- MINOR bump 来自 Check 31 修复打包（identity attestation gate + ledger 授权 + 措辞修复），不引入 breaking runtime API。
+
 ## [0.71.0] - 2026-07-27
 
 ### 0.71.0 - systematic UX fixes for entry/loop/task-planning（MINOR）

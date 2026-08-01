@@ -2963,5 +2963,214 @@ class TestDecisionRiskMigration(unittest.TestCase):
         self.assertFalse(self.archive._version_in_range("1.0.0", "0.1.0", "0.59.0"))
 
 
+class TestArchiveFix235(unittest.TestCase):
+    """FIX-235: evidence migration for completed-but-hot plan-tracker tasks.
+
+    plan-tracker keeps completed task rows hot for full traceability
+    (EVD-854) instead of physically archiving them; their evidence rows must
+    still be archivable by the row's 目标版本. Also covers the --auto range
+    advancing to the latest released version (SKILL.md frontmatter, DEC-096)
+    instead of lagging at the roadmap's second-newest published row.
+    """
+
+    def setUp(self):
+        import archive  # noqa: F401  (module-level sys.path injection applies)
+        self.archive = archive
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        self.gov = self.root / ".governance"
+        self.gov.mkdir(parents=True, exist_ok=True)
+        self.archive_dir = self.gov / "archive"
+        for sub in ["tasks", "evidence", "decisions", "risks"]:
+            (self.archive_dir / sub).mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        self.tempdir.cleanup()
+
+    def _write_plan_tracker(self, content):
+        (self.gov / "plan-tracker.md").write_text(content, encoding="utf-8")
+
+    def test_fix235_parse_completed_task_versions_tolerates_table_breaks(self):
+        """FIX-235: the evidence mapping scans priority tables tolerantly —
+        blank lines / blockquote notes inside a table do NOT terminate the
+        scan (the real plan-tracker interleaves them), and anomalous pipe
+        counts are skipped (column alignment cannot be trusted)."""
+        content = "\n".join([
+            "## 当前活跃事项",
+            "",
+            "### 优先级一览",
+            "",
+            "> 状态漂移清理说明：保留全部历史 task 行。",
+            "",
+            "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+            "|--------|----|------|------|---------|---------|------|",
+            "",
+            "| **P1** | REL-055 | 发布 0.65.2 | FIX-193 | 0.65.2 | done | ✅ 已发布 |",
+            "| **P1** | FIX-192 | lineage gate | SYSGAP-046 | 0.65.3 | done | ✅ 完成 |",
+            "| **P0** | SYSGAP-046 | gap | AUDIT-132 | 0.65.3 | open | 🚧 前向门禁完成，历史处置待 DEC |",
+            "| **P2** | FEAT-001 | ledger | DEC-096 | 0.66.0 | done | ✅ 完成 |",
+            "| **P0** | FIX-222 | malformed | x | 0.72.0 | done | ✅ 完成 | extra | cell |",
+            "",
+            "### 最近完成",
+            "",
+            "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+            "|--------|----|------|------|---------|---------|------|",
+            "| **P0** | FIX-084 | task | — | 0.38.0 | done | ✅ 已完成 |",
+        ])
+        mapping = self.archive._parse_completed_task_versions(content)
+        self.assertEqual(mapping.get("REL-055"), "0.65.2")
+        self.assertEqual(mapping.get("FIX-192"), "0.65.3")
+        self.assertEqual(mapping.get("FEAT-001"), "0.66.0")
+        self.assertEqual(mapping.get("FIX-084"), "0.38.0")  # second table scanned
+        self.assertNotIn("SYSGAP-046", mapping)  # open status — not completed
+        self.assertNotIn("FIX-222", mapping)     # anomalous pipe layout — skipped
+
+    def test_fix235_evidence_migrates_for_hot_completed_tasks(self):
+        """FIX-235: the 'task row kept hot, evidence row still hot' scenario.
+        Completed tasks in the priority table (NOT physically archived)
+        contribute their 目标版本 to the evidence mapping, so in-range
+        evidence rows migrate while the task rows stay untouched. Decisions
+        and risks keep the archive-only mapping (evidence-only scope)."""
+        plan = "\n".join([
+            "## 当前活跃事项",
+            "",
+            "### 优先级一览",
+            "",
+            "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+            "|--------|----|------|------|---------|---------|------|",
+            "",
+            "| **P1** | REL-055 | 发布 0.65.2 | FIX-193 | 0.65.2 | done | ✅ 已发布 |",
+            "| **P1** | FIX-192 | lineage gate | SYSGAP-046 | 0.65.3 | done | ✅ 完成 |",
+            "| **P1** | REL-056 | 发布 0.65.3 | FIX-192 | 0.65.3 | done | ✅ 已发布 |",
+            "| **P0** | SYSGAP-046 | gap | AUDIT-132 | 0.65.3 | open | 🚧 前向门禁完成，历史处置待 DEC |",
+            "| **P2** | FEAT-001 | ledger | DEC-096 | 0.66.0 | done | ✅ 完成 |",
+        ])
+        self._write_plan_tracker(plan)
+        _make_evidence_log(self.gov, [
+            ("EVD-695", "REL-055", "0.65.2 release evidence"),
+            ("EVD-696", "REL-055", "0.65.2 release commit evidence"),
+            ("EVD-699", "FIX-192", "lineage gate evidence"),
+            ("EVD-700", "REL-056", "0.65.3 release evidence"),
+            ("EVD-701", "REL-056", "0.65.3 commit evidence"),
+            ("EVD-697", "FIX-192, SYSGAP-046", "mixed hot+open — must stay"),
+            ("EVD-698", "FEAT-001", "out of range — must stay"),
+        ])
+        (self.gov / "decision-log.md").write_text(
+            "| DEC-200 | 2026-07-01 | 决策标题 | 背景 | 决策 | 备选 | 原因 | 影响 | 决策人 | REL-055 | 后续 |\n",
+            encoding="utf-8",
+        )
+        (self.gov / "risk-log.md").write_text(
+            "| RISK-200 | 2026-07-01 | 风险描述 | 中 | 缓解动作 | REL-055 | 打开 |\n",
+            encoding="utf-8",
+        )
+
+        with patch.object(self.archive, "ROOT", self.root):
+            result = self.archive.migrate_by_version(
+                "0.63.1", "0.65.3", dry_run=False
+            )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["tasks_archived"], 0)   # task rows stay hot
+        self.assertEqual(result["evidence_archived"], 5)  # EVD-695/696/699/700/701
+        self.assertEqual(result["decisions_archived"], 0)  # evidence-only scope
+        self.assertEqual(result["risks_archived"], 0)
+
+        kept = (self.gov / "evidence-log.md").read_text(encoding="utf-8")
+        for evd in ("EVD-695", "EVD-696", "EVD-699", "EVD-700", "EVD-701"):
+            self.assertNotIn(evd, kept)
+        self.assertIn("EVD-697", kept)  # mixed hot+open ref → kept
+        self.assertIn("EVD-698", kept)  # out-of-range ref → kept
+
+        # plan-tracker untouched — task rows preserved (EVD-854 traceability)
+        tracker = (self.gov / "plan-tracker.md").read_text(encoding="utf-8")
+        self.assertIn("REL-055", tracker)
+        self.assertIn("FIX-192", tracker)
+        self.assertIn("FEAT-001", tracker)
+
+        arch = self.archive_dir / "evidence" / "evidence-v0.63.1-0.65.3.md"
+        self.assertTrue(arch.exists())
+        arch_content = arch.read_text(encoding="utf-8")
+        self.assertIn("| EVD-695 |", arch_content)
+        self.assertIn("| EVD-701 |", arch_content)
+        self.assertNotIn("EVD-697", arch_content)
+
+    def test_fix235_evidence_dry_run_reports_hot_task_rows(self):
+        """FIX-235: dry-run reports the evidence count without writing files —
+        the acceptance path for `archive.py migrate <range> --dry-run`."""
+        plan = "\n".join([
+            "## 当前活跃事项",
+            "",
+            "### 优先级一览",
+            "",
+            "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+            "|--------|----|------|------|---------|---------|------|",
+            "",
+            "| **P1** | REL-055 | 发布 0.65.2 | FIX-193 | 0.65.2 | done | ✅ 已发布 |",
+        ])
+        self._write_plan_tracker(plan)
+        _make_evidence_log(self.gov, [
+            ("EVD-695", "REL-055", "0.65.2 release evidence"),
+        ])
+        with patch.object(self.archive, "ROOT", self.root):
+            result = self.archive.migrate_by_version(
+                "0.63.1", "0.65.3", dry_run=True
+            )
+        self.assertEqual(result["evidence_archived"], 1)
+        self.assertFalse(
+            (self.archive_dir / "evidence" / "evidence-v0.63.1-0.65.3.md").exists()
+        )
+        kept = (self.gov / "evidence-log.md").read_text(encoding="utf-8")
+        self.assertIn("EVD-695", kept)
+
+    def test_fix235_auto_range_advances_to_latest_released_version(self):
+        """FIX-235: --auto range end advances to the latest released version
+        (SKILL.md frontmatter, DEC-096) instead of lagging at the roadmap's
+        second-newest published row — recent evidence becomes archivable."""
+        skill = self.root / "skills/software-project-governance/SKILL.md"
+        skill.parent.mkdir(parents=True, exist_ok=True)
+        skill.write_text(
+            "---\nname: test\nversion: 0.13.0\n---\n",
+            encoding="utf-8",
+        )
+        roadmap = [
+            ("0.10.0", "已发布"),
+            ("0.11.0", "已发布"),
+            ("0.12.0", "已发布"),
+        ]
+        tasks = [
+            ("v0.10.0 — Initial", [
+                ("FIX-001", "已完成", "Fix bug 1", "—"),
+            ]),
+            ("v0.11.0 — Early fixes", [
+                ("FIX-002", "已完成", "Fix bug 2", "FIX-001"),
+                ("FIX-003", "已完成", "Fix bug 3", "—"),
+            ]),
+            ("v0.12.0 — Latest roadmap published", [
+                ("FIX-004", "已完成", "Fix bug 4", "—"),
+            ]),
+            ("v0.13.0 — Current", [
+                ("FIX-006", "进行中", "Fix bug 6", "—"),
+            ]),
+        ]
+        _make_plan_tracker_with_roadmap(self.gov, roadmap, tasks)
+        _make_evidence_log(self.gov, [
+            ("EVD-001", "FIX-001", "Fixed bug 1"),
+            ("EVD-002", "FIX-002", "Fixed bug 2"),
+            ("EVD-003", "FIX-003", "Fixed bug 3"),
+            ("EVD-004", "FIX-004", "Fixed bug 4"),
+        ])
+        _pad_plan_tracker(self.gov)
+
+        with patch.object(self.archive, "ROOT", self.root):
+            result = self.archive.migrate_auto(dry_run=True)
+
+        self.assertTrue(result["success"])
+        self.assertFalse(result.get("skipped", False))
+        self.assertEqual(result["versions_range"], ("0.10.0", "0.13.0"))
+        self.assertIn("0.12.0", result["versions_archived"])
+        self.assertEqual(result["tasks_archived"], 4)     # FIX-001..004
+        self.assertEqual(result["evidence_archived"], 4)  # EVD-001..004
+
+
 if __name__ == "__main__":
     unittest.main()

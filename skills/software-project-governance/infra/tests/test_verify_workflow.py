@@ -6942,6 +6942,76 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
         self.assertFalse(result["pass"])
         self.assertTrue(any("execution gate: unit tests" in issue for issue in result["issues"]))
 
+    def test_fix234_release_gate_timeout_resolver_defaults_to_180(self):
+        """FIX-234: absent/empty SPG_RELEASE_GATE_TIMEOUT resolves to the
+        historical 180s default (backward compatible)."""
+        self.assertEqual(vw._resolve_release_gate_timeout(""), 180)
+        self.assertEqual(vw._resolve_release_gate_timeout(None), 180)
+
+    def test_fix234_release_gate_timeout_resolver_env_override(self):
+        """FIX-234: a positive integer env value overrides the default."""
+        self.assertEqual(vw._resolve_release_gate_timeout("300"), 300)
+        self.assertEqual(vw._resolve_release_gate_timeout("  42 "), 42)
+
+    def test_fix234_release_gate_timeout_resolver_invalid_falls_back(self):
+        """FIX-234: malformed or non-positive values fall back to the 180s
+        default instead of crashing the gate."""
+        for raw in ("abc", "12.5", "0", "-5", " "):
+            with self.subTest(raw=raw):
+                self.assertEqual(vw._resolve_release_gate_timeout(raw), 180)
+
+    def test_fix234_release_gate_runner_honors_env_timeout(self):
+        """FIX-234: _run_release_validation_command reads
+        SPG_RELEASE_GATE_TIMEOUT when no explicit timeout is passed."""
+        captured = {}
+
+        def fake_run(*args, **kwargs):
+            captured["timeout"] = kwargs.get("timeout")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with patch.dict(os.environ, {"SPG_RELEASE_GATE_TIMEOUT": "300"}, clear=False), \
+             patch.object(vw.subprocess, "run", side_effect=fake_run):
+            result = vw._run_release_validation_command(
+                "probe", [sys.executable, "-c", "pass"])
+        self.assertTrue(result["pass"])
+        self.assertEqual(captured["timeout"], 300)
+
+    def test_fix234_release_gate_runner_explicit_timeout_wins(self):
+        """FIX-234: an explicit timeout argument overrides the env var."""
+        captured = {}
+
+        def fake_run(*args, **kwargs):
+            captured["timeout"] = kwargs.get("timeout")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with patch.dict(os.environ, {"SPG_RELEASE_GATE_TIMEOUT": "300"}, clear=False), \
+             patch.object(vw.subprocess, "run", side_effect=fake_run):
+            result = vw._run_release_validation_command(
+                "probe", [sys.executable, "-c", "pass"], timeout=999)
+        self.assertTrue(result["pass"])
+        self.assertEqual(captured["timeout"], 999)
+
+    def test_fix234_execution_gates_pass_through_timeout(self):
+        """FIX-234: run_release_execution_gates forwards an explicit timeout
+        to the runner; without one it keeps the two-arg call contract (so
+        existing custom runners keep working)."""
+        seen = []
+
+        def fake_runner(label, command, timeout=None):
+            seen.append((label, timeout))
+            return {"label": label, "pass": True, "exit_code": 0,
+                    "issue": None,
+                    "command": " ".join(str(part) for part in command)}
+
+        vw.run_release_execution_gates(runner=fake_runner, timeout=321)
+        self.assertEqual(len(seen), 4)
+        self.assertTrue(all(timeout == 321 for _, timeout in seen))
+
+        seen.clear()
+        vw.run_release_execution_gates(runner=fake_runner)
+        self.assertEqual(len(seen), 4)
+        self.assertTrue(all(timeout is None for _, timeout in seen))
+
 
 class ProjectionSyncTests(unittest.TestCase):
     """FIX-086: source, target fixture, native entries, and plugin versions stay synchronized."""
@@ -14381,6 +14451,268 @@ unresolved_blockers=0
         self.assertEqual(r["verdict"], "FAIL")
         rules = {v["rule"] for v in r["violations"]}
         self.assertIn("V2", rules)
+
+    def test_fix233_v1_historical_blocked_downgrades_to_warn(self):
+        """FIX-233: a BLOCKED terminal whose evidence predates the FIX-174
+        normalization date is a historical escalation-closure record (the
+        0.66.1 incident chain, e.g. FIX-197 R0 2026-07-13) that cannot be
+        rewritten → downgraded to WARN, not a permanent CI FAIL.
+        """
+        seq = [
+            {"id": "REVIEW-FIX-197", "task_ref": "FIX-197",
+             "conclusion": "BLOCKED", "date": "2026-07-13"},
+        ]
+        r = vw.check_review_closure(
+            review_sequence=seq,
+            plan_tracker_completed={"FIX-197": True},
+        )
+        self.assertEqual(r["verdict"], "WARN")
+        v1_violations = [v for v in r["violations"] if v["rule"] == "V1"]
+        self.assertEqual(v1_violations, [])
+        v1_warns = [w for w in r["warnings"] if w["rule"] == "V1"]
+        self.assertTrue(v1_warns)
+        self.assertEqual(v1_warns[0]["task_id"], "FIX-197")
+        self.assertIn("historical", v1_warns[0]["reason"].lower())
+
+    def test_fix233_v1_post_normalization_blocked_still_fails(self):
+        """FIX-233: a BLOCKED terminal with evidence AFTER the FIX-174
+        normalization date is a real current-rule violation → FAIL.
+        Guards against the exemption masking new BLOCKED closures.
+        """
+        seq = [
+            {"id": "REVIEW-REL-065", "task_ref": "REL-065",
+             "conclusion": "BLOCKED", "date": "2026-08-01"},
+        ]
+        r = vw.check_review_closure(
+            review_sequence=seq,
+            plan_tracker_completed={"REL-065": True},
+        )
+        self.assertEqual(r["verdict"], "FAIL")
+        v1 = [v for v in r["violations"] if v["rule"] == "V1"
+              and v["task_id"] == "REL-065"]
+        self.assertTrue(v1)
+
+    def test_fix233_v1_blocked_without_evidence_date_still_fails(self):
+        """FIX-233: the historical exemption requires a parseable evidence
+        date; a BLOCKED terminal with no date stays a V1 violation
+        (fail-closed on unknown evidence age).
+        """
+        seq = [
+            {"id": "REVIEW-FIX-240", "task_ref": "FIX-240",
+             "conclusion": "BLOCKED"},
+        ]
+        r = vw.check_review_closure(
+            review_sequence=seq,
+            plan_tracker_completed={"FIX-240": True},
+        )
+        self.assertEqual(r["verdict"], "FAIL")
+        v1 = [v for v in r["violations"] if v["rule"] == "V1"
+              and v["task_id"] == "FIX-240"]
+        self.assertTrue(v1)
+
+    def test_fix233_v5_historical_prose_conclusion_downgrades_to_warn(self):
+        """FIX-233: APPROVED_WITH_NOTES without a structured
+        unresolved_blockers=0 token whose evidence predates the FIX-174
+        normalization date is a historical prose conclusion (e.g. FIX-199 R0
+        2026-07-17) that cannot be rewritten → downgraded to WARN.
+        """
+        seq = [
+            {"id": "REVIEW-FIX-199", "task_ref": "FIX-199",
+             "conclusion": "APPROVED_WITH_NOTES", "date": "2026-07-17"},
+        ]
+        r = vw.check_review_closure(
+            review_sequence=seq,
+            plan_tracker_completed={"FIX-199": True},
+        )
+        self.assertEqual(r["verdict"], "WARN")
+        v5_violations = [v for v in r["violations"] if v["rule"] == "V5"]
+        self.assertEqual(v5_violations, [])
+        v5_warns = [w for w in r["warnings"] if w["rule"] == "V5"]
+        self.assertTrue(v5_warns)
+        self.assertEqual(v5_warns[0]["task_id"], "FIX-199")
+        self.assertIn("historical", v5_warns[0]["reason"].lower())
+
+    def test_fix233_v5_post_normalization_without_token_still_fails(self):
+        """FIX-233: APPROVED_WITH_NOTES without the structured token and with
+        evidence AFTER the FIX-174 normalization date stays a V5 violation —
+        new sequences still require unresolved_blockers=0.
+        """
+        seq = [
+            {"id": "REVIEW-REL-065", "task_ref": "REL-065",
+             "conclusion": "APPROVED_WITH_NOTES", "date": "2026-08-01"},
+        ]
+        r = vw.check_review_closure(
+            review_sequence=seq,
+            plan_tracker_completed={"REL-065": True},
+        )
+        self.assertEqual(r["verdict"], "FAIL")
+        v5 = [v for v in r["violations"] if v["rule"] == "V5"
+              and v["task_id"] == "REL-065"]
+        self.assertTrue(v5)
+
+    def test_fix233_v5_historical_with_valid_token_still_passes(self):
+        """FIX-233: a historical APPROVED_WITH_NOTES row that DOES carry the
+        structured unresolved_blockers=0 token remains a valid approval —
+        the exemption only downgrades, it never weakens compliant records.
+        """
+        seq = [
+            {"id": "REVIEW-FIX-195", "task_ref": "FIX-195",
+             "conclusion": "APPROVED_WITH_NOTES", "date": "2026-07-12",
+             "unresolved_blockers_fields": ["unresolved_blockers=0"]},
+        ]
+        r = vw.check_review_closure(
+            review_sequence=seq,
+            plan_tracker_completed={"FIX-195": True},
+        )
+        self.assertEqual(r["verdict"], "PASS")
+        self.assertEqual(r["violations"], [])
+
+    def test_fix233_v5_historical_nonzero_token_still_fails(self):
+        """FIX-233: the V5 historical exemption covers only the missing-token
+        (prose) case; a historical row carrying a NONZERO token is still
+        contradictory and stays a V5 violation (fail-closed).
+        """
+        seq = [
+            {"id": "REVIEW-FIX-241", "task_ref": "FIX-241",
+             "conclusion": "APPROVED_WITH_NOTES", "date": "2026-07-12",
+             "unresolved_blockers_fields": ["unresolved_blockers=2"]},
+        ]
+        r = vw.check_review_closure(
+            review_sequence=seq,
+            plan_tracker_completed={"FIX-241": True},
+        )
+        self.assertEqual(r["verdict"], "FAIL")
+        v5 = [v for v in r["violations"] if v["rule"] == "V5"
+              and v["task_id"] == "FIX-241"]
+        self.assertTrue(v5)
+
+    def test_fix233_live_incident_chain_rows_downgrade_to_warn(self):
+        """FIX-233 live path: reproduces the 0.66.1 incident-chain review rows
+        (FIX-197 BLOCKED 07-13, FIX-199 APPROVED_WITH_NOTES prose 07-17,
+        REL-058 BLOCKED 07-17) plus a post-normalization row (REL-065
+        APPROVED_WITH_NOTES 08-01). The three historical rows become WARN;
+        the post-normalization row remains a V5 violation.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gov = root / ".governance"
+            gov.mkdir(parents=True, exist_ok=True)
+            sp = gov / "plan-tracker.md"
+            ep = gov / "evidence-log.md"
+            sp.write_text("# plan\n", encoding="utf-8")
+            ep.write_text(
+                "| REVIEW-FIX-197 | FIX-197 | 代码审查 | Reviewer BLOCKED | x | y | "
+                "2026-07-13 | G11 | BLOCKED | unresolved_blockers=5 |\n"
+                "| REVIEW-FIX-199 | FIX-199 | 代码审查 | Reviewer APPROVED_WITH_NOTES | x | y | "
+                "2026-07-17 | G11 | APPROVED_WITH_NOTES | 结论+prose blockers |\n"
+                "| REVIEW-REL-058 | REL-058 | 发布 | Reviewer BLOCKED | x | y | "
+                "2026-07-17 | G11 | BLOCKED | unresolved_blockers=7 |\n"
+                "| REVIEW-REL-065 | REL-065 | 发布 | Reviewer APPROVED_WITH_NOTES | x | y | "
+                "2026-08-01 | G11 | APPROVED_WITH_NOTES | unresolved_blockers=0，P0=0 |\n",
+                encoding="utf-8",
+            )
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep), \
+                 patch.object(vw, "GOVERNANCE_DIR", gov), \
+                 patch.object(vw, "parse_completed_task_ids",
+                              return_value={"FIX-197", "FIX-199", "REL-058"}):
+                r = vw.check_review_closure(routing_table={})
+            # Three historical rows downgraded → no V1/V5 violations for them.
+            for task_id in ("FIX-197", "FIX-199", "REL-058"):
+                self.assertEqual(
+                    [v for v in r["violations"]
+                     if v["task_id"] == task_id], [],
+                    f"{task_id} should be downgraded, got violations",
+                )
+            self.assertTrue(
+                any(w["rule"] == "V1" and w["task_id"] == "FIX-197"
+                    for w in r["warnings"]),
+            )
+            self.assertTrue(
+                any(w["rule"] == "V5" and w["task_id"] == "FIX-199"
+                    for w in r["warnings"]),
+            )
+            self.assertTrue(
+                any(w["rule"] == "V1" and w["task_id"] == "REL-058"
+                    for w in r["warnings"]),
+            )
+            # Post-normalization row stays a violation.
+            self.assertTrue(
+                any(v["rule"] == "V5" and v["task_id"] == "REL-065"
+                    for v in r["violations"]),
+            )
+
+    def test_fix233_v1_mixed_chain_post_normalization_terminal_still_fails(self):
+        """FIX-233 R1 (P1-1): the exemption judges the TERMINAL round's
+        evidence date, not the chain's earliest date. A chain with a
+        historical round (BLOCKED 07-13) followed by a post-normalization
+        terminal round (BLOCKED 08-02) is a current-rule violation → FAIL,
+        even though min_evidence_date is historical."""
+        seq = [
+            {"id": "REVIEW-FIX-197", "task_ref": "FIX-197",
+             "conclusion": "BLOCKED", "date": "2026-07-13"},
+            {"id": "REVIEW-FIX-197-R1", "task_ref": "FIX-197",
+             "conclusion": "BLOCKED", "date": "2026-08-02"},
+        ]
+        r = vw.check_review_closure(
+            review_sequence=seq,
+            plan_tracker_completed={"FIX-197": True},
+        )
+        self.assertEqual(r["verdict"], "FAIL")
+        v1 = [v for v in r["violations"] if v["rule"] == "V1"
+              and v["task_id"] == "FIX-197"]
+        self.assertTrue(v1)
+        self.assertFalse(
+            any(w["rule"] == "V1" and w["task_id"] == "FIX-197"
+                for w in r["warnings"]),
+        )
+
+    def test_fix233_v5_mixed_chain_post_normalization_terminal_still_fails(self):
+        """FIX-233 R1 (P1-1): APPROVED_WITH_NOTES prose row (07-17) followed
+        by a post-normalization terminal prose round (08-02) stays a V5
+        violation — the terminal round is not historical."""
+        seq = [
+            {"id": "REVIEW-FIX-199", "task_ref": "FIX-199",
+             "conclusion": "APPROVED_WITH_NOTES", "date": "2026-07-17"},
+            {"id": "REVIEW-FIX-199-R1", "task_ref": "FIX-199",
+             "conclusion": "APPROVED_WITH_NOTES", "date": "2026-08-02"},
+        ]
+        r = vw.check_review_closure(
+            review_sequence=seq,
+            plan_tracker_completed={"FIX-199": True},
+        )
+        self.assertEqual(r["verdict"], "FAIL")
+        v5 = [v for v in r["violations"] if v["rule"] == "V5"
+              and v["task_id"] == "FIX-199"]
+        self.assertTrue(v5)
+        self.assertFalse(
+            any(w["rule"] == "V5" and w["task_id"] == "FIX-199"
+                for w in r["warnings"]),
+        )
+
+    def test_fix233_terminal_round_date_governs_not_earliest(self):
+        """FIX-233 R1 (P1-1): the terminal round date is the exemption
+        predicate — a chain whose EARLIEST round post-dates normalization but
+        whose terminal round is historical (07-13) is downgraded to WARN.
+        Guards the terminal-round semantics from drifting back to
+        min_evidence_date."""
+        seq = [
+            {"id": "REVIEW-FIX-242", "task_ref": "FIX-242",
+             "conclusion": "BLOCKED", "date": "2026-08-02"},
+            {"id": "REVIEW-FIX-242-R1", "task_ref": "FIX-242",
+             "conclusion": "BLOCKED", "date": "2026-07-13"},
+        ]
+        r = vw.check_review_closure(
+            review_sequence=seq,
+            plan_tracker_completed={"FIX-242": True},
+        )
+        self.assertEqual(r["verdict"], "WARN")
+        v1_violations = [v for v in r["violations"] if v["rule"] == "V1"
+                         and v["task_id"] == "FIX-242"]
+        self.assertEqual(v1_violations, [])
+        v1_warns = [w for w in r["warnings"] if w["rule"] == "V1"
+                    and w["task_id"] == "FIX-242"]
+        self.assertTrue(v1_warns)
 
     def test_task_routing_exempt_pure_review_type_returns_true(self):
         """FIX-174 R1 (P0-3): a task whose EVD-row type is a pure review type

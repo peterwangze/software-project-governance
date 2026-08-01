@@ -434,6 +434,66 @@ def _parse_priority_table_tasks(content):
     return tasks
 
 
+def _parse_completed_task_versions(content):
+    """FIX-235: map COMPLETED hot plan-tracker tasks to their target version.
+
+    plan-tracker keeps every task row in the priority table for full
+    traceability (EVD-854) instead of physically archiving them; evidence rows
+    referencing those tasks could therefore never migrate (task_versions was
+    built only from archive/tasks/ files). This helper scans the priority
+    tables tolerantly — blank lines / blockquote notes inside a table no
+    longer terminate the scan, matching the real plan-tracker layout — and
+    returns {task_id: target_version} for archivable-status tasks with a
+    parseable target version. Rows whose pipe count deviates from the 7-column
+    layout are skipped (column alignment cannot be trusted).
+
+    Used ONLY for evidence migration (decisions/risks keep the archive-only
+    mapping, whose contract requires the related task to be physically
+    archived).
+    """
+    result = {}
+    lines = content.split("\n")
+    in_priority_table = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("###") or stripped.startswith("##"):
+            in_priority_table = False
+            continue
+        if not stripped.startswith("|"):
+            # Blank lines / prose / blockquote notes inside a table region do
+            # NOT terminate the scan (the real plan-tracker interleaves them
+            # between priority groups).
+            continue
+        cells = [c.strip() for c in stripped.split("|")]
+        data_cells = cells[1:-1] if len(cells) >= 2 else cells
+        if (len(data_cells) >= 2
+                and data_cells[0] == "优先级"
+                and data_cells[1] == "ID"):
+            in_priority_table = True
+            continue
+        if not in_priority_table:
+            continue
+        if re.match(r"^\|[\s\-:|\t]+\|$", stripped):
+            continue
+        if stripped.count("|") != 8:
+            # Anomalous layout (extra pipes inside cells, shifted columns) —
+            # column alignment cannot be trusted, skip conservatively.
+            continue
+        if len(data_cells) < 5:
+            continue
+        raw_id = re.sub(r"[`*]", "", data_cells[1]).strip()
+        if not re.match(r"^[A-Z]+-\d+$", raw_id):
+            continue
+        target_version = re.sub(r"[`*]", "", data_cells[4]).strip()
+        if not _version_to_tuple(target_version):
+            continue
+        status = data_cells[-1]
+        if not _task_status_is_archivable(status):
+            continue
+        result.setdefault(raw_id, target_version)
+    return result
+
+
 
 
 # ── Archive File Management ────────────────────────────────────────
@@ -1087,11 +1147,22 @@ def migrate_by_version(version_start, version_end, dry_run=False, migrate_eviden
     except Exception:
         pass
 
+    # FIX-235: the EVIDENCE mapping additionally includes COMPLETED tasks that
+    # remain hot in plan-tracker (rows deliberately kept for full traceability
+    # per EVD-854). Their 目标版本 resolves in-range evidence rows even though
+    # the task row is not physically archived. Decisions/risks keep the
+    # archive-only mapping — their contract requires the related task to be
+    # archived.
+    evidence_task_versions = dict(task_versions)
+    for task_id, version in _parse_completed_task_versions(content).items():
+        evidence_task_versions.setdefault(task_id, version)
+
     # FIX-162 (TD-014) / FIX-164: migrate decision-log, risk-log and
     # evidence-log entries whose related tasks have been archived. Runs even
     # when tasks_archived==0, as long as historical tasks exist in
-    # archive/tasks/. dry_run only reports counts.
-    if migrate_evidence and task_versions:
+    # archive/tasks/ (or completed hot tasks exist per FIX-235). dry_run only
+    # reports counts.
+    if migrate_evidence and evidence_task_versions:
         result["decisions_archived"] = _migrate_decisions(
             version_start, version_end, task_versions, dry_run
         )
@@ -1099,7 +1170,7 @@ def migrate_by_version(version_start, version_end, dry_run=False, migrate_eviden
             version_start, version_end, task_versions, dry_run
         )
         result["evidence_archived"] = _migrate_evidence(
-            version_start, version_end, task_versions, dry_run
+            version_start, version_end, evidence_task_versions, dry_run
         )
 
     if result["tasks_archived"] == 0:
@@ -2213,6 +2284,27 @@ def _days_since_file(path):
     return (date.today() - modified).days
 
 
+def _latest_released_version():
+    """FIX-235: return the authoritative current product version.
+
+    Read from the SKILL.md frontmatter (DEC-096: single source of truth for
+    the workflow version; kept in sync with manifest.json/plugin.json by
+    check-version-consistency). Between releases this equals the latest
+    released version. Returns None when unreadable.
+    """
+    skill = ROOT / "skills/software-project-governance/SKILL.md"
+    try:
+        content = skill.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    match = re.search(
+        r"^version:\s*([0-9]+\.[0-9]+\.[0-9]+)\s*$",
+        content,
+        re.MULTILINE,
+    )
+    return match.group(1) if match else None
+
+
 def analyze_auto_archive_candidates():
     """Analyze whether continuous auto archive should run.
 
@@ -2268,7 +2360,22 @@ def analyze_auto_archive_candidates():
     archive_entries = published[:-1]
     version_start = archive_entries[0]["version"]
     version_end = archive_entries[-1]["version"]
-    result["versions_archived"] = [entry["version"] for entry in archive_entries]
+    # FIX-235: advance the range end to the latest released version. The
+    # roadmap 状态 column lags actual releases (e.g. 0.68.0~0.72.0 rows are
+    # still marked 规划), so the second-newest published row can leave recent
+    # evidence unarchivable. SKILL.md frontmatter is the authoritative current
+    # version (DEC-096). Advance-only: never regress below the roadmap-derived
+    # end.
+    latest_released = _latest_released_version()
+    if latest_released and _version_to_tuple(latest_released):
+        if _version_to_tuple(latest_released) > _version_to_tuple(version_end):
+            version_end = latest_released
+    result["versions_archived"] = [
+        entry["version"] for entry in published
+        if (_version_to_tuple(entry["version"]) is not None
+            and _version_to_tuple(entry["version"])
+            <= _version_to_tuple(version_end))
+    ]
     result["versions_range"] = (version_start, version_end)
 
     pre_check = migrate_by_version(version_start, version_end, dry_run=True)

@@ -5794,8 +5794,38 @@ def check_agent_adapter_contract(root=None, run_runtime=False):
     return failures
 
 
-def _run_release_validation_command(label, command, timeout=180):
-    """Run one release validation command and normalize its result."""
+_RELEASE_GATE_TIMEOUT_DEFAULT = 180
+_RELEASE_GATE_TIMEOUT_ENV = "SPG_RELEASE_GATE_TIMEOUT"
+
+
+def _resolve_release_gate_timeout(raw):
+    """FIX-234: resolve the release-gate timeout from an env-var value.
+
+    Returns the value when it is a positive integer, otherwise the 180s
+    default. Invalid values fall back instead of crashing the gate
+    (backward compatible with the historical hardcoded 180s).
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return _RELEASE_GATE_TIMEOUT_DEFAULT
+    try:
+        value = int(raw)
+    except ValueError:
+        return _RELEASE_GATE_TIMEOUT_DEFAULT
+    return value if value > 0 else _RELEASE_GATE_TIMEOUT_DEFAULT
+
+
+def _run_release_validation_command(label, command, timeout=None):
+    """Run one release validation command and normalize its result.
+
+    timeout: explicit seconds; when None (default) the
+    SPG_RELEASE_GATE_TIMEOUT env var (integer seconds, FIX-234) is honored,
+    falling back to the 180s default for absent/invalid values.
+    """
+    if timeout is None:
+        timeout = _resolve_release_gate_timeout(
+            os.environ.get(_RELEASE_GATE_TIMEOUT_ENV, "")
+        )
     try:
         completed = subprocess.run(
             command,
@@ -5829,8 +5859,14 @@ def _run_release_validation_command(label, command, timeout=180):
     }
 
 
-def run_release_execution_gates(runner=_run_release_validation_command):
-    """Run command-backed release gates that must be green before publishing."""
+def run_release_execution_gates(runner=_run_release_validation_command,
+                                timeout=None):
+    """Run command-backed release gates that must be green before publishing.
+
+    timeout: optional explicit seconds forwarded to the runner. When omitted,
+    the runner resolves its own timeout (SPG_RELEASE_GATE_TIMEOUT env var,
+    default 180s — FIX-234). Custom two-arg runners keep working unchanged.
+    """
     verify_script = ROOT / "skills/software-project-governance/infra/verify_workflow.py"
     commands = [
         ("verify", [sys.executable, str(verify_script), "verify"]),
@@ -5838,7 +5874,9 @@ def run_release_execution_gates(runner=_run_release_validation_command):
         ("e2e check", [sys.executable, str(verify_script), "e2e-check"]),
         ("unit tests", [sys.executable, "-m", "unittest", "skills/software-project-governance/infra/tests/test_verify_workflow.py", "-v"]),
     ]
-    return [runner(label, command) for label, command in commands]
+    if timeout is None:
+        return [runner(label, command) for label, command in commands]
+    return [runner(label, command, timeout=timeout) for label, command in commands]
 
 
 def _release_docs_line_has_guard_context(label, line):

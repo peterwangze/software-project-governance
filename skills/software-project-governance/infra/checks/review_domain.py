@@ -1514,6 +1514,22 @@ _LEGACY_REVIEW_FILE_RE = re.compile(r"^review-([A-Z]+-\d+)-v\d+\.md$", re.IGNORE
 # naming residue, not a real round-continuity breach — V2 downgrades to WARN.
 FIX173_NAMING_NORMALIZATION_DATE = date(2026, 7, 4)
 
+# FIX-233: date from which review records are expected to comply with the
+# FIX-174 closure state machine (V1 terminal legality + V5 machine-readable
+# unresolved_blockers=0 token). The 0.66.1 incident chain (FIX-197/FIX-199/
+# REL-058 etc., evidence 2026-07-11~17) produced terminal review rows that
+# cannot be rewritten: BLOCKED escalation closures (V1) and
+# APPROVED_WITH_NOTES prose conclusions without a structured token (V5).
+# Their earliest evidence predates this date (the day after the last
+# incident-chain evidence row, 2026-07-17; the chain was formally closed by
+# the REL-063/REL-064 compensation releases on 2026-07-25, RISK-043/DEC-132),
+# so V1/V5 downgrade to WARN for them — same judgment pattern as the V2
+# FIX173_NAMING_NORMALIZATION_DATE exemption. The predicate is the TERMINAL
+# round's evidence date (FIX-233 R1 P1-1): a mixed chain whose terminal round
+# post-dates this date remains fully enforced, even when earlier rounds are
+# historical residue.
+FIX174_NORMALIZATION_DATE = date(2026, 7, 18)
+
 
 def _normalize_review_conclusion(value):
     """Return a recognized review state, normalizing only plural NEEDS_CHANGE."""
@@ -1673,6 +1689,11 @@ def _build_review_sequence(review_entries, legacy_files=None):
                                    # (round 0) with R{n}-numbered rounds (n>=2)
         "min_evidence_date": date|None,
     }
+
+    Each round dict also carries a "date" field (FIX-233 R1 P1-1): the latest
+    evidence date observed for that round. The V1/V5 historical exemption
+    judges the TERMINAL round's date, not the chain-wide min_evidence_date
+    (which remains the predicate for the V2 naming-residue exemption).
     """
     _resolve_shared()
     sequences = {}
@@ -1683,6 +1704,11 @@ def _build_review_sequence(review_entries, legacy_files=None):
         conclusion = _normalize_review_conclusion(raw_conclusion) or raw_conclusion or "UNKNOWN"
         blocker_evidence = _entry_unresolved_blocker_evidence(entry)
         entry_date = entry.get("date")
+        parsed_date = None
+        if entry_date:
+            parsed = _parse_iso_date(entry_date) if isinstance(entry_date, str) else entry_date
+            if parsed is not None:
+                parsed_date = parsed
         task_id, round_n = _normalize_review_round(raw_id)
         if task_id is None:
             # Unparseable id — fall back to task_ref if present, round unknown.
@@ -1707,27 +1733,34 @@ def _build_review_sequence(review_entries, legacy_files=None):
                     blocker_evidence,
                 )
             )
+            # FIX-233 R1 (P1-1): retain the round's evidence date — the LATEST
+            # date observed for the round (fail-closed: a post-normalization
+            # date must never be masked by an older duplicate entry).
+            if parsed_date is not None:
+                cur_date = seq["rounds"][round_n].get("date")
+                if cur_date is None or parsed_date > cur_date:
+                    seq["rounds"][round_n]["date"] = parsed_date
             if existing not in _REVIEW_TERMINAL_CONCLUSIONS and conclusion in _REVIEW_TERMINAL_CONCLUSIONS:
                 seq["rounds"][round_n] = {"id": raw_id, "conclusion": conclusion,
                                           "blocker_evidence": seq["rounds"][round_n]["blocker_evidence"],
                                           "round_explicit": bool(_REVIEW_ID_RE.match(raw_id)
-                                                                 and _REVIEW_ID_RE.match(raw_id).group(2))}
+                                                                 and _REVIEW_ID_RE.match(raw_id).group(2)),
+                                          "date": seq["rounds"][round_n].get("date")}
         else:
             m = _REVIEW_ID_RE.match(raw_id)
             round_explicit = bool(m and m.group(2) is not None)
             seq["rounds"][round_n] = {"id": raw_id, "conclusion": conclusion,
                                       "blocker_evidence": blocker_evidence,
-                                      "round_explicit": round_explicit}
+                                      "round_explicit": round_explicit,
+                                      "date": parsed_date}
         seq["max_round"] = max(seq["max_round"], round_n)
         # Track naming migration + earliest evidence date for the V2 historical
         # exemption (FIX-174 R1 P0-2). A round-0 entry is "bare" when its id
         # carried no explicit -R{n} suffix (the pre-FIX-173 convention).
-        if entry_date:
-            parsed = _parse_iso_date(entry_date) if isinstance(entry_date, str) else entry_date
-            if parsed is not None:
-                cur = seq["min_evidence_date"]
-                if cur is None or parsed < cur:
-                    seq["min_evidence_date"] = parsed
+        if parsed_date is not None:
+            cur = seq["min_evidence_date"]
+            if cur is None or parsed_date < cur:
+                seq["min_evidence_date"] = parsed_date
 
     # naming_migrated: the sequence mixes a bare round-0 entry with at least
     # one R{n}-numbered round (n >= 2). That signature only arises when review
@@ -1879,7 +1912,28 @@ def check_review_closure(review_sequence=None, plan_tracker_completed=None,
         # V1: terminal state legality. The highest round's conclusion must be
         # an approved state or BLOCKED, UNLESS the task type is routing-exempt (—).
         is_exempt = _task_routing_exempt(task_id, routing_table)
+        # FIX-233 (R1 P1-1): historical-rule exemption (same judgment pattern
+        # as the V2 FIX173_NAMING_NORMALIZATION_DATE exemption). The predicate
+        # is the TERMINAL round's evidence date — a chain whose terminal round
+        # predates FIX174_NORMALIZATION_DATE is 0.66.1 incident-chain residue
+        # (BLOCKED escalation closures and prose-only APPROVED_WITH_NOTES rows
+        # cannot be rewritten): V1/V5 downgrade to WARN. Mixed chains whose
+        # terminal round post-dates the normalization stay violations.
+        ev_date = rounds[max_round].get("date")
+        pre_normalization = (
+            ev_date is not None and ev_date < FIX174_NORMALIZATION_DATE
+        )
         if terminal == "BLOCKED":
+            if pre_normalization:
+                result["warnings"].append({
+                    "rule": "V1",
+                    "task_id": task_id,
+                    "reason": f"R{max_round}=BLOCKED closes the chain for "
+                              "escalation but is not an approval — historical "
+                              f"pre-FIX-174 normalization escalation closure "
+                              f"({ev_date}); downgraded",
+                })
+                continue
             result["violations"].append({
                 "rule": "V1",
                 "task_id": task_id,
@@ -1914,6 +1968,20 @@ def check_review_closure(review_sequence=None, plan_tracker_completed=None,
             blocker_evidence = rounds[max_round].get("blocker_evidence") or {}
             blocker_status = blocker_evidence.get("status", "missing")
             blocker_value = blocker_evidence.get("value")
+            # FIX-233: a historical row with NO structured token at all is a
+            # pre-normalization prose conclusion → WARN. Rows that DID carry a
+            # token (nonzero / invalid / conflict) stay violations — the
+            # exemption only covers the missing-token (prose) case, fail-closed.
+            if blocker_status == "missing" and pre_normalization:
+                result["warnings"].append({
+                    "rule": "V5",
+                    "task_id": task_id,
+                    "reason": f"R{max_round}=APPROVED_WITH_NOTES without a "
+                              "structured unresolved_blockers=0 token — "
+                              f"historical pre-FIX-174 normalization prose "
+                              f"conclusion ({ev_date}); downgraded",
+                })
+                continue
             if blocker_status != "valid" or blocker_value != 0:
                 detail = blocker_status
                 if blocker_status == "valid":

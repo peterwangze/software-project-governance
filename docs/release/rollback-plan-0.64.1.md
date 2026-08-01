@@ -32,4 +32,4 @@
 
 ### No-overclaim boundaries
 
-No official approval. No marketplace approval. No universal/full runtime support. No RISK-036/037/039/040 closure. No 1.0.0 readiness. Rollback is a single-field config revert + mechanical version re-bump. Low risk — the change is additive (restoring prior behavior), not destructive.
+No official approval. No marketplace approval. No universal/full runtime support. No external first-session pilot success. No RISK-036/037/039/040 closure. No 1.0.0 readiness. Rollback is a single-field config revert + mechanical version re-bump. Low risk — the change is additive (restoring prior behavior), not destructive.

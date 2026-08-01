@@ -40,4 +40,4 @@ If resolve_entry.py itself is sound but the prose wiring (FX-131) causes issues:
 
 ### No-overclaim boundaries
 
-No official approval. No marketplace approval. No universal/full runtime support. No RISK-036/037/039/040 closure. No 1.0.0 readiness. Rollback plan covers the regression scenarios specific to this release (dual-root binding failure = the 0.54.2/0.54.3 class of bug). Full and partial rollback paths are reversible via git revert + mechanical version re-bump. resolve_entry.py is additive (no destructive migration), so rollback is low-risk.
+No official approval. No marketplace approval. No universal/full runtime support. No external first-session pilot success. No RISK-036/037/039/040 closure. No 1.0.0 readiness. Rollback plan covers the regression scenarios specific to this release (dual-root binding failure = the 0.54.2/0.54.3 class of bug). Full and partial rollback paths are reversible via git revert + mechanical version re-bump. resolve_entry.py is additive (no destructive migration), so rollback is low-risk.

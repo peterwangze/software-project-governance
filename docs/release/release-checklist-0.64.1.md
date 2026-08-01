@@ -28,4 +28,4 @@ python skills/software-project-governance/infra/verify_workflow.py check-project
 
 ### Boundaries (no-overclaim)
 
-No official approval. No marketplace approval. No universal/full runtime support. No external validation full PASS. No RISK-036/037/039/040 closure. No 1.0.0 readiness. Pure config fix restoring offline-installation capability. Breaking change (direct git-URL install path removed) is acceptable trade-off — standard marketplace add+install covers all scenarios.
+No official approval. No marketplace approval. No universal/full runtime support. No external first-session pilot success. No external validation full PASS. No RISK-036/037/039/040 closure. No 1.0.0 readiness. Pure config fix restoring offline-installation capability. Breaking change (direct git-URL install path removed) is acceptable trade-off — standard marketplace add+install covers all scenarios.

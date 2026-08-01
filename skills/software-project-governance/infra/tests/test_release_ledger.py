@@ -440,6 +440,73 @@ class ReleaseLedgerTests(unittest.TestCase, TempRepoMixin):
             accepted=validate_release_ledger(RepositoryContext(root),manifests_dir=releases,verify_remote=False)
             self.assertEqual(accepted.state,"PASS",accepted.issues)
 
+    def test_single_decision_authorizes_multiple_versions(self):
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td); original=self.init_repo(root)
+            releases=root/"releases"; releases.mkdir()
+            versions=["0.63.0","0.63.1","0.63.2","0.63.3","0.63.4","0.64.0","0.64.1","0.65.0"]
+            records=[]
+            for version in versions:
+                git(root,"tag","v"+version,original)
+                records.append({"decision_id":"DEC-136","action":"approved","version":version,
+                                "commit":original,"tag":"v"+version,"status":"approved"})
+                payload={"schema_version":1,"version":version,"lifecycle_state":"released",
+                         "provenance":"historical_backfill","artifacts":self.artifacts(),
+                         "trust":{"original_release_commit":original,
+                                  "backfill_commit":{"derivation":"git_commit_adding_path"},
+                                  "document_contemporaneity":"contemporaneous",
+                                  "tag_disposition":"created_by_decision","tag_decision":"DEC-136"},
+                         "events":[],
+                         "effective_state":{"lifecycle_state":"released","withdrawn":False,"amendments":[]}}
+                write_manifest(releases / (version+".json"), payload)
+            git(root,"add","."); git(root,"commit","-m","backfill")
+            decision_log=root/".governance/decision-log.md"
+            decision_log.write_text(
+                "\n".join("HISTORICAL_TAG_AUTHORIZATION_JSON: "+json.dumps(record) for record in records)+"\n",
+                encoding="utf-8")
+            for version in versions:
+                with self.subTest(version=version):
+                    result=validate_release_ledger(RepositoryContext(root),manifests_dir=releases,
+                                                   version=version,verify_remote=False)
+                    self.assertEqual(result.state,"PASS",result.issues)
+            # A duplicate record for one version must not poison other versions.
+            decision_log.write_text(
+                "\n".join("HISTORICAL_TAG_AUTHORIZATION_JSON: "+json.dumps(record) for record in records)
+                +"\nHISTORICAL_TAG_AUTHORIZATION_JSON: "+json.dumps(records[0])+"\n",
+                encoding="utf-8")
+            duplicated=validate_release_ledger(RepositoryContext(root),manifests_dir=releases,
+                                               version="0.63.0",verify_remote=False)
+            self.assertEqual(duplicated.state,"FAIL",duplicated.issues)
+            unaffected=validate_release_ledger(RepositoryContext(root),manifests_dir=releases,
+                                               version="0.64.0",verify_remote=False)
+            self.assertEqual(unaffected.state,"PASS",unaffected.issues)
+
+    def test_duplicate_record_same_triple_still_fails(self):
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td); original=self.init_repo(root)
+            git(root,"tag","v0.63.0",original)
+            releases=root/"releases"; releases.mkdir()
+            payload={"schema_version":1,"version":"0.63.0","lifecycle_state":"released",
+                     "provenance":"historical_backfill","artifacts":self.artifacts(),
+                     "trust":{"original_release_commit":original,
+                              "backfill_commit":{"derivation":"git_commit_adding_path"},
+                              "document_contemporaneity":"contemporaneous",
+                              "tag_disposition":"created_by_decision","tag_decision":"DEC-136"},
+                     "events":[],
+                     "effective_state":{"lifecycle_state":"released","withdrawn":False,"amendments":[]}}
+            write_manifest(releases/"0.63.0.json", payload)
+            git(root,"add","."); git(root,"commit","-m","backfill")
+            record={"decision_id":"DEC-136","action":"approved","version":"0.63.0",
+                    "commit":original,"tag":"v0.63.0","status":"approved"}
+            decision_log=root/".governance/decision-log.md"
+            decision_log.write_text(
+                "\n".join(["HISTORICAL_TAG_AUTHORIZATION_JSON: "+json.dumps(record)]*2)+"\n",
+                encoding="utf-8")
+            result=validate_release_ledger(RepositoryContext(root),manifests_dir=releases,
+                                           version="0.63.0",verify_remote=False)
+            self.assertEqual(result.state,"FAIL")
+            self.assertTrue(any("does not prove" in issue for issue in result.issues))
+
     def test_missing_requires_decision_rejects_non_null_decision(self):
         schema=json.loads((INFRA.parent/"core/release-ledger.schema.json").read_text(encoding="utf-8"))
         payload={"schema_version":1,"version":"0.62.0","lifecycle_state":"released","provenance":"historical_backfill",

@@ -41,7 +41,11 @@ def default_decision_resolver(context: RepositoryContext) -> DecisionResolver:
                     continue
                 if not isinstance(record, dict) or set(record) != exact_keys:
                     continue
-                if record.get("decision_id") == decision_id:
+                if (
+                    record.get("decision_id") == decision_id
+                    and record.get("version") == version
+                    and record.get("commit") == commit
+                ):
                     matching_records.append(record)
         if len(matching_records) != 1:
             return False

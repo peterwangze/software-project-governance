@@ -1149,6 +1149,12 @@ from checks.review_domain import (  # noqa: E402
 )
 
 
+# ── Change-control triage domain (checks/triage_domain.py in 0.73.0) ────────
+# FIX-237.4 / ADR-017 §4.4: Check 32 — mandatory change-control triage for
+# product-code task intake (CLI wiring + record validity + no-record FAIL).
+from checks.triage_domain import check_change_triage  # noqa: E402
+
+
 # ── Existing verification functions ──────────────────────────────
 
 def check_files():
@@ -14139,6 +14145,28 @@ def cmd_check_governance(args):
     print(f"│  identity_verdict={identity_verdict}; phase={identity['phase']}")
     print("└──────────────────────────────────────────────────────┘")
 
+    # ── 32. Change-Control Triage (FIX-237.4 / ADR-017 §4.4) ──
+    # Mandatory four-step triage for product-code task intake: the
+    # change-triage CLI must stay wired, every record must be valid, and a
+    # product-code task with post-normalization evidence but NO triage
+    # record FAILs (fail-closed — the task must not have been created).
+    print("\n┌─ Check 32: Change-Control Triage (FIX-237.4) ────────┐")
+    ct32 = check_change_triage()
+    print(f"│  CLI wiring: {ct32['wiring']['reason']}")
+    print(f"│  Records checked: {ct32['records_checked']}; "
+          f"invalid: {ct32['records_invalid']}")
+    print(f"│  Tasks without triage record: {len(ct32['tasks_without_record'])}; "
+          f"exempt: {ct32['tasks_exempt']}")
+    if ct32["issues"]:
+        all_issues += len(ct32["issues"])
+        print(f"│  [FAIL] {len(ct32['issues'])} change-control triage issue(s):")
+        for issue in ct32["issues"]:
+            print(f"│    - {issue}")
+    else:
+        print("│  [PASS] change-triage wiring + record validity + "
+              "intake enforcement OK.")
+    print("└──────────────────────────────────────────────────────┘")
+
     # ── Summary ──
     print(f"\n┌─ Governance Health Summary ──────────────────────────┐")
     if all_issues == 0:
@@ -19151,6 +19179,55 @@ def cmd_next_candidates(args):
     print(json.dumps(report, ensure_ascii=False, indent=2))
 
 
+def cmd_change_triage(args):
+    """Thin entry — change-triage CLI (FIX-237.4 / ADR-017 §4.4).
+
+    Runs the mandatory four-step change-control triage for a new
+    product-code task (dependency analysis via task-priority-analysis with
+    snapshot / priority determination / same-file conflict check / version
+    adaptation) and machine-writes the triage record
+    (``.governance/change-triage/{TASK_ID}.json`` + evidence row). All logic
+    lives in infra/change_triage.py; this entry is argparse glue + I/O
+    (RISK-039 thin-entry discipline). Exits non-zero (2) fail-closed on any
+    step error — without a triage record the task MUST NOT be created.
+    """
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    from change_triage import run_triage
+    if not SAMPLE_PATH.is_file():
+        print(
+            "change-triage: plan-tracker.md not found at {0}".format(SAMPLE_PATH),
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    current_version = (
+        _extract_skill_version(
+            PLUGIN_ROOT / "skills/software-project-governance/SKILL.md")
+        or ""
+    )
+    files = [
+        f.strip() for f in str(args.files or "").replace(";", ",").split(",")
+        if f.strip()
+    ]
+    summary = run_triage(
+        task_id=args.task,
+        title=getattr(args, "title", "") or "",
+        priority=args.priority,
+        target_version=getattr(args, "version", "未规划版本") or "未规划版本",
+        depends_on=getattr(args, "depends_on", "") or "",
+        files=files,
+        reason=getattr(args, "reason", "") or "",
+        plan_tracker_text=SAMPLE_PATH.read_text(encoding="utf-8"),
+        current_version=current_version,
+        governance_dir=GOVERNANCE_DIR,
+    )
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    if summary.get("error"):
+        sys.exit(2)
+
+
 def cmd_check_duplicate_code(args):
     """Run REQ-101 ArchGuard source/projection duplicate-code guard (advisory in 0.58.0)."""
     try:
@@ -20426,6 +20503,33 @@ def main(argv=None):
     nc_p.add_argument("--write", action="store_true",
                       help="Persist the recomputed snapshot")
 
+    # change-triage (FIX-237.4 / ADR-017 §4.4 — mandatory change-control
+    # triage for product-code task intake; fail-closed: no record → the task
+    # MUST NOT be created)
+    ctri_p = subparsers.add_parser(
+        "change-triage",
+        help="Run the mandatory 4-step triage (dependency/priority/conflict/"
+             "version) for a new product-code task (FIX-237)",
+    )
+    ctri_p.add_argument("--task", required=True,
+                        help="New task id (PREFIX-NNN, e.g. FIX-241)")
+    ctri_p.add_argument("--title", default="",
+                        help="One-line task title")
+    ctri_p.add_argument("--priority", required=True,
+                        choices=["P0", "P1", "P2"],
+                        help="Proposed priority (determined with in-flight + "
+                             "version-chain context)")
+    ctri_p.add_argument("--version", default="未规划版本",
+                        help="Target version (semver X.Y.Z or 未规划版本)")
+    ctri_p.add_argument("--depends-on", default="",
+                        help="Comma-separated task-family dependency IDs "
+                             "(cross-entity refs like RISK-/DEC- are ignored)")
+    ctri_p.add_argument("--files", required=True,
+                        help="Comma-separated product files the task will "
+                             "modify (quick lane covers .governance/ only)")
+    ctri_p.add_argument("--reason", default="",
+                        help="Triage rationale (priority determination)")
+
     args = parser.parse_args(parser_argv)
     if args.project_root and explicit_project_root is None:
         explicit_project_root = args.project_root
@@ -20508,6 +20612,7 @@ def main(argv=None):
         "task-priority-analysis": cmd_task_priority_analysis,
         "review-record": cmd_review_record,
         "next-candidates": cmd_next_candidates,
+        "change-triage": cmd_change_triage,
     }
 
     cmd = args.command or "verify"

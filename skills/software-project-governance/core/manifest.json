@@ -184,6 +184,22 @@
         "type": "file"
       },
       {
+        "path": "skills/software-project-governance/infra/change_triage.py",
+        "type": "file"
+      },
+      {
+        "path": "skills/software-project-governance/infra/checks/triage_domain.py",
+        "type": "file"
+      },
+      {
+        "path": "skills/software-project-governance/infra/tests/test_change_triage.py",
+        "type": "file"
+      },
+      {
+        "path": "commands/change-triage.md",
+        "type": "file"
+      },
+      {
         "path": "skills/software-project-governance/references/",
         "type": "dir"
       },

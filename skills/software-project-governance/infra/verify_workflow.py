@@ -19562,6 +19562,35 @@ def _web_console_url(host="127.0.0.1", port=5173):
     return f"http://{host}:{port}/"
 
 
+_WEB_INSTALL_TIMEOUT_DEFAULT = 120
+_WEB_INSTALL_TIMEOUT_ENV = "SPG_WEB_INSTALL_TIMEOUT"
+
+
+def _resolve_positive_timeout(raw, default):
+    """Shared FIX-234-style env-var timeout resolution.
+
+    Positive integer seconds win; absent/invalid values fall back to the
+    supplied default (never crashes the caller).
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def _resolve_web_install_timeout(raw):
+    """FIX-238.4: resolve the web-console npm install timeout.
+
+    SPG_WEB_INSTALL_TIMEOUT (positive integer seconds, default 120s) with
+    invalid values falling back to the default (FIX-234 precedent).
+    """
+    return _resolve_positive_timeout(raw, _WEB_INSTALL_TIMEOUT_DEFAULT)
+
+
 def _web_console_is_live(url, timeout=1.5):
     return _web_console_probe(url, timeout=timeout)["state"] == "running"
 
@@ -19715,7 +19744,22 @@ def cmd_web_console(args):
                 sys.exit(1)
             return
         print("\nInstalling web dependencies with npm install...")
-        install_result = subprocess.run([npm, "install"], cwd=paths["web_dir"])
+        install_timeout = _resolve_web_install_timeout(
+            os.environ.get(_WEB_INSTALL_TIMEOUT_ENV, "")
+        )
+        try:
+            install_result = subprocess.run(
+                [npm, "install"], cwd=paths["web_dir"], timeout=install_timeout
+            )
+        except subprocess.TimeoutExpired:
+            print("Status: blocked")
+            print(
+                f"Reason: npm install timed out after {install_timeout}s "
+                f"(SPG_WEB_INSTALL_TIMEOUT); raise the value or inspect the npm log."
+            )
+            if args.fail_on_issues:
+                sys.exit(124)
+            return
         if install_result.returncode != 0:
             print("Status: blocked")
             print(f"Reason: npm install exited {install_result.returncode}.")
@@ -19813,6 +19857,91 @@ def cmd_web_console(args):
     print("The server did not respond within 15 seconds; check the log above.")
     if args.fail_on_issues:
         sys.exit(1)
+
+
+# ── resolve-entry thin wrapper (FIX-238.3, ADR-017 §2) ────────────────
+# DEC-096 constraint: resolve_entry.py itself is untouched. The bounded
+# timeout and classified fail-closed diagnostics live on the calling side
+# (this thin entry, bootstrap.sh and bootstrap.cmd share one exit-code
+# contract so hosts can delegate between them).
+_RESOLVE_TIMEOUT_DEFAULT = 15
+_RESOLVE_TIMEOUT_ENV = "SPG_RESOLVE_TIMEOUT"
+_RESOLVE_ENTRY_REL = "skills/software-project-governance/infra/resolve_entry.py"
+_RESOLVE_ENTRY_CANONICAL_MARKER = "Deterministic /governance entry resolver (FX-130)"
+_RESOLVE_EXIT_OTHER = 1
+_RESOLVE_EXIT_PYTHON_MISSING = 2
+_RESOLVE_EXIT_FILE_NOT_FOUND = 3
+_RESOLVE_EXIT_TIMEOUT = 4
+_RESOLVE_EXIT_STORE_STUB = 5
+
+
+def _resolve_resolve_timeout(raw):
+    """FIX-238.3: resolve the resolve_entry timeout from an env-var value.
+
+    SPG_RESOLVE_TIMEOUT (positive integer seconds, default 15s); invalid
+    values fall back to the default (FIX-234 precedent) instead of crashing.
+    """
+    return _resolve_positive_timeout(raw, _RESOLVE_TIMEOUT_DEFAULT)
+
+
+def cmd_resolve_entry(args):
+    """Thin bounded invocation of resolve_entry.py with classified
+    fail-closed diagnostics (file-not-found / timeout / python-missing /
+    store-stub). Prints the JSON envelope on stdout on success."""
+    script = ROOT / _RESOLVE_ENTRY_REL
+    if not script.is_file():
+        print(
+            f"spg-bootstrap-error: file-not-found — resolve_entry.py missing at {script}",
+            file=sys.stderr,
+        )
+        sys.exit(_RESOLVE_EXIT_FILE_NOT_FOUND)
+    try:
+        content = script.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        print(
+            f"spg-bootstrap-error: file-not-found — cannot read {script}: {exc}",
+            file=sys.stderr,
+        )
+        sys.exit(_RESOLVE_EXIT_FILE_NOT_FOUND)
+    if _RESOLVE_ENTRY_CANONICAL_MARKER not in content:
+        print(
+            "spg-bootstrap-error: store-stub — resolve_entry.py exists but is not "
+            "the canonical resolver (missing FX-130 marker); reinstall the plugin",
+            file=sys.stderr,
+        )
+        sys.exit(_RESOLVE_EXIT_STORE_STUB)
+    timeout = _resolve_resolve_timeout(os.environ.get(_RESOLVE_TIMEOUT_ENV, ""))
+    command = [sys.executable, str(script), "--json"]
+    if getattr(args, "project_root", None):
+        command += ["--project-root", args.project_root]
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        print(
+            f"spg-bootstrap-error: timeout — resolve_entry did not finish within "
+            f"{timeout}s (SPG_RESOLVE_TIMEOUT); raise the value or inspect the host",
+            file=sys.stderr,
+        )
+        sys.exit(_RESOLVE_EXIT_TIMEOUT)
+    except FileNotFoundError as exc:
+        print(f"spg-bootstrap-error: python-missing — {exc}", file=sys.stderr)
+        sys.exit(_RESOLVE_EXIT_PYTHON_MISSING)
+    if completed.returncode != 0:
+        print(
+            f"spg-bootstrap-error: resolve_entry exited {completed.returncode}",
+            file=sys.stderr,
+        )
+        if completed.stderr:
+            sys.stderr.write(completed.stderr)
+        sys.exit(_RESOLVE_EXIT_OTHER)
+    sys.stdout.write(completed.stdout)
 
 
 def main(argv=None):
@@ -19998,7 +20127,8 @@ def main(argv=None):
     wc_p.add_argument("--start", action="store_true",
                       help="Start the local Web console and print its URL")
     wc_p.add_argument("--install", action="store_true",
-                      help="Run npm install first when web/node_modules is missing")
+                      help="Run npm install first when web/node_modules is missing "
+                           "(SPG_WEB_INSTALL_TIMEOUT, default 120s)")
     wc_p.add_argument("--foreground", action="store_true",
                       help="Run the Vite dev server in the foreground instead of backgrounding it")
     wc_p.add_argument("--open", action="store_true",
@@ -20009,6 +20139,14 @@ def main(argv=None):
                       help="Port passed to Vite (default: 5173)")
     wc_p.add_argument("--fail-on-issues", action="store_true",
                       help="Exit with non-zero code when the console cannot be started")
+
+    # resolve-entry (FIX-238.3)
+    re_p = subparsers.add_parser(
+        "resolve-entry",
+        help="Thin bounded resolve_entry invocation with classified fail-closed diagnostics (FIX-238.3)",
+    )
+    re_p.add_argument("--project-root", default=None,
+                      help="Explicit host project root forwarded to resolve_entry.py")
 
     # agent-runtime-e2e
     are_p = subparsers.add_parser(
@@ -20560,6 +20698,7 @@ def main(argv=None):
         "external-project-validation": cmd_external_project_validation,
         "first-run-demo": cmd_first_run_demo,
         "web-console": cmd_web_console,
+        "resolve-entry": cmd_resolve_entry,
         "agent-runtime-e2e": cmd_agent_runtime_e2e,
         "gemini-auth-preflight": cmd_gemini_auth_preflight,
         "opencode-provider-preflight": cmd_opencode_provider_preflight,

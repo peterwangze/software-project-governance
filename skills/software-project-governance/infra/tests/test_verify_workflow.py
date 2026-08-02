@@ -12694,6 +12694,490 @@ class WebConsoleGovernanceEntryTests(unittest.TestCase):
         self.assertIn("manual /governance uses --governance-entry", output)
 
 
+class WebConsoleInstallTimeoutTests(unittest.TestCase):
+    """FIX-238.4: web-console --install honors SPG_WEB_INSTALL_TIMEOUT."""
+
+    def _args(self, **overrides):
+        args = {
+            "host": "127.0.0.1",
+            "port": 59996,
+            "status": False,
+            "summary_link": False,
+            "governance_entry": False,
+            "start": False,
+            "install": False,
+            "foreground": False,
+            "open": False,
+            "fail_on_issues": False,
+        }
+        args.update(overrides)
+        return argparse.Namespace(**args)
+
+    def _web_fixture(self):
+        root = Path(tempfile.mkdtemp())
+        web = root / "web"
+        web.mkdir()
+        (web / "package.json").write_text("{}", encoding="utf-8")
+        return root, web
+
+    def test_web_install_timeout_default_when_env_absent_or_invalid(self):
+        self.assertEqual(vw._resolve_web_install_timeout(""), 120)
+        self.assertEqual(vw._resolve_web_install_timeout(None), 120)
+        for invalid in ("abc", "0", "-7", "1.5", "  "):
+            self.assertEqual(vw._resolve_web_install_timeout(invalid), 120)
+
+    def test_web_install_timeout_explicit_priority(self):
+        self.assertEqual(vw._resolve_web_install_timeout("45"), 45)
+        self.assertEqual(vw._resolve_web_install_timeout(" 90 "), 90)
+
+    def test_npm_install_timeout_reports_diagnostic_without_hang(self):
+        root, _ = self._web_fixture()
+        self.addCleanup(shutil.rmtree, root)
+        with patch.object(vw.shutil, "which", return_value="npm"), \
+             patch.object(
+                 vw.subprocess,
+                 "run",
+                 side_effect=subprocess.TimeoutExpired(cmd=["npm", "install"], timeout=120),
+             ):
+            stdout = io.StringIO()
+            with patch.object(vw, "ROOT", root), redirect_stdout(stdout):
+                vw.cmd_web_console(self._args(install=True, start=True))
+            output = stdout.getvalue()
+
+        self.assertIn("Status: blocked", output)
+        self.assertIn("timed out", output)
+        self.assertIn("SPG_WEB_INSTALL_TIMEOUT", output)
+        self.assertIn("120", output)
+
+    def test_npm_install_timeout_fail_on_issues_exits_nonzero(self):
+        root, _ = self._web_fixture()
+        self.addCleanup(shutil.rmtree, root)
+        with patch.object(vw.shutil, "which", return_value="npm"), \
+             patch.object(
+                 vw.subprocess,
+                 "run",
+                 side_effect=subprocess.TimeoutExpired(cmd=["npm", "install"], timeout=120),
+             ):
+            with patch.object(vw, "ROOT", root):
+                with self.assertRaises(SystemExit) as ctx:
+                    vw.cmd_web_console(self._args(install=True, start=True, fail_on_issues=True))
+        self.assertNotEqual(ctx.exception.code, 0)
+
+    def test_npm_install_timeout_uses_explicit_env_value(self):
+        root, _ = self._web_fixture()
+        self.addCleanup(shutil.rmtree, root)
+        env = {"SPG_WEB_INSTALL_TIMEOUT": "7"}
+        probes = iter([
+            {"state": "not_running", "error": "connection refused"},
+            {"state": "running", "status": 200},
+        ])
+        with patch.dict(os.environ, env, clear=False), \
+             patch.object(vw.shutil, "which", return_value="npm") as which, \
+             patch.object(vw.subprocess, "run", return_value=subprocess.CompletedProcess(
+                 args=["npm", "install"], returncode=0, stdout="", stderr="",
+             )) as run, \
+             patch.object(vw.subprocess, "Popen", return_value=SimpleNamespace(pid=7)), \
+             patch.object(vw.time, "sleep", return_value=None), \
+             patch.object(vw, "_web_console_probe", side_effect=lambda *_args, **_kwargs: next(probes)):
+            stdout = io.StringIO()
+            with patch.object(vw, "ROOT", root), redirect_stdout(stdout):
+                vw.cmd_web_console(self._args(install=True, start=True))
+            output = stdout.getvalue()
+
+        self.assertIn("Status: running", output)
+        which.assert_called_once_with("npm")
+        self.assertEqual(run.call_args.kwargs.get("timeout"), 7)
+
+    def test_npm_install_success_path_proceeds_to_start(self):
+        root, _ = self._web_fixture()
+        self.addCleanup(shutil.rmtree, root)
+        probes = iter([
+            {"state": "not_running", "error": "connection refused"},
+            {"state": "running", "status": 200},
+        ])
+        with patch.object(vw.shutil, "which", return_value="npm"), \
+             patch.object(
+                 vw.subprocess,
+                 "run",
+                 return_value=subprocess.CompletedProcess(
+                     args=["npm", "install"], returncode=0, stdout="", stderr="",
+                 ),
+             ) as run, \
+             patch.object(vw.subprocess, "Popen", return_value=SimpleNamespace(pid=4243)) as popen, \
+             patch.object(vw.time, "sleep", return_value=None), \
+             patch.object(vw, "_web_console_probe", side_effect=lambda *_args, **_kwargs: next(probes)):
+            stdout = io.StringIO()
+            with patch.object(vw, "ROOT", root), redirect_stdout(stdout):
+                vw.cmd_web_console(self._args(install=True, start=True))
+            output = stdout.getvalue()
+
+        self.assertIn("Status: running", output)
+        self.assertNotIn("timed out", output)
+        popen.assert_called_once()
+        self.assertEqual(run.call_args.kwargs.get("timeout"), 120)
+
+
+class ResolveEntryBootstrapWrapperTests(unittest.TestCase):
+    """FIX-238.3: verify_workflow.py resolve-entry thin wrapper with
+    SPG_RESOLVE_TIMEOUT (default 15s) and classified fail-closed diagnostics."""
+
+    FAKE_ENVELOPE = (
+        '{\n  "plugin_home": "/fake/plugin",\n'
+        '  "host_project_root": "/fake/host",\n'
+        '  "resolved_root_ok": true,\n'
+        '  "scenario_hint": "F"\n}\n'
+    )
+
+    def _fixture(self, script_body=None, marker=True):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root)
+        infra = root / "skills/software-project-governance/infra"
+        infra.mkdir(parents=True)
+        if script_body is None:
+            script_body = (
+                "# Deterministic /governance entry resolver (FX-130)\n"
+                "import json, sys\n"
+                'print(json.dumps({"plugin_home": "/fake/plugin",'
+                ' "host_project_root": "/fake/host",'
+                ' "resolved_root_ok": True, "scenario_hint": "F"}))\n'
+            )
+        if not marker:
+            script_body = (
+                "# marketplace placeholder stub\n"
+                "print('this is not the canonical resolver')\n"
+            )
+        (infra / "resolve_entry.py").write_text(script_body, encoding="utf-8")
+        return root
+
+    def _run_wrapper(self, root, project_root=None):
+        args = argparse.Namespace(project_root=project_root)
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with patch.object(vw, "ROOT", root):
+            with redirect_stdout(stdout):
+                with patch("sys.stderr", stderr):
+                    vw.cmd_resolve_entry(args)
+        return stdout.getvalue(), stderr.getvalue()
+
+    def _run_wrapper_exit(self, root, project_root=None):
+        args = argparse.Namespace(project_root=project_root)
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        code = None
+        with patch.object(vw, "ROOT", root):
+            with redirect_stdout(stdout):
+                with patch("sys.stderr", stderr):
+                    try:
+                        vw.cmd_resolve_entry(args)
+                    except SystemExit as exc:
+                        code = exc.code
+        return code, stdout.getvalue(), stderr.getvalue()
+
+    def test_resolve_timeout_env_default_and_invalid_fall_back(self):
+        self.assertEqual(vw._resolve_resolve_timeout(""), 15)
+        self.assertEqual(vw._resolve_resolve_timeout(None), 15)
+        for invalid in ("abc", "0", "-3", "2.5"):
+            self.assertEqual(vw._resolve_resolve_timeout(invalid), 15)
+
+    def test_resolve_timeout_env_explicit_priority(self):
+        self.assertEqual(vw._resolve_resolve_timeout("9"), 9)
+
+    def test_resolve_entry_wrapper_success_emits_envelope(self):
+        root = self._fixture()
+        stdout, stderr = self._run_wrapper(root)
+        self.assertIn('"resolved_root_ok": true', stdout)
+        self.assertIn('"scenario_hint": "F"', stdout)
+        self.assertEqual(stderr, "")
+
+    def test_resolve_entry_wrapper_file_not_found_diagnostic(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root)
+        code, _, stderr = self._run_wrapper_exit(root)
+        self.assertEqual(code, 3)
+        self.assertIn("file-not-found", stderr)
+
+    def test_resolve_entry_wrapper_timeout_diagnostic(self):
+        root = self._fixture(script_body=(
+            "# Deterministic /governance entry resolver (FX-130)\n"
+            "import time\n"
+            "time.sleep(60)\n"
+        ))
+        with patch.dict(os.environ, {"SPG_RESOLVE_TIMEOUT": "1"}, clear=False):
+            code, _, stderr = self._run_wrapper_exit(root)
+        self.assertEqual(code, 4)
+        self.assertIn("timeout", stderr)
+
+    def test_resolve_entry_wrapper_store_stub_diagnostic(self):
+        root = self._fixture(marker=False)
+        code, _, stderr = self._run_wrapper_exit(root)
+        self.assertEqual(code, 5)
+        self.assertIn("store-stub", stderr)
+
+    def test_resolve_entry_wrapper_python_missing_diagnostic(self):
+        root = self._fixture()
+        with patch.object(
+            vw.subprocess,
+            "run",
+            side_effect=FileNotFoundError("python"),
+        ):
+            code, _, stderr = self._run_wrapper_exit(root)
+        self.assertEqual(code, 2)
+        self.assertIn("python-missing", stderr)
+
+    def test_resolve_entry_wrapper_forward_project_root(self):
+        root = self._fixture()
+        with patch.object(vw.subprocess, "run", return_value=subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=self.FAKE_ENVELOPE, stderr="",
+        )) as run:
+            stdout, _ = self._run_wrapper(root, project_root="/some/host")
+        self.assertIn('"resolved_root_ok": true', stdout)
+        self.assertIn("--project-root", run.call_args.args[0])
+        self.assertIn("/some/host", run.call_args.args[0])
+
+
+class BootstrapScriptTests(unittest.TestCase):
+    """FIX-238.1/238.3: vendor bootstrap.sh/bootstrap.cmd locate
+    resolve_entry.py, bound it with SPG_RESOLVE_TIMEOUT and classify
+    failures fail-closed (exit non-zero)."""
+
+    def _bash(self):
+        for base in (
+            Path(os.environ.get("ProgramFiles", "")) / "Git" / "bin" / "bash.exe",
+            Path(os.environ.get("ProgramFiles(x86)", "")) / "Git" / "bin" / "bash.exe",
+        ):
+            if base.is_file():
+                return str(base)
+        return shutil.which("bash") or "bash"
+
+    def _fixture(self, resolve_body=None):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root)
+        infra = root / "infra"
+        infra.mkdir()
+        shutil.copy(_INFRA_DIR / "bootstrap.sh", infra / "bootstrap.sh")
+        shutil.copy(_INFRA_DIR / "bootstrap.cmd", infra / "bootstrap.cmd")
+        if resolve_body is not None:
+            (infra / "resolve_entry.py").write_text(resolve_body, encoding="utf-8")
+        return root
+
+    def _cmd_fixture(self, resolve_body, verify_body=None):
+        """bootstrap.cmd delegates to `verify_workflow.py resolve-entry`, so
+        the fixture lays out a minimal wrapper mirroring that contract."""
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root)
+        infra = root / "infra"
+        infra.mkdir()
+        shutil.copy(_INFRA_DIR / "bootstrap.cmd", infra / "bootstrap.cmd")
+        (infra / "resolve_entry.py").write_text(resolve_body, encoding="utf-8")
+        if verify_body is None:
+            verify_body = (
+                "import os, subprocess, sys\n"
+                "def main():\n"
+                "    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'resolve_entry.py')\n"
+                "    timeout = 15\n"
+                "    raw = os.environ.get('SPG_RESOLVE_TIMEOUT', '')\n"
+                "    try:\n"
+                "        value = int(raw)\n"
+                "        if value > 0:\n"
+                "            timeout = value\n"
+                "    except ValueError:\n"
+                "        pass\n"
+                "    try:\n"
+                "        proc = subprocess.run([sys.executable, script, '--json'],\n"
+                "                              timeout=timeout, capture_output=True, text=True)\n"
+                "    except subprocess.TimeoutExpired:\n"
+                "        print('spg-bootstrap-error: timeout - fake wrapper', file=sys.stderr)\n"
+                "        sys.exit(4)\n"
+                "    sys.stdout.write(proc.stdout)\n"
+                "    sys.exit(proc.returncode)\n"
+                "if __name__ == '__main__':\n"
+                "    main()\n"
+            )
+        (infra / "verify_workflow.py").write_text(verify_body, encoding="utf-8")
+        return root
+
+    def _run_sh(self, root, env=None):
+        run_env = os.environ.copy()
+        if env:
+            run_env.update(env)
+        return subprocess.run(
+            [self._bash(), "infra/bootstrap.sh"],
+            cwd=root,
+            env=run_env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=60,
+        )
+
+    def _envelope_script(self):
+        return (
+            "# Deterministic /governance entry resolver (FX-130)\n"
+            "import json\n"
+            'print(json.dumps({"plugin_home": "/fake/plugin",'
+            ' "host_project_root": "/fake/host",'
+            ' "resolved_root_ok": True, "scenario_hint": "F"}))\n'
+        )
+
+    def test_bootstrap_sh_success_emits_envelope(self):
+        root = self._fixture(resolve_body=self._envelope_script())
+        result = self._run_sh(root)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('"resolved_root_ok": true', result.stdout)
+
+    def test_bootstrap_sh_timeout_classified_exit_4(self):
+        root = self._fixture(resolve_body=(
+            "# Deterministic /governance entry resolver (FX-130)\n"
+            "import time\n"
+            "time.sleep(60)\n"
+        ))
+        result = self._run_sh(root, {"SPG_RESOLVE_TIMEOUT": "1"})
+        self.assertEqual(result.returncode, 4)
+        self.assertIn("timeout", (result.stdout + result.stderr).lower())
+
+    def test_bootstrap_sh_file_not_found_classified_exit_3(self):
+        root = self._fixture(resolve_body=None)
+        result = self._run_sh(root)
+        self.assertEqual(result.returncode, 3)
+        self.assertIn("file-not-found", (result.stdout + result.stderr).lower())
+
+    def test_bootstrap_sh_store_stub_classified_exit_5(self):
+        root = self._fixture(resolve_body=(
+            "# marketplace placeholder stub\n"
+            "print('not the real resolver')\n"
+        ))
+        result = self._run_sh(root)
+        self.assertEqual(result.returncode, 5)
+        self.assertIn("store-stub", (result.stdout + result.stderr).lower())
+
+    def test_bootstrap_sh_python_missing_classified_exit_2(self):
+        root = self._fixture(resolve_body=self._envelope_script())
+        result = self._run_sh(root, {"SPG_BOOTSTRAP_PYTHON": "definitely-not-a-python-binary"})
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("python-missing", (result.stdout + result.stderr).lower())
+
+    def test_bootstrap_sh_invalid_timeout_falls_back_to_default(self):
+        root = self._fixture(resolve_body=self._envelope_script())
+        result = self._run_sh(root, {"SPG_RESOLVE_TIMEOUT": "not-a-number"})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('"resolved_root_ok": true', result.stdout)
+
+    def test_bootstrap_cmd_contains_classified_diagnostics_and_timeout(self):
+        text = (_INFRA_DIR / "bootstrap.cmd").read_text(encoding="utf-8")
+        for marker in (
+            "resolve_entry.py",
+            "SPG_RESOLVE_TIMEOUT",
+            "python-missing",
+            "file-not-found",
+            "store-stub",
+            "timeout",
+            "exit /b",
+        ):
+            self.assertIn(marker, text)
+
+    @unittest.skipUnless(os.name == "nt", "cmd.exe bootstrap only runs on Windows")
+    def test_bootstrap_cmd_success_emits_envelope_on_windows(self):
+        root = self._cmd_fixture(resolve_body=self._envelope_script())
+        result = subprocess.run(
+            ["cmd", "/c", "infra\\bootstrap.cmd"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=60,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('"resolved_root_ok": true', result.stdout)
+
+    @unittest.skipUnless(os.name == "nt", "cmd.exe bootstrap only runs on Windows")
+    def test_bootstrap_cmd_timeout_classified_on_windows(self):
+        root = self._cmd_fixture(resolve_body=(
+            "# Deterministic /governance entry resolver (FX-130)\n"
+            "import time\n"
+            "time.sleep(60)\n"
+        ))
+        env = os.environ.copy()
+        env["SPG_RESOLVE_TIMEOUT"] = "1"
+        result = subprocess.run(
+            ["cmd", "/c", "infra\\bootstrap.cmd"],
+            cwd=root,
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=60,
+        )
+        self.assertEqual(result.returncode, 4)
+        self.assertIn("timeout", (result.stdout + result.stderr).lower())
+
+
+class EntryBootstrapTemplateTests(unittest.TestCase):
+    """FIX-238.1/238.2: command templates carry platform injection,
+    POSIX/PowerShell dual syntax and the @bootstrap-version upgrade chain."""
+
+    def test_governance_command_documents_platform_injection_and_vendor_fallback(self):
+        text = (vw.ROOT / "commands" / "governance.md").read_text(encoding="utf-8")
+        for marker in (
+            "$CLAUDE_PLUGIN_ROOT",
+            "file:",
+            "bootstrap.sh",
+            "bootstrap.cmd",
+            "PowerShell",
+            "POSIX",
+            "SPG_RESOLVE_TIMEOUT",
+            "SPG_WEB_INSTALL_TIMEOUT",
+        ):
+            self.assertIn(marker, text)
+
+    def test_governance_init_documents_platform_injection_and_dual_syntax(self):
+        text = (vw.ROOT / "commands" / "governance-init.md").read_text(encoding="utf-8")
+        for marker in ("$CLAUDE_PLUGIN_ROOT", "bootstrap.sh", "bootstrap.cmd",
+                       "PowerShell", "POSIX", "@bootstrap-version"):
+            self.assertIn(marker, text)
+
+    def test_bootstrap_version_upgrade_chain_documented_in_governance_command(self):
+        text = (vw.ROOT / "commands" / "governance.md").read_text(encoding="utf-8")
+        for marker in ("@bootstrap-version", "陈旧", "/plugin update", "不升级"):
+            self.assertIn(marker, text)
+
+    def test_bootstrap_version_marker_injected_into_all_profiles(self):
+        text = (vw.ROOT / "commands" / "governance-init.md").read_text(encoding="utf-8")
+        marker_line = "> @bootstrap-version: 0.73.0"
+        self.assertEqual(
+            text.count(marker_line), 3,
+            "lightweight + standard + strict 三个注入模板均应含标记行",
+        )
+
+    def test_host_entry_files_carry_bootstrap_version_marker(self):
+        # AGENTS.md 是已跟踪的 Codex 原生入口——fresh checkout 必须存在，无条件断言
+        agents = vw.ROOT / "AGENTS.md"
+        self.assertIn(
+            "@bootstrap-version:",
+            agents.read_text(encoding="utf-8"),
+            "AGENTS.md",
+        )
+        # 根 CLAUDE.md 被 .gitignore 忽略（未跟踪，设计如此）——存在才断言，
+        # fresh checkout 无此文件时不得 FileNotFoundError（FIX-240 former-46 降级守卫先例）
+        claude = vw.ROOT / "CLAUDE.md"
+        if claude.exists():
+            self.assertIn(
+                "@bootstrap-version:",
+                claude.read_text(encoding="utf-8"),
+                "CLAUDE.md",
+            )
+
+    def test_e2e_fixture_mirrors_bootstrap_script_and_markers(self):
+        fixture_commands = vw.ROOT / "project/e2e-test-project/commands"
+        governance = (fixture_commands / "governance.md").read_text(encoding="utf-8")
+        init = (fixture_commands / "governance-init.md").read_text(encoding="utf-8")
+        self.assertIn("bootstrap.sh", governance)
+        self.assertIn("bootstrap.cmd", governance)
+        self.assertIn("@bootstrap-version", init)
+
+
 class ArchiveTriggerGapTests(unittest.TestCase):
     """FIX-063: Check 26 exposes continuous archive trigger gaps."""
 

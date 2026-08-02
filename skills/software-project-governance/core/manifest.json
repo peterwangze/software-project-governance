@@ -180,6 +180,14 @@
         "type": "file"
       },
       {
+        "path": "skills/software-project-governance/infra/bootstrap.sh",
+        "type": "file"
+      },
+      {
+        "path": "skills/software-project-governance/infra/bootstrap.cmd",
+        "type": "file"
+      },
+      {
         "path": "skills/software-project-governance/infra/archive.py",
         "type": "file"
       },

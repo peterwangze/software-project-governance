@@ -484,13 +484,25 @@
 ### TOOL-042：Local Web Console launcher
 
 - **文件**：`infra/verify_workflow.py` + repo-only `web/`
-- **子命令**：`web-console --status`；`web-console --governance-entry`；`web-console --summary-link`；`web-console --start [--install] [--open] [--host 127.0.0.1] [--port 5173]`
+- **子命令**：`web-console --status`；`web-console --governance-entry`；`web-console --summary-link`；`web-console --start [--install] [--open] [--host 127.0.0.1] [--port 5173]`；`--install` 超时由 `SPG_WEB_INSTALL_TIMEOUT` 参数化（默认 120s，非法回退默认——FIX-238.4）
 - **输入**：当前仓库中的 `web/package.json`、本机 `npm`、可选 `web/node_modules`
-- **输出**：Web console 可用性、启动/复用结果、手动启动命令、本地 URL；`--governance-entry` 是手动 `/governance` 默认入口，启动或复用本地 Web UI；`--summary-link` 输出阶段/session 总结可追加的只读入口且不启动服务；`--start` 后台启动 Vite dev server 并写入 `web/web-dev.log` 与 `.spg-web-console.pid`
+- **输出**：Web console 可用性、启动/复用结果、手动启动命令、本地 URL；`--governance-entry` 是手动 `/governance` 默认入口，启动或复用本地 Web UI；`--summary-link` 输出阶段/session 总结可追加的只读入口且不启动服务；`--start` 后台启动 Vite dev server 并写入 `web/web-dev.log` 与 `.spg-web-console.pid`；npm install 超时输出分类诊断（`timed out after Ns (SPG_WEB_INSTALL_TIMEOUT)`）不挂起，`--fail-on-issues` 时 exit 124
 - **触发条件**：用户手动执行 `/governance`，或希望从 CLI/客户端打开可视化状态面板、查看本地配置、状态、证据/风险或高级维护入口时
 - **依赖**：repo-only `web/` React/Vite console、`npm`、`check-manifest-consistency`
 - **边界**：local companion dashboard only；主交互仍在 CLI/agent client；手动 `/governance` 默认启动或复用 Web console，便于后续 Web UI 交互；阶段/session 总结只追加 `--summary-link` 只读入口；缺少依赖时不静默安装，提示显式 `--install`；不自动执行 agent 任务；不是 Codex Desktop 内嵌 UI、marketplace lifecycle PASS、official approval 或 1.0.0 readiness 证据。
 - **被以下子工作流使用**：立项（initiation）、测试（testing）、运营（operations）、维护（maintenance）
+
+### TOOL-051：Entry bootstrap + resolve_entry 超时兜底
+
+- **文件**：`infra/bootstrap.sh`、`infra/bootstrap.cmd`、`infra/verify_workflow.py`（`resolve-entry` 薄入口）
+- **子命令**：`resolve-entry [--project-root <path>]`；POSIX 直调 `bash "<plugin_home>/infra/bootstrap.sh"`；Windows 直调 `& "<plugin_home>\infra\bootstrap.cmd"`
+- **输入**：插件包内 `infra/resolve_entry.py`；宿主项目根（默认 cwd，或 `--project-root`）
+- **输出**：resolve_entry JSON envelope（stdout）；分类诊断（`spg-bootstrap-error: <category>`）——file-not-found / timeout / python-missing / store-stub，exit 非 0（fail-closed，FIX-238.3）
+- **退出码契约**：0 成功；1 其他失败；2 python 缺失；3 resolve_entry.py 缺失；4 超时；5 store stub（缺 FX-130 canonical marker）
+- **触发条件**：宿主无 AGENTS.md/CLAUDE.md 时定位引导入口；`/governance` 第一动作；resolve_entry 卡住/缺失诊断（FIX-238）
+- **依赖**：resolve_entry.py 本体零改动（DEC-096）；`SPG_RESOLVE_TIMEOUT`（默认 15s，非法回退默认）
+- **边界**：不做路径考古、不无限 fallback、不修改 resolve_entry.py；超时/缺失时只输出诊断并停止；`@bootstrap-version` 升级链按入口引导命令文档的规则由 agent 执行
+- **被以下子工作流使用**：维护（maintenance）、发布（release）、运营（operations）
 
 ### TOOL-043：ArchGuard Architecture Health check
 
@@ -613,6 +625,7 @@
 | Classic Gate Execution Registry guard | | | | | ● | | ● | ● | ● | | ● |
 | Dynamic Lifecycle Migration dry-run preview | | | | | ● | | ● | | ● | | ● |
 | Local Web Console launcher | ● | | | | | | ● | | | ● | ● |
+| 入口引导 bootstrap（resolve_entry 超时兜底） | | | | ● | | | | | ● | ● | ● |
 | Declarative Release Ledger | | | | | ● | | ● | | ● | | ● |
 | Artifact Projection Generator | | | | | ● | ● | ● | | ● | | ● |
 | Optional Quality Tool Probe | | | | | | ● | ● | | ● | | ● |

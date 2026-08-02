@@ -32,6 +32,7 @@ project/e2e-test-project/skills/
 project/e2e-test-project/commands/*
 !project/e2e-test-project/commands/governance.md
 !project/e2e-test-project/commands/governance-status.md
+!project/e2e-test-project/commands/governance-init.md
 
 # Temporary fix/reconstruct scripts
 _fix_*.py

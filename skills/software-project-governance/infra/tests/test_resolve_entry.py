@@ -335,5 +335,73 @@ class ResolveEntryTests(unittest.TestCase):
         self.assertNotEqual(env["scenario_hint"], "C")
 
 
+class ResolveEntryEncodingRegressionTests(unittest.TestCase):
+    """FIX-241: deterministic encoding regression guards (platform-neutral).
+
+    Background (verified 2026-08-02): an external report claimed
+    ``_read_text_safe`` reads plan-tracker with the Windows default cp936
+    codec, silently breaking Scenario C / bootstrap self-upgrade. The claim
+    was FALSE -- the code explicitly passes ``encoding="utf-8",
+    errors="replace"`` -- but the test gap was real: all existing fixtures
+    are written UTF-8 and read UTF-8, so a future change that drops the
+    explicit ``encoding`` argument would pass on Linux CI (default UTF-8)
+    while breaking Windows zh-CN hosts (default cp936). These tests pin the
+    contract deterministically on every platform.
+    """
+
+    def test_read_text_safe_requires_explicit_utf8(self):
+        """White-box parameter contract: _read_text_safe MUST call
+        Path.read_text with encoding='utf-8', never the locale default."""
+        text = (
+            "# 项目\n\n"
+            "## 项目配置\n"
+            "- **工作流版本**: 1.2.3\n"
+            "- **当前阶段**: 开发实现\n"
+        )
+        with tempfile.TemporaryDirectory() as td:
+            fixture = Path(td) / "plan-tracker.md"
+            fixture.write_bytes(text.encode("utf-8"))
+            with patch.object(
+                Path, "read_text", wraps=Path.read_text, autospec=True
+            ) as read_spy:
+                result = re_._read_text_safe(fixture)
+        # If someone drops the encoding argument (or switches it to the
+        # locale default), this assertion fails on EVERY platform -- not
+        # just Windows zh-CN where cp936 would mangle the bytes.
+        self.assertIn("encoding", read_spy.call_args.kwargs)
+        self.assertEqual(
+            read_spy.call_args.kwargs["encoding"], "utf-8"
+        )
+        # The spy wrapped the real read: parsing still succeeds and the
+        # Chinese text survives round-trip.
+        self.assertIn("工作流版本", result)
+        self.assertIn("1.2.3", result)
+
+    def test_plan_tracker_version_parse_is_utf8_byte_safe(self):
+        """Behavioral contract: UTF-8 plan-tracker bytes (Chinese + version
+        line) must yield the version, while the same bytes mis-decoded as
+        cp936 must fail -- proving the hazard the test guards against."""
+        text = (
+            "# 项目\n\n"
+            "## 项目配置\n"
+            "- **工作流版本**: 1.2.3\n"
+            "- **当前阶段**: 开发实现\n"
+        )
+        raw = text.encode("utf-8")
+        with tempfile.TemporaryDirectory() as td:
+            fixture = Path(td) / "plan-tracker.md"
+            fixture.write_bytes(raw)  # byte-exact UTF-8, no text round-trip
+            version = re_._plan_tracker_workflow_version(fixture)
+        self.assertEqual(version, "1.2.3")
+
+        # Hazard simulation (control): decode the SAME bytes with the
+        # Windows zh-CN default codec and run the version regex over the
+        # result. This mirrors what would happen if _read_text_safe ever
+        # fell back to the locale default: the regex MUST fail, proving
+        # this test would have caught such a regression.
+        mangled = raw.decode("cp936", errors="replace")
+        self.assertIsNone(re_._PLAN_TRACKER_VERSION_RE.search(mangled))
+
+
 if __name__ == "__main__":
     unittest.main()

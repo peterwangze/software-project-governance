@@ -9,8 +9,6 @@ on:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
       - name: Setup Python
@@ -22,23 +20,6 @@ jobs:
       - name: Verify manifest consistency
         run: python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues
       - name: Run unit tests
-        run: |
-          python -m unittest discover -s skills/software-project-governance/infra/tests -v > unit-tests.log 2>&1; echo "UNITTEST_EXIT=$?" >> unit-tests.log; tail -n 120 unit-tests.log
-      - name: Upload unit-test log (CI diagnosis)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: unit-tests-log
-          path: unit-tests.log
-      - name: Publish unit-test log to branch (CI diagnosis)
-        if: failure()
-        run: |
-          git config user.email "ci@github.local"
-          git config user.name "governance-ci"
-          git checkout -b "ci-logs/${GITHUB_RUN_ID}" || git checkout "ci-logs/${GITHUB_RUN_ID}"
-          cp unit-tests.log ci-failure.log
-          git add ci-failure.log
-          git commit -m "ci: unit-test failure log (run ${GITHUB_RUN_ID})" || true
-          git push origin "HEAD:ci-logs/${GITHUB_RUN_ID}" || true
+        run: python -m unittest discover -s skills/software-project-governance/infra/tests -v
       - name: Verify cross-references
         run: python skills/software-project-governance/infra/verify_workflow.py check-cross-references

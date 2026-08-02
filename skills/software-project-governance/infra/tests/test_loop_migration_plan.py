@@ -146,15 +146,24 @@ class TestPurityAndDeterminism(unittest.TestCase):
         no module-level mutable state / accumulating cache that could make two
         concurrent derivations disagree (the sacred derive_round purity mirred
         here)."""
-        hashes = {}
-        errors = {}
+        # FIX-240: result keys must NOT be threading.current_thread().ident.
+        # On Linux, get_ident() == pthread_self() (a TCB pointer) and glibc
+        # reuses the TCB memory of short-lived threads, so 16 concurrent
+        # short-lived workers can collide on ident — dict keys merge and
+        # len(hashes) < 16. Use a lock-protected list instead (no reliance on
+        # ident uniqueness).
+        results = []
+        errors = []
+        results_lock = threading.Lock()
 
         def worker():
             try:
                 plan = lmp.build_migration_plan(None)
-                hashes[threading.current_thread().ident] = plan.plan_hash
+                with results_lock:
+                    results.append(plan.plan_hash)
             except Exception as exc:  # pragma: no cover - fail loud
-                errors[threading.current_thread().ident] = repr(exc)
+                with results_lock:
+                    errors.append(repr(exc))
 
         threads = [threading.Thread(target=worker) for _ in range(16)]
         for t in threads:
@@ -163,8 +172,8 @@ class TestPurityAndDeterminism(unittest.TestCase):
             t.join(timeout=30)
 
         self.assertFalse(errors, f"workers raised: {errors}")
-        self.assertEqual(len(hashes), 16, "every worker must report a hash")
-        unique = set(hashes.values())
+        self.assertEqual(len(results), 16, "every worker must report a hash")
+        unique = set(results)
         self.assertEqual(len(unique), 1,
                          f"all threads must agree on plan_hash; got {len(unique)} distinct: {unique}")
         self.assertTrue(_HEX64_RE.match(next(iter(unique))))

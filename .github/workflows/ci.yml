@@ -28,5 +28,15 @@ jobs:
         with:
           name: unit-tests-log
           path: unit-tests.log
+      - name: Publish unit-test log to branch (CI diagnosis)
+        if: failure()
+        run: |
+          git config user.email "ci@github.local"
+          git config user.name "governance-ci"
+          git checkout -b "ci-logs/${GITHUB_RUN_ID}" || git checkout "ci-logs/${GITHUB_RUN_ID}"
+          cp unit-tests.log ci-failure.log
+          git add ci-failure.log
+          git commit -m "ci: unit-test failure log (run ${GITHUB_RUN_ID})" || true
+          git push origin "HEAD:ci-logs/${GITHUB_RUN_ID}" || true
       - name: Verify cross-references
         run: python skills/software-project-governance/infra/verify_workflow.py check-cross-references

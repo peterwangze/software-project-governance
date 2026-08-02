@@ -1143,6 +1143,7 @@ from checks.review_domain import (  # noqa: E402
     check_review_closure,
     _task_routing_exempt,
     _collect_live_review_sequences,
+    check_loop_wiring_call_sites,
     check_m5_compliance,
     cmd_check_review_debt,
 )
@@ -14100,6 +14101,19 @@ def cmd_check_governance(args):
         print(f"│  [{rc30['verdict']}] {rc30['reason']}")
     print("└──────────────────────────────────────────────────────┘")
 
+    # ── 30b. Loop wiring call sites (FIX-236.4 / ADR-017 §3.4 P1-1) ──
+    # AST/import-graph check: process_gate_result production call sites >= 2
+    # (Wiring A review-record + Wiring B gate-engine). Regression → FAIL so
+    # the wiring can never silently return to "call sites = 0" (BT-5).
+    wiring_calls = check_loop_wiring_call_sites()
+    if wiring_calls["count"] >= 2:
+        print(f"│  [PASS] loop wiring call sites: {wiring_calls['count']} "
+              f"(Wiring A review-record + Wiring B gate-engine)")
+    else:
+        all_issues += 1
+        print(f"│  [FAIL] loop wiring call sites: {wiring_calls['count']} — "
+              f"{wiring_calls['reason']}")
+
     # ── 31. Loop Runtime Claim Gate (FIX-197 / DEC-106) ──
     print("\n┌─ Check 31: Loop Runtime Claim Gate (FIX-197) ───────┐")
     claim_report = scan_loop_runtime_claims(_loop_runtime_claim_context("installed_host"))
@@ -14599,11 +14613,18 @@ def _gate_check_result_from_definition(check_definition):
     return "FAIL", f"未知 executor `{executor}`"
 
 
-def auto_judge_gate(gate_id):
+def auto_judge_gate(gate_id, unit_id=None):
     """Auto-judge a specific Gate based on available evidence.
 
     Returns: dict with overall_result (passed/blocked/passed-with-conditions/needs_human)
              and per-item results list.
+
+    ``unit_id`` (optional, FIX-236.2 Wiring B): when a flow-unit id is given
+    and the gate rendered a verdict (not needs_human), the judgment is routed
+    to :func:`loop_gate_processor.process_gate_result` as a thin best-effort
+    call (actor="gate-engine"). The wiring result is attached under the
+    ``wiring`` key only when ``unit_id`` is provided, so existing callers see
+    an unchanged dict shape.
     """
     gate_id = gate_id.upper()
     if not gate_id.startswith("G"):
@@ -14678,19 +14699,39 @@ def auto_judge_gate(gate_id):
     else:
         overall = "passed"
 
-    return {
+    # ── Wiring B (FIX-236.2 / ADR-017 §3.4): gate-engine judgment → loop
+    # engine. Thin best-effort delegation (10 lines); the verdict→conclusion
+    # mapping (GATE_VERDICT_TO_RESULT) and outcome normalization
+    # (wiring_summary) live in review_record.py — no logic here (RISK-039).
+    # Non-success outcomes (v1 no-op / missing runtime / exception) are NOT
+    # reported as wired; the judgment itself is already rendered.
+    wiring = None
+    if unit_id and overall not in ("needs_human",):
+        try:
+            from loop_gate_processor import process_gate_result as _pgr
+            from review_record import GATE_VERDICT_TO_RESULT, wiring_summary
+            if (mapped := GATE_VERDICT_TO_RESULT.get(overall)):
+                outcome = _pgr(unit_id, gate_id, mapped, evidence_ref=f"gate-check-{gate_id}", actor="gate-engine")
+                wiring = wiring_summary(outcome)
+        except Exception as exc:  # noqa: BLE001 — best-effort degrade
+            wiring = {"wired": False, "degraded": True, "reason": f"process_gate_result raised: {exc}"}
+    result = {
         "gate": gate_id,
         "title": detail["title"],
         "overall": overall,
         "items": items,
         "summary": f"PASS={pass_count} FAIL={fail_count} NEEDS_HUMAN={human_count}",
     }
+    if wiring is not None:
+        result["wiring"] = wiring
+    return result
 
 
 def cmd_gate_check(args):
-    """Auto-judge a specific Gate."""
+    """Auto-judge a specific Gate (optional --unit routes the verdict to the
+    loop engine — Wiring B, FIX-236.2)."""
     gate_id = args.gate_id.upper()
-    result = auto_judge_gate(gate_id)
+    result = auto_judge_gate(gate_id, unit_id=getattr(args, "unit", None))
 
     if "error" in result:
         print(f"[FAIL] {result['error']}")
@@ -14717,6 +14758,10 @@ def cmd_gate_check(args):
         print(f"│  {ic} 检查项{i}: {item['check']}")
         print(f"│      {item['detail']}")
 
+    if result.get("wiring"):
+        wiring = result["wiring"]
+        print(f"│  Wiring B: {'wired' if wiring.get('wired') else 'NOT wired'}"
+              f" ({wiring.get('status') or wiring.get('reason')})")
     print(f"└──────────────────────────────────────────────────────┘")
 
     # Show current status from plan-tracker
@@ -19048,6 +19093,64 @@ def cmd_task_priority_analysis(args):
         sys.exit(1)
 
 
+def cmd_review_record(args):
+    """Thin entry — review-record CLI (FIX-236.1 / ADR-017 §3.4 Wiring A).
+
+    Delegates to infra/review_record.py: the single machine-written
+    review-conclusion persistence path (review-{id}-R{n}.md + evidence-log
+    row) + best-effort process_gate_result wiring. Prints the JSON summary;
+    exits 2 on a fail-closed input error (the record was not written).
+    """
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    from review_record import write_review_record
+    summary = write_review_record(
+        task_id=args.task,
+        round_n=args.round,
+        result=args.result,
+        report_path=args.report,
+        reviewer=args.reviewer,
+        unit_id=args.unit,
+        gate_id=args.gate,
+        root=HOST_PROJECT_ROOT,
+    )
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    if summary.get("error"):
+        sys.exit(2)
+
+
+def cmd_next_candidates(args):
+    """Thin entry — next-candidates CLI (FIX-236.3 / ADR-017 §3.4, P3-5).
+
+    Read end of the loop_exit → next-unit recommendation bridge. Reads the
+    persisted candidate snapshot when present; ``--refresh`` (or a missing
+    snapshot) recomputes from plan-tracker + loop event log and persists with
+    ``--write``. Prints the candidate report as JSON.
+    """
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    from loop_exit_bridge import (
+        CANDIDATES_FILENAME,
+        read_candidates,
+        refresh_candidates,
+    )
+    snapshot = HOST_PROJECT_ROOT / ".governance" / CANDIDATES_FILENAME
+    report = None
+    if not getattr(args, "refresh", False):
+        report = read_candidates(snapshot)
+    if report is None:
+        report = refresh_candidates(
+            HOST_PROJECT_ROOT,
+            top_n=getattr(args, "top_n", 3) or 3,
+            candidate_path=snapshot if getattr(args, "write", False) else None,
+        )
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+
+
 def cmd_check_duplicate_code(args):
     """Run REQ-101 ArchGuard source/projection duplicate-code guard (advisory in 0.58.0)."""
     try:
@@ -19693,6 +19796,9 @@ def main(argv=None):
     # gate-check <id> (auto-judge)
     gc_p = subparsers.add_parser("gate-check", help="Auto-judge a Gate's check items (B-level automation)")
     gc_p.add_argument("gate_id", help="Gate ID (e.g. G3, 3, g5)")
+    gc_p.add_argument("--unit", default=None,
+                      help="Flow-unit id — route the rendered verdict to the "
+                           "loop engine (Wiring B, FIX-236.2)")
     gc_p.add_argument("--fail-on-blocked", action="store_true",
                       help="Exit with non-zero code if gate is blocked")
 
@@ -20284,6 +20390,42 @@ def main(argv=None):
              "exit 0 + WARNING banner; FIX-237.3 cycle tolerance)",
     )
 
+    # review-record (FIX-236.1 / ADR-017 §3.4 Wiring A — the single
+    # machine-written review-conclusion persistence path)
+    rr_p = subparsers.add_parser(
+        "review-record",
+        help="Machine-write one review conclusion + wire it to the loop engine (FIX-236)",
+    )
+    rr_p.add_argument("--task", required=True,
+                      help="Reviewed task id (PREFIX-NNN, e.g. FIX-236)")
+    rr_p.add_argument("--round", type=int, default=0,
+                      help="Review round (default 0 = R0)")
+    rr_p.add_argument("--result", required=True,
+                      choices=["APPROVED", "APPROVED_WITH_NOTES",
+                               "NEEDS_CHANGE", "BLOCKED"],
+                      help="Review conclusion")
+    rr_p.add_argument("--report", required=True,
+                      help="Path to the reviewer's full report")
+    rr_p.add_argument("--reviewer", default=None,
+                      help="Reviewer/agent name")
+    rr_p.add_argument("--unit", default=None,
+                      help="Flow-unit id (wiring; optional — else registry mapping)")
+    rr_p.add_argument("--gate", default=None,
+                      help="Gate id G1..G11 (wiring; optional — else registry mapping)")
+
+    # next-candidates (FIX-236.3 / ADR-017 §3.4, P3-5 — read end of the
+    # loop_exit → next-unit recommendation bridge)
+    nc_p = subparsers.add_parser(
+        "next-candidates",
+        help="Read the loop_exit → next-unit recommendation snapshot (FIX-236)",
+    )
+    nc_p.add_argument("--top-n", type=int, default=3,
+                      help="Number of candidates (default 3)")
+    nc_p.add_argument("--refresh", action="store_true",
+                      help="Recompute from plan-tracker + loop event log")
+    nc_p.add_argument("--write", action="store_true",
+                      help="Persist the recomputed snapshot")
+
     args = parser.parse_args(parser_argv)
     if args.project_root and explicit_project_root is None:
         explicit_project_root = args.project_root
@@ -20364,6 +20506,8 @@ def main(argv=None):
         "check-locks": cmd_check_agent_locks,
         "check-archive-integrity": cmd_check_archive_integrity,
         "task-priority-analysis": cmd_task_priority_analysis,
+        "review-record": cmd_review_record,
+        "next-candidates": cmd_next_candidates,
     }
 
     cmd = args.command or "verify"

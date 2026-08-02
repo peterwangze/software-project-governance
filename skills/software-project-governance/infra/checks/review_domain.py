@@ -40,11 +40,13 @@ See docs/architecture/ADR-016-verify-phase5-extraction-0.70.0.md for the
 design and the line-number baseline used during extraction.
 """
 
-import re
+import ast
 import json
+import os
+import re
 import sys
 from pathlib import Path
-from datetime import date
+from datetime import date, timedelta
 
 # ── Shared-helper access (deferred to avoid import cycle) ──────────
 # Same deferred-_vw() pattern as checks.manifest (Phase 1) and
@@ -1530,6 +1532,34 @@ FIX173_NAMING_NORMALIZATION_DATE = date(2026, 7, 4)
 # historical residue.
 FIX174_NORMALIZATION_DATE = date(2026, 7, 18)
 
+# FIX-236.4 / ADR-017 §3.4: Check 30 V6 — NEEDS_CHANGE revisit timeliness.
+#
+# V6c window: SPG_REVIEW_REVISIT_WINDOW (hours, default 24). Parameterized via
+# environment so operators can widen the window without a code change; the
+# "next commit" trigger is an OPTIONAL additional signal (not implemented in
+# the fixture/duration path — without git context, duration-only judgment
+# applies, so no false positives are produced).
+REVIEW_REVISIT_WINDOW_ENV = "SPG_REVIEW_REVISIT_WINDOW"
+REVIEW_REVISIT_WINDOW_DEFAULT_HOURS = 24
+
+
+def _review_revisit_window_hours():
+    """Return the V6 revisit window in hours (int >= 0) or None.
+
+    Reads ``SPG_REVIEW_REVISIT_WINDOW``; invalid / negative values fall back
+    to the default (24h). Returns None only when the value cannot be parsed
+    AND the default itself is unavailable (defensive — never happens).
+    """
+    raw = os.environ.get(REVIEW_REVISIT_WINDOW_ENV)
+    if raw is not None:
+        try:
+            value = int(raw.strip())
+        except (TypeError, ValueError):
+            value = REVIEW_REVISIT_WINDOW_DEFAULT_HOURS
+        if value >= 0:
+            return value
+    return REVIEW_REVISIT_WINDOW_DEFAULT_HOURS
+
 
 def _normalize_review_conclusion(value):
     """Return a recognized review state, normalizing only plural NEEDS_CHANGE."""
@@ -1923,6 +1953,36 @@ def check_review_closure(review_sequence=None, plan_tracker_completed=None,
         pre_normalization = (
             ev_date is not None and ev_date < FIX174_NORMALIZATION_DATE
         )
+        # V6: revisit timeliness (FIX-236.4 / ADR-017 §3.4). Trigger object
+        # (V6a): a NEEDS_CHANGE terminal round whose evidence date is NOT
+        # pre-FIX-174 normalization — same predicate as the V1/V5 exemption
+        # (DEC-138), and the exemption follows the chain (terminal-round date
+        # decides, consistent with rounds[max_round].date). Fuse exemption
+        # (V6b): chains at/above REVIEW_MAX_ROUNDS are the V3 fuse domain —
+        # the correct action is escalation (T2 fuse → BLOCKED), NOT an R+1
+        # revisit, so V6 does not apply. Routing-exempt tasks (review-type
+        # deliverables where NEEDS_CHANGE is the terminal artifact) are also
+        # skipped. Window (V6c): SPG_REVIEW_REVISIT_WINDOW (default 24h),
+        # duration-only in this fixture/duration path (no git context → no
+        # false positives). Rows without a date are not judged (V6d: no
+        # false positive on an unknown date).
+        if (terminal == "NEEDS_CHANGE" and not pre_normalization
+                and max_round < REVIEW_MAX_ROUNDS and not is_exempt):
+            revisit_window = _review_revisit_window_hours()
+            terminal_date = rounds[max_round].get("date")
+            if terminal_date is not None and revisit_window is not None:
+                deadline = terminal_date + timedelta(hours=revisit_window)
+                if date.today() > deadline:
+                    result["violations"].append({
+                        "rule": "V6",
+                        "task_id": task_id,
+                        "reason": (
+                            f"R{max_round}=NEEDS_CHANGE not revisited within "
+                            f"{revisit_window}h window (terminal {terminal_date}, "
+                            f"deadline {deadline}) — expected R{max_round+1} "
+                            f"(复审必达, next_round=REVIEW-{task_id}-R{max_round+1})"
+                        ),
+                    })
         if terminal == "BLOCKED":
             if pre_normalization:
                 result["warnings"].append({
@@ -2156,6 +2216,99 @@ def _collect_live_review_sequences():
 
     sequences = _build_review_sequence(review_entries, legacy_files=legacy_files)
     return sequences, completed
+
+
+def check_loop_wiring_call_sites(roots=None):
+    """FIX-236.4 / ADR-017 §3.4 (P1-1): enumerate process_gate_result call sites.
+
+    AST + import-graph analysis over the production infra modules. Docstrings,
+    comments and string literals are structurally excluded (only real AST
+    ``Call`` nodes count), so the ``loop_gate_processor.py:69`` docstring
+    example is a NEGATIVE sample and cannot cause the AUDIT-133/140 rg-text
+    false positive. The gate is PASS when at least 2 production call sites
+    exist (Wiring A — review-record — and Wiring B — auto_judge_gate).
+
+    Args:
+        roots: optional list of files/dirs to scan (default: the plugin's
+            ``infra`` directory derived from ROOT).
+
+    Returns:
+        dict: ``{"verdict", "count", "call_sites": [{"file", "path", "line"}],
+        "reason"}``. Never raises.
+    """
+    _resolve_shared()
+    if roots is None:
+        roots = [ROOT / "skills/software-project-governance/infra"]
+    files = []
+    for entry in roots or []:
+        p = Path(entry)
+        if p.is_file():
+            files.append(p)
+        elif p.is_dir():
+            files.extend(sorted(p.rglob("*.py")))
+    call_sites = []
+    for path in files:
+        if "tests" in path.parts or "__pycache__" in path.parts:
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except (OSError, UnicodeDecodeError, SyntaxError):
+            continue
+        # Import-graph pass: collect aliases that resolve to
+        # loop_gate_processor.process_gate_result.
+        direct_names = {"process_gate_result"}
+        module_aliases = {"loop_gate_processor"}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name == "loop_gate_processor":
+                        module_aliases.add(alias.asname or "loop_gate_processor")
+            elif isinstance(node, ast.ImportFrom) and node.module == "loop_gate_processor":
+                for alias in node.names:
+                    if alias.name == "process_gate_result":
+                        direct_names.add(alias.asname or "process_gate_result")
+        # Call-site pass: only real Call nodes (docstrings/comments/strings
+        # are not AST calls).
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            matched = False
+            if isinstance(func, ast.Name):
+                matched = func.id in direct_names
+            elif isinstance(func, ast.Attribute):
+                matched = (
+                    func.attr == "process_gate_result"
+                    and isinstance(func.value, ast.Name)
+                    and func.value.id in module_aliases
+                )
+            if matched:
+                call_sites.append({
+                    "file": path.name,
+                    "path": str(path),
+                    "line": node.lineno,
+                })
+    count = len(call_sites)
+    if count >= 2:
+        return {
+            "verdict": "PASS",
+            "count": count,
+            "call_sites": call_sites,
+            "reason": (
+                "{0} production call site(s) of process_gate_result "
+                "(>= 2 required: Wiring A review-record + Wiring B "
+                "gate-engine)".format(count)
+            ),
+        }
+    return {
+        "verdict": "FAIL",
+        "count": count,
+        "call_sites": call_sites,
+        "reason": (
+            "{0} production call site(s) of process_gate_result "
+            "(< 2 required — Wiring A/B regression)".format(count)
+        ),
+    }
 
 
 def cmd_check_review_debt(args):

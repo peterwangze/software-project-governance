@@ -284,6 +284,34 @@ def _load_runtime(runtime_path):
         return None
 
 
+def _load_runtime_with_state(runtime_path):
+    """Return ``(payload, state)`` where state ∈ {"missing", "corrupt", "ok"}.
+
+    P2-2 (ADR-017 §3.1): distinguishes a MISSING runtime file (fail-open —
+    v1/classic installations have no v2 payload, §6.5 no-op) from a
+    PRESENT-BUT-CORRUPT file (fail-closed). "corrupt" covers JSON parse
+    failure, a non-dict root, and a v2 payload whose ``flow_units`` container
+    is missing or not a list (invalid structure per the v2 contract). Never
+    raises.
+    """
+    if runtime_path is None:
+        return None, "missing"
+    path = Path(runtime_path) if not isinstance(runtime_path, Path) else runtime_path
+    if not path.is_file():
+        return None, "missing"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        return None, "corrupt"
+    if not isinstance(payload, dict):
+        return None, "corrupt"
+    if payload.get("schema_version") == "2.0":
+        flow_units = payload.get("flow_units")
+        if not isinstance(flow_units, list):
+            return None, "corrupt"
+    return payload, "ok"
+
+
 def _find_unit(payload, unit_id):
     """Return the unit dict for ``unit_id`` or None (fail-closed)."""
     if not isinstance(payload, dict):
@@ -954,7 +982,23 @@ def loop_fuse_check(root=None, *, plugin_home=None, runtime_file=None):
         runtime_path = _runtime_path(root)
         if runtime_path is None:
             return []
-    payload = _load_runtime(runtime_path)
+    payload, state = _load_runtime_with_state(runtime_path)
+    # P2-2 fail-open/fail-closed boundary (ADR-017 §3.1):
+    #   missing file → fail-open (v1/classic no-op);
+    #   present but corrupt (JSON parse failure / invalid structure) →
+    #   fail-closed with a blocking synthetic entry — never silently
+    #   downgraded to fail-open.
+    if state == "missing":
+        return []
+    if state == "corrupt":
+        return [{
+            "unit_id": "<runtime-file-corrupt>",
+            "loop_count": None,
+            "max_rounds": None,
+            "tier": None,
+            "runtime_status": "corrupt",
+            "corrupt": True,
+        }]
     if not isinstance(payload, dict):
         return []
     # v1 / non-v2 payloads have no per-unit fuse state — empty result.
@@ -1022,6 +1066,13 @@ def collect_loop_fuse_issues(root=None, *, plugin_home=None, runtime_file=None):
         root=root, plugin_home=plugin_home, runtime_file=runtime_file)
     issues = []
     for u in tripped:
+        if u.get("corrupt"):
+            issues.append(
+                "loop fuse block: flow-unit-runtime.json is corrupt (JSON "
+                "parse failure or invalid structure) — fail-closed: fuse "
+                "state cannot be verified; repair or remove the file."
+            )
+            continue
         issues.append(
             "loop fuse: unit {0} tripped at round {1} (max {2}, tier {3}); "
             "unresolved ({4}) — release blocked. Resolve via escalation "

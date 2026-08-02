@@ -22,6 +22,7 @@ import sys
 import tempfile
 import unittest
 from contextlib import ExitStack, redirect_stdout
+from datetime import date, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -15080,6 +15081,246 @@ class ProjectRootExplicitCliTests(unittest.TestCase):
             self.assertIn("HOST-188", output)
             self.assertNotIn("CWD-188", output)
             self.assertNotIn("FileNotFoundError", output)
+
+
+class CheckReviewClosureV6Tests(unittest.TestCase):
+    """FIX-236.4 / ADR-017 §3.4: Check 30 V6 — NEEDS_CHANGE revisit timeliness.
+
+    V6a trigger: NEEDS_CHANGE terminal round with evidence date at/after
+    FIX174_NORMALIZATION_DATE (2026-07-18) — the DEC-138 historical boundary.
+    V6b fuse exemption: chains at/above REVIEW_MAX_ROUNDS(3) are the V3 fuse
+    domain — no R+1 revisit expected (escalation is), so V6 does not apply.
+    V6c window: SPG_REVIEW_REVISIT_WINDOW (default 24h); no git context in
+    fixture mode → duration-only (no false positives).
+    V6d: rows without a 复审必达 structured marker are judged by row date +
+    window (same rule).
+    """
+
+    def _seq(self, task="FIX-800", rounds=((0, "NEEDS_CHANGE", None),),
+             completed=True):
+        seq = []
+        for r, conclusion, d in rounds:
+            entry = {"id": "REVIEW-{0}-R{1}".format(task, r),
+                     "task_ref": task, "conclusion": conclusion}
+            if d is not None:
+                entry["date"] = d.isoformat()
+            seq.append(entry)
+        return seq, ({task: True} if completed else {})
+
+    def test_v6_stale_needs_change_without_revisit_fails(self):
+        seq, completed = self._seq(rounds=(
+            (0, "NEEDS_CHANGE", date.today() - timedelta(days=2)),))
+        r = vw.check_review_closure(
+            review_sequence=seq, plan_tracker_completed=completed)
+        self.assertEqual(r["verdict"], "FAIL")
+        self.assertIn("V6", {v["rule"] for v in r["violations"]})
+
+    def test_v6_within_window_is_not_a_violation(self):
+        seq, completed = self._seq(rounds=((0, "NEEDS_CHANGE", date.today()),),
+                                   completed=False)
+        r = vw.check_review_closure(
+            review_sequence=seq, plan_tracker_completed=completed)
+        self.assertEqual(
+            [v["rule"] for v in r["violations"] if v["rule"] == "V6"], [])
+        self.assertEqual(r["verdict"], "WARN")  # V1 mid-flight WARN only
+
+    def test_v6_window_env_override_zero_forces_stale(self):
+        seq, completed = self._seq(rounds=(
+            (0, "NEEDS_CHANGE", date.today() - timedelta(days=1)),),
+                                   completed=False)
+        with patch.dict(os.environ, {"SPG_REVIEW_REVISIT_WINDOW": "0"}):
+            r = vw.check_review_closure(
+                review_sequence=seq, plan_tracker_completed=completed)
+        self.assertIn("V6", {v["rule"] for v in r["violations"]})
+
+    def test_v6_window_env_override_large_never_stale(self):
+        seq, completed = self._seq(rounds=(
+            (0, "NEEDS_CHANGE", date.today() - timedelta(days=30)),))
+        with patch.dict(os.environ, {"SPG_REVIEW_REVISIT_WINDOW": "100000"}):
+            r = vw.check_review_closure(
+                review_sequence=seq, plan_tracker_completed=completed)
+        self.assertEqual(
+            [v["rule"] for v in r["violations"] if v["rule"] == "V6"], [])
+
+    def test_v6_negative_cross_session_revisit_closed(self):
+        # R+1 happened 48h later and closed the chain → V6 punishes MISSING
+        # revisits, not slow-but-done ones.
+        seq, completed = self._seq(rounds=(
+            (0, "NEEDS_CHANGE", date.today() - timedelta(days=2)),
+            (1, "APPROVED", date.today()),
+        ))
+        r = vw.check_review_closure(
+            review_sequence=seq, plan_tracker_completed=completed)
+        self.assertEqual(r["verdict"], "PASS")
+        self.assertEqual(
+            [v["rule"] for v in r["violations"] if v["rule"] == "V6"], [])
+
+    def test_v6_negative_fuse_round3_exempt(self):
+        # R3 NEEDS_CHANGE is the fuse boundary (V3 domain) — no R4 expected;
+        # a mid-flight task gets only the V1 WARN, never a V6 FAIL.
+        seq, completed = self._seq(task="FIX-801", completed=False, rounds=(
+            (0, "NEEDS_CHANGE", date.today() - timedelta(days=2)),
+            (1, "NEEDS_CHANGE", date.today() - timedelta(days=2)),
+            (2, "NEEDS_CHANGE", date.today() - timedelta(days=2)),
+            (3, "NEEDS_CHANGE", date.today() - timedelta(days=2)),
+        ))
+        r = vw.check_review_closure(
+            review_sequence=seq, plan_tracker_completed=completed)
+        self.assertEqual(
+            [v["rule"] for v in r["violations"] if v["rule"] == "V6"], [])
+        self.assertNotEqual(r["verdict"], "FAIL")
+
+    def test_v6_negative_fuse_escalation_blocked(self):
+        # R3 NEEDS_CHANGE escalated to BLOCKED (T2 fuse) → not a V6 breach.
+        # Historical (pre-FIX-174) escalation closure downgrades V1 to WARN.
+        seq, completed = self._seq(task="FIX-802", rounds=(
+            (0, "NEEDS_CHANGE", date(2026, 7, 17)),
+            (1, "NEEDS_CHANGE", date(2026, 7, 17)),
+            (2, "NEEDS_CHANGE", date(2026, 7, 17)),
+            (3, "NEEDS_CHANGE", date(2026, 7, 17)),
+            (4, "BLOCKED", date(2026, 7, 17)),
+        ))
+        r = vw.check_review_closure(
+            review_sequence=seq, plan_tracker_completed=completed)
+        self.assertEqual(
+            [v["rule"] for v in r["violations"] if v["rule"] == "V6"], [])
+        self.assertEqual(r["verdict"], "WARN")
+
+    def test_v6_historical_pre_normalization_exempt(self):
+        seq, completed = self._seq(rounds=(
+            (0, "NEEDS_CHANGE", date(2026, 7, 17)),), completed=False)
+        r = vw.check_review_closure(
+            review_sequence=seq, plan_tracker_completed=completed)
+        self.assertEqual(
+            [v["rule"] for v in r["violations"] if v["rule"] == "V6"], [])
+        self.assertEqual(r["verdict"], "WARN")  # V1 historical downgrade
+
+    def test_v6_missing_date_no_false_positive(self):
+        seq, completed = self._seq(rounds=((0, "NEEDS_CHANGE", None),))
+        r = vw.check_review_closure(
+            review_sequence=seq, plan_tracker_completed=completed)
+        self.assertEqual(
+            [v["rule"] for v in r["violations"] if v["rule"] == "V6"], [])
+
+    def test_v6_routing_exempt_task_skipped(self):
+        seq, completed = self._seq(rounds=(
+            (0, "NEEDS_CHANGE", date.today() - timedelta(days=3)),))
+        with patch.object(vw, "_evidence_task_type_index",
+                          return_value={"FIX-800": "代码审查"}):
+            r = vw.check_review_closure(
+                review_sequence=seq, plan_tracker_completed=completed)
+        self.assertEqual(
+            [v["rule"] for v in r["violations"] if v["rule"] == "V6"], [])
+
+
+class LoopWiringCallSiteTests(unittest.TestCase):
+    """FIX-236.4 / ADR-017 §3.4 (P1-1): process_gate_result call-site check.
+
+    AST/import-graph analysis must enumerate production call sites (≥2) while
+    ignoring docstrings, comments and string literals — the
+    loop_gate_processor.py:69 docstring example is the negative sample that
+    previously caused AUDIT-133/140-style false positives with rg text search.
+    """
+
+    def test_repo_production_call_sites_two_or_more(self):
+        result = vw.check_loop_wiring_call_sites()
+        self.assertEqual(result["verdict"], "PASS", result["reason"])
+        self.assertGreaterEqual(result["count"], 2)
+        files = {cs["file"] for cs in result["call_sites"]}
+        self.assertIn("review_record.py", files)
+        self.assertIn("verify_workflow.py", files)
+
+    def test_docstring_example_is_not_counted(self):
+        gp_file = _INFRA_DIR / "loop_gate_processor.py"
+        result = vw.check_loop_wiring_call_sites(roots=[gp_file])
+        self.assertEqual(result["count"], 0, result["call_sites"])
+
+    def test_real_calls_counted_strings_and_comments_ignored(self):
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "fake_wiring.py"
+            src.write_text(
+                "def wired(unit, gate):\n"
+                "    process_gate_result(unit, gate, 'APPROVED', "
+                "evidence_ref='r', actor='a')\n"
+                "\n"
+                "def unwired():\n"
+                "    text = \"process_gate_result(unit, gate, ...) in a string\"\n"
+                "    # process_gate_result(...) in a comment\n"
+                "    return text\n"
+                "\n"
+                "def docstring_example():\n"
+                "    '''outcome = process_gate_result('u', 'G6', "
+                "'NEEDS_CHANGE')'''\n"
+                "    return None\n",
+                encoding="utf-8",
+            )
+            result = vw.check_loop_wiring_call_sites(roots=[td])
+        self.assertEqual(result["count"], 1, result["call_sites"])
+        self.assertEqual(result["call_sites"][0]["file"], "fake_wiring.py")
+
+
+class AutoJudgeGateWiringBTests(unittest.TestCase):
+    """FIX-236.2 R1 (P2-2): Wiring B uses registry-side verdict mapping and
+    reports wired only on a successful process_gate_result outcome."""
+
+    def _run(self, overall_result, fake_outcome):
+        fake_registry = {"gate_execution_registry": {"gate_checks": [{
+            "gate_id": "G6",
+            "checks": [{
+                "executor": "constant_result",
+                "result": overall_result,
+                "label": "ok",
+            }],
+        }]}}
+        fake_detail = {"title": "Gate 6", "checks": []}
+        with patch.object(vw, "parse_gate_detail", return_value=fake_detail), \
+             patch.object(vw, "_load_lifecycle_registry",
+                          return_value=(fake_registry, [])), \
+             patch.object(vw, "_gate_execution_registry_contract_issues",
+                          return_value=[]), \
+             patch("loop_gate_processor.process_gate_result",
+                   return_value=fake_outcome) as pgr:
+            result = vw.auto_judge_gate("G6", unit_id="shitu.story.Skeleton")
+        return result, pgr
+
+    def test_wiring_b_success_outcome_wired_with_mapped_conclusion(self):
+        fake_outcome = SimpleNamespace(
+            success=True, decision="exit", status="success",
+            reason="gate G6 passed → exit", new_loop_count=None)
+        result, pgr = self._run("PASS", fake_outcome)
+        self.assertEqual(result["overall"], "passed")
+        self.assertTrue(result["wiring"]["wired"])
+        self.assertEqual(result["wiring"]["decision"], "exit")
+        self.assertEqual(result["wiring"]["status"], "success")
+        pgr.assert_called_once_with(
+            "shitu.story.Skeleton", "G6", "APPROVED",
+            evidence_ref="gate-check-G6", actor="gate-engine")
+
+    def test_wiring_b_non_success_outcome_not_wired(self):
+        fake_outcome = SimpleNamespace(
+            success=False, decision="iterate", status="illegal",
+            reason="schema_version '1.0' is not v2 — no-op", new_loop_count=None)
+        result, _ = self._run("PASS", fake_outcome)
+        self.assertFalse(result["wiring"]["wired"])
+        self.assertEqual(result["wiring"]["status"], "illegal")
+        self.assertFalse(result["wiring"]["degraded"])
+
+    def test_wiring_b_needs_human_skips_wiring_key(self):
+        fake_registry = {"gate_execution_registry": {"gate_checks": [{
+            "gate_id": "G6",
+            "checks": [],  # zero items → overall needs_human (no verdict)
+        }]}}
+        fake_detail = {"title": "Gate 6", "checks": []}
+        with patch.object(vw, "parse_gate_detail", return_value=fake_detail), \
+             patch.object(vw, "_load_lifecycle_registry",
+                          return_value=(fake_registry, [])), \
+             patch.object(vw, "_gate_execution_registry_contract_issues",
+                          return_value=[]), \
+             patch("loop_gate_processor.process_gate_result") as pgr:
+            result = vw.auto_judge_gate("G6", unit_id="shitu.story.Skeleton")
+        self.assertEqual(result["overall"], "needs_human")
+        self.assertNotIn("wiring", result)
+        pgr.assert_not_called()
 
 
 if __name__ == "__main__":

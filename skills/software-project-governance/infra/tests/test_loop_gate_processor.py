@@ -976,5 +976,53 @@ class EndToEndRel060ChainTests(unittest.TestCase):
         self.assertEqual(gp.collect_loop_fuse_issues(runtime_file=runtime_path), [])
 
 
+class LoopFuseFailClosedBoundaryTests(unittest.TestCase):
+    """FIX-236 P2-2 / ADR-017 §3.1: fuse fail-open vs fail-closed boundary.
+
+    No flow-unit-runtime.json (v2) file → fail-open (v1/classic no-op, §6.5).
+    File present but corrupt (JSON parse failure / invalid structure) →
+    fail-closed with a blocking diagnostic — never silently downgraded to
+    fail-open.
+    """
+
+    def test_missing_runtime_file_fails_open(self):
+        with tempfile.TemporaryDirectory() as td:
+            missing = Path(td) / "nope" / "flow-unit-runtime.json"
+            self.assertEqual(gp.loop_fuse_check(runtime_file=missing), [])
+
+    def test_corrupt_json_fails_closed(self):
+        with tempfile.TemporaryDirectory() as td:
+            runtime = Path(td) / "flow-unit-runtime.json"
+            runtime.write_text("{not valid json!!", encoding="utf-8")
+            issues = gp.loop_fuse_check(runtime_file=runtime)
+            self.assertEqual(len(issues), 1)
+            self.assertTrue(issues[0].get("corrupt"))
+            messages = gp.collect_loop_fuse_issues(runtime_file=runtime)
+            self.assertEqual(len(messages), 1)
+            self.assertIn("corrupt", messages[0].lower())
+
+    def test_invalid_structure_fails_closed(self):
+        with tempfile.TemporaryDirectory() as td:
+            runtime = Path(td) / "flow-unit-runtime.json"
+            runtime.write_text(json.dumps({"schema_version": "2.0"}),
+                               encoding="utf-8")
+            issues = gp.loop_fuse_check(runtime_file=runtime)
+            self.assertEqual(len(issues), 1)
+            self.assertTrue(issues[0].get("corrupt"))
+
+    def test_v1_payload_fails_open(self):
+        with tempfile.TemporaryDirectory() as td:
+            runtime = Path(td) / "flow-unit-runtime.json"
+            runtime.write_text(json.dumps({"schema_version": "1.0"}),
+                               encoding="utf-8")
+            self.assertEqual(gp.loop_fuse_check(runtime_file=runtime), [])
+
+    def test_valid_payload_without_tripped_fuse_fails_open(self):
+        with tempfile.TemporaryDirectory() as td:
+            payload = _activated_payload(unit_id="shitu.story.Skeleton")
+            runtime = _write_payload(td, payload)
+            self.assertEqual(gp.loop_fuse_check(runtime_file=runtime), [])
+
+
 if __name__ == "__main__":
     unittest.main()

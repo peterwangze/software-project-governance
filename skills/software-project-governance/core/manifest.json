@@ -63,6 +63,7 @@
   },
   "root_entries": {
     "files": [
+      "AGENTS.md",
       "README.md",
       ".gitignore",
       "package.json",

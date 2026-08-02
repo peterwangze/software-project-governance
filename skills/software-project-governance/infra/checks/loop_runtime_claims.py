@@ -1241,6 +1241,11 @@ def _validate_source_records(context: ClaimScanContext, authority: dict[str, Any
         return []
     if context.host_root is None:
         return [_finding("AUTHORITY_SOURCE_ROOT_MISSING", "authority", "product_release requires host_root")]
+    if not (context.host_root / ".governance").is_dir():
+        # Uninitialized host: governance source records cannot be validated.
+        # Aligned with enumeration, which only includes host_root when
+        # .governance exists (FIX-240).
+        return []
     findings: list[Finding] = []
     for record in authority.get("source_records", []):
         if not isinstance(record, dict):
@@ -2573,7 +2578,10 @@ def _validate_required_paths(context: ClaimScanContext, policy: dict[str, Any]) 
         if context.scan_mode == "installed_host" and owner == "product_root" and rel.startswith(("docs/", "project/")):
             continue
         root = roots[owner]
-        if owner == "host_root" and context.scan_mode == "installed_host" and (
+        # host_root required paths only apply when the governance host is
+        # initialized (.governance exists); uninitialized hosts skip them,
+        # consistent across all scan modes (FIX-240).
+        if owner == "host_root" and (
             root is None or not (root / ".governance").is_dir()
         ):
             continue

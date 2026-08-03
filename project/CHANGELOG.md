@@ -2,6 +2,41 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.73.0] - 2026-08-03
+
+### 0.73.0 - 三链重构（入口/循环/任务规划）生产接线打包（MINOR）
+
+0.73.0 是 MINOR 发布，把 HEAD `c14bce7` 上 0.72.0 released 之后已合入的 13 个 commit 打包成发布候选（AUDIT-142 / FIX-237 / FIX-239 / FIX-236 / FIX-240 / FIX-241 / FIX-233~235 / FIX-238），并同步版本投影与 release 文档。发布目标：入口引导确定性兜底（FIX-238）、循环引擎生产接线（FIX-236）、任务规划数据债去环与变更控制 triage 强制（FIX-237）三链重构落地。但**不关闭 RISK-036/RISK-039**：官方市场操作（Codex Desktop marketplace E2E / 官方提交包）与 ArchGuard 外部宿主验证各自独立关闭标准未满足。版本投影 0.72.0 -> 0.73.0 全 PASS（M-set：13 projections + `verify_workflow.py` REQUIRED_SNIPPETS 6 版本钉）。
+
+### Added
+
+- **FIX-236 loop 生产接线**（EVD-875，DEC-139 + ADR-017 §3）：Wiring A `review-record` CLI（review_record.py，record/reopen/close + 结构化 token + 证据写回）+ Wiring B `auto_judge_gate` 循环接入；`loop_exit_bridge.py` loop_exit -> next-candidates 推荐桥（fuse corrupt fail-closed）；Check 30 V6（review closure 终态 token 校验）；调用点 AST check（verify_workflow.py 接线完整性）。TDD 红→绿 36 新测试 + R1 8 新测试。
+- **FIX-237 任务规划三件套**（EVD-872/873/880）：(1) 237.1 task-priority 数据债去环——12 行依赖去环 + 15 行状态回填，task-priority-analysis 0 cycle；(2) 237.2/237.3 工具过滤（open/plan 工具按角色过滤）+ cycle 默认 exit 0 + WARNING（--strict 保留）；(3) 237.4 变更控制 triage 强制集成——`change-triage` CLI（四步分析：依赖快照/优先级/冲突检查/版本适配）+ 机器 triage 记录（`.governance/change-triage/{id}.json` + TRIAGE- 证据行）+ Check 32（CLI 接线 AST 校验 + 无记录拦截，fail-closed）+ 237.5 交互边界 evidence 化（任务完成→下一步推荐写证据）。33 新测试红→绿。
+- **FIX-238 入口引导修复**（EVD-881）：vendor `bootstrap.sh`/`bootstrap.cmd`（SPG_RESOLVE_TIMEOUT 15s 非法回退 + 四类分类诊断 + 退出码契约 0/1/2/3/4/5）；`resolve-entry` 薄入口（resolve_entry.py 本体零改动 DEC-096）；`SPG_WEB_INSTALL_TIMEOUT`（120s）；`@bootstrap-version` 陈旧标记升级链 + 3 profile 模板注入 + 宿主入口标记。29 新测试红→绿，test_verify_workflow 688 OK。
+- **FIX-239 hook locale 硬化**（EVD-874）：has_approved_review_evidence 的 grep/sed 加 `LC_ALL=C`（pre-commit +6/-2、commit-msg +3/-1），消除 4 字节 UTF-8/emoji 下 GNU grep 字符类遍历失败导致的审查证据假阴性。
+- **FIX-240 CI 流水线修复**（EVD-876/877/878）：manifest AGENTS.md 登记 + fresh-checkout unit-test 确定性 + threading-determinism 测试 Linux 适配（CI 全量 1527 测试唯一失败消除）+ 临时 CI debug workflow 已 revert。
+- **FIX-241 resolve_entry 编码健壮性回归测试**（EVD-879）：外部 cp936 论断核验为不成立，检测缺口关闭（spy 断言 + write_bytes fixture）。
+- **FIX-233/234/235 债务包**（EVD-868/869）：Check 30 历史 review 行终态豁免 + check-release 执行门禁 unit-test 超时参数化（180s -> 可配置）+ archive 证据迁移（release-forced 版本范围推进 + evidence-only 迁移）。
+- **AUDIT-142 三链复诊 + ADR-017**（EVD-871）：entry/loop/task-planning 三链重构诊断报告（docs/requirements/entry-loop-planning-rearchitecture-0.72.0.md）+ 设计评审（docs/adr/ADR-017-loop-wiring-and-task-planning-0.73.0.md），REQ-104/105/106 已交付。
+- **FIX-232 evidence-log 列数结构修复**（EVD-867，治理记录，非 git commit）：20 行 evidence_col_mismatch 归零。
+- 版本声明与 e2e fixture 指针从 0.72.0 推进到 0.73.0（M-set：plugins、marketplace、package.json、source/e2e SKILL frontmatter、manifest、fixture plan-tracker、四个 source hooks，以及 `verify_workflow.py` 的 `REQUIRED_SNIPPETS` 6 版本钉）。
+- `project/CHANGELOG.md` 新增 0.73.0 条目。
+
+### Validation
+
+- REL-066（用户授权 "0.73.0 发布方向"，2026-08-03）。
+- FIX-236：36 新测试 + R1 8 新测试（review_record 271 行 / loop_exit_bridge 133 行 / loop_gate_processor 48 行 / test_verify_workflow +241 行）。
+- FIX-237：33 新测试（test_change_triage 431 行）+ test_task_priority +298 行；Code Review R0 NEEDS_CHANGE/1P1 -> R1 APPROVED_WITH_NOTES/0。
+- FIX-238：29 新测试；test_verify_workflow 688 OK；Code Review R0/R1 APPROVED_WITH_NOTES/0（P2-1 CI fresh-checkout 阻断已修）。
+- FIX-240：CI 全量 1527 测试唯一失败消除；FIX-241：核验 + 回归测试（R0 APPROVED_WITH_NOTES）。
+- `check-version-consistency` PASS（13 文件版本声明一致）；`check-projection-sync` PASS（13 投影同步）；release docs 三件套含保守边界 needle 且无未否定 forbidden claim。
+
+### Boundaries
+
+- 0.73.0 **RISK-036/RISK-039 remain open**。RISK-036（official marketplace operations）与 RISK-039（ArchGuard external validation）各自独立关闭标准未满足；本版本不重开任何已关闭风险。
+- 不声明 official approval、marketplace approval、curated listing、universal/full runtime support、external first-session pilot success、1.0.0 production-ready；不关闭 RISK-036/RISK-039。
+- MINOR bump 来自三链重构生产接线（入口/循环/任务规划），不引入 breaking runtime API（协议修正仅行为契约 MUST 强化，无接口破坏）。
+
 ## [0.72.0] - 2026-08-01
 
 ### 0.72.0 - Check 31 安装态消解打包 + release lineage 多版本授权 + 0.64.x docs 债务（MINOR）

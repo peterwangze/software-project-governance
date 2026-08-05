@@ -239,6 +239,44 @@ def _pad_plan_tracker(governance_dir, min_bytes=82 * 1024):
     return content
 
 
+def _write_release_manifest(root, version, lifecycle="released",
+                            withdrawn=False, withdrawn_effective=False,
+                            corrupt=False, missing_version=False):
+    """Write a release-ledger manifest fixture under the plugin root.
+
+    Mirrors the declarative release ledger schema (release/ledger.py):
+    top-level lifecycle_state/version plus effective_state; ``withdrawn``
+    may appear at top level or inside effective_state (FIX-243/DEC-140).
+    """
+    releases = (
+        root / "skills" / "software-project-governance" / "core" / "releases"
+    )
+    releases.mkdir(parents=True, exist_ok=True)
+    path = releases / f"{version}.json"
+    if corrupt:
+        path.write_text("{ not valid json", encoding="utf-8")
+        return path
+    manifest = {
+        "artifacts": {},
+        "effective_state": {
+            "amendments": [],
+            "lifecycle_state": lifecycle,
+            "withdrawn": withdrawn_effective,
+        },
+        "events": [],
+        "lifecycle_state": lifecycle,
+        "provenance": "native",
+        "schema_version": 1,
+        "version": version,
+    }
+    if withdrawn:
+        manifest["withdrawn"] = True
+    if missing_version:
+        del manifest["version"]
+    path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
 # ────────────────────────────────────────────────────────────
 # Tests
 # ────────────────────────────────────────────────────────────
@@ -2970,9 +3008,9 @@ class TestArchiveFix235(unittest.TestCase):
 
     plan-tracker keeps completed task rows hot for full traceability
     (EVD-854) instead of physically archiving them; their evidence rows must
-    still be archivable by the row's 目标版本. Also covers the --auto range
-    advancing to the latest released version (SKILL.md frontmatter, DEC-096)
-    instead of lagging at the roadmap's second-newest published row.
+    still be archivable by the row's 目标版本. The --auto range advance to
+    the frontmatter version (FIX-235) was replaced by FIX-243/DEC-140's
+    ledger-bounded cooldown endpoint — see TestArchiveFix243.
     """
 
     def setUp(self):
@@ -3124,10 +3162,12 @@ class TestArchiveFix235(unittest.TestCase):
         kept = (self.gov / "evidence-log.md").read_text(encoding="utf-8")
         self.assertIn("EVD-695", kept)
 
-    def test_fix235_auto_range_advances_to_latest_released_version(self):
-        """FIX-235: --auto range end advances to the latest released version
-        (SKILL.md frontmatter, DEC-096) instead of lagging at the roadmap's
-        second-newest published row — recent evidence becomes archivable."""
+    def test_fix243_auto_range_no_longer_advances_to_frontmatter(self):
+        """FIX-243 (DEC-140 方案 A): without a release ledger the --auto
+        range end stays at the roadmap-derived second-newest published row.
+        The FIX-235 'advance to SKILL.md frontmatter current version'
+        behavior is replaced — it archived the current release window's
+        evidence. The frontmatter version (0.13.0) must NOT move the end."""
         skill = self.root / "skills/software-project-governance/SKILL.md"
         skill.parent.mkdir(parents=True, exist_ok=True)
         skill.write_text(
@@ -3168,10 +3208,224 @@ class TestArchiveFix235(unittest.TestCase):
 
         self.assertTrue(result["success"])
         self.assertFalse(result.get("skipped", False))
-        self.assertEqual(result["versions_range"], ("0.10.0", "0.13.0"))
-        self.assertIn("0.12.0", result["versions_archived"])
-        self.assertEqual(result["tasks_archived"], 4)     # FIX-001..004
-        self.assertEqual(result["evidence_archived"], 4)  # EVD-001..004
+        # No ledger available → roadmap-derived end (second-newest published
+        # row = 0.11.0); the frontmatter 0.13.0 must not extend the range.
+        self.assertEqual(result["versions_range"], ("0.10.0", "0.11.0"))
+        self.assertIn("0.11.0", result["versions_archived"])
+        self.assertNotIn("0.13.0", result["versions_archived"])
+        self.assertEqual(result["tasks_archived"], 3)     # FIX-001..003
+        self.assertEqual(result["evidence_archived"], 3)  # EVD-001..003
+
+
+class TestArchiveFix243(unittest.TestCase):
+    """FIX-243 (DEC-140 方案 A): --auto endpoint bounded by release ledger.
+
+    The archive range end must be the second-newest released version from
+    the release ledger (PLUGIN_ROOT asset — never the host root), keeping
+    the newest released version's evidence hot (≥1 release-period cooldown).
+    The roadmap derivation remains the advance-only floor: the bounded
+    endpoint wins only when it is at least the roadmap-derived end.
+    """
+
+    def setUp(self):
+        import archive  # noqa: F401  (module-level sys.path injection applies)
+        self.archive = archive
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        self.gov = self.root / ".governance"
+        self.gov.mkdir(parents=True, exist_ok=True)
+        self.archive_dir = self.gov / "archive"
+        for sub in ["tasks", "evidence", "decisions", "risks"]:
+            (self.archive_dir / sub).mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        self.tempdir.cleanup()
+
+    def _analyze(self, roadmap):
+        """Build a padded plan-tracker + evidence log and run the analysis."""
+        _make_plan_tracker_with_roadmap(self.gov, roadmap, [
+            ("v0.10.0 — Initial", [
+                ("FIX-001", "已完成", "Fix bug 1", "—"),
+            ]),
+            ("v0.11.0 — Early fixes", [
+                ("FIX-002", "已完成", "Fix bug 2", "—"),
+            ]),
+            ("v0.12.0 — Latest", [
+                ("FIX-003", "已完成", "Fix bug 3", "—"),
+            ]),
+            ("v0.13.0 — Current", [
+                ("FIX-004", "进行中", "Fix bug 4", "—"),
+            ]),
+        ])
+        _make_evidence_log(self.gov, [
+            ("EVD-001", "FIX-001", "Fixed bug 1"),
+            ("EVD-002", "FIX-002", "Fixed bug 2"),
+            ("EVD-003", "FIX-003", "Fixed bug 3"),
+        ])
+        _pad_plan_tracker(self.gov)
+        with patch.object(self.archive, "ROOT", self.root), \
+             patch.object(self.archive, "PLUGIN_ROOT", self.root):
+            return self.archive.analyze_auto_archive_candidates()
+
+    def test_auto_range_uses_ledger_second_newest_endpoint(self):
+        """DEC-140: --auto end = second-newest released ledger version; the
+        newest released version (0.13.0) stays hot despite being a published
+        roadmap row."""
+        roadmap = [
+            ("0.10.0", "已发布"),
+            ("0.11.0", "已发布"),
+            ("0.12.0", "已发布"),
+            ("0.13.0", "已发布"),
+        ]
+        for v in ("0.10.0", "0.11.0", "0.12.0", "0.13.0"):
+            _write_release_manifest(self.root, v)
+        result = self._analyze(roadmap)
+
+        self.assertTrue(result["success"])
+        self.assertFalse(result.get("skipped", False))
+        self.assertEqual(result["versions_range"], ("0.10.0", "0.12.0"))
+        self.assertEqual(
+            result["versions_archived"], ["0.10.0", "0.11.0", "0.12.0"]
+        )
+        self.assertNotIn("0.13.0", result["versions_archived"])
+
+    def test_auto_range_advances_to_ledger_bound_beyond_roadmap(self):
+        """FIX-235 scenario: the roadmap 状态 column lags (0.12.0/0.13.0
+        released per ledger but not marked 已发布) — the endpoint still
+        advances to the ledger bound, but never past the newest release."""
+        roadmap = [
+            ("0.10.0", "已发布"),
+            ("0.11.0", "已发布"),
+        ]
+        for v in ("0.10.0", "0.11.0", "0.12.0", "0.13.0"):
+            _write_release_manifest(self.root, v)
+        result = self._analyze(roadmap)
+
+        self.assertEqual(result["versions_range"], ("0.10.0", "0.12.0"))
+        self.assertNotIn("0.13.0", result["versions_archived"])
+
+    def test_release_ledger_excludes_withdrawn_manifests(self):
+        """0.66.1-style withdrawn manifests (top-level or effective_state)
+        never count as released — the bounded endpoint skips them."""
+        _write_release_manifest(self.root, "0.10.0")
+        _write_release_manifest(self.root, "0.11.0")
+        _write_release_manifest(self.root, "0.12.0", withdrawn_effective=True)
+        _write_release_manifest(self.root, "0.12.1", withdrawn=True)
+        _write_release_manifest(self.root, "0.13.0")
+        with patch.object(self.archive, "PLUGIN_ROOT", self.root):
+            released = self.archive._release_ledger_released_versions()
+        self.assertEqual(released, ["0.10.0", "0.11.0", "0.13.0"])
+        with patch.object(self.archive, "PLUGIN_ROOT", self.root):
+            self.assertEqual(
+                self.archive._auto_archive_bounded_endpoint(), "0.11.0"
+            )
+
+    def test_auto_range_excludes_withdrawn_ledger_versions(self):
+        """End-to-end: 0.12.0 withdrawn → bound stays 0.11.0 → range end is
+        0.11.0 (would be 0.12.0 if the withdrawal were ignored)."""
+        roadmap = [
+            ("0.10.0", "已发布"),
+            ("0.11.0", "已发布"),
+            ("0.12.0", "已发布"),
+        ]
+        _write_release_manifest(self.root, "0.10.0")
+        _write_release_manifest(self.root, "0.11.0")
+        _write_release_manifest(self.root, "0.12.0", withdrawn_effective=True)
+        _write_release_manifest(self.root, "0.13.0")
+        result = self._analyze(roadmap)
+
+        self.assertEqual(result["versions_range"], ("0.10.0", "0.11.0"))
+        self.assertNotIn("0.12.0", result["versions_archived"])
+
+    def test_auto_range_falls_back_to_roadmap_end_when_ledger_insufficient(self):
+        """Ledger with <2 released versions → roadmap-derived end wins."""
+        roadmap = [
+            ("0.10.0", "已发布"),
+            ("0.11.0", "已发布"),
+            ("0.12.0", "已发布"),
+        ]
+        _write_release_manifest(self.root, "0.10.0")  # only one released
+        result = self._analyze(roadmap)
+
+        self.assertEqual(result["versions_range"], ("0.10.0", "0.11.0"))
+
+    def test_auto_range_falls_back_when_ledger_dir_absent(self):
+        """No ledger at all → plain roadmap derivation."""
+        roadmap = [
+            ("0.10.0", "已发布"),
+            ("0.11.0", "已发布"),
+            ("0.12.0", "已发布"),
+        ]
+        result = self._analyze(roadmap)
+        self.assertEqual(result["versions_range"], ("0.10.0", "0.11.0"))
+
+    def test_auto_range_never_regresses_below_roadmap_end(self):
+        """Advance-only: when the ledger bound is BELOW the roadmap-derived
+        end, the roadmap end wins (no regression, per DEC-140 formula)."""
+        roadmap = [
+            ("0.10.0", "已发布"),
+            ("0.11.0", "已发布"),
+            ("0.12.0", "已发布"),
+        ]
+        # Ledger lags roadmap: newest released is 0.11.0 → bound = 0.10.0
+        for v in ("0.10.0", "0.11.0"):
+            _write_release_manifest(self.root, v)
+        result = self._analyze(roadmap)
+
+        # bounded (0.10.0) < roadmap end (0.11.0) → roadmap end wins
+        self.assertEqual(result["versions_range"], ("0.10.0", "0.11.0"))
+
+    def test_release_ledger_skips_corrupt_manifests_fail_open(self):
+        """A corrupt, non-dict, missing-version or non-released manifest is
+        skipped without crashing; remaining manifests still drive the bound."""
+        _write_release_manifest(self.root, "0.10.0")
+        _write_release_manifest(self.root, "0.11.0", corrupt=True)
+        _write_release_manifest(self.root, "0.12.0", missing_version=True)
+        _write_release_manifest(self.root, "0.12.1", lifecycle="candidate")
+        releases = (
+            self.root / "skills" / "software-project-governance"
+            / "core" / "releases"
+        )
+        (releases / "0.12.2.json").write_text("[]", encoding="utf-8")
+        _write_release_manifest(self.root, "0.13.0")
+        with patch.object(self.archive, "PLUGIN_ROOT", self.root):
+            released = self.archive._release_ledger_released_versions()
+        self.assertEqual(released, ["0.10.0", "0.13.0"])
+        with patch.object(self.archive, "PLUGIN_ROOT", self.root):
+            self.assertEqual(
+                self.archive._auto_archive_bounded_endpoint(), "0.10.0"
+            )
+
+    def test_release_ledger_skips_non_string_version_fail_open(self):
+        """A manifest whose ``version`` field is not a string (e.g. a number)
+        is skipped without crashing — the regex in _version_to_tuple would
+        raise TypeError, so the type guard keeps the fail-open contract."""
+        _write_release_manifest(self.root, "0.10.0")
+        releases = (
+            self.root / "skills" / "software-project-governance"
+            / "core" / "releases"
+        )
+        (releases / "0.11.0.json").write_text(json.dumps({
+            "artifacts": {},
+            "effective_state": {
+                "amendments": [],
+                "lifecycle_state": "released",
+                "withdrawn": False,
+            },
+            "events": [],
+            "lifecycle_state": "released",
+            "provenance": "native",
+            "schema_version": 1,
+            "version": 0.11,  # non-string → must be skipped, not crash
+        }), encoding="utf-8")
+        _write_release_manifest(self.root, "0.12.0")
+        with patch.object(self.archive, "PLUGIN_ROOT", self.root):
+            released = self.archive._release_ledger_released_versions()
+        self.assertEqual(released, ["0.10.0", "0.12.0"])
+        with patch.object(self.archive, "PLUGIN_ROOT", self.root):
+            self.assertEqual(
+                self.archive._auto_archive_bounded_endpoint(), "0.10.0"
+            )
 
 
 class TestDualRootResolution(unittest.TestCase):

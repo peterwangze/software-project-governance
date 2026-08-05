@@ -14,6 +14,7 @@ Core functions:
 Design: ADR-006 (docs/architecture/ADR-006-governance-data-scalability.md)
 """
 
+import json
 import re
 import shutil
 import sys
@@ -2349,7 +2350,10 @@ def _days_since_file(path):
 
 
 def _latest_released_version():
-    """FIX-235: return the authoritative current product version.
+    """Retained utility (fallback/consumers may use it); not part of the
+    --auto endpoint chain (DEC-140).
+
+    FIX-235: return the authoritative current product version.
 
     Read from the SKILL.md frontmatter (DEC-096: single source of truth for
     the workflow version; kept in sync with manifest.json/plugin.json by
@@ -2369,6 +2373,66 @@ def _latest_released_version():
         re.MULTILINE,
     )
     return match.group(1) if match else None
+
+
+def _release_ledger_released_versions():
+    """FIX-243 (DEC-140 方案 A): released versions from the release ledger.
+
+    Reads ``PLUGIN_ROOT / skills/software-project-governance/core/releases``
+    (``*.json``) — the plugin's declarative release ledger, never the host
+    root. A manifest counts as released when ``lifecycle_state == "released"``
+    (top-level or effective_state) and ``withdrawn`` is not truthy
+    (top-level or effective_state — 0.66.1 is withdrawn/untrusted and must
+    be excluded). Single-file parse failures are skipped fail-open; returns
+    [] when the ledger is unreadable or has no released versions.
+    """
+    releases_dir = (
+        PLUGIN_ROOT / "skills/software-project-governance" / "core" / "releases"
+    )
+    try:
+        paths = sorted(releases_dir.glob("*.json"))
+    except OSError:
+        return []
+    released = []
+    for path in paths:
+        try:
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue  # fail-open: a corrupt manifest never blocks archiving
+        if not isinstance(manifest, dict):
+            continue
+        effective = manifest.get("effective_state")
+        if not isinstance(effective, dict):
+            effective = {}
+        lifecycle = manifest.get("lifecycle_state") or effective.get(
+            "lifecycle_state"
+        )
+        withdrawn = manifest.get("withdrawn") or effective.get("withdrawn")
+        if lifecycle != "released" or withdrawn:
+            continue
+        version = manifest.get("version")
+        # Type guard: a non-string version (e.g. a number) would make
+        # _version_to_tuple's regex raise TypeError — skip the file so a
+        # single malformed manifest never crashes the ledger read (fail-open).
+        if not isinstance(version, str) or _version_to_tuple(version) is None:
+            continue
+        released.append(version)
+    released.sort(key=_version_to_tuple)
+    return released
+
+
+def _auto_archive_bounded_endpoint():
+    """FIX-243 (DEC-140 方案 A): cooldown-bounded --auto range end.
+
+    Returns the second-newest released ledger version — the newest released
+    version's evidence stays hot (≥1 release-period cooldown). Returns None
+    when the ledger has fewer than 2 released versions (caller falls back to
+    the roadmap-derived endpoint).
+    """
+    released = _release_ledger_released_versions()
+    if len(released) < 2:
+        return None
+    return released[-2]
 
 
 def analyze_auto_archive_candidates():
@@ -2426,16 +2490,26 @@ def analyze_auto_archive_candidates():
     archive_entries = published[:-1]
     version_start = archive_entries[0]["version"]
     version_end = archive_entries[-1]["version"]
-    # FIX-235: advance the range end to the latest released version. The
-    # roadmap 状态 column lags actual releases (e.g. 0.68.0~0.72.0 rows are
-    # still marked 规划), so the second-newest published row can leave recent
-    # evidence unarchivable. SKILL.md frontmatter is the authoritative current
-    # version (DEC-096). Advance-only: never regress below the roadmap-derived
-    # end.
-    latest_released = _latest_released_version()
-    if latest_released and _version_to_tuple(latest_released):
-        if _version_to_tuple(latest_released) > _version_to_tuple(version_end):
-            version_end = latest_released
+    # FIX-243 (DEC-140 方案 A): the --auto endpoint is bounded by the
+    # release ledger — the second-newest released version (≥1 release-period
+    # cooldown), so the current release window's evidence stays hot. The
+    # roadmap 状态 column lags actual releases, so the ledger is the reliable
+    # advance source. Advance-only (FIX-235 no-regression): the bounded
+    # endpoint is used only when it is at least the roadmap-derived end;
+    # otherwise the roadmap end wins (never regress below it).
+    bounded_endpoint = _auto_archive_bounded_endpoint()
+    bounded_tuple = (
+        _version_to_tuple(bounded_endpoint)
+        if bounded_endpoint is not None
+        else None
+    )
+    roadmap_end_tuple = _version_to_tuple(version_end)
+    if (
+        bounded_tuple is not None
+        and roadmap_end_tuple is not None
+        and bounded_tuple >= roadmap_end_tuple
+    ):
+        version_end = bounded_endpoint
     result["versions_archived"] = [
         entry["version"] for entry in published
         if (_version_to_tuple(entry["version"]) is not None
@@ -2509,7 +2583,10 @@ def migrate_auto(dry_run=False):
 
     Pipeline:
     1. Parse version roadmap → filter published versions
-    2. Determine archive range [oldest, second-newest]
+    2. Determine archive range [oldest, bounded end] — the end is the
+       second-newest released version from the release ledger (DEC-140 方案 A,
+       FIX-243), falling back to the roadmap-derived second-newest published
+       row when the ledger has fewer than 2 released versions
     3. Pre-check dry-run → skip if no data
     4. Idempotency: skip if archive/index.md exists
     5. Execute migrate_by_version + build_index + verify

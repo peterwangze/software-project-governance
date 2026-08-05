@@ -13,6 +13,8 @@ or:
     python -m unittest skills/software-project-governance.infra.tests.test_archive -v
 """
 
+import contextlib
+import io
 import json
 import os
 import sys
@@ -434,7 +436,7 @@ class TestArchiveMigrateByVersion(unittest.TestCase):
         import archive
 
         # Patch ROOT to point to our temp dir
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             result = archive.migrate_by_version("0.11.0", "0.12.0", dry_run=True)
 
         self.assertTrue(result["dry_run"])
@@ -452,7 +454,7 @@ class TestArchiveMigrateByVersion(unittest.TestCase):
         self._create_test_data()
         import archive
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             result = archive.migrate_by_version("0.11.0", "0.12.0", dry_run=False)
 
         self.assertTrue(result["success"])
@@ -478,7 +480,7 @@ class TestArchiveMigrateByVersion(unittest.TestCase):
         self._create_test_data()
         import archive
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             result = archive.migrate_by_version("0.13.0", "0.13.0", dry_run=False)
 
         self.assertTrue(result["success"])
@@ -491,7 +493,7 @@ class TestArchiveMigrateByVersion(unittest.TestCase):
         self._create_test_data()
         import archive
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             result = archive.migrate_by_version("0.99.0", "0.99.9", dry_run=False)
 
         self.assertTrue(result["success"])
@@ -506,7 +508,7 @@ class TestArchiveMigrateByVersion(unittest.TestCase):
         self._create_test_data()
         import archive
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             result = archive.migrate_by_version("0.11.0", "0.12.0", dry_run=False)
 
         # Should still succeed - archive dir gets auto-created
@@ -517,7 +519,7 @@ class TestArchiveMigrateByVersion(unittest.TestCase):
         self._create_test_data()
         import archive
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             result = archive.migrate_by_version("0.11.0", "0.12.0", dry_run=False,
                                                  migrate_evidence=True)
 
@@ -539,7 +541,7 @@ class TestArchiveMigrateByVersion(unittest.TestCase):
 
         import archive
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             result = archive.migrate_by_version("0.24.0", "0.24.0", dry_run=False)
 
         self.assertTrue(result["success"])
@@ -560,7 +562,7 @@ class TestArchiveMigrateByVersion(unittest.TestCase):
 
         import archive
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             result = archive.migrate_by_version("0.25.0", "0.25.0", dry_run=False)
 
         self.assertTrue(result["success"])
@@ -579,7 +581,7 @@ class TestArchiveMigrateByVersion(unittest.TestCase):
 
         import archive
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             result = archive.migrate_by_version("0.23.0", "0.23.0", dry_run=True)
 
         self.assertTrue(result["dry_run"])
@@ -620,7 +622,7 @@ class TestArchiveMigrateByVersion(unittest.TestCase):
 
         import archive
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             # Archive v0.11.0-v0.11.0 (table only)
             result_table = archive.migrate_by_version("0.11.0", "0.11.0", dry_run=False)
             self.assertEqual(result_table["tasks_archived"], 2)
@@ -683,7 +685,7 @@ class TestArchiveMigrateByVersion(unittest.TestCase):
         # choke on a missing file; no entries reference our tasks.
         _make_evidence_log(self.gov_dir, [])
 
-        with patch.object(archive, "ROOT", self.root):
+        with patch.object(archive, "ROOT", self.root), patch.object(archive, "PLUGIN_ROOT", self.root):
             result = archive.migrate_by_version(
                 "0.1.0", "0.61.0", dry_run=False
             )
@@ -777,7 +779,7 @@ class TestArchiveBuildIndex(unittest.TestCase):
         self._create_archive_files()
         import archive
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             result = archive.build_index()
 
         self.assertEqual(result["status"], "created")
@@ -800,7 +802,7 @@ class TestArchiveBuildIndex(unittest.TestCase):
         """build_index() with no archive files should create an empty index."""
         import archive
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             result = archive.build_index()
 
         self.assertEqual(result["status"], "created")
@@ -837,7 +839,7 @@ class TestArchiveBuildIndex(unittest.TestCase):
             encoding="utf-8",
         )
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             result = archive.build_index()
 
         # Result reports the narrative registration.
@@ -868,7 +870,7 @@ class TestArchiveBuildIndex(unittest.TestCase):
             "\n> 仅指针，无表格。\n",
             encoding="utf-8",
         )
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             result = archive.build_index()
         self.assertEqual(result["narrative_entries"], 1)
         content = (self.archive_dir / "index.md").read_text(encoding="utf-8")
@@ -937,7 +939,7 @@ class TestArchiveVerifyIntegrity(unittest.TestCase):
 
         import archive
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             result = archive.verify_archive_integrity()
 
         self.assertTrue(result["pass"])
@@ -971,7 +973,7 @@ class TestArchiveVerifyIntegrity(unittest.TestCase):
 
         import archive
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             result = archive.verify_archive_integrity()
 
         self.assertFalse(result["pass"])
@@ -1014,7 +1016,7 @@ class TestArchiveVerifyIntegrity(unittest.TestCase):
 
         import archive
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             result = archive.verify_archive_integrity()
 
         self.assertFalse(result["pass"])
@@ -1028,7 +1030,7 @@ class TestArchiveVerifyIntegrity(unittest.TestCase):
 
         import archive
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             result = archive.verify_archive_integrity()
 
         self.assertTrue(result["pass"])
@@ -1059,7 +1061,7 @@ class TestArchiveVerifyIntegrity(unittest.TestCase):
             "|---------|------|------|---------|\n",
             encoding="utf-8"
         )
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             result = archive.verify_archive_integrity()
 
         self.assertFalse(result["pass"], "must flag count mismatch")
@@ -1101,7 +1103,7 @@ class TestArchiveVerifyIntegrity(unittest.TestCase):
             "| RISK-002 | archive/risks/risks-v0.1.0-0.59.0.md |\n",
             encoding="utf-8"
         )
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             result = archive.verify_archive_integrity()
         # Check 3 specifically must not flag a count mismatch (the coupling bug)
         check3_issues = [i for i in result["issues"] if "mismatch" in i.lower() or "count" in i.lower()]
@@ -1136,7 +1138,7 @@ class TestArchiveVerifyIntegrity(unittest.TestCase):
             encoding="utf-8",
         )
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             archive.build_index()  # rebuild index from scratch
             result = archive.verify_archive_integrity()
 
@@ -1176,7 +1178,7 @@ class TestBackwardCompatibility(unittest.TestCase):
 
         import archive
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             # All operations should succeed without errors
             result1 = archive.migrate_by_version("0.11.0", "0.12.0", dry_run=True)
             self.assertTrue(result1["success"])
@@ -1225,7 +1227,7 @@ class TestArchiveRollback(unittest.TestCase):
         self._create_multi_version_data()
         import archive
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             # Archive v0.11.0 tasks
             result = archive.migrate_by_version("0.11.0", "0.11.0", dry_run=False)
             self.assertTrue(result["success"])
@@ -1262,7 +1264,7 @@ class TestArchiveRollback(unittest.TestCase):
         self._create_multi_version_data()
         import archive
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             # Archive v0.11.0 AND v0.12.0 (two migrations)
             result1 = archive.migrate_by_version("0.11.0", "0.11.0", dry_run=False)
             self.assertTrue(result1["success"])
@@ -1307,7 +1309,7 @@ class TestArchiveRollback(unittest.TestCase):
         self._create_multi_version_data()
         import archive
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             result = archive.rollback_last_migration()
             self.assertFalse(result["success"])
             self.assertIn("没有找到归档文件", result["details"])
@@ -1330,7 +1332,7 @@ class TestArchiveRollback(unittest.TestCase):
 
         import archive
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             result = archive.migrate_by_version(
                 "0.10.0", "0.10.0", dry_run=False, migrate_evidence=True
             )
@@ -1357,7 +1359,7 @@ class TestArchiveRollback(unittest.TestCase):
         newer = task_file.stat().st_mtime + 10
         os.utime(evidence_file, (newer, newer))
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             rollback = archive.rollback_last_migration()
 
         self.assertTrue(rollback["success"])
@@ -1397,7 +1399,7 @@ class TestArchiveRollback(unittest.TestCase):
 
         import archive
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             archive.build_index()
             rollback = archive.rollback_last_migration()
 
@@ -1422,7 +1424,7 @@ class TestArchiveRollback(unittest.TestCase):
 
         import archive
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             first = archive.migrate_by_version("0.10.0", "0.10.0", dry_run=False)
             archive.build_index()
 
@@ -1441,7 +1443,7 @@ class TestArchiveRollback(unittest.TestCase):
         )
         pt_path.write_text(pt_content, encoding="utf-8")
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             second = archive.migrate_by_version("0.10.0", "0.10.0", dry_run=False)
             archive.build_index()
 
@@ -1451,7 +1453,7 @@ class TestArchiveRollback(unittest.TestCase):
         self.assertEqual(len(inc_files), 1)
         self.assertTrue(base_file.exists())
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             rollback = archive.rollback_last_migration()
 
         self.assertTrue(rollback["success"])
@@ -1537,7 +1539,7 @@ class TestArchiveMigrateAuto(unittest.TestCase):
 
         import archive
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             result = archive.migrate_auto(dry_run=False)
 
         self.assertTrue(result["success"])
@@ -1574,7 +1576,7 @@ class TestArchiveMigrateAuto(unittest.TestCase):
 
         import archive
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             result = archive.migrate_auto(dry_run=False)
 
         self.assertTrue(result.get("skipped", False))
@@ -1602,7 +1604,7 @@ class TestArchiveMigrateAuto(unittest.TestCase):
 
         import archive
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             result = archive.migrate_auto(dry_run=False)
 
         # When parsing from titles, all found versions are treated as "已发布"
@@ -1635,7 +1637,7 @@ class TestArchiveMigrateAuto(unittest.TestCase):
 
         import archive
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             result = archive.migrate_auto(dry_run=False)
 
         self.assertTrue(result.get("skipped", False))
@@ -1678,7 +1680,7 @@ class TestArchiveMigrateAuto(unittest.TestCase):
 
         import archive
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             result = archive.migrate_auto(dry_run=False)
 
         self.assertTrue(result.get("skipped", False))
@@ -1713,7 +1715,7 @@ class TestArchiveMigrateAuto(unittest.TestCase):
         # Record original content
         pt_before = (self.gov_dir / "plan-tracker.md").read_text(encoding="utf-8")
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             result = archive.migrate_auto(dry_run=True)
 
         self.assertTrue(result["success"])
@@ -1757,7 +1759,7 @@ class TestArchiveMigrateAuto(unittest.TestCase):
 
         import archive
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             result = archive.migrate_auto(dry_run=False)
 
         # Required fields must exist
@@ -1796,7 +1798,7 @@ class TestArchiveMigrateAuto(unittest.TestCase):
 
         import archive
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             result = archive.migrate_auto(dry_run=False)
 
         self.assertTrue(result["success"])
@@ -1843,7 +1845,7 @@ class TestArchiveMigrateAuto(unittest.TestCase):
 
         import archive
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             result = archive.migrate_auto(dry_run=False)
 
         self.assertTrue(result["success"])
@@ -1877,7 +1879,7 @@ class TestArchiveMigrateAuto(unittest.TestCase):
 
         import archive
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             result = archive.migrate_auto(dry_run=True)
 
         self.assertTrue(result["success"])
@@ -1914,7 +1916,7 @@ class TestArchiveMigrateAuto(unittest.TestCase):
 
         import archive
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             result = archive.migrate_auto(dry_run=True)
 
         self.assertTrue(result["success"])
@@ -1942,7 +1944,7 @@ class TestArchiveMigrateAuto(unittest.TestCase):
 
         import archive
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             result = archive.analyze_auto_archive_candidates()
 
         self.assertTrue(result["success"])
@@ -2067,7 +2069,7 @@ class TestSampleTableArchive(unittest.TestCase):
 
         import archive
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             content = (self.gov_dir / "plan-tracker.md").read_text(encoding="utf-8")
             sections, lines = archive._find_version_sections(content)
 
@@ -2102,7 +2104,7 @@ class TestSampleTableArchive(unittest.TestCase):
 
         import archive
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             result = archive.migrate_by_version("0.1.0", "0.2.0", dry_run=False)
 
         self.assertTrue(result["success"])
@@ -2139,7 +2141,7 @@ class TestSampleTableArchive(unittest.TestCase):
 
         import archive
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             result = archive.migrate_by_version("0.1.0", "0.2.0", dry_run=False)
 
         self.assertTrue(result["success"])
@@ -2179,7 +2181,7 @@ class TestSampleTableArchive(unittest.TestCase):
 
         import archive
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             result = archive.migrate_by_version("0.1.0", "0.2.0", dry_run=False)
 
         self.assertTrue(result["success"])
@@ -2215,7 +2217,7 @@ class TestSampleTableArchive(unittest.TestCase):
 
         import archive
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             # Archive range 0.5.0 ~ 0.5.0 — sample table version is 0.1.0, OUT of range
             result = archive.migrate_by_version("0.5.0", "0.5.0", dry_run=False)
 
@@ -2235,7 +2237,7 @@ class TestSampleTableArchive(unittest.TestCase):
 
         import archive
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             content = (self.gov_dir / "plan-tracker.md").read_text(encoding="utf-8")
             sections, lines = archive._find_version_sections(content)
 
@@ -2262,7 +2264,7 @@ class TestSampleTableArchive(unittest.TestCase):
 
         pt_before = (self.gov_dir / "plan-tracker.md").read_text(encoding="utf-8")
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             result = archive.migrate_by_version("0.1.0", "0.2.0", dry_run=True)
 
         self.assertTrue(result["success"])
@@ -2316,7 +2318,7 @@ Content after sample table.
 """
         (self.gov_dir / "plan-tracker.md").write_text(pt_content, encoding="utf-8")
 
-        with patch.object(archive, 'ROOT', self.root):
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
             content = (self.gov_dir / "plan-tracker.md").read_text(encoding="utf-8")
             sections, lines = archive._find_version_sections(content)
 
@@ -2516,7 +2518,7 @@ class TestDecisionRiskMigration(unittest.TestCase):
                 ("DEC-050", "2026-06-28", "Active decision", "FIX-157, REL-048"),
             ])
             self._make_archived_tasks(gov, [("FIX-084", "0.38.0"), ("REL-013", "0.38.0")])
-            with patch.object(self.archive, "ROOT", Path(tmp)):
+            with patch.object(self.archive, "ROOT", Path(tmp)), patch.object(self.archive, "PLUGIN_ROOT", Path(tmp)):
                 # DEC-001 references archived FIX-084 (v0.38.0, in range) -> migrates
                 # DEC-050 references FIX-157 (not in archive) -> stays
                 count = self.archive._migrate_decisions("0.1.0", "0.59.0", {"FIX-084": "0.38.0", "REL-013": "0.38.0"}, dry_run=False)
@@ -2536,7 +2538,7 @@ class TestDecisionRiskMigration(unittest.TestCase):
             self._make_decision_log(gov, [
                 ("DEC-050", "2026-06-28", "Active decision", "FIX-157, REL-048"),
             ])
-            with patch.object(self.archive, "ROOT", Path(tmp)):
+            with patch.object(self.archive, "ROOT", Path(tmp)), patch.object(self.archive, "PLUGIN_ROOT", Path(tmp)):
                 count = self.archive._migrate_decisions("0.1.0", "0.59.0", {"FIX-084": "0.38.0"}, dry_run=False)
                 self.assertEqual(count, 0)
                 kept = (gov / "decision-log.md").read_text(encoding="utf-8")
@@ -2552,7 +2554,7 @@ class TestDecisionRiskMigration(unittest.TestCase):
                 ("RISK-001", "2026-04-01", "Old risk", "FIX-084"),
                 ("RISK-039", "2026-06-24", "Active risk", "AUDIT-121"),
             ])
-            with patch.object(self.archive, "ROOT", Path(tmp)):
+            with patch.object(self.archive, "ROOT", Path(tmp)), patch.object(self.archive, "PLUGIN_ROOT", Path(tmp)):
                 count = self.archive._migrate_risks("0.1.0", "0.59.0", {"FIX-084": "0.38.0"}, dry_run=False)
                 self.assertEqual(count, 1)
                 kept = (gov / "risk-log.md").read_text(encoding="utf-8")
@@ -2607,7 +2609,7 @@ class TestDecisionRiskMigration(unittest.TestCase):
                 ("RISK-001", "2026-04-01", "Old closed risk", "FIX-084", "已关闭"),
             ])
             task_versions = {"FIX-084": "0.38.0"}
-            with patch.object(self.archive, "ROOT", Path(tmp)):
+            with patch.object(self.archive, "ROOT", Path(tmp)), patch.object(self.archive, "PLUGIN_ROOT", Path(tmp)):
                 count = self.archive._migrate_risks(
                     "0.1.0", "0.59.0", task_versions, dry_run=False
                 )
@@ -2656,7 +2658,7 @@ class TestDecisionRiskMigration(unittest.TestCase):
                 ("RISK-001", "2026-04-01", "Old closed", "FIX-001", "已关闭"),
             ])
 
-            with patch.object(self.archive, "ROOT", Path(tmp)):
+            with patch.object(self.archive, "ROOT", Path(tmp)), patch.object(self.archive, "PLUGIN_ROOT", Path(tmp)):
                 result = self.archive.migrate_auto(dry_run=False)
 
             self.assertTrue(result["success"])
@@ -2712,7 +2714,7 @@ class TestDecisionRiskMigration(unittest.TestCase):
             # But historical tasks exist in archive/tasks/.
             self._make_archived_tasks(gov, [("FIX-084", "0.38.0"), ("REL-013", "0.38.0")])
             task_versions = {"FIX-084": "0.38.0", "REL-013": "0.38.0"}
-            with patch.object(self.archive, "ROOT", Path(tmp)):
+            with patch.object(self.archive, "ROOT", Path(tmp)), patch.object(self.archive, "PLUGIN_ROOT", Path(tmp)):
                 count = self.archive._migrate_evidence(
                     "0.1.0", "0.59.0", task_versions, dry_run=False
                 )
@@ -2739,7 +2741,7 @@ class TestDecisionRiskMigration(unittest.TestCase):
             ])
             self._make_archived_tasks(gov, [("FIX-084", "0.38.0"), ("REL-013", "0.38.0")])
             task_versions = {"FIX-084": "0.38.0", "REL-013": "0.38.0"}
-            with patch.object(self.archive, "ROOT", Path(tmp)):
+            with patch.object(self.archive, "ROOT", Path(tmp)), patch.object(self.archive, "PLUGIN_ROOT", Path(tmp)):
                 count = self.archive._migrate_evidence(
                     "0.1.0", "0.59.0", task_versions, dry_run=False
                 )
@@ -2758,7 +2760,7 @@ class TestDecisionRiskMigration(unittest.TestCase):
             ])
             self._make_archived_tasks(gov, [("FIX-084", "0.38.0")])
             task_versions = {"FIX-084": "0.38.0"}
-            with patch.object(self.archive, "ROOT", Path(tmp)):
+            with patch.object(self.archive, "ROOT", Path(tmp)), patch.object(self.archive, "PLUGIN_ROOT", Path(tmp)):
                 count = self.archive._migrate_evidence(
                     "0.1.0", "0.59.0", task_versions, dry_run=True
                 )
@@ -2788,7 +2790,7 @@ class TestDecisionRiskMigration(unittest.TestCase):
             ])
             self._make_archived_tasks(gov, [("FIX-084", "0.38.0")])
             task_versions = {"FIX-084": "0.38.0"}  # FIX-157 deliberately absent (live)
-            with patch.object(self.archive, "ROOT", Path(tmp)):
+            with patch.object(self.archive, "ROOT", Path(tmp)), patch.object(self.archive, "PLUGIN_ROOT", Path(tmp)):
                 count = self.archive._migrate_evidence(
                     "0.1.0", "0.59.0", task_versions, dry_run=False
                 )
@@ -2813,7 +2815,7 @@ class TestDecisionRiskMigration(unittest.TestCase):
             ])
             self._make_archived_tasks(gov, [("FIX-084", "0.38.0")])
             task_versions = {"FIX-084": "0.38.0"}
-            with patch.object(self.archive, "ROOT", Path(tmp)):
+            with patch.object(self.archive, "ROOT", Path(tmp)), patch.object(self.archive, "PLUGIN_ROOT", Path(tmp)):
                 count = self.archive._migrate_evidence(
                     "0.1.0", "0.59.0", task_versions, dry_run=False
                 )
@@ -3064,7 +3066,7 @@ class TestArchiveFix235(unittest.TestCase):
             encoding="utf-8",
         )
 
-        with patch.object(self.archive, "ROOT", self.root):
+        with patch.object(self.archive, "ROOT", self.root), patch.object(self.archive, "PLUGIN_ROOT", self.root):
             result = self.archive.migrate_by_version(
                 "0.63.1", "0.65.3", dry_run=False
             )
@@ -3111,7 +3113,7 @@ class TestArchiveFix235(unittest.TestCase):
         _make_evidence_log(self.gov, [
             ("EVD-695", "REL-055", "0.65.2 release evidence"),
         ])
-        with patch.object(self.archive, "ROOT", self.root):
+        with patch.object(self.archive, "ROOT", self.root), patch.object(self.archive, "PLUGIN_ROOT", self.root):
             result = self.archive.migrate_by_version(
                 "0.63.1", "0.65.3", dry_run=True
             )
@@ -3161,7 +3163,7 @@ class TestArchiveFix235(unittest.TestCase):
         ])
         _pad_plan_tracker(self.gov)
 
-        with patch.object(self.archive, "ROOT", self.root):
+        with patch.object(self.archive, "ROOT", self.root), patch.object(self.archive, "PLUGIN_ROOT", self.root):
             result = self.archive.migrate_auto(dry_run=True)
 
         self.assertTrue(result["success"])
@@ -3170,6 +3172,278 @@ class TestArchiveFix235(unittest.TestCase):
         self.assertIn("0.12.0", result["versions_archived"])
         self.assertEqual(result["tasks_archived"], 4)     # FIX-001..004
         self.assertEqual(result["evidence_archived"], 4)  # EVD-001..004
+
+
+class TestDualRootResolution(unittest.TestCase):
+    """FIX-242: archive.py dual-root model.
+
+    Host governance facts (.governance/**) must resolve to the host project
+    (cwd via resolve_entry / --project-root), never to the plugin cache's
+    phantom .governance copy; the SKILL.md version read stays on the plugin
+    root. ``ROOT`` remains the runtime host-facts seam: verify_workflow.py
+    rebinds ``module.ROOT = HOST_PROJECT_ROOT`` in _load_archive_module
+    (FIX-187), tests patch it, and --project-root rebinds it.
+    """
+
+    def setUp(self):
+        import archive  # noqa: F401  (module-level sys.path injection applies)
+        self.archive = archive
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+
+    def tearDown(self):
+        self.tempdir.cleanup()
+
+    def test_host_root_defaults_to_cwd_via_resolve_entry(self):
+        """resolve_host_root(None) is cwd-first: without --project-root the
+        host facts root is the current working directory (FIX-242)."""
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(self.root)
+            host = self.archive._resolve_host_root()
+            self.assertEqual(host, Path(self.root).resolve())
+        finally:
+            os.chdir(old_cwd)
+
+    def test_host_root_falls_back_to_legacy_root_when_resolve_fails(self):
+        """resolve_entry failure -> legacy parents[3] root (dogfood compat)."""
+        with patch("resolve_entry.resolve_host_root",
+                   side_effect=RuntimeError("resolve failed")):
+            self.assertEqual(
+                self.archive._resolve_host_root(), self.archive._LEGACY_ROOT
+            )
+
+    def test_plugin_root_resolves_from_resolve_entry_plugin_home(self):
+        """PLUGIN_ROOT mirrors verify_workflow FIX-187: resolve_entry.PLUGIN_HOME
+        -> parents[2] of infra/."""
+        fake_plugin_home = (
+            self.root / "pkg" / "skills" / "software-project-governance"
+        )
+        with patch("resolve_entry.PLUGIN_HOME", str(fake_plugin_home)):
+            self.assertEqual(
+                self.archive._resolve_plugin_root(),
+                fake_plugin_home.parent.parent,
+            )
+
+    def test_plugin_root_falls_back_to_legacy_root_when_resolve_unavailable(self):
+        """resolve_entry import failure -> legacy parents[3] root."""
+        with patch.dict(sys.modules, {"resolve_entry": None}):
+            self.assertEqual(
+                self.archive._resolve_plugin_root(), self.archive._LEGACY_ROOT
+            )
+
+    def test_gov_dir_default_follows_host_root(self):
+        """At import time ROOT == HOST_PROJECT_ROOT (cwd-derived), so
+        _gov_dir() points at the host .governance, not the plugin cache."""
+        self.assertEqual(self.archive.ROOT, self.archive.HOST_PROJECT_ROOT)
+        self.assertEqual(
+            self.archive._gov_dir(),
+            self.archive.HOST_PROJECT_ROOT / ".governance",
+        )
+
+    def test_legacy_root_patch_seam_controls_host_facts(self):
+        """Backward compat: patching archive.ROOT (the verify_workflow
+        _load_archive_module rebind seam) redirects all host facts."""
+        with patch.object(self.archive, "ROOT", self.root), patch.object(self.archive, "PLUGIN_ROOT", self.root):
+            self.assertEqual(
+                self.archive._gov_dir(), self.root / ".governance"
+            )
+            self.assertEqual(
+                self.archive._archive_dir(),
+                self.root / ".governance" / "archive",
+            )
+            self.assertEqual(
+                self.archive._index_path(),
+                self.root / ".governance" / "archive" / "index.md",
+            )
+            self.assertEqual(
+                self.archive._plan_tracker(),
+                self.root / ".governance" / "plan-tracker.md",
+            )
+            self.assertEqual(
+                self.archive._evidence_log(),
+                self.root / ".governance" / "evidence-log.md",
+            )
+            self.assertEqual(
+                self.archive._decision_log(),
+                self.root / ".governance" / "decision-log.md",
+            )
+            self.assertEqual(
+                self.archive._risk_log(),
+                self.root / ".governance" / "risk-log.md",
+            )
+
+    def test_project_root_override_rebinds_host_facts_only(self):
+        """--project-root rebinds host facts; PLUGIN_ROOT is never moved."""
+        orig_root = self.archive.ROOT
+        orig_host = self.archive.HOST_PROJECT_ROOT
+        orig_plugin = self.archive.PLUGIN_ROOT
+        try:
+            self.archive._apply_project_root_override(str(self.root))
+            host = Path(self.root).resolve()
+            self.assertEqual(self.archive.ROOT, host)
+            self.assertEqual(self.archive.HOST_PROJECT_ROOT, host)
+            self.assertEqual(self.archive._gov_dir(), host / ".governance")
+            self.assertEqual(
+                self.archive._plan_tracker(),
+                host / ".governance" / "plan-tracker.md",
+            )
+            self.assertEqual(
+                self.archive._archive_dir(), host / ".governance" / "archive"
+            )
+            self.assertEqual(self.archive.PLUGIN_ROOT, orig_plugin)
+        finally:
+            self.archive.ROOT = orig_root
+            self.archive.HOST_PROJECT_ROOT = orig_host
+
+    def test_latest_released_version_reads_plugin_root_not_host(self):
+        """SKILL.md frontmatter version read is plugin-rooted (FIX-242): a
+        host root without the skill tree must not affect the version."""
+        orig_plugin = self.archive.PLUGIN_ROOT
+        orig_root = self.archive.ROOT
+        orig_host = self.archive.HOST_PROJECT_ROOT
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                plugin = Path(td) / "plugin"
+                skill = plugin / "skills" / "software-project-governance" / "SKILL.md"
+                skill.parent.mkdir(parents=True)
+                skill.write_text(
+                    "---\nname: spg\nversion: 9.9.9\n---\n",
+                    encoding="utf-8",
+                )
+                host = Path(td) / "host"
+                host.mkdir()
+                self.archive.PLUGIN_ROOT = plugin
+                self.archive.ROOT = host
+                self.archive.HOST_PROJECT_ROOT = host
+                self.assertEqual(
+                    self.archive._latest_released_version(), "9.9.9"
+                )
+        finally:
+            self.archive.PLUGIN_ROOT = orig_plugin
+            self.archive.ROOT = orig_root
+            self.archive.HOST_PROJECT_ROOT = orig_host
+
+    def test_extract_project_root_arg_position_independent(self):
+        """--project-root is accepted before or after the subcommand."""
+        self.assertEqual(
+            self.archive._extract_project_root_arg(
+                ["migrate", "--project-root", "X", "--dry-run"]
+            ),
+            ("X", ["migrate", "--dry-run"]),
+        )
+        self.assertEqual(
+            self.archive._extract_project_root_arg(["--project-root=X", "verify"]),
+            ("X", ["verify"]),
+        )
+        self.assertEqual(
+            self.archive._extract_project_root_arg(["migrate", "--dry-run"]),
+            (None, ["migrate", "--dry-run"]),
+        )
+        with self.assertRaises(ValueError):
+            self.archive._extract_project_root_arg(["migrate", "--project-root"])
+
+
+class TestArchiveCliProjectRoot(unittest.TestCase):
+    """FIX-242: archive.py CLI --project-root targets the host project."""
+
+    def setUp(self):
+        import archive  # noqa: F401  (module-level sys.path injection applies)
+        self.archive = archive
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        self.gov = self.root / ".governance"
+        self.gov.mkdir(parents=True, exist_ok=True)
+        self._orig_root = archive.ROOT
+        self._orig_host = archive.HOST_PROJECT_ROOT
+        self._orig_plugin = archive.PLUGIN_ROOT
+
+    def tearDown(self):
+        self.archive.ROOT = self._orig_root
+        self.archive.HOST_PROJECT_ROOT = self._orig_host
+        self.archive.PLUGIN_ROOT = self._orig_plugin
+        self.tempdir.cleanup()
+
+    def test_cli_verify_project_root_after_subcommand(self):
+        """`archive.py verify --project-root <host>` reads HOST facts: the
+        index ghost-reference is reported from the host fixture."""
+        tasks_dir = self.gov / "archive" / "tasks"
+        tasks_dir.mkdir(parents=True, exist_ok=True)
+        (self.gov / "archive" / "index.md").write_text(
+            "# 归档索引\n\n"
+            "## Task 索引\n\n"
+            "| Task ID | 状态 | 版本 | 归档文件 |\n"
+            "|---------|------|------|---------|\n"
+            "| FIX-001 | 已完成 | 0.10.0 | archive/tasks/ghost.md |\n",
+            encoding="utf-8",
+        )
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), \
+             self.assertRaises(SystemExit) as ctx:
+            self.archive.main(["verify", "--project-root", str(self.root)])
+        self.assertEqual(ctx.exception.code, 1)
+        printed = out.getvalue()
+        self.assertIn("Pass: False", printed)
+        self.assertIn("ghost.md", printed)
+        # Host fixture archive dir was read, not created/modified.
+        self.assertFalse(tasks_dir.joinpath("ghost.md").exists())
+
+    def test_cli_verify_project_root_before_subcommand(self):
+        """`archive.py --project-root <host> verify` (global position)."""
+        (self.gov / "archive" / "tasks").mkdir(parents=True, exist_ok=True)
+        (self.gov / "archive" / "index.md").write_text(
+            "# 归档索引\n\n"
+            "## Task 索引\n\n"
+            "| Task ID | 状态 | 版本 | 归档文件 |\n"
+            "|---------|------|------|---------|\n"
+            "| FIX-001 | 已完成 | 0.10.0 | archive/tasks/ghost.md |\n",
+            encoding="utf-8",
+        )
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), \
+             self.assertRaises(SystemExit) as ctx:
+            self.archive.main(["--project-root", str(self.root), "verify"])
+        self.assertEqual(ctx.exception.code, 1)
+        printed = out.getvalue()
+        self.assertIn("Pass: False", printed)
+        self.assertIn("ghost.md", printed)
+
+    def test_cli_migrate_auto_dry_run_targets_host(self):
+        """`archive.py migrate --auto --dry-run --project-root <host>` runs
+        the auto analysis on the host fixture (skipped: no triggers) instead
+        of the plugin cache."""
+        (self.gov / "plan-tracker.md").write_text(
+            "# 当前项目样例\n\n"
+            "## 版本规划\n\n"
+            "### 版本路线图\n\n"
+            "| 版本 | 状态 | 日期 |\n"
+            "| --- | --- | --- |\n"
+            "| 0.10.0 | 已发布 | 2026-01-01 |\n"
+            "| 0.11.0 | 已发布 | 2026-02-01 |\n\n"
+            "### v0.10.0 — Old\n"
+            "| 任务ID | 描述 | 优先级 | 依赖 | 目标版本 | 负责人 | 审查人 | 审查类型 | 闭环路径 | 状态 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
+            "| FIX-001 | fix | P1 | — | 0.10.0 | a | — | Code Reviewer | TBD | 已完成 |\n",
+            encoding="utf-8",
+        )
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.archive.main(
+                ["migrate", "--auto", "--dry-run", "--project-root", str(self.root)]
+            )
+        printed = out.getvalue()
+        self.assertIn("治理数据归档", printed)
+        # Dry-run must not create the host archive index.
+        self.assertFalse((self.gov / "archive" / "index.md").exists())
+
+    def test_cli_project_root_missing_value_errors(self):
+        """`--project-root` without a value exits 2 with a clear message."""
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), \
+             self.assertRaises(SystemExit) as ctx:
+            self.archive.main(["verify", "--project-root"])
+        self.assertEqual(ctx.exception.code, 2)
+        self.assertIn("--project-root requires a path", err.getvalue())
 
 
 if __name__ == "__main__":

@@ -21,8 +21,70 @@ import unicodedata
 from datetime import date, datetime
 from pathlib import Path
 
-# ROOT is overridable for testing; paths are lazy to allow patching
-ROOT = Path(__file__).resolve().parents[3]
+# ── Dual-root model (FIX-242 / DEC-080 / RISK-038; mirrors verify_workflow.py FIX-187) ──
+# The plugin installs under a per-version cache dir (e.g.
+# .../software-project-governance/0.73.0/) whose copy of this repo ships a
+# PHANTOM .governance/ tree. Deriving the governance-facts root from __file__
+# (the legacy ``ROOT = parents[3]``) made ``archive.py migrate`` archive cache
+# data instead of the host project (FIX-242: python_game dry-run reported 134
+# phantom evidence rows from the cache copy).
+#
+#   PLUGIN_ROOT        — where the plugin's OWN assets live (SKILL.md / core/
+#                        manifest.json). Used for the version read
+#                        (_latest_released_version). NEVER for host facts.
+#
+#   ROOT / HOST_PROJECT_ROOT — the project being governed; where the real
+#                        .governance/ facts live (plan-tracker.md,
+#                        evidence-log.md, ...). Defaults to resolve_entry's
+#                        cwd-first host root (FIX-187 semantics), never to
+#                        the plugin cache. ``ROOT`` stays the overridable
+#                        seam: verify_workflow._load_archive_module rebinds
+#                        ``module.ROOT = HOST_PROJECT_ROOT`` (FIX-187), tests
+#                        patch it, and archive's own --project-root rebinds
+#                        it. Paths are lazy so the rebind is observed at
+#                        call time.
+_LEGACY_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _resolve_plugin_root():
+    """Deferred resolve of PLUGIN_ROOT via resolve_entry.PLUGIN_HOME.
+
+    Falls back to the legacy ``parents[3]`` root (the plugin package root in
+    both the dev-repo and the versioned-cache layouts) when resolve_entry
+    cannot be imported (e.g. minimal packaging).
+    """
+    try:
+        from resolve_entry import PLUGIN_HOME  # peer import (no cycle)
+        return Path(PLUGIN_HOME).parent.parent  # parents[2] of infra/
+    except Exception:
+        return _LEGACY_ROOT
+
+
+def _resolve_host_root():
+    """Deferred resolve of the host project root via resolve_entry.
+
+    resolve_entry.resolve_host_root(None) prefers os.getcwd(). On any failure
+    (resolve_entry missing, cwd unusable) fall back to the legacy
+    ``parents[3]`` root so dogfood mode (plugin-root == host-root) keeps
+    working — the backward-compat path, not a security decision here
+    (resolve_entry itself is fail-closed for the /governance entry).
+    """
+    try:
+        from resolve_entry import resolve_host_root  # peer import (no cycle)
+        host = resolve_host_root(None)
+        if host is not None:
+            return Path(host)
+    except Exception:
+        pass
+    return _LEGACY_ROOT
+
+
+PLUGIN_ROOT = _resolve_plugin_root()
+HOST_PROJECT_ROOT = _resolve_host_root()
+# ROOT is the HOST-facts seam: verify_workflow.py rebinds it after loading
+# this module (FIX-187), tests patch it, --project-root rebinds it. Its
+# default is the cwd-derived host root — never the plugin cache.
+ROOT = HOST_PROJECT_ROOT
 
 FIRST_MIGRATION_PLAN_SIZE_THRESHOLD = 80 * 1024
 TASK_INCREMENTAL_THRESHOLD = 20
@@ -30,6 +92,7 @@ FALLBACK_ARCHIVE_DAYS = 90
 
 
 def _gov_dir():
+    # ROOT is the host-facts seam (dual-root model above).
     return ROOT / ".governance"
 
 
@@ -1835,6 +1898,7 @@ def verify_archive_integrity():
 
     # Check 1: Every referenced archive file exists
     for ref in all_index_refs:
+        # ROOT is the host-facts seam (FIX-242 dual-root model above).
         filepath = ROOT / ".governance" / ref
         if not filepath.exists():
             result["pass"] = False
@@ -2290,9 +2354,11 @@ def _latest_released_version():
     Read from the SKILL.md frontmatter (DEC-096: single source of truth for
     the workflow version; kept in sync with manifest.json/plugin.json by
     check-version-consistency). Between releases this equals the latest
-    released version. Returns None when unreadable.
+    released version. FIX-242: read from PLUGIN_ROOT (plugin assets), never
+    from the host root — the host project does not ship the plugin's
+    SKILL.md. Returns None when unreadable.
     """
-    skill = ROOT / "skills/software-project-governance/SKILL.md"
+    skill = PLUGIN_ROOT / "skills/software-project-governance/SKILL.md"
     try:
         content = skill.read_text(encoding="utf-8")
     except OSError:
@@ -2623,13 +2689,72 @@ def _format_auto_summary(result):
 
 # ── CLI Entry Point ─────────────────────────────────────────────────
 
-def main():
+def _extract_project_root_arg(argv):
+    """Extract --project-root from argv no matter where the user places it.
+
+    ``argparse`` only accepts global options before the subcommand, but the
+    bootstrap entry commonly invokes commands as:
+
+        archive.py migrate --auto --dry-run --project-root <host>
+
+    Keep that spelling backward-compatible by stripping the option before
+    subparser parsing and applying the host-root override afterward
+    (mirrors verify_workflow.py FIX-187).
+    """
+    filtered = []
+    project_root = None
+    iterator = iter(range(len(argv)))
+    for index in iterator:
+        value = argv[index]
+        if value == "--project-root":
+            try:
+                project_root = argv[index + 1]
+            except IndexError:
+                raise ValueError("--project-root requires a path")
+            next(iterator, None)
+        elif value.startswith("--project-root="):
+            project_root = value.split("=", 1)[1]
+        else:
+            filtered.append(value)
+    return project_root, filtered
+
+
+def _apply_project_root_override(project_root):
+    """Rebind host-governance fact paths to an explicit project root.
+
+    Mirrors verify_workflow.py (FIX-187): only host facts are rebound —
+    ``ROOT`` / ``HOST_PROJECT_ROOT`` and everything derived from _gov_dir().
+    Plugin assets (``PLUGIN_ROOT`` / ``_latest_released_version``) are never
+    moved, so the SKILL.md version read keeps resolving to the plugin
+    (FIX-242).
+    """
+    global ROOT, HOST_PROJECT_ROOT
+    host_root = Path(project_root).expanduser().resolve()
+    ROOT = host_root
+    HOST_PROJECT_ROOT = host_root
+
+
+def main(argv=None):
     """CLI for archive operations."""
     import argparse
+
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    try:
+        explicit_project_root, parser_argv = _extract_project_root_arg(raw_argv)
+    except ValueError as exc:
+        print(f"archive: error: {exc}", file=sys.stderr)
+        sys.exit(2)
 
     parser = argparse.ArgumentParser(
         prog="archive",
         description="Governance Data Archive Tool — SYSGAP-030",
+    )
+    parser.add_argument(
+        "--project-root",
+        help=(
+            "Host project root whose .governance facts should be read. "
+            "May also be placed after the subcommand."
+        ),
     )
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
@@ -2655,7 +2780,11 @@ def main():
     # rollback
     subparsers.add_parser("rollback", help="Rollback the most recent migration")
 
-    args = parser.parse_args()
+    args = parser.parse_args(parser_argv)
+    # --project-root was pre-scanned out of argv (position-independent);
+    # apply the explicit host-root override before dispatching (FIX-242).
+    if explicit_project_root is not None:
+        _apply_project_root_override(explicit_project_root)
 
     # Ensure stdout supports UTF-8 (Windows consoles default to GBK)
     if hasattr(sys.stdout, "reconfigure"):

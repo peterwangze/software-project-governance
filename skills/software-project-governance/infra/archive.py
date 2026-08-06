@@ -56,7 +56,8 @@ def _resolve_plugin_root():
     """
     try:
         from resolve_entry import PLUGIN_HOME  # peer import (no cycle)
-        return Path(PLUGIN_HOME).parent.parent  # parents[2] of infra/
+        # two parents above PLUGIN_HOME (== script parents[3])
+        return Path(PLUGIN_HOME).parent.parent
     except Exception:
         return _LEGACY_ROOT
 
@@ -2796,6 +2797,26 @@ def _extract_project_root_arg(argv):
     return project_root, filtered
 
 
+def _validate_project_root(project_root):
+    """Validate an explicit --project-root value (fail-closed, FIX-244).
+
+    Returns ``(host_root, error)``: the resolved absolute directory Path
+    plus ``None`` for a valid root; ``(None, reason)`` for an empty,
+    nonexistent, or non-directory path. Mirrors
+    ``resolve_entry.resolve_host_root`` (strict resolve + is_dir).
+    """
+    if not project_root:
+        return None, "path is empty"
+    candidate = Path(project_root).expanduser()
+    try:
+        candidate = candidate.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return None, "path does not exist"
+    if not candidate.is_dir():
+        return None, "not a directory"
+    return candidate, None
+
+
 def _apply_project_root_override(project_root):
     """Rebind host-governance fact paths to an explicit project root.
 
@@ -2804,9 +2825,22 @@ def _apply_project_root_override(project_root):
     Plugin assets (``PLUGIN_ROOT`` / ``_latest_released_version``) are never
     moved, so the SKILL.md version read keeps resolving to the plugin
     (FIX-242).
+
+    Fail-closed (FIX-244): an explicit root that is empty, does not exist,
+    or is not a directory is a hard error — classified diagnostic on
+    stderr + exit 2 (aligns with resolve_entry.resolve_host_root, which
+    refuses explicit paths that cannot be resolved). A nonexistent path
+    must never silently rebind to a phantom root.
     """
     global ROOT, HOST_PROJECT_ROOT
-    host_root = Path(project_root).expanduser().resolve()
+    host_root, error = _validate_project_root(project_root)
+    if error is not None:
+        display = "<empty>" if not project_root else str(project_root)
+        print(
+            f"spg-archive-error: invalid-project-root — {display} ({error})",
+            file=sys.stderr,
+        )
+        sys.exit(2)
     ROOT = host_root
     HOST_PROJECT_ROOT = host_root
 

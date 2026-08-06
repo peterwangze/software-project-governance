@@ -3699,6 +3699,45 @@ class TestArchiveCliProjectRoot(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 2)
         self.assertIn("--project-root requires a path", err.getvalue())
 
+    def test_cli_project_root_nonexistent_path_fails_closed(self):
+        """FIX-244 P2-1: an explicit --project-root that does not exist
+        exits 2 with a classified diagnostic — no phantom-root rebind."""
+        missing = self.root / "does-not-exist"
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), \
+             self.assertRaises(SystemExit) as ctx:
+            self.archive.main(["verify", "--project-root", str(missing)])
+        self.assertEqual(ctx.exception.code, 2)
+        self.assertIn("spg-archive-error: invalid-project-root", err.getvalue())
+        self.assertIn(str(missing), err.getvalue())
+        # ROOT must NOT be rebound to the phantom path.
+        self.assertEqual(self.archive.ROOT, self._orig_root)
+        self.assertEqual(self.archive.HOST_PROJECT_ROOT, self._orig_host)
+
+    def test_cli_project_root_file_path_fails_closed(self):
+        """FIX-244 P2-1: --project-root pointing at a file (not a
+        directory) exits 2 with the same classified diagnostic."""
+        some_file = self.root / "plain.txt"
+        some_file.write_text("not a directory", encoding="utf-8")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), \
+             self.assertRaises(SystemExit) as ctx:
+            self.archive.main(["verify", "--project-root", str(some_file)])
+        self.assertEqual(ctx.exception.code, 2)
+        self.assertIn("spg-archive-error: invalid-project-root", err.getvalue())
+        self.assertEqual(self.archive.ROOT, self._orig_root)
+
+    def test_cli_project_root_empty_value_fails_closed(self):
+        """FIX-244 P3-4: `--project-root=` (empty string) exits 2 — must
+        not silently resolve to the current working directory."""
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), \
+             self.assertRaises(SystemExit) as ctx:
+            self.archive.main(["verify", "--project-root="])
+        self.assertEqual(ctx.exception.code, 2)
+        self.assertIn("spg-archive-error: invalid-project-root", err.getvalue())
+        self.assertEqual(self.archive.ROOT, self._orig_root)
+
 
 if __name__ == "__main__":
     unittest.main()

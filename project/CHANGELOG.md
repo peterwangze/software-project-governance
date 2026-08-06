@@ -2,6 +2,38 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.74.0] - 2026-08-07
+
+### 0.74.0 - 入口确定性五修复链打包（archive 双 root / --auto 冷却端点 / --project-root fail-closed 三端对齐 / 审查遗留清理）（MINOR）
+
+0.74.0 是 MINOR 发布，把 HEAD `1a375e6` 上 0.73.0 released 之后已合入的 5 个 commit 打包成发布候选（FIX-242 / FIX-243 / FIX-244 / FIX-245 / FIX-246），并同步版本投影与 release 文档。发布目标：archive.py 双 root 宿主解析与 `--project-root`（FIX-242）、`--auto` 终点冷却期有界推进（FIX-243，DEC-140）、archive 端与 verify_workflow 端 `--project-root` fail-closed 校验逐字对齐（FIX-244/245）、审查遗留观察项清理与仓库 EOL 基线（FIX-246）——入口确定性三链（resolve-entry/bootstrap/archive）输入边界完整闭环。但**不关闭 RISK-036/RISK-039**：官方市场操作（Codex Desktop marketplace E2E / 官方提交包）与 ArchGuard 外部宿主验证各自独立关闭标准未满足。版本投影 0.73.0 -> 0.74.0 全 PASS（M-set：13 projections + `verify_workflow.py` REQUIRED_SNIPPETS 6 版本钉）。
+
+### Added
+
+- **FIX-242 archive.py 双 root 宿主解析 + `--project-root`**（EVD-886，2026-08-05）：根因 = `ROOT = Path(__file__).resolve().parents[3]` 单根同时承载宿主事实源与插件资产，CLI 无 `--project-root`——cache 安装宿主（bootstrap Step E 文档化路径）归档操作指向插件包自身 .governance 幻影数据（EVD-885 实证：python_game cwd dry-run 报 134 条幻影证据）。修复（镜像 FIX-187 双 root）：`_resolve_plugin_root()`/`_resolve_host_root()`（resolve_entry.PLUGIN_HOME / resolve_host_root cwd 优先，失败 fallback parents[3] dogfood 兼容）；PLUGIN_ROOT 承载插件资产（`_latest_released_version()` 读 SKILL frontmatter 不再受宿主影响）；ROOT 保留为宿主事实 seam；CLI 新增 `--project-root <path>`（migrate/build-index/verify/rollback 全可用，`_extract_project_root_arg` 预扫描位置无关，缺值 exit 2，override 只重绑定宿主根）。验证：test_archive.py 106 passed（新增 13 项 TestDualRootResolution/TestArchiveCliProjectRoot，先红后绿 75 failed/31 passed → 106 passed）；test_verify_workflow.py 688 + 87 subtests 零回归。Code Review R0 APPROVED_WITH_NOTES/0（P2-1/P3-1~P3-4 记遗留观察项）。
+- **FIX-243 archive --auto 终点冷却期有界推进**（EVD-887，DEC-140 方案 A，2026-08-05）：根因 = FIX-235 后 `--auto` 终点直接推进到 SKILL frontmatter 当前版本（0.73.0），连当前发布窗口证据一并归档过激进。修复：`_release_ledger_released_versions()`（读发布台账 `core/releases/*.json`，条件 lifecycle_state==released 且 withdrawn 非真——0.66.1 排除；单文件损坏/非 dict/非字符串 version fail-open 跳过不 crash）+ `_auto_archive_bounded_endpoint()`（台账 released 排序倒数第二）；终点公式 = bounded if（bounded 非 None 且 >= roadmap 终点）else roadmap 终点（`_version_to_tuple` 语义比较，advance-only 不回归 + 冷却上限），frontmatter 不再参与推进。验证：test_archive.py 115 passed（TestArchiveFix243 8 项 + fail-open 类型守卫 1 项，红→绿）；test_verify_workflow 688+87 零回归；仓库 dry-run 归档范围 v0.1.0~v0.72.0（128 条证据），0.73.0 证据 9 条保留热；check-archive-integrity trigger gap 范围同步。Code Review R0/R1 APPROVED_WITH_NOTES/0（P2-1 类型守卫 R1 关闭、P2-2 保留声明、P3 非阻塞）。
+- **FIX-244 archive `--project-root` fail-closed 校验**（EVD-889，2026-08-06，FIX-242 R0 P2-1/P3-1/P3-4 处置）：`_validate_project_root()`——空值拦截在 Path 解析前（空串 strict resolve 会静默落 cwd）、resolve(strict=True) 失败或非目录 → stderr 分类诊断 `spg-archive-error: invalid-project-root — <path> (<reason>)` + exit 2；校验先于任何读写（main 中 override 先于命令分发）；与 resolve_entry.resolve_host_root fail-closed 语义逐行对齐。验证：test_archive.py 118 passed（3 新测试先红后绿——旧代码 SystemExit not raised + 空值落 cwd 实证）；test_verify_workflow 688+87 零回归；手工矩阵 4 场景 exit 码 + 分类诊断。Code Review R0 APPROVED_WITH_NOTES/0（P2-1/P2-2 测试加固建议记遗留观察项；P3-1 em-dash 编码可选）。
+- **FIX-245 verify_workflow `--project-root` fail-closed 校验对齐**（EVD-890/891，2026-08-06，FIX-244 同型）：根因 = `_apply_project_root_override`（FIX-187 引入）对显式 `--project-root` 无存在性/目录/空值校验（Path.resolve() 无 strict），非法路径静默重绑定 phantom root 致 check 系列读错宿主；空值落 cwd。修复：`_validate_project_root()`（镜像 FIX-244 archive 端逐字一致——空值 Path 解析前拒绝/path is empty、strict resolve 失败/path does not exist、非目录/not a directory），`_apply_project_root_override` 入口先于任何宿主事实读取校验，失败输出 `verify_workflow: error: invalid-project-root — <path> (<reason>)` + exit 2（模块既有 CLI 错误约定）；默认路径零变化。验证：test_verify_workflow.py 693+87（5 新用例先红后绿——HEAD 版 5 failed）；test_archive.py 118 零回归；手工矩阵 3 场景。Code Review R0/R1 APPROVED_WITH_NOTES/0（P2-1 CLI 层 reason 后缀锁定 R1 关闭）。
+- **FIX-246 遗留观察项清理**（EVD-892，2026-08-07）：FIX-244 P2-1/P2-2——test_archive.py 3 个 fail-closed 用例补齐 HOST_PROJECT_ROOT 未重绑定断言（突变实证：HOST 提前重绑定 3/3 FAIL）+ 错误原因串锁定（path does not exist / not a directory / path is empty 逐字比对）；FIX-242 P3-3——`_load_archive_module` 同步重绑定 module.ROOT 与 module.HOST_PROJECT_ROOT（红相实证 + 注释/docstring 同步）；FIX-242 P3-2——新增 `.gitattributes`（`*.py text eol=lf`；实测 index 556/556 全 LF、零 commit diff、无 EOL 幻影 diff），登记 `core/manifest.json` root_entries.files（check-manifest-consistency 门禁必需）。验证：红相 1 failed → 全绿；突变实证 2 组已恢复；test_archive 118 passed、test_verify_workflow 695+87 全绿；verify_workflow 全量 PASSED、check-manifest-consistency PASS、check-cross-references PASS。Code Review R1 APPROVED_WITH_NOTES/0。
+- 版本声明与 e2e fixture 指针从 0.73.0 推进到 0.74.0（M-set：plugins、marketplace、package.json、source/e2e SKILL frontmatter、manifest、fixture plan-tracker、四个 source hooks，以及 `verify_workflow.py` 的 `REQUIRED_SNIPPETS` 6 版本钉；13 projections 由 `release-projection --write` 确定性写入）。
+- `project/CHANGELOG.md` 新增 0.74.0 条目；release docs 三件套创建。
+
+### Validation
+
+- REL-067（0.74.0 MINOR 候选打包，2026-08-07；candidate-only，transition 需用户授权后另行执行）。
+- FIX-242：test_archive.py 106 passed（13 新测试）+ test_verify_workflow 688+87 零回归；python_game cwd 双跑实证（修复后跳过 vs 基线 134 条幻影证据）；Code Review R0 APPROVED_WITH_NOTES/0。
+- FIX-243：test_archive.py 115 passed（8+1 新测试）+ test_verify_workflow 688+87 零回归；dry-run v0.1.0~v0.72.0/128 条实证、0.73.0 证据 9 条保留热；Code Review R0/R1 APPROVED_WITH_NOTES/0。
+- FIX-244：test_archive.py 118 passed（3 新测试）+ test_verify_workflow 688+87 零回归；手工验证矩阵 4 场景；Code Review R0 APPROVED_WITH_NOTES/0。
+- FIX-245：test_verify_workflow 693+87（5 新用例）+ test_archive 118 零回归；手工矩阵 3 场景；Code Review R0/R1 APPROVED_WITH_NOTES/0。
+- FIX-246：test_archive 118 passed、test_verify_workflow 695+87 全绿；红相+突变实证；verify_workflow 全量 PASSED、check-manifest-consistency PASS、check-cross-references PASS；Code Review R1 APPROVED_WITH_NOTES/0。
+- 门禁（0.74.0 candidate，2026-08-07）：`check-version-consistency` PASS（13 声明）；`check-projection-sync` PASS（13 投影）；`release-ledger --no-remote` 0.74.0 candidate 记录（candidate_commit 派生要求文件已提交，commit 后重跑 PASS）；`check-release --version 0.74.0 --require-changelog --lineage-mode candidate` 记录——静态门禁全 PASS，执行门禁 2 项既有 FAIL（governance health 宿主治理记录 112 issues；unit tests 180s 超时，环境性，pytest 直跑全绿）。
+
+### Boundaries
+
+- 0.74.0 **RISK-036/RISK-039 remain open**。RISK-036（official marketplace operations）与 RISK-039（ArchGuard external validation）各自独立关闭标准未满足；本版本不重开任何已关闭风险。
+- 不声明 official approval、marketplace approval、curated listing、universal/full runtime support、external first-session pilot success、1.0.0 production-ready；不关闭 RISK-036/RISK-039。
+- MINOR bump 来自 archive/verify_workflow 双 root 契约与 fail-closed 输入边界生产强化（五修复链），不引入 breaking runtime API（CLI 新增参数为增量；默认路径零行为变化）。
+
 ## [0.73.0] - 2026-08-03
 
 ### 0.73.0 - 三链重构（入口/循环/任务规划）生产接线打包（MINOR）

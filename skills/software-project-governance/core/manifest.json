@@ -65,6 +65,7 @@
     "files": [
       "AGENTS.md",
       "README.md",
+      ".gitattributes",
       ".gitignore",
       "package.json",
       "pyproject.toml",

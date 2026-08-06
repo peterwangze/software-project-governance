@@ -3435,8 +3435,9 @@ class TestDualRootResolution(unittest.TestCase):
     (cwd via resolve_entry / --project-root), never to the plugin cache's
     phantom .governance copy; the SKILL.md version read stays on the plugin
     root. ``ROOT`` remains the runtime host-facts seam: verify_workflow.py
-    rebinds ``module.ROOT = HOST_PROJECT_ROOT`` in _load_archive_module
-    (FIX-187), tests patch it, and --project-root rebinds it.
+    rebinds ``module.ROOT`` and ``module.HOST_PROJECT_ROOT`` in
+    _load_archive_module (FIX-187 / FIX-242 P3-3), tests patch it, and
+    --project-root rebinds it.
     """
 
     def setUp(self):
@@ -3710,6 +3711,8 @@ class TestArchiveCliProjectRoot(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 2)
         self.assertIn("spg-archive-error: invalid-project-root", err.getvalue())
         self.assertIn(str(missing), err.getvalue())
+        # FIX-244 R0 P2-2: the classified error reason suffix is contract.
+        self.assertIn("path does not exist", err.getvalue())
         # ROOT must NOT be rebound to the phantom path.
         self.assertEqual(self.archive.ROOT, self._orig_root)
         self.assertEqual(self.archive.HOST_PROJECT_ROOT, self._orig_host)
@@ -3725,7 +3728,12 @@ class TestArchiveCliProjectRoot(unittest.TestCase):
             self.archive.main(["verify", "--project-root", str(some_file)])
         self.assertEqual(ctx.exception.code, 2)
         self.assertIn("spg-archive-error: invalid-project-root", err.getvalue())
+        # FIX-244 R0 P2-2: the classified error reason suffix is contract.
+        self.assertIn("not a directory", err.getvalue())
+        # FIX-244 R0 P2-1: HOST_PROJECT_ROOT must NOT be rebound either —
+        # guard against a future split of the ROOT/HOST assignment.
         self.assertEqual(self.archive.ROOT, self._orig_root)
+        self.assertEqual(self.archive.HOST_PROJECT_ROOT, self._orig_host)
 
     def test_cli_project_root_empty_value_fails_closed(self):
         """FIX-244 P3-4: `--project-root=` (empty string) exits 2 — must
@@ -3736,7 +3744,12 @@ class TestArchiveCliProjectRoot(unittest.TestCase):
             self.archive.main(["verify", "--project-root="])
         self.assertEqual(ctx.exception.code, 2)
         self.assertIn("spg-archive-error: invalid-project-root", err.getvalue())
+        # FIX-244 R0 P2-2: the classified error reason suffix is contract.
+        self.assertIn("path is empty", err.getvalue())
+        # FIX-244 R0 P2-1: HOST_PROJECT_ROOT must NOT be rebound either —
+        # guard against a future split of the ROOT/HOST assignment.
         self.assertEqual(self.archive.ROOT, self._orig_root)
+        self.assertEqual(self.archive.HOST_PROJECT_ROOT, self._orig_host)
 
 
 if __name__ == "__main__":

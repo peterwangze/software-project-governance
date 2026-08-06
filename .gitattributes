@@ -1,0 +1,10 @@
+# Normalize Python sources to LF (FIX-242 R0 P3-2).
+#
+# Evidence (2026-08-07, `git ls-files --eol`): the repository index is
+# already 100% LF (556/556 files i/lf); core.autocrlf=true leaves mixed
+# working-tree line endings on Windows (a snapshot counted 28 .py files
+# with CRLF/mixed endings; non-.py files vary over time). Locking *.py to
+# eol=lf makes working-tree line endings deterministic for Python sources
+# without renormalizing any committed content (zero commit diff — the
+# index stays LF).
+*.py text eol=lf

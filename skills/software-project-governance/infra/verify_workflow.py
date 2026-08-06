@@ -8909,7 +8909,14 @@ def _load_archive_module():
     spec.loader.exec_module(module)
     # archive.py reads governance FACTS (.governance/...) — point it at the
     # host project, not the plugin cache (FIX-187 / DEC-080 dual-root).
+    # HOST_PROJECT_ROOT is rebound together with ROOT (FIX-242 P3-3): the
+    # attribute defaults to archive.py's own cwd-derived resolve, which can
+    # drift from the host root resolved/validated here (e.g. after an
+    # explicit --project-root override). archive.py's own --project-root
+    # path is unaffected — it is only applied inside archive.main(), which
+    # this loader never invokes.
     module.ROOT = HOST_PROJECT_ROOT
+    module.HOST_PROJECT_ROOT = HOST_PROJECT_ROOT
     return module
 
 

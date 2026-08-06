@@ -11,12 +11,12 @@ Run:
     python -m unittest discover -s skills/software-project-governance/infra/tests -v
 """
 
-import json
-import io
+import argparse
 import contextlib
 import hashlib
+import io
+import json
 import os
-import argparse
 import shutil
 import subprocess
 import sys
@@ -15893,6 +15893,19 @@ class TestVerifyCliProjectRootFailClosed(unittest.TestCase):
         self.assertEqual(vw.GOVERNANCE_DIR, self._orig_gov)
         self.assertEqual(vw.EXECUTION_PACKET_PATH, self._orig_exec)
 
+    def test_cli_project_root_prefix_form_fails_closed(self):
+        """FIX-245 P3-2: the `--project-root=<path>` prefix form parses
+        end-to-end and fails closed on a nonexistent path."""
+        missing = self.root / "does-not-exist"
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), \
+             self.assertRaises(SystemExit) as ctx:
+            vw.main(["verify", "--project-root=" + str(missing)])
+        self.assertEqual(ctx.exception.code, 2)
+        self.assertIn("verify_workflow: error: invalid-project-root", err.getvalue())
+        self.assertIn("path does not exist", err.getvalue())
+        self.assertEqual(vw.HOST_PROJECT_ROOT, self._orig_host)
+
     def test_validate_project_root_accepts_existing_directory(self):
         """FIX-245: the validator accepts a real directory and returns
         the resolved absolute path (legal-path rebind regression)."""
@@ -15905,6 +15918,34 @@ class TestVerifyCliProjectRootFailClosed(unittest.TestCase):
         host_root, error = vw._validate_project_root("")
         self.assertIsNone(host_root)
         self.assertEqual(error, "path is empty")
+
+
+class TestLoadArchiveModuleRebind(unittest.TestCase):
+    """FIX-242 P3-3 — _load_archive_module must rebind BOTH ROOT and
+    HOST_PROJECT_ROOT on the loaded archive module: archive.py defaults
+    HOST_PROJECT_ROOT to its own cwd-derived resolve, which drifts from
+    the host root verify_workflow resolved/validated here (e.g. after an
+    explicit --project-root override)."""
+
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        self._orig_host = vw.HOST_PROJECT_ROOT
+
+    def tearDown(self):
+        vw.HOST_PROJECT_ROOT = self._orig_host
+        self.tempdir.cleanup()
+
+    def test_load_archive_module_rebinds_host_roots(self):
+        host = self.root / "host-project"
+        host.mkdir()
+        vw.HOST_PROJECT_ROOT = host
+        module = vw._load_archive_module()
+        self.assertIsNotNone(module)
+        # ROOT rebind is the FIX-187 seam; HOST_PROJECT_ROOT must follow
+        # or any direct attribute read inside archive.py drifts.
+        self.assertEqual(module.ROOT, host)
+        self.assertEqual(module.HOST_PROJECT_ROOT, host)
 
 
 if __name__ == "__main__":

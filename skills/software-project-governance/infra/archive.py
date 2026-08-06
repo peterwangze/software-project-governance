@@ -40,10 +40,10 @@ from pathlib import Path
 #                        cwd-first host root (FIX-187 semantics), never to
 #                        the plugin cache. ``ROOT`` stays the overridable
 #                        seam: verify_workflow._load_archive_module rebinds
-#                        ``module.ROOT = HOST_PROJECT_ROOT`` (FIX-187), tests
-#                        patch it, and archive's own --project-root rebinds
-#                        it. Paths are lazy so the rebind is observed at
-#                        call time.
+#                        ``module.ROOT`` / ``module.HOST_PROJECT_ROOT``
+#                        (FIX-187 / FIX-242 P3-3), tests patch it, and
+#                        archive's own --project-root rebinds it. Paths are
+#                        lazy so the rebind is observed at call time.
 _LEGACY_ROOT = Path(__file__).resolve().parents[3]
 
 

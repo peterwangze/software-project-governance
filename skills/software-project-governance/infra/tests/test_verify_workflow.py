@@ -13,6 +13,7 @@ Run:
 
 import json
 import io
+import contextlib
 import hashlib
 import os
 import argparse
@@ -15805,6 +15806,81 @@ class AutoJudgeGateWiringBTests(unittest.TestCase):
         self.assertEqual(result["overall"], "needs_human")
         self.assertNotIn("wiring", result)
         pgr.assert_not_called()
+
+
+class TestVerifyCliProjectRootFailClosed(unittest.TestCase):
+    """FIX-245 — explicit --project-root must fail closed on empty,
+    nonexistent, or non-directory paths (mirror of FIX-244 archive
+    fail-closed alignment, per the FIX-244 Code Review follow-up)."""
+
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        self._orig_host = vw.HOST_PROJECT_ROOT
+        self._orig_gov = vw.GOVERNANCE_DIR
+        self._orig_exec = vw.EXECUTION_PACKET_PATH
+
+    def tearDown(self):
+        vw.HOST_PROJECT_ROOT = self._orig_host
+        vw.GOVERNANCE_DIR = self._orig_gov
+        vw.EXECUTION_PACKET_PATH = self._orig_exec
+        self.tempdir.cleanup()
+
+    def test_cli_project_root_nonexistent_path_fails_closed(self):
+        """FIX-245 P2-1: an explicit --project-root that does not exist
+        exits 2 with a classified diagnostic — no phantom-root rebind."""
+        missing = self.root / "does-not-exist"
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), \
+             self.assertRaises(SystemExit) as ctx:
+            vw.main(["verify", "--project-root", str(missing)])
+        self.assertEqual(ctx.exception.code, 2)
+        self.assertIn("verify_workflow: error: invalid-project-root", err.getvalue())
+        self.assertIn(str(missing), err.getvalue())
+        self.assertIn("path does not exist", err.getvalue())
+        # Host facts must NOT be rebound to the phantom path.
+        self.assertEqual(vw.HOST_PROJECT_ROOT, self._orig_host)
+        self.assertEqual(vw.GOVERNANCE_DIR, self._orig_gov)
+
+    def test_cli_project_root_file_path_fails_closed(self):
+        """FIX-245 P2-1: --project-root pointing at a file (not a
+        directory) exits 2 with the same classified diagnostic."""
+        some_file = self.root / "plain.txt"
+        some_file.write_text("not a directory", encoding="utf-8")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), \
+             self.assertRaises(SystemExit) as ctx:
+            vw.main(["verify", "--project-root", str(some_file)])
+        self.assertEqual(ctx.exception.code, 2)
+        self.assertIn("verify_workflow: error: invalid-project-root", err.getvalue())
+        self.assertIn("not a directory", err.getvalue())
+        self.assertEqual(vw.HOST_PROJECT_ROOT, self._orig_host)
+
+    def test_cli_project_root_empty_value_fails_closed(self):
+        """FIX-245 P3-4: `--project-root=` (empty string) exits 2 — must
+        not silently resolve to the current working directory."""
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), \
+             self.assertRaises(SystemExit) as ctx:
+            vw.main(["verify", "--project-root="])
+        self.assertEqual(ctx.exception.code, 2)
+        self.assertIn("verify_workflow: error: invalid-project-root", err.getvalue())
+        self.assertEqual(vw.HOST_PROJECT_ROOT, self._orig_host)
+        self.assertEqual(vw.GOVERNANCE_DIR, self._orig_gov)
+        self.assertEqual(vw.EXECUTION_PACKET_PATH, self._orig_exec)
+
+    def test_validate_project_root_accepts_existing_directory(self):
+        """FIX-245: the validator accepts a real directory and returns
+        the resolved absolute path (legal-path rebind regression)."""
+        host_root, error = vw._validate_project_root(str(self.root))
+        self.assertIsNone(error)
+        self.assertEqual(host_root, self.root.resolve())
+
+    def test_validate_project_root_rejects_empty_string(self):
+        """FIX-245: empty value is rejected before Path resolution."""
+        host_root, error = vw._validate_project_root("")
+        self.assertIsNone(host_root)
+        self.assertEqual(error, "path is empty")
 
 
 if __name__ == "__main__":

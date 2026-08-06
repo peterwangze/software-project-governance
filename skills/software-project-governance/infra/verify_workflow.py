@@ -164,19 +164,53 @@ def _extract_project_root_arg(argv):
     return project_root, filtered
 
 
+def _validate_project_root(project_root):
+    """Validate an explicit --project-root value (fail-closed, FIX-245).
+
+    Returns ``(host_root, error)``: the resolved absolute directory Path
+    plus ``None`` for a valid root; ``(None, reason)`` for an empty,
+    nonexistent, or non-directory path. Mirrors
+    ``archive._validate_project_root`` (FIX-244) and
+    ``resolve_entry.resolve_host_root`` (strict resolve + is_dir).
+    """
+    if not project_root:
+        return None, "path is empty"
+    candidate = Path(project_root).expanduser()
+    try:
+        candidate = candidate.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return None, "path does not exist"
+    if not candidate.is_dir():
+        return None, "not a directory"
+    return candidate, None
+
+
 def _apply_project_root_override(project_root):
     """Rebind host-governance fact paths to an explicit project root.
 
     This does not move plugin assets.  ``ROOT`` / ``PLUGIN_ROOT`` continue to
     identify the installed workflow package; only host facts under
     ``<project-root>/.governance`` are rebound.
+
+    Fail-closed (FIX-245): an explicit root that is empty, does not exist,
+    or is not a directory is a hard error — classified diagnostic on
+    stderr + exit 2 (module CLI convention, same as the argparse/extraction
+    errors; mirrors FIX-244 archive alignment). A nonexistent path must
+    never silently rebind to a phantom root.
     """
     global HOST_PROJECT_ROOT, GOVERNANCE_DIR, EXECUTION_PACKET_PATH
     global SAMPLE_PATH, SESSION_SNAPSHOT_PATH, EVIDENCE_PATH, RISK_PATH
     global ARCHIVE_INDEX_PATH, ARCHIVE_TASKS_DIR, ARCHIVE_EVIDENCE_DIR
     global ARCHIVE_DECISIONS_DIR, ARCHIVE_RISKS_DIR
 
-    host_root = Path(project_root).expanduser().resolve()
+    host_root, error = _validate_project_root(project_root)
+    if error is not None:
+        display = "<empty>" if not project_root else str(project_root)
+        print(
+            f"verify_workflow: error: invalid-project-root — {display} ({error})",
+            file=sys.stderr,
+        )
+        sys.exit(2)
     HOST_PROJECT_ROOT = host_root
     GOVERNANCE_DIR = HOST_PROJECT_ROOT / ".governance"
     EXECUTION_PACKET_PATH = GOVERNANCE_DIR / "execution-packets.json"

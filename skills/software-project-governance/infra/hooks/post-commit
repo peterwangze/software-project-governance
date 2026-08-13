@@ -26,10 +26,19 @@ resolve_spg_home_candidate() {
 
 find_spg_home() {
     local resolved
+    local dsh_preset_root="${DSH_HOME:-$HOME/.dsh}/.agent-presets/governance"
+    local dsh_link_root=""
+    local dsh_link_home=""
+    dsh_link_root=$(cat "$dsh_preset_root/skill-root.txt" 2>/dev/null || true)
+    if [ -n "$dsh_link_root" ]; then
+        dsh_link_home="$dsh_link_root/skills/software-project-governance"
+    fi
     for candidate in \
         "$SOFTWARE_PROJECT_GOVERNANCE_HOME" \
         "$SPG_HOME" \
-        "$REPO_ROOT/skills/software-project-governance"
+        "$REPO_ROOT/skills/software-project-governance" \
+        "$dsh_preset_root/skills/software-project-governance" \
+        "$dsh_link_home"
     do
         resolved=$(resolve_spg_home_candidate "$candidate" 2>/dev/null || true)
         if [ -n "$resolved" ]; then

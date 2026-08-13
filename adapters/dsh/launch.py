@@ -122,9 +122,16 @@ def install_preset(mode: str) -> int:
 
     (target / "agent.cordis.yml").write_text(composition, encoding="utf-8")
     shutil.copyfile(PRESET_METADATA, target / "preset.yml")
+    # Hook discovery marker: the repo hooks' find_spg_home reads this file to
+    # resolve the workflow home under dsh (link mode), so installed project
+    # hooks keep self-upgrading after `git pull` + `--sync`.
+    (target / "skill-root.txt").write_text(
+        str(ROOT.resolve()).replace("\\", "/") + "\n", encoding="utf-8"
+    )
     print(f"preset written: {target}")
     print(f"  composition : {target / 'agent.cordis.yml'}")
     print(f"  metadata    : {target / 'preset.yml'}")
+    print(f"  skill-root  : {target / 'skill-root.txt'}")
     print(f"  skill roots : {skills_root}")
     print(f"  command root: {shims_root}")
     print(

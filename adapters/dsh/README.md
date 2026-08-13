@@ -16,6 +16,8 @@ dsh 没有 plugin marketplace，也没有 slash-command 扩展面；它的扩展
 
 命令入口映射：dsh 的 `/name` 用户手势直接加载同名 skill。`commands/*.md` 是跨平台共享资产（其内容被其它平台的斜杠命令与测试直接消费），因此 DSH 不修改它们，而是用 `adapters/dsh/skill-shims/` 下的同名薄投影把它们暴露为 skill——`/governance`、`/governance-status` 等九条命令在 dsh 中成为一等 skill 入口。
 
+Git hooks 发现：`launch.py --install` 额外写入预设目录内的 `skill-root.txt`（仓库根路径标记）。`infra/hooks/` 的 `find_spg_home` 已加入 dsh 候选——预设目录内的 skills 快照（copy 模式）与 `skill-root.txt` 指向的仓库（link 模式）——因此安装在项目 `.git/hooks/` 里的治理 hook 在 dsh 环境下也能自升级，无需环境变量。
+
 ## 使用
 
 ```powershell

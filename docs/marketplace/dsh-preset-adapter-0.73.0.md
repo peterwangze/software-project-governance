@@ -41,6 +41,8 @@ python skills/software-project-governance/infra/verify_workflow.py check-runtime
 3. `launch.py --install` 生成的 `governance` 预设通过 `agentPresets.standingKeyFor` 挂载校验（mounted OK）。
 4. 以 standing scope 查询 skill registry：35 个 skill 被发现，含主入口 `software-project-governance`、9 个命令投影（`governance`、`governance-status`、…、`change-triage`）与全部 stage/review skill。
 5. `check-agent-adapters` 与 `check-runtime-readiness-matrix` 均通过（dsh 已进入 `MAINSTREAM_AGENT_ADAPTERS` 与 `RUNTIME_MATRIX_AGENT_IDS`）。
+6. 适配器自身资产有机器校验兜底（ADR-001 执行映射纪律应用于适配层）：`infra/tests/test_dsh_adapter.py`（14 个用例）锁定 token 契约（模板与 launch.py 双向一致）、生成确定性（`--install` 输出 == 纯 token 替换，link/copy 双模式）、必需行结构、9 个命令 shim 的 frontmatter 契约、AGENTS.md 模板契约、preset.yml 元数据契约、manifest 能力声明，以及 git-bash 真实执行两个 hook 自升级场景（DSH link 模式 `skill-root.txt` 标记发现 + copy 模式快照发现）。
+7. Git hooks 在 dsh 下的路径发现闭环：`launch.py --install` 写入 `skill-root.txt`；`infra/hooks/{pre-commit,commit-msg,post-commit}` 的 `find_spg_home` 增加 dsh 候选（预设快照目录 + 标记指向的仓库），安装到项目里的 hook 随 `git pull` + `--sync` 自升级。
 
 ## no-overclaim 边界
 

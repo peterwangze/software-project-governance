@@ -60,7 +60,7 @@
     },
     "git_hooks": {
       "status": "native",
-      "evidence": "Workflow installs and validates pre-commit, commit-msg, and post-commit hooks at the repository level, independent of the agent runtime."
+      "evidence": "Workflow installs and validates pre-commit, commit-msg, and post-commit hooks at the repository level, independent of the agent runtime. The hooks' find_spg_home resolves the workflow home under dsh too: the generated preset directory (copy mode) and the skill-root.txt marker written by launch.py (link mode) are first-class candidates, so installed project hooks self-upgrade after `git pull` + `launch.py --sync`."
     },
     "workflow_closure": {
       "status": "degraded",

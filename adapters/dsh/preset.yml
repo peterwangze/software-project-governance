@@ -1,0 +1,2 @@
+name: 治理协调器
+description: 软件项目治理工作流（software-project-governance）的 DeepSeek Harness 预设——加载后主 agent 即 Coordinator，携带全部治理 skills 与命令入口（/governance），保留完整编码能力与子代理/工作流工具。

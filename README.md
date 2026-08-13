@@ -29,7 +29,8 @@ Tier 1 loading guide:
 | Codex | Use `.agents/plugins/marketplace.json`, `.codex-plugin/plugin.json`, `AGENTS.md`, and `skills/software-project-governance/SKILL.md` as the Codex plugin/project guidance package. | `python C:\Users\peter\.codex\skills\.system\plugin-creator\scripts\validate_plugin.py .`, `python adapters/codex/launch.py`, and `python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent codex --timeout 180` | Codex CLI headless target-cwd read E2E is PASS/DEGRADED as of 2026-06-11. This is still not Codex Desktop marketplace-management lifecycle PASS. |
 | Gemini CLI | Use a thin `GEMINI.md` project context pointer to `skills/software-project-governance/SKILL.md`; custom commands, MCP, and extensions remain separate extension points. | `python adapters/gemini/launch.py`, then `GEMINI_CLI_TRUST_WORKSPACE=true python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent gemini --timeout 180` | Gemini CLI target-cwd read E2E is PASS/DEGRADED as of 2026-06-11 when headless workspace trust is enabled. No Gemini plugin marketplace claim. |
 | opencode | Use `AGENTS.md` or configured opencode instructions to point at `skills/software-project-governance/SKILL.md`. | `python skills/software-project-governance/infra/verify_workflow.py opencode-provider-preflight` and `python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent opencode --timeout 90` | opencode target-cwd runtime E2E is PASS/DEGRADED in local evidence; provider/model preflight still guards future regressions. |
-| Chrys | Chrys auto-loads `AGENTS.md` and `CLAUDE.md` as native context, plus native `load_skill` for `skills/software-project-governance/SKILL.md`. | `python adapters/chrys/launch.py` and `python skills/software-project-governance/infra/verify_workflow.py check-agent-adapters` | Chrys has the strongest native capability profile: native ask_user, sub_agent, tool_calling, and git_hooks. Only browser and MCP remain host-dependent. |
+| Chrys | Chrys auto-loads `AGENTS.md` and `CLAUDE.md` as native context, plus native `load_skill` for `skills/software-project-governance/SKILL.md`. | `python adapters/chrys/launch.py` and `python skills/software-project-governance/infra/verify_workflow.py check-agent-adapters` | Chrys was the first adapter with a full native profile: native ask_user, sub_agent, tool_calling, and git_hooks. Only browser and MCP remain host-dependent. |
+| DeepSeek Harness (dsh) | `python adapters/dsh/launch.py --install` generates the `governance` agent preset under `${DSH_HOME}/.agent-presets/`; the preset persona carries the Coordinator bootstrap and registers the repo `skills/` + `adapters/dsh/skill-shims/` as native skill roots. Per-project activation: `python adapters/dsh/launch.py --bootstrap-project <dir>` writes a thin `AGENTS.md`. | `python adapters/dsh/launch.py` and `python skills/software-project-governance/infra/verify_workflow.py check-agent-adapters` | dsh matches Chrys's native profile (native ask_user_question, subagent, tool_calling, git_hooks; /governance loads the command shim skill). Only browser automation and MCP remain host-dependent. No dsh plugin marketplace claim. |
 | zcode | Add this repo as a plugin marketplace and install: `/plugin marketplace add peterwangze/software-project-governance`, then `/plugin install software-project-governance@spg`. zcode reuses the Claude marketplace protocol (`.claude-plugin/marketplace.json` + `.zcode-plugin/plugin.json`). | `python skills/software-project-governance/infra/verify_workflow.py check-agent-adapters` | Protocol-conformant marketplace install. Not zcode official curation or approval. The 0.56.0 reverse-engineered local-load tool was retired in 0.62.0 (DEC-093). |
 
 Tier 2 compatibility and research rows:
@@ -299,6 +300,26 @@ python skills/software-project-governance/infra/verify_workflow.py agent-runtime
 ```
 
 当前边界：本机 opencode target-cwd E2E 为 PASS/DEGRADED；provider/model preflight 仍然必须保留，避免未来把 provider 配置错误包装成 workflow failure 或 universal support。
+
+### DeepSeek Harness (dsh)
+
+dsh 没有 plugin marketplace，也没有 slash-command 扩展面；它的扩展单位是 agent preset（`${DSH_HOME}/.agent-presets/<id>/` 下的静态组合文件）。本仓库因此提供**生成的预设投影** + **薄项目指针**，不维护第二套 workflow 规则：
+
+```bash
+# 1. 生成 governance 预设（persona = Coordinator bootstrap；注册仓库 skills/ + skill-shims/ 为 skill 根）
+python adapters/dsh/launch.py --install
+
+# 2. 项目级激活（写入薄 AGENTS.md，dsh 自动注入工作区会话）
+python adapters/dsh/launch.py --bootstrap-project <项目目录>
+
+# 3. 验证
+python adapters/dsh/launch.py
+python skills/software-project-governance/infra/verify_workflow.py check-agent-adapters
+```
+
+安装后：启动 dsh 会话选择「治理协调器」预设，或在被治理项目目录内开任意预设会话（由 `AGENTS.md` 激活）。用户输入 `/governance` 即加载统一治理入口（dsh 的 `/name` 手势加载同名 skill）。升级路径：`git -C <仓库> pull && python adapters/dsh/launch.py --sync`（dsh 无 `/plugin update` 概念）。
+
+当前边界：本适配器于 2026-07-08 在真实 dsh 会话（`dsh --version` = `0.1.0-rc.6`）中完成编写与验证——原生 skill/subagent/ask_user_question/tool_calling/git_hooks 全部可用，生成的预设通过 `agentPresets.standingKeyFor` 挂载校验。browser 自动化与 MCP 仍是 host-dependent（degraded）。这是 runtime-verified 适配，不是 dsh 官方收录、marketplace approval 或 universal/full runtime support。
 
 ### zcode
 

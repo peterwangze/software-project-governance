@@ -1452,7 +1452,7 @@ REQ_059_RELEASE_BLOCKERS = [
 ]
 FIX_069_RELEASE_VERSION = "0." + "35.0"
 FIX_069_READINESS_VERSION = "1." + "0.0"
-MAINSTREAM_AGENT_ADAPTERS = ["claude", "codex", "gemini", "opencode", "chrys"]
+MAINSTREAM_AGENT_ADAPTERS = ["claude", "codex", "gemini", "opencode", "chrys", "dsh"]
 ADAPTER_REQUIRED_KEYS = [
     "adapter_id",
     "workflow_id",
@@ -2078,7 +2078,7 @@ def _run_version_command(command):
 
 
 RUNTIME_READINESS_MATRIX_PATH = ROOT / "docs/requirements/runtime-readiness-matrix-0.43.0.md"
-RUNTIME_MATRIX_AGENT_IDS = ["claude", "codex", "gemini", "opencode", "chrys", "cursor", "copilot"]
+RUNTIME_MATRIX_AGENT_IDS = ["claude", "codex", "gemini", "opencode", "chrys", "dsh", "cursor", "copilot"]
 RUNTIME_MATRIX_RESEARCH_ONLY_IDS = ["cursor", "copilot"]
 MAINSTREAM_AGENT_LOADING_DOC_PATH = ROOT / "docs/requirements/mainstream-agent-loading-0.47.0.md"
 MAINSTREAM_AGENT_LOADING_REQUIRED_DOCS = [
@@ -5148,6 +5148,14 @@ ADAPTER_RUNTIME_CAPABILITY_POLICY = {
         "git_hooks": {"native"},
     },
     "chrys": {
+        "ask_user_question": {"native"},
+        "sub_agent": {"native"},
+        "tool_calling": {"native"},
+        "browser": {"degraded"},
+        "mcp": {"degraded"},
+        "git_hooks": {"native"},
+    },
+    "dsh": {
         "ask_user_question": {"native"},
         "sub_agent": {"native"},
         "tool_calling": {"native"},

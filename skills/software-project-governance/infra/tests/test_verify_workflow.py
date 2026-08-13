@@ -1632,6 +1632,29 @@ class AgentAdapterContractTests(unittest.TestCase):
                 "verified_on": "2026-07-01",
                 "evidence": "Chrys is the active runtime in this session.",
             }
+        if adapter_id == "dsh":
+            manifest["runtime_capabilities"]["ask_user_question"] = {
+                "status": "native",
+                "evidence": "dsh ships a native ask_user_question tool.",
+            }
+            manifest["runtime_capabilities"]["sub_agent"] = {
+                "status": "native",
+                "evidence": "dsh ships native subagent and subagent_fork tools.",
+            }
+            manifest["runtime_capabilities"]["tool_calling"] = {
+                "status": "native",
+                "evidence": "dsh ships a rich native tool set.",
+            }
+            manifest["runtime_capabilities"]["workflow_closure"]["degraded_capabilities"] = [
+                "browser", "mcp"
+            ]
+            manifest["runtime_e2e"]["full_e2e_verified"] = True
+            manifest["runtime_e2e"]["agent_runtime_e2e"] = {
+                "status": "passed",
+                "command": "dsh session reading .governance/plan-tracker.md from project cwd",
+                "verified_on": "2026-07-08",
+                "evidence": "dsh is the active runtime in this fixture.",
+            }
         if adapter_id == "claude":
             manifest["runtime_capabilities"]["sub_agent"] = {
                 "status": "native",
@@ -1704,7 +1727,7 @@ class AgentAdapterContractTests(unittest.TestCase):
         (adapter_dir / "adapter-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
     def _write_all_adapters(self, root):
-        for adapter_id in ["claude", "codex", "gemini", "opencode", "chrys"]:
+        for adapter_id in ["claude", "codex", "gemini", "opencode", "chrys", "dsh"]:
             self._write_adapter(root, adapter_id)
 
     def test_agent_adapter_contract_accepts_verified_and_explicit_unsupported(self):
@@ -2343,6 +2366,7 @@ class RuntimeReadinessMatrixTests(unittest.TestCase):
             f"| gemini | {gemini_status} | DEGRADED | gemini --version | full_e2e_verified=true; Gemini target-cwd read E2E passed with headless workspace trust. |\n"
             "| opencode | PASS | DEGRADED | opencode --version | full_e2e_verified=true; agent_runtime_e2e passed; opencode real target cwd E2E passed. |\n"
             "| chrys | PASS | DEGRADED | chrys is the agent running this verification session | full_e2e_verified=true; agent_runtime_e2e passed; Chrys is the active runtime in this session. |\n"
+            "| dsh | PASS | DEGRADED | dsh --version | full_e2e_verified=true; agent_runtime_e2e passed; dsh is the active runtime in this fixture. |\n"
             f"| cursor | {cursor_status} | NOT_RUNTIME_VERIFIED | manual research | Cursor entry is research-only; no adapter manifest or real target-cwd E2E evidence. |\n"
             "| copilot | RESEARCH_ONLY | NOT_RUNTIME_VERIFIED | manual research | Copilot entry is research-only; no adapter manifest or real target-cwd E2E evidence. |\n"
             f"{runtime_table}"

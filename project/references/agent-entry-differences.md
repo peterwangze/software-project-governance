@@ -55,6 +55,24 @@
 2. 支持 external runner 的 agent → 通过 shared command contract 接入
 3. 仅支持 rules/skills 的 agent → 提供独立 rules 文件集
 
+### DeepSeek Harness (dsh)
+
+**安装**：`python adapters/dsh/launch.py --install`——生成 `${DSH_HOME}/.agent-presets/governance/` 预设（persona = Coordinator bootstrap；`customSkillDirs` 注册仓库 `skills/` 与 `adapters/dsh/skill-shims/`）。无需平台内插件安装交互。
+
+**初始化**：`python adapters/dsh/launch.py --bootstrap-project <项目目录>` 写入项目级 `AGENTS.md`（dsh 自动注入工作区会话），或直接让 Coordinator 创建 `.governance/`。
+
+**日常使用**：
+- 预设 persona 在每次会话自动激活（全自动 bootstrap：resolve_entry → SELF-CHECK → 模式确认）
+- 用户输入 `/governance`（dsh 的 `/name` 手势加载同名 skill）进入统一治理入口
+- `ask_user_question` 是交互边界唯一通道；模式口头切换（"最高权限"等）即时生效
+
+**自升级**：`git -C <仓库> pull && python adapters/dsh/launch.py --sync`；下次会话 bootstrap 自动完成版本检测与结构补全（dsh 无 `/plugin update` 概念）。
+
+**特色能力**：
+- 原生 `subagent`/`subagent_fork`（in-process spawn/fork，子代理继承父预设组合）承载 Agent Team 路由
+- 原生 `skill` 工具 + resourceBase 直接给出 skill 目录（resolve_entry.py 的双根模型原样成立，无需平台探测）
+- git hooks（pre-commit + commit-msg + post-commit）独立于 agent 生效
+
 ## 跨 Agent 共享的能力
 
 以下机制不依赖特定 agent，在所有环境下均可工作：

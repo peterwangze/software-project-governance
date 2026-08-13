@@ -275,7 +275,16 @@ python skills/software-project-governance/infra/verify_workflow.py execution-pac
 | Gemini | `adapters/gemini/` | — |
 | opencode | `adapters/opencode/` | — |
 | Chrys | `adapters/chrys/` | — |
+| DeepSeek Harness | `adapters/dsh/` | `${DSH_HOME}/.agent-presets/governance/`（由 launch.py 生成） |
 | 国内 Agent CLI | — | `.agents/` |
+
+### DeepSeek Harness（dsh）平台说明
+
+- **加载模型**：`python adapters/dsh/launch.py --install` 生成 `governance` 预设——persona 携带 Coordinator bootstrap，`customSkillDirs` 注册仓库 `skills/` 与 `adapters/dsh/skill-shims/`（commands 的薄投影），原生 `skill` 工具直接暴露全部工作流 skill；项目级激活用 `--bootstrap-project <dir>` 写入 `AGENTS.md`（dsh 自动注入工作区会话）。
+- **plugin_home**：DSH 下 `skill` 工具返回的 resourceBase 即 `skills/software-project-governance/` 目录；`resolve_entry.py` 的 `__file__` 自定位与 HOST_PROJECT_ROOT=cwd 双根模型原样成立，无需平台探测。
+- **Agent Team 映射**：`subagent` 工具 spawn 角色 agent（子代理继承父预设组合）；角色定义 `agents/<role>.md` + 调度模板 `references/agent-dispatch-template.md` 填入 prompt。
+- **用户交互**：`ask_user_question` 工具替代 AskUserQuestion；**命令入口**：`/governance` 等用户手势直接加载 `adapters/dsh/skill-shims/` 下同名投影 skill（其内容为 `commands/*.md` 的薄指针）。
+- **版本升级**：`git -C <plugin_root> pull && python <plugin_root>/adapters/dsh/launch.py --sync`（DSH 无 `/plugin update`）。
 
 > 仓库根目录的 `平台原生入口文件` 不是产品资产——它是当前仓库使用 Claude Code 开发的临时文件。
 

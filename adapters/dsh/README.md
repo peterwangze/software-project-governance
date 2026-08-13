@@ -2,7 +2,7 @@
 
 本目录定义 `software-project-governance` workflow 在 DeepSeek Harness（dsh）上的加载投影、运行时验证状态与边界约束。
 
-DeepSeek Harness is a Tier 1 loading target in 0.73.0. The loading model is a **generated agent preset** plus a thin `AGENTS.md` project pointer — the workflow rules themselves stay in the shared skill entry and are never duplicated per platform.
+DeepSeek Harness is a Tier 1 loading target in 0.73.0. The loading model is a **generated agent preset** plus a thin `AGENTS.md` project pointer — the workflow rules themselves stay in the shared skill entry (`skills/software-project-governance/SKILL.md`) and are never duplicated per platform.
 
 ## 加载模型
 

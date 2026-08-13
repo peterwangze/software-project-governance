@@ -278,6 +278,47 @@ class DshAdapterTests(unittest.TestCase):
             self.assertIn("skill-root.txt", text, hook_name)
             self.assertIn("DSH_HOME", text, hook_name)
 
+    def test_workflow_registries_know_dsh(self):
+        """FIX-168 doc-sync discipline: the loading machinery must cover dsh."""
+        if str(_INFRA_DIR) not in sys.path:
+            sys.path.insert(0, str(_INFRA_DIR))
+        import verify_workflow as vw
+
+        self.assertIn("dsh", vw.MAINSTREAM_AGENT_ADAPTERS)
+        self.assertIn("dsh", vw.RUNTIME_MATRIX_AGENT_IDS)
+        self.assertIn("dsh", vw.ADAPTER_RUNTIME_CAPABILITY_POLICY)
+        self.assertIn("adapters/dsh/README.md", vw.MAINSTREAM_AGENT_LOADING_REQUIRED_DOCS)
+        self.assertIn("DeepSeek Harness", vw.MAINSTREAM_AGENT_LOADING_TIER1)
+        self.assertIn("dsh", vw.MAINSTREAM_AGENT_LOADING_ADAPTERS)
+        self.assertEqual(
+            vw.MAINSTREAM_AGENT_LOADING_ADAPTERS["dsh"]["display"], "DeepSeek Harness"
+        )
+        # Deliberate absence: dsh has no headless CLI, so the live-session E2E
+        # path (Chrys style) is used instead of the agent-runtime-e2e matrix.
+        self.assertNotIn("dsh", vw.AGENT_RUNTIME_E2E_PLATFORMS)
+
+    def test_supported_agents_and_loading_docs_include_dsh(self):
+        manifest_md = (
+            _REPO_ROOT / "skills" / "software-project-governance" / "core" / "manifest.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("DeepSeek Harness", manifest_md)
+
+        loading_doc = (
+            _REPO_ROOT
+            / "docs"
+            / "requirements"
+            / "mainstream-agent-loading-0.47.0.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("DeepSeek Harness", loading_doc)
+        # The Official Surface Findings row must carry a citation URL (FIX-122).
+        findings_section = loading_doc.split("## Official Surface Findings")[1]
+        dsh_row = next(
+            line
+            for line in findings_section.splitlines()
+            if line.startswith("| DeepSeek Harness")
+        )
+        self.assertIn("https://", dsh_row)
+
     def test_skill_shim_frontmatter_contract(self):
         shims = sorted(_SHIMS_DIR.glob("*.md"))
         self.assertGreaterEqual(len(shims), 9)

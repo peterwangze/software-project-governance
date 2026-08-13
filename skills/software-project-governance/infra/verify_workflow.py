@@ -2088,6 +2088,7 @@ MAINSTREAM_AGENT_LOADING_REQUIRED_DOCS = [
     "adapters/gemini/README.md",
     "adapters/opencode/README.md",
     "adapters/chrys/README.md",
+    "adapters/dsh/README.md",
     "docs/requirements/mainstream-agent-loading-0.47.0.md",
 ]
 MAINSTREAM_AGENT_LOADING_TIER1 = [
@@ -2096,6 +2097,7 @@ MAINSTREAM_AGENT_LOADING_TIER1 = [
     "Gemini CLI",
     "opencode",
     "Chrys",
+    "DeepSeek Harness",
 ]
 MAINSTREAM_AGENT_LOADING_TIER2 = [
     "Cursor",
@@ -2178,6 +2180,19 @@ MAINSTREAM_AGENT_LOADING_ADAPTERS = {
             "python adapters/chrys/launch.py",
             "check-agent-adapters",
             "check-agent-adapters --runtime",
+        ],
+    },
+    "dsh": {
+        "display": "DeepSeek Harness",
+        "path": "adapters/dsh/README.md",
+        "tokens": [
+            "Tier 1",
+            "加载模型",
+            "验证",
+            "能力边界",
+            "skills/software-project-governance/SKILL.md",
+            "python adapters/dsh/launch.py",
+            "check-agent-adapters",
         ],
     },
 }
@@ -15874,6 +15889,9 @@ def _e2e_contract_checks():
     ]
 
 
+# dsh is deliberately absent: it has no headless CLI runner, so its adapter
+# uses Chrys-style live-session E2E evidence instead of an agent-runtime-e2e
+# matrix entry (DSH-ADAPTER-001). Do not add it without a real headless runner.
 AGENT_RUNTIME_E2E_PLATFORMS = ("claude", "codex", "gemini", "opencode")
 
 

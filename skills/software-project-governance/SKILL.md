@@ -285,6 +285,15 @@ python skills/software-project-governance/infra/verify_workflow.py execution-pac
 - **Agent Team 映射**：`subagent` 工具 spawn 角色 agent（子代理继承父预设组合）；角色定义 `agents/<role>.md` + 调度模板 `references/agent-dispatch-template.md` 填入 prompt。
 - **用户交互**：`ask_user_question` 工具替代 AskUserQuestion；**命令入口**：`/governance` 等用户手势直接加载 `adapters/dsh/skill-shims/` 下同名投影 skill（其内容为 `commands/*.md` 的薄指针）。
 - **版本升级**：`git -C <plugin_root> pull && python <plugin_root>/adapters/dsh/launch.py --sync`（DSH 无 `/plugin update`）。
+- **工具映射**（DSH 会话中把本文件正文的 Claude 平台示例按下表替换）：
+
+  | 本文件正文示例 | DSH 等价 |
+  |---|---|
+  | AskUserQuestion（第 38/53/187 行等） | `ask_user_question` 工具 |
+  | Write / Edit / Bash（铁律第 1 条） | `write` / `edit` / `pwsh`（读取用 `read`/`grep`/`glob`） |
+  | Agent 工具 spawn（`subagent_type="general-purpose"` 降级方案，第 204-208 行） | `subagent` 工具——prompt = 角色定义全文 + 任务规范 + 调度模板填充；DSH 无 subagent_type 概念，该降级方案不适用，无需降级 |
+  | `isolation: "worktree"`（第 195 行） | DSH `subagent` 无此参数 → 同文件并发冲突时 MUST 串行化，或手工创建独立工作树 |
+  | 斜杠命令 `/governance`（frontmatter 描述） | dsh 的 `/name` 用户手势加载同名投影 skill，行为一致 |
 
 > 仓库根目录的 `平台原生入口文件` 不是产品资产——它是当前仓库使用 Claude Code 开发的临时文件。
 

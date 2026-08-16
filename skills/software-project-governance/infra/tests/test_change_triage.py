@@ -40,7 +40,7 @@ from checks import triage_domain as td  # noqa: E402
 
 # ─── Fixtures ────────────────────────────────────────────────────────────────
 #
-# Compact plan-tracker with a version roadmap (0.72.0 released, 0.73.0
+# Compact plan-tracker with a version roadmap (0.73.0 released, 0.74.0
 # planned) and a 7-col priority table:
 #   FIX-100 : ✅ completed, no deps                        → completed
 #   FIX-101 : ⏳ pending, no deps                          → unblocked
@@ -54,8 +54,8 @@ _FIXTURE_TRACKER = """\
 
 | 版本 | 状态 | 预计日期 | 核心范围 |
 |------|------|---------|---------|
-| **0.72.0** | **已发布** | 2026-08-02 | baseline |
-| **0.73.0** | **规划** | 2026-08+ | FIX-237/238 |
+| **0.73.0** | **已发布** | 2026-08-02 | baseline |
+| **0.74.0** | **规划** | 2026-08+ | FIX-237/238 |
 
 ### 优先级一览
 
@@ -152,7 +152,7 @@ class PriorityAndVersionTests(unittest.TestCase):
         self.assertEqual(ctx["proposed"], "P2")
         self.assertEqual(ctx["in_flight"]["P1"], 1)  # FIX-102
         self.assertEqual(ctx["in_flight"]["P2"], 1)  # FIX-101
-        self.assertEqual(ctx["version_chain"][1]["version"], "0.73.0")
+        self.assertEqual(ctx["version_chain"][1]["version"], "0.74.0")
 
     def test_priority_context_rejects_invalid_priority(self):
         with self.assertRaises(ValueError):
@@ -160,14 +160,14 @@ class PriorityAndVersionTests(unittest.TestCase):
 
     def test_parse_version_chain_strips_markdown(self):
         chain = ct.parse_version_chain(_FIXTURE_TRACKER)
-        self.assertEqual(chain[0]["version"], "0.72.0")
+        self.assertEqual(chain[0]["version"], "0.73.0")
         self.assertIn("已发布", chain[0]["status"])
         self.assertEqual(chain[1]["status"].strip(), "规划")
 
     def test_version_older_than_current_is_error(self):
         result = ct.validate_version(
-            "0.71.0", current_version="0.72.0",
-            version_chain=[{"version": "0.73.0", "status": "规划"}])
+            "0.73.0", current_version="0.74.0",
+            version_chain=[{"version": "0.74.0", "status": "规划"}])
         self.assertFalse(result["ok"])
         self.assertTrue(any("低于当前版本" in i for i in result["issues"]))
 
@@ -441,7 +441,7 @@ class ChangeTriageCliTests(unittest.TestCase):
     def test_cli_runs_four_steps_and_writes_record(self):
         done = self._run_cli(
             "--task", "FIX-103", "--title", "t", "--priority", "P2",
-            "--version", "0.73.0", "--depends-on", "FIX-100",
+            "--version", "0.74.0", "--depends-on", "FIX-100",
             "--files", "skills/software-project-governance/infra/x.py",
             "--reason", "r",
         )
@@ -453,7 +453,7 @@ class ChangeTriageCliTests(unittest.TestCase):
 
     def test_cli_fails_closed_on_unknown_dep(self):
         done = self._run_cli(
-            "--task", "FIX-103", "--priority", "P2", "--version", "0.73.0",
+            "--task", "FIX-103", "--priority", "P2", "--version", "0.74.0",
             "--depends-on", "FIX-999",
             "--files", "skills/software-project-governance/infra/x.py",
         )

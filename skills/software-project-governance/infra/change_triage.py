@@ -29,6 +29,15 @@ Behavior contract (ADR-017 §4.4 / FIX-237.4 / DEC-139):
     ``TRIAGE-{TASK_ID}``) is appended at the same time. The evidence-log
     call snapshot contract = the JSON command output stored in the record
     (FIX-237.5).
+  - **Single record per task (FIX-247)**: re-triaging an already-recorded
+    task id is rejected (fail-closed) — the machine record is immutable and
+    a duplicate would self-conflict plus double the evidence row.
+  - **Best-effort all-or-nothing (FIX-247)**: the record and its evidence
+    row are written record-first, then evidence row. If the evidence append
+    fails after the record write, the record is rolled back so no
+    half-written triage remains; true cross-file atomicity is not achievable
+    without a journal, so a rollback that itself fails leaves the record
+    behind (residual risk, reported via the returned ``error``).
   - **Quick lane boundary (FIX-228)**: only ``.governance/`` governance
     record changes may skip triage; any new task touching product code
     (skills/**, agents/**, infra/**, commands/**, ...) MUST run the standard
@@ -490,6 +499,11 @@ def run_triage(*, task_id: str, title: str = "", priority: str,
     records = existing_records
     if records is None:
         records = load_triage_records(governance_dir)
+    existing_task_ids = {str(r.get("task_id", "")) for r in records}
+    if task_id in existing_task_ids:
+        return {"error": "task {0} already has a triage record — re-triage "
+                         "is rejected (the machine record is immutable; use "
+                         "a new task id or resolve manually)".format(task_id)}
     tasks = parse_task_dependencies(plan_tracker_text)
     completed_ids = {t.task_id for t in tasks if t.is_completed()}
     conflicts = check_conflicts(files, records, completed_ids)
@@ -555,6 +569,16 @@ def run_triage(*, task_id: str, title: str = "", priority: str,
         with evidence_path.open("a", encoding="utf-8") as fh:
             fh.write("\n" + _evidence_row(task_id, record_name, today))
     except OSError as exc:
+        # P2-2: the record write above already succeeded, so a failed
+        # evidence append would leave a half-written triage (record without
+        # its evidence row). Best-effort roll back the record so the two
+        # writes stay all-or-nothing. True atomicity across two files is not
+        # achievable without a journal; this rollback narrows the window
+        # (the residual risk is documented in the module contract).
+        try:
+            (records_dir / record_name).unlink()
+        except OSError:
+            pass
         return {"error": "cannot append evidence row: {0}".format(exc)}
 
     return {

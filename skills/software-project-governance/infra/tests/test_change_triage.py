@@ -302,6 +302,28 @@ class TriageRecordTests(unittest.TestCase):
         self.assertFalse(summary.get("error"), summary)
         self.assertEqual(summary["analysis"]["conflicts"][0]["task_id"], "FIX-102")
 
+    def test_evidence_append_failure_rolls_back_record(self):
+        """P2-2 (FIX-247): if the evidence-row append fails after the record
+        write, the just-written record is rolled back — no half-written
+        triage (record without evidence row) is left behind."""
+        bad_evidence = self.gov / "no-such-dir" / "evidence-log.md"
+        summary = self._run(evidence_path=bad_evidence)
+        self.assertIn("error", summary)
+        self.assertIn("cannot append evidence row", summary["error"])
+        self.assertFalse((self.gov / "change-triage" / "FIX-103.json").exists())
+
+    def test_re_triage_same_task_id_rejected(self):
+        """P3-1 (FIX-247): re-triaging an already-recorded task id is
+        rejected (fail-closed) — no record overwrite, no duplicate
+        evidence row."""
+        first = self._run()
+        self.assertFalse(first.get("error"), first)
+        second = self._run()
+        self.assertIn("error", second)
+        self.assertIn("already has a triage record", second["error"])
+        evidence = (self.gov / "evidence-log.md").read_text(encoding="utf-8")
+        self.assertEqual(evidence.count("TRIAGE-FIX-103"), 1)
+
 
 class ChangeTriageCheckTests(unittest.TestCase):
     """Check 32 — checks/triage_domain.check_change_triage."""
@@ -366,6 +388,18 @@ class ChangeTriageCheckTests(unittest.TestCase):
             encoding="utf-8")
         result = self._check()
         self.assertEqual(result["verdict"], "PASS", result["issues"])
+
+    def test_completed_task_exempt_from_no_record(self):
+        """P2-1 (FIX-247): a completed task is exempt from the no-record
+        enforcement even with post-normalization product-code evidence —
+        retroactive triage is impossible for already-closed tasks."""
+        (self.gov / "evidence-log.md").write_text(
+            "# Evidence Log\n\n" + self._evidence("FIX-100", "2026-08-05",
+                                                  "skills/software-project-governance/infra/x.py"),
+            encoding="utf-8")
+        result = self._check()
+        self.assertEqual(result["verdict"], "PASS", result["issues"])
+        self.assertNotIn("FIX-100", result["tasks_without_record"])
 
     def test_product_task_with_valid_record_passes(self):
         (self.gov / "change-triage").mkdir(exist_ok=True)

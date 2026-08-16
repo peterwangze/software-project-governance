@@ -11,9 +11,10 @@ task intake:
     version) plus the ``task-priority-analysis`` snapshot.
   - **No-record → FAIL**: a product-code task whose earliest evidence-log
     date is on/after :data:`TRIAGE_NORMALIZATION_DATE` and which has NO
-    triage record FAILs the check (fail-closed). Historical tasks (earliest
-    evidence before the normalization date) and quick-lane tasks (evidence
-    only under ``.governance/`` — FIX-228 boundary) are exempt.
+    triage record FAILs the check (fail-closed). Completed tasks, historical
+    tasks (earliest evidence before the normalization date) and quick-lane
+    tasks (evidence only under ``.governance/`` — FIX-228 boundary) are
+    exempt.
 
 The date-based exemption mirrors the FIX-174 / FIX-233 precedent
 (``FIX173_NAMING_NORMALIZATION_DATE``): tasks created before the feature

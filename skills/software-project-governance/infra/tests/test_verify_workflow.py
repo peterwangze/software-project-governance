@@ -13088,6 +13088,20 @@ class BootstrapScriptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('"resolved_root_ok": true', result.stdout)
 
+    def test_bootstrap_sh_resolve_entry_nonzero_collapses_to_exit_1(self):
+        """FIX-247 P3-1: resolve_entry's own non-zero exit must collapse to
+        exit 1 ("other failure"), never leak a raw code that collides with
+        the classified codes (2=python-missing, 3=file-not-found,
+        5=store-stub) of the shared 0/1/2/3/4/5 contract."""
+        root = self._fixture(resolve_body=(
+            "# Deterministic /governance entry resolver (FX-130)\n"
+            "import sys\n"
+            "sys.exit(2)\n"
+        ))
+        result = self._run_sh(root)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("resolve_entry exited non-zero", result.stderr)
+
     def test_bootstrap_cmd_contains_classified_diagnostics_and_timeout(self):
         text = (_INFRA_DIR / "bootstrap.cmd").read_text(encoding="utf-8")
         for marker in (

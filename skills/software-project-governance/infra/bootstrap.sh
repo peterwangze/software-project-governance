@@ -62,7 +62,15 @@ if command -v timeout >/dev/null 2>&1; then
         echo "spg-bootstrap-error: timeout — resolve_entry did not finish within ${timeout_seconds}s (SPG_RESOLVE_TIMEOUT); raise the value or inspect the host" >&2
         exit 4
     fi
-    exit "$rc"
+    # FIX-247 P3-1 (exit-code passthrough contract): collapse any non-zero
+    # resolve_entry exit to 1 ("other failure") so its raw code cannot
+    # collide with the classified codes (2=python-missing, 3=file-not-found,
+    # 5=store-stub) in the shared 0/1/2/3/4/5 contract.
+    if [ "$rc" -ne 0 ]; then
+        echo "spg-bootstrap-error: resolve_entry exited non-zero ($rc)" >&2
+        exit 1
+    fi
+    exit 0
 fi
 
 # POSIX fallback without coreutils `timeout`: stdlib subprocess timeout
@@ -80,5 +88,7 @@ except subprocess.TimeoutExpired:
         % int(seconds)
     )
     sys.exit(4)
-sys.exit(proc.returncode)
+# FIX-247 P3-1: same exit-code passthrough contract as the timeout(1)
+# branch — collapse any non-zero resolve_entry exit to 1 ("other failure").
+sys.exit(0 if proc.returncode == 0 else 1)
 PY

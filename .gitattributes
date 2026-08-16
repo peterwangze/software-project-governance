@@ -8,3 +8,7 @@
 # without renormalizing any committed content (zero commit diff — the
 # index stays LF).
 *.py text eol=lf
+# Lock JSON sources to LF too (FIX-250): without this, core.autocrlf=true
+# leaves core/releases/*.json as CRLF stat noise (git reports "M" with zero
+# content diff). The index is already LF — renormalizing is zero commit diff.
+*.json text eol=lf

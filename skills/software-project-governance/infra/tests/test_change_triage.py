@@ -67,6 +67,53 @@ _FIXTURE_TRACKER = """\
 """
 
 
+# Fixture (FIX-250 P3-1 / FIX-248 R0): a roadmap table followed by several
+# non-roadmap tables (优先级一览 / 检查项 / 里程碑 / 需求ID). The parser must
+# STOP at the first non-version row after the roadmap table — these trailing
+# tables must never leak into version_chain.
+_FIXTURE_ROADMAP_WITH_TRAILING_TABLES = """\
+# Plan Tracker
+
+## 版本规划
+
+### 版本路线图
+
+| 版本 | 状态 | 预计日期 | 核心范围 |
+|------|------|---------|---------|
+| **0.66.1** | **已发布** | 2026-06-01 | baseline |
+| **0.66.2** | **规划** | 2026-06+ | fix |
+| **0.73.0** | **已发布** | 2026-08-02 | baseline |
+| **0.74.0** | **规划** | 2026-08+ | FIX-237/238 |
+
+### 优先级一览
+
+| 优先级 | ID | 事项 | 依赖 |
+|--------|----|------|------|
+| P1 | FIX-100 | done | — |
+| P2 | FIX-101 | pending | — |
+
+### 检查项
+
+| 检查项 | 结果 |
+|--------|------|
+| lint | ✅ |
+| coverage | ✅ |
+
+### 里程碑
+
+| 里程碑 | 日期 |
+|--------|------|
+| M1 | 2026-08 |
+
+### 需求ID
+
+| 需求ID | 状态 |
+|--------|------|
+| REQ-001 | 完成 |
+| REQ-002 | 规划 |
+"""
+
+
 def _record(task_id="FIX-102", files=None, priority="P1"):
     return {
         "schema_version": 1,
@@ -163,6 +210,16 @@ class PriorityAndVersionTests(unittest.TestCase):
         self.assertEqual(chain[0]["version"], "0.73.0")
         self.assertIn("已发布", chain[0]["status"])
         self.assertEqual(chain[1]["status"].strip(), "规划")
+
+    def test_parse_version_chain_stops_at_trailing_non_version_tables(self):
+        """FIX-250 (FIX-248 R0 P3-1): the roadmap table ends at the first
+        non-version row — trailing tables (优先级一览/检查项/里程碑/需求ID)
+        must not leak into version_chain."""
+        chain = ct.parse_version_chain(_FIXTURE_ROADMAP_WITH_TRAILING_TABLES)
+        versions = [row["version"] for row in chain]
+        self.assertEqual(versions, ["0.66.1", "0.66.2", "0.73.0", "0.74.0"])
+        for row in chain:
+            self.assertRegex(row["version"], r"^\d+\.\d+")
 
     def test_version_older_than_current_is_error(self):
         result = ct.validate_version(

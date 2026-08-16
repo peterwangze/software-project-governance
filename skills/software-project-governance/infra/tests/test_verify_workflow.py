@@ -13283,7 +13283,7 @@ class EntryBootstrapTemplateTests(unittest.TestCase):
 
     def test_bootstrap_version_marker_injected_into_all_profiles(self):
         text = (vw.ROOT / "commands" / "governance-init.md").read_text(encoding="utf-8")
-        marker_line = "> @bootstrap-version: 0.73.0"
+        marker_line = "> @bootstrap-version: 0.74.0"
         self.assertEqual(
             text.count(marker_line), 3,
             "lightweight + standard + strict 三个注入模板均应含标记行",

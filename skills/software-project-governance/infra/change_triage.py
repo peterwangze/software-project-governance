@@ -229,7 +229,10 @@ def parse_version_chain(plan_tracker_text: str) -> list:
     """Parse the ``版本路线图`` roadmap table into a version chain.
 
     Header-driven: the ``版本`` and ``状态`` columns are located by header
-    cell text. Markdown emphasis (``**0.73.0**``) is stripped.
+    cell text. Markdown emphasis (``**0.73.0**``) is stripped. Parsing stops
+    at the first row whose version cell does not match a version shape
+    (``\\d+\\.\\d+`` — FIX-250 P3-1 / FIX-248 R0), so trailing tables after the
+    roadmap are never appended.
 
     Returns:
         list of dicts ``{"version": str, "status": str}`` in row order.
@@ -252,6 +255,8 @@ def parse_version_chain(plan_tracker_text: str) -> list:
         version = re.sub(r"[*`]", "", cells[header_idx["版本"]]).strip()
         status = re.sub(r"[*`]", "", cells[header_idx["状态"]]).strip()
         if version:
+            if not re.match(r"\d+\.\d+", version):
+                break
             rows.append({"version": version, "status": status})
     return rows
 

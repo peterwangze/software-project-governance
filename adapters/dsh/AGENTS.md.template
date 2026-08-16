@@ -1,6 +1,6 @@
 # Governance Bootstrap（DSH — 强制）
 
-> @bootstrap-version: 0.73.0
+> @bootstrap-version: 0.74.0
 >
 > 本文件是 software-project-governance 工作流在 DeepSeek Harness 上的项目级原生入口（thin pointer）。dsh 会把本文件自动注入到以本项目为工作区的每个会话。完整规则在 `software-project-governance` skill 内；本文件不重复 workflow 规则。
 

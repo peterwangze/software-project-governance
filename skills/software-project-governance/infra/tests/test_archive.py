@@ -1774,6 +1774,38 @@ class TestArchiveMigrateAuto(unittest.TestCase):
         # No index should be created
         self.assertFalse((self.archive_dir / "index.md").exists())
 
+    def test_auto_dry_run_summary_reports_verify_na_not_failed(self):
+        """FIX-250: a dry-run performs no migration, so the summary must not
+        report a misleading '校验: FAILED' (verify_pass stays False because
+        verify_archive_integrity never runs in dry-run); report N/A instead."""
+        roadmap = [
+            ("0.10.0", "已发布"),
+            ("0.11.0", "已发布"),
+            ("0.12.0", "已发布"),
+        ]
+        tasks = [
+            ("v0.10.0 — Initial", [
+                ("FIX-001", "已完成", "Fix bug 1", "—"),
+            ]),
+            ("v0.11.0 — Early fixes", [
+                ("FIX-002", "已完成", "Fix bug 2", "—"),
+            ]),
+            ("v0.12.0 — Latest", [
+                ("FIX-003", "进行中", "Fix bug 3", "—"),
+            ]),
+        ]
+        _make_plan_tracker_with_roadmap(self.gov_dir, roadmap, tasks)
+        _pad_plan_tracker(self.gov_dir)
+
+        import archive
+
+        with patch.object(archive, 'ROOT', self.root), patch.object(archive, 'PLUGIN_ROOT', self.root):
+            result = archive.migrate_auto(dry_run=True)
+
+        summary = archive._format_auto_summary(result)
+        self.assertIn("校验: N/A", summary)
+        self.assertNotIn("校验: FAILED", summary)
+
     def test_auto_output_has_required_fields(self):
         """--auto result dict must contain all required summary fields."""
         roadmap = [

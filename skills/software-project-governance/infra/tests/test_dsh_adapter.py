@@ -340,7 +340,7 @@ class DshAdapterTests(unittest.TestCase):
         text = _BOOTSTRAP_TEMPLATE_PATH.read_text(encoding="utf-8")
         self.assertEqual(text.count("__GOVERNANCE_REPO_ROOT__"), 1)
         self.assertIn("# Governance Bootstrap", text)
-        self.assertIn("@bootstrap-version: 0.73.0", text)
+        self.assertIn("@bootstrap-version: 0.74.0", text)
         self.assertIn("software-project-governance", text)
         self.assertIn("resolve_entry.py", text)
         self.assertIn("ask_user_question", text)

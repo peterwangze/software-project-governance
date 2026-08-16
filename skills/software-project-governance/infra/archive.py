@@ -2618,6 +2618,7 @@ def migrate_auto(dry_run=False):
         "evidence_log_after": 0,
         "archive_files_created": [],
         "verify_pass": False,
+        "dry_run": bool(dry_run),
         "triggers": [],
         "details": "",
     }
@@ -2758,9 +2759,12 @@ def _format_auto_summary(result):
         )
 
     lines.append(f"  - 索引: archive/index.md（{result['tasks_archived']} 条目）")
-    lines.append(
-        f"  - 校验: {'PASS' if result.get('verify_pass') else 'FAILED'}"
-    )
+    if result.get("dry_run"):
+        lines.append("  - 校验: N/A（dry-run——预览模式，不校验归档完整性）")
+    else:
+        lines.append(
+            f"  - 校验: {'PASS' if result.get('verify_pass') else 'FAILED'}"
+        )
 
     return "\n".join(lines)
 

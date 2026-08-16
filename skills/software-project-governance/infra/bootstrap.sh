@@ -66,6 +66,13 @@ if command -v timeout >/dev/null 2>&1; then
     # resolve_entry exit to 1 ("other failure") so its raw code cannot
     # collide with the classified codes (2=python-missing, 3=file-not-found,
     # 5=store-stub) in the shared 0/1/2/3/4/5 contract.
+    # FIX-249 P3-2: 125/126/127 mean the timeout(1) wrapper itself could not
+    # run resolve_entry (timeout error / command unexecutable / not found),
+    # NOT a resolve_entry exit code — diagnose distinctly (still exit 1).
+    if [ "$rc" -eq 125 ] || [ "$rc" -eq 126 ] || [ "$rc" -eq 127 ]; then
+        echo "spg-bootstrap-error: timeout-wrapper failed ($rc) — resolve_entry was not executed (timeout(1) could not run it)" >&2
+        exit 1
+    fi
     if [ "$rc" -ne 0 ]; then
         echo "spg-bootstrap-error: resolve_entry exited non-zero ($rc)" >&2
         exit 1
@@ -90,5 +97,12 @@ except subprocess.TimeoutExpired:
     sys.exit(4)
 # FIX-247 P3-1: same exit-code passthrough contract as the timeout(1)
 # branch — collapse any non-zero resolve_entry exit to 1 ("other failure").
+# FIX-249 P3-1: mirror the timeout(1) branch diagnostic so the failure is
+# observable on hosts without coreutils `timeout`.
+if proc.returncode != 0:
+    sys.stderr.write(
+        "spg-bootstrap-error: resolve_entry exited non-zero (%d)\n"
+        % proc.returncode
+    )
 sys.exit(0 if proc.returncode == 0 else 1)
 PY

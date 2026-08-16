@@ -471,6 +471,21 @@ def run_triage(*, task_id: str, title: str = "", priority: str,
                          "product-code task (quick lane covers .governance/ "
                          "records only — FIX-228 boundary)"}
 
+    # FIX-249 P3-3/P3-4: resolve the record path up front and reject a
+    # re-triage BEFORE the pure dependency/priority/version analysis. The
+    # direct ``.exists()`` check is the authoritative "single record per
+    # task" guard (module contract): unlike load_triage_records it also
+    # catches malformed records (which Check 32 flags separately), so an
+    # unparseable record file is never silently overwritten.
+    if records_dir is None:
+        records_dir = Path(governance_dir) / TRIAGE_SUBDIR
+    records_dir = Path(records_dir)
+    record_name = "{0}.json".format(task_id)
+    if (records_dir / record_name).exists():
+        return {"error": "task {0} already has a triage record — re-triage "
+                         "is rejected (the machine record is immutable; use "
+                         "a new task id or resolve manually)".format(task_id)}
+
     depends_on = list(split_dep_ids(depends_on))
     try:
         priority_context = analyze_priority_context(
@@ -499,19 +514,11 @@ def run_triage(*, task_id: str, title: str = "", priority: str,
     records = existing_records
     if records is None:
         records = load_triage_records(governance_dir)
-    existing_task_ids = {str(r.get("task_id", "")) for r in records}
-    if task_id in existing_task_ids:
-        return {"error": "task {0} already has a triage record — re-triage "
-                         "is rejected (the machine record is immutable; use "
-                         "a new task id or resolve manually)".format(task_id)}
     tasks = parse_task_dependencies(plan_tracker_text)
     completed_ids = {t.task_id for t in tasks if t.is_completed()}
     conflicts = check_conflicts(files, records, completed_ids)
 
     # Machine-write the triage record + evidence row.
-    if records_dir is None:
-        records_dir = Path(governance_dir) / TRIAGE_SUBDIR
-    records_dir = Path(records_dir)
     if evidence_path is None:
         evidence_path = Path(governance_dir) / "evidence-log.md"
     evidence_path = Path(evidence_path)
@@ -520,7 +527,6 @@ def run_triage(*, task_id: str, title: str = "", priority: str,
     except OSError as exc:
         return {"error": "cannot create triage record dir: {0}".format(exc)}
 
-    record_name = "{0}.json".format(task_id)
     today = date.today().isoformat()
     record = {
         "schema_version": TRIAGE_SCHEMA_VERSION,

@@ -13036,6 +13036,73 @@ class BootstrapScriptTests(unittest.TestCase):
             timeout=60,
         )
 
+    @staticmethod
+    def _msys(path):
+        """Convert a Windows path to the POSIX form Git Bash (MSYS) uses."""
+        p = Path(path).resolve()
+        if not p.drive:  # POSIX path: pass through unchanged
+            return str(p)
+        return "/" + p.drive[0].lower() + p.as_posix()[2:]
+
+    def _run_sh_prepend_path(self, root, dirs, env=None):
+        """Run bootstrap.sh with extra POSIX dirs prepended to PATH.
+
+        MSYS reconstructs PATH from the Windows registry when bash is
+        launched from a non-MSYS parent (Python), so the override must be
+        injected inside a child bash, which inherits a POSIX PATH verbatim.
+        ``/usr/bin`` (coreutils) is kept so grep/dirname/bash resolve; the
+        caller's ``dirs`` shadow anything they define (e.g. a fake
+        ``timeout``).
+        """
+        inner = ":".join(self._msys(d) for d in dirs)
+        inner += ":/usr/bin:" + self._msys(Path(sys.executable).parent)
+        cmd = 'PATH="{p}" bash infra/bootstrap.sh'.format(p=inner)
+        run_env = os.environ.copy()
+        if env:
+            run_env.update(env)
+        return subprocess.run(
+            [self._bash(), "-c", cmd],
+            cwd=root,
+            env=run_env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=60,
+        )
+
+    def _fallback_snippet(self):
+        """Extract the stdlib timeout-wrapper heredoc from bootstrap.sh so
+        the fallback branch's exit-code collapse can be tested directly."""
+        text = (_INFRA_DIR / "bootstrap.sh").read_text(encoding="utf-8")
+        marker = "<<'PY'"
+        start = text.index(marker) + len(marker)
+        end = text.index("\nPY", start)
+        return text[start:end].lstrip("\n")
+
+    def _run_fallback_snippet(self, resolve_body):
+        """Run the stdlib fallback snippet against a fake resolve_entry.
+
+        Mirrors ``"$SPG_BOOTSTRAP_PYTHON" - "$timeout_seconds"
+        "$RESOLVE_ENTRY" --json``: the snippet's ``command`` is
+        ``[python, resolve_entry.py, --json]`` (the resolve_entry is run via
+        python, as its shebang would do on a POSIX host).
+        """
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root)
+        resolve = root / "resolve_entry.py"
+        resolve.write_text(resolve_body, encoding="utf-8")
+        snippet = self._fallback_snippet()
+        return subprocess.run(
+            [sys.executable, "-", "15", sys.executable, str(resolve), "--json"],
+            input=snippet,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=60,
+        )
+
     def _envelope_script(self):
         return (
             "# Deterministic /governance entry resolver (FX-130)\n"
@@ -13101,6 +13168,38 @@ class BootstrapScriptTests(unittest.TestCase):
         result = self._run_sh(root)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("resolve_entry exited non-zero", result.stderr)
+
+    def test_bootstrap_sh_timeout_wrapper_failure_distinguished(self):
+        """P3-2 (FIX-249): a timeout(1) wrapper failure (125/126/127 — the
+        command was not executed) is diagnosed distinctly from a
+        resolve_entry non-zero exit; the exit code still collapses to 1."""
+        root = self._fixture(resolve_body=self._envelope_script())
+        fakebin = root / "fakebin"
+        fakebin.mkdir()
+        (fakebin / "timeout").write_text("#!/bin/bash\nexit 126\n", encoding="utf-8")
+        (fakebin / "timeout").chmod(0o755)
+        result = self._run_sh_prepend_path(root, [fakebin])
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("timeout-wrapper failed", result.stderr)
+        self.assertNotIn("resolve_entry exited non-zero", result.stderr)
+
+    def test_bootstrap_sh_stdlib_fallback_nonzero_collapses_to_exit_1(self):
+        """P3-1 + P3-5 (FIX-249): the POSIX stdlib fallback (no coreutils
+        ``timeout``) collapses a non-zero resolve_entry exit to 1 and emits
+        the shared diagnostic, without the timeout-specific diagnostic."""
+        result = self._run_fallback_snippet(
+            "# Deterministic /governance entry resolver (FX-130)\n"
+            "import sys\n"
+            "sys.exit(2)\n")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("resolve_entry exited non-zero", result.stderr)
+        self.assertNotIn("timeout", result.stderr.lower())
+
+    def test_bootstrap_sh_stdlib_fallback_success_exits_0(self):
+        """P3-5 (FIX-249): the stdlib fallback passes through a zero exit."""
+        result = self._run_fallback_snippet(self._envelope_script())
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('"resolved_root_ok": true', result.stdout)
 
     def test_bootstrap_cmd_contains_classified_diagnostics_and_timeout(self):
         text = (_INFRA_DIR / "bootstrap.cmd").read_text(encoding="utf-8")

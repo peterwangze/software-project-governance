@@ -324,6 +324,32 @@ class TriageRecordTests(unittest.TestCase):
         evidence = (self.gov / "evidence-log.md").read_text(encoding="utf-8")
         self.assertEqual(evidence.count("TRIAGE-FIX-103"), 1)
 
+    def test_re_triage_beats_unknown_dependency(self):
+        """P3-3 (FIX-249): the re-triage guard runs BEFORE the pure
+        dependency/priority/version analysis, so a duplicate task id that
+        also carries an unknown dependency is rejected as a re-triage (not
+        as an unknown dependency) — correct error priority, fail-closed."""
+        first = self._run()
+        self.assertFalse(first.get("error"), first)
+        second = self._run(depends_on=["FIX-999"])
+        self.assertIn("error", second)
+        self.assertIn("already has a triage record", second["error"])
+        self.assertNotIn("unknown", second["error"].lower())
+
+    def test_re_triage_malformed_record_rejected_not_overwritten(self):
+        """P3-4 (FIX-249): the re-triage guard checks the record file's
+        existence directly, so an unparseable (malformed) record file is
+        still rejected — it is never silently overwritten by a re-triage."""
+        rec_dir = self.gov / "change-triage"
+        rec_dir.mkdir(parents=True, exist_ok=True)
+        malformed = "this is not valid json {"
+        (rec_dir / "FIX-999.json").write_text(malformed, encoding="utf-8")
+        summary = self._run(task_id="FIX-999")
+        self.assertIn("error", summary)
+        self.assertIn("already has a triage record", summary["error"])
+        self.assertEqual(
+            (rec_dir / "FIX-999.json").read_text(encoding="utf-8"), malformed)
+
 
 class ChangeTriageCheckTests(unittest.TestCase):
     """Check 32 — checks/triage_domain.check_change_triage."""

@@ -522,6 +522,106 @@ class TestParserRobustness(unittest.TestCase):
         self.assertFalse(tasks[0].is_completed())
 
 
+# ─── Fixture: headerless 「最近完成」 sub-section table (FIX-251) ─────────────
+#
+# The live plan-tracker's ``### 最近完成（本会话提交窗口）`` sub-section
+# (plan-tracker.md L215-223) is a 优先级|ID|事项|依赖|目标版本|闭环路径|状态 task
+# table WITHOUT a header row and WITHOUT a separator row — the first ``|``
+# line directly after the heading is already a data row. FIX-251: the parser
+# must recognize this shape so the window's task IDs (FIX-244~249, REL-067)
+# are visible to dependency analysis (previously change-triage reported them
+# as unknown-dep fail-closed).
+_SAMPLE_RECENT_WINDOW_TABLE = """\
+# Plan Tracker
+
+Some prose preamble.
+
+### 最近完成（本会话提交窗口）
+
+| **P2** | FIX-244 | archive --project-root fail-closed 校验 | FIX-242, FIX-243 | 未规划版本 | product code | ✅ 完成 (2026-08-06) |
+| **P2** | FIX-245 | verify_workflow --project-root fail-closed 对齐 | FIX-187, FIX-244 | 未规划版本 | product code | ✅ 完成 (2026-08-06) |
+
+| **P1** | REL-067 | 发布 0.74.0——五修复链打包 | FIX-242✅, FIX-243✅, FIX-244✅ | 0.74.0 | release mgmt | ✅ 已发布 (2026-08-13) |
+> 历史提交窗口已归档。
+"""
+
+
+class TestHeaderlessRecentWindowTable(unittest.TestCase):
+    """FIX-251 — headerless task sub-section (最近完成) must be parsed.
+
+    The live plan-tracker's ``### 最近完成（本会话提交窗口）`` window is a full
+    7-col task table that lacks the header row (``| 优先级 | ID | ... |``) and
+    separator row. Before FIX-251 the parse state machine never entered
+    ``in_table`` for it (only a ``| 优先级 | ID |`` header row triggers entry),
+    so the window's task IDs were invisible to dependency analysis and
+    change-triage reported unknown-dep on them fail-closed. These tests pin
+    the headerless-shape recognition: a ``|`` row directly after a heading
+    that carries a bare task ID cell AND a status cell is treated as a
+    headerless task table with the column layout inferred from the canonical
+    7-col shape.
+    """
+
+    def test_window_task_ids_are_parsed(self):
+        tasks = parse_task_dependencies(_SAMPLE_RECENT_WINDOW_TABLE)
+        ids = {t.task_id for t in tasks}
+        self.assertEqual(ids, {"FIX-244", "FIX-245", "REL-067"})
+
+    def test_window_fields_are_correct(self):
+        tasks = {t.task_id: t for t in parse_task_dependencies(_SAMPLE_RECENT_WINDOW_TABLE)}
+        t244 = tasks["FIX-244"]
+        self.assertEqual(t244.priority, "P2")
+        self.assertEqual(t244.dependencies, ("FIX-242", "FIX-243"))
+        self.assertEqual(t244.target_version, "未规划版本")
+        self.assertTrue(t244.is_completed())
+
+        t245 = tasks["FIX-245"]
+        self.assertEqual(t245.priority, "P2")
+        self.assertEqual(t245.dependencies, ("FIX-187", "FIX-244"))
+        self.assertTrue(t245.is_completed())
+
+        rel = tasks["REL-067"]
+        self.assertEqual(rel.priority, "P1")
+        # ✅ glued to the dependency IDs is a dep-state hint — stripped, IDs kept.
+        self.assertEqual(rel.dependencies, ("FIX-242", "FIX-243", "FIX-244"))
+        self.assertEqual(rel.target_version, "0.74.0")
+        self.assertTrue(rel.is_completed())
+
+    def test_window_table_ends_at_non_table_line(self):
+        # The trailing "> 已归档" blockquote ends the headerless table; a
+        # subsequent header-driven table (已归档版本 task pointer) parses
+        # normally AFTER the window without leaking rows into it.
+        table = _SAMPLE_RECENT_WINDOW_TABLE + """\
+### 已归档版本 task
+
+| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |
+|--------|----|------|------|---------|---------|------|
+| — | FIX-082 | archived pointer | AUDIT-102 | 0.38.0 | archive | ✅ 已交付 |
+"""
+        ids = {t.task_id for t in parse_task_dependencies(table)}
+        self.assertEqual(ids, {"FIX-244", "FIX-245", "REL-067", "FIX-082"})
+        self.assertEqual(len(parse_task_dependencies(table)), 4)
+
+    def test_prose_between_heading_and_table_blocks_headerless_parse(self):
+        # Guard for the 需求跟踪矩阵 class of false positive: a table that is
+        # NOT directly after a heading (prose in between) must NOT be read as
+        # a headerless task table — even when its rows carry REQ-* ID cells
+        # (task-family prefix) and emoji status cells (📋 etc.).
+        table = """\
+# Plan Tracker
+
+## 需求跟踪矩阵
+
+需求跟踪回答"这个任务服务于哪个用户需求"——从立项的 PR/FAQ 到开发的 task 全程可追溯。
+
+| 需求ID | 需求描述 | 来源 | 优先级 | 关联任务 | 当前状态 | 验证方式 |
+|--------|---------|------|--------|---------|---------|---------|
+| REQ-002 | 用户能在 5 分钟内完成初始化 | PR/FAQ: 新用户立即可用 | P0 | MAINT-012, AUDIT-003, FIX-001 | ⚠️ 部分 | 外部验证 |
+| REQ-014 | Task-Gate 模型——plan-tracker 数据结构改造 | AUDIT-052 | P0 | AUDIT-057 | 📋 降级到 1.0.0 | — |
+"""
+        tasks = parse_task_dependencies(table)
+        self.assertEqual(tasks, [])
+
+
 class TestFormatReport(unittest.TestCase):
     """format_report — markdown output shape."""
 

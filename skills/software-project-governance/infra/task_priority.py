@@ -3,7 +3,8 @@
 
 This module is the **pure dependency-analysis layer** for the governance
 plan-tracker. It parses the ``优先级一览`` priority tables in
-``plan-tracker.md``, builds a directed acyclic graph (DAG) from the ``依赖``
+``plan-tracker.md`` — including the headerless ``### 最近完成（本会话提交窗口）``
+window table (FIX-251) — builds a directed acyclic graph (DAG) from the ``依赖``
 (dependency) column, and computes which tasks are blocked / unblocked / ready
 to recommend as the next step.
 
@@ -186,6 +187,14 @@ _NON_CANDIDATE_MARKERS = frozenset(
     {marker for marker in _ACTIVE_STATUS_HINTS if marker != "⏳"}
 ) | {"✅", "📋"}
 
+# Status marker emojis that LEAD a plan-tracker ``状态`` cell. Mirrors the
+# markers the module already classifies (✅ completed + the active hints + 📋
+# queued). Used by :func:`_is_headerless_task_row` to tell a task data row
+# apart from any other markdown table row.
+_STATUS_CELL_MARKERS = frozenset(
+    {_COMPLETED_EMOJI} | set(_ACTIVE_STATUS_HINTS) | {"📋"}
+)
+
 
 def _status_is_candidate_eligible(status_cell: str) -> bool:
     """Return True if the status cell permits the row to be an executable candidate.
@@ -292,6 +301,41 @@ def _split_row(line: str) -> list:
 def _strip_markdown(s: str) -> str:
     """Strip markdown emphasis (`` ` `` and ``*``) from a cell value."""
     return re.sub(r"[`*]", "", s).strip()
+
+
+def _is_headerless_task_row(cells: list) -> bool:
+    """True if a ``|`` row has the shape of a headerless task-table row.
+
+    FIX-251: the live plan-tracker's ``### 最近完成（本会话提交窗口）``
+    sub-section is a full 优先级|ID|事项|依赖|目标版本|闭环路径|状态 task table that
+    lacks the header row and separator row — the first ``|`` line after the
+    heading is already a data row. Such a row is recognized by carrying both:
+
+      - a bare task ID cell (``^[A-Z]+-\\d+$`` — the same first-bare-ID anchor
+        the row parser uses, so a duplicated leading priority cell does not
+        confuse the detection), and
+      - a status-semantic cell (a cell whose text begins with a plan-tracker
+        status marker emoji).
+
+    Conservative on purpose: the caller additionally gates this on the row
+    DIRECTLY following a heading (``after_heading`` — only blank lines may sit
+    between heading and table), so prose-separated tables (``需求跟踪矩阵`` and
+    the like) are never misread as headerless task tables. The
+    ``len(cells) >= 5`` sanity bound mirrors the canonical 7-col task table
+    (and its malformed variants keep ≥5 cells) while excluding small
+    non-task tables.
+    """
+    if len(cells) < 5:
+        return False
+    has_id = False
+    has_status = False
+    for c in cells:
+        cand = _strip_markdown(c)
+        if _ID_CELL_RE.match(cand):
+            has_id = True
+        elif cand.startswith(tuple(_STATUS_CELL_MARKERS)):
+            has_status = True
+    return has_id and has_status
 
 
 def _parse_dependency_cell(cell: str) -> tuple:
@@ -433,9 +477,11 @@ def parse_task_dependencies(plan_tracker_text_or_path) -> list:
     entry in verify_workflow.py passes text directly so the compute path stays
     I/O-free and trivially testable).
 
-    Scans every ``| 优先级 | ID | ... |`` priority table in the document
-    (the live plan-tracker has two: ``### 优先级一览`` and ``### 已归档版本
-    task``). Duplicate task IDs across tables are de-duplicated keeping the
+    Scans every priority task table in the document — both the header-driven
+    ``| 优先级 | ID | ... |`` tables (``### 优先级一览`` and ``### 已归档版本
+    task``) and the headerless window table directly under ``### 最近完成
+    （本会话提交窗口）`` (a 7-col task table with NO header row; FIX-251).
+    Duplicate task IDs across tables are de-duplicated keeping the
     FIRST occurrence (the ``优先级一览`` table is authoritative for active
     tasks; the archived-version pointer table repeats FIX-082..087 only as a
     hot-fact-source proof and would otherwise shadow the active entry — though
@@ -449,6 +495,12 @@ def parse_task_dependencies(plan_tracker_text_or_path) -> list:
       - Fallback ID detection: if header indexing fails, the ID cell is the
         first data cell matching ``^[A-Z]+-\\d+$`` (handles the malformed
         leading-``**P0**`` rows at live lines 174-176).
+      - Headerless window table (FIX-251): a ``|`` row that DIRECTLY follows
+        a heading and carries both a bare task ID cell and a status cell
+        enters a headerless task table whose column layout is inferred from
+        the canonical 7-col shape. Prose between the heading and the table
+        disarms this, so non-task tables (``需求跟踪矩阵`` etc.) are never
+        misread.
       - Separator rows and non-table lines are skipped.
 
     Args:
@@ -468,30 +520,44 @@ def parse_task_dependencies(plan_tracker_text_or_path) -> list:
     in_table = False
     col_index: dict = {}  # name -> 0-based data-cell index
     header_width = 0  # number of data cells declared by the header row
+    # True when the last significant line was a heading (only blank lines may
+    # have passed since). Gates the headerless task-table recognition
+    # (FIX-251): only a table that DIRECTLY follows a heading may be read as
+    # a headerless task table, so prose-separated tables (需求跟踪矩阵 etc.)
+    # are never mis-detected.
+    after_heading = False
 
     for line in lines:
         stripped = line.strip()
 
-        # Any heading ends a table.
+        # Any heading ends a table and arms the headerless recognition for
+        # the lines that follow it (FIX-251).
         if stripped.startswith("#"):
             in_table = False
             col_index = {}
             header_width = 0
+            after_heading = True
             continue
 
         # Blank lines are tolerated WITHIN a table (the live plan-tracker
         # inserts a blank line between the priority table and the trailing
         # summary rows, and again between sub-groups). A blank line does NOT
-        # end the table; only a heading or a non-blank non-table paragraph does.
+        # end the table; only a heading or a non-blank non-table paragraph
+        # does. A blank right after a heading does NOT disarm the headerless
+        # recognition either (a headerless window table may be separated from
+        # its heading by a blank line).
         if not stripped:
             continue
 
         if not stripped.startswith("|"):
             # A non-blank line that is not a table row ends the table (it is a
-            # paragraph / prose block / fenced code boundary).
+            # paragraph / prose block / fenced code boundary) and disarms the
+            # headerless recognition (the table no longer directly follows a
+            # heading).
             in_table = False
             col_index = {}
             header_width = 0
+            after_heading = False
             continue
 
         # Separator row: stay in table, do not parse.
@@ -511,7 +577,24 @@ def parse_task_dependencies(plan_tracker_text_or_path) -> list:
             in_table = True
             col_index = _build_column_index(cells)
             header_width = len(cells)
+            after_heading = False
             continue
+
+        # Headerless task table (FIX-251): a row that DIRECTLY follows a
+        # heading and carries both a bare task ID cell and a status cell.
+        # The live ``### 最近完成（本会话提交窗口）`` sub-section is a 7-col task
+        # table WITHOUT a header row; without this branch its rows never enter
+        # ``in_table`` and the window's task IDs stay invisible to dependency
+        # analysis (change-triage reported them as unknown-dep, fail-closed).
+        # The column layout is inferred from the canonical 优先级|ID|依赖|目标版本|
+        # 状态 shape — the row parser is ID-anchored, so no header index map is
+        # needed.
+        if (not in_table and after_heading
+                and _is_headerless_task_row(cells)):
+            in_table = True
+            col_index = {}
+            header_width = 0
+            after_heading = False
 
         if not in_table:
             continue

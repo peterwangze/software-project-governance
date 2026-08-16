@@ -67,6 +67,19 @@ _FIXTURE_TRACKER = """\
 """
 
 
+# Fixture (FIX-251): the headerless ``### 最近完成（本会话提交窗口）`` window —
+# a 7-col task table with NO header row, exactly like the live plan-tracker.
+# A triage dependency that resolves to one of these window tasks must NOT be
+# rejected as unknown-dep (fail-closed) once the parser sees the window.
+_FIXTURE_TRACKER_WITH_WINDOW = _FIXTURE_TRACKER + """\
+### 最近完成（本会话提交窗口）
+
+| **P2** | FIX-244 | archive --project-root fail-closed 校验 | FIX-242, FIX-243 | 未规划版本 | product code | ✅ 完成 (2026-08-06) |
+| **P2** | FIX-247 | 观察项债务包——FIX-237/238 遗留处置 | FIX-237✅, FIX-238✅ | 未规划版本 | product code | ✅ 完成 (2026-08-16) |
+> 历史提交窗口已归档。
+"""
+
+
 # Fixture (FIX-250 P3-1 / FIX-248 R0): a roadmap table followed by several
 # non-roadmap tables (优先级一览 / 检查项 / 里程碑 / 需求ID). The parser must
 # STOP at the first non-version row after the roadmap table — these trailing
@@ -157,6 +170,18 @@ class DependencyAnalysisTests(unittest.TestCase):
     def test_unknown_task_family_dep_fails_closed(self):
         analysis = ct.run_dependency_analysis(_FIXTURE_TRACKER, ["FIX-999"])
         self.assertEqual(analysis["unknown_deps"], ["FIX-999"])
+
+    def test_dep_on_recent_window_task_is_not_unknown(self):
+        """FIX-251: a dependency that resolves to a task inside the headerless
+        「最近完成」 window sub-section must NOT be reported as unknown (it was
+        before — the window table was invisible to the parser) and, being a
+        completed task, must not block the new triage either."""
+        analysis = ct.run_dependency_analysis(
+            _FIXTURE_TRACKER_WITH_WINDOW, ["FIX-247"])
+        self.assertEqual(analysis["unknown_deps"], [])
+        self.assertNotIn("FIX-247", analysis["blocked_by"])
+        # The window task is now part of the same DAG as the priority table.
+        self.assertIn("FIX-247", analysis["snapshot"]["report_json"]["completed"])
 
     def test_blocked_by_incomplete_dep(self):
         analysis = ct.run_dependency_analysis(_FIXTURE_TRACKER, ["FIX-102"])

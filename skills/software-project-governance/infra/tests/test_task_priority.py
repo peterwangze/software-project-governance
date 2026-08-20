@@ -36,6 +36,7 @@ Run:
     python -m pytest skills/software-project-governance/infra/tests/test_task_priority.py -v
 """
 
+import os
 import sys
 import subprocess
 import tempfile
@@ -525,12 +526,16 @@ class TestParserRobustness(unittest.TestCase):
 # ─── Fixture: headerless 「最近完成」 sub-section table (FIX-251) ─────────────
 #
 # The live plan-tracker's ``### 最近完成（本会话提交窗口）`` sub-section
-# (plan-tracker.md L215-223) is a 优先级|ID|事项|依赖|目标版本|闭环路径|状态 task
+# (plan-tracker.md L217-224) is a 优先级|ID|事项|依赖|目标版本|闭环路径|状态 task
 # table WITHOUT a header row and WITHOUT a separator row — the first ``|``
 # line directly after the heading is already a data row. FIX-251: the parser
 # must recognize this shape so the window's task IDs (FIX-244~249, REL-067)
 # are visible to dependency analysis (previously change-triage reported them
 # as unknown-dep fail-closed).
+#
+# FIX-252 F1 (Reviewer P3-1): the fixture was completed from 3/7 to the full
+# 7-row live window, aligned to live order (FIX-244/245/246/REL-067/247/248/249,
+# REL-067 in the middle at position 4 — NOT last) and live fields.
 _SAMPLE_RECENT_WINDOW_TABLE = """\
 # Plan Tracker
 
@@ -540,8 +545,12 @@ Some prose preamble.
 
 | **P2** | FIX-244 | archive --project-root fail-closed 校验 | FIX-242, FIX-243 | 未规划版本 | product code | ✅ 完成 (2026-08-06) |
 | **P2** | FIX-245 | verify_workflow --project-root fail-closed 对齐 | FIX-187, FIX-244 | 未规划版本 | product code | ✅ 完成 (2026-08-06) |
+| **P2** | FIX-246 | FIX-242/244/245 遗留观察项清理 | FIX-242, FIX-244, FIX-245 | 未规划版本 | product code | ✅ 完成 (2026-08-07) |
 
-| **P1** | REL-067 | 发布 0.74.0——五修复链打包 | FIX-242✅, FIX-243✅, FIX-244✅ | 0.74.0 | release mgmt | ✅ 已发布 (2026-08-13) |
+| **P1** | REL-067 | 发布 0.74.0——五修复链打包 | FIX-242✅, FIX-243✅, FIX-244✅, FIX-245✅, FIX-246✅ | 0.74.0 | release mgmt | ✅ 已发布 (2026-08-13) |
+| **P2** | FIX-247 | 观察项债务包——FIX-237/238 遗留处置 | FIX-237✅, FIX-238✅ | 未规划版本 | debt pack | ✅ 完成 (2026-08-16) |
+| **P2** | FIX-248 | CLI 测试 fixture 版本对齐 | FIX-247✅ | 未规划版本 | debt pack | ✅ 完成 (2026-08-16) |
+| **P2** | FIX-249 | 观察项债务包——FIX-247 R0 处置 | FIX-247✅, REVIEW-FIX-247-CODE-R0 | 未规划版本 | debt pack | ✅ 完成 (2026-08-16) |
 > 历史提交窗口已归档。
 """
 
@@ -564,7 +573,10 @@ class TestHeaderlessRecentWindowTable(unittest.TestCase):
     def test_window_task_ids_are_parsed(self):
         tasks = parse_task_dependencies(_SAMPLE_RECENT_WINDOW_TABLE)
         ids = {t.task_id for t in tasks}
-        self.assertEqual(ids, {"FIX-244", "FIX-245", "REL-067"})
+        self.assertEqual(ids, {
+            "FIX-244", "FIX-245", "FIX-246", "REL-067",
+            "FIX-247", "FIX-248", "FIX-249",
+        })
 
     def test_window_fields_are_correct(self):
         tasks = {t.task_id: t for t in parse_task_dependencies(_SAMPLE_RECENT_WINDOW_TABLE)}
@@ -579,12 +591,37 @@ class TestHeaderlessRecentWindowTable(unittest.TestCase):
         self.assertEqual(t245.dependencies, ("FIX-187", "FIX-244"))
         self.assertTrue(t245.is_completed())
 
+        t246 = tasks["FIX-246"]
+        self.assertEqual(t246.priority, "P2")
+        self.assertEqual(t246.dependencies, ("FIX-242", "FIX-244", "FIX-245"))
+        self.assertTrue(t246.is_completed())
+
         rel = tasks["REL-067"]
         self.assertEqual(rel.priority, "P1")
         # ✅ glued to the dependency IDs is a dep-state hint — stripped, IDs kept.
-        self.assertEqual(rel.dependencies, ("FIX-242", "FIX-243", "FIX-244"))
+        self.assertEqual(rel.dependencies,
+                         ("FIX-242", "FIX-243", "FIX-244", "FIX-245", "FIX-246"))
         self.assertEqual(rel.target_version, "0.74.0")
         self.assertTrue(rel.is_completed())
+
+        t247 = tasks["FIX-247"]
+        self.assertEqual(t247.priority, "P2")
+        self.assertEqual(t247.dependencies, ("FIX-237", "FIX-238"))
+        self.assertTrue(t247.is_completed())
+
+        t248 = tasks["FIX-248"]
+        self.assertEqual(t248.priority, "P2")
+        self.assertEqual(t248.dependencies, ("FIX-247",))
+        self.assertTrue(t248.is_completed())
+
+        t249 = tasks["FIX-249"]
+        self.assertEqual(t249.priority, "P2")
+        # REVIEW-FIX-247-CODE-R0 is a single cross-entity record — its inner
+        # FIX-247 is NOT extracted (negative lookbehind blocks [-A-Z] before the
+        # ID), so it contributes NO task dep and NO extractable ref token.
+        self.assertEqual(t249.dependencies, ("FIX-247",))
+        self.assertEqual(t249.cross_entity_refs, ())
+        self.assertTrue(t249.is_completed())
 
     def test_window_table_ends_at_non_table_line(self):
         # The trailing "> 已归档" blockquote ends the headerless table; a
@@ -598,8 +635,11 @@ class TestHeaderlessRecentWindowTable(unittest.TestCase):
 | — | FIX-082 | archived pointer | AUDIT-102 | 0.38.0 | archive | ✅ 已交付 |
 """
         ids = {t.task_id for t in parse_task_dependencies(table)}
-        self.assertEqual(ids, {"FIX-244", "FIX-245", "REL-067", "FIX-082"})
-        self.assertEqual(len(parse_task_dependencies(table)), 4)
+        self.assertEqual(ids, {
+            "FIX-244", "FIX-245", "FIX-246", "REL-067",
+            "FIX-247", "FIX-248", "FIX-249", "FIX-082",
+        })
+        self.assertEqual(len(parse_task_dependencies(table)), 8)
 
     def test_prose_between_heading_and_table_blocks_headerless_parse(self):
         # Guard for the 需求跟踪矩阵 class of false positive: a table that is
@@ -620,6 +660,132 @@ class TestHeaderlessRecentWindowTable(unittest.TestCase):
 """
         tasks = parse_task_dependencies(table)
         self.assertEqual(tasks, [])
+
+
+class TestLiveCombinationOrder(unittest.TestCase):
+    """FIX-252 F2 (Reviewer P3-2) — explicitly pin the LIVE real combination order.
+
+    FIX-251 only locked the reverse order (window → blockquote → 标题 →
+    已归档表). The live plan-tracker's actual order is the OTHER way round for
+    the active window: a **header-driven** 优先级表 (``| 优先级 | ID | … |``) is
+    followed by a ``###`` heading and then a **headerless** window table. This
+    class locks that exact order so the state machine's transitions (header
+    → heading arms ``after_heading`` → headerless recognition) cannot regress
+    the coexistence of both tables' tasks.
+    """
+
+    _TABLE = """\
+# Plan Tracker
+
+### 优先级一览
+
+| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |
+|--------|----|------|------|---------|---------|------|
+| **P0** | FIX-301 | header-driven active | — | 0.5.0 | open | ⏳ 待执行 |
+
+### 最近完成（本会话提交窗口）
+
+| **P2** | FIX-302 | headerless window completed | — | 未规划版本 | product | ✅ 完成 (2026-08-16) |
+"""
+
+    def test_header_table_then_heading_then_headerless_both_parsed(self):
+        tasks = parse_task_dependencies(self._TABLE)
+        ids = {t.task_id for t in tasks}
+        # Both the header-driven table and the headerless window table must be
+        # present (the live order, not just the reverse already locked).
+        self.assertIn("FIX-301", ids)
+        self.assertIn("FIX-302", ids)
+        self.assertEqual(ids, {"FIX-301", "FIX-302"})
+
+    def test_header_table_status_preserved_in_combination(self):
+        tasks = {t.task_id: t for t in parse_task_dependencies(self._TABLE)}
+        self.assertEqual(tasks["FIX-301"].priority, "P0")
+        self.assertFalse(tasks["FIX-301"].is_completed())
+        self.assertTrue(tasks["FIX-302"].is_completed())
+
+
+class TestCoerceTextPathAmbiguity(unittest.TestCase):
+    """FIX-252 O1 — ``_coerce_text`` str path / text ambiguity.
+
+    Red-to-green root behavior: a caller who passes a **str-form path** to
+    :func:`parse_task_dependencies` (e.g.
+    ``parse_task_dependencies('D:\\\\...\\\\plan-tracker.md')``) previously got a
+    silent ``total 0`` — the string was treated as document text, no table was
+    found. These tests pin that (1) a str path to an existing ``.md`` file with
+    a priority table now returns that table's tasks, (2) pure-text str input is
+    unchanged (no regression on the existing text fixtures), (3) a str that
+    looks like a path but names no existing file raises a clear error (rather
+    than a silent 0), and (4) ``Path`` object input is unchanged.
+    """
+
+    def _write_temp_file(self, text, suffix=".md"):
+        fd, path = tempfile.mkstemp(suffix=suffix)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        self.addCleanup(lambda: os.remove(path))
+        return path
+
+    def test_str_path_to_existing_md_reads_task_table(self):
+        # A str path (not a Path object) to an .md containing a priority table
+        # must be READ as a file — previously returned total 0.
+        path = self._write_temp_file(_SAMPLE_TABLE)
+        tasks = parse_task_dependencies(str(Path(path)))
+        ids = {t.task_id for t in tasks}
+        self.assertIn("FIX-101", ids)  # red before fix: total 0 → empty set
+        self.assertEqual(len(tasks), 9)
+
+    def test_plain_text_str_input_unchanged(self):
+        # Passing raw markdown text as str remains the text channel (existing
+        # _SAMPLE_TABLE usage) — zero regression.
+        tasks = parse_task_dependencies(_SAMPLE_TABLE)
+        self.assertEqual(len(tasks), 9)
+
+    def test_path_object_input_unchanged(self):
+        # Path object input still reads the file — zero regression.
+        path = self._write_temp_file(_SAMPLE_TABLE)
+        tasks = parse_task_dependencies(Path(path))
+        self.assertEqual(len(tasks), 9)
+
+    def test_str_path_like_but_missing_file_raises_value_error(self):
+        # A str that looks like a path (contains separator / ends .md) but does
+        # not name an existing file must fail clearly, not silent total 0.
+        missing = str(Path(tempfile.gettempdir()) / "no-such-plan-tracker-file.md")
+        with self.assertRaises(ValueError):
+            parse_task_dependencies(missing)
+
+    def test_text_containing_forward_slash_not_treated_as_path(self):
+        # Ordinary markdown text containing '/' (prose / table separators) must
+        # NOT be mis-detected as a path — it stays the text channel.
+        text = "## a/b path-like value but it is prose text\n\nnot a real file."
+        tasks = parse_task_dependencies(text)
+        self.assertEqual(tasks, [])
+
+    def test_empty_string_is_text_not_path(self):
+        # FIX-252 R0 P1-1: Path("") normalizes to Path("."), whose exists() is
+        # True in a real cwd → the pre-guard heuristic mis-classified "" as a
+        # path → open(".") raised IsADirectoryError/PermissionError. An empty
+        # string must stay on the text channel and parse to [] (the pre-O1
+        # behavior), not crash uncategorized.
+        tasks = parse_task_dependencies("")
+        self.assertEqual(tasks, [])
+
+    def test_multiline_str_never_treated_as_path(self):
+        # FIX-252 R0 P1-1: a real path can never contain "\n" — any multi-line
+        # value is by definition document text. A multi-line str whose first
+        # line carries a drive prefix / .md suffix must NOT raise a spurious
+        # ValueError; it stays the text channel.
+        text = "C:/x/y.md\nrest of the document"
+        tasks = parse_task_dependencies(text)
+        self.assertEqual(tasks, [])
+
+    def test_single_line_md_suffix_with_separator_raises_documented_ambiguity(self):
+        # FIX-252 R0 P3-3: pins the documented ambiguity — a SINGLE-line str
+        # that ends in a document suffix and contains a path separator is
+        # interpreted as a path (prefer path), and a missing file raises
+        # ValueError (documented, not silent).
+        missing = str(Path("nonexistent/nested/dir") / "doc.md")
+        with self.assertRaises(ValueError):
+            parse_task_dependencies(missing)
 
 
 class TestFormatReport(unittest.TestCase):

@@ -12775,6 +12775,12 @@ class WebConsoleInstallTimeoutTests(unittest.TestCase):
         self.assertIn("120", output)
 
     def test_npm_install_timeout_fail_on_issues_exits_nonzero(self):
+        # O4 (FIX-252): THIS test previously called cmd_web_console WITHOUT
+        # redirect_stdout, so its diagnostic stdout ("Installing web
+        # dependencies... / npm install timed out after 120s") leaked to the
+        # test-runner output after the summary — exactly the O4 hygiene issue.
+        # Capture the output like the sibling timeout tests; the exit-code
+        # contract (nonzero) is what this test asserts.
         root, _ = self._web_fixture()
         self.addCleanup(shutil.rmtree, root)
         with patch.object(vw.shutil, "which", return_value="npm"), \
@@ -12783,7 +12789,8 @@ class WebConsoleInstallTimeoutTests(unittest.TestCase):
                  "run",
                  side_effect=subprocess.TimeoutExpired(cmd=["npm", "install"], timeout=120),
              ):
-            with patch.object(vw, "ROOT", root):
+            stdout = io.StringIO()
+            with patch.object(vw, "ROOT", root), redirect_stdout(stdout):
                 with self.assertRaises(SystemExit) as ctx:
                     vw.cmd_web_console(self._args(install=True, start=True, fail_on_issues=True))
         self.assertNotEqual(ctx.exception.code, 0)

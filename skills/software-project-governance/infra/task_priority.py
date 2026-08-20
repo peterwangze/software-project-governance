@@ -57,6 +57,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass, field
+from pathlib import Path
 
 
 __version__ = "0.71.0"
@@ -477,6 +478,14 @@ def parse_task_dependencies(plan_tracker_text_or_path) -> list:
     entry in verify_workflow.py passes text directly so the compute path stays
     I/O-free and trivially testable).
 
+    **str path/text disambiguation (FIX-252 O1):** a ``str`` is ambiguous — it
+    may be document text OR a str-form path. If the str *looks like a path*
+    (names an existing file, has a drive prefix, or ends in ``.md``/``.txt``
+    with a path separator — see :func:`_looks_like_str_path`) it is read from
+    disk; a path-like str naming a non-existent file raises
+    :class:`ValueError` (never a silent ``total 0``). Ordinary markdown text
+    stays on the text channel.
+
     Scans every priority task table in the document — both the header-driven
     ``| 优先级 | ID | ... |`` tables (``### 优先级一览`` and ``### 已归档版本
     task``) and the headerless window table directly under ``### 最近完成
@@ -505,7 +514,8 @@ def parse_task_dependencies(plan_tracker_text_or_path) -> list:
 
     Args:
         plan_tracker_text_or_path: markdown text (str/bytes) or a path to the
-            plan-tracker.md file.
+            plan-tracker.md file. A path may be a Path-like object or a
+            str-form path (auto-detected by :func:`_looks_like_str_path`).
 
     Returns:
         List of :class:`TaskDep` in document order (de-duplicated by task_id).
@@ -610,12 +620,101 @@ def parse_task_dependencies(plan_tracker_text_or_path) -> list:
     return tasks
 
 
+_STR_PATH_SUFFIXES = (".md", ".txt")
+
+
+def _truncate_repr(value: str, limit: int = 120) -> str:
+    """Return a bounded ``repr`` of a str for error messages (FIX-252 R0 P2-1).
+
+    Embedding a full ``!r`` of a large mis-detected input would dump the entire
+    text into the traceback. Cap the rendered representation and append a
+    length annotation so the diagnostic stays actionable without flooding.
+    """
+    rendered = repr(value)
+    if len(rendered) <= limit:
+        return rendered
+    return rendered[:limit] + f"...<len={len(value)}>"
+
+
+def _looks_like_str_path(value: str) -> bool:
+    """Return True when a ``str`` input should be read as a path, not text.
+
+    FIX-252 O1 (a)+(b) disambiguation for :func:`_coerce_text`. A ``str`` is
+    naturally ambiguous — it may be document text OR a str-form path (e.g.
+    ``parse_task_dependencies('D:\\\\...\\\\plan-tracker.md')``), and the pre-fix
+    code returned ANY ``str`` as text, silently producing ``total 0`` for a
+    str-path caller.
+
+    A str is treated as a path when ANY of:
+      - ``Path(value).exists()`` is True (an actually-existing file — the only
+        unambiguous signal; we read its text),
+      - it has a Windows drive-letter prefix (``C:\\...`` / ``C:/...``),
+      - it ends in a document suffix (``.md``/``.txt``) AND contains a path
+        separator (``\\`` or ``/``) — covers absolute, relative and nested
+        str-form paths.
+
+    Plain document text is NOT mis-detected: everyday markdown prose frequently
+    contains ``/`` (URLs, dates, inline code) but does not *end* in ``.md``/``.txt``
+    nor carry a drive prefix, and it almost never names a real file. The rare
+    text-string that happens to end in ``.md`` is accepted as a path
+    (documented ambiguity — prefer path interpretation).
+    """
+    try:
+        if Path(value).exists():
+            return True
+    except (OSError, ValueError, OverflowError):
+        # Over-long / invalid path string (e.g. a huge prose blob) — not a path.
+        pass
+    if re.match(r"^[A-Za-z]:[\\/]", value):
+        return True
+    lowered = value.lower()
+    if lowered.endswith(_STR_PATH_SUFFIXES) and ("\\" in value or "/" in value):
+        return True
+    return False
+
+
 def _coerce_text(plan_tracker_text_or_path) -> str:
-    """Coerce the input to markdown text. Read from path only if not str/bytes."""
-    if isinstance(plan_tracker_text_or_path, (str, bytes)):
-        if isinstance(plan_tracker_text_or_path, bytes):
-            return plan_tracker_text_or_path.decode("utf-8", errors="replace")
-        return plan_tracker_text_or_path
+    """Coerce the input to markdown text, disambiguating str path vs text.
+
+    A ``str`` is ambiguous: it can be document text OR a str-form path. Before
+    FIX-252 O1, ANY ``str`` was returned as text, so a caller passing a str-form
+    path (``parse_task_dependencies('D:\\\\...\\\\plan-tracker.md')``) got a
+    silent ``total 0`` — the string was parsed as doc text and no table matched
+    (the pre-fix bug). Now a str that *looks like a path*
+    (:func:`_looks_like_str_path`) is read from disk; a path-like str that does
+    NOT name an existing file raises an explicit :class:`ValueError` (never a
+    silent total 0 — approach (a)+(b) combo). Ordinary text that merely contains
+    ``/`` stays on the text channel (zero regression for the existing str-text
+    callers: verify_workflow passes ``SAMPLE_PATH.read_text(...)`` and
+    change_triage passes ``plan_tracker_text`` — both plain markdown).
+
+    **Empty / multi-line guard (FIX-252 R0 P1-1):** a real path is never empty
+    and can never contain a newline. An empty str (``Path("")`` normalizes to
+    ``Path(".")``) or any multi-line value is by definition document text and is
+    returned as text WITHOUT entering the path heuristic — closing the
+    ``open(Path(""))`` → ``open(".")`` IsADirectoryError/PermissionError gap
+    (empty plan-tracker crashing uncategorized) and the spurious ValueError on a
+    multi-line str whose first line looks like a path. This also spares real
+    document blobs from the ``exists()`` stat.
+    """
+    if isinstance(plan_tracker_text_or_path, bytes):
+        return plan_tracker_text_or_path.decode("utf-8", errors="replace")
+    if isinstance(plan_tracker_text_or_path, str):
+        value = plan_tracker_text_or_path
+        # Empty / multi-line → text channel (FIX-252 R0 P1-1), never a path.
+        if not value or "\n" in value:
+            return value
+        if _looks_like_str_path(value):
+            target = Path(value)
+            if not target.exists():
+                raise ValueError(
+                    "input is neither text with tables nor an existing path: "
+                    f"{_truncate_repr(value)} — pass a Path object or "
+                    "document text as str"
+                )
+            with open(target, "r", encoding="utf-8") as f:
+                return f.read()
+        return value
     # Path-like: read UTF-8. This is the only file I/O in the module.
     with open(plan_tracker_text_or_path, "r", encoding="utf-8") as f:
         return f.read()

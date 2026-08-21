@@ -40,8 +40,8 @@ from checks import triage_domain as td  # noqa: E402
 
 # ─── Fixtures ────────────────────────────────────────────────────────────────
 #
-# Compact plan-tracker with a version roadmap (0.73.0 released, 0.74.0
-# planned) and a 7-col priority table:
+# Compact plan-tracker with a version roadmap (0.73.0/0.74.0 released,
+# 0.75.0 planned) and a 7-col priority table:
 #   FIX-100 : ✅ completed, no deps                        → completed
 #   FIX-101 : ⏳ pending, no deps                          → unblocked
 #   FIX-102 : ⏳ pending, dep on FIX-100 (✅)               → in-flight product task
@@ -55,7 +55,8 @@ _FIXTURE_TRACKER = """\
 | 版本 | 状态 | 预计日期 | 核心范围 |
 |------|------|---------|---------|
 | **0.73.0** | **已发布** | 2026-08-02 | baseline |
-| **0.74.0** | **规划** | 2026-08+ | FIX-237/238 |
+| **0.74.0** | **已发布** | 2026-08+ | FIX-237/238 |
+| **0.75.0** | **规划** | 2026-08+ | FIX-253/254 |
 
 ### 优先级一览
 
@@ -96,7 +97,8 @@ _FIXTURE_ROADMAP_WITH_TRAILING_TABLES = """\
 | **0.66.1** | **已发布** | 2026-06-01 | baseline |
 | **0.66.2** | **规划** | 2026-06+ | fix |
 | **0.73.0** | **已发布** | 2026-08-02 | baseline |
-| **0.74.0** | **规划** | 2026-08+ | FIX-237/238 |
+| **0.74.0** | **已发布** | 2026-08+ | FIX-237/238 |
+| **0.75.0** | **规划** | 2026-08+ | FIX-253/254 |
 
 ### 优先级一览
 
@@ -234,7 +236,8 @@ class PriorityAndVersionTests(unittest.TestCase):
         chain = ct.parse_version_chain(_FIXTURE_TRACKER)
         self.assertEqual(chain[0]["version"], "0.73.0")
         self.assertIn("已发布", chain[0]["status"])
-        self.assertEqual(chain[1]["status"].strip(), "规划")
+        self.assertEqual(chain[2]["version"], "0.75.0")
+        self.assertEqual(chain[2]["status"].strip(), "规划")
 
     def test_parse_version_chain_stops_at_trailing_non_version_tables(self):
         """FIX-250 (FIX-248 R0 P3-1): the roadmap table ends at the first
@@ -242,7 +245,8 @@ class PriorityAndVersionTests(unittest.TestCase):
         must not leak into version_chain."""
         chain = ct.parse_version_chain(_FIXTURE_ROADMAP_WITH_TRAILING_TABLES)
         versions = [row["version"] for row in chain]
-        self.assertEqual(versions, ["0.66.1", "0.66.2", "0.73.0", "0.74.0"])
+        self.assertEqual(
+            versions, ["0.66.1", "0.66.2", "0.73.0", "0.74.0", "0.75.0"])
         for row in chain:
             self.assertRegex(row["version"], r"^\d+\.\d+")
 
@@ -549,7 +553,7 @@ class ChangeTriageCliTests(unittest.TestCase):
     def test_cli_runs_four_steps_and_writes_record(self):
         done = self._run_cli(
             "--task", "FIX-103", "--title", "t", "--priority", "P2",
-            "--version", "0.74.0", "--depends-on", "FIX-100",
+            "--version", "0.75.0", "--depends-on", "FIX-100",
             "--files", "skills/software-project-governance/infra/x.py",
             "--reason", "r",
         )
@@ -561,7 +565,7 @@ class ChangeTriageCliTests(unittest.TestCase):
 
     def test_cli_fails_closed_on_unknown_dep(self):
         done = self._run_cli(
-            "--task", "FIX-103", "--priority", "P2", "--version", "0.74.0",
+            "--task", "FIX-103", "--priority", "P2", "--version", "0.75.0",
             "--depends-on", "FIX-999",
             "--files", "skills/software-project-governance/infra/x.py",
         )

@@ -13290,7 +13290,17 @@ class EntryBootstrapTemplateTests(unittest.TestCase):
 
     def test_bootstrap_version_marker_injected_into_all_profiles(self):
         text = (vw.ROOT / "commands" / "governance-init.md").read_text(encoding="utf-8")
-        marker_line = "> @bootstrap-version: 0.74.0"
+        # FIX-256: dynamic version assertion — read the authority version from
+        # the SKILL frontmatter instead of a hardcoded literal, so releases no
+        # longer need a manual test-literal sync (isomorphic to the FIX-253
+        # §6.6.2 precedent in test_dsh_adapter.test_bootstrap_template_contract).
+        from checks.version import extract_skill_version
+
+        version = extract_skill_version(
+            vw.ROOT / "skills" / "software-project-governance" / "SKILL.md"
+        )
+        self.assertTrue(version, "SKILL.md frontmatter version is missing")
+        marker_line = f"> @bootstrap-version: {version}"
         self.assertEqual(
             text.count(marker_line), 3,
             "lightweight + standard + strict 三个注入模板均应含标记行",

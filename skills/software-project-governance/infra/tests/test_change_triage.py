@@ -534,14 +534,30 @@ class ChangeTriageCheckTests(unittest.TestCase):
 
 
 class ChangeTriageCliTests(unittest.TestCase):
-    """CLI subprocess — four steps executable + fail-closed exits."""
+    """CLI subprocess — four steps executable + fail-closed exits.
+
+    FIX-256 (FIX-255 F-1): the CLI subprocess derives ``current_version``
+    from the REAL plugin SKILL.md frontmatter — ``--project-root`` rebinds
+    only host governance facts, never PLUGIN_ROOT (verify_workflow
+    ``_apply_project_root_override``). A hardcoded planned-next roadmap row
+    or ``--version`` literal therefore re-reds this suite on every release
+    (target < current → ERROR → exit 2; the FIX-248/FIX-255 recurrence).
+    Both now derive from the same SKILL frontmatter the CLI itself reads,
+    so the happy path stays valid at any future version with zero edits.
+    """
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp(prefix="ctcli_")
         self.root = Path(self.tmpdir)
         self.gov = _governance_dir(self.tmpdir)
-        (self.gov / "plan-tracker.md").write_text(
-            _FIXTURE_TRACKER, encoding="utf-8")
+        from checks.version import extract_skill_version
+
+        self.planned = extract_skill_version(_INFRA_DIR.parent / "SKILL.md")
+        self.assertTrue(self.planned, "SKILL.md frontmatter version is missing")
+        tracker = _FIXTURE_TRACKER.replace(
+            "| **0.75.0** | **规划** |",
+            f"| **{self.planned}** | **规划** |")
+        (self.gov / "plan-tracker.md").write_text(tracker, encoding="utf-8")
 
     def _run_cli(self, *extra):
         return subprocess.run(
@@ -553,7 +569,7 @@ class ChangeTriageCliTests(unittest.TestCase):
     def test_cli_runs_four_steps_and_writes_record(self):
         done = self._run_cli(
             "--task", "FIX-103", "--title", "t", "--priority", "P2",
-            "--version", "0.75.0", "--depends-on", "FIX-100",
+            "--version", self.planned, "--depends-on", "FIX-100",
             "--files", "skills/software-project-governance/infra/x.py",
             "--reason", "r",
         )
@@ -565,8 +581,8 @@ class ChangeTriageCliTests(unittest.TestCase):
 
     def test_cli_fails_closed_on_unknown_dep(self):
         done = self._run_cli(
-            "--task", "FIX-103", "--priority", "P2", "--version", "0.75.0",
-            "--depends-on", "FIX-999",
+            "--task", "FIX-103", "--priority", "P2",
+            "--version", self.planned, "--depends-on", "FIX-999",
             "--files", "skills/software-project-governance/infra/x.py",
         )
         self.assertEqual(done.returncode, 2, done.stdout)

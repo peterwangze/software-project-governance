@@ -129,5 +129,71 @@ class BuildCandidatesTests(unittest.TestCase):
         self.assertIn("pending: FIX-401", reason)
 
 
+# FIX-254 / REQ-110 — unblocked=0 plan: the bridge (next-candidates read end)
+# must not emit a bare empty recommendation. It carries the blocked-chain
+# unblock fallback + structured empty reason alongside the (empty) top-N.
+ALL_BLOCKED_PLAN_TEXT = """# 测试项目（全阻塞）
+
+## 项目配置
+
+### 优先级一览
+| 优先级 | ID | 事项 | 依赖 | 目标版本 | 状态 |
+| --- | --- | --- | --- | --- | --- |
+| P1 | FIX-200 | done dep | — | 0.73.0 | ✅ 完成 |
+| P0 | FIX-205 | held head (deps satisfied) | FIX-200✅ | 0.73.0 | ⛔ BLOCKED_ENV |
+| P0 | FIX-207 | blocked child | FIX-205 | 0.73.0 | ⏳ 待执行 |
+| P0 | FIX-208 | blocked grandchild | FIX-207 | 0.73.0 | ⏳ 待执行 |
+| P1 | FIX-210 | unknown-dep child | FIX-299 | 0.73.0 | ⏳ 待执行 |
+"""
+
+
+class EmptyRecommendationFallbackTests(unittest.TestCase):
+    """REQ-110 / FIX-254 — unblocked=0 next-candidates fallback shape."""
+
+    def test_all_blocked_plan_emits_unblock_fallback_not_bare_empty(self):
+        report = bridge.build_candidates(ALL_BLOCKED_PLAN_TEXT, EXIT_EVENTS, top_n=3)
+        self.assertEqual(report["recommended_top_n"], [])
+        fb = report["recommended_fallback"]
+        self.assertIsNotNone(fb)
+        self.assertEqual(fb["unblock_target"], "FIX-205")
+        self.assertEqual(fb["kind"], "non_executable_status")
+        self.assertIn("FIX-207", fb["downstream"])
+        self.assertIn("FIX-208", fb["downstream"])
+        self.assertEqual(fb["downstream_count"], 2)
+        self.assertTrue(fb["reason"])
+        er = report["empty_reason"]
+        self.assertIsNotNone(er)
+        self.assertEqual(er["kind"], "all_blocked")
+        self.assertEqual(er["blocked"], 3)
+        self.assertTrue(er["nearest_action"])
+
+    def test_all_blocked_fallback_survives_snapshot_roundtrip(self):
+        report = bridge.build_candidates(ALL_BLOCKED_PLAN_TEXT, [], top_n=3)
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "candidates.json"
+            bridge.write_candidates(report, path)
+            loaded = bridge.read_candidates(path)
+        self.assertEqual(loaded["recommended_fallback"], report["recommended_fallback"])
+        self.assertEqual(loaded["empty_reason"], report["empty_reason"])
+
+    def test_normal_plan_has_null_fallback_and_reason(self):
+        report = bridge.build_candidates(PLAN_TEXT, EXIT_EVENTS, top_n=2)
+        self.assertTrue(report["recommended_top_n"])
+        self.assertIsNone(report["recommended_fallback"])
+        self.assertIsNone(report["empty_reason"])
+
+    def test_parse_error_report_has_null_fallback_and_structured_error(self):
+        # A str that looks like a path but names no file raises inside the
+        # compute path; the bridge must never raise — it returns a structured
+        # parse_error report with an explicit null fallback (not a bare empty
+        # list with no explanation).
+        report = bridge.build_candidates("D:/no/such/dir/plan-tracker.md", [])
+        self.assertIn("parse_error", report)
+        self.assertEqual(report["recommended_top_n"], [])
+        self.assertIsNone(report["recommended_fallback"])
+        self.assertIn("empty_reason", report)
+        self.assertIsNone(report["empty_reason"])
+
+
 if __name__ == "__main__":
     unittest.main()

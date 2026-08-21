@@ -27,6 +27,21 @@ The report keeps the cycle list for visibility, sets the ``cycle_warning``
 flag, formats a ``CYCLE DETECTED (WARNING)`` banner, and still produces the
 best-effort analysis.
 
+**Empty-recommendation fallback (FIX-254 / REQ-110):** when no task is
+unblocked (``recommended_next == []`` — the live-data norm: total > 0 with
+unblocked = 0), the report never degrades to a bare empty list (the
+AUDIT-143 data-layer root cause of the "mechanically enumerate an
+unfinished item" degradation). :func:`compute_unblocked_tasks` walks the
+blocked dependency graph and attaches either (a) an
+:class:`UnblockRecommendation` — the head node of the highest-value blocked
+chain (the root blocker whose resolution reopens the most downstream
+tasks), with a dependency reason — and/or (b) a structured
+``empty_reason`` (``all_blocked`` / ``all_non_executable`` /
+``no_active_tasks``) with the nearest actionable step.
+:func:`format_report` renders both; downstream consumers
+(loop_exit_bridge.py / the next-candidates CLI) forward them as machine
+fields.
+
 **Purity contract (load-bearing):** this module imports ONLY the Python
 standard library. The compute functions (:func:`parse_task_dependencies`,
 :func:`compute_unblocked_tasks`, :func:`format_report`) perform NO file I/O and
@@ -422,6 +437,42 @@ class BlockedTask:
 
 
 @dataclass(frozen=True)
+class UnblockRecommendation:
+    """REQ-110 / FIX-254 — the head node of the highest-value blocked chain.
+
+    Built only when ``recommended_next`` is empty AND at least one task is
+    dependency-blocked (there is a chain to unlock). The recommendation is
+    the ROOT blocker whose resolution reopens the most downstream blocked
+    tasks — value = downstream count, tie-broken by the root's priority,
+    target version, then ID (deterministic).
+
+    Attributes:
+        root_task_id: the chain head to unlock — either an in-table task ID
+            or an unknown task-family ID (a dependency with no row).
+        root_kind: why the chain is stopped — ``"non_executable_status"``
+            (in-table, dependency-satisfied, held by a terminal status
+            marker), ``"unknown_dependency"`` (task-family ID missing from
+            the table — fail-closed block), or ``"cycle"`` (the chain bottoms
+            out in a dependency cycle).
+        root_priority: the root's priority label (``P9`` for unknown IDs).
+        root_status: compact status display of the root (``""`` when unknown).
+        downstream_task_ids: the blocked task IDs transitively unlocked by
+            resolving the root, priority-ordered (may include the root itself
+            when it sits on a cycle).
+        downstream_count: ``len(downstream_task_ids)`` (cached for consumers).
+        reason: human-readable dependency reason (why this root, what to do).
+    """
+
+    root_task_id: str
+    root_kind: str
+    root_priority: str = _NO_PRIORITY_SENTINEL
+    root_status: str = ""
+    downstream_task_ids: tuple = ()
+    downstream_count: int = 0
+    reason: str = ""
+
+
+@dataclass(frozen=True)
 class PriorityReport:
     """The full dependency-analysis result.
 
@@ -451,6 +502,17 @@ class PriorityReport:
             best-effort and is not blocked by the cycle. Downstream consumers
             (e.g. the CLI exit code) should switch on this flag once they stop
             treating cycles as fatal (verify_workflow.py integration).
+        unblock_recommendation: :class:`UnblockRecommendation` or None — the
+            REQ-110 / FIX-254 empty-recommendation fallback. Set only when
+            ``recommended_next`` is empty AND at least one task is blocked
+            (the head of the highest-value blocked chain + reason). None on
+            the normal (non-empty) path and when there is no chain to unlock.
+        empty_reason: structured dict or None — set whenever
+            ``recommended_next`` is empty (REQ-110 forbids a bare empty
+            list). Shape: ``{"kind": "all_blocked" | "all_non_executable" |
+            "no_active_tasks", "total", "completed", "blocked",
+            "non_executable", "message", "nearest_action"}``. None on the
+            normal path.
     """
 
     completed: list = field(default_factory=list)
@@ -462,6 +524,8 @@ class PriorityReport:
     cycles: list = field(default_factory=list)  # list[tuple]
     non_executable: list = field(default_factory=list)  # list[TaskDep]
     cycle_warning: bool = False
+    unblock_recommendation: "UnblockRecommendation | None" = None
+    empty_reason: "dict | None" = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -915,6 +979,207 @@ def _priority_sort_key(task: TaskDep) -> tuple:
     return (task.priority, _version_tuple(task.target_version), task.task_id)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Empty-recommendation fallback (REQ-110 / FIX-254)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Root-cause kinds for a blocked chain (why the chain is stopped):
+_ROOT_KIND_STATUS = "non_executable_status"
+_ROOT_KIND_UNKNOWN = "unknown_dependency"
+_ROOT_KIND_CYCLE = "cycle"
+
+# Degenerate-chain guard: a blocker walk deeper than this is treated as a
+# cycle-style unresolvable chain (defensive — real governance chains are
+# single-digit deep; this only bounds recursion on adversarial input).
+_MAX_ROOT_WALK_DEPTH = 200
+
+
+def _walk_blocker_roots(origin_id: str, blocked_map: dict, task_index: dict,
+                        roots: dict) -> None:
+    """Attribute one blocked task to the ROOT blockers of its chain (FIX-254).
+
+    Starting from ``origin_id``'s blocking dependencies, walk each in-table
+    blocker's own blockers until the walk bottoms out at a ROOT — a blocker
+    that is itself not blocked by anything actionable:
+
+      - ``unknown_dependency`` — a task-family ID with no row in the table
+        (fail-closed: it cannot be proven complete);
+      - ``non_executable_status`` — an in-table, not-completed,
+        dependency-satisfied row (its terminal status marker is what stops
+        the chain — e.g. a ⛔/⏸ row like the live FIX-155 停滞链);
+      - ``cycle`` — a blocker already on the current walk path (the chain
+        bottoms out in a dependency cycle).
+
+    Every origin reachable from a root is attributed to that root as
+    downstream (``roots[(root_id, kind)].add(origin_id)``). The per-branch
+    ``path`` set makes diamond shapes attribute to the shared root instead of
+    being misread as cycles; only a TRUE back-edge (a repeat on the SAME
+    branch) classifies as a cycle. Depth-capped for termination.
+
+    Args:
+        origin_id: the blocked task ID whose chain is walked.
+        blocked_map: ``{task_id: (blocking_dependency_ids, ...)}`` for every
+            blocked task.
+        task_index: ``{task_id: TaskDep}`` for every non-completed in-table
+            task (blocked + non-executable members).
+        roots: accumulator mutated in place — ``{(root_id, kind): set(origin)}``.
+    """
+
+    def _visit(dep: str, path: set, depth: int) -> None:
+        if dep in path or depth > _MAX_ROOT_WALK_DEPTH:
+            roots.setdefault((dep, _ROOT_KIND_CYCLE), set()).add(origin_id)
+            return
+        blocker = task_index.get(dep)
+        if blocker is None:
+            roots.setdefault((dep, _ROOT_KIND_UNKNOWN), set()).add(origin_id)
+            return
+        if blocker.is_completed():
+            # Defensive: completed deps never appear in blocking_dependencies
+            # by construction; a hand-built report input cannot block via one.
+            return
+        if dep in blocked_map:
+            # In-table, itself blocked → extend the chain through its blockers.
+            extended = path | {dep}
+            for d in blocked_map[dep]:
+                _visit(d, extended, depth + 1)
+            return
+        # In-table, not completed, not blocked → dependency-satisfied stop.
+        # (On the empty-unblocked path such a row is non-executable by
+        # definition — its status marker is the chain's root cause.)
+        roots.setdefault((dep, _ROOT_KIND_STATUS), set()).add(origin_id)
+
+    for d in blocked_map.get(origin_id, ()):
+        _visit(d, {origin_id}, 0)
+
+
+def _unblock_reason(root_id: str, kind: str, root_task) -> str:
+    """Human-readable dependency reason for one unblock recommendation."""
+    status = _clean_status_for_display(root_task.status) if root_task is not None else ""
+    if kind == _ROOT_KIND_UNKNOWN:
+        return (
+            f"data gap: `{root_id}` is a task-family dependency with no row in "
+            f"the plan-tracker (fail-closed — it cannot be proven complete); "
+            f"verify or record its completion to reopen the chain"
+        )
+    if kind == _ROOT_KIND_CYCLE:
+        return (
+            f"dependency cycle: `{root_id}` sits on a blocker cycle; resolve "
+            f"the cycle (re-point or complete a member) to reopen the chain"
+        )
+    return (
+        f"status stop: `{root_id}` is dependency-satisfied but held by "
+        f"terminal status '{status or 'non-executable marker'}' — re-evaluate "
+        f"or resume `{root_id}` to reopen the chain"
+    )
+
+
+def _build_empty_recommendation_fallback(blocked: list, non_executable: list,
+                                         completed: list, total: int) -> tuple:
+    """Build the REQ-110 / FIX-254 fallback for an empty ``recommended_next``.
+
+    Returns ``(unblock_recommendation, empty_reason)``:
+
+      - ``unblock_recommendation`` — :class:`UnblockRecommendation` for the
+        head of the highest-value blocked chain (value = downstream blocked
+        task count, tie-broken by root priority → version → ID), or None when
+        no task is dependency-blocked (no chain to unlock).
+      - ``empty_reason`` — structured dict with kind ``all_blocked`` /
+        ``all_non_executable`` / ``no_active_tasks`` + counts + message +
+        ``nearest_action`` (最近可行动作). Always non-None on this path.
+
+    A bare empty recommendation is forbidden (AUDIT-143 data-layer root
+    cause): the caller gets either a chain recommendation, a structured
+    reason, or both.
+    """
+    blocked_map = {bt.task.task_id: tuple(bt.blocking_dependencies) for bt in blocked}
+    task_index: dict = {t.task_id: t for t in non_executable}
+    for bt in blocked:
+        task_index[bt.task.task_id] = bt.task
+
+    roots: dict = {}
+    for bt in blocked:
+        _walk_blocker_roots(bt.task.task_id, blocked_map, task_index, roots)
+
+    recommendation = None
+    if roots:
+        dep_index = {bt.task.task_id: bt for bt in blocked}
+
+        def _root_key(item: tuple) -> tuple:
+            (root_id, _kind), downstream = item
+            root_task = task_index.get(root_id)
+            if root_task is None:
+                return (-len(downstream), _NO_PRIORITY_SENTINEL,
+                        (float("inf"), 0, 0), root_id)
+            return (-len(downstream), root_task.priority,
+                    _version_tuple(root_task.target_version), root_id)
+
+        (root_id, kind), downstream_ids = min(roots.items(), key=_root_key)
+        root_task = task_index.get(root_id)
+        ordered = tuple(sorted(
+            downstream_ids,
+            key=lambda tid: _priority_sort_key(dep_index[tid].task)),
+        ) if downstream_ids else ()
+        recommendation = UnblockRecommendation(
+            root_task_id=root_id,
+            root_kind=kind,
+            root_priority=(root_task.priority if root_task is not None
+                           else _NO_PRIORITY_SENTINEL),
+            root_status=(_clean_status_for_display(root_task.status)
+                         if root_task is not None else ""),
+            downstream_task_ids=ordered,
+            downstream_count=len(ordered),
+            reason=_unblock_reason(root_id, kind, root_task),
+        )
+
+    if blocked:
+        kind_label = "all_blocked"
+        held_clause = (
+            f"; {len(non_executable)} dependency-satisfied row(s) additionally "
+            f"held by non-executable status markers"
+        ) if non_executable else ""
+        message = (
+            f"no executable candidate: {len(blocked)} active task(s) are all "
+            f"blocked by unresolved task-family dependencies{held_clause}")
+        if recommendation is not None:
+            nearest_action = (
+                f"unblock `{recommendation.root_task_id}` "
+                f"({recommendation.root_kind}) — highest-value chain, "
+                f"{recommendation.downstream_count} downstream blocked task(s)")
+        else:  # defensive — roots are non-empty whenever blocked is
+            nearest_action = "resolve the root blockers listed under Blocked"
+    elif non_executable:
+        kind_label = "all_non_executable"
+        message = (
+            f"no executable candidate: all {len(non_executable)} active row(s) "
+            f"are dependency-satisfied but held by non-executable status "
+            f"markers (⛔/⏸/🔴/🚧/🛑/📋)")
+        top_held = sorted(non_executable, key=_priority_sort_key)[0]
+        nearest_action = (
+            f"re-evaluate `{top_held.task_id}` [{top_held.priority}] — its "
+            f"dependencies are satisfied; only its status marker holds it back")
+    else:
+        kind_label = "no_active_tasks"
+        if total:
+            message = (
+                f"no active tasks: all {total} parsed task(s) are completed — "
+                f"nothing pending, blocked or held")
+        else:
+            message = "no active tasks: plan-tracker contains no task rows"
+        nearest_action = (
+            "plan the next work batch — append rows to the 优先级一览 table")
+
+    empty_reason = {
+        "kind": kind_label,
+        "total": total,
+        "completed": len(completed),
+        "blocked": len(blocked),
+        "non_executable": len(non_executable),
+        "message": message,
+        "nearest_action": nearest_action,
+    }
+    return recommendation, empty_reason
+
+
 def compute_unblocked_tasks(tasks: list) -> PriorityReport:
     """Compute the dependency-based priority report from parsed tasks.
 
@@ -939,6 +1204,14 @@ def compute_unblocked_tasks(tasks: list) -> PriorityReport:
              or absent (status candidate-eligible).
       5. ``recommended_next`` = ``unblocked`` sorted by priority then version.
       6. ``cycle_warning`` = whether any cycle was detected (WARN, not ERROR).
+      7. **Empty-recommendation fallback (REQ-110 / FIX-254):** when
+         ``recommended_next`` is empty (the live-data norm: total>0 with
+         unblocked=0), analyze the blocked dependency graph and attach
+         ``unblock_recommendation`` (head of the highest-value blocked chain
+         + dependency reason) and/or a structured ``empty_reason``
+         (all_blocked / all_non_executable / no_active_tasks + nearest
+         actionable step). A bare empty recommendation is forbidden — it is
+         the AUDIT-143 data-layer root cause of the机械枚举 degradation.
 
     Cross-entity refs (RISK/DEC/REVIEW/...) are never dependencies in the
     graph and never block (FIX-171 precedent).
@@ -983,6 +1256,18 @@ def compute_unblocked_tasks(tasks: list) -> PriorityReport:
 
     recommended = sorted(unblocked, key=_priority_sort_key)
 
+    unblock_recommendation = None
+    empty_reason = None
+    if not recommended:
+        # REQ-110 / FIX-254 empty-recommendation fallback: never a bare empty
+        # list — blocked-chain unblock pick and/or a structured empty reason.
+        unblock_recommendation, empty_reason = _build_empty_recommendation_fallback(
+            blocked=blocked,
+            non_executable=non_executable,
+            completed=completed,
+            total=len(tasks),
+        )
+
     return PriorityReport(
         completed=completed,
         blocked=blocked,
@@ -993,6 +1278,8 @@ def compute_unblocked_tasks(tasks: list) -> PriorityReport:
         cycles=cycles,
         non_executable=non_executable,
         cycle_warning=bool(cycles),
+        unblock_recommendation=unblock_recommendation,
+        empty_reason=empty_reason,
     )
 
 
@@ -1035,7 +1322,10 @@ def format_report(report: PriorityReport) -> str:
     Sections:
       1. Summary counts.
       2. ``Recommended next`` (the highest-priority unblocked task(s)) — this is
-         the answer to "what should I work on next?".
+         the answer to "what should I work on next?". When empty, the REQ-110 /
+         FIX-254 fallback renders instead: the blocked-chain ``Unblock pick``
+         (root + reason + downstream) and/or the structured empty reason with
+         the nearest actionable step — never the pre-FIX-254 bare empty note.
       3. ``Unblocked`` (all ready-to-work tasks, priority-ordered).
       4. ``Excluded`` (dependency-satisfied rows filtered out by the third-class
          status filter — ⛔/⏸/🔴/🚧/🛑/📋/✅ leading markers).
@@ -1082,6 +1372,47 @@ def format_report(report: PriorityReport) -> str:
         lines.append("")
         for t in report.recommended_next:
             lines.append(_format_task_line(t))
+    elif report.unblock_recommendation is not None:
+        # REQ-110 / FIX-254 fallback (a): blocked-chain unblock recommendation.
+        rec = report.unblock_recommendation
+        lines.append(
+            "_No unblocked tasks — REQ-110 fallback: blocked-chain unblock "
+            "recommendation (FIX-254)._")
+        lines.append("")
+        status_clause = f" status='{rec.root_status}'" if rec.root_status else ""
+        lines.append(
+            f"**Unblock pick: `{rec.root_task_id}` [{rec.root_priority}] "
+            f"({rec.root_kind}{status_clause})**")
+        lines.append("")
+        lines.append(f"- reason: {rec.reason}")
+        if rec.downstream_task_ids:
+            shown = ", ".join(f"`{i}`" for i in rec.downstream_task_ids[:12])
+            more = (f" (+{len(rec.downstream_task_ids) - 12} more)"
+                    if len(rec.downstream_task_ids) > 12 else "")
+            lines.append(
+                f"- unlocks {rec.downstream_count} downstream blocked "
+                f"task(s): {shown}{more}")
+        if report.empty_reason:
+            lines.append(
+                f"- empty reason: {report.empty_reason.get('kind')} — "
+                f"{report.empty_reason.get('message')}")
+            lines.append(
+                f"- nearest action: {report.empty_reason.get('nearest_action')}")
+    elif report.empty_reason:
+        # REQ-110 / FIX-254 fallback (b): structured empty reason + nearest
+        # actionable step — the bare pre-FIX-254 note is forbidden.
+        er = report.empty_reason
+        lines.append(
+            "_No unblocked tasks — structured empty reason "
+            "(REQ-110 / FIX-254)._")
+        lines.append("")
+        lines.append(f"- kind: {er.get('kind')}")
+        lines.append(
+            f"- counts: total={er.get('total')} "
+            f"completed={er.get('completed')} blocked={er.get('blocked')} "
+            f"non-executable={er.get('non_executable')}")
+        lines.append(f"- {er.get('message')}")
+        lines.append(f"- nearest action: {er.get('nearest_action')}")
     else:
         lines.append("_No unblocked tasks. Every non-completed task is blocked "
                      "or there are no active tasks._")
@@ -1147,6 +1478,7 @@ def format_report(report: PriorityReport) -> str:
 __all__ = [
     "TaskDep",
     "BlockedTask",
+    "UnblockRecommendation",
     "PriorityReport",
     "parse_task_dependencies",
     "compute_unblocked_tasks",

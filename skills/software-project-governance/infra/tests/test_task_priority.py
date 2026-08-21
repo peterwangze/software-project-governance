@@ -1064,6 +1064,218 @@ class TestBackwardCompatibility(unittest.TestCase):
         self.assertFalse(report.cycle_warning)
 
 
+# ─── Fixture: unblocked=0 (all-blocked) — REQ-110 empty-recommendation fallback ──
+#
+# FIX-254 / REQ-110: the live-data shape (total=131+ / unblocked=0 →
+# recommended_next 恒空，任务完成后的推荐交互退化为机械枚举) reduced to a
+# minimal fixture. One completed dep, one dependency-satisfied head held by a
+# terminal status marker (⛔) with a two-task blocked chain hanging off it, and
+# one unknown-dependency chain. The ⛔ head is the highest-value unblock entry
+# (2 downstream tasks vs the unknown chain's 1).
+_ALL_BLOCKED_TABLE = """\
+# Plan Tracker
+
+### 优先级一览
+
+| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |
+|--------|----|------|------|---------|---------|------|
+| **P1** | FIX-200 | completed dep | — | 0.1.0 | closed | ✅ 完成 (2026-01-01) |
+| **P0** | FIX-205 | held head (deps satisfied) | FIX-200✅ | 0.2.0 | open | ⛔ BLOCKED_ENVIRONMENT |
+| **P0** | FIX-207 | blocked child | FIX-205 | 0.2.0 | open | ⏳ 待执行 |
+| **P0** | FIX-208 | blocked grandchild | FIX-207 | 0.2.0 | open | ⏳ 待执行 |
+| **P1** | FIX-210 | unknown-dep child | FIX-299 | 0.3.0 | open | ⏳ 待执行 |
+"""
+
+
+class TestEmptyRecommendationFallback(unittest.TestCase):
+    """REQ-110 / FIX-254 — unblocked=0 must NOT degrade to a bare empty list.
+
+    When no task is unblocked, the report must carry either a blocked-chain
+    unblock recommendation (the head node of the highest-value chain + a
+    dependency reason) or a structured empty reason (all_blocked /
+    all_non_executable / no_active_tasks + nearest actionable step). A bare
+    ``recommended_next: []`` with no explanation is the AUDIT-143 data-layer
+    root cause of user-feedback 2a/2b and is forbidden.
+    """
+
+    def test_all_blocked_fixture_recommends_unblock_chain(self):
+        report = compute_unblocked_tasks(parse_task_dependencies(_ALL_BLOCKED_TABLE))
+        self.assertEqual(report.recommended_next, [])
+        self.assertEqual(report.unblocked, [])
+        rec = report.unblock_recommendation
+        self.assertIsNotNone(rec)
+        # FIX-205 (⛔ held, deps satisfied) heads the chain FIX-207→FIX-208 —
+        # 2 downstream beats the unknown-dep chain FIX-299→FIX-210 (1).
+        self.assertEqual(rec.root_task_id, "FIX-205")
+        self.assertEqual(rec.root_kind, "non_executable_status")
+        self.assertEqual(rec.downstream_task_ids, ("FIX-207", "FIX-208"))
+        self.assertEqual(rec.downstream_count, 2)
+        self.assertIn("FIX-205", rec.reason)
+        self.assertIn("status", rec.reason)
+
+    def test_all_blocked_fixture_structured_empty_reason(self):
+        report = compute_unblocked_tasks(parse_task_dependencies(_ALL_BLOCKED_TABLE))
+        er = report.empty_reason
+        self.assertIsNotNone(er)
+        self.assertEqual(er["kind"], "all_blocked")
+        self.assertEqual(er["blocked"], 3)          # FIX-207, FIX-208, FIX-210
+        self.assertEqual(er["non_executable"], 1)   # FIX-205
+        self.assertEqual(er["completed"], 1)        # FIX-200
+        self.assertIn("FIX-205", er["nearest_action"])
+
+    def test_unblock_picks_highest_value_chain_over_priority(self):
+        # Downstream count dominates: a P1 head unlocking 3 beats a P0 head
+        # unlocking 1 (value = how much of the plan reopens).
+        head_p1 = TaskDep("FIX-901", "P1", "⛔ HELD", (), (), "0.1.0")
+        c1 = TaskDep("FIX-902", "P0", "⏳ 待执行", ("FIX-901",), (), "0.1.0")
+        c2 = TaskDep("FIX-903", "P1", "⏳ 待执行", ("FIX-902",), (), "0.1.0")
+        c3 = TaskDep("FIX-904", "P2", "⏳ 待执行", ("FIX-903",), (), "0.1.0")
+        head_p0 = TaskDep("FIX-905", "P0", "⏸ HELD", (), (), "0.1.0")
+        d1 = TaskDep("FIX-906", "P0", "⏳ 待执行", ("FIX-905",), (), "0.1.0")
+        report = compute_unblocked_tasks([head_p1, c1, c2, c3, head_p0, d1])
+        rec = report.unblock_recommendation
+        self.assertIsNotNone(rec)
+        self.assertEqual(rec.root_task_id, "FIX-901")
+        self.assertEqual(rec.downstream_task_ids, ("FIX-902", "FIX-903", "FIX-904"))
+
+    def test_unblock_equal_value_tiebreak_prefers_priority(self):
+        # Equal downstream counts → higher-priority root wins.
+        head_p1 = TaskDep("FIX-910", "P1", "⛔ HELD", (), (), "0.1.0")
+        c1 = TaskDep("FIX-911", "P0", "⏳ 待执行", ("FIX-910",), (), "0.1.0")
+        head_p0 = TaskDep("FIX-912", "P0", "⏸ HELD", (), (), "0.1.0")
+        c2 = TaskDep("FIX-913", "P0", "⏳ 待执行", ("FIX-912",), (), "0.1.0")
+        report = compute_unblocked_tasks([head_p1, c1, head_p0, c2])
+        rec = report.unblock_recommendation
+        self.assertIsNotNone(rec)
+        self.assertEqual(rec.root_task_id, "FIX-912")
+
+    def test_unknown_dependency_root_reported_with_reason(self):
+        # A task-family dep missing from the table blocks fail-closed; the
+        # fallback must surface it as a data-gap root, not stay silent.
+        t = TaskDep("FIX-970", "P0", "⏳ 待执行", ("FIX-999",), (), "0.1.0")
+        report = compute_unblocked_tasks([t])
+        rec = report.unblock_recommendation
+        self.assertIsNotNone(rec)
+        self.assertEqual(rec.root_task_id, "FIX-999")
+        self.assertEqual(rec.root_kind, "unknown_dependency")
+        self.assertEqual(rec.downstream_task_ids, ("FIX-970",))
+        self.assertIn("FIX-999", rec.reason)
+        self.assertEqual(report.empty_reason["kind"], "all_blocked")
+
+    def test_cycle_blocker_walk_terminates_with_cycle_root(self):
+        # A↔B blocker cycle: the walk must terminate and classify the root as
+        # a cycle (never a RecursionError / hang).
+        a = TaskDep("FIX-940", "P0", "⏳ 待执行", ("FIX-941",), (), "0.1.0")
+        b = TaskDep("FIX-941", "P0", "⏳ 待执行", ("FIX-940",), (), "0.1.0")
+        c = TaskDep("FIX-942", "P0", "⏳ 待执行", ("FIX-940",), (), "0.1.0")
+        report = compute_unblocked_tasks([a, b, c])
+        rec = report.unblock_recommendation
+        self.assertIsNotNone(rec)
+        self.assertEqual(rec.root_kind, "cycle")
+        self.assertEqual(rec.root_task_id, "FIX-940")
+        self.assertEqual(set(rec.downstream_task_ids), {"FIX-940", "FIX-942"})
+
+    def test_all_non_executable_yields_structured_reason_and_nearest_action(self):
+        # Nothing is dependency-blocked; every active row is held by a
+        # terminal status marker. There is NO blocked chain, so no chain
+        # recommendation — kind = all_non_executable + a nearest action that
+        # re-evaluates the highest-priority held row.
+        low = TaskDep("FIX-920", "P2", "⛔ BLOCKED", (), (), "0.1.0")
+        high = TaskDep("FIX-921", "P0", "⏸ SPLIT_TO FIX-922/FIX-923", (), (), "0.1.0")
+        report = compute_unblocked_tasks([low, high])
+        self.assertEqual(report.blocked, [])
+        er = report.empty_reason
+        self.assertIsNotNone(er)
+        self.assertEqual(er["kind"], "all_non_executable")
+        self.assertEqual(er["non_executable"], 2)
+        # No chain → no unblock recommendation; the nearest action carries
+        # the re-evaluation entry point instead.
+        self.assertIsNone(report.unblock_recommendation)
+        self.assertIn("FIX-921", er["nearest_action"])
+
+    def test_no_active_tasks_yields_structured_reason(self):
+        done_a = TaskDep("FIX-930", "P0", "✅ 完成", (), (), "0.1.0")
+        done_b = TaskDep("FIX-931", "P1", "✅ 完成", (), (), "0.1.0")
+        report = compute_unblocked_tasks([done_a, done_b])
+        self.assertIsNone(report.unblock_recommendation)
+        er = report.empty_reason
+        self.assertIsNotNone(er)
+        self.assertEqual(er["kind"], "no_active_tasks")
+        self.assertTrue(er["nearest_action"])
+
+    def test_empty_input_yields_no_active_tasks_reason(self):
+        report = compute_unblocked_tasks([])
+        self.assertIsNone(report.unblock_recommendation)
+        self.assertEqual(report.empty_reason["kind"], "no_active_tasks")
+
+    def test_fallback_dormant_when_unblocked_present(self):
+        # Zero behavior change on the non-empty path (no scope creep).
+        report = compute_unblocked_tasks(parse_task_dependencies(_SAMPLE_TABLE))
+        self.assertTrue(report.recommended_next)
+        self.assertIsNone(report.unblock_recommendation)
+        self.assertIsNone(report.empty_reason)
+        # Same for the third-class-filter fixture (FIX-777 is unblocked).
+        report2 = compute_unblocked_tasks(parse_task_dependencies(_NON_EXECUTABLE_TABLE))
+        self.assertTrue(report2.recommended_next)
+        self.assertIsNone(report2.unblock_recommendation)
+        self.assertIsNone(report2.empty_reason)
+
+    def test_backward_compat_new_fields_default_none(self):
+        report = PriorityReport()
+        self.assertIsNone(report.unblock_recommendation)
+        self.assertIsNone(report.empty_reason)
+        legacy = PriorityReport(
+            completed=[], blocked=[], unblocked=[], recommended_next=[],
+            total=0, dependency_graph={}, cycles=[],
+        )
+        self.assertIsNone(legacy.unblock_recommendation)
+        self.assertIsNone(legacy.empty_reason)
+
+
+class TestEmptyRecommendationFallbackFormat(unittest.TestCase):
+    """format_report rendering of the REQ-110 fallback (no bare empty list)."""
+
+    def test_format_all_blocked_renders_unblock_pick(self):
+        out = format_report(
+            compute_unblocked_tasks(parse_task_dependencies(_ALL_BLOCKED_TABLE)))
+        self.assertIn("No unblocked tasks", out)
+        self.assertIn("Unblock pick", out)
+        self.assertIn("`FIX-205`", out)
+        self.assertIn("status", out)
+        self.assertIn("`FIX-207`", out)
+        self.assertIn("`FIX-208`", out)
+        self.assertIn("nearest action", out)
+        self.assertIn("all_blocked", out)
+        # The pre-FIX-254 bare fallback text must be gone in this branch.
+        self.assertNotIn(
+            "Every non-completed task is blocked or there are no active tasks", out)
+
+    def test_format_all_non_executable_renders_structured_reason(self):
+        low = TaskDep("FIX-920", "P2", "⛔ BLOCKED", (), (), "0.1.0")
+        high = TaskDep("FIX-921", "P0", "⏸ HELD", (), (), "0.1.0")
+        out = format_report(compute_unblocked_tasks([low, high]))
+        self.assertIn("No unblocked tasks", out)
+        self.assertIn("all_non_executable", out)
+        self.assertIn("`FIX-921`", out)
+        self.assertIn("nearest action", out)
+        self.assertNotIn("Unblock pick", out)
+
+    def test_format_no_active_tasks_renders_structured_reason(self):
+        done = TaskDep("FIX-930", "P0", "✅ 完成", (), (), "0.1.0")
+        out = format_report(compute_unblocked_tasks([done]))
+        self.assertIn("No unblocked tasks", out)
+        self.assertIn("no_active_tasks", out)
+        self.assertIn("nearest action", out)
+        self.assertNotIn("Unblock pick", out)
+
+    def test_format_normal_table_has_no_fallback_markers(self):
+        out = format_report(
+            compute_unblocked_tasks(parse_task_dependencies(_SAMPLE_TABLE)))
+        self.assertIn("Top pick", out)
+        self.assertNotIn("Unblock pick", out)
+        self.assertNotIn("nearest action", out)
+
+
 # ─── CLI integration fixtures (FIX-237.3 P2-1) ──────────────────────────────
 #
 # These tables are written to a TEMPORARY project root (never the real

@@ -76,7 +76,20 @@ def build_candidates(plan_tracker_text, events, top_n=DEFAULT_TOP_N):
     Returns:
         dict: ``{"generated_at", "exit_events_consumed", "total",
         "unblocked", "recommended_top_n", "cycles", "cycle_warning",
-        "non_executable"}``. Never raises.
+        "non_executable", "recommended_fallback", "empty_reason"}``.
+        Never raises.
+
+        REQ-110 / FIX-254 — empty-recommendation fallback: when
+        ``recommended_next`` is empty (the live-data norm: total>0 with
+        unblocked=0), ``recommended_top_n`` is ``[]`` but the report carries
+        the task_priority fallback as machine fields instead of a bare empty
+        list — ``recommended_fallback`` (blocked-chain unblock pick:
+        unblock_target / kind / priority / status / downstream /
+        downstream_count / reason; None when no chain exists) and
+        ``empty_reason`` (structured kind = all_blocked | all_non_executable
+        | no_active_tasks + counts + message + nearest_action; None on the
+        normal path). A parse failure keeps the explicit ``parse_error`` key
+        (its own structured reason) with ``recommended_fallback: None``.
     """
     exit_events = [
         ev for ev in (events or [])
@@ -95,6 +108,8 @@ def build_candidates(plan_tracker_text, events, top_n=DEFAULT_TOP_N):
             "cycle_warning": False,
             "non_executable": [],
             "parse_error": str(exc),
+            "recommended_fallback": None,
+            "empty_reason": None,
         }
 
     status_map = {t.task_id: t.is_completed() for t in report.completed}
@@ -116,6 +131,27 @@ def build_candidates(plan_tracker_text, events, top_n=DEFAULT_TOP_N):
         }
         for t in report.recommended_next[: max(0, int(top_n))]
     ]
+    recommended_fallback = None
+    empty_reason = None
+    if not report.recommended_next:
+        # REQ-110 / FIX-254 — empty-recommendation fallback: forward the
+        # task_priority fallback as machine fields (never a bare empty list).
+        # getattr guards keep the bridge working against any report object
+        # that predates the FIX-254 fields (bridge must never raise).
+        rec = getattr(report, "unblock_recommendation", None)
+        if rec is not None:
+            recommended_fallback = {
+                "unblock_target": rec.root_task_id,
+                "kind": rec.root_kind,
+                "priority": rec.root_priority,
+                "status": rec.root_status,
+                "downstream": list(rec.downstream_task_ids),
+                "downstream_count": rec.downstream_count,
+                "reason": rec.reason,
+            }
+        er = getattr(report, "empty_reason", None)
+        if er:
+            empty_reason = dict(er)
     return {
         "generated_at": _now_iso(),
         "exit_events_consumed": len(exit_events),
@@ -125,6 +161,8 @@ def build_candidates(plan_tracker_text, events, top_n=DEFAULT_TOP_N):
         "cycles": list(report.cycles or []),
         "cycle_warning": bool(report.cycle_warning),
         "non_executable": [t.task_id for t in report.non_executable],
+        "recommended_fallback": recommended_fallback,
+        "empty_reason": empty_reason,
     }
 
 

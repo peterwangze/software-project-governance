@@ -2,6 +2,45 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.75.0] - 2026-08-21
+
+### 0.75.0 - 关键行为规则注入面 + 空推荐降级（REQ-112/REQ-110，DEC-143 前置放大器双落地）（MINOR）
+
+0.75.0 是 MINOR 发布，把 HEAD `d90c167` 上 0.74.0 released（`v0.74.0` = 3a64d54）之后已合入的 9 个 commit 打包成发布候选——两个承载 MINOR 语义的主 commit：FIX-253（REQ-112 关键行为规则注入面，DEC-144 方案 A）与 FIX-254（REQ-110 空推荐降级）；六个 0.74.0 后观察项/债务 commit（FIX-247/FIX-248/FIX-249/FIX-250/FIX-251/FIX-252）与一个审计 commit（AUDIT-143）随行。发布目标：AUDIT-143 定位的 loop engineering 三层断裂中，注入层根因（关键行为规则只存在于 DSH persona/SKILL 注入链不携带的第四层文件，agent 行为约束靠自觉）与数据层根因（全部任务被阻塞时推荐恒空，用户得不到任何下一步建议）双修复——FIX-253 把三条关键行为规则（复审必达/完成必推荐/选项必带依据）注入确定性注入面（DSH persona + 入口 SKILL.md 双点），并以 version-projections transformed_text 锚定 persona 版本行与 AGENTS.md.template bootstrap 版本行（L33 漂移类问题机器防再发）；FIX-254 为任务推荐链增加空推荐降级——当无未阻塞任务时输出「解锁链推荐」（Unblock pick + 结构化空原因 + 最近可行动作），推荐交互不再恒空退化。**不关闭 RISK-036/RISK-039**：官方市场操作与 ArchGuard 外部宿主验证各自独立关闭标准未满足。版本投影 0.74.0 -> 0.75.0 全 PASS——本次为 FIX-253 新增的 2 个 transformed_text 投影（dsh-persona-version / dsh-agents-bootstrap-version）首次参与发版：`release-projection --write` 写入 15 投影（written=15，exit=0），persona L33（v0.75.0）与 AGENTS.md.template L3（@bootstrap-version: 0.75.0）由投影机制确定性推进（M-set：15 projections + `verify_workflow.py` REQUIRED_SNIPPETS 6 版本钉）。
+
+### Added
+
+- **FIX-253 关键行为规则注入面（REQ-112，DEC-144 方案 A：双点最小注入 + 版本投影锚定 + 锚点检查）**（EVD-FIX-253，2026-08-21）：根因 = AUDIT-143 定位注入层断裂——T1-T4 复审触发器与 M7.4 step 6 推荐规则位于第四层按需加载文件，DSH persona/SKILL 注入链不携带，行为约束依赖 agent 自觉；persona L33 版本行曾漂移 v0.73.0（FIX-250 逃逸者）。修复（9 文件 +213/-6）：(1) DSH persona 契约块 4 行 1404B≤1.5KB（R1 复审必达 / R2 完成必推荐 / R3 选项必带依据——三条与铁律同级的压缩契约），agent.cordis.yml.template 会话注入即生效；(2) 入口 SKILL.md「关键行为契约」段 1623B≤2KB（canonical 投影定义处）+ e2e fixture byte_copy 同步重生成（20884B 相等）；(3) AGENTS.md.template 单行指针（thin-pointer 纪律）；(4) version-projections.json +2 transformed_text 投影（dsh-persona-version / dsh-agents-bootstrap-version，pattern 唯一命中 persona L33 与 AGENTS L3）+ manifest projection_ids 同步（15=15 集合相等）——发版时版本行随投影机制确定性推进，L33 类漂移机器防再发；(5) verify_workflow.py INJECTION_CONTRACT_ANCHORS 12 锚点 + check_injection_contract() + Check 33 接入 check-governance + 独立子命令（fail-closed）；(6) test_dsh_adapter 版本断言动态化（从 SKILL frontmatter 权威源读取，消灭 FIX-250 姊妹手动同步通道）；(7) behavior-protocol.md canonical 注记 + step 6b/6c 改写（统一 DEC-143「自动推荐 + 用户确认」基线，废止「自动执行推荐项」默认分支）。验证：S1-S8 全 PASS（S4 projection-sync 15 投影 exit 0、S6 Check 33 PASS、S8 18/18）；全量回归 699+18+107+12+40 全绿。审查链：Design R0 APPROVED_WITH_NOTES/0（4 WARNING 返工核实）+ DEC-144 用户确认（方案 A）+ Code R0 APPROVED_WITH_NOTES/0（5 P3 非阻塞）。
+- **FIX-254 空推荐降级——解锁链推荐 + 结构化空原因（REQ-110）**（EVD-FIX-254，2026-08-21）：根因 = AUDIT-143 定位数据层断裂——live unblocked=0 时 recommended_next 恒空，任务完成后的推荐交互退化为机械枚举或直接结束（用户反馈 2a/2b 直接根因）。修复（4 文件 +647/-2）：task_priority.py 新增 UnblockRecommendation 与 _walk_blocker_roots（unknown_dependency / non_executable_status / cycle 三类根因，菱形去重 + 环终止 + 深度上限 200）+ _build_empty_recommendation_fallback（价值排序 = 下游解锁数降序 → 优先级 → 版本 → ID 严格全序）；compute 单点接线（仅空推荐触发，正常路径零行为变化）；format_report all_blocked 分支渲染 Unblock pick / 空原因 / 最近可行动作；loop_exit_bridge.py 传播 recommended_fallback / empty_reason 两键（含 parse-error 路径）。19 个新测试红→绿（红相 Ran 119 failures=3 errors=15 → 绿相 119 OK）；全量回归 159/159 + test_verify_workflow 全绿。live 验证：task-priority-analysis unblocked=0 输出非空——Unblock pick: FIX-205 [P0]（解锁 7 下游）+ 结构化空原因。审查链：R0 APPROVED_WITH_NOTES/unresolved_blockers=0（F-1 P1 当轮返工修复）。
+- 版本声明与 e2e fixture 指针从 0.74.0 推进到 0.75.0（M-set：plugins、marketplace、package.json、source/e2e SKILL frontmatter、manifest、fixture plan-tracker、四个 source hooks、DSH persona L33 与 AGENTS.md.template L3——15 projections 由 `release-projection --write` 确定性写入，written=15；以及 `verify_workflow.py` 的 `REQUIRED_SNIPPETS` 6 版本钉）。
+- `project/CHANGELOG.md` 新增 0.75.0 条目；release docs 三件套创建。
+
+### Fixed
+
+0.74.0 released 之后、0.75.0 打包之前合入的六个观察项/债务 commit（均已具备各自 evidence 与审查链，随 0.75.0 一并进入用户安装面）：
+
+- **FIX-247 FIX-237/238 遗留观察项处置**（EVD-FIX-247，commit c9739d0）：change-triage 证据 append 失败时 best-effort 回滚 + 明确报错；同 task_id 重 triage 拒绝（fail-closed）；bootstrap.sh timeout 分支退出码折叠与 stdlib 兜底诊断。用户视角：triage 记录不再出现半写状态，入口引导失败原因可区分。
+- **FIX-248 change-triage CLI 测试 fixture 版本对齐**（EVD-FIX-248，commit 9ce4e19，测试-only）：fixture roadmap 与 CLI 调用从 0.73.0 对齐 0.74.0，unknown-dep fail-closed 测试恢复真实覆盖。用户视角：无可见行为变化（测试强度提升）。
+- **FIX-249 FIX-247 R0 §6 五 P3 债务包**（EVD-FIX-249，commit 113a959，测试加固）：bootstrap.sh stdlib 兜底分支补「resolve_entry exited non-zero」诊断、区分 timeout(1) 自身失败（125/126/127）与真实非零、malformed triage 记录 immutable 边界（拒绝而非静默覆盖）。用户视角：引导失败诊断更精确、triage 记录防覆盖。
+- **FIX-250 候选债务包**（EVD-FIX-250，commit 856301e）：`@bootstrap-version` 模板标记 0.73.0→0.74.0 全投影面同步（REL-067 投影缺口）；parse_version_chain 表后误追加加固（triage 机器记录 version_chain 不再混入路线图后续表行）；archive dry-run「校验: FAILED」误导输出修复为 N/A；`.gitattributes` 补 `*.json text eol=lf`。用户视角：后续版本发布时模板标记不再陈旧、triage 依赖/版本分析准确。
+- **FIX-251 parse_task_dependencies 无表头窗口表可见性**（EVD-FIX-251，commit 0dc1786）：plan-tracker「最近完成（本会话提交窗口）」子节的无表头任务表此前永不进入解析（新任务依赖这些任务时被 unknown-dep fail-closed 拒收）。修复后 live 统计 124→131（+7 全可见）。用户视角：新任务引用最近完成窗口任务不再被误拒。
+- **FIX-252 观察项债务包**（EVD-FIX-252，commit 439f8b4）：`_coerce_text` str 路径/文本歧义修复（像路径但不存在 → 明确 ValueError 而非静默 total 0 或 IsADirectoryError；空串/多行守卫）；web-console 测试 stdout 泄漏修复；fixture 对齐与组合顺序锁定。用户视角：CLI 输入误用从静默错误结果变为明确报错。
+
+### Validation
+
+- REL-068（0.75.0 MINOR 候选打包，2026-08-21；candidate-only，transition 需用户授权后另行执行）。
+- FIX-253：S1-S8 全 PASS（S1 grep NEEDS_CHANGE×1、S2 task-priority-analysis×2+1、S3 依赖状态理由×1+1、S4 check-projection-sync 15 投影 PASS、S5 check-version-consistency PASS、S6 Check 33 PASS + 子命令 exit=0、S7 fixture byte-equal、S8 18/18）；verify/crossref/manifest 全 PASS；全量回归 699+18+107+12+40 全绿；Design R0 + DEC-144 + Code R0 审查链关闭。
+- FIX-254：19 新测试红→绿（119 OK）；全量回归 159/159（task_priority + loop_exit_bridge + change_triage）+ test_verify_workflow 全绿；live CLI 输出 Unblock pick 非空 + all_blocked 结构化空原因；Code R0 APPROVED_WITH_NOTES/0。
+- 随行六 commit（FIX-247~252）：各自 evidence 记录完整（EVD-FIX-247~252）+ 审查链关闭（FIX-247 R0 APPROVED/0、FIX-248 R0 APPROVED/0、FIX-249 R0→R2 APPROVED_WITH_NOTES/0、FIX-250 R0 APPROVED_WITH_NOTES/0、FIX-251 R0 APPROVED_WITH_NOTES/0、FIX-252 R0 NEEDS_CHANGE→R1 APPROVED_WITH_NOTES/0）；合并回归 test_task_priority + test_loop_exit_bridge + test_change_triage 159/159 + test_verify_workflow 全绿 + test_archive 119 全绿。
+- 门禁（0.75.0 candidate，2026-08-21）：`check-version-consistency` PASS（1 advisory WARN——宿主 plan-tracker 仍 0.74.0，Coordinator 打包后 bump）；`check-projection-sync --fail-on-issues` PASS（15 投影，含 2 新投影达成态——dsh-persona-version / dsh-agents-bootstrap-version 首次发版实战）；`release-projection --write` written=15 exit=0（新投影首次实战记录）；`check-manifest-consistency` PASS（554 canonical / 580 actual）；`check-injection-contract` PASS（3 文件 12 锚点）；unittest test_release_ledger 39 OK + test_dsh_adapter 18 OK（版本断言动态化自动适配 0.75.0）+ test_verify_workflow 699 OK（254.9s）；`release-ledger --no-remote` 报告未提交候选过渡态 issue（git_commit_adding_path 派生要求文件已提交——commit 后重跑，同 REL-067 先例）；`check-release --version 0.75.0 --require-changelog --lineage-mode candidate` 记录 6 项 issue 按先例分类：3 = release docs 未跟踪（未提交态产物，commit 后消解）、1 = archive trigger gap 过渡态（既有基线，0 可迁 task）、1 = governance health 既有基线（宿主治理记录 217 issues，非本 diff 引入）、1 = unit tests 180s 环境超时（直跑 699 OK）——核心静态门禁（version consistency / projection sync / cross references / changelog / release lineage candidate / loop runtime claim 578/578 / one-dot-zero blockers）全 PASS。
+
+### Boundaries
+
+- 0.75.0 **RISK-036/RISK-039 remain open**。RISK-036（official marketplace operations）与 RISK-039（ArchGuard external validation）各自独立关闭标准未满足；本版本不重开任何已关闭风险。
+- 不声明 official approval、marketplace approval、curated listing、universal/full runtime support、external first-session pilot success、1.0.0 production-ready；不关闭 RISK-036/RISK-039。
+- MINOR bump 来自注入面行为改进 + 空推荐降级两项新能力（新投影机制落地 + 推荐链降级路径），不引入 breaking changes（纯行为改进：注入为增量文本块、推荐仅在原空路径上增加降级输出，正常路径零行为变化）。
+- **迁移说明（RISK-D5——DSH preset 时滞）**：DSH 平台升级路径为 `git -C <plugin_root> pull && python <plugin_root>/adapters/dsh/launch.py --sync`（DSH 无 `/plugin update`）；persona/bootstrap 模板的 0.75.0 版本行与契约块在 `--sync` 重写 preset 后生效，未 sync 前旧 preset 仍携带旧版本行——升级后首次会话完成其余。
+
 ## [0.74.0] - 2026-08-07
 
 ### 0.74.0 - 入口确定性五修复链打包（archive 双 root / --auto 冷却端点 / --project-root fail-closed 三端对齐 / 审查遗留清理）（MINOR）

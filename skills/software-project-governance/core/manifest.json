@@ -18,7 +18,9 @@
       "hook-pre-commit",
       "hook-commit-msg",
       "hook-post-commit",
-      "hook-prepare-commit-msg"
+      "hook-prepare-commit-msg",
+      "dsh-persona-version",
+      "dsh-agents-bootstrap-version"
     ],
     "projection_kinds": [
       "byte_copy",

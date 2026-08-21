@@ -523,6 +523,8 @@ Agent 从项目 profile 推断模式。用户可随时通过说"仅在关键决�
      (C6) 每轮复审的证据编号：REVIEW-{task_id}-R1 / -R2 / -R3（向后兼容：无后缀 = R0/首轮）。
      (C7) round 完全由 evidence-log 中已存在 R{n} 的最大值派生，无内存状态，并行安全。
 
+   > **最小契约投影（FIX-253/REQ-112）**：本节 T1-T4、step 6 与 interaction-boundary.md 任务排序规则的压缩形式由 SKILL.md「关键行为契约」段与 DSH persona（agent.cordis.yml.template）携带；`check-injection-contract` 锚点守护同步。修改本节关键词（复审/NEEDS_CHANGE/task-priority-analysis/依赖理由）时 MUST 同步注入面，否则 check FAIL。**step 6c 交互基线（DEC-143，R0-W1b 修订）**：step 6c 原「否则可自主执行推荐项并在完成后再次推荐」分支按 DEC-143 废止——任务完成后的推荐统一按「自动推荐 + 用户确认」呈现（选项含推荐候选与「自主执行推荐项」，由用户确认或改选，而非 agent 默认自主执行）；「当且仅当推荐项涉及关键决策（M5.3）时强制 AskUserQuestion」的既有规则不变。step 6 另补一句「推荐为空 → 呈现结构化空原因（禁止机械枚举）」（注入面已先行，出处状态见 §6.2 注）。
+
    **FIX-224 确定性触发器（M5.1b 风格——不依赖 Coordinator 自觉）**：
      当 Coordinator 收到 Reviewer 的审查结论时，MUST 检测以下触发条件并执行对应动作，不得跳过：
      - **T1（NEEDS_CHANGE 触发复审）**：审查结论含 `NEEDS_CHANGE`（含变体 `NEEDS_CHANGES`）且 round < 3 → **MUST** 立即 spawn 同一 Reviewer 复审（round+1），注入前轮 review 报告路径。不得在此处输出任何”是否需要复审”的问句——复审是强制的，不是可选的。
@@ -551,8 +553,8 @@ Agent 从项目 profile 推断模式。用户可随时通过说"仅在关键决�
    - 如果多个独立变更 → 拆分为独立 commit，每 commit 对应单个 task
 6. **继续（FIX-223 增强版）** — 任务完成后 MUST 执行下一步推荐流程，不得直接结束会话或停止交互：
    - **a. 依赖分析（MUST，FIX-237.5 升级）**：读 plan-tracker 优先级表的 `依赖` 列，识别刚完成任务解除阻塞了哪些后续任务（即依赖中包含刚完成任务 ID 的任务）；**MUST 运行 `task-priority-analysis` 子命令（FIX-226）**获取依赖排序候选——不存在"如果存在"豁免（工具缺失或失败时按 fail-closed 处理并升级，不得跳过分析）。运行后 MUST 将调用快照（命令输出 JSON）记录到 evidence-log（FIX-237.5 证据化）。
-   - **b. 推荐下一步**：从 unblocked 任务 + 当前最高优先级未完成任务中，结合版本依赖链和当前项目阶段，选择最合理的 1~3 个候选下一步。
-   - **c. 呈现给用户**：通过 AskUserQuestion 呈现候选下一步（选项包括推荐项 + "自主执行推荐项" + "暂停"）。当且仅当推荐项涉及关键决策（M5.3）时强制 AskUserQuestion；否则可自主执行推荐项并在完成后再次推荐。
+   - **b. 推荐下一步**：从 unblocked 任务 + 当前最高优先级未完成任务中，结合版本依赖链和当前项目阶段，选择最合理的 1~3 个候选下一步。推荐为空 → MUST 呈现结构化空原因（禁止机械枚举）。
+   - **c. 呈现给用户（DEC-143 交互基线：自动推荐 + 用户确认）**：通过 AskUserQuestion 呈现候选下一步（选项包括推荐项 + "自主执行推荐项" + "暂停"），由用户确认或改选，而非 agent 默认自主执行。当且仅当推荐项涉及关键决策（M5.3）时强制 AskUserQuestion。
    - **d. 不得直接结束**：除非 plan-tracker 中无未完成任务，或用户明确选择"暂停"，否则 MUST NOT 在任务完成后直接结束会话。
 
 **跳过任何步骤 = 协议违规。** Agent **MUST NOT** 在未完成全部 6 个步骤的情况下声明任务"已完成"。

@@ -105,6 +105,12 @@ class DshAdapterTests(unittest.TestCase):
             "software-project-governance",
             "resolve_entry.py",
             "ask_user_question",
+            # FIX-253/REQ-112: the persona must carry the compressed
+            # behavior contract (关键行为契约) unconditionally.
+            "关键行为契约",
+            "复审必达",
+            "完成必推荐",
+            "task-priority-analysis",
             "- id: skill-filesystem",
             "customSkillDirs:",
             "- id: tool-skill",
@@ -340,11 +346,85 @@ class DshAdapterTests(unittest.TestCase):
         text = _BOOTSTRAP_TEMPLATE_PATH.read_text(encoding="utf-8")
         self.assertEqual(text.count("__GOVERNANCE_REPO_ROOT__"), 1)
         self.assertIn("# Governance Bootstrap", text)
-        self.assertIn("@bootstrap-version: 0.74.0", text)
+        # FIX-253 (§6.6.2): dynamic version assertion — read the authority
+        # version from the SKILL frontmatter instead of a hardcoded literal,
+        # so releases no longer need a manual test-literal sync (the FIX-250
+        # sibling drift channel for @bootstrap-version is closed by the
+        # dsh-agents-bootstrap-version projection + this test).
+        if str(_INFRA_DIR) not in sys.path:
+            sys.path.insert(0, str(_INFRA_DIR))
+        from checks.version import extract_skill_version
+
+        version = extract_skill_version(
+            _REPO_ROOT / "skills" / "software-project-governance" / "SKILL.md"
+        )
+        self.assertTrue(version, "SKILL.md frontmatter version is missing")
+        self.assertIn(f"@bootstrap-version: {version}", text)
         self.assertIn("software-project-governance", text)
         self.assertIn("resolve_entry.py", text)
         self.assertIn("ask_user_question", text)
         self.assertIn("subagent", text)
+        self.assertIn("关键行为契约", text)  # FIX-253 anchor (§6.6.2)
+
+    def test_dsh_version_projections_are_satisfied(self):
+        """FIX-253 (§6.6.3): persona/AGENTS version strings track the SKILL frontmatter.
+
+        build_projection_plan validates both new transformed_text projections
+        (dsh-persona-version / dsh-agents-bootstrap-version) hit their pattern
+        exactly once; comparing the planned writes against the current file
+        bytes asserts the projection-achieved state (no drift).
+        """
+        if str(_INFRA_DIR) not in sys.path:
+            sys.path.insert(0, str(_INFRA_DIR))
+        from release.projection import build_projection_plan
+
+        version, plan = build_projection_plan(_REPO_ROOT)
+        planned = {write.relative_path: write.content for write in plan}
+        for relative, marker in (
+            ("adapters/dsh/agent.cordis.yml.template", f"治理工作流（v{version}）"),
+            ("adapters/dsh/AGENTS.md.template", f"@bootstrap-version: {version}"),
+        ):
+            self.assertIn(relative, planned, relative)
+            current = (_REPO_ROOT / relative).read_bytes()
+            self.assertEqual(
+                current.replace(b"\r\n", b"\n"),
+                planned[relative].replace(b"\r\n", b"\n"),
+                f"{relative}: projection drift",
+            )
+            self.assertIn(marker.encode("utf-8"), current, relative)
+
+    def test_injection_contract_check_flags_missing_anchor(self):
+        """FIX-253 (S6 guard): deleting an anchor must FAIL check-injection-contract.
+
+        Copies the three injection surfaces into a temp root, removes one
+        anchor keyword from the persona copy, and asserts the checker reports
+        it (the "manually delete anchor → FAIL" scenario, unit-covered).
+        """
+        if str(_INFRA_DIR) not in sys.path:
+            sys.path.insert(0, str(_INFRA_DIR))
+        import verify_workflow as vw
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            for relative in vw.INJECTION_CONTRACT_ANCHORS:
+                target = root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(_REPO_ROOT / relative, target)
+
+            baseline = vw.check_injection_contract(root)
+            self.assertEqual(baseline["issues"], [])
+            self.assertEqual(baseline["files_checked"], len(vw.INJECTION_CONTRACT_ANCHORS))
+
+            persona = root / "adapters/dsh/agent.cordis.yml.template"
+            persona.write_text(
+                persona.read_text(encoding="utf-8").replace("复审必达", "复审必须达成"),
+                encoding="utf-8",
+            )
+            result = vw.check_injection_contract(root)
+            self.assertTrue(
+                any("复审必达" in issue for issue in result["issues"]),
+                result["issues"],
+            )
 
     def test_preset_metadata_contract(self):
         text = _PRESET_METADATA_PATH.read_text(encoding="utf-8")

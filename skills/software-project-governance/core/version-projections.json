@@ -21,6 +21,8 @@
     {"id": "hook-pre-commit", "kind": "transformed_text", "target": "skills/software-project-governance/infra/hooks/pre-commit", "pattern": "(?m)^# @version: [0-9]+\\.[0-9]+\\.[0-9]+$", "replacement": "# @version: {version}", "count": 1},
     {"id": "hook-commit-msg", "kind": "transformed_text", "target": "skills/software-project-governance/infra/hooks/commit-msg", "pattern": "(?m)^# @version: [0-9]+\\.[0-9]+\\.[0-9]+$", "replacement": "# @version: {version}", "count": 1},
     {"id": "hook-post-commit", "kind": "transformed_text", "target": "skills/software-project-governance/infra/hooks/post-commit", "pattern": "(?m)^# @version: [0-9]+\\.[0-9]+\\.[0-9]+$", "replacement": "# @version: {version}", "count": 1},
-    {"id": "hook-prepare-commit-msg", "kind": "transformed_text", "target": "skills/software-project-governance/infra/hooks/prepare-commit-msg", "pattern": "(?m)^# @version: [0-9]+\\.[0-9]+\\.[0-9]+$", "replacement": "# @version: {version}", "count": 1}
+    {"id": "hook-prepare-commit-msg", "kind": "transformed_text", "target": "skills/software-project-governance/infra/hooks/prepare-commit-msg", "pattern": "(?m)^# @version: [0-9]+\\.[0-9]+\\.[0-9]+$", "replacement": "# @version: {version}", "count": 1},
+    {"id": "dsh-persona-version", "kind": "transformed_text", "target": "adapters/dsh/agent.cordis.yml.template", "pattern": "治理工作流（v[0-9]+\\.[0-9]+\\.[0-9]+）", "replacement": "治理工作流（v{version}）", "count": 1},
+    {"id": "dsh-agents-bootstrap-version", "kind": "transformed_text", "target": "adapters/dsh/AGENTS.md.template", "pattern": "(?m)^> @bootstrap-version: [0-9]+\\.[0-9]+\\.[0-9]+$", "replacement": "> @bootstrap-version: {version}", "count": 1}
   ]
 }

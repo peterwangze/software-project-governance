@@ -6507,6 +6507,28 @@ PROJECTION_SYNC_PATTERNS = (
     "agents/*.md",
 )
 
+# FIX-253 / REQ-112 (design §6.5): injection-contract anchor registry.
+# Existence-only anchors over the deterministic injection surfaces — the
+# compressed R1/R2/R3 behavior contract must be carried by the DSH persona
+# template, the entry SKILL, and the DSH thin pointer without any on-demand
+# read. Deliberately asserted as keyword presence, never full-text equality
+# (design §4 principle 3: prose-equality checks are brittle). Placement note
+# (design §6.5 R0-S4): this literal lives FAR away from the REQUIRED_SNIPPETS
+# block and its "# ── Manifest" anchor line so checks/version.py L58 regex
+# (`REQUIRED_SNIPPETS\s*=\s*\{(?P<body>.*?)\n\}\n{2,}# ── Manifest`) keeps
+# matching — do not move it into that region.
+INJECTION_CONTRACT_ANCHORS = {
+    "adapters/dsh/agent.cordis.yml.template": [
+        "关键行为契约", "复审必达", "NEEDS_CHANGE", "完成必推荐",
+        "task-priority-analysis", "选项必带依据",
+    ],
+    "skills/software-project-governance/SKILL.md": [
+        "关键行为契约", "复审必达", "完成必推荐",
+        "task-priority-analysis", "选项必带依据",
+    ],
+    "adapters/dsh/AGENTS.md.template": ["关键行为契约"],
+}
+
 
 def _extract_skill_version(path):
     if not path.is_file():
@@ -6600,6 +6622,35 @@ def check_projection_sync(root=None, target_dir=None, patterns=None):
         Path(target_dir) if target_dir is not None else None,
         patterns,
     )
+
+
+def check_injection_contract(root=None):
+    """FIX-253 / REQ-112 (design §6.5): injection-surface anchor existence check.
+
+    Asserts that each deterministic injection surface (DSH persona template /
+    entry SKILL / DSH thin pointer) carries its anchor keyword set from
+    INJECTION_CONTRACT_ANCHORS. Boundary (design §6.5): existence only —
+    never full-text equality, and no behavior detection (that boundary stays
+    with REQ-107/108/113 per DEC-143).
+    """
+    root = Path(root) if root is not None else ROOT
+    issues = []
+    files_checked = 0
+    for relative, anchors in sorted(INJECTION_CONTRACT_ANCHORS.items()):
+        path = root / relative
+        if not path.is_file():
+            issues.append(f"{relative}: injection-surface file missing")
+            continue
+        files_checked += 1
+        text = path.read_text(encoding="utf-8")
+        for anchor in anchors:
+            if anchor not in text:
+                issues.append(f"{relative}: anchor missing: {anchor}")
+    return {
+        "issues": issues,
+        "files_checked": files_checked,
+        "anchors_checked": sum(len(v) for v in INJECTION_CONTRACT_ANCHORS.values()),
+    }
 
 
 
@@ -14231,6 +14282,23 @@ def cmd_check_governance(args):
               "intake enforcement OK.")
     print("└──────────────────────────────────────────────────────┘")
 
+    # ── 33. Injection Contract Anchors (FIX-253 / REQ-112) ──
+    # Existence-only anchor check over the deterministic injection surfaces
+    # (DSH persona template / entry SKILL / DSH thin pointer). Never asserts
+    # full-text equality; never performs behavior detection (DEC-143 boundary
+    # stays with REQ-107/108/113).
+    print("\n┌─ Check 33: Injection Contract (FIX-253/REQ-112) ────┐")
+    ic33 = check_injection_contract()
+    print(f"│  Files checked: {ic33['files_checked']}; anchors: {ic33['anchors_checked']}")
+    if ic33["issues"]:
+        all_issues += len(ic33["issues"])
+        print(f"│  [FAIL] {len(ic33['issues'])} injection-contract issue(s):")
+        for issue in ic33["issues"]:
+            print(f"│    - {issue}")
+    else:
+        print("│  [PASS] persona/SKILL/AGENTS injection surfaces carry the contract anchors.")
+    print("└──────────────────────────────────────────────────────┘")
+
     # ── Summary ──
     print(f"\n┌─ Governance Health Summary ──────────────────────────┐")
     if all_issues == 0:
@@ -18627,6 +18695,28 @@ def cmd_check_projection_sync(args):
     print()
 
 
+def cmd_check_injection_contract(args):
+    """Run the injection-surface anchor check independently (FIX-253/REQ-112)."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    result = check_injection_contract()
+    print("\n=== Injection Contract Check (FIX-253/REQ-112) ===")
+    print(f"  Files checked: {result['files_checked']}; anchors: {result['anchors_checked']}")
+    if result["issues"]:
+        print(f"\n  Result: FAILED — {len(result['issues'])} issue(s)")
+        for issue in result["issues"][:20]:
+            print(f"    - {issue}")
+        if len(result["issues"]) > 20:
+            print(f"    ... and {len(result['issues']) - 20} more")
+        if getattr(args, "fail_on_issues", False):
+            sys.exit(1)
+    else:
+        print("\n  Result: PASSED — injection surfaces carry the behavior-contract anchors")
+    print()
+
+
 def cmd_release_ledger(args):
     """Validate declarative per-version release manifests and live Git facts."""
     result = validate_release_ledger(
@@ -20315,6 +20405,14 @@ def main(argv=None):
     cps_p.add_argument("--fail-on-issues", action="store_true",
                        help="Exit with non-zero code if projection drift is found")
 
+    # check-injection-contract (FIX-253 / REQ-112)
+    cic_p = subparsers.add_parser(
+        "check-injection-contract",
+        help="Check injection-surface anchor presence (persona/SKILL/AGENTS contract)",
+    )
+    cic_p.add_argument("--fail-on-issues", action="store_true",
+                       help="Exit with non-zero code if injection-contract anchors are missing")
+
     # check-hot-fact-source (FIX-087)
     chfs_p = subparsers.add_parser(
         "check-hot-fact-source",
@@ -20780,6 +20878,7 @@ def main(argv=None):
         "check-review-debt": cmd_check_review_debt,
         "check-version-consistency": cmd_check_version_consistency,
         "check-projection-sync": cmd_check_projection_sync,
+        "check-injection-contract": cmd_check_injection_contract,
         "check-hot-fact-source": cmd_check_hot_fact_source,
         "check-runtime-readiness-matrix": cmd_check_runtime_readiness_matrix,
         "check-first-session-measurement": cmd_check_first_session_measurement,

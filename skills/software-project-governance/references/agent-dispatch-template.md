@@ -46,6 +46,21 @@ Agent 返回结果后，Coordinator **MUST** 立即：
 2. 从 `file_locks` 中移除该 task 持有的所有文件锁条目
 3. 保存 `agent-locks.json`
 
+## 审查结论持久化（Coordinator — Reviewer 返回结论后 MUST 执行）
+
+Reviewer sub-agent 返回审查结论后，Coordinator **MUST** 先通过机器路径持久化结论再进入后续触发器判定（FIX-260/REQ-107，behavior-protocol.md M7.4 step 4.6 C8）：
+
+```
+python skills/software-project-governance/infra/verify_workflow.py review-record \
+  --task {task_id} --round {n} \
+  --result {APPROVED|APPROVED_WITH_NOTES|NEEDS_CHANGE|BLOCKED} \
+  --report {reviewer报告路径} --reviewer {reviewer角色}
+```
+
+- `review-{task}-R{n}.md` 文件与 evidence 行由 CLI 机器写入（唯一路径）；NEEDS_CHANGE 时 CLI 自动产出 `next_round`/`prev_report` 复审义务字段（跨会话可从证据直接推导待复审项）
+- 禁止手写 `REVIEW-{id}` 证据行替代（M1.2 快速通道对 REVIEW 行已收窄）；Check 30c 对无机器来源标记的 REVIEW 记录与缺 `next_round` 的 NEEDS_CHANGE 记录 WARN（渐进 FAIL，ADR-017 R1 N1）
+- CLI 失败 → fail-closed：修复环境后重试，不得降级为手写
+
 ## 执行流程
 
 1. 加载角色定义和任务规范

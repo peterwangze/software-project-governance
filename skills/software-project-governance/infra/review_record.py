@@ -20,6 +20,12 @@ Behavior contract (ADR-017 §3.4):
   - **复审必达**: a NEEDS_CHANGE record carries the structured revisit fields
     ``next_round=REVIEW-{id}-R{n+1}`` + ``prev_report`` so Check 30 V6 and the
     Coordinator can verify / spawn the R+1 revisit.
+  - **审查结论必机录 (FIX-260 / REQ-107)**: calling this CLI is a MUST for
+    every Reviewer conclusion (behavior-protocol.md M7.4 step 4.6 C8; the
+    M1.2 fast lane no longer exempts handwritten REVIEW rows). Check 30c
+    (``check_review_machine_provenance``) WARNs on REVIEW rows/files dated
+    on/after 2026-08-22 that lack the machine markers emitted here — the
+    gradual-FAIL escalation path is registered in the FIX-260 decision log.
   - **loop_exit → next-unit bridge**: when the wiring outcome is ``exit``,
     :func:`loop_exit_bridge.refresh_candidates` is invoked best-effort so the
     next-unit candidate snapshot stays fresh (FIX-236.3 consumer).

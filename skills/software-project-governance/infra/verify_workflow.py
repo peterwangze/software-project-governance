@@ -1177,6 +1177,10 @@ from checks.review_domain import (  # noqa: E402
     check_review_closure,
     _task_routing_exempt,
     _collect_live_review_sequences,
+    REQ107_MACHINE_PROVENANCE_DATE,
+    REVIEW_MACHINE_ROW_MARKER,
+    REVIEW_MACHINE_FILE_MARKER,
+    check_review_machine_provenance,
     check_loop_wiring_call_sites,
     check_m5_compliance,
     cmd_check_review_debt,
@@ -6521,6 +6525,9 @@ INJECTION_CONTRACT_ANCHORS = {
     "adapters/dsh/agent.cordis.yml.template": [
         "关键行为契约", "复审必达", "NEEDS_CHANGE", "完成必推荐",
         "task-priority-analysis", "选项必带依据",
+        # FIX-260 / REQ-107: 4th contract line — review conclusions MUST be
+        # persisted through the review-record CLI machine path.
+        "审查结论必机录", "review-record",
     ],
     "skills/software-project-governance/SKILL.md": [
         "关键行为契约", "复审必达", "完成必推荐",
@@ -14220,6 +14227,35 @@ def cmd_check_governance(args):
             print(f"│    - [{w['rule']}] {w.get('task_id','')}: {w['reason']}")
     else:
         print(f"│  [{rc30['verdict']}] {rc30['reason']}")
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 30c. Review Machine Provenance (FIX-260 / REQ-107, ADR-017 R1 N1) ──
+    # V7: REVIEW rows / review files without the review-record CLI machine
+    # marker → WARN (gradual: escalation to FAIL registered in the FIX-260
+    # decision-log entry). V8: NEEDS_CHANGE records without the machine
+    # next_round revisit field → WARN. Legacy (pre-effective-date) and
+    # undated records are exempt. WARN does not increment all_issues.
+    print("\n┌─ Check 30c: Review Machine Provenance (FIX-260) ────┐")
+    mp30c = check_review_machine_provenance()
+    print(f"│  Rows judged: {mp30c['stats']['rows_judged']} "
+          f"(machine {mp30c['stats']['rows_machine']}, "
+          f"undated {mp30c['stats']['rows_undated']}); "
+          f"files judged: {mp30c['stats']['files_judged']} "
+          f"(legacy {mp30c['stats']['files_legacy_skipped']}, "
+          f"undated {mp30c['stats']['files_undated']}, "
+          f"unmatched {mp30c['stats']['files_unmatched']})")
+    print(f"│  Verdict: {mp30c['verdict']}")
+    if mp30c["warnings"]:
+        shown = mp30c["warnings"][:8]
+        print(f"│  [WARN] {len(mp30c['warnings'])} machine-provenance/revisit-field WARN(s)"
+              f" (showing first {len(shown)}):")
+        for w in shown:
+            print(f"│    - [{w['rule']}] {w.get('task_id','')}: {w['reason']}")
+        if len(mp30c["warnings"]) > 8:
+            print(f"│    ... and {len(mp30c['warnings']) - 8} more")
+        print("│  (gradual severity — WARN in 0.75.x; escalation path registered)")
+    else:
+        print(f"│  [{mp30c['verdict']}] {mp30c['reason']}")
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 30b. Loop wiring call sites (FIX-236.4 / ADR-017 §3.4 P1-1) ──

@@ -2218,6 +2218,252 @@ def _collect_live_review_sequences():
     return sequences, completed
 
 
+# FIX-260 / REQ-107 (ADR-017 R1 finding N1, realized): Check 30c — machine
+# provenance + revisit-field assertions over REVIEW evidence rows and
+# review-*.md files.
+#
+# Effective date: records dated BEFORE this are legacy (all 0.74.x-and-earlier
+# handwritten REVIEW rows/files are pre-rule residue, same judgment pattern as
+# FIX173_NAMING_NORMALIZATION_DATE / FIX174_NORMALIZATION_DATE) and are never
+# judged. Records without a parseable date are not judged (V6d pattern: no
+# false positive on an unknown date).
+REQ107_MACHINE_PROVENANCE_DATE = date(2026, 8, 22)
+
+# Machine-source markers — the exact fixed strings review_record.py emits
+# (_evidence_row description, L241) and the review-file first line (L204).
+# A handwritten row/file can of course copy the marker text; distinguishing
+# that requires an unforgeable side record (change-triage style JSON) and is
+# registered as the escalation path in the FIX-260 decision-log entry.
+REVIEW_MACHINE_ROW_MARKER = "review-record CLI 机器写入"
+REVIEW_MACHINE_FILE_MARKER = "machine-written by review-record"
+REVIEW_NEXT_ROUND_FIELD_RE = re.compile(r"next_round:\s*REVIEW-")
+_REVIEW_FILE_NAME_RE = re.compile(
+    r"^review-([A-Z]+-\d+)(?:-R(\d+))?\.md$", re.IGNORECASE)
+_REVIEW_ROW_ID_FINDITER_RE = re.compile(r"REVIEW-[A-Z]+-\d+(?:-R\d+)?")
+REVIEW_FILE_DATE_RE = re.compile(r"^- date: (\d{4}-\d{2}-\d{2})\s*$", re.MULTILINE)
+
+
+def check_review_machine_provenance(review_rows=None, review_files=None):
+    """FIX-260 / REQ-107: Check 30c — review-record machine-path assertions.
+
+    V7 (machine provenance): a REVIEW evidence row dated on/after
+    ``REQ107_MACHINE_PROVENANCE_DATE`` that lacks the review-record CLI row
+    marker, or a CLI-format ``review-{task}-R{n}.md`` file dated on/after the
+    effective date without the machine-written first line → WARN. Gradual
+    severity: WARN-only as of 0.75.x (ADR-017 R1 N1); escalation to FAIL is
+    registered in the FIX-260 decision-log entry.
+
+    V8 (revisit-field contract): a NEEDS_CHANGE record dated on/after the
+    effective date whose corresponding review file lacks the machine
+    ``next_round: REVIEW-...`` field — or has no file at all → WARN. This
+    makes the 复审必达 obligation derivable from evidence across sessions
+    (REQ-107 acceptance signal 2).
+
+    Args:
+      review_rows: list of raw evidence-log row strings (fixture path). When
+        None, the live evidence-log is scanned.
+      review_files: dict {filename: content} (fixture path). When None, the
+        live ``.governance/review-*.md`` files are scanned.
+
+    Returns dict: {verdict ∈ {"PASS", "WARN", "no-verdict"}, reason, warnings,
+    stats}. Never raises. WARN never escalates to a Check-level FAIL here —
+    that is the registered gradual path, not this release.
+    """
+    _resolve_shared()
+    result = {
+        "verdict": "no-verdict",
+        "reason": "",
+        "warnings": [],
+        "stats": {
+            "rows_scanned": 0, "rows_judged": 0, "rows_undated": 0,
+            "rows_machine": 0,
+            "files_scanned": 0, "files_judged": 0, "files_undated": 0,
+            "files_legacy_skipped": 0, "files_unmatched": 0,
+        },
+    }
+    warnings = result["warnings"]
+    stats = result["stats"]
+
+    # ── Collect rows (fixture or live) ──────────────────────────────────
+    rows = review_rows
+    if rows is None:
+        rows = []
+        if EVIDENCE_PATH.is_file():
+            try:
+                content = EVIDENCE_PATH.read_text(encoding="utf-8")
+            except (IOError, OSError):
+                content = ""
+            rows = [ln for ln in content.split("\n") if ln.strip().startswith("|")]
+
+    # ── Collect files (fixture or live) ─────────────────────────────────
+    files = review_files
+    if files is None:
+        files = {}
+        if GOVERNANCE_DIR.is_dir():
+            for rf in sorted(GOVERNANCE_DIR.glob("review-*.md")):
+                try:
+                    files[rf.name] = rf.read_text(encoding="utf-8")
+                except (IOError, OSError):
+                    continue
+
+    def _file_date(text):
+        m = REVIEW_FILE_DATE_RE.search(text or "")
+        if not m:
+            return None
+        try:
+            return date.fromisoformat(m.group(1))
+        except ValueError:
+            return None
+
+    def _lookup_review_file(task_id, round_n):
+        """Find the machine-format review file content for task+round."""
+        candidates = []
+        if round_n and round_n > 0:
+            candidates.append("review-{0}-R{1}.md".format(task_id, round_n))
+        else:
+            candidates.append("review-{0}-R0.md".format(task_id))
+            candidates.append("review-{0}.md".format(task_id))
+        for name in candidates:
+            if name in files:
+                return name, files[name]
+        # Case-insensitive fallback (file names may vary by case).
+        lowered = {k.lower(): (k, v) for k, v in files.items()}
+        for name in candidates:
+            hit = lowered.get(name.lower())
+            if hit:
+                return hit
+        return None, None
+
+    # ── V7/V8 over files ────────────────────────────────────────────────
+    for name in sorted(files):
+        text = files[name] or ""
+        stats["files_scanned"] += 1
+        if _LEGACY_REVIEW_FILE_RE.match(name):
+            stats["files_legacy_skipped"] += 1
+            continue
+        m = _REVIEW_FILE_NAME_RE.match(name)
+        if not m:
+            # ROLE-token or other handwritten naming — covered by the row-level
+            # V7 scan when an evidence row exists; counted, not judged.
+            stats["files_unmatched"] += 1
+            continue
+        task_id, round_n = m.group(1), int(m.group(2) or 0)
+        fdate = _file_date(text)
+        if fdate is None:
+            stats["files_undated"] += 1
+            continue
+        if fdate < REQ107_MACHINE_PROVENANCE_DATE:
+            continue
+        stats["files_judged"] += 1
+        if REVIEW_MACHINE_FILE_MARKER not in text:
+            warnings.append({
+                "rule": "V7",
+                "task_id": task_id,
+                "reason": "review file {0} lacks the machine-source marker "
+                          "'{1}' (handwritten; MUST persist via "
+                          "`verify_workflow.py review-record`, M7.4 step 4.6 "
+                          "C8)".format(name, REVIEW_MACHINE_FILE_MARKER),
+            })
+        conclusion = _extract_review_conclusion_from_text(text)
+        if conclusion == "NEEDS_CHANGE" and not REVIEW_NEXT_ROUND_FIELD_RE.search(text):
+            warnings.append({
+                "rule": "V8",
+                "task_id": task_id,
+                "reason": "R{0}=NEEDS_CHANGE without the machine next_round "
+                          "revisit field — the 复审必达 obligation is not "
+                          "machine-derivable (expected "
+                          "next_round: REVIEW-{1}-R{2})".format(
+                              round_n, task_id, round_n + 1),
+            })
+
+    # ── V7/V8 over evidence rows ────────────────────────────────────────
+    for raw in rows:
+        stripped = str(raw or "").strip()
+        if not stripped.startswith("|"):
+            continue
+        ids = _REVIEW_ROW_ID_FINDITER_RE.findall(stripped)
+        if not ids:
+            continue
+        stats["rows_scanned"] += 1
+        parts = [p.strip() for p in stripped.split("|")]
+        row_date = None
+        for part in parts[3:]:
+            m_date = re.match(r"^(\d{4}-\d{2}-\d{2})$", part)
+            if m_date:
+                try:
+                    row_date = date.fromisoformat(m_date.group(1))
+                except ValueError:
+                    row_date = None
+                break
+        if row_date is None:
+            stats["rows_undated"] += 1
+            continue
+        if row_date < REQ107_MACHINE_PROVENANCE_DATE:
+            continue
+        stats["rows_judged"] += 1
+        is_machine = REVIEW_MACHINE_ROW_MARKER in stripped
+        if is_machine:
+            stats["rows_machine"] += 1
+        conclusion = ""
+        for part in parts[3:]:
+            conclusion = _normalize_review_conclusion(part)
+            if conclusion:
+                break
+        for cid in ids:
+            m_id = re.match(r"^REVIEW-([A-Z]+-\d+)(?:-R(\d+))?$", cid)
+            if not m_id:
+                continue
+            task_id, round_n = m_id.group(1), int(m_id.group(2) or 0)
+            if not is_machine:
+                warnings.append({
+                    "rule": "V7",
+                    "task_id": task_id,
+                    "reason": "REVIEW evidence row {0} lacks the machine-source "
+                              "marker '{1}' (handwritten; MUST persist via "
+                              "`verify_workflow.py review-record`, M7.4 step "
+                              "4.6 C8)".format(cid, REVIEW_MACHINE_ROW_MARKER),
+                })
+            if conclusion == "NEEDS_CHANGE":
+                fname, ftext = _lookup_review_file(task_id, round_n)
+                if ftext is None or not REVIEW_NEXT_ROUND_FIELD_RE.search(ftext):
+                    warnings.append({
+                        "rule": "V8",
+                        "task_id": task_id,
+                        "reason": "R{0}=NEEDS_CHANGE row without a machine "
+                                  "next_round revisit field ({1}) — the 复审必达 "
+                                  "obligation is not machine-derivable".format(
+                                      round_n,
+                                      "no machine review file"
+                                      if ftext is None
+                                      else "file {0} lacks the field".format(fname)),
+                    })
+
+    judged = stats["rows_judged"] + stats["files_judged"]
+    if warnings:
+        result["verdict"] = "WARN"
+        result["reason"] = (
+            "{0} machine-provenance/revisit-field WARN(s) — gradual severity "
+            "(WARN in 0.75.x, escalation to FAIL registered in the FIX-260 "
+            "decision-log entry; ADR-017 R1 N1)".format(len(warnings))
+        )
+    elif judged == 0:
+        result["verdict"] = "no-verdict"
+        result["reason"] = (
+            "no REVIEW record dated on/after {0} — Check 30c has nothing to "
+            "judge (legacy/undated records are exempt)".format(
+                REQ107_MACHINE_PROVENANCE_DATE.isoformat())
+        )
+    else:
+        result["verdict"] = "PASS"
+        result["reason"] = (
+            "{0} row(s)/{1} file(s) dated on/after {2} all carry the "
+            "review-record machine provenance".format(
+                stats["rows_judged"], stats["files_judged"],
+                REQ107_MACHINE_PROVENANCE_DATE.isoformat())
+        )
+    return result
+
+
 def check_loop_wiring_call_sites(roots=None):
     """FIX-236.4 / ADR-017 §3.4 (P1-1): enumerate process_gate_result call sites.
 

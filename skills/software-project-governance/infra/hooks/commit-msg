@@ -52,9 +52,20 @@ has_approved_review_evidence() {
     local evidence_file="$REPO_ROOT/.governance/evidence-log.md"
     [ -f "$evidence_file" ] || return 1
 
+    # FIX-261: two accepted pass forms (POSIX ERE alternation branches):
+    #   (a) legacy end-column — the APPROVED-family token is the LAST column
+    #       (handwritten row convention; unchanged, backward compatible);
+    #   (b) review-record machine row — 11-column row ending
+    #       "| APPROVED_WITH_NOTES | unresolved_blockers=0 |"
+    #       (infra/review_record.py _evidence_row; FIX-193 four-state: only
+    #       APPROVED_WITH_NOTES carries the structured blockers tail, and it
+    #       must be exactly 0. NEEDS_CHANGE/BLOCKED match neither branch.)
+    local row_prefix="^\|[[:space:]]*REVIEW-[^|]*$task_id[^|]*\|[[:space:]]*$task_id[[:space:]]*\|.*"
+    local tail_legacy="\|[[:space:]]*(APPROVED_WITH_NOTES|APPROVED|通过|批准)[[:space:]]*\|[[:space:]]*$"
+    local tail_machine="\|[[:space:]]*APPROVED_WITH_NOTES[[:space:]]*\|[[:space:]]*unresolved_blockers=0[[:space:]]*\|[[:space:]]*$"
     # LC_ALL=C: multibyte locale (e.g. LC_CTYPE=C.UTF-8) 下 4 字节 UTF-8/emoji 会使
     # [^|]*/.* 字符类遍历失败导致假阴性；LC_ALL=C 强制字节模式，结果 locale 无关（FIX-239）。
-    LC_ALL=C grep -Eq "^\|[[:space:]]*REVIEW-[^|]*$task_id[^|]*\|[[:space:]]*$task_id[[:space:]]*\|.*\|[[:space:]]*(APPROVED_WITH_NOTES|APPROVED|通过|批准)[[:space:]]*\|[[:space:]]*$" "$evidence_file" 2>/dev/null
+    LC_ALL=C grep -Eq "${row_prefix}(${tail_legacy}|${tail_machine})" "$evidence_file" 2>/dev/null
 }
 
 resolve_spg_home_candidate() {

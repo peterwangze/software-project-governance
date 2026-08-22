@@ -190,6 +190,11 @@ class EmptyRecommendationFallbackTests(unittest.TestCase):
         report = bridge.build_candidates("D:/no/such/dir/plan-tracker.md", [])
         self.assertIn("parse_error", report)
         self.assertEqual(report["recommended_top_n"], [])
+        # FIX-258 / F-1 companion key-existence assertions: both nullable
+        # fallback keys must be PRESENT on the parse-error path (the R0 gap
+        # was a missing "empty_reason" key here; assertIn pins the full key
+        # set so a future return-path edit cannot drop a key silently).
+        self.assertIn("recommended_fallback", report)
         self.assertIsNone(report["recommended_fallback"])
         self.assertIn("empty_reason", report)
         self.assertIsNone(report["empty_reason"])

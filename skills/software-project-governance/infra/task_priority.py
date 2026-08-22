@@ -446,6 +446,16 @@ class UnblockRecommendation:
     tasks — value = downstream count, tie-broken by the root's priority,
     target version, then ID (deterministic).
 
+    Approximation note (declared semantics, FIX-258 / R0 F-3): a multi-node
+    cycle entered from DIFFERENT members splits downstream attribution per
+    member — X↔Y with D1 entering via X and D2 via Y attributes each member
+    root with itself + its own entrants, so ``downstream_count`` undercounts
+    a multi-entry cycle's true unlock scope (all members plus all
+    entrants). The pick is still a genuine cycle member and the action
+    guidance ("resolve the cycle") is correct; only the advisory count is
+    per-node approximate. Single-entry chains and non-cycle roots attribute
+    exactly (set-deduped per origin).
+
     Attributes:
         root_task_id: the chain head to unlock — either an in-table task ID
             or an unknown task-family ID (a dependency with no row).
@@ -993,9 +1003,22 @@ _ROOT_KIND_CYCLE = "cycle"
 # single-digit deep; this only bounds recursion on adversarial input).
 _MAX_ROOT_WALK_DEPTH = 200
 
+# F-2 (FIX-258 / R0): total per-walk visit budget. The depth cap above
+# bounds the recursion STACK; this bounds the total WORK — a dense diamond
+# lattice has an exponential number of simple paths, so without a budget an
+# adversarial plan-tracker could hang the walk. Deliberately NOT a memo: a
+# visited-set memo would change cycle-vs-root classification semantics (the
+# same node reached via different branches classifies differently depending
+# on the path taken). On exhaustion the over-budget node is classified as a
+# cycle-style root and the walk stops descending; the recommendation reason
+# carries an observable truncation note. 10_000 is far above real governance
+# chain depth (single digits) and far below a 15-layer binary lattice's
+# ~65k visits.
+_MAX_ROOT_WALK_VISITS = 10_000
+
 
 def _walk_blocker_roots(origin_id: str, blocked_map: dict, task_index: dict,
-                        roots: dict) -> None:
+                        roots: dict) -> bool:
     """Attribute one blocked task to the ROOT blockers of its chain (FIX-254).
 
     Starting from ``origin_id``'s blocking dependencies, walk each in-table
@@ -1016,6 +1039,13 @@ def _walk_blocker_roots(origin_id: str, blocked_map: dict, task_index: dict,
     being misread as cycles; only a TRUE back-edge (a repeat on the SAME
     branch) classifies as a cycle. Depth-capped for termination.
 
+    Per-walk visit budget (FIX-258 / R0 F-2): total ``_visit`` calls are
+    counted; past ``_MAX_ROOT_WALK_VISITS`` the over-budget node is
+    classified as a cycle-style root and the walk stops descending. This
+    bounds the exponential simple-path blow-up of dense diamond lattices
+    without a memo (a memo would change cycle-vs-root classification
+    semantics — see the constant's comment).
+
     Args:
         origin_id: the blocked task ID whose chain is walked.
         blocked_map: ``{task_id: (blocking_dependency_ids, ...)}`` for every
@@ -1023,10 +1053,28 @@ def _walk_blocker_roots(origin_id: str, blocked_map: dict, task_index: dict,
         task_index: ``{task_id: TaskDep}`` for every non-completed in-table
             task (blocked + non-executable members).
         roots: accumulator mutated in place — ``{(root_id, kind): set(origin)}``.
+
+    Returns:
+        True when this origin's walk exhausted the visit budget (the caller
+        annotates the recommendation reason with a truncation note); False
+        when the walk completed within budget.
     """
 
+    visits = 0
+    budget_exhausted = False
+
     def _visit(dep: str, path: set, depth: int) -> None:
+        nonlocal visits, budget_exhausted
+        visits += 1
         if dep in path or depth > _MAX_ROOT_WALK_DEPTH:
+            roots.setdefault((dep, _ROOT_KIND_CYCLE), set()).add(origin_id)
+            return
+        if visits > _MAX_ROOT_WALK_VISITS:
+            # F-2 (FIX-258): total-visit budget exhausted — classify as a
+            # cycle-style root and stop descending (defensive termination on
+            # adversarial input; real governance chains are single-digit
+            # deep and never reach this branch).
+            budget_exhausted = True
             roots.setdefault((dep, _ROOT_KIND_CYCLE), set()).add(origin_id)
             return
         blocker = task_index.get(dep)
@@ -1050,6 +1098,7 @@ def _walk_blocker_roots(origin_id: str, blocked_map: dict, task_index: dict,
 
     for d in blocked_map.get(origin_id, ()):
         _visit(d, {origin_id}, 0)
+    return budget_exhausted
 
 
 def _unblock_reason(root_id: str, kind: str, root_task) -> str:
@@ -1073,64 +1122,94 @@ def _unblock_reason(root_id: str, kind: str, root_task) -> str:
     )
 
 
-def _build_empty_recommendation_fallback(blocked: list, non_executable: list,
-                                         completed: list, total: int) -> tuple:
-    """Build the REQ-110 / FIX-254 fallback for an empty ``recommended_next``.
+def _pick_unblock_recommendation(roots: dict, task_index: dict,
+                                 dep_index: dict, truncated: bool = False):
+    """Pick the highest-value unblock recommendation from walk roots (F-9).
 
-    Returns ``(unblock_recommendation, empty_reason)``:
+    Value = downstream blocked-task count, tie-broken by root priority →
+    target version → ID (a deterministic total order — a root_id holds at
+    most one kind, so the sort key never ties across kinds for the same ID).
 
-      - ``unblock_recommendation`` — :class:`UnblockRecommendation` for the
-        head of the highest-value blocked chain (value = downstream blocked
-        task count, tie-broken by root priority → version → ID), or None when
-        no task is dependency-blocked (no chain to unlock).
-      - ``empty_reason`` — structured dict with kind ``all_blocked`` /
-        ``all_non_executable`` / ``no_active_tasks`` + counts + message +
-        ``nearest_action`` (最近可行动作). Always non-None on this path.
+    Args:
+        roots: ``{(root_id, kind): set(origin_ids)}`` accumulated by
+            :func:`_walk_blocker_roots`.
+        task_index: ``{task_id: TaskDep}`` for every non-completed in-table
+            task (blocked + non-executable members).
+        dep_index: ``{task_id: BlockedTask}`` for every blocked task.
+        truncated: True when any origin's walk exhausted the per-walk visit
+            budget (FIX-258 / R0 F-2) — appends an observable truncation
+            note to the recommendation reason.
 
-    A bare empty recommendation is forbidden (AUDIT-143 data-layer root
-    cause): the caller gets either a chain recommendation, a structured
-    reason, or both.
+    Returns:
+        :class:`UnblockRecommendation` for the winning root, or None when
+        ``roots`` is empty (no chain to unlock).
     """
-    blocked_map = {bt.task.task_id: tuple(bt.blocking_dependencies) for bt in blocked}
-    task_index: dict = {t.task_id: t for t in non_executable}
-    for bt in blocked:
-        task_index[bt.task.task_id] = bt.task
+    if not roots:
+        return None
 
-    roots: dict = {}
-    for bt in blocked:
-        _walk_blocker_roots(bt.task.task_id, blocked_map, task_index, roots)
-
-    recommendation = None
-    if roots:
-        dep_index = {bt.task.task_id: bt for bt in blocked}
-
-        def _root_key(item: tuple) -> tuple:
-            (root_id, _kind), downstream = item
-            root_task = task_index.get(root_id)
-            if root_task is None:
-                return (-len(downstream), _NO_PRIORITY_SENTINEL,
-                        (float("inf"), 0, 0), root_id)
-            return (-len(downstream), root_task.priority,
-                    _version_tuple(root_task.target_version), root_id)
-
-        (root_id, kind), downstream_ids = min(roots.items(), key=_root_key)
+    def _root_key(item: tuple) -> tuple:
+        (root_id, _kind), downstream = item
         root_task = task_index.get(root_id)
-        ordered = tuple(sorted(
-            downstream_ids,
-            key=lambda tid: _priority_sort_key(dep_index[tid].task)),
-        ) if downstream_ids else ()
-        recommendation = UnblockRecommendation(
-            root_task_id=root_id,
-            root_kind=kind,
-            root_priority=(root_task.priority if root_task is not None
-                           else _NO_PRIORITY_SENTINEL),
-            root_status=(_clean_status_for_display(root_task.status)
-                         if root_task is not None else ""),
-            downstream_task_ids=ordered,
-            downstream_count=len(ordered),
-            reason=_unblock_reason(root_id, kind, root_task),
-        )
+        if root_task is None:
+            return (-len(downstream), _NO_PRIORITY_SENTINEL,
+                    (float("inf"), 0, 0), root_id)
+        return (-len(downstream), root_task.priority,
+                _version_tuple(root_task.target_version), root_id)
 
+    # F-2 (FIX-258 / R0): observable truncation marker — appended to the
+    # recommendation reason whenever ANY origin's walk exhausted the
+    # per-walk visit budget (the downstream counts may then understate
+    # the true unlock scope of the picked root).
+    truncation_note = (
+        " — visit budget reached during the blocker walk; downstream "
+        "attribution may be truncated"
+        if truncated else ""
+    )
+
+    (root_id, kind), downstream_ids = min(roots.items(), key=_root_key)
+    root_task = task_index.get(root_id)
+    ordered = tuple(sorted(
+        downstream_ids,
+        key=lambda tid: _priority_sort_key(dep_index[tid].task)),
+    ) if downstream_ids else ()
+    return UnblockRecommendation(
+        root_task_id=root_id,
+        root_kind=kind,
+        root_priority=(root_task.priority if root_task is not None
+                       else _NO_PRIORITY_SENTINEL),
+        root_status=(_clean_status_for_display(root_task.status)
+                     if root_task is not None else ""),
+        downstream_task_ids=ordered,
+        downstream_count=len(ordered),
+        reason=_unblock_reason(root_id, kind, root_task) + truncation_note,
+    )
+
+
+def _build_empty_reason(blocked: list, non_executable: list,
+                        completed: list, total: int,
+                        recommendation) -> dict:
+    """Build the structured empty-recommendation reason (REQ-110 / F-9).
+
+    Three mutually exclusive kinds:
+
+      - ``all_blocked`` — at least one dependency-blocked task; the message
+        carries the held-rows clause when non-executable rows coexist, and
+        the nearest action is the picked recommendation's root;
+      - ``all_non_executable`` — no blocked chains; every active row is
+        dependency-satisfied but held by a terminal status marker;
+      - ``no_active_tasks`` — everything completed (or no rows at all).
+
+    Args:
+        blocked: dependency-blocked :class:`BlockedTask` list.
+        non_executable: dependency-satisfied held :class:`TaskDep` list.
+        completed: completed :class:`TaskDep` list.
+        total: total parsed task count.
+        recommendation: the picked :class:`UnblockRecommendation` or None —
+            its root powers the all_blocked ``nearest_action``.
+
+    Returns:
+        The structured ``empty_reason`` dict (never None on this path).
+    """
     if blocked:
         kind_label = "all_blocked"
         held_clause = (
@@ -1168,7 +1247,7 @@ def _build_empty_recommendation_fallback(blocked: list, non_executable: list,
         nearest_action = (
             "plan the next work batch — append rows to the 优先级一览 table")
 
-    empty_reason = {
+    return {
         "kind": kind_label,
         "total": total,
         "completed": len(completed),
@@ -1177,6 +1256,50 @@ def _build_empty_recommendation_fallback(blocked: list, non_executable: list,
         "message": message,
         "nearest_action": nearest_action,
     }
+
+
+def _build_empty_recommendation_fallback(blocked: list, non_executable: list,
+                                         completed: list, total: int) -> tuple:
+    """Build the REQ-110 / FIX-254 fallback for an empty ``recommended_next``.
+
+    Orchestrator (F-9, FIX-258): builds the indexes, walks every blocked
+    chain into ``roots`` (:func:`_walk_blocker_roots`), then delegates to
+    :func:`_pick_unblock_recommendation` and :func:`_build_empty_reason`.
+
+    Returns ``(unblock_recommendation, empty_reason)``:
+
+      - ``unblock_recommendation`` — :class:`UnblockRecommendation` for the
+        head of the highest-value blocked chain (value = downstream blocked
+        task count, tie-broken by root priority → version → ID), or None when
+        no task is dependency-blocked (no chain to unlock).
+      - ``empty_reason`` — structured dict with kind ``all_blocked`` /
+        ``all_non_executable`` / ``no_active_tasks`` + counts + message +
+        ``nearest_action`` (最近可行动作). Always non-None on this path.
+
+    A bare empty recommendation is forbidden (AUDIT-143 data-layer root
+    cause): the caller gets either a chain recommendation, a structured
+    reason, or both.
+
+    The blocker walk is bounded by a per-walk visit budget (FIX-258 / R0
+    F-2): when any origin's walk exhausts it, the recommendation reason
+    carries an observable truncation note ("visit budget reached …
+    downstream attribution may be truncated").
+    """
+    blocked_map = {bt.task.task_id: tuple(bt.blocking_dependencies) for bt in blocked}
+    task_index: dict = {t.task_id: t for t in non_executable}
+    for bt in blocked:
+        task_index[bt.task.task_id] = bt.task
+
+    roots: dict = {}
+    truncated = False
+    for bt in blocked:
+        truncated = (_walk_blocker_roots(bt.task.task_id, blocked_map,
+                                         task_index, roots) or truncated)
+
+    recommendation = _pick_unblock_recommendation(
+        roots, task_index, {bt.task.task_id: bt for bt in blocked}, truncated)
+    empty_reason = _build_empty_reason(
+        blocked, non_executable, completed, total, recommendation)
     return recommendation, empty_reason
 
 
@@ -1212,6 +1335,9 @@ def compute_unblocked_tasks(tasks: list) -> PriorityReport:
          (all_blocked / all_non_executable / no_active_tasks + nearest
          actionable step). A bare empty recommendation is forbidden — it is
          the AUDIT-143 data-layer root cause of the机械枚举 degradation.
+         The blocker walk behind the fallback is bounded by a per-walk
+         visit budget (FIX-258 / R0 F-2); on exhaustion the recommendation
+         reason notes that downstream attribution may be truncated.
 
     Cross-entity refs (RISK/DEC/REVIEW/...) are never dependencies in the
     graph and never block (FIX-171 precedent).

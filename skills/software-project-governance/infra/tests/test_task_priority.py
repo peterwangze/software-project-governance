@@ -52,8 +52,11 @@ from task_priority import (  # noqa: E402  (import after sys.path setup)
     BlockedTask,
     PriorityReport,
     TaskDep,
+    _MAX_ROOT_WALK_DEPTH,
+    _ROOT_KIND_CYCLE,
     _is_task_family_id,
     _version_tuple,
+    _walk_blocker_roots,
     compute_unblocked_tasks,
     format_report,
     parse_task_dependencies,
@@ -1230,6 +1233,166 @@ class TestEmptyRecommendationFallback(unittest.TestCase):
         )
         self.assertIsNone(legacy.unblock_recommendation)
         self.assertIsNone(legacy.empty_reason)
+
+    # ── FIX-258 debt pack: F-3/F-4/F-6 coverage + F-2 compute-level ─────────
+    # (遗留观察项 from review-FIX-254-CODE-R0.md §1)
+
+    def test_diamond_shape_attributes_shared_root_not_cycle(self):
+        # F-4: origin depends on B and C; both depend on the SAME held root
+        # R. The per-branch ``path`` set must attribute both branches to the
+        # shared root (set-deduped per origin) instead of misreading the
+        # reconvergence as a cycle, and R's downstream must be the full
+        # union {B, C, origin} (count 3 — diamond neither double-counts nor
+        # loses the shared-root attribution).
+        root = TaskDep("FIX-915", "P1", "⛔ HELD", (), (), "0.1.0")
+        b = TaskDep("FIX-916", "P0", "⏳ 待执行", ("FIX-915",), (), "0.1.0")
+        c = TaskDep("FIX-917", "P0", "⏳ 待执行", ("FIX-915",), (), "0.1.0")
+        origin = TaskDep("FIX-918", "P0", "⏳ 待执行",
+                         ("FIX-916", "FIX-917"), (), "0.1.0")
+        report = compute_unblocked_tasks([root, b, c, origin])
+        rec = report.unblock_recommendation
+        self.assertIsNotNone(rec)
+        self.assertEqual(rec.root_task_id, "FIX-915")
+        self.assertEqual(rec.root_kind, "non_executable_status")
+        self.assertEqual(rec.downstream_task_ids,
+                         ("FIX-916", "FIX-917", "FIX-918"))
+        self.assertEqual(rec.downstream_count, 3)
+
+    def test_two_chains_converging_on_same_root_count_union(self):
+        # F-4: two INDEPENDENT blocked chains converging on one root — the
+        # root's downstream count is the union of both chains' origins (2,
+        # set semantics: no double-count, no loss).
+        root = TaskDep("FIX-925", "P1", "⛔ HELD", (), (), "0.1.0")
+        a1 = TaskDep("FIX-926", "P0", "⏳ 待执行", ("FIX-925",), (), "0.1.0")
+        b1 = TaskDep("FIX-927", "P2", "⏳ 待执行", ("FIX-925",), (), "0.1.0")
+        report = compute_unblocked_tasks([root, a1, b1])
+        rec = report.unblock_recommendation
+        self.assertIsNotNone(rec)
+        self.assertEqual(rec.root_task_id, "FIX-925")
+        self.assertEqual(rec.downstream_count, 2)
+        # Priority-ordered downstream: P0 FIX-926 before P2 FIX-927.
+        self.assertEqual(rec.downstream_task_ids, ("FIX-926", "FIX-927"))
+
+    def test_unblock_tiebreak_version_decisive_before_id(self):
+        # F-6①: equal count + equal priority → LOWER target version wins —
+        # version outranks ID (FIX-953's 0.2.0 beats FIX-951's 0.5.0 even
+        # though FIX-951 is the smaller ID, so an ID-only tiebreak fails).
+        r_late = TaskDep("FIX-951", "P0", "⛔ HELD", (), (), "0.5.0")
+        d1 = TaskDep("FIX-952", "P0", "⏳ 待执行", ("FIX-951",), (), "0.1.0")
+        r_early = TaskDep("FIX-953", "P0", "⏸ HELD", (), (), "0.2.0")
+        d2 = TaskDep("FIX-954", "P0", "⏳ 待执行", ("FIX-953",), (), "0.1.0")
+        report = compute_unblocked_tasks([r_late, d1, r_early, d2])
+        self.assertEqual(report.unblock_recommendation.root_task_id, "FIX-953")
+
+    def test_unblock_tiebreak_id_decisive_at_full_tie(self):
+        # F-6①: count/priority/version all equal → smaller root ID wins
+        # (the total-order endgame; deterministic regardless of dict order —
+        # the smaller-ID root FIX-961 is listed AFTER FIX-962 here).
+        r_b = TaskDep("FIX-962", "P1", "⛔ HELD", (), (), "0.1.0")
+        d1 = TaskDep("FIX-963", "P0", "⏳ 待执行", ("FIX-962",), (), "0.1.0")
+        r_a = TaskDep("FIX-961", "P1", "⏸ HELD", (), (), "0.1.0")
+        d2 = TaskDep("FIX-964", "P0", "⏳ 待执行", ("FIX-961",), (), "0.1.0")
+        report = compute_unblocked_tasks([r_b, d1, r_a, d2])
+        self.assertEqual(report.unblock_recommendation.root_task_id, "FIX-961")
+
+    def test_all_blocked_message_held_clause_when_non_executable_coexists(self):
+        # F-6③: blocked + non_executable coexist → the all_blocked message
+        # carries the "; N dependency-satisfied row(s) additionally held by
+        # non-executable status markers" clause (N = 1: the ⛔ FIX-205 row).
+        report = compute_unblocked_tasks(
+            parse_task_dependencies(_ALL_BLOCKED_TABLE))
+        er = report.empty_reason
+        self.assertEqual(er["kind"], "all_blocked")
+        self.assertIn(
+            "; 1 dependency-satisfied row(s) additionally held "
+            "by non-executable status markers", er["message"])
+
+    def test_all_blocked_message_no_held_clause_without_non_executable(self):
+        # F-6③ negative: blocked-only fixture (no held rows) → no clause.
+        t = TaskDep("FIX-970", "P0", "⏳ 待执行", ("FIX-999",), (), "0.1.0")
+        report = compute_unblocked_tasks([t])
+        self.assertNotIn("additionally held",
+                         report.empty_reason["message"])
+
+    def test_multi_entry_cycle_downstream_count_declared_per_node(self):
+        # F-3 (option b — DECLARED approximation, FIX-258): a multi-node
+        # cycle entered from DIFFERENT members splits downstream attribution
+        # per member. X↔Y with D1 entering via X and D2 via Y: each member
+        # root carries itself + its own entrants (count 2), undercounting
+        # the cycle's true unlock scope (X, Y, D1, D2 = 4). The pick is a
+        # genuine cycle member and the action guidance ("resolve the
+        # cycle") is correct — pinned here as DECLARED semantics (see the
+        # approximation note on UnblockRecommendation), not a defect.
+        x = TaskDep("FIX-980", "P0", "⏳ 待执行", ("FIX-981",), (), "0.1.0")
+        y = TaskDep("FIX-981", "P0", "⏳ 待执行", ("FIX-980",), (), "0.1.0")
+        d1 = TaskDep("FIX-982", "P0", "⏳ 待执行", ("FIX-980",), (), "0.1.0")
+        d2 = TaskDep("FIX-983", "P0", "⏳ 待执行", ("FIX-981",), (), "0.1.0")
+        report = compute_unblocked_tasks([x, y, d1, d2])
+        rec = report.unblock_recommendation
+        self.assertIsNotNone(rec)
+        self.assertEqual(rec.root_kind, "cycle")
+        # Deterministic total order: both member roots count 2 with equal
+        # priority/version → smaller ID FIX-980 wins.
+        self.assertEqual(rec.root_task_id, "FIX-980")
+        self.assertEqual(rec.downstream_task_ids, ("FIX-980", "FIX-982"))
+        # Per-member split (2); the cycle's full unlock scope is 4.
+        self.assertEqual(rec.downstream_count, 2)
+
+    def test_visit_budget_exhaustion_marks_reason_and_terminates(self):
+        # F-2 (compute-level): a 15-layer binary diamond lattice makes the
+        # origin's simple-path enumeration exponential (~2×(2^15−1) ≈ 65k
+        # visits > the default per-walk budget). compute must terminate
+        # promptly, still recommend (the held layer-14 roots win on
+        # downstream count over the tiny truncated frontier roots), and the
+        # recommendation reason must carry the observable truncation note.
+        tasks = [TaskDep("FIX-800", "P0", "⏳ 待执行",
+                         ("FIX-901", "FIX-902"), (), "0.1.0")]
+        for i in range(14):  # layers 0..13, two nodes each
+            deps = ((f"FIX-{901 + 2 * (i + 1)}", f"FIX-{902 + 2 * (i + 1)}")
+                    if i < 13 else ("FIX-929", "FIX-930"))
+            for s in (0, 1):
+                tasks.append(TaskDep(f"FIX-{901 + 2 * i + s}", "P0",
+                                     "⏳ 待执行", deps, (), "0.1.0"))
+        tasks.append(TaskDep("FIX-929", "P0", "⛔ HELD", (), (), "0.1.0"))
+        tasks.append(TaskDep("FIX-930", "P0", "⛔ HELD", (), (), "0.1.0"))
+        report = compute_unblocked_tasks(tasks)  # returning == no hang/crash
+        rec = report.unblock_recommendation
+        self.assertIsNotNone(rec)
+        self.assertIn(rec.root_task_id, {"FIX-929", "FIX-930"})
+        self.assertEqual(rec.root_kind, "non_executable_status")
+        self.assertIn("visit budget", rec.reason)
+        self.assertIn("downstream attribution may be truncated", rec.reason)
+
+    def test_depth_cap_long_chain_classifies_cycle_style_root(self):
+        # F-6②: depth-cap boundary — a chain DEEPER than
+        # _MAX_ROOT_WALK_DEPTH (200) must terminate via the depth guard and
+        # classify the OVER-CAP node as a cycle-style root (defensive
+        # semantics per R0 F-6②), never crash. Programmatic 202-link chain:
+        # origin FIX-2999 → FIX-3000 (depth 0) → … → FIX-3201 (depth 201).
+        chain = [f"FIX-{3000 + i}" for i in range(_MAX_ROOT_WALK_DEPTH + 2)]
+        task_index = {tid: TaskDep(tid, "P0", "⏳ 待执行", (), (), "0.1.0")
+                      for tid in chain}
+        task_index["FIX-2999"] = TaskDep("FIX-2999", "P0", "⏳ 待执行",
+                                         ("FIX-3000",), (), "0.1.0")
+        blocked_map = {"FIX-2999": ("FIX-3000",)}
+        for i in range(len(chain) - 1):
+            blocked_map[chain[i]] = (chain[i + 1],)
+        # Chain tail: a held root (⛔, no deps) — reachable only PAST the cap.
+        task_index[chain[-1]] = TaskDep(chain[-1], "P0", "⛔ HELD",
+                                        (), (), "0.1.0")
+        roots: dict = {}
+        exhausted = _walk_blocker_roots(
+            "FIX-2999", blocked_map, task_index, roots)
+        # The over-cap node (depth 201 > 200) is classified cycle-style and
+        # attributed to the origin.
+        self.assertEqual(roots.get((chain[-1], _ROOT_KIND_CYCLE)),
+                         {"FIX-2999"})
+        # The in-cap predecessor (depth 200 ≤ 200) is NOT a cycle root —
+        # only the over-cap node flips to cycle-style classification.
+        self.assertNotIn((chain[-2], _ROOT_KIND_CYCLE), roots)
+        # Depth-cap termination is distinct from the F-2 visit budget: a
+        # 202-link chain is far under _MAX_ROOT_WALK_VISITS.
+        self.assertFalse(exhausted)
 
 
 class TestEmptyRecommendationFallbackFormat(unittest.TestCase):

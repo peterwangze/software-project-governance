@@ -76,6 +76,18 @@ def _resolve_shared():
 
 # ── Domain constants and functions (moved verbatim from verify_workflow.py) ──
 
+# Canonical "open risk" predicate for the risk domain (FIX-270 R0 F3).
+# The whole domain (parse_open_risks / check_risk_staleness / check_risk_escalation
+# — and the status fast path's parse_active_risks) shares ONE judgement: a risk
+# is active/open iff its 当前状态 cell is exactly ``打开``. Non-open states
+# (缓解完成 / 已关闭 / resolved / 降级 / 已接受…) are the risk state-machine's
+# closed or in-flight terminal states and MUST NOT be counted as open — no
+# parallel marker sets.
+def is_risk_status_open(status):
+    """Return True iff the risk status cell is the domain-canonical ``打开``."""
+    return (status or "").strip() == "打开"
+
+
 def _parse_context_open_risks(root):
     _resolve_shared()
     risk_path = _context_file(root, ".governance/risk-log.md")
@@ -90,7 +102,7 @@ def _parse_context_open_risks(root):
         if len(cells) < 9:
             continue
         status = cells[8]
-        if status != "打开":
+        if not is_risk_status_open(status):
             continue
         risks.append(_context_task(
             cells[0],
@@ -119,7 +131,7 @@ def parse_open_risks():
             risk_id = parts[1]
             date_str = parts[2]
             status = parts[9]
-            if status == "打开":
+            if is_risk_status_open(status):
                 risks.append((risk_id, date_str))
     return risks
 
@@ -183,7 +195,7 @@ def check_risk_escalation():
         status = parts[9]            # 当前状态
         deadline_str = parts[11]     # 截止日期
 
-        if status != "打开":
+        if not is_risk_status_open(status):
             continue
 
         all_open.append(risk_id)

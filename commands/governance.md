@@ -439,6 +439,13 @@ P1 (警告):
 
 **检测条件**：一切正常——`.governance/` 存在、健康、版本最新、无 snapshot、无异常
 
+**数据源（MUST，FIX-270 秒级快路径）**：状态展示 = 运行 `python <plugin_home>/infra/verify_workflow.py status`（`<plugin_home>` 来自 resolve_entry.py，先 resolve 后 verify）→ **渲染其输出**（文本或 `status --json`），而不是重新手工读取治理文件。
+
+- **默认不再要求全量读 4 个治理文件**（plan-tracker.md / evidence-log.md / risk-log.md / decision-log.md）——`status` 命令已用行级结构化解析输出 Scenario F 面板所需全部数据（项目配置 / Gate 状态 / 任务统计 / 活跃风险含 ≤3 天升级线标记 / 最近活动 / 插件版本新鲜度 / 建议下一步线索 / Delivery Trust Snapshot）。
+- **按需展开（例外）**：仅当 (a) 用户展开 `<details>` 详情，(b) `status` 输出字段缺失/解析失败，或 (c) 数据对不上时，才用 read 工具按需读取对应治理文件。
+- **Delivery Trust Snapshot 数据来源** = `status` 命令输出 + `governance-context` 既有输出（两者都是确定性 CLI 输出；Snapshot 字段合约见下方，不得以手工翻读证据文件替代）。
+- **性能基线**：`status` 单次运行 <2s（宿主项目实测）——小时级 LLM 成本不再花在重读文档/记录上；若 `status` 输出显示 `Governance unavailable` 类缺失，按下方错误码处理。
+
 **展示内容**（比 `governance-status` 更丰富）：
 - Delivery Trust Snapshot（Resume state、Carry-over、Open risks、Unfinished work、Source facts、Blocker state、Auto-continue、Interrupt boundary、Hooks、Goal、Stage、Gate/setup status、Risk、Evidence、Next action、Preset guidance、Question budget、Pack summary、Default packs、Enabled packs、Pack boundary、Verification signal、No-overclaim boundary）
 - Existing-project resume signal：已有 `.governance/` 状态时 MUST 明确显示 `Existing governance state detected`，展示 carry-over active task count、open risk count/details、hook state 和 next action
@@ -455,6 +462,8 @@ P1 (警告):
 - 建议下一步
 
 **输出格式规则**：
+
+**数据即 status 输出**（FIX-270）：下方「始终展开/默认折叠」的字段全部来自 `status` 命令输出（`status --json` 供机器消费）；agent 只做渲染与引导，不做重复数据挖掘。
 
 **始终展开（关键信息）**：
 - Delivery Trust Snapshot（first-run/status 可观察信号）

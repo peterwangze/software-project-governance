@@ -1110,6 +1110,7 @@ from checks.evidence_domain import (  # noqa: E402
 # cmd_check_governance and discover_governance_context) working unchanged.
 from checks.risk_domain import (  # noqa: E402
     _parse_context_open_risks,
+    is_risk_status_open,
     parse_open_risks,
     check_risk_staleness,
     check_risk_escalation,
@@ -1918,8 +1919,31 @@ def _snapshot_fact_source_issues(plan_content, plan_tracker_path):
     return issues
 
 
+def _hot_fact_source_plugin_scope():
+    """Check 28c plugin-project scope (FIX-270 mixed-root fix).
+
+    The FIX-087-era expectations (0.38.0 roadmap row, FIX-082~087 active
+    task table, REQ-070~074 requirement matrix, RISK-033 / REL-013 blocker
+    chain, ``### 1.0.0 依赖链`` section) assert facts about the governed
+    object being the plugin project itself. They may only run in dogfood
+    mode (host root == plugin root); a host project (roots diverge) must not
+    be FAILed on those expectations — generic section/snapshot consistency
+    still applies there.
+    """
+    return not _host_plugin_roots_divergent()
+
+
 def check_hot_fact_source_consistency(plan_tracker_path=None):
-    """FIX-087: keep plan-tracker hot sections aligned across active release facts."""
+    """FIX-087: keep plan-tracker hot sections aligned across active release facts.
+
+    FIX-270 (mixed-root): generic consistency (snapshot version/date vs
+    plan-tracker + required hot sections) applies to every project. The
+    plugin-project expectations (0.38.0 roadmap / FIX-082~087 / REQ-070~074 /
+    RISK-033 / REL-013 / ``### 1.0.0 依赖链``) assert facts about the governed
+    object being the plugin project and are enforced only in dogfood mode
+    (see :func:`_hot_fact_source_plugin_scope`); host mode reports the
+    downgrade honestly instead of FAILing host data.
+    """
     plan_tracker_path = plan_tracker_path or _governance_dir() / "plan-tracker.md"
     failures = []
     plan_content = plan_tracker_path.read_text(encoding="utf-8")
@@ -1935,14 +1959,16 @@ def check_hot_fact_source_consistency(plan_tracker_path=None):
         return []
     failures.extend(_snapshot_fact_source_issues(plan_content, plan_tracker_path))
 
+    plugin_scope = _hot_fact_source_plugin_scope()
     required_sections = [
         "## 项目配置",
         "## 项目总览",
         "## 当前活跃事项",
-        "### 1.0.0 依赖链",
         "## 版本规划",
         "## 需求跟踪矩阵",
     ]
+    if plugin_scope:
+        required_sections.append("### 1.0.0 依赖链")
     sections = {heading: _markdown_section_by_prefix(plan_content, heading) for heading in required_sections}
     for heading, content in sections.items():
         if not content:
@@ -1952,6 +1978,11 @@ def check_hot_fact_source_consistency(plan_tracker_path=None):
     overview = sections.get("## 项目总览", "")
     active_items = sections.get("## 当前活跃事项", "")
     dependency_chain = sections.get("### 1.0.0 依赖链", "")
+
+    # FIX-270: host mode → plugin-project expectations dormant (downgraded,
+    # not FAILed); generic consistency above stays enforced.
+    if not plugin_scope:
+        return failures
 
     active_row_text = _version_row_text(plan_content, FIX_087_ACTIVE_VERSION)
     previous_row_text = _version_row_text(plan_content, FIX_087_PREVIOUS_VERSION)
@@ -8227,17 +8258,31 @@ def _dedupe_context_items(items):
     return deduped
 
 
-def discover_governance_context(root=None):
-    """Discover unfinished user work from recorded facts only."""
+def discover_governance_context(root=None, skip_evidence_log=False):
+    """Discover unfinished user work from recorded facts only.
+
+    ``skip_evidence_log=True`` (FIX-270 R0 F1) is the status fast-path mode:
+    the evidence-log corpus is skipped entirely. The evidence collector
+    (``_parse_evidence_context_tasks``) does a full ``read_text`` of
+    ``.governance/evidence-log.md`` whenever the file exists, which can be
+    MB-sized in real projects — the status command must never do a full read
+    of that file, so its resume context is derived from plan-tracker /
+    session-snapshot / risk-log / git facts only, and the evidence-derived
+    items are dropped (resume-state fields that need evidence are not
+    required by Scenario F; the authoritative evidence context stays with
+    the ``governance-context`` CLI and Check 28g, which keep full mode).
+    """
     root = _context_root(root)
     flow_context = discover_flow_unit_runtime_context(root)
     recent_commit_facts = _parse_recent_commit_context_facts(root)
-    items = _dedupe_context_items(
+    context_items = (
         _parse_plan_context_tasks(root)
         + _parse_snapshot_context_tasks(root)
-        + _parse_evidence_context_tasks(root)
         + _parse_git_status_context_tasks(root)
     )
+    if not skip_evidence_log:
+        context_items += _parse_evidence_context_tasks(root)
+    items = _dedupe_context_items(context_items)
     risks = _parse_context_open_risks(root)
     if not items:
         context = _empty_governance_context(root)
@@ -8478,8 +8523,13 @@ def check_capability_context(root=None):
     return failures
 
 
-def parse_resume_state():
-    """Summarize existing-project resume state from local governance files."""
+def parse_resume_state(skip_evidence_log=False):
+    """Summarize existing-project resume state from local governance files.
+
+    ``skip_evidence_log=True`` (FIX-270 status fast path) is forwarded to
+    :func:`discover_governance_context` so the evidence-log corpus is never
+    fully read during ``status`` (R0 F1).
+    """
     governance_dir = SAMPLE_PATH.parent
     state_exists = governance_dir.is_dir() and SAMPLE_PATH.is_file()
     active_tasks = [
@@ -8492,7 +8542,10 @@ def parse_resume_state():
         context_root = SAMPLE_PATH.parent.parent
     else:
         context_root = SAMPLE_PATH.parent
-    context = discover_governance_context(context_root) if state_exists else _empty_governance_context(context_root)
+    context = (
+        discover_governance_context(context_root, skip_evidence_log=skip_evidence_log)
+        if state_exists else _empty_governance_context(context_root)
+    )
     if active_tasks and context.get("status") != "FOUND":
         first = active_tasks[0]
         context = {
@@ -9844,8 +9897,452 @@ def cmd_verify(args):
     print("\n== Verification Result: PASSED ==")
 
 
+# ── FIX-270 交付 A: status 秒级状态快路径（Scenario F 结构化数据源）──────
+# 行级/流式解析 .governance 热文件（plan-tracker / risk-log / decision-log /
+# session-snapshot）。明确不读全量 evidence-log 大文件（其体量可达 MB 级）；
+# 最近活动只从 plan-tracker task 表 + decision-log 派生。所有解析器为纯
+# 确定性函数（可注入内容或走 live 读），任何异常 fail-safe 为缺省值，
+# 状态快路径绝不以解析失败阻断。
+
+
+def _status_col_name(raw):
+    """Normalize a header cell into a stable column key."""
+    name = str(raw or "").strip().strip("`").strip("*").strip()
+    return name.lower()
+
+
+def _status_clean_cell(value):
+    """Strip markdown/backtick decoration from a cell value."""
+    return str(value or "").strip().strip("`").replace("**", "").strip()
+
+
+def _status_iso_date(value):
+    """First ISO date (YYYY-MM-DD) inside a cell, or None."""
+    m = re.search(r"\d{4}-\d{2}-\d{2}", str(value or ""))
+    return m.group(0) if m else None
+
+
+def _status_is_completed_cell(cell):
+    """Completed status test for task rows (dogfood ✅ conventions + host text-only).
+
+    - Any cell with "未完成"/"待完成" is NOT completed.
+    - "已完成" → completed (host text-only style).
+    - Leading ``✅`` (dogfood) → completed unless the cell carries an explicit
+      active marker (未完成/待完成/进行中/待执行).
+    - Bare ``完成`` followed by a bracket or end-of-cell (e.g. "✅ 完成 (…)"
+      / "完成（…)") → completed.
+    """
+    text = _status_clean_cell(cell)
+    if "未完成" in text or "待完成" in text:
+        return False
+    if "已完成" in text:
+        return True
+    # Dogfood cells may carry a transition chain ("⏳ 等待 → ✅ 完成"): any ✅
+    # in the status cell marks a delivered endpoint, and no active marker is
+    # present otherwise.
+    if "✅" in text and not any(m in text for m in ("未完成", "待完成", "进行中", "待执行")):
+        return True
+    return bool(re.search(r"完成\s*(?:[（(]|$)", text))
+
+
+def _status_table_stream(content):
+    """Yield (header_cells, rows) for every markdown table in ``content``.
+
+    Line-based: each table starts at a ``|`` row whose following non-blank
+    row is the ``---`` separator. Blank lines are tolerated inside tables
+    (live plan-tracker inserts them between sub-groups); a non-table line
+    ends the table. Returns normalized (unwrapped, no leading/trailing
+    empties) cell lists.
+    """
+    lines = content.split("\n")
+    i = 0
+    n = len(lines)
+    while i < n:
+        line = lines[i].strip()
+        if not line.startswith("|"):
+            i += 1
+            continue
+        header = [c.strip() for c in line.split("|")[1:-1]]
+        j = i + 1
+        while j < n and not lines[j].strip():
+            j += 1
+        if j >= n or not re.match(r"^\|[\s:\-|]+\|$", lines[j].strip()):
+            i += 1
+            continue
+        k = j + 1
+        rows = []
+        while k < n:
+            r = lines[k].strip()
+            if not r:
+                k += 1
+                continue
+            if not r.startswith("|"):
+                break
+            if re.match(r"^\|[\s:\-|]+\|$", r):
+                k += 1
+                continue
+            rows.append([c.strip() for c in r.split("|")[1:-1]])
+            k += 1
+        yield header, rows
+        i = k
+
+
+def parse_task_table_rows(plan_content=None):
+    """Parse task-genre tables (header carries both ``ID`` and ``状态``).
+
+    Every table whose header contains ``ID`` + ``状态`` contributes rows;
+    a task ID appearing in several tables (active-items mirror + tracking
+    table) is de-duplicated keeping the RICHEST row (most columns), so
+    mirror duplicates never double-count statistics. Returns a list of
+    dicts (``id`` / ``priority`` / ``status`` / ``actual_completion`` /
+    ``_order`` / ``_width`` / ``_columns``).
+
+    Status/priority/title resolution is header-indexed on clean rows and
+    ID-anchored (dogfood convention) on over-split rows — prose containing
+    pipe characters (e.g. ``无 ``| RISK-`` 行``) inflates the middle cells and
+    the true status stays the LAST non-empty cell in that shape (the
+    task_priority precedent), while host-style wide tables stay
+    header-indexed (their status column is NOT the last cell).
+    """
+    content = plan_content if plan_content is not None else SAMPLE_PATH.read_text(encoding="utf-8")
+    by_id = {}
+    order = 0
+    for header, rows in _status_table_stream(content):
+        idx = {}
+        for pos, name in enumerate(header):
+            key = _status_col_name(name)
+            if key and key in ("id", "状态", "优先级", "任务项", "事项", "依赖",
+                               "目标版本", "实际完成", "gate", "证据", "任务名称"):
+                idx.setdefault(key, pos)
+        if "id" not in idx or "状态" not in idx:
+            continue
+        width = len(header)
+        for cells in rows:
+            if len(cells) <= max(idx.values()):
+                continue
+            # ID anchor (first bare-PREFIX-NNN cell) — invariant to duplicate
+            # leading priority cells.
+            id_pos = None
+            tid = ""
+            for pos, c in enumerate(cells):
+                cand = _status_clean_cell(c)
+                if re.match(r"^[A-Z]+-\d+$", cand):
+                    id_pos = pos
+                    tid = cand
+                    break
+            if not tid:
+                continue
+            clean = len(cells) == width
+
+            def cell(key):
+                pos = idx.get(key)
+                if pos is None or pos >= len(cells):
+                    return ""
+                return _status_clean_cell(cells[pos])
+
+            if clean:
+                status = cell("状态")
+                priority = cell("优先级")
+                title = cell("任务项") or cell("事项") or cell("任务名称")
+                deps = cell("依赖")
+                target_version = cell("目标版本")
+                actual_completion = _status_iso_date(cell("实际完成"))
+                gate = cell("gate")
+                evidence = cell("证据")
+            else:
+                # Over-split (prose pipes): dogfood shape — status is the LAST
+                # non-empty cell; priority/title are ID-anchored.
+                status = ""
+                for c in reversed(cells):
+                    if _status_clean_cell(c):
+                        status = _status_clean_cell(c)
+                        break
+                priority = _status_clean_cell(cells[id_pos - 1]) if id_pos >= 1 else ""
+                title = _status_clean_cell(cells[id_pos + 1]) if id_pos + 1 < len(cells) else ""
+                deps = _status_clean_cell(cells[id_pos + 2]) if id_pos + 2 < len(cells) else ""
+                target_version = _status_clean_cell(cells[id_pos + 3]) if id_pos + 3 < len(cells) else ""
+                actual_completion = _status_iso_date(cell("实际完成"))
+                gate = ""
+                evidence = ""
+            rec = {
+                "id": tid,
+                "priority": priority,
+                "title": title,
+                "status": status,
+                "deps": deps,
+                "target_version": target_version,
+                "actual_completion": actual_completion,
+                "gate": gate,
+                "evidence": evidence,
+                "_order": order,
+                "_width": width,
+                "_columns": cells,
+            }
+            order += 1
+            prev = by_id.get(tid)
+            if prev is None or rec["_width"] > prev["_width"]:
+                by_id[tid] = rec
+    return sorted(by_id.values(), key=lambda r: r["_order"])
+
+
+def parse_recent_completed_tasks(rows, n=5):
+    """Last ``n`` completed tasks, by completion date desc (fallback: row order)."""
+    done = [r for r in rows if _status_is_completed_cell(r["status"])]
+
+    def _completion_date(rec):
+        d = rec.get("actual_completion") or _status_iso_date(rec["status"])
+        return d if d else "0000-00-00"
+
+    done.sort(
+        key=lambda r: (_completion_date(r), r["_order"]),
+        reverse=True,
+    )
+    return done[:n]
+
+
+def parse_active_risks(risk_content=None):
+    """Parse risk-log active rows with escalation-deadline markers.
+
+    Returns rows for risks whose status is OPEN — the risk domain's canonical
+    predicate :func:`is_risk_status_open` (the SAME judgement Check 2/8 and
+    ``parse_open_risks`` use; FIX-270 R0 F3 — no parallel marker sets). Each
+    row carries ``escalation_soon`` (deadline within 3 days, incl. overdue)
+    and ``escalation_overdue`` (deadline passed). No deadline → both False.
+    """
+    content = risk_content if risk_content is not None else (
+        RISK_PATH.read_text(encoding="utf-8") if RISK_PATH.is_file() else ""
+    )
+    today = date.today()
+    out = []
+    for header, rows in _status_table_stream(content):
+        idx = {}
+        for pos, name in enumerate(header):
+            key = _status_col_name(name)
+            if key in ("编号", "日期", "风险/阻塞描述", "当前状态", "截止日期", "严重级别", "owner"):
+                idx.setdefault(key, pos)
+        if "编号" not in idx or "当前状态" not in idx:
+            continue
+        for cells in rows:
+            if len(cells) <= max(idx.values()):
+                continue
+            def cell(key):
+                pos = idx.get(key)
+                return _status_clean_cell(cells[pos]) if pos is not None and pos < len(cells) else ""
+            status = cell("当前状态")
+            if not is_risk_status_open(status):
+                continue
+            rid = cell("编号")
+            if not rid:
+                continue
+            deadline_text = cell("截止日期")
+            deadline = _status_iso_date(deadline_text)
+            days_left = None
+            if deadline:
+                try:
+                    days_left = (date.fromisoformat(deadline) - today).days
+                except ValueError:
+                    days_left = None
+            out.append({
+                "id": rid,
+                "opened_date": cell("日期"),
+                "description": cell("风险/阻塞描述")[:60] or "",
+                "severity": cell("严重级别"),
+                "owner": cell("owner"),
+                "status": status,
+                "deadline": deadline_text,
+                "deadline_date": deadline,
+                "days_left": days_left,
+                "escalation_soon": days_left is not None and days_left <= 3,
+                "escalation_overdue": days_left is not None and days_left < 0,
+            })
+    return out
+
+
+def parse_recent_decisions(n=5, decision_content=None):
+    """Last ``n`` decision-log rows ordered by (date, id) descending.
+
+    FIX-270 R0 F2: live decision-log is a mixed-order file (newer entries
+    interleaved with older ones), so document order is NOT time order.
+    Rows are ranked by their ``日期`` cell (ISO date) and then by the
+    numeric ID suffix. A row whose date is missing/unparseable is treated as
+    the oldest (date.min + id -inf): it cannot masquerade as "recent" and is
+    only returned when the file holds fewer than ``n`` dated rows — an
+    honest fallback for legacy/ragged records, never a reordering.
+    """
+    content = decision_content if decision_content is not None else (
+        (GOVERNANCE_DIR / "decision-log.md").read_text(encoding="utf-8")
+        if (GOVERNANCE_DIR / "decision-log.md").is_file() else ""
+    )
+    rows = []
+    for header, table_rows in _status_table_stream(content):
+        idx = {}
+        for pos, name in enumerate(header):
+            key = _status_col_name(name)
+            if key in ("编号", "日期", "主题", "决策内容"):
+                idx.setdefault(key, pos)
+        if "编号" not in idx:
+            continue
+        for cells in table_rows:
+            if len(cells) <= max(idx.values()):
+                continue
+            def cell(key):
+                pos = idx.get(key)
+                return _status_clean_cell(cells[pos]) if pos is not None and pos < len(cells) else ""
+            rid = cell("编号")
+            if not re.match(r"^[A-Z]+-\d+$", rid):
+                continue
+            rows.append({
+                "id": rid,
+                "date": cell("日期"),
+                "topic": (cell("主题") or cell("决策内容"))[:60],
+            })
+
+    def _sort_key(rec):
+        parsed = None
+        if rec["date"] and rec["date"] != "—":
+            try:
+                parsed = date.fromisoformat(rec["date"][:10])
+            except ValueError:
+                parsed = None
+        id_num = 0
+        m = re.match(r"^[A-Z]+-(\d+)$", rec["id"])
+        if m:
+            id_num = int(m.group(1))
+        if parsed is None:
+            return (False, date.min, -1)   # 无日期 → 视为最旧（兜底，不可冒充"最近"）
+        return (True, parsed, id_num)
+
+    rows.sort(key=_sort_key, reverse=True)
+    return rows[:n]
+
+
+def _status_plugin_freshness(plan_content=None):
+    """Advisory freshness: resolve_entry active_version vs plan-tracker record.
+
+    NOT authoritative (DEC-096): the authoritative active version comes from
+    ``resolve_entry.py``; this is the host-side driver signal only. The
+    plan-tracker version is extracted permissively (``工作流版本: X.Y.Z`` in
+    both the ``**key**:`` and ``**key**: value**`` shapes used live).
+    """
+    plan_version = ""
+    if plan_content is None:
+        plan_content = SAMPLE_PATH.read_text(encoding="utf-8") if SAMPLE_PATH.is_file() else ""
+    m = re.search(r"工作流版本\s*[:：]?\s*([0-9]+\.[0-9]+\.[0-9]+)", plan_content) or \
+        re.search(r"\b([0-9]+\.[0-9]+\.[0-9]+)\b", plan_content[:2000])
+    if m:
+        plan_version = m.group(1)
+    active_version = ""
+    try:
+        from resolve_entry import read_active_version
+        active_version = read_active_version() or ""
+    except Exception:
+        active_version = ""
+    if not plan_version or not active_version:
+        return {
+            "status": "UNKNOWN", "active_version": active_version or "unknown",
+            "plan_version": plan_version or "unknown",
+        }
+    try:
+        active_tuple = tuple(int(part) for part in active_version.split("."))
+        plan_tuple = tuple(int(part) for part in plan_version.split("."))
+        is_ahead = active_tuple > plan_tuple
+    except (TypeError, ValueError):
+        is_ahead = False
+    if active_version == plan_version:
+        status = "UP TO DATE"
+    elif is_ahead:
+        status = "OUTDATED"
+    else:
+        status = "AHEAD"
+    return {
+        "status": status, "active_version": active_version,
+        "plan_version": plan_version,
+    }
+
+
+_STATUS_ID_TOKEN_RE = re.compile(r"(?<![-A-Z])([A-Z]+)-(\d+)\b")
+
+
+def _status_priority_rank(priority):
+    """P0 < P1 < P2; anything else sorts last."""
+    m = re.match(r"\s*P([012])\b", str(priority or ""))
+    return int(m.group(1)) if m else 9
+
+
+def _status_raw_dependency_ids(rec):
+    """Task-family IDs referenced by a task row (the 依赖 cell when present,
+    else a whole-row scan for host-style tables without a 依赖 column).
+    The row's own ID and cross-entity prefixes (RISK/DEC/…) are excluded at
+    the caller via the status map (unknown prefixes never block)."""
+    text = rec.get("deps") or ""
+    if not text and rec.get("_columns"):
+        text = " ".join(str(c) for c in rec["_columns"])
+    ids = set()
+    for m in _STATUS_ID_TOKEN_RE.finditer(str(text)):
+        tid = f"{m.group(1)}-{m.group(2)}"
+        if tid != rec.get("id"):
+            ids.add(tid)
+    return ids
+
+
+def _status_next_steps(plan_content, max_results=3):
+    """建议下一步线索：轻量派生（header-driven 任务行 + 依赖状态检查）。
+
+    只在 plan-tracker 文本上做确定性分析，绝不运行 check-governance。
+    完成判定用 ``_status_is_completed_cell``（同时识别 ✅ 前缀 dogfood 惯例与
+    宿主 text-only 状态），依赖引用未知 ID 不阻断（推荐线索非门禁；
+    权威 fail-closed 依赖分析仍由 task-priority-analysis 承载）。
+    fail-safe：任何异常返回 []。
+    """
+    try:
+        rows = parse_task_table_rows(plan_content)
+        status_map = {r["id"]: _status_is_completed_cell(r["status"]) for r in rows}
+        candidates = []
+        for r in rows:
+            if status_map.get(r["id"]):
+                continue
+            unresolved = [
+                d for d in _status_raw_dependency_ids(r)
+                if d in status_map and not status_map[d]
+            ]
+            if unresolved:
+                continue
+            candidates.append(r)
+        candidates.sort(
+            key=lambda r: (
+                _status_priority_rank(r["priority"]),
+                0 if "进行中" in r["status"] else 1,
+                r["_order"],
+            )
+        )
+        return [
+            {
+                "task_id": r["id"],
+                "priority": r["priority"],
+                "status": _status_clean_cell(r["status"]),
+                "target_version": r["target_version"],
+            }
+            for r in candidates[:max_results]
+        ]
+    except Exception:
+        return []
+
+
+def _status_task_stats(rows):
+    """Aggregate deduped task-table rows into per-status counts + P0 pending."""
+    stats = {"已完成": 0, "进行中": 0, "未开始": 0, "已终止": 0}
+    p0_pending = 0
+    for r in rows:
+        status = _normalize_task_status(r["status"] or "")
+        if status:
+            stats[status] += 1
+        if r["priority"].strip() == "P0" and not _status_is_completed_cell(r["status"]):
+            p0_pending += 1
+    return stats, p0_pending
+
+
 def cmd_status(args):
-    """Show project status overview."""
+    """Show project status overview (FIX-270 秒级状态快路径)."""
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
@@ -9855,7 +10352,74 @@ def cmd_status(args):
     gates = parse_gate_status()
     stats = parse_task_stats()
     permission_mode = config.get("操作权限模式", config.get("permission_mode", "N/A"))
-    trust_snapshot = build_delivery_trust_snapshot(config, overview, gates, stats)
+    # FIX-270 R0 F1: status 快路径的 resume 上下文发现必须跳过 evidence-log 全量读
+    # （discover_governance_context 的 evidence 采集器在该文件存在时会 read_text 整读；
+    # 1.2MB 级文件即交付 A 明令禁止的"全量读大文件"）。plan-tracker/snapshot/risk/git
+    # 事实足以为 Scenario F resume 信号供货；证据上下文留给 governance-context CLI 的
+    # 全量模式（skip_evidence_log=False 缺省语义不变）。
+    trust_snapshot = build_delivery_trust_snapshot(
+        config, overview, gates, stats,
+        resume=parse_resume_state(skip_evidence_log=True),
+    )
+
+    # ── FIX-270: 秒级结构化数据（Scenario F 面板所需全部字段）──
+    # 行级解析热文件；明确不读 evidence-log 大文件。
+    plan_content = SAMPLE_PATH.read_text(encoding="utf-8") if SAMPLE_PATH.is_file() else ""
+    task_rows = parse_task_table_rows(plan_content)
+    row_stats, p0_pending = _status_task_stats(task_rows)
+    risks = parse_active_risks()
+    decisions = parse_recent_decisions(5)
+    recent_completed = parse_recent_completed_tasks(task_rows, 5)
+    freshness = _status_plugin_freshness(plan_content)
+    next_steps = _status_next_steps(plan_content)
+
+    if getattr(args, "json", False):
+        try:
+            total_raw = int(str(overview.get("total", 0) or 0))
+        except (TypeError, ValueError):
+            total_raw = 0
+        try:
+            completed_raw = int(str(overview.get("completed", 0) or 0))
+        except (TypeError, ValueError):
+            completed_raw = 0
+        try:
+            blocked_raw = int(str(overview.get("blocked", 0) or 0))
+        except (TypeError, ValueError):
+            blocked_raw = 0
+        payload = {
+            "project_config": {
+                "project_name": _status_project_name(config, overview),
+                "profile": _status_clean_cell(config.get("Profile", "")),
+                "trigger_mode": _status_clean_cell(config.get("触发模式", "")),
+                "permission_mode": permission_mode,
+                "workflow_version": _status_clean_cell(config.get("工作流版本", "")),
+                "current_stage": _status_clean_cell(config.get("当前阶段", "")),
+            },
+            "overview": overview,
+            "gates": gates,
+            "stats": {
+                "total": total_raw,
+                "completed": completed_raw,
+                "blocked": blocked_raw,
+                "p0_pending": p0_pending,
+                "table_rows": row_stats,
+            },
+            "risks": risks,
+            "recent_activity": {
+                "completed_tasks": [
+                    {"id": r["id"], "status": r["status"],
+                     "actual_completion": r["actual_completion"],
+                     "evidence": r["evidence"]}
+                    for r in recent_completed
+                ],
+                "decisions": decisions,
+            },
+            "plugin_freshness": freshness,
+            "next_steps": next_steps,
+            "delivery_trust_snapshot": trust_snapshot,
+        }
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return
 
     # Config section
     print("\n┌─ Project Config ────────────────────────────────────┐")
@@ -9892,23 +10456,82 @@ def cmd_status(args):
         print(f"│  {label}: {value}")
     print("└──────────────────────────────────────────────────────┘")
 
-    # Task stats
-    if any(stats.values()):
-        print("\n┌─ Task Status ───────────────────────────────────────┐")
-        total = sum(stats.values())
-        for status, count in stats.items():
+    # Task stats (FIX-270: overview numbers + deduped table rows + P0 pending)
+    print("\n┌─ Task Status ───────────────────────────────────────┐")
+    total_overview = overview.get("total", 0)
+    completed_overview = overview.get("completed", 0)
+    print(f"│  Overview: {completed_overview}/{total_overview} completed, "
+          f"{overview.get('blocked', 0)} blocked (## 项目总览)")
+    print(f"│  P0 pending: {p0_pending} (未完成 P0 任务)")
+    total = sum(row_stats.values())
+    if total:
+        for status, count in row_stats.items():
             bar = "#" * count + "." * (total - count)
             print(f"│  {status:6s} {count:2d} {bar}")
-        print("└──────────────────────────────────────────────────────┘")
+    else:
+        print(f"│  Table rows: none")
+    print("└──────────────────────────────────────────────────────┘")
 
-    # Gate status
+    # Gate status (FIX-270: fixed loop — G1-G11 all printed with date + evidence)
     if gates:
         print("\n┌─ Gate Status ───────────────────────────────────────┐")
         for g in gates:
             icon = STATUS_ICONS.get(g["status"], "?")
             date = g["date"] if g["date"] else ""
-        print(f"│  {icon} {g['gate']:4s}  {g['status']:20s}  {date}")
+            evidence = g.get("evidence", "")
+            line = f"│  {icon} {g['gate']:4s}  {g['status']:20s}  {date}"
+            if evidence:
+                line += f"  ({evidence[:40]})"
+            print(line)
         print("└──────────────────────────────────────────────────────┘")
+
+    # Active risks (≤3 天升级线标记)
+    print("\n┌─ Active Risks ───────────────────────────────────────┐")
+    if risks:
+        for r in risks:
+            marker = ""
+            if r["escalation_overdue"]:
+                marker = f" ⚠ overdue ({-r['days_left']}d)"
+            elif r["escalation_soon"]:
+                marker = f" ⚠ ≤3d escalation"
+            print(f"│  {r['id']:10s} {r['status']:8s} 截止 {r['deadline'] or '—'}{marker}")
+    else:
+        print("│  no open risks")
+    print("└──────────────────────────────────────────────────────┘")
+
+    # Recent activity (last 5 completed tasks + last 5 decisions)
+    print("\n┌─ Recent Activity ────────────────────────────────────┐")
+    if recent_completed:
+        for r in recent_completed:
+            print(f"│  Completed: {r['id']} ({r['status'][:24]})"
+                  f"{' @ ' + r['actual_completion'] if r['actual_completion'] else ''}"
+                  f"{' EVD ' + r['evidence'] if r['evidence'] else ''}")
+    else:
+        print("│  Completed: none")
+    for d in decisions:
+        print(f"│  Decision:  {d['id']} {d['date']} {d['topic']}")
+    print("└──────────────────────────────────────────────────────┘")
+
+    # Plugin freshness (advisory — 权威版本见 resolve_entry active_version)
+    print("\n┌─ Plugin Freshness ───────────────────────────────────┐")
+    print(f"│  active={freshness['active_version']} vs plan={freshness['plan_version']} "
+          f"→ {freshness['status']} (advisory — 权威版本见 resolve_entry.py)")
+    print("└──────────────────────────────────────────────────────┘")
+
+    # Next-step hints (轻量派生，不运行 check-governance)
+    print("\n┌─ Next step hints ────────────────────────────────────┐")
+    if next_steps:
+        for i, s in enumerate(next_steps, 1):
+            print(f"│  {i}. {s['task_id']:10s} [{s['priority']}] {s['status'][:40]}")
+    else:
+        print("│  no ready-to-start candidates (all unblocked work finished or "
+              "blocked by unfinished dependencies)")
+    print("└──────────────────────────────────────────────────────┘")
+
+
+def _status_project_name(config, overview):
+    name = config.get("项目名称", "") or overview.get("project", "")
+    return _status_clean_cell(name) if name else "N/A"
 
 
 def cmd_governance_context(args):
@@ -13075,6 +13698,107 @@ def cmd_check_governance(args):
         sys.exit(1)
 
 
+# ── FIX-270 交付 B: 检查事实源根目录声明（product-gate 切分）─────────────
+# 判定标准：以「检查事实源根」切分——每个检查的事实要么来自插件包本体
+# （manifest / 交叉引用 / 插件 git / ArchGuard 树扫描 / 投影 fixtures /
+# 注入锚点 / 插件版本资产 / loop-claim 扫描 / identity attestation），要么
+# 来自宿主项目（.governance/ 热文件 + 宿主 git）。事实源 = 插件包本体的
+# 检查（PLUGIN_PRODUCT）在宿主模式（HOST_PROJECT_ROOT 与 PLUGIN_ROOT 不同）
+# 默认跳过，经 ``--product-gates`` 显式开启；dogfood（roots 相同）默认保留
+# 全部。新增检查只需在目录中登记一行（先声明事实源，再决定归属），
+# 不得在引擎代码里硬编码编号黑名单。
+_PLUGIN_PRODUCT_CHECK_IDS = frozenset({
+    # 插件 git 作为事实源（-C ROOT 而非宿主仓库）
+    "Check 7",    # Commit-Task Traceability
+    "Check 15",   # Commit Scope Verification
+    # 插件包本体文件作为事实源
+    "Check 10",   # M5 AskUserQuestion Compliance（插件 source 扫描）
+    "Check 11",   # Manifest Consistency
+    "Check 12",   # Cross-Reference Checking
+    "Check 24",   # Version Consistency（插件版本资产）
+    "Check 28b",  # Projection Sync Guard（source/fixtures/native entries）
+    "Check 28d",  # Runtime Readiness Matrix（插件 docs）
+    "Check 28e",  # First-Session Measurement（插件 docs）
+    "Check 28f",  # Governance Pack Registry（插件 core JSON）
+    "Check 28h",  # README Pack Guidance
+    "Check 28i",  # Governance Pack Status Boundary
+    "Check 28k",  # Capability Registry（插件 core JSON）
+    "Check 28m",  # Official Submission Ecosystem（插件 docs）
+    "Check 28n",  # Mainstream Agent Loading（插件 docs）
+    # ArchGuard 插件树扫描
+    "Check 28o",  # Architecture Health
+    "Check 28p",  # Duplicate Code
+    "Check 28q",  # Technical Debt
+    "Check 28r",  # Complexity
+    "Check 30b",  # Loop wiring call sites（插件 infra AST 扫描）
+    "Check 31",   # Loop Runtime Claim Gate（插件树扫描 + identity attestation）
+    "Check 33",   # Injection Contract（插件 persona/SKILL/AGENTS 锚点）
+})
+
+
+def _host_plugin_roots_divergent():
+    """True when the host project root differs from the plugin package root.
+
+    FIX-270 mixed-root watchdog: every check's fact-source root must equal the
+    project it is governed against. When the roots diverge (host scenario),
+    plugin-package-rooted checks are product self-checks and are skipped by
+    default (--product-gates re-enables); when they coincide (dogfood) all
+    checks run.
+    """
+    try:
+        host = os.path.normcase(os.path.abspath(os.fspath(HOST_PROJECT_ROOT)))
+        plugin = os.path.normcase(os.path.abspath(os.fspath(PLUGIN_ROOT)))
+        return host != plugin
+    except Exception:
+        return False
+
+
+def _product_gate_active(args):
+    """Whether PLUGIN_PRODUCT checks run in this invocation.
+
+    dogfood（host==plugin）→ always; host mode → only with ``--product-gates``.
+    """
+    if not _host_plugin_roots_divergent():
+        return True
+    return bool(getattr(args, "product_gates", False))
+
+
+_PRODUCT_GATE_LABELS = {
+    "Check 7": "Commit-Task Traceability",
+    "Check 10": "M5 AskUserQuestion Compliance",
+    "Check 11": "Manifest Consistency",
+    "Check 12": "Cross-Reference Checking",
+    "Check 15": "Commit Scope Verification",
+    "Check 24": "Version Consistency",
+    "Check 28b": "Projection Sync Guard",
+    "Check 28d": "Runtime Readiness Matrix Guard",
+    "Check 28e": "First-Session Measurement Guard",
+    "Check 28f": "Governance Pack Registry",
+    "Check 28h": "README Pack Guidance",
+    "Check 28i": "Governance Pack Status Boundary",
+    "Check 28k": "Capability Registry",
+    "Check 28m": "Official Submission Ecosystem",
+    "Check 28n": "Mainstream Agent Loading",
+    "Check 28o": "Architecture Health (ArchGuard/REQ-101)",
+    "Check 28p": "Duplicate Code (ArchGuard/REQ-101)",
+    "Check 28q": "Technical Debt (ArchGuard/REQ-101)",
+    "Check 28r": "Complexity (ArchGuard/REQ-101)",
+    "Check 30b": "Loop wiring call sites",
+    "Check 31": "Loop Runtime Claim Gate",
+    "Check 33": "Injection Contract",
+}
+
+
+def _print_product_gate_skipped(check_id):
+    """Print the standard SKIP banner for a plugin-product check in host mode."""
+    label = _PRODUCT_GATE_LABELS.get(check_id, "")
+    title = f"{check_id}: {label}" if label else check_id
+    print(f"\n┌─ {title} {'─' * max(1, 60 - len(title))}┐")
+    print("│  [SKIP] product self-check — plugin-package fact source; "
+          "host/plugin roots diverge. Run with --product-gates to enable.")
+    print("└──────────────────────────────────────────────────────┘")
+
+
 def _run_full_engine_checks(args):
     """Run all governance health checks and return the accumulated issue count.
 
@@ -13260,25 +13984,28 @@ def _run_full_engine_checks(args):
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 7. Commit-task traceability ──
-    print("\n┌─ Check 7: Commit-Task Traceability ──────────────────┐")
-    ct_result = check_commit_task_references(limit=20)
-    if "error" in ct_result:
-        print(f"│  [INFO] Skipped: {ct_result['error']}")
-    else:
-        total = ct_result["total_checked"]
-        without = ct_result["without_task_id"]
-        print(f"│  Recent commits checked: {total}")
-        if without > 0:
-            all_issues += without
-            print(f"│  [WARN] {without} commit(s) without task ID reference:")
-            for c in ct_result["issues"]:
-                msg_short = c["message"][:70] + ("..." if len(c["message"]) > 70 else "")
-                print(f"│    - {c['sha']}: {msg_short}")
+    if _product_gate_active(args):
+        print("\n┌─ Check 7: Commit-Task Traceability ──────────────────┐")
+        ct_result = check_commit_task_references(limit=20)
+        if "error" in ct_result:
+            print(f"│  [INFO] Skipped: {ct_result['error']}")
         else:
-            print(f"│  [PASS] All {total} recent commits have task ID references.")
-        # Show stats
-        with_id = total - without
-        print(f"│  With task ID: {with_id}/{total}")
+            total = ct_result["total_checked"]
+            without = ct_result["without_task_id"]
+            print(f"│  Recent commits checked: {total}")
+            if without > 0:
+                all_issues += without
+                print(f"│  [WARN] {without} commit(s) without task ID reference:")
+                for c in ct_result["issues"]:
+                    msg_short = c["message"][:70] + ("..." if len(c["message"]) > 70 else "")
+                    print(f"│    - {c['sha']}: {msg_short}")
+            else:
+                print(f"│  [PASS] All {total} recent commits have task ID references.")
+            # Show stats
+            with_id = total - without
+            print(f"│  With task ID: {with_id}/{total}")
+    else:
+        _print_product_gate_skipped("Check 7")
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 8. Risk escalation deadline ──
@@ -13310,97 +14037,106 @@ def _run_full_engine_checks(args):
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 10. M5 AskUserQuestion compliance ──
-    print("\n┌─ Check 10: M5 AskUserQuestion Compliance ────────────┐")
-    m5_result = check_m5_compliance()
-    m5_issues = m5_result["issues"]
-    if m5_issues:
-        blocking = [i for i in m5_issues if i["severity"] == "BLOCKING"]
-        errors = [i for i in m5_issues if i["severity"] == "ERROR"]
-        warnings = [i for i in m5_issues if i["severity"] == "WARNING"]
-        all_issues += len(blocking) + len(errors)
-        if blocking:
-            print(f"│  [BLOCKING] {len(blocking)} M5 anti-pattern(s) — source files containing")
-            print(f"│             inline question instructions (M5.1 violation):")
-            for b in blocking:
-                print(f"│    - {b['file']}:{b['line']}: {b['text'][:80]}")
-                print(f"│      Fix: {b['fix']}")
-        if errors:
-            print(f"│  [ERROR] {len(errors)} M5 structural gap(s):")
-            for e in errors:
-                print(f"│    - {e['file']}: {e['text'][:80]}")
-        if warnings:
-            print(f"│  [WARN] {len(warnings)} M5 coverage warning(s):")
-            for w in warnings:
-                print(f"│    - {w['file']}: {w['text'][:80]}")
+    if _product_gate_active(args):
+        print("\n┌─ Check 10: M5 AskUserQuestion Compliance ────────────┐")
+        m5_result = check_m5_compliance()
+        m5_issues = m5_result["issues"]
+        if m5_issues:
+            blocking = [i for i in m5_issues if i["severity"] == "BLOCKING"]
+            errors = [i for i in m5_issues if i["severity"] == "ERROR"]
+            warnings = [i for i in m5_issues if i["severity"] == "WARNING"]
+            all_issues += len(blocking) + len(errors)
+            if blocking:
+                print(f"│  [BLOCKING] {len(blocking)} M5 anti-pattern(s) — source files containing")
+                print(f"│             inline question instructions (M5.1 violation):")
+                for b in blocking:
+                    print(f"│    - {b['file']}:{b['line']}: {b['text'][:80]}")
+                    print(f"│      Fix: {b['fix']}")
+            if errors:
+                print(f"│  [ERROR] {len(errors)} M5 structural gap(s):")
+                for e in errors:
+                    print(f"│    - {e['file']}: {e['text'][:80]}")
+            if warnings:
+                print(f"│  [WARN] {len(warnings)} M5 coverage warning(s):")
+                for w in warnings:
+                    print(f"│    - {w['file']}: {w['text'][:80]}")
+        else:
+            print(f"│  [PASS] No M5 anti-patterns in source files.")
+            print(f"│  [PASS] M5 AskUserQuestion rules present in bootstrap.")
+            print(f"│  [PASS] interaction-boundary.md has AskUserQuestion bindings.")
+        print(f"│  Total M5 checks: {m5_result['total_checks']}")
     else:
-        print(f"│  [PASS] No M5 anti-patterns in source files.")
-        print(f"│  [PASS] M5 AskUserQuestion rules present in bootstrap.")
-        print(f"│  [PASS] interaction-boundary.md has AskUserQuestion bindings.")
-    print(f"│  Total M5 checks: {m5_result['total_checks']}")
+        _print_product_gate_skipped("Check 10")
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 11. Manifest consistency ──
-    print("\n┌─ Check 11: Manifest Consistency ─────────────────────┐")
-    mc_result = check_manifest_consistency()
-    if mc_result.get("error"):
-        print(f"│  [INFO] Skipped: {mc_result.get('error')}")
+    if _product_gate_active(args):
+        print("\n┌─ Check 11: Manifest Consistency ─────────────────────┐")
+        mc_result = check_manifest_consistency()
+        if mc_result.get("error"):
+            print(f"│  [INFO] Skipped: {mc_result.get('error')}")
+        else:
+            mc_missing = mc_result["missing"]
+            mc_untracked = mc_result["untracked"]
+            print(f"│  Canonical files in manifest: {mc_result['canonical_count']}")
+            print(f"│  Actual files on disk:       {mc_result['actual_count']}")
+            if mc_missing:
+                all_issues += len(mc_missing)
+                print(f"│  [WARN] {len(mc_missing)} file(s) in manifest but missing on disk:")
+                for m in mc_missing:
+                    print(f"│    - {m}")
+            else:
+                print(f"│  [PASS] No missing files (all manifest entries exist on disk).")
+            if mc_untracked:
+                all_issues += len(mc_untracked)
+                print(f"│  [WARN] {len(mc_untracked)} file(s) on disk but not in manifest:")
+                for u in mc_untracked:
+                    print(f"│    - {u}")
+            else:
+                print(f"│  [PASS] No untracked files (all files covered by manifest).")
     else:
-        mc_missing = mc_result["missing"]
-        mc_untracked = mc_result["untracked"]
-        print(f"│  Canonical files in manifest: {mc_result['canonical_count']}")
-        print(f"│  Actual files on disk:       {mc_result['actual_count']}")
-        if mc_missing:
-            all_issues += len(mc_missing)
-            print(f"│  [WARN] {len(mc_missing)} file(s) in manifest but missing on disk:")
-            for m in mc_missing:
-                print(f"│    - {m}")
-        else:
-            print(f"│  [PASS] No missing files (all manifest entries exist on disk).")
-        if mc_untracked:
-            all_issues += len(mc_untracked)
-            print(f"│  [WARN] {len(mc_untracked)} file(s) on disk but not in manifest:")
-            for u in mc_untracked:
-                print(f"│    - {u}")
-        else:
-            print(f"│  [PASS] No untracked files (all files covered by manifest).")
+        _print_product_gate_skipped("Check 11")
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 12. Cross-Reference Checking (SYSGAP-008) ──
-    print("\n┌─ Check 12: Cross-Reference Checking ────────────────┐")
-    xr_result = check_cross_references()
-    print(f"│  Files scanned: {xr_result['total_files_scanned']}")
-    print(f"│  References extracted: {xr_result['total_refs']}")
-    xr_issues = 0
-    if xr_result["dangling"]:
-        xr_issues += len(xr_result["dangling"])
-        all_issues += len(xr_result["dangling"])
-        print(f"│  [WARN] {len(xr_result['dangling'])} dangling reference(s):")
-        for d in xr_result["dangling"][:10]:
-            print(f"│    - {d['source']}:{d['line']} -> {d['target']}")
-        if len(xr_result["dangling"]) > 10:
-            print(f"│    ... and {len(xr_result['dangling']) - 10} more")
+    if _product_gate_active(args):
+        print("\n┌─ Check 12: Cross-Reference Checking ────────────────┐")
+        xr_result = check_cross_references()
+        print(f"│  Files scanned: {xr_result['total_files_scanned']}")
+        print(f"│  References extracted: {xr_result['total_refs']}")
+        xr_issues = 0
+        if xr_result["dangling"]:
+            xr_issues += len(xr_result["dangling"])
+            all_issues += len(xr_result["dangling"])
+            print(f"│  [WARN] {len(xr_result['dangling'])} dangling reference(s):")
+            for d in xr_result["dangling"][:10]:
+                print(f"│    - {d['source']}:{d['line']} -> {d['target']}")
+            if len(xr_result["dangling"]) > 10:
+                print(f"│    ... and {len(xr_result['dangling']) - 10} more")
+        else:
+            print(f"│  [PASS] No dangling references found.")
+        if xr_result["deprecated"]:
+            xr_issues += len(xr_result["deprecated"])
+            all_issues += len(xr_result["deprecated"])
+            print(f"│  [WARN] {len(xr_result['deprecated'])} deprecated path(s):")
+            for d in xr_result["deprecated"][:10]:
+                print(f"│    - {d['source']}:{d['line']}: {d['target']} ({d['deprecated_pattern']})")
+            if len(xr_result["deprecated"]) > 10:
+                print(f"│    ... and {len(xr_result['deprecated']) - 10} more")
+        else:
+            print(f"│  [PASS] No deprecated path patterns found.")
+        if xr_result["cycles"]:
+            xr_issues += len(xr_result["cycles"])
+            all_issues += len(xr_result["cycles"])
+            print(f"│  [WARN] {len(xr_result['cycles'])} circular reference(s):")
+            for cycle in xr_result["cycles"]:
+                print(f"│    - {' -> '.join(cycle)}")
+        else:
+            print(f"│  [PASS] No circular references found.")
+        if xr_issues == 0:
+            print(f"│  [PASS] Cross-reference graph is clean.")
     else:
-        print(f"│  [PASS] No dangling references found.")
-    if xr_result["deprecated"]:
-        xr_issues += len(xr_result["deprecated"])
-        all_issues += len(xr_result["deprecated"])
-        print(f"│  [WARN] {len(xr_result['deprecated'])} deprecated path(s):")
-        for d in xr_result["deprecated"][:10]:
-            print(f"│    - {d['source']}:{d['line']}: {d['target']} ({d['deprecated_pattern']})")
-        if len(xr_result["deprecated"]) > 10:
-            print(f"│    ... and {len(xr_result['deprecated']) - 10} more")
-    else:
-        print(f"│  [PASS] No deprecated path patterns found.")
-    if xr_result["cycles"]:
-        xr_issues += len(xr_result["cycles"])
-        all_issues += len(xr_result["cycles"])
-        print(f"│  [WARN] {len(xr_result['cycles'])} circular reference(s):")
-        for cycle in xr_result["cycles"]:
-            print(f"│    - {' -> '.join(cycle)}")
-    else:
-        print(f"│  [PASS] No circular references found.")
-    if xr_issues == 0:
-        print(f"│  [PASS] Cross-reference graph is clean.")
+        _print_product_gate_skipped("Check 12")
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 13. Sequential ID Checking (SYSGAP-009) ──
@@ -13439,25 +14175,28 @@ def _run_full_engine_checks(args):
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 15. Commit Scope Verification (SYSGAP-012) ──
-    print("\n┌─ Check 15: Commit Scope Verification ────────────────┐")
-    cs_result = check_commit_scope(limit=20)
-    if cs_result.get("error"):
-        print(f"│  [INFO] Skipped: {cs_result['error']}")
-    else:
-        cs_issues = cs_result["issues"]
-        print(f"│  Recent commits checked: {cs_result['total_checked']}")
-        if cs_issues:
-            all_issues += len(cs_issues)
-            print(f"│  [WARN] {len(cs_issues)} scope discipline issue(s):")
-            for v in cs_issues[:10]:
-                detail = v.get("detail", "")
-                sha = v.get("sha", "?")
-                itype = v.get("type", "?")
-                print(f"│    - [{itype}] {sha}: {detail}")
-            if len(cs_issues) > 10:
-                print(f"│    ... and {len(cs_issues) - 10} more")
+    if _product_gate_active(args):
+        print("\n┌─ Check 15: Commit Scope Verification ────────────────┐")
+        cs_result = check_commit_scope(limit=20)
+        if cs_result.get("error"):
+            print(f"│  [INFO] Skipped: {cs_result['error']}")
         else:
-            print(f"│  [PASS] All recent commits have clean scope discipline.")
+            cs_issues = cs_result["issues"]
+            print(f"│  Recent commits checked: {cs_result['total_checked']}")
+            if cs_issues:
+                all_issues += len(cs_issues)
+                print(f"│  [WARN] {len(cs_issues)} scope discipline issue(s):")
+                for v in cs_issues[:10]:
+                    detail = v.get("detail", "")
+                    sha = v.get("sha", "?")
+                    itype = v.get("type", "?")
+                    print(f"│    - [{itype}] {sha}: {detail}")
+                if len(cs_issues) > 10:
+                    print(f"│    ... and {len(cs_issues) - 10} more")
+            else:
+                print(f"│  [PASS] All recent commits have clean scope discipline.")
+    else:
+        _print_product_gate_skipped("Check 15")
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 16. Goal Alignment (SYSGAP-023) ──
@@ -13818,21 +14557,24 @@ def _run_full_engine_checks(args):
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 24. Version Consistency (FIX-052) ──
-    print("\n┌─ Check 24: Version Consistency (FIX-052) ───────────┐")
-    vc_issues = check_version_consistency()
-    vc_fail = [i for i in vc_issues if not i.startswith("[WARN]")]
-    vc_warn = [i for i in vc_issues if i.startswith("[WARN]")]
-    if vc_fail:
-        all_issues += len(vc_fail)
-        print(f"│  [FAIL] {len(vc_fail)} version mismatch(es):")
-        for v in vc_fail:
-            print(f"│    - {v}")
+    if _product_gate_active(args):
+        print("\n┌─ Check 24: Version Consistency (FIX-052) ───────────┐")
+        vc_issues = check_version_consistency()
+        vc_fail = [i for i in vc_issues if not i.startswith("[WARN]")]
+        vc_warn = [i for i in vc_issues if i.startswith("[WARN]")]
+        if vc_fail:
+            all_issues += len(vc_fail)
+            print(f"│  [FAIL] {len(vc_fail)} version mismatch(es):")
+            for v in vc_fail:
+                print(f"│    - {v}")
+        else:
+            print(f"│  [PASS] All version declarations match SKILL.md.")
+        if vc_warn:
+            print(f"│  [INFO] {len(vc_warn)} non-blocking drift(s):")
+            for w in vc_warn:
+                print(f"│    - {w}")
     else:
-        print(f"│  [PASS] All version declarations match SKILL.md.")
-    if vc_warn:
-        print(f"│  [INFO] {len(vc_warn)} non-blocking drift(s):")
-        for w in vc_warn:
-            print(f"│    - {w}")
+        _print_product_gate_skipped("Check 24")
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 25. Untracked Files Detection (FIX-057 Phase 2) ──
@@ -13945,26 +14687,34 @@ def _run_full_engine_checks(args):
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 28b. Projection Sync Guard (FIX-086) ──
-    print("\n┌─ Check 28b: Projection Sync Guard (FIX-086) ─────────┐")
-    ps_result = check_projection_sync()
-    print(f"│  Source version: {ps_result['source_version'] or 'unknown'}")
-    print(f"│  Mirrored files checked: {ps_result['mirrors_checked']}")
-    if ps_result.get("mirrors_skipped_untracked"):
-        print(f"│  Untracked local projection copies skipped: {ps_result['mirrors_skipped_untracked']}")
-    if ps_result["issues"]:
-        all_issues += len(ps_result["issues"])
-        print(f"│  [FAIL] {len(ps_result['issues'])} projection sync issue(s):")
-        for issue in ps_result["issues"][:10]:
-            print(f"│    - {issue}")
-        if len(ps_result["issues"]) > 10:
-            print(f"│    ... and {len(ps_result['issues']) - 10} more")
+    if _product_gate_active(args):
+        print("\n┌─ Check 28b: Projection Sync Guard (FIX-086) ─────────┐")
+        ps_result = check_projection_sync()
+        print(f"│  Source version: {ps_result['source_version'] or 'unknown'}")
+        print(f"│  Mirrored files checked: {ps_result['mirrors_checked']}")
+        if ps_result.get("mirrors_skipped_untracked"):
+            print(f"│  Untracked local projection copies skipped: {ps_result['mirrors_skipped_untracked']}")
+        if ps_result["issues"]:
+            all_issues += len(ps_result["issues"])
+            print(f"│  [FAIL] {len(ps_result['issues'])} projection sync issue(s):")
+            for issue in ps_result["issues"][:10]:
+                print(f"│    - {issue}")
+            if len(ps_result["issues"]) > 10:
+                print(f"│    ... and {len(ps_result['issues']) - 10} more")
+        else:
+            print("│  [PASS] Source, target fixture, native entries, and plugin versions are synchronized.")
     else:
-        print("│  [PASS] Source, target fixture, native entries, and plugin versions are synchronized.")
+        _print_product_gate_skipped("Check 28b")
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 28c. Hot Fact-Source Consistency Guard (FIX-087) ──
     print("\n┌─ Check 28c: Hot Fact-Source Consistency (FIX-087) ───┐")
     hfs_issues = check_hot_fact_source_consistency()
+    if _host_plugin_roots_divergent():
+        print("│  [INFO] host mode: plugin-project expectations (0.38.0 roadmap/" 
+              "REQ-070~074/RISK-033/REL-013 + ### 1.0.0 依赖链) not asserted — "
+              "governed object is not the plugin project (FIX-270); generic "
+              "section/snapshot consistency still checked.")
     if hfs_issues:
         all_issues += len(hfs_issues)
         print(f"│  [FAIL] {len(hfs_issues)} hot fact-source issue(s):")
@@ -13977,45 +14727,54 @@ def _run_full_engine_checks(args):
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 28d. Runtime Readiness Matrix Guard (FIX-106) ──
-    print("\n┌─ Check 28d: Runtime Readiness Matrix (FIX-106) ──────┐")
-    rrm_issues = check_runtime_readiness_matrix()
-    if rrm_issues:
-        all_issues += len(rrm_issues)
-        print(f"│  [FAIL] {len(rrm_issues)} runtime/readiness matrix issue(s):")
-        for issue in rrm_issues[:10]:
-            print(f"│    - {issue}")
-        if len(rrm_issues) > 10:
-            print(f"│    ... and {len(rrm_issues) - 10} more")
+    if _product_gate_active(args):
+        print("\n┌─ Check 28d: Runtime Readiness Matrix (FIX-106) ──────┐")
+        rrm_issues = check_runtime_readiness_matrix()
+        if rrm_issues:
+            all_issues += len(rrm_issues)
+            print(f"│  [FAIL] {len(rrm_issues)} runtime/readiness matrix issue(s):")
+            for issue in rrm_issues[:10]:
+                print(f"│    - {issue}")
+            if len(rrm_issues) > 10:
+                print(f"│    ... and {len(rrm_issues) - 10} more")
+        else:
+            print("│  [PASS] Public runtime/readiness matrix matches adapter facts and no-overclaim boundaries.")
     else:
-        print("│  [PASS] Public runtime/readiness matrix matches adapter facts and no-overclaim boundaries.")
+        _print_product_gate_skipped("Check 28d")
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 28e. First-Session Measurement Guard (FIX-107) ──
-    print("\n┌─ Check 28e: First-Session Measurement (FIX-107) ─────┐")
-    fsm_issues = check_first_session_measurement()
-    if fsm_issues:
-        all_issues += len(fsm_issues)
-        print(f"│  [FAIL] {len(fsm_issues)} first-session measurement issue(s):")
-        for issue in fsm_issues[:10]:
-            print(f"│    - {issue}")
-        if len(fsm_issues) > 10:
-            print(f"│    ... and {len(fsm_issues) - 10} more")
+    if _product_gate_active(args):
+        print("\n┌─ Check 28e: First-Session Measurement (FIX-107) ─────┐")
+        fsm_issues = check_first_session_measurement()
+        if fsm_issues:
+            all_issues += len(fsm_issues)
+            print(f"│  [FAIL] {len(fsm_issues)} first-session measurement issue(s):")
+            for issue in fsm_issues[:10]:
+                print(f"│    - {issue}")
+            if len(fsm_issues) > 10:
+                print(f"│    ... and {len(fsm_issues) - 10} more")
+        else:
+            print("│  [PASS] Local demo proof is separated from external first-session measurement.")
     else:
-        print("│  [PASS] Local demo proof is separated from external first-session measurement.")
+        _print_product_gate_skipped("Check 28e")
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 28f. Governance Pack Registry Guard (FIX-108) ──
-    print("\n┌─ Check 28f: Governance Pack Registry (FIX-108) ──────┐")
-    gp_issues = check_governance_packs()
-    if gp_issues:
-        all_issues += len(gp_issues)
-        print(f"│  [FAIL] {len(gp_issues)} governance pack registry issue(s):")
-        for issue in gp_issues[:10]:
-            print(f"│    - {issue}")
-        if len(gp_issues) > 10:
-            print(f"│    ... and {len(gp_issues) - 10} more")
+    if _product_gate_active(args):
+        print("\n┌─ Check 28f: Governance Pack Registry (FIX-108) ──────┐")
+        gp_issues = check_governance_packs()
+        if gp_issues:
+            all_issues += len(gp_issues)
+            print(f"│  [FAIL] {len(gp_issues)} governance pack registry issue(s):")
+            for issue in gp_issues[:10]:
+                print(f"│    - {issue}")
+            if len(gp_issues) > 10:
+                print(f"│    ... and {len(gp_issues) - 10} more")
+        else:
+            print("│  [PASS] Governance pack registry is complete, referenced, and no-overclaim safe.")
     else:
-        print("│  [PASS] Governance pack registry is complete, referenced, and no-overclaim safe.")
+        _print_product_gate_skipped("Check 28f")
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 28g. Governance Context Discovery Guard (FIX-112) ──
@@ -14033,31 +14792,37 @@ def _run_full_engine_checks(args):
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 28h. README Pack Guidance Guard (FIX-109) ──
-    print("\n┌─ Check 28h: README Pack Guidance (FIX-109) ──────────┐")
-    readme_pack_issues = check_readme_pack_guidance()
-    if readme_pack_issues:
-        all_issues += len(readme_pack_issues)
-        print(f"│  [FAIL] {len(readme_pack_issues)} README pack guidance issue(s):")
-        for issue in readme_pack_issues[:10]:
-            print(f"│    - {issue}")
-        if len(readme_pack_issues) > 10:
-            print(f"│    ... and {len(readme_pack_issues) - 10} more")
+    if _product_gate_active(args):
+        print("\n┌─ Check 28h: README Pack Guidance (FIX-109) ──────────┐")
+        readme_pack_issues = check_readme_pack_guidance()
+        if readme_pack_issues:
+            all_issues += len(readme_pack_issues)
+            print(f"│  [FAIL] {len(readme_pack_issues)} README pack guidance issue(s):")
+            for issue in readme_pack_issues[:10]:
+                print(f"│    - {issue}")
+            if len(readme_pack_issues) > 10:
+                print(f"│    ... and {len(readme_pack_issues) - 10} more")
+        else:
+            print("│  [PASS] README maps first-run profiles to packs without replacing profiles or overclaiming.")
     else:
-        print("│  [PASS] README maps first-run profiles to packs without replacing profiles or overclaiming.")
+        _print_product_gate_skipped("Check 28h")
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 28i. Governance Pack Status/Release Boundary Guard (FIX-111) ──
-    print("\n┌─ Check 28i: Governance Pack Status Boundary (FIX-111) ┐")
-    pack_status_issues = check_governance_pack_status()
-    if pack_status_issues:
-        all_issues += len(pack_status_issues)
-        print(f"│  [FAIL] {len(pack_status_issues)} governance pack status/release issue(s):")
-        for issue in pack_status_issues[:10]:
-            print(f"│    - {issue}")
-        if len(pack_status_issues) > 10:
-            print(f"│    ... and {len(pack_status_issues) - 10} more")
+    if _product_gate_active(args):
+        print("\n┌─ Check 28i: Governance Pack Status Boundary (FIX-111) ┐")
+        pack_status_issues = check_governance_pack_status()
+        if pack_status_issues:
+            all_issues += len(pack_status_issues)
+            print(f"│  [FAIL] {len(pack_status_issues)} governance pack status/release issue(s):")
+            for issue in pack_status_issues[:10]:
+                print(f"│    - {issue}")
+            if len(pack_status_issues) > 10:
+                print(f"│    ... and {len(pack_status_issues) - 10} more")
+        else:
+            print("│  [PASS] Status and release surfaces expose pack boundaries without overclaiming.")
     else:
-        print("│  [PASS] Status and release surfaces expose pack boundaries without overclaiming.")
+        _print_product_gate_skipped("Check 28i")
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 28j. Capability Context Selection Trace Guard (FIX-115) ──
@@ -14075,17 +14840,20 @@ def _run_full_engine_checks(args):
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 28k. Capability Registry Guard (FIX-116) ──
-    print("\n┌─ Check 28k: Capability Registry (FIX-116) ───────────┐")
-    capability_registry_issues = check_capability_registry()
-    if capability_registry_issues:
-        all_issues += len(capability_registry_issues)
-        print(f"│  [FAIL] {len(capability_registry_issues)} capability registry issue(s):")
-        for issue in capability_registry_issues[:10]:
-            print(f"│    - {issue}")
-        if len(capability_registry_issues) > 10:
-            print(f"│    ... and {len(capability_registry_issues) - 10} more")
+    if _product_gate_active(args):
+        print("\n┌─ Check 28k: Capability Registry (FIX-116) ───────────┐")
+        capability_registry_issues = check_capability_registry()
+        if capability_registry_issues:
+            all_issues += len(capability_registry_issues)
+            print(f"│  [FAIL] {len(capability_registry_issues)} capability registry issue(s):")
+            for issue in capability_registry_issues[:10]:
+                print(f"│    - {issue}")
+            if len(capability_registry_issues) > 10:
+                print(f"│    ... and {len(capability_registry_issues) - 10} more")
+        else:
+            print("│  [PASS] Capability registry separates catalog facts from runtime PASS and governance packs.")
     else:
-        print("│  [PASS] Capability registry separates catalog facts from runtime PASS and governance packs.")
+        _print_product_gate_skipped("Check 28k")
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 28l. Restricted Host Capability Context Guard (FIX-117) ──
@@ -14103,99 +14871,117 @@ def _run_full_engine_checks(args):
     print("└──────────────────────────────────────────────────────────┘")
 
     # ── 28m. Official Submission Ecosystem Boundary Guard (FIX-118) ──
-    print("\n┌─ Check 28m: Official Submission Ecosystem (FIX-118) ─┐")
-    official_submission_issues = check_official_submission_ecosystem()
-    if official_submission_issues:
-        all_issues += len(official_submission_issues)
-        print(f"│  [FAIL] {len(official_submission_issues)} official submission ecosystem issue(s):")
-        for issue in official_submission_issues[:10]:
-            print(f"│    - {issue}")
-        if len(official_submission_issues) > 10:
-            print(f"│    ... and {len(official_submission_issues) - 10} more")
+    if _product_gate_active(args):
+        print("\n┌─ Check 28m: Official Submission Ecosystem (FIX-118) ─┐")
+        official_submission_issues = check_official_submission_ecosystem()
+        if official_submission_issues:
+            all_issues += len(official_submission_issues)
+            print(f"│  [FAIL] {len(official_submission_issues)} official submission ecosystem issue(s):")
+            for issue in official_submission_issues[:10]:
+                print(f"│    - {issue}")
+            if len(official_submission_issues) > 10:
+                print(f"│    ... and {len(official_submission_issues) - 10} more")
+        else:
+            print("│  [PASS] Official submission docs position governance as ecosystem trust layer without overclaim.")
     else:
-        print("│  [PASS] Official submission docs position governance as ecosystem trust layer without overclaim.")
+        _print_product_gate_skipped("Check 28m")
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 28n. Mainstream Agent Loading Guard (FIX-122) ──
-    print("\n┌─ Check 28n: Mainstream Agent Loading (FIX-122) ──────┐")
-    mainstream_loading_issues = check_mainstream_agent_loading()
-    if mainstream_loading_issues:
-        all_issues += len(mainstream_loading_issues)
-        print(f"│  [FAIL] {len(mainstream_loading_issues)} mainstream agent loading issue(s):")
-        for issue in mainstream_loading_issues[:10]:
-            print(f"│    - {issue}")
-        if len(mainstream_loading_issues) > 10:
-            print(f"│    ... and {len(mainstream_loading_issues) - 10} more")
+    if _product_gate_active(args):
+        print("\n┌─ Check 28n: Mainstream Agent Loading (FIX-122) ──────┐")
+        mainstream_loading_issues = check_mainstream_agent_loading()
+        if mainstream_loading_issues:
+            all_issues += len(mainstream_loading_issues)
+            print(f"│  [FAIL] {len(mainstream_loading_issues)} mainstream agent loading issue(s):")
+            for issue in mainstream_loading_issues[:10]:
+                print(f"│    - {issue}")
+            if len(mainstream_loading_issues) > 10:
+                print(f"│    ... and {len(mainstream_loading_issues) - 10} more")
+        else:
+            print("│  [PASS] README, Tier 1 adapters, and 0.47.0 requirements keep loading guidance synchronized.")
     else:
-        print("│  [PASS] README, Tier 1 adapters, and 0.47.0 requirements keep loading guidance synchronized.")
+        _print_product_gate_skipped("Check 28n")
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 28o. ArchGuard Architecture Health (REQ-101 / FIX-152) ──
     # G7: advisory-only in 0.58.0. Findings are reported but MUST NOT increment
     # all_issues (which would flip the gate). Only fatal-on-error ERRORs count.
-    print("\n┌─ Check 28o: Architecture Health (ArchGuard/REQ-101) ┐")
-    arch = check_architecture_health()
-    if arch.get("error"):
-        print(f"│  [SKIP] {arch['error']}")
+    if _product_gate_active(args):
+        print("\n┌─ Check 28o: Architecture Health (ArchGuard/REQ-101) ┐")
+        arch = check_architecture_health()
+        if arch.get("error"):
+            print(f"│  [SKIP] {arch['error']}")
+        else:
+            s = arch["summary"]
+            fatal = bool(arch.get("fatal_on_error"))
+            print(f"│  Module/function/constant: {s['errors']} ERROR, {s['warnings']} WARN")
+            for f in arch["findings"][:8]:
+                loc = f.get("path", "")
+                extra = f.get("name") or f.get("count") or f.get("lines", "")
+                print(f"│    [{f['severity']}] {f['check']}: {loc} {extra}".rstrip())
+            if len(arch["findings"]) > 8:
+                print(f"│    ... and {len(arch['findings']) - 8} more")
+            if s["errors"] and not fatal:
+                print("│  [ADVISORY] fatal_on_error=false — does not block release")
+            elif s["errors"] and fatal:
+                all_issues += s["errors"]
+                print("│  [FATAL] fatal_on_error=true — counting toward gate")
     else:
-        s = arch["summary"]
-        fatal = bool(arch.get("fatal_on_error"))
-        print(f"│  Module/function/constant: {s['errors']} ERROR, {s['warnings']} WARN")
-        for f in arch["findings"][:8]:
-            loc = f.get("path", "")
-            extra = f.get("name") or f.get("count") or f.get("lines", "")
-            print(f"│    [{f['severity']}] {f['check']}: {loc} {extra}".rstrip())
-        if len(arch["findings"]) > 8:
-            print(f"│    ... and {len(arch['findings']) - 8} more")
-        if s["errors"] and not fatal:
-            print("│  [ADVISORY] fatal_on_error=false — does not block release")
-        elif s["errors"] and fatal:
-            all_issues += s["errors"]
-            print("│  [FATAL] fatal_on_error=true — counting toward gate")
+        _print_product_gate_skipped("Check 28o")
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 28p. ArchGuard Duplicate Code (REQ-101 / FIX-152) ──
-    print("\n┌─ Check 28p: Duplicate Code (ArchGuard/REQ-101) ─────┐")
-    dup = check_duplicate_code()
-    if dup.get("error"):
-        print(f"│  [SKIP] {dup['error']}")
+    if _product_gate_active(args):
+        print("\n┌─ Check 28p: Duplicate Code (ArchGuard/REQ-101) ─────┐")
+        dup = check_duplicate_code()
+        if dup.get("error"):
+            print(f"│  [SKIP] {dup['error']}")
+        else:
+            s = dup["summary"]
+            print(f"│  source/projection pairs checked: {dup.get('pairs_checked', 0)}")
+            for f in dup["findings"][:8]:
+                print(f"│    [{f['severity']}] {f['check']}: {f.get('path','')} dup={f.get('duplicate_pct','')}%")
+            if s["errors"] or s["warnings"]:
+                print(f"│  {s['errors']} ERROR, {s['warnings']} WARN (advisory)")
     else:
-        s = dup["summary"]
-        print(f"│  source/projection pairs checked: {dup.get('pairs_checked', 0)}")
-        for f in dup["findings"][:8]:
-            print(f"│    [{f['severity']}] {f['check']}: {f.get('path','')} dup={f.get('duplicate_pct','')}%")
-        if s["errors"] or s["warnings"]:
-            print(f"│  {s['errors']} ERROR, {s['warnings']} WARN (advisory)")
+        _print_product_gate_skipped("Check 28p")
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 28q. ArchGuard Technical Debt (REQ-101 / FIX-152) ──
     # Includes hooks content drift (reuses _external_validation_* helpers, G9).
-    print("\n┌─ Check 28q: Technical Debt (ArchGuard/REQ-101) ─────┐")
-    debt = check_technical_debt()
-    if debt.get("error"):
-        print(f"│  [SKIP] {debt['error']}")
+    if _product_gate_active(args):
+        print("\n┌─ Check 28q: Technical Debt (ArchGuard/REQ-101) ─────┐")
+        debt = check_technical_debt()
+        if debt.get("error"):
+            print(f"│  [SKIP] {debt['error']}")
+        else:
+            s = debt["summary"]
+            print(f"│  residue/docs/hooks-drift/ledger: {s['errors']} ERROR, {s['warnings']} WARN")
+            for f in debt["findings"][:8]:
+                loc = f.get("path") or f.get("hook") or f.get("ledger_id") or ""
+                print(f"│    [{f['severity']}] {f['check']}: {loc}".rstrip())
+            if len(debt["findings"]) > 8:
+                print(f"│    ... and {len(debt['findings']) - 8} more")
     else:
-        s = debt["summary"]
-        print(f"│  residue/docs/hooks-drift/ledger: {s['errors']} ERROR, {s['warnings']} WARN")
-        for f in debt["findings"][:8]:
-            loc = f.get("path") or f.get("hook") or f.get("ledger_id") or ""
-            print(f"│    [{f['severity']}] {f['check']}: {loc}".rstrip())
-        if len(debt["findings"]) > 8:
-            print(f"│    ... and {len(debt['findings']) - 8} more")
+        _print_product_gate_skipped("Check 28q")
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 28r. ArchGuard Complexity (REQ-101 / FIX-152) ──
-    print("\n┌─ Check 28r: Complexity (ArchGuard/REQ-101) ─────────┐")
-    cx = check_complexity()
-    if cx.get("error"):
-        print(f"│  [SKIP] {cx['error']}")
-    elif not cx.get("enabled", False):
-        print(f"│  [INFO] disabled — {cx.get('note','line-based proxy; see check-architecture-health')}")
+    if _product_gate_active(args):
+        print("\n┌─ Check 28r: Complexity (ArchGuard/REQ-101) ─────────┐")
+        cx = check_complexity()
+        if cx.get("error"):
+            print(f"│  [SKIP] {cx['error']}")
+        elif not cx.get("enabled", False):
+            print(f"│  [INFO] disabled — {cx.get('note','line-based proxy; see check-architecture-health')}")
+        else:
+            s = cx["summary"]
+            print(f"│  complexity proxy: {s['errors']} ERROR, {s['warnings']} WARN")
+            for f in cx["findings"][:8]:
+                print(f"│    [{f['severity']}] {f.get('name','')} ({f.get('path','')})".rstrip())
     else:
-        s = cx["summary"]
-        print(f"│  complexity proxy: {s['errors']} ERROR, {s['warnings']} WARN")
-        for f in cx["findings"][:8]:
-            print(f"│    [{f['severity']}] {f.get('name','')} ({f.get('path','')})".rstrip())
+        _print_product_gate_skipped("Check 28r")
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 28s. Governance Data Size (FIX-160 / ArchGuard) ──
@@ -14290,38 +15076,45 @@ def _run_full_engine_checks(args):
     # AST/import-graph check: process_gate_result production call sites >= 2
     # (Wiring A review-record + Wiring B gate-engine). Regression → FAIL so
     # the wiring can never silently return to "call sites = 0" (BT-5).
-    wiring_calls = check_loop_wiring_call_sites()
-    if wiring_calls["count"] >= 2:
-        print(f"│  [PASS] loop wiring call sites: {wiring_calls['count']} "
-              f"(Wiring A review-record + Wiring B gate-engine)")
+    if _product_gate_active(args):
+        wiring_calls = check_loop_wiring_call_sites()
+        if wiring_calls["count"] >= 2:
+            print(f"│  [PASS] loop wiring call sites: {wiring_calls['count']} "
+                  f"(Wiring A review-record + Wiring B gate-engine)")
+        else:
+            all_issues += 1
+            print(f"│  [FAIL] loop wiring call sites: {wiring_calls['count']} — "
+                  f"{wiring_calls['reason']}")
     else:
-        all_issues += 1
-        print(f"│  [FAIL] loop wiring call sites: {wiring_calls['count']} — "
-              f"{wiring_calls['reason']}")
+        print("│  [SKIP] product self-check — Check 30b loop wiring call sites "
+              "(plugin infra AST scan); enable with --product-gates")
 
     # ── 31. Loop Runtime Claim Gate (FIX-197 / DEC-106) ──
-    print("\n┌─ Check 31: Loop Runtime Claim Gate (FIX-197) ───────┐")
-    claim_report = scan_loop_runtime_claims(_loop_runtime_claim_context("installed_host"))
-    print(f"│  Verdict: {claim_report.verdict}")
-    print(f"│  Candidates: {claim_report.inventory.candidate_count}; parsed: {claim_report.parsed_candidates}")
-    print(f"│  Inventory: {claim_report.inventory.inventory_sha256}")
-    if claim_report.findings:
-        all_issues += len(claim_report.findings)
-        for finding in claim_report.findings[:20]:
-            print(f"│  [FAIL] {finding.code}: {finding.normalized_path} {finding.message}")
-        if len(claim_report.findings) > 20:
-            print(f"│  [FAIL] ... {len(claim_report.findings) - 20} more finding(s)")
+    if _product_gate_active(args):
+        print("\n┌─ Check 31: Loop Runtime Claim Gate (FIX-197) ───────┐")
+        claim_report = scan_loop_runtime_claims(_loop_runtime_claim_context("installed_host"))
+        print(f"│  Verdict: {claim_report.verdict}")
+        print(f"│  Candidates: {claim_report.inventory.candidate_count}; parsed: {claim_report.parsed_candidates}")
+        print(f"│  Inventory: {claim_report.inventory.inventory_sha256}")
+        if claim_report.findings:
+            all_issues += len(claim_report.findings)
+            for finding in claim_report.findings[:20]:
+                print(f"│  [FAIL] {finding.code}: {finding.normalized_path} {finding.message}")
+            if len(claim_report.findings) > 20:
+                print(f"│  [FAIL] ... {len(claim_report.findings) - 20} more finding(s)")
+        else:
+            print("│  [PASS] complete semantic inventory; zero skip/truncate")
+        identity = _run_identity_attestation_fixture_only()
+        identity_verdict = identity["verdict"]
+        if identity_verdict == "PASS":
+            print(f"│  [PASS] identity attestation (fixture_only staged_index): {identity_verdict}")
+        else:
+            all_issues += len(identity["issues"])
+            for issue in identity["issues"]:
+                print(f"│  [FAIL] {issue}")
+        print(f"│  identity_verdict={identity_verdict}; phase={identity['phase']}")
     else:
-        print("│  [PASS] complete semantic inventory; zero skip/truncate")
-    identity = _run_identity_attestation_fixture_only()
-    identity_verdict = identity["verdict"]
-    if identity_verdict == "PASS":
-        print(f"│  [PASS] identity attestation (fixture_only staged_index): {identity_verdict}")
-    else:
-        all_issues += len(identity["issues"])
-        for issue in identity["issues"]:
-            print(f"│  [FAIL] {issue}")
-    print(f"│  identity_verdict={identity_verdict}; phase={identity['phase']}")
+        _print_product_gate_skipped("Check 31")
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 32. Change-Control Triage (FIX-237.4 / ADR-017 §4.4) ──
@@ -14351,16 +15144,19 @@ def _run_full_engine_checks(args):
     # (DSH persona template / entry SKILL / DSH thin pointer). Never asserts
     # full-text equality; never performs behavior detection (DEC-143 boundary
     # stays with REQ-107/108/113).
-    print("\n┌─ Check 33: Injection Contract (FIX-253/REQ-112) ────┐")
-    ic33 = check_injection_contract()
-    print(f"│  Files checked: {ic33['files_checked']}; anchors: {ic33['anchors_checked']}")
-    if ic33["issues"]:
-        all_issues += len(ic33["issues"])
-        print(f"│  [FAIL] {len(ic33['issues'])} injection-contract issue(s):")
-        for issue in ic33["issues"]:
-            print(f"│    - {issue}")
+    if _product_gate_active(args):
+        print("\n┌─ Check 33: Injection Contract (FIX-253/REQ-112) ────┐")
+        ic33 = check_injection_contract()
+        print(f"│  Files checked: {ic33['files_checked']}; anchors: {ic33['anchors_checked']}")
+        if ic33["issues"]:
+            all_issues += len(ic33["issues"])
+            print(f"│  [FAIL] {len(ic33['issues'])} injection-contract issue(s):")
+            for issue in ic33["issues"]:
+                print(f"│    - {issue}")
+        else:
+            print("│  [PASS] persona/SKILL/AGENTS injection surfaces carry the contract anchors.")
     else:
-        print("│  [PASS] persona/SKILL/AGENTS injection surfaces carry the contract anchors.")
+        _print_product_gate_skipped("Check 33")
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 34. Completion Recommendation Closure (FIX-262 / REQ-108) ──
@@ -15213,6 +16009,10 @@ def check_untracked_files():
     untracked files with heuristic classification suggestions.  Ordinary
     scratch files are non-blocking; unignored root platform entry files are
     actionable because they can change agent behavior outside versioned review.
+
+    FIX-270 (mixed-root): the git fact source is the HOST project root
+    (HOST_PROJECT_ROOT) — the project being governed — never the plugin
+    package root. In dogfood mode (host == plugin) this is unchanged.
     """
     import subprocess
 
@@ -15230,7 +16030,7 @@ def check_untracked_files():
         r = subprocess.run(
             ["git", "ls-files", "--others", "--exclude-standard"],
             capture_output=True, text=True,
-            cwd=str(ROOT), timeout=10
+            cwd=str(HOST_PROJECT_ROOT), timeout=10
         )
         if r.returncode != 0:
             result["pass"] = None  # couldn't run
@@ -17616,11 +18416,22 @@ def check_governance_data_size(root=None, schema=None):
     error threshold (250KB) is set just below the 256KB agent single-read
     limit so the warning fires before a governance file becomes unreadable.
 
+    FIX-270 (mixed-root): the *schema* (thresholds / file list) is a plugin
+    asset and is loaded from the plugin package; the *facts* to measure are
+    the governed project's hot files, so when ``root`` is not explicit the
+    file paths resolve against HOST_PROJECT_ROOT (never the plugin package
+    root). An explicit ``root`` keeps the legacy fixture semantics (schema +
+    facts from the same root).
+
     Advisory by default (inherits gate_integration.fatal_on_error=false).
     """
-    root = Path(root) if root is not None else ROOT
+    if root is not None:
+        schema_root = fact_root = Path(root)
+    else:
+        schema_root = ROOT
+        fact_root = HOST_PROJECT_ROOT
     if schema is None:
-        schema, err = _archguard_load_schema(root)
+        schema, err = _archguard_load_schema(schema_root)
         if schema is None:
             return {"error": err, "findings": [],
                     "summary": {"errors": 0, "warnings": 0},
@@ -17638,7 +18449,7 @@ def check_governance_data_size(root=None, schema=None):
     files = gds.get("files", [])
     findings = []
     for rel in files:
-        path = root / rel
+        path = fact_root / rel
         if not path.exists():
             continue
         size = path.stat().st_size
@@ -20564,7 +21375,9 @@ def main(argv=None):
     subparsers.add_parser("verify", help="Verify workflow assets exist and contain required snippets")
 
     # status
-    subparsers.add_parser("status", help="Show project status overview")
+    status_p = subparsers.add_parser("status", help="Show project status overview")
+    status_p.add_argument("--json", action="store_true",
+                          help="Emit machine-readable JSON (FIX-270 status fast path)")
 
     # governance-context (FIX-112)
     gctx_p = subparsers.add_parser(
@@ -20622,6 +21435,10 @@ def main(argv=None):
     check_p.add_argument("--level", dest="summary_level", default="standard",
                          choices=("lightweight", "standard", "strict"),
                          help="Detail level for --summary-only (REQ-145.7)")
+    check_p.add_argument("--product-gates", action="store_true",
+                         help="Run plugin product self-checks in host mode "
+                              "(Check 31/28o-28r/11/12/28b etc., FIX-270 — "
+                              "skipped by default when host/plugin roots diverge)")
 
     # execution-packet
     xp_p = subparsers.add_parser(

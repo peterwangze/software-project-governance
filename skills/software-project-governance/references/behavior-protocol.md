@@ -556,7 +556,7 @@ Agent 从项目 profile 推断模式。用户可随时通过说"仅在关键决�
    - **禁止**"顺带"/"also"/"顺便"关键词——commit 只做它声称做的事
    - 如果多个独立变更 → 拆分为独立 commit，每 commit 对应单个 task
 6. **继续（FIX-223 增强版）** — 任务完成后 MUST 执行下一步推荐流程，不得直接结束会话或停止交互：
-   - **a. 依赖分析（MUST，FIX-237.5 升级）**：读 plan-tracker 优先级表的 `依赖` 列，识别刚完成任务解除阻塞了哪些后续任务（即依赖中包含刚完成任务 ID 的任务）；**MUST 运行 `task-priority-analysis` 子命令（FIX-226）**获取依赖排序候选——不存在"如果存在"豁免（工具缺失或失败时按 fail-closed 处理并升级，不得跳过分析）。运行后 MUST 将调用快照（命令输出 JSON）记录到 evidence-log（FIX-237.5 证据化）。
+   - **a. 依赖分析（MUST，FIX-237.5 升级；FIX-262 机器化）**：读 plan-tracker 优先级表的 `依赖` 列，识别刚完成任务解除阻塞了哪些后续任务（即依赖中包含刚完成任务 ID 的任务）；**MUST 运行 `task-priority-analysis` 子命令（FIX-226）**获取依赖排序候选——不存在"如果存在"豁免（工具缺失或失败时按 fail-closed 处理并升级，不得跳过分析）。运行后 MUST 将调用快照记录到 evidence-log（FIX-237.5 证据化）：**优先机器路径**——`task-priority-analysis --evidence-task {task_id}` 自动写入 `RECO-{task_id}` 机器快照行（FIX-262/REQ-108，Check 34 S1 的关联锚）；机器路径不可用时按 EVD-898/899/901/903 先例手写"完成必推荐调用快照"行并绑定 `{task_id} 完成触发`。**session-snapshot 的"下次会话优先级"节 MUST 引用至少一个快照行 ID（RECO-{task} 或 EVD-{n}）**——可验证由推荐快照派生而非自由手写（REQ-108 信号 4，Check 34 S2/S3：缺引用 WARN、悬空引用 FAIL）。
    - **b. 推荐下一步**：从 unblocked 任务 + 当前最高优先级未完成任务中，结合版本依赖链和当前项目阶段，选择最合理的 1~3 个候选下一步。推荐为空 → MUST 呈现结构化空原因（禁止机械枚举）。
    - **c. 呈现给用户（DEC-143 交互基线：自动推荐 + 用户确认）**：通过 AskUserQuestion 呈现候选下一步（选项包括推荐项 + "自主执行推荐项" + "暂停"），由用户确认或改选，而非 agent 默认自主执行。当且仅当推荐项涉及关键决策（M5.3）时强制 AskUserQuestion。
    - **d. 不得直接结束**：除非 plan-tracker 中无未完成任务，或用户明确选择"暂停"，否则 MUST NOT 在任务完成后直接结束会话。

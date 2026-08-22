@@ -14335,6 +14335,31 @@ def cmd_check_governance(args):
         print("│  [PASS] persona/SKILL/AGENTS injection surfaces carry the contract anchors.")
     print("└──────────────────────────────────────────────────────┘")
 
+    # ── 34. Completion Recommendation Closure (FIX-262 / REQ-108) ──
+    # S1: completed product-code task (dated on/after the effective date)
+    # without a recommendation-snapshot row → FAIL. S2: session-snapshot
+    # 下次会话优先级 without a snapshot id reference → WARN (gradual). S3:
+    # dangling snapshot reference → FAIL.
+    print("\n┌─ Check 34: Completion Recommendation (FIX-262) ─────┐")
+    cr34 = check_completion_recommendation()
+    st = cr34["stats"]
+    print(f"│  Completions judged: {st['completions_judged']} "
+          f"(snapshots: {st['snapshots_machine']} machine + "
+          f"{st['snapshots_legacy']} legacy; section: {st['snapshot_section']})")
+    print(f"│  Verdict: {cr34['verdict']}")
+    if cr34["violations"]:
+        all_issues += len(cr34["violations"])
+        print(f"│  [FAIL] {len(cr34['violations'])} violation(s):")
+        for v in cr34["violations"][:8]:
+            print(f"│    - [{v['rule']}] {v.get('task_id','')}: {v['reason']}")
+    elif cr34["warnings"]:
+        print(f"│  [WARN] {len(cr34['warnings'])} warning(s):")
+        for w in cr34["warnings"]:
+            print(f"│    - [{w['rule']}] {w['reason']}")
+    else:
+        print(f"│  [{cr34['verdict']}] {cr34['reason']}")
+    print("└──────────────────────────────────────────────────────┘")
+
     # ── Summary ──
     print(f"\n┌─ Governance Health Summary ──────────────────────────┐")
     if all_issues == 0:
@@ -19271,6 +19296,248 @@ def cmd_loop_telemetry(args):
     _format_telemetry(report, json_out=getattr(args, "json", False))
 
 
+# ── FIX-262 / REQ-108: completion-recommendation machine closure ─────────────
+# Effective date: completion rows dated BEFORE this are legacy (the ~145
+# completed tasks have no recommendation-snapshot association) and are never
+# judged — same pattern as Check 30c's REQ107_MACHINE_PROVENANCE_DATE.
+REQ108_RECOMMENDATION_DATE = date(2026, 8, 22)
+
+# Machine-source marker (mirrors the review-record/change-triage precedent:
+# the unforgeable-ish machine row is the trusted association anchor).
+RECO_ROW_MARKER = "task-priority-analysis 机器写入完成必推荐调用快照"
+_LEGACY_SNAPSHOT_MARKER = "完成必推荐调用快照"
+_RECO_TASK_ID_RE = re.compile(r"^[A-Z]+-\d+$")
+_SNAPSHOT_REF_RE = re.compile(r"(?:RECO-[A-Z]+-\d+|EVD-\d+)")
+_TASK_ID_IN_REF_RE = re.compile(r"\b([A-Z]+-\d+)\b")
+
+
+def _recommendation_snapshot_row_text(task_id, report, date_str):
+    """FIX-262: the machine RECO-{task} evidence row text (10 columns).
+
+    Shape mirrors review_record._evidence_row: | id | task | 治理记录 |
+    description(marker) | 事实依据(machine) | artifacts(stats) | actor |
+    date | G11 | N/A |. The stats cell carries the same figures the live
+    snapshots quote (EVD-898/899/901/903 free-text precedent).
+    """
+    stats = "{0} tasks/{1} completed/{2} unblocked/{3} blocked/{4} non-exec".format(
+        report.total, len(report.completed), len(report.unblocked),
+        len(report.blocked), len(report.non_executable))
+    if getattr(report, "unblock_recommendation", None) is not None:
+        rec = report.unblock_recommendation
+        stats += "; Unblock pick {0} [{1}]".format(
+            rec.root_task_id, rec.root_kind)
+    if getattr(report, "empty_reason", None) is not None:
+        stats += "; empty reason {0}".format(
+            report.empty_reason.get("kind"))
+    cells = [
+        "RECO-{0}".format(task_id),
+        task_id,
+        "治理记录",
+        "{0}（trigger {1}，M7.4 step 6 / FIX-262）".format(
+            RECO_ROW_MARKER, task_id),
+        "事实依据：task-priority-analysis 输出摘要（机器写入）",
+        stats,
+        "Coordinator",
+        date_str,
+        "G11",
+        "N/A",
+    ]
+    return "| " + " | ".join(cells) + " |\n"
+
+
+def _write_recommendation_snapshot(task_id, report, evidence_path=None):
+    """Append one machine RECO row to the evidence log (fail-closed, never raises).
+
+    Returns ``{"row_id", "written": True}`` or ``{"error": ...}`` when the
+    task id is malformed (nothing is written in that case).
+    """
+    if not _RECO_TASK_ID_RE.match(str(task_id or "")):
+        return {"error": "task id must match PREFIX-NNN (e.g. FIX-262)"}
+    path = Path(evidence_path) if evidence_path is not None else EVIDENCE_PATH
+    row = _recommendation_snapshot_row_text(
+        task_id, report, date.today().isoformat())
+    try:
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write("\n" + row)
+    except OSError as exc:
+        return {"error": "cannot append recommendation snapshot row: {0}".format(exc)}
+    return {"row_id": "RECO-{0}".format(task_id), "written": True}
+
+
+def check_completion_recommendation(evidence_rows=None, snapshot_text=None):
+    """FIX-262 / REQ-108: Check 34 — completion-recommendation closure.
+
+    S1 (core, FAIL): a product-code COMPLETION evidence row (id ``EVD-*``,
+    type ``产品代码``) dated on/after ``REQ108_RECOMMENDATION_DATE`` whose
+    task has no associated recommendation-snapshot row. Association = a
+    machine ``RECO-{task}`` row (marker ``task-priority-analysis 机器写入``)
+    OR a legacy snapshot row (description marker ``完成必推荐调用快照``)
+    whose task_ref column or “{task} 完成触发” description binds the task.
+
+    S2 (WARN, gradual): the session-snapshot ``## 下次会话优先级`` section
+    has entries but references no snapshot id (``RECO-*`` / ``EVD-*``) —
+    the section is not verifiably derived from a snapshot (signal 4).
+
+    S3 (FAIL): a referenced snapshot id does not exist in the evidence log
+    (dangling derivation anchor).
+
+    Returns ``{verdict, reason, violations, warnings, stats}``; verdict ∈
+    PASS / WARN / FAIL / no-verdict. Never raises.
+    """
+    result = {
+        "verdict": "no-verdict",
+        "reason": "",
+        "violations": [],
+        "warnings": [],
+        "stats": {"completions_judged": 0, "snapshots_machine": 0,
+                  "snapshots_legacy": 0, "snapshot_section": "absent"},
+    }
+
+    rows = evidence_rows
+    if rows is None:
+        rows = []
+        if EVIDENCE_PATH.is_file():
+            try:
+                content = EVIDENCE_PATH.read_text(encoding="utf-8")
+            except (IOError, OSError):
+                content = ""
+            rows = [ln for ln in content.split("\n") if ln.strip().startswith("|")]
+
+    if snapshot_text is None:
+        snapshot_text = ""
+        # Live snapshot read ONLY in full live mode (evidence_rows also None):
+        # a rows-fixture run without an explicit snapshot_text means "no
+        # snapshot section to judge", not "read the repo's live snapshot".
+        if evidence_rows is None and SESSION_SNAPSHOT_PATH.is_file():
+            try:
+                snapshot_text = SESSION_SNAPSHOT_PATH.read_text(encoding="utf-8")
+            except (IOError, OSError):
+                snapshot_text = ""
+
+    def _row_date(parts):
+        for part in parts[3:]:
+            if re.match(r"^\d{4}-\d{2}-\d{2}$", part):
+                try:
+                    return date.fromisoformat(part)
+                except ValueError:
+                    return None
+        return None
+
+    # Pass 1: collect snapshot associations + evidence ids.
+    known_ids = set()
+    assoc = set()  # task ids that have a snapshot association
+    for raw in rows:
+        parts = [p.strip() for p in str(raw or "").split("|")]
+        if len(parts) < 5:
+            continue
+        row_id = parts[1]
+        if row_id:
+            known_ids.add(row_id)
+        desc = parts[4] if len(parts) > 4 else ""
+        is_machine = row_id.startswith("RECO-") and RECO_ROW_MARKER in desc
+        is_legacy = _LEGACY_SNAPSHOT_MARKER in desc
+        if not (is_machine or is_legacy):
+            continue
+        if is_machine:
+            result["stats"]["snapshots_machine"] += 1
+        else:
+            result["stats"]["snapshots_legacy"] += 1
+        # task_ref column binding (parts[2]) — may carry "FIX-260, FIX-261".
+        for tid in _TASK_ID_IN_REF_RE.findall(parts[2] or ""):
+            assoc.add(tid)
+        # description trigger binding（"FIX-256 完成触发" — EVD-898 pattern).
+        for tid in _TASK_ID_IN_REF_RE.findall(desc):
+            if "{0} 完成触发".format(tid) in desc:
+                assoc.add(tid)
+        # machine row id binding: RECO-{task}.
+        if is_machine:
+            m = re.match(r"^RECO-([A-Z]+-\d+)$", row_id)
+            if m:
+                assoc.add(m.group(1))
+
+    # Pass 2: completion rows → S1.
+    for raw in rows:
+        parts = [p.strip() for p in str(raw or "").split("|")]
+        if len(parts) < 5:
+            continue
+        row_id = parts[1]
+        if not row_id.startswith("EVD-"):
+            continue  # REVIEW-/TRIAGE-/RECO- rows are not completion rows.
+        if (parts[3] if len(parts) > 3 else "") != "产品代码":
+            continue
+        row_date = _row_date(parts)
+        if row_date is None or row_date < REQ108_RECOMMENDATION_DATE:
+            continue
+        result["stats"]["completions_judged"] += 1
+        for tid in _TASK_ID_IN_REF_RE.findall(parts[2] or ""):
+            if tid not in assoc:
+                result["violations"].append({
+                    "rule": "S1",
+                    "task_id": tid,
+                    "reason": "completed product-code task {0} (evidence "
+                              "{1}, {2}) has no recommendation-snapshot "
+                              "row — M7.4 step 6 requires the "
+                              "task-priority-analysis snapshot (machine "
+                              "RECO row via --evidence-task, or a "
+                              "完成必推荐调用快照 row)".format(
+                                  tid, row_id, row_date.isoformat()),
+                })
+
+    # Signal 4: snapshot section derivation (S2/S3).
+    section_lines = []
+    in_section = False
+    for line in (snapshot_text or "").split("\n"):
+        if line.strip().startswith("## "):
+            in_section = line.strip() == "## 下次会话优先级"
+            continue
+        if in_section and line.strip():
+            section_lines.append(line.strip())
+    if section_lines:
+        result["stats"]["snapshot_section"] = "present"
+        blob = "\n".join(section_lines)
+        refs = set(_SNAPSHOT_REF_RE.findall(blob))
+        if not refs:
+            result["warnings"].append({
+                "rule": "S2",
+                "task_id": "",
+                "reason": "session-snapshot ## 下次会话优先级 has entries but "
+                          "references no snapshot id (RECO-*/EVD-*) — not "
+                          "verifiably derived from a recommendation snapshot "
+                          "(REQ-108 signal 4; gradual WARN)",
+            })
+        else:
+            dangling = sorted(r for r in refs if r not in known_ids)
+            if dangling:
+                result["violations"].append({
+                    "rule": "S3",
+                    "task_id": "",
+                    "reason": "snapshot section references missing evidence "
+                              "id(s): {0} — dangling derivation anchor".format(
+                                  ", ".join(dangling)),
+                })
+
+    if result["violations"]:
+        result["verdict"] = "FAIL"
+        result["reason"] = "{0} completion-recommendation violation(s)".format(
+            len(result["violations"]))
+    elif result["warnings"]:
+        result["verdict"] = "WARN"
+        result["reason"] = "{0} derivation warning(s)".format(
+            len(result["warnings"]))
+    elif result["stats"]["completions_judged"] == 0:
+        result["verdict"] = "no-verdict"
+        result["reason"] = (
+            "no product-code completion row dated on/after {0} — Check 34 "
+            "has nothing to judge".format(
+                REQ108_RECOMMENDATION_DATE.isoformat()))
+    else:
+        result["verdict"] = "PASS"
+        result["reason"] = (
+            "{0} completion(s) all carry recommendation snapshots".format(
+                result["stats"]["completions_judged"]))
+    return result
+
+
 def cmd_task_priority_analysis(args):
     """Thin entry — delegates to infra/task_priority.py (FIX-226 / 0.71.0).
 
@@ -19308,6 +19575,17 @@ def cmd_task_priority_analysis(args):
         print(f"task-priority-analysis: parse error: {exc}", file=sys.stderr)
         sys.exit(2)
     print(format_report(report))
+    # FIX-262 / REQ-108: machine snapshot row for the completion-recommendation
+    # closure. Without --evidence-task the CLI behavior is unchanged.
+    evidence_task = getattr(args, "evidence_task", None)
+    if evidence_task:
+        summary = _write_recommendation_snapshot(evidence_task, report)
+        if summary.get("error"):
+            print(f"task-priority-analysis: --evidence-task: {summary['error']}",
+                  file=sys.stderr)
+            sys.exit(2)
+        print(f"[OK] recommendation snapshot row {summary['row_id']} appended "
+              f"to {EVIDENCE_PATH} (FIX-262 / M7.4 step 6)")
     # Cycle tolerance (FIX-237.3): default exit 0 + WARN banner; `--strict`
     # restores the previous fail-closed exit 1 on a cycle.
     if getattr(args, "strict", False) and report.cycles:
@@ -20804,6 +21082,14 @@ def main(argv=None):
         action="store_true",
         help="Exit 1 when the dependency graph contains a cycle (default: "
              "exit 0 + WARNING banner; FIX-237.3 cycle tolerance)",
+    )
+    tpa_p.add_argument(
+        "--evidence-task",
+        dest="evidence_task",
+        metavar="TASK_ID",
+        help="Machine-write a RECO-{TASK_ID} recommendation-snapshot row to "
+             "the evidence log (M7.4 step 6 completion evidence; FIX-262 / "
+             "REQ-108). Fail-closed (exit 2, no write) on a malformed id.",
     )
 
     # review-record (FIX-236.1 / ADR-017 §3.4 Wiring A — the single

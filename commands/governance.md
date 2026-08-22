@@ -586,6 +586,9 @@ Context acceptance harness：运行 `python <plugin_home>/infra/verify_workflow.
 ## 下次会话优先级
 {{ORDERED_LIST}}
 
+> FIX-262/REQ-108：本节 MUST 由完成必推荐快照派生——至少引用一个快照行 ID（`RECO-{TASK_ID}`（`task-priority-analysis --evidence-task` 机器写入）或既有 `EVD-{N}` 快照行）。无引用 = 自由手写，Check 34 S2 WARN；引用不存在的 ID = 悬空，Check 34 S3 FAIL。
+- **推荐快照引用**: {{RECO-_或_EVD-_快照行_ID}}
+
 ## 用户偏好设置
 {{PERSISTED_PREFERENCES}}
 ```

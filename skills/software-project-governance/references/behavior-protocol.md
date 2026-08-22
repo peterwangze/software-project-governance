@@ -217,6 +217,12 @@
    - 升级截止日期 ≤ 当前日期的风险 → 立即升级
 3. 向自己确认：当前阶段、最新 Gate 结论、活跃风险数、遗留任务
 4. 如有未解决的条件（passed-with-conditions），**MUST** 优先处理
+5. **健康摘要（R-D1a / REQ-145.1，bootstrap 自动运行）**：运行 `python skills/software-project-governance/infra/verify_workflow.py check-governance --summary-only`（DSH 支持 CLI；摘要为只读、只显示、不阻断），按摘要驱动后续动作：
+   - `Governance: [PASS]`（N=0）→ 无动作，继续 bootstrap。
+   - `Governance: {N} issues`（N>0，附首个 `[FAIL]` / `[WARN]` 行）→ FAIL 级直达用户、WARN 记入会话上下文（M5.4b 纯通知；**只读优先，不因摘要本身阻断**）。
+   - `Governance: unavailable` → `check-governance` 不可运行（verify_workflow.py 未定位）→ 继续 bootstrap，不阻断（fail-safe 到简报而非硬失败）。
+   - `Governance: timed out` → 运行超时（>60s，DEC-149 验收量级）→ 软超时取消该步，继续会话。
+   - `Governance: N issues (parse degraded)` → 摘要解析降级（输出格式漂移 fail-safe），不报错。
 
 ### M4.2 会话结束协议
 

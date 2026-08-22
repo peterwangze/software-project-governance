@@ -57,6 +57,18 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
 - 产品代码任务执行完成后 MUST 查询路由表"后置审查 Agent"列——非空则 MUST spawn 审查 Agent。跳过审查直接标记完成 = 流程违规
 - 若宿主无法提供真实 sub-agent/Reviewer 分离，MUST 显式进入 degraded mode：只能记录包含 `不构成独立审查`、`不得计入审查通过`、`不得解锁产品代码交付` 的降级证据；不得把 Coordinator/Developer 自审写成已通过审查，`check-governance` 会将降级证据和自审从审查覆盖率中排除。
 
+### 每会话 bootstrap 健康摘要（REQ-145.1, A3）
+
+本 SKILL 每会话经 persona 第一动作（加载本入口 + 运行 `resolve_entry.py --json`）**必然加载**。加载后运行健康摘要——从第 2 步（resolve_entry）之后，执行第 3 步：
+
+- 运行 `python skills/software-project-governance/infra/verify_workflow.py check-governance --summary-only`（DSH 支持 CLI）。读取 `Governance: {N} issues` 汇总 + 首个 FAIL/WARN 项；摘要**只读、只显示、不阻断**（fail-safe 到简报而非硬失败）：
+  - `Governance: [PASS]`（N=0）→ 无动作，继续 bootstrap。
+  - `Governance: {N} issues`（N>0，附首个 `[FAIL]`/`[WARN]` 行）→ FAIL 级直达用户、WARN 记入会话上下文（M5.4b 纯通知；只读优先，不因摘要本身阻断）。
+  - `Governance: unavailable` → `check-governance` 不可运行（verify_workflow.py 未定位）→ 继续 bootstrap 不阻断（fail-safe）。
+  - `Governance: timed out` → 运行超时（>60s）→ 软超时取消该步，继续会话。
+  - `Governance: N issues (parse degraded)` → 摘要解析降级（输出格式漂移 fail-safe），不报错。
+- **详略分档**（`--level lightweight|standard|strict`，缺省 standard）：轻量=汇总+首个 FAIL；标准=汇总+首个 FAIL/WARN；严格=汇总+全部 FAIL/WARN。三档**跑同一个** `--summary-only`，仅输出详略不同，**不按 profile 拆逻辑**。
+
 ### 关键行为契约（MUST——注入面最小契约集，FIX-253/REQ-112；完整规则见 references/behavior-protocol.md M7.4）
 
 以下三条与铁律同级，违反任何一条 = 流程违规。本段是注入面的 canonical 投影定义处（DSH persona 携带其压缩形式；`check-injection-contract` 锚点守护）：

@@ -1,5 +1,7 @@
 from pathlib import Path
 import sys
+import io
+from contextlib import redirect_stdout
 # When this file is run directly (`python verify_workflow.py ...`), it loads as
 # the `__main__` module. The Phase 5 domain modules under checks/ (evidence,
 # risk, review — and the older manifest/capability_registry modules) reach back
@@ -13047,13 +13049,39 @@ def _evidence_task_type_index():
 
 
 def cmd_check_governance(args):
-    """Run governance health checks: evidence completeness, risk staleness, gate consistency."""
+    """Run governance health checks: evidence completeness, risk staleness, gate consistency.
+
+    REQ-145.7: with ``--summary-only``, the full engine is run under a stdout
+    capture and only the ``Governance: {N} issues`` summary (+ first FAIL/WARN)
+    is printed. The default (no ``--summary-only``) path is byte-identical to the
+    pre-existing output — the engine body lives in ``_run_full_engine_checks``.
+    """
     # Ensure UTF-8 stdout to handle Chinese characters from .md files (Windows GBK workaround)
     try:
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     except Exception:
         pass
 
+    if getattr(args, "summary_only", False):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            all_issues = _run_full_engine_checks(args)
+        summary = _aggregate_check_summary(buf.getvalue())
+        _print_check_summary(summary, args)
+    else:
+        all_issues = _run_full_engine_checks(args)
+
+    if getattr(args, "fail_on_issues", False) and all_issues > 0:
+        sys.exit(1)
+
+
+def _run_full_engine_checks(args):
+    """Run all governance health checks and return the accumulated issue count.
+
+    Encapsulates the original ``cmd_check_governance`` body so that
+    ``--summary-only`` can capture its stdout without altering the default path.
+    ``sys.exit`` (on ``--fail-on-issues``) is handled by ``cmd_check_governance``.
+    """
     all_issues = 0
 
     # ── 1. Evidence completeness ──
@@ -14368,8 +14396,104 @@ def cmd_check_governance(args):
         print(f"│  Result: ISSUES FOUND — {all_issues} issue(s)")
     print("└──────────────────────────────────────────────────────┘")
 
-    if args.fail_on_issues and all_issues > 0:
-        sys.exit(1)
+    return all_issues
+
+
+# ── Summary-only engine (REQ-145.7) ──────────────────────────────
+
+def _extract_summary_count(stdout_text):
+    """Return (issues_count, parse_degraded) from the engine's summary line.
+
+    Anchors on the stable ``Result: ISSUES FOUND — N issue(s)`` (or the
+    ``Result: PASSED — 0 issues found``) line. A format drift (neither line
+    matches) degrades to ``(0, True)`` so the caller emits a fail-safe
+    ``(parse degraded)`` marker instead of a hard error.
+    """
+    m = re.search(r"Result:\s*ISSUES FOUND\s*[—\-–]\s*(\d+)\s*issue\(s\)", stdout_text)
+    if m:
+        return int(m.group(1)), False
+    m2 = re.search(r"Result:\s*PASSED\s*[—\-–]\s*0\s*issues found", stdout_text)
+    if m2:
+        return 0, False
+    return 0, True
+
+
+def _aggregate_check_summary(stdout_text):
+    """Parse captured full engine output into a summary dict (REQ-145.7).
+
+    Anchors the issue count on the ``Result: ISSUES FOUND — N issue(s)`` line
+    and the ``[FAIL]`` / ``[WARN]`` / ``[ADVISORY]`` severity lines, correlating
+    each to its enclosing ``┌─ Check N: ... ┐`` section. Returns
+    ``{issues_count, parse_degraded, first_fail, first_warn, fail_items,
+    warn_items, advisory_items, advisory}``.
+    """
+    issues_count, parse_degraded = _extract_summary_count(stdout_text)
+    fail_items, warn_items, advisory_items = [], [], []
+    current_check = ""
+    for line in stdout_text.splitlines():
+        hm = re.search(r"┌─\s*Check\s+(.+?)\s*[─-]+┐", line)
+        if hm:
+            current_check = hm.group(1).strip()
+            continue
+        for token in ("[FAIL]", "[WARN]", "[ADVISORY]"):
+            idx = line.find(token)
+            if idx >= 0:
+                detail = line[idx + len(token):].strip()
+                label = f"{current_check}: {detail}" if current_check else detail
+                if token == "[FAIL]":
+                    fail_items.append(label)
+                elif token == "[WARN]":
+                    warn_items.append(label)
+                else:
+                    advisory_items.append(label)
+                break
+    return {
+        "issues_count": issues_count,
+        "parse_degraded": parse_degraded,
+        "first_fail": fail_items[0] if fail_items else None,
+        "first_warn": warn_items[0] if warn_items else None,
+        "fail_items": fail_items,
+        "warn_items": warn_items,
+        "advisory_items": advisory_items,
+        "advisory": advisory_items[0] if advisory_items else None,
+    }
+
+
+def _print_check_summary(summary, args):
+    """Render the ``--summary-only`` output (REQ-145.7 output contract).
+
+    Summary line ``Governance: {N} issues`` (or ``Governance: [PASS]`` when
+    N==0) followed by the first FAIL/WARN detail line; the detail granularity
+    follows ``--level`` (lightweight → summary + first FAIL; standard →
+    summary + first FAIL else first WARN; strict → summary + all FAIL/WARN).
+    Advisory (``fatal_on_error=false``) issues are not counted and are only
+    annotated when they are the first issue surfaced.
+    """
+    count = summary.get("issues_count") or 0
+    if summary.get("parse_degraded"):
+        print(f"Governance: {count} issues (parse degraded)")
+        return
+    if count == 0:
+        print("Governance: [PASS]")
+    else:
+        print(f"Governance: {count} issues")
+    level = getattr(args, "summary_level", None) or "standard"
+    if count > 0:
+        if level == "lightweight":
+            if summary["first_fail"]:
+                print(f"[FAIL] {summary['first_fail']}")
+        elif level == "strict":
+            for item in summary["fail_items"]:
+                print(f"[FAIL] {item}")
+            for item in summary["warn_items"]:
+                print(f"[WARN] {item}")
+        else:  # standard
+            if summary["first_fail"]:
+                print(f"[FAIL] {summary['first_fail']}")
+            elif summary["first_warn"]:
+                print(f"[WARN] {summary['first_warn']}")
+    if not summary["fail_items"] and not summary["warn_items"] and summary["advisory"]:
+        print(f"[ADVISORY] {summary['advisory']}")
 
 
 # ── Gate auto-judgment (B-level automation) ───────────────────────
@@ -20493,6 +20617,11 @@ def main(argv=None):
     check_p = subparsers.add_parser("check-governance", help="Run governance health checks")
     check_p.add_argument("--fail-on-issues", action="store_true",
                          help="Exit with non-zero code if issues found")
+    check_p.add_argument("--summary-only", action="store_true",
+                         help="Print only the governance health summary + first FAIL/WARN (REQ-145.7)")
+    check_p.add_argument("--level", dest="summary_level", default="standard",
+                         choices=("lightweight", "standard", "strict"),
+                         help="Detail level for --summary-only (REQ-145.7)")
 
     # execution-packet
     xp_p = subparsers.add_parser(

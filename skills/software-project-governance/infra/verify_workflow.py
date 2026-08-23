@@ -1136,6 +1136,17 @@ from checks.gate_domain import (  # noqa: E402
     released_history_version,     # BR-4: roadmap 已发布/已撤回 status probe
 )
 
+# ── CI domain (new in 0.76.0) ──────────────────────────────────────
+# FIX-267 / REQ-145.5 (design §3.5): the CI-evidence watchdog
+# (Check 38). New domain module checks/ci_domain.py mirrors the
+# gate_domain pattern: deferred _vw() shared accessor, no import cycle.
+# Scope per DEC-154 ②: carrier existence + git remote only (no deep
+# workflow/job/run inspection in 0.76.0); facts root = HOST_PROJECT_ROOT
+# (FIX-270 mixed-root semantics — never the plugin ROOT).
+from checks.ci_domain import (  # noqa: E402
+    check_ci_evidence,  # FIX-267 / REQ-145.5 (Check 38)
+)
+
 # ── Review domain (extracted to infra/checks/review_domain.py in 0.70.0) ────
 # DEC-083 Phase 5c / ADR-016 / FEAT-009: the agent-team-review protocol
 # domain (Checks 18, 18b, 21, 21b, 22, 29, 30 plus their review-only helpers
@@ -15326,6 +15337,47 @@ def _run_full_engine_checks(args):
     if not cr37["violations"] and not cr37["warnings"]:
         print(f"│  [{cr37['verdict']}] {cr37['reason']}")
     all_issues += len(cr37["violations"]) + len(cr37["warnings"])
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 38. CI Evidence (FIX-267 / REQ-145.5) ──
+    # Content-dimension watchdog for the AUDIT-145 "claimed CI never
+    # really ran" blind spot (tv: workflow exists, no remote — DEV-003
+    # "本仓无 remote——首次运行/成功率统计待远端仓库后补验"; router: no CI
+    # carrier at all). C1 FAIL (claimed BUILT incl. built-not-run
+    # admissions, no carrier — multi-path probe: **/.github/workflows/*
+    # deep walk over the project's own git tree + .gitlab-ci.yml +
+    # Jenkinsfile; nested git repos excluded) / C2 WARN (carrier exists,
+    # git remote empty or git unavailable — "CI 未真跑", fail-safe never
+    # FAIL) / C3 WARN (claimed RUN locally unprovable — no remote/git OR
+    # no carrier at all; DEC-156: run claims never enter the C1 FAIL
+    # branch) / C4 PASS (no declaration, no carrier). Scope per DEC-154
+    # ②: existence + remote only, no deep workflow/job inspection. WARN
+    # and FAIL both count into all_issues (Check-36/37 convention).
+    # Facts root = HOST_PROJECT_ROOT (FIX-270 mixed-root fix — never the
+    # plugin ROOT).
+    print("\n┌─ Check 38: CI Evidence (FIX-267) ───────────────────┐")
+    cr38 = check_ci_evidence()
+    st38 = cr38["stats"]
+    print(f"│  Plan lines scanned: {st38['plan_lines_scanned']} "
+          f"(built: {st38['built_claims']}, not-run: "
+          f"{st38['built_notrun_claims']}, run: {st38['run_claims']})")
+    carrier_desc = "yes" if st38["carrier_exists"] else "no"
+    print(f"│  Carrier: {carrier_desc} (workflows: "
+          f"{st38['workflow_files']}, gitlab-ci: {st38['gitlab_ci']}, "
+          f"jenkinsfile: {st38['jenkinsfile']}; remote: "
+          f"{st38['remote_state'] or '—'})")
+    print(f"│  Verdict: {cr38['verdict']}")
+    if cr38["violations"]:
+        print(f"│  [FAIL] {len(cr38['violations'])} violation(s):")
+        for v in cr38["violations"][:8]:
+            print(f"│    - [{v['rule']}] {v['reason']}")
+    if cr38["warnings"]:
+        print(f"│  [WARN] {len(cr38['warnings'])} warning(s):")
+        for w in cr38["warnings"][:8]:
+            print(f"│    - [{w['rule']}] {w['reason']}")
+    if not cr38["violations"] and not cr38["warnings"]:
+        print(f"│  [{cr38['verdict']}] {cr38['reason']}")
+    all_issues += len(cr38["violations"]) + len(cr38["warnings"])
     print("└──────────────────────────────────────────────────────┘")
 
     # ── Summary ──

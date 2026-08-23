@@ -15,8 +15,8 @@ test plan §5.2 — 12 cases, plus acceptance-item extras):
 3. Task status map rebuilt from ``task_priority.PriorityReport`` buckets
    (F11 — ``compute_unblocked_tasks`` exposes no status map); parse
    failure / missing plan-tracker → fail-safe WARN, never FAIL.
-4. Numbering: Check 36 block in ``cmd_check_governance``; no Check 35
-   block created (FIX-268 owns Check 35).
+4. Numbering (F9): Check 36 block in ``cmd_check_governance`` co-exists
+   with Check 35 (snapshot freshness, FIX-268) — 35 before 36, consecutive.
 
 Run:
     python -m pytest skills/software-project-governance/infra/tests/test_risk_mitigation_closure.py -v
@@ -348,7 +348,7 @@ class Check36TaskPriorityTests(unittest.TestCase):
 # ── Result contract + numbering ────────────────────────────────────────
 
 class Check36ContractTests(unittest.TestCase):
-    """Result shape + Check numbering (F9: Check 36, no Check 35 block)."""
+    """Result shape + Check numbering (F9: Check 36 with Check 35 before it)."""
 
     def test_result_contract_shape(self):
         r = vw.check_risk_mitigation_closure(
@@ -364,10 +364,17 @@ class Check36ContractTests(unittest.TestCase):
         self.assertEqual(r["warnings"], [])
         self.assertEqual(r["violations"], [])
 
-    def test_check36_block_and_no_check35(self):
+    def test_check35_and_check36_blocks_coexist(self):
+        """F9: Check 35 (FIX-268) landed BEFORE Check 36 (FIX-265) — both
+        blocks must exist in cmd_check_governance, consecutive, 35 → 36."""
         src = (_INFRA_DIR / "verify_workflow.py").read_text(encoding="utf-8")
-        self.assertIn("┌─ Check 36: Risk Mitigation Closure", src)
-        self.assertNotIn("┌─ Check 35", src)  # FIX-268 owns Check 35
+        check35 = "┌─ Check 35: Snapshot Freshness (FIX-268)"
+        check36 = "┌─ Check 36: Risk Mitigation Closure (FIX-265)"
+        self.assertIn(check35, src)
+        self.assertIn(check36, src)
+        # Consecutive block order: Check 35 strictly before Check 36, and
+        # neither overlaps the other's section header.
+        self.assertLess(src.index(check35), src.index(check36))
 
     def test_check36_exported_and_function_lives_in_risk_domain(self):
         domain = (_INFRA_DIR / "checks" / "risk_domain.py").read_text(

@@ -1117,6 +1117,14 @@ from checks.risk_domain import (  # noqa: E402
     check_risk_mitigation_closure,  # FIX-265 / REQ-145.3 (Check 36)
 )
 
+# ── Snapshot domain (new in 0.76.0) ──────────────────────────────────────
+# FIX-268 / REQ-145.2 (design §3.2): the snapshot-freshness watchdog
+# (Check 35). New domain module checks/snapshot_domain.py mirrors the
+# risk_domain pattern: deferred _vw() shared accessor, no import cycle.
+from checks.snapshot_domain import (  # noqa: E402
+    check_snapshot_freshness,  # FIX-268 / REQ-145.2 (Check 35)
+)
+
 # ── Review domain (extracted to infra/checks/review_domain.py in 0.70.0) ────
 # DEC-083 Phase 5c / ADR-016 / FEAT-009: the agent-team-review protocol
 # domain (Checks 18, 18b, 21, 21b, 22, 29, 30 plus their review-only helpers
@@ -15183,6 +15191,39 @@ def _run_full_engine_checks(args):
             print(f"│    - [{w['rule']}] {w['reason']}")
     else:
         print(f"│  [{cr34['verdict']}] {cr34['reason']}")
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 35. Snapshot Freshness (FIX-268 / REQ-145.2) ──
+    # Timeline watchdog for the AUDIT-145 "snapshot frozen while governance
+    # keeps moving" blind spot (tv/router zero-update cases). S1a missing/
+    # unparseable session_date → WARN (fail-safe). S1b snapshot < latest
+    # .governance/ commit → WARN (gradual). S1c AND double threshold
+    # (age ≥ 7d AND lag ≥ 10 commits) → FAIL. S1d no snapshot → no-verdict.
+    # No .governance/ commit baseline (untracked/unversioned) → secondary
+    # plan-tracker/evidence-log mtime, FAIL impossible (fail-safe WARN cap);
+    # snapshot predating the .governance history (adoption edge) → WARN.
+    # Orthogonal to Check 28c (vs latest published release) and Check 34
+    # (recommendation closure) — independent judgement, no swallowing.
+    print("\n┌─ Check 35: Snapshot Freshness (FIX-268) ─────────────┐")
+    cr35 = check_snapshot_freshness()
+    st35 = cr35["stats"]
+    baseline = st35["commit_date"] or st35["mtime_date"] or "none"
+    lag = "—" if st35["lag_commits"] is None else str(st35["lag_commits"])
+    age = "—" if st35["age_days"] is None else f"{st35['age_days']}d"
+    print(f"│  Snapshot: {st35['session_date'] or '—'} (age: {age}; "
+          f"baseline: {baseline}; commit lag: {lag})")
+    print(f"│  Verdict: {cr35['verdict']}")
+    if cr35["violations"]:
+        all_issues += len(cr35["violations"])
+        print(f"│  [FAIL] {len(cr35['violations'])} violation(s):")
+        for v in cr35["violations"][:8]:
+            print(f"│    - [{v['rule']}] {v['reason']}")
+    elif cr35["warnings"]:
+        print(f"│  [WARN] {len(cr35['warnings'])} warning(s):")
+        for w in cr35["warnings"][:8]:
+            print(f"│    - [{w['rule']}] {w['reason']}")
+    else:
+        print(f"│  [{cr35['verdict']}] {cr35['reason']}")
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 36. Risk Mitigation Closure (FIX-265 / REQ-145.3) ──

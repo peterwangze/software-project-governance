@@ -1114,6 +1114,7 @@ from checks.risk_domain import (  # noqa: E402
     parse_open_risks,
     check_risk_staleness,
     check_risk_escalation,
+    check_risk_mitigation_closure,  # FIX-265 / REQ-145.3 (Check 36)
 )
 
 # ── Review domain (extracted to infra/checks/review_domain.py in 0.70.0) ────
@@ -15182,6 +15183,36 @@ def _run_full_engine_checks(args):
             print(f"│    - [{w['rule']}] {w['reason']}")
     else:
         print(f"│  [{cr34['verdict']}] {cr34['reason']}")
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 36. Risk Mitigation Closure (FIX-265 / REQ-145.3) ──
+    # Content-dimension watchdog for the AUDIT-145 "write a mitigation and
+    # move on" blind spot: a non-closed risk must reference tasks in the
+    # plan-tracker and those tasks must be completed (or carry an exemption
+    # marker). R1 WARN (start) / R2 FAIL (deadline passed OR high severity)
+    # / R3 WARN (cross-entity or archived ref) / R4 WARN (no resolvable
+    # task ref, no exemption — content disclosure) / R5 skip (closed,
+    # exempted, ragged, undecidable). WARN and FAIL both count into
+    # all_issues (18x-family convention).
+    print("\n┌─ Check 36: Risk Mitigation Closure (FIX-265) ───────┐")
+    cr36 = check_risk_mitigation_closure()
+    st36 = cr36["stats"]
+    print(f"│  Risks scanned: {st36['risks_scanned']} "
+          f"(closed: {st36['closed_skipped']}, exempted: {st36['exempted_skipped']}, "
+          f"ragged: {st36['ragged_skipped']}, judged: {st36['judged']}, "
+          f"pass: {st36['pass']})")
+    print(f"│  Verdict: {cr36['verdict']}")
+    if cr36["violations"]:
+        print(f"│  [FAIL] {len(cr36['violations'])} violation(s):")
+        for v in cr36["violations"][:8]:
+            print(f"│    - [{v['rule']}] {v['risk_id']}: {v['reason']}")
+    if cr36["warnings"]:
+        print(f"│  [WARN] {len(cr36['warnings'])} warning(s):")
+        for w in cr36["warnings"][:8]:
+            print(f"│    - [{w['rule']}] {w['risk_id']}: {w['reason']}")
+    if not cr36["violations"] and not cr36["warnings"]:
+        print(f"│  [{cr36['verdict']}] {cr36['reason']}")
+    all_issues += len(cr36["violations"]) + len(cr36["warnings"])
     print("└──────────────────────────────────────────────────────┘")
 
     # ── Summary ──

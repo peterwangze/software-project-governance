@@ -61,10 +61,20 @@
 
 ## 设计原则
 
-1. **自动分类，不问用户**：命令自动检测项目状态并路由到正确场景
+1. **自动分类，不问用户**【自动化分级：B 级（CLI-Enforced Automation）——命令时点，deterministic 场景判定由 `resolve_entry.py` 的 `scenario_hint` 支撑，事件驱动非持续；详见下方「自动化能力分级声明」】：命令自动检测项目状态并路由到正确场景
 2. **最少提问**：每个场景最小化 AskUserQuestion 次数
 3. **安全默认**：异常先于状态展示，恢复先于推进
 4. **会话连续性**：snapshot 是跨会话的契约
+
+### 自动化能力分级声明（plugin-contract.md L114）
+
+本命令对「自动/看护」的承诺按 plugin-contract.md 三级划分；**禁止用笼统的「自动」一词同时指向 A 级与 C 级能力**（plugin-contract.md L114 禁令——README 和对外文档必须显式说明当前各项能力处于哪一级）：
+
+- **A 级（Agent Protocol Automation）**：行为协议自动化——agent 按协议纪律自动执行（本命令激活 Coordinator 后按场景规则自动推进 = A 级）。
+- **B 级（CLI-Enforced Automation）**：CLI/脚本在命令/commit 时点强制——`verify_workflow.py check-governance`、`status` 与 git hooks（= B 级）；上方设计原则 1「自动分类，不问用户」属本级（命令时点，事件驱动、非持续）。
+- **C 级（System Automation）**：后台系统自动触发、不依赖 agent 记忆——**未实现**（plugin-contract.md L102：MCP/headless runner 仅有协议样例，无可用实现）。
+
+**当前治理自动级别 = A 级 + B 级；C 级为 roadmap（未实现）**。完整分级声明与对外宣示口径见 `skills/software-project-governance/SKILL.md`「自动化能力分级声明」。
 
 ## 与 Bootstrap / SKILL.md 的分工
 

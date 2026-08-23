@@ -35,7 +35,7 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
 - 路由任务：按任务类型、文件路径和风险级别选择执行 Agent 与后置 Reviewer。
 - 看护事实：所有修改、审查、证据和发布结论必须基于可复查事实，禁止把假设、猜测、推测或编造内容写成闭环事实。
 - 看护闭环：产品代码产出必须有验证证据和独立审查；宿主不支持分离时只能记录 degraded evidence，不得宣称 review passed。
-- Coordinator 接管用户交互：只在 critical triggers 触发时通过 AskUserQuestion 打断用户；常规执行自动推进并记录假设。
+- Coordinator 接管用户交互：只在 critical triggers 触发时通过 AskUserQuestion 打断用户；常规执行自动推进并记录假设。【自动化分级：A 级（Agent Protocol Automation）——agent 按协议纪律自动执行，详见「自动化能力分级声明」】
 - Producer-Reviewer 分离：生产者只产出，Reviewer 只审查；缺少真实分离时只能进入 degraded mode。
 
 ### 你必须避免
@@ -114,6 +114,16 @@ Coordinator 铁律第 1 条"不直接修改产品代码"的具体判定标准。
 - 修改**仅**涉及治理记录路径 → Coordinator 可直接执行
 - **复杂度不是判定标准**——改一行 Python 和改一百行 Markdown 都是产品代码
 - 如果无法判定 → 按产品代码处理（spawn Agent Team）
+
+## 自动化能力分级声明（plugin-contract.md L114）
+
+本工作流对「自动/看护」的承诺按 plugin-contract.md 三级划分；**禁止用笼统的「自动」一词同时指向 A 级与 C 级能力**（plugin-contract.md L114 禁令——README 和对外文档必须显式说明当前各项能力处于哪一级）：
+
+- **A 级（Agent Protocol Automation）**：行为协议自动化——agent 按协议纪律自动执行。例如「Coordinator 接管用户交互：只在 critical triggers 触发时打断；常规执行自动推进并记录假设」（见上方「你负责」清单）= A 级。
+- **B 级（CLI-Enforced Automation）**：CLI/脚本强制——`verify_workflow.py check-governance` 与 commit hooks 在命令/commit 时点强制（= B 级）。本文件「治理基础设施（自动使用）」与 `commands/governance.md`「自动分类，不问用户」均属本级（事件驱动，非持续）。
+- **C 级（System Automation）**：后台系统自动触发、不依赖 agent 记忆——**未实现**（plugin-contract.md L102：MCP/headless runner 仅有协议样例，无可用实现）。0.76.0 通过 `check-governance --summary-only` 的会话 bootstrap 自动运行实现「会话级」自动触发（见上方「每会话 bootstrap 健康摘要」），但**不是** C 级后台 daemon。
+
+**当前治理自动级别 = A 级 + B 级；C 级为 roadmap（未实现）**。各级别能力所处级别必须向用户显式说明（plugin-contract.md L114）；对外宣示不得把 C 级未实现说成已实现。
 
 ## Agent Team 职能分组
 
@@ -277,7 +287,7 @@ python skills/software-project-governance/infra/verify_workflow.py execution-pac
 | `references/company-practices-summary.md` | 企业实践摘要 |
 | `references/agent-dispatch-template.md` | Agent 调度模板——sub-agent prompt 标准化 |
 
-## 治理基础设施（自动使用）
+## 治理基础设施（自动使用）【自动化分级：B 级（CLI-Enforced Automation）——命令/commit 时点强制、事件驱动非持续，详见「自动化能力分级声明」】
 
 - `.governance/plan-tracker.md`——项目状态跟踪
 - `infra/verify_workflow.py`——治理健康检查

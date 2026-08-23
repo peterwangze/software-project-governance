@@ -7,6 +7,11 @@ Covers the mandatory change-control triage for product-code task intake:
     (P0/P1/P2 with in-flight + version-chain context), conflict check
     (same-file overlap with in-flight tasks), version adaptation
     (target version vs current / planned-next).
+  - Fifth step (FIX-271 / AUDIT-146 §7.2 R2): execution side-effect
+    declaration — outside-repo side-effect signals in files / rationale /
+    acceptance MUST be declared (``--side-effects``); user-real-environment
+    signals auto-attach the R1 (one-of-three) review condition; undeclared
+    detectable side effects record a WARN issue (advisory, never silent).
   - Machine triage record (`.governance/change-triage/{TASK_ID}.json`
     containing the tool-output snapshot) + evidence-log row.
   - Fail-closed intake: unknown task-family dep / invalid priority / empty
@@ -305,6 +310,80 @@ class ConflictCheckTests(unittest.TestCase):
         self.assertEqual(conflicts, [])
 
 
+class SideEffectAnalysisTests(unittest.TestCase):
+    """Step e (FIX-271 / AUDIT-146 §7.2 R2) — pure analysis of execution
+    side-effect signals in triage inputs (files / rationale / acceptance)."""
+
+    def test_repo_files_and_clean_text_detect_nothing(self):
+        result = ct.analyze_side_effects(
+            files=["skills/software-project-governance/infra/x.py"],
+            reason="TDD fixture", acceptance="单元测试通过")
+        self.assertFalse(result["detected"])
+        self.assertFalse(result["touches_real_env"])
+        self.assertFalse(result["requires_r1"])
+        self.assertEqual(result["issues"], [])
+        self.assertEqual(result["review_conditions"], [])
+
+    def test_real_env_acceptance_wording_touches_real_env(self):
+        """R5-banned unqualified wording（真实安装/真实环境）in acceptance
+        MUST be classified as a user-real-environment side effect."""
+        result = ct.analyze_side_effects(
+            files=["skills/software-project-governance/infra/x.py"],
+            acceptance="测试 profile 真实安装冒烟通过")
+        self.assertTrue(result["touches_real_env"])
+        self.assertTrue(result["requires_r1"])
+        self.assertTrue(any("R1" in c for c in result["review_conditions"]))
+
+    def test_isolated_smoke_wording_is_outside_repo_but_not_real_env(self):
+        """R5 standard wording（隔离环境安装冒烟+临时目录重定向）is compliant:
+        installer execution IS an outside-repo side effect (declaration
+        required) but is NOT a user-real-environment touch (no R1)."""
+        result = ct.analyze_side_effects(
+            files=["skills/software-project-governance/infra/x.py"],
+            acceptance="隔离环境安装冒烟（环境变量重定向至临时目录）通过")
+        self.assertTrue(result["detected"])
+        self.assertFalse(result["touches_real_env"])
+        self.assertFalse(result["requires_r1"])
+
+    def test_outside_repo_file_targets_detected(self):
+        result = ct.analyze_side_effects(
+            files=["skills/software-project-governance/infra/x.py",
+                   "~/.dsh/config.json"],
+            reason="r")
+        self.assertTrue(result["detected"])
+        self.assertTrue(result["touches_real_env"])
+        self.assertTrue(any("仓库外" in b or "真实环境" in b
+                            for b in result["blast_radius"]))
+
+    def test_absolute_path_outside_repo_detected(self):
+        result = ct.analyze_side_effects(
+            files=["C:\\Users\\peter\\.dsh\\settings.json"], reason="r")
+        self.assertTrue(result["detected"])
+        self.assertTrue(result["touches_real_env"])
+
+    def test_network_publish_wording_detected(self):
+        result = ct.analyze_side_effects(
+            files=["skills/software-project-governance/infra/x.py"],
+            reason="完成后 npm publish 发布到 registry")
+        self.assertTrue(result["detected"])
+
+    def test_undeclared_detection_records_warn_issue(self):
+        result = ct.analyze_side_effects(
+            files=["skills/software-project-governance/infra/x.py"],
+            acceptance="真实环境安装验证")
+        self.assertTrue(any(i.startswith("WARN") for i in result["issues"]))
+
+    def test_declared_side_effect_removes_undeclared_warn(self):
+        result = ct.analyze_side_effects(
+            files=["skills/software-project-governance/infra/x.py"],
+            acceptance="真实环境安装验证",
+            declared="安装器写入 $DSH_HOME 下 profile；爆炸半径=用户 DSH 配置目录")
+        self.assertFalse(any("声明缺失" in i for i in result["issues"]))
+        # Declaration satisfies the declaration duty — but a real-env touch
+        # still auto-attaches the R1 review condition (R2 second clause).
+        self.assertTrue(result["requires_r1"])
+
+
 class TriageRecordTests(unittest.TestCase):
     """Machine triage record + evidence row + fail-closed intake."""
 
@@ -435,6 +514,75 @@ class TriageRecordTests(unittest.TestCase):
         self.assertIn("already has a triage record", summary["error"])
         self.assertEqual(
             (rec_dir / "FIX-999.json").read_text(encoding="utf-8"), malformed)
+
+
+class SideEffectStepTests(unittest.TestCase):
+    """Step e integration (FIX-271 / AUDIT-146 §7.2 R2) — run_triage
+    machine record carries ``analysis.side_effect`` as a purely additive
+    field; the four existing steps keep byte-identical shapes (backward
+    compatibility hard constraint)."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="ctse_")
+        self.gov = _governance_dir(self.tmpdir)
+
+    def _run(self, **overrides):
+        kwargs = {
+            "task_id": "FIX-103",
+            "title": "new product task",
+            "priority": "P2",
+            "target_version": "0.73.0",
+            "depends_on": ["FIX-100"],
+            "files": ["skills/software-project-governance/infra/x.py"],
+            "reason": "TDD fixture",
+            "plan_tracker_text": _FIXTURE_TRACKER,
+            "current_version": "0.72.0",
+            "governance_dir": self.gov,
+        }
+        kwargs.update(overrides)
+        return ct.run_triage(**kwargs)
+
+    def test_pure_repo_task_gets_clean_side_effect_step(self):
+        summary = self._run()
+        self.assertFalse(summary.get("error"), summary)
+        se = summary["analysis"]["side_effect"]
+        self.assertFalse(se["detected"])
+        self.assertFalse(se["touches_real_env"])
+        self.assertFalse(se["requires_r1"])
+        self.assertEqual(se["issues"], [])
+        record = json.loads(
+            (self.gov / "change-triage" / "FIX-103.json")
+            .read_text(encoding="utf-8"))
+        self.assertEqual(record["analysis"]["side_effect"], se)
+
+    def test_real_env_acceptance_in_record_with_r1_condition(self):
+        summary = self._run(acceptance="测试 profile 真实安装冒烟通过")
+        self.assertFalse(summary.get("error"), summary)
+        se = summary["analysis"]["side_effect"]
+        self.assertTrue(se["touches_real_env"])
+        self.assertTrue(se["requires_r1"])
+        self.assertTrue(any("R1" in c for c in se["review_conditions"]))
+        # Undeclared detectable side effect → WARN issue (never silent).
+        self.assertTrue(any(i.startswith("WARN") for i in se["issues"]))
+
+    def test_four_step_fields_unchanged_by_fifth_step(self):
+        """Backward compatibility hard constraint: the four existing
+        analysis steps keep their exact keys/shapes; side_effect is
+        appended LAST so the serialized four-step prefix is unchanged."""
+        summary = self._run()
+        analysis = summary["analysis"]
+        self.assertEqual(
+            list(analysis.keys()),
+            ["dependency", "priority_context", "conflicts", "version",
+             "side_effect"])
+        self.assertEqual(analysis["dependency"]["unknown_deps"], [])
+        self.assertEqual(analysis["priority_context"]["proposed"], "P2")
+        self.assertEqual(analysis["conflicts"], [])
+        self.assertEqual(analysis["version"]["target"], "0.73.0")
+        record = json.loads(
+            (self.gov / "change-triage" / "FIX-103.json")
+            .read_text(encoding="utf-8"))
+        self.assertEqual(record["schema_version"], 1)
 
 
 class ChangeTriageCheckTests(unittest.TestCase):
@@ -587,6 +735,27 @@ class ChangeTriageCliTests(unittest.TestCase):
         )
         self.assertEqual(done.returncode, 2, done.stdout)
         self.assertFalse((self.gov / "change-triage" / "FIX-103.json").exists())
+
+    def test_cli_side_effect_step_survives_warn_without_fail_closed(self):
+        """FIX-271 R2: --acceptance with real-env wording surfaces the R1
+        review condition + WARN issue in the JSON output and the record,
+        but WARN is advisory — the CLI still exits 0 (record written)."""
+        done = self._run_cli(
+            "--task", "FIX-104", "--title", "t", "--priority", "P2",
+            "--version", self.planned, "--depends-on", "FIX-100",
+            "--files", "skills/software-project-governance/infra/x.py",
+            "--reason", "r",
+            "--acceptance", "测试 profile 真实安装冒烟通过",
+        )
+        self.assertEqual(done.returncode, 0, done.stderr + done.stdout)
+        payload = json.loads(done.stdout)
+        se = payload["analysis"]["side_effect"]
+        self.assertTrue(se["touches_real_env"])
+        self.assertTrue(any(i.startswith("WARN") for i in se["issues"]))
+        record = json.loads(
+            (self.gov / "change-triage" / "FIX-104.json")
+            .read_text(encoding="utf-8"))
+        self.assertTrue(record["analysis"]["side_effect"]["requires_r1"])
 
 
 if __name__ == "__main__":

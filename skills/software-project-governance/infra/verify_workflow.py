@@ -20803,14 +20803,18 @@ def cmd_next_candidates(args):
 def cmd_change_triage(args):
     """Thin entry — change-triage CLI (FIX-237.4 / ADR-017 §4.4).
 
-    Runs the mandatory four-step change-control triage for a new
+    Runs the mandatory five-step change-control triage for a new
     product-code task (dependency analysis via task-priority-analysis with
     snapshot / priority determination / same-file conflict check / version
-    adaptation) and machine-writes the triage record
+    adaptation / execution side-effect declaration — FIX-271 / AUDIT-146
+    §7.2 R2) and machine-writes the triage record
     (``.governance/change-triage/{TASK_ID}.json`` + evidence row). All logic
     lives in infra/change_triage.py; this entry is argparse glue + I/O
     (RISK-039 thin-entry discipline). Exits non-zero (2) fail-closed on any
     step error — without a triage record the task MUST NOT be created.
+    Step-e side-effect issues are WARN (advisory): they surface in the JSON
+    output and the record but do not change the exit code (WARN 起步，
+    不得静默).
     """
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -20840,6 +20844,8 @@ def cmd_change_triage(args):
         depends_on=getattr(args, "depends_on", "") or "",
         files=files,
         reason=getattr(args, "reason", "") or "",
+        acceptance=getattr(args, "acceptance", "") or "",
+        declared_side_effects=getattr(args, "side_effects", "") or "",
         plan_tracker_text=SAMPLE_PATH.read_text(encoding="utf-8"),
         current_version=current_version,
         governance_dir=GOVERNANCE_DIR,
@@ -22296,8 +22302,8 @@ def main(argv=None):
     # MUST NOT be created)
     ctri_p = subparsers.add_parser(
         "change-triage",
-        help="Run the mandatory 4-step triage (dependency/priority/conflict/"
-             "version) for a new product-code task (FIX-237)",
+        help="Run the mandatory 5-step triage (dependency/priority/conflict/"
+             "version/side-effect) for a new product-code task (FIX-237/FIX-271)",
     )
     ctri_p.add_argument("--task", required=True,
                         help="New task id (PREFIX-NNN, e.g. FIX-241)")
@@ -22317,6 +22323,17 @@ def main(argv=None):
                              "modify (quick lane covers .governance/ only)")
     ctri_p.add_argument("--reason", default="",
                         help="Triage rationale (priority determination)")
+    ctri_p.add_argument("--acceptance", default="",
+                        help="Acceptance-criteria text — step-e input: R5 "
+                             "banned real-env wording (真实安装/真实环境) "
+                             "auto-attaches the R1 review condition "
+                             "(FIX-271 / AUDIT-146)")
+    ctri_p.add_argument("--side-effects", default="",
+                        help="Side-effect declaration (surface + blast "
+                             "radius) for outside-repo effects (installer "
+                             "runs / profile writes / network publishing) — "
+                             "R2 fifth step: undeclared detectable side "
+                             "effects record a WARN issue")
 
     args = parser.parse_args(parser_argv)
     if args.project_root and explicit_project_root is None:

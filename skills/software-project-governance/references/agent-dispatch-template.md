@@ -24,6 +24,10 @@ Coordinator spawn sub-agent 时 MUST 使用本模板，**禁止**传自定义 pr
 
 {hard_gates}
 
+## 破坏性红线（真实环境任务 MUST 生效——AUDIT-146 / FIX-271 R3）
+
+{destructive_redlines}
+
 ## 并发锁操作（Coordinator — spawn 前 MUST 执行）
 
 Coordinator dispatch Agent 前 **MUST** 按 behavior-protocol.md M7.6a 执行锁检查与获取：
@@ -73,7 +77,7 @@ python skills/software-project-governance/infra/verify_workflow.py review-record
 
 - 不修改非目标文件（"顺带改"）
 - 不直接与用户交互（无 AskUserQuestion）
-- 不修改 .governance/ 治理记录
+- 不修改 .governance/ 治理记录（唯一例外：派发 prompt 预授权 incidents 留痕文件时，可向 `.governance/incidents/{task_id}-*.log` 追加 R4 实时命令日志——仅限该路径、仅限追加，见 behavior-protocol.md M7.7 R4 例外条款）
 - 不做最终决策（决策型任务只出方案）
 - 不把昵称、人设、风格或口号作为执行依据
 ```
@@ -92,6 +96,33 @@ python skills/software-project-governance/infra/verify_workflow.py review-record
 | `{acceptance_criteria}` | 验收标准 | 路由表含后置审查列，表格格式正确 |
 | `{priority}` | 优先级 | P0 |
 | `{hard_gates}` | 硬门槛列表 | verify_workflow.py PASSED, cross-reference consistency PASSED |
+| `{destructive_redlines}` | 破坏性红线段——任务涉及用户真实环境操作时 MUST 填入下方「红线捆绑包」（红线原文 + R1/R4 配套摘要）逐字文本；纯仓库内任务填「不适用——本任务无用户真实环境操作」 | 见下方「破坏性红线注入（真实环境任务）」 |
+
+## 破坏性红线注入（真实环境任务 — AUDIT-146 / FIX-271 R3）
+
+**注入时机（MUST 判定）**：任务满足以下任一条件时，Coordinator **MUST** 将「红线捆绑包」逐字填入模板的 `{destructive_redlines}` 占位符——捆绑包为下方固定文本，**不得改写、不得省略、不得转述、不得拆分**（红线原文源自 RCA §7.2 R3；配套规则为 behavior-protocol.md M7.7 R1/R4 的注入摘要，权威文本以 M7.7 为准）：
+
+1. 任务 `files` 含仓库外路径（`$HOME`/`$DSH_HOME` 下配置目录、绝对路径、环境变量重定向目标）；或
+2. 任务验收/描述要求在用户真实环境执行操作（安装、写入、清理、验证用户 HOME 下配置）；或
+3. change-triage 第五步（`analysis.side_effect`）判定 `touches_real_env=true`。
+
+纯仓库内任务（以上皆不满足）填「不适用——本任务无用户真实环境操作」——占位符 MUST 总是被显式填充，不得留空。
+
+**红线捆绑包（verbatim——`{destructive_redlines}` 的唯一合法填充值，随派发 prompt 进入角色 agent 上下文）**：
+
+```
+【破坏性红线】禁止对用户 HOME 下任何配置目录执行删除/清空/重建/移动；构造测试场景一律使用临时目录；对用户环境的全部写操作限制为安装目标自身的追加式写入。
+
+【配套规则 R1——真实环境三选一】任何涉及用户真实环境（$HOME 下配置目录、$DSH_HOME、仓库外任意路径）的测试/验收/安装操作，执行前必须满足三选一并留痕：(a) 隔离环境——环境变量重定向至临时目录（如 DSH_HOME=<tempdir>）；(b) 事先完整备份 + 操作后一致性校验；(c) 用户经 ask_user_question 逐项授权。三者皆缺禁止执行，无豁免。
+
+【配套规则 R4——真实环境命令逐条上报】你在用户真实环境执行的每条命令必须在结构化返回中逐条上报（命令、时间、退出码、影响路径），由 Coordinator 于收到当下机写 evidence 行留痕；无上报的真实环境操作按违规处理。仅当本派发 prompt 预授权 incidents 留痕文件（.governance/incidents/{task_id}-*.log）时，方可向该文件追加实时命令日志（仅限该路径、仅限追加）——这是「不修改 .governance/ 治理记录」禁令的唯一例外。
+```
+
+注入纪律（Coordinator 侧）：
+
+- 真实环境任务漏填捆绑包 = 调度违规（R3 注入是 MUST，不是可选）
+- 捆绑包内「破坏性红线」三句与 RCA §7.2 R3 逐字一致——单一权威副本，修改须经决策记录
+- 配套规则为 M7.7 注入摘要：摘要与 M7.7 权威文本不一致时以 M7.7 为准并回改摘要（防文本漂移）
 
 ## 并行调度安全
 
@@ -141,3 +172,4 @@ Coordinator spawn sub-agent 时 MUST 在用户可见输出中报告进度：
 - ❌ 修改模板结构
 - ❌ 跳过角色定义或任务 SKILL 的加载指令
 - ❌ 在未预检文件目标重叠的情况下并行 spawn 多个修改 agent
+- ❌ 真实环境任务派发时漏填破坏性红线段（R3 注入是 MUST——见「破坏性红线注入」）

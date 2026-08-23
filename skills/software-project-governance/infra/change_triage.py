@@ -2,7 +2,7 @@
 """Change-control triage engine + machine record writer — FIX-237.4 / ADR-017 §4.4.
 
 The ``change-triage`` CLI (verify_workflow.py thin entry) delegates here. A
-new **product-code** task MUST complete the mandatory four-step triage before
+new **product-code** task MUST complete the mandatory five-step triage before
 it is created in plan-tracker:
 
   a. **dependency analysis** — runs task-priority-analysis
@@ -14,7 +14,16 @@ it is created in plan-tracker:
      existing triage records are the machine registry of in-flight file
      sets; completed tasks never conflict);
   d. **version adaptation** — target version validated against the current
-     workflow version and the planned-next version in the roadmap.
+     workflow version and the planned-next version in the roadmap;
+  e. **execution side-effect declaration** (FIX-271 / AUDIT-146 §7.2 R2) —
+     any outside-repo side effect implied by the task's ``files`` /
+     rationale / acceptance (installer execution, real profile writes,
+     network publishing) MUST be declared (``declared_side_effects``:
+     side-effect surface + blast radius); a user-real-environment touch
+     auto-attaches the R1 (one-of-three) review condition; an undeclared
+     detectable side effect records a WARN issue (advisory — never
+     silent, never blocking). The step lands in the record as the purely
+     additive ``analysis.side_effect`` field.
 
 Behavior contract (ADR-017 §4.4 / FIX-237.4 / DEC-139):
 
@@ -22,13 +31,19 @@ Behavior contract (ADR-017 §4.4 / FIX-237.4 / DEC-139):
     outside P0/P1/P2, an empty ``files`` list, a target version lower than
     the current version, a new-task dependency cycle, or a malformed task id
     produces NO record and a non-zero CLI exit — the task cannot be created
-    without a triage record.
+    without a triage record. Step-e WARN issues are advisory (exit 0) —
+    the WARN lives in the CLI output and the machine record.
   - **Machine record**: ``.governance/change-triage/{TASK_ID}.json`` holds
-    the four-step analysis + the ``task-priority-analysis`` snapshot
+    the five-step analysis + the ``task-priority-analysis`` snapshot
     (``report_json`` + ``report_text``); an evidence-log row (id
     ``TRIAGE-{TASK_ID}``) is appended at the same time. The evidence-log
     call snapshot contract = the JSON command output stored in the record
     (FIX-237.5).
+  - **Schema stability (FIX-271)**: ``TRIAGE_SCHEMA_VERSION`` stays 1 —
+    step e is a purely additive optional field (``analysis.side_effect``)
+    appended after the four existing step keys; no reader (Check 32
+    validates the four required steps only) rejects unknown analysis
+    fields, so existing records and consumers stay byte/shape compatible.
   - **Single record per task (FIX-247)**: re-triaging an already-recorded
     task id is rejected (fail-closed) — the machine record is immutable and
     a duplicate would self-conflict plus double the evidence row.
@@ -80,7 +95,7 @@ from task_priority import (
 )
 
 
-__version__ = "0.73.0"
+__version__ = "0.77.0"
 
 # Record layout (relative to .governance/).
 TRIAGE_SUBDIR = "change-triage"
@@ -389,6 +404,138 @@ def check_conflicts(files: list, records: list, completed_ids: set) -> list:
     return conflicts
 
 
+# ─── Step e (FIX-271 / AUDIT-146 §7.2 R2) ──────────────────────────────────
+#
+# Execution side-effect signals. D2 root cause: the four legacy steps saw
+# only repo-internal file sets, so a task whose acceptance/verification
+# executes effects OUTSIDE the repository (installer runs, real profile
+# writes, network publishing) was invisible to governance.
+
+# Outside-repo FILE shapes: absolute POSIX root, Windows drive, home
+# shorthand, environment-variable redirection, parent-directory escape.
+_OUTSIDE_REPO_FILE_RE = re.compile(r"^(?:[A-Za-z]:[\\/]|~|/|\$|%[^%]*%|\.\.)")
+
+# User-real-environment FILE markers (home directory trees / env-var
+# redirected targets under the user's profile).
+_REAL_ENV_FILE_RE = re.compile(
+    r"(?:^~|/Users/|/home/|\$DSH_HOME|\$HOME|%USERPROFILE%|%APPDATA%)",
+    re.IGNORECASE)
+
+# R5-banned unqualified wording (AUDIT-146 D1): the exact phrasings that
+# made FEAT-010's acceptance run inside the real ~/.dsh with no isolation.
+_REAL_ENV_TEXT_RE = re.compile(
+    r"(真实安装|真实环境|真机|用户\s*HOME|HOME\s*下|用户真实环境|"
+    r"\$DSH_HOME|\$HOME|%USERPROFILE%|%APPDATA%|~/[^\s，。；)）])")
+
+# Outside-repo effect wording — the R2 enumeration: installer execution /
+# real profile write / network publishing. The R5-standard wording
+# 「隔离环境安装冒烟（环境变量重定向至临时目录）」matches here as an
+# outside-repo effect (installer execution, declaration duty) but contains
+# no real-env banned wording, so R1 is NOT triggered — isolation
+# qualifiers never neutralize the banned words themselves (R5's point is
+# to use the standard wording, not qualified real-env wording).
+_OUTSIDE_REPO_TEXT_RE = re.compile(
+    r"(安装冒烟|安装器|installer|profile\s*写入|网络发布|npm\s+publish)",
+    re.IGNORECASE)
+
+# R1 review condition auto-attached to every user-real-environment touch.
+_R1_REVIEW_CONDITION = (
+    "须满足 R1（三选一：隔离环境重定向 / 事先完整备份+一致性校验 / "
+    "用户 ask_user_question 逐项授权）并留痕"
+    "（behavior-protocol.md M7.7 / AUDIT-146 / FIX-271）")
+
+
+def analyze_side_effects(files, reason="", acceptance="", declared=""):
+    """Step e — execution side-effect declaration analysis (pure, no I/O).
+
+    Scans the triage inputs (``files`` / rationale / acceptance wording)
+    for outside-repo side-effect signals:
+
+      - a file outside the repository (absolute path, ``~``, ``$VAR``,
+        ``%VAR%``, parent escape) is an outside-repo side effect; home-tree
+        / env-var targets additionally count as a user REAL-environment
+        touch;
+      - R5-banned unqualified wording（真实安装/真实环境/真机/...）in the
+        rationale or acceptance is a user REAL-environment touch;
+      - installer / network-publish / profile-write wording is an
+        outside-repo side effect even when properly isolated (R5 standard
+        wording「隔离环境安装冒烟…临时目录…」stays NON-real-env).
+
+    Args:
+        files: product files the task will modify.
+        reason: triage rationale text.
+        acceptance: acceptance-criteria text (R5 wording detection input).
+        declared: the task's side-effect declaration (surface + blast
+            radius). Non-empty satisfies the declaration duty.
+
+    Returns:
+        dict ``{"detected", "touches_real_env", "requires_r1",
+        "declared", "blast_radius", "review_conditions", "issues"}``.
+        ``issues`` holds WARN strings (advisory — WARN 起步，不得静默);
+        a real-env touch always carries the R1 review condition.
+    """
+    files = [str(f) for f in (files or []) if str(f).strip()]
+    declared = str(declared or "").strip()
+
+    blast_radius = []
+    real_env = False
+    outside_repo = False
+
+    for f in files:
+        normalized = f.replace("\\", "/")
+        if _OUTSIDE_REPO_FILE_RE.match(f):
+            outside_repo = True
+            if _REAL_ENV_FILE_RE.search(f) or _REAL_ENV_FILE_RE.search(
+                    normalized):
+                real_env = True
+                blast_radius.append(
+                    "用户真实环境文件目标（HOME/环境变量重定向）：{0}".format(f))
+            else:
+                blast_radius.append(
+                    "仓库外文件目标（绝对路径/父目录逃逸）：{0}".format(f))
+
+    blob = "{0} {1}".format(str(reason or ""), str(acceptance or ""))
+    matched_real = sorted({m.group(0) for m in
+                           _REAL_ENV_TEXT_RE.finditer(blob)})
+    matched_outside = sorted({m.group(0) for m in
+                              _OUTSIDE_REPO_TEXT_RE.finditer(blob)})
+
+    if matched_real:
+        real_env = True
+        outside_repo = True
+        blast_radius.append(
+            "输入含真实环境操作措辞（R5 禁令词）：{0}".format(
+                "、".join(matched_real)))
+    if matched_outside:
+        outside_repo = True
+        blast_radius.append(
+            "输入含仓库外副作用措辞（安装器/发布/profile 写入）：{0}".format(
+                "、".join(matched_outside)))
+
+    issues = []
+    if outside_repo and not declared:
+        issues.append(
+            "WARN: R2 执行副作用声明缺失——triage 输入检测到仓库外副作用"
+            "信号（{0}）但未声明副作用面与爆炸半径（--side-effects；"
+            "AUDIT-146 / FIX-271）".format("；".join(blast_radius)))
+    if real_env and not declared:
+        issues.append(
+            "WARN: 触及用户真实环境——未声明且须满足 R1（三选一）方可执行"
+            "（AUDIT-146 / FIX-271 / behavior-protocol.md M7.7）")
+
+    review_conditions = [_R1_REVIEW_CONDITION] if real_env else []
+
+    return {
+        "detected": outside_repo,
+        "touches_real_env": real_env,
+        "requires_r1": real_env,
+        "declared": declared,
+        "blast_radius": blast_radius,
+        "review_conditions": review_conditions,
+        "issues": issues,
+    }
+
+
 def load_triage_records(governance_dir) -> list:
     """Load all existing triage records under ``<governance_dir>/change-triage``.
 
@@ -422,7 +569,7 @@ def _evidence_row(task_id: str, record_name: str, date_str: str) -> str:
         "TRIAGE-{0}".format(task_id),
         task_id,
         "变更控制",
-        "change-triage CLI 机器写入 triage 记录（依赖/优先级/冲突/版本四步分析）",
+        "change-triage CLI 机器写入 triage 记录（依赖/优先级/冲突/版本/执行副作用五步分析）",
         "事实依据：change-triage 输出摘要（机器写入；命令输出 JSON 快照见 "
         "change-triage/{0}.json）".format(task_id),
         record_name,
@@ -436,14 +583,17 @@ def _evidence_row(task_id: str, record_name: str, date_str: str) -> str:
 
 def run_triage(*, task_id: str, title: str = "", priority: str,
                target_version: str, depends_on, files, reason: str = "",
+               acceptance: str = "", declared_side_effects: str = "",
                plan_tracker_text: str, current_version: str = "",
                governance_dir, existing_records=None, records_dir=None,
                evidence_path=None) -> dict:
-    """Run the mandatory four-step triage and write the machine record.
+    """Run the mandatory five-step triage and write the machine record.
 
     Fail-closed: any step-ERROR (unknown dependency, invalid priority, empty
     files, stale target version, new-task cycle, malformed task id) returns
     ``{"error": ...}`` and writes NOTHING — no record, no evidence row.
+    Step-e (side-effect) issues are WARN (advisory): they land in the
+    record and the summary but never block (WARN 起步，不得静默).
 
     Args:
         task_id: new task id (PREFIX-NNN).
@@ -455,6 +605,11 @@ def run_triage(*, task_id: str, title: str = "", priority: str,
             product-code tasks; quick-lane .governance/-only work does not
             use this command).
         reason: triage rationale (priority determination context).
+        acceptance: acceptance-criteria text — step-e input for R5 wording
+            detection (FIX-271 / AUDIT-146 §7.2 R2/R5).
+        declared_side_effects: side-effect declaration (surface + blast
+            radius) — satisfies the step-e declaration duty for
+            outside-repo side effects (R2).
         plan_tracker_text: raw plan-tracker markdown.
         current_version: current workflow version (SKILL.md frontmatter).
         governance_dir: ``.governance`` directory (records land under
@@ -523,6 +678,14 @@ def run_triage(*, task_id: str, title: str = "", priority: str,
     completed_ids = {t.task_id for t in tasks if t.is_completed()}
     conflicts = check_conflicts(files, records, completed_ids)
 
+    # Step e (FIX-271 / AUDIT-146 §7.2 R2): execution side-effect
+    # declaration — purely additive analysis appended AFTER the four
+    # legacy step keys (backward-compat hard constraint: the four-step
+    # serialized prefix stays byte-identical).
+    side_effect = analyze_side_effects(
+        files, reason=reason, acceptance=acceptance,
+        declared=declared_side_effects)
+
     # Machine-write the triage record + evidence row.
     if evidence_path is None:
         evidence_path = Path(governance_dir) / "evidence-log.md"
@@ -567,6 +730,7 @@ def run_triage(*, task_id: str, title: str = "", priority: str,
                 "planned_next": version_result["planned_next"],
                 "issues": version_result["issues"],
             },
+            "side_effect": side_effect,
         },
         "snapshot": dependency["snapshot"],
     }
@@ -616,6 +780,7 @@ __all__ = [
     "analyze_priority_context",
     "validate_version",
     "check_conflicts",
+    "analyze_side_effects",
     "load_triage_records",
     "run_triage",
 ]

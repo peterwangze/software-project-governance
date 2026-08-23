@@ -2,6 +2,66 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.76.0] - 2026-08-23
+
+### 0.76.0 - 看护模式七项 + /governance 性能修复（REQ-145.1~145.7 / FIX-263~270 + FIX-270 性能）（MINOR）
+
+0.76.0 是 MINOR 发布，把 HEAD `db1078f` 上 0.75.0 released（`v0.75.0` = 543550c）之后已合入的 **15 个 commit** 打包成发布候选——承载 MINOR 语义的主链：AUDIT-145 看护缺口七项修复（FIX-263 设计 + FIX-264~269 实现：会话 bootstrap 自动健康摘要 `check-governance --summary-only`、Check 35 快照新鲜度、Check 36 风险缓解闭环、Check 37 Gate-发布互锁、Check 38 CI 实跑证据、能力分级声明）与 `/governance` 性能修复（FIX-270：status 秒级快路径 + 宿主 check-governance -91% 提速 + mixed-root 去噪）；八个随行 commit（FIX-255/256/258、AUDIT-144、FIX-260/261/262、DOC-002）——其中 FIX-260/261/262 为 REQ-107/108 消费方（审查结论机器持久化 + 完成推荐机器验证回路），FIX-255/256/258 为发布后债务/测试加固，AUDIT-144 为只读诊断报告，DOC-002 为项目质量原则投影。发布目标：AUDIT-145 诊断的「记录+门禁有效但运行时看护缺位」——会话纪律、风险缓解闭环、Gate-发布互锁、CI 实跑证据、bootstrap 健康摘要从「人发现问题」转向「机器看护」，并对 `/governance` 分钟级状态展示与宿主 check-governance 噪音/耗时做性能修复。**不关闭 RISK-036/RISK-039**。版本投影 0.75.0 -> 0.76.0 全 PASS（15 projections 由 `release-projection --write` 确定性写入 + `verify_workflow.py` REQUIRED_SNIPPETS 6 版本钉）。**Breaking changes：无**（全部为新增检查/子命令/文档声明与内部修复，无既有接口破坏；CLI 均为增量参数）。
+
+### Added
+
+- **FIX-263/264 会话 bootstrap 自动健康摘要（REQ-145.1+145.7）**（EVD-FIX-264，commit 66fa210，2026-08-23）：根因 = AUDIT-145 D1——check-governance 仅手动触发，会话无自动健康信号。修复：`verify_workflow.py` 新增 `--summary-only` 子命令（复用全量引擎捕获输出 + `_aggregate_check_summary` + `--level lightweight|standard|strict` 详略分档 + fail-safe 降级）；会话协议 M4.1 新增一步 + 入口 SKILL.md 注入健康摘要段（A3 方案：不进 persona——契约块 1535/1536 字节已满）；阈值对齐 DEC-149（>60s 软超时取消，source/e2e 镜像逐字一致）。**披露（RISK-044，2026-08-22 登记，已接受/DEC-149）**：`--summary-only` 墙钟实测 31-32s，未达设计 §3.1 `<15s` 门禁（复用同引擎=全量引擎耗时，设计「秒级」前提经真机实测不成立）；DEC-149 已接受并修订验收信号为「单次运行 <60s 且每会话仅一次」（31-32s 满足），quick-scan 秒级子集列为 0.77+ 候选（不改变 0.76.0 语义）；RISK-044 保持 open（已接受/DEC-149），deadline 2026-08-28 复核。用户视角：每个新会话 bootstrap 后自动输出 `Governance: {N} issues` 汇总 + 首个 FAIL/WARN 项，无 issue 时 `[PASS]`。验证：test_summary_only 15 用例红→绿；全量 1752 passed+237 subtests（唯一失败 = 既有 resolve_entry 时间敏感 flaky 00:00-02:00 窗口恒败，HEAD 同败）；审查链 R0/R1 APPROVED_WITH_NOTES/0。设计文档 `docs/requirements/audit-145-watchdog-design-0.76.0.md` + `audit-145-watchdog-gap-0.76.0.md` 随实现入库（FIX-263 交付物）。
+- **FIX-265 Check 36 风险缓解闭环（REQ-145.3）**（EVD-FIX-265，commit cba247b）：根因 = AUDIT-145 D2——risk-log「写缓解即完成」无闭环断言。修复：`checks/risk_domain.py` 扩展（`is_risk_status_closed` + F11 PriorityReport 四桶状态映射重建 + R1-R5 判定：引用任务未闭环→WARN、截止过/高危→FAIL、跨实体引用→R3 WARN 不升级、无引用无豁免→R4 内容级披露、已关闭/豁免/ragged→skip）；`task_priority ✅` 为规则权威（DEC-151）；解析异常 fail-safe WARN 不 raise。用户视角：风险缓解引用未完成任务时 check-governance 输出警告（内容维度，补充 Check 2/8 时间维度盲区）。24 用例红→绿；全量 1792 passed+237 subtests 零既有断言变化；三项目只读实测 tv FAIL(R2)/router WARN(R3×3)/dogfood WARN(R3×29)；R0 APPROVED_WITH_NOTES/0；遗留 P2×4+P3×7 登记 0.76.x。
+- **FIX-266 Check 37 发布前 Gate 互锁（REQ-145.4）**（EVD-FIX-266，commit 15051c1）：根因 = AUDIT-145 D4——发布绕过 pending Gate 无机器断言。修复：`checks/gate_domain.py` 新域（行序推导识别发布 Gate，不硬编码编号——standard 11/lightweight 7 兼容；G-s1 发布<passed 日期或 passed 无日期→FAIL、G-s2 前置 pending 保守 FAIL、G-s3 git 不可见 tag fail-safe WARN；passed-on-entry 视为非 pending；多 tag 只判最高 semver；反引号状态归一化；永不 raise）+ `check_release_readiness` 内嵌调用 + Check 37 块 + `cmd_check_release` BR-4 自动 released 模式；历史豁免 candidate→FAIL/released→WARN 披露（4 分支双态测试）。用户视角：`check-release` 自动横查前置 Gate，绕过发布被 FAIL。41 用例红→绿；全量 1864 passed+237 subtests 0 failed；tv/router 候选 FAIL + 已发布 WARN + BR-4 端到端 [PASS]；R0/R1 APPROVED_WITH_NOTES/0；遗留 P2-3+P3×9 登记 0.76.x。
+- **FIX-267 Check 38 CI 实跑证据（REQ-145.5）**（EVD-FIX-267，commit 4e3d08a）：根因 = AUDIT-145 D2/D4——声称 CI 已建/已跑无载体验证。修复：`checks/ci_domain.py` 新域（声明解析 CI word-boundary + 否定词归类 + 规则文本排除；C1 声称已建无载体→FAIL、C2 载体无 remote→WARN 未真跑（fail-safe）、C3 声称已跑无法证实（含无载体 DEC-156）→WARN、C4 无声明无载体→PASS；多路径探针 深走查+GitLab/Jenkins+嵌套 git 排除；`_is_pathlike` 守卫永不 raise）。用户视角：plan-tracker 声称 CI 已建但无 workflow → FAIL；有 workflow 无 remote/运行记录 → WARN「未真跑」。R0 NEEDS_CHANGE（P0-1 TypeError）→ 修复（真实 un-mocked 守卫/run→C3 WARN/词边界等）→ R1 APPROVED_WITH_NOTES/0；RED 5 failed→GREEN 31 passed；全量 1895 passed+237 subtests 0 failed；tv WARN(C2)/router PASS(C4)/host PASS。
+- **FIX-268 Check 35 快照新鲜度（REQ-145.2）**（EVD-FIX-268，commit 3a819d0）：根因 = AUDIT-145 D3——会话快照过期无机器保证（三项目实证全部过期）。修复：`checks/snapshot_domain.py` 新域（S1a 缺失/不可解析→WARN、S1b 落后→WARN、S1c AND 双阈值 7 天且 10 commit→FAIL、S1d 无快照→no-verdict；无日历生效日豁免；git 事实源 HOST_PROJECT_ROOT + ls-files 跟踪判定 + mtime 次级基准 FAIL 不可达；adoption-edge 封顶；永不 raise）；DEC-152 裁定 4 项。用户视角：快照比最近治理 commit 落后超阈值时 check-governance 警告/FAIL。31 用例红→绿；全量 1823 passed+237 subtests 0 failed；tv WARN(S1b 4d/72lag)/router PASS/dogfood PASS；R0/R1 APPROVED_WITH_NOTES/0；遗留 P2×2+P3×3 登记 0.76.x。
+- **FIX-269 自动化能力分级声明（REQ-145.6）**（EVD-FIX-269，commit db1078f）：根因 = plugin-contract.md L114 禁令——禁止笼统「自动」同时指向 A 级与 C 级能力。修复：SKILL.md 新增「自动化能力分级声明」小节（A 级 Agent Protocol Automation / B 级 CLI-Enforced Automation / C 级 System Automation 未实现——L102 MCP/headless runner 仅协议样例；0.76.0 `--summary-only` 会话级 auto-run 非 C 级 daemon；当前治理自动级别 = A+B，C 级 roadmap）+ L38 逐条标注 + commands/governance.md L64 B 级标注 + 设计原则节分级声明小节（指回 SKILL.md 单一事实源，无定义双写）+ e2e SKILL.md 镜像同步。用户视角：对外宣示不再把 C 级未实现说成已实现。R0 APPROVED_WITH_NOTES/0 零 P0/P1；全量 verify PASSED + projection/crossrefs(646→648 零悬空)/manifest(557/600)/version(13 文件 0.75.0 未 bump) 全 PASS；check-governance 113==113 零新增；遗留 F-02（README 宣示分级补注）+ F-03（e2e commands 投影决策）登记 0.76.x 候选（DEC-157）。
+- **FIX-270 /governance 性能修复**（EVD-FIX-270，commit 1479fcc）：根因（用户实测 2026-08-23，tv 项目）＝ Scenario F 要求 LLM 全量读命令文档 639 行 + 4 治理文件（110KB+）+ 渲染 28 字段快照 = 分钟级；宿主 check-governance 28.6s（插件产品自检 22 项每会话必跑）；mixed-root 令宿主噪音化 182 issue。修复：(A) 新增 `status` 命令——复用扩展既有 status（补全 Scenario F 数据/活跃风险/最近活动/插件新鲜度/下一步线索/统计对齐 + Gate 显示循环 bug 修复 + `--json` + skip_evidence_log 零整读 evidence-log 机制）；(B) check-governance 宿主提速——`_PLUGIN_PRODUCT_CHECK_IDS` 22 项按检查事实源根切分（无编号黑名单），宿主默认跳过产品自检 + `[SKIP]` 如实报告，`--product-gates` 显式开启，dogfood 保留全部；宿主 full 25.49s→2.40s（-91%），输出 0 条插件路径条目；(C) mixed-root 修复（Check 28s schema/facts 根拆分、Check 25 git 事实源→HOST_PROJECT_ROOT、Check 28c 双段化+plugin-scope+[INFO] 报告）。用户视角：宿主 `/governance` 状态秒级（tv 实测 status 0.47s / check-governance full 2.42s），输出零插件路径噪音。15 用例红→绿；全量 1768 passed+237 subtests 0 failed；R0/R1 APPROVED_WITH_NOTES/0（F1/F2/F3 逐项核验）；遗留 P2×3+P3×4+N1-N3 登记 0.76.x。
+- **FIX-260 审查结论机器持久化 + 复审义务（REQ-107 消费方）**（EVD-FIX-260，commit 8922c6e）：`checks/review_domain.py` +246 纯新增 + Check 30c `check_review_machine_provenance`（V7 机器源标记/V8 next_round 义务字段断言，WARN-only + 生效日豁免 REQ107_MACHINE_PROVENANCE_DATE=2026-08-22，WARN 不进 all_issues）；behavior-protocol M7.4 step 4.6 机器持久化 MUST；DSH persona 契约第 4 行（1535B≤1536B 预算测试断言）。用户视角：审查结论经 review-record CLI 机器入账（本仓首个机器标记审查记录 REVIEW-FIX-260-R0）。TDD 13→14 用例；全量 1696+213 subtests 0 failed；R0 APPROVED_WITH_NOTES/0。
+- **FIX-261 提交钩子审查证据正则对齐机器行格式**（EVD-FIX-261，commit 3fd5adf）：pre-commit/commit-msg `has_approved_review_evidence` 双分支改写——legacy 行尾 APPROVED 族逐字保留（零收窄）+ 机器 11 列格式仅接受 APPROVED_WITH_NOTES + 尾列 unresolved_blockers=0（注入/大小写/NEEDS_CHANGE/BLOCKED 全部 MISS）；两钩子字节一致 + `test_hook_copies_stay_identical` 钉住。用户视角：机器行格式的审查结论能被提交钩子识别为通过终态。11 用例红→绿；全量 1707 passed 0 failed；R0 APPROVED_WITH_NOTES/0。
+- **FIX-262 完成推荐机器验证回路（REQ-108 消费方）**（EVD-FIX-262，commit cc79dd0）：`task-priority-analysis --evidence-task` 旗标机器写入 RECO-{task} 10 列推荐快照行（fail-closed 坏 ID exit 2 零写入；无旗标行为字节一致）；Check 34 `check_completion_recommendation`（S1 完成行缺快照关联→FAIL、~145 条 legacy 豁免；S2 快照优先级节缺 ID 引用→WARN 渐进 DEC-147；S3 悬空引用→FAIL）；behavior-protocol step 6a 机器路径优先 + 快照引用 MUST。用户视角：任务完成的推荐快照被机器验证、写证据（首个 RECO-FIX-262 行）。TDD 18 新用例；全量 1725+237 0 failed；R0 APPROVED_WITH_NOTES/0；DEC-147 入账。
+- 版本声明与 e2e fixture 指针从 0.75.0 推进到 0.76.0（M-set：4×plugin.json（.claude/.codex/.zcode/.chrys）、marketplace、package.json——6 个版本元数据目标、source/e2e SKILL frontmatter、manifest、fixture plan-tracker、四个 source hooks、DSH persona 模板 v0.76.0 与 AGENTS.md.template L3 `@bootstrap-version: 0.76.0`——15 projections 由 `release-projection --write` 确定性写入，written=15；`verify_workflow.py` REQUIRED_SNIPPETS 6 版本钉；`@bootstrap-version` 标记面 9 行——commands/governance-init.md ×3 + e2e 镜像 ×3 + e2e CLAUDE.md + 根 AGENTS.md（根 CLAUDE.md gitignored 本地同步不入 commit），FIX-256 先例）。
+- `project/CHANGELOG.md` 新增 0.76.0 条目；release docs 三件套创建（feature-flags / release-checklist / rollback-plan）。
+
+### Changed
+
+- `check-governance --summary-only`：只输出汇总 + 首个 FAIL/WARN 项（`--level` 分档），零回归既有全量输出路径；会话级 bootstrap 自动运行（每会话一次，>60s 软超时取消）。
+- `/governance` Scenario F 状态展示与 `commands/governance-status.md` 改为渲染 `status` 命令输出——全量读治理文件降为按需；宿主 check-governance 默认跳过 22 项插件产品自检（`--product-gates` 显式开启；dogfood 保留全部）。
+- SKILL.md / commands/governance.md 逐条标注自动化能力级别（A 级协议/B 级 CLI/C 级未实现声明，引用 plugin-contract L114；当前治理自动级别 = A+B，C 级为 roadmap）。
+
+### Fixed
+
+- **风险「写缓解即完成」无机器断言**（Check 36）：缓解措施引用非 completed 任务 → WARN/FAIL，关闭 AUDIT-145 D2 时间维度盲区。
+- **会话快照过期无机器保证**（Check 35）：session_date 落后超阈值 → 渐进 WARN/FAIL（AUDIT-145 D3）。
+- **发布绕过 pending Gate**（Check 37 内嵌 check-release）：release 就绪检查自动横查前置 Gate（AUDIT-145 D4）。
+- **CI 声称与载体不符**（Check 38）：无 workflow 声称已建→FAIL、无 remote/运行记录→WARN（AUDIT-145 D4）。
+- **/governance 分钟级状态展示**（FIX-270）：status 命令 <1s（tv 实测 0.47s）；宿主 check-governance 25.49s→2.40s（-91%）。
+- **mixed-root 噪音**（FIX-270 C）：Check 28s/25/28c 以宿主事实源定位，宿主输出零插件路径条目。
+- **bootstrap 不诊断**（REQ-145.1）：resolve_entry.py 不 import verify，健康摘要走 M4.1 流程步骤（A3 不进 persona）。
+- **commit-msg 拒绝机器行格式审查结论**（FIX-261）：双分支正则对齐，legacy 行尾格式字节保持。
+- 随行债务/加固（FIX-255/256/258）：test_change_triage 版本字面量对齐（FIX-248 同型复发）、@bootstrap-version 标记面 0.75.0 对齐 + EntryBootstrapTemplate 断言动态化（零版本字面量）+ F-1 单源派生（0.76.0 复发通道关闭）、FIX-254 债务包（bae9d5f/FIX-258 落地：访问预算 10,000 + 菱形测试 + 纯重构拆分），AUDIT-144 依赖盲区只读诊断（热指针行方案论证）。
+
+### Validation
+
+- REL-069（0.76.0 MINOR 候选打包，2026-08-23；candidate-only，transition 需用户授权后另行执行）。
+- FIX-264：test_summary_only 15 用例红→绿；全量 1752 passed+237 subtests；R0/R1 APPROVED_WITH_NOTES/0。
+- FIX-265：24 用例红→绿；全量 1792 passed+237 subtests；三项目实测 tv FAIL/router WARN/dogfood WARN；R0 APPROVED_WITH_NOTES/0。
+- FIX-266：41 用例红→绿；全量 1864 passed+237 subtests 0 failed；tv/router 双项目实测 + BR-4 端到端；R0/R1 APPROVED_WITH_NOTES/0。
+- FIX-267：31 用例红→绿（RED 5 failed → GREEN）；全量 1895 passed+237 subtests 0 failed；tv WARN/router PASS/host PASS；R0 NEEDS_CHANGE → R1 APPROVED_WITH_NOTES/0。
+- FIX-268：31 用例红→绿；全量 1823 passed+237 subtests 0 failed；tv WARN/router PASS/dogfood PASS；R0/R1 APPROVED_WITH_NOTES/0。
+- FIX-269：全量 verify PASSED + projection/crossrefs/manifest/version 全 PASS；check-governance 113==113 零新增；R0 APPROVED_WITH_NOTES/0。
+- FIX-270：15 用例红→绿；全量 1768 passed+237 subtests 0 failed；tv 独立复核 status 0.47s / check-governance full 2.42s / 0 条插件路径；R0/R1 APPROVED_WITH_NOTES/0。
+- FIX-260/261/262：全量 1696+213 / 1707+0 / 1725+237 0 failed；机器审查记录 REVIEW-FIX-260/261/262-R0 + RECO-FIX-262；R0 APPROVED_WITH_NOTES/0。
+- 门禁（0.76.0 candidate，2026-08-23）：`check-version-consistency` PASS（13 文件声明；1 advisory WARN——宿主 plan-tracker 仍 0.75.0，Coordinator 打包后 bump）；`check-projection-sync --fail-on-issues` PASS（15 投影）；`release-projection --write` written=15 exit=0（再次 check PASS）；`check-manifest-consistency` PASS；`release-ledger --version 0.76.0 --no-remote` NATIVE_CANDIDATE（未提交候选过渡态，commit 后重跑）；`check-release --version 0.76.0 --require-changelog --lineage-mode candidate` 核心静态门禁 PASS（既有基线 FAIL 按 REL-067/068 先例如实分类披露，见 release checklist 0.76.0）。
+
+### Boundaries
+
+- 0.76.0 **RISK-036/RISK-039 remain open**。RISK-036（official marketplace operations）与 RISK-039（ArchGuard external validation）各自独立关闭标准未满足；本版本不重开任何已关闭风险。
+- 不声明 official approval、marketplace approval、curated listing、universal/full runtime support、external first-session pilot success、1.0.0 production-ready；不关闭 RISK-036/RISK-039。
+- **Breaking changes：无**。全部变更为新增检查/子命令/流程步骤/文档声明（增量文本与增量参数），既有 CLI 默认行为零变化；Check 35~38 为新增 check 编号（35<36<37<38 链），既有 check 无重命名/删除。
+- MINOR bump 来自看护能力新增（5 项机器看护 check/子命令 + status 快路径 + 能力分级声明 + 审查机器持久化/推荐机器验证回路），不引入 breaking runtime API。
+- **迁移说明（RISK-D5——DSH preset 时滞）**：DSH 平台升级路径为 `git -C <plugin_root> pull && python <plugin_root>/adapters/dsh/launch.py --sync`（DSH 无 `/plugin update`）；persona/bootstrap 模板的 0.76.0 版本行在 `--sync` 重写 preset 后生效，未 sync 前旧 preset 仍携带旧版本行——**升级同步后（git pull + adapters/dsh/launch.py --sync）对被治理项目自然生效**（看护 check 作用于宿主 `.governance/` 读时数据，无需被治理项目单独改造）。
+
 ## [0.75.0] - 2026-08-21
 
 ### 0.75.0 - 关键行为规则注入面 + 空推荐降级（REQ-112/REQ-110，DEC-143 前置放大器双落地）（MINOR）

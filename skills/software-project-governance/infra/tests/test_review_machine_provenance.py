@@ -225,15 +225,42 @@ class InjectionAnchorExtensionTests(unittest.TestCase):
         self.assertEqual(result["issues"], [])
 
     def test_persona_contract_block_stays_within_budget(self):
-        """FIX-253 budget: persona contract block ≤ 1.5KB (release-checklist-0.75.0)."""
+        """FIX-253/FIX-274 budget: persona contract block ≤ 2.5KB.
+
+        Originally 1.5KB (FIX-253, release-checklist-0.75.0); raised to
+        2.5KB by FIX-274 / DEC-161 (2026-08-23) — M7.7 behavior-contract
+        injection requires the headroom (audit P1-1 disposition; the M7.4
+        contract-block budget was left unchanged, this budget covers the
+        whole 关键行为契约→Git hooks block).
+        """
         text = (
             vw.ROOT / "adapters/dsh/agent.cordis.yml.template"
         ).read_text(encoding="utf-8")
         start = text.index("关键行为契约")
         end = text.index("Git hooks", start)
         block = text[start:end]
-        self.assertLessEqual(len(block.encode("utf-8")), 1536,
-                             "persona contract block exceeds the 1.5KB budget")
+        self.assertLessEqual(len(block.encode("utf-8")), 2560,
+                             "persona contract block exceeds the 2.5KB budget "
+                             "(DEC-161 raise)")
+
+    def test_skill_contract_section_stays_within_budget(self):
+        """FIX-253/FIX-274 budget: entry SKILL 关键行为契约 section ≤ 2.5KB.
+
+        DEC-144 set a 2KB hard cap for this section; raised to 2.5KB by
+        FIX-274 / DEC-162 (2026-08-23) — the M7.7 4th contract item
+        (真实环境必防护) injection requires the headroom
+        (review-FIX-274-CODE-R0 P1-2 disposition; the persona-side raise
+        is DEC-161). Guard mirrors the persona-block test above.
+        """
+        text = (
+            vw.ROOT / "skills/software-project-governance/SKILL.md"
+        ).read_text(encoding="utf-8")
+        start = text.index("关键行为契约")
+        end = text.index("产品代码 vs 治理记录边界", start)
+        block = text[start:end]
+        self.assertLessEqual(len(block.encode("utf-8")), 2560,
+                             "SKILL 关键行为契约 section exceeds the 2.5KB "
+                             "budget (DEC-162 raise)")
 
 
 if __name__ == "__main__":

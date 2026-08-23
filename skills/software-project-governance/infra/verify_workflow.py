@@ -1224,7 +1224,10 @@ from checks.review_domain import (  # noqa: E402
 # ── Change-control triage domain (checks/triage_domain.py in 0.73.0) ────────
 # FIX-237.4 / ADR-017 §4.4: Check 32 — mandatory change-control triage for
 # product-code task intake (CLI wiring + record validity + no-record FAIL).
-from checks.triage_domain import check_change_triage  # noqa: E402
+from checks.triage_domain import (  # noqa: E402
+    check_change_triage,
+    check_r1_completion_gate,
+)
 
 
 # ── Existing verification functions ──────────────────────────────
@@ -6592,12 +6595,25 @@ INJECTION_CONTRACT_ANCHORS = {
         # FIX-260 / REQ-107: 4th contract line — review conclusions MUST be
         # persisted through the review-record CLI machine path.
         "审查结论必机录", "review-record",
+        # FIX-274 / F-02 (M7.7 projection): 5th contract line — user
+        # real-environment protection (R1 one-of-three / R4 per-command
+        # relay / R5 acceptance wording).
+        "真实环境必防护", "三选一", "逐条上报", "隔离环境安装冒烟",
     ],
     "skills/software-project-governance/SKILL.md": [
         "关键行为契约", "复审必达", "完成必推荐",
         "task-priority-analysis", "选项必带依据",
+        # FIX-274 / F-02 (M7.7 projection): 4th contract item.
+        "真实环境必防护", "三选一", "逐条上报", "隔离环境安装冒烟",
     ],
     "adapters/dsh/AGENTS.md.template": ["关键行为契约"],
+    # FIX-274 / F-02: in-package preset persona — M7.7 contract keywords
+    # only. The VERSION-line anchor for this file stays FIX-272 scope
+    # (deliberately NOT implemented here).
+    "presets/governance/agent.cordis.yml": [
+        "关键行为契约",
+        "真实环境必防护", "三选一", "逐条上报", "隔离环境安装冒烟",
+    ],
 }
 
 
@@ -15378,6 +15394,38 @@ def _run_full_engine_checks(args):
     if not cr38["violations"] and not cr38["warnings"]:
         print(f"│  [{cr38['verdict']}] {cr38['reason']}")
     all_issues += len(cr38["violations"]) + len(cr38["warnings"])
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 39. R1 Completion Gate (FIX-274 / M7.7 R1) ──
+    # Downstream machine consumer of change-triage's requires_r1 flag
+    # (R0 F-03 / BC-2): a task marked completed with
+    # analysis.side_effect.requires_r1=true MUST carry R1 留痕 evidence
+    # (one-of-three fact: isolation redirect / backup + verification /
+    # per-item user authorization — keyword match). Missing → WARN during
+    # the DEC-159 observation window (Check 30c convention: WARN does NOT
+    # increment all_issues); tightening condition registered in
+    # checks/triage_domain.py — escalation to FAIL after 2 consecutive
+    # 0.77.x releases close with zero r1-evidence violations.
+    print("\n┌─ Check 39: R1 Completion Gate (FIX-274) ────────────┐")
+    cr39 = check_r1_completion_gate()
+    st39 = cr39["stats"]
+    print(f"│  Triage records scanned: {st39['records_scanned']} "
+          f"(requires_r1: {st39['r1_records']}; judged: "
+          f"{st39['tasks_judged']} = pass {st39['pass']} + warn "
+          f"{st39['warn']}; skipped: {st39['tasks_skipped_incomplete']} "
+          f"incomplete + {st39['tasks_skipped_unlanded']} unlanded)")
+    print(f"│  Verdict: {cr39['verdict']}")
+    if cr39["warnings"]:
+        print(f"│  [WARN] {len(cr39['warnings'])} missing R1 evidence row(s):")
+        for w in cr39["warnings"][:8]:
+            print(f"│    - [{w['rule']}] {w['task_id']}: {w['reason']}")
+        if len(cr39["warnings"]) > 8:
+            print(f"│    ... and {len(cr39['warnings']) - 8} more")
+        print("│  (gradual severity — WARN in the 0.77.x observation window; "
+              "escalates to FAIL after 2 consecutive violation-free 0.77.x "
+              "releases per DEC-159)")
+    else:
+        print(f"│  [{cr39['verdict']}] {cr39['reason']}")
     print("└──────────────────────────────────────────────────────┘")
 
     # ── Summary ──

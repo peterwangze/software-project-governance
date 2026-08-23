@@ -20,6 +20,7 @@
 | Host product-gate skipping (FIX-270-B) | host default skips; `--product-gates` explicit | 22 plugin product self-checks skipped by default on host projects (`[SKIP]` reported honestly); dogfood (this repo) keeps all gates. |
 | Capability grading declaration (FIX-269) | static documentation | A-level protocol automation / B-level CLI-enforced / C-level system automation NOT implemented (plugin-contract L102/L114). Declaration, not a runtime toggle. |
 | Release docs boundary tokens | static documentation | Each 0.76.0 release doc includes the five `check-release` `boundary_needles` and the compact negation wording verified to pass `_line_has_scoped_claim_negation`. |
+| Persona contract-block budget (FIX-253 → FIX-274) | 2560B (was 1536B at 0.75.0/0.76.0) | **DEC-161 (2026-08-23)**: M7.7 user-real-environment protection (5th behavior-contract line — R1 three-of-one / R4 per-command relay / R5 acceptance wording) injection requires the headroom; raised from the 1.5KB budget in 0.77.0 while the M7.4 contract-block budget stays unchanged. The entry SKILL.md `关键行为契约` section cap was likewise raised 2KB → 2.5KB (DEC-162, same date) for the 4th contract item. Guards: `test_persona_contract_block_stays_within_budget` + `test_skill_contract_section_stays_within_budget` (2.5KB). Documentation-level invariant — no runtime flag. |
 
 ## Rollout and Kill Switch
 

@@ -69,13 +69,14 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
   - `Governance: N issues (parse degraded)` → 摘要解析降级（输出格式漂移 fail-safe），不报错。
 - **详略分档**（`--level lightweight|standard|strict`，缺省 standard）：轻量=汇总+首个 FAIL；标准=汇总+首个 FAIL/WARN；严格=汇总+全部 FAIL/WARN。三档**跑同一个** `--summary-only`，仅输出详略不同，**不按 profile 拆逻辑**。
 
-### 关键行为契约（MUST——注入面最小契约集，FIX-253/REQ-112；完整规则见 references/behavior-protocol.md M7.4）
+### 关键行为契约（MUST——注入面最小契约集，FIX-253/REQ-112；完整规则见 references/behavior-protocol.md M7.4 / M7.7）
 
-以下三条与铁律同级，违反任何一条 = 流程违规。本段是注入面的 canonical 投影定义处（DSH persona 携带其压缩形式；`check-injection-contract` 锚点守护）：
+以下四条与铁律同级，违反任何一条 = 流程违规。本段是注入面的 canonical 投影定义处（DSH persona 携带其压缩形式；`check-injection-contract` 锚点守护）：
 
 1. **复审必达（M7.4 step 4.6，T1-T4）**：收到 Reviewer 审查结论后 MUST 立即判定并执行——结论含 NEEDS_CHANGE 且 round<3（触发器 T1）→ spawn 同一 Reviewer 复审（round+1，prompt 注入前轮 review 报告路径为强制读取项），不得跳过、不得询问；round≥3 仍 NEEDS_CHANGE（触发器 T2）→ BLOCKED + escalation AskUserQuestion；APPROVED 或带 `unresolved_blockers=0` 的 APPROVED_WITH_NOTES 为唯一通过终态；BLOCKED → escalation。
 2. **完成必推荐（M7.4 step 6，FIX-223/237.5 增强）**：任务标记已完成 → MUST 运行 `task-priority-analysis`（fail-closed：工具缺失/失败时升级，不得跳过）并将调用快照记入 evidence-log → 推荐 1~3 个候选（依赖排序 + 每项依赖理由），按 DEC-143 交互基线「自动推荐 + 用户确认」呈现；推荐为空 → 呈现结构化空原因（禁止机械枚举）；除无未完成任务或用户明确选"暂停"外，MUST NOT 直接结束会话。
 3. **选项必带依据（interaction-boundary.md 任务排序行 + 反打断违规表）**：凡向用户呈现"接下来做什么"类选项，选项 MUST 可追溯到依赖分析输出（排序候选 + 每项依赖状态理由），禁止机械枚举未完成事项。
+4. **真实环境必防护（M7.7 R1/R4/R5，FIX-271/274）**：任何涉及用户真实环境（`$HOME` 下配置目录、`$DSH_HOME`、仓库外任意路径）的测试/验收/安装操作，执行前 MUST 满足三选一并留痕——(a) 隔离环境（环境变量重定向至临时目录）/(b) 完整备份 + 操作后一致性校验/(c) 用户逐项授权（ask_user_question）；三者皆缺 = 禁止执行，无豁免。真实环境每条命令 MUST 逐条上报（角色 agent 结构化返回，Coordinator 于收到当下机写 evidence 行；无上报或收到未机写均按违规处理；预授权 incidents log 追加例外）。验收措辞 MUST 用「隔离环境安装冒烟（环境变量重定向至临时目录）通过」——无限定语的「真实安装/真实环境」= 违规措辞。
 
 ### 产品代码 vs 治理记录边界
 

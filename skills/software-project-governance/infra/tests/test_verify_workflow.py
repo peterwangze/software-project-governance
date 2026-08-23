@@ -16078,5 +16078,189 @@ class TestLoadArchiveModuleRebind(unittest.TestCase):
         self.assertEqual(module.HOST_PROJECT_ROOT, host)
 
 
+class CheckR1CompletionGateTests(unittest.TestCase):
+    """FIX-274 F-03 — Check 39: requires_r1 completion gate (M7.7 R1).
+
+    A triage record with ``analysis.side_effect.requires_r1 == true`` whose
+    task is marked completed in the plan-tracker MUST have R1 留痕 evidence
+    in the evidence-log (one-of-three fact: isolation redirect / backup +
+    verification / per-item user authorization — keyword match). Missing →
+    WARN during the DEC-159 observation window (escalation to FAIL after 2
+    consecutive violation-free 0.77.x releases — registered in the module
+    docstring and the check output).
+    """
+
+    _TRACKER = """\
+# Plan Tracker
+
+## 版本规划
+
+### 版本路线图
+
+| 版本 | 状态 | 预计日期 | 核心范围 |
+|------|------|---------|---------|
+| **0.76.0** | **已发布** | 2026-08-20 | baseline |
+| **0.77.0** | **规划** | 2026-08+ | FIX-274 |
+
+### 优先级一览
+
+| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |
+|--------|----|------|------|---------|---------|------|
+| **P1** | FIX-300 | r1 done with evidence | — | 0.77.0 | product code | ✅ 完成 |
+| **P1** | FIX-301 | r1 done without evidence | — | 0.77.0 | product code | ✅ 完成 |
+| **P1** | FIX-302 | r1 pending | — | 0.77.0 | product code | ⏳ 待执行 |
+| **P2** | FIX-303 | non-r1 done | — | 0.77.0 | product code | ✅ 完成 |
+"""
+
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory(prefix="r1gate_")
+        self.root = Path(self.tempdir.name)
+        self.gov = self.root / ".governance"
+        (self.gov / "change-triage").mkdir(parents=True, exist_ok=True)
+        (self.gov / "plan-tracker.md").write_text(self._TRACKER, encoding="utf-8")
+        (self.gov / "evidence-log.md").write_text(
+            "# Evidence Log\n", encoding="utf-8")
+
+    def tearDown(self):
+        self.tempdir.cleanup()
+
+    def _record(self, task_id, requires_r1):
+        (self.gov / "change-triage" / f"{task_id}.json").write_text(
+            json.dumps({
+                "schema_version": 1,
+                "task_id": task_id,
+                "analysis": {"side_effect": {"requires_r1": requires_r1}},
+            }, ensure_ascii=False), encoding="utf-8")
+
+    def _evidence(self, task_id, description):
+        path = self.gov / "evidence-log.md"
+        row = ("| EVD-1 | {t} | 实现 | {d} | 事实依据 | skills/x.py | "
+               "Developer | 2026-08-24 | G11 | ✅ |\n").format(
+                   t=task_id, d=description)
+        path.write_text(path.read_text(encoding="utf-8") + row,
+                        encoding="utf-8")
+
+    def _check(self):
+        from checks import triage_domain as td
+        return td.check_r1_completion_gate(
+            root=self.root, governance_dir=self.gov)
+
+    def test_r1_completed_with_isolation_evidence_passes(self):
+        self._record("FIX-300", True)
+        self._evidence(
+            "FIX-300",
+            "验收：隔离环境安装冒烟（DSH_HOME 重定向至临时目录）通过")
+        result = self._check()
+        self.assertEqual(result["verdict"], "PASS", result)
+        self.assertEqual(result["warnings"], [])
+        self.assertEqual(result["stats"]["tasks_judged"], 1)
+        self.assertEqual(result["stats"]["r1_records"], 1)
+
+    def test_r1_completed_without_r1_evidence_warns(self):
+        self._record("FIX-301", True)
+        self._evidence("FIX-301", "修改 verify_workflow.py 后跑测试通过")
+        result = self._check()
+        self.assertEqual(result["verdict"], "WARN")
+        self.assertEqual(len(result["warnings"]), 1)
+        self.assertEqual(result["warnings"][0]["task_id"], "FIX-301")
+        self.assertEqual(result["warnings"][0]["rule"], "r1-evidence")
+        self.assertIn("R1", result["warnings"][0]["reason"])
+
+    def test_non_r1_completed_task_not_judged(self):
+        """Non-r1 tasks are invisible to the gate — no judgement, no WARN."""
+        self._record("FIX-303", False)
+        self._evidence("FIX-303", "纯仓库内修改，无用户真实环境操作")
+        result = self._check()
+        self.assertEqual(result["verdict"], "PASS", result)
+        self.assertEqual(result["warnings"], [])
+        self.assertEqual(result["stats"]["tasks_judged"], 0)
+
+    def test_r1_incomplete_task_skipped_until_completion(self):
+        """requires_r1=true on a pending task gates nothing yet — the check
+        fires only when the task is MARKED completed."""
+        self._record("FIX-302", True)
+        self._evidence("FIX-302", "进行中")
+        result = self._check()
+        self.assertEqual(result["verdict"], "PASS", result)
+        self.assertEqual(result["warnings"], [])
+        self.assertEqual(result["stats"]["tasks_skipped_incomplete"], 1)
+
+    def test_backup_and_authorization_evidence_also_satisfy(self):
+        """All three R1 paths count: (b) backup+verification records and
+        (c) per-item user authorization records. Each variant is judged on
+        a fresh evidence log so a pass cannot ride on the previous row."""
+        for desc in (
+            "事先完整备份 ~/.dsh 快照 + 操作后一致性校验通过",
+            "用户经 ask_user_question 逐项授权操作清单后执行",
+        ):
+            with self.subTest(description=desc):
+                self._record("FIX-300", True)
+                (self.gov / "evidence-log.md").write_text(
+                    "# Evidence Log\n", encoding="utf-8")
+                self._evidence("FIX-300", desc)
+                result = self._check()
+                self.assertEqual(result["verdict"], "PASS", result)
+                self.assertEqual(result["stats"]["tasks_judged"], 1)
+
+    def test_triage_metadata_row_does_not_satisfy_r1(self):
+        """P1-1 regression (review-FIX-274-CODE-R0): machine TRIAGE rows
+        embed the fixed template "命令输出 JSON 快照见 change-triage/{id}.json"
+        — the 快照 word must NOT count as R1(b) backup evidence. A completed
+        requires_r1 task carrying only its TRIAGE row MUST WARN."""
+        self._record("FIX-300", True)
+        (self.gov / "evidence-log.md").write_text(
+            "# Evidence Log\n"
+            "| TRIAGE-FIX-300 | FIX-300 | 变更控制 | change-triage CLI "
+            "机器写入 triage 记录（依赖/优先级/冲突/版本/执行副作用五步分析） "
+            "| 事实依据：change-triage 输出摘要（机器写入；命令输出 JSON "
+            "快照见 change-triage/FIX-300.json） | FIX-300.json | "
+            "change-triage | 2026-08-24 | G11 | TRIAGED |\n",
+            encoding="utf-8")
+        result = self._check()
+        self.assertEqual(result["verdict"], "WARN", result)
+        self.assertEqual(len(result["warnings"]), 1)
+        self.assertEqual(result["warnings"][0]["task_id"], "FIX-300")
+
+    def test_snapshot_without_verification_does_not_satisfy_group_b(self):
+        """P1-1 AND-semantics discriminator: an evidence row mentioning the
+        completion-recommendation snapshot ("调用快照记入 evidence-log")
+        carries 快照 but no backup/verification pair and MUST NOT satisfy
+        R1(b) — WARN."""
+        self._record("FIX-301", True)
+        self._evidence("FIX-301",
+                       "task-priority-analysis 调用快照记入 evidence-log")
+        result = self._check()
+        self.assertEqual(result["verdict"], "WARN", result)
+        self.assertEqual(len(result["warnings"]), 1)
+        self.assertEqual(result["warnings"][0]["task_id"], "FIX-301")
+
+    def test_unlanded_task_skipped(self):
+        """requires_r1 flag on a record whose task has no plan-tracker row:
+        completion cannot be judged — skip (P2-2 coverage)."""
+        self._record("FIX-306", True)
+        self._evidence("FIX-306", "隔离环境安装冒烟（重定向至临时目录）通过")
+        result = self._check()
+        self.assertEqual(result["verdict"], "PASS", result)
+        self.assertEqual(result["warnings"], [])
+        self.assertEqual(result["stats"]["tasks_skipped_unlanded"], 1)
+
+    def test_missing_evidence_log_is_no_evidence(self):
+        """No evidence-log file = no R1 evidence anywhere — a completed
+        requires_r1 task MUST WARN (never PASS on nothing)."""
+        self._record("FIX-301", True)
+        (self.gov / "evidence-log.md").unlink()
+        result = self._check()
+        self.assertEqual(result["verdict"], "WARN", result)
+        self.assertEqual(result["warnings"][0]["task_id"], "FIX-301")
+
+    def test_plan_tracker_missing_is_no_verdict(self):
+        """plan-tracker unreadable → fail-safe no-verdict, never a
+        misleading PASS/WARN."""
+        self._record("FIX-300", True)
+        (self.gov / "plan-tracker.md").unlink()
+        result = self._check()
+        self.assertEqual(result["verdict"], "no-verdict", result)
+
+
 if __name__ == "__main__":
     unittest.main()

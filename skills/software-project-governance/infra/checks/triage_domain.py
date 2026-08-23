@@ -28,6 +28,23 @@ yet cannot be dated, so it is exempt from the Check-32 scan — the CLI
 fail-closed gate (change-triage MUST run before the task row is created) is
 the primary enforcement for that window.
 
+Check 39 (FIX-274 / F-03, M7.7 R1 downstream consumer): a triage record
+with ``analysis.side_effect.requires_r1 == true`` whose task is marked
+completed MUST carry R1 留痕 evidence in the evidence-log (one-of-three
+fact: isolation redirect / backup + verification / per-item user
+authorization). Missing evidence → WARN during the DEC-159 observation
+window. **Tightening condition (explicit registration)**: WARN is the
+0.77.x observation-window severity; the check escalates to FAIL after 2
+consecutive 0.77.x releases close with zero r1-evidence violations, and
+that escalation flip MUST be recorded as a decision-log entry when made.
+**Evidence discrimination (review-FIX-274-CODE-R0 P1-1 后)**: machine
+metadata rows (TRIAGE-/RECO-/REVIEW- id prefixes) are excluded — their
+fixed templates embed "命令输出 JSON 快照见 change-triage/{id}.json" —
+and group (b) 备份 is AND-combined with 校验/一致性/核对, so a bare
+快照 (JSON-snapshot template or completion-recommendation snapshot)
+never satisfies R1(b); keywords are matched against the descriptive
+cells (cells[3:7]) only.
+
 See docs/architecture/ADR-017-loop-wiring-and-task-planning-0.73.0.md §4.4.
 """
 
@@ -338,9 +355,233 @@ def check_change_triage(root=None, governance_dir=None,
     }
 
 
+# ── Check 39 (FIX-274 / F-03): requires_r1 completion gate ─────────────
+#
+# The R1 flag produced by change-triage step-e (FIX-271 R2) gets its first
+# machine downstream consumer here: R1 is only as strong as the evidence
+# that the one-of-three fact actually happened by the time the task is
+# called complete (R0 BC-2: WARN alone does not survive Coordinator
+# inattention).
+#
+# DEC-159 progressive strategy — tightening condition (explicit): missing
+# evidence is WARN throughout the 0.77.x observation window; the check
+# escalates to FAIL after 2 consecutive 0.77.x releases close with zero
+# r1-evidence violations (escalation flip = decision-log entry).
+
+# R1 one-of-three evidence keyword groups (M7.7 R1 (a)/(b)/(c)). An
+# evidence-log row for the task matching ANY group counts as the R1
+# 留痕 fact. Existence-only keyword match — the check never tries to
+# prove the fact semantically (that boundary stays with human review).
+R1_EVIDENCE_KEYWORD_GROUPS = (
+    # (a) isolation — env-var redirect to a temp dir
+    ("隔离环境", "环境变量重定向", "重定向至临时目录"),
+    # (b) backup — full snapshot AND post-operation consistency check.
+    #     AND-combined below: a backup word alone must NOT satisfy — the
+    #     completion-recommendation rows ("调用快照记入 evidence-log") and
+    #     TRIAGE metadata rows ("命令输出 JSON 快照见 change-triage/…")
+    #     legitimately contain 快照 without claiming an R1(b) backup
+    #     (review-FIX-274-CODE-R0 P1-1).
+    ("备份", "快照"),
+    # (c) per-item user authorization via ask_user_question
+    ("逐项授权", "用户授权", "用户显式授权"),
+)
+
+# Group (b) verification half: the backup/snapshot word MUST appear
+# together with at least one of these to count as R1(b) "完整备份 +
+# 操作后一致性校验" (AND-combination in :func:`_r1_evidence_rows`).
+R1_EVIDENCE_B_VERIFY_KEYWORDS = ("校验", "一致性", "核对")
+
+# Evidence rows that are machine metadata, never R1-evidence carriers:
+# change-control triage / review-machine / completion-recommendation rows.
+R1_EVIDENCE_METADATA_PREFIXES = ("TRIAGE-", "RECO-", "REVIEW-")
+
+
+def _r1_evidence_rows(evidence_text: str, task_id: str) -> list:
+    """Evidence rows for one task that carry an R1 one-of-three keyword.
+
+    Row/column convention mirrors :func:`_evidence_has_product_code`: the
+    task id MUST appear in the second column (``cells[1]``) and keywords
+    are matched against the descriptive cells (``cells[3:7]``) only — never
+    the whole row. Machine metadata rows (TRIAGE-/RECO-/REVIEW- id
+    prefixes) are skipped: their fixed templates embed "命令输出 JSON
+    快照见 change-triage/{id}.json", which would otherwise hit the group
+    (b) 快照 keyword (review-FIX-274-CODE-R0 P1-1); a backup word alone
+    likewise never satisfies (b) — it is AND-combined with
+    :data:`R1_EVIDENCE_B_VERIFY_KEYWORDS`.
+    """
+    hits = []
+    for line in str(evidence_text or "").splitlines():
+        line = line.strip()
+        if not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        if len(cells) < 3 or task_id not in cells[1]:
+            continue
+        if cells[0].startswith(R1_EVIDENCE_METADATA_PREFIXES):
+            continue
+        if len(cells) < 7:
+            # too short to carry the descriptive cells (convention cells[3:7])
+            continue
+        blob = " ".join(cells[3:7])
+        for idx, group in enumerate(R1_EVIDENCE_KEYWORD_GROUPS):
+            if not any(k in blob for k in group):
+                continue
+            # idx 1 = group (b): 备份/快照 AND 校验/一致性/核对.
+            if idx == 1 and not any(
+                    v in blob for v in R1_EVIDENCE_B_VERIFY_KEYWORDS):
+                continue
+            hits.append(line)
+            break
+    return hits
+
+
+def check_r1_completion_gate(root=None, governance_dir=None) -> dict:
+    """Check 39 — requires_r1 completion gate (FIX-274 F-03 / M7.7 R1).
+
+    For every triage record with ``analysis.side_effect.requires_r1 ==
+    true``: when the task is marked completed in the plan-tracker, the
+    evidence-log MUST contain an R1 留痕 row for that task (one-of-three
+    keyword fact per :data:`R1_EVIDENCE_KEYWORD_GROUPS`). Missing → WARN
+    (DEC-159 observation window; tightening condition registered in the
+    module docstring — escalation to FAIL after 2 consecutive
+    violation-free 0.77.x releases).
+
+    Scope notes:
+      - Unlanded records (task not in plan-tracker yet) and incomplete
+        tasks are skipped — the gate fires only at completion marking.
+      - Record validity is Check 32's domain; unparseable records are
+        skipped here.
+      - Pre-FIX-271 records without ``side_effect`` are naturally out of
+        scope (no flag → not judged), so no date exemption is needed.
+
+    Returns:
+        dict ``{"verdict" ∈ {"PASS", "WARN", "no-verdict"}, "reason",
+        "warnings": [{"rule", "task_id", "reason"}], "stats"}``. Never
+        raises. WARN never increments the check-governance issue count
+        during the observation window (Check 30c convention).
+    """
+    result = {
+        "verdict": "no-verdict",
+        "reason": "",
+        "warnings": [],
+        "stats": {
+            "records_scanned": 0,
+            "r1_records": 0,
+            "tasks_judged": 0,
+            "tasks_skipped_incomplete": 0,
+            "tasks_skipped_unlanded": 0,
+            "pass": 0,
+            "warn": 0,
+        },
+    }
+    stats = result["stats"]
+    if governance_dir is None:
+        try:
+            import verify_workflow as _vw
+            governance_dir = _vw.GOVERNANCE_DIR
+        except Exception:  # noqa: BLE001 — degrade to no-verdict
+            governance_dir = None
+    if root is None:
+        try:
+            import verify_workflow as _vw
+            root = _vw.ROOT
+        except Exception:  # noqa: BLE001
+            root = Path(governance_dir).parent if governance_dir else Path.cwd()
+    gov = Path(governance_dir) if governance_dir else None
+    if gov is None or not gov.is_dir():
+        result["reason"] = "no .governance dir — nothing to judge"
+        return result
+
+    # 1. Collect requires_r1 task ids from triage records.
+    r1_task_ids = []
+    rec_dir = gov / "change-triage"
+    if rec_dir.is_dir():
+        for path in sorted(rec_dir.glob("*.json")):
+            stats["records_scanned"] += 1
+            try:
+                record = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue  # record validity is Check 32's domain
+            side_effect = (record.get("analysis") or {}).get("side_effect")
+            if (isinstance(side_effect, dict)
+                    and side_effect.get("requires_r1") is True):
+                r1_task_ids.append(str(record.get("task_id") or path.stem))
+    r1_task_ids = sorted(dict.fromkeys(r1_task_ids))
+    stats["r1_records"] = len(r1_task_ids)
+    if not r1_task_ids:
+        result["verdict"] = "PASS"
+        result["reason"] = ("no requires_r1 triage records — "
+                            "completion gate vacuous")
+        return result
+
+    # 2. Plan-tracker task states (unreadable → no-verdict, fail-safe).
+    plan_path = gov / "plan-tracker.md"
+    if not plan_path.is_file():
+        result["reason"] = "plan-tracker missing — cannot judge completion"
+        return result
+    try:
+        tasks = parse_task_dependencies(
+            plan_path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 — never raise from a check
+        result["reason"] = "plan-tracker unparseable — cannot judge completion"
+        return result
+    task_by_id = {task.task_id: task for task in tasks}
+
+    # 3. Evidence text (missing log = no evidence anywhere).
+    evidence_text = ""
+    evidence_path = gov / "evidence-log.md"
+    if evidence_path.is_file():
+        try:
+            evidence_text = evidence_path.read_text(encoding="utf-8")
+        except OSError:
+            evidence_text = ""
+
+    # 4. Judge each r1 task.
+    for task_id in r1_task_ids:
+        task = task_by_id.get(task_id)
+        if task is None:
+            stats["tasks_skipped_unlanded"] += 1
+            continue
+        if not task.is_completed():
+            stats["tasks_skipped_incomplete"] += 1
+            continue
+        stats["tasks_judged"] += 1
+        if _r1_evidence_rows(evidence_text, task_id):
+            stats["pass"] += 1
+        else:
+            stats["warn"] += 1
+            result["warnings"].append({
+                "rule": "r1-evidence",
+                "task_id": task_id,
+                "reason": (
+                    "completed with analysis.side_effect.requires_r1=true "
+                    "but no R1 留痕 evidence row found (one-of-three: "
+                    "isolation redirect / backup + verification / "
+                    "per-item user authorization — M7.7 R1, FIX-274 "
+                    "observation-window WARN)"
+                ),
+            })
+
+    if result["warnings"]:
+        result["verdict"] = "WARN"
+        result["reason"] = (
+            "{0} completed requires_r1 task(s) missing R1 evidence "
+            "(WARN — 0.77.x observation window; escalates to FAIL after "
+            "2 consecutive violation-free 0.77.x releases per "
+            "DEC-159)".format(len(result["warnings"])))
+    else:
+        result["verdict"] = "PASS"
+        result["reason"] = (
+            "{0} requires_r1 task(s) judged; all carry R1 留痕 "
+            "evidence".format(stats["tasks_judged"]))
+    return result
+
+
 __all__ = [
     "TRIAGE_NORMALIZATION_DATE",
     "check_triage_wiring",
     "validate_triage_record",
     "check_change_triage",
+    "R1_EVIDENCE_KEYWORD_GROUPS",
+    "check_r1_completion_gate",
 ]

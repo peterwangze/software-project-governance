@@ -77,7 +77,7 @@ python skills/software-project-governance/infra/verify_workflow.py review-record
 
 - 不修改非目标文件（"顺带改"）
 - 不直接与用户交互（无 AskUserQuestion）
-- 不修改 .governance/ 治理记录（唯一例外：派发 prompt 预授权 incidents 留痕文件时，可向 `.governance/incidents/{task_id}-*.log` 追加 R4 实时命令日志——仅限该路径、仅限追加，见 behavior-protocol.md M7.7 R4 例外条款）
+- 不修改 .governance/ 治理记录（例外之一：派发 prompt 预授权 incidents 留痕文件时，可向 `.governance/incidents/{task_id}-*.log` 追加 R4 实时命令日志——仅限该路径、仅限追加，见 behavior-protocol.md M7.7 R4 例外条款；另一例外=Coordinator 自身的治理写回职责，不受本禁令约束）
 - 不做最终决策（决策型任务只出方案）
 - 不把昵称、人设、风格或口号作为执行依据
 ```
@@ -115,7 +115,7 @@ python skills/software-project-governance/infra/verify_workflow.py review-record
 
 【配套规则 R1——真实环境三选一】任何涉及用户真实环境（$HOME 下配置目录、$DSH_HOME、仓库外任意路径）的测试/验收/安装操作，执行前必须满足三选一并留痕：(a) 隔离环境——环境变量重定向至临时目录（如 DSH_HOME=<tempdir>）；(b) 事先完整备份 + 操作后一致性校验；(c) 用户经 ask_user_question 逐项授权。三者皆缺禁止执行，无豁免。
 
-【配套规则 R4——真实环境命令逐条上报】你在用户真实环境执行的每条命令必须在结构化返回中逐条上报（命令、时间、退出码、影响路径），由 Coordinator 于收到当下机写 evidence 行留痕；无上报的真实环境操作按违规处理。仅当本派发 prompt 预授权 incidents 留痕文件（.governance/incidents/{task_id}-*.log）时，方可向该文件追加实时命令日志（仅限该路径、仅限追加）——这是「不修改 .governance/ 治理记录」禁令的唯一例外。
+【配套规则 R4——真实环境命令逐条上报】你在用户真实环境执行的每条命令必须在结构化返回中逐条上报（命令、时间、退出码、影响路径），由 Coordinator 于收到当下机写 evidence 行留痕；无上报的真实环境操作按违规处理。仅当本派发 prompt 预授权 incidents 留痕文件（.governance/incidents/{task_id}-*.log）时，方可向该文件追加实时命令日志（仅限该路径、仅限追加）——这是「不修改 .governance/ 治理记录」禁令的例外之一（另一例外=Coordinator 自身的治理写回职责，不受本禁令约束）。
 ```
 
 注入纪律（Coordinator 侧）：

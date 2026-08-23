@@ -310,12 +310,14 @@
 
 | 信号 | 规则 | severity |
 |---|---|---|
-| G-s1 | 存在已发布 tag 且其发布时间 **>** 任一「→发布」前置 Gate「passed/passed-on-entry」日期 | **FAIL**「发布绕过 pending Gate」|
+| G-s1 | 存在已发布 tag 且其发布时间 **<（早于）** 任一「→发布」前置 Gate **passed** 日期（或 passed 且无日期——无法证实通过先于发布；**passed-on-entry 不算**，见下方误报面 / DEC-153 ④）| **FAIL**「发布绕过 pending Gate」|
 | G-s2 | 存在已发布 tag，但任一前置 Gate 为 **pending**（无法确定先后）| **FAIL**（保守，只要发布 tag 存在且前置有 pending 即 FAIL）|
 | G-s3 | 无已发布 tag（无法从 git 确认），但 Gate 表显示发布 Gate 已 passed 且前置有 pending | **WARN**（fail-safe 到 WARN）|
 
 #### 对已发布历史（tv/router 已发生的绕过）是否豁免
 **建议豁免**：对**历史已发布版本**不追溯 FAIL——仅在**当前候选版本**（`check_release_readiness` 的 `lineage_mode="candidate"`+`release_commit` 场景）触发。理由：G-s1/G-s2 用于**发布前互锁**，若把「历史已发生的绕过」一并 FAIL，会产生大量既有债务噪音（tv v1.6.0/router v0.2.1 已发生），掩盖当前发布候选的真问题。**依据**：诊断报告 §7.2 P-TV-1/P-ROUTER-2 均表述为「不要**再**在 pending Gate 上发布」，指向未来而非历史。豁免实现：用 `lineage_mode` 区分（candidate=判新 tag；released=仅 WARN 披露历史）。
+
+> **R0 修正（2026-08-23，REVIEW-FIX-266-R0 P2-2）**：本表 G-s1 原字面「发布时间 **>** passed 日期 → FAIL」为反向笔误——按字面会把「先过 Gate 后发布」的合规场景判 FAIL，与 FAIL 标题「发布绕过 pending Gate」、G-s2 同向语义、REQ-145.4 G9 意图均矛盾。已修正为「**<（早于）** 或无日期（无法证实通过先于发布）」方向；实现（FIX-266）保持修正后方向，测试 `test_g_s1_tag_after_passed_gate_passes` 锁定。原「passed/passed-on-entry」并入 passed 的表述亦与下方误报面 / DEC-153 ④（passed-on-entry 视为非 pending）矛盾——本行已改为仅 **passed**（on-entry 不算，见误报面）。
 **BR-4 注意**：`check_release_readiness` 的 `lineage_mode` **缺省="candidate"**（verify_workflow.py:6671），若调用方 `cmd_check_release`/`check-release`（verify_workflow.py:18178）在检查**已发布版本**时未显式传 `lineage_mode="released"`，历史绕过会误判为 candidate FAIL。**须在 `cmd_check_release` 对已发布版本（`--released` 场景）显式传 `lineage_mode="released"`**，或改为「判定最新候选 tag」的固有边界（推荐前者，改动最小）。
 
 #### 误报面 + 豁免

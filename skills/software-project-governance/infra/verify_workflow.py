@@ -1125,6 +1125,17 @@ from checks.snapshot_domain import (  # noqa: E402
     check_snapshot_freshness,  # FIX-268 / REQ-145.2 (Check 35)
 )
 
+# ── Gate domain (new in 0.76.0) ────────────────────────────────────
+# FIX-266 / REQ-145.4 (design §3.4): the gate↔release interlock watchdog
+# (Check 37). New domain module checks/gate_domain.py mirrors the
+# snapshot_domain pattern: deferred _vw() shared accessor, no import cycle.
+# The module also carries released_history_version() — the BR-4 auto-
+# released helper for cmd_check_release's already-published-version checks.
+from checks.gate_domain import (  # noqa: E402
+    check_gate_sequence_for_release,  # FIX-266 / REQ-145.4 (Check 37)
+    released_history_version,     # BR-4: roadmap 已发布/已撤回 status probe
+)
+
 # ── Review domain (extracted to infra/checks/review_domain.py in 0.70.0) ────
 # DEC-083 Phase 5c / ADR-016 / FEAT-009: the agent-team-review protocol
 # domain (Checks 18, 18b, 21, 21b, 22, 29, 30 plus their review-only helpers
@@ -6713,6 +6724,7 @@ def check_release_readiness(
     lineage_mode="candidate",
     release_commit=None,
     lineage_remote="origin",
+    gate_sequence_lineage_mode=None,
 ):
     """FIX-072: aggregate release gate scripts behind the stage-release check-release command."""
     issues = []
@@ -6824,6 +6836,28 @@ def check_release_readiness(
     )
     details["release_lineage"] = lineage_result
     issues.extend(f"release lineage: {issue}" for issue in lineage_result["issues"])
+
+    # ── FIX-266 / REQ-145.4 (design §3.4): gate↔release interlock ──
+    # Embedded sub-check: a release tag must not exist while prerelease
+    # gates are pending / not yet passed. `gate_sequence_lineage_mode`
+    # defaults to the run's `lineage_mode` (candidate); cmd_check_release
+    # explicitly passes "released" for already-published version checks
+    # (BR-4 / DEC-153 ②) so historical bypasses WARN instead of FAILing.
+    gate_seq_mode = gate_sequence_lineage_mode or lineage_mode
+    gate_seq_result = check_gate_sequence_for_release(
+        lineage_mode=gate_seq_mode,
+    )
+    details["gate_sequence_for_release"] = {
+        "pass": not gate_seq_result["violations"],
+        "verdict": gate_seq_result["verdict"],
+        "lineage_mode": gate_seq_result["stats"].get("lineage_mode"),
+        "latest_tag": gate_seq_result["stats"].get("latest_tag"),
+        "prerelease_pending": gate_seq_result["stats"].get("prerelease_pending"),
+        "issues": [v["reason"] for v in gate_seq_result["violations"]],
+        "warnings": [w["reason"] for w in gate_seq_result["warnings"]],
+    }
+    issues.extend(f"gate sequence: {v['reason']}"
+                  for v in gate_seq_result["violations"])
 
     one_dot_zero_blocker_issues = []
     if version == "1.0.0":
@@ -15256,6 +15290,44 @@ def _run_full_engine_checks(args):
     all_issues += len(cr36["violations"]) + len(cr36["warnings"])
     print("└──────────────────────────────────────────────────────┘")
 
+    # ── 37. Gate Sequence for Release (FIX-266 / REQ-145.4) ──
+    # Content-dimension watchdog for the AUDIT-145 G9 blind spot: a release
+    # tag must not exist while prerelease gates (rows BEFORE the release
+    # gate, row-order derivation — standard 11 / lightweight 7) are pending.
+    # G-s1 FAIL (tag predates a passed gate) / G-s2 FAIL (tag exists with a
+    # pending gate, conservative) / G-s3 WARN (no git tag but release gate
+    # passed with pending prereleases — fail-safe). passed-on-entry is not
+    # pending (DEC-153 ④). WARN and FAIL both count into all_issues
+    # (Check-36 convention). Standalone runs use candidate mode — the
+    # already-published release checks carry released mode via
+    # check_release_readiness (BR-4 / DEC-153 ②).
+    print("\n┌─ Check 37: Gate Sequence for Release (FIX-266) ─────┐")
+    cr37 = check_gate_sequence_for_release()
+    st37 = cr37["stats"]
+    tag_desc = st37["latest_tag"] or "—"
+    if st37["latest_tag_date"]:
+        tag_desc += f" ({st37['latest_tag_date']})"
+    print(f"│  Gates: {st37['gates_scanned']} (release: "
+          f"{st37['release_gate'] or '—'}; prerelease: "
+          f"{st37['prerelease_gates']} = passed {st37['prerelease_passed']} + "
+          f"on-entry {st37['prerelease_on_entry']} + pending "
+          f"{st37['prerelease_pending']})")
+    print(f"│  Latest release tag: {tag_desc}; lineage mode: "
+          f"{st37['lineage_mode']}")
+    print(f"│  Verdict: {cr37['verdict']}")
+    if cr37["violations"]:
+        print(f"│  [FAIL] {len(cr37['violations'])} violation(s):")
+        for v in cr37["violations"][:8]:
+            print(f"│    - [{v['rule']}] {v['reason']}")
+    if cr37["warnings"]:
+        print(f"│  [WARN] {len(cr37['warnings'])} warning(s):")
+        for w in cr37["warnings"][:8]:
+            print(f"│    - [{w['rule']}] {w['reason']}")
+    if not cr37["violations"] and not cr37["warnings"]:
+        print(f"│  [{cr37['verdict']}] {cr37['reason']}")
+    all_issues += len(cr37["violations"]) + len(cr37["warnings"])
+    print("└──────────────────────────────────────────────────────┘")
+
     # ── Summary ──
     print(f"\n┌─ Governance Health Summary ──────────────────────────┐")
     if all_issues == 0:
@@ -19182,14 +19254,30 @@ def cmd_check_release(args):
         pass
 
     skip_execution_gates = getattr(args, "skip_execution_gates", False)
+    # BR-4 (design §3.4 / DEC-153 ③): `lineage_mode` defaults to "candidate";
+    # the embedded gate↔release interlock (FIX-266) must NOT mis-FAIL
+    # historical bypasses when the run targets an ALREADY-PUBLISHED version.
+    # When the user did NOT pass --lineage-mode explicitly (argparse default
+    # is None) AND the roadmap marks --version as published/withdrawn
+    # history, the gate-sequence interlock runs in "released" mode (WARN
+    # disclosure only, DEC-153 ②). The release-lineage check keeps the
+    # explicitly requested/effective mode — released-mode lineage requires
+    # --release-commit, so history queries are never forced down that path.
+    requested_lineage_mode = getattr(args, "lineage_mode", None)
+    lineage_mode = requested_lineage_mode or "candidate"
+    gate_sequence_lineage_mode = lineage_mode
+    if requested_lineage_mode is None and released_history_version(
+            getattr(args, "version", None)):
+        gate_sequence_lineage_mode = "released"
     result = check_release_readiness(
         version=getattr(args, "version", None),
         require_changelog=getattr(args, "require_changelog", False),
         run_runtime_adapters=getattr(args, "runtime_adapters", False),
         run_execution_gates=not skip_execution_gates,
-        lineage_mode=getattr(args, "lineage_mode", "candidate"),
+        lineage_mode=lineage_mode,
         release_commit=getattr(args, "release_commit", None),
         lineage_remote=getattr(args, "lineage_remote", "origin"),
+        gate_sequence_lineage_mode=gate_sequence_lineage_mode,
     )
     claim_report = scan_loop_runtime_claims(_loop_runtime_claim_context("product_release"))
     claim_gate = _loop_runtime_claim_gate_detail(claim_report)
@@ -19202,7 +19290,10 @@ def cmd_check_release(args):
         print(f"  Version: {args.version}")
     print(f"  Runtime adapters: {'enabled' if getattr(args, 'runtime_adapters', False) else 'static'}")
     print(f"  Execution gates: {'skipped' if skip_execution_gates else 'enabled'}")
-    print(f"  Lineage mode: {getattr(args, 'lineage_mode', 'candidate')}")
+    print(f"  Lineage mode: {lineage_mode}")
+    if gate_sequence_lineage_mode != lineage_mode:
+        print(f"  Gate-sequence lineage mode: {gate_sequence_lineage_mode} "
+              f"(BR-4: already-published version check)")
     for label, detail in result["details"].items():
         status = "PASS" if detail["pass"] else "FAIL"
         print(f"  [{status}] {label.replace('_', ' ')}")
@@ -21548,8 +21639,10 @@ def main(argv=None):
                       help="Also execute local runtime version commands for supported adapters")
     cr_p.add_argument("--skip-execution-gates", action="store_true",
                       help="Diagnostic only: skip verify/check-governance/e2e/unit-test execution gates")
-    cr_p.add_argument("--lineage-mode", choices=("candidate", "released"), default="candidate",
-                      help="candidate skips pre-tag validation; released requires local and remote tag lineage")
+    cr_p.add_argument("--lineage-mode", choices=("candidate", "released"), default=None,
+                      help="candidate skips pre-tag validation; released requires local and remote tag lineage. "
+                           "Default (unset): candidate — except that checks against an ALREADY-PUBLISHED "
+                           "version run the embedded gate-sequence interlock in released mode (BR-4 / DEC-153)")
     cr_p.add_argument("--release-commit",
                       help="Expected release commit (required when --lineage-mode released)")
     cr_p.add_argument("--lineage-remote", default="origin",

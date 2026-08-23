@@ -71,7 +71,8 @@
       ".gitignore",
       "package.json",
       "pyproject.toml",
-      "LICENSE"
+      "LICENSE",
+      "cordis.patch.yml"
     ],
     "directories": []
   },
@@ -225,6 +226,18 @@
       {
         "path": "adapters/",
         "type": "dir"
+      },
+      {
+        "path": "presets/",
+        "type": "dir"
+      },
+      {
+        "path": "presets/governance/agent.cordis.yml",
+        "type": "file"
+      },
+      {
+        "path": "presets/governance/preset.yml",
+        "type": "file"
       },
       {
         "path": ".claude-plugin/",

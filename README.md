@@ -30,7 +30,7 @@ Tier 1 loading guide:
 | Gemini CLI | Use a thin `GEMINI.md` project context pointer to `skills/software-project-governance/SKILL.md`; custom commands, MCP, and extensions remain separate extension points. | `python adapters/gemini/launch.py`, then `GEMINI_CLI_TRUST_WORKSPACE=true python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent gemini --timeout 180` | Gemini CLI target-cwd read E2E is PASS/DEGRADED as of 2026-06-11 when headless workspace trust is enabled. No Gemini plugin marketplace claim. |
 | opencode | Use `AGENTS.md` or configured opencode instructions to point at `skills/software-project-governance/SKILL.md`. | `python skills/software-project-governance/infra/verify_workflow.py opencode-provider-preflight` and `python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent opencode --timeout 90` | opencode target-cwd runtime E2E is PASS/DEGRADED in local evidence; provider/model preflight still guards future regressions. |
 | Chrys | Chrys auto-loads `AGENTS.md` and `CLAUDE.md` as native context, plus native `load_skill` for `skills/software-project-governance/SKILL.md`. | `python adapters/chrys/launch.py` and `python skills/software-project-governance/infra/verify_workflow.py check-agent-adapters` | Chrys was the first adapter with a full native profile: native ask_user, sub_agent, tool_calling, and git_hooks. Only browser and MCP remain host-dependent. |
-| DeepSeek Harness (dsh) | `python adapters/dsh/launch.py --install` generates the `governance` agent preset under `${DSH_HOME}/.agent-presets/`; the preset persona carries the Coordinator bootstrap and registers the repo `skills/` + `adapters/dsh/skill-shims/` as native skill roots. Per-project activation: `python adapters/dsh/launch.py --bootstrap-project <dir>` writes a thin `AGENTS.md`. | `python adapters/dsh/launch.py` and `python skills/software-project-governance/infra/verify_workflow.py check-agent-adapters` | dsh matches Chrys's native profile (native ask_user_question, subagent, tool_calling, git_hooks; /governance loads the command shim skill). Only browser automation and MCP remain host-dependent. No dsh plugin marketplace claim. |
+| DeepSeek Harness (dsh) | Standard plugin install: `dsh plugin --profile web add github:peterwangze/software-project-governance` (bundle layer; restart the profile to activate — the governance skills and `/governance` command projections then load in every session of that profile). Optional Coordinator persona preset: `python adapters/dsh/launch.py --install` generates the `governance` agent preset under `${DSH_HOME}/.agent-presets/` (the always-scanned user root). Per-project activation: `python adapters/dsh/launch.py --bootstrap-project <dir>` writes a thin `AGENTS.md`. | `dsh --profile <name> --dump-config` shows the `@zcode/software-project-governance-plugin` bundle layer; `python adapters/dsh/launch.py` and `python skills/software-project-governance/infra/verify_workflow.py check-agent-adapters` | dsh matches Chrys's native profile (native ask_user_question, subagent, tool_calling, git_hooks; /governance loads the command shim skill). Only browser automation and MCP remain host-dependent. The dsh plugin install is the official bundle mechanism, not a marketplace approval or universal runtime claim. |
 | zcode | Add this repo as a plugin marketplace and install: `/plugin marketplace add peterwangze/software-project-governance`, then `/plugin install software-project-governance@spg`. zcode reuses the Claude marketplace protocol (`.claude-plugin/marketplace.json` + `.zcode-plugin/plugin.json`). | `python skills/software-project-governance/infra/verify_workflow.py check-agent-adapters` | Protocol-conformant marketplace install. Not zcode official curation or approval. The 0.56.0 reverse-engineered local-load tool was retired in 0.62.0 (DEC-093). |
 
 Tier 2 compatibility and research rows:
@@ -56,6 +56,20 @@ Alternative Claude paths:
 /plugin install https://github.com/peterwangze/software-project-governance.git
 git clone https://github.com/peterwangze/software-project-governance.git
 /plugin install /path/to/software-project-governance
+```
+
+DeepSeek Harness (dsh) plugin install:
+
+```bash
+dsh plugin --profile web add github:peterwangze/software-project-governance
+# local checkout alternative (run from anywhere; the path is anchored to your invoking directory):
+dsh plugin --profile web add /path/to/software-project-governance
+```
+
+Restart the dsh web profile after installing — bundle layers apply at profile boot. The governance skills and the `/governance` command projections then load in every session of that profile. To also activate the Coordinator persona preset, generate it into the always-scanned user root (works against the dsh-installed package copy; adapt the profile name if you use another profile):
+
+```bash
+python "${DSH_HOME:-$HOME/.dsh}/profiles/web/node_modules/@zcode/software-project-governance-plugin/adapters/dsh/launch.py" --install
 ```
 
 Codex personal marketplace package:

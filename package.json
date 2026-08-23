@@ -4,5 +4,68 @@
   "version": "0.76.0",
   "private": true,
   "license": "MIT",
-  "description": "AI coding delivery trust layer for governance-aware coding agents — zcode plugin packaging. The plugin surface lives in skills/ and commands/; this file only provides the npm package identity expected by the zcode plugin host."
+  "description": "AI coding delivery trust layer for governance-aware coding agents — zcode plugin packaging. The plugin surface lives in skills/ and commands/; this file only provides the npm package identity expected by the zcode plugin host.",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "dsh-bundle",
+    "deepseek-harness",
+    "governance",
+    "project-governance",
+    "ai-coding-agent",
+    "agent-workflow",
+    "skills"
+  ],
+  "files": [
+    "skills/",
+    "commands/",
+    "agents/",
+    "adapters/dsh/",
+    "presets/",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "skills": [
+      "./skills/code-review/SKILL.md",
+      "./skills/design-review/SKILL.md",
+      "./skills/main-workflow/SKILL.md",
+      "./skills/okr/SKILL.md",
+      "./skills/pr-faq/SKILL.md",
+      "./skills/release-checklist/SKILL.md",
+      "./skills/release-review/SKILL.md",
+      "./skills/requirement-clarification/SKILL.md",
+      "./skills/requirement-review/SKILL.md",
+      "./skills/retro-meeting/SKILL.md",
+      "./skills/retro-review/SKILL.md",
+      "./skills/six-pager/SKILL.md",
+      "./skills/software-project-governance/SKILL.md",
+      "./skills/stage-architecture/SKILL.md",
+      "./skills/stage-cicd/SKILL.md",
+      "./skills/stage-development/SKILL.md",
+      "./skills/stage-initiation/SKILL.md",
+      "./skills/stage-infra/SKILL.md",
+      "./skills/stage-maintenance/SKILL.md",
+      "./skills/stage-operations/SKILL.md",
+      "./skills/stage-release/SKILL.md",
+      "./skills/stage-research/SKILL.md",
+      "./skills/stage-selection/SKILL.md",
+      "./skills/stage-testing/SKILL.md",
+      "./skills/tech-review/SKILL.md",
+      "./skills/test-review/SKILL.md",
+      "./adapters/dsh/skill-shims/change-triage.md",
+      "./adapters/dsh/skill-shims/governance-cleanup.md",
+      "./adapters/dsh/skill-shims/governance-gate.md",
+      "./adapters/dsh/skill-shims/governance-init.md",
+      "./adapters/dsh/skill-shims/governance-review.md",
+      "./adapters/dsh/skill-shims/governance-status.md",
+      "./adapters/dsh/skill-shims/governance-update.md",
+      "./adapters/dsh/skill-shims/governance-verify.md",
+      "./adapters/dsh/skill-shims/governance.md"
+    ]
+  }
 }

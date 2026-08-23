@@ -17,6 +17,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -16260,6 +16261,173 @@ class CheckR1CompletionGateTests(unittest.TestCase):
         (self.gov / "plan-tracker.md").unlink()
         result = self._check()
         self.assertEqual(result["verdict"], "no-verdict", result)
+
+
+class InjectionContractPresetVersionLineTests(unittest.TestCase):
+    """FIX-272 (FEAT-010 R0 F1): preset persona VERSION-LINE same-source guard.
+
+    The shipped preset ``presets/governance/agent.cordis.yml``'s persona
+    version line (``治理工作流（vX.Y.Z）``) must be guarded against the
+    authoritative SKILL.md frontmatter version — FIX-250 precedent: the
+    version line silently drifted to bundle end users, and without a machine
+    guard the next release would drift again. The anchor marker
+    ``@version-line`` is DYNAMIC (resolved against the authority at check
+    time, FIX-253 §6.6.3 pattern) so the guard itself cannot drift to a stale
+    hardcoded literal.
+    """
+
+    def _copy_injection_surfaces(self, root):
+        for relative in vw.INJECTION_CONTRACT_ANCHORS:
+            target = root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(vw.ROOT / relative, target)
+
+    def test_live_repo_preset_carries_current_version_line(self):
+        """The live repository preset must satisfy the version-line anchor."""
+        result = vw.check_injection_contract()
+        self.assertEqual(result["issues"], [], result["issues"])
+
+    def test_stale_preset_version_line_is_detected(self):
+        """Rewrite the copied preset's version line to a stale version and
+        assert the checker reports it (the drift this guard exists to catch)."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._copy_injection_surfaces(root)
+            preset = root / "presets/governance/agent.cordis.yml"
+            text = preset.read_text(encoding="utf-8")
+            authority = vw._extract_skill_version(
+                root / "skills/software-project-governance/SKILL.md")
+            self.assertTrue(authority, "authority version must be extractable")
+            self.assertIn(f"治理工作流（v{authority}）", text)
+            stale = text.replace(
+                f"治理工作流（v{authority}）", "治理工作流（v0.99.9）")
+            self.assertNotIn(f"治理工作流（v{authority}）", stale)
+            preset.write_text(stale, encoding="utf-8")
+            result = vw.check_injection_contract(root)
+            self.assertTrue(
+                any("presets/governance/agent.cordis.yml" in issue
+                    and "anchor missing" in issue
+                    for issue in result["issues"]),
+                result["issues"],
+            )
+
+    def test_authority_version_unresolvable_fails_closed(self):
+        """SKILL.md frontmatter version unreadable → the @version-line anchor
+        must FAIL (never silently skip — otherwise drift protection would
+        disappear exactly when the authority is broken)."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._copy_injection_surfaces(root)
+            skill = root / "skills/software-project-governance/SKILL.md"
+            masked = re.sub(
+                r"(?m)^version:\s*[0-9.]+\s*$", "# version masked",
+                skill.read_text(encoding="utf-8"))
+            skill.write_text(masked, encoding="utf-8")
+            result = vw.check_injection_contract(root)
+            self.assertTrue(
+                any("presets/governance/agent.cordis.yml" in issue
+                    and "unresolved" in issue
+                    for issue in result["issues"]),
+                result["issues"],
+            )
+
+
+class DshSkillsManifestTests(unittest.TestCase):
+    """FIX-272 (FEAT-010 R0 F2): package.json dsh.skills ↔ disk check.
+
+    The 35-entry dsh.skills manifest is declarative bundle metadata with zero
+    dsh-side consumers; without a machine check a new skill silently rots the
+    shipped catalog. Bidirectional: declaration-missing-on-disk AND
+    on-disk-undeclared AND duplicates are all detected with actionable
+    diagnostics.
+    """
+
+    def test_live_repo_declaration_matches_disk_bidirectionally(self):
+        result = vw.check_dsh_skills_manifest()
+        self.assertEqual(result["issues"], [], result["issues"])
+        self.assertEqual(result["declared_count"], 35)
+        self.assertEqual(result["disk_count"], 35)
+
+    def test_declared_file_missing_on_disk_is_detected(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "package.json").write_text(json.dumps({
+                "dsh": {"skills": ["./skills/alpha/SKILL.md"]},
+            }, ensure_ascii=False), encoding="utf-8")
+            result = vw.check_dsh_skills_manifest(root)
+            self.assertTrue(
+                any("skills/alpha/SKILL.md" in issue
+                    and "missing" in issue.lower()
+                    for issue in result["issues"]),
+                result["issues"],
+            )
+
+    def test_disk_file_undeclared_is_detected(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "package.json").write_text(json.dumps({
+                "dsh": {"skills": []},
+            }, ensure_ascii=False), encoding="utf-8")
+            beta = root / "skills" / "beta" / "SKILL.md"
+            beta.parent.mkdir(parents=True, exist_ok=True)
+            beta.write_text("---\n", encoding="utf-8")
+            result = vw.check_dsh_skills_manifest(root)
+            self.assertTrue(
+                any("skills/beta/SKILL.md" in issue
+                    and "not declared" in issue
+                    for issue in result["issues"]),
+                result["issues"],
+            )
+
+    def test_duplicate_declaration_is_detected(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "package.json").write_text(json.dumps({
+                "dsh": {"skills": [
+                    "./skills/alpha/SKILL.md", "./skills/alpha/SKILL.md",
+                ]},
+            }, ensure_ascii=False), encoding="utf-8")
+            alpha = root / "skills" / "alpha" / "SKILL.md"
+            alpha.parent.mkdir(parents=True, exist_ok=True)
+            alpha.write_text("---\n", encoding="utf-8")
+            result = vw.check_dsh_skills_manifest(root)
+            self.assertTrue(
+                any("duplicate" in issue.lower()
+                    for issue in result["issues"]),
+                result["issues"],
+            )
+
+    def test_manifest_field_absent_is_detected(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "package.json").write_text(json.dumps({
+                "$schema": "https://json.schemastore.org/package.json",
+                "name": "@zcode/software-project-governance-plugin",
+                "version": "0.76.0",
+                "private": True,
+            }, ensure_ascii=False), encoding="utf-8")
+            result = vw.check_dsh_skills_manifest(root)
+            self.assertTrue(
+                any("dsh.skills" in issue
+                    for issue in result["issues"]),
+                result["issues"],
+            )
+
+    def test_invalid_entry_is_detected(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "package.json").write_text(json.dumps({
+                "dsh": {"skills": ["./skills/alpha/SKILL.md", 42]},
+            }, ensure_ascii=False), encoding="utf-8")
+            alpha = root / "skills" / "alpha" / "SKILL.md"
+            alpha.parent.mkdir(parents=True, exist_ok=True)
+            alpha.write_text("---\n", encoding="utf-8")
+            result = vw.check_dsh_skills_manifest(root)
+            self.assertTrue(
+                any("invalid declaration entry" in issue
+                    for issue in result["issues"]),
+                result["issues"],
+            )
 
 
 if __name__ == "__main__":

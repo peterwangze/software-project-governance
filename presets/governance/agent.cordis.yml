@@ -10,13 +10,14 @@
 # mounts in place inside the installed package, (b) the persona derives the
 # plugin root from the skill resourceBase instead of a substituted absolute
 # path. Keep this file and the template in sync on every persona/contract
-# change. Version sync is currently MANUAL three-way (SKILL.md frontmatter
+# change. Version sync is MANUAL three-way (SKILL.md frontmatter
 # version = this file's persona version line = package.json version; verified
-# aligned at 0.76.0 in the FEAT-010 round). A machine anchor guard for the
-# persona CONTRACT BLOCK keywords of this file landed in FIX-274
-# (INJECTION_CONTRACT_ANCHORS key for this path); the VERSION LINE anchor
-# remains registered as FIX-272 — until that guard lands, every release
-# MUST re-verify the version line by hand.
+# aligned at 0.76.0 in the FEAT-010 round) EXCEPT the version line itself,
+# which is now machine-guarded by FIX-272: INJECTION_CONTRACT_ANCHORS carries
+# the dynamic `@version-line` anchor for this path (resolved to
+# `治理工作流（v<SKILL.md frontmatter version>）` at check time, FIX-250
+# precedent), so the version line needs no hand re-verification. The persona
+# CONTRACT BLOCK keywords are machine-guarded by FIX-274 (same registry).
 #
 # Relative-path semantics: a preset row's relative paths resolve from THIS
 # file's own directory (dsh-agent-presets README "How a preset's rows

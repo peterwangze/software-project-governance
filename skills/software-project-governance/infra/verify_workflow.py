@@ -6588,6 +6588,15 @@ PROJECTION_SYNC_PATTERNS = (
 # block and its "# ── Manifest" anchor line so checks/version.py L58 regex
 # (`REQUIRED_SNIPPETS\s*=\s*\{(?P<body>.*?)\n\}\n{2,}# ── Manifest`) keeps
 # matching — do not move it into that region.
+#
+# FIX-272 / FEAT-010 R0 F1: the `@version-line` marker is a DYNAMIC anchor —
+# at check time it resolves to the persona version line
+# `治理工作流（v<SKILL.md frontmatter version>）` of the authoritative source
+# (FIX-253 §6.6.3 pattern), so the guard itself can never drift to a stale
+# hardcoded literal (the FIX-250 precedent: preset version line silently
+# drifted to bundle end users). Unresolvable authority → FAIL (fail-closed).
+VERSION_LINE_ANCHOR = "@version-line"
+
 INJECTION_CONTRACT_ANCHORS = {
     "adapters/dsh/agent.cordis.yml.template": [
         "关键行为契约", "复审必达", "NEEDS_CHANGE", "完成必推荐",
@@ -6608,11 +6617,14 @@ INJECTION_CONTRACT_ANCHORS = {
     ],
     "adapters/dsh/AGENTS.md.template": ["关键行为契约"],
     # FIX-274 / F-02: in-package preset persona — M7.7 contract keywords
-    # only. The VERSION-line anchor for this file stays FIX-272 scope
-    # (deliberately NOT implemented here).
+    # PLUS the FIX-272 persona VERSION-LINE same-source guard (the shipped
+    # preset's `治理工作流（vX.Y.Z）` line must track the SKILL.md authority —
+    # FIX-250 precedent; the template side is already projection-guarded by
+    # dsh-persona-version, the preset is NOT, hence the dynamic marker here).
     "presets/governance/agent.cordis.yml": [
         "关键行为契约",
         "真实环境必防护", "三选一", "逐条上报", "隔离环境安装冒烟",
+        VERSION_LINE_ANCHOR,
     ],
 }
 
@@ -6719,10 +6731,19 @@ def check_injection_contract(root=None):
     INJECTION_CONTRACT_ANCHORS. Boundary (design §6.5): existence only —
     never full-text equality, and no behavior detection (that boundary stays
     with REQ-107/108/113 per DEC-143).
+
+    FIX-272 / FEAT-010 R0 F1: ``VERSION_LINE_ANCHOR`` entries are DYNAMIC —
+    resolved at check time to the persona version line
+    ``治理工作流（v<authority>）`` from the SKILL.md frontmatter version, so
+    the shipped preset can never silently drift from the release authority
+    (FIX-250 precedent). Unresolvable authority → explicit FAIL (fail-closed:
+    useless to report a missing keyword when the version source is broken).
     """
     root = Path(root) if root is not None else ROOT
     issues = []
     files_checked = 0
+    authority = _extract_skill_version(
+        root / "skills/software-project-governance/SKILL.md")
     for relative, anchors in sorted(INJECTION_CONTRACT_ANCHORS.items()):
         path = root / relative
         if not path.is_file():
@@ -6731,12 +6752,118 @@ def check_injection_contract(root=None):
         files_checked += 1
         text = path.read_text(encoding="utf-8")
         for anchor in anchors:
+            if anchor == VERSION_LINE_ANCHOR:
+                if not authority:
+                    issues.append(
+                        f"{relative}: {VERSION_LINE_ANCHOR} unresolved — "
+                        "SKILL.md frontmatter version missing")
+                    continue
+                anchor = f"治理工作流（v{authority}）"
             if anchor not in text:
                 issues.append(f"{relative}: anchor missing: {anchor}")
     return {
         "issues": issues,
         "files_checked": files_checked,
         "anchors_checked": sum(len(v) for v in INJECTION_CONTRACT_ANCHORS.values()),
+    }
+
+
+# FIX-272 / FEAT-010 R0 F2: dsh.skills declaration ↔ disk bidirectional
+# machine check. package.json's ``dsh.skills`` list is declarative bundle
+# metadata with zero dsh-side consumer (R0 verified: dsh only reads
+# dsh.bundle.patch), so without a machine check a new skill silently rots
+# the shipped catalog. Disk enumeration mirrors the FEAT-010 R0 reference
+# disk glob (skills/*/SKILL.md ×26 + adapters/dsh/skill-shims/*.md ×9).
+DSH_SKILLS_DISK_PATTERNS = ("skills/*/SKILL.md", "adapters/dsh/skill-shims/*.md")
+
+
+def _normalize_declared_skill_path(raw):
+    """Normalize a dsh.skills declaration entry to a repo-relative POSIX path.
+
+    Accepts ``./skills/foo/SKILL.md`` (bundle style) or
+    ``skills/foo/SKILL.md``; returns ``None`` for anything malformed,
+    non-repo-relative, or path-traversal (``..`` / absolute) — the caller
+    reports it as an invalid declaration.
+    """
+    if not isinstance(raw, str):
+        return None
+    value = raw.strip().replace("\\", "/")
+    if value.startswith("./"):
+        value = value[2:]
+    if not value:
+        return None
+    parts = value.split("/")
+    if any(part in ("", ".", "..") for part in parts):
+        return None
+    if value.startswith("/") or ":" in value.split("/")[0]:
+        return None
+    return value
+
+
+def check_dsh_skills_manifest(root=None):
+    """FIX-272 / FEAT-010 R0 F2: package.json dsh.skills ↔ disk consistency.
+
+    Bidirectional: (a) every declared entry must resolve to an existing file
+    (declaration without payload), (b) every disk file matching the DSH skill
+    catalog patterns must be declared (payload silently left out of the
+    shipped catalog), (c) duplicates / malformed / path-traversal entries are
+    drift signals. Each failure carries an actionable diagnostic.
+    """
+    root = Path(root) if root is not None else ROOT
+    package_path = root / "package.json"
+    issues = []
+    if not package_path.is_file():
+        return {
+            "issues": [f"package.json missing — dsh.skills manifest cannot be checked"],
+            "declared_count": 0,
+            "disk_count": 0,
+        }
+    try:
+        payload = json.loads(package_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return {
+            "issues": [f"package.json unreadable: {exc}"],
+            "declared_count": 0,
+            "disk_count": 0,
+        }
+    dsh = payload.get("dsh") if isinstance(payload, dict) else None
+    declared_raw = dsh.get("skills") if isinstance(dsh, dict) else None
+    if declared_raw is None:
+        issues.append("package.json: dsh.skills manifest missing")
+        declared_raw = []
+    if not isinstance(declared_raw, list):
+        issues.append("package.json: dsh.skills must be a list")
+        declared_raw = []
+
+    declared = {}
+    for entry in declared_raw:
+        normalized = _normalize_declared_skill_path(entry)
+        if normalized is None:
+            label = entry if isinstance(entry, str) else repr(entry)
+            issues.append(f"dsh.skills: invalid declaration entry: {label}")
+            continue
+        if normalized in declared:
+            issues.append(f"dsh.skills: duplicate declaration: {normalized}")
+            continue
+        declared[normalized] = entry
+    for normalized in sorted(declared):
+        if not (root / normalized).is_file():
+            issues.append(
+                f"dsh.skills: declared but missing on disk: {normalized}")
+
+    disk = set()
+    for pattern in DSH_SKILLS_DISK_PATTERNS:
+        for path in root.glob(pattern):
+            if path.is_file():
+                disk.add(path.relative_to(root).as_posix())
+    for rel in sorted(disk):
+        if rel not in declared:
+            issues.append(f"dsh.skills: on disk but not declared: {rel}")
+
+    return {
+        "issues": issues,
+        "declared_count": len(declared),
+        "disk_count": len(disk),
     }
 
 
@@ -13803,6 +13930,7 @@ _PLUGIN_PRODUCT_CHECK_IDS = frozenset({
     "Check 30b",  # Loop wiring call sites（插件 infra AST 扫描）
     "Check 31",   # Loop Runtime Claim Gate（插件树扫描 + identity attestation）
     "Check 33",   # Injection Contract（插件 persona/SKILL/AGENTS 锚点）
+    "Check 40",   # DSH Skills Manifest（package.json dsh.skills ↔ 磁盘）
 })
 
 
@@ -13856,6 +13984,7 @@ _PRODUCT_GATE_LABELS = {
     "Check 30b": "Loop wiring call sites",
     "Check 31": "Loop Runtime Claim Gate",
     "Check 33": "Injection Contract",
+    "Check 40": "DSH Skills Manifest",
 }
 
 
@@ -15426,6 +15555,25 @@ def _run_full_engine_checks(args):
               "releases per DEC-159)")
     else:
         print(f"│  [{cr39['verdict']}] {cr39['reason']}")
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 40. DSH Skills Manifest (FIX-272 / FEAT-010 R0 F2) ──
+    # package.json dsh.skills（35 条，声明式 bundle 元数据、dsh 侧零消费者）
+    # ↔ 磁盘技能目录双向机器校验：声明的文件必须存在、磁盘 catalog 内的
+    # 文件必须已声明、重复/畸形/路径穿越条目均为漂移信号（FEAT-010 R0 F2）。
+    if _product_gate_active(args):
+        print("\n┌─ Check 40: DSH Skills Manifest (FIX-272) ──────────┐")
+        dsm40 = check_dsh_skills_manifest()
+        print(f"│  Declared: {dsm40['declared_count']}; on disk: {dsm40['disk_count']}")
+        if dsm40["issues"]:
+            all_issues += len(dsm40["issues"])
+            print(f"│  [FAIL] {len(dsm40['issues'])} dsh.skills manifest issue(s):")
+            for issue in dsm40["issues"]:
+                print(f"│    - {issue}")
+        else:
+            print("│  [PASS] dsh.skills declarations match the disk catalog.")
+    else:
+        _print_product_gate_skipped("Check 40")
     print("└──────────────────────────────────────────────────────┘")
 
     # ── Summary ──
@@ -19976,6 +20124,28 @@ def cmd_check_injection_contract(args):
     print()
 
 
+def cmd_check_dsh_skills_manifest(args):
+    """Run the dsh.skills declaration ↔ disk consistency check (FIX-272)."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    result = check_dsh_skills_manifest()
+    print("\n=== DSH Skills Manifest Check (FIX-272) ===")
+    print(f"  Declared: {result['declared_count']}; on disk: {result['disk_count']}")
+    if result["issues"]:
+        print(f"\n  Result: FAILED — {len(result['issues'])} issue(s)")
+        for issue in result["issues"][:20]:
+            print(f"    - {issue}")
+        if len(result["issues"]) > 20:
+            print(f"    ... and {len(result['issues']) - 20} more")
+        if getattr(args, "fail_on_issues", False):
+            sys.exit(1)
+    else:
+        print("\n  Result: PASSED — dsh.skills declarations match the disk catalog")
+    print()
+
+
 def cmd_release_ledger(args):
     """Validate declarative per-version release manifests and live Git facts."""
     result = validate_release_ledger(
@@ -21944,6 +22114,14 @@ def main(argv=None):
     cic_p.add_argument("--fail-on-issues", action="store_true",
                        help="Exit with non-zero code if injection-contract anchors are missing")
 
+    # check-dsh-skills-manifest (FIX-272 / FEAT-010 R0 F2)
+    cdsm_p = subparsers.add_parser(
+        "check-dsh-skills-manifest",
+        help="Check package.json dsh.skills declaration ↔ disk bidirectional consistency (FIX-272)",
+    )
+    cdsm_p.add_argument("--fail-on-issues", action="store_true",
+                        help="Exit with non-zero code if the dsh.skills manifest drifts from disk")
+
     # check-hot-fact-source (FIX-087)
     chfs_p = subparsers.add_parser(
         "check-hot-fact-source",
@@ -22429,6 +22607,7 @@ def main(argv=None):
         "check-version-consistency": cmd_check_version_consistency,
         "check-projection-sync": cmd_check_projection_sync,
         "check-injection-contract": cmd_check_injection_contract,
+        "check-dsh-skills-manifest": cmd_check_dsh_skills_manifest,
         "check-hot-fact-source": cmd_check_hot_fact_source,
         "check-runtime-readiness-matrix": cmd_check_runtime_readiness_matrix,
         "check-first-session-measurement": cmd_check_first_session_measurement,

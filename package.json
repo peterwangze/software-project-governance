@@ -22,6 +22,8 @@
     "agents/",
     "adapters/dsh/",
     "presets/",
+    "!**/__pycache__/",
+    "!**/*.pyc",
     "cordis.patch.yml",
     "README.md",
     "LICENSE"

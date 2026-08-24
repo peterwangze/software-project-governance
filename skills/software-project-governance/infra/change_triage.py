@@ -411,9 +411,11 @@ def check_conflicts(files: list, records: list, completed_ids: set) -> list:
 # executes effects OUTSIDE the repository (installer runs, real profile
 # writes, network publishing) was invisible to governance.
 
-# Outside-repo FILE shapes: absolute POSIX root, Windows drive, home
-# shorthand, environment-variable redirection, parent-directory escape.
-_OUTSIDE_REPO_FILE_RE = re.compile(r"^(?:[A-Za-z]:[\\/]|~|/|\$|%[^%]*%|\.\.)")
+# Outside-repo FILE shapes: absolute POSIX root, Windows drive, UNC /
+# single-backslash root (drive-relative root), home shorthand,
+# environment-variable redirection, parent-directory escape.
+_OUTSIDE_REPO_FILE_RE = re.compile(
+    r"^(?:[A-Za-z]:[\\/]|\\|~|/|\$|%[^%]*%|\.\.)")
 
 # User-real-environment FILE markers (home directory trees / env-var
 # redirected targets under the user's profile).
@@ -423,9 +425,21 @@ _REAL_ENV_FILE_RE = re.compile(
 
 # R5-banned unqualified wording (AUDIT-146 D1): the exact phrasings that
 # made FEAT-010's acceptance run inside the real ~/.dsh with no isolation.
+# IGNORECASE mirrors the file-side ``_REAL_ENV_FILE_RE`` (FIX-273 P3-2):
+# Windows env-var names are case-insensitive, so lowercase variants
+# (``%userprofile%`` / ``$home``) must not slip through.
+#
+# **Context-blindness limitation (FIX-273 P2-2)**: this wording detector is
+# substring-based and does NOT parse negation or quotation context — the
+# banned substrings trigger conservatively in ANY context (e.g. 「不要修改
+# %USERPROFILE%」 or quoting R5 rule text still scores as a real-env touch).
+# That is an ADVISORY over-trigger (never a silent miss), the behavior is
+# intentionally unchanged; a negation-window / quote-aware pass is a future
+# iteration.
 _REAL_ENV_TEXT_RE = re.compile(
     r"(真实安装|真实环境|真机|用户\s*HOME|HOME\s*下|用户真实环境|"
-    r"\$DSH_HOME|\$HOME|%USERPROFILE%|%APPDATA%|~/[^\s，。；)）])")
+    r"\$DSH_HOME|\$HOME|%USERPROFILE%|%APPDATA%|~/[^\s，。；)）])",
+    re.IGNORECASE)
 
 # Outside-repo effect wording — the R2 enumeration: installer execution /
 # real profile write / network publishing. The R5-standard wording
@@ -451,15 +465,29 @@ def analyze_side_effects(files, reason="", acceptance="", declared=""):
     Scans the triage inputs (``files`` / rationale / acceptance wording)
     for outside-repo side-effect signals:
 
-      - a file outside the repository (absolute path, ``~``, ``$VAR``,
-        ``%VAR%``, parent escape) is an outside-repo side effect; home-tree
-        / env-var targets additionally count as a user REAL-environment
-        touch;
+      - a file outside the repository (absolute path, UNC /
+        single-backslash root, ``~``, ``$VAR``, ``%VAR%``, parent escape)
+        is an outside-repo side effect — BOTH the raw string and its
+        normalized (backslash → slash) form participate in this judgement
+        (FIX-273 P2-1), so no rendering of the same path escapes
+        classification. Home-tree / env-var targets additionally count as
+        a user REAL-environment touch;
       - R5-banned unqualified wording（真实安装/真实环境/真机/...）in the
         rationale or acceptance is a user REAL-environment touch;
       - installer / network-publish / profile-write wording is an
         outside-repo side effect even when properly isolated (R5 standard
         wording「隔离环境安装冒烟…临时目录…」stays NON-real-env).
+
+    **Wording-detection limitation (FIX-273 P2-2)** — the wording signal is
+    context-blind by design: it does NOT parse negation or quotation, so a
+    banned-word substring triggers in ANY context (e.g. 「禁止修改
+    %USERPROFILE%」, or quoting R5 rule text, still classifies as a
+    real-env touch). This is an ADVISORY over-trigger (never a silent
+    miss), it adds R1 condition noise but never blocks; the behavior is
+    intentionally unchanged and a negation-window / quote-aware pass is a
+    future iteration. **File-side detection** (absolute/UNC/``~``/escape
+    shapes) is NOT affected by this limitation — it is shape-based, not
+    wording-based.
 
     Args:
         files: product files the task will modify.
@@ -483,7 +511,14 @@ def analyze_side_effects(files, reason="", acceptance="", declared=""):
 
     for f in files:
         normalized = f.replace("\\", "/")
-        if _OUTSIDE_REPO_FILE_RE.match(f):
+        # Both the raw string AND the normalized form participate in the
+        # outside-repo judgement (FIX-273 P2-1): backslash-rooted forms
+        # (UNC `\\server\share`, single-backslash roots `\Users\...`) match
+        # the ``\\`` branch raw, `/`-rooted forms match after normalization
+        # — the dual check mirrors the real-env dual search below so no
+        # rendering of the same path escapes classification.
+        if _OUTSIDE_REPO_FILE_RE.match(f) or _OUTSIDE_REPO_FILE_RE.match(
+                normalized):
             outside_repo = True
             if _REAL_ENV_FILE_RE.search(f) or _REAL_ENV_FILE_RE.search(
                     normalized):

@@ -383,6 +383,96 @@ class SideEffectAnalysisTests(unittest.TestCase):
         # still auto-attaches the R1 review condition (R2 second clause).
         self.assertTrue(result["requires_r1"])
 
+    # ─── FIX-273 (FIX-271 CODE R0 P2-1/P2-2/P3-2/P3-3) boundary cases ──────
+
+    def test_dotdot_escape_file_target_detected(self):
+        r"""P3-3: a `../` parent-escape file target (the `\.\.` regex branch)
+        is an outside-repo side effect — NOT a user real-environment touch."""
+        result = ct.analyze_side_effects(
+            files=["../outside/config.json"], reason="r")
+        self.assertTrue(result["detected"])
+        self.assertFalse(result["touches_real_env"])
+        self.assertFalse(result["requires_r1"])
+        self.assertTrue(any("仓库外" in b for b in result["blast_radius"]))
+
+    def test_single_backslash_root_path_detected(self):
+        r"""P2-1: a single-backslash root path (`\server\share\x.json`,
+        drive-relative root form) is an outside-repo file target. Both the
+        raw form (the new `\\` branch) and the normalized form (`/server/...`,
+        `/` branch) participate in the outside-repo judgement."""
+        result = ct.analyze_side_effects(
+            files=["\\server\\share\\config.json"], reason="r")
+        self.assertTrue(result["detected"])
+        self.assertFalse(result["touches_real_env"])
+        self.assertTrue(any("仓库外" in b for b in result["blast_radius"]))
+
+    def test_unc_path_detected_but_not_real_env(self):
+        r"""P2-1: a UNC path (`\\server\share\x.json`) is an outside-repo
+        target — but it is a network share, NOT the user's home tree, so
+        the R1 review condition MUST NOT be attached."""
+        result = ct.analyze_side_effects(
+            files=["\\\\server\\share\\config.json"], reason="r")
+        self.assertTrue(result["detected"])
+        self.assertFalse(result["touches_real_env"])
+        self.assertFalse(result["requires_r1"])
+        self.assertEqual(result["review_conditions"], [])
+        self.assertTrue(any("仓库外" in b for b in result["blast_radius"]))
+
+    def test_percent_userprofile_file_target_detected(self):
+        """P3-3: a `%USERPROFILE%` env-var FILE target is an outside-repo
+        side effect AND a user real-environment touch (R1 condition)."""
+        result = ct.analyze_side_effects(
+            files=["%USERPROFILE%\\config.json"], reason="r")
+        self.assertTrue(result["detected"])
+        self.assertTrue(result["touches_real_env"])
+        self.assertTrue(result["requires_r1"])
+        self.assertTrue(any("真实环境" in b for b in result["blast_radius"]))
+
+    def test_normalized_backslash_root_participates_in_judgement(self):
+        r"""P2-1: the normalized path participates in the outside-repo
+        judgement (the old code matched ONLY the raw string). `\Users\...`
+        raw matches the new `\\` branch AND its normalized `/Users/...` hits
+        the `/` branch — a dual check mirroring the existing real-env dual
+        search, so no form of the same path escapes classification."""
+        result = ct.analyze_side_effects(
+            files=["\\Users\\peter\\config.json"], reason="r")
+        self.assertTrue(result["detected"])
+        self.assertTrue(result["touches_real_env"])
+        self.assertTrue(any("真实环境" in b for b in result["blast_radius"]))
+
+    def test_backslash_separated_repo_file_not_flagged(self):
+        r"""P2-1 negative guard: a repo-internal file written with Windows
+        separators (`skills\...\x.py`) normalizes to a repo-relative path and
+        MUST NOT be classified as an outside-repo side effect."""
+        result = ct.analyze_side_effects(
+            files=["skills\\software-project-governance\\infra\\x.py"],
+            reason="TDD fixture")
+        self.assertFalse(result["detected"])
+        self.assertFalse(result["touches_real_env"])
+
+    def test_real_env_text_re_ignores_case(self):
+        """P3-2: `_REAL_ENV_TEXT_RE` carries IGNORECASE (matching the
+        file-side `_REAL_ENV_FILE_RE`) — lowercase env-var variants
+        (`%userprofile%` / `$home`) still trigger; Windows env vars are
+        case-insensitive."""
+        result = ct.analyze_side_effects(
+            files=["skills/software-project-governance/infra/x.py"],
+            acceptance="校验 %userprofile% 重定向目标")
+        self.assertTrue(result["touches_real_env"])
+        self.assertTrue(result["requires_r1"])
+
+    def test_negation_context_still_triggers_real_env(self):
+        """P2-2 behavioral lock — the wording detector is context-blind by
+        design: a negation/quote context (「禁止修改 %USERPROFILE%」) still
+        triggers as a real-env touch (advisory over-trigger, never a silent
+        miss). The limitation is documented in the `analyze_side_effects`
+        docstring; behavior is intentionally unchanged (FIX-273 P2-2)."""
+        result = ct.analyze_side_effects(
+            files=["skills/software-project-governance/infra/x.py"],
+            acceptance="禁止修改 %USERPROFILE% 下的任意文件")
+        self.assertTrue(result["touches_real_env"])
+        self.assertTrue(any(i.startswith("WARN") for i in result["issues"]))
+
 
 class TriageRecordTests(unittest.TestCase):
     """Machine triage record + evidence row + fail-closed intake."""
@@ -756,6 +846,33 @@ class ChangeTriageCliTests(unittest.TestCase):
             (self.gov / "change-triage" / "FIX-104.json")
             .read_text(encoding="utf-8"))
         self.assertTrue(record["analysis"]["side_effect"]["requires_r1"])
+
+    def test_cli_side_effects_declaration_end_to_end(self):
+        """P3-3 (FIX-273): `--side-effects` is passed end to end through the
+        CLI — the declared string lands in ``side_effect.declared`` (both the
+        JSON output and the machine record), the undeclared-WARN is
+        suppressed, but a real-env touch still carries the R1 review
+        condition (declaration duty ≠ R1 execution gate — FIX-271)."""
+        declared = "安装器写入 $DSH_HOME 下 profile；爆炸半径=用户 DSH 配置目录"
+        done = self._run_cli(
+            "--task", "FIX-105", "--title", "t", "--priority", "P2",
+            "--version", self.planned, "--depends-on", "FIX-100",
+            "--files", "skills/software-project-governance/infra/x.py",
+            "--reason", "r",
+            "--acceptance", "真实环境安装验证",
+            "--side-effects", declared,
+        )
+        self.assertEqual(done.returncode, 0, done.stderr + done.stdout)
+        payload = json.loads(done.stdout)
+        se = payload["analysis"]["side_effect"]
+        self.assertEqual(se["declared"], declared)
+        self.assertFalse(any("声明缺失" in i for i in se["issues"]))
+        self.assertTrue(se["touches_real_env"])
+        self.assertTrue(se["requires_r1"])
+        record = json.loads(
+            (self.gov / "change-triage" / "FIX-105.json")
+            .read_text(encoding="utf-8"))
+        self.assertEqual(record["analysis"]["side_effect"]["declared"], declared)
 
 
 if __name__ == "__main__":

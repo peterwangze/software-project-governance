@@ -57,7 +57,7 @@
 
 | # | 事实 | 来源 |
 |---|---|---|
-| F7 | 用户报告（15:46 直达 Coordinator）：上一会话 FEAT-010 派发的 Governance Developer 执行期间，用户全部 DSH 配置（`C:\Users\peter\.dsh\`）被删除、全部 sessions 被清空 | 用户报告，经 [E12] L11、[E5] L244 交叉入账；本报告无独立机器日志可复核（会话记录已丢失） |
+| F7 | 用户报告（15:46 直达 Coordinator）：上一会话 FEAT-010 派发的 Governance Developer 执行期间，用户全部 DSH 配置（C:\Users\peter\.dsh、反斜杠结尾路径）被删除、全部 sessions 被清空 | 用户报告，经 [E12] L11、[E5] L244 交叉入账；本报告无独立机器日志可复核（会话记录已丢失） |
 | F8 | 事故会话的执行记录随 sessions 清空丢失——事故窗口内 Developer 实际执行过哪些命令，无任何留存日志 | 边界事实（[E12] L11「事故会话记录随 session 清空丢失，破坏性命令待 RCA 定论」） |
 | F9 | FEAT-010 交付进度约 80%（交付物已产出、未提交、未过审）；无 EVD-FEAT-010、无 REVIEW-FEAT-010——任务远未闭环 | [E12] L20；[E11] 仅 L1454 一行 TRIAGE 记录；E1 中无 launch.py hunks（见 F12） |
 | F10 | 仓库无 FEAT-010 commit；工作树残留：`README.md`/`package.json`/`core/manifest.json` 已修改 + `cordis.patch.yml`/`presets/` 未跟踪 | Coordinator 交叉验证事实（C3）；E1（141 行 diff 恰只含上述 3 个已修改文件）+ E7/E8（未跟踪文件实体存在）与之吻合。注：commit 缺失无法由本 Analyst 用 git 复核（无 shell 权限），以 E1+E4+E12 佐证 |

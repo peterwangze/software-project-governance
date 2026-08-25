@@ -193,6 +193,16 @@ For full Chinese installation details and daily usage guidance, continue below.
 
 你不需要手动维护项目文档、不需要记住"上次做到哪了"、不需要提醒自己"该做 code review 了"。
 
+## 自动化能力分级声明（plugin-contract.md L114）
+
+本工作流对「自动/看护」的承诺按 [plugin-contract.md 三级划分](skills/software-project-governance/core/protocol/plugin-contract.md)；**禁止用笼统的「自动」一词同时指向 A 级与 C 级能力**（plugin-contract.md L114 禁令——README 和对外文档必须显式说明当前各项能力处于哪一级）：
+
+- **A 级（Agent Protocol Automation）**：行为协议自动化——agent 按协议纪律自动执行。本 README「一句话说明」「日常体验」中的自动承诺（「过程管理全自动」「自动记录证据」「自动检查 Gate」「工作流自动做的事」「记录更新、文件编辑、状态跟踪——全自动」等）与会话内 agent 动作（自动升级 bootstrap + 补全缺失结构、自动创建 `.governance/` 治理文件、自动标记阶段、自动检查质量等）均属本级——agent 按协议纪律自动推进并记录，**不是**系统后台触发。
+- **B 级（CLI-Enforced Automation）**：CLI/脚本强制——`verify_workflow.py check-governance`、`status` 与 commit hooks 在命令/commit 时点强制（= B 级）；「唯一命令」「5 分钟开始」「验证」中的 `/governance` 自动场景检测、自动诊断修复路由属本级（命令时点、事件驱动，非持续）。
+- **C 级（System Automation）**：后台系统自动触发、不依赖 agent 记忆——**未实现（roadmap）**（plugin-contract.md L102：MCP/headless runner 仅有协议样例，无可用实现）。0.76.0 起经会话 bootstrap 的 `check-governance --summary-only` 自动运行的「会话级」健康摘要不是 C 级后台 daemon。
+
+**当前治理自动级别 = A 级 + B 级；C 级为 roadmap（未实现）**。完整分级声明与对外宣示口径见 [`skills/software-project-governance/SKILL.md`](skills/software-project-governance/SKILL.md)「自动化能力分级声明」；对外宣示不得把 C 级未实现说成已实现。README 中其余「自动」表述（如「安装后入口在后续会话自动可用」、适配器边界说明中的「headless 自动化」「browser 自动化」「dsh 自动注入」）为宿主/适配器加载机制或能力边界说明，与治理自动化分级无关。
+
 ## 可选本地 Web 控制台
 
 当前主交互界面仍然是 CLI 或客户端：Claude Code、Codex、Gemini CLI、opencode 等。`web/` 是可选的本地伴随控制台，用来把常用本地配置、状态、证据和风险以更清晰的浏览器界面展示出来。

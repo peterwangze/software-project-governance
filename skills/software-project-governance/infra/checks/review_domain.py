@@ -88,6 +88,14 @@ _SHARED_NAMES = (
     "_task_priority_from_table_parts",
     "_parse_iso_date",
     "_evidence_task_type_index",
+    # FIX-278 F-1 (DESIGN R0): state-column terminal predicates for the live
+    # completed set — replaced the whole-row substring scan (BC-2 double
+    # divergence: "✅ 完成 (date)" cells missed / descriptions mentioning
+    # 已完成 marking ACTIVE tasks terminal). ``_status_is_completed_cell`` is
+    # the state-cell predicate (with active-marker exclusion); the row stream
+    # comes from task_priority.parse_task_dependencies (FIX-251-hardened:
+    # header tables AND the headerless 最近完成 window tables).
+    "_status_is_completed_cell",
 )
 
 
@@ -1506,6 +1514,19 @@ _UNRESOLVED_BLOCKERS_KEY_RE = re.compile(
     re.IGNORECASE,
 )
 
+# FIX-278 G2 (L-B legacy-format rule): the pre-normalization blocker-key
+# spelling ``unresolved_blocks=`` (missing the final ``ers``) is NOT a valid
+# machine token — detecting it lets the V5 rule distinguish format-migration
+# residue (audit-148 §3.1: router ARCH-002 "[V5] ... requires exactly
+# unresolved_blockers=0; got invalid" — 旧 review 格式 un迁移) from a real
+# unresolved-blocker value. The pattern never matches inside
+# ``unresolved_blockers`` (the ``(?![A-Za-z0-9_])`` lookahead rejects the
+# trailing ``ers``).
+_LEGACY_BLOCKERS_KEY_RE = re.compile(
+    r"(?<![A-Za-z0-9_])unresolved_blocks(?![A-Za-z0-9_])",
+    re.IGNORECASE,
+)
+
 _REVIEW_ID_RE = re.compile(r"^REVIEW-([A-Z]+-\d+)(?:-R(\d+))?$")
 _LEGACY_REVIEW_FILE_RE = re.compile(r"^review-([A-Z]+-\d+)-v\d+\.md$", re.IGNORECASE)
 
@@ -1589,6 +1610,83 @@ def _extract_review_conclusion_from_text(text):
     return normalized.pop() if len(normalized) == 1 else "UNKNOWN"
 
 
+def _legacy_blocker_keys(fields):
+    """Collect legacy-format ``unresolved_blocks=`` key spellings (L-B rule).
+
+    Returns a de-duplicated list of the matched legacy key texts; empty when
+    the record carries the canonical ``unresolved_blockers`` spelling (or
+    nothing at all).
+    """
+    keys = []
+    for raw_field in fields or []:
+        field = str(raw_field or "")
+        for key_match in _LEGACY_BLOCKERS_KEY_RE.finditer(field):
+            token = field[key_match.start():key_match.end()]
+            if token not in keys:
+                keys.append(token)
+    return keys
+
+
+def _missing_rounds_are_leading(missing, rounds):
+    """FIX-278 G2 (L-A rule): True when the missing rounds form the leading
+    prefix ``{0..k-1}`` — the chain starts at R{k} (k>=1) without R0.
+
+    That shape is the signature of pre-governance review data (a review chain
+    begun after the task closed — audit-148 §3.1 ARCH-001/DEV-002), whereas a
+    mid-chain hole (R0 exists) is a real record-keeping breach.
+    """
+    if not missing:
+        return False
+    present = set(rounds.keys())
+    if not present or min(present) == 0:
+        return False
+    return missing == set(range(0, min(present)))
+
+
+def _legacy_blocker_facts(fields):
+    """Parse legacy-format ``unresolved_blocks=`` key facts (L-B rule).
+
+    Returns ``{"keys": [...], "values": [...], "invalid": [...]}``:
+      ``keys``    — de-duplicated legacy key texts;
+      ``values``  — parsed integer values of ``unresolved_blocks=<n>``;
+      ``invalid`` — legacy keys whose value is missing or non-numeric
+                    (fail-closed: a legacy value that cannot be proven to be
+                    zero must NEVER be treated as an empty blocker).
+    The canonical ``unresolved_blockers`` spelling is never matched (the
+    ``(?![A-Za-z0-9_])`` lookahead rejects the trailing ``ers``).
+    """
+    keys = []
+    values = []
+    invalid = []
+    for raw_field in fields or []:
+        field = str(raw_field or "")
+        for key_match in _LEGACY_BLOCKERS_KEY_RE.finditer(field):
+            token = field[key_match.start():key_match.end()]
+            if token not in keys:
+                keys.append(token)
+            tail = field[key_match.end():]
+            value_match = re.match(r"\s*=\s*([^\s,;|`*]+)", tail)
+            if not value_match:
+                invalid.append(token)
+                continue
+            raw_value = value_match.group(1)
+            if not re.fullmatch(r"\d+", raw_value):
+                invalid.append("{0}={1}".format(token, raw_value))
+                continue
+            values.append(int(raw_value))
+    return {"keys": keys, "values": values, "invalid": invalid}
+
+
+def _legacy_blocker_keys(fields):
+    """Collect legacy-format ``unresolved_blocks=`` key spellings (L-B rule).
+
+    Returns a de-duplicated list of the matched legacy key texts; empty when
+    the record carries the canonical ``unresolved_blockers`` spelling (or
+    nothing at all).
+    """
+    return _legacy_blocker_facts(fields)["keys"]
+
+
 def _parse_unresolved_blockers_fields(fields):
     """Parse structured ``unresolved_blockers=<count>`` tokens.
 
@@ -1596,6 +1694,13 @@ def _parse_unresolved_blockers_fields(fields):
     parser deliberately does not infer blocker state from prose such as
     ``blocking finding``.  Duplicate equal values are accepted; malformed
     tokens or differing duplicate values are fail-closed.
+
+    FIX-278 G2 (L-B): legacy ``unresolved_blocks=`` keys are annotated in the
+    result as ``legacy_keys`` + parsed ``legacy_values`` +
+    ``legacy_invalid_tokens`` (never treated as valid canonical tokens) so the
+    V5 rule can downgrade ONLY provably-zero old-format records to WARN
+    without weakening the fail-closed default for current records (a legacy
+    key carrying a nonzero/unparseable value stays a real blocker).
     """
     _resolve_shared()
     values = []
@@ -1616,12 +1721,17 @@ def _parse_unresolved_blockers_fields(fields):
                 continue
             values.append(int(raw_value))
 
+    legacy_facts = _legacy_blocker_facts(fields or [])
+
     if invalid_tokens:
         return {
             "status": "invalid",
             "value": None,
             "values": values,
             "invalid_tokens": invalid_tokens,
+            "legacy_keys": legacy_facts["keys"],
+            "legacy_values": legacy_facts["values"],
+            "legacy_invalid_tokens": legacy_facts["invalid"],
         }
     if not values:
         return {
@@ -1629,6 +1739,9 @@ def _parse_unresolved_blockers_fields(fields):
             "value": None,
             "values": [],
             "invalid_tokens": [],
+            "legacy_keys": legacy_facts["keys"],
+            "legacy_values": legacy_facts["values"],
+            "legacy_invalid_tokens": legacy_facts["invalid"],
         }
     if len(set(values)) != 1:
         return {
@@ -1636,30 +1749,79 @@ def _parse_unresolved_blockers_fields(fields):
             "value": None,
             "values": values,
             "invalid_tokens": [],
+            "legacy_keys": legacy_facts["keys"],
+            "legacy_values": legacy_facts["values"],
+            "legacy_invalid_tokens": legacy_facts["invalid"],
         }
     return {
         "status": "valid",
         "value": values[0],
         "values": values,
         "invalid_tokens": [],
+        "legacy_keys": legacy_facts["keys"],
+        "legacy_values": legacy_facts["values"],
+        "legacy_invalid_tokens": legacy_facts["invalid"],
     }
 
 
+def _merge_missing_with_valid(missing_ev, other):
+    """FIX-278 F-2 (DESIGN R0): merge a token-less (missing/legacy) side with
+    a CANONICAL side — the canonical value always wins (fail-closed: a real
+    ``unresolved_blockers=<n>`` token must never be discarded by a legacy
+    ``unresolved_blocks=`` annotation from the other source). The legacy
+    facts stay in the merged evidence (transparency for L-B detection), but
+    they can never override ``status``/``value``.
+
+    Returns a parser-shaped dict (never raises).
+    """
+    fields = []
+    for value in other.get("values", []):
+        fields.append("unresolved_blockers={0}".format(value))
+    fields.extend(other.get("invalid_tokens", []))
+    for value in missing_ev.get("legacy_values", []):
+        fields.append("unresolved_blocks={0}".format(value))
+    fields.extend(missing_ev.get("legacy_invalid_tokens", []))
+    return _parse_unresolved_blockers_fields(fields)
+
+
 def _merge_unresolved_blocker_evidence(left, right):
-    """Merge blocker facts from duplicate evidence for the same round."""
+    """Merge blocker facts from duplicate evidence for the same round.
+
+    FIX-278 F-2 (DESIGN R0) priority: ANY valid canonical token wins over a
+    legacy-only (missing) side — duplicate evidence for the same round is the
+    LIVE norm (evidence-log row + review-{id}-R{n}.md file both append an
+    entry, one written with the canonical token, the other maybe with the old
+    ``unresolved_blocks=`` spelling), so a one-sided return that dropped the
+    canonical value masked real blockers (nonzero) and wrongly downgraded
+    records that DID carry the machine token (0). Only when NEITHER side has a
+    canonical token does the legacy annotation survive for L-B detection.
+    """
     _resolve_shared()
     left = left or _parse_unresolved_blockers_fields([])
     right = right or _parse_unresolved_blockers_fields([])
     if left["status"] == "missing":
-        return right
+        if right["status"] == "missing":
+            # Both token-less: keep the side carrying the legacy signature.
+            if right.get("legacy_keys") or not left.get("legacy_keys"):
+                return right
+            return left
+        return _merge_missing_with_valid(left, right)
     if right["status"] == "missing":
-        return left
+        return _merge_missing_with_valid(right, left)
     fields = [f"unresolved_blockers={value}" for value in left.get("values", [])]
     fields.extend(
         f"unresolved_blockers={value}" for value in right.get("values", [])
     )
     fields.extend(left.get("invalid_tokens", []))
     fields.extend(right.get("invalid_tokens", []))
+    # FIX-278 G2 (L-B): retain legacy-format facts through the merge so a
+    # duplicate-merge never loses the old-format signature or its value.
+    for value in left.get("legacy_values", []):
+        fields.append("unresolved_blocks={0}".format(value))
+    for value in right.get("legacy_values", []):
+        fields.append("unresolved_blocks={0}".format(value))
+    fields.extend(left.get("legacy_invalid_tokens", []))
+    fields.extend(right.get("legacy_invalid_tokens", []))
     return _parse_unresolved_blockers_fields(fields)
 
 
@@ -1905,6 +2067,33 @@ def check_review_closure(review_sequence=None, plan_tracker_completed=None,
                               f"evidence pre-dates FIX-173 normalization {ev_date}); downgraded",
                 })
                 continue
+            # FIX-278 G2 (L-A legacy rule): LEADING round gap on a closed
+            # task. A chain that starts at R{k} (k>=1, R0 never recorded)
+            # whose task is in a terminal/completed state is pre-governance
+            # review data — the审计-148 §3.1 router evidence (ARCH-001 /
+            # DEV-002 "missing R[0]" — 接入前旧任务无旧轮 review, a review
+            # chain that began AFTER the task closed). Downgrade → WARN.
+            # Fail-closed boundary: a MID-CHAIN gap (R0 present, later round
+            # missing) or an ACTIVE (non-completed) task stays a FAIL — both
+            # indicate a real record-keeping breach in current work.
+            # NOTE (P3-3, documented choice): the WARN + continue ends this
+            # task's evaluation here — a pre-governance chain is NOT
+            # re-adjudicated under V1/V3/V5 (its terminal may be a legacy
+            # non-REMOTE state that would produce further legacy-only
+            # findings; the exemption is intentionally single-verdict per
+            # task). A current-work breach is never skipped: it reaches the
+            # L-A downgrade only via the completed-state gate.
+            if _missing_rounds_are_leading(missing_rounds, rounds) \
+                    and task_id in completed:
+                result["warnings"].append({
+                    "rule": "V2",
+                    "task_id": task_id,
+                    "reason": f"round continuity broken — missing R{sorted(missing_rounds)} "
+                              f"— legacy leading round gap: chain starts at R{min(rounds)} "
+                              f"(R0 predates the review record of a closed task, audit-148 "
+                              f"§3.1 ARCH-001/DEV-002 pattern); downgraded",
+                })
+                continue
             result["violations"].append({
                 "rule": "V2",
                 "task_id": task_id,
@@ -2042,6 +2231,38 @@ def check_review_closure(review_sequence=None, plan_tracker_completed=None,
                               f"conclusion ({ev_date}); downgraded",
                 })
                 continue
+            # FIX-278 G2 (L-B legacy rule): the record carries the legacy
+            # key spelling ``unresolved_blocks=`` ON A TERMINAL (completed)
+            # task — old review format cannot be rewritten post-hoc
+            # (audit-148 §3.1 router ARCH-002 "[V5] ... requires exactly
+            # unresolved_blockers=0; got invalid" — 旧 review 格式 un迁移).
+            # Downgrade → WARN ONLY when the legacy value is provably empty
+            # (all values == 0, no unparseable/invalid legacy token) AND the
+            # canonical parse produced no malformed token (status "missing"
+            # — a canonical-invalid token is never masked by the legacy
+            # signature). Fail-closed boundary: a legacy nonzero value
+            # (unresolved_blocks=2 — a real unresolved blocker), an
+            # unparseable legacy value, a canonical-invalid token, or an
+            # ACTIVE task stays a FAIL.
+            legacy_format = bool(blocker_evidence.get("legacy_keys"))
+            legacy_nonzero = any(
+                int(v) > 0 for v in blocker_evidence.get("legacy_values", []))
+            legacy_unparsed = bool(
+                blocker_evidence.get("legacy_invalid_tokens"))
+            if (blocker_status == "missing" and legacy_format
+                    and not legacy_nonzero and not legacy_unparsed
+                    and task_id in completed):
+                result["warnings"].append({
+                    "rule": "V5",
+                    "task_id": task_id,
+                    "reason": f"R{max_round}=APPROVED_WITH_NOTES carries the "
+                              f"legacy-format unresolved_blocks= key (value 0) "
+                              f"on a closed task — old review format "
+                              f"un-migrated, no machine unresolved_blockers=0 "
+                              f"token (audit-148 §3.1 ARCH-002 pattern); "
+                              f"downgraded",
+                })
+                continue
             if blocker_status != "valid" or blocker_value != 0:
                 detail = blocker_status
                 if blocker_status == "valid":
@@ -2118,6 +2339,43 @@ def _task_routing_exempt(task_id, routing_table):
     return False
 
 
+def _live_completed_task_ids():
+    """FIX-278 F-1 (DESIGN R0): terminal-state set over the STATUS COLUMN.
+
+    State-column semantic predicate (``_status_is_completed_cell``: ``✅`` /
+    ``已完成`` / bare ``完成(…)`` completion forms, with explicit active-marker
+    exclusion) over the task rows — NEVER a whole-row substring scan: a
+    description mentioning 已完成 must not mark an ACTIVE task terminal (BC-2:
+    real current-work gap must stay FAIL), and a ``✅ 完成 (date)`` status cell
+    must mark a completed task (its legacy V2/V5 形态 must be eligible for the
+    L-A/L-B WARN downgrade).
+
+    Row source: ``task_priority.parse_task_dependencies`` (FIX-251-hardened)
+    covers BOTH header-indexed priority tables and the headerless
+    ``### 最近完成（本会话提交窗口）`` task tables (the live plan-tracker's
+    second task surface — ``parse_task_table_rows`` alone misses those rows,
+    which would silently keep legacy FAILs on completed window-table tasks).
+
+    Parse failure → empty set (fail-safe: nothing is downgraded; a fragile
+    tracker keeps legacy findings as FAIL rather than masking them).
+    """
+    _resolve_shared()
+    if not SAMPLE_PATH.is_file():
+        return set()
+    try:
+        from task_priority import parse_task_dependencies  # peer, stdlib-only
+        deps = parse_task_dependencies(SAMPLE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return set()
+    done = set()
+    for dep in deps or []:
+        task_id = str(getattr(dep, "task_id", "") or "").strip()
+        status = str(getattr(dep, "status", "") or "")
+        if task_id and _status_is_completed_cell(status):
+            done.add(task_id)
+    return done
+
+
 def _collect_live_review_sequences():
     """Scan evidence-log + .governance/review-*.md for review sequences.
 
@@ -2128,10 +2386,14 @@ def _collect_live_review_sequences():
     legacy_files = []
     completed = set()
 
-    # Plan-tracker: collect completed task ids.
+    # Plan-tracker: collect completed task ids — STATE-COLUMN terminal
+    # predicate (F-1: ``_status_is_completed_cell`` — ✅/已完成/完成(… forms
+    # with active-marker exclusion). The old whole-row substring scan both
+    # missed "✅ 完成 (date)" status cells and mis-marked rows whose
+    # DESCRIPTION mentions 已完成 — the divergence FIX-278 G2 must not carry.
     if SAMPLE_PATH.is_file():
         try:
-            completed = parse_completed_task_ids()
+            completed = _live_completed_task_ids()
         except Exception:
             completed = set()
 

@@ -697,5 +697,82 @@ class Check37ContractTests(unittest.TestCase):
         self.assertEqual(idx, sorted(idx), "Check 35/36/37 out of order")
 
 
+# ── FIX-278 G2 (L-C): released-history exemption in candidate mode ─────
+
+class Check37LegacyReleasedHistoryTests(unittest.TestCase):
+    """FIX-278 G2 (L-C): a published tag whose roadmap version row names a
+    terminal release state is a HISTORY FACT — audit-148 §3.1 router v0.2.1
+    tag exists while G4 pending (接入前发布旁路). In health-side (candidate)
+    mode it is WARN-disclosed (DEC-153 ② semantics), never a retroactive
+    FAIL; an UNRELEASED roadmap row keeps candidate semantics (FAIL)."""
+
+    _ROUTER_ROADMAP = (
+        "## 版本规划\n\n"
+        "| 版本 | 状态 | 预计日期 |\n"
+        "| --- | --- | --- |\n"
+        "| **v0.2.1** | **已发布（2026-08-22，REL-001）** | 2026-08-22 |\n"
+        "| **v0.3.0** | **规划中** | 待定 |\n"
+    )
+    _ROUTER_ROADMAP_UNRELEASED = _ROUTER_ROADMAP.replace(
+        "已发布（2026-08-22，REL-001）", "规划中（DEC-020 定稿）")
+
+    def _run_with_roadmap(self, roadmap, tag="v0.2.1"):
+        with tempfile.TemporaryDirectory() as td:
+            tracker = Path(td) / "plan-tracker.md"
+            tracker.write_text(roadmap, encoding="utf-8")
+            with mock.patch.object(vw, "SAMPLE_PATH", tracker):
+                return vw.check_gate_sequence_for_release(
+                    gates=_router_lightweight_gates(),
+                    published_tags=[_tag(tag, "2026-08-22")])
+
+    def test_released_roadmap_version_exempts_g_s2(self):
+        """v0.2.1 已发布（router 实况）+ G4 pending → WARN 披露（L-C 豁免），
+        released_history_exempt=True，零违规。"""
+        r = self._run_with_roadmap(self._ROUTER_ROADMAP)
+        self.assertEqual(r["verdict"], "WARN")
+        self.assertEqual(r["violations"], [])
+        self.assertEqual([w["rule"] for w in r["warnings"]], ["G-s2"])
+        self.assertTrue(r["stats"]["released_history_exempt"])
+        self.assertIn("historical", r["reason"])
+
+    def test_unreleased_roadmap_version_stays_fail(self):
+        """v0.2.1 规划中 → 保持 candidate FAIL（L-C fail-closed 边界）。"""
+        r = self._run_with_roadmap(self._ROUTER_ROADMAP_UNRELEASED)
+        self.assertEqual(r["verdict"], "FAIL")
+        self.assertEqual(r["violations"][0]["rule"], "G-s2")
+        self.assertFalse(r["stats"]["released_history_exempt"])
+
+    def test_bare_roadmap_row_still_matches_v_prefix_tag(self):
+        """roadmap 行不带 v 前缀（0.2.1）仍匹配 v 前缀 tag（v0.2.1）——
+        编辑器风格差异不改变 History 判定。"""
+        roadmap = self._ROUTER_ROADMAP.replace("**v0.2.1**", "**0.2.1**")
+        r = self._run_with_roadmap(roadmap)
+        self.assertEqual(r["verdict"], "WARN")
+        self.assertTrue(r["stats"]["released_history_exempt"])
+
+    def test_lc_probe_is_guarded_not_except_swallowed(self):
+        """P2-2（源守卫回归）：``released_history_version(latest["tag"])`` 必须
+        置于显式 ``latest is not None`` 守卫之下，且不得用 try/except 包裹
+        （该函数自身 Never-raises——若调用时抛错，那一定是真实 bug，不可被
+        异常吞没；latest=None 路径是普通 ``is not None`` 防护，P3-5 冗余
+        防御一并消除）。行为侧：无 tag → verdict PASS 且 released_history_exempt
+        =False。"""
+        src = (_INFRA_DIR / "checks" / "gate_domain.py").read_text(
+            encoding="utf-8")
+        call_idx = src.index("released_history_version(latest")
+        window = src[max(0, call_idx - 300):call_idx + 40]
+        self.assertIn("if latest is not None:", window,
+                      "probe must be guarded by latest-is-not-None")
+        self.assertIn("history_exempt = False", window)
+        self.assertTrue(
+            window.rindex("if latest is not None:") < call_idx,
+            "guard must precede the dereference")
+        # Behavior: no tag → candidate PASS, no exemption.
+        r = vw.check_gate_sequence_for_release(
+            gates=_tv_standard_gates(), published_tags=[])
+        self.assertEqual(r["verdict"], "PASS")
+        self.assertEqual(r["stats"]["released_history_exempt"], False)
+
+
 if __name__ == "__main__":
     unittest.main()

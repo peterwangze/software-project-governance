@@ -14884,7 +14884,16 @@ class CheckReviewClosureTests(unittest.TestCase):
                      patch.object(vw, "SAMPLE_PATH", sample), \
                      patch.object(vw, "EVIDENCE_PATH", evidence), \
                      patch.object(vw, "GOVERNANCE_DIR", gov), \
-                     patch.object(vw, "parse_completed_task_ids", return_value={task_id}):
+                     patch("task_priority.parse_task_dependencies",
+                           return_value=[SimpleNamespace(
+                               task_id=task_id, status="✅ 完成",
+                               priority="P1", dependencies=(),
+                               cross_entity_refs=(), target_version="")]):
+                    # FIX-278 F-1: the live completed set now comes from the
+                    # state-column predicate (_live_completed_task_ids —
+                    # task_priority row stream + _status_is_completed_cell),
+                    # so the injection point is the row stream, not the old
+                    # whole-row substring scan (parse_completed_task_ids).
                     sequences, completed = vw._collect_live_review_sequences()
                     conclusion = sequences[task_id]["rounds"][0]["conclusion"]
                     self.assertEqual(conclusion, expected)

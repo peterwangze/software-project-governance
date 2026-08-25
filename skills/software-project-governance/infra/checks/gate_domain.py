@@ -437,6 +437,25 @@ def check_gate_sequence_for_release(gates=None, published_tags=None,
         result["stats"]["latest_tag"] = latest["tag"]
         result["stats"]["latest_tag_date"] = latest["date"]
 
+    # FIX-278 G2 (L-C legacy rule): a published tag whose version row in the
+    # roadmap names a terminal release state (已发布/已撤回/失效/不可信 —
+    # BR-4 released_history_version) is a HISTORY FACT, not a current-work
+    # bypass: audit-148 §3.1 — router v0.2.1 tag exists while G4 is pending
+    # (接入前发布旁路: the release predates the governance onboarding). In
+    # health-side (candidate) mode the finding is downgraded to the same
+    # released-mode WARN disclosure (DEC-153 ②) instead of a retroactive
+    # FAIL. Fail-closed boundary: an UNRELEASED roadmap version row
+    # (规划中/进行中) keeps candidate semantics (FAIL); ``released_history_version``
+    # is Never-raises and degrades to False on any parse failure (so the
+    # probe needs NO try/except — the latest-none path MUST be a plain
+    # ``is not None`` guard, never an except-swallowed dereference: an
+    # exception would otherwise mask a real bug, P2-2).
+    history_exempt = False
+    if latest is not None:
+        history_exempt = released_history_version(latest["tag"])
+    result["stats"]["released_history_exempt"] = history_exempt
+    effective_mode = "released" if (history_exempt and mode == "candidate") else mode
+
     # ── Judgement ──
     if latest is None:
         # No published tag detectable (git unavailable / no semver tag).
@@ -486,7 +505,7 @@ def check_gate_sequence_for_release(gates=None, published_tags=None,
                 "(G-s2 conservative: ordering unprovable)".format(
                     latest["tag"], pending_names)),
         }
-        if mode == "released":
+        if effective_mode == "released":
             finding["reason"] += (
                 " [released mode: history disclosure only, no retroactive "
                 "FAIL — DEC-153 ②]")
@@ -545,7 +564,7 @@ def check_gate_sequence_for_release(gates=None, published_tags=None,
                     "time".format(latest["tag"], latest["date"] or "n/a",
                                    names)),
             }
-            if mode == "released":
+            if effective_mode == "released":
                 finding["reason"] += (
                     " [released mode: history disclosure only, no "
                     "retroactive FAIL — DEC-153 ②]")
@@ -589,25 +608,51 @@ def _date_text(value):
 def released_history_version(version):
     """BR-4: True iff ``version`` is an already-published/withdrawn history.
 
-    Parses the host plan-tracker roadmap (reusing change_triage's proven
-    header-driven ``parse_version_chain`` — FIX-248 hardening applies) and
-    returns True when the version row's status names a terminal release
-    state (已发布 / 已撤回 / 失效 / 不可信). Never raises — any parse
-    failure degrades to False (the caller keeps candidate semantics, which
-    is the safe status-quo default).
+    Parses the host plan-tracker roadmap and returns True when the version
+    row's status names a terminal release state (已发布 / 已撤回 / 失效 /
+    不可信). Never raises — any parse failure degrades to False (the caller
+    keeps candidate semantics, which is the safe status-quo default).
+
+    FIX-278 G2 (L-C): the scan tolerates the ``v`` prefix on BOTH sides (a
+    git tag is ``v0.2.1`` while roadmap rows may be ``v0.2.1`` or ``0.2.1``) —
+    audit-148 §3.1: router's roadmap row is ``**v0.2.1** | **已发布…**``. The
+    dedicated scan is deliberately separate from ``change_triage.
+    parse_version_chain`` (its shared consumers pin the bare-``\\d+`` shape;
+    v-prefixed rows must not change the priority/version analysis).
     """
     if not version or not isinstance(version, str):
         return False
+    normalized = version.strip()
+    if normalized[:1].lower() == "v":
+        normalized = normalized[1:]
     try:
         _resolve_shared()
-        from change_triage import parse_version_chain  # peer, stdlib-only
         if not SAMPLE_PATH.is_file():
             return False
         plan = SAMPLE_PATH.read_text(encoding="utf-8", errors="replace")
-        for row in parse_version_chain(plan):
-            if row.get("version") == version:
-                status = str(row.get("status") or "")
-                return any(marker in status
+        header_idx = {}
+        for line in plan.splitlines():
+            line = line.strip()
+            if not line.startswith("|") or "---" in line:
+                continue
+            cells = [c.strip() for c in line.strip("|").split("|")]
+            if "版本" in cells[0] and "状态" in cells:
+                header_idx = {
+                    name: i for i, name in enumerate(cells)
+                    if name in ("版本", "状态")
+                }
+                continue
+            if not header_idx or len(cells) <= max(header_idx.values()):
+                continue
+            raw_version = re.sub(r"[*`\s]", "", cells[header_idx["版本"]])
+            raw_status = re.sub(r"[*`]", "", cells[header_idx["状态"]]).strip()
+            if not re.match(r"(?:v)?\d+\.\d+", raw_version, re.IGNORECASE):
+                break
+            row_version = raw_version
+            if row_version[:1].lower() == "v":
+                row_version = row_version[1:]
+            if row_version == normalized:
+                return any(marker in raw_status
                            for marker in _RELEASED_HISTORY_STATUS_MARKERS)
     except Exception:
         # Fail-safe: candidate stays the default when the roadmap cannot be

@@ -184,6 +184,7 @@
 - 决策记录：`.governance/decision-log.md`
 - 风险记录：`.governance/risk-log.md`
 - 验证命令：`python <plugin_home>/infra/verify_workflow.py`（`<plugin_home>` 见上方 bootstrap 第一动作）
+- 治理文件读取编码（FIX-278 G4/F）：pwsh 读取 `.governance` 治理文件 MUST 显式 UTF-8——`Get-Content -Encoding UTF8`（或 `[System.IO.File]::ReadAllText($p, [System.Text.Encoding]::UTF8)`）；禁止裸 `Get-Content`——Windows 默认 ANSI/GBK 解码会产生 mojibake（AUDIT-147 D6 / AUDIT-148 §4.3 乱码实证）
 - 完整治理交互：`/governance`（状态展示/会话恢复/升级/异常诊断/初始化）
 
 ## 项目质量原则（P-v1 — DEC-150）

@@ -67,7 +67,7 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
   - `Governance: unavailable` → `check-governance` 不可运行（verify_workflow.py 未定位）→ 继续 bootstrap 不阻断（fail-safe）。
   - `Governance: timed out` → 运行超时（>60s）→ 软超时取消该步，继续会话。
   - `Governance: N issues (parse degraded)` → 摘要解析降级（输出格式漂移 fail-safe），不报错。
-- **详略分档**（`--level lightweight|standard|strict`，缺省 standard）：轻量=汇总+首个 FAIL；标准=汇总+首个 FAIL/WARN；严格=汇总+全部 FAIL/WARN。三档**跑同一个** `--summary-only`，仅输出详略不同，**不按 profile 拆逻辑**。
+- **详略分档**（`--level lightweight|standard|strict`，缺省 standard）：轻量=汇总+首个 FAIL；标准=汇总+首个 FAIL/WARN+最多 5 条明细（FAIL 优先，每条截断 130 字符）+「共 N issues，--level strict 查看全部」指引行（FIX-278 G1 top-N——消除 103 字符摘要触发 ~25KB 追查链的放大（audit-148 §2.1））；严格=汇总+全部 FAIL/WARN。三档**跑同一个** `--summary-only`，仅输出详略不同，**不按 profile 拆逻辑**。
 
 ### 关键行为契约（MUST——注入面最小契约集，FIX-253/REQ-112；完整规则见 references/behavior-protocol.md M7.4 / M7.7）
 
@@ -294,6 +294,7 @@ python skills/software-project-governance/infra/verify_workflow.py execution-pac
 - `infra/verify_workflow.py`——治理健康检查
 - `infra/hooks/`——Git 提交治理约束（pre-commit + prepare-commit-msg + commit-msg + post-commit）
 - `.git/hooks/`——Git hooks 安装目标（从 infra/hooks/ 复制）
+- **治理文件读取编码（FIX-278 G4/F）**：pwsh 读取 `.governance` 治理文件 MUST 显式 UTF-8——`Get-Content -Encoding UTF8`（或 `[System.IO.File]::ReadAllText($p, [System.Text.Encoding]::UTF8)`）；禁止裸 `Get-Content`——Windows 默认 ANSI/GBK 解码产生 mojibake（AUDIT-147 D6 / AUDIT-148 §4.3；router 实证 `-Tail 30` 无 `-Encoding` 读 evidence-log → 22,311 字符大面积乱码）
 
 ## 适配层（平台投影）
 

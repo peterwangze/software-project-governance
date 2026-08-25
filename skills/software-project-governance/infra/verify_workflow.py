@@ -13871,10 +13871,13 @@ def _evidence_task_type_index():
 def cmd_check_governance(args):
     """Run governance health checks: evidence completeness, risk staleness, gate consistency.
 
-    REQ-145.7: with ``--summary-only``, the full engine is run under a stdout
-    capture and only the ``Governance: {N} issues`` summary (+ first FAIL/WARN)
-    is printed. The default (no ``--summary-only``) path is byte-identical to the
-    pre-existing output — the engine body lives in ``_run_full_engine_checks``.
+    REQ-145.7/FIX-278 G1: with ``--summary-only``, the full engine is run under
+    a stdout capture and only the ``Governance: {N} issues`` summary (+ first
+    FAIL/WARN, plus --level standard's top-5 bounded detail lines and the
+    ``共 N issues，--level strict 查看全部`` guidance — lightweight=summary+
+    first FAIL; strict=all FAIL/WARN) is printed. The default (no
+    ``--summary-only``) path is byte-identical to the pre-existing output —
+    the engine body lives in ``_run_full_engine_checks``.
     """
     # Ensure UTF-8 stdout to handle Chinese characters from .md files (Windows GBK workaround)
     try:
@@ -15623,12 +15626,17 @@ def _aggregate_check_summary(stdout_text):
         if hm:
             current_check = hm.group(1).strip()
             continue
-        for token in ("[FAIL]", "[WARN]", "[ADVISORY]"):
+        # FIX-278 G2/P2-4: [BLOCKING]/[ERROR] severity markers (M5 structural
+        # gaps, runtime-readiness errors — counted into all_issues by the
+        # engine) are FAIL-class tokens; leaving them out would render the
+        # standard-summary detail section empty for M5-only inputs and push
+        # the model back into a full-check chase (the G1 behavior gap).
+        for token in ("[FAIL]", "[BLOCKING]", "[ERROR]", "[WARN]", "[ADVISORY]"):
             idx = line.find(token)
             if idx >= 0:
                 detail = line[idx + len(token):].strip()
                 label = f"{current_check}: {detail}" if current_check else detail
-                if token == "[FAIL]":
+                if token in ("[FAIL]", "[BLOCKING]", "[ERROR]"):
                     fail_items.append(label)
                 elif token == "[WARN]":
                     warn_items.append(label)
@@ -15647,15 +15655,55 @@ def _aggregate_check_summary(stdout_text):
     }
 
 
+def _summary_detail_cap():
+    """FIX-278 G1: max issue detail lines in the default summary output."""
+    return 5
+
+
+def _summary_detail_char_limit():
+    """FIX-278 G1: per-line truncation budget for summary detail lines.
+
+    130 chars × ≤5 lines ≲ 700 chars — the G1 output budget (audit-148 §2.1:
+    the detail section must stay well under the ~1.7KB full-check output so a
+    model never re-runs the whole engine to understand the summary).
+    """
+    return 130
+
+
+def _truncate_summary_detail(label):
+    """Bound one summary detail line (G1: header + ≤160 chars, ellipsis)."""
+    limit = _summary_detail_char_limit()
+    if len(label) <= limit:
+        return label
+    return label[: max(1, limit - 1)] + "…"
+
+
+def _ordered_detail_items(summary):
+    """Return [(severity, label), ...]: FAIL items first, then WARN — capped.
+
+    FIX-278 G1: the default summary shows the first FAIL/WARN plus at most
+    ``_summary_detail_cap()`` ordered details (audit-148 §2.1: the 103-char
+    summary line alone triggered a 25KB model chase chain; giving the top
+    items removes the need for the full check re-run).
+    """
+    items = []
+    for item in summary.get("fail_items") or []:
+        items.append(("FAIL", item))
+    for item in summary.get("warn_items") or []:
+        items.append(("WARN", item))
+    return items[:_summary_detail_cap()]
+
+
 def _print_check_summary(summary, args):
     """Render the ``--summary-only`` output (REQ-145.7 output contract).
 
     Summary line ``Governance: {N} issues`` (or ``Governance: [PASS]`` when
     N==0) followed by the first FAIL/WARN detail line; the detail granularity
     follows ``--level`` (lightweight → summary + first FAIL; standard →
-    summary + first FAIL else first WARN; strict → summary + all FAIL/WARN).
-    Advisory (``fatal_on_error=false``) issues are not counted and are only
-    annotated when they are the first issue surfaced.
+    summary + first FAIL/WARN + top-5 ordered details + ``共 N issues，
+    --level strict 查看全部`` guidance line — FIX-278 G1; strict → summary +
+    all FAIL/WARN). Advisory (``fatal_on_error=false``) issues are not counted
+    and are only annotated when they are the first issue surfaced.
     """
     count = summary.get("issues_count") or 0
     if summary.get("parse_degraded"):
@@ -15675,11 +15723,10 @@ def _print_check_summary(summary, args):
                 print(f"[FAIL] {item}")
             for item in summary["warn_items"]:
                 print(f"[WARN] {item}")
-        else:  # standard
-            if summary["first_fail"]:
-                print(f"[FAIL] {summary['first_fail']}")
-            elif summary["first_warn"]:
-                print(f"[WARN] {summary['first_warn']}")
+        else:  # standard — FIX-278 G1 top-N contract
+            for sev, item in _ordered_detail_items(summary):
+                print(f"[{sev}] {_truncate_summary_detail(item)}")
+            print(f"共 {count} issues，--level strict 查看全部")
     if not summary["fail_items"] and not summary["warn_items"] and summary["advisory"]:
         print(f"[ADVISORY] {summary['advisory']}")
 
@@ -21018,6 +21065,81 @@ def cmd_next_candidates(args):
     print(json.dumps(report, ensure_ascii=False, indent=2))
 
 
+def _triage_write_structure_guard(evidence_path, record_path, record_id=None):
+    """FIX-278 G3: validate the artifacts ``run_triage`` just wrote.
+
+    AUDIT-148 §4.2 (Check 14 无写时检测): reasoning-level 的 MAINT-017 入账后
+    plan-tracker 结构在「无复核窗口」静默恶化（17:07 [PASS] → 08-26 17 issues）
+    ——写入（机器入账）后没有结构合法性自动复核。本 guard 在
+    ``change-triage`` CLI 的机器写入完成时点触发（等效 write-guard）：
+
+      1. the written evidence-log row (``record_id`` — ``TRIAGE-{task}``,
+         appended by ``run_triage`` at the END of the evidence-log) must match
+         the column count the evidence-log already establishes (the Check 14
+         ``evidence_col_mismatch`` rule, scoped to the written file). The
+         guard matches BY ROW ID — never "the first TRIAGE row" — because the
+         written row is the LAST one (append semantics, change_triage.py), so
+         scanning the first TRIAGE row would both miss a broken fresh row
+         (false-pass) and block a legal intake behind an old-format first row
+         (false-fail, violating the scope contract below);
+      2. the written triage record JSON must parse.
+
+    Scope (write guard, not repo guard): ONLY the written artifacts are
+    judged — a pre-existing structural issue elsewhere in the governance dir
+    never blocks intake (fail-safe to the writer's own artifacts only).
+
+    Returns a list of issue strings; empty = structurally sound. Never raises.
+    """
+    issues = []
+    try:
+        record_text = Path(record_path).read_text(encoding="utf-8")
+        json.loads(record_text)
+    except OSError as exc:
+        issues.append("triage record unreadable after write: {0}".format(exc))
+    except json.JSONDecodeError as exc:
+        issues.append("triage record JSON invalid after write: {0}".format(exc))
+    try:
+        content = Path(evidence_path).read_text(encoding="utf-8")
+    except (IOError, OSError) as exc:
+        issues.append("evidence-log unreadable after write: {0}".format(exc))
+        return issues
+    # Column contract: the canonical column count of the evidence-log (from
+    # the first | EVD- | row) vs the JUST-WRITTEN | TRIAGE-{task} | row —
+    # matched by row id (``record_id`` or derived from the record file stem),
+    # never by position: the written row is the last TRIAGE row (append).
+    if not record_id:
+        try:
+            record_id = "TRIAGE-" + Path(record_path).stem
+        except (OSError, ValueError):
+            record_id = ""
+    standard_cols = None
+    written_cols = None
+    written_found = False
+    for line in content.split("\n"):
+        line = line.strip()
+        if not line.startswith("|"):
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) > 1:
+            written_found |= (parts[1] == record_id)
+        if line.startswith("| TRIAGE-") and parts[1] == record_id:
+            written_cols = len(_split_markdown_table_row(line))
+            continue
+        if standard_cols is None and line.startswith("| EVD-"):
+            standard_cols = len(_split_markdown_table_row(line))
+    if not written_found:
+        issues.append(
+            "written evidence row {0} not found after the machine write — "
+            "evidence-log append did not take effect".format(record_id))
+    elif (standard_cols is not None and written_cols is not None
+            and written_cols != standard_cols):
+        issues.append(
+            "evidence row {0} has {1} columns, evidence-log standard is {2} "
+            "(Check 14 evidence_col_mismatch rule)".format(
+                record_id, written_cols, standard_cols))
+    return issues
+
+
 def cmd_change_triage(args):
     """Thin entry — change-triage CLI (FIX-237.4 / ADR-017 §4.4).
 
@@ -21033,6 +21155,12 @@ def cmd_change_triage(args):
     Step-e side-effect issues are WARN (advisory): they surface in the JSON
     output and the record but do not change the exit code (WARN 起步，
     不得静默).
+
+    FIX-278 G3 (write guard): on the success path the written artifacts are
+    re-validated at write time (``_triage_write_structure_guard`` — the
+    evidence-log row column contract + record JSON); a guard failure exits 2
+    so a structural breach cannot be introduced silently (AUDIT-148 §4.2
+    Check-14 无写时检测 gap).
     """
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -21070,6 +21198,23 @@ def cmd_change_triage(args):
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     if summary.get("error"):
+        sys.exit(2)
+    # FIX-278 G3: write-time structural guard over the artifacts just written.
+    # ``record_id`` identifies the JUST-WRITTEN evidence row (append semantics:
+    # the written row is the LAST TRIAGE row — matching by id prevents both
+    # false-pass on an earlier row and false-fail behind an old-format row).
+    guard_issues = _triage_write_structure_guard(
+        GOVERNANCE_DIR / "evidence-log.md",
+        summary.get("record_path", ""),
+        record_id=summary.get("record_id") or "")
+    if guard_issues:
+        for issue in guard_issues:
+            print("change-triage write guard: {0}".format(issue),
+                  file=sys.stderr)
+        print("change-triage write guard: remediation — 修复写入产物（证据行/"
+              "记录 JSON）后重新入账；记录已存在时先人工处置 "
+              "(change-triage/{0}.json + TRIAGE-{0} evidence row) 再重试".format(
+                  summary.get("task_id", "?")), file=sys.stderr)
         sys.exit(2)
 
 
@@ -21870,10 +22015,12 @@ def main(argv=None):
     check_p.add_argument("--fail-on-issues", action="store_true",
                          help="Exit with non-zero code if issues found")
     check_p.add_argument("--summary-only", action="store_true",
-                         help="Print only the governance health summary + first FAIL/WARN (REQ-145.7)")
+                         help="Print only the governance health summary + first "
+                              "FAIL/WARN + top-5 issue details + guidance "
+                              "(REQ-145.7 / FIX-278 G1)")
     check_p.add_argument("--level", dest="summary_level", default="standard",
                          choices=("lightweight", "standard", "strict"),
-                         help="Detail level for --summary-only (REQ-145.7)")
+                         help="Detail level for --summary-only (REQ-145.7 / FIX-278 G1)")
     check_p.add_argument("--product-gates", action="store_true",
                          help="Run plugin product self-checks in host mode "
                               "(Check 31/28o-28r/11/12/28b etc., FIX-270 — "

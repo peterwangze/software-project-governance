@@ -56,6 +56,8 @@
 - **非关键决策自动执行**：任务排序/证据格式/git commit/治理记录更新/实现细节/Gate 自评(通过时)
 - **M7.4 任务完成协议**：完成 → evidence → check-governance → audit → 再开新任务
 - **M7.5 先入账再动手**：任何新任务 MUST 先出现在 plan-tracker 中
+- **健康摘要输出契约（FIX-278 G1）**：`check-governance --summary-only` 默认（standard）输出 = 汇总行 + 首个 FAIL/WARN + 最多 5 条明细（FAIL 优先，每条截断 130 字符）+「共 N issues，--level strict 查看全部」指引行——模型无需再自行跑完整 check 追查（audit-148 §2.1：103 字符摘要 → ≈25KB 追查链，10× 放大）
+- **治理文件读取编码（FIX-278 G4/F）**：pwsh 读取 `.governance` 治理文件 MUST 显式 UTF-8——`Get-Content -Encoding UTF8`（或 `[System.IO.File]::ReadAllText($p, [System.Text.Encoding]::UTF8)`）；禁止裸 `Get-Content`——Windows 默认 ANSI/GBK 解码会产生 mojibake（AUDIT-147 D6 / AUDIT-148 §4.3 乱码实证：裸 `-Tail 30` 读 evidence-log 22KB 大面积乱码）
 
 ---
 

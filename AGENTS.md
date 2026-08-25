@@ -2,7 +2,7 @@
 
 ## Governance Bootstrap（强制 — 每次会话第一动作）
 
-> @bootstrap-version: 0.76.0（模板最低引导版本——低于 SKILL frontmatter active_version 即陈旧，先升级本段再继续；无法确定新版本时不升级，输出 /plugin update 指引——FIX-238.2 fail-closed）
+> @bootstrap-version: 0.77.0（模板最低引导版本——低于 SKILL frontmatter active_version 即陈旧，先升级本段再继续；无法确定新版本时不升级，输出 /plugin update 指引——FIX-238.2 fail-closed）
 
 **第一动作（DEC-096 / FIX-222）**：运行 `python <plugin_home>/infra/resolve_entry.py --json`。
 

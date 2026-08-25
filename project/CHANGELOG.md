@@ -2,6 +2,62 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.77.0] - 2026-08-25
+
+### 0.77.0 - DSH 标准插件安装支持 + 事故防再发链同槽（FEAT-010 / FIX-271 / AUDIT-146 / FIX-274 / FIX-272 / FIX-273 / FIX-275 + F-02 入槽 FIX-276）（MINOR）
+
+0.77.0 是 MINOR 发布，把 HEAD `0f9e5bb` 上 0.76.0 released（`v0.76.0` = 4f24e74）之后已合入的 **8 个 commit** 打包成发布候选——承载 MINOR 语义的两项主链：FEAT-010（DSH 标准插件安装支持——bundle 形态：根 package.json 增 dsh.bundle / dsh.skills 35 条 / files / keywords，新增 cordis.patch.yml 组合层与 presets/governance 随包 preset，README DSH 行改标准安装命令 + 备选本地路径，纯 md/config 零构建；随包生态接入 dsh 0.1.1-rc.2 plugin 子命令，满足「沉淀可被 coding agent 消费的项目治理 workflow」的分发可达性）与 FIX-274（SKILL.md「关键行为契约」段新增第 4 条行为契约——真实环境必防护（R1 三选一 / R4 逐条上报 / R5 措辞）+ DSH persona 第 5 条，M7.7 防再发规则升为 always-on 注入面）。事故防再发链六 commit 随行：AUDIT-146（FEAT-010 事故 RCA 报告入库）、FIX-271（R1-R5 防再发协议固化：M7.7 三选一/中继留痕/措辞禁令 + 调度红线捆绑包注入 + change-triage 第五步「执行副作用声明」机检）、FIX-272（bundle 同源防漂移守卫：@version-line 动态锚 + dsh.skills 清单双向机器校验 + Check 40）、FIX-273（side-effect 检测盲区加固：UNC/单反斜杠根正则 + normalized 双判定 + IGNORECASE + 9 边界测试）、FIX-275（pyc 打包卫生：files 否定模式，tarball 154 pyc/10.34MB → 0 pyc/5.72MB，-64%），以及 F-02 入槽（DEC-163，用户 M-0 裁决）：FIX-276（README 自动化能力分级声明补注——plugin-contract L114 对外宣示面闭合）。发布目标：把 FEAT-010 事故（RISK-045，2026-08-23 已关闭）的 RCA → 防再发固化 → always-on 注入面 → 守卫补全 → 检测加固 → 打包卫生完整闭环在同版本交付，并让插件进入 dsh 标准 plugin 生态。**不关闭 RISK-036/RISK-039**。版本投影 0.76.0 -> 0.77.0 全 PASS（15 projections 由 `release-projection --write` 确定性写入 + @bootstrap-version 标记面 9 行（commands/governance-init.md ×3 + e2e 镜像 ×3 + e2e CLAUDE.md + 根 AGENTS.md；根 CLAUDE.md gitignored 本地同步不入 commit，FIX-256 先例）+ `verify_workflow.py` REQUIRED_SNIPPETS 6 版本钉）。**Breaking changes：无**（全部为新增能力/检查/规则/打包卫生与增量文本；无既有接口删除、无既有 check 重命名、无默认行为破坏——FIX-271 四步既有输出字节不变）。
+
+### Added
+
+- **FEAT-010 DSH 标准插件安装支持（bundle 形态）**（EVD-FEAT-010，commit 3339d99，2026-08-23）：根 package.json 增 `dsh.bundle.patch` / `dsh.skills`（35 条：34 skill + 命令投影）/ `files` 白名单 / `keywords`；新增 `cordis.patch.yml` 组合层（挂载 agent-presets root 指向随包 `presets/governance/`，preset 内相对路径自包含）；README DSH 行改标准安装命令（`dsh plugin --profile <test> add ./repo`）+ 备选本地路径。契约实证：dsh 0.1.1-rc.2 plugin 子命令（dsh.bundle 声明 → dsh.profile.bundles 层栈自动并入）+ 官方 publish.md + make-dsh-plugin v3.0.0（bundle 包根=仓库根）。验收（R1/R5 隔离协议修订）= 隔离环境安装冒烟：DSH_HOME 重定向至临时目录（禁止触碰真实 ~/.dsh），`--dump-config` 层栈可见、roster 含 governance preset；自证 boot 双 PASS；真实 ~/.dsh 零操作双确认（时窗取证 + 源码反证）。复审链 R0 NEEDS_CHANGE → R1 NEEDS_CHANGE → R2 APPROVED_WITH_NOTES/0（REVIEW-FEAT-010-R2）；遗留登记：F2→FIX-272、F11→FIX-275、F12 P3。用户视角：用户获得标准 dsh plugin add 安装路径与随包 governance preset，无需手动 clone + launch.py。
+- **FIX-276 README 自动化能力分级声明补注（F-02 入槽，DEC-163）**（EVD-FIX-276，commit 0f9e5bb，2026-08-25）：README.md 新增「自动化能力分级声明（plugin-contract.md L114）」节（L196-205，+10/-0）——A 级（Agent Protocol Automation）/ B 级（CLI-Enforced Automation）/ C 级（System Automation **未实现，roadmap**，plugin-contract L102 引用）；口径以 SKILL.md「自动化能力分级声明」节为唯一事实源逐条对齐，27 处「自动」表述逐处归属。R0 APPROVED_WITH_NOTES/0（P0=0/P1=0/P2=1/P3=2）。用户视角：README 读者（用户/评审/官方目录）获得准确分级——「自动」承诺可追溯至 A/B 级，C 级明确 roadmap 未实现。
+- **AUDIT-146 FEAT-010 事故 RCA**（EVD-AUDIT-146，commit 2bb10ac）：RCA 报告 `docs/requirements/audit-146-feat010-dsh-config-loss-rca.md`（266 行）——事实链 + FEAT-010 交付物逐文件审计 + launch.py 源码审计 + dsh CLI 命令面分析 + 破坏面假设分级（H1a 可能·高 + 工具侧确认级排除）+ 流程缺陷分析（D1-D5）+ 防再发协议建议（R1-R5 草案）。R0 审查 APPROVED_WITH_NOTES/0（REVIEW-AUDIT-146-R0）。用户视角：事故根因与防再发设计公开可查。
+- **FIX-274 M7.7 投影 always-on 注入面 + requires_r1 完成门控**（EVD-FIX-274，commit 4d13992）：M7.7 压缩契约（真实环境三选一 / 逐条留痕上报 / R5 措辞）投影进 SKILL.md「关键行为契约」第 4 条（canonical）+ DSH persona 第 5 条（agent.cordis.yml.template 与 presets/governance/agent.cordis.yml 同步）+ e2e 镜像；INJECTION_CONTRACT_ANCHORS 三面锚（27 锚/4 文件）；Check 39 `check_r1_completion_gate`（requires_r1=true 任务完成时须有 R1 留痕证据，WARN-first，收紧条件显式登记：连续 2 个零违规 0.77.x 版本后升 FAIL，升级时 MUST decision-log 入账）；「唯二例外」措辞统一（R1-N2）；DEC-159/160 入账；**DEC-161/162 预算提额**：persona 契约块 1536B→2560B、SKILL 契约段 2048B→2560B（用户裁定方案 A，保真优先；守卫测试更新）。DESIGN R0 APPROVED_WITH_NOTES/0 → CODE R0 NEEDS_CHANGE（P1-1 门控误报 / P1-2 SKILL 预算超顶）→ R1 返工（DEC-161/162；门控修复红→绿 10+2）→ CODE R1 APPROVED_WITH_NOTES/0。用户视角：任意宿主 agent 均受 M7.7 约束；requires_r1 任务缺 R1 留痕时 WARN 可见（0.77.x 观察窗口不阻断）。
+- **FIX-272 bundle 同源防漂移守卫**（EVD-FIX-272，commit e3e45c0）：INJECTION_CONTRACT_ANCHORS 增补 @version-line 动态锚（28 anchors，authority=SKILL.md frontmatter，fail-closed，FIX-250 前科防再发）+ `check_dsh_skills_manifest` 双向校验（package.json ↔ 磁盘，35/35）+ CLI `check-dsh-skills-manifest` + 引擎 Check 40（product-gate 同 Check 33 归组）+ agent.cordis.yml 头部注释同步。TDD 9 新例红→绿；pytest 1923 passed/28 存量失败（stash 基线证实无关）。R0 APPROVED_WITH_NOTES/0（P2×2 登记遗留 + P3×6 讨论级）。
+- **FIX-273 side-effect 检测盲区加固**（EVD-FIX-273，commit 7d7a966）：`_OUTSIDE_REPO_FILE_RE` 增补 UNC/单反斜杠根分支 + normalized 双 match 参与 outside 判定 + `_REAL_ENV_TEXT_RE` 补 IGNORECASE + 否定语境盲区 docstring 披露（行为不改）+ 9 边界测试（`../` 逃逸、`%USERPROFILE%` 文件目标、UNC、`--side-effects` CLI 端到端；TDD 4红→61绿）。pytest 全量 28 存量失败同基线零新失败。R0 APPROVED_WITH_NOTES/0（P0=0/P1=0/P2=0/P3=3）。
+- **FIX-275 pyc 打包卫生**（EVD-FIX-275，commit 618ab13）：package.json `files` 新增 `!**/__pycache__/` + `!**/*.pyc` 否定模式（npm-packlist 10.0.3 源码级实证：files 存在时根 .npmignore/.gitignore 置 null——白名单目录内 ignore 永不生效；否定模式经 `!!` 双反转成明确排除规则）。RED→GREEN 实测：397 entries/154 pyc/10.34MB → 243 entries/0 pyc/5.72MB（**-64% 体积**）；零误删零误增；payload 完整性零破坏（cordis.patch.yml/presets/skills/adapters/commands/agents/README/LICENSE 全在包内）；.npmignore 路线实证否定不引入。R0 APPROVED_WITH_NOTES/0（P0=0/P1=0/P2=0/P3×4：顺序敏感性/双模式重叠/无注释载体/无自动化回归守卫登记候选）。用户视角：最终用户不再收到含本机编译产物（154 个 pyc/9.86MiB + 构建机路径信息）的污染 tarball。
+- **FIX-271 R1-R5 防再发协议固化**（EVD-FIX-271，commit d396097）：R1/R4/R5 → behavior-protocol.md M7.7（真实环境三选一强制 / 中继机制逐条上报 / 验收措辞禁令）+ R3 → agent-dispatch-template.md 破坏性红线捆绑包注入段 + R2 → change-triage 第五步「执行副作用声明」（`analyze_side_effects`，触及用户真实环境 → 自动附加 R1 审查条件）+ TDD 测试。TDD 12 新例红→绿（52/52）；四步键序字节不变；27 存量失败经 stash 基线证实无关。CODE R0 APPROVED_WITH_NOTES/0 + DESIGN R0 NEEDS_CHANGE（F-01 R4 执行链矛盾）→ R1 返工（中继机制 + incidents 例外条款 + 捆绑包契约 + F-06/F-07）→ DESIGN R1 APPROVED_WITH_NOTES/0（REVIEW-FIX-271-R1）。用户视角：涉及用户真实环境的派发全程强制隔离/备份/授权三选一 + 逐条留痕。
+- **版本声明与 e2e fixture 指针从 0.76.0 推进到 0.77.0**（M-set：SKILL.md frontmatter 0.77.0 权威源 + `release-projection --write` 确定性写入 15 投影——core/manifest、4×plugin.json（.claude/.codex/.zcode/.chrys）、marketplace、package.json、4 hooks @version、dsh persona / AGENTS.md.template、e2e SKILL byte_copy 镜像、e2e plan-tracker + @bootstrap-version 标记面 9 行（governance-init ×3 + e2e 镜像 ×3 + e2e CLAUDE.md + 根 AGENTS.md；根 CLAUDE.md gitignored 本地同步）+ `verify_workflow.py` REQUIRED_SNIPPETS 6 版本钉（仅版本字面量 +6/-6 零逻辑，checks/version.py 强制校验面））。
+- `project/CHANGELOG.md` 新增 0.77.0 条目；release docs 三件套创建（feature-flags / release-checklist / rollback-plan）；0.77.0 版本规划文档入库（`docs/release/version-plan-0.77.0.md`，REL-070 第一段经 Release R0→R2 + Design R0→R1 双审查 APPROVED_WITH_NOTES/0 终态，DEC-163 入账）。
+
+### Changed
+
+- SKILL.md「关键行为契约」段与 DSH persona 契约块新增 M7.7 第 4/5 条（真实环境必防护）——行为契约注入面从 3 条增至 4 条（SKILL）与 5 条（persona）；预算按 DEC-161/162 提额为 2560B（机器守卫 `test_persona_contract_block_stays_within_budget` + `test_skill_contract_section_stays_within_budget`）。
+- change-triage 由四步扩为五步（第五步「执行副作用声明」增量——既有四步输出字节不变，向后兼容）。
+- README 对外宣示面补齐能力分级声明（与 SKILL.md/governance.md 口径逐条一致；「过程管理全自动」等承诺归 A 级并显式注明「不是系统后台触发」；C 级 roadmap 未实现）。
+
+### Fixed
+
+- **真实环境操作防护从第四层按需协议升为每会话 always-on 行为契约**（FIX-271 + FIX-274）：R1 从「triage 落 record 后 Coordinator 自觉」变为机器完成门控（Check 39），D1-D5 注入层+消费层双侧闭合（RISK-045 关闭依据链，2026-08-23 已关闭）。
+- **bundle 同源漂移**（FIX-272）：preset persona 版本行与 dsh.skills 清单双向机器校验（Check 40 + 独立子命令）——FIX-250 类版本行漂移防再发。
+- **side-effect 检测盲区**（FIX-273）：UNC/单反斜杠根路径逃逸与 IGNORECASE 漏检加固（FIX-271 CODE R0 P2-1/P2-2/P3-2/P3-3 收口）。
+- **pyc 泄漏进发布包**（FIX-275）：package 打包 154 个 `__pycache__/*.pyc`（10.34MB，含构建机路径信息）→ 0 pyc（-64%）；FEAT-010 R1 F11 闭合。
+- **README 分级宣示与 L114 禁令缝隙**（FIX-276）：消除「全自动」笼统宣示与 C 级未实现并置的误导缝隙（review-FIX-269-CODE-R0 F-02 闭合）。
+
+### Validation
+
+- REL-070（0.77.0 MINOR 候选打包，2026-08-25；candidate-only——transition/tag/push 待用户授权后另行执行，DEC-143 基线；release_authorized=false）。
+- FEAT-010：隔离冒烟 + 自证 boot 双 PASS；真实 ~/.dsh 零操作双确认；复审链 R0→R1→R2 APPROVED_WITH_NOTES/0（REVIEW-FEAT-010-R2）。
+- FIX-271：TDD 12 新例红→绿（52/52）；四步键序字节不变；CODE R0 + DESIGN R0→R1 双审 APPROVED_WITH_NOTES/0×2（REVIEW-FIX-271-R0/R1）。
+- AUDIT-146：R0 APPROVED_WITH_NOTES/0（REVIEW-AUDIT-146-R0 机器行）。
+- FIX-274：DESIGN R0 APPROVED_WITH_NOTES/0 + CODE R0 NEEDS_CHANGE → R1 APPROVED_WITH_NOTES/0（门控修复红→绿 10+2；双预算守卫 15；DEC-161/162）；Check 39 真实数据零误报（35 records/1 r1 未完成合法跳过）。
+- FIX-272：TDD 9 新例红→绿；pytest 1923 passed/28 存量失败（stash 基线证实无关）；R0 APPROVED_WITH_NOTES/0。
+- FIX-273：TDD 4红→61绿；pytest 全量 28 存量失败同基线零新失败；R0 APPROVED_WITH_NOTES/0。
+- FIX-275：RED→GREEN 实测（243 entries/0 pyc/5.72MB）；Reviewer 独立重验（pyc 精确计数 154/10,340,875B 与差分 397-243=154 三方自洽）；verify/cross-refs/manifest/version 全 PASS；R0 APPROVED_WITH_NOTES/0。
+- FIX-276：verify_workflow.py 全量 PASSED（exit 0）+ check-cross-references 68 files/649 refs 无悬空 PASS + check-version-consistency 13 files PASS + check-manifest-consistency 565/608 PASS；R0 APPROVED_WITH_NOTES/0（REVIEW-FIX-276-R0 机器行 + RECO-FIX-276）。
+- 门禁（0.77.0 candidate，2026-08-25）：`check-version-consistency` PASS（13 文件声明；1 advisory WARN——宿主 plan-tracker 仍 0.76.0，Coordinator 打包后 bump）；`check-projection-sync --fail-on-issues` PASS（15 投影）；`check-manifest-consistency` PASS（canonical 568/actual 608）；`check-cross-references --fail-on-issues` PASS（68 文件/649 refs 零悬空）；`verify` 无参 PASSED（唯一 WARN = plan-tracker 0.76.0）；`check-injection-contract` PASS（4 文件/28 anchors——FIX-272 @version-line 锚在打包期间实际捕获 preset 版本行滞后并已同步）；`check-dsh-skills-manifest` PASS（35/35）；pytest 全量 28 failed/1930 passed/215 subtests（与 HEAD 基线 28 failed/1932 passed 一致——零打包引入失败；28 = 窗口内既有基线：pre_commit_review_evidence 24 SUBFAILED + test_all_manifest_dirs_covered（FEAT-010 `presets/` 未入 cleanup PLUGIN_SCOPE_DIRS）+ loop-claims/ragged-row 3 例）；`check-release --version 0.77.0 --require-changelog --lineage-mode candidate` 8 issues 按先例全分类（3 = 未提交态产物 + 1 = archive trigger gap 过渡态（EVD-894 先例）+ 1 = governance health 106（既有宿主 posture）+ 2 = AUDIT-146 RCA 文档 ragged row 窗口内既有基线（loop-claims FAIL + unit tests 同源），核心静态门禁全 PASS（version/fact-source/lineage candidate/gate-sequence Check 37/one-dot-zero/loop-fuse/changelog）+ verify/e2e 执行门禁 PASS）；`release-ledger --no-remote` 未提交候选过渡态（NATIVE_CANDIDATE，commit 后重跑——REL-067 先例）。
+
+### Boundaries
+
+- 0.77.0 **RISK-036/RISK-039 remain open**（2026-09-30；各自独立关闭标准未满足）；不关闭、不重开任何已关闭风险（RISK-045 已于 2026-08-23 用户授权关闭，0.77.0 不重开）。
+- 不声明 official approval、zcode official approval、marketplace approval、curated listing、universal/full runtime support、external first-session pilot success、1.0.0 production-ready；不关闭 RISK-036/RISK-039。
+- **Breaking changes：无**。全部为新增能力/检查/规则/打包卫生与增量文本；既有 CLI 默认行为零变化（FIX-271 四步键序字节不变）；Check 39/40 为新增编号（39<40），既有 check 无重命名/删除。
+- MINOR bump 依据（VERSIONING.md）：① FEAT-010 新安装能力（L12 类别：新能力/分发面）；② FIX-274 SKILL.md MUST 规则新增（L37）。新 check 39/40 与新 CLI 按 L34（verify_workflow.py 新增检查项 → PATCH）如实陈述为 PATCH 面增量，不作为判级依据。
+- **预算提额披露（DEC-161/162 检查值）**：persona 契约块预算 **2560B**（原 1536B，DEC-161 用户裁定方案 A——M7.7 第 5 条行为契约注入所需；M7.4 契约块预算不变）；SKILL.md「关键行为契约」段预算 **2560B**（原 2048B，DEC-162）；守卫测试 `test_persona_contract_block_stays_within_budget` + `test_skill_contract_section_stays_within_budget`。
+- **RISK-044 快照（quick-scan 出槽附注）**：`--summary-only` 墙钟实测 31-32s（超设计 §3.1 <15s 门禁——DEC-149 已接受并修订验收信号为「单次 <60s 且每会话仅一次」，31-32s 满足）；**quick-scan 秒级子集出槽 0.77.0 → 0.78.x+ 候选**（本版不含——M-1 经 decision-log + CHANGELOG 附注登记；RISK-044 保持 open，2026-08-28 复核由 Coordinator 执行：维持接受 / quick-scan 前移）。
+- **迁移说明（RISK-D5——DSH preset 时滞）**：DSH 平台升级路径为 `git -C <plugin_root> pull && python <plugin_root>/adapters/dsh/launch.py --sync`（DSH 无 `/plugin update`）；persona/bootstrap 模板的 0.77.0 版本行与 5 条契约在 `--sync` 重写 preset 后生效，未 sync 前旧 preset 仍携带旧版本行——不得宣称未 sync 安装的会话级 M7.7 效果；升级同步后对被治理项目自然生效（看护 check 作用于宿主 `.governance/` 读时数据，无需被治理项目单独改造）。
+
 ## [0.76.0] - 2026-08-23
 
 ### 0.76.0 - 看护模式七项 + /governance 性能修复（REQ-145.1~145.7 / FIX-263~270 + FIX-270 性能）（MINOR）

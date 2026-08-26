@@ -21075,13 +21075,16 @@ def _triage_write_structure_guard(evidence_path, record_path, record_id=None):
 
       1. the written evidence-log row (``record_id`` — ``TRIAGE-{task}``,
          appended by ``run_triage`` at the END of the evidence-log) must match
-         the column count the evidence-log already establishes (the Check 14
-         ``evidence_col_mismatch`` rule, scoped to the written file). The
-         guard matches BY ROW ID — never "the first TRIAGE row" — because the
-         written row is the LAST one (append semantics, change_triage.py), so
-         scanning the first TRIAGE row would both miss a broken fresh row
-         (false-pass) and block a legal intake behind an old-format first row
-         (false-fail, violating the scope contract below);
+         the column count the evidence-log establishes for its row FAMILY
+         (FIX-279). The standard is the TRIAGE row family ITSELF — the first
+         ``| TRIAGE- |`` row that is NOT this write: machine rows are
+         uniformly 10 cols (incl. the files cell), while the EVD row family
+         is a 9/10/11-col manual mix — so the first ``| EVD- |`` row is only
+         a fallback when no TRIAGE family exists, and the comparison is
+         skipped when neither exists. The written row is matched BY ROW ID —
+         never by position — because it is the LAST TRIAGE row (append
+         semantics, change_triage.py): positional scanning would both miss a
+         broken fresh row (false-pass) and pick the wrong row as written;
       2. the written triage record JSON must parse.
 
     Scope (write guard, not repo guard): ONLY the written artifacts are
@@ -21103,16 +21106,23 @@ def _triage_write_structure_guard(evidence_path, record_path, record_id=None):
     except (IOError, OSError) as exc:
         issues.append("evidence-log unreadable after write: {0}".format(exc))
         return issues
-    # Column contract: the canonical column count of the evidence-log (from
-    # the first | EVD- | row) vs the JUST-WRITTEN | TRIAGE-{task} | row —
-    # matched by row id (``record_id`` or derived from the record file stem),
-    # never by position: the written row is the last TRIAGE row (append).
+    # Column contract (FIX-279): the canonical column count for the written
+    # | TRIAGE-{task} | row comes from the TRIAGE row family ITSELF — the
+    # first | TRIAGE- | row that is NOT this write (machine rows are
+    # uniformly 10 cols incl. the files cell). The | EVD- | family is a
+    # 9/10/11-col manual mix (first row 9 cols) and must NOT set the standard
+    # for machine rows — it is only a fallback when no TRIAGE family exists
+    # (legacy repo without prior triage rows), and the comparison is skipped
+    # when neither exists. Matching is by row id (``record_id`` or derived
+    # from the record file stem), never by position: the written row is the
+    # last TRIAGE row (append).
     if not record_id:
         try:
             record_id = "TRIAGE-" + Path(record_path).stem
         except (OSError, ValueError):
             record_id = ""
     standard_cols = None
+    triage_family_found = False
     written_cols = None
     written_found = False
     for line in content.split("\n"):
@@ -21122,10 +21132,15 @@ def _triage_write_structure_guard(evidence_path, record_path, record_id=None):
         parts = [p.strip() for p in line.split("|")]
         if len(parts) > 1:
             written_found |= (parts[1] == record_id)
-        if line.startswith("| TRIAGE-") and parts[1] == record_id:
-            written_cols = len(_split_markdown_table_row(line))
+        if line.startswith("| TRIAGE-"):
+            if parts[1] == record_id:
+                written_cols = len(_split_markdown_table_row(line))
+            elif not triage_family_found:
+                triage_family_found = True
+                standard_cols = len(_split_markdown_table_row(line))
             continue
-        if standard_cols is None and line.startswith("| EVD-"):
+        if not triage_family_found and standard_cols is None \
+                and line.startswith("| EVD-"):
             standard_cols = len(_split_markdown_table_row(line))
     if not written_found:
         issues.append(

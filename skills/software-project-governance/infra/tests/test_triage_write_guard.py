@@ -70,6 +70,18 @@ def _triage_row(record_id, cols):
     return "| " + " | ".join(cells) + " |\n"
 
 
+def _evidence_row_9(evd_id="EVD-800", task="FIX-100"):
+    """Real EVD row shape (9 cells — repo evidence-log first EVD row EVD-879).
+
+    FIX-279: the EVD row family is a 9/10/11-col manual mix (first row 9
+    cols), while the TRIAGE machine row family is uniformly 10 cols. The
+    column contract must NOT be derived from the EVD family.
+    """
+    cells = [evd_id, task, "维护", "描述", "事实依据：x",
+             "artifact", "actor", "2026-08-26", "✅ 完成"]
+    return "| " + " | ".join(cells) + " |\n"
+
+
 def _run_triage_into(gov_dir, records_dir=None, evidence_path=None):
     """Run ct.run_triage against a fresh fixture governance dir."""
     if evidence_path is None:
@@ -166,15 +178,19 @@ class WriteStructureGuardUnitTests(unittest.TestCase):
             self.assertEqual(len(issues), 1, issues)
             self.assertIn("TRIAGE-FIX-278", issues[0])
 
-    def test_guard_passes_when_first_triage_row_legacy_but_new_row_legal(self):
-        """P0-1 回归（false-fail 场景）：首个 TRIAGE 行为旧格式（列数≠标准）
-        而刚写入的行合法 → guard MUST 放行（既有旧行不阻塞本次入账——
-        write-guard 范围契约）。"""
+    def test_guard_blocks_write_when_first_triage_row_defines_family_standard(self):
+        """FIX-279 契约再基线（原 P0-1 false-fail 场景）：首个（非本次写入）
+        TRIAGE 行即行族标准——旧格式 8 列首行确立行族契约 8，刚写入的 10 列
+        行与行族标准不符 → guard MUST 报错（行族标准权威于 EVD 首行；行 ID
+        匹配保持）。FIX-278 时代以 EVD 首行（10 列）为标准放行——该错配正是
+        FIX-279 根因（活体验证：合法 10 列机器行被 EVD 首行 9 列误报——
+        TRIAGE-REL-071/TRIAGE-FIX-279 两次触发）。"""
         with tempfile.TemporaryDirectory() as td:
             evidence = Path(td) / "evidence-log.md"
             evidence.write_text(
                 _evidence_row_10("EVD-001")
-                + _triage_row("TRIAGE-OLD", 8)        # 既有旧格式 TRIAGE 行
+                + _triage_row("TRIAGE-OLD", 8)        # 首个非写入 TRIAGE 行
+                                                      # = 行族标准 8 列
                 + _triage_row("TRIAGE-FIX-278", 10),
                 encoding="utf-8")
             record = Path(td) / "change-triage" / "FIX-278.json"
@@ -182,6 +198,110 @@ class WriteStructureGuardUnitTests(unittest.TestCase):
             record.write_text('{"ok": true}', encoding="utf-8")
             issues = vw._triage_write_structure_guard(
                 evidence, record, record_id="TRIAGE-FIX-278")
+            self.assertEqual(len(issues), 1, issues)
+            self.assertIn("TRIAGE-FIX-278", issues[0])
+
+
+class TriageFamilyColumnContractTests(unittest.TestCase):
+    """FIX-279 — TRIAGE 行族列数契约：标准取行族自身，而非 EVD 首行。
+
+    根因：guard 的 standard_cols 取自第一条 ``| EVD-`` 行（本仓 EVD 行=9/10/11
+    混合列，首行 9 列），而写入的 TRIAGE 机器行=10 列——每次合法 change-triage
+    入账必误报 fail-closed exit 2（活体验证：TRIAGE-REL-071 与 TRIAGE-FIX-279
+    两次触发）。修复后标准取第一条非本次写入的 TRIAGE 行（行族标准），行族缺失
+    fallback 到 EVD 基线，仍缺则跳过列数比较；行 ID 匹配与「写入行缺失显式
+    报错」保持（P0-1 不得回退）。
+    """
+
+    def _write_fixture(self, td, written_cols):
+        """9 列 EVD 基线 + 10 列 TRIAGE 行族 + 写入行（written_cols 列）。"""
+        evidence = Path(td) / "evidence-log.md"
+        written = _triage_row("TRIAGE-FIX-279", written_cols)
+        evidence.write_text(
+            _evidence_row_9("EVD-800", "FIX-100")
+            + _triage_row("TRIAGE-OLD", 10)
+            + written,
+            encoding="utf-8")
+        record = Path(td) / "change-triage" / "FIX-279.json"
+        record.parent.mkdir()
+        record.write_text('{"ok": true}', encoding="utf-8")
+        return evidence, record
+
+    def test_mixed_file_legal_triage_row_no_false_positive(self):
+        """(a) 混合文件（9 列 EVD 行 + 10 列 TRIAGE 行族）——合法 TRIAGE 写入
+        0 误报（FIX-279 主修复：EVD 首行不得作 TRIAGE 行族的列数标准）。"""
+        with tempfile.TemporaryDirectory() as td:
+            evidence, record = self._write_fixture(td, 10)
+            issues = vw._triage_write_structure_guard(
+                evidence, record, record_id="TRIAGE-FIX-279")
+            self.assertEqual(issues, [])
+
+    def test_mixed_file_broken_nine_col_write_reported(self):
+        """(b) 破坏行（写入 9 列 TRIAGE 行）仍报错——行族标准 10 vs 写入 9。"""
+        with tempfile.TemporaryDirectory() as td:
+            evidence, record = self._write_fixture(td, 9)
+            issues = vw._triage_write_structure_guard(
+                evidence, record, record_id="TRIAGE-FIX-279")
+            self.assertEqual(len(issues), 1, issues)
+            self.assertIn("TRIAGE-FIX-279", issues[0])
+
+    def test_mixed_file_broken_eleven_col_write_reported(self):
+        """(b) 破坏行（写入 11 列 TRIAGE 行）仍报错——行族标准 10 vs 写入 11。"""
+        with tempfile.TemporaryDirectory() as td:
+            evidence, record = self._write_fixture(td, 11)
+            issues = vw._triage_write_structure_guard(
+                evidence, record, record_id="TRIAGE-FIX-279")
+            self.assertEqual(len(issues), 1, issues)
+            self.assertIn("TRIAGE-FIX-279", issues[0])
+
+    def test_evd_baseline_fallback_when_triage_family_absent(self):
+        """TRIAGE 行族缺失（旧库）→ fallback 到 EVD 基线：与基线一致的写入
+        放行（9 列 EVD 基线 vs 9 列首写——兼容旧库契约）；破坏性首写不得以
+        自身为标准（fallback 比较，见既有 test_guard_detects_column_break_
+        in_written_evidence）。"""
+        with tempfile.TemporaryDirectory() as td:
+            evidence = Path(td) / "evidence-log.md"
+            evidence.write_text(
+                _evidence_row_9("EVD-800", "FIX-100")
+                + _triage_row("TRIAGE-FIX-279", 9),
+                encoding="utf-8")
+            record = Path(td) / "change-triage" / "FIX-279.json"
+            record.parent.mkdir()
+            record.write_text('{"ok": true}', encoding="utf-8")
+            issues = vw._triage_write_structure_guard(
+                evidence, record, record_id="TRIAGE-FIX-279")
+            self.assertEqual(issues, [])
+
+    def test_no_family_rows_skips_column_comparison(self):
+        """既无 TRIAGE 行族也无 EVD 行 → 跳过列数比较（仅 JSON/缺失行检查
+        生效——「仍缺则跳过」契约）。"""
+        with tempfile.TemporaryDirectory() as td:
+            evidence = Path(td) / "evidence-log.md"
+            evidence.write_text(_triage_row("TRIAGE-FIX-279", 3),
+                                encoding="utf-8")
+            record = Path(td) / "change-triage" / "FIX-279.json"
+            record.parent.mkdir()
+            record.write_text('{"ok": true}', encoding="utf-8")
+            issues = vw._triage_write_structure_guard(
+                evidence, record, record_id="TRIAGE-FIX-279")
+            self.assertEqual(issues, [])
+
+    def test_legacy_family_standard_accepts_matching_write(self):
+        """行族权威：首行旧格式（8 列，≠EVD 9 列基线）确立行族标准 8；写入
+        与行族标准一致（8 列）→ 放行（行族选定后 EVD 不参与比较——与自身
+        行族一致的写入不被旧格式行阻塞）。"""
+        with tempfile.TemporaryDirectory() as td:
+            evidence = Path(td) / "evidence-log.md"
+            evidence.write_text(
+                _evidence_row_9("EVD-800", "FIX-100")
+                + _triage_row("TRIAGE-OLD", 8)
+                + _triage_row("TRIAGE-FIX-279", 8),
+                encoding="utf-8")
+            record = Path(td) / "change-triage" / "FIX-279.json"
+            record.parent.mkdir()
+            record.write_text('{"ok": true}', encoding="utf-8")
+            issues = vw._triage_write_structure_guard(
+                evidence, record, record_id="TRIAGE-FIX-279")
             self.assertEqual(issues, [])
 
 

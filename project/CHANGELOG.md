@@ -2,6 +2,56 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.78.0] - 2026-08-26
+
+### 0.78.0 - 治理降噪第一批——G1 summary top-N + G2 legacy 判定 + G3 写时 guard + G4/F UTF-8 显式化 + write-guard 契约修正 + M5 基线小修（FIX-278 / FIX-279 / REL-071 / FIX-280）（MINOR）
+
+0.78.0 是 **MINOR** 发布（M-0 用户裁决确认，DEC-169），把 `v0.77.0`（= `db9f6c9`，REL-070 transition）之后已合入的 **4 个 commit** 打包成发布候选——工具核验 `git rev-list --count v0.77.0..HEAD` = 4（`git describe v0.77.0-4-gHEAD`）：**FIX-278** `3ad9fdd`（治理降噪第一批——G4/F 编码显式化 + G1 summary top-N + G2 legacy 基线静默 + G3 写时 guard + AUDIT-147/148 报告入库，16 文件 +2130/-42）、**FIX-279** `c193299`（G3 write-guard 列数契约修正，2 文件 +154/-19）、**REL-071 规划** `ce4d7fe`（0.78.0 版本规划——入出槽裁决表 16 项 + RISK-044 复评 + M5 基线小修入槽；M-0 用户确认 DEC-169 四项；双审 APPROVED_WITH_NOTES/0 ×2）、**FIX-280** `a7fd5b3`（M5 基线小修——version-plan 裁决表样式 Check 10 豁免注记）。v0.77.0 自身链（candidate `ac5df32` / transition `db9f6c9`）属已发布 0.77.0，不重复计入本窗口。发布目标：把 AUDIT-147/148 定性分析（治理开销/告警洪流）的「分析 → 第一批实施 → 契约修正」完整交付链在同版本落地，并兑现 DEC-166 四子项契约与 DEC-168 的「FIX-279 随 0.78.0 发布」归约。**不关闭 RISK-036/RISK-039**。版本投影 0.77.0 -> 0.78.0 全 PASS（15 projections 由 `release-projection --write` 确定性写入 + @bootstrap-version 标记面 9 行（commands/governance-init.md ×3 + e2e 镜像 ×3 + e2e CLAUDE.md + 根 AGENTS.md；根 CLAUDE.md gitignored 本地同步不入 commit，FIX-256 先例）+ presets/governance/agent.cordis.yml 版本行同步（@version-line 守卫）+ `verify_workflow.py` REQUIRED_SNIPPETS 6 版本钉）。**Breaking changes：无**（G1 其余档位字节不变、G2 fail-safe 边界锁定、无接口删除/默认行为破坏——DEC-166 契约）。
+
+### Added
+
+- **FIX-278 G4/F 治理文件读取编码显式化**（EVD-FIX-278，commit `3ad9fdd`，2026-08-26）：治理文档/命令指引中读取 `.governance` 的 pwsh 片段 MUST 显式 `-Encoding UTF8`（或 `[System.IO.File]::ReadAllText(..., [System.Text.Encoding]::UTF8)`），禁止裸 `Get-Content`——Windows 默认 ANSI/GBK 解码产生 mojibake（AUDIT-147 D6 / AUDIT-148 §4.3 实证：router 会话 `-Tail 30` 无 `-Encoding` 读 evidence-log → 22,311 字符大面积乱码）。用户视角：治理记录读取不再出现乱码，Cross-Platform 会话输出可机器核验。
+- **FIX-278 G1 check-governance --summary-only 输出契约（standard 档）**（EVD-FIX-278；DEC-166 ①）：默认档位从「103 字符汇总」升级为「汇总 + 首个 FAIL/WARN + 前 ≤5 条明细（每条 130 字符截断）+ "共 N issues，--level strict 查看全部" 指引行」——消除「103 字符摘要 → 自发追加完整 check 1.7KB + 22KB 追查链」的 10× 放大（audit-148 §2.1 量化）；lightweight/strict 档位与既有默认路径字节不变（DEC-166 ②）。用户视角：健康摘要一眼可见具体告警且不再触发追查链。
+- **FIX-278 G2 legacy 数据判定规则（L-A/L-B/L-C）**（EVD-FIX-278；DEC-166 ③）：接入前历史违规（router 实证 Check 30×12 / Check 37 = legacy 行）按「形状 + 终态判定」降级 advisory WARN，不计 FAIL；ACTIVE/真实 nonzero 恒 FAIL（fail-safe 边界锁定——DEC-166；DESIGN R1 蓝军 7 条验证）。用户视角：接入前历史数据不再污染当前健康基线，当前工作相关违规仍严格 FAIL。
+- **FIX-278 G3 change-triage 写时结构 guard**（EVD-FIX-278；DEC-166 ④）：change-triage 入账成功路径按 `record_id` 行 ID 匹配校验新写入行结构，异常 exit 2 fail-closed（消除「17:07 → 17 issues 无检测窗口」）。
+- **FIX-278 AUDIT-147/148 治理开销/告警洪流定性分析入库**（EVD-FIX-278）：诊断报告 `docs/requirements/audit-147-governance-overhead-analysis-dsh-reasoning-level.md` + 验证报告 `docs/requirements/audit-148-v1-verify-alarm-validation.md`——治理「读取」72.8KB 是治理「命令输出」1.6KB 的 46 倍、干扰源 D1-D8 分类、优化方向表（G1/G5/G6 量化收益）。
+- **版本声明与 e2e fixture 指针从 0.77.0 推进到 0.78.0**（REL-071 M-1 M-set）：SKILL.md frontmatter 0.78.0 权威源 + `release-projection --write` 确定性写入 15 投影（core/manifest、4×plugin.json（.claude/.codex/.zcode/.chrys）、marketplace、package.json、4 hooks @version、e2e SKILL byte_copy 镜像、e2e plan-tracker 工作流版本行、dsh persona / AGENTS.md.template）+ @bootstrap-version 标记面 9 行 + preset 版本行（@version-line 守卫）+ `verify_workflow.py` REQUIRED_SNIPPETS 6 版本钉（仅版本字面量 +6/-6 零逻辑）。
+- **REL-071 0.78.0 版本规划文档入库**（EVD-REL-071 规划段，commit `ce4d7fe`）：`docs/release/version-plan-0.78.0.md`——入出槽裁决表 16 项（全带来源留痕）+ RISK-044 复评（维持接受建议）+ M-0 用户确认 DEC-169（四项：入槽 = FIX-278+FIX-279+M5 基线小修 / RISK-044 维持 / MINOR 定位 / N=2 延续）；Release Reviewer + Design Reviewer 双审 APPROVED_WITH_NOTES/0 ×2（REVIEW-REL-071-RELEASE-R0 / REVIEW-REL-071-DESIGN-R0）。
+- `project/CHANGELOG.md` 新增 0.78.0 条目；release docs 三件套创建（feature-flags / release-checklist / rollback-plan —— rollback-plan 复刻 version-plan §3.1 回滚边界表）；`core/releases/0.78.0.json` candidate（candidate-only；transition/tag/push 待用户授权——DEC-143）。
+
+### Changed
+
+- **check-governance --summary-only（standard 档）输出契约变更（G1）**：默认展示首个 FAIL/WARN + 前 ≤5 条明细（130 字符截断）+ 指引行；lightweight/strict 与其余路径字节不变（DEC-166 ②）。
+- **G2 legacy 判定规则**：接入前历史违规按形状+终态判定降级 advisory WARN（L-A/L-B/L-C）；ACTIVE/真实 nonzero 恒 FAIL（fail-safe 一侧锁定，DEC-166；混合格 W-7/BC-7 保守漏降级方向登记后续 marker 扩展）。
+- **change-triage 入账机制**：新增写时结构 guard（G3）——入账成功路径按 record_id 校验；写入行缺失/列数错配显式报错（FIX-279 修正后以 TRIAGE 行族 10 列为标准——见 Fixed）。
+
+### Fixed
+
+- **write-guard 列数契约错配误报（FIX-279，DEC-168）**：`_triage_write_structure_guard` 原取首个 `| EVD-` 行（9 列）作 standard_cols 比对 TRIAGE 行（10 列）——每次合法 change-triage 入账必误报 fail-closed exit 2（活体验证：TRIAGE-REL-071 / TRIAGE-FIX-279 两次触发）；修复 = standard_cols 改取首个非本次写入的 `| TRIAGE-` 行（行族标准 10 列），EVD 行仅作 fallback，行 ID 匹配与写入行缺失显式报错保持（P0-1 不回退）；TDD 15 用例红→绿；CODE R0 APPROVED_WITH_NOTES/0（P2-1/P2-2/P2-3 + P3×3 登记 0.78.x 队列评估，DEC-168 后续动作）。
+- **M5 Check 10 基线（FIX-280，M-0 入槽）**：version-plan-0.77.0.md L154 裁决表选项菜单样式触发 `m5_option_list_no_auq`（M5 运行时触发器解析选项列表样式）——两规划文档 §5.1 加 M-0 交互注记（AskUserQuestion 引用，事实+引用不引入运行时样式）；check-governance 110→105 issues（该基线条目归零，首个 FAIL 回落既有 18c）；EVD-905；TRIAGE-FIX-280 活体 0 误报实证。
+- **治理文件读取乱码（G4/F）**：pwsh 裸 `Get-Content`（ANSI/GBK 默认解码）读 `.governance` 的乱码风险以显式编码规约消除（AUDIT-147 D6 / AUDIT-148 §4.3 实证）。
+
+### Validation
+
+- FIX-278：CODE R0 NEEDS_CHANGE（P0-1 + P2×4）→ R1 APPROVED_WITH_NOTES/0（五发现全闭合；N-P2-1/N-P2-2/P3 组登记下轮触碰清理）；DESIGN R0 NEEDS_CHANGE（F-1/F-2/F-3）→ R1 APPROVED_WITH_NOTES/0（9/9 处置；W-7/BC-7 登记）；DEC-166 落盘；commit `3ad9fdd` 已推送 github-https；pytest 基线 1976 passed / 27 failed（既有基线：24×WSL 环境 + cleanup + 计时抖动 + snapshot-freshness，EVD-FIX-278 注记）。
+- FIX-279：TDD 14→15 红→绿全绿；Code Reviewer R0 APPROVED_WITH_NOTES/0（REVIEW-FIX-279-CODE-R0）；DEC-168（TRIAGE 行族权威列数标准契约）；EVD-904（1985 tests / 0 新增失败归因本次修改 / 27 存量失败 = 既定基线）；commit `c193299` 已推送 github-https（M-1 前置 ✓）。
+- REL-071 规划段：双审 APPROVED_WITH_NOTES/0 ×2（REVIEW-REL-071-RELEASE-R0 / REVIEW-REL-071-DESIGN-R0）；M-0 用户裁决 DEC-169（2026-08-26，ask_user_question）；commit `ce4d7fe` 已推送。
+- FIX-280：EVD-905；check-governance 110→105（Check 10 基线归零验证）；commit `a7fd5b3` 已推送。
+- REL-071 M-1（本候选打包，2026-08-26；candidate-only——transition/tag/push 待用户授权，DEC-143）：`release-projection --write` → `{"state": "PASS", "written": 15, "source_version": "0.78.0"}` exit 0；@version-line 锚守卫（preset 版本行 v0.78.0）+ @bootstrap-version 标记面 9 行 + REQUIRED_SNIPPETS 6 钉同步；门禁结果见 `docs/release/release-checklist-0.78.0.md`「Candidate Gate Results」。
+- 门禁（0.78.0 candidate，2026-08-26）：`check-version-consistency` PASS（13 文件声明；1 advisory WARN——host plan-tracker 记录版本仍 0.77.0，Coordinator 打包后 bump）；`check-projection-sync --fail-on-issues` PASS（15 投影）；`check-manifest-consistency` PASS；`check-cross-references --fail-on-issues` PASS（零悬空）；`verify` 无参 PASSED；`check-dsh-skills-manifest` PASS（35/35）；`check-injection-contract` PASS（4 文件）+ @version-line 动态锚解析 0.78.0；`check-release --version 0.78.0 --require-changelog --lineage-mode candidate` FAIL 项按先例全分类（见 checklist）；`release-ledger --version 0.78.0 --no-remote` 候选态 NATIVE_CANDIDATE（commit 后重跑——REL-067 先例）；`quality-tools` Ruff/mypy 未安装 → NOT_RUN 如实记录。
+
+### Boundaries
+
+- 0.78.0 **RISK-036/RISK-039 remain open**（2026-09-30；1.0.0 硬阻塞，独立关闭标准未满足）；不关闭、不重开任何风险。
+- 不做最终发布决策（candidate-only；`release_authorized=false`——transition/tag/push 待用户授权，DEC-143 交互基线）。
+- 不声明 official approval、zcode official approval、marketplace approval、curated listing、universal/full runtime support、external first-session pilot success、1.0.0 production-ready；不声明、不证明 `v0.78.0` tag 存在。
+- **Breaking changes：无**。G1 lightweight/strict 与其余输出路径字节不变（DEC-166 ②）；G2 fail-safe 边界锁定（ACTIVE/真实 nonzero 恒 FAIL）；写时 guard 仅作用于 change-triage 入账成功路径；无接口删除/重命名、无默认行为破坏。
+- **MINOR bump 依据（VERSIONING.md）**：① FIX-278 行为/规则面显著变更（G1 输出契约变更 + G2 判定规则修改（经 DEC-166 落盘）+ G3 新增写时门禁）——0.76.0 看护模式七项 / 0.75.0 注入面同类 MINOR 先例；② FIX-279 按 L34（verify_workflow.py 修 bug → PATCH 面增量）如实陈述为 PATCH 面，不作为判级依据；③ 无 BREAKING → 非 MAJOR（M-0 确认 MINOR，DEC-169）。
+- **RISK-044 快照**：`--summary-only` 墙钟 29.6-32.8s（DEC-167 检查点实测，满足修订验收「单次 <60s 且每会话仅一次」，DEC-149 接受口径）；**quick-scan 秒级子集维持出槽 0.78.0 → 0.78.x+ 候选**；**下轮复评 = 0.79.x（或下一版本规划）**——M-8 发布收尾由 Coordinator 登记 risk-log。
+- **基线 FAIL 披露惯例**：check-governance 105 issues（2026-08-26 bootstrap 实测；首个 FAIL = 既有 18c——FIX-280 后 Check 10 基线归零）；`origin SSH` 环境限制保持（github-https 为标准推送面）；archive trigger gap / 既有基线按 REL-067/068/069/070 先例分类披露。基线数字以候选打包实测为准，不引用旧值作新声明。
+- **迁移说明（RISK-D5——DSH preset 时滞）**：DSH 平台升级路径为 `git -C <plugin_root> pull && python <plugin_root>/adapters/dsh/launch.py --sync`；persona/bootstrap 模板的 0.78.0 版本行在 `--sync` 重写 preset 后生效，未 sync 前旧 preset 仍携带旧版本行——不得宣称未 sync 安装的会话级效果；升级同步后对被治理项目自然生效。
+- **出槽队列（0.78.x+）**：F-03 / F-04 / F-04-env / F-05+BC-1 / FIX-272 P2×2 / RISK-044 quick-scan / G3 扩展 / G5 / G6 / W-7+BC-7 / N-P2-1 / N-P2-2 / P3 组 / FIX-279 遗留观察项（P2×3+P3×3）/ FIX-276 R0 F-01 / change-triage「四步」描述陈旧——全部按 version-plan-0.78.0.md §5.1 裁决表登记并带来源留痕，无隐藏带入。
+
 ## [0.77.0] - 2026-08-25
 
 ### 0.77.0 - DSH 标准插件安装支持 + 事故防再发链同槽（FEAT-010 / FIX-271 / AUDIT-146 / FIX-274 / FIX-272 / FIX-273 / FIX-275 + F-02 入槽 FIX-276）（MINOR）

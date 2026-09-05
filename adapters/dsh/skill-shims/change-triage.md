@@ -1,6 +1,6 @@
 ---
 name: change-triage
-description: 变更控制 triage——产品代码新任务强制入账门禁（四步 triage + 机器记录，快速通道仅限治理记录）
+description: 变更控制 triage——产品代码新任务强制入账门禁（五步 triage + 机器记录，快速通道仅限治理记录）
 ---
 
 # change-triage（DSH 投影）

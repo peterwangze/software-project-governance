@@ -1,6 +1,6 @@
 # change-triage — 变更控制 triage（产品代码新任务强制入账门禁）
 
-> **FIX-237.4 / ADR-017 §4.4**：产品代码新任务（涉及 `skills/**`、`agents/**`、`infra/**`、`commands/**`、`adapters/**` 等）**MUST** 先运行本命令完成四步 triage 并产出机器 triage 记录，之后才允许创建 task。快速通道仅限 `.governance/` 治理记录（FIX-228 边界）。
+> **FIX-237.4 / ADR-017 §4.4**：产品代码新任务（涉及 `skills/**`、`agents/**`、`infra/**`、`commands/**`、`adapters/**` 等）**MUST** 先运行本命令完成五步 triage 并产出机器 triage 记录，之后才允许创建 task。快速通道仅限 `.governance/` 治理记录（FIX-228 边界）。
 
 ## 命令
 
@@ -24,7 +24,7 @@ python skills/software-project-governance/infra/verify_workflow.py change-triage
 | `--reason` | 否 | 优先级判定理由 |
 | `--project-root` | 否 | 显式宿主项目根（默认 resolve_entry 解析） |
 
-## 四步分析（MUST 全量执行）
+## 五步分析（MUST 全量执行）
 
 1. **依赖分析**：运行 `task-priority-analysis`（task_priority 纯读），快照完整工具输出（`report_json` + `report_text`）到 triage 记录；识别新任务被哪些未完成任务阻塞、依赖环（既有环 = WARNING，新任务自身成环 = 拦截）。
 2. **优先级判定**：校验 `P0`/`P1`/`P2`，输出 in-flight 各优先级任务计数 + 版本路线图版本链上下文。
@@ -42,7 +42,8 @@ python skills/software-project-governance/infra/verify_workflow.py change-triage
 
 ## 产出
 
-- 机器 triage 记录：`.governance/change-triage/{TASK_ID}.json`（含四步分析 + task-priority-analysis 输出快照）
+- 机器 triage 记录：`.governance/change-triage/{TASK_ID}.json`（含五步分析 + task-priority-analysis 输出快照）
+
 - evidence-log 行：`| TRIAGE-{TASK_ID} | {TASK_ID} | 变更控制 | ... | TRIAGED |`（调用快照 = 记录文件中的命令输出 JSON，FIX-237.5）
 - Check 32（`check-governance`）验证：CLI 接线存在、记录合法、晚于 normalization 边界的产品代码任务无记录 = FAIL
 

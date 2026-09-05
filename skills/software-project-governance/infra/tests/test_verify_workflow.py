@@ -15264,8 +15264,12 @@ unresolved_blockers=0
             with patch.object(vw, "SAMPLE_PATH", sp), \
                  patch.object(vw, "EVIDENCE_PATH", ep), \
                  patch.object(vw, "GOVERNANCE_DIR", gov), \
-                 patch.object(vw, "parse_completed_task_ids",
-                              return_value={"FIX-197", "FIX-199", "REL-058"}):
+                 patch("task_priority.parse_task_dependencies",
+                       return_value=[SimpleNamespace(
+                           task_id=task_id, status="✅ 完成",
+                           priority="P1", dependencies=(),
+                           cross_entity_refs=(), target_version="")
+                           for task_id in ("FIX-197", "FIX-199", "REL-058")]):
                 r = vw.check_review_closure(routing_table={})
             # Three historical rows downgraded → no V1/V5 violations for them.
             for task_id in ("FIX-197", "FIX-199", "REL-058"):
@@ -15418,7 +15422,11 @@ unresolved_blockers=0
             with patch.object(vw, "SAMPLE_PATH", sp), \
                  patch.object(vw, "EVIDENCE_PATH", ep), \
                  patch.object(vw, "ROOT", root), \
-                 patch.object(vw, "parse_completed_task_ids", return_value={"FIX-232"}):
+                 patch("task_priority.parse_task_dependencies",
+                       return_value=[SimpleNamespace(
+                           task_id="FIX-232", status="✅ 完成",
+                           priority="P1", dependencies=(),
+                           cross_entity_refs=(), target_version="")]):
                 r = vw.check_review_closure(routing_table=routing)
             # FIX-232 is exempt → no V1 violation despite NEEDS_CHANGE terminal.
             v1 = [v for v in r["violations"] if v["rule"] == "V1"

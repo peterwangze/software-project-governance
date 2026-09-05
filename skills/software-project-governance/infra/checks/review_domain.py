@@ -1610,23 +1610,6 @@ def _extract_review_conclusion_from_text(text):
     return normalized.pop() if len(normalized) == 1 else "UNKNOWN"
 
 
-def _legacy_blocker_keys(fields):
-    """Collect legacy-format ``unresolved_blocks=`` key spellings (L-B rule).
-
-    Returns a de-duplicated list of the matched legacy key texts; empty when
-    the record carries the canonical ``unresolved_blockers`` spelling (or
-    nothing at all).
-    """
-    keys = []
-    for raw_field in fields or []:
-        field = str(raw_field or "")
-        for key_match in _LEGACY_BLOCKERS_KEY_RE.finditer(field):
-            token = field[key_match.start():key_match.end()]
-            if token not in keys:
-                keys.append(token)
-    return keys
-
-
 def _missing_rounds_are_leading(missing, rounds):
     """FIX-278 G2 (L-A rule): True when the missing rounds form the leading
     prefix ``{0..k-1}`` — the chain starts at R{k} (k>=1) without R0.

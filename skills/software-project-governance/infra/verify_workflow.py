@@ -15671,7 +15671,7 @@ def _summary_detail_char_limit():
 
 
 def _truncate_summary_detail(label):
-    """Bound one summary detail line (G1: header + ≤160 chars, ellipsis)."""
+    """Bound one summary detail line (G1: header + ≤130 chars, ellipsis)."""
     limit = _summary_detail_char_limit()
     if len(label) <= limit:
         return label

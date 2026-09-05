@@ -774,14 +774,15 @@ class ChangeTriageCheckTests(unittest.TestCase):
 class ChangeTriageCliTests(unittest.TestCase):
     """CLI subprocess — four steps executable + fail-closed exits.
 
-    FIX-256 (FIX-255 F-1): the CLI subprocess derives ``current_version``
-    from the REAL plugin SKILL.md frontmatter — ``--project-root`` rebinds
-    only host governance facts, never PLUGIN_ROOT (verify_workflow
-    ``_apply_project_root_override``). A hardcoded planned-next roadmap row
-    or ``--version`` literal therefore re-reds this suite on every release
-    (target < current → ERROR → exit 2; the FIX-248/FIX-255 recurrence).
-    Both now derive from the same SKILL frontmatter the CLI itself reads,
-    so the happy path stays valid at any future version with zero edits.
+    FIX-256 (FIX-255 F-1): the CLI subprocess derives the planned-next
+    fixture row from the REAL plugin SKILL.md frontmatter so no hardcoded
+    version literal re-reds this suite on every release (the FIX-248/FIX-255
+    recurrence). FIX-288 ⑨: the CLI's ``current_version`` fact source is the
+    HOST plan-tracker roadmap's highest released row (project current
+    version — two-layer semantics), never the plugin SKILL.md frontmatter;
+    the fixture's released rows therefore pin the version base and the
+    SKILL-derived ``--version`` target stays above it (valid) and equals the
+    planned row (no mismatch WARN) at any future version with zero edits.
     """
 
     def setUp(self):
@@ -873,6 +874,210 @@ class ChangeTriageCliTests(unittest.TestCase):
             (self.gov / "change-triage" / "FIX-105.json")
             .read_text(encoding="utf-8"))
         self.assertEqual(record["analysis"]["side_effect"]["declared"], declared)
+
+
+# ─── FIX-288 ⑨ — version-adaptation fact source + planned-next selector ─────
+#
+# Two-layer version semantics (FIX-288): the WORKFLOW version (the plugin's
+# own SKILL.md frontmatter) is NOT the PROJECT current version. The
+# version-adaptation step must validate against the host plan-tracker
+# roadmap's highest 「已发布」 row; the planned-next pick must be the lowest
+# planned row ABOVE that current version (the pre-fix first-match selector
+# recorded planned_next="0.66.2" — a stale 「补偿发布规划中」 row that precedes
+# the released block in row order — on the live roadmap, with a false
+# mismatch WARN). Router live recurrence: REL-002 intake rejected because a
+# host target below the WORKFLOW version was fail-closed refused (EVO-004/
+# EV-038 precedents).
+_HOST_TRACKER_LIVE_SHAPE = """\
+# Plan Tracker
+
+## 版本规划
+
+### 版本路线图
+
+| 版本 | 状态 | 预计日期 | 核心范围 |
+|------|------|---------|---------|
+| **0.54.3** | **已撤回/失效** | — | withdrawn |
+| **0.66.1** | **发布事故 / 不可信发布** | — | untrusted |
+| **0.66.2** | **补偿发布规划中** | — | stale planned row (first-match bait) |
+| **0.73.0** | **已发布** | 2026-08-02 | baseline |
+| **0.74.0** | **已发布** | 2026-08+ | prev |
+| **0.78.0** | **已发布** | 2026-08-26 | current release |
+| **0.78.1** | **规划中** | 2026-08+ | next patch |
+
+### 优先级一览
+
+| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |
+|--------|----|------|------|---------|---------|------|
+| **P1** | FIX-100 | done task | — | 0.73.0 | closed | ✅ 完成 |
+| **P2** | FIX-101 | pending no deps | — | 0.78.1 | open | ⏳ 待执行 |
+"""
+
+# A host project far behind the workflow version — the REL-002 shape.
+_OLD_HOST_TRACKER = """\
+# Plan Tracker
+
+## 版本规划
+
+### 版本路线图
+
+| 版本 | 状态 | 预计日期 | 核心范围 |
+|------|------|---------|---------|
+| **0.9.0** | **已发布** | 2026-01-01 | baseline |
+| **0.10.0** | **已发布** | 2026-02-01 | current release |
+| **0.11.0** | **规划** | 2026-03+ | next |
+
+### 优先级一览
+
+| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |
+|--------|----|------|------|---------|---------|------|
+| **P1** | FIX-100 | done task | — | 0.9.0 | closed | ✅ 完成 |
+| **P2** | FIX-101 | pending no deps | — | 0.10.0 | open | ⏳ 待执行 |
+"""
+
+# 无版本规划行宿主 — no roadmap at all.
+_NO_ROADMAP_TRACKER = """\
+# Plan Tracker
+
+### 优先级一览
+
+| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |
+|--------|----|------|------|---------|---------|------|
+| **P2** | FIX-101 | pending no deps | — | 未规划版本 | open | ⏳ 待执行 |
+"""
+
+
+class ProjectCurrentVersionTests(unittest.TestCase):
+    """FIX-288 ⑨ — derive_project_current_version + planned-next selector."""
+
+    def test_current_version_is_highest_released_roadmap_row(self):
+        # Withdrawn (已撤回/失效) and untrusted (发布事故/不可信发布) rows are
+        # NOT released fact — 0.54.3/0.66.1 must never become the base; the
+        # stale planned 0.66.2 neither.
+        self.assertEqual(
+            ct.derive_project_current_version(_HOST_TRACKER_LIVE_SHAPE),
+            "0.78.0")
+
+    def test_old_host_derives_project_current_not_workflow_version(self):
+        # The REL-002 recurrence shape: a host far behind the workflow
+        # version derives ITS OWN current version (0.10.0), never the
+        # plugin SKILL.md frontmatter version (0.78.0+).
+        current = ct.derive_project_current_version(_OLD_HOST_TRACKER)
+        self.assertEqual(current, "0.10.0")
+        self.assertNotEqual(current, "0.78.0")
+
+    def test_no_roadmap_host_derives_empty_current(self):
+        # 无版本规划行宿主: no released row → "" → validate_version skips
+        # the lower-bound comparison (triage proceeds normally).
+        self.assertEqual(
+            ct.derive_project_current_version(_NO_ROADMAP_TRACKER), "")
+
+    def test_planned_next_is_lowest_above_current_not_first_match(self):
+        # Pre-fix first-match bug: on the live-shaped roadmap the stale
+        # 「0.66.2 补偿发布规划中」 row precedes the released block, so the
+        # pre-fix code recorded planned_next="0.66.2" and emitted a false
+        # mismatch WARN for the true next version 0.78.1.
+        result = ct.validate_version(
+            "0.78.1", current_version="0.78.0",
+            version_chain=ct.parse_version_chain(_HOST_TRACKER_LIVE_SHAPE))
+        self.assertTrue(result["ok"], result["issues"])
+        self.assertEqual(result["planned_next"], "0.78.1")
+        self.assertEqual(result["issues"], [])
+
+    def test_planned_next_none_when_all_planned_below_current(self):
+        # Every planned row at-or-below the current version → there is no
+        # next planned version to mismatch → no advisory WARN.
+        result = ct.validate_version(
+            "0.79.0", current_version="0.78.0",
+            version_chain=[{"version": "0.66.2", "status": "补偿发布规划中"}])
+        self.assertTrue(result["ok"], result["issues"])
+        self.assertIsNone(result["planned_next"])
+        self.assertEqual(result["issues"], [])
+
+    def test_unversioned_target_reports_true_planned_next(self):
+        result = ct.validate_version(
+            "未规划版本", current_version="0.78.0",
+            version_chain=ct.parse_version_chain(_HOST_TRACKER_LIVE_SHAPE))
+        self.assertTrue(result["ok"], result["issues"])
+        self.assertEqual(result["planned_next"], "0.78.1")
+
+    def test_run_triage_with_derived_current_accepts_target_above(self):
+        # 入账路径 seam (exactly what the wired CLI does): derive the project
+        # current version from the host tracker and triage the planned-next
+        # target — pre-FIX-288 this shape was rejected with 「目标版本 …
+        # 低于当前版本 <workflow-version>」.
+        tmpdir = tempfile.mkdtemp(prefix="ctpcv_")
+        gov = _governance_dir(tmpdir)
+        summary = ct.run_triage(
+            task_id="FIX-106", title="host next patch", priority="P2",
+            target_version="0.11.0", depends_on=["FIX-100"],
+            files=["skills/software-project-governance/infra/x.py"],
+            reason="router REL-002 reproduction",
+            plan_tracker_text=_OLD_HOST_TRACKER,
+            current_version=ct.derive_project_current_version(
+                _OLD_HOST_TRACKER),
+            governance_dir=gov,
+        )
+        self.assertFalse(summary.get("error"), summary)
+        record = json.loads(
+            (gov / "change-triage" / "FIX-106.json").read_text(
+                encoding="utf-8"))
+        self.assertEqual(record["analysis"]["version"]["current"], "0.10.0")
+        self.assertEqual(
+            record["analysis"]["version"]["planned_next"], "0.11.0")
+
+    def test_planned_next_cur_unknown_takes_lowest_not_first_match(self):
+        # LP-1 (REVIEW-FIX-288-R0 P2-1): direct coverage of the cur=None
+        # branch — no project current version derivable → the LOWEST planned
+        # row wins regardless of roadmap row order (first-match regression
+        # lock: 0.78.1 leads this fixture's row order and must NOT be picked).
+        # NOTE (Coordinator V-A ruling 2026-08-28): expected value locks
+        # CURRENT min-overall semantics; the residual mis-WARN for
+        # released-less hosts is registered as backlog candidate (see
+        # EVD-914) — if semantics change to max, this assertion must flip.
+        result = ct.validate_version(
+            "0.78.1", current_version="",
+            version_chain=[{"version": "0.78.1", "status": "规划中"},
+                           {"version": "0.66.2", "status": "补偿发布规划中"}])
+        self.assertTrue(result["ok"], result["issues"])
+        self.assertEqual(result["planned_next"], "0.66.2")
+
+
+class ChangeTriageProjectVersionCliTests(unittest.TestCase):
+    """FIX-288 ⑨ end to end — the CLI derives the PROJECT current version
+    from the host plan-tracker roadmap (never the plugin SKILL.md
+    frontmatter), so an old host can triage a target above ITS OWN current
+    version. Pre-fix this exited 2 with 「目标版本 0.11.0 低于当前版本
+    <workflow-version>」 and wrote NO record (router REL-002 live shape)."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="ctclifix288_")
+        self.root = Path(self.tmpdir)
+        self.gov = _governance_dir(self.tmpdir)
+        (self.gov / "plan-tracker.md").write_text(
+            _OLD_HOST_TRACKER, encoding="utf-8")
+
+    def _run_cli(self, *extra):
+        return subprocess.run(
+            [sys.executable, str(_INFRA_DIR / "verify_workflow.py"),
+             "change-triage", "--project-root", str(self.root)] + list(extra),
+            capture_output=True, text=True, encoding="utf-8", timeout=60,
+        )
+
+    def test_old_host_can_triage_target_above_project_current(self):
+        done = self._run_cli(
+            "--task", "FIX-107", "--title", "t", "--priority", "P2",
+            "--version", "0.11.0", "--depends-on", "FIX-100",
+            "--files", "skills/software-project-governance/infra/x.py",
+            "--reason", "router REL-002 reproduction",
+        )
+        self.assertEqual(done.returncode, 0, done.stderr + done.stdout)
+        payload = json.loads(done.stdout)
+        self.assertEqual(payload["analysis"]["version"]["current"], "0.10.0")
+        self.assertEqual(
+            payload["analysis"]["version"]["planned_next"], "0.11.0")
+        self.assertTrue(
+            (self.gov / "change-triage" / "FIX-107.json").is_file())
 
 
 if __name__ == "__main__":

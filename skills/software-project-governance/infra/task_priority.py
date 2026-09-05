@@ -20,7 +20,10 @@ marker at all — may enter ``Unblocked`` / ``Recommended next``. Rows with a
 terminal / non-executable leading marker (⛔ blocked, ⏸ split/held, 🔴 blocked,
 🚧 historical in-progress, 🛑 stopped, 📋 queued, ✅ completed) are excluded
 even when dependency-satisfied and reported in a separate ``non_executable``
-bucket.
+bucket. FIX-288 ⑦ extends the filter beyond leading markers: non-✅ terminal
+WORDING (completion-word forms like the live 「🔄 规划段完成 + M-0 裁决完成」,
+bare 已终止/已撤回/... prefixes) is non-executable too — 「🔄 进行中」 stays
+active (🔄 also marks genuine in-progress rows).
 
 **Cycle tolerance (FIX-237.2):** a dependency cycle is a WARNING, not an ERROR.
 The report keeps the cycle list for visibility, sets the ``cycle_warning``
@@ -203,6 +206,48 @@ _NON_CANDIDATE_MARKERS = frozenset(
     {marker for marker in _ACTIVE_STATUS_HINTS if marker != "⏳"}
 ) | {"✅", "📋"}
 
+# FIX-288 ⑦ — non-✅ terminal WORDING forms.
+#
+# The emoji marker set above does not cover terminal statuses that occur in
+# live plan-tracker data (router 2026-08-27: four all-terminal rows were
+# still listed as Top pick / Unblocked):
+#
+#   - 🔄-led rows whose wording records a completion — the live REL-073 row
+#     「🔄 规划段完成 + M-0 裁决完成」. 🔄 is deliberately NOT added to the
+#     marker set: it also marks genuine in-progress rows (「🔄 进行中」),
+#     which MUST stay eligible;
+#   - bare text terminal prefixes with no emoji at all (已终止 / 已撤回 /
+#     已取消 / 已失效 / 已完成).
+#
+# Rule (word/prefix list, FIX-288 scope ruling): a not-completed status cell
+# is terminal when it starts with a text terminal prefix OR contains the
+# completion word 「完成」 — except ⏳-led cells, which stay pending (an
+# explicit pending marker outranks wording; ✅-led cells are completed
+# upstream and never reach this predicate).
+_TEXT_TERMINAL_PREFIXES = ("已终止", "已撤回", "已取消", "已失效", "已完成")
+_COMPLETION_WORD = "完成"
+
+
+def _status_is_terminal_word(status_cell: str) -> bool:
+    """Return True for non-✅ terminal WORDING (FIX-288 ⑦).
+
+    Terminal = the cell starts with a bare text terminal prefix
+    (:data:`_TEXT_TERMINAL_PREFIXES`) or contains the completion word
+    「完成」. ⏳-led cells are explicitly pending and are never terminal
+    here; ✅-led cells are completed upstream (:func:`_status_is_completed`)
+    and never reach this predicate. The judgement mirrors the substring
+    style of ``_status_is_completed`` (contains ✅) and errs conservative: a
+    word-terminal row is filtered from Unblocked / Recommended next but
+    stays visible in the Excluded (non-executable) bucket.
+    """
+    s = str(status_cell or "").strip()
+    if not s or s.startswith("⏳"):
+        return False
+    if s.startswith(_TEXT_TERMINAL_PREFIXES):
+        return True
+    return _COMPLETION_WORD in s
+
+
 # Status marker emojis that LEAD a plan-tracker ``状态`` cell. Mirrors the
 # markers the module already classifies (✅ completed + the active hints + 📋
 # queued). Used by :func:`_is_headerless_task_row` to tell a task data row
@@ -220,7 +265,9 @@ def _status_is_candidate_eligible(status_cell: str) -> bool:
     recommended-next candidate lists ONLY when its status leading marker is ⏳
     (pending/active) or the cell has no leading status marker. Rows whose
     leading marker is terminal / non-executable (⛔ ⏸ 🔴 🚧 🛑 📋 ✅) are
-    non-candidates even when dependency-satisfied.
+    non-candidates even when dependency-satisfied. FIX-288 ⑦: non-✅ terminal
+    wording (a :data:`_TEXT_TERMINAL_PREFIXES` prefix or a completion-word
+    form) is non-candidate too.
 
     Completed rows (✅) are excluded upstream by :func:`_status_is_completed`
     and never reach this predicate; the ✅ branch here is defense-in-depth.
@@ -238,7 +285,14 @@ def _status_is_candidate_eligible(status_cell: str) -> bool:
         return True
     if s.startswith("⏳"):
         return True
-    return not s.startswith(tuple(_NON_CANDIDATE_MARKERS))
+    if s.startswith(tuple(_NON_CANDIDATE_MARKERS)):
+        return False
+    if _status_is_terminal_word(s):
+        # FIX-288 ⑦: non-✅ terminal wording (completion-word forms like the
+        # live 「🔄 规划段完成 + M-0 裁决完成」, bare 已终止/已撤回/... prefixes)
+        # is non-executable exactly like the emoji marker set above.
+        return False
+    return True
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -501,7 +555,8 @@ class PriorityReport:
             dependencies satisfied (or none), but are excluded from the
             unblocked / recommended-next candidates by the third-class status
             filter (leading marker ⛔/⏸/🔴/🚧/🛑/📋/✅ — FIX-237.2 / ADR-017
-            §4.4 P1-3). Reported separately so filtered rows stay visible.
+            §4.4 P1-3 — or non-✅ terminal wording, FIX-288 ⑦). Reported
+            separately so filtered rows stay visible.
         cycles: list of cycles detected in the dependency graph (each a tuple
             of task IDs forming the cycle, e.g. ``("FIX-A","FIX-B","FIX-A")``).
             Empty when the graph is acyclic. When non-empty, the report is still
@@ -1320,7 +1375,8 @@ def compute_unblocked_tasks(tasks: list) -> PriorityReport:
            - ``non_executable`` — not completed, all task-family dependencies
              are completed (or none), but the status leading marker is
              terminal / non-executable (⛔/⏸/🔴/🚧/🛑/📋/✅) — the third-class
-             status filter (FIX-237.2 / ADR-017 §4.4 P1-3). Reported separately
+             status filter (FIX-237.2 / ADR-017 §4.4 P1-3) — or the cell
+             carries non-✅ terminal wording (FIX-288 ⑦). Reported separately
              so filtered rows stay visible.
            - ``unblocked`` — not completed, all task-family dependencies are
              completed (or it has none), AND the status leading marker is ⏳
@@ -1559,8 +1615,9 @@ def format_report(report: PriorityReport) -> str:
         lines.append(
             "_Dependency-satisfied rows excluded from Unblocked / Recommended "
             "next: their status leading marker is terminal / non-executable "
-            "(⛔/⏸/🔴/🚧/🛑/📋/✅) even though their dependencies are met "
-            "(FIX-237.2 / ADR-017 §4.4 P1-3)._"
+            "(⛔/⏸/🔴/🚧/🛑/📋/✅) or their wording is terminal without an "
+            "emoji marker (FIX-237.2 / ADR-017 §4.4 P1-3 / FIX-288 ⑦) even "
+            "though their dependencies are met._"
         )
         lines.append("")
         for t in report.non_executable:

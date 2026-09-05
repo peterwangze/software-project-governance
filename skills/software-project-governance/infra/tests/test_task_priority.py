@@ -1010,6 +1010,129 @@ class TestThirdClassStatusFilter(unittest.TestCase):
         self.assertIn("`FIX-777`", unblocked_section)
 
 
+# ─── Fixture: non-✅ terminal wording forms (FIX-288 ⑦) ─────────────────────
+#
+# Router live-data reproduction (FIX-288 ⑦): rows whose status is terminal in
+# WORDING but carries no ⛔/⏸/🔴/🚧/🛑/📋 leading marker leaked into Unblocked /
+# Recommended next / Top pick, because the third-class filter only knew the
+# emoji marker set. Named cases (live shapes):
+#   FIX-881 — the live REL-073 form 「🔄 规划段完成 + M-0 裁决完成」 (listed as
+#             Top pick in the FIX-288 triage snapshot despite being terminal);
+#   FIX-882 — bare text terminal prefix 「已终止 …」;
+#   FIX-883 — 「已撤回/失效」 (live roadmap vocabulary);
+#   FIX-884 — 「已完成」 without the ✅ emoji (blocking semantics unchanged:
+#             non_executable, NOT completed — completed still requires ✅).
+# Controls: FIX-885 (「🔄 进行中」 — ACTIVE, 🔄 is NOT wholesale terminal),
+# FIX-886 (⏳ 待执行).
+_TERMINAL_WORD_TABLE = """\
+# Non-✅ terminal wording fixtures (FIX-288 ⑦)
+
+### 优先级一览
+
+| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |
+|--------|----|------|------|---------|---------|------|
+| **P1** | FIX-881 | live REL-073 form: segment-complete wording | — | 0.78.1 | closed | 🔄 规划段完成 + M-0 裁决完成 |
+| **P0** | FIX-882 | terminated (text-only terminal prefix) | — | 0.1.0 | closed | 已终止 (2026-08-01) |
+| **P2** | FIX-883 | withdrawn (text-only terminal prefix) | — | 0.1.0 | closed | 已撤回/失效 |
+| **P1** | FIX-884 | completed wording without emoji | — | 0.1.0 | closed | 已完成 |
+| **P0** | FIX-885 | ACTIVE control: 🔄 in-progress stays eligible | — | 0.78.1 | open | 🔄 进行中 |
+| **P2** | FIX-886 | pending control row | — | 0.3.0 | open | ⏳ 待执行 |
+"""
+
+# Router acceptance anchor (FIX-288): when EVERY row is terminal, the report
+# must fall back to the REQ-110 structured reason — no Top pick, no terminal
+# task in Unblocked / Recommended next.
+_ALL_TERMINAL_TABLE = """\
+# All-terminal fixture (FIX-288 ⑦ router anchor)
+
+### 优先级一览
+
+| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |
+|--------|----|------|------|---------|---------|------|
+| **P1** | FIX-881 | live REL-073 form | — | 0.78.1 | closed | 🔄 规划段完成 + M-0 裁决完成 |
+| **P0** | FIX-882 | terminated text-only | — | 0.1.0 | closed | 已终止 (2026-08-01) |
+"""
+
+
+class TestTerminalWordStatusFilter(unittest.TestCase):
+    """FIX-288 ⑦ — non-✅ terminal WORDING is non-executable too.
+
+    The emoji marker set (⛔/⏸/🔴/🚧/🛑/📋) does not cover terminal statuses
+    that occur in live plan-tracker data: 🔄-led rows whose wording records a
+    completion (the live REL-073 row — previously listed as Top pick) and
+    bare text terminal prefixes (已终止/已撤回/已取消/已失效/已完成). Rule: a
+    not-completed status cell is terminal when it starts with a text terminal
+    prefix OR contains the completion word 「完成」 — except ⏳-led cells
+    (explicit pending marker wins). 「🔄 进行中」 carries no completion word
+    and stays ACTIVE: 🔄 is deliberately NOT added to the terminal marker set
+    because it also marks genuine in-progress rows.
+    """
+
+    def setUp(self):
+        self.tasks = parse_task_dependencies(_TERMINAL_WORD_TABLE)
+        self.report = compute_unblocked_tasks(self.tasks)
+        self.unblocked_ids = {t.task_id for t in self.report.unblocked}
+        self.recommended_ids = [t.task_id for t in self.report.recommended_next]
+        self.excluded_ids = {t.task_id for t in self.report.non_executable}
+
+    def test_terminal_wording_rows_excluded_from_unblocked(self):
+        for tid in ("FIX-881", "FIX-882", "FIX-883", "FIX-884"):
+            self.assertNotIn(tid, self.unblocked_ids,
+                             f"{tid} must not be unblocked")
+
+    def test_terminal_wording_rows_excluded_from_recommended(self):
+        for tid in ("FIX-881", "FIX-882", "FIX-883", "FIX-884"):
+            self.assertNotIn(tid, self.recommended_ids,
+                             f"{tid} must not be recommended")
+
+    def test_terminal_wording_rows_land_in_non_executable_bucket(self):
+        self.assertEqual(
+            self.excluded_ids, {"FIX-881", "FIX-882", "FIX-883", "FIX-884"})
+
+    def test_active_in_progress_control_stays_eligible(self):
+        # 🔄 is NOT wholesale terminal: a genuine in-progress row stays a
+        # candidate (live FIX-288/FIX-289 rows depend on this).
+        self.assertIn("FIX-885", self.unblocked_ids)
+        self.assertNotIn("FIX-885", self.excluded_ids)
+
+    def test_pending_and_in_progress_controls_are_the_only_candidates(self):
+        self.assertEqual(self.unblocked_ids, {"FIX-885", "FIX-886"})
+        self.assertEqual(self.recommended_ids, ["FIX-885", "FIX-886"])
+
+    def test_completed_still_requires_emoji_not_wording(self):
+        # 「已完成」 without ✅ is terminal-non-executable, NOT completed —
+        # blocking semantics are unchanged (completed still requires ✅).
+        t = TaskDep("FIX-884", "P1", "已完成", (), (), "0.1.0")
+        done = TaskDep("FIX-885", "P0", "✅ 代码完成", (), (), "0.1.0")
+        report = compute_unblocked_tasks([t, done])
+        self.assertEqual(
+            [x.task_id for x in report.non_executable], ["FIX-884"])
+        self.assertEqual([x.task_id for x in report.completed], ["FIX-885"])
+        # ✅-led wording (「✅ 代码完成」) is completed per the FIX-226 rule
+        # (contains ✅) — judged terminal via the completed bucket (stricter
+        # than non-executable: it unblocks dependents), codified here.
+
+    def test_all_terminal_rows_yield_structured_reason_not_top_pick(self):
+        # Router acceptance anchor: an all-terminal board has NO Top pick and
+        # NO terminal task in Unblocked / Recommended next — the REQ-110
+        # structured empty reason renders instead.
+        report = compute_unblocked_tasks(
+            parse_task_dependencies(_ALL_TERMINAL_TABLE))
+        self.assertEqual(report.unblocked, [])
+        self.assertEqual(report.recommended_next, [])
+        self.assertIsNone(report.unblock_recommendation)
+        self.assertIsNotNone(report.empty_reason)
+        self.assertEqual(report.empty_reason["kind"], "all_non_executable")
+        out = format_report(report)
+        self.assertNotIn("Top pick", out)
+        unblocked_section = out.split(
+            "## Unblocked (ready to work)", 1)[1].split(
+            "## Excluded (non-executable status)", 1)[0]
+        self.assertNotIn("FIX-881", unblocked_section)
+        self.assertNotIn("FIX-882", unblocked_section)
+        self.assertIn("`FIX-881`", out)  # visible in the Excluded bucket
+
+
 class TestCycleWarning(unittest.TestCase):
     """Cycle tolerance — cycles are a WARN, not an ERROR (FIX-237.2).
 

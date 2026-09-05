@@ -13,8 +13,10 @@ it is created in plan-tracker:
   c. **conflict check** — same-file overlap with in-flight tasks (the
      existing triage records are the machine registry of in-flight file
      sets; completed tasks never conflict);
-  d. **version adaptation** — target version validated against the current
-     workflow version and the planned-next version in the roadmap;
+  d. **version adaptation** — target version validated against the project's
+     current version (the plan-tracker roadmap's highest released row;
+     FIX-288 two-layer semantics — never the workflow/plugin version) and
+     the planned-next version in the roadmap;
   e. **execution side-effect declaration** (FIX-271 / AUDIT-146 §7.2 R2) —
      any outside-repo side effect implied by the task's ``files`` /
      rationale / acceptance (installer execution, real profile writes,
@@ -313,16 +315,100 @@ def _version_tuple(version: str):
     return tuple(int(part) for part in version.split("."))
 
 
+# Release/planned roadmap status tokens (FIX-288 ⑨). A roadmap row counts as
+# RELEASED when its status cell contains 「已发布」 (live variants: 已发布 /
+# 已发布（tag 缺失待修）/ 已发布——origin/master=...; NOT 已撤回/失效 nor 发布事故 /
+# 不可信发布). Planned-next candidates keep the FIX-237.4 keyword set.
+_RELEASED_STATUS_TOKEN = "已发布"
+_PLANNED_STATUS_KEYWORDS = ("规划", "未发布", "进行中")
+
+
+def derive_project_current_version(plan_tracker_text: str) -> str:
+    """Step-d fact source (FIX-288 ⑨): the PROJECT's current version.
+
+    Two-layer version semantics: the WORKFLOW version (the plugin's own
+    SKILL.md frontmatter) is NOT the project's current version. A host
+    project may be arbitrarily older — or have no version roadmap at all —
+    and validating its new tasks against the workflow version
+    fail-closed-rejected legal target versions (router REL-002 live
+    recurrence after EVO-004/EV-038). The project current version is the
+    HIGHEST 「已发布」 row of the host plan-tracker version roadmap.
+
+    Pure: parses the passed text, performs no I/O.
+
+    Returns:
+        The highest released semver row (e.g. ``"0.78.0"``), or ``""`` when
+        the roadmap has no released row (or no roadmap) —
+        :func:`validate_version` then skips the lower-bound comparison, so a
+        no-version-planning host can triage normally.
+    """
+    released = []
+    for row in parse_version_chain(plan_tracker_text):
+        if _RELEASED_STATUS_TOKEN in str(row.get("status", "")):
+            vt = _version_tuple(row.get("version", ""))
+            if vt is not None:
+                released.append((vt, str(row["version"])))
+    if not released:
+        return ""
+    return max(released, key=lambda item: item[0])[1]
+
+
+def _planned_next_version(version_chain: list, current_version: str):
+    """Planned-next roadmap version for step d (FIX-288 ⑨ selection fix).
+
+    The pre-fix selector returned the FIRST row (in roadmap row order) whose
+    status contained a planned keyword — on the live roadmap the stale
+    「0.66.2 补偿发布规划中」 row precedes the released 0.73.0-0.78.0 block, so
+    every triage recorded ``planned_next="0.66.2"`` and emitted a false
+    mismatch WARN. Correct selection: among planned-keyword rows, the LOWEST
+    version STRICTLY ABOVE the project current version; when the current
+    version is unknown, the lowest planned version overall; when every
+    planned row sits at-or-below the current version, ``None`` (no advisory
+    WARN — there is no next planned version to mismatch).
+
+    Args:
+        version_chain: roadmap rows (``{"version", "status"}``) from
+            :func:`parse_version_chain`.
+        current_version: the project's current version (may be empty).
+
+    Returns:
+        The planned-next version string, or None.
+    """
+    cur = _version_tuple(current_version)
+    candidates = []
+    for row in version_chain or []:
+        status = str(row.get("status", ""))
+        if not any(k in status for k in _PLANNED_STATUS_KEYWORDS):
+            continue
+        vt = _version_tuple(row.get("version", ""))
+        if vt is not None:
+            candidates.append((vt, str(row["version"])))
+    if not candidates:
+        return None
+    if cur is not None:
+        above = [v for vt, v in candidates if vt > cur]
+        if above:
+            return min(above, key=_version_tuple)
+        return None
+    return min((v for vt, v in candidates), key=_version_tuple)
+
+
 def validate_version(target_version: str, current_version: str,
                      version_chain: list) -> dict:
     """Step d — version adaptation: validate the target version.
 
-    Rules:
+    Rules (FIX-288 two-layer semantics):
+      - ``current_version`` is the PROJECT's current version — the highest
+        released row of the plan-tracker roadmap
+        (:func:`derive_project_current_version`), never the workflow/plugin
+        version;
       - unversioned markers (``未规划版本`` / ``—`` / ...) are allowed;
       - otherwise the target MUST be semver;
       - a semver target LOWER than ``current_version`` is an ERROR;
       - a semver target different from the planned-next roadmap version is a
-        WARN issue (advisory — the Coordinator may still choose it).
+        WARN issue (advisory — the Coordinator may still choose it). The
+        planned-next pick is the lowest planned row above the current
+        version (:func:`_planned_next_version` — FIX-288 selection fix).
 
     Returns:
         dict ``{"target", "current", "planned_next", "issues", "ok"}``.
@@ -332,10 +418,7 @@ def validate_version(target_version: str, current_version: str,
     issues = []
     normalized = re.sub(r"[*`]", "", target).strip()
     if normalized in UNVERSIONED_MARKERS:
-        planned = next(
-            (r["version"] for r in version_chain
-             if any(k in str(r["status"]) for k in ("规划", "未发布", "进行中"))),
-            None)
+        planned = _planned_next_version(version_chain, current_version)
         return {
             "target": target, "current": current_version,
             "planned_next": planned, "issues": [], "ok": True,
@@ -353,10 +436,7 @@ def validate_version(target_version: str, current_version: str,
             issues.append(
                 "ERROR: 目标版本 {0} 低于当前版本 {1}".format(
                     normalized, current_version))
-    planned = next(
-        (r["version"] for r in version_chain
-         if any(k in str(r["status"]) for k in ("规划", "未发布", "进行中"))),
-        None)
+    planned = _planned_next_version(version_chain, current_version)
     if planned and normalized != planned:
         issues.append(
             "WARN: 目标版本 {0} 与版本路线图规划的下一个版本 {1} 不一致"
@@ -646,7 +726,10 @@ def run_triage(*, task_id: str, title: str = "", priority: str,
             radius) — satisfies the step-e declaration duty for
             outside-repo side effects (R2).
         plan_tracker_text: raw plan-tracker markdown.
-        current_version: current workflow version (SKILL.md frontmatter).
+        current_version: the PROJECT's current version — the plan-tracker
+            roadmap's highest released row
+            (:func:`derive_project_current_version`; FIX-288 two-layer
+            semantics — not the workflow/plugin version).
         governance_dir: ``.governance`` directory (records land under
             ``governance_dir/change-triage/``).
         existing_records: optional pre-loaded triage records (defaults to
@@ -812,6 +895,7 @@ __all__ = [
     "split_dep_ids",
     "run_dependency_analysis",
     "parse_version_chain",
+    "derive_project_current_version",
     "analyze_priority_context",
     "validate_version",
     "check_conflicts",

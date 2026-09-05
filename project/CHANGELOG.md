@@ -2,6 +2,51 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.78.1] - 2026-09-05
+
+### 0.78.1 - DEC-172 裁决 A 修复/清理/测试卫生批 + FIX-281 缺陷子集 + FIX-290 dsh 安全生命周期批（FIX-282~289 / FIX-290 / REL-072 / REL-073）（PATCH）
+
+0.78.1 是 **PATCH** 发布，把 `v0.78.0`（= `afb959d`，REL-071 transition）之后已合入的 **13 个 commit**（任务链 11 + 编排纠偏 1 + 本候选 1——门禁实测与双审发现处置已并入候选 commit）打包成发布候选——窗口 `git log v0.78.0..HEAD`（M-1 核定，规划 §0 待验证项①闭环）：**FIX-282** `7771588`（DEC-171 commit-msg Step 3 加粗 ID 匹配修复）、**FIX-289** `9e7c178`（FIX-281⑤⑥ review_record 覆盖守卫 + 前缀约定）、**FIX-283** `d4e3f8e`（review_domain 清理 N-P2-1/N-P2-2/N-P3-1 + 四步措辞）、**FIX-285** `4763868`（F-3 bootstrap 标记面守卫 + F-01 引号）、**FIX-286** `7b816c7`（dsh.skills 分类器收紧）、**FIX-287** `e481b6f`（FIX-281②③④ 解析器边界三联修）、**FIX-288** `fe795d7`（FIX-281⑨ 版本适配事实源 + ⑦ 终态过滤）、**FIX-284∩288∩286** `2c30eca`（G3 列数契约联合，映射表既定）、**REL-072** `b44ef37` + **REL-073** `df17553`（规划产物入库）、**FIX-290** `ce17dfd`（dsh 适配安全生命周期批——DEC-176 范围核增）、编排纠偏 `9046d2c`（blob 分段应用伪影归一，零语义）。commit 编排按 DEC-176 方案 A（分任务 hunk 拆分 + 真交错联合），commit-msg/pre-commit 全门禁活体通过（Step 3 加粗匹配/Step 7 审查证据/Step 10-11 目标对齐与用户影响补账 EVD-928..947）。**不关闭 RISK-036/RISK-039**。版本投影 0.78.0 -> 0.78.1（15 projections `release-projection --write` + @bootstrap-version 标记面 + presets/governance 版本行 @version-line 守卫 + REQUIRED_SNIPPETS 6 版本钉）。**Breaking changes：无**（检查器/解析器/清理/测试卫生/文档批，行为语义按 L38 逐项论证；FIX-290 为适配安全面与包名中立化，dsh 安装命令变更随 README 对称表迁移指南承载）。
+
+### Added
+
+- **FIX-285 F-3 bootstrap 标记面机器守卫**：check-version-consistency 扩展 @bootstrap-version 标记面检查（_version_tuple + VersionConsistencyBootstrapMarkerTests 132 行）——bootstrap 模板漂移从"agent 自觉"升级为机器拦截。
+- **FIX-288 版本适配事实源**：derive_project_current_version（项目当前版本为基准，修复 FIX-281⑨ router 活体第三现——宿主合法目标版本被 fail-closed 拒绝）+ 路线图行状态词表 + task-priority 终态措辞过滤（⑦）。
+- **FIX-289 覆盖守卫**：review_record task+round 记录不可变（force 显式 opt-in + 备份/标记/留痕三重，DEC-174 库级 API 出路）+ EV-/EVD- 跨仓前缀约定说明（references/evidence-id-prefix-conventions.md）。
+- **FIX-290 dsh 安全生命周期批（DEC-176 范围核增）**：npm 包名中立化（@zcode→@peterwangze，cordis.patch.yml 双处自定位同步）+ preset 根 trust:system（防 GUI 删除经 pnpm junction 直删仓库文件）+ launch.py --dry-run/--uninstall 对称生命周期 + **包内预设 skill 接线修复（两轮活体闭环：cwd 相对缺陷 → 裸行继承假设证伪 → baseUrl 自定位双根〔dsh-novel-writing 实证模式〕，用户 2026-09-05 活体确认 /governance 恢复）** + README dsh 段重写（三形态安装/管理动作对称表/安全验证边界 R1 隔离协议/前置要求）+ 三层守卫测试（形态强制 !!js+baseUrl / 禁字面量相对 / URL 运算语义求值 + files 白名单覆盖）。
+- **REL-072/REL-073 规划产物入库**：出槽队列 triage + 0.78.1 版本规划（双审 APPROVED_WITH_NOTES/0 ×2 既录）。
+- RISK-049 登记（适配器面宣示 vs 验证等级缺口；关闭标准三条：claim→evidence 机器映射 / live 冒烟门禁 / 升级回归清单入 release gate）。
+
+### Changed
+
+- **dsh 安装命令族（FIX-290）**：`dsh plugin add` 规格改为 `link:`/`file:`/`github:` 三形态（README 对称表：安装/升级/降级/卸载 × bundle/预设两面）；预设 skill 目录机制改为 baseUrl 自定位（详见 Fixed）。
+- **change-triage 第五步措辞**（FIX-283）：commands/shim 四步→五步投影同步（FIX-271 引入的第五步既成事实）。
+
+### Fixed
+
+- **DEC-171 commit-msg Step 3 匹配缺陷**（FIX-282）：字面量 grep 对加粗任务 ID 行永不匹配（REL-071/072 被迫 --no-verify 实证）→ tolerant row matcher（ERE 锚定首列+第二列，容忍加粗；任务不存在仍 FAIL）；TDD 17 例 + 11 subtests。
+- **FIX-281②③④解析器边界**（FIX-287）：轻量表列数按 profile 解析（parts[9] 硬编码消除）+ 活跃任务节边界（任意完成类子节终止）+ Gate 括号节名匹配。
+- **G3 write-guard 列数契约**（FIX-284∩288）：standard_cols 取首个非写入 TRIAGE 行（行族标准 10 列），EVD fallback 显式来源。
+- **review_domain 死代码遮蔽**（FIX-283 N-P2-1）：_legacy_blocker_keys 旧实现删除。
+- **dsh.skills 分类器**（FIX-286）：路径段校验前移（bundle/平铺双格式一等公民）。
+- **dsh 预设 skill 目录两连缺陷**（FIX-290 核心）：cwd 相对路径（dsh-skill-filesystem L79 按进程 cwd 解析）与裸行（预设层不继承 host 行 customSkillDirs）——均致 /governance 静默失效；修复 = `!!js "fileURLToPath(new URL('../../skills/', baseUrl))"` 自定位（用户活体验证通过）。
+
+### Validation
+
+- 全链 Code Reviewer R0 APPROVED/APPROVED_WITH_NOTES、unresolved_blockers=0（FIX-282..290 逐任务机录 + FIX-290 P2×3 README 边界同轮补齐）；REL-073 规划期双审 DESIGN-R0/RELEASE-R0 既录。
+- FIX-290：test_dsh_adapter 全绿（含 8 新守卫方法）；check-injection-contract / check-dsh-skills-manifest / check-projection-sync / check-cross-references / check-manifest-consistency 全 PASS；隔离实证（临时 DSH_HOME，真实 home 零写入×8 轮取证）：link:/file: 安装布局 + baseUrl 表达式落点求值 + discoverPresets 健康 + web boot 200；用户 link: 活体确认 /governance。
+- commit 链全 hook 门禁活体通过（本 CHANGELOG 条目所载 13 commit 序列）。
+- 门禁（0.78.1 candidate）：见 `docs/release/release-checklist-0.78.1.md`「Candidate Gate Results」；基线 FAIL 按先例分类披露。
+
+### Boundaries
+
+- 0.78.1 **RISK-036/RISK-039 remain open**（2026-09-30；1.0.0 硬阻塞）；RISK-049 新登记（打开）。
+- candidate-only：`release_authorized=false`——transition/tag/push 待用户授权（DEC-143，M-4 唯一人工门）；不声明、不证明 `v0.78.1` tag 存在。
+- 不声明 official/marketplace approval、universal/full runtime support、1.0.0 readiness。
+- **PATCH 定位（VERSIONING.md L38）**：全部确定入槽项零行为语义变更；FIX-281 缺陷子集与 FIX-290 按先例如实陈述（⑤⑨守卫/适配面 = L13/L34 PATCH 面增量）；判定面 ①⑧ 出槽 0.79.0（与 W-7/BC-7 同域，DEC-172/规划 §6）。
+- **dsh 复验边界（R2 三条 P2 落地）**：`link:`/`file:` 隔离复验 2026-09-05（Windows）；`github:` 打包语义同构——v0.78.1 推送前 GitHub master 仍 0.78.0（不含本批修复）；非 Windows 未验证。
+- **GUI 复制预设边界**：复制体 skill 根重锚后目录为空——用户根副本用 `launch.py --install`（README 已载）。
+
 ## [0.78.0] - 2026-08-26
 
 ### 0.78.0 - 治理降噪第一批——G1 summary top-N + G2 legacy 判定 + G3 写时 guard + G4/F UTF-8 显式化 + write-guard 契约修正 + M5 基线小修（FIX-278 / FIX-279 / REL-071 / FIX-280）（MINOR）

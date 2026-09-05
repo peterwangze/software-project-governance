@@ -748,6 +748,138 @@ class CleanCheckoutBoundaryTests(unittest.TestCase):
 
         self.assertEqual(result["dangling"], [])
 
+class VersionConsistencyBootstrapMarkerTests(unittest.TestCase):
+    """FIX-285: bootstrap marker face machine guard inside check-version-consistency.
+
+    Entry files: AGENTS.md (tracked) + CLAUDE.md (gitignored local sync, FIX-256).
+    Contract (DEC-173③ / REL-071 F-3 + Coordinator Option B ruling):
+      * tracked entry, stale marker   -> [FAIL]
+      * tracked entry, missing marker -> [FAIL] (G-series: missing header = stale)
+      * marker == active_version      -> PASS (no bootstrap issue)
+      * untracked local, stale marker -> [WARN] advisory (REL-071 F-2/BC-3:
+        root CLAUDE.md is local-only; FIX-238.2 fail-closed covers re-sync)
+      * entry file absent             -> skipped
+    Tests call checks.version.check_version_consistency(root, root) directly so
+    the fixture host_root is fully isolated from the real repo entry files.
+    """
+
+    @staticmethod
+    def _run_check(root: Path):
+        from checks.version import check_version_consistency
+
+        return check_version_consistency(root, root)
+
+    def _make_root(self, root: Path) -> str:
+        skill_dir = root / "skills" / "software-project-governance"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nversion: 9.9.9\n---\n", encoding="utf-8"
+        )
+        return "9.9.9"
+
+    @staticmethod
+    def _bootstrap_issues(issues):
+        return [i for i in issues if "@bootstrap-version" in i]
+
+    @staticmethod
+    def _git(*args: str) -> None:
+        subprocess.run(["git", *args], capture_output=True, check=False)
+
+    def test_stale_marker_in_tracked_entry_file_fails(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = self._make_root(root)
+            stale = "9.8.0"
+            (root / "AGENTS.md").write_text(
+                f"> @bootstrap-version: {stale}\n", encoding="utf-8"
+            )
+            self._git("-C", str(root), "init")
+            self._git("-C", str(root), "add", "AGENTS.md")
+
+            issues = self._bootstrap_issues(self._run_check(root))
+
+            self.assertTrue(
+                any(
+                    i.startswith("[FAIL]") and "AGENTS.md" in i and stale in i
+                    for i in issues
+                ),
+                f"stale tracked AGENTS.md marker must FAIL, got {issues}",
+            )
+
+    def test_missing_marker_in_tracked_entry_file_fails(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._make_root(root)
+            (root / "AGENTS.md").write_text(
+                "# Codex project guide\n\nNo bootstrap header here.\n",
+                encoding="utf-8",
+            )
+            self._git("-C", str(root), "init")
+            self._git("-C", str(root), "add", "AGENTS.md")
+
+            issues = self._bootstrap_issues(self._run_check(root))
+
+            self.assertTrue(
+                any(
+                    i.startswith("[FAIL]") and "AGENTS.md" in i and "NOT FOUND" in i
+                    for i in issues
+                ),
+                f"tracked AGENTS.md without marker must FAIL, got {issues}",
+            )
+
+    def test_current_markers_produce_no_bootstrap_issue(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = self._make_root(root)
+            (root / "AGENTS.md").write_text(
+                f"> @bootstrap-version: {source}\n", encoding="utf-8"
+            )
+            (root / "CLAUDE.md").write_text(
+                f"> @bootstrap-version: {source}\n", encoding="utf-8"
+            )
+
+            issues = self._bootstrap_issues(self._run_check(root))
+
+            self.assertEqual(
+                issues, [], f"current markers must PASS with no issue, got {issues}"
+            )
+
+    def test_stale_marker_in_untracked_local_copy_warns(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._make_root(root)
+            stale = "9.8.0"
+            # No git init here: the entry copy is untracked (CLAUDE.md local-sync shape).
+            (root / "CLAUDE.md").write_text(
+                f"> @bootstrap-version: {stale}\n", encoding="utf-8"
+            )
+
+            issues = self._bootstrap_issues(self._run_check(root))
+
+            self.assertTrue(
+                any(
+                    i.startswith("[WARN]") and "CLAUDE.md" in i and stale in i
+                    for i in issues
+                ),
+                f"stale untracked CLAUDE.md marker must WARN, got {issues}",
+            )
+            self.assertFalse(
+                any(i.startswith("[FAIL]") for i in issues),
+                f"untracked local copy must never FAIL, got {issues}",
+            )
+
+    def test_absent_entry_files_are_skipped(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._make_root(root)
+
+            issues = self._bootstrap_issues(self._run_check(root))
+
+            self.assertEqual(
+                issues, [], f"absent entry files must be skipped, got {issues}"
+            )
+
+
 
 class FileExistenceTests(unittest.TestCase):
     """Test _check_file_exists() logic."""

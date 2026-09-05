@@ -20099,7 +20099,7 @@ def cmd_check_version_consistency(_args):
 
     print("\n=== Version Consistency Check ===")
     print(f"  Source of truth: skills/software-project-governance/SKILL.md")
-    print(f"  Files checked: 13 (SKILL.md, manifest.json, marketplace.json, 4 plugin.json, CHANGELOG, plan-tracker, 4 hooks)")
+    print(f"  Files checked: 13 (SKILL.md, manifest.json, marketplace.json, 4 plugin.json, CHANGELOG, plan-tracker, 4 hooks) + bootstrap markers (AGENTS.md, CLAUDE.md)")
 
     fail_items = [i for i in issues if not i.startswith("[WARN]")]
     warn_items = [i for i in issues if i.startswith("[WARN]")]

@@ -43,6 +43,37 @@ def version_facts(root: Path) -> Dict[str, str]:
     return facts
 
 
+def _version_tuple(version: str) -> tuple:
+    try:
+        return tuple(int(part) for part in version.split("."))
+    except ValueError:
+        return ()
+
+
+def _tracked_entry_files(root: Path, names) -> set:
+    """Return the subset of ``names`` tracked by git in ``root`` (FIX-285).
+
+    Mirrors the ``_tracked_target_files`` git-probe shape of checks/projection.py:
+    a non-git directory or an unavailable git yields an empty set, so callers
+    treat entry copies as untracked (advisory face) instead of failing.
+    """
+    if not (root / ".git").exists():
+        return set()
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "--", *names],
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", check=False, timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return set()
+    if result.returncode != 0:
+        return set()
+    return {line.strip() for line in result.stdout.splitlines() if line.strip() in names}
+
+
 def check_version_consistency(root: Path, host_root: Optional[Path] = None) -> List[str]:
     facts = version_facts(root)
     source = facts.get("SKILL.md (source of truth)", "")
@@ -82,4 +113,26 @@ def check_version_consistency(root: Path, host_root: Optional[Path] = None) -> L
         match = re.search(r"工作流版本[^0-9]*([0-9]+\.[0-9]+\.[0-9]+)", plan.read_text(encoding="utf-8"))
         if match and match.group(1) != source:
             issues.append(f"[WARN] plan-tracker workflow version={match.group(1)}, expected={source}")
+    # Bootstrap marker face guard (FIX-285 / DEC-173③ / REL-071 F-3).
+    # Entry files: AGENTS.md (tracked) + CLAUDE.md (gitignored local sync, FIX-256).
+    # Stale tracked marker -> FAIL; stale untracked local copy -> [WARN] advisory
+    # (REL-071 F-2/BC-3: the root CLAUDE.md is local-only; FIX-238.2 fail-closed
+    # covers its re-sync). A tracked entry file without a marker header is stale
+    # per the G-series rule (missing header = pre-0.73.0). Absent files skip.
+    entry_names = ("AGENTS.md", "CLAUDE.md")
+    tracked = _tracked_entry_files(host_root, entry_names)
+    for name in entry_names:
+        entry = host_root / name
+        if not entry.is_file():
+            continue
+        match = re.search(r"@bootstrap-version:\s*([0-9]+\.[0-9]+\.[0-9]+)", entry.read_text(encoding="utf-8"))
+        if not match:
+            if name in tracked:
+                issues.append(f"[FAIL] {name}: @bootstrap-version marker NOT FOUND (missing header = stale, expected={source})")
+            continue
+        if _version_tuple(match.group(1)) < _version_tuple(source):
+            if name in tracked:
+                issues.append(f"[FAIL] {name}: @bootstrap-version={match.group(1)} is stale (< active_version {source})")
+            else:
+                issues.append(f"[WARN] {name}: @bootstrap-version={match.group(1)} is stale (< active_version {source}); untracked local copy — advisory (FIX-238.2 fail-closed covers re-sync)")
     return issues

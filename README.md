@@ -201,7 +201,7 @@ For full Chinese installation details and daily usage guidance, continue below.
 - **B 级（CLI-Enforced Automation）**：CLI/脚本强制——`verify_workflow.py check-governance`、`status` 与 commit hooks 在命令/commit 时点强制（= B 级）；「唯一命令」「5 分钟开始」「验证」中的 `/governance` 自动场景检测、自动诊断修复路由属本级（命令时点、事件驱动，非持续）。
 - **C 级（System Automation）**：后台系统自动触发、不依赖 agent 记忆——**未实现（roadmap）**（plugin-contract.md L102：MCP/headless runner 仅有协议样例，无可用实现）。0.76.0 起经会话 bootstrap 的 `check-governance --summary-only` 自动运行的「会话级」健康摘要不是 C 级后台 daemon。
 
-**当前治理自动级别 = A 级 + B 级；C 级为 roadmap（未实现）**。完整分级声明与对外宣示口径见 [`skills/software-project-governance/SKILL.md`](skills/software-project-governance/SKILL.md)「自动化能力分级声明」；对外宣示不得把 C 级未实现说成已实现。README 中其余「自动」表述（如「安装后入口在后续会话自动可用」、适配器边界说明中的「headless 自动化」「browser 自动化」「dsh 自动注入」）为宿主/适配器加载机制或能力边界说明，与治理自动化分级无关。
+**当前治理自动级别 = A 级 + B 级；C 级为 roadmap（未实现）**。完整分级声明与对外宣示口径见 [`skills/software-project-governance/SKILL.md`](skills/software-project-governance/SKILL.md)「自动化能力分级声明」；对外宣示不得把 C 级未实现说成已实现。README 中其余「自动」表述（如「安装后，工作流入口会在后续会话中自动可用」、适配器边界说明中的「headless 自动化」「browser 自动化」「dsh 自动注入」）为宿主/适配器加载机制或能力边界说明，与治理自动化分级无关。
 
 ## 可选本地 Web 控制台
 

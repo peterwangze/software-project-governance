@@ -60,12 +60,12 @@ git clone https://github.com/peterwangze/software-project-governance.git
 
 DeepSeek Harness (dsh) plugin install — `dsh plugin` is a thin pnpm forwarder, so the add spec is a pnpm package spec (same style as the dsh-novel-writing plugin). Prerequisites: **dsh ≥ 0.1.2-rc.1** (the version boundary where the preset activates with the bundle; on ≤0.1.1-rc.2 use the optional launch.py path below), **pnpm**, and for the `github:` form **git + network**; the launch.py path and all verification commands need **Python 3** (`python`; some Linux/macOS distributions use `python3`).
 
+```bash
 # local checkout, live link (recommended for contributors — code edits apply on profile restart)
 dsh plugin --profile web add link:/path/to/software-project-governance
 # local snapshot alternative (content-addressed; upgrading needs remove + add)
 dsh plugin --profile web add file:/path/to/software-project-governance
 # from GitHub (needs git + network)
-```bash
 dsh plugin --profile web add github:peterwangze/software-project-governance
 
 # upgrade / uninstall
@@ -106,8 +106,8 @@ python adapters/dsh/launch.py --sync             # upgrade after git pull
 python adapters/dsh/launch.py --uninstall        # uninstall — deletes exactly .agent-presets/governance/ (--dry-run to preview)
 # downgrade: git checkout v<old-tag> + --install (overwrites in place)
 ```
-Key boundary: `dsh plugin remove` manages the profile's pnpm bundle layer — on dsh ≥ 0.1.2-rc.1 that removes the whole package including the bundle-provided preset (the symmetric uninstall for a `dsh plugin add` install). It still never touches `${DSH_HOME}/.agent-presets/`: a preset installed there via `launch.py --install` is uninstalled by `launch.py --uninstall` (or manual directory deletion), and `dsh plugin remove` on a preset that was never a pnpm dependency reports `ERR_PNPM_CANNOT_REMOVE_MISSING_DEPS`.
 
+Key boundary: `dsh plugin remove` manages the profile's pnpm bundle layer — on dsh ≥ 0.1.2-rc.1 that removes the whole package including the bundle-provided preset (the symmetric uninstall for a `dsh plugin add` install). It still never touches `${DSH_HOME}/.agent-presets/`: a preset installed there via `launch.py --install` is uninstalled by `launch.py --uninstall` (or manual directory deletion), and `dsh plugin remove` on a preset that was never a pnpm dependency reports `ERR_PNPM_CANNOT_REMOVE_MISSING_DEPS`.
 
 Codex personal marketplace package:
 
@@ -446,7 +446,6 @@ Remove-Item Env:\DSH_HOME   # 用完清理临时目录
 ```
 
 当前边界：本适配器于 2026-07-08 在真实 dsh 会话（`dsh --version` = `0.1.0-rc.6`）中完成编写与验证——原生 skill/subagent/ask_user_question/tool_calling/git_hooks 全部可用，生成的预设通过 `agentPresets.standingKeyFor` 挂载校验；2026-09-05 在 dsh `0.1.2-rc.1` + pnpm 11.22.0 隔离环境复验插件安装与预设生成链路。browser 自动化与 MCP 仍是 host-dependent（degraded）。这是 runtime-verified 适配，不是 dsh 官方收录、marketplace approval 或 universal/full runtime support。
-
 
 ### zcode
 

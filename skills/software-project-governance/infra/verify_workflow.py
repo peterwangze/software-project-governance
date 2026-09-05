@@ -9346,6 +9346,7 @@ class GovernanceDataSource:
             entry["id"]
             for entry in self.get_all_completed_task_entries()
         }
+
     def _plan_profile(self):
         """Resolve the Profile declared by this data source's plan-tracker."""
         if not self.sample_path.is_file():
@@ -9360,13 +9361,12 @@ class GovernanceDataSource:
             _PROFILE_TASK_COLUMNS.get(self._plan_profile())
         )
 
-
     def get_all_completed_task_entries(self):
         """Return completed task entries with source metadata."""
         completed = []
         if self.sample_path.is_file():
-            status_index = self._hot_task_status_index()
             content = self.sample_path.read_text(encoding="utf-8")
+            status_index = self._hot_task_status_index()
             for line in content.split("\n"):
                 line_stripped = line.strip()
                 if not line_stripped.startswith("| ") or "---" in line_stripped:
@@ -11925,6 +11925,7 @@ def _is_incomplete_task_status(status):
     completed_markers = ("已完成", "✅", "已关闭", "已发布", "已终止", "终止", "取消", "废弃")
     return not any(marker in normalized for marker in completed_markers)
 
+
 # FIX-287③: subsection headings inside `## 当前活跃事项` that hold completed /
 # archived content — collection suspends on them regardless of section order.
 _NONACTIVE_SUBSECTION_MARKERS = ("最近完成", "已完成", "已归档", "依赖链")
@@ -11935,21 +11936,21 @@ def _is_nonactive_subsection(heading):
     return any(marker in heading for marker in _NONACTIVE_SUBSECTION_MARKERS)
 
 
-
 def parse_current_active_tasks():
     """Parse hot active task rows from plan-tracker compact tables."""
     if not SAMPLE_PATH.is_file():
         return []
     content = SAMPLE_PATH.read_text(encoding="utf-8")
     tasks = []
-    collecting = True
     in_active_section = False
+    collecting = True
     for line in content.split("\n"):
         if line.startswith("## 当前活跃事项"):
-            collecting = True
             in_active_section = True
+            collecting = True
             continue
         if not in_active_section:
+            continue
         if line.startswith("## "):
             # FIX-287③: the next top-level section always ends the active section.
             break
@@ -11960,7 +11961,6 @@ def parse_current_active_tasks():
             collecting = not _is_nonactive_subsection(line)
             continue
         if not collecting:
-            continue
             continue
         stripped = line.strip()
         if not stripped.startswith("|") or "---" in stripped:
@@ -13801,6 +13801,7 @@ _PROFILE_TASK_COLUMNS = {
     "standard": 20,
     "strict": 20,
 }
+
 # FIX-287②: legacy standard/strict task tables (20 columns) keep the status
 # cell at the 10th column; compact profiles (fewer columns, e.g. lightweight
 # 6-column tables) carry it in the last column. Derived from
@@ -13813,7 +13814,6 @@ def _task_status_column_index(expected_cols):
     if expected_cols is None or expected_cols > _LEGACY_TASK_STATUS_COLUMN:
         return _LEGACY_TASK_STATUS_COLUMN
     return expected_cols - 1
-
 
 
 def check_profile_consistency():
@@ -21195,6 +21195,7 @@ def _triage_write_structure_guard(evidence_path, record_path, record_id=None):
 
     Scope (write guard, not repo guard): ONLY the written artifacts are
     judged — a pre-existing structural issue elsewhere in the governance dir
+    never blocks intake (fail-safe to the writer's own artifacts only).
     FIX-284 (review-FIX-279-CODE-R0 P2-2): the row-family standard is the
     one deliberate overlap with pre-existing rows — the column contract is
     read FROM the evidence-log itself (DEC-168), so in a legacy
@@ -21202,7 +21203,6 @@ def _triage_write_structure_guard(evidence_path, record_path, record_id=None):
     that matches the current format; the mismatch issue and the CLI
     remediation message therefore name the standard row source, keeping
     standard-row drift distinguishable from a writer bug.
-    never blocks intake (fail-safe to the writer's own artifacts only).
 
     Returns a list of issue strings; empty = structurally sound. Never raises.
     """
@@ -21234,8 +21234,8 @@ def _triage_write_structure_guard(evidence_path, record_path, record_id=None):
             record_id = "TRIAGE-" + Path(record_path).stem
         except (OSError, ValueError):
             record_id = ""
-    standard_source = ""
     standard_cols = None
+    standard_source = ""
     triage_family_found = False
     written_cols = None
     written_found = False
@@ -21251,14 +21251,14 @@ def _triage_write_structure_guard(evidence_path, record_path, record_id=None):
                 written_cols = len(_split_markdown_table_row(line))
             elif not triage_family_found:
                 triage_family_found = True
-                standard_source = "first non-written TRIAGE-family row"
                 standard_cols = len(_split_markdown_table_row(line))
+                standard_source = "first non-written TRIAGE-family row"
             continue
         if not triage_family_found and standard_cols is None \
                 and line.startswith("| EVD-"):
+            standard_cols = len(_split_markdown_table_row(line))
             standard_source = "EVD fallback row (legacy log without a " \
                 "prior TRIAGE family)"
-            standard_cols = len(_split_markdown_table_row(line))
     if not written_found:
         issues.append(
             "written evidence row {0} not found after the machine write — "
@@ -21295,6 +21295,7 @@ def cmd_change_triage(args):
     re-validated at write time (``_triage_write_structure_guard`` — the
     evidence-log row column contract + record JSON); a guard failure exits 2
     so a structural breach cannot be introduced silently (AUDIT-148 §4.2
+    Check-14 无写时检测 gap).
 
     FIX-288 ⑨ (version fact source): ``current_version`` is the PROJECT's
     current version — the highest 「已发布」 row of the HOST plan-tracker
@@ -21303,7 +21304,6 @@ def cmd_change_triage(args):
     read before FIX-288; that mismatch fail-closed-rejected legal target
     versions on older or roadmap-less hosts — router REL-002 after
     EVO-004/EV-038).
-    Check-14 无写时检测 gap).
     """
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -21360,7 +21360,6 @@ def cmd_change_triage(args):
               "无行族时 EVD fallback——DEC-168 行族权威），历史异构库中该标准行"
               "可能为旧行（列数漂移）——写入行符合当前格式时先核对标准行本身"
               .format(summary.get("task_id", "?")), file=sys.stderr)
-
         sys.exit(2)
 
 

@@ -748,6 +748,7 @@ class CleanCheckoutBoundaryTests(unittest.TestCase):
 
         self.assertEqual(result["dangling"], [])
 
+
 class VersionConsistencyBootstrapMarkerTests(unittest.TestCase):
     """FIX-285: bootstrap marker face machine guard inside check-version-consistency.
 
@@ -878,7 +879,6 @@ class VersionConsistencyBootstrapMarkerTests(unittest.TestCase):
             self.assertEqual(
                 issues, [], f"absent entry files must be skipped, got {issues}"
             )
-
 
 
 class FileExistenceTests(unittest.TestCase):
@@ -9032,6 +9032,7 @@ class PlanTrackerParsingTests(unittest.TestCase):
                 self.assertEqual(len(vw.parse_completed_task_ids()), 0)
                 self.assertEqual(len(vw.parse_gate_status()), 2)
 
+
 class Fix287ParserBoundaryTests(unittest.TestCase):
     """FIX-287: parser defect regressions (②③④).
 
@@ -9224,7 +9225,6 @@ class Fix287ParserBoundaryTests(unittest.TestCase):
             sp = self._write(Path(td), self._gate_plan("## Gate 状态跟踪"))
             with patch.object(vw, "SAMPLE_PATH", sp):
                 self.assertEqual(len(vw.parse_gate_status()), 2)
-
 
 
 class GovernanceIntegrationTests(unittest.TestCase):
@@ -16771,6 +16771,7 @@ class DshSkillsManifestTests(unittest.TestCase):
                     for issue in result["issues"]),
                 result["issues"],
             )
+
     # ─── FIX-286 F1 (review-FIX-272-CODE-R0 F1): traversal regression ──────
     #
     # The defense itself was verified safe by the R0 review's independent
@@ -16928,8 +16929,6 @@ class Fix284WriteGuardMissingRowTests(unittest.TestCase):
             self.assertEqual(len(issues), 1, issues)
             self.assertIn("TRIAGE-FIX-284", issues[0])
             self.assertIn("not found", issues[0])
-
-
 
 
 if __name__ == "__main__":

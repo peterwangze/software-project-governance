@@ -44,7 +44,6 @@ python skills/software-project-governance/infra/verify_workflow.py change-triage
 ## 产出
 
 - 机器 triage 记录：`.governance/change-triage/{TASK_ID}.json`（含五步分析 + task-priority-analysis 输出快照）
-
 - evidence-log 行：`| TRIAGE-{TASK_ID} | {TASK_ID} | 变更控制 | ... | TRIAGED |`（调用快照 = 记录文件中的命令输出 JSON，FIX-237.5）
 - Check 32（`check-governance`）验证：CLI 接线存在、记录合法、晚于 normalization 边界的产品代码任务无记录 = FAIL
 

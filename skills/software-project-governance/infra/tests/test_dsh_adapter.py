@@ -173,6 +173,191 @@ class DshAdapterTests(unittest.TestCase):
             str(_REPO_ROOT.resolve()).replace("\\", "/"),
         )
 
+    def test_install_dry_run_writes_nothing(self):
+        # FEAT-010 incident / DEC-158 R1: the safe verification path must be
+        # side-effect free — --dry-run may not create even the preset root.
+        launch = _load_launch_module()
+        with tempfile.TemporaryDirectory() as td, patch.dict(
+            os.environ, {"DSH_HOME": td}, clear=False
+        ):
+            self.assertEqual(launch.install_preset("link", dry_run=True), 0)
+            self.assertEqual(launch.install_preset("copy", dry_run=True), 0)
+            self.assertFalse((Path(td) / ".agent-presets").exists())
+
+    def test_cli_install_dry_run_flag_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as td:
+            env = os.environ.copy()
+            env["DSH_HOME"] = td
+            result = subprocess.run(
+                [sys.executable, str(_LAUNCH_PATH), "--install", "--dry-run"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=env,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("[DRY-RUN]", result.stdout)
+            self.assertIn("dsh home", result.stdout)
+            self.assertFalse((Path(td) / ".agent-presets").exists())
+
+    def test_bootstrap_dry_run_writes_nothing(self):
+        launch = _load_launch_module()
+        with tempfile.TemporaryDirectory() as td:
+            project = Path(td) / "project"
+            project.mkdir()
+            self.assertEqual(
+                launch.write_bootstrap(project, force=False, dry_run=True), 0
+            )
+            self.assertFalse((project / "AGENTS.md").exists())
+
+    def test_uninstall_removes_only_governance_preset(self):
+        # Lifecycle symmetry: install must have an official uninstall that
+        # deletes exactly the governance preset dir — never siblings.
+        launch = _load_launch_module()
+        with tempfile.TemporaryDirectory() as td, patch.dict(
+            os.environ, {"DSH_HOME": td}, clear=False
+        ):
+            self.assertEqual(launch.install_preset("link"), 0)
+            sibling = Path(td) / ".agent-presets" / "other-agent"
+            sibling.mkdir(parents=True)
+            (sibling / "preset.yml").write_text("name: other\n", encoding="utf-8")
+            self.assertEqual(launch.uninstall_preset(), 0)
+            self.assertFalse((Path(td) / ".agent-presets" / "governance").exists())
+            self.assertTrue((sibling / "preset.yml").is_file())
+            # idempotent: uninstalling an absent preset is a clean no-op
+            self.assertEqual(launch.uninstall_preset(), 0)
+
+    def test_uninstall_dry_run_deletes_nothing(self):
+        launch = _load_launch_module()
+        with tempfile.TemporaryDirectory() as td, patch.dict(
+            os.environ, {"DSH_HOME": td}, clear=False
+        ):
+            self.assertEqual(launch.install_preset("link"), 0)
+            self.assertEqual(launch.uninstall_preset(dry_run=True), 0)
+            self.assertTrue(
+                (Path(td) / ".agent-presets" / "governance" / "preset.yml").is_file()
+            )
+
+    def test_cli_uninstall_flag_removes_preset(self):
+        with tempfile.TemporaryDirectory() as td:
+            env = os.environ.copy()
+            env["DSH_HOME"] = td
+            install = subprocess.run(
+                [sys.executable, str(_LAUNCH_PATH), "--install"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=env,
+            )
+            self.assertEqual(install.returncode, 0, install.stdout + install.stderr)
+            uninstall = subprocess.run(
+                [sys.executable, str(_LAUNCH_PATH), "--uninstall"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=env,
+            )
+            self.assertEqual(
+                uninstall.returncode, 0, uninstall.stdout + uninstall.stderr
+            )
+            self.assertIn("preset removed", uninstall.stdout)
+            self.assertFalse((Path(td) / ".agent-presets" / "governance").exists())
+
+    def test_shipped_preset_skill_dirs_are_baseurl_selflocated(self):
+        # FIX-290 round 2 (live regression, twice): preset sessions do NOT
+        # inherit the host-plane customSkillDirs, and literal relative
+        # entries resolve against the dsh PROCESS CWD
+        # (dsh-skill-filesystem `map((root) => resolve(root))`) — either way
+        # the session catalog silently empties and `/governance` disappears.
+        # The only sanctioned form here is `!!js` resolved from `baseUrl`
+        # (this composition's own directory; the pattern proven by the
+        # shipped dsh-novel-writing preset). Guard: (1) the shipped preset
+        # carries customSkillDirs entries; (2) every entry is a !!js baseUrl
+        # self-location expression; (3) no literal relative entries; (4) the
+        # URL math of each expression, evaluated against the preset file's
+        # real location, yields an existing directory.
+        shipped_path = _REPO_ROOT / "presets" / "governance" / "agent.cordis.yml"
+        shipped = shipped_path.read_text(encoding="utf-8")
+        self.assertIn("- id: skill-filesystem", shipped)
+        entries = re.findall(
+            r"(?m)^\s*-\s*!!js\s+\"([^\"]*baseUrl[^\"]*)\"\s*$", shipped
+        )
+        self.assertGreaterEqual(
+            len(entries), 2, "expected 2 baseUrl self-located customSkillDirs"
+        )
+        # no literal relative customSkillDirs entries (cwd-resolved trap)
+        self.assertIsNone(
+            re.search(r"(?m)^\s*-\s*['\"]\.\.?/", shipped),
+            "literal relative skill roots are forbidden (process-cwd resolved)",
+        )
+        # semantic evaluation: URL math against the preset's real location
+        from urllib.parse import urljoin, urlparse
+        import urllib.request
+
+        preset_dir_uri = shipped_path.parent.resolve().as_uri() + "/"
+        for expr in entries:
+            m = re.search(r"new URL\('([^']+)',\s*baseUrl\)", expr)
+            self.assertIsNotNone(m, f"entry not baseUrl-anchored: {expr}")
+            resolved = urljoin(preset_dir_uri, m.group(1))
+            local = urllib.request.url2pathname(urlparse(resolved).path)
+            self.assertTrue(
+                Path(local).is_dir(),
+                f"customSkillDirs entry resolves to missing dir: {local}",
+            )
+
+    def test_shipped_preset_skill_roots_are_pack_whitelisted(self):
+        # FIX-290 round 2 companion guard: the semantic URL-math test above
+        # validates the REPO layout, but `file:`/`github:` installs receive
+        # a package packed per package.json `files` — a root that exists in
+        # the repo yet falls outside the whitelist silently disappears from
+        # installed copies (same failure class: empty session catalog). Every
+        # directory the preset's customSkillDirs expressions resolve to must
+        # be covered by a `files` entry.
+        shipped_path = _REPO_ROOT / "presets" / "governance" / "agent.cordis.yml"
+        shipped = shipped_path.read_text(encoding="utf-8")
+        # anchor on real `- !!js "..."` config entries (comment examples in
+        # the preset header use a `'<rel>'` placeholder and must not match)
+        exprs = re.findall(
+            r"(?m)^\s*-\s*!!js\s+\"([^\"]*baseUrl[^\"]*)\"\s*$", shipped
+        )
+        rels = [
+            m.group(1)
+            for m in (
+                re.search(r"new URL\('([^']+)',\s*baseUrl\)", expr)
+                for expr in exprs
+            )
+            if m
+        ]
+        self.assertGreaterEqual(len(rels), 2)
+        pkg = json.loads((_REPO_ROOT / "package.json").read_text(encoding="utf-8"))
+        whitelist = [
+            str(item).rstrip("/").replace("\\", "/")
+            for item in pkg.get("files", [])
+            if not str(item).startswith("!")
+        ]
+        for rel in rels:
+            # resolve `../../skills/` against presets/governance/ → repo-relative
+            parts = ["presets", "governance"]
+            for segment in rel.split("/"):
+                if segment == "..":
+                    parts.pop()
+                elif segment:
+                    parts.append(segment)
+            resolved = "/".join(parts)
+            covered = any(
+                resolved == entry or resolved.startswith(entry + "/")
+                for entry in whitelist
+            )
+            self.assertTrue(
+                covered,
+                f"customSkillDirs root '{resolved}' is not covered by "
+                f"package.json files whitelist {whitelist} — installed "
+                "file:/github: copies would lack it",
+            )
+
     def _init_target_repo(self, root: Path) -> None:
         root.mkdir()
         subprocess.run(

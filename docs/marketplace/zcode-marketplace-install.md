@@ -35,7 +35,7 @@ These facts were established by reading the zcode runtime bundle (`D:\app\zcode\
 | --- | --- | --- |
 | zcode plugin manifest | `.zcode-plugin/plugin.json` | Declares name/version/description/author/homepage/repository/license/skills/commands. |
 | Claude/zcode marketplace registry | `.claude-plugin/marketplace.json` | Declares the marketplace (`name: spg`) and the plugin entry with `source: {source:"github", repo:"peterwangze/software-project-governance"}`. zcode and Claude Code both read this path. |
-| npm package identity | `package.json` (root) | `@zcode/software-project-governance-plugin` scope. |
+| npm package identity | `package.json` (root) | `@peterwangze/software-project-governance-plugin` (renamed 2026-09-05 from `@zcode/...` to an agent-neutral owner scope — the npm name is packaging identity only, not agent affiliation; the zcode plugin identity itself is the neutral `software-project-governance` declared in `.zcode-plugin/plugin.json`). |
 | Brand assets | `.zcode-plugin/assets/{logo,composer-icon,governance-preview}.svg` | Placeholder brand assets. |
 
 ## Marketplace Install Procedure

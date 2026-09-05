@@ -12,6 +12,19 @@ Modes:
   --check              Print the adapter manifest summary (default action).
   --install / --sync   (Re)write the preset into ${DSH_HOME}/.agent-presets/governance.
                        --sync is the post-`git pull` refresh path.
+  --uninstall          Remove the governance preset — deletes exactly
+                       ${DSH_HOME}/.agent-presets/governance/ and nothing else
+                       (sibling presets and every other file under DSH_HOME
+                       untouched; path-escape guard built in). Idempotent: a
+                       missing preset is a clean no-op. This is the official
+                       preset-side uninstall path — `dsh plugin remove` manages
+                       the profile's pnpm bundle layer, never the user preset
+                       root, so it cannot remove this preset.
+  --dry-run            Safety mode (FEAT-010 incident / DEC-158 R1 protocol):
+                       print the resolved ${DSH_HOME} and every planned write
+                       without touching the filesystem. Verify the adapter this
+                       way, or against a redirected DSH_HOME — never by
+                       installing into the real ~/.dsh.
   --mode link|copy     link (default): the preset registers the repo's own
                        skills/ + adapters/dsh/skill-shims/ directories as
                        custom skill roots — repo edits are picked up live by
@@ -90,8 +103,22 @@ def print_manifest(manifest: dict) -> None:
     print(f" - command: {manifest['validation']['command']}")
 
 
-def install_preset(mode: str) -> int:
+def install_preset(mode: str, dry_run: bool = False) -> int:
     target = preset_dir()
+    if dry_run:
+        print(f"[DRY-RUN] dsh home     : {dsh_home()}")
+        print(f"[DRY-RUN] preset dir   : {target}")
+        if mode == "copy":
+            print(f"[DRY-RUN] snapshot     : {target / 'skills'} , {target / 'skill-shims'}")
+        else:
+            print(f"[DRY-RUN] skill roots  : {ROOT / 'skills'}")
+            print(f"[DRY-RUN] command roots: {ADAPTER_DIR / 'skill-shims'}")
+        planned = "agent.cordis.yml, preset.yml, skill-root.txt"
+        if mode == "copy":
+            planned += " (+ skills/ and skill-shims/ snapshots)"
+        print(f"[DRY-RUN] planned write: {planned}")
+        print("[DRY-RUN] nothing written — re-run without --dry-run to install")
+        return 0
     target.mkdir(parents=True, exist_ok=True)
 
     if mode == "copy":
@@ -142,7 +169,44 @@ def install_preset(mode: str) -> int:
     return 0
 
 
-def write_bootstrap(project: Path, force: bool) -> int:
+def uninstall_preset(dry_run: bool = False) -> int:
+    """Remove the governance preset from ${DSH_HOME}/.agent-presets/governance.
+
+    Deletes exactly that one preset directory; sibling presets and every
+    other file under ${DSH_HOME} are never touched. Idempotent: a missing
+    preset is a clean no-op (exit 0), not an error.
+    """
+    target = preset_dir()
+    # Path-escape guard: the resolved target must sit directly under an
+    # `.agent-presets` parent before anything is deleted.
+    if target.parent.name != ".agent-presets" or target.name != PRESET_ID:
+        print(
+            f"ERROR: refusing to uninstall unexpected path: {target}",
+            file=sys.stderr,
+        )
+        return 1
+    if not target.exists():
+        print(f"not installed: {target} (nothing to do)")
+        return 0
+    entries = sorted(p.name for p in target.iterdir())
+    if dry_run:
+        print(f"[DRY-RUN] dsh home      : {dsh_home()}")
+        print(f"[DRY-RUN] preset dir    : {target}")
+        print(
+            f"[DRY-RUN] planned delete: {target} "
+            f"({len(entries)} entr{'y' if len(entries) == 1 else 'ies'}: "
+            f"{', '.join(entries)})"
+        )
+        print("[DRY-RUN] nothing deleted — re-run without --dry-run to uninstall")
+        return 0
+    shutil.rmtree(target)
+    print(f"preset removed: {target}")
+    print(f"  deleted entries: {', '.join(entries)}")
+    print("  sibling presets and all other DSH_HOME content untouched")
+    return 0
+
+
+def write_bootstrap(project: Path, force: bool, dry_run: bool = False) -> int:
     project = project.expanduser().resolve()
     if not project.is_dir():
         print(f"ERROR: project root is not a directory: {project}", file=sys.stderr)
@@ -163,6 +227,11 @@ def write_bootstrap(project: Path, force: bool) -> int:
                 file=sys.stderr,
             )
             return 1
+    if dry_run:
+        print(f"[DRY-RUN] bootstrap target: {target}")
+        print("[DRY-RUN] planned write  : AGENTS.md (thin governance pointer)")
+        print("[DRY-RUN] nothing written — re-run without --dry-run to write")
+        return 0
     target.write_text(rendered, encoding="utf-8")
     print(f"bootstrap written: {target}")
     return 0
@@ -187,11 +256,23 @@ def main(argv=None) -> int:
         help="(re)write the governance preset into ${DSH_HOME}/.agent-presets/governance",
     )
     parser.add_argument(
+        "--uninstall",
+        action="store_true",
+        help="remove the governance preset (deletes exactly "
+        "${DSH_HOME}/.agent-presets/governance; sibling presets untouched)",
+    )
+    parser.add_argument(
         "--mode",
         choices=["link", "copy"],
         default="link",
         help="link = register the repo's own skill roots (default); "
         "copy = snapshot them into the preset directory",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the resolved ${DSH_HOME} and planned writes without "
+        "touching the filesystem (safe verification; DEC-158 R1)",
     )
     parser.add_argument(
         "--bootstrap-project",
@@ -208,13 +289,22 @@ def main(argv=None) -> int:
     acted = False
     exit_code = 0
 
+    if args.install and args.uninstall:
+        parser.error("--install and --uninstall are mutually exclusive")
+
     if args.install:
         acted = True
-        exit_code = install_preset(args.mode) or exit_code
+        exit_code = install_preset(args.mode, dry_run=args.dry_run) or exit_code
+    if args.uninstall:
+        acted = True
+        exit_code = uninstall_preset(dry_run=args.dry_run) or exit_code
     if args.bootstrap_project:
         acted = True
         exit_code = (
-            write_bootstrap(Path(args.bootstrap_project), args.force) or exit_code
+            write_bootstrap(
+                Path(args.bootstrap_project), args.force, dry_run=args.dry_run
+            )
+            or exit_code
         )
 
     if not acted or args.check:

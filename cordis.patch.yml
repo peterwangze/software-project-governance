@@ -37,19 +37,31 @@
 # and the root-provided `dshHomePath` service are reachable — the same
 # pattern dsh-base itself uses for `!!js dshHomePath('sessions')`.
 #
-# dsh 0.1.1-rc.2 boundary (verified in source, lib/profile-boot-DG5t9aNs.js
-# `composeProfile`): the launcher appends a final overlay that replaces
-# `agent-presets` `roots` with the shipped preset root alone, so a
-# bundle-declared root is visible in `dsh --profile <p> --dump-config` but
-# not yet honored at boot. The declaration is forward-compatible: the
-# dsh-agent-presets contract (README "Config") defines `roots` as the
-# mechanism for extra preset directories, and this entry turns live as soon
-# as a dsh build stops forcing the field. On current dsh the preset is
-# activated through the user root (`includeUserRoot` scans
-# `$DSH_HOME/.agent-presets`), which `adapters/dsh/launch.py --install`
-# writes — see README.md "DeepSeek Harness" for both paths. `default` stays
-# `standard` deliberately: naming `governance` while roots are launcher-forced
-# would fail session creation on current dsh.
+# dsh boundary history: 0.1.1-rc.2 (verified in source, lib/profile-boot-
+# DG5t9aNs.js `composeProfile`) appended a final overlay that replaced
+# `agent-presets` `roots` with the shipped preset root alone — a bundle-
+# declared root was visible in `dsh --profile <p> --dump-config` but not
+# honored at boot, so the preset activated only through the user root that
+# `adapters/dsh/launch.py --install` writes. **0.1.2-rc.1 (re-verified
+# 2026-09-05, lib/profile-boot-BTzzdrGY.js `composeProfile`) applies bundle
+# patches with no roots-forcing overlay**, and `dsh-agent-presets` scans
+# `config.roots` in precedence order (`lib/index.js` `get roots()`), so this
+# root is live at boot: a plain `dsh plugin add` + restart now exposes the
+# shipped `governance` preset with no launcher script. `launch.py --install`
+# remains as the optional user-root path (GUI-manageable copy / older-dsh
+# fallback / preset-only installs without the bundle).
+#
+# `trust: system` (set 2026-09-05): the shipped preset belongs to the
+# deployment, not the user. `deleteComposition` refuses presets whose trust is
+# not `user` ("it ships with the deployment"), and `writableRoot()` returns
+# the FIRST user-trust root — with `trust: user` here that would be this
+# package's own presets dir (a pnpm junction straight into the source repo
+# under `link:` installs), so a GUI delete would have `rm -rf`'d repository
+# files through the junction. `trust: system` keeps the package preset
+# read-only (copy-to-customize lands in `$DSH_HOME/.agent-presets`, delete
+# refused, removal happens via `dsh plugin remove` — symmetric with install).
+# `default` stays `standard` deliberately: the user picks `governance` per
+# session (or sets the default in settings → agent presets).
 - id: agent-presets
   name: '@deepseek-ai/dsh-agent-presets'
   config:
@@ -60,7 +72,7 @@
           (() => {
             const path = process.getBuiltinModule('node:path');
             const fs = process.getBuiltinModule('node:fs');
-            const pkg = '@zcode/software-project-governance-plugin';
+            const pkg = '@peterwangze/software-project-governance-plugin';
             let profile;
             for (let i = 2; i < process.argv.length; i++) {
               const arg = process.argv[i];
@@ -84,7 +96,7 @@
             }
             return path.join(profilesRoot, 'node_modules', pkg, 'presets');
           })()
-        trust: user
+        trust: system
 
 # ── skill-filesystem: the governance skill catalog (boot-active mechanism) ──
 #
@@ -107,7 +119,7 @@
       (() => {
         const path = process.getBuiltinModule('node:path');
         const fs = process.getBuiltinModule('node:fs');
-        const pkg = '@zcode/software-project-governance-plugin';
+        const pkg = '@peterwangze/software-project-governance-plugin';
         let profile;
         for (let i = 2; i < process.argv.length; i++) {
           const arg = process.argv[i];

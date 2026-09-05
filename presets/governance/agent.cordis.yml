@@ -6,36 +6,47 @@
 # `adapters/dsh/agent.cordis.yml.template` — the same composition
 # `adapters/dsh/launch.py --install` writes to
 # `${DSH_HOME}/.agent-presets/governance/` with ABSOLUTE substituted paths.
-# The only intended differences: (a) skill roots are RELATIVE so the preset
-# mounts in place inside the installed package, (b) the persona derives the
-# plugin root from the skill resourceBase instead of a substituted absolute
-# path. Keep this file and the template in sync on every persona/contract
-# change. Version sync is MANUAL three-way (SKILL.md frontmatter
-# version = this file's persona version line = package.json version; verified
-# aligned at 0.76.0 in the FEAT-010 round) EXCEPT the version line itself,
-# which is now machine-guarded by FIX-272: INJECTION_CONTRACT_ANCHORS carries
-# the dynamic `@version-line` anchor for this path (resolved to
-# `治理工作流（v<SKILL.md frontmatter version>）` at check time, FIX-250
-# precedent), so the version line needs no hand re-verification. The persona
-# CONTRACT BLOCK keywords are machine-guarded by FIX-274 (same registry).
+# The intended differences: (a) this file's `customSkillDirs` use `!!js`
+# `baseUrl` self-location (cwd-independent, works in place inside the
+# installed package) instead of the template's substituted absolute paths,
+# and (b) the persona derives the plugin root from the skill resourceBase
+# instead of a substituted absolute path. Keep this file and the template in
+# sync on every persona/contract change. Version sync is MANUAL three-way
+# (SKILL.md frontmatter version = this file's persona version line =
+# package.json version; verified aligned at 0.76.0 in the FEAT-010 round)
+# EXCEPT the version line itself, which is now machine-guarded by FIX-272:
+# INJECTION_CONTRACT_ANCHORS carries the dynamic `@version-line` anchor for
+# this path (resolved to `治理工作流（v<SKILL.md frontmatter version>）` at
+# check time, FIX-250 precedent), so the version line needs no hand
+# re-verification. The persona CONTRACT BLOCK keywords are machine-guarded by
+# FIX-274 (same registry). FIX-290 adds a further machine guard: every
+# customSkillDirs entry here must be a `!!js` baseUrl self-location
+# expression (test_dsh_adapter.py).
 #
-# Relative-path semantics: a preset row's relative paths resolve from THIS
-# file's own directory (dsh-agent-presets README "How a preset's rows
-# resolve": a preset's own plugin files and skill directories travel with
-# it), so `../../skills` and `../../adapters/dsh/skill-shims` reach the
-# package payload when this preset is mounted from `presets/governance/`.
-# Copying this directory OUT of the package breaks those paths — for a
-# user-root copy under `${DSH_HOME}/.agent-presets/` run
-# `adapters/dsh/launch.py --install` instead, which generates absolute paths.
+# Relative-path WARNING (FIX-290, 2026-09-05): `customSkillDirs` entries are
+# resolved with Node `path.resolve` against the dsh PROCESS CWD (installed
+# dsh: dsh-skill-filesystem/lib/index.js — `this.customSkillDirs = ...map((root)
+# => resolve(root))`), NOT against this composition file's directory. Literal
+# relative strings therefore resolve to nonexistent paths and silently empty
+# the session catalog (`/governance` disappears). Equally, preset sessions do
+# NOT inherit the host-plane row's customSkillDirs — the preset MUST carry its
+# own. The ONLY sanctioned form here is `!!js` resolved from `baseUrl` (this
+# file's own directory, proven by the shipped dsh-novel-writing preset):
+#   - !!js "process.getBuiltinModule('node:url').fileURLToPath(new URL('<rel>', baseUrl))"
+# Copying this directory OUT of the package keeps baseUrl-relative resolution
+# pointing inside the ORIGINAL package location only when the copy retains the
+# same relative depth — for a user-root copy under
+# `${DSH_HOME}/.agent-presets/` run `adapters/dsh/launch.py --install`
+# instead, which generates absolute paths.
 #
 # Loading model (thin projection): the workflow rules stay in the package's
 # shared skill (`skills/software-project-governance/SKILL.md`). This preset
 # only (a) gives the agent the Coordinator persona + bootstrap, (b) registers
-# the package's skills/ directory plus the adapters/dsh/skill-shims/ command
-# projections as custom skill roots so the native `skill` tool exposes the
-# whole workflow catalog, and (c) keeps the full standard coding-agent toolset
-# so role agents can be spawned with the same composition (dsh children
-# inherit their parent's preset).
+# the package's skills/ tree plus the adapters/dsh/skill-shims/ command
+# projections as custom skill roots (baseUrl self-located) so the native
+# `skill` tool exposes the whole workflow catalog, and (c) keeps the full
+# standard coding-agent toolset so role agents can be spawned with the same
+# composition (dsh children inherit their parent's preset).
 #
 # Structure mirrors the shipped `standard` preset: every row outside an
 # `isolate` group resolves a host-plane registry, and no service is published
@@ -125,18 +136,24 @@
 
 # ── skills ──────────────────────────────────────────────────────────────────
 
-# The workflow catalog travels with the package: both roots below are
-# RELATIVE to this preset's own directory (../../skills = the package's
-# skills/ tree; ../../adapters/dsh/skill-shims = the flat command-projection
-# skills over commands/*.md), so `/governance` and friends stay first-class
-# dsh skills without touching the shared command files. Registration happens
-# in THIS preset's layer of the host skill registry, so no realm is needed.
+# The skill REGISTRY lives in the host composition and is layered per scope:
+# these rows register into THIS preset's layer of it, so they need no realm.
+# FIX-290 (round 2, 2026-09-05): preset sessions do NOT inherit the host-plane
+# row's customSkillDirs — a bare row here leaves the session catalog empty and
+# `/governance` disappears (live regression, twice). The PROVEN pattern is the
+# shipped dsh-novel-writing preset: resolve each root from `baseUrl` (this
+# composition file's own directory — set by Include when the preset mounts),
+# which is cwd-independent. `../../skills` = the package's skills/ tree and
+# `../../adapters/dsh/skill-shims` = the flat command projections, because this
+# preset lives at <pkg>/presets/governance/. Literal relative strings are
+# FORBIDDEN here (they resolve against the process cwd and silently empty the
+# catalog — machine-guarded by test_dsh_adapter.py).
 - id: skill-filesystem
   name: '@deepseek-ai/dsh-skill-filesystem'
   config:
     customSkillDirs:
-      - '../../skills'
-      - '../../adapters/dsh/skill-shims'
+      - !!js "process.getBuiltinModule('node:url').fileURLToPath(new URL('../../skills/', baseUrl))"
+      - !!js "process.getBuiltinModule('node:url').fileURLToPath(new URL('../../adapters/dsh/skill-shims/', baseUrl))"
 
 - id: tool-skill
   name: '@deepseek-ai/dsh-tool-skill'

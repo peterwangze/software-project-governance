@@ -21195,6 +21195,13 @@ def _triage_write_structure_guard(evidence_path, record_path, record_id=None):
 
     Scope (write guard, not repo guard): ONLY the written artifacts are
     judged — a pre-existing structural issue elsewhere in the governance dir
+    FIX-284 (review-FIX-279-CODE-R0 P2-2): the row-family standard is the
+    one deliberate overlap with pre-existing rows — the column contract is
+    read FROM the evidence-log itself (DEC-168), so in a legacy
+    heterogeneous library a historical legacy standard row can flag a write
+    that matches the current format; the mismatch issue and the CLI
+    remediation message therefore name the standard row source, keeping
+    standard-row drift distinguishable from a writer bug.
     never blocks intake (fail-safe to the writer's own artifacts only).
 
     Returns a list of issue strings; empty = structurally sound. Never raises.
@@ -21227,6 +21234,7 @@ def _triage_write_structure_guard(evidence_path, record_path, record_id=None):
             record_id = "TRIAGE-" + Path(record_path).stem
         except (OSError, ValueError):
             record_id = ""
+    standard_source = ""
     standard_cols = None
     triage_family_found = False
     written_cols = None
@@ -21243,10 +21251,13 @@ def _triage_write_structure_guard(evidence_path, record_path, record_id=None):
                 written_cols = len(_split_markdown_table_row(line))
             elif not triage_family_found:
                 triage_family_found = True
+                standard_source = "first non-written TRIAGE-family row"
                 standard_cols = len(_split_markdown_table_row(line))
             continue
         if not triage_family_found and standard_cols is None \
                 and line.startswith("| EVD-"):
+            standard_source = "EVD fallback row (legacy log without a " \
+                "prior TRIAGE family)"
             standard_cols = len(_split_markdown_table_row(line))
     if not written_found:
         issues.append(
@@ -21256,8 +21267,11 @@ def _triage_write_structure_guard(evidence_path, record_path, record_id=None):
             and written_cols != standard_cols):
         issues.append(
             "evidence row {0} has {1} columns, evidence-log standard is {2} "
-            "(Check 14 evidence_col_mismatch rule)".format(
-                record_id, written_cols, standard_cols))
+            "from the {3} (Check 14 evidence_col_mismatch rule; DEC-168 "
+            "row-family authority — the standard row may be a historical "
+            "legacy row with an older column count; verify the standard row "
+            "itself if the written row matches the current format)".format(
+                record_id, written_cols, standard_cols, standard_source))
     return issues
 
 
@@ -21281,24 +21295,31 @@ def cmd_change_triage(args):
     re-validated at write time (``_triage_write_structure_guard`` — the
     evidence-log row column contract + record JSON); a guard failure exits 2
     so a structural breach cannot be introduced silently (AUDIT-148 §4.2
+
+    FIX-288 ⑨ (version fact source): ``current_version`` is the PROJECT's
+    current version — the highest 「已发布」 row of the HOST plan-tracker
+    version roadmap (:func:`change_triage.derive_project_current_version`) —
+    never the WORKFLOW version (the plugin SKILL.md frontmatter this entry
+    read before FIX-288; that mismatch fail-closed-rejected legal target
+    versions on older or roadmap-less hosts — router REL-002 after
+    EVO-004/EV-038).
     Check-14 无写时检测 gap).
     """
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
-    from change_triage import run_triage
+    from change_triage import derive_project_current_version, run_triage
     if not SAMPLE_PATH.is_file():
         print(
             "change-triage: plan-tracker.md not found at {0}".format(SAMPLE_PATH),
             file=sys.stderr,
         )
         sys.exit(2)
-    current_version = (
-        _extract_skill_version(
-            PLUGIN_ROOT / "skills/software-project-governance/SKILL.md")
-        or ""
-    )
+    plan_tracker_text = SAMPLE_PATH.read_text(encoding="utf-8")
+    # FIX-288 ⑨: project current version from the host roadmap — two-layer
+    # version semantics (workflow version ≠ project version).
+    current_version = derive_project_current_version(plan_tracker_text)
     files = [
         f.strip() for f in str(args.files or "").replace(";", ",").split(",")
         if f.strip()
@@ -21313,7 +21334,7 @@ def cmd_change_triage(args):
         reason=getattr(args, "reason", "") or "",
         acceptance=getattr(args, "acceptance", "") or "",
         declared_side_effects=getattr(args, "side_effects", "") or "",
-        plan_tracker_text=SAMPLE_PATH.read_text(encoding="utf-8"),
+        plan_tracker_text=plan_tracker_text,
         current_version=current_version,
         governance_dir=GOVERNANCE_DIR,
     )
@@ -21334,8 +21355,12 @@ def cmd_change_triage(args):
                   file=sys.stderr)
         print("change-triage write guard: remediation — 修复写入产物（证据行/"
               "记录 JSON）后重新入账；记录已存在时先人工处置 "
-              "(change-triage/{0}.json + TRIAGE-{0} evidence row) 再重试".format(
-                  summary.get("task_id", "?")), file=sys.stderr)
+              "(change-triage/{0}.json + TRIAGE-{0} evidence row) 再重试；"
+              "列数标准来源=evidence-log 行族首行（首个非本次写入的 TRIAGE 行，"
+              "无行族时 EVD fallback——DEC-168 行族权威），历史异构库中该标准行"
+              "可能为旧行（列数漂移）——写入行符合当前格式时先核对标准行本身"
+              .format(summary.get("task_id", "?")), file=sys.stderr)
+
         sys.exit(2)
 
 

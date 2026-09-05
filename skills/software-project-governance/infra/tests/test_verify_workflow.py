@@ -16771,6 +16771,165 @@ class DshSkillsManifestTests(unittest.TestCase):
                     for issue in result["issues"]),
                 result["issues"],
             )
+    # ─── FIX-286 F1 (review-FIX-272-CODE-R0 F1): traversal regression ──────
+    #
+    # The defense itself was verified safe by the R0 review's independent
+    # 14/14 boundary probes (no live vulnerability); the P2 gap was the
+    # missing regression guard — a future refactor could silently break the
+    # rejection. Each probe below locks: (a) unit-level rejection
+    # (`_normalize_declared_skill_path` → None), (b) the classifier reason
+    # class behind the FIX-286 F2 message split, (c) the upstream
+    # `check_dsh_skills_manifest` security-grade issue, and (d) zero
+    # filesystem side effects (the check only reads package.json — the
+    # probed escape targets do not exist and are not created).
+
+    def test_traversal_probe_dotdot_relative_is_rejected(self):
+        """FIX-286 F1 probe 1: `../skills/x/SKILL.md` parent-escape entry."""
+        probe = "../skills/x/SKILL.md"
+        self.assertIsNone(vw._normalize_declared_skill_path(probe))
+        self.assertEqual(
+            vw._classify_declared_skill_path(probe),
+            (None, "traversal"))
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "package.json").write_text(json.dumps({
+                "dsh": {"skills": [probe]},
+            }, ensure_ascii=False), encoding="utf-8")
+            result = vw.check_dsh_skills_manifest(root)
+            self.assertTrue(
+                any("path traversal or absolute entry rejected" in issue
+                    and probe in issue
+                    for issue in result["issues"]),
+                result["issues"],
+            )
+            self.assertEqual(result["declared_count"], 0)
+            # No filesystem side effect: nothing beyond package.json exists
+            # after the check (the probed escape target was not created).
+            self.assertEqual(
+                sorted(p.relative_to(root).as_posix()
+                       for p in root.rglob("*")),
+                ["package.json"])
+
+    def test_traversal_probe_posix_absolute_is_rejected(self):
+        """FIX-286 F1 probe 2: `/skills/x/SKILL.md` POSIX-absolute entry."""
+        probe = "/skills/x/SKILL.md"
+        self.assertIsNone(vw._normalize_declared_skill_path(probe))
+        self.assertEqual(
+            vw._classify_declared_skill_path(probe),
+            (None, "absolute"))
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "package.json").write_text(json.dumps({
+                "dsh": {"skills": [probe]},
+            }, ensure_ascii=False), encoding="utf-8")
+            result = vw.check_dsh_skills_manifest(root)
+            self.assertTrue(
+                any("path traversal or absolute entry rejected" in issue
+                    and probe in issue
+                    for issue in result["issues"]),
+                result["issues"],
+            )
+            self.assertEqual(result["declared_count"], 0)
+            self.assertEqual(
+                sorted(p.relative_to(root).as_posix()
+                       for p in root.rglob("*")),
+                ["package.json"])
+
+    def test_traversal_probe_windows_drive_is_rejected(self):
+        r"""FIX-286 F1 probe 3: `C:\skills\x\SKILL.md` Windows-drive entry."""
+        probe = "C:\\skills\\x\\SKILL.md"
+        self.assertIsNone(vw._normalize_declared_skill_path(probe))
+        self.assertEqual(
+            vw._classify_declared_skill_path(probe),
+            (None, "absolute"))
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "package.json").write_text(json.dumps({
+                "dsh": {"skills": [probe]},
+            }, ensure_ascii=False), encoding="utf-8")
+            result = vw.check_dsh_skills_manifest(root)
+            self.assertTrue(
+                any("path traversal or absolute entry rejected" in issue
+                    and probe in issue
+                    for issue in result["issues"]),
+                result["issues"],
+            )
+            self.assertEqual(result["declared_count"], 0)
+            self.assertEqual(
+                sorted(p.relative_to(root).as_posix()
+                       for p in root.rglob("*")),
+                ["package.json"])
+
+    def test_traversal_and_format_invalid_messages_are_distinguishable(self):
+        """FIX-286 F2 (review-FIX-272-CODE-R0 F2): path-traversal/absolute
+        entries get their own security-grade rejection message, while plain
+        malformed entries keep the legacy ``invalid declaration entry``
+        wording as the explicit format class. The two classes MUST be
+        mutually distinguishable — a traversal entry must never re-enter
+        the legacy malformed bucket (the R0 audit-actionability gap)."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "package.json").write_text(json.dumps({
+                "dsh": {"skills": ["../evil/SKILL.md", 42]},
+            }, ensure_ascii=False), encoding="utf-8")
+            result = vw.check_dsh_skills_manifest(root)
+            traversal_issues = [
+                i for i in result["issues"]
+                if "path traversal or absolute entry rejected" in i]
+            format_issues = [
+                i for i in result["issues"]
+                if "invalid declaration entry" in i]
+            self.assertEqual(len(traversal_issues), 1, result["issues"])
+            self.assertEqual(len(format_issues), 1, result["issues"])
+            # Class disjointness — each entry lands in exactly one bucket.
+            self.assertNotIn("invalid declaration entry",
+                             traversal_issues[0])
+            self.assertNotIn("path traversal or absolute entry rejected",
+                             format_issues[0])
+            # New format message carries the explicit class marker and the
+            # offending label; the security class names the reject reason.
+            self.assertIn("(format invalid)", format_issues[0])
+            self.assertIn("42", format_issues[0])
+            self.assertIn("parent-directory escape", traversal_issues[0])
+            self.assertIn("../evil/SKILL.md", traversal_issues[0])
+
+
+class Fix284WriteGuardMissingRowTests(unittest.TestCase):
+    """FIX-284 (review-FIX-279-CODE-R0 P2-1): written-row-missing regression.
+
+    FIX-278 P0-1 contract component (``_triage_write_structure_guard``):
+    the just-written evidence row is matched BY ROW ID (never by position);
+    when that row is absent from the evidence-log — the machine append did
+    not take effect — the guard MUST emit an explicit issue instead of
+    silently passing (a triage record without its evidence row must not
+    pass the write gate unnoticed). The R0 review found this exact path
+    untested; the behavior itself was already correct, so this test is
+    green-by-coverage and the FAIL-on-buggy red phase (detection disabled
+    → test red) was recorded and restored during FIX-284.
+    """
+
+    def test_guard_reports_written_row_missing_after_write(self):
+        """写入行（按行 ID 匹配）在 evidence-log 中完全缺失 → guard 报显式
+        「not found」issue（append 未生效不得静默放行）；行族标准存在时
+        亦不得误报 column-mismatch（写入行缺失 ≠ 列数破坏）。"""
+        with tempfile.TemporaryDirectory() as td:
+            evidence = Path(td) / "evidence-log.md"
+            evidence.write_text(
+                "| EVD-001 | FIX-100 | 开发 | 实现 | 依据 | 产物 | actor "
+                "| 2026-08-25 | G11 | PASS |\n"
+                "| TRIAGE-OLD | c1 | c2 | c3 | c4 | c5 | c6 | c7 | c8 | "
+                "c9 |\n",
+                encoding="utf-8")
+            record = Path(td) / "change-triage" / "FIX-284.json"
+            record.parent.mkdir()
+            record.write_text('{"ok": true}', encoding="utf-8")
+            issues = vw._triage_write_structure_guard(
+                evidence, record, record_id="TRIAGE-FIX-284")
+            self.assertEqual(len(issues), 1, issues)
+            self.assertIn("TRIAGE-FIX-284", issues[0])
+            self.assertIn("not found", issues[0])
+
+
 
 
 if __name__ == "__main__":

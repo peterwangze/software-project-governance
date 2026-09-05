@@ -20,6 +20,14 @@ Behavior contract (ADR-017 §3.4):
   - **复审必达**: a NEEDS_CHANGE record carries the structured revisit fields
     ``next_round=REVIEW-{id}-R{n+1}`` + ``prev_report`` so Check 30 V6 and the
     Coordinator can verify / spawn the R+1 revisit.
+  - **覆盖守卫 (FIX-289⑤)**: a review file is an immutable task+round record.
+    Writing over an existing ``review-{id}-R{n}.md`` is rejected (error dict,
+    nothing written — no overwrite, no evidence row) unless ``force=True``:
+    the deliberate overwrite then backs up the previous record
+    (``review-{id}-R{n}.pre-<ts>.md``), marks the overwrite in the new record,
+    and reports the backup in the summary (REL-073 same-number overwrite
+    near-miss; historical backfill / migrated data must never be silently
+    replaced).
   - **审查结论必机录 (FIX-260 / REQ-107)**: calling this CLI is a MUST for
     every Reviewer conclusion (behavior-protocol.md M7.4 step 4.6 C8; the
     M1.2 fast lane no longer exempts handwritten REVIEW rows). Check 30c
@@ -36,7 +44,7 @@ import-cycle-free: it imports loop_gate_processor (peer) and loop_exit_bridge
 """
 
 import re
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 from loop_gate_processor import process_gate_result  # noqa: F401 (re-exported)
@@ -204,8 +212,15 @@ def _wire_to_loop(task_id, round_n, result, review_file, reviewer, report_path,
 
 
 def _review_file_text(task_id, round_n, result, reviewer, report_path,
-                      date_str, wiring_note):
-    """Machine-written review record markdown (Check 30 file-scan parseable)."""
+                      date_str, wiring_note, force_note=None):
+    """Machine-written review record markdown (Check 30 file-scan parseable).
+
+    ``force_note`` (FIX-289⑤) is the backup filename when this write is a
+    deliberate force overwrite; it emits the ``- force_overwrite:`` marker
+    line so the overwrite is traceable from the record itself. The marker is
+    inert to the Check 30/30c file parsers (date/conclusion/next_round
+    extraction are anchored to their own field lines).
+    """
     lines = [
         "# Review Record (machine-written by review-record)",
         "",
@@ -215,6 +230,12 @@ def _review_file_text(task_id, round_n, result, reviewer, report_path,
         "- reviewer: {0}".format(reviewer or "unknown"),
         "- report: {0}".format(report_path),
         "- wiring: {0}".format(wiring_note),
+    ]
+    if force_note:
+        lines.append(
+            "- force_overwrite: previous record preserved at {0}".format(
+                force_note))
+    lines += [
         "",
         "**审查结论**: **{0}**".format(result),
     ]
@@ -271,6 +292,7 @@ def write_review_record(
     runtime_file=None,
     plugin_home=None,
     actor=None,
+    force=False,
 ):
     """Persist one review conclusion + Wire A (FIX-236.1).
 
@@ -292,11 +314,20 @@ def write_review_record(
             wiring (tests / hosts where the runtime is not under root).
         plugin_home: forwarded to registry reads in process_gate_result.
         actor: loop actor override (defaults to reviewer or "review-record").
+        force: FIX-289⑤ overwrite opt-in. When the task+round record already
+            exists, the default (``force=False``) fails closed: an error dict
+            is returned and nothing is written (no overwrite, no evidence
+            row). ``force=True`` overwrites deliberately WITH an audit trail —
+            the previous record is backed up to
+            ``review-{id}-R{n}.pre-<ts>.md`` beside the record, the new record
+            carries a ``- force_overwrite:`` marker naming the backup, and the
+            summary reports ``force_overwrite`` + ``previous_record_backup``.
 
     Returns:
         dict summary: review_id, review_file, evidence_row, wiring {...},
         revisit_required / next_round / prev_report (NEEDS_CHANGE only), and
-        ``error`` (fail-closed) when inputs are invalid. Never raises.
+        ``error`` (fail-closed) when inputs are invalid or the task+round
+        record already exists without ``force``. Never raises.
     """
     # Input validation (fail-closed).
     if not _TASK_ID_RE.match(str(task_id or "")):
@@ -328,9 +359,41 @@ def write_review_record(
     evidence_path = evidence_dir / "evidence-log.md"
     today = date.today().isoformat()
 
+    # 0. FIX-289⑤ overwrite guard: a task+round review record is immutable by
+    # default. Historical backfill / migrated records must never be silently
+    # replaced (REL-073 same-number overwrite near-miss). force=True opts in
+    # with an audit trail: the previous record is backed up beside the record
+    # (microsecond timestamp — repeated forces never collide) and the
+    # overwrite is marked in the new record + summary.
+    force_note = None
+    if review_file.exists():
+        if not force:
+            return {"error": (
+                "review record already exists: {0} — refusing to overwrite "
+                "(FIX-289⑤ task+round record guard; historical backfill data "
+                "is protected). To replace it deliberately, re-run with "
+                "force=True: the previous record is backed up and the "
+                "overwrite is marked in the new record.".format(review_file))}
+        try:
+            previous_text = review_file.read_text(encoding="utf-8")
+        except OSError as exc:
+            return {"error": (
+                "cannot read existing review record for backup: {0}".format(
+                    exc))}
+        backup_name = "{0}.pre-{1}.md".format(
+            review_file.name[: -len(".md")],
+            datetime.now().strftime("%Y%m%dT%H%M%S%f"))
+        try:
+            (evidence_dir / backup_name).write_text(
+                previous_text, encoding="utf-8")
+        except OSError as exc:
+            return {"error": "cannot write overwrite backup: {0}".format(exc)}
+        force_note = backup_name
+
     # 1. Machine-write the review record (independent of the loop wiring).
     review_text = _review_file_text(
-        task_id, round_n, result_norm, reviewer, report_path, today, "pending")
+        task_id, round_n, result_norm, reviewer, report_path, today, "pending",
+        force_note=force_note)
     try:
         review_file.write_text(review_text, encoding="utf-8")
     except OSError as exc:
@@ -372,6 +435,9 @@ def write_review_record(
     if result_norm == "NEEDS_CHANGE":
         summary["next_round"] = "REVIEW-{0}-R{1}".format(task_id, round_n + 1)
         summary["prev_report"] = str(report_path)
+    if force_note is not None:
+        summary["force_overwrite"] = True
+        summary["previous_record_backup"] = str(evidence_dir / force_note)
     return summary
 
 

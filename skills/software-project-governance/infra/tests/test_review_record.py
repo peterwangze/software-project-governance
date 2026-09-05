@@ -267,5 +267,135 @@ class ReviewRecordCliTests(unittest.TestCase):
             )
 
 
+class ReviewRecordOverwriteGuardTests(unittest.TestCase):
+    """FIX-289⑤ — 同 task+round 记录存在性守卫（P7 数据破坏防护）.
+
+    Bug contract (FIX-281⑤ defect, REL-073 same-number overwrite near-miss):
+    ``write_review_record`` used to overwrite an existing
+    ``review-{task}-R{n}.md`` silently. Guard contract:
+
+    - default → reject with an error dict (fail-closed: no file overwrite,
+      no evidence row appended, existing record byte-identical);
+    - ``force=True`` → deliberate overwrite WITH an audit trail: the previous
+      record is backed up beside the record
+      (``review-{task}-R{n}.pre-<ts>.md``), the new record carries a
+      ``force_overwrite`` marker naming the backup, and the summary reports
+      both.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="rro_")
+        self.root = Path(self.tmpdir)
+        (self.root / ".governance").mkdir()
+        self.gov = self.root / ".governance"
+        self.review_file = self.gov / "review-FIX-236-R0.md"
+        self.evidence_log = self.gov / "evidence-log.md"
+
+    def _write(self, **overrides):
+        kwargs = {
+            "task_id": "FIX-236",
+            "round_n": 0,
+            "result": "APPROVED",
+            "report_path": str(self.root / "report.md"),
+            "reviewer": "Code Reviewer Noether",
+            "root": self.root,
+        }
+        kwargs.update(overrides)
+        return review_record.write_review_record(**kwargs)
+
+    def _review_row_count(self):
+        return self.evidence_log.read_text(encoding="utf-8").count(
+            "| REVIEW-FIX-236-R0 |")
+
+    def test_duplicate_task_round_rejected_by_default_without_overwrite(self):
+        first = self._write()
+        self.assertFalse(first.get("error"))
+        original = self.review_file.read_text(encoding="utf-8")
+        self.assertIn("**审查结论**: **APPROVED**", original)
+        # Same task+round again — must NOT silently replace the record.
+        second = self._write(result="NEEDS_CHANGE")
+        self.assertIn("error", second)
+        self.assertEqual(
+            self.review_file.read_text(encoding="utf-8"), original,
+            "existing task+round record was overwritten")
+        self.assertIn("APPROVED", original)
+        # The rejected write must not leak a duplicate evidence row.
+        self.assertEqual(self._review_row_count(), 1)
+
+    def test_rejection_error_names_record_and_force_escape_hatch(self):
+        self._write()
+        second = self._write()
+        self.assertIn("error", second)
+        self.assertIn(str(self.review_file), second["error"])
+        self.assertIn("force", second["error"])
+
+    def test_force_overwrites_with_backup_and_marker(self):
+        self._write()
+        original = self.review_file.read_text(encoding="utf-8")
+        summary = self._write(result="NEEDS_CHANGE", force=True)
+        self.assertFalse(summary.get("error"))
+        self.assertTrue(summary["force_overwrite"])
+        backup = Path(summary["previous_record_backup"])
+        self.assertTrue(backup.is_file())
+        # 留痕 1: the previous record is preserved byte-for-byte.
+        self.assertEqual(backup.read_text(encoding="utf-8"), original)
+        new_text = self.review_file.read_text(encoding="utf-8")
+        self.assertIn("**审查结论**: **NEEDS_CHANGE**", new_text)
+        # 留痕 2: the new record marks the overwrite and names the backup.
+        self.assertIn("force_overwrite", new_text)
+        self.assertIn(backup.name, new_text)
+
+    def test_force_chain_preserves_every_previous_record(self):
+        self._write()
+        v1 = self.review_file.read_text(encoding="utf-8")
+        first = self._write(result="NEEDS_CHANGE", force=True)
+        self.assertFalse(first.get("error"))
+        v2 = self.review_file.read_text(encoding="utf-8")
+        second = self._write(result="APPROVED", force=True)
+        self.assertFalse(second.get("error"))
+        backups = sorted(self.gov.glob("review-FIX-236-R0.pre-*.md"))
+        self.assertEqual(len(backups), 2)
+        self.assertEqual(backups[0].read_text(encoding="utf-8"), v1)
+        self.assertEqual(backups[1].read_text(encoding="utf-8"), v2)
+        self.assertIn("**审查结论**: **APPROVED**",
+                      self.review_file.read_text(encoding="utf-8"))
+
+    def test_force_on_fresh_record_is_plain_write(self):
+        summary = self._write(force=True)
+        self.assertFalse(summary.get("error"))
+        self.assertNotIn("force_overwrite", summary)
+        self.assertNotIn("force_overwrite",
+                         self.review_file.read_text(encoding="utf-8"))
+        self.assertEqual(
+            len(list(self.gov.glob("review-FIX-236-R0.pre-*.md"))), 0)
+
+    def test_cli_duplicate_round_fails_closed_exit_2(self):
+        # The review-record thin entry never passes force — a duplicate
+        # task+round must exit 2 (fail-closed) without touching the record.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / ".governance").mkdir()
+            report = root / "report.md"
+            report.write_text("# report\n", encoding="utf-8")
+            base_cmd = [sys.executable, str(_INFRA_DIR / "verify_workflow.py"),
+                        "review-record", "--project-root", str(root),
+                        "--task", "FIX-236", "--round", "0",
+                        "--report", str(report)]
+            first = subprocess.run(base_cmd + ["--result", "APPROVED"],
+                                   capture_output=True, text=True,
+                                   encoding="utf-8", timeout=60)
+            self.assertEqual(first.returncode, 0, first.stderr)
+            before = (root / ".governance" / "review-FIX-236-R0.md").read_text(
+                encoding="utf-8")
+            second = subprocess.run(base_cmd + ["--result", "NEEDS_CHANGE"],
+                                    capture_output=True, text=True,
+                                    encoding="utf-8", timeout=60)
+            self.assertEqual(second.returncode, 2)
+            self.assertIn("error", second.stdout)
+            self.assertEqual(
+                (root / ".governance" / "review-FIX-236-R0.md").read_text(
+                    encoding="utf-8"), before)
+
+
 if __name__ == "__main__":
     unittest.main()

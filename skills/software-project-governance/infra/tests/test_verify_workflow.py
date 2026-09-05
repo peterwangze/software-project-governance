@@ -9032,6 +9032,200 @@ class PlanTrackerParsingTests(unittest.TestCase):
                 self.assertEqual(len(vw.parse_completed_task_ids()), 0)
                 self.assertEqual(len(vw.parse_gate_status()), 2)
 
+class Fix287ParserBoundaryTests(unittest.TestCase):
+    """FIX-287: parser defect regressions (②③④).
+
+    ② get_all_completed_task_entries — profile-driven status column
+      (_PROFILE_TASK_COLUMNS authoritative source; no parts[9] hardcode).
+    ③ parse_current_active_tasks — order-tolerant active-section boundary
+      (not dependent on `### 最近完成` existing).
+    ④ parse_gate_status — bracketed Gate heading variants
+      (`## Gate 状态跟踪（G1-G11）` full/half-width).
+    """
+
+    def _write(self, tmpdir, content):
+        sp = tmpdir / ".governance" / "plan-tracker.md"
+        sp.parent.mkdir(parents=True, exist_ok=True)
+        sp.write_text(content, encoding="utf-8")
+        return sp
+
+    # ── ② lightweight profile: 6-column completed task rows ──
+
+    _PLAN_LIGHTWEIGHT = "\n".join([
+        "# 计划跟踪",
+        "",
+        "## 项目配置",
+        "",
+        "- **Profile**: lightweight",
+        "- **触发模式**: always-on",
+        "",
+        "## 当前活跃事项",
+        "",
+        "### 优先级一览",
+        "",
+        "| 优先级 | ID | 任务项 | 依赖 | 目标版本 | 状态 |",
+        "|--------|----|--------|------|----------|------|",
+        "| P0 | LW-001 | 修复解析器列数 | — | 0.1.0 | 已完成 |",
+        "| P1 | LW-002 | 仍在进行 | — | 0.1.0 | 进行中 |",
+    ])
+
+    def test_completed_entries_lightweight_profile_six_columns(self):
+        with tempfile.TemporaryDirectory() as td:
+            sp = self._write(Path(td), self._PLAN_LIGHTWEIGHT)
+            ds = vw.GovernanceDataSource(sample_path=sp)
+            hot = [e for e in ds.get_all_completed_task_entries() if e["source"] == "hot"]
+            self.assertEqual([e["id"] for e in hot], ["LW-001"])
+
+    def test_completed_entries_standard_profile_keeps_legacy_status_column(self):
+        plan = "\n".join([
+            "# 计划跟踪",
+            "",
+            "## 项目配置",
+            "",
+            "- **Profile**: standard",
+            "",
+            "## 任务跟踪",
+            _TASK_COLS,
+            _TASK_SEP,
+            _task("STD-001", "已完成"),
+            _task("STD-002", "进行中"),
+        ])
+        with tempfile.TemporaryDirectory() as td:
+            sp = self._write(Path(td), plan)
+            ds = vw.GovernanceDataSource(sample_path=sp)
+            hot = [e for e in ds.get_all_completed_task_entries() if e["source"] == "hot"]
+            self.assertEqual([e["id"] for e in hot], ["STD-001"])
+
+    def test_completed_entries_unknown_profile_falls_back_to_legacy_column(self):
+        plan = "\n".join([
+            "# 计划跟踪",
+            "",
+            "## 任务跟踪",
+            _TASK_COLS,
+            _TASK_SEP,
+            _task("UNK-001", "已完成"),
+        ])
+        with tempfile.TemporaryDirectory() as td:
+            sp = self._write(Path(td), plan)
+            ds = vw.GovernanceDataSource(sample_path=sp)
+            hot = [e for e in ds.get_all_completed_task_entries() if e["source"] == "hot"]
+            self.assertEqual([e["id"] for e in hot], ["UNK-001"])
+
+    # ── ③ active-section boundary ──
+
+    _ACTIVE_TABLE = [
+        "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+        "|--------|----|------|------|---------|---------|------|",
+    ]
+
+    def test_active_tasks_survive_completed_subsection_before_active(self):
+        plan = "\n".join([
+            "# 计划跟踪",
+            "",
+            "## 当前活跃事项",
+            "",
+            "### 最近完成",
+            "",
+            *self._ACTIVE_TABLE,
+            "| **P1** | OLD-001 | 已交付事项 | — | 0.1.0 | tests | ✅ 完成 (2026-01-01) |",
+            "",
+            "### 进行中任务",
+            "",
+            *self._ACTIVE_TABLE,
+            "| **P0** | NEW-001 | 当前活跃任务 | — | 0.2.0 | tests | ⏳ 进行中 |",
+        ])
+        with tempfile.TemporaryDirectory() as td:
+            sp = self._write(Path(td), plan)
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                ids = [t["task_id"] for t in vw.parse_current_active_tasks()]
+                self.assertEqual(ids, ["NEW-001"])
+
+    def test_active_tasks_stop_at_next_top_level_section(self):
+        plan = "\n".join([
+            "# 计划跟踪",
+            "",
+            "## 当前活跃事项",
+            "",
+            *self._ACTIVE_TABLE,
+            "| **P0** | NEW-001 | 当前活跃任务 | — | 0.2.0 | tests | ⏳ 进行中 |",
+            "",
+            "## 版本规划",
+            "",
+            *self._ACTIVE_TABLE,
+            "| **P1** | FUT-001 | 未来版本任务 | — | 0.3.0 | tests | ⬜ 未开始 |",
+        ])
+        with tempfile.TemporaryDirectory() as td:
+            sp = self._write(Path(td), plan)
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                ids = [t["task_id"] for t in vw.parse_current_active_tasks()]
+                self.assertEqual(ids, ["NEW-001"])
+
+    def test_active_tasks_classic_order_regression_guard(self):
+        plan = "\n".join([
+            "# 计划跟踪",
+            "",
+            "## 当前活跃事项",
+            "",
+            "### 优先级一览",
+            "",
+            *self._ACTIVE_TABLE,
+            "| **P0** | NEW-001 | 当前活跃任务 | — | 0.2.0 | tests | ⏳ 进行中 |",
+            "",
+            "### 最近完成（本会话提交窗口）",
+            "",
+            *self._ACTIVE_TABLE,
+            "| **P1** | OLD-001 | 已交付事项 | — | 0.1.0 | tests | ✅ 完成 (2026-01-01) |",
+            "",
+            "### 已归档版本 task（hot-fact-source 指针）",
+            "",
+            *self._ACTIVE_TABLE,
+            "| — | ARC-001 | 归档指针行 | — | 0.1.0 | archive | ✅ 已交付 |",
+        ])
+        with tempfile.TemporaryDirectory() as td:
+            sp = self._write(Path(td), plan)
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                ids = [t["task_id"] for t in vw.parse_current_active_tasks()]
+                self.assertEqual(ids, ["NEW-001"])
+
+    # ── ④ Gate heading bracket variants ──
+
+    _GATE_ROWS = [
+        "| Gate | 阶段转换 | 状态 | 通过日期 | 关键证据 |",
+        "| --- | --- | --- | --- | --- |",
+        "| G1 | → 调研 | passed | 2026-04-01 | EVD-001 |",
+        "| G2 | → 技术选型 | pending | | |",
+    ]
+
+    def _gate_plan(self, heading):
+        return "\n".join(["# 计划跟踪", "", heading, "", *self._GATE_ROWS])
+
+    def test_gate_status_fullwidth_bracketed_heading(self):
+        with tempfile.TemporaryDirectory() as td:
+            sp = self._write(Path(td), self._gate_plan("## Gate 状态跟踪（G1-G11）"))
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                gates = vw.parse_gate_status()
+                self.assertEqual([g["gate"] for g in gates], ["G1", "G2"])
+                self.assertEqual(gates[0]["status"], "passed")
+
+    def test_gate_status_halfwidth_bracketed_heading(self):
+        with tempfile.TemporaryDirectory() as td:
+            sp = self._write(Path(td), self._gate_plan("## Gate 状态跟踪 (G1-G11)"))
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                self.assertEqual(len(vw.parse_gate_status()), 2)
+
+    def test_gate_statuses_wrapper_bracketed_heading(self):
+        with tempfile.TemporaryDirectory() as td:
+            sp = self._write(Path(td), self._gate_plan("## Gate 状态跟踪（G1-G11）"))
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                self.assertEqual(len(vw.parse_gate_statuses()), 2)
+
+    def test_gate_status_exact_heading_regression_guard(self):
+        with tempfile.TemporaryDirectory() as td:
+            sp = self._write(Path(td), self._gate_plan("## Gate 状态跟踪"))
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                self.assertEqual(len(vw.parse_gate_status()), 2)
+
+
 
 class GovernanceIntegrationTests(unittest.TestCase):
     """Integration: check-governance against temp .governance/."""

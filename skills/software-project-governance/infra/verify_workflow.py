@@ -7401,9 +7401,9 @@ def _extract_section(content, heading, stop_headings=None):
     return "\n".join(result)
 
 
-def parse_project_config():
+def parse_project_config(path=None):
     """Parse project configuration section from sample."""
-    content = SAMPLE_PATH.read_text(encoding="utf-8")
+    content = (Path(path) if path is not None else SAMPLE_PATH).read_text(encoding="utf-8")
     config = {}
     in_section = False
     for line in content.split("\n"):
@@ -7425,7 +7425,8 @@ def parse_gate_status():
     gates = []
     in_section = False
     for line in content.split("\n"):
-        if line.strip() == "## Gate 状态跟踪":
+        # FIX-287④: tolerate bracketed heading variants (e.g. `## Gate 状态跟踪（G1-G11）`).
+        if line.strip().startswith("## Gate 状态跟踪"):
             in_section = True
             continue
         if in_section and line.startswith("## "):
@@ -9345,22 +9346,41 @@ class GovernanceDataSource:
             entry["id"]
             for entry in self.get_all_completed_task_entries()
         }
+    def _plan_profile(self):
+        """Resolve the Profile declared by this data source's plan-tracker."""
+        if not self.sample_path.is_file():
+            return ""
+        config = parse_project_config(self.sample_path)
+        m = re.match(r"^\s*(\w+)", config.get("Profile", ""))
+        return m.group(1).lower() if m else ""
+
+    def _hot_task_status_index(self):
+        """FIX-287②: profile-driven task-table status column for hot rows."""
+        return _task_status_column_index(
+            _PROFILE_TASK_COLUMNS.get(self._plan_profile())
+        )
+
 
     def get_all_completed_task_entries(self):
         """Return completed task entries with source metadata."""
         completed = []
         if self.sample_path.is_file():
+            status_index = self._hot_task_status_index()
             content = self.sample_path.read_text(encoding="utf-8")
             for line in content.split("\n"):
                 line_stripped = line.strip()
                 if not line_stripped.startswith("| ") or "---" in line_stripped:
                     continue
-                m = re.match(r"\|\s*([A-Z]+-\d+)\s*\|", line_stripped)
-                if not m:
-                    continue
                 parts = _split_markdown_table_row(line)
-                if len(parts) >= 10 and parts[9] == "已完成":
-                    completed.append({"id": m.group(1), "status": "已完成", "source": "hot"})
+                task_id = next(
+                    (c.strip().strip("*") for c in parts
+                     if re.match(r"^(?:\*\*)?[A-Z]+-\d+(?:\*\*)?$", c.strip())),
+                    None,
+                )
+                if task_id is None:
+                    continue
+                if status_index < len(parts) and parts[status_index] == "已完成":
+                    completed.append({"id": task_id, "status": "已完成", "source": "hot"})
         for entry in self._scan_archive_files(self.archive_tasks_dir, self._extract_task_ids):
             if entry.get("status") == "已完成":
                 completed.append({**entry, "source": "archive"})
@@ -11905,6 +11925,16 @@ def _is_incomplete_task_status(status):
     completed_markers = ("已完成", "✅", "已关闭", "已发布", "已终止", "终止", "取消", "废弃")
     return not any(marker in normalized for marker in completed_markers)
 
+# FIX-287③: subsection headings inside `## 当前活跃事项` that hold completed /
+# archived content — collection suspends on them regardless of section order.
+_NONACTIVE_SUBSECTION_MARKERS = ("最近完成", "已完成", "已归档", "依赖链")
+
+
+def _is_nonactive_subsection(heading):
+    """Return True for `### ` subsections that terminate active-task collection."""
+    return any(marker in heading for marker in _NONACTIVE_SUBSECTION_MARKERS)
+
+
 
 def parse_current_active_tasks():
     """Parse hot active task rows from plan-tracker compact tables."""
@@ -11912,14 +11942,25 @@ def parse_current_active_tasks():
         return []
     content = SAMPLE_PATH.read_text(encoding="utf-8")
     tasks = []
+    collecting = True
     in_active_section = False
     for line in content.split("\n"):
         if line.startswith("## 当前活跃事项"):
+            collecting = True
             in_active_section = True
             continue
-        if in_active_section and line.startswith("### 最近完成"):
-            break
         if not in_active_section:
+        if line.startswith("## "):
+            # FIX-287③: the next top-level section always ends the active section.
+            break
+        if line.startswith("### "):
+            # FIX-287③: order-tolerant subsection boundary — known completed/
+            # archived subsections suspend collection; other subsections resume
+            # it (host trackers may reorder, e.g. 最近完成 before active tables).
+            collecting = not _is_nonactive_subsection(line)
+            continue
+        if not collecting:
+            continue
             continue
         stripped = line.strip()
         if not stripped.startswith("|") or "---" in stripped:
@@ -13760,6 +13801,19 @@ _PROFILE_TASK_COLUMNS = {
     "standard": 20,
     "strict": 20,
 }
+# FIX-287②: legacy standard/strict task tables (20 columns) keep the status
+# cell at the 10th column; compact profiles (fewer columns, e.g. lightweight
+# 6-column tables) carry it in the last column. Derived from
+# _PROFILE_TASK_COLUMNS — replaces the per-row `parts[9]` hardcode.
+_LEGACY_TASK_STATUS_COLUMN = 9
+
+
+def _task_status_column_index(expected_cols):
+    """Resolve the task-table status cell index from the profile column count."""
+    if expected_cols is None or expected_cols > _LEGACY_TASK_STATUS_COLUMN:
+        return _LEGACY_TASK_STATUS_COLUMN
+    return expected_cols - 1
+
 
 
 def check_profile_consistency():

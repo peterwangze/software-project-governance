@@ -6777,27 +6777,66 @@ def check_injection_contract(root=None):
 DSH_SKILLS_DISK_PATTERNS = ("skills/*/SKILL.md", "adapters/dsh/skill-shims/*.md")
 
 
-def _normalize_declared_skill_path(raw):
-    """Normalize a dsh.skills declaration entry to a repo-relative POSIX path.
+# Reject-reason tokens (FIX-286 F2 — review-FIX-272-CODE-R0 F2 message
+# split): ``traversal`` (parent-directory escape) and ``absolute`` (POSIX
+# root / Windows drive) are the security-grade rejection class and carry
+# their own actionable diagnostic; ``format`` / ``non-string`` stay in the
+# legacy "invalid declaration entry" (format invalid) bucket so existing
+# consumers of that wording are not broken.
+_REJECT_REASON_TRAVERSAL = "traversal"
+_REJECT_REASON_ABSOLUTE = "absolute"
+# Human-readable detail per security-grade reason (diagnostic only).
+_REJECT_SECURITY_DETAIL = {
+    _REJECT_REASON_TRAVERSAL: "parent-directory escape ('..' segment)",
+    _REJECT_REASON_ABSOLUTE: "POSIX root or Windows drive",
+}
 
-    Accepts ``./skills/foo/SKILL.md`` (bundle style) or
-    ``skills/foo/SKILL.md``; returns ``None`` for anything malformed,
-    non-repo-relative, or path-traversal (``..`` / absolute) — the caller
-    reports it as an invalid declaration.
+
+def _classify_declared_skill_path(raw):
+    """Single classification point for a dsh.skills declaration entry.
+
+    Returns ``(normalized, reject_reason)``: ``normalized`` is the
+    repo-relative POSIX path (``./`` bundle prefix stripped, backslashes
+    normalized) and ``reject_reason`` is ``None`` when the entry is
+    acceptable; on rejection ``normalized`` is ``None`` and
+    ``reject_reason`` is one of ``traversal`` (``..`` segment) /
+    ``absolute`` (POSIX root or Windows drive) / ``format`` (empty, ``.``,
+    or empty segment) / ``non-string``.
+
+    The reject decision (the ``normalized is None`` set) is exactly the
+    legacy ``_normalize_declared_skill_path`` None-set — the reason token
+    only shapes the diagnostic message and never widens acceptance
+    (FIX-286 F2).
     """
     if not isinstance(raw, str):
-        return None
+        return None, "non-string"
     value = raw.strip().replace("\\", "/")
     if value.startswith("./"):
         value = value[2:]
     if not value:
-        return None
+        return None, "format"
+    if value.startswith("/"):
+        return None, _REJECT_REASON_ABSOLUTE
     parts = value.split("/")
-    if any(part in ("", ".", "..") for part in parts):
-        return None
-    if value.startswith("/") or ":" in value.split("/")[0]:
-        return None
-    return value
+    if ":" in parts[0]:
+        return None, _REJECT_REASON_ABSOLUTE
+    if ".." in parts:
+        return None, _REJECT_REASON_TRAVERSAL
+    if any(part in ("", ".") for part in parts):
+        return None, "format"
+    return value, None
+
+
+def _normalize_declared_skill_path(raw):
+    """Normalize a dsh.skills declaration entry to a repo-relative POSIX path.
+
+    Legacy-contract wrapper over :func:`_classify_declared_skill_path`
+    (FIX-286 F2 kept this signature: the rejection surface — returns
+    ``None`` for anything malformed, non-repo-relative, or path-traversal
+    (``..`` / absolute) — is unchanged; only the caller's diagnostic
+    message is reason-classified now).
+    """
+    return _classify_declared_skill_path(raw)[0]
 
 
 def check_dsh_skills_manifest(root=None):
@@ -6837,10 +6876,23 @@ def check_dsh_skills_manifest(root=None):
 
     declared = {}
     for entry in declared_raw:
-        normalized = _normalize_declared_skill_path(entry)
+        normalized, reject_reason = _classify_declared_skill_path(entry)
         if normalized is None:
             label = entry if isinstance(entry, str) else repr(entry)
-            issues.append(f"dsh.skills: invalid declaration entry: {label}")
+            if reject_reason in _REJECT_SECURITY_DETAIL:
+                # FIX-286 F2: security-grade rejections (path traversal /
+                # absolute) get their own actionable message, decoupled from
+                # the malformed-entry wording (review-FIX-272-CODE-R0 F2).
+                issues.append(
+                    f"dsh.skills: path traversal or absolute entry rejected: "
+                    f"{label} ({_REJECT_SECURITY_DETAIL[reject_reason]})")
+            else:
+                # Format class keeps the legacy ``invalid declaration entry``
+                # substring so existing consumers (the R0-era test assertion
+                # and any Check 40 output reader) stay compatible.
+                issues.append(
+                    f"dsh.skills: invalid declaration entry "
+                    f"(format invalid): {label}")
             continue
         if normalized in declared:
             issues.append(f"dsh.skills: duplicate declaration: {normalized}")

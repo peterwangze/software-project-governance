@@ -68,6 +68,38 @@ has_approved_review_evidence() {
     LC_ALL=C grep -Eq "${row_prefix}(${tail_legacy}|${tail_machine})" "$evidence_file" 2>/dev/null
 }
 
+# --- Step 3 support: tolerant plan-tracker task-row matcher (FIX-282 / DEC-171) ---
+# plan-tracker task rows are conventionally bold on the priority column
+# ("| **P2** | ...") and, per DEC-171 evidence, also on the task-ID column
+# ("| **P1** | **REL-071** |"). The pre-FIX-282 literal grep '| $TASK_ID |'
+# never matched bold-ID rows, so legitimate commits were blocked — REL-071's
+# M-5 transition commit (afb959d) had to bypass via --no-verify (DEC-171).
+# Match: a table row whose FIRST cell is a priority (P{n}, optionally bold)
+# and whose SECOND cell is exactly TASK_ID (optionally bold), tolerating
+# optional whitespace around each cell. M7.5 semantics preserved: an absent
+# task row still misses, so Step 3's FAIL is unchanged and a typo'd or
+# unplanned ID cannot slip through.
+# Task_ID comes from Step 1's extraction (^[A-Z]+-[0-9]+), so it contains no
+# ERE metacharacters. The pattern deliberately uses only the grep-ERE /
+# Python-re equivalence subset (literal classes [|]/[*]/[0-9], '*', '+',
+# '{0,2}' — no POSIX classes, no backslash escapes), so
+# infra/tests/test_hooks.py can drive the literal pattern extracted from
+# this hook source (FIX-282 binding requirement).
+# Support scope (P2-2): priority-first golden layout only — the plan-tracker
+# template (core/templates/plan-tracker.md) and all three profiles'
+# _PROFILE_TASK_COLUMNS put the priority cell first. Legacy ID-first task
+# layouts (e.g. archive.py historical 10-col/21-col rows) and non-task rows
+# (REQ-xxx requirement matrix, '| — |' archive pointers) are intentionally
+# OUT of scope: the matcher MISSes them, and a host still on such a layout
+# hitting a Step 3 block on a real task row must surface it via change-triage
+# instead of expecting out-of-scope shapes to be covered.
+task_in_plan_tracker() {
+    local task_id="$1"
+    local plan_file="$REPO_ROOT/.governance/plan-tracker.md"
+    [ -f "$plan_file" ] || return 1
+    LC_ALL=C grep -Eq "^ *[|] *[*]{0,2}P[0-9]+[*]{0,2} *[|] *[*]{0,2}${task_id}[*]{0,2} *[|]" "$plan_file" 2>/dev/null
+}
+
 resolve_spg_home_candidate() {
     local candidate="$1"
     [ -n "$candidate" ] || return 1
@@ -231,7 +263,12 @@ if [ -z "$TASK_ID" ]; then
 fi
 
 # --- Step 3: Task MUST exist in plan-tracker ---
-if ! grep -q "| $TASK_ID |" "$REPO_ROOT/.governance/plan-tracker.md" 2>/dev/null; then
+# FIX-282 / DEC-171: tolerant matcher — literal '| $TASK_ID |' never matched
+# bold task-ID rows ("| **P1** | **REL-071** |"), causing false BLOCKs
+# (REL-071 M-5 transition used the --no-verify emergency bypass). The
+# matcher accepts bold/plain priority and bold/plain task-ID cells; absent
+# task rows still FAIL (M7.5 semantics unchanged).
+if ! task_in_plan_tracker "$TASK_ID"; then
     echo ""
     echo "╔══════════════════════════════════════════════════════════════╗"
     echo "║  GOVERNANCE BLOCKED: Task '$TASK_ID' not in plan-tracker.  ║"

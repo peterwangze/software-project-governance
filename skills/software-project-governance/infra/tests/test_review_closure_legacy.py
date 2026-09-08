@@ -477,5 +477,406 @@ class MergePriorityTests(unittest.TestCase):
         self.assertTrue(merged["legacy_keys"])
 
 
+class HistoricalFileShapeTests(unittest.TestCase):
+    """FIX-291 / FIX-281①（router EV-066：V2×9 + V5×2）：Check 30 对
+    pre-FIX-174 文件式 review 记录的历史形状分类。
+
+    形状定义：文件名匹配现行 review-{id}[-R{n}].md 约定，但内容为接入前
+    手写报告（无 ``machine-written by review-record`` 首行标记、无机器
+    ``- date:`` 字段）——本仓 29 个同形状实例（review-REL-007.md 等，
+    2026-09-09 实测盘点）。此类记录进入轮次状态机后：
+
+      · V2 轮次连续性——历史手写链的缺轮（含中缝缺口——L-A 仅覆盖前导）
+        → 历史形状 WARN；
+      · V5 APPROVED_WITH_NOTES 无机器 token / prose 附着零值
+        （``unresolved_blockers=0，P0=0/…`` 全角逗号 artifact——router
+        ARCH-002「got invalid」同型）→ 历史形状 WARN。
+
+    边界锁定（不可破）：ACTIVE 任务恒 FAIL；真实 nonzero 恒 FAIL；
+    现行机器格式（marker 完整）违规不得放宽。
+    """
+
+    @staticmethod
+    def _handwritten_file(conclusion, extra_lines=()):
+        """Pre-FIX-174 手写审查报告形状（无机器 marker / 无 - date: 字段）。"""
+        lines = [
+            "# 审查报告",
+            "",
+            "审查对象：目标产物直读；事实依据逐项核验。",
+            "",
+            "审查结论：**{0}**".format(conclusion),
+            "",
+        ]
+        lines.extend(extra_lines)
+        lines.append("")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _machine_file(task, round_n, conclusion, extra_lines=()):
+        """现行 review-record CLI 机器格式（marker + 结构字段齐全）。"""
+        lines = [
+            "# Review Record (machine-written by review-record)",
+            "",
+            "- task: {0}".format(task),
+            "- round: R{0}".format(round_n),
+            "- date: 2026-09-01",
+            "- reviewer: rv",
+            "- report: r.md",
+            "- wiring: pending",
+            "",
+            "**审查结论**: **{0}**".format(conclusion),
+        ]
+        if conclusion == "APPROVED_WITH_NOTES":
+            lines += ["", "unresolved_blockers=0"]
+        lines.extend(extra_lines)
+        lines.append("")
+        return "\n".join(lines)
+
+    _PLAN_HEADER = (
+        "# 计划\n\n"
+        "### 优先级一览\n\n"
+        "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |\n"
+        "|--------|----|------|------|---------|---------|------|\n"
+    )
+
+    def _live_run(self, plan_rows, files):
+        """live 路径（temp .governance + 真实文件扫描——分类只发生在 live
+        文件通道，fixture 注入路径无法覆盖 source_format 分类）。"""
+        import tempfile
+        plan = self._PLAN_HEADER + "".join(plan_rows)
+        with tempfile.TemporaryDirectory() as td:
+            gov = Path(td) / ".governance"
+            gov.mkdir()
+            (gov / "plan-tracker.md").write_text(plan, encoding="utf-8")
+            (gov / "evidence-log.md").write_text("", encoding="utf-8")
+            for name, text in files.items():
+                (gov / name).write_text(text, encoding="utf-8")
+            with mock.patch.object(vw, "SAMPLE_PATH", gov / "plan-tracker.md"), \
+                 mock.patch.object(vw, "EVIDENCE_PATH", gov / "evidence-log.md"), \
+                 mock.patch.object(vw, "GOVERNANCE_DIR", gov):
+                r = vw.check_review_closure()
+        return r
+
+    # ── V2：历史文件链缺轮 → WARN ─────────────────────────────────────
+
+    def test_historical_file_midchain_gap_downgrades_to_warn(self):
+        """历史手写链中缝缺轮（R0+R2，缺 R1——L-A 仅覆盖前导）+ 终态任务
+        → V2 WARN（红→绿：现行判 FAIL）。"""
+        r = self._live_run(
+            ["| **P1** | ARCH-101 | 旧任务 | — | 0.2.0 | closed | "
+             "✅ 完成 (2026-08-01) |\n"],
+            {
+                "review-ARCH-101-R0.md": self._handwritten_file("NEEDS_CHANGE"),
+                "review-ARCH-101-R2.md": self._handwritten_file(
+                    "APPROVED_WITH_NOTES"),
+            })
+        self.assertEqual(r["verdict"], "WARN", r["violations"])
+        v2 = [w for w in r["warnings"] if w["rule"] == "V2"
+              and w["task_id"] == "ARCH-101"]
+        self.assertTrue(v2, r["warnings"])
+        self.assertIn("historical", v2[0]["reason"])
+        self.assertEqual(
+            [v for v in r["violations"] if v.get("task_id") == "ARCH-101"], [])
+
+    def test_historical_file_leading_gap_on_mixed_terminal_status_warns(self):
+        """router V2×9 等效复合形态：W-7 混合终态格（「🔄 进行中 → ✅ 已发布」
+        ——旧谓词判 ACTIVE）+ 历史手写链前导缺轮 → WARN（红→绿：
+        W-7 与历史形状分类两修复共同生效）。
+
+        归因注记（CODE-R0 P3-4）：本用例**有意耦合两个修复**（W-7 谓词
+        flip 使任务进 completed 集 + A 子项历史形状门降级）——router 复合
+        形态等效是其目的；单独回归定位时见
+        W7TerminalSegmentScopeTests（谓词面）与
+        test_historical_file_midchain_gap_downgrades_to_warn（分类面）。"""
+        r = self._live_run(
+            ["| **P1** | ARCH-103 | 发布任务 | — | 0.2.0 | closed | "
+             "🔄 进行中 (2026-08-23)——已派发 → **✅ 已发布 (2026-08-23)** |\n"],
+            {
+                "review-ARCH-103-R1.md": self._handwritten_file("NEEDS_CHANGE"),
+                "review-ARCH-103-R2.md": self._handwritten_file(
+                    "APPROVED_WITH_NOTES"),
+            })
+        self.assertEqual(r["verdict"], "WARN", r["violations"])
+        v2 = [w for w in r["warnings"] if w["rule"] == "V2"
+              and w["task_id"] == "ARCH-103"]
+        self.assertTrue(v2, r["warnings"])
+        self.assertEqual(r["violations"], [])
+
+    # ── V5：历史文件无机器 token / prose 附着零值 → WARN ──────────────
+
+    def test_historical_file_v5_missing_token_downgrades_to_warn(self):
+        """历史手写文件 APPROVED_WITH_NOTES 无任何 blocker token（无日期
+        字段——FIX-233 日期豁免无法生效）+ 终态任务 → V5 WARN（红→绿）。"""
+        r = self._live_run(
+            ["| **P1** | ARCH-102 | 旧任务 | — | 0.2.0 | closed | "
+             "✅ 完成 (2026-08-01) |\n"],
+            {"review-ARCH-102.md": self._handwritten_file("APPROVED_WITH_NOTES")})
+        self.assertEqual(r["verdict"], "WARN", r["violations"])
+        v5 = [w for w in r["warnings"] if w["rule"] == "V5"
+              and w["task_id"] == "ARCH-102"]
+        self.assertTrue(v5, r["warnings"])
+        self.assertIn("historical", v5[0]["reason"])
+
+    def test_historical_file_v5_prose_attached_zero_downgrades_to_warn(self):
+        """router ARCH-002 同型「got invalid」：历史手写文件携带
+        ``unresolved_blockers=0，P0=0/…``（全角逗号 prose 附着——解析器
+        判 invalid）→ 可证零值 → V5 WARN（红→绿）。"""
+        r = self._live_run(
+            ["| **P1** | ARCH-104 | 旧任务 | — | 0.2.0 | closed | "
+             "✅ 完成 (2026-08-01) |\n"],
+            {"review-ARCH-104.md": self._handwritten_file(
+                "APPROVED_WITH_NOTES",
+                ["（unresolved_blockers=0，P0=0/P1=0/P2×1）——备注 prose"])}
+        )
+        self.assertEqual(r["verdict"], "WARN", r["violations"])
+        v5 = [w for w in r["warnings"] if w["rule"] == "V5"
+              and w["task_id"] == "ARCH-104"]
+        self.assertTrue(v5, r["warnings"])
+
+    # ── 边界锁定：ACTIVE / 真实 nonzero / 现行机器格式恒 FAIL ─────────
+
+    def test_historical_file_gap_on_active_task_stays_fail(self):
+        """边界：ACTIVE（⏳ 待执行）任务的历史形状链缺轮 → 恒 FAIL。"""
+        r = self._live_run(
+            ["| **P1** | ARCH-105 | 活跃任务 | — | 0.3.0 | open | "
+             "⏳ 待执行 |\n"],
+            {
+                "review-ARCH-105-R1.md": self._handwritten_file("NEEDS_CHANGE"),
+                "review-ARCH-105-R2.md": self._handwritten_file(
+                    "APPROVED_WITH_NOTES"),
+            })
+        self.assertEqual(r["verdict"], "FAIL")
+        self.assertIn("ARCH-105",
+                      [v["task_id"] for v in r["violations"] if v["rule"] == "V2"])
+
+    def test_historical_file_v5_nonzero_stays_fail(self):
+        """边界：历史文件携带真实 nonzero（unresolved_blockers=2）→ 恒 FAIL。"""
+        r = self._live_run(
+            ["| **P1** | ARCH-106 | 旧任务 | — | 0.2.0 | closed | "
+             "✅ 完成 (2026-08-01) |\n"],
+            {"review-ARCH-106.md": self._handwritten_file(
+                "APPROVED_WITH_NOTES", ["unresolved_blockers=2"])})
+        self.assertEqual(r["verdict"], "FAIL")
+        self.assertIn("ARCH-106",
+                      [v["task_id"] for v in r["violations"] if v["rule"] == "V5"])
+
+    def test_machine_file_gap_stays_fail(self):
+        """边界：现行机器格式（marker + date 字段齐全）链缺轮 → 不得因
+        历史形状逻辑放宽——恒 FAIL。"""
+        r = self._live_run(
+            ["| **P1** | ARCH-107 | 新任务 | — | 0.4.0 | open | "
+             "✅ 完成 (2026-09-02) |\n"],
+            {
+                "review-ARCH-107-R0.md": self._machine_file(
+                    "ARCH-107", 0, "APPROVED"),
+                "review-ARCH-107-R2.md": self._machine_file(
+                    "ARCH-107", 2, "APPROVED_WITH_NOTES"),
+            })
+        self.assertEqual(r["verdict"], "FAIL")
+        self.assertIn("ARCH-107",
+                      [v["task_id"] for v in r["violations"] if v["rule"] == "V2"])
+
+    def test_router_ev066_equivalent_aggregate_warns(self):
+        """router EV-066 等效聚合 fixture：V2（前导缺轮）+ V2（中缝缺轮）
+        + V5（无 token）+ V5（prose 零值）四形态 → 全 WARN、零违规。"""
+        r = self._live_run(
+            [
+                "| **P1** | ARCH-110 | 旧任务A | — | 0.2.0 | closed | "
+                "✅ 完成 (2026-08-01) |\n",
+                "| **P1** | ARCH-111 | 旧任务B | — | 0.2.0 | closed | "
+                "✅ 完成 (2026-08-01) |\n",
+                "| **P1** | ARCH-112 | 旧任务C | — | 0.2.0 | closed | "
+                "✅ 已关闭 (2026-08-01) |\n",
+                "| **P1** | ARCH-113 | 旧任务D | — | 0.2.0 | closed | "
+                "✅ 完成 (2026-08-01) |\n",
+            ],
+            {
+                "review-ARCH-110-R1.md": self._handwritten_file("NEEDS_CHANGE"),
+                "review-ARCH-110-R2.md": self._handwritten_file(
+                    "APPROVED_WITH_NOTES"),
+                "review-ARCH-111-R0.md": self._handwritten_file("NEEDS_CHANGE"),
+                "review-ARCH-111-R2.md": self._handwritten_file(
+                    "APPROVED_WITH_NOTES"),
+                "review-ARCH-112.md": self._handwritten_file(
+                    "APPROVED_WITH_NOTES"),
+                "review-ARCH-113.md": self._handwritten_file(
+                    "APPROVED_WITH_NOTES",
+                    ["（unresolved_blockers=0，P0=0/P2×1）prose 附着"]),
+            })
+        self.assertEqual(r["verdict"], "WARN")
+        self.assertEqual(r["violations"], [])
+        downgraded = {w["task_id"] for w in r["warnings"]}
+        self.assertTrue({"ARCH-110", "ARCH-111", "ARCH-112", "ARCH-113"}
+                        <= downgraded, r["warnings"])
+
+
+class ReworkR1BoundaryTests(unittest.TestCase):
+    """FIX-291 R1 返工（review-FIX-291-DESIGN-R0 P1-1/P2-1/P3-1 + CODE-R0
+    P2-2/P3-1 交叉印证）：provably-zero 证明标准收窄 + 行通道 source_format
+    分类 + 歧义值边界锚定。
+
+    P1-1（Design blocker）：``_PROVABLY_ZERO_TOKEN_RE`` 只证前导数字为 0、
+    不证附着细目无 blocker——``unresolved_blockers=0，P1×1``（本仓 FIX-254
+    live evidence 行同形状：结构 token 报 0、细目报 P1 nonzero——自相矛盾）
+    若处于 historical 文件形状 + completed 任务会被降级 WARN，违背 L-B
+    「可证为空」标准与「真实 nonzero 恒 FAIL」锁定字面。修复 = 负向前瞻：
+    附着细目含 nonzero P0/P1 计数即拒绝（P2/P3 nonzero 不影响——非阻塞级）。
+    """
+
+    @staticmethod
+    def _handwritten_file(conclusion, extra_lines=()):
+        lines = [
+            "# 审查报告",
+            "",
+            "审查对象：目标产物直读；事实依据逐项核验。",
+            "",
+            "审查结论：**{0}**".format(conclusion),
+            "",
+        ]
+        lines.extend(extra_lines)
+        lines.append("")
+        return "\n".join(lines)
+
+    _PLAN_HEADER = (
+        "# 计划\n\n"
+        "### 优先级一览\n\n"
+        "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |\n"
+        "|--------|----|------|------|---------|---------|------|\n"
+    )
+
+    def _live_run(self, plan_rows, files):
+        import tempfile
+        plan = self._PLAN_HEADER + "".join(plan_rows)
+        with tempfile.TemporaryDirectory() as td:
+            gov = Path(td) / ".governance"
+            gov.mkdir()
+            (gov / "plan-tracker.md").write_text(plan, encoding="utf-8")
+            (gov / "evidence-log.md").write_text("", encoding="utf-8")
+            for name, text in files.items():
+                (gov / name).write_text(text, encoding="utf-8")
+            with mock.patch.object(vw, "SAMPLE_PATH", gov / "plan-tracker.md"), \
+                 mock.patch.object(vw, "EVIDENCE_PATH", gov / "evidence-log.md"), \
+                 mock.patch.object(vw, "GOVERNANCE_DIR", gov):
+                r = vw.check_review_closure()
+        return r
+
+    # ── P1-1：nonzero P0/P1 细目拒绝 provably-zero（红→绿） ───────────
+
+    def test_historical_file_v5_p1_nonzero_detail_stays_fail(self):
+        """红字面配置（MUST）：FIX-254 live 形状
+        ``unresolved_blockers=0，P0=0/P1×1/P2×3/P3×5`` ——结构 token 报 0
+        而细目报 P1 nonzero（自相矛盾）→ 不可证为空 → 恒 FAIL。"""
+        r = self._live_run(
+            ["| **P1** | ARCH-120 | 旧任务 | — | 0.2.0 | closed | "
+             "✅ 完成 (2026-08-01) |\n"],
+            {"review-ARCH-120.md": self._handwritten_file(
+                "APPROVED_WITH_NOTES",
+                ["（unresolved_blockers=0，P0=0/P1×1/P2×3/P3×5，共 9 发现）"])}
+        )
+        self.assertEqual(r["verdict"], "FAIL", r["warnings"])
+        self.assertIn("ARCH-120",
+                      [v["task_id"] for v in r["violations"]
+                       if v["rule"] == "V5"])
+
+    def test_historical_file_v5_p0_nonzero_detail_stays_fail(self):
+        """P1-1 同型：``P0=1`` nonzero 细目 → 恒 FAIL。"""
+        r = self._live_run(
+            ["| **P1** | ARCH-121 | 旧任务 | — | 0.2.0 | closed | "
+             "✅ 完成 (2026-08-01) |\n"],
+            {"review-ARCH-121.md": self._handwritten_file(
+                "APPROVED_WITH_NOTES",
+                ["（unresolved_blockers=0，P0=1/P1=0）说明 prose"])}
+        )
+        self.assertEqual(r["verdict"], "FAIL")
+        self.assertIn("ARCH-121",
+                      [v["task_id"] for v in r["violations"]
+                       if v["rule"] == "V5"])
+
+    def test_historical_file_v5_all_zero_with_p2_nonzero_still_warns(self):
+        """绿字面配置（回归锚定）：全零 P0/P1 + P2 nonzero（非阻塞级）
+        ``unresolved_blockers=0，P0=0/P1=0/P2=3`` → 继续降级 WARN。"""
+        r = self._live_run(
+            ["| **P1** | ARCH-122 | 旧任务 | — | 0.2.0 | closed | "
+             "✅ 完成 (2026-08-01) |\n"],
+            {"review-ARCH-122.md": self._handwritten_file(
+                "APPROVED_WITH_NOTES",
+                ["（unresolved_blockers=0，P0=0/P1=0/P2=3/P3=2）"])}
+        )
+        self.assertEqual(r["verdict"], "WARN", r["violations"])
+        v5 = [w for w in r["warnings"] if w["rule"] == "V5"
+              and w["task_id"] == "ARCH-122"]
+        self.assertTrue(v5, r["warnings"])
+
+    def test_parser_p1_nonzero_detail_not_provably_zero(self):
+        """解析器直测：``=0，P1×1`` / ``=0，P0=1`` 附着 → 非 provably-zero。"""
+        for field in ("unresolved_blockers=0，P1×1",
+                      "unresolved_blockers=0，P0=1/P1=0",
+                      "unresolved_blockers=0，P0 = 2 后续"):
+            ev = rd._parse_unresolved_blockers_fields([field])
+            self.assertEqual(ev["status"], "invalid", field)
+            self.assertFalse(
+                rd._blocker_evidence_provably_zero(ev), field)
+
+    # ── P3-1（Design 测试缺口 + Code 边界收窄）── 歧义值 fail-closed ──
+
+    def test_parser_ambiguous_values_not_provably_zero(self):
+        """歧义 prose 值 fail-closed 锚定（Design P3-1 补 2 例）：
+        ``10，``（前导非 0）/ ``02，``（0 后随数字）→ 恒非 provably-zero。"""
+        for field in ("unresolved_blockers=10，P0=0", "unresolved_blockers=02，x"):
+            ev = rd._parse_unresolved_blockers_fields([field])
+            self.assertFalse(
+                rd._blocker_evidence_provably_zero(ev), field)
+
+    def test_parser_ascii_letter_attachment_not_provably_zero(self):
+        """Code P3-1 收窄：``0abc`` 类 ASCII 字母附着（token 边界锚定）
+        → 非 provably-zero；CJK 附着（0件）与全角逗号附着保持可证零。"""
+        ev = rd._parse_unresolved_blockers_fields(
+            ["unresolved_blockers=0abc"])
+        self.assertEqual(ev["status"], "invalid")
+        self.assertFalse(rd._blocker_evidence_provably_zero(ev))
+        for ok_field in ("unresolved_blockers=0件", "unresolved_blockers=0，P0=0"):
+            ev_ok = rd._parse_unresolved_blockers_fields([ok_field])
+            if ev_ok["status"] == "invalid":
+                self.assertTrue(
+                    rd._blocker_evidence_provably_zero(ev_ok), ok_field)
+
+    # ── P2-1(Design)≡P2-2(Code)：机录行击穿历史分类（红→绿） ─────────
+
+    def test_machine_row_contribution_breaks_historical_classification(self):
+        """同轮「review-record 机录行 + historical 手写文件」→ 该轮
+        machine（rank 2），全轮 historical 不成立 → 中缝缺口恒 FAIL
+        （现行格式贡献 MUST 击穿 provably-historical 分类——R0 行通道
+        缺省 unknown(0) 不设防，本用例锁住修复）。"""
+        machine_row = (
+            "| REVIEW-ARCH-123-R0 | ARCH-123 | 治理记录 | review-record CLI "
+            "机器写入 review 结论记录（round 0） | 事实依据：review-record "
+            "输出摘要（机器写入） | r.md; review-ARCH-123-R0.md | rv | "
+            "2026-09-01 | G11 | NEEDS_CHANGE |"
+        )
+        import tempfile
+        plan = (self._PLAN_HEADER +
+                "| **P1** | ARCH-123 | 任务 | — | 0.4.0 | open | "
+                "✅ 完成 (2026-09-02) |\n")
+        with tempfile.TemporaryDirectory() as td:
+            gov = Path(td) / ".governance"
+            gov.mkdir()
+            (gov / "plan-tracker.md").write_text(plan, encoding="utf-8")
+            (gov / "evidence-log.md").write_text(machine_row + "\n",
+                                                 encoding="utf-8")
+            (gov / "review-ARCH-123-R0.md").write_text(
+                self._handwritten_file("NEEDS_CHANGE"), encoding="utf-8")
+            (gov / "review-ARCH-123-R2.md").write_text(
+                self._handwritten_file("APPROVED_WITH_NOTES"),
+                encoding="utf-8")
+            with mock.patch.object(vw, "SAMPLE_PATH", gov / "plan-tracker.md"), \
+                 mock.patch.object(vw, "EVIDENCE_PATH", gov / "evidence-log.md"), \
+                 mock.patch.object(vw, "GOVERNANCE_DIR", gov):
+                r = vw.check_review_closure()
+        self.assertEqual(r["verdict"], "FAIL", r["warnings"])
+        self.assertIn("ARCH-123",
+                      [v["task_id"] for v in r["violations"]
+                       if v["rule"] == "V2"])
+
+
 if __name__ == "__main__":
     unittest.main()

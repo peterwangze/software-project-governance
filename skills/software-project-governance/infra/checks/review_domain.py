@@ -1670,6 +1670,53 @@ def _legacy_blocker_keys(fields):
     return _legacy_blocker_facts(fields)["keys"]
 
 
+# FIX-291 / FIX-281①: provably-zero prose-attached token shape. Pre-FIX-174
+# handwritten review files wrote the structured token inline with prose in the
+# same line — ``unresolved_blockers=0，P0=0/P2×1）…`` (fullwidth comma artifact,
+# router ARCH-002 "[V5] ... got invalid" / this repo's 2026-08-21~22 evidence
+# rows). The value parser captures ``0，P0=0/P2×1）…`` → non-numeric → invalid.
+# A captured value is provably the number zero ONLY when BOTH hold (R1,
+# DESIGN-R0 P1-1 + CODE-R0 P3-1):
+#   * it begins with the single digit ``0`` at a token boundary — a following
+#     ASCII alphanumeric run rejects it (``10，`` / ``02，`` / ``0abc`` /
+#     ``0 x`` are not provable; CJK attachments ``0件`` and the fullwidth
+#     comma are);
+#   * the attached detail carries NO nonzero blocking-severity count — a
+#     ``P0``/``P1`` count of 1-9 anywhere in the token (``P1×1`` / ``P0=1``,
+#     spaces tolerated) rejects the classification. P2/P3 counts are
+#     non-blocking levels and do NOT reject. The self-contradictory live
+#     shape ``unresolved_blockers=0，P0=0/P1×1/P2×3/P3×5`` (structural token
+#     says 0, detail says P1 nonzero — FIX-254 evidence row) is NOT provably
+#     empty and must stay FAIL (「真实 nonzero 恒 FAIL」).
+_PROVABLY_ZERO_TOKEN_RE = re.compile(
+    r"^unresolved_blockers=0(?!\s*[0-9A-Za-z])"
+    r"(?!.*P[01]\s*[=×xX]\s*[1-9])"
+)
+
+
+def _blocker_evidence_provably_zero(blocker_evidence):
+    """FIX-291: True when an ``invalid`` blocker parse is provably zero.
+
+    Every parsed canonical value must be 0 AND every invalid token must be a
+    prose-attached zero (:data:`_PROVABLY_ZERO_TOKEN_RE`). Anything else
+    (nonzero value, ambiguous/non-numeric value, missing entirely) → False —
+    the caller keeps the fail-closed FAIL.
+    """
+    if not isinstance(blocker_evidence, dict):
+        return False
+    if blocker_evidence.get("status") != "invalid":
+        return False
+    values = blocker_evidence.get("values") or []
+    if any(int(v) != 0 for v in values):
+        return False
+    invalid_tokens = blocker_evidence.get("invalid_tokens") or []
+    if not invalid_tokens:
+        return False
+    return all(
+        bool(_PROVABLY_ZERO_TOKEN_RE.match(str(tok))) for tok in invalid_tokens
+    )
+
+
 def _parse_unresolved_blockers_fields(fields):
     """Parse structured ``unresolved_blockers=<count>`` tokens.
 
@@ -1698,9 +1745,12 @@ def _parse_unresolved_blockers_fields(fields):
                 continue
             raw_value = value_match.group(1)
             if not re.fullmatch(r"\d+", raw_value):
-                invalid_tokens.append(
-                    f"unresolved_blockers={raw_value}"
-                )
+                # FIX-291 R1 (DESIGN-R0 P1-1): keep the FULL line remainder
+                # (not just the captured value) — the value capture stops at
+                # the first whitespace, so a spaced detail count
+                # (``=0，P0 = 2``) would otherwise escape the provably-zero
+                # proof window. Same convention as the no-value branch above.
+                invalid_tokens.append(field[key_match.start():].strip())
                 continue
             values.append(int(raw_value))
 
@@ -1852,7 +1902,10 @@ def _build_review_sequence(review_entries, legacy_files=None):
       "conclusion"}. id may be REVIEW-{id} or REVIEW-{id}-R{n}. An optional
       "date" field (ISO YYYY-MM-DD) records the evidence-row date so the V2
       historical-naming exemption (FIX-174 R1 P0-2) can tell pre-FIX-173
-      residue from a real round-continuity breach.
+      residue from a real round-continuity breach. An optional
+      "source_format" field ("machine" | "historical" | "machine_format",
+      FIX-291 / FIX-281①) records the FILE provenance classification from
+      the live scan so Check 30's historical-shape gates can fire.
     legacy_files: iterable of dicts {"file": "review-{id}-v*.md", "task_ref"}.
       These are tagged UNKNOWN (no round inference, P1-c backward compat).
 
@@ -1869,6 +1922,12 @@ def _build_review_sequence(review_entries, legacy_files=None):
     evidence date observed for that round. The V1/V5 historical exemption
     judges the TERMINAL round's date, not the chain-wide min_evidence_date
     (which remains the predicate for the V2 naming-residue exemption).
+
+    Duplicate-round merges rank source_format (FIX-291): machine /
+    machine_format outrank historical, which outranks unknown — a
+    current-format contribution to a round always breaks the provably-
+    historical classification (conservative: the historical downgrade only
+    survives when EVERY contribution to the round is historical-shaped).
     """
     _resolve_shared()
     sequences = {}
@@ -1884,6 +1943,7 @@ def _build_review_sequence(review_entries, legacy_files=None):
             parsed = _parse_iso_date(entry_date) if isinstance(entry_date, str) else entry_date
             if parsed is not None:
                 parsed_date = parsed
+        source_format = str(entry.get("source_format") or "unknown")
         task_id, round_n = _normalize_review_round(raw_id)
         if task_id is None:
             # Unparseable id — fall back to task_ref if present, round unknown.
@@ -1908,6 +1968,12 @@ def _build_review_sequence(review_entries, legacy_files=None):
                     blocker_evidence,
                 )
             )
+            # FIX-291: merge rank — machine/machine_format > historical >
+            # unknown (a current-format duplicate breaks the historical shape).
+            rank = {"machine": 2, "machine_format": 2, "historical": 1}
+            current = seq["rounds"][round_n].get("source_format") or "unknown"
+            if rank.get(source_format, 0) > rank.get(current, 0):
+                seq["rounds"][round_n]["source_format"] = source_format
             # FIX-233 R1 (P1-1): retain the round's evidence date — the LATEST
             # date observed for the round (fail-closed: a post-normalization
             # date must never be masked by an older duplicate entry).
@@ -1920,14 +1986,16 @@ def _build_review_sequence(review_entries, legacy_files=None):
                                           "blocker_evidence": seq["rounds"][round_n]["blocker_evidence"],
                                           "round_explicit": bool(_REVIEW_ID_RE.match(raw_id)
                                                                  and _REVIEW_ID_RE.match(raw_id).group(2)),
-                                          "date": seq["rounds"][round_n].get("date")}
+                                          "date": seq["rounds"][round_n].get("date"),
+                                          "source_format": seq["rounds"][round_n].get("source_format")}
         else:
             m = _REVIEW_ID_RE.match(raw_id)
             round_explicit = bool(m and m.group(2) is not None)
             seq["rounds"][round_n] = {"id": raw_id, "conclusion": conclusion,
                                       "blocker_evidence": blocker_evidence,
                                       "round_explicit": round_explicit,
-                                      "date": parsed_date}
+                                      "date": parsed_date,
+                                      "source_format": source_format}
         seq["max_round"] = max(seq["max_round"], round_n)
         # Track naming migration + earliest evidence date for the V2 historical
         # exemption (FIX-174 R1 P0-2). A round-0 entry is "bare" when its id
@@ -2075,6 +2143,30 @@ def check_review_closure(review_sequence=None, plan_tracker_completed=None,
                               f"— legacy leading round gap: chain starts at R{min(rounds)} "
                               f"(R0 predates the review record of a closed task, audit-148 "
                               f"§3.1 ARCH-001/DEV-002 pattern); downgraded",
+                })
+                continue
+            # FIX-291 / FIX-281① (router EV-066 V2×9): historical FILE shape —
+            # every round of the chain derives exclusively from pre-FIX-174
+            # file-style review records (new-format filename, handwritten
+            # content: no machine marker, no machine date field). Round
+            # continuity over such records is pre-governance residue (covers
+            # BOTH leading and mid-chain gaps — L-A only covers leading), so a
+            # TERMINAL (completed) task downgrades to WARN. Fail-closed
+            # boundary: an ACTIVE task keeps the FAIL (current-work gap), and
+            # any machine/machine-format contribution to a round breaks the
+            # classification (merge rank) — current-format records are never
+            # relaxed by this rule.
+            if task_id in completed and all(
+                    (rounds[r].get("source_format") == "historical")
+                    for r in rounds):
+                result["warnings"].append({
+                    "rule": "V2",
+                    "task_id": task_id,
+                    "reason": f"round continuity broken — missing R{sorted(missing_rounds)} "
+                              f"— historical file shape: chain derives from "
+                              f"pre-FIX-174 handwritten review-{task_id}-*.md "
+                              f"records (no machine marker/date field, FIX-281① "
+                              f"router EV-066 pattern); downgraded",
                 })
                 continue
             result["violations"].append({
@@ -2243,6 +2335,35 @@ def check_review_closure(review_sequence=None, plan_tracker_completed=None,
                               f"on a closed task — old review format "
                               f"un-migrated, no machine unresolved_blockers=0 "
                               f"token (audit-148 §3.1 ARCH-002 pattern); "
+                              f"downgraded",
+                })
+                continue
+            # FIX-291 / FIX-281① (router EV-066 V5×2): historical FILE shape —
+            # the terminal round derives from a pre-FIX-174 handwritten review
+            # file whose APPROVED_WITH_NOTES conclusion has no machine token
+            # (status missing) or a provably-zero prose-attached token
+            # (``unresolved_blockers=0，P0=0/…`` fullwidth-comma artifact →
+            # parser status invalid, FIX-281① router ARCH-002 "got invalid"
+            # same type). Downgrade ONLY on a TERMINAL (completed) task whose
+            # terminal round is provably historical-shaped. Fail-closed
+            # boundary: a real nonzero value (valid 2 / prose-attached 2),
+            # an ambiguous unparseable value, or an ACTIVE task keeps the FAIL.
+            if (task_id in completed
+                    and rounds[max_round].get("source_format") == "historical"
+                    and not legacy_nonzero and not legacy_unparsed
+                    and (blocker_status == "missing"
+                         or _blocker_evidence_provably_zero(
+                             blocker_evidence))):
+                result["warnings"].append({
+                    "rule": "V5",
+                    "task_id": task_id,
+                    "reason": f"R{max_round}=APPROVED_WITH_NOTES on a "
+                              f"pre-FIX-174 handwritten review file "
+                              f"(historical shape, no machine "
+                              f"unresolved_blockers=0 token"
+                              + (" — prose-attached zero value"
+                                 if blocker_status == "invalid" else "")
+                              + f", FIX-281① router EV-066 pattern); "
                               f"downgraded",
                 })
                 continue
@@ -2426,6 +2547,15 @@ def _collect_live_review_sequences():
                     "conclusion": conclusion or "UNKNOWN",
                     "blocker_evidence": _parse_unresolved_blockers_fields(parts[3:]),
                     "date": row_date,
+                    # FIX-291 R1 (DESIGN-R0 P2-1 / CODE-R0 P2-2): the row
+                    # channel classifies by the machine marker so a
+                    # current-format ROW contribution ranks machine(2) and
+                    # breaks a provably-historical round classification —
+                    # same as a machine FILE contribution (the merge-rank
+                    # docstring contract now holds for both channels).
+                    "source_format": (
+                        "machine" if REVIEW_MACHINE_ROW_MARKER in stripped
+                        else "unknown"),
                 })
 
     # .governance/review-*.md files.
@@ -2445,10 +2575,26 @@ def _collect_live_review_sequences():
             round_n = int(m_new.group(2)) if m_new.group(2) else 0
             # Read conclusion from file content.
             conclusion = "UNKNOWN"
+            source_format = "unknown"
             try:
                 fc = rf.read_text(encoding="utf-8")
                 conclusion = _extract_review_conclusion_from_text(fc)
                 blocker_evidence = _parse_unresolved_blockers_fields(fc.splitlines())
+                # FIX-291 / FIX-281①: file-format (provenance) classification
+                # so Check 30 V2/V5 can tell pre-FIX-174 file residue from
+                # current machine-format records:
+                #   machine       — review-record CLI output (first-line marker);
+                #   historical    — pre-FIX-174 handwritten report: no machine
+                #                   marker AND no machine ``- date:`` field
+                #                   (this repo: 29 files, e.g. review-REL-007.md);
+                #   machine_format — dated but not CLI-written (handwritten in
+                #                   the current format — stays fully enforced).
+                if REVIEW_MACHINE_FILE_MARKER in fc:
+                    source_format = "machine"
+                elif not REVIEW_FILE_DATE_RE.search(fc):
+                    source_format = "historical"
+                else:
+                    source_format = "machine_format"
             except (IOError, OSError):
                 blocker_evidence = _parse_unresolved_blockers_fields([])
             cid = f"REVIEW-{task_id}-R{round_n}" if round_n else f"REVIEW-{task_id}"
@@ -2457,6 +2603,7 @@ def _collect_live_review_sequences():
                 "task_ref": task_id,
                 "conclusion": conclusion,
                 "blocker_evidence": blocker_evidence,
+                "source_format": source_format,
             })
 
     sequences = _build_review_sequence(review_entries, legacy_files=legacy_files)
@@ -2504,6 +2651,24 @@ def check_review_machine_provenance(review_rows=None, review_files=None):
     makes the 复审必达 obligation derivable from evidence across sessions
     (REQ-107 acceptance signal 2).
 
+    FIX-291 / FIX-281⑧ (router WARN 10→13 growth) — row classification:
+      * V7/V8 row judgments anchor on the ID COLUMN: only a row whose first
+        cell IS a ``REVIEW-`` record is a review-conclusion row. An EVD-/
+        RECO-/TRIAGE- row that MENTIONS a REVIEW id in its description is a
+        cross-reference, never a review record — it is classified
+        (``stats["rows_non_review"]``) and not judged. This is the
+        whitelist/provenance classification for machine rows of other CLIs
+        (RECO- = task-priority-analysis) and kills the "every new delivery
+        row mentions its review record → +1 WARN" false-positive growth.
+      * V8 provenance discharge: a NEEDS_CHANGE record whose R+1 round record
+        already exists (row or file) has its 复审必达 obligation provably
+        discharged — no WARN (live REL-070: release R0 NEEDS_CHANGE + design
+        R0 APPROVED_WITH_NOTES overwrote the same-numbered machine file, so
+        the file's next_round field is gone while R1/R2 records exist).
+        Boundary: a genuine handwritten REVIEW- row (ID column REVIEW-, no
+        CLI marker, dated ≥ effective date) still WARNs — current-format
+        violations are not relaxed.
+
     Args:
       review_rows: list of raw evidence-log row strings (fixture path). When
         None, the live evidence-log is scanned.
@@ -2521,7 +2686,7 @@ def check_review_machine_provenance(review_rows=None, review_files=None):
         "warnings": [],
         "stats": {
             "rows_scanned": 0, "rows_judged": 0, "rows_undated": 0,
-            "rows_machine": 0,
+            "rows_machine": 0, "rows_non_review": 0,
             "files_scanned": 0, "files_judged": 0, "files_undated": 0,
             "files_legacy_skipped": 0, "files_unmatched": 0,
         },
@@ -2579,6 +2744,74 @@ def check_review_machine_provenance(review_rows=None, review_files=None):
                 return hit
         return None, None
 
+    # ── FIX-291 / FIX-281⑧: round-record index (V8 provenance) ─────────
+    # (task_id, round) -> [record, …] where each record is
+    # {"date": date|None, "valid": bool} over new-format review files +
+    # ID-column-anchored evidence rows. A NEEDS_CHANGE record is discharged
+    # ONLY by a VALID R+1 record dated on/after the NEEDS_CHANGE record
+    # (R1, DESIGN-R0 P2-2 / CODE-R0 P3-3: an older same-numbered historical
+    # round — task+round naming collision — or an UNKNOWN-conclusion record
+    # is not a proven revisit; live REL-070 same-number overwrite keeps its
+    # discharge: R1 records are dated and conclusive). R2 (CODE-R1 P3-5 ≡
+    # DESIGN-R1 P3-R1-b): records are kept PER-RECORD and the discharge is
+    # an exists-one test — merging max-date + OR-valid across records could
+    # combine a valid-but-older record with a newer UNKNOWN one into a
+    # discharge no single record justifies.
+    known_rounds = {}
+
+    def _index_record(tid, rnd, rec_date=None, valid=False):
+        known_rounds.setdefault(
+            (tid, rnd), []).append({"date": rec_date, "valid": bool(valid)})
+
+    def _next_round_discharged(tid, rnd, base_date):
+        """R+1 discharge test: EXISTS one record that is valid AND dated
+        on/after ``base_date`` (per-record judgment, R2)."""
+        if base_date is None:
+            return False
+        return any(
+            rec["valid"] and rec["date"] is not None
+            and rec["date"] >= base_date
+            for rec in known_rounds.get((tid, rnd + 1), ())
+        )
+
+    for _name in files:
+        _m = _REVIEW_FILE_NAME_RE.match(_name)
+        if _m:
+            _text = files[_name] or ""
+            _index_record(
+                _m.group(1), int(_m.group(2) or 0),
+                rec_date=_file_date(_text),
+                valid=_extract_review_conclusion_from_text(_text) != "UNKNOWN",
+            )
+    for _raw in rows:
+        _stripped = str(_raw or "").strip()
+        if not _stripped.startswith("|"):
+            continue
+        _parts = [p.strip() for p in _stripped.split("|")]
+        _id_cell = _parts[1].strip("*` ") if len(_parts) > 1 else ""
+        _row_date = None
+        for _part in _parts[3:]:
+            _m_date = re.match(r"^(\d{4}-\d{2}-\d{2})$", _part)
+            if _m_date:
+                try:
+                    _row_date = date.fromisoformat(_m_date.group(1))
+                except ValueError:
+                    _row_date = None
+                break
+        _conclusion = ""
+        for _part in _parts[3:]:
+            _conclusion = _normalize_review_conclusion(_part)
+            if _conclusion:
+                break
+        for _cid in _REVIEW_ROW_ID_FINDITER_RE.findall(_id_cell):
+            _m = re.match(r"^REVIEW-([A-Z]+-\d+)(?:-R(\d+))?$", _cid)
+            if _m:
+                _index_record(
+                    _m.group(1), int(_m.group(2) or 0),
+                    rec_date=_row_date,
+                    valid=bool(_conclusion),
+                )
+
     # ── V7/V8 over files ────────────────────────────────────────────────
     for name in sorted(files):
         text = files[name] or ""
@@ -2611,26 +2844,36 @@ def check_review_machine_provenance(review_rows=None, review_files=None):
             })
         conclusion = _extract_review_conclusion_from_text(text)
         if conclusion == "NEEDS_CHANGE" and not REVIEW_NEXT_ROUND_FIELD_RE.search(text):
-            warnings.append({
-                "rule": "V8",
-                "task_id": task_id,
-                "reason": "R{0}=NEEDS_CHANGE without the machine next_round "
-                          "revisit field — the 复审必达 obligation is not "
-                          "machine-derivable (expected "
-                          "next_round: REVIEW-{1}-R{2})".format(
-                              round_n, task_id, round_n + 1),
-            })
+            # FIX-291 provenance discharge (R1 tightened): a VALID R+1
+            # record dated on/after this record proves the revisit happened.
+            if not _next_round_discharged(task_id, round_n, fdate):
+                warnings.append({
+                    "rule": "V8",
+                    "task_id": task_id,
+                    "reason": "R{0}=NEEDS_CHANGE without the machine next_round "
+                              "revisit field — the 复审必达 obligation is not "
+                              "machine-derivable (expected "
+                              "next_round: REVIEW-{1}-R{2})".format(
+                                  round_n, task_id, round_n + 1),
+                })
 
     # ── V7/V8 over evidence rows ────────────────────────────────────────
     for raw in rows:
         stripped = str(raw or "").strip()
         if not stripped.startswith("|"):
             continue
-        ids = _REVIEW_ROW_ID_FINDITER_RE.findall(stripped)
+        parts = [p.strip() for p in stripped.split("|")]
+        # FIX-291 / FIX-281⑧: row-scope anchoring on the ID COLUMN — a REVIEW
+        # id mentioned inside an EVD-/RECO-/TRIAGE- row's description is a
+        # cross-reference, not a review record. Classified + counted, never
+        # judged (the router's "new machine row → +1 WARN" growth mechanism).
+        id_cell = parts[1].strip("*` ") if len(parts) > 1 else ""
+        ids = _REVIEW_ROW_ID_FINDITER_RE.findall(id_cell)
         if not ids:
+            if _REVIEW_ROW_ID_FINDITER_RE.search(stripped):
+                stats["rows_non_review"] += 1
             continue
         stats["rows_scanned"] += 1
-        parts = [p.strip() for p in stripped.split("|")]
         row_date = None
         for part in parts[3:]:
             m_date = re.match(r"^(\d{4}-\d{2}-\d{2})$", part)
@@ -2669,6 +2912,11 @@ def check_review_machine_provenance(review_rows=None, review_files=None):
                               "4.6 C8)".format(cid, REVIEW_MACHINE_ROW_MARKER),
                 })
             if conclusion == "NEEDS_CHANGE":
+                # FIX-291 provenance discharge (R1 tightened): a VALID R+1
+                # record dated on/after this row proves the revisit happened
+                # (file overwritten by a later same-number write, REL-070).
+                if _next_round_discharged(task_id, round_n, row_date):
+                    continue
                 fname, ftext = _lookup_review_file(task_id, round_n)
                 if ftext is None or not REVIEW_NEXT_ROUND_FIELD_RE.search(ftext):
                     warnings.append({

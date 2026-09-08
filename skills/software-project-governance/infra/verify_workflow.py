@@ -10191,15 +10191,127 @@ def _status_iso_date(value):
     return m.group(0) if m else None
 
 
+# FIX-291 W-7/BC-7 (review-FIX-278-DESIGN-R1 §1.1 residual / §3 BC-7):
+# terminal-marker vocabulary for MIXED transition-chain status cells. A status
+# cell may record a state history whose FINAL state is terminal without ever
+# using the bare 「完成」 wording — 「⏳ 待执行 (…) → ✅ 已发布 (…)」 /
+# 「🔄 进行中 (…) → ✅ 已关闭 (…)」 (live instance: REL-069). The ✅ branch
+# above is excluded by the active marker and the 完成( fallback misses the
+# wording, so such cells were judged ACTIVE — a conservative missed downgrade
+# (BC-7: fail-safe side, never a masking misjudge).
+#
+# R1 scope tightening (review-FIX-291-CODE-R0 P2-1 four prose-misjudge shapes
+# + review-FIX-291-DESIGN-R0 P2-3 version-context shape): a terminal marker
+# only counts as a TERMINAL ASSERTION when it IS the state word of a
+# transition segment —
+#   (a) segment start: the text before the marker (skipping whitespace and an
+#       optional ✅ qualification) is empty (cell start) or ends with a
+#       transition boundary (→ / — / ——);
+#   (b) terminal date: the marker is immediately followed by a date annotation
+#       （(YYYY-MM-DD …）or the cell end (the dogfood convention always dates
+#       the terminal state).
+# Narrative mentions are thereby excluded: a subject before the marker
+# (「方案A已撤回」「依赖令牌失效」「窗口取消」), a parenthetical version context
+# (「v0.78.0 已发布后启动」), a segment-initial version prefix
+# (「——0.78.1 已发布」) and a comma continuation without a date
+# (「——已撤回，改推方案B」) are NOT assertions. 「推进中」 stays in the ACTIVE
+# set (not in the ✅-branch exclusion set) so 「0.78.0 已发布，0.79.0 推进中」
+# remains ACTIVE.
+_W7_TERMINAL_MARKERS = (
+    "✅", "已发布", "已关闭", "已终止", "已撤回", "失效", "不可信", "取消", "废弃",
+)
+_W7_ACTIVE_MARKERS = ("进行中", "待执行", "推进中", "⏳", "🔄")
+_W7_TERMINAL_DATE_RE = re.compile(r"^[（(]\s*\d{4}-\d{2}-\d{2}")
+
+
+def _last_marker_pos(text, markers):
+    """Last (rightmost) occurrence position of any marker in ``text``, or -1."""
+    best = -1
+    for marker in markers:
+        pos = text.rfind(marker)
+        if pos > best:
+            best = pos
+    return best
+
+
+def _w7_terminal_assertion_positions(text):
+    """Positions of terminal-state ASSERTIONS in a mixed status cell.
+
+    R1 (segment-scope tightening, CODE-R0 P2-1 / DESIGN-R0 P2-3): a
+    VOCABULARY marker (已发布/已关闭/…) is an assertion only when it is the
+    state word of a transition segment — segment-start (cell start / after
+    → / — / ——, with only whitespace, an optional ✅ qualification and/or
+    the perfective prefix 「已」 before it) AND immediately followed by a
+    date annotation （(YYYY-MM-DD…） or the cell end. Narrative mentions
+    (subject-prefixed 「方案A已撤回」, version contexts 「0.78.1 已发布」,
+    comma continuations without a date) are NOT assertions.
+
+    R2 (DESIGN-R1 P1-R1): the ✅ GLYPH is an unambiguous state glyph — not a
+    narrative word — so it keeps its assertion status under the looser
+    segment rule: ✅ at a segment start + a date annotation ANYWHERE in the
+    same segment (up to the next transition boundary or cell end) asserts
+    the terminal state. This restores the pre-existing completed
+    classification of 「⏳ 审计中 (…) → ✅ 分析完成+规划落地 (…)——…」
+    (live AUDIT-143, P0) that the R1 tightening regressed to ACTIVE; the
+    position comparison in ``_status_is_completed_cell`` still keeps any
+    later active marker (reopened) ACTIVE.
+    """
+    positions = []
+    for marker in _W7_TERMINAL_MARKERS:
+        start = 0
+        while True:
+            pos = text.find(marker, start)
+            if pos < 0:
+                break
+            start = pos + len(marker)
+            # (a) segment start: nothing but whitespace / an optional ✅
+            # qualification / the perfective 「已」 prefix between the
+            # transition boundary (or cell start) and the marker.
+            head = text[:pos].rstrip()
+            while head.endswith(("✅", "已")):
+                head = head[:-1].rstrip()
+            if head and not head.endswith(("→", "—")):
+                continue  # narrative mention (subject/version prefix precedes)
+            if marker == "✅":
+                # R2: ✅ state glyph — a date annotation anywhere in the SAME
+                # segment (before the next transition boundary) asserts.
+                seg_end = len(text)
+                for boundary in ("→", "—"):
+                    bpos = text.find(boundary, pos + len(marker))
+                    if bpos != -1 and bpos < seg_end:
+                        seg_end = bpos
+                segment = text[pos:seg_end]
+                if re.search(r"[（(]\s*\d{4}-\d{2}-\d{2}", segment):
+                    positions.append(pos)
+                continue
+            # (b) vocabulary marker: terminal date annotation (or cell end)
+            # immediately after the marker.
+            rest = text[pos + len(marker):].lstrip()
+            if rest and not _W7_TERMINAL_DATE_RE.match(rest):
+                continue  # comma continuation / trailing prose, not a state
+            positions.append(pos)
+    return positions
+
+
 def _status_is_completed_cell(cell):
     """Completed status test for task rows (dogfood ✅ conventions + host text-only).
 
     - Any cell with "未完成"/"待完成" is NOT completed.
     - "已完成" → completed (host text-only style).
     - Leading ``✅`` (dogfood) → completed unless the cell carries an explicit
-      active marker (未完成/待完成/进行中/待执行).
+      active marker (未完成/待完成/进行中/待执行, plus the ⏳/🔄 emoji per
+      FIX-291 W-7 — a mixed chain is judged by its trailing state below).
     - Bare ``完成`` followed by a bracket or end-of-cell (e.g. "✅ 完成 (…)"
       / "完成（…)") → completed.
+    - W-7/BC-7 (FIX-291, R1 assertion scope + R2 ✅ glyph rule): a terminal
+      ASSERTION (:func:`_w7_terminal_assertion_positions` — the state word
+      of a transition segment with a terminal date; for the ✅ glyph the
+      date may appear anywhere in the same segment, R2/DESIGN-R1 P1-R1)
+      that appears after the last active marker makes the cell's trailing
+      (true) state terminal → completed. Narrative terminal-word mentions,
+      version contexts and active-trailing cells (e.g.
+      「✅ 已发布 → 🔄 reopened」) keep the ACTIVE verdict (conservative: no
+      aggressive downgrade).
     """
     text = _status_clean_cell(cell)
     if "未完成" in text or "待完成" in text:
@@ -10207,10 +10319,18 @@ def _status_is_completed_cell(cell):
     if "已完成" in text:
         return True
     # Dogfood cells may carry a transition chain ("⏳ 等待 → ✅ 完成"): any ✅
-    # in the status cell marks a delivered endpoint, and no active marker is
-    # present otherwise.
-    if "✅" in text and not any(m in text for m in ("未完成", "待完成", "进行中", "待执行")):
+    # in the status cell marks a delivered endpoint — UNLESS an active marker
+    # (text wording or the ⏳/🔄 emoji, FIX-291 W-7) makes the cell a mixed
+    # chain, in which case the trailing-state rule below decides.
+    if "✅" in text and not any(m in text for m in (
+            "未完成", "待完成", "进行中", "待执行", "⏳", "🔄")):
         return True
+    # W-7/BC-7 (R1): trailing terminal ASSERTION wins in a mixed chain.
+    assertions = _w7_terminal_assertion_positions(text)
+    if assertions:
+        active_pos = _last_marker_pos(text, _W7_ACTIVE_MARKERS)
+        if max(assertions) > active_pos:
+            return True
     return bool(re.search(r"完成\s*(?:[（(]|$)", text))
 
 
@@ -15361,7 +15481,8 @@ def _run_full_engine_checks(args):
     mp30c = check_review_machine_provenance()
     print(f"│  Rows judged: {mp30c['stats']['rows_judged']} "
           f"(machine {mp30c['stats']['rows_machine']}, "
-          f"undated {mp30c['stats']['rows_undated']}); "
+          f"undated {mp30c['stats']['rows_undated']}, "
+          f"non-review {mp30c['stats'].get('rows_non_review', 0)}); "
           f"files judged: {mp30c['stats']['files_judged']} "
           f"(legacy {mp30c['stats']['files_legacy_skipped']}, "
           f"undated {mp30c['stats']['files_undated']}, "

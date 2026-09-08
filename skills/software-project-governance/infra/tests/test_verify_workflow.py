@@ -16931,5 +16931,233 @@ class Fix284WriteGuardMissingRowTests(unittest.TestCase):
             self.assertIn("not found", issues[0])
 
 
+class StatusCellMixedTerminalMarkerTests(unittest.TestCase):
+    """FIX-291 W-7/BC-7（review-FIX-278-DESIGN-R1 §1.1 残余 / §3 BC-7）：
+    状态格混合终态子类按真实终态判定。
+
+    形态（R1 登记的本仓静态实例 REL-069）：「🔄 进行中 (…) → ✅ 已发布 (…)」
+    ——状态格是状态历史，无「完成」字样时旧谓词判 ACTIVE（✅ 分支被 active
+    marker 排除、``完成(`` 兜底不命中）→ legacy 型缺口漏降级（保守方向的
+    漏判，非误判）。
+
+    修复规则（trailing-terminal）：终态 marker 出现在最后一个 active marker
+    之后 → 混合格的真实终态即当前态 → completed。歧义/active 收尾默认维持
+    现行行为（不激进降级——BC-7 保守边界）。
+    """
+
+    def test_mixed_cell_trailing_released_terminal_is_completed(self):
+        """REL-069 形态：「🔄 进行中 → ✅ 已发布」→ completed（红→绿）。"""
+        self.assertTrue(vw._status_is_completed_cell(
+            "🔄 进行中 (2026-08-23)——已派发 Release Agent 候选打包 "
+            "→ **✅ 已发布 (2026-08-23)**——tag v0.76.0 已推送"))
+
+    def test_mixed_cell_trailing_closed_terminal_is_completed(self):
+        """「⏳ 待执行 → ✅ 已关闭」→ completed（红→绿）。"""
+        self.assertTrue(vw._status_is_completed_cell(
+            "⏳ 待执行 (2026-08-01) → ✅ 已关闭 (2026-08-05)——风险关闭"))
+
+    def test_mixed_cell_bare_trailing_terminal_without_check_mark(self):
+        """终态 marker 无 ✅ 形态（W-7 词表扩展）：「⏳ 待执行 → 已发布」
+        → completed（红→绿）。"""
+        self.assertTrue(vw._status_is_completed_cell(
+            "⏳ 待执行 (2026-08-21) → 已发布 (2026-08-21)"))
+
+    def test_mixed_cell_trailing_terminal_other_vocabularies(self):
+        """W-7 词表其余终态子类（已终止/已撤回/取消/废弃）。"""
+        for cell in ("⏳ 待执行 → ✅ 已终止 (2026-08-01)",
+                     "🔄 进行中 → 已撤回 (2026-08-01)",
+                     "🔄 进行中 → 已取消 (2026-08-01)",
+                     "⏳ 待执行 → 废弃 (2026-08-01)"):
+            self.assertTrue(vw._status_is_completed_cell(cell), cell)
+
+    def test_active_trailing_after_terminal_stays_active(self):
+        """边界（保守）：终态之后又出现 active（reopened）→ 非终态。"""
+        self.assertFalse(vw._status_is_completed_cell(
+            "✅ 已发布 (2026-08-01) → 🔄 reopened (2026-09-01)"))
+
+    def test_terminal_in_version_context_with_trailing_active_stays_active(self):
+        """边界（保守）：「0.78.0 已发布，0.79.0 推进中」——已发布指他物且
+        active 收尾（推进中在 trailing 比较集内）→ 非终态。"""
+        self.assertFalse(vw._status_is_completed_cell(
+            "⏳ 进行中（0.78.0 已发布，0.79.0 推进中）"))
+
+    def test_plain_active_cells_stay_active(self):
+        """回归：纯 active 格维持非终态。"""
+        self.assertFalse(vw._status_is_completed_cell(
+            "⏳ 待执行 (2026-09-08)——首派任务"))
+        self.assertFalse(vw._status_is_completed_cell(
+            "🔄 进行中 (2026-08-23)——已派发"))
+
+    def test_existing_conventions_unchanged(self):
+        """回归：既有谓词分支判定不变（✅ 前缀 / 已完成 / 完成( 兜底）。"""
+        self.assertTrue(vw._status_is_completed_cell("✅ 完成 (2026-06-30)"))
+        self.assertTrue(vw._status_is_completed_cell(
+            "✅ 已发布 (2026-07-25)——origin/master=x"))
+        self.assertTrue(vw._status_is_completed_cell("已完成"))
+        # 「✅ 代码完成 (date)；真实归档待执行」——完成( 兜底命中（FIX-164
+        # 本仓语料形态）；W-7 trailing 规则不改变该判定（active 收尾不触发）。
+        self.assertTrue(vw._status_is_completed_cell(
+            "✅ 代码完成 (2026-06-30)；真实归档待执行"))
+        self.assertFalse(vw._status_is_completed_cell("⏳ 待实施"))
+        self.assertFalse(vw._status_is_completed_cell("⏸ 停滞待重新评估 (2026-06-27)"))
+
+    def test_unfinished_wording_still_blocks_everything(self):
+        """回归（规则优先级）：状态格含「未完成」字样（即使 ✅ 收尾）→
+        非终态（FIX-274 本仓语料形态——规则 1 先于 W-7 trailing）。"""
+        self.assertFalse(vw._status_is_completed_cell(
+            "✅ 完成 (2026-08-23)——Check 39 零误报"
+            "（35 records/1 r1=FIX-273 未完成合法跳过）"))
+
+
+class W7TerminalSegmentScopeTests(unittest.TestCase):
+    """FIX-291 R1 返工（review-FIX-291-CODE-R0 P2-1 实测 4 误伤形态 +
+    review-FIX-291-DESIGN-R0 P2-3 版本上下文形态）：W-7 trailing-terminal
+    收紧为「转移边界后的终态段断言」。
+
+    断言定义（R1）：终态词处于转移边界（→/——/— 或格首）后的段首（仅允许
+    空白/✅ 修饰），且紧随后接日期括注（（(YYYY-MM-DD…）或格尾——即该段
+    「就是」一个终态。段中叙事提及（「方案A已撤回，改推…」主语前置/
+    「依赖令牌失效」/「窗口取消，重新排队」）、括注内版本上下文
+    （「v0.78.0 已发布后启动」）、段首版本号前缀（「——0.78.1 已发布」）
+    与无日期逗号续写（「——已撤回，改推方案B」）均非断言 → 保持 ACTIVE。
+    """
+
+    def test_prose_withdrawal_after_subject_stays_active(self):
+        """Code P2-1 误伤形态 1：「🔄 进行中——方案A已撤回，改推方案B
+        （等待排期）」——终态词主语前置（方案A）+ 逗号续写 → ACTIVE。"""
+        self.assertFalse(vw._status_is_completed_cell(
+            "🔄 进行中——方案A已撤回，改推方案B（等待排期）"))
+
+    def test_parenthetical_version_context_stays_active(self):
+        """Code P2-1 误伤形态 2：「⏳ 待执行 (v0.78.0 已发布后启动)」
+        ——括注内版本上下文、无转移边界 → ACTIVE。"""
+        self.assertFalse(vw._status_is_completed_cell(
+            "⏳ 待执行 (v0.78.0 已发布后启动)"))
+
+    def test_prose_token_expiry_stays_active(self):
+        """Code P2-1 误伤形态 3：「🔄 进行中——依赖令牌失效，等待更换」
+        ——失效主语前置（依赖令牌）→ ACTIVE。"""
+        self.assertFalse(vw._status_is_completed_cell(
+            "🔄 进行中——依赖令牌失效，等待更换"))
+
+    def test_prose_cancel_with_requeue_stays_active(self):
+        """Code P2-1 误伤形态 4：「⏳ 待执行——原定时窗口取消，重新排队」
+        ——取消主语前置（原定时窗口）→ ACTIVE。"""
+        self.assertFalse(vw._status_is_completed_cell(
+            "⏳ 待执行——原定时窗口取消，重新排队"))
+
+    def test_segment_initial_version_prefix_terminal_stays_active(self):
+        """Design P2-3 版本上下文形态：「🔄 进行中 (2026-09-08)——0.78.1
+        已发布」——终态词前为版本号（非段首状态词）、无日期括注 → ACTIVE。"""
+        self.assertFalse(vw._status_is_completed_cell(
+            "🔄 进行中 (2026-09-08)——0.78.1 已发布"))
+
+    def test_segment_start_terminal_without_date_stays_active(self):
+        """收紧护栏：段首终态词但逗号续写改推、无日期括注
+        （「🔄 进行中——已撤回，改推方案B」）→ 非终态断言 → ACTIVE。"""
+        self.assertFalse(vw._status_is_completed_cell(
+            "🔄 进行中——已撤回，改推方案B"))
+
+    def test_transition_terminal_with_date_stays_completed(self):
+        """绿保持：转移边界 + ✅ 终态词 + 日期括注（REL-069 目标形状）
+        → completed。"""
+        self.assertTrue(vw._status_is_completed_cell(
+            "🔄 进行中 (2026-08-23)——已派发 Release Agent 候选打包 "
+            "→ **✅ 已发布 (2026-08-23)**——tag v0.76.0 已推送"))
+
+    def test_bare_transition_terminal_with_date_stays_completed(self):
+        """绿保持：无 ✅ 形态「⏳ 待执行 (…) → 已发布 (date)」→ completed。"""
+        self.assertTrue(vw._status_is_completed_cell(
+            "⏳ 待执行 (2026-08-21) → 已发布 (2026-08-21)"))
+
+    def test_terminal_vocabulary_with_date_still_completed(self):
+        """绿保持：词表其余终态（已终止/已撤回/已取消/废弃）+ 日期括注。"""
+        for cell in ("⏳ 待执行 → ✅ 已终止 (2026-08-01)",
+                     "🔄 进行中 → 已撤回 (2026-08-01)",
+                     "🔄 进行中 → 已取消 (2026-08-01)",
+                     "⏳ 待执行 → 废弃 (2026-08-01)"):
+            self.assertTrue(vw._status_is_completed_cell(cell), cell)
+
+    def test_reopened_after_terminal_stays_active(self):
+        """绿保持（边界）：终态断言后又出现 active（reopened）→ ACTIVE。"""
+        self.assertFalse(vw._status_is_completed_cell(
+            "✅ 已发布 (2026-08-01) → 🔄 reopened (2026-09-01)"))
+
+
+class W7CheckGlyphAssertionTests(unittest.TestCase):
+    """FIX-291 R2 返工（review-FIX-291-DESIGN-R1 P1-R1 + review-FIX-291-
+    CODE-R1 P2-3 交叉印证）：AUDIT-143 completed→ACTIVE 回归窄修。
+
+    P1-R1：live 实例 AUDIT-143（P0 任务）状态格
+    「⏳ 审计中 (2026-08-17) → ✅ 分析完成+规划落地 (2026-08-17)——…」
+    ——HEAD/R0 均判 completed（HEAD ✅ 分支；R0 ✅ trailing 位置胜）；R1
+    断言化误判 ACTIVE（✅ 后非紧跟日期而是复合措辞 + 措辞不在词表 +
+    ``完成(`` 兜底不命中「完成+」）→ p0_pending 误 +1。
+
+    修复（Design R1 指定方向）：**✅ 是无歧义状态字形（非叙事词——R1
+    收紧针对的叙事形态均不含 ✅）——恢复断言地位：✅ 处转移边界后段首 +
+    同段（下一转移边界前）内含日期括注即断言成立**（不要求日期紧随 ✅）；
+    词表 marker（已发布/已关闭等）维持 R1 严格断言（段首 + 紧随日期
+    括注/格尾）。护栏全保持：R1 六叙事形态 + 版本上下文 + reopened
+    （✅ 含 ——位置比较）不得因 ✅ 放宽重新误伤。
+    """
+
+    _AUDIT143_CELL = (
+        "⏳ 审计中 (2026-08-17) → ✅ 分析完成+规划落地 (2026-08-17)"
+        "——DEC-143；REQ-107~114 入需求跟踪矩阵；修复链立项待 "
+        "REQ-112/110 triage"
+    )
+
+    def test_audit143_live_cell_completed(self):
+        """红字面配置（MUST）：AUDIT-143 live 格全文（R2 修前 ACTIVE）
+        → 修后 completed（✅ 段首断言 + 同段日期）。"""
+        self.assertTrue(vw._status_is_completed_cell(self._AUDIT143_CELL))
+
+    def test_check_glyph_date_later_in_segment_asserts(self):
+        """✅ 段首 + 同段日期不紧随（复合措辞后置）→ completed。"""
+        self.assertTrue(vw._status_is_completed_cell(
+            "⏳ 待执行 (2026-08-01) → ✅ 双阶段交付完成 (2026-08-02)"))
+
+    def test_check_glyph_without_date_in_segment_stays_active(self):
+        """护栏：✅ 段首但同段无日期括注 → 非断言 → ACTIVE。"""
+        self.assertFalse(vw._status_is_completed_cell(
+            "⏳ 待执行 → ✅ 已验证（无日期记录）"))
+
+    def test_check_glyph_mid_prose_not_at_segment_start_stays_active(self):
+        """护栏：✅ 非段首（叙事主语前置「讨论后确认」）→ 非断言。"""
+        self.assertFalse(vw._status_is_completed_cell(
+            "⏳ 待执行——讨论后确认 ✅ 方案A (2026-08-01)"))
+
+    def test_r1_narrative_guards_all_stay_active(self):
+        """R1 六叙事护栏 + 版本上下文全保持 ACTIVE（✅ 放宽不重新误伤
+        ——六形态均不含 ✅，逐形复验锁定）。"""
+        for cell in (
+            "🔄 进行中——方案A已撤回，改推方案B（等待排期）",
+            "⏳ 待执行 (v0.78.0 已发布后启动)",
+            "🔄 进行中——依赖令牌失效，等待更换",
+            "⏳ 待执行——原定时窗口取消，重新排队",
+            "🔄 进行中 (2026-09-08)——0.78.1 已发布",
+            "🔄 进行中——已撤回，改推方案B",
+        ):
+            self.assertFalse(vw._status_is_completed_cell(cell), cell)
+
+    def test_reopened_and_rel69_guards_hold(self):
+        """边界：✅ 断言后被 active（reopened）→ ACTIVE；REL-069 目标
+        形状 → completed。"""
+        self.assertFalse(vw._status_is_completed_cell(
+            "✅ 已发布 (2026-08-01) → 🔄 reopened (2026-09-01)"))
+        self.assertTrue(vw._status_is_completed_cell(
+            "🔄 进行中 (2026-08-23)——已派发 Release Agent 候选打包 "
+            "→ **✅ 已发布 (2026-08-23)**——tag v0.76.0 已推送"))
+
+    def test_active_after_check_glyph_segment_stays_active(self):
+        """边界：✅ 断言段之后又有 active 措辞段（位置比较胜出）→ ACTIVE。
+        措辞回避「完成 (」形态——该形态走既有 rule-4 兜底路径，新旧谓词
+        同判 True（DESIGN-R1 P3-R1-c 已登记 pre-existing，不属 R2 范围）。"""
+        self.assertFalse(vw._status_is_completed_cell(
+            "⏳ 审计中 (2026-08-01) → ✅ 阶段产物已交付 (2026-08-02)"
+            "——后续 追加审计 进行中 (2026-09-01)"))
+
+
 if __name__ == "__main__":
     unittest.main()

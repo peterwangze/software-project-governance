@@ -11252,6 +11252,97 @@ class ExecutionPacketTests(unittest.TestCase):
             self.assertEqual(fake_stdout.kwargs["encoding"], "utf-8")
             self.assertIn("FIX-084", fake_stdout.getvalue())
 
+    def test_execution_packet_task_filter_with_write_keeps_full_set(self):
+        """FIX-296 (EVD-959): `--task X --write` must keep the FULL active
+        packet set on disk — the filter limits stdout preview only.
+
+        Regression for the data-loss footgun: the CLI used to write the
+        filtered face wholesale, silently dropping every unselected packet
+        from the runtime file."""
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P0** | FIX-084 | AI packet | DEC-068 | 0.38.0 | packet command | 📋 待启动 |",
+                "| **P1** | FIX-086 | projection sync | DEC-068 | 0.38.0 | sync guard | 🔄 进行中 |",
+            ])
+            # Seed the runtime file with the full set (as a prior full
+            # `--write` would leave it) and give FIX-086 filled content
+            # that must survive the existing-merge on the write face.
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                seeded = vw.generate_execution_packets()
+            seeded["packets"]["FIX-086"]["goal"] = "filled goal that must survive"
+            packet_path.write_text(json.dumps(seeded, ensure_ascii=False),
+                                   encoding="utf-8")
+
+            args = argparse.Namespace(write=True, task=["FIX-084"])
+            out = io.StringIO()
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EXECUTION_PACKET_PATH", packet_path), \
+                 contextlib.redirect_stdout(out):
+                vw.cmd_execution_packet(args)
+
+            on_disk = json.loads(packet_path.read_text(encoding="utf-8"))
+            # Write face: FULL active set preserved (not just FIX-084).
+            self.assertEqual(set(on_disk["packets"]), {"FIX-084", "FIX-086"})
+            # Existing filled content survives the existing-merge.
+            self.assertEqual(on_disk["packets"]["FIX-086"]["goal"],
+                             "filled goal that must survive")
+            # Stdout prints no non-selected packet dump; the OK line
+            # reports the full write and marks the filter preview-only.
+            self.assertNotIn('"task_id": "FIX-086"', out.getvalue())
+            self.assertIn("wrote 2 execution packet(s)", out.getvalue())
+            self.assertIn("--task", out.getvalue())
+
+    def test_execution_packet_task_filter_print_shows_selected_only_and_writes_nothing(self):
+        """FIX-296: without --write the --task filter stays a pure stdout
+        preview — only the selected packet is printed and the runtime file
+        is left untouched (pre-existing behavior, zero change)."""
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P0** | FIX-084 | AI packet | DEC-068 | 0.38.0 | packet command | 📋 待启动 |",
+                "| **P1** | FIX-086 | projection sync | DEC-068 | 0.38.0 | sync guard | 🔄 进行中 |",
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                seeded = vw.generate_execution_packets()
+            packet_path.write_text(json.dumps(seeded, ensure_ascii=False),
+                                   encoding="utf-8")
+
+            args = argparse.Namespace(write=False, task=["FIX-084"])
+            out = io.StringIO()
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EXECUTION_PACKET_PATH", packet_path), \
+                 contextlib.redirect_stdout(out):
+                vw.cmd_execution_packet(args)
+
+            printed = json.loads(out.getvalue())
+            self.assertEqual(set(printed["packets"]), {"FIX-084"})
+            # Preview path must not touch the runtime file.
+            self.assertEqual(
+                packet_path.read_text(encoding="utf-8"),
+                json.dumps(seeded, ensure_ascii=False),
+            )
+
+    def test_execution_packet_full_write_without_task_is_unchanged(self):
+        """FIX-296: full `--write` (no --task) keeps its exact legacy
+        behavior — message format and full-set file write, zero change."""
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P0** | FIX-084 | AI packet | DEC-068 | 0.38.0 | packet command | 📋 待启动 |",
+                "| **P1** | FIX-086 | projection sync | DEC-068 | 0.38.0 | sync guard | 🔄 进行中 |",
+            ])
+            args = argparse.Namespace(write=True, task=None)
+            out = io.StringIO()
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EXECUTION_PACKET_PATH", packet_path), \
+                 contextlib.redirect_stdout(out):
+                vw.cmd_execution_packet(args)
+
+            self.assertEqual(
+                out.getvalue(),
+                f"[OK] wrote 2 execution packet(s) to {packet_path}\n",
+            )
+            on_disk = json.loads(packet_path.read_text(encoding="utf-8"))
+            self.assertEqual(set(on_disk["packets"]), {"FIX-084", "FIX-086"})
+
 
 class ProductSuccessContractTests(unittest.TestCase):
     """FIX-088: active P0/P1 tasks need Product Success Contracts."""

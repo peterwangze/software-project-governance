@@ -13858,21 +13858,31 @@ def cmd_execution_packet(args):
         pass
     packets, _ = _load_execution_packets()
     payload = generate_execution_packets(existing=packets)
+    selected = None
     if args.task:
+        wanted = set(args.task)
         selected = {
             tid: packet for tid, packet in payload["packets"].items()
-            if tid in set(args.task)
+            if tid in wanted
         }
-        payload["packets"] = selected
     if args.write:
+        # FIX-296 (EVD-959): the write face is always the FULL active packet
+        # set; --task filters the stdout preview only. Writing the filtered
+        # face silently dropped every unselected packet from the runtime file.
         EXECUTION_PACKET_PATH.parent.mkdir(parents=True, exist_ok=True)
         EXECUTION_PACKET_PATH.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
-        print(f"[OK] wrote {len(payload['packets'])} execution packet(s) to {EXECUTION_PACKET_PATH}")
+        note = ""
+        if selected is not None:
+            note = (" (--task affects stdout preview only; file written in"
+                    f" full: {', '.join(args.task)})")
+        print(f"[OK] wrote {len(payload['packets'])} execution packet(s) to "
+              f"{EXECUTION_PACKET_PATH}{note}")
     else:
-        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        preview = payload if selected is None else {**payload, "packets": selected}
+        print(json.dumps(preview, ensure_ascii=False, indent=2))
 
 
 # ── SYSGAP-036: Agent Activation Check (Check 20) ────────────────

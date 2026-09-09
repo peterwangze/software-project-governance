@@ -34,7 +34,7 @@
 ## 1. Release Scope（范围特征与任务化结构）
 
 - **范围特征（DEC-172 ② + 路线图 0.79.0 行口径）**：全部入槽候选为规则面/判定面/能力面——G3 扩展（写时门禁新引擎扩展）、W-7/BC-7 + FIX-281 ①⑧（Check 30 形状/终态判定语义域同批）、G5/G6（降噪第二波主题项——单项为 L13 行为面输出变更，主题性打包走 L12 累积 MINOR 论证，如实口径见 §2）；与 0.78.1 PATCH（纯缺陷修复面）边界清晰无交叉。
-- **任务化结构**（M-0 裁决后、M-1 前执行；编号由 change-triage 机器分配，本规划不预设）：按域分组注册，预计 4~7 个任务——G3 扩展独立（新写时 guard 引擎 + hooks/集成 + 测试 + 设计审查）；W-7/BC-7 + FIX-281 ①⑧ 同域同批（Check 30 形状/终态判定——DEC-172/version-plan-0.78.1 §6 论证同批承载语义一致性最好，可 1~2 任务）；G5 + G6 同批（tpa/summary 输出域）；Analyst 合并后新增候选（若有）各自 triage。每任务 TDD + Developer/Reviewer 链（SoD：Developer 不审查自己的代码）；判定面变更 MUST 双审（Release Reviewer + Design Reviewer——G2/DEC-166 先例）。
+- **任务化结构**（M-0 裁决后、M-1 前执行；编号由 change-triage 机器分配，本规划不预设）：按域分组注册，预计 4~7 个任务——G3 扩展独立（新写时 guard 引擎 + hooks/集成 + 测试 + 设计审查）；W-7/BC-7 + FIX-281 ①⑧ 同域同批（Check 30 形状/终态判定——DEC-172/version-plan-0.78.1 §6 论证同批承载语义一致性最好，可 1~2 任务）；G5 + G6 同批（tpa/summary 输出域）；Analyst 合并后新增候选（若有）各自 triage。每任务 TDD + Developer/Reviewer 链（SoD：Developer 不审查自己的代码）；判定面变更 MUST 双审（Release Reviewer + Design Reviewer——G2/DEC-166 先例）。〔2026-09-09 收窄：hook 接线未交付，登记为后续候选；本轮以 behavior-protocol M1.2 MUST 复跑规则 + SKILL.md 分级口径承接（FIX-297，REVIEW-FEAT-011-DESIGN-R0 F-1 方案 2）〕
 - **拆分执行结构**（FIX-281 先例延续）：①⑧入槽子任务 depends_on 不挂 FIX-281 批次行（避免 REL-002 跨仓 data gap 传染阻塞——version-plan-0.78.1 §6.3 口径）；FIX-281 批次行按拆分进度闭合。
 - **90% 完成率（纪律 7）**：全部入槽任务 ✅ 完成 + 审查终态（APPROVED 或 unresolved_blockers=0）后方可 M-1；超 N=2 会话上限自动出槽登记后续版本（DEC-163 惯例，DEC-169 ④ 延续——M-0 ⑨ 确认）。
 
@@ -48,7 +48,7 @@
 
 | 条款 | 行号 | 原文 | 本版适用 |
 |---|---|---|---|
-| Minor 触发条件 | **L12** | 「**Minor** (0.X.0) \| 累积的 PATCH 达到里程碑；或新增 MUST 规则、新增子工作流/skill、**新增 B/C 级自动化能力** \| 每版本里程碑」 | G3 扩展 = 写时门禁**新增 B 级自动化能力**（扩展至 Coordinator 直写路径）；W-7/BC-7 + FIX-281 ①⑧ = 判定规则扩展（规则面）；G5/G6 = 主题性打包（累积里程碑）——三支触发均命中 |
+| Minor 触发条件 | **L12** | 「**Minor** (0.X.0) \| 累积的 PATCH 达到里程碑；或新增 MUST 规则、新增子工作流/skill、**新增 B/C 级自动化能力** \| 每版本里程碑」 | G3 扩展 = 写时门禁**新增 governance-write-guard 结构检查器（B 级检查器工件 + A 级协议触发——写入者 MUST 复跑，无 hook 时点强制，FIX-297）**（扩展至 Coordinator 直写路径）；W-7/BC-7 + FIX-281 ①⑧ = 判定规则扩展（规则面）；G5/G6 = 主题性打包（累积里程碑）——三支触发均命中 |
 | SKILL MUST 规则新增 | **L37** | 「SKILL.md MUST 规则新增 \| **MINOR** \| 影响所有 agent 行为——但 1.0.0 之前可灵活处理」 | 若 G3 扩展涉及 SKILL/behavior-protocol 契约新增、或判定面变更伴随 MUST 规则落盘 → L37 面直接支撑（queue-triage §1.1 L37 适用注记原文：「若 G3 扩展涉及 SKILL/behavior-protocol 契约新增 → MINOR」） |
 | Patch 触发条件（反证/边界） | L13 | 「任何影响 agent 行为或用户可见的变更：bootstrap 模板变更、子工作流活动变更、skill/模板新增或修改…」 | G5/G6 单项为输出文本变更（L13 面）——但作为降噪第二波主题打包由 L12 累积承载（queue-triage §2.1 #8 原口径）；如实陈述不混同 |
 | 计划外变更用 PATCH | L123 | 「不在当前 MINOR 范围内的变更 → bump PATCH，不占用下一 MINOR」 | 0.79.0 窗口内出现的计划外缺陷修复 → 0.79.x PATCH 承载（0.78.1 先例同型） |
@@ -65,7 +65,7 @@
 | 版本号预留（纪律 1/3/5） | 路线图 0.79.0 行已预留（L471）且本规划内容匹配 DEC-172 给定范围；Analyst 合并后范围核增走纪律 5/6 | 一致 |
 | 未完成项处置（纪律 7） | 出槽/搁置项全部显式登记（§5）；无隐藏带入 | 合规 |
 
-**一句话论证**：0.79.0 全部入槽候选命中 L12 三支触发（新增 B 级自动化能力〔G3 扩展〕/ 判定规则扩展〔W-7/BC-7 + ①⑧，G2 先例同型〕/ 累积主题里程碑〔G5/G6〕）+ L37 潜在面（契约新增时）——与 0.78.1 已发布的纯 L38 缺陷修复面构成清晰的两段式边界（DEC-172 裁决 A 原设计）。
+**一句话论证**：0.79.0 全部入槽候选命中 L12 三支触发（新增 governance-write-guard 结构检查器（B 级检查器工件 + A 级协议触发——写入者 MUST 复跑，无 hook 时点强制，FIX-297）〔G3 扩展〕/ 判定规则扩展〔W-7/BC-7 + ①⑧，G2 先例同型〕/ 累积主题里程碑〔G5/G6〕）+ L37 潜在面（契约新增时）——与 0.78.1 已发布的纯 L38 缺陷修复面构成清晰的两段式边界（DEC-172 裁决 A 原设计）。
 
 ---
 
@@ -132,7 +132,7 @@
 
 | # | ID | 范围一句话 | 来源依据（文件+小节） | 裁决 | 版本定位 | M-0 决策点 |
 |---|---|---|---|---|---|---|
-| 1 | **G3 扩展** | 写时结构看护扩展至 Coordinator 直写 plan-tracker/完成记录路径（新 guard 引擎） | queue-triage-0.78x.md §2.1 #7/§3.2；review-FIX-278-DESIGN-R1.md（W-3 L42-44 + BC-3 L78）；DEC-166；plan-tracker L471 | √ 入槽（DEC-172 ②） | **0.79.0**（L12 新增 B 级自动化能力 / L37 契约面） | **② 前置实绩确认**——Analyst 合并 2026-09-08（A.1#1/D-2；引文行号经 R0 P1-1 勘误校正）：G3 首波 write-guard 活体 0 误报实证**三例**（均 2026-08-26、0.78.0 发布窗口当日——plan-tracker **L255** FIX-279 行「活体验证 TRIAGE-FIX-279/REL-071 0 误报」含 TRIAGE-REL-071/TRIAGE-FIX-279 两例 + **L257** FIX-280 行「TRIAGE-FIX-280（write-guard 活体 0 误报实证）」一例）——**前置观察条件已满足，建议确认解除**；M-0 ② 确认即生效 |
+| 1 | **G3 扩展** | 写时结构看护扩展至 Coordinator 直写 plan-tracker/完成记录路径（新 guard 引擎） | queue-triage-0.78x.md §2.1 #7/§3.2；review-FIX-278-DESIGN-R1.md（W-3 L42-44 + BC-3 L78）；DEC-166；plan-tracker L471 | √ 入槽（DEC-172 ②） | **0.79.0**（L12 新增 governance-write-guard 结构检查器（B 级检查器工件 + A 级协议触发——写入者 MUST 复跑，无 hook 时点强制，FIX-297） / L37 契约面） | **② 前置实绩确认**——Analyst 合并 2026-09-08（A.1#1/D-2；引文行号经 R0 P1-1 勘误校正）：G3 首波 write-guard 活体 0 误报实证**三例**（均 2026-08-26、0.78.0 发布窗口当日——plan-tracker **L255** FIX-279 行「活体验证 TRIAGE-FIX-279/REL-071 0 误报」含 TRIAGE-REL-071/TRIAGE-FIX-279 两例 + **L257** FIX-280 行「TRIAGE-FIX-280（write-guard 活体 0 误报实证）」一例）——**前置观察条件已满足，建议确认解除**；M-0 ② 确认即生效 |
 | 2 | **G5** | task-priority-analysis 同会话重复抑制（`--no-cache` 语义或「已分析，推荐未变」提示） | queue-triage-0.78x.md §2.1 #8/§3.2；audit-148-v1-verify-alarm-validation.md L184（-1.7KB/会话量化）；DEC-166；plan-tracker L471 | √ 入槽（DEC-172 ②）；Analyst 合并 2026-09-08（D-1）：⑦终态过滤已随 FIX-288 交付——2026-08-25 收益基线（-1.7KB/会话）待重估，若趋零可缩为 G6 附带项（M-0 呈报选项） | **0.79.0**（L12 主题打包；单项 L13 面如实陈述） | ① 范围总确认（含 G5 收益重估处置） |
 | 3 | **G6** | 告警追查预算提示（summary 尾部「详见 \<command\> 获取 full report」收尾行） | queue-triage-0.78x.md §2.1 #9/§3.2；audit-148 L185；DEC-166；plan-tracker L471 | √ 入槽（DEC-172 ②） | **0.79.0**（与 G5 同批；G1 已覆盖主体，剩余收尾面） | ① 范围总确认 |
 | 4 | **W-7 / BC-7** | 终态 marker 集扩展（状态格混合终态子类「⏳/🔄 + ✅ 已发布/已关闭」保守漏降级修正——判定面规则修改） | queue-triage-0.78x.md §2.1 #10/§3.2；review-FIX-278-DESIGN-R1.md（N-2/W-7 L20 + §3 BC-7 L82）；version-plan-0.78.0.md §5.1 L133；plan-tracker L471 | √ 入槽（DEC-172 ②） | **0.79.0**（L12 判定规则扩展；需 DEC + 双审） | ① 范围总确认 |

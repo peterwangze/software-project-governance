@@ -72,6 +72,7 @@
 - 快速通道仅跳过 Agent Team spawn——不跳过治理记录更新
 - 如果一次操作同时涉及快速通道路径和产品代码路径 → 整体走标准流程
 - **REVIEW 行豁免收窄（FIX-260/REQ-107）**：`REVIEW-{id}` 审查结论证据行不得经快速通道手写——唯一写入路径是 `verify_workflow.py review-record` CLI（M7.4 step 4.6 C8）。治理记录快速通道不得绕过机器路径写 REVIEW 行；绕过 = 流程违规，Check 30c 对无机器来源标记的 REVIEW 记录 WARN（渐进 FAIL，ADR-017 R1 N1）。
+- **直写后 MUST 复跑 governance-write-guard（FEAT-011 / FIX-297）**：Coordinator 直写 `.governance/` 治理记录（plan-tracker 任务行 / evidence-log 追加行 / agent-locks.json / execution-packets.json——守卫覆盖的四类产物）后，**MUST** 复跑 `python skills/software-project-governance/infra/verify_workflow.py governance-write-guard`；FAIL = 结构违约（M1 签名 / DEC-168 行族列数与 ID 格式 / Check 26 / Check 18c），写入者 MUST 按输出行号与期望列形修复数据后复跑至 PASS（守卫只检不改、零 `.governance` 写入；CLI 不可用时 fail-closed——修复环境后重试，不得降级跳过）。该守卫当前为 **B 级检查器工件 + A 级触发（协议纪律）** 的组合：命令被调用即强制（FAIL 退出码 1），但无 hook/commit 时点系统接线——复跑时点由本条 MUST 约束，hook 接线为后续候选（FEAT-011 Design Review R0 F-1 方案 2；分级口径见 SKILL.md「自动化能力分级声明」）。
 
 ## M2. 预加载（MANDATORY）
 

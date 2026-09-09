@@ -10262,6 +10262,224 @@ class GovernanceSignalNoiseTests(unittest.TestCase):
 
 
 # ────────────────────────────────────────────────────────────
+# FIX-295 (AUDIT-149 N6): Check 10 M5 record-doc scope whitelist
+# ────────────────────────────────────────────────────────────
+
+_FIX295_RELEASE_ROW = (
+    # Live shape of docs/release/queue-triage-0.78x.md:66 — a release-queue
+    # task row whose rationale uses ASCII "(a)/(b)/(c)" sub-clauses plus the
+    # word "可选项" (contains "选项"). A factual record citation, not an
+    # agent runtime instruction — the m5_option_list_no_auq heuristic cannot
+    # tell them apart (AUDIT-149 §3 域 6).
+    "| 5 | **FIX-272 P2×2**（F1 路径穿越测试 3 例〔`../skills/x/SKILL.md` / "
+    "`/skills/x/SKILL.md` / `C:\\skills\\x\\SKILL.md`〕+ F2 拆分） | "
+    "**建议入槽 0.78.1（可选项——随修复批合并）** | "
+    "(a) Reviewer 独立 14/14 探针验证拦截全部正确；(b) 工作量小（<1 循环）；"
+    "(c) **备选**：继续搁置 → 0.79.x 守卫批次 |"
+)
+
+_FIX295_REVIEW_ROW = (
+    # Live shape of docs/reviews/review-REL-074-RELEASE-R2.md:17 — an R1
+    # finding verification row with "(a)~(e)" mapping sub-clauses + "选项".
+    "| **P1-1R**（blocker：行号映射失真——#11~#14 被错标搁置） | "
+    "§5 覆盖核对第三句整体重写 | **✅ 已修复**："
+    "(a) 五子句全部成立（选项核对）；(b) 逐行实核；(c) 入槽承接链已恢复；"
+    "(d) 三要素逐字一致；(e) 无回归 |"
+)
+
+
+class Fix295Check10RecordDocScopeTests(unittest.TestCase):
+    """FIX-295 (AUDIT-149 N6): docs/release/** and docs/reviews/** are
+    RECORD-class text — their "(a)/(b)" citation sub-clauses + "选项"
+    vocabulary are factual references to past events, not agent runtime
+    instructions. The Check 10 gate exempts them via a PATH-CLASSIFICATION
+    whitelist (check_m5_compliance_with_record_scope /
+    M5_RECORD_DOC_DIRS = ("docs/release", "docs/reviews")) — never content
+    heuristics. The base scan
+    (checks.review_domain.check_m5_compliance) stays byte-identical and
+    every other M5 face (inline-question instructions on entry files,
+    structural checks) keeps full coverage.
+    """
+
+    def _m5_gate_root(self, root, claude_text="safe\n"):
+        """Minimal root where the M5 structural checks (2/3/4) pass."""
+        (root / "CLAUDE.md").write_text(claude_text, encoding="utf-8")
+        (root / "commands").mkdir(parents=True)
+        (root / "commands" / "governance-init.md").write_text(
+            "AskUserQuestion\nM5.1\n我即将输出的文本是否包含向用户提问的问句\n",
+            encoding="utf-8",
+        )
+        ib_dir = root / "skills/software-project-governance/references"
+        ib_dir.mkdir(parents=True)
+        (ib_dir / "interaction-boundary.md").write_text(
+            "Use AskUserQuestion at interaction boundaries.\n",
+            encoding="utf-8",
+        )
+
+    def _write(self, root, rel_path, text):
+        target = root / rel_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+
+    def test_base_scan_still_flags_record_doc_option_lists(self):
+        """Architecture lock (and the red-side capture of the pre-FIX-295
+        false positive): the base scan is byte-identical — FIX-295 narrows
+        at the GATE wrapper, not by editing the base — so the two
+        live-shaped record rows still come back BLOCKING from the raw
+        check_m5_compliance(). If this ever changes, the wrapper's premise
+        changed too."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._m5_gate_root(root)
+            self._write(root, "docs/release/queue-triage-0.78x.md",
+                        "# queue\n\n" + _FIX295_RELEASE_ROW + "\n")
+            self._write(root, "docs/reviews/review-REL-074-RELEASE-R2.md",
+                        "# review\n\n" + _FIX295_REVIEW_ROW + "\n")
+            with patch.object(vw, "ROOT", root):
+                base = vw.check_m5_compliance()
+
+        blocking = [i for i in base["issues"] if i["severity"] == "BLOCKING"]
+        self.assertEqual(
+            sorted(i["file"] for i in blocking),
+            ["docs/release/queue-triage-0.78x.md",
+             "docs/reviews/review-REL-074-RELEASE-R2.md"],
+        )
+        for i in blocking:
+            self.assertEqual(i["type"], "m5_option_list_no_auq")
+
+    def test_gate_wrapper_exempts_record_doc_issues_with_disclosure(self):
+        """Green side: the gate wrapper drops BOTH live-shaped record-dir
+        issues into record_scope_exempted (disclosed, not counted) and
+        reports no anti-pattern from them."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._m5_gate_root(root)
+            self._write(root, "docs/release/queue-triage-0.78x.md",
+                        "# queue\n\n" + _FIX295_RELEASE_ROW + "\n")
+            self._write(root, "docs/reviews/review-REL-074-RELEASE-R2.md",
+                        "# review\n\n" + _FIX295_REVIEW_ROW + "\n")
+            with patch.object(vw, "ROOT", root):
+                result = vw.check_m5_compliance_with_record_scope()
+
+        self.assertEqual(result["issues"], [])
+        self.assertEqual(result["record_scope_dirs"],
+                         ("docs/release", "docs/reviews"))
+        self.assertEqual(
+            sorted(e["file"] for e in result["record_scope_exempted"]),
+            ["docs/release/queue-triage-0.78x.md",
+             "docs/reviews/review-REL-074-RELEASE-R2.md"],
+        )
+        for e in result["record_scope_exempted"]:
+            self.assertEqual(e["type"], "m5_option_list_no_auq")
+            self.assertEqual(e["severity"], "BLOCKING")
+
+    def test_gate_wrapper_still_blocks_same_text_outside_whitelist(self):
+        """Negative path (use-case lock): the SAME option-list + choice-
+        context text under any NON-whitelisted path still FAILs at the
+        gate — docs/requirements/** (another docs subtree, instruction-
+        bearing surface) and the string-prefix trap docs/release-notes.md
+        (whitelist matches directory components, never a bare prefix)."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._m5_gate_root(root)
+            self._write(root, "docs/requirements/spec-a.md",
+                        "# spec\n\n" + _FIX295_RELEASE_ROW + "\n")
+            self._write(root, "docs/release-notes.md",
+                        "# notes\n\n" + _FIX295_REVIEW_ROW + "\n")
+            with patch.object(vw, "ROOT", root):
+                result = vw.check_m5_compliance_with_record_scope()
+
+        self.assertEqual(result["record_scope_exempted"], [])
+        blocking_files = sorted(
+            i["file"] for i in result["issues"]
+            if i["severity"] == "BLOCKING"
+        )
+        self.assertEqual(
+            blocking_files,
+            ["docs/release-notes.md", "docs/requirements/spec-a.md"])
+
+    def test_gate_wrapper_keeps_inline_question_face_on_entry_files(self):
+        """Check 10's other M5 face (inline-question instructions on entry
+        files) is untouched by the record-scope narrowing: a CLAUDE.md
+        inline-question instruction still BLOCKs through the wrapper."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._m5_gate_root(
+                root, "违规：MUST 直接问用户“要不要继续？”\n")
+            with patch.object(vw, "ROOT", root):
+                result = vw.check_m5_compliance_with_record_scope()
+
+        self.assertEqual(result["record_scope_exempted"], [])
+        blocking = [i for i in result["issues"] if i["severity"] == "BLOCKING"]
+        self.assertEqual(len(blocking), 1)
+        self.assertEqual(blocking[0]["type"], "m5_inline_question_cn")
+        self.assertEqual(blocking[0]["file"], "CLAUDE.md")
+
+    def test_gate_wrapper_preserves_structural_gap_issues(self):
+        """Structural M5 faces (bootstrap template / interaction-boundary /
+        SELF-CHECK guard) can never match the record whitelist: a root
+        missing governance-init.md keeps its structural issues through the
+        wrapper, identical to the base result."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "CLAUDE.md").write_text("safe\n", encoding="utf-8")
+            # No commands/governance-init.md, no interaction-boundary.md.
+            with patch.object(vw, "ROOT", root):
+                base = vw.check_m5_compliance()
+                result = vw.check_m5_compliance_with_record_scope()
+
+        self.assertEqual(result["record_scope_exempted"], [])
+        self.assertEqual(
+            [(i["type"], i["severity"]) for i in result["issues"]],
+            [(i["type"], i["severity"]) for i in base["issues"]],
+        )
+        self.assertIn("m5_bootstrap_missing",
+                      {i["type"] for i in result["issues"]})
+
+    def test_gate_wrapper_passthrough_when_nothing_exempt(self):
+        """No record-doc hits → wrapper result equals the base result
+        (issues identical), with an empty disclosure list."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._m5_gate_root(root)
+            with patch.object(vw, "ROOT", root):
+                base = vw.check_m5_compliance()
+                result = vw.check_m5_compliance_with_record_scope()
+
+        self.assertEqual(result["issues"], base["issues"])
+        self.assertEqual(result["record_scope_exempted"], [])
+        self.assertEqual(result["total_checks"], base["total_checks"])
+
+    def test_is_m5_record_doc_path_component_boundary(self):
+        """Path-classification unit: directory-COMPONENT whitelist match —
+        exact dir or dir + "/"; never a bare string prefix; nested dirs
+        match; backslashes normalize; fail-closed outside the whitelist."""
+        cases = {
+            "docs/release/queue-triage-0.78x.md": True,
+            "docs/release/sub/dir/x.md": True,
+            "docs/reviews/review-REL-074-RELEASE-R2.md": True,
+            "docs\\release\\x.md": True,
+            "docs/release": True,
+            "docs/release-notes.md": False,    # string-prefix trap
+            "docs/requirements/spec.md": False,
+            "docs/other/release/x.md": False,  # not a direct child
+            "CLAUDE.md": False,
+            "AGENTS.md": False,
+            ".governance/CLAUDE.md": False,
+            "commands/governance-init.md": False,
+            "": False,
+        }
+        for rel_path, expected in cases.items():
+            self.assertEqual(
+                vw._is_m5_record_doc_path(rel_path), expected,
+                msg=(f"_is_m5_record_doc_path({rel_path!r}) "
+                     f"should be {expected}"),
+            )
+        self.assertEqual(vw.M5_RECORD_DOC_DIRS,
+                         ("docs/release", "docs/reviews"))
+
+
+# ────────────────────────────────────────────────────────────
 # SYSGAP-029: Goal Alignment (Check 11) and User Impact (Check 12) regression tests
 # ────────────────────────────────────────────────────────────
 

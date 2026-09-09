@@ -14419,6 +14419,94 @@ def check_risk_mitigation_closure_with_archive(risk_content=None,
     return final
 
 
+# ── Check 10 M5 record-doc scope whitelist (FIX-295 / AUDIT-149 N6) ──
+# docs/release/** and docs/reviews/** are RECORD-class governance text —
+# release-queue adjudication tables and review reports that DESCRIBE past
+# events. Their ASCII "(a)/(b)/(c)" verification sub-clauses plus nearby
+# "选项/选择" vocabulary (e.g. "可选项") are factual citations, not agent
+# runtime instructions, but the Check 10 anti-pattern heuristic
+# (m5_option_list_no_auq: option list + choice context, no AskUserQuestion)
+# cannot tell a recorded list from an instructed menu, so it structurally
+# false-positives on them. Two live instances (AUDIT-149 §3 域 6 / §4 N6):
+#   - docs/release/queue-triage-0.78x.md:66 (queue task row citing 3 path-
+#     traversal test-case paths; "(a)/(b)/(c)" rationale sub-clauses)
+#   - docs/reviews/review-REL-074-RELEASE-R2.md:17 (R1-finding verification
+#     row; "(a)~(e)" mapping sub-clauses + "选项")
+# Same record-vs-runtime distinction as Check 29's session-snapshot
+# auto-discovery exclusion (FIX-178; AUDIT-149 cites this precedent family
+# as the "FIX-280 先例").
+#
+# Implementation: WRAPPER, not a base-scan edit — the FIX-294 precedent for
+# a scope held to verify_workflow.py + tests. The base
+# checks.review_domain.check_m5_compliance() stays byte-identical (scan
+# list + FIX-054 plugin-scope filter untouched); only the Check 10 gate
+# call site swaps to check_m5_compliance_with_record_scope(), which moves
+# issues whose file lives under a record-class directory enumerated in
+# M5_RECORD_DOC_DIRS into a disclosed exemption list (not counted).
+#
+# Fail-closed boundaries:
+#   - PATH CLASSIFICATION ONLY — explicit directory whitelist; directory-
+#     component match (exact dir or dir + "/"), never a bare string prefix
+#     ("docs/release-notes.md" is NOT exempt) and never content heuristics.
+#   - Everything else the base scans keeps FULL coverage: AGENTS.md,
+#     CLAUDE.md, .governance/CLAUDE.md, and every docs/ subtree OUTSIDE the
+#     whitelist (e.g. docs/requirements/**) — plus the M5 structural checks
+#     (bootstrap template / interaction-boundary / SELF-CHECK guard), whose
+#     issue files can never match the whitelist.
+#   - Exempt ≠ silent: every dropped issue is returned in
+#     record_scope_exempted and printed as [EXEMPT] (DEC-151-style
+#     disclosure, not counted into all_issues).
+
+M5_RECORD_DOC_DIRS = ("docs/release", "docs/reviews")
+
+
+def _is_m5_record_doc_path(rel_path):
+    """FIX-295: True when rel_path is inside an M5 record-class doc dir.
+
+    Directory-component whitelist match over M5_RECORD_DOC_DIRS: an entry
+    must equal the path or be a leading directory component — "docs/release"
+    matches "docs/release/x.md" and "docs/release/a/b.md" but NOT
+    "docs/release-notes.md" or "docs/other/release/x.md". Backslashes are
+    normalized. Fail-closed: anything not explicitly enumerated stays
+    scanned.
+    """
+    rp = str(rel_path).replace("\\", "/")
+    for record_dir in M5_RECORD_DOC_DIRS:
+        if rp == record_dir or rp.startswith(record_dir + "/"):
+            return True
+    return False
+
+
+def check_m5_compliance_with_record_scope():
+    """FIX-295 / AUDIT-149 N6: Check 10 gate entry with record-doc scope.
+
+    Thin wrapper over the UNCHANGED base ``check_m5_compliance()`` (FIX-294
+    wrapper pattern): pass 1 runs the base scan byte-for-byte; issues whose
+    ``file`` is under an M5_RECORD_DOC_DIRS directory (record-class text —
+    release/review documents; see the module comment above) are moved to
+    ``record_scope_exempted`` (disclosed, never counted); every other issue
+    — entry files, non-whitelisted docs/ subtrees, and all M5 structural
+    checks — passes through untouched.
+
+    Returns the base result dict extended with:
+      ``record_scope_exempted``: list of exempted issue dicts
+      ``record_scope_dirs``: the whitelist tuple (for disclosure)
+    Never raises; never broadens or narrows the base scan itself.
+    """
+    base = check_m5_compliance()
+    kept = []
+    exempted = []
+    for issue in base.get("issues", []):
+        if _is_m5_record_doc_path(str(issue.get("file", ""))):
+            exempted.append(issue)
+        else:
+            kept.append(issue)
+    base["issues"] = kept
+    base["record_scope_exempted"] = exempted
+    base["record_scope_dirs"] = M5_RECORD_DOC_DIRS
+    return base
+
+
 def cmd_check_governance(args):
     """Run governance health checks: evidence completeness, risk staleness, gate consistency.
 
@@ -14794,9 +14882,14 @@ def _run_full_engine_checks(args):
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 10. M5 AskUserQuestion compliance ──
+    # FIX-295 (AUDIT-149 N6): the gate consumes the record-scope wrapper —
+    # issues from docs/release/** and docs/reviews/** (record-class text:
+    # release/review documents) are exempted WITH disclosure ([EXEMPT]
+    # below, not counted into all_issues); the base scan and every other
+    # M5 face (inline-question instructions, structural checks) unchanged.
     if _product_gate_active(args):
         print("\n┌─ Check 10: M5 AskUserQuestion Compliance ────────────┐")
-        m5_result = check_m5_compliance()
+        m5_result = check_m5_compliance_with_record_scope()
         m5_issues = m5_result["issues"]
         if m5_issues:
             blocking = [i for i in m5_issues if i["severity"] == "BLOCKING"]
@@ -14821,6 +14914,15 @@ def _run_full_engine_checks(args):
             print(f"│  [PASS] No M5 anti-patterns in source files.")
             print(f"│  [PASS] M5 AskUserQuestion rules present in bootstrap.")
             print(f"│  [PASS] interaction-boundary.md has AskUserQuestion bindings.")
+        if m5_result.get("record_scope_exempted"):
+            exempted = m5_result["record_scope_exempted"]
+            print(f"│  [EXEMPT] {len(exempted)} record-doc M5 issue(s) — FIX-295 path "
+                  f"whitelist {', '.join(m5_result['record_scope_dirs'])} "
+                  f"(record text, not agent instructions; disclosed, not counted):")
+            for e in exempted[:8]:
+                print(f"│    - {e['file']}:{e['line']}: {e['text'][:70]}")
+            if len(exempted) > 8:
+                print(f"│    ... and {len(exempted) - 8} more")
         print(f"│  Total M5 checks: {m5_result['total_checks']}")
     else:
         _print_product_gate_skipped("Check 10")

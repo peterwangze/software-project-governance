@@ -30,6 +30,7 @@ Run:
 """
 
 import importlib.util
+import io
 import json
 import os
 import re
@@ -38,6 +39,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -67,6 +69,73 @@ def _load_launch_module():
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _fingerprint_tree(root: Path):
+    """Independent (test-local) read-only fingerprint: rel/size/mtime_ns.
+
+    Deliberately NOT the launcher's own helper: the FEAT-015 zero-real-home-write
+    evidence must be produced by an oracle the code under test cannot influence.
+    """
+    if not root.exists():
+        return ("absent",)
+    entries = []
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        dirnames.sort()
+        for name in sorted(dirnames) + sorted(filenames):
+            path = Path(dirpath) / name
+            try:
+                stat = path.lstat()
+            except OSError:
+                continue
+            entries.append(
+                (path.relative_to(root).as_posix(), stat.st_size, stat.st_mtime_ns)
+            )
+    return tuple(entries)
+
+
+def _real_home_witness_oracle(home: Path):
+    """Test-local zero-write oracle: home top level + <home>/.agent-presets.
+
+    Deliberately independent of the launcher's own witness (an oracle the code
+    under test cannot influence). Scope mirrors the claim under test: the
+    adapter's only real-home write surface is ``<home>/.agent-presets``; the
+    host-owned subtrees (sessions/, storages/, dsh-agent-router/, …) are
+    excluded because a live session mutates them concurrently.
+    """
+    top = []
+    if home.is_dir():
+        for path in sorted(home.iterdir()):
+            stat = path.lstat()
+            if path.is_dir():
+                top.append((path.name, "d"))
+            else:
+                top.append((path.name, "f", stat.st_size, stat.st_mtime_ns))
+    return (tuple(top), _fingerprint_tree(home / ".agent-presets"))
+
+
+def _decoy_home_env(decoy: Path):
+    """Env for a smoke CLI run whose 'user home' is a throwaway decoy.
+
+    M7.7: the refusal paths are exercised against a decoy home so the real
+    ~/.dsh is never inside the blast radius of a guard regression.
+    """
+    env = os.environ.copy()
+    env.pop("DSH_HOME", None)
+    env["HOME"] = str(decoy)
+    env["USERPROFILE"] = str(decoy)
+    return env
+
+
+def _run_smoke_cli(env, *extra):
+    return subprocess.run(
+        [sys.executable, str(_LAUNCH_PATH), "--smoke", *extra],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=env,
+    )
 
 
 def _bash():
@@ -630,6 +699,281 @@ class DshAdapterTests(unittest.TestCase):
         closure = capabilities["workflow_closure"]
         self.assertEqual(closure["status"], "degraded")
         self.assertEqual(closure["degraded_capabilities"], ["browser", "mcp"])
+
+    # ── FEAT-015 / RISK-049 ②: isolated preset-session smoke gate ──────────
+    # M7.7 protection baseline (a) — isolation: every preset/session operation
+    # runs under a redirected DSH_HOME; the real ~/.dsh is only FINGERPRINTED
+    # (metadata: rel path + size + mtime_ns — file contents such as
+    # credentials.yaml are never read), never written.
+
+    def test_home_fingerprint_detects_metadata_change(self):
+        # Metadata-only by design (the real home holds credentials that must
+        # not be read). Detection is therefore size/mtime based: a same-size
+        # rewrite inside one filesystem timer tick is not distinguishable —
+        # the structural isolation guard is the primary protection and this
+        # fingerprint is the detection net.
+        launch = _load_launch_module()
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            home.mkdir()
+            (home / "settings.yaml").write_text("a: 1\n", encoding="utf-8")
+            before = launch._home_fingerprint(home)
+            self.assertEqual(before["state"], "present")
+            self.assertEqual(len(before["entries"]), 1)
+            (home / "settings.yaml").write_text("a: 22\n", encoding="utf-8")
+            after = launch._home_fingerprint(home)
+            self.assertNotEqual(before["entries"], after["entries"])
+            (home / "added.yaml").write_text("b: 1\n", encoding="utf-8")
+            self.assertEqual(len(launch._home_fingerprint(home)["entries"]), 2)
+            self.assertEqual(launch._home_fingerprint(home / "nope")["state"], "absent")
+
+    def test_smoke_cli_passes_in_isolated_home(self):
+        # Acceptance (1)+(2): one command under DSH_HOME=<tempdir> yields a
+        # verdict, and the real ~/.dsh witness is identical after.
+        real_home = Path.home() / ".dsh"
+        before = _real_home_witness_oracle(real_home)
+        with tempfile.TemporaryDirectory() as td:
+            env = os.environ.copy()
+            env["DSH_HOME"] = td
+            result = _run_smoke_cli(env)
+            preset = Path(td) / ".agent-presets" / "governance"
+            self.assertTrue((preset / "agent.cordis.yml").is_file())
+            self.assertTrue((preset / "preset.yml").is_file())
+            self.assertTrue((preset / "skill-root.txt").is_file())
+        after = _real_home_witness_oracle(real_home)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("[SMOKE] Result: PASS", result.stdout)
+        # skill 目录加载: the catalog root resolves and carries the skill
+        self.assertIn("software-project-governance/SKILL.md", result.stdout)
+        # /governance 手势: the projection shim resolves to its shared command
+        self.assertIn("governance.md", result.stdout)
+        self.assertIn("commands/governance.md", result.stdout)
+        # acceptance (2): real ~/.dsh zero writes — independent test-side oracle
+        self.assertEqual(before, after)
+
+    def test_smoke_cli_refuses_unredirected_dsh_home(self):
+        # Negative path 3a: DSH_HOME unset. The guard must refuse BEFORE any
+        # write; the decoy home keeps the real ~/.dsh out of scope entirely.
+        with tempfile.TemporaryDirectory() as td:
+            decoy = Path(td) / "decoy-home"
+            decoy.mkdir()
+            result = _run_smoke_cli(_decoy_home_env(decoy))
+            self.assertNotEqual(result.returncode, 0)
+            out = result.stdout + result.stderr
+            self.assertIn("DSH_HOME", out)
+            self.assertIn("refus", out.lower())
+            self.assertFalse((decoy / ".dsh").exists())
+
+    def test_smoke_cli_refuses_dsh_home_at_user_home(self):
+        # Negative path 3b: DSH_HOME == <home>/.dsh — the "误打真实 home"
+        # shape, exercised against a decoy home (zero real-home exposure).
+        with tempfile.TemporaryDirectory() as td:
+            decoy = Path(td) / "decoy-home"
+            decoy.mkdir()
+            env = _decoy_home_env(decoy)
+            env["DSH_HOME"] = str(decoy / ".dsh")
+            result = _run_smoke_cli(env)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("refus", (result.stdout + result.stderr).lower())
+            self.assertFalse((decoy / ".dsh" / ".agent-presets").exists())
+
+    def test_smoke_refuses_in_process_when_dsh_home_is_real_home(self):
+        # Same guard, unit level: the real home is patched to a temp dir, so a
+        # regression can never reach the actual ~/.dsh through this test.
+        launch = _load_launch_module()
+        with tempfile.TemporaryDirectory() as td:
+            fake_real = Path(td) / "real-home"
+            fake_real.mkdir()
+            with patch.dict(os.environ, {"DSH_HOME": str(fake_real)}, clear=False), \
+                    patch.object(launch, "real_dsh_home", return_value=fake_real):
+                exit_code = launch.smoke_preset()
+            self.assertNotEqual(exit_code, 0)
+            self.assertFalse((fake_real / ".agent-presets").exists())
+
+    def test_smoke_verifier_fails_when_skill_catalog_root_missing(self):
+        # Negative path 3c-i: the skill directory is absent → the gate names it.
+        launch = _load_launch_module()
+        with tempfile.TemporaryDirectory() as td, patch.dict(
+            os.environ, {"DSH_HOME": td}, clear=False
+        ):
+            self.assertEqual(launch.install_preset("copy"), 0)
+            preset = Path(td) / ".agent-presets" / "governance"
+            shutil.rmtree(preset / "skills")
+            result = launch.verify_preset_loading(preset)
+        self.assertEqual(result["verdict"], "FAIL")
+        self.assertTrue(
+            any("SKILL.md" in issue for issue in result["issues"]),
+            result["issues"],
+        )
+        self.assertTrue(
+            any("skill" in issue.lower() for issue in result["issues"]),
+            result["issues"],
+        )
+
+    def test_smoke_verifier_fails_when_governance_gesture_missing(self):
+        # Negative path 3c-ii: the /governance projection shim is absent.
+        launch = _load_launch_module()
+        with tempfile.TemporaryDirectory() as td, patch.dict(
+            os.environ, {"DSH_HOME": td}, clear=False
+        ):
+            self.assertEqual(launch.install_preset("copy"), 0)
+            preset = Path(td) / ".agent-presets" / "governance"
+            (preset / "skill-shims" / "governance.md").unlink()
+            result = launch.verify_preset_loading(preset)
+        self.assertEqual(result["verdict"], "FAIL")
+        self.assertTrue(
+            any("/governance" in issue for issue in result["issues"]),
+            result["issues"],
+        )
+
+    def test_smoke_verifier_rejects_literal_relative_skill_dir(self):
+        # FIX-290 defect class at the gate level: a literal relative
+        # customSkillDirs entry resolves against the dsh process CWD and
+        # silently empties the catalog — the gate must name it, not pass.
+        launch = _load_launch_module()
+        with tempfile.TemporaryDirectory() as td:
+            preset = Path(td) / "preset"
+            preset.mkdir()
+            (preset / "agent.cordis.yml").write_text(
+                "- id: skill-filesystem\n"
+                "  name: '@deepseek-ai/dsh-skill-filesystem'\n"
+                "  config:\n"
+                "    customSkillDirs:\n"
+                "      - '../../skills'\n",
+                encoding="utf-8",
+            )
+            result = launch.verify_preset_loading(preset)
+        self.assertEqual(result["verdict"], "FAIL")
+        self.assertTrue(
+            any("relative" in issue.lower() for issue in result["issues"]),
+            result["issues"],
+        )
+
+    def test_real_home_witness_scope_ignores_host_activity(self):
+        # The witness must be a DETERMINISTIC oracle under a live host: host
+        # activity inside its own subtrees (measured 2026-09-09:
+        # dsh-agent-router/stats/*) may not flip it, while any change to the
+        # adapter's write surface or to the home's top level must.
+        launch = _load_launch_module()
+
+        def fresh_home(td, name):
+            home = Path(td) / name
+            (home / ".agent-presets" / "governance").mkdir(parents=True)
+            (home / ".agent-presets" / "governance" / "preset.yml").write_text(
+                "name: governance\n", encoding="utf-8"
+            )
+            (home / "settings.yaml").write_text("a: 1\n", encoding="utf-8")
+            (home / "sessions").mkdir()
+            return home
+
+        with tempfile.TemporaryDirectory() as td:
+            # 1. host-owned subtree activity is tolerated
+            home = fresh_home(td, "host-activity")
+            baseline = launch._real_home_witness(home)
+            (home / "sessions" / "session-1.jsonl").write_text(
+                "{}\n", encoding="utf-8"
+            )
+            self.assertEqual(baseline, launch._real_home_witness(home))
+
+            # 2. adapter write surface change is detected
+            home = fresh_home(td, "write-surface")
+            baseline = launch._real_home_witness(home)
+            (home / ".agent-presets" / "governance" / "agent.cordis.yml").write_text(
+                "- id: persona\n", encoding="utf-8"
+            )
+            self.assertNotEqual(baseline, launch._real_home_witness(home))
+
+            # 3. top-level file modification is detected
+            home = fresh_home(td, "top-level-file")
+            baseline = launch._real_home_witness(home)
+            (home / "settings.yaml").write_text("a: 22\n", encoding="utf-8")
+            self.assertNotEqual(baseline, launch._real_home_witness(home))
+
+            # 4. new top-level entry is detected
+            home = fresh_home(td, "top-level-entry")
+            baseline = launch._real_home_witness(home)
+            (home / ".credentials.yaml").write_text("x: y\n", encoding="utf-8")
+            self.assertNotEqual(baseline, launch._real_home_witness(home))
+
+    def test_smoke_fails_when_real_home_witness_changes(self):
+        # Defence in depth: if any code path mutated the real home, the
+        # before/after witness comparison must FAIL the gate.
+        launch = _load_launch_module()
+        with tempfile.TemporaryDirectory() as td:
+            isolated = Path(td) / "isolated"
+            fake_real = Path(td) / "real-home"
+            fake_real.mkdir()
+            baseline = launch._real_home_witness(fake_real)
+            mutated = dict(baseline)
+            mutated["write_surface"] = list(baseline["write_surface"]) + [
+                "f:governance/preset.yml:1:1"
+            ]
+            sequence = [baseline, mutated]
+            with patch.dict(os.environ, {"DSH_HOME": str(isolated)}, clear=False), \
+                    patch.object(launch, "real_dsh_home", return_value=fake_real), \
+                    patch.object(
+                        launch, "_real_home_witness",
+                        side_effect=lambda home: sequence.pop(0),
+                    ):
+                exit_code = launch.smoke_preset()
+            self.assertNotEqual(exit_code, 0)
+            self.assertEqual(sequence, [], "expected exactly two witnesses")
+
+    def test_smoke_reports_absent_dsh_cli_without_false_live_claim(self):
+        # Quality budget (reliability): a missing dsh CLI must be reported
+        # explicitly as NOT_RUN for the live-session面 — never a silent pass
+        # that implies session behavior was verified.
+        launch = _load_launch_module()
+        with tempfile.TemporaryDirectory() as td, patch.dict(
+            os.environ, {"DSH_HOME": td}, clear=False
+        ), patch.object(launch.shutil, "which", return_value=None):
+            buffer = io.StringIO()
+            with redirect_stdout(buffer):
+                exit_code = launch.smoke_preset()
+        output = buffer.getvalue()
+        self.assertEqual(exit_code, 0, output)
+        self.assertIn("dsh CLI", output)
+        self.assertIn("absent", output)
+        self.assertIn("NOT_RUN", output)
+
+    def test_check_dsh_preset_smoke_passes_and_cleans_temp_home(self):
+        if str(_INFRA_DIR) not in sys.path:
+            sys.path.insert(0, str(_INFRA_DIR))
+        import verify_workflow as vw
+
+        result = vw.check_dsh_preset_smoke()
+        self.assertEqual(result["verdict"], "PASS", result)
+        self.assertEqual(result["exit_code"], 0)
+        self.assertEqual(result["isolation"]["real_home_writes"], 0)
+        self.assertFalse(
+            Path(result["isolation"]["temp_home"]).exists(),
+            "the isolated temp DSH_HOME must be removed after the run",
+        )
+
+    def test_check_dsh_preset_smoke_reports_failure_not_false_pass(self):
+        # Fail-closed: a broken launcher must surface as FAIL with its
+        # diagnostic — the check may never degrade to a silent PASS.
+        if str(_INFRA_DIR) not in sys.path:
+            sys.path.insert(0, str(_INFRA_DIR))
+        import verify_workflow as vw
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            adapter = root / "adapters" / "dsh"
+            adapter.mkdir(parents=True)
+            (adapter / "launch.py").write_text(
+                "import sys\n"
+                "print('[SMOKE] FAIL: skill catalog root missing')\n"
+                "sys.exit(1)\n",
+                encoding="utf-8",
+            )
+            result = vw.check_dsh_preset_smoke(root=root)
+        self.assertEqual(result["verdict"], "FAIL")
+        self.assertEqual(result["exit_code"], 1)
+        self.assertTrue(
+            any("skill catalog root missing" in detail for detail in result["details"]),
+            result["details"],
+        )
 
     @unittest.skipUnless(
         importlib.util.find_spec("yaml") is not None,

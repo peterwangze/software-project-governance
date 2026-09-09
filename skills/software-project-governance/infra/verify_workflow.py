@@ -6919,6 +6919,99 @@ def check_dsh_skills_manifest(root=None):
     }
 
 
+# ── FEAT-015 / RISK-049 ②: isolated preset-session smoke gate ───────────────
+#
+# RISK-049 closure standard (2): "安装后 preset 会话可用" must be a repeatable
+# machine gate, not a reasoning step. The gate runs the adapter launcher's
+# ``--smoke`` action under a temp DSH_HOME created here (M7.7 (a): env
+# redirection; the real ~/.dsh is only fingerprinted by the launcher, never
+# written) and reports the launcher's verdict.
+#
+# Fail-closed: a missing launcher, a non-zero exit, a timeout, or an isolation
+# refusal is FAIL with the launcher's diagnostics — never a silent PASS. The
+# temp home is removed afterwards so the gate leaves no residue.
+DSH_SMOKE_REAL_HOME_WRITES_RE = re.compile(
+    r"\[SMOKE\]\s*real-home writes\s*:\s*(\d+)")
+DSH_SMOKE_RESULT_PASS_RE = re.compile(r"\[SMOKE\]\s*Result:\s*PASS")
+
+
+def check_dsh_preset_smoke(root=None, timeout=120):
+    """FEAT-015 / RISK-049 ②: run the isolated preset-session smoke gate.
+
+    ``root`` overrides the package root (test seam); it defaults to
+    PLUGIN_ROOT, where ``adapters/dsh/launch.py`` lives. Returns
+    ``{"verdict": "PASS"|"FAIL", "reason", "exit_code", "details",
+    "isolation": {"temp_home", "real_home_writes"}}``.
+    """
+    package_root = Path(root) if root is not None else PLUGIN_ROOT
+    launcher = package_root / "adapters" / "dsh" / "launch.py"
+    result = {
+        "verdict": "FAIL",
+        "reason": "",
+        "exit_code": None,
+        "details": [],
+        "isolation": {"temp_home": None, "real_home_writes": None},
+    }
+    if not launcher.is_file():
+        result["reason"] = f"dsh launcher missing: {launcher.as_posix()}"
+        return result
+
+    temp_home = Path(tempfile.mkdtemp(prefix="spg-dsh-smoke-"))
+    result["isolation"]["temp_home"] = temp_home.as_posix()
+    env = os.environ.copy()
+    env["DSH_HOME"] = str(temp_home)
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(launcher), "--smoke"],
+            cwd=str(package_root),
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        result["reason"] = f"smoke timed out after {timeout}s"
+        return result
+    except OSError as exc:
+        result["reason"] = f"smoke could not start: {exc}"
+        return result
+    finally:
+        shutil.rmtree(temp_home, ignore_errors=True)
+
+    result["exit_code"] = proc.returncode
+    output = (proc.stdout or "") + (proc.stderr or "")
+    result["details"] = [
+        line.strip() for line in output.splitlines() if line.strip()]
+    writes = DSH_SMOKE_REAL_HOME_WRITES_RE.search(output)
+    if writes:
+        result["isolation"]["real_home_writes"] = int(writes.group(1))
+
+    if proc.returncode == 0 and DSH_SMOKE_RESULT_PASS_RE.search(output):
+        if result["isolation"]["real_home_writes"] not in (0, None):
+            result["reason"] = (
+                "smoke reported real-home writes="
+                f"{result['isolation']['real_home_writes']} — refusing to "
+                "accept the run as PASS")
+            return result
+        result["verdict"] = "PASS"
+        result["reason"] = (
+            "isolated preset-session smoke PASSED (skill catalog + "
+            "/governance gesture resolved; real ~/.dsh untouched)")
+        return result
+
+    diagnostics = [
+        detail for detail in result["details"]
+        if "[FAIL]" in detail or "[REFUSED]" in detail or "FAIL:" in detail
+    ]
+    result["reason"] = (
+        f"smoke exit {proc.returncode}"
+        + (f": {diagnostics[0]}" if diagnostics else "")
+    )
+    return result
+
+
 
 def check_release_readiness(
     version=None,
@@ -14157,6 +14250,7 @@ _PLUGIN_PRODUCT_CHECK_IDS = frozenset({
     "Check 28q",  # Technical Debt
     "Check 28r",  # Complexity
     "Check 28t",  # README Claim→Evidence Levels（插件包本体 README）
+    "Check 28u",  # DSH Preset Session Smoke（插件包本体 launch.py + presets/）
     "Check 30b",  # Loop wiring call sites（插件 infra AST 扫描）
     "Check 31",   # Loop Runtime Claim Gate（插件树扫描 + identity attestation）
     "Check 33",   # Injection Contract（插件 persona/SKILL/AGENTS 锚点）
@@ -14212,6 +14306,7 @@ _PRODUCT_GATE_LABELS = {
     "Check 28q": "Technical Debt (ArchGuard/REQ-101)",
     "Check 28r": "Complexity (ArchGuard/REQ-101)",
     "Check 28t": "README Claim→Evidence Levels (FEAT-014)",
+    "Check 28u": "DSH Preset Session Smoke (FEAT-015)",
     "Check 30b": "Loop wiring call sites",
     "Check 31": "Loop Runtime Claim Gate",
     "Check 33": "Injection Contract",
@@ -15840,6 +15935,32 @@ def _run_full_engine_checks(args):
             print("│  [PASS] dsh.skills declarations match the disk catalog.")
     else:
         _print_product_gate_skipped("Check 40")
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 28u. DSH Preset Session Smoke (FEAT-015 / RISK-049 ②) ──
+    # RISK-049 closure standard (2): "安装后 preset 会话可用" as a repeatable
+    # gate instead of reasoning. Blocking (mirrors Check 40): a preset session
+    # that cannot load its skill catalog or /governance gesture is a
+    # user-facing defect, not an advisory. Runs in a temp DSH_HOME created by
+    # the check (M7.7 (a) isolation); fact source = the plugin package's own
+    # launch.py + presets/ → PLUGIN_PRODUCT (FIX-270 / F-2).
+    if _product_gate_active(args):
+        print("\n┌─ Check 28u: DSH Preset Session Smoke (FEAT-015) ────┐")
+        dsmk28u = check_dsh_preset_smoke()
+        iso28u = dsmk28u["isolation"]
+        print(f"│  exit code: {dsmk28u['exit_code']}; "
+              f"real-home writes: {iso28u['real_home_writes']}")
+        if dsmk28u["verdict"] == "PASS":
+            print(f"│  [PASS] {dsmk28u['reason']}")
+        else:
+            all_issues += 1
+            print(f"│  [FAIL] {dsmk28u['reason']}")
+            for detail in dsmk28u["details"][:12]:
+                print(f"│    - {detail}")
+            if len(dsmk28u["details"]) > 12:
+                print(f"│    ... and {len(dsmk28u['details']) - 12} more")
+    else:
+        _print_product_gate_skipped("Check 28u")
     print("└──────────────────────────────────────────────────────┘")
 
     # ── Summary ──
@@ -20596,6 +20717,30 @@ def cmd_check_dsh_skills_manifest(args):
     print()
 
 
+def cmd_check_dsh_preset_smoke(args):
+    """Run the isolated DSH preset-session smoke gate (FEAT-015)."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    result = check_dsh_preset_smoke()
+    print("\n=== DSH Preset Session Smoke Check (FEAT-015 / RISK-049 ②) ===")
+    print(f"  Exit code: {result['exit_code']}; "
+          f"real-home writes: {result['isolation']['real_home_writes']}; "
+          f"temp DSH_HOME: {result['isolation']['temp_home']} (removed)")
+    if result["verdict"] == "PASS":
+        print(f"\n  Result: PASSED — {result['reason']}")
+    else:
+        print(f"\n  Result: FAILED — {result['reason']}")
+        for detail in result["details"][:20]:
+            print(f"    - {detail}")
+        if len(result["details"]) > 20:
+            print(f"    ... and {len(result['details']) - 20} more")
+        if getattr(args, "fail_on_issues", False):
+            sys.exit(1)
+    print()
+
+
 def cmd_release_ledger(args):
     """Validate declarative per-version release manifests and live Git facts."""
     result = validate_release_ledger(
@@ -22711,6 +22856,16 @@ def main(argv=None):
     cdsm_p.add_argument("--fail-on-issues", action="store_true",
                         help="Exit with non-zero code if the dsh.skills manifest drifts from disk")
 
+    # check-dsh-preset-smoke (FEAT-015 / RISK-049 ②)
+    csmk_p = subparsers.add_parser(
+        "check-dsh-preset-smoke",
+        help="Run the isolated DSH preset-session smoke gate — skill catalog "
+             "+ /governance gesture resolution under a redirected DSH_HOME "
+             "(FEAT-015 / RISK-049 ②)",
+    )
+    csmk_p.add_argument("--fail-on-issues", action="store_true",
+                        help="Exit with non-zero code if the isolated smoke fails")
+
     # check-hot-fact-source (FIX-087)
     chfs_p = subparsers.add_parser(
         "check-hot-fact-source",
@@ -23197,6 +23352,7 @@ def main(argv=None):
         "check-projection-sync": cmd_check_projection_sync,
         "check-injection-contract": cmd_check_injection_contract,
         "check-dsh-skills-manifest": cmd_check_dsh_skills_manifest,
+        "check-dsh-preset-smoke": cmd_check_dsh_preset_smoke,
         "check-hot-fact-source": cmd_check_hot_fact_source,
         "check-runtime-readiness-matrix": cmd_check_runtime_readiness_matrix,
         "check-first-session-measurement": cmd_check_first_session_measurement,

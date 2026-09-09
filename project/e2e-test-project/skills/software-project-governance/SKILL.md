@@ -113,6 +113,7 @@ Coordinator 铁律第 1 条"不直接修改产品代码"的具体判定标准。
 
 - 修改涉及**任何**产品代码路径 → MUST spawn Agent Team（Developer/QA/DevOps/Governance Developer）
 - 修改**仅**涉及治理记录路径 → Coordinator 可直接执行
+- Coordinator 直写 `.governance/` 治理记录后 MUST 复跑 `verify_workflow.py governance-write-guard`（FAIL 时修复数据后复跑至 PASS；权威规则见 `references/behavior-protocol.md` M1.2）
 - **复杂度不是判定标准**——改一行 Python 和改一百行 Markdown 都是产品代码
 - 如果无法判定 → 按产品代码处理（spawn Agent Team）
 
@@ -122,6 +123,7 @@ Coordinator 铁律第 1 条"不直接修改产品代码"的具体判定标准。
 
 - **A 级（Agent Protocol Automation）**：行为协议自动化——agent 按协议纪律自动执行。例如「Coordinator 接管用户交互：只在 critical triggers 触发时打断；常规执行自动推进并记录假设」（见上方「你负责」清单）= A 级。
 - **B 级（CLI-Enforced Automation）**：CLI/脚本强制——`verify_workflow.py check-governance` 与 commit hooks 在命令/commit 时点强制（= B 级）。本文件「治理基础设施（自动使用）」与 `commands/governance.md`「自动分类，不问用户」均属本级（事件驱动，非持续）。
+- **governance-write-guard（FEAT-011 / FIX-297）= B 级检查器工件 + A 级协议触发**：CLI 被调用即强制（结构违约 FAIL 退出码 1），但无 hook/commit 时点接线——复跑时点由 `references/behavior-protocol.md` M1.2「直写后 MUST 复跑」协议纪律约束（hook 接线为后续候选）；对外宣示不得写成纯 B 级时点强制。
 - **C 级（System Automation）**：后台系统自动触发、不依赖 agent 记忆——**未实现**（plugin-contract.md L102：MCP/headless runner 仅有协议样例，无可用实现）。0.76.0 通过 `check-governance --summary-only` 的会话 bootstrap 自动运行实现「会话级」自动触发（见上方「每会话 bootstrap 健康摘要」），但**不是** C 级后台 daemon。
 
 **当前治理自动级别 = A 级 + B 级；C 级为 roadmap（未实现）**。各级别能力所处级别必须向用户显式说明（plugin-contract.md L114）；对外宣示不得把 C 级未实现说成已实现。

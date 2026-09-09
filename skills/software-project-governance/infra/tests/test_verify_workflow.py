@@ -17307,5 +17307,275 @@ class Fix292ActiveExecutionPacketTasksTests(unittest.TestCase):
             self.assertEqual([t["task_id"] for t in active], ["RAG-001"])
 
 
+class Fix294Check36ArchiveResolutionTests(unittest.TestCase):
+    """FIX-294 / AUDIT-149 N2 (DEC-151): Check 36 R3 archive-corpus resolution.
+
+    ``check_risk_mitigation_closure_with_archive`` wraps the UNCHANGED
+    FIX-265 base judgement: R3 refs (absent from the ACTIVE task-status
+    map) that resolve against the read-only archive corpus (index.md +
+    archive/{tasks,decisions,evidence,risks}/*.md — literal OR
+    family-range occurrence, e.g. "DESIGN-001~005") are exempted WITH
+    disclosure (archived_exemptions carry "resolved via archive" source
+    provenance) and are NOT counted as warnings; unresolvable refs keep
+    the R3 WARN (fail-closed). R1/R2/R4/R5 semantics delegate unchanged
+    to the same base function.
+    """
+
+    _RISK_HEADER = (
+        "| 编号 | 日期 | 风险/阻塞描述 | 所属阶段 | 触发条件 | 影响 | 严重级别 | "
+        "Owner | 当前状态 | 缓解动作 | 截止日期 | 关联任务 | 备注 |\n"
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | "
+        "--- | --- |\n"
+    )
+
+    def _risk_row(self, rid="RISK-001", severity="中", status="打开",
+                  deadline="2099-01-01", refs="FIX-9001"):
+        return (f"| {rid} | 2026-09-09 | 风险描述 | 开发 (6) | 触发 | 影响 | "
+                f"{severity} | Developer | {status} | 缓解动作 | {deadline} | "
+                f"{refs} | — |")
+
+    def _content(self, *rows):
+        return self._RISK_HEADER + "\n".join(rows) + "\n"
+
+    def _gov(self, files=None):
+        """Fixture governance dir: plan-tracker + optional corpus files
+        ({"archive/index.md": "..."}). Returns the plan-tracker path to
+        patch SAMPLE_PATH with — the corpus is derived from its parent."""
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        gov = Path(td.name) / ".governance"
+        gov.mkdir(parents=True)
+        plan = gov / "plan-tracker.md"
+        plan.write_text("# 计划跟踪\n", encoding="utf-8")
+        for rel, text in (files or {}).items():
+            p = gov / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(text, encoding="utf-8")
+        return plan
+
+    DONE = {"FIX-8000": "✅ 完成 (2026-09-01)"}
+    OPEN = {"FIX-8000": "⏳ 进行中"}
+
+    _INDEX_WITH_9001 = "# 归档索引\n| FIX-9001 | 旧任务 | archive/tasks/x.md |\n"
+    _LEGACY_FAMILY = (
+        "# 归档 Task 表 — 遗留收编\n"
+        "| REQ-001 | 用户安装插件后 agent 自动执行项目治理 | PR/FAQ | P0 "
+        "| INIT-001, PLAN-001~004, DESIGN-001~005, MAINT-021~022 "
+        "| ✅ 已交付 | check-governance PASSED |\n"
+    )
+
+    # ── exemption + disclosure (green side) ────────────────────────────
+
+    def test_resolvable_literal_ref_exempted_with_disclosure(self):
+        """R3 ref present (literal) in archive/index.md → exempt, PASS,
+        disclosure entry carries source + via=literal."""
+        plan = self._gov({"archive/index.md": self._INDEX_WITH_9001})
+        with patch.object(vw, "SAMPLE_PATH", plan):
+            r = vw.check_risk_mitigation_closure_with_archive(
+                risk_content=self._content(self._risk_row()),
+                task_status_map=self.DONE)
+        self.assertEqual(r["warnings"], [])
+        self.assertEqual(r["verdict"], "PASS")
+        self.assertEqual(r["stats"]["pass"], 1)
+        self.assertEqual(len(r["archived_exemptions"]), 1)
+        e = r["archived_exemptions"][0]
+        self.assertEqual((e["risk_id"], e["task_id"], e["via"]),
+                         ("RISK-001", "FIX-9001", "literal"))
+        self.assertTrue(e["source"].endswith("archive/index.md"), e["source"])
+        self.assertEqual(r["stats"]["archived_resolved"], 1)
+
+    def test_resolvable_range_ref_exempted_with_family_token(self):
+        """R3 refs recorded ONLY in family-range notation
+        ("DESIGN-001~005" / "PLAN-001~004") resolve via range fallback —
+        the legacy corpus lands the template-era families only that way."""
+        plan = self._gov({"archive/tasks/legacy-t.md": self._LEGACY_FAMILY})
+        with patch.object(vw, "SAMPLE_PATH", plan):
+            r = vw.check_risk_mitigation_closure_with_archive(
+                risk_content=self._content(
+                    self._risk_row(rid="RISK-001", refs="DESIGN-005"),
+                    self._risk_row(rid="RISK-002", refs="PLAN-003")),
+                task_status_map=self.DONE)
+        self.assertEqual(r["warnings"], [])
+        self.assertEqual(r["verdict"], "PASS")
+        by_task = {e["task_id"]: e for e in r["archived_exemptions"]}
+        self.assertEqual(set(by_task), {"DESIGN-005", "PLAN-003"})
+        self.assertEqual(by_task["DESIGN-005"]["via"], "range")
+        self.assertEqual(by_task["DESIGN-005"]["token"], "DESIGN-001~005")
+        self.assertTrue(by_task["PLAN-003"]["source"].endswith(
+            "archive/tasks/legacy-t.md"))
+
+    # ── fail-closed boundaries ─────────────────────────────────────────
+
+    def test_unresolvable_ref_keeps_r3_warn(self):
+        """ZZZ-999 resolves nowhere → R3 WARN survives verbatim (never a
+        blanket silence); zero exemptions."""
+        plan = self._gov({"archive/index.md": self._INDEX_WITH_9001})
+        with patch.object(vw, "SAMPLE_PATH", plan):
+            r = vw.check_risk_mitigation_closure_with_archive(
+                risk_content=self._content(self._risk_row(refs="ZZZ-999")),
+                task_status_map=self.DONE)
+        self.assertEqual(r["verdict"], "WARN")
+        self.assertEqual([w["rule"] for w in r["warnings"]], ["R3"])
+        self.assertEqual(r["warnings"][0]["task_refs"], ["ZZZ-999"])
+        self.assertEqual(r["archived_exemptions"], [])
+        self.assertEqual(r["stats"]["archived_resolved"], 0)
+
+    def test_mixed_refs_partial_exemption_keeps_warn_for_rest(self):
+        """One resolvable + one unresolvable ref in the same risk →
+        exemption for the resolved id, R3 WARN narrowed to ZZZ-999."""
+        plan = self._gov({"archive/index.md": self._INDEX_WITH_9001})
+        with patch.object(vw, "SAMPLE_PATH", plan):
+            r = vw.check_risk_mitigation_closure_with_archive(
+                risk_content=self._content(
+                    self._risk_row(refs="FIX-9001, ZZZ-999")),
+                task_status_map=self.DONE)
+        self.assertEqual([w["rule"] for w in r["warnings"]], ["R3"])
+        self.assertEqual(r["warnings"][0]["task_refs"], ["ZZZ-999"])
+        self.assertEqual([e["task_id"] for e in r["archived_exemptions"]],
+                         ["FIX-9001"])
+
+    def test_active_map_entry_not_overridden_by_archive(self):
+        """Injection is additive only: an id ACTIVE in the map (⏳ 进行中)
+        that also occurs in the corpus stays R1 (uncompleted) — archive
+        resolution must never mask a live uncompleted task."""
+        plan = self._gov({"archive/index.md": self._INDEX_WITH_9001})
+        with patch.object(vw, "SAMPLE_PATH", plan):
+            r = vw.check_risk_mitigation_closure_with_archive(
+                risk_content=self._content(self._risk_row()),
+                task_status_map={"FIX-9001": "⏳ 进行中"})
+        self.assertEqual([w["rule"] for w in r["warnings"]], ["R1"])
+        self.assertEqual(r["archived_exemptions"], [])
+        self.assertEqual(r["verdict"], "WARN")
+
+    def test_missing_archive_corpus_fails_safe_to_warn(self):
+        """No archive/ at all → nothing resolvable → pass-1 returned
+        as-is (R3 WARN kept, no crash) — audit-N2 fail-safe requirement."""
+        plan = self._gov()
+        with patch.object(vw, "SAMPLE_PATH", plan):
+            r = vw.check_risk_mitigation_closure_with_archive(
+                risk_content=self._content(self._risk_row()),
+                task_status_map=self.DONE)
+        self.assertEqual([w["rule"] for w in r["warnings"]], ["R3"])
+        self.assertEqual(r["archived_exemptions"], [])
+
+    def test_task_priority_unavailable_passes_through(self):
+        """task-priority unavailable (map None) → the base fail-safe R1
+        (无法验证) result is returned untouched; no corpus scan happens."""
+        with patch.object(vw, "SAMPLE_PATH",
+                          Path("Z:/definitely-missing/plan-tracker.md")):
+            r = vw.check_risk_mitigation_closure_with_archive(
+                risk_content=self._content(self._risk_row()),
+                task_status_map=None)
+        self.assertEqual(r["verdict"], "WARN")
+        self.assertIn("无法验证", r["warnings"][0]["reason"])
+        self.assertEqual(r["archived_exemptions"], [])
+
+    # ── R1/R2 semantic zero-drift + verdict aggregation ────────────────
+
+    def test_r2_fail_unaffected_by_sibling_archive_exemption(self):
+        """R2 FAIL (active OPEN ref, deadline passed, high severity) keeps
+        its exact violation dict while a sibling risk's archived ref is
+        exempted — exemption never swallows a FAIL."""
+        content = self._content(
+            self._risk_row(rid="RISK-001", severity="高",
+                           deadline="2020-01-01", refs="FIX-8000"),
+            self._risk_row(rid="RISK-002", refs="FIX-9001"))
+        plan = self._gov({"archive/index.md": self._INDEX_WITH_9001})
+        base = vw.check_risk_mitigation_closure(
+            risk_content=content, task_status_map=self.OPEN)
+        self.assertEqual(len(base["violations"]), 1)
+        self.assertEqual(len(base["warnings"]), 1)
+        with patch.object(vw, "SAMPLE_PATH", plan):
+            wrapped = vw.check_risk_mitigation_closure_with_archive(
+                risk_content=content, task_status_map=self.OPEN)
+        self.assertEqual(wrapped["verdict"], "FAIL")
+        self.assertEqual(wrapped["violations"], base["violations"])
+        self.assertEqual(wrapped["warnings"], [])
+        self.assertEqual([e["task_id"] for e in wrapped["archived_exemptions"]],
+                         ["FIX-9001"])
+
+    # ── resolver precision guards ──────────────────────────────────────
+
+    def test_index_source_wins_deterministically(self):
+        """id in BOTH index.md and tasks/*.md → index.md is the disclosed
+        source (fixed corpus order: index, then tasks/decisions/evidence/
+        risks, each name-sorted)."""
+        plan = self._gov({
+            "archive/index.md": self._INDEX_WITH_9001,
+            "archive/tasks/a.md": "| FIX-9001 | dup | x |\n",
+        })
+        with patch.object(vw, "SAMPLE_PATH", plan):
+            r = vw.check_risk_mitigation_closure_with_archive(
+                risk_content=self._content(self._risk_row()),
+                task_status_map=self.DONE)
+        self.assertEqual(r["warnings"], [])
+        self.assertTrue(r["archived_exemptions"][0]["source"].endswith(
+            "archive/index.md"))
+
+    def test_word_boundary_no_prefix_false_positive(self):
+        """"REQ-0012" in the corpus must NOT resolve REQ-001
+        (word-boundary literal match)."""
+        plan = self._gov({"archive/index.md": "| REQ-0012 | x | y |\n"})
+        with patch.object(vw, "SAMPLE_PATH", plan):
+            r = vw.check_risk_mitigation_closure_with_archive(
+                risk_content=self._content(self._risk_row(refs="REQ-001")),
+                task_status_map=self.DONE)
+        self.assertEqual([w["rule"] for w in r["warnings"]], ["R3"])
+        self.assertEqual(r["archived_exemptions"], [])
+
+    def test_range_boundary_no_overreach(self):
+        """"PLAN-001~004" resolves PLAN-003 but NOT PLAN-005 (family
+        span is closed on both ends)."""
+        plan = self._gov({"archive/tasks/legacy-t.md": self._LEGACY_FAMILY})
+        with patch.object(vw, "SAMPLE_PATH", plan):
+            r = vw.check_risk_mitigation_closure_with_archive(
+                risk_content=self._content(
+                    self._risk_row(rid="RISK-001", refs="PLAN-005")),
+                task_status_map=self.DONE)
+        self.assertEqual([w["rule"] for w in r["warnings"]], ["R3"])
+        self.assertEqual(r["warnings"][0]["task_refs"], ["PLAN-005"])
+        self.assertEqual(r["archived_exemptions"], [])
+
+    # ── live-mode integration + panel wiring ───────────────────────────
+
+    def test_live_mode_full_pipeline(self):
+        """No-args call: plan-tracker fixture → default map; risk-log via
+        patched RISK_PATH; corpus via patched SAMPLE_PATH parent."""
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        gov = Path(td.name) / ".governance"
+        gov.mkdir(parents=True)
+        (gov / "plan-tracker.md").write_text(
+            "### 优先级一览\n"
+            "| 优先级 | ID | 任务 | 依赖 | 目标版本 | 状态 |\n"
+            "| --- | --- | --- | --- | --- | --- |\n"
+            "| P0 | FIX-8000 | 任务 | — | 0.79.0 | ✅ 完成 (2026-09-01) |\n",
+            encoding="utf-8")
+        (gov / "risk-log.md").write_text(
+            self._content(self._risk_row()), encoding="utf-8")
+        (gov / "archive").mkdir()
+        (gov / "archive" / "index.md").write_text(
+            self._INDEX_WITH_9001, encoding="utf-8")
+        with patch.object(vw, "SAMPLE_PATH", gov / "plan-tracker.md"), \
+             patch.object(vw, "RISK_PATH", gov / "risk-log.md"):
+            r = vw.check_risk_mitigation_closure_with_archive()
+        self.assertEqual(r["warnings"], [])
+        self.assertEqual(r["verdict"], "PASS")
+        self.assertEqual(r["stats"]["pass"], 1)
+        self.assertEqual([e["task_id"] for e in r["archived_exemptions"]],
+                         ["FIX-9001"])
+
+    def test_check36_panel_wiring_disclosure_visible(self):
+        """Source-shape: the Check 36 block calls the archive-aware
+        wrapper and prints the 'resolved via archive:' disclosure."""
+        src = (_INFRA_DIR / "verify_workflow.py").read_text(encoding="utf-8")
+        panel = "┌─ Check 36: Risk Mitigation Closure (FIX-265)"
+        self.assertIn(panel, src)
+        self.assertIn("check_risk_mitigation_closure_with_archive()", src)
+        self.assertIn("resolved via archive:", src)
+        call = "cr36 = check_risk_mitigation_closure_with_archive()"
+        self.assertGreater(src.index(call), src.index(panel))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -13,10 +13,25 @@ guard 失败 → ``change-triage`` 退出码 2（fail-closed：结构性破坏�
 Scope 契约（write guard, not repo guard）：只判定本写入涉及的产物——
 治理目录中既有结构问题不阻塞入账（fail-safe 到写入者自己的产物）。
 
+FEAT-011 G3 扩展 — Coordinator 直写路径写时结构守卫
+（``governance-write-guard`` 子命令）：change-triage 机器写入有 G3 守卫，
+但 Coordinator 直写 ``.governance/``（plan-tracker 任务行 / evidence-log
+追加行 / agent-locks / execution-packets）无写时校验——结构缺陷静默入库
+（活体：AUDIT-149 §4 M1 四行 FIX-222/223/224/279 长期被判活跃；agent-locks
+14 条 Check 26 schema 违规；execution-packets 字段违规两起）。扩展契约：
+（1）守卫 = 检查器——零 ``.governance`` 写入、零自动修复（remediation 指明
+    行号与期望形状，修复动作留给写入者）；
+（2）复用既有判定权威源（``_governance_table_cells`` / Check 26
+    ``check_agent_locks_format`` / Check 18c ``_validate_execution_packet`` /
+    DEC-168 行族列数契约 / ``change_triage._TASK_ID_RE``），不自建第二套
+    形状定义；
+（3）既有 change-triage 守卫行为零变化（扩展而非重写）。
+
 Run:
     python -m pytest skills/software-project-governance/infra/tests/test_triage_write_guard.py -v
 """
 
+import io
 import json
 import sys
 import tempfile
@@ -383,6 +398,350 @@ class CmdChangeTriageWiringTests(unittest.TestCase):
             with self.assertRaises(SystemExit) as ctx:
                 vw.cmd_change_triage(self._args())
             self.assertEqual(ctx.exception.code, 2)
+
+
+# ─── FEAT-011 G3 扩展 — governance-write-guard（Coordinator 直写路径） ────
+
+_GUARD_TRACKER_CLEAN = """\
+# Plan Tracker
+
+## 当前活跃事项
+
+| 优先级 | 任务ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |
+|--------|--------|------|------|---------|---------|------|
+| **P1** | FIX-301 | clean seven-column row | — | 0.79.0 | path | ⏳ 待执行 (2026-09-09) |
+| **P2** | REL-070 | legit status-continuation row | — | 0.77.0 | path | ⏳ 版本规划中 (2026-08-24) | → ✅ 已发布 (2026-08-25)——live REL-070 shape |
+| **P1** | FIX-278 | legit eight-column row | — | 0.78.0 | path | 🔄 已 lock 待派发 (2026-08-25) | → ✅ 完成 (2026-08-26)——live FIX-278 shape |
+"""
+
+_GUARD_TRACKER_M1 = """\
+# Plan Tracker
+
+## 当前活跃事项
+
+| 优先级 | 任务ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |
+|--------|--------|------|------|---------|---------|------|
+| **P0** | **P0** | FIX-222 | AUDIT-139✅ | 0.71.0 | closure | ✅ 完成 (2026-07-26) | |
+| **P1** | FIX-279 | G3 write-guard 列数契约修正 | TRIAGE-FIX-279 | 0.78.0 | closure | ✅ 完成 (2026-08-26)——narrative | |
+"""
+
+_KNOWN_M1_IDS = {"FIX-222", "FIX-223", "FIX-224", "FIX-279"}
+
+
+def _machine_evidence_fixture():
+    """TRIAGE/RECO 机器行族（各 10 列，DEC-168 行族标准）+ EVD 手工混合行。
+
+    EVD 9/10/11 列混合是 documented legacy（FIX-279 测试组同型）——guard
+    对手工行族不做列数强制（既有 Check 14 WARN 域），仅校验机器行族。
+    """
+    triage = _triage_row("TRIAGE-FIX-278", 10)
+    triage2 = _triage_row("TRIAGE-REL-071", 10)
+    reco_cells = ["RECO-FIX-262", "FIX-262", "推荐记录", "描述", "事实依据：x",
+                  "artifact", "actor", "2026-08-26", "G11", "PASS"]
+    reco = "| " + " | ".join(reco_cells) + " |\n"
+    return _evidence_row_9("EVD-800") + _evidence_row_10("EVD-801") + triage \
+        + triage2 + reco
+
+
+def _legal_locks():
+    return {
+        "active_tasks": {
+            "FEAT-011": {
+                "spawned_at": "2026-09-09T10:00:00+00:00",
+                "coordinator_session": "session-x",
+                "target_files": ["skills/software-project-governance/infra/verify_workflow.py"],
+            },
+        },
+        "file_locks": {
+            "skills/software-project-governance/infra/verify_workflow.py": {
+                "locked_by": "FEAT-011",
+                "locked_at": "2026-09-09T10:00:00+00:00",
+                "ttl_seconds": 600,
+                "ttl_reason": "serial file lock",
+            },
+        },
+    }
+
+
+def _legal_packet(task_id="FIX-301"):
+    return {
+        "task_id": task_id,
+        "goal": "实现 X",
+        "allowed_change_scope": ["skills/software-project-governance/infra/x.py"],
+        "required_evidence": ["事实依据 + 结构化事实：测试输出"],
+        "next_commands": ["python -m pytest"],
+        "done_definition": ["Code Review APPROVED"],
+    }
+
+
+class GovernanceWriteGuardPlanTrackerTests(unittest.TestCase):
+    """FEAT-011 面 1：plan-tracker 任务表行形状（AUDIT-149 §4 M1 签名）。
+
+    M1 缺陷 = ragged 行两签名（AUDIT-149 L97-106 活体）：
+    (a) 重复优先级列——任务 ID 前出现 >1 个优先级 token（`| **P0** | **P0** |`）；
+    (b) 行尾空单元格——末单元格为空（`… | ✅ 完成 | |` → cells[-1]="" →
+        状态列被判空 → 长期误判活跃）。
+    列形权威 = 既有解析器（``_governance_table_cells`` + ``_normalize_priority``
+    + 任务 ID cell 识别），不自建第二套形状定义（FIX-292 语义二源教训）。
+    """
+
+    def _issues(self, tracker_text):
+        with tempfile.TemporaryDirectory() as td:
+            tracker = Path(td) / "plan-tracker.md"
+            tracker.write_text(tracker_text, encoding="utf-8")
+            with mock.patch.object(vw, "SAMPLE_PATH", tracker), \
+                 mock.patch.object(vw, "GOVERNANCE_DIR", Path(td)):
+                result = vw.check_governance_write_shapes()
+        return result["plan_tracker"]["issues"]
+
+    def test_duplicate_priority_column_flagged_with_line_and_shape(self):
+        """M1-a（FIX-222/223/224 形状）：重复优先级列 → FAIL + 行号 + 期望列形。"""
+        issues = self._issues(_GUARD_TRACKER_M1)
+        dup = [i for i in issues
+               if i["type"] == "plan_tracker_duplicate_priority_cell"]
+        self.assertEqual(len(dup), 1, issues)
+        self.assertEqual(dup[0]["line"], 7)
+        self.assertEqual(dup[0]["task_id"], "FIX-222")
+        # 期望列形随 issue 携带（CLI 打印为「期望列形: …」——行号 + 期望形状）
+        self.assertIn("| 优先级 |", dup[0].get("expected", ""))
+        self.assertIn("状态", dup[0]["expected"])
+
+    def test_trailing_empty_status_cell_flagged_with_line_and_shape(self):
+        """M1-b（FIX-279 形状）：行尾空单元格 → FAIL + 行号 + 期望列形。"""
+        issues = self._issues(_GUARD_TRACKER_M1)
+        trail = [i for i in issues
+                 if i["type"] == "plan_tracker_trailing_empty_status"]
+        self.assertEqual(len(trail), 2, issues)
+        self.assertEqual({t["task_id"] for t in trail},
+                         {"FIX-222", "FIX-279"})
+        self.assertEqual(trail[0]["line"], 7)
+        self.assertEqual(trail[1]["line"], 8)
+
+    def test_clean_rows_and_legit_continuation_rows_pass(self):
+        """规范行 + 活体合法变形（REL-070 十列状态续写 / FIX-278 八列）→
+        零误报——「三例活体 0 误报」解除前置观察的依据不得出现新误报。"""
+        self.assertEqual(self._issues(_GUARD_TRACKER_CLEAN), [])
+
+    def test_live_plan_tracker_flags_only_known_m1_rows(self):
+        """活体金丝雀（真实 plan-tracker）：M1 签名命中集合 ⊆ 已知 M1 四行
+        （FIX-222/223/224/279——FIX-293 将修数据，本守卫只检不改）。"""
+        if not vw.SAMPLE_PATH.is_file():
+            self.skipTest("no live plan-tracker under the host governance dir")
+        result = vw.check_governance_write_shapes()
+        flagged = {i["task_id"] for i in result["plan_tracker"]["issues"]}
+        self.assertTrue(flagged.issubset(_KNOWN_M1_IDS), flagged)
+        self.assertTrue(flagged, "live M1 four rows must be flagged (FEAT-011 "
+                                 "acceptance: audit-149 §4 M1 live evidence)")
+
+
+class GovernanceWriteGuardEvidenceLogTests(unittest.TestCase):
+    """FEAT-011 面 2：evidence-log 机器行族（TRIAGE/RECO）列数与 ID 列格式。
+
+    列数权威 = 行族自身首行（DEC-168 行族权威 / FIX-279 write-guard 列契约
+    的全文件扩展）；ID 格式权威 = ``change_triage`` 写入器契约
+    （``TRIAGE-{TASK_ID}``，TASK_ID 匹配 ``_TASK_ID_RE``）。
+    """
+
+    def _issues(self, evidence_text):
+        with tempfile.TemporaryDirectory() as td:
+            evidence = Path(td) / "evidence-log.md"
+            evidence.write_text(evidence_text, encoding="utf-8")
+            with mock.patch.object(vw, "SAMPLE_PATH", Path(td) / "none.md"), \
+                 mock.patch.object(vw, "GOVERNANCE_DIR", Path(td)):
+                result = vw.check_governance_write_shapes()
+        return result["evidence_log"]["issues"]
+
+    def test_machine_family_rows_pass(self):
+        """合法 TRIAGE/RECO 机器行（10 列 + 规范 ID）→ 0 issue。"""
+        self.assertEqual(self._issues(_machine_evidence_fixture()), [])
+
+    def test_triage_column_break_flagged(self):
+        """TRIAGE 行族标准 10 列 vs 9 列破坏行 → FAIL（行族列数契约）。"""
+        issues = self._issues(_machine_evidence_fixture()
+                              + _triage_row("TRIAGE-FIX-299", 9))
+        col = [i for i in issues
+               if i["type"] == "evidence_machine_col_mismatch"]
+        self.assertEqual(len(col), 1, issues)
+        self.assertEqual(col[0]["task_id"], "TRIAGE-FIX-299")
+
+    def test_triage_malformed_id_flagged(self):
+        """ID 列格式破坏（``TRIAGE-FIX29``——任务 ID 无连字符）→ FAIL。"""
+        row = "| TRIAGE-FIX29 | FIX-299 | 变更控制 | 描述 | 依据 | 产物 | " \
+              "change-triage | 2026-09-09 | G11 | TRIAGED |\n"
+        issues = self._issues(_machine_evidence_fixture() + row)
+        fmt = [i for i in issues if i["type"] == "evidence_machine_id_format"]
+        self.assertEqual(len(fmt), 1, issues)
+        self.assertIn("TRIAGE-FIX29", fmt[0]["detail"])
+
+    def test_legacy_evd_manual_mix_not_flagged(self):
+        """EVD 手工行族 9/10/11 列 documented 混合 → 不做列数强制（0 误报；
+        该域归 Check 14 evidence_col_mismatch WARN）。"""
+        text = (_evidence_row_9("EVD-800") + _evidence_row_10("EVD-801")
+                + _evidence_row_10("EVD-802", "FIX-100") .replace(
+                    "| EVD-802 |", "| EVD-802 | extra |", 1))
+        self.assertEqual(self._issues(text), [])
+
+
+class GovernanceWriteGuardLocksAndPacketsTests(unittest.TestCase):
+    """FEAT-011 面 3/4：agent-locks（Check 26 schema 复用）+ execution-packets
+    （Check 18c 字段表 ``EXECUTION_PACKET_REQUIRED_FIELDS`` 复用）。"""
+
+    def _result(self, gov, locks=None, packets=None):
+        gov.mkdir(parents=True, exist_ok=True)
+        tracker = gov / "plan-tracker.md"
+        tracker.write_text(_GUARD_TRACKER_CLEAN, encoding="utf-8")
+        evidence = gov / "evidence-log.md"
+        evidence.write_text(_machine_evidence_fixture(), encoding="utf-8")
+        if locks is not None:
+            (gov / "agent-locks.json").write_text(
+                json.dumps(locks), encoding="utf-8")
+        if packets is not None:
+            (gov / "execution-packets.json").write_text(
+                json.dumps({"packets": packets}), encoding="utf-8")
+        with mock.patch.object(vw, "SAMPLE_PATH", tracker), \
+             mock.patch.object(vw, "GOVERNANCE_DIR", gov):
+            return vw.check_governance_write_shapes()
+
+    def test_agent_locks_legal_passes(self):
+        """合法锁文件（Check 26 全字段）→ PASS。"""
+        with tempfile.TemporaryDirectory() as td:
+            result = self._result(Path(td), locks=_legal_locks(),
+                                  packets={"FIX-301": _legal_packet()})
+        self.assertEqual(result["agent_locks"]["issues"], [])
+        self.assertEqual(result["execution_packets"]["issues"], [])
+
+    def test_agent_locks_missing_spawned_at_flagged(self):
+        """active_tasks 缺 ``spawned_at``（本会话 14 条违规同型）→ FAIL
+        （复用 Check 26 check_agent_locks_format，不建第二套 schema）。"""
+        locks = _legal_locks()
+        del locks["active_tasks"]["FEAT-011"]["spawned_at"]
+        with tempfile.TemporaryDirectory() as td:
+            result = self._result(Path(td), locks=locks,
+                                  packets={"FIX-301": _legal_packet()})
+        self.assertTrue(result["agent_locks"]["issues"])
+        self.assertIn("spawned_at",
+                      " ".join(i["detail"] for i in
+                               result["agent_locks"]["issues"]))
+
+    def test_agent_locks_absent_skipped_not_failed(self):
+        """agent-locks.json 缺席（宿主未启用锁文件）→ SKIPPED 而非 FAIL
+        （R0 F-2：与面 1/2/4 的 ``is_file()`` 门控 SKIP 语义对称——
+        「产物缺席，非缺陷」；result 初始 ``"SKIPPED"`` 值不再不可达）。"""
+        with tempfile.TemporaryDirectory() as td:
+            result = self._result(Path(td), packets={"FIX-301": _legal_packet()})
+        self.assertEqual(result["agent_locks"]["status"], "SKIPPED")
+        self.assertEqual(result["agent_locks"]["issues"], [])
+
+    def test_execution_packet_missing_goal_flagged(self):
+        """packet 缺 ``goal`` 字段 → FAIL（EXECUTION_PACKET_REQUIRED_FIELDS）。"""
+        packet = _legal_packet()
+        del packet["goal"]
+        with tempfile.TemporaryDirectory() as td:
+            result = self._result(Path(td), locks=_legal_locks(),
+                                  packets={"FIX-301": packet})
+        details = " ".join(i["detail"] for i in
+                           result["execution_packets"]["issues"])
+        self.assertIn("goal", details)
+
+    def test_execution_packets_absent_skipped_not_failed(self):
+        """execution-packets.json 缺席（宿主未启用）→ SKIPPED 而非 FAIL。"""
+        with tempfile.TemporaryDirectory() as td:
+            result = self._result(Path(td), locks=_legal_locks())
+        self.assertEqual(result["execution_packets"]["status"], "SKIPPED")
+
+
+class ExecutionPacketNonDictEarlyReturnTests(unittest.TestCase):
+    """FEAT-011 R0 F-1 回归 — ``_validate_execution_packet`` 非 dict 早退。
+
+    R0 F-1（P1，review-FEAT-011-CODE-R0.md §4）：Check 18c 的
+    ``_validate_execution_packet`` 委托 ``_execution_packet_field_issues``
+    后丢失 HEAD 的非 dict 早退——非 dict 非 null 包（str/list/int 实证）到达
+    ``packet.get("task_id")`` 抛 ``AttributeError``，可经
+    ``check_execution_packets``（Check 18c）使 check-governance 整体崩溃。
+    HEAD 语义（``git show HEAD`` 实证）：早退返回 ``["packet must be object"]``。
+    """
+
+    def test_non_dict_packet_returns_head_semantics_without_crash(self):
+        """str/list/int 三型探针 → 无异常 + ``["packet must be object"]``
+        （HEAD 行为恒等）；Check 18c 对含畸形包的 execution-packets.json
+        不崩溃——结构化 FAIL entry 而非 traceback。"""
+        task = {"task_id": "FIX-301"}
+        for packet in ("not-a-dict", ["not", "a", "dict"], 42):
+            self.assertEqual(
+                vw._validate_execution_packet(task, packet),
+                ["packet must be object"], packet)
+        with tempfile.TemporaryDirectory() as td:
+            packets_path = Path(td) / "execution-packets.json"
+            packets_path.write_text(
+                json.dumps({"packets": {"FIX-301": "not-a-dict"}}),
+                encoding="utf-8")
+            tracker = Path(td) / "plan-tracker.md"
+            tracker.write_text(_GUARD_TRACKER_CLEAN, encoding="utf-8")
+            with mock.patch.object(vw, "SAMPLE_PATH", tracker):
+                result = vw.check_execution_packets(packets_path)
+        self.assertFalse(result["pass"])
+        self.assertEqual(
+            result["entries"],
+            [{"task_id": "FIX-301", "status": "FAIL",
+              "issues": ["packet must be object"]}])
+
+
+class GovernanceWriteGuardCmdAndSafetyTests(unittest.TestCase):
+    """CLI 接线（exit code）+ 非破坏性硬约束（守卫零写入）。"""
+
+    def _clean_gov(self, td):
+        gov = Path(td)
+        result = GovernanceWriteGuardLocksAndPacketsTests()._result(
+            gov, locks=_legal_locks(), packets={"FIX-301": _legal_packet()})
+        assert result["plan_tracker"]["issues"] == []
+        return gov
+
+    def test_cmd_exits_one_on_issues(self):
+        """任一面 FAIL → SystemExit 1（守卫语义：结构性缺陷不得静默）。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = Path(td)
+            gov.mkdir(parents=True, exist_ok=True)
+            tracker = gov / "plan-tracker.md"
+            tracker.write_text(_GUARD_TRACKER_M1, encoding="utf-8")
+            (gov / "evidence-log.md").write_text(
+                _machine_evidence_fixture(), encoding="utf-8")
+            (gov / "agent-locks.json").write_text(
+                json.dumps(_legal_locks()), encoding="utf-8")
+            with mock.patch.object(vw, "SAMPLE_PATH", tracker), \
+                 mock.patch.object(vw, "GOVERNANCE_DIR", gov), \
+                 mock.patch("sys.stdout", new_callable=lambda: io.StringIO()):
+                with self.assertRaises(SystemExit) as ctx:
+                    vw.cmd_governance_write_guard(types.SimpleNamespace())
+            self.assertEqual(ctx.exception.code, 1)
+
+    def test_cmd_clean_exits_zero(self):
+        """全 PASS → 正常返回（无 SystemExit）。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = self._clean_gov(td)
+            tracker = gov / "plan-tracker.md"
+            with mock.patch.object(vw, "SAMPLE_PATH", tracker), \
+                 mock.patch.object(vw, "GOVERNANCE_DIR", gov), \
+                 mock.patch("sys.stdout", new_callable=lambda: io.StringIO()):
+                vw.cmd_governance_write_guard(types.SimpleNamespace())
+
+    def test_guard_writes_nothing(self):
+        """非破坏性硬门槛：守卫运行后 .governance 目标文件字节不变
+        （check-only——除 stdout 外零写入、零自动修复）。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = self._clean_gov(td)
+            before = {
+                p.name: p.read_bytes()
+                for p in gov.iterdir() if p.is_file()
+            }
+            tracker = gov / "plan-tracker.md"
+            with mock.patch.object(vw, "SAMPLE_PATH", tracker), \
+                 mock.patch.object(vw, "GOVERNANCE_DIR", gov):
+                vw.check_governance_write_shapes()
+            after = {
+                p.name: p.read_bytes()
+                for p in gov.iterdir() if p.is_file()
+            }
+            self.assertEqual(before, after)
 
 
 if __name__ == "__main__":

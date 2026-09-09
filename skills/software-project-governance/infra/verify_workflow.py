@@ -12119,6 +12119,13 @@ def _split_governance_table_row(line):
     return parts
 
 
+# Standalone task-ID table cell (e.g. ``FIX-222`` / ``**REL-070**``). Single
+# definition shared by parse_current_active_tasks and the FEAT-011
+# governance-write-guard task-row scanner — no second shape source (FIX-292
+# semantic dual-source lesson).
+_TASK_ID_CELL_RE = re.compile(r"^(?:\*\*)?[A-Z]+-\d+(?:\*\*)?$")
+
+
 def _governance_table_cells(line):
     cells = [p.strip() for p in _split_governance_table_row(line.strip())]
     if cells and cells[0] == "":
@@ -12202,7 +12209,7 @@ def parse_current_active_tasks():
             continue
         task_idx = next(
             (idx for idx, cell in enumerate(cells)
-             if re.match(r"^(?:\*\*)?[A-Z]+-\d+(?:\*\*)?$", cell.strip())),
+             if _TASK_ID_CELL_RE.match(cell.strip())),
             None,
         )
         if task_idx is None:
@@ -12691,7 +12698,14 @@ def _load_execution_packets(path=None):
     return packets, ""
 
 
-def _validate_execution_packet(task, packet):
+def _execution_packet_field_issues(packet):
+    """Structural field issues for one packet (shared validator — single
+    definition of the EXECUTION_PACKET_REQUIRED_FIELDS semantics).
+
+    Consumed by Check 18c (:func:`_validate_execution_packet`) and by the
+    FEAT-011 governance-write-guard structural face — no second field
+    semantics (FIX-292 dual-source lesson). Pure: no I/O.
+    """
     issues = []
     if not isinstance(packet, dict):
         return ["packet must be object"]
@@ -12706,6 +12720,13 @@ def _validate_execution_packet(task, packet):
             not value or not all(isinstance(item, str) and item.strip() for item in value)
         ):
             issues.append(f"{field} must be non-empty string array")
+    return issues
+
+
+def _validate_execution_packet(task, packet):
+    issues = _execution_packet_field_issues(packet)
+    if not isinstance(packet, dict):
+        return issues  # HEAD-identical early exit: ["packet must be object"]
     if packet.get("task_id") and packet.get("task_id") != task["task_id"]:
         issues.append("task_id does not match active task")
     allowed_text = " ".join(packet.get("allowed_change_scope", []))
@@ -21736,6 +21757,313 @@ def _triage_write_structure_guard(evidence_path, record_path, record_id=None):
     return issues
 
 
+# ── FEAT-011 / G3 extension: Coordinator direct-write path guard ──────────
+
+# Evidence-log machine-written row families (uniform column contract). The
+# TRIAGE family is the DEC-168 authority (10 cols incl. the files cell,
+# change_triage._evidence_row); RECO rows are machine-written by
+# task-priority-analysis --evidence-task (same writer discipline). Manual
+# families (EVD/REVIEW legacy 9/10/11-col mix) stay in Check 14's WARN domain.
+_EVIDENCE_MACHINE_ROW_FAMILIES = ("TRIAGE", "RECO")
+
+_PLAN_TRACKER_ROW_EXPECTED_SHAPE = (
+    "| 优先级 | 任务ID | 标题 | 依赖 | 目标版本 | 闭环路径 | 状态 |"
+    "（优先级恰一列且居于任务ID 之前；末列为状态列且必须非空；"
+    "行尾不得追加空单元格——AUDIT-149 §4 M1）")
+
+
+def _plan_tracker_task_row_issues(content):
+    """FEAT-011 face 1 — plan-tracker task-row shape issues (AUDIT-149 §4 M1).
+
+    Scans EVERY table row that carries a standalone task-ID cell (the same
+    detection :func:`parse_current_active_tasks` uses — M1 rows live in
+    completed-task sections too, e.g. plan-tracker L188-190) for the two
+    ragged-row signatures AUDIT-149 §4 M1 documented live:
+
+      - ``plan_tracker_duplicate_priority_cell``: more than one priority
+        token before the task-ID cell (live: ``| **P0** | **P0** | FIX-222 |``)
+        — shifts every task-relative column read by one;
+      - ``plan_tracker_trailing_empty_status``: empty LAST cell (live:
+        ``… | ✅ 完成 (…) | |``) — ``cells[-1]`` parses empty, the status
+        verdicts ACTIVE forever (67/117 health-noise contributor).
+
+    Shape authorities are reused, never redefined: cell splitting via
+    :func:`_governance_table_cells` (JSON-pipe/code-span aware), priority
+    tokens via :func:`_normalize_priority`, task-ID cells via
+    ``_TASK_ID_CELL_RE``. Legit variations stay untouched (single priority
+    column, non-empty trailing status / status-continuation cells — live
+    REL-070/FIX-278 shapes), so the three live examples behind the M-0 ②
+    pre-observation lift (plan-tracker L255/L257 annotations) take no new
+    false positives.
+
+    Pure: parses the passed text, performs no I/O. Returns issue dicts
+    ``{"type", "file", "line", "task_id", "detail", "expected"}``.
+    """
+    issues = []
+    for lineno, line in enumerate(content.split("\n"), 1):
+        stripped = line.strip()
+        if not stripped.startswith("|") or "---" in stripped:
+            continue
+        cells = _governance_table_cells(stripped)
+        if not cells:
+            continue
+        task_idx = next(
+            (idx for idx, cell in enumerate(cells)
+             if _TASK_ID_CELL_RE.match(cell.strip())),
+            None,
+        )
+        if task_idx is None:
+            continue
+        task_id = cells[task_idx].strip().strip("*")
+        prio_cells = [c for c in cells[:task_idx] if _normalize_priority(c)]
+        if len(prio_cells) > 1:
+            issues.append({
+                "type": "plan_tracker_duplicate_priority_cell",
+                "file": ".governance/plan-tracker.md",
+                "line": lineno,
+                "task_id": task_id,
+                "detail": "重复优先级列——任务 ID 前出现 {0} 个优先级"
+                          "单元格（{1}），任务相对列整体右移一列"
+                          .format(len(prio_cells), "、".join(prio_cells)),
+                "expected": _PLAN_TRACKER_ROW_EXPECTED_SHAPE,
+            })
+        if not cells[-1].strip():
+            issues.append({
+                "type": "plan_tracker_trailing_empty_status",
+                "file": ".governance/plan-tracker.md",
+                "line": lineno,
+                "task_id": task_id,
+                "detail": "行尾空单元格——末单元格为空，状态列被解析"
+                          "为空 → 判活跃（AUDIT-149 §4 M1；修复动作留给"
+                          "写入者，本守卫只检不改）",
+                "expected": _PLAN_TRACKER_ROW_EXPECTED_SHAPE,
+            })
+    return issues
+
+
+def _evidence_machine_row_issues(content):
+    """FEAT-011 face 2 — evidence-log machine-family row issues.
+
+    For each machine-written family (``_EVIDENCE_MACHINE_ROW_FAMILIES``):
+
+      - column count: every row MUST match the family's own standard — its
+        FIRST row (DEC-168 row-family authority; whole-file extension of the
+        FIX-279 write-guard column contract, same ``_split_markdown_table_row``
+        counting);
+      - ID format: the row id MUST be ``{FAMILY}-{TASK_ID}`` where TASK_ID
+        matches the writer's authoritative ``change_triage._TASK_ID_RE``
+        (single definition — reused, not re-stated).
+
+    Manual families (EVD/REVIEW legacy mixes) are deliberately NOT column-
+    enforced here — their heterogeneity is documented (FIX-279) and Check 14
+    already covers them at WARN. Pure: no I/O. Returns issue dicts like
+    face 1 (``task_id`` carries the row id).
+    """
+    from change_triage import _TASK_ID_RE
+    issues = []
+    family_standard = {}
+    lines = content.split("\n")
+    for lineno, line in enumerate(lines, 1):
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            continue
+        for family in _EVIDENCE_MACHINE_ROW_FAMILIES:
+            if not stripped.startswith("| " + family + "-"):
+                continue
+            cols = len(_split_markdown_table_row(stripped))
+            if family not in family_standard:
+                family_standard[family] = cols
+            elif cols != family_standard[family]:
+                issues.append({
+                    "type": "evidence_machine_col_mismatch",
+                    "file": ".governance/evidence-log.md",
+                    "line": lineno,
+                    "task_id": (stripped.split("|")[1].strip()
+                                if "|" in stripped else ""),
+                    "detail": "机器行族 {0} 列数 {1} ≠ 行族标准 {2}"
+                              "（DEC-168 行族权威——标准取行族首行；"
+                              "修复动作留给写入者）".format(
+                                  family, cols,
+                                  family_standard[family]),
+                    "expected": "{0} 行族标准 {1} 列（行族首行确立）".format(
+                        family, family_standard[family]),
+                })
+            row_id = stripped[2:stripped.find("|", 2)].strip()
+            suffix = row_id[len(family) + 1:] if row_id.startswith(
+                family + "-") else ""
+            if not _TASK_ID_RE.match(suffix):
+                issues.append({
+                    "type": "evidence_machine_id_format",
+                    "file": ".governance/evidence-log.md",
+                    "line": lineno,
+                    "task_id": row_id,
+                    "detail": "机器行 ID 格式破坏——{0!r} 不匹配 "
+                              "写入器契约 {1}-{{PREFIX-NNN}}（权威源 "
+                              "change_triage._TASK_ID_RE）".format(
+                                  row_id, family),
+                    "expected": "{0}-{1}".format(
+                        family, "PREFIX-NNN（如 {0}-FIX-241）".format(family)),
+                })
+            break
+    return issues
+
+
+def check_governance_write_shapes():
+    """FEAT-011 G3 extension — structural write guard over the Coordinator's
+    direct-write ``.governance`` artifacts.
+
+    FIX-278 G3 put a write-time guard on the change-triage CLI's machine
+    writes; the Coordinator's DIRECT writes (plan-tracker task rows,
+    evidence-log appends, agent-locks, execution-packets) had no write-time
+    structural check, so shape defects entered silently (live evidence:
+    AUDIT-149 §4 M1 four rows judged active for weeks; 14 Check 26
+    agent-locks schema violations; execution-packets field violations).
+    This guard extends the SAME G3 discipline to that path — one command
+    after a direct write:
+
+      1. plan-tracker task rows — AUDIT-149 §4 M1 ragged-row signatures
+         (:func:`_plan_tracker_task_row_issues`);
+      2. evidence-log machine families (TRIAGE/RECO) — DEC-168 row-family
+         column contract + writer ID format
+         (:func:`_evidence_machine_row_issues`);
+      3. agent-locks.json — Check 26 schema, reused wholesale via
+         :func:`check_agent_locks_format` (no second schema definition);
+      4. execution-packets.json — structural face only: JSON/root shape via
+         :func:`_load_execution_packets` + per-packet required fields via
+         the ``EXECUTION_PACKET_REQUIRED_FIELDS`` table
+         (:func:`_execution_packet_field_issues`). Semantic packet checks
+         (scope breadth, evidence wording) stay in Check 18c — a write
+         guard judges STRUCTURE, not task semantics.
+
+    Contract: CHECK-ONLY — reads the four artifacts, writes nothing under
+    ``.governance`` (no auto-remediation; issue messages carry line numbers
+    and the expected shape, the fix belongs to the writer). Absent files
+    SKIP their face (a host not using packets is not a breach); unreadable
+    files FAIL fail-closed. The change-triage write guard's behavior is
+    untouched (extension, not rewrite).
+
+    Returns a dict ``{plan_tracker, evidence_log, agent_locks,
+    execution_packets}``, each ``{"status": PASS|FAIL|SKIPPED, "issues": …}``.
+    Never raises.
+    """
+    result = {
+        "plan_tracker": {"status": "SKIPPED", "issues": []},
+        "evidence_log": {"status": "SKIPPED", "issues": []},
+        "agent_locks": {"status": "SKIPPED", "issues": []},
+        "execution_packets": {"status": "SKIPPED", "issues": []},
+    }
+
+    # Face 1 — plan-tracker task rows.
+    if SAMPLE_PATH.is_file():
+        try:
+            content = SAMPLE_PATH.read_text(encoding="utf-8")
+        except (IOError, OSError) as exc:
+            result["plan_tracker"] = {
+                "status": "FAIL",
+                "issues": [{
+                    "type": "plan_tracker_unreadable",
+                    "file": ".governance/plan-tracker.md",
+                    "line": None,
+                    "task_id": "",
+                    "detail": "plan-tracker.md unreadable: {0}".format(exc),
+                    "expected": "",
+                }],
+            }
+        else:
+            issues = _plan_tracker_task_row_issues(content)
+            result["plan_tracker"] = {
+                "status": "FAIL" if issues else "PASS",
+                "issues": issues,
+            }
+
+    # Face 2 — evidence-log machine families.
+    evidence_path = GOVERNANCE_DIR / "evidence-log.md"
+    if evidence_path.is_file():
+        try:
+            content = evidence_path.read_text(encoding="utf-8")
+        except (IOError, OSError) as exc:
+            result["evidence_log"] = {
+                "status": "FAIL",
+                "issues": [{
+                    "type": "evidence_log_unreadable",
+                    "file": ".governance/evidence-log.md",
+                    "line": None,
+                    "task_id": "",
+                    "detail": "evidence-log.md unreadable: {0}".format(exc),
+                    "expected": "",
+                }],
+            }
+        else:
+            issues = _evidence_machine_row_issues(content)
+            result["evidence_log"] = {
+                "status": "FAIL" if issues else "PASS",
+                "issues": issues,
+            }
+
+    # Face 3 — agent-locks schema (Check 26, reused wholesale).
+    locks_path = GOVERNANCE_DIR / "agent-locks.json"
+    if locks_path.is_file():
+        locks_issues = check_agent_locks_format()
+        result["agent_locks"] = {
+            "status": "FAIL" if locks_issues else "PASS",
+            "issues": [
+                {
+                    "type": "agent_locks_{0}".format(issue.get("type", "issue")),
+                    "file": ".governance/agent-locks.json",
+                    "line": None,
+                    "task_id": "",
+                    "detail": str(issue.get("detail", "")),
+                    "expected": "Check 26 schema（active_tasks 条目: "
+                                "spawned_at/coordinator_session/target_files；"
+                                "file_locks 条目: locked_by/locked_at/"
+                                "ttl_seconds/ttl_reason）",
+                }
+                for issue in locks_issues
+            ],
+        }
+
+    # Face 4 — execution-packets structure (Check 18c field table).
+    packet_path = GOVERNANCE_DIR / "execution-packets.json"
+    if packet_path.is_file():
+        packets, load_error = _load_execution_packets(packet_path)
+        if load_error:
+            result["execution_packets"] = {
+                "status": "FAIL",
+                "issues": [{
+                    "type": "execution_packets_structure",
+                    "file": ".governance/execution-packets.json",
+                    "line": None,
+                    "task_id": "",
+                    "detail": "execution-packets.json 结构错误: {0}".format(
+                        load_error),
+                    "expected": "JSON object（可选 packets 键 → task_id → "
+                                "packet object）",
+                }],
+            }
+        else:
+            issues = []
+            for task_id, packet in packets.items():
+                for field_issue in _execution_packet_field_issues(packet):
+                    issues.append({
+                        "type": "execution_packets_field",
+                        "file": ".governance/execution-packets.json",
+                        "line": None,
+                        "task_id": task_id,
+                        "detail": "packet {0}: {1}".format(
+                            task_id, field_issue),
+                        "expected": "EXECUTION_PACKET_REQUIRED_FIELDS 六字段"
+                                    "（task_id/goal/allowed_change_scope/"
+                                    "required_evidence/next_commands/"
+                                    "done_definition）",
+                    })
+            result["execution_packets"] = {
+                "status": "FAIL" if issues else "PASS",
+                "issues": issues,
+            }
+
+    return result
+
+
 def cmd_change_triage(args):
     """Thin entry — change-triage CLI (FIX-237.4 / ADR-017 §4.4).
 
@@ -21822,6 +22150,67 @@ def cmd_change_triage(args):
               "可能为旧行（列数漂移）——写入行符合当前格式时先核对标准行本身"
               .format(summary.get("task_id", "?")), file=sys.stderr)
         sys.exit(2)
+
+
+def cmd_governance_write_guard(_args):
+    """Thin entry — governance-write-guard CLI (FEAT-011 / G3 extension).
+
+    One command after a Coordinator direct write to ``.governance/`` gives
+    the same G3 structural validation the change-triage CLI has at write
+    time: plan-tracker task-row shape (AUDIT-149 §4 M1 signatures),
+    evidence-log machine-family columns + ID format (DEC-168), agent-locks
+    schema (Check 26), execution-packets structure (Check 18c field table).
+    All logic lives in :func:`check_governance_write_shapes`; this entry is
+    argparse glue + printing (RISK-039 thin-entry discipline).
+
+    Check-only contract: the guard writes NOTHING under ``.governance`` —
+    remediation messages name the line and the expected shape, the fix
+    belongs to the writer. Exit 0 = all checked faces PASS; exit 1 = at
+    least one FAIL (a structural breach must not pass silently — the same
+    fail-closed posture as the change-triage write guard); SKIPPED faces
+    (artifact absent) never fail.
+    """
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    result = check_governance_write_shapes()
+    faces = (
+        ("plan_tracker",
+         "plan-tracker 任务表行（M1 签名：重复优先级列/行尾空单元格）"),
+        ("evidence_log",
+         "evidence-log 机器行族 TRIAGE/RECO（DEC-168 行族列数 + ID 格式）"),
+        ("agent_locks", "agent-locks.json schema（Check 26）"),
+        ("execution_packets", "execution-packets.json 结构（Check 18c 字段表）"),
+    )
+    print()
+    print("=== Governance Write Guard (G3 扩展 — FEAT-011, Coordinator 直写路径) ===")
+    total = 0
+    failed = False
+    for key, label in faces:
+        face = result[key]
+        count = len(face["issues"])
+        total += count
+        failed |= face["status"] == "FAIL"
+        print("  [{0}] {1} — {2} issue(s)".format(
+            face["status"], label, count))
+        for issue in face["issues"]:
+            where = ""
+            if issue.get("line"):
+                where = "L{0} ".format(issue["line"])
+            if issue.get("task_id"):
+                where += "{0} ".format(issue["task_id"])
+            print("    - {0}: {1}".format(where.strip(), issue["detail"]))
+            if issue.get("expected"):
+                print("      期望列形: {0}".format(issue["expected"]))
+    print()
+    if failed:
+        print("Result: FAIL — {0} issue(s)。守卫只检不改（零 .governance 写入、"
+              "零自动修复）——按上方行号与期望列形修复后由写入者复跑本命令"
+              .format(total))
+        sys.exit(1)
+    print("Result: PASS — 0 issue(s)（SKIPPED = 产物缺席，非缺陷）。"
+          "守卫只检不改（零 .governance 写入）。")
 
 
 def cmd_check_duplicate_code(args):
@@ -23324,6 +23713,16 @@ def main(argv=None):
                              "R2 fifth step: undeclared detectable side "
                              "effects record a WARN issue")
 
+    # governance-write-guard (FEAT-011 / G3 extension — structural write
+    # guard over the Coordinator's DIRECT .governance writes; check-only)
+    subparsers.add_parser(
+        "governance-write-guard",
+        help="Check .governance structural integrity after a Coordinator "
+             "direct write (plan-tracker task rows / evidence-log machine "
+             "rows / agent-locks / execution-packets — FEAT-011 G3 "
+             "extension; check-only, zero writes)",
+    )
+
     args = parser.parse_args(parser_argv)
     if args.project_root and explicit_project_root is None:
         explicit_project_root = args.project_root
@@ -23411,6 +23810,7 @@ def main(argv=None):
         "review-record": cmd_review_record,
         "next-candidates": cmd_next_candidates,
         "change-triage": cmd_change_triage,
+        "governance-write-guard": cmd_governance_write_guard,
     }
 
     cmd = args.command or "verify"

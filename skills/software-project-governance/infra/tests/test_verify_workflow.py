@@ -7172,6 +7172,371 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
         self.assertTrue(all(timeout is None for _, timeout in seen))
 
 
+class Feat016DshUpgradeRegressionReleaseGateTests(unittest.TestCase):
+    """FEAT-016 / RISK-049 ③: the isolated dsh upgrade re-verification
+    command set (reusing the FEAT-015 preset smoke) is a release-gate
+    component — actually run and blocking under enabled execution gates in
+    candidate mode, and explicitly disclosed as skipped (WARN semantics)
+    on the --skip-execution-gates and BR-4 released-history paths."""
+
+    REGRESSION_LABEL = "dsh preset-session smoke (isolated upgrade regression)"
+
+    def _release_patches(self):
+        return [
+            patch.object(vw, "check_version_consistency", return_value=[]),
+            patch.object(vw, "check_release_readiness_fact_source", return_value=[]),
+            patch.object(vw, "check_hot_fact_source_consistency", return_value=[]),
+            patch.object(vw, "check_runtime_readiness_matrix", return_value=[]),
+            patch.object(vw, "check_first_session_measurement", return_value=[]),
+            patch.object(vw, "check_governance_pack_status", return_value=[]),
+            patch.object(vw, "check_agent_adapter_contract", return_value=[]),
+            patch.object(vw, "check_projection_sync", return_value={
+                "pass": True, "issues": [], "mirrors_checked": 3,
+                "mirrors_discovered": 3, "mirrors_skipped_untracked": 0,
+                "source_version": "0.78.1",
+            }),
+            patch.object(vw, "check_cross_references", return_value={
+                "dangling": [], "deprecated": [], "cycles": [],
+                "total_files_scanned": 1, "total_refs": 0,
+            }),
+            patch.object(vw, "check_archive_integrity", return_value={
+                "pass": True, "issues": [], "hot_tasks": 0,
+                "total_archived_tasks": 0, "index_entries": 0,
+                "total_expected": 0, "pending_archive_tasks": 0,
+            }),
+            patch.object(vw, "check_release_docs_coverage", return_value=[]),
+        ]
+
+    @staticmethod
+    def _apply(patches):
+        stack = ExitStack()
+        for patch_item in patches:
+            stack.enter_context(patch_item)
+        return stack
+
+    @staticmethod
+    def _ok_execution_gate_runner(label, command, timeout=None):
+        return {"label": label, "pass": True, "exit_code": 0, "issue": None,
+                "command": " ".join(str(part) for part in command)}
+
+    def _fake_regression(self, passed=True):
+        issue = None
+        exit_code = 0
+        reason = ("isolated preset-session smoke PASSED "
+                  "(real ~/.dsh untouched)")
+        if not passed:
+            exit_code = 1
+            reason = "smoke exit 1: [FAIL] preset catalog missing"
+            issue = f"{self.REGRESSION_LABEL}: {reason}"
+        return {
+            "results": [{
+                "label": self.REGRESSION_LABEL,
+                "pass": passed,
+                "exit_code": exit_code,
+                "issue": issue,
+                "command": ("python adapters/dsh/launch.py --smoke "
+                            "(temp DSH_HOME redirection)"),
+            }],
+            "issues": [issue] if issue else [],
+            "isolation": {
+                "temp_dsh_home": "Z:/does-not-exist/spg-dsh-smoke-fixture",
+                "real_home_writes": 0,
+                "mechanism": "env redirection to a temp DSH_HOME (M7.7 (a))",
+            },
+        }
+
+    @staticmethod
+    def _smoke(verdict="PASS"):
+        reason = ("isolated preset-session smoke PASSED (skill catalog + "
+                  "/governance gesture resolved; real ~/.dsh untouched)")
+        exit_code = 0
+        if verdict != "PASS":
+            reason = "smoke exit 1: [FAIL] fixture failure"
+            exit_code = 1
+        return {
+            "verdict": verdict,
+            "reason": reason,
+            "exit_code": exit_code,
+            "details": [reason],
+            "isolation": {
+                "temp_home": "Z:/does-not-exist/spg-dsh-smoke-fixture",
+                "real_home_writes": 0,
+            },
+        }
+
+    @staticmethod
+    def _clean_gate_sequence(mode="candidate"):
+        return {"verdict": "PASS", "reason": "", "violations": [],
+                "warnings": [],
+                "stats": {"lineage_mode": mode, "latest_tag": None,
+                          "prerelease_pending": 0}}
+
+    def _cli_patches(self, regression):
+        # run_release_execution_gates is faked because cmd_check_release
+        # wires the REAL subprocess runner (verify / check-governance /
+        # e2e / unit tests) when execution gates are enabled — minutes of
+        # real work that is out of scope for these wiring tests.
+        fake_gate_results = [
+            {"label": label, "pass": True, "exit_code": 0, "issue": None,
+             "command": f"fake {label}"}
+            for label in ("verify", "governance health", "e2e check",
+                          "unit tests")
+        ]
+        return self._release_patches() + [
+            patch.object(vw, "run_release_execution_gates",
+                         return_value=fake_gate_results),
+            patch.object(vw, "scan_loop_runtime_claims", return_value=None),
+            patch.object(
+                vw, "_loop_runtime_claim_gate_detail",
+                return_value={"pass": True, "issues": [], "boundary": ""}),
+            patch.object(vw, "run_dsh_upgrade_regression_gates",
+                         return_value=regression),
+        ]
+
+    @staticmethod
+    def _cli_args(**overrides):
+        base = {
+            "skip_execution_gates": False, "lineage_mode": None,
+            "version": None, "require_changelog": False,
+            "runtime_adapters": False, "release_commit": None,
+            "lineage_remote": "origin",
+        }
+        base.update(overrides)
+        return SimpleNamespace(**base)
+
+    @staticmethod
+    def _run_cli(args):
+        out = io.StringIO()
+        exit_code = None
+        with redirect_stdout(out):
+            try:
+                vw.cmd_check_release(args)
+            except SystemExit as exc:
+                exit_code = exc.code
+        return out.getvalue(), exit_code
+
+    # ── runner unit: reuse + timeout + fail normalization ──
+
+    def test_FEAT_016_runner_reuses_feat015_smoke_with_release_gate_timeout(self):
+        seen = {}
+
+        def smoke(timeout=None, root=None):
+            seen["timeout"] = timeout
+            return self._smoke(verdict="PASS")
+
+        with patch.dict(os.environ,
+                        {"SPG_RELEASE_GATE_TIMEOUT": "300"}, clear=False):
+            regression = vw.run_dsh_upgrade_regression_gates(smoke_runner=smoke)
+        self.assertEqual(300, seen["timeout"])
+        gate = regression["results"][0]
+        self.assertTrue(gate["pass"])
+        self.assertEqual(0, gate["exit_code"])
+        self.assertIsNone(gate["issue"])
+        self.assertIn("dsh", gate["label"].lower())
+        self.assertEqual([], regression["issues"])
+        self.assertEqual(0, regression["isolation"]["real_home_writes"])
+
+    def test_FEAT_016_runner_defaults_to_release_gate_timeout_default(self):
+        seen = {}
+
+        def smoke(timeout=None, root=None):
+            seen["timeout"] = timeout
+            return self._smoke(verdict="PASS")
+
+        env = {k: v for k, v in os.environ.items()
+               if k != "SPG_RELEASE_GATE_TIMEOUT"}
+        with patch.dict(os.environ, env, clear=True):
+            vw.run_dsh_upgrade_regression_gates(smoke_runner=smoke)
+        self.assertEqual(180, seen["timeout"])
+
+    def test_FEAT_016_runner_normalizes_smoke_failure_into_blocking_issue(self):
+        regression = vw.run_dsh_upgrade_regression_gates(
+            smoke_runner=lambda timeout=None, root=None:
+                self._smoke(verdict="FAIL"))
+        gate = regression["results"][0]
+        self.assertFalse(gate["pass"])
+        self.assertEqual(1, gate["exit_code"])
+        self.assertEqual(1, len(regression["issues"]))
+        self.assertIn("[FAIL]", regression["issues"][0])
+
+    # ── engine: run + block + skip disclosure ──
+
+    def test_FEAT_016_release_readiness_runs_regression_when_execution_gates_enabled(self):
+        calls = []
+
+        def regression_runner():
+            calls.append("regression")
+            return self._fake_regression(passed=True)
+
+        stack = self._apply(self._release_patches())
+        with stack:
+            result = vw.check_release_readiness(
+                run_execution_gates=True,
+                execution_gate_runner=self._ok_execution_gate_runner,
+                dsh_upgrade_regression_runner=regression_runner,
+            )
+        self.assertEqual(["regression"], calls)
+        detail = result["details"]["dsh_upgrade_regression"]
+        self.assertFalse(detail["skipped"])
+        self.assertTrue(detail["required"])
+        self.assertTrue(detail["pass"])
+        self.assertEqual(1, len(detail["results"]))
+        self.assertEqual(self.REGRESSION_LABEL, detail["results"][0]["label"])
+        self.assertTrue(result["pass"])
+
+    def test_FEAT_016_release_readiness_default_runner_is_the_regression_gate(self):
+        with patch.object(
+                vw, "run_dsh_upgrade_regression_gates",
+                return_value=self._fake_regression(passed=True)) as default_runner:
+            stack = self._apply(self._release_patches())
+            with stack:
+                result = vw.check_release_readiness(
+                    run_execution_gates=True,
+                    execution_gate_runner=self._ok_execution_gate_runner,
+                )
+        default_runner.assert_called_once_with()
+        self.assertTrue(result["details"]["dsh_upgrade_regression"]["pass"])
+
+    def test_FEAT_016_release_readiness_blocks_when_regression_fails(self):
+        stack = self._apply(self._release_patches())
+        with stack:
+            result = vw.check_release_readiness(
+                run_execution_gates=True,
+                execution_gate_runner=self._ok_execution_gate_runner,
+                dsh_upgrade_regression_runner=lambda:
+                    self._fake_regression(passed=False),
+            )
+        self.assertFalse(result["pass"])
+        self.assertTrue(any(issue.startswith("dsh upgrade regression:")
+                            for issue in result["issues"]))
+        detail = result["details"]["dsh_upgrade_regression"]
+        self.assertFalse(detail["pass"])
+        self.assertTrue(detail["required"])
+        self.assertFalse(detail["skipped"])
+
+    def test_FEAT_016_skip_execution_gates_discloses_skip_without_new_fail(self):
+        with patch.object(vw, "run_dsh_upgrade_regression_gates") as default_runner:
+            stack = self._apply(self._release_patches())
+            with stack:
+                result = vw.check_release_readiness(run_execution_gates=False)
+        default_runner.assert_not_called()
+        detail = result["details"]["dsh_upgrade_regression"]
+        self.assertTrue(detail["skipped"])
+        self.assertTrue(detail["pass"], "WARN semantics — skip must not FAIL")
+        self.assertFalse(detail["required"])
+        self.assertIn("--skip-execution-gates", detail["skip_reason"])
+        self.assertFalse(any("dsh upgrade regression" in issue
+                             for issue in result["issues"]))
+        self.assertTrue(result["pass"], "skip path must not create a new FAIL")
+
+    def test_FEAT_016_br4_released_history_mode_discloses_skip_without_new_fail(self):
+        with patch.object(
+                vw, "check_gate_sequence_for_release",
+                return_value=self._clean_gate_sequence(mode="released")) as seq_mock, \
+             patch.object(vw, "run_dsh_upgrade_regression_gates") as default_runner:
+            stack = self._apply(self._release_patches())
+            with stack:
+                result = vw.check_release_readiness(
+                    run_execution_gates=True,
+                    execution_gate_runner=self._ok_execution_gate_runner,
+                    lineage_mode="candidate",
+                    gate_sequence_lineage_mode="released",
+                )
+        seq_mock.assert_called_once_with(lineage_mode="released")
+        default_runner.assert_not_called()
+        detail = result["details"]["dsh_upgrade_regression"]
+        self.assertTrue(detail["skipped"])
+        self.assertTrue(detail["pass"],
+                        "WARN semantics — BR-4 history query must not FAIL")
+        self.assertFalse(detail["required"])
+        self.assertIn("BR-4", detail["skip_reason"])
+        self.assertTrue(result["pass"])
+
+    def test_FEAT_016_explicit_released_lineage_mode_skips_regression(self):
+        with patch.object(
+                vw, "check_release_lineage",
+                return_value={"pass": True, "issues": [], "boundary": ""}), \
+             patch.object(
+                vw, "check_gate_sequence_for_release",
+                return_value=self._clean_gate_sequence(mode="released")), \
+             patch.object(vw, "run_dsh_upgrade_regression_gates") as default_runner:
+            stack = self._apply(self._release_patches())
+            with stack:
+                result = vw.check_release_readiness(
+                    run_execution_gates=True,
+                    execution_gate_runner=self._ok_execution_gate_runner,
+                    lineage_mode="released",
+                    release_commit="deadbeef",
+                )
+        default_runner.assert_not_called()
+        detail = result["details"]["dsh_upgrade_regression"]
+        self.assertTrue(detail["skipped"])
+        self.assertIn("BR-4", detail["skip_reason"])
+        self.assertTrue(result["pass"])
+
+    # ── CLI: visible component + blocking + skip disclosure ──
+
+    def test_FEAT_016_cli_shows_component_and_result_line_when_gates_enabled(self):
+        stack = self._apply(self._cli_patches(self._fake_regression(passed=True)))
+        with stack:
+            text, _exit_code = self._run_cli(self._cli_args())
+        self.assertIn("[PASS] dsh upgrade regression", text)
+        self.assertIn(f"[PASS] {self.REGRESSION_LABEL} (exit=0)", text)
+        # The topline verdict may read FAILED due to the pre-existing
+        # FIX-199 claim-gate quirk (pass forced False — out of FEAT-016
+        # scope); the FEAT-016 contract proven here is the visible PASS
+        # component line, and no FAIL is attributable to this gate.
+        self.assertNotIn("[FAIL] dsh upgrade regression", text)
+
+    def test_FEAT_016_cli_regression_failure_blocks_with_exit_1(self):
+        stack = self._apply(self._cli_patches(self._fake_regression(passed=False)))
+        with stack:
+            text, exit_code = self._run_cli(self._cli_args())
+        self.assertEqual(1, exit_code)
+        self.assertIn("[FAIL] dsh upgrade regression", text)
+        self.assertIn(self.REGRESSION_LABEL, text)
+        self.assertIn("Result: FAILED", text)
+
+    def test_FEAT_016_cli_skip_execution_gates_prints_skip_disclosure(self):
+        with patch.object(
+                vw, "run_dsh_upgrade_regression_gates",
+                return_value=self._fake_regression(passed=True)) as default_runner:
+            patches = self._release_patches() + [
+                patch.object(vw, "run_release_execution_gates",
+                             return_value=[]),
+                patch.object(vw, "scan_loop_runtime_claims", return_value=None),
+                patch.object(
+                    vw, "_loop_runtime_claim_gate_detail",
+                    return_value={"pass": True, "issues": [],
+                                  "boundary": ""}),
+            ]
+            stack = self._apply(patches)
+            with stack:
+                text, _exit_code = self._run_cli(
+                    self._cli_args(skip_execution_gates=True))
+        default_runner.assert_not_called()
+        self.assertIn("[SKIP] dsh upgrade regression", text)
+        self.assertIn("--skip-execution-gates", text)
+        self.assertNotIn("[FAIL] dsh upgrade regression", text)
+        self.assertNotIn("[PASS] dsh upgrade regression", text)
+
+    # ── real run: isolation proof (temp DSH_HOME, zero real-home writes) ──
+
+    def test_FEAT_016_real_regression_run_is_temp_isolated_zero_real_home_writes(self):
+        regression = vw.run_dsh_upgrade_regression_gates()
+        gate = regression["results"][0]
+        self.assertTrue(gate["pass"], regression["issues"])
+        self.assertEqual(0, gate["exit_code"])
+        isolation = regression["isolation"]
+        self.assertEqual(
+            0, isolation["real_home_writes"],
+            "the launcher must fingerprint zero real-home writes")
+        self.assertTrue(isolation["temp_dsh_home"])
+        self.assertFalse(
+            Path(isolation["temp_dsh_home"]).exists(),
+            "the temp redirected DSH_HOME must be removed after the gate run")
+
+
 class ProjectionSyncTests(unittest.TestCase):
     """FIX-086: source, target fixture, native entries, and plugin versions stay synchronized."""
 

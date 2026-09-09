@@ -7016,6 +7016,66 @@ def check_dsh_preset_smoke(root=None, timeout=120):
     return result
 
 
+# ── FEAT-016 / RISK-049 ③: dsh upgrade regression as a release gate ──────────
+#
+# RISK-049 closure standard (3) (risk-log L49): the dsh upgrade regression
+# checklist (isolated re-verification command set, readme.md L380-440 — temp
+# DSH_HOME link:/file: re-checks, launch.py preset install, --smoke) becomes
+# a machine-enforced part of release readiness instead of a one-off manual
+# ritual. The command set REUSES the FEAT-015 isolated preset-session smoke
+# (check_dsh_preset_smoke): the launcher subprocess runs under a temp
+# redirected DSH_HOME (M7.7 (a)) and fingerprints the real ~/.dsh — a run
+# reporting real-home writes is refused, so this release gate inherits the
+# zero-real-home-write guarantee. Timeout honors the FIX-234 precedent
+# (SPG_RELEASE_GATE_TIMEOUT env override, 180s default).
+
+DSH_UPGRADE_REGRESSION_LABEL = "dsh preset-session smoke (isolated upgrade regression)"
+
+
+def run_dsh_upgrade_regression_gates(smoke_runner=None):
+    """FEAT-016 / RISK-049 ③: run the dsh upgrade regression command set.
+
+    Composition (minimal, per triage): the FEAT-015 isolated preset-session
+    smoke — preset install + skill-catalog load under a temp DSH_HOME. Each
+    result matches the release execution-gate result shape (label / pass /
+    exit_code / issue / command) so check_release_readiness renders it like
+    any other gate. ``smoke_runner`` is a test seam; production always uses
+    check_dsh_preset_smoke (reuse only — never a reimplementation).
+
+    Returns ``{"results": [...], "issues": [...], "isolation":
+    {"temp_dsh_home", "real_home_writes", "mechanism"}}``.
+    """
+    if smoke_runner is None:
+        smoke_runner = check_dsh_preset_smoke
+    timeout = _resolve_release_gate_timeout(
+        os.environ.get(_RELEASE_GATE_TIMEOUT_ENV, ""))
+    smoke = smoke_runner(timeout=timeout)
+    launcher = PLUGIN_ROOT / "adapters" / "dsh" / "launch.py"
+    passed = smoke["verdict"] == "PASS"
+    gate = {
+        "label": DSH_UPGRADE_REGRESSION_LABEL,
+        "pass": passed,
+        "exit_code": smoke["exit_code"],
+        "issue": None if passed else (
+            f"{DSH_UPGRADE_REGRESSION_LABEL}: {smoke['reason']}"),
+        "command": (
+            f"{sys.executable} {launcher.as_posix()} --smoke"
+            " (temp DSH_HOME redirection, real home zero-write)"),
+    }
+    isolation = {
+        "temp_dsh_home": smoke["isolation"].get("temp_home"),
+        "real_home_writes": smoke["isolation"].get("real_home_writes"),
+        "mechanism": (
+            "env redirection to a temp DSH_HOME (M7.7 (a)); the launcher "
+            "fingerprints the real home and the smoke refuses PASS on any "
+            "real-home write (FEAT-015 real-home-writes detection)"),
+    }
+    return {
+        "results": [gate],
+        "issues": [gate["issue"]] if gate["issue"] else [],
+        "isolation": isolation,
+    }
+
 
 def check_release_readiness(
     version=None,
@@ -7028,6 +7088,7 @@ def check_release_readiness(
     release_commit=None,
     lineage_remote="origin",
     gate_sequence_lineage_mode=None,
+    dsh_upgrade_regression_runner=None,
 ):
     """FIX-072: aggregate release gate scripts behind the stage-release check-release command."""
     issues = []
@@ -7184,6 +7245,52 @@ def check_release_readiness(
         "issues": execution_gate_issues,
         "required": run_execution_gates,
         "results": execution_gate_results,
+    }
+
+    # ── FEAT-016 / RISK-049 ③: dsh upgrade regression gate component ──
+    # The isolated dsh upgrade re-verification command set (reuses the
+    # FEAT-015 preset smoke: temp DSH_HOME redirection, real ~/.dsh
+    # zero-write, M7.7 (a)) actually runs whenever execution gates run for
+    # a CANDIDATE release and blocks the release on FAIL. Skip paths stay
+    # explicit (WARN disclosure — never a silent absence, never a new FAIL
+    # for history queries): --skip-execution-gates, and BR-4
+    # released-history checks (effective lineage or gate-sequence mode
+    # "released", DEC-153 ②) — a working-tree regression proves nothing
+    # about an already-published version.
+    dsh_regression_skipped_reason = None
+    dsh_regression_results = []
+    dsh_regression_issues = []
+    dsh_regression_isolation = None
+    if not run_execution_gates:
+        dsh_regression_skipped_reason = (
+            "execution gates skipped (--skip-execution-gates); the dsh "
+            "upgrade regression command set was not run — WARN disclosure, "
+            "not a release verdict")
+    elif lineage_mode == "released" or gate_seq_mode == "released":
+        dsh_regression_skipped_reason = (
+            "released-history check (BR-4 / DEC-153 ②); the dsh upgrade "
+            "regression targets the candidate working tree and is not run "
+            "for already-published version queries — WARN disclosure")
+    else:
+        dsh_regression = (dsh_upgrade_regression_runner
+                          or run_dsh_upgrade_regression_gates)()
+        dsh_regression_results = dsh_regression["results"]
+        dsh_regression_issues = dsh_regression["issues"]
+        dsh_regression_isolation = dsh_regression.get("isolation")
+        issues.extend(f"dsh upgrade regression: {issue}"
+                      for issue in dsh_regression_issues)
+    details["dsh_upgrade_regression"] = {
+        "pass": not dsh_regression_issues,
+        "skipped": dsh_regression_skipped_reason is not None,
+        "skip_reason": dsh_regression_skipped_reason,
+        "required": dsh_regression_skipped_reason is None,
+        "results": dsh_regression_results,
+        "issues": dsh_regression_issues,
+        "isolation": dsh_regression_isolation,
+        "boundary": (
+            "isolated temp-DSH_HOME preset install/load smoke; proves the "
+            "packaged preset session boots in a redirected home with zero "
+            "real-home writes — not a live marketplace upgrade"),
     }
 
     # ── Loop fuse block (FEAT-006 / ADR-014 §6.3 — the system-level block). ──
@@ -20470,6 +20577,14 @@ def cmd_check_release(args):
         print(f"  Gate-sequence lineage mode: {gate_sequence_lineage_mode} "
               f"(BR-4: already-published version check)")
     for label, detail in result["details"].items():
+        if detail.get("skipped"):
+            # FEAT-016 / RISK-049 ③: an intentionally not-run gate must be
+            # disclosed with its reason (WARN semantics) — never a silent
+            # absence, never a mis-FAIL of history queries
+            # (--skip-execution-gates / BR-4 released-history).
+            print(f"  [SKIP] {label.replace('_', ' ')} — "
+                  f"{detail.get('skip_reason')}")
+            continue
         status = "PASS" if detail["pass"] else "FAIL"
         print(f"  [{status}] {label.replace('_', ' ')}")
         if detail.get("boundary"):

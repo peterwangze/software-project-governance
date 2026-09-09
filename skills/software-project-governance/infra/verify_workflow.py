@@ -14156,6 +14156,7 @@ _PLUGIN_PRODUCT_CHECK_IDS = frozenset({
     "Check 28p",  # Duplicate Code
     "Check 28q",  # Technical Debt
     "Check 28r",  # Complexity
+    "Check 28t",  # README Claim→Evidence Levels（插件包本体 README）
     "Check 30b",  # Loop wiring call sites（插件 infra AST 扫描）
     "Check 31",   # Loop Runtime Claim Gate（插件树扫描 + identity attestation）
     "Check 33",   # Injection Contract（插件 persona/SKILL/AGENTS 锚点）
@@ -14210,6 +14211,7 @@ _PRODUCT_GATE_LABELS = {
     "Check 28p": "Duplicate Code (ArchGuard/REQ-101)",
     "Check 28q": "Technical Debt (ArchGuard/REQ-101)",
     "Check 28r": "Complexity (ArchGuard/REQ-101)",
+    "Check 28t": "README Claim→Evidence Levels (FEAT-014)",
     "Check 30b": "Loop wiring call sites",
     "Check 31": "Loop Runtime Claim Gate",
     "Check 33": "Injection Contract",
@@ -15429,6 +15431,40 @@ def _run_full_engine_checks(args):
             print(f"│    [{f['severity']}] {f.get('path','')} {b} bytes ({b/1024:.1f} KB)".rstrip())
         if (s["errors"] or s["warnings"]):
             print("│  (advisory — fatal_on_error=false; does not block release)")
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 28t. README Claim→Evidence Levels (FEAT-014 / RISK-049 ①) ──
+    # Advisory: adapter user-facing claims must carry evidence-level
+    # annotations (live-session / isolation / static — the machine-checkable
+    # claim→evidence mapping). fatal_on_error=false — does NOT increment
+    # all_issues (28s precedent); escalation to FAIL is the registered
+    # tightening path (RISK-049 closure review). Fact source = the plugin
+    # package's own README (ROOT) → PLUGIN_PRODUCT (FIX-270 / F-2).
+    if _product_gate_active(args):
+        print("\n┌─ Check 28t: README Claim→Evidence Levels (FEAT-014) ─┐")
+        rel28t = check_readme_claim_evidence_levels()
+        st28t = rel28t["stats"]
+        print(f"│  claims checked: {st28t['claims_checked']} "
+              f"(annotated {st28t['claims_annotated']}); markers: "
+              f"{st28t['markers_found']} (live-session "
+              f"{st28t['levels']['live-session']}, isolation "
+              f"{st28t['levels']['isolation']}, static "
+              f"{st28t['levels']['static']})")
+        print(f"│  Verdict: {rel28t['verdict']}")
+        if rel28t["warnings"]:
+            shown28t = rel28t["warnings"][:8]
+            print(f"│  [WARN] {len(rel28t['warnings'])} claim-evidence WARN(s)"
+                  f" (showing first {len(shown28t)}):")
+            for w in shown28t:
+                print(f"│    - [{w['rule']}] {w.get('claim_id') or '-'}: "
+                      f"{w['reason']}")
+            if len(rel28t["warnings"]) > 8:
+                print(f"│    ... and {len(rel28t['warnings']) - 8} more")
+            print("│  (advisory — fatal_on_error=false; does not block release)")
+        else:
+            print(f"│  [{rel28t['verdict']}] {rel28t['reason']}")
+    else:
+        _print_product_gate_skipped("Check 28t")
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 29. M5 Runtime Triggers (FIX-174 / DEC-094) ──
@@ -19070,6 +19106,146 @@ def check_complexity(root=None, schema=None):
         "enabled": True, "findings": findings,
         "summary": {"errors": errors, "warnings": warnings},
     }
+
+
+# ── FEAT-014 / RISK-049 ①: adapter claim→evidence level mapping ──────
+#
+# RISK-049 closure standard (1) (risk-log L49): user-facing adapter claims
+# ("安装后 /governance 可用") must carry a machine-checkable claim→evidence
+# level mapping. The defect class (RISK-049 ②): README claims exceeded the
+# actually-verified range with no machine constraint — the plugin's own
+# no-overclaim rule was not enforced on its adapter surface.
+#
+# Three evidence levels (aligned with the RISK-049 row + FIX-290 legacy
+# facts: 2026-07-08 real-session adapter verification, 2026-09-05 isolated
+# DSH_HOME re-verification on Windows, github:-form static reasoning):
+#   live-session — verified in a real user session (real host + version);
+#                  the annotation MUST cite an ISO verification date;
+#   isolation    — re-verified in an isolated environment (redirected home /
+#                  temp dir, zero real-home writes); MUST cite an ISO date;
+#   static       — static/inspection or reasoning only, no execution
+#                  evidence; the explicit label IS the disclosure
+#                  (dates optional — "未验证" is a legal static detail).
+#
+# Annotation marker (machine-checked): 〔<level>: <detail>〕
+EVIDENCE_LEVEL_MARKER_RE = re.compile(
+    r"〔(live-session|isolation|static)[:：]([^\〕]{0,300}?)〕")
+
+# Claim registry: the dsh user-availability claim surface (RISK-049 ② —
+# data, not heuristics; extend per adapter when new user-facing claims
+# land). A registry line MUST carry ≥1 valid evidence-level marker.
+ADAPTER_CLAIM_REGISTRY = (
+    ("dsh-session-projection",
+     re.compile(r"每个会话\*{0,2}中可用|load in every session of that profile"),
+     "dsh bundle session projection availability"),
+    ("dsh-preset-roster",
+     re.compile(r"直接出现在预设选择器|appears in the preset roster"),
+     "dsh shipped preset roster appearance"),
+    ("dsh-governance-gesture",
+     re.compile(r"即加载统一治理入口"),
+     "dsh /governance gesture entry load"),
+    ("dsh-install-forms-boundary",
+     re.compile(r"Both forms were re-verified|两种 plugin add 与 launch\.py 预设安装"),
+     "dsh install forms verification boundary"),
+)
+
+
+def check_readme_claim_evidence_levels(readme_path=None):
+    """FEAT-014 / RISK-049 ①: README adapter claim→evidence level check.
+
+    Two machine judgments over the plugin README (shipped in the package —
+    manifest.json L69 — so the annotated README travels to users):
+
+    1. UNANNOTATED — every line matching a registry claim pattern MUST
+       carry ≥1 valid evidence-level marker 〔level: detail〕 on the same
+       line (per-line granularity; the marker binds the claim to its
+       evidence level — the machine-checkable mapping).
+    2. INTEGRITY — every marker must name a registered level; live-session
+       and isolation details MUST contain an ISO date (their verification
+       event). static is the explicit no-execution-evidence label and does
+       not require a date.
+
+    Advisory WARN (Check 28t, 28s precedent — fatal_on_error=false): WARNs
+    do not increment check-governance all_issues; escalation to FAIL is the
+    registered tightening path (RISK-049 closure review).
+
+    Returns {"verdict": "PASS"|"WARN"|"no-verdict", "reason", "warnings",
+    "stats"} — never raises; a missing README is no-verdict.
+    """
+    path = Path(readme_path) if readme_path is not None else ROOT / "README.md"
+    result = {
+        "verdict": "no-verdict",
+        "reason": "",
+        "warnings": [],
+        "stats": {
+            "claims_checked": 0, "claims_annotated": 0,
+            "markers_found": 0, "markers_invalid": 0,
+            "levels": {"live-session": 0, "isolation": 0, "static": 0},
+        },
+    }
+    if not path.is_file():
+        result["reason"] = (
+            "README.md not found — Check 28t has nothing to judge")
+        return result
+    content = path.read_text(encoding="utf-8")
+    warnings = result["warnings"]
+    stats = result["stats"]
+
+    # 1. Marker integrity (every marker anywhere in the README).
+    for marker_match in EVIDENCE_LEVEL_MARKER_RE.finditer(content):
+        level, detail = marker_match.group(1), marker_match.group(2)
+        stats["markers_found"] += 1
+        stats["levels"][level] += 1
+        if level in ("live-session", "isolation") \
+                and not re.search(r"\d{4}-\d{2}-\d{2}", detail):
+            stats["markers_invalid"] += 1
+            warnings.append({
+                "rule": "INTEGRITY",
+                "claim_id": None,
+                "reason": "evidence-level marker 〔{0}: {1}〕 lacks the "
+                          "required ISO verification date ({0} claims MUST "
+                          "cite their verification date)".format(
+                              level, detail),
+            })
+
+    # 2. Registry claims must carry a marker on the claim line.
+    for lineno, line in enumerate(content.splitlines(), 1):
+        for claim_id, pattern, description in ADAPTER_CLAIM_REGISTRY:
+            if not pattern.search(line):
+                continue
+            stats["claims_checked"] += 1
+            if EVIDENCE_LEVEL_MARKER_RE.search(line):
+                stats["claims_annotated"] += 1
+            else:
+                warnings.append({
+                    "rule": "UNANNOTATED",
+                    "claim_id": claim_id,
+                    "reason": "README L{0}: adapter claim `{1}` ({2}) lacks "
+                              "an evidence-level marker "
+                              "〔live-session|isolation|static: …〕 — the "
+                              "RISK-049 ① claim→evidence mapping".format(
+                                  lineno, claim_id, description),
+                })
+
+    if warnings:
+        result["verdict"] = "WARN"
+        result["reason"] = (
+            "{0} README claim-evidence mapping WARN(s) — advisory "
+            "(RISK-049 ①; escalation path registered)".format(
+                len(warnings)))
+    elif stats["claims_checked"]:
+        result["verdict"] = "PASS"
+        result["reason"] = (
+            "{0} registry claim(s) all carry valid evidence-level "
+            "markers ({1} marker(s): live-session {2} / isolation {3} / "
+            "static {4})".format(
+                stats["claims_checked"], stats["markers_found"],
+                stats["levels"]["live-session"],
+                stats["levels"]["isolation"], stats["levels"]["static"]))
+    else:
+        result["reason"] = (
+            "no registry adapter claims found in README — nothing to judge")
+    return result
 
 
 def check_governance_data_size(root=None, schema=None):

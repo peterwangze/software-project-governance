@@ -12129,14 +12129,33 @@ def _governance_table_cells(line):
 
 
 def _is_incomplete_task_status(status):
-    if not status:
+    """Active-task test for plan/snapshot status cells (FIX-292, DEC-181).
+
+    Delegates to the W-7/BC-7 authoritative terminal-chain predicate
+    :func:`_status_is_completed_cell` (FIX-291) instead of maintaining a
+    second naive marker vocabulary — the authoritative predicate is
+    consumed as-is, never rewritten here. Effects (AUDIT-149 §3 域 1):
+
+    - a mixed transition chain whose trailing state is terminal
+      (「🔄 进行中 (…) → ✅ 完成 (…)」, live: FIX-253/254/255/266/
+      REL-069) is COMPLETED — the old 「进行中」 substring hit hid the
+      trailing terminal state (M2; the FIX-274 M2-shaped cell still
+      verdicts ACTIVE via the inherited 「未完成」 narrative guard);
+    - narrative English tokens (``p0_pending=0``, live: FIX-291) no
+      longer hit a ``pending`` substring blacklist (M3);
+    - conservative verdicts of the authoritative predicate are inherited
+      (reopened trailing-active chains stay ACTIVE; bare 「终止」 is not
+      in the W-7 terminal vocabulary → stays ACTIVE — fail-safe side);
+    - empty/missing status stays incomplete (fail-closed: completion
+      that cannot be proven = active, aligned with the execution-packet
+      ``assumption_record``; ragged-row M1 shapes therefore keep their
+      conservative ACTIVE verdict — the data-side write guard is
+      FEAT-011's domain).
+    """
+    text = str(status or "").strip()
+    if not text:
         return True
-    normalized = status.strip()
-    incomplete_markers = ("未完成", "未发布", "进行中", "待启动", "待处理", "pending", "in progress")
-    if any(marker in normalized for marker in incomplete_markers):
-        return True
-    completed_markers = ("已完成", "✅", "已关闭", "已发布", "已终止", "终止", "取消", "废弃")
-    return not any(marker in normalized for marker in completed_markers)
+    return not _status_is_completed_cell(text)
 
 
 # FIX-287③: subsection headings inside `## 当前活跃事项` that hold completed /

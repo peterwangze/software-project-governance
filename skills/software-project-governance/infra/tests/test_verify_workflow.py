@@ -17159,5 +17159,153 @@ class W7CheckGlyphAssertionTests(unittest.TestCase):
             "——后续 追加审计 进行中 (2026-09-01)"))
 
 
+class Fix292IncompleteTaskStatusPredicateTests(unittest.TestCase):
+    """FIX-292 (DEC-181 / AUDIT-149 N1): `_is_incomplete_task_status`
+    delegates to the W-7/BC-7 authoritative predicate
+    `_status_is_completed_cell` (FIX-291) instead of keeping a second
+    naive substring vocabulary.
+
+    红相锚定三类 live 误判机制（AUDIT-149 §3 域 1，plan-tracker 实况）：
+      M2 — 混合链状态格含「进行中」子串（FIX-253/254/255/266/274/
+           REL-069）：旧子串匹配无视链尾终态 → 误判活跃；
+      M3 — 叙事含英文 token `p0_pending=0`（FIX-291）：命中 `pending`
+           子串 → 误判活跃；
+      M1 — ragged 行形状使状态格为空（FIX-222/223/224/279）：保持
+           保守活跃——数据面写时看护属 FEAT-011 域，本谓词 MUST NOT
+           放宽空/缺失语义（fail-closed：无法证明完成即活跃）。
+    """
+
+    def test_m2_mixed_chain_with_active_substring_is_not_incomplete(self):
+        """M2 live 形状 FIX-253（plan-tracker L221）：链尾 ✅ 终态胜出。"""
+        self.assertFalse(vw._is_incomplete_task_status(
+            "🔄 进行中 (2026-08-21)——Architect 设计已派发（TRIAGE-FIX-253 "
+            "机器入账 2026-08-17；并行 FIX-254）→ **✅ 完成 (2026-08-21)**"
+            "——设计 433 行；commit d90c167 已推送"))
+
+    def test_m2_mixed_chain_terminal_yifabu_is_not_incomplete(self):
+        """M2 live 形状 REL-069（plan-tracker L245，已发布 0.76.0）。"""
+        self.assertFalse(vw._is_incomplete_task_status(
+            "🔄 进行中 (2026-08-23)——已派发 Release Agent 候选打包 "
+            "→ **✅ 已发布 (2026-08-23)**——tag v0.76.0 已推送"))
+
+    def test_m2_narrative_pending_word_fixed266_shape_is_not_incomplete(self):
+        """M2 变体 live 形状 FIX-266（plan-tracker L239）：叙事 G-s2
+        前置 pending（规则名，非状态）。"""
+        self.assertFalse(vw._is_incomplete_task_status(
+            "✅ 完成 (2026-08-23)——Check 37 实现；G-s2 前置 pending 保守 "
+            "FAIL；遗留 P2-3+P3×9 登记 0.76.x"))
+
+    def test_m3_english_pending_metric_token_is_not_incomplete(self):
+        """M3 live 形状 FIX-291（plan-tracker L276）：p0_pending=0 叙事。"""
+        self.assertFalse(vw._is_incomplete_task_status(
+            "✅ 完成 (2026-09-08)——commit 5c630d7 已推送；live：Check 30 "
+            "7/24 逐条不变 / 30c 35→2 WARN / p0_pending=0（AUDIT-143 回归"
+            "修复）/ check-governance 149→149"))
+
+    def test_empty_missing_whitespace_status_stay_incomplete_fail_closed(self):
+        """fail-closed 锚：空/缺失/纯空白状态 = 无法证明完成 = 活跃。"""
+        self.assertTrue(vw._is_incomplete_task_status(""))
+        self.assertTrue(vw._is_incomplete_task_status(None))
+        self.assertTrue(vw._is_incomplete_task_status("   "))
+
+    def test_active_and_ambiguous_states_stay_incomplete(self):
+        """活跃/歧义状态保守判活跃（新旧同判，锁定不放宽）。"""
+        for status in (
+            "⏳ 待执行", "🔄 进行中", "⬜ 未开始", "待启动", "待处理",
+            "未完成", "未发布", "blocked", "carry-over", "pending",
+            "in progress",
+        ):
+            self.assertTrue(vw._is_incomplete_task_status(status), repr(status))
+
+    def test_bare_terminal_wordings_without_assertion_shape(self):
+        """权威词表边界（DEC-181 消费不改写）：裸「终止」不在 W-7 终态
+        词表（仅「已终止」）→ 保守活跃（无 live 实例，fail-safe 方向）；
+        已终止/已关闭/已发布/取消/废弃 裸词在段首+格尾断言 → 完成。"""
+        self.assertTrue(vw._is_incomplete_task_status("终止"))
+        self.assertFalse(vw._is_incomplete_task_status("已终止"))
+        self.assertFalse(vw._is_incomplete_task_status("已关闭"))
+        self.assertFalse(vw._is_incomplete_task_status("已发布"))
+        self.assertFalse(vw._is_incomplete_task_status("取消"))
+        self.assertFalse(vw._is_incomplete_task_status("废弃"))
+        self.assertFalse(vw._is_incomplete_task_status("已完成"))
+
+    def test_reopened_trailing_active_chain_stays_incomplete(self):
+        """消费权威语义的保守面（W-7 docstring：active-trailing cells
+        keep the ACTIVE verdict）——旧谓词判完成，对齐后保守判活跃。"""
+        self.assertTrue(vw._is_incomplete_task_status(
+            "✅ 已发布 (2026-08-01) → 🔄 reopened (2026-09-01)"))
+
+    def test_delegate_keeps_authoritative_predicate_untouched(self):
+        """结构断言（maintainability 契约）：权威谓词仍是单一来源，
+        本修复不复制其词表——`_is_incomplete_task_status` 不得再自带
+        旧 marker 元组（否则语义二源回潮）。"""
+        import inspect
+        src = inspect.getsource(vw._is_incomplete_task_status)
+        self.assertNotIn("incomplete_markers", src)
+        self.assertNotIn("completed_markers", src)
+        self.assertIn("_status_is_completed_cell", src)
+
+
+class Fix292ActiveExecutionPacketTasksTests(unittest.TestCase):
+    """FIX-292 端到端：`_active_execution_packet_tasks`（18c~18i 数据源）
+    按 W-7/BC-7 终态链语义过滤——已完成 M2/M3 行不再进入活跃 P0/P1 集，
+    真实活跃行保留，M1 ragged 行保守保留（FEAT-011 归属）。"""
+
+    _TABLE = [
+        "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+        "|--------|----|------|------|---------|---------|------|",
+    ]
+
+    def _plan(self, *rows):
+        return "\n".join([
+            "# 计划跟踪",
+            "",
+            "## 当前活跃事项",
+            "",
+            *self._TABLE,
+            *rows,
+        ])
+
+    def _write(self, content):
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        sp = Path(td.name) / ".governance" / "plan-tracker.md"
+        sp.parent.mkdir(parents=True, exist_ok=True)
+        sp.write_text(content, encoding="utf-8")
+        return sp
+
+    def test_completed_m2_m3_rows_dropped_true_active_kept(self):
+        plan = self._plan(
+            "| **P1** | MIX-001 | M2 混合链已完成 | — | 0.79.0 | tests "
+            "| 🔄 进行中 (2026-08-21)——设计已派发 → **✅ 完成 (2026-08-21)"
+            "**——commit d90c167 已推送 |",
+            "| **P1** | PEN-001 | M3 叙事 pending 已完成 | — | 0.79.0 "
+            "| tests | ✅ 完成 (2026-09-08)——p0_pending=0（AUDIT-143 回归"
+            "修复） |",
+            "| **P1** | LIVE-001 | 真实活跃任务 | — | 0.79.0 | tests "
+            "| ⏳ 待执行 (2026-09-09) |",
+        )
+        sp = self._write(plan)
+        with patch.object(vw, "SAMPLE_PATH", sp):
+            ids = [t["task_id"] for t in vw._active_execution_packet_tasks()]
+        self.assertEqual(ids, ["LIVE-001"])
+
+    def test_m1_ragged_row_empty_status_cell_stays_active_feat011(self):
+        """M1（FEAT-011 归属，非本任务修复面）：重复优先级列 + 尾空单元
+        格使 status 取到空串 → 保守判活跃。FIX-292 MUST NOT 为消 M1 而
+        改行形状或放宽空状态语义——本用例锁定该保守行为。"""
+        ragged = (
+            "| **P0** | **P0** | RAG-001 | ragged 行形状 | — | 0.71.0 "
+            "| 描述列 | ✅ 完成 (2026-07-26) | |"
+        )
+        sp = self._write(self._plan(ragged))
+        with patch.object(vw, "SAMPLE_PATH", sp):
+            tasks = vw.parse_current_active_tasks()
+            self.assertEqual([t["task_id"] for t in tasks], ["RAG-001"])
+            self.assertEqual(tasks[0]["status"], "")
+            active = vw._active_execution_packet_tasks()
+            self.assertEqual([t["task_id"] for t in active], ["RAG-001"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -89,7 +89,7 @@ DSH_HOME=$(mktemp -d) python adapters/dsh/launch.py --install        # isolated 
 DSH_HOME=$(mktemp -d) dsh plugin --profile web add link:/path/to/software-project-governance
 ```
 
-Both forms were re-verified this way (temp-dir `DSH_HOME`, zero writes to the real home) on dsh 0.1.2-rc.1 + pnpm 11.22.0, 2026-09-05 — all verification ran on Windows; non-Windows is unverified〔isolation: link:/file: 2026-09-05, Windows-only〕〔static: github: form — packaging semantics by reasoning, not install-verified (see RISK-049)〕. Note on `github:` before v0.78.1 is pushed: GitHub's master still serves 0.78.0 (it predates the preset-skill fix and the rename), so install from a local checkout (`link:`/`file:`) or wait for the release.
+Both forms were re-verified this way (temp-dir `DSH_HOME`, zero writes to the real home) on dsh 0.1.2-rc.1 + pnpm 11.22.0, 2026-09-05 — all verification ran on Windows; non-Windows is unverified〔isolation: link:/file: 2026-09-05, Windows-only〕〔static: github: form — packaging semantics by reasoning, not install-verified (see RISK-049)〕. Note on `github:` before v0.79.0 is pushed: GitHub's master still serves 0.78.1, so install from a local checkout (`link:`/`file:`) or wait for the release.
 
 Claim evidence levels (RISK-049 disclosure, FEAT-014): the dsh claims **registered in `ADAPTER_CLAIM_REGISTRY`** (4 claim classes — session projection / preset roster / `/governance` gesture / install-forms boundary) are annotated with their verification level — live-session = verified in a real user session (date cited); isolation = re-verified in an isolated/redirected environment (date cited); static = static/inspection reasoning only, explicitly labeled as not execution-verified. Check 28t (`check-governance`) machine-checks that registry mapping; statements in this dsh section outside the registry are not covered by it.
 
@@ -437,7 +437,7 @@ dsh 侧有两个安装面，各自有**官方对称命令**：
 
 #### 安全验证边界（不要对真实 `~/.dsh` 做"安装验证"）
 
-预览用 `--dry-run`；需要真实执行安装/升级验证时，一律用重定向的临时 `DSH_HOME`（2026-09-05 在 dsh 0.1.2-rc.1 + pnpm 11.22.0 隔离复验 `link:`/`file:` 两种 plugin add 与 launch.py 预设安装，真实 home 零写入；全部验证在 Windows 上执行，非 Windows 未验证；`github:` 形式打包语义与 `file:` 同构——但 v0.78.1 推送前从 GitHub 安装到的是 0.78.0 旧版，请用本地 `link:`/`file:` 或等待发布）〔isolation: link:/file: 2026-09-05, Windows-only〕〔static: github: 形态——打包语义推理，未执行安装验证（RISK-049 披露）〕：
+预览用 `--dry-run`；需要真实执行安装/升级验证时，一律用重定向的临时 `DSH_HOME`（2026-09-05 在 dsh 0.1.2-rc.1 + pnpm 11.22.0 隔离复验 `link:`/`file:` 两种 plugin add 与 launch.py 预设安装，真实 home 零写入；全部验证在 Windows 上执行，非 Windows 未验证；`github:` 形式打包语义与 `file:` 同构——但 v0.79.0 推送前从 GitHub 安装到的是 0.78.1 旧版，请用本地 `link:`/`file:` 或等待发布）〔isolation: link:/file: 2026-09-05, Windows-only〕〔static: github: 形态——打包语义推理，未执行安装验证（RISK-049 披露）〕：
 
 宣示验证等级（RISK-049 披露，FEAT-014）：**登记在 `ADAPTER_CLAIM_REGISTRY` 的 dsh 宣示**（当前 4 类：会话投影 / 预设清单 / `/governance` 手势 / 安装形态边界）逐条标注验证等级——live-session = 真实用户会话活体验证（标注日期）；isolation = 隔离环境复验（重定向 home/临时目录，零真实 home 写入，标注日期）；static = 静态检查/推理验证——无执行证据，显式标注未执行验证。Check 28t（`check-governance`）对该注册表映射做机器核验；本节中注册表之外的其他表述不在该核验范围内。
 

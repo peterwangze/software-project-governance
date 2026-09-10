@@ -20708,8 +20708,27 @@ def cmd_check_loop_runtime_claims(args):
         host_root=host_root,
         scan_mode=args.scan_mode,
     ))
-    print(json.dumps(report.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
-    if report.verdict != "PASS":
+    payload = report.as_dict()
+    if getattr(args, "fixture_identity", False):
+        # FIX-300 dual-caliber agreement: re-run the identity sub-phase
+        # through the exact engine Check-31 assembly (fixture-only
+        # staged_index over PLUGIN_ROOT/`:index` + HOST_PROJECT_ROOT) so
+        # the standalone CLI and the engine produce comparable verdicts on
+        # the same input.  Neither sub-phase's fail-closed rule changes;
+        # the top-level verdict aggregates both.
+        identity = _run_identity_attestation_fixture_only()
+        payload["identity_phase"] = identity["phase"]
+        payload["identity_issues"] = identity["issues"]
+        payload["identity_verdict"] = identity["verdict"]
+        payload["verdict_scope"] = "semantic+identity_fixture"
+        if identity["verdict"] != "PASS":
+            payload["verdict"] = "FAIL"
+    else:
+        # FIX-300: a semantic-only PASS must never be misread as "Check 31
+        # fully green" (EVD-969) — declare what the verdict covers.
+        payload["verdict_scope"] = "semantic_only"
+    print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+    if payload["verdict"] != "PASS":
         sys.exit(1)
 
 
@@ -23924,6 +23943,12 @@ def main(argv=None):
                                   help="Compare exact candidate tree with staged I1 artifact")
     clrc_p.add_argument("--require-identity", action="store_true",
                         help="Require FIX-216 independent identity aggregation")
+    clrc_p.add_argument("--fixture-identity", action="store_true",
+                        help="FIX-300: also run the identity sub-phase through the "
+                             "engine Check-31 fixture assembly (staged_index over the "
+                             "plugin Git index + HOST_PROJECT_ROOT) and aggregate its "
+                             "verdict, so the standalone CLI is directly comparable "
+                             "with the engine caliber on the same input")
     clrc_p.add_argument("--fixture-only", action="store_true",
                         help="Mark disposable FIX-216 evidence non-authorizing")
 

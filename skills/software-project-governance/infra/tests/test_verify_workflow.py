@@ -107,7 +107,136 @@ class LoopRuntimeClaimAdapterTests(unittest.TestCase):
         output = io.StringIO()
         with patch.object(vw, "scan_loop_runtime_claims", return_value=report), redirect_stdout(output):
             vw.cmd_check_loop_runtime_claims(args)
-        self.assertEqual({"verdict": "PASS"}, json.loads(output.getvalue()))
+        # FIX-300: the semantic-only top-level verdict MUST declare its scope so
+        # a PASS can never be misread as "Check 31 fully green" (EVD-969).
+        payload = json.loads(output.getvalue())
+        self.assertEqual("PASS", payload["verdict"])
+        self.assertEqual("semantic_only", payload["verdict_scope"])
+
+
+class FIX300DualCaliberAgreementTests(unittest.TestCase):
+    """FIX-300 differential regression: standalone CLI vs engine Check 31.
+
+    RCA (reproduced deterministically on this repository): the identity
+    sub-phase resolves its host sources (HOST_PATHS ∪ authority
+    source_records — all .governance/*.md) from HOST_PROJECT_ROOT ==
+    os.getcwd() with no .governance existence probe and no FIX-240-style
+    uninitialized-host exemption, while the semantic calibers explicitly
+    skip host validation when .governance is absent (FIX-240).  When
+    HOST_PROJECT_ROOT drifts off the governed root (sub-directory cwd,
+    clean checkout, git worktree — the .governance hot files are
+    git-ignored), identity fails REQUIRED_ROOT_UNAVAILABLE with a bare
+    relative path while every semantic caliber passes — exactly the
+    EVD-969 divergence shape.  The fix keeps both fail-closed verdicts
+    intact and removes the ambiguity: the semantic-only output declares
+    its scope, and ``--fixture-identity`` re-runs the identity sub-phase
+    through the exact engine assembly so both calibers are directly
+    comparable on one input.
+
+    These tests run against the real product/plugin trees and the real
+    Git index (only HOST_PROJECT_ROOT is redirected into a temp host
+    root), so every verdict is a real engine verdict — no scanner mocks.
+    """
+
+    HOST_SOURCE_NAMES = (
+        ".governance/plan-tracker.md",
+        ".governance/session-snapshot.md",
+        ".governance/evidence-log.md",
+        ".governance/risk-log.md",
+        ".governance/decision-log.md",
+    )
+
+    @staticmethod
+    def _drifted_host(base, *, populated):
+        """A host root whose .governance sources are absent (divergence
+        shape) or populated from the real governance files (agreement
+        shape).  Absent sources reproduce what the identity sub-phase sees
+        when HOST_PROJECT_ROOT resolves off the governed root."""
+        host = base / ("host-populated" if populated else "host-drifted")
+        host.mkdir()
+        if populated:
+            (host / ".governance").mkdir()
+            for name in FIX300DualCaliberAgreementTests.HOST_SOURCE_NAMES:
+                shutil.copyfile(_INFRA_DIR.parents[2] / name, host / name)
+        return host
+
+    @staticmethod
+    def _engine_identity():
+        output = io.StringIO()
+        with redirect_stdout(output):
+            return vw._run_identity_attestation_fixture_only()
+
+    def _run_standalone_cli(self, host):
+        args = SimpleNamespace(
+            product_root=None, claim_project_root=str(host),
+            scan_mode="product_release", fixture_identity=True,
+        )
+        output = io.StringIO()
+        with patch.object(vw, "HOST_PROJECT_ROOT", host), \
+                redirect_stdout(output):
+            vw.cmd_check_loop_runtime_claims(args)
+        return json.loads(output.getvalue())
+
+    def test_identity_host_source_drift_reproduces_divergence_shape(self):
+        """Root-cause shape lock: with the host sources unreachable the
+        engine identity sub-phase FAILs (bare REQUIRED_ROOT_UNAVAILABLE on
+        the first missing authority source record) while the engine
+        semantic caliber PASSes — the EVD-969 divergence shape."""
+        with tempfile.TemporaryDirectory() as td:
+            host = self._drifted_host(Path(td), populated=False)
+            with patch.object(vw, "HOST_PROJECT_ROOT", host):
+                identity = self._engine_identity()
+            self.assertEqual("FAIL", identity["verdict"])
+            self.assertEqual(1, len(identity["issues"]))
+            self.assertIn(
+                "IDENTITY_ATTESTATION_FAIL: REQUIRED_ROOT_UNAVAILABLE: "
+                ".governance/decision-log.md",
+                identity["issues"][0])
+            semantic = vw.scan_loop_runtime_claims(
+                vw._loop_runtime_claim_context("installed_host"))
+            self.assertEqual("PASS", semantic.verdict)
+
+    def test_fixture_identity_mode_agrees_with_engine_on_missing_sources(self):
+        """Differential agreement (red shape): with the host sources
+        unreachable the standalone ``--fixture-identity`` caliber reports
+        the SAME identity verdict and issue text as the engine sub-phase,
+        and its top-level verdict aggregates to FAIL with exit 1."""
+        with tempfile.TemporaryDirectory() as td:
+            host = self._drifted_host(Path(td), populated=False)
+            with patch.object(vw, "HOST_PROJECT_ROOT", host):
+                engine = self._engine_identity()
+                args = SimpleNamespace(
+                    product_root=None, claim_project_root=str(host),
+                    scan_mode="product_release", fixture_identity=True,
+                )
+                output = io.StringIO()
+                with redirect_stdout(output), \
+                        self.assertRaises(SystemExit) as caught:
+                    vw.cmd_check_loop_runtime_claims(args)
+        self.assertEqual(1, caught.exception.code)
+        payload = json.loads(output.getvalue())
+        self.assertEqual("FAIL", payload["verdict"])
+        self.assertEqual("semantic+identity_fixture", payload["verdict_scope"])
+        self.assertEqual(engine["verdict"], payload["identity_verdict"])
+        self.assertEqual(engine["issues"], payload["identity_issues"])
+        self.assertIn(
+            "REQUIRED_ROOT_UNAVAILABLE: .governance/decision-log.md",
+            payload["identity_issues"][0])
+
+    def test_fixture_identity_mode_agrees_with_engine_on_present_sources(self):
+        """Differential agreement (green shape): with every host source
+        populated from the real governance files, both calibers report
+        identity PASS and the standalone aggregate verdict is PASS."""
+        with tempfile.TemporaryDirectory() as td:
+            host = self._drifted_host(Path(td), populated=True)
+            with patch.object(vw, "HOST_PROJECT_ROOT", host):
+                engine = self._engine_identity()
+                self.assertEqual("PASS", engine["verdict"])
+                payload = self._run_standalone_cli(host)
+        self.assertEqual("PASS", payload["verdict"])
+        self.assertEqual("semantic+identity_fixture", payload["verdict_scope"])
+        self.assertEqual("PASS", payload["identity_verdict"])
+        self.assertEqual([], payload["identity_issues"])
 
 
 class FIX200ScopedAttestationRehearsalTests(unittest.TestCase):

@@ -1,0 +1,412 @@
+{
+  "faces": {
+    "check_segments": {
+      "count": 70,
+      "ids": [
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12",
+        "13",
+        "14",
+        "15",
+        "16",
+        "17",
+        "18",
+        "18b",
+        "18c",
+        "18d",
+        "18e",
+        "18f",
+        "18g",
+        "18h",
+        "18i",
+        "19",
+        "20",
+        "21",
+        "22",
+        "23",
+        "24",
+        "25",
+        "26",
+        "27",
+        "28",
+        "28b",
+        "28c",
+        "28d",
+        "28e",
+        "28f",
+        "28g",
+        "28h",
+        "28i",
+        "28j",
+        "28k",
+        "28l",
+        "28m",
+        "28n",
+        "28o",
+        "28p",
+        "28q",
+        "28r",
+        "28s",
+        "28t",
+        "28u",
+        "29",
+        "30",
+        "30b",
+        "30c",
+        "31",
+        "32",
+        "33",
+        "34",
+        "35",
+        "36",
+        "37",
+        "38",
+        "39",
+        "40"
+      ],
+      "titles": {
+        "1": "Evidence Completeness",
+        "10": "M5 AskUserQuestion Compliance",
+        "11": "Manifest Consistency",
+        "12": "Cross-Reference Checking",
+        "13": "Sequential ID Checking",
+        "14": "Structural Validity",
+        "15": "Commit Scope Verification",
+        "16": "Goal Alignment",
+        "17": "User Impact",
+        "18": "Fact Grounding (FIX-080)",
+        "18b": "Structured Evidence (FIX-083)",
+        "18c": "AI Execution Packet (FIX-084)",
+        "18d": "Product Success Contract (FIX-088)",
+        "18e": "Executable Acceptance Contract (FIX-089)",
+        "18f": "Quality Budget Gate (FIX-090)",
+        "18g": "Vertical Slice Delivery Packets (FIX-091)",
+        "18h": "Weak-LLM Deterministic Scaffolds (FIX-092)",
+        "18i": "User Interruption Policy v2 (FIX-093)",
+        "19": "Agent Team Review",
+        "2": "Risk Staleness (>7 days)",
+        "20": "Agent Activation (Analyst/Architect)",
+        "21": "Review Debt / Spawn Gap (FIX-174)",
+        "22": "Review Coverage (FIX-037)",
+        "23": "Profile Consistency (FIX-038)",
+        "24": "Version Consistency (FIX-052)",
+        "25": "Untracked Files",
+        "26": "Agent Lock Consistency (FIX-056)",
+        "27": "Archive Integrity (SYSGAP-030)",
+        "28": "Governance Review Fallback Policy",
+        "28b": "Projection Sync Guard (FIX-086)",
+        "28c": "Hot Fact-Source Consistency (FIX-087)",
+        "28d": "Runtime Readiness Matrix (FIX-106)",
+        "28e": "First-Session Measurement (FIX-107)",
+        "28f": "Governance Pack Registry (FIX-108)",
+        "28g": "Governance Context Discovery (FIX-112)",
+        "28h": "README Pack Guidance (FIX-109)",
+        "28i": "Governance Pack Status Boundary (FIX-111)",
+        "28j": "Capability Context Trace (FIX-115)",
+        "28k": "Capability Registry (FIX-116)",
+        "28l": "Restricted Host Capability Context (FIX-117)",
+        "28m": "Official Submission Ecosystem (FIX-118)",
+        "28n": "Mainstream Agent Loading (FIX-122)",
+        "28o": "Architecture Health (ArchGuard/REQ-101)",
+        "28p": "Duplicate Code (ArchGuard/REQ-101)",
+        "28q": "Technical Debt (ArchGuard/REQ-101)",
+        "28r": "Complexity (ArchGuard/REQ-101)",
+        "28s": "Governance Data Size (FIX-160)",
+        "28t": "README Claim→Evidence Levels (FEAT-014)",
+        "28u": "DSH Preset Session Smoke (FEAT-015)",
+        "29": "M5 Runtime Triggers (FIX-174)",
+        "3": "Gate Consistency",
+        "30": "Review Closure State Machine (FIX-174)",
+        "30b": "Loop wiring call sites",
+        "30c": "Review Machine Provenance (FIX-260)",
+        "31": "Loop Runtime Claim Gate (FIX-197)",
+        "32": "Change-Control Triage (FIX-237.4)",
+        "33": "Injection Contract (FIX-253/REQ-112)",
+        "34": "Completion Recommendation (FIX-262)",
+        "35": "Snapshot Freshness (FIX-268)",
+        "36": "Risk Mitigation Closure (FIX-265)",
+        "37": "Gate Sequence for Release (FIX-266)",
+        "38": "CI Evidence (FIX-267)",
+        "39": "R1 Completion Gate (FIX-274)",
+        "4": "Evidence Quality",
+        "40": "DSH Skills Manifest (FIX-272)",
+        "5": "Protocol Compliance (M8 External)",
+        "6": "Tier Audit Completeness",
+        "7": "Commit-Task Traceability",
+        "8": "Risk Escalation Deadline",
+        "9": "Task Deadline Enforcement"
+      }
+    },
+    "cli_dispatch": {
+      "alias_groups": {
+        "cmd_check_deterministic_scaffolds": [
+          "check-deterministic-scaffolds",
+          "check-scaffold-templates"
+        ],
+        "cmd_check_interruption_policy": [
+          "check-interruption-policy",
+          "check-user-interruption-policy"
+        ],
+        "cmd_dynamic_lifecycle_migration": [
+          "dynamic-flow-gate-migration",
+          "dynamic-lifecycle-migration"
+        ]
+      },
+      "handler_count": 77,
+      "key_count": 80,
+      "keys": [
+        "agent-runtime-e2e",
+        "capability-context",
+        "change-triage",
+        "check-acceptance-contracts",
+        "check-agent-adapters",
+        "check-agent-team",
+        "check-architecture-health",
+        "check-archive-integrity",
+        "check-capability-registry",
+        "check-commit-scope",
+        "check-complexity",
+        "check-cross-references",
+        "check-deterministic-scaffolds",
+        "check-dsh-preset-smoke",
+        "check-dsh-skills-manifest",
+        "check-duplicate-code",
+        "check-first-session-measurement",
+        "check-flow-unit-runtime",
+        "check-goal-alignment",
+        "check-governance",
+        "check-governance-data-size",
+        "check-governance-pack-status",
+        "check-governance-packs",
+        "check-host-capability-context",
+        "check-hot-fact-source",
+        "check-injection-contract",
+        "check-interruption-policy",
+        "check-lifecycle-registry",
+        "check-locks",
+        "check-loop-health",
+        "check-loop-role-skills",
+        "check-loop-runtime-claims",
+        "check-mainstream-agent-loading",
+        "check-manifest-consistency",
+        "check-official-submission-ecosystem",
+        "check-plugin-freshness",
+        "check-product-success-contracts",
+        "check-projection-sync",
+        "check-quality-budget",
+        "check-readme-pack-guidance",
+        "check-release",
+        "check-review-debt",
+        "check-runtime-readiness-matrix",
+        "check-scaffold-templates",
+        "check-sequential-ids",
+        "check-structural-validity",
+        "check-technical-debt",
+        "check-user-impact",
+        "check-user-interruption-policy",
+        "check-version-consistency",
+        "check-vertical-slices",
+        "dynamic-flow-gate-migration",
+        "dynamic-lifecycle-migration",
+        "e2e-check",
+        "execution-packet",
+        "external-project-validation",
+        "first-run-demo",
+        "gate",
+        "gate-check",
+        "gates",
+        "gemini-auth-preflight",
+        "generate-deterministic-scaffold",
+        "governance-context",
+        "governance-write-guard",
+        "loop-engineering-migration",
+        "loop-rollup",
+        "loop-telemetry",
+        "next-candidates",
+        "opencode-provider-preflight",
+        "quality-tools",
+        "release-ledger",
+        "release-projection",
+        "resolve-entry",
+        "review-record",
+        "stage",
+        "stages",
+        "status",
+        "task-priority-analysis",
+        "verify",
+        "web-console"
+      ]
+    },
+    "guard_output_pin": {
+      "command": "verify_workflow.py governance-write-guard",
+      "exit_codes": {
+        "fail_fixture": 1,
+        "pass_fixture": 0,
+        "wellformed_fixture": 0
+      },
+      "expected_line_prefix": "      期望列形: ",
+      "face_labels": [
+        "plan-tracker 任务表行（M1 签名：重复优先级列/行尾空单元格）",
+        "evidence-log 机器行族 TRIAGE/RECO（DEC-168 行族列数 + ID 格式）",
+        "agent-locks.json schema（Check 26）",
+        "execution-packets.json 结构（Check 18c 字段表）"
+      ],
+      "face_line_regex": "^  \\[(FAIL|PASS|SKIPPED)\\] .+\\ —\\ \\d+\\ issue\\(s\\)$",
+      "fixture_strategy": "deterministic temp-dir fixtures: empty host (all SKIPPED → PASS/exit 0) + malformed plan-tracker row (FAIL/exit 1) + well-formed plan-tracker (PASS face/exit 0)",
+      "header_line": "=== Governance Write Guard (G3 扩展 — FEAT-011, Coordinator 直写路径) ===",
+      "issue_line_prefix": "    - ",
+      "issue_line_regex": "^    - (?:L\\d+ )?.+$",
+      "result_fail_prefix": "Result: FAIL — ",
+      "result_fail_regex": "^Result:\\ FAIL\\ —\\ \\d+ issue\\(s\\)。[\\s\\S]*$",
+      "result_pass_line": "Result: PASS — 0 issue(s)（SKIPPED = 产物缺席，非缺陷）。守卫只检不改（零 .governance 写入）。"
+    },
+    "result_shapes": {
+      "check_change_triage": {
+        "$dict": {
+          "issues": {
+            "$seq": "list"
+          },
+          "records_checked": "int",
+          "records_invalid": "int",
+          "tasks_exempt": "int",
+          "tasks_without_record": {
+            "$seq": "list"
+          },
+          "verdict": "str",
+          "wiring": {
+            "$dict": {
+              "argparse": "bool",
+              "dispatch": "bool",
+              "reason": "str",
+              "registered": "bool"
+            }
+          }
+        }
+      },
+      "check_evidence_completeness": {
+        "$dict": {
+          "completed_count": "int",
+          "evidenced_count": "int",
+          "historical_missing_evidence": {
+            "$seq": "list"
+          },
+          "missing_evidence": {
+            "$seq": "list"
+          }
+        }
+      },
+      "check_governance_write_shapes": {
+        "$dict": {
+          "agent_locks": {
+            "$dict": {
+              "issues": {
+                "$seq": "list"
+              },
+              "status": "str"
+            }
+          },
+          "evidence_log": {
+            "$dict": {
+              "issues": {
+                "$seq": "list"
+              },
+              "status": "str"
+            }
+          },
+          "execution_packets": {
+            "$dict": {
+              "issues": {
+                "$seq": "list"
+              },
+              "status": "str"
+            }
+          },
+          "plan_tracker": {
+            "$dict": {
+              "issues": {
+                "$seq": "list"
+              },
+              "status": "str"
+            }
+          }
+        }
+      },
+      "check_loop_wiring_call_sites": {
+        "$dict": {
+          "call_sites": {
+            "$seq": "list"
+          },
+          "count": "int",
+          "reason": "str",
+          "verdict": "str"
+        }
+      },
+      "check_risk_staleness": {
+        "$dict": {
+          "fresh": {
+            "$seq": "list"
+          },
+          "stale": {
+            "$seq": "list"
+          },
+          "total_open": "int"
+        }
+      }
+    }
+  },
+  "freeze_point": {
+    "note": "冻结基线含此清单（S6 版本规划对账用）",
+    "residual_waves": {
+      "0.79.0 收尾": [
+        "FEAT-012",
+        "FEAT-013",
+        "FX-195"
+      ],
+      "0.80.0 P0 余项": [
+        "FEAT-018",
+        "FEAT-019",
+        "FIX-301",
+        "AUDIT-152",
+        "DOC-003"
+      ]
+    },
+    "task": "FEAT-020",
+    "version_status": "0.79.0 未 released"
+  },
+  "generated": {
+    "generator_relpath": "skills/software-project-governance/infra/contract_matrix/generator.py",
+    "git_head": "72ccc8960b214ab94f18c5068263a3c2f474fad3",
+    "python": {
+      "family": "3.14",
+      "implementation": "cpython",
+      "platform": "win32",
+      "version": "3.14.3"
+    },
+    "timestamp_utc": "2026-09-10T04:03:40+00:00"
+  },
+  "python_family_pins": [
+    {
+      "family": "3.14",
+      "role": "local-dev-windows"
+    },
+    {
+      "family": "3.11",
+      "role": "ci-ubuntu"
+    }
+  ],
+  "reference": {
+    "description": "Non-asserted human-review material: raw guard fixture samples are regenerated into golden_samples.txt via --golden; snapshot equality covers faces/ only."
+  },
+  "schema": "spg-contract-matrix/1",
+  "task": "FEAT-020"
+}

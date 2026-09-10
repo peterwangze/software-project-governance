@@ -39,7 +39,16 @@ Coordinator dispatch Agent 前 **MUST** 按 behavior-protocol.md M7.6a 执行锁
 3. **文件锁检查**：对 `{file_list}` 中的每个文件，检查 `file_locks` 中是否有其他 task 的锁
    - 无冲突 → 继续
    - 有冲突 → 启用 worktree 隔离或串行化
-4. **获取锁**：写入 `active_tasks["{task_id}"]` + 每个目标文件的 `file_locks` 条目 → 保存 `agent-locks.json`
+4. **获取锁（FEAT-013 机器路径——禁止手写 agent-locks.json，RISK-046 根因）**：运行
+
+   ```
+   python skills/software-project-governance/infra/verify_workflow.py agent-locks-acquire \
+     --task {task_id} --files {file_list} --role {agent_role} \
+     --session {coordinator_session} --ttl-reason "{派发锁理由}" \
+     [--expected-new "任务将新建的文件（逗号分隔）"]
+   ```
+
+   写入前机器校验（exit 2 = 拒绝且零写入）：目标路径**存在性**（不存在的路径一律拒绝）+ 与当日 change-triage 记录 `files` **交叉核对**（不一致 → stderr WARN 披露，不阻断）+ 任务去重/跨任务冲突/损坏锁文件 fail-closed。**新文件预创建场景**：`{file_list}` 中任务将新建（尚未落盘）的文件 MUST 通过 `--expected-new` 显式声明（锁条目落 `expected_new: true`）——未声明的不存在路径会被拒绝，先创建文件或修正路径再取锁。
 5. **Spawn Agent**
 
 ## Coordinator 锁释放（Agent 完成后 MUST 执行）

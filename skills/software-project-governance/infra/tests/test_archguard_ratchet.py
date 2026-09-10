@@ -238,7 +238,7 @@ class R5RegistrationIntegrityTests(unittest.TestCase):
         violations, report = ar.check_r5(_SKILL_ROOT)
         self.assertEqual(violations, [])
         self.assertEqual(report["status"], "PASS")
-        self.assertEqual(report["frozen_cli_keys"], 81)
+        self.assertEqual(report["frozen_cli_keys"], 82)  # 82 since FEAT-013 (agent-locks-acquire)
         self.assertEqual(report["frozen_segments"], 70)
 
     def test_r5_missing_snapshot_skips_with_disclosure(self):

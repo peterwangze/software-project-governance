@@ -17493,6 +17493,15 @@ def check_agent_locks_format():
                     "type": "schema_violation",
                     "detail": f"agent-locks.json file_locks['{file_path}'].ttl_seconds must be a number"
                 })
+            # FEAT-013 (RISK-046): optional expected_new flag — the
+            # pre-created-file exemption declared at acquire time
+            # (agent-locks-acquire --expected-new). Absent = regular
+            # existing-file lock (backward compatible: legacy locks PASS).
+            if "expected_new" in entry and not isinstance(entry["expected_new"], bool):
+                issues.append({
+                    "type": "schema_violation",
+                    "detail": f"agent-locks.json file_locks['{file_path}'].expected_new must be a boolean when present (FEAT-013 pre-created-file declaration)",
+                })
 
     return issues
 
@@ -22435,7 +22444,8 @@ def check_governance_write_shapes():
                     "expected": "Check 26 schema（active_tasks 条目: "
                                 "spawned_at/coordinator_session/target_files；"
                                 "file_locks 条目: locked_by/locked_at/"
-                                "ttl_seconds/ttl_reason）",
+                                "ttl_seconds/ttl_reason；可选 expected_new: "
+                                "bool——FEAT-013 预创建文件声明）",
                 }
                 for issue in locks_issues
             ],
@@ -22569,6 +22579,25 @@ def cmd_change_triage(args):
               "可能为旧行（列数漂移）——写入行符合当前格式时先核对标准行本身"
               .format(summary.get("task_id", "?")), file=sys.stderr)
         sys.exit(2)
+
+
+def cmd_agent_locks_acquire(args):
+    """Thin entry — agent-locks-acquire CLI (FEAT-013 / RISK-046 root fix).
+
+    All validation and writing live in
+    :func:`change_triage.acquire_dispatch_locks` (RISK-039 thin-entry
+    discipline): pre-write path existence + expected-new exemption +
+    same-day change-triage files cross-check (mismatch WARN-disclosed,
+    never blocking). This glue injects the host paths and the Check 26
+    post-write self-validation — the writer proves its own output
+    against the SAME schema the FEAT-011 write guard consumes (no second
+    schema definition). Exit 0 = written (WARNs may accompany on stderr);
+    exit 2 = fail-closed refusal (nothing written).
+    """
+    from change_triage import agent_locks_acquire_cli
+    agent_locks_acquire_cli(
+        args, governance_dir=GOVERNANCE_DIR, repo_root=HOST_PROJECT_ROOT,
+        post_write_check=check_agent_locks_format)
 
 
 def cmd_governance_write_guard(_args):
@@ -24170,6 +24199,36 @@ def main(argv=None):
              "extension; check-only, zero writes)",
     )
 
+    # agent-locks-acquire (FEAT-013 / RISK-046 — machine dispatch-lock
+    # acquisition: pre-write path existence validation + expected-new
+    # pre-created-file exemption + same-day change-triage files
+    # cross-check; hand-writing agent-locks.json is forbidden)
+    ala_p = subparsers.add_parser(
+        "agent-locks-acquire",
+        help="Acquire dispatch locks with write-time validation: path "
+             "existence + expected-new exemption + change-triage files "
+             "cross-check (FEAT-013 / RISK-046)",
+    )
+    ala_p.add_argument("--task", required=True,
+                       help="Dispatch task id (PREFIX-NNN)")
+    ala_p.add_argument("--files", required=True,
+                       help="Comma-separated repo-relative lock targets")
+    ala_p.add_argument("--expected-new", default="",
+                       help="Comma-separated subset of --files the task "
+                            "will create (not on disk yet) — the "
+                            "pre-created-file exemption, persisted as "
+                            "expected_new: true on those entries")
+    ala_p.add_argument("--role", default="Developer",
+                       help="Agent role for the active_tasks entry")
+    ala_p.add_argument("--session", default="",
+                       help="Coordinator session id")
+    ala_p.add_argument("--description", default="",
+                       help="One-line dispatch description")
+    ala_p.add_argument("--ttl", type=int, default=14400,
+                       help="Lock TTL in seconds (default 14400 = 4h)")
+    ala_p.add_argument("--ttl-reason", default="",
+                       help="Why this lock is held (recorded per entry)")
+
     args = parser.parse_args(parser_argv)
     if args.project_root and explicit_project_root is None:
         explicit_project_root = args.project_root
@@ -24259,6 +24318,7 @@ def main(argv=None):
         "next-candidates": cmd_next_candidates,
         "change-triage": cmd_change_triage,
         "governance-write-guard": cmd_governance_write_guard,
+        "agent-locks-acquire": cmd_agent_locks_acquire,
     }
 
     cmd = args.command or "verify"

@@ -22,6 +22,12 @@ Covers the mandatory change-control triage for product-code task intake:
     exempt.
   - CLI subprocess: `change-triage` runs the four steps and writes the
     record; fail-closed inputs exit 2.
+  - FEAT-013 (RISK-046 root cause): dispatch-lock write API
+    (acquire_dispatch_locks + agent-locks-acquire CLI) — pre-write path
+    existence validation, expected_new pre-created-file exemption,
+    same-day change-triage files cross-check (WARN-disclosed mismatch),
+    Check 26 optional-boolean expected_new schema sync + FEAT-011 write
+    guard consumption.
 
 Run:
     python -m pytest skills/software-project-governance/infra/tests/test_change_triage.py -v
@@ -32,7 +38,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
+from unittest.mock import patch
 
 _HERE = Path(__file__).resolve().parent
 _INFRA_DIR = _HERE.parent
@@ -1078,6 +1086,374 @@ class ChangeTriageProjectVersionCliTests(unittest.TestCase):
             payload["analysis"]["version"]["planned_next"], "0.11.0")
         self.assertTrue(
             (self.gov / "change-triage" / "FIX-107.json").is_file())
+
+
+# ─── FEAT-013 (RISK-046 root cause) — dispatch-lock write API ───────────────
+#
+# RISK-046: Coordinator dispatch locks were hand-assembled with no
+# write-time validation — a typo'd / placeholder / not-yet-created path
+# entered file_locks directly (FIX-288 live evidence: a lock on the
+# nonexistent skills/change-triage/SKILL.md), and the lock file set could
+# drift from the same-day change-triage record's files declaration with
+# no cross-check. FEAT-013 lands the machine write API
+# (change_triage.acquire_dispatch_locks + agent-locks-acquire CLI):
+#
+#   Face 1  pre-write path existence validation — a lock target that is
+#           not an existing file is REJECTED (path + remediation hint);
+#   Face 1b pre-created-file exemption — a file the task will create is
+#           declared expected_new (persisted as ``expected_new: true`` on
+#           the lock entry; optional field, absent on legacy locks);
+#   Face 2  same-day change-triage files cross-check — mismatch is a
+#           disclosed WARN (never blocking: triage precedes the lock and
+#           the lock may legitimately carry dispatch-preauthorized
+#           extensions); a match stays silent.
+#
+# Check 26 schema sync: ``expected_new`` is optional-boolean when present
+# (backward compatibility hard gate: legacy locks without the field PASS),
+# and the FEAT-011 write guard face 3 consumes the same schema wholesale.
+
+_LOCK_NOW = datetime(2026, 9, 10, 20, 50, 0)  # fixed clock → today 2026-09-10
+
+
+def _triage_record_for_lock(task_id="FIX-210", files=None,
+                            created_at="2026-09-10"):
+    return {
+        "schema_version": 1,
+        "task_id": task_id,
+        "files": files or ["product/existing_a.py"],
+        "created_at": created_at,
+    }
+
+
+class DispatchLockCrossCheckTests(unittest.TestCase):
+    """Face 2 — cross_check_triage_files (pure set comparison)."""
+
+    def test_same_day_match_returns_true_and_balanced(self):
+        cc = ct.cross_check_triage_files(
+            "FIX-210", ["product/existing_a.py"],
+            [_triage_record_for_lock()], "2026-09-10")
+        self.assertIsNotNone(cc)
+        self.assertTrue(cc["matches"])
+        self.assertEqual(cc["lock_only"], [])
+        self.assertEqual(cc["triage_only"], [])
+
+    def test_same_day_mismatch_lists_both_sides(self):
+        cc = ct.cross_check_triage_files(
+            "FIX-210",
+            ["product/existing_a.py", "product/extra_lock.py"],
+            [_triage_record_for_lock(
+                files=["product/existing_a.py", "product/triage_only.py"])],
+            "2026-09-10")
+        self.assertFalse(cc["matches"])
+        self.assertEqual(cc["lock_only"], ["product/extra_lock.py"])
+        self.assertEqual(cc["triage_only"], ["product/triage_only.py"])
+
+    def test_missing_or_other_day_record_returns_none(self):
+        # No record at all → None (silent).
+        self.assertIsNone(ct.cross_check_triage_files(
+            "FIX-210", ["product/existing_a.py"], [], "2026-09-10"))
+        # Record exists but created another day → None (同期=当日 only).
+        self.assertIsNone(ct.cross_check_triage_files(
+            "FIX-210", ["product/existing_a.py"],
+            [_triage_record_for_lock(created_at="2026-09-01")],
+            "2026-09-10"))
+        # Another task's same-day record → None (task_id must match).
+        self.assertIsNone(ct.cross_check_triage_files(
+            "FIX-210", ["product/existing_a.py"],
+            [_triage_record_for_lock(task_id="FIX-999")], "2026-09-10"))
+
+
+class DispatchLockAcquireTests(unittest.TestCase):
+    """Faces 1 + 1b + 2 through acquire_dispatch_locks (fail-closed)."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="ctlock_")
+        self.root = Path(self.tmpdir)
+        self.gov = _governance_dir(self.tmpdir)
+        (self.root / "product").mkdir(exist_ok=True)
+        (self.root / "product" / "existing_a.py").write_text(
+            "x = 1\n", encoding="utf-8")
+
+    def _acquire(self, **overrides):
+        kwargs = {
+            "task_id": "FIX-210",
+            "files": ["product/existing_a.py"],
+            "governance_dir": self.gov,
+            "repo_root": self.root,
+            "now": _LOCK_NOW,
+        }
+        kwargs.update(overrides)
+        return ct.acquire_dispatch_locks(**kwargs)
+
+    def _locks_path(self):
+        return self.gov / "agent-locks.json"
+
+    def test_missing_path_rejected_no_write(self):
+        """Face 1: a lock target that is not an existing file is rejected
+        with the path + remediation hint; NOTHING is written."""
+        summary = self._acquire(files=["product/ghost_typo.py"])
+        self.assertIn("error", summary)
+        self.assertIn("product/ghost_typo.py", summary["error"])
+        self.assertIn("expected_new", summary["error"])
+        self.assertFalse(self._locks_path().exists())
+
+    def test_expected_new_exemption_persists_flag(self):
+        """Face 1b: a declared pre-created target bypasses the existence
+        check and persists ``expected_new: true``; the existing-file entry
+        carries no expected_new key."""
+        summary = self._acquire(
+            files=["product/existing_a.py", "product/to_be_created.py"],
+            expected_new=["product/to_be_created.py"])
+        self.assertFalse(summary.get("error"), summary)
+        data = json.loads(self._locks_path().read_text(encoding="utf-8"))
+        self.assertTrue(
+            data["file_locks"]["product/to_be_created.py"]["expected_new"])
+        self.assertNotIn(
+            "expected_new", data["file_locks"]["product/existing_a.py"])
+
+    def test_expected_new_outside_files_rejected(self):
+        summary = self._acquire(expected_new=["product/not_listed.py"])
+        self.assertIn("error", summary)
+        self.assertIn("subset", summary["error"])
+        self.assertFalse(self._locks_path().exists())
+
+    def test_happy_path_writes_full_schema_and_merges(self):
+        """Normal path: Check 26 required fields on both entry kinds, and
+        an unrelated task's pre-existing lock survives the merge."""
+        other = {
+            "active_tasks": {
+                "FIX-001": {
+                    "agent_role": "Developer",
+                    "spawned_at": "2026-09-10T08:00:00",
+                    "coordinator_session": "sess-other",
+                    "target_files": ["product/other.py"],
+                    "description": "other",
+                    "acquired": "2026-09-10T08:00:00",
+                    "files": ["product/other.py"],
+                }},
+            "file_locks": {
+                "product/other.py": {
+                    "locked_by": "FIX-001",
+                    "locked_at": "2026-09-10T08:00:00",
+                    "ttl_seconds": 3600,
+                    "ttl_reason": "other",
+                }},
+        }
+        self._locks_path().write_text(
+            json.dumps(other, indent=4), encoding="utf-8")
+        summary = self._acquire()
+        self.assertFalse(summary.get("error"), summary)
+        data = json.loads(self._locks_path().read_text(encoding="utf-8"))
+        # Merge kept the other task's entries...
+        self.assertIn("FIX-001", data["active_tasks"])
+        self.assertIn("product/other.py", data["file_locks"])
+        # ...and added this task's full-schema entries.
+        self.assertIn("FIX-210", data["active_tasks"])
+        entry = data["active_tasks"]["FIX-210"]
+        for key in ("spawned_at", "coordinator_session", "target_files"):
+            self.assertIn(key, entry)
+        lock = data["file_locks"]["product/existing_a.py"]
+        self.assertEqual(lock["locked_by"], "FIX-210")
+        for key in ("locked_by", "locked_at", "ttl_seconds", "ttl_reason"):
+            self.assertIn(key, lock)
+        self.assertEqual(lock["locked_at"], "2026-09-10T20:50:00")
+
+    def test_cross_check_match_no_warning(self):
+        rec_dir = self.gov / "change-triage"
+        rec_dir.mkdir(exist_ok=True)
+        (rec_dir / "FIX-210.json").write_text(json.dumps(
+            _triage_record_for_lock()), encoding="utf-8")
+        summary = self._acquire()
+        self.assertFalse(summary.get("error"), summary)
+        self.assertEqual(summary["warnings"], [])
+        self.assertTrue(summary["cross_check"]["matches"])
+
+    def test_cross_check_mismatch_warns_but_writes(self):
+        """Face 2: mismatch is WARN-disclosed and NON-blocking — the write
+        still lands (triage precedes the lock; the lock may carry
+        dispatch-preauthorized extensions — a human must SEE it, not be
+        stopped by it). Both lock targets exist on disk (face 1 passes);
+        only the declared SETS differ from the triage record."""
+        (self.root / "product" / "lock_extra.py").write_text(
+            "y = 2\n", encoding="utf-8")
+        rec_dir = self.gov / "change-triage"
+        rec_dir.mkdir(exist_ok=True)
+        (rec_dir / "FIX-210.json").write_text(json.dumps(
+            _triage_record_for_lock(
+                files=["product/triage_says_this.py"])),
+            encoding="utf-8")
+        summary = self._acquire(files=[
+            "product/existing_a.py", "product/lock_extra.py"])
+        self.assertFalse(summary.get("error"), summary)
+        self.assertEqual(len(summary["warnings"]), 1)
+        self.assertIn("WARN", summary["warnings"][0])
+        self.assertIn("product/lock_extra.py", summary["warnings"][0])
+        self.assertIn("product/triage_says_this.py", summary["warnings"][0])
+        self.assertTrue(self._locks_path().is_file())
+
+    def test_duplicate_task_rejected(self):
+        first = self._acquire()
+        self.assertFalse(first.get("error"), first)
+        second = self._acquire()
+        self.assertIn("error", second)
+        self.assertIn("already", second["error"])
+
+    def test_conflicting_file_lock_by_other_task_rejected(self):
+        self._locks_path().write_text(json.dumps({
+            "active_tasks": {"FIX-001": {
+                "spawned_at": "2026-09-10T08:00:00",
+                "coordinator_session": "s", "target_files": [],
+            }},
+            "file_locks": {"product/existing_a.py": {
+                "locked_by": "FIX-001",
+                "locked_at": "2026-09-10T08:00:00",
+                "ttl_seconds": 3600, "ttl_reason": "held",
+            }},
+        }), encoding="utf-8")
+        summary = self._acquire()
+        self.assertIn("error", summary)
+        self.assertIn("FIX-001", summary["error"])
+        # Fail-closed: the other task's lock file is left untouched.
+        data = json.loads(self._locks_path().read_text(encoding="utf-8"))
+        self.assertEqual(
+            data["file_locks"]["product/existing_a.py"]["locked_by"],
+            "FIX-001")
+
+    def test_malformed_locks_file_rejected_unchanged(self):
+        malformed = "this is not json {"
+        self._locks_path().write_text(malformed, encoding="utf-8")
+        summary = self._acquire()
+        self.assertIn("error", summary)
+        self.assertEqual(
+            self._locks_path().read_text(encoding="utf-8"), malformed)
+
+
+class AgentLocksCheck26SyncTests(unittest.TestCase):
+    """Check 26 schema sync + FEAT-011 write-guard consumption face.
+
+    ``expected_new`` is optional-boolean; legacy locks without the field
+    keep PASSING (backward-compatibility hard gate). The write guard face
+    3 reuses check_agent_locks_format wholesale, so the synced schema is
+    consumed with no second definition.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="ct26_")
+        self.gov = Path(self.tmpdir) / ".governance"
+        self.gov.mkdir(parents=True)
+
+    def _write_locks(self, expected_new=None):
+        entry = {
+            "locked_by": "FIX-210",
+            "locked_at": "2026-09-10T20:50:00",
+            "ttl_seconds": 14400,
+            "ttl_reason": "test",
+        }
+        if expected_new is not None:
+            entry["expected_new"] = expected_new
+        (self.gov / "agent-locks.json").write_text(json.dumps({
+            "active_tasks": {"FIX-210": {
+                "agent_role": "Developer",
+                "spawned_at": "2026-09-10T20:50:00",
+                "coordinator_session": "s",
+                "target_files": ["product/new_file.py"],
+                "files": ["product/new_file.py"],
+            }},
+            "file_locks": {"product/new_file.py": entry},
+        }), encoding="utf-8")
+
+    def _format_issues(self):
+        import verify_workflow as vw  # lazy: engine import stays local
+        with patch.object(vw, "GOVERNANCE_DIR", self.gov):
+            return vw.check_agent_locks_format()
+
+    def test_legacy_lock_without_expected_new_still_passes(self):
+        self._write_locks(expected_new=None)
+        self.assertEqual(self._format_issues(), [])
+
+    def test_expected_new_true_passes(self):
+        self._write_locks(expected_new=True)
+        self.assertEqual(self._format_issues(), [])
+
+    def test_expected_new_non_bool_is_schema_violation(self):
+        self._write_locks(expected_new="yes")
+        issues = self._format_issues()
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0]["type"], "schema_violation")
+        self.assertIn("expected_new", issues[0]["detail"])
+
+    def test_write_guard_face3_consumes_synced_schema(self):
+        """FEAT-011 write guard face 3 (agent_locks) reuses Check 26 — a
+        valid expected_new lock passes the guard; a malformed one FAILS
+        (consumption verified, not assumed)."""
+        import verify_workflow as vw
+        self._write_locks(expected_new=True)
+        with patch.object(vw, "GOVERNANCE_DIR", self.gov):
+            result = vw.check_governance_write_shapes()
+        self.assertEqual(result["agent_locks"]["status"], "PASS")
+        self._write_locks(expected_new="yes")
+        with patch.object(vw, "GOVERNANCE_DIR", self.gov):
+            result = vw.check_governance_write_shapes()
+        self.assertEqual(result["agent_locks"]["status"], "FAIL")
+        self.assertIn("expected_new",
+                      result["agent_locks"]["issues"][0]["detail"])
+
+
+class AgentLocksAcquireCliTests(unittest.TestCase):
+    """CLI end to end — agent-locks-acquire (FEAT-013 thin entry)."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="ctlockcli_")
+        self.root = Path(self.tmpdir)
+        self.gov = _governance_dir(self.tmpdir)
+        (self.root / "product").mkdir(exist_ok=True)
+        (self.root / "product" / "existing_a.py").write_text(
+            "x = 1\n", encoding="utf-8")
+
+    def _run_cli(self, *extra):
+        return subprocess.run(
+            [sys.executable, str(_INFRA_DIR / "verify_workflow.py"),
+             "agent-locks-acquire", "--project-root", str(self.root)]
+            + list(extra),
+            capture_output=True, text=True, encoding="utf-8", timeout=60,
+        )
+
+    def test_cli_rejects_missing_path_exit_2_no_write(self):
+        """Live-shape refusal record: a nonexistent lock target exits 2
+        fail-closed and writes no agent-locks.json. The refusal lands in
+        the stdout JSON summary (house pattern — cmd_change_triage)."""
+        done = self._run_cli(
+            "--task", "FIX-210", "--files", "skills/typo/ghost.py",
+            "--ttl-reason", "FEAT-013 refusal demo")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("skills/typo/ghost.py", done.stdout)
+        self.assertIn("expected_new", done.stdout)
+        self.assertFalse((self.gov / "agent-locks.json").exists())
+
+    def test_cli_success_expected_new_and_warn_disclosure(self):
+        rec_dir = self.gov / "change-triage"
+        rec_dir.mkdir(exist_ok=True)
+        (rec_dir / "FIX-211.json").write_text(json.dumps(
+            _triage_record_for_lock(
+                task_id="FIX-211", files=["product/existing_a.py"])),
+            encoding="utf-8")
+        done = self._run_cli(
+            "--task", "FIX-211",
+            "--files", "product/existing_a.py,product/to_be_created.py",
+            "--expected-new", "product/to_be_created.py",
+            "--role", "Developer", "--session", "sess-feat013",
+            "--ttl-reason", "FEAT-013 CLI demo")
+        self.assertEqual(done.returncode, 0, done.stderr + done.stdout)
+        payload = json.loads(done.stdout)
+        self.assertTrue(payload["written"])
+        data = json.loads(
+            (self.gov / "agent-locks.json").read_text(encoding="utf-8"))
+        self.assertTrue(
+            data["file_locks"]["product/to_be_created.py"]["expected_new"])
+        # Same-day triage record matches on existing_a but the lock also
+        # carries to_be_created → mismatch WARN disclosed on stderr.
+        self.assertIn("WARN", done.stderr)
+        self.assertIn("product/to_be_created.py", done.stderr)
 
 
 if __name__ == "__main__":

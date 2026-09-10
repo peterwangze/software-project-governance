@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
 """Change-control triage engine + machine record writer — FIX-237.4 / ADR-017 §4.4.
 
+FEAT-013 / RISK-046 adds the dispatch-lock write API
+(:func:`acquire_dispatch_locks` + :func:`agent_locks_acquire_cli`): the
+Coordinator's ``agent-locks.json`` acquisition is machine-validated at
+write time — pre-write path existence (a lock may not target a
+nonexistent file unless declared ``expected_new``), and a same-day
+change-triage ``files`` cross-check (mismatch = disclosed WARN, never
+blocking). Hand-assembling dispatch locks is the RISK-046 drift root
+cause; the write API is the root-cause fix.
+
 The ``change-triage`` CLI (verify_workflow.py thin entry) delegates here. A
 new **product-code** task MUST complete the mandatory five-step triage before
 it is created in plan-tracker:
@@ -64,7 +73,9 @@ Behavior contract (ADR-017 §4.4 / FIX-237.4 / DEC-139):
     fail-closed.
   - **Purity contract**: analysis helpers perform no file I/O and no
     side effects; all I/O lives in :func:`run_triage` /
-    :func:`load_triage_records` (mirror of review_record.py). The module
+    :func:`load_triage_records` / :func:`acquire_dispatch_locks` /
+    :func:`agent_locks_acquire_cli` (FEAT-013 dispatch-lock writer — the
+    same machine-write discipline as the triage record). The module
     imports only the standard library + :mod:`task_priority` (peer, pure).
 
 Usage::
@@ -86,7 +97,8 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import date
+import sys
+from datetime import date, datetime
 from pathlib import Path
 
 import task_priority
@@ -104,6 +116,10 @@ TRIAGE_SUBDIR = "change-triage"
 TRIAGE_SCHEMA_VERSION = 1
 PRIORITIES = ("P0", "P1", "P2")
 UNVERSIONED_MARKERS = ("未规划版本", "未定版本", "—", "-", "")
+
+# FEAT-013 / RISK-046 — dispatch-lock write API constants.
+LOCK_FILE_NAME = "agent-locks.json"
+DEFAULT_LOCK_TTL_SECONDS = 14400  # 4h — matches the live M7.6a practice
 
 _TASK_ID_RE = re.compile(r"^[A-Z]+-\d+$")
 _SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+$")
@@ -673,6 +689,313 @@ def load_triage_records(governance_dir) -> list:
     return records
 
 
+# ─── FEAT-013 (RISK-046 root-cause fix) — dispatch-lock write API ───────────
+
+
+def _normalize_lock_path(path) -> str:
+    """Repo-relative lock key: backslash → slash, trimmed."""
+    return str(path or "").replace("\\", "/").strip()
+
+
+def cross_check_triage_files(task_id, lock_files, records, today):
+    """FEAT-013 face 2 (pure) — same-day change-triage files cross-check.
+
+    RISK-046 ②: the hand-assembled lock file set could drift from the
+    same-day triage record's ``files`` declaration with no detection.
+    When a change-triage record exists for ``task_id`` AND its
+    ``created_at`` equals ``today`` (同期=当日), the declared file sets
+    are compared (case-insensitive, slash-normalized).
+
+    Args:
+        task_id: the dispatch-lock task id.
+        lock_files: the lock file set about to be written.
+        records: triage records (list of dicts,
+            :func:`load_triage_records` shape).
+        today: ISO date string the lock write happens on.
+
+    Returns:
+        None when there is no same-day record for the task (silent —
+        nothing to cross-check), else a dict with ``triage_created_at``,
+        ``triage_files``, ``lock_files``, ``lock_only``, ``triage_only``
+        and ``matches``.
+    """
+    def _norm(path):
+        return _normalize_lock_path(path).lower()
+
+    record = None
+    for candidate in records or []:
+        if str(candidate.get("task_id", "")) == str(task_id):
+            record = candidate
+            break
+    if record is None:
+        return None
+    created_at = str(record.get("created_at", ""))
+    if created_at != str(today):
+        return None
+    triage_files = sorted({
+        _norm(f) for f in (record.get("files") or [])
+        if _normalize_lock_path(f)})
+    lock_set = sorted({
+        _norm(f) for f in (lock_files or []) if _normalize_lock_path(f)})
+    lock_only = sorted(set(lock_set) - set(triage_files))
+    triage_only = sorted(set(triage_files) - set(lock_set))
+    return {
+        "task_id": str(task_id),
+        "triage_created_at": created_at,
+        "triage_files": triage_files,
+        "lock_files": lock_set,
+        "lock_only": lock_only,
+        "triage_only": triage_only,
+        "matches": not lock_only and not triage_only,
+    }
+
+
+def acquire_dispatch_locks(*, task_id, files, expected_new=None,
+                           agent_role="Developer", coordinator_session="",
+                           description="",
+                           ttl_seconds=DEFAULT_LOCK_TTL_SECONDS,
+                           ttl_reason="", governance_dir, repo_root=None,
+                           now=None, locks_path=None) -> dict:
+    """FEAT-013 — machine dispatch-lock acquisition with write-time checks.
+
+    RISK-046 root cause: the Coordinator hand-assembled
+    ``agent-locks.json`` with no write-time validation, so a typo'd /
+    placeholder / not-yet-created path entered ``file_locks`` directly
+    (a lock on a nonexistent file protects nothing once the real file
+    appears), and the lock set could drift from the same-day triage
+    record's ``files``. This API is the only sanctioned acquisition path
+    (CLI ``agent-locks-acquire``; the dispatch template forbids
+    hand-writing the lock file).
+
+    Validation order (fail-closed — NOTHING is written on any error):
+
+      1. task id shape (``PREFIX-NNN``), non-empty file list,
+         ``expected_new`` ⊆ ``files``, positive integer TTL;
+      2. the existing lock file must be structurally sane (valid JSON,
+         dict ``active_tasks`` / ``file_locks``) — a corrupt file is
+         never merged into;
+      3. duplicate-task guard — the task must not already hold an
+         active lock (release first, M7.6a);
+      4. cross-task conflict guard — a target already locked by another
+         active task is refused (the writer never creates the
+         ``multi_lock_conflict`` Check 26 flags as BLOCKING);
+      5. **face 1** path existence — every target must be an existing
+         file under ``repo_root`` unless declared in ``expected_new``
+         (the pre-created-file exemption, persisted as
+         ``expected_new: true`` on that lock entry);
+      6. **face 2** same-day cross-check — a ``files`` mismatch against
+         the same-day triage record is a WARN in the returned summary
+         (disclosed by the CLI on stderr; NEVER blocking: triage
+         precedes the lock and the lock may legitimately carry
+         dispatch-preauthorized extensions — the drift must be SEEN).
+
+    Args:
+        task_id: dispatch task id (PREFIX-NNN).
+        files: repo-relative lock targets (backslashes normalized).
+        expected_new: subset of ``files`` the task will create (not on
+            disk yet) — the RISK-046 ① exemption channel.
+        agent_role / coordinator_session / description: active_tasks
+            entry metadata (Check 26 required fields included).
+        ttl_seconds / ttl_reason: file_locks TTL fields.
+        governance_dir: ``.governance`` directory (locks + triage
+            records live under it).
+        repo_root: base for existence checks (default: cwd).
+        now: injectable clock (tests); default ``datetime.now()``.
+        locks_path: explicit lock-file override (tests).
+
+    Returns:
+        dict summary (``locks_path`` / ``lock_files`` / ``expected_new``
+        / ``cross_check`` / ``warnings`` / ``written``); ``error`` key
+        present on fail-closed input. Never raises.
+    """
+    task_id = str(task_id or "").strip()
+    if not _TASK_ID_RE.match(task_id):
+        return {"error": "task_id must match PREFIX-NNN (e.g. FIX-210)"}
+
+    lock_files = [_normalize_lock_path(f) for f in (files or [])]
+    lock_files = [f for f in lock_files if f]
+    if not lock_files:
+        return {"error": "files is required and must be non-empty — a "
+                         "dispatch lock without targets is RISK-046 drift"}
+    new_files = {_normalize_lock_path(f) for f in (expected_new or [])}
+    new_files.discard("")
+    unknown = sorted(new_files - set(lock_files))
+    if unknown:
+        return {"error": "expected_new must be a subset of files — "
+                         "undeclared target(s): {0}".format(
+                             ", ".join(unknown))}
+
+    try:
+        ttl_seconds = int(ttl_seconds)
+    except (TypeError, ValueError):
+        return {"error": "ttl_seconds must be an integer"}
+    if ttl_seconds <= 0:
+        return {"error": "ttl_seconds must be positive (got {0})".format(
+            ttl_seconds)}
+
+    if locks_path is None:
+        locks_path = Path(governance_dir) / LOCK_FILE_NAME
+    locks_path = Path(locks_path)
+
+    data = {"active_tasks": {}, "file_locks": {}}
+    if locks_path.is_file():
+        try:
+            loaded = json.loads(locks_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            return {"error": "agent-locks.json is unreadable ({0}) — "
+                             "refusing to merge fail-closed; fix or remove "
+                             "the file first".format(exc)}
+        if not isinstance(loaded, dict):
+            return {"error": "agent-locks.json root must be a JSON object "
+                             "— refusing to merge fail-closed"}
+        for key in ("active_tasks", "file_locks"):
+            value = loaded.get(key, {})
+            if not isinstance(value, dict):
+                return {"error": "agent-locks.json '{0}' must be a JSON "
+                                 "object — refusing to merge "
+                                 "fail-closed".format(key)}
+            data[key] = dict(value)
+
+    if task_id in data["active_tasks"]:
+        return {"error": "task {0} already holds an active dispatch lock "
+                         "— release it before re-acquiring (M7.6a)".format(
+                             task_id)}
+
+    held = []
+    for f in lock_files:
+        entry = data["file_locks"].get(f)
+        if (isinstance(entry, dict)
+                and entry.get("locked_by")
+                and entry.get("locked_by") != task_id):
+            held.append("{0} (locked_by {1})".format(
+                f, entry.get("locked_by")))
+    if held:
+        return {"error": "file lock conflict — target(s) already locked by "
+                         "another active task: {0}; serialize or isolate "
+                         "(worktree) per M7.6".format("; ".join(held))}
+
+    # Face 1 — pre-write path existence validation (RISK-046 ①).
+    repo_root = Path(repo_root) if repo_root is not None else Path.cwd()
+    missing = [f for f in lock_files
+               if f not in new_files and not (repo_root / f).is_file()]
+    if missing:
+        return {"error": "lock target(s) do not exist as files — {0}. "
+                         "先创建文件或修正路径；若该文件是本任务将新建的预创建"
+                         "目标，须显式声明 expected_new（CLI --expected-new，"
+                         "锁条目落 expected_new: true）——FEAT-013 / RISK-046 "
+                         "写前校验：拒绝锁定不存在的路径".format(
+                             "; ".join(missing))}
+
+    # Face 2 — same-day change-triage files cross-check (RISK-046 ②).
+    moment = now if now is not None else datetime.now()
+    today = moment.date().isoformat()
+    cross = cross_check_triage_files(
+        task_id, lock_files, load_triage_records(governance_dir), today)
+    warnings = []
+    if cross is not None and not cross["matches"]:
+        warnings.append(
+            "WARN: 派发锁 files 与同期 change-triage 记录（change-triage/"
+            "{0}.json，created_at {1}）不一致——锁独有: {2}；triage 独有: "
+            "{3}（advisory 不阻断：triage 先于锁且锁可含派发预授权扩展，"
+            "差异需人看见——RISK-046 / FEAT-013）".format(
+                task_id, cross["triage_created_at"],
+                ", ".join(cross["lock_only"]) or "—",
+                ", ".join(cross["triage_only"]) or "—"))
+
+    timestamp = moment.replace(microsecond=0).isoformat()
+    data["active_tasks"][task_id] = {
+        "agent_role": str(agent_role or ""),
+        "spawned_at": timestamp,
+        "coordinator_session": str(coordinator_session or ""),
+        "target_files": list(lock_files),
+        "description": str(description or ""),
+        "acquired": timestamp,
+        "files": list(lock_files),
+    }
+    for f in lock_files:
+        entry = {
+            "locked_by": task_id,
+            "locked_at": timestamp,
+            "ttl_seconds": ttl_seconds,
+            "ttl_reason": str(ttl_reason or ""),
+        }
+        if f in new_files:
+            entry["expected_new"] = True
+        data["file_locks"][f] = entry
+
+    try:
+        locks_path.write_text(
+            json.dumps(data, ensure_ascii=False, indent=4) + "\n",
+            encoding="utf-8")
+    except OSError as exc:
+        return {"error": "cannot write agent-locks.json: {0}".format(exc)}
+
+    return {
+        "task_id": task_id,
+        "locks_path": str(locks_path),
+        "lock_files": list(lock_files),
+        "expected_new": sorted(new_files),
+        "active_task_count": len(data["active_tasks"]),
+        "file_lock_count": len(data["file_locks"]),
+        "cross_check": cross,
+        "warnings": warnings,
+        "written": True,
+    }
+
+
+def agent_locks_acquire_cli(args, *, governance_dir, repo_root,
+                            post_write_check=None):
+    """FEAT-013 thin-entry glue — the ``agent-locks-acquire`` CLI body.
+
+    All validation/writing lives in :func:`acquire_dispatch_locks`; this
+    glue parses the comma lists, prints the JSON summary, discloses WARNs
+    on stderr (WARN 起步，不得静默 — never silent, never blocking) and
+    exits 2 fail-closed on any error. ``post_write_check`` (injected by
+    the engine wrapper = ``verify_workflow.check_agent_locks_format``,
+    Check 26) re-validates the just-written file — the writer proves its
+    own output against the SAME schema the FEAT-011 guard consumes (no
+    second schema definition); a post-write violation also exits 2.
+    """
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+    def _split(raw):
+        return [f for f in str(raw or "").replace(";", ",").split(",")
+                if f.strip()]
+
+    summary = acquire_dispatch_locks(
+        task_id=getattr(args, "task", ""),
+        files=_split(getattr(args, "files", "")),
+        expected_new=_split(getattr(args, "expected_new", "")),
+        agent_role=getattr(args, "role", "") or "Developer",
+        coordinator_session=getattr(args, "session", "") or "",
+        description=getattr(args, "description", "") or "",
+        ttl_seconds=getattr(args, "ttl", DEFAULT_LOCK_TTL_SECONDS),
+        ttl_reason=getattr(args, "ttl_reason", "") or "",
+        governance_dir=governance_dir,
+        repo_root=repo_root,
+    )
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    if summary.get("error"):
+        sys.exit(2)
+    for warning in summary.get("warnings", []):
+        print(warning, file=sys.stderr)
+    if post_write_check is not None:
+        issues = post_write_check()
+        if issues:
+            for issue in issues:
+                print("agent-locks-acquire write guard: {0}".format(
+                    issue.get("detail", issue)), file=sys.stderr)
+            print("agent-locks-acquire write guard: the just-written "
+                  "agent-locks.json violates the Check 26 schema — fix the "
+                  "input and re-run; nothing else was written",
+                  file=sys.stderr)
+            sys.exit(2)
+
+
 def _evidence_row(task_id: str, record_name: str, date_str: str) -> str:
     """Evidence-log row in the machine-write contract (mirrors review_record).
 
@@ -892,6 +1215,8 @@ __all__ = [
     "TRIAGE_SUBDIR",
     "TRIAGE_SCHEMA_VERSION",
     "PRIORITIES",
+    "LOCK_FILE_NAME",
+    "DEFAULT_LOCK_TTL_SECONDS",
     "split_dep_ids",
     "run_dependency_analysis",
     "parse_version_chain",
@@ -901,5 +1226,8 @@ __all__ = [
     "check_conflicts",
     "analyze_side_effects",
     "load_triage_records",
+    "cross_check_triage_files",
+    "acquire_dispatch_locks",
+    "agent_locks_acquire_cli",
     "run_triage",
 ]

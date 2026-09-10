@@ -37,7 +37,10 @@ from contract_matrix import generator as cmg  # noqa: E402
 # archguard-ratchet fatal gate: 80→81 keys / 77→78 handlers, snapshot
 # regenerated via generator.py --regen in the same change (the documented
 # contract-change path; review covers both files).
-FROZEN_CLI_KEY_COUNT = 81
+# FEAT-013 (2026-09-10) extended the CLI face with the agent-locks-acquire
+# dispatch-lock write API (RISK-046 root fix): 81→82 keys / 78→79 handlers,
+# snapshot regenerated via generator.py --regen in the same change.
+FROZEN_CLI_KEY_COUNT = 82
 FROZEN_CHECK_SEGMENT_COUNT = 70
 
 

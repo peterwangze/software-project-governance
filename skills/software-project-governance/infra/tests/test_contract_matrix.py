@@ -33,7 +33,11 @@ from contract_matrix import generator as cmg  # noqa: E402
 
 # Freeze-point counts mandated by the FEAT-020 packet (实测值——冻结基线,
 # not hand-copied inventories: the lists themselves come from extraction).
-FROZEN_CLI_KEY_COUNT = 80
+# FEAT-019 (2026-09-10) deliberately extended the CLI face with the
+# archguard-ratchet fatal gate: 80→81 keys / 77→78 handlers, snapshot
+# regenerated via generator.py --regen in the same change (the documented
+# contract-change path; review covers both files).
+FROZEN_CLI_KEY_COUNT = 81
 FROZEN_CHECK_SEGMENT_COUNT = 70
 
 

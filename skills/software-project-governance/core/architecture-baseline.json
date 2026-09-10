@@ -1,0 +1,548 @@
+{
+  "exemptions": [
+    {
+      "allowance_lines": 0,
+      "dec": "DEC-183 / DEC-184 (FEAT-019 packet; evolution §4 S5)",
+      "expire_version": "0.81.0",
+      "reason": "FEAT-019 self-bootstrap RECORD: the anchor was generated AFTER the ratchet's own dispatch wiring (18 lines: import + argparse registration + commands-dict entry), so the wiring is already inside the anchor and the allowance is deliberately ZERO — this entry is the DEC-tracked disclosure, not a growth license (any excess still fails)",
+      "rule": "R1",
+      "scope": "mainfile"
+    }
+  ],
+  "generated": {
+    "git_head": "c92bf5d33a3166a5ccacd3bde7a157a6f422bb9a",
+    "loc_caliber": "physical lines (ReadAllLines equivalent — see physical_line_count docstring, facts §1.1)"
+  },
+  "r1_mainfile_budget": {
+    "anchor_loc": 24302,
+    "design_anchor_note": "facts-0.80.0 §3.1 design anchor was 24,252 (2026-09-09 HEAD); FEAT-019 packet mandates 实测为准 at regen time (intervening engine deltas: FIX-300 + FEAT-019 dispatch wiring). 只降不升 semantics unchanged; the wiring lines are registered as the R1 self-bootstrap exemption.",
+    "path": "infra/verify_workflow.py"
+  },
+  "r2_reverse_dependency": {
+    "inventory": [
+      {
+        "count": 1,
+        "kind": "import_vw",
+        "lines": [
+          39
+        ],
+        "owner_task": "REFACTOR-domains-batch1",
+        "path": "checks/capability_registry.py"
+      },
+      {
+        "count": 4,
+        "kind": "vw_call",
+        "lines": [
+          45,
+          49,
+          53,
+          57
+        ],
+        "owner_task": "REFACTOR-domains-batch1",
+        "path": "checks/capability_registry.py"
+      },
+      {
+        "count": 1,
+        "kind": "vw_def",
+        "lines": [
+          31
+        ],
+        "owner_task": "REFACTOR-domains-batch1",
+        "path": "checks/capability_registry.py"
+      },
+      {
+        "count": 1,
+        "kind": "import_vw",
+        "lines": [
+          82
+        ],
+        "owner_task": "REFACTOR-domains-batch1",
+        "path": "checks/ci_domain.py"
+      },
+      {
+        "count": 1,
+        "kind": "vw_call",
+        "lines": [
+          99
+        ],
+        "owner_task": "REFACTOR-domains-batch1",
+        "path": "checks/ci_domain.py"
+      },
+      {
+        "count": 1,
+        "kind": "vw_def",
+        "lines": [
+          78
+        ],
+        "owner_task": "REFACTOR-domains-batch1",
+        "path": "checks/ci_domain.py"
+      },
+      {
+        "count": 1,
+        "kind": "import_vw",
+        "lines": [
+          49
+        ],
+        "owner_task": "REFACTOR-domains-batch1",
+        "path": "checks/evidence_domain.py"
+      },
+      {
+        "count": 1,
+        "kind": "vw_call",
+        "lines": [
+          93
+        ],
+        "owner_task": "REFACTOR-domains-batch1",
+        "path": "checks/evidence_domain.py"
+      },
+      {
+        "count": 1,
+        "kind": "vw_def",
+        "lines": [
+          41
+        ],
+        "owner_task": "REFACTOR-domains-batch1",
+        "path": "checks/evidence_domain.py"
+      },
+      {
+        "count": 1,
+        "kind": "import_vw",
+        "lines": [
+          79
+        ],
+        "owner_task": "REFACTOR-domains-batch1",
+        "path": "checks/gate_domain.py"
+      },
+      {
+        "count": 1,
+        "kind": "vw_call",
+        "lines": [
+          96
+        ],
+        "owner_task": "REFACTOR-domains-batch1",
+        "path": "checks/gate_domain.py"
+      },
+      {
+        "count": 1,
+        "kind": "vw_def",
+        "lines": [
+          75
+        ],
+        "owner_task": "REFACTOR-domains-batch1",
+        "path": "checks/gate_domain.py"
+      },
+      {
+        "count": 1,
+        "kind": "import_vw",
+        "lines": [
+          41
+        ],
+        "owner_task": "REFACTOR-domains-batch1",
+        "path": "checks/manifest.py"
+      },
+      {
+        "count": 4,
+        "kind": "vw_call",
+        "lines": [
+          47,
+          51,
+          55,
+          323
+        ],
+        "owner_task": "REFACTOR-domains-batch1",
+        "path": "checks/manifest.py"
+      },
+      {
+        "count": 1,
+        "kind": "vw_def",
+        "lines": [
+          33
+        ],
+        "owner_task": "REFACTOR-domains-batch1",
+        "path": "checks/manifest.py"
+      },
+      {
+        "count": 1,
+        "kind": "import_vw",
+        "lines": [
+          69
+        ],
+        "owner_task": "REFACTOR-migrate-review-domain",
+        "path": "checks/review_domain.py"
+      },
+      {
+        "count": 1,
+        "kind": "vw_call",
+        "lines": [
+          113
+        ],
+        "owner_task": "REFACTOR-migrate-review-domain",
+        "path": "checks/review_domain.py"
+      },
+      {
+        "count": 1,
+        "kind": "vw_def",
+        "lines": [
+          61
+        ],
+        "owner_task": "REFACTOR-migrate-review-domain",
+        "path": "checks/review_domain.py"
+      },
+      {
+        "count": 1,
+        "kind": "import_vw",
+        "lines": [
+          49
+        ],
+        "owner_task": "REFACTOR-domains-batch1",
+        "path": "checks/risk_domain.py"
+      },
+      {
+        "count": 1,
+        "kind": "vw_call",
+        "lines": [
+          79
+        ],
+        "owner_task": "REFACTOR-domains-batch1",
+        "path": "checks/risk_domain.py"
+      },
+      {
+        "count": 1,
+        "kind": "vw_def",
+        "lines": [
+          41
+        ],
+        "owner_task": "REFACTOR-domains-batch1",
+        "path": "checks/risk_domain.py"
+      },
+      {
+        "count": 1,
+        "kind": "import_vw",
+        "lines": [
+          48
+        ],
+        "owner_task": "REFACTOR-domains-batch1",
+        "path": "checks/snapshot_domain.py"
+      },
+      {
+        "count": 1,
+        "kind": "vw_call",
+        "lines": [
+          67
+        ],
+        "owner_task": "REFACTOR-domains-batch1",
+        "path": "checks/snapshot_domain.py"
+      },
+      {
+        "count": 1,
+        "kind": "vw_def",
+        "lines": [
+          44
+        ],
+        "owner_task": "REFACTOR-domains-batch1",
+        "path": "checks/snapshot_domain.py"
+      },
+      {
+        "count": 4,
+        "kind": "import_vw",
+        "lines": [
+          261,
+          267,
+          480,
+          486
+        ],
+        "owner_task": "REFACTOR-domains-batch1",
+        "path": "checks/triage_domain.py"
+      },
+      {
+        "count": 1,
+        "kind": "import_vw",
+        "lines": [
+          51
+        ],
+        "owner_task": "REFACTOR-contract-layer",
+        "path": "contract_matrix/generator.py"
+      },
+      {
+        "count": 1,
+        "kind": "import_vw",
+        "lines": [
+          518
+        ],
+        "owner_task": "REFACTOR-domains-batch1",
+        "path": "loop_engine.py"
+      },
+      {
+        "count": 1,
+        "kind": "vw_call",
+        "lines": [
+          531
+        ],
+        "owner_task": "REFACTOR-domains-batch1",
+        "path": "loop_engine.py"
+      },
+      {
+        "count": 1,
+        "kind": "vw_def",
+        "lines": [
+          508
+        ],
+        "owner_task": "REFACTOR-domains-batch1",
+        "path": "loop_engine.py"
+      },
+      {
+        "count": 1,
+        "kind": "import_vw",
+        "lines": [
+          116
+        ],
+        "owner_task": "REFACTOR-domains-batch1",
+        "path": "loop_gate_processor.py"
+      },
+      {
+        "count": 1,
+        "kind": "vw_call",
+        "lines": [
+          268
+        ],
+        "owner_task": "REFACTOR-domains-batch1",
+        "path": "loop_gate_processor.py"
+      },
+      {
+        "count": 1,
+        "kind": "vw_def",
+        "lines": [
+          106
+        ],
+        "owner_task": "REFACTOR-domains-batch1",
+        "path": "loop_gate_processor.py"
+      },
+      {
+        "count": 1,
+        "kind": "import_vw",
+        "lines": [
+          47
+        ],
+        "owner_task": "REFACTOR-domains-batch1",
+        "path": "loop_health.py"
+      },
+      {
+        "count": 2,
+        "kind": "vw_call",
+        "lines": [
+          59,
+          370
+        ],
+        "owner_task": "REFACTOR-domains-batch1",
+        "path": "loop_health.py"
+      },
+      {
+        "count": 1,
+        "kind": "vw_def",
+        "lines": [
+          38
+        ],
+        "owner_task": "REFACTOR-domains-batch1",
+        "path": "loop_health.py"
+      },
+      {
+        "count": 1,
+        "kind": "import_vw",
+        "lines": [
+          1195
+        ],
+        "owner_task": "REFACTOR-domains-batch1",
+        "path": "loop_migration.py"
+      }
+    ],
+    "scan_exclusions": [
+      "tests",
+      "__pycache__",
+      ".pytest_cache",
+      "e2e",
+      "verify_workflow.py"
+    ],
+    "scan_root": "infra/"
+  },
+  "r3_layer_matrix": {
+    "allowed_edges": [
+      [
+        "L6",
+        "L5"
+      ],
+      [
+        "L6",
+        "L4"
+      ],
+      [
+        "L6",
+        "L3"
+      ],
+      [
+        "L6",
+        "L2"
+      ],
+      [
+        "L6",
+        "L0"
+      ],
+      [
+        "L5",
+        "L4"
+      ],
+      [
+        "L5",
+        "L0"
+      ],
+      [
+        "L4",
+        "L3"
+      ],
+      [
+        "L4",
+        "L2"
+      ],
+      [
+        "L4",
+        "L0"
+      ],
+      [
+        "L3",
+        "L0"
+      ],
+      [
+        "L2",
+        "L0"
+      ]
+    ],
+    "asserted_edge_count": 12,
+    "layers": [
+      "L0",
+      "L2",
+      "L3",
+      "L4",
+      "L5",
+      "L6"
+    ],
+    "legacy_note": "verify_workflow.py + checks/* + release/* + loop_* enter R3 at their slice's 接入日; until then their reverse edges ride the R2 inventory",
+    "managed_modules": {
+      "infra/archguard_ratchet.py": {
+        "admitted_by": "FEAT-019",
+        "layer": "L5",
+        "note": "cross-cutting guard; CLI surface ≈ L5; internal imports: stdlib only + lazy contract_matrix consumer edge (unmanaged until REFACTOR-contract-layer admits it)"
+      }
+    },
+    "source": "docs/requirements/architecture-evolution-0.80.0.md §3.2 (enumeration set authoritative; count derived — W1)"
+  },
+  "r4_print_orchestration": {
+    "path": "infra/verify_workflow.py",
+    "per_function": {
+      "_apply_project_root_override": 1,
+      "_archguard_print_findings": 2,
+      "_format_rollup": 8,
+      "_format_telemetry": 8,
+      "_print_check_summary": 9,
+      "_print_product_gate_skipped": 3,
+      "_print_sequential_id_check": 13,
+      "_run_full_engine_checks": 585,
+      "check_agent_adapter_contract": 3,
+      "check_architecture_fact_source": 2,
+      "check_files": 4,
+      "check_hot_fact_source_consistency": 3,
+      "check_release_readiness_fact_source": 2,
+      "check_snippets": 3,
+      "cmd_agent_runtime_e2e": 14,
+      "cmd_capability_context": 25,
+      "cmd_change_triage": 4,
+      "cmd_check_acceptance_contracts": 8,
+      "cmd_check_agent_locks": 7,
+      "cmd_check_agent_team": 18,
+      "cmd_check_architecture_health": 5,
+      "cmd_check_archive_integrity": 13,
+      "cmd_check_commit_scope": 9,
+      "cmd_check_complexity": 7,
+      "cmd_check_cross_references": 14,
+      "cmd_check_deterministic_scaffolds": 8,
+      "cmd_check_dsh_preset_smoke": 7,
+      "cmd_check_dsh_skills_manifest": 7,
+      "cmd_check_duplicate_code": 6,
+      "cmd_check_first_session_measurement": 6,
+      "cmd_check_flow_unit_runtime": 14,
+      "cmd_check_goal_alignment": 13,
+      "cmd_check_governance_data_size": 9,
+      "cmd_check_governance_pack_status": 6,
+      "cmd_check_governance_packs": 6,
+      "cmd_check_host_capability_context": 13,
+      "cmd_check_hot_fact_source": 6,
+      "cmd_check_injection_contract": 7,
+      "cmd_check_interruption_policy": 11,
+      "cmd_check_lifecycle_registry": 9,
+      "cmd_check_loop_health": 4,
+      "cmd_check_loop_role_skills": 5,
+      "cmd_check_loop_runtime_claims": 1,
+      "cmd_check_mainstream_agent_loading": 6,
+      "cmd_check_official_submission_ecosystem": 6,
+      "cmd_check_plugin_freshness": 8,
+      "cmd_check_product_success_contracts": 8,
+      "cmd_check_projection_sync": 11,
+      "cmd_check_quality_budget": 8,
+      "cmd_check_readme_pack_guidance": 6,
+      "cmd_check_release": 15,
+      "cmd_check_runtime_readiness_matrix": 6,
+      "cmd_check_sequential_ids": 7,
+      "cmd_check_sequential_ids._report": 4,
+      "cmd_check_structural_validity": 7,
+      "cmd_check_technical_debt": 6,
+      "cmd_check_user_impact": 9,
+      "cmd_check_version_consistency": 10,
+      "cmd_check_vertical_slices": 8,
+      "cmd_dynamic_lifecycle_migration": 3,
+      "cmd_e2e_check": 26,
+      "cmd_execution_packet": 2,
+      "cmd_external_project_validation": 15,
+      "cmd_first_run_demo": 8,
+      "cmd_gate": 16,
+      "cmd_gate_check": 13,
+      "cmd_gates": 4,
+      "cmd_gemini_auth_preflight": 11,
+      "cmd_generate_deterministic_scaffold": 3,
+      "cmd_governance_context": 14,
+      "cmd_governance_write_guard": 8,
+      "cmd_loop_engineering_migration": 3,
+      "cmd_next_candidates": 1,
+      "cmd_opencode_provider_preflight": 14,
+      "cmd_quality_tools": 1,
+      "cmd_release_ledger": 1,
+      "cmd_release_projection": 1,
+      "cmd_resolve_entry": 6,
+      "cmd_review_record": 1,
+      "cmd_stage": 12,
+      "cmd_stages": 3,
+      "cmd_status": 43,
+      "cmd_task_priority_analysis": 5,
+      "cmd_verify": 6,
+      "cmd_web_console": 61,
+      "main": 1
+    },
+    "total": 1315
+  },
+  "r5_registration_integrity": {
+    "consumes": "infra/contract_matrix/snapshots.json (FEAT-020)",
+    "faces": [
+      "cli_dispatch.keys",
+      "check_segments.ids"
+    ],
+    "missing_snapshot_policy": "SKIP+disclose",
+    "snapshot_present_at_regen": true
+  },
+  "r6_startup_budget": {
+    "import_count": 196,
+    "import_set_sha256": "70157fc2bc9516653aaf7c8d3ddfb00b84ee25ce03096df063eda405169ed1fe",
+    "note": "collection + comparison frame only; FEAT-018's tolerance table fills threshold, then the face tightens — advisory until then, never fatal in v1",
+    "probe": "python -I -B -c 'import verify_workflow' (isolated)",
+    "threshold": null
+  },
+  "rules_version": 1,
+  "schema": "spg-architecture-baseline/1",
+  "task": "FEAT-019"
+}

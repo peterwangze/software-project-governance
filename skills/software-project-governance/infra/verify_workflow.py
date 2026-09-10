@@ -66,6 +66,9 @@ from release.context import RepositoryContext
 from release.ledger import validate_release_ledger
 from release.projection import check_projections, write_projections
 from release.quality import probe_quality_tools
+# FEAT-019: ArchGuard ratchet gate (fatal) — self-contained module; the
+# engine only wires dispatch (bootstrap discipline, evolution doc §4).
+from archguard_ratchet import cmd_archguard_ratchet
 
 ROOT = Path(__file__).resolve().parents[3]
 INTERACTION_BOUNDARY_PATH = ROOT / "skills/software-project-governance/references/interaction-boundary.md"
@@ -23897,6 +23900,20 @@ def main(argv=None):
     cah_p.add_argument("--fail-on-issues", action="store_true",
                        help="Exit non-zero only if gate_integration.fatal_on_error is true and ERRORs found")
 
+    # archguard-ratchet (FEAT-019 / AUDIT-150 §4 — fatal ratchet gate R1~R7
+    # vs core/architecture-baseline.json; violations exit non-zero by design)
+    agr_p = subparsers.add_parser(
+        "archguard-ratchet",
+        help="ArchGuard ratchet R1~R7 vs core/architecture-baseline.json "
+             "(fatal: any violation exits non-zero)",
+    )
+    agr_p.add_argument("--regen", action="store_true",
+                       help="Explicitly regenerate the baseline (anchored at "
+                            "current measurements; only-down from there)")
+    agr_p.add_argument("--baseline", default=None,
+                       help="Baseline JSON path (default: "
+                            "core/architecture-baseline.json)")
+
     # check-loop-health (FX-192 / ADR §9.5 — advisory-only, NOT a Check 28 sub-item)
     clh_p = subparsers.add_parser(
         "check-loop-health",
@@ -24249,6 +24266,7 @@ def main(argv=None):
         "check-mainstream-agent-loading": cmd_check_mainstream_agent_loading,
         "check-readme-pack-guidance": cmd_check_readme_pack_guidance,
         "check-architecture-health": cmd_check_architecture_health,
+        "archguard-ratchet": cmd_archguard_ratchet,
         "check-loop-health": cmd_check_loop_health,
         "check-loop-runtime-claims": cmd_check_loop_runtime_claims,
         "loop-rollup": cmd_loop_rollup,

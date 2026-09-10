@@ -1,0 +1,199 @@
+{
+  "schema_version": "env-failure-classification/v1",
+  "generated": "2026-09-10",
+  "generated_by": "AUDIT-152",
+  "baseline_report": "docs/requirements/env-failure-classification-0.80.0.md",
+  "suite_command": "python -B -m unittest discover -s skills/software-project-governance/infra/tests",
+  "suite_summary": {
+    "head": "a599843",
+    "ran": 2304,
+    "failures": 31,
+    "errors": 1,
+    "skipped": 1,
+    "seconds": 716.848,
+    "load_class": "serial-exclusive-approximate",
+    "transcript": "%TEMP%/audit152_unittest_full.txt"
+  },
+  "classes": {
+    "env_sensitive": "result determined by execution environment (bash/WSL runtime, system codepage, machine load); code and data both correct",
+    "known_defect": "registered defect (test-face or manifest-face); reproducible, root-caused, fix direction known",
+    "data_coupling": "test pins a data-plane precondition that legitimately evolved (new doc committed, governance data archived/fixed); scanner/code behavior correct",
+    "regression_candidate": "suspected real regression; escalate to Developer",
+    "unclassified": "insufficient evidence, honestly marked"
+  },
+  "families": {
+    "bash_wsl_hook": "hook executes via WSL bash; host has no default distro (UTF-16 WSL_E_DEFAULT_DISTRO_NOT_FOUND)",
+    "codepage_gbk": "GBK negative-control skips by design on UTF-8 (cp65001) machines",
+    "load_timing": "timing/timeout assertion sensitive to parallel governance load (RISK-048); passes in serial windows",
+    "test_assertion_stale": "known defect: test assertion not updated after legitimate data fix (FIX-293)",
+    "manifest_presets": "known defect: manifest.json presets/ dir vs cleanup PLUGIN_SCOPE_DIRS vs disk, three-way drift",
+    "review_doc_claim": "docs/reviews/review-FIX-300-CODE-R0.md affirmative loop-runtime clauses unbound -> UNSUPPORTED_AFFIRMATIVE -> semantic verdict BLOCKED",
+    "authority_archive_side_effect": "EVD-983 archive migration moved pinned DEC-104 row out of live decision-log -> AUTHORITY_SOURCE_OCCURRENCE found 0",
+    "live_plan_tracker_row": "live-replay test pins REL-071 task row that EVD-983 migration archived out of hot plan-tracker"
+  },
+  "tests": {
+    "test_pre_commit_review_evidence.ReviewEvidenceRegexTests.test_a_legacy_end_column_hits": {
+      "class": "env_sensitive",
+      "family": "bash_wsl_hook",
+      "count": 2,
+      "evidence": "traceback 'hook function run failed: rc=1', stdout UTF-16 'wsl.exe --list --online' / WSL_E_DEFAULT_DISTRO_NOT_FOUND; subTest hook=pre-commit/commit-msg; expected green on Linux CI (native bash)",
+      "since": "<=2026-08-25 (FIX-278 EVD, via AUDIT-151 section 4-F1)",
+      "ticket": null
+    },
+    "test_pre_commit_review_evidence.ReviewEvidenceRegexTests.test_b_machine_row_with_zero_blockers_hits": {
+      "class": "env_sensitive",
+      "family": "bash_wsl_hook",
+      "count": 2,
+      "evidence": "same WSL rc=1 family as above",
+      "since": "<=2026-08-25 (FIX-278 EVD, via AUDIT-151 section 4-F1)",
+      "ticket": null
+    },
+    "test_pre_commit_review_evidence.ReviewEvidenceRegexTests.test_blocked_never_passes": {
+      "class": "env_sensitive",
+      "family": "bash_wsl_hook",
+      "count": 2,
+      "evidence": "same WSL rc=1 family as above",
+      "since": "<=2026-08-25 (FIX-278 EVD, via AUDIT-151 section 4-F1)",
+      "ticket": null
+    },
+    "test_pre_commit_review_evidence.ReviewEvidenceRegexTests.test_blockers_tail_must_be_exactly_zero": {
+      "class": "env_sensitive",
+      "family": "bash_wsl_hook",
+      "count": 4,
+      "evidence": "2 tail_cols variants x 2 hooks; same WSL rc=1 family",
+      "since": "<=2026-08-25 (FIX-278 EVD, via AUDIT-151 section 4-F1)",
+      "ticket": null
+    },
+    "test_pre_commit_review_evidence.ReviewEvidenceRegexTests.test_c_machine_row_with_nonzero_blockers_misses": {
+      "class": "env_sensitive",
+      "family": "bash_wsl_hook",
+      "count": 2,
+      "evidence": "same WSL rc=1 family as above",
+      "since": "<=2026-08-25 (FIX-278 EVD, via AUDIT-151 section 4-F1)",
+      "ticket": null
+    },
+    "test_pre_commit_review_evidence.ReviewEvidenceRegexTests.test_d_needs_change_misses_both_forms": {
+      "class": "env_sensitive",
+      "family": "bash_wsl_hook",
+      "count": 4,
+      "evidence": "2 forms (legacy/machine) x 2 hooks; same WSL rc=1 family",
+      "since": "<=2026-08-25 (FIX-278 EVD, via AUDIT-151 section 4-F1)",
+      "ticket": null
+    },
+    "test_pre_commit_review_evidence.ReviewEvidenceRegexTests.test_machine_plain_approved_still_hits": {
+      "class": "env_sensitive",
+      "family": "bash_wsl_hook",
+      "count": 2,
+      "evidence": "same WSL rc=1 family as above",
+      "since": "<=2026-08-25 (FIX-278 EVD, via AUDIT-151 section 4-F1)",
+      "ticket": null
+    },
+    "test_pre_commit_review_evidence.ReviewEvidenceRegexTests.test_other_task_machine_row_does_not_hit": {
+      "class": "env_sensitive",
+      "family": "bash_wsl_hook",
+      "count": 2,
+      "evidence": "same WSL rc=1 family as above",
+      "since": "<=2026-08-25 (FIX-278 EVD, via AUDIT-151 section 4-F1)",
+      "ticket": null
+    },
+    "test_pre_commit_review_evidence.ReviewEvidenceRegexTests.test_plain_approved_with_blockers_tail_misses": {
+      "class": "env_sensitive",
+      "family": "bash_wsl_hook",
+      "count": 2,
+      "evidence": "same WSL rc=1 family as above",
+      "since": "<=2026-08-25 (FIX-278 EVD, via AUDIT-151 section 4-F1)",
+      "ticket": null
+    },
+    "test_pre_commit_review_evidence.ReviewEvidenceRegexTests.test_replay_real_evidence_log_fix260": {
+      "class": "env_sensitive",
+      "family": "bash_wsl_hook",
+      "count": 2,
+      "evidence": "same WSL rc=1 family as above",
+      "since": "<=2026-08-25 (FIX-278 EVD, via AUDIT-151 section 4-F1)",
+      "ticket": null
+    },
+    "test_utf8_read_guard": {
+      "class": "env_sensitive",
+      "family": "codepage_gbk",
+      "count": 1,
+      "evidence": "skip (expected behavior): 'system ANSI codepage is 65001, not 936 (GBK) - mojibake negative control not reproducible on this machine'",
+      "since": "by design since test introduction (AUDIT-151 section 4-F0)",
+      "ticket": null
+    },
+    "test_triage_write_guard.GovernanceWriteGuardPlanTrackerTests.test_live_plan_tracker_flags_only_known_m1_rows": {
+      "class": "known_defect",
+      "family": "test_assertion_stale",
+      "count": 1,
+      "evidence": "AssertionError 'set() is not true : live M1 four rows must be flagged' (test L533); FIX-293 fixed the data on 2026-09-09 (EVD-963) so flagged set is now empty by design; guard CLI itself PASSes - assertion flip candidate assertEqual(set(), flagged)",
+      "since": "2026-09-09 (FIX-293 landing)",
+      "ticket": "AUDIT-152 recommends new FIX task (report section 7)"
+    },
+    "test_cleanup.TestPluginScopeDirs.test_all_manifest_dirs_covered": {
+      "class": "known_defect",
+      "family": "manifest_presets",
+      "count": 1,
+      "evidence": "AssertionError {'presets'}: manifest.json declares top-level dir presets/ but cleanup PLUGIN_SCOPE_DIRS lacks it and the directory does not exist on disk (three-way drift)",
+      "since": "<=2026-08-25 (FIX-278 EVD 'cleanup presets', via AUDIT-151 section 4-F3)",
+      "ticket": "existing reconciliation candidate (report section 7)"
+    },
+    "test_verify_workflow.FIX300DualCaliberAgreementTests.test_identity_host_source_drift_reproduces_divergence_shape": {
+      "class": "data_coupling",
+      "family": "review_doc_claim",
+      "count": 1,
+      "evidence": "L197 assertEqual('PASS', semantic.verdict) -> 'PASS' != 'BLOCKED'; installed_host semantic scan of real repo sees 3x UNSUPPORTED_AFFIRMATIVE on docs/reviews/review-FIX-300-CODE-R0.md (locators accounting:71:1/71:4/72:1, claim LRC-ACTIVE-RUNTIME forbidden_current); installed_host skips authority validation (loop_runtime_claims.py L1240-1241); single-run reproduces identically",
+      "since": "2026-09-10 e994c7a (review doc committed)",
+      "ticket": "AUDIT-152 recommends allowlist notice-binding candidate (report section 7)"
+    },
+    "test_verify_workflow.FIX300DualCaliberAgreementTests.test_fixture_identity_mode_agrees_with_engine_on_present_sources": {
+      "class": "data_coupling",
+      "family": "review_doc_claim",
+      "co_causes": ["authority_archive_side_effect"],
+      "count": 1,
+      "evidence": "ERROR form: SystemExit(1) uncaught from cmd_check_loop_runtime_claims (verify_workflow.py L20735 via test L177); aggregate verdict FAIL; review-doc cause necessarily present (product scan BLOCKED), DEC-104 archive cause co-present on copied host governance files; single-run reproduces identically",
+      "since": "2026-09-10 e994c7a (review doc); archive cause since EVD-983 (2026-09-10, post a599843)",
+      "ticket": "AUDIT-152 recommends allowlist notice-binding candidate (report section 7)"
+    },
+    "test_loop_runtime_claims.LoopRuntimeClaimTests.test_real_repository_inventory_complete_and_within_budget": {
+      "class": "data_coupling",
+      "family": "review_doc_claim",
+      "co_causes": ["authority_archive_side_effect"],
+      "count": 1,
+      "evidence": "L904 verdict BLOCKED; direct scanner run: exactly 4 findings = 1x AUTHORITY_SOURCE_OCCURRENCE (.governance/decision-log.md 'found 0', pinned DEC-104 row archived by EVD-983: live=0/archive=1 measured) + 3x UNSUPPORTED_AFFIRMATIVE (review-FIX-300-CODE-R0.md); two independent sufficient causes; single-run reproduces identically",
+      "since": "2026-09-10 e994c7a (review doc) + EVD-983 (same day, post a599843)",
+      "ticket": "AUDIT-152 recommends notice-binding + authority contract candidates (report section 7)"
+    },
+    "test_loop_runtime_claims.LoopRuntimePerformanceAndGoldenTests.test_three_run_performance_identity_and_median": {
+      "class": "data_coupling",
+      "family": "review_doc_claim",
+      "latent_class": "env_sensitive",
+      "latent_family": "load_timing",
+      "count": 1,
+      "evidence": "L1082 identities[0][0] 'PASS' != 'BLOCKED'; finding_snapshots = 3x (UNSUPPORTED_AFFIRMATIVE, review-FIX-300); clean :index clone has no .governance so authority check FIX-240-exempt - review-doc cause ONLY; median<8s assertion (L1083) unevaluated today (masked by verdict failure) and is the RISK-048 load-sensitive exposure (EVD-962/964/967; EVD-981 1E unrecorded test-id)",
+      "since": "2026-09-10 e994c7a (review doc)",
+      "ticket": "notice-binding candidate (report section 7); load exposure owned by FEAT-018 calibration slice"
+    },
+    "test_verify_workflow.LoopRuntimeClaimAdapterTests.test_claim_command_emits_complete_pass_report": {
+      "class": "data_coupling",
+      "family": "review_doc_claim",
+      "latent_class": "env_sensitive",
+      "latent_family": "load_timing",
+      "count": 1,
+      "evidence": "L51 assertEqual(0, completed.returncode) -> 0 != 1 (real CLI subprocess, stderr empty); serial run fails on rc=1 (data coupling); under parallel governance load the same timeout=15 subprocess historically surfaces as TimeoutExpired ERROR (RISK-048 family - likely the FEAT-018 1E, test-id unrecorded, mechanism-level inference only); single-run reproduces as FAIL",
+      "since": "2026-09-10 e994c7a (review doc)",
+      "ticket": "notice-binding candidate (report section 7); load exposure owned by FEAT-018 calibration slice"
+    },
+    "test_hooks.PlanTrackerMatcherTests.test_replay_real_plan_tracker_hits": {
+      "class": "data_coupling",
+      "family": "live_plan_tracker_row",
+      "count": 1,
+      "evidence": "subTest task_id='REL-071' only: L312 assertTrue(_run_pattern('REL-071', plan_text)) -> False; EVD-983 migration archived the REL-071 task row out of hot plan-tracker (remaining occurrences are evidence cells and a roadmap row that the FIX-282 anchored matcher correctly MISSes by design, test L265-270); matcher behavior correct - pinned live-data precondition expired; not present in AUDIT-151 (pre-migration) nor FIX-301 commit-time evidence (EVD-983 ran after a599843)",
+      "since": "2026-09-10 EVD-983 (real archive migration, post a599843)",
+      "ticket": "AUDIT-152 recommends live-replay representative refresh + migration checklist item (report section 7)"
+    }
+  },
+  "consumption": {
+    "post_run_diff_script": "after a suite run, extract FAIL/ERROR test ids and diff against tests keys: unregistered id => treat as regression_candidate and fail loudly (anti-masking); registered id that passes => classification stale, flag for cleanup",
+    "test_code_wiring": "explicitly NOT done in AUDIT-152 (skipUnless/expectedFailure would require test-code changes; WSL family should really run on Linux CI rather than skip); wiring is a follow-up task decision",
+    "maintenance": "this file is a 2026-09-10 snapshot at HEAD a599843; update alongside data-evolution events (new review docs, archive migrations, F2/F3 fixes)"
+  }
+}

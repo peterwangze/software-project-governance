@@ -3099,10 +3099,12 @@ class TestArchiveFix235(unittest.TestCase):
 
     def test_fix235_evidence_migrates_for_hot_completed_tasks(self):
         """FIX-235: the 'task row kept hot, evidence row still hot' scenario.
-        Completed tasks in the priority table (NOT physically archived)
-        contribute their 目标版本 to the evidence mapping, so in-range
-        evidence rows migrate while the task rows stay untouched. Decisions
-        and risks keep the archive-only mapping (evidence-only scope)."""
+        Completed tasks in the priority table contribute their 目标版本 to
+        the evidence mapping, so in-range evidence rows migrate even when the
+        task row is NOT archived in this run (out-of-range hot row FEAT-001
+        keeps covering that path after FIX-301). Since FIX-301 the in-range
+        completed rows ARE physically archived, which additionally unlocks
+        the decision migration through the this-run archive set."""
         plan = "\n".join([
             "## 当前活跃事项",
             "",
@@ -3141,11 +3143,19 @@ class TestArchiveFix235(unittest.TestCase):
                 "0.63.1", "0.65.3", dry_run=False
             )
 
+        # FIX-301 behavior update: in-range completed priority-table rows are
+        # now PHYSICALLY archived (real-shape recognition fix). REL-055 /
+        # FIX-192 / REL-056 (0.65.2/0.65.3, all ✅) migrate; SYSGAP-046 (open)
+        # and FEAT-001 (0.66.0, out of range) stay hot — the out-of-range hot
+        # row keeps covering the original FIX-235 semantics below.
         self.assertTrue(result["success"])
-        self.assertEqual(result["tasks_archived"], 0)   # task rows stay hot
+        self.assertEqual(result["tasks_archived"], 3)
         self.assertEqual(result["evidence_archived"], 5)  # EVD-695/696/699/700/701
-        self.assertEqual(result["decisions_archived"], 0)  # evidence-only scope
-        self.assertEqual(result["risks_archived"], 0)
+        # DEC-200 references REL-055, which THIS RUN physically archived, so
+        # the decision migration unlocks (related task genuinely archived —
+        # the FIX-162 contract now holds via the this-run archive set).
+        self.assertEqual(result["decisions_archived"], 1)
+        self.assertEqual(result["risks_archived"], 0)  # RISK-200 open — stays hot
 
         kept = (self.gov / "evidence-log.md").read_text(encoding="utf-8")
         for evd in ("EVD-695", "EVD-696", "EVD-699", "EVD-700", "EVD-701"):
@@ -3153,10 +3163,14 @@ class TestArchiveFix235(unittest.TestCase):
         self.assertIn("EVD-697", kept)  # mixed hot+open ref → kept
         self.assertIn("EVD-698", kept)  # out-of-range ref → kept
 
-        # plan-tracker untouched — task rows preserved (EVD-854 traceability)
+        # plan-tracker: archived rows physically removed; open and
+        # out-of-range rows preserved. FEAT-001 remains a HOT completed row
+        # whose evidence still resolves via the FIX-235 tolerant mapping.
         tracker = (self.gov / "plan-tracker.md").read_text(encoding="utf-8")
-        self.assertIn("REL-055", tracker)
-        self.assertIn("FIX-192", tracker)
+        self.assertNotIn("REL-055", tracker)
+        self.assertNotIn("FIX-192", tracker)
+        self.assertNotIn("REL-056", tracker)
+        self.assertIn("SYSGAP-046", tracker)
         self.assertIn("FEAT-001", tracker)
 
         arch = self.archive_dir / "evidence" / "evidence-v0.63.1-0.65.3.md"
@@ -3165,6 +3179,9 @@ class TestArchiveFix235(unittest.TestCase):
         self.assertIn("| EVD-695 |", arch_content)
         self.assertIn("| EVD-701 |", arch_content)
         self.assertNotIn("EVD-697", arch_content)
+        dec_arch = self.archive_dir / "decisions" / "decisions-v0.63.1-0.65.3.md"
+        self.assertTrue(dec_arch.exists())
+        self.assertIn("DEC-200", dec_arch.read_text(encoding="utf-8"))
 
     def test_fix235_evidence_dry_run_reports_hot_task_rows(self):
         """FIX-235: dry-run reports the evidence count without writing files —
@@ -3458,6 +3475,311 @@ class TestArchiveFix243(unittest.TestCase):
             self.assertEqual(
                 self.archive._auto_archive_bounded_endpoint(), "0.10.0"
             )
+
+
+class TestArchiveFix301(unittest.TestCase):
+    """FIX-301 (AUDIT-150 / REFACTOR-archive-recognition-fix): archive
+    recognition surface vs the REAL hot-data shapes.
+
+    Real-data diagnostics (2026-09, this repo's .governance) found the dry-run
+    reporting "触发器满足（release_forced）但无可归档数据" while plan-tracker
+    was 355KB and evidence-log 1446KB. Root causes mirrored here:
+
+      * RC-A: the priority table interleaves blank lines / blockquote notes
+        between priority groups; ``_parse_priority_table_tasks`` reset its
+        scan state on ANY non-table line, seeing only the FIRST group
+        (32 of 208 real rows) → tasks_archived=0 while 88 in-range completed
+        rows existed. Its sibling ``_parse_completed_task_versions``
+        (FIX-235) already fixed this for the evidence mapping — the two
+        parsers had drifted.
+      * RC-B (cascade): decisions/risks resolve versions from THIS-RUN
+        archived + already-archived tasks only; with this-run empty (RC-A)
+        all 134 decision rows reported no_archived_task_ref.
+      * RC-C: evidence rows with compound IDs (``EVD-FIX-247`` — evidence
+        rows keyed by their task) failed the plain ``EVD-\\d+`` shape check
+        and were skipped as unknown (52 real rows).
+      * RC-D (deliverable): the dry-run must explain itself — per category
+        scanned / parsed / would-archive / retained / unknown-structure plus
+        a per-row retention reason (auditable explanation, NOT a black box).
+    """
+
+    def setUp(self):
+        import archive  # noqa: F401  (module-level sys.path injection applies)
+        self.archive = archive
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        self.gov = self.root / ".governance"
+        self.gov.mkdir(parents=True, exist_ok=True)
+        self.archive_dir = self.gov / "archive"
+        for sub in ["tasks", "evidence", "decisions", "risks"]:
+            (self.archive_dir / sub).mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        self.tempdir.cleanup()
+
+    def _write_plan_tracker(self, content):
+        (self.gov / "plan-tracker.md").write_text(content, encoding="utf-8")
+
+    # Real-shape priority table: header + first group, then blank line +
+    # blockquote note (priority-group boundary), then the second group.
+    _REAL_SHAPE_TABLE = "\n".join([
+        "## 当前活跃事项",
+        "",
+        "### 优先级一览",
+        "",
+        "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+        "|--------|----|------|------|---------|---------|------|",
+        "| **P0** | FIX-313 | open task | — | 0.76.0 | TBD | ⏳ 进行中 |",
+        "| **P0** | REL-999 | out of range | — | 0.99.0 | TBD | ✅ 已完成 |",
+        "",
+        "> 状态漂移清理说明（真实表组间穿插的 blockquote 注记）。",
+        "",
+        "| **P1** | FIX-311 | task A | — | 0.76.0 | TBD | ✅ 已完成 |",
+        "| **P1** | FIX-312 | task B | FIX-311 | 0.77.0 | TBD | ✅ 已完成 |",
+        "| **P2** | BAD-777 | pipe anomaly | x | 0.76.0 | TBD | ✅ 完成 | extra | cell |",
+    ])
+
+    def test_fix301_priority_scan_survives_group_breaks(self):
+        """RC-A: blank lines / blockquote notes between priority groups must
+        NOT terminate the priority-table scan (sibling parser parity with
+        FIX-235's _parse_completed_task_versions)."""
+        tasks = self.archive._parse_priority_table_tasks(self._REAL_SHAPE_TABLE)
+        ids = [t[2] for t in tasks]
+        self.assertIn("FIX-313", ids, "first group must be seen")
+        self.assertIn("FIX-311", ids, "second group must be seen after blank+quote")
+        self.assertIn("FIX-312", ids)
+        # Pipe-anomaly rows are NOT trusted for physical migration (column
+        # alignment unverifiable) — they surface as unknown structure instead.
+        self.assertNotIn("BAD-777", ids)
+        # Parser-parity guard: the evidence mapping parser agrees on the
+        # archivable rows (the two parsers must not drift again).
+        mapping = self.archive._parse_completed_task_versions(self._REAL_SHAPE_TABLE)
+        for tid in ("FIX-311", "FIX-312", "REL-999"):
+            self.assertIn(tid, mapping)
+
+    def test_fix301_priority_scan_reports_pipe_anomalies(self):
+        """RC-A/RC-D: pipe-anomaly rows are collected for the auditable
+        unknown-structure list via the optional anomalies_out parameter."""
+        anomalies = []
+        self.archive._parse_priority_table_tasks(
+            self._REAL_SHAPE_TABLE, anomalies_out=anomalies
+        )
+        anomaly_ids = [a[0] for a in anomalies]
+        self.assertIn("BAD-777", anomaly_ids)
+
+    def test_fix301_end_to_end_migration_unlocks_all_categories(self):
+        """RC-A + RC-B + RC-C end-to-end: migrating the real-shape table
+        physically archives the in-range completed rows across groups and
+        unlocks decisions/risks (this-run archive set) and compound-ID
+        evidence; open/out-of-range/anomalous rows stay hot with reasons."""
+        self._write_plan_tracker(self._REAL_SHAPE_TABLE)
+        _make_evidence_log(self.gov, [
+            ("EVD-301", "FIX-311", "task A evidence"),
+            ("EVD-FIX-312", "FIX-312", "compound-ID evidence"),
+            ("EVD-302", "REL-999", "out-of-range evidence — must stay"),
+        ])
+        (self.gov / "decision-log.md").write_text(
+            "| 编号 | 日期 | 主题 | 背景 | 决策内容 | 备选 | 选择原因 | 影响范围 | 决策人 | 关联任务 | 后续动作 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
+            "| DEC-301 | 2026-09-09 | 决策标题 | 背景 | 决策 | 备选 | 原因 | 影响 | 用户 | FIX-311 | 后续 |\n",
+            encoding="utf-8",
+        )
+        (self.gov / "risk-log.md").write_text(
+            "| 编号 | 日期 | 风险描述 | 影响 | 缓解动作 | 关联任务 | 当前状态 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- |\n"
+            "| RISK-301 | 2026-09-09 | 风险描述 | 中 | 缓解动作 | FIX-311 | 已关闭 |\n",
+            encoding="utf-8",
+        )
+
+        with patch.object(self.archive, "ROOT", self.root), \
+                patch.object(self.archive, "PLUGIN_ROOT", self.root):
+            result = self.archive.migrate_by_version(
+                "0.1.0", "0.80.0", dry_run=False
+            )
+            self.archive.build_index()
+            verify = self.archive.verify_archive_integrity()
+
+        self.assertTrue(result["success"], f"migration failed: {result}")
+        self.assertEqual(result["tasks_archived"], 2)
+        self.assertEqual(result["decisions_archived"], 1)
+        self.assertEqual(result["risks_archived"], 1)
+        self.assertEqual(result["evidence_archived"], 2)
+
+        # Hot plan-tracker: archived rows physically removed; open,
+        # out-of-range and anomalous rows retained (business reasons, no
+        # forced deletion — P7).
+        tracker = (self.gov / "plan-tracker.md").read_text(encoding="utf-8")
+        self.assertNotIn("FIX-311", tracker)
+        self.assertNotIn("FIX-312", tracker)
+        self.assertIn("FIX-313", tracker)
+        self.assertIn("REL-999", tracker)
+        self.assertIn("BAD-777", tracker)
+
+        # Archive bodies carry the migrated rows (FIX-172 guard extended).
+        task_files = [
+            f for f in (self.archive_dir / "tasks").glob("*.md")
+            if f.name != ".gitkeep"
+        ]
+        self.assertEqual(len(task_files), 1)
+        body = task_files[0].read_text(encoding="utf-8")
+        self.assertIn("FIX-311", body)
+        self.assertIn("FIX-312", body)
+
+        # Compound-ID evidence landed in the archive AND the index (all
+        # three ID-shape surfaces in sync — migration, extraction, index).
+        ev_arch = (self.archive_dir / "evidence" / "evidence-v0.1.0-0.80.0.md")
+        self.assertTrue(ev_arch.exists())
+        ev_body = ev_arch.read_text(encoding="utf-8")
+        self.assertIn("EVD-FIX-312", ev_body)
+        index = (self.archive_dir / "index.md").read_text(encoding="utf-8")
+        self.assertIn("EVD-FIX-312", index)
+        self.assertIn("DEC-301", index)
+        self.assertIn("RISK-301", index)
+
+        # Out-of-range evidence stays hot.
+        kept_ev = (self.gov / "evidence-log.md").read_text(encoding="utf-8")
+        self.assertNotIn("EVD-301", kept_ev)
+        self.assertNotIn("EVD-FIX-312", kept_ev)
+        self.assertIn("EVD-302", kept_ev)
+
+        self.assertTrue(verify["pass"], f"integrity issues: {verify['issues']}")
+
+    def test_fix301_compound_evd_id_shape_admitted(self):
+        """RC-C in isolation: compound evidence IDs (EVD-FIX-101) participate
+        in migration, archive extraction and the index — not 'unknown'."""
+        # Pre-existing archived task so the evidence mapping resolves.
+        (self.archive_dir / "tasks" / "v0.10.0~v0.10.0.md").write_text(
+            "# 归档 Task 表 — v0.10.0 ~ v0.10.0\n\n"
+            "### v0.10.0 — Initial\n"
+            "| 任务ID | 描述 | 优先级 | 依赖 | 目标版本 | 负责人 | 审查人 | 审查类型 | 闭环路径 | 状态 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
+            "| FIX-101 | Fix bug | P1 | — | 0.10.0 | 阿速 | — | Reviewer | TBD | 已完成 |\n",
+            encoding="utf-8",
+        )
+        self._write_plan_tracker("### 优先级一览\n")
+        _make_evidence_log(self.gov, [
+            ("EVD-100", "FIX-101", "plain evidence row"),
+            ("EVD-FIX-101", "FIX-101", "compound evidence row"),
+        ])
+        with patch.object(self.archive, "ROOT", self.root), \
+                patch.object(self.archive, "PLUGIN_ROOT", self.root):
+            result = self.archive.migrate_by_version(
+                "0.1.0", "0.20.0", dry_run=False
+            )
+        self.assertTrue(result["success"])
+        self.assertEqual(result["evidence_archived"], 2)
+        # Extraction from the archive file sees BOTH rows (index source).
+        ev_files = [
+            f for f in (self.archive_dir / "evidence").glob("*.md")
+            if f.name != ".gitkeep"
+        ]
+        self.assertEqual(len(ev_files), 1)
+        rows = self.archive._extract_evidence_from_archive_file(ev_files[0])
+        evd_ids = {r[0] for r in rows}
+        self.assertEqual(evd_ids, {"EVD-100", "EVD-FIX-101"})
+
+    def test_fix301_explain_report_structure(self):
+        """RC-D: dry-run explain carries, per category, the five auditable
+        numbers plus per-row retention reasons and the unknown-structure
+        list."""
+        self._write_plan_tracker(self._REAL_SHAPE_TABLE)
+        _make_evidence_log(self.gov, [
+            ("EVD-301", "FIX-311", "task A evidence"),
+            ("EVD-302", "REL-999", "out-of-range evidence"),
+        ])
+        explain = {}
+        with patch.object(self.archive, "ROOT", self.root), \
+                patch.object(self.archive, "PLUGIN_ROOT", self.root):
+            result = self.archive.migrate_by_version(
+                "0.1.0", "0.80.0", dry_run=True, explain=explain
+            )
+        self.assertTrue(result["success"])
+        for cat in ("tasks", "decisions", "risks", "evidence"):
+            self.assertIn(cat, explain, f"missing category: {cat}")
+            stats = explain[cat]
+            for key in ("scanned", "parsed", "would_archive", "retained",
+                        "unknown_structure"):
+                self.assertIn(key, stats, f"{cat} missing {key}")
+                self.assertIsInstance(stats[key], int)
+            self.assertIn("rows", stats)
+        # Per-row reasons on the real shapes.
+        task_rows = {r["id"]: r["reason"] for r in explain["tasks"]["rows"]}
+        self.assertEqual(task_rows.get("FIX-311"), "would_archive")
+        self.assertEqual(task_rows.get("FIX-313"), "status_not_archivable")
+        self.assertEqual(task_rows.get("REL-999"), "out_of_range_version")
+        self.assertEqual(task_rows.get("BAD-777"), "pipe_layout_anomaly")
+        self.assertEqual(explain["tasks"]["unknown_structure"], 1)
+        self.assertIn("BAD-777", explain["tasks"]["unknown_ids"])
+        evd_rows = {r["id"]: r["reason"] for r in explain["evidence"]["rows"]}
+        self.assertEqual(evd_rows.get("EVD-301"), "would_archive")
+        self.assertEqual(evd_rows.get("EVD-302"), "ref_version_out_of_range")
+        self.assertEqual(
+            explain["decisions"]["rows"], [],
+            "no decision-log rows in this fixture",
+        )
+
+    def test_fix301_bold_id_cells_extract_from_archive_file(self):
+        """FIX-301 (found by the temp-copy conservation check): real hot rows
+        may bold the ID cell itself ('| **P1** | **REL-071** | ...'). The
+        migration parser strips the bold, so the archive-file extraction must
+        tolerate it too — otherwise already_archived and the index go blind
+        for those IDs (88 migrated, 87 extracted)."""
+        f = self.archive_dir / "tasks" / "v0.10.0~v0.10.0.md"
+        f.write_text(
+            "# 归档 Task 表 — v0.10.0 ~ v0.10.0\n\n"
+            "### v0.10.0\n"
+            "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- |\n"
+            "| **P1** | **REL-071** | bolded id row | — | 0.10.0 | done | ✅ 已发布 |\n"
+            "| **P1** | FIX-101 | plain id row | — | 0.10.0 | done | ✅ 已完成 |\n",
+            encoding="utf-8",
+        )
+        rows = self.archive._extract_tasks_from_archive_file(f)
+        ids = {t for t, _s, _v in rows}
+        self.assertIn("REL-071", ids, "bolded ID cell must be extracted")
+        self.assertIn("FIX-101", ids)
+        # and already-archived detection sees it (no re-migration risk)
+        with patch.object(self.archive, "ROOT", self.root):
+            self.assertIn("REL-071", self.archive._get_archived_task_ids())
+
+    def test_fix301_cli_auto_dry_run_renders_explanation_when_skipped(self):
+        """RC-D acceptance path: `migrate --auto --dry-run` with triggers
+        satisfied but nothing archivable must render the auditable
+        explanation (the FIX-301 black-box scenario), not a bare skip line."""
+        # Pre-existing index + archive file (release_forced trigger fires).
+        (self.archive_dir / "tasks" / "v0.10.0~v0.10.0.md").write_text(
+            "# 归档 Task 表 — v0.10.0 ~ v0.10.0\n\n"
+            "### v0.10.0 — Initial\n"
+            "| 任务ID | 描述 | 优先级 | 依赖 | 目标版本 | 负责人 | 审查人 | 审查类型 | 闭环路径 | 状态 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
+            "| FIX-001 | Fix bug 1 | P1 | — | 1.0.0 | 阿速 | — | Reviewer | TBD | 已完成 |\n",
+            encoding="utf-8",
+        )
+        (self.archive_dir / "index.md").write_text(
+            "# 归档索引\n\n## Task 索引\n\n"
+            "| Task ID | 状态 | 版本 | 归档文件 |\n"
+            "|---------|------|------|---------|\n"
+            "| FIX-001 | 已完成 | 0.10.0 | archive/tasks/v0.10.0~v0.10.0.md |\n",
+            encoding="utf-8",
+        )
+        _make_plan_tracker_with_roadmap(
+            self.gov,
+            [("0.10.0", "已发布"), ("0.11.0", "已发布")],
+            [
+                ("v0.10.0 — Initial", [("FIX-001", "已完成", "Fix bug 1", "—")]),
+                ("v0.11.0 — Latest", [("FIX-002", "进行中", "Fix bug 2", "—")]),
+            ],
+        )
+        buf = io.StringIO()
+        with patch.object(self.archive, "ROOT", self.root), \
+                patch.object(self.archive, "PLUGIN_ROOT", self.root):
+            with contextlib.redirect_stdout(buf):
+                self.archive.main(["migrate", "--auto", "--dry-run"])
+        out = buf.getvalue()
+        self.assertIn("无可归档数据", out)  # honest skip reason retained
+        self.assertIn("归档可审计解释", out)  # FIX-301 explanation section
+        for cat_label in ("tasks", "decisions", "risks", "evidence"):
+            self.assertIn(cat_label, out)
 
 
 class TestDualRootResolution(unittest.TestCase):

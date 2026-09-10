@@ -435,7 +435,7 @@ def _task_status_is_archivable(status):
     return any(m in status for m in closed_markers)
 
 
-def _parse_priority_table_tasks(content):
+def _parse_priority_table_tasks(content, anomalies_out=None):
     """FIX-158: parse the '### 优先级一览' / '### 最近完成' priority tables.
 
     Real plan-tracker stores ALL tasks in non-version sections like
@@ -446,15 +446,27 @@ def _parse_priority_table_tasks(content):
     status in the last column. This format was invisible to the original
     archive engine (which required ID in column 1 and version section headers).
 
+    FIX-301 (AUDIT-150 / REFACTOR-archive-recognition-fix): the real table
+    interleaves blank lines, prose and blockquote notes BETWEEN priority
+    groups. The old scan reset on ANY non-table line, so only the FIRST
+    group was ever seen (32 of 208 real rows) while 88 in-range completed
+    rows were invisible — the "触发器满足但无可归档数据" black box. Scan
+    semantics now match the sibling evidence mapper
+    ``_parse_completed_task_versions`` (FIX-235): blank lines / prose /
+    blockquote notes do NOT terminate the scan; only headings do. The two
+    parsers must stay in sync.
+
+    Rows whose pipe layout deviates from the 7-column form (pipe count != 8)
+    are skipped conservatively — their column alignment cannot be trusted
+    for PHYSICAL migration (the hot row is deleted after archiving) — and
+    reported through ``anomalies_out`` (list receiving ``(task_id,
+    line_index, pipe_count)`` tuples) for the auditable unknown-structure
+    list; they are never deleted.
+
     Returns list of (line_index, original_line, task_id, target_version, status).
     """
     lines = content.split("\n")
     tasks = []
-    # Scan for priority-table-like sections: the real plan-tracker 7-col format
-    # '| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |' where 优先级
-    # is the FIRST cell and ID is the SECOND cell. We match this specific layout
-    # (not the legacy 10-col '| 任务ID | 描述 | 优先级 | ... |' where 优先级 is
-    # in the middle) to avoid double-counting version-section tasks.
     in_priority_table = False
     for i, line in enumerate(lines):
         stripped = line.strip()
@@ -467,17 +479,19 @@ def _parse_priority_table_tasks(content):
                     and data_cells[1] == "ID"):
                 in_priority_table = True
                 continue
-        # Reset on section heading or non-table line
+        # Reset ONLY on section headings. Blank lines / prose / blockquote
+        # notes between priority groups no longer terminate the scan
+        # (FIX-301; parity with _parse_completed_task_versions / FIX-235).
         if stripped.startswith("###") or stripped.startswith("##"):
             in_priority_table = False
             continue
         if not in_priority_table:
             continue
+        if not stripped.startswith("|"):
+            # Inside the table region but not a table row — keep scanning.
+            continue
         # Skip separator row
         if re.match(r"^\|[\s\-:|\t]+\|$", stripped):
-            continue
-        if not stripped.startswith("|"):
-            in_priority_table = False
             continue
         parts = [p.strip() for p in line.split("|")]
         data_parts = parts[1:-1] if len(parts) >= 2 else parts
@@ -488,6 +502,13 @@ def _parse_priority_table_tasks(content):
         raw_id = data_parts[1]
         task_id = re.sub(r"[`*]", "", raw_id).strip()
         if not re.match(r"^[A-Z]+-\d+$", task_id):
+            continue
+        # FIX-301: pipe-count guard — anomalous layout (extra pipes inside
+        # cells, shifted columns) means column alignment cannot be trusted
+        # for physical migration. Skip conservatively, report for audit.
+        if stripped.count("|") != 8:
+            if anomalies_out is not None:
+                anomalies_out.append((task_id, i, stripped.count("|")))
             continue
         # Target version in column 5 (data_parts[4]) if present
         target_version = ""
@@ -859,10 +880,22 @@ def _is_task_family_id(task_id):
     return prefix in _TASK_FAMILY_PREFIXES
 
 
+# FIX-301: evidence row IDs come in two REAL shapes — plain sequential
+# (EVD-969) and compound task-keyed (EVD-FIX-247, "the evidence row of
+# FIX-247", in hot use since 2026-08). The old plain `EVD-\d+` shape check
+# rejected every compound row as unknown, making 52 real rows invisible to
+# migration AND to the archive index. Shared by _migrate_evidence (gate) and
+# _extract_evidence_from_archive_file (index extraction) so the migration
+# side and the index side can never drift; verify_archive_integrity's Check 3
+# index-row counter accepts the same multi-segment prefix shape.
+_EVD_ID_SHAPE_RE = re.compile(r"^EVD-(?:[A-Z]+-)?\d+$")
+
+
 # ── Decision / Risk Migration (FIX-162 / TD-014) ───────────────────
 
 
-def _migrate_decisions(version_start, version_end, task_versions, dry_run=False):
+def _migrate_decisions(version_start, version_end, task_versions, dry_run=False,
+                       explain_out=None):
     """FIX-162: migrate decision-log rows whose related tasks have been archived.
 
     Decision-log format: '| DEC-{n} | date | title | context | decision | ... |'
@@ -880,6 +913,11 @@ def _migrate_decisions(version_start, version_end, task_versions, dry_run=False)
     membership test (related task already archived) is therefore the only sound
     migration gate for decisions. This is consistent with the AUDIT-127 root
     cause, which was exclusively a risk-log regression (OPEN risks migrated).
+
+    FIX-301: when ``explain_out`` is a list, every scanned decision row appends
+    exactly one {"id", "reason", "detail"} record (single source of truth —
+    the explanation can never drift from the actual migration behavior).
+    Reasons: would_archive / no_archived_task_ref / ref_version_out_of_range.
     """
 
     dlog = _decision_log()
@@ -887,6 +925,12 @@ def _migrate_decisions(version_start, version_end, task_versions, dry_run=False)
         return 0
     content = dlog.read_text(encoding="utf-8")
     lines = content.split("\n")
+
+    def _note(dec_id, reason, detail=""):
+        if explain_out is not None:
+            explain_out.append(
+                {"id": dec_id, "reason": reason, "detail": detail[:60]}
+            )
 
     kept_lines = []
     archived = []  # (dec_id, title, version, original_line)
@@ -904,8 +948,14 @@ def _migrate_decisions(version_start, version_end, task_versions, dry_run=False)
         ver = _entry_version_for_archive(line, task_versions)
         if ver and _version_in_range(ver, version_start, version_end):
             archived.append((dec_id, title, ver, line))
+            _note(dec_id, "would_archive", f"v{ver}")
         else:
             kept_lines.append(line)
+            if ver is None:
+                _note(dec_id, "no_archived_task_ref",
+                      "no referenced task is archived")
+            else:
+                _note(dec_id, "ref_version_out_of_range", f"v{ver}")
 
     if not archived:
         return 0
@@ -936,7 +986,8 @@ def _migrate_decisions(version_start, version_end, task_versions, dry_run=False)
     return len(archived)
 
 
-def _migrate_risks(version_start, version_end, task_versions, dry_run=False):
+def _migrate_risks(version_start, version_end, task_versions, dry_run=False,
+                   explain_out=None):
     """FIX-162: migrate risk-log rows whose related tasks have been archived.
 
     Risk-log format: '| RISK-{n} | date | desc | impact | ... |'
@@ -949,12 +1000,22 @@ def _migrate_risks(version_start, version_end, task_versions, dry_run=False):
     are NEVER migrated out of the hot risk-log, even when a related task has
     been archived — the hot risk-log is the single source of truth for active
     risks. See _is_risk_closed() for the column-aware status detection.
+
+    FIX-301: when ``explain_out`` is a list, every scanned risk row appends
+    exactly one {"id", "reason", "detail"} record. Reasons: would_archive /
+    no_archived_task_ref / ref_version_out_of_range / risk_not_closed.
     """
     rlog = _risk_log()
     if not rlog.exists():
         return 0
     content = rlog.read_text(encoding="utf-8")
     lines = content.split("\n")
+
+    def _note(risk_id, reason, detail=""):
+        if explain_out is not None:
+            explain_out.append(
+                {"id": risk_id, "reason": reason, "detail": detail[:60]}
+            )
 
     # FIX-170: capture the table header line so _is_risk_closed can locate the
     # '当前状态' column dynamically (the real risk-log does NOT put 状态 last,
@@ -979,10 +1040,17 @@ def _migrate_risks(version_start, version_end, task_versions, dry_run=False):
             # stay in the hot file regardless of version-range membership.
             if not _is_risk_closed(line, risk_header):
                 kept_lines.append(line)
+                _note(risk_id, "risk_not_closed", "status cell not closed")
                 continue
             archived.append((line, ver))
+            _note(risk_id, "would_archive", f"v{ver}")
         else:
             kept_lines.append(line)
+            if ver is None:
+                _note(risk_id, "no_archived_task_ref",
+                      "no referenced task is archived")
+            else:
+                _note(risk_id, "ref_version_out_of_range", f"v{ver}")
 
     if not archived:
         return 0
@@ -999,7 +1067,8 @@ def _migrate_risks(version_start, version_end, task_versions, dry_run=False):
     return len(archived)
 
 
-def _migrate_evidence(version_start, version_end, task_versions, dry_run=False):
+def _migrate_evidence(version_start, version_end, task_versions, dry_run=False,
+                      explain_out=None):
     """FIX-164: migrate evidence-log rows whose related tasks have been archived.
 
     Evidence-log format: '| EVD-{n} | 关联Task | 摘要 | 日期 | 类型 | ... |'
@@ -1027,15 +1096,31 @@ def _migrate_evidence(version_start, version_end, task_versions, dry_run=False):
     migrate (the live task-family ID fails the subset). The fix only stops
     CROSS-ENTITY refs from breaking the subset check.
 
+    FIX-301: evidence row IDs come in two real shapes — plain sequential
+    (EVD-969) and compound task-keyed (EVD-FIX-247). The old plain
+    ``EVD-\\d+`` check rejected every compound row as unknown (52 real rows
+    invisible); the shared _EVD_ID_SHAPE_RE now admits both.
+
     Writes archived rows to archive/evidence/evidence-v{range}.md preserving
     the original table rows verbatim (same fidelity as risks). Returns count
     migrated.
+
+    FIX-301: when ``explain_out`` is a list, every scanned EVD row appends
+    exactly one {"id", "reason", "detail"} record. Reasons: would_archive /
+    no_task_family_ref / live_or_unresolvable_task_ref /
+    ref_version_out_of_range / unknown_evd_id_shape.
     """
     elog = _evidence_log()
     if not elog.exists():
         return 0
     content = elog.read_text(encoding="utf-8")
     lines = content.split("\n")
+
+    def _note(evd_id, reason, detail=""):
+        if explain_out is not None:
+            explain_out.append(
+                {"id": evd_id, "reason": reason, "detail": detail[:60]}
+            )
 
     kept_lines = []
     archived = []  # (original_line, version)
@@ -1046,7 +1131,10 @@ def _migrate_evidence(version_start, version_end, task_versions, dry_run=False):
             continue
         parts = [p.strip() for p in line.split("|")]
         evd_id = parts[1] if len(parts) > 1 else ""
-        if not (evd_id and re.match(r"EVD-\d+", evd_id)):
+        if not (evd_id and _EVD_ID_SHAPE_RE.match(evd_id)):
+            # FIX-301: compound IDs (EVD-FIX-247) are admitted; anything else
+            # (corrupted/malformed rows) is reported as unknown structure.
+            _note(evd_id or "?", "unknown_evd_id_shape", "row ID shape not recognized")
             kept_lines.append(line)
             continue
         # parts[2] = 关联 Task column; may be comma-separated multiple IDs that
@@ -1073,7 +1161,17 @@ def _migrate_evidence(version_start, version_end, task_versions, dry_run=False):
         # we cannot resolve a version for it (no task-family ref to look up in
         # task_versions), so it is KEPT hot rather than riskily migrating an
         # unversionable row (test_migrate_evidence_only_cross_entity_refs_stays).
-        if not task_family_ids or not task_family_ids.issubset(task_versions):
+        if not task_family_ids:
+            _note(evd_id, "no_task_family_ref",
+                  f"refs: {raw_task_ids[:40] or '(none)'}")
+            kept_lines.append(line)
+            continue
+        if not task_family_ids.issubset(task_versions):
+            missing = sorted(
+                t for t in task_family_ids if t not in task_versions
+            )
+            _note(evd_id, "live_or_unresolvable_task_ref",
+                  "live/unresolved: " + ",".join(missing[:5]))
             kept_lines.append(line)
             continue
         ver = None
@@ -1086,7 +1184,10 @@ def _migrate_evidence(version_start, version_end, task_versions, dry_run=False):
                 break
         if ver:
             archived.append((line, ver))
+            _note(evd_id, "would_archive", f"v{ver}")
         else:
+            _note(evd_id, "ref_version_out_of_range",
+                  f"refs resolve out of range: {raw_task_ids[:40]}")
             kept_lines.append(line)
 
     if not archived:
@@ -1106,9 +1207,53 @@ def _migrate_evidence(version_start, version_end, task_versions, dry_run=False):
     return len(archived)
 
 
+# ── Auditable Dry-Run Explanation (FIX-301 / AUDIT-150) ─────────────
+#
+# Reasons that mark a scanned row as UNKNOWN STRUCTURE (counted in the
+# unknown_structure bucket, excluded from parsed/retained). Everything else
+# is a business retention decision on a structurally parsed row.
+_EXPLAIN_UNKNOWN_REASONS = frozenset({
+    "pipe_layout_anomaly",      # priority-table row with non-7col pipe layout
+    "unknown_evd_id_shape",     # evidence row whose ID matches no real shape
+})
+
+
+def _finalize_explain(rows):
+    """FIX-301: aggregate per-row reason records into the auditable stats.
+
+    Every scanned candidate row contributes EXACTLY ONE
+    {"id", "reason", "detail"} record (collected single-source inside the
+    migration functions themselves, so the explanation can never drift from
+    the actual migration behavior). From those records:
+
+      scanned          — all candidate rows seen (len(rows))
+      parsed           — rows whose structure was trusted for a decision
+      would_archive    — rows satisfying every business archive condition
+      retained         — parsed rows kept hot (with a business reason)
+      unknown_structure— rows whose structure could not be trusted
+      unknown_ids      — IDs of the unknown-structure rows
+
+    Returns the stats dict (empty input → zeroed stats, never None).
+    """
+    scanned = len(rows)
+    unknown_rows = [r for r in rows if r["reason"] in _EXPLAIN_UNKNOWN_REASONS]
+    parsed = scanned - len(unknown_rows)
+    would = sum(1 for r in rows if r["reason"] == "would_archive")
+    return {
+        "scanned": scanned,
+        "parsed": parsed,
+        "would_archive": would,
+        "retained": parsed - would,
+        "unknown_structure": len(unknown_rows),
+        "unknown_ids": [r["id"] for r in unknown_rows],
+        "rows": rows,
+    }
+
+
 # ── Core Migration ─────────────────────────────────────────────────
 
-def migrate_by_version(version_start, version_end, dry_run=False, migrate_evidence=True):
+def migrate_by_version(version_start, version_end, dry_run=False, migrate_evidence=True,
+                       explain=None):
     """Archive completed tasks (and optionally evidence) for a version range.
 
     Args:
@@ -1116,6 +1261,12 @@ def migrate_by_version(version_start, version_end, dry_run=False, migrate_eviden
         version_end: e.g. "0.24.0"
         dry_run: if True, report what would be done but don't modify files
         migrate_evidence: if True, also archive evidence entries for archived tasks
+        explain: optional dict; when provided it is populated with the
+            FIX-301 auditable dry-run explanation — per category
+            (tasks/decisions/risks/evidence) the five numbers
+            scanned/parsed/would_archive/retained/unknown_structure plus a
+            per-row {"id","reason","detail"} list collected single-source
+            from the migration loops themselves.
 
     Returns:
         dict with keys: success, dry_run, tasks_archived, tasks_remaining,
@@ -1133,11 +1284,21 @@ def migrate_by_version(version_start, version_end, dry_run=False, migrate_eviden
         "details": "",
     }
 
+    task_rows_explain = []  # FIX-301: per-row reasons (tasks category)
+
+    def _note_task(task_id, reason, detail=""):
+        task_rows_explain.append(
+            {"id": task_id, "reason": reason, "detail": detail[:60]}
+        )
+
     if not dry_run:
         _ensure_archive_dirs()
 
     if not _plan_tracker().exists():
         result["details"] = "plan-tracker.md not found"
+        if explain is not None:
+            for cat in ("tasks", "decisions", "risks", "evidence"):
+                explain[cat] = _finalize_explain([])
         return result
 
     content = _plan_tracker().read_text(encoding="utf-8")
@@ -1159,38 +1320,58 @@ def migrate_by_version(version_start, version_end, dry_run=False, migrate_eviden
                 status = _parse_task_status(line, status_col=sec_status_col)
                 if _task_status_is_archivable(status):
                     if task_id in already_archived_tasks:
+                        _note_task(task_id, "already_archived")
                         continue
                     archived_task_lines.append((line_idx, line, task_id, section["version"]))
                     archived_tasks.add(task_id)
                     archive_body_lines.append((section["version"], line))
+                    _note_task(task_id, "would_archive", f"v{section['version']}")
                 else:
                     result["tasks_remaining"] += 1
+                    _note_task(task_id, "status_not_archivable", status)
         else:
             # Tasks in non-matching sections remain in hot file
             for _line_idx, _line, task_id in section["task_lines"]:
                 result["tasks_remaining"] += 1
+                _note_task(task_id, "out_of_range_version", f"v{section['version']}")
 
     # FIX-158: Also scan the priority table (### 优先级一览) which holds ALL tasks
     # in real plan-tracker, grouped by the row's "目标版本" column rather than by
     # version section headers. This makes the archive engine see tasks that were
     # previously invisible (the root cause of AUDIT-125 "无可归档数据").
-    priority_tasks = _parse_priority_table_tasks(content)
+    #
+    # FIX-301: the scan is now group-break tolerant (blank lines / blockquote
+    # notes between priority groups no longer terminate it — see
+    # _parse_priority_table_tasks) and pipe-anomaly rows are reported through
+    # anomalies for the unknown-structure list instead of being silently
+    # invisible.
+    priority_anomalies = []
+    priority_tasks = _parse_priority_table_tasks(
+        content, anomalies_out=priority_anomalies
+    )
+    for task_id, _line_idx, pipe_count in priority_anomalies:
+        _note_task(task_id, "pipe_layout_anomaly", f"pipe count {pipe_count} != 8")
     for line_idx, line, task_id, target_version, status in priority_tasks:
         if task_id in already_archived_tasks or task_id in archived_tasks:
+            _note_task(task_id, "already_archived")
             continue
         # Only consider tasks whose target version is in range (matching the
         # version-section behavior). Out-of-range tasks are left alone and not
         # counted as remaining (they belong to other version ranges).
         if not target_version:
+            _note_task(task_id, "no_target_version", "no semver target version")
             continue
         if not _version_in_range(target_version, version_start, version_end):
+            _note_task(task_id, "out_of_range_version", f"v{target_version}")
             continue
         if not _task_status_is_archivable(status):
             result["tasks_remaining"] += 1
+            _note_task(task_id, "status_not_archivable", status)
             continue
         archived_task_lines.append((line_idx, line, task_id, target_version))
         archived_tasks.add(task_id)
         archive_body_lines.append((target_version, line))
+        _note_task(task_id, "would_archive", f"v{target_version}")
 
     result["tasks_archived"] = len(archived_tasks)
 
@@ -1226,17 +1407,38 @@ def migrate_by_version(version_start, version_end, dry_run=False, migrate_eviden
     # evidence-log entries whose related tasks have been archived. Runs even
     # when tasks_archived==0, as long as historical tasks exist in
     # archive/tasks/ (or completed hot tasks exist per FIX-235). dry_run only
-    # reports counts.
-    if migrate_evidence and evidence_task_versions:
+    # reports counts. FIX-301: per-row reasons are collected single-source
+    # from the same loops (explain_out lists). The call is no longer gated on
+    # a non-empty mapping: with an empty mapping every row classifies as
+    # no_archived_task_ref / live ref and nothing is written — but the rows
+    # ARE scanned, so the explanation reports real scanned counts instead of
+    # a misleading zero.
+    decision_rows_explain = []
+    risk_rows_explain = []
+    evidence_rows_explain = []
+    if migrate_evidence:
         result["decisions_archived"] = _migrate_decisions(
-            version_start, version_end, task_versions, dry_run
+            version_start, version_end, task_versions, dry_run,
+            explain_out=decision_rows_explain
         )
         result["risks_archived"] = _migrate_risks(
-            version_start, version_end, task_versions, dry_run
+            version_start, version_end, task_versions, dry_run,
+            explain_out=risk_rows_explain
         )
         result["evidence_archived"] = _migrate_evidence(
-            version_start, version_end, evidence_task_versions, dry_run
+            version_start, version_end, evidence_task_versions, dry_run,
+            explain_out=evidence_rows_explain
         )
+
+    # FIX-301: aggregate the auditable explanation (all four categories) so
+    # the dry-run report can explain EVERY number it prints — including the
+    # zero-archivable case that used to be a black box.
+    if explain is not None:
+        explain["tasks"] = _finalize_explain(task_rows_explain)
+        explain["decisions"] = _finalize_explain(decision_rows_explain)
+        explain["risks"] = _finalize_explain(risk_rows_explain)
+        explain["evidence"] = _finalize_explain(evidence_rows_explain)
+        explain["versions_range"] = (version_start, version_end)
 
     if result["tasks_archived"] == 0:
         result["success"] = True
@@ -1456,10 +1658,18 @@ def _extract_tasks_from_archive_file(filepath):
         #   (a) legacy 10-col with ID in column 1: "| TASKID-NNN | desc | ..."
         #   (b) 7-col priority table with ID in column 2: "| **P0** | TASKID-NNN | ..."
         # Try col-1 first (legacy), then col-2 (priority table).
-        m = re.match(r"\|\s*([A-Z]+-\d+)\s*\|", stripped)
+        # FIX-301: the ID cell itself may carry markdown bold ("**REL-071**")
+        # in real hot rows — the migration parser strips it, so the archive
+        # extraction must tolerate it too, or already_archived/index lookups
+        # go blind for those IDs (found by the temp-copy conservation check:
+        # 88 rows migrated, only 87 extracted).
+        m = re.match(r"\|\s*(?:\*{0,2})([A-Z]+-\d+)(?:\*{0,2})\s*\|", stripped)
         col_offset = 0
         if not m:
-            m = re.match(r"\|\s*\*{0,2}[Pp][0-9]\*{0,2}\s*\|\s*([A-Z]+-\d+)\s*\|", stripped)
+            m = re.match(
+                r"\|\s*\*{0,2}[Pp][0-9]\*{0,2}\s*\|\s*(?:\*{0,2})([A-Z]+-\d+)(?:\*{0,2})\s*\|",
+                stripped,
+            )
             col_offset = 1  # status column shifts by 1 when ID is in col 2
         if m:
             task_id = m.group(1)
@@ -1502,7 +1712,11 @@ def _extract_evidence_from_archive_file(filepath):
         if len(parts) >= 3:
             evd_id = parts[1]
             task_ids = parts[2]
-            if evd_id and re.match(r"EVD-\d+", evd_id):
+            # FIX-301: compound IDs (EVD-FIX-247) are extracted too — the
+            # shared shape regex keeps the migration side and this index
+            # source in lockstep (plain `EVD-\d+` made compound rows
+            # invisible to the index while they sat in archive files).
+            if evd_id and _EVD_ID_SHAPE_RE.match(evd_id):
                 results.append((evd_id, task_ids))
 
     return results
@@ -1963,8 +2177,13 @@ def verify_archive_integrity():
             else:
                 current_section = None
             continue
-        # Count ID rows under the current section
-        if current_section and stripped.startswith("| ") and re.match(r"\|\s*[A-Z]+-\d+", stripped):
+        # Count ID rows under the current section. FIX-301: multi-segment
+        # prefixes (compound evidence IDs like EVD-FIX-247) count as ID rows,
+        # keeping this counter symmetric with the archive-file extraction
+        # (_extract_tasks/_extract_evidence now admit compound EVD shapes).
+        if current_section and stripped.startswith("| ") and re.match(
+            r"\|\s*[A-Z]+(?:-[A-Z]+)*-\d+", stripped
+        ):
             index_counts[current_section] += 1
 
     result["total_index_entries"] = sum(index_counts.values())
@@ -2519,7 +2738,16 @@ def analyze_auto_archive_candidates():
     ]
     result["versions_range"] = (version_start, version_end)
 
-    pre_check = migrate_by_version(version_start, version_end, dry_run=True)
+    # FIX-301: the dry-run pre-check now also collects the auditable
+    # per-category explanation (scanned/parsed/would_archive/retained/
+    # unknown_structure + per-row reasons), single-sourced from the migration
+    # loops. It is attached even when the run is skipped — the "triggers
+    # satisfied but nothing archivable" case is exactly the black box this
+    # explanation exists to eliminate.
+    explain = {}
+    pre_check = migrate_by_version(
+        version_start, version_end, dry_run=True, explain=explain
+    )
     result["tasks_archived"] = pre_check.get("tasks_archived", 0)
 
     # FIX-164: a run is actionable if ANY category has migratable data — not
@@ -2564,6 +2792,7 @@ def analyze_auto_archive_candidates():
     # is NOT an actionable archive signal — reporting it as should_archive=True
     # would make check-archive-integrity perpetually flag a clean state.
     result["should_archive"] = bool(result["triggers"]) and not no_archivable_tasks
+    result["explain"] = explain  # FIX-301: auditable explanation for both paths
     if not result["should_archive"]:
         result["skipped"] = True
         if result["triggers"] and no_archivable_tasks:
@@ -2634,6 +2863,7 @@ def migrate_auto(dry_run=False):
     result["decisions_archived"] = analysis.get("decisions_archived", 0)
     result["risks_archived"] = analysis.get("risks_archived", 0)
     result["triggers"] = analysis.get("triggers", [])
+    result["explain"] = analysis.get("explain", {})  # FIX-301
 
     if analysis.get("skipped") or not analysis.get("should_archive"):
         result["success"] = analysis.get("success", False)
@@ -2703,6 +2933,54 @@ def migrate_auto(dry_run=False):
         f"(v{version_start}~v{version_end})"
     )
     return result
+
+
+def _format_explain_report(explain):
+    """FIX-301: render the auditable dry-run explanation as text.
+
+    For each category (tasks/decisions/risks/evidence): the five numbers
+    (scanned / structurally parsed / would-archive / retained /
+    unknown-structure), the reason distribution over its rows, and — when
+    non-empty — the unknown-structure ID list (capped at 10 shown). Generated
+    from the SAME per-row records the migration loops collected, so the
+    report can never contradict what a real run would do.
+    """
+    if not explain:
+        return ""
+    lines = [
+        "📋 归档可审计解释（逐类：扫描/结构可解析/满足归档条件/保留/未知结构；"
+        "逐条原因由迁移判定路径单源收集）:",
+    ]
+    vr = explain.get("versions_range")
+    if vr:
+        lines.append(f"  归档范围: v{vr[0]} ~ v{vr[1]}")
+    for cat in ("tasks", "decisions", "risks", "evidence"):
+        stats = explain.get(cat)
+        if not isinstance(stats, dict):
+            continue
+        lines.append(
+            f"  - {cat}: 扫描 {stats.get('scanned', 0)} | "
+            f"结构可解析 {stats.get('parsed', 0)} | "
+            f"满足归档条件 {stats.get('would_archive', 0)} | "
+            f"保留 {stats.get('retained', 0)} | "
+            f"未知结构 {stats.get('unknown_structure', 0)}"
+        )
+        dist = {}
+        for row in stats.get("rows", []):
+            dist[row["reason"]] = dist.get(row["reason"], 0) + 1
+        if dist:
+            rendered = ", ".join(
+                f"{reason}={count}" for reason, count in sorted(dist.items())
+            )
+            lines.append(f"      逐条原因分布: {rendered}")
+        unknown_ids = stats.get("unknown_ids") or []
+        if unknown_ids:
+            shown = ", ".join(unknown_ids[:10])
+            extra = ""
+            if len(unknown_ids) > 10:
+                extra = f"（共 {len(unknown_ids)} 个，仅列前 10）"
+            lines.append(f"      未知结构清单: {shown}{extra}")
+    return "\n".join(lines)
 
 
 def _format_auto_summary(result):
@@ -2912,6 +3190,12 @@ def main(argv=None):
         if args.auto:
             result = migrate_auto(dry_run=args.dry_run)
             print(_format_auto_summary(result))
+            # FIX-301: the auditable explanation renders for BOTH the skip
+            # path and the action path — a skip with triggers satisfied must
+            # never be a black box again.
+            explain_report = _format_explain_report(result.get("explain"))
+            if explain_report:
+                print(explain_report)
             if not result["skipped"] and not result["success"]:
                 sys.exit(1)
         elif args.version_start and args.version_end:

@@ -20565,7 +20565,14 @@ def cmd_check_release(args):
     claim_gate = _loop_runtime_claim_gate_detail(claim_report)
     result["details"]["loop_runtime_claim_gate"] = claim_gate
     result["issues"].extend(claim_gate["issues"])
-    result["pass"] = False
+    # FIX-299: derive the CLI topline verdict from the merged issue list.
+    # The engine layer (check_release_readiness) already guarantees
+    # pass == (not issues) for its own components, and the claim-gate
+    # issues were merged above, so an issue-free run must read PASSED
+    # with exit 0 and any merged issue must read FAILED with exit 1 —
+    # the former unconditional False (FIX-199/200/202/213 merge, commit
+    # 4134026) made even all-green runs exit 1.
+    result["pass"] = not result["issues"]
     print()
     print("=== Release Readiness Check ===")
     if getattr(args, "version", None):

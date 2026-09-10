@@ -7479,14 +7479,18 @@ class Feat016DshUpgradeRegressionReleaseGateTests(unittest.TestCase):
     def test_FEAT_016_cli_shows_component_and_result_line_when_gates_enabled(self):
         stack = self._apply(self._cli_patches(self._fake_regression(passed=True)))
         with stack:
-            text, _exit_code = self._run_cli(self._cli_args())
+            text, exit_code = self._run_cli(self._cli_args())
         self.assertIn("[PASS] dsh upgrade regression", text)
         self.assertIn(f"[PASS] {self.REGRESSION_LABEL} (exit=0)", text)
-        # The topline verdict may read FAILED due to the pre-existing
-        # FIX-199 claim-gate quirk (pass forced False — out of FEAT-016
-        # scope); the FEAT-016 contract proven here is the visible PASS
-        # component line, and no FAIL is attributable to this gate.
         self.assertNotIn("[FAIL] dsh upgrade regression", text)
+        # FIX-299 corrected expectation: the all-green run (every component
+        # PASS + claim gate 0 issues) now reads PASSED with exit 0 — the
+        # former "may read FAILED" allowance documented the pre-FIX-299
+        # claim-gate quirk (pass unconditionally forced False), which this
+        # fix removes; the quirk-behavior assertion was inverted here.
+        self.assertIsNone(exit_code)
+        self.assertIn("Result: PASSED", text)
+        self.assertNotIn("Result: FAILED", text)
 
     def test_FEAT_016_cli_regression_failure_blocks_with_exit_1(self):
         stack = self._apply(self._cli_patches(self._fake_regression(passed=False)))
@@ -7496,6 +7500,11 @@ class Feat016DshUpgradeRegressionReleaseGateTests(unittest.TestCase):
         self.assertIn("[FAIL] dsh upgrade regression", text)
         self.assertIn(self.REGRESSION_LABEL, text)
         self.assertIn("Result: FAILED", text)
+        # F-2 (FEAT-016 R0 P2, fixed by FIX-299): attribution strength —
+        # the exit-1 must come from a REAL issue count (exactly 1: the
+        # failed dsh regression), distinguishing "genuinely N issues" from
+        # the former quirk where even an issue-free run exited 1.
+        self.assertIn("Result: FAILED - 1 issue(s)", text)
 
     def test_FEAT_016_cli_skip_execution_gates_prints_skip_disclosure(self):
         with patch.object(
@@ -7535,6 +7544,117 @@ class Feat016DshUpgradeRegressionReleaseGateTests(unittest.TestCase):
         self.assertFalse(
             Path(isolation["temp_dsh_home"]).exists(),
             "the temp redirected DSH_HOME must be removed after the gate run")
+
+
+class Fix299CheckReleaseExitCodeTests(unittest.TestCase):
+    """FIX-299: cmd_check_release derives the CLI topline verdict from the
+    merged issue list instead of unconditionally forcing result["pass"]
+    False (the FIX-199/200/202/213 claim-gate merge quirk, commit 4134026).
+
+    Contract (job_to_be_done): an issue-free run (all components PASS +
+    claim gate 0 issues) must print ``Result: PASSED`` and exit 0; any
+    merged issue must print ``Result: FAILED - N issue(s)`` and exit 1.
+    The engine layer (check_release_readiness) already guarantees
+    ``pass == (not issues)`` for its own components, so the CLI verdict
+    must stay consistent with the merged issue list."""
+
+    @staticmethod
+    def _clean_claim_gate(issues=()):
+        return {"pass": not list(issues), "issues": list(issues),
+                "boundary": ""}
+
+    def _patches(self, claim_gate):
+        return [
+            patch.object(vw, "check_version_consistency", return_value=[]),
+            patch.object(vw, "check_release_readiness_fact_source", return_value=[]),
+            patch.object(vw, "check_hot_fact_source_consistency", return_value=[]),
+            patch.object(vw, "check_runtime_readiness_matrix", return_value=[]),
+            patch.object(vw, "check_first_session_measurement", return_value=[]),
+            patch.object(vw, "check_governance_pack_status", return_value=[]),
+            patch.object(vw, "check_agent_adapter_contract", return_value=[]),
+            patch.object(vw, "check_projection_sync", return_value={
+                "pass": True, "issues": [], "mirrors_checked": 3,
+                "mirrors_discovered": 3, "mirrors_skipped_untracked": 0,
+                "source_version": "0.78.1",
+            }),
+            patch.object(vw, "check_cross_references", return_value={
+                "dangling": [], "deprecated": [], "cycles": [],
+                "total_files_scanned": 1, "total_refs": 0,
+            }),
+            patch.object(vw, "check_archive_integrity", return_value={
+                "pass": True, "issues": [], "hot_tasks": 0,
+                "total_archived_tasks": 0, "index_entries": 0,
+                "total_expected": 0, "pending_archive_tasks": 0,
+            }),
+            patch.object(vw, "check_release_docs_coverage", return_value=[]),
+            patch.object(
+                vw, "check_release_lineage",
+                return_value={"pass": True, "issues": [], "boundary": ""}),
+            patch.object(
+                vw, "check_gate_sequence_for_release",
+                return_value={"verdict": "PASS", "reason": "",
+                              "violations": [], "warnings": [],
+                              "stats": {"lineage_mode": "candidate",
+                                        "latest_tag": None,
+                                        "prerelease_pending": 0}}),
+            patch.object(vw, "run_release_execution_gates",
+                         return_value=[]),
+            patch.object(vw, "scan_loop_runtime_claims", return_value=None),
+            patch.object(vw, "_loop_runtime_claim_gate_detail",
+                         return_value=claim_gate),
+        ]
+
+    @staticmethod
+    def _run_cli(args):
+        out = io.StringIO()
+        exit_code = None
+        with redirect_stdout(out):
+            try:
+                vw.cmd_check_release(args)
+            except SystemExit as exc:
+                exit_code = exc.code
+        return out.getvalue(), exit_code
+
+    def _args(self, **overrides):
+        base = {
+            "skip_execution_gates": True, "lineage_mode": None,
+            "version": None, "require_changelog": False,
+            "runtime_adapters": False, "release_commit": None,
+            "lineage_remote": "origin",
+        }
+        base.update(overrides)
+        return SimpleNamespace(**base)
+
+    def test_healthy_run_prints_passed_and_exits_zero(self):
+        """FIX-299 red-first: all components PASS + claim gate 0 issues
+        must read PASSED with exit 0 (no SystemExit). Under the quirk the
+        CLI forced pass False, printing FAILED - 0 issue(s) + exit 1."""
+        stack = ExitStack()
+        for patch_item in self._patches(self._clean_claim_gate()):
+            stack.enter_context(patch_item)
+        with stack:
+            text, exit_code = self._run_cli(self._args())
+        self.assertIsNone(exit_code, "issue-free run must exit 0 (no SystemExit)")
+        self.assertIn("Result: PASSED", text)
+        self.assertNotIn("Result: FAILED", text)
+
+    def test_claim_issues_print_failed_count_and_exit_one(self):
+        """FIX-299: merged claim-gate issues must drive FAILED with the
+        exact issue count and exit 1 — the count assertion is the F-2
+        attribution strength (a real N-issue FAIL, never a 0-issue quirk)."""
+        claim_gate = self._clean_claim_gate([
+            "CLAIM_UNIT_UNKNOWN: skills/x.md claim id is not policy-owned",
+            "IDENTITY_ATTESTATION_FAIL: STAGED_DIGEST_MISMATCH: staged digest drift",
+        ])
+        stack = ExitStack()
+        for patch_item in self._patches(claim_gate):
+            stack.enter_context(patch_item)
+        with stack:
+            text, exit_code = self._run_cli(self._args())
+        self.assertEqual(1, exit_code)
+        self.assertIn("Result: FAILED - 2 issue(s)", text)
+        self.assertNotIn("Result: PASSED", text)
+        self.assertIn("[FAIL] loop runtime claim gate", text)
 
 
 class ProjectionSyncTests(unittest.TestCase):

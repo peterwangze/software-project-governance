@@ -71,7 +71,7 @@
 | 8 | check-injection-contract | PASS（28 anchors 含 @version-line 动态锚解析 0.79.0） | **PASS**（28 anchors，@version-line 动态锚 0.79.0——M-1A） |
 | 9 | check-dsh-skills-manifest | PASS（35/35） | **PASS**（verify 全量内含 agent_adapter 面——M-1A；check-release agent adapters 门 PASS） |
 | 10 | check-release --version 0.79.0 --require-changelog --lineage-mode candidate | 核心静态门禁 PASS + 既有基线 FAIL 分类披露（三件套 MUST 含 No-overclaim needles——0.78.1 R0 F-1 先例，本批三件套已含） | **静态 14 门全 PASS + dsh_upgrade_regression PASS（新门实战，temp DSH_HOME 零真实写入）+ loop fuse/changelog PASS**；execution gates 3 FAIL 全既有分类：①governance health 33（advisory 姿态——0.78.1 先例 127/EVD-894，严格更优）②unit tests 32F 分类零回归（见 #6）③loop claim gate semantic BLOCKED=数据耦合（N1 审查文档 affirmative/N2 归档致 authority 离热——AUDIT-152 登记，identity_verdict=PASS；W-4 披露）；整体 FAILED - 6 issue(s) fail-closed〔0.78.1 先例姿态：基线 FAIL 分类披露发布〕 |
-| 11 | release-ledger --version 0.79.0 --no-remote | NATIVE_CANDIDATE（candidate commit 后；UNKNOWN/BLOCKED 不得包装为 PASS） | 待 candidate commit 后回填（M-5 时点——不预填） |
+| 11 | release-ledger --version 0.79.0 --no-remote | NATIVE_CANDIDATE（candidate commit 后；UNKNOWN/BLOCKED 不得包装为 PASS） | **NATIVE_CANDIDATE PASS**（LEDGER_EXIT=0；candidate_commit=`8d9110c`；CANONICAL_BYTES 规范化一次后过；M-5 授权后 transition 事件+integrity 追加） |
 | 12 | quality-tools | NOT_RUN 如实记录（Ruff/mypy 未安装——ADR-010 不虚构 PASS） | **NOT_RUN**（本机未安装——如实；不虚构 PASS） |
 | 13 | check-release --version 0.79.0 --require-changelog --lineage-mode released --release-commit \<commit\> | （M-6 释放态）核心门禁 PASS + 基线 FAIL 披露 | 待 M-6 回填 |
 | 14 | release-ledger --version 0.79.0 --remote github-https | （M-6）NATIVE_RELEASED PASS（--no-remote 与 --remote 双证） | 待 M-6 回填 |

@@ -27,8 +27,20 @@ matcher, and the old literal grep must not regress in.
 Run:
     python -m pytest skills/software-project-governance/infra/tests/test_hooks.py -v
     python skills/software-project-governance/infra/tests/test_hooks.py
+
+FEAT-017 extension: post-commit Step 4b governance-write-guard panel
+wiring. The wiring block is ONE contiguous section in the shipped
+post-commit source; these tests bind to the literal section (same
+no-unbound-copy strategy as the FIX-282 matcher tests): static pins prove
+the invocation contract, verdict-line gate, timeout protection, set -e
+safety and the documented rollback path; when a functional bash exists the
+extracted section is executed end-to-end over a stub verify_workflow.py and
+the four observable states (PASS / FAIL / SKIP / UNAVAILABLE) are asserted —
+including that a crashed guard (rc=1 WITHOUT a ``Result: FAIL`` line) is
+disclosed as UNAVAILABLE, never rendered as a false FAIL verdict.
 """
 
+import os
 import re
 import shutil
 import subprocess
@@ -40,7 +52,12 @@ _INFRA_DIR = Path(__file__).resolve().parent.parent
 _HOOKS_DIR = _INFRA_DIR / "hooks"
 _REPO_ROOT = _INFRA_DIR.parent.parent.parent  # <repo>/skills/<skill>/infra -> <repo>
 _COMMIT_MSG = _HOOKS_DIR / "commit-msg"
+_POST_COMMIT = _HOOKS_DIR / "post-commit"
 _PLAN = _REPO_ROOT / ".governance" / "plan-tracker.md"
+
+_WG_SECTION_RE = re.compile(
+    r"(?ms)^# --- Step 4b: governance-write-guard panel wiring.*?"
+    r"(?=^# --- Step 5:)")
 
 _FN_RE = re.compile(r"(?ms)^task_in_plan_tracker\(\) \{.*?^\}")
 _PATTERN_RE = re.compile(r'grep -Eq "([^"]+)"')
@@ -107,6 +124,17 @@ def _fragment(*rows):
         "|---|---|---|---|---|\n"
     )
     return header + "\n".join(rows) + "\n"
+
+
+def _wg_section():
+    """Extract the shipped post-commit Step 4b write-guard wiring block."""
+    text = _POST_COMMIT.read_text(encoding="utf-8")
+    m = _WG_SECTION_RE.search(text)
+    if not m:
+        raise AssertionError(
+            "post-commit Step 4b write-guard wiring (FEAT-017) not found "
+            "in {0}".format(_POST_COMMIT))
+    return m.group(0)
 
 
 def _find_bash():
@@ -309,6 +337,214 @@ class BashParityTests(unittest.TestCase):
         plan = _fragment(
             "| **P1** | FIX-284 | 关联 FIX-282（描述列） | FIX-279 | 0.78.1 |")
         self.assertFalse(_run_bash_function(_BASH, "FIX-282", plan))
+
+
+class PostCommitWriteGuardWiringTests(unittest.TestCase):
+    """FEAT-017 static binding pins over the literal shipped Step 4b block."""
+
+    def test_section_extraction_works(self):
+        """Binding: the wiring block must exist in the shipped post-commit."""
+        section = _wg_section()
+        self.assertIn("FEAT-017", section)
+
+    def test_invocation_contract(self):
+        """The guard subcommand is invoked with an explicit project root so
+        the verdict always targets THIS repo's .governance (cwd-independent),
+        reusing the hook's already-resolved VERIFY_WORKFLOW path."""
+        section = _wg_section()
+        self.assertIn("governance-write-guard", section)
+        self.assertIn('--project-root "$REPO_ROOT"', section)
+        self.assertIn('"$VERIFY_WORKFLOW"', section)
+
+    def test_verdict_line_gate_present(self):
+        """Honesty gate: rc alone must not render a verdict — both PASS and
+        FAIL branches require the CLI's authoritative Result line (an
+        uncaught python exception also exits rc=1; rendering that as FAIL
+        would be a false verdict)."""
+        section = _wg_section()
+        self.assertIn("grep -q '^Result: PASS'", section)
+        self.assertIn("grep -q '^Result: FAIL'", section)
+
+    def test_panel_markers(self):
+        """Panel vocabulary: PASS one-liner / FAIL box / SKIP + UNAVAILABLE
+        single-line disclosures (existing hook idiom — no ANSI codes)."""
+        section = _wg_section()
+        self.assertIn("✅ GOVERNANCE: write-guard PASS", section)
+        self.assertIn("${SPG_WG_ELAPSED}", section)  # elapsed-time placeholder
+        self.assertIn("WRITE-GUARD FAIL", section)
+        self.assertIn("SKIPPED — no .governance", section)
+        self.assertIn("SKIPPED — verify_workflow.py not found", section)
+        self.assertIn("SKIPPED — no python interpreter", section)
+        self.assertIn("UNAVAILABLE", section)
+
+    def test_timeout_protection_present(self):
+        """The guard call is wrapped by a VERIFIED GNU coreutils timeout
+        (System32 timeout.exe is a pause command and must never wrap it);
+        without GNU timeout the call degrades to unwrapped, never mis-wrapped."""
+        section = _wg_section()
+        self.assertIn('timeout "$SPG_WG_TIMEOUT_SECONDS"', section)
+        self.assertIn("GNU coreutils", section)
+        self.assertIn("SPG_WG_TIMEOUT_SECONDS=30", section)
+
+    def test_set_e_safe_rc_capture(self):
+        """rc capture uses the || capture idiom so a FAIL verdict (rc=1)
+        cannot abort the hook under `set -e`."""
+        self.assertIn("|| SPG_WG_RC=$?", _wg_section())
+
+    def test_rollback_documented(self):
+        """FEAT-017 acceptance 3: deleting the block restores the FIX-297
+        scheme-2 pure protocol-rule posture — documented in the section."""
+        section = _wg_section()
+        self.assertIn("ROLLBACK", section)
+        self.assertIn("FIX-297", section)
+
+    def test_section_never_blocks(self):
+        """post-commit stays advisory: the wiring must contain no exit-1 /
+        exit-2 statement of its own (comments deliberately use rc= forms)."""
+        section = _wg_section()
+        self.assertNotIn("exit 1", section)
+        self.assertNotIn("exit 2", section)
+
+    def test_section_self_contained(self):
+        """The block only reads REPO_ROOT + VERIFY_WORKFLOW (both set by
+        Step 4 and earlier) plus its own SPG_WG_* locals — no hidden
+        coupling to Step 5 state (LOCKS_FILE) or resolution internals."""
+        section = _wg_section()
+        self.assertNotIn("SPG_RESOLVED_HOME", section)
+        self.assertNotIn("TASK_ID", section)
+        self.assertNotIn("LOCKS_FILE", section)
+
+
+# Stub verify_workflow.py stand-in for behavioral runs: emits the REAL CLI's
+# output shapes (issue lines "    - ...", authoritative Result line) with a
+# configurable verdict, and touches a marker file when actually invoked so
+# SKIP-path tests can prove the guard was NOT called (test fixture, not a
+# production mock — the shipped hook always resolves the real script).
+_WG_STUB = """\
+import os
+import sys
+
+marker = os.environ.get("WG_STUB_MARKER", "")
+if marker:
+    open(marker, "w").close()
+mode = os.environ.get("WG_STUB_MODE", "pass")
+print("=== Governance Write Guard (stub) ===")
+if mode == "fail":
+    print("  [FAIL] evidence_log 机器行族 TRIAGE/RECO — 2 issue(s)")
+    print("    - L42 TRIAGE-FEAT017: 列数 7 ≠ 行族标准 6")
+    print("    - L57 RECO-999: writer ID 格式破坏")
+    print()
+    print("Result: FAIL — 2 issue(s)。守卫只检不改。")
+    sys.exit(1)
+if mode == "crash":
+    sys.exit(1)
+print("  [PASS] plan_tracker — 0 issue(s)")
+print()
+print("Result: PASS — 0 issue(s)（SKIPPED = 产物缺席，非缺陷）。")
+sys.exit(0)
+"""
+
+
+def _find_python_for_bash(bash_path):
+    """Return 'python'/'python3' as resolvable INSIDE the bash env, or None."""
+    if not bash_path:
+        return None
+    try:
+        proc = subprocess.run(
+            [bash_path, "-c",
+             'command -v python >/dev/null 2>&1 && echo python || '
+             '{ command -v python3 >/dev/null 2>&1 && echo python3; }'],
+            capture_output=True, timeout=15, check=False,
+            stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    out = proc.stdout.decode("utf-8", "replace").strip()
+    return out if out in ("python", "python3") else None
+
+
+_BASH_PYTHON = _find_python_for_bash(_BASH)
+
+
+@unittest.skipUnless(_BASH, "no functional bash (git-bash/WSL/native)")
+@unittest.skipUnless(_BASH_PYTHON, "no python interpreter inside bash env")
+class PostCommitWriteGuardPanelTests(unittest.TestCase):
+    """FEAT-017 behavioral runs: the literal shipped Step 4b section is
+    executed under `set -e` over a stub verify_workflow.py; every state must
+    render its panel line AND let the script continue (no abort)."""
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        root = Path(self._td.name)
+        self.repo = root / "repo"
+        (self.repo / ".governance").mkdir(parents=True)
+        (self.repo / ".governance" / "plan-tracker.md").write_text(
+            "# plan\n\n| **P1** | FIX-001 | demo | — | 0.80.0 |\n",
+            encoding="utf-8")
+        self.stub = root / "guard_stub.py"
+        self.stub.write_text(_WG_STUB, encoding="utf-8")
+        self.marker = root / "stub_invoked.marker"
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def _run_section(self, repo_root, verify_workflow, mode):
+        script = (
+            "set -e\n"
+            "REPO_ROOT={0!r}\n"
+            "VERIFY_WORKFLOW={1!r}\n"
+            "{2}\n"
+            "echo '__WG_DONE__'\n"
+        ).format(
+            str(repo_root).replace("\\", "/"),
+            str(verify_workflow).replace("\\", "/"),
+            _wg_section())
+        script = script.replace("\r\n", "\n").replace("\r", "\n")
+        env = dict(os.environ)
+        env["WG_STUB_MODE"] = mode
+        env["WG_STUB_MARKER"] = str(self.marker).replace("\\", "/")
+        proc = subprocess.run(
+            [_BASH, "-s"], input=script.encode("utf-8"),
+            capture_output=True, timeout=60, check=False, env=env)
+        return (proc.stdout.decode("utf-8", "replace"),
+                proc.returncode, proc.stderr.decode("utf-8", "replace"))
+
+    def test_pass_state_renders_pass_line(self):
+        out, rc, err = self._run_section(self.repo, self.stub, "pass")
+        self.assertIn("GOVERNANCE: write-guard PASS", out)
+        self.assertIn("结构检查通过", out)
+        self.assertNotIn("UNAVAILABLE", out)
+        self.assertNotIn("SKIPPED", out)
+        self.assertIn("__WG_DONE__", out)  # set -e survival
+        self.assertTrue(self.marker.exists())  # guard actually invoked
+
+    def test_fail_state_renders_panel_and_continues(self):
+        out, rc, err = self._run_section(self.repo, self.stub, "fail")
+        self.assertIn("WRITE-GUARD FAIL", out)
+        self.assertIn("L42 TRIAGE-FEAT017", out)  # first-N issue passthrough
+        self.assertIn("L57 RECO-999", out)
+        self.assertIn("governance-write-guard", out)  # rerun command hint
+        self.assertIn("__WG_DONE__", out)  # FAIL verdict must not abort
+        self.assertTrue(self.marker.exists())
+
+    def test_crash_rc1_without_verdict_is_unavailable_not_fail(self):
+        out, rc, err = self._run_section(self.repo, self.stub, "crash")
+        self.assertIn("UNAVAILABLE", out)
+        self.assertNotIn("WRITE-GUARD FAIL", out)  # no false verdict
+        self.assertIn("__WG_DONE__", out)
+
+    def test_skip_when_no_governance_dir(self):
+        plain = Path(self._td.name) / "plain"
+        plain.mkdir()
+        out, rc, err = self._run_section(plain, self.stub, "pass")
+        self.assertIn("SKIPPED — no .governance", out)
+        self.assertFalse(self.marker.exists())  # guard NOT invoked
+        self.assertIn("__WG_DONE__", out)
+
+    def test_skip_when_no_verify_workflow(self):
+        out, rc, err = self._run_section(self.repo, "", "pass")
+        self.assertIn("SKIPPED — verify_workflow.py not found", out)
+        self.assertFalse(self.marker.exists())
+        self.assertIn("__WG_DONE__", out)
 
 
 if __name__ == "__main__":

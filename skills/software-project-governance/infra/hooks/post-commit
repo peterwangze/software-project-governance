@@ -192,6 +192,115 @@ if [ -n "$VERIFY_WORKFLOW" ]; then
     echo "-------------------------------"
 fi
 
+# --- Step 4b: governance-write-guard panel wiring (FEAT-017 / AUDIT-150 §10) ---
+# Immediate post-commit visibility of the .governance structural write guard
+# (FEAT-011 subcommand, FIX-297 follow-up). Before this wiring a Coordinator
+# direct-write breach surfaced only in the NEXT session (check-governance);
+# now it surfaces at the commit point. Panel idiom matches the existing
+# steps: ✅ one-liner = pass, ╔═╗ box = violation, ⚠️ one-liner = degraded
+# disclosure (these hooks emit no ANSI color codes — emoji + box carry the
+# green/red semantics, same vocabulary as Steps 2-4 above).
+#
+# Verdict mapping (honest — never reports a verdict it does not have):
+#   rc=0 with a "Result: PASS" line → ✅ PASS one-liner (with elapsed time)
+#   rc=1 with a "Result: FAIL" line → ❌ FAIL box (first issues + rerun cmd)
+#   rc=124/137                       → guard timed out → ⚠️ UNAVAILABLE
+#   any other rc / missing verdict   → invocation failed (python missing,
+#     script crash, subcommand absent) → ⚠️ UNAVAILABLE. The Result-line gate
+#     matters: an uncaught python exception ALSO exits rc=1, and rendering a
+#     crashed guard as FAIL would be a false verdict.
+#   .governance/ absent / verify_workflow.py unresolved → ⚠️ SKIPPED.
+# This step NEVER blocks and never aborts the hook: post-commit is advisory
+# by design and every command below is guarded against `set -e`; the hook's
+# flow continues to Step 5 with an unchanged status.
+#
+# ROLLBACK (documented revert path, FEAT-017 acceptance 3): delete this
+# whole Step 4b block. That restores the FIX-297 scheme-2 posture — the pure
+# protocol rule (behavior-protocol.md M1.2 "直写后 MUST 复跑
+# governance-write-guard") with discovery deferred to the next session's
+# check-governance run. All variables below are SPG_WG_* section-local; no
+# later step reads them, so removal is self-contained.
+if [ ! -d "$REPO_ROOT/.governance" ]; then
+    echo "⚠️  GOVERNANCE: write-guard SKIPPED — no .governance/ in this repo (guard target absent)."
+elif [ -z "$VERIFY_WORKFLOW" ]; then
+    echo "⚠️  GOVERNANCE: write-guard SKIPPED — verify_workflow.py not found (guard command unavailable)."
+else
+    SPG_WG_TIMEOUT_SECONDS=30
+    SPG_WG_PY=""
+    if command -v python >/dev/null 2>&1; then
+        SPG_WG_PY="python"
+    elif command -v python3 >/dev/null 2>&1; then
+        SPG_WG_PY="python3"
+    fi
+    if [ -z "$SPG_WG_PY" ]; then
+        echo "⚠️  GOVERNANCE: write-guard SKIPPED — no python interpreter found (guard command unavailable)."
+    else
+        # Timeout protection (FEAT-017 acceptance 2; hooks had no prior
+        # timeout precedent to copy — conservative semantic probe instead):
+        # only wrap the call when `timeout` is verifiably GNU coreutils.
+        # Git-bash/WSL/Linux ship it (/usr/bin/timeout — kills the child on
+        # expiry, rc=124). Windows System32 timeout.exe is a PAUSE command
+        # that would swallow the guard silently; the probe rejects it (empty
+        # `--version` stdout → no "GNU coreutils" banner) and the call runs
+        # unwrapped instead of mis-wrapped.
+        spg_wg_invoke() {
+            if timeout --version 2>/dev/null | head -1 | grep -q "GNU coreutils"; then
+                timeout "$SPG_WG_TIMEOUT_SECONDS" "$SPG_WG_PY" "$VERIFY_WORKFLOW" \
+                    governance-write-guard --project-root "$REPO_ROOT"
+            else
+                "$SPG_WG_PY" "$VERIFY_WORKFLOW" governance-write-guard \
+                    --project-root "$REPO_ROOT"
+            fi
+        }
+        # date +%s%N sanitized through tr: BSD/macOS date prints a literal
+        # trailing "N" for unsupported %N — tr strips it so $((...)) never
+        # sees a non-numeric token (degrades to whole-second precision).
+        SPG_WG_T0=$(date +%s%N 2>/dev/null | tr -cd '0-9')
+        SPG_WG_RC=0
+        SPG_WG_OUT=$(spg_wg_invoke 2>/dev/null) || SPG_WG_RC=$?
+        SPG_WG_T1=$(date +%s%N 2>/dev/null | tr -cd '0-9')
+        SPG_WG_ELAPSED=""
+        if [ -n "$SPG_WG_T0" ] && [ -n "$SPG_WG_T1" ] && [ "$SPG_WG_T0" -le "$SPG_WG_T1" ] 2>/dev/null; then
+            SPG_WG_ELAPSED=" ($(( (SPG_WG_T1 - SPG_WG_T0) / 1000000 ))ms)"
+        fi
+        case "$SPG_WG_RC" in
+            0)
+                if printf '%s\n' "$SPG_WG_OUT" | grep -q '^Result: PASS'; then
+                    echo "✅ GOVERNANCE: write-guard PASS — .governance 结构检查通过${SPG_WG_ELAPSED}"
+                else
+                    echo "⚠️  GOVERNANCE: write-guard UNAVAILABLE — guard returned rc=0 without a PASS verdict line (unexpected output shape; no verdict reported)."
+                fi
+                ;;
+            1)
+                if printf '%s\n' "$SPG_WG_OUT" | grep -q '^Result: FAIL'; then
+                    SPG_WG_COUNT=$(printf '%s\n' "$SPG_WG_OUT" | grep -c '^ *- ' || true)
+                    echo ""
+                    echo "╔══════════════════════════════════════════════════════════════╗"
+                    echo "║  ❌ WRITE-GUARD FAIL: .governance 直写结构违规              ║"
+                    echo "║  (FEAT-011 guard verdict — 直写产物形状缺陷, writer 需修复) ║"
+                    echo "║                                                            ║"
+                    echo "║  ${SPG_WG_COUNT} issue(s) — first 3 shown (full report: rerun):"
+                    printf '%s\n' "$SPG_WG_OUT" | grep '^ *- ' | head -3 | sed 's/^ */║    /'
+                    echo "║                                                            ║"
+                    echo "║  Guard is check-only (零 .governance 写入) — fix the writer."
+                    echo "║  Rerun for line numbers + expected shapes:"
+                    echo "║    ${SPG_WG_PY} \"${VERIFY_WORKFLOW}\" governance-write-guard --project-root \"${REPO_ROOT}\""
+                    echo "╚══════════════════════════════════════════════════════════════╝"
+                    echo ""
+                else
+                    echo "⚠️  GOVERNANCE: write-guard UNAVAILABLE — invocation failed (rc=1 without a FAIL verdict line — tooling error, not a governance FAIL; no verdict reported)."
+                fi
+                ;;
+            124|137)
+                echo "⚠️  GOVERNANCE: write-guard UNAVAILABLE — timed out after ${SPG_WG_TIMEOUT_SECONDS}s (no verdict; post-commit not blocked)."
+                ;;
+            *)
+                echo "⚠️  GOVERNANCE: write-guard UNAVAILABLE — invocation failed (rc=${SPG_WG_RC}; no verdict — tooling error, not a governance FAIL)."
+                ;;
+        esac
+    fi
+fi
+
 # --- Step 5: Agent lock cleanup + scope creep detection (FIX-056 Phase 2) ---
 LOCKS_FILE="$REPO_ROOT/.governance/agent-locks.json"
 if [ -f "$LOCKS_FILE" ]; then

@@ -1,0 +1,52 @@
+{
+  "schema": "spg-perf-tolerance/1",
+  "task": "FEAT-018",
+  "source": "docs/requirements/architecture-evolution-0.80.0.md#9.5 (item 5 / P24)",
+  "calibration_status": "initial-hypothesis",
+  "judge_face": "warm median / warm P95; cold sample is observed-only (never judged)",
+  "environment_covariates_note": "AUDIT-151 / RISK-048: load class is a covariate — serial-exclusive and parallel-observed tolerances are not interchangeable",
+  "commands": {
+    "status": {
+      "repeat_min": 5,
+      "judge": "warm",
+      "loads": {
+        "serial-exclusive": {
+          "median_rel": 0.1,
+          "p95_rel": 0.25,
+          "abs_floor_s": 0.05
+        },
+        "parallel-observed": {
+          "median_rel": 0.25,
+          "p95_rel": 0.5,
+          "abs_floor_s": 0.2,
+          "note": "RISK-048: parallel governance load pollutes samples — observation-only caliber, never a gate"
+        }
+      }
+    },
+    "summary": {
+      "repeat_min": 5,
+      "judge": "warm",
+      "loads": {
+        "serial-exclusive": {
+          "median_rel": 0.1,
+          "p95_rel": 0.25,
+          "abs_floor_s": 0.05
+        },
+        "parallel-observed": {
+          "median_rel": 0.25,
+          "p95_rel": 0.5,
+          "abs_floor_s": 0.2,
+          "note": "RISK-048: parallel governance load pollutes samples — observation-only caliber, never a gate"
+        }
+      }
+    }
+  },
+  "r6_threshold_fill": {
+    "wall_ms_rel_median": 0.1,
+    "wall_ms_rel_p95": 0.25,
+    "abs_floor_s": 0.05,
+    "import_count_max_delta": 0,
+    "probe": "python -I -B -c 'import verify_workflow' (isolated) — architecture-baseline.json r6_startup_budget.probe",
+    "note": "FEAT-018 initial hypothesis per §9.5 item 5; fill into r6_startup_budget.threshold when R6 wiring consumes it (advisory, never fatal in v1); calibrate on first comparison slices"
+  }
+}

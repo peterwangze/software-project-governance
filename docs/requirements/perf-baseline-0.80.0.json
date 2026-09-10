@@ -1,0 +1,269 @@
+{
+  "schema": "spg-perf-report/1",
+  "task": "FEAT-018",
+  "generated_utc": "2026-09-10T06:25:35+00:00",
+  "protocol": {
+    "ref": "docs/requirements/architecture-evolution-0.80.0.md#9.5",
+    "interleaved": true,
+    "repeat": 5,
+    "cold_warm_split": true,
+    "sample_order": [
+      "status",
+      "summary",
+      "status",
+      "summary",
+      "status",
+      "summary",
+      "status",
+      "summary",
+      "status",
+      "summary"
+    ],
+    "caliber_notes": [
+      "cold = first run of this command in this session; warm = later runs (§9.5 item 3; OS file cache is the practical cold/warm boundary)",
+      "-B on every sampled subprocess: no bytecode-cache writes, behavior unchanged (AUDIT-151 measurement-safe variant)",
+      "importtime probe runs separately from wall-clock samples so instrumentation overhead never pollutes the timings",
+      "P95 = linear interpolation on rank (n-1)*p/100 (numpy-linear caliber)",
+      "decomposition is a single-process approximation: wall = import-self sum + residual (interpreter startup + business + I/O merged)",
+      "load class is a covariate, not metadata decoration (AUDIT-151 / RISK-048: 0.49~0.56s serial vs 4.04s parallel-observed)"
+    ]
+  },
+  "environment": {
+    "python_version": "3.14.3",
+    "python_full": "3.14.3 (tags/v3.14.3:323c59a, Feb  3 2026, 16:04:56) [MSC v.1944 64 bit (AMD64)]",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "machine": "AMD64",
+    "processor_count": 16,
+    "cwd": "D:\\AI\\agent\\claude\\coding\\project_management_workflow",
+    "git_head": "c44375771672fa30f399b17023ac48ce49a66f64",
+    "load_class": "serial-exclusive",
+    "load_note": "串行独占——采样期间零并行治理负载（RISK-048 纪律，AUDIT-151 口径）",
+    "timestamp_utc": "2026-09-10T06:25:35+00:00"
+  },
+  "commands": {
+    "status": {
+      "argv": [
+        "C:\\Python314\\python.exe",
+        "-B",
+        "D:\\AI\\agent\\claude\\coding\\project_management_workflow\\skills\\software-project-governance\\infra\\verify_workflow.py",
+        "status"
+      ],
+      "repeat": 5,
+      "samples_s": [
+        0.5149,
+        0.5184,
+        0.5249,
+        0.5215,
+        0.5327
+      ],
+      "cold_s": 0.5149,
+      "warm_s": [
+        0.5184,
+        0.5249,
+        0.5215,
+        0.5327
+      ],
+      "wall": {
+        "n": 5,
+        "min": 0.5149,
+        "max": 0.5327,
+        "median": 0.5215,
+        "p95": 0.53114,
+        "warm_median": 0.5232,
+        "warm_p95": 0.53153
+      },
+      "importtime": {
+        "import_events": 194,
+        "self_total_ms": 101.925,
+        "top": [
+          {
+            "module": "checks.loop_runtime_claims",
+            "self_us": 10905,
+            "cumulative_us": 11232,
+            "depth": 0
+          },
+          {
+            "module": "_colorize",
+            "self_us": 4273,
+            "cumulative_us": 4273,
+            "depth": 0
+          },
+          {
+            "module": "_hashlib",
+            "self_us": 4241,
+            "cumulative_us": 4241,
+            "depth": 1
+          },
+          {
+            "module": "_socket",
+            "self_us": 2447,
+            "cumulative_us": 2447,
+            "depth": 3
+          },
+          {
+            "module": "task_priority",
+            "self_us": 2303,
+            "cumulative_us": 2303,
+            "depth": 1
+          },
+          {
+            "module": "checks.review_domain",
+            "self_us": 2118,
+            "cumulative_us": 2118,
+            "depth": 0
+          },
+          {
+            "module": "re._constants",
+            "self_us": 1756,
+            "cumulative_us": 1756,
+            "depth": 5
+          },
+          {
+            "module": "annotationlib",
+            "self_us": 1726,
+            "cumulative_us": 1726,
+            "depth": 6
+          },
+          {
+            "module": "ssl",
+            "self_us": 1638,
+            "cumulative_us": 3005,
+            "depth": 2
+          },
+          {
+            "module": "typing",
+            "self_us": 1596,
+            "cumulative_us": 1628,
+            "depth": 1
+          }
+        ]
+      },
+      "sys_modules_probe": {
+        "import_count": 196,
+        "import_set_sha256": "70157fc2bc9516653aaf7c8d3ddfb00b84ee25ce03096df063eda405169ed1fe",
+        "wall_ms": 1046.3,
+        "interpreter_family": "3.14",
+        "note": "R6-identical probe caliber (python -I -B isolated); approximates the command import face (the engine imports its full set at module load)"
+      },
+      "decomposition": {
+        "wall_total_s": 0.5215,
+        "import_self_total_s": 0.101925,
+        "non_import_residual_s": 0.419575,
+        "note": "approx: residual = interpreter startup + business + I/O merged (importtime cumulative approximation + total wall)"
+      }
+    },
+    "summary": {
+      "argv": [
+        "C:\\Python314\\python.exe",
+        "-B",
+        "D:\\AI\\agent\\claude\\coding\\project_management_workflow\\skills\\software-project-governance\\infra\\verify_workflow.py",
+        "check-governance",
+        "--summary-only"
+      ],
+      "repeat": 5,
+      "samples_s": [
+        42.8115,
+        40.8269,
+        40.7233,
+        41.796,
+        45.1255
+      ],
+      "cold_s": 42.8115,
+      "warm_s": [
+        40.8269,
+        40.7233,
+        41.796,
+        45.1255
+      ],
+      "wall": {
+        "n": 5,
+        "min": 40.7233,
+        "max": 45.1255,
+        "median": 41.796,
+        "p95": 44.6627,
+        "warm_median": 41.31145,
+        "warm_p95": 44.626075
+      },
+      "importtime": {
+        "import_events": 197,
+        "self_total_ms": 103.21,
+        "top": [
+          {
+            "module": "checks.loop_runtime_claims",
+            "self_us": 9883,
+            "cumulative_us": 10198,
+            "depth": 0
+          },
+          {
+            "module": "_colorize",
+            "self_us": 4642,
+            "cumulative_us": 4642,
+            "depth": 0
+          },
+          {
+            "module": "_hashlib",
+            "self_us": 3366,
+            "cumulative_us": 3366,
+            "depth": 1
+          },
+          {
+            "module": "task_priority",
+            "self_us": 2267,
+            "cumulative_us": 2267,
+            "depth": 1
+          },
+          {
+            "module": "checks.review_domain",
+            "self_us": 2166,
+            "cumulative_us": 2166,
+            "depth": 0
+          },
+          {
+            "module": "_socket",
+            "self_us": 1933,
+            "cumulative_us": 1933,
+            "depth": 3
+          },
+          {
+            "module": "re._constants",
+            "self_us": 1814,
+            "cumulative_us": 1814,
+            "depth": 5
+          },
+          {
+            "module": "checks.loop_runtime_claim_attestation",
+            "self_us": 1685,
+            "cumulative_us": 1685,
+            "depth": 0
+          },
+          {
+            "module": "typing",
+            "self_us": 1630,
+            "cumulative_us": 1663,
+            "depth": 1
+          },
+          {
+            "module": "annotationlib",
+            "self_us": 1623,
+            "cumulative_us": 1623,
+            "depth": 6
+          }
+        ]
+      },
+      "sys_modules_probe": {
+        "import_count": 196,
+        "import_set_sha256": "70157fc2bc9516653aaf7c8d3ddfb00b84ee25ce03096df063eda405169ed1fe",
+        "wall_ms": 1033.0,
+        "interpreter_family": "3.14",
+        "note": "R6-identical probe caliber (python -I -B isolated); approximates the command import face (the engine imports its full set at module load)"
+      },
+      "decomposition": {
+        "wall_total_s": 41.796,
+        "import_self_total_s": 0.10321,
+        "non_import_residual_s": 41.69279,
+        "note": "approx: residual = interpreter startup + business + I/O merged (importtime cumulative approximation + total wall)"
+      }
+    }
+  },
+  "tolerance_table_ref": "D:\\AI\\agent\\claude\\coding\\project_management_workflow\\skills\\software-project-governance\\core\\perf-tolerance.json"
+}

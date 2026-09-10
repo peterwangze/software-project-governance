@@ -38,7 +38,11 @@ BASELINE = _SKILL_ROOT / "core" / "architecture-baseline.json"
 SNAPSHOT = _INFRA_DIR / "contract_matrix" / "snapshots.json"
 
 # facts-0.80.0 §3.1 (2026-09-09 audit): print-call census over the engine.
-FACTS_PRINT_TOTAL = 1315
+# Re-censused 2026-09-10 at 1310 by FEAT-012 G5 (the tpa CLI flow — 5 print
+# calls in cmd_task_priority_analysis — moved from the engine into
+# task_priority.run_cli_analysis; sanctioned ratchet shrink, baseline
+# regenerated in the same change). Original facts census: 1315.
+FACTS_PRINT_TOTAL = 1310
 
 
 def _committed_baseline():
@@ -195,7 +199,8 @@ class R3LayerMatrixTests(unittest.TestCase):
 
 class R4PrintOrchestrationTests(unittest.TestCase):
     def test_r4_total_matches_facts_census(self):
-        """Calibration cross-check: 1,315 print calls (facts §3.1)."""
+        """Calibration cross-check: 1,310 print calls (FEAT-012 re-census;
+        original facts §3.1 census 1,315 — see FACTS_PRINT_TOTAL note)."""
         current = ar.count_print_calls(ENGINE)
         self.assertEqual(current["total"], FACTS_PRINT_TOTAL)
         self.assertEqual(

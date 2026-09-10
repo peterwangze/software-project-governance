@@ -17,6 +17,10 @@ Deliverable under test (design §3.1, test plan §5.5 — 11 cases + FIX-278 G1)
    line ``共 N issues，--level strict 查看全部``; the added detail portion is
    bounded (detail lines truncated at 130 chars, ≤5 lines — ≲700 chars).
    [BLOCKING]/[ERROR] markers are FAIL-class tokens (P2-4).
+5. FEAT-012 G6: the standard-tier tail line is TWO-STATE — when every
+   FAIL/WARN detail is already displayed (≤ cap) it reads
+   ``构成已全量展示（N 项）`` (no chase invitation); above the cap the FIX-278
+   G1 guidance line is preserved verbatim.
 
 Run:
     python -m pytest skills/software-project-governance/infra/tests/test_summary_only.py -v
@@ -199,15 +203,17 @@ class SummaryOnlyDispatchTests(unittest.TestCase):
                              "G1 budget: detail portion ≤ ~700 chars")
 
     def test_standard_warn_only_outputs_warn_first_and_guidance(self):
-        """FIX-278 G1: a WARN-only run still starts the detail section with
-        [WARN] (no FAIL) and carries the guidance line."""
+        """FIX-278 G1 + FEAT-012 G6: a WARN-only run still starts the detail
+        section with [WARN] (no FAIL); 2 issues ≤ cap → all details are on
+        screen, so the tail line states that fact (no chase invitation)."""
         text = _engine_output(2, warn_lines=["2 stale risk(s):", "1 gate(s):"])
         out = self._run(text, 2, _args(summary_only=True))
         lines = out.splitlines()
         self.assertEqual(lines[0], "Governance: 2 issues")
         self.assertTrue(lines[1].startswith("[WARN]"), out)
         self.assertNotIn("[FAIL]", out)
-        self.assertIn("共 2 issues，--level strict 查看全部", out)
+        self.assertIn("构成已全量展示（2 项）", out)
+        self.assertNotIn("--level strict 查看全部", out)
 
     def test_standard_shows_blocking_and_error_as_fail_items(self):
         """P2-4: engine 只输出 [BLOCKING]/[ERROR] 行（M5-only 场景）时
@@ -228,7 +234,10 @@ class SummaryOnlyDispatchTests(unittest.TestCase):
             "M5 structural gap: segment X")
         self.assertIn("[FAIL] 10: M5 AskUserQuestion Compliance: "
                       "runtime readiness: 1 ERROR", out)
-        self.assertIn("共 3 issues，--level strict 查看全部", out)
+        # FEAT-012 G6: both detail lines are on screen (2 ≤ cap) → the tail
+        # line states full display instead of inviting a strict chase.
+        self.assertIn("构成已全量展示", out)
+        self.assertNotIn("--level strict 查看全部", out)
 
     def test_pass_when_no_issues(self):
         """Test case 2: N=0 → 'Governance: [PASS]' with no detail line (F1)."""
@@ -297,6 +306,67 @@ class SummaryOnlyDispatchTests(unittest.TestCase):
             eng.assert_called_once()
             self.assertEqual(buf.getvalue(), engine_output)
             self.assertNotIn("Governance: ", buf.getvalue())
+
+
+class SummaryTailLineTwoStateTests(unittest.TestCase):
+    """FEAT-012 G6 — two-state standard-tier tail line (chase budget).
+
+    FIX-278 G1's tail line ``共 N issues，--level strict 查看全部`` is a chase
+    invitation. When every FAIL/WARN detail is ALREADY on screen (≤
+    ``_summary_detail_cap()`` = 5 lines), the invitation re-creates exactly
+    the audit-148 amplification G1 was built to remove (103-char summary →
+    ~25KB chase chain). FEAT-012 G6: small-N runs state the fact
+    (``构成已全量展示（N 项）``) and do NOT invite a chase; runs above the cap
+    keep the guidance line.
+    """
+
+    _run = SummaryOnlyDispatchTests._run
+
+    def test_boundary_count_equal_cap_shows_fully_displayed(self):
+        """G6 hit (boundary): exactly cap (5) issues, all 5 displayed →
+        「构成已全量展示（5 项）」, no chase invitation."""
+        text = _engine_output(
+            5, fail_lines=["FIX-001: a", "FIX-002: b", "FIX-003: c",
+                           "FIX-004: d", "FIX-005: e"])
+        out = self._run(text, 5, _args(summary_only=True))
+        lines = out.splitlines()
+        detail_lines = [ln for ln in lines
+                        if ln.startswith(("[FAIL]", "[WARN]"))]
+        self.assertEqual(len(detail_lines), 5, out)
+        self.assertIn("构成已全量展示（5 项）", out)
+        self.assertNotIn("--level strict 查看全部", out)
+
+    def test_over_cap_by_one_keeps_strict_guidance(self):
+        """G6 miss (boundary+1): 6 issues > cap → only 5 displayed → the
+        existing guidance line is preserved verbatim."""
+        text = _engine_output(
+            6, fail_lines=["FIX-001: a", "FIX-002: b", "FIX-003: c",
+                           "FIX-004: d", "FIX-005: e", "FIX-006: f"])
+        out = self._run(text, 6, _args(summary_only=True))
+        self.assertIn("共 6 issues，--level strict 查看全部", out)
+        self.assertNotIn("构成已全量展示", out)
+
+    def test_large_count_keeps_strict_guidance(self):
+        """G6 miss (large): 11 issues >> cap → guidance line unchanged
+        (zero regression of the FIX-278 G1 contract for big-N runs)."""
+        text = _engine_output(
+            11,
+            fail_lines=["FIX-001: a", "FIX-002: b", "FIX-003: c",
+                        "FIX-004: d", "FIX-005: e", "FIX-006: f",
+                        "FIX-007: g", "FIX-008: h"],
+            warn_lines=["2 stale risk(s):", "3 gate(s) pending:"])
+        out = self._run(text, 11, _args(summary_only=True))
+        self.assertIn("共 11 issues，--level strict 查看全部", out)
+        self.assertNotIn("构成已全量展示", out)
+
+    def test_no_parsed_details_keeps_guidance(self):
+        """G6 defensive two-state: count > 0 but NO severity detail lines
+        parsed (engine format anomaly) — nothing is on screen, so the tail
+        must NOT claim 全量展示; the chase guidance stays."""
+        text = _engine_output(3)
+        out = self._run(text, 3, _args(summary_only=True))
+        self.assertIn("共 3 issues，--level strict 查看全部", out)
+        self.assertNotIn("构成已全量展示", out)
 
 
 class BootstrapContractTests(unittest.TestCase):

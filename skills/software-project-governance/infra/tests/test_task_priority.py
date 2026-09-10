@@ -59,7 +59,9 @@ from task_priority import (  # noqa: E402  (import after sys.path setup)
     _walk_blocker_roots,
     compute_unblocked_tasks,
     format_report,
+    has_reco_row_today,
     parse_task_dependencies,
+    should_reuse_cached_analysis,
 )
 
 
@@ -1640,6 +1642,180 @@ class TestTaskPriorityCliCycleTolerance(unittest.TestCase):
         proc = self._run_cli(root)
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertNotIn("CYCLE DETECTED", proc.stdout)
+
+
+# ─── FEAT-012 G5: same-session duplicate-run suppression (pure layer) ────────
+
+_RECO_ROW_TMPL = (
+    "| RECO-{task} | {task} | 治理记录 | "
+    "task-priority-analysis 机器写入完成必推荐调用快照（trigger {task}，"
+    "M7.4 step 6 / FIX-262） | 事实依据：task-priority-analysis 输出摘要（机器写入）"
+    " | 3 tasks/0 completed/2 unblocked/0 blocked/1 non-exec | Coordinator "
+    "| {day} | G11 | N/A |"
+)
+
+
+class TestDuplicateRunSuppressionPredicates(unittest.TestCase):
+    """FEAT-012 G5 — pure cache/duplicate predicates (no I/O)."""
+
+    _TODAY = "2026-09-10"
+    _MTIME = 1757500000.123456
+
+    def _state(self, **overrides):
+        state = {
+            "date": self._TODAY,
+            "plan_tracker_mtime": self._MTIME,
+            "report_text": "# Task Priority Analysis\nTotal: **3** tasks",
+        }
+        state.update(overrides)
+        return state
+
+    def test_reuse_hit_same_day_same_mtime(self):
+        """G5 抑制命中：当日 + plan-tracker mtime 未变 + 缓存报告在 → 复用。"""
+        self.assertTrue(
+            should_reuse_cached_analysis(
+                self._state(), self._TODAY, self._MTIME))
+
+    def test_reuse_misses_on_every_invalidation_signal(self):
+        """G5 抑制未命中：非 dict / 日期跨天 / mtime 变化 / 缓存报告缺失
+        ——每一信号独立使复用失效（fail-open 到全量重跑）。"""
+        self.assertFalse(should_reuse_cached_analysis(None, self._TODAY, self._MTIME))
+        self.assertFalse(should_reuse_cached_analysis("junk", self._TODAY, self._MTIME))
+        # 不同日（会话边界/跨天）→ 重跑
+        self.assertFalse(should_reuse_cached_analysis(
+            self._state(date="2026-09-09"), self._TODAY, self._MTIME))
+        # plan-tracker 已被编辑（mtime 变化）→ 重跑
+        self.assertFalse(should_reuse_cached_analysis(
+            self._state(), self._TODAY, self._MTIME + 0.5))
+        # 缓存报告缺失/为空 → 重跑（无内容可复用）
+        self.assertFalse(should_reuse_cached_analysis(
+            self._state(report_text=""), self._TODAY, self._MTIME))
+        self.assertFalse(should_reuse_cached_analysis(
+            self._state(report_text=None), self._TODAY, self._MTIME))
+
+    def test_has_reco_row_today_hit_and_miss(self):
+        """G5 RECO 重复判定：当日机器 RECO-{task} 行命中；跨日/他任务/无机器
+        标记/空日志均不命中。"""
+        ev_today = _RECO_ROW_TMPL.format(task="FIX-991", day=self._TODAY)
+        ev_yesterday = _RECO_ROW_TMPL.format(
+            task="FIX-991", day="2026-09-09")
+        legacy_row = (
+            "| RECO-FIX-991 | FIX-991 | 治理记录 | 完成必推荐调用快照（手工） "
+            "| 事实依据：手写 | 3 tasks | Coordinator | " + self._TODAY + " | G11 | N/A |"
+        )
+        self.assertTrue(has_reco_row_today(ev_today, "FIX-991", self._TODAY))
+        self.assertTrue(has_reco_row_today(  # 多行日志中定位
+            "| EVD-1 | FIX-990 | 产品代码 | x | y | z | Dev | 2026-09-10 | G6 | N/A |\n"
+            + ev_today, "FIX-991", self._TODAY))
+        self.assertFalse(has_reco_row_today(ev_yesterday, "FIX-991", self._TODAY),
+                         "昨日快照不算当日重复")
+        self.assertFalse(has_reco_row_today(ev_today, "FIX-992", self._TODAY),
+                         "他任务的 RECO 行不算本任务重复")
+        self.assertFalse(has_reco_row_today(legacy_row, "FIX-991", self._TODAY),
+                         "无机器标记的行不算机器重复（严格判定）")
+        self.assertFalse(has_reco_row_today("", "FIX-991", self._TODAY))
+        self.assertFalse(has_reco_row_today(None, "FIX-991", self._TODAY))
+
+
+# ─── FEAT-012 G5: same-session duplicate-run suppression (CLI layer) ────────
+
+class TestTaskPriorityCliDuplicateSuppression(unittest.TestCase):
+    """CLI integration — FEAT-012 G5 duplicate-run suppression.
+
+    Subprocess-level tests against a TEMPORARY fixture root (the real
+    ``.governance/`` is never touched). The live-session bloat fact this
+    closes: one session ran task-priority-analysis 7×, each run re-doing the
+    full analysis and appending its own RECO row. Now the second consecutive
+    run reuses the cached analysis (「复用上次分析（--force 重跑）」) and a
+    duplicate RECO-{task} row dated today is NOT re-appended.
+    """
+
+    _CLI = Path(__file__).resolve().parent.parent / "verify_workflow.py"
+
+    def _run_cli(self, project_root, extra=()):
+        return subprocess.run(
+            [sys.executable, str(self._CLI), "task-priority-analysis",
+             "--project-root", str(project_root), *extra],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=120,
+        )
+
+    def _write_fixture(self, table=_ACYCLIC_CLI_TABLE, evidence=True):
+        tmp = tempfile.TemporaryDirectory(prefix="spg-tpa-g5-")
+        gov = Path(tmp.name) / ".governance"
+        gov.mkdir(parents=True, exist_ok=True)
+        (gov / "plan-tracker.md").write_text(table, encoding="utf-8")
+        if evidence:
+            (gov / "evidence-log.md").write_text(
+                "| id | task | type | desc | fact | artifacts | actor | date | gate | note |\n",
+                encoding="utf-8")
+        self.addCleanup(tmp.cleanup)
+        return tmp.name
+
+    def test_second_consecutive_run_is_suppressed(self):
+        """活体场景（纯分析）：连续两次 tpa——第二次输出「复用上次分析
+        （--force 重跑）」提示并复用缓存报告，不再重复全量分析。"""
+        root = self._write_fixture()
+        first = self._run_cli(root)
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        self.assertIn("# Task Priority Analysis", first.stdout)
+        self.assertNotIn("复用上次分析", first.stdout)
+        second = self._run_cli(root)
+        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+        self.assertIn("复用上次分析（--force 重跑）", second.stdout)
+        self.assertIn("# Task Priority Analysis", second.stdout)  # 缓存报告仍在
+        # 状态文件已由首次运行落盘（缓存判定依据）。
+        self.assertTrue((Path(root) / ".governance" / "tpa-last-run.json").is_file())
+
+    def test_force_reruns_full_analysis(self):
+        """--force 显式重跑：不触发复用提示，照常全量分析输出。"""
+        root = self._write_fixture()
+        self._run_cli(root)
+        forced = self._run_cli(root, ("--force",))
+        self.assertEqual(forced.returncode, 0, forced.stdout + forced.stderr)
+        self.assertNotIn("复用上次分析", forced.stdout)
+        self.assertIn("# Task Priority Analysis", forced.stdout)
+
+    def test_plan_tracker_edit_invalidates_cache(self):
+        """抑制未命中：plan-tracker 被编辑（mtime 变化）→ 复用失效重跑。"""
+        root = self._write_fixture()
+        self._run_cli(root)
+        tracker = Path(root) / ".governance" / "plan-tracker.md"
+        st = tracker.stat()
+        os.utime(tracker, (st.st_atime + 10, st.st_mtime + 10))
+        rerun = self._run_cli(root)
+        self.assertEqual(rerun.returncode, 0, rerun.stdout + rerun.stderr)
+        self.assertNotIn("复用上次分析", rerun.stdout)
+        self.assertIn("# Task Priority Analysis", rerun.stdout)
+
+    def test_duplicate_evidence_task_reco_row_not_reappended(self):
+        """活体场景（RECO 面）：同任务连续两次 --evidence-task——第二次
+        识别当日已存在机器 RECO 行，不重复追加（行数守恒 1）。"""
+        root = self._write_fixture()
+        first = self._run_cli(root, ("--evidence-task", "FIX-991"))
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        ev = Path(root) / ".governance" / "evidence-log.md"
+        self.assertEqual(ev.read_text(encoding="utf-8").count("RECO-FIX-991"), 1)
+        second = self._run_cli(root, ("--evidence-task", "FIX-991"))
+        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+        content = ev.read_text(encoding="utf-8")
+        self.assertEqual(content.count("RECO-FIX-991"), 1,
+                         "重复调用不得追加第二条 RECO 行")
+        self.assertIn("不重复追加", second.stdout)
+
+    def test_first_evidence_task_appends_despite_cached_analysis(self):
+        """FIX-262/REQ-108 硬门槛：缓存命中也必须为新任务的首次闭环落
+        RECO 行——抑制的是「重复」，不是「首次」。"""
+        root = self._write_fixture()
+        warm = self._run_cli(root)  # 建缓存（当日 + mtime 未变）
+        self.assertEqual(warm.returncode, 0, warm.stdout + warm.stderr)
+        proc = self._run_cli(root, ("--evidence-task", "FIX-993"))
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        ev = Path(root) / ".governance" / "evidence-log.md"
+        content = ev.read_text(encoding="utf-8")
+        self.assertEqual(content.count("RECO-FIX-993"), 1,
+                         "首次闭环义务不得被抑制")
+        self.assertIn("[OK] recommendation snapshot row RECO-FIX-993", proc.stdout)
 
 
 if __name__ == "__main__":

@@ -48,10 +48,15 @@ fields.
 **Purity contract (load-bearing):** this module imports ONLY the Python
 standard library. The compute functions (:func:`parse_task_dependencies`,
 :func:`compute_unblocked_tasks`, :func:`format_report`) perform NO file I/O and
-hold NO module-level mutable state. The CLI entry in ``verify_workflow.py`` is
-the only place that reads ``plan-tracker.md`` from disk; it passes the file
-*text* to :func:`parse_task_dependencies`. This makes the analysis trivially
-testable with fixture strings and deterministic across runs.
+hold NO module-level mutable state. The CLI entry in ``verify_workflow.py``
+passes the file *text* to :func:`parse_task_dependencies`, keeping the
+analysis trivially testable with fixture strings and deterministic across
+runs. Documented I/O exceptions (FEAT-012 G5 consolidation): besides the
+``_coerce_text`` convenience read, the RECO snapshot writer
+(:func:`write_recommendation_snapshot`), the tpa last-run cache helpers
+(:func:`read_last_run_state` / :func:`write_last_run_state`) and the CLI
+orchestrator :func:`run_cli_analysis` perform explicit, parameterized file
+I/O — they never touch module state and stay stdlib-only.
 
 **Task-family vs cross-entity (FIX-171 precedent):** the ``依赖`` column
 routinely mixes task-family IDs (``FIX-162``, ``REL-047``, ``AUDIT-124`` —
@@ -72,9 +77,12 @@ Usage::
 
 from __future__ import annotations
 
+import json
 import re
+import sys
 import unicodedata
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 
 
@@ -1658,6 +1666,323 @@ def format_report(report: PriorityReport) -> str:
     return "\n".join(lines)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Same-session duplicate-run suppression (FEAT-012 / G5 — 0.79.0)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Live-session fact (AUDIT-149 N-domain): one session ran
+# task-priority-analysis 7×, each invocation re-doing the full analysis and
+# appending its own RECO evidence row — a measurable evidence-log bloat
+# contributor. The analysis output is a PURE function of the plan-tracker
+# text, so a same-day run over an unchanged tracker is byte-identical to the
+# previous one and may be reused; a machine RECO-{task} row dated today
+# already closes the FIX-262 obligation for that task, so re-appending is a
+# pure duplicate.
+#
+# Both suppression decisions are PURE predicates here (values in, bool out);
+# the RECO snapshot writer, the last-run cache helpers and the CLI
+# orchestrator (:func:`run_cli_analysis`) own the explicit, parameterized
+# file I/O (documented exceptions to the compute-purity rule — see the module
+# purity contract). This consolidation is also FEAT-012's architectural
+# answer to the ArchGuard R1 main-file budget (AUDIT-150 §4): the G5 CLI
+# flow lives HERE, not in verify_workflow.py, so the engine entry stays thin.
+
+# Machine-source marker for RECO rows. Canonical home (FEAT-012 G5 moved the
+# writer here); verify_workflow.RECO_ROW_MARKER is the Check 34 consumer's
+# local mirror (kept in sync — same pattern as _TASK_FAMILY_PREFIXES being a
+# local copy of the archive.py allow-list).
+RECO_ROW_MARKER = "task-priority-analysis 机器写入完成必推荐调用快照"
+
+# A bare ISO date cell (the RECO row's date column).
+_BARE_DATE_CELL_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+# The last-run cache sidecar filename (inside .governance/).
+TPA_STATE_FILENAME = "tpa-last-run.json"
+
+
+def should_reuse_cached_analysis(state, today, plan_tracker_mtime):
+    """FEAT-012 G5: True when a cached analysis from a prior run is reusable.
+
+    Reuse hit = ALL of:
+
+      - ``state`` is a dict (a missing / corrupt state file never reuses —
+        fail-open to a full re-run);
+      - ``state["date"] == today`` — the cached run is from the same
+        calendar day (a session boundary / day rollover always re-analyzes);
+      - ``state["plan_tracker_mtime"] == plan_tracker_mtime`` — the tracker
+        has not been touched since the cached run (the report is a pure
+        function of the tracker text, so an unchanged mtime ⇒ an identical
+        report);
+      - ``state["report_text"]`` is a non-empty str (the cached payload is
+        actually there).
+
+    Args:
+        state: the persisted last-run dict (``{"date", "plan_tracker_mtime",
+            "report_text"}``) or None when absent/unreadable.
+        today: ISO date string of the current run (``date.today().isoformat()``).
+        plan_tracker_mtime: the current ``plan-tracker.md`` st_mtime.
+
+    Returns:
+        True when the CLI may print the cached report instead of re-running
+        the full analysis.
+    """
+    if not isinstance(state, dict):
+        return False
+    if state.get("date") != today:
+        return False
+    if state.get("plan_tracker_mtime") != plan_tracker_mtime:
+        return False
+    report_text = state.get("report_text")
+    return isinstance(report_text, str) and bool(report_text.strip())
+
+
+def has_reco_row_today(evidence_log_text, task_id, today):
+    """FEAT-012 G5: True when a machine ``RECO-{task}`` row dated ``today``
+    already exists in the evidence log.
+
+    Duplicate detection is deliberately STRICT — a row matches only when ALL
+    of:
+
+      - the row id cell is exactly ``RECO-{task_id}`` (machine row-id
+        binding, mirroring Check 34's association rule);
+      - the description cell carries the machine-source marker
+        (:data:`RECO_ROW_MARKER`) — a legacy/manual row is never treated as
+        a machine duplicate (worst case: one extra machine row, exactly the
+        pre-FEAT-012 behavior, no breakage);
+      - a bare-date cell equal to ``today`` exists (same-day duplicate — a
+        row from another day records a genuinely new invocation and does
+        not suppress).
+
+    Args:
+        evidence_log_text: the evidence-log markdown text ("" / None safe).
+        task_id: the --evidence-task id (e.g. ``FIX-300``).
+        today: ISO date string.
+
+    Returns:
+        True when appending another RECO row would be a same-session
+        duplicate (the caller suppresses the append).
+    """
+    wanted = "RECO-{0}".format(task_id)
+    for raw in str(evidence_log_text or "").split("\n"):
+        line = raw.strip()
+        if not line.startswith("|"):
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) < 6 or parts[1] != wanted:
+            continue
+        desc = parts[4] if len(parts) > 4 else ""
+        if RECO_ROW_MARKER not in desc:
+            continue
+        # The machine row's date column (a bare ISO date cell after the
+        # description/fact/artifact cells).
+        if any(_BARE_DATE_CELL_RE.match(part) and part == today
+               for part in parts[5:]):
+            return True
+    return False
+
+
+def recommendation_snapshot_row_text(task_id, report, date_str):
+    """FIX-262: the machine RECO-{task} evidence row text (10 columns).
+
+    Shape mirrors review_record._evidence_row: | id | task | 治理记录 |
+    description(marker) | 事实依据(machine) | artifacts(stats) | actor |
+    date | G11 | N/A |. The stats cell carries the same figures the live
+    snapshots quote (EVD-898/899/901/903 free-text precedent).
+
+    FEAT-012 G5: moved from verify_workflow._recommendation_snapshot_row_text
+    (canonical home is now next to the writer and the duplicate detector);
+    verify_workflow keeps a thin delegating alias for existing consumers.
+    """
+    stats = "{0} tasks/{1} completed/{2} unblocked/{3} blocked/{4} non-exec".format(
+        report.total, len(report.completed), len(report.unblocked),
+        len(report.blocked), len(report.non_executable))
+    if getattr(report, "unblock_recommendation", None) is not None:
+        rec = report.unblock_recommendation
+        stats += "; Unblock pick {0} [{1}]".format(
+            rec.root_task_id, rec.root_kind)
+    if getattr(report, "empty_reason", None) is not None:
+        stats += "; empty reason {0}".format(
+            report.empty_reason.get("kind"))
+    cells = [
+        "RECO-{0}".format(task_id),
+        task_id,
+        "治理记录",
+        "{0}（trigger {1}，M7.4 step 6 / FIX-262）".format(
+            RECO_ROW_MARKER, task_id),
+        "事实依据：task-priority-analysis 输出摘要（机器写入）",
+        stats,
+        "Coordinator",
+        date_str,
+        "G11",
+        "N/A",
+    ]
+    return "| " + " | ".join(cells) + " |\n"
+
+
+def write_recommendation_snapshot(task_id, report, evidence_path):
+    """Append one machine RECO row to the evidence log (fail-closed, never
+    raises).
+
+    FEAT-012 G5: moved from verify_workflow._write_recommendation_snapshot;
+    ``evidence_path`` is REQUIRED here (the engine alias supplies the
+    rebinding-aware EVIDENCE_PATH default).
+
+    Returns ``{"row_id", "written": True}`` or ``{"error": ...}`` when the
+    task id is malformed (nothing is written in that case).
+    """
+    if not _ID_CELL_RE.match(str(task_id or "")):
+        return {"error": "task id must match PREFIX-NNN (e.g. FIX-262)"}
+    path = Path(evidence_path)
+    row = recommendation_snapshot_row_text(
+        task_id, report, date.today().isoformat())
+    try:
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write("\n" + row)
+    except OSError as exc:
+        return {"error": "cannot append recommendation snapshot row: {0}".format(exc)}
+    return {"row_id": "RECO-{0}".format(task_id), "written": True}
+
+
+def read_last_run_state(governance_dir):
+    """FEAT-012 G5: read the tpa last-run cache; None when missing/corrupt.
+
+    Advisory cache — never raises; a missing/corrupt state fails open to a
+    full re-run (see :func:`should_reuse_cached_analysis`).
+    """
+    try:
+        data = json.loads(
+            (Path(governance_dir) / TPA_STATE_FILENAME).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def write_last_run_state(governance_dir, state):
+    """FEAT-012 G5: persist the tpa last-run cache (advisory, never raises)."""
+    try:
+        (Path(governance_dir) / TPA_STATE_FILENAME).write_text(
+            json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    except (OSError, ValueError):
+        pass
+
+
+def _read_evidence_log_text(evidence_path):
+    """Read the evidence log text ("" when absent/unreadable; never raises)."""
+    try:
+        path = Path(evidence_path)
+        return path.read_text(encoding="utf-8") if path.is_file() else ""
+    except (IOError, OSError):
+        return ""
+
+
+def run_cli_analysis(tracker_path, governance_dir, evidence_path,
+                     evidence_task=None, force=False, strict=False):
+    """FEAT-012 G5 CLI orchestration — run / reuse / suppress, return exit code.
+
+    Full flow (delegated from verify_workflow.cmd_task_priority_analysis —
+    the engine entry is argparse glue only, keeping the ArchGuard R1
+    main-file budget honest):
+
+      1. Missing tracker → stderr message, return 2.
+      2. **Duplicate-closure check** — ``--evidence-task T`` with a machine
+         ``RECO-T`` row already dated today appends nothing (pure duplicate,
+         FEAT-012 G5) unless ``force``.
+      3. **Cached-analysis reuse** — a prior run TODAY over an UNCHANGED
+         tracker (mtime match) prints 「复用上次分析（--force 重跑）」 plus the
+         cached report instead of re-analyzing. Reuse is skipped when a
+         first-time evidence append needs a live report object, and under
+         ``strict`` (the strict exit code reads ``report.cycles``).
+         FIRST-TIME closures are never suppressed (FIX-262 / REQ-108
+         obligation preserved — suppression targets the repeat, not the
+         first run).
+      4. Full run → parse + compute + format + print + cache the report.
+      5. Evidence append (first-time path) via
+         :func:`write_recommendation_snapshot`.
+      6. ``strict`` + cycle → return 1 (FIX-237.3); default 0.
+
+    Args:
+        tracker_path: path to plan-tracker.md.
+        governance_dir: the .governance directory (state cache home).
+        evidence_path: path to evidence-log.md.
+        evidence_task: optional ``--evidence-task`` task id.
+        force: ``--force`` bypass (re-run + re-append).
+        strict: ``--strict`` cycle-fail-closed mode (disables reuse).
+
+    Returns:
+        The CLI exit code (0 / 1 strict-cycle / 2 input-or-parse error).
+    """
+    tracker_path = Path(tracker_path)
+    if not tracker_path.exists():
+        print(f"task-priority-analysis: plan-tracker.md not found at {tracker_path}",
+              file=sys.stderr)
+        return 2
+    today = date.today().isoformat()
+    try:
+        tracker_mtime = tracker_path.stat().st_mtime
+        tracker_text = tracker_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        print(f"task-priority-analysis: cannot read {tracker_path}: {exc}",
+              file=sys.stderr)
+        return 2
+
+    # G5 (1) — duplicate-closure: a machine RECO-{task} row dated today
+    # already satisfies the FIX-262 obligation for this task; appending
+    # another is a pure duplicate (suppressed unless --force).
+    duplicate_reco = bool(evidence_task) and not force and has_reco_row_today(
+        _read_evidence_log_text(evidence_path), evidence_task, today)
+
+    # G5 (2) — cached-analysis reuse: a prior run TODAY over an UNCHANGED
+    # plan-tracker yields a byte-identical report. Reuse is deliberately
+    # skipped when the run needs a live report object (a first-time
+    # --evidence-task append builds its row from the report) and under
+    # --strict (the strict exit code reads report.cycles).
+    needs_live_report = (bool(evidence_task) and not duplicate_reco) or strict
+    state = None if (force or needs_live_report) else read_last_run_state(
+        governance_dir)
+    reuse = should_reuse_cached_analysis(state, today, tracker_mtime)
+
+    report = None
+    if reuse:
+        print("task-priority-analysis: 复用上次分析（--force 重跑）")
+        print(state["report_text"])
+    else:
+        try:
+            report = compute_unblocked_tasks(parse_task_dependencies(tracker_text))
+            report_text = format_report(report)
+        except Exception as exc:  # parse failure surface — entry stays thin
+            print(f"task-priority-analysis: parse error: {exc}", file=sys.stderr)
+            return 2
+        print(report_text)
+        write_last_run_state(governance_dir, {
+            "date": today, "plan_tracker_mtime": tracker_mtime,
+            "report_text": report_text})
+
+    # FIX-262 / REQ-108: machine snapshot row for the completion-recommendation
+    # closure. Without --evidence-task the CLI behavior is unchanged. A
+    # same-day duplicate RECO row is suppressed (FEAT-012 G5).
+    if evidence_task:
+        if duplicate_reco:
+            print(f"[OK] recommendation snapshot row RECO-{evidence_task} already "
+                  f"recorded today ({today}) — 复用上次分析（--force 重跑），"
+                  f"不重复追加 (FEAT-012 G5)")
+        else:
+            summary = write_recommendation_snapshot(evidence_task, report,
+                                                    evidence_path)
+            if summary.get("error"):
+                print(f"task-priority-analysis: --evidence-task: {summary['error']}",
+                      file=sys.stderr)
+                return 2
+            print(f"[OK] recommendation snapshot row {summary['row_id']} appended "
+                  f"to {evidence_path} (FIX-262 / M7.4 step 6)")
+    # Cycle tolerance (FIX-237.3): default exit 0 + WARN banner; `--strict`
+    # restores the previous fail-closed exit 1 on a cycle. (Reuse never
+    # coexists with --strict — see needs_live_report — so report is live
+    # whenever strict is set; the None guard is defense-in-depth.)
+    if strict and report is not None and report.cycles:
+        return 1
+    return 0
+
+
 __all__ = [
     "TaskDep",
     "BlockedTask",
@@ -1666,4 +1991,13 @@ __all__ = [
     "parse_task_dependencies",
     "compute_unblocked_tasks",
     "format_report",
+    "should_reuse_cached_analysis",
+    "has_reco_row_today",
+    "recommendation_snapshot_row_text",
+    "write_recommendation_snapshot",
+    "read_last_run_state",
+    "write_last_run_state",
+    "run_cli_analysis",
+    "RECO_ROW_MARKER",
+    "TPA_STATE_FILENAME",
 ]

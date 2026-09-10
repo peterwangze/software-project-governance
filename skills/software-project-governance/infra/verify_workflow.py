@@ -16550,9 +16550,11 @@ def _print_check_summary(summary, args):
     Summary line ``Governance: {N} issues`` (or ``Governance: [PASS]`` when
     N==0) followed by the first FAIL/WARN detail line; the detail granularity
     follows ``--level`` (lightweight → summary + first FAIL; standard →
-    summary + first FAIL/WARN + top-5 ordered details + ``共 N issues，
-    --level strict 查看全部`` guidance line — FIX-278 G1; strict → summary +
-    all FAIL/WARN). Advisory (``fatal_on_error=false``) issues are not counted
+    summary + first FAIL/WARN + top-5 ordered details + a TWO-STATE tail
+    line — ``构成已全量展示（N 项）`` when all details are already displayed
+    (≤ cap, FEAT-012 G6: no chase invitation) and ``共 N issues，--level
+    strict 查看全部`` above the cap (FIX-278 G1); strict → summary + all
+    FAIL/WARN). Advisory (``fatal_on_error=false``) issues are not counted
     and are only annotated when they are the first issue surfaced.
     """
     count = summary.get("issues_count") or 0
@@ -16573,10 +16575,23 @@ def _print_check_summary(summary, args):
                 print(f"[FAIL] {item}")
             for item in summary["warn_items"]:
                 print(f"[WARN] {item}")
-        else:  # standard — FIX-278 G1 top-N contract
+        else:  # standard — FIX-278 G1 top-N + FEAT-012 G6 two-state tail
             for sev, item in _ordered_detail_items(summary):
                 print(f"[{sev}] {_truncate_summary_detail(item)}")
-            print(f"共 {count} issues，--level strict 查看全部")
+            # FEAT-012 G6: when every FAIL/WARN detail is ALREADY on screen
+            # (≤ _summary_detail_cap() lines) the tail states that fact
+            # instead of inviting a --level strict chase — a small-N chase
+            # invitation re-creates the audit-148 §2.1 amplification G1 was
+            # built to remove (103-char summary → ~25KB chain). Judged on
+            # the actual detail count (not issues_count) so the 全量展示
+            # claim is literally true; count>0 with no parsed details keeps
+            # the guidance (nothing is on screen to display).
+            total_details = (len(summary.get("fail_items") or [])
+                             + len(summary.get("warn_items") or []))
+            tail = (f"构成已全量展示（{total_details} 项）"
+                    if 0 < total_details <= _summary_detail_cap()
+                    else f"共 {count} issues，--level strict 查看全部")
+            print(tail)
     if not summary["fail_items"] and not summary["warn_items"] and summary["advisory"]:
         print(f"[ADVISORY] {summary['advisory']}")
 
@@ -21766,7 +21781,9 @@ def cmd_loop_telemetry(args):
 REQ108_RECOMMENDATION_DATE = date(2026, 8, 22)
 
 # Machine-source marker (mirrors the review-record/change-triage precedent:
-# the unforgeable-ish machine row is the trusted association anchor).
+# the unforgeable-ish machine row is the trusted association anchor). Mirror
+# of the canonical task_priority.RECO_ROW_MARKER (FEAT-012 G5 moved the
+# writer there; this copy feeds Check 34's consumer logic).
 RECO_ROW_MARKER = "task-priority-analysis 机器写入完成必推荐调用快照"
 _LEGACY_SNAPSHOT_MARKER = "完成必推荐调用快照"
 _RECO_TASK_ID_RE = re.compile(r"^[A-Z]+-\d+$")
@@ -21775,56 +21792,22 @@ _TASK_ID_IN_REF_RE = re.compile(r"\b([A-Z]+-\d+)\b")
 
 
 def _recommendation_snapshot_row_text(task_id, report, date_str):
-    """FIX-262: the machine RECO-{task} evidence row text (10 columns).
-
-    Shape mirrors review_record._evidence_row: | id | task | 治理记录 |
-    description(marker) | 事实依据(machine) | artifacts(stats) | actor |
-    date | G11 | N/A |. The stats cell carries the same figures the live
-    snapshots quote (EVD-898/899/901/903 free-text precedent).
-    """
-    stats = "{0} tasks/{1} completed/{2} unblocked/{3} blocked/{4} non-exec".format(
-        report.total, len(report.completed), len(report.unblocked),
-        len(report.blocked), len(report.non_executable))
-    if getattr(report, "unblock_recommendation", None) is not None:
-        rec = report.unblock_recommendation
-        stats += "; Unblock pick {0} [{1}]".format(
-            rec.root_task_id, rec.root_kind)
-    if getattr(report, "empty_reason", None) is not None:
-        stats += "; empty reason {0}".format(
-            report.empty_reason.get("kind"))
-    cells = [
-        "RECO-{0}".format(task_id),
-        task_id,
-        "治理记录",
-        "{0}（trigger {1}，M7.4 step 6 / FIX-262）".format(
-            RECO_ROW_MARKER, task_id),
-        "事实依据：task-priority-analysis 输出摘要（机器写入）",
-        stats,
-        "Coordinator",
-        date_str,
-        "G11",
-        "N/A",
-    ]
-    return "| " + " | ".join(cells) + " |\n"
+    """FIX-262 row text — thin alias; canonical home is
+    task_priority.recommendation_snapshot_row_text (moved there by FEAT-012
+    G5 so the writer, duplicate detector and row schema live in one module;
+    alias kept for existing engine/test consumers)."""
+    from task_priority import recommendation_snapshot_row_text
+    return recommendation_snapshot_row_text(task_id, report, date_str)
 
 
 def _write_recommendation_snapshot(task_id, report, evidence_path=None):
-    """Append one machine RECO row to the evidence log (fail-closed, never raises).
-
-    Returns ``{"row_id", "written": True}`` or ``{"error": ...}`` when the
-    task id is malformed (nothing is written in that case).
-    """
-    if not _RECO_TASK_ID_RE.match(str(task_id or "")):
-        return {"error": "task id must match PREFIX-NNN (e.g. FIX-262)"}
-    path = Path(evidence_path) if evidence_path is not None else EVIDENCE_PATH
-    row = _recommendation_snapshot_row_text(
-        task_id, report, date.today().isoformat())
-    try:
-        with path.open("a", encoding="utf-8") as fh:
-            fh.write("\n" + row)
-    except OSError as exc:
-        return {"error": "cannot append recommendation snapshot row: {0}".format(exc)}
-    return {"row_id": "RECO-{0}".format(task_id), "written": True}
+    """FIX-262 append — thin alias; canonical home is
+    task_priority.write_recommendation_snapshot (FEAT-012 G5). Supplies the
+    rebinding-aware EVIDENCE_PATH default the pure module cannot know."""
+    from task_priority import write_recommendation_snapshot
+    return write_recommendation_snapshot(
+        task_id, report,
+        evidence_path if evidence_path is not None else EVIDENCE_PATH)
 
 
 def check_completion_recommendation(evidence_rows=None, snapshot_text=None):
@@ -22002,57 +21985,33 @@ def check_completion_recommendation(evidence_rows=None, snapshot_text=None):
 
 
 def cmd_task_priority_analysis(args):
-    """Thin entry — delegates to infra/task_priority.py (FIX-226 / 0.71.0).
+    """Thin entry — delegates to infra/task_priority.py (FIX-226 / FEAT-012 G5).
 
-    Reads .governance/plan-tracker.md via HOST_PROJECT_ROOT (never PLUGIN_HOME;
-    RISK-040 dual-root discipline) and delegates parse → compute → format to the
-    pure task_priority module. All logic lives there; this entry is argparse
-    glue + I/O (RISK-039 thin-entry discipline). Exits non-zero (2) on a
-    missing plan-tracker or a parse error.
-
-    Cycle tolerance (FIX-237.2/237.3): a dependency cycle is a WARNING, not an
-    ERROR — the report is always printed (best-effort analysis) with a
-    ``CYCLE DETECTED (WARNING)`` banner, and the default exit code is 0 (the
-    cycle no longer blocks the analysis output). Pass ``--strict`` to restore
-    the previous fail-closed behavior: exit 1 when the dependency graph
-    contains a cycle.
-
-    Published-version filtering (FIX-237.1/237.2): no released-version
-    parameter is needed — the 237.1 drift backfill marks published tasks ✅ in
-    the plan-tracker and ``_status_is_completed`` excludes them from
-    Unblocked / Recommended next; release rows with a terminal marker
-    (⛔/⏸/🚧/🛑/📋/…) are likewise excluded by the third-class status filter.
+    Reads .governance paths via HOST_PROJECT_ROOT (never PLUGIN_HOME;
+    RISK-040 dual-root discipline) and delegates the WHOLE flow — parse →
+    compute → format, the FIX-262 RECO snapshot append, cycle tolerance
+    (FIX-237.3: default exit 0 + WARNING banner; ``--strict`` restores the
+    fail-closed exit 1), and the FEAT-012 G5 same-session duplicate-run
+    suppression (same-day + unchanged-tracker runs reuse the cached report
+    「复用上次分析（--force 重跑）」; a duplicate same-day RECO row is not
+    re-appended; FIRST-TIME closures are never suppressed — FIX-262 /
+    REQ-108) — to the pure task_priority module. This entry is argparse
+    glue only (RISK-039 thin-entry discipline + ArchGuard R1 main-file
+    budget). Exits 2 on a missing plan-tracker or a parse error.
     """
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
-    from task_priority import parse_task_dependencies, compute_unblocked_tasks, format_report
-    pt = SAMPLE_PATH  # HOST_PROJECT_ROOT / ".governance" / "plan-tracker.md"
-    if not pt.exists():
-        print(f"task-priority-analysis: plan-tracker.md not found at {pt}", file=sys.stderr)
-        sys.exit(2)
-    try:
-        report = compute_unblocked_tasks(parse_task_dependencies(pt.read_text(encoding="utf-8")))
-    except Exception as exc:  # parse failure surface — keep entry thin, no recovery here
-        print(f"task-priority-analysis: parse error: {exc}", file=sys.stderr)
-        sys.exit(2)
-    print(format_report(report))
-    # FIX-262 / REQ-108: machine snapshot row for the completion-recommendation
-    # closure. Without --evidence-task the CLI behavior is unchanged.
-    evidence_task = getattr(args, "evidence_task", None)
-    if evidence_task:
-        summary = _write_recommendation_snapshot(evidence_task, report)
-        if summary.get("error"):
-            print(f"task-priority-analysis: --evidence-task: {summary['error']}",
-                  file=sys.stderr)
-            sys.exit(2)
-        print(f"[OK] recommendation snapshot row {summary['row_id']} appended "
-              f"to {EVIDENCE_PATH} (FIX-262 / M7.4 step 6)")
-    # Cycle tolerance (FIX-237.3): default exit 0 + WARN banner; `--strict`
-    # restores the previous fail-closed exit 1 on a cycle.
-    if getattr(args, "strict", False) and report.cycles:
-        sys.exit(1)
+    from task_priority import run_cli_analysis
+    code = run_cli_analysis(
+        SAMPLE_PATH, GOVERNANCE_DIR, EVIDENCE_PATH,
+        evidence_task=getattr(args, "evidence_task", None),
+        force=bool(getattr(args, "force", False)),
+        strict=bool(getattr(args, "strict", False)),
+    )
+    if code:
+        sys.exit(code)
 
 
 def cmd_review_record(args):
@@ -24117,6 +24076,14 @@ def main(argv=None):
         help="Machine-write a RECO-{TASK_ID} recommendation-snapshot row to "
              "the evidence log (M7.4 step 6 completion evidence; FIX-262 / "
              "REQ-108). Fail-closed (exit 2, no write) on a malformed id.",
+    )
+    tpa_p.add_argument(
+        "--force",
+        action="store_true",
+        help="Bypass the same-session duplicate-run suppression (FEAT-012 "
+             "G5): re-run the full analysis even when a cached same-day run "
+             "over an unchanged plan-tracker matches, and re-append the "
+             "RECO row even when one is already recorded today.",
     )
 
     # review-record (FIX-236.1 / ADR-017 §3.4 Wiring A — the single

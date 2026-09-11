@@ -151,7 +151,7 @@ AUDIT-143 确认的注入层主根因（诊断报告 §2.0.1，逐字比对实�
 
 实现时以 `release-projection --write` 写入（值=当时 SKILL.md frontmatter 权威版本；落地 0.75.0 时由发版链自动变为 0.75.0），此后由投影检查守护。
 
-**改动点 2 — 新增关键行为契约块**。位置：`Agent Team（DSH 映射）` 块（现 L52-57）之后、`Git hooks`（现 L59）之前。注入原文（YAML `text: |-` 块内，缩进与相邻段一致）：
+**改动点 2 — 新增关键行为契约块**。位置：`Agent Team（DSH 映射）` 块（现 L52-57）之后、`Git hooks`（现 L59）之前。注入原文（YAML persona `config` 的块标量内，缩进与相邻段一致；FIX-253 时期该键名为 `text`，FIX-308 起为 `prefix`——见 `@deepseek-ai/dsh-persona` 的 `prefix: z.string().required()`）：
 
 ```text
 关键行为契约（MUST——不依赖任何按需读取即生效；完整规则 behavior-protocol.md M7.4 / interaction-boundary.md）：

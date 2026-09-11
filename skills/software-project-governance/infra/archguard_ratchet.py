@@ -99,27 +99,43 @@ ALLOWED_EDGES: Tuple[Tuple[str, str], ...] = (
 ASSERTED_EDGE_COUNT = 12
 
 # Managed modules enter R3 scope at their slice's 接入日 (evolution §4.1 R3
-# 存量政策). v1 admits only the ratchet itself; legacy modules stay on the
-# R2 inventory until their strangler slice lands.
+# 存量政策). v1 admits the ratchet itself; legacy modules stay on the R2
+# inventory until their strangler slice lands. FEAT-021's L0 contract layer was
+# admitted by the R0 leftover batch (FIX-303 / F-5) so its zero-internal-
+# dependency claim is machine-judged instead of self-attested.
 DEFAULT_MANAGED_MODULES: Dict[str, Dict[str, str]] = {
     "infra/archguard_ratchet.py": {
         "layer": "L5",
         "admitted_by": "FEAT-019",
         "note": "cross-cutting guard; CLI surface ≈ L5; internal imports: "
                 "stdlib only + lazy contract_matrix consumer edge (unmanaged "
-                "until REFACTOR-contract-layer admits it)",
+                "until its own slice - owner task FIX-303, F-6 transfer)",
+    },
+    "infra/contracts.py": {
+        "layer": "L0",
+        "admitted_by": "FIX-303",
+        "note": "L0 contract layer of FEAT-021 (AUDIT-150 §3.6); zero outgoing "
+                "internal edges, so admitting it can only add a clean L0 node. "
+                "Admitted by the FEAT-021 R0 leftover batch (F-5): the "
+                "'zero I/O, zero internal dependency' acceptance gate is now "
+                "machine-judged by R3, not only by the module's own AST test. "
+                "contract_matrix/generator.py stays unmanaged until its own "
+                "slice (owner task FIX-303, F-6 transfer).",
     },
 }
 
 # Owner-task placeholders for the R2 inventory (design §4.3: every legacy
-# violation carries a responsible-task placeholder name).
+# violation carries a responsible-task placeholder name). The contract_matrix
+# entry was re-owned by FIX-303 (F-6): FEAT-021 / REFACTOR-contract-layer
+# closed without consuming contract_matrix/generator.py L51 import_vw, so the
+# debt would otherwise lose its owner on task closure.
 _OWNER_TASK_MAP: Tuple[Tuple[str, str], ...] = (
     ("checks/review_domain.py", "REFACTOR-migrate-review-domain"),
     ("checks/loop_runtime_claims", "REFACTOR-migrate-review-domain"),
     ("checks/", "REFACTOR-domains-batch1"),
     ("release/", "REFACTOR-domains-batch1"),
     ("loop_", "REFACTOR-domains-batch1"),
-    ("contract_matrix/", "REFACTOR-contract-layer"),
+    ("contract_matrix/", "FIX-303"),
 )
 
 

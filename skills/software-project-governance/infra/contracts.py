@@ -33,23 +33,41 @@ field, the expected shape and the value observed. Nothing is coerced silently.
 Caliber decisions, each backed by a measurement over the current engine
 (``verify_workflow.py`` + ``checks/`` + ``release/``), not by assumption:
 
-  1. ``to_legacy_dict`` renders ``issues`` as strings. Element-type census:
-     ``issues.append`` string 210 / dict 45 / other 17 — the legacy caliber is
-     a human-readable line. FEAT-020's frozen class-3 signature pins only the
-     ``list`` container ("element payloads are state-dependent",
-     ``contract_matrix/generator.py``), so the element format is L0-owned here
-     and is a documented, single-source rendering (``legacy_issue_text``).
-  2. SKIP disclosure reuses the FIX-270 mechanism verbatim: the legacy detail
-     block carries ``{"skipped": True, "skip_reason": <str>}``
-     (``verify_workflow.py`` L7285-7297 builds it, L20613-20621 discloses it as
-     ``[SKIP] <label> — <reason>``), with WARN semantics — a skip is disclosed,
-     never a mis-FAIL. ``to_legacy_dict`` therefore keeps ``pass`` as given
-     (a skipped result must be ``passed=True``) and adds the two disclosure
-     keys inside ``details``. No top-level key is ever added (§3.7: "不加必填
-     键").
-  3. ``extra`` is the single documented field loss of the adapter: the legacy
-     per-issue slot is a string, so check-specific detail stays on the typed
-     object (and belongs in ``CheckResult.details`` for the legacy face).
+  1. ``to_legacy_dict`` renders ``issues`` as strings — the caliber of the
+     **string element face**, not of every face. Element-type census:
+     ``issues.append`` string 210 / dict 45 / other 17, and the dict face has
+     live structured consumers — ``verify_workflow.py`` L14824-14838 branches
+     on ``issue["type"]``/``issue["detail"]``, L22439 reads
+     ``issue.get("type")``, ``checks/review_domain.py`` L213-221 emits 7-key
+     dicts, and ``tests/test_verify_workflow.py`` L9364 pins ``issue["type"]``.
+     A ``dict``-element slice MUST therefore decide its own element caliber and
+     pin the element shape in a §8.1 class-3 golden sample: FEAT-020 froze only
+     the ``list`` container ("element payloads are state-dependent",
+     ``contract_matrix/generator.py``), so the differential gate alone passes
+     silently while those consumers break. The string rendering is
+     single-source (``legacy_issue_text``).
+  2. SKIP disclosure reuses the FIX-270 key pair and WARN semantics — a skip is
+     disclosed, never a mis-FAIL (``verify_workflow.py`` L7285-7297 builds
+     ``{"pass", "skipped", "skip_reason"}``, L20613-20621 renders
+     ``[SKIP] <label> — <reason>``). Placement is *not* verbatim: the engine
+     reads the pair at the label block's own top level
+     (``details[label].get("skipped")``), whereas the adapter emits the §3.7
+     Result dict whose pair sits inside ``details`` — one nesting level deeper.
+     The aggregation convention for a slice wiring ``CheckResult`` into that
+     consumer is therefore explicit: promote the two keys to the label block
+     (pinned by
+     ``test_adapter_output_is_the_level_a_result_dict_not_a_label_block``).
+     ``to_legacy_dict`` keeps ``pass`` as given (a skipped result must be
+     ``passed=True``) and never adds a top-level key (§3.7: "不加必填键").
+     The pair is adapter-owned: a recorded skip overwrites it in ``details``,
+     and a caller-supplied pair with no recorded skip is refused (NF-1), so
+     the ``details`` channel cannot re-introduce the FAIL-disclosed-as-SKIP
+     face that the ``skipped`` field invariant already rejects.
+  3. ``extra`` has no slot in the string rendering — the legacy per-issue slot
+     is a string, so check-specific detail stays on the typed object (and
+     belongs in ``CheckResult.details`` for the legacy face). Scoped: this is a
+     property of the string element face; a dict-element slice decides its own
+     payload mapping (see 1).
   4. Tri-state ``pass``: the engine still emits ``pass: None`` for
      "couldn't run" (``verify_workflow.py`` L17340/L17372, ``checks/
      manifest.py`` L419). §3.6 declares ``passed: bool``, so the contract
@@ -118,8 +136,12 @@ CHECK_ID_PATTERN = r"check-[0-9]+[a-z]?"
 #: "domain:<name>").
 _MODE_PATTERN = r"(?:full|quick|domain:[A-Za-z0-9_-]+)"
 
-#: Loader is a *module path string*, never a file path (§9.1 controlled
-#: whitelist): at least one dotted segment, no separators, no ``.py`` suffix.
+#: Loader is a *dotted path string*, never a file path (§9.1 controlled
+#: whitelist): ``<module>`` or ``<module>.<attribute>`` — a check entry point
+#: may be a module-level callable (as in the engine), so both forms are
+#: admitted; at least one dotted segment, no separators, no ``.py`` suffix, no
+#: root-level name. Consumers resolve it by importing the module prefix and
+#: ``getattr``-ing the trailing attribute.
 _DOTTED_PATH_PATTERN = r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+"
 
 _FULL_CHECK_ID_RE = re.compile(r"^" + CHECK_ID_PATTERN + r"$")
@@ -204,7 +226,6 @@ def _require_sequence(
     where: str,
     value: Any,
     *,
-    unique: bool,
     allow_empty: bool,
 ) -> Tuple[str, ...]:
     # A str is itself a sequence — accepting it would silently explode a
@@ -220,11 +241,10 @@ def _require_sequence(
             _fail(f"{where}[{index}]: expected a non-empty string, got "
                   f"{item!r}")
         items.append(item)
-    if unique:
-        duplicates = sorted({item for item in items if items.count(item) > 1})
-        if duplicates:
-            _fail(f"{where}: duplicate entry {duplicates[0]!r} — declared "
-                  f"entries must be unique for R5 registration diffing")
+    duplicates = sorted({item for item in items if items.count(item) > 1})
+    if duplicates:
+        _fail(f"{where}: duplicate entry {duplicates[0]!r} — declared "
+              f"entries must be unique for R5 registration diffing")
     return tuple(items)
 
 
@@ -241,6 +261,54 @@ def _require_findings(where: str, value: Any) -> List[Finding]:
     return findings
 
 
+def _require_skip_consistent(
+    where: str, passed: Any, skipped: Optional[str],
+) -> None:
+    """The FIX-270 WARN invariant: a disclosed skip is never a FAIL.
+
+    Shared by construction (``CheckResult.__post_init__``) and by the legacy
+    adapter (``to_legacy_dict``) — post-construction mutation is the design's
+    escape hatch, so both entry points must reject a contradictory payload.
+    """
+    if skipped is not None and passed is not True:
+        _fail(f"{where}: skipped={skipped!r} requires passed=True "
+              f"(FIX-270 WARN semantics: an intentional skip is disclosed, "
+              f"never a mis-FAIL) — drop skipped to record a failure")
+
+
+#: The FIX-270 disclosure pair, written by ``to_legacy_dict`` itself. Reserved:
+#: a caller-supplied pair in ``details`` is a claim the typed object cannot
+#: back, so the adapter refuses it (NF-1) instead of forwarding a contradictory
+#: legacy face.
+_LEGACY_DISCLOSURE_KEYS: Tuple[str, ...] = ("skipped", "skip_reason")
+
+
+def _require_no_reserved_disclosure_keys(
+    where: str, details: Dict[str, Any], skipped: Optional[str],
+) -> None:
+    """Reserved-key enforcement on the ``details`` channel (NF-1).
+
+    ``skipped`` set: the adapter overwrites both keys from the typed object
+    (the pre-existing FIX-270 normalization caliber). ``skipped`` unset: a
+    pair carried by ``details`` would be forwarded verbatim, so a FAIL
+    (``passed=False`` + ``details["skipped"]=True``) could reach the engine's
+    label-block reader and be disclosed as ``[SKIP]`` — a failure hidden
+    behind a skip disclosure, the exact inversion of FIX-270's WARN semantics.
+    Rejecting keeps the contract fail-closed and says nothing about the
+    caller's other ``details`` entries, which stay free-form.
+    """
+    if skipped is not None:
+        return
+    carried = [key for key in _LEGACY_DISCLOSURE_KEYS if key in details]
+    if carried:
+        _fail(f"{where}: details carries the adapter-owned disclosure key(s) "
+              f"{carried} while skipped is None — to_legacy_dict writes these "
+              f"keys itself, and a stale pair on a passing/failing result "
+              f"would be read as SKIP (FIX-270 WARN semantics inverted); set "
+              f"CheckResult.skipped to disclose a skip, or drop the keys from "
+              f"details")
+
+
 # ── Finding ─────────────────────────────────────────────────────────────────
 
 
@@ -249,14 +317,20 @@ class Finding:
     """One issue raised by one check (§3.6).
 
     ``extra`` stays a ``dict`` field per the design (a check-specific payload
-    preserved as-is for output compatibility); it is copied on construction, so
-    a frozen Finding never aliases caller-owned mutable state. Consequence: the
-    generated ``__hash__`` is unusable — findings are compared by equality.
+    preserved as-is for output compatibility); it is copied on construction,
+    as a **top-level shallow copy** — ``dict(value)``, never ``deepcopy``: the
+    caller's container is not aliased, but nested mutable values remain shared
+    with the caller (pinned by ``test_extra_copy_is_top_level_only``), so
+    "frozen" here means the attribute cannot be rebound, not that the object
+    deep-isolates its innards. Consequence: the generated ``__hash__`` is
+    unusable — findings are compared by equality.
     """
 
     severity: str
     check: CheckID
     message: str
+    #: Repo-root-relative path per §3.6 — L0 does not validate relativeness
+    #: (no root knowledge in this layer); parsers/renderers own resolution.
     file: Optional[str] = None
     line: Optional[int] = None
     extra: Dict[str, Any] = field(default_factory=dict)
@@ -289,7 +363,9 @@ class CheckResult:
     topline verdict, mirroring ``result["pass"] = not result["issues"]`` in the
     engine. Construction is the fail-closed gate; post-construction mutation is
     the design's deliberate escape hatch, and ``to_legacy_dict`` re-validates
-    the two fields it serializes before handing data to hooks/CI consumers.
+    every field it serializes — ``passed``/``findings``/``skipped``/``details``,
+    the skip invariant, and the adapter-owned disclosure keys inside
+    ``details`` — before handing data to hooks/CI consumers.
     """
 
     check: CheckID
@@ -306,32 +382,47 @@ class CheckResult:
         self.skipped = _require_optional_text("CheckResult.skipped",
                                               self.skipped)
         self.details = _require_mapping("CheckResult.details", self.details)
-        if self.skipped is not None and self.passed is not True:
-            _fail(f"CheckResult: skipped={self.skipped!r} requires passed=True "
-                  f"(FIX-270 WARN semantics: an intentional skip is disclosed, "
-                  f"never a mis-FAIL) — drop skipped to record a failure")
+        _require_skip_consistent("CheckResult", self.passed, self.skipped)
 
     def to_legacy_dict(self) -> Dict[str, Any]:
         """Result dict compatibility face (§3.7 / §8.1 class 3).
 
         Key set is exactly ``pass`` / ``issues`` / ``details`` — unchanged
         spelling, no added or removed top-level key. ``details`` is a fresh
-        copy per call (callers cannot corrupt the typed object), and a recorded
-        skip is disclosed inside it with the FIX-270 ``skipped``/``skip_reason``
-        pair.
+        **top-level shallow copy** per call: callers cannot corrupt the typed
+        object's mapping, while nested values stay shared with it
+        (``test_details_copy_is_top_level_only`` pins that caliber). A recorded
+        skip is disclosed inside ``details`` with the FIX-270
+        ``skipped``/``skip_reason`` pair — the level-A placement; the engine's
+        label-block reader is one level shallower, see the module docstring
+        caliber 2.
+
+        Re-validation covers everything this method serializes: ``passed``,
+        ``findings``, ``skipped`` and ``details`` are re-checked (and the skip
+        invariant re-asserted) because post-construction mutation is the
+        documented escape hatch and hooks/CI derive exit codes from this dict.
+        The FIX-270 pair inside ``details`` is adapter-owned: a recorded skip
+        overwrites it from the typed object, and a caller-supplied pair with no
+        recorded skip is refused rather than forwarded (NF-1) — otherwise the
+        ``details`` channel would keep producing the contradictory
+        ``pass=False`` + ``details["skipped"]=True`` face the attribute-level
+        invariant already rejects.
         """
         where = "CheckResult.to_legacy_dict"
         passed = _require_bool(f"{where}: passed", self.passed)
         findings = _require_findings(f"{where}: findings", self.findings)
+        skipped = _require_optional_text(f"{where}: skipped", self.skipped)
         details = _require_mapping(f"{where}: details", self.details)
+        _require_skip_consistent(where, passed, skipped)
+        _require_no_reserved_disclosure_keys(where, details, skipped)
         legacy: Dict[str, Any] = {
             "pass": passed,
             "issues": [legacy_issue_text(finding) for finding in findings],
             "details": details,
         }
-        if self.skipped is not None:
+        if skipped is not None:
             details["skipped"] = True
-            details["skip_reason"] = self.skipped
+            details["skip_reason"] = skipped
         return legacy
 
 
@@ -361,9 +452,12 @@ def legacy_issue_text(finding: Finding) -> str:
 class CheckSpec:
     """Registration metadata for one independently dispatchable check (§3.6).
 
-    Lightweight by design: a module-path string, never an imported callable —
-    importing the check body at registry load is forbidden (§9.1), and R5
-    asserts the path resolves inside the controlled whitelist.
+    Lightweight by design: a dotted path string — ``<module>`` or
+    ``<module>.<attribute>``, i.e. also a module-level handler callable — never
+    an imported callable, since importing the check body at registry load is
+    forbidden (§9.1); R5 asserts the path resolves inside the controlled
+    whitelist, resolving the module prefix by import and the trailing attribute
+    by ``getattr``.
     """
 
     check_id: CheckID
@@ -384,14 +478,14 @@ class CheckSpec:
         object.__setattr__(
             self, "input_deps",
             _require_sequence("CheckSpec.input_deps", self.input_deps,
-                              unique=True, allow_empty=True))
+                              allow_empty=True))
         object.__setattr__(
             self, "severity_floor",
             _require_severity("CheckSpec.severity_floor", self.severity_floor))
         object.__setattr__(
             self, "modes",
             _require_sequence("CheckSpec.modes", self.modes,
-                              unique=True, allow_empty=False))
+                              allow_empty=False))
         for index, mode in enumerate(self.modes):
             if not _FULL_MODE_RE.match(mode):
                 _fail(f"CheckSpec.modes[{index}]: expected {_MODE_PATTERN!r} "
@@ -403,9 +497,10 @@ def _require_loader(where: str, value: Any) -> str:
     text = _require_text(where, value)
     if (text.endswith(".py") or "/" in text or "\\" in text or ":" in text
             or not _FULL_DOTTED_PATH_RE.match(text)):
-        _fail(f"{where}: expected a dotted module path (no file extension, no "
-              f"path separators, no root-level name — §9.1 whitelist loader), "
-              f"got {text!r}")
+        _fail(f"{where}: expected a dotted module/handler path (no file "
+              f"extension, no path separators, no root-level name — §9.1 "
+              f"whitelist loader; 'module' or 'module.attribute'), got "
+              f"{text!r}")
     return text
 
 

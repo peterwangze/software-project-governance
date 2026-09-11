@@ -8,7 +8,9 @@ plus the R3 zero-I/O zero-internal-dependency caliber (AST-judged).
 
 The legacy caliber facts asserted here are measured, not assumed:
   * ``issues`` element type census over the engine + checks/ + release/:
-    string 210 / dict 45 / other 17 — the adapter renders strings;
+    string 210 / dict 45 / other 17 — the adapter renders the **string element
+    face**; dict-element consumers keep their ``issue["type"]``/``["detail"]``
+    payloads and are pinned by their own tests (``contracts.py`` caliber 1);
   * ``"details": None`` never occurs (0 dict literals); ``"pass": None``
     occurs exactly 3x (verify_workflow.py L17340/L17372 couldn't-run,
     checks/manifest.py L419 manifest-unreadable) — the tri-state gap is
@@ -59,7 +61,10 @@ ALLOWED_MODULE_BODY_NODES = (
     ast.ClassDef, ast.FunctionDef,
 )
 
-# Test-local inverse of the legacy issue caliber (round-trip proof). Messages
+# Test-local inverse of the legacy issue caliber (round-trip proof). The round
+# trip holds only for the caliber's unambiguous subset: the message must not
+# itself end in the ``" (...)"`` location-suffix form (see
+# ``test_parenthesized_message_is_not_guaranteed_reversible``), so the messages
 # used in the round-trip test intentionally contain no parentheses.
 _LEGACY_ISSUE_RE = re.compile(
     r"^\[(?P<severity>[A-Z]+)\] (?P<check>check-[0-9]+[a-z]?): "
@@ -114,6 +119,47 @@ def _annotation_nodes(tree):
             yield node.annotation
 
 
+def _type_expression_values(tree):
+    """Assignment right-hand sides, where a PEP 604 *alias* hides.
+
+    ``Alias = str | None`` is py39-grammar-legal but raises ``TypeError`` at
+    import time on 3.9 — exactly the drift this guard exists to catch, and
+    invisible to an annotation-only scan (F-10).
+    """
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
+            yield node.value
+
+
+#: Names that make a ``|`` expression look like a type union rather than an
+#: integer/bitwise flag combination.
+_TYPE_LIKE_NAMES = {
+    "str", "int", "bool", "float", "complex", "bytes", "bytearray", "list",
+    "dict", "tuple", "set", "frozenset", "type", "object",
+}
+
+
+def _looks_like_type_union(value):
+    """Heuristic: is this ``a | b`` expression a type union (PEP 604)?"""
+    leaves = [node for node in ast.walk(value)
+              if isinstance(node, (ast.Name, ast.Constant))]
+    if len(leaves) < 2:
+        return False
+    has_anchor = False
+    for leaf in leaves:
+        if isinstance(leaf, ast.Constant):
+            if leaf.value is not None:
+                return False        # 1 | 2 — a value expression, not a type
+            has_anchor = True
+            continue
+        if leaf.id in _TYPE_LIKE_NAMES:
+            has_anchor = True
+            continue
+        if not leaf.id[:1].isupper():
+            return False            # lowercase non-builtin => a variable
+    return has_anchor
+
+
 def _python39_problems(source):
     """3.10+-only constructs a py39 target (pyproject: ruff/mypy py39) rejects."""
     problems = []
@@ -131,6 +177,14 @@ def _python39_problems(source):
                 problems.append(
                     f"PEP 604 union in annotation at line {node.lineno} — "
                     f"use typing.Optional/typing.Union (DEC-184 Q1)")
+    for value in _type_expression_values(tree):
+        for node in ast.walk(value):
+            if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr) \
+                    and _looks_like_type_union(node):
+                problems.append(
+                    f"PEP 604 union alias outside an annotation at line "
+                    f"{node.lineno} — py39 rejects it at runtime; use "
+                    f"typing.Optional/typing.Union (DEC-184 Q1)")
     return problems
 
 
@@ -291,6 +345,16 @@ class FindingTests(unittest.TestCase):
         _violation(self, lambda: _finding(file=Path("docs/a.md")),
                    "Finding.file")
 
+    def test_file_relativeness_is_not_validated_by_l0(self):
+        """Characterization (F-9): §3.6 calls ``file`` repo-root-relative, but
+        L0 does not parse paths — nothing here forbids an absolute/escaping
+        path. The declared gap is deliberate: parsers/renderers own path
+        resolution, and adding a root concept to L0 would need repo knowledge
+        this layer must not have.
+        """
+        for unvalidated in ("C:\\x\\y.md", "/abs/x.md", "../../escape.md"):
+            self.assertEqual(_finding(file=unvalidated).file, unvalidated)
+
     def test_rejects_non_positive_line(self):
         for bad in (0, -1, 1.5, "12"):
             _violation(self, lambda bad=bad: _finding(line=bad),
@@ -310,6 +374,21 @@ class FindingTests(unittest.TestCase):
         source["expected_columns"] = 99
         self.assertEqual(finding.extra, {"expected_columns": 4})
         self.assertIsNot(finding.extra, source)
+
+    def test_extra_copy_is_top_level_only(self):
+        """Characterization (F-7): the copy is ``dict(value)``, not deepcopy.
+
+        The caller's container is not aliased, but nested mutable values are
+        still shared — a frozen Finding does not deep-isolate its innards.
+        Keep this pinned so no later slice reads "frozen" as "deeply isolated".
+        """
+        nested = {"expected": 4}
+        source = {"columns": nested}
+        finding = _finding(extra=source)
+        self.assertIsNot(finding.extra, source)
+        self.assertIs(finding.extra["columns"], nested)
+        nested["expected"] = 99
+        self.assertEqual(finding.extra["columns"]["expected"], 99)
 
     def test_extra_default_is_not_shared(self):
         first, second = _finding(), _finding()
@@ -476,6 +555,66 @@ class LegacyAdapterTests(unittest.TestCase):
         self.assertIs(legacy["details"]["skipped"], True)
         self.assertEqual(legacy["details"]["skip_reason"], "fresh reason")
 
+    def test_adapter_output_is_the_level_a_result_dict_not_a_label_block(self):
+        """F-2: the two nesting levels of the FIX-270 skip pair are pinned.
+
+        Level A (§3.7 Result dict, what the adapter emits): exactly
+        ``pass``/``issues``/``details``, with the disclosure pair inside
+        ``details``.
+
+        Level B (the label block inside a domain result — what
+        ``verify_workflow.py`` L20613-20621 reads): ``pass``/``skipped``/
+        ``skip_reason`` at the block's *own* top level, exactly as
+        L7285-7297 builds ``details["dsh_upgrade_regression"]``.
+
+        The two levels are not interchangeable: handing the adapter dict to the
+        engine loop as a label block loses the disclosure (first half of this
+        test), so a slice wiring ``CheckResult`` into that consumer MUST promote
+        the pair to the label-block level (documented convention, second half).
+        Without this pin the placement rule lives nowhere.
+        """
+        result = _result(check="check-30c",
+                         skipped="BR-4 released-history query")
+        legacy = result.to_legacy_dict()
+
+        # Level A: the adapter's own face — 3 keys, pair inside `details`.
+        self.assertEqual(set(legacy), LEGACY_RESULT_KEYS)
+        self.assertIs(legacy["details"]["skipped"], True)
+
+        def engine_loop(domain_result):
+            """``verify_workflow.py`` L20613-20621 caliber, verbatim."""
+            disclosed = []
+            for label, detail in domain_result["details"].items():
+                if detail.get("skipped"):
+                    disclosed.append((label, detail.get("skip_reason")))
+            return disclosed
+
+        # Trap: nesting the level-A dict as a label block hides the skip.
+        trapped = {"pass": legacy["pass"], "issues": legacy["issues"],
+                   "details": {"the_label": legacy}}
+        self.assertEqual(engine_loop(trapped), [],
+                         "level-A nesting cannot be read as a label block")
+
+        # Convention: promote the pair to the label block's top level.
+        label_block = {
+            "pass": legacy["pass"],
+            "issues": legacy["issues"],
+            "skipped": "skipped" in legacy["details"],
+            "skip_reason": legacy["details"].get("skip_reason"),
+        }
+        self.assertEqual(engine_loop({"details": {"the_label": label_block}}),
+                         [("the_label", "BR-4 released-history query")])
+        self.assertTrue(label_block["pass"],
+                        "WARN semantics — a skip is disclosed, never a mis-FAIL")
+
+    def test_details_copy_is_top_level_only(self):
+        """Characterization (F-7): nested details values stay shared."""
+        nested = {"records": 3}
+        result = _result(details={"summary": nested})
+        legacy = result.to_legacy_dict()
+        self.assertIsNot(legacy["details"], result.details)
+        self.assertIs(legacy["details"]["summary"], nested)
+
     def test_details_copy_isolates_every_call(self):
         result = _result(details={"records_checked": 3})
         first = result.to_legacy_dict()
@@ -499,7 +638,13 @@ class LegacyAdapterTests(unittest.TestCase):
         self.assertEqual(json.loads(payload), legacy)
 
     def test_legacy_issue_text_round_trips_to_finding_fields(self):
-        """Every field the legacy caliber can carry survives the round trip."""
+        """Every field the caliber can carry survives the round trip.
+
+        Premise (F-13): the round trip is guaranteed only for messages that do
+        not themselves end in the ``" (...)"`` location-suffix form — the
+        caliber is then unambiguous. The characterization test below pins what
+        happens outside that subset.
+        """
         findings = [
             _finding(severity="BLOCKING", check="check-1",
                      message="missing evidence", file="docs/a.md", line=42),
@@ -527,8 +672,26 @@ class LegacyAdapterTests(unittest.TestCase):
             for f in findings
         ])
 
-    def test_extra_is_the_only_documented_field_loss(self):
-        """``extra`` has no legacy slot — the reduction is deliberate."""
+    def test_parenthesized_message_is_not_guaranteed_reversible(self):
+        """Characterization (F-13): outside the premise, the caliber is lossy.
+
+        ``legacy_issue_text`` has no escaping, so a message carrying the
+        location-suffix form is re-read as a source location by any consumer
+        (including this file's inverse regex). Pinned so no later slice reads
+        the adapter as an arbitrary Finding ⇄ string bijection.
+        """
+        text = c.legacy_issue_text(_finding(message="over budget (columns=5)"))
+        match = _LEGACY_ISSUE_RE.match(text)
+        self.assertIsNotNone(match, f"issue line not parseable: {text!r}")
+        self.assertEqual(match.group("file"), "columns=5")
+        self.assertNotEqual(match.group("message"), "over budget (columns=5)")
+
+    def test_extra_has_no_slot_in_the_legacy_issue_string(self):
+        """``extra`` has no legacy slot *in the string element face*.
+
+        Scoped claim (F-1): this says nothing about dict-element faces, which
+        own their own payload mapping (see ``contracts.py`` caliber 1).
+        """
         finding = _finding(extra={"expected_columns": 4})
         self.assertNotIn("expected_columns",
                          c.legacy_issue_text(finding))
@@ -544,6 +707,68 @@ class LegacyAdapterTests(unittest.TestCase):
         broken.findings = ["not a finding"]
         _violation(self, broken.to_legacy_dict,
                    "to_legacy_dict", "Finding")
+
+    def test_adapter_refuses_mutated_skip_invariant(self):
+        """F-3: post-construction mutation must not ship a contradictory dict.
+
+        ``passed=False`` + a leftover ``skipped`` would serialize as
+        ``pass=False`` with ``details["skipped"]=True`` — a skip disclosure
+        attached to a FAIL, contradicting the FIX-270 WARN invariant.
+        """
+        contradicted = _result(skipped="was skipped")
+        contradicted.passed = False
+        _violation(self, contradicted.to_legacy_dict,
+                   "to_legacy_dict", "skipped", "passed=True", "FIX-270")
+        broken_skip = _result()
+        broken_skip.skipped = 3
+        _violation(self, broken_skip.to_legacy_dict,
+                   "to_legacy_dict", "skipped")
+
+    def test_adapter_revalidates_every_serialized_field(self):
+        """F-3: the adapter's re-validation covers exactly what it serializes."""
+        for mutate in (
+            lambda r: setattr(r, "passed", "yes"),
+            lambda r: setattr(r, "findings", "not a list"),
+            lambda r: setattr(r, "skipped", "   "),
+            lambda r: setattr(r, "details", ["not", "a", "mapping"]),
+        ):
+            mutated = _result()
+            mutate(mutated)
+            _violation(self, mutated.to_legacy_dict, "to_legacy_dict")
+
+    def test_adapter_rejects_caller_supplied_disclosure_keys(self):
+        """NF-1: the FIX-270 pair inside ``details`` is adapter-owned.
+
+        F-3's attribute check does not cover the ``details`` channel: a
+        caller-supplied pair survives the verbatim copy, so a FAIL
+        (``passed=False``) carrying ``details["skipped"]=True`` would be
+        promoted to a label block and read by the engine loop as ``[SKIP]`` —
+        a failure silently disclosed as a skip. The adapter therefore refuses
+        the reserved keys instead of passing a contradictory face through.
+        """
+        injected = _result(passed=False,
+                           details={"skipped": True,
+                                    "skip_reason": "injected"})
+        _violation(self, injected.to_legacy_dict,
+                   "to_legacy_dict", "adapter-owned", "skipped", "skip_reason")
+        for stale in ({"skipped": False}, {"skip_reason": "stale reason"}):
+            _violation(self, _result(details=stale).to_legacy_dict,
+                       "to_legacy_dict", "adapter-owned")
+
+    def test_recorded_skip_still_normalizes_stale_detail_keys(self):
+        """The pre-existing caliber survives NF-1: a recorded skip owns the pair.
+
+        Stale keys carried by ``details`` are overwritten from the typed object
+        (never treated as caller-supplied disclosure), so the FIX-270
+        normalization path keeps working.
+        """
+        stale = {"skipped": False, "skip_reason": "stale reason"}
+        for result in (_result(skipped="fresh reason", details=dict(stale)),
+                       _result(passed=True, skipped="fresh reason",
+                               details=dict(stale))):
+            legacy = result.to_legacy_dict()
+            self.assertIs(legacy["details"]["skipped"], True)
+            self.assertEqual(legacy["details"]["skip_reason"], "fresh reason")
 
 
 class CheckSpecTests(unittest.TestCase):
@@ -574,8 +799,16 @@ class CheckSpecTests(unittest.TestCase):
             _violation(self, lambda bad=bad: _spec(domain=bad),
                        "CheckSpec.domain")
 
-    def test_loader_accepts_dotted_module_paths(self):
+    def test_loader_accepts_module_and_handler_dotted_paths(self):
+        """Caliber decision (F-4): ``<module>`` or ``<module>.<attribute>``.
+
+        The engine's check entry points are module-level callables (e.g.
+        ``run_review_checks``), so the loader is a dotted *handler* path: R5
+        resolution imports the module prefix and ``getattr``s the trailing
+        attribute. A root-level (single-segment) name stays rejected.
+        """
         for good in ("checks.review_domain",
+                     "checks.review_domain.run_review_checks",
                      "infra.checks.review_domain.run_review_checks"):
             self.assertEqual(_spec(loader=good).loader, good)
 
@@ -731,6 +964,22 @@ class Python39CompatibilityTests(unittest.TestCase):
             "def f(x):\n    match x:\n        case 1:\n            return 1\n")
         self.assertTrue(problems, "3.10+ match statement not flagged")
 
+    def test_checker_detects_pep604_union_alias_outside_annotations(self):
+        """F-10: ``Alias = str | None`` passes py39 grammar, fails at runtime."""
+        problems = _python39_problems("Alias = str | None\n")
+        self.assertTrue(any("PEP 604" in problem for problem in problems),
+                        f"module-level union alias not flagged: {problems}")
+
+    def test_checker_detects_pep604_union_alias_with_class_operands(self):
+        problems = _python39_problems("Alias = Record | None\n")
+        self.assertTrue(any("PEP 604" in problem for problem in problems),
+                        f"alias with a class operand not flagged: {problems}")
+
+    def test_type_union_heuristic_does_not_flag_plain_bitwise_values(self):
+        """Negative-negative control: the widened scan must not over-reach."""
+        self.assertEqual(_python39_problems("MASK = 1 | 2\n"), [])
+        self.assertEqual(_python39_problems("combined = left | right\n"), [])
+
 
 class FrozenContractCrossCheckTests(unittest.TestCase):
     """The L0 CheckID form must cover the FEAT-020 frozen segment surface."""
@@ -747,10 +996,24 @@ class FrozenContractCrossCheckTests(unittest.TestCase):
             "FEAT-020 frozen segments that the L0 CheckID form cannot "
             "express — extend the pattern deliberately")
 
-    def test_frozen_cli_keys_are_plain_strings_of_the_command_key_alias(self):
+    def test_frozen_cli_keys_reconcile_with_the_frozen_face_counts(self):
+        """F-11: reconciled counts instead of a vacuously-true isinstance.
+
+        JSON object keys are always ``str``, so the previous assertion could
+        never fail. This one reconciles the frozen face's three fields against
+        each other and against the ``CommandKey`` alias: the key list must be
+        complete (count match), unique, and decomposable into single-key
+        handlers plus alias groups — a hand-edit or a lost key breaks it.
+        """
         snapshot = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
-        keys = snapshot["faces"]["cli_dispatch"]["keys"]
-        self.assertTrue(keys)
+        face = snapshot["faces"]["cli_dispatch"]
+        keys = face["keys"]
+        self.assertTrue(keys, "frozen key list must not be empty")
+        self.assertEqual(face["key_count"], len(keys))
+        self.assertEqual(len(set(keys)), len(keys), "frozen keys must be unique")
+        single_key_handlers = face["handler_count"] - len(face["alias_groups"])
+        aliased_keys = sum(len(group) for group in face["alias_groups"].values())
+        self.assertEqual(face["key_count"], single_key_handlers + aliased_keys)
         for key in keys:
             self.assertIsInstance(key, c.CommandKey)
 

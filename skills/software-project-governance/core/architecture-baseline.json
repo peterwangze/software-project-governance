@@ -10,7 +10,7 @@
     }
   ],
   "generated": {
-    "git_head": "385b83b0ce4fa9a87d1be0b4c8e6f728a2868c30",
+    "git_head": "70773da4cd5c27fa3b51df2de7084b11a46402ae",
     "loc_caliber": "physical lines (ReadAllLines equivalent — see physical_line_count docstring, facts §1.1)"
   },
   "r1_mainfile_budget": {
@@ -260,7 +260,7 @@
         "lines": [
           51
         ],
-        "owner_task": "REFACTOR-contract-layer",
+        "owner_task": "FIX-303",
         "path": "contract_matrix/generator.py"
       },
       {
@@ -429,7 +429,12 @@
       "infra/archguard_ratchet.py": {
         "admitted_by": "FEAT-019",
         "layer": "L5",
-        "note": "cross-cutting guard; CLI surface ≈ L5; internal imports: stdlib only + lazy contract_matrix consumer edge (unmanaged until REFACTOR-contract-layer admits it)"
+        "note": "cross-cutting guard; CLI surface ≈ L5; internal imports: stdlib only + lazy contract_matrix consumer edge (unmanaged until its own slice - owner task FIX-303, F-6 transfer)"
+      },
+      "infra/contracts.py": {
+        "admitted_by": "FIX-303",
+        "layer": "L0",
+        "note": "L0 contract layer of FEAT-021 (AUDIT-150 §3.6); zero outgoing internal edges, so admitting it can only add a clean L0 node. Admitted by the FEAT-021 R0 leftover batch (F-5): the 'zero I/O, zero internal dependency' acceptance gate is now machine-judged by R3, not only by the module's own AST test. contract_matrix/generator.py stays unmanaged until its own slice (owner task FIX-303, F-6 transfer)."
       }
     },
     "source": "docs/requirements/architecture-evolution-0.80.0.md §3.2 (enumeration set authoritative; count derived — W1)"

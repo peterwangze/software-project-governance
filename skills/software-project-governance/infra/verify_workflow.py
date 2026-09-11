@@ -14644,7 +14644,17 @@ def cmd_check_governance(args):
     except Exception:
         pass
 
-    if getattr(args, "summary_only", False):
+    if getattr(args, "quick", False) or getattr(args, "shadow", False):
+        # FEAT-026 Slice-2 wiring: the selector owns the four-state contract and
+        # the S-A/S-B shadow channel; the engine only provides the run + capture.
+        from quickscan_selector import prepare_quick_args, render_quick_output
+        quick_notice = prepare_quick_args(args)
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            all_issues = _run_full_engine_checks(args)
+        print(quick_notice + render_quick_output(
+            buf.getvalue(), args, _run_full_engine_checks), end="")
+    elif getattr(args, "summary_only", False):
         buf = io.StringIO()
         with redirect_stdout(buf):
             all_issues = _run_full_engine_checks(args)
@@ -14718,8 +14728,16 @@ def _host_plugin_roots_divergent():
 def _product_gate_active(args):
     """Whether PLUGIN_PRODUCT checks run in this invocation.
 
-    dogfood（host==plugin）→ always; host mode → only with ``--product-gates``.
+    dogfood（host==plugin）→ always; host mode → only with ``--product-gates``;
+    ``--quick``（FX-195 Slice-2）→ never: the quick face is *defined* by the
+    FEAT-025 registry as "everything except the not-quick exclusion set", and
+    that exclusion set is machine-checked equal to this very product-gate set
+    (the registry side asserts the identity), so quick reuses the existing
+    ``[SKIP]`` machinery instead of introducing a second, parallel selection
+    path in the monolith (§255 carrier discipline).
     """
+    if getattr(args, "quick", False):
+        return False
     if not _host_plugin_roots_divergent():
         return True
     return bool(getattr(args, "product_gates", False))
@@ -23468,6 +23486,15 @@ def main(argv=None):
                          help="Run plugin product self-checks in host mode "
                               "(Check 31/28o-28r/11/12/28b etc., FIX-270 — "
                               "skipped by default when host/plugin roots diverge)")
+    check_p.add_argument("--quick", action="store_true",
+                         help="Quick scan (FX-195 Slice-2): run only the FEAT-025 "
+                              "registry's quick face; every not-quick segment is "
+                              "disclosed as NOT_RUN(<reason>) and the four-state "
+                              "counts are printed in the summary line")
+    check_p.add_argument("--shadow", action="store_true",
+                         help="S-A/S-B shadow channel (FX-195 §4.1): run quick + full "
+                              "in one invocation and compare per-segment verdicts — "
+                              "any mismatch is BLOCKING")
 
     # execution-packet
     xp_p = subparsers.add_parser(

@@ -38,11 +38,16 @@ BASELINE = _SKILL_ROOT / "core" / "architecture-baseline.json"
 SNAPSHOT = _INFRA_DIR / "contract_matrix" / "snapshots.json"
 
 # facts-0.80.0 §3.1 (2026-09-09 audit): print-call census over the engine.
-# Re-censused 2026-09-10 at 1310 by FEAT-012 G5 (the tpa CLI flow — 5 print
-# calls in cmd_task_priority_analysis — moved from the engine into
-# task_priority.run_cli_analysis; sanctioned ratchet shrink, baseline
-# regenerated in the same change). Original facts census: 1315.
-FACTS_PRINT_TOTAL = 1310
+# Evolution chain (calibration re-census, appendix per sanctioned change):
+#   1315 (facts §3.1, 2026-09-09)
+#   -> 1310 (FEAT-012 G5, 2026-09-10: 5 print calls in cmd_task_priority_analysis
+#      moved out of the engine into task_priority.run_cli_analysis; sanctioned
+#      ratchet shrink, baseline regenerated in the same change)
+#   -> 1311 (FEAT-026 Slice-2, sanctioned +1: the --quick dispatch branch renders
+#      the selector's four-state output at the L5 dispatch site —
+#      r4_print_orchestration.per_function attributes it to cmd_check_governance;
+#      baseline regenerated in the same change, EVD-1000 authorization recorded)
+FACTS_PRINT_TOTAL = 1311
 
 
 def _committed_baseline():
@@ -199,8 +204,9 @@ class R3LayerMatrixTests(unittest.TestCase):
 
 class R4PrintOrchestrationTests(unittest.TestCase):
     def test_r4_total_matches_facts_census(self):
-        """Calibration cross-check: 1,310 print calls (FEAT-012 re-census;
-        original facts §3.1 census 1,315 — see FACTS_PRINT_TOTAL note)."""
+        """Calibration cross-check: 1,311 print calls (FEAT-026 Slice-2 sanctioned
+        +1; chain 1,315 → 1,310 (FEAT-012 re-census) → 1,311 — see
+        FACTS_PRINT_TOTAL note)."""
         current = ar.count_print_calls(ENGINE)
         self.assertEqual(current["total"], FACTS_PRINT_TOTAL)
         self.assertEqual(

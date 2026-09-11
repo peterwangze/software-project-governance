@@ -577,10 +577,26 @@ class DiscoveryDisclosureTests(unittest.TestCase):
 class CarrierDisciplineTests(unittest.TestCase):
     """⑤ 载体禁写入巨石编排体（FX-195 §255）：注册表为独立数据模块。"""
 
-    def test_engine_never_references_the_registry_module(self):
+    def test_engine_references_only_the_sanctioned_selector_wiring(self):
+        """⑤ 载体纪律（切片一 caliber）+ FEAT-026 接线 footprint 的正向机判。
+
+        FIX-304 断言的"引擎源码零 ``quickscan`` 子串"对 Slice-1（零引擎改动）
+        成立，但被 Slice-2 **按设计**取代：FEAT-026 为 ``--quick`` 只加了一处
+        分支内的惰性 selector import（§255 dispatch 接线；EVD-1000 授权披露）。
+        本守卫因此**强化为正向断言**而非放宽：注册表数据载体的零引用不变，且
+        selector 的接线面被逐字符钉死（唯一一行、缩进在分支内、模块名与导入名
+        精确）——任何新增的引擎侧选择/编排逻辑都会打穿它。
+        """
         source = _engine_source()
         self.assertNotIn("quickscan_registry", source)
-        self.assertNotIn("quickscan", source)
+        wiring = [line for line in source.splitlines() if "quickscan" in line]
+        self.assertEqual(len(wiring), 1, wiring)
+        self.assertEqual(
+            wiring[0],
+            "        from quickscan_selector import prepare_quick_args, render_quick_output",
+        )
+        self.assertNotEqual(wiring[0], wiring[0].lstrip(),
+                            "the selector wiring must stay an in-branch import")
 
     def test_registry_module_does_not_import_the_engine(self):
         """A data module must not import the 24k-line orchestration body."""

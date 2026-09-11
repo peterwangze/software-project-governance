@@ -51,6 +51,32 @@
 # remains as the optional user-root path (GUI-manageable copy / older-dsh
 # fallback / preset-only installs without the bundle).
 #
+# 0.1.5-rc.2 (re-verified 2026-09-11 against installed dsh): dsh-web-app's
+# own cordis.patch.yml now disables the base host `skill-filesystem` row on
+# web profiles (`- id: skill-filesystem` / `disabled: true`, comment
+# "presets own local discovery" — skill registration moved from the host
+# plane into the preset layer), and `applyEntryPatches`
+# (dsh-app-boot/lib/index.js) covers the targeted row's keys one by one, so
+# the UPDATE row below that restated only `config` left the row disabled
+# there — the bundle's global skill registration silently failed
+# (`/governance` gone from every non-governance preset session). The row now
+# carries `disabled: false` to re-enable it as a deployment-level provider
+# (the dsh-web-app patch's comment names the host-row global layer as the
+# by-design registration path for repository plugins). Everything else on
+# the loading face is unchanged: `applyEntryPatches` still REPLACES the
+# target row's whole `config` for non-insert patches and covers the
+# remaining keys one by one (`disabled` is just another overridable key);
+# `composeProfile` (dsh/lib/profile-boot-Dk-7KqJc.js) still applies bundle
+# patches with no roots-forcing overlay (the 0.1.1-rc.2 bug stays fixed),
+# with a NEW home-level patch layer `$DSH_HOME/cordis.patch.yml` applied
+# after this one (order: bundles → profile layer → home layer → overlays →
+# telemetry); the dsh-agent-presets Config schema keeps `default` /
+# `roots[].path`+`trust` / `includeUserRoot` / `includeShippedRoot` all
+# valid; `dshHomePath(...)` (dsh-home-paths) is a generic join that does
+# not validate key names, so `dshHomePath('profiles')` still resolves; and
+# dsh-skill-filesystem's Config is schemastery-based (optional without
+# .required()), so a `customSkillDirs`-only config stays legal.
+#
 # `trust: system` (set 2026-09-05): the shipped preset belongs to the
 # deployment, not the user. `deleteComposition` refuses presets whose trust is
 # not `user` ("it ships with the deployment"), and `writableRoot()` returns
@@ -108,12 +134,32 @@
 # expression supplies absolute paths. The provider scans each root one level
 # deep — `skills/<name>/SKILL.md` directory bundles (the 26 workflow skills)
 # and flat `<name>.md` files (the 9 command projections in
-# adapters/dsh/skill-shims/) are both first-class skill formats — and the
-# merged catalog reaches every session of the profile regardless of agent
-# preset (the preset plane merges the host-plane registry; dsh-agent-presets
-# shipped `standard` composition, skill-filesystem row comment).
+# adapters/dsh/skill-shims/) are both first-class skill formats.
+#
+# `disabled: false` (set 2026-09-11, dsh 0.1.5-rc.2): from 0.1.5 on,
+# dsh-web-app's own cordis.patch.yml disables the base host
+# `skill-filesystem` row on web profiles ("presets own local discovery" —
+# skill registration moved from the host plane into the preset layer), and
+# `applyEntryPatches` covers the targeted row's keys one by one, so an
+# UPDATE that restates only `config` leaves the row disabled there — the
+# bundle's global skill registration silently fails (`/governance`
+# disappears from every non-governance preset session; the governance
+# preset keeps its catalog through its own preset-layer skill row).
+# Restating `disabled: false` re-enables the row as a deployment-level
+# provider; the dsh-web-app patch's own comment names this the by-design
+# path for repository plugins ("deployment-level providers — repository
+# plugins, a host skill-filesystem row — register into its global layer",
+# dsh-web-app cordis.patch.yml L394-396). On base-only
+# profiles the host row is enabled to begin with, so the key is idempotent
+# and has no side effect there.
+#
+# With the row re-enabled, the merged catalog reaches every session of the
+# profile regardless of agent preset (the preset plane merges the host-plane
+# registry; dsh-agent-presets shipped `standard` composition,
+# skill-filesystem row comment).
 - id: skill-filesystem
   name: '@deepseek-ai/dsh-skill-filesystem'
+  disabled: false
   config:
     customSkillDirs: !!js >-
       (() => {

@@ -30,6 +30,16 @@ git -C <仓库> pull; python adapters/dsh/launch.py --sync       # 升级后刷�
 
 然后：启动 dsh 会话并选择「治理协调器」预设（或在被治理项目目录里直接开任意预设会话，由 `AGENTS.md` 激活）。
 
+### dsh 升级 / 重装后恢复接入
+
+dsh 升级或 profile 清单重置/重装后，插件的 `dsh.profile.bundles` 注册可能丢失（profile 的 package.json 恢复模板态），bundle 层（`cordis.patch.yml`）不再应用——表现为非治理预设会话中 `/governance` 手势失效；bundle-only 安装时治理预设亦从预设选择器消失（经 `launch.py --install` 写入的用户根 `governance` 预设不受影响，其会话仍保有目录）。恢复方法（bundle 路径）：
+
+```powershell
+dsh plugin --profile web add "link:<本仓库绝对路径>"
+```
+
+然后重启 dsh——bundle 层是 boot-time 应用，非 HMR，不重启不生效。注意 `launch.py --sync` 只刷新用户根预设（`${DSH_HOME}/.agent-presets/governance`），不恢复 bundle 注册。验证：重启后 profile 的 package.json 中 `dsh.profile.bundles` 应含 `@peterwangze/software-project-governance-plugin`；预设选择器应出现「治理协调器」。
+
 ## 验证
 
 ```powershell

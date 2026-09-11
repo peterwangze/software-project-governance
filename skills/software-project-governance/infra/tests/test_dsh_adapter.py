@@ -14,6 +14,10 @@ Covers:
   - Structural row contract: persona + skill-filesystem customSkillDirs
     (repo skills/ + skill-shims/) + tool-skill + delegation rows are
     present so the generated preset remains a full coding agent.
+  - Bundle patch contract (FIX-307): the repo-root cordis.patch.yml
+    skill-filesystem UPDATE row carries ``disabled: false`` — without it
+    dsh >= 0.1.5 web profiles keep the host row disabled and the bundle's
+    global skill registration silently fails.
   - Command shim contract: each ``adapters/dsh/skill-shims/<name>.md``
     carries DSH frontmatter (``name`` == filename, non-empty
     ``description``) and a thin pointer to ``commands/<name>.md`` — this
@@ -426,6 +430,49 @@ class DshAdapterTests(unittest.TestCase):
                 f"package.json files whitelist {whitelist} — installed "
                 "file:/github: copies would lack it",
             )
+
+    def test_bundle_patch_reenables_host_skill_filesystem_row(self):
+        # FIX-307 guard: since dsh 0.1.5, dsh-web-app's own cordis.patch.yml
+        # disables the base host `skill-filesystem` row on web profiles
+        # ("presets own local discovery" — skill registration moved from the
+        # host plane into the preset layer), and applyEntryPatches covers the
+        # targeted row's keys one by one — an UPDATE that restates only
+        # `config` leaves the row disabled, so the bundle's global skill
+        # registration silently fails (`/governance` disappears from every
+        # preset session). The UPDATE row MUST re-enable the row explicitly:
+        # `disabled: false` is the 0.1.5 compatibility invariant (idempotent
+        # on base-only profiles where the host row is enabled to begin with).
+        # String/regex checks, not YAML parsing: the `!!js` tag makes a plain
+        # parse infeasible (same rationale as the FIX-290 guard above). The
+        # row block starts AT the `- id:` line, so header comments quoting
+        # `disabled: false` can never flip the verdict, and the key check is
+        # anchored to exact 2-space row-member indentation (trailing classes
+        # tolerate CR for CRLF belt-and-braces, mirroring the FIX-290
+        # guards' `\s*$`).
+        patch = (_REPO_ROOT / "cordis.patch.yml").read_text(encoding="utf-8")
+        m = re.search(r"(?m)^- id: skill-filesystem[ \t\r]*$", patch)
+        self.assertIsNotNone(
+            m, "bundle patch must carry a top-level skill-filesystem UPDATE row"
+        )
+        # row block: from the `- id:` line to the next top-level row or EOF
+        rest = patch[m.end():]
+        nxt = re.search(r"(?m)^- id: ", rest)
+        block = patch[m.start():] if nxt is None else patch[m.start(): m.end() + nxt.start()]
+        self.assertIn(
+            "name: '@deepseek-ai/dsh-skill-filesystem'",
+            block,
+            "skill-filesystem row must name the dsh-skill-filesystem provider",
+        )
+        self.assertIsNotNone(
+            re.search(r"(?m)^  disabled:[ \t]*false[ \t\r]*$", block),
+            "skill-filesystem UPDATE row must carry an explicit "
+            "`disabled: false` — without it the row stays disabled on 0.1.5 "
+            "web profiles and the bundle's global skill registration "
+            "silently fails",
+        )
+        self.assertIn(
+            "customSkillDirs", block, "the self-locating skill roots must stay declared in this layer"
+        )
 
     def _init_target_repo(self, root: Path) -> None:
         root.mkdir()

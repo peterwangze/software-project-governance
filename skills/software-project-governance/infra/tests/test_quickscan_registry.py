@@ -20,10 +20,18 @@ of ``docs/requirements/quickscan-evaluation-0.79.0.md`` §6 (FX-195 §250):
 Negative controls operate on synthetic id fixtures held in memory; the real
 engine, the real FEAT-020 snapshot and the real governance data are read-only.
 
+FIX-304 (FEAT-025 R0 findings F-1~F-10) hardens the *guards* rather than the
+accepted surface: F-1 AST module-body judgement (replacing the text slice that
+stopped at the first ``def``), F-2 fail-closed product-gate parse, F-3
+observation-side census uniqueness (§4.1 R5), F-4 ``not-quick:`` vocabulary
+disclosure, F-5 ``fallback_target`` naming, F-6 ``SEGMENTS`` export, F-7
+body-scan offset, F-8 census-order caliber, F-10 C3 basis symbol resolution.
+
 Run:
     python -m unittest skills/software-project-governance/infra.tests.test_quickscan_registry -v
 """
 
+import ast
 import json
 import re
 import sys
@@ -97,6 +105,86 @@ def _engine_source():
     return ENGINE.read_text(encoding="utf-8")
 
 
+# ── F-1: AST judge of import-time statements (declarations only, zero I/O) ──────
+# Precedent: tests/test_contracts.py ZeroIoZeroDependencyTests (node whitelist on
+# the real module body). The pre-FIX-304 guard was a text slice that stopped at
+# the first ``def`` and therefore never saw SEGMENTS / C3_ADJUDICATION / _BY_ID.
+_MODULE_BODY_DECLARATIONS = (
+    ast.Import,
+    ast.ImportFrom,
+    ast.Assign,
+    ast.AnnAssign,
+    ast.ClassDef,
+    ast.FunctionDef,
+    ast.Expr,
+    ast.If,
+)
+_MODULE_LEVEL_FORBIDDEN_NAMES = frozenset(("open", "print", "eval", "exec", "compile", "__import__"))
+_MODULE_LEVEL_FORBIDDEN_ATTRS = frozenset(
+    ("read_text", "read_bytes", "write_text", "write_bytes", "load", "loads",
+     "read", "readline", "readlines", "glob", "rglob")
+)
+
+
+def _import_time_statements(nodes):
+    """Statements that actually run at import time (defs are deferred)."""
+    for node in nodes:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if isinstance(node, ast.ClassDef):
+            yield from _import_time_statements(node.body)
+            continue
+        yield node
+
+
+def _module_level_io_offenses(source):
+    """Import-time statements must be declarations with zero I/O / side effects.
+
+    Function bodies are legitimately allowed to read the engine: they run on
+    call, not at import. Every offense is reported as a ``line N: …`` string so
+    a failure is self-describing.
+    """
+    offenses = []
+    for node in _import_time_statements(ast.parse(source).body):
+        if not isinstance(node, _MODULE_BODY_DECLARATIONS):
+            offenses.append(f"line {node.lineno}: import-time {type(node).__name__}")
+            continue
+        for sub in ast.walk(node):
+            if not isinstance(sub, ast.Call):
+                continue
+            func = sub.func
+            if isinstance(func, ast.Name) and func.id in _MODULE_LEVEL_FORBIDDEN_NAMES:
+                offenses.append(f"line {sub.lineno}: module-level {func.id}()")
+            elif isinstance(func, ast.Attribute) and func.attr in _MODULE_LEVEL_FORBIDDEN_ATTRS:
+                offenses.append(f"line {sub.lineno}: module-level .{func.attr}()")
+    return offenses
+
+
+# ── F-10: symbol universe quoted by the C3 adjudication bases ──────────────────
+_UNDERSCORE_SYMBOL_RE = re.compile(r"(?<![A-Za-z0-9_])_[A-Za-z][A-Za-z0-9_]*")
+_PYTHON_SOURCES = None
+
+
+def _python_sources():
+    """Engine + ``checks/*.py`` source text: the symbol universe C3 cites."""
+    global _PYTHON_SOURCES
+    if _PYTHON_SOURCES is None:
+        parts = [_engine_source()]
+        parts.extend(
+            path.read_text(encoding="utf-8")
+            for path in sorted((_INFRA_DIR / "checks").glob("*.py"))
+        )
+        _PYTHON_SOURCES = "\n".join(parts)
+    return _PYTHON_SOURCES
+
+
+def _undefined_basis_symbols(basis, sources):
+    """``_``-prefixed identifiers a basis quotes that no source module defines."""
+    return tuple(
+        sorted({tok for tok in _UNDERSCORE_SYMBOL_RE.findall(basis) if tok not in sources})
+    )
+
+
 class Acceptance1CoverageTests(unittest.TestCase):
     """① 70/70 coverage against the FEAT-020 frozen snapshot (machine identity)."""
 
@@ -162,7 +250,7 @@ class Acceptance2CompletenessGuardTests(unittest.TestCase):
         self.assertEqual(report.undeclared, ())
         self.assertEqual(report.stale, ())
         self.assertFalse(report.fail_closed)
-        self.assertEqual(report.fallback_mode, qr.MODE_FULL_FALLBACK)
+        self.assertEqual(report.fallback_target, qr.MODE_FULL_FALLBACK)
 
     def test_guard_warns_and_fails_closed_on_a_new_engine_segment(self):
         """Missing-segment fixture: engine grew a Check 41 the table never saw."""
@@ -171,7 +259,7 @@ class Acceptance2CompletenessGuardTests(unittest.TestCase):
         self.assertFalse(report.ok)
         self.assertEqual(report.undeclared, ("41",))
         self.assertTrue(report.fail_closed)
-        self.assertEqual(report.fallback_mode, qr.MODE_FULL_FALLBACK)
+        self.assertEqual(report.fallback_target, qr.MODE_FULL_FALLBACK)
         self.assertTrue(report.warnings, "guard MUST emit a warning line")
         self.assertTrue(any("41" in w for w in report.warnings))
 
@@ -187,7 +275,7 @@ class Acceptance2CompletenessGuardTests(unittest.TestCase):
         self.assertEqual(report.stale, ("20",))
         self.assertEqual(report.undeclared, ())
         self.assertFalse(report.fail_closed)
-        self.assertEqual(report.fallback_mode, qr.MODE_FULL_FALLBACK)
+        self.assertEqual(report.fallback_target, qr.MODE_FULL_FALLBACK)
         self.assertTrue(report.warnings)
 
     def test_missing_declared_row_alone_disables_quick(self):
@@ -199,6 +287,22 @@ class Acceptance2CompletenessGuardTests(unittest.TestCase):
 
     def test_guard_uses_live_engine_discovery_by_default(self):
         self.assertEqual(qr.guard_completeness().observed, qr.discover_engine_segment_ids())
+
+    def test_fallback_target_names_the_target_not_an_observed_outcome(self):
+        """F-5: ``fail_closed`` is the discriminant; the mode field is a target.
+
+        The constant is returned even on a fully covered run, so a lone
+        ``is it 'full'?`` read would report every healthy quick run as "fell back
+        to full". The field is therefore named for the target it denotes.
+        """
+        complete = qr.guard_completeness(observed_ids=tuple(_snapshot_ids()))
+        self.assertFalse(complete.fail_closed)
+        self.assertEqual(complete.fallback_target, qr.MODE_FULL_FALLBACK)
+        self.assertFalse(
+            hasattr(complete, "fallback_mode"),
+            "the ambiguous field name must be gone (F-5)",
+        )
+        self.assertIn("fallback_target=full", complete.lines()[0])
 
 
 class Acceptance3SchemaTests(unittest.TestCase):
@@ -237,6 +341,19 @@ class Acceptance3SchemaTests(unittest.TestCase):
         spec = qr.segment("1")
         with self.assertRaises(AttributeError):
             spec.check_id = "99"  # frozen dataclass — Phase-2 must re-declare
+
+    def test_not_quick_token_is_disclosed_as_a_slice1_extension_vocabulary(self):
+        """F-4: ``not-quick:<CODE>`` is an extension of §3.6's example grammar.
+
+        §3.6 L221 lists ``("full", "quick", "domain:<name>")`` only — the
+        exclusion family borrows that shape convention but is Slice-1's own
+        vocabulary, so the Phase-2 translation owner must be named explicitly
+        instead of being assumed to be "zero semantic fork".
+        """
+        doc = qr.__doc__ or ""
+        self.assertIn(qr.NOT_QUICK_PREFIX, doc)
+        self.assertIn("扩展词汇", doc)
+        self.assertIn("REFACTOR-light-registry", doc)
 
 
 class Acceptance4FactSourceRootTests(unittest.TestCase):
@@ -321,6 +438,30 @@ class Acceptance5C3AdjudicationTests(unittest.TestCase):
     def test_review_recorded_c3_verdicts_are_not_silently_reclassified(self):
         for check_id in EVAL_C3_SEGMENTS:
             self.assertEqual(qr.C3_ADJUDICATION[check_id]["review"], "FX-195 §136 C3 行 + 代码核验")
+
+    def test_c3_basis_underscore_symbols_resolve_in_the_engine_or_checks(self):
+        """F-10: every ``_``-symbol quoted as evidence must exist in the sources.
+
+        The pre-FIX-304 machine check only asserted ``target in basis``, so a
+        mistyped engine symbol in a basis (e.g. ``_parse_open_risks`` for
+        ``_parse_context_open_risks``) would have passed unnoticed.
+        """
+        sources = _python_sources()
+        symbols = set()
+        for check_id in EVAL_C3_SEGMENTS:
+            basis = " | ".join(qr.C3_ADJUDICATION[check_id]["basis"])
+            self.assertEqual(_undefined_basis_symbols(basis, sources), (), check_id)
+            symbols.update(_UNDERSCORE_SYMBOL_RE.findall(basis))
+        self.assertGreaterEqual(len(symbols), 8, "basis symbol check is vacuous")
+
+    def test_c3_basis_symbol_checker_catches_a_mistyped_engine_symbol(self):
+        """Negative control: F-10's own example — plausible but nonexistent name."""
+        sources = _python_sources()
+        self.assertIn("_parse_context_open_risks", sources)
+        self.assertEqual(
+            _undefined_basis_symbols("_parse_open_risks 经 _context_file 读证据", sources),
+            ("_parse_open_risks",),
+        )
 
 
 class QuickFacePolicyTests(unittest.TestCase):
@@ -467,12 +608,181 @@ class CarrierDisciplineTests(unittest.TestCase):
         self.assertEqual(data["faces"]["check_segments"]["count"], 70)
         self.assertEqual(data["faces"]["cli_dispatch"]["key_count"], len(data["faces"]["cli_dispatch"]["keys"]))
 
-    def test_registry_declares_no_module_level_file_io(self):
-        """Importing the table alone must be pure declaration (no reads, no drift)."""
+    def test_registry_module_body_declares_no_import_time_io(self):
+        """Importing the table alone must be pure declaration (F-1: AST-judged).
+
+        The pre-FIX-304 guard sliced the source at the first ``def``
+        (``split("\\ndef ", 1)[0]``), so it never scanned ``SEGMENTS`` (the table
+        itself) / ``C3_ADJUDICATION`` / ``_BY_ID`` — a module-level ``read_text``
+        below that line passed silently. The AST judge covers the real module body.
+        """
         source = (_INFRA_DIR / "quickscan_registry.py").read_text(encoding="utf-8")
-        module_level = source.split("\ndef ", 1)[0]
-        for token in ("read_text(", "read_bytes(", "json.load(", "open(", "Path(__file__)"):
-            self.assertNotIn(token, module_level, token)
+        self.assertEqual(_module_level_io_offenses(source), [])
+        for token in ("SEGMENTS = (", "C3_ADJUDICATION = {", "_BY_ID = _index()"):
+            self.assertIn(token, source)  # the surface the old slice never reached
+
+    def test_module_level_guard_catches_the_false_green_counterexample(self):
+        """Negative control: I/O declared *below* the first ``def`` (F-1's hole)."""
+        source = (
+            '"""Module docstring."""\n'
+            "\n"
+            "def _index():\n"
+            "    return {}\n"
+            "\n"
+            "_BY_ID = _index()\n"
+            "SEGMENTS = Path('x').read_text(encoding='utf-8')\n"
+        )
+        offenses = _module_level_io_offenses(source)
+        self.assertTrue(any("read_text" in o for o in offenses), offenses)
+        # Why the old guard was green: its scan face ended at the first def line,
+        # which is above the table / index / guard region it claimed to protect.
+        old_scan_face = source.split("\ndef ", 1)[0]
+        self.assertEqual(old_scan_face.strip(), '"""Module docstring."""')
+        self.assertNotIn("read_text", old_scan_face)
+        self.assertNotIn("_BY_ID = _index()", old_scan_face)
+
+    def test_module_level_guard_flags_import_time_calls_and_non_declarations(self):
+        """Negative controls: bare calls, ``print`` and executed statements."""
+        self.assertTrue(_module_level_io_offenses("open('x').read()\n"))
+        self.assertTrue(
+            any("print" in o for o in _module_level_io_offenses("print('x')\n"))
+        )
+        self.assertTrue(_module_level_io_offenses("_BY_ID = json.loads('{}')\n"))
+        self.assertTrue(_module_level_io_offenses("for _ in (1,):\n    pass\n"))
+
+    def test_module_level_guard_allows_deferred_reads_inside_functions(self):
+        """Positive control: reads in function bodies run on call, not at import."""
+        source = (
+            "def load(path):\n"
+            "    return path.read_text(encoding='utf-8')\n"
+            "\n"
+            "class Reader:\n"
+            "    def read(self):\n"
+            "        return open('x')\n"
+        )
+        self.assertEqual(_module_level_io_offenses(source), [])
+
+    def test_the_registry_table_is_exported(self):
+        """F-6: ``SEGMENTS`` is the slice's single source of truth — export it."""
+        self.assertIn("SEGMENTS", qr.__all__)
+        self.assertEqual(len(qr.__all__), len(set(qr.__all__)), "duplicate export")
+        for name in qr.__all__:
+            self.assertTrue(hasattr(qr, name), name)
+
+    def test_every_public_name_defined_here_is_exported(self):
+        """Machine check of the F-6 gap: no public symbol is silently unindexed."""
+        exported = set(qr.__all__)
+        defined_here = {
+            name for name, obj in vars(qr).items()
+            if getattr(obj, "__module__", None) == qr.__name__
+        }
+        unexported = sorted(
+            name for name in defined_here if not name.startswith("_") and name not in exported
+        )
+        self.assertEqual(unexported, [])
+
+
+class CensusIntegrityTests(unittest.TestCase):
+    """观察侧 census 语义：唯一（§4.1 R5）/ 扫描边界 / 返回序（F-3、F-7、F-8）。"""
+
+    def test_live_census_holds_unique_ids(self):
+        observed = qr.discover_engine_segment_ids()
+        self.assertEqual(len(observed), 70)
+        self.assertEqual(len(observed), len(set(observed)))
+
+    def test_duplicate_section_comments_fail_closed(self):
+        """F-3 counterexample: a repeated ``# ── 29. `` section must not census twice.
+
+        Pre-fix the duplicate was invisible — ``len(observed)=71`` with
+        ``unique=70`` and ``ok=True`` — because §4.1 R5「Check ID 唯一」was only
+        machine-checked on the registry side (import-time guard).
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = _write_engine_fixture(Path(tmp), extra_segments=("29",))
+            with self.assertRaisesRegex(ValueError, "duplicate"):
+                qr.discover_engine_segment_ids(fixture)
+
+    def test_guard_never_reports_a_duplicate_census_as_ok(self):
+        """Untrusted census ⇒ no verdict: the guard must not answer ``ok=True``."""
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = _write_engine_fixture(Path(tmp), extra_segments=("29",))
+            with self.assertRaises(ValueError):
+                qr.guard_completeness(engine_path=fixture)
+
+    def test_guard_rejects_a_duplicate_explicit_observed_input(self):
+        """G-1 negative control: the explicit ``observed_ids`` path is guarded too.
+
+        Pre-fix this reproduced the R0 F-3 signature verbatim on a *public*
+        input — ``len(observed)=71`` / ``unique=70`` / ``ok=True`` / zero
+        warnings — because the uniqueness guard existed only on the discovery
+        path (``discover_engine_segment_ids``).
+        """
+        duplicated = tuple(_snapshot_ids()) + ("29",)
+        with self.assertRaisesRegex(ValueError, "observed_ids"):
+            qr.guard_completeness(observed_ids=duplicated)
+
+    def test_reconcile_rejects_a_duplicate_explicit_actual_input(self):
+        """G-1 same family: ``reconcile_snapshot(actual_ids=…)`` is guarded too."""
+        duplicated = tuple(_snapshot_ids()) + ("29",)
+        with self.assertRaisesRegex(ValueError, "actual_ids"):
+            qr.reconcile_snapshot(actual_ids=duplicated)
+
+    def test_guard_rejects_a_duplicate_explicit_declared_input(self):
+        """Family completion: the invariant holds on every id-sequence input.
+
+        ``declared`` is the same public-parameter family as ``observed`` — a
+        duplicate there also makes the undeclared/stale verdicts untrustworthy,
+        so the guard refuses to answer instead of returning a silent ``ok``.
+        """
+        duplicated = tuple(_snapshot_ids()) + ("29",)
+        with self.assertRaisesRegex(ValueError, "declared_ids"):
+            qr.guard_completeness(declared_ids=duplicated)
+
+    def test_reconcile_rejects_a_duplicate_explicit_expected_input(self):
+        """Family completion: the ``expected`` (snapshot) side is guarded too."""
+        duplicated = tuple(_snapshot_ids()) + ("29",)
+        with self.assertRaisesRegex(ValueError, "snapshot_ids"):
+            qr.reconcile_snapshot(snapshot_ids=duplicated)
+
+    def test_census_body_scan_is_not_offset_by_a_magic_constant(self):
+        """F-7 counterexample: a decoy ``def`` inside the pre-fix ``+5`` window.
+
+        The old scan started at ``start + 5`` and stepped over a top-level
+        definition sitting 1..4 lines below the entry ``def``, swallowing the
+        sections that follow it (``99`` here).
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "verify_workflow.py"
+            path.write_text(
+                "def _run_full_engine_checks(args):\n"
+                "    # " + _DASH + _DASH + " 1. Inside " + _DASH + _DASH + "\n"
+                "    pass\n"
+                "    pass\n"
+                "def _next():\n"
+                "    # " + _DASH + _DASH + " 99. Outside " + _DASH + _DASH + "\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(qr.discover_engine_segment_ids(path), ("1",))
+
+    def test_census_order_is_engine_source_order_not_snapshot_position(self):
+        """F-8: the two orders co-exist — a positional zip would silently mis-pair."""
+        observed = qr.discover_engine_segment_ids()
+        snapshot = _snapshot_ids()
+        self.assertEqual(set(observed), set(snapshot))
+        self.assertNotEqual(tuple(observed), tuple(snapshot))
+        mismatch = next(i for i, pair in enumerate(zip(observed, snapshot)) if pair[0] != pair[1])
+        self.assertEqual(mismatch, 55)
+        self.assertEqual((observed[55], snapshot[55]), ("29", "28u"))
+        doc = qr.discover_engine_segment_ids.__doc__ or ""
+        self.assertIn("source order", doc)
+        self.assertIn("positional", doc)
+
+    def test_verdicts_ignore_the_census_position(self):
+        """Set semantics: permuting the census must not change any verdict."""
+        snapshot = _snapshot_ids()
+        for permutation in (tuple(reversed(snapshot)), snapshot[10:] + snapshot[:10]):
+            self.assertTrue(qr.guard_completeness(observed_ids=permutation).ok)
+            self.assertTrue(qr.reconcile_snapshot(actual_ids=permutation).ok)
 
 
 class DesignTraceabilityTests(unittest.TestCase):
@@ -533,6 +843,46 @@ class FailClosedBranchTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 qr.discover_product_gate_ids(path)
 
+    def test_product_gate_discovery_fails_closed_when_the_parse_yields_nothing(self):
+        """F-2: anchor present + reformatted entries MUST NOT silently return ().
+
+        The reader is a *text* parse (``frozenset({…})`` + ``"Check <ID>"``
+        literals, not AST); a shape change must fail closed like the sibling
+        ``load_frozen_snapshot_ids`` count guard — degrading to an empty set
+        would misreport every plugin-face segment as ungated (over-disclosure).
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "verify_workflow.py"
+            path.write_text(
+                "_PLUGIN_PRODUCT_CHECK_IDS = frozenset({\n"
+                "    'Check 7',\n"  # single quotes: outside the regex's literal form
+                "})\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "parsed"):
+                qr.discover_product_gate_ids(path)
+        doc = qr.discover_product_gate_ids.__doc__ or ""
+        self.assertIn("not AST", doc)
+        self.assertIn("fail-closed", doc)
+
+    def test_product_gate_discovery_parses_a_well_formed_block(self):
+        """Positive control for the fixture shape used by the guard above."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "verify_workflow.py"
+            path.write_text(
+                "_PLUGIN_PRODUCT_CHECK_IDS = frozenset({\n"
+                '    "Check 7",\n'
+                '    "Check 31",\n'
+                "})\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(qr.discover_product_gate_ids(path), ("7", "31"))
+
+    def test_live_product_gate_declaration_holds_twenty_five_unique_ids(self):
+        ids = qr.discover_product_gate_ids()
+        self.assertEqual(len(ids), 25)
+        self.assertEqual(len(set(ids)), 25)
+
     def test_snapshot_loader_fails_closed_on_count_mismatch(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = _write_snapshot(Path(tmp), count=2, ids=["1"])
@@ -549,7 +899,7 @@ class FixtureDrivenGuardTests(unittest.TestCase):
             report = qr.guard_completeness(engine_path=fixture)
             self.assertEqual(report.undeclared, ("41",))
             self.assertTrue(report.fail_closed)
-            self.assertEqual(report.fallback_mode, qr.MODE_FULL_FALLBACK)
+            self.assertEqual(report.fallback_target, qr.MODE_FULL_FALLBACK)
             self.assertTrue(
                 any("41" in w and qr.REASON_UNDECLARED_SEGMENT in w for w in report.warnings)
             )
@@ -562,7 +912,7 @@ class FixtureDrivenGuardTests(unittest.TestCase):
             self.assertTrue(report.ok)
             self.assertFalse(report.fail_closed)
             self.assertEqual(report.warnings, ())
-            self.assertIn("fallback=full", report.lines()[0])
+            self.assertIn("fallback_target=full", report.lines()[0])
 
     def test_guard_ignores_non_segment_sections_in_a_fixture_engine(self):
         with tempfile.TemporaryDirectory() as tmp:

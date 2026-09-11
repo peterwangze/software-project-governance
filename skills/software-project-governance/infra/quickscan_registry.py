@@ -32,7 +32,12 @@ FEAT-019 先例：主文件 +18 行；本切片对主文件零修改）。禁止
                   ``fact_source_root()`` 由它纯函数派生（无第二份真相）。
     modes       — 模式政策面：``("full","quick")`` 保留 /
                   ``("full","not-quick:<REASON_CODE>")`` 排除。
-                  标签化 token 沿用 §3.6 modes 既有 ``domain:<name>`` 文法。
+                  ``not-quick:<CODE>`` 是 Slice-1 引入的**扩展词汇**：§3.6 L221
+                  示例只列 ``("full","quick","domain:<name>")``，本 token 沿用的是
+                  其**形态约定**，不是既定词汇。Phase-2 平移口径由
+                  REFACTOR-light-registry / REFACTOR-quickscan-orchestration 定义
+                  （quickscan-evaluation §6 L253「平移 Slice-1 注册表为
+                  CheckSpec.input_deps」）；本切片不预设映射，防第二份真相。
 
 派生列（不落表，全部是以上四列的纯函数，避免漂移）：
 
@@ -98,6 +103,7 @@ __all__ = [
     "NOT_QUICK_PREFIX",
     "REASON_UNDECLARED_SEGMENT",
     "REASON_UNKNOWN_INPUT",
+    "SEGMENTS",
     "SEGMENT_SPEC_FIELDS",
     "CompletenessReport",
     "ReconcileReport",
@@ -688,6 +694,40 @@ def _id_sort_key(check_id):
     return (0, int(match.group(1)), match.group(2)) if match else (1, 0, check_id)
 
 
+def _duplicate_ids(check_id_seq):
+    """Ids occurring more than once, in deterministic id-sort order.
+
+    §4.1 R5「Check ID 唯一」为**零容忍**——注册表侧在导入期守卫，观察侧
+    （census）在返回前守卫，两侧同构，重复即抛 ``ValueError``（FIX-304 F-3）。
+    """
+    seen = set()
+    duplicates = set()
+    for check_id in check_id_seq:
+        if check_id in seen:
+            duplicates.add(check_id)
+        seen.add(check_id)
+    return tuple(sorted(duplicates, key=_id_sort_key))
+
+
+def _reject_duplicate_check_ids(check_id_seq, context):
+    """§4.1 R5 零容忍：**每个取得 id 序列的公开入口**见重复即拒绝回答。
+
+    覆盖面（FIX-304 G-1：守卫不再只挂在发现路径上）——
+    ``discover_engine_segment_ids`` 的引擎 census、``guard_completeness`` 的
+    ``observed``（发现路径 **或** 显式 ``observed_ids``）与 ``declared``、
+    ``reconcile_snapshot`` 的 ``actual`` 与 ``expected``。任一入口带入重复
+    CheckID 都会让 ``len(…)`` 与集合差失真并传递到消费面，故统一抛
+    ``ValueError``（消费方按 §2.4 映射 undetermined → 回退 full）。
+    """
+    duplicates = _duplicate_ids(check_id_seq)
+    if duplicates:
+        raise ValueError(
+            f"{context}: duplicate CheckID(s) {list(duplicates)} — "
+            "Check ID uniqueness is zero-tolerance (§4.1 R5)"
+        )
+    return check_id_seq
+
+
 def _index():
     return {spec.check_id: spec for spec in SEGMENTS}
 
@@ -765,6 +805,16 @@ def discover_engine_segment_ids(engine_path=None):
     only 69 of the 70 segments (30b has no ``┌─ Check 30b:`` banner line) and
     the file also quotes the ``┌─ Check N:`` marker in prose — the section
     comments are the only complete, unambiguous census.
+
+    口径（FIX-304 显式化，消费面 MUST 遵守）：
+
+    * **返回序 = 引擎源码顺序（engine source order）**，与 FEAT-020 快照 / 注册表
+      **位序（positional order）无关**——实测首个错位下标 = 55：census[55]="29"
+      vs 快照[55]="28u"。消费面 MUST 用集合运算或显式排序，禁止按位 positional
+      zip 两份清单；
+    * **唯一性零容忍**（``architecture-evolution-0.80.0`` §4.1 R5）：段落注释
+      重复出现即抛 ``ValueError``，与注册表侧导入期守卫（``_BY_ID`` 长度校验）
+      同构——重复段号会让 ``len(observed)`` 失真并传递给消费面。
     """
     path = Path(engine_path) if engine_path is not None else _default_engine_path()
     lines = path.read_text(encoding="utf-8").splitlines()
@@ -776,23 +826,39 @@ def discover_engine_segment_ids(engine_path=None):
     if start is None:
         raise ValueError(f"{path}: engine entry {_ENGINE_ENTRY!r} not found")
     end = len(lines)
-    for index in range(start + 5, len(lines)):
+    # Body starts on the line right after the ``def``: a top-level ``def `` can
+    # never appear inside the (indented) docstring, so no offset is needed.
+    for index in range(start + 1, len(lines)):
         if lines[index].startswith("def "):
             end = index
             break
     body = "\n".join(lines[start:end])
-    return tuple(_SEGMENT_SECTION_RE.findall(body))
+    observed = tuple(_SEGMENT_SECTION_RE.findall(body))
+    return _reject_duplicate_check_ids(observed, str(path))
 
 
 def discover_product_gate_ids(engine_path=None):
-    """FIX-270 product-gate declaration as read from the engine source (25 ids)."""
+    """FIX-270 product-gate declaration as read from the engine source (25 ids).
+
+    实现口径 = 源码**文本**解析（``frozenset({…})`` 块 + ``"Check <ID>"`` 字面量，
+    **not AST**）；两条 fail-closed 分支：锚点缺失即抛，锚点在而条目形态变化
+    导致零命中亦抛——退化静默返回 ``()`` 会把全部插件面段误报为「未受
+    product-gate 管辖」（过度披露方向），故与兄弟 ``load_frozen_snapshot_ids``
+    的 count 校验同族：结果为空即拒绝回答（FIX-304 F-2）。
+    """
     path = Path(engine_path) if engine_path is not None else _default_engine_path()
     source = path.read_text(encoding="utf-8")
     anchor = "_PLUGIN_PRODUCT_CHECK_IDS = frozenset({"
     if anchor not in source:
         raise ValueError(f"{path}: {anchor!r} declaration not found")
     block = source.split(anchor, 1)[1].split("})", 1)[0]
-    return tuple(_PRODUCT_GATE_RE.findall(block))
+    ids = tuple(_PRODUCT_GATE_RE.findall(block))
+    if not ids:
+        raise ValueError(
+            f"{path}: {anchor!r} found but no \"Check <ID>\" entry parsed in the "
+            "declaration block — format changed, refusing an empty product-gate set"
+        )
+    return ids
 
 
 def load_frozen_snapshot_ids(snapshot_path=None):
@@ -840,7 +906,13 @@ class ReconcileReport:
 
 @dataclass(frozen=True)
 class CompletenessReport:
-    """完整性守卫结果：未声明段 → 告警 + fail-closed 回退 full（QR-1）。"""
+    """完整性守卫结果：未声明段 → 告警 + fail-closed 回退 full（QR-1）。
+
+    ``fail_closed`` 是「本次是否已回退」的**唯一判别字段**；``fallback_target``
+    恒为回退**目标**（``full``），与本次是否熔断无关——Slice-2 编排器 MUST 用
+    ``fail_closed`` 判定，单看 ``fallback_target`` 会把正常 quick 运行报成
+    「已回退 full」（FIX-304 F-5：字段名原为歧义的 ``fallback_mode``）。
+    """
 
     declared: tuple
     observed: tuple
@@ -848,7 +920,7 @@ class CompletenessReport:
     stale: tuple
     warnings: tuple
     fail_closed: bool
-    fallback_mode: str
+    fallback_target: str
 
     @property
     def ok(self):
@@ -857,15 +929,27 @@ class CompletenessReport:
     def lines(self):
         return self.warnings or (
             f"registry={len(self.declared)} engine={len(self.observed)} "
-            f"undeclared=[] stale=[] fallback={self.fallback_mode}",
+            f"undeclared=[] stale=[] fallback_target={self.fallback_target}",
         )
 
 
 def reconcile_snapshot(actual_ids=None, snapshot_ids=None, snapshot_path=None):
-    """70/70 覆盖机判：注册表 id 集必须与 FEAT-020 冻结快照恒等（验收 ①）。"""
-    actual = tuple(registry_ids() if actual_ids is None else actual_ids)
-    expected = tuple(
-        load_frozen_snapshot_ids(snapshot_path) if snapshot_ids is None else snapshot_ids
+    """70/70 覆盖机判：注册表 id 集必须与 FEAT-020 冻结快照恒等（验收 ①）。
+
+    ``actual``（注册表 **或** 显式 ``actual_ids``）与 ``expected``（冻结快照 loader
+    **或** 显式 ``snapshot_ids``）两侧统一落唯一性校验：重复 CheckID 即抛
+    ``ValueError``（§4.1 R5 零容忍，FIX-304 G-1），不产出 ``ok=True`` 裁决——
+    重复项会让 ``len(…)`` 与差集失真并传递给消费面。
+    """
+    actual = _reject_duplicate_check_ids(
+        tuple(registry_ids() if actual_ids is None else actual_ids),
+        "reconcile_snapshot(actual_ids)",
+    )
+    expected = _reject_duplicate_check_ids(
+        tuple(
+            load_frozen_snapshot_ids(snapshot_path) if snapshot_ids is None else snapshot_ids
+        ),
+        "reconcile_snapshot(snapshot_ids)",
     )
     missing = tuple(sorted(set(expected) - set(actual), key=_id_sort_key))
     extra = tuple(sorted(set(actual) - set(expected), key=_id_sort_key))
@@ -876,12 +960,22 @@ def guard_completeness(observed_ids=None, declared_ids=None, engine_path=None):
     """完整性守卫：新段未入表 → 告警且 fail-closed 回退 full（验收 ②）。
 
     ``undeclared``（引擎有、表无）= 覆盖缺口 → ``fail_closed=True``、
-    ``fallback_mode="full"``；``stale``（表有、引擎无）= 注册表漂移 →
-    仅告警（不损失覆盖，quick 仍可用）。
+    ``fallback_target="full"``；``stale``（表有、引擎无）= 注册表漂移 →
+    仅告警（不损失覆盖，quick 仍可用）。**重复 CheckID 不在本函数静默容忍**：
+    ``observed``（发现路径 ``discover_engine_segment_ids`` 或显式 ``observed_ids``）
+    与 ``declared``（注册表或显式 ``declared_ids``）两侧统一落唯一性校验，重复即抛
+    ``ValueError``（§4.1 R5 零容忍，FIX-304 F-3 + G-1），故本守卫永不把重复输入
+    报成 ``ok``。
     """
-    declared = tuple(registry_ids() if declared_ids is None else declared_ids)
-    observed = tuple(
-        discover_engine_segment_ids(engine_path) if observed_ids is None else observed_ids
+    declared = _reject_duplicate_check_ids(
+        tuple(registry_ids() if declared_ids is None else declared_ids),
+        "guard_completeness(declared_ids)",
+    )
+    observed = _reject_duplicate_check_ids(
+        tuple(
+            discover_engine_segment_ids(engine_path) if observed_ids is None else observed_ids
+        ),
+        "guard_completeness(observed_ids)",
     )
     undeclared = tuple(sorted(set(observed) - set(declared), key=_id_sort_key))
     stale = tuple(sorted(set(declared) - set(observed), key=_id_sort_key))
@@ -905,7 +999,7 @@ def guard_completeness(observed_ids=None, declared_ids=None, engine_path=None):
         stale=stale,
         warnings=tuple(warnings),
         fail_closed=fail_closed,
-        fallback_mode=MODE_FULL_FALLBACK,
+        fallback_target=MODE_FULL_FALLBACK,
     )
 
 

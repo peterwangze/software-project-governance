@@ -99,6 +99,7 @@ __all__ = [
     "Assembly",
     "CHECK_SPECS",
     "CHECK_SPEC_FIELDS",
+    "CLI_KEYS_AXIS",
     "COMMAND_SPECS",
     "CommandSpec",
     "DELEGATED_LOADERS",
@@ -108,6 +109,7 @@ __all__ = [
     "LoaderWhitelistViolation",
     "RegistrationReport",
     "RegistryError",
+    "SEGMENTS_AXIS",
     "SEVERITY_FLOOR_ADVISORY",
     "SEVERITY_FLOOR_BLOCKING",
     "UnknownCheckID",
@@ -583,10 +585,17 @@ def _segment_sort_key(segment: str) -> Tuple[int, str]:
 
 
 def check_id_of(segment: str) -> CheckID:
-    """Bare segment → stable CheckID (``28p`` → ``check-28p``)."""
-    if not isinstance(segment, str):
+    """Bare segment → stable CheckID (``28p`` → ``check-28p``).
+
+    Only a bare segment form is accepted. Prefixing an arbitrary string would
+    mint a "CheckID" no consumer could ever resolve (``""`` → ``check-``),
+    which contradicts the module's own caliber — fail-closed, never guessed —
+    and the form check ``segment_of`` already applies in the other direction.
+    """
+    if not isinstance(segment, str) or _SEGMENT_RE.match(segment) is None:
         raise UnknownCheckID(
-            f"segment must be a string, got {type(segment).__name__}")
+            f"segment {segment!r} is not a bare segment form "
+            f"(expected '<digits><optional lowercase letter>', e.g. '28p')")
     return CHECK_ID_PREFIX + segment
 
 
@@ -792,6 +801,15 @@ INJECTED_SOURCE = "injected"
 LIVE_PROVIDER = ("contract_matrix.generator.extract_cli_dispatch / "
                  "contract_matrix.generator.extract_check_segments (FEAT-020)")
 
+CLI_KEYS_AXIS = "cli-keys"
+SEGMENTS_AXIS = "segments"
+"""Axis tokens naming which face an observation actually covers (F-2).
+
+An axis absent from ``RegistrationReport.observed_axes`` was defaulted to the
+registry's own declaration, so that half of the comparison is a
+self-comparison rather than a measurement — the report has to say so.
+"""
+
 
 @dataclass(frozen=True)
 class RegistrationReport:
@@ -799,6 +817,11 @@ class RegistrationReport:
 
     ``missing_*`` = declared but not observed (registration drift);
     ``extra_*`` = observed but not declared (the declaration is stale).
+
+    ``observed_axes`` names the faces that were actually *observed* (F-2). A
+    face missing from it was defaulted to the registry's own declaration, so
+    ``ok`` can be green with a face that was never measured; :meth:`lines`
+    labels that axis ``unobserved`` instead of presenting it as a measurement.
     """
 
     source: str
@@ -810,11 +833,23 @@ class RegistrationReport:
     observed_segments: Tuple[str, ...]
     missing_segments: Tuple[str, ...]
     extra_segments: Tuple[str, ...]
+    observed_axes: Tuple[str, ...] = ()
 
     @property
     def ok(self) -> bool:
+        """Both axes agree — read :attr:`unobserved_axes` for their coverage."""
         return not (self.missing_keys or self.extra_keys
                     or self.missing_segments or self.extra_segments)
+
+    @property
+    def unobserved_axes(self) -> Tuple[str, ...]:
+        """Declared axes whose face was defaulted, not measured (F-2).
+
+        Computed rather than stored, so a report built without axis
+        information never claims a measurement it cannot back.
+        """
+        return tuple(axis for axis in (CLI_KEYS_AXIS, SEGMENTS_AXIS)
+                     if axis not in self.observed_axes)
 
     def lines(self) -> Tuple[str, ...]:
         """Human-readable verdict lines (never a silent pass)."""
@@ -823,11 +858,13 @@ class RegistrationReport:
         out.append(f"  cli keys: registry={len(self.declared_keys)} "
                    f"observed={len(self.observed_keys)} "
                    f"missing={list(self.missing_keys)} "
-                   f"extra={list(self.extra_keys)}")
+                   f"extra={list(self.extra_keys)}"
+                   f"{self._unobserved_note(CLI_KEYS_AXIS)}")
         out.append(f"  segments: registry={len(self.declared_segments)} "
                    f"observed={len(self.observed_segments)} "
                    f"missing={list(self.missing_segments)} "
-                   f"extra={list(self.extra_segments)}")
+                   f"extra={list(self.extra_segments)}"
+                   f"{self._unobserved_note(SEGMENTS_AXIS)}")
         if self.missing_keys or self.missing_segments:
             out.append("  [FAIL] declared entries missing from the observed "
                        "face — registration drift")
@@ -835,6 +872,13 @@ class RegistrationReport:
             out.append("  [FAIL] observed entries missing from the registry — "
                        "the declaration is stale")
         return tuple(out)
+
+    def _unobserved_note(self, axis: str) -> str:
+        """A defaulted face is labelled as such — never read as measured."""
+        if axis in self.observed_axes:
+            return ""
+        return (f"  [unobserved] {axis}: face defaulted to the registry's own "
+                f"declaration — a self-comparison, not a measurement")
 
 
 def _live_faces() -> Tuple[Tuple[str, ...], Tuple[str, ...]]:
@@ -871,12 +915,37 @@ def verify_registration(
     extractors; passing either face injects an observation (the frozen
     snapshot, or a synthetic negative-control projection) and the other face
     defaults to the registry's own declaration so a single-axis comparison
-    stays meaningful.
+    stays meaningful — that defaulted axis is *labelled* unobserved in the
+    report (:attr:`RegistrationReport.observed_axes`), never presented as a
+    measurement.
+
+    ``source`` is provenance, so it can only agree with the branch actually
+    taken, never assert over it (F-1): the live branch reports
+    :data:`LIVE_SOURCE` and refuses any other label, and an injected
+    observation may not claim :data:`LIVE_SOURCE` (it defaults to
+    :data:`INJECTED_SOURCE`, or keeps a caller-supplied fixture label such as
+    ``frozen-snapshot``).
     """
     if observed_cli_keys is None and observed_segment_ids is None:
+        if source is not None and source != LIVE_SOURCE:
+            raise RegistryError(
+                f"source {source!r} contradicts the face actually observed: "
+                f"with no injected face the live engine is observed, so the "
+                f"only honest provenance is {LIVE_SOURCE!r} — provenance is "
+                f"derived from the observation, never asserted")
+        observed_axes = (CLI_KEYS_AXIS, SEGMENTS_AXIS)
         observed_cli_keys, observed_segment_ids = _live_faces()
-        source = source or LIVE_SOURCE
+        source = LIVE_SOURCE
     else:
+        if source == LIVE_SOURCE:
+            raise RegistryError(
+                f"source {LIVE_SOURCE!r} contradicts the face actually "
+                f"observed: injected faces are not the live engine — pass "
+                f"{INJECTED_SOURCE!r} or a fixture-specific label")
+        observed_axes = tuple(
+            axis for axis, face in ((CLI_KEYS_AXIS, observed_cli_keys),
+                                    (SEGMENTS_AXIS, observed_segment_ids))
+            if face is not None)
         if observed_cli_keys is None:
             observed_cli_keys = _COMMAND_KEYS
         if observed_segment_ids is None:
@@ -894,4 +963,5 @@ def verify_registration(
         observed_segments=tuple(observed_segment_ids),
         missing_segments=missing_segments,
         extra_segments=extra_segments,
+        observed_axes=observed_axes,
     )

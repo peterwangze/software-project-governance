@@ -427,6 +427,20 @@ class CheckRegistryTests(unittest.TestCase):
         with self.assertRaises(reg.UnknownCheckID):
             reg.check_id_of(None)
 
+    def test_check_id_of_refuses_anything_but_a_bare_segment(self):
+        """F-6: the same fail-closed caliber ``segment_of`` applies.
+
+        Prefixing an arbitrary string would mint a "CheckID" no consumer could
+        resolve (``""`` → ``check-``), against the module's own
+        "fail-closed, never guessed" discipline.
+        """
+        for bad in (None, "", "   ", "28p!", "nosuch", "check-28p", "28pa", 28):
+            with self.assertRaises(reg.UnknownCheckID) as ctx:
+                reg.check_id_of(bad)
+            self.assertIn(repr(bad), str(ctx.exception))
+        for segment in reg.segment_ids():  # negative control: all 70 resolve
+            self.assertEqual(reg.check_id_of(segment), f"check-{segment}")
+
 
 class DelegatedLoaderTests(unittest.TestCase):
     """Segments whose implementation is reached through an engine wrapper."""
@@ -714,6 +728,34 @@ class RegistrationIntegrityTests(unittest.TestCase):
         self.assertTrue(mirrored.ok, "\n".join(mirrored.lines()))
         self.assertEqual(mirrored.observed_keys, reg.command_keys())
 
+    def test_a_defaulted_axis_is_disclosed_as_unobserved(self):
+        """F-2: ``ok`` can be green with an axis that was never measured.
+
+        The defaulted face is the registry's own declaration, so that axis is
+        a self-comparison; the report names it instead of letting a single
+        boolean read as a two-axis measurement.
+        """
+        report = reg.verify_registration(
+            observed_cli_keys=list(reg.command_keys()))
+        self.assertTrue(report.ok, "\n".join(report.lines()))
+        self.assertEqual(report.observed_axes, (reg.CLI_KEYS_AXIS,))
+        self.assertEqual(report.unobserved_axes, (reg.SEGMENTS_AXIS,))
+        rendered = "\n".join(report.lines())
+        self.assertIn(f"[unobserved] {reg.SEGMENTS_AXIS}", rendered)
+        self.assertNotIn(f"[unobserved] {reg.CLI_KEYS_AXIS}", rendered)
+        mirrored = reg.verify_registration(
+            observed_segment_ids=list(reg.segment_ids()))
+        self.assertEqual(mirrored.unobserved_axes, (reg.CLI_KEYS_AXIS,))
+        self.assertIn(f"[unobserved] {reg.CLI_KEYS_AXIS}",
+                      "\n".join(mirrored.lines()))
+        dual = reg.verify_registration(
+            observed_cli_keys=list(reg.command_keys()),
+            observed_segment_ids=list(reg.segment_ids()))
+        self.assertEqual(dual.observed_axes,
+                         (reg.CLI_KEYS_AXIS, reg.SEGMENTS_AXIS))
+        self.assertEqual(dual.unobserved_axes, ())
+        self.assertNotIn("unobserved", "\n".join(dual.lines()))
+
     def test_missing_provider_fails_closed_and_injection_still_works(self):
         """With the FEAT-020 extractors unavailable, the live source refuses
         and names the provider; an explicitly injected face still judges."""
@@ -745,16 +787,87 @@ class RegistrationIntegrityTests(unittest.TestCase):
         )
         self.assertTrue(report.ok, "\n".join(report.lines()))
         self.assertEqual(report.source, "frozen-snapshot")
+        self.assertEqual(report.observed_axes,
+                         (reg.CLI_KEYS_AXIS, reg.SEGMENTS_AXIS))
+        self.assertEqual(report.unobserved_axes, ())
+        self.assertNotIn("unobserved", "\n".join(report.lines()))
+
+    def test_the_frozen_snapshot_path_never_imports_the_engine(self):
+        """F-1: the caliber a frozen-snapshot caller wants is engine-free.
+
+        Injecting both faces must not reach the live provider: the whole point
+        of the frozen comparison is a cheap, engine-free pass.
+        """
+        faces = _frozen_faces()
+        probe = _probe(
+            "import registry\n"
+            f"keys = {faces['cli_dispatch']['keys']!r}\n"
+            f"ids = {faces['check_segments']['ids']!r}\n"
+            "report = registry.verify_registration(\n"
+            "    observed_cli_keys=keys, observed_segment_ids=ids,\n"
+            "    source='frozen-snapshot')\n"
+            "print(json.dumps({\n"
+            "    'ok': report.ok,\n"
+            "    'source': report.source,\n"
+            "    'axes': list(report.observed_axes),\n"
+            "    'provider': 'contract_matrix' in sys.modules,\n"
+            "    'engine': 'verify_workflow' in sys.modules}))\n")
+        self.assertTrue(probe["ok"])
+        self.assertEqual(probe["source"], "frozen-snapshot")
+        self.assertEqual(probe["axes"], [reg.CLI_KEYS_AXIS, reg.SEGMENTS_AXIS])
+        self.assertFalse(probe["provider"], "the live provider was imported")
+        self.assertFalse(probe["engine"], "the engine was imported")
+
+    def test_provenance_cannot_be_asserted_over_an_injected_face(self):
+        """F-1: labelling an injected observation ``live-engine`` is refused."""
+        with self.assertRaises(reg.RegistryError) as ctx:
+            reg.verify_registration(
+                observed_cli_keys=list(reg.command_keys()),
+                observed_segment_ids=list(reg.segment_ids()),
+                source=reg.LIVE_SOURCE)
+        message = str(ctx.exception)
+        self.assertIn(reg.LIVE_SOURCE, message)
+        self.assertIn("contradict", message)
+
+    def test_a_contradicting_label_is_refused_before_the_provider_loads(self):
+        """F-1: no injected face + ``source='frozen-snapshot'`` used to run the
+        *live* branch while keeping the frozen label. It is now refused, and
+        refused before ``_live_faces()`` imports the engine."""
+        probe = _probe(
+            "import registry\n"
+            "outcome = {}\n"
+            "try:\n"
+            "    registry.verify_registration(source='frozen-snapshot')\n"
+            "except Exception as exc:\n"
+            "    outcome['type'] = type(exc).__name__\n"
+            "    outcome['message'] = str(exc)\n"
+            "else:\n"
+            "    outcome['type'] = None\n"
+            "outcome['provider'] = 'contract_matrix' in sys.modules\n"
+            "outcome['engine'] = 'verify_workflow' in sys.modules\n"
+            "print(json.dumps(outcome))\n")
+        self.assertEqual(probe["type"], "RegistryError")
+        self.assertIn("frozen-snapshot", probe["message"])
+        self.assertFalse(probe["provider"], "the live provider was imported")
+        self.assertFalse(probe["engine"], "the engine was imported")
 
     def test_matches_the_live_engine_face(self):
         """Default provider consumes the FEAT-020 extractors (lazy import)."""
         report = reg.verify_registration()
         self.assertEqual(report.source, "live-engine")
         self.assertTrue(report.ok, "\n".join(report.lines()))
+        self.assertEqual(report.observed_axes,
+                         (reg.CLI_KEYS_AXIS, reg.SEGMENTS_AXIS))
         self.assertEqual(len(report.declared_keys), FROZEN_CLI_KEYS)
         self.assertEqual(len(report.declared_segments), FROZEN_SEGMENTS)
         self.assertEqual(len(report.observed_keys), FROZEN_CLI_KEYS)
         self.assertEqual(len(report.observed_segments), FROZEN_SEGMENTS)
+
+    def test_an_explicit_live_label_on_the_live_branch_is_accepted(self):
+        """F-1 negative control: the honest label is not refused."""
+        report = reg.verify_registration(source=reg.LIVE_SOURCE)
+        self.assertEqual(report.source, reg.LIVE_SOURCE)
+        self.assertTrue(report.ok, "\n".join(report.lines()))
 
 
 # ── ② startup import set ────────────────────────────────────────────────────
@@ -764,11 +877,27 @@ class StartupImportTests(unittest.TestCase):
     """Acceptance ② — registry load and per-command load add no startup mass."""
 
     def test_engine_baseline_is_the_frozen_196_module_caliber(self):
+        """F-4: the recorded r6 count is reproduced by an *executable* caliber.
+
+        ``core/architecture-baseline.json`` labels its r6 block with the
+        shorthand ``python -I -B -c 'import verify_workflow' (isolated)``,
+        which cannot run as written: ``-I`` implies ``-P``, so the cwd never
+        enters ``sys.path`` and the import dies with ``ModuleNotFoundError``.
+        The executable caliber is the one both producers require
+        (``perf_protocol.probe_sys_modules(infra_dir)`` /
+        ``archguard_ratchet.measure_cold_import(infra_dir)``): the infra dir on
+        ``sys.path`` first. That form runs here and must land exactly on the
+        recorded count. The label string itself is baseline-owned — correcting
+        it is registered on the archguard/baseline side, not edited here.
+        """
         baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
         budget = baseline["r6_startup_budget"]
         self.assertEqual(budget["import_count"], FROZEN_ENGINE_IMPORT_COUNT)
-        self.assertEqual(budget["probe"],
-                         "python -I -B -c 'import verify_workflow' (isolated)")
+        self.assertIn("import verify_workflow", budget["probe"])
+        self.assertEqual(_engine_startup_face()["count"],
+                         budget["import_count"],
+                         "the executable caliber (infra dir injected) does not "
+                         "reproduce the recorded r6 count")
 
     def test_importing_the_registry_pulls_no_engine_and_no_domain(self):
         probe = _probe(

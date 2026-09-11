@@ -40,8 +40,14 @@ from contract_matrix import generator as cmg  # noqa: E402
 # FEAT-013 (2026-09-10) extended the CLI face with the agent-locks-acquire
 # dispatch-lock write API (RISK-046 root fix): 81→82 keys / 78→79 handlers,
 # snapshot regenerated via generator.py --regen in the same change.
-FROZEN_CLI_KEY_COUNT = 82
-FROZEN_CHECK_SEGMENT_COUNT = 70
+# The DSH preset schema-compat guard extended BOTH faces in the same change
+# (the documented contract-change path): 82→83 keys / 79→80 handlers for the
+# new `check-dsh-preset-compat` subcommand, and 70→71 check segments for the
+# new Check 28v — a shipped preset composition row is now validated against
+# the INSTALLED dsh's own Config schemas; snapshot regenerated via
+# generator.py --regen in the same change (review covers both files).
+FROZEN_CLI_KEY_COUNT = 83
+FROZEN_CHECK_SEGMENT_COUNT = 71
 
 
 @lru_cache(maxsize=1)

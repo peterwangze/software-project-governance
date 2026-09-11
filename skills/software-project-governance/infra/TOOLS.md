@@ -54,6 +54,7 @@
 | TOOL-047 | Declarative Release Ledger | schema + CLI | `core/releases/` + `infra/verify_workflow.py release-ledger` | 候选/发布 commit、tag、remote、historical trust 与 artifact ledger 验证 | 发布/维护 | 是 |
 | TOOL-048 | Artifact Projection Generator | registry + CLI | `core/version-projections.json` + `infra/verify_workflow.py release-projection [--write]` | SKILL frontmatter 版本投影检查与原子写入 | 发布/维护 | 是 |
 | TOOL-049 | Optional Quality Tool Probe | CLI probe | `infra/verify_workflow.py quality-tools` | Ruff/mypy 可用性与版本探测，结构化 PASS/NOT_RUN/FAIL | 开发/测试/发布/维护 | 是 |
+| TOOL-052 | DSH Preset Schema Compat Guard | CLI check（可独立运行） | `infra/dsh_compat.py` + `infra/verify_workflow.py check-dsh-preset-compat`（`check-governance` Check 28v） | 用**解析态** dsh 插件集的 loader YAML 方言 + loader `evaluate` + cordis `resolveConfig` 逐行校验每个 preset 组合（含 `group` 递归、`disabled` 祖先继承语义），行级报告 row id + 模块名 + schema 原文消息；无 node / 无可解析插件集 → NOT_RUN（可选工具政策，不计 issues） | 开发/测试/发布/维护 | 是 |
 
 ## 工具详情
 
@@ -536,6 +537,16 @@
 - **子命令**：`quality-tools`
 - **输出**：Ruff/mypy 各自 `PASS`、`NOT_RUN` 或 `FAIL`，以及 `runtime_dependency=false`
 - **边界**：未安装必须为 `NOT_RUN`；不安装依赖，不把未运行写成 PASS
+- **被以下子工作流使用**：开发、测试、发布、维护
+
+### TOOL-052：DSH Preset Schema Compat Guard
+
+- **文件**：`infra/dsh_compat.py`（独立可运行）、`infra/tests/test_dsh_compat.py`
+- **子命令**：`check-dsh-preset-compat [--fail-on-issues]`；`check-governance` 内为 Check 28v（FIX-270 插件产品自检，宿主模式需 `--product-gates`）
+- **输入**：包内每个 preset 组合（`presets/*/agent.cordis.yml` + `adapters/*/*.cordis.yml.template`）+ **解析态** dsh 插件集的 `@deepseek-ai/cordis-plugin-include` `entryListSchema`、`@deepseek-ai/cordis-plugin-loader` `evaluate`/`isJsExpr`、`@deepseek-ai/cordis` `resolveConfig`；解析面优先级 = `DSH_INSTALL_DIR` / `DSH_HARNESS_NODE_MODULES` → `$DSH_HOME/profiles/<profile>/node_modules` 与 `profiles/node_modules`（**只读**，且仅在 `$DSH_HOME` 被显式导出时；绝不猜测 `~/.dsh`）→ PATH `dsh` 的 install anchor。输出中逐包报告解析出的绝对路径与版本；`@deepseek-ai/dsh` CLI 版本仅作参考（schema 权威是 oracle 包，不是 CLI 版本串）
+- **输出**：逐行 `PASS / CONFIG_INVALID / MODULE_UNRESOLVED / IMPORT_ERROR / CONFIG_EXPR_ERROR / DISABLED_EXPR_ERROR / ROW_SHAPE / NO_SCHEMA / BUILTIN / DISABLED_INHERITED`，失败行携带 row id + 模块名 + schema 原文消息；整体 `PASS` / `FAIL` / `NOT_RUN`
+- **安全边界**：只读静态分析 + 从解析面 import 模块（不调用 `apply`，不构造 Context）；子进程 `DSH_HOME` 重定向到临时空目录，`home_writes` = 该临时目录的条目数（构造时为空）⇒ **仅证明未写入该隔离 home**，不是全局零写入证明（模块 import 与 `$DSH_HOME/profiles` 只读探测都在其外），M7.7 (a) 先例
+- **边界**：无 node / 无可解析插件集 → `NOT_RUN`（不计 issues，不写成 PASS）；schema 判定只来自解析面 `Config`，不复制任何 schema；`disabled` 语义按 loader 的 `Entry._disabled` 祖先链继承（group 自身恒为 enabled，但其 `disabled` 由子行继承 ⇒ 子行记 `DISABLED_INHERITED`，不出 finding）
 - **被以下子工作流使用**：开发、测试、发布、维护
 
 ### TOOL-050：Loop Runtime Claim Gate

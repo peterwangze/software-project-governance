@@ -62,9 +62,12 @@ _DASH = "\u2500"
 _ENGINE_ENTRY = "def _run_full_engine_checks"
 _SECTION_RE = re.compile(r"^\s*#\s*" + _DASH + r"{2}\s*([0-9][A-Za-z0-9]*)\.\s")
 
-# FEAT-020 frozen faces are the 82-key / 70-segment caliber (R5 reference).
-FROZEN_CLI_KEYS = 82
-FROZEN_SEGMENTS = 70
+# FEAT-020 frozen faces, extended once by the DSH preset schema-compat guard
+# in the same change as the regenerated snapshot: the new check segment 28v
+# (70→71) and its `check-dsh-preset-compat` subcommand (82→83) — the
+# documented contract-change path (generator.py --regen + review).
+FROZEN_CLI_KEYS = 83
+FROZEN_SEGMENTS = 71
 
 # FEAT-018 R6 frozen startup budget (``core/architecture-baseline.json`` r6):
 # the acceptance ② comparison frame for "启动 import 集合不增".
@@ -698,8 +701,11 @@ class RegistrationIntegrityTests(unittest.TestCase):
         lines = report.lines()
         self.assertTrue(lines)
         joined = "\n".join(lines)
-        self.assertIn("82", joined)
-        self.assertIn("70", joined)
+        # Derived from the frozen faces rather than re-spelled: the assertion
+        # is "both faces are rendered", not a hard-coded caliber that has to
+        # be edited alongside every deliberate contract change.
+        self.assertIn(str(FROZEN_CLI_KEYS), joined)
+        self.assertIn(str(FROZEN_SEGMENTS), joined)
 
     def test_failed_report_discloses_drift_on_both_axes(self):
         """A registered face that drifted is disclosed, never a silent FAIL."""

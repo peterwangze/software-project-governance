@@ -56,11 +56,15 @@ EVAL_DOC = _REPO_ROOT / "docs" / "requirements" / "quickscan-evaluation-0.79.0.m
 # FEAT-020 freeze commit (authoritative snapshot provenance).
 FREEZE_COMMIT = "c92bf5d"
 
-# quickscan-evaluation §3.1 C1（25 段排除）/ C2（41 段保留）/ C3（4 段待判定）
+# quickscan-evaluation §3.1 C1（现 26 段排除）/ C2 / C3（4 段待判定）。
+# 28v（DSH preset schema-compat guard）与 28u 同源同根（事实源 = 插件包本体
+# presets/ + adapters/dsh 组合），按 C1 判据随 28u 一并排除——排除集仍 ≡
+# FIX-270 `_PLUGIN_PRODUCT_CHECK_IDS`（机判恒等由
+# test_excluded_set_equals_the_engine_product_gate_declaration 守住）。
 EVAL_C1_EXCLUDED = (
     "7", "10", "11", "12", "15", "24", "28b", "28d", "28e", "28f", "28h",
     "28i", "28k", "28m", "28n", "28o", "28p", "28q", "28r", "28t", "28u",
-    "30b", "31", "33", "40",
+    "28v", "30b", "31", "33", "40",
 )
 EVAL_C3_SEGMENTS = ("28g", "28j", "28l", "29")
 
@@ -189,7 +193,7 @@ class Acceptance1CoverageTests(unittest.TestCase):
     """① 70/70 coverage against the FEAT-020 frozen snapshot (machine identity)."""
 
     def test_registry_declares_exactly_the_frozen_segment_ids(self):
-        self.assertEqual(len(qr.registry_ids()), 70)
+        self.assertEqual(len(qr.registry_ids()), len(_snapshot_ids()))
         self.assertEqual(set(qr.registry_ids()), set(_snapshot_ids()))
 
     def test_registry_order_follows_the_frozen_snapshot_order(self):
@@ -200,7 +204,7 @@ class Acceptance1CoverageTests(unittest.TestCase):
     def test_snapshot_count_field_matches_ids_and_the_freeze_provenance(self):
         data = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
         face = data["faces"]["check_segments"]
-        self.assertEqual(face["count"], 70)
+        self.assertEqual(face["count"], len(_snapshot_ids()))
         self.assertEqual(face["count"], len(face["ids"]))
         # Snapshot provenance is FEAT-020 (freeze commit c92bf5d).
         self.assertEqual(data["freeze_point"]["task"], "FEAT-020")
@@ -212,8 +216,8 @@ class Acceptance1CoverageTests(unittest.TestCase):
         self.assertTrue(report.ok, report.lines())
         self.assertEqual(report.missing, ())
         self.assertEqual(report.extra, ())
-        self.assertEqual(len(report.expected), 70)
-        self.assertEqual(len(report.actual), 70)
+        self.assertEqual(len(report.expected), len(_snapshot_ids()))
+        self.assertEqual(len(report.actual), len(_snapshot_ids()))
 
     def test_reconcile_snapshot_negative_control_missing_and_extra(self):
         """Negative control: a drifted registry MUST be reported, never silent."""
@@ -224,10 +228,10 @@ class Acceptance1CoverageTests(unittest.TestCase):
         self.assertEqual(report.extra, ("41",))
         self.assertTrue(any("28o" in line for line in report.lines()))
 
-    def test_engine_discovery_yields_the_same_70_segments(self):
+    def test_engine_discovery_yields_the_same_segments_as_the_snapshot(self):
         """The live engine's own segment list must equal the frozen snapshot."""
         observed = qr.discover_engine_segment_ids()
-        self.assertEqual(len(observed), 70)
+        self.assertEqual(len(observed), len(_snapshot_ids()))
         self.assertEqual(set(observed), set(_snapshot_ids()))
 
     def test_engine_discovery_ignores_non_segment_sections(self):
@@ -238,7 +242,7 @@ class Acceptance1CoverageTests(unittest.TestCase):
         )
         in_body_hits = len(qr.discover_engine_segment_ids())
         self.assertGreater(whole_file_hits, in_body_hits)  # scoping is load-bearing
-        self.assertEqual(in_body_hits, 70)
+        self.assertEqual(in_body_hits, len(_snapshot_ids()))
 
 
 class Acceptance2CompletenessGuardTests(unittest.TestCase):
@@ -472,7 +476,7 @@ class QuickFacePolicyTests(unittest.TestCase):
 
     def test_excluded_set_equals_the_evaluation_c1_list(self):
         self.assertEqual(set(qr.excluded_ids()), set(EVAL_C1_EXCLUDED))
-        self.assertEqual(len(qr.excluded_ids()), 25)
+        self.assertEqual(len(qr.excluded_ids()), len(EVAL_C1_EXCLUDED))
 
     def test_engine_product_gate_parse_matches_the_live_constant(self):
         import verify_workflow as vw  # heavy import confined to this assertion
@@ -483,7 +487,7 @@ class QuickFacePolicyTests(unittest.TestCase):
     def test_quick_face_is_the_complement_of_the_exclusion_set(self):
         quick = set(qr.quick_face_ids())
         excluded = set(qr.excluded_ids())
-        self.assertEqual(len(quick), 45)
+        self.assertEqual(len(quick), len(_snapshot_ids()) - len(excluded))
         self.assertEqual(quick | excluded, set(_snapshot_ids()))
         self.assertEqual(quick & excluded, set())
         for spec in qr.all_segments():
@@ -618,10 +622,12 @@ class CarrierDisciplineTests(unittest.TestCase):
         self.assertNotIn("set_defaults", body)
 
     def test_engine_segment_census_is_unchanged_by_this_slice(self):
-        """The 70-segment census and the CLI key census still hold (no engine edit)."""
+        """The segment census and the CLI key census still hold (no engine edit)."""
         data = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
-        self.assertEqual(len(qr.discover_engine_segment_ids()), 70)
-        self.assertEqual(data["faces"]["check_segments"]["count"], 70)
+        self.assertEqual(len(qr.discover_engine_segment_ids()),
+                         len(_snapshot_ids()))
+        self.assertEqual(data["faces"]["check_segments"]["count"],
+                         len(_snapshot_ids()))
         self.assertEqual(data["faces"]["cli_dispatch"]["key_count"], len(data["faces"]["cli_dispatch"]["keys"]))
 
     def test_registry_module_body_declares_no_import_time_io(self):
@@ -703,7 +709,7 @@ class CensusIntegrityTests(unittest.TestCase):
 
     def test_live_census_holds_unique_ids(self):
         observed = qr.discover_engine_segment_ids()
-        self.assertEqual(len(observed), 70)
+        self.assertEqual(len(observed), len(_snapshot_ids()))
         self.assertEqual(len(observed), len(set(observed)))
 
     def test_duplicate_section_comments_fail_closed(self):
@@ -894,10 +900,10 @@ class FailClosedBranchTests(unittest.TestCase):
             )
             self.assertEqual(qr.discover_product_gate_ids(path), ("7", "31"))
 
-    def test_live_product_gate_declaration_holds_twenty_five_unique_ids(self):
+    def test_live_product_gate_declaration_holds_unique_ids(self):
         ids = qr.discover_product_gate_ids()
-        self.assertEqual(len(ids), 25)
-        self.assertEqual(len(set(ids)), 25)
+        self.assertEqual(len(ids), len(set(ids)))
+        self.assertEqual(len(ids), len(qr.excluded_ids()))
 
     def test_snapshot_loader_fails_closed_on_count_mismatch(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -919,7 +925,9 @@ class FixtureDrivenGuardTests(unittest.TestCase):
             self.assertTrue(
                 any("41" in w and qr.REASON_UNDECLARED_SEGMENT in w for w in report.warnings)
             )
-            self.assertEqual(len(report.observed), 71)
+            # Real engine segments + the one the fixture adds — derived, so a
+            # deliberate contract change never silently invalidates the claim.
+            self.assertEqual(len(report.observed), len(_snapshot_ids()) + 1)
 
     def test_guard_stays_green_on_a_fixture_engine_without_new_segments(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -943,7 +951,8 @@ class FixtureDrivenGuardTests(unittest.TestCase):
 
     def test_count_mismatch_guard_accepts_a_matching_fixture_snapshot(self):
         with tempfile.TemporaryDirectory() as tmp:
-            fixture = _write_snapshot(Path(tmp), count=70, ids=list(_snapshot_ids()))
+            ids = list(_snapshot_ids())
+            fixture = _write_snapshot(Path(tmp), count=len(ids), ids=ids)
             self.assertEqual(qr.load_frozen_snapshot_ids(fixture), tuple(_snapshot_ids()))
             self.assertTrue(
                 qr.reconcile_snapshot(snapshot_ids=tuple(_snapshot_ids())).ok

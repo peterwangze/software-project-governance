@@ -1,7 +1,7 @@
 {
   "faces": {
     "check_segments": {
-      "count": 70,
+      "count": 71,
       "ids": [
         "1",
         "2",
@@ -59,6 +59,7 @@
         "28s",
         "28t",
         "28u",
+        "28v",
         "29",
         "30",
         "30b",
@@ -124,6 +125,7 @@
         "28s": "Governance Data Size (FIX-160)",
         "28t": "README Claim→Evidence Levels (FEAT-014)",
         "28u": "DSH Preset Session Smoke (FEAT-015)",
+        "28v": "DSH Preset Schema Compat",
         "29": "M5 Runtime Triggers (FIX-174)",
         "3": "Gate Consistency",
         "30": "Review Closure State Machine (FIX-174)",
@@ -162,8 +164,8 @@
           "dynamic-lifecycle-migration"
         ]
       },
-      "handler_count": 79,
-      "key_count": 82,
+      "handler_count": 80,
+      "key_count": 83,
       "keys": [
         "agent-locks-acquire",
         "agent-runtime-e2e",
@@ -180,6 +182,7 @@
         "check-complexity",
         "check-cross-references",
         "check-deterministic-scaffolds",
+        "check-dsh-preset-compat",
         "check-dsh-preset-smoke",
         "check-dsh-skills-manifest",
         "check-duplicate-code",
@@ -387,14 +390,14 @@
   },
   "generated": {
     "generator_relpath": "skills/software-project-governance/infra/contract_matrix/generator.py",
-    "git_head": "385b83b0ce4fa9a87d1be0b4c8e6f728a2868c30",
+    "git_head": "031f0fa3bfd5c5d86b0144cdf6674dd48ff241e9",
     "python": {
       "family": "3.14",
       "implementation": "cpython",
       "platform": "win32",
       "version": "3.14.3"
     },
-    "timestamp_utc": "2026-09-10T11:15:16+00:00"
+    "timestamp_utc": "2026-09-11T15:01:08+00:00"
   },
   "python_family_pins": [
     {

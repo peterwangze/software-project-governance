@@ -82,6 +82,16 @@ def _snapshot_ids():
     return tuple(data["faces"]["check_segments"]["ids"])
 
 
+def _not_quick_count():
+    """Policy-face size, derived from the registry — never re-spelled.
+
+    The claim these assertions make is structural ("the quick face is exactly
+    the complement of the product-gate exclusion set"), so a deliberate
+    contract change must not force edits to the numbers that express it.
+    """
+    return len(qr.excluded_ids())
+
+
 def _selection():
     return qs.select()
 
@@ -110,8 +120,8 @@ class Acceptance1ShadowChannelTests(unittest.TestCase):
     def test_selection_covers_every_registry_segment_without_overlap(self):
         selection = _selection()
         chosen, not_quick = set(selection.chosen), set(selection.not_quick)
-        self.assertEqual(len(chosen), 45)
-        self.assertEqual(len(not_quick), 25)
+        self.assertEqual(len(chosen), len(_snapshot_ids()) - _not_quick_count())
+        self.assertEqual(len(not_quick), _not_quick_count())
         self.assertEqual(chosen & not_quick, set())
         self.assertEqual(chosen | not_quick, set(_snapshot_ids()))
         self.assertEqual(qs.selection_contract_violations(selection), ())
@@ -180,7 +190,7 @@ class Acceptance1ShadowChannelTests(unittest.TestCase):
         lines = qs.shadow_dry_run_lines(_selection())
         joined = "\n".join(lines)
         self.assertIn("chosen=45", joined)
-        self.assertIn("not-run=25", joined)
+        self.assertIn(f"not-run={_not_quick_count()}", joined)
         self.assertIn("PLUGIN_GIT_FACT_SOURCE", joined)
         self.assertIn("fingerprints:", joined)
 
@@ -214,7 +224,7 @@ class Acceptance2FourStateGuardTests(unittest.TestCase):
     def test_not_run_segments_do_not_zero_or_reduce_the_issue_count(self):
         """§2.4 硬约束 1：25 段 NOT_RUN 而 N 仍为执行面实测值。"""
         report = self._report(issues=4, issue_map={"3": ["[WARN] a"], "19": ["[FAIL] b"]})
-        self.assertEqual(report.not_run, 25)
+        self.assertEqual(report.not_run, _not_quick_count())
         self.assertEqual(report.failed, 2)
         self.assertEqual(report.passed, 43)
         self.assertEqual(report.issues, 4)
@@ -284,7 +294,7 @@ class Acceptance2FourStateGuardTests(unittest.TestCase):
                               skip_not_quick=False)
         report = qs.quick_report(text, selection=self.selection)
         mismatched = [s for s in report.segments if s.reason == qs.REASON_POLICY_MISMATCH]
-        self.assertEqual(len(mismatched), 25)
+        self.assertEqual(len(mismatched), _not_quick_count())
         self.assertEqual(report.not_run, 0)
 
     def test_missing_section_for_a_quick_face_segment_is_undetermined(self):
@@ -293,13 +303,15 @@ class Acceptance2FourStateGuardTests(unittest.TestCase):
         report = qs.quick_report(text, selection=self.selection)
         missing = [s for s in report.segments if s.reason == qs.REASON_NO_SECTION]
         self.assertEqual([s.check_id for s in missing], ["2"])
-        self.assertEqual(report.not_run, 25)
+        self.assertEqual(report.not_run, _not_quick_count())
 
     def test_report_lines_stay_bounded_and_disclose_every_not_run_segment(self):
         report = self._report(issues=1, issue_map={"3": ["[WARN] x"]})
         lines = report.lines()
         self.assertTrue(lines[0].startswith("Governance: "))
-        self.assertTrue(any(line.startswith("[NOT_RUN] 25 segment(s)") for line in lines))
+        self.assertTrue(any(
+            line.startswith(f"[NOT_RUN] {_not_quick_count()} segment(s)")
+            for line in lines))
         self.assertLess(len(lines), 12, "quick 输出必须有界（FIX-278 G1 预算）")
         self.assertTrue(any(line.startswith("[WARN] Check 3") for line in lines))
 
@@ -394,7 +406,7 @@ class Acceptance3DefaultPathTests(unittest.TestCase):
             out = buf.getvalue()
             eng.assert_called_once()
             self.assertIn("1 issues (quick)", out)
-            self.assertIn("44 passed / 1 failed / 25 not-run", out)
+            self.assertIn(f"44 passed / 1 failed / {_not_quick_count()} not-run", out)
             self.assertIn("NOT_RUN", out)
 
     def test_quick_calls_the_engine_with_the_product_gate_disabled(self):

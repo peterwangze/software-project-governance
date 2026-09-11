@@ -244,8 +244,15 @@ class R5RegistrationIntegrityTests(unittest.TestCase):
         violations, report = ar.check_r5(_SKILL_ROOT)
         self.assertEqual(violations, [])
         self.assertEqual(report["status"], "PASS")
-        self.assertEqual(report["frozen_cli_keys"], 82)  # 82 since FEAT-013 (agent-locks-acquire)
-        self.assertEqual(report["frozen_segments"], 70)
+        # Both faces are read from the FEAT-020 snapshot rather than re-spelled:
+        # the claim is "R5 consumes the live snapshot", and every deliberate
+        # contract change regenerates that snapshot (generator.py --regen).
+        faces = json.loads(
+            (SNAPSHOT).read_text(encoding="utf-8"))["faces"]
+        self.assertEqual(report["frozen_cli_keys"],
+                         faces["cli_dispatch"]["key_count"])
+        self.assertEqual(report["frozen_segments"],
+                         faces["check_segments"]["count"])
 
     def test_r5_missing_snapshot_skips_with_disclosure(self):
         """Packet acceptance ③ — snapshot missing → SKIP+披露, never a false FAIL."""

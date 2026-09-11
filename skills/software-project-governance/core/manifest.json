@@ -208,6 +208,14 @@
         "type": "file"
       },
       {
+        "path": "skills/software-project-governance/infra/dsh_compat.py",
+        "type": "file"
+      },
+      {
+        "path": "skills/software-project-governance/infra/tests/test_dsh_compat.py",
+        "type": "file"
+      },
+      {
         "path": "commands/change-triage.md",
         "type": "file"
       },

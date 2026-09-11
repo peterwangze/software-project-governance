@@ -4,8 +4,8 @@ The composition-root prototype of the 0.80.0 six-layer architecture: two
 static declaration tables plus a controlled loader, so a command can be
 selected and assembled **without** importing the monolith.
 
-    COMMAND_SPECS   82 dispatch keys → handler dotted paths (§3.5 step 3)
-    CHECK_SPECS     70 CheckIDs → ``contracts.CheckSpec`` rows (§3.6 / §9.1)
+    COMMAND_SPECS   83 dispatch keys → handler dotted paths (§3.5 step 3)
+    CHECK_SPECS     71 CheckIDs → ``contracts.CheckSpec`` rows (§3.6 / §9.1)
     LOADER_WHITELIST  the closed set of modules a declaration may name
     assemble()      L6 组合根雏形: resolve ONE command's handler on demand
 
@@ -41,7 +41,7 @@ Caliber decisions (each anchored to a measurement, not to preference):
      ``checks.evidence_domain.check_evidence_completeness``). The L0 validator
      (``contracts._require_loader``) requires at least one dot and rejects
      root-level names, while the engine's dispatch table holds bare handler
-     names and the 70 segments' entry points live in root-level modules
+     names and the 71 segments' entry points live in root-level modules
      (``verify_workflow``) as well as packages. A ``module.attr`` dotted path
      is the only form that is both contract-legal and truthfully resolvable in
      the engine's own import namespace (infra dir on ``sys.path``). Prefixing
@@ -194,6 +194,7 @@ LOADER_WHITELIST: Tuple[str, ...] = (
     "checks.snapshot_domain",
     "checks.triage_domain",
     "checks.version",
+    "dsh_compat",
 )
 """Closed declaration of loadable modules (§9.1 controlled loader whitelist).
 
@@ -247,6 +248,8 @@ _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
     ("check-cross-references", "verify_workflow.cmd_check_cross_references"),
     ("check-deterministic-scaffolds",
      "verify_workflow.cmd_check_deterministic_scaffolds"),
+    ("check-dsh-preset-compat",
+     "verify_workflow.cmd_check_dsh_preset_compat"),
     ("check-dsh-preset-smoke", "verify_workflow.cmd_check_dsh_preset_smoke"),
     ("check-dsh-skills-manifest",
      "verify_workflow.cmd_check_dsh_skills_manifest"),
@@ -338,12 +341,12 @@ _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
     ("verify", "verify_workflow.cmd_verify"),
     ("web-console", "verify_workflow.cmd_web_console"),
 )
-"""82 dispatch keys from the FEAT-020 frozen face, each with the module that
+"""83 dispatch keys from the FEAT-020 frozen face, each with the module that
 *defines* its handler (machine-derived: the ``commands`` dict of ``main()``
 cross-referenced with the defining module of every handler name — 4 keys are
-already outside the engine, the other 78 ride the monolith)."""
+already outside the engine, the other 79 ride the monolith)."""
 
-# ── check declaration: 70 segments → entry dotted path ──────────────────────
+# ── check declaration: 71 segments → entry dotted path ──────────────────────
 
 _SEGMENT_LOADERS: Tuple[Tuple[str, str], ...] = (
     ("1", "checks.evidence_domain.check_evidence_completeness"),
@@ -402,6 +405,7 @@ _SEGMENT_LOADERS: Tuple[Tuple[str, str], ...] = (
     ("28s", "verify_workflow.check_governance_data_size"),
     ("28t", "verify_workflow.check_readme_claim_evidence_levels"),
     ("28u", "verify_workflow.check_dsh_preset_smoke"),
+    ("28v", "dsh_compat.emit_check_section"),
     ("29", "checks.review_domain.check_m5_runtime_triggers"),
     ("30", "checks.review_domain.check_review_closure"),
     ("30b", "checks.review_domain.check_loop_wiring_call_sites"),
@@ -417,11 +421,11 @@ _SEGMENT_LOADERS: Tuple[Tuple[str, str], ...] = (
     ("39", "checks.triage_domain.check_r1_completion_gate"),
     ("40", "verify_workflow.check_dsh_skills_manifest"),
 )
-"""70 segments ↔ the entry point the engine's section actually calls.
+"""71 segments ↔ the entry point the engine's section actually calls.
 
 Machine-derived in two passes: the section's single check-entry call name
 (``check_*`` / ``scan_*``) cross-referenced with that symbol's defining infra
-module. 68 of 70 resolve uniquely; ``24`` / ``28b`` name the implementing
+module. 69 of 71 resolve uniquely; ``24`` / ``28b`` name the implementing
 domain module behind an engine delegating wrapper (``DELEGATED_LOADERS``).
 """
 

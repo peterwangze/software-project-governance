@@ -751,8 +751,10 @@ def apply_exemptions(violations: List[dict], exemptions: List[dict],
 R1_DESIGN_ANCHOR_NOTE = (
     "facts-0.80.0 §3.1 design anchor was 24,252 (2026-09-09 HEAD); FEAT-019 "
     "packet mandates 实测为准 at regen time (intervening engine deltas: "
-    "FIX-300 + FEAT-019 dispatch wiring). 只降不升 semantics unchanged; the "
-    "wiring lines are registered as the R1 self-bootstrap exemption."
+    "FIX-300 + FEAT-019 dispatch wiring, then FIX-309 Check 28v wiring: 24,356"
+    "→24,399, whose rendering was moved into infra/dsh_compat.py so the R4 "
+    "print budget stayed at 1,311). 只降不升 semantics unchanged; the wiring "
+    "lines are registered as the R1 self-bootstrap exemption."
 )
 
 DEFAULT_EXEMPTIONS: List[dict] = [

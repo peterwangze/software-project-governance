@@ -14701,6 +14701,7 @@ _PLUGIN_PRODUCT_CHECK_IDS = frozenset({
     "Check 28r",  # Complexity
     "Check 28t",  # README Claim→Evidence Levels（插件包本体 README）
     "Check 28u",  # DSH Preset Session Smoke（插件包本体 launch.py + presets/）
+    "Check 28v",  # DSH Preset Schema Compat（插件 presets/ + adapters/dsh 组合 ↔ 安装态 dsh schema）
     "Check 30b",  # Loop wiring call sites（插件 infra AST 扫描）
     "Check 31",   # Loop Runtime Claim Gate（插件树扫描 + identity attestation）
     "Check 33",   # Injection Contract（插件 persona/SKILL/AGENTS 锚点）
@@ -14765,6 +14766,7 @@ _PRODUCT_GATE_LABELS = {
     "Check 28r": "Complexity (ArchGuard/REQ-101)",
     "Check 28t": "README Claim→Evidence Levels (FEAT-014)",
     "Check 28u": "DSH Preset Session Smoke (FEAT-015)",
+    "Check 28v": "DSH Preset Schema Compat",
     "Check 30b": "Loop wiring call sites",
     "Check 31": "Loop Runtime Claim Gate",
     "Check 33": "Injection Contract",
@@ -16446,6 +16448,24 @@ def _run_full_engine_checks(args):
     else:
         _print_product_gate_skipped("Check 28u")
     print("└──────────────────────────────────────────────────────┘")
+
+    # ── 28v. DSH Preset Schema Compat ──
+    # A dsh upgrade silently invalidated one shipped-preset row (key `text` vs
+    # dsh-persona's required `prefix`) and the WHOLE preset mount was rejected,
+    # so users could not start a session. Neither Check 40 nor Check 28u
+    # compares a composition row against the plugin set a mount actually uses;
+    # this gate does, with the loader's own dialect/evaluate and the resolved
+    # cordis `resolveConfig` (no schema is copied). Fact source = the plugin
+    # package's own compositions → PLUGIN_PRODUCT (FIX-270); no node / no
+    # resolvable plugin set → NOT_RUN, never a silent PASS. Body rendering and
+    # the full rationale live in dsh_compat (R4: orchestration output belongs
+    # to the render layer).
+    if _product_gate_active(args):
+        from dsh_compat import emit_check_section
+
+        all_issues += emit_check_section()
+    else:
+        _print_product_gate_skipped("Check 28v")
 
     # ── Summary ──
     print(f"\n┌─ Governance Health Summary ──────────────────────────┐")
@@ -21283,6 +21303,18 @@ def cmd_check_dsh_preset_smoke(args):
     print()
 
 
+def cmd_check_dsh_preset_compat(args):
+    """Validate preset composition rows against the resolved plugin set's schemas.
+
+    Thin dispatch only — rendering lives in ``dsh_compat`` (R4: orchestration
+    output belongs to the render layer, and this new engine function starts
+    with a print budget of zero).
+    """
+    from dsh_compat import run_cli
+
+    return run_cli(fail_on_issues=getattr(args, "fail_on_issues", False))
+
+
 def cmd_release_ledger(args):
     """Validate declarative per-version release manifests and live Git facts."""
     result = validate_release_ledger(
@@ -23749,6 +23781,16 @@ def main(argv=None):
     csmk_p.add_argument("--fail-on-issues", action="store_true",
                         help="Exit with non-zero code if the isolated smoke fails")
 
+    # check-dsh-preset-compat (DSH preset composition ↔ installed schema guard)
+    cdpc_p = subparsers.add_parser(
+        "check-dsh-preset-compat",
+        help="Validate every preset composition row against the INSTALLED "
+             "dsh's own Config schemas (loader YAML dialect + loader evaluate "
+             "+ cordis resolveConfig); NOT_RUN when no node / no dsh install",
+    )
+    cdpc_p.add_argument("--fail-on-issues", action="store_true",
+                        help="Exit with non-zero code if a row is rejected by the installed schemas")
+
     # check-hot-fact-source (FIX-087)
     chfs_p = subparsers.add_parser(
         "check-hot-fact-source",
@@ -24304,6 +24346,7 @@ def main(argv=None):
         "check-injection-contract": cmd_check_injection_contract,
         "check-dsh-skills-manifest": cmd_check_dsh_skills_manifest,
         "check-dsh-preset-smoke": cmd_check_dsh_preset_smoke,
+        "check-dsh-preset-compat": cmd_check_dsh_preset_compat,
         "check-hot-fact-source": cmd_check_hot_fact_source,
         "check-runtime-readiness-matrix": cmd_check_runtime_readiness_matrix,
         "check-first-session-measurement": cmd_check_first_session_measurement,

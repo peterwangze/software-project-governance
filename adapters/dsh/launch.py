@@ -73,6 +73,9 @@ MANIFEST_PATH = ADAPTER_DIR / "adapter-manifest.json"
 COMPOSITION_TEMPLATE = ADAPTER_DIR / "agent.cordis.yml.template"
 PRESET_METADATA = ADAPTER_DIR / "preset.yml"
 BOOTSTRAP_TEMPLATE = ADAPTER_DIR / "AGENTS.md.template"
+# The installed-schema row check lives with the rest of the governance infra
+# (single implementation, shared with check-governance Check 28v).
+INFRA_DIR = ROOT / "skills" / "software-project-governance" / "infra"
 
 SKILLS_TOKEN = "__GOVERNANCE_SKILLS_ROOT__"
 SHIMS_TOKEN = "__GOVERNANCE_SHIMS_ROOT__"
@@ -411,13 +414,72 @@ def _repo_root_for_preset(preset_dir: Path, catalog_root):
     return None
 
 
+def _validate_composition_rows(composition_path: Path) -> dict:
+    """Validate every enabled row against the INSTALLED dsh's own schemas.
+
+    Thin delegation to ``skills/software-project-governance/infra/dsh_compat.py``
+    — the single implementation of "parse with the loader's YAML dialect,
+    interpolate ``!!js`` with the loader's ``evaluate``, run the installed
+    cordis ``resolveConfig``". No schema is copied here, so this gate and
+    `check-governance` Check 28v can never disagree about what a row means.
+
+    Why it lives here: this function's caller (``--smoke``) is the repo's own
+    "preset loading" verifier, yet it only resolved ``customSkillDirs`` and the
+    ``/governance`` shim — it never parsed the composition into rows and never
+    validated config, which is exactly why the ``text``-vs-``prefix`` defect
+    (whole preset mount rejected) escaped it.
+
+    Returns ``{"verdict", "reason", "issues", "rows_enabled", "install",
+    "schema_checked"}``. An unreachable harness (no node / no discoverable dsh
+    install) is ``NOT_RUN`` — never FAIL and never a silent PASS — so the smoke
+    gate stays usable on a machine without dsh (FEAT-015 NOT_RUN policy).
+    """
+    fallback = {
+        "verdict": "NOT_RUN",
+        "reason": "row/config guard unavailable",
+        "issues": [],
+        "rows_enabled": 0,
+        "install": None,
+        "schema_checked": False,
+    }
+    try:
+        if str(INFRA_DIR) not in sys.path:
+            sys.path.insert(0, str(INFRA_DIR))
+        import dsh_compat
+    except Exception as exc:  # noqa: BLE001 — disclosure, never a crash
+        fallback["reason"] = f"guard module unavailable: {type(exc).__name__}: {exc}"
+        return fallback
+    try:
+        composition_path.resolve().relative_to(ROOT)
+        probe_root = ROOT
+    except (ValueError, OSError):
+        probe_root = composition_path.parent
+    try:
+        report = dsh_compat.check_dsh_preset_compat(
+            root=probe_root, compositions=[composition_path])
+    except Exception as exc:  # noqa: BLE001 — disclosure, never a crash
+        fallback["reason"] = f"guard raised: {type(exc).__name__}: {exc}"
+        return fallback
+    return {
+        "verdict": report["verdict"],
+        "reason": report["reason"],
+        "issues": list(report["issues"]),
+        "rows_enabled": report["rows_enabled"],
+        "install": (report.get("install") or {}).get("node_modules"),
+        "schema_checked": report["verdict"] != "NOT_RUN",
+    }
+
+
 def verify_preset_loading(preset_dir: Path, repo_root=None) -> dict:
     """Resolve a preset's skill roots + the ``/governance`` gesture (read-only).
 
     Pure verification over an installed or shipped preset directory. Returns
     ``{"verdict": "PASS"|"FAIL", "issues": [...], "skill_roots": [...],
-    "skill_catalog", "gesture_shim", "gesture_target", "repo_root"}`` with
-    POSIX-form paths (the report and assertions compare them literally).
+    "skill_catalog", "gesture_shim", "gesture_target", "repo_root",
+    "row_validation"}`` with POSIX-form paths (the report and assertions
+    compare them literally). ``row_validation`` records the installed-schema
+    row check (see :func:`_validate_composition_rows`); its findings are folded
+    into ``issues`` only when it reaches FAIL.
     """
     preset_dir = Path(preset_dir)
     result = {
@@ -428,6 +490,7 @@ def verify_preset_loading(preset_dir: Path, repo_root=None) -> dict:
         "gesture_shim": None,
         "gesture_target": None,
         "repo_root": None,
+        "row_validation": None,
     }
     composition_path = preset_dir / "agent.cordis.yml"
     if not composition_path.is_file():
@@ -436,6 +499,11 @@ def verify_preset_loading(preset_dir: Path, repo_root=None) -> dict:
         result["verdict"] = "FAIL"
         return result
     composition = composition_path.read_text(encoding="utf-8")
+    result["row_validation"] = _validate_composition_rows(composition_path)
+    if result["row_validation"]["verdict"] == "FAIL":
+        result["issues"].extend(
+            f"preset row/config rejected by the installed dsh schemas: {issue}"
+            for issue in result["row_validation"]["issues"])
     entries = _custom_skill_dir_entries(composition)
     if not entries:
         result["issues"].append(
@@ -525,6 +593,11 @@ def _print_surface_report(label, surface):
     print(f"[SMOKE]   gesture shim   : {surface['gesture_shim'] or 'MISSING'}")
     print(f"[SMOKE]   gesture target : "
           f"{surface['gesture_target'] or 'UNRESOLVED'}")
+    row_validation = surface.get("row_validation") or {}
+    print(f"[SMOKE]   row schemas    : "
+          f"{row_validation.get('verdict', 'NOT_RUN')} "
+          f"({row_validation.get('rows_enabled', 0)} enabled row(s) validated "
+          f"against the installed dsh; {row_validation.get('reason', '-')})")
     print(f"[SMOKE]   verdict        : {surface['verdict']}")
     for issue in surface["issues"]:
         print(f"[SMOKE]   [FAIL] {issue}")

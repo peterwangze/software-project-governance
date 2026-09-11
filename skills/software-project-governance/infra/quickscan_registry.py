@@ -539,6 +539,10 @@ SEGMENTS = (
         "plugin:asset:adapters/dsh/launch.py",
         "plugin:asset:presets/**",
     ), _excluded("PLUGIN_PACKAGE_ASSET")),
+    SegmentSpec("28v", "distribution", (
+        "plugin:asset:presets/**",
+        "plugin:asset:adapters/dsh/agent.cordis.yml.template",
+    ), _excluded("PLUGIN_PACKAGE_ASSET")),
     # ── C3 待判定 ④：事实源根 = 宿主面（宿主治理证据语料）──
     SegmentSpec("29", "protocol", (
         "host:governance:.governance/evidence-log.md",

@@ -77,49 +77,134 @@ import sys
 import time
 import urllib.request
 from pathlib import Path
+from typing import Optional
 from urllib.parse import urljoin, urlparse
 
 ROOT = Path(__file__).resolve().parents[2]
 ADAPTER_DIR = ROOT / "adapters" / "dsh"
 MANIFEST_PATH = ADAPTER_DIR / "adapter-manifest.json"
-# The package's preset payload: the ONE composition template + its metadata.
-# Nothing here is a copy of the shared core — the template's customSkillDirs
-# entries are rendered to ABSOLUTE paths into this repository.
-PACKAGE_PRESET = ROOT / "agent-presets" / "governance"
-COMPOSITION_TEMPLATE = PACKAGE_PRESET / "agent.cordis.yml.template"
-PRESET_METADATA = PACKAGE_PRESET / "preset.yml"
 BOOTSTRAP_TEMPLATE = ADAPTER_DIR / "AGENTS.md.template"
 # The installed-schema row check lives with the rest of the governance infra
 # (single implementation, shared with check-governance Check 28v).
 INFRA_DIR = ROOT / "skills" / "software-project-governance" / "infra"
 
-# Render contract, shared verbatim with `lib/index.js` (`TOKEN_PATHS`): token →
-# package-relative path, `""` meaning the package root itself. Both renderers
-# MUST stay identical or `dsh plugin add` and `--install` would write different
-# presets for the same package version.
+# dsh facts come from the single host-dependency contract (design §2.5 C-2):
+# the preset id, the preset payload paths, the render token table, the user
+# preset root, the `DSH_HOME` variable name and the marker file names are all
+# declared there in `own.preset.*`, `own.render.tokens`, `host.home.*` and
+# `host.env.*`. This launcher holds the declared symbols, never their values —
+# a second copy of a value is a second source of truth, which is the defect
+# class the contract exists to remove. The contract is read **lazily** (see
+# `_contract()`), so importing this module never depends on the file being
+# present and no inlined fallback copy is needed to keep the import working.
+#
+# Render contract, shared verbatim with `lib/index.js`: token → package-relative
+# path, `""` meaning the package root itself. Both renderers read the same
+# `own.render.tokens` map, so `dsh plugin add` and `--install` cannot write
+# different presets for the same package version.
 SKILLS_TOKEN = "__GOVERNANCE_SKILLS_ROOT__"
 SHIMS_TOKEN = "__GOVERNANCE_SHIMS_ROOT__"
 REPO_TOKEN = "__GOVERNANCE_REPO_ROOT__"
-TOKEN_PATHS = {
-    SKILLS_TOKEN: ROOT / "skills",
-    SHIMS_TOKEN: ADAPTER_DIR / "skill-shims",
-    REPO_TOKEN: ROOT,
-}
 
+#: Declared preset facts and the contract path each one is read from. The
+#: values are resolved at call time; the names are the traceability anchors the
+#: contract self-check compares against (`test_dsh_contract.py`).
 PRESET_ID = "governance"
 PRESET_MARKER = ".dsh-bundle-version"
 SKILL_ROOT_MARKER = "skill-root.txt"
 
+CONTRACT_BINDING = {
+    "PRESET_ID": "own.preset.id",
+    "PRESET_MARKER": "own.preset.version_marker",
+    "SKILL_ROOT_MARKER": "own.preset.skill_root_marker",
+    "PACKAGE_PRESET": "own.preset.payload_dir",
+    "COMPOSITION_TEMPLATE": "own.preset.template",
+    "PRESET_METADATA": "own.preset.metadata",
+    "COMPOSITION_FILENAME": "host.home.composition_file",
+    "PRESET_DIR_NAME": "host.home.user_preset_dir",
+    "HOME_VAR": "host.env.home_var",
+    "HOME_FALLBACK": "host.env.write_side.fallback",
+    "TOKENS": "own.render.tokens",
+    "LEFTOVER_SCAN": "own.render.leftover_scan",
+}
+
+#: Memoized contract document; `None` until the first declared fact is read.
+_CONTRACT: Optional[dict] = None
+
+
+def _fact(name: str):
+    """Value of one declared dsh fact, resolved from the contract.
+
+    The import is deferred to the first call so this module stays importable on
+    its own, and the contract is loaded once per process. A missing, unreadable,
+    malformed or schema-unknown contract raises — the caller turns that into an
+    actionable message and a non-zero exit; it is never absorbed by falling back
+    to a built-in copy (design §2.5 C-2).
+    """
+    global _CONTRACT
+    if str(INFRA_DIR) not in sys.path:
+        sys.path.insert(0, str(INFRA_DIR))
+    import dsh_contract  # noqa: PLC0415 — deliberate: lazy (see docstring)
+
+    if _CONTRACT is None:
+        _CONTRACT = dsh_contract.load_contract()
+    path = CONTRACT_BINDING[name]
+    value = _CONTRACT
+    for key in path.split("."):
+        if not isinstance(value, dict) or key not in value:
+            raise dsh_contract.ContractMalformed(
+                f"ContractMalformed: `{path}` is not declared "
+                f"(needed for {name}) in contract "
+                f"{dsh_contract.contract_path()}")
+        value = value[key]
+    return value
+
+
+def _preset_payload_dir() -> Path:
+    return ROOT / Path(_fact("PACKAGE_PRESET"))
+
+
+def _composition_template() -> Path:
+    return ROOT / Path(_fact("COMPOSITION_TEMPLATE"))
+
+
+def _preset_metadata() -> Path:
+    return ROOT / Path(_fact("PRESET_METADATA"))
+
+
+def _composition_filename() -> str:
+    return _fact("COMPOSITION_FILENAME")
+
+
+def _preset_dir_name() -> str:
+    return _fact("PRESET_DIR_NAME")
+
+
+def _token_paths() -> dict:
+    """Token → absolute target, resolved from ``own.render.tokens``.
+
+    The contract declares each token's package-relative path (``""`` = the
+    package root itself), so the render map is derived rather than restated.
+    """
+    return {token: (ROOT / Path(relative) if relative else ROOT)
+            for token, relative in _fact("TOKENS").items()}
+
+
+def _home_fallback_name() -> str:
+    """Last path segment of the declared ``$DSH_HOME`` fallback (`<home>/.dsh`)."""
+    declared = str(_fact("HOME_FALLBACK"))
+    return declared.replace("\\", "/").rsplit("/", 1)[-1]
+
 
 def dsh_home() -> Path:
-    env = os.environ.get("DSH_HOME")
+    env = os.environ.get(_fact("HOME_VAR"))
     if env:
         return Path(env).expanduser()
-    return Path.home() / ".dsh"
+    return Path.home() / Path(_fact("HOME_FALLBACK")).name
 
 
 def preset_dir() -> Path:
-    return dsh_home() / ".agent-presets" / PRESET_ID
+    return dsh_home() / _preset_dir_name() / _fact("PRESET_ID")
 
 
 def package_version() -> str:
@@ -136,21 +221,24 @@ def render_composition() -> str:
 
     Returns ``""`` when the template is missing or a token survives
     substitution — the caller reports it instead of installing a composition
-    whose skill roots would silently resolve against the dsh process CWD.
+    whose skill roots would silently resolve against the dsh process CWD. The
+    ``__…__`` scan is the declared ``own.render.leftover_scan`` set, so a token
+    this renderer does not know is reported too.
 
     Line endings are LF by construction: ``read_text`` uses universal newlines
     (CRLF → LF), which is what ``lib/index.js`` normalizes to as well, so the
     two renderers produce byte-identical text for the same package root.
     """
     try:
-        template = COMPOSITION_TEMPLATE.read_text(encoding="utf-8")
+        template = _composition_template().read_text(encoding="utf-8")
     except OSError:
         return ""
     composition = template
-    for token, path in TOKEN_PATHS.items():
+    tokens = _token_paths()
+    for token, path in tokens.items():
         value = str(path.resolve()).replace("\\", "/")
         composition = composition.replace(token, value)
-    if any(token in composition for token in TOKEN_PATHS):
+    if re.search(_fact("LEFTOVER_SCAN"), composition):
         return ""
     return composition
 
@@ -193,20 +281,20 @@ def write_rendered_preset(destination: Path) -> bool:
     code path that installs it.
     """
     composition = render_composition()
-    if not composition or not PRESET_METADATA.is_file():
+    if not composition or not _preset_metadata().is_file():
         return False
     destination.mkdir(parents=True, exist_ok=True)
     # newline="\n": the rendered composition is LF on every platform, matching
     # `lib/index.js` (YAML is newline-agnostic; parity is what matters).
-    (destination / "agent.cordis.yml").write_text(
+    (destination / _composition_filename()).write_text(
         composition, encoding="utf-8", newline="\n")
-    shutil.copyfile(PRESET_METADATA, destination / "preset.yml")
-    (destination / PRESET_MARKER).write_text(
+    shutil.copyfile(_preset_metadata(), destination / "preset.yml")
+    (destination / _fact("PRESET_MARKER")).write_text(
         package_version() + "\n", encoding="utf-8")
     # Hook discovery marker: the repo hooks' find_spg_home reads this file to
     # resolve the workflow home under dsh, so installed project hooks keep
     # self-upgrading after `git pull` + `--sync`.
-    (destination / SKILL_ROOT_MARKER).write_text(
+    (destination / _fact("SKILL_ROOT_MARKER")).write_text(
         str(ROOT.resolve()).replace("\\", "/") + "\n", encoding="utf-8")
     return True
 
@@ -232,13 +320,13 @@ def install_preset(dry_run: bool = False) -> int:
     if dry_run:
         print(f"[DRY-RUN] dsh home       : {dsh_home()}")
         print(f"[DRY-RUN] preset dir     : {target}")
-        print(f"[DRY-RUN] composition tpl: {COMPOSITION_TEMPLATE}")
+        print(f"[DRY-RUN] composition tpl: {_composition_template()}")
         print(f"[DRY-RUN] render map     : "
               + ", ".join(f"{token} -> {str(path.resolve()).replace(chr(92), '/')}"
-                          for token, path in TOKEN_PATHS.items()))
+                          for token, path in _token_paths().items()))
         print(
-            "[DRY-RUN] planned write  : agent.cordis.yml (rendered), "
-            f"preset.yml, {PRESET_MARKER}, {SKILL_ROOT_MARKER} "
+            f"[DRY-RUN] planned write  : {_composition_filename()} (rendered), "
+            f"preset.yml, {_fact('PRESET_MARKER')}, {_fact('SKILL_ROOT_MARKER')} "
             "(staging + rename replace)"
         )
         print("[DRY-RUN] nothing written — re-run without --dry-run to install")
@@ -248,12 +336,12 @@ def install_preset(dry_run: bool = False) -> int:
     if not composition:
         print(
             f"ERROR: cannot render the composition — missing template or an "
-            f"unsubstituted token: {COMPOSITION_TEMPLATE}",
+            f"unsubstituted token: {_composition_template()}",
             file=sys.stderr,
         )
         return 1
-    if not PRESET_METADATA.is_file():
-        print(f"ERROR: preset metadata missing: {PRESET_METADATA}", file=sys.stderr)
+    if not _preset_metadata().is_file():
+        print(f"ERROR: preset metadata missing: {_preset_metadata()}", file=sys.stderr)
         return 1
 
     version = package_version()
@@ -264,19 +352,20 @@ def install_preset(dry_run: bool = False) -> int:
     shutil.rmtree(staging, ignore_errors=True)
     if not write_rendered_preset(staging):
         shutil.rmtree(staging, ignore_errors=True)
-        print(f"ERROR: rendering the preset failed: {COMPOSITION_TEMPLATE}",
+        print(f"ERROR: rendering the preset failed: {_composition_template()}",
               file=sys.stderr)
         return 1
     if target.exists():
         shutil.rmtree(target)
     staging.rename(target)
     print(f"preset written: {target}")
-    print(f"  template    : {COMPOSITION_TEMPLATE}")
-    print(f"  composition : {target / 'agent.cordis.yml'}")
+    print(f"  template    : {_composition_template()}")
+    print(f"  composition : {target / _composition_filename()}")
     print(f"  metadata    : {target / 'preset.yml'}")
-    print(f"  skill roots : {TOKEN_PATHS[SKILLS_TOKEN]} , {TOKEN_PATHS[SHIMS_TOKEN]}")
-    print(f"  version mark: {target / PRESET_MARKER} ({version})")
-    print(f"  skill-root  : {target / SKILL_ROOT_MARKER}")
+    targets = _token_paths()
+    print(f"  skill roots : {targets[SKILLS_TOKEN]} , {targets[SHIMS_TOKEN]}")
+    print(f"  version mark: {target / _fact('PRESET_MARKER')} ({version})")
+    print(f"  skill-root  : {target / _fact('SKILL_ROOT_MARKER')}")
     print(
         "Next: start a dsh session and select the '治理协调器' (governance) "
         "preset, or run `python adapters/dsh/launch.py --bootstrap-project "
@@ -295,7 +384,7 @@ def uninstall_preset(dry_run: bool = False) -> int:
     target = preset_dir()
     # Path-escape guard: the resolved target must sit directly under an
     # `.agent-presets` parent before anything is deleted.
-    if target.parent.name != ".agent-presets" or target.name != PRESET_ID:
+    if target.parent.name != _preset_dir_name() or target.name != _fact("PRESET_ID"):
         print(
             f"ERROR: refusing to uninstall unexpected path: {target}",
             file=sys.stderr,
@@ -360,7 +449,7 @@ def real_dsh_home() -> Path:
     The isolation guard compares the ambient ``DSH_HOME`` against this path, so
     an env override can never disguise the real home as "redirected".
     """
-    return Path.home() / ".dsh"
+    return Path.home() / _home_fallback_name()
 
 
 def _normcase_path(path: Path) -> str:
@@ -439,7 +528,7 @@ def _real_home_witness(home: Path) -> dict:
                 top_level.append(f"f:{path.name}:{stat.st_size}:{stat.st_mtime_ns}")
     return {
         "state": "present" if home.exists() else "absent",
-        "write_surface": _home_fingerprint(home / ".agent-presets")["entries"],
+        "write_surface": _home_fingerprint(home / _preset_dir_name())["entries"],
         "top_level": top_level,
     }
 
@@ -589,7 +678,7 @@ def verify_preset_loading(preset_dir: Path, repo_root=None) -> dict:
         "repo_root": None,
         "row_validation": None,
     }
-    composition_path = preset_dir / "agent.cordis.yml"
+    composition_path = preset_dir / _composition_filename()
     if not composition_path.is_file():
         result["issues"].append(
             f"preset composition missing: {composition_path.as_posix()}")
@@ -713,10 +802,11 @@ def smoke_preset() -> int:
         pass
     print("== DSH preset session smoke (FEAT-015 / RISK-049 ②) ==")
     home = real_dsh_home()
-    env_home = (os.environ.get("DSH_HOME") or "").strip()
+    home_var = _fact("HOME_VAR")
+    env_home = (os.environ.get(home_var) or "").strip()
     if not env_home:
         message = (
-            f"[SMOKE] [REFUSED] DSH_HOME is not set — refusing to run the "
+            f"[SMOKE] [REFUSED] {home_var} is not set — refusing to run the "
             f"smoke (M7.7: it must be redirected to a temporary directory; "
             f"the real home {home} is never a target)")
         print(message)
@@ -726,14 +816,14 @@ def smoke_preset() -> int:
     isolated = Path(env_home).expanduser()
     if _is_within(isolated, home) or _is_within(home, isolated):
         message = (
-            f"[SMOKE] [REFUSED] DSH_HOME resolves to the real DSH home "
+            f"[SMOKE] [REFUSED] {home_var} resolves to the real DSH home "
             f"({home}) — refusing to run (M7.7: never write the real home)")
         print(message)
         print(message, file=sys.stderr)
         print(f"[SMOKE] Result: REFUSED (exit {SMOKE_EXIT_REFUSED})")
         return SMOKE_EXIT_REFUSED
 
-    print(f"[SMOKE] isolated DSH_HOME: {isolated}")
+    print(f"[SMOKE] isolated {home_var}: {isolated}")
     print(f"[SMOKE] real DSH home    : {home}")
     before = _real_home_witness(home)
     print(f"[SMOKE] real home before : state={before['state']} "
@@ -742,31 +832,32 @@ def smoke_preset() -> int:
     isolated.mkdir(parents=True, exist_ok=True)
 
     issues = []
-    saved_home = os.environ.get("DSH_HOME")
+    saved_home = os.environ.get(home_var)
     try:
-        os.environ["DSH_HOME"] = str(isolated)
+        os.environ[home_var] = str(isolated)
         if install_preset() != 0:
             issues.append("preset installation failed in the isolated home")
     finally:
         if saved_home is None:
-            os.environ.pop("DSH_HOME", None)
+            os.environ.pop(home_var, None)
         else:
-            os.environ["DSH_HOME"] = saved_home
+            os.environ[home_var] = saved_home
 
     # Second surface: the shipped payload rendered through the SAME code path,
     # into a scratch dir of the isolated home. This is the FIX-290 regression
     # surface — it proves the tokens substitute to absolute paths that really
     # resolve, not just that an installed copy happens to work.
-    payload_surface = isolated / ".preset-payload-check" / PRESET_ID
+    preset_id = _fact("PRESET_ID")
+    payload_surface = isolated / ".preset-payload-check" / preset_id
     if not write_rendered_preset(payload_surface):
         issues.append(
-            f"shipped payload failed to render: {COMPOSITION_TEMPLATE}")
+            f"shipped payload failed to render: {_composition_template()}")
 
     surfaces = (
-        ("installed preset (rendered into the isolated DSH_HOME)",
-         isolated / ".agent-presets" / PRESET_ID),
-        ("shipped in-package payload (rendered from agent-presets/governance/"
-         "agent.cordis.yml.template)",
+        (f"installed preset (rendered into the isolated {home_var})",
+         isolated / _preset_dir_name() / preset_id),
+        (f"shipped in-package payload (rendered from {_fact('PACKAGE_PRESET')}/"
+         f"{_composition_filename()}.template)",
          payload_surface),
     )
     for label, directory in surfaces:
@@ -777,12 +868,12 @@ def smoke_preset() -> int:
     after = _real_home_witness(home)
     unchanged = before == after
     print(f"[SMOKE] real-home writes : {0 if unchanged else 1} "
-          f"({'witness unchanged — top level + .agent-presets recursive' if unchanged else 'WITNESS CHANGED'})")
+          f"({'witness unchanged — top level + preset write surface recursive' if unchanged else 'WITNESS CHANGED'})")
     if not unchanged:
         issues.append(
             f"real DSH home witness changed during the smoke: {home} — the "
-            "isolation guarantee is broken (top-level entries and/or "
-            ".agent-presets write surface)")
+            "isolation guarantee is broken (top-level entries and/or the "
+            "preset write surface)")
 
     dsh_cli = shutil.which("dsh") or shutil.which("dsh.cmd") \
         or shutil.which("dsh.ps1")
@@ -839,6 +930,22 @@ def main(argv=None) -> int:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except AttributeError:
         pass
+    # Declared facts are read before the CLI is described, so the help text
+    # names the same preset and home the code will use. A contract that cannot
+    # be read is answered with an actionable error and a non-zero exit — it is
+    # never papered over with built-in literals (design §2.5 C-2).
+    try:
+        preset_id = _fact("PRESET_ID")
+        home_var = _fact("HOME_VAR")
+        preset_location = f"${{{home_var}}}/{_preset_dir_name()}/{preset_id}"
+    except Exception as exc:  # noqa: BLE001 — boundary: no stack may escape
+        print(f"ERROR: the dsh host contract could not be read: {exc}",
+              file=sys.stderr)
+        print("ERROR: fix or restore the contract at "
+              "adapters/dsh/host-contract.json, then re-run — the launcher "
+              "carries no built-in fallback copy by design.", file=sys.stderr)
+        return 1
+
     parser = argparse.ArgumentParser(
         description="DeepSeek Harness adapter launcher for software-project-governance."
     )
@@ -850,27 +957,27 @@ def main(argv=None) -> int:
         "--sync",
         dest="install",
         action="store_true",
-        help="(re)write the governance preset into ${DSH_HOME}/.agent-presets/governance",
+        help=f"(re)write the {preset_id} preset into {preset_location}",
     )
     parser.add_argument(
         "--uninstall",
         action="store_true",
-        help="remove the governance preset (deletes exactly "
-        "${DSH_HOME}/.agent-presets/governance; sibling presets untouched)",
+        help=f"remove the {preset_id} preset (deletes exactly "
+        f"{preset_location}; sibling presets untouched)",
     )
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="print the resolved ${DSH_HOME} and planned writes without "
+        help=f"print the resolved ${{{home_var}}} and planned writes without "
         "touching the filesystem (safe verification; DEC-158 R1)",
     )
     parser.add_argument(
         "--smoke",
         action="store_true",
         help="isolated preset-session smoke gate (FEAT-015 / RISK-049 ②): "
-        "generate the preset under a redirected DSH_HOME and verify the skill "
-        "catalog + /governance gesture resolve (exit 0 PASS / 1 FAIL / "
-        "2 REFUSED — refuses an unredirected DSH_HOME)",
+        f"generate the preset under a redirected {home_var} and verify the "
+        f"skill catalog + /{preset_id} gesture resolve (exit 0 PASS / 1 FAIL / "
+        f"2 REFUSED — refuses an unredirected {home_var})",
     )
     parser.add_argument(
         "--bootstrap-project",

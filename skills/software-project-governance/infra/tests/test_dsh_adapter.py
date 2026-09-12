@@ -1219,12 +1219,21 @@ class DshAdapterTests(unittest.TestCase):
             self.skipTest("node unavailable (host row cannot be exercised)")
         lib_uri = (_REPO_ROOT / "lib" / "index.js").resolve().as_uri()
         with tempfile.TemporaryDirectory() as td:
-            # A package copy whose preset payload is absent.
+            # A package copy whose preset payload is absent. V2 (FEAT-030): the
+            # payload's location comes from the host contract — the row holds no
+            # inlined copy of it (J-4) — so the copy carries the contract and is
+            # still missing only the payload. Without that contract the failure
+            # under test would be "contract unreadable", a different guard.
             fake_pkg = Path(td) / "pkg"
             (fake_pkg / "lib").mkdir(parents=True)
+            (fake_pkg / "adapters" / "dsh").mkdir(parents=True)
             (fake_pkg / "lib" / "index.js").write_text(
                 (_REPO_ROOT / "lib" / "index.js").read_text(encoding="utf-8"),
                 encoding="utf-8",
+            )
+            shutil.copyfile(
+                _REPO_ROOT / "adapters" / "dsh" / "host-contract.json",
+                fake_pkg / "adapters" / "dsh" / "host-contract.json",
             )
             (fake_pkg / "package.json").write_text(
                 '{"name":"fake","version":"9.9.9","type":"module",'

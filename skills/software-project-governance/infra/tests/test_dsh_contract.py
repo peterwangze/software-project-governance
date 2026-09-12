@@ -54,9 +54,12 @@ Run:
 
 import contextlib
 import hashlib
+import importlib.util
 import io
 import json
+import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -71,6 +74,7 @@ for _path in (str(_INFRA_DIR), str(_HERE)):
     if _path not in sys.path:
         sys.path.insert(0, _path)
 
+import dsh_compat  # noqa: E402
 import dsh_contract  # noqa: E402
 import dsh_fixtures  # noqa: E402
 
@@ -288,6 +292,241 @@ def _registered_check_tokens():
     tokens.update(re.findall(r'\("(check-[a-z0-9-]+)"', text))
     tokens.update(re.findall(r'\("(dsh-doctor)"', text))
     return tokens
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# K-2 — the outside-contract hard-coding scan (design §2.8, R0 BT-R-01)
+# ══════════════════════════════════════════════════════════════════════════
+#
+# **What this scan is for.** K-3/K-4 and the renderer parity suite prove that
+# the *output* is unchanged; they cannot prove that the consumers stopped
+# holding their own copy of a host fact. R0 BT-R-04 names that gap explicitly:
+#
+#     "parity 只证输出等价，不证单一事实源" — parity proves output equivalence
+#     only; the single-source-of-truth claim is K-2's job.
+#
+# So V2 lands this scan together with the consumer migration (R0 BT-R-01: the
+# only judgment that can see "still hard-coded" must not wait for V8), and the
+# mutation matrix below proves the other half (the consumers really read the
+# contract). The two are complementary, and neither substitutes for the other.
+#
+# **What it is.** Pure text/regex over six declared consumer files plus the
+# template — no import of `verify_workflow`, no dependency on any module that
+# only exists in V8. For four classes of literal, every occurrence must be
+# traceable to a declared contract value, or be allowlisted with a reason.
+#
+# **Scope note (deliberate, R1 N-2/N-4 territory).** The design lists the
+# consumer set as `lib/index.js`, `launch.py`, `dsh_compat.py`, the template,
+# the hooks, `adapter-manifest.json`, `package.json` and `cordis.patch.yml`.
+# This scan covers the six files V2 actually migrates plus the three hooks
+# (whose runtime is explicitly *not* migrated — §2.5 C-5 keeps them static, so
+# scanning them is the only V2-available guard). The remaining three are
+# declaration files whose literals are the *input* the contract mirrors, and
+# their consistency is already judged by K-10/`check-manifest-consistency` and
+# by `test_own_package_matches_package_json`; scanning them here would only
+# re-assert the same facts with a second mechanism. Widening the set is V8's
+# `check-dsh-boundary` step, and the widening itself must fail closed when a
+# new literal appears.
+
+#: Ratchet budget for the allowlist below.
+#:
+#: Design §10 O-9 budgets **3** entries for "the three `@deepseek-ai/cordis*`
+#: oracle packages". This slice lands **0**: the oracle names are declared in
+#: the contract (`host.apis` is a declaration, so the guard naming one is not a
+#: second source of truth) and V2 removed the last quoted occurrence of them
+#: from `dsh_compat.py` (they now survive only as prose, which this scan does
+#: not judge). The three entries would therefore have been *unnecessary* —
+#: `test_every_allowlist_entry_is_necessary` proves it by removing each one and
+#: watching no violation appear — and an unnecessary exemption is exactly what
+#: R0 BT-R-01 asks to be denied. Landing 0 against a budget of 3 spends none of
+#: the ratchet, so the constraint "only down, never up" is untouched.
+#:
+#: R1 N-2 flags that the budget's *anchor* must live outside the contract (a
+#: contract field could be raised in the same commit as the entry it should
+#: reject). It lives here, in the judging test, together with the entries.
+ALLOWLIST_BUDGET = 0
+
+#: The scanned consumers, repo-relative. Kept explicit (not globbed) so adding
+#: a consumer is a reviewable edit rather than a silent widening.
+K2_CONSUMERS = (
+    "lib/index.js",
+    "adapters/dsh/launch.py",
+    "skills/software-project-governance/infra/dsh_compat.py",
+    "skills/software-project-governance/infra/verify_workflow.py",
+    "agent-presets/governance/agent.cordis.yml.template",
+    "skills/software-project-governance/infra/hooks/pre-commit",
+    "skills/software-project-governance/infra/hooks/commit-msg",
+    "skills/software-project-governance/infra/hooks/post-commit",
+)
+
+#: The allowlist (K-11 shape: `literal` + `reason` + `since_slice`, plus the
+#: file scope this scan needs — a literal is exempt where it is justified, not
+#: everywhere). Empty at V2 (see the budget note above); every entry added must
+#: be *necessary*, which `test_every_allowlist_entry_is_necessary` asserts by
+#: removing it and requiring a violation to appear.
+K2_ALLOWLIST = ()
+
+
+def _declared_literal_sets(contract=None):
+    """The literal sets K-2 accepts, derived from the contract itself.
+
+    Deriving the accepted set from the contract is what makes the scan a
+    single-source judgment: the contract cannot widen its own acceptance
+    without the migration (and the reader) seeing the change. Oracle packages
+    are included — `host.apis` is a declaration, so the guard naming one is not
+    a second source of truth.
+    """
+    contract = _contract() if contract is None else contract
+    host = contract["host"]
+    packages = ({row["package"] for row in host["rows"]}
+                | {contract["own"]["package"]["name"]}
+                | {"{0}/{1}".format(host["install"]["scope"],
+                                    host["install"]["cli_package"])}
+                | set(host["apis"]))
+    # Directory-boundary prefixes: `@scope/pkg` also declares `@scope`, so a
+    # reference to a path *inside* a declared package (`@scope/pkg/package.json`,
+    # which the probe resolves) is not a second literal.
+    for name in list(packages):
+        parts = name.split("/")
+        for index in range(1, len(parts)):
+            packages.add("/".join(parts[:index]))
+    return {
+        "package": packages,
+        "env": {host["env"]["home_var"], *host["install"]["env_overrides"].values()},
+        "path": {host["home"]["user_preset_dir"], host["home"]["composition_file"]},
+        "marker": {contract["own"]["preset"]["version_marker"],
+                   contract["own"]["preset"]["skill_root_marker"]},
+    }
+
+
+#: The four detection patterns (module-level constants, so a test can assert
+#: what each class does and does not catch).
+#:
+#: **What the path class can and cannot see** (recorded so the coverage face is
+#: honest): it judges the two spellings the contract declares — the user preset
+#: directory name and the composition file name. A *different* preset directory
+#: or composition name is not a fixed literal, so no text scan can recognize it
+#: without a list; that is what the mutation matrix covers (the consumer must
+#: follow `own.preset.id`, whichever value it holds). V8's `check-dsh-boundary`
+#: can extend the class by reading `own.preset.*` for more spellings.
+_PACKAGE_RE = re.compile(r"@[A-Za-z0-9._-]+/[A-Za-z0-9._-]+")
+_QUOTED_RE = re.compile(r"""(['"])((?:\\.|(?!\1).)*)\1""")
+_ENV_REF_RE = re.compile(
+    r"(?:os\.environ\.get|os\.environ\[|process\.env\[|process\.env\.)"
+    r"\(?\s*[\"']?([A-Za-z_][A-Za-z0-9_]*)")
+_PATH_RE = re.compile(r"\.agent-presets\b|agent\.cordis\.yml(?!\.template)")
+_MARKER_RE = re.compile(r"\.dsh-bundle-version\b|\bskill-root\.txt\b")
+
+
+def k2_scan(paths=K2_CONSUMERS, root=None, allowlist=K2_ALLOWLIST):
+    """Every outside-contract host literal, as ``(file, line, class, literal)``.
+
+    Detection is deliberately **literal-scoped, not prose-scoped**: the package
+    class judges each quoted string as a whole, the env class reads only
+    environment accessor calls, and the path/marker classes use word boundaries
+    so `agent.cordis.yml.template` is not read as `agent.cordis.yml`. Reading
+    raw lines instead would flag every sentence that discusses a package, which
+    would force the allowlist to grow until the judgment meant nothing.
+
+    ``paths`` is repo-relative (the negative tests pass their own), and the
+    allowlist is a parameter so both the "entry missing" and the "entry out of
+    scope" failures can be exercised without touching the real one.
+    """
+    root = _REPO_ROOT if root is None else Path(root)
+    declared = _declared_literal_sets()
+    allowed = {(entry["literal"], path)
+               for entry in allowlist
+               for path in entry["files"]}
+    violations = []
+    for relative in paths:
+        text = _read(root / relative)
+        for line_number, line in enumerate(text.splitlines(), start=1):
+            def report(kind, literal):
+                if (literal, relative) not in allowed:
+                    violations.append((relative, line_number, kind, literal))
+
+            # package class: judged per quoted string, so prose that merely
+            # mentions a path is not read as a literal.
+            for quoted in _QUOTED_RE.finditer(line):
+                literal = quoted.group(2)
+                for package in _PACKAGE_RE.findall(literal):
+                    if package in declared["package"]:
+                        continue
+                    report("package", package)
+            # env class: only environment accessor calls, and only names shaped
+            # like a host variable — `DSH_SCOPE` (our own symbol) is not one.
+            for reference in _ENV_REF_RE.finditer(line):
+                name = reference.group(1)
+                if name in declared["env"] or not name.startswith("DSH"):
+                    continue
+                report("env", name)
+            for kind, pattern, declared_key in (
+                    ("path", _PATH_RE, "path"),
+                    ("marker", _MARKER_RE, "marker")):
+                for match in pattern.finditer(line):
+                    literal = match.group(0)
+                    if literal in declared[declared_key]:
+                        continue
+                    report(kind, literal)
+    return violations
+
+
+def k2_report(violations):
+    """The design's failure line shape: `file:line [class] "literal"`."""
+    return "\n".join(
+        f'{relative}:{line} [{kind}] "{literal}"'
+        for relative, line, kind, literal in violations)
+
+
+def _correct(a, b):
+    """Like :func:`unittest.TestCase.assertEqual`, but returning the mismatch."""
+    return "" if a == b else f"{a!r} != {b!r}"
+
+
+def template_row_mismatches(contract=None, template_text=None):
+    """K-3's comparison as a value: how the template's rows disagree with the
+    contract's.
+
+    Extracted so the idempotent tests and the mutation matrix share one
+    implementation — the mutation test must observe *this* judgment changing
+    when `host.rows[]` changes, otherwise it proves nothing about the reader.
+    Order-independent by construction: the caller gets one message per
+    disagreement, and the empty list means "the two sides agree".
+    """
+    contract = _contract() if contract is None else contract
+    declared = contract["host"]["rows"]
+    template_text = _template_text() if template_text is None else template_text
+
+    # Both sides are values: the template rows are re-derived from the text
+    # (independently of the JSON) and the contract rows come from the accessor,
+    # so a mutation on either side shows up here and only here.
+    rows = _link_template_rows(_parse_template_rows(template_text))
+    by_id = {row["row_id"]: row for row in declared}
+    template_ids = [row["row_id"] for row in rows]
+    mismatch = []
+    if len(template_ids) != len(set(template_ids)):
+        mismatch.append(f"template row ids are not unique: {template_ids}")
+    for missing in sorted(set(by_id) - set(template_ids)):
+        mismatch.append(f"contract row absent from template: {missing}")
+    for extra in sorted(set(template_ids) - set(by_id)):
+        mismatch.append(f"template row not in contract: {extra}")
+    for row in rows:
+        declared_row = by_id.get(row["row_id"])
+        if declared_row is None:
+            continue
+        for key, value in (
+                ("package", row["package"]),
+                ("disabled_expr", row["disabled_expr"]),
+                ("platform_conditional", _platform_conditional(row)),
+                ("enabled_on", _enabled_on(row)),
+                ("config_keys", row["config_keys"]),
+                ("config_declared", row["config_declared"]),
+                ("group", row["group"]),
+        ):
+            message = _correct(declared_row[key], value)
+            if message:
+                mismatch.append(f"{row['row_id']}.{key}: {message}")
+    return mismatch
 
 
 class TestAccessorContract(unittest.TestCase):
@@ -517,8 +756,19 @@ class TestContractFields(unittest.TestCase):
         self.assertEqual(sorted(install["env_overrides"].values()),
                          ["DSH_HARNESS_NODE_MODULES", "DSH_INSTALL_DIR"])
         guard_text = _read(GUARD_PY)
-        for token in install["env_overrides"].values():
-            self.assertIn(f'"{token}"', guard_text, token)
+        # V2: the guard declares the contract field per symbol instead of the
+        # literal, so the anchor is the binding itself.
+        bindings = (
+            ("DSH_SCOPE", "host.install.scope"),
+            ("DSH_PACKAGE", "host.install.cli_package"),
+            ("INSTALL_ANCHOR_REL", "host.install.anchor_rel"),
+            ("PROFILES_DIR_NAME", "host.install.profiles_dir_name"),
+        )
+        for symbol, contract_path in bindings:
+            self.assertIn(f'"{symbol}": "{contract_path}"', guard_text, symbol)
+        for key, token in install["env_overrides"].items():
+            self.assertIn(f'"{key.upper()}_ENV"', guard_text, key)
+            self.assertIn(f'"host.install.env_overrides.{key}"', guard_text, token)
         for shape in install["plane_layout"]:
             self.assertIn("DSH_HOME/profiles", shape)
             self.assertIn("node_modules", shape)
@@ -530,10 +780,10 @@ class TestContractFields(unittest.TestCase):
         self.assertEqual(home["composition_globs"],
                          ["**/agent.cordis.yml", "**/*.cordis.yml.template"])
         guard_text = _read(GUARD_PY)
-        self.assertIn('COMPOSITION_FILENAMES = ("agent.cordis.yml",)',
-                      guard_text.replace("'", '"'))
-        for glob in home["composition_globs"]:
-            self.assertIn(glob, guard_text, glob)
+        self.assertIn('"COMPOSITION_FILENAMES": "host.home.composition_file"',
+                      guard_text)
+        self.assertIn('"COMPOSITION_GLOBS": "host.home.composition_globs"',
+                      guard_text)
 
     def test_host_row_contract_is_anchored_in_the_guard(self):
         row_contract = self.contract["host"]["row_contract"]
@@ -608,12 +858,23 @@ class TestContractFields(unittest.TestCase):
     def test_host_apis_match_the_oracle_package_set(self):
         apis = self.contract["host"]["apis"]
         guard_text = _read(GUARD_PY)
+        # V2: `host.apis` is bound as one contract path and the probe script is
+        # rendered from it, so the guard names no package and no symbol of its
+        # own. The anchor is the binding plus the renderer that consumes it.
+        self.assertIn('"ORACLE_PACKAGES": "host.apis"', guard_text)
+        self.assertIn("def _render_probe_script()", guard_text)
         for package, entry in apis.items():
-            self.assertIn(package, guard_text, package)
             self.assertTrue(entry["role"], package)
-            for symbol in entry["exports"]:
-                self.assertIn(symbol, guard_text, f"{package}:{symbol}")
+            self.assertTrue(entry["exports"], package)
         self.assertEqual(len(apis), 4)
+        # Every declared symbol must be reachable from a role the renderer
+        # resolves (`load` → YAML, `entryListSchema` → dialect,
+        # `evaluate`/`isJsExpr` → loader, `resolveConfig` → cordis), otherwise
+        # `_render_probe_script()` raises instead of running a partial probe.
+        symbols = {symbol for entry in apis.values() for symbol in entry["exports"]}
+        for required in ("load", "entryListSchema", "evaluate", "isJsExpr",
+                         "resolveConfig"):
+            self.assertIn(required, symbols)
 
     def test_host_cli_commands_are_anchored(self):
         cli = self.contract["host"]["cli"]
@@ -660,12 +921,23 @@ class TestContractFields(unittest.TestCase):
         self.assertEqual(preset["skill_root_marker"], "skill-root.txt")
         self.assertTrue((_REPO_ROOT / preset["template"]).is_file())
         self.assertTrue((_REPO_ROOT / preset["metadata"]).is_file())
+        # V2: the renderers no longer spell the values — they declare which
+        # contract field supplies each one. The traceability assertion is
+        # therefore "the declared symbol is bound to the declared contract
+        # path", not "the literal appears in the file" (which is precisely the
+        # hard coding K-2 now fails on).
         launch_text = _read(LAUNCH_PY)
+        for symbol, contract_path in (
+                ("PRESET_ID", "own.preset.id"),
+                ("PRESET_MARKER", "own.preset.version_marker"),
+                ("SKILL_ROOT_MARKER", "own.preset.skill_root_marker")):
+            self.assertIn(f'"{symbol}": "{contract_path}"', launch_text, symbol)
         lib_text = _read(LIB_INDEX)
-        self.assertIn(f'PRESET_ID = "{preset["id"]}"', launch_text)
-        self.assertIn(f"PRESET_MARKER = '{preset['version_marker']}'", lib_text)
-        self.assertIn(f'SKILL_ROOT_MARKER = "{preset["skill_root_marker"]}"',
-                      launch_text)
+        for symbol, contract_path in (
+                ("presetId", "own.preset.id"),
+                ("versionMarker", "own.preset.version_marker"),
+                ("skillRootMarker", "own.preset.skill_root_marker")):
+            self.assertIn(f"{symbol}: '{contract_path}'", lib_text, symbol)
 
     def test_own_render_tokens_match_both_renderers(self):
         tokens = self.contract["own"]["render"]["tokens"]
@@ -733,9 +1005,14 @@ class TestContractFields(unittest.TestCase):
 
     def test_own_checks_section_titles_and_exit_codes(self):
         checks = self.contract["own"]["checks"]
-        self.assertEqual(checks["compat_section_title"],
-                         _read(GUARD_PY).split(
-                             'CHECK_SECTION_TITLE = "')[1].split('"')[0])
+        # V2: the title is bound to the contract (`own.checks.compat_section_title`)
+        # rather than restated, so the assertion is that the binding exists and
+        # that the guard module's exported title is the declared value.
+        guard_text = _read(GUARD_PY)
+        self.assertIn('"COMPAT_SECTION_TITLE": "own.checks.compat_section_title"',
+                      guard_text)
+        self.assertEqual(dsh_compat.CHECK_SECTION_TITLE,
+                         checks["compat_section_title"])
         self.assertIn(checks["smoke_section_title"],
                       _read(_REPO_ROOT / "skills" / "software-project-governance"
                             / "infra" / "verify_workflow.py"))
@@ -1033,6 +1310,414 @@ class TestCoverageAndElimination(unittest.TestCase):
             dsh_contract.get("host.rows[persona].config_keys"), ["prefix"])
         self.assertEqual(
             dsh_contract.get("host.rows[plan-mode].config_keys"), ["section"])
+
+
+class TestOutsideContractScan(unittest.TestCase):
+    """K-2 (V2 form): no consumer holds a host fact of its own.
+
+    Complies with K-11's allowlist constraints at unit scope: every entry
+    carries `literal` + `reason` + `since_slice`, the entry count is under the
+    frozen budget, and each entry is *necessary* (removing it must produce a
+    violation). The budget's anchor lives in this file, not in the contract —
+    R1 N-2: a contract-owned budget could be raised in the same commit as the
+    entry it should reject.
+    """
+
+    def test_no_outside_contract_host_literal_in_any_consumer(self):
+        violations = k2_scan()
+        self.assertEqual(
+            violations, [],
+            "outside-contract host literal(s) found:\n" + k2_report(violations))
+
+    def test_every_scanned_consumer_exists(self):
+        # A renamed consumer must fail loudly instead of silently dropping out
+        # of the scan (the failure mode that would let hard coding return).
+        for relative in K2_CONSUMERS:
+            self.assertTrue((_REPO_ROOT / relative).is_file(), relative)
+
+    def test_allowlist_is_within_budget_and_well_formed(self):
+        self.assertLessEqual(len(K2_ALLOWLIST), ALLOWLIST_BUDGET)
+        for entry in K2_ALLOWLIST:
+            self.assertTrue(entry["literal"], entry)
+            self.assertTrue(entry["reason"].strip(), entry)
+            self.assertTrue(entry["since_slice"], entry)
+            self.assertTrue(entry["files"], entry)
+            for relative in entry["files"]:
+                self.assertIn(relative, K2_CONSUMERS, entry)
+
+    def test_every_allowlist_entry_is_necessary(self):
+        # An allowlist entry that suppresses nothing is a budget spent for free;
+        # removing it must produce at least one violation.
+        self.assertLessEqual(len(K2_ALLOWLIST), ALLOWLIST_BUDGET)
+        for entry in K2_ALLOWLIST:
+            without = tuple(item for item in K2_ALLOWLIST if item is not entry)
+            violations = k2_scan(allowlist=without)
+            matched = [item for item in violations
+                       if item[3] == entry["literal"]
+                       and item[0] in entry["files"]]
+            self.assertTrue(
+                matched,
+                f"allowlist entry {entry['literal']!r} suppresses nothing — "
+                f"drop it (budget {len(K2_ALLOWLIST)}/{ALLOWLIST_BUDGET})")
+
+    def test_an_undeclared_package_name_in_a_consumer_is_a_violation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "lib" / "index.js"
+            target.parent.mkdir(parents=True)
+            target.write_text(
+                "const pkg = '@deepseek-ai/dsh-totally-new'\n", encoding="utf-8")
+            violations = k2_scan(paths=("lib/index.js",), root=root)
+            self.assertEqual(len(violations), 1, violations)
+            self.assertEqual(violations[0][0], "lib/index.js")
+            self.assertEqual(violations[0][1], 1)
+            self.assertEqual(violations[0][3], "@deepseek-ai/dsh-totally-new")
+            self.assertIn("lib/index.js:1 [package]", k2_report(violations))
+
+    def test_an_undeclared_env_var_is_a_violation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "adapters" / "dsh" / "launch.py"
+            target.parent.mkdir(parents=True)
+            target.write_text(
+                'env = os.environ.get("DSH_SOMETHING_ELSE")\n'
+                'other = os.environ.get("DSH_HOME")\n',
+                encoding="utf-8")
+            violations = k2_scan(paths=("adapters/dsh/launch.py",), root=root)
+            found = {(kind, literal) for _f, _l, kind, literal in violations}
+            self.assertIn(("env", "DSH_SOMETHING_ELSE"), found)
+            # `DSH_HOME` IS declared, so reading it is not a violation — the
+            # scan accepts declared values, it does not ban the names.
+            self.assertNotIn(("env", "DSH_HOME"), found)
+
+    def test_the_literal_classes_accept_only_declared_spellings(self):
+        # The path/marker classes judge the spellings the contract declares, and
+        # the boundary rule keeps `agent.cordis.yml.template` (the declared
+        # render-source name, `own.preset.template`) out of the path class. An
+        # unrelated name that merely *looks* like a marker is not a contract
+        # literal at all — the scan is literal-based, not shape-based — while an
+        # undeclared environment-variable read is a violation.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "adapters" / "dsh" / "launch.py"
+            target.parent.mkdir(parents=True)
+            target.write_text(
+                'a = home / ".agent-presets"\n'
+                'b = "agent.cordis.yml"\n'
+                'c = ".dsh-bundle-version"\n'
+                'd = "other-bundle-version"\n'
+                'e = "agent-presets/governance/agent.cordis.yml.template"\n',
+                encoding="utf-8")
+            self.assertEqual(k2_scan(paths=("adapters/dsh/launch.py",), root=root), [])
+            target.write_text(
+                'g = os.environ.get("DSH_ANOTHER_HOME")\n', encoding="utf-8")
+            violations = k2_scan(paths=("adapters/dsh/launch.py",), root=root)
+            self.assertEqual([item[3] for item in violations],
+                             ["DSH_ANOTHER_HOME"], violations)
+            self.assertIn("adapters/dsh/launch.py:1 [env]", k2_report(violations))
+
+    def test_an_allowlist_entry_out_of_scope_is_still_a_violation(self):
+        # The exemption is file-scoped: the same literal in another consumer
+        # must fail. (This is what stops an allowlist entry from becoming a
+        # repo-wide amnesty.) Exercised with a synthetic entry, because the
+        # shipped allowlist is empty at V2.
+        entry = {"literal": "@totally-new/pkg",
+                 "reason": "synthetic (test-local)",
+                 "since_slice": "V2",
+                 "files": ("skills/software-project-governance/infra/dsh_compat.py",)}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "adapters" / "dsh" / "launch.py"
+            target.parent.mkdir(parents=True)
+            target.write_text("const p = '@totally-new/pkg'\n", encoding="utf-8")
+            declared_elsewhere = k2_scan(paths=("adapters/dsh/launch.py",), root=root,
+                                         allowlist=(entry,))
+            self.assertEqual([item[3] for item in declared_elsewhere],
+                             ["@totally-new/pkg"], declared_elsewhere)
+            # …and the same synthetic entry does cover its declared file.
+            dsh_compat_rel = ("skills/software-project-governance/infra/"
+                              "dsh_compat.py")
+            in_scope = root / dsh_compat_rel
+            in_scope.parent.mkdir(parents=True)
+            in_scope.write_text("const p = '@totally-new/pkg'\n", encoding="utf-8")
+            covered = k2_scan(paths=(dsh_compat_rel,), root=root,
+                              allowlist=(entry,))
+            self.assertEqual(covered, [])
+
+    def test_a_marker_name_inside_a_longer_name_is_not_a_violation(self):
+        # Boundary discipline: `agent.cordis.yml.template` contains
+        # `agent.cordis.yml`, and the template's own file name must not be
+        # reported as an undeclared composition-file literal.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "lib" / "index.js"
+            target.parent.mkdir(parents=True)
+            target.write_text(
+                "// agent-presets/governance/agent.cordis.yml.template\n",
+                encoding="utf-8")
+            self.assertEqual(k2_scan(paths=("lib/index.js",), root=root), [])
+
+
+class TestConsumerContractReads(unittest.TestCase):
+    """R0 BT-R-04: the per-field mutation matrix.
+
+    The parity suite (`test_dsh_adapter.py::test_js_and_python_renderers_agree`)
+    proves that the three render paths still produce the same bytes — **output
+    equivalence only.** It cannot tell a consumer that *reads* the contract from
+    one that kept a shadow copy of the same values, because both would render
+    identically. So each field below is mutated in the contract on disk, and
+    the consumer must be observed *changing* because of it:
+
+      * `own.render.tokens`          → `renderComposition` (JS) + `render_composition` (Py)
+      * `own.preset.id`              → `ensurePreset` destination directory (JS)
+      * `own.preset.version_marker`  → the marker file `ensurePreset` writes (JS)
+      * `own.preset.skill_root_marker` → the marker file the launcher writes (Py)
+      * `host.rows[]`                → the template ↔ contract row judgment
+
+    **JS-side mutation runs in a separate process**, deliberately: `lib/index.js`
+    memoizes its contract view for the life of the process (J-3), and adding a
+    `reset` export for tests would violate J-5 (no new exports). A fresh
+    `node` process is therefore the only honest way to observe a re-read — and
+    `test_dsh_adapter.py:1127` already establishes the `subprocess.run([node,…])`
+    shape.
+
+    Every mutation restores the contract from the bytes captured before the
+    first change and asserts the SHA-256 is back — the real contract file is
+    only ever transiently modified, with restoration in a `finally`.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.contract_path = dsh_contract.contract_path()
+        cls.original_bytes = cls.contract_path.read_bytes()
+        cls.original_sha = _sha256(cls.original_bytes)
+        cls.original = json.loads(cls.original_bytes.decode("utf-8"))
+
+    def setUp(self):
+        # A previous test in this class could not have left the file dirty
+        # (`_contract_swapped` restores in a `finally`); verify anyway so a
+        # failure names the real cause instead of cascading.
+        self.assertEqual(_sha256(self.contract_path.read_bytes()),
+                         self.original_sha,
+                         f"the contract was already modified: {self.contract_path}")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.contract_path.write_bytes(cls.original_bytes)
+
+    # ── helpers ────────────────────────────────────────────────────────────
+    def _http_sha(self):
+        return _sha256(self.contract_path.read_bytes())
+
+    @contextlib.contextmanager
+    def _contract_swapped(self, mutate):
+        """Apply ``mutate`` to the contract on disk, then restore it exactly.
+
+        Restoration happens in `finally`, so a failing assertion cannot leave a
+        mutated contract behind; the context re-verifies the SHA-256 on the way
+        out and the caller can read it again for the report.
+        """
+        mutated = json.loads(json.dumps(self.original))
+        mutate(mutated)
+        self.contract_path.write_bytes(
+            json.dumps(mutated, ensure_ascii=False, indent=2).encode("utf-8"))
+        dsh_contract.reset_cache()
+        try:
+            yield
+        finally:
+            self.contract_path.write_bytes(self.original_bytes)
+            dsh_contract.reset_cache()
+
+    def _node(self, script, env=None, argv=()):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node unavailable (JS consumer cannot be exercised)")
+        environment = os.environ.copy() if env is None else env
+        result = subprocess.run(
+            [node, "--input-type=module", "-e", script, *argv],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            env=environment, cwd=str(_REPO_ROOT),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout
+
+    @staticmethod
+    def _fresh_launch_module():
+        """A launch.py instance that has not read the contract yet.
+
+        The launcher memoizes the resolved facts (one read per process), and
+        `test_dsh_adapter.py` already loads it this way; a fresh module object
+        is the in-process equivalent of the JS side's fresh process.
+        """
+        spec = importlib.util.spec_from_file_location(
+            "dsh_launch_under_mutation", LAUNCH_PY)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        return module
+
+    def _assert_restored(self):
+        self.assertEqual(self._http_sha(), self.original_sha,
+                         "the contract was not restored byte-for-byte")
+
+    # ── the matrix ─────────────────────────────────────────────────────────
+    def test_mutation_own_render_tokens_is_read_by_the_js_renderer(self):
+        def mutate(contract):
+            # The declared set is REPLACED: the real token is no longer declared,
+            # so a renderer that read the contract leaves it unresolved.
+            contract["own"]["render"]["tokens"] = {
+                "__MUTATED_SKILLS_ROOT__": "skills",
+                "__GOVERNANCE_SHIMS_ROOT__": "adapters/dsh/skill-shims",
+                "__GOVERNANCE_REPO_ROOT__": "",
+            }
+        with self._contract_swapped(mutate):
+            template = _template_text()
+            script = (
+                f"import {{ renderComposition }} from "
+                f"{json.dumps(LIB_INDEX.resolve().as_uri())};"
+                "import { readFileSync } from 'node:fs';"
+                "const t = readFileSync(process.argv[1], 'utf8');"
+                "process.stdout.write(JSON.stringify("
+                "renderComposition(t, process.argv[2])));"
+            )
+            payload = json.loads(self._node(
+                script, argv=(str(TEMPLATE),
+                              str(_REPO_ROOT.resolve()).replace("\\", "/"))))
+            # The template's real token is left in the text and reported: the
+            # renderer followed the contract rather than a fixed three-token
+            # table.
+            self.assertIn("__GOVERNANCE_SKILLS_ROOT__", payload["text"])
+            self.assertIn("__GOVERNANCE_SKILLS_ROOT__", payload["leftovers"])
+        self._assert_restored()
+        # …and with the real contract the template leaves nothing behind.
+        payload = json.loads(self._node(
+            "import { renderComposition } from "
+            f"{json.dumps(LIB_INDEX.resolve().as_uri())};"
+            "import { readFileSync } from 'node:fs';"
+            "process.stdout.write(JSON.stringify(renderComposition("
+            "readFileSync(process.argv[1], 'utf8'), process.argv[2])));",
+            argv=(str(TEMPLATE), str(_REPO_ROOT.resolve()).replace("\\", "/"))))
+        self.assertEqual(payload["leftovers"], [], payload)
+
+    def test_mutation_own_render_tokens_is_read_by_the_python_renderer(self):
+        def mutate(contract):
+            contract["own"]["render"]["tokens"] = {
+                "__MUTATED_SKILLS_ROOT__": "skills",
+                "__GOVERNANCE_SHIMS_ROOT__": "adapters/dsh/skill-shims",
+                "__GOVERNANCE_REPO_ROOT__": "",
+            }
+        with self._contract_swapped(mutate):
+            launch = self._fresh_launch_module()
+            rendered = launch.render_composition()
+            # The Python renderer also refuses to emit a composition with an
+            # unresolved token — and the unresolved one is now the token the
+            # mutated contract does not declare.
+            self.assertEqual(rendered, "")
+            self.assertEqual(launch._token_paths(),
+                             {"__MUTATED_SKILLS_ROOT__": _REPO_ROOT / "skills",
+                              "__GOVERNANCE_SHIMS_ROOT__":
+                                  _REPO_ROOT / "adapters" / "dsh" / "skill-shims",
+                              "__GOVERNANCE_REPO_ROOT__": _REPO_ROOT})
+        self._assert_restored()
+        launch = self._fresh_launch_module()
+        self.assertTrue(launch.render_composition())
+
+    def test_mutation_own_preset_id_moves_the_js_sync_destination(self):
+        def mutate(contract):
+            contract["own"]["preset"]["id"] = "governance-mutated"
+        with self._contract_swapped(mutate):
+            with tempfile.TemporaryDirectory() as td:
+                env = os.environ.copy()
+                env["DSH_HOME"] = td
+                out = self._node(
+                    "import { apply } from "
+                    f"{json.dumps(LIB_INDEX.resolve().as_uri())};"
+                    "const warns = [];"
+                    "apply({ logger: { warn: (m) => warns.push(String(m)),"
+                    " info: () => {} } });"
+                    "process.stdout.write(JSON.stringify(warns));", env=env)
+                self.assertEqual(json.loads(out), [])
+                self.assertTrue(
+                    (Path(td) / ".agent-presets" / "governance-mutated"
+                     / "agent.cordis.yml").is_file(),
+                    "the mutated preset id did not reach ensurePreset()")
+                self.assertFalse(
+                    (Path(td) / ".agent-presets" / "governance").exists(),
+                    "the un-mutated preset id was still used")
+        self._assert_restored()
+
+    def test_mutation_own_preset_version_marker_names_the_js_marker_file(self):
+        def mutate(contract):
+            contract["own"]["preset"]["version_marker"] = ".mutated-version"
+        with self._contract_swapped(mutate):
+            with tempfile.TemporaryDirectory() as td:
+                env = os.environ.copy()
+                env["DSH_HOME"] = td
+                self._node(
+                    "import { apply } from "
+                    f"{json.dumps(LIB_INDEX.resolve().as_uri())};"
+                    "const warns = [];"
+                    "apply({ logger: { warn: (m) => warns.push(String(m)),"
+                    " info: () => {} } });"
+                    "process.stdout.write(JSON.stringify(warns));", env=env)
+                preset = Path(td) / ".agent-presets" / "governance"
+                self.assertTrue((preset / ".mutated-version").is_file(),
+                                sorted(item.name for item in preset.iterdir()))
+                self.assertFalse((preset / ".dsh-bundle-version").exists())
+        self._assert_restored()
+
+    def test_mutation_own_skill_root_marker_names_the_launcher_marker_file(self):
+        def mutate(contract):
+            contract["own"]["preset"]["skill_root_marker"] = "mutated-root.txt"
+        with self._contract_swapped(mutate):
+            launch = self._fresh_launch_module()
+            with tempfile.TemporaryDirectory() as tmp:
+                staging = Path(tmp) / "staging"
+                self.assertTrue(launch.write_rendered_preset(staging))
+                written = sorted(item.name for item in staging.iterdir())
+                self.assertIn("mutated-root.txt", written, written)
+                self.assertNotIn("skill-root.txt", written, written)
+        self._assert_restored()
+
+    def test_mutation_host_rows_flips_the_template_agreement_judgment(self):
+        # The consumer of `host.rows[]` at V2 is the template cross-check
+        # (design §2.8 K-3; the rule engine reads the composition, never the
+        # contract). So the observable consumer output here IS that judgment:
+        # with the real contract it is empty, and a one-row mutation must make
+        # it non-empty.
+        self.assertEqual(template_row_mismatches(), [])
+        # The affected row is chosen from the declared set, not hard-coded.
+        target = next(row for row in self.original["host"]["rows"]
+                      if row["config_keys"] and row["config_declared"])
+
+        def mutate(contract):
+            for row in contract["host"]["rows"]:
+                if row["row_id"] == target["row_id"]:
+                    row["config_declared"] = False
+
+        with self._contract_swapped(mutate):
+            dsh_contract.reset_cache()
+            dsh_contract.load_contract()
+            mutated = dsh_contract.load_contract()
+            mismatches = template_row_mismatches(mutated)
+            self.assertTrue(mismatches, target["row_id"])
+            self.assertTrue(any(target["row_id"] in item for item in mismatches),
+                            mismatches)
+        self._assert_restored()
+        self.assertEqual(template_row_mismatches(), [])
+
+    def test_mutation_host_rows_removal_is_a_one_sided_row(self):
+        dropped = self.original["host"]["rows"][0]["row_id"]
+
+        def mutate(contract):
+            contract["host"]["rows"] = [
+                row for row in contract["host"]["rows"]
+                if row["row_id"] != dropped]
+        with self._contract_swapped(mutate):
+            mismatches = template_row_mismatches(dsh_contract.load_contract())
+            self.assertIn(f"template row not in contract: {dropped}", mismatches)
+        self._assert_restored()
+        self.assertEqual(template_row_mismatches(), [])
 
 
 class TestFixtureEmitter(unittest.TestCase):

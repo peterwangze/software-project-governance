@@ -50,7 +50,7 @@ Isolation and access boundaries (M7.7 (a) precedent, FEAT-015/016)
 ------------------------------------------------------------------
 * The guard is **read-only static analysis over repo files plus module imports
   from the resolved plugin plane**. It performs one narrow READ of
-  ``$DSH_HOME/profiles`` (and, when ``DSH_HOME`` is set, only then — it never
+  ``${DSH_HOME_ENV}/profiles`` (and, when ``DSH_HOME`` is set, only then — it never
   guesses ``~/.dsh``) to resolve the plugin set dsh would load. It writes
   nothing to ``$DSH_HOME``, and the probe subprocess runs with ``DSH_HOME``
   redirected to a freshly created empty temp directory which is deleted
@@ -82,6 +82,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -123,49 +124,125 @@ FINDING_KINDS = (
     "ROW_SHAPE",
 )
 
-#: Environment overrides for the harness install. Both spellings are honoured
-#: so an operator can pin the install explicitly instead of relying on PATH.
-INSTALL_DIR_ENV = "DSH_INSTALL_DIR"
-NODE_MODULES_ENV = "DSH_HARNESS_NODE_MODULES"
+# ── the dsh host-dependency contract (single source of the host facts) ─────
+# Design §2.5 C-3: every host literal this guard used to inline — the install
+# scope / cli package / anchor, the two environment overrides, the profiles
+# directory name, the `DSH_HOME` variable it reads, the composition file name and
+# its globs, and the oracle packages with the symbols this guard calls them
+# through — is declared in `adapters/dsh/host-contract.json`.
+#
+# The declared symbols are read from the contract at import (see
+# `_declared`/the binding block below), so this module holds no copy of a host
+# value. A contract that is missing, unreadable, malformed or of an unknown
+# schema makes that read raise and the module fail to import its facts;
+# `check_dsh_preset_compat()` maps the same failure to `NOT_RUN` (unreadable) or
+# `FAIL` (malformed) per §2.5.1 instead of validating against an inlined copy.
+#
+# `PROBE_SCRIPT` likewise carries no package name and no symbol name of its own:
+# both are injected into the probe request (see `_probe_request`).
+#
+# The oracle packages are the ones whose OWN code decides a row's fate, imported
+# from the resolved plane, never re-implemented:
+#   * `cordis-plugin-include` — the `!!js` YAML dialect (its entry-list schema)
+#   * `cordis-plugin-loader`  — the `!!js` evaluate / isJsExpr pair
+#   * `cordis`                — `resolveConfig`, the call that throws
+#   * `js-yaml`               — the parser those schemas are loaded with
+# Their versions are reported next to every verdict, because "which plugin set
+# did this validate against" is part of the answer.
+#
+# A preset directory is a directory holding the declared composition file
+# (`COMPOSITION_FILE` in the presets package); the shipped render source — the
+# token template the two renderers substitute — must satisfy the same row
+# contract as a mounted preset. FIX-310: the template now lives with the preset
+# payload it renders; the composition globs are depth-agnostic.
+#
+# Declared, contract-resolved symbols (resolved on first access):
+#   INSTALL_DIR_ENV, NODE_MODULES_ENV, DSH_SCOPE, DSH_PACKAGE,
+#   INSTALL_ANCHOR_REL, ORACLE_PACKAGES, DSH_HOME_ENV, PROFILES_DIR_NAME,
+#   COMPOSITION_FILENAMES, COMPOSITION_GLOBS
+_DECLARED_BINDING = {
+    "INSTALL_DIR_ENV": "host.install.env_overrides.install_dir",
+    "NODE_MODULES_ENV": "host.install.env_overrides.node_modules",
+    "DSH_SCOPE": "host.install.scope",
+    "DSH_PACKAGE": "host.install.cli_package",
+    "INSTALL_ANCHOR_REL": "host.install.anchor_rel",
+    "ORACLE_PACKAGES": "host.apis",
+    "DSH_HOME_ENV": "host.env.home_var",
+    "PROFILES_DIR_NAME": "host.install.profiles_dir_name",
+    "COMPOSITION_FILENAMES": "host.home.composition_file",
+    "COMPOSITION_GLOBS": "host.home.composition_globs",
+    "COMPAT_SECTION_TITLE": "own.checks.compat_section_title",
+}
 
-#: dsh's own install anchor package (``INSTALL_ANCHOR`` in
-#: ``@deepseek-ai/dsh``'s profile boot is
-#: ``<install>/node_modules/@deepseek-ai/dsh/package.json``).
-DSH_SCOPE = "@deepseek-ai"
-DSH_PACKAGE = "dsh"
-INSTALL_ANCHOR_REL = (DSH_SCOPE, DSH_PACKAGE, "package.json")
+#: Sequence-shaped bindings: the contract field is a JSON array.
+_SEQUENCE_FACTS = frozenset({"INSTALL_ANCHOR_REL", "COMPOSITION_GLOBS"})
+#: Single-value bindings wrapped into the one-element tuple the guard uses.
+_WRAPPED_FACTS = frozenset({"COMPOSITION_FILENAMES"})
 
-#: The packages whose OWN code decides a row's fate. Imported from the
-#: resolved plane, never re-implemented:
-#:   * ``cordis-plugin-include`` — the ``!!js`` YAML dialect (entryListSchema)
-#:   * ``cordis-plugin-loader`` — ``evaluate`` / ``isJsExpr``
-#:   * ``cordis``               — ``resolveConfig``, the call that throws
-#:   * ``js-yaml``              — the parser those schemas are loaded with
-#: Their versions are reported next to every verdict, because "which plugin set
-#: did this validate against" is part of the answer.
-ORACLE_PACKAGES = (
-    "@deepseek-ai/cordis-plugin-loader",
-    "@deepseek-ai/cordis-plugin-include",
-    "@deepseek-ai/cordis",
-    "js-yaml",
-)
+_declared_cache: dict = {}
 
-#: Environment variable dsh itself resolves its home from. Only an EXPLICITLY
-#: set value is honoured: the guard never guesses ``~/.dsh``.
-DSH_HOME_ENV = "DSH_HOME"
-PROFILES_DIR_NAME = "profiles"
 
-#: A preset directory is a directory holding this composition file
-#: (``COMPOSITION_FILE`` in ``@deepseek-ai/dsh-agent-presets``).
-COMPOSITION_FILENAMES = ("agent.cordis.yml",)
-#: The package also ships the composition as a token template that the two
-#: renderers (``lib/index.js`` ``ensurePreset()`` / ``adapters/dsh/launch.py``)
-#: substitute into ``${DSH_HOME}/.agent-presets/governance/agent.cordis.yml``;
-#: the render source must satisfy the same row contract as a mounted preset.
-#: FIX-310: the template now lives with the preset payload it renders
-#: (``agent-presets/governance/agent.cordis.yml.template``) instead of under
-#: ``adapters/dsh/``; the glob is depth-agnostic, so it still finds it.
-COMPOSITION_GLOBS = ("**/agent.cordis.yml", "**/*.cordis.yml.template")
+def _declared(name: str):
+    """One declared dsh fact, read from the host contract (memoized per process).
+
+    Raises the accessor's `ContractUnreadable` / `ContractMalformed` /
+    `ContractSchemaUnknown` when the contract cannot supply the fact — the caller
+    classifies that per design §2.5.1. There is no inlined fallback: a second
+    copy of a host fact is the defect class this guard exists to catch.
+    """
+    if name in _declared_cache:
+        return _declared_cache[name]
+    import dsh_contract  # noqa: PLC0415 — sibling accessor, imported on first need
+
+    value = dsh_contract.get(_DECLARED_BINDING[name])
+    if name == "ORACLE_PACKAGES":
+        # `host.apis` is the package → {exports, role} map; the declared order is
+        # the order the probe reports them in.
+        value = tuple(value)
+    elif name in _SEQUENCE_FACTS:
+        value = tuple(value)
+    elif name in _WRAPPED_FACTS:
+        value = (value,)
+    _declared_cache[name] = value
+    return value
+
+
+#: The declared ``"<scope>/<cli package>"`` spelling of the harness CLI package
+#: (used in messages and as the lookup key for the CLI package version). Needed
+#: before the first verdict, so it is resolved once at import; a contract that
+#: cannot supply it makes this module fail to import its own facts — the same
+#: fail-closed outcome the CLI reports with an actionable message.
+CLI_PACKAGE = "{0}/{1}".format(_declared("DSH_SCOPE"), _declared("DSH_PACKAGE"))
+
+#: The declared symbols the rest of this module (and its consumers) use. They are
+#: bound eagerly — as module globals, because module-level `__getattr__` is not
+#: consulted by code inside the module. A contract that cannot supply one of
+#: them aborts the import with the accessor's actionable error: fail-closed, and
+#: never a built-in fallback copy.
+INSTALL_DIR_ENV = _declared("INSTALL_DIR_ENV")
+NODE_MODULES_ENV = _declared("NODE_MODULES_ENV")
+DSH_SCOPE = _declared("DSH_SCOPE")
+DSH_PACKAGE = _declared("DSH_PACKAGE")
+INSTALL_ANCHOR_REL = _declared("INSTALL_ANCHOR_REL")
+ORACLE_PACKAGES = _declared("ORACLE_PACKAGES")
+DSH_HOME_ENV = _declared("DSH_HOME_ENV")
+PROFILES_DIR_NAME = _declared("PROFILES_DIR_NAME")
+COMPOSITION_FILENAMES = _declared("COMPOSITION_FILENAMES")
+COMPOSITION_GLOBS = _declared("COMPOSITION_GLOBS")
+CHECK_SECTION_TITLE = _declared("COMPAT_SECTION_TITLE")
+
+
+def oracle_api_symbols() -> dict:
+    """Oracle package → the exported symbols this guard calls it through.
+
+    Declared in `host.apis[<package>].exports`. The probe imports exactly these
+    names, so a symbol rename upstream becomes a contract change instead of a
+    silent `undefined` at runtime.
+    """
+    import dsh_contract  # noqa: PLC0415 — sibling accessor, imported on first need
+
+    return {package: tuple(entry["exports"])
+            for package, entry in dsh_contract.get("host.apis").items()}
 
 _SKIP_DIRS = frozenset({".git", "node_modules", "__pycache__", ".venv", "venv",
                         ".pytest_cache", ".mypy_cache"})
@@ -206,30 +283,33 @@ try {
 }
 const fileUrl = (spec) => pathToFileURL(req.resolve(spec)).href
 
+// Symbol names and package names are rendered in from the contract at request
+// build time (design §2.5 C-3): this script names nothing of its own.
 let entryListSchema, evaluate, isJsExpr, resolveConfig, yaml
 try {
-  yaml = await import(fileUrl('js-yaml'))
-  const include = await import(fileUrl('@deepseek-ai/cordis-plugin-include'))
-  const loader = await import(fileUrl('@deepseek-ai/cordis-plugin-loader'))
-  const cordis = await import(fileUrl('@deepseek-ai/cordis'))
-  entryListSchema = include.entryListSchema
-  evaluate = loader.evaluate
-  isJsExpr = loader.isJsExpr
-  resolveConfig = cordis.resolveConfig
+  yaml = await import(fileUrl('__YAML_PACKAGE__'))
+  const include = await import(fileUrl('__INCLUDE_PACKAGE__'))
+  const loader = await import(fileUrl('__LOADER_PACKAGE__'))
+  const cordis = await import(fileUrl('__CORDIS_PACKAGE__'))
+  entryListSchema = include.__ENTRY_LIST_SCHEMA__
+  evaluate = loader.__EVALUATE__
+  isJsExpr = loader.__IS_JS_EXPR__
+  resolveConfig = cordis.__RESOLVE_CONFIG__
 } catch (error) {
   fail(`installed harness API unavailable: ${error && error.name}: ${error && error.message}`)
 }
-for (const [name, value] of [['entryListSchema', entryListSchema], ['evaluate', evaluate],
-                             ['isJsExpr', isJsExpr], ['resolveConfig', resolveConfig]]) {
+for (const [name, value] of [['__ENTRY_LIST_SCHEMA__', entryListSchema],
+                             ['__EVALUATE__', evaluate],
+                             ['__IS_JS_EXPR__', isJsExpr],
+                             ['__RESOLVE_CONFIG__', resolveConfig]]) {
   if (typeof value !== 'function' && typeof value !== 'object') {
     fail(`installed harness API is not callable: ${name}`)
   }
 }
-out.probe = {
-  loader: req.resolve('@deepseek-ai/cordis-plugin-loader/package.json'),
-  include: req.resolve('@deepseek-ai/cordis-plugin-include/package.json'),
-  cordis: req.resolve('@deepseek-ai/cordis/package.json'),
-}
+out.probe = { yaml: req.resolve('__YAML_PACKAGE__/package.json'),
+              include: req.resolve('__INCLUDE_PACKAGE__/package.json'),
+              loader: req.resolve('__LOADER_PACKAGE__/package.json'),
+              cordis: req.resolve('__CORDIS_PACKAGE__/package.json') }
 
 /* The loader's own recursive `!!js` interpolation (config/utils.ts). */
 function interpolate(ctx, value) {
@@ -286,9 +366,10 @@ async function walk(rows, at, ctx, entry, inheritedBy) {
     // owning-parent chain — `while (entry) { if (this.disabledOf(entry.options))
     // return true; entry = entry.parent.ctx.fiber.entry }` — applying
     // `disabledOf` to every ancestor WITHOUT that short-circuit, so a child of
-    // a `disabled: true` group never starts. The roster's own reader agrees
-    // (`@deepseek-ai/dsh-agent-presets` composition-inventory
-    // `combineDisabled(outer, own)`: "lets children inherit its disabled").
+    // a `disabled: true` group never starts. The roster's own reader, a
+    // composition-inventory helper in the host's own presets package
+    // (`combineDisabled(outer, own)`), agrees: it "lets children inherit its
+    // disabled".
     //
     // Divergence, deliberate: the group test here is truthiness, matching the
     // loader (`if (options.group)`, and the mount path's own `row.group`),
@@ -542,12 +623,12 @@ def _env_text(env: dict, key: str) -> str:
 def _profile_planes(env: dict) -> list:
     """dsh's OWN resolution plane, read-only, from an explicitly set ``$DSH_HOME``.
 
-    dsh resolves a profile's bare plugin names out of ``$DSH_HOME/profiles``:
+    dsh resolves a profile's bare plugin names out of ``${DSH_HOME_ENV}/profiles``:
     each profile's own ``node_modules`` is pnpm-managed and authoritative, and
-    ``$DSH_HOME/profiles/node_modules`` is the installation mirror dsh heals
+    ``${DSH_HOME_ENV}/${PROFILES_DIR_NAME}/node_modules`` is the installation mirror dsh heals
     (``healProfilesModuleFallback``). The schemas that decide whether a preset
     row mounts come from the RUNTIME BUNDLE packages resolved there — not from
-    the ``@deepseek-ai/dsh`` CLI package, whose version string is a different
+    the ``CLI_PACKAGE`` CLI package, whose version string is a different
     fact entirely.
 
     Only an explicitly exported ``DSH_HOME`` is consulted — the guard never
@@ -583,13 +664,13 @@ def locate_dsh_install(env: Optional[dict] = None,
     Precedence:
 
     1. the explicit ``DSH_INSTALL_DIR`` / ``DSH_HARNESS_NODE_MODULES`` override;
-    2. dsh's own **profile plane** (``$DSH_HOME/profiles/<profile>/node_modules``,
-       then the ``$DSH_HOME/profiles/node_modules`` installation mirror) —
+    2. dsh's own **profile plane** (``${DSH_HOME_ENV}/${PROFILES_DIR_NAME}/<profile>/node_modules``,
+       then the ``${DSH_HOME_ENV}/${PROFILES_DIR_NAME}/node_modules`` installation mirror) —
        consulted only when ``DSH_HOME`` is explicitly set, read-only;
     3. the **install anchor** reached from the ``dsh`` executable on PATH —
        the same anchor dsh derives from its own module URL.
 
-    The ``@deepseek-ai/dsh`` CLI package version is reported for context only:
+    The ``CLI_PACKAGE`` CLI package version is reported for context only:
     it is NOT what decides a row's schema. What decides it is the set of
     packages reported under ``oracle_packages`` (and, per row, the module the
     row names), each with the absolute path it was resolved from — a guard that
@@ -659,22 +740,23 @@ def locate_dsh_install(env: Optional[dict] = None,
 
     result.update(status="OK", source=chosen_plane, plane=chosen_plane,
                   node_modules=str(chosen))
-    package_json = chosen.joinpath(*INSTALL_ANCHOR_REL)
+    install_anchor = _declared("INSTALL_ANCHOR_REL")
+    cli_package_name = f"{_declared('DSH_SCOPE')}/{_declared('DSH_PACKAGE')}"
+    package_json = chosen.joinpath(*install_anchor)
     result["dsh_package"] = str(package_json.parent) if package_json.is_file() else None
-    cli = _package_version(chosen, f"{DSH_SCOPE}/{DSH_PACKAGE}")
+    cli = _package_version(chosen, cli_package_name)
     if cli is None:
         # A profile plane mirrors the INSTALLATION's dependencies; the CLI
         # package itself may legitimately live only in the install tree.
         for label, plane in _profile_planes(env):
-            cli = _package_version(plane, f"{DSH_SCOPE}/{DSH_PACKAGE}")
+            cli = _package_version(plane, cli_package_name)
             if cli is not None:
                 break
     result["dsh_version"] = cli["version"] if cli else None
     result["cli_package"] = dict(cli or {"version": None, "path": None},
-                                 note=("informational only — the "
-                                       "@deepseek-ai/dsh CLI package version "
-                                       "does not decide a row's schema; the "
-                                       "oracle packages below do"))
+                                 note=("informational only — the installed CLI "
+                                       "package version does not decide a row's "
+                                       "schema; the oracle packages below do"))
     result["oracle_packages"] = _oracle_versions(chosen)
     for label, plane in candidates:
         if plane == chosen:
@@ -710,6 +792,81 @@ def discover_compositions(root: os.PathLike) -> list:
                 continue
             found.append(path)
     return sorted(set(found), key=lambda item: item.relative_to(root).as_posix())
+
+
+# ── the probe request: the contract-declared API facts, injected ────────────
+def _probe_request(install: dict, compositions: Sequence[Path],
+                   output: Path) -> dict:
+    """Build the probe request, injecting the declared API facts.
+
+    Every package name and every symbol name the probe calls comes from
+    `host.apis`; the probe script itself carries none (design §2.5 C-3). Each
+    role is resolved by the symbols its package must export — the YAML parser by
+    `load`, the `!!js` dialect by `entryListSchema`, the loader by
+    `evaluate`/`isJsExpr` and cordis by `resolveConfig` — so a contract
+    reordering is a loud failure, never a silent `undefined`.
+    """
+    return {
+        "nodeModules": install["node_modules"],
+        "output": str(output),
+        "files": [{"path": str(path)} for path in compositions],
+    }
+
+
+def _render_probe_script() -> str:
+    """The probe script with the contract-declared names substituted in.
+
+    The script is a module constant so its JS stays a readable artifact; the
+    package and symbol names it calls are injected here, which keeps the "no
+    host literal in the consumer" rule (K-2) satisfiable without hiding the
+    names behind a second copy. An unresolved placeholder raises — a probe
+    naming a package or a symbol we did not declare must not run.
+    """
+    apis = oracle_api_symbols()
+
+    def package_exporting(*symbols: str) -> tuple:
+        for package, exports in apis.items():
+            if all(symbol in exports for symbol in symbols):
+                return package, exports
+        raise ValueError(
+            "the contract's host.apis declares no package exporting "
+            + "/".join(symbols) + " (declared: "
+            + ", ".join(f"{name} -> {list(entry)}" for name, entry in sorted(apis.items()))
+            + ")")
+
+    def symbol_of(package: str, exports: tuple, *candidates: str) -> str:
+        for symbol in candidates:
+            if symbol in exports:
+                return symbol
+        raise ValueError(
+            f"the contract declares no symbol {candidates[0]} for {package} "
+            f"(declared: {list(exports)})")
+
+    yaml_package, _ = package_exporting("load")
+    include_package, include_exports = package_exporting("entryListSchema")
+    loader_package, loader_exports = package_exporting("evaluate", "isJsExpr")
+    cordis_package, cordis_exports = package_exporting("resolveConfig")
+
+    replacements = {
+        "__YAML_PACKAGE__": yaml_package,
+        "__INCLUDE_PACKAGE__": include_package,
+        "__LOADER_PACKAGE__": loader_package,
+        "__CORDIS_PACKAGE__": cordis_package,
+        "__ENTRY_LIST_SCHEMA__": symbol_of(include_package, include_exports,
+                                           "entryListSchema"),
+        "__EVALUATE__": symbol_of(loader_package, loader_exports, "evaluate"),
+        "__IS_JS_EXPR__": symbol_of(loader_package, loader_exports, "isJsExpr"),
+        "__RESOLVE_CONFIG__": symbol_of(cordis_package, cordis_exports,
+                                        "resolveConfig"),
+    }
+    rendered = PROBE_SCRIPT
+    for placeholder, value in replacements.items():
+        rendered = rendered.replace(placeholder, value)
+    leftover = sorted(set(re.findall(r"__[A-Z0-9_]+__", rendered)))
+    if leftover:
+        raise ValueError(
+            f"probe script placeholders not resolved: {leftover}")
+    return rendered
 
 
 # ── the probe run ───────────────────────────────────────────────────────────
@@ -749,7 +906,7 @@ def _run_probe(node: str, install: dict, compositions: Sequence[Path],
                 "entry count of THAT directory (empty by construction), so it "
                 "proves zero writes to the isolated home — it is not a global "
                 "no-write proof (module imports and a read-only "
-                "$DSH_HOME/profiles probe still happen outside it). "
+                "<home-var>/<profiles-dir> probe still happen outside it). "
                 "M7.7 (a) precedent, FEAT-015/016"),
         },
     }
@@ -764,16 +921,21 @@ def _run_probe(node: str, install: dict, compositions: Sequence[Path],
 
     result["isolation"]["temp_home"] = home.as_posix()
     output_path = scratch / "report.json"
-    request = {
-        "nodeModules": install["node_modules"],
-        "output": str(output_path),
-        "files": [{"path": str(path)} for path in compositions],
-    }
+    try:
+        request = _probe_request(install, compositions, output_path)
+        script = _render_probe_script()
+    except Exception as exc:  # noqa: BLE001 — reported, never a stack
+        result["reason"] = (
+            f"the dsh host contract could not supply the probe facts: "
+            f"{type(exc).__name__}: {exc}")
+        _remove_scratch_dir(scratch)
+        _remove_scratch_dir(home)
+        return result
     child_env = os.environ.copy()
-    child_env["DSH_HOME"] = str(home)
+    child_env[DSH_HOME_ENV] = str(home)
     try:
         completed = subprocess.run(
-            [node, "--input-type=module", "--eval", PROBE_SCRIPT],
+            [node, "--input-type=module", "--eval", script],
             cwd=str(root),
             env=child_env,
             input=json.dumps(request, ensure_ascii=False),
@@ -933,7 +1095,7 @@ def check_dsh_preset_compat(root: Optional[os.PathLike] = None,
             for name, entry in sorted(resolved.items())))
     cli = report["install"].get("cli_package") or {}
     report["details"].append(
-        f"@deepseek-ai/dsh CLI package {cli.get('version') or '?'} "
+        f"installed CLI package {cli.get('version') or '?'} "
         f"({cli.get('path') or '?'}) — informational only; a row's schema comes "
         f"from the oracle packages above, not from the CLI version")
     for other in report["install"].get("other_planes") or []:
@@ -1032,7 +1194,8 @@ def check_dsh_preset_compat(root: Optional[os.PathLike] = None,
 # to the render layer". Check 28v therefore contributes a banner/footer pair to
 # `_run_full_engine_checks` and nothing else — every line of its body is
 # rendered here, so adding the check does not grow the monolith's print surface.
-CHECK_SECTION_TITLE = "Check 28v: DSH Preset Schema Compat"
+# The section title is declared in the contract (`own.checks.compat_section_title`,
+# bound at the top of this module) so the render face has one source too.
 
 
 def emit_check_section(stream=None) -> int:
@@ -1061,7 +1224,7 @@ def emit_check_section(stream=None) -> int:
     print(f"│    resolved at: {install.get('node_modules') or '-'}", file=stream)
     print(f"│    oracle: {oracle or '(none resolved)'}", file=stream)
     cli = install.get("cli_package") or {}
-    print(f"│    @deepseek-ai/dsh CLI {cli.get('version') or '?'} "
+    print(f"│    installed CLI {cli.get('version') or '?'} "
           f"(informational — a row's schema comes from the oracle packages "
           f"above, not from the CLI version)", file=stream)
     for other in install.get("other_planes") or []:
@@ -1111,7 +1274,7 @@ def run_cli(fail_on_issues: bool = False, stream=None) -> int:
         print(f"    oracle: {name}@{entry.get('version') or '?'} "
               f"({entry.get('path') or '?'})", file=stream)
     cli = install.get("cli_package") or {}
-    print(f"    @deepseek-ai/dsh CLI {cli.get('version') or '?'} "
+    print(f"    installed CLI {cli.get('version') or '?'} "
           f"({cli.get('path') or '?'}) — informational only: a row's schema "
           f"comes from the oracle packages above, not from the CLI version",
           file=stream)
@@ -1156,7 +1319,7 @@ def _print_human(report: dict, stream) -> None:
     print(f"plane  : {install.get('source') or '-'}", file=stream)
     print(f"resolve: {install.get('node_modules') or '-'}", file=stream)
     cli = install.get("cli_package") or {}
-    print(f"cli    : @deepseek-ai/dsh {cli.get('version') or '?'} "
+    print(f"cli    : {CLI_PACKAGE} {cli.get('version') or '?'} "
           f"({cli.get('path') or '?'}) — informational, not the schema authority",
           file=stream)
     for name, entry in sorted((install.get("oracle_packages") or {}).items()):

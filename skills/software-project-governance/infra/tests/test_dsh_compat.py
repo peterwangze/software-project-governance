@@ -35,12 +35,14 @@ Run:
 
 import contextlib
 import importlib.util
+import io
 import json
 import os
 import shutil
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _HERE = Path(__file__).resolve().parent
 _INFRA_DIR = _HERE.parent
@@ -50,6 +52,7 @@ if str(_INFRA_DIR) not in sys.path:
     sys.path.insert(0, str(_INFRA_DIR))
 
 import dsh_compat  # noqa: E402
+import dsh_fixtures  # noqa: E402
 
 # FIX-310: the composition template IS the preset payload's render source
 # (there is no second, self-locating composition any more), so the same file
@@ -362,7 +365,12 @@ class AggregationTests(unittest.TestCase):
         self.assertEqual(report["verdict"], "FAIL", report)
         self.assertIn("valid entry list", report["issues"][0])
 
-    def test_no_schema_rows_are_disclosed_not_failed(self):
+    def test_no_schema_rows_only_degrades_to_not_run(self):
+        # FIX-315 (V3) / design §4.4.1③. This test used to assert
+        # `PASS` + `checked=0`, which is precisely the defect AUDIT-153
+        # G-01 filed: a run that validated NOTHING reported a green verdict.
+        # The rewritten expectation is the invariant, not a preference —
+        # `rows_checked == 0` can never be PASS (design §4.3 L1).
         path = _REPO_ROOT / "fixture.cordis.yml"
         report = self._run(
             [_file_entry(path, [
@@ -370,9 +378,48 @@ class AggregationTests(unittest.TestCase):
                 _row("grp", "cordis:group", "BUILTIN", "builtin"),
             ], checked=0)],
             compositions=[path])
+        self.assertEqual(report["verdict"], "NOT_RUN", report)
+        self.assertEqual(report["issues"], [])
+        self.assertEqual(report["rows_checked"], 0)
+        self.assertEqual(report["rows_enabled"], 2)
+        # The verdict reason states the denominator instead of claiming a
+        # validation that did not happen ("0 enabled row(s) validated" next to
+        # a PASS was the old, self-contradicting sentence).
+        self.assertIn("NOT verified", report["reason"])
+        self.assertIn("rows_verified 0 of 2", report["reason"])
+        # Both unverified rows are disclosed on the report face …
+        self.assertEqual(report["coverage"]["rows_verified"], 0)
+        self.assertEqual(report["coverage"]["rows_unverified"], 2)
+        self.assertEqual(dict(report["coverage"]["unverified_reasons"]),
+                         {"NO_SCHEMA": 1, "BUILTIN": 1})
+        self.assertEqual(len(report["unverified"]), 2, report["unverified"])
+        self.assertTrue(any("NO_SCHEMA" in line for line in report["details"]))
+        self.assertTrue(all("NOT verified" in line for line in report["unverified"]))
+
+    def test_mixed_rows_pass_discloses_the_unverified_ones(self):
+        # FIX-315 (V3) / design §4.4.1③: exactly one schema-bearing row plus
+        # one row no schema can check. The verified surface may still PASS —
+        # but only while naming the row it could not verify.
+        path = _REPO_ROOT / "fixture.cordis.yml"
+        report = self._run(
+            [_file_entry(path, [
+                _row("persona", "@deepseek-ai/dsh-persona", "PASS"),
+                _row("tool-ask-user", "@deepseek-ai/dsh-tool-ask-user",
+                     "NO_SCHEMA", "no Config schema"),
+            ], checked=1)],
+            compositions=[path])
         self.assertEqual(report["verdict"], "PASS", report)
         self.assertEqual(report["issues"], [])
-        self.assertTrue(any("NO_SCHEMA" in line for line in report["details"]))
+        self.assertEqual(report["rows_checked"], 1)
+        self.assertEqual(report["coverage"]["rows_unverified"], 1, report["coverage"])
+        self.assertEqual(dict(report["coverage"]["unverified_reasons"]),
+                         {"NO_SCHEMA": 1})
+        self.assertEqual(len(report["unverified"]), 1, report["unverified"])
+        self.assertIn("tool-ask-user", report["unverified"][0])
+        # The reason carries both numbers: the verified denominator AND the
+        # rows left unverified (G01-d).
+        self.assertIn("verified 1 of 2", report["reason"])
+        self.assertIn("1 enabled row(s) NOT verified", report["reason"])
 
     def test_everything_unverified_degrades_to_not_run(self):
         # Fail-closed: a run that verified nothing must never read as PASS.
@@ -451,6 +498,450 @@ class AggregationTests(unittest.TestCase):
         self.assertEqual(report["verdict"], "NOT_RUN", report)
         self.assertEqual(report["issues"], [])
         self.assertIn("oracle unavailable", report["reason"])
+
+
+# ── FIX-315 / V3: "zero validations MUST NOT PASS" (design §4.3) ────────────
+# Three independent invariants, one per layer. Any of them failing means a run
+# that validated nothing can reach the user as a green verdict — the defect
+# AUDIT-153 G-01 filed (5 `NO_SCHEMA` rows reported `PASS / checked 0`, and
+# those rows did not even appear on screen).
+#
+#: All three are built on injected probe reports, so they need neither node nor
+#: an installed harness: the invariant is about this guard's own decision and
+#: rendering, and it must hold on every machine.
+
+#: Row kinds that mean "this row's config WAS put through a schema".
+_MATRIX_COMPARED_KINDS = ("PASS", "CONFIG_INVALID")
+#: Row kinds the probe reports WITHOUT counting the row as enabled: it bumps
+#: `inherited_disabled` and `continue`s before `enabled += 1` (a child of a
+#: disabled ancestor never starts). Rendering one as an "enabled row not
+#: verified" is the F-01 defect, so the fixture must model the split.
+_MATRIX_NOT_STARTED_KINDS = ("DISABLED_INHERITED",)
+
+
+def _matrix_entry(path, kinds, *, status="OK"):
+    """A composition entry shaped exactly like the Node probe's output.
+
+    The counters are **derived from the row kinds** the way the probe derives
+    them, because a fixture whose counters disagree with its own rows would test
+    the fixture instead of the guard:
+
+    * ``enabled`` counts the rows the walk reached and either compared against a
+      schema (`PASS`, or the comparison that produced `CONFIG_INVALID`) or had
+      no schema to compare against (``UNVERIFIED_KINDS``);
+    * ``inherited_disabled`` counts the rows that never started, and they are
+      **not** part of ``enabled`` (F-01 — this is the split the probe makes at
+      its `inherited_disabled += 1; continue`);
+    * ``checked`` counts the comparisons that actually happened.
+    """
+    not_started = sum(1 for kind in kinds if kind in _MATRIX_NOT_STARTED_KINDS)
+    checked = sum(1 for kind in kinds if kind in _MATRIX_COMPARED_KINDS)
+    return {
+        "path": str(path),
+        "status": status,
+        "error": "",
+        "enabled": len(kinds) - not_started,
+        "checked": checked,
+        "inherited_disabled": not_started,
+        "rows": [_row(f"row-{index + 1}", f"@deepseek-ai/dsh-mod-{index + 1}", kind,
+                      f"{kind} fixture message")
+                 for index, kind in enumerate(kinds)],
+    }
+
+
+class ZeroVerificationInvariantTests(unittest.TestCase):
+    """L1/L2/L3 — design §4.3, one test per layer.
+
+    The matrix below is the "orthogonal subset" §4.3 L1 asks for: every
+    combination of (verified row, unverified row, finding) at zero, one and
+    two occurrences, plus the file-level shapes that also produce a report.
+    """
+
+    _INSTALL = {"status": "OK", "reason": "", "source": "$TEST",
+                "node_modules": "C:/fake/node_modules",
+                "dsh_package": "C:/fake/node_modules/@deepseek-ai/dsh",
+                "dsh_version": "0.0.0-test"}
+
+    #: (label, row kinds, file status)
+    MATRIX = (
+        ("only NO_SCHEMA rows", ("NO_SCHEMA", "NO_SCHEMA"), "OK"),
+        ("only BUILTIN rows", ("BUILTIN",), "OK"),
+        ("only inherited-disabled rows", ("DISABLED_INHERITED",), "OK"),
+        ("mixed unverified kinds", ("NO_SCHEMA", "BUILTIN", "DISABLED_INHERITED"), "OK"),
+        ("NO_SCHEMA plus a finding", ("NO_SCHEMA", "IMPORT_ERROR"), "OK"),
+        ("one verified row", ("PASS",), "OK"),
+        ("verified plus one unverified", ("PASS", "NO_SCHEMA"), "OK"),
+        ("verified plus one inherited-disabled (F-01)", ("PASS", "DISABLED_INHERITED"), "OK"),
+        ("two verified plus two unverified", ("PASS", "PASS", "NO_SCHEMA", "BUILTIN"), "OK"),
+        ("only a finding", ("CONFIG_INVALID",), "OK"),
+        ("unreadable composition", (), "UNREADABLE"),
+    )
+
+    def _report(self, kinds, status="OK"):
+        path = _REPO_ROOT / "matrix.cordis.yml"
+        return dsh_compat.check_dsh_preset_compat(
+            root=_REPO_ROOT,
+            compositions=[path],
+            env={},
+            which=_which_map({"node": "C:/fake/node.exe"}),
+            install=dict(self._INSTALL),
+            probe_runner=lambda node, install, paths, root, timeout: _probe_report(
+                [_matrix_entry(path, kinds, status=status)]),
+        )
+
+    # ── L1: report level ────────────────────────────────────────────────────
+    def test_L1_zero_checked_rows_never_verdict_pass(self):
+        """§4.3 L1 — no report may satisfy `rows_checked == 0 ∧ verdict == PASS`."""
+        for label, kinds, status in self.MATRIX:
+            with self.subTest(case=label, kinds=kinds, status=status):
+                report = self._report(kinds, status)
+                if report["rows_checked"] != 0:
+                    continue
+                self.assertIn(report["verdict"], ("FAIL", "NOT_RUN"), report)
+                self.assertNotEqual(report["verdict"], "PASS", report)
+
+    def test_L1_coverage_block_accounts_for_every_enabled_row(self):
+        """G01-b — no enabled row falls outside the trust surface.
+
+        ``verified + unverified == enabled``, exactly: every **enabled** row is
+        either put through a schema or disclosed as unverifiable. A row the walk
+        could not evaluate never reaches either state — an import failure is a
+        finding, and a child of a disabled ancestor never starts (the probe
+        counts it in `inherited_disabled`, **not** in `enabled`, F-01) — so
+        neither is quietly filed as "verified" nor as "enabled but unverified".
+
+        ``unverified_reasons`` is a histogram of the unverified ROWS only: a
+        file-level fact has its own counter, so no row count is invented for a
+        composition whose rows could not be read (F-03).
+        """
+        for label, kinds, status in self.MATRIX:
+            with self.subTest(case=label, kinds=kinds, status=status):
+                report = self._report(kinds, status)
+                coverage = report["coverage"]
+                unreached = sum(
+                    1 for kind in kinds
+                    if kind not in dsh_compat.UNVERIFIED_KINDS
+                    and kind not in _MATRIX_COMPARED_KINDS
+                    and kind not in _MATRIX_NOT_STARTED_KINDS)
+                self.assertEqual(
+                    coverage["rows_verified"] + coverage["rows_unverified"]
+                    + unreached,
+                    coverage["rows_enabled"], report["coverage"])
+                self.assertEqual(coverage["rows_enabled"], report["rows_enabled"])
+                self.assertEqual(coverage["rows_verified"], report["rows_checked"],
+                                 report["coverage"])
+                self.assertLessEqual(coverage["rows_verified"],
+                                     coverage["rows_enabled"], report["coverage"])
+                self.assertEqual(
+                    sum(coverage["unverified_reasons"].values()),
+                    coverage["rows_unverified"], report["coverage"])
+                if status == "OK":
+                    self.assertEqual(
+                        sorted(coverage["unverified_reasons"]),
+                        sorted({kind for kind in kinds
+                                if kind in dsh_compat.UNVERIFIED_KINDS}),
+                        report["coverage"])
+                    self.assertEqual(coverage["unreadable_compositions"], 0,
+                                     report["coverage"])
+                else:
+                    # The rows of an unreadable file are unknowable, so they are
+                    # NOT part of the row histogram (a `UNREADABLE=0` bucket
+                    # would read as "no unreadable composition"): the count of
+                    # such compositions is its own fact, and the composition
+                    # itself is disclosed on the `unverified` channel.
+                    self.assertEqual(coverage["unreadable_compositions"], 1,
+                                     report["coverage"])
+                    self.assertNotIn("UNREADABLE", coverage["unverified_reasons"],
+                                     report["coverage"])
+                    self.assertEqual(coverage["rows_enabled"], 0, report["coverage"])
+                    self.assertEqual(coverage["rows_unverified"], 0,
+                                     report["coverage"])
+                    self.assertEqual(len(report["unverified"]), 1,
+                                     report["unverified"])
+                    self.assertIn("could not be read", report["unverified"][0])
+
+    def test_L1_verified_plus_inherited_disabled_is_not_self_contradictory(self):
+        """F-01 — the exact shape the review measured with the real probe.
+
+        One schema-checked row plus one child of a disabled ancestor: the probe
+        reports `enabled=1 / checked=1 / inherited_disabled=1`. Counting the
+        non-started row as an enabled-but-unverified row made the arithmetic
+        wrong (``1 + 1 != 1``) **and** put a self-contradicting PASS sentence on
+        screen ("verified 1 of 1 enabled row(s) …; 1 enabled row(s) NOT
+        verified"), which is the very wording defect G01-d exists to remove.
+        """
+        report = self._report(("PASS", "DISABLED_INHERITED"))
+        coverage = report["coverage"]
+        self.assertEqual(report["verdict"], "PASS", report)
+        self.assertEqual(report["rows_enabled"], 1, report)
+        self.assertEqual(report["rows_checked"], 1, report)
+        self.assertEqual(report["rows_inherited_disabled"], 1, report)
+        self.assertEqual(coverage["rows_enabled"], 1, coverage)
+        self.assertEqual(coverage["rows_verified"], 1, coverage)
+        self.assertEqual(coverage["rows_unverified"], 0, coverage)
+        self.assertEqual(
+            coverage["rows_verified"] + coverage["rows_unverified"],
+            coverage["rows_enabled"], coverage)
+        # No sentence may claim an enabled row went unverified when it did not.
+        self.assertIn("verified 1 of 1 enabled row(s)", report["reason"])
+        self.assertNotIn("enabled row(s) NOT verified", report["reason"])
+        self.assertEqual(report["unverified"], [], report["unverified"])
+        # …and the non-started row is still disclosed, just under its own fact:
+        # every surface reports the `inherited-disabled rows:` count, and the
+        # detail-carrying surfaces print the row itself.
+        out = self._render(report, "section")
+        self.assertIn("inherited-disabled rows: 1", out, out)
+        self.assertNotIn("[NOT_RUN]", out, out)
+        cli_out = self._render(report, "cli")
+        self.assertIn("inherited-disabled rows: 1", cli_out, cli_out)
+        self.assertIn("DISABLED_INHERITED", cli_out, cli_out)
+        human = io.StringIO()
+        dsh_compat._print_human(report, human)
+        self.assertIn("DISABLED_INHERITED", human.getvalue(), human.getvalue())
+        self.assertIn("(writes: 0)", human.getvalue(), human.getvalue())
+
+    def test_L1_inherited_disabled_rows_are_still_disclosed(self):
+        """F-01 — removing `DISABLED_INHERITED` from the unverified half must
+        not make the row disappear.
+
+        Its disclosure path is the `inherited_disabled` counter (every surface
+        prints the count) plus the row's own `details` line, and the F4
+        "would mount nothing" branch when nothing else is enabled — not the
+        `[NOT_RUN]` line, which is reserved for enabled rows.
+        """
+        report = self._report(("DISABLED_INHERITED",))
+        self.assertEqual(report["rows_inherited_disabled"], 1, report)
+        self.assertEqual(report["rows_enabled"], 0, report)
+        self.assertEqual(report["coverage"]["rows_unverified"], 0,
+                         report["coverage"])
+        self.assertTrue(any("DISABLED_INHERITED" in line
+                            for line in report["details"]), report["details"])
+        self.assertEqual(report["verdict"], "NOT_RUN", report)
+        self.assertIn("would mount nothing", report["reason"])
+        out = self._render(report, "section")
+        self.assertIn("inherited-disabled rows: 1", out, out)
+
+    def test_L1_unreadable_only_names_the_read_failure_not_disabled_rows(self):
+        """F-06 — a file we never opened must not be explained as "all rows are
+        disabled": that names the wrong cause on the only line the user reads.
+        """
+        report = self._report((), "UNREADABLE")
+        self.assertEqual(report["verdict"], "NOT_RUN", report)
+        self.assertIn("could not be read", report["reason"])
+        self.assertIn("rows NOT verified", report["reason"])
+        self.assertNotIn("would mount nothing", report["reason"])
+        self.assertNotIn("disabled", report["reason"])
+        self.assertEqual(report["coverage"]["unreadable_compositions"], 1,
+                         report["coverage"])
+
+    def test_L1_findings_still_win_over_the_zero_checked_degradation(self):
+        # Ordering matters: a rejected row is a FAIL (a real, actionable
+        # defect), not a NOT_RUN. Degrading a finding to "unverified" would
+        # trade one wrong verdict for another.
+        report = self._report(("NO_SCHEMA", "CONFIG_INVALID"))
+        self.assertEqual(report["verdict"], "FAIL", report)
+        self.assertEqual(len(report["issues"]), 1, report["issues"])
+        self.assertEqual(report["coverage"]["rows_unverified"], 1, report["coverage"])
+
+    # ── L2: render level ────────────────────────────────────────────────────
+    def _render(self, report, renderer="section"):
+        """Capture one render surface for an already-built report.
+
+        The render entry points run the guard themselves, so the guard is
+        patched to return ``report`` — the Renderer must then be judged purely
+        on what it does with a given report, which is exactly the L2/L3
+        question.
+        """
+        stream = io.StringIO()
+        with mock.patch.object(dsh_compat, "check_dsh_preset_compat",
+                               return_value=report):
+            if renderer == "section":
+                dsh_compat.emit_check_section(stream=stream)
+            else:
+                dsh_compat.run_cli(stream=stream)
+        return stream.getvalue()
+
+    def test_L2_zero_checked_report_never_renders_pass(self):
+        """§4.3 L2 — a zero-checked report renders `[NOT_RUN]`, never `[PASS]`."""
+        for renderer in ("section", "cli"):
+            with self.subTest(renderer=renderer):
+                out = self._render(self._report(("NO_SCHEMA",)), renderer)
+                self.assertNotIn("[PASS]", out, out)
+                self.assertIn("[NOT_RUN]", out, out)
+                self.assertIn("schema-checked rows: 0", out, out)
+                if renderer == "cli":
+                    # `run_cli`'s terminal token has no brackets, so the
+                    # bracket assertion above cannot see a regression on that
+                    # surface (F-04b): assert the token's own spelling.
+                    self.assertIn("Result: NOT_RUN", out, out)
+                    self.assertNotIn("Result: PASSED", out, out)
+
+    def test_L2_zero_checked_report_lists_each_unverified_row(self):
+        out = self._render(self._report(("NO_SCHEMA", "BUILTIN")), "section")
+        self.assertIn("[NO_SCHEMA]", out, out)
+        self.assertIn("[BUILTIN]", out, out)
+        self.assertIn('row "row-1"', out, out)
+        self.assertIn('row "row-2"', out, out)
+
+    def test_L2_unreadable_composition_is_disclosed_by_both_surfaces(self):
+        """F-02 — a composition nobody could read must not vanish from a PASS run.
+
+        The three surfaces render from the structured `unverified` set, so a
+        file-level unverified fact has to travel on that same channel: when it
+        lived only in `details`, both `emit_check_section` and `run_cli` printed
+        nothing for it, which is the "unverified fact off the screen" defect this
+        slice exists to remove.
+        """
+        good = _REPO_ROOT / "good.cordis.yml"
+        locked = _REPO_ROOT / "locked.cordis.yml"
+        report = dsh_compat.check_dsh_preset_compat(
+            root=_REPO_ROOT,
+            compositions=[good, locked],
+            env={},
+            which=_which_map({"node": "C:/fake/node.exe"}),
+            install=dict(self._INSTALL),
+            probe_runner=lambda node, install, paths, root, timeout: _probe_report([
+                _file_entry(good, [_row("persona", "@deepseek-ai/dsh-persona", "PASS")]),
+                _file_entry(locked, [], status="UNREADABLE", error="ENOENT: no such file"),
+            ]),
+        )
+        # The verified half still passes — that is the point: the disclosure has
+        # to survive a green verdict.
+        self.assertEqual(report["verdict"], "PASS", report)
+        self.assertEqual(report["coverage"]["unreadable_compositions"], 1,
+                         report["coverage"])
+        self.assertEqual(len(report["unverified"]), 1, report["unverified"])
+        self.assertIn("could not be read", report["unverified"][0])
+        self.assertIn("ENOENT", report["unverified"][0])
+        for renderer in ("section", "cli"):
+            with self.subTest(renderer=renderer):
+                out = self._render(report, renderer)
+                self.assertIn(report["unverified"][0], out, out)
+                self.assertIn("[NOT_RUN]", out, out)
+                self.assertIn("ENOENT", out, out)
+        human = io.StringIO()
+        dsh_compat._print_human(report, human)
+        self.assertIn("ENOENT", human.getvalue(), human.getvalue())
+
+    # ── L3: disclosure level ────────────────────────────────────────────────
+    def test_L3_partial_pass_discloses_every_unverified_row(self):
+        """§4.3 L3 — a mixed report must put its unverified rows on screen."""
+        for renderer in ("section", "cli"):
+            with self.subTest(renderer=renderer):
+                report = self._report(("PASS", "PASS", "NO_SCHEMA", "BUILTIN"))
+                self.assertEqual(report["verdict"], "PASS", report)
+                self.assertEqual(len(report["unverified"]), 2, report["unverified"])
+                out = self._render(report, renderer)
+                for line in report["unverified"]:
+                    self.assertIn(line, out, out)
+                # Judged by the structured kind, not by a substring: the
+                # disclosure survives any rewording of a row message.
+                self.assertIn("[NO_SCHEMA]", out, out)
+                self.assertIn("[BUILTIN]", out, out)
+                # The verified denominator is stated, so "verified 2 of 4" can
+                # never be read as "4 rows validated" (G01-d).
+                self.assertIn("verified 2 of 4", out, out)
+                self.assertIn("2 enabled row(s) NOT verified", out, out)
+
+    def test_L3_disclosure_is_kind_driven_not_message_driven(self):
+        # The regression this pins down: the old render branch printed a
+        # detail only when its TEXT contained "NOT verified", while the
+        # `NO_SCHEMA` message never did — five unverified rows were therefore
+        # invisible on a PASS screen. A row whose message contains no such
+        # substring must still be disclosed.
+        path = _REPO_ROOT / "kind-driven.cordis.yml"
+        report = dsh_compat.check_dsh_preset_compat(
+            root=_REPO_ROOT,
+            compositions=[path],
+            env={},
+            which=_which_map({"node": "C:/fake/node.exe"}),
+            install=dict(self._INSTALL),
+            probe_runner=lambda node, install, paths, root, timeout: _probe_report(
+                [{"path": str(path), "status": "OK", "error": "", "enabled": 2,
+                  "checked": 1, "inherited_disabled": 0,
+                  "rows": [_row("ok", "@deepseek-ai/dsh-persona", "PASS"),
+                           _row("silent", "@deepseek-ai/dsh-tool-ask-user",
+                                "NO_SCHEMA", "message text without the old marker")]}]),
+        )
+        self.assertEqual(report["verdict"], "PASS", report)
+        self.assertNotIn("NOT verified", report["compositions"][0]["rows"][1]["message"])
+        out = self._render(report, "section")
+        self.assertIn("message text without the old marker", out, out)
+        # Exactly one disclosure *line* (the verdict line mentions [NOT_RUN]
+        # too; the count is of lines the renderer emitted for unverified rows).
+        self.assertEqual(len([line for line in out.splitlines()
+                              if "[NOT_RUN]" in line and "[PASS]" not in line]),
+                         1, out)
+
+    def test_L3_the_render_is_not_the_old_substring_scan(self):
+        """F-04(a) — pin the ROOT-CAUSE fix, not just its current output.
+
+        Reverting the render branches to the HEAD form
+        (``for detail in details: if "NOT verified" in detail``) keeps the rest
+        of the suite green, because today's disclosure lines happen to contain
+        that phrase and to live in `details` too. So the suite must assert the
+        *difference* between the two mechanisms:
+
+        * **false negative** — a row disclosed because its KIND says unverified
+          but whose message never says "NOT verified" (the real §4.4.1 G-01④
+          root cause);
+        * **false positive** — a detail line that is not an unverified item at
+          all, carrying the phrase only as prose;
+        * **file level** — an unreadable composition, whose line is a file fact
+          rather than a row fact.
+
+        Any of the three reverted to a substring scan changes the asserted line
+        set, so the mutation is caught here.
+        """
+        # ── false positive: a report whose DETAIL lines carry the phrase as
+        #    prose while the actual unverified set excludes them. The old
+        #    mechanism would print those prose lines as `[NOT_RUN]` disclosures;
+        #    dropping one of them (the mechanism change under test) is what this
+        #    pins. Artwork directly on top of a real report, because the phrase
+        #    has to appear in a detail line for the asymmetry to exist at all.
+        path = _REPO_ROOT / "substring.cordis.yml"
+        report = self._report(("PASS", "BUILTIN", "NO_SCHEMA"))
+        report["details"].append(
+            f"{path.as_posix()}: row \"noise\" (@deepseek-ai/dsh-noise) "
+            f"[NO_SCHEMA] — NOT verified: prose that is not a disclosure")
+        self.assertEqual(report["verdict"], "PASS", report)
+        self.assertEqual(len(report["unverified"]), 2, report["unverified"])
+        self.assertEqual(
+            len([line for line in report["details"] if "NOT verified" in line]), 3,
+            report["details"])
+
+        out = self._render(report, "section")
+        structured = [line for line in out.splitlines()
+                      if "[NOT_RUN]" in line and "[PASS]" not in line]
+        # The screen shows exactly the two unverified rows — not three: the
+        # prose detail is NOT promoted, because selection is by kind.
+        self.assertEqual(len(structured), 2, out)
+        for line in report["unverified"]:
+            self.assertIn(line, out, out)
+        self.assertNotIn("noise", out, out)
+        # (2) the disclosure is kind-labelled, so a rewording cannot hide it.
+        for kind in ("BUILTIN", "NO_SCHEMA"):
+            self.assertIn(f"[{kind}]", out, out)
+
+        # ── false negative: the same shape with the phrase removed from every
+        #    unverified message — a substring scan would disclose NOTHING, while
+        #    the structured set still finds both (the G-01④ root cause). This is
+        #    the direction the old code failed in, kept as its own case so both
+        #    directions of the asymmetry are pinned.
+        bare = self._report(("PASS", "BUILTIN", "NO_SCHEMA"))
+        for row in bare["compositions"][0]["rows"][1:]:
+            row["message"] = "message reworded with no marker"
+        bare["details"] = [line for line in bare["details"]
+                           if "NOT verified" not in line]
+        self.assertEqual(bare["verdict"], "PASS", bare)
+        self.assertEqual(len(bare["unverified"]), 2, bare["unverified"])
+        self.assertEqual([line for line in bare["details"]
+                          if "NOT verified" in line], [], bare["details"])
+        bare_out = self._render(bare, "section")
+        bare_lines = [line for line in bare_out.splitlines()
+                      if "[NOT_RUN]" in line and "[PASS]" not in line]
+        self.assertEqual(len(bare_lines), 2, bare_out)
+        self.assertNotIn("NOT verified", bare["compositions"][0]["rows"][1]["message"])
 
 
 # ── the pure-Python floor: no node, no dsh install required ─────────────────
@@ -880,6 +1371,110 @@ class InstalledSchemaTests(unittest.TestCase):
         paths = [entry["path"] for entry in report["compositions"]]
         self.assertEqual(
             paths, ["agent-presets/governance/agent.cordis.yml.template"], paths)
+
+    @unittest.skipUnless(_LIVE_INSTALL and _LIVE_NODE, _LIVE_SKIP)
+    def test_shipped_composition_discloses_its_unverified_rows(self):
+        # FIX-315 / V3: the repo itself carries rows whose modules export no
+        # `Config`. The aggregate verdict legitimately stays PASS (18 of the
+        # 23 enabled rows ARE schema-checked, and this slice must not shrink
+        # that surface), but the unverified remainder is now named on screen
+        # instead of being absent from the output entirely.
+        report = dsh_compat.check_dsh_preset_compat(
+            root=_REPO_ROOT, env={}, install=_LIVE_INSTALL, node=_LIVE_NODE)
+        coverage = report["coverage"]
+        self.assertEqual(coverage["rows_enabled"], report["rows_enabled"])
+        self.assertEqual(coverage["rows_verified"], report["rows_checked"])
+        self.assertEqual(
+            coverage["rows_verified"] + coverage["rows_unverified"],
+            coverage["rows_enabled"], coverage)
+        if report["verdict"] == "PASS":
+            self.assertGreater(coverage["rows_unverified"], 0, coverage)
+            self.assertEqual(len(report["unverified"]),
+                             coverage["rows_unverified"], report["unverified"])
+            self.assertIn("NOT verified", report["reason"])
+            out = self._rendered_section(report)
+            for line in report["unverified"]:
+                self.assertIn(line, out, out)
+
+    @staticmethod
+    def _rendered_section(report):
+        stream = io.StringIO()
+        with mock.patch.object(dsh_compat, "check_dsh_preset_compat",
+                               return_value=report):
+            dsh_compat.emit_check_section(stream=stream)
+        return stream.getvalue()
+
+
+# ── the generated negative fixtures (design §5.6 / §6.1 V3③) ────────────────
+# FX-NO-SCHEMA-01/02 are emitted by `dsh_fixtures.py` rather than checked in
+# (§4.4.1④: "生成式"), so the acceptance command of §4.4.1⑤ is reproducible on
+# any machine: same id ⇒ same bytes ⇒ same verdict.
+class NoSchemaFixtureTests(unittest.TestCase):
+    """End-to-end: emitted fixture → real loader dialect → real schemas."""
+
+    def _emit(self, fixture_id, out_dir):
+        return dsh_fixtures.emit_fixture(fixture_id, out_dir)
+
+    @unittest.skipUnless(_LIVE_INSTALL and _LIVE_NODE, _LIVE_SKIP)
+    def test_fx_no_schema_01_degrades_to_not_run_never_pass(self):
+        # The fixture carries a config key (`BOGUS_KEY`) that any schema
+        # would reject. The row's module exports no schema, so nothing can
+        # reject it — and therefore nothing may be reported as verified:
+        # `NOT_RUN`, with zero gate issues (the optional-tooling policy).
+        with _scratch("spg-test-fx01-") as td:
+            composition = self._emit("FX-NO-SCHEMA-01", td)
+            report = dsh_compat.check_dsh_preset_compat(
+                root=Path(td), compositions=[composition], env={},
+                install=_LIVE_INSTALL, node=_LIVE_NODE)
+        self.assertEqual(report["verdict"], "NOT_RUN", report)
+        self.assertEqual(report["issues"], [], report["issues"])
+        self.assertEqual(report["rows_enabled"], 1, report)
+        self.assertEqual(report["rows_checked"], 0, report)
+        self.assertEqual(report["coverage"]["rows_unverified"], 1, report["coverage"])
+        self.assertEqual(dict(report["coverage"]["unverified_reasons"]),
+                         {"NO_SCHEMA": 1})
+        self.assertIn("NOT verified", report["reason"])
+        # The message must not claim what the loader does with the config:
+        # that behaviour is a separate, unverified fact (G01-e).
+        message = report["compositions"][0]["rows"][0]["message"]
+        self.assertIn("cannot validate", message)
+        self.assertNotIn("passes this config through", message)
+        self.assertNotIn("unvalidated", message)
+
+    @unittest.skipUnless(_LIVE_INSTALL and _LIVE_NODE, _LIVE_SKIP)
+    def test_fx_no_schema_01_cli_exits_zero_and_renders_not_run(self):
+        # The standalone surface too: NOT_RUN is disclosed, exits 0, and does
+        # not print a [PASS] the report never earned.
+        with _scratch("spg-test-fx01-cli-") as td:
+            composition = self._emit("FX-NO-SCHEMA-01", td)
+            report = dsh_compat.check_dsh_preset_compat(
+                root=Path(td), compositions=[composition], env={},
+                install=_LIVE_INSTALL, node=_LIVE_NODE)
+            stream = io.StringIO()
+            with mock.patch.object(dsh_compat, "check_dsh_preset_compat",
+                                   return_value=report):
+                code = dsh_compat.run_cli(stream=stream)
+            out = stream.getvalue()
+        self.assertEqual(code, 0, out)
+        self.assertIn("Result: NOT_RUN", out, out)
+        self.assertNotIn("[PASS]", out, out)
+        self.assertIn("schema-checked rows: 0", out, out)
+        self.assertIn("[NO_SCHEMA]", out, out)
+
+    @unittest.skipUnless(_LIVE_INSTALL and _LIVE_NODE, _LIVE_SKIP)
+    def test_fx_no_schema_02_passes_but_discloses_the_unverified_row(self):
+        with _scratch("spg-test-fx02-") as td:
+            composition = self._emit("FX-NO-SCHEMA-02", td)
+            report = dsh_compat.check_dsh_preset_compat(
+                root=Path(td), compositions=[composition], env={},
+                install=_LIVE_INSTALL, node=_LIVE_NODE)
+        self.assertEqual(report["verdict"], "PASS", report)
+        self.assertEqual(report["issues"], [], report["issues"])
+        self.assertEqual(report["rows_enabled"], 2, report)
+        self.assertEqual(report["rows_checked"], 1, report)
+        self.assertEqual(report["coverage"]["rows_unverified"], 1, report["coverage"])
+        self.assertEqual(len(report["unverified"]), 1, report["unverified"])
+        self.assertIn("tool-ask-user", report["unverified"][0])
 
 
 if __name__ == "__main__":

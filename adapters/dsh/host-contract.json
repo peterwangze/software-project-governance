@@ -1015,7 +1015,7 @@
         "target": "medium",
         "guard": [
           "28v",
-          "test_dsh_compat.py::test_no_schema_rows_are_disclosed_not_failed"
+          "test_dsh_compat.py::test_L1_zero_checked_rows_never_verdict_pass"
         ],
         "negative_fixtures": [
           "FX-NO-SCHEMA-01",

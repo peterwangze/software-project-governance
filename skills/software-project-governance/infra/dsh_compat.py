@@ -68,13 +68,20 @@ Isolation and access boundaries (M7.7 (a) precedent, FEAT-015/016)
 
 Verdicts (repo optional-tooling policy)
 ---------------------------------------
-``PASS``   every enabled row validated against the resolved schemas.
+``PASS``   at least one enabled row was validated against the resolved
+           schemas, **and** every enabled row that could not be validated is
+           disclosed (the ``coverage`` block, plus one ``[NOT_RUN]`` line per
+           unverified row).
 ``FAIL``   a row's config was rejected (row id + module + the schema's exact
            message), a row's module could not be resolved, a ``!!js``
            expression threw, or a composition is not a valid entry list.
-``NOT_RUN`` no node and/or no resolvable plugin set (with the reason), or
-           nothing could be verified. ``NOT_RUN`` never counts as a gate issue
-           — it discloses an unverified fact instead of inventing a green one.
+``NOT_RUN`` no node and/or no resolvable plugin set (with the reason), nothing
+           could be verified, **or enabled rows exist but not one of them was
+           compared against a schema** (``rows_checked == 0`` — e.g. every
+           enabled row's module exports no ``Config``). ``NOT_RUN`` never counts
+           as a gate issue — it discloses an unverified fact instead of
+           inventing a green one. The second clause is the invariant behind
+           ``coverage``: zero validated rows can never render as ``PASS``.
 """
 
 from __future__ import annotations
@@ -98,6 +105,7 @@ __all__ = [
     "NODE_MODULES_ENV",
     "ORACLE_PACKAGES",
     "PROBE_SCRIPT",
+    "UNVERIFIED_KINDS",
     "VERDICT_FAIL",
     "VERDICT_NOT_RUN",
     "VERDICT_PASS",
@@ -122,6 +130,37 @@ FINDING_KINDS = (
     "CONFIG_EXPR_ERROR",
     "DISABLED_EXPR_ERROR",
     "ROW_SHAPE",
+)
+
+#: Row diagnostics that mean "an **enabled** row's config was NOT verified by
+#: any schema". They are **not** findings — the row may be perfectly valid —
+#: but they must never be counted as validated either (design §4.4.1 G01-c /
+#: §4.3 L3).
+#:
+#: The PASS branch of the render layer decides what to put on screen from this
+#: set instead of from a substring of a message ("NOT verified"): that string
+#: coupling is why five ``NO_SCHEMA`` rows could be unverified and invisible at
+#: the same time (AUDIT-153 G-01④).
+#:
+#: * ``NO_SCHEMA`` — the module exports no ``Config``, so nothing to validate
+#:   the row's config against. The message asserts nothing about what the
+#:   loader then does with it (that behaviour is a separate, unverified fact).
+#: * ``BUILTIN`` — a ``cordis:`` loader builtin: no module to import, hence no
+#:   schema to apply.
+#:
+#: ``DISABLED_INHERITED`` is deliberately **absent**: such a row never starts
+#: (its ancestor is disabled), so the probe does not count it in
+#: ``entry.enabled`` either (`inherited_disabled` is its own counter, read from
+#: `Entry._disabled`'s ancestor walk). Counting it here would put a row into
+#: the trust surface that is not part of the enabled denominator, and the PASS
+#: sentence would then contradict itself ("verified 1 of 1 … 1 enabled row(s)
+#: NOT verified", F-01). Not started is not "we failed to check it" — and it
+#: stays visible: the row keeps its `details` line and every surface reports
+#: the `inherited-disabled rows:` count (plus the F4 "would mount nothing"
+#: disclosure when nothing else is enabled).
+UNVERIFIED_KINDS = (
+    "NO_SCHEMA",
+    "BUILTIN",
 )
 
 # ── the dsh host-dependency contract (single source of the host facts) ─────
@@ -451,8 +490,13 @@ async function walk(rows, at, ctx, entry, inheritedBy) {
     }
     const schema = exports && exports.Config
     if (!schema) {
+      // G01-e: this text states only what was measured (the module exports no
+      // `Config`, so this guard has nothing to validate the config against).
+      // It must NOT claim what the loader then does with the config — "passes
+      // it through unvalidated" is an unverified statement about loader
+      // behaviour, not an observation of this run.
       entry.rows.push({ row: id, name, kind: 'NO_SCHEMA', message:
-        'module exports no Config schema — the loader passes this config through unvalidated' })
+        "this guard cannot validate this row's config (the module exports no Config schema)" })
       continue
     }
     entry.checked += 1
@@ -984,6 +1028,76 @@ def _run_probe(node: str, install: dict, compositions: Sequence[Path],
 
 
 # ── aggregation ─────────────────────────────────────────────────────────────
+#: Max unverified-disclosure lines one surface prints before summarising the
+#: remainder. One constant, so the three surfaces (Check 28v section, the
+#: `check-dsh-preset-compat` CLI, `--json`-less human output) cannot drift apart
+#: in either prefix or cap (F-08).
+DISCLOSURE_LIMIT = 10
+
+
+def emit_disclosures(report: dict, stream, *, prefix: str = "│  ",
+                     indent: str = "│    ") -> None:
+    """Print the report's unverified disclosure lines, uniformly (F-08).
+
+    Called only under the verdicts that own a disclosure face: `PASS` (a
+    partially verified run) and `NOT_RUN` (nothing verified). Under `FAIL` the
+    findings are the screen's content; repeating the unverified rows there adds
+    noise without changing the action.
+    """
+    lines = report.get("unverified") or []
+    for line in lines[:DISCLOSURE_LIMIT]:
+        print(f"{prefix}[NOT_RUN] {line}", file=stream)
+    if len(lines) > DISCLOSURE_LIMIT:
+        print(f"{indent}... and {len(lines) - DISCLOSURE_LIMIT} more unverified "
+              f"item(s) — see the machine-readable report", file=stream)
+
+
+def _informational_details(report: dict) -> list:
+    """Detail lines about rows that were neither verified nor left unverified.
+
+    A row that never STARTED (`DISABLED_INHERITED`) is not part of the trust
+    surface — the probe counts it in `inherited_disabled`, not in `enabled` — so
+    it carries no `[NOT_RUN]` disclosure. It must not vanish either (F-01): its
+    own line is printed under the verdicts that show detail, next to the
+    `inherited-disabled rows:` count every surface already reports.
+    """
+    lines = []
+    for entry in report["compositions"]:
+        for row in entry["rows"]:
+            kind = row.get("kind")
+            if kind in FINDING_KINDS or kind in UNVERIFIED_KINDS or kind == "PASS":
+                continue
+            lines.append(f"{entry['path']}: row \"{row.get('row')}\" "
+                         f"({row.get('name') or 'unnamed'}) [{kind}] "
+                         f"{row.get('message')}")
+    return lines
+
+
+def _unverified_disclosure(entry: dict, row: dict) -> str:
+    """One on-screen line for a row that was NOT verified by any schema (L3).
+
+    Structured (`kind in UNVERIFIED_KINDS`), never a substring test on the
+    message: the message text is a wording choice, the kind is the fact.
+    """
+    kind = row.get("kind") or "UNKNOWN"
+    name = row.get("name") or "unnamed"
+    return (f'{entry["path"]}: row "{row.get("row")}" ({name}) '
+            f"[{kind}] — NOT verified: {row.get('message')}")
+
+
+def _reason_histogram(coverage: dict) -> str:
+    """The `NO_SCHEMA=5, BUILTIN=2` tail of a verdict reason.
+
+    File-level facts are deliberately not in this histogram (see the report
+    skeleton in `check_dsh_preset_compat`), so the empty case says exactly that
+    rather than implying a key.
+    """
+    reasons = coverage.get("unverified_reasons") or {}
+    if not reasons:
+        return "no unverified row"
+    return ", ".join(f"{kind}={count}" for kind, count in sorted(reasons.items()))
+
+
 def _composition_entry(payload: dict, root: Path) -> dict:
     try:
         display = Path(payload["path"]).relative_to(root).as_posix()
@@ -998,6 +1112,147 @@ def _composition_entry(payload: dict, root: Path) -> dict:
         "inherited_disabled": int(payload.get("inherited_disabled") or 0),
         "rows": list(payload.get("rows") or []),
     }
+
+
+def _aggregate_composition(item: dict, root: Path, report: dict,
+                           coverage: dict) -> list:
+    """Fold one probed composition into ``report``; return its findings.
+
+    Row classification lives here so the verdict function stays a verdict
+    function: `FINDING_KINDS` become findings, `UNVERIFIED_KINDS` become the
+    disclosed unverified half of the trust surface, `PASS` becomes a detail
+    line. The outcomes are disjoint by construction, which is what makes
+    "every **enabled** row is accounted for exactly once" checkable (G01-b):
+    ``rows_verified + rows_unverified == rows_enabled``, with the rows the walk
+    could not evaluate (import failures, inherited-disabled) counted in neither
+    half — the probe does not count them in ``enabled`` either.
+    """
+    failures = []
+    entry = _composition_entry(item, root)
+    report["compositions"].append(entry)
+    report["rows_enabled"] += entry["enabled"]
+    report["rows_checked"] += entry["checked"]
+    report["rows_inherited_disabled"] += entry["inherited_disabled"]
+    coverage["rows_enabled"] += entry["enabled"]
+    coverage["rows_verified"] += entry["checked"]
+    if entry["status"] == "UNREADABLE":
+        # Not one row of this file could be read, so there is no enabled row to
+        # account for (`rows_enabled` stays 0 — the probe cannot know how many
+        # rows the file had). The composition itself is the unverified fact, and
+        # it is disclosed on the same `unverified` channel the row-level
+        # disclosures use, so every surface shows it (F-02).
+        coverage["unreadable_compositions"] += 1
+        line = (f"{entry['path']}: composition could not be read "
+                f"({entry['error']}) — rows NOT verified")
+        report["unverified"].append(line)
+        report["details"].append(line)
+        return failures
+    if entry["status"] == "PARSE_ERROR":
+        failures.append(
+            f"{entry['path']}: not a valid entry list — {entry['error']}")
+        return failures
+    if entry["enabled"] == 0 and entry["inherited_disabled"] == 0:
+        # F4: a discovered composition whose every row is disabled mounts
+        # nothing. That is a real user-facing outcome, so it is disclosed
+        # — but as [INFO], not [WARN]: the quick-scan reader counts
+        # `[WARN]` as an issue token while this does not increment the
+        # engine's gate count, and the two faces must not disagree.
+        report["details"].append(
+            f"{entry['path']}: composition declares no enabled rows — this "
+            f"preset would mount nothing")
+    for row in entry["rows"]:
+        kind = row.get("kind")
+        if kind in FINDING_KINDS:
+            failures.append(
+                f"{entry['path']}: row \"{row.get('row')}\" "
+                f"({row.get('name') or 'unnamed'}): {row.get('message')}")
+        elif kind in UNVERIFIED_KINDS:
+            # L3: an enabled row that no schema could check is disclosed on
+            # BOTH faces — its own `[NOT_RUN]` line, and the
+            # `unverified_reasons` histogram the verdict reasons quote.
+            line = _unverified_disclosure(entry, row)
+            report["unverified"].append(line)
+            coverage["rows_unverified"] += 1
+            coverage["unverified_reasons"][kind] = (
+                coverage["unverified_reasons"].get(kind, 0) + 1)
+            report["details"].append(line)
+        elif kind == "PASS":
+            report["details"].append(
+                f"{entry['path']}: row \"{row.get('row')}\" {row.get('name')} OK")
+        else:
+            report["details"].append(
+                f"{entry['path']}: row \"{row.get('row')}\" {row.get('name')} "
+                f"[{kind}] {row.get('message')}")
+    return failures
+
+
+def _resolve_verdict(report: dict, failures: list, plane: str,
+                     oracle_label: str) -> None:
+    """Set ``verdict`` and ``reason`` on ``report`` (design §4.6 three states).
+
+    The order of the branches is the contract, not an accident:
+
+    1. a finding is `FAIL` — a rejected row is an actionable defect, and
+       degrading it to "unverified" would trade one wrong verdict for another;
+    2. nothing enabled (or nothing discovered) is `NOT_RUN`, with the cause
+       named per composition state (unreadable file / all rows disabled /
+       nothing discovered);
+    3. **enabled rows but zero comparisons is `NOT_RUN`** (G01-a, L1) — a green
+       verdict here is the exact defect this module exists to prevent;
+    4. otherwise `PASS`, and only because at least one row really was compared;
+       its sentence carries the denominator so a partially verified run cannot
+       read as a fully verified one (G01-d).
+    """
+    coverage = report["coverage"]
+    if failures:
+        report["verdict"] = VERDICT_FAIL
+        report["reason"] = (
+            f"{len(failures)} preset composition row(s) rejected by the plugin "
+            f"set resolved from {plane} ({oracle_label})")
+    elif not report["compositions"] or report["rows_enabled"] == 0:
+        report["verdict"] = VERDICT_NOT_RUN
+        if not report["compositions"]:
+            report["reason"] = (
+                "no enabled preset row could be validated — nothing was "
+                "verified (fail-closed: never reported as PASS)")
+        elif coverage["unreadable_compositions"]:
+            # F-06: nothing is enabled here because the composition could not
+            # be READ, not because its rows are disabled. Asserting "every row
+            # is disabled … would mount nothing" about a file we never opened
+            # names the wrong cause; the read failure is the reason.
+            report["reason"] = (
+                f"no preset row could be validated — "
+                f"{coverage['unreadable_compositions']} composition(s) could not "
+                f"be read, so their rows were NOT verified: "
+                + "; ".join(line for line in report["unverified"])
+                + " (fail-closed: never reported as PASS)")
+        else:
+            # F4: every discovered row is disabled, so the preset mounts
+            # nothing. Named explicitly instead of a generic "nothing
+            # verified" — it is a user-visible outcome, not a tooling gap.
+            report["reason"] = (
+                f"no enabled preset row could be validated — every row of "
+                f"{len(report['compositions'])} composition(s) is disabled "
+                f"({report['rows_inherited_disabled']} inherited from a "
+                f"disabled ancestor), so this preset would mount nothing")
+    elif report["rows_checked"] == 0:
+        report["verdict"] = VERDICT_NOT_RUN
+        report["reason"] = (
+            f"rows_verified 0 of {report['rows_enabled']} enabled row(s) — "
+            f"NOT verified: no enabled row's config could be compared against "
+            f"a schema ({_reason_histogram(coverage)}); fail-closed: a run that "
+            f"verified nothing is never reported as PASS")
+    else:
+        report["verdict"] = VERDICT_PASS
+        report["reason"] = (
+            f"verified {report['rows_checked']} of {report['rows_enabled']} "
+            f"enabled row(s) against the plugin set resolved from {plane} "
+            f"({oracle_label}); {len(report['compositions'])} composition(s) "
+            f"checked")
+        if coverage["rows_unverified"]:
+            report["reason"] += (
+                f"; {coverage['rows_unverified']} enabled row(s) NOT verified "
+                f"({_reason_histogram(coverage)}) — disclosed as [NOT_RUN]")
 
 
 def check_dsh_preset_compat(root: Optional[os.PathLike] = None,
@@ -1030,6 +1285,25 @@ def check_dsh_preset_compat(root: Optional[os.PathLike] = None,
         "rows_enabled": 0,
         "rows_checked": 0,
         "rows_inherited_disabled": 0,
+        # G01-b: the trust surface, made visible. `rows_verified` is the same
+        # fact as `rows_checked` (kept for the two readers that already spell
+        # it that way); the unverified half is what the verdicts below turn on.
+        # `unverified_reasons` is a histogram **of rows**, so it never carries a
+        # file-level key: an unreadable composition's row count is unknowable
+        # (its probe entry reports `enabled: 0`), and a `UNREADABLE=0` bucket
+        # would read as "no unreadable composition" (F-03). That fact has its
+        # own counter instead.
+        "coverage": {
+            "rows_enabled": 0,
+            "rows_verified": 0,
+            "rows_unverified": 0,
+            "unverified_reasons": {},
+            "unreadable_compositions": 0,
+        },
+        # Disclosure lines shown as `[NOT_RUN]` by every output surface: one per
+        # enabled row no schema could check, plus one per composition that could
+        # not be read at all (F-02).
+        "unverified": [],
     }
 
     paths = ([Path(item) for item in compositions] if compositions is not None
@@ -1113,78 +1387,17 @@ def check_dsh_preset_compat(root: Optional[os.PathLike] = None,
         else:
             report["details"].append(f"{label} carries the same oracle versions")
     failures = []
-    unverified = []
     for item in payload.get("files") or []:
-        entry = _composition_entry(item, root)
-        report["compositions"].append(entry)
-        report["rows_enabled"] += entry["enabled"]
-        report["rows_checked"] += entry["checked"]
-        report["rows_inherited_disabled"] += entry["inherited_disabled"]
-        if entry["status"] == "UNREADABLE":
-            unverified.append(
-                f"{entry['path']}: composition could not be read "
-                f"({entry['error']}) — rows NOT verified")
-            continue
-        if entry["status"] == "PARSE_ERROR":
-            failures.append(
-                f"{entry['path']}: not a valid entry list — {entry['error']}")
-            continue
-        if entry["enabled"] == 0:
-            # F4: a discovered composition whose every row is disabled mounts
-            # nothing. That is a real user-facing outcome, so it is disclosed
-            # — but as [INFO], not [WARN]: the quick-scan reader counts
-            # `[WARN]` as an issue token while this does not increment the
-            # engine's gate count, and the two faces must not disagree.
-            report["details"].append(
-                f"{entry['path']}: composition declares no enabled rows — this "
-                f"preset would mount nothing")
-        for row in entry["rows"]:
-            kind = row.get("kind")
-            if kind in FINDING_KINDS:
-                failures.append(
-                    f"{entry['path']}: row \"{row.get('row')}\" "
-                    f"({row.get('name') or 'unnamed'}): {row.get('message')}")
-            elif kind == "PASS":
-                report["details"].append(
-                    f"{entry['path']}: row \"{row.get('row')}\" {row.get('name')} OK")
-            else:
-                report["details"].append(
-                    f"{entry['path']}: row \"{row.get('row')}\" {row.get('name')} "
-                    f"[{kind}] {row.get('message')}")
+        failures.extend(_aggregate_composition(
+            item, root, report, report["coverage"]))
 
-    report["details"].extend(unverified)
     report["issues"] = failures
     plane = install_probe.get("source") or "unknown plane"
     oracle_label = ", ".join(
         f"{name}@{entry.get('version') or '?'}"
         for name, entry in sorted(
             (report["install"].get("oracle_packages") or {}).items()))
-    if failures:
-        report["verdict"] = VERDICT_FAIL
-        report["reason"] = (
-            f"{len(failures)} preset composition row(s) rejected by the plugin "
-            f"set resolved from {plane} ({oracle_label})")
-    elif not report["compositions"] or report["rows_enabled"] == 0:
-        report["verdict"] = VERDICT_NOT_RUN
-        if report["compositions"]:
-            # F4: every discovered row is disabled, so the preset mounts
-            # nothing. Named explicitly instead of a generic "nothing
-            # verified" — it is a user-visible outcome, not a tooling gap.
-            report["reason"] = (
-                f"no enabled preset row could be validated — every row of "
-                f"{len(report['compositions'])} composition(s) is disabled "
-                f"({report['rows_inherited_disabled']} inherited from a "
-                f"disabled ancestor), so this preset would mount nothing")
-        else:
-            report["reason"] = (
-                "no enabled preset row could be validated — nothing was "
-                "verified (fail-closed: never reported as PASS)")
-    else:
-        report["verdict"] = VERDICT_PASS
-        report["reason"] = (
-            f"{report['rows_checked']} enabled row(s) validated against the "
-            f"plugin set resolved from {plane} ({oracle_label}); "
-            f"{len(report['compositions'])} composition(s) checked")
+    _resolve_verdict(report, failures, plane, oracle_label)
     return report
 
 
@@ -1233,6 +1446,7 @@ def emit_check_section(stream=None) -> int:
     print(f"│  compositions: {len(report['compositions'])}; "
           f"enabled rows: {report['rows_enabled']}; "
           f"schema-checked rows: {report['rows_checked']}; "
+          f"NOT verified: {report['coverage']['rows_unverified']}; "
           f"inherited-disabled rows: {report.get('rows_inherited_disabled', 0)}; "
           f"isolated-home writes: {isolation.get('home_writes')}", file=stream)
     verdict = report["verdict"]
@@ -1245,13 +1459,21 @@ def emit_check_section(stream=None) -> int:
         print("└──────────────────────────────────────────────────────┘", file=stream)
         return len(report["issues"])
     if verdict == VERDICT_NOT_RUN:
+        # L2: a report that verified nothing renders as [NOT_RUN], never as
+        # [PASS] — and the unverified items that produced that verdict are
+        # listed underneath it instead of staying invisible.
         print(f"│  [NOT_RUN] {report['reason']}", file=stream)
+        emit_disclosures(report, stream, prefix="│    ", indent="│    ")
         print("└──────────────────────────────────────────────────────┘", file=stream)
         return 0
     print(f"│  [PASS] {report['reason']}", file=stream)
-    for detail in report["details"]:
-        if "NOT verified" in detail:
-            print(f"│  [NOT_RUN] {detail}", file=stream)
+    # G01-c (L3): the disclosure is driven by the structured `unverified` set,
+    # not by a substring of a detail line (the old `if "NOT verified" in detail`
+    # was the reason five NO_SCHEMA rows were unverified and invisible at once).
+    # It carries one line per enabled row no schema could check **and** one per
+    # composition that could not be read (F-02), so a partial PASS is never
+    # silent about either.
+    emit_disclosures(report, stream)
     print("└──────────────────────────────────────────────────────┘", file=stream)
     return 0
 
@@ -1280,7 +1502,10 @@ def run_cli(fail_on_issues: bool = False, stream=None) -> int:
           file=stream)
     print(f"  Compositions: {len(report['compositions'])}; "
           f"enabled rows: {report['rows_enabled']}; "
-          f"schema-checked rows: {report['rows_checked']}", file=stream)
+          f"schema-checked rows: {report['rows_checked']}; "
+          f"NOT verified: {report['coverage']['rows_unverified']}; "
+          f"inherited-disabled rows: "
+          f"{report.get('rows_inherited_disabled', 0)}", file=stream)
     print(f"  Isolated temp DSH_HOME: {isolation.get('temp_home') or '-'} "
           f"(writes: {isolation.get('home_writes')})", file=stream)
     for entry in report["compositions"]:
@@ -1291,6 +1516,8 @@ def run_cli(fail_on_issues: bool = False, stream=None) -> int:
             if row.get("kind") in FINDING_KINDS:
                 print(f"      [FAIL] {row.get('row')} ({row.get('name')}): "
                       f"{row.get('message')}", file=stream)
+    for line in _informational_details(report):
+        print(f"      [INFO] {line}", file=stream)
     if report["verdict"] == VERDICT_FAIL:
         print(f"\n  Result: FAILED — {report['reason']}", file=stream)
         for issue in report["issues"][:20]:
@@ -1303,11 +1530,14 @@ def run_cli(fail_on_issues: bool = False, stream=None) -> int:
         # Optional-tooling policy: an unresolvable plugin set is disclosed,
         # never a green verdict and never a non-zero exit.
         print(f"\n  Result: NOT_RUN — {report['reason']}", file=stream)
+        emit_disclosures(report, stream, prefix="    ", indent="    ")
     else:
         print(f"\n  Result: PASSED — {report['reason']}", file=stream)
-        for detail in report["details"]:
-            if "NOT verified" in detail:
-                print(f"    [NOT_RUN] {detail}", file=stream)
+        # Same structured disclosure as `emit_check_section`: the items no
+        # schema could check — and the compositions that could not be read —
+        # are printed under this terminal verdict too, so neither is ever only
+        # in the machine-readable report.
+        emit_disclosures(report, stream, prefix="    ", indent="    ")
     print(file=stream)
     return 0
 
@@ -1339,6 +1569,15 @@ def _print_human(report: dict, stream) -> None:
             if row.get("kind") in FINDING_KINDS:
                 print(f"      [FAIL] {row.get('row')} ({row.get('name')}): "
                       f"{row.get('message')}", file=stream)
+    # Same disclosure face as the two command surfaces, under the same verdicts:
+    # an item no schema could check is named, so `verdict: PASS` with "18 with a
+    # schema" can never be read as "all 23 were checked" (G01-c). Under FAIL the
+    # findings above are the actionable content, exactly as in the other two
+    # surfaces (F-08).
+    if report["verdict"] in (VERDICT_PASS, VERDICT_NOT_RUN):
+        emit_disclosures(report, stream)
+    for line in _informational_details(report):
+        print(f"  [INFO] {line}", file=stream)
     for issue in report["issues"]:
         print(f"issue  : {issue}", file=stream)
 

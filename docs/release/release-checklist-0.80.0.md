@@ -63,7 +63,9 @@
 
 ## Candidate Gate Results（M-2 — Coordinator 回填实测）
 
-> 本节由 M-2 打包期实测回填（2026-09-12）。候选 commit hash：**待回填**（`check-release --lineage-mode candidate` 的 `candidate_commit` 在 commit 后由 `release-ledger` 导出；见本表 #11）。
+> 本节由 M-2 打包期实测回填（2026-09-12）。候选 commit hash：**`bcb0d6d`**（`bcb0d6d786c5c1334f02ceac98403b0b311c799c`，36 文件 +1921/−49）——由 `release-ledger --version 0.80.0 --no-remote` 导出（见 #11）。
+>
+> **commit 后复核（M-5 回填，2026-09-12）**：`check-release --version 0.80.0 --require-changelog --lineage-mode candidate` 复跑——**`release docs` 3 项「must be tracked by git」如预测自消（FAIL→PASS）**；`archive integrity` 仍 FAIL（FIX-312 引擎假阳）、`execution gates` 仍 FAIL（governance health exit=1 + unit tests 门内 180s 超时）、`loop runtime claim gate` 仍 FAIL（`AUTHORITY_SOURCE_OCCURRENCE` + 3×`UNSUPPORTED_AFFIRMATIVE` = AUDIT-152 既有分类）。**回填期另行修复一处我方缺陷**：`check-loop-runtime-claims` 报 `ACCOUNTING_MARKDOWN_AMBIGUOUS_BOUNDARY: plan-tracker ragged table row`——根因是我新增的 FIX-315 行只有 7 个 pipe（缺「状态」列），已补齐为 8；修复后该子项消失（复跑仅余既有分类项）。
 
 | # | Gate（`python skills/software-project-governance/infra/verify_workflow.py <cmd>`） | 预期 | Result（M-2 回填实测 2026-09-12） |
 |---|---|---|---|
@@ -79,7 +81,7 @@
 | 10 | check-release --version 0.80.0 --require-changelog --lineage-mode candidate | 核心静态门禁 PASS + 既有基线 FAIL 分类披露 | **静态：version consistency / release fact source / hot fact source / runtime readiness matrix / first session measurement / governance pack status / agent adapters / projection sync / cross references / release lineage / gate sequence / one dot zero blockers 全 PASS**；execution gates：`verify` PASS / `e2e check` PASS / **`dsh upgrade regression` PASS**（隔离 temp DSH_HOME 预设会话冒烟，零真实 home 写入）/ `loop fuse block` PASS / `changelog` PASS；**`archive integrity` FAIL（M-3 修复期新增，见下）**；**FAILED - 10 issue(s)**，构成 = ① release docs ×3「must be tracked by git」〔**候选中——commit 后自消，M-2 复核**〕② **archive integrity ×1（新）**③ execution gates 汇总 FAIL（其下 governance health exit=1〔见 #7〕+ unit tests 门内 180s 超时〔见 #6 披露〕）④ loop runtime claim gate（`semantic_verdict=BLOCKED` / `identity_verdict=PASS` / candidates=722 parsed=722——**AUDIT-152 既有分类**：N1 审查文档 affirmative + N2 归档致 authority 离热；**零新增类**）。**W-1 披露**：本仓无凭据，CI ubuntu 权威面未跑（发布后补跑义务登记） |
 
 **⚠️ archive integrity FAIL（M-3 修复期新增，已定位为**引擎缺陷**，非本版内容缺陷）**：DESIGN R0 F4 指出归档迁移（本版 M-2 期执行）把 **DEC-187**（2026-09-12 现行治理裁决）从其热 `decision-log.md` 误迁至 `archive/decisions/decisions-v0.1.0-0.78.1.md`（记 "归档版本: v0.77.0"）并写入 `archive/index.md`。处置按 FIX-169 先例**回迁热文件**（删归档节 + 删 index 条目 + 行内补 DEC-188 澄清注记）。**副作用（如实登记）**：回迁后 `check-archive-integrity` 复报 `Archive trigger gap: 0 hot completed task(s) ... release_forced`（0 task、**1 decision**）——`analyze_auto_archive_candidates()` 实测 `decisions_archived=1`、`explain` 指认 `would_archive: DEC-187 / detail: v0.77.0`：**引擎按"任一被引 task 已归档"给 decision 归版，而 DEC-187 的关联列含 `FEAT-010`（v0.77.0，已归档）**，遂把一条当天新产生、其 governing task（FIX-307~310，0.80.0 活跃）未归档的决策判为可迁 ⇒ 假阳。**本版不修引擎**（属独立任务），已登记 **FIX-312**（P2，含最小修复方向与必备回归 fixture）。故该 FAIL **不是本版交付内容引入的**：回迁前的 PASS 状态恰恰是"现行裁决被误归档"换来的。
-| 11 | release-ledger --version 0.80.0 --no-remote | NATIVE_CANDIDATE（candidate commit 后） | 待回填（commit 后执行） |
+| 11 | release-ledger --version 0.80.0 --no-remote | NATIVE_CANDIDATE（candidate commit 后） | **PASS（M-5 回填）**——`state: PASS`，`trust_level: NATIVE_CANDIDATE`，`candidate_commit: bcb0d6d786c5c1334f02ceac98403b0b311c799c`，`effective_state.lifecycle_state: candidate`，`release_authorized: false`，`events: []`（candidate_to_released 事件与 integrity 待 M-4 用户授权后追加——0.79.0 先例）；`event_identity_digest: 37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570` |
 | 12 | quality-tools | NOT_RUN 如实记录（Ruff/mypy 未安装——ADR-010 不虚构 PASS） | **NOT_RUN**（五工具实证未安装——如实，不虚构 PASS） |
 | 13 | check-release --version 0.80.0 --require-changelog --lineage-mode released --release-commit \<commit\> | （M-6 释放态） | 待 M-6 回填 |
 | 14 | release-ledger --version 0.80.0 --remote github-https | （M-6）NATIVE_RELEASED PASS | 待 M-6 回填 |

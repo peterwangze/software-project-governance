@@ -778,7 +778,7 @@ python …/verify_workflow.py check-dsh-preset-compat                           
 | `adapters/dsh/host-contract.json`（新） | ● | | | | | | | | |
 | `infra/dsh_contract.py`（新） | ● | | | | | | | | |
 | `infra/tests/test_dsh_contract.py`（新） | ● | ●（+K-2 用例） | | | | | | | |
-| `infra/tests/dsh_fixtures.py`（新） | ● | | | | ● | | | | | |
+| `infra/tests/dsh_fixtures.py`（新） | ● | | | | ● | | | | |
 | `core/manifest.json` | ● | | | | | | | ●（host-facts 条目） | |
 | `adapters/dsh/launch.py` | | ● | | | ● | ● | | | |
 | `infra/dsh_compat.py` | | ● | ● | ● | ● | ● | | | |

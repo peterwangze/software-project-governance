@@ -336,10 +336,11 @@ def _validate(document: Any, path: Path) -> None:
             raise _fail_malformed(
                 path,
                 f"`host.rows[{row_id}].recorded.source` must be \"recorded\"")
-        if "recorded" not in recorded:
+        if recorded.get("recorded") is not False:
             raise _fail_malformed(
                 path,
-                f"missing required field `host.rows[{row_id}].recorded.recorded`")
+                f"`host.rows[{row_id}].recorded.recorded` must be false — "
+                f"present and exactly `false` in V1 (R0 F-5)")
         if row_id in seen:
             raise _fail_malformed(path, f"duplicate `host.rows[]` row_id `{row_id}`")
         seen.add(row_id)
@@ -384,7 +385,11 @@ def load_contract(root: Optional[Path] = None,
             return cached
         try:
             raw = path.read_text(encoding="utf-8")
-        except OSError as error:
+        except (OSError, UnicodeDecodeError) as error:
+            # §2.5.1 / R0 F-1: undecodable bytes are a *read* failure — a
+            # consumer may degrade `ContractUnreadable` to NOT_RUN, whereas
+            # `ContractMalformed` would force a FAIL. Never let the raw
+            # `UnicodeDecodeError` (a ValueError, not an OSError) escape.
             raise _fail_unreadable(path, f"{type(error).__name__}: {error}")
     try:
         document = json.loads(raw)

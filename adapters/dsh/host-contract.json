@@ -1201,6 +1201,21 @@
         "necessity": "weakenable"
       },
       {
+        "subject": "evidence.recording",
+        "audit_ids": [
+          "D-57"
+        ],
+        "target": "medium",
+        "guard": [
+          "test_dsh_contract.py::test_recorded_evidence_is_not_hand_filled",
+          "test_dsh_contract.py::test_load_never_writes_the_contract_file"
+        ],
+        "negative_fixtures": [],
+        "requires": [],
+        "gap_note": "§2.7 的证据写入单点面（写入方 / 切片 / 字段清单 / null ⇒ NOT_RUN 纪律）＝ D-57 的落地形态。V1 的守卫是单元级声明校验（无需平面），且 §5.6 无该面的具名反相 fixture ⇒ 按 §4.1 只声明 medium（不得声明强于佐证）；真实平面的记录与 K-7/TTL 判据按 D-57 的切片 V7 + check-dsh-boundary（V8）落地，届时上修为 requires 含 dsh-plane 并补反相 fixture。",
+        "necessity": "weakenable"
+      },
+      {
         "subject": "own.paths.manifest",
         "audit_ids": [
           "D-58",
@@ -1563,7 +1578,8 @@
         "evidence": "AUDIT-153 §2.1 D-05; design §3.2 (版本闸门替代 peerDependencies；声明面 U-1 未验证，不落地)",
         "decision": "weakened",
         "slice": [
-          "V1"
+          "V1",
+          "V8"
         ]
       },
       {

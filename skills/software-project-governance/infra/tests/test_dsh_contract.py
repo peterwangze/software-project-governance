@@ -559,6 +559,24 @@ class TestAccessorContract(unittest.TestCase):
         self.assertIn("ContractUnreadable", message)
         self.assertIn("host-contract.json", message)
 
+    def test_a_non_utf8_contract_is_unreadable_and_names_the_path(self):
+        # §2.5.1 / R0 F-1: bytes that cannot be decoded are a *read* failure —
+        # `ContractUnreadable` (a consumer may degrade it to NOT_RUN), never a
+        # bare `UnicodeDecodeError` (which escapes the three-class vocabulary
+        # entirely) and never `ContractMalformed` (a product defect: FAIL).
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / dsh_contract.CONTRACT_REL
+            target.parent.mkdir(parents=True)
+            good = dsh_contract.contract_path().read_bytes()
+            target.write_bytes(good[:200] + b"\xff\xfe" + good[200:])
+            with self.assertRaises(dsh_contract.ContractUnreadable) as caught:
+                dsh_contract.load_contract(Path(tmp))
+        message = str(caught.exception)
+        self.assertIn("ContractUnreadable", message)
+        self.assertIn("UnicodeDecodeError", message)
+        self.assertIn(str(target), message, "the message must carry the path")
+        self.assertNotIsInstance(caught.exception, dsh_contract.ContractMalformed)
+
     def test_malformed_json_is_malformed(self):
         with self.assertRaises(dsh_contract.ContractMalformed) as caught:
             dsh_contract.load_contract(raw="{ not json")
@@ -604,6 +622,32 @@ class TestAccessorContract(unittest.TestCase):
             dsh_contract.load_contract(raw=json.dumps(payload))
         message = str(caught.exception)
         self.assertIn("host.rows[persona].config_declared", message)
+
+    def test_a_non_false_recorded_flag_is_malformed(self):
+        # R0 F-2: `recorded.source` was value-checked while `recorded.recorded`
+        # was only key-checked. V1 ships every row unrecorded, so the flag must
+        # be *exactly* the JSON literal `false` on all 29 rows (design §2.4/
+        # §2.7 + R0 F-5) — `null`, `0` and the string "false" are malformed,
+        # not merely "not yet recorded".
+        for mutated in (None, "false", 0, "False", True):
+            payload = json.loads(json.dumps(_contract()))
+            payload["host"]["rows"][0]["recorded"]["recorded"] = mutated
+            with self.assertRaises(dsh_contract.ContractMalformed) as caught:
+                dsh_contract.load_contract(raw=json.dumps(payload))
+            self.assertIn("host.rows[persona].recorded.recorded",
+                          str(caught.exception), repr(mutated))
+        # The key check this replaces is not lost: an absent flag is not
+        # `false` either.
+        payload = json.loads(json.dumps(_contract()))
+        del payload["host"]["rows"][0]["recorded"]["recorded"]
+        with self.assertRaises(dsh_contract.ContractMalformed) as caught:
+            dsh_contract.load_contract(raw=json.dumps(payload))
+        self.assertIn("host.rows[persona].recorded.recorded",
+                      str(caught.exception))
+        # Positive control: the shipped `source: "recorded"` + `false` loads.
+        payload = json.loads(json.dumps(_contract()))
+        loaded = dsh_contract.load_contract(raw=json.dumps(payload))
+        self.assertIs(loaded["host"]["rows"][0]["recorded"]["recorded"], False)
 
     def test_duplicate_row_id_is_malformed(self):
         payload = json.loads(json.dumps(_contract()))

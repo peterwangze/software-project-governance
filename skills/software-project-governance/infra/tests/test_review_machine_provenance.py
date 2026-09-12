@@ -210,7 +210,7 @@ class InjectionAnchorExtensionTests(unittest.TestCase):
 
     def test_persona_carries_review_record_contract(self):
         text = (
-            vw.ROOT / "adapters/dsh/agent.cordis.yml.template"
+            vw.ROOT / "agent-presets/governance/agent.cordis.yml.template"
         ).read_text(encoding="utf-8")
         self.assertIn("审查结论必机录", text)
         self.assertIn("review-record", text)
@@ -218,7 +218,7 @@ class InjectionAnchorExtensionTests(unittest.TestCase):
     def test_injection_contract_anchors_include_review_record(self):
         self.assertIn(
             "review-record",
-            vw.INJECTION_CONTRACT_ANCHORS["adapters/dsh/agent.cordis.yml.template"],
+            vw.INJECTION_CONTRACT_ANCHORS["agent-presets/governance/agent.cordis.yml.template"],
         )
         # Real repo must satisfy the extended anchor set (Check 33 stays green).
         result = vw.check_injection_contract()
@@ -234,7 +234,7 @@ class InjectionAnchorExtensionTests(unittest.TestCase):
         whole 关键行为契约→Git hooks block).
         """
         text = (
-            vw.ROOT / "adapters/dsh/agent.cordis.yml.template"
+            vw.ROOT / "agent-presets/governance/agent.cordis.yml.template"
         ).read_text(encoding="utf-8")
         start = text.index("关键行为契约")
         end = text.index("Git hooks", start)

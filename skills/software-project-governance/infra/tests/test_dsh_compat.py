@@ -51,8 +51,12 @@ if str(_INFRA_DIR) not in sys.path:
 
 import dsh_compat  # noqa: E402
 
-_PRESET_COMPOSITION = _REPO_ROOT / "presets" / "governance" / "agent.cordis.yml"
-_TEMPLATE_COMPOSITION = _REPO_ROOT / "adapters" / "dsh" / "agent.cordis.yml.template"
+# FIX-310: the composition template IS the preset payload's render source
+# (there is no second, self-locating composition any more), so the same file
+# is both the "preset composition" and the "template composition" under test.
+_PRESET_COMPOSITION = (
+    _REPO_ROOT / "agent-presets" / "governance" / "agent.cordis.yml.template")
+_TEMPLATE_COMPOSITION = _PRESET_COMPOSITION
 _HAS_YAML = importlib.util.find_spec("yaml") is not None
 
 
@@ -272,8 +276,11 @@ class CompositionDiscoveryTests(unittest.TestCase):
     def test_repo_compositions_are_discovered(self):
         found = [path.relative_to(_REPO_ROOT).as_posix()
                  for path in dsh_compat.discover_compositions(_REPO_ROOT)]
-        self.assertIn("presets/governance/agent.cordis.yml", found)
-        self.assertIn("adapters/dsh/agent.cordis.yml.template", found)
+        # FIX-310: one shipped composition form — the preset payload's render
+        # source. It must be discovered by the `*.cordis.yml.template` glob so
+        # the schema guard covers what the renderers actually write.
+        self.assertEqual(
+            found, ["agent-presets/governance/agent.cordis.yml.template"], found)
 
     def test_discovery_is_sorted_and_skips_vendored_trees(self):
         with _scratch("spg-test-disc-") as td:
@@ -871,7 +878,8 @@ class InstalledSchemaTests(unittest.TestCase):
         self.assertIn(report["verdict"], {"PASS", "NOT_RUN"}, report)
         self.assertEqual(report["issues"], [], report["issues"])
         paths = [entry["path"] for entry in report["compositions"]]
-        self.assertIn("presets/governance/agent.cordis.yml", paths)
+        self.assertEqual(
+            paths, ["agent-presets/governance/agent.cordis.yml.template"], paths)
 
 
 if __name__ == "__main__":

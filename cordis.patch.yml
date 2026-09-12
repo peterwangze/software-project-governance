@@ -1,191 +1,43 @@
-# software-project-governance — dsh bundle composition layer.
+# software-project-governance — dsh bundle composition layer (patch).
 #
 # Declared by package.json `dsh.bundle.patch`; `dsh plugin --profile <name> add`
 # appends this package to the profile's `dsh.profile.bundles` list because of
-# that declaration (installed dsh: lib/plugin-9h8shc4d.js `exportsPatch` /
-# `reconcilePlugins`), and the layer applies at profile boot (restart to take
-# effect — bundle layers are boot-time, not HMR).
+# that declaration, and the layer applies at profile boot (a restart is needed
+# — bundle layers are boot-time, not HMR).
 #
-# Patch semantics: a non-insert patch REPLACES the targeted row's whole
-# `config` (installed dsh: dsh-app-boot/lib/index.js `applyEntryPatches`;
-# official publish tutorial "The loading order"), so every row below restates
-# the complete config it needs.
+# ── The whole layer is ONE insert row naming this package only ──────────────
 #
-# This bundle ships pure markdown/yaml payload — no Cordis entry, no
-# install-time code execution (no prepare/build scripts). It contributes two
-# UPDATE rows and no INSERT rows: an `- insert:` of `agent-presets` would
-# duplicate the row dsh-web-app already inserts on web profiles and fail the
-# boot with "duplicate loader entry id" (empirically verified against dsh
-# 0.1.1-rc.2), while UPDATE rows on a tree without the target row only warn
-# and skip (harmless on base-only profiles that carry no roster).
-
-# ── agent-presets: roster wiring (declared; activation is dsh-version dependent) ──
+# DEC-187 architecture invariant I-1/I-2/I-3 (user ruling, 2026-09-12): no
+# intrusive modification of host behaviour, no host→plugin reverse dependency,
+# forward dependency only. This layer therefore contains:
 #
-# Restates the dsh-web-app baseline (cordis.patch.yml L441-445: `default:
-# standard`; `includeUserRoot` defaults true and is restated explicitly) and
-# declares one additional root pointing at the governance preset shipped in
-# this package (`presets/governance/`).
+#   * ZERO `- id: <host row>` UPDATE rows — every dsh / dsh-web-app / other
+#     vendor row keeps its config and `disabled` exactly as the deployment
+#     composed it (`dsh --profile web --dump-config` before/after an install
+#     differs by one inserted row and nothing else);
+#   * ZERO `!!js` expressions — in particular none that parse `process.argv`
+#     or scan `$DSH_HOME/profiles` to self-locate (that was the FIX-307/FIX-309
+#     host-plane registration face, removed with the rest of the intrusion);
+#   * ZERO `trust: system` preset-root declarations — the governance preset is
+#     delivered into the USER preset root by the inserted row, which is what
+#     makes it a custom (deletable, openable) preset in the settings page;
+#   * ZERO service / provider / tool registration in the host plane — the row
+#     module (`lib/index.js`) publishes no service and registers nothing; its
+#     only effect is rendering the package's preset payload
+#     (`agent-presets/governance/agent.cordis.yml.template` + `preset.yml`)
+#     into `$DSH_HOME/.agent-presets/governance/` (see the module header).
 #
-# Path semantics (why `!!js`): `roots[].path` resolves via Node
-# `path.resolve(expandHomePath(root.path))` — a relative value would resolve
-# against the dsh process cwd, not this package (installed dsh:
-# dsh-agent-presets/lib/index.js `scanRoot`; leading `~` expands, everything
-# else is cwd/absolute). No static spelling reaches the pnpm-managed profile
-# store (`$DSH_HOME/profiles/<profile>/node_modules/<pkg>`), so the path is
-# computed at row activation by a synchronous `!!js` expression evaluated in
-# the row's context (loader: `with (ctx) { eval(expr) }`), where `process`
-# and the root-provided `dshHomePath` service are reachable — the same
-# pattern dsh-base itself uses for `!!js dshHomePath('sessions')`.
+# Patch semantics (installed dsh 0.1.5-rc.2, `dsh-app-boot/lib/index.js`
+# `applyEntryPatches`): `insert` with no `id` appends to the root entry list;
+# an `- id:`-targeted entry REPLACES the targeted row's whole `config`. This
+# layer uses only the first form, so no pre-existing row is reachable from it.
 #
-# dsh boundary history: 0.1.1-rc.2 (verified in source, lib/profile-boot-
-# DG5t9aNs.js `composeProfile`) appended a final overlay that replaced
-# `agent-presets` `roots` with the shipped preset root alone — a bundle-
-# declared root was visible in `dsh --profile <p> --dump-config` but not
-# honored at boot, so the preset activated only through the user root that
-# `adapters/dsh/launch.py --install` writes. **0.1.2-rc.1 (re-verified
-# 2026-09-05, lib/profile-boot-BTzzdrGY.js `composeProfile`) applies bundle
-# patches with no roots-forcing overlay**, and `dsh-agent-presets` scans
-# `config.roots` in precedence order (`lib/index.js` `get roots()`), so this
-# root is live at boot: a plain `dsh plugin add` + restart now exposes the
-# shipped `governance` preset with no launcher script. `launch.py --install`
-# remains as the optional user-root path (GUI-manageable copy / older-dsh
-# fallback / preset-only installs without the bundle).
-#
-# 0.1.5-rc.2 (re-verified 2026-09-11 against installed dsh): dsh-web-app's
-# own cordis.patch.yml now disables the base host `skill-filesystem` row on
-# web profiles (`- id: skill-filesystem` / `disabled: true`, comment
-# "presets own local discovery" — skill registration moved from the host
-# plane into the preset layer), and `applyEntryPatches`
-# (dsh-app-boot/lib/index.js) covers the targeted row's keys one by one, so
-# the UPDATE row below that restated only `config` left the row disabled
-# there — the bundle's global skill registration silently failed
-# (`/governance` gone from every non-governance preset session). The row now
-# carries `disabled: false` to re-enable it as a deployment-level provider
-# (the dsh-web-app patch's comment names the host-row global layer as the
-# by-design registration path for repository plugins). Everything else on
-# the loading face is unchanged: `applyEntryPatches` still REPLACES the
-# target row's whole `config` for non-insert patches and covers the
-# remaining keys one by one (`disabled` is just another overridable key);
-# `composeProfile` (dsh/lib/profile-boot-Dk-7KqJc.js) still applies bundle
-# patches with no roots-forcing overlay (the 0.1.1-rc.2 bug stays fixed),
-# with a NEW home-level patch layer `$DSH_HOME/cordis.patch.yml` applied
-# after this one (order: bundles → profile layer → home layer → overlays →
-# telemetry); the dsh-agent-presets Config schema keeps `default` /
-# `roots[].path`+`trust` / `includeUserRoot` / `includeShippedRoot` all
-# valid; `dshHomePath(...)` (dsh-home-paths) is a generic join that does
-# not validate key names, so `dshHomePath('profiles')` still resolves; and
-# dsh-skill-filesystem's Config is schemastery-based (optional without
-# .required()), so a `customSkillDirs`-only config stays legal.
-#
-# `trust: system` (set 2026-09-05): the shipped preset belongs to the
-# deployment, not the user. `deleteComposition` refuses presets whose trust is
-# not `user` ("it ships with the deployment"), and `writableRoot()` returns
-# the FIRST user-trust root — with `trust: user` here that would be this
-# package's own presets dir (a pnpm junction straight into the source repo
-# under `link:` installs), so a GUI delete would have `rm -rf`'d repository
-# files through the junction. `trust: system` keeps the package preset
-# read-only (copy-to-customize lands in `$DSH_HOME/.agent-presets`, delete
-# refused, removal happens via `dsh plugin remove` — symmetric with install).
-# `default` stays `standard` deliberately: the user picks `governance` per
-# session (or sets the default in settings → agent presets).
-- id: agent-presets
-  name: '@deepseek-ai/dsh-agent-presets'
-  config:
-    default: standard
-    includeUserRoot: true
-    roots:
-      - path: !!js >-
-          (() => {
-            const path = process.getBuiltinModule('node:path');
-            const fs = process.getBuiltinModule('node:fs');
-            const pkg = '@peterwangze/software-project-governance-plugin';
-            let profile;
-            for (let i = 2; i < process.argv.length; i++) {
-              const arg = process.argv[i];
-              if (arg === '--profile') { profile = process.argv[i + 1]; break; }
-              if (arg.startsWith('--profile=')) { profile = arg.slice(10); break; }
-              if (i === 2 && (arg === 'web' || arg === 'headless')) { profile = arg; break; }
-            }
-            const profilesRoot = dshHomePath('profiles');
-            const names = [];
-            if (profile) names.push(profile);
-            try {
-              for (const name of fs.readdirSync(profilesRoot)) {
-                if (name !== 'node_modules' && !names.includes(name)) names.push(name);
-              }
-            } catch {}
-            for (const name of names) {
-              const root = path.join(profilesRoot, name, 'node_modules', pkg);
-              if (fs.existsSync(path.join(root, 'cordis.patch.yml'))) {
-                return path.join(root, 'presets');
-              }
-            }
-            return path.join(profilesRoot, 'node_modules', pkg, 'presets');
-          })()
-        trust: system
-
-# ── skill-filesystem: the governance skill catalog (boot-active mechanism) ──
-#
-# dsh-base inserts the host-plane `skill-filesystem` row with default roots;
-# this layer replaces its config to add the two governance skill roots inside
-# the installed package. `customSkillDirs` entries are resolved with Node
-# `path.resolve` against the process cwd (installed dsh:
-# dsh-skill-filesystem/lib/index.js), so the same self-locating `!!js`
-# expression supplies absolute paths. The provider scans each root one level
-# deep — `skills/<name>/SKILL.md` directory bundles (the 26 workflow skills)
-# and flat `<name>.md` files (the 9 command projections in
-# adapters/dsh/skill-shims/) are both first-class skill formats.
-#
-# `disabled: false` (set 2026-09-11, dsh 0.1.5-rc.2): from 0.1.5 on,
-# dsh-web-app's own cordis.patch.yml disables the base host
-# `skill-filesystem` row on web profiles ("presets own local discovery" —
-# skill registration moved from the host plane into the preset layer), and
-# `applyEntryPatches` covers the targeted row's keys one by one, so an
-# UPDATE that restates only `config` leaves the row disabled there — the
-# bundle's global skill registration silently fails (`/governance`
-# disappears from every non-governance preset session; the governance
-# preset keeps its catalog through its own preset-layer skill row).
-# Restating `disabled: false` re-enables the row as a deployment-level
-# provider; the dsh-web-app patch's own comment names this the by-design
-# path for repository plugins ("deployment-level providers — repository
-# plugins, a host skill-filesystem row — register into its global layer",
-# dsh-web-app cordis.patch.yml L394-396). On base-only
-# profiles the host row is enabled to begin with, so the key is idempotent
-# and has no side effect there.
-#
-# With the row re-enabled, the merged catalog reaches every session of the
-# profile regardless of agent preset (the preset plane merges the host-plane
-# registry; dsh-agent-presets shipped `standard` composition,
-# skill-filesystem row comment).
-- id: skill-filesystem
-  name: '@deepseek-ai/dsh-skill-filesystem'
-  disabled: false
-  config:
-    customSkillDirs: !!js >-
-      (() => {
-        const path = process.getBuiltinModule('node:path');
-        const fs = process.getBuiltinModule('node:fs');
-        const pkg = '@peterwangze/software-project-governance-plugin';
-        let profile;
-        for (let i = 2; i < process.argv.length; i++) {
-          const arg = process.argv[i];
-          if (arg === '--profile') { profile = process.argv[i + 1]; break; }
-          if (arg.startsWith('--profile=')) { profile = arg.slice(10); break; }
-          if (i === 2 && (arg === 'web' || arg === 'headless')) { profile = arg; break; }
-        }
-        const profilesRoot = dshHomePath('profiles');
-        const names = [];
-        if (profile) names.push(profile);
-        try {
-          for (const name of fs.readdirSync(profilesRoot)) {
-            if (name !== 'node_modules' && !names.includes(name)) names.push(name);
-          }
-        } catch {}
-        for (const name of names) {
-          const root = path.join(profilesRoot, name, 'node_modules', pkg);
-          if (fs.existsSync(path.join(root, 'cordis.patch.yml'))) {
-            return [path.join(root, 'skills'), path.join(root, 'adapters', 'dsh', 'skill-shims')];
-          }
-        }
-        return [];
-      })()
+# Why an insert at all, and not `launch.py` alone: the insert is how `dsh
+# plugin add` + restart registers the preset with zero user action, while
+# `adapters/dsh/launch.py --install` stays available as the manual / offline
+# path (mirroring the reference bundle's `install.ps1` / `install.sh`). Both
+# render the same single composition source to the same place, with the same
+# three-token substitution, so they cannot disagree.
+- insert:
+    - id: governance
+      name: '@peterwangze/software-project-governance-plugin'

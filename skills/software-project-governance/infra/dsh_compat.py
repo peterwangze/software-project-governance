@@ -158,8 +158,13 @@ PROFILES_DIR_NAME = "profiles"
 #: A preset directory is a directory holding this composition file
 #: (``COMPOSITION_FILE`` in ``@deepseek-ai/dsh-agent-presets``).
 COMPOSITION_FILENAMES = ("agent.cordis.yml",)
-#: The package also ships the composition as a token template the adapter
-#: launcher substitutes; it must satisfy the same row contract.
+#: The package also ships the composition as a token template that the two
+#: renderers (``lib/index.js`` ``ensurePreset()`` / ``adapters/dsh/launch.py``)
+#: substitute into ``${DSH_HOME}/.agent-presets/governance/agent.cordis.yml``;
+#: the render source must satisfy the same row contract as a mounted preset.
+#: FIX-310: the template now lives with the preset payload it renders
+#: (``agent-presets/governance/agent.cordis.yml.template``) instead of under
+#: ``adapters/dsh/``; the glob is depth-agnostic, so it still finds it.
 COMPOSITION_GLOBS = ("**/agent.cordis.yml", "**/*.cordis.yml.template")
 
 _SKIP_DIRS = frozenset({".git", "node_modules", "__pycache__", ".venv", "venv",
@@ -690,9 +695,9 @@ def locate_dsh_install(env: Optional[dict] = None,
 def discover_compositions(root: os.PathLike) -> list:
     """Every preset composition in the package, sorted by relative path.
 
-    Covers both shipped forms: a preset's own ``agent.cordis.yml`` and the
-    adapter's ``*.cordis.yml.template`` (the same row contract, with the
-    launcher's path tokens substituted at install time).
+    Covers both shipped forms: a mounted preset's own ``agent.cordis.yml`` and
+    the render source ``*.cordis.yml.template`` (the same row contract, with
+    the renderer's absolute path tokens substituted at sync time).
     """
     root = Path(root)
     found = []

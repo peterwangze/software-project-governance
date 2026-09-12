@@ -61,10 +61,13 @@ FREEZE_COMMIT = "c92bf5d"
 # presets/ + adapters/dsh 组合），按 C1 判据随 28u 一并排除——排除集仍 ≡
 # FIX-270 `_PLUGIN_PRODUCT_CHECK_IDS`（机判恒等由
 # test_excluded_set_equals_the_engine_product_gate_declaration 守住）。
+# FIX-310: "40" (DSH Skills Manifest) left the set with its subject — the
+# dead `dsh.skills` declaration is gone from package.json, so the guard and
+# its segment are gone too (24 excluded segments now).
 EVAL_C1_EXCLUDED = (
     "7", "10", "11", "12", "15", "24", "28b", "28d", "28e", "28f", "28h",
     "28i", "28k", "28m", "28n", "28o", "28p", "28q", "28r", "28t", "28u",
-    "28v", "30b", "31", "33", "40",
+    "28v", "30b", "31", "33",
 )
 EVAL_C3_SEGMENTS = ("28g", "28j", "28l", "29")
 
@@ -509,7 +512,6 @@ class QuickFacePolicyTests(unittest.TestCase):
             "28r": "PLUGIN_TREE_SCAN",
             "30b": "PLUGIN_TREE_SCAN",
             "11": "PLUGIN_PACKAGE_ASSET",
-            "40": "PLUGIN_PACKAGE_ASSET",
         }
         for check_id, code in expected.items():
             self.assertEqual(qr.exclusion_reason_code(check_id), code, check_id)

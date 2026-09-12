@@ -46,8 +46,11 @@ from contract_matrix import generator as cmg  # noqa: E402
 # new Check 28v — a shipped preset composition row is now validated against
 # the INSTALLED dsh's own Config schemas; snapshot regenerated via
 # generator.py --regen in the same change (review covers both files).
-FROZEN_CLI_KEY_COUNT = 83
-FROZEN_CHECK_SEGMENT_COUNT = 71
+# FIX-310: deliberate contract change — the retired `dsh.skills` guard
+# (Check 40 + its CLI key) left the frozen faces; snapshot regenerated via
+# `contract_matrix/generator.py --regen`.
+FROZEN_CLI_KEY_COUNT = 82
+FROZEN_CHECK_SEGMENT_COUNT = 70
 
 
 @lru_cache(maxsize=1)

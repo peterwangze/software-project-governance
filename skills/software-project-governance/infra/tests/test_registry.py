@@ -66,8 +66,12 @@ _SECTION_RE = re.compile(r"^\s*#\s*" + _DASH + r"{2}\s*([0-9][A-Za-z0-9]*)\.\s")
 # in the same change as the regenerated snapshot: the new check segment 28v
 # (70→71) and its `check-dsh-preset-compat` subcommand (82→83) — the
 # documented contract-change path (generator.py --regen + review).
-FROZEN_CLI_KEYS = 83
-FROZEN_SEGMENTS = 71
+# FIX-310: 83 -> 82 CLI keys and 71 -> 70 check segments — retiring the
+# dead `dsh.skills` declaration also retired its guard (Check 40 /
+# `check-dsh-skills-manifest`); the FEAT-020 snapshot was regenerated with
+# `contract_matrix/generator.py --regen` to record that deliberate change.
+FROZEN_CLI_KEYS = 82
+FROZEN_SEGMENTS = 70
 
 # FEAT-018 R6 frozen startup budget (``core/architecture-baseline.json`` r6):
 # the acceptance ② comparison frame for "启动 import 集合不增".

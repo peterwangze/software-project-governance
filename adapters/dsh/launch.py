@@ -4,14 +4,30 @@
 Unlike the other adapters, whose launchers only print the manifest,
 dsh has a real install surface: an agent preset is a plain directory under
 ``${DSH_HOME}/.agent-presets/<id>/`` holding ``agent.cordis.yml`` +
-``preset.yml``. This launcher generates the ``governance`` preset from the
-template in this directory and, optionally, writes the DSH project bootstrap
-(``AGENTS.md``) into a governed project root.
+``preset.yml``. This launcher RENDERS the composition template (substituting
+the ``__GOVERNANCE_*__`` tokens with absolute paths) into that directory, and,
+optionally, writes the DSH project bootstrap (``AGENTS.md``) into a governed
+project root.
+
+Single source (FIX-310 / DEC-187, 2026-09-12): the package's preset payload is
+``agent-presets/governance/`` and holds exactly two files — the composition
+template ``agent.cordis.yml.template`` (the ONE composition source) and
+``preset.yml``. Nothing is duplicated: ``skills/``, ``commands/`` and
+``agents/`` stay the repository's shared core, referenced ABSOLUTELY from the
+rendered file. ``lib/index.js`` ``ensurePreset()`` renders the identical
+composition automatically on bundle boot; this launcher is the manual /
+offline path (the reference bundle ships ``install.ps1`` / ``install.sh`` for
+the same purpose). Both renderers share the same three-token contract, so they
+cannot disagree; ``adapters/dsh/agent.cordis.yml.template`` used to carry that
+template and now lives inside the preset payload it renders.
 
 Modes:
   --check              Print the adapter manifest summary (default action).
-  --install / --sync   (Re)write the preset into ${DSH_HOME}/.agent-presets/governance.
-                       --sync is the post-`git pull` refresh path.
+  --install / --sync   (Re)write the preset into ${DSH_HOME}/.agent-presets/governance
+                       by rendering ``agent-presets/governance/agent.cordis.yml.template``
+                       (staging directory + rename, so a crash mid-render never
+                       leaves a half-written preset). --sync is the post-`git
+                       pull` refresh path.
   --uninstall          Remove the governance preset — deletes exactly
                        ${DSH_HOME}/.agent-presets/governance/ and nothing else
                        (sibling presets and every other file under DSH_HOME
@@ -26,33 +42,28 @@ Modes:
                        way, or against a redirected DSH_HOME — never by
                        installing into the real ~/.dsh.
   --smoke              Isolated preset-session smoke gate (FEAT-015 /
-                       RISK-049 ②): generate the preset under a REDIRECTED
+                       RISK-049 ②): render the preset under a REDIRECTED
                        DSH_HOME and prove the session loading surface — the
                        skill catalog root (skills/software-project-governance/
                        SKILL.md) and the /governance gesture projection
-                       (skill-shims/governance.md → commands/governance.md) —
-                       for both the installed and the shipped in-package
-                       preset. Exit 0 = PASS, 1 = FAIL, 2 = REFUSED. The
-                       guard refuses to run when DSH_HOME is unset or resolves
-                       to (or around) the real ${HOME}/.dsh, and the real home
-                       is fingerprinted before/after (metadata only) so a
-                       write would be detected. Resolution-level only: it
-                       never claims LLM session behavior (printed as NOT_RUN).
-  --mode link|copy     link (default): the preset registers the repo's own
-                       skills/ + adapters/dsh/skill-shims/ directories as
-                       custom skill roots — repo edits are picked up live by
-                       the dsh skill watcher. copy: snapshot those two trees
-                       into the preset directory so the preset stays valid if
-                       the repo moves. Also selects the --smoke generation mode.
+                       (adapters/dsh/skill-shims/governance.md →
+                       commands/governance.md). Exit 0 = PASS, 1 = FAIL,
+                       2 = REFUSED. The guard refuses to run when DSH_HOME is
+                       unset or resolves to (or around) the real ${HOME}/.dsh,
+                       and the real home is fingerprinted before/after
+                       (metadata only) so a write would be detected.
+                       Resolution-level only: it never claims LLM session
+                       behavior (printed as NOT_RUN).
   --bootstrap-project DIR [--force]
                        Write the DSH AGENTS.md bootstrap into DIR (thin
                        pointer; it must not duplicate workflow rules). Refuses
                        to overwrite an existing different AGENTS.md without
                        --force.
 
-The generated composition never needs the file sandbox: it only reads skills
-and points agents at scripts under this repository. It registers no services,
-so the dsh mount audit accepts it from any user preset root.
+The rendered composition never needs the file sandbox: it only reads the
+repository's shared skills tree and points agents at scripts under this
+repository. It registers no services, so the dsh mount audit accepts it from
+any user preset root.
 """
 
 from __future__ import annotations
@@ -63,6 +74,7 @@ import os
 import re
 import shutil
 import sys
+import time
 import urllib.request
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
@@ -70,18 +82,33 @@ from urllib.parse import urljoin, urlparse
 ROOT = Path(__file__).resolve().parents[2]
 ADAPTER_DIR = ROOT / "adapters" / "dsh"
 MANIFEST_PATH = ADAPTER_DIR / "adapter-manifest.json"
-COMPOSITION_TEMPLATE = ADAPTER_DIR / "agent.cordis.yml.template"
-PRESET_METADATA = ADAPTER_DIR / "preset.yml"
+# The package's preset payload: the ONE composition template + its metadata.
+# Nothing here is a copy of the shared core — the template's customSkillDirs
+# entries are rendered to ABSOLUTE paths into this repository.
+PACKAGE_PRESET = ROOT / "agent-presets" / "governance"
+COMPOSITION_TEMPLATE = PACKAGE_PRESET / "agent.cordis.yml.template"
+PRESET_METADATA = PACKAGE_PRESET / "preset.yml"
 BOOTSTRAP_TEMPLATE = ADAPTER_DIR / "AGENTS.md.template"
 # The installed-schema row check lives with the rest of the governance infra
 # (single implementation, shared with check-governance Check 28v).
 INFRA_DIR = ROOT / "skills" / "software-project-governance" / "infra"
 
+# Render contract, shared verbatim with `lib/index.js` (`TOKEN_PATHS`): token →
+# package-relative path, `""` meaning the package root itself. Both renderers
+# MUST stay identical or `dsh plugin add` and `--install` would write different
+# presets for the same package version.
 SKILLS_TOKEN = "__GOVERNANCE_SKILLS_ROOT__"
 SHIMS_TOKEN = "__GOVERNANCE_SHIMS_ROOT__"
 REPO_TOKEN = "__GOVERNANCE_REPO_ROOT__"
+TOKEN_PATHS = {
+    SKILLS_TOKEN: ROOT / "skills",
+    SHIMS_TOKEN: ADAPTER_DIR / "skill-shims",
+    REPO_TOKEN: ROOT,
+}
 
 PRESET_ID = "governance"
+PRESET_MARKER = ".dsh-bundle-version"
+SKILL_ROOT_MARKER = "skill-root.txt"
 
 
 def dsh_home() -> Path:
@@ -93,6 +120,40 @@ def dsh_home() -> Path:
 
 def preset_dir() -> Path:
     return dsh_home() / ".agent-presets" / PRESET_ID
+
+
+def package_version() -> str:
+    try:
+        payload = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return "0"
+    version = payload.get("version")
+    return version if isinstance(version, str) and version else "0"
+
+
+def render_composition() -> str:
+    """Render the composition template with absolute paths.
+
+    Returns ``""`` when the template is missing or a token survives
+    substitution — the caller reports it instead of installing a composition
+    whose skill roots would silently resolve against the dsh process CWD.
+
+    Line endings are LF by construction: ``read_text`` uses universal newlines
+    (CRLF → LF), which is what ``lib/index.js`` normalizes to as well, so the
+    two renderers produce byte-identical text for the same package root.
+    """
+    try:
+        template = COMPOSITION_TEMPLATE.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    composition = template
+    for token, path in TOKEN_PATHS.items():
+        value = str(path.resolve()).replace("\\", "/")
+        composition = composition.replace(token, value)
+    if any(token in composition for token in TOKEN_PATHS):
+        return ""
+    return composition
+
 
 
 def print_manifest(manifest: dict) -> None:
@@ -122,64 +183,100 @@ def print_manifest(manifest: dict) -> None:
     print(f" - command: {manifest['validation']['command']}")
 
 
-def install_preset(mode: str, dry_run: bool = False) -> int:
+def write_rendered_preset(destination: Path) -> bool:
+    """Render the payload into ``destination`` (no atomicity — the caller owns it).
+
+    Returns ``False`` (leaving no partial directory behind) when the template
+    cannot be rendered or its metadata is missing. Shared by
+    :func:`install_preset` (into a staging dir) and the smoke gate (into a
+    scratch dir), so the shipped payload is verified through exactly the same
+    code path that installs it.
+    """
+    composition = render_composition()
+    if not composition or not PRESET_METADATA.is_file():
+        return False
+    destination.mkdir(parents=True, exist_ok=True)
+    # newline="\n": the rendered composition is LF on every platform, matching
+    # `lib/index.js` (YAML is newline-agnostic; parity is what matters).
+    (destination / "agent.cordis.yml").write_text(
+        composition, encoding="utf-8", newline="\n")
+    shutil.copyfile(PRESET_METADATA, destination / "preset.yml")
+    (destination / PRESET_MARKER).write_text(
+        package_version() + "\n", encoding="utf-8")
+    # Hook discovery marker: the repo hooks' find_spg_home reads this file to
+    # resolve the workflow home under dsh, so installed project hooks keep
+    # self-upgrading after `git pull` + `--sync`.
+    (destination / SKILL_ROOT_MARKER).write_text(
+        str(ROOT.resolve()).replace("\\", "/") + "\n", encoding="utf-8")
+    return True
+
+
+def install_preset(dry_run: bool = False) -> int:
+    """Render the composition into ${DSH_HOME}/.agent-presets/governance.
+
+    Staging directory + ``rename`` replace (identical atomicity contract to
+    ``lib/index.js`` ``ensurePreset()``): a crash mid-render can never leave a
+    half-written preset behind, which would break every governance session.
+    Three files are written — the rendered ``agent.cordis.yml``, the preset
+    metadata, and two markers:
+
+      * ``.dsh-bundle-version`` — the idempotence key ``ensurePreset()`` reads;
+      * ``skill-root.txt``      — the plugin-home marker the shipped git hooks
+        read (``find_spg_home``) so an installed project hook self-upgrades.
+
+    Nothing else is copied: the skill catalog, the command shims and the role
+    definitions stay the repository's shared core, referenced by the absolute
+    paths rendered into the composition.
+    """
     target = preset_dir()
     if dry_run:
-        print(f"[DRY-RUN] dsh home     : {dsh_home()}")
-        print(f"[DRY-RUN] preset dir   : {target}")
-        if mode == "copy":
-            print(f"[DRY-RUN] snapshot     : {target / 'skills'} , {target / 'skill-shims'}")
-        else:
-            print(f"[DRY-RUN] skill roots  : {ROOT / 'skills'}")
-            print(f"[DRY-RUN] command roots: {ADAPTER_DIR / 'skill-shims'}")
-        planned = "agent.cordis.yml, preset.yml, skill-root.txt"
-        if mode == "copy":
-            planned += " (+ skills/ and skill-shims/ snapshots)"
-        print(f"[DRY-RUN] planned write: {planned}")
+        print(f"[DRY-RUN] dsh home       : {dsh_home()}")
+        print(f"[DRY-RUN] preset dir     : {target}")
+        print(f"[DRY-RUN] composition tpl: {COMPOSITION_TEMPLATE}")
+        print(f"[DRY-RUN] render map     : "
+              + ", ".join(f"{token} -> {str(path.resolve()).replace(chr(92), '/')}"
+                          for token, path in TOKEN_PATHS.items()))
+        print(
+            "[DRY-RUN] planned write  : agent.cordis.yml (rendered), "
+            f"preset.yml, {PRESET_MARKER}, {SKILL_ROOT_MARKER} "
+            "(staging + rename replace)"
+        )
         print("[DRY-RUN] nothing written — re-run without --dry-run to install")
         return 0
-    target.mkdir(parents=True, exist_ok=True)
 
-    if mode == "copy":
-        skills_root = target / "skills"
-        shims_root = target / "skill-shims"
-        if skills_root.exists():
-            shutil.rmtree(skills_root)
-        if shims_root.exists():
-            shutil.rmtree(shims_root)
-        shutil.copytree(ROOT / "skills", skills_root)
-        shutil.copytree(ADAPTER_DIR / "skill-shims", shims_root)
-        print(f"snapshot copied: {skills_root}")
-        print(f"snapshot copied: {shims_root}")
-    else:  # link
-        skills_root = ROOT / "skills"
-        shims_root = ADAPTER_DIR / "skill-shims"
+    composition = render_composition()
+    if not composition:
+        print(
+            f"ERROR: cannot render the composition — missing template or an "
+            f"unsubstituted token: {COMPOSITION_TEMPLATE}",
+            file=sys.stderr,
+        )
+        return 1
+    if not PRESET_METADATA.is_file():
+        print(f"ERROR: preset metadata missing: {PRESET_METADATA}", file=sys.stderr)
+        return 1
 
-    template = COMPOSITION_TEMPLATE.read_text(encoding="utf-8")
-    composition = (
-        template.replace(SKILLS_TOKEN, str(skills_root.resolve()).replace("\\", "/"))
-        .replace(SHIMS_TOKEN, str(shims_root.resolve()).replace("\\", "/"))
-        .replace(REPO_TOKEN, str(ROOT.resolve()).replace("\\", "/"))
+    version = package_version()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    staging = target.with_name(
+        f"{target.name}.staging-{os.getpid()}-{int(time.time() * 1000)}"
     )
-    for token in (SKILLS_TOKEN, SHIMS_TOKEN, REPO_TOKEN):
-        if token in composition:
-            print(f"ERROR: template token {token} not substituted", file=sys.stderr)
-            return 1
-
-    (target / "agent.cordis.yml").write_text(composition, encoding="utf-8")
-    shutil.copyfile(PRESET_METADATA, target / "preset.yml")
-    # Hook discovery marker: the repo hooks' find_spg_home reads this file to
-    # resolve the workflow home under dsh (link mode), so installed project
-    # hooks keep self-upgrading after `git pull` + `--sync`.
-    (target / "skill-root.txt").write_text(
-        str(ROOT.resolve()).replace("\\", "/") + "\n", encoding="utf-8"
-    )
+    shutil.rmtree(staging, ignore_errors=True)
+    if not write_rendered_preset(staging):
+        shutil.rmtree(staging, ignore_errors=True)
+        print(f"ERROR: rendering the preset failed: {COMPOSITION_TEMPLATE}",
+              file=sys.stderr)
+        return 1
+    if target.exists():
+        shutil.rmtree(target)
+    staging.rename(target)
     print(f"preset written: {target}")
+    print(f"  template    : {COMPOSITION_TEMPLATE}")
     print(f"  composition : {target / 'agent.cordis.yml'}")
     print(f"  metadata    : {target / 'preset.yml'}")
-    print(f"  skill-root  : {target / 'skill-root.txt'}")
-    print(f"  skill roots : {skills_root}")
-    print(f"  command root: {shims_root}")
+    print(f"  skill roots : {TOKEN_PATHS[SKILLS_TOKEN]} , {TOKEN_PATHS[SHIMS_TOKEN]}")
+    print(f"  version mark: {target / PRESET_MARKER} ({version})")
+    print(f"  skill-root  : {target / SKILL_ROOT_MARKER}")
     print(
         "Next: start a dsh session and select the '治理协调器' (governance) "
         "preset, or run `python adapters/dsh/launch.py --bootstrap-project "
@@ -603,7 +700,7 @@ def _print_surface_report(label, surface):
         print(f"[SMOKE]   [FAIL] {issue}")
 
 
-def smoke_preset(mode: str = "link") -> int:
+def smoke_preset() -> int:
     """Isolated preset-session smoke gate (FEAT-015 / RISK-049 ②).
 
     Exit codes: 0 = PASS, 1 = FAIL (a loading surface is missing), 2 =
@@ -648,7 +745,7 @@ def smoke_preset(mode: str = "link") -> int:
     saved_home = os.environ.get("DSH_HOME")
     try:
         os.environ["DSH_HOME"] = str(isolated)
-        if install_preset(mode) != 0:
+        if install_preset() != 0:
             issues.append("preset installation failed in the isolated home")
     finally:
         if saved_home is None:
@@ -656,11 +753,21 @@ def smoke_preset(mode: str = "link") -> int:
         else:
             os.environ["DSH_HOME"] = saved_home
 
+    # Second surface: the shipped payload rendered through the SAME code path,
+    # into a scratch dir of the isolated home. This is the FIX-290 regression
+    # surface — it proves the tokens substitute to absolute paths that really
+    # resolve, not just that an installed copy happens to work.
+    payload_surface = isolated / ".preset-payload-check" / PRESET_ID
+    if not write_rendered_preset(payload_surface):
+        issues.append(
+            f"shipped payload failed to render: {COMPOSITION_TEMPLATE}")
+
     surfaces = (
-        ("installed preset (generated in the isolated DSH_HOME)",
+        ("installed preset (rendered into the isolated DSH_HOME)",
          isolated / ".agent-presets" / PRESET_ID),
-        ("shipped in-package preset (baseUrl self-location)",
-         ROOT / "presets" / PRESET_ID),
+        ("shipped in-package payload (rendered from agent-presets/governance/"
+         "agent.cordis.yml.template)",
+         payload_surface),
     )
     for label, directory in surfaces:
         surface = verify_preset_loading(directory)
@@ -752,13 +859,6 @@ def main(argv=None) -> int:
         "${DSH_HOME}/.agent-presets/governance; sibling presets untouched)",
     )
     parser.add_argument(
-        "--mode",
-        choices=["link", "copy"],
-        default="link",
-        help="link = register the repo's own skill roots (default); "
-        "copy = snapshot them into the preset directory",
-    )
-    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="print the resolved ${DSH_HOME} and planned writes without "
@@ -798,10 +898,10 @@ def main(argv=None) -> int:
 
     if args.smoke:
         acted = True
-        exit_code = smoke_preset(args.mode) or exit_code
+        exit_code = smoke_preset() or exit_code
     if args.install:
         acted = True
-        exit_code = install_preset(args.mode, dry_run=args.dry_run) or exit_code
+        exit_code = install_preset(dry_run=args.dry_run) or exit_code
     if args.uninstall:
         acted = True
         exit_code = uninstall_preset(dry_run=args.dry_run) or exit_code

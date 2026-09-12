@@ -8,16 +8,20 @@ command shim, or a launcher/template mismatch fails the suite.
 Covers:
 
   - Token contract: every ``__GOVERNANCE_*__`` token in the composition
-    template is exactly one the launcher substitutes, and vice versa.
-  - Generation determinism: ``launch.py --install`` (link and copy modes)
-    output equals pure token substitution — no hidden drift.
+    template is exactly one the renderers substitute, and vice versa.
+  - Render determinism: ``launch.py --install`` output equals pure token
+    substitution — no hidden drift.
+  - Render parity: the Python renderer (``launch.render_composition``) and the
+    JavaScript renderer (``lib/index.js`` ``renderComposition``) produce the
+    SAME text for the same package root, so ``dsh plugin add`` and
+    ``--install`` cannot write different presets.
   - Structural row contract: persona + skill-filesystem customSkillDirs
-    (repo skills/ + skill-shims/) + tool-skill + delegation rows are
-    present so the generated preset remains a full coding agent.
-  - Bundle patch contract (FIX-307): the repo-root cordis.patch.yml
-    skill-filesystem UPDATE row carries ``disabled: false`` — without it
-    dsh >= 0.1.5 web profiles keep the host row disabled and the bundle's
-    global skill registration silently fails.
+    (repo skills/ + adapters/dsh/skill-shims/) + tool-skill + delegation rows
+    are present so the rendered preset remains a full coding agent.
+  - Zero-intrusion bundle patch contract (DEC-187): the repo-root
+    cordis.patch.yml is ONE ``- insert:`` row naming only this package — no
+    UPDATE of any host row, no ``!!js`` self-location, no ``trust: system``
+    preset root.
   - Command shim contract: each ``adapters/dsh/skill-shims/<name>.md``
     carries DSH frontmatter (``name`` == filename, non-empty
     ``description``) and a thin pointer to ``commands/<name>.md`` — this
@@ -53,8 +57,11 @@ _REPO_ROOT = _INFRA_DIR.parents[2]
 _ADAPTER_DIR = _REPO_ROOT / "adapters" / "dsh"
 _HOOKS_DIR = _INFRA_DIR / "hooks"
 
-_TEMPLATE_PATH = _ADAPTER_DIR / "agent.cordis.yml.template"
-_PRESET_METADATA_PATH = _ADAPTER_DIR / "preset.yml"
+# FIX-310: the composition template and the preset metadata are the payload
+# of the preset they render, not adapter-side siblings.
+_PACKAGE_PRESET = _REPO_ROOT / "agent-presets" / "governance"
+_TEMPLATE_PATH = _PACKAGE_PRESET / "agent.cordis.yml.template"
+_PRESET_METADATA_PATH = _PACKAGE_PRESET / "preset.yml"
 _BOOTSTRAP_TEMPLATE_PATH = _ADAPTER_DIR / "AGENTS.md.template"
 _SHIMS_DIR = _ADAPTER_DIR / "skill-shims"
 _MANIFEST_PATH = _ADAPTER_DIR / "adapter-manifest.json"
@@ -196,16 +203,15 @@ class DshAdapterTests(unittest.TestCase):
         ):
             self.assertIn(marker, text)
 
-    def test_launch_link_generation_is_pure_substitution(self):
+    def test_launch_render_is_pure_substitution(self):
         launch = _load_launch_module()
         with tempfile.TemporaryDirectory() as td, patch.dict(
             os.environ, {"DSH_HOME": td}, clear=False
         ):
-            exit_code = launch.install_preset("link")
+            exit_code = launch.install_preset()
             self.assertEqual(exit_code, 0)
-            generated = (
-                Path(td) / ".agent-presets" / "governance" / "agent.cordis.yml"
-            ).read_text(encoding="utf-8")
+            preset_dir = Path(td) / ".agent-presets" / "governance"
+            generated = (preset_dir / "agent.cordis.yml").read_text(encoding="utf-8")
         skills = str((_REPO_ROOT / "skills").resolve()).replace("\\", "/")
         shims = str((_ADAPTER_DIR / "skill-shims").resolve()).replace("\\", "/")
         repo = str(_REPO_ROOT.resolve()).replace("\\", "/")
@@ -216,28 +222,47 @@ class DshAdapterTests(unittest.TestCase):
             .replace("__GOVERNANCE_REPO_ROOT__", repo)
         )
         self.assertEqual(generated, expected)
+        # No residue of the retired self-locating form, and no token may
+        # survive into a mounted composition.
+        self.assertNotIn("baseUrl", generated)
+        for token in _TOKENS:
+            self.assertNotIn(token, generated, token)
 
-    def test_launch_copy_generation_snapshots_roots(self):
+    def test_install_writes_only_the_rendered_preset(self):
+        # FIX-310: the package's shared core (skills/, commands/, agents/) is
+        # referenced ABSOLUTELY — nothing may be copied into the preset dir,
+        # otherwise the repo would carry a second source of the same files.
         launch = _load_launch_module()
         with tempfile.TemporaryDirectory() as td, patch.dict(
             os.environ, {"DSH_HOME": td}, clear=False
         ):
-            exit_code = launch.install_preset("copy")
-            self.assertEqual(exit_code, 0)
+            self.assertEqual(launch.install_preset(), 0)
             preset_dir = Path(td) / ".agent-presets" / "governance"
-            self.assertTrue((preset_dir / "skills" / "software-project-governance" / "SKILL.md").is_file())
-            self.assertTrue((preset_dir / "skill-shims" / "governance.md").is_file())
+            entries = sorted(item.name for item in preset_dir.iterdir())
+            self.assertEqual(
+                entries,
+                [".dsh-bundle-version", "agent.cordis.yml", "preset.yml",
+                 "skill-root.txt"],
+                entries,
+            )
             composition = (preset_dir / "agent.cordis.yml").read_text(encoding="utf-8")
-            self.assertTrue((preset_dir / "preset.yml").is_file())
-        self.assertIn(str(preset_dir).replace("\\", "/") + "/skills", composition)
-        self.assertIn(str(preset_dir).replace("\\", "/") + "/skill-shims", composition)
+        for copied in ("skills/", "skill-shims/", "commands/", "agents/"):
+            self.assertFalse((preset_dir / copied).exists(), copied)
+        roots = launch._custom_skill_dir_entries(composition)
+        self.assertEqual(len(roots), 2, roots)
+        for entry in roots:
+            form, path, issue = launch._resolve_skill_entry(entry, preset_dir)
+            self.assertIsNone(issue, entry)
+            self.assertEqual(form, "absolute", entry)
+            self.assertTrue(path.is_dir(), entry)
+            self.assertTrue(str(path).startswith(str(_REPO_ROOT.resolve())), entry)
 
     def test_install_writes_skill_root_marker(self):
         launch = _load_launch_module()
         with tempfile.TemporaryDirectory() as td, patch.dict(
             os.environ, {"DSH_HOME": td}, clear=False
         ):
-            self.assertEqual(launch.install_preset("link"), 0)
+            self.assertEqual(launch.install_preset(), 0)
             marker = (
                 Path(td) / ".agent-presets" / "governance" / "skill-root.txt"
             ).read_text(encoding="utf-8")
@@ -253,8 +278,8 @@ class DshAdapterTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td, patch.dict(
             os.environ, {"DSH_HOME": td}, clear=False
         ):
-            self.assertEqual(launch.install_preset("link", dry_run=True), 0)
-            self.assertEqual(launch.install_preset("copy", dry_run=True), 0)
+            self.assertEqual(launch.install_preset(dry_run=True), 0)
+            self.assertEqual(launch.install_preset(dry_run=True), 0)
             self.assertFalse((Path(td) / ".agent-presets").exists())
 
     def test_cli_install_dry_run_flag_writes_nothing(self):
@@ -272,6 +297,7 @@ class DshAdapterTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("[DRY-RUN]", result.stdout)
             self.assertIn("dsh home", result.stdout)
+            self.assertIn("composition tpl", result.stdout)
             self.assertFalse((Path(td) / ".agent-presets").exists())
 
     def test_bootstrap_dry_run_writes_nothing(self):
@@ -291,7 +317,7 @@ class DshAdapterTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td, patch.dict(
             os.environ, {"DSH_HOME": td}, clear=False
         ):
-            self.assertEqual(launch.install_preset("link"), 0)
+            self.assertEqual(launch.install_preset(), 0)
             sibling = Path(td) / ".agent-presets" / "other-agent"
             sibling.mkdir(parents=True)
             (sibling / "preset.yml").write_text("name: other\n", encoding="utf-8")
@@ -306,7 +332,7 @@ class DshAdapterTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td, patch.dict(
             os.environ, {"DSH_HOME": td}, clear=False
         ):
-            self.assertEqual(launch.install_preset("link"), 0)
+            self.assertEqual(launch.install_preset(), 0)
             self.assertEqual(launch.uninstall_preset(dry_run=True), 0)
             self.assertTrue(
                 (Path(td) / ".agent-presets" / "governance" / "preset.yml").is_file()
@@ -339,140 +365,118 @@ class DshAdapterTests(unittest.TestCase):
             self.assertIn("preset removed", uninstall.stdout)
             self.assertFalse((Path(td) / ".agent-presets" / "governance").exists())
 
-    def test_shipped_preset_skill_dirs_are_baseurl_selflocated(self):
-        # FIX-290 round 2 (live regression, twice): preset sessions do NOT
-        # inherit the host-plane customSkillDirs, and literal relative
-        # entries resolve against the dsh PROCESS CWD
-        # (dsh-skill-filesystem `map((root) => resolve(root))`) — either way
-        # the session catalog silently empties and `/governance` disappears.
-        # The only sanctioned form here is `!!js` resolved from `baseUrl`
-        # (this composition's own directory; the pattern proven by the
-        # shipped dsh-novel-writing preset). Guard: (1) the shipped preset
-        # carries customSkillDirs entries; (2) every entry is a !!js baseUrl
-        # self-location expression; (3) no literal relative entries; (4) the
-        # URL math of each expression, evaluated against the preset file's
-        # real location, yields an existing directory.
-        shipped_path = _REPO_ROOT / "presets" / "governance" / "agent.cordis.yml"
-        shipped = shipped_path.read_text(encoding="utf-8")
-        self.assertIn("- id: skill-filesystem", shipped)
-        entries = re.findall(
-            r"(?m)^\s*-\s*!!js\s+\"([^\"]*baseUrl[^\"]*)\"\s*$", shipped
-        )
-        self.assertGreaterEqual(
-            len(entries), 2, "expected 2 baseUrl self-located customSkillDirs"
-        )
-        # no literal relative customSkillDirs entries (cwd-resolved trap)
-        self.assertIsNone(
-            re.search(r"(?m)^\s*-\s*['\"]\.\.?/", shipped),
-            "literal relative skill roots are forbidden (process-cwd resolved)",
-        )
-        # semantic evaluation: URL math against the preset's real location
-        from urllib.parse import urljoin, urlparse
-        import urllib.request
-
-        preset_dir_uri = shipped_path.parent.resolve().as_uri() + "/"
-        for expr in entries:
-            m = re.search(r"new URL\('([^']+)',\s*baseUrl\)", expr)
-            self.assertIsNotNone(m, f"entry not baseUrl-anchored: {expr}")
-            resolved = urljoin(preset_dir_uri, m.group(1))
-            local = urllib.request.url2pathname(urlparse(resolved).path)
+    def test_rendered_composition_carries_absolute_existing_skill_roots(self):
+        # FIX-290 round 2 (live regression, twice) + FIX-310: preset sessions do
+        # NOT inherit the host-plane customSkillDirs, and a literal relative
+        # entry resolves against the dsh PROCESS CWD
+        # (dsh-skill-filesystem `map((root) => resolve(root))`) — either way the
+        # session catalog silently empties and `/governance` disappears. The
+        # render model makes every entry an ABSOLUTE path into this package, so
+        # the guard is: (1) the render source carries customSkillDirs;
+        # (2) rendering it yields exactly 2 entries; (3) every entry is
+        # absolute (no literal relative string, no `../` escape, no `baseUrl`
+        # self-location residue); (4) every entry exists and resolves inside
+        # the package.
+        template = _TEMPLATE_PATH.read_text(encoding="utf-8")
+        self.assertIn("- id: skill-filesystem", template)
+        launch = _load_launch_module()
+        rendered = launch.render_composition()
+        self.assertTrue(rendered, "the shipped payload must render")
+        entries = launch._custom_skill_dir_entries(rendered)
+        self.assertEqual(len(entries), 2, entries)
+        for entry in entries:
+            form, path, issue = launch._resolve_skill_entry(
+                entry, _PACKAGE_PRESET)
+            self.assertIsNone(issue, entry)
+            self.assertEqual(form, "absolute", entry)
+            self.assertNotIn("..", str(path), entry)
+            self.assertTrue(path.is_dir(), entry)
             self.assertTrue(
-                Path(local).is_dir(),
-                f"customSkillDirs entry resolves to missing dir: {local}",
-            )
+                str(path).startswith(str(_REPO_ROOT.resolve())), entry)
 
-    def test_shipped_preset_skill_roots_are_pack_whitelisted(self):
-        # FIX-290 round 2 companion guard: the semantic URL-math test above
-        # validates the REPO layout, but `file:`/`github:` installs receive
-        # a package packed per package.json `files` — a root that exists in
-        # the repo yet falls outside the whitelist silently disappears from
-        # installed copies (same failure class: empty session catalog). Every
-        # directory the preset's customSkillDirs expressions resolve to must
-        # be covered by a `files` entry.
-        shipped_path = _REPO_ROOT / "presets" / "governance" / "agent.cordis.yml"
-        shipped = shipped_path.read_text(encoding="utf-8")
-        # anchor on real `- !!js "..."` config entries (comment examples in
-        # the preset header use a `'<rel>'` placeholder and must not match)
-        exprs = re.findall(
-            r"(?m)^\s*-\s*!!js\s+\"([^\"]*baseUrl[^\"]*)\"\s*$", shipped
-        )
-        rels = [
-            m.group(1)
-            for m in (
-                re.search(r"new URL\('([^']+)',\s*baseUrl\)", expr)
-                for expr in exprs
-            )
-            if m
-        ]
-        self.assertGreaterEqual(len(rels), 2)
+    def test_rendered_skill_roots_are_pack_whitelisted(self):
+        # FIX-310 companion guard: rendering produces absolute paths into the
+        # REPO, but `file:`/`github:` installs receive a package packed per
+        # package.json `files` — a root that exists in the repo yet falls
+        # outside the whitelist silently disappears from installed copies (the
+        # same empty-catalog failure class). Every root the renderer produces
+        # must be covered by a `files` entry, and the render source itself must
+        # be packed too.
+        launch = _load_launch_module()
+        rendered = launch.render_composition()
+        resolved_roots = []
+        for entry in launch._custom_skill_dir_entries(rendered):
+            _form, path, issue = launch._resolve_skill_entry(entry, _PACKAGE_PRESET)
+            self.assertIsNone(issue, entry)
+            resolved_roots.append(
+                path.resolve().relative_to(_REPO_ROOT.resolve()).as_posix())
         pkg = json.loads((_REPO_ROOT / "package.json").read_text(encoding="utf-8"))
         whitelist = [
             str(item).rstrip("/").replace("\\", "/")
             for item in pkg.get("files", [])
             if not str(item).startswith("!")
         ]
-        for rel in rels:
-            # resolve `../../skills/` against presets/governance/ → repo-relative
-            parts = ["presets", "governance"]
-            for segment in rel.split("/"):
-                if segment == "..":
-                    parts.pop()
-                elif segment:
-                    parts.append(segment)
-            resolved = "/".join(parts)
+        for resolved in resolved_roots + ["agent-presets/governance/agent.cordis.yml.template",
+                                          "agent-presets/governance/preset.yml",
+                                          "lib/index.js"]:
             covered = any(
                 resolved == entry or resolved.startswith(entry + "/")
                 for entry in whitelist
             )
             self.assertTrue(
                 covered,
-                f"customSkillDirs root '{resolved}' is not covered by "
-                f"package.json files whitelist {whitelist} — installed "
-                "file:/github: copies would lack it",
+                f"required path '{resolved}' is not covered by package.json "
+                f"files whitelist {whitelist} — installed file:/github: copies "
+                "would lack it",
             )
 
-    def test_bundle_patch_reenables_host_skill_filesystem_row(self):
-        # FIX-307 guard: since dsh 0.1.5, dsh-web-app's own cordis.patch.yml
-        # disables the base host `skill-filesystem` row on web profiles
-        # ("presets own local discovery" — skill registration moved from the
-        # host plane into the preset layer), and applyEntryPatches covers the
-        # targeted row's keys one by one — an UPDATE that restates only
-        # `config` leaves the row disabled, so the bundle's global skill
-        # registration silently fails (`/governance` disappears from every
-        # preset session). The UPDATE row MUST re-enable the row explicitly:
-        # `disabled: false` is the 0.1.5 compatibility invariant (idempotent
-        # on base-only profiles where the host row is enabled to begin with).
-        # String/regex checks, not YAML parsing: the `!!js` tag makes a plain
-        # parse infeasible (same rationale as the FIX-290 guard above). The
-        # row block starts AT the `- id:` line, so header comments quoting
-        # `disabled: false` can never flip the verdict, and the key check is
-        # anchored to exact 2-space row-member indentation (trailing classes
-        # tolerate CR for CRLF belt-and-braces, mirroring the FIX-290
-        # guards' `\s*$`).
-        patch = (_REPO_ROOT / "cordis.patch.yml").read_text(encoding="utf-8")
-        m = re.search(r"(?m)^- id: skill-filesystem[ \t\r]*$", patch)
-        self.assertIsNotNone(
-            m, "bundle patch must carry a top-level skill-filesystem UPDATE row"
+    def test_bundle_patch_is_zero_intrusion(self):
+        # DEC-187 I-1/I-2/I-3 (user ruling, 2026-09-12): this bundle may not
+        # modify host behaviour. The machine criterion the ruling names is that
+        # the composed entry list differs from the unpatched one by exactly the
+        # bundle's OWN inserted row — so the patch is one `- insert:` row naming
+        # this package, plus comments. Guard (regex/string, not YAML: the file
+        # is a loader patch list, not a document):
+        #   (1) exactly one top-level `- insert:` and ZERO top-level `- id:`
+        #       UPDATE rows (an id-targeted entry would REPLACE a host row's
+        #       whole config);
+        #   (2) no `!!js` expression at all — in particular none parsing
+        #       `process.argv` or scanning `$DSH_HOME/profiles` to self-locate;
+        #   (3) no `trust: system` preset-root declaration;
+        #   (4) the inserted row names this package and nothing under
+        #       `@deepseek-ai/`.
+        patch_text = (_REPO_ROOT / "cordis.patch.yml").read_text(encoding="utf-8")
+        code_lines = [
+            line for line in patch_text.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+        code_text = "\n".join(code_lines)
+        inserts = [line for line in code_lines if re.match(r"^- insert:\s*$", line)]
+        self.assertEqual(len(inserts), 1, code_lines)
+        top_level_ids = [line for line in code_lines if re.match(r"^- id:", line)]
+        self.assertEqual(
+            top_level_ids, [],
+            "an `- id:`-targeted patch entry REPLACES a host row's config — "
+            "DEC-187 forbids it; only `- insert:` is allowed",
         )
-        # row block: from the `- id:` line to the next top-level row or EOF
-        rest = patch[m.end():]
-        nxt = re.search(r"(?m)^- id: ", rest)
-        block = patch[m.start():] if nxt is None else patch[m.start(): m.end() + nxt.start()]
-        self.assertIn(
-            "name: '@deepseek-ai/dsh-skill-filesystem'",
-            block,
-            "skill-filesystem row must name the dsh-skill-filesystem provider",
+        # Comments explain the ban, so the scan is over CODE lines only.
+        self.assertNotIn("!!js", code_text)
+        for forbidden in ("process.argv", "profiles", "dshHomePath", "trust:"):
+            self.assertNotIn(forbidden, code_text, forbidden)
+        self.assertNotIn("@deepseek-ai/", code_text)
+        inserted_names = re.findall(r"(?m)^\s+name:\s*'?([^'\s]+)'?\s*$", code_text)
+        self.assertEqual(
+            inserted_names, ["@peterwangze/software-project-governance-plugin"],
+            inserted_names,
         )
-        self.assertIsNotNone(
-            re.search(r"(?m)^  disabled:[ \t]*false[ \t\r]*$", block),
-            "skill-filesystem UPDATE row must carry an explicit "
-            "`disabled: false` — without it the row stays disabled on 0.1.5 "
-            "web profiles and the bundle's global skill registration "
-            "silently fails",
-        )
-        self.assertIn(
-            "customSkillDirs", block, "the self-locating skill roots must stay declared in this layer"
-        )
+        inserted_ids = re.findall(r"(?m)^\s+- id:\s*'?([^'\s]+)'?\s*$", code_text)
+        self.assertEqual(inserted_ids, ["governance"], inserted_ids)
+        # The inserted row must be resolvable as a module: package.json main.
+        pkg = json.loads((_REPO_ROOT / "package.json").read_text(encoding="utf-8"))
+        self.assertEqual(pkg["dsh"]["bundle"]["patch"], "./cordis.patch.yml")
+        self.assertNotIn("skills", pkg["dsh"], "dsh.skills is dead metadata")
+        self.assertEqual(pkg["main"], "lib/index.js")
+        self.assertEqual(pkg["type"], "module")
 
     def _init_target_repo(self, root: Path) -> None:
         root.mkdir()
@@ -682,7 +686,8 @@ class DshAdapterTests(unittest.TestCase):
         version, plan = build_projection_plan(_REPO_ROOT)
         planned = {write.relative_path: write.content for write in plan}
         for relative, marker in (
-            ("adapters/dsh/agent.cordis.yml.template", f"治理工作流（v{version}）"),
+            ("agent-presets/governance/agent.cordis.yml.template",
+             f"治理工作流（v{version}）"),
             ("adapters/dsh/AGENTS.md.template", f"@bootstrap-version: {version}"),
         ):
             self.assertIn(relative, planned, relative)
@@ -716,7 +721,7 @@ class DshAdapterTests(unittest.TestCase):
             self.assertEqual(baseline["issues"], [])
             self.assertEqual(baseline["files_checked"], len(vw.INJECTION_CONTRACT_ANCHORS))
 
-            persona = root / "adapters/dsh/agent.cordis.yml.template"
+            persona = root / "agent-presets/governance/agent.cordis.yml.template"
             persona.write_text(
                 persona.read_text(encoding="utf-8").replace("复审必达", "复审必须达成"),
                 encoding="utf-8",
@@ -838,14 +843,24 @@ class DshAdapterTests(unittest.TestCase):
             self.assertFalse((fake_real / ".agent-presets").exists())
 
     def test_smoke_verifier_fails_when_skill_catalog_root_missing(self):
-        # Negative path 3c-i: the skill directory is absent → the gate names it.
+        # Negative path 3c-i: the skill root resolves to a directory without
+        # the catalog skill → the gate names it.
         launch = _load_launch_module()
         with tempfile.TemporaryDirectory() as td, patch.dict(
             os.environ, {"DSH_HOME": td}, clear=False
         ):
-            self.assertEqual(launch.install_preset("copy"), 0)
+            self.assertEqual(launch.install_preset(), 0)
             preset = Path(td) / ".agent-presets" / "governance"
-            shutil.rmtree(preset / "skills")
+            empty_root = Path(td) / "empty-skills"
+            empty_root.mkdir()
+            composition = (preset / "agent.cordis.yml").read_text(encoding="utf-8")
+            (preset / "agent.cordis.yml").write_text(
+                composition.replace(
+                    str((_REPO_ROOT / "skills").resolve()).replace("\\", "/"),
+                    empty_root.as_posix(),
+                ),
+                encoding="utf-8",
+            )
             result = launch.verify_preset_loading(preset)
         self.assertEqual(result["verdict"], "FAIL")
         self.assertTrue(
@@ -858,14 +873,24 @@ class DshAdapterTests(unittest.TestCase):
         )
 
     def test_smoke_verifier_fails_when_governance_gesture_missing(self):
-        # Negative path 3c-ii: the /governance projection shim is absent.
+        # Negative path 3c-ii: the shims root exists but carries no
+        # /governance projection.
         launch = _load_launch_module()
         with tempfile.TemporaryDirectory() as td, patch.dict(
             os.environ, {"DSH_HOME": td}, clear=False
         ):
-            self.assertEqual(launch.install_preset("copy"), 0)
+            self.assertEqual(launch.install_preset(), 0)
             preset = Path(td) / ".agent-presets" / "governance"
-            (preset / "skill-shims" / "governance.md").unlink()
+            empty_shims = Path(td) / "empty-shims"
+            empty_shims.mkdir()
+            composition = (preset / "agent.cordis.yml").read_text(encoding="utf-8")
+            (preset / "agent.cordis.yml").write_text(
+                composition.replace(
+                    str((_ADAPTER_DIR / "skill-shims").resolve()).replace("\\", "/"),
+                    empty_shims.as_posix(),
+                ),
+                encoding="utf-8",
+            )
             result = launch.verify_preset_loading(preset)
         self.assertEqual(result["verdict"], "FAIL")
         self.assertTrue(
@@ -1076,6 +1101,159 @@ class DshAdapterTests(unittest.TestCase):
             any("skill catalog root missing" in detail for detail in result["details"]),
             result["details"],
         )
+
+    # ── FIX-310: single-source payload + two-renderer parity ───────────────
+
+    def test_package_preset_payload_has_no_duplicated_core(self):
+        # FIX-310 / DEC-187: this repository is one shared core (skills/,
+        # commands/, agents/) consumed by six adapters. The preset payload must
+        # stay a two-file payload — the composition template + its metadata —
+        # because a copied core inside one adapter's preset is a second source
+        # of the same files (and a 2x package). Guard the shape, not the prose.
+        entries = sorted(item.name for item in _PACKAGE_PRESET.iterdir())
+        self.assertEqual(
+            entries,
+            ["agent.cordis.yml.template", "preset.yml"],
+            f"preset payload must carry exactly the composition template and "
+            f"its metadata, found {entries}",
+        )
+        for leaked in ("skills", "commands", "agents", "skill-shims"):
+            self.assertFalse(
+                (_PACKAGE_PRESET / leaked).exists(),
+                f"the shared core directory '{leaked}' must not be duplicated "
+                "into the preset payload (single-source violation)",
+            )
+
+    def test_js_and_python_renderers_agree(self):
+        # Two renderers write the same user-root composition: `lib/index.js`
+        # `ensurePreset()` on bundle boot and `launch.py --install` on the
+        # manual path. They share a token contract but no code, so parity is a
+        # machine fact, not an intention: a divergence would install a
+        # different preset depending on which path ran.
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node unavailable (JS renderer cannot be exercised)")
+        launch = _load_launch_module()
+        lib_uri = (_REPO_ROOT / "lib" / "index.js").resolve().as_uri()
+        script = (
+            f"import {{ renderComposition }} from {json.dumps(lib_uri)};"
+            "import { readFileSync } from 'node:fs';"
+            "const t = readFileSync(process.argv[1], 'utf8');"
+            "process.stdout.write(JSON.stringify(renderComposition(t, process.argv[2])));"
+        )
+        result = subprocess.run(
+            [node, "--input-type=module", "-e", script,
+             str(_TEMPLATE_PATH),
+             str(_REPO_ROOT.resolve()).replace("\\", "/")],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["leftovers"], [], payload)
+        self.assertEqual(
+            payload["text"], launch.render_composition(),
+            "the JS and Python renderers produced different compositions",
+        )
+
+    def test_lib_ensure_preset_renders_the_user_root_idempotently(self):
+        # Acceptance path of the DEC-187 design: the inserted host row alone
+        # must deliver a mountable preset into the USER preset root (which is
+        # what makes it a custom, deletable preset in the settings page), and
+        # a second boot must not rewrite it. The row is exercised against a
+        # redirected DSH_HOME only — the real ~/.dsh is never touched.
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node unavailable (host row cannot be exercised)")
+        launch = _load_launch_module()
+        lib_uri = (_REPO_ROOT / "lib" / "index.js").resolve().as_uri()
+        script = (
+            f"import {{ apply }} from {json.dumps(lib_uri)};"
+            "const warns = [];"
+            "const ctx = { logger: { warn: (m) => warns.push(String(m)), info: () => {} } };"
+            "apply(ctx);"
+            "process.stdout.write(JSON.stringify(warns));"
+        )
+        with tempfile.TemporaryDirectory() as td:
+            env = os.environ.copy()
+            env["DSH_HOME"] = td
+            preset = Path(td) / ".agent-presets" / "governance"
+
+            def run():
+                return subprocess.run(
+                    [node, "--input-type=module", "-e", script],
+                    capture_output=True, text=True, encoding="utf-8",
+                    errors="replace", env=env,
+                )
+
+            first = run()
+            self.assertEqual(first.returncode, 0, first.stderr)
+            self.assertEqual(json.loads(first.stdout), [])
+            for name in ("agent.cordis.yml", "preset.yml",
+                         ".dsh-bundle-version", "skill-root.txt"):
+                self.assertTrue((preset / name).is_file(), name)
+            composition = (preset / "agent.cordis.yml").read_text(encoding="utf-8")
+            # The synced composition is the same text --install writes, with
+            # absolute package roots and no token/baseUrl residue.
+            self.assertEqual(composition, launch.render_composition())
+            self.assertEqual(
+                sorted(item.name for item in preset.iterdir()),
+                [".dsh-bundle-version", "agent.cordis.yml", "preset.yml",
+                 "skill-root.txt"],
+            )
+            before = (preset / "agent.cordis.yml").stat().st_mtime_ns
+
+            second = run()
+            self.assertEqual(second.returncode, 0, second.stderr)
+            self.assertEqual(json.loads(second.stdout), [])
+            self.assertEqual(
+                (preset / "agent.cordis.yml").stat().st_mtime_ns, before,
+                "a version-matching boot must not rewrite the preset",
+            )
+
+    def test_lib_ensure_preset_warns_and_never_throws_without_payload(self):
+        # Failure policy (module header): a broken payload must NOT throw out
+        # of apply() — a throwing row breaks the whole dsh boot, which is far
+        # worse than a missing preset. The row warns and returns.
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node unavailable (host row cannot be exercised)")
+        lib_uri = (_REPO_ROOT / "lib" / "index.js").resolve().as_uri()
+        with tempfile.TemporaryDirectory() as td:
+            # A package copy whose preset payload is absent.
+            fake_pkg = Path(td) / "pkg"
+            (fake_pkg / "lib").mkdir(parents=True)
+            (fake_pkg / "lib" / "index.js").write_text(
+                (_REPO_ROOT / "lib" / "index.js").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            (fake_pkg / "package.json").write_text(
+                '{"name":"fake","version":"9.9.9","type":"module",'
+                '"main":"lib/index.js"}\n',
+                encoding="utf-8",
+            )
+            dsh_home = Path(td) / "home"
+            script = (
+                f"import {{ apply }} from {json.dumps((fake_pkg / 'lib' / 'index.js').as_uri())};"
+                "const warns = [];"
+                "const ctx = { logger: { warn: (m) => warns.push(String(m)), info: () => {} } };"
+                "apply(ctx);"
+                "process.stdout.write(JSON.stringify(warns));"
+            )
+            env = os.environ.copy()
+            env["DSH_HOME"] = str(dsh_home)
+            result = subprocess.run(
+                [node, "--input-type=module", "-e", script],
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", env=env,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            warns = json.loads(result.stdout)
+            self.assertTrue(
+                any("payload incomplete" in warning for warning in warns), warns)
+            self.assertFalse(
+                (dsh_home / ".agent-presets" / "governance").exists(),
+                "a failed render must leave no preset behind",
+            )
 
     @unittest.skipUnless(
         importlib.util.find_spec("yaml") is not None,

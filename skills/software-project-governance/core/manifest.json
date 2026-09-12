@@ -236,15 +236,23 @@
         "type": "dir"
       },
       {
-        "path": "presets/",
+        "path": "lib/",
         "type": "dir"
       },
       {
-        "path": "presets/governance/agent.cordis.yml",
+        "path": "lib/index.js",
         "type": "file"
       },
       {
-        "path": "presets/governance/preset.yml",
+        "path": "agent-presets/",
+        "type": "dir"
+      },
+      {
+        "path": "agent-presets/governance/agent.cordis.yml.template",
+        "type": "file"
+      },
+      {
+        "path": "agent-presets/governance/preset.yml",
         "type": "file"
       },
       {
@@ -810,15 +818,17 @@
   "cleanup_scope": {
     "description": "Top-level plugin directories that cleanup.py may scan for redundant product artifacts. User project files outside this scope are never cleanup candidates.",
     "directories": [
-      "skills",
+      "adapters",
+      "agent-presets",
       "agents",
       "commands",
-      "adapters",
+      "lib",
+      "skills",
+      ".agents",
+      ".chrys-plugin",
       ".claude-plugin",
       ".codex-plugin",
-      ".zcode-plugin",
-      ".chrys-plugin",
-      ".agents"
+      ".zcode-plugin"
     ]
   },
   "exclude_from_cleanup": {

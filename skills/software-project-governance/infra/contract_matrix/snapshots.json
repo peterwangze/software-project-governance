@@ -1,7 +1,7 @@
 {
   "faces": {
     "check_segments": {
-      "count": 71,
+      "count": 70,
       "ids": [
         "1",
         "2",
@@ -72,8 +72,7 @@
         "36",
         "37",
         "38",
-        "39",
-        "40"
+        "39"
       ],
       "titles": {
         "1": "Evidence Completeness",
@@ -141,7 +140,6 @@
         "38": "CI Evidence (FIX-267)",
         "39": "R1 Completion Gate (FIX-274)",
         "4": "Evidence Quality",
-        "40": "DSH Skills Manifest (FIX-272)",
         "5": "Protocol Compliance (M8 External)",
         "6": "Tier Audit Completeness",
         "7": "Commit-Task Traceability",
@@ -164,8 +162,8 @@
           "dynamic-lifecycle-migration"
         ]
       },
-      "handler_count": 80,
-      "key_count": 83,
+      "handler_count": 79,
+      "key_count": 82,
       "keys": [
         "agent-locks-acquire",
         "agent-runtime-e2e",
@@ -184,7 +182,6 @@
         "check-deterministic-scaffolds",
         "check-dsh-preset-compat",
         "check-dsh-preset-smoke",
-        "check-dsh-skills-manifest",
         "check-duplicate-code",
         "check-first-session-measurement",
         "check-flow-unit-runtime",
@@ -390,14 +387,14 @@
   },
   "generated": {
     "generator_relpath": "skills/software-project-governance/infra/contract_matrix/generator.py",
-    "git_head": "031f0fa3bfd5c5d86b0144cdf6674dd48ff241e9",
+    "git_head": "94c0a619dcce751c00553e0bb004b4daa1de689a",
     "python": {
       "family": "3.14",
       "implementation": "cpython",
       "platform": "win32",
       "version": "3.14.3"
     },
-    "timestamp_utc": "2026-09-11T15:01:08+00:00"
+    "timestamp_utc": "2026-09-11T22:29:05+00:00"
   },
   "python_family_pins": [
     {

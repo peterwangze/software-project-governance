@@ -48,6 +48,13 @@ PLUGIN_SCOPE_DIRS = {
     "agents",
     "commands",
     "adapters",
+    # FIX-310: the dsh delivery surface — the preset payload the host row
+    # renders (`agent-presets/governance/`: composition template + preset.yml)
+    # and the host row module itself (`lib/index.js`). Declared here so
+    # cleanup.py can purge stale payload files after an upgrade, and so the
+    # manifest cleanup_scope stays in sync (FIX-053 F-001).
+    "agent-presets",
+    "lib",
     ".claude-plugin",
     ".codex-plugin",
     ".zcode-plugin",

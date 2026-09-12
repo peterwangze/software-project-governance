@@ -275,6 +275,13 @@ PLUGIN_SCOPE_DIRS = {
     "agents",
     "commands",
     "adapters",
+    # FIX-310: the dsh delivery surface — the preset payload the host row
+    # renders (`agent-presets/governance/`: composition template + preset.yml)
+    # and the host row module itself (`lib/index.js`). Declared here so
+    # cleanup.py can purge stale payload files after an upgrade, and so the
+    # manifest cleanup_scope stays in sync (FIX-053 F-001).
+    "agent-presets",
+    "lib",
     ".claude-plugin",
     ".codex-plugin",
     ".zcode-plugin",
@@ -6605,7 +6612,15 @@ PROJECTION_SYNC_PATTERNS = (
 VERSION_LINE_ANCHOR = "@version-line"
 
 INJECTION_CONTRACT_ANCHORS = {
-    "adapters/dsh/agent.cordis.yml.template": [
+    # FIX-310 / DEC-187: the composition template is the SINGLE persona surface
+    # (the former second spelling, `presets/governance/agent.cordis.yml`, is
+    # gone with the copy model), so it carries the whole anchor set:
+    #   * FIX-274 / F-02 — the M7.7 real-environment contract keywords;
+    #   * FIX-272 / FEAT-010 R0 F1 — the persona VERSION-LINE same-source guard
+    #     (`治理工作流（vX.Y.Z）` must track the SKILL.md authority; the
+    #     dsh-persona-version projection guards it too, the dynamic marker here
+    #     is the belt-and-braces layer that also covers a hand-edited file).
+    "agent-presets/governance/agent.cordis.yml.template": [
         "关键行为契约", "复审必达", "NEEDS_CHANGE", "完成必推荐",
         "task-priority-analysis", "选项必带依据",
         # FIX-260 / REQ-107: 4th contract line — review conclusions MUST be
@@ -6615,6 +6630,7 @@ INJECTION_CONTRACT_ANCHORS = {
         # real-environment protection (R1 one-of-three / R4 per-command
         # relay / R5 acceptance wording).
         "真实环境必防护", "三选一", "逐条上报", "隔离环境安装冒烟",
+        VERSION_LINE_ANCHOR,
     ],
     "skills/software-project-governance/SKILL.md": [
         "关键行为契约", "复审必达", "完成必推荐",
@@ -6623,16 +6639,6 @@ INJECTION_CONTRACT_ANCHORS = {
         "真实环境必防护", "三选一", "逐条上报", "隔离环境安装冒烟",
     ],
     "adapters/dsh/AGENTS.md.template": ["关键行为契约"],
-    # FIX-274 / F-02: in-package preset persona — M7.7 contract keywords
-    # PLUS the FIX-272 persona VERSION-LINE same-source guard (the shipped
-    # preset's `治理工作流（vX.Y.Z）` line must track the SKILL.md authority —
-    # FIX-250 precedent; the template side is already projection-guarded by
-    # dsh-persona-version, the preset is NOT, hence the dynamic marker here).
-    "presets/governance/agent.cordis.yml": [
-        "关键行为契约",
-        "真实环境必防护", "三选一", "逐条上报", "隔离环境安装冒烟",
-        VERSION_LINE_ANCHOR,
-    ],
 }
 
 
@@ -6775,155 +6781,6 @@ def check_injection_contract(root=None):
     }
 
 
-# FIX-272 / FEAT-010 R0 F2: dsh.skills declaration ↔ disk bidirectional
-# machine check. package.json's ``dsh.skills`` list is declarative bundle
-# metadata with zero dsh-side consumer (R0 verified: dsh only reads
-# dsh.bundle.patch), so without a machine check a new skill silently rots
-# the shipped catalog. Disk enumeration mirrors the FEAT-010 R0 reference
-# disk glob (skills/*/SKILL.md ×26 + adapters/dsh/skill-shims/*.md ×9).
-DSH_SKILLS_DISK_PATTERNS = ("skills/*/SKILL.md", "adapters/dsh/skill-shims/*.md")
-
-
-# Reject-reason tokens (FIX-286 F2 — review-FIX-272-CODE-R0 F2 message
-# split): ``traversal`` (parent-directory escape) and ``absolute`` (POSIX
-# root / Windows drive) are the security-grade rejection class and carry
-# their own actionable diagnostic; ``format`` / ``non-string`` stay in the
-# legacy "invalid declaration entry" (format invalid) bucket so existing
-# consumers of that wording are not broken.
-_REJECT_REASON_TRAVERSAL = "traversal"
-_REJECT_REASON_ABSOLUTE = "absolute"
-# Human-readable detail per security-grade reason (diagnostic only).
-_REJECT_SECURITY_DETAIL = {
-    _REJECT_REASON_TRAVERSAL: "parent-directory escape ('..' segment)",
-    _REJECT_REASON_ABSOLUTE: "POSIX root or Windows drive",
-}
-
-
-def _classify_declared_skill_path(raw):
-    """Single classification point for a dsh.skills declaration entry.
-
-    Returns ``(normalized, reject_reason)``: ``normalized`` is the
-    repo-relative POSIX path (``./`` bundle prefix stripped, backslashes
-    normalized) and ``reject_reason`` is ``None`` when the entry is
-    acceptable; on rejection ``normalized`` is ``None`` and
-    ``reject_reason`` is one of ``traversal`` (``..`` segment) /
-    ``absolute`` (POSIX root or Windows drive) / ``format`` (empty, ``.``,
-    or empty segment) / ``non-string``.
-
-    The reject decision (the ``normalized is None`` set) is exactly the
-    legacy ``_normalize_declared_skill_path`` None-set — the reason token
-    only shapes the diagnostic message and never widens acceptance
-    (FIX-286 F2).
-    """
-    if not isinstance(raw, str):
-        return None, "non-string"
-    value = raw.strip().replace("\\", "/")
-    if value.startswith("./"):
-        value = value[2:]
-    if not value:
-        return None, "format"
-    if value.startswith("/"):
-        return None, _REJECT_REASON_ABSOLUTE
-    parts = value.split("/")
-    if ":" in parts[0]:
-        return None, _REJECT_REASON_ABSOLUTE
-    if ".." in parts:
-        return None, _REJECT_REASON_TRAVERSAL
-    if any(part in ("", ".") for part in parts):
-        return None, "format"
-    return value, None
-
-
-def _normalize_declared_skill_path(raw):
-    """Normalize a dsh.skills declaration entry to a repo-relative POSIX path.
-
-    Legacy-contract wrapper over :func:`_classify_declared_skill_path`
-    (FIX-286 F2 kept this signature: the rejection surface — returns
-    ``None`` for anything malformed, non-repo-relative, or path-traversal
-    (``..`` / absolute) — is unchanged; only the caller's diagnostic
-    message is reason-classified now).
-    """
-    return _classify_declared_skill_path(raw)[0]
-
-
-def check_dsh_skills_manifest(root=None):
-    """FIX-272 / FEAT-010 R0 F2: package.json dsh.skills ↔ disk consistency.
-
-    Bidirectional: (a) every declared entry must resolve to an existing file
-    (declaration without payload), (b) every disk file matching the DSH skill
-    catalog patterns must be declared (payload silently left out of the
-    shipped catalog), (c) duplicates / malformed / path-traversal entries are
-    drift signals. Each failure carries an actionable diagnostic.
-    """
-    root = Path(root) if root is not None else ROOT
-    package_path = root / "package.json"
-    issues = []
-    if not package_path.is_file():
-        return {
-            "issues": [f"package.json missing — dsh.skills manifest cannot be checked"],
-            "declared_count": 0,
-            "disk_count": 0,
-        }
-    try:
-        payload = json.loads(package_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        return {
-            "issues": [f"package.json unreadable: {exc}"],
-            "declared_count": 0,
-            "disk_count": 0,
-        }
-    dsh = payload.get("dsh") if isinstance(payload, dict) else None
-    declared_raw = dsh.get("skills") if isinstance(dsh, dict) else None
-    if declared_raw is None:
-        issues.append("package.json: dsh.skills manifest missing")
-        declared_raw = []
-    if not isinstance(declared_raw, list):
-        issues.append("package.json: dsh.skills must be a list")
-        declared_raw = []
-
-    declared = {}
-    for entry in declared_raw:
-        normalized, reject_reason = _classify_declared_skill_path(entry)
-        if normalized is None:
-            label = entry if isinstance(entry, str) else repr(entry)
-            if reject_reason in _REJECT_SECURITY_DETAIL:
-                # FIX-286 F2: security-grade rejections (path traversal /
-                # absolute) get their own actionable message, decoupled from
-                # the malformed-entry wording (review-FIX-272-CODE-R0 F2).
-                issues.append(
-                    f"dsh.skills: path traversal or absolute entry rejected: "
-                    f"{label} ({_REJECT_SECURITY_DETAIL[reject_reason]})")
-            else:
-                # Format class keeps the legacy ``invalid declaration entry``
-                # substring so existing consumers (the R0-era test assertion
-                # and any Check 40 output reader) stay compatible.
-                issues.append(
-                    f"dsh.skills: invalid declaration entry "
-                    f"(format invalid): {label}")
-            continue
-        if normalized in declared:
-            issues.append(f"dsh.skills: duplicate declaration: {normalized}")
-            continue
-        declared[normalized] = entry
-    for normalized in sorted(declared):
-        if not (root / normalized).is_file():
-            issues.append(
-                f"dsh.skills: declared but missing on disk: {normalized}")
-
-    disk = set()
-    for pattern in DSH_SKILLS_DISK_PATTERNS:
-        for path in root.glob(pattern):
-            if path.is_file():
-                disk.add(path.relative_to(root).as_posix())
-    for rel in sorted(disk):
-        if rel not in declared:
-            issues.append(f"dsh.skills: on disk but not declared: {rel}")
-
-    return {
-        "issues": issues,
-        "declared_count": len(declared),
-        "disk_count": len(disk),
-    }
 
 
 # ── FEAT-015 / RISK-049 ②: isolated preset-session smoke gate ───────────────
@@ -14705,7 +14562,6 @@ _PLUGIN_PRODUCT_CHECK_IDS = frozenset({
     "Check 30b",  # Loop wiring call sites（插件 infra AST 扫描）
     "Check 31",   # Loop Runtime Claim Gate（插件树扫描 + identity attestation）
     "Check 33",   # Injection Contract（插件 persona/SKILL/AGENTS 锚点）
-    "Check 40",   # DSH Skills Manifest（package.json dsh.skills ↔ 磁盘）
 })
 
 
@@ -14770,7 +14626,6 @@ _PRODUCT_GATE_LABELS = {
     "Check 30b": "Loop wiring call sites",
     "Check 31": "Loop Runtime Claim Gate",
     "Check 33": "Injection Contract",
-    "Check 40": "DSH Skills Manifest",
 }
 
 
@@ -16404,32 +16259,13 @@ def _run_full_engine_checks(args):
         print(f"│  [{cr39['verdict']}] {cr39['reason']}")
     print("└──────────────────────────────────────────────────────┘")
 
-    # ── 40. DSH Skills Manifest (FIX-272 / FEAT-010 R0 F2) ──
-    # package.json dsh.skills（35 条，声明式 bundle 元数据、dsh 侧零消费者）
-    # ↔ 磁盘技能目录双向机器校验：声明的文件必须存在、磁盘 catalog 内的
-    # 文件必须已声明、重复/畸形/路径穿越条目均为漂移信号（FEAT-010 R0 F2）。
-    if _product_gate_active(args):
-        print("\n┌─ Check 40: DSH Skills Manifest (FIX-272) ──────────┐")
-        dsm40 = check_dsh_skills_manifest()
-        print(f"│  Declared: {dsm40['declared_count']}; on disk: {dsm40['disk_count']}")
-        if dsm40["issues"]:
-            all_issues += len(dsm40["issues"])
-            print(f"│  [FAIL] {len(dsm40['issues'])} dsh.skills manifest issue(s):")
-            for issue in dsm40["issues"]:
-                print(f"│    - {issue}")
-        else:
-            print("│  [PASS] dsh.skills declarations match the disk catalog.")
-    else:
-        _print_product_gate_skipped("Check 40")
-    print("└──────────────────────────────────────────────────────┘")
-
     # ── 28u. DSH Preset Session Smoke (FEAT-015 / RISK-049 ②) ──
     # RISK-049 closure standard (2): "安装后 preset 会话可用" as a repeatable
-    # gate instead of reasoning. Blocking (mirrors Check 40): a preset session
-    # that cannot load its skill catalog or /governance gesture is a
-    # user-facing defect, not an advisory. Runs in a temp DSH_HOME created by
-    # the check (M7.7 (a) isolation); fact source = the plugin package's own
-    # launch.py + presets/ → PLUGIN_PRODUCT (FIX-270 / F-2).
+    # gate instead of reasoning. Blocking: a preset session that cannot load
+    # its skill catalog or /governance gesture is a user-facing defect, not an
+    # advisory. Runs in a temp DSH_HOME created by the check (M7.7 (a)
+    # isolation); fact source = the plugin package's own launch.py +
+    # agent-presets/ → PLUGIN_PRODUCT (FIX-270 / F-2).
     if _product_gate_active(args):
         print("\n┌─ Check 28u: DSH Preset Session Smoke (FEAT-015) ────┐")
         dsmk28u = check_dsh_preset_smoke()
@@ -21257,28 +21093,6 @@ def cmd_check_injection_contract(args):
     print()
 
 
-def cmd_check_dsh_skills_manifest(args):
-    """Run the dsh.skills declaration ↔ disk consistency check (FIX-272)."""
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-    result = check_dsh_skills_manifest()
-    print("\n=== DSH Skills Manifest Check (FIX-272) ===")
-    print(f"  Declared: {result['declared_count']}; on disk: {result['disk_count']}")
-    if result["issues"]:
-        print(f"\n  Result: FAILED — {len(result['issues'])} issue(s)")
-        for issue in result["issues"][:20]:
-            print(f"    - {issue}")
-        if len(result["issues"]) > 20:
-            print(f"    ... and {len(result['issues']) - 20} more")
-        if getattr(args, "fail_on_issues", False):
-            sys.exit(1)
-    else:
-        print("\n  Result: PASSED — dsh.skills declarations match the disk catalog")
-    print()
-
-
 def cmd_check_dsh_preset_smoke(args):
     """Run the isolated DSH preset-session smoke gate (FEAT-015)."""
     try:
@@ -23763,14 +23577,6 @@ def main(argv=None):
     cic_p.add_argument("--fail-on-issues", action="store_true",
                        help="Exit with non-zero code if injection-contract anchors are missing")
 
-    # check-dsh-skills-manifest (FIX-272 / FEAT-010 R0 F2)
-    cdsm_p = subparsers.add_parser(
-        "check-dsh-skills-manifest",
-        help="Check package.json dsh.skills declaration ↔ disk bidirectional consistency (FIX-272)",
-    )
-    cdsm_p.add_argument("--fail-on-issues", action="store_true",
-                        help="Exit with non-zero code if the dsh.skills manifest drifts from disk")
-
     # check-dsh-preset-smoke (FEAT-015 / RISK-049 ②)
     csmk_p = subparsers.add_parser(
         "check-dsh-preset-smoke",
@@ -24344,7 +24150,6 @@ def main(argv=None):
         "check-version-consistency": cmd_check_version_consistency,
         "check-projection-sync": cmd_check_projection_sync,
         "check-injection-contract": cmd_check_injection_contract,
-        "check-dsh-skills-manifest": cmd_check_dsh_skills_manifest,
         "check-dsh-preset-smoke": cmd_check_dsh_preset_smoke,
         "check-dsh-preset-compat": cmd_check_dsh_preset_compat,
         "check-hot-fact-source": cmd_check_hot_fact_source,

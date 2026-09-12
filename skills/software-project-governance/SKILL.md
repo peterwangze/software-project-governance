@@ -309,12 +309,12 @@ python skills/software-project-governance/infra/verify_workflow.py execution-pac
 | Gemini | `adapters/gemini/` | — |
 | opencode | `adapters/opencode/` | — |
 | Chrys | `adapters/chrys/` | — |
-| DeepSeek Harness | `adapters/dsh/` | `${DSH_HOME}/.agent-presets/governance/`（由 launch.py 生成） |
+| DeepSeek Harness | `adapters/dsh/` + `agent-presets/governance/` | `${DSH_HOME}/.agent-presets/governance/`（由包内宿主行 `lib/index.js` 或 `adapters/dsh/launch.py --install` 渲染 `agent.cordis.yml.template` 生成） |
 | 国内 Agent CLI | — | `.agents/` |
 
 ### DeepSeek Harness（dsh）平台说明
 
-- **加载模型**：`python adapters/dsh/launch.py --install` 生成 `governance` 预设——persona 携带 Coordinator bootstrap，`customSkillDirs` 注册仓库 `skills/` 与 `adapters/dsh/skill-shims/`（commands 的薄投影），原生 `skill` 工具直接暴露全部工作流 skill；项目级激活用 `--bootstrap-project <dir>` 写入 `AGENTS.md`（dsh 自动注入工作区会话）。
+- **加载模型**：`dsh plugin --profile <name> add <包>` + 重启即自动完成——`cordis.patch.yml` 只插入本包自己的宿主行（DEC-187：不改任何宿主行），其 `lib/index.js` 把 `agent-presets/governance/agent.cordis.yml.template` 渲染为**绝对路径**写入 `${DSH_HOME}/.agent-presets/governance/`（用户预设根 ⇒ 设置页显示为可删除/可打开目录的自定义预设；按包版本号幂等，失败只 warn 不抛）。persona 携带 Coordinator bootstrap，`customSkillDirs` 注册仓库 `skills/` 与 `adapters/dsh/skill-shims/`（commands 的薄投影），原生 `skill` 工具直接暴露全部工作流 skill。手工/离线路径为 `python adapters/dsh/launch.py --install`（渲染同一模板，字节一致）；项目级激活用 `--bootstrap-project <dir>` 写入 `AGENTS.md`（dsh 自动注入工作区会话）。
 - **plugin_home**：DSH 下 `skill` 工具返回的 resourceBase 即 `skills/software-project-governance/` 目录；`resolve_entry.py` 的 `__file__` 自定位与 HOST_PROJECT_ROOT=cwd 双根模型原样成立，无需平台探测。
 - **Agent Team 映射**：`subagent` 工具 spawn 角色 agent（子代理继承父预设组合）；角色定义 `agents/<role>.md` + 调度模板 `references/agent-dispatch-template.md` 填入 prompt。
 - **用户交互**：`ask_user_question` 工具替代 AskUserQuestion；**命令入口**：`/governance` 等用户手势直接加载 `adapters/dsh/skill-shims/` 下同名投影 skill（其内容为 `commands/*.md` 的薄指针）。

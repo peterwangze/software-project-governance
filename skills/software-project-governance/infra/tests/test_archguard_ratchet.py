@@ -47,7 +47,11 @@ SNAPSHOT = _INFRA_DIR / "contract_matrix" / "snapshots.json"
 #      the selector's four-state output at the L5 dispatch site —
 #      r4_print_orchestration.per_function attributes it to cmd_check_governance;
 #      baseline regenerated in the same change, EVD-1000 authorization recorded)
-FACTS_PRINT_TOTAL = 1311
+#   -> 1298 (FIX-310, 2026-09-12: -13 — retiring the dead `dsh.skills`
+#      declaration also retired its guard output: the Check 40 print block in
+#      the engine plus cmd_check_dsh_skills_manifest's own prints; sanctioned
+#      ratchet shrink, baseline regenerated in the same change)
+FACTS_PRINT_TOTAL = 1298
 
 
 def _committed_baseline():

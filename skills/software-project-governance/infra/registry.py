@@ -251,8 +251,6 @@ _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
     ("check-dsh-preset-compat",
      "verify_workflow.cmd_check_dsh_preset_compat"),
     ("check-dsh-preset-smoke", "verify_workflow.cmd_check_dsh_preset_smoke"),
-    ("check-dsh-skills-manifest",
-     "verify_workflow.cmd_check_dsh_skills_manifest"),
     ("check-duplicate-code", "verify_workflow.cmd_check_duplicate_code"),
     ("check-first-session-measurement",
      "verify_workflow.cmd_check_first_session_measurement"),
@@ -419,14 +417,17 @@ _SEGMENT_LOADERS: Tuple[Tuple[str, str], ...] = (
     ("37", "checks.gate_domain.check_gate_sequence_for_release"),
     ("38", "checks.ci_domain.check_ci_evidence"),
     ("39", "checks.triage_domain.check_r1_completion_gate"),
-    ("40", "verify_workflow.check_dsh_skills_manifest"),
 )
-"""71 segments ↔ the entry point the engine's section actually calls.
+"""70 segments ↔ the entry point the engine's section actually calls.
 
 Machine-derived in two passes: the section's single check-entry call name
 (``check_*`` / ``scan_*``) cross-referenced with that symbol's defining infra
-module. 69 of 71 resolve uniquely; ``24`` / ``28b`` name the implementing
+module. 68 of 70 resolve uniquely; ``24`` / ``28b`` name the implementing
 domain module behind an engine delegating wrapper (``DELEGATED_LOADERS``).
+
+Segment ``40`` (``verify_workflow.check_dsh_skills_manifest``) was removed with
+its subject: FIX-310/DEC-187 retired the dead ``dsh.skills`` declaration from
+package.json, so the declaration↔disk guard had nothing left to guard.
 """
 
 

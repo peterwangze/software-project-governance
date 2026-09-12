@@ -17532,14 +17532,15 @@ class CheckR1CompletionGateTests(unittest.TestCase):
 class InjectionContractPresetVersionLineTests(unittest.TestCase):
     """FIX-272 (FEAT-010 R0 F1): preset persona VERSION-LINE same-source guard.
 
-    The shipped preset ``presets/governance/agent.cordis.yml``'s persona
-    version line (``治理工作流（vX.Y.Z）``) must be guarded against the
-    authoritative SKILL.md frontmatter version — FIX-250 precedent: the
-    version line silently drifted to bundle end users, and without a machine
-    guard the next release would drift again. The anchor marker
-    ``@version-line`` is DYNAMIC (resolved against the authority at check
-    time, FIX-253 §6.6.3 pattern) so the guard itself cannot drift to a stale
-    hardcoded literal.
+    The shipped preset payload's persona version line
+    (``治理工作流（vX.Y.Z）``) in
+    ``agent-presets/governance/agent.cordis.yml.template`` must be guarded
+    against the authoritative SKILL.md frontmatter version — FIX-250
+    precedent: the version line silently drifted to bundle end users, and
+    without a machine guard the next release would drift again. The anchor
+    marker ``@version-line`` is DYNAMIC (resolved against the authority at
+    check time, FIX-253 §6.6.3 pattern) so the guard itself cannot drift to a
+    stale hardcoded literal.
     """
 
     def _copy_injection_surfaces(self, root):
@@ -17559,7 +17560,7 @@ class InjectionContractPresetVersionLineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             self._copy_injection_surfaces(root)
-            preset = root / "presets/governance/agent.cordis.yml"
+            preset = root / "agent-presets/governance/agent.cordis.yml.template"
             text = preset.read_text(encoding="utf-8")
             authority = vw._extract_skill_version(
                 root / "skills/software-project-governance/SKILL.md")
@@ -17571,7 +17572,7 @@ class InjectionContractPresetVersionLineTests(unittest.TestCase):
             preset.write_text(stale, encoding="utf-8")
             result = vw.check_injection_contract(root)
             self.assertTrue(
-                any("presets/governance/agent.cordis.yml" in issue
+                any("agent-presets/governance/agent.cordis.yml.template" in issue
                     and "anchor missing" in issue
                     for issue in result["issues"]),
                 result["issues"],
@@ -17591,231 +17592,11 @@ class InjectionContractPresetVersionLineTests(unittest.TestCase):
             skill.write_text(masked, encoding="utf-8")
             result = vw.check_injection_contract(root)
             self.assertTrue(
-                any("presets/governance/agent.cordis.yml" in issue
+                any("agent-presets/governance/agent.cordis.yml.template" in issue
                     and "unresolved" in issue
                     for issue in result["issues"]),
                 result["issues"],
             )
-
-
-class DshSkillsManifestTests(unittest.TestCase):
-    """FIX-272 (FEAT-010 R0 F2): package.json dsh.skills ↔ disk check.
-
-    The 35-entry dsh.skills manifest is declarative bundle metadata with zero
-    dsh-side consumers; without a machine check a new skill silently rots the
-    shipped catalog. Bidirectional: declaration-missing-on-disk AND
-    on-disk-undeclared AND duplicates are all detected with actionable
-    diagnostics.
-    """
-
-    def test_live_repo_declaration_matches_disk_bidirectionally(self):
-        result = vw.check_dsh_skills_manifest()
-        self.assertEqual(result["issues"], [], result["issues"])
-        self.assertEqual(result["declared_count"], 35)
-        self.assertEqual(result["disk_count"], 35)
-
-    def test_declared_file_missing_on_disk_is_detected(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            (root / "package.json").write_text(json.dumps({
-                "dsh": {"skills": ["./skills/alpha/SKILL.md"]},
-            }, ensure_ascii=False), encoding="utf-8")
-            result = vw.check_dsh_skills_manifest(root)
-            self.assertTrue(
-                any("skills/alpha/SKILL.md" in issue
-                    and "missing" in issue.lower()
-                    for issue in result["issues"]),
-                result["issues"],
-            )
-
-    def test_disk_file_undeclared_is_detected(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            (root / "package.json").write_text(json.dumps({
-                "dsh": {"skills": []},
-            }, ensure_ascii=False), encoding="utf-8")
-            beta = root / "skills" / "beta" / "SKILL.md"
-            beta.parent.mkdir(parents=True, exist_ok=True)
-            beta.write_text("---\n", encoding="utf-8")
-            result = vw.check_dsh_skills_manifest(root)
-            self.assertTrue(
-                any("skills/beta/SKILL.md" in issue
-                    and "not declared" in issue
-                    for issue in result["issues"]),
-                result["issues"],
-            )
-
-    def test_duplicate_declaration_is_detected(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            (root / "package.json").write_text(json.dumps({
-                "dsh": {"skills": [
-                    "./skills/alpha/SKILL.md", "./skills/alpha/SKILL.md",
-                ]},
-            }, ensure_ascii=False), encoding="utf-8")
-            alpha = root / "skills" / "alpha" / "SKILL.md"
-            alpha.parent.mkdir(parents=True, exist_ok=True)
-            alpha.write_text("---\n", encoding="utf-8")
-            result = vw.check_dsh_skills_manifest(root)
-            self.assertTrue(
-                any("duplicate" in issue.lower()
-                    for issue in result["issues"]),
-                result["issues"],
-            )
-
-    def test_manifest_field_absent_is_detected(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            (root / "package.json").write_text(json.dumps({
-                "$schema": "https://json.schemastore.org/package.json",
-                "name": "@zcode/software-project-governance-plugin",
-                "version": "0.76.0",
-                "private": True,
-            }, ensure_ascii=False), encoding="utf-8")
-            result = vw.check_dsh_skills_manifest(root)
-            self.assertTrue(
-                any("dsh.skills" in issue
-                    for issue in result["issues"]),
-                result["issues"],
-            )
-
-    def test_invalid_entry_is_detected(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            (root / "package.json").write_text(json.dumps({
-                "dsh": {"skills": ["./skills/alpha/SKILL.md", 42]},
-            }, ensure_ascii=False), encoding="utf-8")
-            alpha = root / "skills" / "alpha" / "SKILL.md"
-            alpha.parent.mkdir(parents=True, exist_ok=True)
-            alpha.write_text("---\n", encoding="utf-8")
-            result = vw.check_dsh_skills_manifest(root)
-            self.assertTrue(
-                any("invalid declaration entry" in issue
-                    for issue in result["issues"]),
-                result["issues"],
-            )
-
-    # ─── FIX-286 F1 (review-FIX-272-CODE-R0 F1): traversal regression ──────
-    #
-    # The defense itself was verified safe by the R0 review's independent
-    # 14/14 boundary probes (no live vulnerability); the P2 gap was the
-    # missing regression guard — a future refactor could silently break the
-    # rejection. Each probe below locks: (a) unit-level rejection
-    # (`_normalize_declared_skill_path` → None), (b) the classifier reason
-    # class behind the FIX-286 F2 message split, (c) the upstream
-    # `check_dsh_skills_manifest` security-grade issue, and (d) zero
-    # filesystem side effects (the check only reads package.json — the
-    # probed escape targets do not exist and are not created).
-
-    def test_traversal_probe_dotdot_relative_is_rejected(self):
-        """FIX-286 F1 probe 1: `../skills/x/SKILL.md` parent-escape entry."""
-        probe = "../skills/x/SKILL.md"
-        self.assertIsNone(vw._normalize_declared_skill_path(probe))
-        self.assertEqual(
-            vw._classify_declared_skill_path(probe),
-            (None, "traversal"))
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            (root / "package.json").write_text(json.dumps({
-                "dsh": {"skills": [probe]},
-            }, ensure_ascii=False), encoding="utf-8")
-            result = vw.check_dsh_skills_manifest(root)
-            self.assertTrue(
-                any("path traversal or absolute entry rejected" in issue
-                    and probe in issue
-                    for issue in result["issues"]),
-                result["issues"],
-            )
-            self.assertEqual(result["declared_count"], 0)
-            # No filesystem side effect: nothing beyond package.json exists
-            # after the check (the probed escape target was not created).
-            self.assertEqual(
-                sorted(p.relative_to(root).as_posix()
-                       for p in root.rglob("*")),
-                ["package.json"])
-
-    def test_traversal_probe_posix_absolute_is_rejected(self):
-        """FIX-286 F1 probe 2: `/skills/x/SKILL.md` POSIX-absolute entry."""
-        probe = "/skills/x/SKILL.md"
-        self.assertIsNone(vw._normalize_declared_skill_path(probe))
-        self.assertEqual(
-            vw._classify_declared_skill_path(probe),
-            (None, "absolute"))
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            (root / "package.json").write_text(json.dumps({
-                "dsh": {"skills": [probe]},
-            }, ensure_ascii=False), encoding="utf-8")
-            result = vw.check_dsh_skills_manifest(root)
-            self.assertTrue(
-                any("path traversal or absolute entry rejected" in issue
-                    and probe in issue
-                    for issue in result["issues"]),
-                result["issues"],
-            )
-            self.assertEqual(result["declared_count"], 0)
-            self.assertEqual(
-                sorted(p.relative_to(root).as_posix()
-                       for p in root.rglob("*")),
-                ["package.json"])
-
-    def test_traversal_probe_windows_drive_is_rejected(self):
-        r"""FIX-286 F1 probe 3: `C:\skills\x\SKILL.md` Windows-drive entry."""
-        probe = "C:\\skills\\x\\SKILL.md"
-        self.assertIsNone(vw._normalize_declared_skill_path(probe))
-        self.assertEqual(
-            vw._classify_declared_skill_path(probe),
-            (None, "absolute"))
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            (root / "package.json").write_text(json.dumps({
-                "dsh": {"skills": [probe]},
-            }, ensure_ascii=False), encoding="utf-8")
-            result = vw.check_dsh_skills_manifest(root)
-            self.assertTrue(
-                any("path traversal or absolute entry rejected" in issue
-                    and probe in issue
-                    for issue in result["issues"]),
-                result["issues"],
-            )
-            self.assertEqual(result["declared_count"], 0)
-            self.assertEqual(
-                sorted(p.relative_to(root).as_posix()
-                       for p in root.rglob("*")),
-                ["package.json"])
-
-    def test_traversal_and_format_invalid_messages_are_distinguishable(self):
-        """FIX-286 F2 (review-FIX-272-CODE-R0 F2): path-traversal/absolute
-        entries get their own security-grade rejection message, while plain
-        malformed entries keep the legacy ``invalid declaration entry``
-        wording as the explicit format class. The two classes MUST be
-        mutually distinguishable — a traversal entry must never re-enter
-        the legacy malformed bucket (the R0 audit-actionability gap)."""
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            (root / "package.json").write_text(json.dumps({
-                "dsh": {"skills": ["../evil/SKILL.md", 42]},
-            }, ensure_ascii=False), encoding="utf-8")
-            result = vw.check_dsh_skills_manifest(root)
-            traversal_issues = [
-                i for i in result["issues"]
-                if "path traversal or absolute entry rejected" in i]
-            format_issues = [
-                i for i in result["issues"]
-                if "invalid declaration entry" in i]
-            self.assertEqual(len(traversal_issues), 1, result["issues"])
-            self.assertEqual(len(format_issues), 1, result["issues"])
-            # Class disjointness — each entry lands in exactly one bucket.
-            self.assertNotIn("invalid declaration entry",
-                             traversal_issues[0])
-            self.assertNotIn("path traversal or absolute entry rejected",
-                             format_issues[0])
-            # New format message carries the explicit class marker and the
-            # offending label; the security class names the reject reason.
-            self.assertIn("(format invalid)", format_issues[0])
-            self.assertIn("42", format_issues[0])
-            self.assertIn("parent-directory escape", traversal_issues[0])
-            self.assertIn("../evil/SKILL.md", traversal_issues[0])
 
 
 class Fix284WriteGuardMissingRowTests(unittest.TestCase):

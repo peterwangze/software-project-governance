@@ -1,9 +1,26 @@
 # The `governance` agent preset for the software-project-governance workflow.
 #
-# This file is a TEMPLATE: `adapters/dsh/launch.py` substitutes the
-# `__GOVERNANCE_*__` tokens with absolute paths and writes the result to
-# `${DSH_HOME}/.agent-presets/governance/agent.cordis.yml`. Do not mount this
-# template directly.
+# This file is a TEMPLATE and the SINGLE composition source for the dsh
+# adapter: `agent-presets/governance/` holds the preset payload (this template
+# + preset.yml) and nothing else. Two renderers substitute the
+# `__GOVERNANCE_*__` tokens with ABSOLUTE paths and write the result to
+# `${DSH_HOME}/.agent-presets/governance/agent.cordis.yml`:
+#   * `lib/index.js` `ensurePreset()` — the inserted bundle row, on boot;
+#   * `adapters/dsh/launch.py --install` — the manual / offline path.
+# Do not mount this template directly, and do not rename it to
+# `agent.cordis.yml`: a token-bearing composition under that name would be
+# discovered as a mountable preset by `dsh-agent-presets` and would silently
+# register the literal `__GOVERNANCE_*__` strings as skill roots. The
+# `.template` suffix is what keeps it render-only, and `dsh_compat`'s
+# `**/*.cordis.yml.template` glob validates it against the installed schemas.
+#
+# Absolute, not relative, roots: `customSkillDirs` entries are resolved with
+# Node `path.resolve` against the dsh PROCESS CWD (installed dsh:
+# dsh-skill-filesystem/lib/index.js) and the user-root copy sits outside this
+# package, so only absolute paths are correct. The package stays the single
+# source of the skill content: there is no copied `skills/` tree anywhere, and
+# no literal relative entry (a documented live-regression class — the catalog
+# silently empties and `/governance` disappears).
 #
 # Loading model (thin projection): the workflow rules stay in the repository's
 # shared skill (`skills/software-project-governance/SKILL.md`). This preset only
@@ -22,8 +39,9 @@
 
 # The Coordinator persona + DSH governance bootstrap, shadowing the deployment
 # default for this agent. `{{model}}` and `{{cwd}}` resolve from the agent's
-# own route and workspace; `__GOVERNANCE_REPO_ROOT__` is substituted by
-# launch.py at install time.
+# own route and workspace; `__GOVERNANCE_REPO_ROOT__` is substituted at render
+# time (launch.py / ensurePreset) with the package root, which is what
+# `<plugin_root>` in the persona body resolves to.
 - id: persona
   name: '@deepseek-ai/dsh-persona'
   config:
@@ -103,12 +121,12 @@
 # ── skills ──────────────────────────────────────────────────────────────────
 
 # The workflow catalog travels with the repository, not with a copied skill
-# tree: both roots below point at the repo checkout (substituted by launch.py),
-# so `git pull` is the skill update. The second root is a flat skill root:
-# `adapters/dsh/skill-shims/` holds thin name+description shims over
-# `commands/*.md`, which makes `/governance` and friends first-class dsh skills
-# (the `/name` user gesture loads them) without touching the shared command
-# files. Registration happens in THIS preset's layer of the host skill
+# tree: both roots below point at the package checkout (substituted at render
+# time), so `git pull` + a re-render is the skill update. The second root is a
+# flat skill root: `adapters/dsh/skill-shims/` holds thin name+description
+# shims over `commands/*.md`, which makes `/governance` and friends first-class
+# dsh skills (the `/name` user gesture loads them) without touching the shared
+# command files. Registration happens in THIS preset's layer of the host skill
 # registry, so no realm is needed.
 - id: skill-filesystem
   name: '@deepseek-ai/dsh-skill-filesystem'

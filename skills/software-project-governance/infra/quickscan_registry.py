@@ -290,7 +290,7 @@ SEGMENTS = (
         "plugin:asset:docs/**",
         "plugin:asset:tests/**",
         "plugin:asset:web/**",
-        "plugin:asset:presets/**",
+        "plugin:asset:agent-presets/**",
         "plugin:asset:project/**",
         "plugin:git:ls-files --cached",
     ), _excluded("PLUGIN_PACKAGE_ASSET")),
@@ -537,11 +537,12 @@ SEGMENTS = (
     ), _excluded("PLUGIN_PACKAGE_ASSET")),
     SegmentSpec("28u", "distribution", (
         "plugin:asset:adapters/dsh/launch.py",
-        "plugin:asset:presets/**",
+        "plugin:asset:agent-presets/**",
     ), _excluded("PLUGIN_PACKAGE_ASSET")),
     SegmentSpec("28v", "distribution", (
-        "plugin:asset:presets/**",
-        "plugin:asset:adapters/dsh/agent.cordis.yml.template",
+        "plugin:asset:agent-presets/**",
+        "plugin:asset:lib/index.js",
+        "plugin:asset:cordis.patch.yml",
     ), _excluded("PLUGIN_PACKAGE_ASSET")),
     # ── C3 待判定 ④：事实源根 = 宿主面（宿主治理证据语料）──
     SegmentSpec("29", "protocol", (
@@ -579,8 +580,7 @@ SEGMENTS = (
     SegmentSpec("33", "injection", (
         "plugin:asset:skills/software-project-governance/SKILL.md",
         "plugin:asset:adapters/dsh/AGENTS.md.template",
-        "plugin:asset:adapters/dsh/agent.cordis.yml.template",
-        "plugin:asset:presets/governance/agent.cordis.yml",
+        "plugin:asset:agent-presets/governance/agent.cordis.yml.template",
     ), _excluded("PLUGIN_PACKAGE_ASSET")),
     SegmentSpec("34", "recommendation", (
         "host:governance:.governance/evidence-log.md",
@@ -612,11 +612,6 @@ SEGMENTS = (
         "host:governance:.governance/evidence-log.md",
         "host:governance:.governance/change-triage/**",
     ), _RETAIN),
-    SegmentSpec("40", "distribution", (
-        "plugin:asset:package.json",
-        "plugin:asset:adapters/dsh/skill-shims/**",
-        "plugin:asset:skills/*/SKILL.md",
-    ), _excluded("PLUGIN_PACKAGE_ASSET")),
 )
 
 # ── C3 逐段裁决（FX-195 §136 C3 行 + 代码核验；默认保留 quick 面）──────────

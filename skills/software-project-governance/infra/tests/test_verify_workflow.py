@@ -11821,6 +11821,75 @@ class ExecutionPacketTests(unittest.TestCase):
             self.assertIn("事实依据", issues)
             self.assertIn("independent review", issues)
 
+    # ── FIX-319: markdown bold is not a wildcard (bidirectional guard) ──
+
+    def _packet_with_scope(self, scope):
+        """Structurally valid FIX-084 packet carrying a single scope value."""
+        return {
+            "task_id": "FIX-084",
+            "goal": "implement packet check",
+            "allowed_change_scope": [scope],
+            "required_evidence": ["事实依据 and 结构化事实"],
+            "next_commands": ["python test.py"],
+            "done_definition": ["Review APPROVED"],
+        }
+
+    def _scope_issues(self, scope):
+        """Only the scope judgement can fire for these synthetic packets."""
+        return vw._validate_execution_packet({"task_id": "FIX-084"}, self._packet_with_scope(scope))
+
+    def test_scope_markdown_bold_is_not_a_wildcard(self):
+        """FIX-319 red→green: scopes assembled from plan-tracker row text carry
+        markdown bold (`**NOT_RUN**`). Paired `**` is formatting, not a
+        wildcard token — the old substring predicate flagged every one of them."""
+        for scope in (
+            "**NOT_RUN** 落地 + **契约层** 收口",
+            "Only change files required by this task row: `rows_checked == 0` → **NOT_RUN** + **已披露面（不是静默全绿）**",
+            "**排程约束**：`test_dsh_contract.py` 在 V2 持锁期间不可并发写",
+        ):
+            self.assertNotIn("allowed_change_scope is too broad", self._scope_issues(scope), scope)
+
+    def test_scope_markdown_bold_packet_passes_check(self):
+        """FIX-319 green face at the Check 18c boundary (not just the helper)."""
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P0** | FIX-084 | AI packet | DEC-068 | 0.38.0 | packet command | 📋 待启动 |",
+            ])
+            packet_path.write_text(json.dumps({
+                "version": 1,
+                "packets": {"FIX-084": self._packet_with_scope("**NOT_RUN** 落地 + **契约层** 收口")},
+            }, ensure_ascii=False), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_execution_packets(packet_path)
+            self.assertTrue(r["pass"])
+            self.assertEqual(r["entries"][0]["status"], "PASS")
+
+    def test_scope_real_wildcards_still_too_broad(self):
+        """FIX-319 reversal guard: the fix MUST NOT relax a genuinely broad
+        scope. A *surviving* `*` (standalone, attached or glob) stays FAIL, and
+        bold does not launder a broad phrase (`**all files**`)."""
+        for scope in (
+            "*",
+            "all files",
+            "any file in the repo",
+            "whole repo",
+            "src/*",
+            "*.py",
+            "**/*.py",
+            "*foo*",
+            "**all files**",
+        ):
+            self.assertIn("allowed_change_scope is too broad", self._scope_issues(scope), scope)
+
+    def test_scope_phrase_match_is_word_anchored(self):
+        """FIX-319: natural language that merely *contains* the phrase must not
+        be misread — `install files` / `many files` are not whole-repo scopes."""
+        for scope in (
+            "install files under the slice directory only",
+            "cover as many files as this slice needs",
+        ):
+            self.assertNotIn("allowed_change_scope is too broad", self._scope_issues(scope), scope)
+
     def test_completed_tasks_do_not_require_execution_packet(self):
         with tempfile.TemporaryDirectory() as td:
             _, sp, packet_path = self._setup_plan(td, [

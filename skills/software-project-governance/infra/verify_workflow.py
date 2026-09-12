@@ -12694,6 +12694,51 @@ def _execution_packet_field_issues(packet):
     return issues
 
 
+# FIX-319: `allowed_change_scope` is assembled from plan-tracker row text (see
+# `build_execution_packet`), which carries markdown emphasis — `**NOT_RUN**`,
+# `**契约层**`. Bold uses a PAIRED `**` delimiter, so the old substring
+# predicate `"*" in scope.lower()` reported EVERY bold-bearing scope as
+# `too broad` (systematic false positive: FIX-315 / FIX-317 / FEAT-031).
+#
+# Only `**` needs neutralising: the predicate inspects `*` and the whole-repo
+# phrases, and `` ` `` / `_` carry no asterisk semantics (stripping them would
+# change no verdict). A single `*` is deliberately NOT stripped — in a scope
+# string it is far more often a glob (`src/*`, `*.py`, `*foo*`) than italic
+# emphasis, so leaving it in place keeps the judgement on the strict side.
+_MARKDOWN_BOLD_SPAN_RE = re.compile(r"\*\*(?P<inner>[^*]+?)\*\*")
+
+# Whole-repo phrases, anchored at a WORD START (and case-insensitive) so that
+# natural language merely containing the sequence — `install files`,
+# `as many files as` — is not misread as an unbounded scope. The start anchor
+# alone is enough: the trailing part is left open so the old substring
+# coverage of plurals (`any files`, `whole repository`) is preserved.
+_TOO_BROAD_SCOPE_PHRASE_RE = re.compile(r"\b(?:any file|all files|whole repo)", re.IGNORECASE)
+
+
+def _strip_markdown_bold_markers(text):
+    """Neutralise PAIRED markdown bold markers, keeping the inner text.
+
+    `**X**` becomes ` X ` — the inner text survives so a genuinely broad bold
+    phrase (`**all files**`) is still caught. A single pass is sufficient: the
+    inner group excludes `*` and the replacement only inserts the inner text
+    plus spaces, so no new `**` pair can appear for a second pass to find.
+    """
+    return _MARKDOWN_BOLD_SPAN_RE.sub(lambda match: f" {match.group('inner')} ", text)
+
+
+def _is_too_broad_scope_text(text):
+    """True when an `allowed_change_scope` blob declares an unbounded scope.
+
+    FIX-319: markdown bold is stripped first. A *surviving* `*` is a genuine
+    wildcard — standalone (`*`), attached (`src/*`, `*.py`) or glob
+    (`**/*.py`) — and stays `too broad`; stripping must never launder it.
+    """
+    stripped = _strip_markdown_bold_markers(text)
+    if "*" in stripped:
+        return True
+    return bool(_TOO_BROAD_SCOPE_PHRASE_RE.search(stripped))
+
+
 def _validate_execution_packet(task, packet):
     issues = _execution_packet_field_issues(packet)
     if not isinstance(packet, dict):
@@ -12701,7 +12746,7 @@ def _validate_execution_packet(task, packet):
     if packet.get("task_id") and packet.get("task_id") != task["task_id"]:
         issues.append("task_id does not match active task")
     allowed_text = " ".join(packet.get("allowed_change_scope", []))
-    if allowed_text and any(token in allowed_text.lower() for token in ("*", "any file", "all files", "whole repo")):
+    if allowed_text and _is_too_broad_scope_text(allowed_text):
         issues.append("allowed_change_scope is too broad")
     required_text = " ".join(packet.get("required_evidence", []))
     if required_text and "事实依据" not in required_text:

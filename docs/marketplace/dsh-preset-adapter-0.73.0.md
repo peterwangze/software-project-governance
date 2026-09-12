@@ -28,11 +28,12 @@ dsh 是继 Chrys 之后第二个具备完整原生能力画像（ask_user_questi
 
 ```powershell
 python adapters/dsh/launch.py --install                     # 生成 ${DSH_HOME}/.agent-presets/governance/
-python adapters/dsh/launch.py --install --mode copy         # 自包含快照模式
 python adapters/dsh/launch.py --bootstrap-project <dir>     # 项目级 AGENTS.md（thin pointer）
 python skills/software-project-governance/infra/verify_workflow.py check-agent-adapters
 python skills/software-project-governance/infra/verify_workflow.py check-runtime-readiness-matrix
 ```
+
+> ⚠️ **0.80.0 更正（FIX-310，DESIGN R0 F10）**：上文原有的 `--install --mode copy`（自包含快照模式）**已随 FIX-310 退役**——预设交付改为「单源模板 + 三 token 渲染为包内绝对路径」，不再有复制快照路径；模板退役后 `--mode copy` 旗标在 `adapters/dsh/launch.py` 中已不存在。本文档记录的是 0.73.0 时点的形态，保留作历史证据。
 
 ## 验证证据（2026-07-08，本机）
 

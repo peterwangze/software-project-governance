@@ -2,6 +2,26 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.80.0] - 2026-09-12
+
+### 0.80.0 - 0.80.0 重构线 P1 首批（契约层 / 轻量注册 / quick-scan 两切片）+ **dsh 适配层零侵入改造三连**（REL-076 / FEAT-021~022 / FEAT-025~026 / FIX-303~305 / FIX-307~310）（MINOR）
+
+0.80.0 是 **MINOR** 发布（用户 2026-09-12 指令「发布新版本承载这次修改」；三任务在 plan-tracker 中的目标版本即 0.80.0），把 `v0.79.0`（= transition `17eda48`）之后已合入的 **21 个 commit** + 本候选 commit 打包成发布候选——窗口核定 `git log v0.79.0..HEAD`（M-1，2026-09-12）。窗口内含两条独立主线：
+
+**主线一 — 0.80.0 重构线 P1 首批**（前一会话交付）：**FEAT-021** `906b209`（最小契约层 L0：CheckID/CommandKey/Finding/CheckResult/CheckSpec + 四端口 Protocol + fail-closed 构造校验，87 测试）、**FEAT-022** `36f2040`（轻量注册与按命令加载：`infra/registry.py` 897 行命令/Check 注册表 + 受控 loader 白名单 + 导入期 join 守卫，71 测试）、**FEAT-025** `504cc8f`（quick-scan Slice-1 检查段事实源注册表）、**FEAT-026** `2a5e9ec`（quick-scan Slice-2 编排器 + 四态契约 + shadow 通道）、**FIX-303** `4fcc354`（FEAT-021 R0 遗留批 F-1~F-13 闭环）、**FIX-304** `d6d12e8`（FEAT-025 R0 遗留批 + G-1 显式入参守卫）、**FIX-305** `ebb2dce`（FEAT-022 R0 遗留批）、**REL-075 回填** `e9facf5`，以及审查报告入库 commits `4e4de2b`/`3da4e14`/`70773da`/`c87c47d`/`f87b2fc`/`e143508`/`9410f80`/`e74c0a1`。
+
+**主线二 — dsh 适配层零侵入改造三连**（本会话交付；用户 2026-09-11 反馈「dsh 升级版本之后安装会导致 dsh 异常／预设页崩毁／开不了新会话」触发）：
+- **FIX-307** `4998c6d`+`73e04e5`（0.1.5 接入兼容性修复：`skill-filesystem` UPDATE 行补 `disabled:false`；**本次改造已把该 UPDATE 行整体删除**）
+- **FIX-308** `031f0fa`（根因：`@deepseek-ai/dsh-persona@0.1.5-rc.2` 声明 `prefix: z.string().required()` 而本仓 persona 行使用 `text` ⇒ 单行 config 校验失败**否决整棵预设挂载**（真机实测 entries 0 → 1），致新会话无法创建 + 预设面异常；缺陷自适配器首批提交潜伏、从未被真实执行）
+- **FIX-309** `94c0a61`（新增 **Check 28v** `check-dsh-preset-compat`：用**真实安装的 dsh 插件 Config schema** 逐行校验预设组合，不复制任何 schema——"不复制"经独立遮蔽实验证明（改写已安装 persona 的键名，判定随之翻转）；审查链 R0 NEEDS_CHANGE/1 → R1 APPROVED_WITH_NOTES/0；NEW=0 由两位审查方各自独立复现）
+- **FIX-310** `5a259e2`（**零侵入改造**，参照用户已跑通的 `dsh-novel-writing`：`cordis.patch.yml` 由「两条 UPDATE 打 dsh 内部行 + 3 处 `!!js` 解析 `process.argv`/扫 `$DSH_HOME/profiles` 自定位」收敛为**单行 `- insert:` 命名本包自己的行**；新增宿主行 `lib/index.js`，唯一职责 `ensurePreset()` 把组合模板**渲染为绝对路径**写入 `$DSH_HOME/.agent-presets/governance/`（幂等、staging+rename、失败只 warn）；`presets/` 与包内模板重复面退役；移除死字段 `dsh.skills` 及其守卫扇出 —— 该字段经全量核实 dsh 核心从不读取）
+
+**架构不变量（DEC-187，2026-09-12 用户裁定，永久生效）**：**I-1** 禁止任何侵入式修改宿主行为的做法；**I-2** 禁止让宿主产生对本插件的反向依赖；**I-3** 本插件对 dsh 只允许正向依赖（dsh 变更由我方适配，绝不通过覆盖宿主内部行来「兼容」）。**机检判据（DEC-188 ② 澄清）**：`dsh --profile <p> --dump-config` 安装前后，**既有**宿主行的存在性 / `config` / `disabled` 与任何宿主平面注册表内容**零变化**，组合 entry 列表**恰多一行且该行只命名本包**——**不是**「与未安装时逐字节等价」（后者在「官方 `dsh plugin add` 零手工步骤即交付预设」同时成立时不可满足：那一行正是官方安装命令的交付载体，参照实现 `dsh-novel-writing` 同形）。FIX-310 即按此不变量重做：**宿主既有行零触碰**（不改任何既有行、不注册全局 provider / 服务 / 工具、不声明 `system`-trust 预设根、无 `!!js` 自定位）；交付物为**恰一行自有 `- insert:`** + 该行模块 `lib/index.js`（唯一动作 `ensurePreset()`，warn-only）。
+
+发布目标：兑现 0.80.0 重构线的 P1 首批落地，并把 dsh 适配层从「打补丁改 harness 私有行」迁移到「bundle 单行 insert + 文档化的公开机制」，**消除 RISK-050 的一条腿**（上游内部行 UPDATE 面 + `!!js` 自定位面退役——FIX-307 与 FIX-308 两次事故同源）。**范围限定**：RISK-050 的**另一条腿未消除**——组合仍绑定 23 个 `@deepseek-ai/dsh-*` 行的 Config schema（含 `dsh-persona.config.prefix`），dsh 再改这些行的 schema 时同类漂移仍会发生，该腿由 **advisory 级 Check 28v** 前移到 CI（护栏，非消除）；因此**不声明 RISK-050 关闭**，收口待真实环境验收 + 复评窗。**Breaking changes**：dsh 安装形态变更——预设由包内 `system` 根发现改为由本包宿主行**供给到用户预设根**（设置页显示为**自定义**预设，可删除 / 可打开目录）；`package.json` 移除死字段 `dsh.skills`；`presets/` 目录删除。**其它五个适配层与核心规则零改动**（`skills/*/SKILL.md`、`commands/`、`agents/` 仅路径引用同步）。RISK-050 关闭路径已由本次改造完成**部分**结构性交付（另一条腿见上），收口待真实环境验收；RISK-036/RISK-039 不关闭。
+
+版本投影 0.79.0 -> 0.80.0（`release-projection --write` 15 projections + @bootstrap-version 标记面 9 行 + REQUIRED_SNIPPETS 6 版本钉）。
+
 ## [0.79.0] - 2026-09-10
 
 ### 0.79.0 - 降噪第二波/规则判定能力批 + RISK-049 关闭三件套 + RISK-046 根因修复 + 治理数据归档迁移 + 0.80.0 重构线 P0 前置波（REL-074 / REL-075 / FIX-291~297 / FEAT-011~017 / FEAT-018~020 / FIX-299~302 / FX-195 / AUDIT-149~152 / DOC-003）（MINOR）

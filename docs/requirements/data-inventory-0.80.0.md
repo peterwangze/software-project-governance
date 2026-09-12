@@ -172,8 +172,8 @@
 | OPENCODE_LEGAL_DEEPSEEK_MODELS | L5606-L5607 | 2 | tuple[2] | B | 单域 token/枚举/映射（_opencode_model_scan、_validate_opencode_provider_model_preflight_claim）——域内 data.py | 内部：_opencode_model_scan L5669；_validate_opencode_provider_model_preflight_claim L5777/L5793 | 保持 |
 | PROJECTION_SYNC_PATTERNS | L6574-L6604 | 31 | tuple[11] | A | 投影同步模式表（11 源），§6 投影单源策略的直接数据面 | 内部：_projection_source_files L6672；源扫描/fixture：skills/software-project-governance/infra/tests/test_release_ledger.py:666 等2处 | P1 |
 | INJECTION_CONTRACT_ANCHORS | L6607-L6638 | 32 | dict[4] | A | dsh 投影注入契约锚点（4 锚×字段），外部测试 4 处消费 | 内部：check_injection_contract L6754/L6774；测试：skills/software-project-governance/infra/tests/test_dsh_adapter.py:663 等4处 | P1 |
-| DSH_SKILLS_DISK_PATTERNS | L6784-L6792 | 9 | tuple[2] | B | 单域 token/枚举/映射（check_dsh_skills_manifest）——域内 data.py | 内部：check_dsh_skills_manifest L6914 | 保持 |
-| _REJECT_SECURITY_DETAIL | L6796-L6801 | 6 | dict[2] | B | 单域 token/枚举/映射（check_dsh_skills_manifest）——域内 data.py | 内部：check_dsh_skills_manifest L6889/L6895 | 保持 |
+| ~~DSH_SKILLS_DISK_PATTERNS~~ | ~~L6784-L6792~~ | ~~9~~ | ~~tuple[2]~~ | — | **已退役（0.80.0 FIX-310）**——`dsh.skills` 经全量核实 dsh 核心从不读取，字段与 `check_dsh_skills_manifest` 及其数据面一并移除；候选实现中该符号出现次数 = 0，本行原引行号已为空行/无关行（DESIGN R0 F5 更正） | —— | 已退役 |
+| ~~_REJECT_SECURITY_DETAIL~~ | ~~L6796-L6801~~ | ~~6~~ | ~~dict[2]~~ | — | **已退役（0.80.0 FIX-310）**——同上，随 `check_dsh_skills_manifest` 移除；候选实现中 0 次出现（DESIGN R0 F5 更正） | —— | 已退役 |
 | STAGE_ORDER | L7567-L7572 | 6 | list[11] | B | 单域 token/枚举/映射（list_available_stages）——域内 data.py | 内部：list_available_stages L9444/L9451 | 保持 |
 | STAGE_SKILL_ALIASES | L7573-L7579 | 7 | dict[4] | B | 单域 token/枚举/映射（normalize_stage_name）——域内 data.py | 内部：normalize_stage_name L9415 | 保持 |
 | STAGE_SKILL_DIR_NAMES | L7580-L7584 | 5 | dict[2] | B | 单域 token/枚举/映射（_stage_name_from_skill_dir、stage_skill_dir_name）——域内 data.py | 内部：_stage_name_from_skill_dir L9431；stage_skill_dir_name L9421 | 保持 |

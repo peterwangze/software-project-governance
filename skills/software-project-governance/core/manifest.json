@@ -236,6 +236,10 @@
         "type": "dir"
       },
       {
+        "path": "adapters/dsh/host-contract.json",
+        "type": "file"
+      },
+      {
         "path": "lib/",
         "type": "dir"
       },
@@ -761,6 +765,17 @@
         "artifact_role": "artifact-projection-registry",
         "validation_commands": [
           "python skills/software-project-governance/infra/verify_workflow.py release-projection",
+          "python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues"
+        ]
+      },
+      {
+        "id": "dsh-host-contract",
+        "path": "adapters/dsh/host-contract.json",
+        "type": "file",
+        "required": true,
+        "artifact_role": "host-dependency-contract",
+        "validation_commands": [
+          "python -m unittest discover -s skills/software-project-governance/infra/tests -p test_dsh_contract.py",
           "python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues"
         ]
       }

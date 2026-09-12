@@ -1,0 +1,2457 @@
+{
+  "schema_version": 1,
+  "evidence": {
+    "_note": "版本证据面。`audit` 指向本契约的事实来源快照；其余字段只能由 `dsh-doctor --record-evidence` 在真实平面写入（设计 §2.4/§2.7，V8）。V1 一律为 null（未记录），禁止人工誊抄——誊抄会把契约退化为第二事实源。",
+    "audit": {
+      "id": "AUDIT-153",
+      "path": "docs/requirements/dsh-host-dependency-inventory-0.81.0.md",
+      "head": "d87ead845ff8c641ceebf52890c9232d1404aeb2",
+      "date": "2026-09-13"
+    },
+    "recorded_on": null,
+    "verified_on": null,
+    "verified_on_ttl_days": 180,
+    "plane": {
+      "source": null,
+      "node_modules": null
+    },
+    "dsh_cli_version": null,
+    "oracle_packages": {},
+    "compat_range": null,
+    "recording": {
+      "source": "recorded",
+      "recorded": false,
+      "writer": "dsh-doctor --record-evidence",
+      "slice": "V8",
+      "fields": [
+        "recorded_on",
+        "verified_on",
+        "plane.source",
+        "plane.node_modules",
+        "dsh_cli_version",
+        "oracle_packages"
+      ],
+      "note": "只有该命令写 evidence.*（设计 §2.7，git diff 可审）；读取方只读，不得自动刷新。null = 未记录 ⇒ 依赖它的判据（TTL / 平面比对 / 版本区间）在本版 MUST 按 NOT_RUN 处理，不得当作过期或通过。"
+    },
+    "notes": {
+      "compat_range": "未裁定（设计 §2.4 定义为「人工裁定」但未给取值）：V1 不虚构。取值确定前，S3 的越界判据不可用（V8 按 NOT_RUN 处理，不得默认 PASS）。",
+      "dsh_cli_version_current_measurement": "当前安装态实测值记录在事实源里（AUDIT-153 §1.1 = 0.1.5-rc.1），不在本契约内——本字段只由 --record-evidence 写（设计 §2.7）。"
+    }
+  },
+  "host": {
+    "_note": "宿主侧事实（dsh 单方面决定的部分）。每一项都可回到 AUDIT-153 或仓库源码锚点；「我们的策略」不写在这里。探测侧与写入侧必须分开读（R0 F-6）。",
+    "install": {
+      "scope": "@deepseek-ai",
+      "cli_package": "dsh",
+      "anchor_rel": [
+        "@deepseek-ai",
+        "dsh",
+        "package.json"
+      ],
+      "env_overrides": {
+        "install_dir": "DSH_INSTALL_DIR",
+        "node_modules": "DSH_HARNESS_NODE_MODULES"
+      },
+      "profiles_dir_name": "profiles",
+      "plane_layout": [
+        "DSH_HOME/profiles/<profile>/node_modules",
+        "DSH_HOME/profiles/node_modules"
+      ]
+    },
+    "env": {
+      "home_var": "DSH_HOME",
+      "write_side": {
+        "blank_policy": "trimmed-empty-means-unset",
+        "trim_policy": "verbatim-then-platform-resolve",
+        "fallback": "<home>/.dsh",
+        "tilde_expansion": [
+          "~",
+          "~/",
+          "~\\"
+        ],
+        "implementations": [
+          "lib/index.js",
+          "adapters/dsh/launch.py",
+          "dsh-doctor --record-evidence path (V8)"
+        ],
+        "differential_gate": "G06-b：写入侧实现 MUST 与安装态 @deepseek-ai/dsh-home-paths 的实测 case 表一致（设计 §4.4.4；AUDIT-153 G-06 逐 case 实测，V6 落地）。"
+      },
+      "probe_side": {
+        "require_explicit": true,
+        "no_fallback": true,
+        "implementations": [
+          "skills/software-project-governance/infra/dsh_compat.py"
+        ],
+        "note": "G06-b'（R0 F-6）：写入侧的「与上游一致」不适用于探测侧。guard 只认显式 DSH_HOME，从不猜 ~/.dsh（dsh_compat._profile_planes:560-563），这是安全属性，反相断言见 test_dsh_compat.py::test_dsh_home_is_never_guessed_when_unset。"
+      }
+    },
+    "home": {
+      "user_preset_dir": ".agent-presets",
+      "composition_file": "agent.cordis.yml",
+      "composition_globs": [
+        "**/agent.cordis.yml",
+        "**/*.cordis.yml.template"
+      ]
+    },
+    "row_contract": {
+      "id_field": "id",
+      "name_field": "name",
+      "config_field": "config",
+      "group_field": "group",
+      "disabled_field": "disabled",
+      "builtin_prefix": "cordis:",
+      "builtin_group_name": "cordis:group",
+      "js_dialect_tag": "!!js",
+      "loader_scope": [
+        "baseUrl",
+        "process",
+        "console"
+      ],
+      "loader_scope_baseurl_shape": "file-url",
+      "group_self_disabled_shortcircuit": true,
+      "ancestor_disabled_inherited": true,
+      "ctx_logger": "optional"
+    },
+    "rows": [
+      {
+        "row_id": "persona",
+        "package": "@deepseek-ai/dsh-persona",
+        "disabled_expr": null,
+        "platform_conditional": false,
+        "enabled_on": "any",
+        "config_keys": [
+          "prefix"
+        ],
+        "config_declared": true,
+        "group": null,
+        "recorded": {
+          "schema_export": null,
+          "required_keys": [],
+          "accepted_keys": [],
+          "probe_result": null,
+          "source": "recorded",
+          "recorded": false
+        }
+      },
+      {
+        "row_id": "agent-instructions",
+        "package": "@deepseek-ai/dsh-agent-instructions",
+        "disabled_expr": null,
+        "platform_conditional": false,
+        "enabled_on": "any",
+        "config_keys": [
+          "maxBytes"
+        ],
+        "config_declared": true,
+        "group": null,
+        "recorded": {
+          "schema_export": null,
+          "required_keys": [],
+          "accepted_keys": [],
+          "probe_result": null,
+          "source": "recorded",
+          "recorded": false
+        }
+      },
+      {
+        "row_id": "tool-bash",
+        "package": "@deepseek-ai/dsh-tool-bash",
+        "disabled_expr": "!!js process.platform === 'win32'",
+        "platform_conditional": true,
+        "enabled_on": "posix",
+        "config_keys": [],
+        "config_declared": false,
+        "group": null,
+        "recorded": {
+          "schema_export": null,
+          "required_keys": [],
+          "accepted_keys": [],
+          "probe_result": null,
+          "source": "recorded",
+          "recorded": false
+        }
+      },
+      {
+        "row_id": "tool-pwsh",
+        "package": "@deepseek-ai/dsh-tool-pwsh",
+        "disabled_expr": "!!js process.platform !== 'win32'",
+        "platform_conditional": true,
+        "enabled_on": "win32",
+        "config_keys": [],
+        "config_declared": false,
+        "group": null,
+        "recorded": {
+          "schema_export": null,
+          "required_keys": [],
+          "accepted_keys": [],
+          "probe_result": null,
+          "source": "recorded",
+          "recorded": false
+        }
+      },
+      {
+        "row_id": "tool-fs",
+        "package": "@deepseek-ai/dsh-tool-fs",
+        "disabled_expr": null,
+        "platform_conditional": false,
+        "enabled_on": "any",
+        "config_keys": [],
+        "config_declared": false,
+        "group": null,
+        "recorded": {
+          "schema_export": null,
+          "required_keys": [],
+          "accepted_keys": [],
+          "probe_result": null,
+          "source": "recorded",
+          "recorded": false
+        }
+      },
+      {
+        "row_id": "tool-fs-search",
+        "package": "@deepseek-ai/dsh-tool-fs-search",
+        "disabled_expr": null,
+        "platform_conditional": false,
+        "enabled_on": "any",
+        "config_keys": [
+          "sampleOverCapGlobResults"
+        ],
+        "config_declared": true,
+        "group": null,
+        "recorded": {
+          "schema_export": null,
+          "required_keys": [],
+          "accepted_keys": [],
+          "probe_result": null,
+          "source": "recorded",
+          "recorded": false
+        }
+      },
+      {
+        "row_id": "tool-jobs",
+        "package": "@deepseek-ai/dsh-tool-jobs",
+        "disabled_expr": null,
+        "platform_conditional": false,
+        "enabled_on": "any",
+        "config_keys": [],
+        "config_declared": false,
+        "group": null,
+        "recorded": {
+          "schema_export": null,
+          "required_keys": [],
+          "accepted_keys": [],
+          "probe_result": null,
+          "source": "recorded",
+          "recorded": false
+        }
+      },
+      {
+        "row_id": "skill-filesystem",
+        "package": "@deepseek-ai/dsh-skill-filesystem",
+        "disabled_expr": null,
+        "platform_conditional": false,
+        "enabled_on": "any",
+        "config_keys": [
+          "customSkillDirs"
+        ],
+        "config_declared": true,
+        "group": null,
+        "recorded": {
+          "schema_export": null,
+          "required_keys": [],
+          "accepted_keys": [],
+          "probe_result": null,
+          "source": "recorded",
+          "recorded": false
+        }
+      },
+      {
+        "row_id": "tool-skill",
+        "package": "@deepseek-ai/dsh-tool-skill",
+        "disabled_expr": null,
+        "platform_conditional": false,
+        "enabled_on": "any",
+        "config_keys": [],
+        "config_declared": false,
+        "group": null,
+        "recorded": {
+          "schema_export": null,
+          "required_keys": [],
+          "accepted_keys": [],
+          "probe_result": null,
+          "source": "recorded",
+          "recorded": false
+        }
+      },
+      {
+        "row_id": "tool-goal",
+        "package": "@deepseek-ai/dsh-tool-goal",
+        "disabled_expr": null,
+        "platform_conditional": false,
+        "enabled_on": "any",
+        "config_keys": [],
+        "config_declared": false,
+        "group": null,
+        "recorded": {
+          "schema_export": null,
+          "required_keys": [],
+          "accepted_keys": [],
+          "probe_result": null,
+          "source": "recorded",
+          "recorded": false
+        }
+      },
+      {
+        "row_id": "planning",
+        "package": "cordis:group",
+        "disabled_expr": null,
+        "platform_conditional": false,
+        "enabled_on": null,
+        "config_keys": [],
+        "config_declared": true,
+        "group": null,
+        "recorded": {
+          "schema_export": null,
+          "required_keys": [],
+          "accepted_keys": [],
+          "probe_result": null,
+          "source": "recorded",
+          "recorded": false
+        }
+      },
+      {
+        "row_id": "plan-mode",
+        "package": "@deepseek-ai/dsh-plan-mode",
+        "disabled_expr": null,
+        "platform_conditional": false,
+        "enabled_on": "any",
+        "config_keys": [
+          "section"
+        ],
+        "config_declared": true,
+        "group": "planning",
+        "recorded": {
+          "schema_export": null,
+          "required_keys": [],
+          "accepted_keys": [],
+          "probe_result": null,
+          "source": "recorded",
+          "recorded": false
+        }
+      },
+      {
+        "row_id": "compaction",
+        "package": "cordis:group",
+        "disabled_expr": null,
+        "platform_conditional": false,
+        "enabled_on": null,
+        "config_keys": [],
+        "config_declared": true,
+        "group": null,
+        "recorded": {
+          "schema_export": null,
+          "required_keys": [],
+          "accepted_keys": [],
+          "probe_result": null,
+          "source": "recorded",
+          "recorded": false
+        }
+      },
+      {
+        "row_id": "compaction-basic",
+        "package": "@deepseek-ai/dsh-compaction-basic",
+        "disabled_expr": null,
+        "platform_conditional": false,
+        "enabled_on": "any",
+        "config_keys": [],
+        "config_declared": false,
+        "group": "compaction",
+        "recorded": {
+          "schema_export": null,
+          "required_keys": [],
+          "accepted_keys": [],
+          "probe_result": null,
+          "source": "recorded",
+          "recorded": false
+        }
+      },
+      {
+        "row_id": "command-compact",
+        "package": "@deepseek-ai/dsh-command-compact",
+        "disabled_expr": null,
+        "platform_conditional": false,
+        "enabled_on": "any",
+        "config_keys": [],
+        "config_declared": false,
+        "group": "compaction",
+        "recorded": {
+          "schema_export": null,
+          "required_keys": [],
+          "accepted_keys": [],
+          "probe_result": null,
+          "source": "recorded",
+          "recorded": false
+        }
+      },
+      {
+        "row_id": "tool-result-pruner",
+        "package": "@deepseek-ai/dsh-compaction-tool-result-pruner",
+        "disabled_expr": null,
+        "platform_conditional": false,
+        "enabled_on": "any",
+        "config_keys": [
+          "thresholdChars",
+          "headChars",
+          "tailChars"
+        ],
+        "config_declared": true,
+        "group": "compaction",
+        "recorded": {
+          "schema_export": null,
+          "required_keys": [],
+          "accepted_keys": [],
+          "probe_result": null,
+          "source": "recorded",
+          "recorded": false
+        }
+      },
+      {
+        "row_id": "delegation",
+        "package": "cordis:group",
+        "disabled_expr": null,
+        "platform_conditional": false,
+        "enabled_on": null,
+        "config_keys": [],
+        "config_declared": true,
+        "group": null,
+        "recorded": {
+          "schema_export": null,
+          "required_keys": [],
+          "accepted_keys": [],
+          "probe_result": null,
+          "source": "recorded",
+          "recorded": false
+        }
+      },
+      {
+        "row_id": "tool-subagent-control",
+        "package": "@deepseek-ai/dsh-tool-subagent-control",
+        "disabled_expr": null,
+        "platform_conditional": false,
+        "enabled_on": "any",
+        "config_keys": [],
+        "config_declared": false,
+        "group": "delegation",
+        "recorded": {
+          "schema_export": null,
+          "required_keys": [],
+          "accepted_keys": [],
+          "probe_result": null,
+          "source": "recorded",
+          "recorded": false
+        }
+      },
+      {
+        "row_id": "tool-subagent-list-agents",
+        "package": "@deepseek-ai/dsh-tool-subagent-control/list-agents",
+        "disabled_expr": null,
+        "platform_conditional": false,
+        "enabled_on": "any",
+        "config_keys": [],
+        "config_declared": false,
+        "group": "delegation",
+        "recorded": {
+          "schema_export": null,
+          "required_keys": [],
+          "accepted_keys": [],
+          "probe_result": null,
+          "source": "recorded",
+          "recorded": false
+        }
+      },
+      {
+        "row_id": "tool-subagent",
+        "package": "@deepseek-ai/dsh-tool-subagent",
+        "disabled_expr": null,
+        "platform_conditional": false,
+        "enabled_on": "any",
+        "config_keys": [
+          "provider",
+          "toolName",
+          "backgroundMode"
+        ],
+        "config_declared": true,
+        "group": "delegation",
+        "recorded": {
+          "schema_export": null,
+          "required_keys": [],
+          "accepted_keys": [],
+          "probe_result": null,
+          "source": "recorded",
+          "recorded": false
+        }
+      },
+      {
+        "row_id": "tool-subagent-fork",
+        "package": "@deepseek-ai/dsh-tool-subagent",
+        "disabled_expr": null,
+        "platform_conditional": false,
+        "enabled_on": "any",
+        "config_keys": [
+          "provider",
+          "toolName",
+          "backgroundMode"
+        ],
+        "config_declared": true,
+        "group": "delegation",
+        "recorded": {
+          "schema_export": null,
+          "required_keys": [],
+          "accepted_keys": [],
+          "probe_result": null,
+          "source": "recorded",
+          "recorded": false
+        }
+      },
+      {
+        "row_id": "tool-subagent-codex",
+        "package": "@deepseek-ai/dsh-tool-subagent",
+        "disabled_expr": "true",
+        "platform_conditional": false,
+        "enabled_on": "never",
+        "config_keys": [
+          "provider",
+          "toolName",
+          "enableRunInBackground",
+          "maxDepth"
+        ],
+        "config_declared": true,
+        "group": "delegation",
+        "recorded": {
+          "schema_export": null,
+          "required_keys": [],
+          "accepted_keys": [],
+          "probe_result": null,
+          "source": "recorded",
+          "recorded": false
+        }
+      },
+      {
+        "row_id": "tool-subagent-claude-code",
+        "package": "@deepseek-ai/dsh-tool-subagent",
+        "disabled_expr": "true",
+        "platform_conditional": false,
+        "enabled_on": "never",
+        "config_keys": [
+          "provider",
+          "toolName",
+          "enableRunInBackground",
+          "maxDepth"
+        ],
+        "config_declared": true,
+        "group": "delegation",
+        "recorded": {
+          "schema_export": null,
+          "required_keys": [],
+          "accepted_keys": [],
+          "probe_result": null,
+          "source": "recorded",
+          "recorded": false
+        }
+      },
+      {
+        "row_id": "workflow-worker-thread",
+        "package": "@deepseek-ai/dsh-workflow-worker-thread",
+        "disabled_expr": null,
+        "platform_conditional": false,
+        "enabled_on": "any",
+        "config_keys": [
+          "provider"
+        ],
+        "config_declared": true,
+        "group": "delegation",
+        "recorded": {
+          "schema_export": null,
+          "required_keys": [],
+          "accepted_keys": [],
+          "probe_result": null,
+          "source": "recorded",
+          "recorded": false
+        }
+      },
+      {
+        "row_id": "tool-workflow",
+        "package": "@deepseek-ai/dsh-tool-workflow",
+        "disabled_expr": null,
+        "platform_conditional": false,
+        "enabled_on": "any",
+        "config_keys": [],
+        "config_declared": false,
+        "group": "delegation",
+        "recorded": {
+          "schema_export": null,
+          "required_keys": [],
+          "accepted_keys": [],
+          "probe_result": null,
+          "source": "recorded",
+          "recorded": false
+        }
+      },
+      {
+        "row_id": "tool-ralph",
+        "package": "@deepseek-ai/dsh-tool-ralph",
+        "disabled_expr": null,
+        "platform_conditional": false,
+        "enabled_on": "any",
+        "config_keys": [
+          "subagentProvider",
+          "maxRounds"
+        ],
+        "config_declared": true,
+        "group": "delegation",
+        "recorded": {
+          "schema_export": null,
+          "required_keys": [],
+          "accepted_keys": [],
+          "probe_result": null,
+          "source": "recorded",
+          "recorded": false
+        }
+      },
+      {
+        "row_id": "tool-ask-user",
+        "package": "@deepseek-ai/dsh-tool-ask-user",
+        "disabled_expr": null,
+        "platform_conditional": false,
+        "enabled_on": "any",
+        "config_keys": [],
+        "config_declared": false,
+        "group": null,
+        "recorded": {
+          "schema_export": null,
+          "required_keys": [],
+          "accepted_keys": [],
+          "probe_result": null,
+          "source": "recorded",
+          "recorded": false
+        }
+      },
+      {
+        "row_id": "tool-todo",
+        "package": "@deepseek-ai/dsh-tool-todo",
+        "disabled_expr": null,
+        "platform_conditional": false,
+        "enabled_on": "any",
+        "config_keys": [
+          "allowParallelInProgress"
+        ],
+        "config_declared": true,
+        "group": null,
+        "recorded": {
+          "schema_export": null,
+          "required_keys": [],
+          "accepted_keys": [],
+          "probe_result": null,
+          "source": "recorded",
+          "recorded": false
+        }
+      },
+      {
+        "row_id": "tool-web",
+        "package": "@deepseek-ai/dsh-tool-web",
+        "disabled_expr": null,
+        "platform_conditional": false,
+        "enabled_on": "any",
+        "config_keys": [
+          "fetch",
+          "searchTimeoutMs"
+        ],
+        "config_declared": true,
+        "group": null,
+        "recorded": {
+          "schema_export": null,
+          "required_keys": [],
+          "accepted_keys": [],
+          "probe_result": null,
+          "source": "recorded",
+          "recorded": false
+        }
+      }
+    ],
+    "skill_frontmatter": {
+      "name_equals_filename": true,
+      "description_required": true,
+      "fence": "---"
+    },
+    "apis": {
+      "@deepseek-ai/cordis": {
+        "exports": [
+          "resolveConfig"
+        ],
+        "role": "行 config 的校验调用（挂载期拒绝的抛出点）"
+      },
+      "@deepseek-ai/cordis-plugin-include": {
+        "exports": [
+          "entryListSchema"
+        ],
+        "role": "!!js YAML 方言的 schema（探针用 js-yaml 加载它）"
+      },
+      "@deepseek-ai/cordis-plugin-loader": {
+        "exports": [
+          "isJsExpr",
+          "evaluate"
+        ],
+        "role": "loader 表达式判定与求值"
+      },
+      "js-yaml": {
+        "exports": [
+          "load"
+        ],
+        "role": "加载 entryListSchema 所用的 YAML 解析器"
+      }
+    },
+    "cli": {
+      "version_command": "dsh --version",
+      "dump_config_command": "dsh --profile <name> --dump-config",
+      "plugin_command": "dsh plugin --profile <name> add <package>",
+      "probe_invocation": "node --input-type=module --eval <probe>",
+      "dump_config_policy": "--dump-config 只在授权模式（--allow-host-probe 且满足 R1 三选一）下执行（设计 §5.2 S5），默认 NOT_RUN"
+    },
+    "host_plane_registries": {
+      "registries": [
+        "shell-env",
+        "subagents",
+        "web"
+      ],
+      "verification": "unverified (R-09)",
+      "evidence": "agent-presets/governance/agent.cordis.yml.template:96,194,266 （宿主组合注释）+ AUDIT-153 D-45；S5 默认 NOT_RUN（设计 §5.3 T-7）"
+    },
+    "notes": {
+      "profile_declaration": "host-install-mechanism-not-ours",
+      "rows_field_semantics": "row_id = 组合行的 `- id:`；package = `name:`；group = 父 group id（顶层行 null）；group 容器行由 package == host.row_contract.builtin_group_name 标识；enabled_on ∈ {any, win32, posix, never, null}（null = group 容器行，非叶子）；config_declared = 存在 `config:` 键（group 行的值 = 子行序列）；config_keys = 非 group 行 config 映射的顶层键（group 行 []）；disabled_expr = `disabled:` 键的原始标量文本（无该键 = null）。",
+      "rows_recorded_subblock": "`recorded.{schema_export,required_keys,accepted_keys,probe_result}` 只由 `dsh-doctor --record-evidence` 在真实平面写入（设计 §2.4 R0 F-5）。V1 全空并标 `source: recorded` + `recorded: false`；人工誊抄 = 契约缺陷，不是数据。",
+      "rows_enabled_arithmetic": "29（平台无关全集 = 顶层 16 + 嵌套 13）− 3 group − 2 `disabled: true` − 1 平台短路 = 任一平台上 enabled 的 23 行（AUDIT-153 §1.1 rows_enabled，设计 §0.2 E-10②）。",
+      "platform_conditional_rows": "平台条件行的唯一载体 = `host.rows[].{platform_conditional, enabled_on, disabled_expr}`（设计 §2.4；R1 N-1 已闭合：不设任何派生字段、禁止第二来源）。"
+    }
+  },
+  "own": {
+    "_note": "本包约定（我们自己的 parity 契约：JS × Python × 模板 × hooks）。与 host.* 分开，否则「宿主改了」与「我们改了」无法分辨（设计 §2.1）。",
+    "package": {
+      "name": "@peterwangze/software-project-governance-plugin",
+      "type": "module",
+      "main": "lib/index.js",
+      "exports": {
+        ".": "./lib/index.js",
+        "./package.json": "./package.json"
+      },
+      "files": [
+        "lib/",
+        "agent-presets/",
+        "skills/",
+        "commands/",
+        "agents/",
+        "adapters/dsh/",
+        "!**/__pycache__/",
+        "!**/*.pyc",
+        "cordis.patch.yml",
+        "README.md",
+        "LICENSE"
+      ],
+      "engines_node": ">=20",
+      "dsh_bundle_patch_key": "dsh.bundle.patch"
+    },
+    "host_row": {
+      "entry": "lib/index.js",
+      "export_surface": [
+        "apply",
+        "ensurePreset",
+        "name",
+        "renderComposition"
+      ],
+      "apply_never_throws": true,
+      "warn_only": true,
+      "top_level_io": false,
+      "runtime_dependencies": []
+    },
+    "patch": {
+      "file": "cordis.patch.yml",
+      "shape_invariants": [
+        "exactly-one-insert-row",
+        "no-id-update",
+        "no-trust",
+        "no-!!js"
+      ]
+    },
+    "preset": {
+      "id": "governance",
+      "payload_dir": "agent-presets/governance",
+      "template": "agent-presets/governance/agent.cordis.yml.template",
+      "metadata": "agent-presets/governance/preset.yml",
+      "version_marker": ".dsh-bundle-version",
+      "skill_root_marker": "skill-root.txt",
+      "write_policy": "staging+rename, no-lock, best-effort"
+    },
+    "render": {
+      "tokens": {
+        "__GOVERNANCE_SKILLS_ROOT__": "skills",
+        "__GOVERNANCE_SHIMS_ROOT__": "adapters/dsh/skill-shims",
+        "__GOVERNANCE_REPO_ROOT__": ""
+      },
+      "newline_policy": "lf",
+      "leftover_scan": "__[A-Za-z0-9_]+__",
+      "custom_skill_dirs_shape": {
+        "key_indent": 4,
+        "item_indent": 6,
+        "list_style": "block-sequence",
+        "entry_count": 2,
+        "entry_form": [
+          "token"
+        ],
+        "renders_to": "absolute-path"
+      },
+      "differential_gate": "三条渲染路径 MUST 输出字节相同（设计 §4.4.3/§4.4.5；parity 测试 test_dsh_adapter.py::test_js_and_python_renderers_agree）。"
+    },
+    "paths": {
+      "host_row": "lib/index.js",
+      "launcher": "adapters/dsh/launch.py",
+      "guard": "skills/software-project-governance/infra/dsh_compat.py",
+      "accessor": "skills/software-project-governance/infra/dsh_contract.py",
+      "doctor": "skills/software-project-governance/infra/dsh_doctor.py",
+      "manifest": "adapters/dsh/adapter-manifest.json",
+      "hooks": "skills/software-project-governance/infra/hooks",
+      "skill_shims_dir": "adapters/dsh/skill-shims"
+    },
+    "paths_pending": [
+      "doctor"
+    ],
+    "adapter_manifest": {
+      "required_fields": [
+        "workflow_id",
+        "entry_type",
+        "support_status",
+        "trigger",
+        "inputs",
+        "outputs",
+        "native_entry",
+        "runtime_e2e",
+        "validation"
+      ]
+    },
+    "checks": {
+      "smoke_section_title": "Check 28u: DSH Preset Session Smoke (FEAT-015)",
+      "compat_section_title": "Check 28v: DSH Preset Schema Compat",
+      "upgrade_regression_label": "dsh preset-session smoke (isolated upgrade regression)",
+      "exit_codes": {
+        "smoke": {
+          "PASS": 0,
+          "FAIL": 1,
+          "REFUSED": 2
+        },
+        "doctor": {
+          "NONE": 0,
+          "FAIL": 1,
+          "REFUSED": 2
+        }
+      }
+    },
+    "notes": {
+      "core_to_adapter_edge": "core `infra/` 读 `adapters/dsh/host-contract.json` 是一条已登记的 core→adapter 数据边，被收窄为「一个访问器 + 一个数据文件」（ADR-018 D-2 / 设计 §2.3 BT-6）；若后续 DEC 要求迁移，成本 ≤3 处引用。",
+      "single_source_of_truth": "消费方 MUST 从此处读取这些事实。契约已声明的字面量出现在消费代码里，即「契约外硬编码」（K-2，V2 落地）；唯一豁免通道是受棘轮预算约束的 allowlist（K-11，V8；本文件在 V2/V8 追加该块，V1 不含）。",
+      "recorded_slice": "记录式字段（evidence.* 的实测值与 host.rows[].recorded 子块）一律由 V8 的 `--record-evidence` 写入。",
+      "paths_pending": "`own.paths_pending` 列出「已按设计声明、但所属切片尚未落地」的路径键（当前 = doctor，设计 §6.1 V8）。存在性判据 MUST 跳过这些键，其余 `own.paths.*` 全部必须存在且与实际一致（设计 §2.4）。"
+    }
+  },
+  "coverage": {
+    "_note": "逐条目的目标覆盖强度 + 守卫引用 + 反相 fixture 引用（设计 §4.1/§4.2）。双键：subject = 契约内 JSON path（[<row id>] 按 row_id 索引），audit_ids = AUDIT-153 的 D-nn。一个 audit_id 允许出现在多个 subject（聚类本就重叠），但同一 subject 重复即 FAIL。`necessity` 取该条目所覆盖 ID 中最严格的一类（necessary > weakenable > eliminable > historical）；`target` 是 0.81.0 结束时的目标强度，不是当前强度（当前强度见 AUDIT-153 §4 与 gap_note）。`requires` 词表：node / dsh-plane（缺环境时按 NOT_RUN 披露，不得静默 skip）。`guard` 引用必须解析到现存测试 id 或已注册 check id（K-8，解析动作在 V8 的 checks/dsh_boundary 内完成——dsh_contract 不得 import registry，ADR-018 §8）。`negative_fixtures` 只能取名 dsh_fixtures 已知的 ID（可发射或已登记 deferred）。",
+    "entries": [
+      {
+        "subject": "own.package",
+        "audit_ids": [
+          "D-01",
+          "D-03",
+          "D-04",
+          "D-06",
+          "D-07",
+          "D-08",
+          "D-13",
+          "D-97"
+        ],
+        "target": "strong",
+        "guard": [
+          "28v",
+          "test_dsh_adapter.py::test_bundle_patch_is_zero_intrusion"
+        ],
+        "negative_fixtures": [
+          "FX-PKG-01",
+          "FX-PKG-02"
+        ],
+        "requires": [],
+        "gap_note": "包身份/入口/发布面：D-13（apply 导出形态）与 D-97（canonical 产物路径）无专属字段，就近归属本 subject。",
+        "necessity": "necessary"
+      },
+      {
+        "subject": "own.host_row",
+        "audit_ids": [
+          "D-15",
+          "D-23"
+        ],
+        "target": "strong",
+        "guard": [
+          "test_dsh_adapter.py::test_lib_ensure_preset_warns_and_never_throws_without_payload"
+        ],
+        "negative_fixtures": [
+          "FX-JS-03"
+        ],
+        "requires": [
+          "node"
+        ],
+        "gap_note": "warn-only/永不抛是宿主行对宿主的安全承诺（设计 §2.6 J-1~J-7）；反相 fixture FX-JS-03 属 V2。",
+        "necessity": "necessary"
+      },
+      {
+        "subject": "own.patch.shape_invariants",
+        "audit_ids": [
+          "D-09",
+          "D-10",
+          "D-11"
+        ],
+        "target": "strong",
+        "guard": [
+          "test_dsh_adapter.py::test_bundle_patch_is_zero_intrusion"
+        ],
+        "negative_fixtures": [
+          "FX-PATCH-01"
+        ],
+        "requires": [],
+        "necessity": "necessary"
+      },
+      {
+        "subject": "own.preset",
+        "audit_ids": [
+          "D-18",
+          "D-19",
+          "D-20",
+          "D-22",
+          "D-35",
+          "D-46",
+          "D-59",
+          "D-91"
+        ],
+        "target": "strong",
+        "guard": [
+          "28u",
+          "test_dsh_adapter.py::test_install_writes_skill_root_marker",
+          "test_dsh_adapter.py::test_preset_metadata_contract"
+        ],
+        "negative_fixtures": [
+          "FX-PATH-01"
+        ],
+        "requires": [],
+        "gap_note": "D-22 的写策略由 own.preset.write_policy 声明（设计 §3.3 第 6 行）；D-46 的 metadata 字段契约就近归属本 subject。",
+        "necessity": "necessary"
+      },
+      {
+        "subject": "host.skill_frontmatter",
+        "audit_ids": [
+          "D-52",
+          "D-62",
+          "D-63",
+          "D-64"
+        ],
+        "target": "medium",
+        "guard": [
+          "28u",
+          "test_dsh_adapter.py::test_skill_shim_frontmatter_contract"
+        ],
+        "negative_fixtures": [],
+        "requires": [],
+        "gap_note": "既有测试含正反用例，但 §5.6 无该面的具名 fixture ⇒ 按 C-6 只声明 medium（不得声明强于佐证）。",
+        "necessity": "necessary"
+      },
+      {
+        "subject": "host.rows",
+        "audit_ids": [
+          "D-24",
+          "D-25",
+          "D-26",
+          "D-27",
+          "D-28",
+          "D-29",
+          "D-32",
+          "D-33",
+          "D-34",
+          "D-35",
+          "D-36",
+          "D-37",
+          "D-41",
+          "D-42",
+          "D-43",
+          "D-44",
+          "D-45"
+        ],
+        "target": "strong",
+        "guard": [
+          "28v",
+          "test_dsh_compat.py::test_persona_row_using_prefix_passes",
+          "test_dsh_compat.py::test_persona_row_using_text_is_rejected_naming_persona_and_prefix"
+        ],
+        "negative_fixtures": [
+          "FX-ROW-KEY-01",
+          "FX-NO-SCHEMA-02"
+        ],
+        "requires": [
+          "dsh-plane",
+          "node"
+        ],
+        "gap_note": "D-45（宿主平面分工）无 schema 级守卫，就近归属本 subject；其真实漂移面由 S5 授权探测承接（V8）。",
+        "necessity": "necessary"
+      },
+      {
+        "subject": "host.rows[plan-mode].config_keys",
+        "audit_ids": [
+          "D-40",
+          "D-76"
+        ],
+        "target": "medium",
+        "guard": [
+          "28v",
+          "test_dsh_compat.py::test_no_schema_rows_are_disclosed_not_failed"
+        ],
+        "negative_fixtures": [
+          "FX-NO-SCHEMA-01",
+          "FX-NO-SCHEMA-02"
+        ],
+        "requires": [
+          "dsh-plane",
+          "node"
+        ],
+        "gap_note": "零校验行的目标不是 strong：必须上屏 + 必须使结论降级（设计 §4.2 末段 / §4.4.1，V3 落地）；既有守卫在 V3 按 C-23 改写。",
+        "necessity": "necessary"
+      },
+      {
+        "subject": "host.row_contract",
+        "audit_ids": [
+          "D-14",
+          "D-30",
+          "D-31",
+          "D-38",
+          "D-39"
+        ],
+        "target": "strong",
+        "guard": [
+          "test_dsh_compat.py::test_js_scope_carries_base_url_and_process",
+          "test_dsh_compat.py::test_group_rows_recurse_into_their_config_list",
+          "test_dsh_compat.py::test_throwing_group_disabled_expression_is_a_finding",
+          "test_dsh_compat.py::test_nested_group_inheritance_propagates"
+        ],
+        "negative_fixtures": [
+          "FX-GROUP-01",
+          "FX-GROUP-02",
+          "FX-GROUP-03",
+          "FX-BASEURL-01"
+        ],
+        "requires": [
+          "dsh-plane",
+          "node"
+        ],
+        "necessity": "necessary"
+      },
+      {
+        "subject": "host.apis",
+        "audit_ids": [
+          "D-70",
+          "D-74",
+          "D-75",
+          "D-77"
+        ],
+        "target": "strong",
+        "guard": [
+          "28v",
+          "test_dsh_compat.py::test_oracle_failure_is_not_run_not_fail"
+        ],
+        "negative_fixtures": [
+          "FX-API-01"
+        ],
+        "requires": [
+          "dsh-plane",
+          "node"
+        ],
+        "necessity": "necessary"
+      },
+      {
+        "subject": "host.home.composition_globs",
+        "audit_ids": [
+          "D-73"
+        ],
+        "target": "medium",
+        "guard": [
+          "test_dsh_compat.py::test_repo_compositions_are_discovered",
+          "test_dsh_compat.py::test_discovery_is_sorted_and_skips_vendored_trees"
+        ],
+        "negative_fixtures": [],
+        "requires": [],
+        "gap_note": "发现面有正反用例但无 §5.6 fixture ⇒ medium。",
+        "necessity": "necessary"
+      },
+      {
+        "subject": "host.env.write_side",
+        "audit_ids": [
+          "D-16",
+          "D-17",
+          "D-47"
+        ],
+        "target": "strong",
+        "guard": [
+          "test_dsh_adapter.py::test_smoke_cli_passes_in_isolated_home",
+          "test_dsh_compat.py::test_profile_plane_is_used_when_dsh_home_is_explicit"
+        ],
+        "negative_fixtures": [
+          "FX-HOME-01",
+          "FX-HOME-02",
+          "FX-HOME-03"
+        ],
+        "requires": [],
+        "gap_note": "当前强度：弱（AUDIT-153 §4 D-16/D-47，无差分 gate）；三方差分 gate 与 fixture 由 V6 落地（设计 §4.4.4 G06-b）。",
+        "necessity": "necessary"
+      },
+      {
+        "subject": "host.env.probe_side",
+        "audit_ids": [
+          "D-71",
+          "D-72"
+        ],
+        "target": "medium",
+        "guard": [
+          "test_dsh_compat.py::test_dsh_home_is_never_guessed_when_unset",
+          "test_dsh_compat.py::test_invalid_override_reports_instead_of_falling_back"
+        ],
+        "negative_fixtures": [],
+        "requires": [],
+        "gap_note": "探测侧刻意不纳入写入侧差分 gate（G06-b'）：guard 从不回落到 ~/.dsh 是安全属性，改之为「与上游一致」会扩大真实环境探测面 ⇒ 无用例可作反相 fixture，声明 medium。",
+        "necessity": "necessary"
+      },
+      {
+        "subject": "host.cli",
+        "audit_ids": [
+          "D-12",
+          "D-79",
+          "D-80",
+          "D-81"
+        ],
+        "target": "medium",
+        "guard": [
+          "28u",
+          "test_dsh_compat.py::test_isolated_home_witness_reports_zero_writes"
+        ],
+        "negative_fixtures": [],
+        "requires": [],
+        "gap_note": "探针调用形态（node --input-type=module --eval + stdin JSON）与临时目录卫生声明化；D-79 的残留计数披露在 V8 的 S3。",
+        "necessity": "necessary"
+      },
+      {
+        "subject": "host.install",
+        "audit_ids": [
+          "D-69"
+        ],
+        "target": "strong",
+        "guard": [
+          "28v",
+          "test_dsh_compat.py::test_override_accepts_a_node_modules_directory",
+          "test_dsh_compat.py::test_path_walk_finds_the_install_anchor_above_the_dsh_shim"
+        ],
+        "negative_fixtures": [
+          "FX-API-01"
+        ],
+        "requires": [
+          "dsh-plane",
+          "node"
+        ],
+        "necessity": "necessary"
+      },
+      {
+        "subject": "coverage.entries",
+        "audit_ids": [
+          "D-67",
+          "D-68"
+        ],
+        "target": "medium",
+        "guard": [
+          "test_dsh_adapter.py::test_js_and_python_renderers_agree",
+          "test_dsh_adapter.py::test_lib_ensure_preset_renders_the_user_root_idempotently"
+        ],
+        "negative_fixtures": [],
+        "requires": [
+          "node"
+        ],
+        "gap_note": "node-gated 测试的 skip 必须按同一政策披露（本字段即载体 + doctor S6 的 unverified_due_to_env[]，V8）。",
+        "necessity": "necessary"
+      },
+      {
+        "subject": "evidence.verified_on",
+        "audit_ids": [
+          "D-57"
+        ],
+        "target": "weak",
+        "guard": [
+          "28v"
+        ],
+        "negative_fixtures": [],
+        "requires": [],
+        "gap_note": "28v 报告真实版本但不与 adapter-manifest 的声明比对（AUDIT-153 §4 D-57：抓不住）⇒ weak；K-7 的一致性判据 V8 落地。",
+        "necessity": "weakenable"
+      },
+      {
+        "subject": "own.paths.manifest",
+        "audit_ids": [
+          "D-58",
+          "D-59",
+          "D-60",
+          "D-61",
+          "D-92",
+          "D-94",
+          "D-95",
+          "D-96",
+          "D-98"
+        ],
+        "target": "medium",
+        "guard": [
+          "check-manifest-consistency",
+          "test_dsh_adapter.py::test_dsh_version_projections_are_satisfied"
+        ],
+        "negative_fixtures": [],
+        "requires": [],
+        "gap_note": "清单/投影/清理范围的一致性面由既有 manifest check 与投影测试承载；D-90/D-93 的文档漂移为「登记不修」（设计 §3.3 第 21 行）。",
+        "necessity": "necessary"
+      },
+      {
+        "subject": "own.checks",
+        "audit_ids": [
+          "D-51",
+          "D-78",
+          "D-82",
+          "D-83",
+          "D-84",
+          "D-85",
+          "D-86",
+          "D-87",
+          "D-88",
+          "D-89",
+          "D-90",
+          "D-93"
+        ],
+        "target": "medium",
+        "guard": [
+          "28u",
+          "28v",
+          "check-dsh-preset-smoke",
+          "test_dsh_adapter.py::test_check_dsh_preset_smoke_passes_and_cleans_temp_home",
+          "test_dsh_adapter.py::test_smoke_cli_passes_in_isolated_home",
+          "test_dsh_adapter.py::test_smoke_cli_refuses_unredirected_dsh_home",
+          "test_dsh_adapter.py::test_smoke_cli_refuses_dsh_home_at_user_home",
+          "test_dsh_adapter.py::test_smoke_refuses_in_process_when_dsh_home_is_real_home"
+        ],
+        "negative_fixtures": [
+          "FX-WIRE-01"
+        ],
+        "requires": [],
+        "gap_note": "接线面（段注册/白名单/命令键/输出标签/退出码）由既有 28u/28v 与快照 + 上述 5 个隔离/退出码用例承载（R1 N-4）；28w 的段注册与 K-12（doctor↔boundary 裁决一致）属 V8（设计 §2.9.4/§5.1）。",
+        "necessity": "necessary"
+      },
+      {
+        "subject": "own.paths.launcher",
+        "audit_ids": [
+          "D-53",
+          "D-54",
+          "D-55"
+        ],
+        "target": "strong",
+        "guard": [
+          "test_dsh_adapter.py::test_uninstall_removes_only_governance_preset",
+          "test_dsh_adapter.py::test_uninstall_dry_run_deletes_nothing",
+          "test_dsh_adapter.py::test_real_home_witness_scope_ignores_host_activity",
+          "test_dsh_adapter.py::test_smoke_cli_refuses_unredirected_dsh_home"
+        ],
+        "negative_fixtures": [
+          "FX-WITNESS-01"
+        ],
+        "requires": [],
+        "necessity": "necessary"
+      },
+      {
+        "subject": "own.render.tokens",
+        "audit_ids": [
+          "D-21",
+          "D-65"
+        ],
+        "target": "strong",
+        "guard": [
+          "test_dsh_adapter.py::test_template_uses_only_known_tokens",
+          "test_dsh_adapter.py::test_js_and_python_renderers_agree"
+        ],
+        "negative_fixtures": [
+          "FX-TOKEN-01",
+          "FX-TOKEN-02"
+        ],
+        "requires": [
+          "node"
+        ],
+        "necessity": "necessary"
+      },
+      {
+        "subject": "own.render.leftover_scan",
+        "audit_ids": [
+          "D-48"
+        ],
+        "target": "strong",
+        "guard": [
+          "test_dsh_adapter.py::test_launch_render_is_pure_substitution",
+          "test_dsh_adapter.py::test_js_and_python_renderers_agree"
+        ],
+        "negative_fixtures": [
+          "FX-TOKEN-01",
+          "FX-TOKEN-02"
+        ],
+        "requires": [
+          "node"
+        ],
+        "gap_note": "G-07/G-08：既有守卫只在已知 token 集合内查残留，抓不住拼错 token（当前强度 弱）；未知 token 扫描与反相 fixture 在 V2/V5 落地。",
+        "necessity": "necessary"
+      },
+      {
+        "subject": "own.render.newline_policy",
+        "audit_ids": [
+          "D-66",
+          "D-100"
+        ],
+        "target": "strong",
+        "guard": [
+          "test_dsh_adapter.py::test_js_and_python_renderers_agree"
+        ],
+        "negative_fixtures": [
+          "FX-CR-01"
+        ],
+        "requires": [
+          "node"
+        ],
+        "gap_note": "当前两条渲染路径对孤立 CR 实测分歧（AUDIT-153 §2.7 D-66）；显式统一在 V5 落地。",
+        "necessity": "weakenable"
+      },
+      {
+        "subject": "own.render.custom_skill_dirs_shape",
+        "audit_ids": [
+          "D-34",
+          "D-49"
+        ],
+        "target": "strong",
+        "guard": [
+          "test_dsh_adapter.py::test_rendered_composition_carries_absolute_existing_skill_roots",
+          "test_dsh_adapter.py::test_smoke_verifier_rejects_literal_relative_skill_dir"
+        ],
+        "negative_fixtures": [
+          "FX-CSD-01",
+          "FX-CSD-02"
+        ],
+        "requires": [],
+        "necessity": "necessary"
+      },
+      {
+        "subject": "own.paths.hooks",
+        "audit_ids": [
+          "D-99"
+        ],
+        "target": "medium",
+        "guard": [
+          "test_dsh_adapter.py::test_hook_discovers_dsh_link_mode_marker",
+          "test_dsh_adapter.py::test_hooks_carry_dsh_discovery_candidates"
+        ],
+        "negative_fixtures": [],
+        "requires": [],
+        "gap_note": "hook 运行时零改动（shell 无 JSON 解析能力）；K-5 静态等式判据 V8 落地。",
+        "necessity": "weakenable"
+      },
+      {
+        "subject": "elimination.dispositions",
+        "audit_ids": [
+          "D-02",
+          "D-05",
+          "D-50",
+          "D-56"
+        ],
+        "target": "weak",
+        "guard": [
+          "test_dsh_adapter.py::test_bundle_patch_is_zero_intrusion"
+        ],
+        "negative_fixtures": [],
+        "requires": [],
+        "gap_note": "消除/弱化的执行验收 = check-dsh-boundary 读 elimination.dispositions（V8）；V1 只登记裁决，故当前只能声明 weak。",
+        "necessity": "eliminable"
+      }
+    ]
+  },
+  "elimination": {
+    "_note": "AUDIT-153 §3 的逐条处置与依赖面收窄基线（设计 §3）。necessary_ids 是「必须被契约化维护」的集合：它以 AUDIT-153 §2 逐行的必要性标记为唯一事实来源，并由 test_dsh_contract.py 机械复算比对（见 count_reconciliation 的口径说明）。",
+    "audit_baseline": {
+      "total": 100,
+      "source": "AUDIT-153 §2.1~§2.10 逐行「必要性」列（6 列依赖点表）",
+      "necessary_ids": [
+        "D-01",
+        "D-03",
+        "D-04",
+        "D-06",
+        "D-08",
+        "D-09",
+        "D-10",
+        "D-12",
+        "D-13",
+        "D-17",
+        "D-18",
+        "D-19",
+        "D-20",
+        "D-21",
+        "D-23",
+        "D-24",
+        "D-25",
+        "D-26",
+        "D-27",
+        "D-28",
+        "D-29",
+        "D-32",
+        "D-33",
+        "D-34",
+        "D-35",
+        "D-36",
+        "D-37",
+        "D-38",
+        "D-39",
+        "D-40",
+        "D-41",
+        "D-42",
+        "D-43",
+        "D-44",
+        "D-45",
+        "D-46",
+        "D-48",
+        "D-51",
+        "D-52",
+        "D-53",
+        "D-55",
+        "D-58",
+        "D-59",
+        "D-60",
+        "D-62",
+        "D-63",
+        "D-64",
+        "D-65",
+        "D-67",
+        "D-68",
+        "D-69",
+        "D-70",
+        "D-71",
+        "D-72",
+        "D-73",
+        "D-74",
+        "D-75",
+        "D-76",
+        "D-77",
+        "D-78",
+        "D-80",
+        "D-83",
+        "D-85",
+        "D-86",
+        "D-87",
+        "D-88",
+        "D-91",
+        "D-94",
+        "D-95",
+        "D-96",
+        "D-97",
+        "D-98"
+      ],
+      "weakenable_ids": [
+        "D-07",
+        "D-11",
+        "D-14",
+        "D-15",
+        "D-16",
+        "D-22",
+        "D-30",
+        "D-31",
+        "D-47",
+        "D-49",
+        "D-54",
+        "D-57",
+        "D-61",
+        "D-66",
+        "D-79",
+        "D-81",
+        "D-82",
+        "D-84",
+        "D-90",
+        "D-93",
+        "D-99",
+        "D-100"
+      ],
+      "eliminable_ids": [
+        "D-02",
+        "D-05",
+        "D-50",
+        "D-56"
+      ],
+      "historical_ids": [
+        "D-89",
+        "D-92"
+      ],
+      "count_reconciliation": {
+        "stated_in_audit_section_2_11": {
+          "total": 100,
+          "necessary": 62,
+          "weakenable": 26,
+          "eliminable": 4,
+          "historical": 3
+        },
+        "derived_from_section_2_markers": {
+          "total": 100,
+          "necessary": 72,
+          "weakenable": 22,
+          "eliminable": 4,
+          "historical": 2
+        },
+        "note": "AUDIT-153 的汇总口径（§2.11：62/26/4/3 = 95）与其逐行标记不一致，且与设计 §4.1/K-9 引用的 62 不同源。逐行标记可复算且恰好覆盖 D-01~D-100（72+22+4+2 = 100，每个 ID 恰好一类），故以其为机检基线（fail-closed 取超集：覆盖必须 ⊇ 72 条，强于设计引用的 62 条）。本设计不修改 AUDIT-153——口径差异按设计 §3.1 对「可弱化 26 vs 21」的同一先例登记，REQ-146 的验收信号以逐 ID 的 removed_at/weakened_at 为准。"
+      }
+    },
+    "dispositions": [
+      {
+        "id": "D-01",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.1 D-01; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-02",
+        "class": "eliminable",
+        "evidence": "AUDIT-153 §2.1 D-02; design §3.2 (可消除裁决)",
+        "decision": "eliminated",
+        "slice": [
+          "V1"
+        ],
+        "removed_at": "V1"
+      },
+      {
+        "id": "D-03",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.1 D-03; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-04",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.1 D-04; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-05",
+        "class": "eliminable",
+        "evidence": "AUDIT-153 §2.1 D-05; design §3.2 (版本闸门替代 peerDependencies；声明面 U-1 未验证，不落地)",
+        "decision": "weakened",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-06",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.1 D-06; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-07",
+        "class": "weakenable",
+        "evidence": "AUDIT-153 §2.1 D-07; design §3.3 第 1 行",
+        "decision": "weakened",
+        "slice": [
+          "V1",
+          "V8"
+        ]
+      },
+      {
+        "id": "D-08",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.1 D-08; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-09",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.2 D-09; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-10",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.2 D-10; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-11",
+        "class": "weakenable",
+        "evidence": "AUDIT-153 §2.2 D-11; design §3.3 第 2 行",
+        "decision": "weakened",
+        "slice": [
+          "V7"
+        ],
+        "weakened_at": "V7"
+      },
+      {
+        "id": "D-12",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.2 D-12; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-13",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.3 D-13; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-14",
+        "class": "weakenable",
+        "evidence": "AUDIT-153 §2.3 D-14; design §3.3 第 3 行",
+        "decision": "kept-as-is",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-15",
+        "class": "weakenable",
+        "evidence": "AUDIT-153 §2.3 D-15; design §3.3 第 4 行",
+        "decision": "weakened",
+        "slice": [
+          "V7"
+        ],
+        "weakened_at": "V7"
+      },
+      {
+        "id": "D-16",
+        "class": "weakenable",
+        "evidence": "AUDIT-153 §2.3 D-16; design §3.3 第 5 行",
+        "decision": "weakened",
+        "slice": [
+          "V6"
+        ],
+        "weakened_at": "V6"
+      },
+      {
+        "id": "D-17",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.3 D-17; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-18",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.3 D-18; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-19",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.3 D-19; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-20",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.3 D-20; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-21",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.3 D-21; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-22",
+        "class": "weakenable",
+        "evidence": "AUDIT-153 §2.3 D-22; design §3.3 第 6 行",
+        "decision": "weakened",
+        "slice": [
+          "V1"
+        ],
+        "weakened_at": "V1"
+      },
+      {
+        "id": "D-23",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.3 D-23; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-24",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.4 D-24; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-25",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.4 D-25; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-26",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.4 D-26; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-27",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.4 D-27; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-28",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.4 D-28; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-29",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.4 D-29; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-30",
+        "class": "weakenable",
+        "evidence": "AUDIT-153 §2.4 D-30; design §3.3 第 7 行",
+        "decision": "weakened",
+        "slice": [
+          "V4",
+          "V5"
+        ]
+      },
+      {
+        "id": "D-31",
+        "class": "weakenable",
+        "evidence": "AUDIT-153 §2.4 D-31; design §3.3 第 7 行",
+        "decision": "weakened",
+        "slice": [
+          "V4",
+          "V5"
+        ]
+      },
+      {
+        "id": "D-32",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.4 D-32; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-33",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.4 D-33; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-34",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.4 D-34; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-35",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.4 D-35; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-36",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.4 D-36; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-37",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.4 D-37; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-38",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.4 D-38; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-39",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.4 D-39; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-40",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.4 D-40; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-41",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.4 D-41; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-42",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.4 D-42; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-43",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.4 D-43; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-44",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.4 D-44; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-45",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.4 D-45; design §3.3 第 8 行",
+        "decision": "weakened",
+        "slice": [
+          "V1",
+          "V8"
+        ]
+      },
+      {
+        "id": "D-46",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.4 D-46; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-47",
+        "class": "weakenable",
+        "evidence": "AUDIT-153 §2.5 D-47; design §3.3 第 9 行",
+        "decision": "weakened",
+        "slice": [
+          "V6"
+        ],
+        "weakened_at": "V6"
+      },
+      {
+        "id": "D-48",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.5 D-48; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-49",
+        "class": "weakenable",
+        "evidence": "AUDIT-153 §2.5 D-49; design §3.3 第 10 行",
+        "decision": "weakened",
+        "slice": [
+          "V5"
+        ],
+        "weakened_at": "V5"
+      },
+      {
+        "id": "D-50",
+        "class": "eliminable",
+        "evidence": "AUDIT-153 §2.5 D-50; design §3.2 (可消除裁决)",
+        "decision": "eliminated",
+        "slice": [
+          "V5"
+        ],
+        "removed_at": "V5"
+      },
+      {
+        "id": "D-51",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.5 D-51; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-52",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.5 D-52; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-53",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.5 D-53; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-54",
+        "class": "weakenable",
+        "evidence": "AUDIT-153 §2.5 D-54; design §3.3 第 11 行",
+        "decision": "weakened",
+        "slice": [
+          "V5"
+        ],
+        "weakened_at": "V5"
+      },
+      {
+        "id": "D-55",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.5 D-55; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-56",
+        "class": "eliminable",
+        "evidence": "AUDIT-153 §2.5 D-56; design §3.2 (可消除裁决)",
+        "decision": "eliminated",
+        "slice": [
+          "V5"
+        ],
+        "removed_at": "V5"
+      },
+      {
+        "id": "D-57",
+        "class": "weakenable",
+        "evidence": "AUDIT-153 §2.6 D-57; design §3.3 第 12 行",
+        "decision": "weakened",
+        "slice": [
+          "V7"
+        ],
+        "weakened_at": "V7"
+      },
+      {
+        "id": "D-58",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.6 D-58; design §3.3 第 24 行",
+        "decision": "weakened",
+        "slice": [
+          "V8"
+        ],
+        "weakened_at": "V8"
+      },
+      {
+        "id": "D-59",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.6 D-59; design §3.3 第 24 行",
+        "decision": "weakened",
+        "slice": [
+          "V8"
+        ],
+        "weakened_at": "V8"
+      },
+      {
+        "id": "D-60",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.6 D-60; design §3.3 第 23 行",
+        "decision": "weakened",
+        "slice": [
+          "V1",
+          "V8"
+        ]
+      },
+      {
+        "id": "D-61",
+        "class": "weakenable",
+        "evidence": "AUDIT-153 §2.6 D-61; design §3.3 第 13 行",
+        "decision": "weakened",
+        "slice": [
+          "V8"
+        ],
+        "weakened_at": "V8"
+      },
+      {
+        "id": "D-62",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.6 D-62; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-63",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.6 D-63; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-64",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.6 D-64; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-65",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.7 D-65; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-66",
+        "class": "weakenable",
+        "evidence": "AUDIT-153 §2.7 D-66; design §3.3 第 14 行",
+        "decision": "weakened",
+        "slice": [
+          "V5"
+        ],
+        "weakened_at": "V5"
+      },
+      {
+        "id": "D-67",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.7 D-67; design §3.3 第 15 行",
+        "decision": "weakened",
+        "slice": [
+          "V1",
+          "V8"
+        ]
+      },
+      {
+        "id": "D-68",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.7 D-68; design §3.3 第 15 行",
+        "decision": "weakened",
+        "slice": [
+          "V1",
+          "V8"
+        ]
+      },
+      {
+        "id": "D-69",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.8 D-69; design §3.3 第 16 行",
+        "decision": "weakened",
+        "slice": [
+          "V1",
+          "V2"
+        ]
+      },
+      {
+        "id": "D-70",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.8 D-70; design §3.3 第 16 行",
+        "decision": "weakened",
+        "slice": [
+          "V1",
+          "V2"
+        ]
+      },
+      {
+        "id": "D-71",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.8 D-71; design §3.3 第 16 行",
+        "decision": "weakened",
+        "slice": [
+          "V1",
+          "V2"
+        ]
+      },
+      {
+        "id": "D-72",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.8 D-72; design §3.3 第 16 行",
+        "decision": "weakened",
+        "slice": [
+          "V1",
+          "V2"
+        ]
+      },
+      {
+        "id": "D-73",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.8 D-73; design §3.3 第 16 行",
+        "decision": "weakened",
+        "slice": [
+          "V1",
+          "V2"
+        ]
+      },
+      {
+        "id": "D-74",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.8 D-74; design §3.3 第 16 行",
+        "decision": "weakened",
+        "slice": [
+          "V1",
+          "V2"
+        ]
+      },
+      {
+        "id": "D-75",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.8 D-75; design §3.3 第 16 行",
+        "decision": "weakened",
+        "slice": [
+          "V1",
+          "V2"
+        ]
+      },
+      {
+        "id": "D-76",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.8 D-76; design §3.3 第 25 行",
+        "decision": "weakened",
+        "slice": [
+          "V3"
+        ],
+        "weakened_at": "V3"
+      },
+      {
+        "id": "D-77",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.8 D-77; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-78",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.8 D-78; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-79",
+        "class": "weakenable",
+        "evidence": "AUDIT-153 §2.8 D-79; design §3.3 第 17 行",
+        "decision": "weakened",
+        "slice": [
+          "V8"
+        ],
+        "weakened_at": "V8"
+      },
+      {
+        "id": "D-80",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.8 D-80; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-81",
+        "class": "weakenable",
+        "evidence": "AUDIT-153 §2.8 D-81; design §3.3 第 18 行",
+        "decision": "weakened",
+        "slice": [
+          "V1",
+          "V2"
+        ]
+      },
+      {
+        "id": "D-82",
+        "class": "weakenable",
+        "evidence": "AUDIT-153 §2.8 D-82; design §3.3 第 19 行",
+        "decision": "weakened",
+        "slice": [
+          "V1",
+          "V8"
+        ]
+      },
+      {
+        "id": "D-83",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.9 D-83; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-84",
+        "class": "weakenable",
+        "evidence": "AUDIT-153 §2.9 D-84; design §3.3 第 20 行",
+        "decision": "weakened",
+        "slice": [
+          "V8"
+        ],
+        "weakened_at": "V8"
+      },
+      {
+        "id": "D-85",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.9 D-85; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-86",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.9 D-86; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-87",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.9 D-87; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-88",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.9 D-88; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-89",
+        "class": "historical",
+        "evidence": "AUDIT-153 §2.9 D-89; AUDIT-153 §2.11 (历史/有意不可消除，仅保留记录) design §4.5/§8.1 (登记不修)",
+        "decision": "historical-record-only",
+        "slice": []
+      },
+      {
+        "id": "D-90",
+        "class": "weakenable",
+        "evidence": "AUDIT-153 §2.9 D-90; design §3.3 第 21 行",
+        "decision": "registered-not-fixed",
+        "slice": []
+      },
+      {
+        "id": "D-91",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.9 D-91; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-92",
+        "class": "historical",
+        "evidence": "AUDIT-153 §2.9 D-92; AUDIT-153 §2.11 (历史/有意不可消除，仅保留记录) design §4.5/§8.1 (登记不修)",
+        "decision": "historical-record-only",
+        "slice": []
+      },
+      {
+        "id": "D-93",
+        "class": "weakenable",
+        "evidence": "AUDIT-153 §2.9 D-93; design §3.3 第 21 行",
+        "decision": "registered-not-fixed",
+        "slice": []
+      },
+      {
+        "id": "D-94",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.10 D-94; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-95",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.10 D-95; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-96",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.10 D-96; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-97",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.10 D-97; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-98",
+        "class": "necessary",
+        "evidence": "AUDIT-153 §2.10 D-98; design §3.3 聚类表（必要：必须被契约化维护）",
+        "decision": "maintain-in-contract",
+        "slice": [
+          "V1"
+        ]
+      },
+      {
+        "id": "D-99",
+        "class": "weakenable",
+        "evidence": "AUDIT-153 §2.10 D-99; design §3.3 第 22 行",
+        "decision": "weakened",
+        "slice": [
+          "V8"
+        ],
+        "weakened_at": "V8"
+      },
+      {
+        "id": "D-100",
+        "class": "weakenable",
+        "evidence": "AUDIT-153 §2.10 D-100; design §3.3 第 14 行",
+        "decision": "weakened",
+        "slice": [
+          "V5"
+        ],
+        "weakened_at": "V5"
+      }
+    ],
+    "notes": {
+      "field_semantics": "`class` 取自 audit_baseline 的分类；`decision` 词表 = maintain-in-contract / weakened / kept-as-is / eliminated / registered-not-fixed / historical-record-only；`slice` 是设计切片列表（§3.2/§3.3 的「切片」列）；`removed_at` 仅消除项有；`weakened_at` 只在设计给出单一落地切片时出现（多平面项保留完整 slice 列表）；`evidence` 指向事实源（AUDIT-153 节号 + 设计节/行）。",
+      "necessary_default": "未被 §3.2/§3.3 单独裁决的必要项 = maintain-in-contract，slice [\"V1\"]（契约登记平面；设计 §3.3 聚类表「必要：必须被契约化维护」）。§2.9.4 的接线改动由 V8 切片自身承载。"
+    }
+  }
+}

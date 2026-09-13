@@ -216,6 +216,167 @@ def _fixture_misspelt_mixed_case_token():
         "__Governance_Repo_Root__")
 
 
+def _fixture_settings_race_probe():
+    """FX-WITNESS-01 — the D-54 `settings.yaml` race, as a runnable oracle.
+
+    The emitted artifact is a standard-library-only Python script that drives
+    the *launcher's own* witness through the four judgments D-54 fixes, using a
+    throwaway home directory it creates itself (never a real DSH home):
+
+      * host rewrite of ``settings.yaml`` (size **and** mtime change) →
+        **no failure** (the witness compares names only);
+      * host-side file churn in an unrelated subtree → **no failure**;
+      * a write into ``.agent-presets`` (the adapter's only write face) →
+        **failure**, no resampling tolerance;
+      * a new top-level entry → failure on the first sample, waived when the
+        resample does not reproduce it.
+
+    It prints a JSON report and exits non-zero unless every line holds, so the
+    fixture is machine-checkable end to end rather than a description of a
+    judgment (the "可机检" half of design §6.1 V5 acceptance ⑤).
+    """
+    return _WITNESS_PROBE_SOURCE
+
+
+#: See :func:`_fixture_settings_race_probe`. Kept **ASCII-only** (asserted by
+#: `test_witness_fixture_source_is_pure_ascii`) and standard-library-only, so the
+#: emitted file runs unchanged on any host regardless of its source encoding
+#: defaults — the earlier docstring claimed ASCII while carrying an em dash
+#: (N-6a), which is exactly the comment-vs-fact drift this suite exists to catch.
+_WITNESS_PROBE_SOURCE = '''\
+"""FX-WITNESS-01 - D-54 witness-sampling oracle (self-contained).
+
+Usage: python FX-WITNESS-01.py <path/to/adapters/dsh/launch.py>
+
+Creates a throwaway home under the system temp directory, mutates it the way a
+live host would, and asserts the four judgments design 3.3 (row 11) fixes.
+Exits 0 only when all of them hold.
+"""
+import importlib.util
+import json
+import os
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+
+def load_launch(path):
+    spec = importlib.util.spec_from_file_location("launch_under_test", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def fresh_home(root):
+    home = root / ".dsh"
+    preset = home / ".agent-presets" / "governance"
+    preset.mkdir(parents=True, exist_ok=True)
+    (preset / "agent.cordis.yml").write_text("- id: persona\\n", encoding="utf-8")
+    (home / "settings.yaml").write_text("a: 1\\n", encoding="utf-8")
+    (home / ".credentials.yaml").write_text("token: x\\n", encoding="utf-8")
+    (home / "sessions").mkdir(exist_ok=True)
+    return home
+
+
+def verdict(launch, samples, resample=None):
+    return launch.witness_verdict(samples, resample=resample)
+
+
+def main():
+    launch = load_launch(sys.argv[1])
+    checks = []
+
+    def record(name, ok, detail=""):
+        checks.append({"check": name, "ok": bool(ok), "detail": detail})
+
+    with tempfile.TemporaryDirectory(prefix="fx-witness-01-") as td:
+        root = Path(td)
+
+        # 1. host rewrites settings.yaml: size AND mtime move, names do not.
+        home = fresh_home(root / "c1")
+        before = launch._real_home_witness(home)
+        target = home / "settings.yaml"
+        stamp = target.stat().st_mtime_ns
+        target.write_text("a: 2222222\\n" + "x" * 4096 + "\\n", encoding="utf-8")
+        os.utime(target, ns=(stamp + 10 ** 9, stamp + 10 ** 9))
+        after = launch._real_home_witness(home)
+        result = verdict(launch, (before, after))
+        record("settings_yaml_race_is_not_a_failure",
+               result["verdict"] == "PASS" and not result["failures"],
+               json.dumps(result))
+        record("witness_records_no_size_or_mtime",
+               before["top_level"] == after["top_level"]
+               and not any(":" + str(target.stat().st_size) in entry
+                           for entry in after["top_level"]),
+               json.dumps(after["top_level"]))
+
+        # 2. host churn inside its own subtree.
+        home = fresh_home(root / "c2")
+        before = launch._real_home_witness(home)
+        (home / "sessions" / "s1.jsonl").write_text("{}\\n", encoding="utf-8")
+        after = launch._real_home_witness(home)
+        result = verdict(launch, (before, after))
+        record("host_subtree_churn_is_not_a_failure",
+               result["verdict"] == "PASS", json.dumps(result))
+
+        # 3. a write into the adapter write face: failure, no tolerance.
+        home = fresh_home(root / "c3")
+        before = launch._real_home_witness(home)
+        (home / ".agent-presets" / "governance" / "agent.cordis.yml").write_text(
+            "- id: persona\\n- id: tool-skill\\n", encoding="utf-8")
+        after = launch._real_home_witness(home)
+        result = verdict(launch, (before, after),
+                         resample=lambda: launch._real_home_witness(home))
+        record("write_surface_change_fails_without_resample",
+               result["verdict"] == "FAIL"
+               and any("write surface" in f for f in result["failures"]),
+               json.dumps(result))
+
+        # 4a. top-level entry appears and is GONE again by the resample:
+        # a genuine host race, which must be advisory rather than a failure.
+        home = fresh_home(root / "c4")
+        before = launch._real_home_witness(home)
+        transient = home / "transient.tmp"
+        transient.write_text("x\\n", encoding="utf-8")
+        after_first = launch._real_home_witness(home)
+
+        def resample():
+            transient.unlink()
+            return launch._real_home_witness(home)
+
+        result = verdict(launch, (before, after_first), resample=resample)
+        record("unreproduced_top_level_change_is_advisory",
+               result["verdict"] == "PASS" and bool(result["advisories"])
+               and not result["failures"], json.dumps(result))
+
+        # 4b. the same change DOES reproduce -> failure.
+        home = fresh_home(root / "c5")
+        before = launch._real_home_witness(home)
+        (home / "settled.tmp").write_text("x\\n", encoding="utf-8")
+        after_first = launch._real_home_witness(home)
+        result = verdict(launch, (before, after_first),
+                         resample=lambda: launch._real_home_witness(home))
+        record("reproduced_top_level_change_fails",
+               result["verdict"] == "FAIL"
+               and any("top level" in f for f in result["failures"]),
+               json.dumps(result))
+
+    failed = [check for check in checks if not check["ok"]]
+    print(json.dumps({"fixture": "FX-WITNESS-01", "checks": checks,
+                      "verdict": "FAIL" if failed else "PASS"}, indent=2))
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        print("usage: FX-WITNESS-01.py <launch.py>", file=sys.stderr)
+        raise SystemExit(2)
+    raise SystemExit(main())
+'''
+
+
 def _fixture_patch_with_update_row():
     """FX-PATCH-01 — the patch layer with an `- id: <host row>` UPDATE row:
     violates DEC-187 I-1 and K-6, so the invariant check must FAIL."""
@@ -246,6 +407,7 @@ FIXTURES = {
     "FX-TOKEN-02": ("FX-TOKEN-02.cordis.yml.template",
                     _fixture_misspelt_mixed_case_token),
     "FX-PATCH-01": ("FX-PATCH-01.cordis.patch.yml", _fixture_patch_with_update_row),
+    "FX-WITNESS-01": ("FX-WITNESS-01.py", _fixture_settings_race_probe),
 }
 
 #: Fixtures named by §5.6 whose content needs a slice that has not landed.
@@ -289,9 +451,6 @@ DEFERRED = {
     "FX-HOME-03": {"slice": "V6",
                    "reason": "DSH_HOME case table of the three-way differential "
                              "gate (G-06 / D-16 / D-47)"},
-    "FX-WITNESS-01": {"slice": "V5",
-                      "reason": "`settings.yaml` race fixture (D-54) needs the "
-                                "V5 witness resampling"},
     "FX-RESIDUE-01": {"slice": "V8",
                       "reason": "pre-seeded `spg-dsh-compat-*` residue is read "
                                 "by `dsh-doctor` S3 (D-79)"},

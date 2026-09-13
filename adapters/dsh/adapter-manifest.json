@@ -72,8 +72,8 @@
     "e2e_level": "real-agent-target-cwd",
     "command": "dsh",
     "version_command": "dsh --version",
-    "verified_on": "2026-07-08",
-    "evidence": "This adapter was authored from a live DeepSeek Harness session (dsh --version returns 0.1.0-rc.6) whose workspace is the repository itself. The session loaded the editing-cordis-compositions skill through the native skill tool, ran three parallel subagents through the native subagent tool, used ask_user_question/pwsh/fs/web_search, and mount-validated the generated governance preset through agentPresets.standingKeyFor.",
+    "verified_on": "see contract evidence.verified_on",
+    "evidence": "This adapter was authored from a live DeepSeek Harness session whose workspace is the repository itself. The session loaded the editing-cordis-compositions skill through the native skill tool, ran three parallel subagents through the native subagent tool, used ask_user_question/pwsh/fs/web_search, and mount-validated the generated governance preset through agentPresets.standingKeyFor. The dsh version this was verified against, the date it was last verified, the resolution plane and the oracle package versions are NOT restated here: they are recorded once in `adapters/dsh/host-contract.json` (`evidence.dsh_cli_version` / `evidence.verified_on` / `evidence.plane` / `evidence.oracle_packages`) and refreshed only by `dsh-doctor --record-evidence` on a real plane (design 2.4/2.7). A version literal in this file would be a second, unverifiable source of the same fact.",
     "target_cwd_e2e": {
       "status": "passed",
       "command": "python skills/software-project-governance/infra/verify_workflow.py status",

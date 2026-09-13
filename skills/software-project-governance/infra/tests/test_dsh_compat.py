@@ -39,6 +39,7 @@ import io
 import json
 import os
 import shutil
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -1819,6 +1820,1379 @@ class NoSchemaFixtureTests(unittest.TestCase):
         self.assertEqual(report["coverage"]["rows_unverified"], 1, report["coverage"])
         self.assertEqual(len(report["unverified"]), 1, report["unverified"])
         self.assertIn("tool-ask-user", report["unverified"][0])
+
+
+class RenderAndDecodeGuardTests(unittest.TestCase):
+    """The render/decode face of the launcher (FIX-316, design §4.4.3-§4.4.6).
+
+    The guard above decides whether a *row* is valid; this class covers the
+    other half of the same delivery — the launcher that writes the composition
+    the guard then reads. Every case here is one the audit measured as a
+    silent or unactionable failure:
+
+      * a legal same-indent block sequence the hand-written scanner missed;
+      * a misspelt render token that used to reach a written preset;
+      * a non-UTF-8 file whose ``UnicodeDecodeError`` escaped a public entry;
+      * an isolated CR the two renderers disagreed about.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "dsh_launch_render_guard",
+            _REPO_ROOT / "adapters" / "dsh" / "launch.py")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        cls.launch = module
+
+    # ── G-05: same-indent block sequence ───────────────────────────────────
+    def test_same_indent_custom_skill_dirs_are_found(self):
+        # FX-CSD-01 puts the sequence items at the KEY's indentation. That is
+        # legal YAML; the old `<=` end-of-block test broke out immediately and
+        # reported zero entries, which surfaced as the misleading "preset
+        # declares no customSkillDirs" message.
+        text = dsh_fixtures.fixture_bytes("FX-CSD-01").decode("utf-8")
+        entries = self.launch._custom_skill_dir_entries(text)
+        self.assertEqual(len(entries), 2, entries)
+        self.assertIn("__GOVERNANCE_SKILLS_ROOT__", entries[0])
+        self.assertIn("__GOVERNANCE_SHIMS_ROOT__", entries[1])
+
+    def test_rendered_same_indent_fixture_yields_absolute_existing_roots(self):
+        """FX-CSD-01 end to end: the block is found AND renders to real dirs."""
+        text = dsh_fixtures.fixture_bytes("FX-CSD-01").decode("utf-8")
+        rendered = self._render_text(text)
+        self.assertTrue(rendered, "the same-indent fixture must render")
+        entries = self.launch._custom_skill_dir_entries(rendered)
+        self.assertEqual(len(entries), 2, entries)
+        for entry in entries:
+            form, path, issue = self.launch._resolve_skill_entry(entry, _REPO_ROOT)
+            self.assertIsNone(issue, entry)
+            self.assertEqual(form, "absolute", entry)
+            self.assertTrue(path.is_dir(), entry)
+        # Same inputs, same result as the shipped template: the scanner's
+        # tolerance must not change what a valid block resolves to.
+        shipped = self.launch._custom_skill_dir_entries(self.launch.render_composition())
+        self.assertEqual(len(shipped), 2, shipped)
+
+    def test_a_sibling_key_ends_the_block(self):
+        # Tolerance must not become greed: a following key at the block's own
+        # indentation closes the sequence instead of being read as an entry.
+        text = ("- id: skill-filesystem\n"
+                "  config:\n"
+                "    customSkillDirs:\n"
+                "    - /one\n"
+                "    - /two\n"
+                "    otherKey: 1\n"
+                "    - /not-an-entry\n")
+        self.assertEqual(self.launch._custom_skill_dir_entries(text),
+                         ["/one", "/two"])
+
+    def test_declared_block_shape_is_asserted_on_the_render_source(self):
+        # `own.render.custom_skill_dirs_shape` is a declaration, not prose: the
+        # shipped render source must still match it (key indent, item indent,
+        # entry count and the declared token form).
+        source = self.launch._read_text_with_newline_mode(
+            _REPO_ROOT / "agent-presets" / "governance"
+            / "agent.cordis.yml.template")
+        self.assertEqual(
+            self.launch._shape_violations(source, stage="template"), [])
+        self.assertEqual(self.launch._shape_violations(self._render_text(source)), [])
+
+    def test_unimplemented_list_style_is_a_contract_defect(self):
+        # N-3: `list_style` used to be emitted as a per-document violation, but
+        # only `block-sequence` is implemented — so for any valid contract the
+        # branch was unreachable and a mutation removing it survived. It is now
+        # asserted at entry, which has a counter-case: declare another style and
+        # the check fails loudly naming the contract field.
+        original = self.launch.declared_custom_skill_dirs_shape
+
+        def flowed():
+            shape = dict(original())
+            shape["list_style"] = "flow-sequence"
+            return shape
+
+        self.launch.declared_custom_skill_dirs_shape = flowed
+        try:
+            with self.assertRaises(Exception) as caught:
+                self.launch._shape_violations(
+                    "- id: x\n  config:\n    customSkillDirs:\n      - /a\n")
+        finally:
+            self.launch.declared_custom_skill_dirs_shape = original
+        self.assertIn("list_style", str(caught.exception))
+        self.assertIn("block-sequence", str(caught.exception))
+        # The shipped declaration is the implemented one.
+        self.assertEqual(
+            original()["list_style"], "block-sequence")
+
+    def test_unreadable_skill_root_marker_is_disclosed_not_silent(self):
+        # N-6b: a non-decodable `skill-root.txt` used to fall through to the
+        # catalog parent with no issue at all — a silent downgrade. It must now
+        # be disclosed, and the report must still be a structured FAIL/PASS
+        # rather than a raise.
+        with _scratch("spg-test-marker-disclosure-") as td:
+            root = Path(td) / "repo"
+            preset = Path(td) / "preset"
+            (preset / "skills" / "software-project-governance").mkdir(parents=True)
+            (preset / "agent.cordis.yml").write_text(
+                "- id: x\n", encoding="utf-8")
+            (preset / "skill-root.txt").write_bytes(b"\xff bad marker\n")
+            surface = self.launch.verify_preset_loading(preset)
+        self.assertEqual(surface["verdict"], "FAIL", surface)
+        self.assertTrue(
+            any("skill-root.txt" in issue and "unreadable" in issue
+                for issue in surface["issues"]),
+            surface["issues"])
+
+    def test_package_version_is_strict_at_every_call_site(self):
+        # N-8: there is exactly ONE package-identity reader and it is strict, so
+        # no caller can quietly stamp a wrong marker. The placeholder survives
+        # only for the genuinely absent file (a repository copy that ships
+        # without `package.json`), and only through `marker_version`.
+        self.assertEqual(self.launch.package_version(),
+                         json.loads((_REPO_ROOT / "package.json").read_text(
+                             encoding="utf-8"))["version"])
+        self.assertEqual(self.launch.marker_version(),
+                         self.launch.package_version())
+        self.assertFalse(hasattr(self.launch, "require_package_version"),
+                         "the lenient/strict pair is back — consolidation lost")
+        # A present-but-unreadable identity is refused, not degraded.
+        with _scratch("spg-test-n8-") as td:
+            root = Path(td) / "repo"
+            (root / "adapters" / "dsh").mkdir(parents=True)
+            (root / "skills" / "software-project-governance" / "infra").mkdir(
+                parents=True)
+            (root / "package.json").write_bytes(b'{"version": "\xff bad"}')
+            shutil.copy2(_REPO_ROOT / "skills" / "software-project-governance"
+                         / "infra" / "dsh_contract.py",
+                         root / "skills" / "software-project-governance"
+                         / "infra" / "dsh_contract.py")
+            shutil.copy2(_REPO_ROOT / "adapters" / "dsh" / "launch.py",
+                         root / "adapters" / "dsh" / "launch.py")
+            shutil.copy2(_REPO_ROOT / "adapters" / "dsh" / "host-contract.json",
+                         root / "adapters" / "dsh" / "host-contract.json")
+            spec = importlib.util.spec_from_file_location(
+                "dsh_launch_n8_probe", root / "adapters" / "dsh" / "launch.py")
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = module
+            spec.loader.exec_module(module)
+            with self.assertRaises(module.PackageIdentityUnreadable):
+                module.marker_version()
+        # The writer accepts an explicit version, which is how `install_preset`
+        # keeps its strict read ahead of any staging write.
+        import inspect
+        self.assertIn("version",
+                      inspect.signature(self.launch.write_rendered_preset).parameters)
+
+    def test_relative_skill_dir_is_still_reported(self):
+        # FX-CSD-02 replaces one entry with a literal relative path (FIX-290):
+        # it resolves against the dsh process CWD and silently empties the
+        # session catalog, so it MUST be reported — while the other, token
+        # substituted entry stays clean.
+        text = dsh_fixtures.fixture_bytes("FX-CSD-02").decode("utf-8")
+        rendered = self._render_text(text)
+        resolved = [self.launch._resolve_skill_entry(entry, _REPO_ROOT)
+                    for entry in self.launch._custom_skill_dir_entries(rendered)]
+        forms = [form for form, _path, _issue in resolved]
+        self.assertIn("relative", forms, resolved)
+        self.assertIn("absolute", forms, resolved)
+        reported = [issue for _form, _path, issue in resolved if issue]
+        self.assertEqual(len(reported), 1, resolved)
+        self.assertIn("FIX-290", reported[0])
+        # Absolute entries keep no issue: the report is about the relative one.
+        for form, _path, issue in resolved:
+            if form == "absolute":
+                self.assertIsNone(issue)
+
+    # ── G-07: misspelt tokens ──────────────────────────────────────────────
+    def test_misspelt_tokens_are_refused_by_both_shipped_forms(self):
+        # FX-TOKEN-01 (all caps) and FX-TOKEN-02 (mixed case) both used to
+        # render cleanly: the guard only looked for the three KNOWN tokens to
+        # survive, so an unknown spelling passed through into the preset. The
+        # declared `leftover_scan` catches any `__…__` spelling instead.
+        for fixture in ("FX-TOKEN-01", "FX-TOKEN-02"):
+            with self.subTest(fixture=fixture):
+                text = dsh_fixtures.fixture_bytes(fixture).decode("utf-8")
+                self.assertEqual(self._render_text(text), "",
+                                 f"{fixture} must not render")
+                self.assertTrue(self.launch.leftovers(text), fixture)
+
+    def test_leftovers_uses_the_declared_scan_not_a_known_token_list(self):
+        self.assertEqual(self.launch.leftovers("plain text"), [])
+        self.assertEqual(self.launch.leftovers("__Governance_Repo_Root__"),
+                         ["__Governance_Repo_Root__"])
+        # Deduplicated and order-stable (first appearance wins).
+        self.assertEqual(self.launch.leftovers("__A_1__ x __A_1__ __B_2__"),
+                         ["__A_1__", "__B_2__"])
+        self.assertEqual(self.launch._fact("LEFTOVER_SCAN"), "__[A-Za-z0-9_]+__")
+
+    # ── G-10: non-UTF-8 input ──────────────────────────────────────────────
+    def test_non_utf8_verification_is_a_structured_failure_not_a_raise(self):
+        raw = dsh_fixtures.fixture_bytes("FX-UTF8-01")
+        with _scratch("spg-test-utf8-") as td:
+            preset = Path(td) / "preset"
+            preset.mkdir()
+            (preset / "agent.cordis.yml").write_bytes(raw)
+            surface = self.launch.verify_preset_loading(preset)
+        self.assertEqual(surface["verdict"], "FAIL", surface)
+        self.assertTrue(surface["issues"], surface)
+        issue = surface["issues"][0]
+        self.assertIn("not valid UTF-8", issue)
+        self.assertIn("byte offset", issue)
+
+    def test_non_utf8_render_refuses_without_raising(self):
+        raw = dsh_fixtures.fixture_bytes("FX-UTF8-01")
+        with _scratch("spg-test-utf8-render-") as td:
+            path = Path(td) / "tpl.yml"
+            path.write_bytes(raw)
+            self.assertEqual(self._render_path(path), "")
+
+    def test_non_utf8_read_raises_the_structured_type_only(self):
+        raw = dsh_fixtures.fixture_bytes("FX-UTF8-01")
+        with _scratch("spg-test-utf8-read-") as td:
+            path = Path(td) / "x.yml"
+            path.write_bytes(raw)
+            with self.assertRaises(self.launch.CompositionUnreadable) as caught:
+                self.launch._read_text(path)
+        self.assertEqual(caught.exception.offset, 72)
+        self.assertEqual(caught.exception.byte, 0xFF)
+        self.assertIn("0xff", caught.exception.diagnostic())
+
+    def test_valid_utf8_still_reads_normally(self):
+        # The control: the diagnosis must not fire on a healthy file.
+        with _scratch("spg-test-utf8-ok-") as td:
+            path = Path(td) / "x.yml"
+            path.write_text("ok: true\n", encoding="utf-8")
+            self.assertEqual(self.launch._read_text(path), "ok: true\n")
+
+    # ── D-66: line-ending rule shared with lib/index.js ────────────────────
+    def test_isolated_cr_is_preserved_like_the_js_renderer(self):
+        # The JS renderer normalizes exactly `\r\n` -> `\n` and leaves a lone
+        # `\r` alone. The Python renderer used the text layer's universal
+        # newlines, which folded EVERY `\r` — so the same template produced
+        # different bytes on the two delivery paths.
+        text = dsh_fixtures.fixture_bytes("FX-CR-01").decode("utf-8")
+        self.assertEqual(text.count("\r"), 1)
+        self.assertEqual(text.count("\r\n"), 0)
+        rendered = self._render_text(text)
+        self.assertTrue(rendered, "the CR fixture must still render")
+        self.assertEqual(rendered.count("\r"), 1, "lone CR must survive")
+
+    def test_crlf_template_folds_to_lf(self):
+        # The half that must NOT change: a CRLF checkout still renders LF, so
+        # `core.autocrlf` cannot change the preset's bytes.
+        source = _REPO_ROOT / "agent-presets" / "governance" / "agent.cordis.yml.template"
+        lf_text = self.launch._read_text_with_newline_mode(source)
+        crlf_text = lf_text.replace("\n", "\r\n")
+        self.assertEqual(self._render_text(crlf_text), self._render_text(lf_text))
+        self.assertEqual(self._render_text(crlf_text).count("\r"), 0)
+
+    def test_shape_violations_fire_in_the_reverse_direction(self):
+        # F-3: five independent neutralizations of `_shape_violations` used to
+        # survive the whole suite, because every assertion was `== []`. Each
+        # declared dimension now has a counter-case that must produce a
+        # violation, so removing a check turns a test red.
+        shape = self.launch.declared_custom_skill_dirs_shape()
+        key_indent = " " * shape["key_indent"]
+        item_indent = " " * shape["item_indent"]
+
+        def block(*items):
+            return ("- id: skill-filesystem\n"
+                    "  config:\n"
+                    f"{key_indent}customSkillDirs:\n"
+                    + "".join(f"{item}\n" for item in items))
+
+        cases = {
+            "key_indent": block(f"{item_indent}- __GOVERNANCE_SKILLS_ROOT__",
+                                f"{item_indent}- __GOVERNANCE_SHIMS_ROOT__")
+            .replace(f"{key_indent}customSkillDirs:",
+                     f"{key_indent}  customSkillDirs:"),
+            "item_indent": block(f"{item_indent}    - __GOVERNANCE_SKILLS_ROOT__",
+                                 f"{item_indent}    - __GOVERNANCE_SHIMS_ROOT__"),
+            "entry_count": block(f"{item_indent}- __GOVERNANCE_SKILLS_ROOT__"),
+            "entry_form": block(f"{item_indent}- @deepseek-ai/dsh-somewhere",
+                                f"{item_indent}- __GOVERNANCE_SHIMS_ROOT__"),
+        }
+        for dimension, text in cases.items():
+            with self.subTest(dimension=dimension):
+                violations = self.launch._shape_violations(text, stage="template")
+                self.assertTrue(violations, f"{dimension}: no violation reported")
+        # The same input through the public verifier must reach FAIL, not PASS.
+        with _scratch("spg-test-shape-neg-") as td:
+            preset = Path(td) / "preset"
+            preset.mkdir()
+            (preset / "agent.cordis.yml").write_text(
+                cases["item_indent"], encoding="utf-8")
+            (preset / "skill-root.txt").write_text(str(_REPO_ROOT) + "\n",
+                                                   encoding="utf-8")
+            surface = self.launch.verify_preset_loading(preset)
+        self.assertEqual(surface["verdict"], "FAIL", surface)
+        self.assertTrue(
+            any("shape drift" in issue for issue in surface["issues"]),
+            surface["issues"])
+
+    def test_shape_violations_are_stable_for_a_healthy_block(self):
+        # The counterpart to the counter-cases: a well-formed block yields no
+        # violation in either stage, so the assertions above cannot be
+        # satisfied by a checker that always reports something.
+        shape = self.launch.declared_custom_skill_dirs_shape()
+        key_indent = " " * shape["key_indent"]
+        item_indent = " " * shape["item_indent"]
+        token_block = ("- id: skill-filesystem\n"
+                       "  config:\n"
+                       f"{key_indent}customSkillDirs:\n"
+                       f"{item_indent}- __GOVERNANCE_SKILLS_ROOT__\n"
+                       f"{item_indent}- __GOVERNANCE_SHIMS_ROOT__\n")
+        self.assertEqual(
+            self.launch._shape_violations(token_block, stage="template"), [])
+        # The rendered stage holds the substituted absolute paths instead.
+        rendered_block = ("- id: skill-filesystem\n"
+                          "  config:\n"
+                          f"{key_indent}customSkillDirs:\n"
+                          f"{item_indent}- '{_REPO_ROOT.as_posix()}/skills'\n"
+                          f"{item_indent}- "
+                          f"'{_REPO_ROOT.as_posix()}/adapters/dsh/skill-shims'\n")
+        self.assertEqual(self.launch._shape_violations(rendered_block), [])
+
+    def test_baseurl_entry_is_accepted_by_both_judgments(self):
+        # F-6: `- !!js new URL('skills', baseUrl)` is a form
+        # `_resolve_skill_entry` accepts. The shape checker used to call the
+        # same line "relative" and report a violation — one file, two
+        # contradictory verdicts about one line.
+        shape = self.launch.declared_custom_skill_dirs_shape()
+        item_indent = " " * shape["item_indent"]
+        entry = "!!js new URL('skills', baseUrl)"
+        text = ("- id: skill-filesystem\n"
+                "  config:\n"
+                "    customSkillDirs:\n"
+                f"{item_indent}- '{entry}'\n"
+                f"{item_indent}- '{entry}'\n")
+        violations = self.launch._shape_violations(text)
+        self.assertEqual(violations, [], violations)
+        form, path, issue = self.launch._resolve_skill_entry(entry, _REPO_ROOT)
+        self.assertEqual(form, "baseUrl")
+        self.assertIsNone(issue)
+        self.assertEqual(path, _REPO_ROOT.resolve() / "skills")
+
+    def test_newline_policy_is_consumed_by_the_writer(self):
+        # F-7: `own.render.newline_policy` used to be a declared-but-unread
+        # binding, so mutating it to `crlf` changed nothing. The writer now
+        # asserts it, which is what makes the declaration load-bearing.
+        self.assertEqual(self.launch.require_lf_newline_policy(), "lf")
+        original = self.launch._fact
+
+        def crlf(name):
+            return "crlf" if name == "NEWLINE_POLICY" else original(name)
+
+        with _scratch("spg-test-newline-") as td:
+            isolated = str(Path(td) / "dsh-home")
+            stream = io.StringIO()
+            self.launch._fact = crlf
+            try:
+                with contextlib.redirect_stdout(stream), \
+                        contextlib.redirect_stderr(stream), \
+                        mock.patch.dict(os.environ, {"DSH_HOME": isolated},
+                                        clear=False):
+                    code = self.launch.install_preset()
+            finally:
+                self.launch._fact = original
+            output = stream.getvalue()
+            written = (Path(isolated) / ".agent-presets" / "governance").exists()
+        self.assertEqual(code, 1, output)
+        self.assertIn("newline_policy", output)
+        self.assertFalse(written, "a refused newline policy must not write a preset")
+
+    def test_skill_frontmatter_binding_is_not_declared_unused(self):
+        # F-7: `SKILL_FRONTMATTER` had no reader anywhere. A declared-but-unread
+        # binding is the same defect class as a second source of truth, so it is
+        # gone rather than annotated.
+        self.assertNotIn("SKILL_FRONTMATTER", self.launch.CONTRACT_BINDING)
+        for name in self.launch.CONTRACT_BINDING:
+            with self.subTest(binding=name):
+                self.assertTrue(self.launch._fact(name) is not None, name)
+
+    # ── D-54 / FX-WITNESS-01 ──────────────────────────────────────────────
+    def test_witness_ignores_host_settings_rewrite(self):
+        # D-54: the host rewrites `settings.yaml` for its own reasons; a change
+        # in that file's size and mtime is not evidence that this adapter wrote
+        # anything, so the witness must not carry those fields at all.
+        with _scratch("spg-test-witness-") as td:
+            home = Path(td) / "home"
+            preset = home / ".agent-presets" / "governance"
+            preset.mkdir(parents=True)
+            (preset / "preset.yml").write_text("name: governance\n", encoding="utf-8")
+            settings = home / "settings.yaml"
+            settings.write_text("a: 1\n", encoding="utf-8")
+            before = self.launch._real_home_witness(home)
+            stamp = settings.stat().st_mtime_ns
+            settings.write_text("a: 2" * 512 + "\n", encoding="utf-8")
+            os.utime(settings, ns=(stamp + 10 ** 9, stamp + 10 ** 9))
+            after = self.launch._real_home_witness(home)
+        self.assertEqual(before["top_level"], after["top_level"])
+        result = self.launch.witness_verdict((before, after))
+        self.assertEqual(result["verdict"], "PASS", result)
+        self.assertFalse(result["failures"])
+
+    def test_witness_fails_on_a_preset_write_without_resampling(self):
+        with _scratch("spg-test-witness-") as td:
+            home = Path(td) / "home"
+            preset = home / ".agent-presets" / "governance"
+            preset.mkdir(parents=True)
+            (preset / "preset.yml").write_text("name: governance\n", encoding="utf-8")
+            before = self.launch._real_home_witness(home)
+            (preset / "agent.cordis.yml").write_text("- id: x\n", encoding="utf-8")
+            after = self.launch._real_home_witness(home)
+        result = self.launch.witness_verdict((before, after), resample=lambda: after)
+        self.assertEqual(result["verdict"], "FAIL", result)
+        self.assertTrue(any("write surface" in f for f in result["failures"]),
+                        result["failures"])
+
+    def test_witness_reproduced_top_level_change_fails(self):
+        with _scratch("spg-test-witness-") as td:
+            home = Path(td) / "home"
+            (home / ".agent-presets").mkdir(parents=True)
+            before = self.launch._real_home_witness(home)
+            (home / "settled.tmp").write_text("x\n", encoding="utf-8")
+            after_first = self.launch._real_home_witness(home)
+            result = self.launch.witness_verdict(
+                (before, after_first),
+                resample=lambda: self.launch._real_home_witness(home))
+        self.assertEqual(result["verdict"], "FAIL", result)
+        self.assertTrue(any("top level" in f for f in result["failures"]),
+                        result["failures"])
+
+    def test_witness_unreproduced_top_level_change_is_advisory(self):
+        with _scratch("spg-test-witness-") as td:
+            home = Path(td) / "home"
+            (home / ".agent-presets").mkdir(parents=True)
+            before = self.launch._real_home_witness(home)
+            transient = home / "transient.tmp"
+            transient.write_text("x\n", encoding="utf-8")
+            after_first = self.launch._real_home_witness(home)
+
+            def resample():
+                transient.unlink()
+                return self.launch._real_home_witness(home)
+
+            result = self.launch.witness_verdict(
+                (before, after_first), resample=resample)
+        self.assertEqual(result["verdict"], "PASS", result)
+        self.assertTrue(result["advisories"], result)
+        self.assertFalse(result["failures"])
+
+    def test_fx_witness_01_fixture_is_consumed(self):
+        # D-54 acceptance ⑤: `FX-WITNESS-01` must be machine-checked, not merely
+        # registered. The emitted artifact is a runnable oracle that drives the
+        # launcher's own witness through all four judgments.
+        with _scratch("spg-test-witness-fx-") as td:
+            path = dsh_fixtures.emit_fixture("FX-WITNESS-01", Path(td))
+            self.assertEqual(path.name, "FX-WITNESS-01.py")
+            # N-6a: the module claims the emitted source is ASCII-only, so the
+            # claim is checked instead of trusted (it was false once).
+            path.read_bytes().decode("ascii")
+            # Deterministic bytes: two emissions are identical.
+            second = dsh_fixtures.emit_fixture("FX-WITNESS-01", Path(td) / "again")
+            self.assertEqual(path.read_bytes(), second.read_bytes())
+            proc = subprocess.run(
+                [sys.executable, str(path),
+                 str(_REPO_ROOT / "adapters" / "dsh" / "launch.py")],
+                cwd=str(_REPO_ROOT), capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=300)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        report = json.loads(proc.stdout)
+        self.assertEqual(report["verdict"], "PASS", report)
+        self.assertEqual([check["check"] for check in report["checks"]], [
+            "settings_yaml_race_is_not_a_failure",
+            "witness_records_no_size_or_mtime",
+            "host_subtree_churn_is_not_a_failure",
+            "write_surface_change_fails_without_resample",
+            "unreproduced_top_level_change_is_advisory",
+            "reproduced_top_level_change_fails",
+        ], report)
+
+    # ── helpers ────────────────────────────────────────────────────────────
+    def _render_text(self, text):
+        """``render_composition()`` driven against in-memory template text."""
+        with _scratch("spg-test-render-") as td:
+            path = Path(td) / "template.yml"
+            path.write_text(text, encoding="utf-8", newline="")
+            return self._render_path(path)
+
+    def _render_path(self, path):
+        original = self.launch._composition_template
+        self.launch._composition_template = lambda: Path(path)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                return self.launch.render_composition()
+        finally:
+            self.launch._composition_template = original
+
+
+class WriteSideHomeConvergenceTests(unittest.TestCase):
+    """`$DSH_HOME` write-side convergence + the write-entry guard (FIX-316).
+
+    Design §4.4.4 states the write side as ONE rule shared by every writer
+    (`blank_policy` / `trim_policy` / `fallback` / `tilde_expansion` are
+    contract fields), with the *probe* side deliberately excluded from that
+    convergence because the guard's safety property is "an explicit
+    `$DSH_HOME` or nothing" (G06-b').
+
+    The two writers are `adapters/dsh/launch.py::dsh_home()` and
+    `lib/index.js::resolveDshHome()`. The JS side is read-only probed by
+    evaluating the module source with `import.meta.url` bound to its real URL —
+    reaching the same rule through `ensurePreset()` would write the preset into
+    whatever home the case resolves to, which for the blank cases is the user's
+    real `~/.dsh`.
+    """
+
+    CASES = (
+        ("unset", None),
+        ("empty", ""),
+        ("spaces", "   "),
+        ("tab", "\t"),
+        ("posix", "C:/tmp/spg-fix316/x"),
+        ("trailing", "C:/tmp/spg-fix316/x/"),
+        ("backslash", "C:\\tmp\\spg-fix316\\x"),
+        ("relative", "spg-fix316/x"),
+        ("tilde", "~"),
+        ("tilde-slash", "~/spg-fix316/x"),
+        ("tilde-backslash", "~\\spg-fix316\\x"),
+        ("spaced", "  C:/tmp/spg-fix316/x  "),
+    )
+
+    _JS_PROBE = """
+import { readFileSync } from 'node:fs'
+import { pathToFileURL } from 'node:url'
+const libPath = process.argv[2]
+const src = readFileSync(libPath, 'utf8').replace(/^export /gm, '')
+const shim = 'import.meta.url = ' + JSON.stringify(pathToFileURL(libPath).href) + ';\\n'
+  + src + '\\nexport { resolveDshHome, CONTRACT_BINDING };\\n'
+const mod = await import('data:text/javascript;base64,'
+  + Buffer.from(shim).toString('base64'))
+const contract = JSON.parse(readFileSync(process.argv[3], 'utf8'))
+const declared = {}
+for (const [key, path] of Object.entries(mod.CONTRACT_BINDING)) {
+  let node = contract
+  for (const part of path.split('.')) node = node?.[part]
+  declared[key] = node
+}
+const bindings = {
+  homeVar: declared.homeVar,
+  homeFallbackName: String(declared.homeFallback).split(/[\\\\/]/).pop(),
+}
+console.log(JSON.stringify({ home: mod.resolveDshHome(bindings) }))
+"""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "dsh_launch_home_convergence",
+            _REPO_ROOT / "adapters" / "dsh" / "launch.py")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        cls.launch = module
+        cls.contract_path = _REPO_ROOT / "adapters" / "dsh" / "host-contract.json"
+
+    @staticmethod
+    def _env(case_value):
+        """Controlled env: only what locating the default home requires."""
+        env = {key: os.environ[key] for key in
+               ("PATH", "SystemRoot", "windir", "PATHEXT", "TEMP", "TMP",
+                "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "COMSPEC", "APPDATA",
+                "LOCALAPPDATA")
+               if key in os.environ}
+        if case_value is not None:
+            env["DSH_HOME"] = case_value
+        return env
+
+    @staticmethod
+    def _norm(text):
+        """Forward slashes, no trailing separator, case-folded.
+
+        Windows resolves paths case-insensitively, so a drive-letter casing
+        difference is the same location (`c:/TMP/X` vs `C:/tmp/X`); comparing
+        the raw strings would report a disagreement the filesystem does not
+        have.
+        """
+        return text.replace("\\", "/").rstrip("/").lower()
+
+    def _launch_home(self, case_value):
+        """`launch.py::dsh_home()` in its own process, under `case_value`."""
+        env = self._env(case_value)
+        argv = [sys.executable, "-c",
+                "import importlib.util,json,sys;"
+                "from pathlib import Path;"
+                "s=importlib.util.spec_from_file_location('L',sys.argv[1]);"
+                "m=importlib.util.module_from_spec(s);sys.modules['L']=m;"
+                "s.loader.exec_module(m);"
+                "print(json.dumps({'home':str(m.dsh_home())}))",
+                str(_REPO_ROOT / "adapters" / "dsh" / "launch.py")]
+        proc = subprocess.run(argv, cwd=str(_REPO_ROOT), env=env,
+                              capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=120)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return json.loads(proc.stdout.strip().splitlines()[-1])["home"]
+
+    def _lib_home(self, case_value):
+        """`lib/index.js::resolveDshHome()` — a read-only source probe."""
+        node = shutil.which("node")
+        if not node:  # pragma: no cover - node is present in the live gates
+            self.skipTest("node unavailable — differential gate is NOT_RUN")
+        with _scratch("spg-test-home-js-") as td:
+            probe = Path(td) / "probe.mjs"
+            probe.write_text(self._JS_PROBE, encoding="utf-8")
+            proc = subprocess.run(
+                [node, str(probe), str(_REPO_ROOT / "lib" / "index.js"),
+                 str(self.contract_path)],
+                cwd=str(_REPO_ROOT), env=self._env(case_value),
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=120)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return json.loads(proc.stdout.strip().splitlines()[-1])["home"]
+
+    def test_blank_dsh_home_means_unset(self):
+        # `blank_policy = "trimmed-empty-means-unset"`: an unset OR blank value
+        # falls back to the declared `<home>/.dsh`. The old `if env:` test
+        # treated `"   "` as a real path and produced
+        # `"   \\.agent-presets\\governance"`.
+        fallback = str(Path.home() / ".dsh")
+        for label, value in (("unset", None), ("empty", ""),
+                             ("spaces", "   "), ("tab", "\t")):
+            with self.subTest(case=label):
+                home = self._launch_home(value)
+                self.assertEqual(self._norm(home), self._norm(fallback), home)
+                self.assertFalse(home.strip() != home,
+                                 f"{label}: produced a literal blank path {home!r}")
+
+    def test_tilde_forms_expand(self):
+        home = Path.home()
+        expected = {
+            "~": home,
+            "~/spg-fix316/x": home / "spg-fix316" / "x",
+            "~\\spg-fix316\\x": home / "spg-fix316" / "x",
+        }
+        for case, want in expected.items():
+            with self.subTest(case=case):
+                self.assertEqual(self._norm(self._launch_home(case)),
+                                 self._norm(str(want)))
+
+    def test_relative_value_resolves_against_the_process_cwd(self):
+        # `trim_policy = "verbatim-then-platform-resolve"`: the value decides
+        # what is resolved, the platform decides how. Leaving it relative was
+        # the one case where the two writers disagreed.
+        got = self._launch_home("spg-fix316/x")
+        self.assertTrue(Path(got).is_absolute(), got)
+        self.assertEqual(self._norm(got),
+                         self._norm(str(_REPO_ROOT / "spg-fix316" / "x")))
+
+    @unittest.skipUnless(shutil.which("node"),
+                         "node unavailable — three-way matrix is NOT_RUN")
+    def test_writer_case_table_agrees_with_lib_index(self):
+        # The differential gate: same input, same result on both writers.
+        # The probe side is intentionally NOT in this table (G06-b').
+        for label, value in self.CASES:
+            with self.subTest(case=label):
+                launch_home = self._launch_home(value)
+                lib_home = self._lib_home(value)
+                self.assertEqual(self._norm(launch_home), self._norm(lib_home),
+                                 f"{label}: launch={launch_home} lib={lib_home}")
+
+    def test_probe_side_stays_fail_closed_on_unset_or_blank(self):
+        # G06-b'反相断言: the read/probe side must NOT take the fallback.
+        # `DSH_HOME` unset or blank ⇒ no plane is discovered, so the guard
+        # never guesses `~/.dsh` (the existing safety property, kept).
+        for label, value in (("unset", None), ("empty", ""),
+                             ("spaces", "   "), ("tab", "\t")):
+            with self.subTest(case=label):
+                env = {} if value is None else {"DSH_HOME": value}
+                self.assertEqual(dsh_compat._profile_planes(env), [], label)
+
+
+@contextlib.contextmanager
+def _isolated_profile(fake_home):
+    """Point ``Path.home()`` at ``fake_home`` for the duration (F-8).
+
+    The write entry points derive the real DSH home from ``Path.home()``, so a
+    test that exercises them would — with the guard removed or regressed —
+    happily write ``<home>/.agent-presets`` and ``<home>/.dsh/.agent-presets``
+    into the developer's real profile. That is precisely the incident shape this
+    task hit three times, so the tests may not *depend* on the guard to stay
+    harmless: with ``USERPROFILE``/``HOME`` redirected, a regressed guard writes
+    into a throwaway directory instead. On Windows ``Path.home()`` reads
+    ``USERPROFILE`` first, hence all four variables.
+    """
+    fake = Path(fake_home)
+    fake.mkdir(parents=True, exist_ok=True)
+    with mock.patch.dict(os.environ, {
+        "USERPROFILE": str(fake),
+        "HOME": str(fake),
+        "HOMEDRIVE": fake.drive or "",
+        "HOMEPATH": str(fake)[len(fake.drive):] if fake.drive else str(fake),
+    }, clear=False):
+        yield fake
+
+
+def _assert_profile_is_redirected(test, fake_home):
+    """Fail loudly if the ambient home is still the developer's real one."""
+    import importlib
+    home = Path.home()
+    test.assertEqual(
+        home.resolve(), Path(fake_home).resolve(),
+        "refusing to exercise write entry points: Path.home() is still the "
+        f"real profile ({home}) — the F-8 isolation seam is not in effect")
+
+
+class WriteEntryGuardTests(unittest.TestCase):
+    """The write entry points refuse a real-home target (FIX-316 / V7).
+
+    The guard is symmetric on purpose: install/sync and uninstall both mutate
+    the user's real preset root, so both answer to the same rule the isolated
+    smoke gate applies. `smoke_preset()` refuses an unset `$DSH_HOME`; without
+    the same rule on `install_preset()` a mis-set variable silently rewrites
+    the real preset.
+
+    **F-8**: every test here runs under :func:`_isolated_profile`, so the
+    "real home" they refuse is a throwaway directory and a *regressed* guard
+    cannot touch the developer's profile. The refusal shapes are additionally
+    asserted on the pure predicate first — that judgment needs no write path at
+    all.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "dsh_launch_write_guard",
+            _REPO_ROOT / "adapters" / "dsh" / "launch.py")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        cls.launch = module
+
+    def _call(self, func_name, case_value):
+        """Run one write entry point with `DSH_HOME` patched; return (rc, out)."""
+        func = getattr(self.launch, func_name)
+        saved = os.environ.get("DSH_HOME", None)
+        had = "DSH_HOME" in os.environ
+        try:
+            if case_value is None:
+                os.environ.pop("DSH_HOME", None)
+            else:
+                os.environ["DSH_HOME"] = case_value
+            stream = io.StringIO()
+            with contextlib.redirect_stdout(stream), \
+                    contextlib.redirect_stderr(stream):
+                code = func()
+            return code, stream.getvalue()
+        finally:
+            if had:
+                os.environ["DSH_HOME"] = saved
+            else:
+                os.environ.pop("DSH_HOME", None)
+
+    # ── the predicate, with no write path involved at all (F-8) ────────────
+    def test_refusal_predicate_covers_every_real_home_shape(self):
+        with _scratch("spg-test-predicate-") as td:
+            fake = Path(td) / "profile"
+            with _isolated_profile(fake):
+                _assert_profile_is_redirected(self, fake)
+                target = self.launch.preset_dir()
+                # unset, set-but-blank, the profile itself, the real DSH home.
+                for value in (None, "", "   ", "\t", str(fake),
+                              str(fake / ".dsh")):
+                    with self.subTest(home=value):
+                        saved = os.environ.get("DSH_HOME")
+                        had = "DSH_HOME" in os.environ
+                        try:
+                            if value is None:
+                                os.environ.pop("DSH_HOME", None)
+                            else:
+                                os.environ["DSH_HOME"] = value
+                            refusal = self.launch.write_side_refusal(
+                                target, operation="install")
+                        finally:
+                            if had:
+                                os.environ["DSH_HOME"] = saved
+                            else:
+                                os.environ.pop("DSH_HOME", None)
+                        self.assertIsNotNone(refusal, value)
+                # A redirected home is allowed.
+                allowed = Path(td) / "redirected"
+                saved = os.environ.get("DSH_HOME")
+                had = "DSH_HOME" in os.environ
+                try:
+                    os.environ["DSH_HOME"] = str(allowed)
+                    self.assertIsNone(self.launch.write_side_refusal(
+                        allowed / ".agent-presets" / "governance",
+                        operation="install"))
+                finally:
+                    if had:
+                        os.environ["DSH_HOME"] = saved
+                    else:
+                        os.environ.pop("DSH_HOME", None)
+
+    def test_blank_and_unset_report_different_reasons(self):
+        # F-13: "not set" and "set but blank" need different fixes, so they get
+        # different messages.
+        with _scratch("spg-test-predicate-") as td, \
+                _isolated_profile(Path(td) / "profile"):
+            target = self.launch.preset_dir()
+            saved = os.environ.get("DSH_HOME")
+            had = "DSH_HOME" in os.environ
+            try:
+                os.environ.pop("DSH_HOME", None)
+                unset = self.launch.write_side_refusal(target, operation="install")
+                os.environ["DSH_HOME"] = "   "
+                blank = self.launch.write_side_refusal(target, operation="install")
+            finally:
+                if had:
+                    os.environ["DSH_HOME"] = saved
+                else:
+                    os.environ.pop("DSH_HOME", None)
+        self.assertIn("is not set", unset)
+        self.assertIn("is set but blank", blank)
+        self.assertNotEqual(unset, blank)
+
+    # ── entry level, always under a redirected profile (F-8) ───────────────
+    def test_unset_dsh_home_is_refused_not_redirected_to_the_real_home(self):
+        with _scratch("spg-test-entry-") as td, \
+                _isolated_profile(Path(td) / "profile"):
+            fake = Path(td) / "profile"
+            _assert_profile_is_redirected(self, fake)
+            for func_name in ("install_preset", "uninstall_preset"):
+                with self.subTest(entry=func_name):
+                    code, output = self._call(func_name, None)
+                    self.assertEqual(code, self.launch.SMOKE_EXIT_REFUSED, output)
+                    self.assertIn("[REFUSED]", output)
+                    self.assertIn("DSH_HOME is not set", output)
+            # Nothing may have been created under the fake profile.
+            self.assertEqual(
+                sorted(p.name for p in fake.iterdir()), [],
+                "a refused entry point must not create anything")
+
+    def test_real_home_shapes_are_refused(self):
+        with _scratch("spg-test-entry-") as td, \
+                _isolated_profile(Path(td) / "profile"):
+            fake = Path(td) / "profile"
+            _assert_profile_is_redirected(self, fake)
+            real_home = str(fake)
+            real_dsh = str(fake / ".dsh")
+            for func_name in ("install_preset", "uninstall_preset"):
+                for value in (real_home, real_dsh):
+                    with self.subTest(entry=func_name, home=value):
+                        code, output = self._call(func_name, value)
+                        self.assertEqual(code, self.launch.SMOKE_EXIT_REFUSED, output)
+                        self.assertIn("real DSH home", output)
+            self.assertEqual(
+                [p.name for p in fake.iterdir() if p.name != ".agent-presets"],
+                [], "a refused entry point must not create anything")
+            self.assertFalse((fake / ".agent-presets").exists())
+
+    def test_uninstall_dry_run_is_allowed_and_writes_nothing(self):
+        # R0 F-1 / R2 microfix: `install --dry-run` was allowed (its dry-run
+        # branch sits before the guard) while `uninstall --dry-run` was refused
+        # (its guard sat first), so the documented read-only preview of the
+        # REAL preset root was unreachable. The guard now runs after the
+        # dry-run early return, in both entry points.
+        with _scratch("spg-test-uninstall-dry-") as td, \
+                _isolated_profile(Path(td) / "profile"):
+            fake = Path(td) / "profile"
+            _assert_profile_is_redirected(self, fake)
+            # A real-home SHAPE (the throwaway profile) plus a populated preset.
+            fake_dsh = fake / ".dsh"
+            target = fake_dsh / ".agent-presets" / "governance"
+            target.mkdir(parents=True)
+            (target / "preset.yml").write_text("name: governance\n", encoding="utf-8")
+            before = sorted(p.name for p in target.iterdir())
+
+            stream = io.StringIO()
+            had = "DSH_HOME" in os.environ
+            saved = os.environ.get("DSH_HOME")
+            try:
+                os.environ["DSH_HOME"] = str(fake_dsh)
+                with contextlib.redirect_stdout(stream), \
+                        contextlib.redirect_stderr(stream):
+                    code = self.launch.uninstall_preset(dry_run=True)
+            finally:
+                if had:
+                    os.environ["DSH_HOME"] = saved
+                else:
+                    os.environ.pop("DSH_HOME", None)
+
+            output = stream.getvalue()
+            after = sorted(p.name for p in target.iterdir())
+            still_dir = target.is_dir()
+        self.assertEqual(code, 0, output)
+        self.assertIn("[DRY-RUN]", output)
+        self.assertIn("planned delete", output)
+        self.assertNotIn("[REFUSED]", output)
+        self.assertEqual(before, after, "uninstall --dry-run must not delete")
+        self.assertTrue(still_dir, "uninstall --dry-run must not delete")
+
+    def test_uninstall_dry_run_writes_nothing_under_a_redirected_home(self):
+        with _scratch("spg-test-uninstall-dry2-") as td:
+            isolated = Path(td) / "dsh-home"
+            stream = io.StringIO()
+            had = "DSH_HOME" in os.environ
+            saved = os.environ.get("DSH_HOME")
+            try:
+                os.environ["DSH_HOME"] = str(isolated)
+                with contextlib.redirect_stdout(stream), \
+                        contextlib.redirect_stderr(stream):
+                    code = self.launch.uninstall_preset(dry_run=True)
+            finally:
+                if had:
+                    os.environ["DSH_HOME"] = saved
+                else:
+                    os.environ.pop("DSH_HOME", None)
+            output = stream.getvalue()
+            # Zero writes: not even the DSH home may be created for a preview.
+            created = isolated.exists()
+        self.assertEqual(code, 0, output)
+        self.assertIn("[DRY-RUN]", output)
+        self.assertFalse(created, "uninstall --dry-run must not create anything")
+
+    def test_real_uninstall_is_still_refused_in_a_real_home_shape(self):
+        # The microfix must not weaken the guard on the REAL path.
+        with _scratch("spg-test-uninstall-guard-") as td, \
+                _isolated_profile(Path(td) / "profile"):
+            fake = Path(td) / "profile"
+            _assert_profile_is_redirected(self, fake)
+            fake_dsh = fake / ".dsh"
+            target = fake_dsh / ".agent-presets" / "governance"
+            target.mkdir(parents=True)
+            (target / "preset.yml").write_text("name: governance\n", encoding="utf-8")
+            code, output = self._call("uninstall_preset", str(fake_dsh))
+            still_there = (target / "preset.yml").is_file()
+        self.assertEqual(code, self.launch.SMOKE_EXIT_REFUSED, output)
+        self.assertIn("[REFUSED]", output)
+        self.assertTrue(still_there, "a refused uninstall must delete nothing")
+
+    def test_redirected_home_still_installs_and_uninstalls(self):
+        # The guard must not block the isolated path every other check uses.
+        with _scratch("spg-test-guard-") as td, \
+                _isolated_profile(Path(td) / "profile"):
+            _assert_profile_is_redirected(self, Path(td) / "profile")
+            isolated = str(Path(td) / "dsh-home")
+            code, output = self._call("install_preset", isolated)
+            self.assertEqual(code, 0, output)
+            preset = Path(isolated) / ".agent-presets" / "governance"
+            self.assertTrue(preset.is_dir(), output)
+            self.assertEqual(
+                sorted(p.name for p in preset.iterdir()),
+                [".dsh-bundle-version", "agent.cordis.yml", "preset.yml",
+                 "skill-root.txt"])
+            # newline_policy "lf" applies to the whole preset, not just the
+            # composition: copying the metadata as raw bytes made its line
+            # endings depend on the checkout.
+            for name in ("agent.cordis.yml", "preset.yml", "skill-root.txt",
+                         ".dsh-bundle-version"):
+                self.assertNotIn(b"\r\n", (preset / name).read_bytes(), name)
+            code, output = self._call("uninstall_preset", isolated)
+            self.assertEqual(code, 0, output)
+            self.assertFalse(preset.exists())
+
+    def test_dry_run_never_writes_even_into_a_real_home(self):
+        # `--dry-run` is the documented safe verification path (DEC-158 R1):
+        # it must report the resolved home without creating even the preset
+        # root. It is the one write-shaped entry that may target the real home,
+        # precisely because it writes nothing — so it must NOT be refused.
+        # F-8: "the real home" here is the throwaway profile, never the
+        # developer's.
+        with _scratch("spg-test-dryrun-") as td, \
+                _isolated_profile(Path(td) / "profile"):
+            fake = Path(td) / "profile"
+            _assert_profile_is_redirected(self, fake)
+            fake_dsh = str(fake / ".dsh")
+            target = fake / ".dsh" / ".agent-presets" / "governance"
+
+            stream = io.StringIO()
+            had = "DSH_HOME" in os.environ
+            saved = os.environ.get("DSH_HOME")
+            try:
+                os.environ["DSH_HOME"] = fake_dsh
+                with contextlib.redirect_stdout(stream), \
+                        contextlib.redirect_stderr(stream):
+                    code = self.launch.install_preset(dry_run=True)
+            finally:
+                if had:
+                    os.environ["DSH_HOME"] = saved
+                else:
+                    os.environ.pop("DSH_HOME", None)
+
+            output = stream.getvalue()
+            self.assertEqual(code, 0, output)
+            self.assertIn("[DRY-RUN]", output)
+            self.assertNotIn("[REFUSED]", output)
+            self.assertFalse(target.exists(), "dry-run must not create the preset")
+            self.assertFalse((fake / ".dsh").exists(),
+                             "dry-run must not create the DSH home either")
+
+
+class PublicEntryDecodeBoundaryTests(unittest.TestCase):
+    """`main()` must never leak a stack, and a failed install leaves nothing.
+
+    Covers the two R0 findings the first submission missed:
+
+      * **F-2** — design §4.4.6 names three entry points
+        (`render_composition` / `verify_preset_loading` / **`main(["--install"])`**)
+        and the third had no coverage. Three read points were still able to
+        raise out of it (`package.json`, `preset.yml`, `skill-root.txt`).
+      * **F-4** — a decode failure *inside* the already-created staging
+        directory made `install_preset`'s cleanup branch unreachable, so
+        `governance.staging-<pid>-…` stayed behind forever.
+
+    Every case runs against a throwaway repository copy under `%TEMP%` (the
+    corruption has to be a real file for the launcher to read) and every
+    `DSH_HOME` is a fresh temporary directory. The real repository is copied
+    from, never modified.
+    """
+
+    COPIES = (
+        "adapters/dsh/launch.py",
+        "adapters/dsh/AGENTS.md.template",
+        "adapters/dsh/adapter-manifest.json",
+        "adapters/dsh/host-contract.json",
+        "agent-presets/governance/agent.cordis.yml.template",
+        "agent-presets/governance/preset.yml",
+        "package.json",
+        "skills/software-project-governance/infra/dsh_contract.py",
+    )
+
+    def _copy_repo(self, root: Path) -> Path:
+        for relative in self.COPIES:
+            target = root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(_REPO_ROOT / relative, target)
+        (root / "adapters" / "dsh" / "skill-shims").mkdir(parents=True, exist_ok=True)
+        (root / "skills").mkdir(exist_ok=True)
+        return root
+
+    def _launch_from(self, root: Path):
+        spec = importlib.util.spec_from_file_location(
+            "dsh_launch_entry_probe", root / "adapters" / "dsh" / "launch.py")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        return module
+
+    def _run_main(self, module, args, dsh_home):
+        """`main()` in-process, under a redirected DSH_HOME. Never raises."""
+        stream = io.StringIO()
+        with mock.patch.dict(os.environ, {"DSH_HOME": str(dsh_home)}, clear=False):
+            with contextlib.redirect_stdout(stream), \
+                    contextlib.redirect_stderr(stream):
+                code = module.main(args)
+        return code, stream.getvalue()
+
+    def test_non_utf8_package_json_is_refused_by_the_install_entry(self):
+        with _scratch("spg-test-f2-pkg-") as td:
+            root = self._copy_repo(Path(td) / "repo")
+            (root / "package.json").write_bytes(
+                b'{"version": "\xff bad"}')
+            module = self._launch_from(root)
+            code, output = self._run_main(module, ["--install"], Path(td) / "home")
+        self.assertEqual(code, 1, output)
+        self.assertIn("package identity unreadable", output)
+        self.assertIn("not valid UTF-8", output)
+        self.assertIn("byte offset 13", output)
+
+    def test_non_utf8_preset_metadata_is_refused_with_offset_and_no_residue(self):
+        with _scratch("spg-test-f2-meta-") as td:
+            root = self._copy_repo(Path(td) / "repo")
+            (root / "agent-presets" / "governance" / "preset.yml").write_bytes(
+                b"name: x\nbytes: \xff bad\n")
+            module = self._launch_from(root)
+            home = Path(td) / "home"
+            code, output = self._run_main(module, ["--install"], home)
+            preset_root = home / ".agent-presets"
+            residue = sorted(p.name for p in preset_root.glob("*.staging-*")) \
+                if preset_root.is_dir() else []
+        self.assertEqual(code, 1, output)
+        self.assertIn("not valid UTF-8", output)
+        self.assertIn("byte offset 15", output)
+        self.assertEqual(residue, [], "a failed install must leave no staging dir")
+
+    def test_failed_install_leaves_no_staging_directory_anywhere(self):
+        # F-4 directly: whatever the failure, nothing named
+        # `<preset>.staging-*` may survive under the target DSH home, and no
+        # partial `governance` preset may be published in its place.
+        with _scratch("spg-test-f4-") as td:
+            root = self._copy_repo(Path(td) / "repo")
+            (root / "agent-presets" / "governance" / "preset.yml").write_bytes(
+                b"\xff not utf-8 at all\n")
+            module = self._launch_from(root)
+            home = Path(td) / "home"
+            code, output = self._run_main(module, ["--install"], home)
+            leftovers = sorted(
+                p.name for p in (home / ".agent-presets").iterdir()) \
+                if (home / ".agent-presets").is_dir() else []
+        self.assertEqual(code, 1, output)
+        self.assertEqual(leftovers, [], leftovers)
+
+    def test_non_utf8_skill_root_marker_does_not_raise_the_verifier(self):
+        with _scratch("spg-test-f2-marker-") as td:
+            root = self._copy_repo(Path(td) / "repo")
+            module = self._launch_from(root)
+            preset = Path(td) / "preset"
+            preset.mkdir()
+            (preset / "agent.cordis.yml").write_text("- id: x\n", encoding="utf-8")
+            (preset / "skill-root.txt").write_bytes(b"\xff bad marker\n")
+            surface = module.verify_preset_loading(preset)
+        self.assertEqual(surface["verdict"], "FAIL", surface)
+        self.assertTrue(surface["issues"], surface)
+
+    def test_healthy_copy_still_installs_through_the_public_entry(self):
+        # The control: the boundary above must not block the normal path.
+        with _scratch("spg-test-f2-ok-") as td:
+            root = self._copy_repo(Path(td) / "repo")
+            module = self._launch_from(root)
+            home = Path(td) / "home"
+            code, output = self._run_main(module, ["--install"], home)
+            written = sorted(p.name for p in
+                             (home / ".agent-presets" / "governance").iterdir()) \
+                if (home / ".agent-presets" / "governance").is_dir() else []
+        self.assertEqual(code, 0, output)
+        self.assertEqual(written, [".dsh-bundle-version", "agent.cordis.yml",
+                                   "preset.yml", "skill-root.txt"])
+
+    # ── N-1: the guard must refuse when the profile is unresolvable ────────
+    _PROFILE_VARS = ("USERPROFILE", "HOME", "HOMEDRIVE", "HOMEPATH")
+
+    _DRIVER = (
+        "import contextlib, importlib.util, io, json, os, sys\n"
+        "from pathlib import Path\n"
+        "root = Path(sys.argv[1]); entry = sys.argv[2]; dsh_home = sys.argv[3]\n"
+        "spec = importlib.util.spec_from_file_location("
+        "'L', root / 'adapters' / 'dsh' / 'launch.py')\n"
+        "module = importlib.util.module_from_spec(spec); "
+        "sys.modules['L'] = module\n"
+        "spec.loader.exec_module(module)\n"
+        "os.environ['DSH_HOME'] = dsh_home\n"
+        "stream = io.StringIO()\n"
+        "raised = None\n"
+        "code = None\n"
+        "try:\n"
+        "    with contextlib.redirect_stdout(stream), "
+        "contextlib.redirect_stderr(stream):\n"
+        "        if entry == 'main':\n"
+        "            code = module.main(['--install'])\n"
+        "        elif entry == 'smoke':\n"
+        "            code = module.smoke_preset()\n"
+        "        else:\n"
+        "            code = getattr(module, entry)()\n"
+        "except BaseException as exc:\n"
+        "    raised = f'{type(exc).__name__}: {exc}'\n"
+        "print(json.dumps({'code': code, 'raised': raised, "
+        "'traceback': 'Traceback (most recent call last)' in stream.getvalue(), "
+        "'output': stream.getvalue()}))\n"
+    )
+
+    @staticmethod
+    def _profileless_env(dsh_home):
+        """Only what a process needs to start — no profile at all."""
+        env = {}
+        for key in ("PATH", "SystemRoot", "windir", "PATHEXT", "TEMP", "TMP",
+                    "COMSPEC", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE",
+                    "OS"):
+            if key in os.environ:
+                env[key] = os.environ[key]
+        env["DSH_HOME"] = str(dsh_home)
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        return env
+
+    def test_unresolvable_profile_is_refused_not_raised(self):
+        """N-1 reverse case: the guard's `Path.home()` must not escape.
+
+        With every profile variable absent, ``Path.home()`` raises
+        ``RuntimeError``. The guard needs it only to *compare* against, so an
+        unresolvable profile has to become a fail-closed refusal — not a
+        traceback out of a public entry point, which is what this test pins.
+        Removing the `try/except` in `write_side_refusal` turns this red.
+
+        Runs in a subprocess because the profile must be absent from the
+        environment the launcher sees; `DSH_HOME` is a fresh %TEMP% directory
+        and nothing may be written into it.
+        """
+        # The premise: this environment really does raise (otherwise the case
+        # would be vacuous and would silently stop testing anything).
+        saved = {name: os.environ.pop(name, None) for name in self._PROFILE_VARS}
+        try:
+            raised = False
+            try:
+                Path.home()
+            except RuntimeError:
+                raised = True
+        finally:
+            for name, value in saved.items():
+                if value is not None:
+                    os.environ[name] = value
+        if not raised:
+            self.skipTest(
+                "Path.home() resolves even with every profile variable "
+                "cleared — the unresolvable-profile case is NOT_RUN here")
+
+        with _scratch("spg-test-n1-") as td:
+            root = self._copy_repo(Path(td) / "repo")
+            for entry in ("install_preset", "uninstall_preset", "main"):
+                with self.subTest(entry=entry):
+                    home = Path(td) / f"home-{entry}"
+                    home.mkdir()
+                    before = sorted(p.name for p in home.rglob("*"))
+                    proc = subprocess.run(
+                        [sys.executable, "-c", self._DRIVER, str(root), entry,
+                         str(home)],
+                        cwd=str(root), env=self._profileless_env(home),
+                        capture_output=True, text=True, encoding="utf-8",
+                        errors="replace", timeout=300)
+                    payload = json.loads(proc.stdout.strip().splitlines()[-1])
+                    after = sorted(p.name for p in home.rglob("*"))
+                    self.assertIsNone(payload["raised"],
+                                      f"{entry} raised: {payload['raised']}")
+                    self.assertFalse(payload["traceback"], payload["output"])
+                    self.assertEqual(payload["code"], 2, payload["output"])
+                    self.assertIn("cannot be resolved", payload["output"])
+                    self.assertIn("DSH_HOME is set", payload["output"])
+                    self.assertEqual(before, after,
+                                     f"{entry} wrote into DSH_HOME")
+
+    def test_smoke_refuses_when_the_real_home_cannot_be_fingerprinted(self):
+        # N-1's smoke half: `smoke_preset()` fingerprints the real home, so an
+        # unresolvable profile must be a REFUSED exit, not a `RuntimeError`
+        # escaping a public entry point.
+        saved = {name: os.environ.pop(name, None) for name in self._PROFILE_VARS}
+        try:
+            raised = False
+            try:
+                Path.home()
+            except RuntimeError:
+                raised = True
+        finally:
+            for name, value in saved.items():
+                if value is not None:
+                    os.environ[name] = value
+        if not raised:
+            self.skipTest("Path.home() resolves here — NOT_RUN")
+
+        with _scratch("spg-test-n1-smoke-") as td:
+            root = self._copy_repo(Path(td) / "repo")
+            home = Path(td) / "home"
+            home.mkdir()
+            before = sorted(p.name for p in home.rglob("*"))
+            proc = subprocess.run(
+                [sys.executable, "-c", self._DRIVER, str(root), "smoke",
+                 str(home)],
+                cwd=str(root), env=self._profileless_env(home),
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=300)
+            payload = json.loads(proc.stdout.strip().splitlines()[-1])
+            after = sorted(p.name for p in home.rglob("*"))
+        self.assertIsNone(payload["raised"], payload["raised"])
+        self.assertFalse(payload["traceback"], payload["output"])
+        self.assertEqual(payload["code"], 2, payload["output"])
+        self.assertIn("REFUSED", payload["output"])
+        self.assertEqual(before, after)
+
+
+class StagingCleanupTests(unittest.TestCase):
+    """N-2: the cleanup fuse for a failure *after* the staging dir exists.
+
+    F-4 moved the metadata decode ahead of `mkdir`, which is why the ordinary
+    corrupt-file cases cannot reach the fuse any more. That made the fuse
+    untested — and an untested fuse is exactly the silent-removal hazard the
+    reviewer flagged. This class induces a failure *inside* the write loop
+    instead, so the `rmtree(staging)` branch is the only thing that can keep
+    the DSH home clean.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "dsh_launch_staging", _REPO_ROOT / "adapters" / "dsh" / "launch.py")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        cls.launch = module
+
+    def test_write_failure_leaves_no_staging_directory(self):
+        # Fail *inside* the write loop, which is strictly after `staging` was
+        # created — the only way to reach the cleanup fuse now that the
+        # metadata decode happens before `mkdir` (F-4). `pathlib.Path.write_bytes`
+        # is patched on the ABC so every concrete path object is affected;
+        # `write_rendered_preset`'s own `except OSError` returns False, and
+        # `install_preset` must clear the residue (N-2).
+        state = {"fired": False}
+        original_write_bytes = Path.write_bytes
+
+        def failing_write_bytes(self, data):
+            if not state["fired"] and b"phase-boom" in data:
+                state["fired"] = True
+                raise OSError(28, "No space left on device (induced)")
+            return original_write_bytes(self, data)
+
+        original_version = self.launch.package_version
+        self.launch.package_version = lambda: "phase-boom"
+        try:
+            with _scratch("spg-test-n2-") as td, \
+                    mock.patch.object(Path, "write_bytes", failing_write_bytes):
+                isolated = Path(td) / "dsh-home"
+                stream = io.StringIO()
+                with contextlib.redirect_stdout(stream), \
+                        contextlib.redirect_stderr(stream), \
+                        mock.patch.dict(os.environ, {"DSH_HOME": str(isolated)},
+                                        clear=False):
+                    code = self.launch.install_preset()
+                output = stream.getvalue()
+                preset_root = isolated / ".agent-presets"
+                leftovers = sorted(p.name for p in preset_root.rglob("*")) \
+                    if preset_root.is_dir() else []
+        finally:
+            self.launch.package_version = original_version
+
+        self.assertTrue(state["fired"], "the induced failure never fired")
+        self.assertEqual(code, 1, output)
+        self.assertEqual(leftovers, [],
+                         f"a failed install left the DSH home dirty: {leftovers}")
+
+    def test_caller_fuse_removes_a_staging_tree_the_writer_left_behind(self):
+        # N-2's real subject: `install_preset`'s own `finally`-style removal.
+        # The test above is satisfied by the writer's internal cleanup, so it
+        # cannot pin the caller's fuse. Here the writer aborts by *raising*
+        # after creating the directory — exactly the shape `install_preset`
+        # documents it must survive (`governance.staging-<pid>-…` must not
+        # survive a failed install). Removing either of the caller's two
+        # `rmtree(staging, ...)` lines turns this red.
+        original = self.launch.write_rendered_preset
+
+        def aborting_writer(destination, version=None):
+            Path(destination).mkdir(parents=True, exist_ok=True)
+            (Path(destination) / "partial.tmp").write_text(
+                "partial\n", encoding="utf-8")
+            raise OSError(28, "No space left on device (induced)")
+
+        with _scratch("spg-test-n2b-") as td:
+            isolated = Path(td) / "dsh-home"
+            stream = io.StringIO()
+            self.launch.write_rendered_preset = aborting_writer
+            try:
+                with contextlib.redirect_stdout(stream), \
+                        contextlib.redirect_stderr(stream), \
+                        mock.patch.dict(os.environ, {"DSH_HOME": str(isolated)},
+                                        clear=False):
+                    code = self.launch.install_preset()
+            finally:
+                self.launch.write_rendered_preset = original
+            output = stream.getvalue()
+            preset_root = isolated / ".agent-presets"
+            leftovers = sorted(p.name for p in preset_root.rglob("*")) \
+                if preset_root.is_dir() else []
+
+        self.assertEqual(code, 1, output)
+        self.assertEqual(leftovers, [],
+                         f"the caller's fuse did not clear the staging tree: "
+                         f"{leftovers}")
 
 
 if __name__ == "__main__":

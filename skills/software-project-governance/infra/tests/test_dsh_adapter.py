@@ -980,7 +980,14 @@ class DshAdapterTests(unittest.TestCase):
         # The witness must be a DETERMINISTIC oracle under a live host: host
         # activity inside its own subtrees (measured 2026-09-09:
         # dsh-agent-router/stats/*) may not flip it, while any change to the
-        # adapter's write surface or to the home's top level must.
+        # adapter's own write surface must.
+        #
+        # D-54 (design §3.3 row 11) rewrote the top-level half of this contract:
+        # the witness compares top-level NAMES only — a host rewrite of
+        # `settings.yaml` moves size and mtime but is not evidence that this
+        # adapter wrote anything. Cases 3/4 below are the C-23 expected rewrite
+        # of this test's pre-D-54 assertions ("top-level size/mtime change IS
+        # detected"), which asserted exactly the behaviour D-54 removes.
         launch = _load_launch_module()
 
         def fresh_home(td, name):
@@ -1010,17 +1017,74 @@ class DshAdapterTests(unittest.TestCase):
             )
             self.assertNotEqual(baseline, launch._real_home_witness(home))
 
-            # 3. top-level file modification is detected
+            # 2b. …and the verdict function agrees, with no resampling grace
+            self.assertEqual(
+                launch.witness_verdict((baseline, launch._real_home_witness(home))
+                                       )["verdict"],
+                "FAIL",
+            )
+
+            # 3. D-54: top-level file MODIFICATION is NOT a failure. The host
+            # rewrites settings.yaml on its own schedule; size/mtime are no
+            # longer witness inputs at all, so the samples stay identical.
             home = fresh_home(td, "top-level-file")
             baseline = launch._real_home_witness(home)
-            (home / "settings.yaml").write_text("a: 22\n", encoding="utf-8")
-            self.assertNotEqual(baseline, launch._real_home_witness(home))
+            settings = home / "settings.yaml"
+            stamp = settings.stat().st_mtime_ns
+            settings.write_text("a: 22\n" + "y" * 4096, encoding="utf-8")
+            os.utime(settings, ns=(stamp + 10 ** 9, stamp + 10 ** 9))
+            after = launch._real_home_witness(home)
+            self.assertEqual(
+                baseline, after,
+                "top-level size/mtime must not be witness inputs any more",
+            )
+            self.assertEqual(launch.witness_verdict((baseline, after))["verdict"],
+                             "PASS")
 
-            # 4. new top-level entry is detected
+            # 4. D-54: a NEW top-level entry is still noticed, but a single
+            # appearance is a host race → advisory; only a reproduced change
+            # (present again on the immediate resample) fails the gate.
             home = fresh_home(td, "top-level-entry")
             baseline = launch._real_home_witness(home)
+            transient = home / ".credentials.yaml"
+            transient.write_text("x: y\n", encoding="utf-8")
+            first = launch._real_home_witness(home)
+            self.assertNotEqual(baseline, first)
+            race = launch.witness_verdict((baseline, first), resample=lambda: (
+                transient.unlink(), launch._real_home_witness(home))[1])
+            self.assertEqual(race["verdict"], "PASS", race)
+            self.assertTrue(race["advisories"], race)
+
+            home = fresh_home(td, "top-level-entry-settled")
+            baseline = launch._real_home_witness(home)
             (home / ".credentials.yaml").write_text("x: y\n", encoding="utf-8")
-            self.assertNotEqual(baseline, launch._real_home_witness(home))
+            first = launch._real_home_witness(home)
+            settled = launch.witness_verdict(
+                (baseline, first),
+                resample=lambda: launch._real_home_witness(home),
+            )
+            self.assertEqual(settled["verdict"], "FAIL", settled)
+
+    def test_fx_witness_01_fixture_reproduces_the_d54_judgments(self):
+        # D-54 acceptance ⑤: the fixture registered for this judgment must be
+        # machine-checkable. It is emitted here and executed against this
+        # launcher, so the four judgments are verified by running them rather
+        # than by asserting that a file exists.
+        if str(_INFRA_DIR) not in sys.path:
+            sys.path.insert(0, str(_INFRA_DIR))
+        sys.path.insert(0, str(_INFRA_DIR / "tests"))
+        import dsh_fixtures
+
+        with tempfile.TemporaryDirectory() as td:
+            path = dsh_fixtures.emit_fixture("FX-WITNESS-01", Path(td))
+            proc = subprocess.run(
+                [sys.executable, str(path), str(_LAUNCH_PATH)],
+                cwd=str(_REPO_ROOT), capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=300,
+            )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        report = json.loads(proc.stdout)
+        self.assertEqual(report["verdict"], "PASS", report)
 
     def test_smoke_fails_when_real_home_witness_changes(self):
         # Defence in depth: if any code path mutated the real home, the

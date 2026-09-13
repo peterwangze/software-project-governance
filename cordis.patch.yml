@@ -27,10 +27,17 @@
 #     (`agent-presets/governance/agent.cordis.yml.template` + `preset.yml`)
 #     into `$DSH_HOME/.agent-presets/governance/` (see the module header).
 #
-# Patch semantics (installed dsh 0.1.5-rc.2, `dsh-app-boot/lib/index.js`
-# `applyEntryPatches`): `insert` with no `id` appends to the root entry list;
-# an `- id:`-targeted entry REPLACES the targeted row's whole `config`. This
-# layer uses only the first form, so no pre-existing row is reachable from it.
+# Patch semantics (upstream `dsh-app-boot/lib/index.js` `applyEntryPatches`):
+# `insert` with no `id` appends to the root entry list; an `- id:`-targeted
+# entry REPLACES the targeted row's whole `config`. This layer uses only the
+# first form, so no pre-existing row is reachable from it.
+#
+# The dsh build this semantic was read from is NOT named here: a version
+# literal in a comment cannot be kept true (it silently goes stale on every
+# upstream release — this line previously named a release-candidate that the
+# installed tree had already moved past). The verified host version of record
+# lives in `adapters/dsh/host-contract.json` -> `evidence.dsh_cli_version`,
+# which the contract's boundary check enforces against the live plane.
 #
 # Why an insert at all, and not `launch.py` alone: the insert is how `dsh
 # plugin add` + restart registers the preset with zero user action, while

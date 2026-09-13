@@ -23,7 +23,7 @@
 | **风险挂载** | **RISK-050**（dsh 上游内部面耦合；截止 2026-10-31）。本版把**依赖面枚举 + 契约化 + 零校验门禁 + 单点诊断 + 升级演练**前移，**不声明关闭** | 0.81.0 |
 | **如实披露的既有失败** | `check-loop-runtime-claims` 语义面 **BLOCKED**（3 条 `UNSUPPORTED_AFFIRMATIVE` 全在**既有** `docs/reviews/review-FIX-300-CODE-R0.md`，0.66.1 期引入）→ **FIX-320**（本版处置 = 如实披露） | 0.81.0 披露 |
 
-## Change Inventory（19 commits — `git log --oneline d87ead8..HEAD`，2026-09-13 核定）⟦待 V8/FIX-313 落地后追加⟧
+## Change Inventory（**31 commits** — `git log --oneline d87ead8..3074120`，2026-09-13 M-1 冻结核定；**全部切片 V1~V8 + V10 已落地**）
 
 | # | 任务 | commit | 终态要点（审查终态 + EVD） |
 |---|---|---|---|
@@ -73,6 +73,19 @@
 | 12 | 契约 SHA | `96F92485…43FC6E`（或按 V8 决定后的新值 + 说明） | ⟦待回填⟧ |
 | 13 | `check-release` / `release-ledger` | 发布记录一致 | ⟦待回填⟧ |
 | 14 | 回滚方案 | 已交付且可执行 | **已交付**（`rollback-plan-0.81.0.md`；`⟦待 V8 回填`区间`⟧`） |
+| 20 | FEAT-030 | `1ddb503` | V2 消费方改读契约（行为保持）——lib/index.js 8+3 绑定 + launch.py 12 绑定 + dsh_compat.py 11 绑定（PROBE_SCRIPT 包名/符号抽为 host.apis 占位符）+ K-2 静态扫描（8 消费者/allowlist 0-0）+ per- |
+| 21 | REL-077 | `9e80c6a` | 0.81.0 发布检查清单（M-1 草稿）——Release Scope（AUDIT-153/FEAT-028/V1~V10/FIX-313·319·321 + RISK-050 挂载 + FIX-320 如实披露）+ Change Inventory（按 git log 实测 19 commits |
+| 22 | REL-077 | `2bc2889` | CHANGELOG 新增 0.81.0 条目（M-1 草稿）——按用户诉求四条硬要求组织叙事 + 三步（事实清点→契约架构→五切片落地）+ 并行收口 FIX-319/321 + 两项行为变更 B-1/B-2 + FIX-320 既有失败如实披露 + RISK-050 不声明关闭 + 真机项未回贴前不 |
+| 23 | REL-077 | `a5e7622` | 发布检查清单补 M-2 执行序（门禁顺序 + check-release 实测需后台作业 + 两次 --regen 的证据与越权停止纪律 + 真机项禁声明纪律 + M-1 冻结前必须消除全部回填占位） |
+| 24 | FIX-313 | `61b571c` | V10 catch 清理的所有权判据重写——非递归 mkdirSync + EEXIST 换名重试（不删）+ 仅创建成功才置 stagingCreated + 只删已证明属己的精确路径 + 无证明则不删并告警 + 8 次熔断；消除按名前缀误删同名用户目录与 CWD 同名目录两类破坏（EVD-1028 |
+| 25 | REL-077 | `5ea1850` | 发布检查清单补「验收① 证据形态披露（Honesty Note）」——FIX-313/V10 验收①由独立审查的故障注入复现成立（非机器守卫），机器守卫登记 FIX-325；硬约束：清单/CHANGELOG 均不得声称验收①有测试守卫；同批登记实际改动面 +66/-13（F7）与孤儿 staging |
+| 26 | REL-077 | `7c2d717` | 发布检查清单回填 M-2 预检——Coordinator 独立实测 archguard-ratchet 全绿（R1 24405<=anchor、R5 cli 84/84 + segments 71/71 含 Check 28w、R7 regen deterministic 且 committed== |
+| 27 | REL-077 | `146a93a` | 发布检查清单回填 M-2 预检——Coordinator 独立实测 Check 28w 全绿（Result PASS / 0 failing criterion；K-1~K-13 逐条结论；K-6 机检 DEC-187 I-1/I-2/I-3；K-9 72 条必要依赖全覆盖；K-11 allowli |
+| 28 | REL-077 | `9500d7b` | 发布检查清单补 dsh-doctor 预检（Coordinator 独立实测）——CLI 接口与设计 §5 一致（S0~S7 + 四开关 + --rehearse/--against/--allow-host-probe）；--offline --selftest 结果 PASS/exit 0，且  |
+| 29 | REL-077 | `e6087de` | 发布检查清单回填 M-2 测试基线预检——Coordinator 独立实测 test_registry 77 OK / test_dsh_compat 120 OK / test_dsh_contract 120 OK / test_dsh_adapter 50 OK，证明 V8 的 registr |
+| 30 | REL-077 | `210b200` | 发布检查清单回填 M-2 测试基线（含 V8 两个新套件）——test_dsh_boundary 115 OK、test_dsh_doctor 70 OK（均在 DSH_HOME=%TEMP% 隔离下由 Coordinator 实跑），连同 registry 77 / compat 120 / co |
+| 31 | REL-077 | `6fa8940` | F-03 发布条件落地——设计 §5.1/§5.5 的「唯一契约证据写入路径」口径收窄为「证据采集 = 单点」+ 新增 evidence.* 写入面约束段（契约 evidence.* 由维护者在受审提交中更新；未记录时 K-7/S3 一律 NOT_RUN 绝不默认 PASS）；依据 REVIEW-F |
+| 32 | FEAT-031 | `3074120` | V8 契约边界门禁（Check 28w K-1~K-13）+ dsh-doctor 单点诊断（S0~S7 / 四开关 / 退出码 0-1-2 / 阶段级崩溃隔离）+ 升级演练与 host-facts baseline + registry 接线；EVD-1032；REVIEW-FEAT-031-CO |
 
 ## 真机验收（用户手动三项 —— DEC-190 ⑧）
 

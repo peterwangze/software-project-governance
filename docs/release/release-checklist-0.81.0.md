@@ -64,8 +64,8 @@
 | 3 | `check-injection-contract --fail-on-issues` | PASS | ⟦待回填⟧（bump 前预检 **PASSED**） |
 | 4 | `check-manifest-consistency --fail-on-issues` | PASS | ⟦待回填⟧ |
 | 5 | `cleanup.py --dry-run` | 零删除 | ⟦待回填⟧ |
-| 6 | `archguard-ratchet`（**两次 `--regen` 后**） | 无新增 ERROR | ⟦待回填⟧ |
-| 7 | **Check 28w** `check-dsh-boundary`（V8 交付） | PASS / 或如实披露豁免 | ⟦待回填⟧ |
+| 6 | `archguard-ratchet`（**两次 `--regen` 后**） | 无新增 ERROR | **预检 PASSED（Coordinator 独立实测 2026-09-13，V8 在制品状态下）**：`R1 PASS mainfile loc 24405 ≤ anchor 24405（only-down）`、`R2 PASS reverse-dep 47 ≤ 47`、`R3 PASS matrix 12 edges`、`R4 PASS print 1299 ≤ 1299`、**`R5 PASS cli keys 84/84 frozen, segments 71/71 frozen`**（含 Check 28w 段）、`R6 INFO cold import 196（Δ0，advisory）`、**`R7 PASS regen deterministic=True; committed==fresh True`**（即两次 `--regen` **幂等**）；`Result: PASS (0 violations; raw findings before exemptions: 0) — fatal gate green`。⟦M-2 需在全部切片落地后重跑⟧ |
+| 7 | **Check 28w** `check-dsh-boundary`（V8 交付） | PASS / 或如实披露豁免 | **部分预检**：`archguard-ratchet` 的 `R5` 已确认 **Check 28w 段已注册并被冻结**（`segments 71/71 frozen`）；28w 自身的判据面 PASS/FAIL ⟦M-2 回填⟧ |
 | 8 | `check-dsh-preset-smoke`（28u） | exit 0 + `real-home writes: 0` | ⟦待回填⟧ |
 | 9 | `check-dsh-preset-compat`（28v） | `23 / 18 / 5` + exit 0 + `writes: 0` | ⟦待回填⟧ |
 | 10 | 全量测试基线 | 无新增失败（**既有失败基线如实披露**） | ⟦待回填⟧ |

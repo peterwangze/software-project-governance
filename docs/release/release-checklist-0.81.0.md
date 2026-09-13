@@ -68,7 +68,7 @@
 | 7 | **Check 28w** `check-dsh-boundary`（V8 交付） | PASS / 或如实披露豁免 | **预检 PASSED（Coordinator 独立实测 2026-09-13，V8 在制品状态下）**：`Result: PASS — 0 failing criterion(a)`；逐条：**K-1** PASS（schema_version 1 / 29 host rows / 26 coverage claims / 100 dispositions）· **K-2** PASS（契约外字面量 **0**，扫 8 个声明消费方）· **K-3** PASS（模板行 == 契约 `host.rows[]` = 29）· **K-4** PASS（token 集相等 + 渲染后无 `__…__` 残留）· **K-5** PASS（hook 路径表达式 + 三 hook 读声明 marker）· **K-6** PASS（**exactly-one-insert / no-id-update / no-trust / no-!!js** —— 即 DEC-187 I-1/I-2/I-3 的机检锚）· **K-7 `NOT_RUN`（按设计的三态：`verified_on = null` ⇒ 提示在真实平面跑 `dsh-doctor --record-evidence`）** · **K-8** PASS（26 claims 中 14 strong 各带反相 fixture；守卫引用全部可解析 = 54 测试文件 / 71 段 / 84 命令键）· **K-9** PASS（100 dispositions 恰好覆盖审计基线一次；**72 条必要依赖全部被 claim 覆盖**）· **K-10** PASS（契约入 manifest + 1 个 host-facts fixture + cleanup scope == `PLUGIN_SCOPE_DIRS`）· **K-11** PASS（**allowlist 0/0**，棘轮只降，上界锚在契约外）· **K-12** PASS（**`coverage` 单一生成点且携带 `unreadable_compositions`** —— F-R1-06 义务已兑现；doctor 命令键已注册）· **K-13** PASS（host-facts baseline 成形且在 180 天 TTL 内）。⟦M-2 需在全部切片落地后重跑⟧ |
 | 8 | `check-dsh-preset-smoke`（28u） | exit 0 + `real-home writes: 0` | ⟦待回填⟧ |
 | 9 | `check-dsh-preset-compat`（28v） | `23 / 18 / 5` + exit 0 + `writes: 0` | ⟦待回填⟧ |
-| 10 | 全量测试基线 | 无新增失败（**既有失败基线如实披露**） | ⟦待回填⟧ |
+| 10 | 全量测试基线 | 无新增失败（**既有失败基线如实披露**） | **部分预检（Coordinator 独立实测 2026-09-13，V8 在制品状态下）**：`test_registry` **Ran 77 OK**（含 V8 的计数更新）/ `test_dsh_compat` **120 OK** / `test_dsh_contract` **120 OK** / `test_dsh_adapter` **50 OK** —— 即 **V8 的 registry 接线与 V10 的改动均未造成回归**。⟦M-2 需跑全量（含新 2 个套件）并逐条披露既有失败⟧ |
 | 11 | 三路径渲染 sha256 | `00e0d330…3723` 不变 | ⟦待回填⟧ |
 | 12 | 契约 SHA | `96F92485…43FC6E`（或按 V8 决定后的新值 + 说明） | ⟦待回填⟧ |
 | 13 | `check-release` / `release-ledger` | 发布记录一致 | ⟦待回填⟧ |

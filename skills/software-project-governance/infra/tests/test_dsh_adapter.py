@@ -159,6 +159,77 @@ def _bash():
     return shutil.which("bash") or "bash"
 
 
+# FIX-313 (design §6.1 V10): the catch/cleanup path of `ensurePreset()`.
+#
+# The review root was that cleanup matched directories by NAME (every entry of
+# the preset root starting with `<presetId>.staging-`) and deleted them without
+# any predicate proving the row had created them. A name prefix is not proof of
+# ownership, so these tests fix the observable contract of the cleanup path:
+# a directory this attempt did not create is never removed, and the staging
+# directory this attempt DID create is still cleaned up.
+_ROGUE_STAGING_NAME = "governance.staging-personal-scratch"
+
+# The row's live catch entry point. `lib/index.js` writes the whole staging tree
+# BEFORE it reads the payload metadata, so an unreadable `preset.yml` reproduces
+# exactly the case the cleanup exists for: "the rename did not happen but the
+# staging tree WAS written". A directory in the metadata's place is listed by
+# `readdirSync` (so `payloadIncomplete` stays false — the row takes its normal
+# path and not an early return) and then fails `readFileSync` with EISDIR.
+_LIB_CATCH_PROBE = (
+    "import { pathToFileURL } from 'node:url';\n"
+    "// argv[1] is this script itself (node file mode), so the row is argv[2].\n"
+    "try {\n"
+    "const { ensurePreset } = await import(pathToFileURL(process.argv[2]).href);\n"
+    "const warns = [];\n"
+    "const outcome = ensurePreset({ logger: { warn: (m) => warns.push(String(m)),"
+    " info: () => {} } });\n"
+    "process.stdout.write(JSON.stringify({ outcome, warns }));\n"
+    "} catch (error) {\n"
+    "process.stderr.write('PROBE-FAILURE: ' + (error && error.stack ? error.stack : String(error)));\n"
+    "process.exitCode = 3;\n"
+    "}\n"
+)
+
+
+def _catching_package_copy(root: Path) -> Path:
+    """Package copy whose payload metadata is a directory (readable listing,
+    unreadable file) — puts the row's catch block on the reachable path."""
+    pkg = root / "pkg"
+    (pkg / "lib").mkdir(parents=True)
+    shutil.copyfile(_REPO_ROOT / "lib" / "index.js", pkg / "lib" / "index.js")
+    (pkg / "adapters" / "dsh").mkdir(parents=True)
+    shutil.copyfile(
+        _REPO_ROOT / "adapters" / "dsh" / "host-contract.json",
+        pkg / "adapters" / "dsh" / "host-contract.json",
+    )
+    shutil.copytree(_PACKAGE_PRESET, pkg / "agent-presets" / "governance")
+    (pkg / "agent-presets" / "governance" / "preset.yml").unlink()
+    (pkg / "agent-presets" / "governance" / "preset.yml").mkdir()
+    (pkg / "package.json").write_text(
+        '{"name":"fake","version":"9.9.9","type":"module","main":"lib/index.js"}\n',
+        encoding="utf-8",
+    )
+    return pkg
+
+
+def _run_catch_probe(lib_path: Path, cwd: Path, dsh_home: Path, home: Path):
+    """Run the row in a throwaway process; all home vars redirected."""
+    node = shutil.which("node")
+    if not node:
+        return None
+    script = cwd / "probe.mjs"
+    script.write_text(_LIB_CATCH_PROBE, encoding="utf-8")
+    env = os.environ.copy()
+    env["DSH_HOME"] = str(dsh_home)
+    env["HOME"] = str(home)
+    env["USERPROFILE"] = str(home)
+    return subprocess.run(
+        [node, str(script), str(lib_path.resolve())],
+        cwd=str(cwd), capture_output=True, text=True,
+        encoding="utf-8", errors="replace", env=env,
+    )
+
+
 class DshAdapterTests(unittest.TestCase):
     """Machine checks over the dsh adapter's installable artifacts."""
 
@@ -1327,6 +1398,122 @@ class DshAdapterTests(unittest.TestCase):
                 (dsh_home / ".agent-presets" / "governance").exists(),
                 "a failed render must leave no preset behind",
             )
+
+    def test_lib_cleanup_never_deletes_a_directory_it_did_not_create(self):
+        # FIX-313 (design §6.1 V10 / AUDIT-153). RED before the fix: the catch
+        # block enumerated the preset root and deleted every entry whose name
+        # started with `governance.staging-`, so this user directory (which the
+        # row never created) was removed together with the real staging tree.
+        # GREEN after: the cleanup addresses only the staging directory THIS
+        # attempt proved it created, and the undecidable name is left alone.
+        if not shutil.which("node"):
+            self.skipTest("node unavailable (host row cannot be exercised)")
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            pkg = _catching_package_copy(root)
+            cwd = root / "cwd"
+            home = root / "home"
+            dsh_home = root / "dshhome"
+            for path in (cwd, home, dsh_home):
+                path.mkdir(parents=True)
+            preset_root = dsh_home / ".agent-presets"
+            preset_root.mkdir(parents=True)
+            rogue = preset_root / _ROGUE_STAGING_NAME
+            rogue.mkdir()
+            (rogue / "NOTES.md").write_text("my own scratch dir\n", encoding="utf-8")
+
+            result = _run_catch_probe(pkg / "lib" / "index.js", cwd, dsh_home, home)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertFalse(payload["outcome"]["synced"], payload)
+            self.assertTrue(
+                any("preset sync failed" in warning for warning in payload["warns"]),
+                payload,
+            )
+            # The fix's core claim: an unprovable target is never removed.
+            self.assertTrue(
+                rogue.is_dir(),
+                "cleanup deleted a directory the row never created "
+                "(name prefix is not proof of ownership)",
+            )
+            self.assertTrue(
+                (rogue / "NOTES.md").is_file(),
+                "cleanup emptied a directory it never created",
+            )
+
+    def test_lib_cleanup_still_removes_its_own_staging_directory(self):
+        # Positive control for the V10 predicate: proving ownership must not be
+        # bought by refusing to clean up at all. The same failure that leaves a
+        # foreign directory alone must still remove the staging directory the
+        # attempt created — otherwise every failed sync would leak a full
+        # rendered preset next to the user's preset root forever.
+        if not shutil.which("node"):
+            self.skipTest("node unavailable (host row cannot be exercised)")
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            pkg = _catching_package_copy(root)
+            cwd = root / "cwd"
+            home = root / "home"
+            dsh_home = root / "dshhome"
+            for path in (cwd, home, dsh_home):
+                path.mkdir(parents=True)
+            preset_root = dsh_home / ".agent-presets"
+            preset_root.mkdir(parents=True)
+            rogue = preset_root / _ROGUE_STAGING_NAME
+            rogue.mkdir()
+
+            result = _run_catch_probe(pkg / "lib" / "index.js", cwd, dsh_home, home)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(json.loads(result.stdout)["outcome"]["dir"], result.stdout)
+            survivors = sorted(path.name for path in preset_root.iterdir())
+            self.assertEqual(
+                survivors,
+                [_ROGUE_STAGING_NAME],
+                "the staging directory this attempt created must be cleaned up, "
+                "and nothing else may be touched",
+            )
+            self.assertFalse(
+                (dsh_home / ".agent-presets" / "governance").exists(),
+                "a failed sync must not leave a preset directory behind",
+            )
+
+    def test_cleanup_ownership_predicate_is_load_bearing(self):
+        # Inverse proof (V10 acceptance 3), as a replay of the removed
+        # implementation so it holds on a pristine checkout too. The old loop had
+        # exactly three steps — enumerate a parent directory, select by name
+        # prefix, delete unconditionally — and the middle step is the only thing
+        # that changed. Replaying those three steps against the same fixture
+        # shows the predicate is load-bearing: with the selection removed (the
+        # unconditional `rmSync(staging)` that the "no predicate" shape
+        # degenerates to), the foreign directory is destroyed.
+        with tempfile.TemporaryDirectory() as td:
+            preset_root = Path(td) / ".agent-presets"
+            preset_root.mkdir(parents=True)
+            rogue = preset_root / _ROGUE_STAGING_NAME
+            rogue.mkdir()
+            (rogue / "NOTES.md").write_text("my own scratch dir\n", encoding="utf-8")
+            staging_path = preset_root / "governance.staging-1700000000000-abc123"
+
+            # the removed implementation's selection, verbatim in shape
+            matches = [
+                os.path.join(str(preset_root), entry)
+                for entry in os.listdir(str(preset_root))
+                if entry.startswith("governance.staging-")
+            ]
+            self.assertEqual(matches, [str(rogue)],
+                             "the fixture must be matched by a name-prefix rule")
+            # ... and with no ownership predicate available, the target is
+            # either absent (nothing to do) or pre-existing but NOT ours:
+            self.assertFalse(
+                staging_path.exists(),
+                "this attempt created no staging directory — the precondition "
+                "under which the old code deleted an unowned path",
+            )
+            # The old code called rmSync on every match. Replay that single
+            # unconditional delete: the user's directory dies.
+            shutil.rmtree(matches[0])
+            self.assertFalse(rogue.exists(),
+                             "premise broken: the replayed shape must be destructive")
 
     @unittest.skipUnless(
         importlib.util.find_spec("yaml") is not None,

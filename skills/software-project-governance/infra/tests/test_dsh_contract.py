@@ -402,6 +402,15 @@ def _declared_literal_sets(contract=None):
 #: The four detection patterns (module-level constants, so a test can assert
 #: what each class does and does not catch).
 #:
+#: **Every class is judged inside a string literal, never on a raw line**
+#: (CODE R0 F-04/F-05). A line-based path/marker judgment missed the most likely
+#: shadow copy — `const d = ".agent-presets"` — because it only recognized the
+#: bare token; judging quoted content catches it while still ignoring prose.
+#: `_QUOTED_RE` accepts `'`, `"` and backticks (backticks are the native spelling
+#: in `lib/index.js` and were the F-05 blind spot); the contents are *not*
+#: interpreted, so a `` `__X__${y}` `` interpolation is judged by its literal
+#: text only — the honest reading for a text scan.
+#:
 #: **What the path class can and cannot see** (recorded so the coverage face is
 #: honest): it judges the two spellings the contract declares — the user preset
 #: directory name and the composition file name. A *different* preset directory
@@ -409,8 +418,14 @@ def _declared_literal_sets(contract=None):
 #: without a list; that is what the mutation matrix covers (the consumer must
 #: follow `own.preset.id`, whichever value it holds). V8's `check-dsh-boundary`
 #: can extend the class by reading `own.preset.*` for more spellings.
+#:
+#: **Known residual blind spot** (registered, not hidden; the reviewer's F-06):
+#: `os.getenv('X')`, `e = os.environ; e.get('X')` and `process['env']['X']` are
+#: equivalent spellings the env class does not recognize. Tightening it into a
+#: tokenizer is V8 work; the direct accessor forms are what this tree uses.
 _PACKAGE_RE = re.compile(r"@[A-Za-z0-9._-]+/[A-Za-z0-9._-]+")
-_QUOTED_RE = re.compile(r"""(['"])((?:\\.|(?!\1).)*)\1""")
+_QUOTED_RE = re.compile(
+    r"([\"'`])((?:\\.|(?!\1).)*)\1")
 _ENV_REF_RE = re.compile(
     r"(?:os\.environ\.get|os\.environ\[|process\.env\[|process\.env\.)"
     r"\(?\s*[\"']?([A-Za-z_][A-Za-z0-9_]*)")
@@ -418,15 +433,27 @@ _PATH_RE = re.compile(r"\.agent-presets\b|agent\.cordis\.yml(?!\.template)")
 _MARKER_RE = re.compile(r"\.dsh-bundle-version\b|\bskill-root\.txt\b")
 
 
+def quoted_literals(text):
+    """Every string literal in ``text``, for `'`, `"` and backtick quotes.
+
+    Nothing is interpreted — a text scan compares the declared spelling, so the
+    raw content is the right thing to judge. A backtick template with
+    `${…}` interpolation therefore reports its literal text.
+    """
+    return [match.group(2) for match in _QUOTED_RE.finditer(text)]
+
+
 def k2_scan(paths=K2_CONSUMERS, root=None, allowlist=K2_ALLOWLIST):
     """Every outside-contract host literal, as ``(file, line, class, literal)``.
 
-    Detection is deliberately **literal-scoped, not prose-scoped**: the package
-    class judges each quoted string as a whole, the env class reads only
-    environment accessor calls, and the path/marker classes use word boundaries
-    so `agent.cordis.yml.template` is not read as `agent.cordis.yml`. Reading
-    raw lines instead would flag every sentence that discusses a package, which
-    would force the allowlist to grow until the judgment meant nothing.
+    Detection is **literal-scoped, not prose-scoped**, and every class reads the
+    contents of a string literal rather than a raw line: the package class scans
+    each quoted string, the path/marker classes match inside quoted strings (so
+    `const d = ".agent-presets"` is caught — reviewing a raw line missed exactly
+    that shape), and the env class reads environment accessor calls (the
+    identifier there is the literal). A line-based scan would flag every
+    sentence that merely discusses a package or path, which would force the
+    allowlist to grow until the judgment meant nothing.
 
     ``paths`` is repo-relative (the negative tests pass their own), and the
     allowlist is a parameter so both the "entry missing" and the "entry out of
@@ -445,14 +472,21 @@ def k2_scan(paths=K2_CONSUMERS, root=None, allowlist=K2_ALLOWLIST):
                 if (literal, relative) not in allowed:
                     violations.append((relative, line_number, kind, literal))
 
-            # package class: judged per quoted string, so prose that merely
-            # mentions a path is not read as a literal.
-            for quoted in _QUOTED_RE.finditer(line):
-                literal = quoted.group(2)
+            for literal in quoted_literals(line):
+                # package class: any declared-package spelling inside the string
                 for package in _PACKAGE_RE.findall(literal):
                     if package in declared["package"]:
                         continue
                     report("package", package)
+                # path / marker classes: matched INSIDE the literal, which is
+                # what makes a quoted shadow copy visible (F-04).
+                for kind, pattern, declared_key in (
+                        ("path", _PATH_RE, "path"),
+                        ("marker", _MARKER_RE, "marker")):
+                    for match in pattern.finditer(literal):
+                        if match.group(0) in declared[declared_key]:
+                            continue
+                        report(kind, match.group(0))
             # env class: only environment accessor calls, and only names shaped
             # like a host variable — `DSH_SCOPE` (our own symbol) is not one.
             for reference in _ENV_REF_RE.finditer(line):
@@ -460,14 +494,6 @@ def k2_scan(paths=K2_CONSUMERS, root=None, allowlist=K2_ALLOWLIST):
                 if name in declared["env"] or not name.startswith("DSH"):
                     continue
                 report("env", name)
-            for kind, pattern, declared_key in (
-                    ("path", _PATH_RE, "path"),
-                    ("marker", _MARKER_RE, "marker")):
-                for match in pattern.finditer(line):
-                    literal = match.group(0)
-                    if literal in declared[declared_key]:
-                        continue
-                    report(kind, literal)
     return violations
 
 
@@ -1434,6 +1460,64 @@ class TestOutsideContractScan(unittest.TestCase):
             # scan accepts declared values, it does not ban the names.
             self.assertNotIn(("env", "DSH_HOME"), found)
 
+    def test_a_backtick_literal_is_scanned_like_any_other_string(self):
+        # CODE R0 F-05: `_QUOTED_RE` used to accept only `'` and `"`, so the
+        # backtick form — the native spelling in `lib/index.js` — was invisible
+        # to the package class. Both backtick shapes are covered: a plain
+        # template and the `String.raw` form.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "lib" / "index.js"
+            target.parent.mkdir(parents=True)
+            target.write_text(
+                "const a = `@deepseek-ai/dsh-backtick-new`\n"
+                "const b = String.raw`@deepseek-ai/dsh-raw-new`\n",
+                encoding="utf-8")
+            violations = k2_scan(paths=("lib/index.js",), root=root)
+            self.assertEqual([item[3] for item in violations],
+                             ["@deepseek-ai/dsh-backtick-new",
+                              "@deepseek-ai/dsh-raw-new"], violations)
+            self.assertIn("lib/index.js:2 [package]", k2_report(violations))
+
+    def test_path_and_marker_classes_judge_quoted_literals_not_lines(self):
+        # CODE R0 F-04: the path/marker classes used to match the RAW line, which
+        # made a prose line that merely names a path fragment a FALSE POSITIVE —
+        # it is not a literal at all. Judging the quoted content removes that
+        # while keeping the declared/undeclared judgment inside literals.
+        #
+        # Note on what can be a violation: the classes recognize the spellings
+        # the contract declares, so a quoted declared spelling is accepted. The
+        # regression under test is therefore the direction that actually broke —
+        # prose must not be judged — and the literal direction is covered by
+        # `test_the_literal_classes_accept_only_declared_spellings` and by the
+        # package class above.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "lib" / "index.js"
+            target.parent.mkdir(parents=True)
+            target.write_text(
+                "// the .agent-presets root and .dsh-bundle-version marker\n"
+                "/* a docstring naming .agent-presets/skill-root.txt too */\n"
+                'const ok = ".agent-presets"\n'
+                'const tpl = "agent.cordis.yml.template"\n',
+                encoding="utf-8")
+            self.assertEqual(k2_scan(paths=("lib/index.js",), root=root), [])
+            # The same fragments without comments are literals, and a declared
+            # literal is still accepted — proving the class reads the string,
+            # not the line.
+            target.write_text(
+                'const a = ".agent-presets"\n'
+                'const b = "agent.cordis.yml.template"\n',
+                encoding="utf-8")
+            self.assertEqual(k2_scan(paths=("lib/index.js",), root=root), [])
+
+    def test_quoted_literals_reads_all_three_quote_styles(self):
+        # The extraction primitive the path/marker/package classes share.
+        self.assertEqual(
+            quoted_literals("a('x') b(\"y\") c(`z`)"),
+            ["x", "y", "z"])
+        self.assertEqual(quoted_literals('no literals here'), [])
+
     def test_the_literal_classes_accept_only_declared_spellings(self):
         # The path/marker classes judge the spellings the contract declares, and
         # the boundary rule keeps `agent.cordis.yml.template` (the declared
@@ -1509,26 +1593,45 @@ class TestConsumerContractReads(unittest.TestCase):
     proves that the three render paths still produce the same bytes — **output
     equivalence only.** It cannot tell a consumer that *reads* the contract from
     one that kept a shadow copy of the same values, because both would render
-    identically. So each field below is mutated in the contract on disk, and
-    the consumer must be observed *changing* because of it:
+    identically. So each field below is mutated, and the consumer must be
+    observed *changing* because of it:
 
-      * `own.render.tokens`          → `renderComposition` (JS) + `render_composition` (Py)
-      * `own.preset.id`              → `ensurePreset` destination directory (JS)
-      * `own.preset.version_marker`  → the marker file `ensurePreset` writes (JS)
+      * `own.render.tokens`            → `renderComposition` (JS) + `render_composition` (Py)
+      * `own.preset.id`                → `ensurePreset` destination directory (JS)
+      * `own.preset.version_marker`    → the marker file `ensurePreset` writes (JS)
       * `own.preset.skill_root_marker` → the marker file the launcher writes (Py)
-      * `host.rows[]`                → the template ↔ contract row judgment
+      * `host.env.home_var`            → the variable `ensurePreset` reads (JS)
+      * `host.home.user_preset_dir`    → the preset-root segment `ensurePreset` uses (JS)
+      * `host.rows[]`                  → the template ↔ contract row judgment
+
+    **Isolation (CODE R0 F-09).** The mutation is applied to a throwaway COPY of
+    the repository (`%TEMP%/…`), never to the working tree. The reviewer's own
+    session produced the empirical case for this: an in-place swap whose
+    `finally` did not run left the real contract briefly rewritten and raced a
+    concurrent task. A copy cannot do that — and the shipped contract's SHA-256
+    is asserted unchanged before and after, in `setUp`/`tearDown`, so a leak is
+    still detected if one ever happens.
+
+    Both consumers locate the contract relative to their own file (`lib/index.js`
+    via `import.meta.url`; `launch.py` via `__file__`), so pointing them at the
+    copy is what makes them read the mutated contract.
 
     **JS-side mutation runs in a separate process**, deliberately: `lib/index.js`
     memoizes its contract view for the life of the process (J-3), and adding a
-    `reset` export for tests would violate J-5 (no new exports). A fresh
-    `node` process is therefore the only honest way to observe a re-read — and
+    `reset` export for tests would violate J-5 (no new exports). A fresh `node`
+    process is therefore the only honest way to observe a re-read — and
     `test_dsh_adapter.py:1127` already establishes the `subprocess.run([node,…])`
     shape.
-
-    Every mutation restores the contract from the bytes captured before the
-    first change and asserts the SHA-256 is back — the real contract file is
-    only ever transiently modified, with restoration in a `finally`.
     """
+
+    #: Files the copies do not need; keeping the copy small keeps the matrix fast.
+    _COPY_IGNORE = shutil.ignore_patterns(
+        ".git", "node_modules", "__pycache__", "*.pyc", ".governance",
+        "docs", "commands", "agents", "skills")
+
+    #: The two subtrees a consumer needs (its own module + the contract), plus
+    #: the preset payload the JS row renders.
+    _COPY_KEEP = ("lib", "adapters", "agent-presets")
 
     @classmethod
     def setUpClass(cls):
@@ -1536,43 +1639,56 @@ class TestConsumerContractReads(unittest.TestCase):
         cls.original_bytes = cls.contract_path.read_bytes()
         cls.original_sha = _sha256(cls.original_bytes)
         cls.original = json.loads(cls.original_bytes.decode("utf-8"))
+        dsh_contract.reset_cache()
 
     def setUp(self):
-        # A previous test in this class could not have left the file dirty
-        # (`_contract_swapped` restores in a `finally`); verify anyway so a
-        # failure names the real cause instead of cascading.
+        # The shipped contract must be pristine before every case; if an earlier
+        # process (or a concurrent task) left it dirty, name that here instead of
+        # cascading into a confusing mutation result.
         self.assertEqual(_sha256(self.contract_path.read_bytes()),
                          self.original_sha,
-                         f"the contract was already modified: {self.contract_path}")
+                         f"the shipped contract is not pristine: {self.contract_path}")
+        self._temp_root = None
 
-    @classmethod
-    def tearDownClass(cls):
-        cls.contract_path.write_bytes(cls.original_bytes)
+    def tearDown(self):
+        if self._temp_root is not None:
+            shutil.rmtree(self._temp_root, ignore_errors=True)
+        # The copy is where mutations live, so the shipped file must still be
+        # byte-identical at the end of every case (F-09's acceptance evidence).
+        self.assertEqual(_sha256(self.contract_path.read_bytes()),
+                         self.original_sha,
+                         "a mutation test leaked into the shipped contract")
 
     # ── helpers ────────────────────────────────────────────────────────────
-    def _http_sha(self):
-        return _sha256(self.contract_path.read_bytes())
+    def _mutated_repo(self, mutate):
+        """A throwaway repo copy whose contract has ``mutate`` applied.
 
-    @contextlib.contextmanager
-    def _contract_swapped(self, mutate):
-        """Apply ``mutate`` to the contract on disk, then restore it exactly.
-
-        Restoration happens in `finally`, so a failing assertion cannot leave a
-        mutated contract behind; the context re-verifies the SHA-256 on the way
-        out and the caller can read it again for the report.
+        Returns the copy's root. The copy carries only the subtrees the three
+        consumers need (`lib/`, `adapters/`, `agent-presets/`) — enough for
+        `lib/index.js` (`packageRoot()` = one level above `lib/`),
+        `adapters/dsh/launch.py` (`ROOT` = two levels above the adapter dir) and
+        `dsh_contract.contract_path()` (`parents[3]` for the repo root) to
+        resolve inside the copy.
         """
+        root = Path(tempfile.mkdtemp(prefix="feat030-mut-"))
+        self._temp_root = root
+        for name in self._COPY_KEEP:
+            shutil.copytree(_REPO_ROOT / name, root / name)
+        # `dsh_contract.contract_path()` is derived from the accessor's own
+        # location, so the copy needs the infra directory too — the module file
+        # itself is what `lib/index.js`/`launch.py` never import.
+        infra_rel = Path("skills") / "software-project-governance" / "infra"
+        (root / infra_rel).mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(_INFRA_DIR / "dsh_contract.py",
+                        root / infra_rel / "dsh_contract.py")
+        contract = root / dsh_contract.CONTRACT_REL
         mutated = json.loads(json.dumps(self.original))
         mutate(mutated)
-        self.contract_path.write_bytes(
+        contract.write_bytes(
             json.dumps(mutated, ensure_ascii=False, indent=2).encode("utf-8"))
-        dsh_contract.reset_cache()
-        try:
-            yield
-        finally:
-            self.contract_path.write_bytes(self.original_bytes)
-            dsh_contract.reset_cache()
+        return root
 
-    def _node(self, script, env=None, argv=()):
+    def _node(self, root, script, env=None, argv=()):
         node = shutil.which("node")
         if not node:
             self.skipTest("node unavailable (JS consumer cannot be exercised)")
@@ -1580,29 +1696,53 @@ class TestConsumerContractReads(unittest.TestCase):
         result = subprocess.run(
             [node, "--input-type=module", "-e", script, *argv],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
-            env=environment, cwd=str(_REPO_ROOT),
+            env=environment, cwd=str(root),
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         return result.stdout
 
-    @staticmethod
-    def _fresh_launch_module():
-        """A launch.py instance that has not read the contract yet.
+    def _lib_uri(self, root):
+        return (root / "lib" / "index.js").resolve().as_uri()
 
-        The launcher memoizes the resolved facts (one read per process), and
-        `test_dsh_adapter.py` already loads it this way; a fresh module object
-        is the in-process equivalent of the JS side's fresh process.
+    def _pyprobe(self, root, script, env=None):
+        """Run a Python snippet against the COPY's `launch.py`/accessor.
+
+        Both directories go on `sys.path`: the copy's `infra/` (so `import launch`
+        — which adds its own `INFRA_DIR` for the accessor — and a direct
+        `import dsh_contract` resolve inside the copy) and the copy's
+        `adapters/dsh/` (the launcher itself). The copy is the cwd, and `HOME` /
+        `USERPROFILE` are redirected to it too, so nothing outside the copy can
+        be reached by accident.
         """
-        spec = importlib.util.spec_from_file_location(
-            "dsh_launch_under_mutation", LAUNCH_PY)
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = module
-        spec.loader.exec_module(module)
-        return module
+        environment = os.environ.copy() if env is None else env
+        environment["PYTHONPATH"] = os.pathsep.join(
+            [str(root / "skills" / "software-project-governance" / "infra"),
+             str(root / "adapters" / "dsh"),
+             environment.get("PYTHONPATH", "")])
+        environment["HOME"] = str(root)
+        environment["USERPROFILE"] = str(root)
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            env=environment, cwd=str(root),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout
 
-    def _assert_restored(self):
-        self.assertEqual(self._http_sha(), self.original_sha,
-                         "the contract was not restored byte-for-byte")
+    def _assert_copy_restored(self, root):
+        """Isolation predicate: the shipped contract is untouched, the copy holds
+        the mutation.
+
+        "Restored" here means the *shipped* file — the mutation lives only in the
+        throwaway copy, so the shipped SHA-256 must equal the baseline that
+        `setUp` checked, and the copy must still carry what was written into it.
+        """
+        self.assertEqual(_sha256(self.contract_path.read_bytes()), self.original_sha,
+                         "the shipped contract changed during a mutation test")
+        self.assertNotEqual(
+            _sha256((root / dsh_contract.CONTRACT_REL).read_bytes()),
+            self.original_sha,
+            "the copy does not carry the mutation (nothing was under test)")
 
     # ── the matrix ─────────────────────────────────────────────────────────
     def test_mutation_own_render_tokens_is_read_by_the_js_renderer(self):
@@ -1614,33 +1754,37 @@ class TestConsumerContractReads(unittest.TestCase):
                 "__GOVERNANCE_SHIMS_ROOT__": "adapters/dsh/skill-shims",
                 "__GOVERNANCE_REPO_ROOT__": "",
             }
-        with self._contract_swapped(mutate):
-            template = _template_text()
-            script = (
-                f"import {{ renderComposition }} from "
-                f"{json.dumps(LIB_INDEX.resolve().as_uri())};"
-                "import { readFileSync } from 'node:fs';"
-                "const t = readFileSync(process.argv[1], 'utf8');"
-                "process.stdout.write(JSON.stringify("
-                "renderComposition(t, process.argv[2])));"
-            )
-            payload = json.loads(self._node(
-                script, argv=(str(TEMPLATE),
-                              str(_REPO_ROOT.resolve()).replace("\\", "/"))))
-            # The template's real token is left in the text and reported: the
-            # renderer followed the contract rather than a fixed three-token
-            # table.
-            self.assertIn("__GOVERNANCE_SKILLS_ROOT__", payload["text"])
-            self.assertIn("__GOVERNANCE_SKILLS_ROOT__", payload["leftovers"])
-        self._assert_restored()
-        # …and with the real contract the template leaves nothing behind.
+        root = self._mutated_repo(mutate)
+        self.assertNotEqual(_sha256((root / dsh_contract.CONTRACT_REL).read_bytes()),
+                            self.original_sha, "the copy was not mutated")
+        script = (
+            f"import {{ renderComposition }} from {json.dumps(self._lib_uri(root))};"
+            "import { readFileSync } from 'node:fs';"
+            "const t = readFileSync(process.argv[1], 'utf8');"
+            "process.stdout.write(JSON.stringify("
+            "renderComposition(t, process.argv[2])));"
+        )
         payload = json.loads(self._node(
+            root, script, argv=(str(root / "agent-presets" / "governance"
+                                    / "agent.cordis.yml.template"),
+                                str(root).replace("\\", "/"))))
+        # The template's real token is left in the text and reported: the
+        # renderer followed the contract rather than a fixed three-token table.
+        self.assertIn("__GOVERNANCE_SKILLS_ROOT__", payload["text"])
+        self.assertIn("__GOVERNANCE_SKILLS_ROOT__", payload["leftovers"])
+        self._assert_copy_restored(root)
+        # …and with the copy's pristine contract the template leaves nothing.
+        pristine = self._mutated_repo(lambda _contract: None)
+        payload = json.loads(self._node(
+            pristine,
             "import { renderComposition } from "
-            f"{json.dumps(LIB_INDEX.resolve().as_uri())};"
+            f"{json.dumps(self._lib_uri(pristine))};"
             "import { readFileSync } from 'node:fs';"
             "process.stdout.write(JSON.stringify(renderComposition("
             "readFileSync(process.argv[1], 'utf8'), process.argv[2])));",
-            argv=(str(TEMPLATE), str(_REPO_ROOT.resolve()).replace("\\", "/"))))
+            argv=(str(pristine / "agent-presets" / "governance"
+                      / "agent.cordis.yml.template"),
+                  str(pristine).replace("\\", "/"))))
         self.assertEqual(payload["leftovers"], [], payload)
 
     def test_mutation_own_render_tokens_is_read_by_the_python_renderer(self):
@@ -1650,78 +1794,148 @@ class TestConsumerContractReads(unittest.TestCase):
                 "__GOVERNANCE_SHIMS_ROOT__": "adapters/dsh/skill-shims",
                 "__GOVERNANCE_REPO_ROOT__": "",
             }
-        with self._contract_swapped(mutate):
-            launch = self._fresh_launch_module()
-            rendered = launch.render_composition()
-            # The Python renderer also refuses to emit a composition with an
-            # unresolved token — and the unresolved one is now the token the
-            # mutated contract does not declare.
-            self.assertEqual(rendered, "")
-            self.assertEqual(launch._token_paths(),
-                             {"__MUTATED_SKILLS_ROOT__": _REPO_ROOT / "skills",
-                              "__GOVERNANCE_SHIMS_ROOT__":
-                                  _REPO_ROOT / "adapters" / "dsh" / "skill-shims",
-                              "__GOVERNANCE_REPO_ROOT__": _REPO_ROOT})
-        self._assert_restored()
-        launch = self._fresh_launch_module()
-        self.assertTrue(launch.render_composition())
+        root = self._mutated_repo(mutate)
+        out = self._pyprobe(root, (
+            "import json, launch\n"
+            "print(json.dumps({'rendered': launch.render_composition(),\n"
+            "                  'tokens': sorted(launch._token_paths())}))\n"))
+        payload = json.loads(out)
+        # The Python renderer refuses to emit a composition with an unresolved
+        # token — and the unresolved one is the token the mutated contract no
+        # longer declares.
+        self.assertEqual(payload["rendered"], "")
+        self.assertEqual(payload["tokens"], ["__GOVERNANCE_REPO_ROOT__",
+                                             "__GOVERNANCE_SHIMS_ROOT__",
+                                             "__MUTATED_SKILLS_ROOT__"])
+        self._assert_copy_restored(root)
+        pristine = self._mutated_repo(lambda _contract: None)
+        out = self._pyprobe(pristine, (
+            "import launch\n"
+            "print(len(launch.render_composition()))\n"))
+        self.assertGreater(int(out.strip()), 0, out)
 
     def test_mutation_own_preset_id_moves_the_js_sync_destination(self):
         def mutate(contract):
             contract["own"]["preset"]["id"] = "governance-mutated"
-        with self._contract_swapped(mutate):
-            with tempfile.TemporaryDirectory() as td:
-                env = os.environ.copy()
-                env["DSH_HOME"] = td
-                out = self._node(
-                    "import { apply } from "
-                    f"{json.dumps(LIB_INDEX.resolve().as_uri())};"
-                    "const warns = [];"
-                    "apply({ logger: { warn: (m) => warns.push(String(m)),"
-                    " info: () => {} } });"
-                    "process.stdout.write(JSON.stringify(warns));", env=env)
-                self.assertEqual(json.loads(out), [])
-                self.assertTrue(
-                    (Path(td) / ".agent-presets" / "governance-mutated"
-                     / "agent.cordis.yml").is_file(),
-                    "the mutated preset id did not reach ensurePreset()")
-                self.assertFalse(
-                    (Path(td) / ".agent-presets" / "governance").exists(),
-                    "the un-mutated preset id was still used")
-        self._assert_restored()
+        root = self._mutated_repo(mutate)
+        with tempfile.TemporaryDirectory() as td:
+            env = os.environ.copy()
+            env["DSH_HOME"] = td
+            out = self._node(
+                root,
+                "import { apply } from "
+                f"{json.dumps(self._lib_uri(root))};"
+                "const warns = [];"
+                "apply({ logger: { warn: (m) => warns.push(String(m)),"
+                " info: () => {} } });"
+                "process.stdout.write(JSON.stringify(warns));", env=env)
+            self.assertEqual(json.loads(out), [])
+            self.assertTrue(
+                (Path(td) / ".agent-presets" / "governance-mutated"
+                 / "agent.cordis.yml").is_file(),
+                "the mutated preset id did not reach ensurePreset()")
+            self.assertFalse(
+                (Path(td) / ".agent-presets" / "governance").exists(),
+                "the un-mutated preset id was still used")
+        self._assert_copy_restored(root)
 
     def test_mutation_own_preset_version_marker_names_the_js_marker_file(self):
         def mutate(contract):
             contract["own"]["preset"]["version_marker"] = ".mutated-version"
-        with self._contract_swapped(mutate):
-            with tempfile.TemporaryDirectory() as td:
-                env = os.environ.copy()
-                env["DSH_HOME"] = td
-                self._node(
-                    "import { apply } from "
-                    f"{json.dumps(LIB_INDEX.resolve().as_uri())};"
-                    "const warns = [];"
-                    "apply({ logger: { warn: (m) => warns.push(String(m)),"
-                    " info: () => {} } });"
-                    "process.stdout.write(JSON.stringify(warns));", env=env)
-                preset = Path(td) / ".agent-presets" / "governance"
-                self.assertTrue((preset / ".mutated-version").is_file(),
-                                sorted(item.name for item in preset.iterdir()))
-                self.assertFalse((preset / ".dsh-bundle-version").exists())
-        self._assert_restored()
+        root = self._mutated_repo(mutate)
+        with tempfile.TemporaryDirectory() as td:
+            env = os.environ.copy()
+            env["DSH_HOME"] = td
+            self._node(
+                root,
+                "import { apply } from "
+                f"{json.dumps(self._lib_uri(root))};"
+                "const warns = [];"
+                "apply({ logger: { warn: (m) => warns.push(String(m)),"
+                " info: () => {} } });"
+                "process.stdout.write(JSON.stringify(warns));", env=env)
+            preset = Path(td) / ".agent-presets" / "governance"
+            self.assertTrue((preset / ".mutated-version").is_file(),
+                            sorted(item.name for item in preset.iterdir()))
+            self.assertFalse((preset / ".dsh-bundle-version").exists())
+        self._assert_copy_restored(root)
 
     def test_mutation_own_skill_root_marker_names_the_launcher_marker_file(self):
         def mutate(contract):
             contract["own"]["preset"]["skill_root_marker"] = "mutated-root.txt"
-        with self._contract_swapped(mutate):
-            launch = self._fresh_launch_module()
-            with tempfile.TemporaryDirectory() as tmp:
-                staging = Path(tmp) / "staging"
-                self.assertTrue(launch.write_rendered_preset(staging))
-                written = sorted(item.name for item in staging.iterdir())
-                self.assertIn("mutated-root.txt", written, written)
-                self.assertNotIn("skill-root.txt", written, written)
-        self._assert_restored()
+        root = self._mutated_repo(mutate)
+        with tempfile.TemporaryDirectory() as tmp:
+            out = self._pyprobe(root, (
+                "import json, launch\n"
+                f"ok = launch.write_rendered_preset(__import__('pathlib')"
+                f".Path({str(Path(tmp) / 'staging')!r}))\n"
+                "import pathlib\n"
+                "names = sorted(p.name for p in "
+                f"pathlib.Path({str(Path(tmp) / 'staging')!r}).iterdir())\n"
+                "print(json.dumps({'ok': ok, 'names': names}))\n"))
+        payload = json.loads(out)
+        self.assertTrue(payload["ok"], payload)
+        self.assertIn("mutated-root.txt", payload["names"], payload)
+        self.assertNotIn("skill-root.txt", payload["names"], payload)
+        self._assert_copy_restored(root)
+
+    def test_mutation_host_env_home_var_is_read_by_the_js_row(self):
+        # F-10: `host.env.home_var` has a binding in all three consumers; the JS
+        # row is the one whose observable output changes when the *variable name*
+        # changes (the home it resolves is named by that declaration).
+        def mutate(contract):
+            contract["host"]["env"]["home_var"] = "DSH_HOME_MUTATED"
+        root = self._mutated_repo(mutate)
+        with tempfile.TemporaryDirectory() as td:
+            # The declared (mutated) variable is set; the original one is also
+            # set to a DIFFERENT directory, so reading the wrong name is visible.
+            other = Path(td) / "wrong-home"
+            target = Path(td) / "right-home"
+            env = os.environ.copy()
+            env["DSH_HOME"] = str(other)
+            env["DSH_HOME_MUTATED"] = str(target)
+            out = self._node(
+                root,
+                "import { apply } from "
+                f"{json.dumps(self._lib_uri(root))};"
+                "const warns = [];"
+                "apply({ logger: { warn: (m) => warns.push(String(m)),"
+                " info: () => {} } });"
+                "process.stdout.write(JSON.stringify(warns));", env=env)
+            self.assertEqual(json.loads(out), [])
+            self.assertTrue(
+                (target / ".agent-presets" / "governance"
+                 / "agent.cordis.yml").is_file(),
+                "the mutated home variable was not the one read")
+            self.assertFalse(other.exists(),
+                             "the row read the un-mutated home variable")
+        self._assert_copy_restored(root)
+
+    def test_mutation_host_home_user_preset_dir_is_read_by_the_js_row(self):
+        # F-10: `host.home.user_preset_dir` names the preset root segment; a
+        # consumer that kept `.agent-presets` hard-coded would ignore it.
+        def mutate(contract):
+            contract["host"]["home"]["user_preset_dir"] = ".mutated-presets"
+        root = self._mutated_repo(mutate)
+        with tempfile.TemporaryDirectory() as td:
+            env = os.environ.copy()
+            env["DSH_HOME"] = td
+            out = self._node(
+                root,
+                "import { apply } from "
+                f"{json.dumps(self._lib_uri(root))};"
+                "const warns = [];"
+                "apply({ logger: { warn: (m) => warns.push(String(m)),"
+                " info: () => {} } });"
+                "process.stdout.write(JSON.stringify(warns));", env=env)
+            self.assertEqual(json.loads(out), [])
+            self.assertTrue(
+                (Path(td) / ".mutated-presets" / "governance"
+                 / "agent.cordis.yml").is_file(),
+                "the mutated user preset dir was not used")
+            self.assertFalse((Path(td) / ".agent-presets").exists(),
+                             "the un-mutated preset dir was still used")
+        self._assert_copy_restored(root)
 
     def test_mutation_host_rows_flips_the_template_agreement_judgment(self):
         # The consumer of `host.rows[]` at V2 is the template cross-check
@@ -1739,16 +1953,23 @@ class TestConsumerContractReads(unittest.TestCase):
                 if row["row_id"] == target["row_id"]:
                     row["config_declared"] = False
 
-        with self._contract_swapped(mutate):
-            dsh_contract.reset_cache()
-            dsh_contract.load_contract()
-            mutated = dsh_contract.load_contract()
-            mismatches = template_row_mismatches(mutated)
-            self.assertTrue(mismatches, target["row_id"])
-            self.assertTrue(any(target["row_id"] in item for item in mismatches),
-                            mismatches)
-        self._assert_restored()
-        self.assertEqual(template_row_mismatches(), [])
+        root = self._mutated_repo(mutate)
+        out = self._pyprobe(root, (
+            "import json, dsh_contract\n"
+            "document = dsh_contract.load_contract()\n"
+            "print(json.dumps([r['config_declared'] for r in "
+            "document['host']['rows'] if r['row_id'] == "
+            f"{target['row_id']!r}]))\n"))
+        self.assertIn(False, json.loads(out),
+                      "the copy's mutated row was not read")
+        self._assert_copy_restored(root)
+        # The judgment itself is contract-driven: feeding it the mutated
+        # document (as the copy's accessor returns it) reports the mismatch.
+        mutated = json.loads((root / dsh_contract.CONTRACT_REL).read_text("utf-8"))
+        mismatches = template_row_mismatches(mutated)
+        self.assertTrue(mismatches, target["row_id"])
+        self.assertTrue(any(target["row_id"] in item for item in mismatches),
+                        mismatches)
 
     def test_mutation_host_rows_removal_is_a_one_sided_row(self):
         dropped = self.original["host"]["rows"][0]["row_id"]
@@ -1757,11 +1978,277 @@ class TestConsumerContractReads(unittest.TestCase):
             contract["host"]["rows"] = [
                 row for row in contract["host"]["rows"]
                 if row["row_id"] != dropped]
-        with self._contract_swapped(mutate):
-            mismatches = template_row_mismatches(dsh_contract.load_contract())
-            self.assertIn(f"template row not in contract: {dropped}", mismatches)
-        self._assert_restored()
-        self.assertEqual(template_row_mismatches(), [])
+        root = self._mutated_repo(mutate)
+        mutated = json.loads((root / dsh_contract.CONTRACT_REL).read_text("utf-8"))
+        mismatches = template_row_mismatches(mutated)
+        self.assertIn(f"template row not in contract: {dropped}", mismatches)
+        self._assert_copy_restored(root)
+
+
+class TestGuardContractFailureVerdicts(unittest.TestCase):
+    """§2.5.1/§2.5 C-3 as executable acceptance (CODE R0 F-02/F-03).
+
+    The `dsh_compat` guard consumes the contract too, and the design fixes what a
+    contract failure must look like for it:
+
+      * `ContractUnreadable` (the contract is not there) is an *environment*
+        fact → `NOT_RUN`, never a gate issue;
+      * `ContractMalformed` / `ContractSchemaUnknown` (the contract is there and
+        wrong) is a **product defect** → `FAIL`, explicitly never downgraded to
+        `NOT_RUN`.
+
+    Both halves used to be unreachable: the guard read its declared facts at
+    import time, so *any* contract defect aborted the import and the CLI exited
+    with a traceback instead of a verdict (F-02). And a contract that could not
+    supply the probe facts was reported as `NOT_RUN` — the same status as "no dsh
+    installed" (F-03), which is exactly the conflation §2.5.1 forbids.
+
+    Each case runs in a **fresh process against a throwaway COPY of the repo**:
+    import-time behaviour is part of what is under test, and
+    `dsh_contract.contract_path()` resolves from the accessor's own location, so
+    a copy of the tree is the only way to point the guard at a different
+    contract. The shipped contract is asserted unchanged before and after.
+    """
+
+    _COPY_FOR_GUARD = ("lib", "adapters", "agent-presets", "package.json")
+
+    def setUp(self):
+        self.contract_path = dsh_contract.contract_path()
+        self.original_bytes = self.contract_path.read_bytes()
+        self.original_sha = _sha256(self.original_bytes)
+        self.original = json.loads(self.original_bytes.decode("utf-8"))
+        dsh_contract.reset_cache()
+        self._temp_root = None
+
+    def tearDown(self):
+        if self._temp_root is not None:
+            shutil.rmtree(self._temp_root, ignore_errors=True)
+        self.assertEqual(_sha256(self.contract_path.read_bytes()), self.original_sha,
+                         "a guard scenario leaked into the shipped contract")
+
+    def _guard_repo(self, contract_bytes=None, drop=False):
+        """A repo copy carrying the accessor + the guard + a chosen contract."""
+        root = Path(tempfile.mkdtemp(prefix="feat030-guard-"))
+        self._temp_root = root
+        for name in self._COPY_FOR_GUARD:
+            source = _REPO_ROOT / name
+            if source.is_dir():
+                shutil.copytree(source, root / name)
+            else:
+                shutil.copyfile(source, root / name)
+        infra_rel = Path("skills") / "software-project-governance" / "infra"
+        (root / infra_rel).mkdir(parents=True, exist_ok=True)
+        for module in ("dsh_contract.py", "dsh_compat.py"):
+            shutil.copyfile(_INFRA_DIR / module, root / infra_rel / module)
+        target = root / dsh_contract.CONTRACT_REL
+        if drop:
+            target.unlink()
+        elif contract_bytes is not None:
+            target.write_bytes(contract_bytes)
+        return root
+
+    def _run_guard(self, root):
+        """Import + run the guard in a fresh process; return the parsed outcome.
+
+        The probe captures both the report and the CLI exit code, and it never
+        lets a traceback decide the result: an escaping exception is reported as
+        such, which is exactly the F-02 symptom.
+        """
+        script = (
+            "import json, sys\n"
+            "sys.path.insert(0, sys.argv[1])\n"
+            "sys.path.insert(0, sys.argv[2])\n"
+            "out = {'import_ok': True}\n"
+            "try:\n"
+            "    import dsh_compat\n"
+            "except BaseException as exc:\n"
+            "    print(json.dumps({'import_ok': False,\n"
+            "                      'error': type(exc).__name__ + ': ' + str(exc)}))\n"
+            "    raise SystemExit(0)\n"
+            "report = dsh_compat.check_dsh_preset_compat(root=sys.argv[3])\n"
+            "out['verdict'] = report['verdict']\n"
+            "out['reason'] = report['reason'][:200]\n"
+            "out['issues'] = len(report['issues'])\n"
+            "out['exit'] = dsh_compat.main(['--json', '--root', sys.argv[3]])\n"
+            "print(json.dumps(out))\n")
+        env = os.environ.copy()
+        env["PYTHONPATH"] = os.pathsep.join([
+            str(root / "skills" / "software-project-governance" / "infra"),
+            str(root / "adapters" / "dsh"),
+        ])
+        result = subprocess.run(
+            [sys.executable, "-c", script,
+             str(root / "adapters" / "dsh"),
+             str(root / "skills" / "software-project-governance" / "infra"),
+             str(root)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            env=env, cwd=str(root))
+        self.assertNotIn("Traceback", result.stderr,
+                         f"the guard escaped with a traceback:\n{result.stderr}")
+        payload = [line for line in result.stdout.splitlines()
+                   if line.startswith("{")]
+        self.assertTrue(payload, f"no report on stdout: {result.stdout!r}")
+        return json.loads(payload[-1])
+
+    # ── F-02: the guard classifies instead of aborting ─────────────────────
+    def test_unreadable_contract_degrades_to_not_run(self):
+        root = self._guard_repo(drop=True)
+        outcome = self._run_guard(root)
+        self.assertTrue(outcome["import_ok"], outcome)
+        self.assertEqual(outcome["verdict"], "NOT_RUN", outcome)
+        self.assertIn("ContractUnreadable", outcome["reason"])
+        self.assertEqual(outcome["issues"], 0, outcome)
+        self.assertEqual(outcome["exit"], 0, outcome)
+
+    def test_truncated_contract_is_fail_not_not_run(self):
+        root = self._guard_repo(contract_bytes=b'{"schema_version": 1, "host":')
+        outcome = self._run_guard(root)
+        self.assertTrue(outcome["import_ok"], outcome)
+        self.assertEqual(outcome["verdict"], "FAIL", outcome)
+        self.assertIn("ContractMalformed", outcome["reason"])
+        self.assertGreaterEqual(outcome["issues"], 1, outcome)
+
+    def test_unknown_schema_version_is_fail_not_not_run(self):
+        mutated = json.loads(json.dumps(self.original))
+        mutated["schema_version"] = 99
+        root = self._guard_repo(
+            contract_bytes=json.dumps(mutated, ensure_ascii=False,
+                                      indent=2).encode("utf-8"))
+        outcome = self._run_guard(root)
+        self.assertTrue(outcome["import_ok"], outcome)
+        self.assertEqual(outcome["verdict"], "FAIL", outcome)
+        self.assertIn("ContractSchemaUnknown", outcome["reason"])
+
+    # ── F-03: a contract defect must not share the "no dsh" status ─────────
+    def test_missing_apis_exports_is_a_fail_not_an_environment_gap(self):
+        # `host.apis[...].exports` is not in the accessor's REQUIRED_PATHS, so a
+        # contract that carries it malformed passes every earlier check and only
+        # fails when the probe script is rendered. That failure is a contract
+        # defect: FAIL, never the NOT_RUN that "no dsh installed" produces.
+        mutated = json.loads(json.dumps(self.original))
+        mutated["host"]["apis"]["js-yaml"].pop("exports")
+        root = self._guard_repo(
+            contract_bytes=json.dumps(mutated, ensure_ascii=False,
+                                      indent=2).encode("utf-8"))
+        outcome = self._run_guard(root)
+        self.assertTrue(outcome["import_ok"], outcome)
+        self.assertEqual(outcome["verdict"], "FAIL", outcome)
+        self.assertIn("host.apis", outcome["reason"])
+        self.assertNotIn("NOT_RUN", outcome["verdict"])
+
+    def test_a_healthy_contract_still_classifies_normally(self):
+        # Control: the copy's pristine contract must not turn every run red.
+        root = self._guard_repo()
+        outcome = self._run_guard(root)
+        self.assertTrue(outcome["import_ok"], outcome)
+        self.assertIn(outcome["verdict"], ("PASS", "NOT_RUN"), outcome)
+
+    def test_declared_symbols_still_resolve_for_outside_callers(self):
+        # The lazy binding must not change the public surface: the names the
+        # guard's own tests and the render layer use stay resolvable, and a typo
+        # still raises instead of resolving to something else.
+        import dsh_compat as guard
+
+        self.assertEqual(guard.DSH_HOME_ENV, "DSH_HOME")
+        self.assertEqual(guard.INSTALL_DIR_ENV, "DSH_INSTALL_DIR")
+        self.assertEqual(guard.NODE_MODULES_ENV, "DSH_HARNESS_NODE_MODULES")
+        self.assertEqual(guard.CLI_PACKAGE,
+                         f"{guard.DSH_SCOPE}/{guard.DSH_PACKAGE}")
+        self.assertEqual(guard.CHECK_SECTION_TITLE,
+                         _contract()["own"]["checks"]["compat_section_title"])
+        with self.assertRaises(AttributeError):
+            guard.DSH_NOT_A_DECLARED_SYMBOL  # noqa: B018
+
+    def test_render_composition_without_a_contract_reports_every_token(self):
+        """`FX-JS-03` (design §5.6 / §2.6 J-3), as a direct-call regression.
+
+        The P0 of the R0 review was precisely "this acceptance item had **no
+        test**", so the fix ships with the regression that would have caught it.
+        `renderComposition` is called **directly** — the shape
+        `test_dsh_adapter.py::test_js_and_python_renderers_agree` uses — because
+        the J-3 read point exists for exactly that caller (a scheduled-runner
+        integration may render the template without going through `apply()`).
+
+        The package under test carries only `lib/index.js` and `package.json`:
+        no `adapters/dsh/host-contract.json`, so `contractBindings()` degrades to
+        the empty view. The three assertions are the J-3 failure semantics:
+
+          1. nothing throws (J-2: a throwing host row takes down the dsh boot);
+          2. `leftovers` is exactly the template's token set — the renderer says
+             "I substituted nothing", instead of returning an `undefined`
+             leftover list that a caller reads as "nothing left to do";
+          3. `apply()` also does not throw, and its warning is the actionable
+             contract-unreadable remediation, not a degraded `TypeError`.
+        """
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node unavailable (JS consumer cannot be exercised)")
+        with tempfile.TemporaryDirectory() as td:
+            pkg = Path(td) / "pkg"
+            (pkg / "lib").mkdir(parents=True)
+            (pkg / "lib" / "index.js").write_text(
+                _read(LIB_INDEX), encoding="utf-8")
+            (pkg / "package.json").write_text(
+                '{"name":"fake","version":"9.9.9","type":"module",'
+                '"main":"lib/index.js"}\n', encoding="utf-8")
+            # Deliberately absent: pkg/adapters/dsh/host-contract.json
+            self.assertFalse(
+                (pkg / "adapters" / "dsh" / "host-contract.json").exists())
+
+            script = (
+                f"import {{ renderComposition, apply }} from "
+                f"{json.dumps((pkg / 'lib' / 'index.js').as_uri())};"
+                "import { readFileSync } from 'node:fs';"
+                "const t = readFileSync(process.argv[1], 'utf8');"
+                "const tokens = [...new Set(t.match(/__[A-Za-z0-9_]+__/g) || [])];"
+                "let threw = false, rendered = null;"
+                "try { rendered = renderComposition(t, process.argv[2]); }"
+                "catch { threw = true; }"
+                "const warns = [];"
+                "let applyThrew = false;"
+                "try { apply({ logger: { warn: (m) => warns.push(String(m)),"
+                " info: () => {} } }); } catch { applyThrew = true; }"
+                "process.stdout.write(JSON.stringify({"
+                " threw, applyThrew, warns, tokens,"
+                " leftovers: rendered && rendered.leftovers,"
+                " text: rendered && rendered.text }));"
+            )
+            env = os.environ.copy()
+            env["DSH_HOME"] = str(Path(td) / "home")
+            result = subprocess.run(
+                [node, "--input-type=module", "-e", script,
+                 str(TEMPLATE), str(pkg).replace("\\", "/")],
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", env=env, cwd=str(_REPO_ROOT))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+
+            # 1. neither entry point throws
+            self.assertFalse(payload["threw"],
+                             "renderComposition threw without a contract")
+            self.assertFalse(payload["applyThrew"],
+                             "apply() threw without a contract")
+            # 2. leftovers is the template's token set — nothing was substituted
+            self.assertEqual(payload["tokens"],
+                             ["__GOVERNANCE_REPO_ROOT__",
+                              "__GOVERNANCE_SKILLS_ROOT__",
+                              "__GOVERNANCE_SHIMS_ROOT__"])
+            self.assertIsInstance(payload["leftovers"], list, payload)
+            self.assertEqual(sorted(payload["leftovers"]),
+                             sorted(payload["tokens"]),
+                             "leftovers must cover every template token")
+            self.assertNotEqual(payload["leftovers"], [])
+            for token in payload["tokens"]:
+                self.assertIn(token, payload["text"],
+                              "an unreadable contract must substitute nothing")
+            # 3. the warning is the actionable remediation, not a TypeError
+            self.assertEqual(len(payload["warns"]), 1, payload["warns"])
+            self.assertIn("contract unreadable", payload["warns"][0])
+            self.assertIn("--sync", payload["warns"][0])
+            self.assertNotIn("TypeError", payload["warns"][0])
+        self.assertEqual(_sha256(self.contract_path.read_bytes()),
+                         self.original_sha,
+                         "the shipped contract changed during this case")
 
 
 class TestFixtureEmitter(unittest.TestCase):

@@ -50,7 +50,7 @@ Isolation and access boundaries (M7.7 (a) precedent, FEAT-015/016)
 ------------------------------------------------------------------
 * The guard is **read-only static analysis over repo files plus module imports
   from the resolved plugin plane**. It performs one narrow READ of
-  ``${DSH_HOME_ENV}/profiles`` (and, when ``DSH_HOME`` is set, only then — it never
+  ``$DSH_HOME/profiles`` (and, when ``DSH_HOME`` is set, only then — it never
   guesses ``~/.dsh``) to resolve the plugin set dsh would load. It writes
   nothing to ``$DSH_HOME``, and the probe subprocess runs with ``DSH_HOME``
   redirected to a freshly created empty temp directory which is deleted
@@ -195,10 +195,9 @@ UNVERIFIED_KINDS = (
 # contract as a mounted preset. FIX-310: the template now lives with the preset
 # payload it renders; the composition globs are depth-agnostic.
 #
-# Declared, contract-resolved symbols (resolved on first access):
-#   INSTALL_DIR_ENV, NODE_MODULES_ENV, DSH_SCOPE, DSH_PACKAGE,
-#   INSTALL_ANCHOR_REL, ORACLE_PACKAGES, DSH_HOME_ENV, PROFILES_DIR_NAME,
-#   COMPOSITION_FILENAMES, COMPOSITION_GLOBS
+# The declared symbols below are the *source* names of the facts; their values
+# are read from the contract lazily (see `__getattr__` after `_declared`), so a
+# contract defect surfaces as a verdict instead of an import-time traceback.
 _DECLARED_BINDING = {
     "INSTALL_DIR_ENV": "host.install.env_overrides.install_dir",
     "NODE_MODULES_ENV": "host.install.env_overrides.node_modules",
@@ -220,8 +219,29 @@ _WRAPPED_FACTS = frozenset({"COMPOSITION_FILENAMES"})
 
 _declared_cache: dict = {}
 
+#: Short internal aliases for the declared symbols this module's own code reads.
+#: In-module call sites use `_fact("<alias>")` because a bare global lookup does
+#: **not** consult the module-level `__getattr__` below — only attribute access
+#: does. Binding them eagerly at import would make any contract defect abort the
+#: import, which is exactly the F-02 defect: the §2.5.1 three-state verdict
+#: (`NOT_RUN` / `FAIL`) must stay reachable, and it is the *verdict* that reports
+#: a bad contract. No inlined fallback is introduced: `_fact()` raises.
+_FACT_ALIASES = {
+    "_install_dir_env": "INSTALL_DIR_ENV",
+    "_node_modules_env": "NODE_MODULES_ENV",
+    "_scope": "DSH_SCOPE",
+    "_cli_package": "DSH_PACKAGE",
+    "_install_anchor_rel": "INSTALL_ANCHOR_REL",
+    "_oracle_packages": "ORACLE_PACKAGES",
+    "_home_env": "DSH_HOME_ENV",
+    "_profiles_dir_name": "PROFILES_DIR_NAME",
+    "_composition_filenames": "COMPOSITION_FILENAMES",
+    "_composition_globs": "COMPOSITION_GLOBS",
+    "_section_title": "COMPAT_SECTION_TITLE",
+}
 
-def _declared(name: str):
+
+def _contract_value(name: str):
     """One declared dsh fact, read from the host contract (memoized per process).
 
     Raises the accessor's `ContractUnreadable` / `ContractMalformed` /
@@ -246,29 +266,31 @@ def _declared(name: str):
     return value
 
 
-#: The declared ``"<scope>/<cli package>"`` spelling of the harness CLI package
-#: (used in messages and as the lookup key for the CLI package version). Needed
-#: before the first verdict, so it is resolved once at import; a contract that
-#: cannot supply it makes this module fail to import its own facts — the same
-#: fail-closed outcome the CLI reports with an actionable message.
-CLI_PACKAGE = "{0}/{1}".format(_declared("DSH_SCOPE"), _declared("DSH_PACKAGE"))
+def _fact(alias: str):
+    """Resolve one of the short internal aliases (see `_FACT_ALIASES`)."""
+    return _contract_value(_FACT_ALIASES[alias])
 
-#: The declared symbols the rest of this module (and its consumers) use. They are
-#: bound eagerly — as module globals, because module-level `__getattr__` is not
-#: consulted by code inside the module. A contract that cannot supply one of
-#: them aborts the import with the accessor's actionable error: fail-closed, and
-#: never a built-in fallback copy.
-INSTALL_DIR_ENV = _declared("INSTALL_DIR_ENV")
-NODE_MODULES_ENV = _declared("NODE_MODULES_ENV")
-DSH_SCOPE = _declared("DSH_SCOPE")
-DSH_PACKAGE = _declared("DSH_PACKAGE")
-INSTALL_ANCHOR_REL = _declared("INSTALL_ANCHOR_REL")
-ORACLE_PACKAGES = _declared("ORACLE_PACKAGES")
-DSH_HOME_ENV = _declared("DSH_HOME_ENV")
-PROFILES_DIR_NAME = _declared("PROFILES_DIR_NAME")
-COMPOSITION_FILENAMES = _declared("COMPOSITION_FILENAMES")
-COMPOSITION_GLOBS = _declared("COMPOSITION_GLOBS")
-CHECK_SECTION_TITLE = _declared("COMPAT_SECTION_TITLE")
+
+def __getattr__(name: str):
+    """Resolve a declared symbol on first access (PEP 562 module attribute).
+
+    Public compatibility surface only: code *inside* this module cannot rely on
+    this hook (a bare global lookup does not consult it), so in-module call
+    sites go through `_fact()` / `_contract_value()` directly. The names served
+    here are exactly the ones outside callers already use —
+    `dsh_compat.DSH_HOME_ENV`, `dsh_compat.INSTALL_DIR_ENV`, … — and a typo
+    still raises `AttributeError` instead of resolving to something else.
+
+    `CHECK_SECTION_TITLE` is the alias the render layer has always exported for
+    `own.checks.compat_section_title`; the binding keeps the contract path.
+    """
+    if name == "CLI_PACKAGE":
+        return "{0}/{1}".format(_fact("_scope"), _fact("_cli_package"))
+    if name == "CHECK_SECTION_TITLE":
+        return _contract_value("COMPAT_SECTION_TITLE")
+    if name in _DECLARED_BINDING:
+        return _contract_value(name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def oracle_api_symbols() -> dict:
@@ -276,18 +298,82 @@ def oracle_api_symbols() -> dict:
 
     Declared in `host.apis[<package>].exports`. The probe imports exactly these
     names, so a symbol rename upstream becomes a contract change instead of a
-    silent `undefined` at runtime.
+    silent `undefined` at runtime. A declared package without an `exports` list
+    is a contract defect and raises `ContractMalformed` (never a silent skip).
     """
     import dsh_contract  # noqa: PLC0415 — sibling accessor, imported on first need
 
-    return {package: tuple(entry["exports"])
-            for package, entry in dsh_contract.get("host.apis").items()}
+    apis = dsh_contract.get("host.apis")
+    symbols = {}
+    for package, entry in apis.items():
+        exports = entry.get("exports") if isinstance(entry, dict) else None
+        if not isinstance(exports, list) or not exports:
+            raise dsh_contract.ContractMalformed(
+                f"ContractMalformed: `host.apis[{package}].exports` must be a "
+                f"non-empty list (declared: {entry!r})")
+        symbols[package] = tuple(exports)
+    return symbols
 
 _SKIP_DIRS = frozenset({".git", "node_modules", "__pycache__", ".venv", "venv",
                         ".pytest_cache", ".mypy_cache"})
 
 #: Wall-clock budget for one probe run (it imports ~30 plugin packages).
 DEFAULT_PROBE_TIMEOUT = 180
+
+#: Probe-internal status meaning "the contract could not supply the probe facts".
+#: Distinct from the default `NOT_RUN` on purpose (CODE R0 F-03): a contract
+#: defect is a product failure and must never share a status with "the optional
+#: tooling is unavailable", or a broken contract would read as an absent dsh.
+PROBE_STATUS_CONTRACT_FAIL = "CONTRACT_FAIL"
+
+#: Memo for `_contract_failure_types()`; `None` until resolved (or when the
+#: accessor cannot be imported at all).
+_CONTRACT_TYPES_CACHE = None
+
+
+def _contract_failure_types():
+    """The accessor's three failure classes, in its own vocabulary.
+
+    Resolved on demand from the sibling module rather than restated here: design
+    §2.5.1 fixes one vocabulary, and `dsh_contract` owns it (it is also the
+    module that raises them).
+
+    Returns `None` when the accessor itself cannot be imported. That matters
+    because this function is called from an `except` clause — where its own
+    failure would escape as a fresh traceback instead of a verdict — so it never
+    raises: a missing accessor is reported as `NOT_RUN` by the caller.
+    """
+    global _CONTRACT_TYPES_CACHE
+    if _CONTRACT_TYPES_CACHE is None:
+        try:
+            import dsh_contract  # noqa: PLC0415 — sibling accessor, on first need
+        except ImportError:
+            return None
+        _CONTRACT_TYPES_CACHE = (dsh_contract.ContractUnreadable,
+                                 dsh_contract.ContractMalformed,
+                                 dsh_contract.ContractSchemaUnknown)
+    return _CONTRACT_TYPES_CACHE
+
+
+def _contract_failure_report(report: dict, exc: Exception) -> dict:
+    """Classify a contract failure into the §2.5.1 verdict for this consumer.
+
+    ``ContractUnreadable`` → ``NOT_RUN`` (the contract is not there; an
+    environment fact, never a gate issue). ``ContractMalformed`` /
+    ``ContractSchemaUnknown`` → ``FAIL`` (the contract is there and wrong; a
+    product defect that MUST NOT be downgraded to `NOT_RUN`).
+    """
+    types = _contract_failure_types()
+    if types is None:
+        report["verdict"] = VERDICT_NOT_RUN
+    else:
+        unreadable, rest = types[0], tuple(types[1:])
+        report["verdict"] = VERDICT_FAIL if isinstance(exc, rest) else VERDICT_NOT_RUN
+    report["reason"] = f"{type(exc).__name__}: {exc}"
+    report["details"].append(report["reason"])
+    if report["verdict"] == VERDICT_FAIL:
+        report["issues"] = [report["reason"]]
+    return report
 
 
 # ── the Node probe: the loader's own code, taken from the installed dsh ──────
@@ -602,8 +688,8 @@ def _count_entries(path: Path) -> int:
 
 # ── plugin-set discovery (read-only; never guesses ~/.dsh) ──────────────────
 def _looks_like_node_modules(path: Path) -> bool:
-    return (path / INSTALL_ANCHOR_REL[0] / INSTALL_ANCHOR_REL[1]
-            / INSTALL_ANCHOR_REL[2]).is_file()
+    anchor = _fact("_install_anchor_rel")
+    return (path / anchor[0] / anchor[1] / anchor[2]).is_file()
 
 
 def _walk_up_for_node_modules(start: Path) -> Optional[Path]:
@@ -652,7 +738,7 @@ def _package_version(node_modules: Path, name: str) -> Optional[dict]:
 
 def _oracle_versions(node_modules: Path) -> dict:
     out = {}
-    for name in ORACLE_PACKAGES:
+    for name in _fact("_oracle_packages"):
         found = _package_version(node_modules, name)
         out[name] = found or {"version": None, "path": None}
     return out
@@ -667,12 +753,12 @@ def _env_text(env: dict, key: str) -> str:
 def _profile_planes(env: dict) -> list:
     """dsh's OWN resolution plane, read-only, from an explicitly set ``$DSH_HOME``.
 
-    dsh resolves a profile's bare plugin names out of ``${DSH_HOME_ENV}/profiles``:
+    dsh resolves a profile's bare plugin names out of ``$DSH_HOME/profiles``:
     each profile's own ``node_modules`` is pnpm-managed and authoritative, and
-    ``${DSH_HOME_ENV}/${PROFILES_DIR_NAME}/node_modules`` is the installation mirror dsh heals
+    ``$DSH_HOME/profiles/node_modules`` is the installation mirror dsh heals
     (``healProfilesModuleFallback``). The schemas that decide whether a preset
     row mounts come from the RUNTIME BUNDLE packages resolved there — not from
-    the ``CLI_PACKAGE`` CLI package, whose version string is a different
+    the CLI package, whose version string is a different
     fact entirely.
 
     Only an explicitly exported ``DSH_HOME`` is consulted — the guard never
@@ -682,10 +768,10 @@ def _profile_planes(env: dict) -> list:
     different directory. The read-only claim rests on the code: every call in
     this function is ``iterdir``/``is_dir``/``read_text``.)
     """
-    raw = _env_text(env, DSH_HOME_ENV)
+    raw = _env_text(env, _fact("_home_env"))
     if not raw:
         return []
-    profiles = Path(raw).expanduser() / PROFILES_DIR_NAME
+    profiles = Path(raw).expanduser() / _fact("_profiles_dir_name")
     planes = []
     try:
         children = sorted(profiles.iterdir())
@@ -694,10 +780,12 @@ def _profile_planes(env: dict) -> list:
     for child in children:
         candidate = child / "node_modules"
         if child.is_dir() and candidate.is_dir():
-            planes.append((f"{DSH_HOME_ENV}/{PROFILES_DIR_NAME}/{child.name}", candidate))
+            planes.append((f"{_fact('_home_env')}/{_fact('_profiles_dir_name')}"
+                           f"/{child.name}", candidate))
     fallback = profiles / "node_modules"
     if fallback.is_dir():
-        planes.append((f"{DSH_HOME_ENV}/{PROFILES_DIR_NAME}", fallback))
+        planes.append((f"{_fact('_home_env')}/{_fact('_profiles_dir_name')}",
+                       fallback))
     return planes
 
 
@@ -708,8 +796,8 @@ def locate_dsh_install(env: Optional[dict] = None,
     Precedence:
 
     1. the explicit ``DSH_INSTALL_DIR`` / ``DSH_HARNESS_NODE_MODULES`` override;
-    2. dsh's own **profile plane** (``${DSH_HOME_ENV}/${PROFILES_DIR_NAME}/<profile>/node_modules``,
-       then the ``${DSH_HOME_ENV}/${PROFILES_DIR_NAME}/node_modules`` installation mirror) —
+    2. dsh's own **profile plane** (``$DSH_HOME/profiles/<profile>/node_modules``,
+       then the ``$DSH_HOME/profiles/node_modules`` installation mirror) —
        consulted only when ``DSH_HOME`` is explicitly set, read-only;
     3. the **install anchor** reached from the ``dsh`` executable on PATH —
        the same anchor dsh derives from its own module URL.
@@ -742,7 +830,7 @@ def locate_dsh_install(env: Optional[dict] = None,
     chosen = None
     chosen_plane = None
     candidates = []
-    for key in (INSTALL_DIR_ENV, NODE_MODULES_ENV):
+    for key in (_fact("_install_dir_env"), _fact("_node_modules_env")):
         raw = _env_text(env, key)
         if not raw:
             continue
@@ -750,7 +838,7 @@ def locate_dsh_install(env: Optional[dict] = None,
         if resolved is None:
             result["reason"] = (
                 f"{key}={raw!r} does not contain "
-                f"{'/'.join(INSTALL_ANCHOR_REL)} (checked the path itself and "
+                f"{'/'.join(_fact('_install_anchor_rel'))} (checked the path itself and "
                 f"its node_modules/); refusing to fall back to another install")
             result["source"] = f"${key} (invalid)"
             return result
@@ -759,7 +847,7 @@ def locate_dsh_install(env: Optional[dict] = None,
     else:
         candidates = _profile_planes(env)
         for label, plane in candidates:
-            if _package_version(plane, ORACLE_PACKAGES[0]) is not None \
+            if _package_version(plane, _fact("_oracle_packages")[0]) is not None \
                     or _looks_like_node_modules(plane):
                 chosen, chosen_plane = plane, label
                 break
@@ -772,20 +860,23 @@ def locate_dsh_install(env: Optional[dict] = None,
                 else:
                     result["reason"] = (
                         f"`dsh` resolved to {executable}, but no node_modules "
-                        f"carrying {'/'.join(INSTALL_ANCHOR_REL)} was found above it")
+                        f"carrying {'/'.join(_fact('_install_anchor_rel'))} "
+                        f"was found above it")
                     result["source"] = "`dsh` on PATH (anchor not found)"
                     return result
 
     if chosen is None:
+        install_dir_env = _fact("_install_dir_env")
+        node_modules_env = _fact("_node_modules_env")
         result["reason"] = result["reason"] or (
-            f"no dsh plugin set discovered: set ${INSTALL_DIR_ENV} or "
-            f"${NODE_MODULES_ENV}, or put `dsh` on PATH")
+            f"no dsh plugin set discovered: set ${install_dir_env} or "
+            f"${node_modules_env}, or put `dsh` on PATH")
         return result
 
     result.update(status="OK", source=chosen_plane, plane=chosen_plane,
                   node_modules=str(chosen))
-    install_anchor = _declared("INSTALL_ANCHOR_REL")
-    cli_package_name = f"{_declared('DSH_SCOPE')}/{_declared('DSH_PACKAGE')}"
+    install_anchor = _fact("_install_anchor_rel")
+    cli_package_name = "{0}/{1}".format(_fact("_scope"), _fact("_cli_package"))
     package_json = chosen.joinpath(*install_anchor)
     result["dsh_package"] = str(package_json.parent) if package_json.is_file() else None
     cli = _package_version(chosen, cli_package_name)
@@ -827,7 +918,7 @@ def discover_compositions(root: os.PathLike) -> list:
     """
     root = Path(root)
     found = []
-    for pattern in COMPOSITION_GLOBS:
+    for pattern in _fact("_composition_globs"):
         for path in root.glob(pattern):
             if not path.is_file():
                 continue
@@ -968,15 +1059,22 @@ def _run_probe(node: str, install: dict, compositions: Sequence[Path],
     try:
         request = _probe_request(install, compositions, output_path)
         script = _render_probe_script()
-    except Exception as exc:  # noqa: BLE001 — reported, never a stack
+    except Exception as exc:  # noqa: BLE001 — classified, never a stack
+        # The probe facts come from the contract (`host.apis` and the declared
+        # composition/globs). A failure here is the contract failing to supply
+        # them — a product defect, NOT an environment gap — so it gets its own
+        # status instead of the ambient `NOT_RUN` it used to share (CODE R0 F-03).
+        result["status"] = PROBE_STATUS_CONTRACT_FAIL
         result["reason"] = (
             f"the dsh host contract could not supply the probe facts: "
-            f"{type(exc).__name__}: {exc}")
+            f"{type(exc).__name__}: {exc} — this is a contract defect, not a "
+            f"missing environment; repair the contract's `host.apis` entries "
+            f"(each needs a non-empty `exports` list)")
         _remove_scratch_dir(scratch)
         _remove_scratch_dir(home)
         return result
     child_env = os.environ.copy()
-    child_env[DSH_HOME_ENV] = str(home)
+    child_env[_fact("_home_env")] = str(home)
     try:
         completed = subprocess.run(
             [node, "--input-type=module", "--eval", script],
@@ -1306,41 +1404,72 @@ def check_dsh_preset_compat(root: Optional[os.PathLike] = None,
         "unverified": [],
     }
 
-    paths = ([Path(item) for item in compositions] if compositions is not None
-             else discover_compositions(root))
-    paths = [path if path.is_absolute() else root / path for path in paths]
-    if not paths:
-        report["reason"] = (
-            f"no preset composition found under {root.as_posix()} "
-            f"(looked for {' and '.join(COMPOSITION_GLOBS)})")
-        return report
-
-    install_probe = install if install is not None else locate_dsh_install(env=env, which=which)
-    report["install"] = dict(install_probe)
-    if install_probe.get("status") != "OK":
-        report["reason"] = (
-            f"installed dsh not available — composition schemas cannot be "
-            f"validated: {install_probe.get('reason')}")
-        report["details"].append(report["reason"])
-        return report
-
-    node_path = node if node is not None else which("node")
-    report["install"]["node"] = node_path
-    if not node_path:
-        report["reason"] = (
-            "node executable not found on PATH — the installed harness's own "
-            "YAML dialect and Config schemas cannot be reached without it")
-        report["details"].append(report["reason"])
-        return report
+    # The declared facts are read inside this function's scope (through the
+    # lazily-resolving accessors), and a contract that cannot supply them is a
+    # verdict, not a crash (design §2.5.1, CODE R0 F-02/F-03):
+    #
+    #   * `ContractUnreadable` — the contract is absent or unreadable. That is
+    #     an *environment* fact, so it degrades to `NOT_RUN`, which never counts
+    #     as a gate issue.
+    #   * `ContractMalformed` / `ContractSchemaUnknown` — the contract is present
+    #     but wrong. That is a **product defect** and MUST NOT be downgraded to
+    #     `NOT_RUN`, so it is reported as `FAIL`.
+    #
+    # Both messages carry the exception class plus the offending field/path, so
+    # the remediation is actionable without a stack trace. The composition
+    # discovery is inside the same try: it reads `host.home.composition_globs`,
+    # which is a declared fact like any other.
     try:
-        version = subprocess.run([node_path, "--version"], capture_output=True,
-                                 text=True, encoding="utf-8", errors="replace",
-                                 timeout=30)
-        report["install"]["node_version"] = (version.stdout or "").strip() or None
-    except (OSError, subprocess.TimeoutExpired):
-        report["install"]["node_version"] = None
+        paths = ([Path(item) for item in compositions] if compositions is not None
+                 else discover_compositions(root))
+        paths = [path if path.is_absolute() else root / path for path in paths]
+        if not paths:
+            report["reason"] = (
+                f"no preset composition found under {root.as_posix()} "
+                f"(looked for {' and '.join(_fact('_composition_globs'))})")
+            return report
 
-    probe = probe_runner(node_path, install_probe, paths, root, timeout)
+        install_probe = (install if install is not None
+                         else locate_dsh_install(env=env, which=which))
+        report["install"] = dict(install_probe)
+        if install_probe.get("status") != "OK":
+            report["reason"] = (
+                f"installed dsh not available — composition schemas cannot be "
+                f"validated: {install_probe.get('reason')}")
+            report["details"].append(report["reason"])
+            return report
+
+        node_path = node if node is not None else which("node")
+        report["install"]["node"] = node_path
+        if not node_path:
+            report["reason"] = (
+                "node executable not found on PATH — the installed harness's own "
+                "YAML dialect and Config schemas cannot be reached without it")
+            report["details"].append(report["reason"])
+            return report
+        try:
+            version = subprocess.run([node_path, "--version"], capture_output=True,
+                                     text=True, encoding="utf-8", errors="replace",
+                                     timeout=30)
+            report["install"]["node_version"] = (version.stdout or "").strip() or None
+        except (OSError, subprocess.TimeoutExpired):
+            report["install"]["node_version"] = None
+
+        probe = probe_runner(node_path, install_probe, paths, root, timeout)
+        if probe["status"] == PROBE_STATUS_CONTRACT_FAIL:
+            # The contract itself could not supply the probe facts: a product
+            # defect, never an environment gap (CODE R0 F-03).
+            report["verdict"] = VERDICT_FAIL
+            report["reason"] = probe["reason"]
+            report["issues"] = [probe["reason"]]
+            report["details"].append(probe["reason"])
+            return report
+    # `_contract_failure_types()` can raise nothing (it returns None when the
+    # accessor module itself is missing), which matters here: a raise inside an
+    # `except` clause escapes as a fresh traceback instead of a verdict.
+    except Exception as exc:  # noqa: BLE001 — classified below
+        return _contract_failure_report(report, exc)
+
     report["isolation"] = probe["isolation"]
     if probe["status"] != "OK":
         report["reason"] = probe["reason"]
@@ -1425,7 +1554,8 @@ def emit_check_section(stream=None) -> int:
     """
     report = check_dsh_preset_compat()
     stream = sys.stdout if stream is None else stream
-    print(f"\n┌─ {CHECK_SECTION_TITLE} {'─' * max(1, 60 - len(CHECK_SECTION_TITLE))}┐",
+    title = _fact("_section_title")
+    print(f"\n┌─ {title} {'─' * max(1, 60 - len(title))}┐",
           file=stream)
     install = report.get("install") or {}
     isolation = report.get("isolation") or {}
@@ -1549,7 +1679,8 @@ def _print_human(report: dict, stream) -> None:
     print(f"plane  : {install.get('source') or '-'}", file=stream)
     print(f"resolve: {install.get('node_modules') or '-'}", file=stream)
     cli = install.get("cli_package") or {}
-    print(f"cli    : {CLI_PACKAGE} {cli.get('version') or '?'} "
+    print(f"cli    : {_fact('_scope')}/{_fact('_cli_package')} "
+          f"{cli.get('version') or '?'} "
           f"({cli.get('path') or '?'}) — informational, not the schema authority",
           file=stream)
     for name, entry in sorted((install.get("oracle_packages") or {}).items()):

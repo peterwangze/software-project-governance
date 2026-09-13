@@ -603,7 +603,7 @@ python …/verify_workflow.py check-dsh-preset-compat                           
 | `--json` | 机器可读报告（默认可读文本） |
 | `--stage S0..S7`（可重复） | 只跑指定阶段 |
 | `--offline` | 禁止一切子进程/宿主探测（全部相关阶段 → `NOT_RUN`，**不 FAIL**） |
-| `--record-evidence` | 唯一契约证据写入路径（需真实平面；隔离 DSH_HOME） |
+| `--record-evidence` | **证据采集**的唯一路径（口径收窄，FEAT-031 V8 / F-03）（需真实平面；隔离 DSH_HOME） |
 | `--rehearse <host-facts.json> [--against <baseline.json>]` | 离线升级演练（§5.5） |
 | `--allow-host-probe` | 允许 S5 执行宿主组合探测（**要求先满足 R1 三选一**：隔离/备份+校验/用户授权），否则拒绝（exit 2） |
 
@@ -650,6 +650,9 @@ python …/verify_workflow.py check-dsh-preset-compat                           
 - **K-12**：同一仓库态下 `dsh-doctor --json` 顶层 `verdict` 与 `check-dsh-boundary --fail-on-issues` 退出码 MUST 一致；不一致 → doctor 自身 FAIL（含反相 fixture `FX-VERDICT-01`）。
 
 #> **S2 投影约束（F-R1-06）**：`dsh-doctor` 的 S2 面投影 `coverage` 时 MUST 携带 `unreadable_compositions`；读失败（`ContractUnreadable` 之外的**组合文件**读失败）在该面 MUST NOT 丢失——它是与 `rows_unverified` 同级的可信面事实。
+
+> **`evidence.*` 的写入面（口径收窄，FEAT-031 V8 落地 / DEC-193 / REVIEW-FEAT-031-CODE-R1 F-03）**：`dsh-doctor --record-evidence` 的写入面 = **记录式 fixture**（`host-facts-<v>.json`）；契约 `evidence.*` 的更新由**维护者在受审提交中**完成（把 fixture 里实测的 `dsh_cli_version` / `verified_on` / `plane` / `oracle_packages` 写入契约）。理由：契约是单一事实源；若由探针直接改写，则「唯一写入点」同时意味着「未受审的可机变面」，与 §2.1 的单一事实源纪律冲突。因此 §2.7 的「证据写入 = 单点」应读作「**证据采集 = 单点**」；TTL（§2.4 `verified_on_ttl_days`）与版本比对（K-7 / S3）在契约未记录时一律 `NOT_RUN`，**绝不默认 PASS**。
+
 
 ## 5.2 阶段规格（S0→S7，对齐 AUDIT-153 §6.1 的定界链）
 

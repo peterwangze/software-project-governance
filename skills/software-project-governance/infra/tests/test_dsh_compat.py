@@ -445,14 +445,33 @@ class AggregationTests(unittest.TestCase):
 
     def test_zero_enabled_rows_degrades_to_not_run(self):
         path = _REPO_ROOT / "fixture.cordis.yml"
+        # FIX-311: "zero enabled rows" now has TWO distinguishable causes, so the
+        # fixture names the one this test is about — a row that exists and is
+        # disabled — instead of relying on the ambiguity of an empty row list.
+        # (`_matrix_entry` derives `inherited_disabled` from the row kinds the
+        # way the probe does.)
         report = self._run(
-            [_file_entry(path, [], enabled=0, checked=0)],
+            [_matrix_entry(path, ("DISABLED_INHERITED",))],
             compositions=[path])
         self.assertEqual(report["verdict"], "NOT_RUN", report)
+        self.assertEqual(report["rows_enabled"], 0, report)
+        self.assertEqual(report["rows_inherited_disabled"], 1, report)
         # F4: "the preset mounts nothing" is named, not hidden behind a
         # generic unverified message.
         self.assertIn("would mount nothing", report["reason"])
         self.assertIn("disabled", report["reason"])
+
+    def test_no_plugin_row_at_all_does_not_claim_disabled_rows(self):
+        # FIX-311: the other cause of "zero enabled rows" — a composition whose
+        # only record is a group row (G-02) or which declares no row at all.
+        # Nothing measured a disabled row, so the verdict must not assert one.
+        path = _REPO_ROOT / "fixture.cordis.yml"
+        report = self._run([_file_entry(path, [], enabled=0, checked=0)],
+                           compositions=[path])
+        self.assertEqual(report["verdict"], "NOT_RUN", report)
+        self.assertIn("would mount nothing", report["reason"])
+        self.assertIn("no plugin row", report["reason"])
+        self.assertNotIn("every row", report["reason"])
 
     def test_absent_install_is_not_run_with_zero_issues(self):
         report = dsh_compat.check_dsh_preset_compat(
@@ -536,6 +555,11 @@ def _matrix_entry(path, kinds, *, status="OK"):
     """
     not_started = sum(1 for kind in kinds if kind in _MATRIX_NOT_STARTED_KINDS)
     checked = sum(1 for kind in kinds if kind in _MATRIX_COMPARED_KINDS)
+    # FIX-311: a row under a group whose `disabled` expression threw is counted on
+    # the probe's own `inherited_unverified` channel (G03-b), so the fixture
+    # derives it the way the probe does rather than leaving the counter absent.
+    inherited_unverified = sum(
+        1 for kind in kinds if kind == "DISABLED_INHERITED_UNKNOWN")
     return {
         "path": str(path),
         "status": status,
@@ -543,6 +567,7 @@ def _matrix_entry(path, kinds, *, status="OK"):
         "enabled": len(kinds) - not_started,
         "checked": checked,
         "inherited_disabled": not_started,
+        "inherited_unverified": inherited_unverified,
         "rows": [_row(f"row-{index + 1}", f"@deepseek-ai/dsh-mod-{index + 1}", kind,
                       f"{kind} fixture message")
                  for index, kind in enumerate(kinds)],
@@ -1003,6 +1028,161 @@ def _check_persona_contract(case, path, label, config):
                      f"not mount")
 
 
+class RowKindClassificationTests(unittest.TestCase):
+    """G-18 / FIX-311 — the classification table is guarded, and it fails loud.
+
+    The audit's G-18: `FINDING_KINDS` is a claim about the trust surface
+    ("everything else is at most a disclosure") but nothing guarded the claim.
+    The companion defect (F-R1-03) is the render layer's consequence: it selected
+    `[INFO]` lines by ELIMINATION (`kind ∉ FINDING_KINDS ∪ UNVERIFIED_KINDS ∧
+    kind ≠ "PASS"`), so a kind the table did not know landed in `[INFO]` and
+    changed no verdict. These tests pin both halves: the vocabulary is
+    exhaustive and disjoint, and an undeclared kind is a finding, never `[INFO]`.
+    """
+
+    _INSTALL = ZeroVerificationInvariantTests._INSTALL
+
+    def _report(self, kinds):
+        path = _REPO_ROOT / "kinds.cordis.yml"
+        return dsh_compat.check_dsh_preset_compat(
+            root=_REPO_ROOT,
+            compositions=[path],
+            env={},
+            which=_which_map({"node": "C:/fake/node.exe"}),
+            install=dict(self._INSTALL),
+            probe_runner=lambda node, install, paths, root, timeout: _probe_report(
+                [_matrix_entry(path, kinds)]))
+
+    # ── the vocabulary ──────────────────────────────────────────────────────
+    def test_every_kind_belongs_to_exactly_one_category(self):
+        """§6.1 V4③ — "each kind belongs to exactly one class", asserted.
+
+        The tables are pairwise disjoint, and each one round-trips through the
+        single classifier back to its own category. A kind that drifts into two
+        tables (or is misspelled in one) fails here rather than silently moving a
+        verdict.
+        """
+        tables = {dsh_compat.CATEGORY_FINDING: dsh_compat.FINDING_KINDS,
+                  dsh_compat.CATEGORY_UNVERIFIED: dsh_compat.UNVERIFIED_KINDS,
+                  dsh_compat.CATEGORY_INFO: dsh_compat.INFO_KINDS,
+                  dsh_compat.CATEGORY_PASS: (dsh_compat.PASS_KIND,)}
+        seen = {}
+        for category, kinds in tables.items():
+            self.assertTrue(kinds, f"{category} must not be empty")
+            for kind in kinds:
+                self.assertNotIn(kind, seen,
+                                 f"{kind!r} appears in {seen.get(kind)} and {category}")
+                seen[kind] = category
+                self.assertEqual(dsh_compat._classify_row_kind(kind), category)
+        # The coverage table the slice's acceptance asks for: every kind the
+        # guard can now emit, exactly once, over the four categories.
+        self.assertEqual(sorted(seen), sorted([
+            "CONFIG_INVALID", "MODULE_UNRESOLVED", "IMPORT_ERROR",
+            "CONFIG_EXPR_ERROR", "DISABLED_EXPR_ERROR", "ROW_SHAPE",
+            "GROUP_NAME_UNRESOLVED",
+            "NO_SCHEMA", "BUILTIN", "DISABLED_INHERITED_UNKNOWN",
+            "DISABLED_INHERITED", "PASS",
+        ]), seen)
+        # `_assert_kind_tables` is called at import; calling it again must stay
+        # silent on a consistent table (and is what a new kind would break).
+        dsh_compat._assert_kind_tables()
+
+    def test_the_declared_tables_are_the_only_source_of_a_category(self):
+        # No consumer may re-derive a category: the verdict, the `[NOT_RUN]`
+        # disclosure and the `[INFO]` face all ask `_classify_row`.
+        self.assertEqual(dsh_compat._classify_row_kind("NO_SCHEMA"),
+                         dsh_compat.CATEGORY_UNVERIFIED)
+        self.assertEqual(dsh_compat._classify_row_kind("DISABLED_INHERITED"),
+                         dsh_compat.CATEGORY_INFO)
+        self.assertEqual(dsh_compat._classify_row_kind("GROUP_NAME_UNRESOLVED"),
+                         dsh_compat.CATEGORY_FINDING)
+        self.assertEqual(dsh_compat._classify_row_kind("DISABLED_INHERITED_UNKNOWN"),
+                         dsh_compat.CATEGORY_UNVERIFIED)
+        self.assertEqual(dsh_compat._classify_row_kind("PASS"),
+                         dsh_compat.CATEGORY_PASS)
+
+    # ── the self-check over a report ────────────────────────────────────────
+    def test_an_undeclared_kind_is_a_finding_never_an_info_line(self):
+        """G-18 / F-R1-03 — the residual bucket is gone.
+
+        A kind in no table must become a gate issue. Before this slice it printed
+        as `[INFO]` and changed nothing, which is exactly how a future probe
+        diagnostic would have gone unnoticed.
+        """
+        report = self._report(("PASS", "SOME_FUTURE_PROBE_KIND"))
+        self.assertEqual(report["verdict"], "FAIL", report)
+        self.assertEqual(len(report["issues"]), 1, report["issues"])
+        self.assertIn("SOME_FUTURE_PROBE_KIND", report["issues"][0])
+        self.assertIn("undeclared row kind", report["issues"][0])
+        # …and it is NOT quietly filed as an `[INFO]` line: the render face
+        # fails loud on it rather than printing it as information (the residual
+        # selection this replaced would have printed it and changed nothing).
+        with self.assertRaises(ValueError) as caught:
+            dsh_compat._informational_details(report)
+        self.assertIn("SOME_FUTURE_PROBE_KIND", str(caught.exception))
+
+    def test_the_report_level_self_check_raises_on_an_undeclared_kind(self):
+        # The render layer's own guard: if a report somehow carries a kind in no
+        # table, `_informational_details` fails loud instead of printing it as
+        # information.
+        report = self._report(("DISABLED_INHERITED",))
+        self.assertEqual(len(dsh_compat._informational_details(report)), 1)
+        report["compositions"][0]["rows"].append(
+            _row("future", "@deepseek-ai/dsh-future", "SOME_FUTURE_PROBE_KIND"))
+        with self.assertRaises(ValueError) as caught:
+            dsh_compat._informational_details(report)
+        self.assertIn("SOME_FUTURE_PROBE_KIND", str(caught.exception))
+        self.assertIn("G-18", str(caught.exception))
+
+    def test_a_group_record_is_info_not_an_unverified_config(self):
+        # FIX-311: a group row is recorded as BUILTIN (G02-a) but it is
+        # STRUCTURE — it carries a child count, not a config — so it must not
+        # enter `unverified_reasons` (which stays "enabled rows whose config was
+        # not verified") and must not change the verdict.
+        report = self._report(("PASS", "BUILTIN"))
+        self.assertEqual(report["verdict"], "PASS", report)
+        self.assertEqual(report["rows_enabled"], 2, report)
+        self.assertEqual(report["rows_checked"], 1, report)
+        self.assertEqual(dict(report["coverage"]["unverified_reasons"]),
+                         {"BUILTIN": 1}, report["coverage"])
+        report["compositions"][0]["rows"].append({
+            "row": "planning", "name": "cordis:group", "kind": "BUILTIN",
+            "builtin": "group", "children": 1,
+            "message": "group builtin — 1 child row(s) enumerated"})
+        self.assertEqual(
+            dsh_compat._classify_row(report["compositions"][0]["rows"][-1]),
+            dsh_compat.CATEGORY_INFO)
+        self.assertEqual(
+            dsh_compat._classify_row_kind("BUILTIN"),
+            dsh_compat.CATEGORY_UNVERIFIED)
+        lines = dsh_compat._informational_details(report)
+        self.assertEqual(len(lines), 1, lines)
+        self.assertIn("cordis:group", lines[0])
+
+    def test_every_declared_kind_round_trips_through_a_real_report(self):
+        # The classifier is what the verdict turns on: driving each declared kind
+        # through the aggregation must land it in its declared category — a
+        # finding gates, an unverified kind is disclosed, INFO is not a gate
+        # issue, PASS neither. Any divergence shows up as a wrong verdict here.
+        for kind in dsh_compat.FINDING_KINDS:
+            with self.subTest(kind=kind):
+                self.assertEqual(self._report((kind,))["verdict"], "FAIL")
+        for kind in dsh_compat.UNVERIFIED_KINDS:
+            with self.subTest(kind=kind):
+                report = self._report((kind,))
+                self.assertEqual(report["issues"], [], report["issues"])
+                self.assertIn(report["verdict"], ("NOT_RUN", "FAIL"), report)
+                self.assertEqual(dict(report["coverage"]["unverified_reasons"]),
+                                 {kind: 1}, report["coverage"])
+        for kind in dsh_compat.INFO_KINDS:
+            with self.subTest(kind=kind):
+                report = self._report((dsh_compat.PASS_KIND, kind))
+                self.assertEqual(report["verdict"], "PASS", report)
+                self.assertEqual(report["coverage"]["rows_unverified"], 0,
+                                 report["coverage"])
+                self.assertEqual(len(dsh_compat._informational_details(report)), 1)
+
+
 @unittest.skipUnless(_HAS_YAML,
                      "PyYAML unavailable (optional, NOT_RUN per repo policy)")
 class CompositionRowContractTests(unittest.TestCase):
@@ -1243,9 +1423,24 @@ class InstalledSchemaTests(unittest.TestCase):
 
     @unittest.skipUnless(_LIVE_INSTALL and _LIVE_NODE, _LIVE_SKIP)
     def test_throwing_group_disabled_expression_is_a_finding(self):
-        # `disabledOf` is called unguarded by the loader's ancestor walk, so a
-        # throwing group expression rejects the mount — it must not be
-        # swallowed into a silent skip.
+        # FIX-311 (V4) / design §4.4.2③ — **C-23 expected rewrite, not a
+        # regression**. This test used to assert only "a throwing group
+        # expression is a finding", on the comment that "`disabledOf` is called
+        # unguarded by the loader's ancestor walk". That is true OF THE ANCESTOR
+        # WALK and false of the group itself: `Entry._disabled` line 1
+        # (`if (options.group) return false`) short-circuits the group's own
+        # `disabled`, so nothing evaluates it *at the group row*. What the old
+        # expectation encoded — FAIL at the group row and stop — also swallowed
+        # the child: `continue` left it out of the report entirely, neither
+        # PASSed nor FAILed (AUDIT-153 §5 G-03, the false negative).
+        #
+        # The corrected attribution: the expression IS evaluated, but as an
+        # ANCESTOR of the child rows (that walk carries no short-circuit), so the
+        # child's inheritance — not the group's own mount — is what breaks. The
+        # assertions below pin all three halves of the corrected behaviour:
+        # the finding, the child's disclosure, and (see
+        # `test_group_children_are_still_validated_when_the_group_expression_throws`)
+        # the child still being validated.
         with _scratch("spg-test-t05c-") as td:
             composition = Path(td) / "agent.cordis.yml"
             composition.write_text(
@@ -1263,7 +1458,156 @@ class InstalledSchemaTests(unittest.TestCase):
                 root=Path(td), compositions=[composition], env={},
                 install=_LIVE_INSTALL, node=_LIVE_NODE)
         self.assertEqual(report["verdict"], "FAIL", report)
+        self.assertEqual(len(report["issues"]), 1, report["issues"])
+        # The finding is attributed to the group's INHERITANCE evaluation, not to
+        # a mount of the group itself (G03-b).
+        self.assertIn("planning", report["issues"][0])
         self.assertIn("group-boom", report["issues"][0])
+        self.assertIn("child rows", report["issues"][0])
+        # …and the child it decides is disclosed instead of disappearing (the
+        # false negative the old `continue` produced). The child now carries TWO
+        # records, and that is the point of the fix: one says its mount cannot be
+        # determined (the inheritance), the other is the schema comparison that
+        # the old `continue` never reached — the child is disclosed *and*
+        # validated, which the pre-fix behaviour managed neither of.
+        rows = report["compositions"][0]["rows"]
+        self.assertEqual(
+            sorted((row["row"], row["kind"]) for row in rows),
+            [("persona", "DISABLED_INHERITED_UNKNOWN"), ("persona", "PASS"),
+             ("planning", "BUILTIN"), ("planning", "DISABLED_EXPR_ERROR")], rows)
+        self.assertEqual(report["rows_inherited_unverified"], 1, report)
+        self.assertEqual(
+            report["coverage"]["unverified_reasons"].get(
+                "DISABLED_INHERITED_UNKNOWN"), 1, report["coverage"])
+        self.assertTrue(
+            any("persona" in line and "DISABLED_INHERITED_UNKNOWN" in line
+                for line in report["unverified"]), report["unverified"])
+
+    @unittest.skipUnless(_LIVE_INSTALL and _LIVE_NODE, _LIVE_SKIP)
+    def test_group_children_are_still_validated_when_the_group_expression_throws(self):
+        # FIX-311 (V4) / design §4.4.2③ + acceptance 2②: the connected false
+        # negative. Before the fix, a throwing group expression `continue`d and
+        # every child of that group was simply never walked — the report held no
+        # row for them at all. The child below carries a BAD config (`text`
+        # instead of persona's required `prefix`), so once the walk continues the
+        # child must be checked and must FAIL on its own schema — independently
+        # of the group's finding.
+        with _scratch("spg-test-grpwalk-") as td:
+            composition = Path(td) / "agent.cordis.yml"
+            composition.write_text(
+                "- id: planning\n"
+                "  name: cordis:group\n"
+                "  group: true\n"
+                "  disabled: !!js \"(() => { throw new Error('group-boom') })()\"\n"
+                "  config:\n"
+                "    - id: persona\n"
+                "      name: '@deepseek-ai/dsh-persona'\n"
+                "      config:\n"
+                "        text: 'the pre-fix key, rejected by the installed schema'\n",
+                encoding="utf-8")
+            report = dsh_compat.check_dsh_preset_compat(
+                root=Path(td), compositions=[composition], env={},
+                install=_LIVE_INSTALL, node=_LIVE_NODE)
+        self.assertEqual(report["verdict"], "FAIL", report)
+        # The group's own finding …
+        self.assertTrue(any("group-boom" in issue for issue in report["issues"]),
+                        report["issues"])
+        # … and the child's, which only exists because the walk continued.
+        self.assertTrue(any("persona" in issue and "prefix" in issue
+                            for issue in report["issues"]), report["issues"])
+        # The child entered the trust surface: it was compared against the
+        # installed schema (and rejected), so it is counted, not merely listed.
+        self.assertEqual(report["rows_enabled"], 1, report)
+        self.assertEqual(report["rows_checked"], 1, report)
+        self.assertIn(("persona", "CONFIG_INVALID"),
+                      [(row["row"], row["kind"])
+                       for row in report["compositions"][0]["rows"]],
+                      report["compositions"][0]["rows"])
+
+    @unittest.skipUnless(_LIVE_INSTALL and _LIVE_NODE, _LIVE_SKIP)
+    def test_throwing_group_disabled_without_children_is_not_a_finding(self):
+        # FIX-311 (V4) / design §4.4.2 G03-c + `FX-GROUP-02`: a group with a
+        # throwing `disabled` and NO children. `_disabled` short-circuits the
+        # group's own `disabled`, and the ancestor walk exists only to serve
+        # children — with none, nothing ever evaluates the expression. The old
+        # guard reported a mount failure here that the loader cannot produce: a
+        # false FAIL on a composition the loader accepts (AUDIT-153 §5 G-03).
+        with _scratch("spg-test-grponly-") as td:
+            composition = dsh_fixtures.emit_fixture("FX-GROUP-02", td)
+            report = dsh_compat.check_dsh_preset_compat(
+                root=Path(td), compositions=[composition], env={},
+                install=_LIVE_INSTALL, node=_LIVE_NODE)
+        self.assertEqual(report["issues"], [], report["issues"])
+        self.assertEqual(report["verdict"], "NOT_RUN", report)
+        # Nothing was verified, so nothing may read as PASS (G01-a) …
+        self.assertEqual(report["rows_enabled"], 0, report)
+        self.assertEqual(report["rows_checked"], 0, report)
+        # … and the group still leaves a record (G02-a): the whole point of the
+        # slice is that a group is never silently absent from the report.
+        rows = report["compositions"][0]["rows"]
+        self.assertEqual(len(rows), 1, rows)
+        self.assertEqual(rows[0]["row"], "planning")
+        self.assertEqual(rows[0]["kind"], "BUILTIN")
+        self.assertEqual(rows[0]["builtin"], "group")
+        self.assertEqual(rows[0]["children"], 0)
+        self.assertIn("no child row", rows[0]["message"])
+        # The verdict must not claim what nothing measured: with no disabled row
+        # observed and no enabled row, "every row is disabled" is not a fact of
+        # this run — the group is structure, and structure mounts nothing.
+        self.assertIn("no plugin row", report["reason"], report["reason"])
+        self.assertNotIn("every row", report["reason"], report["reason"])
+
+    @unittest.skipUnless(_LIVE_INSTALL and _LIVE_NODE, _LIVE_SKIP)
+    def test_group_name_that_is_not_the_declared_builtin_is_a_finding(self):
+        # FIX-311 (V4) / design §4.4.2 G02-b + `FX-GROUP-01`: G-02 was a silent
+        # false negative — the walk recursed past every group row without ever
+        # resolving its `name`, so `cordis:group` and `cordis:gruop` were equally
+        # green (AUDIT-153 §5: the `planning` row produced NO record at all).
+        # Only the declared builtin is a measured form; anything else fails
+        # closed instead of being assumed equivalent.
+        with _scratch("spg-test-grpname-") as td:
+            composition = dsh_fixtures.emit_fixture("FX-GROUP-01", td)
+            report = dsh_compat.check_dsh_preset_compat(
+                root=Path(td), compositions=[composition], env={},
+                install=_LIVE_INSTALL, node=_LIVE_NODE)
+        self.assertEqual(report["verdict"], "FAIL", report)
+        self.assertEqual(
+            [row["kind"] for row in report["compositions"][0]["rows"]],
+            ["GROUP_NAME_UNRESOLVED"], report["compositions"][0]["rows"])
+        self.assertIn("GROUP_NAME_UNRESOLVED", report["issues"][0],
+                      report["issues"])
+        self.assertIn("cordis:group", report["issues"][0], report["issues"])
+        self.assertIn("cordis:gruop", report["issues"][0], report["issues"])
+        # The name is resolved against the CONTRACT's declared builtin, not a
+        # literal in the probe.
+        self.assertEqual(dsh_compat._fact("_builtin_group_name"), "cordis:group")
+
+    @unittest.skipUnless(_LIVE_INSTALL and _LIVE_NODE, _LIVE_SKIP)
+    def test_group_children_of_a_disabled_group_are_still_disclosed(self):
+        # FIX-311 (V4) / design §4.4.2 G03-a regression guard: the fix moves the
+        # group's `disabled` evaluation to the children's inheritance path —
+        # `disabled: true` must still reach every child. Evaluating the group's
+        # expression is not allowed to become "the group is enabled".
+        with _scratch("spg-test-grpinherit-") as td:
+            report = self._group_disabled_report(td, "true")
+        self.assertEqual(report["issues"], [], report["issues"])
+        self.assertEqual(report["rows_inherited_disabled"], 1, report)
+        self.assertEqual(report["rows_inherited_unverified"], 0, report)
+        rows = report["compositions"][0]["rows"]
+        # The child is disclosed exactly as before the fix (the inheritance rule
+        # is untouched) …
+        self.assertEqual(
+            sorted((row["row"], row["kind"]) for row in rows),
+            [("persona", "DISABLED_INHERITED")], rows)
+        # … and the group row is NOT enumerated here. Its own `disabled: true` is
+        # what the children inherited, so it did not enumerate anything: the
+        # group record exists to state what a group did for its children, and
+        # the "enumerated N child row(s)" form belongs to the path that walked
+        # them. Recording a child count here would claim an enumeration that
+        # never happened.
+        self.assertFalse(any(row["kind"] == "BUILTIN" for row in rows), rows)
+        self.assertEqual(
+            report["coverage"]["rows_unverified"], 0, report["coverage"])
 
     @unittest.skipUnless(_LIVE_INSTALL and _LIVE_NODE, _LIVE_SKIP)
     def test_nested_group_inheritance_propagates(self):

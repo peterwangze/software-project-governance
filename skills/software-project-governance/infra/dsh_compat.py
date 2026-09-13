@@ -130,6 +130,13 @@ FINDING_KINDS = (
     "CONFIG_EXPR_ERROR",
     "DISABLED_EXPR_ERROR",
     "ROW_SHAPE",
+    # G-02 / FIX-311 (design §4.4.2 G02-b). A group row's `name` was never
+    # resolved: the walk recursed straight past it, so every name form — the
+    # real builtin, a `cordis:` typo, a plain package name — read exactly the
+    # same (AUDIT-153 §5 G-02). Measured fact: only `cordis:group` is a builtin
+    # group (`host.row_contract.builtin_group_name`); any other name is
+    # unverifiable, and "cannot verify" is a finding here, not a shrug.
+    "GROUP_NAME_UNRESOLVED",
 )
 
 #: Row diagnostics that mean "an **enabled** row's config was NOT verified by
@@ -146,7 +153,19 @@ FINDING_KINDS = (
 #:   the row's config against. The message asserts nothing about what the
 #:   loader then does with it (that behaviour is a separate, unverified fact).
 #: * ``BUILTIN`` — a ``cordis:`` loader builtin: no module to import, hence no
-#:   schema to apply.
+#:   schema to apply. This covers a **leaf** builtin row. The ``BUILTIN`` record
+#:   of a **group** row is the same kind for the same reason, but it is tagged
+#:   ``builtin: "group"`` and is routed to ``[INFO]`` by :func:`_classify_row`
+#:   instead: a group is structure, it carries a child count rather than a config,
+#:   and there is no config whose verification could be missing (G-02).
+#: * ``DISABLED_INHERITED_UNKNOWN`` — a child whose ancestor group carries a
+#:   `disabled` expression that THREW. The loader's ancestor walk
+#:   (`Entry._disabled`'s `while (entry) { if (this.disabledOf(entry.options))
+#:   return true; … }`) evaluates that expression unguarded, so the mount is
+#:   rejected — a real finding (G03-b) — and at the same time not one of this
+#:   group's children can be known to start. They are counted here, not as
+#:   inherited-disabled: "we know it never starts" and "we could not find out"
+#:   are different facts and must not share a counter.
 #:
 #: ``DISABLED_INHERITED`` is deliberately **absent**: such a row never starts
 #: (its ancestor is disabled), so the probe does not count it in
@@ -161,7 +180,149 @@ FINDING_KINDS = (
 UNVERIFIED_KINDS = (
     "NO_SCHEMA",
     "BUILTIN",
+    "DISABLED_INHERITED_UNKNOWN",
 )
+
+#: Row diagnostics that are neither verified nor unverified nor failing: the
+#: probe knows the row never started, so it is outside the trust surface and is
+#: disclosed as `[INFO]`.
+#:
+#: **This set is a whitelist, not a residual bucket** (FIX-311 / F-R1-03). The
+#: render layer used to select `[INFO]` lines by elimination
+#: (`kind ∉ FINDING_KINDS ∪ UNVERIFIED_KINDS ∧ kind ≠ "PASS"`), so any kind a
+#: future probe added landed in `[INFO]` silently — the v0.81.0 audit's G-18:
+#: the classification table IS the trust-surface claim, and nothing guarded it.
+#: A kind reaches `[INFO]` now only by being named here, and a kind named
+#: nowhere is a finding (`_classify_row_kind`) — fail-loud, never a quiet bucket.
+INFO_KINDS = (
+    "DISABLED_INHERITED",
+)
+
+#: The one kind that means "a schema was applied and the config was accepted".
+PASS_KIND = "PASS"
+
+#: The four row outcomes, in the order the design names them (§4.4.2 G-18:
+#: "each kind belongs to exactly one of {FINDING, UNVERIFIED, DISCLOSURE}").
+#: `_classify_row_kind` has no fallthrough that returns a real category: an
+#: undeclared kind answers `"unknown"`, which is what makes the classification
+#: self-check (`_assert_kind_tables`) able to catch a future kind instead of
+#: filing it.
+CATEGORY_FINDING = "finding"
+CATEGORY_UNVERIFIED = "unverified"
+CATEGORY_INFO = "info"
+CATEGORY_PASS = "pass"
+CATEGORY_UNKNOWN = "unknown"
+
+_KNOWN_KIND_CATEGORIES = {
+    **{kind: CATEGORY_FINDING for kind in FINDING_KINDS},
+    **{kind: CATEGORY_UNVERIFIED for kind in UNVERIFIED_KINDS},
+    **{kind: CATEGORY_INFO for kind in INFO_KINDS},
+    PASS_KIND: CATEGORY_PASS,
+}
+
+
+def _is_group_record(row: dict) -> bool:
+    """Is this row record the GROUP itself (G-02), not a plugin row?
+
+    A group row is recorded as the ``BUILTIN`` kind because it *is* a builtin
+    (`cordis:group`, no module to import, no schema to apply), tagged with
+    ``builtin: "group"`` per design §4.4.2 G02-a.
+    """
+    return row.get("kind") == "BUILTIN" and row.get("builtin") == "group"
+
+
+def _classify_row_kind(kind: Optional[str]) -> str:
+    """The declared category of one row diagnostic kind (single source).
+
+    Every consumer that has to tell a finding from a disclosure asks HERE, so
+    the verdict, the on-screen disclosure and the `[INFO]` face cannot drift
+    apart, and a kind that is in no declared table answers `CATEGORY_UNKNOWN` —
+    which callers turn into a finding rather than a silent `[INFO]` line.
+    """
+    return _KNOWN_KIND_CATEGORIES.get(kind, CATEGORY_UNKNOWN)
+
+
+def _classify_row(row: dict) -> str:
+    """The category of one row RECORD — `_classify_row_kind` plus the two facts
+    that are decided by the record rather than by its kind.
+
+    Both exceptions move a row OUT of the trust surface, so they are named
+    explicitly instead of being inherited from the kind:
+
+    * a **group record** (`_is_group_record`) is structural. It was invisible
+      before G-02 and it carries a child count, not a config — there is no
+      config whose verification could be missing, so it is `[INFO]`, not a
+      `[NOT_RUN]` disclosure, and it does not enter the `unverified_reasons`
+      histogram (which stays "enabled rows whose CONFIG was not verified").
+    * a row is still `[INFO]` when a future probe omits a `kind`; an undeclared
+      *kind* answers `CATEGORY_UNKNOWN` and becomes a finding, but "no kind at
+      all" is a missing field, not an new vocabulary entry.
+    """
+    if _is_group_record(row):
+        return CATEGORY_INFO
+    if row.get("kind") is None:
+        return CATEGORY_INFO
+    return _classify_row_kind(row.get("kind"))
+
+
+def _assert_kind_tables() -> None:
+    """G-18 classification self-check over the guard's OWN kind tables.
+
+    The tables above are a claim about the trust surface ("these kinds are
+    findings, these are disclosures, these are informational"). This asserts the
+    claim is well-formed: the four tables are pairwise disjoint, their keys are
+    non-empty strings, and each one round-trips through
+    :func:`_classify_row_kind` back to its own category. A kind that has been
+    dropped into two tables — or misspelled in one — fails here instead of
+    silently changing a verdict.
+    """
+    problems = []
+    seen = {}
+    for category, kinds in ((CATEGORY_FINDING, FINDING_KINDS),
+                            (CATEGORY_UNVERIFIED, UNVERIFIED_KINDS),
+                            (CATEGORY_INFO, INFO_KINDS),
+                            (CATEGORY_PASS, (PASS_KIND,))):
+        for kind in kinds:
+            if not isinstance(kind, str) or not kind:
+                problems.append(f"{category} declares a non-string/empty kind: {kind!r}")
+                continue
+            if kind in seen:
+                problems.append(
+                    f"{kind!r} is declared in both {seen[kind]} and {category}")
+                continue
+            seen[kind] = category
+            resolved = _classify_row_kind(kind)
+            if resolved != category:
+                problems.append(
+                    f"{kind!r} declares {category} but classifies as {resolved!r}")
+    if problems:
+        raise ValueError(
+            "dsh_compat row-kind classification is not exhaustive/disjoint "
+            "(G-18): " + "; ".join(problems))
+
+
+_assert_kind_tables()
+
+
+def _assert_report_kinds_declared(report: dict) -> None:
+    """G-18 self-check over a REPORT: every row kind it carries is declared.
+
+    The table check above guards the vocabulary; this guards the observation. A
+    probe row whose kind is in no table is a fact this module cannot place in the
+    trust surface, so it must be reported — the alternative is the residual
+    bucket this slice removed (F-R1-03), where the row printed as `[INFO]` and
+    changed no verdict. Raises ``ValueError`` naming every offending kind.
+    """
+    undeclared = sorted({
+        row.get("kind")
+        for entry in report.get("compositions") or ()
+        for row in entry.get("rows") or ()
+        if _classify_row(row) == CATEGORY_UNKNOWN})
+    if undeclared:
+        raise ValueError(
+            "row kind(s) in no declared table (G-18 fail-loud — add each to "
+            "FINDING_KINDS, UNVERIFIED_KINDS, INFO_KINDS or PASS_KIND): "
+            + ", ".join(repr(kind) for kind in undeclared))
 
 # ── the dsh host-dependency contract (single source of the host facts) ─────
 # Design §2.5 C-3: every host literal this guard used to inline — the install
@@ -210,6 +371,15 @@ _DECLARED_BINDING = {
     "COMPOSITION_FILENAMES": "host.home.composition_file",
     "COMPOSITION_GLOBS": "host.home.composition_globs",
     "COMPAT_SECTION_TITLE": "own.checks.compat_section_title",
+    # G-02 / G-03 (FIX-311): the group row's semantics are host facts, so they
+    # come from the contract like every other host fact rather than from a
+    # literal here. `builtin_group_name` is the only measured legal group name
+    # (G02-b); the two flags are the loader's own rules that the walk reproduces
+    # (`group_self_disabled_shortcircuit` = `Entry._disabled` line 1,
+    # `ancestor_disabled_inherited` = its `while (entry)` walk).
+    "BUILTIN_GROUP_NAME": "host.row_contract.builtin_group_name",
+    "GROUP_DISABLED_SHORT_CIRCUIT": "host.row_contract.group_self_disabled_shortcircuit",
+    "GROUP_ANCESTOR_INHERITED": "host.row_contract.ancestor_disabled_inherited",
 }
 
 #: Sequence-shaped bindings: the contract field is a JSON array.
@@ -238,6 +408,9 @@ _FACT_ALIASES = {
     "_composition_filenames": "COMPOSITION_FILENAMES",
     "_composition_globs": "COMPOSITION_GLOBS",
     "_section_title": "COMPAT_SECTION_TITLE",
+    "_builtin_group_name": "BUILTIN_GROUP_NAME",
+    "_group_disabled_short_circuit": "GROUP_DISABLED_SHORT_CIRCUIT",
+    "_group_ancestor_inherited": "GROUP_ANCESTOR_INHERITED",
 }
 
 
@@ -477,45 +650,169 @@ function disabledOf(row, ctx) {
 async function walk(rows, at, ctx, entry, inheritedBy) {
   for (const [index, row] of rows.entries()) {
     const positional = at === '' ? `row ${index + 1}` : `${at} row ${index + 1}`
-    const id = row && typeof row.id === 'string' && row.id !== '' ? row.id : positional
-    if (row === null || typeof row !== 'object' || Array.isArray(row)
-        || typeof row.name !== 'string' || row.name === '') {
+    if (row === null || typeof row !== 'object' || Array.isArray(row)) {
+      entry.rows.push({ row: positional, name: '', kind: 'ROW_SHAPE', message:
+        `${positional} is not a plugin row (a "name" string is required)` })
+      continue
+    }
+    const id = typeof row.id === 'string' && row.id !== '' ? row.id : positional
+    // Group rows first, so the builtin's own name rule can be applied instead of
+    // the plugin-row one: `Entry._disabled` line 1 (`if (options.group) return
+    // false`) means the loader never treats a group as a plugin to mount, and
+    // its `name` selects the builtin rather than a module (G-02).
+    const isGroup = Boolean(row.group)
+    if (!isGroup && (typeof row.name !== 'string' || row.name === '')) {
       entry.rows.push({ row: id, name: '', kind: 'ROW_SHAPE', message:
         `${positional} is not a plugin row (a "name" string is required)` })
       continue
     }
-    const name = row.name
-    // Group rows: `Entry._disabled` line 1 (`if (options.group) return false`)
-    // makes the GROUP itself always enabled, and `Entry.refresh` skips a row
-    // only when `_disabled` is true. But the same function then walks the
-    // owning-parent chain — `while (entry) { if (this.disabledOf(entry.options))
-    // return true; entry = entry.parent.ctx.fiber.entry }` — applying
-    // `disabledOf` to every ancestor WITHOUT that short-circuit, so a child of
-    // a `disabled: true` group never starts. The roster's own reader, a
+    const name = typeof row.name === 'string' ? row.name : ''
+    if (!isGroup && Array.isArray(row.config)) {
+      entry.rows.push({ row: id, name, kind: 'ROW_SHAPE', message:
+        `${positional} carries a config LIST but is not a group row; the ` +
+        `loader reads "config" as this row's config, not as nested rows` })
+      continue
+    }
+    // Group rows: the loader decides what mounts, so `Entry._disabled` is the
+    // text reproduced here. Its first line short-circuits the GROUP's own
+    // `disabled`; the ancestor walk below it is what makes a child of a
+    // `disabled: true` group never start. The roster's own reader, a
     // composition-inventory helper in the host's own presets package
     // (`combineDisabled(outer, own)`), agrees: it "lets children inherit its
     // disabled".
     //
     // Divergence, deliberate: the group test here is truthiness, matching the
     // loader (`if (options.group)`, and the mount path's own `row.group`),
-    // rather than `flattenRows`' stricter `=== true`. The loader decides what
-    // mounts, so the loader's test is the one reproduced.
-    if (row.group) {
+    // rather than `flattenRows`' stricter `=== true`.
+    if (isGroup) {
+      // G-02: the group's `name` WAS never resolved — the walk recursed past
+      // it, so every name form behaved identically and an unusable one was as
+      // green as the builtin (AUDIT-153 §5). Only the declared builtin is a
+      // measured form; anything else is not verifiable here and is a finding.
+      if (row.name !== __GROUP_NAME__) {
+        entry.rows.push({ row: id, name,
+          kind: 'GROUP_NAME_UNRESOLVED',
+          message: `GROUP_NAME_UNRESOLVED: group name must be "${__GROUP_NAME__}" ` +
+            `(the declared builtin); got ` +
+            (row.name === undefined ? 'no name' : JSON.stringify(row.name)) })
+        continue
+      }
       if (!Array.isArray(row.config)) {
         entry.rows.push({ row: id, name, kind: 'ROW_SHAPE', message:
           `group ${positional} must hold a list of plugin rows` })
         continue
       }
-      let groupDisabled
-      try {
-        groupDisabled = disabledOf(row, ctx)
-      } catch (error) {
-        entry.rows.push({ row: id, name, kind: 'DISABLED_EXPR_ERROR', message:
-          `group disabled !!js expression threw: ${message(error)}` })
+      // G-03-a: a group's OWN `disabled` is never evaluated at the group row —
+      // `_disabled` returns false for `options.group` before reaching
+      // `disabledOf`. So a throwing expression on a childless group is not a
+      // finding: nothing would ever evaluate it (G03-c).
+      let unknownInherited = false
+      if (!inheritedBy && !__GROUP_DISABLED_SHORT_CIRCUIT__) {
+        // Contract says the short-circuit is off: reproduce the loader's
+        // ancestor-walk rule at the group row too, unguarded — it may throw.
+        try {
+          inheritedBy = disabledOf(row, ctx) ? id : ''
+        } catch (error) {
+          entry.rows.push({ row: id, name, kind: 'DISABLED_EXPR_ERROR', message:
+            `group disabled !!js expression threw: ${message(error)}` })
+          continue
+        }
+      }
+      if (row.config.length === 0) {
+        // G03-c: nothing can inherit this group's `disabled`, so the loader
+        // never evaluates it and there is nothing to find. The group still
+        // leaves a record (G02-a): zero children, nothing enumerated.
+        entry.rows.push({ row: id, name, kind: 'BUILTIN', builtin: 'group',
+          groups: 0, children: 0, message:
+          'group builtin — declares no child row, so it enumerates nothing' })
         continue
       }
-      await walk(row.config, positional, ctx, entry,
-                 inheritedBy || (groupDisabled ? id : ''))
+      if (inheritedBy) {
+        // An ancestor already decides this row's fate, and it is evaluated
+        // FIRST. Nothing below it is enumerated: those rows never start, which
+        // is what the loader does — a disabled entry never instantiates the
+        // plugins under it. The group itself is not enumerated either: the group
+        // record states what it did for its children, and here it did nothing.
+        continue
+      }
+      if (__GROUP_ANCESTOR_INHERITED__) {
+        // G-03-b: the children's ancestor walk evaluates this group's
+        // `disabled` unguarded, so it is evaluated here — ONCE for the group,
+        // exactly as the loader does it — and a throw is a real finding.
+        // Distinguishing "threw" from "true" matters: a throw says the mount is
+        // rejected, not that the children were skipped.
+        let groupDisabled
+        try {
+          groupDisabled = disabledOf(row, ctx)
+        } catch (error) {
+          entry.rows.push({ row: id, name, kind: 'DISABLED_EXPR_ERROR', message:
+            `group disabled !!js expression threw while evaluating it for this ` +
+            `group's child rows: ${message(error)}` })
+          // The group's fate is now a finding either way, but its children's is
+          // NOT: the mount is rejected before any of them starts, so "did this
+          // row mount" has no answer. Each child is named on the unverified
+          // channel instead of being silently dropped (G03-b) — this is the
+          // false negative the old `continue` produced.
+          unknownInherited = true
+          for (let child = 0; child < row.config.length; child += 1) {
+            const childRow = row.config[child]
+            const childAt = `${positional} row ${child + 1}`
+            const childId = childRow && typeof childRow.id === 'string'
+              && childRow.id !== '' ? childRow.id : childAt
+            entry.inherited_unverified += 1
+            entry.rows.push({ row: childId,
+              name: childRow && typeof childRow.name === 'string' ? childRow.name : '',
+              kind: 'DISABLED_INHERITED_UNKNOWN', message:
+              `cannot be determined to start — ancestor entry "${id}" carries a ` +
+              `disabled expression that threw, so this row's mount is rejected ` +
+              `without any schema comparison` })
+          }
+        }
+        if (!unknownInherited && groupDisabled) {
+          // `true` disables every child just as flat as a throwing expression
+          // does, but for a KNOWN reason. Each child is named as
+          // inherited-disabled (the existing rule) rather than walked: a row
+          // that never starts is never mounted, and validating its config would
+          // be the false FAIL t05/t06 exist to prevent.
+          for (let child = 0; child < row.config.length; child += 1) {
+            const childRow = row.config[child]
+            const childAt = `${positional} row ${child + 1}`
+            const childId = childRow && typeof childRow.id === 'string'
+              && childRow.id !== '' ? childRow.id : childAt
+            entry.inherited_disabled += 1
+            entry.rows.push({ row: childId,
+              name: childRow && typeof childRow.name === 'string' ? childRow.name : '',
+              kind: 'DISABLED_INHERITED', message:
+              `not started — inherits disabled from ancestor entry "${id}"` })
+          }
+          continue
+        }
+      }
+      // G-03 (the connected false negative): the walk CONTINUES into the
+      // group's children. The old `continue` on a throwing group expression left
+      // every child of that group unvalidated — they were neither PASSed nor
+      // FAILED, they simply stopped existing in the report. (A throwing group
+      // already emitted its children's disclosures above.)
+      await walk(row.config, positional, ctx, entry, inheritedBy)
+      // G02-a/D2: the group leaves a record of its own — named builtin, child
+      // count, and how many of those children it could not pin down.
+      entry.rows.push({ row: id, name, kind: 'BUILTIN', builtin: 'group',
+        groups: row.config.length, children: row.config.length,
+        message: unknownInherited
+          ? `group builtin — ${row.config.length} child row(s); this group's ` +
+            `disabled expression threw, so none of them can be known to start`
+          : `group builtin — ${row.config.length} child row(s) enumerated` })
+      continue
+    }
+    if (inheritedBy) {
+      // Not a finding: the loader never starts this row. Disclosed so the
+      // skip stays visible instead of silently dropping rows. The ancestor walk
+      // is evaluated BEFORE this row's own `disabled` (that is the order in
+      // `_disabled`), so a throwing expression here is not a finding either —
+      // the row is categorised by the ancestor that already decided it.
+      entry.inherited_disabled += 1
+      entry.rows.push({ row: id, name, kind: 'DISABLED_INHERITED', message:
+        `not started — inherits disabled from ancestor entry "${inheritedBy}"` })
       continue
     }
     let disabled
@@ -524,14 +821,6 @@ async function walk(rows, at, ctx, entry, inheritedBy) {
     } catch (error) {
       entry.rows.push({ row: id, name, kind: 'DISABLED_EXPR_ERROR', message:
         `disabled !!js expression threw: ${message(error)}` })
-      continue
-    }
-    if (inheritedBy) {
-      // Not a finding: the loader never starts this row. Disclosed so the
-      // skip stays visible instead of silently dropping rows.
-      entry.inherited_disabled += 1
-      entry.rows.push({ row: id, name, kind: 'DISABLED_INHERITED', message:
-        `not started — inherits disabled from ancestor entry "${inheritedBy}"` })
       continue
     }
     if (disabled) continue
@@ -616,7 +905,7 @@ async function walk(rows, at, ctx, entry, inheritedBy) {
 
 for (const file of request.files) {
   const entry = { path: file.path, status: 'OK', rows: [], enabled: 0, checked: 0,
-                  inherited_disabled: 0 }
+                  inherited_disabled: 0, inherited_unverified: 0, groups: 0 }
   let text
   try {
     text = readFileSync(file.path, 'utf8')
@@ -982,6 +1271,25 @@ def _render_probe_script() -> str:
     loader_package, loader_exports = package_exporting("evaluate", "isJsExpr")
     cordis_package, cordis_exports = package_exporting("resolveConfig")
 
+    # The group row's semantics (G-02/G-03). `builtin_group_name` is injected as a
+    # JSON string literal because the probe compares `row.name` against it; the
+    # two loader rules are injected as JS booleans, and a contract that declares
+    # them non-boolean is a contract defect, not something to coerce.
+    builtin_group_name = _fact("_builtin_group_name")
+    if not isinstance(builtin_group_name, str) or not builtin_group_name:
+        raise ValueError(
+            "the contract's host.row_contract.builtin_group_name must be a "
+            f"non-empty string (declared: {builtin_group_name!r})")
+    group_flags = {
+        "__GROUP_DISABLED_SHORT_CIRCUIT__": _fact("_group_disabled_short_circuit"),
+        "__GROUP_ANCESTOR_INHERITED__": _fact("_group_ancestor_inherited"),
+    }
+    for placeholder, value in group_flags.items():
+        if not isinstance(value, bool):
+            raise ValueError(
+                f"the contract's host.row_contract declaration for {placeholder} "
+                f"must be a boolean (declared: {value!r})")
+
     replacements = {
         "__YAML_PACKAGE__": yaml_package,
         "__INCLUDE_PACKAGE__": include_package,
@@ -993,10 +1301,18 @@ def _render_probe_script() -> str:
         "__IS_JS_EXPR__": symbol_of(loader_package, loader_exports, "isJsExpr"),
         "__RESOLVE_CONFIG__": symbol_of(cordis_package, cordis_exports,
                                         "resolveConfig"),
+        "__GROUP_NAME__": json.dumps(builtin_group_name),
+        **{placeholder: ("true" if value else "false")
+           for placeholder, value in group_flags.items()},
     }
-    rendered = PROBE_SCRIPT
-    for placeholder, value in replacements.items():
-        rendered = rendered.replace(placeholder, value)
+    # One pass, not a loop of `.replace()`: `__GROUP_NAME__` is substituted with a
+    # contract-supplied STRING, and a value that happened to contain another
+    # placeholder's spelling would otherwise be rewritten by the replacements
+    # still to come.
+    rendered = re.sub(
+        r"__[A-Z0-9_]+__",
+        lambda match: replacements.get(match.group(0), match.group(0)),
+        PROBE_SCRIPT)
     leftover = sorted(set(re.findall(r"__[A-Z0-9_]+__", rendered)))
     if leftover:
         raise ValueError(
@@ -1158,15 +1474,23 @@ def _informational_details(report: dict) -> list:
     it carries no `[NOT_RUN]` disclosure. It must not vanish either (F-01): its
     own line is printed under the verdicts that show detail, next to the
     `inherited-disabled rows:` count every surface already reports.
+
+    **Selection is an explicit whitelist** (`kind in INFO_KINDS`), never a
+    residual. The residual form this replaced
+    (`kind ∉ FINDING_KINDS ∪ UNVERIFIED_KINDS ∧ kind ≠ "PASS"`, F-R1-03) filed
+    every unknown or future kind here silently — a new probe diagnostic would
+    have printed as an innocuous `[INFO]` line and changed nothing. A kind in no
+    declared table is now caught by :func:`_assert_report_kinds_declared`; this
+    function never has to guess one.
     """
+    _assert_report_kinds_declared(report)
     lines = []
     for entry in report["compositions"]:
         for row in entry["rows"]:
-            kind = row.get("kind")
-            if kind in FINDING_KINDS or kind in UNVERIFIED_KINDS or kind == "PASS":
+            if _classify_row(row) != CATEGORY_INFO:
                 continue
             lines.append(f"{entry['path']}: row \"{row.get('row')}\" "
-                         f"({row.get('name') or 'unnamed'}) [{kind}] "
+                         f"({row.get('name') or 'unnamed'}) [{row.get('kind')}] "
                          f"{row.get('message')}")
     return lines
 
@@ -1208,6 +1532,11 @@ def _composition_entry(payload: dict, root: Path) -> dict:
         "enabled": int(payload.get("enabled") or 0),
         "checked": int(payload.get("checked") or 0),
         "inherited_disabled": int(payload.get("inherited_disabled") or 0),
+        # Rows under a group whose `disabled` expression threw: the mount is
+        # rejected, so they cannot be known to start. Their own counter, kept
+        # apart from `inherited_disabled`, because "never starts" and "could not
+        # be determined" are different facts (G03-b).
+        "inherited_unverified": int(payload.get("inherited_unverified") or 0),
         "rows": list(payload.get("rows") or []),
     }
 
@@ -1231,6 +1560,7 @@ def _aggregate_composition(item: dict, root: Path, report: dict,
     report["rows_enabled"] += entry["enabled"]
     report["rows_checked"] += entry["checked"]
     report["rows_inherited_disabled"] += entry["inherited_disabled"]
+    report["rows_inherited_unverified"] += entry["inherited_unverified"]
     coverage["rows_enabled"] += entry["enabled"]
     coverage["rows_verified"] += entry["checked"]
     if entry["status"] == "UNREADABLE":
@@ -1260,11 +1590,22 @@ def _aggregate_composition(item: dict, root: Path, report: dict,
             f"preset would mount nothing")
     for row in entry["rows"]:
         kind = row.get("kind")
-        if kind in FINDING_KINDS:
+        category = _classify_row(row)
+        if category == CATEGORY_UNKNOWN:
+            # G-18 fail-loud: the probe reported a diagnostic this module has not
+            # placed in the trust surface. It is a finding with its own message,
+            # never a silent `[INFO]` line (F-R1-03) and never a crash — the
+            # report still has to come out.
+            failures.append(
+                f"{entry['path']}: row \"{row.get('row')}\" "
+                f"({row.get('name') or 'unnamed'}): undeclared row kind "
+                f"{kind!r} — add it to FINDING_KINDS, UNVERIFIED_KINDS, "
+                f"INFO_KINDS or PASS_KIND (G-18 classification self-check)")
+        elif category == CATEGORY_FINDING:
             failures.append(
                 f"{entry['path']}: row \"{row.get('row')}\" "
                 f"({row.get('name') or 'unnamed'}): {row.get('message')}")
-        elif kind in UNVERIFIED_KINDS:
+        elif category == CATEGORY_UNVERIFIED:
             # L3: an enabled row that no schema could check is disclosed on
             # BOTH faces — its own `[NOT_RUN]` line, and the
             # `unverified_reasons` histogram the verdict reasons quote.
@@ -1274,7 +1615,7 @@ def _aggregate_composition(item: dict, root: Path, report: dict,
             coverage["unverified_reasons"][kind] = (
                 coverage["unverified_reasons"].get(kind, 0) + 1)
             report["details"].append(line)
-        elif kind == "PASS":
+        elif category == CATEGORY_PASS:
             report["details"].append(
                 f"{entry['path']}: row \"{row.get('row')}\" {row.get('name')} OK")
         else:
@@ -1325,14 +1666,34 @@ def _resolve_verdict(report: dict, failures: list, plane: str,
                 + "; ".join(line for line in report["unverified"])
                 + " (fail-closed: never reported as PASS)")
         else:
-            # F4: every discovered row is disabled, so the preset mounts
-            # nothing. Named explicitly instead of a generic "nothing
-            # verified" — it is a user-visible outcome, not a tooling gap.
-            report["reason"] = (
-                f"no enabled preset row could be validated — every row of "
-                f"{len(report['compositions'])} composition(s) is disabled "
-                f"({report['rows_inherited_disabled']} inherited from a "
-                f"disabled ancestor), so this preset would mount nothing")
+            # F4: no row of this composition is enabled, so the preset mounts
+            # nothing. Named explicitly instead of a generic "nothing verified".
+            #
+            # FIX-311: "no enabled row" has TWO causes and they are NOT the same
+            # fact. Either the rows that exist are disabled (they provably never
+            # start), or there is no plugin row to enable at all — a composition
+            # whose only record is a group row (G-02): a group IS structure, it
+            # mounts its children and nothing else, so a childless group has no
+            # mount to lose. Asserting "every row is disabled" over the second
+            # case would state a fact nothing measured, and
+            # `rows_inherited_disabled` can read 0 in both cases — so the test is
+            # on whether any disabled row was actually observed.
+            if report["rows_inherited_disabled"] or report["rows_enabled"]:
+                report["reason"] = (
+                    f"no enabled preset row could be validated — every row of "
+                    f"{len(report['compositions'])} composition(s) is disabled "
+                    f"({report['rows_inherited_disabled']} inherited from a "
+                    f"disabled ancestor"
+                    + (f", {report['rows_inherited_unverified']} under an ancestor "
+                       f"whose disabled expression threw"
+                       if report.get("rows_inherited_unverified") else "")
+                    + "), so this preset would mount nothing")
+            else:
+                report["reason"] = (
+                    f"no enabled preset row could be validated — the "
+                    f"{len(report['compositions'])} discovered composition(s) "
+                    f"declare no plugin row at all, so this preset would mount "
+                    f"nothing")
     elif report["rows_checked"] == 0:
         report["verdict"] = VERDICT_NOT_RUN
         report["reason"] = (
@@ -1383,6 +1744,12 @@ def check_dsh_preset_compat(root: Optional[os.PathLike] = None,
         "rows_enabled": 0,
         "rows_checked": 0,
         "rows_inherited_disabled": 0,
+        # G03-b / FIX-311: rows under a group whose `disabled` expression threw.
+        # Separate from `rows_inherited_disabled` on purpose — they are the rows
+        # the guard CANNOT make a statement about, so they are counted on the
+        # unverified channel (`coverage.rows_unverified`) instead of the
+        # "known not to start" one.
+        "rows_inherited_unverified": 0,
         # G01-b: the trust surface, made visible. `rows_verified` is the same
         # fact as `rows_checked` (kept for the two readers that already spell
         # it that way); the unverified half is what the verdicts below turn on.
@@ -1578,6 +1945,8 @@ def emit_check_section(stream=None) -> int:
           f"schema-checked rows: {report['rows_checked']}; "
           f"NOT verified: {report['coverage']['rows_unverified']}; "
           f"inherited-disabled rows: {report.get('rows_inherited_disabled', 0)}; "
+          f"unresolvable-inheritance rows: "
+          f"{report.get('rows_inherited_unverified', 0)}; "
           f"isolated-home writes: {isolation.get('home_writes')}", file=stream)
     verdict = report["verdict"]
     if verdict == VERDICT_FAIL:
@@ -1635,7 +2004,9 @@ def run_cli(fail_on_issues: bool = False, stream=None) -> int:
           f"schema-checked rows: {report['rows_checked']}; "
           f"NOT verified: {report['coverage']['rows_unverified']}; "
           f"inherited-disabled rows: "
-          f"{report.get('rows_inherited_disabled', 0)}", file=stream)
+          f"{report.get('rows_inherited_disabled', 0)}; "
+          f"unresolvable-inheritance rows: "
+          f"{report.get('rows_inherited_unverified', 0)}", file=stream)
     print(f"  Isolated temp DSH_HOME: {isolation.get('temp_home') or '-'} "
           f"(writes: {isolation.get('home_writes')})", file=stream)
     for entry in report["compositions"]:

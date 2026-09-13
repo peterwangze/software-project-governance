@@ -99,6 +99,20 @@
 - **真机项（第 14 行之外的独立交付面）**：由用户在真实 dsh 环境手动执行三项并回贴；**回贴前严禁在任何 release 文档/CHANGELOG 中声明真机项通过**。
 - **冻结纪律**：M-1 冻结前 MUST 把 Change Inventory 的 \⟦待落地⟧\/\⟦待回填⟧\ 占位**全部消除**（V8/V10 的 commit hash 与终态），否则不得进入 M-2。
 
+### dsh-doctor 预检（Coordinator 独立实测 2026-09-13，V8 在制品状态下）
+
+**CLI 接口**（实测 `--help`）：`--json` / `--stage S0..S7` / `--offline` / `--selftest` / `--record-evidence` / `--out` / `--rehearse CANDIDATE.json` / `--against BASELINE.json` / `--allow-host-probe` / `--fail-on-issues` —— 与设计 §5 的 S0~S7 + 四开关一致。
+
+**`dsh-doctor --offline --selftest` → `Result: PASS`（exit 0）**，且 8 个阶段逐条演示了**阶段级崩溃隔离**：
+
+```
+ok   S0: crashed=NOT_RUN/stage_error=True stages=8 verdict=PASS exit=0
+ok   S1: crashed=NOT_RUN/stage_error=True stages=8 verdict=PASS exit=0
+ok   S2..S7: crashed=NOT_RUN/stage_error=True stages=8 verdict=FAIL exit=1
+```
+
+⇒ ① 某个阶段崩溃时**该阶段降级为 `NOT_RUN` 而非整体崩溃**，其余 7 个阶段照常执行（`stages=8`）；② 退出码三态语义正确（健康 `0` / 可行动失败 `1`）；③ `--offline` 生效。这正是设计 §5 与 BT「诊断入口本身失败时的降级」的要求。
+
 ## 验收① 证据形态披露（FIX-313 / V10，Honesty Note）
 
 `REVIEW-FIX-313-CODE-R0` 判 **F1（P1）**：设计 §6.1 V10 的**验收①（G-04：`resolveDshHome()` 抛错路径下 CWD 的 `governance.staging-*` 不被删除）没有任何机器守卫**——审查方以**部分回归变异 M5** 证明：整个 adapter 套件 **50 项全绿而 CWD 误删依旧发生**。

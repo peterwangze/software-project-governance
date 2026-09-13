@@ -12705,7 +12705,21 @@ def _execution_packet_field_issues(packet):
 # change no verdict). A single `*` is deliberately NOT stripped — in a scope
 # string it is far more often a glob (`src/*`, `*.py`, `*foo*`) than italic
 # emphasis, so leaving it in place keeps the judgement on the strict side.
-_MARKDOWN_BOLD_SPAN_RE = re.compile(r"\*\*(?P<inner>[^*]+?)\*\*")
+# The same decision covers italic emphasis: `*foo*` is NOT neutralised and is
+# still reported `too broad` (FIX-319 boundary, restated by FIX-321).
+#
+# FIX-321 (review FIX-319 F-01): the pairing alone was not enough — a `**` run
+# must also be a TRUE run boundary, otherwise `**/tests/**` falls inside one
+# span, becomes ` /tests/ ` and PASSes, while its sibling `**/*.py` still FAILs
+# (the `/` blocked the span) — an inconsistency, and exactly the laundering the
+# predicate's contract forbids. So a `**` run counts as a bold delimiter only
+# when it is a MAXIMAL run of exactly two stars that touches neither another
+# `*` nor a path separator `/` on EITHER side — the glob tokens are `**/`,
+# `/**` and `/**/`. A rejected span is left verbatim, its `*` survives, and the
+# scope stays FAIL: an ambiguous boundary always resolves to the strict side.
+_MARKDOWN_BOLD_SPAN_RE = re.compile(
+    r"(?<![\*/])\*\*(?![\*/])(?P<inner>[^*]+?)(?<![\*/])\*\*(?![\*/])"
+)
 
 # Whole-repo phrases, anchored at a WORD START (and case-insensitive) so that
 # natural language merely containing the sequence — `install files`,
@@ -12722,6 +12736,18 @@ def _strip_markdown_bold_markers(text):
     phrase (`**all files**`) is still caught. A single pass is sufficient: the
     inner group excludes `*` and the replacement only inserts the inner text
     plus spaces, so no new `**` pair can appear for a second pass to find.
+
+    FIX-321: only spans whose two `**` runs are TRUE run boundaries are
+    neutralised — a maximal two-star run that touches neither `*` nor `/` on
+    either side (see `_MARKDOWN_BOLD_SPAN_RE`). Everything else is left
+    verbatim, so a glob such as `**/tests/**` or `**/*.py` keeps its `*` and
+    stays `too broad`. The slash may live inside the span (`**a/b**` is bold);
+    only a slash glued to a delimiter disqualifies it. Ambiguity therefore
+    fails closed instead of laundering a wildcard.
+
+    Deliberate boundary (FIX-319, restated by FIX-321): single-`*` emphasis
+    (`*foo*`) is NOT stripped either, because in a scope string a lone `*` is
+    far more often a glob than italic emphasis — it is reported `too broad`.
     """
     return _MARKDOWN_BOLD_SPAN_RE.sub(lambda match: f" {match.group('inner')} ", text)
 
@@ -12731,7 +12757,11 @@ def _is_too_broad_scope_text(text):
 
     FIX-319: markdown bold is stripped first. A *surviving* `*` is a genuine
     wildcard — standalone (`*`), attached (`src/*`, `*.py`) or glob
-    (`**/*.py`) — and stays `too broad`; stripping must never launder it.
+    (`**/*.py`, `**/tests/**`, `/**`) — and stays `too broad`; stripping must
+    never launder it. FIX-321 makes that guarantee mechanical rather than
+    incidental: `_strip_markdown_bold_markers` refuses any span whose `**`
+    runs are not true run boundaries, so a recursive-directory glob can no
+    longer land inside one.
     """
     stripped = _strip_markdown_bold_markers(text)
     if "*" in stripped:

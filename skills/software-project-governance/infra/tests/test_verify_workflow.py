@@ -11890,6 +11890,77 @@ class ExecutionPacketTests(unittest.TestCase):
         ):
             self.assertNotIn("allowed_change_scope is too broad", self._scope_issues(scope), scope)
 
+    # ── FIX-321: `**` must be a TRUE run boundary to count as markdown bold ──
+
+    def test_scope_glob_star_runs_are_not_markdown_bold(self):
+        """FIX-321 red→green: the recursive-directory glob `**/tests/**` used to
+        fall inside a single `**…**` span, be replaced by ` /tests/ ` and PASS,
+        while its sibling `**/*.py` still FAILed (its `/` blocked the span).
+        The `**` runs of a glob are not bold delimiters; both must FAIL."""
+        for scope in (
+            "**/tests/**",
+            "**/docs/**",
+            "**/tests/** and **/*.py",
+            "**/src/**/*.py",
+        ):
+            self.assertIn("allowed_change_scope is too broad", self._scope_issues(scope), scope)
+
+    def test_scope_glob_family_is_judged_consistently(self):
+        """FIX-321: every member of the `**/`, `/**`, `/**/` glob family shares
+        one verdict, so the outcome cannot depend on whether the span regex
+        happens to swallow a particular string whole."""
+        for scope in (
+            "**/tests/**",
+            "**/tests/**/*.py",
+            "**/",
+            "/**",
+            "/**/",
+            "src/**",
+            "**/*.py",
+        ):
+            self.assertIn("allowed_change_scope is too broad", self._scope_issues(scope), scope)
+
+    def test_scope_bold_with_interior_separators_still_stripped(self):
+        """FIX-321 guard is about the `**` RUN boundary, not the span content: a
+        bold span may contain `/` as long as no slash is glued to a delimiter."""
+        for scope in (
+            "**a/b**",
+            "a**b**c",
+            "**lib/index.js** 只读引用",
+            "**NOT_RUN** and **APPROVED**",
+        ):
+            self.assertNotIn("allowed_change_scope is too broad", self._scope_issues(scope), scope)
+
+    def test_scope_ambiguous_bold_boundary_resolves_to_fail(self):
+        """FIX-321 fail-closed: when a `**` run touches `/` (or a third `*`) the
+        string is ambiguous — bold or glob. Nothing is stripped, the `*`
+        survives, and the scope is reported broad; this is the mechanism that
+        keeps a glob from ever being laundered by the bold path."""
+        for scope in (
+            "**/tests/**",
+            "**bold**/tests",
+            "tests/**bold**",
+            "***a***",
+            "**a****b**",
+        ):
+            self.assertIn("allowed_change_scope is too broad", self._scope_issues(scope), scope)
+
+    def test_glob_scope_packet_fails_check(self):
+        """FIX-321 green face at the Check 18c boundary (not just the helper)."""
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P0** | FIX-084 | AI packet | DEC-068 | 0.38.0 | packet command | 📋 待启动 |",
+            ])
+            packet_path.write_text(json.dumps({
+                "version": 1,
+                "packets": {"FIX-084": self._packet_with_scope("**/tests/**")},
+            }, ensure_ascii=False), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_execution_packets(packet_path)
+            self.assertFalse(r["pass"])
+            self.assertEqual(r["entries"][0]["status"], "FAIL")
+            self.assertIn("allowed_change_scope is too broad", r["entries"][0]["issues"])
+
     def test_completed_tasks_do_not_require_execution_packet(self):
         with tempfile.TemporaryDirectory() as td:
             _, sp, packet_path = self._setup_plan(td, [

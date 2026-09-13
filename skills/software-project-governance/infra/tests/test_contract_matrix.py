@@ -49,8 +49,12 @@ from contract_matrix import generator as cmg  # noqa: E402
 # FIX-310: deliberate contract change — the retired `dsh.skills` guard
 # (Check 40 + its CLI key) left the frozen faces; snapshot regenerated via
 # `contract_matrix/generator.py --regen`.
-FROZEN_CLI_KEY_COUNT = 82
-FROZEN_CHECK_SEGMENT_COUNT = 70
+# FEAT-031 (0.81.0 slice V8): 82→84 keys (`check-dsh-boundary` + `dsh-doctor`)
+# and 70→71 check segments (Check 28w / `checks.dsh_boundary`); the snapshot was
+# regenerated with `contract_matrix/generator.py --regen` in the same change —
+# the documented contract-change path, review covering both files.
+FROZEN_CLI_KEY_COUNT = 84
+FROZEN_CHECK_SEGMENT_COUNT = 71
 
 
 @lru_cache(maxsize=1)

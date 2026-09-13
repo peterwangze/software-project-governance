@@ -51,7 +51,13 @@ SNAPSHOT = _INFRA_DIR / "contract_matrix" / "snapshots.json"
 #      declaration also retired its guard output: the Check 40 print block in
 #      the engine plus cmd_check_dsh_skills_manifest's own prints; sanctioned
 #      ratchet shrink, baseline regenerated in the same change)
-FACTS_PRINT_TOTAL = 1298
+#   -> 1299 (FEAT-031, 2026-09-13: +1 — the V8 `cmd_check_dsh_boundary` thin
+#      wrapper prints the criterion report it delegates to; the engine's 28w
+#      section itself prints nothing (C-15: the rendering lives in
+#      `checks.dsh_boundary`). Baseline regenerated with
+#      `archguard-ratchet --regen` after all V8 source edits, per the
+#      all-changes-first rule that keeps the anchor from being re-cut twice.)
+FACTS_PRINT_TOTAL = 1299
 
 
 def _committed_baseline():

@@ -769,7 +769,15 @@ DEFAULT_EXEMPTIONS: List[dict] = [
                   "deliberately ZERO — this entry is the DEC-tracked "
                   "disclosure, not a growth license (any excess still fails)",
         "dec": "DEC-183 / DEC-184 (FEAT-019 packet; evolution §4 S5)",
-        "expire_version": "0.81.0",
+        # DEC-190 ⑥ (0.81.0 M-0, O-8): renewed to 0.82.0. The renewal changes
+        # nothing about the exemption's substance — the allowance stays 0 and
+        # still grants no growth; what it carries is the DEC-tracked
+        # self-bootstrap disclosure, whose fact base this version's V8 wiring
+        # (Check 28w section + the two thin command wrappers) does not change.
+        # Letting it lapse silently at 0.81.0 was the one outcome the design
+        # forbade (§2.9.4 / O-8); `--regen` absorbs the wiring lines into the
+        # anchor, so the zero allowance remains honest.
+        "expire_version": "0.82.0",
     },
 ]
 

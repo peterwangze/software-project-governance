@@ -14634,6 +14634,7 @@ _PLUGIN_PRODUCT_CHECK_IDS = frozenset({
     "Check 28t",  # README Claim→Evidence Levels（插件包本体 README）
     "Check 28u",  # DSH Preset Session Smoke（插件包本体 launch.py + presets/）
     "Check 28v",  # DSH Preset Schema Compat（插件 presets/ + adapters/dsh 组合 ↔ 安装态 dsh schema）
+    "Check 28w",  # DSH Dependency Boundary（契约 K-1~K-13：模板/令牌/hooks/patch/证据/覆盖/演练基线）
     "Check 30b",  # Loop wiring call sites（插件 infra AST 扫描）
     "Check 31",   # Loop Runtime Claim Gate（插件树扫描 + identity attestation）
     "Check 33",   # Injection Contract（插件 persona/SKILL/AGENTS 锚点）
@@ -14698,6 +14699,7 @@ _PRODUCT_GATE_LABELS = {
     "Check 28t": "README Claim→Evidence Levels (FEAT-014)",
     "Check 28u": "DSH Preset Session Smoke (FEAT-015)",
     "Check 28v": "DSH Preset Schema Compat",
+    "Check 28w": "DSH Dependency Boundary (FEAT-031)",
     "Check 30b": "Loop wiring call sites",
     "Check 31": "Loop Runtime Claim Gate",
     "Check 33": "Injection Contract",
@@ -16377,6 +16379,31 @@ def _run_full_engine_checks(args):
         all_issues += emit_check_section()
     else:
         _print_product_gate_skipped("Check 28v")
+
+    # ── 28w. DSH Dependency Boundary (FEAT-031 / 0.81.0 slice V8) ──
+    # The contract `adapters/dsh/host-contract.json` is the single machine-
+    # readable statement of what this plugin consumes from the dsh host. V2
+    # moved the consumers onto it; this gate is what makes the move judgeable
+    # (K-1…K-13, design §2.8): contract shape, template ↔ row-set equivalence
+    # in both directions, token equality, the hooks' path expression, the patch
+    # invariants, version-evidence consistency + TTL, coverage-claim backing,
+    # disposition completeness, the structural declarations, the allowlist
+    # ratchet, the single-verdict anchor and the rehearsal baseline. Its fact
+    # source is the plugin package's own dsh surface → PLUGIN_PRODUCT (FIX-270).
+    # Body rendering lives in `checks/dsh_boundary` (C-15/R4: the monolith's
+    # print budget does not grow; this wrapper is one statement) and the import
+    # is function-local for the same reason 28v's is — the engine's frozen
+    # startup import budget (R6, 196 modules) must not move.
+    if _product_gate_active(args):
+        # `registry.py` declares the loader as `checks.dsh_boundary.emit_check_section`,
+        # and tests/test_registry.py machine-checks that each section really
+        # calls the entry it declares (AST attribution on the bare name), so the
+        # import mirrors 28v's form rather than aliasing or module-qualifying it.
+        from checks.dsh_boundary import emit_check_section
+
+        all_issues += emit_check_section()
+    else:
+        _print_product_gate_skipped("Check 28w")
 
     # ── Summary ──
     print(f"\n┌─ Governance Health Summary ──────────────────────────┐")
@@ -21204,6 +21231,67 @@ def cmd_check_dsh_preset_compat(args):
     return run_cli(fail_on_issues=getattr(args, "fail_on_issues", False))
 
 
+def cmd_check_dsh_boundary(args):
+    """Check 28w (FEAT-031): the dependency-boundary contract guard.
+
+    Thin dispatch only — the criteria and the rendering live in
+    ``checks.dsh_boundary`` (C-15/R4: the monolith's print budget does not
+    grow). Lazy import: the engine's frozen startup import budget (R6, 196
+    modules) must not move, and the check must stay loadable when the
+    registry itself is the broken component.
+    """
+    from checks.dsh_boundary import check_dsh_boundary, emit_check_section, failed
+
+    report = check_dsh_boundary()
+    if getattr(args, "json", False):
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+    else:
+        emit_check_section(report=report)
+    if failed(report) and getattr(args, "fail_on_issues", False):
+        sys.exit(1)
+
+
+def cmd_dsh_doctor(args):
+    """The single staged dsh diagnostic entry (FEAT-031, S0–S7).
+
+    Thin dispatch only: the stages, the exit-code semantics and the four
+    switches live in ``dsh_doctor``. Lazy import for the same two reasons as
+    ``cmd_check_dsh_boundary`` — and because a diagnostic entry that cannot run
+    when the engine is broken is useless.
+    """
+    from dsh_doctor import main as doctor_main
+
+    argv = []
+    if getattr(args, "json", False):
+        argv.append("--json")
+    for stage in getattr(args, "stage", None) or ():
+        argv += ["--stage", stage]
+    if getattr(args, "offline", False):
+        argv.append("--offline")
+    if getattr(args, "selftest", False):
+        argv.append("--selftest")
+    if getattr(args, "record_evidence", False):
+        argv.append("--record-evidence")
+    if getattr(args, "out", None):
+        argv += ["--out", args.out]
+    if getattr(args, "rehearse", None):
+        argv += ["--rehearse", args.rehearse]
+    if getattr(args, "against", None):
+        argv += ["--against", args.against]
+    if getattr(args, "allow_host_probe", False):
+        argv.append("--allow-host-probe")
+    if getattr(args, "fail_on_issues", False):
+        argv.append("--fail-on-issues")
+    code = doctor_main(argv)
+    # The exit-code contract (design 5.1: 0 clean / 1 stage FAIL / 2 refused)
+    # belongs to `dsh-doctor`, and the engine route must not swallow it: a
+    # diagnostic entry whose non-zero code vanished behind the engine would
+    # tell CI and the user two different things about the same run.
+    if code:
+        sys.exit(code)
+    return code
+
+
 def cmd_release_ledger(args):
     """Validate declarative per-version release manifests and live Git facts."""
     result = validate_release_ledger(
@@ -23672,6 +23760,49 @@ def main(argv=None):
     cdpc_p.add_argument("--fail-on-issues", action="store_true",
                         help="Exit with non-zero code if a row is rejected by the installed schemas")
 
+    # check-dsh-boundary (FEAT-031 / 0.81.0 slice V8 — Check 28w)
+    cdbs_p = subparsers.add_parser(
+        "check-dsh-boundary",
+        help="Check the dsh dependency-boundary contract (K-1…K-13): contract "
+             "shape, template/token/hook/patch agreement, version evidence + "
+             "TTL, coverage claims, dispositions, declarations, allowlist "
+             "ratchet, single verdict, rehearsal baseline",
+    )
+    cdbs_p.add_argument("--fail-on-issues", action="store_true",
+                        help="Exit with non-zero code if a criterion FAILs")
+    cdbs_p.add_argument("--json", action="store_true",
+                        help="Emit the criterion report as JSON")
+
+    # dsh-doctor (FEAT-031 / 0.81.0 slice V8 — the single diagnostic entry)
+    dd_p = subparsers.add_parser(
+        "dsh-doctor",
+        help="Single staged diagnostic entry for the dsh boundary (S0–S7): "
+             "per-stage verdict + evidence + remediation, exit codes 0/1/2",
+    )
+    dd_p.add_argument("--json", action="store_true",
+                      help="Emit the machine-readable report")
+    dd_p.add_argument("--stage", action="append", default=None,
+                      metavar="S0..S7", help="Run only these stages (repeatable)")
+    dd_p.add_argument("--offline", action="store_true",
+                      help="Forbid every subprocess and host-plane probe; "
+                           "the file-level judgments still run")
+    dd_p.add_argument("--selftest", action="store_true",
+                      help="Crash each stage in turn and assert the isolation rules")
+    dd_p.add_argument("--record-evidence", action="store_true",
+                      help="Probe the plane read-only and write the host-facts "
+                           "fixture (the only writing path)")
+    dd_p.add_argument("--out", default=None,
+                      help="Destination of --record-evidence")
+    dd_p.add_argument("--rehearse", default=None, metavar="CANDIDATE.json",
+                      help="Replay a recorded candidate against --against")
+    dd_p.add_argument("--against", default=None, metavar="BASELINE.json",
+                      help="The baseline record to rehearse against")
+    dd_p.add_argument("--allow-host-probe", action="store_true",
+                      help="Allow the S5 host probe (M7.7 R1 must be satisfied "
+                           "first; refused otherwise)")
+    dd_p.add_argument("--fail-on-issues", action="store_true",
+                      help="Exit 1 when a stage FAILs (the default already does)")
+
     # check-hot-fact-source (FIX-087)
     chfs_p = subparsers.add_parser(
         "check-hot-fact-source",
@@ -24227,6 +24358,8 @@ def main(argv=None):
         "check-injection-contract": cmd_check_injection_contract,
         "check-dsh-preset-smoke": cmd_check_dsh_preset_smoke,
         "check-dsh-preset-compat": cmd_check_dsh_preset_compat,
+        "check-dsh-boundary": cmd_check_dsh_boundary,
+        "dsh-doctor": cmd_dsh_doctor,
         "check-hot-fact-source": cmd_check_hot_fact_source,
         "check-runtime-readiness-matrix": cmd_check_runtime_readiness_matrix,
         "check-first-session-measurement": cmd_check_first_session_measurement,

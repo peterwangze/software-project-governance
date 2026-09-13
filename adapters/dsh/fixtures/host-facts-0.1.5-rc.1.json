@@ -1,0 +1,328 @@
+{
+  "schema_version": 1,
+  "dsh_version": "0.1.5-rc.1",
+  "captured_at": "2026-09-13T05:50:50+00:00",
+  "synthetic": false,
+  "provenance": "dsh-doctor --record-evidence; plane=$DSH_HARNESS_NODE_MODULES; node_modules=C:\\Users\\peter\\AppData\\Local\\npm-cache\\_npx\\1e7f6d9597241db0\\node_modules",
+  "plane": {
+    "source": "$DSH_HARNESS_NODE_MODULES",
+    "node_modules": "C:\\Users\\peter\\AppData\\Local\\npm-cache\\_npx\\1e7f6d9597241db0\\node_modules"
+  },
+  "oracle_packages": {
+    "@deepseek-ai/cordis": {
+      "version": "4.0.2",
+      "path": "C:/Users/peter/AppData/Local/npm-cache/_npx/1e7f6d9597241db0/node_modules/@deepseek-ai/cordis"
+    },
+    "@deepseek-ai/cordis-plugin-include": {
+      "version": "1.0.7",
+      "path": "C:/Users/peter/AppData/Local/npm-cache/_npx/1e7f6d9597241db0/node_modules/@deepseek-ai/cordis-plugin-include"
+    },
+    "@deepseek-ai/cordis-plugin-loader": {
+      "version": "1.0.3",
+      "path": "C:/Users/peter/AppData/Local/npm-cache/_npx/1e7f6d9597241db0/node_modules/@deepseek-ai/cordis-plugin-loader"
+    },
+    "js-yaml": {
+      "version": "4.3.2",
+      "path": "C:/Users/peter/AppData/Local/npm-cache/_npx/1e7f6d9597241db0/node_modules/js-yaml"
+    }
+  },
+  "api_symbols": [
+    "@deepseek-ai/cordis",
+    "@deepseek-ai/cordis-plugin-include",
+    "@deepseek-ai/cordis-plugin-loader",
+    "js-yaml"
+  ],
+  "rows": [
+    {
+      "row_id": "persona",
+      "module": "@deepseek-ai/dsh-persona",
+      "resolved": true,
+      "config_export": true,
+      "accepted_keys": [],
+      "required_keys": [],
+      "probe_result": "accept",
+      "source": "recorded"
+    },
+    {
+      "row_id": "agent-instructions",
+      "module": "@deepseek-ai/dsh-agent-instructions",
+      "resolved": true,
+      "config_export": true,
+      "accepted_keys": [],
+      "required_keys": [],
+      "probe_result": "accept",
+      "source": "recorded"
+    },
+    {
+      "row_id": "tool-bash",
+      "module": null,
+      "resolved": null,
+      "config_export": null,
+      "accepted_keys": [],
+      "required_keys": [],
+      "probe_result": null,
+      "source": "recorded"
+    },
+    {
+      "row_id": "tool-pwsh",
+      "module": "@deepseek-ai/dsh-tool-pwsh",
+      "resolved": true,
+      "config_export": true,
+      "accepted_keys": [],
+      "required_keys": [],
+      "probe_result": "accept",
+      "source": "recorded"
+    },
+    {
+      "row_id": "tool-fs",
+      "module": "@deepseek-ai/dsh-tool-fs",
+      "resolved": true,
+      "config_export": true,
+      "accepted_keys": [],
+      "required_keys": [],
+      "probe_result": "accept",
+      "source": "recorded"
+    },
+    {
+      "row_id": "tool-fs-search",
+      "module": "@deepseek-ai/dsh-tool-fs-search",
+      "resolved": true,
+      "config_export": true,
+      "accepted_keys": [],
+      "required_keys": [],
+      "probe_result": "accept",
+      "source": "recorded"
+    },
+    {
+      "row_id": "tool-jobs",
+      "module": "@deepseek-ai/dsh-tool-jobs",
+      "resolved": true,
+      "config_export": true,
+      "accepted_keys": [],
+      "required_keys": [],
+      "probe_result": "accept",
+      "source": "recorded"
+    },
+    {
+      "row_id": "skill-filesystem",
+      "module": "@deepseek-ai/dsh-skill-filesystem",
+      "resolved": true,
+      "config_export": true,
+      "accepted_keys": [],
+      "required_keys": [],
+      "probe_result": "accept",
+      "source": "recorded"
+    },
+    {
+      "row_id": "tool-skill",
+      "module": "@deepseek-ai/dsh-tool-skill",
+      "resolved": true,
+      "config_export": true,
+      "accepted_keys": [],
+      "required_keys": [],
+      "probe_result": "accept",
+      "source": "recorded"
+    },
+    {
+      "row_id": "tool-goal",
+      "module": "@deepseek-ai/dsh-tool-goal",
+      "resolved": true,
+      "config_export": true,
+      "accepted_keys": [],
+      "required_keys": [],
+      "probe_result": "accept",
+      "source": "recorded"
+    },
+    {
+      "row_id": "planning",
+      "module": "cordis:group",
+      "resolved": true,
+      "config_export": true,
+      "accepted_keys": [],
+      "required_keys": [],
+      "probe_result": "accept",
+      "source": "recorded"
+    },
+    {
+      "row_id": "plan-mode",
+      "module": "@deepseek-ai/dsh-plan-mode",
+      "resolved": true,
+      "config_export": false,
+      "accepted_keys": [],
+      "required_keys": [],
+      "probe_result": "accept",
+      "source": "recorded"
+    },
+    {
+      "row_id": "compaction",
+      "module": "cordis:group",
+      "resolved": true,
+      "config_export": true,
+      "accepted_keys": [],
+      "required_keys": [],
+      "probe_result": "accept",
+      "source": "recorded"
+    },
+    {
+      "row_id": "compaction-basic",
+      "module": "@deepseek-ai/dsh-compaction-basic",
+      "resolved": true,
+      "config_export": true,
+      "accepted_keys": [],
+      "required_keys": [],
+      "probe_result": "accept",
+      "source": "recorded"
+    },
+    {
+      "row_id": "command-compact",
+      "module": "@deepseek-ai/dsh-command-compact",
+      "resolved": true,
+      "config_export": false,
+      "accepted_keys": [],
+      "required_keys": [],
+      "probe_result": "accept",
+      "source": "recorded"
+    },
+    {
+      "row_id": "tool-result-pruner",
+      "module": "@deepseek-ai/dsh-compaction-tool-result-pruner",
+      "resolved": true,
+      "config_export": true,
+      "accepted_keys": [],
+      "required_keys": [],
+      "probe_result": "accept",
+      "source": "recorded"
+    },
+    {
+      "row_id": "delegation",
+      "module": "cordis:group",
+      "resolved": true,
+      "config_export": true,
+      "accepted_keys": [],
+      "required_keys": [],
+      "probe_result": "accept",
+      "source": "recorded"
+    },
+    {
+      "row_id": "tool-subagent-control",
+      "module": "@deepseek-ai/dsh-tool-subagent-control",
+      "resolved": true,
+      "config_export": false,
+      "accepted_keys": [],
+      "required_keys": [],
+      "probe_result": "accept",
+      "source": "recorded"
+    },
+    {
+      "row_id": "tool-subagent-list-agents",
+      "module": "@deepseek-ai/dsh-tool-subagent-control/list-agents",
+      "resolved": true,
+      "config_export": false,
+      "accepted_keys": [],
+      "required_keys": [],
+      "probe_result": "accept",
+      "source": "recorded"
+    },
+    {
+      "row_id": "tool-subagent",
+      "module": "@deepseek-ai/dsh-tool-subagent",
+      "resolved": true,
+      "config_export": true,
+      "accepted_keys": [],
+      "required_keys": [],
+      "probe_result": "accept",
+      "source": "recorded"
+    },
+    {
+      "row_id": "tool-subagent-fork",
+      "module": "@deepseek-ai/dsh-tool-subagent",
+      "resolved": true,
+      "config_export": true,
+      "accepted_keys": [],
+      "required_keys": [],
+      "probe_result": "accept",
+      "source": "recorded"
+    },
+    {
+      "row_id": "tool-subagent-codex",
+      "module": null,
+      "resolved": null,
+      "config_export": null,
+      "accepted_keys": [],
+      "required_keys": [],
+      "probe_result": null,
+      "source": "recorded"
+    },
+    {
+      "row_id": "tool-subagent-claude-code",
+      "module": null,
+      "resolved": null,
+      "config_export": null,
+      "accepted_keys": [],
+      "required_keys": [],
+      "probe_result": null,
+      "source": "recorded"
+    },
+    {
+      "row_id": "workflow-worker-thread",
+      "module": "@deepseek-ai/dsh-workflow-worker-thread",
+      "resolved": true,
+      "config_export": true,
+      "accepted_keys": [],
+      "required_keys": [],
+      "probe_result": "accept",
+      "source": "recorded"
+    },
+    {
+      "row_id": "tool-workflow",
+      "module": "@deepseek-ai/dsh-tool-workflow",
+      "resolved": true,
+      "config_export": true,
+      "accepted_keys": [],
+      "required_keys": [],
+      "probe_result": "accept",
+      "source": "recorded"
+    },
+    {
+      "row_id": "tool-ralph",
+      "module": "@deepseek-ai/dsh-tool-ralph",
+      "resolved": true,
+      "config_export": true,
+      "accepted_keys": [],
+      "required_keys": [],
+      "probe_result": "accept",
+      "source": "recorded"
+    },
+    {
+      "row_id": "tool-ask-user",
+      "module": "@deepseek-ai/dsh-tool-ask-user",
+      "resolved": true,
+      "config_export": false,
+      "accepted_keys": [],
+      "required_keys": [],
+      "probe_result": "accept",
+      "source": "recorded"
+    },
+    {
+      "row_id": "tool-todo",
+      "module": "@deepseek-ai/dsh-tool-todo",
+      "resolved": true,
+      "config_export": true,
+      "accepted_keys": [],
+      "required_keys": [],
+      "probe_result": "accept",
+      "source": "recorded"
+    },
+    {
+      "row_id": "tool-web",
+      "module": "@deepseek-ai/dsh-tool-web",
+      "resolved": true,
+      "config_export": true,
+      "accepted_keys": [],
+      "required_keys": [],
+      "probe_result": "accept",
+      "source": "recorded"
+    }
+  ],
+  "notes": "read-only discovery of the resolved plane (see `provenance` and `plane`); the only file this command writes is the one named by `--out`"
+}

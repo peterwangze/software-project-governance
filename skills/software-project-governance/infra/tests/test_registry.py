@@ -70,8 +70,15 @@ _SECTION_RE = re.compile(r"^\s*#\s*" + _DASH + r"{2}\s*([0-9][A-Za-z0-9]*)\.\s")
 # dead `dsh.skills` declaration also retired its guard (Check 40 /
 # `check-dsh-skills-manifest`); the FEAT-020 snapshot was regenerated with
 # `contract_matrix/generator.py --regen` to record that deliberate change.
-FROZEN_CLI_KEYS = 82
-FROZEN_SEGMENTS = 70
+# FEAT-031 (0.81.0 slice V8): 82 -> 84 CLI keys (`dsh-doctor` + the
+# `check-dsh-boundary` gate entry) and 70 -> 71 check segments (`28w`); the
+# snapshot was regenerated with `contract_matrix/generator.py --regen` in the
+# same change — the same deliberate-change path as FEAT-025/FIX-310, and the
+# reason the segment is declared in `quickscan_registry.py` too
+# (`registry._build_check_specs()` raises at import time when the two tables
+# disagree, E-17).
+FROZEN_CLI_KEYS = 84
+FROZEN_SEGMENTS = 71
 
 # FEAT-018 R6 frozen startup budget (``core/architecture-baseline.json`` r6):
 # the acceptance ② comparison frame for "启动 import 集合不增".
@@ -314,6 +321,7 @@ class CommandRegistryTests(unittest.TestCase):
         self.assertEqual(migrated, [
             "archguard-ratchet", "check-capability-registry",
             "check-manifest-consistency", "check-review-debt",
+            "dsh-doctor",
         ])
 
     def test_declared_keys_resolve_to_callables(self):

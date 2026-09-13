@@ -240,6 +240,14 @@
         "type": "file"
       },
       {
+        "path": "adapters/dsh/fixtures/",
+        "type": "dir"
+      },
+      {
+        "path": "adapters/dsh/fixtures/host-facts-0.1.5-rc.1.json",
+        "type": "file"
+      },
+      {
         "path": "lib/",
         "type": "dir"
       },
@@ -648,6 +656,7 @@
       "adapters/*/README.md",
       "adapters/*/adapter-manifest.json",
       "adapters/*/launch.py",
+      "adapters/dsh/fixtures/*.json",
       ".claude-plugin/*.json",
       ".claude-plugin/assets/*",
       ".codex-plugin/*.json",
@@ -776,7 +785,19 @@
         "artifact_role": "host-dependency-contract",
         "validation_commands": [
           "python -m unittest discover -s skills/software-project-governance/infra/tests -p test_dsh_contract.py",
+          "python skills/software-project-governance/infra/verify_workflow.py check-dsh-boundary --fail-on-issues",
           "python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues"
+        ]
+      },
+      {
+        "id": "dsh-host-facts-baseline",
+        "path": "adapters/dsh/fixtures/host-facts-0.1.5-rc.1.json",
+        "type": "file",
+        "required": true,
+        "artifact_role": "host-facts-baseline",
+        "validation_commands": [
+          "python skills/software-project-governance/infra/verify_workflow.py dsh-doctor --offline --stage S0",
+          "python skills/software-project-governance/infra/verify_workflow.py check-dsh-boundary --fail-on-issues"
         ]
       }
     ]

@@ -2,19 +2,19 @@
   "exemptions": [
     {
       "allowance_lines": 0,
-      "dec": "DEC-183 / DEC-184 (FEAT-019 packet; evolution §4 S5)",
-      "expire_version": "0.81.0",
+      "dec": "DEC-183 / DEC-184 (FEAT-019 packet; evolution §4 S5); renewal DEC-190 (0.81.0 M-0 O-8)",
+      "expire_version": "0.82.0",
       "reason": "FEAT-019 self-bootstrap RECORD: the anchor was generated AFTER the ratchet's own dispatch wiring (18 lines: import + argparse registration + commands-dict entry), so the wiring is already inside the anchor and the allowance is deliberately ZERO — this entry is the DEC-tracked disclosure, not a growth license (any excess still fails)",
       "rule": "R1",
       "scope": "mainfile"
     }
   ],
   "generated": {
-    "git_head": "94c0a619dcce751c00553e0bb004b4daa1de689a",
+    "git_head": "210b2003313abdc55710c9fddcb3d6d4b3c208f0",
     "loc_caliber": "physical lines (ReadAllLines equivalent — see physical_line_count docstring, facts §1.1)"
   },
   "r1_mainfile_budget": {
-    "anchor_loc": 24204,
+    "anchor_loc": 24412,
     "design_anchor_note": "facts-0.80.0 §3.1 design anchor was 24,252 (2026-09-09 HEAD); FEAT-019 packet mandates 实测为准 at regen time (intervening engine deltas: FIX-300 + FEAT-019 dispatch wiring, then FIX-309 Check 28v wiring: 24,356→24,399, whose rendering was moved into infra/dsh_compat.py so the R4 print budget stayed at 1,311). 只降不升 semantics unchanged; the wiring lines are registered as the R1 self-bootstrap exemption.",
     "path": "infra/verify_workflow.py"
   },
@@ -267,6 +267,15 @@
         "count": 1,
         "kind": "import_vw",
         "lines": [
+          1050
+        ],
+        "owner_task": "REFACTOR-remaining",
+        "path": "dsh_doctor.py"
+      },
+      {
+        "count": 1,
+        "kind": "import_vw",
+        "lines": [
           518
         ],
         "owner_task": "REFACTOR-domains-batch1",
@@ -468,6 +477,7 @@
       "cmd_check_complexity": 7,
       "cmd_check_cross_references": 14,
       "cmd_check_deterministic_scaffolds": 8,
+      "cmd_check_dsh_boundary": 1,
       "cmd_check_dsh_preset_smoke": 7,
       "cmd_check_duplicate_code": 6,
       "cmd_check_first_session_measurement": 6,
@@ -528,7 +538,7 @@
       "cmd_web_console": 61,
       "main": 1
     },
-    "total": 1298
+    "total": 1299
   },
   "r5_registration_integrity": {
     "consumes": "infra/contract_matrix/snapshots.json (FEAT-020)",

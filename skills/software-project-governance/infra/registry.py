@@ -4,7 +4,7 @@ The composition-root prototype of the 0.80.0 six-layer architecture: two
 static declaration tables plus a controlled loader, so a command can be
 selected and assembled **without** importing the monolith.
 
-    COMMAND_SPECS   83 dispatch keys → handler dotted paths (§3.5 step 3)
+    COMMAND_SPECS   84 dispatch keys → handler dotted paths (§3.5 step 3)
     CHECK_SPECS     71 CheckIDs → ``contracts.CheckSpec`` rows (§3.6 / §9.1)
     LOADER_WHITELIST  the closed set of modules a declaration may name
     assemble()      L6 组合根雏形: resolve ONE command's handler on demand
@@ -184,6 +184,7 @@ LOADER_WHITELIST: Tuple[str, ...] = (
     "archguard_ratchet",
     "checks.capability_registry",
     "checks.ci_domain",
+    "checks.dsh_boundary",
     "checks.evidence_domain",
     "checks.gate_domain",
     "checks.loop_runtime_claims",
@@ -195,6 +196,7 @@ LOADER_WHITELIST: Tuple[str, ...] = (
     "checks.triage_domain",
     "checks.version",
     "dsh_compat",
+    "dsh_doctor",
 )
 """Closed declaration of loadable modules (§9.1 controlled loader whitelist).
 
@@ -226,7 +228,7 @@ class LoaderResolutionError(RegistryError):
     """A malformed loader path, or a declared entry that cannot be resolved."""
 
 
-# ── command declaration: 82 keys → handler dotted path (FEAT-020 caliber) ───
+# ── command declaration: 84 keys → handler dotted path (FEAT-020 caliber) ───
 
 _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
     ("agent-locks-acquire", "verify_workflow.cmd_agent_locks_acquire"),
@@ -251,6 +253,7 @@ _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
     ("check-dsh-preset-compat",
      "verify_workflow.cmd_check_dsh_preset_compat"),
     ("check-dsh-preset-smoke", "verify_workflow.cmd_check_dsh_preset_smoke"),
+    ("check-dsh-boundary", "verify_workflow.cmd_check_dsh_boundary"),
     ("check-duplicate-code", "verify_workflow.cmd_check_duplicate_code"),
     ("check-first-session-measurement",
      "verify_workflow.cmd_check_first_session_measurement"),
@@ -307,6 +310,7 @@ _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
      "verify_workflow.cmd_dynamic_lifecycle_migration"),
     ("dynamic-lifecycle-migration",
      "verify_workflow.cmd_dynamic_lifecycle_migration"),
+    ("dsh-doctor", "dsh_doctor.main"),
     ("e2e-check", "verify_workflow.cmd_e2e_check"),
     ("execution-packet", "verify_workflow.cmd_execution_packet"),
     ("external-project-validation",
@@ -339,7 +343,8 @@ _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
     ("verify", "verify_workflow.cmd_verify"),
     ("web-console", "verify_workflow.cmd_web_console"),
 )
-"""83 dispatch keys from the FEAT-020 frozen face, each with the module that
+"""84 dispatch keys from the FEAT-020 frozen face (FEAT-031 added
+``check-dsh-boundary`` and ``dsh-doctor``), each with the module that
 *defines* its handler (machine-derived: the ``commands`` dict of ``main()``
 cross-referenced with the defining module of every handler name — 4 keys are
 already outside the engine, the other 79 ride the monolith)."""
@@ -404,6 +409,7 @@ _SEGMENT_LOADERS: Tuple[Tuple[str, str], ...] = (
     ("28t", "verify_workflow.check_readme_claim_evidence_levels"),
     ("28u", "verify_workflow.check_dsh_preset_smoke"),
     ("28v", "dsh_compat.emit_check_section"),
+    ("28w", "checks.dsh_boundary.emit_check_section"),
     ("29", "checks.review_domain.check_m5_runtime_triggers"),
     ("30", "checks.review_domain.check_review_closure"),
     ("30b", "checks.review_domain.check_loop_wiring_call_sites"),
@@ -418,16 +424,22 @@ _SEGMENT_LOADERS: Tuple[Tuple[str, str], ...] = (
     ("38", "checks.ci_domain.check_ci_evidence"),
     ("39", "checks.triage_domain.check_r1_completion_gate"),
 )
-"""70 segments ↔ the entry point the engine's section actually calls.
+"""71 segments ↔ the entry point the engine's section actually calls.
 
 Machine-derived in two passes: the section's single check-entry call name
 (``check_*`` / ``scan_*``) cross-referenced with that symbol's defining infra
-module. 68 of 70 resolve uniquely; ``24`` / ``28b`` name the implementing
+module. 69 of 71 resolve uniquely; ``24`` / ``28b`` name the implementing
 domain module behind an engine delegating wrapper (``DELEGATED_LOADERS``).
 
 Segment ``40`` (``verify_workflow.check_dsh_skills_manifest``) was removed with
 its subject: FIX-310/DEC-187 retired the dead ``dsh.skills`` declaration from
 package.json, so the declaration↔disk guard had nothing left to guard.
+
+Segment ``28w`` (``checks.dsh_boundary``, FEAT-031 / 0.81.0 slice V8) is the
+contract-boundary guard: its entry is ``emit_check_section`` for the same
+reason ``28v``'s is — the rendering lives in the check module (C-15: the
+monolith's print budget does not grow), and the engine's section is a
+one-statement delegation.
 """
 
 

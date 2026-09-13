@@ -544,6 +544,22 @@ SEGMENTS = (
         "plugin:asset:lib/index.js",
         "plugin:asset:cordis.patch.yml",
     ), _excluded("PLUGIN_PACKAGE_ASSET")),
+    # FEAT-031 / 0.81.0 slice V8: the dependency-boundary contract guard. Its
+    # fact source is the plugin package's own dsh surface — the contract itself,
+    # the preset payload the host row renders, the host row, the patch layer,
+    # the launcher and the guard that consumes the contract (design §2.9.4).
+    # Declaration is import-time mandatory: `registry._build_check_specs()`
+    # joins this table against `_SEGMENT_LOADERS` and raises `RegistryError`
+    # when either side names a segment the other does not (E-17).
+    SegmentSpec("28w", "distribution", (
+        "plugin:asset:adapters/dsh/host-contract.json",
+        "plugin:asset:adapters/dsh/fixtures/**",
+        "plugin:asset:agent-presets/**",
+        "plugin:asset:lib/index.js",
+        "plugin:asset:cordis.patch.yml",
+        "plugin:asset:adapters/dsh/launch.py",
+        "plugin:asset:skills/software-project-governance/infra/dsh_compat.py",
+    ), _excluded("PLUGIN_PACKAGE_ASSET")),
     # ── C3 待判定 ④：事实源根 = 宿主面（宿主治理证据语料）──
     SegmentSpec("29", "protocol", (
         "host:governance:.governance/evidence-log.md",

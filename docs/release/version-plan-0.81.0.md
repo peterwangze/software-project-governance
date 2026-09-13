@@ -152,3 +152,18 @@
 ---
 
 *本文件为 0.81.0 规划产物，随 M-0 裁决（DEC-190）产出；M-1~M-8 执行中持续更新。*
+
+---
+
+## M-2 前置门禁实测（Coordinator，2026-09-13 预检）
+
+在实现切片尚未全部落地时先做**只读预检**，用于在 M-2 前提前发现返工点（结果可复现，命令见下）：
+
+| 门禁 | 命令 | 实测（2026-09-13，HEAD 1c2dc0a） |
+|---|---|---|
+| 版本一致性 | check-version-consistency | **PASSED**——13 个版本声明文件 + 2 个 bootstrap 标记一致（真值源 SKILL.md） |
+| 投影同步 | check-projection-sync --fail-on-issues | **PASSED**——15 个镜像文件与版本声明同步 |
+| 注入契约 | check-injection-contract --fail-on-issues | **PASSED**——3 文件 / 23 锚点齐全 |
+
+**意义**：发布链上「版本一致性 / 投影同步 / 注入契约」三项在**版本 bump 之前**即已绿，故 0.81.0 的 M-2 剩余待验门禁收敛为：结构清单（check-manifest-consistency）、清理面（cleanup.py --dry-run）、棘轮（**两次 --regen 后**的 rchguard-ratchet）、**Check 28w（V8 交付）**、28u + 28v、全量测试基线、回滚方案。
+**注意**：版本 bump（0.80.0 → 0.81.0）后本三项 **MUST 重跑**——上表证明的是「未 bump 前的健康度」，不是 bump 后的终态。

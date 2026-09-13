@@ -439,7 +439,7 @@ def reset_cache() -> None: ...                                  # 仅测试用
 | 判据 | 内容 | 判据来源 |
 |---|---|---|
 | G01-a | `rows_checked == 0` ⇒ verdict = `NOT_RUN`（**永不 PASS**） | C-7 三态政策（`dsh_compat.py:75-77` 实测） |
-| G01-b | 报告新增结构化 `coverage = {rows_enabled, rows_verified, rows_unverified, unverified_reasons{kind: n}}` | C-6「可信面 ≤ 校验面」的可见化 |
+| G01-b | 报告新增结构化 `coverage = {rows_enabled, rows_verified, rows_unverified, unverified_reasons{kind: n}, unreadable_compositions}` | C-6「可信面 ≤ 校验面」的可见化。**第 5 字段 `unreadable_compositions`（FIX-315 落地，REVIEW-FIX-315-CODE-R1 F-R1-06 勘误补入）**：不可读文件是**组合级**事实（其行数不可知，故不入 `rows_*` 直方图），必须独立计数，否则读失败在只消费 `rows_unverified` 的面上会消失 |
 | G01-c | PASS 分支必须逐行打印未校验行（按 `kind` 判定，不按字符串） | G-01④ 实测缺陷 |
 | G01-d | PASS reason 措辞必须声明分母：`"verified X of Y enabled row(s) ..."`（不得只说 `"X enabled row(s) validated"`） | G-01③ 实测（`checked: 1` 却 reason 说 "1 enabled row(s) validated"，与 `enabled: 2` 不一致） |
 | G01-e | `NO_SCHEMA` 的 detail 文案 MUST NOT 断言"loader 会把 config 原样透传" | **R-15 未验证**（§9 U-2）：改为"this guard cannot validate this row's config (the module exports no Config schema)"——**去掉对 loader 行为的未经证实的断言** |
@@ -629,6 +629,7 @@ python …/verify_workflow.py check-dsh-preset-compat                           
     {"stage": "S2", "title": "row/config schema",
      "verdict": "PASS",
      "credible_face": {"rows_enabled": 23, "rows_verified": 18, "rows_unverified": 5,
+                        "unreadable_compositions": 0,
                        "unverified_reasons": {"NO_SCHEMA": 5}},
      "evidence": [{"kind": "check|file|probe|test", "ref": "...", "detail": "..."}],
      "remediation": [{"action": "...", "command": "...", "expected": "..."}]}
@@ -648,7 +649,9 @@ python …/verify_workflow.py check-dsh-preset-compat                           
 - **`coverage` 块只有一个生成点**（`check_dsh_preset_compat()`）；doctor S2 只**投影**它（`kind: "check", ref: "28v"`），不重算、不改写。
 - **K-12**：同一仓库态下 `dsh-doctor --json` 顶层 `verdict` 与 `check-dsh-boundary --fail-on-issues` 退出码 MUST 一致；不一致 → doctor 自身 FAIL（含反相 fixture `FX-VERDICT-01`）。
 
-### 5.2 阶段规格（S0→S7，对齐 AUDIT-153 §6.1 的定界链）
+#> **S2 投影约束（F-R1-06）**：`dsh-doctor` 的 S2 面投影 `coverage` 时 MUST 携带 `unreadable_compositions`；读失败（`ContractUnreadable` 之外的**组合文件**读失败）在该面 MUST NOT 丢失——它是与 `rows_unverified` 同级的可信面事实。
+
+## 5.2 阶段规格（S0→S7，对齐 AUDIT-153 §6.1 的定界链）
 
 | 阶段 | 名称 | 今天的状态（§6.1） | 本设计的判定输入 | verdict 判据 | 典型 remediation |
 |---|---|---|---|---|---|

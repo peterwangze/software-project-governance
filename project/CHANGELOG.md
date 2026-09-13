@@ -2,6 +2,40 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.81.0] - ⟦待 M-1 冻结填日期⟧
+
+### 0.81.0 - **dsh 宿主兼容性体系化**：依赖面全量清点 → 单一契约层 → 五切片落地 → 单点诊断（REL-077 / AUDIT-153 / FEAT-028~031 / FIX-311~317 / FIX-319 / FIX-321）
+
+0.81.0 是 **MINOR** 发布，承载用户 2026-09-13 的诉求：**「dsh 升级适配之后出现大量的兼容性问题，需要针对插件的兼容性设计进行系统性的分析设计和实现，直到兼容性实现闭环并发布对应版本」**，以及四条硬要求：
+**① 尽可能减少对 DSH 宿主的依赖；② 必须的接口和字段依赖解耦、单独维护；③ 依赖代码严格校验与看护；④ 依赖边界可调测（第一时间发现 + 低代价适配）**。授权链：DEC-189（架构）/ DEC-190（范围 = 全量 V1~V8+V10 入槽 0.81.0 + 真机验收路径 + 发布预授权）/ DEC-191（必要依赖 72 条；`compat_range` 取值推 V8）/ DEC-192（夹具迁移授权 + K-2 allowlist 0/0）。
+
+**第一步 — 把"依赖什么"变成事实（AUDIT-153）**：`docs/requirements/dsh-host-dependency-inventory-0.81.0.md`（801 行）逐点清点 **D-01~D-100** 宿主依赖点、**G-01~G-18** 缺口（**逐条实测复现**，含"零校验却报 PASS""group 名静默不校验""非 UTF-8 穿出公共入口"等）、**C-1~C-25** 约束与 **R-01~R-19** 风险。三类归并结论：可消除 4 / 可弱化 26 / **必要 72（fail-closed 超集，逐行复算）**。
+
+**第二步 — 把"如何依赖"固化为可机检架构（FEAT-028 / ADR-018）**：`docs/requirements/dsh-compat-design-0.81.0.md`（1023 行）+ `ADR-018`（280 行）确立单一机器可读契约 `adapters/dsh/host-contract.json` + 访问器 `infra/dsh_contract.py`，并立下不变量 **「可信面 ≤ 校验面」**：**零校验 MUST NOT PASS**；契约缺失/畸形按 §2.5.1 三态降级（`NOT_RUN` / `FAIL`），**刻意不保留内联回退副本**（J-4：保留即第二事实源）。看护面 = **K-1~K-13**；诊断面 = **S0~S7** 单点入口 `dsh-doctor`；升级演练 = `--rehearse` + `host-facts-<v>.json`。
+
+**第三步 — 五切片落地（V1~V8 + V10）**：
+- **V1** `FEAT-029`（契约数据层：契约本体 2456 行 + 访问器 + 自校验测试 + 夹具发射器）+ `FIX-317`（审查收口：编码错误分类 / `recorded` 值校验 / 切片归属 / 覆盖声明）；
+- **V2** `FEAT-030`（消费方改读契约：`lib/index.js` / `launch.py` / `dsh_compat.py` 三侧绑定；K-2 静态扫描把"契约外硬编码"变为可机检 FAIL；**行为保持**经三路径渲染 sha256 证明）；
+- **V3** `FIX-315`（**零校验不得 PASS**：`rows_checked==0 ⇒ NOT_RUN` + `coverage` 块 + kind 驱动上屏，消除 28v 对 5/23 零 schema 行"假绿 + 不上屏"）；
+- **V4** `FIX-311`（group 语义与 **loader 真实源码语义**对齐：G-02 group 名校验 + G-03① 自身 `disabled` 短路 + G-03② 消除子行**连带假阴**；G-18 分类自检与显式白名单）；
+- **V5+V6+V7** `FIX-316`（渲染/解码守卫 G-05/G-07/G-10、死代码 D-50/D-56、行尾 D-66；`DSH_HOME` 两实现收敛（20 例矩阵 0 分歧）+ 探测侧保持 fail-closed；版本字面量在授权声明面归零 + `--smoke` 断言事实化 + **写入守卫对称化**）；
+- **V8** `FEAT-031`（Check 28w `check-dsh-boundary` K-1~K-13 + `dsh-doctor` S0~S7 + `host-facts` 升级演练 + registry 接线 + 两次 `--regen`）⟦待回填 commit⟧；
+- **V10** `FIX-313`（`lib/index.js` 清理路径的所有者判据：防误删同名的 CWD 目录）⟦待回填 commit⟧。
+
+**并行收口**：`FIX-319`（Check 18c 判据把 markdown 粗体 `**` 当通配符 ⇒ 每个含粗体的活跃任务 packet 都假 FAIL；修复后真实语料 3/3 误报消除 + 9 条宽范围反证仍 FAIL + **192 条穷举放宽面 0 例外**）+ `FIX-321`（粗体剥离的**双侧 run 边界**守卫，防 glob 串被洗白）。
+
+**发布目标**：兑现"依赖最小化 / 单点维护 / 严格看护 / 可调测"四条要求，并把 dsh 适配从"散落的隐式依赖"收敛为"**一份契约 + 一个访问器 + 一套机检看护 + 一个诊断入口**"，使未来 dsh 升级的适配成本与发现时间都可控。
+
+**行为变更（用户可感知，2 项）**：**B-1** `--install` 对缺失/不可读 `package.json` 由 `rc 0`（写占位版本 `"0"` ⇒ 每次启动重建预设）改为 **`rc 1` 拒绝**；**B-2** 真实 home 形态的 `DSH_HOME` 下 `--install`/`--sync`/`--uninstall` 由可用改为 **`exit 2` + `[REFUSED]`**（`--dry-run` 仍放行，只读预览）。详见 `docs/release/feature-flags-0.81.0.md`。
+
+**如实披露的既有失败**：`check-loop-runtime-claims` 语义面 **BLOCKED**——3 条 `UNSUPPORTED_AFFIRMATIVE` 全部落在**既有**的 `docs/reviews/review-FIX-300-CODE-R0.md`（0.66.1 期引入，**非本版引入**）⇒ 登记为 **FIX-320**，本版处置 = 如实披露，不阻断发布。
+
+**风险**：**RISK-050**（dsh 上游内部面耦合）本版把依赖面枚举 + 契约化 + 零校验门禁 + 单点诊断 + 升级演练**前移**，**不声明关闭**（截止 2026-10-31 继续观察）。
+
+**真机验收**：`docs/release/real-machine-acceptance-0.81.0.md` 三项由用户手动执行并回贴；**回贴前 release 文档 MUST NOT 声明真机项通过**，未回贴项标「未验证」。
+
+版本投影 0.80.0 -> 0.81.0（`release-projection --write` 全量投影 + `@bootstrap-version` 标记面 + `REQUIRED_SNIPPETS` 版本钉）。
+
 ## [0.80.0] - 2026-09-12
 
 ### 0.80.0 - 0.80.0 重构线 P1 首批（契约层 / 轻量注册 / quick-scan 两切片）+ **dsh 适配层零侵入改造三连**（REL-076 / FEAT-021~022 / FEAT-025~026 / FIX-303~305 / FIX-307~310）（MINOR）

@@ -29,19 +29,19 @@
 git -C <plugin_root> log --oneline -1
 git -C <plugin_root> status --porcelain
 # 2) 回退到本版之前的稳定点（二选一）
-#    (a) 精确回退本版提交区间（推荐，保留历史）——区间 = **整个 0.81.0 窗口 `d87ead8..<发布 tip>`**：
+#    (a) 精确回退本版提交区间（推荐，保留历史）——区间 = **整个 0.81.0 窗口 `d87ead8..e376ddf（0.81.0 发布 tip = transition 提交）`**：
 #        起点 = `d87ead8`（0.80.0 线 tip；0.80.0 基线即实测于该提交，§4 验证 6）
 #        终点 = **发布 tip**（M-5 transition 提交；其 hash 由 M-5 生成后回填，不预先编造）
-git -C <plugin_root> revert --no-commit d87ead8..<发布 tip>
+git -C <plugin_root> revert --no-commit d87ead8..e376ddf（0.81.0 发布 tip = transition 提交）
 #        区间**计数不写死**（FIX-334 / REVIEW-REL-077-RELEASE-R0 F-03：原稿"31 + 该冻结提交"少 1）：
-#        M-5 现场以 `git rev-list --count d87ead8..<发布 tip>` 取值记入 EVD。本文件写作时点实测
+#        M-5 现场以 `git rev-list --count d87ead8..e376ddf（0.81.0 发布 tip = transition 提交）` 取值记入 EVD。本文件写作时点实测
 #        （tip = 门禁收口提交 `22cf185`）为 **34** = 31（Change Inventory 窗口 `d87ead8..3074120`）
 #        + `5e6d8c7`（M-1 冻结推进）+ `a89341e`（候选打包）+ `22cf185`（门禁收口）；
 #        候选打包点上的计数为 **33**（= 前述前 3 项之和）。
 #        V8 `3074120` / V10 `61b571c` 仅为本区间末两个代表性交付，**不是**区间本身。
 #        **终点为什么必须是发布 tip 而不是候选打包提交 `a89341e`**（F-04）：`a89341e..<tip>` 内的提交
 #        修改了**区间内新增**的三件套 release 文档，故在 tip 上执行 `revert d87ead8..a89341e` 会冲突
-#        （实测 3 处，见 §4「revert 干跑」行）；只有 `..<发布 tip>` 才是"回到 0.80.0 行为"的完整区间。
+#        （实测 3 处，见 §4「revert 干跑」行）；只有 `..e376ddf（0.81.0 发布 tip = transition 提交）` 才是"回到 0.80.0 行为"的完整区间。
 #    (b) 直接切回稳定 tag
 git -C <plugin_root> checkout v0.80.0
 # 3) 重装适配层（隔离验证后再对真实环境执行）
@@ -86,7 +86,7 @@ $env:DSH_HOME = "<用户 DSH home>"; python adapters/dsh/launch.py --install
 | A（预设终点 = 候选打包提交） | `a89341e` | `git revert --no-commit --no-edit d87ead8..a89341e` | **0** | **0** | **80**（39 `D` + 41 `M`） |
 | B（同一区间在当前 tip 上） | `22cf185`（= 写作时点发布 tip） | 同上 | **1** | **3**（`docs/release/feature-flags-0.81.0.md`、`docs/release/release-checklist-0.81.0.md`、`docs/release/rollback-plan-0.81.0.md`，均 `UU`） | 35（5 `D` + 27 `M` + 3 `UU`） |
 
-**结论**：① 区间 `d87ead8..a89341e` 在候选打包点上可无冲突回退（80 路径）；② 但在**发布 tip** 上执行同一区间会因**区间外提交改动了区间内新增的三件套**而冲突（3 处）⇒ 回滚 MUST 以 `d87ead8..<发布 tip>` 表达区间（区间整体覆盖 post-candidate 提交，包括三件套的修改），而不是 `..a89341e`；③ 干跑 B 的 `git revert --abort` 复原后 worktree 干净、主工作树 `git status --porcelain` 仍只有本次修复涉及的文件。
+**结论**：① 区间 `d87ead8..a89341e` 在候选打包点上可无冲突回退（80 路径）；② 但在**发布 tip** 上执行同一区间会因**区间外提交改动了区间内新增的三件套**而冲突（3 处）⇒ 回滚 MUST 以 `d87ead8..e376ddf（0.81.0 发布 tip = transition 提交）` 表达区间（区间整体覆盖 post-candidate 提交，包括三件套的修改），而不是 `..a89341e`；③ 干跑 B 的 `git revert --abort` 复原后 worktree 干净、主工作树 `git status --porcelain` 仍只有本次修复涉及的文件。
 
 ## 5. 不可回滚项（如实列出）
 
@@ -107,4 +107,4 @@ $env:DSH_HOME = "<用户 DSH home>"; python adapters/dsh/launch.py --install
 
 ---
 
-*M-1 冻结完成（2026-09-13）；FIX-334 于 2026-09-14 按 REVIEW-REL-077-RELEASE-R0 F-03/F-04 更正区间表述与计数并补演练记录。V8/V10 终态（`3074120` / `61b571c`）已按实测回填；**回滚区间 = 整个 0.81.0 窗口 `d87ead8..<发布 tip>`**——写作时点 tip = 门禁收口提交 `22cf185`，`git rev-list --count d87ead8..22cf185` = **34**；候选打包提交 `a89341e` 上为 **33**（= 31 + `5e6d8c7` + `a89341e`）。原稿「31 commits + 本候选打包提交」= 32 **少 1**（REVIEW-REL-077-RELEASE-R0 **F-03**）；区间终点由「候选打包提交」改为**发布 tip**（同报告 **F-04**，依据 = §4.1 的两次 revert 干跑：候选点上 0 冲突 / 发布 tip 上 3 处冲突）；V8/V10 只是该区间末两个代表提交、不是区间本身（REVIEW-REL-077-CODE-R0 **F-01** 更正；候选打包提交 = `a89341e`（由 ledger 派生））。本文件作为 M-2 门禁「回滚方案」的交付物参与 `check-release`。*
+*M-1 冻结完成（2026-09-13）；FIX-334 于 2026-09-14 按 REVIEW-REL-077-RELEASE-R0 F-03/F-04 更正区间表述与计数并补演练记录。V8/V10 终态（`3074120` / `61b571c`）已按实测回填；**回滚区间 = 整个 0.81.0 窗口 `d87ead8..e376ddf（0.81.0 发布 tip = transition 提交）`**——写作时点 tip = 门禁收口提交 `22cf185`，`git rev-list --count d87ead8..22cf185` = **34**；候选打包提交 `a89341e` 上为 **33**（= 31 + `5e6d8c7` + `a89341e`）。原稿「31 commits + 本候选打包提交」= 32 **少 1**（REVIEW-REL-077-RELEASE-R0 **F-03**）；区间终点由「候选打包提交」改为**发布 tip**（同报告 **F-04**，依据 = §4.1 的两次 revert 干跑：候选点上 0 冲突 / 发布 tip 上 3 处冲突）；V8/V10 只是该区间末两个代表提交、不是区间本身（REVIEW-REL-077-CODE-R0 **F-01** 更正；候选打包提交 = `a89341e`（由 ledger 派生））。本文件作为 M-2 门禁「回滚方案」的交付物参与 `check-release`。*

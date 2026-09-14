@@ -624,12 +624,76 @@ class RenderStageTests(DoctorCase):
         self.assertIsNone(s4["credible_face"]["js_render_sha256"])
 
     def test_the_python_render_is_the_launchers_own_output(self):
-        import hashlib
+        """The doctor's render *is* the launcher's own output — derived, not pinned.
 
+        **Why this stopped being a literal hash** (FIX-334 / REVIEW-REL-077-RELEASE-R0
+        F-01): the case used to assert one sha256 measured on 0.80.0
+        (``00e0d330…3723``). That literal goes stale on **two** axes, and both are
+        properties of the *tree*, not of the renderer: the persona version line is
+        projected into ``agent-presets/governance/agent.cordis.yml.template`` at
+        every version bump, and the render substitutes the **absolute** package
+        root into ``__GOVERNANCE_REPO_ROOT__`` — so the literal also pinned the
+        checkout path. A stale literal is a red test on a healthy tree, which is
+        the "version-pin rot" defect class this release exists to remove; the pin
+        was previously read as evidence about the *pristine* tree when in fact it
+        could only ever be satisfied there.
+
+        The claim is kept, in a form that cannot rot:
+
+        * **parity** — a second, independent delivery path (a fresh interpreter
+          importing the same ``launch.py``) must produce byte-identical text, so
+          the doctor is still proven to *delegate* to the launcher's renderer
+          rather than reimplement it (which is what the case name claims);
+        * **derivation** — the rendered persona version line must carry the
+          authoritative version, read from the ``SKILL.md`` frontmatter (the
+          version's single source of truth), so a projection that lags the
+          release is caught here instead of being masked by a literal somebody
+          remembered to update;
+        * **not a refused render** — ``render_composition()`` returns ``""`` when
+          the template is missing, undecodable or leaves a ``__…__`` token
+          behind, so an empty render must fail rather than compare equal to
+          another empty render.
+        """
+        import hashlib
+        import subprocess
+
+        from checks.version import extract_skill_version
+
+        launcher = _PACKAGE_ROOT / "adapters" / "dsh" / "launch.py"
         rendered = doctor._python_render(_PACKAGE_ROOT)
+        self.assertTrue(rendered, "the launcher refused to render the template")
+
+        # Parity: same tree, same run, a second path to the same renderer. The
+        # child only imports and renders (no install, no write), and it is given
+        # an isolated home anyway so no real ``$DSH_HOME`` is ever in scope.
+        script = (
+            "import hashlib, importlib.util, sys;"
+            "spec = importlib.util.spec_from_file_location('_parity', sys.argv[1]);"
+            "module = importlib.util.module_from_spec(spec);"
+            "spec.loader.exec_module(module);"
+            "sys.stdout.write(hashlib.sha256("
+            "module.render_composition().encode('utf-8')).hexdigest())"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", script, str(launcher)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=120, cwd=str(_PACKAGE_ROOT),
+            env={**os.environ, "DSH_HOME": str(self.clean_home())},
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(
             hashlib.sha256(rendered.encode("utf-8")).hexdigest(),
-            "00e0d330f3560e10381b54b37a06fe6a626a451e3e70da8126b9c2bc47be3723")
+            proc.stdout.strip(),
+            "the doctor's render diverged from the launcher's own output")
+
+        # Derivation: the render tracks the authoritative version rather than a
+        # literal (FIX-253 precedent in `test_dsh_adapter`).
+        version = extract_skill_version(
+            _PACKAGE_ROOT / "skills" / "software-project-governance" / "SKILL.md")
+        self.assertTrue(version, "SKILL.md frontmatter version is missing")
+        self.assertIn(
+            f"（v{version}）", rendered,
+            "the rendered persona version line does not carry the authoritative version")
 
     def test_a_missing_template_is_a_fail(self):
         with tempfile.TemporaryDirectory() as tmp:

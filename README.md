@@ -82,6 +82,8 @@ python adapters/dsh/launch.py --install --dry-run   # preview: resolved DSH_HOME
 python adapters/dsh/launch.py --install             # renders only ${DSH_HOME}/.agent-presets/governance/ (4 files: composition + preset.yml + 2 markers)
 ```
 
+**Since 0.81.0 these write paths refuse a real home (behaviour B-2, `docs/release/feature-flags-0.81.0.md` section 2)**: `--install` / `--sync` / `--uninstall` exit `2` with `[REFUSED]` unless `DSH_HOME` is explicitly set to a directory outside your real home tree (`~/.dsh` (unset **or** blank counts as the real home), so a deliberate manual install MUST redirect `DSH_HOME` to a temporary directory; `--dry-run` stays a read-only preview and is still allowed. 〔static: 0.81.0 write-side guard, `adapters/dsh/launch.py` write_side_refusal + release-gate tests; refusal path not re-executed in this doc edit〕
+
 Safe verification boundary (do not "verify" against your real `~/.dsh`): preview with `--dry-run`, then run install/upgrade checks against a redirected home —
 
 ```bash
@@ -413,6 +415,8 @@ python adapters/dsh/launch.py --bootstrap-project <项目目录>
 python adapters/dsh/launch.py
 python skills/software-project-governance/infra/verify_workflow.py check-agent-adapters
 ```
+
+> **0.81.0 起写入守卫（行为变更 B-2）**：`--install` / `--sync` / `--uninstall` 在**真实 home 形态**下（`DSH_HOME` 未设 / 空串 / 空白，或解析为 `~/.dsh`、`~/.dsh` 的子目录）一律 `exit 2` + `[REFUSED]`——真实环境手工安装 MUST 先把 `DSH_HOME` 重定向到临时目录（拒绝面覆盖**任何解析后落在真实用户 home 之下、含其父目录**的 `DSH_HOME`）；`--dry-run` 是只读预览，仍放行。详见 `docs/release/feature-flags-0.81.0.md` §2。〔static: 0.81.0 写入守卫 `adapters/dsh/launch.py` `write_side_refusal` + 发布门禁测试；本段编辑未重跑拒绝路径〕
 
 安装后：启动 dsh 会话选择「治理协调器」预设，或在被治理项目目录内开任意预设会话（由 `AGENTS.md` 激活）。用户输入 `/governance` 即加载统一治理入口（dsh 的 `/name` 手势加载同名 skill）〔live-session: 2026-07-08 真实 dsh 会话 0.1.0-rc.6 /name skill 加载验证〕〔isolation: 2026-09-05 dsh 0.1.2-rc.1 链路复验〕。
 

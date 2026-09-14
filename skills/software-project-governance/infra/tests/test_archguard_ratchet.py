@@ -32,6 +32,8 @@ if str(_INFRA_DIR) not in sys.path:
     sys.path.insert(0, str(_INFRA_DIR))
 
 import archguard_ratchet as ar  # noqa: E402
+# DEC-096 authority: SKILL.md frontmatter is the only version fact source.
+from checks.version import extract_skill_version  # noqa: E402
 
 ENGINE = _INFRA_DIR / "verify_workflow.py"
 BASELINE = _SKILL_ROOT / "core" / "architecture-baseline.json"
@@ -356,23 +358,61 @@ class R7ReproducibilityTests(unittest.TestCase):
 
 
 class ExemptionMechanismTests(unittest.TestCase):
+    """The fuse's two faces: an ACTIVE exemption suppresses / still fails.
+
+    FIX-335 derivation discipline (4th instance of version-pin rot): the two
+    "active" fixtures below derive their ``expire_version`` from the
+    authoritative version — SKILL.md frontmatter, read through
+    ``checks.version.extract_skill_version`` (DEC-096; same helper the
+    ``test_dsh_doctor`` / ``test_dsh_adapter`` derivations use) — instead of
+    pinning a release literal. The fuse is judged
+    ``current_version >= expire_version`` (``archguard_ratchet._entry_expired``),
+    so a pinned literal equal to the then-current release flips its fixture to
+    ``EXPIRED:<version>`` the moment that release ships: the literal 0.81.0
+    pinned here turned both fixtures into ``EXPIRED:0.81.0`` at 0.81.0 and made
+    this module red on every candidate tree. Deriving keeps the fixtures'
+    semantics intact — an exemption whose fuse has NOT expired yet — under any
+    future bump, while a bump that passes the derived fuse still turns them red
+    (the assertion stays a real test, never a tautology).
+    """
+
     def _r1_finding(self, excess):
         return [{"rule": "R1", "scope": "mainfile", "message": "x",
                  "excess_lines": excess}]
 
+    def _not_yet_expired_version(self) -> str:
+        """Fuse strictly ABOVE the shipped version — not expired by construction.
+
+        Patch-increment of the DEC-096 authoritative version: parse, then step
+        one patch. An unreadable version fails the fixture loudly (fail-closed)
+        rather than silently degrading the expiry judgement.
+        """
+        current = extract_skill_version(_SKILL_ROOT / "SKILL.md")
+        self.assertRegex(current, r"^\d+\.\d+\.\d+$",
+                         "SKILL.md frontmatter version (DEC-096) is required")
+        major, minor, patch = (int(part) for part in current.split("."))
+        derived = f"{major}.{minor}.{patch + 1}"
+        self.assertGreater(tuple(int(p) for p in derived.split(".")),
+                           tuple(int(p) for p in current.split(".")))
+        return derived
+
     def test_active_exemption_suppresses_within_allowance(self):
+        """NOT-yet-expired fuse + excess <= allowance -> suppressed, disclosed."""
         exemptions = [{"rule": "R1", "scope": "mainfile",
                        "allowance_lines": 16, "reason": "test",
-                       "dec": "DEC-TEST", "expire_version": "0.81.0"}]
+                       "dec": "DEC-TEST",
+                       "expire_version": self._not_yet_expired_version()}]
         effective, disclosures = ar.apply_exemptions(
             self._r1_finding(10), exemptions, _SKILL_ROOT)
         self.assertEqual(effective, [])
         self.assertTrue(disclosures)
 
     def test_active_exemption_over_allowance_still_fails(self):
+        """NOT-yet-expired fuse + excess > allowance -> the teeth still bite."""
         exemptions = [{"rule": "R1", "scope": "mainfile",
                        "allowance_lines": 16, "reason": "test",
-                       "dec": "DEC-TEST", "expire_version": "0.81.0"}]
+                       "dec": "DEC-TEST",
+                       "expire_version": self._not_yet_expired_version()}]
         effective, _ = ar.apply_exemptions(
             self._r1_finding(20), exemptions, _SKILL_ROOT)
         self.assertEqual(len(effective), 1)

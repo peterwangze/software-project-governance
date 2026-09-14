@@ -1,7 +1,14 @@
 # Feature Flags — 0.81.0（REL-077）
 
-- **状态**：**M-1 冻结**（2026-09-13）——V8（FEAT-031 `3074120`）已落地，「待 V8 回填」占位已按下述实测事实补齐（CLI / 退出码 / 阶段级崩溃隔离见 `docs/release/release-checklist-0.81.0.md` §「dsh-doctor 预检」；Check 28w 逐条结论见同文件 Gate 7 行）。
-- **范围**：0.81.0 引入的**开关 / 可配置项 / 行为变更**清单。本版的设计取向是 **fail-closed 且默认安全**，故**新增开关为零**——变更是"更严的默认"，而非"需要用户打开的开关"。
+## 保守边界声明（no-overclaim boundary）
+
+本版**不**主张、也不构成以下任何一项；下列边界按 release gate 的保守边界 token 如实声明：
+
+- **No official approval claim**：official approval 未被授予、未被主张；0.81.0 不主张官方认可。
+- **No marketplace approval claim**：marketplace approval 未被授予、未被主张；0.81.0 不主张已进入任何市场或商店。
+- **No universal/full runtime support claim**：universal/full runtime support 未被主张；真实环境面仍未验证（真机三项由用户手动执行回贴，未回贴前一律标「未验证」），非 Windows 平台未验证。
+- **No external first-session pilot success claim**：external first-session pilot success 未被主张；本版的隔离验收 = 「隔离环境安装冒烟（环境变量重定向至临时目录）通过」，不等于真实外部首会话验证通过。
+- **RISK-036 remains open / do not claim 1.0.0 production-ready**：RISK-036（官方收录与外部验证）继续打开，未关闭；do not claim 1.0.0 production-ready。
 
 ## 1. 新增/变更的开关
 

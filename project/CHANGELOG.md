@@ -34,6 +34,8 @@
 
 **真机验收**：`docs/release/real-machine-acceptance-0.81.0.md` 三项由用户手动执行并回贴；**回贴前 release 文档 MUST NOT 声明真机项通过**，未回贴项标「未验证」。
 
+**Breaking changes：无**（`skills/software-project-governance/core/VERSIONING.md` L11 口径：无接口删除/重命名、无默认行为破坏、无 Gate 语义或治理字段格式变更）。**行为变更（升级须知，2 项）**：**B-1** `--install` 对缺失/不可读 `package.json`：`rc 0`（写占位 `"0"`）→ **`rc 1` 拒绝**；**B-2** 真实 home 形态的 `DSH_HOME` 下 `--install`/`--sync`/`--uninstall`：可用 → **`exit 2` + `[REFUSED]`**（`--dry-run` 仍放行，只读预览；**拒绝面覆盖任何解析后落在真实用户 home 之下（含其父目录）的 `DSH_HOME`**——真实环境手工安装 MUST 先把 `DSH_HOME` 重定向到临时目录）。详见 `docs/release/feature-flags-0.81.0.md` §2 与 `docs/release/release-checklist-0.81.0.md` 的「行为变更」段。
+
 版本投影 0.80.0 -> 0.81.0（`release-projection --write` 全量投影 + `@bootstrap-version` 标记面 + `REQUIRED_SNIPPETS` 版本钉）。
 
 ## [0.80.0] - 2026-09-12

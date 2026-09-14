@@ -1,8 +1,14 @@
 # Rollback Plan — 0.81.0（REL-077）
 
-- **状态**：**M-1 冻结**（2026-09-13）——行为清单已确定；`V8` 交付项与最终 commit 清单已按实测回填。**回滚区间 = 整个 0.81.0 窗口 `d87ead8..<0.81.0 候选打包提交>`**（实测 `d87ead8..3074120` = **31 commits**，加本候选打包提交本身）；`61b571c`（V10）/ `3074120`（V8）**仅为本区间末两个代表提交，不是区间本身**——原稿把区间写成这 2 个提交，按文执行会留下 29 个 0.81.0 提交、回不到 0.80.0 行为（REVIEW-REL-077-CODE-R0 **F-01** 已更正）。
-- **对应版本**：0.81.0（dsh 宿主兼容性体系化）；前置稳定版本 = **0.80.0**（tag `v0.80.0`）。
-- **回滚目标**：在不损坏用户数据的前提下，把插件恢复到 0.80.0 行为。
+## 保守边界声明（no-overclaim boundary）
+
+本版**不**主张、也不构成以下任何一项；下列边界按 release gate 的保守边界 token 如实声明：
+
+- **No official approval claim**：official approval 未被授予、未被主张；0.81.0 不主张官方认可。
+- **No marketplace approval claim**：marketplace approval 未被授予、未被主张；0.81.0 不主张已进入任何市场或商店。
+- **No universal/full runtime support claim**：universal/full runtime support 未被主张；真实环境面仍未验证（真机三项由用户手动执行回贴，未回贴前一律标「未验证」），非 Windows 平台未验证。
+- **No external first-session pilot success claim**：external first-session pilot success 未被主张；本版的隔离验收 = 「隔离环境安装冒烟（环境变量重定向至临时目录）通过」，不等于真实外部首会话验证通过。
+- **RISK-036 remains open / do not claim 1.0.0 production-ready**：RISK-036（官方收录与外部验证）继续打开，未关闭；do not claim 1.0.0 production-ready。
 
 ## 1. 本版改动的回滚影响分类
 
@@ -23,14 +29,19 @@
 git -C <plugin_root> log --oneline -1
 git -C <plugin_root> status --porcelain
 # 2) 回退到本版之前的稳定点（二选一）
-#    (a) 精确回退本版提交区间（推荐，保留历史）——区间 = **整个 0.81.0 窗口**：
+#    (a) 精确回退本版提交区间（推荐，保留历史）——区间 = **整个 0.81.0 窗口 `d87ead8..<发布 tip>`**：
 #        起点 = `d87ead8`（0.80.0 线 tip；0.80.0 基线即实测于该提交，§4 验证 6）
-#        终点 = 本版候选打包提交（= `docs/release/release-checklist-0.81.0.md` 的冻结提交）
-git -C <plugin_root> revert --no-commit d87ead8..<0.81.0 候选打包提交>
-#        实测区间含 31 个提交（本文件配套的 Change Inventory 全表 `d87ead8..3074120`），加候选打包提交本身；
+#        终点 = **发布 tip**（M-5 transition 提交；其 hash 由 M-5 生成后回填，不预先编造）
+git -C <plugin_root> revert --no-commit d87ead8..<发布 tip>
+#        区间**计数不写死**（FIX-334 / REVIEW-REL-077-RELEASE-R0 F-03：原稿"31 + 该冻结提交"少 1）：
+#        M-5 现场以 `git rev-list --count d87ead8..<发布 tip>` 取值记入 EVD。本文件写作时点实测
+#        （tip = 门禁收口提交 `22cf185`）为 **34** = 31（Change Inventory 窗口 `d87ead8..3074120`）
+#        + `5e6d8c7`（M-1 冻结推进）+ `a89341e`（候选打包）+ `22cf185`（门禁收口）；
+#        候选打包点上的计数为 **33**（= 前述前 3 项之和）。
 #        V8 `3074120` / V10 `61b571c` 仅为本区间末两个代表性交付，**不是**区间本身。
-#        候选打包提交的 hash 此刻由 M-2 期 `release-ledger --version 0.81.0 --no-remote` 从 git 派生后回填——
-#        它是本 checklist 的冻结提交，故本文件不预先编造该 hash。
+#        **终点为什么必须是发布 tip 而不是候选打包提交 `a89341e`**（F-04）：`a89341e..<tip>` 内的提交
+#        修改了**区间内新增**的三件套 release 文档，故在 tip 上执行 `revert d87ead8..a89341e` 会冲突
+#        （实测 3 处，见 §4「revert 干跑」行）；只有 `..<发布 tip>` 才是"回到 0.80.0 行为"的完整区间。
 #    (b) 直接切回稳定 tag
 git -C <plugin_root> checkout v0.80.0
 # 3) 重装适配层（隔离验证后再对真实环境执行）
@@ -64,6 +75,18 @@ $env:DSH_HOME = "<用户 DSH home>"; python adapters/dsh/launch.py --install
 | 5 | 三路径渲染 sha256（**回滚后**） | `00e0d330…3723`（**0.80.0 基线值**；0.81.0 候选态为 `6caf90fe…e55d`，两者差异仅 persona 版本行 1 处） |
 | 6 | `test_dsh_compat` / `test_dsh_contract` / `test_dsh_adapter` | 回到 0.80.0 基线（**实测于 `d87ead8` = 0.80.0 tip**：`test_dsh_compat` **43** / `test_dsh_adapter` **46**；`test_dsh_contract` **本版新增**（0.80.0 时该文件不存在），回滚后应为"文件不存在"） |
 | 7 | 预设页面与会话可用性 | 宿主可正常启动、治理会话技能完整（**真机项，需用户回贴**） |
+| 8 | **revert 干跑（回滚演练）** | **已执行**（隔离 worktree，主工作树零试跑）：区间 `d87ead8..a89341e` 在 `a89341e` 上 **干净**（0 冲突，80 路径 = 39 删除 + 41 修改）；同一区间在当前 tip `22cf185` 上 **3 处冲突**（三件套 release 文档）⇒ 证明终点必须是**发布 tip**。详见下方演练记录。 |
+
+### 4.1 revert 干跑记录（回滚演练 —— SKILL 硬门槛「至少一次」）
+
+**执行方式**：全部在 `%TEMP%` 的**隔离 git worktree** 内进行（`git worktree add --detach <dir> <commit>`），主工作树**零 revert 试跑**、零 `git stash`；每次干跑后 `git revert --abort` 复原并 `git worktree remove --force` 删除隔离副本。
+
+| 干跑 | 隔离 worktree 起点 | 命令 | 退出码 | 冲突 | 涉及文件数 |
+|---|---|---|---|---|---|
+| A（预设终点 = 候选打包提交） | `a89341e` | `git revert --no-commit --no-edit d87ead8..a89341e` | **0** | **0** | **80**（39 `D` + 41 `M`） |
+| B（同一区间在当前 tip 上） | `22cf185`（= 写作时点发布 tip） | 同上 | **1** | **3**（`docs/release/feature-flags-0.81.0.md`、`docs/release/release-checklist-0.81.0.md`、`docs/release/rollback-plan-0.81.0.md`，均 `UU`） | 35（5 `D` + 27 `M` + 3 `UU`） |
+
+**结论**：① 区间 `d87ead8..a89341e` 在候选打包点上可无冲突回退（80 路径）；② 但在**发布 tip** 上执行同一区间会因**区间外提交改动了区间内新增的三件套**而冲突（3 处）⇒ 回滚 MUST 以 `d87ead8..<发布 tip>` 表达区间（区间整体覆盖 post-candidate 提交，包括三件套的修改），而不是 `..a89341e`；③ 干跑 B 的 `git revert --abort` 复原后 worktree 干净、主工作树 `git status --porcelain` 仍只有本次修复涉及的文件。
 
 ## 5. 不可回滚项（如实列出）
 
@@ -84,4 +107,4 @@ $env:DSH_HOME = "<用户 DSH home>"; python adapters/dsh/launch.py --install
 
 ---
 
-*M-1 冻结完成（2026-09-13）。V8/V10 终态（`3074120` / `61b571c`）已按实测回填；**回滚区间 = 整个 0.81.0 窗口 `d87ead8..<0.81.0 候选打包提交>`（实测 31 commits + 本候选打包提交），V8/V10 只是该区间末两个代表提交、不是区间本身**（REVIEW-REL-077-CODE-R0 **F-01** 更正；候选打包提交的 hash 待 M-2 期 ledger 派生后回填，本文件不编造）。本文件作为 M-2 门禁「回滚方案」的交付物参与 `check-release`。*
+*M-1 冻结完成（2026-09-13）；FIX-334 于 2026-09-14 按 REVIEW-REL-077-RELEASE-R0 F-03/F-04 更正区间表述与计数并补演练记录。V8/V10 终态（`3074120` / `61b571c`）已按实测回填；**回滚区间 = 整个 0.81.0 窗口 `d87ead8..<发布 tip>`**——写作时点 tip = 门禁收口提交 `22cf185`，`git rev-list --count d87ead8..22cf185` = **34**；候选打包提交 `a89341e` 上为 **33**（= 31 + `5e6d8c7` + `a89341e`）。原稿「31 commits + 本候选打包提交」= 32 **少 1**（REVIEW-REL-077-RELEASE-R0 **F-03**）；区间终点由「候选打包提交」改为**发布 tip**（同报告 **F-04**，依据 = §4.1 的两次 revert 干跑：候选点上 0 冲突 / 发布 tip 上 3 处冲突）；V8/V10 只是该区间末两个代表提交、不是区间本身（REVIEW-REL-077-CODE-R0 **F-01** 更正；候选打包提交 = `a89341e`（由 ledger 派生））。本文件作为 M-2 门禁「回滚方案」的交付物参与 `check-release`。*

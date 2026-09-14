@@ -10,7 +10,7 @@
     }
   ],
   "generated": {
-    "git_head": "210b2003313abdc55710c9fddcb3d6d4b3c208f0",
+    "git_head": "5e6d8c71a2dad19c8cff3b720fbe7a99bae83629",
     "loc_caliber": "physical lines (ReadAllLines equivalent — see physical_line_count docstring, facts §1.1)"
   },
   "r1_mainfile_budget": {

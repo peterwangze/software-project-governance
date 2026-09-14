@@ -1,7 +1,7 @@
 # Version Plan — 0.81.0
 
 > **主题**：DSH 宿主兼容性体系化（依赖契约层 + 依赖最小化 + 严格校验看护 + 依赖边界可调测性）
-> **状态**：规划中（M-0 已裁决，DEC-190；实现进行中）
+> **状态**：M-1 候选打包完成（M-0 已裁决 DEC-190；实现切片 V1~V8 + V10 全部落地；M-2 门禁实测进行中）
 > **规则依据**：`skills/software-project-governance/core/VERSIONING.md`（版本号分配规则 / 版本内容一致性规则 / 版本规划纪律）
 
 ## 0. 规划基线事实（治理记录核验，零编造）
@@ -14,7 +14,7 @@
 | 4 | 事实输入 = **AUDIT-153**（`docs/requirements/dsh-host-dependency-inventory-0.81.0.md`，801 行；依赖点 D-01~D-100 / 缺口 G-01~G-18 实测复现 / 约束 C-1~C-25 / 未验证项 R-01~R-19） | EVD-1009 |
 | 5 | 设计交付 = **FEAT-028**：ADR-018（280 行）+ `docs/requirements/dsh-compat-design-0.81.0.md`（1023 行） | EVD-1010 |
 | 6 | 设计审查链：R0 NEEDS_CHANGE（3 P1 / 5 P2 / 10 P3+NOTE）→ 修复 → **R1 APPROVED_WITH_NOTES / unresolved_blockers=0** | `REVIEW-FEAT-028-R0` / `REVIEW-FEAT-028-R1`；`docs/reviews/review-FEAT-028-DESIGN-R0.md` / `-R1.md` |
-| 7 | 审查方独立核实的关键事实（不凭注释）：安装态 dsh = **0.1.5-rc.1**（注释引 rc.2 失真）；三路径渲染 sha256 全等 `00e0d330…3723`；RISK-050 上游内部面耦合基本清零（`!!js` 0 / id-UPDATE 0 / 宿主平面注册 0） | AUDIT-153 §1/§2；R0 §5/§8 |
+| 7 | 审查方独立核实的关键事实（不凭注释）：安装态 dsh = **0.1.5-rc.1**（注释引 rc.2 失真）；三路径渲染 sha256 全等 `00e0d330…3723`（**注**：该值系审查时点、即版本 bump **之前**（0.80.0 时点）的事实；0.81.0 **候选态**实测为 `6caf90fec1f2773eaa0128f0fa5c7a7795b512c8a36d603f5cd6e939ff48e55d`（16796 bytes），与 `00e0d330…3723` 的差异**仅 persona 版本行 1 处**——版本行变更的必然结果）；RISK-050 上游内部面耦合基本清零（`!!js` 0 / id-UPDATE 0 / 宿主平面注册 0） | AUDIT-153 §1/§2；R0 §5/§8 |
 | 8 | 用户安装形态 = 源码仓 `link:`（profile 侧声明）；`package.json` 无 `dsh.profile`（真实声明在 `~/.dsh/profiles/web/package.json`） | 用户 2026-09-13 答问；AUDIT-153 D-02 |
 | 9 | push 凭据本会话**可用**（`git ls-remote --tags github-https` 成功、`git push --dry-run` 成功）⇒ 0.79.0/0.80.0 两个 tag 与 118 commits 的**补推义务可在本版一并履行** | 本会话命令输出 |
 
@@ -32,7 +32,7 @@
 | **V6** | **FIX-316** | `DSH_HOME` 三方收敛（G-06） | 写入侧三实现一致（`lib/index.js` / `launch.py` / doctor 记录路径）；探测侧 fail-closed 保持 |
 | **V7** | **FIX-316** | 版本与证据看护（G-11/G-12/C-20） | 消除失真版本字面量；`adapter-manifest.json` 指向契约；TTL 过期 FAIL |
 | **V8** | FEAT-031 | 契约边界门禁 + 单一诊断入口 + 升级演练 | `checks/dsh_boundary.py`（Check 28w，K-1~K-13）+ `dsh_doctor.py`（S0~S7 + 退出码 0/1/2 + `--offline`/`--selftest`/`--record-evidence`/`--rehearse`）+ `adapters/dsh/fixtures/host-facts-<v>.json`；registry/quickscan/verify 接线 + 两次 `--regen` |
-| **V10** | **FIX-313(b)** | 安全面：`lib/index.js` catch 清理退化（G-04，潜在误删 CWD 同名目录） | 显式 staging 变量替代 `dirname(outcome.dir \|\| '.')` + 反相 fixture |
+| **V10** | **FIX-313(b)** | 安全面：`lib/index.js` catch 清理退化（G-04，潜在误删 CWD 同名目录） | 显式 staging 变量替代 `dirname(outcome.dir \\|\\| '.')` + 反相 fixture |
 | **V9** | **REL-077** | 发布面收尾 | CHANGELOG / release 三件套 / `core/releases/0.81.0.json` / 版本投影核对 |
 
 **需求覆盖**：REQ-146（最小化，V1+V2+设计 §3 逐条裁决）/ REQ-147（契约单点，V1+V2）/ REQ-148（严格校验看护，V3~V7+V8）/ REQ-149（可调测性，V8）——四条全覆盖，无缺项（DEC-190 备选 C 否决理由）。
@@ -52,9 +52,9 @@
 | 里程碑 | 内容 | 状态 |
 |---|---|---|
 | **M-0** 范围裁决 | 版本范围（O-1/O-2）+ O-3~O-9 处置 + 真机验收路径 | ✅ 完成 2026-09-13（DEC-190） |
-| **M-1** 候选打包 | 实现切片全部落地 + 候选 commit | ⏳ 进行中（V1 起） |
-| **M-2** 门禁实测 | release 三件套 + 版本投影 + 全套 check（见 §4） | ⏳ 待执行 |
-| **M-3** 独立审查 | Design Reviewer（设计侧已 R1 通过）+ Code Reviewer（产品代码）+ Release Reviewer（发布侧） | ⏳ 待执行（设计半面已完成） |
+| **M-1** 候选打包 | 实现切片全部落地 + 候选 commit | ✅ 完成 2026-09-13（V1~V8 + V10 全部落地，实现窗末提交 `3074120`（`d87ead8..3074120` 的 tip）；候选打包提交见 M-2 期 ledger 派生） |
+| **M-2** 门禁实测 | release 三件套 + 版本投影 + 全套 check（见 §4） | ✅ **实测完成 2026-09-13**（Coordinator 独立实测，见 EVD-1034；14 项逐条结论回填于 `docs/release/release-checklist-0.81.0.md` 的 M-2 表；唯一保留的前置依赖 = `release-ledger` 的 `candidate_commit` 派生要求 candidate manifest 随候选打包提交入库，已显式声明） |
+| **M-3** 独立审查 | Design Reviewer（设计侧已 R1 通过）+ Code Reviewer（产品代码）+ Release Reviewer（发布侧） | 🔄 **进行中**：设计半面 R1 通过；产品代码半面 **REVIEW-REL-077-CODE-R0 = NEEDS_CHANGE/1 → 修复 → R1 = APPROVED_WITH_NOTES / unresolved_blockers=0**（通过终态；`docs/reviews/review-REL-077-CODE-R1.md`）；**发布侧 Release Reviewer 待执行** |
 | **M-4** 用户授权 | transition + tag + push（**用户 2026-09-13 已预授权**，DEC-190 ⑨） | ⏳ 待执行 |
 | **M-5** transition + tag | manifest-only `candidate_to_released` + annotated tag `v0.81.0` | ⏳ 待执行 |
 | **M-6** released 态门禁 | `release-ledger --no-remote` = NATIVE_RELEASED PASS + 静态门禁 | ⏳ 待执行 |
@@ -79,7 +79,7 @@
 | 5 | 清理面 | `cleanup.py --dry-run` 零删除 | ⏳ |
 | 6 | 棘轮 | `archguard-ratchet`（R1~R7）committed==fresh 且 0 violations | ⏳ |
 | 7 | 契约边界 | `check-dsh-boundary --fail-on-issues` PASSED（K-1~K-13） | ⏳（V8 交付） |
-| 8 | 冻结面 | `test_registry.py` 全绿（82→83 / 70→71 / `migrated` +`dsh-doctor`） | ⏳（V8 交付） |
+| 8 | 冻结面 | `test_registry.py` 全绿（**82→84** / **70→71** / `migrated` +`dsh-doctor`） | V8 一次新增 **2 个 CLI 键**（`check-dsh-boundary` + `dsh-doctor`）与 **1 个检查段**（28w）；`test_registry.py` 的 `FROZEN_CLI_KEYS = 84` / `FROZEN_SEGMENTS = 71` （REVIEW-REL-077-CODE-R1 **F-R1-05** 更正，原稿 82→83 少计 `check-dsh-boundary`） |
 | 9 | 预设隔离冒烟 | `check-dsh-preset-smoke`（28u）退出码与文本不变 + `real-home writes: 0` | ⏳ |
 | 10 | 预设 schema 兼容 | `check-dsh-preset-compat`（28v）PASSED（`rows_enabled 23`/`rows_checked 18` 口径 + NO_SCHEMA 行为改变后口径同步） | ⏳ |
 | 11 | 全量测试 | 冻结树全量 `unittest` 基线对比（新增失败必须逐条归因） | ⏳ |

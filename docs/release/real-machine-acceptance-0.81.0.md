@@ -80,8 +80,8 @@ Get-ChildItem "$env:USERPROFILE\.dsh\.agent-presets\governance"
 | 1 | `check-dsh-preset-smoke`（28u） | exit 0；`real-home writes: 0` |
 | 2 | `check-dsh-preset-compat`（28v） | PASSED；`rows_enabled 23` / `rows_checked 18` |
 | 3 | `check-dsh-boundary`（28w，V8 交付后） | PASSED（K-1~K-13） |
-| 4 | `dsh-doctor --offline --json`（V8 交付后） | 8 阶段全 `NOT_RUN` 且 exit 0 |
-| 5 | 三路径渲染 sha256 | 全等 `00e0d330…3723` |
+| 4 | `dsh-doctor --offline --json`（V8 交付后） | **以实测为准（R1 标为待验证 + Coordinator 实测更正）**：`--offline` 抑制的是**子进程/宿主探测**而非文件读取，故**并非 8 阶段全 `NOT_RUN`**。隔离 `DSH_HOME` 实测：**首次（该 home 内预设未安装）** = S0/S1 均 `NOT_RUN`（`no installed plane`）⇒ `verdict: NOT_RUN`、`exit 0`；**在隔离 home 内先 `launch.py --sync` 渲染预设后** = **S1 `PASS`（resolution-level，disclosing「设置页 UI 与会话内解析 NOT verified」）+ S7 `PASS` + 其余 6 阶段 `NOT_RUN` ⇒ `verdict: PASS`、`exit 0`**。故正确期望 = **`--offline` 运行 `exit 0` 且无 `FAIL` 阶段**；阶段 `PASS`/`NOT_RUN` 的组合取决于隔离 home 内是否已渲染预设，**不得**把它写成判据 |
+| 5 | 三路径渲染 sha256 | **0.81.0 候选态 = 全等 `6caf90fe…e55d`（16796 bytes）**——两个独立隔离 `DSH_HOME` 的 `launch.py` 渲染 + JS `lib/index.js` 的 `renderComposition` 三者逐字节相同（Coordinator 实测 2026-09-13）。`00e0d330…3723` 是 **0.80.0 基线值 / 回滚后应恢复的值**，两者差异恰为 persona 版本行 1 处（`治理工作流（v0.81.0）` ↔ `（v0.80.0）`）；**不得**再以 `00e0d330…3723` 作为 0.81.0 的验收期望（REVIEW-REL-077-CODE-R1 **F-R1-01** 更正） |
 
 ## 3. 回贴方式
 

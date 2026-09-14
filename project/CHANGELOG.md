@@ -2,7 +2,7 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
-## [0.81.0] - ⟦待 M-1 冻结填日期⟧
+## [0.81.0] - 2026-09-13
 
 ### 0.81.0 - **dsh 宿主兼容性体系化**：依赖面全量清点 → 单一契约层 → 五切片落地 → 单点诊断（REL-077 / AUDIT-153 / FEAT-028~031 / FIX-311~317 / FIX-319 / FIX-321）
 
@@ -19,8 +19,8 @@
 - **V3** `FIX-315`（**零校验不得 PASS**：`rows_checked==0 ⇒ NOT_RUN` + `coverage` 块 + kind 驱动上屏，消除 28v 对 5/23 零 schema 行"假绿 + 不上屏"）；
 - **V4** `FIX-311`（group 语义与 **loader 真实源码语义**对齐：G-02 group 名校验 + G-03① 自身 `disabled` 短路 + G-03② 消除子行**连带假阴**；G-18 分类自检与显式白名单）；
 - **V5+V6+V7** `FIX-316`（渲染/解码守卫 G-05/G-07/G-10、死代码 D-50/D-56、行尾 D-66；`DSH_HOME` 两实现收敛（20 例矩阵 0 分歧）+ 探测侧保持 fail-closed；版本字面量在授权声明面归零 + `--smoke` 断言事实化 + **写入守卫对称化**）；
-- **V8** `FEAT-031`（Check 28w `check-dsh-boundary` K-1~K-13 + `dsh-doctor` S0~S7 + `host-facts` 升级演练 + registry 接线 + 两次 `--regen`）⟦待回填 commit⟧；
-- **V10** `FIX-313`（`lib/index.js` 清理路径的所有者判据：防误删同名的 CWD 目录）⟦待回填 commit⟧。
+- **V8** `FEAT-031`（Check 28w `check-dsh-boundary` K-1~K-13 + `dsh-doctor` S0~S7 + `host-facts` 升级演练 + registry 接线 + 两次 `--regen`）commit **`3074120`**（18 文件 / **+7232**；审查链 **REVIEW-FEAT-031-CODE-R0 APPROVED_WITH_NOTES/0 → R1 APPROVED_WITH_NOTES/0**，发布条件 F-02/F-03 已闭环；EVD-1030/1032）；
+- **V10** `FIX-313`（`lib/index.js` 清理路径的所有权判据重写：非递归 `mkdirSync` + EEXIST 换名重试（不删）+ 仅创建成功才置 `stagingCreated` + 只删已证明属己的精确路径 + 无证明则不删并告警 + 8 次熔断，消除「按名前缀误删同名用户目录」与「误删 CWD 同名目录」两类破坏）commit **`61b571c`**，实际改动面 **+66/−13 行**（`lib/index.js` 产品代码；连同审查报告与适配器测试共 3 文件 **+329/−13**）；**REVIEW-FIX-313-R0 APPROVED_WITH_NOTES/0**；EVD-1028；**验收① 由独立审查的故障注入复现成立，机器守卫待 FIX-325**。
 
 **并行收口**：`FIX-319`（Check 18c 判据把 markdown 粗体 `**` 当通配符 ⇒ 每个含粗体的活跃任务 packet 都假 FAIL；修复后真实语料 3/3 误报消除 + 9 条宽范围反证仍 FAIL + **192 条穷举放宽面 0 例外**）+ `FIX-321`（粗体剥离的**双侧 run 边界**守卫，防 glob 串被洗白）。
 

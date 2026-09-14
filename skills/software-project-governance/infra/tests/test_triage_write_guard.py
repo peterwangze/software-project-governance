@@ -523,15 +523,73 @@ class GovernanceWriteGuardPlanTrackerTests(unittest.TestCase):
         self.assertEqual(self._issues(_GUARD_TRACKER_CLEAN), [])
 
     def test_live_plan_tracker_flags_only_known_m1_rows(self):
-        """活体金丝雀（真实 plan-tracker）：M1 签名命中集合 ⊆ 已知 M1 四行
-        （FIX-222/223/224/279——FIX-293 将修数据，本守卫只检不改）。"""
+        """活体金丝雀（真实 plan-tracker）：M1 命中集合 ⊆ 已知 M1 四行
+        （FIX-222/223/224/279——FIX-293 已修数据，本守卫只检不改），且任何
+        非零命中即红（零命中是 live 数据的当前事实，不是「无证据」）。
+
+        FIX-330 收口（承接 REVIEW-FIX-328-CODE-R0 F-1~F-5）：FIX-293 目标达成后
+        （FIX-222/223/224 归档迁出、FIX-279 行形归一——EVD-963 记 FAIL 7 →
+        PASS/exit 0），live 数据零命中是**数据已治愈**的**可断言事实**。故取
+        (b) 零命中断言（授权文档 ``docs/requirements/test-baseline-0.80.0.md``
+        §4-F2 修复候选原文 ``assertEqual(set(), flagged)``），弃 FIX-328 的 (a)
+        条件 skip——取舍理由：
+          1. 与授权候选一致（(a) 的 ``skipTest`` 是 FIX-328 自创形态）；
+          2. 零命中可断言，skip 只能表达「无证据」——(a) 把「数据健康」与
+             「金丝雀失效」写成同一终态；
+          3. ``skipTest`` 无红相，会掩盖守卫整体失效（F-1 面）；(b) 下零命中是
+             硬断言：集合外新签名与已知四行重现都立即红。
+
+        判据顺序（三条互不遮蔽，各覆盖独立场景）：
+          ① 面级 fail-closed 门禁——plan-tracker 不可读时守卫返回 status=FAIL +
+             issue.task_id 哨兵 ``""``（verify_workflow.py 22415-22426），该状态
+             **不是「零命中」**，必须先于命中集合判据暴露（否则只取 task_id 会把
+             不可读报成「``{''}`` 不是已知集合子集」的失真措辞）。审查方建议的
+             ``assertEqual(status, "PASS")`` 与 ③ 在守卫现契约下是**同一谓词**
+             （``status==FAIL ⟺ issues 非空 ⟺ flagged 非空``，见 22429-22432），
+             两者同置必产生一枚「可达即恒真」死断言（F-3 口径；后置还会被 ② 抢占
+             而永不触发），故取哨兵形态：不可读场景必红且诊断直指
+             ``plan_tracker_unreadable`` + OS 错误，与 ②③ 并存时三判据全活。
+          ② 无条件核心防护：不得出现已知 M1 四行之外的新误报（subset 判据）。
+          ③ 零命中事实：live 数据不得再出现任何 M1 命中（已知 ID 重现 = 数据回退）。
+
+        原「live M1 four rows must be flagged」断言（F-3 死代码，可达即恒真）已删；
+        其「live evidence 必须存在」义务由两处承接——合成样本用例
+        （test_duplicate_priority_column_flagged_with_line_and_shape /
+        test_trailing_empty_status_cell_flagged_with_line_and_shape）钉住守卫
+        **命中能力**，③ 钉住 live 面**零命中**终态。
+
+        术语边界（F-5）：名称沿用 FIX-328 前史（FEAT-011 born-red 窗口内 live 确有
+        M1 四行，「flags」当时是真实承诺），零命中下只兑现 ``only``（②：命中若存在
+        必属已知四行）；``flags`` 的存在性预设不再兑现，其回归信号由 ③ 承接（任何
+        命中即红）。改名会牵动 ``infra/tests/env_failure_classification.json`` 的
+        unittest 全名键与 ``docs/**`` 引用，超出本任务改动面，故保留名称并在此显式
+        披露语义边界（名称弱于行为 = 欠声称，非过度声称）。
+
+        直接证据：归档文件 ``.governance/archive/tasks/v0.1.0~v0.78.0.md``
+        L131-133 三行**字面任务行**（FIX-222/223/224；``archive/index.md``
+        L391-393 仅为位置目录）。
+        """
         if not vw.SAMPLE_PATH.is_file():
             self.skipTest("no live plan-tracker under the host governance dir")
         result = vw.check_governance_write_shapes()
-        flagged = {i["task_id"] for i in result["plan_tracker"]["issues"]}
+        face = result["plan_tracker"]
+        flagged = {i["task_id"] for i in face["issues"]}
+        # ① 面级 fail-closed 门禁：哨兵 ""（plan-tracker 不可读）不是「零命中」，
+        #    须先于命中集合判据暴露——否则只取 task_id 会把不可读报成
+        #    「{''} 不是已知集合子集」的失真措辞。
+        self.assertNotIn("", flagged, face)
+        # ② 无条件核心防护：不得出现已知 M1 四行之外的新误报
         self.assertTrue(flagged.issubset(_KNOWN_M1_IDS), flagged)
-        self.assertTrue(flagged, "live M1 four rows must be flagged (FEAT-011 "
-                                 "acceptance: audit-149 §4 M1 live evidence)")
+        # ③ 零命中事实（F-2(b)）：FIX-222/223/224 已归档迁出（archive/tasks/
+        #    v0.1.0~v0.78.0.md L131-133 字面任务行）、FIX-279 行形归一
+        #    （FIX-293/EVD-963）；任何 M1 命中重现即红。
+        self.assertEqual(
+            set(), flagged,
+            "live plan-tracker 零命中契约被破坏：FIX-222/223/224 应已归档迁出"
+            "（archive/tasks/v0.1.0~v0.78.0.md L131-133，index.md L391-393 定位）、"
+            "FIX-279 行形应已归一（FIX-293/EVD-963）——先按 M1 签名修复数据，"
+            "再复核本契约",
+        )
 
 
 class GovernanceWriteGuardEvidenceLogTests(unittest.TestCase):

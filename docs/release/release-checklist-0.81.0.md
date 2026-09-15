@@ -135,7 +135,14 @@
 ## 真机验收（用户手动三项 —— DEC-190 ⑧）
 
 规程：`docs/release/real-machine-acceptance-0.81.0.md`（三项 + 只读复核命令 + 回贴格式）。
-**状态**：⟦待用户回贴⟧。**在回贴之前，本 checklist 与 release 文档 MUST NOT 声明真机项通过**；未回贴项 MUST 标「未验证」。
+**状态**：✅ **已由用户在真实 dsh 环境手动执行并回贴（2026-09-14），三项 5 个判定点全部通过**（机录 EVD-1040；证据来源 = 用户会话内结构化回贴，M7.7 R5 当下机录）。逐项：
+1. **设置页面**：标签显示为**「自定义」**（非内置）✅；**「删除」**按钮存在 ✅；**「打开目录」**指向用户预设根 `C:/Users/<user>/.dsh/.agent-presets/governance` ✅ —— 即 FIX-310 的目标形态（预设由本包宿主行交付到 **user 根**，可自助管理）真机成立。
+2. **非治理预设会话**（standard）：技能列表**不含** `software-project-governance`，也不含 `governance` / `stage-*` / `*-review` ✅ —— FIX-310 的核心行为目标（作用域限预设）真机成立。
+3. **治理预设会话**：`/governance` 手势可用 ✅；技能列表**含** `software-project-governance`、`governance`（命令投影 shim）与多个 `stage-*` ✅；会话内 `resolve_entry.py --json` 返回 **`resolved_root_ok: true`** ✅。
+
+**升级演练**：用户回贴确认**已做**（RISK-050 关闭条件第二项）；演练方式与结果明细待用户补充，届时以 supersede 行追加并正式关闭 RISK-050。
+
+> 此前纪律（保留）：**回贴前**严禁在任何文档声明真机项通过；未回贴项 MUST 标「未验证」。
 
 ## M-8 收尾义务
 

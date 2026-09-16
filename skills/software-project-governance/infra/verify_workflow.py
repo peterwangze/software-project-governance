@@ -12700,8 +12700,8 @@ def _load_execution_packets(path=None):
         return {}, f"{packet_path} not found"
     try:
         data = json.loads(packet_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        return {}, f"invalid JSON: {exc.msg}"
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        return {}, f"invalid JSON: {exc}"
     if not isinstance(data, dict):
         return {}, "execution packet root must be object"
     packets = data.get("packets", data)
@@ -17423,7 +17423,7 @@ def check_agent_locks_format():
             })
             return issues
         data = json.loads(raw)
-    except json.JSONDecodeError as e:
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
         issues.append({
             "type": "invalid_json",
             "detail": f".governance/agent-locks.json is not valid JSON: {e}"
@@ -17571,7 +17571,7 @@ def check_agent_lock_consistency():
             result["skipped"] = "agent-locks.json is empty — lock consistency check skipped."
             return result
         data = json.loads(raw)
-    except (json.JSONDecodeError, IOError):
+    except (json.JSONDecodeError, IOError, UnicodeDecodeError):
         result["skipped"] = "agent-locks.json is unparseable — lock consistency check skipped."
         return result
 
@@ -22188,13 +22188,13 @@ def _triage_write_structure_guard(evidence_path, record_path, record_id=None):
     try:
         record_text = Path(record_path).read_text(encoding="utf-8")
         json.loads(record_text)
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         issues.append("triage record unreadable after write: {0}".format(exc))
     except json.JSONDecodeError as exc:
         issues.append("triage record JSON invalid after write: {0}".format(exc))
     try:
         content = Path(evidence_path).read_text(encoding="utf-8")
-    except (IOError, OSError) as exc:
+    except (IOError, OSError, UnicodeDecodeError) as exc:
         issues.append("evidence-log unreadable after write: {0}".format(exc))
         return issues
     # Column contract (FIX-279): the canonical column count for the written
@@ -22435,8 +22435,8 @@ def check_governance_write_shapes():
     ``.governance`` (no auto-remediation; issue messages carry line numbers
     and the expected shape, the fix belongs to the writer). Absent files
     SKIP their face (a host not using packets is not a breach); unreadable
-    files FAIL fail-closed. The change-triage write guard's behavior is
-    untouched (extension, not rewrite).
+    files (incl. non-UTF-8, FIX-333) FAIL fail-closed. The change-triage
+    write guard's behavior is untouched (extension, not rewrite).
 
     Returns a dict ``{plan_tracker, evidence_log, agent_locks,
     execution_packets}``, each ``{"status": PASS|FAIL|SKIPPED, "issues": …}``.
@@ -22453,7 +22453,7 @@ def check_governance_write_shapes():
     if SAMPLE_PATH.is_file():
         try:
             content = SAMPLE_PATH.read_text(encoding="utf-8")
-        except (IOError, OSError) as exc:
+        except (IOError, OSError, ValueError) as exc:
             result["plan_tracker"] = {
                 "status": "FAIL",
                 "issues": [{
@@ -22477,7 +22477,7 @@ def check_governance_write_shapes():
     if evidence_path.is_file():
         try:
             content = evidence_path.read_text(encoding="utf-8")
-        except (IOError, OSError) as exc:
+        except (IOError, OSError, ValueError) as exc:
             result["evidence_log"] = {
                 "status": "FAIL",
                 "issues": [{

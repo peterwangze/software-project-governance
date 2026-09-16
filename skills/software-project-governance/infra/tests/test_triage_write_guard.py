@@ -193,6 +193,52 @@ class WriteStructureGuardUnitTests(unittest.TestCase):
             self.assertEqual(len(issues), 1, issues)
             self.assertIn("TRIAGE-FIX-278", issues[0])
 
+    def test_write_guard_non_utf8_record_returns_structured_issue_not_raise(self):
+        """FIX-333 R0 F-1 反相（写后校验 record 面）：刚写入的 triage record
+        为 GBK 字节时 ``read_text(encoding="utf-8")`` 抛 ``UnicodeDecodeError``
+        （``ValueError`` 子类），旧捕获面 ``except OSError`` 接不住 ⇒ 异常从
+        写后校验本体逸出，与 docstring「Never raises」（L22185）不符
+        （REVIEW-FIX-333-CODE-R0 §六 F-1 独立扫描实证）。修复后契约：结构化
+        issue（"triage record unreadable after write"）而非异常。GBK 副本写
+        ``tempfile`` 临时目录（%TEMP%），不触碰 ``.governance/``。
+        """
+        with tempfile.TemporaryDirectory() as td:
+            evidence = Path(td) / "evidence-log.md"
+            evidence.write_text(
+                _evidence_row_10() + _triage_row("TRIAGE-FIX-333", 10),
+                encoding="utf-8")
+            record = Path(td) / "FIX-333.json"
+            record.write_bytes(json.dumps(
+                {"schema_version": 1, "task_id": "FIX-333",
+                 "note": "非UTF-8反相样本"},
+                ensure_ascii=False).encode("gbk"))
+            issues = vw._triage_write_structure_guard(evidence, record)
+        self.assertEqual(len(issues), 1, issues)
+        self.assertIn("triage record unreadable after write", issues[0])
+        self.assertIn("codec", issues[0], issues)
+
+    def test_write_guard_non_utf8_evidence_returns_structured_issue_not_raise(self):
+        """FIX-333 R0 F-1 反相（写后校验 evidence-log 面，与面2 读同一文件）：
+        evidence-log 为 GBK 字节时 ``except (IOError, OSError)`` 接不住
+        ``UnicodeDecodeError`` ⇒ 异常逸出（同一「Never raises」契约缺口，
+        泛化收口不做单点修复）。修复后契约：结构化 issue（"evidence-log
+        unreadable after write"）而非异常。GBK 副本写 ``tempfile`` 临时
+        目录（%TEMP%）。
+        """
+        with tempfile.TemporaryDirectory() as td:
+            evidence = Path(td) / "evidence-log.md"
+            evidence.write_bytes(
+                (_evidence_row_10() + _triage_row("TRIAGE-FIX-333", 10)
+                 ).encode("gbk"))
+            record = Path(td) / "FIX-333.json"
+            record.write_text('{"schema_version": 1, "ok": true}',
+                              encoding="utf-8")
+            issues = vw._triage_write_structure_guard(evidence, record,
+                                                      record_id="TRIAGE-FIX-333")
+        self.assertEqual(len(issues), 1, issues)
+        self.assertIn("evidence-log unreadable after write", issues[0])
+        self.assertIn("codec", issues[0], issues)
+
     def test_guard_blocks_write_when_first_triage_row_defines_family_standard(self):
         """FIX-279 契约再基线（原 P0-1 false-fail 场景）：首个（非本次写入）
         TRIAGE 行即行族标准——旧格式 8 列首行确立行族契约 8，刚写入的 10 列
@@ -591,6 +637,35 @@ class GovernanceWriteGuardPlanTrackerTests(unittest.TestCase):
             "再复核本契约",
         )
 
+    def test_non_utf8_plan_tracker_returns_structured_issue_not_raise(self):
+        """FIX-333 反相（面 1，非 UTF-8 边界）：活体面文件为 GBK 字节时
+        ``read_text(encoding="utf-8")`` 抛 ``UnicodeDecodeError``（``ValueError``
+        子类），旧捕获面 ``except (IOError, OSError)`` 接不住 ⇒ 异常从公共入口
+        ``check_governance_write_shapes()`` 逸出，与其 docstring「Never raises」
+        不符（FIX-330 §8-④ 实证的既有边界）。修复后契约：面级 fail-closed——
+        返回结构化 ``plan_tracker_unreadable`` issue（哨兵 ``task_id: ""``）
+        而非抛异常。GBK 副本一律写 ``tempfile`` 临时目录（%TEMP%），不触碰
+        ``.governance/``。
+        """
+        gbk_tracker = (
+            "# Plan Tracker\n\n## 当前活跃事项\n\n"
+            "| 优先级 | 任务ID | 事项 |\n|---|---|---|\n"
+            "| **P1** | FIX-333 | 非UTF-8反相样本 |\n"
+        ).encode("gbk")
+        with tempfile.TemporaryDirectory() as td:
+            tracker = Path(td) / "plan-tracker.md"
+            tracker.write_bytes(gbk_tracker)
+            with mock.patch.object(vw, "SAMPLE_PATH", tracker), \
+                 mock.patch.object(vw, "GOVERNANCE_DIR", Path(td)):
+                result = vw.check_governance_write_shapes()
+        face = result["plan_tracker"]
+        self.assertEqual(face["status"], "FAIL", face)
+        self.assertEqual(len(face["issues"]), 1, face)
+        issue = face["issues"][0]
+        self.assertEqual(issue["type"], "plan_tracker_unreadable")
+        self.assertEqual(issue["task_id"], "")
+        self.assertIn("codec", issue["detail"], issue)
+
 
 class GovernanceWriteGuardEvidenceLogTests(unittest.TestCase):
     """FEAT-011 面 2：evidence-log 机器行族（TRIAGE/RECO）列数与 ID 列格式。
@@ -638,6 +713,29 @@ class GovernanceWriteGuardEvidenceLogTests(unittest.TestCase):
                 + _evidence_row_10("EVD-802", "FIX-100") .replace(
                     "| EVD-802 |", "| EVD-802 | extra |", 1))
         self.assertEqual(self._issues(text), [])
+
+    def test_non_utf8_evidence_log_returns_structured_issue_not_raise(self):
+        """FIX-333 反相（面 2，同型捕获面缺陷）：evidence-log 为 GBK 字节
+        → 返回结构化 ``evidence_log_unreadable`` issue 而非异常逸出（面 2
+        与面 1 同为 ``except (IOError, OSError)``，非 UTF-8 时
+        ``UnicodeDecodeError`` 不被捕获——同一「Never raises」契约缺口，
+        泛化收口不做单点修复）。GBK 副本写 ``tempfile`` 临时目录（%TEMP%）。
+        """
+        gbk_evidence = (
+            "| TRIAGE-FIX-333 | FIX-333 | 变更控制 | 描述样本 | 依据样本 | "
+            "产物样本 | change-triage | 2026-09-17 | G11 | TRIAGED |\n"
+        ).encode("gbk")
+        with tempfile.TemporaryDirectory() as td:
+            evidence = Path(td) / "evidence-log.md"
+            evidence.write_bytes(gbk_evidence)
+            with mock.patch.object(vw, "SAMPLE_PATH", Path(td) / "none.md"), \
+                 mock.patch.object(vw, "GOVERNANCE_DIR", Path(td)):
+                result = vw.check_governance_write_shapes()
+        face = result["evidence_log"]
+        self.assertEqual(face["status"], "FAIL", face)
+        self.assertEqual(len(face["issues"]), 1, face)
+        self.assertEqual(face["issues"][0]["type"], "evidence_log_unreadable")
+        self.assertIn("codec", face["issues"][0]["detail"], face)
 
 
 class GovernanceWriteGuardLocksAndPacketsTests(unittest.TestCase):
@@ -706,6 +804,63 @@ class GovernanceWriteGuardLocksAndPacketsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             result = self._result(Path(td), locks=_legal_locks())
         self.assertEqual(result["execution_packets"]["status"], "SKIPPED")
+
+    def test_non_utf8_locks_and_packets_fail_closed_not_raise(self):
+        """FIX-333 反相（面 3/4，helper 捕获面）：agent-locks.json 与
+        execution-packets.json 为 GBK 字节时，helper 内层只捕
+        ``json.JSONDecodeError`` / ``IOError``，``UnicodeDecodeError`` 既逸出
+        helper 亦逸出公共入口。修复后：两面各返回结构化 FAIL issue——锁面
+        复用既有 ``invalid_json`` 分支（write-guard 投影为
+        ``agent_locks_invalid_json``）、包面走既有 ``load_error`` 结构——
+        而非抛异常（「Never raises」契约覆盖全部四面的泛化收口）。
+        GBK 副本写 ``tempfile`` 临时目录（%TEMP%）。
+        """
+        locks = _legal_locks()
+        locks["active_tasks"]["FEAT-011"]["ttl_reason"] = "串行文件锁"
+        with tempfile.TemporaryDirectory() as td:
+            gov = Path(td)
+            (gov / "agent-locks.json").write_bytes(
+                json.dumps(locks, ensure_ascii=False).encode("gbk"))
+            (gov / "execution-packets.json").write_bytes(
+                json.dumps({"packets": {"FIX-301": _legal_packet()}},
+                           ensure_ascii=False).encode("gbk"))
+            tracker = gov / "plan-tracker.md"
+            tracker.write_text(_GUARD_TRACKER_CLEAN, encoding="utf-8")
+            (gov / "evidence-log.md").write_text(
+                _machine_evidence_fixture(), encoding="utf-8")
+            with mock.patch.object(vw, "SAMPLE_PATH", tracker), \
+                 mock.patch.object(vw, "GOVERNANCE_DIR", gov):
+                result = vw.check_governance_write_shapes()
+        self.assertEqual(result["agent_locks"]["status"], "FAIL")
+        self.assertTrue(result["agent_locks"]["issues"],
+                        result["agent_locks"])
+        self.assertEqual(result["execution_packets"]["status"], "FAIL")
+        self.assertIn("invalid JSON",
+                      " ".join(i["detail"]
+                               for i in result["execution_packets"]["issues"]),
+                      result["execution_packets"])
+
+    def test_lock_consistency_non_utf8_skips_without_raise(self):
+        """FIX-333 R0 F-2 反相（Check 26 一致性路径，与面3 读同一
+        agent-locks.json）：文件为 GBK 字节时 ``check_agent_lock_consistency``
+        的 ``except (json.JSONDecodeError, IOError)`` 接不住
+        ``UnicodeDecodeError`` ⇒ 异常逸出（本应 skipped 的 WARN 级检查变
+        crash）。修复后契约：结构化 skipped 结论而非异常（format 检查经
+        FIX-333 面收口已先行返回 invalid_json，不 raise）。GBK 副本写
+        ``tempfile`` 临时目录（%TEMP%）。
+        """
+        locks = _legal_locks()
+        locks["active_tasks"]["FEAT-011"]["ttl_reason"] = "串行文件锁"
+        with tempfile.TemporaryDirectory() as td:
+            gov = Path(td)
+            (gov / "agent-locks.json").write_bytes(
+                json.dumps(locks, ensure_ascii=False).encode("gbk"))
+            with mock.patch.object(vw, "GOVERNANCE_DIR", gov):
+                result = vw.check_agent_lock_consistency()
+        self.assertIn("unparseable", result["skipped"] or "", result)
+        self.assertTrue(
+            any("invalid_json" in i["type"] for i in result["issues"]),
+            result["issues"])
 
 
 class ExecutionPacketNonDictEarlyReturnTests(unittest.TestCase):

@@ -119,7 +119,8 @@ class FIX300DualCaliberAgreementTests(unittest.TestCase):
 
     RCA (reproduced deterministically on this repository): the identity
     sub-phase resolves its host sources (HOST_PATHS ∪ authority
-    source_records — all .governance/*.md) from HOST_PROJECT_ROOT ==
+    source_records — the .governance hot files plus the FIX-345
+    archive-aware anchor targets) from HOST_PROJECT_ROOT ==
     os.getcwd() with no .governance existence probe and no FIX-240-style
     uninitialized-host exemption, while the semantic calibers explicitly
     skip host validation when .governance is absent (FIX-240).  When
@@ -146,6 +147,17 @@ class FIX300DualCaliberAgreementTests(unittest.TestCase):
         ".governance/decision-log.md",
     )
 
+    # FIX-345: the authority source records are archive-aware (DEC-104 ->
+    # .governance/archive/decisions/..., AUDIT-133 -> the canonical audit
+    # report under docs/requirements/), so the populated agreement-shape host
+    # must also carry the files the re-anchored records resolve against;
+    # otherwise the identity sub-phase would raise REQUIRED_ROOT_UNAVAILABLE
+    # for a legitimate, digest-pinned re-anchor.
+    AUTHORITY_ANCHOR_SOURCE_NAMES = (
+        ".governance/archive/decisions/decisions-v0.1.0-0.78.0.md",
+        "docs/requirements/loop-engineering-post-implementation-audit-0.66.0.md",
+    )
+
     @staticmethod
     def _drifted_host(base, *, populated):
         """A host root whose .governance sources are absent (divergence
@@ -155,9 +167,11 @@ class FIX300DualCaliberAgreementTests(unittest.TestCase):
         host = base / ("host-populated" if populated else "host-drifted")
         host.mkdir()
         if populated:
-            (host / ".governance").mkdir()
-            for name in FIX300DualCaliberAgreementTests.HOST_SOURCE_NAMES:
-                shutil.copyfile(_INFRA_DIR.parents[2] / name, host / name)
+            for name in (*FIX300DualCaliberAgreementTests.HOST_SOURCE_NAMES,
+                         *FIX300DualCaliberAgreementTests.AUTHORITY_ANCHOR_SOURCE_NAMES):
+                target = host / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(_INFRA_DIR.parents[2] / name, target)
         return host
 
     @staticmethod
@@ -188,9 +202,11 @@ class FIX300DualCaliberAgreementTests(unittest.TestCase):
                 identity = self._engine_identity()
             self.assertEqual("FAIL", identity["verdict"])
             self.assertEqual(1, len(identity["issues"]))
+            # FIX-345: DEC-104 is the first source record and now resolves
+            # against its archive-aware location.
             self.assertIn(
                 "IDENTITY_ATTESTATION_FAIL: REQUIRED_ROOT_UNAVAILABLE: "
-                ".governance/decision-log.md",
+                ".governance/archive/decisions/decisions-v0.1.0-0.78.0.md",
                 identity["issues"][0])
             semantic = vw.scan_loop_runtime_claims(
                 vw._loop_runtime_claim_context("installed_host"))
@@ -219,8 +235,10 @@ class FIX300DualCaliberAgreementTests(unittest.TestCase):
         self.assertEqual("semantic+identity_fixture", payload["verdict_scope"])
         self.assertEqual(engine["verdict"], payload["identity_verdict"])
         self.assertEqual(engine["issues"], payload["identity_issues"])
+        # FIX-345: DEC-104 is the first source record; its archive-aware
+        # location is what the drifted host is missing first.
         self.assertIn(
-            "REQUIRED_ROOT_UNAVAILABLE: .governance/decision-log.md",
+            "REQUIRED_ROOT_UNAVAILABLE: .governance/archive/decisions/decisions-v0.1.0-0.78.0.md",
             payload["identity_issues"][0])
 
     def test_fixture_identity_mode_agrees_with_engine_on_present_sources(self):

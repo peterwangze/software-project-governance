@@ -120,10 +120,26 @@ REQUIRED_EXEMPTION_KEYS = frozenset({
     "exemption_id", "finding_code", "root_owner", "normalized_path", "locator",
     "claim_id", "reason", "source", "expected_duration",
 })
+# FIX-345: authority source records are archive-aware. FIX-343's governance
+# archive migration (2026-09-16) moved the DEC-104 decision row out of the hot
+# decision-log (it now lives blockquoted in
+# .governance/archive/decisions/decisions-v0.1.0-0.78.0.md) and removed the
+# AUDIT-133 tracker row from the hot plan-tracker (the canonical AUDIT-133
+# artifact is the audit report itself, at
+# docs/requirements/loop-engineering-post-implementation-audit-0.66.0.md —
+# git-tracked and therefore immune to future archive migrations). The digests
+# below pin those current, verifiable locations byte-exactly (_sha_text of the
+# single line matching the prefix); any movement, edit or duplication fails
+# closed and forces a governed re-anchor. The same triples are mirrored in
+# core/loop-runtime-claim-authority.json (source_records): both anchored faces
+# MUST change in lockstep — the coordinator-approved FIX-345 re-anchor — or
+# AUTHORITY_SOURCE_RECORD_DRIFT fires. REQUIRED_POLICY_SHA256 and the
+# authority's policy_sha256 binding are untouched: the policy face did not
+# change in FIX-345.
 REQUIRED_SOURCE_RECORDS = {
-    "DEC-104": (".governance/decision-log.md", "| DEC-104 |", "7666ace742ebc8691356ea53b884163ffafc25dd8545d7e6b680786461f6db11"),
+    "DEC-104": (".governance/archive/decisions/decisions-v0.1.0-0.78.0.md", "> | DEC-104 |", "ed1cadba6a33bd72e9c5b21e4293d0f30029e07fa442f87154fd5912d3331b61"),
     "EVD-707": (".governance/evidence-log.md", "| EVD-707 |", "8aa48e272d6e627cdb64d5eb443215a584e5d0fc6cdfbb5fa329a93dfeb68e69"),
-    "AUDIT-133": (".governance/plan-tracker.md", "| **P0** | AUDIT-133 |", "c3fbd2e490f8871a39e63a7c2db750ee71bd0d8f9550b83f4442344532c08adb"),
+    "AUDIT-133": ("docs/requirements/loop-engineering-post-implementation-audit-0.66.0.md", "**Task**: AUDIT-133", "90bc4ef9bf32a1b3a8437a3332106f25fb45e5abf4e291723cf04f27d4e3d0e9"),
 }
 REQUIRED_PLANNED_TARGETS = {
     **{f"LRC-{name}-PLANNED-001": frozenset({

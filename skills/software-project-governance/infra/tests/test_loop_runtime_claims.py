@@ -612,6 +612,40 @@ class LoopRuntimeClaimTests(unittest.TestCase):
         self._write_controls(plugin, policy, authority)
         self.assertIn("AUTHORITY_SOURCE_RECORDS_EMPTY", {f.code for f in self._scan(product, plugin, host).findings})
 
+    def test_forged_source_records_fail_closed(self):
+        """FIX-345 negative: re-anchoring the source records never weakens
+        the identity chain.  A forged (missing) record path, a duplicated
+        anchor line and an edited anchor line each keep the product_release
+        scan from passing (report verdict BLOCKED — fail-closed)."""
+        # (a) forged missing source: the record path points at no real file.
+        # The report verdict vocabulary is PASS/BLOCKED: any finding keeps
+        # the scan BLOCKED, so the identity chain never silently passes.
+        stack, product, plugin, host, policy, authority = self._roots()
+        self.addCleanup(stack.cleanup)
+        authority["source_records"][0]["path"] = ".governance/plan-tracker-forged.md"
+        self._write_controls(plugin, policy, authority)
+        report = self._scan(product, plugin, host)
+        self.assertIn("AUTHORITY_SOURCE_MISSING", {f.code for f in report.findings})
+        self.assertEqual("BLOCKED", report.verdict, report.findings[:5])
+
+        # (b) duplicated anchor line: exactly one occurrence is required.
+        stack, product, plugin, host, policy, authority = self._roots()
+        self.addCleanup(stack.cleanup)
+        target = host / ".governance/plan-tracker.md"
+        target.write_text(target.read_text(encoding="utf-8") * 2, encoding="utf-8")
+        report = self._scan(product, plugin, host)
+        self.assertIn("AUTHORITY_SOURCE_OCCURRENCE", {f.code for f in report.findings})
+        self.assertEqual("BLOCKED", report.verdict, report.findings[:5])
+
+        # (c) edited anchor line: single occurrence but digest drift.
+        stack, product, plugin, host, policy, authority = self._roots()
+        self.addCleanup(stack.cleanup)
+        target = host / ".governance/plan-tracker.md"
+        target.write_text("| TEST-AUTHORITY | forged |\n", encoding="utf-8")
+        report = self._scan(product, plugin, host)
+        self.assertIn("AUTHORITY_SOURCE_DIGEST", {f.code for f in report.findings})
+        self.assertEqual("BLOCKED", report.verdict, report.findings[:5])
+
     def test_policy_cannot_self_authorize_by_resigning_controls(self):
         stack, product, plugin, host, policy, authority = self._roots()
         self.addCleanup(stack.cleanup)

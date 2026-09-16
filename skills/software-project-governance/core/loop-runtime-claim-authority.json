@@ -19,9 +19,9 @@
   "source_records": [
     {
       "record_id": "DEC-104",
-      "path": ".governance/decision-log.md",
-      "line_prefix": "| DEC-104 |",
-      "sha256": "7666ace742ebc8691356ea53b884163ffafc25dd8545d7e6b680786461f6db11"
+      "path": ".governance/archive/decisions/decisions-v0.1.0-0.78.0.md",
+      "line_prefix": "> | DEC-104 |",
+      "sha256": "ed1cadba6a33bd72e9c5b21e4293d0f30029e07fa442f87154fd5912d3331b61"
     },
     {
       "record_id": "EVD-707",
@@ -31,9 +31,9 @@
     },
     {
       "record_id": "AUDIT-133",
-      "path": ".governance/plan-tracker.md",
-      "line_prefix": "| **P0** | AUDIT-133 |",
-      "sha256": "c3fbd2e490f8871a39e63a7c2db750ee71bd0d8f9550b83f4442344532c08adb"
+      "path": "docs/requirements/loop-engineering-post-implementation-audit-0.66.0.md",
+      "line_prefix": "**Task**: AUDIT-133",
+      "sha256": "90bc4ef9bf32a1b3a8437a3332106f25fb45e5abf4e291723cf04f27d4e3d0e9"
     }
   ]
 }

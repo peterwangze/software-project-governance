@@ -84,7 +84,7 @@ Get-ChildItem ".governance\archive\*.md" | Select-String -Pattern '^\| DEC-104 \
 
 ### F2 — 已知缺陷 ×1：live 断言过期（存量）
 
-- `test_triage_write_guard.GovernanceWriteGuardPlanTrackerTests.test_live_plan_tracker_flags_only_known_m1_rows`：`AssertionError: set() is not true : live M1 four rows must be flagged`（L533）。FIX-293（2026-09-09，EVD-963）修复数据后断言未反转——非产品回归（守卫 CLI 当时与今日均 PASS）。修复候选：断言反转为 `assertEqual(set(), flagged)`（本任务不改测试）。
+- `test_triage_write_guard.GovernanceWriteGuardPlanTrackerTests.test_live_plan_tracker_flags_only_known_m1_rows`：`AssertionError: set() is not true : live M1 four rows must be flagged`（L533）。FIX-293（2026-09-09，EVD-963）修复数据后断言未反转——非产品回归（守卫 CLI 当时与今日均 PASS）。修复候选：断言反转为 `assertEqual(set(), flagged)`（本任务不改测试）。**收口注记（FIX-332，2026-09-17）**：候选已由 FIX-330 采纳落地（2026-09-14）：`assertEqual(set(), flagged)` + 面级哨兵门禁 `assertNotIn("", flagged, face)`，当时模块 `Ran 32 OK`、`skipped=0`；FIX-332 复跑实测同结果（2026-09-17，现 35 用例含 FIX-333 GBK 反相）；「L533」为 0.80.0 时点行号快照。依据：`docs/reviews/review-FIX-330-CODE-R0.md`（同轮反相实测证伪 FIX-328/R0 F-1 前提，更正登记归 DEC-194）。
 
 ### F3 — 已知缺陷 ×1：manifest `presets/` 三方脱节（存量）
 

@@ -133,6 +133,21 @@ python skills/software-project-governance/infra/verify_workflow.py review-record
 - 捆绑包内「破坏性红线」三句与 RCA §7.2 R3 逐字一致——单一权威副本，修改须经决策记录
 - 配套规则为 M7.7 注入摘要：摘要与 M7.7 权威文本不一致时以 M7.7 为准并回改摘要（防文本漂移）
 
+### 隔离变量名纪律（FIX-337 — 真实环境隔离命令 MUST）
+
+真实环境隔离（R1 方案 (a)「环境变量重定向至临时目录」）构造 PowerShell/pwsh 命令时，Coordinator 与角色 agent **MUST** 使用**非保留变量名**承载重定向目标（规范名 **`$tmpHome`**），**禁止**对 PowerShell 自动只读变量 `$HOME`（含任意大小写变体 `$home`）赋值：
+
+```
+# ✅ 正相——非保留变量名 + 显式环境变量重定向
+$tmpHome = Join-Path $env:TEMP "ds-home"
+$env:DSH_HOME = $tmpHome
+
+# ❌ 负相（判违规）——$HOME 是 pwsh 只读保留变量：
+$home = Join-Path $env:TEMP "ds-home"
+```
+
+违规机制（incident 实证）：`$home = …` 触发 WriteError 但**不中断**后续语句 ⇒ `$env:DSH_HOME` 未被设置、回落到真实用户主目录 ⇒ 隔离**静默失效**（活体：`.governance/incidents/incident-20260914-fix335-dshhome-redirect-failure.md`——该次因 import 链无 DSH 代码路径而实测零读写，失效本身未被即时察觉，故 MUST 从模板层根治）。机检提示：派发命令与隔离脚本**不得出现 `$home =`**（大小写不敏感）；本节负相示例为该字面串在本模板中的唯一**代码示例赋值形态**出现（其余出现均为行文引用或 ❌ 清单条目，非可执行赋值语句）。真实环境任务的派发 prompt **MUST** 随红线捆绑包一并将本段纪律纳入（R4 逐条上报同样适用于隔离命令）。
+
 ## 并行调度安全
 
 Coordinator 在并行 spawn 多个 agent 前 **MUST** 校验：任意两个 agent 的任务所涉及的文件修改目标无重叠。如两个 agent 都要修改同一文件路径 -> **MUST** 优先使用 `isolation: "worktree"` 物理隔离（见下方 Worktree 隔离参数）；不可用时回退为串行执行。仅读取文件（不修改）的 agent 之间无冲突风险——可安全并行。详见 `references/behavior-protocol.md` M7.6。
@@ -182,3 +197,4 @@ Coordinator spawn sub-agent 时 MUST 在用户可见输出中报告进度：
 - ❌ 跳过角色定义或任务 SKILL 的加载指令
 - ❌ 在未预检文件目标重叠的情况下并行 spawn 多个修改 agent
 - ❌ 真实环境任务派发时漏填破坏性红线段（R3 注入是 MUST——见「破坏性红线注入」）
+- ❌ 真实环境隔离命令对 PowerShell 保留变量 `$HOME`（`$home`）赋值——MUST 用非保留名（如 `$tmpHome`）；`$home =` 判违规：赋值静默失败使隔离失效（incident-20260914-fix335；FIX-337——见「隔离变量名纪律」）

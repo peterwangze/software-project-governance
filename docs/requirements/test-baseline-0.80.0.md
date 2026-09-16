@@ -110,6 +110,7 @@ python -B -m unittest discover -s skills/software-project-governance/infra/tests
 - **证据**：`AssertionError: set() is not true : live M1 four rows must be flagged`（test_triage_write_guard.py L533）。docstring（L525-527）自述「FIX-293 将修数据，本守卫只检不改」——作者预知数据修复将清空 flagged 集，但断言仍要求非空。EVD-963（L1805）：FIX-293 于 2026-09-09 修复 M1 四行→守卫 PASS。本会话守卫 CLI 复跑：**PASS / 0 issues / exit 0**（四面绿）——产品面健康，纯测试断言过期
 - **分类**：**已知缺陷（测试面）**——非产品回归。自 FIX-293 落地起必然变红，潜伏被「单文件回归口径」掩盖（FEAT-011 验收只跑 test_verify_workflow.py 775，未跑自家 live 测试所在文件全量）。修复候选：断言反转为 `assertEqual(set(), flagged)`（AUDIT-152 邻域，本任务不改测试文件）
 - **方法论注记**：这是「单文件绿 ≠ 全仓过」教训（FEAT-016 R0 先例，facts §7.2）的又一实证——治理记录以单文件数充当回归证据时，跨文件数据耦合断言不被覆盖
+- **收口注记（FIX-332，2026-09-17）**：上述修复候选已由 **FIX-330 采纳落地**（2026-09-14）——方案 (b) 断言反转 `assertEqual(set(), flagged)` + 面级哨兵门禁 `assertNotIn("", flagged, face)`（1 文件 +63/−5），当时模块 `Ran 32 tests OK` 且 `skipped=0`；同轮审查以反相实测**证伪** FIX-328/R0 F-1 的「真实灵敏度回退」前提（不可读分支 `flagged={''}` 非空 ⇒ 改前与 (a) 版均红在 subset 断言；真实缺陷降级为**诊断失真**，更正登记归 DEC-194 与 plan-tracker FIX-332 行）。本节为 0.80.0 时点历史记录——文中「test_triage_write_guard.py L533」等行号为当时快照，不对应现行文件。依据：`docs/reviews/review-FIX-330-CODE-R0.md`（APPROVED_WITH_NOTES / unresolved_blockers=0）；FIX-332 于 2026-09-17 复跑实测：金丝雀单跑 OK、全模块 OK、skipped=0（现 35 用例，含 FIX-333 GBK 反相）。
 
 ### F3 — 已知缺陷 ×1：manifest `presets/` 三方脱节
 

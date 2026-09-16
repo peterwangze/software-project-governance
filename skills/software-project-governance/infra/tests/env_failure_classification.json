@@ -124,9 +124,11 @@
       "class": "known_defect",
       "family": "test_assertion_stale",
       "count": 1,
-      "evidence": "AssertionError 'set() is not true : live M1 four rows must be flagged' (test L533); FIX-293 fixed the data on 2026-09-09 (EVD-963) so flagged set is now empty by design; guard CLI itself PASSes - assertion flip candidate assertEqual(set(), flagged)",
+      "evidence": "AssertionError 'set() is not true : live M1 four rows must be flagged' (test L533, line number as of this 2026-09-10 registry snapshot); FIX-293 fixed the data on 2026-09-09 (EVD-963) so flagged set became empty by design; guard CLI itself PASSes",
       "since": "2026-09-09 (FIX-293 landing)",
-      "ticket": "AUDIT-152 recommends new FIX task (report section 7)"
+      "resolved": true,
+      "resolved_by": "FIX-330 (2026-09-14) adopted the recorded flip candidate: (b) zero-hit assertion assertEqual(set(), flagged) + face-level sentinel gate assertNotIn(\"\", flagged, face), 1 file +63/-5; module then Ran 32 OK with skipped=0; re-verified 2026-09-17 by FIX-332 (canary single-run OK, module OK, skipped=0 - now 35 tests incl. FIX-333 GBK negative cases); the same review also falsified the FIX-328/R0 F-1 'real sensitivity regression' premise by inverted experiment (unreadable face flagged={''} non-empty => HEAD and (a) both red at the subset assertion; real defect downgraded to diagnostic distortion, correction registered in DEC-194) - docs/reviews/review-FIX-330-CODE-R0.md (APPROVED_WITH_NOTES, unresolved_blockers=0)",
+      "ticket": "resolved by FIX-330 (was: AUDIT-152 recommends new FIX task, report section 7); entry kept with resolution record per maintenance note 'update alongside data-evolution events (F2 fixes)'"
     },
     "test_cleanup.TestPluginScopeDirs.test_all_manifest_dirs_covered": {
       "class": "known_defect",

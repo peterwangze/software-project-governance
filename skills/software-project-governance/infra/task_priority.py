@@ -54,7 +54,10 @@ analysis trivially testable with fixture strings and deterministic across
 runs. Documented I/O exceptions (FEAT-012 G5 consolidation): besides the
 ``_coerce_text`` convenience read, the RECO snapshot writer
 (:func:`write_recommendation_snapshot`), the tpa last-run cache helpers
-(:func:`read_last_run_state` / :func:`write_last_run_state`) and the CLI
+(:func:`read_last_run_state` / :func:`write_last_run_state`), the FIX-341
+archive-index resolution helpers (:func:`parse_archive_index_completed_ids`
+takes TEXT — pure; :func:`read_archive_index_completed_ids` /
+:func:`_archive_index_mtime` read the parameterized index path) and the CLI
 orchestrator :func:`run_cli_analysis` perform explicit, parameterized file
 I/O — they never touch module state and stay stdlib-only.
 
@@ -599,6 +602,146 @@ class PriorityReport:
     cycle_warning: bool = False
     unblock_recommendation: "UnblockRecommendation | None" = None
     empty_reason: "dict | None" = None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Archive-index dependency resolution (FIX-341)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Live fact (2026-09-16 tpa output): completed-and-archived dependency IDs
+# with NO hot-table row (REL-076✅ / FIX-162✅ / FIX-319✅ / FEAT-031✅ /
+# FIX-171) were conservatively judged blocked because the dependency loop
+# only consulted the hot-table status map (the FIX-171 fail-closed default).
+# FIX-341 adds a SECOND resolution layer for hot-miss dep IDs: the archive
+# index (``.governance/archive/index.md`` 「## Task 索引」 table). Resolution
+# order per dependency:
+#
+#   1. hot-table row (authoritative — ⏳/🔴/… still blocks even if a stale
+#      archive row claims completion);
+#   2. archive-index archived-completed row → satisfied;
+#   3. neither → blocking (fail-closed, FIX-171 conservative default kept).
+#
+# Purity: :func:`parse_archive_index_completed_ids` takes the index TEXT
+# (pure); :func:`read_archive_index_completed_ids` is the documented I/O
+# exception (parameterized path, like :func:`_coerce_text` / the snapshot
+# writers) and lives only on the CLI/triage orchestration layer.
+_ARCHIVE_TASK_SECTION_HEADING = "## Task 索引"
+
+# Negative-intent markers — an index 状态 cell containing one is NOT an
+# archived-completed row: release CANDIDATES (候选), conservative closures
+# without a full PASS (保守闭环), indirect closures (间接闭合), cancellations
+# (已终止/已撤回/失效), pending/queued/planning states (未开始/待执行/进行中/
+# 规划入账/暂停), and legacy rows where the 状态 column carries a priority or
+# a description. EXCEPTION: a cell that also carries the ✅ emoji (e.g. the
+# real FIX-264 row 「待执行/暂停→✅ 完成」) IS completed — the ✅ completion
+# marker outranks the stale pending prefix.
+_ARCHIVE_NON_COMPLETED_MARKERS = (
+    "候选", "保守闭环", "间接闭合", "已终止", "已撤回", "失效",
+    "未开始", "待执行", "进行中", "规划入账", "暂停",
+)
+# Positive completion wordings (substring match, mirroring the module's
+# completion-word doctrine in _status_is_terminal_word): 已完成/完成/实现完成/
+# 发布完成/… (the bare completion word), plus 已发布/已交付 release forms.
+_ARCHIVE_RELEASED_MARKERS = ("已发布", "已交付")
+
+
+def _archive_index_status_is_completed(status_cell: str) -> bool:
+    """True when an archive-index 状态 cell proves archived completion.
+
+    Conservative on purpose: only clear completion wordings resolve a
+    dependency. Negative-intent markers (:data:`_ARCHIVE_NON_COMPLETED_MARKERS`)
+    veto UNLESS the cell also carries ✅; positive signals are the completion
+    word (完成 — covers 已完成/实现完成/发布完成/…) and the release forms
+    (已发布/已交付).
+    """
+    s = _strip_markdown(str(status_cell or ""))
+    if not s:
+        return False
+    if "✅" not in s and any(m in s for m in _ARCHIVE_NON_COMPLETED_MARKERS):
+        return False
+    return (_COMPLETION_WORD in s
+            or any(m in s for m in _ARCHIVE_RELEASED_MARKERS))
+
+
+def parse_archive_index_completed_ids(archive_index_text) -> frozenset:
+    """Parse the archive-index TEXT into the set of archived-completed task IDs.
+
+    Scans ONLY the ``## Task 索引`` section (the boundary is load-bearing:
+    Decision/Risk/Evidence index rows share the ``| PREFIX-NNN | …`` row shape
+    but are NOT tasks and must never resolve). A row qualifies when its first
+    cell is a bare ``PREFIX-NNN`` ID and its second cell (状态) proves
+    completion (:func:`_archive_index_status_is_completed`). Duplicate rows
+    for the same ID (the index accumulates across rebuilds) resolve when ANY
+    row is completed.
+
+    Args:
+        archive_index_text: the ``archive/index.md`` text (str/bytes; empty /
+            None / non-index text yield an empty set — never raises).
+
+    Returns:
+        frozenset of archived-completed task IDs.
+    """
+    if archive_index_text is None:
+        return frozenset()
+    if isinstance(archive_index_text, bytes):
+        archive_index_text = archive_index_text.decode("utf-8", errors="replace")
+    text = str(archive_index_text)
+    if not text.strip():
+        return frozenset()
+    completed: set = set()
+    in_task_section = False
+    for raw_line in text.split("\n"):
+        line = raw_line.strip()
+        if line.startswith("#"):
+            in_task_section = (line == _ARCHIVE_TASK_SECTION_HEADING)
+            continue
+        if not in_task_section or not line.startswith("|"):
+            continue
+        if _SEPARATOR_RE.match(line):
+            continue
+        cells = _split_row(line)
+        if len(cells) < 2:
+            continue
+        first = _strip_markdown(cells[0])
+        if not _ID_CELL_RE.match(first):
+            continue
+        if _archive_index_status_is_completed(cells[1]):
+            completed.add(first)
+    return frozenset(completed)
+
+
+def read_archive_index_completed_ids(governance_dir) -> frozenset:
+    """FIX-341 I/O helper — read ``<governance_dir>/archive/index.md`` and
+    return its archived-completed ID set.
+
+    Documented I/O exception to the compute-purity rule (parameterized path,
+    orchestration layer only — same discipline as
+    :func:`read_last_run_state`). A missing/unreadable index yields an empty
+    set: every dependency then falls back to the fail-closed hot-table
+    behavior (never raises).
+    """
+    try:
+        path = Path(governance_dir) / "archive" / "index.md"
+        if not path.is_file():
+            return frozenset()
+        return parse_archive_index_completed_ids(
+            path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return frozenset()
+
+
+def _archive_index_mtime(governance_dir):
+    """``archive/index.md`` st_mtime, or None when absent/unreadable.
+
+    FIX-341 cache-guard input: the tpa analysis is a pure function of the
+    plan-tracker text AND the archive index, so a same-day cache written
+    before an index change must not be reused.
+    """
+    try:
+        path = Path(governance_dir) / "archive" / "index.md"
+        return path.stat().st_mtime if path.is_file() else None
+    except OSError:
+        return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1366,8 +1509,21 @@ def _build_empty_recommendation_fallback(blocked: list, non_executable: list,
     return recommendation, empty_reason
 
 
-def compute_unblocked_tasks(tasks: list) -> PriorityReport:
+def compute_unblocked_tasks(tasks: list, archive_completed_ids=None) -> PriorityReport:
     """Compute the dependency-based priority report from parsed tasks.
+
+    Args:
+        tasks: list of :class:`TaskDep` (from :func:`parse_task_dependencies`).
+        archive_completed_ids: optional set of task IDs proven completed by
+            the archive index (:func:`parse_archive_index_completed_ids`,
+            read on the orchestration layer via
+            :func:`read_archive_index_completed_ids`). FIX-341: a task-family
+            dependency with NO hot-table row that appears here is satisfied
+            instead of fail-closed blocking. The hot table stays
+            authoritative (a hot ⏳/🔴 row still blocks even when the set
+            contains its ID); an ID in neither layer still blocks (FIX-171
+            conservative default kept). Omitting the parameter (or passing
+            an empty set) reproduces the pre-FIX-341 behavior exactly.
 
     Algorithm:
       1. Build a status lookup: ``{task_id: is_completed}``.
@@ -1378,8 +1534,9 @@ def compute_unblocked_tasks(tasks: list) -> PriorityReport:
            - ``completed`` — status ✅.
            - ``blocked`` — not completed AND has ≥1 task-family dependency
              that is not provably completed (either the dep is in the table
-             with non-✅ status, OR the dep is missing from the table —
-             fail-closed: an unknown task-family ID cannot be proven done).
+             with non-✅ status, or the dep is missing from the table AND
+             not proven completed by ``archive_completed_ids`` — fail-closed:
+             an unknown task-family ID cannot be proven done).
            - ``non_executable`` — not completed, all task-family dependencies
              are completed (or none), but the status leading marker is
              terminal / non-executable (⛔/⏸/🔴/🚧/🛑/📋/✅) — the third-class
@@ -1415,6 +1572,9 @@ def compute_unblocked_tasks(tasks: list) -> PriorityReport:
     status_map: dict = {t.task_id: t.is_completed() for t in tasks}
     graph: dict = {t.task_id: tuple(t.dependencies) for t in tasks}
     cycles = _detect_cycles(graph)
+    # FIX-341: second resolution layer for hot-miss dependency IDs. An empty
+    # / absent set keeps the loop below identical to the pre-FIX-341 behavior.
+    archive_done: frozenset = frozenset(archive_completed_ids or ())
 
     completed: list = []
     blocked: list = []
@@ -1431,8 +1591,16 @@ def compute_unblocked_tasks(tasks: list) -> PriorityReport:
             if status_map.get(dep, False):
                 # Dependency is completed → does not block.
                 continue
+            if dep not in status_map and dep in archive_done:
+                # FIX-341: the dep has NO hot-table row and the archive index
+                # proves it completed → does not block. A dep that HAS a hot
+                # row never reaches this branch: the hot table is
+                # authoritative (a hot ⏳/🔴 row still blocks even when a
+                # stale/duplicated archive row claims completion).
+                continue
             # Dependency is either incomplete (in table, non-✅) or unknown
-            # (missing from table). Either way it blocks fail-closed.
+            # everywhere (missing from table and archive index). Either way
+            # it blocks fail-closed.
             blocking.append(dep)
         if blocking:
             blocked.append(BlockedTask(task=t, blocking_dependencies=tuple(blocking)))
@@ -1940,6 +2108,14 @@ def run_cli_analysis(tracker_path, governance_dir, evidence_path,
     state = None if (force or needs_live_report) else read_last_run_state(
         governance_dir)
     reuse = should_reuse_cached_analysis(state, today, tracker_mtime)
+    # FIX-341 cache guard: the report is a pure function of the plan-tracker
+    # text AND the archive index, so a cached analysis written before an
+    # index change must not be reused. Old caches (no recorded index mtime)
+    # fail this check whenever an index file exists — one extra full run,
+    # never a stale report.
+    if reuse:
+        reuse = (state.get("archive_index_mtime")
+                 == _archive_index_mtime(governance_dir))
 
     report = None
     if reuse:
@@ -1947,7 +2123,10 @@ def run_cli_analysis(tracker_path, governance_dir, evidence_path,
         print(state["report_text"])
     else:
         try:
-            report = compute_unblocked_tasks(parse_task_dependencies(tracker_text))
+            report = compute_unblocked_tasks(
+                parse_task_dependencies(tracker_text),
+                archive_completed_ids=read_archive_index_completed_ids(
+                    governance_dir))
             report_text = format_report(report)
         except Exception as exc:  # parse failure surface — entry stays thin
             print(f"task-priority-analysis: parse error: {exc}", file=sys.stderr)
@@ -1955,6 +2134,7 @@ def run_cli_analysis(tracker_path, governance_dir, evidence_path,
         print(report_text)
         write_last_run_state(governance_dir, {
             "date": today, "plan_tracker_mtime": tracker_mtime,
+            "archive_index_mtime": _archive_index_mtime(governance_dir),
             "report_text": report_text})
 
     # FIX-262 / REQ-108: machine snapshot row for the completion-recommendation
@@ -1991,6 +2171,8 @@ __all__ = [
     "parse_task_dependencies",
     "compute_unblocked_tasks",
     "format_report",
+    "parse_archive_index_completed_ids",
+    "read_archive_index_completed_ids",
     "should_reuse_cached_analysis",
     "has_reco_row_today",
     "recommendation_snapshot_row_text",

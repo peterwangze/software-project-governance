@@ -60,6 +60,7 @@ from task_priority import (  # noqa: E402  (import after sys.path setup)
     compute_unblocked_tasks,
     format_report,
     has_reco_row_today,
+    parse_archive_index_completed_ids,
     parse_task_dependencies,
     should_reuse_cached_analysis,
 )
@@ -1816,6 +1817,274 @@ class TestTaskPriorityCliDuplicateSuppression(unittest.TestCase):
         self.assertEqual(content.count("RECO-FIX-993"), 1,
                          "首次闭环义务不得被抑制")
         self.assertIn("[OK] recommendation snapshot row RECO-FIX-993", proc.stdout)
+
+
+# ─── FIX-341: archived-index dependency resolution ───────────────────────────
+#
+# Live fact (2026-09-16 tpa output): completed-and-archived dependency IDs with
+# NO hot-table row (REL-076✅, FIX-162✅, FIX-319✅, FEAT-031✅, FIX-171) were
+# conservatively judged blocked (fail-closed unknown-dep default) because the
+# dependency resolution only consulted the hot-table status map. FIX-341 adds
+# an ARCHIVE-INDEX lookup as the second resolution layer: a hot-miss dep that
+# the archive index proves completed is satisfied; an index miss stays
+# fail-closed blocked. The index text is INJECTED (pure compute, no I/O).
+
+# Fixture mirrors the REAL .governance/archive/index.md shapes (section header
+# 「## Task 索引」, 4-col rows, real status wordings — including the traps:
+# 完成候选 / 保守闭环 / 间接闭合 / legacy P0-as-status / prose statuses).
+_ARCHIVE_INDEX_FIXTURE = """\
+# 归档索引
+
+> 自动生成，记录每个治理条目的归档位置。
+
+## Task 索引
+
+| Task ID | 状态 | 版本 | 归档文件 |
+|---------|------|------|---------|
+| FIX-075 | 已完成 (2026-05-21) | 0.36.0 | archive/tasks/completed.md |
+| REL-076 | 已完成 (2026-09-12) | 0.80.0 | archive/tasks/v0.1.0~v0.80.0.md |
+| FEAT-031 | 已发布 (2026-09-14)——origin/master=x | 0.81.0 | archive/tasks/v0.1.0~v0.81.0.md |
+| FIX-171 | 完成 (2026-06-11) | 0.61.0 | archive/tasks/v0.1.0~v0.61.0.md |
+| FIX-152 | 实现完成 + 事后审查 APPROVED (2026-06-25) | 0.58.0 | archive/tasks/completed.md |
+| FIX-264 | 待执行/暂停→✅ 完成 (2026-08-23) | 0.76.0 | archive/tasks/v0.1.0~v0.78.0.md |
+| AUDIT-201 | 未开始 | 0.90.0 | archive/tasks/future.md |
+| REL-080 | 完成候选 (2026-09-30) | 0.90.0 | archive/tasks/future.md |
+| VAL-010 | 保守闭环 / 未满足 full PASS (2026-06-10) | 0.49.0 | archive/tasks/completed.md |
+| FIX-172 | 已撤回/失效 (2026-06-18) | 0.54.2 | archive/tasks/completed.md |
+| DESIGN-099 | 间接闭合（归档：0.66.2 补偿链 + DEC-132；原 ⛔ BLOCKED） | 0.66.1 | archive/tasks/v0.1.0~v0.78.0.md |
+| FIX-173 | 待执行 | 0.90.0 | archive/tasks/future.md |
+| FIX-174 | P0 | 0.10.0 | archive/tasks/legacy-v0.10.0.md |
+| MAINT-010 | 待执行/暂停→⏸ 暂停 (2026-08-23) | 0.76.0 | archive/tasks/v0.1.0~v0.78.0.md |
+| REQ-010 | 0.10.0 | 0.10.0 | archive/tasks/legacy-v0.10.0.md |
+
+## Evidence 索引
+
+| Evidence ID | Task | 归档文件 |
+|---------|------|---------|
+| EVD-641 | FIX-163 | archive/evidence/evidence-v0.1.0-0.61.2.md |
+
+## Decision 索引
+
+| Decision ID | 描述 | 归档文件 |
+|---------|------|---------|
+| DEC-187 | 架构不变量 | archive/decisions/decisions-v0.1.0-0.79.0.md |
+
+## Risk 索引
+
+| Risk ID | 描述 | 归档文件 |
+|---------|------|---------|
+| RISK-039 | 2026-06-24 | archive/risks/risks-v0.1.0-0.59.0.md |
+"""
+
+# Completed-by-index IDs (any-completed-wins across dup rows).
+_ARCHIVE_COMPLETED_EXPECTED = {
+    "FIX-075",    # 已完成
+    "REL-076",    # 已完成
+    "FEAT-031",   # 已发布
+    "FIX-171",    # bare 完成
+    "FIX-152",    # 实现完成 (completion-word form)
+    "FIX-264",    # ✅ escape beats the 待执行/暂停 negative prefix
+}
+# Non-completed / non-Task-section IDs that must NEVER resolve.
+_ARCHIVE_NOT_COMPLETED_EXPECTED = {
+    "AUDIT-201", "REL-080", "VAL-010", "FIX-172", "DESIGN-099",
+    "FIX-173", "FIX-174", "MAINT-010", "REQ-010",
+    "DEC-187", "RISK-039", "EVD-641",  # cross-section leakage guards
+}
+
+
+class TestArchiveIndexCompletedIds(unittest.TestCase):
+    """parse_archive_index_completed_ids — archive-index text → completed IDs.
+
+    FIX-341: the archive index (.governance/archive/index.md 「## Task 索引」
+    table) is the second dependency-resolution layer for hot-miss dep IDs.
+    Conservative: only clear archived-completion wordings resolve; 候选/
+    保守闭环/间接闭合/已终止/待执行/未开始/legacy statuses do NOT.
+    """
+
+    def test_completed_statuses_resolve(self):
+        ids = parse_archive_index_completed_ids(_ARCHIVE_INDEX_FIXTURE)
+        for tid in _ARCHIVE_COMPLETED_EXPECTED:
+            self.assertIn(tid, ids, f"{tid} should resolve as archived-completed")
+
+    def test_non_completed_statuses_do_not_resolve(self):
+        ids = parse_archive_index_completed_ids(_ARCHIVE_INDEX_FIXTURE)
+        for tid in _ARCHIVE_NOT_COMPLETED_EXPECTED:
+            self.assertNotIn(
+                tid, ids, f"{tid} must NOT resolve (conservative fail-closed)")
+
+    def test_non_task_section_rows_never_leak(self):
+        # The section boundary is load-bearing: Decision/Risk/Evidence index
+        # rows share the | PREFIX-NNN |... row shape but are NOT tasks.
+        ids = parse_archive_index_completed_ids(_ARCHIVE_INDEX_FIXTURE)
+        self.assertNotIn("DEC-187", ids)
+        self.assertNotIn("RISK-039", ids)
+
+    def test_empty_and_garbage_input_yield_empty_set(self):
+        self.assertEqual(parse_archive_index_completed_ids(""), frozenset())
+        self.assertEqual(parse_archive_index_completed_ids(None), frozenset())
+        self.assertEqual(
+            parse_archive_index_completed_ids("# no index here\n"),
+            frozenset())
+
+    def test_duplicate_rows_any_completed_wins(self):
+        text = (
+            "## Task 索引\n\n"
+            "| Task ID | 状态 | 版本 | 归档文件 |\n"
+            "|---------|------|------|---------|\n"
+            "| FIX-115 | 已完成 (2026-06-08) | 0.45.0 | archive/tasks/a.md |\n"
+            "| FIX-115 | 未开始 | 0.90.0 | archive/tasks/b.md |\n"
+        )
+        ids = parse_archive_index_completed_ids(text)
+        self.assertIn("FIX-115", ids)
+
+
+def _arch_dep_task(task_id, deps):
+    """One ⏳ pending task row with the given task-family deps (in-memory)."""
+    return TaskDep(
+        task_id=task_id, priority="P2", status="⏳ 待执行",
+        dependencies=tuple(deps), target_version="0.90.0")
+
+
+class TestArchiveResolvedDependencies(unittest.TestCase):
+    """compute_unblocked_tasks(…, archive_completed_ids=…) — FIX-341.
+
+    Resolution order per dep: hot-table status (authoritative) → archive-index
+    completion → blocking (fail-closed). The parameter is OPTIONAL: the
+    one-argument call is byte-identical to the pre-FIX-341 behavior.
+    """
+
+    def test_no_archive_arg_keeps_fail_closed_baseline(self):
+        # Baseline (pre-FIX-341 behavior preserved): a hot-miss dep blocks.
+        report = compute_unblocked_tasks([_arch_dep_task("FIX-901", ("REL-076",))])
+        self.assertEqual(len(report.blocked), 1)
+        self.assertEqual(report.blocked[0].blocking_dependencies, ("REL-076",))
+
+    def test_archived_completed_dep_unblocks(self):
+        # FIX-341 core: index-proven completed dep is satisfied.
+        report = compute_unblocked_tasks(
+            [_arch_dep_task("FIX-901", ("REL-076",))],
+            archive_completed_ids=frozenset({"REL-076"}))
+        self.assertEqual(len(report.blocked), 0)
+        self.assertEqual([t.task_id for t in report.unblocked], ["FIX-901"])
+
+    def test_index_miss_still_blocks_fail_closed(self):
+        # 保守性保留: an ID absent from BOTH the hot table and the injected
+        # archive set still blocks (unknown dependency).
+        report = compute_unblocked_tasks(
+            [_arch_dep_task("FIX-901", ("FIX-171",))],
+            archive_completed_ids=frozenset({"REL-076"}))
+        self.assertEqual(len(report.blocked), 1)
+        self.assertEqual(report.blocked[0].blocking_dependencies, ("FIX-171",))
+
+    def test_hot_pending_dep_wins_over_archive_completed(self):
+        # A hot ⏳ row is authoritative: even if the archive set (stale or
+        # duplicated index row) claims completion, the hot row blocks.
+        tasks = [
+            _arch_dep_task("FIX-901", ("FIX-902",)),
+            _arch_dep_task("FIX-902", ()),
+        ]
+        report = compute_unblocked_tasks(
+            tasks, archive_completed_ids=frozenset({"FIX-902"}))
+        self.assertEqual(len(report.blocked), 1)
+        self.assertEqual(report.blocked[0].task.task_id, "FIX-901")
+        self.assertEqual(
+            report.blocked[0].blocking_dependencies, ("FIX-902",))
+
+    def test_mixed_deps_partial_archive_resolution(self):
+        # FIX-312-style row: deps = [archived REL-076, archived FIX-162,
+        # unknown FIX-171] → only the unknown one still blocks.
+        tasks = [_arch_dep_task("FIX-901", ("REL-076", "FIX-162", "FIX-171"))]
+        report = compute_unblocked_tasks(
+            tasks,
+            archive_completed_ids=frozenset({"REL-076", "FIX-162"}))
+        self.assertEqual(len(report.blocked), 1)
+        self.assertEqual(
+            report.blocked[0].blocking_dependencies, ("FIX-171",))
+
+    def test_empty_archive_set_is_neutral(self):
+        report = compute_unblocked_tasks(
+            [_arch_dep_task("FIX-901", ("REL-076",))],
+            archive_completed_ids=frozenset())
+        self.assertEqual(len(report.blocked), 1)
+
+
+class TestTaskPriorityCliArchiveIndex(unittest.TestCase):
+    """CLI integration — FIX-341 archive-index resolution end-to-end.
+
+    Subprocess-level tests against a TEMPORARY fixture root: the tracker has a
+    task depending on REL-076 (NO hot row); ``.governance/archive/index.md``
+    proves REL-076 archived-completed. The CLI must resolve it (Unblocked).
+    Editing the index invalidates the FEAT-012 analysis cache (the report is a
+    function of the tracker text AND the archive index).
+    """
+
+    _CLI = Path(__file__).resolve().parent.parent / "verify_workflow.py"
+
+    _TRACKER = """\
+# Priority fixture (FIX-341 CLI test)
+
+### 优先级一览
+
+| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |
+|--------|----|------|------|---------|---------|------|
+| **P2** | FIX-901 | depends on archived REL-076 | REL-076✅ | 0.90.0 | open | ⏳ 待执行 |
+| **P2** | FIX-902 | depends on unknown FIX-971 | FIX-971 | 0.90.0 | open | ⏳ 待执行 |
+"""
+
+    _INDEX = """\
+# 归档索引
+
+## Task 索引
+
+| Task ID | 状态 | 版本 | 归档文件 |
+|---------|------|------|---------|
+| REL-076 | 已完成 (2026-09-12) | 0.80.0 | archive/tasks/v0.1.0~v0.80.0.md |
+"""
+
+    def _write_fixture(self):
+        tmp = tempfile.TemporaryDirectory(prefix="spg-tpa-fix341-")
+        gov = Path(tmp.name) / ".governance"
+        (gov / "archive").mkdir(parents=True, exist_ok=True)
+        (gov / "plan-tracker.md").write_text(self._TRACKER, encoding="utf-8")
+        (gov / "archive" / "index.md").write_text(self._INDEX, encoding="utf-8")
+        self.addCleanup(tmp.cleanup)
+        return tmp.name
+
+    def _run_cli(self, project_root, extra=()):
+        return subprocess.run(
+            [sys.executable, str(self._CLI), "task-priority-analysis",
+             "--project-root", str(project_root), *extra],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=120,
+        )
+
+    def test_archived_dep_resolves_and_unknown_still_blocks(self):
+        root = self._write_fixture()
+        proc = self._run_cli(root, ("--force",))
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        # REL-076 (archived) resolved → FIX-901 executable.
+        self.assertIn("`FIX-901`", proc.stdout)
+        self.assertNotIn(
+            "FIX-901` [P2] v=0.90.0 status=⏳ 待执行 blocked_by=[REL-076]",
+            proc.stdout)
+        # FIX-971 (hot-miss AND index-miss) still blocks fail-closed.
+        self.assertIn(
+            "FIX-902` [P2] v=0.90.0 status=⏳ 待执行 blocked_by=[FIX-971]",
+            proc.stdout)
+
+    def test_index_edit_invalidates_analysis_cache(self):
+        root = self._write_fixture()
+        first = self._run_cli(root)
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        index = Path(root) / ".governance" / "archive" / "index.md"
+        st = index.stat()
+        os.utime(index, (st.st_atime + 10, st.st_mtime + 10))
+        rerun = self._run_cli(root)
+        self.assertEqual(rerun.returncode, 0, rerun.stdout + rerun.stderr)
+        self.assertNotIn(
+            "复用上次分析", rerun.stdout,
+            "archive-index change must invalidate the cached analysis")
 
 
 if __name__ == "__main__":

@@ -211,7 +211,8 @@ def _would_create_cycle(task_id: str, depends_on: list, report) -> bool:
 
 
 def run_dependency_analysis(plan_tracker_text: str, depends_on: list,
-                            task_id: str = "") -> dict:
+                            task_id: str = "",
+                            archive_completed_ids=None) -> dict:
     """Step a — run task-priority-analysis and snapshot its full output.
 
     Args:
@@ -219,23 +220,37 @@ def run_dependency_analysis(plan_tracker_text: str, depends_on: list,
             compute path stays I/O-free).
         depends_on: task-family dependency IDs of the new task.
         task_id: the new task id (used only for new-task cycle detection).
+        archive_completed_ids: optional set of task IDs proven completed by
+            ``.governance/archive/index.md`` (FIX-341 — the caller loads it
+            via :func:`task_priority.read_archive_index_completed_ids`; this
+            function stays pure). A dep with NO hot-table row that appears in
+            the set is resolved instead of fail-closed unknown. Omitting it
+            keeps the pre-FIX-341 behavior exactly.
 
     Returns:
         dict with ``unblocked`` / ``blocked`` / ``blocked_by`` /
-        ``unknown_deps`` / ``cycles`` / ``cycle_warning`` /
-        ``new_task_cycle`` and the ``snapshot`` (``tool``,
+        ``unknown_deps`` / ``archive_resolved_deps`` / ``cycles`` /
+        ``cycle_warning`` / ``new_task_cycle`` and the ``snapshot`` (``tool``,
         ``module_version``, ``report_json``, ``report_text``). Never raises.
     """
     tasks = parse_task_dependencies(plan_tracker_text)
-    report = compute_unblocked_tasks(tasks)
+    report = compute_unblocked_tasks(
+        tasks, archive_completed_ids=archive_completed_ids)
     status_map = {t.task_id: t for t in tasks}
+    # FIX-341: second resolution layer — hot table first, then the injected
+    # archive-completed set, then fail-closed (FIX-171 conservative default).
+    archive_done = frozenset(archive_completed_ids or ())
 
     unknown_deps = []
     blocked_by = []
+    archive_resolved = []
     for dep in depends_on:
         task = status_map.get(dep)
         if task is None:
-            unknown_deps.append(dep)  # fail-closed (FIX-171 conservative)
+            if dep in archive_done:
+                archive_resolved.append(dep)  # archived-completed (FIX-341)
+            else:
+                unknown_deps.append(dep)  # fail-closed (FIX-171 conservative)
         elif not task.is_completed():
             blocked_by.append(dep)
 
@@ -245,6 +260,7 @@ def run_dependency_analysis(plan_tracker_text: str, depends_on: list,
         "blocked": [b.task.task_id for b in report.blocked],
         "blocked_by": blocked_by,
         "unknown_deps": unknown_deps,
+        "archive_resolved_deps": archive_resolved,
         "cycles": [list(c) for c in report.cycles],
         "cycle_warning": report.cycle_warning,
         "new_task_cycle": bool(task_id) and _would_create_cycle(
@@ -1101,8 +1117,13 @@ def run_triage(*, task_id: str, title: str = "", priority: str,
         return {"error": "version adaptation failed: {0}".format(
             "; ".join(version_result["issues"]))}
 
+    # FIX-341: load the archive-index completed set here (the I/O layer of
+    # the triage flow) and inject it into the pure step-a analysis — a dep
+    # with no hot row but proven archived-completed no longer fails closed.
     dependency = run_dependency_analysis(
-        plan_tracker_text, depends_on, task_id=task_id)
+        plan_tracker_text, depends_on, task_id=task_id,
+        archive_completed_ids=task_priority.read_archive_index_completed_ids(
+            governance_dir))
     if dependency["unknown_deps"]:
         return {"error": "dependency analysis failed — unknown task-family "
                          "dependency id(s): {0} (fail-closed, FIX-171 "
@@ -1155,6 +1176,7 @@ def run_triage(*, task_id: str, title: str = "", priority: str,
                 "blocked": dependency["blocked"],
                 "blocked_by": dependency["blocked_by"],
                 "unknown_deps": dependency["unknown_deps"],
+                "archive_resolved_deps": dependency["archive_resolved_deps"],
                 "cycles": dependency["cycles"],
                 "cycle_warning": dependency["cycle_warning"],
                 "new_task_cycle": dependency["new_task_cycle"],

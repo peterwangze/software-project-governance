@@ -231,6 +231,44 @@ class DependencyAnalysisTests(unittest.TestCase):
         self.assertTrue(analysis["new_task_cycle"])
 
 
+class ArchiveResolvedDepTests(unittest.TestCase):
+    """FIX-341 — hot-miss dependency IDs resolve via the archive index.
+
+    The archived-completed ID set is INJECTED (pure analysis, no I/O here);
+    :func:`ct.run_triage` owns the index read. Fail-closed baseline: without
+    the set (or on an index miss) the dep stays unknown.
+    """
+
+    def test_archived_completed_dep_resolves_not_unknown(self):
+        analysis = ct.run_dependency_analysis(
+            _FIXTURE_TRACKER, ["REL-076"],
+            archive_completed_ids=frozenset({"REL-076"}))
+        self.assertEqual(analysis["unknown_deps"], [])
+        self.assertEqual(analysis["blocked_by"], [])
+        self.assertEqual(analysis["archive_resolved_deps"], ["REL-076"])
+
+    def test_index_miss_still_unknown_fail_closed(self):
+        analysis = ct.run_dependency_analysis(
+            _FIXTURE_TRACKER, ["FIX-171"],
+            archive_completed_ids=frozenset({"REL-076"}))
+        self.assertEqual(analysis["unknown_deps"], ["FIX-171"])
+        self.assertEqual(analysis["archive_resolved_deps"], [])
+
+    def test_no_archive_arg_keeps_baseline(self):
+        analysis = ct.run_dependency_analysis(_FIXTURE_TRACKER, ["FIX-999"])
+        self.assertEqual(analysis["unknown_deps"], ["FIX-999"])
+        self.assertEqual(analysis["archive_resolved_deps"], [])
+
+    def test_hot_incomplete_dep_still_blocks_even_if_archived_set_has_it(self):
+        # A hot non-✅ row is authoritative: the archive set only resolves
+        # IDs with NO hot row.
+        analysis = ct.run_dependency_analysis(
+            _FIXTURE_TRACKER, ["FIX-102"],
+            archive_completed_ids=frozenset({"FIX-102"}))
+        self.assertIn("FIX-102", analysis["blocked_by"])
+        self.assertEqual(analysis["archive_resolved_deps"], [])
+
+
 class PriorityAndVersionTests(unittest.TestCase):
     """Steps b + d — priority determination and version adaptation."""
 
@@ -529,6 +567,28 @@ class TriageRecordTests(unittest.TestCase):
         self.assertFalse((self.gov / "change-triage" / "FIX-103.json").exists())
         evidence = (self.gov / "evidence-log.md").read_text(encoding="utf-8")
         self.assertNotIn("TRIAGE-FIX-103", evidence)
+
+    def test_archived_dep_resolves_via_governance_archive_index(self):
+        """FIX-341 end-to-end: a dep with NO hot row but proven archived-
+        completed by ``.governance/archive/index.md`` passes the intake
+        (pre-fix it failed closed as an unknown dependency)."""
+        arch = self.gov / "archive"
+        arch.mkdir(parents=True, exist_ok=True)
+        (arch / "index.md").write_text(
+            "# 归档索引\n\n## Task 索引\n\n"
+            "| Task ID | 状态 | 版本 | 归档文件 |\n"
+            "|---------|------|------|---------|\n"
+            "| REL-076 | 已完成 (2026-09-12) | 0.80.0 | archive/tasks/v.md |\n",
+            encoding="utf-8")
+        summary = self._run(depends_on=["REL-076"])
+        self.assertFalse(summary.get("error"), summary)
+        record = json.loads(
+            (self.gov / "change-triage" / "FIX-103.json")
+            .read_text(encoding="utf-8"))
+        self.assertEqual(record["analysis"]["dependency"]["unknown_deps"], [])
+        self.assertEqual(
+            record["analysis"]["dependency"]["archive_resolved_deps"],
+            ["REL-076"])
 
     def test_invalid_priority_fails_closed(self):
         summary = self._run(priority="P3")

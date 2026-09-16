@@ -18778,5 +18778,442 @@ class Fix294Check36ArchiveResolutionTests(unittest.TestCase):
         self.assertGreater(src.index(call), src.index(panel))
 
 
+class ReviewRecordReviewerKeyTests(unittest.TestCase):
+    """FIX-314 — review_record 唯一键 ``(task, round)`` → ``(task, round, reviewer)``.
+
+    Key-face contract (canonical-first naming, DEC-195 全量范围):
+
+    - The canonical file ``review-{task}-R{n}.md`` stays the FIRST reviewer's
+      slot — byte-for-byte the pre-FIX-314 name, so legacy single-reviewer
+      records (no reviewer segment in the name) keep resolving and are never
+      rewritten.
+    - A record by a DIFFERENT reviewer for the same task+round lands in its
+      own namespaced file ``review-{task}-R{n}-{reviewer-slug}.md`` with the
+      mirrored evidence id ``REVIEW-{task}-R{n}-{SLUG}`` — the two halves of
+      one round never overwrite each other (REL-076 M-3 dual-half defect: the
+      second half used to hit the FIX-289⑤ exit-2 guard).
+    - Three identical keys (task+round+reviewer) still hit the FIX-289⑤
+      guard: rejected unless ``force`` (no silent overwrite — semantic
+      unchanged, key face widened).
+    - Consumers stay compatible without modification: the evidence id keeps
+      ``REVIEW-{task}-R{n}`` as its canonical prefix (Check 30/30c live-scan
+      row channel, commit-msg ``has_approved_review_evidence`` prefix match),
+      and reviewer-namespaced FILES are intentionally outside the Check 30/30c
+      file-scan name shape — their conclusion reaches Check 30 through the
+      evidence ROW channel.
+
+    Run (from repo root):
+        python -m unittest discover -s skills/software-project-governance/infra/tests -p test_verify_workflow.py -v
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="fix314_")
+        self.root = Path(self.tmpdir)
+        self.gov = self.root / ".governance"
+        self.gov.mkdir(parents=True)
+        self.report = self.root / "report.md"
+        self.report.write_text("# report\n", encoding="utf-8")
+
+    def _write(self, **overrides):
+        import review_record
+        kwargs = {
+            "task_id": "FIX-314",
+            "round_n": 0,
+            "result": "APPROVED",
+            "report_path": str(self.report),
+            "root": self.root,
+        }
+        kwargs.update(overrides)
+        return review_record.write_review_record(**kwargs)
+
+    def _canonical(self):
+        return self.gov / "review-FIX-314-R0.md"
+
+    def _namespaced(self, slug):
+        return self.gov / "review-FIX-314-R0-{0}.md".format(slug)
+
+    # ── 核心验收：同 task 同轮两位审查方各得一条记录 + 互不覆盖 ──
+
+    def test_two_reviewers_same_round_get_disjoint_records(self):
+        first = self._write(reviewer="Code Reviewer")
+        self.assertFalse(first.get("error"), first)
+        second = self._write(reviewer="Release Reviewer",
+                             result="APPROVED_WITH_NOTES")
+        self.assertFalse(second.get("error"), second)
+        # First reviewer owns the canonical slot (pre-FIX-314 name unchanged).
+        self.assertTrue(self._canonical().is_file())
+        self.assertIn("- reviewer: Code Reviewer",
+                      self._canonical().read_text(encoding="utf-8"))
+        self.assertIn("**审查结论**: **APPROVED**",
+                      self._canonical().read_text(encoding="utf-8"))
+        # Second reviewer gets its own namespaced record — no overwrite.
+        self.assertTrue(self._namespaced("release-reviewer").is_file())
+        ns_text = self._namespaced("release-reviewer").read_text(
+            encoding="utf-8")
+        self.assertIn("- reviewer: Release Reviewer", ns_text)
+        self.assertIn("**审查结论**: **APPROVED_WITH_NOTES**", ns_text)
+        self.assertIn("unresolved_blockers=0", ns_text)
+        # Evidence rows: mirrored ids, both landed, canonical prefix intact.
+        ev = (self.gov / "evidence-log.md").read_text(encoding="utf-8")
+        self.assertIn("| REVIEW-FIX-314-R0 | FIX-314 |", ev)
+        self.assertIn("| REVIEW-FIX-314-R0-RELEASE-REVIEWER | FIX-314 |", ev)
+        self.assertEqual(first["review_id"], "REVIEW-FIX-314-R0")
+        self.assertEqual(second["review_id"],
+                         "REVIEW-FIX-314-R0-RELEASE-REVIEWER")
+        self.assertEqual(second["review_file"],
+                         str(self._namespaced("release-reviewer")))
+
+    def test_second_reviewer_never_rewrites_legacy_canonical_history(self):
+        # Pre-FIX-314 machine record (canonical name, owner field present) —
+        # the REL-076 defect shape: Design half occupies R0.
+        legacy = (
+            "# Review Record (machine-written by review-record)\n"
+            "\n"
+            "- task: FIX-314\n"
+            "- round: R0\n"
+            "- date: 2026-09-12\n"
+            "- reviewer: Design Reviewer\n"
+            "- report: design-report.md\n"
+            "- wiring: pending\n"
+            "\n"
+            "**审查结论**: **APPROVED_WITH_NOTES**\n"
+            "\n"
+            "unresolved_blockers=0\n")
+        self._canonical().write_text(legacy, encoding="utf-8")
+        summary = self._write(reviewer="Release Reviewer")
+        self.assertFalse(summary.get("error"), summary)
+        # Historical file untouched (不重写历史文件), second half in its own file.
+        self.assertEqual(self._canonical().read_text(encoding="utf-8"), legacy)
+        self.assertTrue(self._namespaced("release-reviewer").is_file())
+
+    # ── FIX-289⑤ 守卫：三键全同仍拒绝（除非 force） ──
+
+    def test_same_three_keys_guard_rejects_without_force(self):
+        first = self._write(reviewer="Code Reviewer")
+        self.assertFalse(first.get("error"))
+        original = self._canonical().read_text(encoding="utf-8")
+        # Same task+round+reviewer → the canonical slot IS this reviewer's
+        # record → FIX-289⑤ guard fires exactly as before.
+        second = self._write(reviewer="Code Reviewer", result="NEEDS_CHANGE")
+        self.assertIn("error", second)
+        self.assertIn(str(self._canonical()), second["error"])
+        self.assertIn("force", second["error"])
+        self.assertEqual(self._canonical().read_text(encoding="utf-8"),
+                         original)
+        ev = (self.gov / "evidence-log.md").read_text(encoding="utf-8")
+        self.assertEqual(ev.count("| REVIEW-FIX-314-R0 |"), 1)
+
+    def test_namespaced_record_guard_rejects_same_reviewer_rerun(self):
+        self._write(reviewer="Code Reviewer")
+        self._write(reviewer="Release Reviewer")
+        ns_original = self._namespaced("release-reviewer").read_text(
+            encoding="utf-8")
+        rerun = self._write(reviewer="Release Reviewer",
+                            result="NEEDS_CHANGE")
+        self.assertIn("error", rerun)
+        self.assertIn(str(self._namespaced("release-reviewer")),
+                      rerun["error"])
+        self.assertEqual(
+            self._namespaced("release-reviewer").read_text(encoding="utf-8"),
+            ns_original)
+
+    def test_reviewerless_write_still_guarded_by_canonical_file(self):
+        # A reviewer-less write keeps the legacy key face: canonical file
+        # exists → rejected (the unnamed slot can never displace a named
+        # owner — no silent overwrite).
+        self._write(reviewer="Code Reviewer")
+        rerun = self._write()
+        self.assertIn("error", rerun)
+        self.assertIn(str(self._canonical()), rerun["error"])
+
+    def test_force_on_namespaced_record_backs_up_namespaced_file(self):
+        self._write(reviewer="Code Reviewer")
+        first = self._write(reviewer="Release Reviewer")
+        self.assertFalse(first.get("error"))
+        summary = self._write(reviewer="Release Reviewer",
+                              result="NEEDS_CHANGE", force=True)
+        self.assertFalse(summary.get("error"), summary)
+        self.assertTrue(summary["force_overwrite"])
+        backup = Path(summary["previous_record_backup"])
+        self.assertEqual(backup.parent, self.gov)
+        self.assertTrue(backup.name.startswith(
+            "review-FIX-314-R0-release-reviewer.pre-"))
+        self.assertIn("**审查结论**: **NEEDS_CHANGE**",
+                      self._namespaced("release-reviewer").read_text(
+                          encoding="utf-8"))
+
+    # ── P1-1（review-FIX-314-CODE-R0）：非 UTF-8 canonical 读取 → error dict ──
+
+    def _write_gbk_canonical(self):
+        """Seed the canonical slot with GBK bytes (valid non-UTF-8 content).
+
+        The Windows ANSI/GBK mojibake family is the realistic source here
+        (AUDIT-147 D6 / AUDIT-148 §4.3): a hand-written pre-FIX-260 record
+        saved in the system codepage must fail closed, never escape a raw
+        UnicodeDecodeError (a ValueError, NOT an OSError).
+        """
+        self._canonical().write_bytes(
+            "# Review Record\n"
+            "\n"
+            "- task: FIX-314\n"
+            "- round: R0\n"
+            "- reviewer: Design Reviewer\n"
+            "- 审查结论：需返工（GBK 编码）\n".encode("gbk"))
+
+    def test_gbk_canonical_owner_probe_fails_closed_to_error_dict(self):
+        # P1-1 main path: the owner-probe read must fail closed with the
+        # EXISTING error dict (exit-2 contract face, no new exception type),
+        # zero write.
+        self._write_gbk_canonical()
+        original = self._canonical().read_bytes()
+        summary = self._write(reviewer="Code Reviewer")
+        self.assertIn("error", summary)
+        self.assertIn("cannot read existing review record to resolve",
+                      summary["error"])
+        # Zero write (fail-closed): canonical bytes untouched, no namespaced
+        # file, no evidence row.
+        self.assertEqual(self._canonical().read_bytes(), original)
+        self.assertFalse(self._namespaced("code-reviewer").exists())
+        self.assertFalse((self.gov / "evidence-log.md").exists())
+
+    def test_gbk_canonical_force_backup_read_fails_closed_to_error_dict(self):
+        # P1-1 same-type gap on the force path (read-for-backup): force must
+        # also fail closed with the error dict, never a raw
+        # UnicodeDecodeError.
+        self._write_gbk_canonical()
+        original = self._canonical().read_bytes()
+        summary = self._write(force=True)  # reviewer-less → probe skipped
+        self.assertIn("error", summary)
+        self.assertIn("cannot read existing review record for backup",
+                      summary["error"])
+        self.assertEqual(self._canonical().read_bytes(), original)
+        self.assertFalse((self.gov / "evidence-log.md").exists())
+
+    # ── 输入校验（fail-closed） ──
+
+    def test_reviewer_without_ascii_slug_fails_closed(self):
+        summary = self._write(reviewer="///")
+        self.assertIn("error", summary)
+        self.assertIn("slug", summary["error"])
+        self.assertFalse(self._canonical().exists())
+        self.assertFalse(
+            (self.gov / "evidence-log.md").exists())
+
+    # ── Check 30 live-scan 口径（V1~V4 不回归 + 双半面同轮可表达） ──
+
+    def _activate_gov_paths(self):
+        return (patch.object(vw, "SAMPLE_PATH", self.gov / "plan-tracker.md"),
+                patch.object(vw, "EVIDENCE_PATH",
+                             self.gov / "evidence-log.md"),
+                patch.object(vw, "GOVERNANCE_DIR", self.gov))
+
+    def test_live_check30_accepts_dual_same_round_records(self):
+        self._write(reviewer="Code Reviewer")
+        self._write(reviewer="Release Reviewer",
+                    result="APPROVED_WITH_NOTES")
+        (self.gov / "plan-tracker.md").write_text(
+            "# 项目配置\n\n### 优先级一览\n"
+            "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 状态 |\n"
+            "| --- | --- | --- | --- | --- | --- |\n"
+            "| P2 | FIX-314 | dual-half fixture | — | 0.82.0 | ✅ 完成 |\n",
+            encoding="utf-8")
+        p1, p2, p3 = self._activate_gov_paths()
+        with p1, p2, p3:
+            result = vw.check_review_closure()
+        self.assertEqual(result["verdict"], "PASS", result["reason"])
+        self.assertEqual(result["violations"], [])
+        self.assertEqual(result["tasks_checked"], 1)
+
+    def test_live_check30_dual_records_merge_most_terminal_conclusion(self):
+        # Documented Check 30 口径 for same-round multi-reviewer rows: the
+        # rounds table keeps ONE entry per round and the most-terminal
+        # conclusion wins (review_domain._build_review_sequence duplicate
+        # merge). Both rows still parse through the canonical-prefix channel
+        # (reviewer-suffixed ids are never dropped).
+        self._write(reviewer="Code Reviewer")
+        self._write(reviewer="Release Reviewer", result="NEEDS_CHANGE")
+        (self.gov / "plan-tracker.md").write_text(
+            "# 项目配置\n\n### 优先级一览\n"
+            "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 状态 |\n"
+            "| --- | --- | --- | --- | --- | --- |\n"
+            "| P2 | FIX-314 | dual-half fixture | — | 0.82.0 | ✅ 完成 |\n",
+            encoding="utf-8")
+        p1, p2, p3 = self._activate_gov_paths()
+        with p1, p2, p3:
+            result = vw.check_review_closure()
+        # APPROVED (canonical, most terminal) masks NEEDS_CHANGE → no V1
+        # violation. Per-half NEEDS_CHANGE handling stays with the loop
+        # wiring (CODE→G6 / RELEASE→G9), not the Check 30 row merge.
+        self.assertEqual(result["verdict"], "PASS", result["reason"])
+        self.assertEqual(result["violations"], [])
+
+    def test_legacy_records_still_parse_check30_no_regression(self):
+        # 旧格式（canonical 文件名 + canonical 行 ID）解析兼容不回归——
+        # 含本会话既有机录 REVIEW-FIX-312-R0 同形态。
+        self._write()  # reviewer-less legacy shape
+        (self.gov / "plan-tracker.md").write_text(
+            "# 项目配置\n\n### 优先级一览\n"
+            "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 状态 |\n"
+            "| --- | --- | --- | --- | --- | --- |\n"
+            "| P2 | FIX-314 | legacy fixture | — | 0.82.0 | ✅ 完成 |\n",
+            encoding="utf-8")
+        p1, p2, p3 = self._activate_gov_paths()
+        with p1, p2, p3:
+            result = vw.check_review_closure()
+        self.assertEqual(result["verdict"], "PASS", result["reason"])
+        self.assertEqual(result["violations"], [])
+
+    # ── commit-msg hook 行前缀匹配（同步面①：无需改动，测试钉死） ──
+
+    _BASH_CANDIDATES = (
+        shutil.which("bash"),
+        r"C:\Program Files\Git\bin\bash.exe",
+        r"C:\Program Files\Git\usr\bin\bash.exe",
+    )
+
+    @classmethod
+    def _bash_exe(cls):
+        """A WORKING bash, or None.
+
+        ``shutil.which("bash")`` alone is not enough: on Windows the PATH may
+        resolve to the WSL stub (``system32\\bash.exe``), which exits non-zero
+        when no distro is installed — probing it keeps the FIX-314 hook
+        assertions skipped instead of red on such hosts (the pre-existing
+        FIX-261 harness in test_pre_commit_review_evidence.py has the same
+        exposure; this probe is local to the FIX-314 tests).
+        """
+        for candidate in cls._BASH_CANDIDATES:
+            if not candidate:
+                continue
+            try:
+                probe = subprocess.run(
+                    [candidate, "-c", "echo ok"], capture_output=True,
+                    timeout=15)
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+            if probe.returncode == 0:
+                return candidate
+        return None
+
+    def _run_commit_msg_hook(self, task_id, evidence_text):
+        """Execute the REAL ``has_approved_review_evidence`` from the
+        commit-msg hook source (extracted, not re-typed) against a fixture
+        evidence-log. Returns True/False (HIT/MISS)."""
+        from tests.test_pre_commit_review_evidence import (
+            _extract_function,
+            _win_to_msys_or_wsl,
+        )
+        bash = self._bash_exe()
+        if not bash:
+            self.skipTest("no working bash (hooks are bash)")
+        fn = _extract_function(_INFRA_DIR / "hooks" / "commit-msg")
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / ".governance").mkdir()
+            (root / ".governance" / "evidence-log.md").write_text(
+                evidence_text, encoding="utf-8")
+            root_posix = str(root).replace("\\", "/")
+            root_wsl = _win_to_msys_or_wsl(root_posix)
+            script = (
+                "REPO_ROOT={0!r}\n"
+                "[ -d \"$REPO_ROOT\" ] || REPO_ROOT=$(cygpath -u {1!r} "
+                "2>/dev/null || echo {1!r})\n"
+                "{2}\n"
+                'if has_approved_review_evidence "{3}"; then echo HIT; '
+                "else echo MISS; fi\n"
+            ).format(root_wsl, root_posix, fn, task_id)
+            script = script.replace("\r\n", "\n").replace("\r", "\n")
+            proc = subprocess.run(
+                [bash, "-s"], input=script.encode("utf-8"),
+                capture_output=True, timeout=30)
+        out = proc.stdout.decode("utf-8", "replace").strip()
+        self.assertIn(out, ("HIT", "MISS"),
+                      "hook run failed: rc={0} stderr={1!r}".format(
+                          proc.returncode, proc.stderr[:400]))
+        return out == "HIT"
+
+    def _hook_row(self, result, tail_cols):
+        return (
+            "| REVIEW-FIX-314-R0-CODE-REVIEWER | FIX-314 | 治理记录 | "
+            "review-record CLI 机器写入 review 结论记录（round 0） | "
+            "事实依据：review-record 输出摘要（机器写入） | report.md; "
+            "review-FIX-314-R0-code-reviewer.md | Code Reviewer | "
+            "2026-08-22 | G11 | {0}{1}").format(result, tail_cols)
+
+    def test_commit_msg_hook_matches_reviewer_suffixed_machine_row(self):
+        self.assertTrue(
+            self._run_commit_msg_hook(
+                "FIX-314",
+                self._hook_row("APPROVED_WITH_NOTES",
+                               " | unresolved_blockers=0 |") + "\n"),
+            "commit-msg must accept the reviewer-suffixed machine row")
+
+    def test_commit_msg_hook_still_rejects_needs_change_row(self):
+        self.assertFalse(
+            self._run_commit_msg_hook(
+                "FIX-314", self._hook_row("NEEDS_CHANGE", " |") + "\n"),
+            "NEEDS_CHANGE must not satisfy the approved-evidence gate")
+
+    # ── CLI 端到端两连发（临时 project root，不触碰真实 .governance/） ──
+
+    def test_cli_two_reviewers_end_to_end_double_fire(self):
+        base_cmd = [sys.executable, str(_INFRA_DIR / "verify_workflow.py"),
+                    "review-record", "--project-root", str(self.root),
+                    "--task", "FIX-314", "--round", "0",
+                    "--report", str(self.report)]
+        first = subprocess.run(
+            base_cmd + ["--result", "APPROVED",
+                        "--reviewer", "Code Reviewer"],
+            capture_output=True, text=True, encoding="utf-8", timeout=120)
+        self.assertEqual(first.returncode, 0, first.stderr)
+        payload1 = json.loads(first.stdout)
+        self.assertEqual(payload1["review_id"], "REVIEW-FIX-314-R0")
+        second = subprocess.run(
+            base_cmd + ["--result", "APPROVED_WITH_NOTES",
+                        "--reviewer", "Release Reviewer"],
+            capture_output=True, text=True, encoding="utf-8", timeout=120)
+        self.assertEqual(second.returncode, 0, second.stderr)
+        payload2 = json.loads(second.stdout)
+        self.assertEqual(payload2["review_id"],
+                         "REVIEW-FIX-314-R0-RELEASE-REVIEWER")
+        # Three identical keys via CLI → fail-closed exit 2 (guard intact).
+        third = subprocess.run(
+            base_cmd + ["--result", "NEEDS_CHANGE",
+                        "--reviewer", "Release Reviewer"],
+            capture_output=True, text=True, encoding="utf-8", timeout=120)
+        self.assertEqual(third.returncode, 2)
+        self.assertIn("error", third.stdout)
+        # Both records coexist; canonical history unchanged.
+        self.assertTrue(self._canonical().is_file())
+        self.assertTrue(self._namespaced("release-reviewer").is_file())
+        ev = (self.gov / "evidence-log.md").read_text(encoding="utf-8")
+        self.assertEqual(ev.count("| REVIEW-FIX-314-R0 |"), 1)
+        self.assertIn("| REVIEW-FIX-314-R0-RELEASE-REVIEWER |", ev)
+
+    def test_cli_gbk_canonical_yields_exit2_error_dict_not_traceback(self):
+        # P1-1 exit-2 contract face, end to end: a GBK canonical + a reviewer
+        # write must produce the structured error dict + exit 2 — never a
+        # bare traceback / exit 1 (pre-fix probe 7b,
+        # REVIEW-FIX-314-CODE-R0 P1-1).
+        self._write_gbk_canonical()
+        proc = subprocess.run(
+            [sys.executable, str(_INFRA_DIR / "verify_workflow.py"),
+             "review-record", "--project-root", str(self.root),
+             "--task", "FIX-314", "--round", "0",
+             "--report", str(self.report),
+             "--result", "APPROVED", "--reviewer", "Code Reviewer"],
+            capture_output=True, text=True, encoding="utf-8", timeout=120)
+        self.assertEqual(
+            proc.returncode, 2,
+            "rc={0} stderr={1!r}".format(proc.returncode,
+                                         proc.stderr[:400]))
+        payload = json.loads(proc.stdout)
+        self.assertIn("error", payload)
+        self.assertIn("cannot read existing review record", payload["error"])
+        self.assertNotIn("Traceback", proc.stderr)
+        # Zero write: no namespaced record may appear beside the GBK file.
+        self.assertFalse(self._namespaced("code-reviewer").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

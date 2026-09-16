@@ -20,9 +20,19 @@ Behavior contract (ADR-017 §3.4):
   - **复审必达**: a NEEDS_CHANGE record carries the structured revisit fields
     ``next_round=REVIEW-{id}-R{n+1}`` + ``prev_report`` so Check 30 V6 and the
     Coordinator can verify / spawn the R+1 revisit.
-  - **覆盖守卫 (FIX-289⑤)**: a review file is an immutable task+round record.
-    Writing over an existing ``review-{id}-R{n}.md`` is rejected (error dict,
-    nothing written — no overwrite, no evidence row) unless ``force=True``:
+  - **覆盖守卫 (FIX-289⑤ / FIX-314 three-key extension)**: a review file is
+    an immutable task+round+reviewer record (key extended from task+round by
+    FIX-314 so the two halves of one review round never collide — REL-076
+    M-3 dual-half defect). The FIRST reviewer of a round owns the canonical
+    ``review-{task}-R{n}.md`` name — legacy single-reviewer files included:
+    a file without a matching owner is never rewritten, only namespaced
+    around. A DIFFERENT reviewer for the same task+round lands in
+    ``review-{task}-R{n}-{reviewer-slug}.md`` with the mirrored evidence id
+    ``REVIEW-{task}-R{n}-{SLUG}`` (the ``REVIEW-{task}-R{n}`` canonical
+    prefix stays intact for the Check 30/30c live row scans and the
+    commit-msg evidence gate). Writing over a reviewer's OWN existing file
+    is rejected (error dict, nothing written — no overwrite, no evidence
+    row) unless ``force=True``:
     the deliberate overwrite then backs up the previous record
     (``review-{id}-R{n}.pre-<ts>.md``), marks the overwrite in the new record,
     and reports the backup in the summary (REL-073 same-number overwrite
@@ -74,6 +84,42 @@ _ROLE_TOKEN_RE = re.compile(r"(?:^|[_-])(CODE|DESIGN|RELEASE)(?:[_-]|$)")
 _TASK_ID_RE = re.compile(r"^[A-Z]+-\d+$")
 _RESULT_RE = re.compile(
     r"^(APPROVED|APPROVED_WITH_NOTES|NEEDS_CHANGE|BLOCKED)$", re.IGNORECASE)
+
+# FIX-314: the reviewer name namespaces the record key (task, round,
+# reviewer). The slug is deliberately ASCII-only (cross-platform filename
+# safety); a name that normalizes to nothing fails closed at the caller.
+_REVIEWER_SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+# FIX-314: the ``- reviewer:`` field line of an existing record — the owner
+# probe that decides whether an incoming record matches the canonical slot
+# or must be namespaced beside it.
+_RECORD_REVIEWER_RE = re.compile(
+    r"^[-*][ \t]*reviewer:[ \t]*(.+?)[ \t]*$", re.MULTILINE | re.IGNORECASE)
+
+
+def _reviewer_slug(reviewer):
+    """Normalize a reviewer name into a filename-safe slug (FIX-314).
+
+    Lower-case ASCII alnum runs joined by single dashes, e.g.
+    ``"Code Reviewer"`` → ``"code-reviewer"``. Returns ``""`` when nothing
+    survives (the caller fails closed — a reviewer that cannot name a file
+    must never silently collapse into another reviewer's slot).
+    """
+    return _REVIEWER_SLUG_RE.sub("-", str(reviewer or "").lower()).strip("-")
+
+
+def _read_record_reviewer(review_file):
+    """Return the ``- reviewer:`` owner of an existing record (FIX-314).
+
+    ``None`` when the field is absent (pre-FIX-314 single-reviewer
+    convention / handwritten record) — an unnamed owner is never treated as
+    a match, so the incoming reviewer is namespaced beside the legacy file
+    instead of claiming it. Read errors propagate: the caller fails closed
+    rather than guessing the owner of an unreadable record.
+    """
+    text = review_file.read_text(encoding="utf-8")
+    m = _RECORD_REVIEWER_RE.search(text)
+    return m.group(1).strip() if m else None
 
 
 def _detect_role(task_id, report_path):
@@ -253,16 +299,20 @@ def _review_file_text(task_id, round_n, result, reviewer, report_path,
 
 
 def _evidence_row(task_id, round_n, result, reviewer, report_path,
-                  review_file_name, date_str):
+                  review_file_name, date_str, review_id=None):
     """Evidence-log row in the Check 30 live-scan contract.
 
     Column shape mirrors existing rows: | id | task_ref | type | description |
     basis | artifacts | actor | date | gate | conclusion [| blocker token].
     The description intentionally carries NO ISO date and NO conclusion token
     so the live collector's first-match scan lands on the real columns.
+    ``review_id`` (FIX-314) is the caller-resolved record id — the canonical
+    ``REVIEW-{task}-R{n}`` for the round's first reviewer, or the mirrored
+    ``REVIEW-{task}-R{n}-{SLUG}`` for a namespaced second reviewer; either
+    way the Check 30/30c row scans keep matching its canonical prefix.
     """
     cells = [
-        "REVIEW-{0}-R{1}".format(task_id, round_n),
+        review_id or "REVIEW-{0}-R{1}".format(task_id, round_n),
         task_id,
         "治理记录",
         "review-record CLI 机器写入 review 结论记录（round {0}）".format(round_n),
@@ -304,6 +354,12 @@ def write_review_record(
         report_path: path of the reviewer's full report (embedded in the
             record and reused as prev_report for the R+1 revisit).
         reviewer: reviewer/agent name (also the loop actor when given).
+            FIX-314: part of the record key — the FIRST reviewer of a
+            task+round keeps the canonical ``review-{task}-R{n}.md`` name, a
+            DIFFERENT reviewer is namespaced to
+            ``review-{task}-R{n}-{reviewer-slug}.md`` (mirrored evidence id
+            ``REVIEW-{task}-R{n}-{SLUG}``). A name that does not normalize
+            to an ASCII slug fails closed.
         unit_id / gate_id: explicit flow-unit wiring (overrides the registry
             mapping).
         root: host project root — review file + evidence row land under
@@ -314,11 +370,12 @@ def write_review_record(
             wiring (tests / hosts where the runtime is not under root).
         plugin_home: forwarded to registry reads in process_gate_result.
         actor: loop actor override (defaults to reviewer or "review-record").
-        force: FIX-289⑤ overwrite opt-in. When the task+round record already
-            exists, the default (``force=False``) fails closed: an error dict
-            is returned and nothing is written (no overwrite, no evidence
-            row). ``force=True`` overwrites deliberately WITH an audit trail —
-            the previous record is backed up to
+        force: FIX-289⑤ overwrite opt-in (FIX-314: the guard key is the full
+            task+round+reviewer triple). When the reviewer's own record
+            already exists, the default (``force=False``) fails closed: an
+            error dict is returned and nothing is written (no overwrite, no
+            evidence row). ``force=True`` overwrites deliberately WITH an
+            audit trail — the previous record is backed up to
             ``review-{id}-R{n}.pre-<ts>.md`` beside the record, the new record
             carries a ``- force_overwrite:`` marker naming the backup, and the
             summary reports ``force_overwrite`` + ``previous_record_backup``.
@@ -354,29 +411,67 @@ def write_review_record(
     evidence_dir = Path(evidence_dir)
     evidence_dir.mkdir(parents=True, exist_ok=True)
 
+    # FIX-314 key-face resolution: the record key is (task, round, reviewer).
+    # The canonical name stays the FIRST reviewer's slot — backward
+    # compatible with every pre-FIX-314 record (a reviewer-less legacy file
+    # is an unnamed owner that is never rewritten); a DIFFERENT reviewer for
+    # the same task+round is namespaced beside it. The FIX-289⑤ guard below
+    # then protects each reviewer's OWN file: three identical keys are still
+    # refused without force, while the two halves of one review round
+    # (REL-076 M-3) never overwrite each other.
+    canonical_name = "review-{0}-R{1}.md".format(task_id, round_n)
+    review_file = evidence_dir / canonical_name
+    reviewer_slug = None
+    if reviewer:
+        reviewer_slug = _reviewer_slug(reviewer)
+        if not reviewer_slug:
+            return {"error": (
+                "reviewer does not normalize to a filename-safe slug "
+                "(ASCII alnum runs joined by dashes): {0!r}".format(reviewer))}
+        if review_file.exists():
+            try:
+                owner = _read_record_reviewer(review_file)
+            except (OSError, UnicodeDecodeError) as exc:
+                # UnicodeDecodeError is a ValueError, NOT an OSError: a
+                # non-UTF-8 record (the Windows GBK/ANSI mojibake family)
+                # must fail closed to the same error dict — review-FIX-314-
+                # CODE-R0 P1-1 — never escape as a raw traceback.
+                return {"error": (
+                    "cannot read existing review record to resolve the "
+                    "(task, round, reviewer) key: {0}".format(exc))}
+            if owner != str(reviewer).strip():
+                review_file = evidence_dir / (
+                    "review-{0}-R{1}-{2}.md".format(
+                        task_id, round_n, reviewer_slug))
     review_id = "REVIEW-{0}-R{1}".format(task_id, round_n)
-    review_file = evidence_dir / "review-{0}-R{1}.md".format(task_id, round_n)
+    if reviewer_slug is not None and review_file.name != canonical_name:
+        review_id = "REVIEW-{0}-R{1}-{2}".format(
+            task_id, round_n, reviewer_slug.upper())
     evidence_path = evidence_dir / "evidence-log.md"
     today = date.today().isoformat()
 
-    # 0. FIX-289⑤ overwrite guard: a task+round review record is immutable by
-    # default. Historical backfill / migrated records must never be silently
-    # replaced (REL-073 same-number overwrite near-miss). force=True opts in
-    # with an audit trail: the previous record is backed up beside the record
-    # (microsecond timestamp — repeated forces never collide) and the
-    # overwrite is marked in the new record + summary.
+    # 0. FIX-289⑤ overwrite guard: a task+round+reviewer review record is
+    # immutable by default. Historical backfill / migrated records must never
+    # be silently replaced (REL-073 same-number overwrite near-miss).
+    # force=True opts in with an audit trail: the previous record is backed
+    # up beside the record (microsecond timestamp — repeated forces never
+    # collide) and the overwrite is marked in the new record + summary.
     force_note = None
     if review_file.exists():
         if not force:
             return {"error": (
                 "review record already exists: {0} — refusing to overwrite "
-                "(FIX-289⑤ task+round record guard; historical backfill data "
-                "is protected). To replace it deliberately, re-run with "
-                "force=True: the previous record is backed up and the "
-                "overwrite is marked in the new record.".format(review_file))}
+                "(FIX-289⑤ task+round+reviewer record guard; historical "
+                "backfill data is protected). To replace it deliberately, "
+                "re-run with force=True: the previous record is backed up "
+                "and the overwrite is marked in the new record.".format(
+                    review_file))}
         try:
             previous_text = review_file.read_text(encoding="utf-8")
-        except OSError as exc:
+        except (OSError, UnicodeDecodeError) as exc:
+            # P1-1 (review-FIX-314-CODE-R0): same half-face on the force
+            # backup read — a non-UTF-8 record fails closed to the error
+            # dict, not to a raw UnicodeDecodeError.
             return {"error": (
                 "cannot read existing review record for backup: {0}".format(
                     exc))}
@@ -401,7 +496,7 @@ def write_review_record(
 
     row = _evidence_row(
         task_id, round_n, result_norm, reviewer, report_path,
-        review_file.name, today)
+        review_file.name, today, review_id=review_id)
     try:
         with evidence_path.open("a", encoding="utf-8") as fh:
             fh.write("\n" + row)
@@ -426,6 +521,7 @@ def write_review_record(
         "review_id": review_id,
         "task_id": task_id,
         "round": round_n,
+        "reviewer": reviewer,
         "result": result_norm,
         "review_file": str(review_file),
         "evidence_row_written": True,

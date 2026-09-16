@@ -47,7 +47,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -1458,6 +1458,73 @@ class DshAdapterTests(unittest.TestCase):
             payload["text"], launch.render_composition(),
             "the JS and Python renderers produced different compositions",
         )
+
+    def test_isolated_cr_template_renders_identically(self):
+        # FIX-313(a) / D-66: the shared line-ending contract of the two
+        # renderers is "fold `\r\n` to `\n`, leave an isolated `\r` alone".
+        # `test_js_and_python_renderers_agree` reads the SHIPPED template,
+        # which contains no isolated CR, so the lone-CR half of the contract
+        # is invisible to it (inventory D-67: the parity test "不注入 `\r` ⇒
+        # 抓不到 D-66"). This fixture injects exactly one isolated CR and
+        # requires the two delivery paths — `launch.render_composition()`
+        # (the `--install` path) and `renderComposition()` (the bundle-boot
+        # path), both against the same package root — to produce the
+        # identical byte string, with the CR SURVIVING on both sides (the
+        # direction FIX-316 pinned when it closed D-66). Either regression
+        # direction is caught: a renderer that folds the lone CR alone breaks
+        # parity, and a silent both-sides fold breaks the survival pins.
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node unavailable (JS renderer cannot be exercised)")
+        launch = _load_launch_module()
+        with tempfile.TemporaryDirectory() as td:
+            fixture = (
+                _TEMPLATE_PATH.read_text(encoding="utf-8").replace("\r\n", "\n")
+                + "\n# FIX-313 isolated-CR probe: X\rY\n"
+            )
+            self.assertEqual(fixture.count("\r"), 1,
+                             "fixture must carry exactly one lone CR")
+            fixture_path = Path(td) / "isolated-cr.template"
+            # `newline=""` keeps the writer from translating the probe CR
+            # back into the platform's text convention.
+            fixture_path.write_text(fixture, encoding="utf-8", newline="")
+
+            original_template = launch._composition_template
+            launch._composition_template = lambda: Path(fixture_path)
+            try:
+                with redirect_stdout(io.StringIO()), \
+                        redirect_stderr(io.StringIO()):
+                    rendered = launch.render_composition()
+            finally:
+                launch._composition_template = original_template
+            self.assertTrue(rendered, "the lone-CR fixture must still render")
+
+            lib_uri = (_REPO_ROOT / "lib" / "index.js").resolve().as_uri()
+            script = (
+                f"import {{ renderComposition }} from {json.dumps(lib_uri)};"
+                "import { readFileSync } from 'node:fs';"
+                "const t = readFileSync(process.argv[1], 'utf8');"
+                "process.stdout.write(JSON.stringify(renderComposition(t, process.argv[2])));"
+            )
+            result = subprocess.run(
+                [node, "--input-type=module", "-e", script,
+                 str(fixture_path),
+                 str(_REPO_ROOT.resolve()).replace("\\", "/")],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["leftovers"], [], payload)
+            # Parity: byte-identical compositions from the two delivery paths
+            # (string equality — the same fact a sha256 comparison would show).
+            self.assertEqual(
+                payload["text"], rendered,
+                "the JS and Python renderers disagree on the isolated-CR template",
+            )
+            self.assertEqual(rendered.count("\r"), 1,
+                             "lone CR must survive the Python path")
+            self.assertEqual(payload["text"].count("\r"), 1,
+                             "lone CR must survive the JS path")
 
     def test_lib_ensure_preset_renders_the_user_root_idempotently(self):
         # Acceptance path of the DEC-187 design: the inserted host row alone

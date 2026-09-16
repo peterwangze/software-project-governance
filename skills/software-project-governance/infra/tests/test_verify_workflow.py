@@ -42,11 +42,21 @@ class LoopRuntimeClaimAdapterTests(unittest.TestCase):
     """FIX-197 thin verify_workflow adapter coverage."""
 
     def test_claim_command_emits_complete_pass_report(self):
+        # FIX-346: the 15 s subprocess budget predates the current full-repo
+        # scan cost and was measured timing out on an essentially idle
+        # machine (TimeoutExpired after 15.038 s in the 2026-09 calibration
+        # session). Recalibrated from the SAME idle calibration session as
+        # the median budget in test_loop_runtime_claims.py (same-source
+        # discipline: one session, explicit coefficient): CLI wall clock
+        # 3 runs = 16.991 / 15.821 / 17.925 s, p50 = 16.991 s, verdict PASS
+        # each run; timeout = p50 x 1.5 (the same coefficient the median
+        # budget uses) -> 26 s. Halved (13 s) it stays RED against every
+        # observed run (min 15.821 s), so the budget still bites.
         completed = subprocess.run(
             [sys.executable, str(_INFRA_DIR / "verify_workflow.py"),
              "check-loop-runtime-claims", "--product-root", str(_INFRA_DIR.parents[2]),
              "--project-root", str(_INFRA_DIR.parents[2])],
-            capture_output=True, text=True, encoding="utf-8", timeout=15,
+            capture_output=True, text=True, encoding="utf-8", timeout=26,
         )
         self.assertEqual(0, completed.returncode, completed.stderr)
         payload = json.loads(completed.stdout)

@@ -2567,12 +2567,14 @@ def _collect_live_review_sequences():
             if m_legacy:
                 legacy_files.append({"file": name, "task_ref": m_legacy.group(1)})
                 continue
-            # New-format review-{id}-R{n}.md or review-{id}.md.
-            m_new = re.match(r"^review-([A-Z]+-\d+)(?:-R(\d+))?\.md$", name, re.IGNORECASE)
-            if not m_new:
+            # New-format review-{id}-R{n}.md or review-{id}.md, plus the
+            # FIX-314 namespaced review-{id}-R{n}-{slug}.md (FIX-344: the
+            # namespaced file feeds the SAME (task, round) aggregate — the
+            # duplicate-round merge below keeps its most-terminal conclusion).
+            parsed = _match_review_file_name(name)
+            if parsed is None:
                 continue
-            task_id = m_new.group(1)
-            round_n = int(m_new.group(2)) if m_new.group(2) else 0
+            task_id, round_n, _slug = parsed
             # Read conclusion from file content.
             conclusion = "UNKNOWN"
             source_format = "unknown"
@@ -2631,8 +2633,42 @@ REVIEW_MACHINE_FILE_MARKER = "machine-written by review-record"
 REVIEW_NEXT_ROUND_FIELD_RE = re.compile(r"next_round:\s*REVIEW-")
 _REVIEW_FILE_NAME_RE = re.compile(
     r"^review-([A-Z]+-\d+)(?:-R(\d+))?\.md$", re.IGNORECASE)
+# FIX-344 (review-FIX-314-CODE-R0 P2-1): namespaced second-reviewer records
+# (FIX-314) — ``review-{task}-R{n}-{slug}.md`` where slug is the LOWERCASE
+# reviewer slug (``review_record._reviewer_slug``) and the ``-R{n}`` segment
+# is ALWAYS present (the CLI never writes a round-less namespaced name).
+# Case-sensitive ON PURPOSE: the historical ROLE-token file shape
+# (``review-FEAT-002-CODE-R0.md``, uppercase tail) must stay OUTSIDE the
+# machine-record name shape — reclassifying those ~150 live files would flip
+# the Check 30 V1-V6 and 30c files_unmatched baselines.
+_REVIEW_FILE_NAMESPACED_RE = re.compile(
+    r"^review-([A-Z]+-\d+)-R(\d+)-([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)\.md$")
+# FIX-344: a slug-suffixed record id in an evidence ID cell —
+# ``REVIEW-{task}-R{n}-{SLUG}`` (review_record writes the slug UPPERCASE in
+# the mirrored evidence id). Group 1 = the canonical id prefix, group 2 = the
+# reviewer slug; the canonical prefix is what every existing row scan sees.
+_REVIEW_ROW_ID_SLUG_TAIL_RE = re.compile(
+    r"(REVIEW-[A-Z]+-\d+-R\d+)-([A-Z0-9](?:[A-Z0-9-]*[A-Z0-9])?)")
 _REVIEW_ROW_ID_FINDITER_RE = re.compile(r"REVIEW-[A-Z]+-\d+(?:-R\d+)?")
 REVIEW_FILE_DATE_RE = re.compile(r"^- date: (\d{4}-\d{2}-\d{2})\s*$", re.MULTILINE)
+
+
+def _match_review_file_name(name):
+    """FIX-344: parse a machine review-record filename (suffix-aware).
+
+    Returns ``(task_id, round_n, slug_or_None)`` for the canonical shape
+    (``review-{task}-R{n}.md`` / legacy ``review-{task}.md``) and the FIX-314
+    namespaced shape (``review-{task}-R{n}-{slug}.md``); None for everything
+    else (``-v*`` legacy files, ROLE-token names, prose-named files — those
+    stay in the files_unmatched bucket).
+    """
+    m = _REVIEW_FILE_NAME_RE.match(name)
+    if m:
+        return m.group(1), int(m.group(2) or 0), None
+    m = _REVIEW_FILE_NAMESPACED_RE.match(name)
+    if m:
+        return m.group(1), int(m.group(2)), m.group(3)
+    return None
 
 
 def check_review_machine_provenance(review_rows=None, review_files=None):
@@ -2649,7 +2685,12 @@ def check_review_machine_provenance(review_rows=None, review_files=None):
     effective date whose corresponding review file lacks the machine
     ``next_round: REVIEW-...`` field — or has no file at all → WARN. This
     makes the 复审必达 obligation derivable from evidence across sessions
-    (REQ-107 acceptance signal 2).
+    (REQ-107 acceptance signal 2). FIX-344: a slug-suffixed record id
+    (``REVIEW-{task}-R{n}-{SLUG}``, the FIX-314 second-reviewer shape) is
+    judged against its OWN namespaced file ``review-{task}-R{n}-{slug}.md`` —
+    the canonical sibling of the round's FIRST reviewer is never borrowed
+    (that borrow manufactured a false "lacks the field" WARN for every
+    compliant second-half NEEDS_CHANGE).
 
     FIX-291 / FIX-281⑧ (router WARN 10→13 growth) — row classification:
       * V7/V8 row judgments anchor on the ID COLUMN: only a row whose first
@@ -2725,10 +2766,21 @@ def check_review_machine_provenance(review_rows=None, review_files=None):
         except ValueError:
             return None
 
-    def _lookup_review_file(task_id, round_n):
-        """Find the machine-format review file content for task+round."""
+    def _lookup_review_file(task_id, round_n, slug=None):
+        """Find the machine-format review file content for task+round.
+
+        FIX-344: a slug-suffixed record id (``REVIEW-{task}-R{n}-{SLUG}``)
+        binds a row to its OWN namespaced file — the canonical sibling is
+        never borrowed for another reviewer's record (the review-FIX-314-R0
+        false-WARN shape: the second half's NEEDS_CHANGE was judged against
+        the first half's APPROVED file). ``slug=None`` keeps the legacy
+        canonical-only candidate list (pre-FIX-314 rows).
+        """
         candidates = []
-        if round_n and round_n > 0:
+        if slug:
+            candidates.append("review-{0}-R{1}-{2}.md".format(
+                task_id, round_n, slug.lower()))
+        elif round_n and round_n > 0:
             candidates.append("review-{0}-R{1}.md".format(task_id, round_n))
         else:
             candidates.append("review-{0}-R0.md".format(task_id))
@@ -2775,11 +2827,11 @@ def check_review_machine_provenance(review_rows=None, review_files=None):
         )
 
     for _name in files:
-        _m = _REVIEW_FILE_NAME_RE.match(_name)
-        if _m:
+        _parsed = _match_review_file_name(_name)
+        if _parsed:
             _text = files[_name] or ""
             _index_record(
-                _m.group(1), int(_m.group(2) or 0),
+                _parsed[0], _parsed[1],
                 rec_date=_file_date(_text),
                 valid=_extract_review_conclusion_from_text(_text) != "UNKNOWN",
             )
@@ -2819,13 +2871,13 @@ def check_review_machine_provenance(review_rows=None, review_files=None):
         if _LEGACY_REVIEW_FILE_RE.match(name):
             stats["files_legacy_skipped"] += 1
             continue
-        m = _REVIEW_FILE_NAME_RE.match(name)
-        if not m:
+        m = _match_review_file_name(name)
+        if m is None:
             # ROLE-token or other handwritten naming — covered by the row-level
             # V7 scan when an evidence row exists; counted, not judged.
             stats["files_unmatched"] += 1
             continue
-        task_id, round_n = m.group(1), int(m.group(2) or 0)
+        task_id, round_n, _slug = m
         fdate = _file_date(text)
         if fdate is None:
             stats["files_undated"] += 1
@@ -2874,6 +2926,13 @@ def check_review_machine_provenance(review_rows=None, review_files=None):
                 stats["rows_non_review"] += 1
             continue
         stats["rows_scanned"] += 1
+        # FIX-344: map canonical id → reviewer slug for slug-suffixed record
+        # ids (REVIEW-{task}-R{n}-{SLUG}) — a slugged row is bound to its OWN
+        # namespaced file in the V8 lookup below (the canonical sibling of a
+        # DIFFERENT reviewer is never borrowed).
+        slug_by_cid = {}
+        for _m_slug in _REVIEW_ROW_ID_SLUG_TAIL_RE.finditer(id_cell):
+            slug_by_cid[_m_slug.group(1)] = _m_slug.group(2)
         row_date = None
         for part in parts[3:]:
             m_date = re.match(r"^(\d{4}-\d{2}-\d{2})$", part)
@@ -2917,7 +2976,12 @@ def check_review_machine_provenance(review_rows=None, review_files=None):
                 # (file overwritten by a later same-number write, REL-070).
                 if _next_round_discharged(task_id, round_n, row_date):
                     continue
-                fname, ftext = _lookup_review_file(task_id, round_n)
+                # FIX-344: a slug-suffixed id is judged against its OWN
+                # namespaced record file (review_record FIX-314 writes the
+                # slug UPPERCASE in the id, lowercase in the filename);
+                # slug=None rows keep the legacy canonical candidates.
+                fname, ftext = _lookup_review_file(
+                    task_id, round_n, slug=slug_by_cid.get(cid))
                 if ftext is None or not REVIEW_NEXT_ROUND_FIELD_RE.search(ftext):
                     warnings.append({
                         "rule": "V8",

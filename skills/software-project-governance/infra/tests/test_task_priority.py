@@ -36,6 +36,7 @@ Run:
     python -m pytest skills/software-project-governance/infra/tests/test_task_priority.py -v
 """
 
+import json
 import os
 import sys
 import subprocess
@@ -51,9 +52,11 @@ if str(_INFRA) not in sys.path:
 from task_priority import (  # noqa: E402  (import after sys.path setup)
     BlockedTask,
     PriorityReport,
+    TPA_STATE_FILENAME,
     TaskDep,
     _MAX_ROOT_WALK_DEPTH,
     _ROOT_KIND_CYCLE,
+    _archive_index_status_is_completed,
     _is_task_family_id,
     _version_tuple,
     _walk_blocker_roots,
@@ -1938,6 +1941,49 @@ class TestArchiveIndexCompletedIds(unittest.TestCase):
         ids = parse_archive_index_completed_ids(text)
         self.assertIn("FIX-115", ids)
 
+    def test_negative_completion_compounds_do_not_resolve(self):
+        """FIX-342 P2-1 (review-FIX-341-312-CODE-R0): negative-completion
+        compound wordings in the 状态 cell are NOT archived-completed.
+
+        Pre-fix the positive substring 完成 matched 未完成/待完成/完成条件
+        未满足/任务完成度50% (probe → True). The negative-marker table must
+        veto them (unless the ✅ escape is present), while every positive
+        control keeps resolving."""
+        for status in ("未完成", "待完成", "尚未完成",
+                       "完成条件未满足", "任务完成度50%"):
+            self.assertFalse(
+                _archive_index_status_is_completed(status),
+                "{0!r} is not an archived-completed wording".format(status))
+        # Positive controls (zero-flip guard): real-index wordings and the
+        # ✅ escape keep resolving.
+        for status in ("已完成 (2026-09-16)", "完成", "实现完成",
+                       "发布完成", "已发布", "待执行/暂停→✅ 完成"):
+            self.assertTrue(
+                _archive_index_status_is_completed(status),
+                "{0!r} must keep resolving (zero-flip guard)".format(status))
+
+    def test_negative_completion_compound_index_rows_do_not_resolve(self):
+        """End-to-end through the index parser: compound-word rows stay out,
+        completion + ✅-escape rows still resolve."""
+        text = (
+            "## Task 索引\n\n"
+            "| Task ID | 状态 | 版本 | 归档文件 |\n"
+            "|---------|------|------|---------|\n"
+            "| FIX-903 | 未完成 | 0.90.0 | archive/tasks/a.md |\n"
+            "| FIX-904 | 待完成 (条件未满足) | 0.90.0 | archive/tasks/a.md |\n"
+            "| FIX-905 | 完成条件未满足 | 0.90.0 | archive/tasks/a.md |\n"
+            "| FIX-906 | 任务完成度50% | 0.90.0 | archive/tasks/a.md |\n"
+            "| FIX-907 | 已完成 (2026-09-16) | 0.82.0 | archive/tasks/a.md |\n"
+            "| FIX-908 | 待执行/暂停→✅ 完成 | 0.82.0 | archive/tasks/a.md |\n"
+        )
+        ids = parse_archive_index_completed_ids(text)
+        for tid in ("FIX-903", "FIX-904", "FIX-905", "FIX-906"):
+            self.assertNotIn(tid, ids,
+                             "{0} must NOT resolve as completed".format(tid))
+        for tid in ("FIX-907", "FIX-908"):
+            self.assertIn(tid, ids,
+                          "{0} must keep resolving as completed".format(tid))
+
 
 def _arch_dep_task(task_id, deps):
     """One ⏳ pending task row with the given task-family deps (in-memory)."""
@@ -2085,6 +2131,34 @@ class TestTaskPriorityCliArchiveIndex(unittest.TestCase):
         self.assertNotIn(
             "复用上次分析", rerun.stdout,
             "archive-index change must invalidate the cached analysis")
+
+    def test_legacy_cache_without_index_mtime_key_upgrades_not_reused(self):
+        """FIX-342 P3-3 (review-FIX-341-312-CODE-R0 P3-3): the upgrade
+        scenario — a same-day cache written by a PRE-FIX-341 build carries NO
+        ``archive_index_mtime`` key. With an archive index present, the cache
+        guard must force ONE full re-run (None != mtime) — never reuse a
+        report that did not see the index. The tracker mtime is preserved so
+        the FEAT-012 reuse predicate alone would hit: only the FIX-341 guard
+        can reject here."""
+        root = self._write_fixture()
+        first = self._run_cli(root)
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        state_path = Path(root) / ".governance" / TPA_STATE_FILENAME
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        self.assertIn("archive_index_mtime", state)  # new-build sanity
+        self.assertIsNotNone(state["archive_index_mtime"])
+        legacy = {k: v for k, v in state.items()
+                  if k != "archive_index_mtime"}
+        st = state_path.stat()
+        state_path.write_text(
+            json.dumps(legacy, ensure_ascii=False), encoding="utf-8")
+        os.utime(state_path, (st.st_atime, st.st_mtime))
+        rerun = self._run_cli(root)
+        self.assertEqual(rerun.returncode, 0, rerun.stdout + rerun.stderr)
+        self.assertNotIn(
+            "复用上次分析", rerun.stdout,
+            "legacy cache (no archive_index_mtime key) + index present must "
+            "not be reused — one extra full run, never a stale report")
 
 
 if __name__ == "__main__":

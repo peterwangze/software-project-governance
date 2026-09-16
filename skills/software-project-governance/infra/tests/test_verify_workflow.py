@@ -18797,10 +18797,12 @@ class ReviewRecordReviewerKeyTests(unittest.TestCase):
       unchanged, key face widened).
     - Consumers stay compatible without modification: the evidence id keeps
       ``REVIEW-{task}-R{n}`` as its canonical prefix (Check 30/30c live-scan
-      row channel, commit-msg ``has_approved_review_evidence`` prefix match),
-      and reviewer-namespaced FILES are intentionally outside the Check 30/30c
-      file-scan name shape — their conclusion reaches Check 30 through the
-      evidence ROW channel.
+      row channel, commit-msg ``has_approved_review_evidence`` prefix match).
+      FIX-344 (review-FIX-314-CODE-R0 P2-1) supersedes the earlier "namespaced
+      FILES stay outside the 30c name shape" stance: the file channel is now
+      suffix-aware and judges each reviewer's OWN file, so a compliant
+      second-half NEEDS_CHANGE no longer borrows the canonical sibling's
+      fields (the false "lacks the field" WARN shape).
 
     Run (from repo root):
         python -m unittest discover -s skills/software-project-governance/infra/tests -p test_verify_workflow.py -v
@@ -19213,6 +19215,240 @@ class ReviewRecordReviewerKeyTests(unittest.TestCase):
         self.assertNotIn("Traceback", proc.stderr)
         # Zero write: no namespaced record may appear beside the GBK file.
         self.assertFalse(self._namespaced("code-reviewer").exists())
+
+
+class ReviewFileSuffixAwarenessTests(unittest.TestCase):
+    """FIX-344 — Check 30c 文件通道后缀感知 + V8 查证自身文件.
+
+    review-FIX-314-CODE-R0 P2-1 三点盲区修复的回归面：
+
+    - a. V8 假 WARN：第二半面（namespaced）NEEDS_CHANGE 行 → 旧逻辑借查
+      canonical 兄弟文件（APPROVED 半面，无 next_round）→ 报「lacks the
+      field」假 WARN。修复 = slug 后缀行绑定自身 namespaced 文件。
+    - b. namespaced 文件永入 files_unmatched 逃过文件级 V7/V8。修复 =
+      文件名形接受 review-{task}-R{n}-{slug}.md（小写 slug；ROLE-token
+      大写尾文件保持 unmatched——live ~150 个历史文件不得翻转）。
+    - c. 双记录同轮聚合语义不回归：Check 30 序列构建中 namespaced 文件
+      并入同 (task, round)，重复轮合并仍取最 terminal 结论。
+    """
+
+    @staticmethod
+    def _machine_row(task, round_n, result, slug=None, date="2026-09-01"):
+        rid = "REVIEW-{0}-R{1}".format(task, round_n)
+        fname = "review-{0}-R{1}.md".format(task, round_n)
+        if slug:
+            rid += "-" + slug
+            fname = "review-{0}-R{1}-{2}.md".format(task, round_n,
+                                                    slug.lower())
+        return (
+            "| {rid} | {t} | 治理记录 | review-record CLI 机器写入 review "
+            "结论记录（round {n}） | 事实依据：review-record 输出摘要（机器"
+            "写入） | r.md; {f} | rv | {d} | G11 | {r} |"
+        ).format(rid=rid, t=task, n=round_n, f=fname, d=date, r=result)
+
+    @staticmethod
+    def _machine_file_text(task, round_n, result, date="2026-09-01",
+                           include_next_round=True):
+        lines = [
+            "# Review Record (machine-written by review-record)",
+            "",
+            "- task: {0}".format(task),
+            "- round: R{0}".format(round_n),
+            "- date: {0}".format(date),
+            "- reviewer: rv",
+            "- report: r.md",
+            "- wiring: pending",
+            "",
+            "**审查结论**: **{0}**".format(result),
+        ]
+        if result == "NEEDS_CHANGE" and include_next_round:
+            lines += ["", "## 复审必达（NEEDS_CHANGE）", "",
+                      "- next_round: REVIEW-{0}-R{1}".format(task, round_n + 1),
+                      "- prev_report: r.md"]
+        lines.append("")
+        return "\n".join(lines)
+
+    # ── b. namespaced 文件入 matched 桶（文件级 V7/V8 判定） ─────────────
+
+    def test_namespaced_machine_file_is_judged_not_unmatched(self):
+        r = vw.check_review_machine_provenance(
+            review_rows=[],
+            review_files={
+                "review-FIX-400-R0-design.md": self._machine_file_text(
+                    "FIX-400", 0, "NEEDS_CHANGE"),
+            })
+        self.assertEqual(r["warnings"], [], r["warnings"])
+        self.assertEqual(r["stats"]["files_judged"], 1)
+        self.assertEqual(r["stats"]["files_unmatched"], 0)
+        self.assertEqual(r["verdict"], "PASS")
+
+    def test_namespaced_handwritten_file_warns_v7(self):
+        """文件级 V7 对 namespaced 同样生效（matched 桶不是豁免）。"""
+        body = self._machine_file_text(
+            "FIX-401", 0, "APPROVED").replace(
+            "# Review Record (machine-written by review-record)", "# Review")
+        r = vw.check_review_machine_provenance(
+            review_rows=[],
+            review_files={"review-FIX-401-R0-design.md": body})
+        self.assertTrue(
+            [w for w in r["warnings"] if w["rule"] == "V7"], r["warnings"])
+        self.assertEqual(r["stats"]["files_unmatched"], 0)
+
+    def test_role_token_files_stay_unmatched(self):
+        """零翻转守卫：大写 ROLE-token 尾与 prose 尾的历史文件形态保持
+        unmatched（live ~150 文件不得翻入判定面）。"""
+        r = vw.check_review_machine_provenance(
+            review_rows=[],
+            review_files={
+                "review-FIX-402-CODE-R0.md": self._machine_file_text(
+                    "FIX-402", 0, "APPROVED"),
+                "review-AUDIT-099-full-project-audit-2026-05-12.md":
+                    self._machine_file_text("AUDIT-099", 0, "APPROVED"),
+            })
+        self.assertEqual(r["warnings"], [], r["warnings"])
+        self.assertEqual(r["stats"]["files_unmatched"], 2)
+        self.assertEqual(r["stats"]["files_judged"], 0)
+
+    # ── a. V8 借查 canonical 兄弟的假 WARN（R0 探针形态） ────────────────
+
+    def test_second_half_needs_change_row_no_false_v8_borrow(self):
+        """红→绿（R0 30c 探针原样）：canonical(APPROVED) +
+        namespaced(NEEDS_CHANGE 带 next_round) + 第二半面机器行 → 不得产生
+        「file review-X-R0.md lacks the field」假 WARN。"""
+        rows = [self._machine_row("FIX-410", 0, "NEEDS_CHANGE",
+                                  slug="DESIGN-REVIEWER")]
+        files = {
+            "review-FIX-410-R0.md": self._machine_file_text(
+                "FIX-410", 0, "APPROVED"),
+            "review-FIX-410-R0-design-reviewer.md": self._machine_file_text(
+                "FIX-410", 0, "NEEDS_CHANGE"),
+        }
+        r = vw.check_review_machine_provenance(review_rows=rows,
+                                               review_files=files)
+        self.assertEqual(r["warnings"], [], r["warnings"])
+
+    def test_namespaced_row_without_own_file_still_warns_v8(self):
+        """边界（不放宽）：slug 行的自身文件缺失时——即使 canonical 兄弟
+        存在——复审义务不可机读，V8 WARN 保持（不借查他方记录）。"""
+        rows = [self._machine_row("FIX-411", 0, "NEEDS_CHANGE",
+                                  slug="DESIGN-REVIEWER")]
+        files = {
+            "review-FIX-411-R0.md": self._machine_file_text(
+                "FIX-411", 0, "APPROVED"),
+        }
+        r = vw.check_review_machine_provenance(review_rows=rows,
+                                               review_files=files)
+        v8 = [w for w in r["warnings"] if w["rule"] == "V8"]
+        self.assertTrue(v8, r["warnings"])
+
+    def test_namespaced_file_without_next_round_still_warns_v8(self):
+        """边界（不放宽）：namespaced 文件 NEEDS_CHANGE 但缺 next_round →
+        V8 WARN 保持，且归属自身文件（不再指向 canonical 兄弟）。"""
+        rows = [self._machine_row("FIX-412", 0, "NEEDS_CHANGE",
+                                  slug="DESIGN-REVIEWER")]
+        files = {
+            "review-FIX-412-R0.md": self._machine_file_text(
+                "FIX-412", 0, "APPROVED"),
+            "review-FIX-412-R0-design-reviewer.md":
+                self._machine_file_text(
+                    "FIX-412", 0, "NEEDS_CHANGE",
+                    include_next_round=False),
+        }
+        r = vw.check_review_machine_provenance(review_rows=rows,
+                                               review_files=files)
+        v8 = [w for w in r["warnings"] if w["rule"] == "V8"]
+        self.assertTrue(v8, r["warnings"])
+        # The row-channel V8 names the record's OWN file; the file-channel
+        # V8 (new matched bucket) carries no filename. Neither may point at
+        # the canonical sibling.
+        self.assertTrue(
+            any("review-FIX-412-R0-design-reviewer.md" in w["reason"]
+                for w in v8), v8)
+        self.assertTrue(
+            all("review-FIX-412-R0.md " not in w["reason"] + " "
+                for w in v8), v8)
+
+    def test_namespaced_r1_discharges_r0_needs_change_row(self):
+        """V8 溯源豁免聚合：R0 NEEDS_CHANGE 行 + canonical R0 被终写覆盖
+        （无字段）+ namespaced R1 有效记录 → 复审义务已履行，无 WARN。"""
+        rows = [self._machine_row("FIX-413", 0, "NEEDS_CHANGE")]
+        files = {
+            "review-FIX-413-R0.md": self._machine_file_text(
+                "FIX-413", 0, "APPROVED"),
+            "review-FIX-413-R1-qa.md": self._machine_file_text(
+                "FIX-413", 1, "APPROVED_WITH_NOTES", date="2026-09-02"),
+        }
+        r = vw.check_review_machine_provenance(review_rows=rows,
+                                               review_files=files)
+        self.assertEqual(r["warnings"], [], r["warnings"])
+
+    # ── c. 双记录同轮聚合语义（Check 30 序列构建不回归） ─────────────────
+
+    def test_dual_half_same_round_aggregate_most_terminal_wins(self):
+        """红→绿（R0 漏网点）：namespaced 文件并入同 (task, round) 聚合，
+        重复轮合并取最 terminal 结论——canonical(NEEDS_CHANGE) +
+        namespaced(APPROVED) → 轮次视图 APPROVED。"""
+        with tempfile.TemporaryDirectory(prefix="fix344_") as td:
+            gov = Path(td) / ".governance"
+            gov.mkdir()
+            (gov / "review-FIX-420-R0.md").write_text(
+                self._machine_file_text("FIX-420", 0, "NEEDS_CHANGE"),
+                encoding="utf-8")
+            (gov / "review-FIX-420-R0-qa.md").write_text(
+                self._machine_file_text("FIX-420", 0, "APPROVED_WITH_NOTES"),
+                encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", Path(td) / "absent-plan.md"), \
+                 patch.object(vw, "EVIDENCE_PATH",
+                              Path(td) / "absent-evidence.md"), \
+                 patch.object(vw, "GOVERNANCE_DIR", gov):
+                sequences, _completed = vw._collect_live_review_sequences()
+        rounds = sequences["FIX-420"]["rounds"]
+        self.assertEqual(
+            rounds[0]["conclusion"], "APPROVED_WITH_NOTES",
+            "the namespaced half must join the round aggregate and the "
+            "most-terminal conclusion must win")
+
+    # ── 端到端：review_record 双审查方产出 → Check 30c 全绿 ─────────────
+
+    def test_cli_two_reviewer_records_pass_check30c(self):
+        """端到端（REQ-107 契约）：review-record 两位审查方（canonical +
+        namespaced，第二半面 NEEDS_CHANGE）的全部产出必须通过 Check 30c——
+        无假 WARN，files_unmatched=0。"""
+        import review_record
+        with tempfile.TemporaryDirectory(prefix="fix344_e2e_") as td:
+            root = Path(td)
+            gov = root / ".governance"
+            gov.mkdir()
+            report = root / "report.md"
+            report.write_text("# report\n", encoding="utf-8")
+            first = review_record.write_review_record(
+                task_id="FIX-421", round_n=0, result="APPROVED",
+                report_path=str(report), reviewer="Code Reviewer",
+                root=root)
+            self.assertFalse(first.get("error"), first)
+            second = review_record.write_review_record(
+                task_id="FIX-421", round_n=0, result="NEEDS_CHANGE",
+                report_path=str(report), reviewer="Design Reviewer",
+                root=root)
+            self.assertFalse(second.get("error"), second)
+            self.assertEqual(second["review_id"],
+                             "REVIEW-FIX-421-R0-DESIGN-REVIEWER")
+            rows = [
+                line for line in
+                (gov / "evidence-log.md").read_text(
+                    encoding="utf-8").splitlines()
+                if line.strip().startswith("|")
+            ]
+            files = {
+                rf.name: rf.read_text(encoding="utf-8")
+                for rf in gov.glob("review-*.md")
+            }
+            r = vw.check_review_machine_provenance(review_rows=rows,
+                                                   review_files=files)
+            self.assertEqual(r["warnings"], [], r["warnings"])
+            self.assertEqual(r["verdict"], "PASS")
+            self.assertEqual(r["stats"]["files_unmatched"], 0)
+            self.assertEqual(r["stats"]["files_judged"], 2)
 
 
 if __name__ == "__main__":

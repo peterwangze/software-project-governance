@@ -233,5 +233,135 @@ class RiskPathUnchangedTests(unittest.TestCase):
             "0.38.0")
 
 
+class Fix342DefensiveSurfaceTests(unittest.TestCase):
+    """FIX-342 — review-FIX-341-312-CODE-R0 defensive-surface gaps.
+
+    P2-2: the headerless fallback trusted ``data_cells[-2]`` for ragged
+    4≤cells<11 rows — a title/ctx-cell archived ref could be misread as the
+    governing ref (R0 probe: headerless 6-cell row → would_archive). The
+    fallback now requires the canonical 11-column schema and fails closed
+    (decision_row_too_short) otherwise.
+
+    P3-2: ``_decision_related_column_index`` scanned the WHOLE file, so a
+    body narrative table carrying an exact 「关联任务」 cell could shadow the
+    real header (live data never triggers — header is at file top). The scan
+    is now limited to the header area (before the first separator row).
+    """
+
+    def setUp(self):
+        import archive  # noqa: F401  (module-level sys.path injection applies)
+        self.archive = archive
+        self.tempdir = tempfile.TemporaryDirectory(prefix="spg-fix342-")
+        self.root = Path(self.tempdir.name)
+        self.gov = self.root / ".governance"
+        self.gov.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(self.tempdir.cleanup)
+
+    def _write_decision_log(self, rows, header=False):
+        lines = ["# 决策记录", ""]
+        if header:
+            lines += [_DECISION_HEADER, _DECISION_SEPARATOR]
+        lines += rows
+        (self.gov / "decision-log.md").write_text(
+            "\n".join(lines) + "\n", encoding="utf-8")
+
+    def _migrate(self, task_versions, dry_run=False, explain_out=None):
+        with patch.object(self.archive, "ROOT", self.root), \
+                patch.object(self.archive, "PLUGIN_ROOT", self.root):
+            return self.archive._migrate_decisions(
+                "0.1.0", "0.80.0", task_versions,
+                dry_run=dry_run, explain_out=explain_out)
+
+    # ── P2-2: headerless fallback requires the canonical column count ────
+
+    def test_headerless_short_row_fails_closed_too_short(self):
+        """R0 P2-2 probe (red→green): a headerless 6-cell row whose 5th cell
+        carries an archived task ref must NOT treat that cell as the
+        governing 关联任务 column (pre-fix: would_archive v0.77.0)."""
+        short = "| DEC-300 | 2026-09-16 | 标题 | 背景 | FIX-084 | 范围 |"
+        self._write_decision_log([short])
+        explain = []
+        count = self._migrate(
+            {"FIX-084": "0.77.0"}, dry_run=True, explain_out=explain)
+        self.assertEqual(count, 0,
+                         "a structurally short headerless row must not "
+                         "migrate (fail-closed)")
+        reasons = {r["id"]: r["reason"] for r in explain}
+        self.assertEqual(reasons.get("DEC-300"), "decision_row_too_short")
+
+    def test_headerless_noncanonical_lengths_fail_closed(self):
+        """Boundary: the fallback accepts ONLY the canonical 11 columns —
+        4/6/10/12-cell headerless rows are all decision_row_too_short."""
+        for cell_count, label in ((4, "min-boundary"), (6, "ragged"),
+                                  (10, "one-short"), (12, "one-over")):
+            dec_id = "DEC-{0}".format(310 + cell_count)
+            parts = ([dec_id, "2026-09-16"]
+                     + ["c{0}".format(i) for i in range(3, cell_count + 1)])
+            parts[-2] = "FIX-084"  # a wrong fallback would misread this cell
+            row = "| " + " | ".join(parts) + " |"
+            with self.subTest(cells=cell_count, label=label):
+                self._write_decision_log([row])
+                explain = []
+                count = self._migrate(
+                    {"FIX-084": "0.77.0"}, dry_run=True, explain_out=explain)
+                self.assertEqual(count, 0)
+                reasons = {r["id"]: r["reason"] for r in explain}
+                self.assertEqual(
+                    reasons.get(dec_id), "decision_row_too_short")
+
+    def test_headerless_canonical_row_still_migrates(self):
+        """Zero-flip guard: the canonical 11-column headerless row keeps the
+        fallback semantics (mirrors the test_archive.py legacy fixtures)."""
+        legacy_row = (
+            "| DEC-001 | 2026-05-01 | Old decision | ctx | decision | alt "
+            "| reason | impact | owner | FIX-084, REL-013 | scope |")
+        self._write_decision_log([legacy_row])
+        count = self._migrate(
+            {"FIX-084": "0.38.0", "REL-013": "0.38.0"}, dry_run=True)
+        self.assertEqual(count, 1, "canonical headerless row must still "
+                                   "migrate (all refs archived)")
+
+    # ── P3-2: header-area-limited column scan ────────────────────────────
+
+    def test_body_table_never_answers_when_header_area_has_none(self):
+        """R0 P3-2 mechanism (red→green): when the header area declares no
+        「关联任务」 cell, a body narrative table carrying one must NOT
+        answer — the scan stops at the first separator row and returns None
+        (the caller then uses the canonical fallback)."""
+        lines = [
+            "# 决策记录",
+            "",
+            "| 编号 | 日期 | 主题 |",       # legacy 3-col header area
+            "| --- | --- |",
+            "| DEC-001 | 2026-05-01 | 旧决策 |",
+            "",
+            "## 附录：字段说明", "",
+            "| 字段 | 说明 |",
+            "| --- | --- |",
+            "| 关联任务 | governing refs 列 |",
+        ]
+        self.assertIsNone(self.archive._decision_related_column_index(lines))
+
+    def test_header_still_found_and_body_decoy_ignored(self):
+        """Zero-flip guard: the real header (first table, before the first
+        separator) still answers, and a later narrative table cannot
+        shadow it."""
+        lines = [
+            "# 决策记录",
+            "",
+            _DECISION_HEADER,
+            _DECISION_SEPARATOR,
+            "| DEC-187 | 2026-09-12 | 主题 | 背景 | 决策 | 备选 | 原因 "
+            "| 影响 | 决策人 | FIX-310 | 后续 |",
+            "",
+            "## 附录：字段说明", "",
+            "| 字段 | 关联任务 |",
+            "| --- | --- |",
+            "| 注 | 见上 |",
+        ]
+        self.assertEqual(
+            self.archive._decision_related_column_index(lines), 9)
+
+
 if __name__ == "__main__":
     unittest.main()

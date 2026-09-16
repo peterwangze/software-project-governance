@@ -632,12 +632,16 @@ _ARCHIVE_TASK_SECTION_HEADING = "## Task 索引"
 # without a full PASS (保守闭环), indirect closures (间接闭合), cancellations
 # (已终止/已撤回/失效), pending/queued/planning states (未开始/待执行/进行中/
 # 规划入账/暂停), and legacy rows where the 状态 column carries a priority or
-# a description. EXCEPTION: a cell that also carries the ✅ emoji (e.g. the
+# a description. FIX-342 (review-FIX-341-312-CODE-R0 P2-1) adds the
+# negative-completion COMPOUNDS: a plain 完成 substring used to match inside
+# 未完成/待完成/尚未完成/完成条件未满足/任务完成度NN% and misjudge those cells
+# as completed. EXCEPTION: a cell that also carries the ✅ emoji (e.g. the
 # real FIX-264 row 「待执行/暂停→✅ 完成」) IS completed — the ✅ completion
 # marker outranks the stale pending prefix.
 _ARCHIVE_NON_COMPLETED_MARKERS = (
     "候选", "保守闭环", "间接闭合", "已终止", "已撤回", "失效",
     "未开始", "待执行", "进行中", "规划入账", "暂停",
+    "未完成", "待完成", "尚未完成", "完成条件未满足", "完成度",
 )
 # Positive completion wordings (substring match, mirroring the module's
 # completion-word doctrine in _status_is_terminal_word): 已完成/完成/实现完成/
@@ -650,9 +654,10 @@ def _archive_index_status_is_completed(status_cell: str) -> bool:
 
     Conservative on purpose: only clear completion wordings resolve a
     dependency. Negative-intent markers (:data:`_ARCHIVE_NON_COMPLETED_MARKERS`)
-    veto UNLESS the cell also carries ✅; positive signals are the completion
-    word (完成 — covers 已完成/实现完成/发布完成/…) and the release forms
-    (已发布/已交付).
+    veto UNLESS the cell also carries ✅ — including the negative-completion
+    compounds (未完成/待完成/完成条件未满足/完成度…, FIX-342); positive
+    signals are the completion word (完成 — covers 已完成/实现完成/发布完成/…)
+    and the release forms (已发布/已交付).
     """
     s = _strip_markdown(str(status_cell or ""))
     if not s:

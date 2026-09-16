@@ -743,6 +743,14 @@ def _entry_version_for_archive(line, task_versions):
 
 _DECISION_RELATED_COLUMN_HEADER = "关联任务"
 
+# Canonical decision-log schema length (编号/日期/主题/背景/决策内容/备选方案/
+# 选择原因/影响范围/决策人/关联任务/后续动作). FIX-342 (review-FIX-341-312-
+# CODE-R0 P2-2): the headerless fallback may trust the second-to-last cell
+# ONLY when the row has exactly this many columns — a shorter row's [-2] cell
+# is not the 关联任务 column (a title/ctx archived ref there would be misread
+# as a governing ref).
+_DECISION_SCHEMA_COLUMNS = 11
+
 # Governing-ref extraction uses the SAME negative-lookbehind discipline as
 # task_priority._ID_TOKEN_RE: REVIEW-FIX-310 is ONE cross-entity review
 # record, not the FIX-310 task — a plain \b regex would extract the inner
@@ -753,16 +761,24 @@ _DECISION_ID_TOKEN_RE = re.compile(r"(?<![-A-Z])([A-Z]+)-(\d+)\b")
 def _decision_related_column_index(lines):
     """FIX-312: locate the 关联任务 data-cell index from the decision-log header.
 
-    Scans for the first table row declaring the exact header cell
-    「关联任务」 and returns its 0-based data-cell index, or None when no
-    header declares it (the caller then falls back to the canonical
-    second-to-last cell — 关联任务 | 后续动作 are the last two columns of
-    the 11-column decision schema).
+    FIX-342 (review-FIX-341-312-CODE-R0 P3-2): the scan is limited to the
+    HEADER AREA — table rows before the FIRST separator row. A narrative
+    table further down the body can no longer shadow the real header (the
+    previous whole-file scan let any later table carrying an exact 「关联任务」
+    cell hijack the column index). Returns the 0-based data-cell index, or
+    None when the header area declares no such cell or the file has no
+    separator row (the caller then falls back to the canonical second-to-last
+    cell — 关联任务 | 后续动作 are the last two columns of the 11-column
+    decision schema).
     """
     for line in lines:
         stripped = line.strip()
         if not stripped.startswith("|"):
             continue
+        if re.match(r"^\|[\s\-:|\t]+\|$", stripped):
+            # First separator row: the header area ends here — a later
+            # table (body narrative / appendix) is never consulted.
+            break
         parts = [p.strip() for p in stripped.split("|")]
         data_cells = parts[1:-1] if len(parts) >= 2 else parts
         for idx, cell in enumerate(data_cells):
@@ -792,7 +808,8 @@ def _decision_archive_version(line, related_idx, task_versions):
         line: the raw ``| DEC-… |`` row.
         related_idx: 0-based data-cell index of the 关联任务 column
             (:func:`_decision_related_column_index`), or None for the
-            canonical second-to-last-cell fallback.
+            canonical second-to-last-cell fallback (trusted only for
+            canonical-length rows — FIX-342 fail-closed).
         task_versions: ``{task_id: version}`` for archived tasks (this run +
             already-archived historical tasks).
 
@@ -808,7 +825,11 @@ def _decision_archive_version(line, related_idx, task_versions):
             return None, "decision_row_too_short", ""
         related_cell = data_cells[related_idx]
     else:
-        if len(data_cells) < 4:
+        # FIX-342 (review-FIX-341-312-CODE-R0 P2-2): the headerless fallback
+        # trusts the second-to-last cell ONLY at the canonical schema length.
+        # A shorter row's [-2] cell is NOT the 关联任务 column — fail closed
+        # like any other structurally untrusted row.
+        if len(data_cells) != _DECISION_SCHEMA_COLUMNS:
             return None, "decision_row_too_short", ""
         related_cell = data_cells[-2]
     refs = []

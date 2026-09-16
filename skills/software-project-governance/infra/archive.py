@@ -723,12 +723,109 @@ def _entry_version_for_archive(line, task_versions):
     first referenced task that is in task_versions (task_id -> version dict) to
     determine the version. Returns a version string, or None if no related task
     is being archived (the row is not ready to migrate).
+
+    FIX-312 scope note: the DECISION path no longer uses this helper — the
+    whole-line any-hit semantics mis-attributed NEW decisions that merely
+    REFERENCED historical archived tasks (live case: DEC-187 → FEAT-010@0.77.0
+    while its governing FIX-310/307/308/309 were still hot; R2 F-R2-01 family).
+    Decisions now use :func:`_decision_archive_version` (governing 关联任务
+    column + all-refs-archived gate + newest-version attribution). The RISK
+    path keeps this helper (risks carry the additional _is_risk_closed gate).
     """
     for m in re.finditer(r"\b([A-Z]+-\d+)\b", line):
         tid = m.group(1)
         if tid in task_versions:
             return task_versions[tid]
     return None
+
+
+# ── Decision attribution (FIX-312 / R2 F-R2-01 family) ──────────────
+
+_DECISION_RELATED_COLUMN_HEADER = "关联任务"
+
+# Governing-ref extraction uses the SAME negative-lookbehind discipline as
+# task_priority._ID_TOKEN_RE: REVIEW-FIX-310 is ONE cross-entity review
+# record, not the FIX-310 task — a plain \b regex would extract the inner
+# task ID from the hyphen boundary.
+_DECISION_ID_TOKEN_RE = re.compile(r"(?<![-A-Z])([A-Z]+)-(\d+)\b")
+
+
+def _decision_related_column_index(lines):
+    """FIX-312: locate the 关联任务 data-cell index from the decision-log header.
+
+    Scans for the first table row declaring the exact header cell
+    「关联任务」 and returns its 0-based data-cell index, or None when no
+    header declares it (the caller then falls back to the canonical
+    second-to-last cell — 关联任务 | 后续动作 are the last two columns of
+    the 11-column decision schema).
+    """
+    for line in lines:
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            continue
+        parts = [p.strip() for p in stripped.split("|")]
+        data_cells = parts[1:-1] if len(parts) >= 2 else parts
+        for idx, cell in enumerate(data_cells):
+            if cell == _DECISION_RELATED_COLUMN_HEADER:
+                return idx
+    return None
+
+
+def _decision_archive_version(line, related_idx, task_versions):
+    """FIX-312: decide a decision row's archival attribution from its GOVERNING refs.
+
+    Governing refs = the task-family IDs in the 关联任务 (related tasks)
+    column ONLY. Prose mentions in 背景/决策内容 are context, never governing
+    refs — the whole-line any-hit scan is exactly what mis-attributed DEC-187
+    to FEAT-010@v0.77.0 while its governing FIX-310/307/308/309 were still hot
+    (R2 F-R2-01 family).
+
+    Migration gate (conservative): the row migrates ONLY when EVERY
+    task-family governing ref is archived (present in ``task_versions`` — a
+    ref missing from the mapping is an active/unarchived task or unknown,
+    either of which keeps the decision hot); the attributed version is the
+    NEWEST archived governing version (max semver, not the first whole-line
+    hit). Anything unprovable (no related column cell, structurally short
+    row, no task-family refs) is retained fail-closed.
+
+    Args:
+        line: the raw ``| DEC-… |`` row.
+        related_idx: 0-based data-cell index of the 关联任务 column
+            (:func:`_decision_related_column_index`), or None for the
+            canonical second-to-last-cell fallback.
+        task_versions: ``{task_id: version}`` for archived tasks (this run +
+            already-archived historical tasks).
+
+    Returns:
+        ``(version_or_None, reason, detail)`` — version is the attribution
+        when the gate passes, else None. ``reason`` ∈ would_archive /
+        retained_active_task_ref / no_task_family_ref / decision_row_too_short.
+    """
+    parts = [p.strip() for p in line.split("|")]
+    data_cells = parts[1:-1] if len(parts) >= 2 else parts
+    if related_idx is not None:
+        if related_idx >= len(data_cells):
+            return None, "decision_row_too_short", ""
+        related_cell = data_cells[related_idx]
+    else:
+        if len(data_cells) < 4:
+            return None, "decision_row_too_short", ""
+        related_cell = data_cells[-2]
+    refs = []
+    for m in _DECISION_ID_TOKEN_RE.finditer(related_cell):
+        tid = "{0}-{1}".format(m.group(1), m.group(2))
+        if _is_task_family_id(tid) and tid not in refs:
+            refs.append(tid)
+    if not refs:
+        return None, "no_task_family_ref", ""
+    unarchived = [t for t in refs if t not in task_versions]
+    if unarchived:
+        return (None, "retained_active_task_ref",
+                "active/unarchived refs: " + ", ".join(unarchived))
+    best = max(refs, key=lambda t: _version_to_tuple(task_versions.get(t))
+               or (0, 0, 0))
+    return task_versions[best], "would_archive", "v{0}".format(
+        task_versions[best])
 
 
 # ── Risk status filtering (FIX-170 / AUDIT-127) ────────────────────
@@ -899,8 +996,10 @@ def _migrate_decisions(version_start, version_end, task_versions, dry_run=False,
     """FIX-162: migrate decision-log rows whose related tasks have been archived.
 
     Decision-log format: '| DEC-{n} | date | title | context | decision | ... |'
-    The 'related' column references task IDs. A row migrates if it references a
-    task in task_versions AND that version is in [version_start, version_end].
+    The 'related' column (关联任务) references governing task IDs. FIX-312: a
+    row migrates only when EVERY task-family ref in its related column is
+    archived AND the newest archived governing version is in
+    [version_start, version_end] — see _decision_archive_version.
     Writes archived rows to archive/decisions/decisions-v{range}.md in the format
     '## DEC-{n}: {title}' that build_index expects. Returns count migrated.
 
@@ -917,7 +1016,15 @@ def _migrate_decisions(version_start, version_end, task_versions, dry_run=False,
     FIX-301: when ``explain_out`` is a list, every scanned decision row appends
     exactly one {"id", "reason", "detail"} record (single source of truth —
     the explanation can never drift from the actual migration behavior).
-    Reasons: would_archive / no_archived_task_ref / ref_version_out_of_range.
+
+    FIX-312 attribution semantics: governing refs are read ONLY from the
+    关联任务 (related tasks) column (:func:`_decision_related_column_index`,
+    with a canonical second-to-last-cell fallback for headerless files), and
+    a row migrates ONLY when EVERY task-family governing ref is archived —
+    the attributed version being the NEWEST archived governing version
+    (:func:`_decision_archive_version`). Reasons: would_archive /
+    retained_active_task_ref / no_task_family_ref / decision_row_too_short /
+    ref_version_out_of_range.
     """
 
     dlog = _decision_log()
@@ -925,6 +1032,7 @@ def _migrate_decisions(version_start, version_end, task_versions, dry_run=False,
         return 0
     content = dlog.read_text(encoding="utf-8")
     lines = content.split("\n")
+    related_idx = _decision_related_column_index(lines)
 
     def _note(dec_id, reason, detail=""):
         if explain_out is not None:
@@ -945,15 +1053,15 @@ def _migrate_decisions(version_start, version_end, task_versions, dry_run=False,
         if not (dec_id and re.match(r"DEC-\d+", dec_id)):
             kept_lines.append(line)
             continue
-        ver = _entry_version_for_archive(line, task_versions)
+        ver, reason, detail = _decision_archive_version(
+            line, related_idx, task_versions)
         if ver and _version_in_range(ver, version_start, version_end):
             archived.append((dec_id, title, ver, line))
             _note(dec_id, "would_archive", f"v{ver}")
         else:
             kept_lines.append(line)
             if ver is None:
-                _note(dec_id, "no_archived_task_ref",
-                      "no referenced task is archived")
+                _note(dec_id, reason, detail)
             else:
                 _note(dec_id, "ref_version_out_of_range", f"v{ver}")
 
@@ -1215,6 +1323,9 @@ def _migrate_evidence(version_start, version_end, task_versions, dry_run=False,
 _EXPLAIN_UNKNOWN_REASONS = frozenset({
     "pipe_layout_anomaly",      # priority-table row with non-7col pipe layout
     "unknown_evd_id_shape",     # evidence row whose ID matches no real shape
+    "decision_row_too_short",   # FIX-312: decision row shorter than the
+                                # related-column index / canonical schema —
+                                # structurally untrusted, retained fail-closed
 })
 
 

@@ -1542,8 +1542,9 @@ class HotFactSourceConsistencyTests(unittest.TestCase):
         project_stage=None,
         overview_stage=None,
         active_items_intro=None,
-        plan_version=None,
+        plan_version="0.38.0",
         extra_roadmap_rows="",
+        extra_task_rows=(),
     ):
         dependency_line = dependency_line or (
             "0.38.0 FIX-082~086 已闭环，RISK-033 关闭前不得打 1.0.0\n"
@@ -1563,6 +1564,7 @@ class HotFactSourceConsistencyTests(unittest.TestCase):
             f"| **P1** | FIX-087 | Hot fact-source consistency guard | AUDIT-102 | 0.38.0 | pending | {fix087_status} |",
             f"| **P0** | REL-013 | Release 0.38.0 | FIX-082~087 | 0.38.0 | pending | {rel013_status} |",
         ]
+        rows.extend(extra_task_rows)
         return (
             "# 当前项目样例\n\n"
             "## 项目配置\n\n"
@@ -1737,9 +1739,19 @@ class HotFactSourceConsistencyTests(unittest.TestCase):
                 self._plan_content(
                     plan_version="0.42.0",
                     dependency_line="0.38.0 FIX-082~087 + REL-013 全部闭环，RISK-033 已关闭\nREL-018 与 REL-019 关闭前不得推进 1.0.0",
+                    project_stage="维护与演进 — 0.42.0 已发布，0.43.0 规划中",
+                    overview_stage="维护（0.42.0 已发布，0.43.0 规划中）",
+                    active_items_intro="0.42.0 发布闭环完成。",
+                    overview_tail="G6 通过；RISK-033 已关闭",
                     extra_roadmap_rows=(
                         "| **0.42.0** | **已发布** | **2026-06-04** | **5 分钟成功路径** | **REL-018(P0)** | **已发布** |\n"
                         "| **0.43.0** | **规划** | **—** | **Cross-Harness E2E Closure** | **FIX-105(P1), REL-019(P0)** | **规划** |\n"
+                    ),
+                    # FIX-339 fail-closed: the released face must be corroborated
+                    # by a delivered REL row — the roadmap self-claim alone no
+                    # longer upgrades the face.
+                    extra_task_rows=(
+                        "| **P0** | REL-018 | Release 0.42.0 | FIX-105 | 0.42.0 | done | ✅ 已完成 (2026-06-04) |",
                     ),
                 ),
             )
@@ -1761,6 +1773,351 @@ class HotFactSourceConsistencyTests(unittest.TestCase):
             issues = vw.check_hot_fact_source_consistency(path)
             self.assertTrue(any("dependency chain missing readiness release blocker token REL-018" in issue for issue in issues))
             self.assertTrue(any("dependency chain missing readiness release blocker token REL-019" in issue for issue in issues))
+
+    # ── FIX-339 (DEC-195 a): hot-fact version anchors derive from plan-tracker ──
+    #
+    # The FIX-087-era constants (0.38.0 roadmap row, FIX-082~087/REL-013 task
+    # list) permanently conflict with migrated governance data: 0.38.0 is
+    # released and archived, so demanding an in-progress 0.38.0 face yields
+    # false FAILs. The active anchor now derives from `## 项目配置`'s
+    # 工作流版本 field; the 进行中/已发布 branch follows the version's REL
+    # delivery state. Protective semantics (unreleased-must-not-claim-
+    # released, active-row-must-exist, snapshot-latest) stay enforced.
+
+    def _derived_plan_content(
+        self,
+        *,
+        plan_version="0.81.0",
+        roadmap_rows="",
+        project_stage=None,
+        overview_stage=None,
+        active_items_intro=None,
+        overview_tail="G11 通过；RISK-033 已关闭",
+        rel077_status="✅ 已发布并推送 (2026-09-14)",
+        rel078_status="📋 待启动",
+        include_rel077_row=True,
+        include_rel078_row=True,
+        rel078_target="0.82.0",
+        extra_task_rows=(),
+        req074_status="✅ 已交付",
+        dependency_line=None,
+    ):
+        project_stage = project_stage or f"维护与演进 — {plan_version} 发布闭环完成，0.82.0 规划中"
+        overview_stage = overview_stage or f"维护（{plan_version} 已发布，0.82.0 规划中）"
+        active_items_intro = active_items_intro or f"{plan_version} 发布闭环完成，0.82.0 规划中。"
+        task_rows = []
+        if include_rel077_row:
+            task_rows.append(
+                f"| **P1** | REL-077 | 发布 0.81.0 | — | 0.81.0 | done | {rel077_status} |"
+            )
+        if include_rel078_row:
+            task_rows.append(
+                f"| **P0** | REL-078 | 发布 0.82.0 | FIX-339 | {rel078_target} | pending | {rel078_status} |"
+            )
+        task_rows.extend(extra_task_rows)
+        default_roadmap = (
+            "| **0.37.0** | **已发布** | **2026-05-22** | **事实依据看护** | **FIX-080~081(P0), REL-012(P0)** | **tag v0.37.0** |\n"
+            "| **0.38.0** | **已发布** | **2026-05-28** | **AI 执行底座** | **AUDIT-102(P0), FIX-082~085(P0), FIX-086~087(P1), REL-013(P0)** | **tag v0.38.0** |\n"
+            "| **0.80.0** | **已发布** | **2026-09-12** | **重构线第一波** | **REL-076(P0)** | **tag v0.80.0** |\n"
+            f"| **{plan_version}** | **已发布** | **2026-09-14** | **dsh 宿主兼容性体系化** | **REL-077(P0)** | **tag v{plan_version}** |\n"
+            "| **0.82.0** | **规划中** | **—** | **dsh 兼容性收尾** | **FIX-339(P2), REL-078(P1)** | **规划** |\n"
+        )
+        return (
+            "# 当前项目样例\n\n"
+            "## 项目配置\n\n"
+            f"- **当前阶段**: {project_stage}\n"
+            f"- **工作流版本**: {plan_version}\n\n"
+            "## 项目总览\n\n"
+            "| 项目 | 当前阶段 | 总任务数 | 已完成 | 阻塞中 | 关键风险数 | 最近 Gate 结论 | 最近复盘日期 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- | --- |\n"
+            f"| 项目管理工作流插件 | {overview_stage} | 430 | 421 | 0 | 2 | {overview_tail} | 2026-09-16 |\n\n"
+            "## 当前活跃事项\n\n"
+            f"{active_items_intro}\n\n"
+            "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- |\n"
+            + "\n".join(task_rows)
+            + "\n\n"
+            "### 1.0.0 依赖链\n\n"
+            "```\n"
+            "0.38.0 FIX-082~087 + REL-013 全部闭环，RISK-033 已关闭\n"
+            "    │\n"
+            "    ▼\n"
+            f"{dependency_line or 'REL-018 与 REL-019 关闭前不得推进 1.0.0'}\n"
+            "    │\n"
+            "    ▼\n"
+            "1.0.0 正式发布\n"
+            "```\n\n"
+            "## 版本规划\n\n"
+            "| 版本 | 状态 | 预计日期 | 核心范围 | 包含 Tier/Layer | 关键交付物 |\n"
+            "| --- | --- | --- | --- | --- | --- |\n"
+            f"{roadmap_rows or default_roadmap}"
+            "| **1.0.0** | **预留** | **—** | **首次正式发布标签** | **—** | **不得绕过收口** |\n\n"
+            "## 需求跟踪矩阵\n\n"
+            "| 需求ID | 需求描述 | 来源 | 优先级 | 关联任务 | 当前状态 | 验证方式 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- |\n"
+            "| REQ-070 | 真实运行时能力 | AUDIT-102 | P0 | FIX-082, FIX-085 | ✅ 已交付 | 0.38.0 |\n"
+            "| REQ-071 | 结构化证据 | AUDIT-102 | P0 | FIX-083 | ✅ 已交付 | 0.38.0 |\n"
+            "| REQ-072 | AI execution packet | AUDIT-102 | P0 | FIX-084 | ✅ 已交付 | 0.38.0 |\n"
+            "| REQ-073 | projection sync | AUDIT-102 | P1 | FIX-086 | ✅ 已交付 | 0.38.0 |\n"
+            f"| REQ-074 | hot fact-source consistency | AUDIT-102 | P1 | FIX-087 | {req074_status} | 0.38.0 |\n"
+        )
+
+    def test_fix339_accepts_derived_released_active_version(self):
+        """FIX-339 red→green: 0.38.x false positives must be gone.
+
+        The fixture mirrors the migrated governance data shape (0.38.0
+        released + archived, active anchor 0.81.0 released via REL-077) —
+        the pre-fix engine FAILed it with the 0.38.0 assertion family.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            path = self._write_plan(td, self._derived_plan_content())
+            self.assertEqual(vw.check_hot_fact_source_consistency(path), [])
+
+    def test_fix339_rejects_unreleased_version_marked_published(self):
+        """FIX-339 protective negative: an active version whose release task
+        is not delivered must FAIL when roadmap/hot sections claim 已发布."""
+        with tempfile.TemporaryDirectory() as td:
+            path = self._write_plan(
+                td,
+                self._derived_plan_content(
+                    plan_version="0.82.0",
+                    rel078_status="📋 待启动",
+                    roadmap_rows=(
+                        "| **0.80.0** | **已发布** | **2026-09-12** | **重构线第一波** | **REL-076(P0)** | **tag v0.80.0** |\n"
+                        "| **0.81.0** | **已发布** | **2026-09-14** | **dsh 宿主兼容性体系化** | **REL-077(P0)** | **tag v0.81.0** |\n"
+                        "| **0.82.0** | **已发布** | **2026-09-20** | **dsh 兼容性收尾** | **FIX-339(P2), REL-078(P1)** | **tag v0.82.0** |\n"
+                    ),
+                    project_stage="维护与演进 — 0.82.0 已发布",
+                    overview_stage="维护（0.82.0 已发布）",
+                    active_items_intro="0.82.0 已发布。",
+                    overview_tail="G11 通过",
+                ),
+            )
+            issues = vw.check_hot_fact_source_consistency(path)
+            self.assertTrue(any("0.82.0 roadmap row must not claim 已发布" in issue for issue in issues))
+            self.assertTrue(any("hot sections overstate 0.82.0 as released" in issue for issue in issues))
+
+    def test_fix339_rejects_missing_active_roadmap_row(self):
+        """FIX-339 protective: a missing active-version roadmap row still FAILs,
+        now keyed to the derived anchor instead of the 0.38.0 literal."""
+        with tempfile.TemporaryDirectory() as td:
+            path = self._write_plan(
+                td,
+                self._derived_plan_content(
+                    roadmap_rows=(
+                        "| **0.37.0** | **已发布** | **2026-05-22** | **事实依据看护** | **FIX-080~081(P0), REL-012(P0)** | **tag v0.37.0** |\n"
+                        "| **0.38.0** | **已发布** | **2026-05-28** | **AI 执行底座** | **AUDIT-102(P0), FIX-082~085(P0), FIX-086~087(P1), REL-013(P0)** | **tag v0.38.0** |\n"
+                        "| **0.80.0** | **已发布** | **2026-09-12** | **重构线第一波** | **REL-076(P0)** | **tag v0.80.0** |\n"
+                        "| **0.82.0** | **规划中** | **—** | **dsh 兼容性收尾** | **FIX-339(P2), REL-078(P1)** | **规划** |\n"
+                    ),
+                ),
+            )
+            issues = vw.check_hot_fact_source_consistency(path)
+            self.assertTrue(any("missing 0.81.0 roadmap row" in issue for issue in issues))
+            self.assertFalse(any("0.38.0" in issue for issue in issues))
+
+    def test_fix339_snapshot_missing_latest_published_still_fails(self):
+        """FIX-339 protective: snapshot-latest check keys to the derived
+        latest published release (0.81.0), not a historical literal."""
+        with tempfile.TemporaryDirectory() as td:
+            path = self._write_plan(td, self._derived_plan_content())
+            self._write_snapshot(td, version="0.80.0", session_date="2026-09-14", body="0.80.0 已发布")
+            issues = vw.check_hot_fact_source_consistency(path)
+            self.assertTrue(any("session snapshot missing latest published release 0.81.0" in issue for issue in issues))
+
+    # ── FIX-339 R1 repair round (REVIEW-FIX-339-CODE-R0 F-01/F-02/F-05) ──
+
+    def test_fix339_r1_rejects_unpublished_claim_when_rel_row_target_misaligned(self):
+        """R0 F-01/E3: a REL row whose target-version cell is a date or a gate
+        reference (real REL-077 shape: `G9/G11`, version token only in the
+        事项 cell) must still be recognized, so an unpublished active version
+        claiming 已发布 keeps failing instead of escaping through the
+        roadmap-self-claim fallback."""
+        for misaligned_target in ("2026-09-20", "G9/G11"):
+            with tempfile.TemporaryDirectory() as td:
+                path = self._write_plan(
+                    td,
+                    self._derived_plan_content(
+                        plan_version="0.82.0",
+                        rel078_target=misaligned_target,
+                        rel078_status="📋 待启动",
+                        roadmap_rows=(
+                            "| **0.80.0** | **已发布** | **2026-09-12** | **重构线第一波** | **REL-076(P0)** | **tag v0.80.0** |\n"
+                            "| **0.81.0** | **已发布** | **2026-09-14** | **dsh 宿主兼容性体系化** | **REL-077(P0)** | **tag v0.81.0** |\n"
+                            "| **0.82.0** | **已发布** | **2026-09-20** | **dsh 兼容性收尾** | **FIX-339(P2), REL-078(P1)** | **tag v0.82.0** |\n"
+                        ),
+                        project_stage="维护与演进 — 0.82.0 已发布",
+                        overview_stage="维护（0.82.0 已发布）",
+                        active_items_intro="0.82.0 已发布。",
+                        overview_tail="G11 通过",
+                    ),
+                )
+                issues = vw.check_hot_fact_source_consistency(path)
+                self.assertTrue(
+                    any("0.82.0 roadmap row must not claim 已发布" in issue for issue in issues),
+                    f"misaligned target {misaligned_target!r}: protective claim FAIL missing in {issues}",
+                )
+                self.assertTrue(
+                    any("hot sections overstate 0.82.0 as released" in issue for issue in issues),
+                    f"misaligned target {misaligned_target!r}: overstate FAIL missing in {issues}",
+                )
+
+    def test_fix339_r1_fail_closed_roadmap_self_claim_without_rel_row(self):
+        """R0 F-01: with no recognizable REL row for the active version, a
+        roadmap 已发布 self-claim must FAIL explicitly instead of silently
+        upgrading to the released face."""
+        with tempfile.TemporaryDirectory() as td:
+            path = self._write_plan(
+                td,
+                self._derived_plan_content(
+                    plan_version="0.82.0",
+                    include_rel078_row=False,
+                    roadmap_rows=(
+                        "| **0.80.0** | **已发布** | **2026-09-12** | **重构线第一波** | **REL-076(P0)** | **tag v0.80.0** |\n"
+                        "| **0.81.0** | **已发布** | **2026-09-14** | **dsh 宿主兼容性体系化** | **REL-077(P0)** | **tag v0.81.0** |\n"
+                        "| **0.82.0** | **已发布** | **2026-09-20** | **dsh 兼容性收尾** | **FIX-339(P2), REL-078(P1)** | **tag v0.82.0** |\n"
+                    ),
+                    project_stage="维护与演进 — 0.82.0 已发布",
+                    overview_stage="维护（0.82.0 已发布）",
+                    active_items_intro="0.82.0 已发布。",
+                    overview_tail="G11 通过",
+                ),
+            )
+            issues = vw.check_hot_fact_source_consistency(path)
+            self.assertTrue(
+                any(
+                    "0.82.0 roadmap row claims 已发布 but no delivered release task row corroborates it" in issue
+                    for issue in issues
+                )
+            )
+
+    def test_fix339_r1_or_later_target_rows_join_active_version_tasks(self):
+        """R0 F-05: `X.Y.Z 或后续` target-version rows belong to the active
+        version for recognition (completion semantics untouched), so an
+        unreleased roadmap row must reference them."""
+        with tempfile.TemporaryDirectory() as td:
+            path = self._write_plan(
+                td,
+                self._derived_plan_content(
+                    plan_version="0.82.0",
+                    extra_task_rows=(
+                        "| **P2** | FIX-339 | hot fact source 版本锚参数化 | DEC-195 | 0.82.0 或后续 | pending | 📋 待启动 |",
+                    ),
+                    roadmap_rows=(
+                        "| **0.80.0** | **已发布** | **2026-09-12** | **重构线第一波** | **REL-076(P0)** | **tag v0.80.0** |\n"
+                        "| **0.81.0** | **已发布** | **2026-09-14** | **dsh 宿主兼容性体系化** | **REL-077(P0)** | **tag v0.81.0** |\n"
+                        "| **0.82.0** | **规划中** | **—** | **dsh 兼容性收尾** | **REL-078(P1)** | **规划** |\n"
+                    ),
+                ),
+            )
+            issues = vw.check_hot_fact_source_consistency(path)
+            self.assertTrue(any("0.82.0 roadmap row missing active task FIX-339" in issue for issue in issues))
+
+    def test_fix339_r1_req_matrix_delivery_check_spans_other_version_rows(self):
+        """R0 F-02: the REQ delivery cross-check must inspect each linked task
+        row regardless of the active anchor; filtering by the active version
+        makes REQ rows linked to other versions' tasks silently no-op."""
+        with tempfile.TemporaryDirectory() as td:
+            path = self._write_plan(
+                td,
+                self._derived_plan_content(
+                    plan_version="0.82.0",
+                    req074_status="📋 待实施",
+                    extra_task_rows=(
+                        "| **P1** | FIX-087 | Hot fact-source consistency guard | AUDIT-102 | 0.38.0 | done | ✅ 已完成 (2026-05-26) |",
+                    ),
+                ),
+            )
+            issues = vw.check_hot_fact_source_consistency(path)
+            self.assertTrue(any("REQ-074 is not delivered while FIX-087 are complete" in issue for issue in issues))
+
+    # ── FIX-339 R2 repair round (REVIEW-FIX-339-CODE-R1 F-R1-01/F-R1-05) ──
+
+    def test_fix339_r2_narrative_mention_in_delivered_rel_row_never_lifts_face(self):
+        """R1 F-R1-01 (probe D): a delivered REL row belonging to another
+        version whose narrative cell merely mentions the anchor version must
+        NOT corroborate the released face — the two unreleased-claim
+        protections must keep failing instead of silently vanishing (the
+        pre-fix OR-accumulation collapsed issues 5→1). Recognition recall
+        (any-cell) is intentionally kept: the row still joins task_ids."""
+        with tempfile.TemporaryDirectory() as td:
+            path = self._write_plan(
+                td,
+                self._derived_plan_content(
+                    plan_version="0.82.0",
+                    include_rel077_row=False,
+                    rel078_status="📋 待启动",
+                    extra_task_rows=(
+                        # Real REL-077 shape (delivered 0.81.0 release row) whose
+                        # 事项 narrative picks up a bare `0.82.0` cross-reference —
+                        # a high-frequency narrative form in this repo.
+                        "| **P1** | REL-077 | 发布 0.81.0——后续 0.82.0 承载收尾批 | — | 0.81.0 | done | ✅ 已发布并推送 (2026-09-14) |",
+                    ),
+                    roadmap_rows=(
+                        "| **0.80.0** | **已发布** | **2026-09-12** | **重构线第一波** | **REL-076(P0)** | **tag v0.80.0** |\n"
+                        "| **0.81.0** | **已发布** | **2026-09-14** | **dsh 宿主兼容性体系化** | **REL-077(P0)** | **tag v0.81.0** |\n"
+                        "| **0.82.0** | **已发布** | **2026-09-20** | **dsh 兼容性收尾** | **FIX-339(P2), REL-078(P1)** | **tag v0.82.0** |\n"
+                    ),
+                    project_stage="维护与演进 — 0.82.0 已发布",
+                    overview_stage="维护（0.82.0 已发布）",
+                    active_items_intro="0.82.0 已发布。",
+                    overview_tail="G11 通过",
+                ),
+            )
+            ids, release_delivered, release_declared = vw._hot_task_ids_for_version(
+                path.read_text(encoding="utf-8"), "0.82.0"
+            )
+            self.assertIn(
+                "REL-077",
+                ids,
+                f"recognition recall must keep any-cell membership: ids={ids}",
+            )
+            self.assertFalse(
+                release_delivered,
+                f"face-side: narrative mention must not accumulate release_delivered (ids={ids})",
+            )
+            self.assertTrue(release_declared)
+            issues = vw.check_hot_fact_source_consistency(path)
+            self.assertTrue(
+                any("0.82.0 roadmap row must not claim 已发布" in issue for issue in issues),
+                f"narrative-mention pollution: protective claim FAIL missing in {issues}",
+            )
+            self.assertTrue(
+                any("hot sections overstate 0.82.0 as released" in issue for issue in issues),
+                f"narrative-mention pollution: overstate FAIL missing in {issues}",
+            )
+
+    def test_fix339_r2_stale_range_check_spans_nonexact_target_rows(self):
+        """R1 F-R1-05: completion lookups behind the dependency-chain
+        stale-range check must inspect a task's own rows (version=None) —
+        exact-anchor filtering silently no-oped the check for delivered rows
+        whose target cell is a `X.Y.Z 或后续` form. Recall-only fix: the
+        completion semantics themselves are untouched."""
+        with tempfile.TemporaryDirectory() as td:
+            path = self._write_plan(
+                td,
+                self._derived_plan_content(
+                    plan_version="0.82.0",
+                    rel078_status="📋 待启动",
+                    dependency_line="REL-018 与 REL-019 关闭前不得推进 1.0.0\nFIX-339 待闭环（收尾批遗留）",
+                    extra_task_rows=(
+                        "| **P2** | FIX-339 | hot fact source 版本锚参数化 | DEC-195 | 0.82.0 或后续 | done | ✅ 已完成 (2026-09-16) |",
+                    ),
+                    roadmap_rows=(
+                        "| **0.80.0** | **已发布** | **2026-09-12** | **重构线第一波** | **REL-076(P0)** | **tag v0.80.0** |\n"
+                        "| **0.81.0** | **已发布** | **2026-09-14** | **dsh 宿主兼容性体系化** | **REL-077(P0)** | **tag v0.81.0** |\n"
+                        "| **0.82.0** | **规划中** | **—** | **dsh 兼容性收尾** | **REL-078(P1), FIX-339(P2)** | **规划** |\n"
+                    ),
+                    project_stage="维护与演进 — 0.82.0 推进中",
+                    overview_stage="维护（0.82.0 规划中）",
+                    overview_tail="G11 通过",
+                ),
+            )
+            issues = vw.check_hot_fact_source_consistency(path)
+            self.assertTrue(
+                any("dependency chain line marks completed FIX-339 as pending" in issue for issue in issues),
+                f"stale-range check idled on 或后续 target row: FAIL missing in {issues}",
+            )
 
 
 class AgentAdapterContractTests(unittest.TestCase):

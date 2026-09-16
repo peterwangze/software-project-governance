@@ -1852,11 +1852,9 @@ def check_release_readiness_fact_source(
     return failures
 
 
-FIX_087_ACTIVE_VERSION = ".".join(["0", "38", "0"])
-FIX_087_PREVIOUS_VERSION = ".".join(["0", "37", "0"])
+# FIX-339 (DEC-195 a): 0.38.0-era version anchors removed — the active anchor
+# derives from plan-tracker 工作流版本; the face follows its REL delivery state.
 FIX_087_READINESS_VERSION = ".".join(["1", "0", "0"])
-FIX_087_ACTIVE_TASKS = ["FIX-082", "FIX-083", "FIX-084", "FIX-085", "FIX-086", "FIX-087", "REL-013"]
-FIX_087_ACTIVE_FIXES = ["FIX-082", "FIX-083", "FIX-084", "FIX-085", "FIX-086", "FIX-087"]
 FIX_087_REQ_TASKS = {
     "REQ-070": ["FIX-082", "FIX-085"],
     "REQ-071": ["FIX-083"],
@@ -1866,6 +1864,13 @@ FIX_087_REQ_TASKS = {
 }
 
 FIX_105_SNAPSHOT_RELEASE_VERSION_RE = re.compile(r"\|\s*\*\*(0\.\d+(?:\.\d+)?)\*\*\s*\|\s*\*\*已发布\*\*\s*\|\s*\*\*(\d{4}-\d{2}-\d{2})\*\*")
+# FIX-339 F-03 registration (REVIEW-FIX-339-CODE-R0): two 工作流版本 parsers
+# coexist on purpose. This strict pattern serves the snapshot face and the
+# real session-snapshot.md format (closed `**工作流版本:**` bold run). The hot
+# face (check_hot_fact_source_consistency) needs a looser inline pattern
+# because the real plan-tracker line is `- **工作流版本: 0.81.0（**已发布…`
+# (unclosed bold). Not unified until the data format is normalized: feeding
+# the loose pattern to the snapshot face would change its parsing there.
 FIX_105_PLAN_WORKFLOW_VERSION_RE = re.compile(r"\*\*工作流版本\*\*:\s*([0-9]+(?:\.[0-9]+){2})")
 FIX_105_SNAPSHOT_VERSION_RE = re.compile(r"\*\*工作流版本\*\*:\s*([0-9]+(?:\.[0-9]+){2})")
 FIX_105_SNAPSHOT_DATE_RE = re.compile(r"\*\*session_date\*\*:\s*(\d{4}-\d{2}-\d{2})")
@@ -1896,6 +1901,43 @@ def _hot_task_is_delivered(plan_content, task_id, version=None):
 def _hot_task_is_open(plan_content, task_id, version=None):
     statuses = _task_statuses_for_hot_source(plan_content, task_id, version=version)
     return bool(statuses) and any(not _status_cell_is_delivered(status) for status in statuses)
+
+
+def _hot_task_ids_for_version(plan_content, version):
+    """FIX-339: data-derived task facts for the active version anchor.
+
+    Returns ``(task_ids, release_delivered, release_declared)`` where
+    ``task_ids`` are task-pattern rows whose cells mention ``version`` as a
+    standalone token — the target-version cell, a ``X.Y.Z 或后续`` target
+    form, or the 事项 cell when the target column carries a date/gate
+    reference (REVIEW-FIX-339-CODE-R0 F-01/F-05; real REL-077 row shape) —
+    and the release flags describe REL rows *for that version*.
+
+    FIX-339 (REVIEW-FIX-339-CODE-R1 F-R1-01): recognition keeps any-cell
+    recall, but a REL row only feeds the release flags when it belongs to
+    ``version`` — its target-version cell names the anchor (exact or
+    ``X.Y.Z 或后续`` form) or its 事项 cell opens with the ``发布 <anchor>``
+    header form. A bare anchor mention in any other cell (narrative,
+    dependency, status) never lifts the released face.
+    """
+    ids, release_delivered, release_declared = [], False, False
+    version_token_re = re.compile(r"(?<![\d.])" + re.escape(version) + r"(?![\d.])")
+    release_item_re = re.compile(r"[*\s]*发布\s*" + version_token_re.pattern)
+    for line in plan_content.splitlines():
+        cells = _markdown_table_cells(line)
+        normalized = [_normalize_markdown_cell(cell) for cell in cells]
+        if len(normalized) < 5 or not re.fullmatch(r"(?:FIX|REL|AUDIT)-\d{3}", normalized[1]):
+            continue
+        if not any(version_token_re.search(cell) for cell in normalized):
+            continue
+        if normalized[1] not in ids:
+            ids.append(normalized[1])
+        if normalized[1].startswith("REL-") and (
+            version_token_re.search(normalized[4]) or release_item_re.match(normalized[2])
+        ):
+            release_declared = True
+            release_delivered = release_delivered or _status_cell_is_delivered(cells[-1])
+    return ids, release_delivered, release_declared
 
 
 def _line_mentions_completed_range_as_pending(line, completed_task_ids):
@@ -2032,105 +2074,104 @@ def check_hot_fact_source_consistency(plan_tracker_path=None):
     if not plugin_scope:
         return failures
 
-    active_row_text = _version_row_text(plan_content, FIX_087_ACTIVE_VERSION)
-    previous_row_text = _version_row_text(plan_content, FIX_087_PREVIOUS_VERSION)
-    readiness_row_text = _version_row_text(plan_content, FIX_087_READINESS_VERSION)
-    rel013_delivered = _hot_task_is_delivered(plan_content, "REL-013", version=FIX_087_ACTIVE_VERSION)
-
-    if not active_row_text:
-        failures.append(f"{rel_plan}: missing {FIX_087_ACTIVE_VERSION} roadmap row")
-    elif rel013_delivered and "已发布" not in active_row_text:
-        failures.append(f"{rel_plan}: {FIX_087_ACTIVE_VERSION} roadmap row must be 已发布 after REL-013 release")
-    elif not rel013_delivered and "进行中" not in active_row_text:
-        failures.append(f"{rel_plan}: {FIX_087_ACTIVE_VERSION} roadmap row must remain 进行中 before REL-013 release")
-    if not previous_row_text:
-        failures.append(f"{rel_plan}: missing {FIX_087_PREVIOUS_VERSION} roadmap row")
-    elif "已发布" not in previous_row_text:
-        failures.append(f"{rel_plan}: {FIX_087_PREVIOUS_VERSION} roadmap row must be 已发布")
-
-    for source_name, source in [
-        ("project config", project_config),
-        ("project overview", overview),
-        ("current active items", active_items),
-    ]:
-        if FIX_087_ACTIVE_VERSION not in source:
-            failures.append(f"{rel_plan}: {source_name} missing active version {FIX_087_ACTIVE_VERSION}")
-    if not rel013_delivered and re.search(r"0\.38\.0[^。\n|]*已发布", project_config + "\n" + overview):
-        failures.append(f"{rel_plan}: hot sections overstate {FIX_087_ACTIVE_VERSION} as released before REL-013")
-
-    for task_id in FIX_087_ACTIVE_TASKS:
-        if not _task_statuses_for_hot_source(plan_content, task_id, version=FIX_087_ACTIVE_VERSION):
-            failures.append(f"{rel_plan}: active {FIX_087_ACTIVE_VERSION} task table missing {task_id}")
-        if active_row_text and not _contains_fix_token_or_range(active_row_text, task_id):
-            failures.append(f"{rel_plan}: {FIX_087_ACTIVE_VERSION} roadmap row missing active task {task_id}")
-
-    if not dependency_chain:
-        pass
-    else:
-        for token in [FIX_087_ACTIVE_VERSION, FIX_087_READINESS_VERSION, "RISK-033", "REL-013"]:
-            if token not in dependency_chain:
-                failures.append(f"{rel_plan}: {FIX_087_READINESS_VERSION} dependency chain missing active blocker token {token}")
-        for token in FIX_105_READINESS_RELEASE_BLOCKERS:
-            if token in plan_content and token not in dependency_chain:
-                failures.append(f"{rel_plan}: {FIX_087_READINESS_VERSION} dependency chain missing readiness release blocker token {token}")
-        if rel013_delivered:
-            risk033_lines = [line for line in dependency_chain.splitlines() if "RISK-033" in line]
-            if risk033_lines and not any("已关闭" in line for line in risk033_lines):
-                failures.append(f"{rel_plan}: {FIX_087_READINESS_VERSION} dependency chain still lacks RISK-033 closure after REL-013")
-        elif "不得打 1.0.0" not in dependency_chain and "不得推进 1.0.0" not in dependency_chain:
-            failures.append(f"{rel_plan}: {FIX_087_READINESS_VERSION} dependency chain missing blocking language for active release")
-        completed_active_fixes = [
-            task_id for task_id in FIX_087_ACTIVE_FIXES
-            if _hot_task_is_delivered(plan_content, task_id, version=FIX_087_ACTIVE_VERSION)
-        ]
-        for line in dependency_chain.splitlines():
-            stale_task = _line_mentions_completed_range_as_pending(line, completed_active_fixes)
-            if stale_task:
-                failures.append(
-                    f"{rel_plan}: dependency chain line marks completed {stale_task} as pending: {line.strip()}"
-                )
-
-    remaining_line = ""
-    for line in overview.splitlines():
-        if "RISK-033" in line and ("继续由" in line or "承载" in line):
-            remaining_line = line
-            break
-    if rel013_delivered:
-        if "RISK-033" in overview and "已关闭" not in overview:
-            failures.append(f"{rel_plan}: project overview mentions RISK-033 after REL-013 but does not mark it closed")
-    elif remaining_line:
-        remaining_text = remaining_line.split("RISK-033", 1)[1] if "RISK-033" in remaining_line else remaining_line
-        for task_id in _extract_task_ids(remaining_text):
-            if _hot_task_is_delivered(plan_content, task_id, version=FIX_087_ACTIVE_VERSION):
-                failures.append(f"{rel_plan}: project overview says completed {task_id} still carries RISK-033")
-    elif "RISK-033" in overview and "FIX-087" not in overview:
-        failures.append(f"{rel_plan}: project overview mentions RISK-033 but does not name remaining FIX-087")
-
-    for req_id, task_ids in FIX_087_REQ_TASKS.items():
-        req_row = _find_table_row_by_first_cell(plan_content, req_id)
-        if not req_row:
-            failures.append(f"{rel_plan}: requirement matrix missing {req_id}")
-            continue
-        if len(req_row) < 6:
-            failures.append(f"{rel_plan}: requirement matrix {req_id} row has too few columns")
-            continue
-        req_status = req_row[5]
-        linked = req_row[4] if len(req_row) > 4 else ""
-        for task_id in task_ids:
-            if task_id not in linked:
-                failures.append(f"{rel_plan}: requirement matrix {req_id} must reference {task_id}")
-        all_tasks_delivered = all(
-            _hot_task_is_delivered(plan_content, task_id, version=FIX_087_ACTIVE_VERSION)
-            for task_id in task_ids
+    # Loose form (FIX-339 F-03): matches the real unclosed-bold 工作流版本
+    # line; see the FIX_105_PLAN_WORKFLOW_VERSION_RE registration note above.
+    version_match = re.search(r"\*\*工作流版本(?:\*\*)?:\s*([0-9]+(?:\.[0-9]+){2})", project_config)
+    active_version = version_match.group(1) if version_match else ""
+    if not active_version:
+        failures.append(f"{rel_plan}: project config missing 工作流版本 (cannot derive active version anchor)")
+    if active_version:
+        active_row_text = _version_row_text(plan_content, active_version)
+        version_task_ids, release_delivered, release_declared = _hot_task_ids_for_version(plan_content, active_version)
+        # FIX-339 (REVIEW-FIX-339-CODE-R0 F-01): the released face must be
+        # corroborated by a delivered REL row. The former
+        # `not release_declared and roadmap self-claims 已发布` fallback is
+        # removed — an uncorroborated self-claim now FAILs below instead of
+        # silently upgrading the face.
+        released_face = release_delivered
+        if not active_row_text:
+            failures.append(f"{rel_plan}: missing {active_version} roadmap row")
+        elif released_face and "已发布" not in active_row_text:
+            failures.append(f"{rel_plan}: {active_version} roadmap row must be 已发布 after its release task is delivered")
+        elif not released_face and "已发布" in active_row_text:
+            if release_declared:
+                failures.append(f"{rel_plan}: {active_version} roadmap row must not claim 已发布 before its release task is delivered")
+            else:
+                failures.append(f"{rel_plan}: {active_version} roadmap row claims 已发布 but no delivered release task row corroborates it")
+        if not any(version != active_version for version, _date_text in FIX_105_SNAPSHOT_RELEASE_VERSION_RE.findall(plan_content)):
+            failures.append(f"{rel_plan}: missing released roadmap row before {active_version}")
+        for source_name, source in [("project config", project_config), ("project overview", overview), ("current active items", active_items)]:
+            if active_version not in source:
+                failures.append(f"{rel_plan}: {source_name} missing active version {active_version}")
+        if not released_face and re.search(re.escape(active_version) + r"[^。\n|]*已发布", project_config + "\n" + overview):
+            failures.append(f"{rel_plan}: hot sections overstate {active_version} as released before its release task is delivered")
+        if not released_face:
+            if not version_task_ids:
+                failures.append(f"{rel_plan}: active {active_version} task table has no task rows")
+            for task_id in version_task_ids:
+                if active_row_text and not _contains_fix_token_or_range(active_row_text, task_id):
+                    failures.append(f"{rel_plan}: {active_version} roadmap row missing active task {task_id}")
+        if dependency_chain:
+            if FIX_087_READINESS_VERSION not in dependency_chain:
+                failures.append(f"{rel_plan}: {FIX_087_READINESS_VERSION} dependency chain missing active blocker token {FIX_087_READINESS_VERSION}")
+            for token in ["RISK-033", "REL-013"]:
+                if token in plan_content and token not in dependency_chain:
+                    failures.append(f"{rel_plan}: {FIX_087_READINESS_VERSION} dependency chain missing active blocker token {token}")
+            for token in FIX_105_READINESS_RELEASE_BLOCKERS:
+                if token in plan_content and token not in dependency_chain:
+                    failures.append(f"{rel_plan}: {FIX_087_READINESS_VERSION} dependency chain missing readiness release blocker token {token}")
+            if released_face:
+                risk033_lines = [line for line in dependency_chain.splitlines() if "RISK-033" in line]
+                if risk033_lines and not any("已关闭" in line for line in risk033_lines):
+                    failures.append(f"{rel_plan}: {FIX_087_READINESS_VERSION} dependency chain still lacks RISK-033 closure after release")
+            elif "不得打 1.0.0" not in dependency_chain and "不得推进 1.0.0" not in dependency_chain:
+                failures.append(f"{rel_plan}: {FIX_087_READINESS_VERSION} dependency chain missing blocking language for active release")
+            # FIX-339 (REVIEW-FIX-339-CODE-R1 F-R1-05): completion lookups span
+            # the task's own rows (version=None, same caliber as F-02 above) —
+            # exact-anchor filtering silently no-oped these checks for
+            # `或后续`/gate-reference target cells. Recall-only: this never
+            # relaxes a completion judgment, it only restores recall.
+            completed_active_tasks = [task_id for task_id in version_task_ids if _hot_task_is_delivered(plan_content, task_id, version=None)]
+            for line in dependency_chain.splitlines():
+                stale_task = _line_mentions_completed_range_as_pending(line, completed_active_tasks)
+                if stale_task:
+                    failures.append(f"{rel_plan}: dependency chain line marks completed {stale_task} as pending: {line.strip()}")
+        remaining_line = next(
+            (line for line in overview.splitlines() if "RISK-033" in line and ("继续由" in line or "承载" in line)), ""
         )
-        any_task_open = any(
-            _hot_task_is_open(plan_content, task_id, version=FIX_087_ACTIVE_VERSION)
-            for task_id in task_ids
-        )
-        if all_tasks_delivered and not _status_cell_is_delivered(req_status):
-            failures.append(f"{rel_plan}: requirement matrix {req_id} is not delivered while {', '.join(task_ids)} are complete")
-        if any_task_open and _status_cell_is_delivered(req_status):
-            failures.append(f"{rel_plan}: requirement matrix {req_id} is delivered while linked task remains open")
+        if released_face:
+            if "RISK-033" in overview and "已关闭" not in overview:
+                failures.append(f"{rel_plan}: project overview mentions RISK-033 after release but does not mark it closed")
+        elif remaining_line:
+            remaining_text = remaining_line.split("RISK-033", 1)[1] if "RISK-033" in remaining_line else remaining_line
+            for task_id in _extract_task_ids(remaining_text):
+                # FIX-339 (F-R1-05): version=None — see the stale-range note above.
+                if _hot_task_is_delivered(plan_content, task_id, version=None):
+                    failures.append(f"{rel_plan}: project overview says completed {task_id} still carries RISK-033")
+        elif "RISK-033" in overview and "FIX-087" not in overview:
+            failures.append(f"{rel_plan}: project overview mentions RISK-033 but does not name remaining FIX-087")
+        for req_id, task_ids in FIX_087_REQ_TASKS.items():
+            req_row = _find_table_row_by_first_cell(plan_content, req_id)
+            if not req_row:
+                failures.append(f"{rel_plan}: requirement matrix missing {req_id}")
+                continue
+            if len(req_row) < 6:
+                failures.append(f"{rel_plan}: requirement matrix {req_id} row has too few columns")
+                continue
+            req_status = req_row[5]
+            linked = req_row[4] if len(req_row) > 4 else ""
+            for task_id in task_ids:
+                if task_id not in linked:
+                    failures.append(f"{rel_plan}: requirement matrix {req_id} must reference {task_id}")
+            # FIX-339 (REVIEW-FIX-339-CODE-R0 F-02): look at each linked task
+            # row regardless of the active anchor — filtering by the active
+            # version made REQ rows linked to other versions' tasks no-op.
+            all_tasks_delivered = all(_hot_task_is_delivered(plan_content, task_id, version=None) for task_id in task_ids)
+            any_task_open = any(_hot_task_is_open(plan_content, task_id, version=None) for task_id in task_ids)
+            if all_tasks_delivered and not _status_cell_is_delivered(req_status):
+                failures.append(f"{rel_plan}: requirement matrix {req_id} is not delivered while {', '.join(task_ids)} are complete")
+            if any_task_open and _status_cell_is_delivered(req_status):
+                failures.append(f"{rel_plan}: requirement matrix {req_id} is delivered while linked task remains open")
 
     for failure in failures:
         print(f"[FAIL] hot fact-source consistency: {failure}")

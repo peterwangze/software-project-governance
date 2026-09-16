@@ -429,8 +429,10 @@ DEFERRED = {
     "FX-API-01": {"slice": "V8",
                   "reason": "removing an oracle API symbol requires the "
                             "isolated plane of `dsh-doctor` S2/S3"},
-    "FX-BASEURL-01": {"slice": "V2",
-                      "reason": "`baseUrl` shape is asserted inside the guard's "
+    "FX-BASEURL-01": {"slice": "V8",
+                      "reason": "construction landed with V8 "
+                                "(test_dsh_boundary.BaseUrlShapeTests): "
+                                "`baseUrl` shape is asserted inside the guard's "
                                 "probe context, not by a composition file "
                                 "(design §2.4 R0 F-10)"},
     "FX-JS-01": {"slice": "V2",

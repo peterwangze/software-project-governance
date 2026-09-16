@@ -254,13 +254,13 @@ def _classify_row(row: dict) -> str:
       config whose verification could be missing, so it is `[INFO]`, not a
       `[NOT_RUN]` disclosure, and it does not enter the `unverified_reasons`
       histogram (which stays "enabled rows whose CONFIG was not verified").
-    * a row is still `[INFO]` when a future probe omits a `kind`; an undeclared
-      *kind* answers `CATEGORY_UNKNOWN` and becomes a finding, but "no kind at
-      all" is a missing field, not an new vocabulary entry.
+    * a row with NO `kind` at all is a malformed record, not a disclosure:
+      like an undeclared kind it answers `CATEGORY_UNKNOWN` and becomes a
+      finding (FIX-323 / F-02 — it used to answer `CATEGORY_INFO` here, which
+      quietly parked the record on the `[INFO]` face and let it bypass the
+      whitelist this module is).
     """
     if _is_group_record(row):
-        return CATEGORY_INFO
-    if row.get("kind") is None:
         return CATEGORY_INFO
     return _classify_row_kind(row.get("kind"))
 
@@ -1495,6 +1495,27 @@ def _informational_details(report: dict) -> list:
     return lines
 
 
+def _informational_details_fail_soft(report: dict) -> list:
+    """:func:`_informational_details` with the G-18 report guard degraded.
+
+    FIX-323 / F-01: the two standalone report faces used to call
+    :func:`_informational_details` unconditionally BEFORE the FAIL branch was
+    rendered, and its first line (:func:`_assert_report_kinds_declared`)
+    raises on an undeclared kind — so a run that had already decided FAIL
+    escaped as a raw ``ValueError`` and the readable report (verdict + issue
+    list) was lost. Report completeness wins: the machine-readable layer keeps
+    its fail-loud guard (G-18 is unchanged — see
+    ``test_the_report_level_self_check_raises_on_an_undeclared_kind``), but a
+    face whose job is to RENDER the report degrades the tripped guard to a
+    finding line instead of crashing.
+    """
+    try:
+        return _informational_details(report)
+    except ValueError as exc:
+        return [f"row-kind declaration guard tripped while selecting the "
+                f"[INFO] face — treat this as a finding: {exc}"]
+
+
 def _unverified_disclosure(entry: dict, row: dict) -> str:
     """One on-screen line for a row that was NOT verified by any schema (L3).
 
@@ -2013,20 +2034,24 @@ def run_cli(fail_on_issues: bool = False, stream=None) -> int:
         print(f"  [{entry['status']}] {entry['path']} — "
               f"{entry['enabled']} enabled row(s), {entry['checked']} with a schema",
               file=stream)
+        # FIX-323 / F-03: the face asks the single classifier, not a raw
+        # `FINDING_KINDS` membership test — an undeclared kind (or a missing
+        # one) is a finding to the verdict, so it renders its own `[FAIL]` row
+        # here too instead of only appearing in the issue list.
         for row in entry["rows"]:
-            if row.get("kind") in FINDING_KINDS:
+            if _classify_row(row) in (CATEGORY_FINDING, CATEGORY_UNKNOWN):
                 print(f"      [FAIL] {row.get('row')} ({row.get('name')}): "
                       f"{row.get('message')}", file=stream)
-    for line in _informational_details(report):
-        print(f"      [INFO] {line}", file=stream)
+    # FIX-323 / F-01: the verdict branches are rendered BEFORE the `[INFO]`
+    # face, and the face's G-18 guard is degraded to a finding line — an
+    # undeclared kind must not raise out of the face after the verdict was
+    # decided (the old order escaped as ValueError and lost the whole report).
     if report["verdict"] == VERDICT_FAIL:
         print(f"\n  Result: FAILED — {report['reason']}", file=stream)
         for issue in report["issues"][:20]:
             print(f"    - {issue}", file=stream)
         if len(report["issues"]) > 20:
             print(f"    ... and {len(report['issues']) - 20} more", file=stream)
-        if fail_on_issues:
-            return 1
     elif report["verdict"] == VERDICT_NOT_RUN:
         # Optional-tooling policy: an unresolvable plugin set is disclosed,
         # never a green verdict and never a non-zero exit.
@@ -2039,6 +2064,13 @@ def run_cli(fail_on_issues: bool = False, stream=None) -> int:
         # are printed under this terminal verdict too, so neither is ever only
         # in the machine-readable report.
         emit_disclosures(report, stream, prefix="    ", indent="    ")
+    for line in _informational_details_fail_soft(report):
+        print(f"      [INFO] {line}", file=stream)
+    # The exit mapping is the LAST step: the whole readable report — verdict,
+    # issue list and the `[INFO]` face — is on screen before a requested
+    # non-zero exit, never cut short by it (FIX-323 / F-01).
+    if fail_on_issues and report["verdict"] == VERDICT_FAIL:
+        return 1
     print(file=stream)
     return 0
 
@@ -2067,8 +2099,10 @@ def _print_human(report: dict, stream) -> None:
         print(f"  [{entry['status']}] {entry['path']} — "
               f"{entry['enabled']} enabled row(s), {entry['checked']} with a schema",
               file=stream)
+        # FIX-323 / F-03: same single-classifier source as `run_cli` — never a
+        # raw `FINDING_KINDS` membership test.
         for row in entry["rows"]:
-            if row.get("kind") in FINDING_KINDS:
+            if _classify_row(row) in (CATEGORY_FINDING, CATEGORY_UNKNOWN):
                 print(f"      [FAIL] {row.get('row')} ({row.get('name')}): "
                       f"{row.get('message')}", file=stream)
     # Same disclosure face as the two command surfaces, under the same verdicts:
@@ -2078,10 +2112,13 @@ def _print_human(report: dict, stream) -> None:
     # surfaces (F-08).
     if report["verdict"] in (VERDICT_PASS, VERDICT_NOT_RUN):
         emit_disclosures(report, stream)
-    for line in _informational_details(report):
-        print(f"  [INFO] {line}", file=stream)
     for issue in report["issues"]:
         print(f"issue  : {issue}", file=stream)
+    # FIX-323 / F-01: after the issue list, and fail-soft — the same contract
+    # as `run_cli`: the guard may degrade to a finding line, it may not take
+    # the verdict and the issues with it.
+    for line in _informational_details_fail_soft(report):
+        print(f"  [INFO] {line}", file=stream)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

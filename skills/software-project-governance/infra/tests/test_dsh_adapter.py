@@ -230,6 +230,175 @@ def _run_catch_probe(lib_path: Path, cwd: Path, dsh_home: Path, home: Path):
     )
 
 
+# FIX-325 (REVIEW-FIX-313-CODE-R0 F1/F2/F3): the collision side of the V10
+# staging loop. `Date.now` and `Math.random` are PINNED for the row under test,
+# so the staging name is a fixed, predictable string — which lets the fixture
+# pre-create a directory at exactly that name and put the EEXIST rename-retry,
+# the 8-attempt circuit breaker and its warning path on the reachable path.
+# This is the machine guard for V10 acceptance ①/G-04 the review found missing
+# (mutation M5 passed the whole suite while the CWD misdeletion survived).
+_COLLISION_PROBE = (
+    "import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';\n"
+    "import { join } from 'node:path';\n"
+    "import { pathToFileURL } from 'node:url';\n"
+    "// argv: 2 = lib/index.js copy, 3 = pinned Math.random sequence (JSON),\n"
+    "//      4 = DSH_HOME (forwarded to the row through the environment).\n"
+    "const FIXED_TS = 1700000000000;\n"
+    "const pinned = JSON.parse(process.argv[3]);\n"
+    "let randCalls = 0;\n"
+    "Date.now = () => FIXED_TS;\n"
+    "Math.random = () => pinned[Math.min(randCalls++, pinned.length - 1)];\n"
+    "const dshHome = process.argv[4];\n"
+    "const presetRoot = join(dshHome, '.agent-presets');\n"
+    "const colliding = join(presetRoot,\n"
+    "  `governance.staging-${FIXED_TS}-${pinned[0].toString(36).slice(2, 8)}`);\n"
+    "mkdirSync(presetRoot, { recursive: true });\n"
+    "mkdirSync(colliding);\n"
+    "writeFileSync(join(colliding, 'NOTES.md'), 'my own scratch dir\\n', 'utf8');\n"
+    "const before = readdirSync(presetRoot).sort();\n"
+    "const warns = [];\n"
+    "const { ensurePreset } = await import(pathToFileURL(process.argv[2]).href);\n"
+    "const outcome = ensurePreset({ logger: { warn: (m) => warns.push(String(m)),"
+    " info: () => {} } });\n"
+    "const after = readdirSync(presetRoot).sort();\n"
+    "process.stdout.write(JSON.stringify({ outcome, warns, before, after,\n"
+    "  collidingSurvived: existsSync(join(colliding, 'NOTES.md')) }));\n"
+)
+
+
+# FIX-325 / F1 — the CWD-degradation inverse. When `resolveDshHome()` THROWS,
+# `outcome.dir` stays '' and the pre-V10 catch enumerated `dirname('.')` — the
+# PROCESS CWD — deleting every `governance.staging-*` entry there (review
+# scenario S2). On Windows the throw cannot be produced by clearing environment
+# variables (`os.homedir()` still resolves), so the fixture faults the row's
+# own `homedir` import binding via the SYNCHRONOUS ESM `registerHooks` — which
+# needs Node >= 22.15. The repo declares engines >= 20: on older runtimes this
+# guard is NOT_RUN (skip), never a failure — the FIX-325 skip/NOT_RUN policy.
+_CWD_FAULT_PROBE = (
+    "import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';\n"
+    "import { join } from 'node:path';\n"
+    "import { registerHooks } from 'node:module';\n"
+    "import { pathToFileURL } from 'node:url';\n"
+    "// argv: 2 = lib/index.js copy, 3 = decoy directory name for the CWD.\n"
+    "const target = pathToFileURL(process.argv[2]).href;\n"
+    "registerHooks({\n"
+    "  load(url, context, nextLoad) {\n"
+    "    if (url === target) {\n"
+    "      const source = readFileSync(new URL(url), 'utf8').replace(\n"
+    "        \"import { homedir } from 'node:os'\",\n"
+    "        \"const homedir = () => { throw new Error('injected: homedir unavailable') }\");\n"
+    "      return { format: 'module', source, shortCircuit: true };\n"
+    "    }\n"
+    "    return nextLoad(url, context);\n"
+    "  },\n"
+    "});\n"
+    "const decoy = process.argv[3];\n"
+    "mkdirSync(decoy);\n"
+    "writeFileSync(join(decoy, 'NOTES.md'), 'my own scratch dir\\n', 'utf8');\n"
+    "const warns = [];\n"
+    "let outcome = null;\n"
+    "let threw = null;\n"
+    "try {\n"
+    "  const { ensurePreset } = await import(target);\n"
+    "  outcome = ensurePreset({ logger: { warn: (m) => warns.push(String(m)),"
+    " info: () => {} } });\n"
+    "} catch (error) {\n"
+    "  threw = String(error);\n"
+    "}\n"
+    "process.stdout.write(JSON.stringify({ outcome, warns, threw,\n"
+    "  decoySurvived: existsSync(join(decoy, 'NOTES.md')) }));\n"
+)
+
+
+def _complete_package_copy(root: Path) -> Path:
+    """Package copy with a COMPLETE payload — the row's happy path is reachable,
+    so the collision fixture can reach the EEXIST retry loop and the successful
+    rename after it (unlike `_catching_package_copy`, which breaks `preset.yml`
+    on purpose)."""
+    pkg = root / "pkg"
+    (pkg / "lib").mkdir(parents=True)
+    shutil.copyfile(_REPO_ROOT / "lib" / "index.js", pkg / "lib" / "index.js")
+    (pkg / "adapters" / "dsh").mkdir(parents=True)
+    shutil.copyfile(
+        _REPO_ROOT / "adapters" / "dsh" / "host-contract.json",
+        pkg / "adapters" / "dsh" / "host-contract.json",
+    )
+    shutil.copytree(_PACKAGE_PRESET, pkg / "agent-presets" / "governance")
+    (pkg / "package.json").write_text(
+        '{"name":"fake","version":"9.9.9","type":"module","main":"lib/index.js"}\n',
+        encoding="utf-8",
+    )
+    return pkg
+
+
+def _run_collision_probe(pkg: Path, dsh_home: Path, home: Path, cwd: Path,
+                         pinned_random):
+    """Run the row with `Date.now`/`Math.random` pinned; all home vars
+    redirected. The probe seeds a directory at the exact colliding staging name
+    before `ensurePreset()` runs and reports the preset-root listing before and
+    after, so the assertions cover creation as well as deletion."""
+    node = shutil.which("node")
+    if not node:
+        return None
+    script = cwd / "collision-probe.mjs"
+    script.write_text(_COLLISION_PROBE, encoding="utf-8")
+    env = os.environ.copy()
+    env["DSH_HOME"] = str(dsh_home)
+    env["HOME"] = str(home)
+    env["USERPROFILE"] = str(home)
+    return subprocess.run(
+        [node, str(script), str((pkg / "lib" / "index.js").resolve()),
+         json.dumps(pinned_random), str(dsh_home.resolve())],
+        cwd=str(cwd), capture_output=True, text=True,
+        encoding="utf-8", errors="replace", env=env,
+    )
+
+
+def _node_version_tuple():
+    """The runtime's `(major, minor, patch)`, or None when node is unusable."""
+    node = shutil.which("node")
+    if not node:
+        return None
+    try:
+        out = subprocess.run([node, "--version"], capture_output=True,
+                             text=True, encoding="utf-8", timeout=30)
+    except OSError:
+        return None
+    match = re.match(r"^v(\d+)\.(\d+)\.(\d+)", (out.stdout or "").strip())
+    return tuple(int(part) for part in match.groups()) if match else None
+
+
+def _node_register_hooks_available():
+    """FIX-325 skip/NOT_RUN policy: the CWD fault injection needs the
+    synchronous `module.registerHooks` (Node >= 22.15); the repo declares
+    engines >= 20, so older runtimes skip the guard instead of failing."""
+    version = _node_version_tuple()
+    return version is not None and version >= (22, 15, 0)
+
+
+def _run_cwd_fault_probe(lib_path: Path, cwd: Path, home: Path,
+                         decoy_name: str):
+    """Run the row with `homedir` faulted to throw; DSH_HOME is deliberately
+    UNSET so `resolveDshHome()` actually reaches its `homedir()` fallback (with
+    DSH_HOME set, `homedir()` is never consulted and the fault never fires).
+    `DSH_HOME`/`HOME`/`USERPROFILE` are removed or redirected — the real home
+    is never read through the row under test."""
+    node = shutil.which("node")
+    if not node:
+        return None
+    script = cwd / "cwd-fault-probe.mjs"
+    script.write_text(_CWD_FAULT_PROBE, encoding="utf-8")
+    env = os.environ.copy()
+    env.pop("DSH_HOME", None)
+    env["HOME"] = str(home)
+    env["USERPROFILE"] = str(home)
+    return subprocess.run(
+        [node, str(script), str(lib_path.resolve()), decoy_name],
+        cwd=str(cwd), capture_output=True, text=True,
+        encoding="utf-8", errors="replace", env=env,
+    )
+
+
 class DshAdapterTests(unittest.TestCase):
     """Machine checks over the dsh adapter's installable artifacts."""
 
@@ -1477,43 +1646,133 @@ class DshAdapterTests(unittest.TestCase):
                 "a failed sync must not leave a preset directory behind",
             )
 
-    def test_cleanup_ownership_predicate_is_load_bearing(self):
-        # Inverse proof (V10 acceptance 3), as a replay of the removed
-        # implementation so it holds on a pristine checkout too. The old loop had
-        # exactly three steps — enumerate a parent directory, select by name
-        # prefix, delete unconditionally — and the middle step is the only thing
-        # that changed. Replaying those three steps against the same fixture
-        # shows the predicate is load-bearing: with the selection removed (the
-        # unconditional `rmSync(staging)` that the "no predicate" shape
-        # degenerates to), the foreign directory is destroyed.
+    def test_lib_eexist_collision_breaker_keeps_every_directory_and_warns(self):
+        # FIX-325 / F3 (REVIEW-FIX-313-CODE-R0): the EEXIST rename-retry loop,
+        # its 8-attempt circuit breaker and its warning path had zero coverage
+        # (mutation M4 passed all three V10 tests). `Date.now` and
+        # `Math.random` are pinned so EVERY attempt derives the SAME staging
+        # name, and that name pre-exists as a directory the row never created.
+        # RED under the pre-V10 shape (`rmSync` + recursive `mkdirSync`: the
+        # foreign directory is adopted and destroyed); GREEN requires the
+        # breaker: eight losing attempts, zero deletions, one actionable
+        # warning naming the parent — and it replaces the self-justifying
+        # replay the review graded as zero-capture (F2), so this one test
+        # closes F1's fixture gap, F2's rewrite and F3's coverage at once.
+        if not shutil.which("node"):
+            self.skipTest("node unavailable (host row cannot be exercised)")
         with tempfile.TemporaryDirectory() as td:
-            preset_root = Path(td) / ".agent-presets"
-            preset_root.mkdir(parents=True)
-            rogue = preset_root / _ROGUE_STAGING_NAME
-            rogue.mkdir()
-            (rogue / "NOTES.md").write_text("my own scratch dir\n", encoding="utf-8")
-            staging_path = preset_root / "governance.staging-1700000000000-abc123"
+            root = Path(td)
+            pkg = _complete_package_copy(root)
+            cwd = root / "cwd"
+            home = root / "home"
+            dsh_home = root / "dshhome"
+            for path in (cwd, home, dsh_home):
+                path.mkdir(parents=True)
 
-            # the removed implementation's selection, verbatim in shape
-            matches = [
-                os.path.join(str(preset_root), entry)
-                for entry in os.listdir(str(preset_root))
-                if entry.startswith("governance.staging-")
-            ]
-            self.assertEqual(matches, [str(rogue)],
-                             "the fixture must be matched by a name-prefix rule")
-            # ... and with no ownership predicate available, the target is
-            # either absent (nothing to do) or pre-existing but NOT ours:
-            self.assertFalse(
-                staging_path.exists(),
-                "this attempt created no staging directory — the precondition "
-                "under which the old code deleted an unowned path",
+            result = _run_collision_probe(pkg, dsh_home, home, cwd, [0.5])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertFalse(payload["outcome"]["synced"], payload)
+            breaker = [warning for warning in payload["warns"]
+                       if "could not create a fresh staging" in warning]
+            self.assertTrue(breaker, payload["warns"])
+            self.assertIn("no existing directory was removed", breaker[0])
+            # The pre-existing directory carrying the colliding name — with
+            # its user file — is untouched after eight collisions.
+            self.assertTrue(
+                payload["collidingSurvived"],
+                "the breaker deleted or emptied a directory the row never "
+                f"created (name collision is not ownership): {payload}",
             )
-            # The old code called rmSync on every match. Replay that single
-            # unconditional delete: the user's directory dies.
-            shutil.rmtree(matches[0])
-            self.assertFalse(rogue.exists(),
-                             "premise broken: the replayed shape must be destructive")
+            # Zero residue: the losing attempts created nothing and removed
+            # nothing — the preset root holds exactly the seeded directory.
+            self.assertEqual(payload["after"], payload["before"], payload)
+
+    def test_lib_eexist_collision_retry_syncs_and_keeps_the_foreign_dir(self):
+        # The OTHER half of F3: the first pinned draw collides, the second is
+        # fresh. The loop must retry — and the retry must complete the whole
+        # sync WITHOUT touching the directory the first attempt lost to (the
+        # pre-V10 shape deleted it right before adopting its name).
+        if not shutil.which("node"):
+            self.skipTest("node unavailable (host row cannot be exercised)")
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            pkg = _complete_package_copy(root)
+            cwd = root / "cwd"
+            home = root / "home"
+            dsh_home = root / "dshhome"
+            for path in (cwd, home, dsh_home):
+                path.mkdir(parents=True)
+
+            result = _run_collision_probe(pkg, dsh_home, home, cwd, [0.1, 0.9])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertTrue(payload["outcome"]["synced"], payload)
+            self.assertTrue(
+                payload["collidingSurvived"],
+                "the winning retry destroyed the directory the losing first "
+                f"attempt collided with: {payload}",
+            )
+            # The sync really landed: the user preset holds the four payload
+            # files, and no staging residue survives the rename.
+            user_dir = dsh_home / ".agent-presets" / "governance"
+            names = sorted(entry.name for entry in user_dir.iterdir())
+            self.assertEqual(len(names), 4, names)
+            self.assertIn("agent.cordis.yml", names, names)
+            self.assertIn("preset.yml", names, names)
+            preset_root = dsh_home / ".agent-presets"
+            # The ONLY new entry in the preset root is the synced preset
+            # itself: no staging residue survives the rename.
+            self.assertEqual(
+                sorted(entry.name for entry in preset_root.iterdir()),
+                sorted(payload["before"] + ["governance"]),
+                payload,
+            )
+
+    def test_lib_cwd_degradation_never_deletes_a_cwd_staging_directory(self):
+        # FIX-325 / F1 — V10 acceptance ① (G-04 CWD degradation inverse), the
+        # machine guard the review found MISSING (mutation M5 restored the old
+        # CWD sweep and the whole suite stayed green while the CWD misdeletion
+        # survived). When `resolveDshHome()` THROWS, `outcome.dir` stays '' and
+        # the pre-V10 catch enumerated `dirname('.')` — the PROCESS CWD —
+        # deleting every `governance.staging-*` entry there. The fixture seeds
+        # such a directory in the CWD and faults the row's `homedir` import via
+        # the synchronous ESM `registerHooks` (Node >= 22.15; repo engines
+        # >= 20 — older runtimes NOT_RUN this guard, per the FIX-325 policy).
+        if not shutil.which("node"):
+            self.skipTest("node unavailable (host row cannot be exercised)")
+        if not _node_register_hooks_available():
+            self.skipTest(
+                "Node >= 22.15 required for the ESM registerHooks fault "
+                "injection (repo declares engines >= 20) — NOT_RUN per the "
+                "FIX-325 skip/NOT_RUN policy")
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            pkg = _complete_package_copy(root)
+            cwd = root / "cwd"
+            home = root / "home"
+            for path in (cwd, home):
+                path.mkdir(parents=True)
+
+            result = _run_cwd_fault_probe(pkg / "lib" / "index.js", cwd, home,
+                                          _ROGUE_STAGING_NAME)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            # The row failed BEFORE a staging directory existed, said so, and
+            # — the core claim — the CWD decoy survived.
+            self.assertIsNone(payload["threw"], payload)
+            self.assertFalse(payload["outcome"]["synced"], payload)
+            self.assertFalse(payload["outcome"]["dir"], payload)
+            self.assertTrue(
+                any("nothing was removed" in warning
+                    for warning in payload["warns"]),
+                payload,
+            )
+            self.assertTrue(
+                payload["decoySurvived"],
+                "cleanup swept the process CWD for staging-prefixed names and "
+                f"deleted a directory the row never created: {payload}",
+            )
 
     @unittest.skipUnless(
         importlib.util.find_spec("yaml") is not None,

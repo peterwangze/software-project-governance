@@ -51,6 +51,15 @@ _REPO_ROOT = _INFRA_DIR.parents[2]
 
 if str(_INFRA_DIR) not in sys.path:
     sys.path.insert(0, str(_INFRA_DIR))
+# FIX-336: the bare `import dsh_fixtures` below resolves the helper from THIS
+# directory, which only worked when unittest put the start dir on `sys.path`
+# (i.e. `-s <tests>` without `-t`). Under the full-suite discover
+# (`-s <tests> -t <repo>`) modules import by their dotted repo-relative name,
+# the start dir is NOT added, and the whole module died with
+# `ModuleNotFoundError: No module named 'dsh_fixtures'` — its cases silently
+# absent from the collection count. Same preamble as `test_dsh_contract.py`.
+if str(_HERE) not in sys.path:
+    sys.path.insert(0, str(_HERE))
 
 import dsh_compat  # noqa: E402
 import dsh_fixtures  # noqa: E402
@@ -1182,6 +1191,142 @@ class RowKindClassificationTests(unittest.TestCase):
                 self.assertEqual(report["coverage"]["rows_unverified"], 0,
                                  report["coverage"])
                 self.assertEqual(len(dsh_compat._informational_details(report)), 1)
+
+
+class ReportFaceFailSoftTests(unittest.TestCase):
+    """FIX-323 — the standalone report faces survive an undeclared kind.
+
+    REVIEW-FIX-311-CODE-R0 left three findings, all reachable through the SAME
+    report — one carrying a row diagnostic no declared table knows:
+
+    * F-01: `run_cli`/`_print_human` called `_informational_details`
+      unconditionally BEFORE the FAIL branch was rendered, and its first line
+      (`_assert_report_kinds_declared`) raises on exactly that kind — so the
+      standalone CLI escaped as a raw `ValueError` and the readable report
+      (verdict + issue list) was lost. Both faces now render the verdict
+      branches FIRST and degrade a tripped guard to a finding line: report
+      completeness wins (fail-soft at the face, still fail-loud in
+      `_informational_details` itself — G-18 keeps its own contract).
+    * F-02: `_classify_row` answered `CATEGORY_INFO` for a row with NO `kind`
+      field, parking a malformed record on the `[INFO]` face. A missing kind
+      is not a declared disclosure — it classifies as `CATEGORY_UNKNOWN` and
+      gates, exactly like an undeclared kind.
+    * F-03: both faces picked `[FAIL]` rows by table membership
+      (`kind in FINDING_KINDS`) instead of asking the single classifier, so an
+      undeclared kind rendered zero per-row `[FAIL]` lines even though the
+      verdict failed on it. The faces now ask `_classify_row`.
+    """
+
+    _INSTALL = ZeroVerificationInvariantTests._INSTALL
+
+    def _report(self, kinds):
+        path = _REPO_ROOT / "kinds.cordis.yml"
+        return dsh_compat.check_dsh_preset_compat(
+            root=_REPO_ROOT,
+            compositions=[path],
+            env={},
+            which=_which_map({"node": "C:/fake/node.exe"}),
+            install=dict(self._INSTALL),
+            probe_runner=lambda node, install, paths, root, timeout: _probe_report(
+                [_matrix_entry(path, kinds)]))
+
+    def _undeclared_kind_report(self):
+        report = self._report(("PASS", "SOME_FUTURE_PROBE_KIND"))
+        self.assertEqual(report["verdict"], "FAIL", report)
+        return report
+
+    # ── F-02: a missing `kind` is UNKNOWN, never a quiet `[INFO]` ───────────
+    def test_a_row_without_a_kind_is_unknown_not_info(self):
+        ghost = {"row": "ghost", "name": "@deepseek-ai/dsh-ghost",
+                 "message": "no kind at all"}
+        self.assertEqual(dsh_compat._classify_row(ghost),
+                         dsh_compat.CATEGORY_UNKNOWN)
+        self.assertEqual(dsh_compat._classify_row(dict(ghost, kind=None)),
+                         dsh_compat.CATEGORY_UNKNOWN)
+        self.assertEqual(dsh_compat._classify_row_kind(None),
+                         dsh_compat.CATEGORY_UNKNOWN)
+
+    def test_a_missing_kind_gates_instead_of_quietly_informing(self):
+        # The verdict-level consequence of F-02: the malformed record used to
+        # land on the `[INFO]` face and let the run degrade to NOT_RUN with
+        # zero issues; it is now a finding like any undeclared kind.
+        path = _REPO_ROOT / "kinds.cordis.yml"
+        report = dsh_compat.check_dsh_preset_compat(
+            root=_REPO_ROOT,
+            compositions=[path],
+            env={},
+            which=_which_map({"node": "C:/fake/node.exe"}),
+            install=dict(self._INSTALL),
+            probe_runner=lambda node, install, paths, root, timeout: _probe_report(
+                [_file_entry(path, [{"row": "ghost",
+                                     "name": "@deepseek-ai/dsh-ghost",
+                                     "message": "no kind at all"}])]))
+        self.assertEqual(report["verdict"], "FAIL", report)
+        self.assertEqual(len(report["issues"]), 1, report["issues"])
+        self.assertIn("ghost", report["issues"][0])
+
+    # ── F-01: the faces survive the tripped report guard ────────────────────
+    def test_run_cli_survives_an_undeclared_kind_and_renders_the_full_report(self):
+        report = self._undeclared_kind_report()
+        stream = io.StringIO()
+        with mock.patch.object(dsh_compat, "check_dsh_preset_compat",
+                               return_value=report):
+            code = dsh_compat.run_cli(stream=stream)
+        out = stream.getvalue()
+        self.assertEqual(code, 0, out)
+        # The FAIL verdict and its issue list are on screen — exactly the parts
+        # the escaping ValueError used to swallow.
+        self.assertIn("Result: FAILED", out, out)
+        self.assertIn("SOME_FUTURE_PROBE_KIND", out, out)
+        # The tripped guard degraded to a finding line instead of crashing.
+        self.assertIn("row-kind declaration guard", out, out)
+
+    def test_print_human_survives_an_undeclared_kind_and_keeps_the_issue_list(self):
+        report = self._undeclared_kind_report()
+        stream = io.StringIO()
+        dsh_compat._print_human(report, stream)
+        out = stream.getvalue()
+        self.assertIn("verdict: FAIL", out, out)
+        self.assertIn("issue  :", out, out)
+        self.assertIn("SOME_FUTURE_PROBE_KIND", out, out)
+        self.assertIn("row-kind declaration guard", out, out)
+
+    # ── F-03: the faces ask the single classifier ───────────────────────────
+    def test_an_undeclared_kind_still_renders_a_per_row_fail_line(self):
+        # `row-2` carries the undeclared kind: the verdict failed on it, so the
+        # per-row `[FAIL]` line must exist on both faces — not only the issue
+        # list further down.
+        report = self._undeclared_kind_report()
+        stream = io.StringIO()
+        with mock.patch.object(dsh_compat, "check_dsh_preset_compat",
+                               return_value=report):
+            dsh_compat.run_cli(stream=stream)
+        self.assertIn("[FAIL] row-2", stream.getvalue(), stream.getvalue())
+        stream = io.StringIO()
+        dsh_compat._print_human(report, stream)
+        self.assertIn("[FAIL] row-2", stream.getvalue(), stream.getvalue())
+
+    def test_render_faces_still_route_a_group_record_to_info(self):
+        # The unification must not reclassify the record-level fact the
+        # classifier owns: a group record stays structural `[INFO]`, never a
+        # `[FAIL]` row, on both faces.
+        report = self._report(("PASS", "BUILTIN"))
+        self.assertEqual(report["verdict"], "PASS", report)
+        report["compositions"][0]["rows"].append({
+            "row": "planning", "name": "cordis:group", "kind": "BUILTIN",
+            "builtin": "group", "children": 1,
+            "message": "group builtin — 1 child row(s) enumerated"})
+        stream = io.StringIO()
+        with mock.patch.object(dsh_compat, "check_dsh_preset_compat",
+                               return_value=report):
+            dsh_compat.run_cli(stream=stream)
+        out = stream.getvalue()
+        self.assertNotIn("[FAIL]", out, out)
+        self.assertIn("cordis:group", out, out)
+        stream = io.StringIO()
+        dsh_compat._print_human(report, stream)
+        self.assertNotIn("[FAIL]", stream.getvalue())
+        self.assertIn("cordis:group", stream.getvalue())
 
 
 @unittest.skipUnless(_HAS_YAML,

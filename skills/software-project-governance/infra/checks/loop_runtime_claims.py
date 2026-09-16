@@ -19,6 +19,11 @@ from typing import Any, Iterable, Optional
 
 POLICY_RELATIVE_PATH = PurePosixPath("core/loop-runtime-claim-allowlist.json")
 AUTHORITY_RELATIVE_PATH = PurePosixPath("core/loop-runtime-claim-authority.json")
+# FIX-320 disposition (b): an explicit, auditable exemption ledger for legacy
+# published-artifact records the semantic classifier misreads as active loop
+# capability claims. Code-owned digest + id-set anchors (below) keep the face
+# from widening silently; every applied exemption is disclosed per finding.
+EXEMPTIONS_RELATIVE_PATH = PurePosixPath("core/loop-runtime-claim-exemptions.json")
 SUPPORTED_EXTENSIONS = {".md": "markdown", ".py": "python", ".json": "json"}
 SEMANTIC_ACCOUNTING_CONTRACT = "loop-semantic-accounting/v1"
 SEMANTIC_REPORT_SCHEMA = "loop-semantic-claim-report/v1"
@@ -102,6 +107,19 @@ REQUIRED_HISTORICAL_IDS = {
 }
 REQUIRED_SOURCE_IDS = {"DEC-104", "EVD-707", "AUDIT-133"}
 REQUIRED_POLICY_SHA256 = "3e22d0bd4c2df1d2d7bfafe88210447b94481d339d1494974aa0f398a7aa2122"
+# FIX-320: code-owned anchors for the exemption ledger. Any edit to the JSON
+# (adding, removing or rewording an entry) changes the digest and MUST go
+# through product-code review — that is what makes the exemption face
+# reviewable instead of silently widenable.
+REQUIRED_EXEMPTIONS_SHA256 = "4f8a6cc8bb8b33161d99584a6923c52cca2241da8ca08c2ed28f2826c7a63f52"
+REQUIRED_EXEMPTION_IDS = frozenset({
+    "LRC-EXEMPT-FIX300R0-71-1", "LRC-EXEMPT-FIX300R0-71-4", "LRC-EXEMPT-FIX300R0-72-1",
+    "LRC-EXEMPT-CHECKLIST0810-241-1",
+})
+REQUIRED_EXEMPTION_KEYS = frozenset({
+    "exemption_id", "finding_code", "root_owner", "normalized_path", "locator",
+    "claim_id", "reason", "source", "expected_duration",
+})
 REQUIRED_SOURCE_RECORDS = {
     "DEC-104": (".governance/decision-log.md", "| DEC-104 |", "7666ace742ebc8691356ea53b884163ffafc25dd8545d7e6b680786461f6db11"),
     "EVD-707": (".governance/evidence-log.md", "| EVD-707 |", "8aa48e272d6e627cdb64d5eb443215a584e5d0fc6cdfbb5fa329a93dfeb68e69"),
@@ -279,6 +297,10 @@ class ClaimScanReport:
     source_envelope_sha256: str = field(default_factory=lambda: hashlib.sha256(b"").hexdigest())
     policy_sha256: str = field(default_factory=lambda: hashlib.sha256(b"").hexdigest())
     authority_sha256: str = field(default_factory=lambda: hashlib.sha256(b"").hexdigest())
+    # FIX-320: findings exempted by the code-anchored ledger. Each entry carries
+    # the exemption id plus its reason/source/duration so the CLI output is a
+    # self-describing audit record — never a silent swallow.
+    exemptions_applied: list[dict[str, Any]] = field(default_factory=list)
 
     def _semantic_verdict(self) -> str:
         if self.verdict == "PASS":
@@ -364,6 +386,8 @@ class ClaimScanReport:
             "semantic_accounting_contract": self.semantic_accounting_contract,
             "semantic_accounting_by_path": self.semantic_accounting_by_path,
             "semantic_accounting_sha256": self.semantic_accounting_sha256,
+            "exemptions_applied": self.exemptions_applied,
+            "exemptions_count": len(self.exemptions_applied),
         }
 
 
@@ -1274,6 +1298,97 @@ def _validate_source_records(context: ClaimScanContext, authority: dict[str, Any
         elif _sha_text(matches[0]) != record.get("sha256"):
             findings.append(Finding("AUTHORITY_SOURCE_DIGEST", "authority", "source digest drift", "host_root", rel))
     return findings
+
+
+def _exemptions_digest(data: dict[str, Any]) -> str:
+    return _sha_text(json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+
+
+def _load_exemptions(plugin_home: Path) -> tuple[list[dict[str, Any]], list[Finding]]:
+    """Load the FIX-320 exemption ledger, fail-closed on any contract drift.
+
+    An absent ledger is not an error: zero exemptions is the strict shape, so a
+    missing file only disables the mechanism (fixtures and pre-FIX-320 plugin
+    trees keep scanning). Every drift in a *present* ledger (bad schema, digest
+    mismatch, id-set drift) yields a finding AND voids all exemptions — a
+    tampered ledger must never widen the exemption face, it must return the
+    scan to the unexempted (blocking) shape.
+    """
+    core_dir, dir_error = _safe_join(plugin_home, PurePosixPath(EXEMPTIONS_RELATIVE_PATH.parent).as_posix())
+    if not dir_error and not (core_dir / EXEMPTIONS_RELATIVE_PATH.name).is_file():
+        # Absent ledger, safely resolved: zero exemptions is the strict shape.
+        # This stays error-free so fixtures and pre-FIX-320 plugin trees keep
+        # scanning; findings simply survive unexempted.
+        return [], []
+    data, errors = _load_json(plugin_home, EXEMPTIONS_RELATIVE_PATH, "exemptions")
+    if (errors and len(errors) == 1 and errors[0].code == "EXEMPTIONS_MISSING"
+            and not (plugin_home / EXEMPTIONS_RELATIVE_PATH.as_posix()).exists()):
+        # The guarded reader saw nothing where the raw path shows nothing
+        # either (unsafe core dir, race): the strict no-ledger shape.
+        return [], []
+    if errors or not data:
+        # Anything else (symlink/reparse dir, unreadable bytes, bad schema) is
+        # surfaced fail-closed: a ledger that exists but cannot be honored
+        # must never silently disable itself.
+        return [], errors
+    findings: list[Finding] = []
+    entries = data.get("exemptions")
+    if not isinstance(entries, list) or not entries:
+        findings.append(_finding("EXEMPTIONS_SCHEMA", "exemptions", "exemptions must be a non-empty list"))
+        return [], findings
+    if _exemptions_digest(data) != REQUIRED_EXEMPTIONS_SHA256:
+        findings.append(_finding(
+            "EXEMPTIONS_CONTRACT_DIGEST_DRIFT", "exemptions",
+            "exemptions differ from the code-owned contract"))
+    ids = [entry.get("exemption_id") for entry in entries if isinstance(entry, dict)]
+    if len(ids) != len(set(ids)):
+        findings.append(_finding("EXEMPTIONS_DUPLICATE_ID", "exemptions", "exemption ids must be unique"))
+    if set(ids) != REQUIRED_EXEMPTION_IDS:
+        findings.append(_finding("EXEMPTIONS_SET_DRIFT", "exemptions", "exemption id set drift"))
+    if any(
+        not isinstance(entry, dict) or set(entry) != set(REQUIRED_EXEMPTION_KEYS)
+        for entry in entries
+    ):
+        findings.append(_finding("EXEMPTIONS_SCHEMA", "exemptions", "exemption record fields must be exact"))
+    if findings:
+        return [], findings
+    return entries, []
+
+
+def _apply_exemptions(report: ClaimScanReport, exemptions: list[dict[str, Any]]) -> None:
+    """Move ledger-matched findings out of ``findings`` into the audit record.
+
+    A finding is exempted only on the full key (code, root owner, path, locator,
+    claim id) — narrower keys would let one ledger entry sweep neighbouring
+    findings. Unmatched findings are untouched; each applied exemption is
+    disclosed with its id, reason, source and expected duration.
+    """
+    remaining: list[Finding] = []
+    for finding in report.findings:
+        match = None
+        for entry in exemptions:
+            if (finding.code == entry.get("finding_code")
+                    and finding.root_owner == entry.get("root_owner")
+                    and finding.normalized_path == entry.get("normalized_path")
+                    and finding.locator == entry.get("locator")
+                    and finding.claim_id == entry.get("claim_id")):
+                match = entry
+                break
+        if match is None:
+            remaining.append(finding)
+            continue
+        report.exemptions_applied.append({
+            "exemption_id": match.get("exemption_id", ""),
+            "finding_code": finding.code,
+            "root_owner": finding.root_owner,
+            "normalized_path": finding.normalized_path,
+            "locator": finding.locator,
+            "claim_id": finding.claim_id,
+            "reason": match.get("reason", ""),
+            "source": match.get("source", ""),
+            "expected_duration": match.get("expected_duration", ""),
+        })
+    report.findings = remaining
 
 
 def _owner_roots(context: ClaimScanContext) -> list[tuple[str, Path, tuple[str, ...]]]:
@@ -2347,6 +2462,16 @@ def _json_units(candidate: Candidate, text: str) -> list[SemanticUnit]:
         and isinstance(data, dict)
         and all(key in data for key in ("authority_ids", "source_records"))
     )
+    # FIX-320: the exemption ledger is itself scanned (it lives in the skills
+    # tree); its descriptive reason/source text must read as structural data,
+    # or the ledger would generate the very findings it exists to exempt.
+    exemptions_schema = (
+        candidate.root_owner == "product_root"
+        and candidate.normalized_path
+        == "skills/software-project-governance/core/loop-runtime-claim-exemptions.json"
+        and isinstance(data, dict)
+        and "exemptions" in data
+    )
 
     def walk(value: Any, pointer: str, parent_key: str = "", context: tuple[str, ...] = ()) -> None:
         if isinstance(value, dict):
@@ -2375,7 +2500,7 @@ def _json_units(candidate: Candidate, text: str) -> list[SemanticUnit]:
                 "record_id", "path", "line_prefix", "sha256", "policy_sha256", "authority_ids",
                 "effective_version", "capability", "runtime_activation", "migration_validity",
                 "criteria_2_3_4_5_6", "criterion_7", "criterion_8", "open_risks",
-            })
+            }) or exemptions_schema
             if _claim_potential_hint(content, context):
                 units.append(_unit(candidate, f"json:{pointer or '/'}", (1, 0, 1, 0), content,
                                    "data" if schema_role else ("structured_assertion" if assertion else "data"),
@@ -3137,6 +3262,14 @@ def scan_loop_runtime_claims(context: ClaimScanContext, *, limits: ScanLimits | 
     report.findings.extend(final_errors)
     if final_digest != inventory.inventory_sha256:
         report.findings.append(_finding("INVENTORY_DIGEST_DRIFT", "aggregate", "final candidate inventory differs"))
+    # FIX-320: apply the code-anchored exemption ledger after every finding
+    # source has reported and before the verdict — exempted findings move to
+    # the disclosed exemptions_applied record, so BLOCKED now means "real
+    # findings remain", never "a legacy record was misread again".
+    exemptions, exemption_errors = _load_exemptions(context.plugin_home)
+    report.findings.extend(exemption_errors)
+    if exemptions:
+        _apply_exemptions(report, exemptions)
     report.verdict = "PASS" if not report.findings and report.parsed_candidates == inventory.candidate_count else "BLOCKED"
     return report
 

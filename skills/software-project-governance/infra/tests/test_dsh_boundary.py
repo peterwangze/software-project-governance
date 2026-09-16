@@ -211,6 +211,109 @@ class K2OutsideContractTests(RepoCase):
             criterion = boundary.k2_no_outside_literal(subject, self.contract_facts(subject))
             self.assertFails(criterion, "declared consumer missing")
 
+    def test_negative_a_sentence_mentioning_an_undeclared_package_is_prose(self):
+        """N-2 (REVIEW-FEAT-030-CODE-R1): a literal that merely *mentions* an
+        undeclared package inside a sentence is prose, not a host fact. The
+        package class judges the quoted string as a whole — the literal must
+        *be* a package reference — not any spelling inside it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _copy_artifact(root, dsh_contract.CONTRACT_REL)
+            for relative in boundary.K2_CONSUMERS:
+                _copy_artifact(root, relative)
+            target = root / "lib" / "index.js"
+            target.write_text(
+                target.read_text(encoding="utf-8")
+                + '\nctx.logger.warn("host row @deepseek-ai/dsh-other is required");\n',
+                encoding="utf-8")
+            subject = boundary.Subject(root)
+            violations = boundary.scan_outside_contract_literals(
+                subject, self.contract_facts(subject))
+            self.assertEqual(violations, [])
+
+    def test_negative_an_escaped_quote_inside_a_message_hides_no_package_fact(self):
+        """F-07 (REVIEW-FEAT-030-CODE-R0): `throw new Error("… \\"@scope/pkg\\"")`
+        — the package spelling sits inside an *inner* quoted fragment of a
+        message literal. The whole-literal judgment must not extract it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _copy_artifact(root, dsh_contract.CONTRACT_REL)
+            for relative in boundary.K2_CONSUMERS:
+                _copy_artifact(root, relative)
+            target = root / "lib" / "index.js"
+            target.write_text(
+                target.read_text(encoding="utf-8")
+                + '\nthrow new Error("… \\"@deepseek-ai/dsh-x\\"");\n',
+                encoding="utf-8")
+            subject = boundary.Subject(root)
+            violations = boundary.scan_outside_contract_literals(
+                subject, self.contract_facts(subject))
+            self.assertEqual(violations, [])
+
+    def test_negative_a_whole_literal_undeclared_package_is_still_caught(self):
+        """Guard against over-correction: the whole-literal judgment keeps the
+        negative power of the class — a literal that *is* an undeclared package
+        (with or without a declared-package subpath… the subpath form is judged
+        by its package prefix) is still a violation. The bare undeclared form
+        is covered by ``test_negative_an_undeclared_package_literal_is_caught…``;
+        this locks the subpath suffix form stays attributed to its package."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _copy_artifact(root, dsh_contract.CONTRACT_REL)
+            for relative in boundary.K2_CONSUMERS:
+                _copy_artifact(root, relative)
+            target = root / "lib" / "index.js"
+            target.write_text(
+                target.read_text(encoding="utf-8")
+                + '\nconst ghost = "@deepseek-ai/dsh-not-a-declared-package/sub";\n',
+                encoding="utf-8")
+            subject = boundary.Subject(root)
+            violations = boundary.scan_outside_contract_literals(
+                subject, self.contract_facts(subject))
+            self.assertEqual(len(violations), 1, violations)
+            self.assertEqual(violations[0][2], "package")
+            self.assertEqual(violations[0][3], "@deepseek-ai/dsh-not-a-declared-package")
+
+    def test_negative_a_version_suffixed_undeclared_package_is_caught(self):
+        """F-2 (REVIEW-FIX-320-322-CODE-R0): a version tag rides on the package
+        token (`@scope/pkg@^1.2`); the whole-literal judgment must attribute
+        the `@…` rest to the package prefix, not treat it as prose."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _copy_artifact(root, dsh_contract.CONTRACT_REL)
+            for relative in boundary.K2_CONSUMERS:
+                _copy_artifact(root, relative)
+            target = root / "lib" / "index.js"
+            target.write_text(
+                target.read_text(encoding="utf-8")
+                + '\nconst ghost = "@deepseek-ai/dsh-not-a-declared-package@^1.2";\n',
+                encoding="utf-8")
+            subject = boundary.Subject(root)
+            violations = boundary.scan_outside_contract_literals(
+                subject, self.contract_facts(subject))
+            self.assertEqual(len(violations), 1, violations)
+            self.assertEqual(violations[0][2], "package")
+            self.assertEqual(violations[0][3], "@deepseek-ai/dsh-not-a-declared-package")
+
+    def test_positive_a_declared_package_with_a_version_suffix_is_accepted(self):
+        """Guard for the same F-2 rule: a *declared* package spelled with a
+        version tag stays accepted — attribution must not become a new false
+        positive."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _copy_artifact(root, dsh_contract.CONTRACT_REL)
+            for relative in boundary.K2_CONSUMERS:
+                _copy_artifact(root, relative)
+            target = root / "lib" / "index.js"
+            target.write_text(
+                target.read_text(encoding="utf-8")
+                + '\nconst pinned = "@deepseek-ai/dsh-persona@^2.0";\n',
+                encoding="utf-8")
+            subject = boundary.Subject(root)
+            violations = boundary.scan_outside_contract_literals(
+                subject, self.contract_facts(subject))
+            self.assertEqual(violations, [])
+
     def test_an_allowlisted_literal_is_exempt_only_in_its_declared_scope(self):
         literal = "@deepseek-ai/dsh-not-a-declared-package"
         with tempfile.TemporaryDirectory() as tmp:

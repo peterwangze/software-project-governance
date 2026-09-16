@@ -1,0 +1,49 @@
+{
+  "schema_version": "1.0",
+  "exemptions": [
+    {
+      "exemption_id": "LRC-EXEMPT-FIX300R0-71-1",
+      "finding_code": "UNSUPPORTED_AFFIRMATIVE",
+      "root_owner": "product_root",
+      "normalized_path": "docs/reviews/review-FIX-300-CODE-R0.md",
+      "locator": "accounting:71:1",
+      "claim_id": "LRC-ACTIVE-RUNTIME",
+      "reason": "记录性文本：审查报告对 check-loop-runtime-claims 的 CLI stdout 消费者全量枚举（grep 命中归类清单），非对 loop runtime 能力的当前活跃声明；语义扫描器把命令名与动词性文本误判为 runtime_activation 断言（untenable 假阻）。",
+      "source": "docs/reviews/review-FIX-300-CODE-R0.md §3.4——FIX-300 审查报告（0.66.1 期随 commit e994c7a 引入）；FIX-319 TRIAGE 2026-09-13 归因（EVD-1018）；FIX-320 处置 (b)（DEC-195 真修方向，Coordinator 裁决 2026-09-16 批准豁免面 4 条）。",
+      "expected_duration": "该历史审查报告存在于扫描面期间持续有效；若报告按 DEC-195 (a) 路径改写措辞或移出索引面，本条目应随之删除（增删条目须同步 REQUIRED_EXEMPTIONS_SHA256 并走产品代码审查）。"
+    },
+    {
+      "exemption_id": "LRC-EXEMPT-FIX300R0-71-4",
+      "finding_code": "UNSUPPORTED_AFFIRMATIVE",
+      "root_owner": "product_root",
+      "normalized_path": "docs/reviews/review-FIX-300-CODE-R0.md",
+      "locator": "accounting:71:4",
+      "claim_id": "LRC-ACTIVE-RUNTIME",
+      "reason": "记录性文本：同 §3.4 消费者枚举的 FIX-215 gate runner 条目（描述测试如何容错读取扫描器 stdout），非活跃能力声明；误判机理同 LRC-EXEMPT-FIX300R0-71-1。",
+      "source": "docs/reviews/review-FIX-300-CODE-R0.md §3.4——FIX-300 审查报告（0.66.1 期随 commit e994c7a 引入）；FIX-319 TRIAGE 2026-09-13 归因（EVD-1018）；FIX-320 处置 (b)（Coordinator 裁决 2026-09-16）。",
+      "expected_duration": "同 LRC-EXEMPT-FIX300R0-71-1：随报告存在持续；报告改写或移出索引面时删除本条目并同步 digest 锚。"
+    },
+    {
+      "exemption_id": "LRC-EXEMPT-FIX300R0-72-1",
+      "finding_code": "UNSUPPORTED_AFFIRMATIVE",
+      "root_owner": "product_root",
+      "normalized_path": "docs/reviews/review-FIX-300-CODE-R0.md",
+      "locator": "accounting:72:1",
+      "claim_id": "LRC-ACTIVE-RUNTIME",
+      "reason": "记录性文本：同 §3.4 的 as_dict() 键面陈述（报告描述扫描器输出键集无碰撞），非活跃能力声明；误判机理同 LRC-EXEMPT-FIX300R0-71-1。",
+      "source": "docs/reviews/review-FIX-300-CODE-R0.md §3.4——FIX-300 审查报告（0.66.1 期随 commit e994c7a 引入）；FIX-319 TRIAGE 2026-09-13 归因（EVD-1018）；FIX-320 处置 (b)（Coordinator 裁决 2026-09-16）。",
+      "expected_duration": "同 LRC-EXEMPT-FIX300R0-71-1：随报告存在持续；报告改写或移出索引面时删除本条目并同步 digest 锚。"
+    },
+    {
+      "exemption_id": "LRC-EXEMPT-CHECKLIST0810-241-1",
+      "finding_code": "AMBIGUOUS_SUBJECT_RELATION",
+      "root_owner": "product_root",
+      "normalized_path": "docs/release/release-checklist-0.81.0.md",
+      "locator": "accounting:241:1",
+      "claim_id": "",
+      "reason": "已发布 0.81.0 checklist 对 release-ledger 复跑结果的记录性文本（state/trust_level/candidate_commit 事实行），多主语肯定句被语义扫描器判为 AMBIGUOUS_SUBJECT_RELATION；与历史审查报告条目同属已发布产物记录性文本误判族（Coordinator 裁决 2026-09-16 纳入豁免面第 4 条）。",
+      "source": "docs/release/release-checklist-0.81.0.md Gate 13 复跑记录（0.81.0 发布产物，candidate_commit a89341e）；EVD-1041 将其归入 FIX-320 族既有基线；FIX-320 处置 (b)（Coordinator 裁决 2026-09-16）。",
+      "expected_duration": "该已发布 checklist 存在于扫描面期间持续有效（已发布文档不可改写）；若语义扫描器分类精度后续修复该多主语记录形态误判，应删除本条目并同步 digest 锚。"
+    }
+  ]
+}

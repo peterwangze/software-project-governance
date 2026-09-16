@@ -462,6 +462,14 @@ K2_CONSUMERS: Tuple[str, ...] = (
     "cordis.patch.yml",
 )
 
+#: The package class judges a quoted string **as a whole**: the literal must
+#: *be* a package reference — `@scope/name`, optionally followed by `/`-separated
+#: subpath segments — not merely contain one (FIX-322, closing F-07 of
+#: REVIEW-FEAT-030-CODE-R0 and N-2 of REVIEW-FEAT-030-CODE-R1, where
+#: ``findall`` over the literal reported a package spelling inside a message).
+#: A sentence mentioning a package is prose: an error message quoting a
+#: package name is a message, not a host fact. This mirrors the whole-literal
+#: rationale recorded on ``_ENV_NAME_LITERAL_RE`` below.
 _PACKAGE_RE = re.compile(r"@[A-Za-z0-9._-]+/[A-Za-z0-9._-]+")
 _QUOTED_RE = re.compile(r"([\"'`])((?:\\.|(?!\1).)*)\1")
 _ENV_REF_RE = re.compile(
@@ -521,9 +529,18 @@ def scan_outside_contract_literals(subject: Subject, facts: ContractFacts,
                     violations.append((relative, line_number, kind, literal))
 
             for literal in quoted_literals(line):
-                for package in _PACKAGE_RE.findall(literal):
-                    if package not in declared["package"]:
-                        report("package", package)
+                # package class: whole-literal judgment (see _PACKAGE_RE) — the
+                # literal must *be* a package reference. The match is anchored
+                # at the literal start; a `/`-prefixed rest is a subpath and an
+                # `@`-prefixed rest is a version tag of the same package — both
+                # stay attributed to their package token (F-2,
+                # REVIEW-FIX-320-322-CODE-R0).
+                package_match = _PACKAGE_RE.match(literal)
+                if package_match:
+                    rest = literal[package_match.end():]
+                    if (not rest or rest.startswith(("/", "@"))) \
+                            and package_match.group(0) not in declared["package"]:
+                        report("package", package_match.group(0))
                 # env names in declaration files: a whole-literal `DSH_…`
                 if (relative in K2_DECLARATION_CONSUMERS
                         and _ENV_NAME_LITERAL_RE.match(literal)

@@ -447,13 +447,21 @@ def k2_scan(paths=K2_CONSUMERS, root=None, allowlist=K2_ALLOWLIST):
     """Every outside-contract host literal, as ``(file, line, class, literal)``.
 
     Detection is **literal-scoped, not prose-scoped**, and every class reads the
-    contents of a string literal rather than a raw line: the package class scans
-    each quoted string, the path/marker classes match inside quoted strings (so
-    `const d = ".agent-presets"` is caught — reviewing a raw line missed exactly
-    that shape), and the env class reads environment accessor calls (the
-    identifier there is the literal). A line-based scan would flag every
-    sentence that merely discusses a package or path, which would force the
-    allowlist to grow until the judgment meant nothing.
+    contents of a string literal rather than a raw line: the path/marker classes
+    match inside quoted strings (so `const d = ".agent-presets"` is caught —
+    reviewing a raw line missed exactly that shape), and the env class reads
+    environment accessor calls (the identifier there is the literal).
+
+    **Known divergence from the product scanner** (FIX-322): the package class
+    here keeps the historic inside-string ``findall`` — any package spelling
+    inside a literal is extracted and judged — while the product scanner
+    (``checks/dsh_boundary.py``) judges a quoted string as a whole: the literal
+    must *be* the package reference (optionally with a `/`-prefixed subpath),
+    which closes F-07 (REVIEW-FEAT-030-CODE-R0) and N-2
+    (REVIEW-FEAT-030-CODE-R1). This oracle stays conservative on purpose so a
+    contract-facing test that needs the literal-scoped shape keeps a working
+    reference; a message sentence quoting a package name is judged prose only by
+    the product scanner.
 
     ``paths`` is repo-relative (the negative tests pass their own), and the
     allowlist is a parameter so both the "entry missing" and the "entry out of
@@ -473,7 +481,9 @@ def k2_scan(paths=K2_CONSUMERS, root=None, allowlist=K2_ALLOWLIST):
                     violations.append((relative, line_number, kind, literal))
 
             for literal in quoted_literals(line):
-                # package class: any declared-package spelling inside the string
+                # package class (V2 oracle): any package spelling inside the
+                # string — the conservative divergence from the product
+                # scanner's whole-literal judgment (see k2_scan docstring).
                 for package in _PACKAGE_RE.findall(literal):
                     if package in declared["package"]:
                         continue

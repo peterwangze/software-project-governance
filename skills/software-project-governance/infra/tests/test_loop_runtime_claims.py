@@ -1647,5 +1647,184 @@ class LoopRuntimeFix215ContractTests(unittest.TestCase):
                 self.assertIn(expected, codes)
 
 
+class FIX320ExemptionLedgerTests(unittest.TestCase):
+    """FIX-320 disposition (b): the code-anchored legacy-record exemption ledger.
+
+    The semantic classifier misreads legacy *published-artifact records* (a
+    0.66.1-era review report and the 0.81.0 release checklist) as active loop
+    capability claims — an untenable BLOCKED. The ledger exempts exactly those
+    findings, discloses each with id/reason/source/expected-duration, and is
+    anchored by a code-owned digest + id set: any ledger drift voids every
+    exemption (fail-closed), so the face can never widen silently.
+    """
+
+    # Runtime concatenation on purpose: a single module-level literal shaped
+    # like an active-capability claim would itself be judged by the scanner
+    # (this file lives in the scanned tree); each fragment alone is not a claim.
+    TRIGGER_TEXT = "Loop runtime is " + "active and complete.\n"
+
+    def _borrowed_fixture(self):
+        """Borrow ``LoopRuntimeClaimTests``' fixture helpers (no test state)."""
+        helper = LoopRuntimeClaimTests("test_clean_complete_inventory_passes")
+        self.addCleanup(helper.doCleanups)
+        return helper
+
+    def _exemption_entry(self, finding, exemption_id="LRC-EXEMPT-TEST-1"):
+        return {
+            "exemption_id": exemption_id,
+            "finding_code": finding.code,
+            "root_owner": finding.root_owner,
+            "normalized_path": finding.normalized_path,
+            "locator": finding.locator,
+            "claim_id": finding.claim_id,
+            "reason": "test reason",
+            "source": "test source",
+            "expected_duration": "test duration",
+        }
+
+    @staticmethod
+    def _ledger(entries):
+        return {"schema_version": "1.0", "exemptions": entries}
+
+    def _install_ledger(self, plugin, data, ids):
+        (plugin / "core/loop-runtime-claim-exemptions.json").write_text(
+            json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        for attr, value in (
+            ("REQUIRED_EXEMPTIONS_SHA256", lrc._exemptions_digest(data)),
+            ("REQUIRED_EXEMPTION_IDS", frozenset(ids)),
+        ):
+            patcher = patch.object(lrc, attr, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def _triggered_baseline(self, helper, product, plugin, host):
+        (product / "docs/legacy.md").write_text(self.TRIGGER_TEXT, encoding="utf-8")
+        baseline = helper._scan(product, plugin, host)
+        finding = next(f for f in baseline.findings if f.code == "UNSUPPORTED_AFFIRMATIVE")
+        return finding
+
+    def test_exemption_moves_legacy_finding_to_disclosure(self):
+        helper = self._borrowed_fixture()
+        stack, product, plugin, host, _, _ = helper._roots()
+        self.addCleanup(stack.cleanup)
+        finding = self._triggered_baseline(helper, product, plugin, host)
+        entry = self._exemption_entry(finding)
+        self._install_ledger(plugin, self._ledger([entry]), {entry["exemption_id"]})
+        report = helper._scan(product, plugin, host)
+        self.assertEqual("PASS", report.verdict, report.findings)
+        self.assertEqual([], [f for f in report.findings if f.stage == "classify"])
+        self.assertEqual(1, len(report.exemptions_applied))
+        applied = report.exemptions_applied[0]
+        self.assertEqual(entry["exemption_id"], applied["exemption_id"])
+        self.assertEqual("test reason", applied["reason"])
+        self.assertEqual("test source", applied["source"])
+        self.assertEqual("test duration", applied["expected_duration"])
+        self.assertEqual(entry["locator"], applied["locator"])
+        self.assertEqual(finding.claim_id, applied["claim_id"])
+        payload = report.as_dict()
+        self.assertEqual(1, payload["exemptions_count"])
+        self.assertEqual(1, len(payload["exemptions_applied"]))
+
+    def test_ledger_digest_drift_voids_every_exemption(self):
+        helper = self._borrowed_fixture()
+        stack, product, plugin, host, _, _ = helper._roots()
+        self.addCleanup(stack.cleanup)
+        finding = self._triggered_baseline(helper, product, plugin, host)
+        entry = self._exemption_entry(finding)
+        data = self._ledger([entry])
+        self._install_ledger(plugin, data, {entry["exemption_id"]})
+        tampered = json.loads(json.dumps(data))
+        tampered["exemptions"][0]["reason"] = "reworded without re-anchoring"
+        (plugin / "core/loop-runtime-claim-exemptions.json").write_text(
+            json.dumps(tampered, ensure_ascii=False), encoding="utf-8")
+        report = helper._scan(product, plugin, host)
+        self.assertIn("EXEMPTIONS_CONTRACT_DIGEST_DRIFT", {f.code for f in report.findings})
+        self.assertIn("UNSUPPORTED_AFFIRMATIVE", {f.code for f in report.findings})
+        self.assertEqual([], report.exemptions_applied)
+        self.assertEqual("BLOCKED", report.verdict)
+
+    def test_ledger_id_set_drift_voids_every_exemption(self):
+        helper = self._borrowed_fixture()
+        stack, product, plugin, host, _, _ = helper._roots()
+        self.addCleanup(stack.cleanup)
+        finding = self._triggered_baseline(helper, product, plugin, host)
+        entries = [
+            self._exemption_entry(finding, "LRC-EXEMPT-TEST-1"),
+            self._exemption_entry(finding, "LRC-EXEMPT-TEST-2"),
+        ]
+        data = self._ledger(entries)
+        # digest anchor matches the two-entry ledger; the id anchor covers only
+        # one — the id-set drift alone must void everything.
+        self._install_ledger(plugin, data, {"LRC-EXEMPT-TEST-1"})
+        report = helper._scan(product, plugin, host)
+        self.assertIn("EXEMPTIONS_SET_DRIFT", {f.code for f in report.findings})
+        self.assertIn("UNSUPPORTED_AFFIRMATIVE", {f.code for f in report.findings})
+        self.assertEqual([], report.exemptions_applied)
+
+    def test_ledger_unknown_field_voids_every_exemption(self):
+        helper = self._borrowed_fixture()
+        stack, product, plugin, host, _, _ = helper._roots()
+        self.addCleanup(stack.cleanup)
+        finding = self._triggered_baseline(helper, product, plugin, host)
+        entry = self._exemption_entry(finding)
+        entry["note"] = "field outside the exact record schema"
+        data = self._ledger([entry])
+        self._install_ledger(plugin, data, {entry["exemption_id"]})
+        report = helper._scan(product, plugin, host)
+        self.assertIn("EXEMPTIONS_SCHEMA", {f.code for f in report.findings})
+        self.assertIn("UNSUPPORTED_AFFIRMATIVE", {f.code for f in report.findings})
+        self.assertEqual([], report.exemptions_applied)
+
+    def test_absent_ledger_disables_exemptions_without_error(self):
+        """No ledger file = zero exemptions = the strict shape. That must stay
+        error-free (fixtures and pre-FIX-320 trees keep scanning); the finding
+        simply survives unexempted."""
+        helper = self._borrowed_fixture()
+        stack, product, plugin, host, _, _ = helper._roots()
+        self.addCleanup(stack.cleanup)
+        self._triggered_baseline(helper, product, plugin, host)
+        report = helper._scan(product, plugin, host)
+        self.assertEqual([], [f for f in report.findings if f.code.startswith("EXEMPTIONS_")])
+        self.assertIn("UNSUPPORTED_AFFIRMATIVE", {f.code for f in report.findings})
+        self.assertEqual([], report.exemptions_applied)
+        self.assertEqual("BLOCKED", report.verdict)
+
+    def test_non_matching_entry_leaves_finding_untouched(self):
+        helper = self._borrowed_fixture()
+        stack, product, plugin, host, _, _ = helper._roots()
+        self.addCleanup(stack.cleanup)
+        finding = self._triggered_baseline(helper, product, plugin, host)
+        entry = self._exemption_entry(finding)
+        entry["locator"] = "accounting:999:9"
+        data = self._ledger([entry])
+        self._install_ledger(plugin, data, {entry["exemption_id"]})
+        report = helper._scan(product, plugin, host)
+        self.assertEqual([], [f for f in report.findings if f.code.startswith("EXEMPTIONS_")])
+        self.assertIn("UNSUPPORTED_AFFIRMATIVE", {f.code for f in report.findings})
+        self.assertEqual([], report.exemptions_applied)
+
+    def test_real_repository_discloses_exactly_the_code_anchored_ledger(self):
+        """Live-tree integration: all four anchored exemptions apply on both
+        scan modes and no classify-stage finding survives. The top-level
+        verdict is deliberately not asserted here: a concurrent writer inside
+        the scanned tree trips the existing INVENTORY_* re-check protections
+        (transient, environment noise — by design, not by exemption)."""
+        repo_root = _INFRA.parents[2]
+        plugin_home = repo_root / "skills/software-project-governance"
+        for mode in ("installed_host", "product_release"):
+            with self.subTest(mode=mode):
+                context = ClaimScanContext(repo_root, plugin_home, repo_root, mode)
+                report = scan_loop_runtime_claims(context)
+                self.assertEqual(
+                    lrc.REQUIRED_EXEMPTION_IDS,
+                    {item["exemption_id"] for item in report.exemptions_applied})
+                self.assertEqual(
+                    [], [f for f in report.findings if f.stage == "classify"])
+                self.assertEqual(
+                    [], [f for f in report.findings if f.code.startswith("EXEMPTIONS_")])
+                payload = report.as_dict()
+                self.assertEqual(payload["exemptions_count"], len(payload["exemptions_applied"]))
+
+
 if __name__ == "__main__":
     raise SystemExit(_fix215_cli_or_unittest())

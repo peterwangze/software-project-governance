@@ -11760,12 +11760,17 @@ def _scan_unicode_line_separators():
     editors, markdown renderers) while the "\\n"-based governance checks saw
     one long line — the M5.4b false positive. EVD-1063 repaired that single
     occurrence without a systemic guard; this scan closes the class. It
-    reports every occurrence of the FIX-349 ⑥ separator family (VT, FS/GS/RS,
-    NEL, LS, PS — all honored as line boundaries by splitlines-style
+    reports every occurrence of the FIX-349 ⑥ separator family (VT, FF,
+    FS/GS/RS, NEL, LS, PS — all honored as line boundaries by splitlines-style
     consumers) in the hot files that line-based governance checks parse.
 
-    WARN severity (same caliber as ``evidence_col_mismatch``:
-    ``structural_issue_is_blocking`` treats WARN as non-blocking): the
+    Severity caliber (FIX-350 F-2): the WARN issues emitted here are
+    non-blocking inside the ``check-governance`` aggregation
+    (``structural_issue_is_blocking`` treats WARN as non-blocking), but the
+    standalone ``check-structural-validity`` CLI exits 1 on ANY issue,
+    WARN included — run it only when a fail-closed reading is intended.
+
+    WARN severity (same caliber as ``evidence_col_mismatch``): the
     characters are a parsing hazard, not a broken schema, and the data fix
     belongs to the Coordinator's governance write-back, not to this check.
     """
@@ -11775,6 +11780,7 @@ def _scan_unicode_line_separators():
     )
     separators = (
         ("U+000B", "\x0b"),    # VT  — vertical tab (EVD-890 incident character)
+        ("U+000C", "\x0c"),    # FF  — form feed (FIX-350 F-1: splitlines boundary)
         ("U+001C", "\x1c"),    # FS  — file separator
         ("U+001D", "\x1d"),    # GS  — group separator
         ("U+001E", "\x1e"),    # RS  — record separator
@@ -15997,6 +16003,10 @@ def _run_full_engine_checks(args):
         else:
             s = dup["summary"]
             print(f"│  source/projection pairs checked: {dup.get('pairs_checked', 0)}")
+            for x in dup.get("exemptions", []):
+                reason = x.get("reason", "")
+                print(f"│    [EXEMPT] {x.get('path', '')}"
+                      + (f" — {reason}" if reason else ""))
             for f in dup["findings"][:8]:
                 print(f"│    [{f['severity']}] {f['check']}: {f.get('path','')} dup={f.get('duplicate_pct','')}%")
             if s["errors"] or s["warnings"]:
@@ -19440,8 +19450,15 @@ def _archguard_severity(count, warn, error):
     return None
 
 
-def _archguard_excluded(rel_path, exclusions):
-    """True if rel_path matches any exclusion glob (fnmatch, supports ** segments)."""
+def _archguard_exclusion_match(rel_path, exclusions):
+    """Return the first exclusion entry matching rel_path, or None.
+
+    Single matching implementation for every ArchGuard scan face (FIX-350):
+    fnmatch on the posix form, supports ``**`` segments. Callers that only
+    need the boolean verdict use :func:`_archguard_excluded`; callers that
+    must disclose WHICH rule fired (DEC-151: 豁免必披露) take the entry's
+    ``reason`` from here.
+    """
     posix = str(rel_path).replace("\\", "/")
     for entry in exclusions or []:
         pat = entry.get("path") if isinstance(entry, dict) else entry
@@ -19449,18 +19466,23 @@ def _archguard_excluded(rel_path, exclusions):
             continue
         # Support a leading **/ by also matching the basename segment.
         if fnmatch.fnmatch(posix, pat):
-            return True
+            return entry
         if pat.startswith("**/"):
             base = pat[3:]
             if fnmatch.fnmatch(Path(posix).name, base):
-                return True
+                return entry
             if fnmatch.fnmatch(posix, base):
-                return True
+                return entry
         # segment-agnostic match: any path containing a segment matching the bare glob
         bare = pat.replace("**/", "").replace("/**", "")
         if bare and any(fnmatch.fnmatch(seg, bare) for seg in posix.split("/")):
-            return True
-    return False
+            return entry
+    return None
+
+
+def _archguard_excluded(rel_path, exclusions):
+    """True if rel_path matches any exclusion glob (fnmatch, supports ** segments)."""
+    return _archguard_exclusion_match(rel_path, exclusions) is not None
 
 
 def _archguard_iter_code_files(root, extensions=(".py", ".js", ".ts")):
@@ -19503,8 +19525,14 @@ def check_architecture_health(root=None, schema=None):
         lines = text.splitlines()
         n_lines = len(lines)
 
+        # FIX-350: the exclusion gate covers every scan face, not only
+        # module_size — function_size / module_constants / duplicate_constant
+        # honor the same schema `module_size.exclusions` list (module_size
+        # semantics unchanged; a schema with no exclusions behaves as before).
+        excluded = _archguard_excluded(rel, exclusions)
+
         # module size (only when not excluded)
-        if not _archguard_excluded(rel, exclusions):
+        if not excluded:
             sev = _archguard_severity(n_lines, ms_warn, ms_error)
             if sev:
                 findings.append({
@@ -19513,7 +19541,7 @@ def check_architecture_health(root=None, schema=None):
                 })
 
         # Python-only: function size via ast + module constants + duplicate constants
-        if str(rel).endswith(".py"):
+        if str(rel).endswith(".py") and not excluded:
             # function sizes
             try:
                 tree = ast.parse(text)
@@ -19620,10 +19648,22 @@ def check_duplicate_code(root=None, schema=None):
     error_pct = dc.get("error_pct", 80)
     normalize_le = bool(dc.get("normalize_line_endings", True))
     ignore_ws = bool(dc.get("ignore_whitespace", True))
+    # FIX-350: schema-driven pair exemptions ([{path, reason}] on the SOURCE
+    # rel path, same caliber as module_size.exclusions). An exempt pair still
+    # counts toward pairs_checked and is disclosed — never silently dropped.
+    dc_exclusions = dc.get("exclusions", [])
 
     findings = []
+    exemptions = []
     pairs = _archguard_source_projection_pairs(root)
     for rel, src_abs, proj_abs in pairs:
+        match = _archguard_exclusion_match(rel, dc_exclusions)
+        if match is not None:
+            reason = match.get("reason", "") if isinstance(match, dict) else ""
+            # posix form for the disclosure — same caliber as the schema glob.
+            exemptions.append({"path": str(rel).replace("\\", "/"),
+                               "reason": reason})
+            continue
         try:
             src_text = src_abs.read_text(encoding="utf-8", errors="replace")
             proj_text = proj_abs.read_text(encoding="utf-8", errors="replace")
@@ -19649,6 +19689,7 @@ def check_duplicate_code(root=None, schema=None):
     warnings = sum(1 for f in findings if f["severity"] == "WARN")
     return {
         "findings": findings, "pairs_checked": len(pairs),
+        "exemptions": exemptions,
         "summary": {"errors": errors, "warnings": warnings},
     }
 
@@ -22830,6 +22871,10 @@ def cmd_check_duplicate_code(args):
         return
     errors, warnings = _archguard_print_findings("Duplicate Code", result)
     print(f"\n  Pairs checked: {result.get('pairs_checked', 0)}")
+    for x in result.get("exemptions", []):
+        reason = x.get("reason", "")
+        print(f"  [EXEMPT] {x.get('path', '')}"
+              + (f" — {reason}" if reason else ""))
     print(f"  Result: ISSUES FOUND — {errors} ERROR, {warnings} WARN")
     if getattr(args, "fail_on_issues", False) and errors > 0:
         sys.exit(1)

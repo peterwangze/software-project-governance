@@ -8,7 +8,9 @@
     "target_lines": 1500,
     "exclusions": [
       {"path": "**/tests/**", "reason": "test files exempted from size limits"},
-      {"path": "**/test_*.py", "reason": "test files exempted from size limits"}
+      {"path": "**/test_*.py", "reason": "test files exempted from size limits"},
+      {"path": "project/**", "reason": "FIX-350: e2e fixture projection mirror (project/e2e-test-project) — expected duplication by design, release-projection generates it; dual-write debt is registered as RISK-039, long-term fix = projection single-source"},
+      {"path": ".governance/**", "reason": "FIX-350: host governance runtime data (incl. backups/) — not product code"}
     ]
   },
   "function_size": {
@@ -26,7 +28,12 @@
     "error_pct": 80,
     "normalize_line_endings": true,
     "ignore_whitespace": true,
-    "source_projection_pairs": "auto-from-manifest"
+    "source_projection_pairs": "auto-from-manifest",
+    "exclusions": [
+      {"path": "skills/software-project-governance/infra/__init__.py", "reason": "FIX-350: projection mirror pair — 100% identity is the expected release-projection sync, not accidental copy; dual-write debt registered as RISK-039, long-term fix = projection single-source"},
+      {"path": "skills/software-project-governance/infra/resolve_entry.py", "reason": "FIX-350: projection mirror pair — 100% identity is the expected release-projection sync, not accidental copy; dual-write debt registered as RISK-039, long-term fix = projection single-source"},
+      {"path": "skills/software-project-governance/infra/cleanup.py", "reason": "FIX-350: projection mirror pair — 89.2% identity is the expected release-projection sync, not accidental copy; dual-write debt registered as RISK-039, long-term fix = projection single-source"}
+    ]
   },
   "complexity": {
     "enabled": false,
@@ -36,7 +43,8 @@
   },
   "technical_debt": {
     "root_residue_patterns": ["_fix_*", "_tmp_*", "debug_*", "scratch_*"],
-    "release_docs_archive_threshold_versions": 30,
+    "release_docs_archive_threshold_versions": 80,
+    "release_docs_note": "FIX-350: threshold raised 30->80. Keeping the full docs/release history is a deliberate strategy (release lineage reproducibility — check-release reads these files for released-version lineage), so the 74-token count is a permanent false WARN at 30. Archiving existing files is blocked by the check-release dependency; at 80 the advisory re-arms and archive candidacy must be re-evaluated.",
     "hooks_drift_detection": true,
     "ledger_cross_validate": true
   },

@@ -513,7 +513,7 @@
 - **输出**：3 级（PASS/WARN/ERROR）发现清单——module_size（文件行数）、function_size（Python AST 函数行数）、module_constants（模块常量计数）、duplicate_constant（重复定义如 PRODUCT_CODE_PATTERNS）
 - **触发条件**：大型项目持续演进中需要看模块/函数膨胀信号时；CI/本地一键扫描
 - **依赖**：`core/architecture-health.json`（manifest 双重登记）、Python `ast`
-- **边界**：0.58.0 advisory-only（`gate_integration.fatal_on_error=false`）——WARN/ERROR 告警但不阻断 release gate；test 文件（`**/tests/**`、`**/test_*.py`）按 schema exclusion 豁免；不重写代码，仅诊断。
+- **边界**：0.58.0 advisory-only（`gate_integration.fatal_on_error=false`）——WARN/ERROR 告警但不阻断 release gate；schema `module_size.exclusions` 豁免（FIX-350 起同时 gate 全部四个扫描面：module_size/function_size/module_constants/duplicate_constant；无豁免 schema 行为与旧版一致）；`project/**`（e2e fixture 投影镜像）与 `.governance/**`（宿主治理运行时数据）已豁免；不重写代码，仅诊断。
 - **被以下子工作流使用**：架构（architecture）、维护（maintenance）
 
 ### TOOL-047：Declarative Release Ledger
@@ -565,10 +565,10 @@
 - **文件**：`infra/verify_workflow.py`（`check_duplicate_code`）
 - **子命令**：`check-duplicate-code [--fail-on-issues]`
 - **输入**：source（`skills/software-project-governance/infra/*.py`）与 projection（`project/e2e-test-project/.../infra/*.py`）文件对
-- **输出**：每对的重复率（duplicate_pct）+ 阈值分级（WARN≥60%/ERROR≥80%）
+- **输出**：每对的重复率（duplicate_pct）+ 阈值分级（WARN≥60%/ERROR≥80%）；FIX-350 起豁免对（schema `duplicate_code.exclusions`，按 source 相对路径匹配）计入 pairs_checked 并以 `[EXEMPT]` 行披露（DEC-151：豁免必披露，不静默）
 - **触发条件**：监控 source/projection 双写腐化、评估拆分收益时
 - **依赖**：`core/architecture-health.json` 的 `duplicate_code` 段
-- **边界**：**MUST normalize 换行符**（CRLF→LF）+ 忽略空白——否则 source(CRLF) vs projection(LF) 会误判 100% 差异；advisory-only。
+- **边界**：**MUST normalize 换行符**（CRLF→LF）+ 忽略空白——否则 source(CRLF) vs projection(LF) 会误判 100% 差异；advisory-only；`__init__.py`/`resolve_entry.py`/`cleanup.py` 三个镜像对为预期同步（RISK-039 双写债），已按 source 路径豁免。
 - **被以下子工作流使用**：架构（architecture）、维护（maintenance）
 
 ### TOOL-045：ArchGuard Technical Debt check
@@ -579,7 +579,7 @@
 - **输出**：root_residue（游离脚本）、release_docs_versions（历史文档版本数）、hooks_drift（源 vs 已安装内容漂移）、ledger_no_carrying_version（OPEN/IN_PROGRESS 项无承载版本）
 - **触发条件**：定期技术债巡检、发布前 hooks 一致性检查
 - **依赖**：`core/technical-debt-ledger.md`（manifest 登记）、`core/architecture-health.json`
-- **边界**：advisory-only；hooks 漂移检测复用既有 helper（G9 约束）不重复实现；不自动清理游离脚本。
+- **边界**：advisory-only；hooks 漂移检测复用既有 helper（G9 约束）不重复实现；不自动清理游离脚本；release_docs_versions 阈值经 FIX-350 校准为 80（docs/release 全历史保留是蓄意策略——release lineage 可复现性，check-release 依赖该目录；归档评估在阈值再次触及时出槽）。
 - **被以下子工作流使用**：维护（maintenance）
 
 ### TOOL-046：ArchGuard Complexity check

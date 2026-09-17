@@ -10,6 +10,7 @@ Run:
     python -m pytest skills/software-project-governance/infra/tests/test_architecture_health.py -q
 """
 
+import json
 import sys
 import tempfile
 import unittest
@@ -116,6 +117,64 @@ class CheckArchitectureHealthTests(unittest.TestCase):
             self.assertFalse(module_findings, "test files must be excluded from module_size")
 
 
+def _write_fixture_module(root):
+    """Plant a fixture-mirror module that trips function_size + module_constants
+    + duplicate_constant at once (FIX-350 exemption-gate test fixture)."""
+    fixture_dir = (root /
+                   "project/e2e-test-project/skills/software-project-governance/infra")
+    fixture_dir.mkdir(parents=True, exist_ok=True)
+    body = "\n".join("    pass" for _ in range(600))  # > error_lines(500)
+    constants = "\n".join(f"K{i:03d} = {i}" for i in range(200))  # > warn_count(150)
+    (fixture_dir / "mirror.py").write_text(
+        f"def huge():\n{body}\n\n{constants}\nX_CONST = 1\nX_CONST = 2\n",
+        encoding="utf-8")
+    return fixture_dir / "mirror.py"
+
+
+class ExemptionGateTests(unittest.TestCase):
+    """FIX-350: the module_size exclusion gate must extend to the
+    function_size / module_constants / duplicate_constant faces — without
+    weakening the scan when no exemption is configured."""
+
+    def test_no_exclusions_fixture_still_scanned(self):
+        """负例（机制不弱化）：schema 无 project/** 豁免时，fixture 镜像文件
+        在全部三个 Python 扫描面上仍被扫描。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _make_repo(tmp)
+            _write_fixture_module(root)
+            result = vw.check_architecture_health(root=root)
+            mirror = [f for f in result["findings"]
+                      if "mirror.py" in f.get("path", "")]
+            by_check = {f["check"] for f in mirror}
+            self.assertIn("function_size", by_check,
+                          "no-exclusion schema: fixture must still be scanned "
+                          f"(function_size); got checks={by_check}")
+            self.assertIn("module_constants", by_check,
+                          "no-exclusion schema: fixture must still be scanned "
+                          f"(module_constants); got checks={by_check}")
+            self.assertIn("duplicate_constant", by_check,
+                          "no-exclusion schema: fixture must still be scanned "
+                          f"(duplicate_constant); got checks={by_check}")
+            self.assertTrue(any(f["severity"] == "ERROR" for f in mirror),
+                            "fixture ERROR findings must survive a no-exclusion schema")
+
+    def test_exclusion_gate_covers_function_and_constant_faces(self):
+        """正例：module_size.exclusions 命中（project/**）后，function_size /
+        module_constants / duplicate_constant 三面同步豁免（module_size 语义不变）。"""
+        schema = json.loads(SCHEMA_JSON)
+        schema["module_size"]["exclusions"].append(
+            {"path": "project/**", "reason": "e2e fixture projection mirror"})
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _make_repo(tmp)
+            _write_fixture_module(root)
+            result = vw.check_architecture_health(root=root, schema=schema)
+            mirror = [f for f in result["findings"]
+                      if "mirror.py" in f.get("path", "")]
+            self.assertEqual(mirror, [],
+                             "excluded fixture must produce zero findings on "
+                             f"every scan face; got {mirror}")
+
+
 class CheckDuplicateCodeTests(unittest.TestCase):
     """G7-adjacent: CRLF normalization is the #1 regression to lock in."""
 
@@ -157,6 +216,49 @@ class CheckDuplicateCodeTests(unittest.TestCase):
             # whitespace-only differences should be treated as duplicates (high %)
             if beta:
                 self.assertGreater(beta[0]["duplicate_pct"], 80.0)
+
+    def _make_alpha_pair(self, root):
+        """Identical source/projection alpha.py pair → ~100% duplicate."""
+        content = "import os\nimport sys\n\n\ndef main():\n    return 0\n"
+        src_dir = root / "skills/software-project-governance/infra"
+        proj_base = root / "project/e2e-test-project/skills/software-project-governance/infra"
+        proj_base.mkdir(parents=True, exist_ok=True)
+        (src_dir / "alpha.py").write_text(content, encoding="utf-8")
+        (proj_base / "alpha.py").write_text(content, encoding="utf-8")
+
+    def test_without_exclusions_pair_still_flags(self):
+        """负例（机制不弱化）：duplicate_code 无 exclusions 时，镜像 pair 仍按
+        阈值分级产出 finding（FIX-350 豁免通道不得静默弱化检测）。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _make_repo(tmp)
+            self._make_alpha_pair(root)
+            result = vw.check_duplicate_code(root=root)
+            alpha = [f for f in result["findings"] if "alpha" in f.get("path", "")]
+            self.assertEqual(len(alpha), 1, "no-exclusion schema: pair must still flag")
+            self.assertGreaterEqual(alpha[0]["duplicate_pct"], 80.0)
+            self.assertEqual(result.get("exemptions"), [],
+                             "no-exclusion schema must disclose zero exemptions")
+
+    def test_pair_exemption_disclosed_and_excluded(self):
+        """正例：schema duplicate_code.exclusions 命中 source 路径后——
+        finding 消失、pair 仍计入 pairs_checked、豁免以 path+reason 披露
+        （DEC-151：豁免必披露，不静默）。"""
+        schema = json.loads(SCHEMA_JSON)
+        schema["duplicate_code"]["exclusions"] = [
+            {"path": "skills/software-project-governance/infra/alpha.py",
+             "reason": "projection mirror sync (RISK-039)"}]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _make_repo(tmp)
+            self._make_alpha_pair(root)
+            result = vw.check_duplicate_code(root=root, schema=schema)
+            alpha = [f for f in result["findings"] if "alpha" in f.get("path", "")]
+            self.assertEqual(alpha, [], "exempt pair must not produce a finding")
+            self.assertEqual(result["pairs_checked"], 1,
+                             "exempt pair still counts toward pairs_checked")
+            self.assertEqual(len(result["exemptions"]), 1)
+            self.assertEqual(result["exemptions"][0]["path"],
+                             "skills/software-project-governance/infra/alpha.py")
+            self.assertIn("mirror", result["exemptions"][0]["reason"])
 
 
 class CheckTechnicalDebtTests(unittest.TestCase):

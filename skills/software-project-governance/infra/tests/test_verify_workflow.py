@@ -11866,6 +11866,23 @@ class UnicodeLineSeparatorScanTests(unittest.TestCase):
             # decision-log / risk-log / session-snapshot deliberately absent.
             self.assertEqual(self._scan(root), [])
 
+    def test_detects_form_feed_separator(self):
+        """FIX-350 F-1 负例（检出面）：U+000C (FF) is a splitlines-style line
+        boundary just like VT (EVD-890 class) — it MUST be reported as WARN
+        with the exact file:line and the U+000C code point label."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_gov(root, "risk-log.md",
+                            "# 风险登记\n| RISK-001\x0c | 续行内容 |\n")
+            issues = self._scan(root)
+            self.assertEqual(len(issues), 1, f"exactly one FF hit expected; got {issues}")
+            hit = issues[0]
+            self.assertEqual(hit["type"], "unicode_line_separator")
+            self.assertEqual(hit["severity"], "WARN")
+            self.assertEqual(hit["file"], ".governance/risk-log.md")
+            self.assertEqual(hit["line"], 2)
+            self.assertIn("U+000C", hit["detail"])
+
     def test_structural_validity_reports_separator_as_non_blocking_warn(self):
         """Check 14 integration: a contaminated session-snapshot surfaces as a
         WARN structural issue that does NOT block (structural_issue_is_blocking

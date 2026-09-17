@@ -59,7 +59,12 @@ SNAPSHOT = _INFRA_DIR / "contract_matrix" / "snapshots.json"
 #      `checks.dsh_boundary`). Baseline regenerated with
 #      `archguard-ratchet --regen` after all V8 source edits, per the
 #      all-changes-first rule that keeps the anchor from being re-cut twice.)
-FACTS_PRINT_TOTAL = 1299
+#   -> 1301 (FIX-350, 2026-09-17: +2 — the DEC-151 [EXEMPT] disclosure loop
+#      for schema-exempt source/projection pairs: one print site in the
+#      engine's 28p check-governance segment (cmd_check_governance) and one
+#      in cmd_check_duplicate_code. Baseline regenerated in the same change:
+#      R1 anchor 24453 -> 24583, R4 total 1299 -> 1301.)
+FACTS_PRINT_TOTAL = 1301
 
 
 def _committed_baseline():

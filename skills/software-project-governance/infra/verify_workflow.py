@@ -14529,6 +14529,18 @@ def check_risk_mitigation_closure_with_archive(risk_content=None,
 # auto-discovery exclusion (FIX-178; AUDIT-149 cites this precedent family
 # as the "FIX-280 先例").
 #
+# FIX-348 extends the whitelist with docs/requirements/**: delivered design
+# documents (docs/requirements/*-design-*.md) are the same record class —
+# their "(a)/(b)" adjudication rows RECORD past disposition options plus a
+# recommendation left for the DEC record, not agent runtime instructions,
+# and m5_option_list_no_auq structurally false-positives on them the same
+# way (live instance: docs/requirements/dsh-compat-design-0.81.0.md:292,
+# the R1-expiry adjudication row). Same record-vs-runtime distinction, same
+# PATH-CLASSIFICATION-only boundary; docs/requirements design docs being
+# scanned-or-not does not change any other check's fact sourcing (the
+# docs/requirements paths consumed by Checks 1x/2x are read directly, not
+# routed through the M5 whitelist).
+#
 # Implementation: WRAPPER, not a base-scan edit — the FIX-294 precedent for
 # a scope held to verify_workflow.py + tests. The base
 # checks.review_domain.check_m5_compliance() stays byte-identical (scan
@@ -14543,14 +14555,17 @@ def check_risk_mitigation_closure_with_archive(risk_content=None,
 #     ("docs/release-notes.md" is NOT exempt) and never content heuristics.
 #   - Everything else the base scans keeps FULL coverage: AGENTS.md,
 #     CLAUDE.md, .governance/CLAUDE.md, and every docs/ subtree OUTSIDE the
-#     whitelist (e.g. docs/requirements/**) — plus the M5 structural checks
-#     (bootstrap template / interaction-boundary / SELF-CHECK guard), whose
-#     issue files can never match the whitelist.
+#     whitelist (FIX-348 moved docs/requirements/** INTO the whitelist as
+#     record-class design docs; every other docs/ subtree — e.g.
+#     docs/other/** — stays scanned, and lookalike non-directory paths like
+#     "docs/requirements-notes.md" never match) — plus the M5 structural
+#     checks (bootstrap template / interaction-boundary / SELF-CHECK guard),
+#     whose issue files can never match the whitelist.
 #   - Exempt ≠ silent: every dropped issue is returned in
 #     record_scope_exempted and printed as [EXEMPT] (DEC-151-style
 #     disclosure, not counted into all_issues).
 
-M5_RECORD_DOC_DIRS = ("docs/release", "docs/reviews")
+M5_RECORD_DOC_DIRS = ("docs/release", "docs/reviews", "docs/requirements")
 
 
 def _is_m5_record_doc_path(rel_path):
@@ -14576,7 +14591,8 @@ def check_m5_compliance_with_record_scope():
     Thin wrapper over the UNCHANGED base ``check_m5_compliance()`` (FIX-294
     wrapper pattern): pass 1 runs the base scan byte-for-byte; issues whose
     ``file`` is under an M5_RECORD_DOC_DIRS directory (record-class text —
-    release/review documents; see the module comment above) are moved to
+    release/review documents and delivered design docs; see the module
+    comment above) are moved to
     ``record_scope_exempted`` (disclosed, never counted); every other issue
     — entry files, non-whitelisted docs/ subtrees, and all M5 structural
     checks — passes through untouched.
@@ -14995,9 +15011,10 @@ def _run_full_engine_checks(args):
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 10. M5 AskUserQuestion compliance ──
-    # FIX-295 (AUDIT-149 N6): the gate consumes the record-scope wrapper —
-    # issues from docs/release/** and docs/reviews/** (record-class text:
-    # release/review documents) are exempted WITH disclosure ([EXEMPT]
+    # FIX-295 (AUDIT-149 N6) / FIX-348: the gate consumes the record-scope
+    # wrapper — issues from docs/release/**, docs/reviews/** and
+    # docs/requirements/** (record-class text: release/review documents and
+    # delivered design docs) are exempted WITH disclosure ([EXEMPT]
     # below, not counted into all_issues); the base scan and every other
     # M5 face (inline-question instructions, structural checks) unchanged.
     if _product_gate_active(args):

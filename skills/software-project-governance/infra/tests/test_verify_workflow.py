@@ -11287,14 +11287,27 @@ _FIX295_REVIEW_ROW = (
 )
 
 
+_FIX348_REQUIREMENTS_ROW = (
+    # Live shape of docs/requirements/dsh-compat-design-0.81.0.md:292 — a
+    # delivered design doc's R1-expiry adjudication row: it RECORDS two past
+    # disposition options "(a)/(b)" plus a recommendation left for the DEC
+    # record. Factual record text, not an agent runtime instruction — the
+    # m5_option_list_no_auq heuristic cannot tell them apart (FIX-348).
+    "| **R1 豁免到期处置** | 本设计给出两个选项并建议 **(a)**：<br>"
+    "(a) **续期到 0.82.0 并在 DEC 中重述理由**；<br>"
+    "(b) **退役该豁免条目**（删除 exemptions[0]，后续增长即 FATAL） |"
+)
+
+
 class Fix295Check10RecordDocScopeTests(unittest.TestCase):
-    """FIX-295 (AUDIT-149 N6): docs/release/** and docs/reviews/** are
-    RECORD-class text — their "(a)/(b)" citation sub-clauses + "选项"
-    vocabulary are factual references to past events, not agent runtime
-    instructions. The Check 10 gate exempts them via a PATH-CLASSIFICATION
-    whitelist (check_m5_compliance_with_record_scope /
-    M5_RECORD_DOC_DIRS = ("docs/release", "docs/reviews")) — never content
-    heuristics. The base scan
+    """FIX-295 (AUDIT-149 N6) + FIX-348: docs/release/**, docs/reviews/**
+    and docs/requirements/** are RECORD-class text — their "(a)/(b)"
+    citation sub-clauses + "选项" vocabulary are factual references to past
+    events, not agent runtime instructions. The Check 10 gate exempts them
+    via a PATH-CLASSIFICATION whitelist
+    (check_m5_compliance_with_record_scope /
+    M5_RECORD_DOC_DIRS = ("docs/release", "docs/reviews", "docs/requirements"))
+    — never content heuristics. The base scan
     (checks.review_domain.check_m5_compliance) stays byte-identical and
     every other M5 face (inline-question instructions on entry files,
     structural checks) keeps full coverage.
@@ -11362,7 +11375,8 @@ class Fix295Check10RecordDocScopeTests(unittest.TestCase):
 
         self.assertEqual(result["issues"], [])
         self.assertEqual(result["record_scope_dirs"],
-                         ("docs/release", "docs/reviews"))
+                         ("docs/release", "docs/reviews",
+                          "docs/requirements"))
         self.assertEqual(
             sorted(e["file"] for e in result["record_scope_exempted"]),
             ["docs/release/queue-triage-0.78x.md",
@@ -11375,16 +11389,22 @@ class Fix295Check10RecordDocScopeTests(unittest.TestCase):
     def test_gate_wrapper_still_blocks_same_text_outside_whitelist(self):
         """Negative path (use-case lock): the SAME option-list + choice-
         context text under any NON-whitelisted path still FAILs at the
-        gate — docs/requirements/** (another docs subtree, instruction-
-        bearing surface) and the string-prefix trap docs/release-notes.md
-        (whitelist matches directory components, never a bare prefix)."""
+        gate — docs/other/** (another docs subtree, instruction-bearing
+        surface), the string-prefix trap docs/release-notes.md, the FIX-348
+        lookalike docs/requirements-notes.md (whitelist matches directory
+        components, never a bare prefix) and docs/other/requirements/x.md
+        ("requirements" is not a whitelisted leading directory there)."""
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             self._m5_gate_root(root)
-            self._write(root, "docs/requirements/spec-a.md",
+            self._write(root, "docs/other/spec-a.md",
                         "# spec\n\n" + _FIX295_RELEASE_ROW + "\n")
             self._write(root, "docs/release-notes.md",
                         "# notes\n\n" + _FIX295_REVIEW_ROW + "\n")
+            self._write(root, "docs/requirements-notes.md",
+                        "# notes\n\n" + _FIX348_REQUIREMENTS_ROW + "\n")
+            self._write(root, "docs/other/requirements/x.md",
+                        "# nested\n\n" + _FIX348_REQUIREMENTS_ROW + "\n")
             with patch.object(vw, "ROOT", root):
                 result = vw.check_m5_compliance_with_record_scope()
 
@@ -11395,7 +11415,39 @@ class Fix295Check10RecordDocScopeTests(unittest.TestCase):
         )
         self.assertEqual(
             blocking_files,
-            ["docs/release-notes.md", "docs/requirements/spec-a.md"])
+            ["docs/other/requirements/x.md",
+             "docs/other/spec-a.md",
+             "docs/release-notes.md",
+             "docs/requirements-notes.md"])
+
+    def test_gate_wrapper_exempts_requirements_design_doc_issues(self):
+        """FIX-348 green side: a delivered design doc's recorded "(a)/(b)"
+        adjudication row under docs/requirements/** moves into
+        record_scope_exempted (disclosed, not counted) and reports no
+        anti-pattern from it. The base scan still flags the row first —
+        the wrapper (not a base-scan edit) is what exempts it."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._m5_gate_root(root)
+            self._write(
+                root, "docs/requirements/dsh-compat-design-0.81.0.md",
+                "# design\n\n" + _FIX348_REQUIREMENTS_ROW + "\n")
+            with patch.object(vw, "ROOT", root):
+                base = vw.check_m5_compliance()
+                result = vw.check_m5_compliance_with_record_scope()
+
+        self.assertEqual(
+            [i["file"] for i in base["issues"]
+             if i["severity"] == "BLOCKING"],
+            ["docs/requirements/dsh-compat-design-0.81.0.md"])
+        self.assertEqual(result["issues"], [])
+        self.assertEqual(
+            [e["file"] for e in result["record_scope_exempted"]],
+            ["docs/requirements/dsh-compat-design-0.81.0.md"])
+        self.assertEqual(result["record_scope_exempted"][0]["type"],
+                         "m5_option_list_no_auq")
+        self.assertEqual(result["record_scope_exempted"][0]["severity"],
+                         "BLOCKING")
 
     def test_gate_wrapper_keeps_inline_question_face_on_entry_files(self):
         """Check 10's other M5 face (inline-question instructions on entry
@@ -11459,8 +11511,11 @@ class Fix295Check10RecordDocScopeTests(unittest.TestCase):
             "docs/reviews/review-REL-074-RELEASE-R2.md": True,
             "docs\\release\\x.md": True,
             "docs/release": True,
+            "docs/requirements/dsh-compat-design-0.81.0.md": True,
+            "docs/requirements": True,
             "docs/release-notes.md": False,    # string-prefix trap
-            "docs/requirements/spec.md": False,
+            "docs/requirements-notes.md": False,  # string-prefix trap
+            "docs/other/requirements/x.md": False,  # not a whitelisted dir
             "docs/other/release/x.md": False,  # not a direct child
             "CLAUDE.md": False,
             "AGENTS.md": False,
@@ -11475,7 +11530,8 @@ class Fix295Check10RecordDocScopeTests(unittest.TestCase):
                      f"should be {expected}"),
             )
         self.assertEqual(vw.M5_RECORD_DOC_DIRS,
-                         ("docs/release", "docs/reviews"))
+                         ("docs/release", "docs/reviews",
+                          "docs/requirements"))
 
 
 # ────────────────────────────────────────────────────────────

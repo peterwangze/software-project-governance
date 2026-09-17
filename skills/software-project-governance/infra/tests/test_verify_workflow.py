@@ -11740,6 +11740,159 @@ class GoalAlignmentTests(unittest.TestCase):
             self.assertTrue(r["pass"])
             self.assertEqual(r["entries"][0]["status"], "PASS")
 
+    def test_check_goal_alignment_duplicate_across_different_evds_still_detected(self):
+        """FIX-349 ③b: identical goal text in two DIFFERENT EVD rows is still
+        template reuse — cross-EVD duplicate detection capability is preserved
+        by the same-EVD fan-out fix."""
+        with tempfile.TemporaryDirectory() as td:
+            evidence_rows = [
+                _impact_evidence_row("EVD-100", "TASK-100",
+                                     f"目标对齐: {self.GOAL_TEXT}"),
+                _impact_evidence_row("EVD-200", "TASK-200",
+                                     f"目标对齐: {self.GOAL_TEXT}"),
+            ]
+            sp, ep = self._setup(td, evidence_lines=evidence_rows)
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_goal_alignment()
+            self.assertEqual(len(r["entries"]), 2)
+            self.assertEqual(len(r["duplicates"]), 1)
+            self.assertEqual(r["duplicates"], [("TASK-100", "TASK-200")])
+
+    def test_check_goal_alignment_same_evd_multi_task_fanout_not_template_reuse(self):
+        """FIX-349 ③c: one EVD row serving several hot tasks (expand_task_ids
+        fan-out in parse_impact_analysis_entries) shares a single description
+        by construction — identical goal text inside one EVD row is structural,
+        not template reuse (live false positive: EVD-507 -> REQ-094<->REQ-095)."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gov = root / ".governance"; gov.mkdir(parents=True, exist_ok=True)
+            sp = gov / "plan-tracker.md"
+            ep = gov / "evidence-log.md"
+            sp.write_text("\n".join([
+                "# 计划跟踪",
+                "## 项目配置",
+                "- **项目目标**: 提供一套完整的软件项目治理工作流插件",
+                "## 当前活跃事项",
+                "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+                "|--------|----|------|------|---------|---------|------|",
+                "| **P1** | REQ-094 | 需求A | - | 0.83.0 | tests | ✅ 已完成 |",
+                "| **P1** | REQ-095 | 需求B | - | 0.83.0 | tests | ✅ 已完成 |",
+            ]), encoding="utf-8")
+            ep.write_text("\n".join([
+                _impact_evidence_row(
+                    "EVD-507", "REQ-094, REQ-095",
+                    f"目标对齐: {self.GOAL_TEXT}"),
+            ]), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_goal_alignment()
+            # Fan-out must keep both per-task entries guarded (not collapse).
+            self.assertEqual(len(r["entries"]), 2)
+            self.assertEqual([e["task_id"] for e in r["entries"]],
+                             ["REQ-094", "REQ-095"])
+            # The fix: same EVD row -> same description -> NOT template reuse.
+            self.assertEqual(r["duplicates"], [])
+            self.assertTrue(r["pass"])
+
+
+class UnicodeLineSeparatorScanTests(unittest.TestCase):
+    """FIX-349 ⑥: Unicode line/segment separator scan over the governance
+    hot files (Check 14 sub-check) — EVD-890 class regression guard.
+
+    All fixtures are temp-dir copies with ``GOVERNANCE_DIR`` patched: the
+    real ``.governance/`` data is never touched by these tests.
+    """
+
+    def _write_gov(self, root, name, text):
+        gov = root / ".governance"
+        gov.mkdir(parents=True, exist_ok=True)
+        path = gov / name
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def _scan(self, root):
+        with patch.object(vw, "GOVERNANCE_DIR", root / ".governance"):
+            return vw._scan_unicode_line_separators()
+
+    def test_detects_separators_with_precise_file_line_and_codepoint(self):
+        """负例（检出面）：VT / LS / NEL / RS planted in temp hot-file copies
+        are each reported as WARN with exact file:line and the code point."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            # evidence-log.md: two VT hits on different lines (line 2 + line 3)
+            self._write_gov(
+                root, "evidence-log.md",
+                "| EVD-001 | a |\n| EVD-002\x0b | b |\n| EVD-003\x0b | c |\n")
+            # plan-tracker.md: LS (U+2028) on line 2
+            self._write_gov(root, "plan-tracker.md",
+                            "# 计划跟踪\n目标\u2028分段\n")
+            # session-snapshot.md: NEL (U+0085) on line 1
+            self._write_gov(root, "session-snapshot.md", "快照\x85续行\n")
+            # decision-log.md: RS (U+001E) on line 2
+            self._write_gov(root, "decision-log.md", "## DEC-001\n状态\x1e值\n")
+
+            issues = self._scan(root)
+            self.assertEqual(len(issues), 5)
+
+            by_file = {}
+            for i in issues:
+                by_file.setdefault(i["file"], []).append(i)
+
+            evd_hits = by_file[".governance/evidence-log.md"]
+            self.assertEqual([h["line"] for h in evd_hits], [2, 3])
+            self.assertTrue(all("U+000B" in h["detail"] for h in evd_hits))
+            pt_hit = by_file[".governance/plan-tracker.md"][0]
+            self.assertEqual(pt_hit["line"], 2)
+            self.assertIn("U+2028", pt_hit["detail"])
+            snap_hit = by_file[".governance/session-snapshot.md"][0]
+            self.assertEqual(snap_hit["line"], 1)
+            self.assertIn("U+0085", snap_hit["detail"])
+            dec_hit = by_file[".governance/decision-log.md"][0]
+            self.assertEqual(dec_hit["line"], 2)
+            self.assertIn("U+001E", dec_hit["detail"])
+
+            for hit in issues:
+                self.assertEqual(hit["type"], "unicode_line_separator")
+                self.assertEqual(hit["severity"], "WARN")
+
+    def test_clean_or_missing_hot_files_yield_zero_alerts(self):
+        """正例（零告警面）：clean hot-file copies produce no findings; files
+        that do not exist are skipped (存在才扫) without error."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_gov(root, "plan-tracker.md", "# 计划跟踪\n干净内容\n")
+            self._write_gov(root, "evidence-log.md", "| EVD-001 | ok |\n")
+            # decision-log / risk-log / session-snapshot deliberately absent.
+            self.assertEqual(self._scan(root), [])
+
+    def test_structural_validity_reports_separator_as_non_blocking_warn(self):
+        """Check 14 integration: a contaminated session-snapshot surfaces as a
+        WARN structural issue that does NOT block (structural_issue_is_blocking
+        is False) — same caliber as evidence_col_mismatch."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gov = root / ".governance"
+            gov.mkdir(parents=True)
+            (gov / "plan-tracker.md").write_text("ok\n", encoding="utf-8")
+            (gov / "decision-log.md").write_text("", encoding="utf-8")
+            (gov / "evidence-log.md").write_text("", encoding="utf-8")
+            (gov / "session-snapshot.md").write_text(
+                "快照\u2029段落\n", encoding="utf-8")
+
+            with patch.object(vw, "GOVERNANCE_DIR", gov):
+                issues = vw.check_structural_validity()
+
+            sep_issues = [i for i in issues
+                          if i["type"] == "unicode_line_separator"]
+            self.assertEqual(len(sep_issues), 1)
+            self.assertEqual(sep_issues[0]["file"],
+                             ".governance/session-snapshot.md")
+            self.assertEqual(sep_issues[0]["line"], 1)
+            self.assertIn("U+2029", sep_issues[0]["detail"])
+            self.assertEqual(sep_issues[0]["severity"], "WARN")
+            self.assertFalse(vw.structural_issue_is_blocking(sep_issues[0]))
+
 
 class UserImpactTests(unittest.TestCase):
     """Test check_user_impact() — SYSGAP-024 Check 12."""

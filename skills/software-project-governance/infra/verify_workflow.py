@@ -11752,6 +11752,59 @@ def _print_sequential_id_check(si_result):
     return issue_count
 
 
+def _scan_unicode_line_separators():
+    """FIX-349 ⑥: Unicode line/segment separators in governance hot files.
+
+    EVD-890: a U+000B (VT) inside one evidence-log row silently became a line
+    boundary for splitlines-style consumers (Python ``str.splitlines``,
+    editors, markdown renderers) while the "\\n"-based governance checks saw
+    one long line — the M5.4b false positive. EVD-1063 repaired that single
+    occurrence without a systemic guard; this scan closes the class. It
+    reports every occurrence of the FIX-349 ⑥ separator family (VT, FS/GS/RS,
+    NEL, LS, PS — all honored as line boundaries by splitlines-style
+    consumers) in the hot files that line-based governance checks parse.
+
+    WARN severity (same caliber as ``evidence_col_mismatch``:
+    ``structural_issue_is_blocking`` treats WARN as non-blocking): the
+    characters are a parsing hazard, not a broken schema, and the data fix
+    belongs to the Coordinator's governance write-back, not to this check.
+    """
+    scan_files = (
+        "plan-tracker.md", "evidence-log.md", "decision-log.md",
+        "risk-log.md", "session-snapshot.md",
+    )
+    separators = (
+        ("U+000B", "\x0b"),    # VT  — vertical tab (EVD-890 incident character)
+        ("U+001C", "\x1c"),    # FS  — file separator
+        ("U+001D", "\x1d"),    # GS  — group separator
+        ("U+001E", "\x1e"),    # RS  — record separator
+        ("U+0085", "\x85"),    # NEL — next line
+        ("U+2028", "\u2028"),  # LS  — line separator
+        ("U+2029", "\u2029"),  # PS  — paragraph separator
+    )
+    issues = []
+    for name in scan_files:
+        path = GOVERNANCE_DIR / name
+        if not path.is_file():
+            continue  # 存在才扫 — optional hot files (e.g. session-snapshot)
+        content = path.read_text(encoding="utf-8")
+        for label, char in separators:
+            pos = content.find(char)
+            while pos != -1:
+                issues.append({
+                    "type": "unicode_line_separator",
+                    "severity": "WARN",
+                    "file": f".governance/{name}",
+                    "line": content.count("\n", 0, pos) + 1,
+                    "col": pos - content.rfind("\n", 0, pos),
+                    "detail": f"{label} line/segment separator in hot file "
+                              f"(breaks splitlines-style parsing; "
+                              f"EVD-890 class)",
+                })
+                pos = content.find(char, pos + 1)
+    return issues
+
+
 # ── SYSGAP-010: Structural Validity Checking ─────────────────────
 
 def check_structural_validity():
@@ -11763,6 +11816,8 @@ def check_structural_validity():
     3. decision-log.md: each ADR contains all required fields
     4. SKILL.md: frontmatter contains required fields (name/version/description)
     5. manifest.json: product / repo_only / exclude sections all present
+    6. Unicode line/segment separators (FIX-349 ⑥) in the governance hot
+       files — WARN-level disclosure via _scan_unicode_line_separators()
     """
     import json as _json
     issues = []
@@ -11925,6 +11980,9 @@ def check_structural_validity():
             "file": "skills/software-project-governance/core/manifest.json",
             "detail": "manifest.json not found",
         })
+
+    # ── 6. Unicode line/segment separators in hot files (FIX-349 ⑥) ──
+    issues.extend(_scan_unicode_line_separators())
 
     return issues
 
@@ -12321,7 +12379,9 @@ def check_goal_alignment():
     Checks:
     1. plan-tracker has 项目目标 field (WARN if missing)
     2. Each 影响分析 entry has 目标对齐: field with >= 30 chars (FAIL if missing/short)
-    3. Identical goal alignment text across different tasks (WARN — template reuse)
+    3. Identical goal alignment text across different EVD rows
+       (WARN — template reuse; FIX-349 ③: entries fanned out of ONE EVD row
+       share a single description by construction and are never compared)
 
     Returns dict with 'has_project_goal', 'entries', 'duplicates', 'pass'.
     """
@@ -12345,7 +12405,7 @@ def check_goal_alignment():
     if not entries:
         return result
 
-    goal_map = {}  # goal_text -> [task_ids]
+    goal_map = {}  # goal_text -> [(evd_id, task_id)]
 
     for entry in entries:
         desc = entry["description"]
@@ -12368,9 +12428,9 @@ def check_goal_alignment():
         else:
             # Track for duplicate detection
             if goal_text in goal_map:
-                goal_map[goal_text].append(entry["task_id"])
+                goal_map[goal_text].append((entry["evd_id"], entry["task_id"]))
             else:
-                goal_map[goal_text] = [entry["task_id"]]
+                goal_map[goal_text] = [(entry["evd_id"], entry["task_id"])]
 
         result["entries"].append({
             "task_id": entry["task_id"],
@@ -12382,11 +12442,19 @@ def check_goal_alignment():
         })
 
     # 3. Check duplicates
-    for goal_text, task_ids in goal_map.items():
-        if len(task_ids) >= 2:
-            for i in range(len(task_ids)):
-                for j in range(i + 1, len(task_ids)):
-                    result["duplicates"].append((task_ids[i], task_ids[j]))
+    # FIX-349 ③: compare only entries from DIFFERENT evd_id rows. One EVD row
+    # fanning out to several tasks (expand_task_ids in
+    # parse_impact_analysis_entries) shares a single description by
+    # construction, so identical goal text inside one row is structural, not
+    # template reuse (live false positive: EVD-507 -> REQ-094<->REQ-095).
+    # Cross-EVD comparison — the real template-reuse signal — is unchanged.
+    for goal_text, evd_tasks in goal_map.items():
+        if len(evd_tasks) >= 2:
+            for i in range(len(evd_tasks)):
+                for j in range(i + 1, len(evd_tasks)):
+                    if evd_tasks[i][0] != evd_tasks[j][0]:
+                        result["duplicates"].append(
+                            (evd_tasks[i][1], evd_tasks[j][1]))
 
     return result
 

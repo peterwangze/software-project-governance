@@ -2,6 +2,41 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.82.0] - 2026-09-18
+
+### 0.82.0 - **dsh 兼容性适配全量收尾**：引擎版本锚参数化 → 归档/审查引擎完整性 → 扫描器收口 → 渲染面/守卫/收集面 → 数据资产与派发纪律（REL-078 / FIX-312~314 / FIX-320~326 / FIX-332~337 / FIX-339 / FIX-341~346）
+
+0.82.0 是 **MINOR** 发布，承载 DEC-195（2026-09-16 用户裁决：FIX-339 = (a) 真修；0.82.0 = **全量范围**——「把 dsh 兼容性适配全量收尾，然后发布对应版本承载这个修复」授权链的落版本）与 DEC-197（推进方式 = 标准链：M-0 prep → M-1 候选打包 → M-2 门禁实测（安静窗 850 复跑）→ M-3 双半面审查 → M-4 用户停点逐项授权 transition/tag/push → M-5~M-8）。版本目标：发布门禁基线 hot fact source 假阳清零 + 既有披露项收敛 + 红基线清零后的安静窗复跑。
+
+**引擎事实源——版本锚参数化（FIX-339，commits `8bd6a8a`）**：`check_hot_fact_source_consistency` 的活动版本锚从 `FIX_087_*` 硬编码常量改为从 `## 项目配置` 的「工作流版本」派生（fail-closed：锚缺失/不可解析 ⇒ 恰 1 条 FAIL，不崩溃不误报）——消除 0.38.x 插件域断言与已发布事实互斥的 **9 条假阳**（`hot fact source` 假阳清零，REL-077 主路径实证）；review 链 R0→R1→R2（REVIEW-FIX-339-CODE-R2 APPROVED_WITH_NOTES/unresolved_blockers=0，机录 R0/R1/R2）。**行为变更 B-1/B-2/B-3**（见下）。承转：F-R1-02 的 0.82.0 锚 missing-active-task 过报族（2 假 1 真 + 数据演进新增）= **已声明的 fail-closed 过报**，REL-078 prep 期由数据面消化（处置提案见 release-checklist §F-R1-02）。
+
+**归档/审查引擎完整性**：**FIX-341** `28690dd`（tpa 依赖解析查归档索引——`parse_archive_index_completed_ids` 纯解析器 + 判定序「热表权威→归档完成集→fail-closed」，四伪阻塞解锁；翻转前置 = FIX-343 数据回填）+ **FIX-343**（治理数据批：10 行归档任务行回填 + DEC-187 归属更正 v0.77.0→v0.80.0 + tpa 假阻塞池清零 + check-archive-integrity PASS 守恒）；**FIX-312** `7bb102b`（归档引擎决策归属判据——关联任务列 governing refs 全部已归档才可迁 + 归版取最新 + 短行 fail-closed，消除「新决策因引用历史已归档 task 被误迁出热文件」）+ **FIX-342** `f73bef7`（防御面四子项：否定-完成复合词 ×5 + canonical 11 列 fallback + header 区扫描 + 缓存升级；真实数据五重零翻转指纹）；**FIX-345** `2466a80`（authority source records 归档感知重锚——**行为变更 B-6**；product_release BLOCKED→PASS，loop-claims 语义面双模式全绿）；**FIX-314** `a260637`（review_record 唯一键扩展——**行为变更 B-5**；M-3 双审模型在 CLI 面可表达）+ **FIX-344** `f73bef7`（Check 30c 文件通道后缀感知三盲区修复 + V8 借查假 WARN 消灭——第二半面 NEEDS_CHANGE 不再产生假「复审义务不可机读」）。
+
+**扫描器/身份门禁**：**FIX-320** `0462f3b`（既有身份门禁阻塞的处置 (b)——loop-claims **豁免账本** `core/loop-runtime-claim-exemptions.json`：**行为变更 B-4**；installed_host BLOCKED→PASS）+ **FIX-322** `0462f3b`（K-2 包名类 `findall` → **整串判定**（match 锚定 + rest 空/`/`子路径/`@`版本 tag 三前缀归属），字符串内引用未申报包名不再误报；Check 28w K-2 literals 0/11 保持）。
+
+**渲染面/守卫/收集面**：**FIX-323** `0a13b21`（dsh_compat 渲染面收口——F-01 fail-soft 守卫降级（同源证明判定不可吞）+ F-02 UNKNOWN fail-closed + F-03 渲染单源化）+ **FIX-325** `0a13b21`（删零捕获力自证式用例 → **3 条真守卫**：EEXIST 熔断/碰撞换名重试/CWD 退化反相（registerHooks 真故障注入）——**行为变更 B-8 限定语**；F4 孤儿 staging 权衡 + F5 注释登记于 `lib/index.js`）+ **FIX-336** `0a13b21`（discover 收集面缺陷修复——`_HERE` sys.path，`test_dsh_compat` 126 用例恢复被收集：**行为变更 B-7 计数口径**；FX-BASEURL-01 slice V2→V8 连带更正 = FIX-326② 顺带完成）；**FIX-313** `845c050`（**DEC-196 方向更正交付，产品零变更**——原处方「JS `\r\n?` 折叠孤立 CR」作废（D-66 已由 FIX-316 反方向收口，两侧均保留孤立 CR 且 compat 契约测试钉死），改以**跨渲染器孤立 CR 同哈希 parity 测试**（三组变异双向红）达成验收本义 + `lib/index.js` 注释真实性 + catch 自清理 vs F4 孤儿 GC 权衡显式区分）；**FIX-346** `845c050`（测试性能预算重定标——空闲定标 p50×1.5：median 8.0→27.0s / timeout 15→26s，减半反相双红；identity/verdict 断言逐字未动；**红基线清零：test_verify_workflow 850 OK exit 0 + loop 60 OK**）。
+
+**数据资产/派发纪律**：**FIX-332** `21121c5`（过期数据资产收口——金丝雀 `resolved:true/resolved_by` 登记（优于删除，FIX-330 F-5 披露保全）+ 两 requirements 文档收口注记（历史正文零改动）+ DEC-194 补记落账）+ **FIX-333** `3bdf28f`（write-guard 非 UTF-8 边界全面收口——四面 + 写后校验两面 + Check26 一致性共 **7 处** UnicodeDecodeError 捕获扩面（精确变体），「Never raises」契约全面兑现，6 条 GBK 反相全绿）+ **FIX-337** `21121c5`（派发纪律硬化——agent-dispatch-template 隔离变量名 `$tmpHome` 规范 + 禁 `$HOME` 赋值 + 正负相示例 + incident 引用 + 机检提示；RISK-046 同族事件的结构性预防）。
+
+**发布治理面（M-0 prep，REL-078）**：本 CHANGELOG 段 + release 三件套（`docs/release/release-checklist-0.82.0.md` / `feature-flags-0.82.0.md` / `rollback-plan-0.82.0.md`）+ **FIX-324/326 并入**（adapter-manifest.json 登记 `dsh-doctor` 诊断入口〔FIX-326①，设计 §2.9.4〕；host-contract.json 三处 evidence.* 写入路径 note 按 as-built 更正〔FIX-326③：`--record-evidence` 只写 factsheet，契约内值由维护者在受审提交中回填——DEC-193 口径；`recording.writer` 字段与钉扎测试未动〕；FIX-326④ S5 授权模式核实一致无需动作；FIX-324/326 逐项处置报告见 checklist）+ **日期炸弹测试修复**（`test_change_triage` CLI 用例 `created_at="2026-09-10"` 硬编码 → 与 CLI 子进程同一真实时钟源派生当日——0.81.0 Gate 10 #6 的必红形态（`'WARN' not found in ''`）修复，红→绿 + 注入时钟（2027/2030）任意日期绿实证）。commit hash ⟦M-1 冻结回填⟧。
+
+**行为变更（用户可感知，8 项 —— MUST 出现在升级说明）**：详见 `docs/release/feature-flags-0.82.0.md` §2。
+
+- **B-1**（FIX-339·进行中面放宽）：`check-hot-fact-source` 的进行中面**不再断言 roadmap 行必须含「进行中」字样**——仅保留「不得虚写已发布」；活跃版本行写「规划中/待启动」不再报（REVIEW-FIX-339-CODE-R0 F-04 有意放宽：与锚参数化目标一致，无虚报风险）。
+- **B-2**（FIX-339·已发布面 fail-closed 收紧）：未发布版本的「自称已发布」防护收窄为**双判据**——REL 行仅在其**目标版本列**含锚版本 token（精确或「X.Y.Z 或后续」形态）或**事项格以「发布 <版本>」头形态**开头时才抬 released face；叙事格/依赖格/状态格的裸版本提及**永不抬面**（REVIEW-FIX-339-CODE-R1 F-R1-01：修复前「任意格 OR 累积」在叙事提及形态下 5→1 逃逸）；「无交付 REL 行佐证而自称已发布」= 显式 FAIL。
+- **B-3**（FIX-339·REL 归属识别放宽）：REL 行识别从「目标版本 cell 精确相等」放宽为**任意格召回**——目标列错位（如日期占位，0.81.0 的 REL-077 行实形态）或「X.Y.Z 或后续」前缀形态不再被静默跳过；识别宽度增加的方向为过报（fail-closed），经 12 项边界探针验证（词界守卫无前缀渗透；`发布：0.81.0` 全角冒号变体不识别 → 过报方向）。
+- **B-4**（FIX-320·豁免披露机制）：`check-loop-runtime-claims` 新增**豁免账本**（`core/loop-runtime-claim-exemptions.json`）——4 条九键豁免（3×UNSUPPORTED@`review-FIX-300-CODE-R0.md` 0.66.1 期历史报告 + 1×AMBIGUOUS@checklist-0.81.0，裁决扩面），digest/ID/键面三锚 fail-closed（防篡改三反相全复活）+ 五元组全键匹配 + `exemptions_applied` 审计披露；**真实漂移不豁免**（product_release 的 2×AUTHORITY 漂移仍 FAIL，由 FIX-345 重锚收口）。`installed_host` 模式 BLOCKED→PASS（0 findings / 4 披露）。
+- **B-5**（FIX-314·键面语义）：review_record 唯一键 **(task, round) → (task, round, reviewer)**——同 task 同轮两位审查方各得一条记录（canonical-first 命名：首位审查方保留 canonical 名，同轮他方派生 `-{slug}` 文件与镜像行 ID）；FIX-289⑤「不静默覆盖」语义保持（三键守卫，force 备份留痕）+ 旧格式字节级不可变 + commit-msg hook / Check 30 兼容。
+- **B-6**（FIX-345·authority 锚位置变更）：authority source records 双锚位置变更——DEC-104 锚 → `.governance/archive/decisions/decisions-v0.1.0-0.78.0.md` L289（归档决策行）、AUDIT-133 锚 → `docs/requirements/loop-engineering-post-implementation-audit-0.66.0.md` L3（审计报告本体，免疫归档迁移）；治理化重锚（不静默改锚，双锚 lockstep：代码常量 + authority JSON），断锚 fail-closed 三形态（MISSING/OCCURRENCE/DIGEST）负例锁死。
+- **B-7**（FIX-336·全量计数口径）：全量测试基线计数 **2983 → 3193**（FIX-336 期实测；M-0 prep 复测 pristine `845c050` = **3200**，TestLoader discover 口径——见 release-checklist Gate 10 注记，M-2 以当场值为准）——`test_dsh_compat`（126 用例）在 discover 口径下恢复被收集，M-2「全量测试基线」恢复真全量语义。
+- **B-8**（FIX-325·G-04 CWD 守卫环境限定语）：`lib/index.js` CWD 退化反相守卫经 **Node ≥22.15** 的 ESM `registerHooks` 真故障注入交付（仓声明 engines≥20 ⇒ 旧引擎上该守卫按 skip/NOT_RUN 政策处理）——发布注记 MUST 携带该限定语，**不得声称全引擎覆盖**（开发机 Windows Node v24.13.1 真跑 0 skip）。
+
+**如实披露**：① 候选期曾出现 1 条 accounting（ragged table）项——`REVIEW-FIX-333-CODE-R0` 报告行内代码**尾反斜杠转义闭合反引号**陷阱（accounting fail-closed 契约内行为，引擎零缺陷）；已于 M-2 triage 单字符消解（loop-claims 双模式 PASS），该陷阱已两次命中（FIX-333-R0 / REL-078-R1），登记为评审文档生成面守卫候选任务；② FIX-346 性能预算重定标为**单机定标口径**（空闲环境三轮 p50×1.5；跨机/负载分层的预算演进未含在本版，环境变量覆盖通道语义不变）；③ **RISK-050 维持打开**（dsh 上游内部面耦合，截止 2026-10-31）——本版不声明关闭；0.82.0 窗口对 dsh 交付面为**注释级零行为变更**（`lib/index.js` 仅注释，渲染产物字节不变）。
+
+**Breaking changes：无**（`skills/software-project-governance/core/VERSIONING.md` L11 口径：无接口删除/重命名、无默认行为破坏、无 Gate 语义或治理字段格式变更——B-1~B-3/B-5 为检查判定面语义修正（误报消除 + fail-closed 收紧），B-4/B-6 为披露机制与锚治理，B-7 为计数口径恢复真全量，B-8 为守卫覆盖面的如实限定；均属 MINOR L12「判定规则扩展 + 主题里程碑」承载面）。**MINOR bump 依据**：L12 三支触发——判定规则扩展（hot fact source 面切换语义 / review_record 三键 / Check 30c 后缀感知 / K-2 整串判定 / loop-claims 豁免账本）+ 主题里程碑（dsh 兼容性适配全量收尾，DEC-195）；VERSIONING.md 契约面条款（evidence.* 写入路径 note 治理化更正——FIX-326③）。
+
+版本投影 0.81.0 -> 0.82.0：由 M-1 统一执行（`release-projection --write` 15 投影 + `@bootstrap-version` 标记面 + REQUIRED_SNIPPETS 版本钉）——本段随候选打包提交落库，投影前 `check-version-consistency` 处于「CHANGELOG 已入 0.82.0 段而声明面仍 0.81.0」的**预期过渡态**（0.81.0 M-1 先例同型）。
+
 ## [0.81.0] - 2026-09-13
 
 ### 0.81.0 - **dsh 宿主兼容性体系化**：依赖面全量清点 → 单一契约层 → 五切片落地 → 单点诊断（REL-077 / AUDIT-153 / FEAT-028~031 / FIX-311~317 / FIX-319 / FIX-321）

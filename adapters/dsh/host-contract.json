@@ -31,11 +31,11 @@
         "dsh_cli_version",
         "oracle_packages"
       ],
-      "note": "只有该命令写 evidence.*（设计 §2.7，git diff 可审）；读取方只读，不得自动刷新。null = 未记录 ⇒ 依赖它的判据（TTL / 平面比对 / 版本区间）在本版 MUST 按 NOT_RUN 处理，不得当作过期或通过。"
+      "note": "采集单点 = 该命令（设计 §2.7；DEC-193 收窄口径：证据采集 = 单点）。as-built（FIX-326③）：--record-evidence 只把实测写入 factsheet（adapters/dsh/fixtures/host-facts-*.json，设计 §5.4），契约内 evidence.* 的值由维护者在落地 factsheet 的同一受审提交中回填——探针直改契约会让单一事实源未经审查地可机变（取舍 Coordinator 已裁决接受）；读取方只读，不得自动刷新。null = 未记录 ⇒ 依赖它的判据（TTL / 平面比对 / 版本区间）在本版 MUST 按 NOT_RUN 处理，不得当作过期或通过。"
     },
     "notes": {
       "compat_range": "未裁定（设计 §2.4 定义为「人工裁定」但未给取值）：V1 不虚构。取值确定前，S3 的越界判据不可用（V8 按 NOT_RUN 处理，不得默认 PASS）。",
-      "dsh_cli_version_current_measurement": "当前安装态实测值记录在事实源里（AUDIT-153 §1.1 = 0.1.5-rc.1），不在本契约内——本字段只由 --record-evidence 写（设计 §2.7）。"
+      "dsh_cli_version_current_measurement": "当前安装态实测值记录在事实源里（AUDIT-153 §1.1 = 0.1.5-rc.1），不在本契约内——本字段的实测经 --record-evidence 单点采集到 factsheet，契约内的值由维护者在受审提交中回填（设计 §2.7；FIX-326③）。"
     }
   },
   "host": {
@@ -857,7 +857,7 @@
     "notes": {
       "core_to_adapter_edge": "core `infra/` 读 `adapters/dsh/host-contract.json` 是一条已登记的 core→adapter 数据边，被收窄为「一个访问器 + 一个数据文件」（ADR-018 D-2 / 设计 §2.3 BT-6）；若后续 DEC 要求迁移，成本 ≤3 处引用。",
       "single_source_of_truth": "消费方 MUST 从此处读取这些事实。契约已声明的字面量出现在消费代码里，即「契约外硬编码」（K-2，V2 落地）；唯一豁免通道是受棘轮预算约束的 allowlist（K-11，V8；本文件在 V2/V8 追加该块，V1 不含）。",
-      "recorded_slice": "记录式字段（evidence.* 的实测值与 host.rows[].recorded 子块）一律由 V8 的 `--record-evidence` 写入。",
+      "recorded_slice": "记录式字段（evidence.* 的实测值与 host.rows[].recorded 子块）：实测经 V8 的 `--record-evidence` 单点采集到 factsheet（设计 §5.4），契约内的值由维护者在落地 factsheet 的同一受审提交中回填——探针不直改契约（DEC-193 / FIX-326③）。",
       "paths_pending": "`own.paths_pending` 列出「已按设计声明、但所属切片尚未落地」的路径键（当前 = doctor，设计 §6.1 V8）。存在性判据 MUST 跳过这些键，其余 `own.paths.*` 全部必须存在且与实际一致（设计 §2.4）。"
     }
   },

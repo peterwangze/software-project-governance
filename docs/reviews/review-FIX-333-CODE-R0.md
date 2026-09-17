@@ -30,7 +30,7 @@
 | 2 | GREEN | `python -m pytest skills/software-project-governance/infra/tests/test_triage_write_guard.py -q` | **35 passed in 0.24s**（32 旧 + 3 新） | ✅ |
 | 3 | 四面 GBK 独立探针 | Reviewer 自建 `%TEMP%\fix333_review\probe.py`（不重用开发者测试代码）：GBK 副本 ×4 面 + `mock.patch` 常量 → `check_governance_write_shapes()` | 工作树：`plan_tracker=FAIL(plan_tracker_unreadable)` / `evidence_log=FAIL(evidence_log_unreadable)` / `agent_locks=FAIL(agent_locks_invalid_json)` / `execution_packets=FAIL(execution_packets_structure, detail 含 "invalid JSON: 'utf-8' codec can't decode…")`，**零异常逸出**；基线副本同探针：**`ESCAPED UnicodeDecodeError`** | ✅ Never raises 契约四面成立，缺陷非自证 |
 | 4 | archguard 行锚恒等 | `python skills/software-project-governance/infra/verify_workflow.py archguard-ratchet` | **R1 PASS mainfile loc 24453 ≤ anchor 24453**；R2~R7 全 PASS（print 1299 ≤ 1299、cli 84/84 frozen、regen deterministic=True）；exit 0 | ✅ 行中性实证 |
-| 5 | 反相隔离 | 全部 GBK 副本位于 `%TEMP%\fix333_review\` 与 `tempfile.TemporaryDirectory`；仓库 `.governance/` 零写入 | ✅ | ✅ 符合破坏性红线 |
+| 5 | 反相隔离 | 全部 GBK 副本位于 `%TEMP%\fix333_review` 与 `tempfile.TemporaryDirectory`；仓库 `.governance/` 零写入 | ✅ | ✅ 符合破坏性红线 |
 
 探针勘误记录：首版探针面4 显示 PASS——根因是探针自身载荷 `{"packets": {}}` 全 ASCII（GBK↔ASCII 字节重合，UTF-8 可解码），**非被修代码缺陷**；载荷注入中文后重跑，面4 正确 FAIL。此过程同时反向证实了捕获面的判定边界正确（可解码内容不误报）。
 

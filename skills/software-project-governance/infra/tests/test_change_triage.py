@@ -1493,9 +1493,22 @@ class AgentLocksAcquireCliTests(unittest.TestCase):
     def test_cli_success_expected_new_and_warn_disclosure(self):
         rec_dir = self.gov / "change-triage"
         rec_dir.mkdir(exist_ok=True)
+        # Date-bomb guard (REL-078 M-0 prep): the CLI subprocess reads the
+        # REAL clock (agent_locks_acquire_cli passes no ``now``), so the
+        # fixture record must carry that same clock source — today's date,
+        # derived here — instead of a pinned literal. FEAT-013 pinned
+        # ``created_at="2026-09-10"``; once the real clock moved past that
+        # date the same-day cross-check returned None, the WARN was never
+        # emitted, and this test was permanently red (Gate 10 #6 of the
+        # 0.81.0 checklist: ``'WARN' not found in ''``). Deriving both
+        # sides from the same clock keeps the end-to-end shape green on
+        # any run date; the mismatch WARN itself comes from the file set
+        # (to_be_created.py), not from the date.
+        today = datetime.now().date().isoformat()
         (rec_dir / "FIX-211.json").write_text(json.dumps(
             _triage_record_for_lock(
-                task_id="FIX-211", files=["product/existing_a.py"])),
+                task_id="FIX-211", files=["product/existing_a.py"],
+                created_at=today)),
             encoding="utf-8")
         done = self._run_cli(
             "--task", "FIX-211",

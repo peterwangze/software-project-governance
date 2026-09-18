@@ -20,7 +20,8 @@
       "hook-post-commit",
       "hook-prepare-commit-msg",
       "dsh-persona-version",
-      "dsh-agents-bootstrap-version"
+      "dsh-agents-bootstrap-version",
+      "canonical-bootstrap-version"
     ],
     "projection_kinds": [
       "byte_copy",
@@ -213,6 +214,14 @@
       },
       {
         "path": "skills/software-project-governance/infra/tests/test_dsh_compat.py",
+        "type": "file"
+      },
+      {
+        "path": "skills/software-project-governance/infra/sync_entry_projection.py",
+        "type": "file"
+      },
+      {
+        "path": "skills/software-project-governance/infra/tests/test_entry_projection.py",
         "type": "file"
       },
       {

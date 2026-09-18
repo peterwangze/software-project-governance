@@ -1658,6 +1658,22 @@ def smoke_preset() -> int:
     return SMOKE_EXIT_PASS
 
 
+def _entry_projection_shared():
+    """FEAT-037: load the canonical entry-projection library.
+
+    The section-span/splice/dual-presence logic lives ONCE in
+    ``skills/software-project-governance/infra/sync_entry_projection.py``;
+    this adapter imports it instead of duplicating the logic (task FEAT-037
+    item 4: 生成逻辑与脚本一致，复用同一函数).
+    """
+    infra_dir = ROOT / "skills" / "software-project-governance" / "infra"
+    if str(infra_dir) not in sys.path:
+        sys.path.insert(0, str(infra_dir))
+    import sync_entry_projection
+
+    return sync_entry_projection
+
+
 def write_bootstrap(project: Path, force: bool, dry_run: bool = False) -> int:
     project = project.expanduser().resolve()
     if not project.is_dir():
@@ -1677,21 +1693,49 @@ def write_bootstrap(project: Path, force: bool, dry_run: bool = False) -> int:
         print("ERROR: bootstrap template carries an unresolved token: "
               + ", ".join(escaped), file=sys.stderr)
         return 1
-    if target.exists() and not force:
+    try:
+        shared = _entry_projection_shared()
+    except ImportError as exc:
+        print("ERROR: entry-projection shared module unavailable: "
+              f"{exc} (FEAT-037 requires skills/software-project-governance/infra)",
+              file=sys.stderr)
+        return 1
+    existing = None
+    if target.exists():
         existing = target.read_text(encoding="utf-8", errors="replace")
-        if "Governance Bootstrap" not in existing:
-            print(
-                f"ERROR: {target} exists without a Governance Bootstrap section; "
-                "re-run with --force to overwrite",
-                file=sys.stderr,
-            )
-            return 1
+    span = (shared.bootstrap_section_span(existing)
+            if existing is not None else None)
+    if existing is not None and span is None and not force:
+        print(
+            f"ERROR: {target} exists without a Governance Bootstrap section; "
+            "re-run with --force to overwrite",
+            file=sys.stderr,
+        )
+        return 1
     if dry_run:
         print(f"[DRY-RUN] bootstrap target: {target}")
-        print("[DRY-RUN] planned write  : AGENTS.md (thin governance pointer)")
+        if span is not None:
+            print("[DRY-RUN] planned write  : AGENTS.md bootstrap section splice "
+                  "(non-bootstrap content preserved; FEAT-037)")
+        else:
+            print("[DRY-RUN] planned write  : AGENTS.md (thin governance pointer)")
         print("[DRY-RUN] nothing written — re-run without --dry-run to write")
         return 0
-    target.write_text(rendered, encoding="utf-8")
+    if existing is not None and span is not None:
+        # FEAT-037: splice the bootstrap section in place, preserving any
+        # non-bootstrap content around it, instead of clobbering the file.
+        primary = project / "CLAUDE.md"
+        if primary.exists():
+            primary_text = primary.read_text(encoding="utf-8", errors="replace")
+            primary_section = shared.bootstrap_section_span(primary_text)
+            if primary_section is not None and shared.has_full_bootstrap(
+                    primary_text[primary_section[0]:primary_section[1]]):
+                print("dual-presence note: CLAUDE.md carries the full bootstrap; "
+                      "AGENTS.md stays the thin pointer (FEAT-037 dedup)")
+        target.write_text(shared.replace_bootstrap_section(existing, rendered),
+                          encoding="utf-8")
+    else:
+        target.write_text(rendered, encoding="utf-8")
     print(f"bootstrap written: {target}")
     return 0
 

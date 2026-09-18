@@ -56,6 +56,7 @@
 | TOOL-049 | Optional Quality Tool Probe | CLI probe | `infra/verify_workflow.py quality-tools` | Ruff/mypy 可用性与版本探测，结构化 PASS/NOT_RUN/FAIL | 开发/测试/发布/维护 | 是 |
 | TOOL-052 | DSH Preset Schema Compat Guard | CLI check（可独立运行） | `infra/dsh_compat.py` + `infra/verify_workflow.py check-dsh-preset-compat`（`check-governance` Check 28v） | 用**解析态** dsh 插件集的 loader YAML 方言 + loader `evaluate` + cordis `resolveConfig` 逐行校验每个 preset 组合（含 `group` 递归、`disabled` 祖先继承语义），行级报告 row id + 模块名 + schema 原文消息；无 node / 无可解析插件集 → NOT_RUN（可选工具政策，不计 issues） | 开发/测试/发布/维护 | 是 |
 | TOOL-053 | 治理成本埋点报告 | CLI report（只读扫描） | `infra/governance_cost.py` + `infra/verify_workflow.py governance-cost-report --sessions-root <dir> [--workspace <str>] --format json\|text` | 0.84.0 治理成本可观测（FEAT-032/AUDIT-154 切片 A-1）：解析 DSH 会话轨迹（session.v3.jsonl.zstd），机读输出每轮 TTFA（用户消息→首次 ask_user_question）、进入实质工作时间（首次 ask→首个非治理工具调用或轮结束）、token 分项（in/cache/out 累计请求量）、工具时长分布、LLM vs 工具时间占比；`--sessions-root` 缺省取 `DSH_SESSIONS_ROOT` 环境变量，两者皆缺 → fail-closed（exit 2）；zstandard 缺失 → 清晰报错不静默降级；对用户会话目录仅只读 | 架构/开发/测试/维护 | 是 |
+| TOOL-054 | 只读 bootstrap 聚合命令 | CLI aggregate（只读） | `infra/bootstrap_aggregate.py` + `infra/verify_workflow.py governance-bootstrap [--budget-ms N] [--format json\|text] [--profile lite\|standard\|strict]` | 0.84.0 bootstrap 聚合快路径（FEAT-033/AUDIT-154 切片 A-2）：单次输出 resolve envelope（复用 resolve_entry）+ 状态投影（项目配置/Gate 摘要/任务统计/活跃风险/最近活动）+ 候选（复用 task-priority 轻量路径，空推荐带结构化空原因）+ migration 版本比较标志（仅标志不执行）+ health（v1 恒 `deferred`——未做健康检查，指向 check-governance）+ next_actions；`--budget-ms`（默认 3000）超时 fail-safe 返回已完成部分 + `deferred` 明示未完成范围；零 .governance 写入、零 git 写入、零子进程；JSON ≤8KB 投影，text ≤40 行 | 立项/架构/开发/测试/发布/运营/维护 | 是 |
 
 ## 工具详情
 
@@ -560,6 +561,17 @@
 - **安全边界**：对 sessions root 纯只读（rglob + 读字节）；zstandard 缺失 → 清晰报错 exit 1，不静默降级；模块 import 期 stdlib-only（引擎冷启动面 +1），zstandard 懒加载
 - **依赖**：zstandard（可选运行时依赖，缺失 fail-closed——依赖登记由 Coordinator 决策，未修改 requirements/pyproject）
 - **被以下子工作流使用**：架构、开发、测试、维护（FEAT-033/034/039 消费其指标）
+
+### TOOL-054：只读 bootstrap 聚合命令（FEAT-033 / AUDIT-154 切片 A-2）
+
+- **文件**：`infra/bootstrap_aggregate.py`（核心模块，engine-free）、`infra/tests/test_bootstrap_aggregate.py`；引擎只接线 dispatch（`verify_workflow.py` import + subparser + commands dict，governance_cost 同款模式）
+- **子命令**：`governance-bootstrap [--budget-ms N] [--format json|text] [--profile lite|standard|strict]`（`--project-root` 走引擎全局参数；缺省 cwd，fail-closed）
+- **输入**：`.governance/` 活数据只读（plan-tracker.md / risk-log.md / decision-log.md，UTF-8 行级解析）+ `resolve_entry.resolve()` envelope（dual-root 权威，DEC-096）+ `task_priority` 轻量依赖分析（纯 stdlib 复用，非重新推导）
+- **输出**：机读 JSON（schema `governance-bootstrap/1`，≤8KB 投影 / ≤2K token）或 ≤40 行 text 摘要。聚合面：`resolve`（envelope 子集）+ `migration`（active vs plan 版本比较**仅标志不执行**）+ `project`/`gates`（计数 + 首 pending gate）/`tasks`（tpa 口径统计：total/completed/unblocked/blocked/non_executable/p0_pending）/`risks`（open/overdue/soon + ≤3 overdue ids）/`recent`（≤3/5 决策，lite 档省略）/`candidates`（recommended_next ≤1/3/5，空推荐携带 `empty_reason`+`unblock_recommendation` 结构化原因——REQ-110，禁止机械枚举）+ `health`（**v1 恒 `deferred`**：`pending_checks` + 指向 `check-governance` 的 next_action——本命令未做健康检查，不得伪装已检查）+ `next_actions`（≤5 条派生指引）
+- **预算契约**：`--budget-ms`（默认 3000）单调钟相位间检查；超时返回已完成部分 + `deferred: [{section, reason: budget_exhausted}]` 明示未完成范围（fail-safe 不猜测通过；health 的 deferred 是 v1 契约，与预算 deferred 是两回事）
+- **只读红线**：零 `.governance` 写入、零 git 写入、零子进程派发、不调用 archive/迁移；连续两次运行输出一致（仅 `generated_at`/`duration_ms` 易变）——测试以 fixture 树哈希 + 双跑 payload 相等断言看护
+- **边界**：不 import `verify_workflow`（ArchGuard R2 零新增反向边——状态投影为**已披露镜像**，与 resolve_entry 镜像引擎 regex 同一纪律）；`status` 仍是全量投影依赖（Delivery Trust Snapshot/Gate 全表以 status 为准）；协议重排（Scenario 顺序/交互时序）是 FEAT-034 边界，本命令只做数据面聚合
+- **被以下子工作流使用**：立项/架构/开发/测试/发布/运营/维护（每会话 bootstrap 快路径；governance 命令文档的 Scenario F/D 数据源段与入口 SKILL 的 bootstrap 健康摘要段已接线指向）
 
 ### TOOL-050：Loop Runtime Claim Gate
 

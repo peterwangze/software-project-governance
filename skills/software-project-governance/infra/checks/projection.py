@@ -87,3 +87,81 @@ def check_projection_sync(root: Path, target_dir: Optional[Path] = None, pattern
 
 def write_projection_sync(root: Path, config_path: Optional[Path] = None) -> dict:
     return write_projections(root, config_path).as_dict()
+
+
+def check_entry_bootstrap_sync(root: Optional[Path] = None) -> dict:
+    """FEAT-037: entry-file bootstrap projection guard.
+
+    Validates that every platform-native entry bootstrap section is exactly
+    the canonical template projection: the primary entry carries the full
+    governance-init.md Step 7 template, the secondary entry carries the
+    rendered thin pointer (≤40 lines / ≤3072 bytes, minimal survival checks
+    intact), and a dual-full workspace is a FAIL.  Guarded surfaces:
+    the dev-repo root (AGENTS.md/CLAUDE.md) and the e2e dual-entry fixture.
+
+    Root resolves to the repository root WITHOUT importing verify_workflow
+    (ArchGuard R2 bans new reverse-dependency sites in checks/ modules).
+    """
+    root = Path(root) if root is not None else Path(__file__).resolve().parents[4]
+    from sync_entry_projection import CanonicalSourceError, build_sync_report
+
+    issues: list = []
+    targets: list = []
+    for label, project_root in (
+        ("repo-root", root),
+        ("e2e-fixture", root / "project/e2e-test-project"),
+    ):
+        if not project_root.is_dir():
+            issues.append(f"{label}: workspace missing: {project_root}")
+            continue
+        try:
+            report = build_sync_report(project_root, source_root=root)
+        except CanonicalSourceError as exc:
+            issues.append(f"{label}: canonical source error: {exc}")
+            continue
+        issues.extend(f"{label}: {issue}" for issue in report["issues"])
+        targets.append({
+            "label": label,
+            "workspace": str(project_root),
+            "primary": report["primary"],
+            "secondary": report["secondary"],
+            "profile": report["profile"],
+            "entries": report["entries"],
+            "total_section_bytes": report["total_section_bytes"],
+        })
+    return {"pass": not issues, "issues": issues, "targets": targets}
+
+
+def print_entry_bootstrap_report(entry_result: dict) -> bool:
+    """Render the FEAT-037 entry-bootstrap guard result (always printed)."""
+    print("\n=== Entry Bootstrap Sync Check (FEAT-037) ===")
+    for target in entry_result["targets"]:
+        sizes = ", ".join(
+            f"{entry['file']}={entry['bytes']}B/{entry.get('kind', entry['state'])}"
+            for entry in target["entries"]
+        )
+        print(f"  {target['label']}: primary={target['primary']} "
+              f"secondary={target['secondary']} profile={target['profile']}")
+        print(f"    sections: {sizes}")
+    if entry_result["issues"]:
+        print(f"\n  Result: FAILED — {len(entry_result['issues'])} issue(s)")
+        for issue in entry_result["issues"][:20]:
+            print(f"    - {issue}")
+        return False
+    print("\n  Result: PASSED — entry bootstrap sections synchronized with the canonical templates")
+    return True
+
+
+def cmd_check_entry_bootstrap_sync(args) -> None:
+    """Run the FEAT-037 entry-bootstrap projection guard independently."""
+    import sys
+
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    entry_result = check_entry_bootstrap_sync()
+    failed = not print_entry_bootstrap_report(entry_result)
+    if failed:
+        sys.exit(1)
+    print()

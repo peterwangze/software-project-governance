@@ -1,15 +1,34 @@
 # Codex / opencode Project Guidance
 
-## Governance Bootstrap
+## Governance Bootstrap（强制 — 每次会话第一动作 · 次要平台入口薄指针）
 
-This file is the project-local native entry for Codex-compatible and opencode-style agents in the E2E fixture.
+> @bootstrap-version: 0.83.0（薄指针版——FEAT-037 双入口去重；完整 bootstrap 见 CLAUDE.md（主入口），行为约束以主入口为准）
 
-SELF-CHECK:
-1. Read `.governance/plan-tracker.md` before answering or modifying files.
-2. Load `skills/software-project-governance/SKILL.md` for the canonical workflow rules.
-3. Treat this file as a thin projection only; do not duplicate workflow rules here.
+本工作区存在两个平台原生入口文件。本文件是次要平台入口（Codex/opencode 等）的薄指针投影，不复制完整模板；主入口 `CLAUDE.md` 携带完整 bootstrap（Step 0~4、交叉验证、阶段跳跃防护、Agent Team、Bootstrap 变更纪律）。
 
-Runtime expectation:
-- Codex uses `AGENTS.md` as the project instruction file.
-- opencode-compatible runs may also use `AGENTS.md` as the project instruction pointer.
-- The canonical workflow remains `skills/software-project-governance/SKILL.md`.
+### 最小存活检查（第一动作）
+
+1. 运行 `python <plugin_home>/skills/software-project-governance/infra/resolve_entry.py --json`；`resolved_root_ok == false` → MUST STOP，不呈现治理状态（fail-closed）。
+2. 读 `.governance/plan-tracker.md`；阶段/Gate/模式未知 → 读 `## 项目配置` 节；`.governance/` 不存在 → 提醒先初始化。
+3. 完整规则：加载 `skills/software-project-governance/SKILL.md`（或读主入口 `CLAUDE.md`）。
+
+### SELF-CHECK（在任何输出之前）
+
+1. 读了 `.governance/plan-tracker.md`？否 → 立即停止，先读。
+2. 知道当前阶段/Gate/模式？否 → 读 plan-tracker `## 项目配置`。
+3. 即将输出问句（吗？/？/要不要/是否）？→ 删除问句，改用 AskUserQuestion 工具。
+4. 到达交互边界（呈现选项/完成工作单元/用户需选择）？→ MUST 使用 AskUserQuestion。
+5. 即将写入的修改/证据是否有事实依据？无文件/命令/测试/日志支撑 → 标 `BLOCKED`/`待验证`，禁止编造。
+
+### 模式确认（每次会话一句，模式自适应）
+
+- **always-on** → `Governance: {trigger_mode} x {permission_mode} | stage: {stage}, Gate {gate}: {status}, {risk_count} risk(s)`
+- **on-demand** → `Governance: on-demand x {permission_mode}`（仅用户显式调用时展开完整状态）
+- **silent-track** → 不输出治理面板/风险统计/任务进度表
+
+### 治理状态快速入口
+
+- 计划跟踪 `.governance/plan-tracker.md` · 证据 `.governance/evidence-log.md` · 决策 `.governance/decision-log.md` · 风险 `.governance/risk-log.md`
+- 验证命令：`python <plugin_home>/skills/software-project-governance/infra/verify_workflow.py`（`<plugin_home>` 来自 resolve_entry.py）
+- 治理文件读取编码（FIX-278）：pwsh 读 `.governance` 文件 MUST 显式 UTF-8——`Get-Content -Encoding UTF8` 或 `[IO.File]::ReadAllText($p,[Text.Encoding]::UTF8)`；裸 `Get-Content` 在 Windows 默认 GBK 解码产生 mojibake/乱码。
+- 完整治理交互：`/governance`；完整 bootstrap（SELF-CHECK 全文/干活前/提问规则/收工检查）：`CLAUDE.md`（主入口）

@@ -30,6 +30,53 @@
 
 ---
 
+## 行为灰度开关（FEAT-040——legacy 回退通道）
+
+切片 A（AUDIT-154，0.84.0）一次性落地四个热路径行为变更：FEAT-034（首次交互前置）/ FEAT-035（升级确认门）/ FEAT-036（Snapshot 双契约）/ FEAT-038（Scenario 按需加载）。本开关是它们的**回退通道**——一个总开关，不是逐 FEAT 矩阵。
+
+**两个臂（一个决策）**：
+
+| 臂 | 形态 | 适用 | 优先级 |
+|----|------|------|--------|
+| 会话级 | 环境变量 `GOVERNANCE_LEGACY_BEHAVIOR=1` | 用户**当下**踩到问题——不必动治理文件即可退回 | 高 |
+| 项目级 | plan-tracker `## 项目配置` 的 `- **behavior_profile**: legacy` | 项目需要旧形态超过一个会话 | 中 |
+| 默认 | `modern`（新协议） | 未配置 | 低 |
+
+- 取值词表（封闭）：legacy = `1/true/yes/on/legacy`；modern = `0/false/no/off/modern`（大小写不敏感，自动 strip）。
+- **非法值不猜（fail-closed）**：空值/未设置 → 落到下一臂；非空但不在词表内（如 `legacyy`）→ **不按 legacy 执行**（静默接受拼写错误会直接废掉回退意图），也**不静默按 modern 执行**——在 `governance-bootstrap` 的 `behavior.invalid` 显式报告后按下一臂决定。
+- **生效形态的唯一事实源 = `governance-bootstrap --format json` 的 `behavior` 面**（`profile`/`source`/`reverted`/`invariants`/`invalid`）；协议文本只描述边界，不承担判定。legacy 生效时该命令把回退提示置于 `next_actions` **首位**（提醒不可被 5 条上限挤掉）。
+
+**回退范围（只回退性能/编排行为）**：
+
+| 面 | modern（默认） | legacy 回退 |
+|----|---------------|------------|
+| FEAT-034 bootstrap 热数据入口 | `governance-bootstrap` 单命令快路径（≤8KB 投影） | plan-tracker 六段热数据逐段读取 |
+| FEAT-034 首次交互时序 | 热数据就绪后立即 `ask_user_question`；深检后置 | 深检（健康摘要 + 交叉验证）先行，再进入首次 ask |
+| FEAT-036 snapshot 渲染契约 | 默认交互视图 ≤8 字段；完整契约按需取 | 直接渲染完整交付信任快照 |
+| FEAT-038 Scenario 加载 | 路由层为默认载荷；命中场景按需 Read | 会话开始预加载全部 `commands/governance/*.md` |
+
+**安全语义硬边界（legacy 模式一律不回退——无豁免）**：
+
+1. **升级确认门（FEAT-035）**：版本升级写序列 MUST 先呈现摘要并经 `ask_user_question` 确认；**确认前零写操作**。
+2. **异常不隐藏**：异常先于状态展示；`health.state="deferred"` 显示「待检查」而非通过。
+3. **fail-closed**：`resolved_root_ok == false` → MUST STOP，不呈现治理状态（DEC-080 / RISK-038）。
+4. **真实环境防护（M7.7）**：三选一（隔离/备份+校验/逐项授权），三者皆缺即禁止执行。
+5. **复审必达（M7.4）**：`NEEDS_CHANGE` 且 round<3 → MUST 立即复审，不得跳过。
+
+> **为什么回退边界如此划**：legacy 是**性能/编排**回退，不是安全回退。FEAT-035 的确认门代价是一次交互确认，收益是"展示状态不再隐含修改项目的授权"（DEC-209）——把它做成可回退等于把知情同意做成可选项。`behavior_profile.py` 的 `revert_contract_issues()` 是该边界的机检：任何试图把安全语义塞进 `LEGACY_REVERTS` 的改动会让守护测试翻红，而不是靠注释自律。
+
+**验证命令**：
+
+```bash
+python <plugin_home>/infra/verify_workflow.py governance-bootstrap --format json   # behavior 面
+GOVERNANCE_LEGACY_BEHAVIOR=1 python <plugin_home>/infra/verify_workflow.py governance-bootstrap --format text
+python -m pytest <plugin_home>/infra/tests/test_behavior_profile.py -q              # 边界守护
+```
+
+**相关**：完整边界表与机检契约见 `skills/software-project-governance/SKILL.md`「行为灰度开关」段与 `infra/behavior_profile.py`。
+
+---
+
 ## 错误码
 
 | 代码 | 条件 | 动作 |

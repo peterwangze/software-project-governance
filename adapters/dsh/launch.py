@@ -1732,10 +1732,16 @@ def write_bootstrap(project: Path, force: bool, dry_run: bool = False) -> int:
                     primary_text[primary_section[0]:primary_section[1]]):
                 print("dual-presence note: CLAUDE.md carries the full bootstrap; "
                       "AGENTS.md stays the thin pointer (FEAT-037 dedup)")
+        # FEAT-037 P3-4 (closed by FEAT-040): `newline=""` keeps the byte
+        # discipline the rest of the projection stack already follows
+        # (sync_entry_projection L342). Without it Python's text layer
+        # translates every "\n" to os.linesep on Windows, so one bootstrap
+        # write silently re-EOLs the WHOLE target file (LF -> CRLF) — a side
+        # effect well outside the section this path claims to splice.
         target.write_text(shared.replace_bootstrap_section(existing, rendered),
-                          encoding="utf-8")
+                          encoding="utf-8", newline="")
     else:
-        target.write_text(rendered, encoding="utf-8")
+        target.write_text(rendered, encoding="utf-8", newline="")
     print(f"bootstrap written: {target}")
     return 0
 

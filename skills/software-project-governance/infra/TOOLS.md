@@ -58,6 +58,7 @@
 | TOOL-053 | 治理成本埋点报告 | CLI report（只读扫描） | `infra/governance_cost.py` + `infra/verify_workflow.py governance-cost-report --sessions-root <dir> [--workspace <str>] --format json\|text` | 0.84.0 治理成本可观测（FEAT-032/AUDIT-154 切片 A-1）：解析 DSH 会话轨迹（session.v3.jsonl.zstd），机读输出每轮 TTFA（用户消息→首次 ask_user_question）、进入实质工作时间（首次 ask→首个非治理工具调用或轮结束）、token 分项（in/cache/out 累计请求量）、工具时长分布、LLM vs 工具时间占比；`--sessions-root` 缺省取 `DSH_SESSIONS_ROOT` 环境变量，两者皆缺 → fail-closed（exit 2）；zstandard 缺失 → 清晰报错不静默降级；对用户会话目录仅只读 | 架构/开发/测试/维护 | 是 |
 | TOOL-054 | 只读 bootstrap 聚合命令 | CLI aggregate（只读） | `infra/bootstrap_aggregate.py` + `infra/verify_workflow.py governance-bootstrap [--budget-ms N] [--format json\|text] [--profile lite\|standard\|strict]` | 0.84.0 bootstrap 聚合快路径（FEAT-033/AUDIT-154 切片 A-2）：单次输出 resolve envelope（复用 resolve_entry）+ 状态投影（项目配置/Gate 摘要/任务统计/活跃风险/最近活动）+ 候选（复用 task-priority 轻量路径，空推荐带结构化空原因）+ migration 版本比较标志（仅标志不执行）+ health（v1 恒 `deferred`——未做健康检查，指向 check-governance）+ next_actions；`--budget-ms`（默认 3000）超时 fail-safe 返回已完成部分 + `deferred` 明示未完成范围；零 .governance 写入、零 git 写入、零子进程；JSON ≤8KB 投影，text ≤40 行 | 立项/架构/开发/测试/发布/运营/维护 | 是 |
 | TOOL-055 | 注入面体积预算门禁 | CLI check（可独立运行） | `infra/verify_workflow.py check-injection-budget [--budget-tokens N] [--profile lightweight\|standard\|strict] [--format text\|json]`（`check-governance` Check 33 内联同报） | 0.84.0 治理自身资源预算门禁（FEAT-039/AUDIT-154 切片 A-8）：对**实际加载集合**（多文件求和，非单文件——拆分文件不能绕过预算）定价并裁决；分项输出每面 bytes/chars/CJK/token（预算价 + DSH host 价）；口径 = CJK 1 tok/char、ASCII ceil(chars/4)、其他 ceil(chars*2/5)，**不引外部 tokenizer 依赖**（假设在 `--format json` 的 `tokenizer` 字段与 help 中文档化）；resident 层（persona + 所选 profile 入口模板 + 双入口薄指针 + agent-instructions）默认预算 6000 tok（切片 A 放宽档，arch 目标 4K），超限按 `BUDGET_TIER_POLICY` 报 ADVISORY；skill/command 层按需加载单独计量（report-only，不并入 resident）；任一 canonical 源解析失败 → 显式 issue + fail-closed；tool-return 面登记 FEAT-033 `MAX_JSON_BYTES=8192`（引用断言，不重实现） | 架构/开发/测试/发布/维护 | 是 |
+| TOOL-056 | 行为灰度开关 / legacy 回退通道 | 模块 + CLI 面（只读） | `infra/behavior_profile.py` + `infra/verify_workflow.py governance-bootstrap` 的 `behavior` 面 | 0.84.0 切片 A 行为变更回退通道（FEAT-040/AUDIT-154 切片 A-9）：`GOVERNANCE_LEGACY_BEHAVIOR=1` 或 plan-tracker `behavior_profile: legacy` → 只回退性能/编排行为（快路径/首次交互前置/≤8 字段视图/Scenario 按需）；**安全语义不回退**（升级确认门/异常不隐藏/fail-closed/真实环境防护/复审必达）——边界为机检契约（`revert_contract_issues`）非注释 | 全部阶段 | 是 |
 
 ## 工具详情
 
@@ -555,13 +556,15 @@
 ### TOOL-053：治理成本埋点报告（FEAT-032 / AUDIT-154 切片 A-1）
 
 - **文件**：`infra/governance_cost.py`（正式模块，EVD-1071 研究脚本逻辑提升）、`infra/tests/test_governance_cost.py`；`project/research/dsh-trace-analysis/` 下脚本为 deprecated 指针
-- **子命令**：`governance-cost-report --sessions-root <dir> [--workspace <str>] --format json|text`
+- **子命令**：`governance-cost-report --sessions-root <dir> [--workspace <str>] --format json|text [--ttfa-acceptance]`
 - **输入**：`--sessions-root` 下 `**/session.v3.jsonl.zstd`（zstandard 解压；`--sessions-root` 缺省取 `DSH_SESSIONS_ROOT` 环境变量，两者皆缺 → exit 2 fail-closed，不硬编码用户路径）；`--workspace` 按 cwd 子串过滤后再聚合
 - **输出**：机读 JSON（schema `governance-cost-report/1`）+ 人类可读 text：每轮 TTFA（用户消息→首次 ask_user_question）、进入实质工作时间（首次 ask→首个非治理工具调用或轮结束，含 endpoint 判别）、token 分项（in/cache/out，累计请求量口径）、工具时长分布（按名聚合 count/total/max/avg）、LLM vs 工具时间占比与 labeled residual、ask_user_question 挂起（用户等待）单列；报告内嵌 `calibration` 口径披露（审计报告 §4：原始时间戳差值不加工、LLM 窗口内 TTFT/解码不可分离、残差语义）
 - **口径**：`user/message` 无 turn 字段按事件序归属当前 turn（EVD-1071/审计 §2）；治理工具按名分类仅 `ask_user_question`+`skill`（声明式常量，通用工具按名不可分类、计入实质工作候选——已在 calibration 披露）
 - **安全边界**：对 sessions root 纯只读（rglob + 读字节）；zstandard 缺失 → 清晰报错 exit 1，不静默降级；模块 import 期 stdlib-only（引擎冷启动面 +1），zstandard 懒加载
 - **依赖**：zstandard（可选运行时依赖，缺失 fail-closed——依赖登记由 Coordinator 决策，未修改 requirements/pyproject）
-- **被以下子工作流使用**：架构、开发、测试、维护（FEAT-033/034/039 消费其指标）
+- **验收面（`--ttfa-acceptance`，FEAT-040 / RISK-055 一键复验路径）**：追加成对 TTFA+TTW 验收块——阈值常量在代码（`TTFA_ACCEPTANCE_P50_MS = 25000` / `TTFA_ACCEPTANCE_P95_MS = 45000` / `TTFA_ACCEPTANCE_MIN_TURNS = 3`），采样口径与 `totals.ttfa_ms` 同一全体（DEC-207① 要求的同快照口径，与 EVD-1073/RISK-052 基线可直接对比）；`TTW` 逐行配对（首次 ask → 首个非治理工具 | 轮结束），因为单看 TTFA 可以用"更早发问"买分。verdict ∈ `PASS` / `FAIL` / `PENDING`——样本 < 3 时 **PENDING 而非绿**：机制未跑就宣称达标正是 AUDIT-154 点名的度量诚实性问题。**一键命令**（在新会话跑过新协议后执行）：
+  `python <plugin_home>/infra/verify_workflow.py governance-cost-report --sessions-root "$env:DSH_SESSIONS_ROOT" --workspace project_management_workflow --ttfa-acceptance --format text`
+- **被以下子工作流使用**：架构、开发、测试、维护（FEAT-033/034/039 消费其指标；RISK-055 复验）
 
 ### TOOL-054：只读 bootstrap 聚合命令（FEAT-033 / AUDIT-154 切片 A-2）
 
@@ -589,6 +592,19 @@
 - **CI 接线（不新建 CI 系统——复用既有 check 面）**：① 每次 commit/PR 走既有 `governance` hook 与 `check-governance` 聚合（Check 33 段内已内联体积分项与 ADVISORY 行）；② 需要在流水线里单独取退出码时用 `python skills/software-project-governance/infra/verify_workflow.py check-injection-budget --fail-on-issues`（FAIL → exit 1；ADVISORY → exit 0）；③ 机读断言用 `--format json` 的 `verdict` / `tiers` 字段。zstandard 依赖面：FEAT-032 的 zstd fixture 测试在依赖缺失时**显式 FAIL**（`test_governance_cost.py::Feat039ZstandardDependencyAssertionTests`，提示 `pip install zstandard`），不再静默 skip（DEC-205②）。
 - **边界**：只测量与裁决，不修改任何被测量文件、不写 `.governance/`、不执行 git；不替代 `check-injection-contract`（锚点存在性）与 `check-entry-bootstrap-sync`（投影一致性）——三者互补：注入面**在不在** / **一致不一致** / **贵不贵**。
 - **被以下子工作流使用**：架构、开发、测试、发布、维护
+
+### TOOL-056：行为灰度开关 / legacy 回退通道（FEAT-040 / AUDIT-154 切片 A-9）
+
+- **文件**：`infra/behavior_profile.py`（核心模块，stdlib-only leaf）、`infra/tests/test_behavior_profile.py`；引擎面零改动（`governance-bootstrap` 的 `behavior` 面由 `infra/bootstrap_aggregate.py` 承载——ArchGuard R1/R4/R5 不动）
+- **调用形态**：无独立子命令。判定入口 = `governance-bootstrap --format json` 的 `behavior` 面（`profile`/`source`/`env_var`/`plan_tracker_key`/`reverted`/`invariants`/`invalid`）+ `--format text` 的 `behavior:` 行；legacy 生效时回退提示置于 `next_actions` **首位**（不可被 5 条上限挤掉）
+- **输入（两臂 + 默认）**：会话级环境变量 `GOVERNANCE_LEGACY_BEHAVIOR`（`1/true/yes/on/legacy` → legacy；`0/false/no/off/modern` → modern）> 项目级 plan-tracker `## 项目配置` 的 `- **behavior_profile**: legacy|modern` > 默认 `modern`
+- **回退范围（`LEGACY_REVERTS`，**只回退性能/编排行为**）**：FEAT-034 快路径→六段读取；FEAT-034 首次交互前置→深检先行；FEAT-036 ≤8 字段默认视图→完整快照契约；FEAT-038 Scenario 按需→预加载。每条带 `class` 字段，`ALLOWED_REVERT_CLASSES = {performance}`
+- **安全硬边界（`SAFETY_INVARIANTS`，legacy 一律不回退）**：升级确认门（FEAT-035，确认前零写操作）/ 异常不隐藏 / fail-closed（`resolved_root_ok == false` 即停）/ 真实环境防护（M7.7 三选一）/ 复审必达（M7.4）
+- **机检契约**：`revert_contract_issues()` 断言 (1) 回退表只允许 `performance` 类；(2) 回退表与安全不变量不得共享 FEAT（FEAT-035 只出现在不变量侧）；(3) 每个不变量带非空协议 marker；(4) 面/id 唯一。守护测试除「真实表干净」外**注入违规**验证 checker 真的会失败（净表断言无法证明 checker 有效）
+- **非干扰契约（守护测试）**：同一宿主树下 modern/legacy 两次 `governance-bootstrap` payload 除 `behavior` 与回退 next_action 外**逐面相等**——`health` 仍为 `deferred`（不借绿），`resolve`（fail-closed 权威）不变，治理面无缺失
+- **发布面**：六个注入面必须携带 `行为灰度开关` 标记（canonical Step 7 四个模板 + 路由层 + bootstrap 说明 + SKILL.md + DSH 模板 + persona），由 `test_behavior_profile.py::PublicationTests` 守护；薄指针上限（≤40 行/≤3KB）由 `check-entry-bootstrap-sync` 守护
+- **边界**：只读纯函数（AST 守护：仅 `os`/`re` 导入、零写调用）；不 import `verify_workflow`（ArchGuard R2/R6）；不做用户提示、不写 `.governance/`
+- **被以下子工作流使用**：全部阶段（每会话 bootstrap 生效面）；发布/维护（回退通道可用性验收）
 
 ### TOOL-050：Loop Runtime Claim Gate
 
@@ -681,6 +697,7 @@
 | Declarative Release Ledger | | | | | ● | | ● | | ● | | ● |
 | Artifact Projection Generator | | | | | ● | ● | ● | | ● | | ● |
 | Optional Quality Tool Probe | | | | | | ● | ● | | ● | | ● |
+| 行为灰度开关（legacy 回退通道） | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● |
 
 > ● 主要使用者  ○ 可选用
 

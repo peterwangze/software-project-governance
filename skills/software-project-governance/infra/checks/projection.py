@@ -89,7 +89,8 @@ def write_projection_sync(root: Path, config_path: Optional[Path] = None) -> dic
     return write_projections(root, config_path).as_dict()
 
 
-def check_entry_bootstrap_sync(root: Optional[Path] = None) -> dict:
+def check_entry_bootstrap_sync(root: Optional[Path] = None,
+                               profile: str = "standard") -> dict:
     """FEAT-037: entry-file bootstrap projection guard.
 
     Validates that every platform-native entry bootstrap section is exactly
@@ -99,11 +100,23 @@ def check_entry_bootstrap_sync(root: Optional[Path] = None) -> dict:
     intact), and a dual-full workspace is a FAIL.  Guarded surfaces:
     the dev-repo root (AGENTS.md/CLAUDE.md) and the e2e dual-entry fixture.
 
+    FEAT-040 additions:
+
+    * ``profile`` is a parameter, not a hidden constant (FEAT-037 P3-3): the
+      report DISCLOSES which profile it priced the sections against, so adding
+      a non-standard workspace to the guard face is a call-site change rather
+      than a silent false drift.
+    * the DSH thin-pointer DIALECT is guarded too (FEAT-037 P3-6): the
+      agent-instructions template is validated against the shared survival
+      core + its own dialect anchors instead of being classified ``unknown``
+      and left unguarded.
+
     Root resolves to the repository root WITHOUT importing verify_workflow
     (ArchGuard R2 bans new reverse-dependency sites in checks/ modules).
     """
     root = Path(root) if root is not None else Path(__file__).resolve().parents[4]
-    from sync_entry_projection import CanonicalSourceError, build_sync_report
+    from sync_entry_projection import (
+        CanonicalSourceError, build_sync_report, check_dsh_thin_pointer)
 
     issues: list = []
     targets: list = []
@@ -115,7 +128,8 @@ def check_entry_bootstrap_sync(root: Optional[Path] = None) -> dict:
             issues.append(f"{label}: workspace missing: {project_root}")
             continue
         try:
-            report = build_sync_report(project_root, source_root=root)
+            report = build_sync_report(project_root, source_root=root,
+                                       profile=profile)
         except CanonicalSourceError as exc:
             issues.append(f"{label}: canonical source error: {exc}")
             continue
@@ -129,7 +143,21 @@ def check_entry_bootstrap_sync(root: Optional[Path] = None) -> dict:
             "entries": report["entries"],
             "total_section_bytes": report["total_section_bytes"],
         })
-    return {"pass": not issues, "issues": issues, "targets": targets}
+
+    dsh = check_dsh_thin_pointer(root)
+    issues.extend(dsh["issues"])
+    return {
+        "pass": not issues,
+        "issues": issues,
+        "targets": targets,
+        "dsh_dialect": dsh,
+        "profile": profile,
+        "profile_note": (
+            "the two entry-file targets are priced against the `%s` profile "
+            "templates; a workspace rendered with another profile reports "
+            "drift and must be added here with its own profile (FEAT-037 P3-3 "
+            "disclosure)" % profile),
+    }
 
 
 def print_entry_bootstrap_report(entry_result: dict) -> bool:
@@ -143,6 +171,13 @@ def print_entry_bootstrap_report(entry_result: dict) -> bool:
         print(f"  {target['label']}: primary={target['primary']} "
               f"secondary={target['secondary']} profile={target['profile']}")
         print(f"    sections: {sizes}")
+    dsh = entry_result.get("dsh_dialect")
+    if dsh:
+        print(f"  dsh-dialect (FEAT-040): {dsh['path']} "
+              f"{dsh['state']} ({dsh['bytes']}B/{dsh['lines']}L) — "
+              f"mutual recognition: shared survival core + DSH extras")
+    if entry_result.get("profile_note"):
+        print(f"  note: {entry_result['profile_note']}")
     if entry_result["issues"]:
         print(f"\n  Result: FAILED — {len(entry_result['issues'])} issue(s)")
         for issue in entry_result["issues"][:20]:

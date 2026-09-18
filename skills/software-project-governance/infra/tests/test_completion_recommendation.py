@@ -251,10 +251,16 @@ class ContractPinningTests(unittest.TestCase):
         self.assertIn("RECO-", text)
 
     def test_governance_md_snapshot_spec_carries_derivation_rule(self):
-        text = (_INFRA_DIR.parent.parent.parent / "commands" / "governance.md"
+        """FEAT-038: the session-snapshot field contract moved out of the
+        `/governance` router layer into the on-demand
+        `commands/governance/snapshot-schema.md`; the router must point at it."""
+        root = _INFRA_DIR.parent.parent.parent
+        text = (root / "commands" / "governance" / "snapshot-schema.md"
                 ).read_text(encoding="utf-8")
         self.assertIn("下次会话优先级", text)
         self.assertIn("RECO-", text)
+        router = (root / "commands" / "governance.md").read_text(encoding="utf-8")
+        self.assertIn("commands/governance/snapshot-schema.md", router)
 
 
 if __name__ == "__main__":

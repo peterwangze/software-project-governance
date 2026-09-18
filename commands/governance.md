@@ -96,6 +96,7 @@
 - **Scenario C 写序列**：版本升级写序列属推进类动作——执行前 MUST 满足 M5.5 条 3 深检前置；用户确认升级不免除深检；确认前零写操作（FEAT-035）。
 - **Scenario D 新鲜度**：≤24h 活跃恢复 / 24h~7d 标记且仍提供继续 / >7d 归档转 F（规则全文见规程文件）。
 - **Scenario F 双契约（FEAT-036）**：默认交互视图（≤8 字段，强制生成）+ 完整机器契约（20 字段 CLI snapshot + 4 字段 pack doc-surface，不随会话强制生成）。
+- **行为灰度开关（FEAT-040）**：`GOVERNANCE_LEGACY_BEHAVIOR=1` 或 plan-tracker `behavior_profile: legacy` → 只回退性能行为，安全语义不回退；判定与边界全文见 `commands/governance/bootstrap.md`。
 
 ---
 

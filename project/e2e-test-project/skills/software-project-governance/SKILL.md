@@ -36,7 +36,7 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
 - 看护事实：所有修改、审查、证据和发布结论必须基于可复查事实，禁止把假设、猜测、推测或编造内容写成闭环事实。
 - 看护闭环：产品代码产出必须有验证证据和独立审查；宿主不支持分离时只能记录 degraded evidence，不得宣称 review passed。
 - Coordinator 接管用户交互：只在 critical triggers 触发时通过 AskUserQuestion 打断用户；常规执行自动推进并记录假设。【自动化分级：A 级（Agent Protocol Automation）——agent 按协议纪律自动执行，详见「自动化能力分级声明」】
-- 首次交互前置（FEAT-034）：会话 bootstrap 在快路径数据（`governance-bootstrap` 聚合）就绪后**立即**通过 AskUserQuestion 进入首次用户交互（最小状态行 + 恢复/下一步选项）；健康摘要等深检后置为用户选择后按需执行（推进类动作前 MUST 补齐对应深检，deferred 期间显示「待检查」）；同时成对跟踪进入实质工作时间——不得把"先 ask、用户选完再久等深检"当作改善（AUDIT-154 arch 判定，详见 behavior-protocol.md M5.5）。
+- 首次交互前置（FEAT-034）：会话 bootstrap 在快路径数据（`governance-bootstrap` 聚合）就绪后**立即**通过 AskUserQuestion 进入首次用户交互（最小状态行 + 恢复/下一步选项）；健康摘要等深检后置为用户选择后按需执行（推进类动作前 MUST 补齐对应深检，deferred 期间显示「待检查」）；同时成对跟踪进入实质工作时间——不得把"先 ask、用户选完再久等深检"当作改善（AUDIT-154 arch 判定，详见 behavior-protocol.md M5.5）。版本升级写序列属推进类动作（FEAT-035 / DEC-207② P2-1）：升级/归档写操作 MUST 先经 AskUserQuestion 确认（升级摘要含写操作清单与回滚方式；用户未响应前零写操作），执行前 MUST 补齐 M5.5 条 3 深检。
 - Producer-Reviewer 分离：生产者只产出，Reviewer 只审查；缺少真实分离时只能进入 degraded mode。
 
 ### 你必须避免
@@ -70,6 +70,35 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
   - `Governance: N issues (parse degraded)` → 摘要解析降级（输出格式漂移 fail-safe），不报错。
 - **详略分档**（`--level lightweight|standard|strict`，缺省 standard）：轻量=汇总+首个 FAIL；标准=汇总+首个 FAIL/WARN+最多 5 条明细（FAIL 优先，每条截断 130 字符）+「共 N issues，--level strict 查看全部」指引行（FIX-278 G1 top-N——消除 103 字符摘要触发 ~25KB 追查链的放大（audit-148 §2.1））；严格=汇总+全部 FAIL/WARN。三档**跑同一个** `--summary-only`，仅输出详略不同，**不按 profile 拆逻辑**。
 - **bootstrap 聚合快路径（FEAT-033；FEAT-034 起为第二动作）**：会话 bootstrap 在健康摘要之前 MUST 先跑 `python skills/software-project-governance/infra/verify_workflow.py governance-bootstrap --format json`（只读聚合，≤8KB 投影：resolve envelope + 状态投影 + 候选 + migration 标志 + next_actions）以支撑首次交互前置；其 `health.state="deferred"` 表示本命令未做健康检查——健康摘要仍以后置的 `check-governance --summary-only` 为准，deferred 期间显示「待检查」，不得把 deferred 当作已通过。
+
+### 行为灰度开关（FEAT-040——legacy 回退通道；边界机检见 `infra/behavior_profile.py`）
+
+切片 A（AUDIT-154，0.84.0）一次落地四个热路径行为变更（FEAT-034/035/036/038）。本开关是它们的**回退通道**——**一个总开关**，不是逐 FEAT 矩阵。
+
+| 臂 | 形态 | 优先级 |
+|----|------|--------|
+| 会话级 | 环境变量 `GOVERNANCE_LEGACY_BEHAVIOR=1` | 高 |
+| 项目级 | plan-tracker `## 项目配置` 的 `- **behavior_profile**: legacy` | 中 |
+| 默认 | `modern`（新协议） | 低 |
+
+- 取值词表封闭：legacy = `1/true/yes/on/legacy`；modern = `0/false/no/off/modern`。**非法值不猜**——非空但不在词表内时既不按 legacy 也不静默按 modern 执行，而是在 `governance-bootstrap` 的 `behavior.invalid` 显式报告后落到下一臂。
+- **生效形态的唯一事实源**：`governance-bootstrap --format json` 的 `behavior` 面（`profile`/`source`/`reverted`/`invariants`/`invalid`）。legacy 生效时回退提示置于 `next_actions` **首位**。
+
+**回退范围（只回退性能/编排行为）**：快路径→六段读取；首次交互前置→深检先行；≤8 字段默认视图→完整快照契约；Scenario 按需→预加载。
+
+**安全语义硬边界（legacy 模式一律不回退——无豁免）**：
+
+| 不变量 | 出处 | 内容 |
+|--------|------|------|
+| 升级确认门 | FEAT-035 | 版本升级写序列 MUST 先呈现摘要并经用户确认；**确认前零写操作** |
+| 异常不隐藏 | M9 / 设计原则 3 | 异常先于状态展示；`deferred` 显示「待检查」而非通过 |
+| fail-closed | DEC-080 / RISK-038 | `resolved_root_ok == false` → MUST STOP，不呈现治理状态 |
+| 真实环境防护 | M7.7 | 三选一（隔离/备份+校验/逐项授权），三者皆缺即禁止执行 |
+| 复审必达 | M7.4 | `NEEDS_CHANGE` 且 round<3 → MUST 立即复审，不得跳过 |
+
+> **边界为何如此划**：legacy 是性能/编排回退，不是安全回退。升级确认门（FEAT-035）的代价是一次交互确认，收益是"展示状态不再隐含修改项目的授权"（DEC-209）——把它做成可回退等于把知情同意做成可选项。`behavior_profile.revert_contract_issues()` 是该边界的**机检**：回退表只允许 `performance` 类别、且不得与安全不变量共享 FEAT——任何试图把安全语义塞进 `LEGACY_REVERTS` 的改动会让守护测试翻红，而不是靠注释自律。
+
+**一键验证**：`governance-bootstrap --format json | --format text`（`behavior` 面 + 文本行）；守护测试 `infra/tests/test_behavior_profile.py`；协议面守护（六个注入面必须携带 `行为灰度开关` 标记）同文件。
 
 ### 关键行为契约（MUST——注入面最小契约集，FIX-253/REQ-112；完整规则见 references/behavior-protocol.md M7.4 / M7.7）
 
@@ -124,7 +153,7 @@ Coordinator 铁律第 1 条"不直接修改产品代码"的具体判定标准。
 本工作流对「自动/看护」的承诺按 plugin-contract.md 三级划分；**禁止用笼统的「自动」一词同时指向 A 级与 C 级能力**（plugin-contract.md L114 禁令——README 和对外文档必须显式说明当前各项能力处于哪一级）：
 
 - **A 级（Agent Protocol Automation）**：行为协议自动化——agent 按协议纪律自动执行。例如「Coordinator 接管用户交互：只在 critical triggers 触发时打断；常规执行自动推进并记录假设」（见上方「你负责」清单）= A 级。
-- **B 级（CLI-Enforced Automation）**：CLI/脚本强制——`verify_workflow.py check-governance` 与 commit hooks 在命令/commit 时点强制（= B 级）。本文件「治理基础设施（自动使用）」与 `commands/governance.md`「自动分类，不问用户」均属本级（事件驱动，非持续）。
+- **B 级（CLI-Enforced Automation）**：CLI/脚本强制——`verify_workflow.py check-governance` 与 commit hooks 在命令/commit 时点强制（= B 级）。本文件「治理基础设施（自动使用）」与 `commands/governance.md`（FEAT-038 起为**路由层**：只含 Coordinator 身份/检测逻辑/决策树/六 Scenario 摘要与路由，执行规程按需 Read `commands/governance/` 下文件）「自动分类，不问用户」均属本级（事件驱动，非持续）。
 - **governance-write-guard（FEAT-011 / FIX-297 / FEAT-017）= B 级检查器工件 + A 级协议触发（post-commit advisory 显示面）**：CLI 被调用即强制（结构违约 FAIL 退出码 1）；post-commit 面板接线已交付（FEAT-017——advisory 显示、非阻断，回滚=删 post-commit Step 4b 段），复跑时点仍由 `references/behavior-protocol.md` M1.2「直写后 MUST 复跑」协议纪律约束并保留为权威与回退路径；对外宣示不得写成 write-guard hook 时点强制或 C 级（B 级时点强制属 commit-msg/pre-commit 既有 hook 面）。
 - **C 级（System Automation）**：后台系统自动触发、不依赖 agent 记忆——**未实现**（plugin-contract.md L102：MCP/headless runner 仅有协议样例，无可用实现）。0.76.0 通过 `check-governance --summary-only` 的会话 bootstrap 自动运行实现「会话级」自动触发（见上方「每会话 bootstrap 健康摘要」），但**不是** C 级后台 daemon。
 

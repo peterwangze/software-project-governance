@@ -20207,20 +20207,24 @@ class Feat039InjectionBudgetTests(unittest.TestCase):
     # EXACTLY as the platform entry files are rendered — the same authority
     # ``check-entry-bootstrap-sync`` validates the live CLAUDE.md/AGENTS.md
     # sections against (``sync_entry_projection.extract_canonical_templates``).
-    # The pinned byte counts are that authority's own output at R1 time
-    # (governance-init.md blocks: lightweight 195-257, standard 262-533,
-    # strict 538-830, secondary-thin 836-867): a change to a template — or to
-    # the boundary rule — must redden this test rather than move the price
-    # silently. NOTE the R0 review's fence-pair reading (17,219 / 17,220 /
-    # 2,739) truncated the standard/strict blocks at the nested ``Bootstrap
-    # 变更纪律`` fence and dropped the sections the live entry files DO carry;
-    # the authority above explicitly forbids that ("nested fences cannot
-    # truncate a block").
+    # The pinned byte counts are that authority's own output: a change to a
+    # template — or to the boundary rule — must redden this test rather than
+    # move the price silently. NOTE the R0 review's fence-pair reading
+    # (17,219 / 17,220 / 2,739) truncated the standard/strict blocks at the
+    # nested ``Bootstrap 变更纪律`` fence and dropped the sections the live
+    # entry files DO carry; the authority above explicitly forbids that
+    # ("nested fences cannot truncate a block").
+    #
+    # FEAT-040 rebase: the counts moved because every template gained the
+    # gray-release switch block (FEAT-040; performance-only rollback + the
+    # safety hard boundary) — 3904→4555 / 22858→23836 / 23484→24462 /
+    # 2724→3013. The rebase is the guard working as designed: the price could
+    # not move without a deliberate edit here.
     ENTRY_TEMPLATE_CANONICAL_BYTES = {
-        "lightweight": 3904,
-        "standard": 22858,
-        "strict": 23484,
-        "secondary-thin": 2724,
+        "lightweight": 4555,
+        "standard": 23836,
+        "strict": 24462,
+        "secondary-thin": 3013,
     }
 
     def test_entry_template_surfaces_price_the_canonical_blocks(self):
@@ -20646,11 +20650,39 @@ class FEAT038GovernanceOnDemandSplitTests(unittest.TestCase):
                               f"{rel} is not declared in the canonical manifest")
 
     def test_scenario_documents_are_not_in_the_default_injection_surface(self):
-        """The router must point at each document instead of inlining it."""
+        """The router must point at each document instead of inlining it.
+
+        FEAT-038 P2-2 (closed by FEAT-040): the original assertion checked
+        `vw.INJECTION_CONTRACT_ANCHORS` — a 3-key dict whose keys are
+        `agent-presets/*`, `SKILL.md` and `adapters/dsh/AGENTS.md.template`.
+        `commands/**` can never be one of its keys, so the assertion was
+        near-tautological (false assurance: the name promised an injection-
+        surface check the body could not fail). The real fact source is
+        `INJECTION_BUDGET_SURFACES` — the FEAT-039 surface census — so the
+        guard now derives the answer from it. A surface census that moves a
+        scenario document into the default payload (e.g. by adding a
+        `commands/governance/*` surface, or by widening the router surface's
+        scope to a directory) FAILs here.
+        """
+        surfaces = vw.INJECTION_BUDGET_SURFACES
+        # ① no surface path may point INTO the on-demand directory …
+        for surface in surfaces:
+            self.assertFalse(
+                surface["path"].startswith("commands/governance/"),
+                f"injection surface {surface['name']!r} resolves into "
+                f"commands/governance/ ({surface['path']}) — scenario "
+                "documents must stay off the default payload")
+        # ② …and the router layer must remain the ONLY `command`-tier surface,
+        #    so "the deferring document is the payload" stays enforceable.
+        command_tier = [s for s in surfaces if s["tier"] == "command"]
+        self.assertEqual([s["path"] for s in command_tier],
+                         [GOVERNANCE_ROUTER_DOC],
+                         "the routing layer must be the single command-tier "
+                         "surface (FEAT-038 split + FEAT-039 budget)")
+        # ③ and the router really does name every deferred document.
         for rel in GOVERNANCE_SCENARIO_DOCS + GOVERNANCE_SUPPORT_DOCS:
-            for pattern in (f"skills/software-project-governance/{rel}", rel):
-                self.assertNotIn(pattern, vw.INJECTION_CONTRACT_ANCHORS,
-                                 f"{rel} must not be an injection anchor surface")
+            self.assertIn(rel, self.router,
+                          f"{rel} must be routed to, not inlined")
 
     # ── ④ zero semantic loss ────────────────────────────────────────────
     def test_scenario_documents_carry_every_original_section_heading(self):
@@ -20697,6 +20729,54 @@ class FEAT038GovernanceOnDemandSplitTests(unittest.TestCase):
         for marker in ("Web console 入口边界", "自动化能力分级声明",
                        "C 级为 roadmap（未实现）"):
             self.assertIn(marker, overview, marker)
+
+    # ── ⑤ command-discovery exposure (FEAT-038 P3-4 / FEAT-040) ──────────
+    def test_deferred_documents_are_not_exposed_as_commands(self):
+        """The actual exposed command list, not a claim about it.
+
+        FEAT-038 P3-4: the acceptance wording promised that the split is
+        "isolated from the flat command-discovery mechanism", but nothing in
+        the repo checked what the host actually discovers. The DSH exposure
+        mechanism IS in the repo — `adapters/dsh/skill-shims/` holds one thin
+        projection per flat `commands/*.md` — so the list is checkable here:
+        it must equal the flat command set, and no shim may point into
+        `commands/governance/`. A recursive discovery change that pulled the
+        nine on-demand documents into the command surface FAILs this.
+        """
+        shims = self.root / "adapters/dsh/skill-shims"
+        self.assertTrue(shims.is_dir(), "skill-shims directory missing")
+        shim_names = {path.stem for path in shims.glob("*.md")}
+        flat_commands = {path.stem for path in (self.root / "commands").glob("*.md")}
+        self.assertEqual(shim_names, flat_commands,
+                         "the DSH command surface must expose exactly the flat "
+                         "commands/*.md set")
+        self.assertEqual(len(shim_names), 9,
+                         "expected the 9 governance commands")
+        for name in ("scenario-a", "scenario-f", "bootstrap",
+                     "snapshot-schema", "overview"):
+            self.assertNotIn(name, shim_names,
+                             f"{name} is an on-demand document, not a command")
+        for path in shims.glob("*.md"):
+            text = path.read_text(encoding="utf-8")
+            # each shim projects its OWN flat source …
+            self.assertIn(f"commands/{path.stem}.md", text,
+                          f"{path.name} does not name commands/{path.stem}.md "
+                          "as its source")
+            # … and never becomes the entry point of a deferred document.
+            # (The router shim legitimately ROUTES into the directory — that
+            # is the routing contract; what must not exist is a shim whose
+            # subject is one of the nine on-demand documents.)
+            self.assertNotIn(f"commands/governance/{path.stem}.md", text,
+                             f"{path.name} projects an on-demand document — "
+                             "the deferred documents must not become "
+                             "reachable command entries")
+        self.assertEqual(
+            sorted(path.name for path in
+                   (self.root / "commands/governance").glob("*.md")),
+            sorted(rel.rsplit("/", 1)[1]
+                   for rel in GOVERNANCE_SCENARIO_DOCS + GOVERNANCE_SUPPORT_DOCS),
+            "the on-demand directory must contain exactly the deferred docs "
+            "(the router layer lives one level up)")
 
     # ── fixture mirror ─────────────────────────────────────────────────
     def test_fixture_mirrors_router_and_scenario_documents(self):

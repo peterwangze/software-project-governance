@@ -727,6 +727,168 @@ CALIBRATION = {
         "and count as work-tool candidates."),
 }
 
+# ── RISK-055 acceptance face (FEAT-040 one-click re-verification path) ──────
+#
+# DEC-207① folded FEAT-034's numeric acceptance (TTFA p50 ≤ 25s / p95 ≤ 45s)
+# into FEAT-040 and registered it as RISK-055: the trajectory re-verification
+# has to run AFTER new sessions execute the reworked protocol, so the
+# measurement itself cannot happen inside the FEAT-040 session. What CAN and
+# MUST land here is the path: one command, the threshold constants in code
+# (not in prose), the paired TTFA + TTW report, and an explicit PENDING verdict
+# when the sample is still too small — never a green light borrowed from an
+# unchanged baseline. Measuring a mechanism that has not run yet and calling
+# it "verified" is exactly the honest-measurement failure AUDIT-154 named.
+
+TTFA_ACCEPTANCE_TASK = "RISK-055"
+TTFA_ACCEPTANCE_P50_MS = 25000
+TTFA_ACCEPTANCE_P95_MS = 45000
+#: Below this sample size the face reports PENDING instead of a verdict: two
+#: turns cannot support a p95, and a p50 from one turn is an anecdote.
+TTFA_ACCEPTANCE_MIN_TURNS = 3
+TTFA_ACCEPTANCE_SOURCE = (
+    "DEC-207① (FEAT-034 验收尾巴并入 FEAT-040；成对 TTFA+TTW；"
+    "DEC-205 下界声明；同 EVD-1073/RISK-052 快照口径)")
+TTFA_ACCEPTANCE_SCOPE = (
+    "all turns carrying a measured TTFA — the same population as "
+    "`totals.ttfa_ms`, so the number is directly comparable with the "
+    "EVD-1073 / RISK-052 baseline. TTW is reported PAIRED per turn "
+    "(first ask → first non-governance tool | turn end) because TTFA alone "
+    "can be bought by asking sooner.")
+#: Per-turn rows are capped so a large scan cannot balloon the report; the
+#: worst offenders are the ones worth eyeballing.
+TTFA_ACCEPTANCE_ROW_LIMIT = 20
+
+
+def ttfa_acceptance(report):
+    """RISK-055: TTFA/TTW acceptance verdict over a scanned report.
+
+    Reads only the aggregate the scan already produced (no second pass over
+    the traces), so the paired numbers come from the SAME snapshot as every
+    other figure in the report — the caliber DEC-207① requires.
+    """
+    rows = []
+    sessions = 0
+    governance_turns = 0
+    for session in report.get("sessions") or []:
+        session_hit = False
+        for turn in session.get("turns") or []:
+            if turn.get("ttfa_ms") is None:
+                continue
+            session_hit = True
+            if turn.get("is_governance_turn"):
+                governance_turns += 1
+            rows.append({
+                "session": session.get("file"),
+                "cwd": session.get("cwd"),
+                "turn": turn.get("turn"),
+                "ttfa_ms": turn.get("ttfa_ms"),
+                "time_to_work_ms": turn.get("time_to_work_ms"),
+                "work_endpoint": turn.get("work_endpoint"),
+                "is_governance_turn": bool(turn.get("is_governance_turn")),
+            })
+        if session_hit:
+            sessions += 1
+
+    ttfa_values = [row["ttfa_ms"] for row in rows]
+    ttw_values = [row["time_to_work_ms"] for row in rows
+                  if row["time_to_work_ms"] is not None]
+    ttfa_stats = _bucket_stats(ttfa_values)
+    ttw_stats = _bucket_stats(ttw_values)
+
+    if len(ttfa_values) < TTFA_ACCEPTANCE_MIN_TURNS:
+        verdict = "PENDING"
+        reason = (
+            "sample too small: %d turn(s) carry a measured TTFA, need >= %d — "
+            "run new sessions under the reworked protocol, then re-run this "
+            "command (a verdict derived from the unchanged baseline would be "
+            "a borrowed green light)"
+            % (len(ttfa_values), TTFA_ACCEPTANCE_MIN_TURNS))
+    else:
+        over = []
+        if ttfa_stats["p50"] > TTFA_ACCEPTANCE_P50_MS:
+            over.append("p50 %s > %s" % (_fmt_ms(ttfa_stats["p50"]),
+                                         _fmt_ms(TTFA_ACCEPTANCE_P50_MS)))
+        if ttfa_stats["p95"] > TTFA_ACCEPTANCE_P95_MS:
+            over.append("p95 %s > %s" % (_fmt_ms(ttfa_stats["p95"]),
+                                         _fmt_ms(TTFA_ACCEPTANCE_P95_MS)))
+        if over:
+            verdict = "FAIL"
+            reason = "TTFA acceptance exceeded: " + "; ".join(over)
+        else:
+            verdict = "PASS"
+            reason = ("TTFA p50 %s <= %s and p95 %s <= %s over %d measured "
+                      "turn(s)"
+                      % (_fmt_ms(ttfa_stats["p50"]),
+                         _fmt_ms(TTFA_ACCEPTANCE_P50_MS),
+                         _fmt_ms(ttfa_stats["p95"]),
+                         _fmt_ms(TTFA_ACCEPTANCE_P95_MS), len(ttfa_values)))
+
+    worst = sorted(rows, key=lambda row: -(row["ttfa_ms"] or 0))
+    return {
+        "task": TTFA_ACCEPTANCE_TASK,
+        "source": TTFA_ACCEPTANCE_SOURCE,
+        "scope": TTFA_ACCEPTANCE_SCOPE,
+        "thresholds_ms": {"p50": TTFA_ACCEPTANCE_P50_MS,
+                          "p95": TTFA_ACCEPTANCE_P95_MS,
+                          "min_turns": TTFA_ACCEPTANCE_MIN_TURNS},
+        "samples": {"turns_with_ttfa": len(ttfa_values),
+                    "sessions_with_ttfa": sessions,
+                    "governance_turns": governance_turns},
+        "ttfa_ms": ttfa_stats,
+        "time_to_work_ms": ttw_stats,
+        "paired_rows": worst[:TTFA_ACCEPTANCE_ROW_LIMIT],
+        "paired_rows_truncated": max(0, len(worst) - TTFA_ACCEPTANCE_ROW_LIMIT),
+        "verdict": verdict,
+        "reason": reason,
+    }
+
+
+def format_ttfa_acceptance(result):
+    """The paired TTFA + TTW acceptance block (RISK-055 template)."""
+    lines = [
+        "",
+        "=== RISK-055 TTFA/TTW Acceptance (FEAT-040 re-verification path) ===",
+        "task: %s | thresholds: TTFA p50 <= %s, p95 <= %s | min sample %d"
+        % (result["task"], _fmt_ms(result["thresholds_ms"]["p50"]),
+           _fmt_ms(result["thresholds_ms"]["p95"]),
+           result["thresholds_ms"]["min_turns"]),
+        "source: %s" % result["source"],
+        "scope:  %s" % result["scope"],
+        "samples: %d turn(s) with TTFA across %d session(s) "
+        "(%d governance-turn(s))"
+        % (result["samples"]["turns_with_ttfa"],
+           result["samples"]["sessions_with_ttfa"],
+           result["samples"]["governance_turns"]),
+        "TTFA  : p50=%s p95=%s max=%s"
+        % (_fmt_ms(result["ttfa_ms"]["p50"]), _fmt_ms(result["ttfa_ms"]["p95"]),
+           _fmt_ms(result["ttfa_ms"]["max"])),
+        "TTW   : p50=%s p95=%s max=%s (paired with the TTFA rows below)"
+        % (_fmt_ms(result["time_to_work_ms"]["p50"]),
+           _fmt_ms(result["time_to_work_ms"]["p95"]),
+           _fmt_ms(result["time_to_work_ms"]["max"])),
+    ]
+    rows = result.get("paired_rows") or []
+    if rows:
+        lines.append("paired rows (worst TTFA first):")
+        lines.append("  %-34s %-6s %-10s %-10s %-16s %s"
+                     % ("session", "turn", "TTFA", "TTW", "endpoint", "gov"))
+        for row in rows:
+            lines.append("  %-34s %-6s %-10s %-10s %-16s %s"
+                         % ((row["session"] or "-")[-34:], row["turn"],
+                            _fmt_ms(row["ttfa_ms"]),
+                            _fmt_ms(row["time_to_work_ms"]),
+                            row["work_endpoint"] or "-",
+                            "yes" if row["is_governance_turn"] else "no"))
+        if result.get("paired_rows_truncated"):
+            lines.append("  ... and %d more row(s)"
+                         % result["paired_rows_truncated"])
+    else:
+        lines.append("paired rows: none — no turn in the scan carries a "
+                     "measured TTFA (first ask_user_question)")
+    lines.append("verdict: %s — %s" % (result["verdict"], result["reason"]))
+    lines.append("")
+    return "\n".join(lines)
+
 
 def _fmt_ms(ms):
     if ms is None:
@@ -843,6 +1005,12 @@ def add_arguments(parser):
         "--format", choices=("json", "text"), default="text",
         help="Machine-readable JSON report or human-readable summary "
              "(default: text).")
+    parser.add_argument(
+        "--ttfa-acceptance", action="store_true",
+        help="Append the RISK-055 TTFA/TTW acceptance block (paired report + "
+             "PASS/FAIL/PENDING verdict against TTFA p50<=25s / p95<=45s). "
+             "Same snapshot as the rest of the report — this is the one-click "
+             "re-verification path (DEC-207①).")
 
 
 def _build_arg_parser():
@@ -882,7 +1050,13 @@ def cmd_governance_cost_report(args):
         sys.exit(1)
 
     fmt = getattr(args, "format", "text")
+    acceptance = (ttfa_acceptance(report)
+                  if getattr(args, "ttfa_acceptance", False) else None)
+    if acceptance is not None:
+        report["ttfa_acceptance"] = acceptance
     if fmt == "json":
         print(json.dumps(report, ensure_ascii=False, indent=2))
     else:
         print(format_text(report))
+        if acceptance is not None:
+            print(format_ttfa_acceptance(acceptance))

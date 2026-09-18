@@ -130,6 +130,12 @@
       "count": 4
     },
     {
+      "id": "fixture-command-governance-router",
+      "kind": "byte_copy",
+      "source": "commands/governance.md",
+      "target": "project/e2e-test-project/commands/governance.md"
+    },
+    {
       "id": "fixture-command-governance-scenario-a",
       "kind": "byte_copy",
       "source": "commands/governance/scenario-a.md",
@@ -182,6 +188,81 @@
       "kind": "byte_copy",
       "source": "commands/governance/overview.md",
       "target": "project/e2e-test-project/commands/governance/overview.md"
+    }
+  ],
+  "declared_legacy_snapshot_scope": [
+    "skills/software-project-governance/infra/"
+  ],
+  "declared_legacy_snapshots": [
+    {
+      "id": "fixture-engine",
+      "path": "project/e2e-test-project/skills/software-project-governance/infra/verify_workflow.py",
+      "canonical": "skills/software-project-governance/infra/verify_workflow.py",
+      "scope": "FEAT-038 P2-4 / RISK-039 / FIX-350",
+      "reason": "The e2e fixture ships a 0.82-era COPY of the engine (≈579KB vs the canonical ≈1.08MB; ~34.7k differing lines). Its routes/attribution still reference tokens that FEAT-038 moved out of the router layer (L3897-3902 doc list, L12476-12499 proxy contract text, L12085/L12092 e2e contract paths), so running `governance-context`/`e2e-check` FROM the fixture cwd FAILs. The active matrix never takes that path (`_e2e_target_cwd_command_matrix` runs status/gate/cleanup only), so there is no live failure. Options weighed at FEAT-040: (a) sync the 4 attribution points by hand — rejected, a 4-line patch on a 34.7k-line divergence manufactures the impression that the copy tracks canonical; (b) promote the file to a byte_copy projection — rejected, a ~530KB fixture rewrite whose blast radius (fixture-local tests and the fixture's own .governance/ assumptions) is far outside a projection-registry task. Chosen: DECLARE the divergence, machine-guarded (this entry, not prose) — `check_legacy_snapshots` reddens if the file disappears, and reddens if it ever converges (a converged copy must be promoted to a real projection instead of keeping a stale 'legacy' label)."
+    },
+    {
+      "id": "fixture-tools-doc",
+      "path": "project/e2e-test-project/skills/software-project-governance/infra/TOOLS.md",
+      "canonical": "skills/software-project-governance/infra/TOOLS.md",
+      "scope": "RISK-039",
+      "reason": "Same legacy-copy generation as the fixture engine: the fixture TOOLS.md predates the slice-A tool additions (governance-bootstrap / check-injection-budget / governance-cost-report) and is not consumed by any fixture scenario. Declared rather than converged for the same reason as the engine copy; the guard reddens on removal or on convergence."
+    },
+    {
+      "id": "fixture-archive",
+      "path": "project/e2e-test-project/skills/software-project-governance/infra/archive.py",
+      "canonical": "skills/software-project-governance/infra/archive.py",
+      "scope": "RISK-039",
+      "reason": "Legacy copy: the fixture archive predates the continuous-archive triggers the canonical module carries. No fixture scenario archives; declared so the divergence is a fact on the record instead of an implicit parity debt."
+    },
+    {
+      "id": "fixture-cleanup",
+      "path": "project/e2e-test-project/skills/software-project-governance/infra/cleanup.py",
+      "canonical": "skills/software-project-governance/infra/cleanup.py",
+      "scope": "RISK-039",
+      "reason": "Legacy copy of the residual cleanup tool. `test_cleanup.py` in the fixture exercises the fixture copy, so converging it is a fixture-test change, not a projection write — declared for now."
+    },
+    {
+      "id": "fixture-hook-pre-commit",
+      "path": "project/e2e-test-project/skills/software-project-governance/infra/hooks/pre-commit",
+      "canonical": "skills/software-project-governance/infra/hooks/pre-commit",
+      "scope": "RISK-039",
+      "reason": "Legacy hook copy from the same snapshot generation. The fixture workspace carries its own `.git/`, so converging these hooks would change the fixture's commit-time behaviour — a fixture-behaviour decision, not a projection write. Declared so the divergence is a recorded fact."
+    },
+    {
+      "id": "fixture-hook-commit-msg",
+      "path": "project/e2e-test-project/skills/software-project-governance/infra/hooks/commit-msg",
+      "canonical": "skills/software-project-governance/infra/hooks/commit-msg",
+      "scope": "RISK-039",
+      "reason": "Legacy hook copy (see fixture-hook-pre-commit): declared, not converged, for the same reason."
+    },
+    {
+      "id": "fixture-hook-post-commit",
+      "path": "project/e2e-test-project/skills/software-project-governance/infra/hooks/post-commit",
+      "canonical": "skills/software-project-governance/infra/hooks/post-commit",
+      "scope": "RISK-039",
+      "reason": "Legacy hook copy (see fixture-hook-pre-commit): declared, not converged, for the same reason."
+    },
+    {
+      "id": "fixture-hook-prepare-commit-msg",
+      "path": "project/e2e-test-project/skills/software-project-governance/infra/hooks/prepare-commit-msg",
+      "canonical": "skills/software-project-governance/infra/hooks/prepare-commit-msg",
+      "scope": "RISK-039",
+      "reason": "Legacy hook copy (see fixture-hook-pre-commit): declared, not converged, for the same reason."
+    },
+    {
+      "id": "fixture-test-archive",
+      "path": "project/e2e-test-project/skills/software-project-governance/infra/tests/test_archive.py",
+      "canonical": "skills/software-project-governance/infra/tests/test_archive.py",
+      "scope": "RISK-039",
+      "reason": "Legacy fixture test copy: it exercises the fixture's own (legacy) `archive.py`, so converging the test alone would make the fixture suite fail. Declared together with its subject; both must be promoted in the same change or neither."
+    },
+    {
+      "id": "fixture-test-verify-workflow",
+      "path": "project/e2e-test-project/skills/software-project-governance/infra/tests/test_verify_workflow.py",
+      "canonical": "skills/software-project-governance/infra/tests/test_verify_workflow.py",
+      "scope": "RISK-039",
+      "reason": "Legacy fixture test copy, bound to the legacy fixture engine (its assertions encode the pre-split router contract). Declared together with fixture-engine; promoting one without the other breaks the pair."
     }
   ]
 }

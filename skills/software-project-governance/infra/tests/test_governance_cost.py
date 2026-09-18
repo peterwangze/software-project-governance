@@ -830,5 +830,117 @@ class Feat039ZstandardDependencyAssertionTests(unittest.TestCase):
         self.assertIn("zstandard 未安装", source)
 
 
+class Feat040TtfaAcceptanceTests(unittest.TestCase):
+    """RISK-055 — the one-click re-verification path (FEAT-040).
+
+    The acceptance itself runs in a LATER session (DEC-207①); what must hold
+    here is the path: thresholds in code, the paired TTFA+TTW report, and an
+    explicit PENDING verdict while the sample is too small. A face that
+    borrows a green light from the unchanged baseline is worse than no face.
+    """
+
+    def _report(self, ttfa_values, ttw_values=None):
+        ttw_values = ttw_values or [None] * len(ttfa_values)
+        turns = [{"turn": index, "ttfa_ms": value,
+                  "time_to_work_ms": ttw_values[index],
+                  "work_endpoint": ("first_work_tool" if ttw_values[index]
+                                    else "none"),
+                  "is_governance_turn": index == 0}
+                 for index, value in enumerate(ttfa_values)]
+        return {"sessions": [{"file": "s/session.v3.jsonl.zstd", "cwd": "/w",
+                              "turns": turns}]}
+
+    def test_thresholds_are_code_not_prose(self):
+        self.assertEqual(gc.TTFA_ACCEPTANCE_P50_MS, 25000)
+        self.assertEqual(gc.TTFA_ACCEPTANCE_P95_MS, 45000)
+        self.assertEqual(gc.TTFA_ACCEPTANCE_TASK, "RISK-055")
+        self.assertEqual(gc.TTFA_ACCEPTANCE_MIN_TURNS, 3)
+
+    def test_small_sample_is_pending_not_pass(self):
+        result = gc.ttfa_acceptance(self._report([1000, 2000]))
+        self.assertEqual(result["verdict"], "PENDING")
+        self.assertIn("sample too small", result["reason"])
+        self.assertEqual(result["samples"]["turns_with_ttfa"], 2)
+
+    def test_empty_scan_is_pending(self):
+        result = gc.ttfa_acceptance({"sessions": []})
+        self.assertEqual(result["verdict"], "PENDING")
+
+    def test_pass_verdict(self):
+        result = gc.ttfa_acceptance(self._report([1000, 2000, 3000]))
+        self.assertEqual(result["verdict"], "PASS", result["reason"])
+        self.assertEqual(result["ttfa_ms"]["p50"], 2000)
+
+    def test_fail_verdict_names_the_breached_bound(self):
+        result = gc.ttfa_acceptance(self._report([30000, 40000, 50000]))
+        self.assertEqual(result["verdict"], "FAIL")
+        self.assertIn("p50", result["reason"])
+        self.assertIn("p95", result["reason"])
+
+    def test_ttw_is_paired_per_turn(self):
+        result = gc.ttfa_acceptance(
+            self._report([1000, 2000, 3000], [4000, None, 6000]))
+        self.assertEqual(result["samples"]["turns_with_ttfa"], 3)
+        self.assertEqual(result["time_to_work_ms"]["count"], 2)
+        rows = {row["ttfa_ms"]: row for row in result["paired_rows"]}
+        self.assertEqual(rows[1000]["time_to_work_ms"], 4000)
+        self.assertIsNone(rows[2000]["time_to_work_ms"])
+        self.assertEqual(rows[3000]["time_to_work_ms"], 6000)
+
+    def test_rows_are_ranked_worst_first_and_capped(self):
+        result = gc.ttfa_acceptance(
+            self._report(list(range(1, gc.TTFA_ACCEPTANCE_ROW_LIMIT + 6))))
+        self.assertEqual(len(result["paired_rows"]),
+                         gc.TTFA_ACCEPTANCE_ROW_LIMIT)
+        self.assertGreater(result["paired_rows_truncated"], 0)
+        self.assertGreater(result["paired_rows"][0]["ttfa_ms"],
+                           result["paired_rows"][-1]["ttfa_ms"])
+
+    def test_scope_declares_baseline_comparability(self):
+        """The caliber must be stated, or the number is not comparable."""
+        result = gc.ttfa_acceptance(self._report([1, 2, 3]))
+        self.assertIn("totals.ttfa_ms", result["scope"])
+        self.assertIn("DEC-207", result["source"])
+
+    def test_text_rendering_carries_the_verdict_and_pairs(self):
+        result = gc.ttfa_acceptance(
+            self._report([1000, 2000, 3000], [500, None, 700]))
+        text = gc.format_ttfa_acceptance(result)
+        self.assertIn("RISK-055", text)
+        self.assertIn("verdict: PASS", text)
+        self.assertIn("TTW", text)
+        self.assertIn("paired rows", text)
+
+    def test_cli_flag_reaches_the_report(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_session(root, "a", _minimal_session([
+                _user_msg(0, "/governance 状态"),
+                _tool_call(5000, "c1", "ask_user_question"),
+                _tool_result(6000, "c1"),
+            ]))
+            code, out, _err = _run_cmd(["--sessions-root", str(root),
+                                        "--ttfa-acceptance",
+                                        "--format", "json"])
+        self.assertEqual(code, 0, out)
+        payload = json.loads(out)
+        self.assertIn("ttfa_acceptance", payload)
+        self.assertIn(payload["ttfa_acceptance"]["verdict"],
+                      ("PASS", "FAIL", "PENDING"))
+
+    def test_cli_flag_absent_keeps_the_report_shape(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_session(root, "a", _minimal_session([
+                _user_msg(0, "/governance 状态"),
+                _tool_call(5000, "c1", "ask_user_question"),
+                _tool_result(6000, "c1"),
+            ]))
+            code, out, _err = _run_cmd(["--sessions-root", str(root),
+                                        "--format", "json"])
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("ttfa_acceptance", json.loads(out))
+
+
 if __name__ == "__main__":
     unittest.main()

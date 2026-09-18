@@ -21,6 +21,13 @@ class PlannedWrite:
     kind: str
 
 
+#: The e2e fixture workspace root, repo-relative. Declared once: the
+#: legacy-snapshot registry names FIXTURE-relative paths while the mirror
+#: census walks canonical-relative sources, so the two namespaces are
+#: translated through this prefix instead of being compared by accident.
+FIXTURE_PREFIX = "project/e2e-test-project/"
+
+
 def _projection_matches(write: PlannedWrite, current: bytes) -> bool:
     if write.kind == "byte_copy":
         return current == write.content
@@ -214,6 +221,192 @@ def build_projection_plan(root: Path, config_path: Optional[Path] = None) -> tup
     return version, [PlannedWrite(path, writes[path][0], writes[path][1]) for path in sorted(writes)]
 
 
+def check_legacy_snapshots(root: Path, config_path: Optional[Path] = None) -> dict:
+    """FEAT-040 / FEAT-038 P2-4: guard DECLARED legacy snapshots.
+
+    A "legacy snapshot" is a fixture artefact that deliberately does NOT track
+    its canonical counterpart. Declaring one is a real decision (see the
+    ``declared_legacy_snapshots`` reasons in ``version-projections.json``), so
+    the declaration must be falsifiable — otherwise it silently turns into an
+    implied parity debt (exactly the complaint that produced FEAT-038 P2-4):
+
+    * a declared path that is **missing** ⇒ FAIL (the declaration points at
+      nothing);
+    * a declared path that has **converged** with its canonical file ⇒ FAIL —
+      the reason for the exemption is gone, so the path must be promoted to a
+      real ``byte_copy`` projection and the declaration deleted;
+    * a declaration without ``path`` / ``canonical`` / non-empty ``reason``
+      and ``scope`` ⇒ FAIL (an unexplained exemption is not auditable).
+
+    Returns ``{"pass", "issues", "declared", "checked", "converged",
+    "missing", "scope", "census"}``. An absent/empty block is legitimate: it
+    means this tree has no declared divergences (``checked`` = 0,
+    ``pass`` = True). ``census`` always carries the same keys (zeroed when the
+    registry is unreadable), so a caller can render it unconditionally.
+    """
+    root = Path(root).resolve()
+    config_path = config_path or root / "skills/software-project-governance/core/version-projections.json"
+    issues: list[str] = []
+    declared: list[dict] = []
+    converged: list[str] = []
+    missing: list[str] = []
+    empty_census = {"inventory": 0, "identical": 0, "divergent": 0,
+                    "absent": 0, "declared": 0, "undeclared_in_scope": [],
+                    "undeclared_out_of_scope": 0}
+
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return {"pass": False,
+                "issues": [f"legacy-snapshot registry unreadable: {exc}"],
+                "declared": [], "checked": 0, "converged": [], "missing": [],
+                "scope": [], "census": dict(empty_census)}
+
+    entries = config.get("declared_legacy_snapshots", [])
+    if not isinstance(entries, list):
+        return {"pass": False, "issues": ["declared_legacy_snapshots must be a list"],
+                "declared": [], "checked": 0, "converged": [], "missing": [],
+                "scope": [], "census": dict(empty_census)}
+    scopes = tuple(config.get("declared_legacy_snapshot_scope") or ())
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            issues.append("declared_legacy_snapshots entry must be an object")
+            continue
+        identifier = entry.get("id") or entry.get("path") or "<unnamed>"
+        path_rel, canon_rel = entry.get("path"), entry.get("canonical")
+        if not isinstance(path_rel, str) or not isinstance(canon_rel, str) \
+                or not entry.get("reason") or not entry.get("scope"):
+            issues.append(
+                f"legacy snapshot {identifier!r} needs path + canonical + "
+                "non-empty reason + scope (an unexplained exemption is not "
+                "auditable)")
+            continue
+        try:
+            path = _safe_repo_path(root, path_rel)
+            canon = _safe_repo_path(root, canon_rel)
+        except ValueError as exc:
+            issues.append(f"legacy snapshot {identifier!r}: {exc}")
+            continue
+        if not path.is_file():
+            missing.append(path_rel)
+            issues.append(
+                f"legacy snapshot {identifier!r} is missing: {path_rel} — the "
+                "declaration points at nothing")
+            continue
+        if canon.is_file() and path.read_bytes() == canon.read_bytes():
+            converged.append(path_rel)
+            issues.append(
+                f"legacy snapshot {identifier!r} has CONVERGED with "
+                f"{canon_rel} — the exemption is stale: promote it to a "
+                "byte_copy projection and delete this declaration")
+            continue
+        declared.append({"id": identifier, "path": path_rel,
+                         "canonical": canon_rel, "scope": entry.get("scope")})
+
+    return {
+        "pass": not issues,
+        "issues": issues,
+        "declared": declared,
+        "checked": len(entries),
+        "converged": converged,
+        "missing": missing,
+        "scope": list(scopes),
+        "census": _legacy_census(root, config, declared, scopes),
+    }
+
+
+def _legacy_census(root: Path, config: dict, declared: list,
+                   scopes: tuple = ()) -> dict:
+    """Disclose the WIDER fixture divergence instead of silently absorbing it.
+
+    The fixture mirror is much larger than the declared set: most mirror
+    targets are simply absent from the fixture tree, and a second group
+    diverges outside the declared scope. Neither is fixed here (both need
+    fixture-behaviour decisions), so both are COUNTED and reported — a
+    disclosure the projection report carries, not a claim of completeness.
+    """
+    fixture_root = root / "project/e2e-test-project"
+    planned = {item.get("target") for item in (config.get("projections") or [])
+               if isinstance(item, dict)}
+    # Declared paths and projection targets are WORKSPACE-relative (they name
+    # the fixture file); the census walks CANONICAL-relative mirror sources.
+    # Translate once, explicitly — comparing the two namespaces directly was
+    # the first cut's bug.
+    def _canonical(relative):
+        return (relative[len(FIXTURE_PREFIX):]
+                if isinstance(relative, str) and relative.startswith(FIXTURE_PREFIX)
+                else None)
+
+    projected = {value for value in map(_canonical, planned) if value}
+    declared_paths = {value for value in
+                      map(_canonical, (item["path"] for item in declared))
+                      if value}
+    census = {"inventory": 0, "identical": 0, "divergent": 0, "absent": 0,
+              "declared": len(declared_paths), "undeclared_in_scope": [],
+              "undeclared_out_of_scope": 0}
+    if not fixture_root.is_dir():
+        return census
+    try:
+        inventory = _mirror_inventory(root)
+    except Exception:  # noqa: BLE001 - census is diagnostic, never fatal
+        return census
+    for rel in inventory:
+        census["inventory"] += 1
+        fixture = fixture_root / rel
+        if rel in projected:
+            continue
+        if not fixture.is_file():
+            census["absent"] += 1
+            continue
+        if fixture.read_bytes() == (root / rel).read_bytes():
+            census["identical"] += 1
+            continue
+        census["divergent"] += 1
+        if rel in declared_paths:
+            continue
+        if scopes and rel.startswith(scopes):
+            census["undeclared_in_scope"].append(rel)
+        else:
+            census["undeclared_out_of_scope"] += 1
+    census["undeclared_in_scope"].sort()
+    return census
+
+
+def _mirror_inventory(root: Path) -> list:
+    """The fixture-mirror source inventory (``PROJECTION_SYNC_PATTERNS``).
+
+    Resolved by AST from ``verify_workflow.py`` — the same authority the
+    manifest's ``fixture-mirror-patterns`` inventory names — without importing
+    the engine (ArchGuard R2: no new reverse edges from ``release/``).
+    """
+    import ast
+    engine = root / "skills/software-project-governance/infra/verify_workflow.py"
+    tree = ast.parse(engine.read_text(encoding="utf-8"), filename=str(engine))
+    values = None
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+                isinstance(target, ast.Name)
+                and target.id == "PROJECTION_SYNC_PATTERNS"
+                for target in node.targets):
+            values = node.value
+    if not isinstance(values, ast.Tuple):
+        raise ValueError("PROJECTION_SYNC_PATTERNS is not a literal tuple")
+    patterns = [element.value for element in values.elts
+                if isinstance(element, ast.Constant)
+                and isinstance(element.value, str)]
+    files = set()
+    for pattern in patterns:
+        for path in root.glob(pattern):
+            if not path.is_file():
+                continue
+            rel = path.relative_to(root).as_posix()
+            if "__pycache__" in rel or rel.endswith(".pyc"):
+                continue
+            files.add(rel)
+    return sorted(files)
+
+
 def check_projections(root: Path, config_path: Optional[Path] = None) -> CheckResult:
     try:
         version, plan = build_projection_plan(root, config_path)
@@ -225,10 +418,16 @@ def check_projections(root: Path, config_path: Optional[Path] = None) -> CheckRe
         current = path.read_bytes()
         if not _projection_matches(write, current):
             issues.append(f"projection drift: {write.relative_path}")
+    # FEAT-040: declared legacy snapshots are part of the same contract — an
+    # exemption is only honest while it is still true (and still needed).
+    legacy = check_legacy_snapshots(root, config_path)
+    issues.extend(f"legacy snapshot: {issue}" for issue in legacy["issues"])
     return CheckResult(
         "FAIL" if issues else "PASS",
         issues,
-        {"source_version": version, "projections_checked": len(plan)},
+        {"source_version": version, "projections_checked": len(plan),
+         "declared_legacy_snapshots": len(legacy["declared"]),
+         "legacy_snapshot_check": legacy},
     )
 
 

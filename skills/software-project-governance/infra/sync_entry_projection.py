@@ -53,18 +53,52 @@ _FULL_BOOTSTRAP_MARKER = "### Step 0: 确定双维度模式"
 _THIN_BOOTSTRAP_MARKER = "次要平台入口薄指针"
 _PLACEHOLDER = "{PRIMARY_ENTRY}"
 
-_THIN_REQUIRED_ANCHORS = (
-    ("bootstrap header", "## Governance Bootstrap"),
+#: FEAT-037 P3-6 (closed by FEAT-040) — thin-pointer DIALECT contract.
+#:
+#: Two thin-pointer dialects legitimately coexist and can never be byte-equal:
+#: the generated secondary-thin projection (H2 header + `次要平台入口薄指针`
+#: marker + the governance quick-entry block) and the DSH agent-instructions
+#: template (`adapters/dsh/AGENTS.md.template`: H1 header, DSH-only sections for
+#: the subagent mapping / hooks / upgrade path, no quick-entry block). The
+#: FEAT-037 guard only knew the first, so it classified the second as `unknown`
+#: and left it unguarded. Reconciliation = **shared core + per-dialect extras**:
+#: the survival semantics a thin pointer exists to preserve are dialect-neutral
+#: and machine-checked for BOTH, while the dialect-specific sections stay free.
+THIN_SHARED_CORE_ANCHORS = (
+    ("bootstrap header", "Governance Bootstrap"),
     ("bootstrap version line", "> @bootstrap-version: "),
-    ("resolve_entry", "resolve_entry.py --json"),
-    ("plan-tracker", ".governance/plan-tracker.md"),
+    ("resolve_entry first action", "resolve_entry.py"),
+    ("plan-tracker read", ".governance/plan-tracker.md"),
     ("SELF-CHECK", "SELF-CHECK"),
-    ("AskUserQuestion", "AskUserQuestion"),
     ("mode confirmation (always-on)", "always-on"),
     ("mode confirmation (silent-track)", "silent-track"),
+)
+
+#: Extras carried by the GENERATED secondary-thin projection only.
+THIN_DIALECT_GENERATED_ANCHORS = (
+    ("bootstrap header (H2 form)", "## Governance Bootstrap"),
+    ("resolve_entry (full command)", "resolve_entry.py --json"),
+    ("AskUserQuestion (generated spelling)", "AskUserQuestion"),
     ("quick entries", ".governance/evidence-log.md"),
     ("skill entry", "skills/software-project-governance/SKILL.md"),
 )
+
+#: Extras carried by the DSH dialect only (agent-instructions template).
+THIN_DIALECT_DSH_ANCHORS = (
+    ("bootstrap header (H1 form)", "# Governance Bootstrap"),
+    ("ask tool (DSH spelling)", "ask_user_question"),
+    ("skill package name", "software-project-governance"),
+)
+
+#: Back-compat alias — the full anchor set of the generated dialect.
+_THIN_REQUIRED_ANCHORS = THIN_SHARED_CORE_ANCHORS + THIN_DIALECT_GENERATED_ANCHORS
+
+#: The DSH dialect's own template (guarded as a thin-pointer surface).
+DSH_THIN_TEMPLATE = "adapters/dsh/AGENTS.md.template"
+#: The DSH dialect must also carry the gray-release switch (FEAT-040): the
+#: agent-instructions payload is the only project-level surface a DSH-hosted
+#: session sees before the skill loads.
+DSH_THIN_REQUIRED_EXTRA = ("行为灰度开关",)
 
 
 class CanonicalSourceError(ValueError):
@@ -120,7 +154,17 @@ def extract_canonical_templates(text: str) -> dict[str, str]:
 def load_canonical_templates(source_root: Path) -> dict[str, str]:
     source = Path(source_root) / CANONICAL_SOURCE
     if not source.is_file():
-        raise CanonicalSourceError(f"canonical source is missing: {source}")
+        # FEAT-034 P3-6 (DX trap, closed by FEAT-040): `--source-root` defaults
+        # to `--project`, so a projection run whose project is a FIXTURE
+        # workspace fails here with a bare "missing" that reads as if the
+        # canonical source were damaged. Name the fix in the error instead:
+        # fail-closed stays, the misdiagnosis does not.
+        raise CanonicalSourceError(
+            f"canonical source is missing: {source} — `--source-root` defaults "
+            f"to `--project`, so pass the PLUGIN REPO ROOT explicitly "
+            f"(`--source-root <dir carrying {CANONICAL_SOURCE}>`) when the "
+            f"project being projected is a fixture/secondary workspace"
+        )
     return extract_canonical_templates(source.read_text(encoding="utf-8"))
 
 
@@ -225,6 +269,48 @@ def render_thin_pointer(thin_template: str, primary_entry: str) -> str:
     return thin_template.replace(_PLACEHOLDER, primary_entry)
 
 
+def validate_dsh_thin_pointer(section_text: str) -> list[str]:
+    """FEAT-037 P3-6 / FEAT-040: guard the DSH thin-pointer dialect.
+
+    Mutual recognition instead of byte-equality (see
+    ``THIN_SHARED_CORE_ANCHORS``): the dialect must carry the shared survival
+    core plus its own extras, and it must publish the FEAT-040 gray-release
+    switch. Returns the issue list (empty == valid).
+    """
+    issues: list[str] = []
+    for anchor_label, needle in THIN_SHARED_CORE_ANCHORS + THIN_DIALECT_DSH_ANCHORS:
+        if needle not in section_text:
+            issues.append(f"dsh thin pointer missing anchor: {anchor_label}")
+    for needle in DSH_THIN_REQUIRED_EXTRA:
+        if needle not in section_text:
+            issues.append(
+                f"dsh thin pointer missing required marker: {needle!r} "
+                f"(FEAT-040 gray-release switch)")
+    return issues
+
+
+def check_dsh_thin_pointer(source_root: Path) -> dict:
+    """Read-only result for the DSH dialect surface (fail-closed when absent)."""
+    path = Path(source_root) / DSH_THIN_TEMPLATE
+    if not path.is_file():
+        return {
+            "path": DSH_THIN_TEMPLATE,
+            "state": "missing",
+            "bytes": 0,
+            "lines": 0,
+            "issues": [f"{DSH_THIN_TEMPLATE}: DSH thin-pointer template missing"],
+        }
+    text = path.read_text(encoding="utf-8")
+    return {
+        "path": DSH_THIN_TEMPLATE,
+        "state": "present",
+        "bytes": len(text.encode("utf-8")),
+        "lines": len(text.splitlines()),
+        "issues": [f"{DSH_THIN_TEMPLATE}: {issue}"
+                   for issue in validate_dsh_thin_pointer(text)],
+    }
+
+
 def validate_thin_pointer(section_text: str, primary_entry: str) -> list[str]:
     issues: list[str] = []
     line_count = len(section_text.splitlines())
@@ -296,7 +382,7 @@ def plan_entry_writes(
     if secondary_path.exists():
         existing = _read_text(secondary_path)
         span = bootstrap_section_span(existing)
-        current = _slice_span(existing, span)
+        current = _section_content(existing, span)
         if span is not None and is_thin_pointer_section(current) and \
                 not validate_thin_pointer(current, primary):
             return []  # sticky thin pointer; nothing to do
@@ -305,6 +391,31 @@ def plan_entry_writes(
             "single-entry workspace: full bootstrap (backward compatible)",
         ))
     return plan
+
+
+def _normalized_content(section: str) -> str:
+    """One canonical measurement caliber for a bootstrap section body.
+
+    The splice separator blank line between the section end and the following
+    H2 belongs to the span, not to the section content — measure and compare
+    the content without trailing newlines or CRLF variance.
+    """
+    return _norm(section).rstrip("\n")
+
+
+def _section_content(text: str, span) -> str:
+    """The section body in the ONE canonical caliber.
+
+    FEAT-037 P3-2 (closed by FEAT-040): the sticky check and the drift report
+    measured the same span two ways — the sticky arm compared the RAW span
+    (whose tail carries the splice separator blank line, +1 line) while the
+    report compared the rstripped content. On a thin pointer sitting exactly on
+    the 40-line / 3072-byte line the sticky arm was strictly harsher and could
+    flip a committed dedup projection back to the full template, i.e. double the
+    session injection cost it exists to prevent. Both arms now come through
+    here, so the two calibers cannot diverge again.
+    """
+    return _normalized_content(_slice_span(text, span))
 
 
 def apply_entry_projection(
@@ -391,10 +502,7 @@ def build_sync_report(
             continue
         kind, section = _classify_entry(_read_text(path), _h2_titles(templates[profile]))
         kinds[name] = kind
-        # The splice separator blank line between the section end and the
-        # following H2 belongs to the span, not to the section content —
-        # measure and compare the content without trailing newlines.
-        content = _norm(section).rstrip("\n")
+        content = _normalized_content(section)
         entry = {
             "file": name,
             "state": "present",

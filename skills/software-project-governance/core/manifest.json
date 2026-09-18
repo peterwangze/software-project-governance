@@ -22,6 +22,7 @@
       "dsh-persona-version",
       "dsh-agents-bootstrap-version",
       "canonical-bootstrap-version",
+      "fixture-command-governance-router",
       "fixture-command-governance-scenario-a",
       "fixture-command-governance-scenario-b",
       "fixture-command-governance-scenario-c",

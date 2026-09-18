@@ -10,7 +10,8 @@
 
 1. 运行 `python <plugin_home>/skills/software-project-governance/infra/resolve_entry.py --json`；`resolved_root_ok == false` → MUST STOP，不呈现治理状态（fail-closed）。
 2. 读 `.governance/plan-tracker.md`；阶段/Gate/模式未知 → 读 `## 项目配置` 节；`.governance/` 不存在 → 提醒先初始化。
-3. 完整规则：加载 `skills/software-project-governance/SKILL.md`（或读主入口 `CLAUDE.md`）。
+3. **快路径与行为灰度开关（FEAT-034/040）**：热数据优先 `governance-bootstrap --format json`（不可用回退六段读取）；`GOVERNANCE_LEGACY_BEHAVIOR=1` 或 `behavior_profile: legacy` → 只回退性能行为，**安全语义不回退**；见其 `behavior` 面。
+4. 完整规则：加载 `skills/software-project-governance/SKILL.md`（或读主入口 `CLAUDE.md`）。
 
 ### SELF-CHECK（在任何输出之前）
 

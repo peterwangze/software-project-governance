@@ -84,6 +84,22 @@ TASK_ID = "FEAT-033"
 DEFAULT_BUDGET_MS = 3000
 MAX_JSON_BYTES = 8192
 
+
+def _behavior():
+    """The gray-release resolver (FEAT-040), imported function-locally.
+
+    ``behavior_profile`` has no CLI surface of its own — nothing on the
+    engine's cold-load path needs it, because only this module's own
+    ``cmd_governance_bootstrap`` calls it — so it must NOT ride the engine's
+    frozen startup import face (ArchGuard R6). This is the same trade
+    ``checks.dsh_boundary`` makes for its own leaf, and it keeps the frozen
+    count at 199 instead of re-anchoring the ratchet for a module the
+    startup path never calls. The cost is one module load on the first
+    ``governance-bootstrap`` run.
+    """
+    import behavior_profile  # noqa: PLC0415 (deliberate: R6 startup budget)
+    return behavior_profile
+
 #: v1 health contract — deferred, never faked (QR-4).
 PENDING_CHECKS = ("check-governance", "verify")
 HEALTH_NEXT_ACTION = (
@@ -594,6 +610,7 @@ def _build_payload(host_root, envelope, budget_ms, profile, started):
             ".governance/plan-tracker.md not found — governance faces are "
             "absent (not failed); run /governance to initialize or onboard."]
         payload["health"] = _health_face()
+        payload["behavior"] = _behavior().behavior_face()
         payload["next_actions"] = [
             "运行 /governance 初始化或接入项目治理（当前 .governance/ 缺失）"]
         payload["deferred"] = []
@@ -654,6 +671,8 @@ def _build_payload(host_root, envelope, budget_ms, profile, started):
         pass
 
     payload["health"] = _health_face()
+    payload["behavior"] = _behavior().behavior_face(
+        plan_tracker_text=plan_text)
     payload["next_actions"] = _next_actions(payload, envelope)
     payload["deferred"] = builder.deferred
     payload["duration_ms"] = int((time.monotonic() - started) * 1000)
@@ -702,7 +721,35 @@ def _next_actions(payload, envelope):
     if hooks and not all(hooks.values()):
         actions.append("安装治理 git hooks：cp <plugin_home>/infra/hooks/* "
                        ".git/hooks/")
+    # The rollout switch outranks every other hint when it is engaged: an
+    # operator who forgot that a rollback is active must learn it FIRST (the
+    # cap below could otherwise drop the line entirely).
+    rollback = _behavior().next_action_line(payload.get("behavior"))
+    if rollback:
+        actions.insert(0, rollback)
+    # R0 P1-2: the other half of the same intent — a value outside the
+    # vocabulary is ignored (never guessed) and the JSON face carries it only
+    # as data (`behavior.invalid`), which a fast-path consumer never reads.
+    # Advisory hints such as the deferred-health line could push it past the
+    # cap, so it takes the slot right after the rollback hint (or the head).
+    if (payload.get("behavior") or {}).get("invalid"):
+        actions.insert(1 if rollback else 0, _invalid_behavior_action())
     return actions[:5]
+
+
+def _invalid_behavior_action():
+    """The R0 P1-2 signal: the switch was set to a value outside its vocabulary.
+
+    ``resolve_behavior_profile`` never guesses such a value (it falls through to
+    the next arm), but without this line the only trace on the JSON fast path
+    would be the ``behavior.invalid`` datum — a consumer that reads
+    ``next_actions`` alone would never learn that its rollback did NOT take
+    effect. The asymmetry that makes this a defect: the legacy-engaged case has
+    always carried a first-class action line. The wording is owned by
+    ``behavior_profile`` (same single-source discipline as
+    ``next_action_line``), so a test names the constant, not a substring.
+    """
+    return _behavior().INVALID_VALUE_ACTION
 
 
 def _read_text(path):
@@ -856,6 +903,8 @@ def format_text(payload):
     lines.append("health: %s — %s"
                  % ((payload.get("health") or {}).get("state"),
                     "run check-governance (v1 not wired)"))
+    lines.append(_behavior().format_behavior_line(
+        payload.get("behavior")))
     next_actions = payload.get("next_actions") or []
     if next_actions:
         lines.append("next:")

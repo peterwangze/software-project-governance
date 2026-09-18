@@ -5,8 +5,6 @@
 
 `session-snapshot.md` 必须包含以下字段以确保 Scenario D 可无缝恢复：
 
-`session-snapshot.md` 必须包含以下字段以确保 Scenario D 可无缝恢复：
-
 ```markdown
 # 会话快照 — {{DATE}}
 

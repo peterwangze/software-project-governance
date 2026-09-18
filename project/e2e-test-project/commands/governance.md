@@ -56,15 +56,27 @@
 - **非关键决策自动执行**：任务排序/证据格式/git commit/治理记录更新/实现细节/Gate 自评(通过时)
 - **M7.4 任务完成协议**：完成 → evidence → check-governance → audit → 再开新任务
 - **M7.5 先入账再动手**：任何新任务 MUST 先出现在 plan-tracker 中
+- **健康摘要输出契约（FIX-278 G1）**：`check-governance --summary-only` 默认（standard）输出 = 汇总行 + 首个 FAIL/WARN + 最多 5 条明细（FAIL 优先，每条截断 130 字符）+「共 N issues，--level strict 查看全部」指引行——模型无需再自行跑完整 check 追查（audit-148 §2.1：103 字符摘要 → ≈25KB 追查链，10× 放大）
+- **治理文件读取编码（FIX-278 G4/F）**：pwsh 读取 `.governance` 治理文件 MUST 显式 UTF-8——`Get-Content -Encoding UTF8`（或 `[System.IO.File]::ReadAllText($p, [System.Text.Encoding]::UTF8)`）；禁止裸 `Get-Content`——Windows 默认 ANSI/GBK 解码会产生 mojibake（AUDIT-147 D6 / AUDIT-148 §4.3 乱码实证：裸 `-Tail 30` 读 evidence-log 22KB 大面积乱码）
 
 ---
 
 ## 设计原则
 
-1. **自动分类，不问用户**：命令自动检测项目状态并路由到正确场景
+1. **自动分类，不问用户**【自动化分级：B 级（CLI-Enforced Automation）——命令时点，deterministic 场景判定由 `resolve_entry.py` 的 `scenario_hint` 支撑，事件驱动非持续；详见下方「自动化能力分级声明」】：命令自动检测项目状态并路由到正确场景
 2. **最少提问**：每个场景最小化 AskUserQuestion 次数
 3. **安全默认**：异常先于状态展示，恢复先于推进
 4. **会话连续性**：snapshot 是跨会话的契约
+
+### 自动化能力分级声明（plugin-contract.md L114）
+
+本命令对「自动/看护」的承诺按 plugin-contract.md 三级划分；**禁止用笼统的「自动」一词同时指向 A 级与 C 级能力**（plugin-contract.md L114 禁令——README 和对外文档必须显式说明当前各项能力处于哪一级）：
+
+- **A 级（Agent Protocol Automation）**：行为协议自动化——agent 按协议纪律自动执行（本命令激活 Coordinator 后按场景规则自动推进 = A 级）。
+- **B 级（CLI-Enforced Automation）**：CLI/脚本在命令/commit 时点强制——`verify_workflow.py check-governance`、`status` 与 git hooks（= B 级）；上方设计原则 1「自动分类，不问用户」属本级（命令时点，事件驱动、非持续）。
+- **C 级（System Automation）**：后台系统自动触发、不依赖 agent 记忆——**未实现**（plugin-contract.md L102：MCP/headless runner 仅有协议样例，无可用实现）。
+
+**当前治理自动级别 = A 级 + B 级；C 级为 roadmap（未实现）**。完整分级声明与对外宣示口径见 `skills/software-project-governance/SKILL.md`「自动化能力分级声明」。
 
 ## 与 Bootstrap / SKILL.md 的分工
 
@@ -124,7 +136,13 @@ Web console 是可选的本地伴随状态面板，也是用户手动 `/governan
 
 ## 决策树（自动分类——deterministic，DEC-096）
 
-**MUST 先运行 `python <plugin_home>/infra/resolve_entry.py --json`**（`<plugin_home>` 由 resolve_entry.py 自定位；本命令第一动作）。读取 `scenario_hint`（A..F）并按对应 Scenario 分支：
+**第一动作（不变，fail-closed）：MUST 先运行 `python <plugin_home>/infra/resolve_entry.py --json`**（`<plugin_home>` 由 resolve_entry.py 自定位）。
+
+**第二动作（FEAT-034 首次交互前置——快路径立即 ask）**：`resolved_root_ok == true` 后 MUST 运行 `python <plugin_home>/infra/verify_workflow.py governance-bootstrap --format json`（FEAT-033 只读聚合快路径，≤8KB：resolve envelope + 状态投影 + 候选 + migration 标志 + next_actions），**立即**呈现最小状态行（模式确认句 + 阶段/Gate 摘要 + carry-over/风险计数）并通过 AskUserQuestion 进入首次用户交互——Scenario D 呈现恢复选项（继续上次/审查快照/重新开始），Scenario F 呈现下一步引导（见「状态展示后的引导」），其余场景按对应 Scenario 的首个用户决策点呈现。
+
+**深检后置（FEAT-034——用户选择后按需执行）**：`check-governance --summary-only` 健康摘要、plan-tracker 六段热数据逐段读取、交叉验证、版本升级摘要呈现与确认后写序列（Scenario C——FEAT-035 ask-确认前置）、归档检测**不作为首次 ask 的前置条件**——深检结果不阻塞首次交互；`governance-bootstrap` 的 `health.state="deferred"` 期间，状态行健康位显示「待检查」而非绿色通过（诚实语义——deferred ≠ 已检查）。**深检后置 ≠ 深检可选**：用户选择推进类动作（发布/版本 bump/治理写回/恢复遗留任务的实际修改）时 MUST 先补跑对应深检（健康摘要 + 交叉验证 + 按所选动作对应的升级/归档序列）再继续——版本升级写序列属推进类动作（DEC-207② P2-1），写操作执行前深检 MUST 补齐；安全约束零削减，只重排时序。
+
+读取 `scenario_hint`（A..F）并按对应 Scenario 分支：
 
 - `resolved_root_ok == false` → **STOP**，展示 `diagnostic`，不呈现任何治理状态（DEC-080 / RISK-038 fail-closed）。
 - `scenario_hint == "A"` → Scenario A（全新项目初始化）
@@ -274,37 +292,50 @@ Web console 是可选的本地伴随状态面板，也是用户手动 `/governan
 
 **检测条件**：`resolve_entry.py` 输出 `scenario_hint == "C"`——即 `.governance/` 存在、无异常、且 host `工作流版本` < `active_version`（`active_version` 来自 SKILL.md frontmatter，权威；DEC-096）。不再由本命令在 prose 中比较版本号。
 
+**时序（FEAT-034 首次交互前置）**：版本差距 + CHANGELOG delta 摘要随快路径首次 ask 一并呈现征询确认；下方步骤 4 的升级写序列（入口 bootstrap 替换 / plan-tracker 结构补全 / 归档迁移等写操作）在用户确认升级后执行——写序列不前置于首次交互，**用户未响应前零写操作**（FEAT-035——读入口与写迁移解耦：展示状态不拥有修改项目的隐含授权）。
+
+**深检衔接（DEC-207② P2-1，MUST）**：版本升级写序列属推进类动作——用户确认升级后、执行写序列前 MUST 先满足 M5.5 条 3 的深检前置（健康摘要 `check-governance --summary-only` + 交叉验证；FEAT-034 后置时序的必达补齐），不得以"已获得升级确认"替代深检。
+
 **流程**：
 1. 从 resolve_entry envelope 读取 `active_version`（权威）与 plan-tracker 记录版本，计算版本差距
 2. 提取 CHANGELOG delta（从 plan-tracker 版本到当前版本）
-3. 自动升级序列：
+3. **AskUserQuestion 呈现升级摘要，征询确认（FEAT-035——确认前不执行任何写操作）**：
+   - 版本跨度（记录版本 → `active_version`）
+   - CHANGELOG 要点（新增/修复行数 + 代表条目）
+   - 将执行的写操作清单（显式列出目标文件）：平台原生入口文件 bootstrap 段（AGENTS.md/CLAUDE.md 等按平台实际入口）、`.governance/plan-tracker.md`（结构补全 + `工作流版本` 字段）、`.git/hooks/*`（缺失时提示安装命令，不代写）、插件残留清理删除面（cleanup.py——dry-run 先行 + 确认后执行；删除插件安装目录中不在 canonical manifest 中的文件，`.governance/`/`.git/` 不触碰）、其它模板补全涉及的治理文件
+   - 回滚方式（入口文件 bootstrap 段按 git/备份恢复、plan-tracker `工作流版本` 字段回退；归档迁移执行前 dry-run 报告先行呈现并留存）
+   - 选项：**(1) 执行升级（推荐——保持既有"自动完成"精神，确认后其余步骤全自动）** / (2) 暂不升级（记录 migration 待处理状态，不影响会话其余功能）/ (3) 查看完整 CHANGELOG 后再决定
+4. 用户确认后执行升级序列：
    - A. 替换 平台原生入口文件 bootstrap 段为最新模板（保留 profile 差异化）
    - B. 补全 plan-tracker 缺失结构（permission_mode、版本规划、需求跟踪矩阵、变更控制含快速通道）
    - C. Hook 存活检测——缺失则提示安装命令（hook 路径用 `<plugin_home>/infra/hooks/*`）
+    - C-2. 插件残留清理删除面（与模板 C-2 同序同措辞——dry-run 先行 + 确认后执行）：先运行 `python <plugin_home>/infra/cleanup.py --dry-run` 呈现待删报告（基于 manifest.json 的结构 diff），AskUserQuestion 确认后再执行 `python <plugin_home>/infra/cleanup.py`（不确认 → 跳过清理，不影响其余步骤）
    - D. 更新 `工作流版本` 为 `active_version`
-   - E. 持续归档触发检测与执行（`<plugin_home>` 来自 resolve_entry.py，取代 `$WORKFLOW_HOME` 路径考古）：
+   - E. 持续归档触发检测与执行（`<plugin_home>` 来自 resolve_entry.py，取代 `$WORKFLOW_HOME` 路径考古；归档写操作同 ask-确认前置——dry-run 报告先行呈现，用户确认后才执行迁移）：
      - 运行 `python <plugin_home>/infra/archive.py migrate --auto --dry-run` 检测四类触发器：
        1. 首次迁移：`.governance/archive/index.md` 不存在 AND `plan-tracker.md` > 80 KB AND 已发布版本 ≥ 2
        2. 发布强制：出现新的已发布版本后，除最新已发布版本外仍有未归档历史 task
        3. task 增量：热文件中可归档 completed task 达到阈值
        4. 90 天兜底：长期未归档但仍有可归档历史数据
-     - dry-run 报告需要归档 → 运行 `python <plugin_home>/infra/archive.py migrate --auto`，再运行 `python <plugin_home>/infra/verify_workflow.py check-archive-integrity`
+     - dry-run 报告需要归档 → **呈现 dry-run 报告并通过 AskUserQuestion 确认** → 运行 `python <plugin_home>/infra/archive.py migrate --auto`，再运行 `python <plugin_home>/infra/verify_workflow.py check-archive-integrity`
      - 归档成功 → 输出归档迁移摘要（格式: 📦 治理数据归档完成: 归档{N}个task→..., plan-tracker: {old}KB→{new}KB(-{pct}%)）
      - 归档完整性失败 → 记录到 risk-log；发布/版本 bump 收尾场景 MUST 阻断完成
      - 无可归档数据 → 跳过归档（不修改文件）
-4. 输出升级摘要面板
+5. 输出升级摘要面板
 
-**输出**：升级摘要（版本跨度 + 新增功能 + 已自动升级 + 需手动操作）
+**输出**：升级摘要（版本跨度 + 新增功能 + 已升级项 + 需手动操作）
 
 升级完成后 **MUST 自动衔接 Scenario F**——展示最新状态面板。
 
-**幂等性**：运行两次安全——已是最新版本时自动路由到 Scenario F
+**幂等性**：运行两次安全——已是最新版本时自动路由到 Scenario F；用户拒绝升级时同样路由到 Scenario F（migration 待处理状态经 FEAT-033 migration 标志在状态行持续可见）
 
 ---
 
 ## Scenario D: 会话恢复
 
 **检测条件**：`session-snapshot.md` 存在 AND 日期在 24h 内
+
+**数据源补充（FEAT-033 bootstrap 聚合快路径；FEAT-034 时序重排）**：恢复面板所需的当前状态交叉验证数据（任务统计 / 风险 / 候选）MAY 优先取自单次 `python <plugin_home>/infra/verify_workflow.py governance-bootstrap --format json`（只读聚合，≤8KB），替代多次 verify 调用 + 逐段读 plan-tracker；snapshot 字段解析与 D1-D3 流程不变。**首次交互前置（FEAT-034）**：快路径数据就绪后 D3 恢复面板 + AskUserQuestion **立即**执行——D2 交叉验证与其它深检后置为用户选择后按需执行（用户选择"继续上次"并进入实际修改前 MUST 补齐 D2 交叉验证）；`health.state="deferred"` 期间恢复面板健康位显示「待检查」而非通过。
 
 **新鲜度规则**：
 | 时间 | 处理 |
@@ -363,6 +394,8 @@ Web console 是可选的本地伴随状态面板，也是用户手动 `/governan
 ## Scenario E: 异常恢复
 
 **检测条件**：任一异常标记触发
+
+**时序（FEAT-034 首次交互前置）**：异常标记本身来自 resolve_entry 判定（fail-closed 已在第一动作保证，不受本重排影响）——首次 ask 先呈现已知异常标记 + 选项（立即全量诊断 / 暂缓并记录为已知异常），下方 E1 全量诊断作为深检在用户选择后执行；用户选择推进类动作时 MUST 先补齐对应深检再继续。
 
 ### Step E1: 全量诊断
 
@@ -439,74 +472,83 @@ P1 (警告):
 
 **检测条件**：一切正常——`.governance/` 存在、健康、版本最新、无 snapshot、无异常
 
-**展示内容**（比 `governance-status` 更丰富）：
-- Delivery Trust Snapshot（Resume state、Carry-over、Open risks、Unfinished work、Source facts、Blocker state、Auto-continue、Interrupt boundary、Hooks、Goal、Stage、Gate/setup status、Risk、Evidence、Next action、Preset guidance、Question budget、Pack summary、Default packs、Enabled packs、Pack boundary、Verification signal、No-overclaim boundary）
-- Existing-project resume signal：已有 `.governance/` 状态时 MUST 明确显示 `Existing governance state detected`，展示 carry-over active task count、open risk count/details、hook state 和 next action
-- Context-aware resume handoff：MUST run the same factual discovery contract as `python <plugin_home>/infra/verify_workflow.py governance-context --fixture project/e2e-test-project --fail-on-issues`（`<plugin_home>` 来自 resolve_entry.py，先 resolve 后 verify）。`Unfinished work` MUST be backed by `Source facts`; if no facts exist, output `not found` and `do not invent` new work.
-- First-run preset guidance：MUST 展示 `lite is the recommended first-run default`；`standard is for team delivery`；`strict is for regulated/high-risk work`
-- Pack summary：MUST 展示 `Packs are capability modules; profiles are governance intensity presets.`；Default packs MUST 至少展示 `governance-core`、`quality-gates`、`release-governance`、`agent-team`、`enterprise`；Enabled packs MUST 从 profile/default pack summary 或 registry facts 得出，无法得出时显示 unknown/not configured；Pack boundary MUST 说明 pack membership/`pack enabled` 不替代 task evidence、independent review、quality gates、release gates、official approval、marketplace approval、universal/full runtime support 或 1.0.0 production-ready
-- Question budget：Snapshot 前 MUST NOT 提超过 3 个 non-critical questions；deferred non-critical fields MUST 记录为 assumptions
-- 项目配置摘要（名称、profile、trigger_mode、permission_mode、版本、阶段）
-- Gate 状态表（G1-G11，含通过日期和关键证据）
-- 任务统计（总数/已完成/阻塞中/P0 待处理）
-- 活跃风险（升级截止日期在 3 天内的标记）
-- 最近活动（最近 5 个已完成任务、最近 5 个决策）
-- 插件版本新鲜度
-- 建议下一步
+**数据源（MUST，FIX-270 秒级快路径）**：状态展示 = 运行 `python <plugin_home>/infra/verify_workflow.py status`（`<plugin_home>` 来自 resolve_entry.py，先 resolve 后 verify）→ **渲染其输出**（文本或 `status --json`），而不是重新手工读取治理文件。
+
+- **bootstrap 聚合快路径（FEAT-033，推荐入口）**：单次会话引导/路由需要 resolve + 状态 + 候选一次性数据时，MAY 运行 `python <plugin_home>/infra/verify_workflow.py governance-bootstrap --format json`（只读聚合：resolve envelope + 状态投影 + 候选 + migration 标志 + next_actions，≤8KB JSON 投影；`--budget-ms` 超时 fail-safe 返回 `deferred` 明示未完成范围）——一次调用替代"多次 verify 调用 + 多段读 plan-tracker"的串行链。`status` 仍是底层全量投影依赖（Delivery Trust Snapshot / Gate 全表等完整面以 `status` 输出为准）；`governance-bootstrap` 的 `health.state` 恒为 `deferred`（v1 未接线健康检查——健康面 MUST 另跑 `check-governance --summary-only`，不得把 deferred 当作已检查）。
+- **默认不再要求全量读 4 个治理文件**（plan-tracker.md / evidence-log.md / risk-log.md / decision-log.md）——`status` 命令已用行级结构化解析输出 Scenario F 面板所需全部数据（项目配置 / Gate 状态 / 任务统计 / 活跃风险含 ≤3 天升级线标记 / 最近活动 / 插件版本新鲜度 / 建议下一步线索 / Delivery Trust Snapshot）。
+- **按需展开（例外）**：仅当 (a) 用户展开 `<details>` 详情，(b) `status` 输出字段缺失/解析失败，或 (c) 数据对不上时，才用 read 工具按需读取对应治理文件。
+- **Delivery Trust Snapshot 数据来源** = `status` 命令输出 + `governance-context` 既有输出（两者都是确定性 CLI 输出；Snapshot 字段合约见下方，不得以手工翻读证据文件替代）。
+- **性能基线**：`status` 单次运行 <2s（宿主项目实测）——小时级 LLM 成本不再花在重读文档/记录上；若 `status` 输出显示 `Governance unavailable` 类缺失，按下方错误码处理。
+
+**展示内容（FEAT-036 双契约——默认交互视图瘦身 + 完整机器 artifact，比 `governance-status` 更丰富）**：
+
+Delivery Trust Snapshot 拆为两份契约，`/governance` 与 `/governance-status` 共用同一口径：
+
+1. **默认交互视图（≤8 字段）**——每次状态展示强制生成的唯一 Snapshot 面板（合约见下），生成预算 ≤700 tok。
+2. **完整机器契约（20 字段 CLI snapshot 契约 + 4 字段 pack doc-surface 契约）**——不随会话强制生成；CLI snapshot 载体 = 既有确定性 CLI 输出（`status` 文本面 / `status --json` 的 `delivery_trust_snapshot` 对象 / `first-run-demo --assert-snapshot` 本地断言），按需渲染或机器消费；4 个 pack 字段是 doc-surface 契约（两命令文档的固定语义行 + `check-governance-pack-status` 专项校验），不在任何 CLI snapshot 输出中。FEAT-036 不新建平行契约，也不扩展 `governance-bootstrap` schema——其 ≤8KB 数据面（resolve/project/gates/tasks/risks/candidates/health/next_actions）已覆盖默认视图消费，20 字段信任面以 `status` 输出为准。
+
+- 默认视图数据源 = `governance-bootstrap` 聚合数据面 + `check-governance` 健康结果；agent 只做渲染与引导，不做重复数据挖掘
+- Existing-project resume signal：已有 `.governance/` 状态时 Mode 字段 MUST 携带 `Existing governance state detected`，并保留 carry-over active task count、open risk count 和 next action；hook state 异常（installed/missing）必须在 Mode/Health 位可见
+- Context-aware resume handoff：MUST run the same factual discovery contract as `python <plugin_home>/infra/verify_workflow.py governance-context --fixture project/e2e-test-project --fail-on-issues`（`<plugin_home>` 来自 resolve_entry.py，先 resolve 后 verify）。Next/Decision 字段的未完成事项 MUST be backed by `Source facts`; if no facts exist, output `not found` and `do not invent` new work.
+- 展开语义：用户显式请求（如"完整状态"）或高风险场景（发布 / Gate 检查 / 版本 bump / 故障诊断）需要完整面时，从 `status` 输出**直接渲染**完整面板（20 字段 CLI snapshot + pack doc-surface 语义行，不手工重建）；`--level strict` 语义 = 完整面板 + Gate 全表按始终展开处理
+- 其余面板内容沿用折叠规则：始终展开 = 默认 Snapshot 视图 + 项目配置摘要（名称、profile、trigger_mode、permission_mode、版本、阶段）+ 建议下一步；默认折叠（`<details>`，非关键信息）= Gate 状态表（G1-G11）→ `<details><summary>Gate 状态表</summary>...表格...</details>`；最近活动（最近 5 个已完成任务、最近 5 个决策）→ `<details><summary>最近活动</summary>...列表...</details>`；插件版本新鲜度 → `<details><summary>插件版本</summary>...版本信息...</details>`；完整 Snapshot 面板（20 字段 CLI + pack doc-surface 语义行；仅显式请求时渲染）
+- **折叠红线（异常不隐藏）**：权限风险（hooks 缺失 / permission_mode 非法）、已知 FAIL、证据缺失不得因折叠或瘦身而不可见——默认视图的 Risks/Health 字段必须携带异常位（哪怕压缩为一行）
 
 **输出格式规则**：
 
-**始终展开（关键信息）**：
-- Delivery Trust Snapshot（first-run/status 可观察信号）
-- 项目配置摘要（名称、profile、trigger_mode、permission_mode、版本、阶段）
-- 任务统计（总数/已完成/阻塞中/P0 待处理）
-- 活跃风险（升级截止日期在 3 天内的标记）
-- 建议下一步
+**数据即 status/bootstrap 输出**（FIX-270）：默认视图与折叠明细的字段全部来自 `governance-bootstrap` 数据面与 `status` 命令输出（`status --json` 供机器消费）；agent 只做渲染与引导，不做重复数据挖掘。
 
-**默认折叠（非关键信息）**——使用 `<details>` 标签，默认关闭：
-- Gate 状态表（G1-G11）→ `<details><summary>Gate 状态表</summary>...表格...</details>`
-- 最近活动（最近 5 个已完成任务、最近 5 个决策）→ `<details><summary>最近活动</summary>...列表...</details>`
-- 插件版本新鲜度 → `<details><summary>插件版本</summary>...版本信息...</details>`
+折叠原则：用户一眼看到项目健康摘要（默认 Snapshot 视图 + 配置 + 下一步），细节按需展开；完整面板（20 字段 CLI snapshot + pack doc-surface 语义行）是显式请求的按需面，不是默认生成面。
 
-折叠原则：用户一眼看到项目健康摘要（配置 + 风险 + 下一步），细节按需展开。
-
-**Delivery Trust Snapshot 合约**：
+**Delivery Trust Snapshot 默认交互视图合约（≤8 字段）**：
 
 ```
-Delivery Trust Snapshot
-Resume state: Existing governance state detected
-Carry-over: {carry_over_count} active task(s)
-Open risks: {open_risk_count} open risk(s); {risk_details}
-Unfinished work: {detected_item_or_not_found}
-Source facts: {plan_tracker_or_snapshot_or_risk_rows}
-Blocker state: {no_blocker_open_risk_or_blocked_fact}
-Auto-continue: {yes_or_no}
-Interrupt boundary: {critical_decision_blocker_review_or_release_boundary}
-Hooks: {hook_state}
-Goal: {project_goal}
-Stage: {current_stage}
-Gate/setup status: {gate_or_setup_status}
-Risk: {risk_status}
-Evidence: {evidence_status}
-Next action: {next_action}
-Preset guidance: lite is the recommended first-run default; standard is for team delivery; strict is for regulated/high-risk work
-Question budget: no more than 3 non-critical questions before snapshot; deferred non-critical fields become assumptions
-Pack summary: Packs are capability modules; profiles are governance intensity presets.
-Default packs: lite -> `governance-core`; standard -> `governance-core`, `quality-gates`, `release-governance`, `agent-team`; strict -> `governance-core`, `quality-gates`, `release-governance`, `agent-team`, `enterprise`
-Enabled packs: {enabled_pack_summary_or_unknown}
-Pack boundary: pack membership and `pack enabled` are not task evidence, independent review, quality gates, release gates, official approval, marketplace approval, universal/full runtime support, or 1.0.0 production-ready proof
-Verification signal: {runnable_or_observable_signal}
-No-overclaim boundary: local/demo-only snapshot; no external credentials required; no official approval, marketplace approval, universal/full runtime support, or 1.0.0 production-ready claim
+Delivery Trust Snapshot (compact)
+Mode: {trigger_mode} x {permission_mode}; {Existing governance state detected | first-run}; hooks {installed | missing}
+Stage/Gate: {current_stage}; {最近 Gate 结论 | Gate {n} pending}
+Tasks: in-progress {n} / blocked {n} / P0 pending {n}
+Risks: {open_risk_count} open; {最高升级项一行（overdue/≤3d 风险 ID+截止） | none}
+Health: {check-governance 未跑 → 待检查（deferred——FEAT-034 口径，不得显示为通过）}; {已知 FAIL/证据缺失 → 一行摘要内联 | clear}
+Next: {top 1~3 候选（含依赖理由）| 结构化空原因}
+Decision: {需 AskUserQuestion 的事项 | none}
+Full: 20-field CLI snapshot + 4-field pack doc-surface -> `python <plugin_home>/infra/verify_workflow.py status --json` (delivery_trust_snapshot) / `check-governance-pack-status`
 ```
 
-Snapshot 是 `/governance` 或 `/governance-status` first-run/status path 的最小可观察交付信号；它必须在用户不阅读 `plan-tracker.md`、`evidence-log.md`、`risk-log.md` 或完整 SKILL 文件的情况下可见。
-本地 acceptance harness：运行 `python <plugin_home>/infra/verify_workflow.py first-run-demo --assert-snapshot` MUST 可在 demo/local-only 范围运行，不需要 external credentials，并断言 Delivery Trust Snapshot 字段和 no-overclaim boundary（`<plugin_home>` 来自 resolve_entry.py）。
+- **FEAT-034 时序兼容**：ask 前的「最小状态行」= 本视图的一行压缩子集（Mode + Stage/Gate + Risks 计数 + carry-over）；ask 后的深检视图 = 本视图 8 字段全量（Health 位由 `check-governance` 结果填充；deferred → 「待检查」）
+- **异常不隐藏红线**：Risks 字段必须含最高升级项（存在时）；Health 字段必须内联已知 FAIL/证据缺失摘要——两者不得以「无异常」外观掩盖事实
+- **输出预算（DEC-205 口径：推演值非实测）**：8 字段 × 典型值长度静态推演上界 ≈260 tok（最坏含异常摘要），≤700 tok 契约预算（arch 建议 300-700）留 ≥2.5x 余量；基线对照 = AUDIT-154 §3.2 实测（改造前 24 字段强制生成，Snapshot 面 ≈0.8-1.0K tok/次）
+
+**Delivery Trust Snapshot 完整机器契约（20 字段 CLI snapshot 契约 + 4 字段 pack doc-surface 契约——不随会话强制生成）**：
+
+CLI snapshot 载体（20 字段，全为既有确定性 CLI 输出，`<plugin_home>` 来自 resolve_entry.py）：
+- `python <plugin_home>/infra/verify_workflow.py status`——文本面 `┌─ Delivery Trust Snapshot ─┐` 段（20 字段全量）
+- `python <plugin_home>/infra/verify_workflow.py status --json`——`delivery_trust_snapshot` 对象（20 键，机器消费入口）
+- `python <plugin_home>/infra/verify_workflow.py first-run-demo --assert-snapshot`——demo/local-only 范围断言其中 19 字段（`FIRST_RUN_DEMO_REQUIRED_FIELDS`，不含 `Flow-unit lanes`）与 no-overclaim 标记
+
+CLI snapshot 字段集（20 字段，与 `status` 输出逐字一致）：Resume state、Carry-over、Open risks、Unfinished work、Source facts、Blocker state、Auto-continue、Interrupt boundary、Hooks、Goal、Stage、Gate/setup status、Flow-unit lanes、Risk、Evidence、Next action、Preset guidance、Question budget、Verification signal、No-overclaim boundary。
+
+Pack doc-surface 契约字段集（4 字段）：Pack summary、Default packs、Enabled packs、Pack boundary——载体 = 本文档与 `governance-status.md` 的固定语义行（docs 面），由 `check-governance-pack-status` 专项校验守护，不在任何 CLI snapshot 输出中。
+
+Health 映射注脚：默认视图 Health 位的数据源 = `check-governance --summary-only`，不是 snapshot 字段——完整 CLI artifact 中无对应字段，按 Full 指示行取 artifact 的消费者需另跑 `check-governance` 获取健康面。
+
+固定语义行（常量字段值——CLI snapshot 三行与 `status` 输出逐字一致，pack doc-surface 三行为 docs 契约常量、经 `check-governance-pack-status` token 校验；First-run preset guidance 与 Question budget 属机器契约面，不再挤占默认视图）：
+- Preset guidance: lite is the recommended first-run default; standard is for team delivery; strict is for regulated/high-risk work
+- Question budget: ask no more than 3 non-critical questions before snapshot; record deferred non-critical fields as assumptions（Snapshot 前 MUST NOT 提超过 3 个 non-critical questions）
+- No-overclaim boundary: local/demo-only snapshot; no external credentials required; no official approval, marketplace approval, universal/full runtime support, or 1.0.0 production-ready claim
+- Pack summary: Packs are capability modules; profiles are governance intensity presets.
+- Default packs: lite -> `governance-core`; standard -> `governance-core`, `quality-gates`, `release-governance`, `agent-team`; strict -> `governance-core`, `quality-gates`, `release-governance`, `agent-team`, `enterprise`（Enabled packs MUST 从 profile/default pack summary 或 registry facts 得出，无法得出时显示 unknown/not configured）
+- Pack boundary: pack membership and `pack enabled` are not task evidence, independent review, quality gates, release gates, official approval, marketplace approval, universal/full runtime support, or 1.0.0 production-ready proof
+
+默认交互视图（8 字段）是 `/governance` 或 `/governance-status` first-run/status path 的最小可观察交付信号；它必须在用户不阅读 `plan-tracker.md`、`evidence-log.md`、`risk-log.md` 或完整 SKILL 文件的情况下可见，且完整 20 字段 CLI snapshot 契约可经 `status`/`status --json` 一步取回（两端可达，缺一不可）；4 字段 pack doc-surface 契约由上述固定语义行承载，经 `check-governance-pack-status` 校验。
+本地 acceptance harness：运行 `python <plugin_home>/infra/verify_workflow.py first-run-demo --assert-snapshot` MUST 可在 demo/local-only 范围运行，不需要 external credentials，并断言 CLI snapshot 契约 20 字段中的 19 个 demo 断言字段（`FIRST_RUN_DEMO_REQUIRED_FIELDS`，不含 `Flow-unit lanes`）和 no-overclaim boundary——断言对象是 CLI 机器面，不随交互视图瘦身降级（`<plugin_home>` 来自 resolve_entry.py）。
 Context acceptance harness：运行 `python <plugin_home>/infra/verify_workflow.py governance-context --fixture project/e2e-test-project --fail-on-issues` MUST pass，并且 no-facts fixture 必须明确输出 `not found`；不得从假设中发明 unfinished work。
 已有 `.governance/` 项目的 Scenario F 是 resume happy path，不得提示重新初始化；只有 `.governance/plan-tracker.md` 缺失时才进入初始化/接入错误路径。
 
 **输出模板**：参考 `commands/governance-status.md`，扩展含 permission_mode、版本新鲜度、最近活动，并应用上述折叠规则。
 
 ### 状态展示后的引导（MUST）
+
+**时序（FEAT-034 首次交互前置）**：本引导 = 快路径（第二动作）后的首次用户交互——`governance-bootstrap`/`status` 渲染完成后**立即**执行；健康摘要（`check-governance --summary-only`）等深检后置为用户选择后按需执行，`health.state="deferred"` 期间面板健康位显示「待检查」而非通过。
 
 展示完治理面板后，**MUST 通过 AskUserQuestion 引导用户进入下一步**——Scenario F 不是终点，是工作起点。
 
@@ -585,6 +627,9 @@ Context acceptance harness：运行 `python <plugin_home>/infra/verify_workflow.
 
 ## 下次会话优先级
 {{ORDERED_LIST}}
+
+> FIX-262/REQ-108：本节 MUST 由完成必推荐快照派生——至少引用一个快照行 ID（`RECO-{TASK_ID}`（`task-priority-analysis --evidence-task` 机器写入）或既有 `EVD-{N}` 快照行）。无引用 = 自由手写，Check 34 S2 WARN；引用不存在的 ID = 悬空，Check 34 S3 FAIL。
+- **推荐快照引用**: {{RECO-_或_EVD-_快照行_ID}}
 
 ## 用户偏好设置
 {{PERSISTED_PREFERENCES}}

@@ -220,13 +220,13 @@ Bootstrap 注入内容（按 `profile` 差异化——lightweight 注入轻量�
 - on-demand: `Governance: on-demand x {permission_mode}`
 - silent-track: 不输出
 
-**治理数据归档**（版本 bump / 发布收尾后自动触发）:
+**治理数据归档**（版本 bump / 发布收尾后触发；归档写操作 AskUserQuestion 确认后执行——FEAT-035）:
 运行 `python <plugin_home>/infra/archive.py migrate --auto --dry-run` 检查持续归档触发器（`<plugin_home>` 来自 resolve_entry.py）:
 - 首次迁移: archive/index.md 不存在 AND plan-tracker > 80KB AND ≥2 已发布版本
 - 发布强制: 新版本标记已发布后，除最新已发布版本外仍有热文件历史 task
 - task 增量: 可归档 completed task 达到阈值
 - 90 天兜底: 长期未归档且仍有可归档历史数据
-→ dry-run 显示需要归档: 运行 `python <plugin_home>/infra/archive.py migrate --auto`，再运行 `python <plugin_home>/infra/verify_workflow.py check-archive-integrity`
+→ dry-run 显示需要归档: 呈现 dry-run 报告并通过 AskUserQuestion 确认后，运行 `python <plugin_home>/infra/archive.py migrate --auto`，再运行 `python <plugin_home>/infra/verify_workflow.py check-archive-integrity`
 → 归档完整性失败: 阻断发布完成 / Gate 完成
 
 - IF .governance/archive/index.md 存在 → 已归档条目可通过索引查询
@@ -343,7 +343,7 @@ AskUserQuestion 是唯一合法的用户提问方式。禁止内联文字提问�
    i. `## 版本规划` 中的"规划纪律"部分
    j. 版本规划中的"里程碑"和"版本路线图"
 
-   **首次交互前置（FEAT-034——快路径后立即 ask）**：热数据就绪后 MUST 立即呈现最小状态行（模式确认句 + 阶段/Gate 摘要 + carry-over/风险计数）并通过 AskUserQuestion 进入首次用户交互（会话恢复引导 / 下一步选项）；Step 2 交叉验证等深检**后置**为用户选择后按需执行，深检结果不作为本次 ask 的前置条件。健康面未检查时（`governance-bootstrap` 的 `health.state="deferred"`）状态行健康位显示「待检查」而非绿色通过；深检后置 ≠ 深检可选——用户选择推进类动作（发布/版本 bump/治理写回/恢复遗留任务的实际修改）前 MUST 补齐对应深检。
+   **首次交互前置（FEAT-034——快路径后立即 ask）**：热数据就绪后 MUST 立即呈现最小状态行（模式确认句 + 阶段/Gate 摘要 + carry-over/风险计数）并通过 AskUserQuestion 进入首次用户交互（会话恢复引导 / 下一步选项）；Step 2 交叉验证等深检**后置**为用户选择后按需执行，深检结果不作为本次 ask 的前置条件。健康面未检查时（`governance-bootstrap` 的 `health.state="deferred"`）状态行健康位显示「待检查」而非绿色通过；深检后置 ≠ 深检可选——用户选择推进类动作（发布/版本 bump/治理写回/恢复遗留任务的实际修改）前 MUST 补齐对应深检。升级 ask 时序（FEAT-035）：若快路径检测到版本差距，升级待处理确认随本次首次交互 ask 一并呈现征询——与 /governance Scenario C 时序同口径，不拆分为先后两次弹窗；确认前不执行升级写序列。
 
 2. **AI Execution Packet 优先读取（0.38.0+）**：
    — IF `.governance/execution-packets.json` 存在:
@@ -371,20 +371,22 @@ AskUserQuestion 是唯一合法的用户提问方式。禁止内联文字提问�
 
 **Hook 存活检测**（系统级约束——不依赖 agent 自觉）：检查 `.git/hooks/pre-commit`、`.git/hooks/commit-msg` 和 `.git/hooks/post-commit` 是否存在。缺失 → ⚠️ 治理 hook 缺失——agent 的 commit 不受系统约束。**MUST** 先运行 `python <plugin_home>/infra/resolve_entry.py --json` 拿到 `plugin_home`（`<plugin_home>` 取代 `$WORKFLOW_HOME` 路径考古；DEC-096），再提示重装：`cp "<plugin_home>/infra/hooks/pre-commit" .git/hooks/pre-commit && cp "<plugin_home>/infra/hooks/commit-msg" .git/hooks/commit-msg && cp "<plugin_home>/infra/hooks/post-commit" .git/hooks/post-commit`
 
-**版本变化自动检测 + bootstrap 自升级**（用户更新插件后首次会话自动触发——零用户行动）：
+**版本变化检测 + bootstrap 升级（提示 + 确认后执行——FEAT-035；用户未响应前零写操作）**：
 1. 读取 plan-tracker `工作流版本` 和当前安装版本（SKILL.md frontmatter `version`）
-2. **IF** 当前版本 > 记录版本 → 执行以下自动序列：
+2. **IF** 当前版本 > 记录版本 → **呈现升级待处理**（AskUserQuestion 升级摘要：版本跨度 + CHANGELOG 要点 + 将执行的写操作清单（显式列出目标文件）+ 回滚方式；选项默认「执行升级（推荐）」），**用户确认后才执行**以下序列——确认前不执行任何写操作：
 
-   **A. 自动输出更新摘要**（告知用户）：
+   **A. 呈现更新摘要**（并入升级确认 AskUserQuestion——确认前零写操作）：
    - 版本跨度 + 从 CHANGELOG.md 提取的新增/修复要点
 
-   **B. 自动升级 平台原生入口文件 bootstrap 段**（agent 自己升级自己）：
+   **B. 升级 平台原生入口文件 bootstrap 段**（用户确认升级后执行——agent 执行，无需手动操作）：
    - 读取当前 平台原生入口文件，找到 `## Governance Bootstrap` 段落（FIX-238.2 陈旧标记：段落内 `@bootstrap-version` 头 < SKILL frontmatter `active_version` 即陈旧；无法确定新版本 → 不升级，输出 `/plugin update` 指引）
    - 替换为**与本文件完全一致的最新模板**（按 profile 选精简/完整版）
    - **保留 平台原生入口文件 其余所有内容不变**
-   - 输出：`Bootstrap 已自动升级：v{old} → v{new}。`
+   - 输出：`Bootstrap 已升级：v{old} → v{new}。`
 
-   **C. 自动补全 plan-tracker 缺失结构**（agent 自动补全——不是提示，是直接做）：
+   **深检前置（MUST——DEC-207② P2-1 / M5.5 条 3）**：版本升级写序列属推进类动作——执行 B~E 写操作前 MUST 先完成健康摘要（`check-governance --summary-only`）+ 交叉验证等深检；用户确认升级不免除深检。
+
+   **C. 自动补全 plan-tracker 缺失结构**（用户确认升级后直接执行——不是提示，是直接做）：
    - 项目配置缺少字段？→ 自动添加（permission_mode、工作流版本）
    - 缺少 `## 版本规划` 节？→ 自动添加（版本路线图空表 + 版本里程碑 + V-Gate + 版本规划纪律）
    - 缺少 `## 需求跟踪矩阵` 节？→ 自动添加
@@ -392,25 +394,24 @@ AskUserQuestion 是唯一合法的用户提问方式。禁止内联文字提问�
    - 变更控制流程中是旧版（无快速通道）？→ 自动更新为含快速通道的版本
    - `.git/hooks/post-commit` 不存在？→ 提示一次性命令（agent 不能自动写 .git/hooks/——安全问题）
      - `.git/hooks/commit-msg` 不存在？→ 提示一次性命令（同上）
-   - **自动清理升级残留**（每版本更新时执行）：运行 `python <plugin_home>/infra/cleanup.py`（`<plugin_home>` 来自 resolve_entry.py；基于 manifest.json 的结构 diff——不在 canonical manifest 中的文件 = 残留，自动删除）。输出 `✅ 已清理 {N} 个过期文件/目录`
+   - **插件残留清理删除面**（cleanup.py——dry-run 先行 + 确认后执行；每版本更新时执行）：先运行 `python <plugin_home>/infra/cleanup.py --dry-run` 呈现待删报告（`<plugin_home>` 来自 resolve_entry.py；基于 manifest.json 的结构 diff——不在 canonical manifest 中的文件 = 残留；`.governance/`、`.git/` 硬编码保护不触碰），通过 AskUserQuestion 确认后再执行 `python <plugin_home>/infra/cleanup.py`（不确认 → 跳过清理，不影响其余步骤）。输出 `✅ 已清理 {N} 个过期文件/目录`
 
    **D. 更新 plan-tracker `工作流版本`** 为当前版本
 
-	   **E. 持续归档触发检测与执行**（用户更新插件后自动触发——零用户操作）：
+	   **E. 持续归档触发检测与执行**（用户确认升级后执行；归档写操作同 ask-确认前置——dry-run 报告先行呈现，AskUserQuestion 确认后才执行迁移）：
 	   — 运行 `python <plugin_home>/infra/archive.py migrate --auto --dry-run` 检测四类触发器（`<plugin_home>` 来自 resolve_entry.py）:
 	     1. 首次迁移：`.governance/archive/index.md` 不存在 AND `plan-tracker.md` > 80 KB AND 已发布版本 ≥ 2
 	     2. 发布强制：出现新的已发布版本后，除最新已发布版本外仍有未归档历史 task
 	     3. task 增量：热文件中可归档 completed task 达到阈值
 	     4. 90 天兜底：长期未归档但仍有可归档历史数据
-	   — dry-run 报告需要归档 → 执行:
+	   — dry-run 报告需要归档 → 呈现 dry-run 报告并通过 AskUserQuestion 确认后执行:
 	     a. 运行 `python <plugin_home>/infra/archive.py migrate --auto`
 	     b. 运行 `python <plugin_home>/infra/verify_workflow.py check-archive-integrity`
 	     c. 输出归档迁移摘要（格式: 📦 治理数据归档完成: 归档{N}个task→..., plan-tracker: {old}KB→{new}KB(-{pct}%)）
 	   — 归档完整性失败 → 记录到 risk-log；发布/版本 bump 收尾场景 MUST 阻断完成
 	   — 无可归档数据 → 跳过归档（不修改文件）
 
-**这就是用户要做的全部：/plugin update → 下次会话 → 一切自动完成。**
-不需要记住命令，不需要读文档，不需要手动操作——agent 自己升级自己。
+**用户要做的仍然只有：/plugin update → 下次会话。** 升级不再静默写文件——检测到版本差即呈现升级待处理摘要（含写操作清单与回滚方式），默认选项为执行升级（推荐）；确认后其余步骤自动完成，用户未响应前零写操作。
 
 ### Step 2: 交叉验证（3 项强制检查——FEAT-034 起为后置深检）
 **时序（FEAT-034）**：本步骤属深检——在首次交互（Step 1 首次交互前置 ask）之后按需执行，不前置于首次 ask；用户选择推进类动作（发布/版本 bump/治理写回/恢复遗留任务的实际修改）时 MUST 先完成本步骤再继续。健康面未完成时显示「待检查」而非绿色通过。
@@ -618,7 +619,7 @@ AskUserQuestion 是唯一合法的用户提问方式。禁止内联文字提问�
    i. `## 版本规划` 中的"规划纪律"部分
    j. 版本规划中的"里程碑"和"版本路线图"
 
-   **首次交互前置（FEAT-034——快路径后立即 ask）**：热数据就绪后 MUST 立即呈现最小状态行（模式确认句 + 阶段/Gate 摘要 + carry-over/风险计数）并通过 AskUserQuestion 进入首次用户交互（会话恢复引导 / 下一步选项）；Step 2 交叉验证等深检**后置**为用户选择后按需执行，深检结果不作为本次 ask 的前置条件。健康面未检查时（`governance-bootstrap` 的 `health.state="deferred"`）状态行健康位显示「待检查」而非绿色通过；深检后置 ≠ 深检可选——用户选择推进类动作（发布/版本 bump/治理写回/恢复遗留任务的实际修改）前 MUST 补齐对应深检。
+   **首次交互前置（FEAT-034——快路径后立即 ask）**：热数据就绪后 MUST 立即呈现最小状态行（模式确认句 + 阶段/Gate 摘要 + carry-over/风险计数）并通过 AskUserQuestion 进入首次用户交互（会话恢复引导 / 下一步选项）；Step 2 交叉验证等深检**后置**为用户选择后按需执行，深检结果不作为本次 ask 的前置条件。健康面未检查时（`governance-bootstrap` 的 `health.state="deferred"`）状态行健康位显示「待检查」而非绿色通过；深检后置 ≠ 深检可选——用户选择推进类动作（发布/版本 bump/治理写回/恢复遗留任务的实际修改）前 MUST 补齐对应深检。升级 ask 时序（FEAT-035）：若快路径检测到版本差距，升级待处理确认随本次首次交互 ask 一并呈现征询——与 /governance Scenario C 时序同口径，不拆分为先后两次弹窗；确认前不执行升级写序列。
 
 2. **AI Execution Packet 优先读取（0.38.0+）**：
    — IF `.governance/execution-packets.json` 存在:
@@ -646,20 +647,22 @@ AskUserQuestion 是唯一合法的用户提问方式。禁止内联文字提问�
 
 **Hook 存活检测**（系统级约束——不依赖 agent 自觉）：检查 `.git/hooks/pre-commit`、`.git/hooks/commit-msg` 和 `.git/hooks/post-commit` 是否存在。缺失 → ⚠️ 治理 hook 缺失——agent 的 commit 不受系统约束。**MUST** 先运行 `python <plugin_home>/infra/resolve_entry.py --json` 拿到 `plugin_home`（`<plugin_home>` 取代 `$WORKFLOW_HOME` 路径考古；DEC-096），再提示重装：`cp "<plugin_home>/infra/hooks/pre-commit" .git/hooks/pre-commit && cp "<plugin_home>/infra/hooks/commit-msg" .git/hooks/commit-msg && cp "<plugin_home>/infra/hooks/post-commit" .git/hooks/post-commit`
 
-**版本变化自动检测 + bootstrap 自升级**（用户更新插件后首次会话自动触发——零用户行动）：
+**版本变化检测 + bootstrap 升级（提示 + 确认后执行——FEAT-035；用户未响应前零写操作）**：
 1. 读取 plan-tracker `工作流版本` 和当前安装版本（SKILL.md frontmatter `version`）
-2. **IF** 当前版本 > 记录版本 → 执行以下自动序列：
+2. **IF** 当前版本 > 记录版本 → **呈现升级待处理**（AskUserQuestion 升级摘要：版本跨度 + CHANGELOG 要点 + 将执行的写操作清单（显式列出目标文件）+ 回滚方式；选项默认「执行升级（推荐）」），**用户确认后才执行**以下序列——确认前不执行任何写操作：
 
-   **A. 自动输出更新摘要**（告知用户）：
+   **A. 呈现更新摘要**（并入升级确认 AskUserQuestion——确认前零写操作）：
    - 版本跨度 + 从 CHANGELOG.md 提取的新增/修复要点
 
-   **B. 自动升级 平台原生入口文件 bootstrap 段**（agent 自己升级自己）：
+   **B. 升级 平台原生入口文件 bootstrap 段**（用户确认升级后执行——agent 执行，无需手动操作）：
    - 读取当前 平台原生入口文件，找到 `## Governance Bootstrap` 段落（FIX-238.2 陈旧标记：段落内 `@bootstrap-version` 头 < SKILL frontmatter `active_version` 即陈旧；无法确定新版本 → 不升级，输出 `/plugin update` 指引）
    - 替换为**与本文件完全一致的最新模板**（按 profile 选精简/完整版）
    - **保留 平台原生入口文件 其余所有内容不变**
-   - 输出：`Bootstrap 已自动升级：v{old} → v{new}。`
+   - 输出：`Bootstrap 已升级：v{old} → v{new}。`
 
-   **C. 自动补全 plan-tracker 缺失结构**（agent 自动补全——不是提示，是直接做）：
+   **深检前置（MUST——DEC-207② P2-1 / M5.5 条 3）**：版本升级写序列属推进类动作——执行 B~E 写操作前 MUST 先完成健康摘要（`check-governance --summary-only`）+ 交叉验证等深检；用户确认升级不免除深检。
+
+   **C. 自动补全 plan-tracker 缺失结构**（用户确认升级后直接执行——不是提示，是直接做）：
    - 项目配置缺少字段？→ 自动添加（permission_mode、工作流版本）
    - 缺少 `## 版本规划` 节？→ 自动添加（版本路线图空表 + 版本里程碑 + V-Gate + 版本规划纪律）
    - 缺少 `## 需求跟踪矩阵` 节？→ 自动添加
@@ -667,26 +670,25 @@ AskUserQuestion 是唯一合法的用户提问方式。禁止内联文字提问�
    - 变更控制流程中是旧版（无快速通道）？→ 自动更新为含快速通道的版本
    - `.git/hooks/post-commit` 不存在？→ 提示一次性命令（agent 不能自动写 .git/hooks/——安全问题）
      - `.git/hooks/commit-msg` 不存在？→ 提示一次性命令（同上）
-   - **自动清理升级残留**（每版本更新时执行）：运行 `python <plugin_home>/infra/cleanup.py`（`<plugin_home>` 来自 resolve_entry.py；基于 manifest.json 的结构 diff——不在 canonical manifest 中的文件 = 残留，自动删除）。输出 `✅ 已清理 {N} 个过期文件/目录`
+   - **插件残留清理删除面**（cleanup.py——dry-run 先行 + 确认后执行；每版本更新时执行）：先运行 `python <plugin_home>/infra/cleanup.py --dry-run` 呈现待删报告（`<plugin_home>` 来自 resolve_entry.py；基于 manifest.json 的结构 diff——不在 canonical manifest 中的文件 = 残留；`.governance/`、`.git/` 硬编码保护不触碰），通过 AskUserQuestion 确认后再执行 `python <plugin_home>/infra/cleanup.py`（不确认 → 跳过清理，不影响其余步骤）。输出 `✅ 已清理 {N} 个过期文件/目录`
 
    **D. 更新 plan-tracker `工作流版本`** 为当前版本
 
 
-	   **E. 持续归档触发检测与执行**（用户更新插件后自动触发——零用户操作）：
+	   **E. 持续归档触发检测与执行**（用户确认升级后执行；归档写操作同 ask-确认前置——dry-run 报告先行呈现，AskUserQuestion 确认后才执行迁移）：
 	   — 运行 `python <plugin_home>/infra/archive.py migrate --auto --dry-run` 检测四类触发器（`<plugin_home>` 来自 resolve_entry.py）:
 	     1. 首次迁移：`.governance/archive/index.md` 不存在 AND `plan-tracker.md` > 80 KB AND 已发布版本 ≥ 2
 	     2. 发布强制：出现新的已发布版本后，除最新已发布版本外仍有未归档历史 task
 	     3. task 增量：热文件中可归档 completed task 达到阈值
 	     4. 90 天兜底：长期未归档但仍有可归档历史数据
-	   — dry-run 报告需要归档 → 执行:
+	   — dry-run 报告需要归档 → 呈现 dry-run 报告并通过 AskUserQuestion 确认后执行:
 	     a. 运行 `python <plugin_home>/infra/archive.py migrate --auto`
 	     b. 运行 `python <plugin_home>/infra/verify_workflow.py check-archive-integrity`
 	     c. 输出归档迁移摘要（格式: 📦 治理数据归档完成: 归档{N}个task→..., plan-tracker: {old}KB→{new}KB(-{pct}%)）
 	   — 归档完整性失败 → 记录到 risk-log；发布/版本 bump 收尾场景 MUST 阻断完成
 	   — 无可归档数据 → 跳过归档（不修改文件）
 
-**这就是用户要做的全部：/plugin update → 下次会话 → 一切自动完成。**
-不需要记住命令，不需要读文档，不需要手动操作——agent 自己升级自己。
+**用户要做的仍然只有：/plugin update → 下次会话。** 升级不再静默写文件——检测到版本差即呈现升级待处理摘要（含写操作清单与回滚方式），默认选项为执行升级（推荐）；确认后其余步骤自动完成，用户未响应前零写操作。
 
 ### Step 2: 交叉验证（3 项强制检查——FEAT-034 起为后置深检）
 **时序（FEAT-034）**：本步骤属深检——在首次交互（Step 1 首次交互前置 ask）之后按需执行，不前置于首次 ask；用户选择推进类动作（发布/版本 bump/治理写回/恢复遗留任务的实际修改）时 MUST 先完成本步骤再继续。健康面未完成时显示「待检查」而非绿色通过。

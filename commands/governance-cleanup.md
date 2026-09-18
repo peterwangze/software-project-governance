@@ -1,6 +1,6 @@
 # governance-cleanup -- 声明式插件残留清理
 
-> **推荐使用 `/governance`**——版本升级时自动触发清理（Scenario C）。本命令保留为手动快捷方式。
+> **推荐使用 `/governance`**——版本升级时随 Scenario C 序列触发清理检测（dry-run 先行 + AskUserQuestion 确认后执行——FEAT-035）。本命令保留为手动快捷方式。
 
 清理命令基于 canonical manifest (`skills/software-project-governance/core/manifest.json`) 的声明式 diff：
 **REDUNDANT = ACTUAL - CANONICAL - EXCLUDE**。不再维护硬编码的冗余文件列表，
@@ -10,7 +10,7 @@
 
 - `/governance-cleanup` -- 执行清理
 - 首次使用 `/governance` 时自动检测并提示（Scenario C 升级场景）
-- CLAUDE.md bootstrap 自动升级序列中执行
+- CLAUDE.md bootstrap 版本升级序列中执行（用户确认升级后——FEAT-035 ask-确认前置）
 
 ## 核心原理
 

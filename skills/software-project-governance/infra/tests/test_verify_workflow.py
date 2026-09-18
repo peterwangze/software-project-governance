@@ -9692,6 +9692,115 @@ class GovernanceStatusContractTests(unittest.TestCase):
         self.assertEqual([needle for needle in forbidden if needle in governance], [])
         self.assertEqual([needle for needle in forbidden if needle in init], [])
 
+    def test_scenario_c_upgrade_writes_are_ask_confirmed(self):
+        """FEAT-035 (AUDIT-154 A-4): Scenario C upgrade write operations are
+        ask-confirmed — the protocol presents an upgrade summary (version
+        span + CHANGELOG digest + explicit write-target list + rollback) via
+        AskUserQuestion and performs zero writes before the user responds.
+        R1 D7 erratum: this FEAT-035 test family lives inside
+        GovernanceStatusContractTests; the declared standalone class name
+        "UpgradeWriteConfirmationTests" was never created."""
+        governance = (vw.ROOT / "commands" / "governance.md").read_text(encoding="utf-8")
+        required = [
+            "AskUserQuestion 呈现升级摘要",
+            "用户未响应前零写操作",
+            "将执行的写操作清单",
+            "回滚方式",
+            "执行升级（推荐",
+            "dry-run 报告先行呈现",
+            # R1 D1: the cleanup deletion surface must be disclosed in the
+            # ask list — the user consents to deletions before they happen.
+            "插件残留清理删除面",
+        ]
+        self.assertEqual([needle for needle in required if needle not in governance], [])
+        for stale in ("自动升级序列", "已自动升级", "自动删除"):
+            self.assertNotIn(stale, governance)
+
+    def test_scenario_c_archive_migration_dry_run_confirmed(self):
+        """FEAT-035: archive migration (archive.py migrate) follows the same
+        ask-confirm gate — the dry-run report is presented first and the
+        migration runs only after AskUserQuestion confirmation."""
+        governance = (vw.ROOT / "commands" / "governance.md").read_text(encoding="utf-8")
+        self.assertIn("呈现 dry-run 报告并通过 AskUserQuestion 确认", governance)
+
+    def test_init_templates_present_pending_upgrade_and_zero_write(self):
+        """FEAT-035: the standard + strict bootstrap templates present the
+        pending upgrade and execute only after confirmation — the old
+        silent-completion promise ("零用户行动 / 一切自动完成") is retired
+        while the auto-complete spirit stays (default option = execute)."""
+        init = (vw.ROOT / "commands" / "governance-init.md").read_text(encoding="utf-8")
+        self.assertEqual(init.count("呈现升级待处理"), 4)  # header + footer × standard/strict
+        self.assertEqual(init.count("用户未响应前零写操作"), 4)
+        self.assertEqual(init.count("执行升级（推荐）"), 4)
+        self.assertEqual(init.count("版本升级写序列属推进类动作"), 2)
+        # R1 D2: the upgrade ask timing is explicit on the bootstrap main
+        # path — the pending-upgrade confirm rides the FIRST interaction ask
+        # (same caliber as /governance Scenario C), not a second popup.
+        self.assertEqual(init.count("升级待处理确认随本次首次交互 ask 一并呈现"), 2)
+        for stale in ("零用户行动", "零用户操作", "一切自动完成", "自动序列", "已自动升级"):
+            self.assertNotIn(stale, init)
+
+    def test_upgrade_write_sequence_deep_check_linkage(self):
+        """DEC-207② P2-1: the version-upgrade write sequence is explicitly a
+        推进类动作 — the M5.5 rule 3 deep-check precondition is documented at
+        the Scenario C linkage point, in the bootstrap templates and in the
+        entry SKILL, closing the two-reading ambiguity."""
+        governance = (vw.ROOT / "commands" / "governance.md").read_text(encoding="utf-8")
+        self.assertIn("M5.5 条 3", governance)
+        self.assertIn("版本升级写序列属推进类动作", governance)
+        init = (vw.ROOT / "commands" / "governance-init.md").read_text(encoding="utf-8")
+        self.assertIn("DEC-207② P2-1 / M5.5 条 3", init)
+        skill = (vw.ROOT / "skills/software-project-governance/SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("版本升级写序列属推进类动作", skill)
+
+    def test_upgrade_cleanup_deletion_surface_dual_entry_aligned(self):
+        """FEAT-035 R1 (D1): the cleanup deletion surface is disclosed in the
+        Scenario C ask list and the confirmed write sequence aligns with the
+        bootstrap template C-2 step across BOTH entry points — dry-run report
+        first, deletion only after AskUserQuestion confirmation.  The old
+        "自动删除" wording (which contradicted governance-cleanup.md's own
+        dry-run-first safety guarantee) is retired from both faces."""
+        governance = (vw.ROOT / "commands" / "governance.md").read_text(encoding="utf-8")
+        init = (vw.ROOT / "commands" / "governance-init.md").read_text(encoding="utf-8")
+        cleanup = (vw.ROOT / "commands" / "governance-cleanup.md").read_text(encoding="utf-8")
+        for text in (governance, init):
+            self.assertIn("插件残留清理删除面", text)
+            self.assertIn("cleanup.py --dry-run", text)
+            self.assertIn("确认后再执行 `python <plugin_home>/infra/cleanup.py`", text)
+        self.assertEqual(init.count("插件残留清理删除面"), 2)  # standard + strict templates
+        self.assertNotIn("自动删除", governance)
+        self.assertNotIn("自动删除", init)
+        # template C-2 wording no longer contradicts governance-cleanup.md's
+        # own safety guarantee ("dry-run 先展示……用户确认后才执行")
+        self.assertIn("dry-run 先行 + AskUserQuestion 确认后执行", cleanup)
+        # dual-entry sequence alignment: cleanup sits between the hooks hint
+        # and the version-field update in both confirmed sequences.
+        g_seq = governance[governance.index("用户确认后执行升级序列"):]
+        self.assertLess(g_seq.index("Hook 存活检测"), g_seq.index("插件残留清理删除面"))
+        self.assertLess(g_seq.index("插件残留清理删除面"), g_seq.index("更新 `工作流版本` 为 `active_version`"))
+        i_block = init[init.index("版本变化检测 + bootstrap 升级"):]
+        self.assertLess(i_block.index("`.git/hooks/post-commit` 不存在"), i_block.index("插件残留清理删除面"))
+        self.assertLess(i_block.index("插件残留清理删除面"), i_block.index("**D. 更新 plan-tracker `工作流版本`**"))
+
+    def test_governance_update_command_ask_confirmed_no_silent_semantics(self):
+        """FEAT-035 R1 (D3): the deprecated manual governance-update command
+        must not carry the old silent-upgrade mental model ("自动检测版本变
+        化并自升级" / "自动升级失败") — its behavior description and Steps
+        5/6 follow the ask-confirm gate.  This closes the guard-net gap where
+        the live command sat outside every stale-wording anti-assertion scan."""
+        update = (vw.ROOT / "commands" / "governance-update.md").read_text(encoding="utf-8")
+        for stale in ("自动检测版本变化并自升级", "自动升级失败", "自动升级序列", "已自动升级", "自动删除"):
+            self.assertNotIn(stale, update)
+        for required in (
+            "AskUserQuestion",
+            "将执行的写操作清单",
+            "回滚方式",
+            "用户确认前不执行任何写操作",
+            "确认后替换 bootstrap 段",
+            "确认后更新 plan-tracker 工作流版本",
+        ):
+            self.assertIn(required, update)
+
 
 class FirstRunDemoTests(unittest.TestCase):
     """FIX-103: local demo harness asserts first happy path snapshot fields."""
@@ -15389,6 +15498,10 @@ class EntryBootstrapTemplateTests(unittest.TestCase):
         self.assertIn("bootstrap.sh", governance)
         self.assertIn("bootstrap.cmd", governance)
         self.assertIn("@bootstrap-version", init)
+        # R1 D7b: the fixture mirror also carries the FEAT-035 zero-write
+        # marker, so future canonical drift of the upgrade-confirm protocol
+        # cannot slip past the fixture unnoticed.
+        self.assertIn("用户未响应前零写操作", init)
 
 
 class ArchiveTriggerGapTests(unittest.TestCase):

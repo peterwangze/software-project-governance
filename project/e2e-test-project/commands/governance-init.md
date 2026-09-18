@@ -194,10 +194,12 @@ Bootstrap 注入内容（按 `profile` 差异化——lightweight 注入轻量�
 ```markdown
 ## Governance Bootstrap（由 software-project-governance 插件注入）
 
-> @bootstrap-version: 0.81.0（模板最低引导版本——低于 SKILL frontmatter active_version 即陈旧，先升级本段再继续）
+> @bootstrap-version: 0.83.0（模板最低引导版本——低于 SKILL frontmatter active_version 即陈旧，先升级本段再继续）
 
 ### 每次会话第一动作
 读取 `.governance/plan-tracker.md`，确认当前阶段、Gate 状态、活跃风险。如 `.governance/` 不存在，提醒先初始化。
+
+首次交互前置（FEAT-034）：热数据可经单命令快路径获取——`python <plugin_home>/infra/verify_workflow.py governance-bootstrap --format json`（只读聚合；不可用时回退直接读取 plan-tracker）；快路径就绪后立即向用户呈现最小状态行并进入首次 AskUserQuestion 交互，深检后置为用户选择后按需执行（推进类动作前 MUST 补齐）；健康面未检查时（`health.state="deferred"`）显示「待检查」而非通过。
 
 触发模式行为：
 - always-on → 执行完整检查，治理面板可正常输出
@@ -218,13 +220,13 @@ Bootstrap 注入内容（按 `profile` 差异化——lightweight 注入轻量�
 - on-demand: `Governance: on-demand x {permission_mode}`
 - silent-track: 不输出
 
-**治理数据归档**（版本 bump / 发布收尾后自动触发）:
+**治理数据归档**（版本 bump / 发布收尾后触发；归档写操作 AskUserQuestion 确认后执行——FEAT-035）:
 运行 `python <plugin_home>/infra/archive.py migrate --auto --dry-run` 检查持续归档触发器（`<plugin_home>` 来自 resolve_entry.py）:
 - 首次迁移: archive/index.md 不存在 AND plan-tracker > 80KB AND ≥2 已发布版本
 - 发布强制: 新版本标记已发布后，除最新已发布版本外仍有热文件历史 task
 - task 增量: 可归档 completed task 达到阈值
 - 90 天兜底: 长期未归档且仍有可归档历史数据
-→ dry-run 显示需要归档: 运行 `python <plugin_home>/infra/archive.py migrate --auto`，再运行 `python <plugin_home>/infra/verify_workflow.py check-archive-integrity`
+→ dry-run 显示需要归档: 呈现 dry-run 报告并通过 AskUserQuestion 确认后，运行 `python <plugin_home>/infra/archive.py migrate --auto`，再运行 `python <plugin_home>/infra/verify_workflow.py check-archive-integrity`
 → 归档完整性失败: 阻断发布完成 / Gate 完成
 
 - IF .governance/archive/index.md 存在 → 已归档条目可通过索引查询
@@ -259,7 +261,7 @@ AskUserQuestion 是唯一合法的用户提问方式。禁止内联文字提问�
 ```markdown
 ## Governance Bootstrap（强制 — 每次会话第一动作）
 
-> @bootstrap-version: 0.81.0（模板最低引导版本——低于 SKILL frontmatter active_version 即陈旧，先升级本段再继续）
+> @bootstrap-version: 0.83.0（模板最低引导版本——低于 SKILL frontmatter active_version 即陈旧，先升级本段再继续）
 
 **⚡ SELF-CHECK（在任何输出之前先问自己）**：
 1. 我是否已经读了 `.governance/plan-tracker.md`？否 → **立即停止，先去读**
@@ -328,18 +330,20 @@ AskUserQuestion 是唯一合法的用户提问方式。禁止内联文字提问�
 - 复盘/维护 → Maintenance
 
 ### Step 1: 读 plan-tracker + 跨会话恢复
-1. 读取 `.governance/plan-tracker.md` 的热数据段落（按以下优先级）:
+1. **热数据快路径（FEAT-034 首次交互前置）**：优先运行 `python <plugin_home>/infra/verify_workflow.py governance-bootstrap --format json`（只读聚合 ≤8KB——resolve envelope + 状态投影 + 候选 + migration 标志 + next_actions，即下方 a~f 热数据段落的单命令投影）获取热数据；聚合命令不可用（命令缺失/超时/解析失败）时 **fallback 原六段读取**——读取 `.governance/plan-tracker.md` 的热数据段落（按以下优先级）:
    a. `## 项目配置` — 当前 phase/stage/gate/mode/permission_mode/工作流版本
    b. `## Gate 状态跟踪` — 所有 Gate 状态
    c. `## 项目总览` — 当前统计（任务数/已完成/阻塞中/风险数）
    d. `## 当前活跃事项` — 仅未完成/进行中的 P0/P1/P2 任务
    e. 当前活跃版本的 task 表 — 版本描述中含"进行中"或"未发布"的段落
    f. `## 1.0.0 依赖链` 或等效的活跃依赖链
-   — 以下段落按需读取（不在 bootstrap 阶段强制读取）:
+   — 快路径输出缺某个热数据面（候选为空/字段缺失/解析失败）时，用 read 工具按需展开对应段落；以下段落仍按需读取（不在 bootstrap 阶段强制读取）:
    g. `## 需求跟踪矩阵`
    h. `## 变更控制`
    i. `## 版本规划` 中的"规划纪律"部分
    j. 版本规划中的"里程碑"和"版本路线图"
+
+   **首次交互前置（FEAT-034——快路径后立即 ask）**：热数据就绪后 MUST 立即呈现最小状态行（模式确认句 + 阶段/Gate 摘要 + carry-over/风险计数）并通过 AskUserQuestion 进入首次用户交互（会话恢复引导 / 下一步选项）；Step 2 交叉验证等深检**后置**为用户选择后按需执行，深检结果不作为本次 ask 的前置条件。健康面未检查时（`governance-bootstrap` 的 `health.state="deferred"`）状态行健康位显示「待检查」而非绿色通过；深检后置 ≠ 深检可选——用户选择推进类动作（发布/版本 bump/治理写回/恢复遗留任务的实际修改）前 MUST 补齐对应深检。升级 ask 时序（FEAT-035）：若快路径检测到版本差距，升级待处理确认随本次首次交互 ask 一并呈现征询——与 /governance Scenario C 时序同口径，不拆分为先后两次弹窗；确认前不执行升级写序列。
 
 2. **AI Execution Packet 优先读取（0.38.0+）**：
    — IF `.governance/execution-packets.json` 存在:
@@ -367,20 +371,22 @@ AskUserQuestion 是唯一合法的用户提问方式。禁止内联文字提问�
 
 **Hook 存活检测**（系统级约束——不依赖 agent 自觉）：检查 `.git/hooks/pre-commit`、`.git/hooks/commit-msg` 和 `.git/hooks/post-commit` 是否存在。缺失 → ⚠️ 治理 hook 缺失——agent 的 commit 不受系统约束。**MUST** 先运行 `python <plugin_home>/infra/resolve_entry.py --json` 拿到 `plugin_home`（`<plugin_home>` 取代 `$WORKFLOW_HOME` 路径考古；DEC-096），再提示重装：`cp "<plugin_home>/infra/hooks/pre-commit" .git/hooks/pre-commit && cp "<plugin_home>/infra/hooks/commit-msg" .git/hooks/commit-msg && cp "<plugin_home>/infra/hooks/post-commit" .git/hooks/post-commit`
 
-**版本变化自动检测 + bootstrap 自升级**（用户更新插件后首次会话自动触发——零用户行动）：
+**版本变化检测 + bootstrap 升级（提示 + 确认后执行——FEAT-035；用户未响应前零写操作）**：
 1. 读取 plan-tracker `工作流版本` 和当前安装版本（SKILL.md frontmatter `version`）
-2. **IF** 当前版本 > 记录版本 → 执行以下自动序列：
+2. **IF** 当前版本 > 记录版本 → **呈现升级待处理**（AskUserQuestion 升级摘要：版本跨度 + CHANGELOG 要点 + 将执行的写操作清单（显式列出目标文件）+ 回滚方式；选项默认「执行升级（推荐）」），**用户确认后才执行**以下序列——确认前不执行任何写操作：
 
-   **A. 自动输出更新摘要**（告知用户）：
+   **A. 呈现更新摘要**（并入升级确认 AskUserQuestion——确认前零写操作）：
    - 版本跨度 + 从 CHANGELOG.md 提取的新增/修复要点
 
-   **B. 自动升级 平台原生入口文件 bootstrap 段**（agent 自己升级自己）：
+   **B. 升级 平台原生入口文件 bootstrap 段**（用户确认升级后执行——agent 执行，无需手动操作）：
    - 读取当前 平台原生入口文件，找到 `## Governance Bootstrap` 段落（FIX-238.2 陈旧标记：段落内 `@bootstrap-version` 头 < SKILL frontmatter `active_version` 即陈旧；无法确定新版本 → 不升级，输出 `/plugin update` 指引）
    - 替换为**与本文件完全一致的最新模板**（按 profile 选精简/完整版）
    - **保留 平台原生入口文件 其余所有内容不变**
-   - 输出：`Bootstrap 已自动升级：v{old} → v{new}。`
+   - 输出：`Bootstrap 已升级：v{old} → v{new}。`
 
-   **C. 自动补全 plan-tracker 缺失结构**（agent 自动补全——不是提示，是直接做）：
+   **深检前置（MUST——DEC-207② P2-1 / M5.5 条 3）**：版本升级写序列属推进类动作——执行 B~E 写操作前 MUST 先完成健康摘要（`check-governance --summary-only`）+ 交叉验证等深检；用户确认升级不免除深检。
+
+   **C. 自动补全 plan-tracker 缺失结构**（用户确认升级后直接执行——不是提示，是直接做）：
    - 项目配置缺少字段？→ 自动添加（permission_mode、工作流版本）
    - 缺少 `## 版本规划` 节？→ 自动添加（版本路线图空表 + 版本里程碑 + V-Gate + 版本规划纪律）
    - 缺少 `## 需求跟踪矩阵` 节？→ 自动添加
@@ -388,27 +394,27 @@ AskUserQuestion 是唯一合法的用户提问方式。禁止内联文字提问�
    - 变更控制流程中是旧版（无快速通道）？→ 自动更新为含快速通道的版本
    - `.git/hooks/post-commit` 不存在？→ 提示一次性命令（agent 不能自动写 .git/hooks/——安全问题）
      - `.git/hooks/commit-msg` 不存在？→ 提示一次性命令（同上）
-   - **自动清理升级残留**（每版本更新时执行）：运行 `python <plugin_home>/infra/cleanup.py`（`<plugin_home>` 来自 resolve_entry.py；基于 manifest.json 的结构 diff——不在 canonical manifest 中的文件 = 残留，自动删除）。输出 `✅ 已清理 {N} 个过期文件/目录`
+   - **插件残留清理删除面**（cleanup.py——dry-run 先行 + 确认后执行；每版本更新时执行）：先运行 `python <plugin_home>/infra/cleanup.py --dry-run` 呈现待删报告（`<plugin_home>` 来自 resolve_entry.py；基于 manifest.json 的结构 diff——不在 canonical manifest 中的文件 = 残留；`.governance/`、`.git/` 硬编码保护不触碰），通过 AskUserQuestion 确认后再执行 `python <plugin_home>/infra/cleanup.py`（不确认 → 跳过清理，不影响其余步骤）。输出 `✅ 已清理 {N} 个过期文件/目录`
 
    **D. 更新 plan-tracker `工作流版本`** 为当前版本
 
-	   **E. 持续归档触发检测与执行**（用户更新插件后自动触发——零用户操作）：
+	   **E. 持续归档触发检测与执行**（用户确认升级后执行；归档写操作同 ask-确认前置——dry-run 报告先行呈现，AskUserQuestion 确认后才执行迁移）：
 	   — 运行 `python <plugin_home>/infra/archive.py migrate --auto --dry-run` 检测四类触发器（`<plugin_home>` 来自 resolve_entry.py）:
 	     1. 首次迁移：`.governance/archive/index.md` 不存在 AND `plan-tracker.md` > 80 KB AND 已发布版本 ≥ 2
 	     2. 发布强制：出现新的已发布版本后，除最新已发布版本外仍有未归档历史 task
 	     3. task 增量：热文件中可归档 completed task 达到阈值
 	     4. 90 天兜底：长期未归档但仍有可归档历史数据
-	   — dry-run 报告需要归档 → 执行:
+	   — dry-run 报告需要归档 → 呈现 dry-run 报告并通过 AskUserQuestion 确认后执行:
 	     a. 运行 `python <plugin_home>/infra/archive.py migrate --auto`
 	     b. 运行 `python <plugin_home>/infra/verify_workflow.py check-archive-integrity`
 	     c. 输出归档迁移摘要（格式: 📦 治理数据归档完成: 归档{N}个task→..., plan-tracker: {old}KB→{new}KB(-{pct}%)）
 	   — 归档完整性失败 → 记录到 risk-log；发布/版本 bump 收尾场景 MUST 阻断完成
 	   — 无可归档数据 → 跳过归档（不修改文件）
 
-**这就是用户要做的全部：/plugin update → 下次会话 → 一切自动完成。**
-不需要记住命令，不需要读文档，不需要手动操作——agent 自己升级自己。
+**用户要做的仍然只有：/plugin update → 下次会话。** 升级不再静默写文件——检测到版本差即呈现升级待处理摘要（含写操作清单与回滚方式），默认选项为执行升级（推荐）；确认后其余步骤自动完成，用户未响应前零写操作。
 
-### Step 2: 交叉验证（3 项强制检查）
+### Step 2: 交叉验证（3 项强制检查——FEAT-034 起为后置深检）
+**时序（FEAT-034）**：本步骤属深检——在首次交互（Step 1 首次交互前置 ask）之后按需执行，不前置于首次 ask；用户选择推进类动作（发布/版本 bump/治理写回/恢复遗留任务的实际修改）时 MUST 先完成本步骤再继续。健康面未完成时显示「待检查」而非绿色通过。
 对照 `.governance/plan-tracker.md` 和 `.governance/evidence-log.md`：
 
 1. **证据完整性**：
@@ -524,13 +530,14 @@ AskUserQuestion 是唯一合法的用户提问方式。禁止内联文字提问�
    Step 1: Read `.governance/archive/index.md` → grep 目标 ID
    Step 2: 从 index.md 获取归档文件路径 → Read 该归档文件 → 定位具体条目
    总开销: 2 次 Read call
+- 治理文件读取编码（FIX-278 G4/F）：pwsh 读取 `.governance` 治理文件 MUST 显式 UTF-8——`Get-Content -Encoding UTF8`（或 `[System.IO.File]::ReadAllText($p, [System.Text.Encoding]::UTF8)`）；禁止裸 `Get-Content`——Windows 默认 ANSI/GBK 解码会产生 mojibake（AUDIT-147 D6 乱码实证）
 
 ```
 **strict profile 注入模板**（完整版 + Strict 强制规则——自包含，不依赖 SKILL.md 加载状态）：
 ```markdown
 ## Governance Bootstrap（强制 — 每次会话第一动作）
 
-> @bootstrap-version: 0.81.0（模板最低引导版本——低于 SKILL frontmatter active_version 即陈旧，先升级本段再继续）
+> @bootstrap-version: 0.83.0（模板最低引导版本——低于 SKILL frontmatter active_version 即陈旧，先升级本段再继续）
 
 **⚡ SELF-CHECK（在任何输出之前先问自己）**：
 1. 我是否已经读了 `.governance/plan-tracker.md`？否 → **立即停止，先去读**
@@ -599,18 +606,20 @@ AskUserQuestion 是唯一合法的用户提问方式。禁止内联文字提问�
 - 复盘/维护 → Maintenance
 
 ### Step 1: 读 plan-tracker + 跨会话恢复
-1. 读取 `.governance/plan-tracker.md` 的热数据段落（按以下优先级）:
+1. **热数据快路径（FEAT-034 首次交互前置）**：优先运行 `python <plugin_home>/infra/verify_workflow.py governance-bootstrap --format json`（只读聚合 ≤8KB——resolve envelope + 状态投影 + 候选 + migration 标志 + next_actions，即下方 a~f 热数据段落的单命令投影）获取热数据；聚合命令不可用（命令缺失/超时/解析失败）时 **fallback 原六段读取**——读取 `.governance/plan-tracker.md` 的热数据段落（按以下优先级）:
    a. `## 项目配置` — 当前 phase/stage/gate/mode/permission_mode/工作流版本
    b. `## Gate 状态跟踪` — 所有 Gate 状态
    c. `## 项目总览` — 当前统计（任务数/已完成/阻塞中/风险数）
    d. `## 当前活跃事项` — 仅未完成/进行中的 P0/P1/P2 任务
    e. 当前活跃版本的 task 表 — 版本描述中含"进行中"或"未发布"的段落
    f. `## 1.0.0 依赖链` 或等效的活跃依赖链
-   — 以下段落按需读取（不在 bootstrap 阶段强制读取）:
+   — 快路径输出缺某个热数据面（候选为空/字段缺失/解析失败）时，用 read 工具按需展开对应段落；以下段落仍按需读取（不在 bootstrap 阶段强制读取）:
    g. `## 需求跟踪矩阵`
    h. `## 变更控制`
    i. `## 版本规划` 中的"规划纪律"部分
    j. 版本规划中的"里程碑"和"版本路线图"
+
+   **首次交互前置（FEAT-034——快路径后立即 ask）**：热数据就绪后 MUST 立即呈现最小状态行（模式确认句 + 阶段/Gate 摘要 + carry-over/风险计数）并通过 AskUserQuestion 进入首次用户交互（会话恢复引导 / 下一步选项）；Step 2 交叉验证等深检**后置**为用户选择后按需执行，深检结果不作为本次 ask 的前置条件。健康面未检查时（`governance-bootstrap` 的 `health.state="deferred"`）状态行健康位显示「待检查」而非绿色通过；深检后置 ≠ 深检可选——用户选择推进类动作（发布/版本 bump/治理写回/恢复遗留任务的实际修改）前 MUST 补齐对应深检。升级 ask 时序（FEAT-035）：若快路径检测到版本差距，升级待处理确认随本次首次交互 ask 一并呈现征询——与 /governance Scenario C 时序同口径，不拆分为先后两次弹窗；确认前不执行升级写序列。
 
 2. **AI Execution Packet 优先读取（0.38.0+）**：
    — IF `.governance/execution-packets.json` 存在:
@@ -638,20 +647,22 @@ AskUserQuestion 是唯一合法的用户提问方式。禁止内联文字提问�
 
 **Hook 存活检测**（系统级约束——不依赖 agent 自觉）：检查 `.git/hooks/pre-commit`、`.git/hooks/commit-msg` 和 `.git/hooks/post-commit` 是否存在。缺失 → ⚠️ 治理 hook 缺失——agent 的 commit 不受系统约束。**MUST** 先运行 `python <plugin_home>/infra/resolve_entry.py --json` 拿到 `plugin_home`（`<plugin_home>` 取代 `$WORKFLOW_HOME` 路径考古；DEC-096），再提示重装：`cp "<plugin_home>/infra/hooks/pre-commit" .git/hooks/pre-commit && cp "<plugin_home>/infra/hooks/commit-msg" .git/hooks/commit-msg && cp "<plugin_home>/infra/hooks/post-commit" .git/hooks/post-commit`
 
-**版本变化自动检测 + bootstrap 自升级**（用户更新插件后首次会话自动触发——零用户行动）：
+**版本变化检测 + bootstrap 升级（提示 + 确认后执行——FEAT-035；用户未响应前零写操作）**：
 1. 读取 plan-tracker `工作流版本` 和当前安装版本（SKILL.md frontmatter `version`）
-2. **IF** 当前版本 > 记录版本 → 执行以下自动序列：
+2. **IF** 当前版本 > 记录版本 → **呈现升级待处理**（AskUserQuestion 升级摘要：版本跨度 + CHANGELOG 要点 + 将执行的写操作清单（显式列出目标文件）+ 回滚方式；选项默认「执行升级（推荐）」），**用户确认后才执行**以下序列——确认前不执行任何写操作：
 
-   **A. 自动输出更新摘要**（告知用户）：
+   **A. 呈现更新摘要**（并入升级确认 AskUserQuestion——确认前零写操作）：
    - 版本跨度 + 从 CHANGELOG.md 提取的新增/修复要点
 
-   **B. 自动升级 平台原生入口文件 bootstrap 段**（agent 自己升级自己）：
+   **B. 升级 平台原生入口文件 bootstrap 段**（用户确认升级后执行——agent 执行，无需手动操作）：
    - 读取当前 平台原生入口文件，找到 `## Governance Bootstrap` 段落（FIX-238.2 陈旧标记：段落内 `@bootstrap-version` 头 < SKILL frontmatter `active_version` 即陈旧；无法确定新版本 → 不升级，输出 `/plugin update` 指引）
    - 替换为**与本文件完全一致的最新模板**（按 profile 选精简/完整版）
    - **保留 平台原生入口文件 其余所有内容不变**
-   - 输出：`Bootstrap 已自动升级：v{old} → v{new}。`
+   - 输出：`Bootstrap 已升级：v{old} → v{new}。`
 
-   **C. 自动补全 plan-tracker 缺失结构**（agent 自动补全——不是提示，是直接做）：
+   **深检前置（MUST——DEC-207② P2-1 / M5.5 条 3）**：版本升级写序列属推进类动作——执行 B~E 写操作前 MUST 先完成健康摘要（`check-governance --summary-only`）+ 交叉验证等深检；用户确认升级不免除深检。
+
+   **C. 自动补全 plan-tracker 缺失结构**（用户确认升级后直接执行——不是提示，是直接做）：
    - 项目配置缺少字段？→ 自动添加（permission_mode、工作流版本）
    - 缺少 `## 版本规划` 节？→ 自动添加（版本路线图空表 + 版本里程碑 + V-Gate + 版本规划纪律）
    - 缺少 `## 需求跟踪矩阵` 节？→ 自动添加
@@ -659,28 +670,28 @@ AskUserQuestion 是唯一合法的用户提问方式。禁止内联文字提问�
    - 变更控制流程中是旧版（无快速通道）？→ 自动更新为含快速通道的版本
    - `.git/hooks/post-commit` 不存在？→ 提示一次性命令（agent 不能自动写 .git/hooks/——安全问题）
      - `.git/hooks/commit-msg` 不存在？→ 提示一次性命令（同上）
-   - **自动清理升级残留**（每版本更新时执行）：运行 `python <plugin_home>/infra/cleanup.py`（`<plugin_home>` 来自 resolve_entry.py；基于 manifest.json 的结构 diff——不在 canonical manifest 中的文件 = 残留，自动删除）。输出 `✅ 已清理 {N} 个过期文件/目录`
+   - **插件残留清理删除面**（cleanup.py——dry-run 先行 + 确认后执行；每版本更新时执行）：先运行 `python <plugin_home>/infra/cleanup.py --dry-run` 呈现待删报告（`<plugin_home>` 来自 resolve_entry.py；基于 manifest.json 的结构 diff——不在 canonical manifest 中的文件 = 残留；`.governance/`、`.git/` 硬编码保护不触碰），通过 AskUserQuestion 确认后再执行 `python <plugin_home>/infra/cleanup.py`（不确认 → 跳过清理，不影响其余步骤）。输出 `✅ 已清理 {N} 个过期文件/目录`
 
    **D. 更新 plan-tracker `工作流版本`** 为当前版本
 
 
-	   **E. 持续归档触发检测与执行**（用户更新插件后自动触发——零用户操作）：
+	   **E. 持续归档触发检测与执行**（用户确认升级后执行；归档写操作同 ask-确认前置——dry-run 报告先行呈现，AskUserQuestion 确认后才执行迁移）：
 	   — 运行 `python <plugin_home>/infra/archive.py migrate --auto --dry-run` 检测四类触发器（`<plugin_home>` 来自 resolve_entry.py）:
 	     1. 首次迁移：`.governance/archive/index.md` 不存在 AND `plan-tracker.md` > 80 KB AND 已发布版本 ≥ 2
 	     2. 发布强制：出现新的已发布版本后，除最新已发布版本外仍有未归档历史 task
 	     3. task 增量：热文件中可归档 completed task 达到阈值
 	     4. 90 天兜底：长期未归档但仍有可归档历史数据
-	   — dry-run 报告需要归档 → 执行:
+	   — dry-run 报告需要归档 → 呈现 dry-run 报告并通过 AskUserQuestion 确认后执行:
 	     a. 运行 `python <plugin_home>/infra/archive.py migrate --auto`
 	     b. 运行 `python <plugin_home>/infra/verify_workflow.py check-archive-integrity`
 	     c. 输出归档迁移摘要（格式: 📦 治理数据归档完成: 归档{N}个task→..., plan-tracker: {old}KB→{new}KB(-{pct}%)）
 	   — 归档完整性失败 → 记录到 risk-log；发布/版本 bump 收尾场景 MUST 阻断完成
 	   — 无可归档数据 → 跳过归档（不修改文件）
 
-**这就是用户要做的全部：/plugin update → 下次会话 → 一切自动完成。**
-不需要记住命令，不需要读文档，不需要手动操作——agent 自己升级自己。
+**用户要做的仍然只有：/plugin update → 下次会话。** 升级不再静默写文件——检测到版本差即呈现升级待处理摘要（含写操作清单与回滚方式），默认选项为执行升级（推荐）；确认后其余步骤自动完成，用户未响应前零写操作。
 
-### Step 2: 交叉验证（3 项强制检查）
+### Step 2: 交叉验证（3 项强制检查——FEAT-034 起为后置深检）
+**时序（FEAT-034）**：本步骤属深检——在首次交互（Step 1 首次交互前置 ask）之后按需执行，不前置于首次 ask；用户选择推进类动作（发布/版本 bump/治理写回/恢复遗留任务的实际修改）时 MUST 先完成本步骤再继续。健康面未完成时显示「待检查」而非绿色通过。
 对照 `.governance/plan-tracker.md` 和 `.governance/evidence-log.md`：
 
 1. **证据完整性**：
@@ -820,6 +831,48 @@ AskUserQuestion 是唯一合法的用户提问方式。禁止内联文字提问�
 
 ```
 
+**secondary-thin 注入模板**（薄指针版——FEAT-037 双入口去重；仅当工作区同时存在 AGENTS.md 与 CLAUDE.md 且本文件为次要平台入口时注入；`{PRIMARY_ENTRY}` 由生成机制替换为主入口文件名；段内小节只用三级标题——薄指针段边界=下一个二级标题）：
+```markdown
+## Governance Bootstrap（强制 — 每次会话第一动作 · 次要平台入口薄指针）
+
+> @bootstrap-version: 0.83.0（薄指针版——FEAT-037 双入口去重；完整 bootstrap 见 {PRIMARY_ENTRY}（主入口），行为约束以主入口为准）
+
+本工作区存在两个平台原生入口文件。本文件是次要平台入口（Codex/opencode 等）的薄指针投影，不复制完整模板；主入口 `{PRIMARY_ENTRY}` 携带完整 bootstrap（Step 0~4、交叉验证、阶段跳跃防护、Agent Team、Bootstrap 变更纪律）。
+
+### 最小存活检查（第一动作）
+
+1. 运行 `python <plugin_home>/skills/software-project-governance/infra/resolve_entry.py --json`；`resolved_root_ok == false` → MUST STOP，不呈现治理状态（fail-closed）。
+2. 读 `.governance/plan-tracker.md`；阶段/Gate/模式未知 → 读 `## 项目配置` 节；`.governance/` 不存在 → 提醒先初始化。
+3. 完整规则：加载 `skills/software-project-governance/SKILL.md`（或读主入口 `{PRIMARY_ENTRY}`）。
+
+### SELF-CHECK（在任何输出之前）
+
+1. 读了 `.governance/plan-tracker.md`？否 → 立即停止，先读。
+2. 知道当前阶段/Gate/模式？否 → 读 plan-tracker `## 项目配置`。
+3. 即将输出问句（吗？/？/要不要/是否）？→ 删除问句，改用 AskUserQuestion 工具。
+4. 到达交互边界（呈现选项/完成工作单元/用户需选择）？→ MUST 使用 AskUserQuestion。
+5. 即将写入的修改/证据是否有事实依据？无文件/命令/测试/日志支撑 → 标 `BLOCKED`/`待验证`，禁止编造。
+
+### 模式确认（每次会话一句，模式自适应）
+
+- **always-on** → `Governance: {trigger_mode} x {permission_mode} | stage: {stage}, Gate {gate}: {status}, {risk_count} risk(s)`
+- **on-demand** → `Governance: on-demand x {permission_mode}`（仅用户显式调用时展开完整状态）
+- **silent-track** → 不输出治理面板/风险统计/任务进度表
+
+### 治理状态快速入口
+
+- 计划跟踪 `.governance/plan-tracker.md` · 证据 `.governance/evidence-log.md` · 决策 `.governance/decision-log.md` · 风险 `.governance/risk-log.md`
+- 验证命令：`python <plugin_home>/skills/software-project-governance/infra/verify_workflow.py`（`<plugin_home>` 来自 resolve_entry.py）
+- 治理文件读取编码（FIX-278）：pwsh 读 `.governance` 文件 MUST 显式 UTF-8——`Get-Content -Encoding UTF8` 或 `[IO.File]::ReadAllText($p,[Text.Encoding]::UTF8)`；裸 `Get-Content` 在 Windows 默认 GBK 解码产生 mojibake/乱码。
+- 完整治理交互：`/governance`；完整 bootstrap（SELF-CHECK 全文/干活前/提问规则/收工检查）：`{PRIMARY_ENTRY}`（主入口）
+```
+
+**双入口去重（FEAT-037——单一 canonical 源生成薄投影）**：
+- **IF** 项目根目录同时存在 `AGENTS.md` 与 `CLAUDE.md` → 主入口（platform primary 声明：默认 `CLAUDE.md`，见 sync_entry_projection.py `PRIMARY_DEFAULT`）注入所选 profile **完整模板**；次要入口注入 **secondary-thin 薄指针模板**（`{PRIMARY_ENTRY}` → 主入口文件名，≤40 行 / ≤3072 字节）。**禁止两份完整模板并存**（会话注入成本翻倍——AUDIT-154 §5.3）。
+- **IF** 仅存在一个入口文件 → 该文件注入完整模板（单入口行为不变——向后兼容）。
+- **确定性执行路径**：`python <plugin_home>/skills/software-project-governance/infra/sync_entry_projection.py --project <项目根> --write`（幂等——跑两次零 diff；默认只读 check）。agent 手工编辑入口 bootstrap 段 = 违反"模板是唯一事实源"纪律。
+- **投影同步守护**：`verify_workflow.py check-projection-sync` 附带运行 `check-entry-bootstrap-sync`（主入口段 == canonical 全文；薄指针段 == 渲染结果且 ≤40 行/≤3KB/最小存活检查齐全；双全模板并存 = FAIL）。
+- **薄指针保留的最小存活检查**（去重不得删除行为约束）：resolve_entry 第一动作、先读 plan-tracker、SELF-CHECK（对应完整版 6 条的压缩映射：完整 1→薄 1、完整 2+3→薄 2、完整 4→薄 3、完整 5→薄 4、完整 6→薄 5；完整 3 的 carry-over 恢复由主入口指针承载）、模式确认、治理状态快速入口、主入口指针。
 
 ### Step 8: 安装 git governance hooks（系统级约束——不依赖 agent 自觉）
 

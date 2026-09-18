@@ -1,10 +1,10 @@
 # governance-update — 更新 平台原生入口文件 bootstrap（已弃用）
 
-> **已弃用——使用 `/governance`**，它会自动检测版本差距并触发 Scenario C 升级。本命令保留为手动回退。
+> **已弃用——使用 `/governance`**，它会自动检测版本差距并路由到 Scenario C 升级（ask-确认前置——FEAT-035）。本命令保留为手动回退。
 
 更新 平台原生入口文件 中的 Governance Bootstrap 段到最新版本。**不触碰 `.governance/` 目录中的任何文件**。
 
-**注意**：此命令是手动回退选项。正常情况下，bootstrap 在每次会话开始时会**自动检测版本变化并自升级**——用户不需要手动运行此命令。仅在自动升级失败或用户想立即升级（不等下次会话）时使用。
+**注意**：此命令是手动回退选项。正常情况下，bootstrap 升级由会话开始的版本变化检测承接——检测到版本差距即**呈现升级待处理摘要并经 AskUserQuestion 确认**（FEAT-035 ask-确认前置；用户未响应前零写操作），用户不需要手动运行此命令。仅在确认流程受阻（如入口文件 bootstrap 段无法解析）或用户想立即升级（不等下次会话）时使用本命令。另：本命令只覆盖升级写序列的入口段子集——完整升级序列（plan-tracker 结构补全 / 插件残留清理 / 归档迁移）仍以 `/governance` Scenario C 为准。
 
 ## 输入参数
 
@@ -35,15 +35,16 @@
 ### Step 4: 生成最新 bootstrap 模板
 - 根据 `profile` 选择模板：
   - **lightweight** → 精简版（3 节）
-  - **standard / strict** → 完整版（Step 0~4 + 干活前检查 + 提问规则 + 关键决策 + 收工前检查 + 版本变化自动检测）
+  - **standard / strict** → 完整版（Step 0~4 + 干活前检查 + 提问规则 + 关键决策 + 收工前检查 + 版本变化检测 + bootstrap 升级（提示 + 确认后执行——FEAT-035））
 - 模板内容 = `governance-init.md` Step 7 中的对应注入模板
 
-### Step 5: 替换 bootstrap 段
-- 在 `平台原生入口文件` 中找到 `## Governance Bootstrap` 段落（从该行到下一个 `## ` 标题或文件末尾）
+### Step 5: 确认后替换 bootstrap 段（ask-确认前置——FEAT-035）
+- **确认门（先确认后写）**：执行任何写操作前，通过 AskUserQuestion 呈现将执行的写操作清单（平台原生入口文件 bootstrap 段 + `.governance/plan-tracker.md` 的 `工作流版本` 字段）与回滚方式（bootstrap 段按 git/备份恢复、`工作流版本` 字段回退）——**用户确认前不执行任何写操作**
+- 用户确认后：在 `平台原生入口文件` 中找到 `## Governance Bootstrap` 段落（从该行到下一个 `## ` 标题或文件末尾）
 - 替换为最新模板
 - **保留 平台原生入口文件 中其他所有内容不变**
 
-### Step 6: 更新 plan-tracker 工作流版本
+### Step 6: 确认后更新 plan-tracker 工作流版本
 - 读取当前安装的 workflow 版本（从 `skills/software-project-governance/SKILL.md` frontmatter）
 - 更新 `.governance/plan-tracker.md` 中的 `工作流版本` 为当前版本
 

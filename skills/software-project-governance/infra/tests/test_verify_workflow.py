@@ -38,6 +38,40 @@ import verify_workflow as vw
 import cleanup as cleanup_mod
 
 
+# ── FEAT-038 (AUDIT-154 A-7) governance-document resolution helpers ─────────
+#
+# `/governance` was split into a router layer (`commands/governance.md`) plus
+# per-Scenario on-demand documents under `commands/governance/`. Content guards
+# that assert a FEAT-035/036 scenario contract must therefore look at the file
+# that OWNS that contract, not at the router layer. These helpers resolve the
+# owning document so the assertions keep guarding the same text.
+GOVERNANCE_ROUTER_DOC = "commands/governance.md"
+GOVERNANCE_SCENARIO_DOCS = tuple(
+    f"commands/governance/scenario-{key}.md" for key in "abcdef"
+)
+GOVERNANCE_SUPPORT_DOCS = (
+    "commands/governance/bootstrap.md",
+    "commands/governance/snapshot-schema.md",
+    "commands/governance/overview.md",
+)
+GOVERNANCE_ALL_DOCS = (
+    (GOVERNANCE_ROUTER_DOC,) + GOVERNANCE_SCENARIO_DOCS + GOVERNANCE_SUPPORT_DOCS
+)
+
+
+def governance_doc(label, fixture=False):
+    """Return the text of a `/governance` document by repo-relative label."""
+    root = vw.ROOT
+    if fixture:
+        root = root / "project" / "e2e-test-project"
+    return (root / label).read_text(encoding="utf-8")
+
+
+def governance_docs(rel_paths, fixture=False):
+    """Map repo-relative document labels to their text."""
+    return {rel: governance_doc(rel, fixture=fixture) for rel in rel_paths}
+
+
 class LoopRuntimeClaimAdapterTests(unittest.TestCase):
     """FIX-197 thin verify_workflow adapter coverage."""
 
@@ -3665,9 +3699,11 @@ class GovernancePackStatusTests(unittest.TestCase):
         governance_text = status_text + "\nScenario F uses the same Pack summary fields.\n"
         for rel_path, content in {
             "commands/governance-status.md": status_text,
-            "commands/governance.md": governance_text,
+            # FEAT-038: the `/governance` pack doc-surface contract is owned by
+            # the on-demand Scenario F document on both faces.
+            "commands/governance/scenario-f.md": governance_text,
             "project/e2e-test-project/commands/governance-status.md": status_text,
-            "project/e2e-test-project/commands/governance.md": governance_text,
+            "project/e2e-test-project/commands/governance/scenario-f.md": governance_text,
         }.items():
             path = root / rel_path
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -3839,6 +3875,11 @@ class GovernanceContextDiscoveryTests(unittest.TestCase):
             )
             (commands / "governance.md").write_text(contract, encoding="utf-8")
             (commands / "governance-status.md").write_text(contract, encoding="utf-8")
+            # FEAT-038: the resume/unfinished-work contract is owned by the
+            # on-demand Scenario F document.
+            scenario_f = commands / "governance" / "scenario-f.md"
+            scenario_f.parent.mkdir(parents=True, exist_ok=True)
+            scenario_f.write_text(contract, encoding="utf-8")
 
     def test_discovers_next_priority_from_session_snapshot(self):
         snapshot = "\n".join([
@@ -8682,7 +8723,13 @@ class E2ECommandMatrixTests(unittest.TestCase):
                 "No-overclaim boundary\n"
             )
             (e2e_dir / "commands" / "governance.md").write_text(
-                "Scenario F\nAskUserQuestion\nCoordinator\n" + trust_snapshot_contract,
+                "Scenario F\nAskUserQuestion\nCoordinator\n"
+                "commands/governance/scenario-f.md\n",
+                encoding="utf-8",
+            )
+            (e2e_dir / "commands" / "governance").mkdir(parents=True, exist_ok=True)
+            (e2e_dir / "commands" / "governance" / "scenario-f.md").write_text(
+                "Scenario F\n" + trust_snapshot_contract,
                 encoding="utf-8",
             )
             (e2e_dir / "commands" / "governance-status.md").write_text(
@@ -9494,14 +9541,15 @@ class GovernanceStatusContractTests(unittest.TestCase):
         self.assertEqual(missing, [])
 
     def test_governance_status_docs_require_delivery_trust_snapshot_contract(self):
+        """FEAT-038: the Delivery Trust Snapshot contract now lives in the
+        Scenario F document; the router layer points at it. The contract
+        assertions follow the owning document (the router is asserted to carry
+        the routing pointer instead)."""
         status_text = (vw.ROOT / "commands" / "governance-status.md").read_text(encoding="utf-8")
-        governance_text = (vw.ROOT / "commands" / "governance.md").read_text(encoding="utf-8")
         fixture_status = (
             vw.ROOT / "project" / "e2e-test-project" / "commands" / "governance-status.md"
         ).read_text(encoding="utf-8")
-        fixture_governance = (
-            vw.ROOT / "project" / "e2e-test-project" / "commands" / "governance.md"
-        ).read_text(encoding="utf-8")
+        scenario_f = "commands/governance/scenario-f.md"
 
         required = [
             "Delivery Trust Snapshot",
@@ -9544,20 +9592,25 @@ class GovernanceStatusContractTests(unittest.TestCase):
         ]
         for label, text in {
             "commands/governance-status.md": status_text,
-            "commands/governance.md": governance_text,
+            f"commands/governance/scenario-f.md (source)": governance_doc(scenario_f),
+            f"commands/governance/scenario-f.md (fixture)": governance_doc(scenario_f, fixture=True),
             "project/e2e-test-project/commands/governance-status.md": fixture_status,
-            "project/e2e-test-project/commands/governance.md": fixture_governance,
         }.items():
             with self.subTest(label=label):
                 self.assertEqual([needle for needle in required if needle not in text], [])
+        # The router layer must route to the owning document for this contract.
+        router = governance_doc(GOVERNANCE_ROUTER_DOC)
+        self.assertIn("commands/governance/scenario-f.md", router)
+        self.assertIn("Delivery Trust Snapshot", router)
 
     def test_governance_snapshot_dual_contract_default_view_guard(self):
         """FEAT-036: the default interactive view is the <=8-field compact
         contract with anomaly visibility, and the full machine contract stays
         split-accurate: a 20-field CLI snapshot reachable via the existing
         status CLI carriers plus a 4-field pack doc-surface contract guarded
-        by check-governance-pack-status (no parallel contract). Guards both
-        canonical command docs."""
+        by check-governance-pack-status (no parallel contract). Guards the
+        canonical command docs — FEAT-038: the `/governance` side of the
+        contract is owned by the Scenario F document."""
         dual_markers = [
             "默认交互视图合约",
             "≤8 字段",
@@ -9579,8 +9632,8 @@ class GovernanceStatusContractTests(unittest.TestCase):
             "Health:", "Next:", "Decision:", "Full:",
         ]
         self.assertEqual(len(compact_labels), 8)
-        for rel in ("commands/governance.md", "commands/governance-status.md"):
-            text = (vw.ROOT / rel).read_text(encoding="utf-8")
+        for rel in ("commands/governance/scenario-f.md", "commands/governance-status.md"):
+            text = governance_doc(rel)
             with self.subTest(file=rel):
                 missing = [m for m in dual_markers if m not in text]
                 self.assertEqual(missing, [])
@@ -9671,7 +9724,8 @@ class GovernanceStatusContractTests(unittest.TestCase):
         self.assertFalse(ok)
 
     def test_governance_scenario_c_matches_continuous_archive_step_e(self):
-        governance = (vw.ROOT / "commands" / "governance.md").read_text(encoding="utf-8")
+        # FEAT-038: the Scenario C body now lives in the on-demand document.
+        governance = governance_doc("commands/governance/scenario-c.md")
         init = (vw.ROOT / "commands" / "governance-init.md").read_text(encoding="utf-8")
 
         required = [
@@ -9699,8 +9753,11 @@ class GovernanceStatusContractTests(unittest.TestCase):
         AskUserQuestion and performs zero writes before the user responds.
         R1 D7 erratum: this FEAT-035 test family lives inside
         GovernanceStatusContractTests; the declared standalone class name
-        "UpgradeWriteConfirmationTests" was never created."""
-        governance = (vw.ROOT / "commands" / "governance.md").read_text(encoding="utf-8")
+        "UpgradeWriteConfirmationTests" was never created.
+        FEAT-038: the Scenario C body is now the on-demand document
+        `commands/governance/scenario-c.md`; the router layer carries a
+        no-regression note restating the zero-write gate."""
+        governance = governance_doc("commands/governance/scenario-c.md")
         required = [
             "AskUserQuestion 呈现升级摘要",
             "用户未响应前零写操作",
@@ -9715,12 +9772,16 @@ class GovernanceStatusContractTests(unittest.TestCase):
         self.assertEqual([needle for needle in required if needle not in governance], [])
         for stale in ("自动升级序列", "已自动升级", "自动删除"):
             self.assertNotIn(stale, governance)
+        # FEAT-038 no-regression: the router layer keeps the gate visible.
+        router = governance_doc(GOVERNANCE_ROUTER_DOC)
+        self.assertIn("未响应前零写操作", router)
+        self.assertIn("commands/governance/scenario-c.md", router)
 
     def test_scenario_c_archive_migration_dry_run_confirmed(self):
         """FEAT-035: archive migration (archive.py migrate) follows the same
         ask-confirm gate — the dry-run report is presented first and the
         migration runs only after AskUserQuestion confirmation."""
-        governance = (vw.ROOT / "commands" / "governance.md").read_text(encoding="utf-8")
+        governance = governance_doc("commands/governance/scenario-c.md")
         self.assertIn("呈现 dry-run 报告并通过 AskUserQuestion 确认", governance)
 
     def test_init_templates_present_pending_upgrade_and_zero_write(self):
@@ -9744,10 +9805,16 @@ class GovernanceStatusContractTests(unittest.TestCase):
         """DEC-207② P2-1: the version-upgrade write sequence is explicitly a
         推进类动作 — the M5.5 rule 3 deep-check precondition is documented at
         the Scenario C linkage point, in the bootstrap templates and in the
-        entry SKILL, closing the two-reading ambiguity."""
-        governance = (vw.ROOT / "commands" / "governance.md").read_text(encoding="utf-8")
-        self.assertIn("M5.5 条 3", governance)
-        self.assertIn("版本升级写序列属推进类动作", governance)
+        entry SKILL, closing the two-reading ambiguity.
+        FEAT-038: the Scenario C linkage point is the on-demand Scenario C
+        document; the router layer restates the same rule in its cross-scenario
+        note so the router alone is never silent about it."""
+        scenario_c = governance_doc("commands/governance/scenario-c.md")
+        self.assertIn("M5.5 条 3", scenario_c)
+        self.assertIn("版本升级写序列属推进类动作", scenario_c)
+        router = governance_doc(GOVERNANCE_ROUTER_DOC)
+        self.assertIn("M5.5 条 3", router)
+        self.assertIn("版本升级写序列属推进类动作", router)
         init = (vw.ROOT / "commands" / "governance-init.md").read_text(encoding="utf-8")
         self.assertIn("DEC-207② P2-1 / M5.5 条 3", init)
         skill = (vw.ROOT / "skills/software-project-governance/SKILL.md").read_text(encoding="utf-8")
@@ -9759,8 +9826,9 @@ class GovernanceStatusContractTests(unittest.TestCase):
         bootstrap template C-2 step across BOTH entry points — dry-run report
         first, deletion only after AskUserQuestion confirmation.  The old
         "自动删除" wording (which contradicted governance-cleanup.md's own
-        dry-run-first safety guarantee) is retired from both faces."""
-        governance = (vw.ROOT / "commands" / "governance.md").read_text(encoding="utf-8")
+        dry-run-first safety guarantee) is retired from both faces.
+        FEAT-038: the `/governance` face is the on-demand Scenario C document."""
+        governance = governance_doc("commands/governance/scenario-c.md")
         init = (vw.ROOT / "commands" / "governance-init.md").read_text(encoding="utf-8")
         cleanup = (vw.ROOT / "commands" / "governance-cleanup.md").read_text(encoding="utf-8")
         for text in (governance, init):
@@ -15430,7 +15498,10 @@ class EntryBootstrapTemplateTests(unittest.TestCase):
     POSIX/PowerShell dual syntax and the @bootstrap-version upgrade chain."""
 
     def test_governance_command_documents_platform_injection_and_vendor_fallback(self):
-        text = (vw.ROOT / "commands" / "governance.md").read_text(encoding="utf-8")
+        """FEAT-038: the entry-resolution protocol (FIX-238) now lives in the
+        on-demand `commands/governance/bootstrap.md`; the router layer carries
+        the first action sentence and routes to it."""
+        text = governance_doc("commands/governance/bootstrap.md")
         for marker in (
             "$CLAUDE_PLUGIN_ROOT",
             "file:",
@@ -15442,6 +15513,9 @@ class EntryBootstrapTemplateTests(unittest.TestCase):
             "SPG_WEB_INSTALL_TIMEOUT",
         ):
             self.assertIn(marker, text)
+        router = governance_doc(GOVERNANCE_ROUTER_DOC)
+        self.assertIn("resolve_entry.py --json", router)
+        self.assertIn("commands/governance/bootstrap.md", router)
 
     def test_governance_init_documents_platform_injection_and_dual_syntax(self):
         text = (vw.ROOT / "commands" / "governance-init.md").read_text(encoding="utf-8")
@@ -15450,9 +15524,13 @@ class EntryBootstrapTemplateTests(unittest.TestCase):
             self.assertIn(marker, text)
 
     def test_bootstrap_version_upgrade_chain_documented_in_governance_command(self):
-        text = (vw.ROOT / "commands" / "governance.md").read_text(encoding="utf-8")
+        """FEAT-038: the FIX-238.2 upgrade chain moved to the on-demand
+        `commands/governance/bootstrap.md` together with the entry protocol."""
+        text = governance_doc("commands/governance/bootstrap.md")
         for marker in ("@bootstrap-version", "陈旧", "/plugin update", "不升级"):
             self.assertIn(marker, text)
+        router = governance_doc(GOVERNANCE_ROUTER_DOC)
+        self.assertIn("bootstrap.md", router)
 
     def test_bootstrap_version_marker_injected_into_all_profiles(self):
         text = (vw.ROOT / "commands" / "governance-init.md").read_text(encoding="utf-8")
@@ -15492,11 +15570,17 @@ class EntryBootstrapTemplateTests(unittest.TestCase):
             )
 
     def test_e2e_fixture_mirrors_bootstrap_script_and_markers(self):
+        """FEAT-038: the fixture mirror must carry the router layer AND the
+        on-demand entry-resolution document — the bootstrap markers moved with
+        the FIX-238 protocol."""
         fixture_commands = vw.ROOT / "project/e2e-test-project/commands"
-        governance = (fixture_commands / "governance.md").read_text(encoding="utf-8")
+        governance = governance_doc("commands/governance/bootstrap.md", fixture=True)
+        router = governance_doc(GOVERNANCE_ROUTER_DOC, fixture=True)
         init = (fixture_commands / "governance-init.md").read_text(encoding="utf-8")
         self.assertIn("bootstrap.sh", governance)
         self.assertIn("bootstrap.cmd", governance)
+        self.assertIn("@bootstrap-version", governance)
+        self.assertIn("commands/governance/bootstrap.md", router)
         self.assertIn("@bootstrap-version", init)
         # R1 D7b: the fixture mirror also carries the FEAT-035 zero-write
         # marker, so future canonical drift of the upgrade-confirm protocol
@@ -19873,6 +19957,754 @@ class ReviewFileSuffixAwarenessTests(unittest.TestCase):
             self.assertEqual(r["verdict"], "PASS")
             self.assertEqual(r["stats"]["files_unmatched"], 0)
             self.assertEqual(r["stats"]["files_judged"], 2)
+
+
+class Feat039InjectionBudgetTests(unittest.TestCase):
+    """FEAT-039 (0.84.0 slice A-8): governance self-resource budget gate.
+
+    AUDIT-154 §5 / §8: the workflow ships quality gates but no budget gate for
+    its OWN injected surfaces, so a slimming pass inevitably rebounds. This
+    suite pins the check that prices the ACTUAL LOADED SET (multi-file sum —
+    splitting a file across surfaces must not evade the budget), the
+    documented tokenizer calibration, and the fail-closed resolution of every
+    surface's canonical source.
+
+    Measurement fixes used here are COPIED from the real sources (canonical
+    template files / the live tree) and in every case the threshold is DERIVED
+    from that same measured value, so normal growth never reddens the suite —
+    only a full surface going missing or silent (fail-open) does.
+    """
+
+    # ── tokenizer calibration (documented assumption face) ─────────────────
+
+    def test_token_estimate_ascii_matches_host_density(self):
+        """ASCII-dominant text prices identically under both calibrations.
+
+        The ASCII arm of ``estimate_surface_tokens`` IS the host rate
+        (``ceil(chars / 4)``), so ASCII text must price the SAME under both
+        calibrations; otherwise a single-file ASCII surface could regress while
+        both numbers stay put. The two non-ASCII arms (CJK = 1 token/char,
+        non-CJK/non-ASCII = ``ceil(chars * 2 / 5)``) are the conservative ones.
+        """
+        text = "The governance workflow checks anchors and budgets.\n" * 40
+        self.assertEqual(vw.count_cjk_chars(text), 0)
+        self.assertEqual(vw.estimate_surface_tokens(text),
+                         vw.estimate_surface_tokens_host(text))
+        self.assertEqual(vw.estimate_surface_tokens_host(text),
+                         -(-len(text) // 4))
+
+    def test_token_estimate_is_never_looser_than_host_on_any_script(self):
+        """Cross-script invariant: ``tokens >= tokens_host`` always."""
+        for text in ("budget gate", "预算门禁", "mixed 混合 text 2026",
+                     "a", "。" * 50):
+            self.assertGreaterEqual(vw.estimate_surface_tokens(text),
+                                    vw.estimate_surface_tokens_host(text),
+                                    text)
+
+    def test_token_estimate_cjk_never_undercounts_host(self):
+        """CJK text prices ABOVE the host density (1 tok/char vs 1 tok/4 chars).
+
+        Chinese is the governance documentation's dominant script and a real
+        BPE tokenizer spends ≈1 token per Han character; pricing it at the
+        host's 4-chars-per-token density would under-report by 3-4x and make
+        the budget gate blind exactly where the cost lives.
+        """
+        for text in ("治理工作流注入面预算门禁检查",
+                     "复审必达：Reviewer 结论 NEEDS_CHANGE 且 round<3",
+                     "a" * 10 + "治理" * 10):
+            tokens = vw.estimate_surface_tokens(text)
+            host = vw.estimate_surface_tokens_host(text)
+            self.assertGreater(tokens, host, text)
+            cjk = vw.count_cjk_chars(text)
+            ascii_chars = vw.count_ascii_chars(text)
+            other = len(text) - cjk - ascii_chars
+            self.assertEqual(tokens, cjk + -(-ascii_chars // 4)
+                             + -(-other * 2 // 5))
+
+    def test_token_estimate_empty_is_zero(self):
+        self.assertEqual(vw.estimate_surface_tokens(""), 0)
+        self.assertEqual(vw.estimate_surface_tokens_host(""), 0)
+
+    def test_token_estimate_is_monotonic(self):
+        """Growing a surface in either script must raise the price — a
+        calibration that saturates would let unbounded growth pass."""
+        base = "surface"
+        self.assertLess(vw.estimate_surface_tokens(base),
+                        vw.estimate_surface_tokens(base + " more text"))
+        self.assertLess(vw.estimate_surface_tokens("治理"),
+                        vw.estimate_surface_tokens("治理工作流"))
+
+    # ── surface resolution (canonical sources, fail-closed) ────────────────
+
+    def test_live_tree_resolves_every_surface(self):
+        """Every declared surface resolves to non-empty text on the live tree.
+
+        ``load_injection_surface`` returning "" is the fail-closed signal; an
+        empty surface silently contributes 0 tokens and would let the gate
+        pass while injecting nothing.
+        """
+        for surface in vw.set_injection_budget_surface_profiles(
+                vw.INJECTION_BUDGET_DEFAULT_PROFILE):
+            text = vw.load_injection_surface(surface, vw.ROOT)
+            self.assertTrue(text, surface["name"])
+
+    def test_persona_surface_is_prompt_not_template_file(self):
+        """The persona surface must price the injected prompt, not the whole
+        composition template (YAML host config + comments are not injected).
+
+        Distinctness anchors the sub-block extraction: a resolver that
+        regressed to whole-file reading would make the two identical.
+        """
+        surfaces = {s["name"]: s for s in vw.set_injection_budget_surface_profiles(
+            vw.INJECTION_BUDGET_DEFAULT_PROFILE)}
+        persona = vw.load_injection_surface(surfaces["persona"], vw.ROOT)
+        template = vw.load_injection_surface(
+            surfaces["agent-instructions"], vw.ROOT)
+        self.assertNotEqual(persona, template)
+        self.assertLess(len(persona.encode("utf-8")),
+                        len((vw.ROOT / surfaces["persona"]["path"]).read_bytes()))
+        self.assertNotIn("agent-instructions", persona)
+
+    def test_persona_prefix_resolver_fails_closed_on_missing_anchor(self):
+        """Rewriting the persona target away from ``@deepseek-ai/dsh-persona``
+        must resolve to "" (FAIL), never fall back to another scalar."""
+        with tempfile.TemporaryDirectory(prefix="feat039_persona_") as td:
+            root = Path(td)
+            rel = "agent-presets/governance/agent.cordis.yml.template"
+            target = root / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            text = (vw.ROOT / rel).read_text(encoding="utf-8")
+            self.assertTrue(
+                vw.extract_persona_prefix_from_template(text),
+                "canonical template must resolve before the negative case")
+            rewritten = text.replace("@deepseek-ai/dsh-persona",
+                                      "@deepseek-ai/dsh-someone-else")
+            target.write_text(rewritten, encoding="utf-8")
+            self.assertEqual(
+                vw.extract_persona_prefix_from_template(
+                    rewritten, display=rel),
+                "")
+            loaded = vw.load_injection_surface(
+                [s for s in vw.set_injection_budget_surface_profiles(
+                    vw.INJECTION_BUDGET_DEFAULT_PROFILE)
+                 if s["scope"] == vw.INJECTION_SURFACE_SCOPE_PERSONA_PREFIX][0],
+                root)
+            self.assertEqual(loaded, "")
+
+    def test_persona_prefix_resolver_rejects_wrong_body(self):
+        """The anchor alone is not enough: the block scalar must still look
+        like the rendered persona prompt (first sentence anchor), so a
+        re-purposed ``prefix:`` under the persona plugin cannot masquerade."""
+        with tempfile.TemporaryDirectory(prefix="feat039_persona_body_") as td:
+            root = Path(td)
+            rel = "agent-presets/governance/agent.cordis.yml.template"
+            target = root / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            text = (vw.ROOT / rel).read_text(encoding="utf-8")
+            swapped = text.replace(
+                "You are a coding agent powered by", "Something else entirely")
+            target.write_text(swapped, encoding="utf-8")
+            # a DIFFERENT file in the same tree, to prove per-surface
+            # independence: one broken anchor must not zero the whole run.
+            other = "adapters/dsh/AGENTS.md.template"
+            (root / other).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(vw.ROOT / other, root / other)
+            self.assertEqual(
+                vw.extract_persona_prefix_from_template(swapped, display=rel),
+                "")
+            surfaces = vw.set_injection_budget_surface_profiles(
+                vw.INJECTION_BUDGET_DEFAULT_PROFILE)
+            persona_surface = [s for s in surfaces
+                               if s["scope"] == vw.INJECTION_SURFACE_SCOPE_PERSONA_PREFIX][0]
+            self.assertEqual(vw.load_injection_surface(persona_surface, root), "")
+            self.assertTrue(vw.load_injection_surface(
+                [s for s in surfaces if s["name"] == "agent-instructions"][0],
+                root))
+
+    def test_entry_template_resolver_fails_closed_on_missing_marker(self):
+        """Dropping a profile's template label must yield "" (FAIL) — for every
+        entry-template surface, not just the dropped one.
+
+        The canonical boundary authority (``sync_entry_projection``) parses the
+        Step 7 block map as a whole: with one label gone every following region
+        shifts, so pricing an "intact-looking" neighbour would price a WRONG
+        slice (the pre-R1 truthiness check could not see that — it accepted a
+        19 KB standard block as the lightweight template). Surfaces from other
+        files stay measurable — that is the independence that matters.
+        """
+        with tempfile.TemporaryDirectory(prefix="feat039_entry_") as td:
+            root = Path(td)
+            rel = "commands/governance-init.md"
+            target = root / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            text = (vw.ROOT / rel).read_text(encoding="utf-8")
+            target.write_text(text, encoding="utf-8")
+            # a DIFFERENT file in the same tree, so the run has a surface that
+            # the broken canonical source cannot invalidate (independence).
+            other = "adapters/dsh/AGENTS.md.template"
+            (root / other).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(vw.ROOT / other, root / other)
+            selected = {}
+            for profile in ("lightweight", "standard"):
+                selected[profile] = [
+                    s for s in vw.set_injection_budget_surface_profiles(profile)
+                    if s["name"] == "entry-template"][0]
+                self.assertTrue(
+                    vw.load_injection_surface(selected[profile], root), profile)
+            dropped = text.replace(vw.ENTRY_TEMPLATE_MARKERS["standard"], "## nope")
+            self.assertNotEqual(dropped, text)
+            target.write_text(dropped, encoding="utf-8")
+            self.assertEqual(
+                vw.load_injection_surface(selected["standard"], root), "")
+            self.assertEqual(
+                vw.load_injection_surface(selected["lightweight"], root), "")
+            # …and the run stays measurable through the surfaces that do not
+            # depend on the broken source (per-file independence).
+            surfaces = vw.set_injection_budget_surface_profiles("lightweight")
+            self.assertTrue(vw.load_injection_surface(
+                [s for s in surfaces if s["name"] == "agent-instructions"][0],
+                root))
+
+    def test_surface_census_declares_its_profile_candidates(self):
+        """Profile selectability is declared as surface data, so a caller (and
+        this suite) can enumerate every selectable template without reaching
+        into a private convention."""
+        matched = [s for s in vw.INJECTION_BUDGET_SURFACES
+                   if s.get("profile_key") == "profile"]
+        self.assertEqual(len(matched), 1)
+        self.assertEqual(tuple(matched[0]["profile_candidates"]),
+                         tuple(vw.INJECTION_BUDGET_PROFILES))
+        for profile in matched[0]["profile_candidates"]:
+            surface = [s for s in vw.set_injection_budget_surface_profiles(
+                profile) if s.get("profile_key") == "profile"][0]
+            self.assertEqual(surface["profile"], profile)
+            self.assertTrue(vw.load_injection_surface(surface, vw.ROOT),
+                            profile)
+
+    def test_template_block_excludes_its_own_heading(self):
+        """The slice must start AFTER the marker line: the heading sentence
+        ('standard profile 注入模板…') is scaffolding, not injected text."""
+        block = vw.extract_marked_block(
+            (vw.ROOT / "commands/governance-init.md").read_text(encoding="utf-8"),
+            vw.ENTRY_TEMPLATE_MARKERS["lightweight"],
+            vw.ENTRY_TEMPLATE_MARKERS["standard"])
+        self.assertTrue(block)
+        self.assertNotIn("注入模板", block.splitlines()[0])
+
+    def test_secondary_thin_is_not_inside_a_canonical_block(self):
+        """Guards the slice boundary: if the secondary-thin template were
+        folded into the strict block, the thin pointer would be double-counted."""
+        standardish = vw.extract_marked_block(
+            (vw.ROOT / "commands/governance-init.md").read_text(encoding="utf-8"),
+            vw.ENTRY_TEMPLATE_MARKERS["strict"],
+            vw.ENTRY_TEMPLATE_MARKERS["secondary-thin"])
+        self.assertTrue(standardish)
+        self.assertNotIn("次要平台入口薄指针", standardish)
+
+    # ── entry-template slice precision (review-FEAT-039 R1: P1-1) ──────────
+    #
+    # The entry-template surfaces must price the canonical Step 7 blocks
+    # EXACTLY as the platform entry files are rendered — the same authority
+    # ``check-entry-bootstrap-sync`` validates the live CLAUDE.md/AGENTS.md
+    # sections against (``sync_entry_projection.extract_canonical_templates``).
+    # The pinned byte counts are that authority's own output at R1 time
+    # (governance-init.md blocks: lightweight 195-257, standard 262-533,
+    # strict 538-830, secondary-thin 836-867): a change to a template — or to
+    # the boundary rule — must redden this test rather than move the price
+    # silently. NOTE the R0 review's fence-pair reading (17,219 / 17,220 /
+    # 2,739) truncated the standard/strict blocks at the nested ``Bootstrap
+    # 变更纪律`` fence and dropped the sections the live entry files DO carry;
+    # the authority above explicitly forbids that ("nested fences cannot
+    # truncate a block").
+    ENTRY_TEMPLATE_CANONICAL_BYTES = {
+        "lightweight": 3904,
+        "standard": 22858,
+        "strict": 23484,
+        "secondary-thin": 2724,
+    }
+
+    def test_entry_template_surfaces_price_the_canonical_blocks(self):
+        """Byte-exact: resolver output == canonical projection, per profile."""
+        from sync_entry_projection import extract_canonical_templates
+        canonical = extract_canonical_templates(
+            (vw.ROOT / "commands/governance-init.md").read_text(encoding="utf-8"))
+        for profile in ("lightweight", "standard", "strict"):
+            surfaces = {s["name"]: s for s in
+                        vw.set_injection_budget_surface_profiles(profile)}
+            resolved = vw.load_injection_surface(
+                surfaces["entry-template"], vw.ROOT)
+            self.assertEqual(resolved, canonical[profile], profile)
+            self.assertEqual(len(resolved.encode("utf-8")),
+                             self.ENTRY_TEMPLATE_CANONICAL_BYTES[profile],
+                             profile)
+        thin = {s["name"]: s for s in vw.set_injection_budget_surface_profiles(
+            "lightweight")}
+        thin_text = vw.load_injection_surface(
+            thin["secondary-entry-template"], vw.ROOT)
+        self.assertEqual(thin_text, canonical["secondary-thin"])
+        self.assertEqual(len(thin_text.encode("utf-8")),
+                         self.ENTRY_TEMPLATE_CANONICAL_BYTES["secondary-thin"])
+
+    def test_entry_template_slice_excludes_text_outside_the_block(self):
+        """Tail precision: neither the next template's label nor the spec prose
+        after a block may be priced into it (R0 priced 1,596 B of trailing
+        '双入口去重' prose + the fence markup into the thin pointer)."""
+        surfaces = {s["name"]: s for s in
+                    vw.set_injection_budget_surface_profiles("standard")}
+        standard = vw.load_injection_surface(surfaces["entry-template"], vw.ROOT)
+        self.assertNotIn(vw.ENTRY_TEMPLATE_MARKERS["strict"], standard)
+        self.assertNotIn("### Step 8", standard)
+        thin = vw.load_injection_surface(
+            surfaces["secondary-entry-template"], vw.ROOT)
+        self.assertNotIn("### Step 8", thin)
+        self.assertNotIn("单一 canonical 源生成薄投影", thin)
+        strict_surfaces = {s["name"]: s for s in
+                           vw.set_injection_budget_surface_profiles("strict")}
+        strict = vw.load_injection_surface(
+            strict_surfaces["entry-template"], vw.ROOT)
+        self.assertNotIn(vw.ENTRY_TEMPLATE_MARKERS["secondary-thin"], strict)
+        self.assertNotIn("### Step 8", strict)
+
+    # ── budget gate (verdict semantics) ────────────────────────────────────
+
+    def test_default_profile_is_the_reference_config(self):
+        self.assertEqual(vw.INJECTION_BUDGET_DEFAULT_PROFILE, "lightweight")
+        self.assertEqual(vw.INJECTION_BUDGET_TOKENS, 6000)
+        self.assertIn(vw.INJECTION_BUDGET_DEFAULT_PROFILE,
+                      vw.INJECTION_BUDGET_PROFILES)
+
+    def test_live_resident_baseline_is_within_budget(self):
+        """The reference (lightweight) resident set must stay within the
+        slice-A relaxed budget of 6K tokens.
+
+        NOTE (honest baseline, AUDIT-154 §8): the DEFAULT standard profile is
+        NOT within it — its reduction is outside this task's boundary and is
+        reported as an advisory candidate instead (see the next test). The
+        threshold here is derived from the same run so that normal growth does
+        not redden the suite; only a whole surface going missing does.
+        """
+        result = vw.check_injection_budget()
+        budget = vw.INJECTION_BUDGET_TOKENS
+        resident = result["tiers"]["resident"]
+        self.assertLessEqual(resident["tokens"], budget)
+        self.assertLessEqual(result["tokens"], budget)
+        self.assertEqual(result["gated_over_budget_tiers"], [])
+        self.assertEqual(result["issues"], [])
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertNotEqual(vw.check_injection_budget(
+            profile="lightweight", budget_tokens=(
+                resident["tokens"] - 1))["verdict"], "PASS")
+
+    def test_report_separates_gated_from_report_only_over_budget(self):
+        """P2-1 (review-FEAT-039): the verdict moves on ``gated`` tiers only, so
+        the printed summary must label that set — a reader must be able to tell
+        a measurement overrun (report-only) from a verdict-moving one."""
+        result = vw.check_injection_budget(profile="standard")
+        self.assertIn("skill", result["over_budget_tiers"])
+        self.assertNotIn("skill", result["gated_over_budget_tiers"])
+        self.assertEqual(result["verdict"], "ADVISORY")
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            vw.emit_injection_budget_section(result=result)
+        rendered = buf.getvalue()
+        self.assertIn("Over budget — gated (moves the verdict): resident",
+                      rendered)
+        self.assertIn("Over budget — report-only (measurement): skill",
+                      rendered)
+        self.assertIn("[REPORT-ONLY]", rendered)
+        # the CLI verdict line carries the same caliber (no bare "over-budget
+        # tiers" label on a gated list)
+        buf2 = io.StringIO()
+        with redirect_stdout(buf2):
+            vw.cmd_check_injection_budget(SimpleNamespace(
+                budget_tokens=vw.INJECTION_BUDGET_TOKENS, profile="standard",
+                format="text", fail_on_issues=False))
+        self.assertIn("gated over-budget tiers: resident", buf2.getvalue())
+
+    def test_missing_resident_tier_policy_fails_closed_not_crashes(self):
+        """P3-2 (review-FEAT-039): the headline numbers come from the resident
+        tier — dropping that policy row from the table must yield an explicit
+        issue (FAIL), never a ``KeyError`` crash."""
+        policy = vw.BUDGET_TIER_POLICY
+        saved = policy.pop("resident")
+        try:
+            result = vw.check_injection_budget(profile="lightweight")
+            self.assertTrue(result["issues"])
+            self.assertEqual(result["verdict"], "FAIL")
+            self.assertEqual(result["tokens"], 0)
+            self.assertEqual(result["tokens_host"], 0)
+            self.assertEqual(result["tiers"].get("resident"), None)
+            self.assertIn("no 'resident' tier",
+                          " ".join(result["issues"]))
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                vw.cmd_check_injection_budget(SimpleNamespace(
+                    budget_tokens=vw.INJECTION_BUDGET_TOKENS,
+                    profile=vw.INJECTION_BUDGET_DEFAULT_PROFILE,
+                    format="text", fail_on_issues=False))
+            self.assertIn("FAILED", buf.getvalue())
+        finally:
+            policy["resident"] = saved
+        self.assertEqual(vw.check_injection_budget()["verdict"], "PASS")
+
+    def test_standard_profile_is_an_advisory_candidate_not_a_silent_pass(self):
+        """The relaxed slice-A window is explicit: the standard entry template
+        exceeds the 6K budget today. It must be REPORTED (advisory) rather
+        than silently passing, and it must not be counted as an issue here —
+        capping it is a separate, scheduled reduction.
+        """
+        result = vw.check_injection_budget(profile="standard")
+        budget = vw.INJECTION_BUDGET_TOKENS
+        self.assertGreater(result["tokens"], budget)
+        self.assertIn("resident", result["over_budget_tiers"])
+        self.assertIn("resident", result["gated_over_budget_tiers"])
+        self.assertEqual(result["issues"], [])
+        self.assertEqual(result["verdict"], "ADVISORY")
+        self.assertEqual(vw.BUDGET_TIER_POLICY["resident"]["gate"], "advisory")
+        self.assertEqual(vw.BUDGET_TIER_POLICY["skill"]["gate"], "report-only")
+
+    def test_budget_tier_is_not_a_hard_fail_while_advisory(self):
+        """Fail-closed semantics: the moment the resident tier's policy flips
+        to hard, an over-budget resident set MUST become an issue + FAIL."""
+        policy = vw.BUDGET_TIER_POLICY["resident"]
+        original = policy["gate"]
+        policy["gate"] = "hard"
+        try:
+            result = vw.check_injection_budget(profile="standard")
+            self.assertTrue(result["issues"])
+            self.assertEqual(result["verdict"], "FAIL")
+        finally:
+            policy["gate"] = original
+
+    def test_dynamic_tiers_are_measured_but_never_added_to_resident(self):
+        """On-demand surfaces (skill entry / command doc) are measured for
+        visibility, but the budget verdict must not sum them into the
+        resident injection set (that would make the resident number
+        meaningless — AUDIT-154 §8 separates static from bootstrap cost)."""
+        result = vw.check_injection_budget(profile="lightweight")
+        tiers = result["tiers"]
+        # the headline number is the resident tier alone, not the grand total
+        self.assertEqual(result["tokens"], tiers["resident"]["tokens"])
+        self.assertLess(result["tokens"],
+                        tiers["resident"]["tokens"] + tiers["skill"]["tokens"])
+        self.assertGreater(tiers["skill"]["tokens"], 0)
+        self.assertGreater(tiers["command"]["tokens"], 0)
+        self.assertGreater(result["grand_total_tokens"], result["tokens"])
+        self.assertEqual(tiers["skill"]["gate"], "report-only")
+        self.assertEqual(tiers["command"]["gate"], "report-only")
+        self.assertEqual(tiers["resident"]["gate"], "advisory")
+        # report-only tiers are reported but never gate the verdict
+        self.assertEqual(result["gated_over_budget_tiers"], [])
+        self.assertEqual(result["verdict"], "PASS")
+
+    def test_profile_selection_changes_the_measured_entry_template(self):
+        """``--profile`` must actually drive the measured surface: the
+        lightweight entry is far smaller than the standard one, so identical
+        totals would mean the profile argument is ignored."""
+        light = vw.check_injection_budget(profile="lightweight")
+        standard = vw.check_injection_budget(profile="standard")
+        self.assertLess(light["tokens"], standard["tokens"])
+        self.assertLess(
+            {s["name"]: s["tokens"] for s in light["surfaces"]
+             }["entry-template"],
+            {s["name"]: s["tokens"] for s in standard["surfaces"]
+             }["entry-template"])
+        profiles = {s["profile"] for s in standard["surfaces"] if s["profile"]}
+        self.assertIn("standard", profiles)
+
+    def test_budget_argument_is_honoured_and_echoed(self):
+        result = vw.check_injection_budget(
+            profile="lightweight", budget_tokens=1234)
+        self.assertEqual(result["budget_tokens"], 1234)
+        self.assertEqual(result["profile"], "lightweight")
+        self.assertNotEqual(result["verdict"], "PASS")
+
+    def test_per_surface_report_carries_bytes_cjk_and_both_prices(self):
+        """Acceptance ① of FEAT-039: per-surface sizing + PASS/FAIL, so a
+        reviewer can see WHICH face blew the budget and by how much."""
+        result = vw.check_injection_budget(profile="lightweight")
+        for surface in result["surfaces"]:
+            for key in ("name", "layer", "tier", "scope", "chars", "cjk",
+                        "tokens", "tokens_host", "sha256_16", "budget_tokens",
+                        "status"):
+                self.assertIn(key, surface, surface)
+            self.assertGreater(surface["bytes"], 0, surface)
+            self.assertGreater(surface["chars"], 0, surface)
+            self.assertGreaterEqual(surface["cjk"], 0, surface)
+            self.assertLessEqual(surface["cjk"], surface["chars"], surface)
+            self.assertLessEqual(surface["tokens_host"], surface["tokens"],
+                                 surface)
+            self.assertIn(surface["status"], {"ok", "over"})
+            # drift anchor (review-FEAT-039 P3-9): 16 hex chars of the
+            # resolved text, so an equal-size content swap is detectable
+            self.assertRegex(surface["sha256_16"], r"^[0-9a-f]{16}$")
+        names = [s["name"] for s in result["surfaces"]]
+        for expected in ("persona", "entry-template", "secondary-entry-template",
+                         "agent-instructions", "entry-skill", "command-doc"):
+            self.assertIn(expected, names)
+        self.assertIn("tokenizer", result)
+        self.assertIn("chars/4", result["tokenizer"]["host_baseline"])
+        self.assertIn("CJK", result["tokenizer"]["calibration"])
+
+    def test_unresolvable_surface_is_an_issue_and_fails(self):
+        """Fail-closed: a missing canonical source must never be skipped — it
+        is an explicit issue with a FAIL verdict."""
+        with tempfile.TemporaryDirectory(prefix="feat039_failclosed_") as td:
+            result = vw.check_injection_budget(root=Path(td))
+            self.assertTrue(result["issues"])
+            self.assertEqual(result["verdict"], "FAIL")
+            self.assertEqual(result["missing"], len(result["surfaces"]))
+            self.assertEqual(result["tokens"], 0)
+
+    # ── tool-return budget guard (FEAT-033 cross-reference) ────────────────
+
+    def test_tool_return_budget_surface_is_registered(self):
+        """FEAT-039 ②: the existing governance-bootstrap output budget
+        (FEAT-033 ``MAX_JSON_BYTES = 8192``) is REGISTERED as a guarded face
+        instead of being re-implemented here; the assertion re-checks the
+        constant in its own module so the registration can never drift to a
+        budget that no longer exists."""
+        guard = vw.check_tool_return_budget()
+        self.assertEqual(guard["max_json_bytes"], 8192)
+        self.assertTrue(guard["enforced"])
+        self.assertEqual(guard["issues"], [])
+        with tempfile.TemporaryDirectory(prefix="feat039_toolbudget_") as td:
+            drifted = Path(td) / "skills/software-project-governance/infra"
+            drifted.mkdir(parents=True)
+            source = (vw.ROOT / "skills/software-project-governance/infra"
+                      / "bootstrap_aggregate.py").read_text(encoding="utf-8")
+            rewritten = source.replace("MAX_JSON_BYTES = 8192",
+                                       "MAX_JSON_BYTES = 999999")
+            self.assertNotEqual(rewritten, source)
+            (drifted / "bootstrap_aggregate.py").write_text(
+                rewritten, encoding="utf-8")
+            drifted_result = vw.check_tool_return_budget(root=Path(td))
+            self.assertTrue(drifted_result["issues"])
+            self.assertEqual(drifted_result["max_json_bytes"], 999999)
+            self.assertIn("expected 8192", " ".join(drifted_result["issues"]))
+
+    # ── CLI + aggregation wiring ───────────────────────────────────────────
+
+    def test_cli_reports_per_surface_budget_and_exit_codes(self):
+        """Acceptance ①/④: the subcommand prints the per-surface table, exits
+        0 while the resident set is inside budget, stays exit-0 on the ADVISORY
+        verdict (reported, not blocking), and honours ``--fail-on-issues`` when
+        a surface fails to resolve (fail-closed)."""
+        parser_func = getattr(vw, "cmd_check_injection_budget", None)
+        self.assertTrue(callable(parser_func), "CLI handler must exist")
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            vw.cmd_check_injection_budget(SimpleNamespace(
+                budget_tokens=vw.INJECTION_BUDGET_TOKENS,
+                profile=vw.INJECTION_BUDGET_DEFAULT_PROFILE, format="text",
+                fail_on_issues=False))
+        out = buf.getvalue()
+        self.assertIn("Injection Budget", out)
+        self.assertIn("persona", out)
+        self.assertIn("TOTAL", out.upper())
+        self.assertIn("PASS", out.upper())
+        # an over-budget resident set is ADVISORY in the slice-A window: the
+        # verdict is printed and the command does NOT block
+        with tempfile.TemporaryDirectory(prefix="feat039_cli_advisory_") as td:
+            buf2 = io.StringIO()
+            with redirect_stdout(buf2):
+                vw.cmd_check_injection_budget(SimpleNamespace(
+                    budget_tokens=1,
+                    profile=vw.INJECTION_BUDGET_DEFAULT_PROFILE,
+                    format="text", fail_on_issues=True))
+            self.assertIn("ADVISORY", buf2.getvalue())
+        # fail-closed surfaces DO block under --fail-on-issues. The CLI handler
+        # resolves its own default root inside the leaf module (the engine wires
+        # dispatch only), so that is the seam to redirect.
+        from checks import injection_budget as injection_budget_mod
+        with tempfile.TemporaryDirectory(prefix="feat039_cli_fail_") as td:
+            with patch.object(injection_budget_mod, "_DEFAULT_ROOT", Path(td)):
+                with self.assertRaises(SystemExit) as ctx:
+                    with redirect_stdout(io.StringIO()):
+                        vw.cmd_check_injection_budget(SimpleNamespace(
+                            budget_tokens=vw.INJECTION_BUDGET_TOKENS,
+                            profile=vw.INJECTION_BUDGET_DEFAULT_PROFILE,
+                            format="text", fail_on_issues=True))
+            self.assertEqual(ctx.exception.code, 1)
+
+    def test_cli_json_format_is_machine_readable(self):
+        """The CI form of the gate: a JSON payload a job can assert on."""
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            vw.cmd_check_injection_budget(SimpleNamespace(
+                budget_tokens=vw.INJECTION_BUDGET_TOKENS,
+                profile=vw.INJECTION_BUDGET_DEFAULT_PROFILE, format="json",
+                fail_on_issues=False))
+        payload = buf.getvalue()
+        start = payload.index("{")
+        data, _end = json.JSONDecoder().raw_decode(payload[start:])
+        self.assertEqual(data["budget_tokens"], vw.INJECTION_BUDGET_TOKENS)
+        self.assertIn(data["verdict"], ("PASS", "ADVISORY", "FAIL"))
+        self.assertTrue(data["surfaces"])
+
+    def test_check_governance_section_prints_budget_without_regressing(self):
+        """Acceptance ④: Check 33 must keep its anchor verdict AND carry the
+        budget report (no new segment id — the registry's segment vocabulary
+        and the contract matrix stay untouched)."""
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            section = vw.emit_injection_budget_section()
+        out = buf.getvalue()
+        self.assertIn("Injection Budget", out)
+        self.assertIn("persona", out)
+        self.assertTrue(section["verdict"] in ("PASS", "FAIL", "ADVISORY"))
+        self.assertNotIn("\n", section["verdict"])
+
+    def test_registry_declares_the_new_command_key(self):
+        """Command-surface declaration face: a subcommand with no registry key
+        is not reachable through the controlled loader model. FEAT-039 keeps
+        the handler in the ``checks/`` leaf (the engine's LOC/print counts are
+        only-down under the ArchGuard ratchet); the engine's thin wrapper is
+        what Check 33 calls, and it must stay callable."""
+        import registry as registry_mod
+        path = registry_mod.handler_path("check-injection-budget")
+        self.assertEqual(
+            path, "checks.injection_budget.cmd_check_injection_budget")
+        handler = registry_mod.load_handler("check-injection-budget")
+        self.assertTrue(callable(handler))
+        self.assertEqual(handler.__name__, "cmd_check_injection_budget")
+        self.assertTrue(callable(vw.cmd_check_injection_budget))
+
+
+class FEAT038GovernanceOnDemandSplitTests(unittest.TestCase):
+    """FEAT-038 (AUDIT-154 A-7): `/governance` is a router layer + on-demand
+    Scenario documents.
+
+    Guard net (AUDIT-154 A-7 acceptance ⑤/⑥):
+      1. the router layer stays inside its injection budget (≤12KB);
+      2. the decision tree + the six Scenario summaries + the MUST-Read routing
+         instruction are all present in the router layer;
+      3. every Scenario document exists, is non-empty, is registered in the
+         manifest, and is NOT part of the default injection surface;
+      4. zero semantic loss — each Scenario document carries the complete
+         pre-split section verbatim (no step dropped in the move).
+    """
+
+    ROUTER_BUDGET_BYTES = 12288  # 12 KiB
+
+    def setUp(self):
+        self.root = vw.ROOT
+        self.router_path = self.root / GOVERNANCE_ROUTER_DOC
+        self.router = self.router_path.read_text(encoding="utf-8")
+
+    # ── ① injection budget ─────────────────────────────────────────────
+    def test_router_layer_within_injection_budget(self):
+        size = self.router_path.stat().st_size
+        self.assertLessEqual(
+            size, self.ROUTER_BUDGET_BYTES,
+            f"commands/governance.md is {size}B — the router layer must stay "
+            f"≤{self.ROUTER_BUDGET_BYTES}B (FEAT-038). Move execution detail "
+            f"into commands/governance/<name>.md instead of growing the router.")
+
+    # ── ② decision tree + summaries + routing instruction ──────────────
+    def test_router_layer_keeps_decision_tree_and_summaries(self):
+        for marker in (
+            "## 决策树（自动分类——deterministic，DEC-096）",
+            "resolve_entry.py --json",
+            "governance-bootstrap --format json",
+            "scenario_hint",
+            "## Scenario 摘要与路由",
+        ):
+            self.assertIn(marker, self.router, marker)
+        # one summary row per Scenario, each naming its owning document
+        for key in "abcdef":
+            self.assertRegex(
+                self.router,
+                rf"(?m)^\|\s*{key.upper()}\s*\|[^\n]*scenario-{key}\.md",
+                f"Scenario {key.upper()} summary row missing from the router layer",
+            )
+
+    def test_router_layer_states_must_read_routing_contract(self):
+        self.assertIn("MUST 先用 `read` 工具读取下表对应文件", self.router)
+        self.assertIn("路由契约（MUST）", self.router)
+
+    # ── ③ Scenario documents exist / non-empty / registered / on-demand ─
+    def test_scenario_documents_exist_and_are_non_empty(self):
+        for rel in GOVERNANCE_SCENARIO_DOCS:
+            path = self.root / rel
+            with self.subTest(document=rel):
+                self.assertTrue(path.is_file(), f"{rel} is missing")
+                text = path.read_text(encoding="utf-8")
+                self.assertGreater(len(text.encode("utf-8")), 512,
+                                   f"{rel} looks empty/stub")
+
+    def test_scenario_documents_are_registered_in_manifest(self):
+        manifest = json.loads(
+            (self.root / "skills/software-project-governance/core/manifest.json")
+            .read_text(encoding="utf-8"))
+        declared = {entry["path"] for entry in manifest["product"]["entries"]}
+        patterns = manifest["product"]["glob_patterns"]
+        self.assertIn("commands/governance/*.md", patterns)
+        for rel in GOVERNANCE_SCENARIO_DOCS + GOVERNANCE_SUPPORT_DOCS:
+            with self.subTest(document=rel):
+                self.assertIn(rel, declared,
+                              f"{rel} is not declared in the canonical manifest")
+
+    def test_scenario_documents_are_not_in_the_default_injection_surface(self):
+        """The router must point at each document instead of inlining it."""
+        for rel in GOVERNANCE_SCENARIO_DOCS + GOVERNANCE_SUPPORT_DOCS:
+            for pattern in (f"skills/software-project-governance/{rel}", rel):
+                self.assertNotIn(pattern, vw.INJECTION_CONTRACT_ANCHORS,
+                                 f"{rel} must not be an injection anchor surface")
+
+    # ── ④ zero semantic loss ────────────────────────────────────────────
+    def test_scenario_documents_carry_every_original_section_heading(self):
+        """Every `##/###` heading of each original Scenario section survives in
+        its owning document — the move may not drop a step."""
+        expected = {
+            "a": [],
+            "b": ["### Step B1:", "### Step B2:", "### Step B3:", "### Step B4:",
+                  "### Step B5:", "### Step B6-B7:", "### Step B8:"],
+            "c": [],
+            "d": ["### Step D1:", "### Step D2:", "### Step D3:", "### Step D4:"],
+            "e": ["### Step E1:", "### Step E2:", "### Step E3:", "### Step E4:"],
+            "f": ["### 状态展示后的引导（MUST）"],
+        }
+        for key, headings in expected.items():
+            text = governance_doc(f"commands/governance/scenario-{key}.md")
+            with self.subTest(scenario=key):
+                self.assertTrue(text.startswith(f"# Scenario {key.upper()}: "))
+                for heading in headings:
+                    self.assertIn(heading, text, f"scenario-{key}: {heading} lost")
+
+    def test_scenario_documents_keep_feat034_035_036_semantics(self):
+        """The protocols landed by FEAT-034/035/036 may not regress in the split."""
+        scenario_c = governance_doc("commands/governance/scenario-c.md")
+        for marker in ("用户未响应前零写操作", "AskUserQuestion 呈现升级摘要",
+                       "插件残留清理删除面", "M5.5 条 3"):
+            self.assertIn(marker, scenario_c, f"Scenario C lost: {marker}")
+        scenario_d = governance_doc("commands/governance/scenario-d.md")
+        self.assertIn("FEAT-034", scenario_d)
+        scenario_f = governance_doc("commands/governance/scenario-f.md")
+        for marker in ("默认交互视图合约", "≤8 字段", "20 字段 CLI snapshot 契约",
+                       "4 字段 pack doc-surface 契约", "状态展示后的引导（MUST）"):
+            self.assertIn(marker, scenario_f, f"Scenario F lost: {marker}")
+
+    def test_support_documents_keep_their_contracts(self):
+        bootstrap = governance_doc("commands/governance/bootstrap.md")
+        for marker in ("SPG_RESOLVE_TIMEOUT", "SPG_WEB_INSTALL_TIMEOUT",
+                       "@bootstrap-version", "GOV-ERR-006"):
+            self.assertIn(marker, bootstrap, marker)
+        snapshot = governance_doc("commands/governance/snapshot-schema.md")
+        for marker in ("session-snapshot.md", "推荐快照引用", "用户偏好设置"):
+            self.assertIn(marker, snapshot, marker)
+        overview = governance_doc("commands/governance/overview.md")
+        for marker in ("Web console 入口边界", "自动化能力分级声明",
+                       "C 级为 roadmap（未实现）"):
+            self.assertIn(marker, overview, marker)
+
+    # ── fixture mirror ─────────────────────────────────────────────────
+    def test_fixture_mirrors_router_and_scenario_documents(self):
+        for rel in GOVERNANCE_ALL_DOCS:
+            with self.subTest(document=rel):
+                self.assertEqual(
+                    governance_doc(rel), governance_doc(rel, fixture=True),
+                    f"fixture drift: {rel}")
 
 
 if __name__ == "__main__":

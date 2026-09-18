@@ -65,7 +65,12 @@ from contract_matrix import generator as cmg  # noqa: E402
 # bootstrap aggregate, handler in `bootstrap_aggregate.py`, engine wires
 # dispatch only); snapshot regenerated via `contract_matrix/generator.py
 # --regen` in the same change.
-FROZEN_CLI_KEY_COUNT = 87
+# FEAT-039 (0.84.0 slice A-8): 87→88 keys (`check-injection-budget` — the
+# injection-size budget gate; handler in `checks/injection_budget.py` and it
+# rides INSIDE check segment 33 so the segment face is unchanged at 71);
+# snapshot regenerated via `contract_matrix/generator.py --regen` in the same
+# change (the documented contract-change path, review covering both files).
+FROZEN_CLI_KEY_COUNT = 88
 FROZEN_CHECK_SEGMENT_COUNT = 71
 
 

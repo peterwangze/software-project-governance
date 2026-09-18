@@ -164,8 +164,8 @@
           "dynamic-lifecycle-migration"
         ]
       },
-      "handler_count": 84,
-      "key_count": 87,
+      "handler_count": 85,
+      "key_count": 88,
       "keys": [
         "agent-locks-acquire",
         "agent-runtime-e2e",
@@ -196,6 +196,7 @@
         "check-governance-packs",
         "check-host-capability-context",
         "check-hot-fact-source",
+        "check-injection-budget",
         "check-injection-contract",
         "check-interruption-policy",
         "check-lifecycle-registry",
@@ -394,14 +395,14 @@
   },
   "generated": {
     "generator_relpath": "skills/software-project-governance/infra/contract_matrix/generator.py",
-    "git_head": "564b7dae6704a30ec0148f931434e3b353be6957",
+    "git_head": "df9e7db89a885c41f1e102b70d88c359245496e8",
     "python": {
       "family": "3.14",
       "implementation": "cpython",
       "platform": "win32",
       "version": "3.14.3"
     },
-    "timestamp_utc": "2026-09-18T03:57:17+00:00"
+    "timestamp_utc": "2026-09-18T13:47:49+00:00"
   },
   "python_family_pins": [
     {

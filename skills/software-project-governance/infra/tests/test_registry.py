@@ -86,7 +86,12 @@ _SECTION_RE = re.compile(r"^\s*#\s*" + _DASH + r"{2}\s*([0-9][A-Za-z0-9]*)\.\s")
 # FEAT-033 (0.84.0 slice A-2): 86 -> 87 CLI keys (`governance-bootstrap`;
 # handler lives in `bootstrap_aggregate.py`, engine wires dispatch only);
 # snapshot + architecture baseline regenerated in the same change.
-FROZEN_CLI_KEYS = 87
+# FEAT-039 (0.84.0 slice A-8): 87 -> 88 CLI keys (`check-injection-budget`;
+# handler lives in `checks/injection_budget.py` — the engine wires dispatch and
+# the Check 33 sub-report only — and the report rides inside check segment 33,
+# so the segment face stays at 71); snapshot regenerated via
+# `contract_matrix/generator.py --regen` in the same change.
+FROZEN_CLI_KEYS = 88
 FROZEN_SEGMENTS = 71
 
 # FEAT-018 R6 frozen startup budget (``core/architecture-baseline.json`` r6):
@@ -98,7 +103,12 @@ FROZEN_SEGMENTS = 71
 # ``bootstrap_aggregate`` module (import face = stdlib + the engine-free
 # leaves resolve_entry / task_priority; grows the face by exactly this one
 # module).
-FROZEN_ENGINE_IMPORT_COUNT = 198
+# FEAT-039: 198 -> 199 — the engine imports the self-contained
+# ``checks.injection_budget`` leaf (stdlib-only: json/re/sys/pathlib) and
+# re-exports its public surface; the ArchGuard R6 cold-import face grows by
+# exactly this one module (baseline regenerated in the same change, see
+# ``core/architecture-baseline.json`` r6).
+FROZEN_ENGINE_IMPORT_COUNT = 199
 
 # Mechanism red lines (§9.1): no discovery scan, no third-party plugin loader.
 FORBIDDEN_REGISTRY_NAMES = {
@@ -339,6 +349,12 @@ class CommandRegistryTests(unittest.TestCase):
             # FEAT-037 (0.84.0 slice A-6): entry-bootstrap guard handler lives
             # in checks/projection.py; the engine wires a thin wrapper only.
             "check-entry-bootstrap-sync",
+            # FEAT-039 (0.84.0 slice A-8): injection-size budget handler lives
+            # in checks/injection_budget.py; the engine wires dispatch + the
+            # Check 33 sub-report only (this engine's LOC/print counts are
+            # only-down under the ArchGuard ratchet). Sorted position follows
+            # the key string, not the task age.
+            "check-injection-budget",
             "check-manifest-consistency", "check-review-debt",
             "dsh-doctor",
             # FEAT-033 (0.84.0 slice A-2): read-only bootstrap aggregate
@@ -541,7 +557,10 @@ class LoaderWhitelistTests(unittest.TestCase):
             self.assertNotIn(".py", module)
             for part in module.split("."):
                 self.assertTrue(part.isidentifier(), module)
-        self.assertLess(len(reg.LOADER_WHITELIST), 20)
+        # The bound is the "no package walk, no discovery" red line — it is a
+        # magnitude guard, not an exact count: FEAT-039 added the 21st leaf
+        # (``checks.injection_budget``) and the declaration is still hand-kept.
+        self.assertLess(len(reg.LOADER_WHITELIST), 32)
 
     def test_declared_loader_resolves(self):
         handler = reg.resolve_loader("archguard_ratchet.cmd_archguard_ratchet")

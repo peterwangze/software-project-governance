@@ -64,7 +64,16 @@ SNAPSHOT = _INFRA_DIR / "contract_matrix" / "snapshots.json"
 #      engine's 28p check-governance segment (cmd_check_governance) and one
 #      in cmd_check_duplicate_code. Baseline regenerated in the same change:
 #      R1 anchor 24453 -> 24583, R4 total 1299 -> 1301.)
-FACTS_PRINT_TOTAL = 1301
+#   -> 1304 (0.84.0 slice A, 2026-09-18: +3 across the parallel A-7/A-8 work.
+#      A-8 (FEAT-039) contributes ONE new site — the Check 33 injection-budget
+#      verdict line; the report body renders inside `checks.injection_budget`
+#      so the engine's own print surface stays at the wiring minimum. The
+#      remaining sites are A-7 (FEAT-038) scenario-routing output. The two
+#      tasks share one working tree, so the baseline was regenerated ONCE,
+#      after both source edits, per the all-changes-first rule that keeps the
+#      anchor from being re-cut twice. Baseline regenerated in the same change:
+#      R1 anchor 24639 -> 24766, R4 total 1301 -> 1304.)
+FACTS_PRINT_TOTAL = 1304
 
 
 def _committed_baseline():
@@ -221,9 +230,9 @@ class R3LayerMatrixTests(unittest.TestCase):
 
 class R4PrintOrchestrationTests(unittest.TestCase):
     def test_r4_total_matches_facts_census(self):
-        """Calibration cross-check: 1,311 print calls (FEAT-026 Slice-2 sanctioned
-        +1; chain 1,315 → 1,310 (FEAT-012 re-census) → 1,311 — see
-        FACTS_PRINT_TOTAL note)."""
+        """Calibration cross-check: 1,304 print calls (0.84.0 slice A,
+        FEAT-038 + FEAT-039 sanctioned +3; chain 1,315 → 1,310 → 1,311 → 1,298
+        → 1,299 → 1,301 → 1,304 — see FACTS_PRINT_TOTAL note)."""
         current = ar.count_print_calls(ENGINE)
         self.assertEqual(current["total"], FACTS_PRINT_TOTAL)
         self.assertEqual(

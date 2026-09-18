@@ -187,6 +187,11 @@ LOADER_WHITELIST: Tuple[str, ...] = (
     "checks.dsh_boundary",
     "checks.evidence_domain",
     "checks.gate_domain",
+    "checks.gate_domain",
+    # FEAT-039 (0.84.0 slice A-8): injection-size budget leaf — surface
+    # resolution + tokenizer calibration + report render; the engine wires
+    # dispatch and the Check 33 sub-report only (ArchGuard R1/R4 discipline).
+    "checks.injection_budget",
     "checks.loop_runtime_claims",
     "checks.manifest",
     "checks.projection",
@@ -280,6 +285,13 @@ _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
      "verify_workflow.cmd_check_host_capability_context"),
     ("check-hot-fact-source", "verify_workflow.cmd_check_hot_fact_source"),
     ("check-injection-contract", "verify_workflow.cmd_check_injection_contract"),
+    # FEAT-039 (0.84.0 slice A-8): injection-size budget gate — the resident
+    # injection set (multi-file sum, canonical templates) is priced against a
+    # token budget; the handler lives in checks/injection_budget.py (engine
+    # wires dispatch + the Check 33 sub-report only, ArchGuard R1/R4) and rides
+    # inside check-governance segment 33.
+    ("check-injection-budget",
+     "checks.injection_budget.cmd_check_injection_budget"),
     ("check-interruption-policy",
      "verify_workflow.cmd_check_interruption_policy"),
     ("check-lifecycle-registry", "verify_workflow.cmd_check_lifecycle_registry"),

@@ -774,5 +774,61 @@ class TestPercentile(unittest.TestCase):
         self.assertIsNone(gc.percentile([], 0.5))
 
 
+class Feat039ZstandardDependencyAssertionTests(unittest.TestCase):
+    """FEAT-039 / DEC-205② (FEAT-032 P2-3 carry-over): dependency presence.
+
+    FEAT-032's zstd fixtures are built by ``zstandard``. On a machine without
+    it this module skipped wholesale — CI reported green while none of the
+    §2/§3/§4 acceptance measurements had actually run. The carry-over
+    acceptance is "tests must not silently skip": the dependency is either
+    present (asserted here) or its absence is an explicit FAIL carrying the
+    install command.
+
+    Deliberately a hard assertion, not a conditional skip — FEAT-032 needs
+    zstandard in dev and CI environments.
+    """
+
+    def test_zstandard_dependency_is_present(self):
+        """Explicit FAIL (not skip) when zstandard is missing."""
+        self.assertIsNotNone(
+            zstandard,
+            "zstandard is a required dev/CI dependency for FEAT-032 "
+            "governance-cost fixtures — install it with "
+            "`pip install zstandard`; a missing dependency must FAIL, never "
+            "silently skip the measurements.")
+
+    def test_skip_is_driven_only_by_the_import_probe(self):
+        """Anti-silence guard: exactly ONE call site may skip, and its sole
+        trigger must be the ``zstandard`` import probe — a second silent gate
+        (env var / platform) would re-open the hole DEC-205② closed.
+
+        The needle is the bare call (``skip`` + ``Test(``), not a one-form
+        spelling — and the single call site must sit INSIDE
+        ``_require_zstandard``, so a skip added elsewhere cannot hide behind
+        the same count (review-FEAT-039 P3-5). These docstrings must not spell
+        the needle out, or the guard would count itself.
+        """
+        import inspect
+        source = inspect.getsource(sys.modules[__name__])
+        self.assertIn("except ImportError", source)
+        # built by concatenation so this assertion cannot count itself
+        needle = "skip" + "Test" + "("
+        self.assertEqual(source.count(needle), 1, "skip call sites")
+        self.assertIn("if zstandard is None:", source)
+        helper = source.split("def _require_zstandard(testcase):", 1)
+        self.assertEqual(len(helper), 2, "_require_zstandard helper missing")
+        body = helper[1].split("\ndef ", 1)[0]
+        self.assertEqual(body.count(needle), 1,
+                         "the only skip call site must be the dependency probe")
+
+    def test_import_failure_message_names_the_install_command(self):
+        """The fail-closed error path in governance_cost must name the fix —
+        a bare 'zstandard missing' costs the reader a search."""
+        source = (_HERE.parent / "governance_cost.py").read_text(
+            encoding="utf-8")
+        self.assertIn("pip install zstandard", source)
+        self.assertIn("zstandard 未安装", source)
+
+
 if __name__ == "__main__":
     unittest.main()

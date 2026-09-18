@@ -727,10 +727,10 @@ WORKFLOW_SNIPPETS = {
     ],
 }
 
-REQUIRED_SNIPPETS = {}
-REQUIRED_SNIPPETS.update(WORKFLOW_SNIPPETS)
-REQUIRED_SNIPPETS.update(PROJECTION_SNIPPETS)
-
+# FEAT-038 补修 / F-2 (data-inventory-0.80.0.md §F-2): the `REQUIRED_SNIPPETS = {}`
+# + two `.update()` calls removed here were DEAD — the literal below rebinds the
+# name, so check_snippets() never saw them (dead since AUDIT-082/f9a18d0; removal
+# advised by REL-078 CODE R0 L121). Literal is the sole authority; F-2 items open.
 REQUIRED_SNIPPETS = {
     ROOT / "README.md": [
         "让 coding agent 帮你看护项目质量",
@@ -2672,9 +2672,13 @@ GOVERNANCE_PACK_KNOWN_CHECKS = {
 }
 GOVERNANCE_PACK_STATUS_DOC_PATHS = [
     "commands/governance-status.md",
-    "commands/governance.md",
+    # FEAT-038 (AUDIT-154 A-7): the `/governance` Delivery Trust Snapshot /
+    # pack doc-surface contract moved from the router layer into the on-demand
+    # Scenario F document; the router layer keeps a pointer, so the
+    # pack-status token guard follows the owning document on both faces.
+    "commands/governance/scenario-f.md",
     "project/e2e-test-project/commands/governance-status.md",
-    "project/e2e-test-project/commands/governance.md",
+    "project/e2e-test-project/commands/governance/scenario-f.md",
 ]
 GOVERNANCE_PACK_STATUS_REQUIRED_TOKENS = [
     "Pack summary",
@@ -6643,6 +6647,12 @@ PROJECTION_SYNC_PATTERNS = (
     "skills/software-project-governance/infra/hooks/*",
     "skills/software-project-governance/references/**/*.md",
     "commands/*.md",
+    # FEAT-038 (AUDIT-154 A-7): `/governance` was split into a router layer plus
+    # per-Scenario on-demand documents under `commands/governance/`. The extra
+    # pattern keeps the fixture-mirror inventory (and its manifest contract
+    # `required_members`) exact — the legacy glob `commands/*.md` does not
+    # descend into the new directory.
+    "commands/governance/*.md",
     "agents/*.md",
 )
 
@@ -6835,6 +6845,63 @@ def check_injection_contract(root=None):
     }
 
 
+# ── FEAT-039 / AUDIT-154 slice A-8: injection-size budget gate ──────────────
+#
+# AUDIT-154 §5 ("诉点 3"): the workflow ships quality gates but owns no budget
+# gate for its OWN injected surfaces — "预算不守护则瘦身必然回弹". The
+# measurement + render leaf lives in ``checks/injection_budget.py`` (this
+# engine's LOC and print counts are only-down under the ArchGuard ratchet), so
+# the engine keeps dispatch wiring + the Check 33 sub-report only, and the
+# tests/CLI/check all read ONE definition:
+#
+#   * ``checks.injection_budget``  — surfaces, tokenizer calibration, validation
+#   * ``cmd_check_injection_budget`` — dispatch wiring (engine module path)
+#   * Check 33 — prints the same report inside the aggregate box
+#
+# CI wiring (no new CI system): every commit/PR already runs
+# ``check-governance``, which prints this report inside Check 33; a pipeline
+# that needs its own exit code runs ``check-injection-budget
+# --fail-on-issues`` (FAIL → exit 1), and a job that asserts values reads
+# ``--format json`` (``verdict`` / ``tiers``).
+from checks import injection_budget as injection_budget  # noqa: E402
+from checks.injection_budget import cmd_check_injection_budget  # noqa: E402,F401
+# Public surface re-exported for the check, the CLI and the test suite: one
+# definition, three consumers (never re-implemented per caller).
+from checks.injection_budget import (  # noqa: E402,F401
+    BUDGET_TIER_POLICY,
+    ENTRY_TEMPLATE_MARKERS,
+    INJECTION_BUDGET_DEFAULT_PROFILE,
+    INJECTION_BUDGET_PROFILES,
+    INJECTION_BUDGET_SURFACES,
+    INJECTION_BUDGET_TOKENS,
+    INJECTION_SURFACE_SCOPE_FULL_FILE,
+    INJECTION_SURFACE_SCOPE_PERSONA_PREFIX,
+    INJECTION_SURFACE_SCOPE_TEMPLATE_BLOCK,
+    check_tool_return_budget,
+    count_ascii_chars,
+    count_cjk_chars,
+    estimate_surface_tokens,
+    estimate_surface_tokens_host,
+    extract_marked_block,
+    extract_persona_prefix_from_template,
+    find_marker_line,
+    injection_budget_tier_gate,
+    load_injection_surface,
+    normalize_token_budget,
+    set_injection_budget_surface_profiles,
+    tokenizer_calibration,
+)
+
+
+def check_injection_budget(root=None, profile=None, budget_tokens=None):
+    """Engine entry — the leaf supplies the default root (``ROOT`` is ours)."""
+    return injection_budget.check_injection_budget(
+        root if root is not None else ROOT, profile, budget_tokens)
+
+
+def emit_injection_budget_section(indent="  ", result=None):
+    """Engine entry — the Check 33 sub-report, framed inside the box."""
+    return injection_budget.emit_check_section(indent=indent, result=result)
 
 
 # ── FEAT-015 / RISK-049 ②: isolated preset-session smoke gate ───────────────
@@ -8740,7 +8807,9 @@ def check_governance_context(root=None):
             failures.append("governance context: NOT_FOUND cannot auto-continue")
 
     docs = [
-        root / "commands/governance.md",
+        # FEAT-038 (AUDIT-154 A-7): the resume/unfinished-work contract moved
+        # from the router layer into the on-demand Scenario F document.
+        root / "commands/governance/scenario-f.md",
         root / "commands/governance-status.md",
     ]
     required_doc_tokens = [
@@ -16259,8 +16328,18 @@ def _run_full_engine_checks(args):
     # (DSH persona template / entry SKILL / DSH thin pointer). Never asserts
     # full-text equality; never performs behavior detection (DEC-143 boundary
     # stays with REQ-107/108/113).
+    #
+    # FEAT-039 / AUDIT-154 A-8 rides inside this segment (no new segment id —
+    # the registry's 71-segment vocabulary and the contract-matrix face stay
+    # untouched): the SAME surfaces also get a size budget. Anchors answer
+    # "is the contract still injected?", the budget answers "at what cost?" —
+    # AUDIT-154 §5.3: a quality gate with no budget gate lets slimming
+    # rebound. The budget's own hard/advisory posture lives in
+    # BUDGET_TIER_POLICY; today the resident tier is advisory (slice-A
+    # relaxed window), so over-budget surfaces are reported with per-surface
+    # overshoot instead of blocking this segment.
     if _product_gate_active(args):
-        print("\n┌─ Check 33: Injection Contract (FIX-253/REQ-112) ────┐")
+        print("\n┌─ Check 33: Injection Contract (FIX-253/REQ-112) ────────────────────┐")
         ic33 = check_injection_contract()
         print(f"│  Files checked: {ic33['files_checked']}; anchors: {ic33['anchors_checked']}")
         if ic33["issues"]:
@@ -16270,9 +16349,21 @@ def _run_full_engine_checks(args):
                 print(f"│    - {issue}")
         else:
             print("│  [PASS] persona/SKILL/AGENTS injection surfaces carry the contract anchors.")
+        ib33 = emit_injection_budget_section()
+        if ib33["issues"]:
+            all_issues += len(ib33["issues"])
+            print(f"│  [FAIL] {len(ib33['issues'])} injection-budget issue(s):\n"
+                  + "\n".join(f"│    - {issue}" for issue in ib33["issues"]))
+        elif ib33["verdict"] == "ADVISORY":
+            print(f"│  [ADVISORY] resident set {ib33['tokens']} tok, budget "
+                  f"{ib33['budget_tokens']} tok; gated over-budget tiers: "
+                  f"{', '.join(ib33['gated_over_budget_tiers']) or 'none'}")
+        else:
+            print(f"│  [PASS] resident injection set {ib33['tokens']} tok "
+                  f"<= budget {ib33['budget_tokens']} tok.")
     else:
         _print_product_gate_skipped("Check 33")
-    print("└──────────────────────────────────────────────────────┘")
+    print("└──────────────────────────────────────────────────────────────────────┘")
 
     # ── 34. Completion Recommendation Closure (FIX-262 / REQ-108) ──
     # S1: completed product-code task (dated on/after the effective date)
@@ -18300,9 +18391,14 @@ def _e2e_target_fixture_checks(e2e_dir):
             "needles": [f"version: {target_version}", "Coordinator", "Agent Team"],
         },
         {
-            "label": "target /governance route contract",
+            "label": "target /governance route contract (router layer)",
             "path": e2e_dir / "commands" / "governance.md",
-            "needles": ["Scenario F", "AskUserQuestion", "Coordinator", *delivery_trust_needles],
+            "needles": ["Scenario F", "AskUserQuestion", "Coordinator"],
+        },
+        {
+            "label": "target /governance Scenario F delivery-trust contract",
+            "path": e2e_dir / "commands" / "governance" / "scenario-f.md",
+            "needles": delivery_trust_needles,
         },
         {
             "label": "target /governance-status Delivery Trust Snapshot contract",
@@ -18337,12 +18433,26 @@ def _e2e_contract_checks():
             "reason": "Interactive user choice requires platform runtime tools.",
         },
         {
-            "label": "/governance route contract",
+            "label": "/governance route contract (router layer)",
             "kind": "CONTRACT_CHECK",
             "path": ROOT / "commands/governance.md",
             "needles": [
                 "Scenario F",
-                "状态面板",
+                "场景路由",
+                "commands/governance/scenario-f.md",
+            ],
+            "reason": "FEAT-038: the router layer routes to the owning Scenario document.",
+        },
+        {
+            "label": "/governance Scenario F route contract",
+            "kind": "CONTRACT_CHECK",
+            "path": ROOT / "commands/governance/scenario-f.md",
+            "needles": [
+                "Scenario F",
+                # FEAT-038: the pre-split needle "状态面板" matched the router
+                # section intro; the Scenario F document's own status-panel
+                # (compact Snapshot) contract is the equivalent anchor there.
+                "默认交互视图合约",
                 "Delivery Trust Snapshot",
                 "lite is the recommended first-run default",
                 "No-overclaim boundary",
@@ -18726,11 +18836,19 @@ def _evaluate_e2e_target_fixture_check(entry):
 
 def _validate_e2e_governance_proxy(result):
     output = _e2e_output(result)
-    contract = ROOT / "commands/governance.md"
+    # FEAT-038: the Delivery Trust Snapshot resume contract lives in the
+    # on-demand Scenario F document; the router layer is asserted separately to
+    # route to it (so a router that stopped pointing at the contract fails too).
+    contract = ROOT / "commands/governance/scenario-f.md"
     try:
         contract_text = contract.read_text(encoding="utf-8")
     except OSError:
         contract_text = ""
+    router = ROOT / "commands/governance.md"
+    try:
+        router_text = router.read_text(encoding="utf-8")
+    except OSError:
+        router_text = ""
     ok = (
         result.returncode == 0
         and "Project Overview" in output
@@ -18751,6 +18869,7 @@ def _validate_e2e_governance_proxy(result):
         and "Unfinished work" in contract_text
         and "Source facts" in contract_text
         and "Existing governance state detected" in contract_text
+        and "commands/governance/scenario-f.md" in router_text
     )
     return ok, "Scenario F proxy executed status and found /governance Delivery Trust Snapshot resume route contract"
 
@@ -23937,6 +24056,16 @@ def main(argv=None):
     cic_p.add_argument("--fail-on-issues", action="store_true",
                        help="Exit with non-zero code if injection-contract anchors are missing")
 
+    # check-injection-budget (FEAT-039 / AUDIT-154 slice A-8): args + handler
+    # live in checks/injection_budget.py — the engine only wires dispatch
+    # (bootstrap_aggregate pattern; ArchGuard R4 print budget untouched).
+    cib_p = subparsers.add_parser(
+        "check-injection-budget",
+        help="Price the actually-injected surface set (multi-file sum) against "
+             "a token budget (FEAT-039 / AUDIT-154 A-8)",
+    )
+    injection_budget.add_arguments(cib_p)
+
     # check-dsh-preset-smoke (FEAT-015 / RISK-049 ②)
     csmk_p = subparsers.add_parser(
         "check-dsh-preset-smoke",
@@ -24581,6 +24710,7 @@ def main(argv=None):
         "check-projection-sync": cmd_check_projection_sync,
         "check-entry-bootstrap-sync": cmd_check_entry_bootstrap_sync,
         "check-injection-contract": cmd_check_injection_contract,
+        "check-injection-budget": cmd_check_injection_budget,
         "check-dsh-preset-smoke": cmd_check_dsh_preset_smoke,
         "check-dsh-preset-compat": cmd_check_dsh_preset_compat,
         "check-dsh-boundary": cmd_check_dsh_boundary,

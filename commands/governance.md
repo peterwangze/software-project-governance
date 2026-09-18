@@ -318,6 +318,8 @@ Web console 是可选的本地伴随状态面板，也是用户手动 `/governan
 
 **检测条件**：`session-snapshot.md` 存在 AND 日期在 24h 内
 
+**数据源补充（FEAT-033 bootstrap 聚合快路径）**：恢复面板所需的当前状态交叉验证数据（任务统计 / 风险 / 候选）MAY 优先取自单次 `python <plugin_home>/infra/verify_workflow.py governance-bootstrap --format json`（只读聚合，≤8KB），替代多次 verify 调用 + 逐段读 plan-tracker；snapshot 字段解析与 D1-D3 流程不变。
+
 **新鲜度规则**：
 | 时间 | 处理 |
 |------|------|
@@ -453,6 +455,7 @@ P1 (警告):
 
 **数据源（MUST，FIX-270 秒级快路径）**：状态展示 = 运行 `python <plugin_home>/infra/verify_workflow.py status`（`<plugin_home>` 来自 resolve_entry.py，先 resolve 后 verify）→ **渲染其输出**（文本或 `status --json`），而不是重新手工读取治理文件。
 
+- **bootstrap 聚合快路径（FEAT-033，推荐入口）**：单次会话引导/路由需要 resolve + 状态 + 候选一次性数据时，MAY 运行 `python <plugin_home>/infra/verify_workflow.py governance-bootstrap --format json`（只读聚合：resolve envelope + 状态投影 + 候选 + migration 标志 + next_actions，≤8KB JSON 投影；`--budget-ms` 超时 fail-safe 返回 `deferred` 明示未完成范围）——一次调用替代"多次 verify 调用 + 多段读 plan-tracker"的串行链。`status` 仍是底层全量投影依赖（Delivery Trust Snapshot / Gate 全表等完整面以 `status` 输出为准）；`governance-bootstrap` 的 `health.state` 恒为 `deferred`（v1 未接线健康检查——健康面 MUST 另跑 `check-governance --summary-only`，不得把 deferred 当作已检查）。
 - **默认不再要求全量读 4 个治理文件**（plan-tracker.md / evidence-log.md / risk-log.md / decision-log.md）——`status` 命令已用行级结构化解析输出 Scenario F 面板所需全部数据（项目配置 / Gate 状态 / 任务统计 / 活跃风险含 ≤3 天升级线标记 / 最近活动 / 插件版本新鲜度 / 建议下一步线索 / Delivery Trust Snapshot）。
 - **按需展开（例外）**：仅当 (a) 用户展开 `<details>` 详情，(b) `status` 输出字段缺失/解析失败，或 (c) 数据对不上时，才用 read 工具按需读取对应治理文件。
 - **Delivery Trust Snapshot 数据来源** = `status` 命令输出 + `governance-context` 既有输出（两者都是确定性 CLI 输出；Snapshot 字段合约见下方，不得以手工翻读证据文件替代）。

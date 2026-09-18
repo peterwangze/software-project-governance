@@ -75,6 +75,13 @@ from archguard_ratchet import cmd_archguard_ratchet
 # the engine's cold-import face stays stdlib-only.
 import governance_cost
 from governance_cost import cmd_governance_cost_report
+# FEAT-033 (AUDIT-154 slice A-2): read-only bootstrap aggregate —
+# self-contained module; the engine only wires dispatch (archguard_ratchet /
+# governance_cost pattern). Imports resolve_entry + task_priority (both
+# engine-free leaves); zero .governance writes / zero git writes / zero
+# subprocess dispatch; the health face is v1-deferred (never faked).
+import bootstrap_aggregate
+from bootstrap_aggregate import cmd_governance_bootstrap
 
 ROOT = Path(__file__).resolve().parents[3]
 INTERACTION_BOUNDARY_PATH = ROOT / "skills/software-project-governance/references/interaction-boundary.md"
@@ -24473,6 +24480,20 @@ def main(argv=None):
     )
     governance_cost.add_arguments(gcr_p)
 
+    # governance-bootstrap (FEAT-033 / AUDIT-154 slice A-2 — read-only
+    # bootstrap aggregate: resolve envelope + lean status projection +
+    # v1-deferred health face + task-priority light candidates in ONE
+    # output, ≤2K token projection; args and handler live in
+    # bootstrap_aggregate.py — the engine only wires dispatch, ArchGuard
+    # R4 print budget untouched)
+    gb_p = subparsers.add_parser(
+        "governance-bootstrap",
+        help="Read-only bootstrap aggregate (FEAT-033): resolve envelope + "
+             "status projection + deferred health face + light candidates "
+             "in one output (--budget-ms/--format/--profile)",
+    )
+    bootstrap_aggregate.add_arguments(gb_p)
+
     # governance-write-guard (FEAT-011 / G3 extension — structural write
     # guard over the Coordinator's DIRECT .governance writes; check-only)
     subparsers.add_parser(
@@ -24606,6 +24627,7 @@ def main(argv=None):
         "change-triage": cmd_change_triage,
         "governance-write-guard": cmd_governance_write_guard,
         "governance-cost-report": cmd_governance_cost_report,
+        "governance-bootstrap": cmd_governance_bootstrap,
         "agent-locks-acquire": cmd_agent_locks_acquire,
     }
 

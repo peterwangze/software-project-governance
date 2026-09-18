@@ -68,6 +68,7 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
   - `Governance: timed out` → 运行超时（>60s）→ 软超时取消该步，继续会话。
   - `Governance: N issues (parse degraded)` → 摘要解析降级（输出格式漂移 fail-safe），不报错。
 - **详略分档**（`--level lightweight|standard|strict`，缺省 standard）：轻量=汇总+首个 FAIL；标准=汇总+首个 FAIL/WARN+最多 5 条明细（FAIL 优先，每条截断 130 字符）+「共 N issues，--level strict 查看全部」指引行（FIX-278 G1 top-N——消除 103 字符摘要触发 ~25KB 追查链的放大（audit-148 §2.1））；严格=汇总+全部 FAIL/WARN。三档**跑同一个** `--summary-only`，仅输出详略不同，**不按 profile 拆逻辑**。
+- **bootstrap 聚合快路径（FEAT-033）**：需要 resolve+状态+候选单次输出时 MAY 改跑 `python skills/software-project-governance/infra/verify_workflow.py governance-bootstrap --format json`（只读聚合，≤8KB 投影）；其 `health.state="deferred"` 表示本命令未做健康检查——健康摘要仍以本节 `check-governance --summary-only` 为准，不得把 deferred 当作已通过。
 
 ### 关键行为契约（MUST——注入面最小契约集，FIX-253/REQ-112；完整规则见 references/behavior-protocol.md M7.4 / M7.7）
 

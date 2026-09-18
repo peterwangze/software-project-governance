@@ -61,7 +61,11 @@ from contract_matrix import generator as cmg  # noqa: E402
 # AGENTS/CLAUDE bootstrap projection guard, handler in `checks/projection.py`,
 # thin bare-Name wrapper in the engine); snapshot regenerated via
 # `contract_matrix/generator.py --regen` in the same change.
-FROZEN_CLI_KEY_COUNT = 86
+# FEAT-033 (0.84.0 slice A-2): 86→87 keys (`governance-bootstrap` — read-only
+# bootstrap aggregate, handler in `bootstrap_aggregate.py`, engine wires
+# dispatch only); snapshot regenerated via `contract_matrix/generator.py
+# --regen` in the same change.
+FROZEN_CLI_KEY_COUNT = 87
 FROZEN_CHECK_SEGMENT_COUNT = 71
 
 

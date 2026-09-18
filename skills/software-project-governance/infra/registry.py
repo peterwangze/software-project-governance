@@ -201,6 +201,11 @@ LOADER_WHITELIST: Tuple[str, ...] = (
     # self-contained module, engine wires dispatch only (archguard_ratchet
     # pattern); stdlib-only at import time, zstandard lazy (R6 face +1).
     "governance_cost",
+    # FEAT-033 (0.84.0 slice A-2): read-only bootstrap aggregate handler —
+    # self-contained module, engine wires dispatch only (governance_cost
+    # pattern); imports only resolve_entry + task_priority (engine-free
+    # leaves) at import time; zero writes / zero subprocess dispatch.
+    "bootstrap_aggregate",
 )
 """Closed declaration of loadable modules (§9.1 controlled loader whitelist).
 
@@ -259,6 +264,8 @@ _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
     ("check-dsh-preset-smoke", "verify_workflow.cmd_check_dsh_preset_smoke"),
     ("check-dsh-boundary", "verify_workflow.cmd_check_dsh_boundary"),
     ("check-duplicate-code", "verify_workflow.cmd_check_duplicate_code"),
+    ("check-entry-bootstrap-sync",
+     "checks.projection.cmd_check_entry_bootstrap_sync"),
     ("check-first-session-measurement",
      "verify_workflow.cmd_check_first_session_measurement"),
     ("check-flow-unit-runtime", "verify_workflow.cmd_check_flow_unit_runtime"),
@@ -326,6 +333,8 @@ _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
     ("gemini-auth-preflight", "verify_workflow.cmd_gemini_auth_preflight"),
     ("generate-deterministic-scaffold",
      "verify_workflow.cmd_generate_deterministic_scaffold"),
+    ("governance-bootstrap",
+     "bootstrap_aggregate.cmd_governance_bootstrap"),
     ("governance-context", "verify_workflow.cmd_governance_context"),
     ("governance-cost-report", "governance_cost.cmd_governance_cost_report"),
     ("governance-write-guard", "verify_workflow.cmd_governance_write_guard"),
@@ -348,12 +357,13 @@ _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
     ("verify", "verify_workflow.cmd_verify"),
     ("web-console", "verify_workflow.cmd_web_console"),
 )
-"""85 dispatch keys from the FEAT-020 frozen face (FEAT-031 added
+"""87 dispatch keys from the FEAT-020 frozen face (FEAT-031 added
 ``check-dsh-boundary`` and ``dsh-doctor``; FEAT-032 added
-``governance-cost-report``), each with the module that
+``governance-cost-report``; FEAT-037 added ``check-entry-bootstrap-sync``;
+FEAT-033 added ``governance-bootstrap``), each with the module that
 *defines* its handler (machine-derived: the ``commands`` dict of ``main()``
-cross-referenced with the defining module of every handler name — 5 keys are
-already outside the engine, the other 80 ride the monolith)."""
+cross-referenced with the defining module of every handler name — 8 keys are
+already outside the engine, the other 79 ride the monolith)."""
 
 # ── check declaration: 71 segments → entry dotted path ──────────────────────
 

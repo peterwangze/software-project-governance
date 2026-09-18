@@ -210,6 +210,8 @@
 
 ### M4.1 会话开始协议
 
+**时序（FEAT-034 首次交互前置）**：第 1~3 步的热数据获取 MAY 经 `governance-bootstrap --format json` 快路径单命令完成（不可用时按原步骤逐项读取）；热数据就绪后 MUST 立即呈现最小状态行 + AskUserQuestion 首次交互——第 5 步健康摘要等深检后置为用户选择后按需执行（推进类动作前 MUST 补齐，deferred 期间显示「待检查」）；完整纪律见 M5.5。
+
 1. 读取 `.governance/plan-tracker.md`，获取项目配置和 Gate 状态
 2. **跨会话状态恢复（MANDATORY）**：读取 `.governance/session-snapshot.md`（如存在）。与 `.governance/plan-tracker.md` 对比：
    - snapshot 中标记为 "进行中" 且 plan-tracker 中仍为 "进行中" 的任务 → 这些是遗留任务，继续执行
@@ -218,7 +220,7 @@
    - 升级截止日期 ≤ 当前日期的风险 → 立即升级
 3. 向自己确认：当前阶段、最新 Gate 结论、活跃风险数、遗留任务
 4. 如有未解决的条件（passed-with-conditions），**MUST** 优先处理
-5. **健康摘要（R-D1a / REQ-145.1，bootstrap 自动运行）**：运行 `python skills/software-project-governance/infra/verify_workflow.py check-governance --summary-only`（DSH 支持 CLI；摘要为只读、只显示、不阻断），按摘要驱动后续动作：
+5. **健康摘要（R-D1a / REQ-145.1，bootstrap 自动运行——FEAT-034 起为后置深检）**：运行 `python skills/software-project-governance/infra/verify_workflow.py check-governance --summary-only`（DSH 支持 CLI；摘要为只读、只显示、不阻断），按摘要驱动后续动作：
    - `Governance: [PASS]`（N=0）→ 无动作，继续 bootstrap。
    - `Governance: {N} issues`（N>0，附首个 `[FAIL]` / `[WARN]` 行——standard 档另附最多 5 条明细（FAIL 优先，每条截断 130 字符）与「共 N issues，--level strict 查看全部」指引行，FIX-278 G1 top-N；G1 契约以 SKILL.md 详略分档与 `_print_check_summary` 为准）→ FAIL 级直达用户、WARN 记入会话上下文（M5.4b 纯通知；**只读优先，不因摘要本身阻断**）。
    - `Governance: unavailable` → `check-governance` 不可运行（verify_workflow.py 未定位）→ 继续 bootstrap，不阻断（fail-safe 到简报而非硬失败）。
@@ -396,6 +398,15 @@ AskUserQuestion 是交互边界的**默认行为**。以下是唯一有效的跳
   - "我已完成 X，要继续吗？" → 含问号，不是通知，必须 AskUserQuestion
   - "我已完成 X。下一步将执行 Y。" → 加 ℹ️ 前缀后是合法通知
 
+### M5.5 首次交互前置与实质工作时间跟踪（FEAT-034 / AUDIT-154）
+
+会话 bootstrap 的交互时序纪律——快路径数据就绪后立即把第一次决策权交给用户，深检后置但不豁免：
+
+1. **快路径立即 ask（MUST）**：第一动作 `resolve_entry.py --json`（fail-closed，不变）之后，第二动作为快路径数据获取（`governance-bootstrap --format json` 单命令聚合，FEAT-033）——就绪后 MUST **立即**呈现最小状态行（模式确认 + 阶段/Gate 摘要 + carry-over/风险计数）并通过 AskUserQuestion 进入首次用户交互。深检（`check-governance --summary-only` 健康摘要、交叉验证、版本升级序列、归档检测）**不作为首次 ask 的前置条件**，后置为用户选择后按需执行。
+2. **诚实语义（MUST）**：健康面未检查时（`health.state="deferred"`）状态行健康位显示「待检查」，MUST NOT 显示绿色通过或暗示已检查——deferred 不是 PASS。
+3. **深检后置 ≠ 深检可选（MUST）**：用户选择推进类动作（发布/版本 bump/治理写回/恢复遗留任务的实际修改）时，MUST 先补跑对应深检再继续——本条只重排深检时序，不削减 M6 Gate 义务、M8 验证义务与任何安全约束（fail-closed 第一动作不变）。
+4. **实质工作时间跟踪义务（arch 判定，AUDIT-154）**：禁止把"首次 ask 提前"单独当作治理提效结论——"先 ask 选完、用户再等数分钟深检"是虚假改善。治理开销评估 MUST 同时跟踪**进入实质工作时间**（time-to-substantive-work，`governance-cost-report`），与 TTFA（time-to-first-ask）成对报告。口径声明：`time_to_work` 是治理开销的 **lower bound**（DEC-205——ask 后的治理性 read/pwsh 计入 first_work_tool），不得把下界当无偏值使用；跨时点轨迹对比不可直接 diff（RISK-052）——效果验证用同快照内对比或新会话采样后重新生成对照。
+
 ## M6. Gate 行为（MANDATORY）
 
 ### Gate 通过类型
@@ -439,7 +450,7 @@ AskUserQuestion 是交互边界的**默认行为**。以下是唯一有效的跳
 | **仅关键决策停下** | 自动执行非关键决策；仅 M5.3 关键列表使用 AskUserQuestion | standard、strict profile |
 | **所有决策都停下** | 每个 M5.2 触发点使用 AskUserQuestion | lightweight profile、首次用户 |
 
-Agent 从项目 profile 推断模式。用户可随时通过说"仅在关键决策停下来"或"所有决策都问我"来覆盖。
+Agent 从项目 profile 推断模式。用户可随时通过说"仅在关键决策停下来"或"所有决策都问我"来覆盖。会话 bootstrap 的首次交互时序按 M5.5 执行（快路径立即 ask、深检后置、实质工作时间成对跟踪）。
 
 ### M7.2 禁止的中断
 

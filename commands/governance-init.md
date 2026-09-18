@@ -199,6 +199,8 @@ Bootstrap 注入内容（按 `profile` 差异化——lightweight 注入轻量�
 ### 每次会话第一动作
 读取 `.governance/plan-tracker.md`，确认当前阶段、Gate 状态、活跃风险。如 `.governance/` 不存在，提醒先初始化。
 
+首次交互前置（FEAT-034）：热数据可经单命令快路径获取——`python <plugin_home>/infra/verify_workflow.py governance-bootstrap --format json`（只读聚合；不可用时回退直接读取 plan-tracker）；快路径就绪后立即向用户呈现最小状态行并进入首次 AskUserQuestion 交互，深检后置为用户选择后按需执行（推进类动作前 MUST 补齐）；健康面未检查时（`health.state="deferred"`）显示「待检查」而非通过。
+
 触发模式行为：
 - always-on → 执行完整检查，治理面板可正常输出
 - on-demand → 仅读 plan-tracker，治理面板仅在用户显式调用时展开
@@ -328,18 +330,20 @@ AskUserQuestion 是唯一合法的用户提问方式。禁止内联文字提问�
 - 复盘/维护 → Maintenance
 
 ### Step 1: 读 plan-tracker + 跨会话恢复
-1. 读取 `.governance/plan-tracker.md` 的热数据段落（按以下优先级）:
+1. **热数据快路径（FEAT-034 首次交互前置）**：优先运行 `python <plugin_home>/infra/verify_workflow.py governance-bootstrap --format json`（只读聚合 ≤8KB——resolve envelope + 状态投影 + 候选 + migration 标志 + next_actions，即下方 a~f 热数据段落的单命令投影）获取热数据；聚合命令不可用（命令缺失/超时/解析失败）时 **fallback 原六段读取**——读取 `.governance/plan-tracker.md` 的热数据段落（按以下优先级）:
    a. `## 项目配置` — 当前 phase/stage/gate/mode/permission_mode/工作流版本
    b. `## Gate 状态跟踪` — 所有 Gate 状态
    c. `## 项目总览` — 当前统计（任务数/已完成/阻塞中/风险数）
    d. `## 当前活跃事项` — 仅未完成/进行中的 P0/P1/P2 任务
    e. 当前活跃版本的 task 表 — 版本描述中含"进行中"或"未发布"的段落
    f. `## 1.0.0 依赖链` 或等效的活跃依赖链
-   — 以下段落按需读取（不在 bootstrap 阶段强制读取）:
+   — 快路径输出缺某个热数据面（候选为空/字段缺失/解析失败）时，用 read 工具按需展开对应段落；以下段落仍按需读取（不在 bootstrap 阶段强制读取）:
    g. `## 需求跟踪矩阵`
    h. `## 变更控制`
    i. `## 版本规划` 中的"规划纪律"部分
    j. 版本规划中的"里程碑"和"版本路线图"
+
+   **首次交互前置（FEAT-034——快路径后立即 ask）**：热数据就绪后 MUST 立即呈现最小状态行（模式确认句 + 阶段/Gate 摘要 + carry-over/风险计数）并通过 AskUserQuestion 进入首次用户交互（会话恢复引导 / 下一步选项）；Step 2 交叉验证等深检**后置**为用户选择后按需执行，深检结果不作为本次 ask 的前置条件。健康面未检查时（`governance-bootstrap` 的 `health.state="deferred"`）状态行健康位显示「待检查」而非绿色通过；深检后置 ≠ 深检可选——用户选择推进类动作（发布/版本 bump/治理写回/恢复遗留任务的实际修改）前 MUST 补齐对应深检。
 
 2. **AI Execution Packet 优先读取（0.38.0+）**：
    — IF `.governance/execution-packets.json` 存在:
@@ -408,7 +412,8 @@ AskUserQuestion 是唯一合法的用户提问方式。禁止内联文字提问�
 **这就是用户要做的全部：/plugin update → 下次会话 → 一切自动完成。**
 不需要记住命令，不需要读文档，不需要手动操作——agent 自己升级自己。
 
-### Step 2: 交叉验证（3 项强制检查）
+### Step 2: 交叉验证（3 项强制检查——FEAT-034 起为后置深检）
+**时序（FEAT-034）**：本步骤属深检——在首次交互（Step 1 首次交互前置 ask）之后按需执行，不前置于首次 ask；用户选择推进类动作（发布/版本 bump/治理写回/恢复遗留任务的实际修改）时 MUST 先完成本步骤再继续。健康面未完成时显示「待检查」而非绿色通过。
 对照 `.governance/plan-tracker.md` 和 `.governance/evidence-log.md`：
 
 1. **证据完整性**：
@@ -600,18 +605,20 @@ AskUserQuestion 是唯一合法的用户提问方式。禁止内联文字提问�
 - 复盘/维护 → Maintenance
 
 ### Step 1: 读 plan-tracker + 跨会话恢复
-1. 读取 `.governance/plan-tracker.md` 的热数据段落（按以下优先级）:
+1. **热数据快路径（FEAT-034 首次交互前置）**：优先运行 `python <plugin_home>/infra/verify_workflow.py governance-bootstrap --format json`（只读聚合 ≤8KB——resolve envelope + 状态投影 + 候选 + migration 标志 + next_actions，即下方 a~f 热数据段落的单命令投影）获取热数据；聚合命令不可用（命令缺失/超时/解析失败）时 **fallback 原六段读取**——读取 `.governance/plan-tracker.md` 的热数据段落（按以下优先级）:
    a. `## 项目配置` — 当前 phase/stage/gate/mode/permission_mode/工作流版本
    b. `## Gate 状态跟踪` — 所有 Gate 状态
    c. `## 项目总览` — 当前统计（任务数/已完成/阻塞中/风险数）
    d. `## 当前活跃事项` — 仅未完成/进行中的 P0/P1/P2 任务
    e. 当前活跃版本的 task 表 — 版本描述中含"进行中"或"未发布"的段落
    f. `## 1.0.0 依赖链` 或等效的活跃依赖链
-   — 以下段落按需读取（不在 bootstrap 阶段强制读取）:
+   — 快路径输出缺某个热数据面（候选为空/字段缺失/解析失败）时，用 read 工具按需展开对应段落；以下段落仍按需读取（不在 bootstrap 阶段强制读取）:
    g. `## 需求跟踪矩阵`
    h. `## 变更控制`
    i. `## 版本规划` 中的"规划纪律"部分
    j. 版本规划中的"里程碑"和"版本路线图"
+
+   **首次交互前置（FEAT-034——快路径后立即 ask）**：热数据就绪后 MUST 立即呈现最小状态行（模式确认句 + 阶段/Gate 摘要 + carry-over/风险计数）并通过 AskUserQuestion 进入首次用户交互（会话恢复引导 / 下一步选项）；Step 2 交叉验证等深检**后置**为用户选择后按需执行，深检结果不作为本次 ask 的前置条件。健康面未检查时（`governance-bootstrap` 的 `health.state="deferred"`）状态行健康位显示「待检查」而非绿色通过；深检后置 ≠ 深检可选——用户选择推进类动作（发布/版本 bump/治理写回/恢复遗留任务的实际修改）前 MUST 补齐对应深检。
 
 2. **AI Execution Packet 优先读取（0.38.0+）**：
    — IF `.governance/execution-packets.json` 存在:
@@ -681,7 +688,8 @@ AskUserQuestion 是唯一合法的用户提问方式。禁止内联文字提问�
 **这就是用户要做的全部：/plugin update → 下次会话 → 一切自动完成。**
 不需要记住命令，不需要读文档，不需要手动操作——agent 自己升级自己。
 
-### Step 2: 交叉验证（3 项强制检查）
+### Step 2: 交叉验证（3 项强制检查——FEAT-034 起为后置深检）
+**时序（FEAT-034）**：本步骤属深检——在首次交互（Step 1 首次交互前置 ask）之后按需执行，不前置于首次 ask；用户选择推进类动作（发布/版本 bump/治理写回/恢复遗留任务的实际修改）时 MUST 先完成本步骤再继续。健康面未完成时显示「待检查」而非绿色通过。
 对照 `.governance/plan-tracker.md` 和 `.governance/evidence-log.md`：
 
 1. **证据完整性**：

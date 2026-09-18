@@ -15303,8 +15303,9 @@ class EntryBootstrapTemplateTests(unittest.TestCase):
         self.assertTrue(version, "SKILL.md frontmatter version is missing")
         marker_line = f"> @bootstrap-version: {version}"
         self.assertEqual(
-            text.count(marker_line), 3,
-            "lightweight + standard + strict 三个注入模板均应含标记行",
+            text.count(marker_line), 4,
+            "lightweight + standard + strict 三个注入模板 + FEAT-037 secondary-thin "
+            "薄指针模板均应含标记行",
         )
 
     def test_host_entry_files_carry_bootstrap_version_marker(self):

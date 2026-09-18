@@ -36,6 +36,7 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
 - 看护事实：所有修改、审查、证据和发布结论必须基于可复查事实，禁止把假设、猜测、推测或编造内容写成闭环事实。
 - 看护闭环：产品代码产出必须有验证证据和独立审查；宿主不支持分离时只能记录 degraded evidence，不得宣称 review passed。
 - Coordinator 接管用户交互：只在 critical triggers 触发时通过 AskUserQuestion 打断用户；常规执行自动推进并记录假设。【自动化分级：A 级（Agent Protocol Automation）——agent 按协议纪律自动执行，详见「自动化能力分级声明」】
+- 首次交互前置（FEAT-034）：会话 bootstrap 在快路径数据（`governance-bootstrap` 聚合）就绪后**立即**通过 AskUserQuestion 进入首次用户交互（最小状态行 + 恢复/下一步选项）；健康摘要等深检后置为用户选择后按需执行（推进类动作前 MUST 补齐对应深检，deferred 期间显示「待检查」）；同时成对跟踪进入实质工作时间——不得把"先 ask、用户选完再久等深检"当作改善（AUDIT-154 arch 判定，详见 behavior-protocol.md M5.5）。
 - Producer-Reviewer 分离：生产者只产出，Reviewer 只审查；缺少真实分离时只能进入 degraded mode。
 
 ### 你必须避免
@@ -59,7 +60,7 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
 
 ### 每会话 bootstrap 健康摘要（REQ-145.1, A3）
 
-本 SKILL 每会话经 persona 第一动作（加载本入口 + 运行 `resolve_entry.py --json`）**必然加载**。加载后运行健康摘要——从第 2 步（resolve_entry）之后，执行第 3 步：
+本 SKILL 每会话经 persona 第一动作（加载本入口 + 运行 `resolve_entry.py --json`）**必然加载**。**执行时序（FEAT-034 首次交互前置）**：第 2 步（resolve_entry，fail-closed 不变）之后先走快路径——运行 `governance-bootstrap --format json` 获取热数据（resolve+状态+候选+migration 标志+next_actions）并**立即**呈现最小状态行 + AskUserQuestion 首次交互；健康摘要（`check-governance --summary-only`）**后置**为用户选择后按需执行的深检——深检结果不作为首次 ask 的前置条件；`health.state="deferred"` 期间状态行健康位显示「待检查」而非绿色通过。**深检后置 ≠ 深检可选**：用户选择推进类动作（发布/版本 bump/治理写回/恢复遗留任务的实际修改）时 MUST 先补跑健康摘要与对应深检再继续。后置执行时按以下契约运行健康摘要：
 
 - 运行 `python skills/software-project-governance/infra/verify_workflow.py check-governance --summary-only`（DSH 支持 CLI）。读取 `Governance: {N} issues` 汇总 + 首个 FAIL/WARN 项；摘要**只读、只显示、不阻断**（fail-safe 到简报而非硬失败）：
   - `Governance: [PASS]`（N=0）→ 无动作，继续 bootstrap。
@@ -68,7 +69,7 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
   - `Governance: timed out` → 运行超时（>60s）→ 软超时取消该步，继续会话。
   - `Governance: N issues (parse degraded)` → 摘要解析降级（输出格式漂移 fail-safe），不报错。
 - **详略分档**（`--level lightweight|standard|strict`，缺省 standard）：轻量=汇总+首个 FAIL；标准=汇总+首个 FAIL/WARN+最多 5 条明细（FAIL 优先，每条截断 130 字符）+「共 N issues，--level strict 查看全部」指引行（FIX-278 G1 top-N——消除 103 字符摘要触发 ~25KB 追查链的放大（audit-148 §2.1））；严格=汇总+全部 FAIL/WARN。三档**跑同一个** `--summary-only`，仅输出详略不同，**不按 profile 拆逻辑**。
-- **bootstrap 聚合快路径（FEAT-033）**：需要 resolve+状态+候选单次输出时 MAY 改跑 `python skills/software-project-governance/infra/verify_workflow.py governance-bootstrap --format json`（只读聚合，≤8KB 投影）；其 `health.state="deferred"` 表示本命令未做健康检查——健康摘要仍以本节 `check-governance --summary-only` 为准，不得把 deferred 当作已通过。
+- **bootstrap 聚合快路径（FEAT-033；FEAT-034 起为第二动作）**：会话 bootstrap 在健康摘要之前 MUST 先跑 `python skills/software-project-governance/infra/verify_workflow.py governance-bootstrap --format json`（只读聚合，≤8KB 投影：resolve envelope + 状态投影 + 候选 + migration 标志 + next_actions）以支撑首次交互前置；其 `health.state="deferred"` 表示本命令未做健康检查——健康摘要仍以后置的 `check-governance --summary-only` 为准，deferred 期间显示「待检查」，不得把 deferred 当作已通过。
 
 ### 关键行为契约（MUST——注入面最小契约集，FIX-253/REQ-112；完整规则见 references/behavior-protocol.md M7.4 / M7.7）
 

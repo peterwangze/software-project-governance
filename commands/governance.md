@@ -136,7 +136,13 @@ Web console 是可选的本地伴随状态面板，也是用户手动 `/governan
 
 ## 决策树（自动分类——deterministic，DEC-096）
 
-**MUST 先运行 `python <plugin_home>/infra/resolve_entry.py --json`**（`<plugin_home>` 由 resolve_entry.py 自定位；本命令第一动作）。读取 `scenario_hint`（A..F）并按对应 Scenario 分支：
+**第一动作（不变，fail-closed）：MUST 先运行 `python <plugin_home>/infra/resolve_entry.py --json`**（`<plugin_home>` 由 resolve_entry.py 自定位）。
+
+**第二动作（FEAT-034 首次交互前置——快路径立即 ask）**：`resolved_root_ok == true` 后 MUST 运行 `python <plugin_home>/infra/verify_workflow.py governance-bootstrap --format json`（FEAT-033 只读聚合快路径，≤8KB：resolve envelope + 状态投影 + 候选 + migration 标志 + next_actions），**立即**呈现最小状态行（模式确认句 + 阶段/Gate 摘要 + carry-over/风险计数）并通过 AskUserQuestion 进入首次用户交互——Scenario D 呈现恢复选项（继续上次/审查快照/重新开始），Scenario F 呈现下一步引导（见「状态展示后的引导」），其余场景按对应 Scenario 的首个用户决策点呈现。
+
+**深检后置（FEAT-034——用户选择后按需执行）**：`check-governance --summary-only` 健康摘要、plan-tracker 六段热数据逐段读取、交叉验证、版本升级序列（Scenario C 自动序列）、归档检测**不作为首次 ask 的前置条件**——深检结果不阻塞首次交互；`governance-bootstrap` 的 `health.state="deferred"` 期间，状态行健康位显示「待检查」而非绿色通过（诚实语义——deferred ≠ 已检查）。**深检后置 ≠ 深检可选**：用户选择推进类动作（发布/版本 bump/治理写回/恢复遗留任务的实际修改）时 MUST 先补跑对应深检（健康摘要 + 交叉验证 + 按所选动作对应的升级/归档序列）再继续——安全约束零削减，只重排时序。
+
+读取 `scenario_hint`（A..F）并按对应 Scenario 分支：
 
 - `resolved_root_ok == false` → **STOP**，展示 `diagnostic`，不呈现任何治理状态（DEC-080 / RISK-038 fail-closed）。
 - `scenario_hint == "A"` → Scenario A（全新项目初始化）
@@ -286,6 +292,8 @@ Web console 是可选的本地伴随状态面板，也是用户手动 `/governan
 
 **检测条件**：`resolve_entry.py` 输出 `scenario_hint == "C"`——即 `.governance/` 存在、无异常、且 host `工作流版本` < `active_version`（`active_version` 来自 SKILL.md frontmatter，权威；DEC-096）。不再由本命令在 prose 中比较版本号。
 
+**时序（FEAT-034 首次交互前置）**：版本差距 + CHANGELOG delta 摘要随快路径首次 ask 一并呈现征询确认；下方步骤 3 的自动升级序列（入口 bootstrap 替换 / plan-tracker 结构补全 / 归档检测等深检写操作）在用户确认升级后执行——深检写序列不前置于首次交互。
+
 **流程**：
 1. 从 resolve_entry envelope 读取 `active_version`（权威）与 plan-tracker 记录版本，计算版本差距
 2. 提取 CHANGELOG delta（从 plan-tracker 版本到当前版本）
@@ -318,7 +326,7 @@ Web console 是可选的本地伴随状态面板，也是用户手动 `/governan
 
 **检测条件**：`session-snapshot.md` 存在 AND 日期在 24h 内
 
-**数据源补充（FEAT-033 bootstrap 聚合快路径）**：恢复面板所需的当前状态交叉验证数据（任务统计 / 风险 / 候选）MAY 优先取自单次 `python <plugin_home>/infra/verify_workflow.py governance-bootstrap --format json`（只读聚合，≤8KB），替代多次 verify 调用 + 逐段读 plan-tracker；snapshot 字段解析与 D1-D3 流程不变。
+**数据源补充（FEAT-033 bootstrap 聚合快路径；FEAT-034 时序重排）**：恢复面板所需的当前状态交叉验证数据（任务统计 / 风险 / 候选）MAY 优先取自单次 `python <plugin_home>/infra/verify_workflow.py governance-bootstrap --format json`（只读聚合，≤8KB），替代多次 verify 调用 + 逐段读 plan-tracker；snapshot 字段解析与 D1-D3 流程不变。**首次交互前置（FEAT-034）**：快路径数据就绪后 D3 恢复面板 + AskUserQuestion **立即**执行——D2 交叉验证与其它深检后置为用户选择后按需执行（用户选择"继续上次"并进入实际修改前 MUST 补齐 D2 交叉验证）；`health.state="deferred"` 期间恢复面板健康位显示「待检查」而非通过。
 
 **新鲜度规则**：
 | 时间 | 处理 |
@@ -377,6 +385,8 @@ Web console 是可选的本地伴随状态面板，也是用户手动 `/governan
 ## Scenario E: 异常恢复
 
 **检测条件**：任一异常标记触发
+
+**时序（FEAT-034 首次交互前置）**：异常标记本身来自 resolve_entry 判定（fail-closed 已在第一动作保证，不受本重排影响）——首次 ask 先呈现已知异常标记 + 选项（立即全量诊断 / 暂缓并记录为已知异常），下方 E1 全量诊断作为深检在用户选择后执行；用户选择推进类动作时 MUST 先补齐对应深检再继续。
 
 ### Step E1: 全量诊断
 
@@ -531,6 +541,8 @@ Context acceptance harness：运行 `python <plugin_home>/infra/verify_workflow.
 **输出模板**：参考 `commands/governance-status.md`，扩展含 permission_mode、版本新鲜度、最近活动，并应用上述折叠规则。
 
 ### 状态展示后的引导（MUST）
+
+**时序（FEAT-034 首次交互前置）**：本引导 = 快路径（第二动作）后的首次用户交互——`governance-bootstrap`/`status` 渲染完成后**立即**执行；健康摘要（`check-governance --summary-only`）等深检后置为用户选择后按需执行，`health.state="deferred"` 期间面板健康位显示「待检查」而非通过。
 
 展示完治理面板后，**MUST 通过 AskUserQuestion 引导用户进入下一步**——Scenario F 不是终点，是工作起点。
 

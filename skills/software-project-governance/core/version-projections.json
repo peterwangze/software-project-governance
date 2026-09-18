@@ -5,25 +5,183 @@
     "path": "skills/software-project-governance/SKILL.md"
   },
   "validation_inventories": [
-    {"id": "required-snippets", "source": "skills/software-project-governance/infra/verify_workflow.py", "symbol": "REQUIRED_SNIPPETS"},
-    {"id": "fixture-mirror-patterns", "source": "skills/software-project-governance/infra/verify_workflow.py", "symbol": "PROJECTION_SYNC_PATTERNS"}
+    {
+      "id": "required-snippets",
+      "source": "skills/software-project-governance/infra/verify_workflow.py",
+      "symbol": "REQUIRED_SNIPPETS"
+    },
+    {
+      "id": "fixture-mirror-patterns",
+      "source": "skills/software-project-governance/infra/verify_workflow.py",
+      "symbol": "PROJECTION_SYNC_PATTERNS"
+    }
   ],
   "projections": [
-    {"id": "fixture-skill", "kind": "byte_copy", "source": "skills/software-project-governance/SKILL.md", "target": "project/e2e-test-project/skills/software-project-governance/SKILL.md"},
-    {"id": "core-manifest", "kind": "structured_json", "target": "skills/software-project-governance/core/manifest.json", "pointer": "/version"},
-    {"id": "claude-plugin", "kind": "structured_json", "target": ".claude-plugin/plugin.json", "pointer": "/version"},
-    {"id": "claude-marketplace", "kind": "structured_json", "target": ".claude-plugin/marketplace.json", "pointer": "/plugins/0/version"},
-    {"id": "codex-plugin", "kind": "structured_json", "target": ".codex-plugin/plugin.json", "pointer": "/version"},
-    {"id": "zcode-plugin", "kind": "structured_json", "target": ".zcode-plugin/plugin.json", "pointer": "/version"},
-    {"id": "chrys-plugin", "kind": "structured_json", "target": ".chrys-plugin/plugin.json", "pointer": "/version"},
-    {"id": "package", "kind": "structured_json", "target": "package.json", "pointer": "/version"},
-    {"id": "fixture-plan", "kind": "transformed_text", "target": "project/e2e-test-project/.governance/plan-tracker.md", "pattern": "(?m)(\\*\\*工作流版本:\\s*)[0-9]+\\.[0-9]+\\.[0-9]+", "replacement": "\\g<1>{version}", "count": 1},
-    {"id": "hook-pre-commit", "kind": "transformed_text", "target": "skills/software-project-governance/infra/hooks/pre-commit", "pattern": "(?m)^# @version: [0-9]+\\.[0-9]+\\.[0-9]+$", "replacement": "# @version: {version}", "count": 1},
-    {"id": "hook-commit-msg", "kind": "transformed_text", "target": "skills/software-project-governance/infra/hooks/commit-msg", "pattern": "(?m)^# @version: [0-9]+\\.[0-9]+\\.[0-9]+$", "replacement": "# @version: {version}", "count": 1},
-    {"id": "hook-post-commit", "kind": "transformed_text", "target": "skills/software-project-governance/infra/hooks/post-commit", "pattern": "(?m)^# @version: [0-9]+\\.[0-9]+\\.[0-9]+$", "replacement": "# @version: {version}", "count": 1},
-    {"id": "hook-prepare-commit-msg", "kind": "transformed_text", "target": "skills/software-project-governance/infra/hooks/prepare-commit-msg", "pattern": "(?m)^# @version: [0-9]+\\.[0-9]+\\.[0-9]+$", "replacement": "# @version: {version}", "count": 1},
-    {"id": "dsh-persona-version", "kind": "transformed_text", "target": "agent-presets/governance/agent.cordis.yml.template", "pattern": "治理工作流（v[0-9]+\\.[0-9]+\\.[0-9]+）", "replacement": "治理工作流（v{version}）", "count": 1},
-    {"id": "dsh-agents-bootstrap-version", "kind": "transformed_text", "target": "adapters/dsh/AGENTS.md.template", "pattern": "(?m)^> @bootstrap-version: [0-9]+\\.[0-9]+\\.[0-9]+$", "replacement": "> @bootstrap-version: {version}", "count": 1},
-    {"id": "canonical-bootstrap-version", "kind": "transformed_text", "target": "commands/governance-init.md", "pattern": "(?m)^> @bootstrap-version: [0-9]+\\.[0-9]+\\.[0-9]+", "replacement": "> @bootstrap-version: {version}", "count": 4}
+    {
+      "id": "fixture-skill",
+      "kind": "byte_copy",
+      "source": "skills/software-project-governance/SKILL.md",
+      "target": "project/e2e-test-project/skills/software-project-governance/SKILL.md"
+    },
+    {
+      "id": "core-manifest",
+      "kind": "structured_json",
+      "target": "skills/software-project-governance/core/manifest.json",
+      "pointer": "/version"
+    },
+    {
+      "id": "claude-plugin",
+      "kind": "structured_json",
+      "target": ".claude-plugin/plugin.json",
+      "pointer": "/version"
+    },
+    {
+      "id": "claude-marketplace",
+      "kind": "structured_json",
+      "target": ".claude-plugin/marketplace.json",
+      "pointer": "/plugins/0/version"
+    },
+    {
+      "id": "codex-plugin",
+      "kind": "structured_json",
+      "target": ".codex-plugin/plugin.json",
+      "pointer": "/version"
+    },
+    {
+      "id": "zcode-plugin",
+      "kind": "structured_json",
+      "target": ".zcode-plugin/plugin.json",
+      "pointer": "/version"
+    },
+    {
+      "id": "chrys-plugin",
+      "kind": "structured_json",
+      "target": ".chrys-plugin/plugin.json",
+      "pointer": "/version"
+    },
+    {
+      "id": "package",
+      "kind": "structured_json",
+      "target": "package.json",
+      "pointer": "/version"
+    },
+    {
+      "id": "fixture-plan",
+      "kind": "transformed_text",
+      "target": "project/e2e-test-project/.governance/plan-tracker.md",
+      "pattern": "(?m)(\\*\\*工作流版本:\\s*)[0-9]+\\.[0-9]+\\.[0-9]+",
+      "replacement": "\\g<1>{version}",
+      "count": 1
+    },
+    {
+      "id": "hook-pre-commit",
+      "kind": "transformed_text",
+      "target": "skills/software-project-governance/infra/hooks/pre-commit",
+      "pattern": "(?m)^# @version: [0-9]+\\.[0-9]+\\.[0-9]+$",
+      "replacement": "# @version: {version}",
+      "count": 1
+    },
+    {
+      "id": "hook-commit-msg",
+      "kind": "transformed_text",
+      "target": "skills/software-project-governance/infra/hooks/commit-msg",
+      "pattern": "(?m)^# @version: [0-9]+\\.[0-9]+\\.[0-9]+$",
+      "replacement": "# @version: {version}",
+      "count": 1
+    },
+    {
+      "id": "hook-post-commit",
+      "kind": "transformed_text",
+      "target": "skills/software-project-governance/infra/hooks/post-commit",
+      "pattern": "(?m)^# @version: [0-9]+\\.[0-9]+\\.[0-9]+$",
+      "replacement": "# @version: {version}",
+      "count": 1
+    },
+    {
+      "id": "hook-prepare-commit-msg",
+      "kind": "transformed_text",
+      "target": "skills/software-project-governance/infra/hooks/prepare-commit-msg",
+      "pattern": "(?m)^# @version: [0-9]+\\.[0-9]+\\.[0-9]+$",
+      "replacement": "# @version: {version}",
+      "count": 1
+    },
+    {
+      "id": "dsh-persona-version",
+      "kind": "transformed_text",
+      "target": "agent-presets/governance/agent.cordis.yml.template",
+      "pattern": "治理工作流（v[0-9]+\\.[0-9]+\\.[0-9]+）",
+      "replacement": "治理工作流（v{version}）",
+      "count": 1
+    },
+    {
+      "id": "dsh-agents-bootstrap-version",
+      "kind": "transformed_text",
+      "target": "adapters/dsh/AGENTS.md.template",
+      "pattern": "(?m)^> @bootstrap-version: [0-9]+\\.[0-9]+\\.[0-9]+$",
+      "replacement": "> @bootstrap-version: {version}",
+      "count": 1
+    },
+    {
+      "id": "canonical-bootstrap-version",
+      "kind": "transformed_text",
+      "target": "commands/governance-init.md",
+      "pattern": "(?m)^> @bootstrap-version: [0-9]+\\.[0-9]+\\.[0-9]+",
+      "replacement": "> @bootstrap-version: {version}",
+      "count": 4
+    },
+    {
+      "id": "fixture-command-governance-scenario-a",
+      "kind": "byte_copy",
+      "source": "commands/governance/scenario-a.md",
+      "target": "project/e2e-test-project/commands/governance/scenario-a.md"
+    },
+    {
+      "id": "fixture-command-governance-scenario-b",
+      "kind": "byte_copy",
+      "source": "commands/governance/scenario-b.md",
+      "target": "project/e2e-test-project/commands/governance/scenario-b.md"
+    },
+    {
+      "id": "fixture-command-governance-scenario-c",
+      "kind": "byte_copy",
+      "source": "commands/governance/scenario-c.md",
+      "target": "project/e2e-test-project/commands/governance/scenario-c.md"
+    },
+    {
+      "id": "fixture-command-governance-scenario-d",
+      "kind": "byte_copy",
+      "source": "commands/governance/scenario-d.md",
+      "target": "project/e2e-test-project/commands/governance/scenario-d.md"
+    },
+    {
+      "id": "fixture-command-governance-scenario-e",
+      "kind": "byte_copy",
+      "source": "commands/governance/scenario-e.md",
+      "target": "project/e2e-test-project/commands/governance/scenario-e.md"
+    },
+    {
+      "id": "fixture-command-governance-scenario-f",
+      "kind": "byte_copy",
+      "source": "commands/governance/scenario-f.md",
+      "target": "project/e2e-test-project/commands/governance/scenario-f.md"
+    },
+    {
+      "id": "fixture-command-governance-bootstrap",
+      "kind": "byte_copy",
+      "source": "commands/governance/bootstrap.md",
+      "target": "project/e2e-test-project/commands/governance/bootstrap.md"
+    },
+    {
+      "id": "fixture-command-governance-snapshot-schema",
+      "kind": "byte_copy",
+      "source": "commands/governance/snapshot-schema.md",
+      "target": "project/e2e-test-project/commands/governance/snapshot-schema.md"
+    },
+    {
+      "id": "fixture-command-governance-overview",
+      "kind": "byte_copy",
+      "source": "commands/governance/overview.md",
+      "target": "project/e2e-test-project/commands/governance/overview.md"
+    }
   ]
 }

@@ -36,7 +36,7 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
 - 看护事实：所有修改、审查、证据和发布结论必须基于可复查事实，禁止把假设、猜测、推测或编造内容写成闭环事实。
 - 看护闭环：产品代码产出必须有验证证据和独立审查；宿主不支持分离时只能记录 degraded evidence，不得宣称 review passed。
 - Coordinator 接管用户交互：只在 critical triggers 触发时通过 AskUserQuestion 打断用户；常规执行自动推进并记录假设。【自动化分级：A 级（Agent Protocol Automation）——agent 按协议纪律自动执行，详见「自动化能力分级声明」】
-- 首次交互前置（FEAT-034）：会话 bootstrap 在快路径数据（`governance-bootstrap` 聚合）就绪后**立即**通过 AskUserQuestion 进入首次用户交互（最小状态行 + 恢复/下一步选项）；健康摘要等深检后置为用户选择后按需执行（推进类动作前 MUST 补齐对应深检，deferred 期间显示「待检查」）；同时成对跟踪进入实质工作时间——不得把"先 ask、用户选完再久等深检"当作改善（AUDIT-154 arch 判定，详见 behavior-protocol.md M5.5）。
+- 首次交互前置（FEAT-034）：会话 bootstrap 在快路径数据（`governance-bootstrap` 聚合）就绪后**立即**通过 AskUserQuestion 进入首次用户交互（最小状态行 + 恢复/下一步选项）；健康摘要等深检后置为用户选择后按需执行（推进类动作前 MUST 补齐对应深检，deferred 期间显示「待检查」）；同时成对跟踪进入实质工作时间——不得把"先 ask、用户选完再久等深检"当作改善（AUDIT-154 arch 判定，详见 behavior-protocol.md M5.5）。版本升级写序列属推进类动作（FEAT-035 / DEC-207② P2-1）：升级/归档写操作 MUST 先经 AskUserQuestion 确认（升级摘要含写操作清单与回滚方式；用户未响应前零写操作），执行前 MUST 补齐 M5.5 条 3 深检。
 - Producer-Reviewer 分离：生产者只产出，Reviewer 只审查；缺少真实分离时只能进入 degraded mode。
 
 ### 你必须避免
@@ -124,7 +124,7 @@ Coordinator 铁律第 1 条"不直接修改产品代码"的具体判定标准。
 本工作流对「自动/看护」的承诺按 plugin-contract.md 三级划分；**禁止用笼统的「自动」一词同时指向 A 级与 C 级能力**（plugin-contract.md L114 禁令——README 和对外文档必须显式说明当前各项能力处于哪一级）：
 
 - **A 级（Agent Protocol Automation）**：行为协议自动化——agent 按协议纪律自动执行。例如「Coordinator 接管用户交互：只在 critical triggers 触发时打断；常规执行自动推进并记录假设」（见上方「你负责」清单）= A 级。
-- **B 级（CLI-Enforced Automation）**：CLI/脚本强制——`verify_workflow.py check-governance` 与 commit hooks 在命令/commit 时点强制（= B 级）。本文件「治理基础设施（自动使用）」与 `commands/governance.md`「自动分类，不问用户」均属本级（事件驱动，非持续）。
+- **B 级（CLI-Enforced Automation）**：CLI/脚本强制——`verify_workflow.py check-governance` 与 commit hooks 在命令/commit 时点强制（= B 级）。本文件「治理基础设施（自动使用）」与 `commands/governance.md`（FEAT-038 起为**路由层**：只含 Coordinator 身份/检测逻辑/决策树/六 Scenario 摘要与路由，执行规程按需 Read `commands/governance/` 下文件）「自动分类，不问用户」均属本级（事件驱动，非持续）。
 - **governance-write-guard（FEAT-011 / FIX-297 / FEAT-017）= B 级检查器工件 + A 级协议触发（post-commit advisory 显示面）**：CLI 被调用即强制（结构违约 FAIL 退出码 1）；post-commit 面板接线已交付（FEAT-017——advisory 显示、非阻断，回滚=删 post-commit Step 4b 段），复跑时点仍由 `references/behavior-protocol.md` M1.2「直写后 MUST 复跑」协议纪律约束并保留为权威与回退路径；对外宣示不得写成 write-guard hook 时点强制或 C 级（B 级时点强制属 commit-msg/pre-commit 既有 hook 面）。
 - **C 级（System Automation）**：后台系统自动触发、不依赖 agent 记忆——**未实现**（plugin-contract.md L102：MCP/headless runner 仅有协议样例，无可用实现）。0.76.0 通过 `check-governance --summary-only` 的会话 bootstrap 自动运行实现「会话级」自动触发（见上方「每会话 bootstrap 健康摘要」），但**不是** C 级后台 daemon。
 

@@ -21,7 +21,16 @@
       "hook-prepare-commit-msg",
       "dsh-persona-version",
       "dsh-agents-bootstrap-version",
-      "canonical-bootstrap-version"
+      "canonical-bootstrap-version",
+      "fixture-command-governance-scenario-a",
+      "fixture-command-governance-scenario-b",
+      "fixture-command-governance-scenario-c",
+      "fixture-command-governance-scenario-d",
+      "fixture-command-governance-scenario-e",
+      "fixture-command-governance-scenario-f",
+      "fixture-command-governance-bootstrap",
+      "fixture-command-governance-snapshot-schema",
+      "fixture-command-governance-overview"
     ],
     "projection_kinds": [
       "byte_copy",
@@ -46,7 +55,7 @@
         "source": "skills/software-project-governance/infra/verify_workflow.py",
         "symbol": "PROJECTION_SYNC_PATTERNS",
         "value_type": "sequence",
-        "min_entries": 11,
+        "min_entries": 12,
         "member_match": "exact",
         "required_members": [
           "skills/*/SKILL.md",
@@ -59,7 +68,8 @@
           "skills/software-project-governance/infra/hooks/*",
           "skills/software-project-governance/references/**/*.md",
           "commands/*.md",
-          "agents/*.md"
+          "agents/*.md",
+          "commands/governance/*.md"
         ]
       }
     ]
@@ -639,6 +649,42 @@
       {
         "path": "docs/release/rollback-plan-0.61.2.md",
         "type": "file"
+      },
+      {
+        "path": "commands/governance/scenario-a.md",
+        "type": "file"
+      },
+      {
+        "path": "commands/governance/scenario-b.md",
+        "type": "file"
+      },
+      {
+        "path": "commands/governance/scenario-c.md",
+        "type": "file"
+      },
+      {
+        "path": "commands/governance/scenario-d.md",
+        "type": "file"
+      },
+      {
+        "path": "commands/governance/scenario-e.md",
+        "type": "file"
+      },
+      {
+        "path": "commands/governance/scenario-f.md",
+        "type": "file"
+      },
+      {
+        "path": "commands/governance/bootstrap.md",
+        "type": "file"
+      },
+      {
+        "path": "commands/governance/snapshot-schema.md",
+        "type": "file"
+      },
+      {
+        "path": "commands/governance/overview.md",
+        "type": "file"
       }
     ],
     "glob_patterns": [
@@ -671,7 +717,8 @@
       ".codex-plugin/*.json",
       ".zcode-plugin/*.json",
       ".zcode-plugin/assets/*",
-      ".agents/plugins/*.json"
+      ".agents/plugins/*.json",
+      "commands/governance/*.md"
     ]
   },
   "canonical_product_artifacts": {

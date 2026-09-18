@@ -55,6 +55,7 @@
 | TOOL-048 | Artifact Projection Generator | registry + CLI | `core/version-projections.json` + `infra/verify_workflow.py release-projection [--write]` | SKILL frontmatter 版本投影检查与原子写入 | 发布/维护 | 是 |
 | TOOL-049 | Optional Quality Tool Probe | CLI probe | `infra/verify_workflow.py quality-tools` | Ruff/mypy 可用性与版本探测，结构化 PASS/NOT_RUN/FAIL | 开发/测试/发布/维护 | 是 |
 | TOOL-052 | DSH Preset Schema Compat Guard | CLI check（可独立运行） | `infra/dsh_compat.py` + `infra/verify_workflow.py check-dsh-preset-compat`（`check-governance` Check 28v） | 用**解析态** dsh 插件集的 loader YAML 方言 + loader `evaluate` + cordis `resolveConfig` 逐行校验每个 preset 组合（含 `group` 递归、`disabled` 祖先继承语义），行级报告 row id + 模块名 + schema 原文消息；无 node / 无可解析插件集 → NOT_RUN（可选工具政策，不计 issues） | 开发/测试/发布/维护 | 是 |
+| TOOL-053 | 治理成本埋点报告 | CLI report（只读扫描） | `infra/governance_cost.py` + `infra/verify_workflow.py governance-cost-report --sessions-root <dir> [--workspace <str>] --format json\|text` | 0.84.0 治理成本可观测（FEAT-032/AUDIT-154 切片 A-1）：解析 DSH 会话轨迹（session.v3.jsonl.zstd），机读输出每轮 TTFA（用户消息→首次 ask_user_question）、进入实质工作时间（首次 ask→首个非治理工具调用或轮结束）、token 分项（in/cache/out 累计请求量）、工具时长分布、LLM vs 工具时间占比；`--sessions-root` 缺省取 `DSH_SESSIONS_ROOT` 环境变量，两者皆缺 → fail-closed（exit 2）；zstandard 缺失 → 清晰报错不静默降级；对用户会话目录仅只读 | 架构/开发/测试/维护 | 是 |
 
 ## 工具详情
 
@@ -548,6 +549,17 @@
 - **安全边界**：只读静态分析 + 从解析面 import 模块（不调用 `apply`，不构造 Context）；子进程 `DSH_HOME` 重定向到临时空目录，`home_writes` = 该临时目录的条目数（构造时为空）⇒ **仅证明未写入该隔离 home**，不是全局零写入证明（模块 import 与 `$DSH_HOME/profiles` 只读探测都在其外），M7.7 (a) 先例
 - **边界**：无 node / 无可解析插件集 → `NOT_RUN`（不计 issues，不写成 PASS）；schema 判定只来自解析面 `Config`，不复制任何 schema；`disabled` 语义按 loader 的 `Entry._disabled` 祖先链继承（group 自身恒为 enabled，但其 `disabled` 由子行继承 ⇒ 子行记 `DISABLED_INHERITED`，不出 finding）
 - **被以下子工作流使用**：开发、测试、发布、维护
+
+### TOOL-053：治理成本埋点报告（FEAT-032 / AUDIT-154 切片 A-1）
+
+- **文件**：`infra/governance_cost.py`（正式模块，EVD-1071 研究脚本逻辑提升）、`infra/tests/test_governance_cost.py`；`project/research/dsh-trace-analysis/` 下脚本为 deprecated 指针
+- **子命令**：`governance-cost-report --sessions-root <dir> [--workspace <str>] --format json|text`
+- **输入**：`--sessions-root` 下 `**/session.v3.jsonl.zstd`（zstandard 解压；`--sessions-root` 缺省取 `DSH_SESSIONS_ROOT` 环境变量，两者皆缺 → exit 2 fail-closed，不硬编码用户路径）；`--workspace` 按 cwd 子串过滤后再聚合
+- **输出**：机读 JSON（schema `governance-cost-report/1`）+ 人类可读 text：每轮 TTFA（用户消息→首次 ask_user_question）、进入实质工作时间（首次 ask→首个非治理工具调用或轮结束，含 endpoint 判别）、token 分项（in/cache/out，累计请求量口径）、工具时长分布（按名聚合 count/total/max/avg）、LLM vs 工具时间占比与 labeled residual、ask_user_question 挂起（用户等待）单列；报告内嵌 `calibration` 口径披露（审计报告 §4：原始时间戳差值不加工、LLM 窗口内 TTFT/解码不可分离、残差语义）
+- **口径**：`user/message` 无 turn 字段按事件序归属当前 turn（EVD-1071/审计 §2）；治理工具按名分类仅 `ask_user_question`+`skill`（声明式常量，通用工具按名不可分类、计入实质工作候选——已在 calibration 披露）
+- **安全边界**：对 sessions root 纯只读（rglob + 读字节）；zstandard 缺失 → 清晰报错 exit 1，不静默降级；模块 import 期 stdlib-only（引擎冷启动面 +1），zstandard 懒加载
+- **依赖**：zstandard（可选运行时依赖，缺失 fail-closed——依赖登记由 Coordinator 决策，未修改 requirements/pyproject）
+- **被以下子工作流使用**：架构、开发、测试、维护（FEAT-033/034/039 消费其指标）
 
 ### TOOL-050：Loop Runtime Claim Gate
 

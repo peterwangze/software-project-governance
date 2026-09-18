@@ -53,7 +53,15 @@ from contract_matrix import generator as cmg  # noqa: E402
 # and 70→71 check segments (Check 28w / `checks.dsh_boundary`); the snapshot was
 # regenerated with `contract_matrix/generator.py --regen` in the same change —
 # the documented contract-change path, review covering both files.
-FROZEN_CLI_KEY_COUNT = 84
+# FEAT-032 (0.84.0 slice A-1): 84→85 keys (`governance-cost-report` — cost
+# observability handler in `governance_cost.py`, engine wires dispatch only);
+# snapshot regenerated via `contract_matrix/generator.py --regen` in the same
+# change (the documented contract-change path, review covering both files).
+# FEAT-037 (0.84.0 slice A-6): 85→86 keys (`check-entry-bootstrap-sync` —
+# AGENTS/CLAUDE bootstrap projection guard, handler in `checks/projection.py`,
+# thin bare-Name wrapper in the engine); snapshot regenerated via
+# `contract_matrix/generator.py --regen` in the same change.
+FROZEN_CLI_KEY_COUNT = 86
 FROZEN_CHECK_SEGMENT_COUNT = 71
 
 

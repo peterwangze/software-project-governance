@@ -69,6 +69,12 @@ from release.quality import probe_quality_tools
 # FEAT-019: ArchGuard ratchet gate (fatal) — self-contained module; the
 # engine only wires dispatch (bootstrap discipline, evolution doc §4).
 from archguard_ratchet import cmd_archguard_ratchet
+# FEAT-032 (AUDIT-154 slice A-1): governance cost observability —
+# self-contained module; the engine only wires dispatch (same pattern as
+# archguard_ratchet). zstandard is imported lazily inside the module so
+# the engine's cold-import face stays stdlib-only.
+import governance_cost
+from governance_cost import cmd_governance_cost_report
 
 ROOT = Path(__file__).resolve().parents[3]
 INTERACTION_BOUNDARY_PATH = ROOT / "skills/software-project-governance/references/interaction-boundary.md"
@@ -21338,6 +21344,15 @@ def cmd_check_projection_sync(args):
     else:
         print("\n  Result: PASSED — projection files and version declarations are synchronized")
     print()
+    # FEAT-037: entry-file bootstrap projection rides the same guard (one command covers both surfaces).
+    entry_result = projection_checks.check_entry_bootstrap_sync()
+    entry_failed = not projection_checks.print_entry_bootstrap_report(entry_result)
+    if entry_failed or (getattr(args, "fail_on_issues", False) and not entry_result["pass"]):
+        sys.exit(1)
+
+
+def cmd_check_entry_bootstrap_sync(args):  # FEAT-037; bare-Name handler (FEAT-020 contract matrix)
+    projection_checks.cmd_check_entry_bootstrap_sync(args)
 
 
 def cmd_check_injection_contract(args):
@@ -23903,6 +23918,10 @@ def main(argv=None):
     cps_p.add_argument("--fail-on-issues", action="store_true",
                        help="Exit with non-zero code if projection drift is found")
 
+    # check-entry-bootstrap-sync (FEAT-037) — cmd lives in checks/projection.py
+    cebs_p = subparsers.add_parser("check-entry-bootstrap-sync", help="Check AGENTS/CLAUDE bootstrap sections against the canonical templates (FEAT-037)")
+    cebs_p.add_argument("--fail-on-issues", action="store_true", help="Exit with non-zero code if entry bootstrap drift is found")
+
     # check-injection-contract (FIX-253 / REQ-112)
     cic_p = subparsers.add_parser(
         "check-injection-contract",
@@ -24441,6 +24460,19 @@ def main(argv=None):
                              "R2 fifth step: undeclared detectable side "
                              "effects record a WARN issue")
 
+    # governance-cost-report (FEAT-032 / AUDIT-154 slice A-1 — governance
+    # cost observability: TTFA, time-to-substantive-work, token breakdown,
+    # tool duration distribution; read-only scan of session traces; args
+    # and handler live in governance_cost.py — the engine only wires
+    # dispatch, ArchGuard R4 print budget untouched)
+    gcr_p = subparsers.add_parser(
+        "governance-cost-report",
+        help="Governance cost observability report (FEAT-032): TTFA, "
+             "time-to-substantive-work, governance token breakdown, tool "
+             "duration distribution (read-only scan; --format json|text)",
+    )
+    governance_cost.add_arguments(gcr_p)
+
     # governance-write-guard (FEAT-011 / G3 extension — structural write
     # guard over the Coordinator's DIRECT .governance writes; check-only)
     subparsers.add_parser(
@@ -24526,6 +24558,7 @@ def main(argv=None):
         "check-review-debt": cmd_check_review_debt,
         "check-version-consistency": cmd_check_version_consistency,
         "check-projection-sync": cmd_check_projection_sync,
+        "check-entry-bootstrap-sync": cmd_check_entry_bootstrap_sync,
         "check-injection-contract": cmd_check_injection_contract,
         "check-dsh-preset-smoke": cmd_check_dsh_preset_smoke,
         "check-dsh-preset-compat": cmd_check_dsh_preset_compat,
@@ -24572,6 +24605,7 @@ def main(argv=None):
         "next-candidates": cmd_next_candidates,
         "change-triage": cmd_change_triage,
         "governance-write-guard": cmd_governance_write_guard,
+        "governance-cost-report": cmd_governance_cost_report,
         "agent-locks-acquire": cmd_agent_locks_acquire,
     }
 

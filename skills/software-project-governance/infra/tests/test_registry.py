@@ -77,12 +77,18 @@ _SECTION_RE = re.compile(r"^\s*#\s*" + _DASH + r"{2}\s*([0-9][A-Za-z0-9]*)\.\s")
 # reason the segment is declared in `quickscan_registry.py` too
 # (`registry._build_check_specs()` raises at import time when the two tables
 # disagree, E-17).
-FROZEN_CLI_KEYS = 84
+# FEAT-032 (0.84.0 slice A-1): 84 -> 85 CLI keys (`governance-cost-report`;
+# handler lives in `governance_cost.py`, the engine wires dispatch only);
+# snapshot + architecture baseline regenerated in the same change.
+FROZEN_CLI_KEYS = 85
 FROZEN_SEGMENTS = 71
 
 # FEAT-018 R6 frozen startup budget (``core/architecture-baseline.json`` r6):
 # the acceptance ② comparison frame for "启动 import 集合不增".
-FROZEN_ENGINE_IMPORT_COUNT = 196
+# FEAT-032: 196 -> 197 — the engine imports the self-contained
+# ``governance_cost`` module (stdlib-only at import time; zstandard is lazy,
+# so the face grows by exactly this one module).
+FROZEN_ENGINE_IMPORT_COUNT = 197
 
 # Mechanism red lines (§9.1): no discovery scan, no third-party plugin loader.
 FORBIDDEN_REGISTRY_NAMES = {
@@ -322,6 +328,9 @@ class CommandRegistryTests(unittest.TestCase):
             "archguard-ratchet", "check-capability-registry",
             "check-manifest-consistency", "check-review-debt",
             "dsh-doctor",
+            # FEAT-032 (0.84.0 slice A-1): cost observability handler lives
+            # in governance_cost.py; the engine wires dispatch only.
+            "governance-cost-report",
         ])
 
     def test_declared_keys_resolve_to_callables(self):

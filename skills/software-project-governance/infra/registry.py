@@ -197,6 +197,10 @@ LOADER_WHITELIST: Tuple[str, ...] = (
     "checks.version",
     "dsh_compat",
     "dsh_doctor",
+    # FEAT-032 (0.84.0 slice A-1): governance cost observability handler —
+    # self-contained module, engine wires dispatch only (archguard_ratchet
+    # pattern); stdlib-only at import time, zstandard lazy (R6 face +1).
+    "governance_cost",
 )
 """Closed declaration of loadable modules (§9.1 controlled loader whitelist).
 
@@ -323,6 +327,7 @@ _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
     ("generate-deterministic-scaffold",
      "verify_workflow.cmd_generate_deterministic_scaffold"),
     ("governance-context", "verify_workflow.cmd_governance_context"),
+    ("governance-cost-report", "governance_cost.cmd_governance_cost_report"),
     ("governance-write-guard", "verify_workflow.cmd_governance_write_guard"),
     ("loop-engineering-migration",
      "verify_workflow.cmd_loop_engineering_migration"),
@@ -343,11 +348,12 @@ _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
     ("verify", "verify_workflow.cmd_verify"),
     ("web-console", "verify_workflow.cmd_web_console"),
 )
-"""84 dispatch keys from the FEAT-020 frozen face (FEAT-031 added
-``check-dsh-boundary`` and ``dsh-doctor``), each with the module that
+"""85 dispatch keys from the FEAT-020 frozen face (FEAT-031 added
+``check-dsh-boundary`` and ``dsh-doctor``; FEAT-032 added
+``governance-cost-report``), each with the module that
 *defines* its handler (machine-derived: the ``commands`` dict of ``main()``
-cross-referenced with the defining module of every handler name — 4 keys are
-already outside the engine, the other 79 ride the monolith)."""
+cross-referenced with the defining module of every handler name — 5 keys are
+already outside the engine, the other 80 ride the monolith)."""
 
 # ── check declaration: 71 segments → entry dotted path ──────────────────────
 

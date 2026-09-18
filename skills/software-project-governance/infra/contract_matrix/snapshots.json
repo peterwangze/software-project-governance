@@ -164,8 +164,8 @@
           "dynamic-lifecycle-migration"
         ]
       },
-      "handler_count": 81,
-      "key_count": 84,
+      "handler_count": 83,
+      "key_count": 86,
       "keys": [
         "agent-locks-acquire",
         "agent-runtime-e2e",
@@ -186,6 +186,7 @@
         "check-dsh-preset-compat",
         "check-dsh-preset-smoke",
         "check-duplicate-code",
+        "check-entry-bootstrap-sync",
         "check-first-session-measurement",
         "check-flow-unit-runtime",
         "check-goal-alignment",
@@ -234,6 +235,7 @@
         "gemini-auth-preflight",
         "generate-deterministic-scaffold",
         "governance-context",
+        "governance-cost-report",
         "governance-write-guard",
         "loop-engineering-migration",
         "loop-rollup",
@@ -391,14 +393,14 @@
   },
   "generated": {
     "generator_relpath": "skills/software-project-governance/infra/contract_matrix/generator.py",
-    "git_head": "210b2003313abdc55710c9fddcb3d6d4b3c208f0",
+    "git_head": "c3e1da020dde03bb2a11f042cb0100c6bc239300",
     "python": {
       "family": "3.14",
       "implementation": "cpython",
       "platform": "win32",
       "version": "3.14.3"
     },
-    "timestamp_utc": "2026-09-13T05:56:43+00:00"
+    "timestamp_utc": "2026-09-18T02:51:05+00:00"
   },
   "python_family_pins": [
     {

@@ -9551,6 +9551,62 @@ class GovernanceStatusContractTests(unittest.TestCase):
             with self.subTest(label=label):
                 self.assertEqual([needle for needle in required if needle not in text], [])
 
+    def test_governance_snapshot_dual_contract_default_view_guard(self):
+        """FEAT-036: the default interactive view is the <=8-field compact
+        contract with anomaly visibility, and the full machine contract stays
+        split-accurate: a 20-field CLI snapshot reachable via the existing
+        status CLI carriers plus a 4-field pack doc-surface contract guarded
+        by check-governance-pack-status (no parallel contract). Guards both
+        canonical command docs."""
+        dual_markers = [
+            "默认交互视图合约",
+            "≤8 字段",
+            "异常不隐藏",
+            "最小状态行",
+            "≤700 tok",
+            "待检查（deferred",
+            "status --json",
+            "delivery_trust_snapshot",
+            "first-run-demo --assert-snapshot",
+            "不新建平行契约",
+            "20 字段 CLI snapshot 契约",
+            "4 字段 pack doc-surface 契约",
+            "不在任何 CLI snapshot 输出中",
+            "断言其中 19 字段",
+        ]
+        compact_labels = [
+            "Mode:", "Stage/Gate:", "Tasks:", "Risks:",
+            "Health:", "Next:", "Decision:", "Full:",
+        ]
+        self.assertEqual(len(compact_labels), 8)
+        for rel in ("commands/governance.md", "commands/governance-status.md"):
+            text = (vw.ROOT / rel).read_text(encoding="utf-8")
+            with self.subTest(file=rel):
+                missing = [m for m in dual_markers if m not in text]
+                self.assertEqual(missing, [])
+                match = re.search(
+                    r"默认交互视图合约[^\n]*\n+```[^\n]*\n(.*?)```",
+                    text, re.DOTALL)
+                self.assertIsNotNone(match, rel)
+                block = match.group(1)
+                field_lines = [
+                    line.strip() for line in block.splitlines()
+                    if re.match(r"^[A-Z][A-Za-z/-]*: ", line.strip())
+                ]
+                self.assertEqual(len(field_lines), 8)
+                for label in compact_labels:
+                    self.assertIn(label, block)
+                # full-face-only labels must NOT leak into the compact block
+                for leaked in ("Resume state:", "Preset guidance:",
+                               "Pack summary:", "No-overclaim boundary:"):
+                    self.assertNotIn(leaked, block)
+                # the Full pointer line must not regress to the old single
+                # "24-field artifact" carrier claim (R0 P1-1)
+                self.assertNotIn("24-field", block)
+                self.assertNotIn("24 字段", block)
+                # the full machine contract enumerates the engine truth
+                self.assertIn("Flow-unit lanes", text)
+
     def test_target_status_validator_requires_no_overclaim_denial_content(self):
         base_output = (
             "Project Overview\n"

@@ -1,5 +1,6 @@
 """Phase 6 version extraction and consistency checks."""
 
+import ast
 import json
 from pathlib import Path
 import re
@@ -135,4 +136,168 @@ def check_version_consistency(root: Path, host_root: Optional[Path] = None) -> L
                 issues.append(f"[FAIL] {name}: @bootstrap-version={match.group(1)} is stale (< active_version {source})")
             else:
                 issues.append(f"[WARN] {name}: @bootstrap-version={match.group(1)} is stale (< active_version {source}); untracked local copy — advisory (FIX-238.2 fail-closed covers re-sync)")
+    # Static version pin scan (DEC-213③ / FIX-361) — appended WARN face over
+    # infra/tests; WARN-only posture, no effect on existing FAIL semantics.
+    issues.extend(scan_static_version_pins(root, active_version=source))
+    return issues
+
+
+# ── Static version pin scan (DEC-213③ / FIX-361) ────────────────────────────
+# M-1 caliber blind spot, rule-ized: release-time test pins (FIX-352/353) were
+# found by hand for the fifth consecutive time — no machine face intercepted
+# NEW static pins of the active version inside infra/tests.
+#
+# Judgement semantics (minimal, auditable): a test-file line is a "static
+# version pin" when it carries a standalone semver token equal to the CURRENT
+# active version (SKILL.md frontmatter — the same authority the rest of this
+# module reads) on a line that can actually execute or feed data. Pure `#`
+# comment lines and docstrings are annotations — they cannot turn a suite red
+# on a bump — so they are skipped (docstrings detected via ast; string CONTENT
+# lines that merely start with `#`, e.g. fixture markdown headings, stay
+# scanned). This captures the pre-fix defect shapes verbatim (FIX-352
+# assertion argument string; FIX-353 module-level fixture head string) while
+# synthetic versions (9.9.9), historical references (0.83.0 after the bump),
+# and future targets (0.85.0 today) never equal the active version and pass.
+# At the next bump today's future targets become equal and surface as WARN —
+# derive them or exempt them then.
+#
+# Posture: WARN-only disclosure (0.85.0 conservative close; FAIL escalation
+# is a later ruling). Findings name file:line plus the suggested derivation.
+#
+# Exemptions (FIX-354-style auditable ledger): synthetic fixture data and
+# version-pair test inputs that legitimately mention the active version live
+# in STATIC_PIN_EXEMPTIONS as (line, token, reason) rows. The token anchors a
+# row to its line's content: an entry whose line no longer carries the token
+# (drift or removal) is reported as a stale-exemption warning, so the ledger
+# cannot rot into a blanket allow.
+STATIC_PIN_SCAN_DIR = "skills/software-project-governance/infra/tests"
+
+_SEMVER_TOKEN_RE = re.compile(r"(?<![\d.])(\d+\.\d+\.\d+)(?![\d.])")
+
+_REASON_FIXTURE_TABLE = (
+    "fixture task-table heading/row — synthetic plan-tracker scenario data; "
+    "aggregate projection semantics never compare task-table versions to the "
+    "active version (shape survived the 0.83.0->0.84.0 bump unchanged)")
+_REASON_MIGRATION_PAIR = (
+    "migration_flag(plan, active) synthetic version-pair input or its echo "
+    "assertion — relative-comparison semantics; neither operand is the real "
+    "active version")
+
+STATIC_PIN_EXEMPTIONS = {
+    "skills/software-project-governance/infra/tests/test_bootstrap_aggregate.py": [
+        (116, "0.84.0", _REASON_FIXTURE_TABLE),
+        (120, "0.84.0", _REASON_FIXTURE_TABLE),
+        (121, "0.84.0", _REASON_FIXTURE_TABLE),
+        (122, "0.84.0", _REASON_FIXTURE_TABLE),
+        (212, "0.84.0", _REASON_FIXTURE_TABLE),
+        (216, "0.84.0", _REASON_FIXTURE_TABLE),
+        (217, "0.84.0", _REASON_FIXTURE_TABLE),
+        (319, "0.84.0", _REASON_MIGRATION_PAIR),
+        (322, "0.84.0", _REASON_MIGRATION_PAIR),
+        (326, "0.84.0", _REASON_MIGRATION_PAIR),
+        (331, "0.84.0", _REASON_MIGRATION_PAIR),
+        (336, "0.84.0", _REASON_MIGRATION_PAIR),
+    ],
+}
+
+
+def _annotation_string_lines(tree):
+    """Line spans that are annotation, not executable/data code.
+
+    Returns ``(docstring_lines, multiline_string_inner_lines)``. Docstrings
+    are bare string-expression statements heading Module/Class/Function
+    bodies. Multiline-string INNER lines physically start with string content
+    (e.g. fixture markdown like ``## 0.84.0 task 表``) and must not be misread
+    as ``#`` comment lines.
+    """
+    docstring_lines = set()
+    string_inner_lines = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            body = getattr(node, "body", [])
+            if (body and isinstance(body[0], ast.Expr)
+                    and isinstance(body[0].value, ast.Constant)
+                    and isinstance(body[0].value.value, str)):
+                first = body[0]
+                end = getattr(first, "end_lineno", first.lineno)
+                docstring_lines.update(range(first.lineno, end + 1))
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            end = getattr(node, "end_lineno", node.lineno)
+            if end > node.lineno:
+                string_inner_lines.update(range(node.lineno + 1, end + 1))
+    return docstring_lines, string_inner_lines
+
+
+def scan_static_version_pins(root, active_version=None, tests_dir=None, exemptions=None):
+    """DEC-213③ (FIX-361): report static pins of the active version in tests.
+
+    WARN-only by design. Returns ``[WARN]``-prefixed issue lines; empty when
+    the tree carries no unexempted pin or has no tests directory (advisory
+    face — installed packs ship without infra/tests).
+    """
+    if active_version is None:
+        active_version = version_facts(root).get("SKILL.md (source of truth)", "")
+    if not active_version:
+        return []  # the source-version face already FAILs upstream
+    base = Path(tests_dir) if tests_dir else root / STATIC_PIN_SCAN_DIR
+    if not base.is_dir():
+        return []
+    registry = STATIC_PIN_EXEMPTIONS if exemptions is None else exemptions
+    issues = []
+    for path in sorted(base.rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        rel = path.relative_to(root).as_posix()
+        try:
+            source_text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            issues.append(f"[WARN] static-version-pin: cannot read {rel} — line scan skipped")
+            continue
+        try:
+            tree = ast.parse(source_text)
+        except SyntaxError as exc:
+            tree = None
+            issues.append(f"[WARN] static-version-pin: cannot parse {rel} ({exc.msg}) — line scan skipped")
+        doc_lines, string_inner = _annotation_string_lines(tree) if tree is not None else (set(), set())
+        allowed_lines = {entry[0] for entry in registry.get(rel, ()) if entry[1] == active_version}
+        for lineno, line in enumerate(source_text.splitlines(), start=1):
+            if lineno in doc_lines:
+                continue
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.startswith("#") and lineno not in string_inner:
+                continue
+            tokens = [m.group(1) for m in _SEMVER_TOKEN_RE.finditer(line)]
+            if active_version not in tokens:
+                continue
+            if lineno in allowed_lines:
+                continue  # audited exemption (reason lives in the ledger)
+            issues.append(
+                f"[WARN] static-version-pin: {rel}:{lineno} pins the active version "
+                f"\"{active_version}\" literally — derive it instead "
+                f"(resolve_entry.read_active_version() / @@ACTIVE_VERSION@@ token, the "
+                f"FIX-352/353 shape) or register a reasoned (line, token, reason) "
+                f"exemption in checks/version.py STATIC_PIN_EXEMPTIONS (DEC-213③)")
+    # Exemption ledger audit: an entry whose target line no longer carries its
+    # token has drifted — re-audit (prevents blanket-allow rot).
+    for rel, entries in registry.items():
+        target = root / rel
+        if not target.is_file():
+            for lineno, token, _reason in entries:
+                issues.append(
+                    f"[WARN] static-version-pin: stale exemption {rel}:{lineno} "
+                    f"(token \"{token}\") — target file missing; re-audit STATIC_PIN_EXEMPTIONS")
+            continue
+        try:
+            lines = target.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeError):
+            continue  # unreadable face already covered by the scan above
+        for lineno, token, _reason in entries:
+            line = lines[lineno - 1] if 0 < lineno <= len(lines) else ""
+            if token not in [m.group(1) for m in _SEMVER_TOKEN_RE.finditer(line)]:
+                issues.append(
+                    f"[WARN] static-version-pin: stale exemption {rel}:{lineno} "
+                    f"(token \"{token}\") — line no longer carries the token; "
+                    f"re-audit STATIC_PIN_EXEMPTIONS (DEC-213③)")
     return issues

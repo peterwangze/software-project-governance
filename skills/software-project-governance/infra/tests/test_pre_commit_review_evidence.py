@@ -76,6 +76,43 @@ def _win_to_msys_or_wsl(path_text):
     return "/mnt/{0}/{1}".format(m.group(1).lower(), m.group(2))
 
 
+def _find_bash():
+    """Return a FUNCTIONAL bash executable, or None (WSL stub excluded).
+
+    FIX-359 (RISK-056): ``subprocess.run(["bash", ...])`` resolves through
+    the Windows CreateProcess search order, where the ``System32\bash.exe``
+    WSL launcher stub wins over PATH — on hosts without a WSL distro it
+    exits 1 with WSL_E_DEFAULT_DISTRO_NOT_FOUND and every bash-backed test
+    drowns in environment failures before the hook regex is ever exercised.
+    Probe the candidates and keep the first one that actually executes
+    (same harness as test_hooks.py ``_find_bash`` — parity by precedent).
+    """
+    candidates = []
+    which = shutil.which("bash")
+    if which:
+        candidates.append(which)
+    for p in (
+        r"C:\Program Files\Git\bin\bash.exe",
+        r"C:\Program Files\Git\usr\bin\bash.exe",
+        r"C:\Program Files (x86)\Git\bin\bash.exe",
+    ):
+        if Path(p).is_file():
+            candidates.append(p)
+    for cand in candidates:
+        try:
+            proc = subprocess.run(
+                [cand, "-c", ":"], capture_output=True, timeout=10,
+                check=False, stdin=subprocess.DEVNULL)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if proc.returncode == 0:
+            return cand
+    return None
+
+
+_BASH = _find_bash()
+
+
 def _run_hook_function(hook_path, task_id, evidence_text, repo_root=None):
     """Extract the function from hook source and execute it in bash.
 
@@ -106,8 +143,9 @@ def _run_hook_function(hook_path, task_id, evidence_text, repo_root=None):
             'if has_approved_review_evidence "{3}"; then echo HIT; else echo MISS; fi\n'
         ).format(root_wsl, root_posix, fn, task_id)
         script = script.replace("\r\n", "\n").replace("\r", "\n")
+        assert _BASH, "no functional bash (git-bash/WSL/native)"
         proc = subprocess.run(
-            ["bash", "-s"], input=script.encode("utf-8"),
+            [_BASH, "-s"], input=script.encode("utf-8"),
             capture_output=True, timeout=30,
         )
         out = proc.stdout.decode("utf-8", "replace").strip()
@@ -118,7 +156,7 @@ def _run_hook_function(hook_path, task_id, evidence_text, repo_root=None):
         return out == "HIT"
 
 
-@unittest.skipUnless(shutil.which("bash"), "bash unavailable (hooks are bash)")
+@unittest.skipUnless(_BASH, "no functional bash (git-bash/WSL/native)")
 class ReviewEvidenceRegexTests(unittest.TestCase):
     """FIX-261 four-form fixtures, run against BOTH hook copies."""
 

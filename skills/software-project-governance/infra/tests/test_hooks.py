@@ -126,6 +126,27 @@ def _fragment(*rows):
     return header + "\n".join(rows) + "\n"
 
 
+_TASK_ID_RE = re.compile(r"[A-Z]+-[0-9]+")
+
+
+def _live_task_ids(plan_text):
+    """Independent live-row parse (FIX-359 replay re-anchor): the task-ID
+    cell of every P{n}-first table row, bold markers stripped. Deliberately
+    string-split + fullmatch — NOT the hook ERE — so agreement between this
+    parse and the matcher is a real cross-engine check on live data."""
+    ids = set()
+    for line in plan_text.splitlines():
+        cells = line.split("|")
+        if len(cells) < 4:
+            continue
+        priority = cells[1].strip().strip("*").strip()
+        task_cell = cells[2].strip().strip("*").strip()
+        if (re.fullmatch(r"P[0-9]+", priority)
+                and _TASK_ID_RE.fullmatch(task_cell)):
+            ids.add(task_cell)
+    return ids
+
+
 def _wg_section():
     """Extract the shipped post-commit Step 4b write-guard wiring block."""
     text = _POST_COMMIT.read_text(encoding="utf-8")
@@ -300,17 +321,33 @@ class PlanTrackerMatcherTests(unittest.TestCase):
         self.assertNotIn('grep -q "| $TASK_ID |"', text)
 
     def test_replay_real_plan_tracker_hits(self):
-        """Live replay (skipped offline): the REAL plan-tracker rows — bold
-        IDs (REL-071/REL-072), plain IDs (FIX-282/REL-073/FIX-283/FIX-288)
-        — must HIT the matcher; an absent ID must MISS."""
+        """Live replay (skipped offline): every live task row in the REAL
+        plan-tracker must HIT the matcher; an absent ID must MISS.
+
+        FIX-359 re-anchor (RISK-056): this replay previously pinned six
+        0.78.x-era IDs (REL-071/REL-072/FIX-282/REL-073/FIX-283/FIX-288);
+        their task rows have since been archived out of the live
+        plan-tracker (live-data growth), so the static pins drifted and the
+        matcher — correctly — stopped hitting them. The positive set is now
+        derived from the authoritative source at run time (FIX-352/353
+        dynamic-pin precedent) via the independent parse in
+        ``_live_task_ids``; matcher semantics stay pinned by the offline
+        constructed-fragment tests plus the absent-ID MISS below.
+        """
         if not _PLAN.is_file():
             self.skipTest("live .governance/plan-tracker.md unavailable")
         plan_text = _PLAN.read_text(encoding="utf-8")
-        for task_id in ("REL-071", "REL-072", "FIX-282", "REL-073",
-                        "FIX-283", "FIX-288"):
+        live_ids = _live_task_ids(plan_text)
+        self.assertTrue(
+            live_ids,
+            "no live task rows parsed from the real plan-tracker — table "
+            "format drifted past the independent parse; re-inspect")
+        for task_id in sorted(live_ids):
             with self.subTest(task_id=task_id):
                 self.assertTrue(_run_pattern(task_id, plan_text))
-        self.assertFalse(_run_pattern("FIX-9999", plan_text))
+        absent = "FIX-9999"
+        self.assertNotIn(absent, live_ids)
+        self.assertFalse(_run_pattern(absent, plan_text))
 
 
 @unittest.skipUnless(_BASH, "no functional bash (git-bash/WSL/native)")

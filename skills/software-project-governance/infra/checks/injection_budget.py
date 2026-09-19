@@ -38,12 +38,14 @@ Four measurement decisions, each deliberate:
    bootstrap / tool-return budget, which FEAT-033 already enforces at 8192
    bytes — registered here rather than re-implemented).
 
-4. **Slice-A relaxed window.** The threshold is 6K tokens (arch target: 4K).
-   The reference profile is ``lightweight``, because that is the configuration
-   whose resident set can actually be held under 6K today; the
-   ``standard``/``strict`` entry templates exceed it and are therefore reported
-   as ADVISORY candidates with per-surface overshoot rather than hard failures
-   (their reduction is a separate scheduled task — AUDIT-154 §8).
+4. **Hard gate (FEAT-050, DEC-211③ — slice-A window closed).** The threshold
+   is 6K tokens (arch target: 4K). The slice-A advisory window existed because
+   the standard/strict entry templates exceeded 6K; the FEAT-041 slimming pass
+   brought all three profiles under it (EVD-1104 baseline: lightweight 4,216 /
+   standard 5,694 / strict 5,966), so an over-budget resident set is now an
+   issue + FAIL — future growth fails closed instead of rebounding silently.
+   The ``skill``/``command`` tiers stay report-only: their budget face is a
+   separate scheduled task and is NOT folded into the resident gate here.
 
 Layer placement: this is a measurement + render leaf (``checks`` package), not
 engine code. The ArchGuard ratchet forbids growing the engine's own LOC and
@@ -65,7 +67,8 @@ from pathlib import Path
 #: never the caller's cwd.
 _DEFAULT_ROOT = Path(__file__).resolve().parents[4]
 
-#: Slice-A relaxed budget (arch target: 4K). Reference profile = lightweight.
+#: Resident budget, now a HARD gate (FEAT-050 / DEC-211③; arch target: 4K).
+#: EVD-1104 post-slimming baseline: all three profiles fit under it.
 INJECTION_BUDGET_TOKENS = 6000
 INJECTION_BUDGET_DEFAULT_PROFILE = "lightweight"
 INJECTION_BUDGET_PROFILES = ("lightweight", "standard", "strict")
@@ -160,13 +163,16 @@ INJECTION_BUDGET_SURFACES = (
 
 #: Per-tier gate posture. ``hard`` counts into ``issues`` and can FAIL the
 #: command; ``advisory`` is reported and can only yield the ADVISORY verdict;
-#: ``report-only`` is measurement only. Slice A keeps the resident tier
-#: advisory because the standard/strict entry templates exceed 6K today; the
-#: flip to ``hard`` is a one-line change here (pinned by test).
+#: ``report-only`` is measurement only. The resident tier flipped from
+#: ``advisory`` to ``hard`` in FEAT-050 (DEC-211③): the EVD-1104 post-slimming
+#: baseline holds all three profiles within budget, so an over-budget resident
+#: set now blocks (any rebound fails closed). The skill tier stays
+#: ``report-only`` — a separate budget face, not folded into the resident
+#: gate (pinned by test).
 BUDGET_TIER_POLICY = {
     "resident": {
         "description": "static injection surface (before any user interaction)",
-        "gate": "advisory",
+        "gate": "hard",
     },
     "skill": {
         "description": "progressive load — entry skill",
@@ -589,8 +595,8 @@ def check_injection_budget(root=None, profile=None, budget_tokens=None):
         if injection_budget_tier_gate(name) == "hard":
             issues.append(headline + " — hard gate")
         elif injection_budget_tier_gate(name) == "advisory":
-            tier["note"] = (headline + " — advisory in the slice-A relaxed "
-                            "window (reported, not blocking)")
+            tier["note"] = (headline + " — advisory-gated (reported, not "
+                            "blocking)")
         else:
             tier["note"] = (headline + " — report-only (measured for "
                             "visibility; not part of the resident budget)")
@@ -699,7 +705,8 @@ def add_arguments(parser):
     parser.add_argument(
         "--budget-tokens", type=int, default=None,
         help=f"Token budget for the resident injection tier "
-             f"(default {INJECTION_BUDGET_TOKENS}; slice-A 放宽档, arch target 4K)")
+             f"(default {INJECTION_BUDGET_TOKENS}; resident hard gate "
+             f"(FEAT-050), arch target 4K)")
     parser.add_argument(
         "--profile", default=INJECTION_BUDGET_DEFAULT_PROFILE,
         choices=list(INJECTION_BUDGET_PROFILES),
@@ -734,7 +741,7 @@ def cmd_check_injection_budget(args):
     budget = normalize_token_budget(raw_budget)
     if raw_budget is None:
         print(f"\n  Budget: default {budget} tokens "
-              f"(slice-A 放宽档; arch target 4K)")
+              f"(resident hard gate; arch target 4K)")
     else:
         print(f"\n  Budget: {budget} tokens (explicit --budget-tokens)")
     print("\n=== Injection Budget Check (FEAT-039 / AUDIT-154 A-8) ===")
@@ -753,12 +760,16 @@ def cmd_check_injection_budget(args):
         if getattr(args, "fail_on_issues", False):
             sys.exit(1)
     elif result["verdict"] == "ADVISORY":
+        # Unreachable while every non-report-only tier is ``hard`` (an
+        # over-budget hard tier lands in ``issues`` → FAIL above); kept as the
+        # data-driven arm for a future ``advisory`` policy row, so an ADVISORY
+        # verdict can never fall through to the PASSED line (fail-open text).
         resident = result["tiers"].get("resident") or {}
         if resident.get("over_budget"):
             print(f"\n  Result: ADVISORY — resident set {resident['tokens']} tok "
                   f"> budget {result['budget_tokens']} tok "
-                  f"(+{resident['tokens'] - result['budget_tokens']}) in the "
-                  "slice-A relaxed window; gated over-budget tiers: "
+                  f"(+{resident['tokens'] - result['budget_tokens']}); "
+                  "gated over-budget tiers: "
                   f"{', '.join(result['gated_over_budget_tiers'])}")
         else:
             print(f"\n  Result: ADVISORY — resident set "

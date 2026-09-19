@@ -20335,15 +20335,16 @@ class Feat039InjectionBudgetTests(unittest.TestCase):
         """P2-1 (review-FEAT-039): the verdict moves on ``gated`` tiers only, so
         the printed summary must label that set — a reader must be able to tell
         a measurement overrun (report-only) from a verdict-moving one.
-        FEAT-041 rebase: standard/strict now fit the 6K budget, so the
-        separation is exercised at a reduced budget where the resident tier
-        overruns while the skill tier stays a report-only measurement."""
+        FEAT-050 hard flip (DEC-211③): the resident tier is a hard gate, so its
+        over-budget condition is an issue + FAIL; the separation rendering is
+        still exercised at a reduced budget where the resident tier overruns
+        while the skill tier stays a report-only measurement."""
         result = vw.check_injection_budget(profile="standard", budget_tokens=5000)
         self.assertIn("resident", result["over_budget_tiers"])
         self.assertIn("skill", result["over_budget_tiers"])
         self.assertNotIn("skill", result["gated_over_budget_tiers"])
         self.assertIn("resident", result["gated_over_budget_tiers"])
-        self.assertEqual(result["verdict"], "ADVISORY")
+        self.assertEqual(result["verdict"], "FAIL")
         buf = io.StringIO()
         with redirect_stdout(buf):
             vw.emit_injection_budget_section(result=result)
@@ -20353,14 +20354,17 @@ class Feat039InjectionBudgetTests(unittest.TestCase):
         self.assertIn("Over budget — report-only (measurement): skill",
                       rendered)
         self.assertIn("[REPORT-ONLY]", rendered)
-        # the CLI verdict line carries the same caliber (no bare "over-budget
-        # tiers" label on a gated list)
+        # the CLI verdict line carries the same caliber: the hard gate prints
+        # FAILED with the hard-gate issue (an over-budget gated tier can no
+        # longer surface as ADVISORY)
         buf2 = io.StringIO()
         with redirect_stdout(buf2):
             vw.cmd_check_injection_budget(SimpleNamespace(
                 budget_tokens=5000, profile="standard",
                 format="text", fail_on_issues=False))
-        self.assertIn("gated over-budget tiers: resident", buf2.getvalue())
+        out2 = buf2.getvalue()
+        self.assertIn("Result: FAILED", out2)
+        self.assertIn("hard gate", out2)
 
     def test_missing_resident_tier_policy_fails_closed_not_crashes(self):
         """P3-2 (review-FEAT-039): the headline numbers come from the resident
@@ -20391,10 +20395,10 @@ class Feat039InjectionBudgetTests(unittest.TestCase):
     def test_standard_and_strict_profiles_within_budget_after_feat041(self):
         """FEAT-041 (DEC-218/DEC-219): the scheduled slice-A reduction shipped —
         the standard AND strict resident sets now fit the 6K budget and the
-        verdict is a plain PASS. The tier gate posture data is unchanged
-        (resident stays ``advisory`` until the scheduled hard flip; skill stays
-        report-only), so a future regression re-connects the ADVISORY verdict
-        without any posture change."""
+        verdict is a plain PASS. FEAT-050 (DEC-211③) then flipped the resident
+        tier to ``hard`` on that zero-over-budget baseline (EVD-1104), so the
+        same PASS now means the hard gate is green — not advisory-deferred;
+        skill stays report-only."""
         for profile in ("standard", "strict"):
             result = vw.check_injection_budget(profile=profile)
             with self.subTest(profile=profile):
@@ -20402,7 +20406,7 @@ class Feat039InjectionBudgetTests(unittest.TestCase):
                 self.assertEqual(result["gated_over_budget_tiers"], [])
                 self.assertEqual(result["issues"], [])
                 self.assertEqual(result["verdict"], "PASS")
-        self.assertEqual(vw.BUDGET_TIER_POLICY["resident"]["gate"], "advisory")
+        self.assertEqual(vw.BUDGET_TIER_POLICY["resident"]["gate"], "hard")
         self.assertEqual(vw.BUDGET_TIER_POLICY["skill"]["gate"], "report-only")
 
     def test_budget_tier_is_not_a_hard_fail_while_advisory(self):
@@ -20436,7 +20440,7 @@ class Feat039InjectionBudgetTests(unittest.TestCase):
         self.assertGreater(result["grand_total_tokens"], result["tokens"])
         self.assertEqual(tiers["skill"]["gate"], "report-only")
         self.assertEqual(tiers["command"]["gate"], "report-only")
-        self.assertEqual(tiers["resident"]["gate"], "advisory")
+        self.assertEqual(tiers["resident"]["gate"], "hard")
         # report-only tiers are reported but never gate the verdict
         self.assertEqual(result["gated_over_budget_tiers"], [])
         self.assertEqual(result["verdict"], "PASS")
@@ -20531,9 +20535,10 @@ class Feat039InjectionBudgetTests(unittest.TestCase):
 
     def test_cli_reports_per_surface_budget_and_exit_codes(self):
         """Acceptance ①/④: the subcommand prints the per-surface table, exits
-        0 while the resident set is inside budget, stays exit-0 on the ADVISORY
-        verdict (reported, not blocking), and honours ``--fail-on-issues`` when
-        a surface fails to resolve (fail-closed)."""
+        0 while the resident set is inside budget, turns an over-budget
+        resident set into FAILED + exit 1 under ``--fail-on-issues`` (FEAT-050
+        hard gate — the slice-A advisory window is closed), and keeps the
+        fail-closed exit for an unresolvable surface."""
         parser_func = getattr(vw, "cmd_check_injection_budget", None)
         self.assertTrue(callable(parser_func), "CLI handler must exist")
         buf = io.StringIO()
@@ -20547,16 +20552,18 @@ class Feat039InjectionBudgetTests(unittest.TestCase):
         self.assertIn("persona", out)
         self.assertIn("TOTAL", out.upper())
         self.assertIn("PASS", out.upper())
-        # an over-budget resident set is ADVISORY in the slice-A window: the
-        # verdict is printed and the command does NOT block
-        with tempfile.TemporaryDirectory(prefix="feat039_cli_advisory_") as td:
-            buf2 = io.StringIO()
+        # an over-budget resident set FAILS the hard gate (FEAT-050): the
+        # verdict is printed and --fail-on-issues turns it into exit 1
+        buf2 = io.StringIO()
+        with self.assertRaises(SystemExit) as ctx:
             with redirect_stdout(buf2):
                 vw.cmd_check_injection_budget(SimpleNamespace(
                     budget_tokens=1,
                     profile=vw.INJECTION_BUDGET_DEFAULT_PROFILE,
                     format="text", fail_on_issues=True))
-            self.assertIn("ADVISORY", buf2.getvalue())
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertIn("FAILED", buf2.getvalue())
+        self.assertIn("hard gate", buf2.getvalue())
         # fail-closed surfaces DO block under --fail-on-issues. The CLI handler
         # resolves its own default root inside the leaf module (the engine wires
         # dispatch only), so that is the seam to redirect.

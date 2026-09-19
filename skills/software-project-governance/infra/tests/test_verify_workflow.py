@@ -9788,16 +9788,27 @@ class GovernanceStatusContractTests(unittest.TestCase):
         """FEAT-035: the standard + strict bootstrap templates present the
         pending upgrade and execute only after confirmation — the old
         silent-completion promise ("零用户行动 / 一切自动完成") is retired
-        while the auto-complete spirit stays (default option = execute)."""
+        while the auto-complete spirit stays (default option = execute).
+        FEAT-041 rebase: the strict template is the shared base + delta
+        composed by ``extract_canonical_templates``, so the FILE carries the
+        base once; the per-template guarantee is asserted on the COMPOSED
+        templates (both must carry the full gate needle set)."""
+        from sync_entry_projection import extract_canonical_templates
         init = (vw.ROOT / "commands" / "governance-init.md").read_text(encoding="utf-8")
-        self.assertEqual(init.count("呈现升级待处理"), 4)  # header + footer × standard/strict
-        self.assertEqual(init.count("用户未响应前零写操作"), 4)
-        self.assertEqual(init.count("执行升级（推荐）"), 4)
-        self.assertEqual(init.count("版本升级写序列属推进类动作"), 2)
-        # R1 D2: the upgrade ask timing is explicit on the bootstrap main
-        # path — the pending-upgrade confirm rides the FIRST interaction ask
-        # (same caliber as /governance Scenario C), not a second popup.
-        self.assertEqual(init.count("升级待处理确认随本次首次交互 ask 一并呈现"), 2)
+        composed = extract_canonical_templates(init)
+        for profile in ("standard", "strict"):
+            tpl = composed[profile]
+            with self.subTest(profile=profile):
+                self.assertEqual(tpl.count("呈现升级待处理"), 2)  # trigger + footer
+                self.assertEqual(tpl.count("用户未响应前零写操作"), 2)
+                self.assertEqual(tpl.count("执行升级（推荐）"), 2)
+                self.assertEqual(tpl.count("版本升级写序列属推进类动作"), 1)
+                # R1 D2: the upgrade ask timing is explicit on the bootstrap
+                # main path — the pending-upgrade confirm rides the FIRST
+                # interaction ask (same caliber as /governance Scenario C),
+                # not a second popup.
+                self.assertEqual(
+                    tpl.count("升级待处理确认随本次首次交互 ask 一并呈现"), 1)
         for stale in ("零用户行动", "零用户操作", "一切自动完成", "自动序列", "已自动升级"):
             self.assertNotIn(stale, init)
 
@@ -9835,7 +9846,14 @@ class GovernanceStatusContractTests(unittest.TestCase):
             self.assertIn("插件残留清理删除面", text)
             self.assertIn("cleanup.py --dry-run", text)
             self.assertIn("确认后再执行 `python <plugin_home>/infra/cleanup.py`", text)
-        self.assertEqual(init.count("插件残留清理删除面"), 2)  # standard + strict templates
+        # FEAT-041 rebase: the file carries the shared base once (strict is
+        # composed from it), so the dual-template guarantee moves to the
+        # composed templates: each injected profile carries the deletion
+        # surface exactly once.
+        from sync_entry_projection import extract_canonical_templates
+        composed = extract_canonical_templates(init)
+        for profile in ("standard", "strict"):
+            self.assertEqual(composed[profile].count("插件残留清理删除面"), 1, profile)
         self.assertNotIn("自动删除", governance)
         self.assertNotIn("自动删除", init)
         # template C-2 wording no longer contradicts governance-cleanup.md's
@@ -15545,11 +15563,17 @@ class EntryBootstrapTemplateTests(unittest.TestCase):
         )
         self.assertTrue(version, "SKILL.md frontmatter version is missing")
         marker_line = f"> @bootstrap-version: {version}"
-        self.assertEqual(
-            text.count(marker_line), 4,
-            "lightweight + standard + strict 三个注入模板 + FEAT-037 secondary-thin "
-            "薄指针模板均应含标记行",
-        )
+        # FEAT-041 rebase: the strict block is the delta composed over the
+        # shared base (the file carries the base once), so the per-template
+        # guarantee moves to the COMPOSED templates — every injected profile
+        # (incl. composed strict) carries the marker line exactly once.
+        from sync_entry_projection import extract_canonical_templates
+        templates = extract_canonical_templates(text)
+        for profile in ("lightweight", "standard", "strict", "secondary-thin"):
+            self.assertEqual(
+                templates[profile].count(marker_line), 1,
+                f"{profile} 注入模板应含且仅含一行 @bootstrap-version 标记",
+            )
 
     def test_host_entry_files_carry_bootstrap_version_marker(self):
         # AGENTS.md 是已跟踪的 Codex 原生入口——fresh checkout 必须存在，无条件断言
@@ -20220,11 +20244,19 @@ class Feat039InjectionBudgetTests(unittest.TestCase):
     # safety hard boundary) — 3904→4555 / 22858→23836 / 23484→24462 /
     # 2724→3013. The rebase is the guard working as designed: the price could
     # not move without a deliberate edit here.
+    #
+    # FEAT-041 rebase (DEC-218/DEC-219 contract v2 — 触发器行内 + 明细按需):
+    # the standard block became the shared base (23836→9553) and the strict
+    # block became the strict-profile DELTA composed over that base by
+    # ``extract_canonical_templates`` (24462→10441 = base 9553 + delta +
+    # separator); the thin pointer was compacted with anchor parity
+    # (3013→2859). Same guard discipline: the price cannot move without a
+    # deliberate edit here.
     ENTRY_TEMPLATE_CANONICAL_BYTES = {
         "lightweight": 4555,
-        "standard": 23836,
-        "strict": 24462,
-        "secondary-thin": 3013,
+        "standard": 9553,
+        "strict": 10441,
+        "secondary-thin": 2859,
     }
 
     def test_entry_template_surfaces_price_the_canonical_blocks(self):
@@ -20302,10 +20334,15 @@ class Feat039InjectionBudgetTests(unittest.TestCase):
     def test_report_separates_gated_from_report_only_over_budget(self):
         """P2-1 (review-FEAT-039): the verdict moves on ``gated`` tiers only, so
         the printed summary must label that set — a reader must be able to tell
-        a measurement overrun (report-only) from a verdict-moving one."""
-        result = vw.check_injection_budget(profile="standard")
+        a measurement overrun (report-only) from a verdict-moving one.
+        FEAT-041 rebase: standard/strict now fit the 6K budget, so the
+        separation is exercised at a reduced budget where the resident tier
+        overruns while the skill tier stays a report-only measurement."""
+        result = vw.check_injection_budget(profile="standard", budget_tokens=5000)
+        self.assertIn("resident", result["over_budget_tiers"])
         self.assertIn("skill", result["over_budget_tiers"])
         self.assertNotIn("skill", result["gated_over_budget_tiers"])
+        self.assertIn("resident", result["gated_over_budget_tiers"])
         self.assertEqual(result["verdict"], "ADVISORY")
         buf = io.StringIO()
         with redirect_stdout(buf):
@@ -20321,7 +20358,7 @@ class Feat039InjectionBudgetTests(unittest.TestCase):
         buf2 = io.StringIO()
         with redirect_stdout(buf2):
             vw.cmd_check_injection_budget(SimpleNamespace(
-                budget_tokens=vw.INJECTION_BUDGET_TOKENS, profile="standard",
+                budget_tokens=5000, profile="standard",
                 format="text", fail_on_issues=False))
         self.assertIn("gated over-budget tiers: resident", buf2.getvalue())
 
@@ -20351,30 +20388,33 @@ class Feat039InjectionBudgetTests(unittest.TestCase):
             policy["resident"] = saved
         self.assertEqual(vw.check_injection_budget()["verdict"], "PASS")
 
-    def test_standard_profile_is_an_advisory_candidate_not_a_silent_pass(self):
-        """The relaxed slice-A window is explicit: the standard entry template
-        exceeds the 6K budget today. It must be REPORTED (advisory) rather
-        than silently passing, and it must not be counted as an issue here —
-        capping it is a separate, scheduled reduction.
-        """
-        result = vw.check_injection_budget(profile="standard")
-        budget = vw.INJECTION_BUDGET_TOKENS
-        self.assertGreater(result["tokens"], budget)
-        self.assertIn("resident", result["over_budget_tiers"])
-        self.assertIn("resident", result["gated_over_budget_tiers"])
-        self.assertEqual(result["issues"], [])
-        self.assertEqual(result["verdict"], "ADVISORY")
+    def test_standard_and_strict_profiles_within_budget_after_feat041(self):
+        """FEAT-041 (DEC-218/DEC-219): the scheduled slice-A reduction shipped —
+        the standard AND strict resident sets now fit the 6K budget and the
+        verdict is a plain PASS. The tier gate posture data is unchanged
+        (resident stays ``advisory`` until the scheduled hard flip; skill stays
+        report-only), so a future regression re-connects the ADVISORY verdict
+        without any posture change."""
+        for profile in ("standard", "strict"):
+            result = vw.check_injection_budget(profile=profile)
+            with self.subTest(profile=profile):
+                self.assertLessEqual(result["tokens"], vw.INJECTION_BUDGET_TOKENS)
+                self.assertEqual(result["gated_over_budget_tiers"], [])
+                self.assertEqual(result["issues"], [])
+                self.assertEqual(result["verdict"], "PASS")
         self.assertEqual(vw.BUDGET_TIER_POLICY["resident"]["gate"], "advisory")
         self.assertEqual(vw.BUDGET_TIER_POLICY["skill"]["gate"], "report-only")
 
     def test_budget_tier_is_not_a_hard_fail_while_advisory(self):
         """Fail-closed semantics: the moment the resident tier's policy flips
-        to hard, an over-budget resident set MUST become an issue + FAIL."""
+        to hard, an over-budget resident set MUST become an issue + FAIL.
+        FEAT-041 rebase: the live standard set now fits the default budget, so
+        the over-budget condition is exercised at a reduced budget."""
         policy = vw.BUDGET_TIER_POLICY["resident"]
         original = policy["gate"]
         policy["gate"] = "hard"
         try:
-            result = vw.check_injection_budget(profile="standard")
+            result = vw.check_injection_budget(profile="standard", budget_tokens=5000)
             self.assertTrue(result["issues"])
             self.assertEqual(result["verdict"], "FAIL")
         finally:

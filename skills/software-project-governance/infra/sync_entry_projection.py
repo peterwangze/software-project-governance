@@ -123,6 +123,14 @@ def extract_canonical_templates(text: str) -> dict[str, str]:
     last block).  The block's closing fence is the LAST bare ```` ``` ````
     line inside that slice — nested fences (e.g. the Bootstrap 变更纪律
     block inside the standard template) therefore cannot truncate a block.
+
+    FEAT-041 composition (DEC-218 shared base): the ``strict`` block carries
+    ONLY the strict-profile delta (``### Strict Profile 强制规则`` …); the
+    shipped strict template is the standard shared base with that delta
+    appended.  Composing here — the single extraction authority — keeps the
+    canonical source single-maintenance while every consumer (entry
+    projection, ``check-entry-bootstrap-sync``, injection budget, tests)
+    sees and prices the exact text that gets injected.
     """
     labels = list(_TEMPLATE_LABEL_RE.finditer(text))
     if not labels:
@@ -148,6 +156,12 @@ def extract_canonical_templates(text: str) -> dict[str, str]:
     missing = [key for key in (*FULL_PROFILE_KEYS, "secondary-thin") if key not in templates]
     if missing:
         raise CanonicalSourceError(f"canonical template blocks missing: {missing}")
+    templates["strict"] = (
+        templates["standard"].rstrip("\n")
+        + "\n\n"
+        + templates["strict"].rstrip("\n")
+        + "\n"
+    )
     return templates
 
 

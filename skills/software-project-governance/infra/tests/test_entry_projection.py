@@ -103,15 +103,11 @@ _MINI_CANONICAL_DOC = f"""# init command
 ```markdown
 {_MINI_STANDARD}```
 
-**strict profile 注入模板**（完整版 + Strict 强制规则）：
+**strict profile 注入模板**（strict 差异段——渲染时由提取器组合：strict = standard 共享基座 + 本段，FEAT-041）：
 ```markdown
-## Governance Bootstrap（强制 — 每次会话第一动作）
+### Strict Profile 强制规则
 
-> @bootstrap-version: 9.9.9（严格版）
-
-### Step 0: 确定双维度模式
-
-Strict Profile 强制规则。
+Strict 量化评分与双证据强制。
 ```
 
 **secondary-thin 注入模板**（薄指针版——FEAT-037 双入口去重）：
@@ -191,6 +187,32 @@ class ExtractCanonicalTemplatesTests(unittest.TestCase):
         self.assertIn("### Step 0: 确定双维度模式", templates["standard"])
         self.assertIn("{PRIMARY_ENTRY}", templates["secondary-thin"])
         self.assertNotIn("{PRIMARY_ENTRY}", templates["standard"])
+
+    def test_strict_block_composes_over_standard_base(self):
+        """FEAT-041: the strict block carries the strict-profile DELTA; the
+        shipped strict template = standard shared base + delta appended."""
+        templates = sep.extract_canonical_templates(_MINI_CANONICAL_DOC)
+        base, strict = templates["standard"], templates["strict"]
+        self.assertTrue(strict.startswith("## Governance Bootstrap"))
+        self.assertGreater(len(strict), len(base))
+        expected = base.rstrip("\n") + "\n\n" + strict[len(base.rstrip("\n")) + 2:]
+        self.assertEqual(strict, expected)
+        self.assertIn("### Strict Profile 强制规则", strict[len(base):])
+
+    def test_strict_delta_block_is_not_a_full_template(self):
+        """Single-maintenance guard: a full-template copy pasted into the
+        strict block would double the shared base after composition — the
+        delta must never carry the full-bootstrap marker."""
+        for doc in (_MINI_CANONICAL_DOC,
+                    (_REPO_ROOT / "commands" / "governance-init.md").read_text(encoding="utf-8")):
+            templates = sep.extract_canonical_templates(doc)
+            base, strict = templates["standard"], templates["strict"]
+            delta = strict[len(base.rstrip("\n")) + 2:]
+            self.assertTrue(
+                delta.startswith("### Strict Profile 强制规则") or "Strict" in delta,
+                "strict delta block lost its heading")
+            self.assertNotIn("### Step 0: 确定双维度模式", delta)
+            self.assertNotIn("## Governance Bootstrap", delta)
 
 
 # ────────────────────────────────────────────────────────────

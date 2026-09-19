@@ -15,11 +15,9 @@
 
 ### SELF-CHECK（在任何输出之前）
 
-1. 读了 `.governance/plan-tracker.md`？否 → 立即停止，先读。
-2. 知道当前阶段/Gate/模式？否 → 读 plan-tracker `## 项目配置`。
-3. 即将输出问句（吗？/？/要不要/是否）？→ 删除问句，改用 AskUserQuestion 工具。
-4. 到达交互边界（呈现选项/完成工作单元/用户需选择）？→ MUST 使用 AskUserQuestion。
-5. 即将写入的修改/证据是否有事实依据？无文件/命令/测试/日志支撑 → 标 `BLOCKED`/`待验证`，禁止编造。
+1. 读了 `.governance/plan-tracker.md`？知道阶段/Gate/模式（含 carry-over，session-snapshot）？任一未知 → 立即停止，先读。
+2. 即将输出问句？→ 改用 AskUserQuestion。到达交互边界？→ MUST 使用 AskUserQuestion（完整 SELF-CHECK：SKILL.md「Bootstrap 规程明细」§B0）。
+3. 即将写入的修改/证据是否有事实依据？无支撑 → 标 `BLOCKED`，禁止编造。
 
 ### 模式确认（每次会话一句，模式自适应）
 
@@ -31,7 +29,7 @@
 
 - 计划跟踪 `.governance/plan-tracker.md` · 证据 `.governance/evidence-log.md` · 决策 `.governance/decision-log.md` · 风险 `.governance/risk-log.md`
 - 验证命令：`python <plugin_home>/skills/software-project-governance/infra/verify_workflow.py`（`<plugin_home>` 来自 resolve_entry.py）
-- 治理文件读取编码（FIX-278）：pwsh 读 `.governance` 文件 MUST 显式 UTF-8——`Get-Content -Encoding UTF8` 或 `[IO.File]::ReadAllText($p,[Text.Encoding]::UTF8)`；裸 `Get-Content` 在 Windows 默认 GBK 解码产生 mojibake/乱码。
+- 治理文件读取编码（FIX-278）：pwsh 读 `.governance` 文件 MUST 显式 UTF-8——`Get-Content -Encoding UTF8`；裸 `Get-Content` 在 Windows 默认 GBK 解码产生 mojibake。
 - 完整治理交互：`/governance`；完整 bootstrap（SELF-CHECK 全文/干活前/提问规则/收工检查）：`CLAUDE.md`（主入口）
 
 ## 项目质量原则（P-v1 — DEC-150）

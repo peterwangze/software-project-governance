@@ -71,6 +71,126 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
 - **详略分档**（`--level lightweight|standard|strict`，缺省 standard）：轻量=汇总+首个 FAIL；标准=汇总+首个 FAIL/WARN+最多 5 条明细（FAIL 优先，每条截断 130 字符）+「共 N issues，--level strict 查看全部」指引行（FIX-278 G1 top-N——消除 103 字符摘要触发 ~25KB 追查链的放大（audit-148 §2.1））；严格=汇总+全部 FAIL/WARN。三档**跑同一个** `--summary-only`，仅输出详略不同，**不按 profile 拆逻辑**。
 - **bootstrap 聚合快路径（FEAT-033；FEAT-034 起为第二动作）**：会话 bootstrap 在健康摘要之前 MUST 先跑 `python skills/software-project-governance/infra/verify_workflow.py governance-bootstrap --format json`（只读聚合，≤8KB 投影：resolve envelope + 状态投影 + 候选 + migration 标志 + next_actions）以支撑首次交互前置；其 `health.state="deferred"` 表示本命令未做健康检查——健康摘要仍以后置的 `check-governance --summary-only` 为准，deferred 期间显示「待检查」，不得把 deferred 当作已通过。
 
+## Bootstrap 规程明细（FEAT-041 契约 v2 承接面——触发器 ↔ 明细锚）
+
+> entry 模板（`commands/governance-init.md` Step 7）自 0.85.0 起为「触发器行内 + 明细按需」契约（DEC-218）：模板行内保留节标题、一行触发器（做什么/何时）与安全边界（fail-closed、Step 1 fallback 降级最小集、SELF-CHECK/FEAT-035 等硬约束的触发器形式）；规程明细正文迁至本节，由 skill 层按需加载（本节不在 resident 注入面）。模板中「§Bx」即本节对应小节，触发器 ↔ 明细一一对应，迁移零丢失。
+
+### B0 SELF-CHECK 全文 / 模式确认句式 / 治理开关映射 / Agent Team 激活（§B0）
+
+**SELF-CHECK 全文（任何输出之前）**：
+1. 我是否已经读了 `.governance/plan-tracker.md`？否 → **立即停止，先去读**。
+2. 我是否知道当前项目处于哪个阶段？否 → **你没读 plan-tracker，去读**（`## 项目配置` 节）。
+3. 上一 session 结束后是哪个阶段？是否有 carry-over 任务？不知道 → **去读 session-snapshot.md**。
+4. **我即将输出的文本是否包含向用户提问的问句？** 检查关键词：`吗？`、`？`、`要不要`、`是否`、`需要我`、`你想`、`Should I`、`Do you want`。如果是 → **立即删除问句，改用 AskUserQuestion 工具**。M5.1 违规不是"建议"——是流程违规。
+5. **我的回复是否到达了交互边界？** 我是否呈现了选项？是否完成了一个工作单元？用户是否需要选择下一步？如果是 → **MUST 使用 AskUserQuestion。默认是问——跳过是例外（仅连续执行中途可跳过）。** M5.2 元规则：有疑问就问。
+6. **我即将写入的修改/审查/证据是否都有事实依据？** 没有文件、命令、测试、日志、用户明确输入或外部文档支撑 → **不得写成事实**。标为 `BLOCKED` / `待验证` / `未知`，禁止假设、猜测、推测或编造。
+如果你已经回答了用户的任务请求但没有执行以上检查 → **停下来补执行。**
+
+**模式确认（每次会话一句，模式自适应）**：
+- **always-on**：`Governance: {trigger_mode} x {permission_mode} | stage: {stage}, Gate {gate}: {status}, {risk_count} risk(s)`
+- **on-demand**：`Governance: on-demand x {permission_mode}`（仅在用户显式调用时展开完整状态）
+- **silent-track**：不输出（MUST NOT 输出治理面板/风险统计/任务进度表）
+
+**治理开关完整触发语句映射（用户随时动态切换，均须同步更新 plan-tracker `## 项目配置`）**：
+- "切换到最高权限模式" / "开启最高权限" / "maximum autonomy" → permission_mode = maximum-autonomy
+- "切换到默认确认模式" / "开启确认模式" / "default confirm" → permission_mode = default-confirm
+- "切换到始终在线" / "切换到按需调用" / "切换到静默跟踪" → trigger_mode 对应切换
+- "当前模式" / "现在什么模式" → 输出当前 trigger_mode × permission_mode
+
+**Agent Team 何时激活**：用户请求开发/代码审查/架构设计/测试/部署/任何多步骤任务；任何需要修改文件或创建代码的任务 → spawn Developer + Code Reviewer（MUST 分离）；架构/设计决策 → Architect；需求分析/调研 → Analyst。完整路由表见本文件「Agent 分发路由」；铁律见「你的铁律」。
+
+### B1 Step 1 规程明细（读 plan-tracker + 跨会话恢复）
+
+**1. 快路径与六段 fallback（FEAT-034）**：
+- 快路径：`python <plugin_home>/infra/verify_workflow.py governance-bootstrap --format json`（只读聚合 ≤8KB——resolve envelope + 状态投影 + 候选 + migration 标志 + next_actions，即下方 a~f 热数据段落的单命令投影）。
+- 聚合命令不可用（命令缺失/超时/解析失败）→ fallback 原六段读取——读 `.governance/plan-tracker.md` 热数据段落（按优先级）：
+  a. `## 项目配置` — 当前 phase/stage/gate/mode/permission_mode/工作流版本
+  b. `## Gate 状态跟踪` — 所有 Gate 状态
+  c. `## 项目总览` — 当前统计（任务数/已完成/阻塞中/风险数）
+  d. `## 当前活跃事项` — 仅未完成/进行中的 P0/P1/P2 任务
+  e. 当前活跃版本的 task 表 — 版本描述中含"进行中"或"未发布"的段落
+  f. `## 1.0.0 依赖链` 或等效的活跃依赖链
+- 快路径输出缺某个热数据面（候选为空/字段缺失/解析失败）时，用 read 工具按需展开对应段落；以下段落按需读取（不在 bootstrap 阶段强制读取）：g. `## 需求跟踪矩阵`；h. `## 变更控制`；i. `## 版本规划` 中的"规划纪律"部分；j. 版本规划中的"里程碑"和"版本路线图"。
+- 首次交互前置完整语义：Step 2 交叉验证等深检后置为用户选择后按需执行，深检结果不作为首次 ask 的前置条件；用户选择推进类动作（发布/版本 bump/治理写回/恢复遗留任务的实际修改）前 MUST 补齐对应深检。
+
+**2. AI Execution Packet（0.38.0+）**：
+- IF `.governance/execution-packets.json` 存在：读取当前 `TASK_ID` 对应短包，优先使用短包中的 `goal`、`allowed_change_scope`、`required_evidence`、`next_commands`、`done_definition`；短包用于约束本次执行边界，长篇 plan-tracker 和规则文件只作事实源补充。
+- IF 当前任务为活跃 P0/P1 且短包缺失：运行 `python <plugin_home>/infra/verify_workflow.py execution-packet --write`（`<plugin_home>` 来自 resolve_entry.py），再读取生成后的短包继续执行。
+- `check-governance` Check 18c 会阻断缺包或字段无效的活跃 P0/P1 任务。
+
+**3. 归档感知**：IF `.governance/archive/index.md` 存在——读取 `archive/index.md` 了解已归档条目的位置；交叉验证时 evidence-log.md 中找不到某 task 的证据 → 先查 index.md 定位归档文件；**归档文件中的证据 = 有效证据——不可误判为缺失**。已归档 entry 标准查询路径：Read `.governance/archive/index.md` → grep 目标 ID → 按索引路径 Read 归档文件定位条目（总开销 2 次 Read call）。
+
+**4. 跨会话恢复与检测**：
+- 读取 `.governance/session-snapshot.md`（如存在）对照 plan-tracker：快照中的进行中任务 → 确认为 carry-over 任务继续执行；待确认决策 → 检查是否已过期或仍需确认；风险 escalation deadline ≤ 今天 → 立即升级。
+- 工作流脱轨检测：检查 plan-tracker 的 `最近复盘日期`——距今 > 7 天 AND 有若干新 commit 但 plan-tracker 无更新 → ⚠️ 工作流可能已被忽略，提醒用户是否需要更新治理状态。
+- Hook 存活检测（系统级约束——不依赖 agent 自觉）：检查 `.git/hooks/pre-commit`、`.git/hooks/commit-msg` 和 `.git/hooks/post-commit` 是否存在；缺失 → ⚠️ 治理 hook 缺失——agent 的 commit 不受系统约束。MUST 先运行 `python <plugin_home>/infra/resolve_entry.py --json` 拿到 `plugin_home`（`<plugin_home>` 取代 `$WORKFLOW_HOME` 路径考古；DEC-096），再提示重装：`cp "<plugin_home>/infra/hooks/pre-commit" .git/hooks/pre-commit && cp "<plugin_home>/infra/hooks/commit-msg" .git/hooks/commit-msg && cp "<plugin_home>/infra/hooks/post-commit" .git/hooks/post-commit`
+
+**5. 版本变化检测 + bootstrap 升级序列 A~E（FEAT-035 全文——提示 + 确认后执行）**：
+1. 读取 plan-tracker `工作流版本` 和当前安装版本（SKILL.md frontmatter `version`）。
+2. **IF** 当前版本 > 记录版本 → **呈现升级待处理**（AskUserQuestion 升级摘要：版本跨度 + CHANGELOG 要点 + 将执行的写操作清单（显式列出目标文件）+ 回滚方式；选项默认「执行升级（推荐）」），**用户确认后才执行**以下序列——确认前不执行任何写操作：
+   - **A. 呈现更新摘要**（并入升级确认 AskUserQuestion——确认前零写操作）：版本跨度 + 从 CHANGELOG.md 提取的新增/修复要点。
+   - **B. 升级平台原生入口文件 bootstrap 段**（用户确认升级后执行——agent 执行）：读取当前入口文件，找到 `## Governance Bootstrap` 段落（FIX-238.2 陈旧标记：段落内 `@bootstrap-version` 头 < SKILL frontmatter `active_version` 即陈旧；无法确定新版本 → 不升级，输出 `/plugin update` 指引）；替换为**与最新模板完全一致**的内容（按 profile 选精简/完整版）；**保留入口文件其余所有内容不变**；输出：`Bootstrap 已升级：v{old} → v{new}。` **深检前置（MUST——DEC-207② P2-1 / M5.5 条 3）**：版本升级写序列属推进类动作——执行 B~E 写操作前 MUST 先完成健康摘要（`check-governance --summary-only`）+ 交叉验证等深检；用户确认升级不免除深检。
+   - **C. 自动补全 plan-tracker 缺失结构**（用户确认升级后直接执行）：项目配置缺少字段？→ 自动添加（permission_mode、工作流版本）；缺少 `## 版本规划` 节？→ 自动添加（版本路线图空表 + 版本里程碑 + V-Gate + 版本规划纪律）；缺少 `## 需求跟踪矩阵` 节？→ 自动添加；缺少 `## 变更控制` 节？→ 自动添加（含快速通道）；变更控制流程是旧版（无快速通道）？→ 自动更新为含快速通道的版本；`.git/hooks/post-commit` / `.git/hooks/commit-msg` 不存在？→ 提示一次性安装命令（agent 不能自动写 .git/hooks/——安全问题）；**插件残留清理删除面**（cleanup.py——dry-run 先行 + 确认后执行；每版本更新时执行）：先运行 `python <plugin_home>/infra/cleanup.py --dry-run` 呈现待删报告（`<plugin_home>` 来自 resolve_entry.py；基于 manifest.json 的结构 diff——不在 canonical manifest 中的文件 = 残留；`.governance/`、`.git/` 硬编码保护不触碰），通过 AskUserQuestion 确认后再执行 `python <plugin_home>/infra/cleanup.py`（不确认 → 跳过清理，不影响其余步骤），输出 `✅ 已清理 {N} 个过期文件/目录`。
+   - **D. 更新 plan-tracker `工作流版本`** 为当前版本。
+   - **E. 持续归档触发检测与执行**（用户确认升级后执行；归档写操作同 ask-确认前置——dry-run 报告先行呈现，AskUserQuestion 确认后才执行迁移）：运行 `python <plugin_home>/infra/archive.py migrate --auto --dry-run` 检测四类触发器（`<plugin_home>` 来自 resolve_entry.py）：1. 首次迁移：`.governance/archive/index.md` 不存在 AND `plan-tracker.md` > 80 KB AND 已发布版本 ≥ 2；2. 发布强制：出现新的已发布版本后，除最新已发布版本外仍有未归档历史 task；3. task 增量：热文件中可归档 completed task 达到阈值；4. 90 天兜底：长期未归档但仍有可归档历史数据。dry-run 报告需要归档 → 呈现 dry-run 报告并通过 AskUserQuestion 确认后执行：a. `python <plugin_home>/infra/archive.py migrate --auto`；b. `python <plugin_home>/infra/verify_workflow.py check-archive-integrity`；c. 输出归档迁移摘要（格式: 📦 治理数据归档完成: 归档{N}个task→..., plan-tracker: {old}KB→{new}KB(-{pct}%)）。归档完整性失败 → 记录到 risk-log；发布/版本 bump 收尾场景 MUST 阻断完成。无可归档数据 → 跳过归档（不修改文件）。
+3. **用户要做的仍然只有：/plugin update → 下次会话。** 升级不再静默写文件——确认后其余步骤自动完成。
+
+### B2 交叉验证与优先级（entry 模板 Step 2 / Step 4 承接）
+
+**Step 2: 交叉验证（3 项强制检查——FEAT-034 起为后置深检）**：时序——本步骤属深检，在首次交互（Step 1 首次交互前置 ask）之后按需执行，不前置于首次 ask；用户选择推进类动作（发布/版本 bump/治理写回/恢复遗留任务的实际修改）时 MUST 先完成本步骤再继续；健康面未完成时显示「待检查」而非绿色通过。对照 `.governance/plan-tracker.md` 和 `.governance/evidence-log.md`：
+1. **证据完整性**：a. plan-tracker 热数据中标记为"已完成"的任务 → 先查 evidence-log.md 热数据；b. 缺失 → 查 `.governance/archive/index.md`（如存在）→ 定位归档文件；c. 归档文件中存在 = 有效证据——不标记为缺失；d. 热文件 + 归档文件中均缺失 → **检查 profile**。
+2. **Gate 一致性**：plan-tracker 的 Gate 状态与 evidence-log 的最新证据是否匹配？Gate 标记 passed 但无对应证据 = 不一致，告知用户。
+3. **风险过期**：risk-log 中活跃风险超过 7 天未更新？是 = 标记为过期风险，告知用户。
+任一检查失败 → 列出差距 → 征求用户是否立即修复（AskUserQuestion）。
+
+**Step 4: 优先级确认**：如果 plan-tracker 中有 passed-with-conditions 遗留项或有进行中的 P0 任务 → 优先处理。上一 session 未完成的 P0 任务 → 继续执行（从 session-snapshot.md 中识别）。**没读 plan-tracker 就开始干活 = 流程违规。跳过交叉验证 = 流程违规。跳过阶段跳跃防护 = 流程违规。这不是"建议"，是前置条件。**
+
+### B3 提问规则三清单（entry 模板「提问规则」承接）
+
+**AskUserQuestion 是唯一合法的用户提问方式。** 禁止用内联文字问"要不要继续""是否如何如何"——所有需要用户判断的问题必须通过 AskUserQuestion 工具。默认模式：**仅在关键决策停下来**。非关键决策自动执行不中断。
+
+**关键决策** — 无论何种 permission_mode，**永远**停下来用 AskUserQuestion：
+- 范围变更（新增/删除功能、改变项目边界）
+- 架构决策（技术栈选择、模块拆分、接口设计）
+- 发布决策（go/no-go、版本号升级、breaking change）
+- 风险接受（接受已知风险、绕过 Gate）
+- 外部依赖变更（引入新库、新服务、API 变更）
+- Profile/触发模式/操作权限模式变更
+- 阶段跳跃（跳过 Gate）
+
+**危险操作确认** — 仅 default-confirm 模式下停下来：
+- 破坏性 git：push --force、reset --hard、branch -D、删除远程分支
+- 文件系统破坏：rm -rf、批量删除文件、覆盖重要配置
+- 外部副作用：API 调用（非只读）、package 安装/卸载、数据库变更、环境变量修改
+- 不可逆操作：squash 合并、rebase 变基、修改已推送的 commit
+- **maximum-autonomy 模式下以上操作自动执行不确认。**
+
+**非关键决策** — 自动执行，不提问：
+- 已确认方向内的任务排序
+- 证据格式和详细程度
+- git commit（不带 --force）/ git push（maximum-autonomy 下自动）
+- 治理记录更新
+- 微小实现选择（文件命名、变量名、代码风格）
+- Gate 自评结果（仅在失败时告知）
+- 文件编辑 / 运行测试 / 创建文件
+
+**判断标准**：决策是否改变项目方向、范围、架构或接受风险？是 → 关键决策，永远必须问。决策是否涉及破坏性/不可逆操作？是 + default-confirm → 必须确认。否 → 自动执行。
+
+### B4 干活前 / 收工检查（entry 模板承接）
+
+**干活前检查（每次收到任务时）**：这个任务在计划跟踪表里吗？不在就先入账。做完后需要补什么证据？先想清楚。这个任务会不会影响别的阶段？影响就先记风险。**用户视角三问**：①用户怎么获得变更（update/init/手动？）②用户怎么知道变更存在？③用户体验真的变了吗？
+
+**收工前检查（session 结束前）**：1. 输出本轮完成事项摘要。2. 补证据到 `.governance/evidence-log.md`。3. 更新 plan-tracker 任务状态（已完成/进行中）。4. **生成跨会话快照**：写入 `.governance/session-snapshot.md`。5. **auto git commit + push**（maximum-autonomy 模式）或 **auto git commit**（default-confirm 模式——push 需确认）。commit message 必须引用 task ID。6. 用 AskUserQuestion 确认下一步优先级。
+
+### B5 故障排除四步（Agent 行为异常时）
+
+如果 agent 不遵守协议（跳过 Gate、忽略 AskUserQuestion、选择性执行规则），按以下顺序排查：
+1. agent 加载了 skill 吗？ → 检查 agent 是否知道当前阶段和 Gate 状态
+2. agent 读了 plan-tracker 吗？ → 检查 agent 是否提到当前 Tier 和待执行任务
+3. agent 的证据可信吗？ → 运行 `python <plugin_home>/infra/verify_workflow.py check-governance`（`<plugin_home>` 来自 resolve_entry.py）
+4. agent 的完成是真的吗？ → 读 agent 声称创建/修改的文件
+完整的 8 种失败模式、检测方法和应急动作见 `skills/software-project-governance/references/agent-failure-modes.md`。
+
 ### 行为灰度开关（FEAT-040——legacy 回退通道；边界机检见 `infra/behavior_profile.py`）
 
 切片 A（AUDIT-154，0.84.0）一次落地四个热路径行为变更（FEAT-034/035/036/038）。本开关是它们的**回退通道**——**一个总开关**，不是逐 FEAT 矩阵。

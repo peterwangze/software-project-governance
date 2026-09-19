@@ -2155,8 +2155,20 @@ def check_review_closure(review_sequence=None, plan_tracker_completed=None,
                 # fail-safe (live-only set; findings stay FAIL).
                 closed = completed
             else:
+                # FIX-358 P3-2 (review-FIX-357-CODE-R0 P3-2): this is the
+                # single merge point where ``closed`` is derived. Invariant
+                # ``closed ⊇ completed``: the archive side only ever ADDS ids
+                # (minus live_active), which is exactly what lets
+                # ``_terminal_exemption_source`` read "in closed, not in
+                # completed" as causal proof of the archive basis (see its
+                # docstring). A future derivation that narrows ``closed``
+                # below ``completed`` would silently misattribute live-basis
+                # exemption rows. Defensive assert (stripped under -O; the
+                # verdict itself never depends on it).
                 closed = completed | (
                     _archived_completed_task_ids() - live_active)
+                assert closed >= completed, \
+                    "closed ⊇ completed invariant broken (FIX-358 P3-2)"
         except Exception:
             # An archive read never degrades the live verdict (same fail-safe
             # direction as _live_completed_task_ids).
@@ -2637,22 +2649,39 @@ def _archived_completed_task_ids():
     the archive Task index is a second completed-source for the SAME per-task
     terminal predicate the live path uses.
 
-    Predicate: the shared ``_status_is_completed_cell`` (FIX-278 F-1 state-cell
-    terminal test; already exposed via ``_SHARED_NAMES`` — zero new imports).
-    Deliberate divergence from ``task_priority`` FIX-341's
-    ``parse_archive_index_completed_ids``, which answers a DIFFERENT question
-    (is a *dependency* satisfied?) and is conservative enough to veto any cell
-    carrying a negative marker. Live REL-078's cell reads
-    ``完成 (2026-09-17)——…候选 `3f4c534`…``: the token 候选 there names the
-    released CANDIDATE COMMIT, not a non-terminal state, so FIX-341's predicate
-    returns False where the cell's leading ``完成 (date)`` assertion is
-    unambiguous. Terminal-state judgement therefore uses the state-column
-    predicate, per this defect's spec.
+    Predicate (FIX-358 C-02): a UNION of two conservative archive parsers.
+      1. The shared ``_status_is_completed_cell`` (FIX-278 F-1 state-cell
+         terminal test; already exposed via ``_SHARED_NAMES`` — zero new
+         imports) stays PRIMARY: it reads the state COLUMN, so a leading
+         ``完成 (date)`` assertion is terminal even when the prose carries a
+         negative-looking token — live REL-078's cell reads
+         ``完成 (2026-09-17)——…候选 `3f4c534`…`` where 候选 names the released
+         CANDIDATE COMMIT, a cell FIX-341's veto list would wrongly reject.
+      2. ``task_priority`` FIX-341's ``parse_archive_index_completed_ids``
+         (same load-bearing ``## Task 索引`` boundary) is UNIONED in: the
+         state-cell fallback (``完成\\s*(?:[（(]|$)`` — 完成 followed by
+         whitespace-then-bracket or end-of-cell) cannot see the archive
+         prose forms ``完成 + …`` / ``完成——…`` / ``完成/…``, the release
+         forms ``已交付 (…)`` / ``已发布 …`` (no 完成-bracket adjacency at
+         all), or a narrative-terminal row like FIX-263's
+         ``设计定稿 (…)——…每链完成后…`` — 13 verified-closed IDs (3.5% of the
+         index) misjudged non-terminal (review-FIX-355-CODE-R0 C-02, V-8
+         three forms). Cell normalization was rejected: those forms are not
+         reachable without widening the SHARED live predicate (已交付/已发布
+         markers), whose blast radius is every F-1/V1 consumer. The FIX-341
+         parser answers a different question (is a *dependency* satisfied?)
+         and is conservative in the opposite direction: its negative-marker
+         veto list (候选/未完成/待执行/…) only shrinks its own output, so the
+         union is monotone-additive — measured on the real index it adds
+         exactly the 13 verified-closed IDs and nothing else.
 
     Scope: rows inside the ``## Task 索引`` section only — the boundary is
     load-bearing (the Decision/Risk/Evidence index tables share the
     ``| PREFIX-NNN | … |`` row shape but are not tasks). A row qualifies when
-    its first cell is a bare ``PREFIX-NNN`` ID and its 状态 cell tests terminal.
+    its first cell is a bare ``PREFIX-NNN`` ID and its 状态 cell tests terminal
+    (arm 1); the FIX-341 arm additionally accepts a bold ``**PREFIX-NNN**`` ID
+    cell (its ``_strip_markdown`` — a known-arm-only widening, C-06 notes the
+    divergence, direction-safe here).
 
     Fail-closed / zero-regression: a missing or unreadable index (or any parse
     failure) yields an empty set, so the exemption gate reduces to exactly the
@@ -2667,7 +2696,12 @@ def _archived_completed_task_ids():
         if not index_path.is_file():
             return set()
         text = index_path.read_text(encoding="utf-8")
-    except (IOError, OSError):
+    except (IOError, OSError, ValueError):
+        # FIX-358 C-03: UnicodeDecodeError (⊂ ValueError) — a non-UTF-8 index
+        # must fall back to the empty set per the contract above ("any parse
+        # failure yields an empty set"), not raise out of the helper (V-11).
+        # Same catch tuple as task_priority.read_archive_index_completed_ids
+        # (FIX-341 precedent).
         return set()
     completed = set()
     in_task_section = False
@@ -2689,6 +2723,13 @@ def _archived_completed_task_ids():
             continue
         if _status_is_completed_cell(cells[2]):
             completed.add(task_id)
+    # FIX-358 C-02: union with the FIX-341 dependency-resolution parser (peer,
+    # stdlib-only, pure text in → frozenset out, never raises). Direction-safe:
+    # it only ADDS archived-terminal ids (its negative-marker veto list shrinks
+    # its own output), the live-active veto stays upstream at the ``closed``
+    # merge, and an unreadable index never reaches this line.
+    from task_priority import parse_archive_index_completed_ids
+    completed |= parse_archive_index_completed_ids(text)
     return completed
 
 

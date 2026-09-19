@@ -1293,5 +1293,322 @@ class TerminalExemptionCauseSplitTests(unittest.TestCase):
         self.assertNotIn("closure basis: archived", v2[0]["reason"])
 
 
+# ── FIX-358 C-02：归档散文格终态识别（V-8 三形锁形） ──────────────────────
+
+class ArchiveProseCompletionFormsTests(unittest.TestCase):
+    """FIX-358 C-02（review-FIX-355-CODE-R0 C-02，V-8 实证复现）：归档索引
+    散文格「完成 + / 完成—— / 已交付 (…) / 设计定稿…完成后…」等形态不被
+    ``_status_is_completed_cell`` 兜底（``完成`` 后仅认空白+括号/格尾）识别
+    ——真实语料 13 个确凿闭环 ID（3.5%）漏判。
+
+    裁决（C-02 direction ②，Developer 定夺论证见任务返回）：与 FIX-341 的
+    ``parse_archive_index_completed_ids`` 取**并集**，而非 cell 归一化（①）：
+    ① 覆盖不了「已交付 (…)」（无「完成」token）与 FIX-263「设计定稿…每链
+    完成后…」（无终态位「完成」），强行补齐须扩共享活体谓词（已交付/已发布
+    marker），爆炸半径波及 V1/F-1 全部消费面；② 的负标记否决表只收缩其自身
+    输出——真实索引实测并集恰新增 13 个真闭环 ID（362→375），方向安全。
+    REL-078「候选=候选提交」形态仍由 arm 1（状态格谓词）看护
+    （test_archive_predicate_beats_fix341_conservative_veto）。
+
+    本类锁 V-8 三形——语料为真实 ``archive/index.md`` 行**逐字**（禁止虚构
+    形态）：FIX-165 / AUDIT-137 / REL-048。
+    """
+
+    _INDEX_HEADER = (
+        "# 归档索引\n\n"
+        "## Task 索引\n\n"
+        "| Task ID | 状态 | 版本 | 归档文件 |\n"
+        "|---------|------|------|---------|\n"
+    )
+
+    def _archived_ids(self, rows):
+        """最小归档索引 fixture → 终态集（单元面，真解析路径）。"""
+        import tempfile
+        index = self._INDEX_HEADER + "".join(rows)
+        with tempfile.TemporaryDirectory() as td:
+            gov = Path(td) / ".governance"
+            (gov / "archive").mkdir(parents=True)
+            (gov / "archive" / "index.md").write_text(index, encoding="utf-8")
+            with mock.patch.object(vw, "GOVERNANCE_DIR", gov):
+                return rd._archived_completed_task_ids()
+
+    def test_v8_form_1_complete_plus_released(self):
+        """V-8 形 1：「完成 + 已发布 0.61.2 (…) [行重构 …]」（FIX-165 真实行
+        逐字）→ 终态集识别（修复前漏判）。"""
+        ids = self._archived_ids([
+            "| FIX-165 | 完成 + 已发布 0.61.2 (2026-07-01) "
+            "[行重构 2026-07-04] | 0.61.2 | "
+            "archive/tasks/v0.1.0~v0.61.2.md |\n",
+        ])
+        self.assertIn("FIX-165", ids)
+
+    def test_v8_form_2_complete_em_dash(self):
+        """V-8 形 2：「完成——Requirement R3 APPROVED」（AUDIT-137 真实行
+        逐字）→ 终态集识别（修复前漏判）。"""
+        ids = self._archived_ids([
+            "| AUDIT-137 | 完成——Requirement R3 APPROVED | 0.66.2 | "
+            "archive/tasks/v0.1.0~v0.78.0.md |\n",
+        ])
+        self.assertIn("AUDIT-137", ids)
+
+    def test_v8_form_3_release_complete_plus_pushed(self):
+        """V-8 形 3：「发布完成 + pushed (…) [行重构 …]」（REL-048 真实行
+        逐字）→ 终态集识别（修复前漏判）。"""
+        ids = self._archived_ids([
+            "| REL-048 | 发布完成 + pushed (2026-06-28) "
+            "[行重构 2026-07-04] | 0.61.0 | "
+            "archive/tasks/v0.1.0~v0.61.2.md |\n",
+        ])
+        self.assertIn("REL-048", ids)
+
+
+# ── FIX-358 C-03 + C-05：归档豁免门 fail-safe 分支看护 ────────────────────
+
+class ArchiveGateFailSafeBranchTests(unittest.TestCase):
+    """FIX-358 C-03/C-05（review-FIX-355-CODE-R0）：Check 30 归档豁免门的
+    三条 fail-safe 分支端到端看护 + 非法 UTF-8 索引契约。
+
+      · C-03：索引非法 UTF-8 → ``UnicodeDecodeError``（⊂ ValueError）必须
+        空集回退不抛（契约文「any parse failure yields an empty set」；
+        FIX-341 ``read_archive_index_completed_ids`` 同款捕获面）。
+      · C-05①：tracker 不可读（活体状态 UNKNOWN）→ ``closed`` 保持活体集，
+        归档终态行不得豁免（把 UNKNOWN 当空 active 集是 docstring 明示的
+        fail-open 反模式）。
+      · C-05③：含完成词但开放语义的 cell 按 C-02 裁决锁定行为——
+        「尚未完成」两谓词皆 False → 保持违规（谓词退化 ``"完成" in cell``
+        会误豁免，本断言即 M4 突变击杀）；「已完成 3/8 项」真实谓词按
+        「已完成」子串判终态（review 实证既定行为、语料 0 例）→ 豁免成立，
+        且 WARN 必须携带 closure basis 披露（FIX-357 分流主体）。
+    """
+
+    _PLAN_HEADER = (
+        "# 计划\n\n"
+        "### 优先级一览\n\n"
+        "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |\n"
+        "|--------|----|------|------|---------|---------|------|\n"
+    )
+
+    _ARCHIVE_INDEX = (
+        "# 归档索引\n\n"
+        "## Task 索引\n\n"
+        "| Task ID | 状态 | 版本 | 归档文件 |\n"
+        "|---------|------|------|---------|\n"
+        "| REL-178 | 完成 (2026-09-17)——**M-1~M-8 全链闭环** | "
+        "0.82.0 | a.md |\n"
+    )
+
+    _BAD_UTF8 = b"\xff\xfe<p>\xc3\x28broken-not-utf8"
+
+    def _live_run(self, plan_rows=(), evidence="", plan_bytes=None,
+                  archive_text=None, archive_bytes=None):
+        """live 路径（temp .governance + 真实文件扫描）；``plan_bytes`` /
+        ``archive_bytes`` 写原始字节以构造不可读/非法 UTF-8 fixture。"""
+        import tempfile
+        plan = self._PLAN_HEADER + "".join(plan_rows)
+        with tempfile.TemporaryDirectory() as td:
+            gov = Path(td) / ".governance"
+            gov.mkdir()
+            plan_path = gov / "plan-tracker.md"
+            if plan_bytes is not None:
+                plan_path.write_bytes(plan_bytes)
+            else:
+                plan_path.write_text(plan, encoding="utf-8")
+            evidence_path = gov / "evidence-log.md"
+            evidence_path.write_text(evidence, encoding="utf-8")
+            if archive_text is not None:
+                (gov / "archive").mkdir()
+                (gov / "archive" / "index.md").write_text(
+                    archive_text, encoding="utf-8")
+            elif archive_bytes is not None:
+                (gov / "archive").mkdir()
+                (gov / "archive" / "index.md").write_bytes(archive_bytes)
+            with mock.patch.object(vw, "SAMPLE_PATH", plan_path), \
+                 mock.patch.object(vw, "EVIDENCE_PATH", evidence_path), \
+                 mock.patch.object(vw, "GOVERNANCE_DIR", gov):
+                r = vw.check_review_closure()
+        return r
+
+    # ── C-03：非法 UTF-8 索引 → 空集回退不抛（单元面） ────────────────
+
+    def test_illegal_utf8_index_yields_empty_set_not_raise(self):
+        """C-03：非法 UTF-8 索引 → ``_archived_completed_task_ids`` 返回空集
+        （修复前 V-11 实证抛 ``UnicodeDecodeError``）。"""
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            gov = Path(td) / ".governance"
+            (gov / "archive").mkdir(parents=True)
+            (gov / "archive" / "index.md").write_bytes(self._BAD_UTF8)
+            with mock.patch.object(vw, "GOVERNANCE_DIR", gov):
+                ids = rd._archived_completed_task_ids()
+        self.assertEqual(ids, set())
+
+    # ── C-05①：tracker 不可读 → closed 保持活体集 ─────────────────────
+
+    def test_unreadable_tracker_archive_row_cannot_rescue(self):
+        """C-05①：tracker 非法 UTF-8（活体状态 UNKNOWN）→ 归档终态行不得
+        豁免 → 前导缺口保持 FAIL；对照运行（同一归档行 + 可读 tracker 无该
+        任务行）→ WARN——证明运行 1 的 FAIL 来自 UNKNOWN 门而非归档行本身。
+        杀突变：UNKNOWN 当空 active 集并入归档贡献 → 运行 1 翻 WARN。"""
+        evidence = _evidence_review_row(
+            "REVIEW-REL-178-R1", "REL-178", "APPROVED_WITH_NOTES",
+            "unresolved_blockers=0")
+        fragile = self._live_run(plan_bytes=self._BAD_UTF8,
+                                 evidence=evidence,
+                                 archive_text=self._ARCHIVE_INDEX)
+        self.assertEqual(fragile["verdict"], "FAIL", fragile)
+        self.assertIn("REL-178",
+                      [v["task_id"] for v in fragile["violations"]
+                       if v["rule"] == "V2"])
+        control = self._live_run(
+            plan_rows=["| **P1** | FIX-900 | 无关活跃任务 | — | 0.4.0 | "
+                       "open | ⏳ 待执行 |\n"],
+            evidence=evidence,
+            archive_text=self._ARCHIVE_INDEX)
+        self.assertEqual(control["verdict"], "WARN", control["violations"])
+        self.assertEqual(control["violations"], [], control["violations"])
+
+    # ── C-05②：索引非法 UTF-8 → 空集回退（端到端，配 C-03） ──────────
+
+    def test_illegal_utf8_index_end_to_end_stays_fail(self):
+        """C-05②：索引非法 UTF-8 → 归档集空集回退（C-03 单元面的端到端
+        对应）→ 豁免门收缩为活体集 → 前导缺口保持 FAIL（FIX-355 前同判）。"""
+        evidence = _evidence_review_row(
+            "REVIEW-REL-178-R1", "REL-178", "APPROVED_WITH_NOTES",
+            "unresolved_blockers=0")
+        r = self._live_run(evidence=evidence,
+                           archive_bytes=self._BAD_UTF8)
+        self.assertEqual(r["verdict"], "FAIL", r)
+        self.assertIn("REL-178",
+                      [v["task_id"] for v in r["violations"]
+                       if v["rule"] == "V2"])
+
+    # ── C-05③：开放语义 cell 行为锁定（M4 突变击杀） ──────────────────
+
+    def test_open_semantics_cells_locked_behavior_with_disclosure(self):
+        """C-05③：同一运行双任务——「尚未完成」格不得豁免（保持 V2 违规；
+        M4「``"完成" in cell``」突变会误豁免 → 本断言击杀）；「已完成 3/8
+        项」格按 C-02 裁决锁定豁免（真实谓词既定行为），且豁免 WARN 必须带
+        closure basis 归档披露、不带活体措辞。"""
+        index = (
+            "# 归档索引\n\n"
+            "## Task 索引\n\n"
+            "| Task ID | 状态 | 版本 | 归档文件 |\n"
+            "|---------|------|------|---------|\n"
+            "| ARCH-201 | 尚未完成 (2026-01-01)——实现中 | 0.1.0 | a.md |\n"
+            "| ARCH-202 | 已完成 3/8 项 (2026-01-01) | 0.1.0 | a.md |\n"
+        )
+        evidence = (
+            _evidence_review_row("REVIEW-ARCH-201-R1", "ARCH-201",
+                                 "APPROVED_WITH_NOTES",
+                                 "unresolved_blockers=0")
+            + _evidence_review_row("REVIEW-ARCH-202-R1", "ARCH-202",
+                                   "APPROVED_WITH_NOTES",
+                                   "unresolved_blockers=0")
+        )
+        r = self._live_run(evidence=evidence, archive_text=index)
+        self.assertIn("ARCH-201",
+                      [v["task_id"] for v in r["violations"]
+                       if v["rule"] == "V2"])
+        v2 = [x for x in r["warnings"]
+              if x["rule"] == "V2" and x["task_id"] == "ARCH-202"]
+        self.assertTrue(v2, r)
+        self.assertIn("closure basis: archived task", v2[0]["reason"])
+        self.assertIn("DEC-214②", v2[0]["reason"])
+        self.assertNotIn("closure basis: live", v2[0]["reason"])
+
+
+# ── FIX-358 P3-1：V2/V5 historical 门 closure basis 端到端正例 ────────────
+
+class HistoricalGateCauseClauseTests(unittest.TestCase):
+    """FIX-358 P3-1（review-FIX-357-CODE-R0 P3-1）：V2 historical / V5
+    historical 两门的行为正例。FIX-357 的 closure basis 分句经 f-string
+    注入点进入门措辞，此前仅由共享 mapper（``_terminal_exemption_cause_
+    clause``）单测间接看护——注入点内容漂移无端到端断言。本类补齐：两类
+    门各 1 条端到端正例，断言分句在场、来源正确（live 依据）。
+    """
+
+    _PLAN_HEADER = (
+        "# 计划\n\n"
+        "### 优先级一览\n\n"
+        "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |\n"
+        "|--------|----|------|------|---------|---------|------|\n"
+    )
+
+    @staticmethod
+    def _live_completed_row(task_id):
+        """活体终态行（tracker 仍持行、状态格断言完成——EVD-892 形态）。"""
+        return ("| **P1** | {0} | 旧任务（活体行终态） | — | 0.2.0 | closed | "
+                "✅ 完成 (2026-08-01) |\n").format(task_id)
+
+    @staticmethod
+    def _handwritten_file(conclusion):
+        """Pre-FIX-174 手写审查报告形状（无机器 marker / 无 - date: 字段）。"""
+        return ("\n".join([
+            "# 审查报告",
+            "",
+            "审查对象：目标产物直读；事实依据逐项核验。",
+            "",
+            "审查结论：**{0}**".format(conclusion),
+            "",
+        ]))
+
+    def _live_run(self, plan_rows, files):
+        """live 路径（与 HistoricalFileShapeTests 同构——分类只发生在 live
+        文件通道）。"""
+        import tempfile
+        plan = self._PLAN_HEADER + "".join(plan_rows)
+        with tempfile.TemporaryDirectory() as td:
+            gov = Path(td) / ".governance"
+            gov.mkdir()
+            (gov / "plan-tracker.md").write_text(plan, encoding="utf-8")
+            (gov / "evidence-log.md").write_text("", encoding="utf-8")
+            for name, text in files.items():
+                (gov / name).write_text(text, encoding="utf-8")
+            with mock.patch.object(vw, "SAMPLE_PATH", gov / "plan-tracker.md"), \
+                 mock.patch.object(vw, "EVIDENCE_PATH", gov / "evidence-log.md"), \
+                 mock.patch.object(vw, "GOVERNANCE_DIR", gov):
+                r = vw.check_review_closure()
+        return r
+
+    def test_v2_historical_gate_discloses_live_closure_basis(self):
+        """V2 historical 门端到端正例：历史手写链中缝缺轮（R0+R2 缺 R1）+
+        活体终态行 → WARN reason 携带 closure basis 分句（live 依据 +
+        EVD-892），且不含归档措辞——注入点内容回归即翻红。"""
+        r = self._live_run(
+            [self._live_completed_row("ARCH-120")],
+            {
+                "review-ARCH-120-R0.md": self._handwritten_file("NEEDS_CHANGE"),
+                "review-ARCH-120-R2.md": self._handwritten_file(
+                    "APPROVED_WITH_NOTES"),
+            })
+        self.assertEqual(r["verdict"], "WARN", r["violations"])
+        v2 = [w for w in r["warnings"]
+              if w["rule"] == "V2" and w["task_id"] == "ARCH-120"]
+        self.assertTrue(v2, r["warnings"])
+        self.assertIn("historical file shape", v2[0]["reason"])
+        self.assertIn("closure basis: live plan-tracker terminal row",
+                      v2[0]["reason"])
+        self.assertIn("EVD-892", v2[0]["reason"])
+        self.assertNotIn("closure basis: archived", v2[0]["reason"])
+
+    def test_v5_historical_gate_discloses_live_closure_basis(self):
+        """V5 historical 门端到端正例：历史手写 APPROVED_WITH_NOTES 无机器
+        token + 活体终态行 → WARN reason 携带 closure basis 分句（live 依据
+        + EVD-892），且不含归档措辞。"""
+        r = self._live_run(
+            [self._live_completed_row("ARCH-121")],
+            {"review-ARCH-121.md": self._handwritten_file(
+                "APPROVED_WITH_NOTES")})
+        self.assertEqual(r["verdict"], "WARN", r["violations"])
+        v5 = [w for w in r["warnings"]
+              if w["rule"] == "V5" and w["task_id"] == "ARCH-121"]
+        self.assertTrue(v5, r["warnings"])
+        self.assertIn("historical shape", v5[0]["reason"])
+        self.assertIn("closure basis: live plan-tracker terminal row",
+                      v5[0]["reason"])
+        self.assertIn("EVD-892", v5[0]["reason"])
+        self.assertNotIn("closure basis: archived", v5[0]["reason"])
+
+
 if __name__ == "__main__":
     unittest.main()

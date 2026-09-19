@@ -878,5 +878,216 @@ class ReworkR1BoundaryTests(unittest.TestCase):
                        if v["rule"] == "V2"])
 
 
+# ── FIX-355：归档感知终态门（REL-080 发布阻塞：Check 30 V2×2） ────────────
+
+class ArchiveAwareTerminalGateTests(unittest.TestCase):
+    """FIX-355：Check 30 终态豁免门合并归档 Task 索引。
+
+    缺陷（REL-080 发布阻塞）：``completed`` 仅从活体 plan-tracker 派生——
+    任务行被 ``archive.py`` 迁移出热文件后，任务从 tracker 消失而审查链仍留
+    在 evidence-log，于是真实已闭环任务的历史前导缺口重新判 FAIL
+    （REL-078「missing R[0]」在 0.83.0 归档迁移移走其任务行后复发）。
+
+    归档语义 = 完结入册（不是「从未存在」），故归档索引是终态的第二来源。
+    边界（不可破）：
+      · 豁免仅限「归档行状态格证明终态」——索引缺行/状态非终态 → 保持 FAIL；
+      · 活体行权威——tracker 仍显示 ACTIVE 的任务不得被陈旧归档行豁免
+        （沿用 FIX-341 归档索引解析序「热表行权威」）；
+      · V1 破链面（「非终态但任务已标记完成」）不进归档集——它断言的是
+        **当前工作**的闭环缺口，喂入归档历史会造出 7 个新 FAIL（实测：
+        Check 30 2→8 violations，历史遗留 UNKNOWN 轮结论全部翻红）。
+
+    零回归：archive/index.md 不存在/不可读 → 归档集为空 → 与 FIX-355 前
+    完全同判（既有 LiveCompletedPredicateShapeTests 全部在无 archive 的
+    temp .governance 下运行，即该路径的持续看护）。
+    """
+
+    _PLAN_HEADER = (
+        "# 计划\n\n"
+        "### 优先级一览\n\n"
+        "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |\n"
+        "|--------|----|------|------|---------|---------|------|\n"
+    )
+
+    #: 真实 ``archive/index.md`` 行形态（REL-078 语料逐字同型）：状态格以
+    #: 「完成 (date)」断言开头，正文含「候选」——该词此处指**候选提交**
+    #: （candidate commit），不是非终态状态。这正是 FIX-341 的保守谓词
+    #: （``_ARCHIVE_NON_COMPLETED_MARKERS`` 含「候选」）会误判 False、
+    #: 而 ``_status_is_completed_cell`` 正确判 True 的形态。
+    _ARCHIVE_INDEX = (
+        "# 归档索引\n\n"
+        "## Task 索引\n\n"
+        "| Task ID | 状态 | 版本 | 归档文件 |\n"
+        "|---------|------|------|---------|\n"
+        "| REL-178 | 完成 (2026-09-17)——**M-1~M-8 全链闭环**（日期勘误："
+        "taggerdate 权威）：候选 `3f4c534`（M-1 冻结 + M-3 双半面 R0→R1 全 "
+        "APPROVED_WITH_NOTES/0，机录 REVIEW-REL-178-R1~R4）→ M-5 transition "
+        "`b63584c`（candidate→released + tag `v0.82.0`）→ M-7 push → M-8 归档"
+        "迁移（22 项 evidence，integrity PASS）。EVD-1060/1061/1062 | "
+        "0.82.0 | archive/tasks/v0.1.0~v0.82.0.md |\n"
+    )
+
+    _ARCHIVED_PLAN_ROW = (
+        "| **P1** | REL-178 | 发布任务（行已归档迁移出热文件） | — | 0.82.0 | "
+        "closed | ⏳ 待执行 |\n"
+    )
+
+    def _live_run(self, plan_rows, evidence, archive_index=None):
+        """live 路径：temp ``.governance`` + 真实文件扫描（``completed`` 与归档
+        索引均经真实 I/O 派生——fixture 注入路径无法覆盖归档合并）。"""
+        import tempfile
+        plan = self._PLAN_HEADER + "".join(plan_rows)
+        with tempfile.TemporaryDirectory() as td:
+            gov = Path(td) / ".governance"
+            gov.mkdir()
+            (gov / "plan-tracker.md").write_text(plan, encoding="utf-8")
+            (gov / "evidence-log.md").write_text(evidence, encoding="utf-8")
+            if archive_index is not None:
+                (gov / "archive").mkdir()
+                (gov / "archive" / "index.md").write_text(
+                    archive_index, encoding="utf-8")
+            with mock.patch.object(vw, "SAMPLE_PATH", gov / "plan-tracker.md"), \
+                 mock.patch.object(vw, "EVIDENCE_PATH", gov / "evidence-log.md"), \
+                 mock.patch.object(vw, "GOVERNANCE_DIR", gov):
+                r = vw.check_review_closure()
+        return r
+
+    @staticmethod
+    def _leading_gap_evidence(task_id="REL-178"):
+        """链从 R1 起（无 R0）——LEADING gap，L-A 豁免候选形态。"""
+        return _evidence_review_row(
+            "REVIEW-{0}-R1".format(task_id), task_id,
+            "APPROVED_WITH_NOTES", "unresolved_blockers=0")
+
+    def _v2(self, result, task_id="REL-178", bucket="warnings"):
+        return [x for x in result[bucket]
+                if x["rule"] == "V2" and x["task_id"] == task_id]
+
+    # ── 核心验收：归档终态任务的前导缺口 → WARN（红→绿） ───────────────
+
+    def test_archived_closed_task_leading_gap_downgrades_to_warn(self):
+        """归档索引「完成」行 + tracker 无该任务行 + 链从 R1 起 → WARN
+        （REL-078 形态；修复前 FAIL——本用例锁住修复）。"""
+        r = self._live_run([], self._leading_gap_evidence(),
+                           archive_index=self._ARCHIVE_INDEX)
+        self.assertEqual(r["violations"], [], r["violations"])
+        self.assertEqual(r["verdict"], "WARN")
+        v2 = self._v2(r)
+        self.assertTrue(v2, r["warnings"])
+        self.assertIn("legacy leading round gap", v2[0]["reason"])
+        self.assertIn("closed task", v2[0]["reason"])
+
+    def test_archived_closed_task_leading_gap_ignores_unrelated_live_rows(self):
+        """归档合并与活体行解析共存：另一 ACTIVE 任务行在场（live_active 非
+        空）时，归档任务的豁免照常生效。"""
+        r = self._live_run(
+            ["| **P1** | FIX-900 | 无关活跃任务 | — | 0.4.0 | open | "
+             "⏳ 待实施 |\n"],
+            self._leading_gap_evidence(),
+            archive_index=self._ARCHIVE_INDEX)
+        self.assertEqual(r["violations"], [], r["violations"])
+        self.assertTrue(self._v2(r), r["warnings"])
+
+    # ── 零回归：索引缺失 → 与 FIX-355 前同判 ──────────────────────────
+
+    def test_missing_archive_index_keeps_leading_gap_fail(self):
+        """零回归路径：``archive/index.md`` 不存在 → 归档集为空 → 既非活体
+        终态亦非归档终态的任务前导缺口保持 FAIL（FIX-355 前行为逐字不变）。"""
+        r = self._live_run([], self._leading_gap_evidence())
+        self.assertEqual(r["verdict"], "FAIL")
+        self.assertIn("REL-178",
+                      [v["task_id"] for v in r["violations"]
+                       if v["rule"] == "V2"])
+
+    def test_archive_row_without_terminal_assertion_stays_fail(self):
+        """fail-closed：归档行存在但状态格未证明终态（候选/进行中）→
+        不豁免 → 保持 FAIL（豁免依据是逐任务终态断言，不是「行存在」）。"""
+        index = (
+            "# 归档索引\n\n"
+            "## Task 索引\n\n"
+            "| Task ID | 状态 | 版本 | 归档文件 |\n"
+            "|---------|------|------|---------|\n"
+            "| REL-178 | 候选（未发布）——M-1 冻结中 | 0.82.0 | a.md |\n"
+        )
+        r = self._live_run([], self._leading_gap_evidence(),
+                          archive_index=index)
+        self.assertEqual(r["verdict"], "FAIL")
+        self.assertIn("REL-178",
+                      [v["task_id"] for v in r["violations"]
+                       if v["rule"] == "V2"])
+
+    # ── fail-closed 边界：ACTIVE 恒 FAIL（活体行权威） ────────────────
+
+    def test_live_active_row_outranks_stale_archive_row(self):
+        """活体行权威：tracker 仍显示 ⏳ 待执行的任务，即使归档索引有「完成」
+        行（陈旧/重开形态）也不得豁免 → 前导缺口保持 FAIL（沿用 FIX-341
+        「热表行权威」解析序；FIX-355 前该形态同样 FAIL——零回归）。"""
+        r = self._live_run([self._ARCHIVED_PLAN_ROW],
+                           self._leading_gap_evidence(),
+                           archive_index=self._ARCHIVE_INDEX)
+        self.assertEqual(r["verdict"], "FAIL")
+        self.assertIn("REL-178",
+                      [v["task_id"] for v in r["violations"]
+                       if v["rule"] == "V2"])
+
+    def test_archive_index_rows_are_not_a_live_completed_source(self):
+        """归档集不进 V1 破链面：归档终态任务 + 链终态 NEEDS_CHANGE（R0 在，
+        非前导缺口）→ V1 WARN（非 FAIL）。锁住实测回归——把归档集喂进 V1 会
+        让历史遗留轮结论（AUDIT-112/FIX-065/…/FIX-120 同型）全部翻红，
+        Check 30 由 2 涨到 8 violations。"""
+        r = self._live_run(
+            [],
+            _evidence_review_row("REVIEW-REL-178-R0", "REL-178",
+                                 "NEEDS_CHANGE"),
+            archive_index=self._ARCHIVE_INDEX)
+        self.assertEqual([v for v in r["violations"] if v["rule"] == "V1"], [],
+                         r["violations"])
+        v1 = [w for w in r["warnings"]
+              if w["rule"] == "V1" and w["task_id"] == "REL-178"]
+        self.assertTrue(v1, r["warnings"])
+        self.assertIn("not yet completed", v1[0]["reason"])
+
+    # ── 索引节边界（load-bearing） ────────────────────────────────────
+
+    def test_archive_section_boundary_ignores_other_index_sections(self):
+        """只认 ``## Task 索引`` 节：Evidence 索引节里形态完全合格的行
+        （``REL-903 | 已完成``）不得进入 completed 集。"""
+        index = (
+            "# 归档索引\n\n"
+            "## Task 索引\n\n"
+            "| Task ID | 状态 | 版本 | 归档文件 |\n"
+            "|---------|------|------|---------|\n"
+            "| FIX-901 | 已完成 (2026-01-01) | 0.1.0 | a.md |\n"
+            "| FIX-902 | ⏳ 待执行 | 0.1.0 | a.md |\n\n"
+            "## Evidence 索引\n\n"
+            "| EVD-ID | Task | 归档文件 |\n"
+            "|--------|------|---------|\n"
+            "| EVD-901 | FIX-903 | b.md |\n"
+            "| REL-903 | 已完成 (2026-01-01) | b.md |\n"
+        )
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            gov = Path(td) / ".governance"
+            (gov / "archive").mkdir(parents=True)
+            (gov / "archive" / "index.md").write_text(index, encoding="utf-8")
+            with mock.patch.object(vw, "GOVERNANCE_DIR", gov):
+                ids = rd._archived_completed_task_ids()
+        self.assertEqual(ids, {"FIX-901"})
+
+    def test_archive_predicate_beats_fix341_conservative_veto(self):
+        """谓词口径锁定：FIX-341 的 ``parse_archive_index_completed_ids``
+        因「候选」否决词判 False，而 Check 30 的终态判定用
+        ``_status_is_completed_cell`` 判 True——两者回答不同问题
+        （依赖是否满足 vs 任务是否终态），本修复取后者。"""
+        from task_priority import parse_archive_index_completed_ids
+        self.assertFalse(
+            parse_archive_index_completed_ids(self._ARCHIVE_INDEX) >= {"REL-178"}
+            and "REL-178" in parse_archive_index_completed_ids(
+                self._ARCHIVE_INDEX))
+        self.assertTrue(
+            vw._status_is_completed_cell(
+                "完成 (2026-09-17)——候选 `3f4c534`（M-5 transition）"))
+
+
 if __name__ == "__main__":
     unittest.main()

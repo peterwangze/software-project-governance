@@ -130,6 +130,12 @@
       "count": 4
     },
     {
+      "id": "fixture-command-governance-init",
+      "kind": "byte_copy",
+      "source": "commands/governance-init.md",
+      "target": "project/e2e-test-project/commands/governance-init.md"
+    },
+    {
       "id": "fixture-command-governance-router",
       "kind": "byte_copy",
       "source": "commands/governance.md",

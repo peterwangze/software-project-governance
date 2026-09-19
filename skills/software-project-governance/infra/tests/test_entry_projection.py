@@ -20,6 +20,7 @@ Run:
     python -m pytest skills/software-project-governance/infra/tests/test_entry_projection.py -v
 """
 
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -407,6 +408,35 @@ class RepoSyncReportTests(unittest.TestCase):
 # 8. launch.py reuse (shared splice, CLI behavior unchanged)
 # ────────────────────────────────────────────────────────────
 
+def _bootstrap_template_version() -> str:
+    """Version carried by the DSH bootstrap template's header line (FIX-352).
+
+    ``launch.write_bootstrap`` splices a render of
+    ``adapters/dsh/AGENTS.md.template`` into the target ``AGENTS.md`` verbatim,
+    so the version landing in the spliced section is the render source's own
+    header version — the source closest to this surface. Deriving it here
+    (instead of pinning the release literal ``0.83.0``) closes the version-pin
+    rot the FIX-335 discipline names: the pin was RED on the next bump and on
+    nothing else.
+
+    The template ↔ SKILL.md frontmatter authority binding is deliberately NOT
+    re-asserted here — ``test_dsh_adapter.py`` owns that drift channel through
+    the ``dsh-agents-bootstrap-version`` projection, so a stale template fails
+    once, correctly attributed, instead of surfacing twice. An unreadable
+    header raises rather than degrading the assertion to a vacuous compare.
+    """
+    template = _REPO_ROOT / "adapters" / "dsh" / "AGENTS.md.template"
+    if not template.is_file():
+        raise AssertionError(f"bootstrap template missing: {template}")
+    match = re.search(r"@bootstrap-version:\s*([0-9]+\.[0-9]+\.[0-9]+)",
+                      template.read_text(encoding="utf-8"))
+    if match is None:
+        raise AssertionError(
+            f"{template} carries no @bootstrap-version header — "
+            "write_bootstrap renders this file into AGENTS.md")
+    return match.group(1)
+
+
 class LaunchBootstrapReuseTests(unittest.TestCase):
 
     @classmethod
@@ -447,7 +477,11 @@ class LaunchBootstrapReuseTests(unittest.TestCase):
             self.assertIn("# Project Guidance", updated)
             self.assertIn("## 自定义尾段", updated)
             self.assertIn("保留我", updated)
-            self.assertIn("@bootstrap-version: 0.83.0", updated)
+            # FIX-352: the spliced section carries the *template's* header
+            # version (the bytes write_bootstrap renders), derived — never a
+            # pinned release literal.
+            self.assertIn(
+                f"@bootstrap-version: {_bootstrap_template_version()}", updated)
             self.assertNotIn("旧内容", updated)
 
     def test_write_bootstrap_refuses_sectionless_target_without_force(self):

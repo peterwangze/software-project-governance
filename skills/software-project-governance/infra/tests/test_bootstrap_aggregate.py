@@ -43,7 +43,52 @@ _ENGINE = _INFRA_DIR / "verify_workflow.py"
 
 VOLATILE_KEYS = ("generated_at", "duration_ms")
 
-PLAN_TRACKER = """# 项目计划跟踪
+# ── Fixture version pin — DEC-096 authoritative derivation (FIX-353) ──────
+# resolve_entry.detect_scenario routes `host_v < active_version` to scenario
+# "C" (upgrade), so a literal pin in the fixture head rots the suite on every
+# plugin bump (FIX-352 §6 root cause; REL-080: fixture head 0.83.0 vs active
+# 0.84.0 ⇒ scenario 'C' != expected 'F'). Derive the version through the SAME
+# reader resolve() uses — resolve_entry.read_active_version() over
+# PLUGIN_HOME/SKILL.md leading frontmatter — so `fixture plan version ==
+# active_version` holds by construction for every future bump.
+_ACTIVE_VERSION = ba.resolve_entry.read_active_version()
+if not _ACTIVE_VERSION:  # pragma: no cover — plugin tree corruption
+    raise RuntimeError(
+        "active_version underivable from %s/SKILL.md frontmatter — the "
+        "fixture plan version cannot be pinned (fail-closed)"
+        % ba.resolve_entry.PLUGIN_HOME)
+
+#: Replaced by ``_ACTIVE_VERSION`` in every fixture plan-tracker head.
+_VERSION_TOKEN = "@@ACTIVE_VERSION@@"
+
+
+def _pin_active_version(text):
+    """Bind a fixture plan-tracker head to the derived active version.
+
+    Fail-closed on a token-less template: a fixture head re-pinned to a
+    literal would silently rot again (the FIX-352 §6 failure mode).
+    """
+    pinned = text.replace(_VERSION_TOKEN, _ACTIVE_VERSION)
+    if pinned == text:  # pragma: no cover — template lost its token
+        raise RuntimeError(
+            "fixture plan-tracker template carries no %s token — its head "
+            "version would silently rot against the active version"
+            % _VERSION_TOKEN)
+    return pinned
+
+
+def _version_header(version):
+    """The fixture plan-tracker config line carrying ``version``."""
+    return "- **工作流版本**: %s" % version
+
+
+def _next_minor(version):
+    """``version`` + one minor — strictly greater (upgrade-scenario shape)."""
+    major, minor = version.split(".")[:2]
+    return "%d.%d.0" % (int(major), int(minor) + 1)
+
+
+_PLAN_TRACKER_TEMPLATE = """# 项目计划跟踪
 
 ## 项目配置
 
@@ -51,7 +96,7 @@ PLAN_TRACKER = """# 项目计划跟踪
 - **Profile**: standard
 - **触发模式**: always-on
 - **操作权限模式**: default-confirm
-- **工作流版本**: 0.83.0
+- **工作流版本**: @@ACTIVE_VERSION@@
 - **当前阶段**: 维护（maintenance）
 
 ## 项目总览
@@ -78,8 +123,18 @@ PLAN_TRACKER = """# 项目计划跟踪
 | P2 | FEAT-104 | 被阻塞的任务 | FEAT-105 | 0.85.0 | tests | ⏳ 待执行 |
 """
 
-PLAN_TRACKER_UPGRADED = PLAN_TRACKER.replace("**工作流版本**: 0.83.0",
-                                              "**工作流版本**: 0.99.0")
+PLAN_TRACKER = _pin_active_version(_PLAN_TRACKER_TEMPLATE)
+
+# Upgrade fixture: same body, version bumped ONE minor above the derived
+# active version — no literal, so it can never equal (or fall behind) the
+# head it derives from, and it stays "plan ahead of active" for any bump.
+PLAN_TRACKER_UPGRADED = PLAN_TRACKER.replace(
+    _version_header(_ACTIVE_VERSION),
+    _version_header(_next_minor(_ACTIVE_VERSION)))
+if PLAN_TRACKER_UPGRADED == PLAN_TRACKER:  # pragma: no cover — silent no-op
+    raise RuntimeError(
+        "PLAN_TRACKER_UPGRADED no longer bumps the fixture version — the "
+        "upgrade-scenario fixture would silently equal PLAN_TRACKER")
 
 RISK_LOG = """# 风险记录
 
@@ -143,7 +198,7 @@ GHOST_BLOCK_COMBINED = RISK_LOG_SEGMENTED + """
 # path (_candidate_empty's empty_reason / unblock_recommendation branches),
 # which the original 26 tests never executed (their fixture always had
 # unblocked tasks).
-PLAN_TRACKER_ALL_BLOCKED = """# 项目计划跟踪
+_PLAN_TRACKER_ALL_BLOCKED_TEMPLATE = """# 项目计划跟踪
 
 ## 项目配置
 
@@ -151,7 +206,7 @@ PLAN_TRACKER_ALL_BLOCKED = """# 项目计划跟踪
 - **Profile**: standard
 - **触发模式**: always-on
 - **操作权限模式**: default-confirm
-- **工作流版本**: 0.83.0
+- **工作流版本**: @@ACTIVE_VERSION@@
 - **当前阶段**: 维护（maintenance）
 
 ## 0.84.0 task 表
@@ -161,6 +216,9 @@ PLAN_TRACKER_ALL_BLOCKED = """# 项目计划跟踪
 | P0 | FEAT-201 | 链中阻塞任务 | FEAT-998 | 0.84.0 | tests | ⏳ 待执行 |
 | P1 | FEAT-202 | 链尾阻塞任务 | FEAT-201 | 0.84.0 | tests | ⏳ 待执行 |
 """
+
+PLAN_TRACKER_ALL_BLOCKED = _pin_active_version(
+    _PLAN_TRACKER_ALL_BLOCKED_TEMPLATE)
 
 # R0 P0-1 recent half: the LIVE decision-log shape — blank lines cut the
 # decision table into segments (live file lines 8-11 do exactly this);
@@ -321,7 +379,8 @@ class AggregateFieldCompletenessTests(unittest.TestCase):
         migration = payload["migration"]
         self.assertEqual(migration["status"], "upgrade_available")
         self.assertTrue(migration["required"])
-        self.assertEqual(migration["plan_version"], "0.83.0")
+        # The fixture head carries the DERIVED active version (FIX-353).
+        self.assertEqual(migration["plan_version"], _ACTIVE_VERSION)
         self.assertEqual(migration["active_version"], "9.9.9")
 
     def test_project_face(self):
@@ -330,7 +389,7 @@ class AggregateFieldCompletenessTests(unittest.TestCase):
         self.assertEqual(project["profile"], "standard")
         self.assertEqual(project["trigger_mode"], "always-on")
         self.assertEqual(project["permission_mode"], "default-confirm")
-        self.assertEqual(project["workflow_version"], "0.83.0")
+        self.assertEqual(project["workflow_version"], _ACTIVE_VERSION)
         self.assertIn("维护", project["stage"])
 
     def test_gate_summary_counts(self):

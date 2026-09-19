@@ -2061,9 +2061,52 @@ def check_review_closure(review_sequence=None, plan_tracker_completed=None,
         sequences = _build_review_sequence(review_sequence,
                                            legacy_files=legacy_files)
         completed = set((plan_tracker_completed or {}).keys())
+        # Fixture path: the completed set is the caller's explicit parameter —
+        # never widened with live archive data (test isolation).
+        closed = completed
     else:
         # Live scan: gather REVIEW-{id}[-R{n}] evidence rows + review-*.md files.
         sequences, completed = _collect_live_review_sequences()
+        # FIX-355: the TERMINAL-STATE EXEMPTION gate set — the live tracker's
+        # completed rows PLUS the archive Task index's closed rows. Archival is
+        # itself closure evidence, so an archived task keeps its terminal state
+        # for the L-A / L-B / historical-shape downgrade arms even though its
+        # tracker row is gone (REL-078's "missing R[0]" re-FAILed after the
+        # 0.83.0 archive migration; REL-080 blocker).
+        #
+        # Scoped on purpose — this set must NOT reach the V1 breach arm below
+        # (``task_id in completed``, "non-terminal but task is marked
+        # completed"), which asserts a CURRENT-WORK closure breach. Feeding
+        # archive-closed rows into it was measured as a 7-FAIL regression on
+        # historical pre-governance residue (AUDIT-112 / FIX-065 / FIX-066 /
+        # FIX-070 / FIX-106 / FIX-107 "R0=UNKNOWN", FIX-120 "R0=NEEDS_CHANGE" —
+        # all long-standing V1 WARNs that would flip to FAIL, Check 30 going
+        # 2 → 8 violations). V1 stays on the live-tracker set: unchanged
+        # behavior for every task, historical or current.
+        #
+        # Fail-closed: the archive side contributes only rows whose 状态 cell
+        # asserts completion, AND only for IDs the live tracker does not still
+        # hold as ACTIVE — live-row authority (FIX-341's archive-index
+        # resolution order) keeps a reopened/stale-row task FAILing. Absence or
+        # unreadability of the index yields an empty set, i.e. the pre-FIX-355
+        # live-only gate (zero-regression path).
+        try:
+            # Second tracker scan (~1 ms) — same negligible-cost trade-off as
+            # ``_resolve_shared`` re-fetching on every call, and this runs once
+            # per check invocation.
+            _live_done, live_active = _live_task_completion_sets()
+            if live_active is None:
+                # Fragile/unreadable tracker: the live state is UNKNOWN, so the
+                # archive gate cannot be corroborated — keep the pre-FIX-355
+                # fail-safe (live-only set; findings stay FAIL).
+                closed = completed
+            else:
+                closed = completed | (
+                    _archived_completed_task_ids() - live_active)
+        except Exception:
+            # An archive read never degrades the live verdict (same fail-safe
+            # direction as _live_completed_task_ids).
+            closed = completed
 
     if not sequences:
         result["verdict"] = "no-verdict"
@@ -2135,7 +2178,7 @@ def check_review_closure(review_sequence=None, plan_tracker_completed=None,
             # task). A current-work breach is never skipped: it reaches the
             # L-A downgrade only via the completed-state gate.
             if _missing_rounds_are_leading(missing_rounds, rounds) \
-                    and task_id in completed:
+                    and task_id in closed:  # FIX-355: archive-aware terminal gate
                 result["warnings"].append({
                     "rule": "V2",
                     "task_id": task_id,
@@ -2156,7 +2199,7 @@ def check_review_closure(review_sequence=None, plan_tracker_completed=None,
             # any machine/machine-format contribution to a round breaks the
             # classification (merge rank) — current-format records are never
             # relaxed by this rule.
-            if task_id in completed and all(
+            if task_id in closed and all(  # FIX-355: archive-aware terminal gate
                     (rounds[r].get("source_format") == "historical")
                     for r in rounds):
                 result["warnings"].append({
@@ -2326,7 +2369,8 @@ def check_review_closure(review_sequence=None, plan_tracker_completed=None,
                 blocker_evidence.get("legacy_invalid_tokens"))
             if (blocker_status == "missing" and legacy_format
                     and not legacy_nonzero and not legacy_unparsed
-                    and task_id in completed):
+                    # FIX-355: archive-aware terminal gate
+                    and task_id in closed):
                 result["warnings"].append({
                     "rule": "V5",
                     "task_id": task_id,
@@ -2348,7 +2392,7 @@ def check_review_closure(review_sequence=None, plan_tracker_completed=None,
             # terminal round is provably historical-shaped. Fail-closed
             # boundary: a real nonzero value (valid 2 / prose-attached 2),
             # an ambiguous unparseable value, or an ACTIVE task keeps the FAIL.
-            if (task_id in completed
+            if (task_id in closed  # FIX-355: archive-aware terminal gate
                     and rounds[max_round].get("source_format") == "historical"
                     and not legacy_nonzero and not legacy_unparsed
                     and (blocker_status == "missing"
@@ -2463,27 +2507,131 @@ def _live_completed_task_ids():
     Parse failure → empty set (fail-safe: nothing is downgraded; a fragile
     tracker keeps legacy findings as FAIL rather than masking them).
     """
+    done, _active = _live_task_completion_sets()
+    return done if done is not None else set()
+
+
+def _live_task_completion_sets():
+    """FIX-355: one live-tracker row scan → ``(completed_ids, active_ids)``.
+
+    The FIX-278 F-1 row scan (see ``_live_completed_task_ids`` for the row
+    source and the state-column predicate contract) split into BOTH terminal
+    sets: ``_live_completed_task_ids`` delegates here for the completed half,
+    and the archive merge needs the ACTIVE half to honour live-row authority
+    (a task the tracker still shows as ⏳ must never be exempted by a stale
+    archive row — the FIX-341 archive-index resolution order, "hot-table row
+    authoritative", applied to the terminal-state gate).
+
+    Parse failure / missing tracker → ``(None, None)`` — the explicit
+    live-state-UNKNOWN signal. Callers must NOT read that as "no active rows":
+    treating unknown as empty would let the archive gate exempt current work on
+    a fragile tracker, whereas the pre-FIX-355 fail-safe keeps such findings
+    as FAIL (nothing is downgraded when the tracker cannot be read).
+    """
     _resolve_shared()
     if not SAMPLE_PATH.is_file():
-        return set()
+        return None, None
     try:
         from task_priority import parse_task_dependencies  # peer, stdlib-only
         deps = parse_task_dependencies(SAMPLE_PATH.read_text(encoding="utf-8"))
     except Exception:
-        return set()
-    done = set()
+        return None, None
+    done, active = set(), set()
     for dep in deps or []:
         task_id = str(getattr(dep, "task_id", "") or "").strip()
+        if not task_id:
+            continue
         status = str(getattr(dep, "status", "") or "")
-        if task_id and _status_is_completed_cell(status):
+        if _status_is_completed_cell(status):
             done.add(task_id)
-    return done
+        else:
+            active.add(task_id)
+    return done, active
+
+
+# FIX-355: archive Task-index parsing (see ``_archived_completed_task_ids``).
+# The section heading is load-bearing — the other index sections share the row
+# shape; the ID cell shape mirrors ``task_priority._ID_CELL_RE``.
+_ARCHIVE_TASK_SECTION_HEADING = "## Task 索引"
+_ARCHIVE_TASK_ID_RE = re.compile(r"^[A-Z]+-\d+$")
+
+
+def _archived_completed_task_ids():
+    """FIX-355: archived-completed task IDs from the archive Task index.
+
+    Check 30 V2's L-A rule (leading round gap on a CLOSED task, FIX-278 G2)
+    gates on ``task_id in completed``, and until FIX-355 that set derived from
+    the LIVE plan-tracker only. Once ``archive.py`` migrates a task row out,
+    the task vanishes from the tracker while its review chain stays in the
+    evidence-log — so a genuinely closed task's historical leading gap flipped
+    back to FAIL. Live blocker (REL-080): REL-078's "missing R[0]" re-appeared
+    after the 0.83.0 archive migration moved its tracker row away. Archival is
+    itself terminal-state proof (归档语义 = 完结入册, not "never existed"), so
+    the archive Task index is a second completed-source for the SAME per-task
+    terminal predicate the live path uses.
+
+    Predicate: the shared ``_status_is_completed_cell`` (FIX-278 F-1 state-cell
+    terminal test; already exposed via ``_SHARED_NAMES`` — zero new imports).
+    Deliberate divergence from ``task_priority`` FIX-341's
+    ``parse_archive_index_completed_ids``, which answers a DIFFERENT question
+    (is a *dependency* satisfied?) and is conservative enough to veto any cell
+    carrying a negative marker. Live REL-078's cell reads
+    ``完成 (2026-09-17)——…候选 `3f4c534`…``: the token 候选 there names the
+    released CANDIDATE COMMIT, not a non-terminal state, so FIX-341's predicate
+    returns False where the cell's leading ``完成 (date)`` assertion is
+    unambiguous. Terminal-state judgement therefore uses the state-column
+    predicate, per this defect's spec.
+
+    Scope: rows inside the ``## Task 索引`` section only — the boundary is
+    load-bearing (the Decision/Risk/Evidence index tables share the
+    ``| PREFIX-NNN | … |`` row shape but are not tasks). A row qualifies when
+    its first cell is a bare ``PREFIX-NNN`` ID and its 状态 cell tests terminal.
+
+    Fail-closed / zero-regression: a missing or unreadable index (or any parse
+    failure) yields an empty set, so the exemption gate reduces to exactly the
+    live-tracker set — i.e. pre-FIX-355 behavior. Read-only: the archive index
+    is never written.
+    """
+    _resolve_shared()
+    if not GOVERNANCE_DIR.is_dir():
+        return set()
+    index_path = GOVERNANCE_DIR / "archive" / "index.md"
+    try:
+        if not index_path.is_file():
+            return set()
+        text = index_path.read_text(encoding="utf-8")
+    except (IOError, OSError):
+        return set()
+    completed = set()
+    in_task_section = False
+    for raw_line in text.split("\n"):
+        line = raw_line.strip()
+        if line.startswith("#"):
+            in_task_section = (line == _ARCHIVE_TASK_SECTION_HEADING)
+            continue
+        if not in_task_section or not line.startswith("|"):
+            continue
+        # ``| REL-078 | 完成 (…) | 0.82.0 | path |`` → ['', 'REL-078', '完成 (…)',
+        # …] — ID cell at index 1, 状态 cell at index 2. The separator row
+        # (``|---|---|``) and the header row both fail the ID-cell regex.
+        cells = [c.strip() for c in line.split("|")]
+        if len(cells) < 4:
+            continue
+        task_id = cells[1]
+        if not _ARCHIVE_TASK_ID_RE.match(task_id):
+            continue
+        if _status_is_completed_cell(cells[2]):
+            completed.add(task_id)
+    return completed
 
 
 def _collect_live_review_sequences():
     """Scan evidence-log + .governance/review-*.md for review sequences.
 
-    Returns (sequences_dict, completed_set).
+    Returns (sequences_dict, completed_set). The completed set stays the LIVE
+    plan-tracker terminal set — the archive Task index is merged separately, in
+    ``check_review_closure``, and only into the terminal-state EXEMPTION gate
+    (``closed``, FIX-355); the V1 breach arm keeps consuming this live-only set.
     """
     _resolve_shared()
     review_entries = []

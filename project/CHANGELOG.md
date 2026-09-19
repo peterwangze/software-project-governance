@@ -2,6 +2,72 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.84.0] - 2026-09-19
+
+### 0.84.0 - **轻量入口 + 交互前置**：治理开销审计切片 A 全量落地（REL-080 / FEAT-032~040 / DEC-204~212 / RISK-052~058）
+
+0.84.0 是 **MINOR** 发布，承载 DEC-204（2026-09-18 用户会话指令预授权：「我授权 Coordinator 按照推荐进行这次优化，完成任务链之后发布新版本」；M-4 授权形态 = 预授权，**边界 = 预授权不免除门禁**——M-2 门禁实测与 M-3 双半面审查仍 MUST 满足，任一发布门禁 FAIL → 停止并升级用户）。版本目标：把 AUDIT-154 实测的三诉点（冷启动到首次 ask 4m31.8s~7m08s / 单轮输出 18.4K tok 注入 / 相当比例预算消耗在治理动作本身）在**切片 A（轻量入口 + 交互前置）**内收敛——AUDIT-154 立项 + FEAT-032~040 九任务全部闭环，对应 EVD-1071~1081。
+
+**治理成本埋点（FEAT-032，commit `564b7da`）**：新增 `governance-cost-report` 子命令（单命令 4.8s / 298 文件，<5s 验收线达标）——TTFA、进入实质工作时间、治理 token 分项（TTFT/解码/工具/并行口径分离）；TTFA p50=271.8s 逐值复现 AUDIT-154 §3.1，fast≡full 等价 298/298；37 单测 + 契约矩阵 85 键 + 0.83.0 基线快照 `docs/research/governance-cost-baseline-0.83.0.{md,json}`（后续切片验收有对照起点）；口径入 DEC-205（治理工具最小声明集；`time_to_work` 为治理开销**下界**并如实携带声明）。REVIEW-FEAT-032-CODE-R0 APPROVED_WITH_NOTES/0（机录）；EVD-1073；RISK-052（活动语料时点漂移）。
+
+**只读 bootstrap 聚合命令（FEAT-033，commit `a5d678f`）**：新增 `governance-bootstrap`——单命令输出热数据投影（resolve envelope + 状态投影 + 候选 + migration 标志 + next_actions），**358ms / 4,937B / 42 测试**；四阶段预算钳制；`health` 恒 `deferred` 的诚实语义（未检查不显示绿色通过）；活体 parity risks 4==4。bootstrap 协议改为消费该命令——原「LLM 读热文件 19 次往返」路径降为 2~4 步的前提成立。R0 NEEDS_CHANGE（mirror 表扫描口径）→ R1 返工 → REVIEW-FEAT-033-CODE-R1 APPROVED_WITH_NOTES/0（机录 R0/R1）；EVD-1075；RISK-054。
+
+**首次交互前置（FEAT-034，commit `469fb57`）**：协议重排四处一致（`/governance` 决策树 / SKILL / bootstrap 模板 / M5.5 新条目）——快路径热数据就绪后**立即**进入首次交互，Step 2 交叉验证等深检**后置**（后置 ≠ 可选：推进类动作前 MUST 补齐）；健康面未完成时状态行显示「待检查」而非绿色通过。安全零削减（fail-closed 不变、深检后置 ≠ 跳过）。REVIEW-FEAT-034-DESIGN-R0 APPROVED_WITH_NOTES/0（机录）；EVD-1076；数值验收尾巴结构化 → RISK-055（DEC-207①）。
+
+**迁移退出启动关键路径（FEAT-035，commit `df9e7db`）**：升级/归档/清理等迁移写操作**全部退出自动执行路径**，改为「提示 + 确认后执行」——ask 清单五类（含 cleanup **删除面**）+ C-2 步骤位置锁定 + D2 时序句 + D3 update.md 确认门 + D4 ADR-007 指针；正常启动路径零隐式写操作。「零用户行动」承诺的交互安全化权衡入 DEC-209（保留自动完成精神，放弃静默写）。R0 NEEDS_CHANGE（知情同意链缺口：删除面漏披露 + 双入口分叉）→ R1 返工 → R1 复审 APPROVED_WITH_NOTES/0（7/7 findings 响应）；EVD-1078；RISK-056。
+
+**Snapshot 双契约（FEAT-036，commit `38ff7d7`）**：默认交互视图收敛为 **8 字段**（推演 ≈260 tok ≤ 700 tok 验收线），完整 artifact 契约口径拆正并保留——20 字段 CLI snapshot（三载体：status 文本面 / `status --json` 20 键 / first-run-demo 断言 19）+ 4 pack doc-surface = **24 token 零删减**；权限风险 / FAIL / 证据缺失项**不隐藏**。载体裁决 = **不扩展 `governance-bootstrap`**（DEC-208：≤8KB 硬预算下 24 字段必触发裁剪）。R0 NEEDS_CHANGE（载体口径与引擎不符——继承性漂移）→ R1 返工 → R1 复审 APPROVED_WITH_NOTES/0（P0~P2 全零）；守护测试 4 marker + 24 反断言锁；pytest 858 + 五校验 PASS；EVD-1077。
+
+**双 bootstrap 去重（FEAT-037，commit `457a756`）**：新增 `infra/sync_entry_projection.py`——`commands/governance-init.md` Step 7 保持**唯一** canonical 模板源，主入口投影完整模板、次要入口投影生成的薄指针（≤40 行 / ≤3072B，保留最小存活检查）；`adapters/dsh/launch.py` 延迟导入复用同一函数（R2 反向依赖 47≤47 零新增）。AGENTS.md 引导段 **16,011B → 2,699B（-83%）**；双 apply 零 diff（幂等）+ 双面守护（repo-root + e2e fixture）。REVIEW-FEAT-037-CODE-R0 APPROVED_WITH_NOTES/0（机录；9/9 申报核实）；EVD-1074；P3×6 处置入 DEC-206 / RISK-053。
+
+**Scenario 按需加载（FEAT-038，commit `697689d`）**：`/governance` 命令入口拆为**路由层 + 九个按需文件**（`commands/governance/{scenario-a..f,bootstrap,overview,snapshot-schema}.md`）——入口 **49,889B → 11,702B（-76.5%）**，零语义丢失（逐行对照 A24~F120）⇒ Scenario D/F 会话不再加载 A/B/C 全文。manifest 投影 16→25；REQUIRED_SNIPPETS 补修（F-2 部分交付，AUDIT-082 死代码）。REVIEW-FEAT-038-CODE-R0 APPROVED_WITH_NOTES/0（机录，P0=0/P1=0）；EVD-1079。归属披露：本 commit 引擎/测试同时承载并行 FEAT-039 的同步产物（同树耦合，按 commit 内披露入账）。
+
+**注入预算门禁（FEAT-039，commit `512fd51`）**：新增 `check-injection-budget`——canonical 口径基线 **lightweight resident 4,288/6,000 PASS**；standard/strict 为 **ADVISORY**（DEC-210 出货姿态：余量未耗尽时硬 FAIL 零增益，且真正超限的 entry-skill 属 report-only 层）+ zstandard 显式断言（未安装不得包装为 PASS）+ `sha256_16` 漂移锚（每次必打印）。全域 55,214B（AUDIT-154 对照 **-50%**）。R0 NEEDS_CHANGE（切片越界 + 期望值误判经裁决推翻）→ R1 委托权威 extractor 返工 → R1 复审 APPROVED_WITH_NOTES/0（独立复算逐位吻合）；EVD-1080；DEC-210/211；RISK-057。
+
+**多平台回归 + 灰度开关 + 集成收尾（FEAT-040，commit `b537976`）**：新增 `behavior_profile.py`——env `GOVERNANCE_LEGACY_BEHAVIOR`（会话级）> plan-tracker `behavior_profile`（项目级）> 默认 `modern`；安全边界**三层机检**（回退表只允许 performance 类 + FEAT-035 只出现在不变量面 + 非干扰契约双臂逐面相等），取值非法不猜（按下一优先级执行并在 `behavior.invalid` 显式报告）。收尾 16 项（10 修 3 转跟踪）+ RISK-055 复验框架（`--ttfa-acceptance`）+ 多平台 **26 投影全绿**。R0 NEEDS_CHANGE（plan-tracker 臂无证据 + invalid 未进 next_actions）→ R1 返工 → R1 复审 APPROVED_WITH_NOTES/0（P0~P2 全零；59/32 计数争议由 Coordinator 复跑闭）；EVD-1081；DEC-212；RISK-055/058。归属披露：含 FEAT-038 漏提交的 4 个确定性同步产物（dirty4——HEAD 陈旧态修复，DEC-212⑥）。
+
+### Added
+
+- **`governance-bootstrap` 只读聚合命令（FEAT-033）**：单命令热数据投影（358ms / 4,937B），health 恒 `deferred` 诚实语义，四阶段预算钳制。用户视角：会话冷启动不再需要 LLM 逐段读热文件。
+- **`governance-cost-report` 治理成本埋点（FEAT-032）**：TTFA / 进入实质工作时间 / 治理 token 分项机读输出（<5s），0.83.0 基线快照入库。用户视角：治理开销从"累计量 1.6M 未解释"变成可机读对照的分项事实。
+- **`check-injection-budget` 注入预算门禁（FEAT-039）**：canonical 口径分项表 + `sha256_16` 漂移锚 + zstandard 断言；lightweight resident 4,288/6,000 PASS，standard/strict ADVISORY。用户视角：注入瘦身不再依赖自觉——有可机检的回弹防护面（口径与出货姿态按 DEC-210/211 披露）。
+- **行为灰度开关（FEAT-040）**：`GOVERNANCE_LEGACY_BEHAVIOR=1`（会话级）/ plan-tracker `behavior_profile: legacy`（项目级）一键回退**性能/编排**行为；`governance-bootstrap` 的 `behavior` 面即时显示生效形态（`profile`/`source`/`reverted`/`invariants`）。
+- **`infra/sync_entry_projection.py` 单源投影工具（FEAT-037）**：canonical 模板 → 主/次入口投影的确定性生成（幂等、零 diff、可机检），含 DSH 方言薄指针互认守护。
+- **九个按需 Scenario 文件（FEAT-038）**：`commands/governance/{scenario-a..f,bootstrap,overview,snapshot-schema}.md` + 路由层入口（-76.5%）。
+
+### Changed
+
+- **会话启动顺序（FEAT-034）**：快路径热数据就绪即 ask，深检后置（后置 ≠ 可选）；健康未检查显示「待检查」。
+- **升级/归档/清理写操作（FEAT-035）**：全部改为提示 + 确认后执行（五类写操作清单含删除面）；`/plugin update → 下次会话` 的用户操作不变，但升级不再静默写用户入口文件（DEC-209）。
+- **快照默认视图（FEAT-036）**：默认交互视图 8 字段（≈260 tok）；完整契约（24 token）保留在 artifact 面，不隐藏风险/失败/证据缺口。
+- **次要平台入口形态（FEAT-037）**：`AGENTS.md` 引导段由「完整模板副本」改为「canonical 生成的薄指针」（16,011B→2,699B，-83%）；双入口在场不再双份注入。
+- **`/governance` 命令结构（FEAT-038）**：全文单文档 → 路由层 + 按需加载（入口 -76.5%）。
+- **注入预算判定姿态（FEAT-039；DEC-210）**：lightweight resident 为硬门禁（PASS），standard/strict 为 ADVISORY 并登记回弹风险 RISK-057。
+
+### Fixed
+
+- **FEAT-040 集成收尾 16 项（10 修 / 3 转跟踪）**：FEAT-037 P3 全修、FEAT-038 P2-1/2/4 承接、FEAT-036 P2-3 fixture 漂移、DSH 方言互认（FEAT-037 P3-6 闭合）、legacy 快照声明化（`declared_legacy_snapshots` 10 条 + 可证伪机检 + census 守恒，DEC-212④）。
+- **FEAT-038 漏提交的同步产物（dirty4）**：4 个确定性工具产物的 HEAD 陈旧态随 FEAT-040 commit 修复（DEC-212⑥ 归属裁决）。
+- **`REQUIRED_SNIPPETS` 补修（FEAT-038）**：AUDIT-082 死代码面（F-2 部分交付）。
+- **FEAT-039 期望值误判纠正（DEC-211）**：切片边界收口到权威 extractor（嵌套围栏不截断），R0 的 fence-pair 期望值归档为误判，正式期望值 3,904 / 22,858 / 23,484 / 2,724 B。
+
+**行为变更（用户可感知，B-1~B-6 —— MUST 出现在升级说明）**：详见 `docs/release/feature-flags-0.84.0.md` §2。
+
+- **B-1**（FEAT-034·首次交互前置）：会话启动顺序改变——快路径热数据就绪即进入首次交互，交叉验证等深检**后置**；健康面未检查时显示「待检查」而非绿色通过。深检后置 ≠ 可选（推进类动作前 MUST 补齐），fail-closed 语义不变。
+- **B-2**（FEAT-035·迁移写操作确认门）：升级 / 归档 / 清理等迁移写操作不再随会话自动执行，改为「提示 + 确认后执行」（清单五类含 cleanup 删除面）；用户未响应前零写操作。
+- **B-3**（FEAT-036·快照默认视图）：默认交互视图 8 字段（≈260 tok），完整 artifact 契约（24 token）保留；权限风险 / FAIL / 证据缺失项不隐藏。
+- **B-4**（FEAT-037·次要入口薄指针）：`AGENTS.md` 引导段由完整模板副本改为 canonical 生成的薄指针（≤40 行 / ≤3072B；16,011B→2,699B）；行为约束以主入口 `CLAUDE.md` 为准。单入口工作区不受影响（仍为完整模板）。
+- **B-5**（FEAT-038·命令按需加载）：`/governance` 入口只保留决策树 + 当前场景投影，Scenario 文档按需读取——Scenario D/F 会话不再加载 A/B/C 全文。
+- **B-6**（FEAT-040·灰度开关）：`GOVERNANCE_LEGACY_BEHAVIOR=1` / `behavior_profile: legacy` 回退 4 项**性能/编排**行为（快路径→六段读取；首次交互前置→深检先行；8 字段视图→完整视图；Scenario 按需→预加载）。**安全语义不变量不回退**：升级确认门（FEAT-035）/ 异常不隐藏 / fail-closed（`resolved_root_ok == false` 即停）/ 真实环境防护 / 复审必达。
+
+**如实披露**：① **RISK-052~058 打开/登记**（成本口径时点漂移 / FEAT-037 P3 族 / 并行竞态 / 数值验收尾巴 / 既有测试失败 / 注入回弹 / resident +669 tok）；② **既有门禁披露项如实保留、不隐瞒**：Check 28s（`evidence-log ~1.5MB` 维持 DEC-140/FIX-171 披露口径）、Check 30 V2 ×2（FIX-246 与 REL-078 历史审查轮次连续性——0.83.0 发布时已存在，本版不新增）、Check 28o 残余（God-module 族真实 advisory，RISK-039 + 棘轮锚）、Check 28q `hooks_drift`（`prepare-commit-msg` 用户一次性命令移交中）；③ **发布任务 ID 归属**：DEC-204 授权链记 0.84.0 发布为 **REL-080**；plan-tracker 0.84.0 行曾登记 REL-079（与 2026-09-17 已发布的 0.83.0 REL-079 同 ID）——本版按 DEC-204 采 **REL-080**，plan-tracker 行更正由 Coordinator 收口；④ **注入成本上行**：本版 resident 注入 4,288→4,957 tok（+669 = 灰度开关协议文本，两轮压缩后仍余量 17.4%）→ RISK-058，0.85.0 模板瘦身承接；⑤ **no-overclaim 边界**：official approval / marketplace approval / universal runtime support / external first-session pilot success 均未被主张；非 Windows 平台未验证，本版验收全部在仓库内与隔离 `DSH_HOME`（环境变量重定向至临时目录）下完成，隔离验收不等于真实外部首会话验证通过；RISK-036（官方收录与外部验证）继续打开，do not claim 1.0.0 production-ready。
+
+**Breaking changes：无**（`skills/software-project-governance/core/VERSIONING.md` L11 口径：无 MUST 规则删除/重命名、无 Gate 行为语义破坏、无 governance 文件字段格式变更）。**无新增文件格式、无删除既有 CLI 命令、无删除既有开关**（0.83.0 既有开关与豁免账本语义未变；本版新增 3 个 CLI 命令 `governance-bootstrap` / `governance-cost-report` / `check-injection-budget` 与 1 个 opt-in 回退开关）。**MINOR bump 依据**：VERSIONING.md L12「新增 MUST 规则、新增子工作流/skill、新增 B/C 级自动化能力」+ L37「SKILL.md MUST 规则新增 → MINOR」——本版含 SKILL.md 行为协议变更（首次交互前置、迁移写操作确认门、快照双契约、灰度开关）与三项新增 CLI/检查能力，属规则/能力面变更（0.79.0/0.83.0 同型先例）；非纯 bug fix（L38 PATCH 口径不适用）。版本号未占用预留（0.84.0 为 AUDIT-154 切片 A 承载版本，2026-09-18 用户裁决立项，DEC-204）。
+
+版本投影 0.83.0 -> 0.84.0：由 M-1 统一执行——`release-projection --write` 写入 16 个 registry 投影面（5 plugin/marketplace + `package.json` + `core/manifest.json` + 4 hook `@version` + DSH persona 版本行 + `adapters/dsh/AGENTS.md.template` + `commands/governance-init.md` 四模板 `@bootstrap-version` + fixture skill/plan + 10 个 fixture 命令面；二次 apply `written: 0` 幂等），`sync_entry_projection --write` 双根（repo-root + e2e-fixture，二次 apply 全 `[SKIP]` 幂等），并手工钉 `verify_workflow.py` `REQUIRED_SNIPPETS` 六个版本锚与 JSON 声明面一致。本段随候选打包提交落库，投影前 `check-version-consistency` 处于「CHANGELOG 已入 0.84.0 段而声明面仍 0.83.0」的**预期过渡态**（0.81.0/0.82.0/0.83.0 M-1 先例同型）。
+
+**发布时点**：本条目日期取发布时点（2026-09-19 +0800；末位载荷提交 `b537976` = 2026-09-19 02:16 +0800）；若 M-5 transition/tag 的 taggerdate 与之不同，按 FIX-349 口径（**taggerdate 权威**）勘误对齐，不预填未生成的 tag 事实。
+
 ## [0.83.0] - 2026-09-17
 
 ### 0.83.0 - **治理健康收口 + 架构债批**：0.82.0 发布后收尾 → 存量治理数据卫生 → ArchGuard 判定面校准（REL-079 / FIX-348~350 / DEC-198~201 / RISK-051）

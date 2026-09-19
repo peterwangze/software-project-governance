@@ -195,7 +195,7 @@ Bootstrap 注入内容（按 `profile` 差异化——lightweight 注入轻量�
 ```markdown
 ## Governance Bootstrap（由 software-project-governance 插件注入）
 
-> @bootstrap-version: 0.83.0（模板最低引导版本——低于 SKILL frontmatter active_version 即陈旧，先升级本段再继续）
+> @bootstrap-version: 0.84.0（模板最低引导版本——低于 SKILL frontmatter active_version 即陈旧，先升级本段再继续）
 
 ### 每次会话第一动作
 读取 `.governance/plan-tracker.md`，确认当前阶段、Gate 状态、活跃风险。如 `.governance/` 不存在，提醒先初始化。
@@ -264,7 +264,7 @@ AskUserQuestion 是唯一合法的用户提问方式。禁止内联文字提问�
 ```markdown
 ## Governance Bootstrap（强制 — 每次会话第一动作）
 
-> @bootstrap-version: 0.83.0（模板最低引导版本——低于 SKILL frontmatter active_version 即陈旧，先升级本段再继续）
+> @bootstrap-version: 0.84.0（模板最低引导版本——低于 SKILL frontmatter active_version 即陈旧，先升级本段再继续）
 
 **⚡ SELF-CHECK（在任何输出之前先问自己）**：
 1. 我是否已经读了 `.governance/plan-tracker.md`？否 → **立即停止，先去读**
@@ -546,7 +546,7 @@ AskUserQuestion 是唯一合法的用户提问方式。禁止内联文字提问�
 ```markdown
 ## Governance Bootstrap（强制 — 每次会话第一动作）
 
-> @bootstrap-version: 0.83.0（模板最低引导版本——低于 SKILL frontmatter active_version 即陈旧，先升级本段再继续）
+> @bootstrap-version: 0.84.0（模板最低引导版本——低于 SKILL frontmatter active_version 即陈旧，先升级本段再继续）
 
 **⚡ SELF-CHECK（在任何输出之前先问自己）**：
 1. 我是否已经读了 `.governance/plan-tracker.md`？否 → **立即停止，先去读**
@@ -850,7 +850,7 @@ AskUserQuestion 是唯一合法的用户提问方式。禁止内联文字提问�
 ```markdown
 ## Governance Bootstrap（强制 — 每次会话第一动作 · 次要平台入口薄指针）
 
-> @bootstrap-version: 0.83.0（薄指针版——FEAT-037 双入口去重；完整 bootstrap 见 {PRIMARY_ENTRY}（主入口），行为约束以主入口为准）
+> @bootstrap-version: 0.84.0（薄指针版——FEAT-037 双入口去重；完整 bootstrap 见 {PRIMARY_ENTRY}（主入口），行为约束以主入口为准）
 
 本工作区存在两个平台原生入口文件。本文件是次要平台入口（Codex/opencode 等）的薄指针投影，不复制完整模板；主入口 `{PRIMARY_ENTRY}` 携带完整 bootstrap（Step 0~4、交叉验证、阶段跳跃防护、Agent Team、Bootstrap 变更纪律）。
 

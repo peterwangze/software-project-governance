@@ -184,9 +184,10 @@
 - **IF** 项目根目录不存在 `平台原生入口文件` → 创建 `平台原生入口文件`，内容仅为 governance bootstrap 块
 
 **注入时 Profile 差异化**：
-- **IF** profile = lightweight → 注入轻量版模板（~80行：自包含的每次会话/干活前/提问规则/收工前 + 双维度模式，无 Agent Team 激活）
-- **IF** profile = standard → 注入标准版模板（~212行：完整 Step 0~4 + Agent Team 激活 + 双维度模式 + 开发纪律 + 交叉验证 + 阶段跳跃防护 + 干活前/提问规则/收工前/故障排除）
-- **IF** profile = strict → 注入严格版模板（~242行：标准版全部内容 + Strict Profile 强制规则——量化 Gate 评分/双证据强制/阶段禁止重叠/禁止条件通过/强制独立审查）
+- **IF** profile = lightweight → 注入轻量版模板（自包含的每次会话/干活前/提问规则/收工前 + 双维度模式，无 Agent Team 激活）
+- **IF** profile = standard → 注入标准版模板（完整 Step 0~4 + Agent Team 激活 + 双维度模式 + 开发纪律 + 交叉验证 + 阶段跳跃防护 + 干活前/提问规则/收工前/故障排除）
+- **IF** profile = strict → 注入严格版模板（标准版全部内容 + Strict Profile 强制规则——量化 Gate 评分/双证据强制/阶段禁止重叠/禁止条件通过/强制独立审查）
+- **行数不在此处承诺**：以 `sync_entry_projection.extract_canonical_templates` 的实测输出为准（`check-entry-bootstrap-sync` 报告逐 profile 字节/行数，`check-injection-budget` 报告逐 profile token——两处硬断言钉住，陈旧行数估计不再维护）。
 
 Bootstrap 注入内容（按 `profile` 差异化——lightweight 注入轻量版，standard 注入标准版，strict 注入严格版）：
 
@@ -194,7 +195,7 @@ Bootstrap 注入内容（按 `profile` 差异化——lightweight 注入轻量�
 ```markdown
 ## Governance Bootstrap（由 software-project-governance 插件注入）
 
-> @bootstrap-version: 0.83.0（模板最低引导版本——低于 SKILL frontmatter active_version 即陈旧，先升级本段再继续）
+> @bootstrap-version: 0.84.0（模板最低引导版本——低于 SKILL frontmatter active_version 即陈旧，先升级本段再继续）
 
 ### 每次会话第一动作
 读取 `.governance/plan-tracker.md`，确认当前阶段、Gate 状态、活跃风险。如 `.governance/` 不存在，提醒先初始化。
@@ -214,6 +215,8 @@ Bootstrap 注入内容（按 `profile` 差异化——lightweight 注入轻量�
 - "切换到最高权限模式" / "切换到默认确认模式"
 - "切换到始终在线" / "切换到按需调用" / "切换到静默跟踪"
 - "当前模式" → 输出当前 trigger_mode × permission_mode
+
+**行为灰度开关（FEAT-040——legacy 回退通道，只回退性能行为）**：`GOVERNANCE_LEGACY_BEHAVIOR=1`（会话级）或 plan-tracker `## 项目配置` 的 `- **behavior_profile**: legacy`（项目级；env 优先；默认 `modern`）→ 快路径→六段读取、首次交互前置→深检先行、≤8 字段视图→完整契约、Scenario 按需→预加载。**安全语义不回退（硬边界）**：升级确认门（FEAT-035）／异常不隐藏／fail-closed／真实环境防护／复审必达——legacy 下全部照常生效。生效形态以 `governance-bootstrap` 的 `behavior` 面为准（`profile`/`source`）。
 
 每次会话输出一句确认（模式自适应）：
 - always-on: `Governance: {mode} | stage: {stage}, Gate {gate}: {status}, {risk_count} risk(s)`
@@ -261,7 +264,7 @@ AskUserQuestion 是唯一合法的用户提问方式。禁止内联文字提问�
 ```markdown
 ## Governance Bootstrap（强制 — 每次会话第一动作）
 
-> @bootstrap-version: 0.83.0（模板最低引导版本——低于 SKILL frontmatter active_version 即陈旧，先升级本段再继续）
+> @bootstrap-version: 0.84.0（模板最低引导版本——低于 SKILL frontmatter active_version 即陈旧，先升级本段再继续）
 
 **⚡ SELF-CHECK（在任何输出之前先问自己）**：
 1. 我是否已经读了 `.governance/plan-tracker.md`？否 → **立即停止，先去读**
@@ -292,6 +295,12 @@ AskUserQuestion 是唯一合法的用户提问方式。禁止内联文字提问�
 - "切换到默认确认模式" / "开启确认模式" / "default confirm" → permission_mode = default-confirm
 - "切换到始终在线" / "切换到按需调用" / "切换到静默跟踪" → trigger_mode 对应切换
 - "当前模式" / "现在什么模式" → 输出当前 trigger_mode × permission_mode
+
+**行为灰度开关（FEAT-040——legacy 回退通道）**：
+- 开启：`GOVERNANCE_LEGACY_BEHAVIOR=1`（会话级）或 plan-tracker `## 项目配置` 增 `- **behavior_profile**: legacy`（项目级）。env 优先于 plan-tracker；默认 `modern`（新协议）；取值非法 → **不猜**（按下一优先级执行并在 `behavior.invalid` 显式报告）。
+- 回退范围（**只回退性能/编排行为**）：快路径→六段读取；首次交互前置→深检先行；≤8 字段默认视图→完整快照契约；Scenario 按需→预加载。
+- **安全语义不回退（硬边界）**：升级确认门（FEAT-035）／异常不隐藏／fail-closed（`resolved_root_ok == false` 即停）／真实环境防护／复审必达——legacy 模式下全部照常生效。
+- 生效形态以 `governance-bootstrap` 的 `behavior` 面为准（`profile`/`source`/`reverted`/`invariants`）；完整边界表见 `skills/software-project-governance/SKILL.md`。
 
 **每次会话输出一句确认（模式自适应）**：
 - **always-on**：`Governance: {trigger_mode} x {permission_mode} | stage: {stage}, Gate {gate}: {status}, {risk_count} risk(s)`
@@ -537,7 +546,7 @@ AskUserQuestion 是唯一合法的用户提问方式。禁止内联文字提问�
 ```markdown
 ## Governance Bootstrap（强制 — 每次会话第一动作）
 
-> @bootstrap-version: 0.83.0（模板最低引导版本——低于 SKILL frontmatter active_version 即陈旧，先升级本段再继续）
+> @bootstrap-version: 0.84.0（模板最低引导版本——低于 SKILL frontmatter active_version 即陈旧，先升级本段再继续）
 
 **⚡ SELF-CHECK（在任何输出之前先问自己）**：
 1. 我是否已经读了 `.governance/plan-tracker.md`？否 → **立即停止，先去读**
@@ -568,6 +577,12 @@ AskUserQuestion 是唯一合法的用户提问方式。禁止内联文字提问�
 - "切换到默认确认模式" / "开启确认模式" / "default confirm" → permission_mode = default-confirm
 - "切换到始终在线" / "切换到按需调用" / "切换到静默跟踪" → trigger_mode 对应切换
 - "当前模式" / "现在什么模式" → 输出当前 trigger_mode × permission_mode
+
+**行为灰度开关（FEAT-040——legacy 回退通道）**：
+- 开启：`GOVERNANCE_LEGACY_BEHAVIOR=1`（会话级）或 plan-tracker `## 项目配置` 增 `- **behavior_profile**: legacy`（项目级）。env 优先于 plan-tracker；默认 `modern`（新协议）；取值非法 → **不猜**（按下一优先级执行并在 `behavior.invalid` 显式报告）。
+- 回退范围（**只回退性能/编排行为**）：快路径→六段读取；首次交互前置→深检先行；≤8 字段默认视图→完整快照契约；Scenario 按需→预加载。
+- **安全语义不回退（硬边界）**：升级确认门（FEAT-035）／异常不隐藏／fail-closed（`resolved_root_ok == false` 即停）／真实环境防护／复审必达——legacy 模式下全部照常生效。
+- 生效形态以 `governance-bootstrap` 的 `behavior` 面为准（`profile`/`source`/`reverted`/`invariants`）；完整边界表见 `skills/software-project-governance/SKILL.md`。
 
 **每次会话输出一句确认（模式自适应）**：
 - **always-on**：`Governance: {trigger_mode} x {permission_mode} | stage: {stage}, Gate {gate}: {status}, {risk_count} risk(s)`
@@ -835,7 +850,7 @@ AskUserQuestion 是唯一合法的用户提问方式。禁止内联文字提问�
 ```markdown
 ## Governance Bootstrap（强制 — 每次会话第一动作 · 次要平台入口薄指针）
 
-> @bootstrap-version: 0.83.0（薄指针版——FEAT-037 双入口去重；完整 bootstrap 见 {PRIMARY_ENTRY}（主入口），行为约束以主入口为准）
+> @bootstrap-version: 0.84.0（薄指针版——FEAT-037 双入口去重；完整 bootstrap 见 {PRIMARY_ENTRY}（主入口），行为约束以主入口为准）
 
 本工作区存在两个平台原生入口文件。本文件是次要平台入口（Codex/opencode 等）的薄指针投影，不复制完整模板；主入口 `{PRIMARY_ENTRY}` 携带完整 bootstrap（Step 0~4、交叉验证、阶段跳跃防护、Agent Team、Bootstrap 变更纪律）。
 
@@ -843,7 +858,8 @@ AskUserQuestion 是唯一合法的用户提问方式。禁止内联文字提问�
 
 1. 运行 `python <plugin_home>/skills/software-project-governance/infra/resolve_entry.py --json`；`resolved_root_ok == false` → MUST STOP，不呈现治理状态（fail-closed）。
 2. 读 `.governance/plan-tracker.md`；阶段/Gate/模式未知 → 读 `## 项目配置` 节；`.governance/` 不存在 → 提醒先初始化。
-3. 完整规则：加载 `skills/software-project-governance/SKILL.md`（或读主入口 `{PRIMARY_ENTRY}`）。
+3. **快路径与行为灰度开关（FEAT-034/040）**：热数据优先 `governance-bootstrap --format json`（不可用回退六段读取）；`GOVERNANCE_LEGACY_BEHAVIOR=1` 或 `behavior_profile: legacy` → 只回退性能行为，**安全语义不回退**；见其 `behavior` 面。
+4. 完整规则：加载 `skills/software-project-governance/SKILL.md`（或读主入口 `{PRIMARY_ENTRY}`）。
 
 ### SELF-CHECK（在任何输出之前）
 
@@ -872,7 +888,7 @@ AskUserQuestion 是唯一合法的用户提问方式。禁止内联文字提问�
 - **IF** 仅存在一个入口文件 → 该文件注入完整模板（单入口行为不变——向后兼容）。
 - **确定性执行路径**：`python <plugin_home>/skills/software-project-governance/infra/sync_entry_projection.py --project <项目根> --write`（幂等——跑两次零 diff；默认只读 check）。agent 手工编辑入口 bootstrap 段 = 违反"模板是唯一事实源"纪律。
 - **投影同步守护**：`verify_workflow.py check-projection-sync` 附带运行 `check-entry-bootstrap-sync`（主入口段 == canonical 全文；薄指针段 == 渲染结果且 ≤40 行/≤3KB/最小存活检查齐全；双全模板并存 = FAIL）。
-- **薄指针保留的最小存活检查**（去重不得删除行为约束）：resolve_entry 第一动作、先读 plan-tracker、SELF-CHECK（对应完整版 6 条的压缩映射：完整 1→薄 1、完整 2+3→薄 2、完整 4→薄 3、完整 5→薄 4、完整 6→薄 5；完整 3 的 carry-over 恢复由主入口指针承载）、模式确认、治理状态快速入口、主入口指针。
+- **薄指针保留的最小存活检查**（去重不得删除行为约束）：resolve_entry 第一动作、先读 plan-tracker、SELF-CHECK（对应完整版 6 条的压缩映射：完整 1→薄 1、**完整 2→薄 2**、**完整 3（carry-over 恢复）由主入口指针承载**、完整 4→薄 3、完整 5→薄 4、完整 6→薄 5）、快路径与行为灰度开关（薄 3，FEAT-034/040）、模式确认、治理状态快速入口、主入口指针。
 
 ### Step 8: 安装 git governance hooks（系统级约束——不依赖 agent 自觉）
 

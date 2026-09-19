@@ -760,6 +760,12 @@ CALIBRATION = {
         + ", ".join(sorted(GOVERNANCE_TOOL_NAMES))
         + " — generic tools (read/pwsh/...) cannot be classified by name "
         "and count as work-tool candidates."),
+    "sessions_cwd": (
+        "dual-source: the session event's ``cwd`` wins when present; when "
+        "it is absent this field carries a token unwrapped from the encoded "
+        "ancestor directory name (--<id>--), empty when no encoded ancestor "
+        "exists — a --workspace substring filter token, NOT a filesystem "
+        "path."),
 }
 
 # ── RISK-055 acceptance face (FEAT-040 one-click re-verification path) ──────

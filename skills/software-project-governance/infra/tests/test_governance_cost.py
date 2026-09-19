@@ -760,6 +760,14 @@ class TestCLIOutput(unittest.TestCase):
         self.assertIn("cumulative", notes)
         self.assertIn("residual", notes)
 
+    def test_calibration_discloses_sessions_cwd_dual_source(self):
+        # FIX-360 contract pin: the calibration face must disclose the
+        # sessions[].cwd dual-source semantics (event cwd wins; no-cwd
+        # sessions carry a directory-derived filter token, not a path).
+        self.assertIn("sessions_cwd", gc.CALIBRATION)
+        self.assertIsInstance(gc.CALIBRATION["sessions_cwd"], str)
+        self.assertTrue(gc.CALIBRATION["sessions_cwd"].strip())
+
 
 class TestFastScannerEquivalence(unittest.TestCase):
     """Byte fast path ≡ full json.loads path (metrics identical)."""

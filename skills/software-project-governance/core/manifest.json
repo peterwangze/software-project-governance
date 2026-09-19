@@ -23,6 +23,7 @@
       "dsh-agents-bootstrap-version",
       "canonical-bootstrap-version",
       "fixture-command-governance-init",
+      "fixture-command-governance-status",
       "fixture-command-governance-router",
       "fixture-command-governance-scenario-a",
       "fixture-command-governance-scenario-b",

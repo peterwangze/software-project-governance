@@ -136,6 +136,12 @@
       "target": "project/e2e-test-project/commands/governance-init.md"
     },
     {
+      "id": "fixture-command-governance-status",
+      "kind": "byte_copy",
+      "source": "commands/governance-status.md",
+      "target": "project/e2e-test-project/commands/governance-status.md"
+    },
+    {
       "id": "fixture-command-governance-router",
       "kind": "byte_copy",
       "source": "commands/governance.md",

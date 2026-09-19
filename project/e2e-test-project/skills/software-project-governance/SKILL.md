@@ -118,7 +118,7 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
 - IF 当前任务为活跃 P0/P1 且短包缺失：运行 `python <plugin_home>/infra/verify_workflow.py execution-packet --write`（`<plugin_home>` 来自 resolve_entry.py），再读取生成后的短包继续执行。
 - `check-governance` Check 18c 会阻断缺包或字段无效的活跃 P0/P1 任务。
 
-**3. 归档感知**：IF `.governance/archive/index.md` 存在——读取 `archive/index.md` 了解已归档条目的位置；交叉验证时 evidence-log.md 中找不到某 task 的证据 → 先查 index.md 定位归档文件；**归档文件中的证据 = 有效证据——不可误判为缺失**。已归档 entry 标准查询路径：Read `.governance/archive/index.md` → grep 目标 ID → 按索引路径 Read 归档文件定位条目（总开销 2 次 Read call）。
+**3. 归档感知**：IF `.governance/archive/index.md` 存在——读取 `.governance/archive/index.md` 了解已归档条目的位置；交叉验证时 evidence-log.md 中找不到某 task 的证据 → 先查 index.md 定位归档文件；**归档文件中的证据 = 有效证据——不可误判为缺失**。已归档 entry 标准查询路径：Read `.governance/archive/index.md` → grep 目标 ID → 按索引路径 Read 归档文件定位条目（总开销 2 次 Read call）。
 
 **4. 跨会话恢复与检测**：
 - 读取 `.governance/session-snapshot.md`（如存在）对照 plan-tracker：快照中的进行中任务 → 确认为 carry-over 任务继续执行；待确认决策 → 检查是否已过期或仍需确认；风险 escalation deadline ≤ 今天 → 立即升级。

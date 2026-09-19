@@ -1,1 +1,40 @@
-{"artifacts":{"changelog":"project/CHANGELOG.md","release_docs":["docs/release/release-checklist-0.84.0.md","docs/release/feature-flags-0.84.0.md","docs/release/rollback-plan-0.84.0.md"],"review_evidence":[".governance/evidence-log.md"]},"effective_state":{"amendments":[],"lifecycle_state":"candidate","withdrawn":false},"events":[],"lifecycle_state":"candidate","provenance":"native","schema_version":1,"trust":{"candidate_commit":{"derivation":"git_commit_adding_path"}},"version":"0.84.0"}
+{
+  "artifacts": {
+    "changelog": "project/CHANGELOG.md",
+    "release_docs": [
+      "docs/release/release-checklist-0.84.0.md",
+      "docs/release/feature-flags-0.84.0.md",
+      "docs/release/rollback-plan-0.84.0.md"
+    ],
+    "review_evidence": [
+      ".governance/evidence-log.md"
+    ]
+  },
+  "effective_state": {
+    "amendments": [],
+    "lifecycle_state": "released",
+    "withdrawn": false
+  },
+  "events": [
+    {
+      "id": "rel080-transition",
+      "type": "candidate_to_released",
+      "recorded_at": "2026-09-19T09:30:00Z",
+      "claims": {
+        "derivation": "manifest_only_transition",
+        "m4_authorization": "DEC-204_preauthorization_fullchain_plus_T2_user_decisions_R4_R6_20260919",
+        "release_task": "REL-080"
+      },
+      "integrity": "sha256:8d0a46eb3251d2012b76f42e995893d8c40aa676e0687524d355131f54d38bcf"
+    }
+  ],
+  "lifecycle_state": "released",
+  "provenance": "native",
+  "schema_version": 1,
+  "trust": {
+    "candidate_commit": {
+      "derivation": "git_commit_adding_path"
+    }
+  },
+  "version": "0.84.0"
+}

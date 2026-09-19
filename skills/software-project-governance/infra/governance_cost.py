@@ -622,6 +622,35 @@ def _tool_distribution(sessions):
     return tools
 
 
+def _cwd_fallback_from_session_path(rel_path):
+    """Derive a workspace identifier from the session file's ancestors.
+
+    RISK-050 (dsh upstream internal-face coupling — FIX-356): dsh v3
+    session events carry no structured cwd/workspace field (real corpus,
+    EVD-1088: 344/344 files have ``data={}``), so the only reliable
+    workspace carrier is dsh's internal session-directory naming
+    convention — the workspace directory under the sessions root is
+    wrapped as ``--<workspace-id>--`` with the workspace path's
+    separators normalized to ``-`` (e.g.
+    ``--D-AI-agent-claude-coding-project_management_workflow--``). THIS
+    function is the single point that encodes that convention: it
+    inspects ancestor directory NAMES as plain strings and returns the
+    unwrapped inner identifier — a filter-matching token, NOT a
+    filesystem path (never reconstructed into a traversable path).
+    Returns "" when no encoded ancestor exists; sessions whose event
+    ``cwd`` is present never reach this fallback.
+
+    ``rel_path`` is the session file path RELATIVE to the sessions root,
+    so the ancestor walk stops at the root and never borrows names from
+    outside the scanned corpus.
+    """
+    for parent in Path(rel_path).parents:
+        name = parent.name
+        if len(name) > 4 and name.startswith("--") and name.endswith("--"):
+            return name[2:-2]
+    return ""
+
+
 def scan_sessions(sessions_root, workspace=None):
     """Scan a sessions root (read-only) and assemble the full report."""
     root = Path(sessions_root)
@@ -646,8 +675,14 @@ def scan_sessions(sessions_root, workspace=None):
         events, corrupt = _events_from_bytes(raw)
         corrupt_lines += corrupt
         files_parsed += 1
+        rel_path = path.relative_to(root)
         parsed = parse_session(events)
         cwd = parsed["cwd"]
+        if not cwd:
+            # FIX-356: real v3 session events carry no cwd (data={}) — fall
+            # back to the encoded workspace directory name (RISK-050, see
+            # _cwd_fallback_from_session_path). Event cwd wins when present.
+            cwd = _cwd_fallback_from_session_path(rel_path)
         if workspace is not None and workspace not in cwd:
             continue
         orphans += parsed["orphans"]
@@ -659,7 +694,7 @@ def scan_sessions(sessions_root, workspace=None):
             session_raw_calls.extend(rec["tool_calls"])
         unfinished += sum(t["unfinished_tool_calls"] for t in turn_records)
         sessions.append({
-            "file": path.relative_to(root).as_posix(),
+            "file": rel_path.as_posix(),
             "cwd": cwd,
             "title": parsed["title"],
             "totals": _summarize(turn_records),

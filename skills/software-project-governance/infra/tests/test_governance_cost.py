@@ -572,6 +572,113 @@ class TestWorkspaceFilterAndDefaults(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 2)
 
 
+class TestCwdFallbackFromDirectoryName(unittest.TestCase):
+    """FIX-356 — workspace filter must hit sessions whose session event
+    carries no cwd (real dsh v3 corpus shape, EVD-1088: 344/344 files have
+    ``data={}``).
+
+    The only reliable workspace carrier is dsh's encoded ancestor
+    directory name (``--<workspace-id>--`` wrapper, path separators
+    normalized to ``-``). Fixtures here reproduce that REAL shape next to
+    the legacy shape (session event with cwd), which must keep working
+    unchanged. The fallback yields a match token only — never a
+    reconstructed filesystem path.
+    """
+
+    WS_DIR = "--D-AI-agent-claude-coding-project_management_workflow--"
+    WS_TOKEN = "D-AI-agent-claude-coding-project_management_workflow"
+    OTHER_DIR = "--C-other-project--"
+
+    def setUp(self):
+        _require_zstandard(self)
+
+    @staticmethod
+    def _real_shape_events():
+        # Session header with data={} — the real v3 corpus shape (no cwd).
+        return [
+            _ev("session", 1000),
+            _ev("turn/start", 1100, turn=1),
+            _user_msg(1150, "/governance"),
+            _tool_call(3000, "a1", "ask_user_question", turn=1),
+            _tool_result(3500, "a1", turn=1),
+            _ev("turn/end", 3600, turn=1),
+        ]
+
+    def test_fallback_unwraps_the_encoded_ancestor(self):
+        rel = Path(self.WS_DIR, "sess-abc", gc._SESSION_FILENAME)
+        self.assertEqual(gc._cwd_fallback_from_session_path(rel), self.WS_TOKEN)
+
+    def test_fallback_returns_empty_without_encoded_ancestor(self):
+        rel = Path("plain-ws", "s1", gc._SESSION_FILENAME)
+        self.assertEqual(gc._cwd_fallback_from_session_path(rel), "")
+        bare = Path(gc._SESSION_FILENAME)
+        self.assertEqual(gc._cwd_fallback_from_session_path(bare), "")
+
+    def test_fallback_prefers_the_nearest_encoded_ancestor(self):
+        rel = Path("--outer--", "mid", self.WS_DIR, "s", gc._SESSION_FILENAME)
+        self.assertEqual(gc._cwd_fallback_from_session_path(rel), self.WS_TOKEN)
+
+    def test_fallback_token_is_a_match_token_not_a_path(self):
+        rel = Path(self.WS_DIR, "s", gc._SESSION_FILENAME)
+        token = gc._cwd_fallback_from_session_path(rel)
+        self.assertFalse(token.startswith("--"))
+        self.assertFalse(token.endswith("--"))
+        self.assertNotIn("/", token)
+        self.assertNotIn("\\", token)
+        self.assertNotIn(":", token)
+
+    def test_real_shape_directory_encoding_hits_workspace_filter(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _write_session(
+                tmp,
+                os.path.join(self.WS_DIR, "sess-real", gc._SESSION_FILENAME),
+                self._real_shape_events())
+            report = gc.scan_sessions(
+                tmp, workspace="project_management_workflow")
+            self.assertEqual(len(report["sessions"]), 1)
+            self.assertEqual(report["sessions"][0]["cwd"], self.WS_TOKEN)
+            report_all = gc.scan_sessions(tmp)
+            self.assertEqual(len(report_all["sessions"]), 1)
+
+    def test_other_workspace_directory_does_not_hit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _write_session(
+                tmp, os.path.join(self.WS_DIR, "s1", gc._SESSION_FILENAME),
+                self._real_shape_events())
+            _write_session(
+                tmp, os.path.join(self.OTHER_DIR, "s2", gc._SESSION_FILENAME),
+                self._real_shape_events())
+            # No cwd anywhere and no encoded ancestor — the fallback must
+            # NOT over-match this one.
+            _write_session(
+                tmp, os.path.join("plain", "s3", gc._SESSION_FILENAME),
+                self._real_shape_events())
+            report = gc.scan_sessions(
+                tmp, workspace="project_management_workflow")
+            self.assertEqual([s["cwd"] for s in report["sessions"]],
+                             [self.WS_TOKEN])
+            report_all = gc.scan_sessions(tmp)
+            self.assertEqual(len(report_all["sessions"]), 3)
+
+    def test_legacy_cwd_shape_still_wins_and_matches(self):
+        events = [_ev("session", 1000, cwd="D:/proj/ws-fixture"),
+                  _ev("turn/start", 1100, turn=1),
+                  _user_msg(1150, "legacy"),
+                  _ev("turn/end", 1200, turn=1)]
+        with tempfile.TemporaryDirectory() as tmp:
+            _write_session(
+                tmp, os.path.join(self.WS_DIR, "s1", gc._SESSION_FILENAME),
+                events)
+            # Event cwd wins over the directory-derived token (no override).
+            report = gc.scan_sessions(tmp, workspace="ws-fixture")
+            self.assertEqual(len(report["sessions"]), 1)
+            self.assertEqual(report["sessions"][0]["cwd"], "D:/proj/ws-fixture")
+            # And the directory token is NOT consulted when cwd is present.
+            report_by_dir = gc.scan_sessions(
+                tmp, workspace="project_management_workflow")
+            self.assertEqual(len(report_by_dir["sessions"]), 0)
+
+
 class TestZstandardFailClosed(unittest.TestCase):
     """Missing zstandard must produce a clear error, never silent data."""
 

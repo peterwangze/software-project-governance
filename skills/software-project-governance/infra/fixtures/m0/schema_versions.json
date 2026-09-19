@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "task_id": "FEAT-049",
+  "facet": "schema_version",
+  "frozen_revision": "m0-r1",
+  "field": "schema_version",
+  "field_type": "positive int (bool refused), monotonic per record family",
+  "window_semantics": {
+    "minimum": "oldest schema version the writer still writes",
+    "current": "newest schema version the writer knows",
+    "supports": "minimum <= v <= current — anything below minimum and anything ABOVE current is refused"
+  },
+  "refuse_on_unknown_rule": "旧 CLI 遇新 schema 拒写 — a writer refuses a newer-than-known schema (error code schema_version_unsupported); it never guesses, never silently downgrades, never writes into a record it cannot fully interpret",
+  "bump_discipline": "raising current = deliberate contract change; minimum moves forward only when old versions are genuinely retired; 新格式产生新数据后不得靠备份回退丢数据 (arch round-2 §规划缺失③)",
+  "window_cases": [
+    {
+      "minimum": 1,
+      "current": 2,
+      "version": 1,
+      "supported": true
+    },
+    {
+      "minimum": 1,
+      "current": 2,
+      "version": 2,
+      "supported": true
+    },
+    {
+      "minimum": 1,
+      "current": 2,
+      "version": 3,
+      "supported": false,
+      "expected_code": "schema_version_unsupported"
+    },
+    {
+      "minimum": 2,
+      "current": 2,
+      "version": 1,
+      "supported": false,
+      "expected_code": "schema_version_unsupported"
+    }
+  ]
+}

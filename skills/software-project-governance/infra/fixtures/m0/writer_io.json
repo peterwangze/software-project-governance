@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "task_id": "FEAT-049",
+  "facet": "writer_minimal_io_and_effect_judgement",
+  "frozen_revision": "m0-r1",
+  "idempotency_model": "effect_based",
+  "idempotency_declaration": "幂等必须 effect-based（查世界不信日志）— resume checks actual world effects before re-running a step; an operation log alone never decides what already happened (arch round-2 §2)",
+  "writer_input_contract": {
+    "task_id": "non-empty string",
+    "expected_revision": "positive int — CAS optimistic-concurrency expectation; mismatch => revision_conflict with observed_revision, never auto-rebased",
+    "target_state": "member of TASK_STATES (closed)",
+    "operation_id": "op-[0-9a-f]{32} (face 1)",
+    "input_fingerprint": "[0-9a-f]{64} SHA-256 hex of canonical normalized input (face 1)",
+    "evidence_refs": "tuple of typed EvidenceRef (kind + value + optional validation), may be empty"
+  },
+  "writer_output_contract": {
+    "code": "RESULT_OK ('ok') or a closed error code (face 3)",
+    "new_revision": "present ONLY on success — the released new version (五步流程: 释放返回新版本+结果码)",
+    "observed_revision": "REQUIRED on conflict codes — caller re-judges against current state; meaningless elsewhere",
+    "execution": "external-action state: succeeded / failed / unknown / None (nothing executed)",
+    "detail": "optional human-readable reason"
+  },
+  "execution_invariants": {
+    "ok": "requires new_revision + execution (succeeded or unknown); ok+failed is contradictory",
+    "validation_conflict_retryable": "pre-execution rejections — execution must be None",
+    "manual": "may follow an executed action (源已提交投影待修复 => succeeded; push 超时 => unknown — check the world before re-running)",
+    "conflict": "requires observed_revision (CAS 冲突返回当前状态与冲突原因由调用方重判)"
+  },
+  "evidence_ref_kinds": [
+    "repo_file",
+    "git_object",
+    "governance_id",
+    "url",
+    "human_observation"
+  ],
+  "evidence_ref_kind_semantics": {
+    "repo_file": "exists in the named workspace/commit + path legal",
+    "git_object": "commit/blob resolvable",
+    "governance_id": "governance record exists with the expected type",
+    "url": "syntax valid only — 默认不联网验证 (never an implicit network entry)",
+    "human_observation": "non-empty content + judgement source explicit + never claims machine verification"
+  },
+  "reference_validation_states": [
+    "resolvable",
+    "unresolvable",
+    "not_yet_verifiable"
+  ],
+  "reference_validation_vs_verdict": "reference_validation (deterministic resolvability) is separate from verdict (whether evidence suffices — human/LLM); a CLI never derives 测试通过 from 文件存在",
+  "not_frozen_here": "locking, re-validation order, atomic-replacement mechanics, dry-run flags — writer-internal detail (arch round-3 P1-1: M0 冻结跨票接口非全部内部细节; DoD §4 九条 applies at writer delivery)",
+  "sample_requests": [
+    {
+      "case": "standard-success",
+      "request": {
+        "task_id": "FEAT-042R",
+        "expected_revision": 7,
+        "target_state": "review",
+        "operation_id": "op-3f9a1c7e5b2d4a8f9e0c1d2b3a4f5e6d",
+        "input_fingerprint": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+        "evidence_refs": [
+          {
+            "kind": "repo_file",
+            "value": "docs/reviews/review-FEAT-042R-R0.md"
+          }
+        ]
+      },
+      "result": {
+        "operation_id": "op-3f9a1c7e5b2d4a8f9e0c1d2b3a4f5e6d",
+        "code": "ok",
+        "new_revision": 8,
+        "observed_revision": null,
+        "execution": "succeeded",
+        "detail": null
+      }
+    },
+    {
+      "case": "revision-conflict",
+      "request": {
+        "task_id": "FEAT-042R",
+        "expected_revision": 7,
+        "target_state": "review",
+        "operation_id": "op-4f9a1c7e5b2d4a8f9e0c1d2b3a4f5e6d",
+        "input_fingerprint": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+        "evidence_refs": []
+      },
+      "result": {
+        "operation_id": "op-4f9a1c7e5b2d4a8f9e0c1d2b3a4f5e6d",
+        "code": "revision_conflict",
+        "new_revision": null,
+        "observed_revision": 9,
+        "execution": null
+      }
+    },
+    {
+      "case": "operation-id-conflict",
+      "request": {
+        "task_id": "FEAT-046",
+        "expected_revision": 3,
+        "target_state": "committed",
+        "operation_id": "op-5f9a1c7e5b2d4a8f9e0c1d2b3a4f5e6d",
+        "input_fingerprint": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+        "evidence_refs": []
+      },
+      "result": {
+        "operation_id": "op-5f9a1c7e5b2d4a8f9e0c1d2b3a4f5e6d",
+        "code": "operation_id_conflict",
+        "new_revision": null,
+        "observed_revision": 4,
+        "execution": null
+      }
+    },
+    {
+      "case": "external-unknown",
+      "request": {
+        "task_id": "FEAT-048",
+        "expected_revision": 12,
+        "target_state": "completed",
+        "operation_id": "op-6f9a1c7e5b2d4a8f9e0c1d2b3a4f5e6d",
+        "input_fingerprint": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+        "evidence_refs": []
+      },
+      "result": {
+        "operation_id": "op-6f9a1c7e5b2d4a8f9e0c1d2b3a4f5e6d",
+        "code": "manual_intervention",
+        "new_revision": null,
+        "observed_revision": null,
+        "execution": "unknown",
+        "detail": "push timed out — check whether the remote already contains the target SHA before any re-run (恢复规则表: 先查远端再决定)"
+      }
+    }
+  ],
+  "sources": [
+    "docs/planning/0.86.0-arch-consult-round2-external.md §1 (写入流程五步) §3 (引用类型表/reference_validation 与 verdict 分离) §5 (结构化结果分类)",
+    "docs/planning/0.86.0-arch-consult-round3-external.md §P1-1 (写入器最小输入输出与效果判定契约)"
+  ]
+}

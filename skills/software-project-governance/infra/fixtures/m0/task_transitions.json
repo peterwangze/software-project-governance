@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "task_id": "FEAT-049",
+  "facet": "task_states_and_legal_transitions",
+  "frozen_revision": "m0-r1",
+  "task_states": [
+    "triaged",
+    "dev",
+    "review",
+    "approved",
+    "completed",
+    "committed",
+    "blocked"
+  ],
+  "state_semantics": {
+    "triaged": "machine-recorded in change-triage (.governance/change-triage/<id>.json)",
+    "dev": "进行中 — implementation in progress",
+    "review": "待审查/审查中 — spawned reviewer round in flight (per-round detail = review_round dimension, C6/C7)",
+    "approved": "已审查 — pass terminal reached (review machine), task may be marked completed",
+    "completed": "已完成 — M7.4 completion protocol executed",
+    "committed": "commit landed with the task ID in the message (M7.4 step 5) — terminal",
+    "blocked": "escalation (T2 circuit breaker / T4 BLOCKED verdict)"
+  },
+  "legal_transitions": {
+    "triaged": [
+      "dev",
+      "blocked"
+    ],
+    "dev": [
+      "review",
+      "blocked"
+    ],
+    "review": [
+      "approved",
+      "dev",
+      "blocked"
+    ],
+    "approved": [
+      "completed"
+    ],
+    "completed": [
+      "committed"
+    ],
+    "committed": [],
+    "blocked": [
+      "dev",
+      "triaged"
+    ]
+  },
+  "transition_grounding": {
+    "review->approved": "behavior-protocol.md §4.6 T3 (APPROVED / APPROVED_WITH_NOTES unresolved_blockers=0 通过终态)",
+    "review->dev": "behavior-protocol.md §4.6 T1 (NEEDS_CHANGE 返工, round+1, 同一 Reviewer 复审)",
+    "review->blocked": "behavior-protocol.md §4.6 T2 (round>3 仍 NEEDS_CHANGE 熔断) / T4 (BLOCKED 终态)",
+    "blocked->dev": "escalation resolved — work resumes",
+    "blocked->triaged": "delivery verdict C 撤回规划 (version-plan §4 第一层) — back to planning"
+  },
+  "review_outcomes": [
+    "approved",
+    "approved_with_notes",
+    "needs_change",
+    "blocked"
+  ],
+  "review_circuit_breaker_rounds": 3,
+  "execution_results": [
+    "succeeded",
+    "failed",
+    "unknown"
+  ],
+  "execution_unknown_semantics": "执行态 UNKNOWN — external action result unknown (e.g. push timeout); recovery MUST check the actual world state before re-running (effect-based: 查世界不信日志)",
+  "evaluation_results": [
+    "pass",
+    "fail",
+    "not_evaluable"
+  ],
+  "evaluation_not_evaluable_semantics": "评估态 NOT_EVALUABLE — evaluation basis invalid (baseline expired / scope changed / measurer incompatible); never silently mapped to pass",
+  "axis_separation_rule": "UNKNOWN (execution axis) and NOT_EVALUABLE (evaluation axis) are distinct vocabularies on distinct axes and must never be conflated (arch round-2 §4 Q-4 精化)",
+  "continuation_policies": [
+    "block",
+    "advisory"
+  ],
+  "continuation_rule": "评估结果与继续策略分离 — e.g. not_evaluable+advisory for trend gates, not_evaluable+block for release/safety/data-integrity gates",
+  "delivery_verdicts": [
+    "delivered",
+    "deferred",
+    "withdrawn"
+  ],
+  "runtime_postures": [
+    "enabled",
+    "disabled",
+    "read_only",
+    "validated_fallback"
+  ],
+  "three_axis_rule": "实现状态 (task states) / 交付裁决 (delivery verdicts) / 运行姿态 (runtime postures) are separate axes — never merged into one 完成态 (arch round-3 P1-3)",
+  "sources": [
+    "skills/software-project-governance/references/behavior-protocol.md M7.4 step 4.6 (L516-531 转移表 + C1~C8 + T1~T4)",
+    "docs/planning/0.86.0-arch-consult-round2-external.md §4 (评估结果与继续策略分离)",
+    "docs/planning/0.86.0-arch-consult-round3-external.md §P1-3 (交付裁决/运行姿态分轴)"
+  ]
+}

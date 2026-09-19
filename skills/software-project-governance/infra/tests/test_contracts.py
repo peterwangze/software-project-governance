@@ -22,6 +22,7 @@ Run:
 
 import ast
 import dataclasses
+import hashlib
 import json
 import re
 import sys
@@ -45,8 +46,12 @@ LEGACY_DISCLOSURE_KEYS = {"skipped", "skip_reason"}
 # R3 caliber: the module may import stdlib only, and only what the contract
 # needs. A new import is a deliberate contract-module change (add it here in
 # the same reviewed change) — never an accident.
+# FEAT-049 M0 faces: ``uuid`` powers the canonical operation-id generator
+# (face 1); ``types`` provides the read-only mapping proxies that freeze the
+# transition table and the error-code enum.
 ALLOWED_IMPORTS = {
     "__future__", "collections", "dataclasses", "datetime", "re", "typing",
+    "types", "uuid",
 }
 FORBIDDEN_CALL_NAMES = {
     "open", "print", "input", "eval", "exec", "compile", "__import__",
@@ -1044,6 +1049,554 @@ class AdapterVsFrozenShapeTests(unittest.TestCase):
                          details={"extra": "kept"}).to_legacy_dict()
         self.assertEqual(set(legacy), LEGACY_RESULT_KEYS)
         self.assertIn("extra", legacy["details"])
+
+
+# ── M0 governed-writer contract tests (FEAT-049, version-plan-0.86.0 §2) ────
+
+_FX_DIR = _INFRA_DIR / "fixtures" / "m0"
+_FX_MANIFEST_PATH = _FX_DIR / "manifest.json"
+#: Repo checkout root — pin-revision paths in the fixtures manifest are
+#: repo-root-relative (infra/tests → infra → software-project-governance →
+#: skills → root).
+_REPO_ROOT = _INFRA_DIR.parents[2]
+_HEX64 = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+_HEX64_ALT = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+
+
+def _writer_request(**overrides):
+    fields = {
+        "task_id": "FEAT-042R",
+        "expected_revision": 7,
+        "target_state": "review",
+        "operation_id": "op-3f9a1c7e5b2d4a8f9e0c1d2b3a4f5e6d",
+        "input_fingerprint": _HEX64,
+        "evidence_refs": (),
+    }
+    fields.update(overrides)
+    return c.WriterRequest(**fields)
+
+
+def _writer_result(**overrides):
+    fields = {
+        "operation_id": "op-3f9a1c7e5b2d4a8f9e0c1d2b3a4f5e6d",
+        "code": "ok",
+        "new_revision": 8,
+        "execution": "succeeded",
+    }
+    fields.update(overrides)
+    return c.WriterResult(**fields)
+
+
+class M0OperationIdContractTests(unittest.TestCase):
+    """Face 1 — form, canonical generator, replay/conflict decision."""
+
+    def test_form_pattern_and_fixture_example(self):
+        self.assertEqual(c.OPERATION_ID_PATTERN, r"op-[0-9a-f]{32}")
+        fixture = json.loads((_FX_DIR / "operation_id.json")
+                             .read_text(encoding="utf-8"))
+        for example in fixture["valid_examples"]:
+            self.assertEqual(
+                c.require_operation_id("fixture", example), example)
+
+    def test_generator_output_conforms_and_is_unique(self):
+        first, second = c.new_operation_id(), c.new_operation_id()
+        self.assertEqual(c.require_operation_id("generator", first), first)
+        self.assertEqual(c.require_operation_id("generator", second), second)
+        self.assertNotEqual(first, second,
+                            "uuid4 entropy — collisions are not a thing")
+
+    def test_rejects_malformed_operation_ids(self):
+        for bad in ("", "   ", 3, None):
+            _violation(self, lambda bad=bad: c.require_operation_id("x", bad),
+                       "non-empty string")
+        for bad in ("OP-3F9A1C7E5B2D4A8F9E0C1D2B3A4F5E6D",
+                    "task-3f9a1c7e5b2d4a8f9e0c1d2b3a4f5e6d",
+                    "op-3f9a1c7e5b2d4a8f9e0c1d2b3a4f5e6",
+                    "op-3f9a1c7e5b2d4a8f9e0c1d2b3a4f5e6dd",
+                    "op-3f9a1c7e5b2d4a8f9e0c1d2b3a4f5e6g"):
+            _violation(self, lambda bad=bad: c.require_operation_id("x", bad),
+                       "does not match", "op-[0-9a-f]{32}")
+
+    def test_replay_decisions_are_the_frozen_triple(self):
+        self.assertEqual(c.OPERATION_REPLAY_DECISIONS,
+                         ("execute", "replay", "conflict"))
+
+    def test_unseen_id_decision_is_execute(self):
+        self.assertEqual(
+            c.decide_operation_replay(None, _HEX64), "execute")
+
+    def test_same_id_same_payload_is_replay(self):
+        self.assertEqual(
+            c.decide_operation_replay(_HEX64, _HEX64), "replay")
+
+    def test_same_id_different_payload_is_conflict(self):
+        self.assertEqual(
+            c.decide_operation_replay(_HEX64, _HEX64_ALT), "conflict")
+
+    def test_replay_cases_match_fixture(self):
+        fixture = json.loads((_FX_DIR / "operation_id.json")
+                             .read_text(encoding="utf-8"))
+        for case in fixture["replay_cases"]:
+            self.assertEqual(
+                c.decide_operation_replay(case["stored"], case["request"]),
+                case["decision"],
+                f"fixture replay case drifted: {case}")
+
+    def test_replay_rejects_malformed_fingerprints(self):
+        _violation(self, lambda: c.decide_operation_replay(None, "xyz"),
+                   "request_fingerprint")
+        _violation(self,
+                   lambda: c.decide_operation_replay("xyz", _HEX64),
+                   "stored_fingerprint")
+
+    def test_fingerprint_form_is_pinned_sha256_hex(self):
+        self.assertEqual(c.INPUT_FINGERPRINT_PATTERN, r"[0-9a-f]{64}")
+        self.assertEqual(
+            c.require_input_fingerprint("x", _HEX64), _HEX64)
+        _violation(self, lambda: c.require_input_fingerprint("x", "A" * 64),
+                   "input fingerprint")
+
+
+class M0TaskStateMachineTests(unittest.TestCase):
+    """Face 2 — lifecycle, legal transitions, semantic-axis separation."""
+
+    def _fixture(self):
+        return json.loads((_FX_DIR / "task_transitions.json")
+                          .read_text(encoding="utf-8"))
+
+    def test_states_closed_vocabulary(self):
+        self.assertEqual(
+            c.TASK_STATES,
+            ("triaged", "dev", "review", "approved", "completed",
+             "committed", "blocked"))
+
+    def test_transitions_equal_fixture(self):
+        fixture = self._fixture()
+        self.assertEqual(
+            {state: list(targets) for state, targets in
+             c.TASK_TRANSITIONS.items()},
+            fixture["legal_transitions"])
+
+    def test_happy_path_chain_is_legal(self):
+        for step in (("triaged", "dev"), ("dev", "review"),
+                     ("review", "approved"), ("approved", "completed"),
+                     ("completed", "committed")):
+            self.assertEqual(c.require_task_transition(*step), step[1])
+
+    def test_needs_change_rework_path_review_to_dev(self):
+        self.assertEqual(c.require_task_transition("review", "dev"), "dev")
+
+    def test_escalation_paths_land_in_blocked(self):
+        self.assertEqual(c.require_task_transition("review", "blocked"),
+                         "blocked")
+        self.assertEqual(c.require_task_transition("dev", "blocked"),
+                         "blocked")
+
+    def test_blocked_recovery_paths(self):
+        self.assertEqual(c.require_task_transition("blocked", "dev"), "dev")
+        self.assertEqual(c.require_task_transition("blocked", "triaged"),
+                         "triaged")
+
+    def test_illegal_transitions_rejected(self):
+        for current, target in (("triaged", "approved"),
+                                ("triaged", "completed"),
+                                ("dev", "completed"),
+                                ("dev", "approved"),
+                                ("approved", "review"),
+                                ("approved", "dev"),
+                                ("completed", "dev"),
+                                ("committed", "dev"),
+                                ("committed", "completed")):
+            _violation(self,
+                       lambda c_=current, t_=target:
+                       c.require_task_transition(c_, t_),
+                       "illegal transition", current, target)
+
+    def test_unknown_states_fail_closed(self):
+        _violation(self, lambda: c.require_task_transition("done", "dev"),
+                   "unknown task state")
+        _violation(self, lambda: c.legal_task_transitions("nope"),
+                   "unknown task state")
+
+    def test_committed_is_terminal(self):
+        self.assertEqual(c.legal_task_transitions("committed"), ())
+
+    def test_transitions_mapping_is_read_only(self):
+        with self.assertRaises(TypeError):
+            c.TASK_TRANSITIONS["triaged"] = ("committed",)
+
+    def test_circuit_breaker_is_three_rounds(self):
+        self.assertEqual(c.REVIEW_CIRCUIT_BREAKER_ROUNDS, 3)
+
+    def test_review_outcomes_vocabulary(self):
+        self.assertEqual(
+            c.REVIEW_OUTCOMES,
+            ("approved", "approved_with_notes", "needs_change", "blocked"))
+
+    def test_unknown_execution_vs_not_evaluable_evaluation_are_distinct(self):
+        """Arch round-2 Q4 精化: the two states live on different axes."""
+        self.assertEqual(c.EXECUTION_RESULTS,
+                         ("succeeded", "failed", "unknown"))
+        self.assertEqual(c.EVALUATION_RESULTS,
+                         ("pass", "fail", "not_evaluable"))
+        self.assertEqual(set(c.EXECUTION_RESULTS)
+                         & set(c.EVALUATION_RESULTS), set())
+        self.assertIn("unknown", c.EXECUTION_RESULTS)
+        self.assertIn("not_evaluable", c.EVALUATION_RESULTS)
+
+    def test_continuation_policy_is_a_separate_axis(self):
+        self.assertEqual(c.CONTINUATION_POLICIES, ("block", "advisory"))
+        self.assertEqual(set(c.CONTINUATION_POLICIES)
+                         & set(c.EVALUATION_RESULTS), set())
+
+    def test_delivery_verdicts_and_runtime_postures_are_separate_axes(self):
+        self.assertEqual(c.DELIVERY_VERDICTS,
+                         ("delivered", "deferred", "withdrawn"))
+        self.assertEqual(c.RUNTIME_POSTURES,
+                         ("enabled", "disabled", "read_only",
+                          "validated_fallback"))
+        self.assertEqual(
+            (set(c.DELIVERY_VERDICTS) | set(c.RUNTIME_POSTURES))
+            & set(c.TASK_STATES), set(),
+            "adjudication/posture axes never merge into the "
+            "task-state machine (arch round-3 P1-3)")
+
+    def test_fixture_semantic_axes_match_module(self):
+        fixture = self._fixture()
+        self.assertEqual(fixture["execution_results"],
+                         list(c.EXECUTION_RESULTS))
+        self.assertEqual(fixture["evaluation_results"],
+                         list(c.EVALUATION_RESULTS))
+        self.assertEqual(fixture["continuation_policies"],
+                         list(c.CONTINUATION_POLICIES))
+        self.assertEqual(fixture["delivery_verdicts"],
+                         list(c.DELIVERY_VERDICTS))
+        self.assertEqual(fixture["runtime_postures"],
+                         list(c.RUNTIME_POSTURES))
+        self.assertEqual(fixture["review_outcomes"], list(c.REVIEW_OUTCOMES))
+        self.assertEqual(fixture["review_circuit_breaker_rounds"],
+                         c.REVIEW_CIRCUIT_BREAKER_ROUNDS)
+
+
+class M0ErrorCodeContractTests(unittest.TestCase):
+    """Face 3 — closed enum + disposition classes."""
+
+    def test_dispositions_closed_set(self):
+        self.assertEqual(c.ERROR_DISPOSITIONS,
+                         ("validation", "conflict", "retryable", "manual"))
+
+    def test_every_code_has_exactly_one_closed_disposition(self):
+        self.assertTrue(c.ERROR_CODE_DISPOSITIONS)
+        for code, disposition in c.ERROR_CODE_DISPOSITIONS.items():
+            self.assertIn(disposition, c.ERROR_DISPOSITIONS,
+                          f"{code} carries an off-enum disposition")
+
+    def test_grounded_classifications(self):
+        self.assertEqual(
+            c.error_disposition("x", "schema_version_unsupported"),
+            "validation")
+        self.assertEqual(c.error_disposition("x", "revision_conflict"),
+                         "conflict")
+        self.assertEqual(c.error_disposition("x", "operation_id_conflict"),
+                         "conflict")
+        self.assertEqual(c.error_disposition("x", "lock_contention"),
+                         "retryable")
+        self.assertEqual(c.error_disposition("x", "manual_intervention"),
+                         "manual")
+
+    def test_unknown_error_code_fails_closed(self):
+        _violation(self, lambda: c.error_disposition("x", "whatever"),
+                   "unknown error code")
+        _violation(self, lambda: c.error_disposition("x", "ok"),
+                   "unknown error code", "'ok'")
+
+    def test_require_error_code_accepts_ok_and_enum_rejects_garbage(self):
+        self.assertEqual(c.require_error_code("x", "ok"), "ok")
+        for code in c.ERROR_CODE_DISPOSITIONS:
+            self.assertEqual(c.require_error_code("x", code), code)
+        _violation(self, lambda: c.require_error_code("x", "E_NOPE"),
+                   "unknown result code")
+
+    def test_fixture_matches_module(self):
+        fixture = json.loads((_FX_DIR / "error_codes.json")
+                             .read_text(encoding="utf-8"))
+        self.assertEqual(fixture["error_code_dispositions"],
+                         dict(c.ERROR_CODE_DISPOSITIONS))
+        self.assertEqual(fixture["dispositions"], list(c.ERROR_DISPOSITIONS))
+        self.assertEqual(fixture["result_ok"], c.RESULT_OK)
+
+
+class M0SchemaVersionTests(unittest.TestCase):
+    """Face 4 — field, window, refuse-on-unknown (旧 CLI 遇新 schema 拒写)."""
+
+    def test_version_must_be_positive_int(self):
+        for bad in (0, -1, 1.5, "1", None, True, False):
+            _violation(self, lambda bad=bad: c.require_schema_version("x",
+                                                                      bad),
+                       "positive int")
+
+    def test_window_supports_in_range(self):
+        window = c.SchemaVersionWindow(minimum=1, current=2)
+        self.assertTrue(window.supports(1))
+        self.assertTrue(window.supports(2))
+
+    def test_window_refuses_newer_than_current(self):
+        """The frozen rule: a writer never writes into an unknown schema."""
+        window = c.SchemaVersionWindow(minimum=1, current=2)
+        self.assertFalse(window.supports(3))
+        _violation(self, lambda: window.require_supported("w", 3),
+                   "schema_version_unsupported", "refuse to")
+
+    def test_window_refuses_below_minimum(self):
+        window = c.SchemaVersionWindow(minimum=2, current=2)
+        self.assertFalse(window.supports(1))
+        _violation(self, lambda: window.require_supported("w", 1),
+                   "schema_version_unsupported")
+
+    def test_window_construction_invariants(self):
+        _violation(self, lambda: c.SchemaVersionWindow(minimum=2, current=1),
+                   "never valid")
+        _violation(self, lambda: c.SchemaVersionWindow(minimum=0, current=1),
+                   "positive int")
+
+    def test_fixture_window_cases_match_module(self):
+        fixture = json.loads((_FX_DIR / "schema_versions.json")
+                             .read_text(encoding="utf-8"))
+        for case in fixture["window_cases"]:
+            window = c.SchemaVersionWindow(minimum=case["minimum"],
+                                           current=case["current"])
+            self.assertEqual(window.supports(case["version"]),
+                             case["supported"],
+                             f"window case drifted: {case}")
+            if not case["supported"]:
+                with self.assertRaises(c.ContractViolation):
+                    window.require_supported("fixture", case["version"])
+
+
+class M0WriterIoContractTests(unittest.TestCase):
+    """Face 5 — minimal request/result shapes + effect-based declaration."""
+
+    def test_idempotency_model_is_declared_effect_based(self):
+        self.assertEqual(c.IDEMPOTENCY_MODEL, "effect_based")
+
+    def test_request_happy_path(self):
+        request = _writer_request(
+            evidence_refs=[c.EvidenceRef(kind="repo_file",
+                                         value="docs/reviews/r0.md")])
+        self.assertEqual(request.task_id, "FEAT-042R")
+        self.assertEqual(request.expected_revision, 7)
+        self.assertEqual(request.target_state, "review")
+        self.assertEqual(request.evidence_refs[0].validation, None,
+                         "validation is a checker output, not a claim")
+
+    def test_request_field_validations(self):
+        _violation(self, lambda: _writer_request(task_id=""),
+                   "WriterRequest.task_id")
+        for bad in (0, -1, True, "7", None):
+            _violation(self, lambda bad=bad: _writer_request(
+                expected_revision=bad), "WriterRequest.expected_revision")
+        _violation(self, lambda: _writer_request(target_state="done"),
+                   "WriterRequest.target_state", "closed enum")
+        _violation(self, lambda: _writer_request(operation_id="op-xyz"),
+                   "WriterRequest.operation_id")
+        _violation(self, lambda: _writer_request(input_fingerprint="abc"),
+                   "WriterRequest.input_fingerprint")
+        _violation(self, lambda: _writer_request(evidence_refs="docs/x.md"),
+                   "WriterRequest.evidence_refs")
+        _violation(self, lambda: _writer_request(
+            evidence_refs=[{"kind": "repo_file", "value": "x"}]),
+            "WriterRequest.evidence_refs[0]", "EvidenceRef")
+
+    def test_evidence_ref_kinds_are_the_frozen_five(self):
+        self.assertEqual(
+            c.EVIDENCE_REF_KINDS,
+            ("repo_file", "git_object", "governance_id", "url",
+             "human_observation"))
+        for kind in c.EVIDENCE_REF_KINDS:
+            self.assertEqual(c.EvidenceRef(kind=kind, value="v").kind, kind)
+        _violation(self,
+                   lambda: c.EvidenceRef(kind="vibes", value="v"),
+                   "EvidenceRef.kind", "closed enum")
+
+    def test_evidence_ref_validation_states_closed(self):
+        self.assertEqual(
+            c.REFERENCE_VALIDATION_STATES,
+            ("resolvable", "unresolvable", "not_yet_verifiable"))
+        for state in c.REFERENCE_VALIDATION_STATES:
+            self.assertEqual(
+                c.EvidenceRef(kind="url", value="https://x", validation=state)
+                .validation, state)
+        _violation(self,
+                   lambda: c.EvidenceRef(kind="url", value="https://x",
+                                         validation="verified"),
+                   "EvidenceRef.validation", "closed enum")
+
+    def test_result_ok_requires_new_revision_and_execution(self):
+        self.assertEqual(_writer_result().new_revision, 8)
+        _violation(self, lambda: _writer_result(new_revision=None),
+                   "code 'ok' requires new_revision")
+        _violation(self, lambda: _writer_result(execution=None),
+                   "code 'ok' requires execution")
+
+    def test_result_ok_with_failed_execution_is_contradictory(self):
+        _violation(self, lambda: _writer_result(execution="failed"),
+                   "contradictory")
+
+    def test_result_ok_with_unknown_execution_is_legal(self):
+        """push-timeout shape: ok code + unresolved external action."""
+        self.assertEqual(
+            _writer_result(execution="unknown").execution, "unknown")
+
+    def test_result_error_must_not_carry_new_revision(self):
+        _violation(self,
+                   lambda: _writer_result(code="revision_conflict",
+                                          new_revision=9,
+                                          observed_revision=9,
+                                          execution=None),
+                   "must not carry new_revision")
+
+    def test_conflict_requires_observed_revision(self):
+        _violation(self,
+                   lambda: _writer_result(code="revision_conflict",
+                                          new_revision=None,
+                                          execution=None),
+                   "requires observed_revision")
+
+    def test_pre_execution_rejections_carry_no_execution(self):
+        for code in ("schema_violation", "illegal_transition",
+                     "lock_contention"):
+            _violation(self,
+                       lambda code=code: _writer_result(
+                           code=code, new_revision=None,
+                           execution="succeeded"),
+                       "executed nothing")
+
+    def test_manual_intervention_may_follow_an_executed_action(self):
+        """源已提交投影待修复 / push 超时 shapes (arch round-2 §2/§5)."""
+        self.assertEqual(
+            _writer_result(code="manual_intervention", new_revision=None,
+                           execution="succeeded").execution, "succeeded")
+        self.assertEqual(
+            _writer_result(code="manual_intervention", new_revision=None,
+                           execution="unknown").execution, "unknown")
+
+    def test_writer_result_code_must_be_closed_enum(self):
+        _violation(self, lambda: _writer_result(code="E_HALLUCINATED"),
+                   "unknown result code")
+
+    def test_writer_io_fixture_samples_replay_through_module(self):
+        """Fixture samples replay through the frozen shapes (with typed
+        rehydration of JSON-borne evidence refs — the contract refuses raw
+        dicts by design)."""
+        fixture = json.loads((_FX_DIR / "writer_io.json")
+                             .read_text(encoding="utf-8"))
+        self.assertEqual(fixture["idempotency_model"], c.IDEMPOTENCY_MODEL)
+        for sample in fixture["sample_requests"]:
+            request_data = dict(sample["request"])
+            request_data["evidence_refs"] = [
+                c.EvidenceRef(**ref)
+                for ref in request_data["evidence_refs"]]
+            request = c.WriterRequest(**request_data)
+            self.assertIsInstance(request, c.WriterRequest)
+            result = _writer_result(**sample["result"])
+            self.assertEqual(result.operation_id, request.operation_id)
+
+    def test_request_and_result_are_json_round_trippable(self):
+        """JSON round trip = structural equivalence + EXPLICIT rehydration.
+
+        The contract refuses raw dicts where an ``EvidenceRef`` is required
+        (fail-closed — model output is never silently coerced), so a payload
+        that crossed a JSON boundary must be rehydrated by the caller. That
+        rehydrate step is writer-owned (batch 1), pinned here so the
+        requirement is not discovered the hard way.
+        """
+
+        def rehydrate_request(payload):
+            data = json.loads(payload)
+            data["evidence_refs"] = [c.EvidenceRef(**ref)
+                                     for ref in data["evidence_refs"]]
+            return c.WriterRequest(**data)
+
+        request = _writer_request(
+            evidence_refs=[c.EvidenceRef(kind="governance_id",
+                                         value="DEC-221")])
+        payload = json.dumps(dataclasses.asdict(request), ensure_ascii=False)
+        self.assertEqual(rehydrate_request(payload), request)
+        result = _writer_result(detail="ok 中文 detail")
+        payload = json.dumps(dataclasses.asdict(result), ensure_ascii=False)
+        self.assertEqual(c.WriterResult(**json.loads(payload)), result)
+
+
+class M0FixtureManifestTests(unittest.TestCase):
+    """Fixture integrity + pin-revision wellformedness (frozen revision)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.manifest = json.loads(
+            _FX_MANIFEST_PATH.read_text(encoding="utf-8"))
+
+    def _sha256(self, path):
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def test_every_fixture_hash_matches_manifest(self):
+        for name, record in self.manifest["fixtures"].items():
+            path = _FX_DIR / name
+            self.assertTrue(path.is_file(), f"fixture missing: {name}")
+            digest = self._sha256(path)
+            self.assertEqual(
+                digest, record["sha256"],
+                f"fixture {name} drifted from the frozen revision — this is "
+                f"a contract change: re-baseline M0 (manifest + contracts.py "
+                f"+ tests), never edit a frozen fixture in place")
+
+    def test_frozen_revision_and_change_rule_declared(self):
+        self.assertEqual(self.manifest["task_id"], "FEAT-049")
+        self.assertTrue(self.manifest["frozen_revision"]["id"])
+        self.assertTrue(self.manifest["change_rule"])
+
+    def test_pin_revision_block_is_wellformed(self):
+        pin = self.manifest["pin_revision"]
+        self.assertIn("批 2.0", pin["purpose"])
+        for source in pin["sources"]:
+            path = _REPO_ROOT / source["path"]
+            self.assertTrue(
+                path.is_file(),
+                f"pinned contract source missing: {source['path']}")
+            start, end = source["line_span"]
+            self.assertTrue(1 <= start <= end)
+            for key in ("content_sha256", "file_sha256"):
+                self.assertRegex(source[key], r"^[0-9a-f]{64}$",
+                                 f"{source['path']} {key} must be sha256 hex")
+
+    def test_pin_revision_hashes_still_resolve(self):
+        """The span recipe re-derives the pinned content hashes.
+
+        NOTE (honest scope): this pins THIS suite to the contract sources at
+        M0 time — a deliberate maintenance edit to a pinned span breaks this
+        test ON PURPOSE and MUST be resolved by re-baselining the pin (the
+        change_rule in the manifest), which keeps 批 2.0 复跑对照 meaningful.
+        """
+        pin = self.manifest["pin_revision"]
+        recipe = pin["span_hash_recipe"]
+        self.assertIn("splitlines", recipe)
+        for source in pin["sources"]:
+            path = _REPO_ROOT / source["path"]
+            lines = path.read_text(encoding="utf-8").splitlines()
+            start, end = source["line_span"]
+            digest = hashlib.sha256(
+                "\n".join(lines[start - 1:end]).encode("utf-8")).hexdigest()
+            self.assertEqual(digest, source["content_sha256"],
+                             f"pinned span changed since M0 freeze: "
+                             f"{source['path']} {source['line_span']}")
+
+    def test_batch1_consumers_declared(self):
+        consumers = self.manifest["consumers"]
+        self.assertEqual(
+            set(consumers), {"FEAT-042R", "FEAT-046", "FEAT-047"})
+        for task_id, record in consumers.items():
+            self.assertEqual(record["batch"], 1, task_id)
+            self.assertEqual(record["access"], "read-only", task_id)
+            self.assertTrue(record["consumes"], task_id)
 
 
 if __name__ == "__main__":

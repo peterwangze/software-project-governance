@@ -889,6 +889,10 @@
         "type": "dir"
       },
       {
+        "path": "benchmarks/closure/",
+        "type": "dir"
+      },
+      {
         "path": "web/",
         "type": "dir"
       }
@@ -900,6 +904,7 @@
       ".github/workflows/*.yml",
       "tests/**/*.py",
       "docs/**/*.md",
+      "benchmarks/closure/**/*.md",
       "web/.gitignore",
       "web/index.html",
       "web/package.json",

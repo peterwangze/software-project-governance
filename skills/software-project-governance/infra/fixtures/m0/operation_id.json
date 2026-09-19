@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "task_id": "FEAT-049",
+  "facet": "operation_id",
+  "frozen_revision": "m0-r1",
+  "pattern": "op-[0-9a-f]{32}",
+  "canonical_generator": "contracts.new_operation_id() (op- + uuid4().hex — single source for all governed writers)",
+  "scope": "global-across-governed-writers",
+  "input_fingerprint_pattern": "[0-9a-f]{64}",
+  "input_fingerprint_semantics": "SHA-256 hex of the writer's canonical normalized input; canonicalization is writer-owned and must be stable for that writer's own inputs",
+  "replay_decisions": [
+    "execute",
+    "replay",
+    "conflict"
+  ],
+  "replay_rule": "same operation_id + same input fingerprint => replay (return the original result, never re-execute); same operation_id + different fingerprint => conflict (refuse — arch round-2 §1); unseen id => execute",
+  "replay_cases": [
+    {
+      "stored": null,
+      "request": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "decision": "execute"
+    },
+    {
+      "stored": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "request": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "decision": "replay"
+    },
+    {
+      "stored": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "request": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+      "decision": "conflict"
+    }
+  ],
+  "valid_examples": [
+    "op-3f9a1c7e5b2d4a8f9e0c1d2b3a4f5e6d"
+  ],
+  "invalid_examples": [
+    "",
+    "   ",
+    "OP-3F9A1C7E5B2D4A8F9E0C1D2B3A4F5E6D",
+    "task-3f9a1c7e5b2d4a8f9e0c1d2b3a4f5e6d",
+    "op-3f9a1c7e5b2d4a8f9e0c1d2b3a4f5e6",
+    "op-3f9a1c7e5b2d4a8f9e0c1d2b3a4f5e6dd",
+    "op-3f9a1c7e5b2d4a8f9e0c1d2b3a4f5e6g"
+  ],
+  "sources": [
+    "docs/planning/0.86.0-arch-consult-round2-external.md §1 (幂等与冲突协议)",
+    "docs/planning/0.86.0-arch-consult-round3-external.md §P1-1 (至少冻结: operation_id 产生/作用域/重试复用/同 ID 异载荷处置)"
+  ]
+}

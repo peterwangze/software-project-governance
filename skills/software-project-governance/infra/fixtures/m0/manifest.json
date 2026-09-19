@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "manifest_of": "M0 contract fixtures (FEAT-049 — version-plan-0.86.0 §2 批 0)",
+  "task_id": "FEAT-049",
+  "frozen_revision": {
+    "id": "m0-r1",
+    "rule": "契约测试通过 = 冻结 revision（version-plan §2 批 0 验收入口）——本 manifest 的 fixture sha256 即冻结面；批 2.0 复跑 = 兼容性回归（非补做验收）",
+    "recorded_at": "2026-09-19",
+    "accepted_by_command": "python -m pytest skills/software-project-governance/infra/tests/test_contracts.py -q",
+    "contracts_module_sha256": "42c8cb6fe8c70bb26435d7ac63153780f725333d710a47ea1f088f155e480875"
+  },
+  "fixtures": {
+    "operation_id.json": {
+      "sha256": "f1ddd7106da4bf99fb3f78a607d3d86a3f79a21c972f2a2935057d3c2b2d1e03",
+      "bytes": 2006,
+      "face": "1 operation_id"
+    },
+    "task_transitions.json": {
+      "sha256": "3584d3a79cd863d59e79aceb0aac81c3f8c165237dc87526dc26525a9bd6beaf",
+      "bytes": 3628,
+      "face": "2 task states & legal transitions (+UNKNOWN/NOT_EVALUABLE axes)"
+    },
+    "error_codes.json": {
+      "sha256": "06d520a375c74428755324b1fa9e549aafb5914e65e3a78279d9428895fc802b",
+      "bytes": 1945,
+      "face": "3 error codes & dispositions"
+    },
+    "schema_versions.json": {
+      "sha256": "3de80387d45167c8355348a4b5b92ee9ae3151bd2cc1ad92c490eb762ba87c8c",
+      "bytes": 1467,
+      "face": "4 schema version window"
+    },
+    "writer_io.json": {
+      "sha256": "5386cc1606b4426ae0e3061eef03797ed9aa4008a9384cf68b8f1ed63066713c",
+      "bytes": 5950,
+      "face": "5 writer minimal I/O + effect-based idempotency"
+    }
+  },
+  "pin_revision": {
+    "purpose": "M0 契约源 pin revision（FEAT-049 交付物⑥）——批 2.0 复跑对照锚：契约源被改即可检测；检测发生在批 2.0 复跑对照，非法人 gate（契约源正常维护演进时按契约变更流程重置本 pin）",
+    "span_hash_recipe": "sha256 of '\\n'.join(path.read_text(encoding='utf-8').splitlines()[start-1:end]) — 1-based inclusive line span, LF-normalized",
+    "sources": [
+      {
+        "path": "skills/software-project-governance/references/behavior-protocol.md",
+        "section": "M7.4 step 4.6 Review 闭环状态机（MANDATORY）——L516-531 转移表 + 强制条款 C1~C8 + FIX-224 确定性触发器 T1~T4",
+        "line_span": [512, 556],
+        "content_sha256": "59773c601742ac7d6d4674009a700ab96142b83dcbb13b9c14f0ab423eda6684",
+        "file_sha256": "647bd10fcb9a919ea45bdc0cb3e3f165daa3d26f3a90ed2817e2ac48c0eb22af"
+      },
+      {
+        "path": "skills/software-project-governance/SKILL.md",
+        "section": "关键行为契约（MUST——注入面最小契约集，FIX-253/REQ-112）——复审必达/完成必推荐/选项必带依据/真实环境必防护",
+        "line_span": [223, 230],
+        "content_sha256": "65658f97d0d3cabbf1d3c5d90747d9c252e3082802d4a954d327d877779c6be1",
+        "file_sha256": "8b63435596a17ec2485ff2c52976672ca1c02ec6b1bba2554b00189679f1606a"
+      }
+    ]
+  },
+  "consumers": {
+    "FEAT-042R": {
+      "batch": 1,
+      "consumes": "faces 1+2+4+5 — task-row-update 消费 TASK_TRANSITIONS（M7.4 转移合法性表可执行化）+ CAS expected_revision + operation_id + WriterRequest/WriterResult 形状",
+      "access": "read-only"
+    },
+    "FEAT-046": {
+      "batch": 1,
+      "consumes": "faces 1+3+4+5 — governance_store 追加写入器族消费 operation_id 重试协议 + 错误码闭枚举/处置分类 + schema 窗口 + 结构化结果",
+      "access": "read-only"
+    },
+    "FEAT-047": {
+      "batch": 1,
+      "consumes": "faces 2+3+4 — BaselineMetadata provenance 消费 EVALUATION_RESULTS/CONTINUATION_POLICIES 分轴（PASS/FAIL/NOT_EVALUABLE vs BLOCK/ADVISORY）+ 错误码 + schema_version 字段",
+      "access": "read-only"
+    }
+  },
+  "change_rule": "批 1 发现契约必须变更 → 提出变更 → 更新 M0 基线（本 manifest + fixtures + contracts.py 同步重置）→ 识别受影响票 → 重跑相关验收——实现票不得直接改共享语义再让其他票追认（version-plan §2 依赖图 / arch round-3 P1-1）"
+}

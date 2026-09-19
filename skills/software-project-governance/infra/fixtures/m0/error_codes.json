@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "task_id": "FEAT-049",
+  "facet": "error_codes",
+  "frozen_revision": "m0-r1",
+  "result_ok": "ok",
+  "dispositions": [
+    "validation",
+    "conflict",
+    "retryable",
+    "manual"
+  ],
+  "disposition_semantics": {
+    "validation": "input or candidate state illegal — fix the input, retry as a NEW operation (写前完整验证: schema + 跨记录约束)",
+    "conflict": "concurrent/intent mismatch — return observed state + reason, caller re-judges (CAS 冲突不自动换版本执行)",
+    "retryable": "transient — the SAME operation may be retried",
+    "manual": "human intervention required (credential repair / projection rebuild / recovery adjudication)"
+  },
+  "error_code_dispositions": {
+    "schema_violation": "validation",
+    "cross_record_violation": "validation",
+    "illegal_transition": "validation",
+    "schema_version_unsupported": "validation",
+    "revision_conflict": "conflict",
+    "operation_id_conflict": "conflict",
+    "lock_contention": "retryable",
+    "manual_intervention": "manual"
+  },
+  "code_grounding": {
+    "schema_violation": "写前完整验证 (arch round-2 §5: 先算候选结果再校验 schema)",
+    "cross_record_violation": "写前完整验证 (arch round-2 §5: +跨记录约束)",
+    "illegal_transition": "TASK_TRANSITIONS refusal (behavior-protocol.md §4.6 可执行化)",
+    "schema_version_unsupported": "旧 CLI 遇新 schema 拒写 (version-plan §2 M0 line)",
+    "revision_conflict": "CAS expected_revision mismatch (arch round-2 §1)",
+    "operation_id_conflict": "同 ID 不同输入拒绝 (arch round-2 §1)",
+    "lock_contention": "短时存储写入锁 busy (arch round-2 §1 — retryable)",
+    "manual_intervention": "需介入 (arch round-2 §5 DoD item 5; 凭据修复/投影重建/恢复裁决)"
+  },
+  "closed_enum_rule": "unknown codes fail closed — extend ERROR_CODE_DISPOSITIONS deliberately, never emit ad-hoc codes"
+}

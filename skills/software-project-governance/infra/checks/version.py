@@ -182,6 +182,19 @@ _REASON_MIGRATION_PAIR = (
     "migration_flag(plan, active) synthetic version-pair input or its echo "
     "assertion — relative-comparison semantics; neither operand is the real "
     "active version")
+_REASON_INSTRUMENT_VERSION = (
+    "instrument-version fixture data (\"check-injection-budget@X.Y.Z\") — a "
+    "versioned identifier under test, not a pin of the active version; "
+    "registered at the 0.85.0 bump (target file belongs to an in-flight "
+    "untracked batch — re-audit these rows when the owning batch lands)")
+_REASON_FUTURE_TARGET = (
+    "synthetic future-target literal proving non-active semver tokens stay "
+    "silent; it equals the active version only at the 0.85.0 bump (the "
+    "FIX-361 designed bump-time double signal) and goes dormant afterwards")
+_REASON_FIXTURE_ROW_TEXT = (
+    "fixture task-table row text quoted as synthetic plan-tracker data; the "
+    "version column is scenario payload and is never compared to the active "
+    "version")
 
 STATIC_PIN_EXEMPTIONS = {
     "skills/software-project-governance/infra/tests/test_bootstrap_aggregate.py": [
@@ -197,6 +210,30 @@ STATIC_PIN_EXEMPTIONS = {
         (326, "0.84.0", _REASON_MIGRATION_PAIR),
         (331, "0.84.0", _REASON_MIGRATION_PAIR),
         (336, "0.84.0", _REASON_MIGRATION_PAIR),
+        # 0.85.0 bump-time row (the FIX-361 designed double signal): this
+        # fixture row was written with the then-future target while 0.84.0
+        # was active, so it surfaces exactly once — at this bump.
+        (123, "0.85.0", _REASON_FIXTURE_TABLE),
+    ],
+    # In-flight untracked batch (baseline/task-row/store tooling): rows pin
+    # only fixture data; re-audit at landing per the reason text. NOTE: the
+    # baseline-metadata file is being edited by its owning batch while this
+    # bump runs — line numbers re-anchored 2026-09-19; the stale-exemption
+    # audit below flags any further drift automatically.
+    "skills/software-project-governance/infra/tests/test_baseline_metadata.py": [
+        (60, "0.85.0", _REASON_INSTRUMENT_VERSION),
+        (315, "0.85.0", _REASON_INSTRUMENT_VERSION),
+        (392, "0.85.0", _REASON_INSTRUMENT_VERSION),
+        (563, "0.85.0", _REASON_INSTRUMENT_VERSION),
+        (620, "0.85.0", _REASON_INSTRUMENT_VERSION),
+        (738, "0.85.0", _REASON_INSTRUMENT_VERSION),
+    ],
+    "skills/software-project-governance/infra/tests/test_task_row_update.py": [
+        (74, "0.85.0", _REASON_FIXTURE_ROW_TEXT),
+        (76, "0.85.0", _REASON_FIXTURE_ROW_TEXT),
+    ],
+    "skills/software-project-governance/infra/tests/test_static_version_pins.py": [
+        (158, "0.85.0", _REASON_FUTURE_TARGET),
     ],
 }
 

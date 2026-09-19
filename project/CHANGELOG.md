@@ -2,6 +2,69 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.85.0] - 2026-09-19
+
+### 0.85.0 - **注入瘦身到位 + 预算硬门**：治理降噪第二波两批制全清（REL-081 / FIX-356~362 / FEAT-041/049/050/052 / DEC-214~221 / EVD-1088~1107）
+
+0.85.0 是 **MINOR** 发布，承载 DEC-215②（2026-09-19 批次规划授权）+ DEC-216（用户 M-0 裁定：**0.85.0 MINOR 两批制**——批 1 降噪/机检面前置 + 批 2 瘦身→翻 hard 串行关键路径）+ DEC-217（用户全链预授权：「授权 Coordinator 按照推荐进行推进，直到当前规划的版本发布」；M-4 授权形态 = 预授权，**边界 = 预授权不免除门禁**——M-2 门禁实测与 M-3 双半面审查仍 MUST 满足）。版本目标：把治理工作流自身的资源消耗变成有硬门守护的事实——入口模板契约 v2 瘦身（resident 三 profile 4,957/10,718/10,918 → **4,216/5,694/5,966**，双 ≤6,000 达标）+ 注入预算翻 hard（超限即 FAIL）+ skill 层独立预算线（16,000）+ 测试红噪音与归档谓词盲区清零（批 1 七修复 FIX-356~362），对应 EVD-1088~1107。
+
+**治理成本过滤修复（FIX-356，commit `be0b844`）**：`governance-cost-report` 的 `--workspace` 过滤在真实 dsh v3 会话流下完全失效（session 事件无 cwd 字段 → 344/344 会话全被剔除 → 0 样本死循环）——新增目录名编码回退推导（事件 cwd 优先语义保留），真实语料命中 **0→156 sessions/22 TTFA**；RISK-055 数值验收机制修复（EVD-1088 诊断闭环）。用户视角：治理开销可按工作区分域统计了。REVIEW-FIX-356-R0 APPROVED_WITH_NOTES/0（机录）；EVD-1089；RISK-055。
+
+**Check 30 豁免行因果措辞分流（FIX-357，commit `25aef9f`）**：4 个终态豁免门的 reason 自带「closure basis」来源分句——归档依据豁免（DEC-214②）与活体终态恢复豁免（EVD-892）不再共用同一措辞模板；判定逻辑/门结构逐字零改动。用户视角：健康检查里每条豁免行都说得清「为什么豁免」。REVIEW-FIX-357-R0 APPROVED_WITH_NOTES/0（机录）；EVD-1095。
+
+**归档谓词并集五件套（FIX-358，commit `399c48a`）**：Check 30 的 closed 集派生并入归档索引 completed ID（13 个归档散文格漏判 ID 收敛，union 362→375 语料口径）+ UnicodeDecodeError 契约例外修正 + 三分支测试与 M4 突变击杀实证。用户视角：已归档任务的真实闭环不再假红。REVIEW-FIX-358-R0 APPROVED_WITH_NOTES/0（机录）；EVD-1097。
+
+**回放族既有测试失败收敛（FIX-359，commit `11289be`）**：RISK-056 匹配器族 **30 项失败清零**——hook 回放 6 项重锚为 live plan-tracker 运行时派生（旧静态钉语义保留为 MISS 正确性）+ review evidence 24 项 bash 探测移植（本机 WSL stub 实证：修复而非 skip 包装）。用户视角：测试套件红噪音消失，验证信号重新可信。REVIEW-FIX-359-R0 APPROVED_WITH_NOTES/0（机录）；EVD-1094。
+
+**成本报告 cwd 双源披露（FIX-360，commit `c7b515a`）**：`governance-cost-report` 的 CALIBRATION 面新增 `sessions_cwd` 键——事件 cwd 优先 / 目录名回退 token / 空串三态语义入报告本体。用户视角：报告消费者可从报告自身得知 cwd 过滤的测量口径。REVIEW-FIX-360-R0 APPROVED_WITH_NOTES/0（机录）；EVD-1093。
+
+**测试静态版本钉机检面（FIX-361，commit `2e80c69`；DEC-213③）**：新增 WARN-only 扫描——`infra/tests` 内可执行/数据行携带与权威版本相等的字面 semver 即告警（注释/docstring 排除；(line, token, reason) 豁免账本可审计防腐蚀）。用户视角：FIX-352/353 同型的「发布期静态版本钉」盲区（连续 5 次手工同类修复）由机器拦截。REVIEW-FIX-361-R0 APPROVED_WITH_NOTES/0（机录）；EVD-1098。
+
+**fixture governance-status 投影 promote（FIX-362，commit `5a4c4f4`）**：e2e fixture 的 governance-status.md 由 pre-FIX-270 陈旧镜像（14,493B、113 行分歧）promote 为 byte_copy 投影合同成员（SHA256 与 canonical 相等），投影合同 27→28。用户视角：fixture 漂移防线扩展且 SHA 等同可机验。REVIEW-FIX-362-R0 APPROVED_WITH_NOTES/0（机录）；EVD-1096。
+
+**入口模板契约 v2 全量推开（FEAT-041，commit `b717835`；DEC-218/219）**：bootstrap 模板从「pre-skill-load 自包含」改为「触发器行内 + 明细按需（SKILL.md progressive disclosure）」——resident 注入 **standard 10,718→5,694 / strict 10,918→5,966（双 ≤6,000 PASSED；-46.9%/-45.4%）**，lightweight 4,957→4,216；明细零丢失（SKILL.md §B0~B5 承接 + Reviewer 锚抽查）；共享基座 strict=base+delta 单次维护；旧安装升级路径兼容（「详细规则」H2 恢复=边界集超集，`/plugin update` 整段替换零残留）。用户视角：每轮会话的治理注入开销砍半，上下文留给实际工作。试点门 FAIL 如实回呈（EVD-1100）→ R0 NEEDS_CHANGE（投影行尾 P0）→ 修复 → R1 APPROVED_WITH_NOTES/0（机录）；EVD-1099/1100/1103。
+
+**注入预算 resident 翻 hard（FEAT-050，commit `407b230`；DEC-211③）**：`check-injection-budget` 的 resident 层判定从 ADVISORY 翻为 **FAIL 硬门**——瘦身后达标基线（4,216/5,694/5,966，EVD-1104 双重复跑）获得机器强制力，任何注入面增长 fail-closed 红灯；FEAT-039 P3-3 三态 fail-closed 断言同 commit 兑现。用户视角：预算回弹不再只是建议——超标直接阻断验证。REVIEW-FEAT-050-R0 APPROVED_WITH_NOTES/0（机录）；EVD-1106；RISK-057 缓解④转事实。
+
+**skill 层独立预算线（FEAT-052，commit `1519bf1`；DEC-215⑧）**：entry-skill 层获得独立数值线 **16,000 tok**（report-only 数据字段化；实测基线 14,456——FEAT-041 明细迁移的设计性增长，+10.7% 余量）+ per-tier 四通道判定 + CLI/Check 33 同步渲染 + F 族顺带清理（含超限 note 按 tier 自身线计数的顺手修）。用户视角：skill 层体积有独立数字线可核查，不再被 resident 口径遮蔽。REVIEW-FEAT-052-R0 APPROVED_WITH_NOTES/0（机录）；EVD-1107。
+
+**M0 契约冻结（FEAT-049，commit `27eeea0`；0.86.0 批 0 前置——随本候选树入库，如实登记）**：contracts 五面契约冻结 revision **m0-r1**（operation_id / 状态机含 UNKNOWN 与 NOT_EVALUABLE 三轴 / 错误码闭枚举 / SchemaVersionWindow / 写入器最小 I/O）+ fixtures + 契约测试（99 存量零回归 + 58 新增）+ 量测协议工件。0.85.0 零行为消费（纯新增基座）。REVIEW-FEAT-049-R0 APPROVED_WITH_NOTES/0（机录）；EVD-1105。
+
+**⑥ 治理面**：窗口内 **8 决策**（DEC-214 FIX-355 superseding 承接 / DEC-215① RISK-055 分域复采样 + ② 批次规划授权 / DEC-216 M-0 裁定 MINOR 两批制 / **DEC-217 0.85.0 全链预授权** / DEC-218 批 2.0 条件 go / DEC-219 外扩削减面 / DEC-220 确定性核心·LLM 边界设计公理 / **DEC-221 0.86.0 设计演进全链预授权**——双预授权均在案）+ **20 EVD**（EVD-1088~1107，含 M-0 双半面规划闭环 EVD-1090、批 1 ⑥ 治理记录三票快速通道 EVD-1091、批 2 前置量测 EVD-1092、批 2.2 canonical 重测 EVD-1104、自演进摩擦点复盘入候选池 EVD-1101、0.86.0 规划闭环与 DEC-221 生效确认 EVD-1102）；产品任务全部走 change-triage 机录 + Developer→Reviewer 审查链（11 票 R0 全闭环，0 unresolved blockers）。
+
+### Added
+
+- **`--workspace` 过滤真实语料修复 + cwd 双源披露（FIX-356/360）**：治理成本报告的工作区过滤在 dsh v3 会话流下恢复有效（0→156 sessions 命中）；CALIBRATION 面自带三态语义披露。用户视角：TTFA / 治理 token 分项可按工作区分域统计且口径自解释。
+- **测试静态版本钉扫描面（FIX-361；DEC-213③）**：WARN-only + 豁免账本；版本 bump 期静态钉由机器拦截（bump 时点双重信号为设计预期）。
+- **skill 层独立预算线 16,000（FEAT-052）**：per-tier 判定 + 数据字段化（report-only——翻硬为 0.86.0+ 候选经 FEAT-047 BaselineMetadata 承载）。
+- **M0 契约基座（FEAT-049）**：五面契约冻结 m0-r1 + 58 项契约测试（0.86.0 批 0 前置，本版零行为消费）。
+
+### Changed
+
+- **入口模板契约 v2（FEAT-041；DEC-218/219）**：自包含 → 触发器行内 + 明细按需；resident 注入三 profile **4,216/5,694/5,966**（原 4,957/10,718/10,918）；共享基座 strict=base+delta 单次维护（行为变更 B-1）。
+- **注入预算 resident 判定姿态（FEAT-050；DEC-211③）**：standard/strict 从 ADVISORY 翻为 FAIL 硬门（行为变更 B-2）。
+- **Check 30 终态豁免行（FIX-357/358）**：豁免 reason 自带来源分句；closed 集并入归档索引 completed ID（判定面扩展为并集——已归档任务闭环识别完整）。
+
+### Fixed
+
+- **RISK-056 回放族既有测试失败 30 项清零（FIX-359）**——hook 回放 6 + review evidence 24；非族 3 项转 FIX-363 候选。
+- **归档散文格 13 ID 漏判（FIX-358）**——closed 集并集派生 + M4 突变击杀看护；UnicodeDecodeError 契约例外修正（FIX-341 先例）。
+- **governance-status fixture 陈旧镜像（FIX-362）**——promote 为 byte_copy 投影（合同 27→28 面）。
+- **Check 30 豁免行因果措辞混用（FIX-357）**——归档依据与活体恢复两类来源分流。
+
+**行为变更（用户可感知，B-1~B-2 —— MUST 出现在升级说明）**：
+
+- **B-1**（FEAT-041·入口模板契约 v2）：会话注入的 bootstrap 模板从自包含全文改为「触发器行内 + 明细按需」——启动后的行为规程明细按需加载 `skills/software-project-governance/SKILL.md`「Bootstrap 规程明细」§B0~B5；resident 注入 5,694/5,966 ≤6,000（砍半）。旧安装 `/plugin update` 升级路径兼容（整段替换零残留）。单入口工作区行为约束以主入口 `CLAUDE.md` 为准不变。
+- **B-2**（FEAT-050·注入预算硬门）：`check-injection-budget` 的 resident 层（standard/strict）从 ADVISORY 翻为 **FAIL**——注入面超 6,000 tok 直接判 FAIL（fail-closed）；skill/command 层维持 report-only。回退通道：无 flag 级降级，版本级回滚（与 0.84.0 D-4 同型）。
+
+**如实披露**：① **RISK-055 首判 FAIL 如实保留**（22 混合新旧协议语料样本 p50/p95 超阈，EVD-1089）——DEC-215① 裁决为**非终态**：分域复采样，关闭条件 = 新协议会话积累 ≥3 TTFA 轮后纯净复跑；0.85.0 发布窗不阻塞于 RISK-055（version-plan-0.85.0 时序节）。② **strict 余量 34 tok（0.57%）接受现状**（EVD-1104 裁决：双层预警在位 + hard 硬门守护，trim 重开审查链成本>收益）。③ **批 2 规划数字漂移如实披露**：DEC-211② 规划口径（9,953/10,154）与开工实测（10,718/10,918）漂移 ~+19%——85% 实现率门数学不可达触发两次用户裁决（DEC-218 条件 go / DEC-219 外扩削减面）；自演进摩擦点复盘入账（EVD-1101 → FEAT-042/043/044/045 候选池）。④ **静态版本钉 bump 时点豁免 10 行登记**（`checks/version.py` STATIC_PIN_EXEMPTIONS）：2 行 = FIX-361 设计的 bump 双重信号（fixture 未来钉）；8 行 = 在途未跟踪批次文件（test_baseline_metadata.py ×6 / test_task_row_update.py ×2）——**baseline 面行号随在途批次实时编辑重锚过一次（2026-09-19），批次落库时 MUST 复核全部行号**（stale 豁免告警自动兜底）。⑤ **FEAT-049 属 0.86.0 批 0 前置**（DEC-220/221 轨道）：代码随本候选树入库、0.85.0 零行为消费——本段登记避免「CHANGELOG 与 git log 对照」缺口。⑥ **本版不发布什么**：0.86.0 架构演进全链（DEC-220/221——FEAT-042~047 候选池）、RISK-055 终态裁决（纯净复采未到期）、resident 4K arch 目标与 skill 层翻硬（0.86.0+ 候选）、FIX-363 非族 3 项（loop-runtime-claims 活体耦合）。⑦ **no-overclaim 边界**：official approval / marketplace approval / universal runtime support / external first-session pilot success 均未被主张；非 Windows 平台未验证，本版验收全部在仓库内与隔离 `DSH_HOME`（环境变量重定向至临时目录）下完成；RISK-036（官方收录与外部验证）继续打开，do not claim 1.0.0 production-ready。
+
+**Breaking changes：无**（`skills/software-project-governance/core/VERSIONING.md` L11 口径：无 MUST 规则删除/重命名、无 governance 文件字段格式变更；FEAT-050 翻 hard 属**门禁硬化**——既有预算线从 advisory 到 fail-closed 的强制化，判定方向与 0.84.0「注入预算判定姿态」MINOR 先例同域，L11 pre-1.0.0 括注「1.0.0 之前 Minor 可含有限 Breaking Change」覆盖〔DEC-216 semver 处置段同口径〕；B-1 契约变更保持升级路径兼容——旧安装整段替换零残留）。**MINOR bump 依据**：VERSIONING.md L12「新增 B/C 级自动化能力」（FIX-361 静态钉机检面 + FEAT-052 skill 层独立预算线 + FEAT-049 契约基座）+ L37（FEAT-041 入口模板协议变更——SKILL.md §B 明细承接结构变化）；非纯 bug fix（L38 PATCH 口径不适用）。版本号未占用预留（0.85.0 为 REL-081 承载版本，DEC-216 用户 M-0 裁定 MINOR 两批制）。
+
+版本投影 0.84.0 -> 0.85.0：由 M-1 统一执行——`release-projection --write` 写入 28 个 registry 投影面（5 plugin/marketplace + `package.json` + `core/manifest.json` + 4 hook `@version` + DSH persona 版本行 + `adapters/dsh/AGENTS.md.template` + `commands/governance-init.md` 三模板 `@bootstrap-version`（FEAT-041 契约 v2 后 canonical 标记 4→3，registry count 同步）+ fixture skill/plan + 12 个 fixture 命令面；二次 apply 幂等），`sync_entry_projection --write` 双根（repo-root + e2e-fixture），手工钉 `verify_workflow.py` `REQUIRED_SNIPPETS` 六个版本锚与 JSON 声明面一致，并按 FIX-361 bump 双重信号设计在 `checks/version.py` 登记静态钉豁免 10 行（P3-1 勘正：本段初稿误记 8 行，账本实测 1+6+2+1=10——EVD-1109 承载）。本段随候选打包提交落库，投影前 `check-version-consistency` 处于「CHANGELOG 已入 0.85.0 段而声明面仍 0.84.0」的**预期过渡态**（0.81.0~0.84.0 M-1 先例同型）；`.governance/plan-tracker.md` `工作流版本` 随发布收口由 Coordinator 更新（过渡态 WARN 如实呈现）。
+
+**发布时点**：本条目日期取发布时点（2026-09-19 +0800）；若 M-5 transition/tag 的 taggerdate 与之不同，按 FIX-349 口径（**taggerdate 权威**）勘误对齐，不预填未生成的 tag 事实。
+
 ## [0.84.0] - 2026-09-19
 
 ### 0.84.0 - **轻量入口 + 交互前置**：治理开销审计切片 A 全量落地（REL-080 / FEAT-032~040 / DEC-204~212 / RISK-052~058）

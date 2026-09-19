@@ -1089,5 +1089,209 @@ class ArchiveAwareTerminalGateTests(unittest.TestCase):
                 "完成 (2026-09-17)——候选 `3f4c534`（M-5 transition）"))
 
 
+class TerminalExemptionCauseSplitTests(unittest.TestCase):
+    """FIX-357：Check 30 终态豁免行因果断言按来源分流。
+
+    缺陷（review-FIX-355-CODE-R0 C-01，源判 P1）：4 个终态豁免门（V2 L-A /
+    V2 historical-shape / V5 legacy-key / V5 historical-shape）都以
+    ``task_id in closed`` 触发，但 ``closed`` 有两个因果来源——
+      · 归档依据豁免：id 仅经归档 Task 索引进入 ``closed``（FIX-355 合并：
+        closed = completed ∪ (archived − live_active)，DEC-214②）——
+        tracker 行已迁移，归档终态行即完结证据；
+      · 活体行终态恢复豁免：活体 plan-tracker 行自身断言终态
+        （id ∈ completed）——EVD-892 在案登记修复，非补造。
+    修复前两类豁免行共用同一措辞模板，读者无法区分「任务已归档故豁免」
+    与「活体行终态恢复故豁免」（披露失真）。
+
+    修复边界（不可破）：判定逻辑零改动（closed 集派生 / 4 门结构 / V1~V5
+    口径不变）；分流集中单一模板映射函数
+    ``_terminal_exemption_cause_clause``，不与判定逻辑耦合；
+    fail-safe 路径（fixture / tracker 不可读 / 索引缺失，closed == completed）
+    一律归类 live——无归档贡献就不得声称归档依据。
+    """
+
+    _PLAN_HEADER = (
+        "# 计划\n\n"
+        "### 优先级一览\n\n"
+        "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |\n"
+        "|--------|----|------|------|---------|---------|------|\n"
+    )
+
+    #: 真实归档索引行形态（与 FIX-355 用例同型——「完成 (date)」终态断言）。
+    _ARCHIVE_INDEX = (
+        "# 归档索引\n\n"
+        "## Task 索引\n\n"
+        "| Task ID | 状态 | 版本 | 归档文件 |\n"
+        "|---------|------|------|---------|\n"
+        "| REL-178 | 完成 (2026-09-17)——**M-1~M-8 全链闭环**（日期勘误："
+        "taggerdate 权威）：候选 `3f4c534`（M-1 冻结 + M-3 双半面 R0→R1 全 "
+        "APPROVED_WITH_NOTES/0，机录 REVIEW-REL-178-R1~R4）→ M-5 transition "
+        "`b63584c`（candidate→released + tag `v0.82.0`）→ M-7 push → M-8 归档"
+        "迁移（22 项 evidence，integrity PASS）。EVD-1060/1061/1062 | "
+        "0.82.0 | archive/tasks/v0.1.0~v0.82.0.md |\n"
+    )
+
+    #: 活体终态行（tracker 仍持行、状态格断言完成——EVD-892 活体恢复形态）。
+    _LIVE_COMPLETED_ROW = (
+        "| **P1** | REL-178 | 已闭环（活体行终态恢复） | — | 0.4.0 | "
+        "closed | ✅ 完成 (2026-08-20) |\n"
+    )
+
+    def _live_run(self, plan_rows, evidence, archive_index=None):
+        """live 路径：temp ``.governance`` + 真实文件扫描（与 FIX-355 用例
+        同构——``completed``/``closed`` 均经真实 I/O 派生）。"""
+        import tempfile
+        plan = self._PLAN_HEADER + "".join(plan_rows)
+        with tempfile.TemporaryDirectory() as td:
+            gov = Path(td) / ".governance"
+            gov.mkdir()
+            (gov / "plan-tracker.md").write_text(plan, encoding="utf-8")
+            (gov / "evidence-log.md").write_text(evidence, encoding="utf-8")
+            if archive_index is not None:
+                (gov / "archive").mkdir()
+                (gov / "archive" / "index.md").write_text(
+                    archive_index, encoding="utf-8")
+            with mock.patch.object(vw, "SAMPLE_PATH", gov / "plan-tracker.md"), \
+                 mock.patch.object(vw, "EVIDENCE_PATH", gov / "evidence-log.md"), \
+                 mock.patch.object(vw, "GOVERNANCE_DIR", gov):
+                r = vw.check_review_closure()
+        return r
+
+    @staticmethod
+    def _leading_gap_evidence(task_id="REL-178"):
+        """链从 R1 起（无 R0）——V2 L-A 豁免门候选形态。"""
+        return _evidence_review_row(
+            "REVIEW-{0}-R1".format(task_id), task_id,
+            "APPROVED_WITH_NOTES", "unresolved_blockers=0")
+
+    @staticmethod
+    def _legacy_token_evidence(task_id="REL-178"):
+        """R0 终态 APPROVED_WITH_NOTES + 旧格式 ``unresolved_blocks=0``
+        token——V5 legacy-key 豁免门候选形态（canonical 拼写不匹配 →
+        status=missing + legacy_keys 非空）。"""
+        return _evidence_review_row(
+            "REVIEW-{0}".format(task_id), task_id,
+            "APPROVED_WITH_NOTES", "unresolved_blocks=0")
+
+    # ── 单元面：来源分类器 + 模板映射（单一可单测函数） ────────────────
+
+    def test_classifier_archive_basis(self):
+        """仅经归档侧进入门集（closed 有、completed 无）→ "archive"。"""
+        self.assertEqual(
+            rd._terminal_exemption_source("REL-178", {"REL-178"}, set()),
+            "archive")
+
+    def test_classifier_live_basis(self):
+        """活体行自身断言终态（completed ⊆ closed）→ "live"。"""
+        self.assertEqual(
+            rd._terminal_exemption_source(
+                "REL-178", {"REL-178"}, {"REL-178"}),
+            "live")
+
+    def test_classifier_merged_set_mixed_membership(self):
+        """真实合并门集形态：同一 ``closed`` 内两类来源共存且互不误判。"""
+        closed = {"REL-178", "FIX-900"}
+        completed = {"FIX-900"}
+        self.assertEqual(
+            rd._terminal_exemption_source("REL-178", closed, completed),
+            "archive")
+        self.assertEqual(
+            rd._terminal_exemption_source("FIX-900", closed, completed),
+            "live")
+
+    def test_classifier_id_outside_both_sets_defaults_live(self):
+        """域外边界：不在任何集合的 id 取 fail-safe "live" 缺省（分类函数
+        只在豁免门触发后被调用；门未触发的输入不产生归档声称）。"""
+        self.assertEqual(
+            rd._terminal_exemption_source(
+                "NOPE-1", {"REL-178"}, {"REL-178"}),
+            "live")
+
+    def test_cause_clause_templates_mutually_distinguishable(self):
+        """两类措辞模板互异且各带来源锚（DEC-214② / EVD-892）——读者一眼
+        可辨「归档依据」vs「活体恢复」。"""
+        archive_clause = rd._terminal_exemption_cause_clause(
+            "REL-178", {"REL-178"}, set())
+        live_clause = rd._terminal_exemption_cause_clause(
+            "REL-178", {"REL-178"}, {"REL-178"})
+        self.assertNotEqual(archive_clause, live_clause)
+        self.assertIn("archived task", archive_clause)
+        self.assertIn("archive Task index", archive_clause)
+        self.assertIn("DEC-214②", archive_clause)
+        self.assertIn("live plan-tracker", live_clause)
+        self.assertIn("EVD-892", live_clause)
+
+    # ── 行为面：V2 L-A 门（前导缺口）两类来源分流正例 ──────────────────
+
+    def test_v2_leading_gap_archive_source_discloses_archive_basis(self):
+        """归档依据豁免正例：归档终态行 + 前导缺口 → V2 WARN 因果措辞指
+        归档（DEC-214②），且不含活体措辞。"""
+        r = self._live_run([], self._leading_gap_evidence(),
+                           archive_index=self._ARCHIVE_INDEX)
+        self.assertEqual(r["verdict"], "WARN")
+        v2 = [x for x in r["warnings"]
+              if x["rule"] == "V2" and x["task_id"] == "REL-178"]
+        self.assertTrue(v2, r["warnings"])
+        self.assertIn("closure basis: archived task", v2[0]["reason"])
+        self.assertIn("DEC-214②", v2[0]["reason"])
+        self.assertNotIn("closure basis: live", v2[0]["reason"])
+
+    def test_v2_leading_gap_live_source_discloses_live_basis(self):
+        """活体恢复豁免正例：tracker「✅ 完成」行 + 前导缺口 → 同一门、同一
+        WARN，但因果措辞指活体行（EVD-892），且不含归档措辞。"""
+        r = self._live_run([self._LIVE_COMPLETED_ROW],
+                           self._leading_gap_evidence())
+        self.assertEqual(r["verdict"], "WARN")
+        v2 = [x for x in r["warnings"]
+              if x["rule"] == "V2" and x["task_id"] == "REL-178"]
+        self.assertTrue(v2, r["warnings"])
+        self.assertIn("closure basis: live plan-tracker terminal row",
+                      v2[0]["reason"])
+        self.assertIn("EVD-892", v2[0]["reason"])
+        self.assertNotIn("closure basis: archived", v2[0]["reason"])
+
+    # ── 行为面：V5 legacy-key 门同样分流（第二豁免门抽样） ─────────────
+
+    def test_v5_legacy_key_archive_source_discloses_archive_basis(self):
+        """V5 门归档来源正例：归档终态任务 + 旧格式 token → WARN 带归档
+        因果措辞。"""
+        r = self._live_run([], self._legacy_token_evidence(),
+                           archive_index=self._ARCHIVE_INDEX)
+        v5 = [x for x in r["warnings"]
+              if x["rule"] == "V5" and x["task_id"] == "REL-178"]
+        self.assertTrue(v5, r["warnings"])
+        self.assertIn("closure basis: archived task", v5[0]["reason"])
+        self.assertIn("DEC-214②", v5[0]["reason"])
+        self.assertNotIn("closure basis: live", v5[0]["reason"])
+
+    def test_v5_legacy_key_live_source_discloses_live_basis(self):
+        """V5 门活体来源正例：tracker 终态行 + 旧格式 token → WARN 带活体
+        因果措辞（同一门、不同来源、措辞可辨）。"""
+        r = self._live_run([self._LIVE_COMPLETED_ROW],
+                           self._legacy_token_evidence())
+        v5 = [x for x in r["warnings"]
+              if x["rule"] == "V5" and x["task_id"] == "REL-178"]
+        self.assertTrue(v5, r["warnings"])
+        self.assertIn("closure basis: live plan-tracker terminal row",
+                      v5[0]["reason"])
+        self.assertIn("EVD-892", v5[0]["reason"])
+        self.assertNotIn("closure basis: archived", v5[0]["reason"])
+
+    # ── 边界：fail-safe 路径（closed == completed）永不声称归档依据 ────
+
+    def test_fixture_path_rows_carry_live_clause_never_archive(self):
+        """fixture 路径（closed == completed，无归档贡献）：豁免行措辞只能
+        指活体行——分类器 fail-safe 缺省的端到端看护。"""
+        r = vw.check_review_closure(
+            review_sequence=_router_legacy_sequences(),
+            plan_tracker_completed=_ROUTER_COMPLETED)
+        v2 = [w for w in r["warnings"] if w["rule"] == "V2"
+              and w["task_id"] == "ARCH-001"]
+        self.assertTrue(v2, r["warnings"])
+        self.assertIn("closure basis: live plan-tracker terminal row",
+                      v2[0]["reason"])
+        self.assertNotIn("closure basis: archived", v2[0]["reason"])
+
+
 if __name__ == "__main__":
     unittest.main()

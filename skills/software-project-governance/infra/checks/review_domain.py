@@ -2028,6 +2028,60 @@ def _build_review_sequence(review_entries, legacy_files=None):
     return sequences
 
 
+# FIX-357: Check 30's four terminal exemption gates (V2 L-A leading-gap,
+# V2 historical-shape, V5 legacy-key, V5 historical-shape) all fire on
+# ``task_id in closed`` — but ``closed`` merges TWO causal sources with
+# different stories, and pre-FIX-357 exemption rows used one shared wording
+# for both, so a reader could not tell 「任务已归档故豁免」 from
+# 「活体行终态恢复故豁免」:
+#   · "archive" — the id entered ``closed`` ONLY through the archive Task
+#     index (FIX-355: closed = completed ∪ (archived − live_active),
+#     DEC-214②): the tracker row is gone; the archive terminal row IS the
+#     closure evidence.
+#   · "live" — the live plan-tracker row itself asserts the terminal state
+#     (the id is in ``completed``); the EVD-892 in-case registered recovery,
+#     not the archive, is the closure evidence. Every fail-safe path that
+#     collapses ``closed`` back to ``completed`` (fixture path, fragile
+#     tracker, unreadable index) classifies "live" by construction — the
+#     archive contributed nothing there, so no row can ever claim an archive
+#     basis it does not have.
+# Pure OUTPUT split: exemption eligibility (set derivation, gate structure,
+# V1~V5 verdicts) is untouched — only the disclosure wording branches.
+_TERMINAL_EXEMPTION_SOURCE_CLAUSE = {
+    "archive": (
+        "closure basis: archived task — archive Task index terminal row "
+        "(DEC-214②)"),
+    "live": (
+        "closure basis: live plan-tracker terminal row (EVD-892)"),
+}
+
+
+def _terminal_exemption_source(task_id, closed, completed):
+    """FIX-357: classify WHICH causal source put a task into ``closed``.
+
+    ``closed`` ⊇ ``completed`` holds on every path that builds these sets
+    (the archive side only ever adds ids), so membership in ``completed``
+    decides: an id in the merged gate set but NOT in the live completed set
+    came in through the archive index → "archive"; anything else — including
+    an id in neither set, which can never reach an exemption gate — takes the
+    fail-safe "live" default (live-row basis, the pre-FIX-355 semantic).
+    """
+    if task_id in closed and task_id not in completed:
+        return "archive"
+    return "live"
+
+
+def _terminal_exemption_cause_clause(task_id, closed, completed):
+    """FIX-357: the single unit-testable source→wording template mapping.
+
+    Exemption rows embed the returned clause in their ``reason``; ALL
+    branching between the two causal templates lives here, so judgment
+    logic stays wording-free and the wording stays judgment-free.
+    """
+    return _TERMINAL_EXEMPTION_SOURCE_CLAUSE[
+        _terminal_exemption_source(task_id, closed, completed)]
+
+
 def check_review_closure(review_sequence=None, plan_tracker_completed=None,
                          routing_table=None, legacy_files=None):
     """FIX-174 (DEC-094): Check 30 — review closure state-machine validation.
@@ -2179,13 +2233,17 @@ def check_review_closure(review_sequence=None, plan_tracker_completed=None,
             # L-A downgrade only via the completed-state gate.
             if _missing_rounds_are_leading(missing_rounds, rounds) \
                     and task_id in closed:  # FIX-355: archive-aware terminal gate
+                # FIX-357: disclose the closure source (archive vs live row);
+                # the eligibility predicate above is untouched.
+                cause = _terminal_exemption_cause_clause(
+                    task_id, closed, completed)
                 result["warnings"].append({
                     "rule": "V2",
                     "task_id": task_id,
                     "reason": f"round continuity broken — missing R{sorted(missing_rounds)} "
                               f"— legacy leading round gap: chain starts at R{min(rounds)} "
                               f"(R0 predates the review record of a closed task, audit-148 "
-                              f"§3.1 ARCH-001/DEV-002 pattern); downgraded",
+                              f"§3.1 ARCH-001/DEV-002 pattern); {cause}; downgraded",
                 })
                 continue
             # FIX-291 / FIX-281① (router EV-066 V2×9): historical FILE shape —
@@ -2202,6 +2260,9 @@ def check_review_closure(review_sequence=None, plan_tracker_completed=None,
             if task_id in closed and all(  # FIX-355: archive-aware terminal gate
                     (rounds[r].get("source_format") == "historical")
                     for r in rounds):
+                # FIX-357: disclose the closure source (archive vs live row).
+                cause = _terminal_exemption_cause_clause(
+                    task_id, closed, completed)
                 result["warnings"].append({
                     "rule": "V2",
                     "task_id": task_id,
@@ -2209,7 +2270,7 @@ def check_review_closure(review_sequence=None, plan_tracker_completed=None,
                               f"— historical file shape: chain derives from "
                               f"pre-FIX-174 handwritten review-{task_id}-*.md "
                               f"records (no machine marker/date field, FIX-281① "
-                              f"router EV-066 pattern); downgraded",
+                              f"router EV-066 pattern); {cause}; downgraded",
                 })
                 continue
             result["violations"].append({
@@ -2371,6 +2432,9 @@ def check_review_closure(review_sequence=None, plan_tracker_completed=None,
                     and not legacy_nonzero and not legacy_unparsed
                     # FIX-355: archive-aware terminal gate
                     and task_id in closed):
+                # FIX-357: disclose the closure source (archive vs live row).
+                cause = _terminal_exemption_cause_clause(
+                    task_id, closed, completed)
                 result["warnings"].append({
                     "rule": "V5",
                     "task_id": task_id,
@@ -2379,7 +2443,7 @@ def check_review_closure(review_sequence=None, plan_tracker_completed=None,
                               f"on a closed task — old review format "
                               f"un-migrated, no machine unresolved_blockers=0 "
                               f"token (audit-148 §3.1 ARCH-002 pattern); "
-                              f"downgraded",
+                              f"{cause}; downgraded",
                 })
                 continue
             # FIX-291 / FIX-281① (router EV-066 V5×2): historical FILE shape —
@@ -2398,6 +2462,9 @@ def check_review_closure(review_sequence=None, plan_tracker_completed=None,
                     and (blocker_status == "missing"
                          or _blocker_evidence_provably_zero(
                              blocker_evidence))):
+                # FIX-357: disclose the closure source (archive vs live row).
+                cause = _terminal_exemption_cause_clause(
+                    task_id, closed, completed)
                 result["warnings"].append({
                     "rule": "V5",
                     "task_id": task_id,
@@ -2408,7 +2475,7 @@ def check_review_closure(review_sequence=None, plan_tracker_completed=None,
                               + (" — prose-attached zero value"
                                  if blocker_status == "invalid" else "")
                               + f", FIX-281① router EV-066 pattern); "
-                              f"downgraded",
+                              f"{cause}; downgraded",
                 })
                 continue
             if blocker_status != "valid" or blocker_value != 0:

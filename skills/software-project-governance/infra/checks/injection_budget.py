@@ -44,8 +44,14 @@ Four measurement decisions, each deliberate:
    brought all three profiles under it (EVD-1104 baseline: lightweight 4,216 /
    standard 5,694 / strict 5,966), so an over-budget resident set is now an
    issue + FAIL — future growth fails closed instead of rebounding silently.
-   The ``skill``/``command`` tiers stay report-only: their budget face is a
-   separate scheduled task and is NOT folded into the resident gate here.
+   The ``skill``/``command`` tiers stay report-only and are NOT folded into
+   the resident gate here. The skill tier carries its OWN budget line
+   (16,000 tokens — FEAT-052): the measured baseline is 14,456 tokens, the
+   deliberate growth of FEAT-041's progressive-disclosure migration, so the
+   independent budget is data on the policy row (``budget_tokens`` beside the
+   explicit ``report-only`` gate) — the posture does not move; flipping it to
+   ``hard`` is a 0.86.0+ candidate to be carried via FEAT-047's
+   BaselineMetadata, not by this table.
 
 Layer placement: this is a measurement + render leaf (``checks`` package), not
 engine code. The ArchGuard ratchet forbids growing the engine's own LOC and
@@ -161,14 +167,23 @@ INJECTION_BUDGET_SURFACES = (
     },
 )
 
-#: Per-tier gate posture. ``hard`` counts into ``issues`` and can FAIL the
-#: command; ``advisory`` is reported and can only yield the ADVISORY verdict;
-#: ``report-only`` is measurement only. The resident tier flipped from
-#: ``advisory`` to ``hard`` in FEAT-050 (DEC-211③): the EVD-1104 post-slimming
-#: baseline holds all three profiles within budget, so an over-budget resident
-#: set now blocks (any rebound fails closed). The skill tier stays
-#: ``report-only`` — a separate budget face, not folded into the resident
-#: gate (pinned by test).
+#: Per-tier gate posture + budget line. ``hard`` counts into ``issues`` and
+#: can FAIL the command; ``advisory`` is reported and can only yield the
+#: ADVISORY verdict; ``report-only`` is measurement only. The resident tier
+#: flipped from ``advisory`` to ``hard`` in FEAT-050 (DEC-211③): the EVD-1104
+#: post-slimming baseline holds all three profiles within budget, so an
+#: over-budget resident set now blocks (any rebound fails closed).
+#:
+#: ``budget_tokens`` (FEAT-052): a tier may carry its OWN budget line — the
+#: tier aggregate and its surfaces are then priced and verdicted against THAT
+#: line instead of the resident ``--budget-tokens`` value. The skill tier's
+#: 16,000-token line is exactly that: data fields on an explicit
+#: ``report-only`` row (measured baseline 14,456 — FEAT-041's
+#: progressive-disclosure growth), so the independent budget is visible and
+#: pinned WITHOUT moving the posture; flipping it to ``hard`` is a 0.86.0+
+#: candidate carried via FEAT-047's BaselineMetadata. A tier without the
+#: field keeps following the resident budget (the command tier: measured
+#: 3,466 tok, far under the resident line — no evidenced independent need).
 BUDGET_TIER_POLICY = {
     "resident": {
         "description": "static injection surface (before any user interaction)",
@@ -177,10 +192,15 @@ BUDGET_TIER_POLICY = {
     "skill": {
         "description": "progressive load — entry skill",
         "gate": "report-only",
+        # Own budget line, NOT the resident 6K (FEAT-052; measured 14,456).
+        "budget_tokens": 16000,
     },
     "command": {
         "description": "progressive load — command documentation",
         "gate": "report-only",
+        # No independent budget line: measured 3,466 tok, far under the
+        # resident line — no evidenced need (FEAT-052 decision). Add a
+        # ``budget_tokens`` field here only with a measured justification.
     },
 }
 
@@ -510,7 +530,9 @@ def check_injection_budget(root=None, profile=None, budget_tokens=None):
     Returns a structured report: per-surface bytes/chars/CJK/both token prices,
     tier aggregates, ``over_budget_tiers``, ``issues`` (only from hard-gated
     tiers) and one of the verdicts PASS / ADVISORY / FAIL. Surfaces that fail
-    to resolve are explicit issues, never zero-priced silently.
+    to resolve are explicit issues, never zero-priced silently. A tier with
+    its own ``budget_tokens`` policy field (FEAT-052) is priced and verdicted
+    against that line; tiers without one follow the resident budget.
     """
     root = Path(root) if root is not None else _DEFAULT_ROOT
     profile = profile or INJECTION_BUDGET_DEFAULT_PROFILE
@@ -520,11 +542,18 @@ def check_injection_budget(root=None, profile=None, budget_tokens=None):
             f"{INJECTION_BUDGET_PROFILES}")
     budget = normalize_token_budget(budget_tokens)
 
+    # FEAT-052: per-tier effective budget line — a policy row with its own
+    # ``budget_tokens`` field prices and verdicts against that line; every
+    # other tier keeps following the resident ``--budget-tokens`` value.
+    tier_budgets = {name: policy.get("budget_tokens", budget)
+                    for name, policy in BUDGET_TIER_POLICY.items()}
+
     rows = []
     for surface in set_injection_budget_surface_profiles(profile):
         text = load_injection_surface(surface, root)
         cjk = count_cjk_chars(text)
         tokens = estimate_surface_tokens(text)
+        tier_budget = tier_budgets.get(surface["tier"], budget)
         rows.append({
             "name": surface["name"],
             "path": surface["path"],
@@ -539,11 +568,11 @@ def check_injection_budget(root=None, profile=None, budget_tokens=None):
             "tokens": tokens,
             "tokens_host": estimate_surface_tokens_host(text),
             "sha256_16": surface_content_hash(text),
-            "budget_tokens": budget,
+            "budget_tokens": tier_budget,
             "resolved": bool(text),
-            "over_budget": bool(text) and tokens > budget,
+            "over_budget": bool(text) and tokens > tier_budget,
             "status": ("unresolved" if not text
-                       else "over" if tokens > budget else "ok"),
+                       else "over" if tokens > tier_budget else "ok"),
         })
 
     issues = []
@@ -558,6 +587,7 @@ def check_injection_budget(root=None, profile=None, budget_tokens=None):
     for name, policy in BUDGET_TIER_POLICY.items():
         rows_in_tier = [row for row in rows if row["tier"] == name]
         tokens = sum(row["tokens"] for row in rows_in_tier)
+        tier_budget = tier_budgets[name]
         tiers[name] = {
             "tier": name,
             "description": policy["description"],
@@ -567,8 +597,8 @@ def check_injection_budget(root=None, profile=None, budget_tokens=None):
             "cjk": sum(row["cjk"] for row in rows_in_tier),
             "tokens": tokens,
             "tokens_host": sum(row["tokens_host"] for row in rows_in_tier),
-            "budget_tokens": budget,
-            "over_budget": tokens > budget,
+            "budget_tokens": tier_budget,
+            "over_budget": tokens > tier_budget,
         }
     # Surfaces whose tier is not declared anywhere: never drop them silently.
     for row in rows:
@@ -589,8 +619,12 @@ def check_injection_budget(root=None, profile=None, budget_tokens=None):
     for name, tier in tiers.items():
         if not tier["over_budget"]:
             continue
+        # Headline quotes the tier's OWN effective line (FEAT-052 review F1):
+        # a tier carrying its own budget_tokens must never report the
+        # resident line in its overrun note.
         headline = (f"'{name}' tier over budget: {tier['tokens']} > "
-                    f"{budget} tokens by {tier['tokens'] - budget} "
+                    f"{tier['budget_tokens']} tokens by "
+                    f"{tier['tokens'] - tier['budget_tokens']} "
                     f"(surfaces: {', '.join(tier['surfaces'])})")
         if injection_budget_tier_gate(name) == "hard":
             issues.append(headline + " — hard gate")
@@ -656,7 +690,7 @@ def format_budget_report(result, indent="  ", frame=None):
         lines.append(
             f"{indent}{row['name']:<26} {row['tier']:<9} {row['bytes']:>7} "
             f"{row['chars']:>7} {row['cjk']:>6} {row['tokens']:>6} "
-            f"{row['tokens_host']:>8} {result['budget_tokens']:>7} "
+            f"{row['tokens_host']:>8} {row['budget_tokens']:>7} "
             f"{row['status']:<10} {row['sha256_16'] or '-'}")
     for name, tier in result["tiers"].items():
         lines.append(f"{indent}TOTAL {name:<20} {tier['bytes']:>7} {'':>7} "
@@ -667,6 +701,14 @@ def format_budget_report(result, indent="  ", frame=None):
                  f"{result['grand_total_tokens_host']:>8}")
     lines.append(f"{indent}Tokenizer: {result['tokenizer']['calibration']}")
     lines.append(f"{indent}Baseline:  {result['tokenizer']['host_baseline']}")
+    # FEAT-052: each tier's own effective budget line, so the skill tier's
+    # independent 16,000 budget is visible in both the standalone CLI report
+    # and the aggregate Check 33 rendering (same function — cannot diverge).
+    tier_budgets_line = " · ".join(
+        f"{name}={tier['budget_tokens']}/{tier['gate']}"
+        for name, tier in result["tiers"].items())
+    lines.append(f"{indent}Tier budgets (per-tier line, FEAT-052): "
+                 f"{tier_budgets_line}")
     gated_over = result["gated_over_budget_tiers"]
     report_only_over = [name for name in result["over_budget_tiers"]
                         if name not in gated_over]
@@ -706,7 +748,9 @@ def add_arguments(parser):
         "--budget-tokens", type=int, default=None,
         help=f"Token budget for the resident injection tier "
              f"(default {INJECTION_BUDGET_TOKENS}; resident hard gate "
-             f"(FEAT-050), arch target 4K)")
+             f"(FEAT-050), arch target 4K. Tiers carrying their own "
+             f"budget_tokens policy line — skill: 16000 (FEAT-052) — "
+             f"verdict against that line instead)")
     parser.add_argument(
         "--profile", default=INJECTION_BUDGET_DEFAULT_PROFILE,
         choices=list(INJECTION_BUDGET_PROFILES),

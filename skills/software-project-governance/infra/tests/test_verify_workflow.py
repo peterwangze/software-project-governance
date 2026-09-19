@@ -20310,15 +20310,17 @@ class Feat039InjectionBudgetTests(unittest.TestCase):
                       vw.INJECTION_BUDGET_PROFILES)
 
     def test_live_resident_baseline_is_within_budget(self):
-        """The reference (lightweight) resident set must stay within the
-        slice-A relaxed budget of 6K tokens.
+        """The reference (lightweight) resident set must stay within the 6K
+        hard-gate budget (FEAT-050/DEC-211③): an over-budget resident set is
+        an issue + FAIL, no longer an advisory note — the gated/report-only
+        rendering split is exercised by
+        ``test_report_separates_gated_from_report_only_over_budget``.
 
-        NOTE (honest baseline, AUDIT-154 §8): the DEFAULT standard profile is
-        NOT within it — its reduction is outside this task's boundary and is
-        reported as an advisory candidate instead (see the next test). The
-        threshold here is derived from the same run so that normal growth does
-        not redden the suite; only a whole surface going missing does.
-        """
+        The threshold here is derived from the same run so that normal growth
+        does not redden the suite; only a whole surface going missing does.
+        (Docstring refreshed by FEAT-052 / review-FEAT-050-CODE-R0 F-3: the
+        stale slice-A wording and the see-also pointing at an advisory
+        assertion that no longer exists.)"""
         result = vw.check_injection_budget()
         budget = vw.INJECTION_BUDGET_TOKENS
         resident = result["tiers"]["resident"]
@@ -20338,8 +20340,19 @@ class Feat039InjectionBudgetTests(unittest.TestCase):
         FEAT-050 hard flip (DEC-211③): the resident tier is a hard gate, so its
         over-budget condition is an issue + FAIL; the separation rendering is
         still exercised at a reduced budget where the resident tier overruns
-        while the skill tier stays a report-only measurement."""
-        result = vw.check_injection_budget(profile="standard", budget_tokens=5000)
+        while the skill tier stays a report-only measurement.
+        FEAT-052 rebase: the skill tier now carries its OWN 16,000-token line
+        (no longer the resident budget), so the test lowers that policy line
+        for the duration of the call (try/finally restore) to reproduce the
+        report-only overrun."""
+        skill_policy = vw.BUDGET_TIER_POLICY["skill"]
+        saved_skill_budget = skill_policy["budget_tokens"]
+        skill_policy["budget_tokens"] = 1000
+        try:
+            result = vw.check_injection_budget(profile="standard",
+                                               budget_tokens=5000)
+        finally:
+            skill_policy["budget_tokens"] = saved_skill_budget
         self.assertIn("resident", result["over_budget_tiers"])
         self.assertIn("skill", result["over_budget_tiers"])
         self.assertNotIn("skill", result["gated_over_budget_tiers"])
@@ -20409,20 +20422,15 @@ class Feat039InjectionBudgetTests(unittest.TestCase):
         self.assertEqual(vw.BUDGET_TIER_POLICY["resident"]["gate"], "hard")
         self.assertEqual(vw.BUDGET_TIER_POLICY["skill"]["gate"], "report-only")
 
-    def test_budget_tier_is_not_a_hard_fail_while_advisory(self):
-        """Fail-closed semantics: the moment the resident tier's policy flips
-        to hard, an over-budget resident set MUST become an issue + FAIL.
-        FEAT-041 rebase: the live standard set now fits the default budget, so
-        the over-budget condition is exercised at a reduced budget."""
-        policy = vw.BUDGET_TIER_POLICY["resident"]
-        original = policy["gate"]
-        policy["gate"] = "hard"
-        try:
-            result = vw.check_injection_budget(profile="standard", budget_tokens=5000)
-            self.assertTrue(result["issues"])
-            self.assertEqual(result["verdict"], "FAIL")
-        finally:
-            policy["gate"] = original
+    # review-FEAT-050-CODE-R0 F-2: the former
+    # ``test_budget_tier_is_not_a_hard_fail_while_advisory`` was REMOVED here
+    # (FEAT-052) — after the DEC-211③ flip its name described a posture that
+    # no longer exists and its ``policy["gate"] = "hard"`` assignment was a
+    # no-op (the row already reads ``hard``). Its FAIL-motion face is carried
+    # by ``test_report_separates_gated_from_report_only_over_budget`` above
+    # (same profile/budget, fuller assertions incl. the CLI face) and by
+    # tests #6/#7 of tests/test_injection_budget_gate.py; its posture face by
+    # that suite's #1/#2. No assertion surface was lost.
 
     def test_dynamic_tiers_are_measured_but_never_added_to_resident(self):
         """On-demand surfaces (skill entry / command doc) are measured for

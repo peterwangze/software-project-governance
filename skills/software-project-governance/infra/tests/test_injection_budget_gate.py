@@ -26,6 +26,19 @@ This suite pins the FLIP and its four contracted consequences:
 plus review-FEAT-039-CODE-R1 P3-3 (deferred there as untested, landed here by
 the DEC-211③ same-commit discipline): ``injection_budget_tier_gate`` fails
 closed to ``hard`` for any tier missing from the policy table.
+
+FEAT-052 (batch 2.4 ⑧, 0.85.0 — ``Feat052SkillTierBudgetTests`` below) adds
+the skill tier's OWN budget face: a 16,000-token ``budget_tokens`` field on
+the explicit ``report-only`` policy row (measured baseline 14,456 — the
+deliberate growth of FEAT-041's progressive-disclosure migration). The
+posture stays report-only and the row stays data; flipping it to ``hard`` is
+a 0.86.0+ candidate to be carried via FEAT-047's BaselineMetadata. Review
+cleanup carried in the same batch (review-FEAT-050-CODE-R0 F-2): the stale
+``test_budget_tier_is_not_a_hard_fail_while_advisory`` in
+test_verify_workflow.py was REMOVED — its FAIL-motion face lives in
+``test_report_separates_gated_from_report_only_over_budget`` (same file) and
+in this suite's #6/#7, its posture face in this suite's #1/#2; F-3's stale
+docstring on ``test_live_resident_baseline_is_within_budget`` was refreshed.
 """
 
 import io
@@ -102,9 +115,18 @@ class Feat050ResidentHardGateTests(unittest.TestCase):
         """③ Behavior face of report-only: with every tier driven over budget
         at once, the issues may name the resident tier (hard) but never the
         skill/command surfaces — a measurement overrun stays out of the
-        verdict path (AUDIT-154 §8 keeps the static budget separate)."""
-        result = ib.check_injection_budget(profile="lightweight",
-                                           budget_tokens=1)
+        verdict path (AUDIT-154 §8 keeps the static budget separate).
+        FEAT-052 rebase: the skill tier now verdicts against its OWN 16,000
+        line, so the overrun is reproduced by lowering that policy line for
+        the duration of the call (try/finally restore)."""
+        skill_policy = ib.BUDGET_TIER_POLICY["skill"]
+        saved_skill_budget = skill_policy["budget_tokens"]
+        skill_policy["budget_tokens"] = 1000
+        try:
+            result = ib.check_injection_budget(profile="lightweight",
+                                               budget_tokens=1)
+        finally:
+            skill_policy["budget_tokens"] = saved_skill_budget
         self.assertIn("skill", result["over_budget_tiers"])
         self.assertIn("command", result["over_budget_tiers"])
         self.assertNotIn("skill", result["gated_over_budget_tiers"])
@@ -190,6 +212,65 @@ class Feat050ResidentHardGateTests(unittest.TestCase):
                 self.assertEqual(result["issues"], [])
                 self.assertEqual(result["gated_over_budget_tiers"], [])
                 self.assertEqual(result["verdict"], "PASS")
+
+
+class Feat052SkillTierBudgetTests(unittest.TestCase):
+    """FEAT-052: the skill tier's own 16,000-token budget line — report-only.
+
+    Complementary to (not a repeat of) the ③ pins above: #4 pins the POSTURE
+    (gate == report-only), #5 pins skill staying out of the issue path while
+    the RESIDENT tier simultaneously fails at a global budget=1. These two
+    pin the INDEPENDENT LINE itself: its value, its per-tier verdicting, and
+    the pure-PASS behavior when ONLY the skill line is crossed.
+    """
+
+    def test_skill_tier_carries_its_own_16000_budget_line(self):
+        """The independent line exists as data: 16,000 tokens on the explicit
+        ``report-only`` row (FEAT-052; measured baseline 14,456 — FEAT-041's
+        progressive-disclosure growth), and the per-tier verdict actually
+        uses it — the live skill tier (14,456) is within ITS OWN budget even
+        though it exceeds the resident 6K, so the tier neither over-budgets
+        nor prints an overrun note. Flipping the posture stays a 0.86.0+
+        candidate via FEAT-047's BaselineMetadata, NOT this row."""
+        self.assertEqual(ib.BUDGET_TIER_POLICY["skill"]["budget_tokens"],
+                         16000)
+        self.assertEqual(ib.BUDGET_TIER_POLICY["skill"]["gate"],
+                         "report-only")
+        result = ib.check_injection_budget(profile="lightweight")
+        skill = result["tiers"]["skill"]
+        self.assertEqual(skill["budget_tokens"], 16000)
+        self.assertFalse(skill["over_budget"])
+        self.assertNotIn("note", skill)
+        self.assertNotIn("skill", result["over_budget_tiers"])
+        skill_row = next(s for s in result["surfaces"]
+                         if s["name"] == "entry-skill")
+        self.assertEqual(skill_row["budget_tokens"], 16000)
+        self.assertEqual(skill_row["status"], "ok")
+        self.assertEqual(result["verdict"], "PASS")
+
+    def test_skill_overrun_stays_out_of_the_verdict_path_at_its_own_line(self):
+        """Behavior face of the independent line: when ONLY the skill line is
+        crossed (derived-threshold pattern — the policy line lowered one
+        token below the measured 14,456; no template rewritten), the overrun
+        is measured and rendered as report-only but produces NO issue and
+        does NOT move the verdict — the resident set is within budget, so
+        the gate stays a plain PASS. This is the pure-skill counterpart of
+        #5 (where the resident tier fails simultaneously): the issue channel
+        and the verdict channel are both closed to a report-only overrun."""
+        baseline = ib.check_injection_budget(profile="lightweight")
+        skill_tokens = baseline["tiers"]["skill"]["tokens"]
+        skill_policy = ib.BUDGET_TIER_POLICY["skill"]
+        saved = skill_policy["budget_tokens"]
+        skill_policy["budget_tokens"] = skill_tokens - 1
+        try:
+            result = ib.check_injection_budget(profile="lightweight")
+        finally:
+            skill_policy["budget_tokens"] = saved
+        self.assertEqual(skill_policy["budget_tokens"], 16000)
+        self.assertIn("skill", result["over_budget_tiers"])
+        self.assertNotIn("skill", result["gated_over_budget_tiers"])
+        self.assertEqual(result["issues"], [])
+        self.assertEqual(result["verdict"], "PASS")
 
 
 if __name__ == "__main__":

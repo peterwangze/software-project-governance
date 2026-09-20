@@ -12442,8 +12442,14 @@ def parse_impact_analysis_entries():
             continue
         evd_id = parts[1]
         task_id = parts[2]
-        evd_type = parts[4] if len(parts) > 4 else ""
-        description = parts[5] if len(parts) > 5 else ""
+        # FIX-368: LIVE evidence-log column layout is
+        # parts[3]=type, parts[4]=description, parts[5]=fact basis,
+        # parts[6]=file location (10 data cells -> 12 split parts incl. the
+        # leading/trailing empties). The pre-fix parts[4]/parts[5] read was a
+        # +1 offset that matched 目标对齐/用户影响 against the fact-basis
+        # column — the EVD-1118 false-FAIL root cause in Check 16/17.
+        evd_type = parts[3] if len(parts) > 3 else ""
+        description = parts[4] if len(parts) > 4 else ""
         file_location = parts[6] if len(parts) > 6 else ""
 
         covered_ids = expand_task_ids(task_id) if task_id and re.search(r"[A-Z]+-\d+", task_id) else set()

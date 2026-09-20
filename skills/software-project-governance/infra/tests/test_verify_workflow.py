@@ -11792,11 +11792,149 @@ class Fix295Check10RecordDocScopeTests(unittest.TestCase):
 def _impact_evidence_row(evd_id, task_id, description, file_location="skills/test.md"):
     """Build an evidence-log row with type=影响分析.
 
-    Column layout matching evidence-log.md:
-      | EVD-xxx | TASK-xxx | category | type | description | file_loc | author | date | gate | notes |
-    parts[1]=evd_id  parts[2]=task_id  parts[3]=cat  parts[4]=type  parts[5]=desc  parts[6]=file
+    Column layout matching the LIVE evidence-log.md rows (FIX-368):
+      | EVD-xxx | TASK-xxx | type | description | fact basis | file_loc | author | date | gate | notes |
+    parts[1]=evd_id  parts[2]=task_id  parts[3]=type  parts[4]=description
+    parts[5]=fact basis  parts[6]=file_location
+
+    FIX-368: the pre-fix fixture emitted the legacy cat|type|desc layout
+    (type at parts[4]) which mirrored the engine's off-by-one column read and
+    hid the EVD-1118 false-FAIL class from Check 16/17.
     """
-    return f"| {evd_id} | {task_id} | 架构 | 影响分析 | {description} | {file_location} | Developer | 2026-05-02 | G11 | PASS |"
+    return f"| {evd_id} | {task_id} | 影响分析 | {description} |  | {file_location} | Developer | 2026-05-02 | G11 | PASS |"
+
+
+def _evidence_row_live(evd_id, task_id, evd_type="实现", description="test",
+                       fact_basis="", file_location="skills/test.py",
+                       author="Developer", date_str="2026-05-02",
+                       gate="G4", notes="PASS"):
+    """FIX-368: generic evidence row in the LIVE evidence-log column layout.
+
+    parts[1]=evd_id  parts[2]=task_id  parts[3]=type  parts[4]=description
+    parts[5]=fact basis  parts[6]=file_location — used by tests that exercise
+    parse_impact_analysis_entries consumers (Check 16/17) so engine column
+    reads stay pinned to the live table shape.
+    """
+    return (
+        f"| {evd_id} | {task_id} | {evd_type} | {description} | {fact_basis} | "
+        f"{file_location} | {author} | {date_str} | {gate} | {notes} |"
+    )
+
+
+class ParseImpactEntriesColumnLayoutTests(unittest.TestCase):
+    """FIX-368: parse_impact_analysis_entries must read the LIVE evidence-log
+    column layout — parts[3]=type, parts[4]=description, parts[5]=fact basis,
+    parts[6]=file location (10 data cells -> 12 split parts incl. the leading
+    and trailing empties).
+
+    Pre-fix regression (EVD-1118 double false FAIL in Check 16/17): the engine
+    read parts[4]/parts[5] (description/fact-basis columns) as type/description,
+    so the 目标对齐/用户影响 regexes were matched against the fact-basis column
+    text and always missed.
+    """
+
+    DESC = (
+        "目标对齐：本变更为 FIX-368 列序回归测试数据，描述列承载目标对齐与用户影响字段，"
+        "长度满足三十字符门槛。"
+        "用户影响：获得=plugin update, 感知=误报消失, 体验变化=正向, 迁移指南=不需要"
+    )
+    FACT = "事实依据：红绿翻转实测输出（本测试的 fixture 数据）"
+    FILE_LOC = "docs/reviews/review-FIX-368-CODE-R0.md"
+
+    @staticmethod
+    def _live_row(evd_id, task_id, evd_type, description, fact, file_location):
+        """One LIVE-shape evidence row (same shape as machine-recorded
+        EVD-1118/EVD-1119 rows in the real evidence-log)."""
+        return (
+            f"| {evd_id} | {task_id} | {evd_type} | {description} | {fact} | "
+            f"{file_location} | Coordinator | 2026-09-20 | G11 | ✅ 完成 |"
+        )
+
+    def _entries_for(self, tmpdir, row, plan_lines=None):
+        root = Path(tmpdir)
+        gov = root / ".governance"; gov.mkdir(parents=True, exist_ok=True)
+        sp = gov / "plan-tracker.md"
+        ep = gov / "evidence-log.md"
+        sp.write_text("\n".join(plan_lines if plan_lines is not None else [
+            "# 计划跟踪",
+            "## 项目配置",
+            "- **项目目标**: 提供一套完整的软件项目治理工作流插件",
+        ]), encoding="utf-8")
+        ep.write_text(row, encoding="utf-8")
+        with patch.object(vw, "SAMPLE_PATH", sp), \
+             patch.object(vw, "EVIDENCE_PATH", ep):
+            return vw.parse_impact_analysis_entries()
+
+    def test_explicit_impact_type_read_from_type_column(self):
+        """type=影响分析 in parts[3] enters the check set even with a
+        non-product file location; description/file_location take their own
+        columns (pre-fix: type column misread -> 0 entries)."""
+        with tempfile.TemporaryDirectory() as td:
+            row = self._live_row("EVD-720", "FIX-200", "影响分析",
+                                 self.DESC, self.FACT, self.FILE_LOC)
+            entries = self._entries_for(td, row)
+            self.assertEqual(len(entries), 1)
+            self.assertEqual(entries[0]["evd_id"], "EVD-720")
+            self.assertEqual(entries[0]["task_id"], "FIX-200")
+            self.assertEqual(entries[0]["description"], self.DESC)
+            self.assertEqual(entries[0]["file_location"], self.FILE_LOC)
+
+    def test_product_delivery_type_read_from_type_column(self):
+        """type∈{实现,修复,...} in parts[3] + hot task + non-product file
+        location still enters (product_delivery_by_current_task_type — a dead
+        branch pre-fix); description takes the description column."""
+        plan_lines = [
+            "# 计划跟踪",
+            "## 项目配置",
+            "- **项目目标**: 提供一套完整的软件项目治理工作流插件",
+            "## 当前活跃事项",
+            "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+            "|--------|----|------|------|---------|---------|------|",
+            "| **P1** | FIX-312 | hot fix | - | 0.85.0 | tests | ✅ 完成 |",
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            row = self._live_row("EVD-1044", "FIX-312", "修复",
+                                 self.DESC, self.FACT, self.FILE_LOC)
+            entries = self._entries_for(td, row, plan_lines=plan_lines)
+            self.assertEqual(len(entries), 1)
+            self.assertEqual(entries[0]["task_id"], "FIX-312")
+            self.assertIn("目标对齐：", entries[0]["description"])
+            self.assertIn("用户影响：", entries[0]["description"])
+
+    def test_check_goal_and_user_impact_pass_on_live_layout(self):
+        """Check 16/17 end-to-end on a LIVE-shape EVD-1118-like row: the
+        description column carries 目标对齐/用户影响 -> both PASS (pre-fix:
+        the fact-basis column was matched -> double false FAIL)."""
+        plan_lines = [
+            "# 计划跟踪",
+            "## 项目配置",
+            "- **项目目标**: 提供一套完整的软件项目治理工作流插件",
+            "## 当前活跃事项",
+            "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+            "|--------|----|------|------|---------|---------|------|",
+            "| **P1** | REL-082 | 0.86.0 规划闭环 | - | 0.86.0 | tests | ✅ 规划闭环 |",
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gov = root / ".governance"; gov.mkdir(parents=True, exist_ok=True)
+            sp = gov / "plan-tracker.md"
+            ep = gov / "evidence-log.md"
+            sp.write_text("\n".join(plan_lines), encoding="utf-8")
+            ep.write_text(self._live_row(
+                "EVD-1118", "REL-082", "治理记录",
+                self.DESC, self.FACT,
+                "skills/software-project-governance/infra/verify_workflow.py",
+            ), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                ga = vw.check_goal_alignment()
+                ui = vw.check_user_impact()
+            self.assertEqual(len(ga["entries"]), 1)
+            self.assertEqual(ga["entries"][0]["status"], "PASS")
+            self.assertTrue(ga["pass"])
+            self.assertEqual(len(ui["entries"]), 1)
+            self.assertEqual(ui["entries"][0]["status"], "PASS")
+            self.assertTrue(ui["pass"])
 
 
 def _dated_impact_evidence_row(evd_id, task_id, description, file_location="skills/test.md"):
@@ -11927,7 +12065,7 @@ class GoalAlignmentTests(unittest.TestCase):
                 "|--------|----|------|------|---------|---------|------|",
                 "| **P1** | FIX-073 | guardrails | AUDIT-100 | 0.35.0 | tests | ✅ 已完成 |",
             ]), encoding="utf-8")
-            ep.write_text(_evidence_row_generic(
+            ep.write_text(_evidence_row_live(
                 "EVD-073",
                 "FIX-073",
                 evd_type="实现",
@@ -11964,7 +12102,7 @@ class GoalAlignmentTests(unittest.TestCase):
                 "| 版本 | 状态 | 预计日期 | 核心范围 | 包含 Tier/Layer | 关键交付物 |",
                 "| 0.35.0 | 进行中 | 2026-05-14 | scope | FIX-073~074 | delivery |",
             ]), encoding="utf-8")
-            ep.write_text(_evidence_row_generic(
+            ep.write_text(_evidence_row_live(
                 "EVD-999",
                 "FIX-999",
                 evd_type="实现",
@@ -12290,7 +12428,7 @@ class UserImpactTests(unittest.TestCase):
                 "|--------|----|------|------|---------|---------|------|",
                 "| **P1** | FIX-073 | guardrails | AUDIT-100 | 0.35.0 | tests | ✅ 已完成 |",
             ]), encoding="utf-8")
-            ep.write_text(_evidence_row_generic(
+            ep.write_text(_evidence_row_live(
                 "EVD-073",
                 "FIX-073",
                 evd_type="实现",
@@ -12325,7 +12463,7 @@ class UserImpactTests(unittest.TestCase):
                 "| 版本 | 状态 | 预计日期 | 核心范围 | 包含 Tier/Layer | 关键交付物 |",
                 "| 0.35.0 | 进行中 | 2026-05-14 | scope | FIX-073~074 | delivery |",
             ]), encoding="utf-8")
-            ep.write_text(_evidence_row_generic(
+            ep.write_text(_evidence_row_live(
                 "EVD-999",
                 "FIX-999",
                 evd_type="实现",
@@ -12472,8 +12610,9 @@ class StructuredEvidenceTests(unittest.TestCase):
         )
 
     def _delivery_row(self, description, file_location="validation commands"):
+        # FIX-368: LIVE column layout — parts[3]=type(修复闭环), parts[4]=description.
         return (
-            f"| EVD-085 | FIX-083 | 维护 | 修复闭环 | {description} | {file_location} | "
+            f"| EVD-085 | FIX-083 | 修复闭环 | {description} |  | {file_location} | "
             f"Developer | 2026-05-23 | G11 | 完成 |"
         )
 

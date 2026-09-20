@@ -1,0 +1,76 @@
+diff --git a/skills/software-project-governance/infra/checks/loop_runtime_claims.py b/skills/software-project-governance/infra/checks/loop_runtime_claims.py
+index 055ff7d..dac5ea3 100644
+--- a/skills/software-project-governance/infra/checks/loop_runtime_claims.py
++++ b/skills/software-project-governance/infra/checks/loop_runtime_claims.py
+@@ -222,7 +222,25 @@ class ScanLimits:
+     max_candidates: int = 1500
+     max_candidate_bytes: int = 24 * 1024 * 1024
+     max_file_bytes: int = 2 * 1024 * 1024
+-    max_semantic_units: int = 300000
++    # FIX-369 (v0.87.0, DEC-226): recalibrated 300000 -> 361923 as a capacity
++    # re-derivation from measurement, never an over-limit waiver —
++    # SEMANTIC_BUDGET_EXCEEDED still fail-closes the scan (regression guard:
++    # FIX369SemanticBudgetRecalibrationTests in
++    # infra/tests/test_loop_runtime_claims.py).  Recomputable formula:
++    #   max_semantic_units = ceil(measured_peak x 1.2)
++    # measured_peak = 301602 semantic_units = the highest same-day
++    # check-loop-runtime-claims measurement on record (2026-09-20 +08:00:
++    # 300701 morning / 300913 ~17:4x / 301602 ~18:0x; working tree at commit
++    # 6e25753; payload 15,385,341B < the 32MiB payload budget), and 1.2 is
++    # the growth-margin factor from docs/planning/version-plan-0.87.0.md
++    # §3.1 (candidate A).  ceil(301602 x 1.2) = ceil(361922.4) = 361923.
++    # Derived pre-archive, so the M-8 evidence-log hot-face migration
++    # (~8920 units) only widens the headroom.  M-2 duty: re-measure at each
++    # release gate; before moving this constant again, re-derive it via the
++    # same formula and register the measurement provenance with
++    # verify_workflow.py baseline-register (gate check-31-semantic-units) —
++    # silent raises are forbidden.
++    max_semantic_units: int = 361923
+     max_semantic_payload_bytes: int = 32 * 1024 * 1024
+ 
+ 
+diff --git a/skills/software-project-governance/infra/tests/test_loop_runtime_claims.py b/skills/software-project-governance/infra/tests/test_loop_runtime_claims.py
+index a4ff5c1..81c6e55 100644
+--- a/skills/software-project-governance/infra/tests/test_loop_runtime_claims.py
++++ b/skills/software-project-governance/infra/tests/test_loop_runtime_claims.py
+@@ -1876,5 +1876,40 @@ class FIX320ExemptionLedgerTests(unittest.TestCase):
+                 self.assertEqual(payload["exemptions_count"], len(payload["exemptions_applied"]))
+ 
+ 
++class FIX369SemanticBudgetRecalibrationTests(unittest.TestCase):
++    """FIX-369 regression guard (v0.87.0): the semantic-budget recalibration.
++
++    The budget move 300000 -> 361923 is a capacity re-derivation from a
++    measured baseline, not an over-limit waiver: the scanner must still
++    fail closed when the unit count crosses the configured limit, and any
++    future budget move must re-derive the constant from a recorded
++    measurement via the formula documented next to ``ScanLimits``.
++    """
++
++    def test_budget_matches_recorded_formula(self):
++        # Recomputable derivation (provenance block in
++        # checks/loop_runtime_claims.py): ceil(301602 measured peak x 1.2
++        # margin) = 361923, recorded 2026-09-20 (+08:00) at commit 6e25753.
++        # A budget edit that skips this derivation fails here — silent
++        # raises are the drift failure mode review-REL-084-DESIGN BA-1
++        # names.
++        import math
++
++        self.assertEqual(361923, ScanLimits().max_semantic_units)
++        self.assertEqual(361923, math.ceil(301602 * 1.2))
++
++    def test_recalibrated_budget_still_fail_closes_on_excess(self):
++        # The recalibrated default is a hard limit, not a waiver: a fixture
++        # scan under a tightened limit still emits SEMANTIC_BUDGET_EXCEEDED
++        # and a BLOCKED verdict.
++        helper = LoopRuntimeClaimTests("test_clean_complete_inventory_passes")
++        self.addCleanup(helper.doCleanups)
++        stack, product, plugin, host, _, _ = helper._roots()
++        self.addCleanup(stack.cleanup)
++        report = helper._scan(product, plugin, host, limits=ScanLimits(max_semantic_units=0))
++        self.assertIn("SEMANTIC_BUDGET_EXCEEDED", {f.code for f in report.findings})
++        self.assertEqual("BLOCKED", report.verdict)
++
++
+ if __name__ == "__main__":
+     raise SystemExit(_fix215_cli_or_unittest())

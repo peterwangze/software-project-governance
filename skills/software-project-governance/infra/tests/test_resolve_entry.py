@@ -15,6 +15,7 @@ or:
 import sys
 import tempfile
 import unittest
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
@@ -58,6 +59,14 @@ def _write_plan_tracker(host_root, workflow_version):
 
 
 def _write_snapshot(host_root, dt):
+    """Write a session-snapshot fixture.
+
+    FIX-364 granularity contract: ``dt`` is rendered DATE-ONLY
+    (``%Y-%m-%d``) and the engine parses it at 00:00, so callers must
+    pass the date they want the engine to judge. Hour-level arithmetic
+    (``now - timedelta(hours=2)``) silently crosses midnight near 00:00
+    and changes the date the engine sees.
+    """
     gov = host_root / ".governance"
     gov.mkdir(parents=True, exist_ok=True)
     iso = dt.strftime("%Y-%m-%d")
@@ -75,6 +84,28 @@ def _install_hook(host_root, name):
     hooks = host_root / ".git" / "hooks"
     hooks.mkdir(parents=True, exist_ok=True)
     (hooks / name).write_text("#!/bin/sh\n", encoding="utf-8")
+
+
+@contextmanager
+def _frozen_engine_clock(frozen_now):
+    """Freeze resolve_entry's clock at ``frozen_now`` (stdlib-only).
+
+    FIX-364: the freshness defect only fired inside the 00:00~02:00
+    local window, so the regression pins must control the clock.
+    resolve_entry.py binds ``datetime`` at module import time, so
+    patching the module attribute with a tiny subclass whose ``now()``
+    is fixed freezes the freshness comparison deterministically -- the
+    stdlib equivalent of freezegun, no new dependency. (CPython forbids
+    patching methods on the built-in datetime type itself, hence the
+    subclass + module-attribute approach.)
+    """
+    class _FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return frozen_now
+
+    with patch.object(re_, "datetime", _FrozenDateTime):
+        yield _FrozenDateTime
 
 
 # ─── Tests ─────────────────────────────────────────────────────
@@ -239,15 +270,78 @@ class ResolveEntryTests(unittest.TestCase):
 
     # ── Snapshot freshness ──
     def test_snapshot_freshness_recent_is_fresh(self):
+        """A snapshot dated TODAY is fresh -- the fixture computes its
+        date at the SAME granularity the engine judges (FIX-364).
+
+        The engine parses date-only ``session_date`` at 00:00, so
+        "recent" in its input space is ``session_date == today``. The
+        previous hour-granularity formula
+        ``datetime.now() - timedelta(hours=2)`` crossed midnight when
+        the suite ran between 00:00 and 02:00 local: the fixture
+        recorded yesterday, the engine compared against yesterday
+        00:00, and now - that >= 24h misjudged the snapshot stale
+        (FEAT-054 M-2). The exact window is pinned deterministically by
+        test_snapshot_freshness_midnight_window_is_fresh below.
+        """
         with tempfile.TemporaryDirectory() as plugin_td, \
                 tempfile.TemporaryDirectory() as host_td:
             _write_skill_md(Path(plugin_td), "1.0.0")
             host = Path(host_td)
             _write_plan_tracker(host, "1.0.0")
-            _write_snapshot(host, datetime.now() - timedelta(hours=2))
+            # Same granularity as the engine: date-only now == today.
+            _write_snapshot(host, datetime.now())
             env = self._env_for(Path(plugin_td), host)
         self.assertTrue(env["snapshot_exists"])
         self.assertTrue(env["snapshot_fresh"])
+
+    def test_snapshot_freshness_midnight_window_is_fresh(self):
+        """FIX-364 regression pin: the 00:00~02:00 local-time window.
+
+        FEAT-054 M-2 reproduced the defect only when the suite ran
+        between midnight and 02:00: ``now - 2h`` crossed midnight, the
+        fixture recorded yesterday's date, and the engine (parsing it
+        at 00:00) saw an age of >= 24h. Clock injection freezes "now"
+        at today 00:30 so this exact window is exercised on every run,
+        and the fixture date comes from the SAME frozen clock at the
+        engine's date granularity: 00:30 - today 00:00 = 30min, which
+        MUST be judged fresh.
+        """
+        frozen_now = datetime.now().replace(
+            hour=0, minute=30, second=0, microsecond=0
+        )
+        with tempfile.TemporaryDirectory() as plugin_td, \
+                tempfile.TemporaryDirectory() as host_td:
+            _write_skill_md(Path(plugin_td), "1.0.0")
+            host = Path(host_td)
+            _write_plan_tracker(host, "1.0.0")
+            with _frozen_engine_clock(frozen_now):
+                _write_snapshot(host, frozen_now)
+                env = self._env_for(Path(plugin_td), host)
+        self.assertTrue(env["snapshot_exists"])
+        self.assertTrue(env["snapshot_fresh"])
+
+    def test_snapshot_freshness_midnight_window_stale_stays_stale(self):
+        """FIX-364 negative control inside the same frozen window.
+
+        A genuinely stale snapshot (yesterday's date, parsed at
+        yesterday 00:00 -> 24h30m old at frozen 00:30) MUST stay stale.
+        Guards the window fix against weakening the freshness boundary
+        just to make the failing test pass (acceptance: the negative
+        case must survive the fix untouched).
+        """
+        frozen_now = datetime.now().replace(
+            hour=0, minute=30, second=0, microsecond=0
+        )
+        with tempfile.TemporaryDirectory() as plugin_td, \
+                tempfile.TemporaryDirectory() as host_td:
+            _write_skill_md(Path(plugin_td), "1.0.0")
+            host = Path(host_td)
+            _write_plan_tracker(host, "1.0.0")
+            with _frozen_engine_clock(frozen_now):
+                _write_snapshot(host, frozen_now - timedelta(days=1))
+                env = self._env_for(Path(plugin_td), host)
+        self.assertTrue(env["snapshot_exists"])
+        self.assertFalse(env["snapshot_fresh"])
 
     def test_snapshot_freshness_old_is_not_fresh(self):
         with tempfile.TemporaryDirectory() as plugin_td, \

@@ -1,0 +1,31 @@
+{
+  "case_id": "conflict",
+  "use_case": "B",
+  "path_class": "exception",
+  "protocol_revision": "m0-r1",
+  "title": "用例组 B【conflict】冲突——CAS 期望版本过期与同 operation_id 异载荷",
+  "description": "构造两类冲突各 ≥1 次：revision_conflict（CAS 期望版本过期，含 observed_revision 返回、调用方重判）与 operation_id_conflict（同 id 异载荷）。判定：冲突被结构化拒绝、无静默换版重试、重判后收敛、最终一致。",
+  "executable_master": {
+    "note": "冲突由批 1 写入器自身的幂等/冲突协议承载（contracts m0-r1 face 1/face 3）；链引擎的职责是结构化透传拒绝并 blocked 停链——本用例在写入器夹具层构造，链层断言结构化透传。"
+  },
+  "constructions": [
+    {
+      "conflict": "revision_conflict",
+      "how": "task-row-update 携带过期 --expected-revision（或行状态与 --from 期望不符）→ 状态级 CAS 拒绝，payload 携带 observed_revision 与当前状态，由调用方重判；链层记录 step_failed（code=revision_conflict, disposition=conflict）并停链，绝不自动换版本重试",
+      "fixture": "infra/tests/test_task_row_update.py::test_state_cas_conflict_reports_observed_revision（写入器层红相）"
+    },
+    {
+      "conflict": "operation_id_conflict",
+      "how": "同一 operation_id 携带不同 input_fingerprint 重放 → decide_operation_replay 返回 conflict，拒绝执行；链层同样结构化透传（step_failed, disposition=conflict）",
+      "fixture": "infra/tests/test_governance_store.py（同 id 异载荷拒绝红相）"
+    }
+  ],
+  "chain_layer_expected": {
+    "on_conflict": "step_failed 事件记录闭合错误码 + disposition，链 status=blocked，CLI exit 2",
+    "no_silent_reversion": "无静默换版执行（arch round-2 §1: CAS 冲突不自动换版本执行）",
+    "convergence": "调用方按 observed_revision 重判后以新 operation（或修正期望）恢复，最终一致"
+  },
+  "measurement": {
+    "llm_rounds_scope": "异常路径：逻辑往返照常计数；恢复动作、人工干预次数单列（协议 §3，故障路径单列不隐藏）"
+  }
+}

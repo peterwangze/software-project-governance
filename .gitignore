@@ -36,3 +36,7 @@ project/e2e-test-project/commands/*
 
 # Temporary fix/reconstruct scripts
 _fix_*.py
+
+# closure benchmark raw measurement runs (R-F5: protocol.md + cases/ 入库，
+# runs/ 本地保留原始 trace 不入 git 历史——FEAT-056 随票添加，锁外披露先例)
+benchmarks/closure/runs/

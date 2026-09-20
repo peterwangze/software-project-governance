@@ -1,0 +1,54 @@
+{
+  "case_id": "standard-success",
+  "use_case": "A",
+  "path_class": "standard",
+  "protocol_revision": "m0-r1",
+  "title": "用例组 A【standard-success】标准成功——一条完整标准 closure",
+  "description": "review 通过后的票收口链全链自动完成：任务行 approved→completed 翻转（task-row-update）、结构化 EVD 行追加（evidence-append）、派发锁 TTL 收缩（locks-amend，locks-release 登记缺口的 Governed 承载）、ready-to-commit 摘要输出。零冲突、零人工干预、零手写。",
+  "executable_master": {
+    "chain_id": "standard-ticket-closure",
+    "definition_location": "skills/software-project-governance/infra/closure_chain.py::STANDARD_TICKET_CLOSURE",
+    "note": "本文件是协议工件（用例描述），不是可执行 spec 的第二事实源——可执行链定义以模块内常量为唯一权威，避免双主漂移（arch round-2 §6: 每张表只有一个规范源）。"
+  },
+  "chain_steps": [
+    {
+      "step_id": "flip-completed",
+      "writer": "task-row-update",
+      "effect": "计划面任务行状态翻转 approved→completed（TASK_TRANSITIONS 合法边）+ 机器来源标记〔op-…〕",
+      "effect_probe": "task_row_state（writer --inspect，只读）"
+    },
+    {
+      "step_id": "append-evidence",
+      "writer": "evidence-append",
+      "effect": "10 列结构化 EVD 行落 evidence-log.md，basis 携带 operation 标记（效果锚点）",
+      "effect_probe": "text_anchor（文件内 operation 标记检索，只读）"
+    },
+    {
+      "step_id": "shrink-locks",
+      "writer": "locks-amend",
+      "effect": "该任务全部派发锁 TTL 收缩至 ceiling（默认 60s）",
+      "effect_probe": "lock_ttl_le（agent-locks.json 解析，只读）",
+      "gap_disclosure": "governance_store 无 locks-release 命令——本步为最近 Governed 效果（TTL 收缩）；真正的锁条目删除是登记缺口，后续切片候选，不静默。"
+    },
+    {
+      "step_id": "ready-to-commit",
+      "kind": "summary",
+      "effect": "closure_ready 事件：commit message 建议 + do_not_stage 清单（.governance/closure-events.jsonl 与 closure-locks/——自指约束：运行状态记录不入其描述的 commit）",
+      "note": "git 操作不在链内；完成以 --finalize --commit-sha 显式门记录（只读核验 commit 存在后记账）。"
+    }
+  ],
+  "construction": {
+    "command_template": "python closure_chain.py --project-root <root> run --task <TASK-ID> --closure-id <closure-id> --input evd_type=<类型> --input evd_description=<≥30字含目标对齐> --input evd_basis=<事实依据> --input evd_artifacts=<分号分隔产物>",
+    "fixture": "infra/tests/test_closure_chain.py::StandardChainE2ETests（夹具治理工作区全链端到端）"
+  },
+  "expected": {
+    "chain_status": "ready",
+    "effects_exactly_once": true,
+    "zero_manual_intervention": true,
+    "journal": "closure-events.jsonl 信封全部通过闭合枚举校验且 seq 严格单调 +1（复用 loop_event_log 单调性管道）"
+  },
+  "measurement": {
+    "llm_rounds_scope": "链引擎自身零 LLM 往返（纯确定性）；口径内计数 = Coordinator 触发链 + 确认结构化结果（协议 §1 规则 1.1~1.3；规划/评审/返工排除）",
+    "target": "标准 closure 路径 LLM 逻辑往返 ≤ 2（version-plan-0.86.0 §3 维度②；M-2 实测判定，非本文件结论）"
+  }
+}

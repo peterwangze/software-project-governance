@@ -1,0 +1,48 @@
+{
+  "case_id": "recovery",
+  "use_case": "C",
+  "path_class": "exception",
+  "protocol_revision": "m0-r1",
+  "title": "用例组 C【recovery】恢复——三边界 kill+resume 零人工修复（混沌发布门）",
+  "description": "三边界故障注入各 kill 一次后 resume：commit 失败 / push 凭据失败 / push 超时 UNKNOWN。判定：effect-based 恢复（查世界不信日志：push 超时先核远端是否已含目标 SHA 再决定）、零重复追加、零丢失、零人工修复（治理状态零手改；外部世界修复——凭据/暂存——是设计内 blocked→修复→resume 流程，单列不隐藏）。",
+  "executable_master": {
+    "note": "本用例是发布门级混沌测试（version-plan §2 批 2.2 / M-2 门禁实测 MUST 含混沌三边界复演）；可执行断言以守护测试为准。"
+  },
+  "kill_semantics": {
+    "mechanism": "子进程写入器 + 父进程测试控制器 + 命名故障点（BT-9）；无 TTY、不依赖 SIGKILL 常量——子进程到指定故障点写握手标记文件并暂停，父进程以 Popen.kill() 跨平台终止、等退出、新进程恢复、检查状态/效果/重复执行",
+    "fault_points": "协议边界命名故障点：post-step-effect:<step_id>（效果完成、记账前）；注入接口仅存内部测试入口（CLOSURE_CHAIN_TEST_FAULT_POINTS 环境变量），不向生产 CLI 暴露任何旗标",
+    "failure_classes": "硬终止（Popen.kill——清理逻辑无机会执行）与抛异常等价（结构化退出码→blocked）两类分开测试；进程 kill ≠ 掉电/存储故障——本用例不推导断电持久性保证（round-3 原文）"
+  },
+  "boundaries": [
+    {
+      "boundary": "① evidence 已写 tracker 未更新",
+      "recovery_rule": "复用原 EVD 锚点从 tracker 续（arch round-2 §2 恢复规则表第 1 行）",
+      "construction": "evidence-first 夹具链，kill 于 post-step-effect:append-evidence——EVD 行已落、step_completed 记账缺失、翻转步未启动",
+      "resume": "text_anchor 探针命中原 operation 标记 → step_reconciled（锚点含原 EVD ID，不新增第二行）→ 翻转步执行一次 → ready",
+      "fixture": "infra/tests/test_closure_chain.py::Boundary1EvidenceWithoutTrackerTests（含标准链顺序镜像：flip 已落 evidence 未写→resume 只补一次）"
+    },
+    {
+      "boundary": "② commit 成功状态未落盘",
+      "recovery_rule": "核验目标 commit 不重复提交（arch round-2 §2 恢复规则表第 2 行）",
+      "construction": "临时仓库夹具（真实本地 git commit，零网络零真 push），kill 于 post-step-effect:commit-fix——commit 已在 HEAD、记账缺失",
+      "resume": "git_head_message 探针核验 HEAD 与声明一致 → step_reconciled；rev-list 计数不变——核验不重复提交；--finalize 只读核验 commit 存在后记 closure_finalized",
+      "fixture": "infra/tests/test_closure_chain.py::Boundary2CommitStateNotRecordedTests（含 commit 失败→结构化 blocked→外部修复→resume 成功的异常类腿）"
+    },
+    {
+      "boundary": "③ push 凭据失效（+ push 超时 UNKNOWN）",
+      "recovery_rule": "凭据失效→保留本地 commit 等凭据修复续；结果不明→先查远端是否含目标 SHA 再决定（arch round-2 §2 恢复规则表第 3/4 行）",
+      "construction": "隔离 remote：本地 bare 仓库夹具（零真实远端副作用）；模拟 push 脚本凭据无效 exit 5 / 凭据有效但 push 后挂起触发步级超时→UNKNOWN",
+      "resume": "凭据失效→blocked+诊断（含建议的只读远端核查命令），修复后 resume 先核远端（--world-check 显式启用；远端查询建议非自动执行）再决定补推；超时 UNKNOWN→resume 先核远端：已含目标 SHA→step_reconciled 零重推",
+      "fixture": "infra/tests/test_closure_chain.py::Boundary3PushCredentialTests（三腿：blocked 修复续推 / 超时 UNKNOWN 世界核验 / 硬 kill 后世界核验）"
+    }
+  ],
+  "invariants": {
+    "zero_duplicate_append": "EVD 行/任务行翻转/commit/推送各恰好一次",
+    "zero_loss": "效果先于记账落地的窗口由世界探针收敛，无记录丢失",
+    "zero_manual_repair": "治理状态零手改——resume 恢复完全由链引擎+写入器幂等协议完成；外部世界修复（凭据文件/暂存区）单列披露",
+    "forward_recovery_only": "无跨 git/push 边界整体回滚（arch round-2 §2 总裁决）"
+  },
+  "measurement": {
+    "llm_rounds_scope": "恢复动作、人工干预次数、UNKNOWN 核验次数单列（协议 §3/§5：异常路径 failure_point 与 recovery_action 必记）"
+  }
+}

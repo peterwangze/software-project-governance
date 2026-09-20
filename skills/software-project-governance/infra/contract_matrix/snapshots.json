@@ -164,12 +164,14 @@
           "dynamic-lifecycle-migration"
         ]
       },
-      "handler_count": 85,
-      "key_count": 88,
+      "handler_count": 92,
+      "key_count": 95,
       "keys": [
         "agent-locks-acquire",
         "agent-runtime-e2e",
         "archguard-ratchet",
+        "baseline-evaluate",
+        "baseline-register",
         "capability-context",
         "change-triage",
         "check-acceptance-contracts",
@@ -223,10 +225,12 @@
         "check-user-interruption-policy",
         "check-version-consistency",
         "check-vertical-slices",
+        "decision-append",
         "dsh-doctor",
         "dynamic-flow-gate-migration",
         "dynamic-lifecycle-migration",
         "e2e-check",
+        "evidence-append",
         "execution-packet",
         "external-project-validation",
         "first-run-demo",
@@ -239,6 +243,8 @@
         "governance-context",
         "governance-cost-report",
         "governance-write-guard",
+        "locks-amend",
+        "locks-extend",
         "loop-engineering-migration",
         "loop-rollup",
         "loop-telemetry",
@@ -253,6 +259,7 @@
         "stages",
         "status",
         "task-priority-analysis",
+        "task-row-update",
         "verify",
         "web-console"
       ]
@@ -395,14 +402,14 @@
   },
   "generated": {
     "generator_relpath": "skills/software-project-governance/infra/contract_matrix/generator.py",
-    "git_head": "df9e7db89a885c41f1e102b70d88c359245496e8",
+    "git_head": "c2cc7c1058c9f1c57b43e617872a0ab95bb65fec",
     "python": {
       "family": "3.14",
       "implementation": "cpython",
       "platform": "win32",
       "version": "3.14.3"
     },
-    "timestamp_utc": "2026-09-18T13:47:49+00:00"
+    "timestamp_utc": "2026-09-19T23:50:59+00:00"
   },
   "python_family_pins": [
     {

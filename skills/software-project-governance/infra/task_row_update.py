@@ -30,6 +30,13 @@ Public entry points:
                         ...`` works, and the dotted path ``task_row_update.main``
                         is the composition-root assembly point in the
                         governance_cost / bootstrap_aggregate pattern)
+    cmd_task_row_update(args)
+                        engine dispatch face (wired by the batch-2.0
+                        integration slice, FEAT-055): consumes the engine's
+                        parsed Namespace, no argv re-parse
+    add_arguments(parser)
+                        module-owned option fact source (single definition
+                        shared by ``main`` and the engine subparser)
     execute_update(...) library entry (the five-step flow, returns WriterResult)
     inspect_target(...) read-only observation surface (CAS expectation source)
 
@@ -1330,16 +1337,16 @@ def _dry_run(
     return payload
 
 
-def main(argv=None) -> int:
-    """CLI handler — also the dotted-path assembly point for a composition
-    root (``task_row_update.main``).  Self-contained: ``python
-    task_row_update.py ...`` runs the same code path."""
-    parser = argparse.ArgumentParser(
-        prog="task-row-update",
-        description=(
-            "Governed single write path for plan-tracker task-row state "
-            "flips (FEAT-051, contracts m0-r1 consumer). Refuses anything "
-            "the frozen transition table, CAS or replay protocol rejects."))
+def add_arguments(parser: argparse.ArgumentParser) -> None:
+    """The module-owned option fact source (single source of truth).
+
+    The engine's ``task-row-update`` subparser calls this same face when it
+    wires dispatch (batch-2.0 integration, FEAT-055 — governance_cost
+    pattern), so every option is defined exactly once and an engine
+    Namespace can flow straight into the executor without an argv
+    round-trip (FEAT-047 P2-1 caliber). ``main`` stays self-contained on
+    top of it.
+    """
     parser.add_argument("--task", required=True,
                         help="Task id to anchor (ID column, exact match; an "
                              "ambiguous anchor is refused, never guessed)")
@@ -1395,7 +1402,25 @@ def main(argv=None) -> int:
                         help="Human-readable rendering instead of JSON")
     parser.set_defaults(json=True)
 
-    args = parser.parse_args(argv)
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="task-row-update",
+        description=(
+            "Governed single write path for plan-tracker task-row state "
+            "flips (FEAT-051, contracts m0-r1 consumer). Refuses anything "
+            "the frozen transition table, CAS or replay protocol rejects."))
+    add_arguments(parser)
+    return parser
+
+
+def _execute(args: argparse.Namespace,
+             parser: argparse.ArgumentParser) -> int:
+    """Shared executor behind ``main`` and the engine dispatch face.
+
+    ``parser`` is used only for usage-level refusals (``parser.error`` keeps
+    the argparse exit-2 + usage-text contract identical on both paths).
+    """
     target = Path(args.file)
     ledger = Path(args.ledger) if args.ledger else None
 
@@ -1467,6 +1492,26 @@ def main(argv=None) -> int:
     if result.code == RESULT_OK:
         return ExitCode.REPLAY if replayed else ExitCode.OK
     return _disposition_exit_code(result.code)
+
+
+def main(argv=None) -> int:
+    """CLI handler — also the dotted-path assembly point for a composition
+    root (``task_row_update.main``).  Self-contained: ``python
+    task_row_update.py ...`` runs the same code path."""
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    return _execute(args, parser)
+
+
+def cmd_task_row_update(args) -> int:
+    """Engine dispatch face (batch-2.0 integration wiring, FEAT-055).
+
+    Consumes the engine's already-parsed Namespace — the same attribute
+    surface ``main`` produces after ``parse_args`` — and runs the identical
+    executor; there is no Namespace→argv→main re-parse (FEAT-047 P2-1
+    caliber).
+    """
+    return _execute(args, _build_parser())
 
 
 # ``ExitCode.REPLAY`` is declared with the structured-code table above.

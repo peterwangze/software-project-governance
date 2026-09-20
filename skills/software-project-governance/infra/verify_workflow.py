@@ -82,6 +82,20 @@ from governance_cost import cmd_governance_cost_report
 # subprocess dispatch; the health face is v1-deferred (never faked).
 import bootstrap_aggregate
 from bootstrap_aggregate import cmd_governance_bootstrap
+# FEAT-055 (0.86.0 batch 2.0): governed writer family dispatch wiring —
+# task_row_update (FEAT-051), governance_store (FEAT-046) and
+# baseline_metadata (FEAT-047) join the governance_cost / bootstrap_aggregate
+# pattern: each is a self-contained module, stdlib-only at import time, the
+# engine only wires dispatch, and every option fact source is the module's
+# own add_arguments face consumed by a cmd_* Namespace handler (FEAT-047
+# P2-1 caliber — no argv re-parse).
+import task_row_update
+from task_row_update import cmd_task_row_update
+import governance_store
+from governance_store import (cmd_decision_append, cmd_evidence_append,
+                              cmd_locks_amend, cmd_locks_extend)
+import baseline_metadata
+from baseline_metadata import cmd_baseline_evaluate, cmd_baseline_register
 
 ROOT = Path(__file__).resolve().parents[3]
 INTERACTION_BOUNDARY_PATH = ROOT / "skills/software-project-governance/references/interaction-boundary.md"
@@ -24663,6 +24677,66 @@ def main(argv=None):
     ala_p.add_argument("--ttl-reason", default="",
                        help="Why this lock is held (recorded per entry)")
 
+    # task-row-update (FEAT-055 / 0.86.0 batch 2.0 — governed task-row
+    # state-flip writer, FEAT-051): args and handler live in
+    # task_row_update.py — the engine only wires dispatch, ArchGuard R4
+    # print budget untouched)
+    tru_p = subparsers.add_parser(
+        "task-row-update",
+        help="Governed single write path for plan-tracker task-row state "
+             "flips (FEAT-051): state CAS + short-term lock + operation "
+             "receipts; --inspect is the read-only observation surface",
+    )
+    task_row_update.add_arguments(tru_p)
+
+    # governance_store writer family (FEAT-055 / 0.86.0 batch 2.0 —
+    # FEAT-046): locks-extend / locks-amend / evidence-append /
+    # decision-append; args and handlers live in governance_store.py — the
+    # engine only wires dispatch, ArchGuard R4 print budget untouched)
+    lse_p = subparsers.add_parser(
+        "locks-extend",
+        help="Extend dispatch file-lock TTLs (FEAT-046 governed writer; "
+             "operation_id idempotent, structured JSON result)",
+    )
+    governance_store.add_locks_extend_arguments(lse_p)
+    lsa_p = subparsers.add_parser(
+        "locks-amend",
+        help="Amend a dispatch lock: add files / retune TTL (FEAT-046 "
+             "governed writer; operation_id idempotent)",
+    )
+    governance_store.add_locks_amend_arguments(lsa_p)
+    eva_p = subparsers.add_parser(
+        "evidence-append",
+        help="Append one machine-written EVD row (FEAT-046 governed "
+             "writer; five typed refs machine-checked, effect-based "
+             "idempotency, --dry-run preview)",
+    )
+    governance_store.add_evidence_append_arguments(eva_p)
+    dea_p = subparsers.add_parser(
+        "decision-append",
+        help="Append one machine-written DEC row (FEAT-046 governed "
+             "writer; effect-based idempotency, --dry-run preview)",
+    )
+    governance_store.add_decision_append_arguments(dea_p)
+
+    # baseline_metadata commands (FEAT-055 / 0.86.0 batch 2.0 — FEAT-047):
+    # baseline-register / baseline-evaluate; args and handlers live in
+    # baseline_metadata.py — the engine only wires dispatch, ArchGuard R4
+    # print budget untouched; exit 0/1/2 are gate verdicts, 3 is a
+    # command error)
+    blr_p = subparsers.add_parser(
+        "baseline-register",
+        help="Register one numeric-gate baseline with seven provenance "
+             "elements (FEAT-047; --dry-run previews without writing)",
+    )
+    baseline_metadata.add_register_arguments(blr_p)
+    ble_p = subparsers.add_parser(
+        "baseline-evaluate",
+        help="Evaluate an observation against the registered baseline "
+             "(FEAT-047; exit 0 pass / 1 fail / 2 not_evaluable)",
+    )
+    baseline_metadata.add_evaluate_arguments(ble_p)
+
     args = parser.parse_args(parser_argv)
     if args.project_root and explicit_project_root is None:
         explicit_project_root = args.project_root
@@ -24759,6 +24833,15 @@ def main(argv=None):
         "governance-cost-report": cmd_governance_cost_report,
         "governance-bootstrap": cmd_governance_bootstrap,
         "agent-locks-acquire": cmd_agent_locks_acquire,
+        # FEAT-055 (0.86.0 batch 2.0): governed writer family dispatch
+        # (task_row_update / governance_store / baseline_metadata modules).
+        "task-row-update": cmd_task_row_update,
+        "locks-extend": cmd_locks_extend,
+        "locks-amend": cmd_locks_amend,
+        "evidence-append": cmd_evidence_append,
+        "decision-append": cmd_decision_append,
+        "baseline-register": cmd_baseline_register,
+        "baseline-evaluate": cmd_baseline_evaluate,
     }
 
     cmd = args.command or "verify"

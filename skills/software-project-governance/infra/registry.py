@@ -211,6 +211,14 @@ LOADER_WHITELIST: Tuple[str, ...] = (
     # pattern); imports only resolve_entry + task_priority (engine-free
     # leaves) at import time; zero writes / zero subprocess dispatch.
     "bootstrap_aggregate",
+    # FEAT-055 (0.86.0 batch 2.0): governed writer family — three
+    # self-contained batch-1 modules whose dispatch the engine wires
+    # (governance_cost pattern); stdlib-only at import time, each exposes an
+    # ``add_arguments`` option fact source + a ``cmd_*`` Namespace handler
+    # (FEAT-047 P2-1 caliber — no argv re-parse).
+    "task_row_update",
+    "governance_store",
+    "baseline_metadata",
 )
 """Closed declaration of loadable modules (§9.1 controlled loader whitelist).
 
@@ -242,14 +250,22 @@ class LoaderResolutionError(RegistryError):
     """A malformed loader path, or a declared entry that cannot be resolved."""
 
 
-# ── command declaration: 84 keys → handler dotted path (FEAT-020 caliber) ───
+# ── command declaration: 95 keys → handler dotted path (FEAT-020 caliber) ───
 
 _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
     ("agent-locks-acquire", "verify_workflow.cmd_agent_locks_acquire"),
     ("agent-runtime-e2e", "verify_workflow.cmd_agent_runtime_e2e"),
     ("archguard-ratchet", "archguard_ratchet.cmd_archguard_ratchet"),
+    # FEAT-055 (0.86.0 batch 2.0): the BaselineMetadata provenance writer
+    # joins the dispatch face (batch-1 module, engine wires dispatch only —
+    # governance_cost pattern; FEAT-047 P2-1 add_arguments caliber).
+    ("baseline-evaluate", "baseline_metadata.cmd_baseline_evaluate"),
+    ("baseline-register", "baseline_metadata.cmd_baseline_register"),
     ("capability-context", "verify_workflow.cmd_capability_context"),
     ("change-triage", "verify_workflow.cmd_change_triage"),
+    # FEAT-055 (0.86.0 batch 2.0): the DEC-append writer of the
+    # governance_store family (batch-1 module, engine wires dispatch only).
+    ("decision-append", "governance_store.cmd_decision_append"),
     ("check-acceptance-contracts",
      "verify_workflow.cmd_check_acceptance_contracts"),
     ("check-agent-adapters", "verify_workflow.cmd_check_agent_adapters"),
@@ -335,6 +351,9 @@ _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
      "verify_workflow.cmd_dynamic_lifecycle_migration"),
     ("dsh-doctor", "dsh_doctor.main"),
     ("e2e-check", "verify_workflow.cmd_e2e_check"),
+    # FEAT-055 (0.86.0 batch 2.0): the EVD-append writer of the
+    # governance_store family (batch-1 module, engine wires dispatch only).
+    ("evidence-append", "governance_store.cmd_evidence_append"),
     ("execution-packet", "verify_workflow.cmd_execution_packet"),
     ("external-project-validation",
      "verify_workflow.cmd_external_project_validation"),
@@ -350,6 +369,10 @@ _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
     ("governance-context", "verify_workflow.cmd_governance_context"),
     ("governance-cost-report", "governance_cost.cmd_governance_cost_report"),
     ("governance-write-guard", "verify_workflow.cmd_governance_write_guard"),
+    # FEAT-055 (0.86.0 batch 2.0): the lock-maintenance writers of the
+    # governance_store family (batch-1 module, engine wires dispatch only).
+    ("locks-amend", "governance_store.cmd_locks_amend"),
+    ("locks-extend", "governance_store.cmd_locks_extend"),
     ("loop-engineering-migration",
      "verify_workflow.cmd_loop_engineering_migration"),
     ("loop-rollup", "verify_workflow.cmd_loop_rollup"),
@@ -366,16 +389,24 @@ _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
     ("stages", "verify_workflow.cmd_stages"),
     ("status", "verify_workflow.cmd_status"),
     ("task-priority-analysis", "verify_workflow.cmd_task_priority_analysis"),
+    # FEAT-055 (0.86.0 batch 2.0): the task-row state-flip writer (B-1
+    # termination surface, batch-1 module, engine wires dispatch only).
+    ("task-row-update", "task_row_update.cmd_task_row_update"),
     ("verify", "verify_workflow.cmd_verify"),
     ("web-console", "verify_workflow.cmd_web_console"),
 )
-"""87 dispatch keys from the FEAT-020 frozen face (FEAT-031 added
+"""95 dispatch keys from the FEAT-020 frozen face (FEAT-031 added
 ``check-dsh-boundary`` and ``dsh-doctor``; FEAT-032 added
 ``governance-cost-report``; FEAT-037 added ``check-entry-bootstrap-sync``;
-FEAT-033 added ``governance-bootstrap``), each with the module that
+FEAT-033 added ``governance-bootstrap``; FEAT-055 added the three governed
+writer modules — ``task-row-update``, the four governance_store writer
+commands, and the two baseline_metadata commands), each with the module that
 *defines* its handler (machine-derived: the ``commands`` dict of ``main()``
-cross-referenced with the defining module of every handler name — 8 keys are
-already outside the engine, the other 79 ride the monolith)."""
+cross-referenced with the defining module of every handler name — 16 keys are
+already outside the engine, the other 79 ride the monolith).  The docstring
+count shipped stale at FEAT-039 time (said 87 with 8 outside when the table
+held 88 with 9 outside); corrected here as part of the deliberate
+re-baseline rather than silently absorbed."""
 
 # ── check declaration: 71 segments → entry dotted path ──────────────────────
 

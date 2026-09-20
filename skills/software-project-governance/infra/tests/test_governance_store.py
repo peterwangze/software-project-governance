@@ -25,12 +25,15 @@ Run:
     python -m pytest skills/software-project-governance/infra/tests/test_governance_store.py -v
 """
 
+import argparse
 import hashlib
+import io
 import json
 import os
 import subprocess
 import sys
 import threading
+import time
 import unittest
 import uuid
 from datetime import datetime
@@ -705,13 +708,65 @@ class LocksExtendTests(StoreTestCase):
         gs._ledger_transaction(self.gov, seed)
         result = self.call_extend(extend_by=600, operation_id=op)
         self.assertFalse(result.get("error"), result)
-        self.assertIn(result.get("replay_source"), ("apply", "resume"))
+        # FEAT-055 (batch-2.0): tightened from the original
+        # assertIn(..., ("apply", "resume")).  This scenario's world is at
+        # the RECORDED BASELINE (crash before apply), so the shared locks
+        # pipeline re-applies the deterministic mutator exactly once and
+        # completes — replay_source == "apply" is this leg's exact contract
+        # (_locks_execute docstring: world==baseline → re-apply → complete);
+        # conflating it with "resume" would let an apply-leg regression hide.
+        self.assertEqual(result.get("replay_source"), "apply")
         data = json.loads(
             (self.gov / "agent-locks.json").read_text(encoding="utf-8"))
         self.assertEqual(data["file_locks"]["docs/a.md"]["ttl_seconds"], 4200)
         ledger = json.loads(
             (self.gov / gs.LEDGER_FILE_NAME).read_text(encoding="utf-8"))
         self.assertEqual(ledger["operations"][op]["status"], "ok")
+
+    def test_resume_completes_without_reapplying_when_target_reached(self):
+        """FEAT-055 (batch-2.0): the resume leg gets its own exact pin —
+        world==pending_effects (the crash happened AFTER the apply) → the
+        re-run completes from the recorded target, reports
+        replay_source == "resume" and never mutates the TTL again."""
+        op = gs.new_operation_id()
+        fingerprint = gs._fingerprint({
+            "command": "locks-extend", "task": "FIX-100",
+            "files": ["docs/a.md"], "ttl_seconds": None,
+            "extend_by": 600, "reason": "续期",
+        })
+        target_state = {"file_locks": {"docs/a.md": {
+            "locked_by": "FIX-100", "locked_at": "2026-09-19T10:00:00",
+            "ttl_seconds": 4200, "ttl_reason": "extend: 续期"}}}
+        entry = gs._ledger_entry(
+            op, "locks-extend", "FIX-100", fingerprint, status="pending",
+            revision=None, now=datetime(2026, 9, 19, 10, 0, 0),
+            pending_effects=target_state,
+            baseline_effects={"file_locks": {"docs/a.md": dict(
+                target_state["file_locks"]["docs/a.md"],
+                ttl_seconds=3600, ttl_reason="seed")}})
+
+        def seed(ledger):
+            ledger["operations"][op] = entry
+
+        gs._ledger_transaction(self.gov, seed)
+        # the world is ALREADY at the recorded target: the locks file
+        # carries ttl 4200 — the apply happened, only the ledger completion
+        # was lost to the crash.
+        locks = json.loads(
+            (self.gov / "agent-locks.json").read_text(encoding="utf-8"))
+        locks["file_locks"]["docs/a.md"]["ttl_seconds"] = 4200
+        locks["file_locks"]["docs/a.md"]["ttl_reason"] = "extend: 续期"
+        gs._atomic_write_bytes(
+            self.gov / "agent-locks.json",
+            (json.dumps(locks, ensure_ascii=False, indent=4) + "\n")
+            .encode("utf-8"))
+        result = self.call_extend(extend_by=600, operation_id=op)
+        self.assertFalse(result.get("error"), result)
+        self.assertEqual(result.get("replay_source"), "resume")
+        data = json.loads(
+            (self.gov / "agent-locks.json").read_text(encoding="utf-8"))
+        self.assertEqual(data["file_locks"]["docs/a.md"]["ttl_seconds"],
+                         4200)  # completed, never re-applied (+600)
 
     def test_drift_refuses_manual_intervention(self):
         op = gs.new_operation_id()
@@ -1075,6 +1130,153 @@ class CliSubprocessTests(unittest.TestCase):
         self.assertEqual(target.read_bytes(), before)
         payload = json.loads(proc.stdout.decode("utf-8"))
         self.assertTrue(payload["dry_run"])
+
+
+class StaleLockTakeoverTests(unittest.TestCase):
+    """P3-2 negative controls (batch-2.0 FEAT-055): the stale-takeover face
+    of ``_TargetLock._stale`` now has both red faces — a stale lockfile IS
+    taken over, a fresh one never is.  The takeover semantics and the
+    transient-exclusion boundary are disclosed in the ``_TargetLock``
+    docstring; the 600s window itself stays unreachable by a healthy write.
+    """
+
+    def setUp(self):
+        import tempfile
+        self._tmp_ctx = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp_ctx.name)
+        self.target = self.tmp / "target.md"
+        _write_bytes(self.target, "content")
+
+    def tearDown(self):
+        self._tmp_ctx.cleanup()
+
+    def _lock_path(self):
+        lock = self.target.parent / gs.LOCK_DIR_NAME \
+            / (self.target.name + ".lock")
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        return lock
+
+    def test_stale_lockfile_is_taken_over(self):
+        lock = self._lock_path()
+        lock.write_text("999999", encoding="ascii")
+        old = time.time() - (gs._LOCK_STALE_SECONDS + 60)
+        os.utime(lock, (old, old))
+        with gs._TargetLock(self.target, timeout_seconds=1.0) as held:
+            self.assertTrue(held._acquired)
+            self.assertTrue(lock.exists())  # takeover re-created the file
+            self.assertEqual(lock.read_text(encoding="ascii"),
+                             str(os.getpid()))
+        self.assertFalse(lock.exists())  # clean exit unlinks its own lock
+
+    def test_fresh_lockfile_is_never_judged_stale(self):
+        lock = self._lock_path()
+        lock.write_text("424242", encoding="ascii")
+        holder = gs._TargetLock(self.target, timeout_seconds=0.2)
+        self.assertFalse(holder._stale())
+        self.assertTrue(lock.exists())  # a fresh rival's lock is untouched
+
+    def test_a_stale_successor_cannot_revoke_an_active_holder(self):
+        """The takeover only fires past _LOCK_STALE_SECONDS: a lock that is
+        seconds old blocks the acquirer (lock_contention), it is never
+        silently revoked."""
+        lock = self._lock_path()
+        lock.write_text("1", encoding="ascii")
+        recent = time.time() - 5  # well inside the 600s window
+        os.utime(lock, (recent, recent))
+        with self.assertRaises(gs.StoreError) as caught:
+            with gs._TargetLock(self.target, timeout_seconds=0.1):
+                pass
+        self.assertEqual(caught.exception.payload["code"], "lock_contention")
+        self.assertTrue(lock.exists())  # the recent lock survives
+
+
+class RepoFileRootContainmentTests(StoreTestCase):
+    """P3-4 read-side tightening (batch-2.0 FEAT-055): a repo_file reference
+    must resolve INSIDE the repo root — absolute paths and ``..``-prefixed
+    escapes report unresolvable (→ cross_record_violation), root-internal
+    paths behave exactly as before.
+    """
+
+    def refs_result(self, refs):
+        return _call_evidence(self.gov, overrides={"refs": refs},
+                              operation_id=gs.new_operation_id())
+
+    def test_dotdot_escape_refused(self):
+        secret = self.tmp / "outside-secret.txt"
+        _write_bytes(secret, "secret")
+        payload = self.refs_result(["repo_file:../outside-secret.txt"])
+        self.assertRefused(payload, "cross_record_violation")
+        self.assertIn("escapes the repo root", payload["detail"])
+
+    def test_absolute_path_refused(self):
+        # a real file OUTSIDE the repo root, addressed by absolute path:
+        # the governed repo lives at <tmp>/repo, the secret sits beside it.
+        repo_root = self.tmp / "repo"
+        outside = self.tmp / "outside-abs-secret.txt"
+        _write_bytes(outside, "secret")
+        result = _call_evidence(
+            self.gov, overrides={"refs": ["repo_file:" + str(outside)]},
+            repo_root=repo_root, operation_id=gs.new_operation_id())
+        self.assertRefused(result, "cross_record_violation")
+        self.assertIn("escapes the repo root", result["detail"])
+
+    def test_root_internal_path_still_resolvable(self):
+        real = self.tmp / "docs" / "a.md"
+        real.parent.mkdir(exist_ok=True)
+        _write_bytes(real, "x")
+        state, detail = gs._validate_ref(
+            gs._parse_refs(["repo_file:docs/a.md"])[0],
+            self.tmp, self.gov)
+        self.assertEqual(state, "resolvable")
+
+    def test_missing_root_internal_path_reports_plain_unresolvable(self):
+        real = self.tmp / "docs" / "a.md"
+        real.parent.mkdir(exist_ok=True)
+        _write_bytes(real, "x")
+        state, detail = gs._validate_ref(
+            gs._parse_refs(["repo_file:docs/gone.md"])[0],
+            self.tmp, self.gov)
+        self.assertEqual(state, "unresolvable")
+        self.assertIn("path does not exist", detail)
+
+
+class WriterCliHandlerTests(StoreTestCase):
+    """The engine-dispatch faces added by FEAT-055 (``cmd_*`` Namespace
+    handlers) get the same guard the self-contained CLI already has: one
+    happy path, one structured refusal, and the project-root default —
+    proving the engine Namespace flows straight into the executor (FEAT-047
+    P2-1 caliber, no argv round-trip).
+    """
+
+    def test_cmd_locks_extend_namespace_exit0(self):
+        out = io.StringIO()
+        with mock.patch.object(gs.sys, "stdout", out):
+            code = gs.cmd_locks_extend(argparse.Namespace(
+                task="FIX-100", files="docs/a.md", ttl_seconds=None,
+                extend_by=600, reason="r", operation_id=gs.new_operation_id(),
+                timeout=10.0, project_root=str(self.tmp)))
+        self.assertEqual(code, 0)
+        payload = json.loads(out.getvalue())
+        self.assertEqual(payload["code"], "ok")
+
+    def test_cmd_decision_append_refusal_exit2(self):
+        out = io.StringIO()
+        with mock.patch.object(gs.sys, "stdout", out):
+            code = gs.cmd_decision_append(argparse.Namespace(
+                decider="   ", content="x", basis="", date=None,
+                operation_id=gs.new_operation_id(), dry_run=False,
+                expected_revision=None, timeout=10.0,
+                project_root=str(self.tmp)))
+        self.assertEqual(code, 2)
+        payload = json.loads(out.getvalue())
+        self.assertEqual(payload["code"], "schema_violation")
+
+    def test_governance_dir_defaults_to_cwd_without_project_root(self):
+        args = argparse.Namespace(task="FIX-100")
+        # the self-contained CLI's original face: a relative default that
+        # resolves against the process cwd at use time
+        self.assertEqual(gs._governance_dir_from(args),
+                         Path(".") / gs.GOVERNANCE_DIR_NAME)
 
 
 if __name__ == "__main__":

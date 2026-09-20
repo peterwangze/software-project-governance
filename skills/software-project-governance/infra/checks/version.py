@@ -219,14 +219,16 @@ STATIC_PIN_EXEMPTIONS = {
     # only fixture data; re-audit at landing per the reason text. NOTE: the
     # baseline-metadata file is being edited by its owning batch while this
     # bump runs — line numbers re-anchored 2026-09-19; the stale-exemption
-    # audit below flags any further drift automatically.
+    # audit below flags any further drift automatically. Re-anchored again
+    # by FEAT-055 (0.86.0 batch 2.0 wiring: three import lines + guard-test
+    # additions shifted the file; same six instrument-version fixture rows).
     "skills/software-project-governance/infra/tests/test_baseline_metadata.py": [
-        (60, "0.85.0", _REASON_INSTRUMENT_VERSION),
-        (315, "0.85.0", _REASON_INSTRUMENT_VERSION),
-        (392, "0.85.0", _REASON_INSTRUMENT_VERSION),
-        (563, "0.85.0", _REASON_INSTRUMENT_VERSION),
-        (620, "0.85.0", _REASON_INSTRUMENT_VERSION),
-        (738, "0.85.0", _REASON_INSTRUMENT_VERSION),
+        (63, "0.85.0", _REASON_INSTRUMENT_VERSION),
+        (318, "0.85.0", _REASON_INSTRUMENT_VERSION),
+        (395, "0.85.0", _REASON_INSTRUMENT_VERSION),
+        (566, "0.85.0", _REASON_INSTRUMENT_VERSION),
+        (623, "0.85.0", _REASON_INSTRUMENT_VERSION),
+        (741, "0.85.0", _REASON_INSTRUMENT_VERSION),
     ],
     "skills/software-project-governance/infra/tests/test_task_row_update.py": [
         (74, "0.85.0", _REASON_FIXTURE_ROW_TEXT),

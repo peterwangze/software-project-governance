@@ -70,7 +70,15 @@ from contract_matrix import generator as cmg  # noqa: E402
 # rides INSIDE check segment 33 so the segment face is unchanged at 71);
 # snapshot regenerated via `contract_matrix/generator.py --regen` in the same
 # change (the documented contract-change path, review covering both files).
-FROZEN_CLI_KEY_COUNT = 88
+# FEAT-055 (0.86.0 batch 2.0): 88→95 keys — the three governed writer modules
+# join the dispatch face (`task-row-update`, `locks-extend`, `locks-amend`,
+# `evidence-append`, `decision-append`, `baseline-register`,
+# `baseline-evaluate`; handlers in task_row_update.py / governance_store.py /
+# baseline_metadata.py, engine wires dispatch only — governance_cost
+# pattern); segment face unchanged at 71; snapshot + architecture baseline
+# regenerated via `contract_matrix/generator.py --regen` +
+# `archguard-ratchet --regen` in the same change.
+FROZEN_CLI_KEY_COUNT = 95
 FROZEN_CHECK_SEGMENT_COUNT = 71
 
 

@@ -91,7 +91,15 @@ _SECTION_RE = re.compile(r"^\s*#\s*" + _DASH + r"{2}\s*([0-9][A-Za-z0-9]*)\.\s")
 # the Check 33 sub-report only — and the report rides inside check segment 33,
 # so the segment face stays at 71); snapshot regenerated via
 # `contract_matrix/generator.py --regen` in the same change.
-FROZEN_CLI_KEYS = 88
+# FEAT-055 (0.86.0 batch 2.0): 88 -> 95 CLI keys — the three governed writer
+# modules join the dispatch face (engine wires dispatch only, governance_cost
+# pattern; FEAT-047 P2-1 add_arguments caliber): `task-row-update`
+# (task_row_update.py, FEAT-051), `locks-extend`/`locks-amend`/
+# `evidence-append`/`decision-append` (governance_store.py, FEAT-046), and
+# `baseline-register`/`baseline-evaluate` (baseline_metadata.py, FEAT-047).
+# Snapshot + architecture baseline regenerated in the same change
+# (`contract_matrix/generator.py --regen` + `archguard_ratchet.py --regen`).
+FROZEN_CLI_KEYS = 95
 FROZEN_SEGMENTS = 71
 
 # FEAT-018 R6 frozen startup budget (``core/architecture-baseline.json`` r6):
@@ -108,7 +116,17 @@ FROZEN_SEGMENTS = 71
 # re-exports its public surface; the ArchGuard R6 cold-import face grows by
 # exactly this one module (baseline regenerated in the same change, see
 # ``core/architecture-baseline.json`` r6).
-FROZEN_ENGINE_IMPORT_COUNT = 199
+# FEAT-055: 199 -> 205 — the engine imports the three self-contained
+# governed writer modules (``task_row_update`` / ``governance_store`` /
+# ``baseline_metadata``) plus exactly the three leaves their import-time
+# faces pull in and the engine never had: the L0 ``contracts`` leaf (all
+# three writers consume the m0-r1 frozen contract read-only), ``uuid``
+# (contracts' operation-id generator) and ``_uuid`` (uuid's C companion
+# module in the measured sys.modules face — git-archive dual-face diff,
+# review-FEAT-055 F-1; ``threading`` was already in the HEAD face).
+# Baseline regenerated in the same change, see
+# ``core/architecture-baseline.json``.
+FROZEN_ENGINE_IMPORT_COUNT = 205
 
 # Mechanism red lines (§9.1): no discovery scan, no third-party plugin loader.
 FORBIDDEN_REGISTRY_NAMES = {
@@ -345,7 +363,13 @@ class CommandRegistryTests(unittest.TestCase):
                           if reg.loader_module(spec.handler)
                           != reg.ENGINE_MODULE)
         self.assertEqual(migrated, [
-            "archguard-ratchet", "check-capability-registry",
+            "archguard-ratchet",
+            # FEAT-055 (0.86.0 batch 2.0): the BaselineMetadata provenance
+            # writer's two dispatch keys; handlers live in
+            # baseline_metadata.py, the engine wires dispatch only
+            # (governance_cost pattern, FEAT-047 P2-1 add_arguments caliber).
+            "baseline-evaluate", "baseline-register",
+            "check-capability-registry",
             # FEAT-037 (0.84.0 slice A-6): entry-bootstrap guard handler lives
             # in checks/projection.py; the engine wires a thin wrapper only.
             "check-entry-bootstrap-sync",
@@ -356,7 +380,12 @@ class CommandRegistryTests(unittest.TestCase):
             # the key string, not the task age.
             "check-injection-budget",
             "check-manifest-consistency", "check-review-debt",
-            "dsh-doctor",
+            # FEAT-055 (0.86.0 batch 2.0): the DEC-append writer of the
+            # governance_store family (handlers in governance_store.py).
+            "decision-append", "dsh-doctor",
+            # FEAT-055 (0.86.0 batch 2.0): the EVD-append writer of the
+            # governance_store family.
+            "evidence-append",
             # FEAT-033 (0.84.0 slice A-2): read-only bootstrap aggregate
             # handler lives in bootstrap_aggregate.py; the engine wires
             # dispatch only (governance_cost pattern).
@@ -364,6 +393,12 @@ class CommandRegistryTests(unittest.TestCase):
             # FEAT-032 (0.84.0 slice A-1): cost observability handler lives
             # in governance_cost.py; the engine wires dispatch only.
             "governance-cost-report",
+            # FEAT-055 (0.86.0 batch 2.0): the lock-maintenance writers of
+            # the governance_store family.
+            "locks-amend", "locks-extend",
+            # FEAT-055 (0.86.0 batch 2.0): the task-row state-flip writer
+            # (B-1 termination surface; handler in task_row_update.py).
+            "task-row-update",
         ])
 
     def test_declared_keys_resolve_to_callables(self):
@@ -1006,17 +1041,22 @@ class StartupImportTests(unittest.TestCase):
         self.assertNotIn("from registry import", source)
 
     def test_the_engine_frozen_face_is_not_grown_by_the_registry(self):
-        """② "启动 import 集合不增": the engine's own R6 face is untouched.
+        """② "启动 import 集合不增": the engine's own R6 face is untouched
+        by the registry seam.
 
         Adding ``registry.py`` to the tree cannot grow the engine's startup
         import set, because the engine never imports the registry (module
-        axis) and the live count stays inside the frozen 196-module budget.
+        axis) and the live count stays inside the frozen budget.  FEAT-055
+        deliberately moved ``contracts`` INTO the engine face: the three
+        governed writers consume the m0-r1 frozen contract leaf at import
+        time, so the negative control narrows to the registry's own modules
+        (``registry`` / ``quickscan_registry`` stay out).
         """
         face = _engine_startup_face()
         modules = set(face["modules"])
         self.assertNotIn("registry", modules)
-        self.assertNotIn("contracts", modules)
         self.assertNotIn("quickscan_registry", modules)
+        self.assertIn("contracts", modules)
         self.assertLessEqual(face["count"], FROZEN_ENGINE_IMPORT_COUNT)
         self.assertGreater(face["count"], 100)
 

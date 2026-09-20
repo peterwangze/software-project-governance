@@ -82,14 +82,36 @@ DoD ten items (0.86.0-architecture-evolution.md §4, items 0–9) mapping:
     (``机器写入：governance-store <command> <operation_id>`` marker in the
     basis cell; actor cell ``governance-store``).
 
-Registration face (组合根装配 — engine untouched): the frozen 87-key CLI
-dispatch face (FEAT-020 / registry R5 live-face agreement) is NOT grown by
-an implementation ticket; batch 1 writers are self-hosted behind this
-module's own composition root (``COMMANDS`` + :func:`main`), invoked as
-``python governance_store.py <command> …`` — the same direct-invocation
-pattern as ``cleanup.py`` / ``archive.py``.  Engine-dispatch wiring (and
-the frozen-face re-baseline it implies) belongs to the later integration
-slice, not to this ticket.
+Registration face (组合根装配 — wired by FEAT-055, 0.86.0 batch 2.0): the
+four writer commands are now engine-dispatched (`registry._COMMANDS` +
+verify_workflow main(); FEAT-020 frozen face re-baselined 88 → 95 keys in
+the same change).  The module keeps its own composition root (``COMMANDS`` +
+:func:`main`) so ``python governance_store.py <command> …`` keeps working —
+both paths share one option fact source (``add_*_arguments``) and one
+Namespace executor (``cmd_*``, FEAT-047 P2-1 caliber — no argv re-parse).
+
+Batch-2.0 disclosure obligations discharged here (review-FEAT-046-CODE-R0
+P3-2/P3-3, FEAT-055):
+
+  * **Stale-lock takeover (P3-2)** — a lockfile older than
+    ``_LOCK_STALE_SECONDS`` (600s) is unlinked and taken over by the next
+    acquirer.  Reachable only when one holder is pathologically slow (>600s
+    for a single-file atomic write); the disclosed cost is a transient
+    mutual-exclusion erosion (a stale holder that eventually finishes will
+    not unlink its successor's lock — it no longer owns ``_acquired``).
+  * **New .governance artifacts have no check coverage (P3-2)** —
+    ``governance-store-ops.json`` (the operation ledger) and
+    ``.governance-store-locks/`` (the lockfile dir) are read/written only by
+    this module; no verify_workflow check guards them yet.  Unbounded ledger
+    growth is registered as BT-4 (evolution §5); a structural check is a
+    later-slice candidate, not silently assumed.
+  * **governance_id matching is mention-level (P3-3)** —
+    ``_validate_governance_id`` searches hot files and the archive with a
+    ``\b``-delimited substring match, NOT row-anchored: a typo'd mention in
+    prose is enough to report ``resolvable``.  Under the resolvability-only
+    contract this cannot fabricate a verdict (validation ≠ sufficiency),
+    and row-anchored matching is deferred deliberately — tightening it
+    would change the resolvable face of existing legitimate references.
 
 ×415 legacy policy (arch round-2 §3): legacy rows are a legacy batch —
 read-safety only; this writer constrains NEW rows and never rewrites or
@@ -457,6 +479,21 @@ class _TargetLock:
     Lock order discipline: the record target first, then the ledger —
     every code path acquires them in that order, so nesting cannot
     deadlock.
+
+    Stale-takeover semantics (P3-2 disclosure, batch-2.0 FEAT-055): a
+    lockfile whose mtime is older than ``_LOCK_STALE_SECONDS`` (600s) is
+    unlinked by :meth:`_stale` and the acquire loop retries, so a crashed or
+    pathologically slow holder does not wedge the target forever.  The
+    disclosed boundary (review-FEAT-046-CODE-R0 P3-2, verified): the takeover
+    keys on the lockfile PATH, not on ownership — a slow holder A that
+    resumes after its stale lock was taken over still holds
+    ``_acquired=True``, so its ``__exit__`` will unlink the SUCCESSOR's
+    active lockfile, opening a transient mutual-exclusion erosion window
+    (a third acquirer can then create a fresh lock while the successor is
+    still inside).  Unreachable by a healthy single-file atomic write
+    (<600s); the takeover exists as crash recovery, not a scheduling
+    feature, and fixing the ownership gap belongs to a lock-surface slice,
+    not to wiring.
     """
 
     def __init__(self, target: Path, timeout_seconds: float = 10.0):
@@ -816,7 +853,22 @@ def _validate_ref(ref: EvidenceRef, repo_root: Path, governance_dir: Path):
     """
     kind, value = ref.kind, ref.value
     if kind == "repo_file":
-        if (repo_root / value.replace("\\", "/")).is_file():
+        # P3-4 (review-FEAT-046-CODE-R0; batch-2.0 read-side tightening,
+        # FEAT-055): the value must resolve INSIDE the repo root — an
+        # absolute path or a ``..``-prefixed escape used to pass a bare
+        # existence test against anything the process can see.  Still a
+        # read-only check (``is_file``); an escaping path now reports
+        # unresolvable, which the caller refuses on (cross_record_violation).
+        candidate = repo_root / value.replace("\\", "/")
+        try:
+            resolved = candidate.resolve()
+            inside = resolved.is_relative_to(Path(repo_root).resolve())
+        except (ValueError, OSError):
+            inside = False
+        if not inside:
+            return ("unresolvable",
+                    f"path escapes the repo root: {value}")
+        if resolved.is_file():
             return "resolvable", "path exists"
         return "unresolvable", f"path does not exist: {value}"
     if kind == "git_object":
@@ -858,6 +910,16 @@ def _validate_ref(ref: EvidenceRef, repo_root: Path, governance_dir: Path):
 
 
 def _validate_governance_id(value, governance_dir: Path):
+    """Mention-level hot+archive search → (state, detail).
+
+    P3-3 disclosure (batch-2.0 FEAT-055): the match is a ``\\b``-delimited
+    substring search over whole files, NOT row-anchored — a mention in prose
+    is enough to report ``resolvable`` (asymmetric with the row-anchored
+    ``_hot_id_numbers`` used for ID allocation).  Under the
+    resolvability-only contract this cannot fabricate a sufficiency verdict;
+    row-anchored tightening would change the resolvable face of existing
+    legitimate references and is therefore deferred deliberately.
+    """
     match = re.match(r"^([A-Z]+)-(\d+)$", value)
     if match is None:
         return "unresolvable", "expected FAMILY-NUMBER form (e.g. DEC-221)"
@@ -1750,6 +1812,73 @@ def _emit(payload) -> int:
     return 0
 
 
+def add_locks_extend_arguments(parser: argparse.ArgumentParser) -> None:
+    """Module-owned option fact source for ``locks-extend`` (single
+    definition shared by ``build_parser`` and the engine subparser —
+    batch-2.0 wiring FEAT-055, FEAT-047 P2-1 caliber)."""
+    parser.add_argument("--task", required=True)
+    parser.add_argument("--files", required=True,
+                        help="semicolon/comma-separated locked paths to extend")
+    parser.add_argument("--ttl-seconds", type=int, default=None,
+                        help="absolute new TTL value")
+    parser.add_argument("--extend-by", type=int, default=None,
+                        help="add seconds to the current TTL")
+    parser.add_argument("--reason", required=True)
+    parser.add_argument("--operation-id", default="")
+    parser.add_argument("--timeout", type=float, default=10.0)
+
+
+def add_locks_amend_arguments(parser: argparse.ArgumentParser) -> None:
+    """Option fact source for ``locks-amend`` (see
+    :func:`add_locks_extend_arguments`)."""
+    parser.add_argument("--task", required=True)
+    parser.add_argument("--add-file", default="")
+    parser.add_argument("--expected-new", action="store_true")
+    parser.add_argument("--ttl-seconds", type=int, default=None)
+    parser.add_argument("--extend-by", type=int, default=None)
+    parser.add_argument("--reason", required=True)
+    parser.add_argument("--operation-id", default="")
+    parser.add_argument("--timeout", type=float, default=10.0)
+
+
+def add_evidence_append_arguments(parser: argparse.ArgumentParser) -> None:
+    """Option fact source for ``evidence-append`` (see
+    :func:`add_locks_extend_arguments`)."""
+    parser.add_argument("--task", required=True)
+    parser.add_argument("--type", dest="evd_type", required=True)
+    parser.add_argument("--description", required=True,
+                        help="description cell; must carry 目标对齐： >= 30 chars")
+    parser.add_argument("--basis", required=True,
+                        help="factual basis (after 事实依据：)")
+    parser.add_argument("--artifacts", required=True,
+                        help="artifacts cell (all 10 row cells must be non-empty)")
+    parser.add_argument("--actor", default="governance-store")
+    parser.add_argument("--date", default="")
+    parser.add_argument("--gate", default="G11")
+    parser.add_argument("--conclusion", default="✅ 完成")
+    parser.add_argument("--refs", default="",
+                        help="semicolon-separated kind:value refs "
+                             "(repo_file|git_object|governance_id|url|"
+                             "human_observation; aliases url_syntax/human_note)")
+    parser.add_argument("--operation-id", default="")
+    parser.add_argument("--expected-revision", type=int, default=None)
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--timeout", type=float, default=10.0)
+
+
+def add_decision_append_arguments(parser: argparse.ArgumentParser) -> None:
+    """Option fact source for ``decision-append`` (see
+    :func:`add_locks_extend_arguments`)."""
+    parser.add_argument("--decider", required=True)
+    parser.add_argument("--content", required=True)
+    parser.add_argument("--basis", default="")
+    parser.add_argument("--date", default="")
+    parser.add_argument("--operation-id", default="")
+    parser.add_argument("--expected-revision", type=int, default=None)
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--timeout", type=float, default=10.0)
+
+
 def build_parser():
     """The module-owned composition root (see module docstring: the frozen
     engine dispatch face is not grown by a batch-1 implementation ticket)."""
@@ -1764,58 +1893,16 @@ def build_parser():
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("locks-extend", help="extend file-lock TTLs")
-    p.add_argument("--task", required=True)
-    p.add_argument("--files", required=True,
-                   help="semicolon/comma-separated locked paths to extend")
-    p.add_argument("--ttl-seconds", type=int, default=None,
-                   help="absolute new TTL value")
-    p.add_argument("--extend-by", type=int, default=None,
-                   help="add seconds to the current TTL")
-    p.add_argument("--reason", required=True)
-    p.add_argument("--operation-id", default="")
-    p.add_argument("--timeout", type=float, default=10.0)
+    add_locks_extend_arguments(p)
 
     p = sub.add_parser("locks-amend", help="amend a dispatch lock")
-    p.add_argument("--task", required=True)
-    p.add_argument("--add-file", default="")
-    p.add_argument("--expected-new", action="store_true")
-    p.add_argument("--ttl-seconds", type=int, default=None)
-    p.add_argument("--extend-by", type=int, default=None)
-    p.add_argument("--reason", required=True)
-    p.add_argument("--operation-id", default="")
-    p.add_argument("--timeout", type=float, default=10.0)
+    add_locks_amend_arguments(p)
 
     p = sub.add_parser("evidence-append", help="append one EVD row")
-    p.add_argument("--task", required=True)
-    p.add_argument("--type", dest="evd_type", required=True)
-    p.add_argument("--description", required=True,
-                   help="description cell; must carry 目标对齐： >= 30 chars")
-    p.add_argument("--basis", required=True,
-                   help="factual basis (after 事实依据：)")
-    p.add_argument("--artifacts", required=True,
-                   help="artifacts cell (all 10 row cells must be non-empty)")
-    p.add_argument("--actor", default="governance-store")
-    p.add_argument("--date", default="")
-    p.add_argument("--gate", default="G11")
-    p.add_argument("--conclusion", default="✅ 完成")
-    p.add_argument("--refs", default="",
-                   help="semicolon-separated kind:value refs "
-                        "(repo_file|git_object|governance_id|url|"
-                        "human_observation; aliases url_syntax/human_note)")
-    p.add_argument("--operation-id", default="")
-    p.add_argument("--expected-revision", type=int, default=None)
-    p.add_argument("--dry-run", action="store_true")
-    p.add_argument("--timeout", type=float, default=10.0)
+    add_evidence_append_arguments(p)
 
     p = sub.add_parser("decision-append", help="append one DEC row")
-    p.add_argument("--decider", required=True)
-    p.add_argument("--content", required=True)
-    p.add_argument("--basis", default="")
-    p.add_argument("--date", default="")
-    p.add_argument("--operation-id", default="")
-    p.add_argument("--expected-revision", type=int, default=None)
-    p.add_argument("--dry-run", action="store_true")
-    p.add_argument("--timeout", type=float, default=10.0)
+    add_decision_append_arguments(p)
     return parser
 
 
@@ -1827,55 +1914,96 @@ COMMANDS = {
 }
 
 
-def main(argv=None) -> int:
-    """CLI entry — JSON summary on stdout, exit 0 ok / 2 refusal / 3 retry."""
+def _configure_stdio() -> None:
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     except Exception:  # noqa: BLE001 — best-effort console hygiene
         pass
+
+
+def _governance_dir_from(args) -> Path:
+    """The governance dir for a parsed Namespace: the engine dispatch face
+    reads the engine-resolved ``project_root``; the self-contained CLI reads
+    its own ``--project-root`` (default cwd)."""
+    return Path(getattr(args, "project_root", ".") or ".") \
+        / GOVERNANCE_DIR_NAME
+
+
+def cmd_locks_extend(args) -> int:
+    """Engine dispatch face (batch-2.0 wiring, FEAT-055): consume the
+    engine's parsed Namespace directly — no argv re-parse (FEAT-047 P2-1
+    caliber)."""
+    _configure_stdio()
+    payload = _run(locks_extend, dict(
+        task_id=args.task,
+        files=_split_cli_list(args.files),
+        ttl_seconds=args.ttl_seconds, extend_by=args.extend_by,
+        reason=args.reason, governance_dir=_governance_dir_from(args),
+        operation_id=args.operation_id or None,
+        timeout_seconds=args.timeout))
+    return _emit(payload)
+
+
+def cmd_locks_amend(args) -> int:
+    """Engine dispatch face (see :func:`cmd_locks_extend`)."""
+    _configure_stdio()
+    payload = _run(locks_amend, dict(
+        task_id=args.task, add_file=args.add_file or None,
+        expected_new=args.expected_new,
+        ttl_seconds=args.ttl_seconds, extend_by=args.extend_by,
+        reason=args.reason, governance_dir=_governance_dir_from(args),
+        operation_id=args.operation_id or None,
+        timeout_seconds=args.timeout))
+    return _emit(payload)
+
+
+def cmd_evidence_append(args) -> int:
+    """Engine dispatch face (see :func:`cmd_locks_extend`)."""
+    _configure_stdio()
+    payload = _run(evidence_append, dict(
+        task_id=args.task, evd_type=args.evd_type,
+        description=args.description, basis=args.basis,
+        artifacts=args.artifacts, actor=args.actor,
+        date=args.date or None, gate=args.gate,
+        conclusion=args.conclusion,
+        refs=_split_refs_list(args.refs),
+        governance_dir=_governance_dir_from(args),
+        operation_id=args.operation_id or None,
+        dry_run=args.dry_run,
+        expected_revision=args.expected_revision,
+        timeout_seconds=args.timeout))
+    return _emit(payload)
+
+
+def cmd_decision_append(args) -> int:
+    """Engine dispatch face (see :func:`cmd_locks_extend`)."""
+    _configure_stdio()
+    payload = _run(decision_append, dict(
+        decider=args.decider, content=args.content,
+        basis=args.basis, date=args.date or None,
+        governance_dir=_governance_dir_from(args),
+        operation_id=args.operation_id or None,
+        dry_run=args.dry_run,
+        expected_revision=args.expected_revision,
+        timeout_seconds=args.timeout))
+    return _emit(payload)
+
+
+_CLI_HANDLERS = {
+    "locks-extend": cmd_locks_extend,
+    "locks-amend": cmd_locks_amend,
+    "evidence-append": cmd_evidence_append,
+    "decision-append": cmd_decision_append,
+}
+
+
+def main(argv=None) -> int:
+    """CLI entry — JSON summary on stdout, exit 0 ok / 2 refusal / 3 retry."""
+    _configure_stdio()
     parser = build_parser()
     args = parser.parse_args(argv)
-    governance_dir = Path(args.project_root) / GOVERNANCE_DIR_NAME
-    if args.command == "locks-extend":
-        payload = _run(locks_extend, dict(
-            task_id=args.task,
-            files=_split_cli_list(args.files),
-            ttl_seconds=args.ttl_seconds, extend_by=args.extend_by,
-            reason=args.reason, governance_dir=governance_dir,
-            operation_id=args.operation_id or None,
-            timeout_seconds=args.timeout))
-    elif args.command == "locks-amend":
-        payload = _run(locks_amend, dict(
-            task_id=args.task, add_file=args.add_file or None,
-            expected_new=args.expected_new,
-            ttl_seconds=args.ttl_seconds, extend_by=args.extend_by,
-            reason=args.reason, governance_dir=governance_dir,
-            operation_id=args.operation_id or None,
-            timeout_seconds=args.timeout))
-    elif args.command == "evidence-append":
-        payload = _run(evidence_append, dict(
-            task_id=args.task, evd_type=args.evd_type,
-            description=args.description, basis=args.basis,
-            artifacts=args.artifacts, actor=args.actor,
-            date=args.date or None, gate=args.gate,
-            conclusion=args.conclusion,
-            refs=_split_refs_list(args.refs),
-            governance_dir=governance_dir,
-            operation_id=args.operation_id or None,
-            dry_run=args.dry_run,
-            expected_revision=args.expected_revision,
-            timeout_seconds=args.timeout))
-    else:
-        payload = _run(decision_append, dict(
-            decider=args.decider, content=args.content,
-            basis=args.basis, date=args.date or None,
-            governance_dir=governance_dir,
-            operation_id=args.operation_id or None,
-            dry_run=args.dry_run,
-            expected_revision=args.expected_revision,
-            timeout_seconds=args.timeout))
-    return _emit(payload)
+    return _CLI_HANDLERS[args.command](args)
 
 
 if __name__ == "__main__":

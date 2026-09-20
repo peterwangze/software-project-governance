@@ -24,14 +24,17 @@ Run:
     python -m unittest discover -s skills/software-project-governance/infra/tests -p "test_baseline_metadata.py" -v
 """
 
+import argparse
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
+from unittest import mock
 
 _HERE = Path(__file__).resolve().parent
 _INFRA_DIR = _HERE.parent
@@ -738,6 +741,189 @@ class StockBaselineProvenanceTests(unittest.TestCase):
                 current_instrument_version="check-injection-budget@0.85.0",
             )
         self.assertEqual(outcome.evaluation, "pass")
+
+
+class DispatchFaceTests(unittest.TestCase):
+    """P3-5 + P2-1 (review-FEAT-047, batch-2.0 FEAT-055): the engine
+    dispatch face gets its own guards — the ``cmd_*`` handlers consume a
+    Namespace built by the SAME option fact source (``add_*_arguments``) the
+    engine subparser uses, and there is exactly one option definition per
+    flag (the former Namespace→argv→main re-parse and its hand-maintained
+    option maps are gone).
+    """
+
+    # instrument-version is DERIVED from the stock row (never a literal
+    # version pin — the static-pin scan stays clean by construction)
+    INSTRUMENT_VERSION = _valid_kwargs()["instrument_version"]
+
+    BASE_ARGS = [
+        "baseline-register",
+        "--gate", "injection-budget",
+        "--value", "4216",
+        "--unit", "tokens",
+        "--measured-at", "2026-09-19",
+        "--measurement-command",
+        "verify_workflow.py check-injection-budget --profile lightweight",
+        "--instrument-version", INSTRUMENT_VERSION,
+        "--target-commit-digest", "b717835",
+        "--scope", "resident injection template set",
+        "--numerator", "resident tokens measured",
+        "--denominator", "INJECTION_BUDGET_TOKENS=6000",
+        "--exclusions", "tool-return budget face",
+        "--threshold-basis", "DEC-210/211",
+        "--expiry-condition", "SKILL version bump or surface SHA change",
+        "--source-evd", "EVD-1104",
+    ]
+
+    def test_cmd_register_handler_consumes_engine_namespace(self):
+        with _tmp_registry() as registry:
+            parser = bm.build_parser()
+            args = parser.parse_args(self.BASE_ARGS
+                                     + ["--registry", str(registry)])
+            with _capture_stdio() as (buf_out, _):
+                code = bm.cmd_baseline_register(args)
+            self.assertEqual(code, 0)
+            payload = json.loads(buf_out.getvalue())
+            self.assertEqual(payload["status"], "registered")
+            self.assertTrue(registry.exists())
+
+    def test_cmd_evaluate_handler_consumes_engine_namespace(self):
+        with _tmp_registry() as registry:
+            bm.register(bm.BaselineMetadata(**_valid_kwargs()), registry)
+            scope_digest = bm.caliber_digest(
+                "tokens", _valid_kwargs()["numerator"],
+                _valid_kwargs()["denominator"], _valid_kwargs()["exclusions"])
+            parser = bm.build_parser()
+            args = parser.parse_args([
+                "baseline-evaluate", "--gate", "injection-budget",
+                "--policy-class", "release", "--observed-value", "5966",
+                "--threshold", "6000", "--direction", "upper",
+                "--observed-unit", "tokens",
+                "--observed-scope-digest", scope_digest,
+                "--current-instrument-version", self.INSTRUMENT_VERSION,
+                "--current-target-digest", "b717835",
+                "--registry", str(registry)])
+            with _capture_stdio() as (buf_out, _):
+                code = bm.cmd_baseline_evaluate(args)
+            self.assertEqual(code, 0)
+            self.assertEqual(json.loads(buf_out.getvalue())["evaluation"],
+                             "pass")
+
+    def test_add_arguments_is_the_single_option_fact_source(self):
+        """The exported add_*_arguments faces define EXACTLY the option set
+        of build_parser's own subparsers (same dests, requireds, choices) —
+        proving the engine subparser and the module CLI cannot drift."""
+        for add_face, command in ((bm.add_register_arguments,
+                                   "baseline-register"),
+                                  (bm.add_evaluate_arguments,
+                                   "baseline-evaluate")):
+            canonical = bm.build_parser()
+            engine_side = argparse.ArgumentParser()
+            sub = engine_side.add_subparsers(dest="command")
+            face_parser = sub.add_parser(command)
+            add_face(face_parser)
+            canonical_sub = next(a for a in canonical._subparsers._group_actions
+                                 if a.dest == "command")
+            canonical_opts = {
+                a.dest: (a.required, getattr(a, "option_strings", []))
+                for a in canonical_sub.choices[command]._actions
+                if a.dest != "help"}
+            face_opts = {
+                a.dest: (a.required, getattr(a, "option_strings", []))
+                for a in face_parser._actions if a.dest != "help"}
+            self.assertEqual(canonical_opts, face_opts, command)
+
+    def test_namespace_handlers_no_longer_route_through_argv(self):
+        """P2-1 structural pin: the argv-rebuild helpers are gone — a
+        regression that reintroduces the double fact source fails here."""
+        for gone in ("_namespace_to_argv", "_register_option_map",
+                     "_evaluate_option_map"):
+            self.assertFalse(hasattr(bm, gone), gone)
+
+
+class RegistryNegativeControlTests(unittest.TestCase):
+    """P2-2 (b)/(c)/(d) (review-FEAT-047, batch-2.0 FEAT-055): the
+    fail-closed reader and the crash-safe writer get their direct negative
+    controls."""
+
+    def test_key_row_gate_id_mismatch_refused(self):
+        with _tmp_registry() as registry:
+            bm.register(bm.BaselineMetadata(**_valid_kwargs()), registry)
+            payload = json.loads(registry.read_text(encoding="utf-8"))
+            row = payload["baselines"]["injection-budget"]
+            row["gate_id"] = "injection-budget-spoofed"
+            payload["baselines"]["injection-budget"] = row
+            registry.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8")
+            with self.assertRaises(bm.BaselineMetadataError) as caught:
+                bm.load_registry(registry)
+            self.assertIn("keys and rows must agree", str(caught.exception))
+
+    def test_non_utf8_bytes_refused(self):
+        with _tmp_registry() as registry:
+            registry.write_bytes(
+                '{"baselines": "中文通道"}'.encode("gbk"))
+            with self.assertRaises(bm.BaselineMetadataError) as caught:
+                bm.load_registry(registry)
+            self.assertIn("not valid UTF-8", str(caught.exception))
+
+    def test_crash_during_replace_keeps_old_file_and_leaves_no_temp(self):
+        with _tmp_registry() as registry:
+            bm.register(bm.BaselineMetadata(**_valid_kwargs()), registry)
+            before = registry.read_bytes()
+            parent = registry.parent
+            crashed = bm.BaselineMetadata(
+                **_valid_kwargs(gate_id="crash-gate"))
+
+            def exploding_replace(src, dst):
+                raise OSError(13, "simulated crash mid-replace")
+
+            with mock.patch.object(bm.os, "replace", exploding_replace):
+                with self.assertRaises(OSError):
+                    bm.register(crashed, registry)
+            self.assertEqual(registry.read_bytes(), before)
+            leftovers = [p.name for p in parent.iterdir()
+                         if p.name.startswith(".baselines-")]
+            self.assertEqual(leftovers, [],
+                             "crash-point temp files must be cleaned up")
+
+
+class ConcurrentRegisterWindowTests(unittest.TestCase):
+    """P2-2(a) — the TOCTOU negative control (review-FEAT-047 DoD-7 ruling,
+    batch-2.0 obligation FEAT-055): ``register`` is an UNLOCKED
+    load→mutate→os.replace whole-file write, so two interleaved registers of
+    DIFFERENT gates can lost-update each other.  This test reproduces the
+    window with a controlled interleave (no thread-scheduling assumptions)
+    to pin the documented single-writer constraint; a cross-process lock
+    face landing MUST flip it with that deliberate change."""
+
+    def test_concurrent_register_lost_update_window_is_documented(self):
+        with _tmp_registry() as registry:
+            meta_a = bm.BaselineMetadata(**_valid_kwargs(gate_id="gate-a"))
+            meta_b = bm.BaselineMetadata(**_valid_kwargs(gate_id="gate-b"))
+            original_load = bm.load_registry
+            state = {"b_done": False}
+
+            def interleaved_load(path):
+                # Writer A's register loads the (empty) registry; while A
+                # holds that stale view, writer B completes a FULL register.
+                result = original_load(path)
+                if not state["b_done"]:
+                    state["b_done"] = True
+                    bm.register(meta_b, registry)
+                return result
+
+            with mock.patch.object(bm, "load_registry", interleaved_load):
+                bm.register(meta_a, registry)
+
+            final = bm.load_registry(registry)
+            self.assertIn("gate-a", final["baselines"])
+            # THE WINDOW: B's row is silently gone — A wrote its stale view
+            # over B's completed registration without any refusal.
+            self.assertNotIn("gate-b", final["baselines"],
+                             "if a lock face landed, flip this test: the "
+                             "lost update must now be refused")
 
 
 if __name__ == "__main__":

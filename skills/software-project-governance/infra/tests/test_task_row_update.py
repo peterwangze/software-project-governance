@@ -846,5 +846,41 @@ class CliSurfaceTests(_WriterFixture):
         self.assertIn("review", payload["preview"]["row_after"])
 
 
+class EngineDispatchFaceTests(_WriterFixture):
+    """FEAT-055 (batch-2.0 wiring): the engine dispatch face consumes an
+    engine-built Namespace directly — the same executor ``main`` runs, no
+    Namespace→argv round-trip (FEAT-047 P2-1 caliber)."""
+
+    def _engine_args(self, *extra):
+        argv = ["--task", "FEAT-051", "--from", "dev", "--to", "review",
+                "--reason", "engine dispatch", "--file", str(self.target)]
+        return tru._build_parser().parse_args(list(argv) + list(extra))
+
+    def test_cmd_handler_consumes_namespace_and_flips(self):
+        self.write_table(_table(_ROW_FEAT049, _ROW_FEAT051_DEV))
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            code = tru.cmd_task_row_update(self._engine_args())
+        payload = json.loads(buffer.getvalue().strip())
+        self.assertEqual(code, tru.ExitCode.OK)
+        self.assertEqual(payload["result"]["code"], "ok")
+
+    def test_cmd_handler_missing_triple_uses_usage_refusal(self):
+        """An engine Namespace without --from/--to/--reason and without
+        --inspect/--dry-run (e.g. a caller that only anchored --task) hits
+        the identical usage-level refusal: exit 2 with the argparse usage
+        text, exactly like the self-contained CLI."""
+        self.write_table(_table(_ROW_FEAT051_DEV))
+        args = tru._build_parser().parse_args(
+            ["--task", "FEAT-051", "--file", str(self.target)])
+        stderr = io.StringIO()
+        with mock.patch.object(tru.sys, "stderr", stderr):
+            with self.assertRaises(SystemExit) as caught:
+                tru.cmd_task_row_update(args)
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("are required for --dry-run/execute",
+                      stderr.getvalue())
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

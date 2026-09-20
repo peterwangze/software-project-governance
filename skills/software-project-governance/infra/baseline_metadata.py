@@ -573,6 +573,18 @@ def register(metadata: BaselineMetadata, registry_path, *,
     UTF-8, then a full re-read through :func:`load_registry` — the self-check
     parses the stored file with the same schema and refuses on any anomaly
     (it never "restores" the old file; recovery is a human decision).
+
+    Single-writer constraint (P2-2 condition, discharged in prose by
+    FEAT-055 — the frozen writer core cannot grow a lock inside a wiring
+    ticket): ``register`` is an UNLOCKED load→mutate→``os.replace``
+    whole-file write.  Two concurrent registers of different gates can
+    lost-update each other; the same gate with different payloads racing can
+    slip past :class:`BaselineConflict`.  Until a cross-process lock face
+    lands (batch-2.0 review: the FEAT-046 lock pipeline is the designated
+    owner), writes to ``baselines.json`` MUST stay single-writer — one
+    Coordinator, serial registrations, which the governance flow already
+    is.  ``test_concurrent_register_lost_update_window_is_documented`` pins
+    this window; a lock face landing MUST flip that test with the change.
     """
     if not isinstance(metadata, BaselineMetadata):
         raise ContractViolation(
@@ -869,10 +881,17 @@ def evaluate(
         f"{float(meta.value):g} @ {meta.measured_at})")
 
 
-# ── CLI (self-contained until the batch-1 registry wiring lands) ────────────
+# ── CLI (engine dispatch wired by the batch-2.0 integration slice, FEAT-055;
+#    FEAT-047 P2-1 discharged here: the option fact source below is the
+#    single definition shared by ``build_parser`` and the engine subparser,
+#    and the ``cmd_*`` handlers consume the engine Namespace directly — the
+#    former Namespace→argv→main re-parse and its hand-maintained option maps
+#    are gone) ────────────────────────────────────────────────────────────────
 
 
-def _add_register_options(parser: argparse.ArgumentParser) -> None:
+def add_register_arguments(parser: argparse.ArgumentParser) -> None:
+    """Option fact source for ``baseline-register`` (single definition
+    shared by ``build_parser`` and the engine subparser — FEAT-047 P2-1)."""
     parser.add_argument("--gate", required=True)
     parser.add_argument("--value", required=True, type=float)
     parser.add_argument("--unit", required=True)
@@ -898,7 +917,9 @@ def _add_register_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--dry-run", action="store_true")
 
 
-def _add_evaluate_options(parser: argparse.ArgumentParser) -> None:
+def add_evaluate_arguments(parser: argparse.ArgumentParser) -> None:
+    """Option fact source for ``baseline-evaluate`` (see
+    :func:`add_register_arguments`)."""
     parser.add_argument("--gate", required=True)
     parser.add_argument("--policy-class", required=True,
                         choices=list(POLICY_CLASSES))
@@ -941,16 +962,94 @@ def build_parser() -> argparse.ArgumentParser:
     register_parser = subparsers.add_parser(
         "baseline-register",
         help="register one gate baseline (dry-run previews without writing)")
-    _add_register_options(register_parser)
+    add_register_arguments(register_parser)
     evaluate_parser = subparsers.add_parser(
         "baseline-evaluate",
         help="evaluate an observation against the registered baseline")
-    _add_evaluate_options(evaluate_parser)
+    add_evaluate_arguments(evaluate_parser)
     return parser
 
 
 def _emit(payload: Dict[str, Any]) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+
+
+def _run_error(exc: Exception) -> int:
+    """Shared CLI error face: command errors exit 3, never a verdict code."""
+    print(f"ERROR: {exc}", file=sys.stderr)
+    return 3
+
+
+def run_register(args) -> int:
+    """Execute a ``baseline-register`` Namespace (shared by ``main`` and the
+    engine dispatch face; FEAT-047 P2-1 — no argv round-trip)."""
+    try:
+        metadata = BaselineMetadata(
+            gate_id=args.gate,
+            value=args.value,
+            unit=args.unit,
+            measured_at=args.measured_at,
+            measurement_command=args.measurement_command,
+            instrument_version=args.instrument_version,
+            target_commit_digest=args.target_commit_digest,
+            scope=args.scope,
+            numerator=args.numerator,
+            denominator=args.denominator,
+            exclusions=args.exclusions,
+            threshold_basis=args.threshold_basis,
+            expiry_condition=args.expiry_condition,
+            source_evd=args.source_evd,
+            max_age_days=args.max_age_days,
+        )
+        result = register(metadata, args.registry, dry_run=args.dry_run)
+        payload = result.to_dict()
+        if args.dry_run:
+            payload["would_write"] = metadata.to_storage_dict()
+        _emit(payload)
+        return 0
+    except (ContractViolation, BaselineMetadataError) as exc:
+        return _run_error(exc)
+    except OSError as exc:
+        # Storage-face convergence (P0-1 same family): a registry the CLI
+        # cannot read/write (permission, missing parent, disk) is a command
+        # error (exit 3), never a gate verdict (0/1/2 are verdict codes).
+        print(f"ERROR: storage failure: {exc}", file=sys.stderr)
+        return 3
+
+
+def run_evaluate(args) -> int:
+    """Execute a ``baseline-evaluate`` Namespace (shared by ``main`` and the
+    engine dispatch face; FEAT-047 P2-1 — no argv round-trip)."""
+    try:
+        # P0-1 (review-FEAT-047-CODE-R0): parse through the same
+        # fail-closed wrapper as every other timestamp — a bare
+        # ``fromisoformat`` ValueError would pierce the except face and
+        # exit 1, wearing a FAIL verdict for what is a usage error.
+        now = (_parse_timestamp("main: --now", args.now) if args.now
+               else datetime.now())
+        outcome = evaluate(
+            args.gate,
+            args.observed_value,
+            policy_class=args.policy_class,
+            threshold=args.threshold,
+            direction=args.direction,
+            registry=args.registry,
+            observed_unit=args.observed_unit,
+            observed_scope_digest=args.observed_scope_digest,
+            current_instrument_version=args.current_instrument_version,
+            current_target_digest=args.current_target_digest,
+            floor_value=args.floor_value,
+            now=now,
+        )
+        _emit(outcome.to_dict())
+        return {"pass": 0, "fail": 1, "not_evaluable": 2}[
+            outcome.evaluation]
+    except (ContractViolation, BaselineMetadataError) as exc:
+        return _run_error(exc)
+    except OSError as exc:
+        # Storage-face convergence (see run_register).
+        print(f"ERROR: storage failure: {exc}", file=sys.stderr)
+        return 3
 
 
 def main(argv=None) -> int:
@@ -966,126 +1065,23 @@ def main(argv=None) -> int:
     if not getattr(args, "command", None):
         parser.print_usage(sys.stderr)
         return 3
-    try:
-        if args.command == "baseline-register":
-            metadata = BaselineMetadata(
-                gate_id=args.gate,
-                value=args.value,
-                unit=args.unit,
-                measured_at=args.measured_at,
-                measurement_command=args.measurement_command,
-                instrument_version=args.instrument_version,
-                target_commit_digest=args.target_commit_digest,
-                scope=args.scope,
-                numerator=args.numerator,
-                denominator=args.denominator,
-                exclusions=args.exclusions,
-                threshold_basis=args.threshold_basis,
-                expiry_condition=args.expiry_condition,
-                source_evd=args.source_evd,
-                max_age_days=args.max_age_days,
-            )
-            result = register(metadata, args.registry, dry_run=args.dry_run)
-            payload = result.to_dict()
-            if args.dry_run:
-                payload["would_write"] = metadata.to_storage_dict()
-            _emit(payload)
-            return 0
-        if args.command == "baseline-evaluate":
-            # P0-1 (review-FEAT-047-CODE-R0): parse through the same
-            # fail-closed wrapper as every other timestamp — a bare
-            # ``fromisoformat`` ValueError would pierce the except face and
-            # exit 1, wearing a FAIL verdict for what is a usage error.
-            now = (_parse_timestamp("main: --now", args.now) if args.now
-                   else datetime.now())
-            outcome = evaluate(
-                args.gate,
-                args.observed_value,
-                policy_class=args.policy_class,
-                threshold=args.threshold,
-                direction=args.direction,
-                registry=args.registry,
-                observed_unit=args.observed_unit,
-                observed_scope_digest=args.observed_scope_digest,
-                current_instrument_version=args.current_instrument_version,
-                current_target_digest=args.current_target_digest,
-                floor_value=args.floor_value,
-                now=now,
-            )
-            _emit(outcome.to_dict())
-            return {"pass": 0, "fail": 1, "not_evaluable": 2}[
-                outcome.evaluation]
-        return 3
-    except (ContractViolation, BaselineMetadataError) as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        return 3
-    except OSError as exc:
-        # Storage-face convergence (P0-1 same family): a registry the CLI
-        # cannot read/write (permission, missing parent, disk) is a command
-        # error (exit 3), never a gate verdict (0/1/2 are verdict codes).
-        print(f"ERROR: storage failure: {exc}", file=sys.stderr)
-        return 3
+    if args.command == "baseline-register":
+        return run_register(args)
+    if args.command == "baseline-evaluate":
+        return run_evaluate(args)
+    return 3
 
 
 def cmd_baseline_register(args) -> int:
-    """Registry-wiring face (engine ``cmd_*`` dispatch convention).
-
-    Reads the same options the subcommand parser defines off the engine's
-    Namespace; the batch-1 integration point adds the two dispatch keys and
-    identical option names to the engine parser (self-contained module,
-    engine wires dispatch — governance_cost pattern).
-    """
-    return main(["baseline-register"] + _namespace_to_argv(
-        args, _register_option_map()))
+    """Engine dispatch face (batch-2.0 wiring, FEAT-055): consume the
+    engine's already-parsed Namespace directly — the former
+    Namespace→argv→main re-parse is gone (FEAT-047 P2-1)."""
+    return run_register(args)
 
 
 def cmd_baseline_evaluate(args) -> int:
-    return main(["baseline-evaluate"] + _namespace_to_argv(
-        args, _evaluate_option_map()))
-
-
-def _register_option_map() -> Dict[str, str]:
-    return {
-        "gate": "--gate", "value": "--value", "unit": "--unit",
-        "measured_at": "--measured-at",
-        "measurement_command": "--measurement-command",
-        "instrument_version": "--instrument-version",
-        "target_commit_digest": "--target-commit-digest",
-        "scope": "--scope", "numerator": "--numerator",
-        "denominator": "--denominator", "exclusions": "--exclusions",
-        "threshold_basis": "--threshold-basis",
-        "expiry_condition": "--expiry-condition", "source_evd": "--source-evd",
-        "max_age_days": "--max-age-days", "registry": "--registry",
-        "dry_run": "--dry-run",
-    }
-
-
-def _evaluate_option_map() -> Dict[str, str]:
-    return {
-        "gate": "--gate", "policy_class": "--policy-class",
-        "observed_value": "--observed-value", "threshold": "--threshold",
-        "direction": "--direction", "observed_unit": "--observed-unit",
-        "observed_scope_digest": "--observed-scope-digest",
-        "current_instrument_version": "--current-instrument-version",
-        "current_target_digest": "--current-target-digest",
-        "floor_value": "--floor-value", "now": "--now",
-        "registry": "--registry",
-    }
-
-
-def _namespace_to_argv(args: Any, option_map: Dict[str, str]) -> list:
-    """Rebuild an argv from an engine-side Namespace (None values dropped,
-    booleans become flags)."""
-    argv: list = []
-    for attr, flag in option_map.items():
-        value = getattr(args, attr, None)
-        if value is None:
-            continue
-        if value is True:
-            argv.append(flag)
-        elif value is not False:
-            argv.extend([flag, str(value)])
-    return argv
+    """Engine dispatch face (see :func:`cmd_baseline_register`)."""
+    return run_evaluate(args)
 
 
 if __name__ == "__main__":  # pragma: no cover

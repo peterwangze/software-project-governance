@@ -1876,5 +1876,40 @@ class FIX320ExemptionLedgerTests(unittest.TestCase):
                 self.assertEqual(payload["exemptions_count"], len(payload["exemptions_applied"]))
 
 
+class FIX369SemanticBudgetRecalibrationTests(unittest.TestCase):
+    """FIX-369 regression guard (v0.87.0): the semantic-budget recalibration.
+
+    The budget move 300000 -> 361923 is a capacity re-derivation from a
+    measured baseline, not an over-limit waiver: the scanner must still
+    fail closed when the unit count crosses the configured limit, and any
+    future budget move must re-derive the constant from a recorded
+    measurement via the formula documented next to ``ScanLimits``.
+    """
+
+    def test_budget_matches_recorded_formula(self):
+        # Recomputable derivation (provenance block in
+        # checks/loop_runtime_claims.py): ceil(301602 measured peak x 1.2
+        # margin) = 361923, recorded 2026-09-20 (+08:00) at commit 6e25753.
+        # A budget edit that skips this derivation fails here — silent
+        # raises are the drift failure mode review-REL-084-DESIGN BA-1
+        # names.
+        import math
+
+        self.assertEqual(361923, ScanLimits().max_semantic_units)
+        self.assertEqual(361923, math.ceil(301602 * 1.2))
+
+    def test_recalibrated_budget_still_fail_closes_on_excess(self):
+        # The recalibrated default is a hard limit, not a waiver: a fixture
+        # scan under a tightened limit still emits SEMANTIC_BUDGET_EXCEEDED
+        # and a BLOCKED verdict.
+        helper = LoopRuntimeClaimTests("test_clean_complete_inventory_passes")
+        self.addCleanup(helper.doCleanups)
+        stack, product, plugin, host, _, _ = helper._roots()
+        self.addCleanup(stack.cleanup)
+        report = helper._scan(product, plugin, host, limits=ScanLimits(max_semantic_units=0))
+        self.assertIn("SEMANTIC_BUDGET_EXCEEDED", {f.code for f in report.findings})
+        self.assertEqual("BLOCKED", report.verdict)
+
+
 if __name__ == "__main__":
     raise SystemExit(_fix215_cli_or_unittest())

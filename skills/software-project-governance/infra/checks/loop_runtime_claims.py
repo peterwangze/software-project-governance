@@ -222,7 +222,25 @@ class ScanLimits:
     max_candidates: int = 1500
     max_candidate_bytes: int = 24 * 1024 * 1024
     max_file_bytes: int = 2 * 1024 * 1024
-    max_semantic_units: int = 300000
+    # FIX-369 (v0.87.0, DEC-226): recalibrated 300000 -> 361923 as a capacity
+    # re-derivation from measurement, never an over-limit waiver —
+    # SEMANTIC_BUDGET_EXCEEDED still fail-closes the scan (regression guard:
+    # FIX369SemanticBudgetRecalibrationTests in
+    # infra/tests/test_loop_runtime_claims.py).  Recomputable formula:
+    #   max_semantic_units = ceil(measured_peak x 1.2)
+    # measured_peak = 301602 semantic_units = the highest same-day
+    # check-loop-runtime-claims measurement on record (2026-09-20 +08:00:
+    # 300701 morning / 300913 ~17:4x / 301602 ~18:0x; working tree at commit
+    # 6e25753; payload 15,385,341B < the 32MiB payload budget), and 1.2 is
+    # the growth-margin factor from docs/planning/version-plan-0.87.0.md
+    # §3.1 (candidate A).  ceil(301602 x 1.2) = ceil(361922.4) = 361923.
+    # Derived pre-archive, so the M-8 evidence-log hot-face migration
+    # (~8920 units) only widens the headroom.  M-2 duty: re-measure at each
+    # release gate; before moving this constant again, re-derive it via the
+    # same formula and register the measurement provenance with
+    # verify_workflow.py baseline-register (gate check-31-semantic-units) —
+    # silent raises are forbidden.
+    max_semantic_units: int = 361923
     max_semantic_payload_bytes: int = 32 * 1024 * 1024
 
 

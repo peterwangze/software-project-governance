@@ -2,6 +2,61 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.86.0] - 2026-09-20
+
+### 0.86.0 - **确定性核心架构演进第一版：写入器时代**：四类可靠原子写入器 + 一条可恢复标准闭环 + 受管状态变更零人工直写（REL-082 / FEAT-049/051/046/047/055/056/057 + FIX-365 / DEC-218~224 / EVD-1102~1118）
+
+0.86.0 是 **MINOR** 发布，承载 REL-082（0.86.0 架构演进规划闭环——用户四交付：深度检视→arch 顾问多轮→架构演进设计→版本规划；EVD-1102）+ DEC-220（**确定性核心 / LLM 边界设计公理**：明确规则的 schema 约束、状态翻转、记录追加、序列编排、门禁执行、量测计价全部软件化走 CLI/机录/校验器，仅不确定的逻辑由 LLM 推进——本版为其首次系统性落地）+ **DEC-221（0.86.0 设计演进全链预授权：设计打磨完成后授权 Coordinator 按推荐推进直至完全闭环并发布对应版本；预授权不免除门禁）**。版本主题：**四类可靠原子写入器 + 一条可恢复标准闭环 + 受管范围零人工直写**——批 0 M0 契约冻结（FEAT-049，revision m0-r1）→ 批 1 原子写入器三票（FEAT-051/046/047，DEC-222 归属裁定兑现）→ 批 2 集成窗+closure 纵切+混沌发布门+write-guard 执法（FEAT-055/056/057+FIX-365），对应 EVD-1102~1118。
+
+**批 0 — M0 契约冻结与验收基座（FEAT-049，commit `27eeea0`）**：扩展既有 `contracts.py`（573→1,140 行纯追加，99 存量契约测试零回归）——五面契约冻结 revision **m0-r1**（operation_id 产生/作用域/重试复用；状态机含执行态 UNKNOWN 与评估态 NOT_EVALUABLE 三轴；错误码闭枚举；SchemaVersionWindow；写入器最小 I/O 与效果判定）+ 版本化 fixtures + 契约测试（99 存量零回归 + 58 新增）+ 量测协议工件（`benchmarks/closure/protocol.md` + 固定用例组三路径）+ pin revision 记录。归属链：0.85.0 段已如实披露为「批 0 前置随候选树入库、0.85.0 零行为消费」——本版正式承载。REVIEW-FEAT-049-R0 APPROVED_WITH_NOTES/0（机录）；EVD-1105。
+
+**批 1 — 原子写入器三票（DEC-222 归属裁定兑现：三票为纯 0.86.0 轨道工作，0.85.0 CHANGELOG 窗口不承载）**：
+
+- **task-row-update 写入器 CLI（FEAT-051，commit `b2152ea`）**：B-1 根终结面——M7.4 任务表行变更可执行化：五步写流程/短时文件锁 fail-closed/双层 CAS（observed_revision）/凭证侧车 18 键 join 锚/effect-based 幂等；R1 增 `_cell_parts` 偏移替换字节保持 + 4 红相驱动测试（R0 NEEDS_CHANGE：状态 cell 空白静默剥离——Reviewer 真表事故实证）。验收 = 40 测试 + mutation 红相 + 三场景 CLI 退出码 + 真表 dry-run 零写入。REVIEW-FEAT-051-R0→R1 APPROVED_WITH_NOTES/0（机录）；EVD-1110。
+- **governance_store 写入器族（FEAT-046，commit `1cd224e`）**：B-2/B-3/B-5 根终结面——`locks-extend`/`locks-amend` + `evidence-append`（五类型引用机检）+ `decision-append` 三命令；effect-based 幂等；R1 修 locks 族 conflict 腿缺 observed_revision（P0 契约不变量未捕获崩溃→结构化拒绝复演）。验收 = 76 测试 + 三套回归 + P0 结构化拒绝复演。REVIEW-FEAT-046-R0→R1 APPROVED_WITH_NOTES/0（机录）；EVD-1111。
+- **BaselineMetadata provenance 机制（FEAT-047，commit `bff298d`）**：W-3 制度化解药——14 必填字段 schema/`baselines.json` 原子存储/evaluate 分轴（config_error 先行 + policy_class→block|advisory + 过期口径→not_evaluable）/CLI 退出码 0-1-2-3；R1 增必需观测分层（R0 NEEDS_CHANGE：P0 CLI 崩溃语义混淆 + P1 观察参数静默跳过）。验收 = 64 测试 + 三套回归 + CLI 四场景退出码。REVIEW-FEAT-047-R0→R1 APPROVED_WITH_NOTES/0（机录）；EVD-1108。
+
+**批 2 — 集成窗 + closure 纵切 + 混沌发布门 + write-guard 执法**：
+
+- **集成窗（FEAT-055，commit `a5dec3d`）**：三写入器 dispatch 接线 **7 键**（task-row-update/locks-extend/locks-amend/evidence-append/decision-append/baseline-register/baseline-evaluate）+ M0 契约复跑双绿 + **冻结面 88→95 三重钉**（DEC-223 三项契约口径：CLI 冻结面 +7 写入器子命令键等）+ archguard regen + 留置八项收口。验收 = 7 键冒烟 + 六套件 462 + AST 执行体零改动（29 IDENTICAL）。REVIEW-FEAT-055-R0 APPROVED_WITH_NOTES/0（机录）；EVD-1114。
+- **closure-chain 纵切 + 混沌发布门（FEAT-056，commit `7709987`）**：B-4 根面终结——closure_chain.py（~1,700 行）：纯序排器 + 独立事件日志 + **effect-based resume（UNKNOWN 态世界核验门控）** + ready-to-commit 终点；**混沌三边界发布门**：commit 失败/push 凭据失败/push 超时 UNKNOWN 各 kill 一次 → resume 零人工修复（隔离 bare 夹具——不产生真实远端副作用）。验收 = 30 测试 + 混沌三边界 + 全绿基线 + dry-run 零写入。REVIEW-FEAT-056-R0 APPROVED_WITH_NOTES/0（机录）；EVD-1116。
+- **write-guard 行族执法上线（FEAT-057，commit `ffcb787`）**：面 5「受管行族对账」（EVD/DEC/REVIEW/任务状态列/ops 台账——行级差分 + 凭证四权威〔governance-store 标记/op- 锚/receipt operation_id〕+ 多重集语义）+ **WARN 姿态上线路由**（响亮+可指引+exit 0 不阻断；BLOCK 升级留 0.87——DEC-224 契约修订三条款）+ 状态基线 `.write-guard-state.json`（首跑 amnesty：960 EVD/115 任务/102 DEC 行入基线零 WARN，Reviewer 逐 digest 零差异）+ P1-1 超时恢复腿（步探针即世界核验，互斥双腿 landed=reconcile/NOT-landed=重执行+replay 兜底）+ post-commit WARN 计数披露行。**首活体实证：EVD-1117 被 WARN 精确捕获——DEC-224 起转机录路径**。REVIEW-FEAT-057-R0→R1 APPROVED_WITH_NOTES/0（机录）；EVD-1117。
+- **review 报告 ragged row 转义修复（FIX-365，commit `a7474e4`）**：review-FEAT-054-RELEASE-R0.md L83 裸管道符一行修（「引用叙述 ragged 先例的行自身被多切」递归实证）——存量 5 项测试失败转绿 + LRC PASS + 独立扫描 1→0。REVIEW-FIX-365-R0 = **APPROVED/0**（零 findings——四层归因链闭环）。EVD-1115。
+
+**⑥ 治理面**：窗口内 **7 决策**（DEC-218 批 2.0 条件 go / DEC-219 外扩削减面 / DEC-220 确定性核心·LLM 边界设计公理 / **DEC-221 0.86.0 设计演进全链预授权** / DEC-222 0.85.0 CHANGELOG 窗口归属裁定〔批 1 三票纯 0.86.0 轨道〕/ DEC-223 批 2.0 接线三项契约口径〔冻结面 88→95 等〕/ **DEC-224 write-guard 契约修订三条款**〔面 5 对账+WARN 路由+BLOCK 升级留 0.87〕）+ **17 EVD**（EVD-1102~1118：规划闭环 EVD-1102 / 批 0~批 2 八票交付审查链 EVD-1105/1108/1110/1111/1114/1115/1116/1117 / 0.85.0 发布收口 EVD-1112/1113 / 批 2.2 canonical 重测 EVD-1104 / **写入器时代三活体实证**——write-guard 首 WARN 捕获手写行、DEC-224 起 CLI 机录路径开通、**首机录 EVD-1118 经 governance_store evidence-append 落账**）；产品任务全部 change-triage 机录 + Developer→Reviewer 审查链（批 0/1/2 八票审查链全闭环，0 unresolved blockers——含 NEEDS_CHANGE→R1 转化四票）。
+
+### Added
+
+- **四类原子写入器 CLI + 7 键接线（FEAT-051/046/055）**：task-row-update / locks-extend / locks-amend / evidence-append / decision-append / baseline-register / baseline-evaluate——短时文件锁 + CAS + effect-based 幂等 + 凭证 join 锚。用户视角：治理行变更首次拥有可对账的机器写入路径。
+- **M0 契约基座（FEAT-049）**：五面契约冻结 m0-r1 + 58 项契约测试 + 量测协议工件；批 2.0 复跑 = 兼容性回归门。
+- **BaselineMetadata provenance 机制（FEAT-047）**：数值门登记进 baselines.json（14 必填字段 + evaluate 分轴 + CLI 退出码 0-1-2-3）。用户视角：门禁基线从此有出处、有过期口径、有 policy 分级。
+- **closure-chain 纵切 + 混沌发布门（FEAT-056）**：一条标准闭环（纯序排器/独立事件日志/effect-based resume）+ 三边界混沌 kill+resume 零人工修复作为发布门。
+- **write-guard 受管行族对账（FEAT-057）**：EVD/DEC/REVIEW/任务状态列/ops 台账行级变更凭机器凭证对账，无凭证 WARN 响亮披露（exit 0 不阻断）。
+
+### Changed
+
+- **CLI 冻结面 88→95（FEAT-055；DEC-223）**：+7 写入器子命令键入冻结面三重钉。
+- **治理行写入路径收敛（行为变更 B-3；FEAT-051/046/057）**：受管行族变更机录优先——写入器 CLI 为主路径，手写行凭机器凭证对账、无凭证 WARN 披露（非破坏：WARN 姿态不阻断，BLOCK 升级留 0.87）。
+- **CLI 步超时分类学 step_unknown（行为变更 B-4；FEAT-056）**：closure-chain 步超时不再笼统失败——分类为 step_unknown 执行态交 effect-based resume 世界核验门控处置；链内部语义，用户可感知面 = 恢复路径可靠性。
+- **全仓版本面 0.85.0→0.86.0（FEAT-058）**：SKILL frontmatter 权威源 + 28 投影面 + canonical 标记 + REQUIRED_SNIPPETS 引擎锚统一再生。
+
+### Fixed
+
+- **review 报告 ragged row（FIX-365）**——review-FEAT-054-RELEASE-R0.md L83 裸管道符转义；存量 5 项失败转绿 + 独立扫描清零。
+
+**行为变更（用户可感知，B-3~B-4 —— MUST 出现在升级说明）**：
+
+- **B-3**（FEAT-051/046/057·治理行写入路径收敛）：EVD/DEC/REVIEW/任务状态列等受管行族的变更**机录优先**——经 governance-store/task-row-update 等 CLI 写入并留凭证；write-guard 对无凭证手写行 WARN 响亮披露（exit 0 不阻断——非破坏性执法，BLOCK 升级已声明留 0.87 且受双约束〔不得 WARN-once-then-absorb + hook 窗口消费权台账化〕）。既有手工路径仍可用；回退通道：版本级回滚（与 0.84.0 D-4 / 0.85.0 B-2 同型）。
+- **B-4**（FEAT-056·CLI 步超时分类学）：closure-chain CLI 步超时从笼统失败改为 step_unknown 分类——恢复由 effect-based resume 的世界核验门控处置（landed=reconcile / NOT-landed=重执行 + replay 兜底，互斥双腿）。链内部语义，不改变任何既有 CLI 的对外退出码契约。
+
+**如实披露**：① **8 次手工行编辑事故全捕获链**：0.86.0 窗口内 8 次手工行编辑事故全部被 write-guard/审查链捕获并制度性终结（能力→执法的跨越，EVD-1117）——首 WARN 精确捕获手写行 → DEC-224 裁定转机录路径 → 首机录 EVD-1118 经 evidence-append 落账（写入器时代三活体实证）。② **维度①（历史相对改善）= NOT_EVALUABLE**：基线不可评估（无可信历史 trace）——未宣传达成（R-F10 固定措辞）；绝对目标（标准 closure 路径 LLM 逻辑往返 ≤2）待量测协议实测，本版不主张。③ **引擎两阶段耦合缺陷仍在**（FEAT-053 P2-1：projection.py 单遍 plan——byte_copy 源 = 同批 transformed 目标时必回滚，fail-closed 无静默腐坏）：本版 M-1 bump 沿用 FEAT-053 同款绕开手法（canonical 标记先达目标值 → transformed 幂等 → `--write` 再生 byte_copy 面），修复票留 0.87 候选。④ **FIX-364 triage 在案未实施**（P2——snapshot freshness 午夜窗口时间敏感缺陷 + AUDIT-152 账本补登记）：本版不承载。⑤ **0.87 候选池**：write-guard BLOCK 升级（双约束）/locks-release 缺口/存储分离 JSON 化（首表 decision-log）/closure 铺开（取消/重开/异常接管）/FEAT-044 回合心跳/FEAT-045 并行段识别/B-7 index-rebuild/大表迁移/发版管线自举。⑥ **版本标记 token 敏感面**：版本 bump 不改变注入面 token 计数——三 profile 逐位复测无回归（见版本投影段）。⑦ **本版不发布什么**：closure 铺开、存储分离、write-guard BLOCK 升级、0.87 候选池全部；M-2 门禁实测与 M-3 双半面审查照常（预授权不免除门禁）。⑧ **no-overclaim 边界**：official approval / marketplace approval / universal runtime support / external first-session pilot success 均未被主张；非 Windows 平台未验证，本版验收全部在仓库内完成；RISK-036 继续打开，do not claim 1.0.0 production-ready。
+
+**Breaking changes：无**（`skills/software-project-governance/core/VERSIONING.md` L11 口径：无 MUST 规则删除/重命名、无 governance 文件字段格式变更；write-guard 为 **WARN 姿态上线路由**非门禁硬化、既有 CLI/记录格式零破坏——L11 无触发面；B-3 保持手工路径兼容）。**MINOR bump 依据**：version-plan-0.86.0 §0（Release R1 审定）——载荷 = 四类新写入器 CLI + contracts.py 契约 MUST 规则扩展 + write-guard 行族全覆盖上线路由，**新增受治理能力面**（VERSIONING.md L12「新增 B/C 级自动化能力」）；无 breaking（write-guard WARN 姿态→L11 不触发）。版本号未占用预留（Release Reviewer R0 V5 代验：无 0.86.0 roadmap 行占用、tag 序顺延不跳号）。
+
+版本投影 0.85.0 -> 0.86.0：由 M-1 统一执行——`release-projection --write` 写入 28 个 registry 投影面（5 plugin/marketplace + `package.json` + `core/manifest.json` + 4 hook `@version` + DSH persona 版本行 + `adapters/dsh/AGENTS.md.template` + `commands/governance-init.md` 三模板 `@bootstrap-version` + fixture skill/plan + 12 个 fixture 命令面；二次 apply 幂等），`sync_entry_projection --write` 双根（repo-root + e2e-fixture），手工钉 `verify_workflow.py` `REQUIRED_SNIPPETS` 六个版本锚与 JSON 声明面一致，并按 FIX-361 bump 程序处置 `checks/version.py` 静态钉豁免账本：bump 时点双重信号如期触发——scan 命中 **11 行新增**（批次落库时以当时 future token 写入的 fixture 面），逐行归因后全部登记豁免（fixture 表行 payload ×9〔test_task_row_update ×7 / test_closure_chain ×1 / test_triage_write_guard ×1〕+ instrument-version fixture ×1〔test_baseline_metadata〕+ write-guard 披露措辞断言 ×1〔test_triage_write_guard——声明性版本引用非 active pin，新增 `_REASON_GUARD_OUTPUT_ASSERT` reason〕），0.85.0 期 10 行豁免 dormant 且零 stale，处置后 scan 返回空（纯账本数据零判定逻辑改动）。本段随候选打包提交落库；`.governance/plan-tracker.md` `工作流版本` 随发布收口由 Coordinator 更新（过渡态 WARN 如实呈现——本版 verify 唯一预期 WARN）。
+
+**发布时点**：本条目日期取发布时点（2026-09-20 +0800）；若 M-5 transition/tag 的 taggerdate 与之不同，按 FIX-349 口径（**taggerdate 权威**）勘误对齐，不预填未生成的 tag 事实。
+
 ## [0.85.0] - 2026-09-19
 
 ### 0.85.0 - **注入瘦身到位 + 预算硬门**：治理降噪第二波两批制全清（REL-081 / FIX-356~362 / FEAT-041/049/050/052 / DEC-214~221 / EVD-1088~1107）

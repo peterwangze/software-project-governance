@@ -32,7 +32,7 @@
 ### 批 0（串行先行——批 1 的显式阻塞依赖；arch 顾问第三轮 P1-1 裁决）
 | 票 | 内容 | 文件面（冻结） | 验收入口 |
 |---|---|---|---|
-| FEAT-049 | **M0 契约冻结与验收基座**：**扩展既有 `contracts.py`**（FEAT-021〔906b209〕交付的 L0 最小契约层 466 行 + FIX-303〔4fcc354〕——非新建；**约束：不破坏既有 frozen 形状，87 存量契约测试零回归**）——新增：operation_id 产生/作用域/重试复用/同 ID 异载荷处置；状态与合法迁移——含执行态 UNKNOWN 与评估态 NOT_EVALUABLE 区分；错误码及重试/人工分类；schema 版本字段/兼容规则/未知版本处理；写入器最小 I/O 与效果判定契约。交付物另含：版本化契约 fixtures + 可运行契约测试 + 三张批 1 票的契约引用与变更规则 + **量测协议工件（benchmarks/closure/protocol.md+固定用例组三路径）** + **M0 契约源 pin revision 记录**（behavior-protocol.md 转移表/SKILL.md 相关段的内容摘要锚——记入 fixtures manifest 供批 2.0 复跑对照） | `skills/software-project-governance/infra/contracts.py`（扩展既有）+ `infra/tests/test_contracts.py`（扩展既有）+ fixtures + `benchmarks/closure/protocol.md`（新） | 契约测试通过 = 冻结 revision；批 2.0 复跑 = 兼容性回归（非补做验收）；**关闭证据四项**：谁交付/产物在哪/验收命令/哪些票被阻塞 |
+| FEAT-049 | **M0 契约冻结与验收基座**：**扩展既有 `contracts.py`**（FEAT-021〔906b209〕交付的 L0 最小契约层 466 行 + FIX-303〔4fcc354〕——非新建；**约束：不破坏既有 frozen 形状，99 存量契约测试零回归**）——新增：operation_id 产生/作用域/重试复用/同 ID 异载荷处置；状态与合法迁移——含执行态 UNKNOWN 与评估态 NOT_EVALUABLE 区分；错误码及重试/人工分类；schema 版本字段/兼容规则/未知版本处理；写入器最小 I/O 与效果判定契约。交付物另含：版本化契约 fixtures + 可运行契约测试 + 三张批 1 票的契约引用与变更规则 + **量测协议工件（benchmarks/closure/protocol.md+固定用例组三路径）** + **M0 契约源 pin revision 记录**（behavior-protocol.md 转移表/SKILL.md 相关段的内容摘要锚——记入 fixtures manifest 供批 2.0 复跑对照） | `skills/software-project-governance/infra/contracts.py`（扩展既有）+ `infra/tests/test_contracts.py`（扩展既有）+ fixtures + `benchmarks/closure/protocol.md`（新） | 契约测试通过 = 冻结 revision；批 2.0 复跑 = 兼容性回归（非补做验收）；**关闭证据四项**：谁交付/产物在哪/验收命令/哪些票被阻塞 |
 
 依赖图：批 0 → 契约测试通过冻结 revision → 批 1（各票消费同一冻结 revision；M0 产物为共享只读依赖——修改触发契约变更流程：提变更→更新 M0 基线→识别受影响票→重跑验收，实现票不得直接改共享语义）→ 批 2.0（复跑 M0 契约测试+跨票集成验收）→ closure/混沌发布门。
 

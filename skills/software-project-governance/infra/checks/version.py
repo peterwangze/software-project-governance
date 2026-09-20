@@ -195,6 +195,12 @@ _REASON_FIXTURE_ROW_TEXT = (
     "fixture task-table row text quoted as synthetic plan-tracker data; the "
     "version column is scenario payload and is never compared to the active "
     "version")
+_REASON_GUARD_OUTPUT_ASSERT = (
+    "assertion argument quoting the write-guard WARN disclosure's "
+    "declarative BLOCK-upgrade version reference (DEC-224 wording) — it "
+    "pins a product-output statement, not the active version; re-audit if "
+    "the disclosure wording changes (the stale-exemption audit below flags "
+    "token drift automatically)")
 
 STATIC_PIN_EXEMPTIONS = {
     "skills/software-project-governance/infra/tests/test_bootstrap_aggregate.py": [
@@ -229,10 +235,36 @@ STATIC_PIN_EXEMPTIONS = {
         (566, "0.85.0", _REASON_INSTRUMENT_VERSION),
         (623, "0.85.0", _REASON_INSTRUMENT_VERSION),
         (741, "0.85.0", _REASON_INSTRUMENT_VERSION),
+        # 0.86.0 bump-time row: instrument-version fixture added by the
+        # FEAT-047 batch (same shape as the six rows above — a versioned
+        # identifier under test, not a pin of the active version).
+        (383, "0.86.0", _REASON_INSTRUMENT_VERSION),
     ],
     "skills/software-project-governance/infra/tests/test_task_row_update.py": [
         (74, "0.85.0", _REASON_FIXTURE_ROW_TEXT),
         (76, "0.85.0", _REASON_FIXTURE_ROW_TEXT),
+        # 0.86.0 bump-time rows: fixture task-table rows written by the
+        # FEAT-051 batch while 0.85.0 was active (the FIX-361 bump-time
+        # double signal); the 目标版本 column is scenario payload.
+        (59, "0.86.0", _REASON_FIXTURE_ROW_TEXT),
+        (68, "0.86.0", _REASON_FIXTURE_ROW_TEXT),
+        (203, "0.86.0", _REASON_FIXTURE_ROW_TEXT),
+        (421, "0.86.0", _REASON_FIXTURE_ROW_TEXT),
+        (441, "0.86.0", _REASON_FIXTURE_ROW_TEXT),
+        (586, "0.86.0", _REASON_FIXTURE_ROW_TEXT),
+        (594, "0.86.0", _REASON_FIXTURE_ROW_TEXT),
+    ],
+    "skills/software-project-governance/infra/tests/test_closure_chain.py": [
+        # 0.86.0 bump-time row: FEAT-056 fixture tracker row (marked
+        # 非真实计划面 in the row itself); version column is scenario payload.
+        (83, "0.86.0", _REASON_FIXTURE_ROW_TEXT),
+    ],
+    "skills/software-project-governance/infra/tests/test_triage_write_guard.py": [
+        # 0.86.0 bump-time rows: FEAT-057 fixture tracker row (scenario
+        # payload) + one assertion quoting the write-guard WARN disclosure's
+        # declarative BLOCK-upgrade version reference (DEC-224 wording).
+        (992, "0.86.0", _REASON_FIXTURE_ROW_TEXT),
+        (1138, "0.86.0", _REASON_GUARD_OUTPUT_ASSERT),
     ],
     "skills/software-project-governance/infra/tests/test_static_version_pins.py": [
         (158, "0.85.0", _REASON_FUTURE_TARGET),

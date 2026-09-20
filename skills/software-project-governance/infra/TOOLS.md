@@ -59,6 +59,7 @@
 | TOOL-054 | 只读 bootstrap 聚合命令 | CLI aggregate（只读） | `infra/bootstrap_aggregate.py` + `infra/verify_workflow.py governance-bootstrap [--budget-ms N] [--format json\|text] [--profile lite\|standard\|strict]` | 0.84.0 bootstrap 聚合快路径（FEAT-033/AUDIT-154 切片 A-2）：单次输出 resolve envelope（复用 resolve_entry）+ 状态投影（项目配置/Gate 摘要/任务统计/活跃风险/最近活动）+ 候选（复用 task-priority 轻量路径，空推荐带结构化空原因）+ migration 版本比较标志（仅标志不执行）+ health（v1 恒 `deferred`——未做健康检查，指向 check-governance）+ next_actions；`--budget-ms`（默认 3000）超时 fail-safe 返回已完成部分 + `deferred` 明示未完成范围；零 .governance 写入、零 git 写入、零子进程；JSON ≤8KB 投影，text ≤40 行 | 立项/架构/开发/测试/发布/运营/维护 | 是 |
 | TOOL-055 | 注入面体积预算门禁 | CLI check（可独立运行） | `infra/verify_workflow.py check-injection-budget [--budget-tokens N] [--profile lightweight\|standard\|strict] [--format text\|json]`（`check-governance` Check 33 内联同报） | 0.84.0 治理自身资源预算门禁（FEAT-039/AUDIT-154 切片 A-8）：对**实际加载集合**（多文件求和，非单文件——拆分文件不能绕过预算）定价并裁决；分项输出每面 bytes/chars/CJK/token（预算价 + DSH host 价）；口径 = CJK 1 tok/char、ASCII ceil(chars/4)、其他 ceil(chars*2/5)，**不引外部 tokenizer 依赖**（假设在 `--format json` 的 `tokenizer` 字段与 help 中文档化）；resident 层（persona + 所选 profile 入口模板 + 双入口薄指针 + agent-instructions）默认预算 6000 tok（**hard 硬门**，FEAT-050/DEC-211③ 翻 hard；arch 目标 4K），超限即显式 issue + FAIL（EVD-1104 瘦身后三 profile 4,216/5,694/5,966 全达标，当前树零超预算；未来增长 fail-closed）；skill 层独立预算 **16,000 tok**（FEAT-052：实测基线 14,456——FEAT-041 progressive disclosure 明细迁移的设计性增长；姿态保持 report-only 数据字段化——不翻硬门，翻硬为 0.86.0+ 候选经 FEAT-047 BaselineMetadata 承载）；command 层按需加载单独计量（report-only，实测 3,466 tok 远低于 resident 线，无独立数值需求）；任一 canonical 源解析失败 → 显式 issue + fail-closed；tool-return 面登记 FEAT-033 `MAX_JSON_BYTES=8192`（引用断言，不重实现） | 架构/开发/测试/发布/维护 | 是 |
 | TOOL-056 | 行为灰度开关 / legacy 回退通道 | 模块 + CLI 面（只读） | `infra/behavior_profile.py` + `infra/verify_workflow.py governance-bootstrap` 的 `behavior` 面 | 0.84.0 切片 A 行为变更回退通道（FEAT-040/AUDIT-154 切片 A-9）：`GOVERNANCE_LEGACY_BEHAVIOR=1` 或 plan-tracker `behavior_profile: legacy` → 只回退性能/编排行为（快路径/首次交互前置/≤8 字段视图/Scenario 按需）；**安全语义不回退**（升级确认门/异常不隐藏/fail-closed/真实环境防护/复审必达）——边界为机检契约（`revert_contract_issues`）非注释 | 全部阶段 | 是 |
+| TOOL-057 | Governance Write Guard（直写路径守卫 + 行族对账） | CLI check（5 面） | `infra/verify_workflow.py governance-write-guard`（`check_governance_write_shapes`） | Coordinator 直写 `.governance/` 后一次性复跑：面 1 plan-tracker 任务行形状（M1 签名）/面 2 evidence-log 机器行族列数+ID（DEC-168）/面 3 agent-locks schema（Check 26）/面 4 execution-packets 结构（Check 18c）/面 5 **受管行族对账**（FEAT-057：EVD/DEC/REVIEW 行 + 任务状态列 + `*.ops.jsonl` receipt 台账的行级变更凭 `机器写入：governance-store` 标记、task_row_update `〔op-…〕` 锚、receipt `operation_id` 对账——无机器凭证 → WARN 响亮披露 `unattributed row change — use governance_store/task_row_update`，BLOCK 升级留 0.87）。首跑建立 `.governance/.write-guard-state.json` 状态基线（amnesty——存量行不追溯，零 WARN）；状态文件为守卫自身工件非修复（治理记录零写入零改写语义不变）；对账基线仅在 CLI 路径落盘，probe 调用（contract-matrix/测试）零写入 | 全部阶段（每次直写后） | 是 |
 
 ## 工具详情
 
@@ -606,6 +607,18 @@
 - **边界**：只读纯函数（AST 守护：仅 `os`/`re` 导入、零写调用）；不 import `verify_workflow`（ArchGuard R2/R6）；不做用户提示、不写 `.governance/`
 - **被以下子工作流使用**：全部阶段（每会话 bootstrap 生效面）；发布/维护（回退通道可用性验收）
 
+### TOOL-057：Governance Write Guard（直写路径守卫 + 行族对账，FEAT-011 / FEAT-057）
+
+- **文件**：`infra/verify_workflow.py`（`check_governance_write_shapes` + `cmd_governance_write_guard`）；无独立模块（thin-entry + 面函数与既有 Check 复用面同居引擎文件）
+- **子命令**：`governance-write-guard`（post-commit hook Step 4b 自动接线，30s 超时预算；亦可手动复跑）
+- **检查面（5 面）**：面 1 plan-tracker 任务行形状（AUDIT-149 §4 M1 两签名）；面 2 evidence-log 机器行族 TRIAGE/RECO 列数 + ID 格式（DEC-168 行族权威）；面 3 agent-locks.json schema（复用 Check 26）；面 4 execution-packets.json 结构（复用 Check 18c 字段表）；面 5 **受管行族对账**（FEAT-057，WARN 姿态）
+- **面 5 对账范围**：evidence-log EVD/REVIEW 行、decision-log DEC 行、plan-tracker 任务行（状态列 = 末单元格，写入器 schema）、`.governance/*.ops.jsonl` receipt 台账；凭证判据消费写入器自有形状——governance-store `机器写入：governance-store` 标记（evidence-append/decision-append）、`checks.review_domain.REVIEW_MACHINE_ROW_MARKER`（Check 30c V7 权威）、`task_row_update.STATUS_CELL_OP_SUFFIX_PATTERN`（`〔op-<32hex>〕` 状态锚，末单元格端锚定）、receipt 行 `operation_id`；guard 测试将判据绑定到写入器实建行（标记漂移测试先红）
+- **状态基线（新增工件，非修复）**：`.governance/.write-guard-state.json`（schema_version=1；每受管面存 sha256 快路径 + 行级 digest 多重集）。首跑建立基线——存量手写行属历史事实不追溯（amnesty 零 WARN）；此后每轮对账「自上轮以来的行级差分」，改写/新增行无机器凭证 → `unattributed_row_change` WARN（响亮披露 + 写入器指引，退出码不变）；行删除不追溯（归档迁移合法机器面）；TRIAGE/RECO 不做标记判定（写入器先于标记纪律，列数契约已覆盖——Check 30c V7 分类先例）；`governance-store-ops.json`（JSON 文档账本）不做行 diff（BT-4 邻域，后切片）
+- **WARN→BLOCK 升级**：留 0.87（version-plan §2 批 1 行声明）；输出注释与 docstring 均声明升级边界
+- **锁外披露先例**：本守卫不要求 file_lock/agent-locks 在场即可运行（锁缺席不 SKIP 不 FAIL）——对账面以状态基线差分为准，不依赖锁状态；hook ✅ 行后 WARN-gated 计数披露行（`write-guard: N WARN(s) —— run governance-write-guard for details`，N>0 才现——详情需复跑 guard 查看）
+- **安全边界**：守卫只检不改——治理记录零写入零改写（faces 1-4 原契约不变）；唯一落盘工件是状态基线文件，且仅在 CLI 路径（probe 调用——contract-matrix representative 提取/聚合读/测试——零写入、不消费对账窗口）；SKIPPED 面 = 产物缺席非缺陷；faces 1-4 非 UTF-8 fail-closed（FIX-333），面 5 不可读面 WARN 披露后跳过
+- **被以下子工作流使用**：全部阶段（Coordinator 直写后复跑）；CI/CD（post-commit hook 自动面板）
+
 ### TOOL-050：Loop Runtime Claim Gate
 
 - **文件**：`infra/checks/loop_runtime_claims.py`、`core/loop-runtime-claim-allowlist.json`、`core/loop-runtime-claim-authority.json`
@@ -698,6 +711,7 @@
 | Artifact Projection Generator | | | | | ● | ● | ● | | ● | | ● |
 | Optional Quality Tool Probe | | | | | | ● | ● | | ● | | ● |
 | 行为灰度开关（legacy 回退通道） | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● |
+| Governance Write Guard（直写守卫+行族对账） | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● |
 
 > ● 主要使用者  ○ 可选用
 

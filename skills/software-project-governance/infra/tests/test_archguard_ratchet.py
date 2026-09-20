@@ -73,7 +73,11 @@ SNAPSHOT = _INFRA_DIR / "contract_matrix" / "snapshots.json"
 #      after both source edits, per the all-changes-first rule that keeps the
 #      anchor from being re-cut twice. Baseline regenerated in the same change:
 #      R1 anchor 24639 -> 24766, R4 total 1301 -> 1304.)
-FACTS_PRINT_TOTAL = 1304
+#   -> 1306 (0.86.0 批 2.3, FEAT-057: +2 in cmd_governance_write_guard — the
+#      face-5 BASELINE disclosure line and the WARN-aware PASS Result line.
+#      Baseline regenerated in the same change: R1 anchor 24852 -> 25291,
+#      R4 total 1304 -> 1306.)
+FACTS_PRINT_TOTAL = 1306
 
 
 def _committed_baseline():
@@ -230,9 +234,9 @@ class R3LayerMatrixTests(unittest.TestCase):
 
 class R4PrintOrchestrationTests(unittest.TestCase):
     def test_r4_total_matches_facts_census(self):
-        """Calibration cross-check: 1,304 print calls (0.84.0 slice A,
+        """Calibration cross-check: 1,306 print calls (0.84.0 slice A,
         FEAT-038 + FEAT-039 sanctioned +3; chain 1,315 → 1,310 → 1,311 → 1,298
-        → 1,299 → 1,301 → 1,304 — see FACTS_PRINT_TOTAL note)."""
+        → 1,299 → 1,301 → 1,304 → 1,306 — see FACTS_PRINT_TOTAL note)."""
         current = ar.count_print_calls(ENGINE)
         self.assertEqual(current["total"], FACTS_PRINT_TOTAL)
         self.assertEqual(
@@ -461,7 +465,7 @@ class BaselineArtifactTests(unittest.TestCase):
         self.assertIsInstance(data["rules_version"], int)
         self.assertRegex(data["generated"]["git_head"],
                          r"^([0-9a-f]{40}|unknown)$")
-        self.assertIn("24", str(data["r1_mainfile_budget"]["anchor_loc"]))
+        self.assertIn("25", str(data["r1_mainfile_budget"]["anchor_loc"]))
 
     def test_authored_zone_survives_regen(self):
         existing = _committed_baseline()

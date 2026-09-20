@@ -1172,5 +1172,232 @@ class FaultSurfaceTests(_WorkspaceFixture):
         self.assertIn("掉电", doc)
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# CLI-step timeout taxonomy (review-FEAT-056-CODE-R0 P2-1 — FEAT-057 承接)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+CLI_TIMEOUT_LANDED_SCRIPT = (
+    "import pathlib, sys, time\n"
+    "pathlib.Path(sys.argv[1]).write_text('ok', encoding='utf-8')\n"
+    "time.sleep(30)\n")
+"""Effect lands immediately, then hangs past any short timeout (killed).
+Backs review-FEAT-057-CODE-R0 P1-1 landed leg."""
+
+CLI_TIMEOUT_NOTLANDED_SCRIPT = (
+    "import pathlib, sys, time\n"
+    "count = pathlib.Path(sys.argv[2])\n"
+    "seen = int(count.read_text(encoding='utf-8')) if count.exists() else 0\n"
+    "count.write_text(str(seen + 1), encoding='utf-8')\n"
+    "if seen >= 1:\n"
+    "    pathlib.Path(sys.argv[1]).write_text('ok', encoding='utf-8')\n"
+    "else:\n"
+    "    time.sleep(30)\n")
+"""First invocation hangs past the timeout (killed, effect NOT landed);
+the recovery re-invocation lands the effect and exits 0. Backs the P1-1
+not-landed leg."""
+
+
+class CliStepTimeoutTaxonomyTests(_WorkspaceFixture):
+    """P2-1: a governed-writer subprocess TIMEOUT is a hard kill whose
+    effect may have landed before the kill — the event taxonomy must match
+    the external step (``step_unknown`` / ``awaiting-world-check``), not
+    ``blocked``/``manual_intervention``. Both recovery legs reach the ready
+    terminal state (review-FEAT-057-CODE-R0 P1-1, 方案 c): effect landed →
+    the step's own read-only probe reconciles (no re-run); effect not
+    landed → the probe miss releases the step for re-execution (the
+    writer's effect-based replay / state-level CAS carries idempotency —
+    the pre-P2-1 timeout behavior)."""
+
+    def _timeout_spec(self, world_check):
+        return {
+            "chain_id": "cli-timeout-fixture",
+            "required_inputs": [],
+            "steps": [
+                {"step_id": "slow-writer", "kind": "cli",
+                 "description": "governed writer that hangs past its "
+                                "timeout (hard-kill crash window)",
+                 "argv": [sys.executable, "-c",
+                          "import time; time.sleep(8)"],
+                 "timeout_seconds": 1.0,
+                 "world_check": list(world_check),
+                 "dry_run_flag": None},
+                {"step_id": "ready-to-commit", "kind": "summary"},
+            ]}
+
+    def _recovery_spec(self, script, done_path, counter_path):
+        """Timeout fixture with NO declared world_check (the standard-chain
+        shape that stranded the not-landed leg) and a real effect probe."""
+        return {
+            "chain_id": "cli-timeout-recovery",
+            "required_inputs": [],
+            "steps": [
+                {"step_id": "slow-writer", "kind": "cli",
+                 "description": "governed writer hanging past its timeout; "
+                                "no world_check declared (standard-chain "
+                                "shape, review-FEAT-057-CODE-R0 P1-1)",
+                 "argv": [sys.executable, "-c", script,
+                          str(done_path), str(counter_path)],
+                 "probe": {"kind": "command_exit",
+                           "argv": [sys.executable, "-c",
+                                    "import pathlib, sys; sys.exit(0 if "
+                                    "pathlib.Path(sys.argv[1]).exists() "
+                                    "else 1)",
+                                    str(done_path)]},
+                 "timeout_seconds": 1.0,
+                 "dry_run_flag": None},
+                {"step_id": "ready-to-commit", "kind": "summary"},
+            ]}
+
+    def _started_count(self, closure_id, step_id="slow-writer"):
+        events = _chain_events(self.root, closure_id)
+        return sum(
+            1 for e in events
+            if e.get("event_type") == "step_started"
+            and (e.get("payload") or {}).get("step_id") == step_id)
+
+    def test_cli_timeout_records_step_unknown_and_reconciles(self):
+        world_check = [sys.executable, "-c", "pass"]
+        spec_path = _write_fixture_spec(
+            self.root, "cli_timeout.json", self._timeout_spec(world_check))
+        code, payload = _run_cli(self.root, "run", "--spec", str(spec_path),
+                                 "--task", TASK, "--closure-id",
+                                 self.closure_id)
+        self.assertEqual(code, 2, payload)
+        self.assertEqual(payload["status"], "awaiting-world-check", payload)
+        self.assertEqual(payload["steps"][0]["status"], "unknown")
+        events = _chain_events(self.root, self.closure_id)
+        unknowns = [e for e in events
+                    if e.get("event_type") == "step_unknown"]
+        self.assertEqual(len(unknowns), 1, events)
+        self.assertEqual(unknowns[0]["payload"]["step_id"], "slow-writer")
+        self.assertEqual(unknowns[0]["payload"].get("execution"), "unknown")
+        self.assertIn("timed out", unknowns[0]["payload"]["detail"])
+        self.assertNotIn("manual_intervention",
+                         json.dumps(unknowns[0]["payload"]))
+        # resume WITHOUT --world-check: the world check is suggested, never
+        # auto-executed (round-2 查询建议非自动)
+        code, payload = _run_cli(self.root, "run", "--spec", str(spec_path),
+                                 "--task", TASK, "--closure-id",
+                                 self.closure_id)
+        self.assertEqual(code, 2, payload)
+        self.assertEqual(payload["status"], "awaiting-world-check")
+        self.assertIn("world-check", payload["steps"][0]["note"])
+        # resume WITH --world-check: the declared read-only check resolves
+        # the UNKNOWN — reconciled, and the writer executed exactly once
+        code, payload = _run_cli(self.root, "run", "--spec", str(spec_path),
+                                 "--task", TASK, "--closure-id",
+                                 self.closure_id, "--world-check")
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(payload["status"], "ready", payload)
+        self.assertEqual(payload["steps"][0]["status"], "reconciled")
+        events = _chain_events(self.root, self.closure_id)
+        started = [e for e in events
+                   if e.get("event_type") == "step_started"
+                   and (e.get("payload") or {}).get("step_id")
+                   == "slow-writer"]
+        self.assertEqual(len(started), 1, events)  # no blind re-run
+
+    def test_single_flight_assumption_declared_and_do_not_stage_lock(self):
+        """P3-④: the single-closure-per-task concurrency assumption is
+        disclosed in the module docstring (never silent); P3-①: the
+        journal's cross-process lock companion file joins do_not_stage."""
+        doc = CC_PATH.read_text(encoding="utf-8")
+        self.assertIn("单飞", doc)
+        self.assertIn("evolution §6②", doc)
+        summary = cc._summary_payload(
+            cc.parse_chain_spec({"chain_id": "x", "steps": [
+                {"step_id": "a", "kind": "cli",
+                 "argv": ["python", "-c", "1"]},
+                {"step_id": "s", "kind": "summary"}]}),
+            "closure-" + "0" * 32, TASK, {})
+        self.assertIn(".governance/closure-events.jsonl",
+                      summary["do_not_stage"])
+        self.assertIn(".governance/closure-events.jsonl.lock",
+                      summary["do_not_stage"])
+        # P3-⑥: the vestigial always-true --json flag is gone from the
+        # chain's own CLI (writer argvs keep their own writer flags)
+        proc = subprocess.run(
+            [sys.executable, str(CC_PATH), "run", "--task", TASK, "--json"],
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", env=_clean_env(), check=False, timeout=60)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("--json", proc.stderr)
+
+    # ── review-FEAT-057-CODE-R0 P1-1: both recovery legs reachable ──────
+
+    def test_timeout_not_landed_bare_resume_reexecutes_to_ready(self):
+        """P1-1 not-landed leg: probe MISS on a CLI step with no declared
+        world_check releases the step for re-execution on a BARE resume —
+        the chain reaches ready (pre-fix this halted forever with a literal
+        "n/a" remediation)."""
+        done = self.tmpdir / "done-notlanded.flag"
+        counter = self.tmpdir / "invocations-notlanded.flag"
+        spec_path = _write_fixture_spec(
+            self.root, "cli_timeout_notlanded.json",
+            self._recovery_spec(CLI_TIMEOUT_NOTLANDED_SCRIPT, done, counter))
+        code, payload = _run_cli(self.root, "run", "--spec", str(spec_path),
+                                 "--task", TASK, "--closure-id",
+                                 self.closure_id)
+        self.assertEqual(code, 2, payload)
+        self.assertEqual(payload["status"], "awaiting-world-check", payload)
+        self.assertFalse(done.exists())  # effect NOT landed
+        # bare resume (no --world-check): probe miss ⇒ re-execute
+        code, payload = _run_cli(self.root, "run", "--spec", str(spec_path),
+                                 "--task", TASK, "--closure-id",
+                                 self.closure_id)
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(payload["status"], "ready", payload)
+        self.assertEqual(payload["steps"][0]["status"], "completed")
+        self.assertTrue(done.exists())
+        self.assertEqual(self._started_count(self.closure_id), 2)
+
+    def test_timeout_landed_bare_resume_reconciles_without_rerun(self):
+        """P1-1 landed leg: probe HIT reconciles on a BARE resume (no
+        --world-check, no declared world_check) — no re-execution."""
+        done = self.tmpdir / "done-landed.flag"
+        counter = self.tmpdir / "invocations-landed.flag"
+        spec_path = _write_fixture_spec(
+            self.root, "cli_timeout_landed.json",
+            self._recovery_spec(CLI_TIMEOUT_LANDED_SCRIPT, done, counter))
+        code, payload = _run_cli(self.root, "run", "--spec", str(spec_path),
+                                 "--task", TASK, "--closure-id",
+                                 self.closure_id)
+        self.assertEqual(code, 2, payload)
+        self.assertEqual(payload["status"], "awaiting-world-check", payload)
+        self.assertTrue(done.exists())  # effect landed before the kill
+        # bare resume: probe hit ⇒ reconcile, never re-execute
+        code, payload = _run_cli(self.root, "run", "--spec", str(spec_path),
+                                 "--task", TASK, "--closure-id",
+                                 self.closure_id)
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(payload["status"], "ready", payload)
+        self.assertEqual(payload["steps"][0]["status"], "reconciled")
+        self.assertEqual(self._started_count(self.closure_id), 1)
+
+    def test_world_check_resume_on_undeclared_world_check_no_longer_crashes(self):
+        """P1-1: following the old suggested remediation (--world-check on a
+        CLI step with no declared world_check) built an empty command_exit
+        argv and crashed with schema_violation. 方案 (c): the step re-
+        executes instead — structured success, no crash."""
+        done = self.tmpdir / "done-wc.flag"
+        counter = self.tmpdir / "invocations-wc.flag"
+        spec_path = _write_fixture_spec(
+            self.root, "cli_timeout_wc.json",
+            self._recovery_spec(CLI_TIMEOUT_NOTLANDED_SCRIPT, done, counter))
+        code, payload = _run_cli(self.root, "run", "--spec", str(spec_path),
+                                 "--task", TASK, "--closure-id",
+                                 self.closure_id)
+        self.assertEqual(code, 2, payload)
+        # the previously-crashing remediation now recovers
+        code, payload = _run_cli(self.root, "run", "--spec", str(spec_path),
+                                 "--task", TASK, "--closure-id",
+                                 self.closure_id, "--world-check")
+        self.assertEqual(code, 0, payload)
+        self.assertNotEqual(payload.get("code"), "schema_violation", payload)
+        self.assertEqual(payload["status"], "ready", payload)
+        self.assertEqual(payload["steps"][0]["status"], "completed")
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

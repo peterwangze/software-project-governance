@@ -276,7 +276,8 @@
         "plan-tracker 任务表行（M1 签名：重复优先级列/行尾空单元格）",
         "evidence-log 机器行族 TRIAGE/RECO（DEC-168 行族列数 + ID 格式）",
         "agent-locks.json schema（Check 26）",
-        "execution-packets.json 结构（Check 18c 字段表）"
+        "execution-packets.json 结构（Check 18c 字段表）",
+        "受管行族对账（EVD/DEC/REVIEW/任务状态列/ops 台账——机器凭证 WARN 披露，FEAT-057）"
       ],
       "face_line_regex": "^  \\[(FAIL|PASS|SKIPPED)\\] .+\\ —\\ \\d+\\ issue\\(s\\)$",
       "fixture_strategy": "deterministic temp-dir fixtures: empty host (all SKIPPED → PASS/exit 0) + malformed plan-tracker row (FAIL/exit 1) + well-formed plan-tracker (PASS face/exit 0)",
@@ -285,7 +286,7 @@
       "issue_line_regex": "^    - (?:L\\d+ )?.+$",
       "result_fail_prefix": "Result: FAIL — ",
       "result_fail_regex": "^Result:\\ FAIL\\ —\\ \\d+ issue\\(s\\)。[\\s\\S]*$",
-      "result_pass_line": "Result: PASS — 0 issue(s)（SKIPPED = 产物缺席，非缺陷）。守卫只检不改（零 .governance 写入）。"
+      "result_pass_line": "Result: PASS — 0 issue(s)（SKIPPED = 产物缺席，非缺陷）。守卫只检不改（零 .governance 治理记录写入；状态基线 .write-guard-state.json 为守卫自身工件）。"
     },
     "result_shapes": {
       "check_change_triage": {
@@ -355,6 +356,17 @@
               },
               "status": "str"
             }
+          },
+          "row_families": {
+            "$dict": {
+              "baselined": {
+                "$seq": "list"
+              },
+              "issues": {
+                "$seq": "list"
+              },
+              "status": "str"
+            }
           }
         }
       },
@@ -402,14 +414,14 @@
   },
   "generated": {
     "generator_relpath": "skills/software-project-governance/infra/contract_matrix/generator.py",
-    "git_head": "c2cc7c1058c9f1c57b43e617872a0ab95bb65fec",
+    "git_head": "7709987ef215e064e2a9a45eb404aadcb14d7554",
     "python": {
       "family": "3.14",
       "implementation": "cpython",
       "platform": "win32",
       "version": "3.14.3"
     },
-    "timestamp_utc": "2026-09-19T23:50:59+00:00"
+    "timestamp_utc": "2026-09-20T04:01:42+00:00"
   },
   "python_family_pins": [
     {

@@ -96,6 +96,14 @@ lock step is carried by ``locks-amend`` TTL shrink (every lock owned by the
 task shrunk to a small ceiling).  Actual lock-entry removal/removal of
 active_tasks remains a registered gap for a later slice — reported in the
 chain output, never silently assumed.
+
+Single-flight assumption (FEAT-056 R0 P3-4 disclosure): the per-closure
+run lock makes ONE closure id safe against concurrent resumes, but it does
+NOT arbitrate two DIFFERENT closures driving the SAME task in parallel —
+both would legitimately flip the same task row / append their own evidence
+rows (evolution §6② registered 0.87 open question).  Until that护栏
+exists, operators MUST run one closure per task at a time (单 closure
+单飞); the chain neither detects nor prevents the parallel-siblings shape.
 """
 
 from __future__ import annotations
@@ -975,7 +983,25 @@ def _execute_cli_step(step: StepSpec, argv: Tuple[str, ...], seq: int,
                       closure_id: str) -> Dict[str, Any]:
     """Run one governed-writer step. The WRITER owns idempotency/replay;
     a structured refusal stops the chain (blocked) with the closed code +
-    disposition carried verbatim."""
+    disposition carried verbatim.
+
+    FEAT-056 R0 P2-1 (review-FEAT-056-CODE-R0): a subprocess timeout is a
+    HARD KILL — the writer's commit point (its atomic replace) may have
+    landed before the kill, so the step's result is UNKNOWN, exactly like
+    the external step (:func:`_execute_external_step`). The event is
+    ``step_unknown`` (``execution: "unknown"``) and the chain halts with
+    ``awaiting-world-check`` — resume then recovers via BOTH legs
+    (review-FEAT-057-CODE-R0 P1-1, 方案 c): effect LANDED → the step's own
+    read-only probe reconciles with the original anchor (no re-run);
+    effect NOT landed → the probe miss releases the step for re-execution,
+    safe under the writer's effect-based replay / state-level CAS (the
+    pre-P2-1 timeout behavior; CLI steps that declare no ``world_check``
+    gate on their probe, not on the chain-level ``--world-check`` flag).
+    The old blocked/``manual_intervention`` classification mislabeled a
+    recoverable crash window as manual work and distorted the audit trail
+    — correctness was never at risk (writer replay + probes are safely
+    isomorphic), the classification was.
+    """
     _append_closure_event(log_path, closure_id, "step_started", seq,
                           prev_seq,
                           {"step_id": step.step_id, "kind": step.kind})
@@ -983,13 +1009,19 @@ def _execute_cli_step(step: StepSpec, argv: Tuple[str, ...], seq: int,
     try:
         proc = _run_subprocess(list(argv), step.timeout_seconds)
     except subprocess.TimeoutExpired:
-        return {"halt": "blocked", "seq": seq + 1, "last_seq": seq,
-                "event": ("step_failed", {
+        # subprocess.run already killed the child on timeout (it kills then
+        # reaps); the governed effect MAY have landed before the kill —
+        # UNKNOWN, same taxonomy as the external step.
+        return {"halt": "awaiting-world-check", "seq": seq + 1,
+                "last_seq": seq,
+                "event": ("step_unknown", {
                     "step_id": step.step_id,
-                    "code": "manual_intervention",
-                    "disposition": "manual",
-                    "detail": "writer subprocess timed out after {0}s"
-                              .format(step.timeout_seconds)})}
+                    "execution": "unknown",
+                    "detail": "writer subprocess timed out after {0}s — "
+                              "result unknown (hard-kill crash window); "
+                              "resume reconciles via the step probe before "
+                              "any re-run".format(step.timeout_seconds),
+                })}
     fired = _maybe_fault("post-step-effect:" + step.step_id)
     if proc.returncode == 0:
         out = proc.stdout.strip()
@@ -1099,9 +1131,13 @@ def _summary_payload(spec: ChainSpec, closure_id: str, task: str,
         "commit_message_suggestion": message,
         # 自指约束（round-2 §2）: the closure journal + run locks are
         # post-commit bookkeeping — they must NOT be staged into the commit
-        # this summary describes.
+        # this summary describes. FEAT-056 R0 P3-1: the journal's
+        # cross-process lock COMPANION FILE is produced by
+        # ``loop_event_log._cross_process_lock`` on every real run and
+        # belongs to the same do-not-stage class.
         "do_not_stage": [
             ".governance/closure-events.jsonl",
+            ".governance/closure-events.jsonl.lock",
             ".governance/closure-locks/",
         ],
         "finalize_command": None,  # filled after the operator commits
@@ -1123,6 +1159,9 @@ def _step_world_state(events: List[Dict[str, Any]]) -> Dict[str, str]:
     declared world check instead of blindly re-executing; for a CLI step
     the crash window stays undecided (``"started"``) — the read-only probe
     plus the writer's own effect-based replay protocol decide safely.
+    (FEAT-056 R0 P2-1: an explicit subprocess TIMEOUT records
+    ``step_unknown`` for BOTH kinds — only the dangling-``started`` window
+    keeps the kind distinction.)
     """
     last: Dict[str, Tuple[str, str]] = {}
     for ev in events:
@@ -1286,8 +1325,29 @@ def _run_locked(spec: ChainSpec, closure_id: str, task: str,
             info["anchor"] = probe_result.get("anchor")
             report_steps.append(info)
             continue
-        # UNKNOWN external step: world check FIRST, and only when enabled.
-        if step_state.get(step.step_id) == "unknown":
+        # UNKNOWN step: world check FIRST, and only when enabled — with one
+        # CLI-specific recovery leg (review-FEAT-057-CODE-R0 P1-1, 方案 c):
+        unknown_state = step_state.get(step.step_id) == "unknown"
+        if unknown_state and step.kind == "cli" and not step.world_check:
+            # A CLI step's own read-only probe IS its world check, and it
+            # already ran above. This branch is the NOT-landed leg (the
+            # landed leg reconciled at the probe branch): the governed
+            # effect is not in the world, so the recovery is re-execution —
+            # safe because the writer's effect-based replay / state-level
+            # CAS carries idempotency (deterministic per-step operation
+            # id), exactly the pre-P2-1 timeout behavior. Halting here
+            # would strand standard-chain steps (which declare no
+            # world_check) forever in awaiting-world-check with a literal
+            # "n/a" remediation, and honoring the old suggestion
+            # (--world-check) would crash on the empty command_exit argv.
+            # CLI probes are read-only world queries (no external side
+            # effects), so releasing the step keeps the round-2 gate's
+            # purpose (never blindly re-run an action whose result is
+            # unknown) without the dead end: for a CLI writer the result is
+            # KNOWN to be "not in the world" precisely because its probe
+            # missed.
+            pass  # fall through to re-execution (skip the unknown gate)
+        elif unknown_state:
             if not world_check:
                 info["status"] = "unknown"
                 info["note"] = (
@@ -1617,8 +1677,12 @@ def build_parser() -> argparse.ArgumentParser:
                         "an UNKNOWN external step (default: suggested "
                         "only, never auto-run)")
     p.add_argument("--lock-timeout", type=float, default=10.0)
-    p.add_argument("--json", action="store_true", default=True)
-    p.set_defaults(json=True)
+    # FEAT-056 R0 P3-⑥: the vestigial always-true ``--json`` flag was
+    # removed — every subcommand prints a JSON payload unconditionally (the
+    # structured-output contract); the flag documented nothing and gated
+    # nothing. (CLI-face note: callers still passing ``--json`` get the
+    # standard argparse unrecognized-argument error — the flag was a no-op,
+    # so dropping it changes no behavior for correct callers.)
 
     p = sub.add_parser("status", help="structured closure status")
     p.add_argument("--closure-id", required=True)

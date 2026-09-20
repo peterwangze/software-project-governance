@@ -22685,7 +22685,386 @@ def _evidence_machine_row_issues(content):
     return issues
 
 
-def check_governance_write_shapes():
+# ── FEAT-057: row-family reconciliation (受管行族对账 — WARN posture) ──────
+#
+# The structural faces above judge SHAPES; this face judges the PROVENANCE of
+# row-level CHANGES in the managed row families (EVD/REVIEW evidence rows,
+# DEC decision rows, plan-tracker task-row status cells, ``*.ops.jsonl``
+# receipt ledgers). It is the institutional close-out of the "8 hand row
+# edits in one session" incident class: a managed row that changed since the
+# last guard run WITHOUT a machine credential is disclosed as a loud WARN
+# pointing the writer at governance_store / task_row_update. Posture is WARN
+# in 0.86.0 — the BLOCK escalation is deliberately left to 0.87
+# (version-plan §2 批 1 行声明); this face never FAILs and never changes the
+# guard exit code.
+#
+# Amnesty (存量不追溯): the FIRST sighting of a surface establishes its
+# baseline — pre-existing rows are historical facts and are never judged.
+# Only the delta since the previous guard run is reconciled. The baseline
+# lives in ``.governance/.write-guard-state.json`` — a NEW guard-owned
+# artifact, NOT a repair: the guard still never modifies any managed file,
+# so the "check-only, zero .governance remediation" contract is unchanged
+# for governance records. The state write happens ONLY on the CLI path
+# (``persist_state=True``); probe callers (contract-matrix representative
+# extraction, tests, aggregate reads) stay read-only and never consume the
+# reconciliation window.
+#
+# Credential authority (consumed, never re-stated — FIX-292 lesson):
+#   - EVD/DEC rows → the ``机器写入：governance-store <command> <op>`` marker
+#     built by ``governance_store._build_evidence_row`` /
+#     ``_build_decision_row`` (matched by its stable writer prefix below;
+#     the guard test binds this prefix to a REALLY built row, so drift
+#     fails the test rather than silently diverging);
+#   - REVIEW rows → ``checks.review_domain.REVIEW_MACHINE_ROW_MARKER``
+#     (Check 30c V7 authority, imported above);
+#   - plan-tracker task rows → ``task_row_update.STATUS_CELL_OP_SUFFIX_PATTERN``
+#     applied to the LAST cell (the writer's own "status column = last cell"
+#     schema and its end-anchored provenance anchor — deferred import, same
+#     pattern as the ``change_triage._TASK_ID_RE`` consumption above);
+#   - ``*.ops.jsonl`` lines → the receipt schema anchor ``operation_id``
+#     (task_row_update ledger receipt shape).
+#
+# Deliberate v1 boundaries (disclosed, not silent):
+#   - TRIAGE/RECO rows are NOT marker-judged (their writers predate the
+#     marker discipline; the DEC-168 column contract above already guards
+#     their shape — same classification precedent as Check 30c V7);
+#   - row DELETIONS are out of scope (archive migrations legitimately move
+#     rows out of hot files; a vanished key is absorbed by the state update,
+#     never judged);
+#   - ``governance-store-ops.json`` (the JSON-document ledger) is not
+#     line-diffable — its structural face is BT-4 adjacent, a later slice.
+
+_WRITE_GUARD_STATE_FILENAME = ".write-guard-state.json"
+_WRITE_GUARD_STATE_SCHEMA_VERSION = 1
+_WRITE_GUARD_STATE_TOOL = "governance-write-guard/row-family-reconciliation"
+
+# Stable writer prefix of the governance_store provenance marker
+# (``（机器写入：governance-store evidence-append op-…；schema vN）`` /
+#  ``（机器写入：governance-store decision-append op-…；schema vN）`` —
+# governance_store._build_evidence_row / _build_decision_row).
+_GOVERNANCE_STORE_MARKER_PREFIX = "机器写入：governance-store"
+
+# ops-ledger receipt anchor: task_row_update receipt lines carry the
+# operation id under this key (task_row_update.RECEIPT_RECORD_KIND face).
+_OPS_LEDGER_RECEIPT_ANCHOR = "operation_id"
+
+_ROW_FAMILY_TEXT_SURFACES = ("evidence-log.md", "decision-log.md",
+                             "plan-tracker.md")
+
+
+def _write_guard_row_digest(text):
+    """Stable row digest (128-bit truncation — collision-safe for
+    reconciliation windows; the state file is a host-local artifact)."""
+    return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()[:32]
+
+
+def _extract_managed_row_records(surface, content):
+    """Managed row records of one text surface → ``[record, …]`` where each
+    record is ``{"key", "line", "text", "digest"}``.
+
+    Row detection reuses the established parsers only: evidence/decision
+    rows are prefix-matched on the rendered row-id cell; plan-tracker task
+    rows reuse the exact :func:`_governance_table_cells` +
+    ``_TASK_ID_CELL_RE`` detection of face 1 (no second task-row shape
+    source). Pure: no I/O.
+    """
+    records = []
+    for lineno, line in enumerate(content.split("\n"), 1):
+        stripped = line.strip()
+        if not stripped.startswith("|") or "---" in stripped:
+            continue
+        if surface == "plan-tracker.md":
+            cells = _governance_table_cells(stripped)
+            if not cells:
+                continue
+            task_idx = next(
+                (idx for idx, cell in enumerate(cells)
+                 if _TASK_ID_CELL_RE.match(cell.strip())),
+                None,
+            )
+            if task_idx is None:
+                continue
+            key = cells[task_idx].strip().strip("*")
+        elif surface == "evidence-log.md":
+            if not (stripped.startswith("| EVD-")
+                    or stripped.startswith("| REVIEW-")):
+                continue
+            key = stripped[2:stripped.find("|", 2)].strip()
+        else:  # decision-log.md
+            if not stripped.startswith("| DEC-"):
+                continue
+            key = stripped[2:stripped.find("|", 2)].strip()
+        records.append({
+            "key": key,
+            "line": lineno,
+            "text": stripped,
+            "digest": _write_guard_row_digest(stripped),
+        })
+    return records
+
+
+def _extract_ops_ledger_records(content):
+    """Receipt-ledger records → ``[record, …]`` keyed by line index (the
+    ledger is append-only; the index is the identity a receipt line keeps
+    across guard runs)."""
+    records = []
+    for lineno, line in enumerate(content.split("\n"), 1):
+        if not line.strip():
+            continue
+        records.append({
+            "key": str(lineno),
+            "line": lineno,
+            "text": line.strip(),
+            "digest": _write_guard_row_digest(line),
+        })
+    return records
+
+
+def _row_family_credential_ok(surface, row_key, row_text):
+    """True when the changed row carries its writer's machine credential
+    (authority mapping in the FEAT-057 block comment above)."""
+    if surface == "plan-tracker.md":
+        from task_row_update import STATUS_CELL_OP_SUFFIX_PATTERN
+        cells = _governance_table_cells(row_text)
+        if not cells:
+            return False
+        return bool(STATUS_CELL_OP_SUFFIX_PATTERN.search(cells[-1]))
+    if surface == "evidence-log.md":
+        if row_key.startswith("REVIEW-"):
+            return REVIEW_MACHINE_ROW_MARKER in row_text
+        return _GOVERNANCE_STORE_MARKER_PREFIX in row_text
+    if surface == "decision-log.md":
+        return _GOVERNANCE_STORE_MARKER_PREFIX in row_text
+    return _OPS_LEDGER_RECEIPT_ANCHOR in row_text  # *.ops.jsonl receipts
+
+
+def _load_write_guard_state(governance_dir):
+    """Load the reconciliation baseline → ``(state_dict, load_issue)``.
+
+    ``load_issue`` is None when a valid state file was loaded OR no state
+    file exists (first run); a corrupt/foreign-schema state file yields a
+    WARN-class issue and an empty baseline (rebuild, never silent).
+    """
+    state_path = governance_dir / _WRITE_GUARD_STATE_FILENAME
+    if not state_path.is_file():
+        return {"schema_version": _WRITE_GUARD_STATE_SCHEMA_VERSION,
+                "tool": _WRITE_GUARD_STATE_TOOL, "files": {}}, None
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError, IOError, OSError,
+            ValueError) as exc:
+        return {"schema_version": _WRITE_GUARD_STATE_SCHEMA_VERSION,
+                "tool": _WRITE_GUARD_STATE_TOOL, "files": {}}, {
+            "type": "row_family_state_unreadable",
+            "file": ".governance/" + _WRITE_GUARD_STATE_FILENAME,
+            "line": None,
+            "task_id": "",
+            "detail": "对账状态基线不可读（{0}）——按首跑重建基线，本轮差异"
+                      "窗口视为丢失（响亮披露，不静默）".format(exc),
+            "expected": "JSON object（schema_version={0}, files 键）".format(
+                _WRITE_GUARD_STATE_SCHEMA_VERSION),
+        }
+    if not isinstance(state, dict) \
+            or state.get("schema_version") != _WRITE_GUARD_STATE_SCHEMA_VERSION \
+            or not isinstance(state.get("files"), dict):
+        return {"schema_version": _WRITE_GUARD_STATE_SCHEMA_VERSION,
+                "tool": _WRITE_GUARD_STATE_TOOL, "files": {}}, {
+            "type": "row_family_state_unreadable",
+            "file": ".governance/" + _WRITE_GUARD_STATE_FILENAME,
+            "line": None,
+            "task_id": "",
+            "detail": "对账状态基线 schema 不识别——按首跑重建基线，本轮差异"
+                      "窗口视为丢失（响亮披露，不静默）",
+            "expected": "schema_version={0} 的状态对象".format(
+                _WRITE_GUARD_STATE_SCHEMA_VERSION),
+        }
+    return state, None
+
+
+def _reconcile_row_families(governance_dir, persist_state=False):
+    """FEAT-057 face 5 engine — 受管行族对账.
+
+    Returns ``(result_face, next_state)``. ``result_face`` is the face dict
+    ``{"status", "issues", "baselined"}``; WARN posture: issues are
+    WARN-class disclosures, the face never FAILs. ``next_state`` is the
+    updated baseline to persist — None when ``persist_state`` is False or
+    nothing may be written (probe callers never consume the window).
+
+    Per managed surface: file SHA256 fast path (unchanged file → zero
+    diff), then a per-row multiset digest diff against the baseline —
+    added/changed row instances without a machine credential → one
+    ``unattributed_row_change`` WARN each. First sighting of a surface
+    (amnesty) records its baseline and discloses it in ``baselined``.
+    """
+    face = {"status": "SKIPPED", "issues": [], "baselined": []}
+    next_state = None
+    if not governance_dir.is_dir():
+        return face, next_state
+
+    issues = []
+    # Alias, not copy: every later append (load anomaly, surface errors,
+    # judge WARNs) must land in the face — the judge result is the face's
+    # payload, never a side list.
+    face["issues"] = issues
+    state, load_issue = _load_write_guard_state(governance_dir)
+    if load_issue is not None:
+        issues.append(load_issue)
+    baseline_files = state["files"]
+    next_files = {}
+    # A pre-existing state file counts as a seen surface even when every
+    # managed file is gone — the state must shrink, not silently vanish.
+    surfaces_seen = state_path_seen(governance_dir)
+
+    def _sha256_of(text):
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    def _surface_file(name):
+        return governance_dir / name
+
+    # Text surfaces (evidence / decision / plan-tracker).
+    for surface in _ROW_FAMILY_TEXT_SURFACES:
+        path = _surface_file(surface)
+        rel = ".governance/" + surface
+        if not path.is_file():
+            continue
+        surfaces_seen = True
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (IOError, OSError, UnicodeDecodeError, ValueError) as exc:
+            issues.append({
+                "type": "row_family_surface_unreadable",
+                "file": rel,
+                "line": None,
+                "task_id": "",
+                "detail": "受管面不可读（{0}）——本轮跳过该面对账（不静默）"
+                          .format(exc),
+                "expected": "UTF-8 文本",
+            })
+            continue
+        records = _extract_managed_row_records(surface, content)
+        current_sha = _sha256_of(content)
+        baseline = baseline_files.get(surface)
+        next_files[surface] = {
+            "sha256": current_sha,
+            "rows": _rows_snapshot(records),
+        }
+        if baseline == next_files[surface]:
+            continue  # fast path: byte-identical to the baseline snapshot
+        if not isinstance(baseline, dict) or "rows" not in baseline:
+            # First sighting (or malformed entry) — amnesty, disclose.
+            face["baselined"].append(rel)
+            continue
+        baseline_rows = baseline.get("rows")
+        if not isinstance(baseline_rows, dict):
+            face["baselined"].append(rel)
+            continue
+        if baseline.get("sha256") == current_sha:
+            continue
+        _judge_row_delta(surface, rel, records, baseline_rows, issues)
+
+    # ops 台账 surfaces (*.ops.jsonl — line-oriented receipt ledgers).
+    for path in sorted(governance_dir.glob("*.ops.jsonl")):
+        rel = ".governance/" + path.name
+        surfaces_seen = True
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (IOError, OSError, UnicodeDecodeError, ValueError) as exc:
+            issues.append({
+                "type": "row_family_surface_unreadable",
+                "file": rel,
+                "line": None,
+                "task_id": "",
+                "detail": "ops 台账不可读（{0}）——本轮跳过该面对账（不静默）"
+                          .format(exc),
+                "expected": "UTF-8 JSONL",
+            })
+            continue
+        records = _extract_ops_ledger_records(content)
+        current_sha = _sha256_of(content)
+        baseline = baseline_files.get(path.name)
+        next_files[path.name] = {
+            "sha256": current_sha,
+            "rows": _rows_snapshot(records),
+        }
+        if baseline == next_files[path.name]:
+            continue
+        if not isinstance(baseline, dict) or not isinstance(
+                baseline.get("rows"), dict):
+            face["baselined"].append(rel)
+            continue
+        if baseline.get("sha256") == current_sha:
+            continue
+        _judge_row_delta(path.name, rel, records, baseline["rows"], issues,
+                         surface_kind="ops")
+
+    if not surfaces_seen:
+        return face, next_state  # SKIPPED — nothing managed, nothing written
+
+    face["status"] = "PASS"  # WARN posture: never FAIL in 0.86.0
+    if persist_state:
+        next_state = {
+            "schema_version": _WRITE_GUARD_STATE_SCHEMA_VERSION,
+            "tool": _WRITE_GUARD_STATE_TOOL,
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+            "files": next_files,
+        }
+    return face, next_state
+
+
+def state_path_seen(governance_dir):
+    """True when the reconciliation state file exists (surface seen even
+    with all managed files gone — the state must shrink, not vanish)."""
+    return (governance_dir / _WRITE_GUARD_STATE_FILENAME).is_file()
+
+
+def _rows_snapshot(records):
+    """State snapshot of one surface: ``{row_key: [digest, …]}`` (multiset
+    per key preserves duplicate row ids)."""
+    snapshot = {}
+    for record in records:
+        snapshot.setdefault(record["key"], []).append(record["digest"])
+    for key in snapshot:
+        snapshot[key].sort()
+    return snapshot
+
+
+def _judge_row_delta(surface, rel, records, baseline_rows, issues,
+                     surface_kind="text"):
+    """Multiset-diff current records against the baseline digests and emit
+    one WARN per uncredentialed added/changed row instance."""
+    baseline_pool = {}
+    for key, digests in baseline_rows.items():
+        if isinstance(digests, list):
+            baseline_pool[key] = list(digests)
+    for record in records:
+        pool = baseline_pool.get(record["key"])
+        if pool and record["digest"] in pool:
+            pool.remove(record["digest"])  # unchanged instance
+            continue
+        if _row_family_credential_ok(surface, record["key"], record["text"]):
+            continue
+        if surface_kind == "ops":
+            guidance = ("unattributed row change — ops 台账行须由写入器追加"
+                        "（receipt 行携 operation_id 凭证）")
+        elif surface == "plan-tracker.md":
+            guidance = ("unattributed row change — use task_row_update"
+                        "（状态列须携 〔op-…〕 机器锚）")
+        else:
+            guidance = ("unattributed row change — use governance_store"
+                        "（行须携 机器写入：governance-store 凭证）")
+        issues.append({
+            "type": "unattributed_row_change",
+            "file": rel,
+            "line": record["line"],
+            "task_id": record["key"],
+            "detail": "{0}（WARN 姿态 0.86.0——响亮披露不阻断；BLOCK 升级"
+                      "留 0.87）: {1}".format(record["key"], guidance),
+            "expected": "受管行变更携带机器凭证（governance-store 标记 / "
+                        "〔op-…〕 锚 / receipt operation_id）",
+        })
+
+
+def check_governance_write_shapes(*, persist_state=False):
     """FEAT-011 G3 extension — structural write guard over the Coordinator's
     direct-write ``.governance`` artifacts.
 
@@ -22710,24 +23089,40 @@ def check_governance_write_shapes():
          the ``EXECUTION_PACKET_REQUIRED_FIELDS`` table
          (:func:`_execution_packet_field_issues`). Semantic packet checks
          (scope breadth, evidence wording) stay in Check 18c — a write
-         guard judges STRUCTURE, not task semantics.
+         guard judges STRUCTURE, not task semantics;
+      5. row-family reconciliation (FEAT-057) — provenance of row-level
+         CHANGES in the managed families (EVD/DEC/REVIEW rows, plan-tracker
+         task-row status cells, ``*.ops.jsonl`` receipts) against the
+         ``.write-guard-state.json`` baseline
+         (:func:`_reconcile_row_families`). WARN posture: uncredentialed
+         changes are disclosed loudly, the face never FAILs (BLOCK
+         escalation left to 0.87). The baseline state file is a guard-owned
+         ARTIFACT, not a repair — it is the only thing this guard ever
+         writes, and only when ``persist_state=True`` (the CLI path);
+         probe callers (contract-matrix representative extraction,
+         aggregate reads, tests) stay read-only and never consume the
+         reconciliation window.
 
-    Contract: CHECK-ONLY — reads the four artifacts, writes nothing under
-    ``.governance`` (no auto-remediation; issue messages carry line numbers
-    and the expected shape, the fix belongs to the writer). Absent files
+    Contract: CHECK-ONLY for governance records — reads the artifacts,
+    never repairs or rewrites them (issue messages carry line numbers and
+    the expected shape, the fix belongs to the writer). Absent files
     SKIP their face (a host not using packets is not a breach); unreadable
-    files (incl. non-UTF-8, FIX-333) FAIL fail-closed. The change-triage
-    write guard's behavior is untouched (extension, not rewrite).
+    files (incl. non-UTF-8, FIX-333) FAIL fail-closed on faces 1-4 (face 5
+    discloses an unreadable surface as WARN and skips that surface). The
+    change-triage write guard's behavior is untouched (extension, not
+    rewrite).
 
     Returns a dict ``{plan_tracker, evidence_log, agent_locks,
-    execution_packets}``, each ``{"status": PASS|FAIL|SKIPPED, "issues": …}``.
-    Never raises.
+    execution_packets, row_families}``, each ``{"status":
+    PASS|FAIL|SKIPPED, "issues": …}`` (face 5 additionally carries
+    ``baselined``). Never raises.
     """
     result = {
         "plan_tracker": {"status": "SKIPPED", "issues": []},
         "evidence_log": {"status": "SKIPPED", "issues": []},
         "agent_locks": {"status": "SKIPPED", "issues": []},
         "execution_packets": {"status": "SKIPPED", "issues": []},
+        "row_families": {"status": "SKIPPED", "issues": [], "baselined": []},
     }
 
     # Face 1 — plan-tracker task rows.
@@ -22838,6 +23233,28 @@ def check_governance_write_shapes():
                 "status": "FAIL" if issues else "PASS",
                 "issues": issues,
             }
+
+    # Face 5 — row-family reconciliation (FEAT-057, WARN posture).
+    row_face, next_state = _reconcile_row_families(
+        GOVERNANCE_DIR, persist_state=persist_state)
+    if next_state is not None:
+        state_path = GOVERNANCE_DIR / _WRITE_GUARD_STATE_FILENAME
+        try:
+            state_path.write_text(
+                json.dumps(next_state, ensure_ascii=False, indent=2,
+                           sort_keys=True) + "\n",
+                encoding="utf-8")
+        except (IOError, OSError, ValueError) as exc:
+            row_face["issues"].append({
+                "type": "row_family_state_unwritable",
+                "file": ".governance/" + _WRITE_GUARD_STATE_FILENAME,
+                "line": None,
+                "task_id": "",
+                "detail": "对账状态基线写入失败（{0}）——下一轮将以同一基线"
+                          "重复披露同一差异窗口（响亮披露，不静默）".format(exc),
+                "expected": "可写的 .governance 目录",
+            })
+    result["row_families"] = row_face
 
     return result
 
@@ -22956,22 +23373,29 @@ def cmd_governance_write_guard(_args):
     the same G3 structural validation the change-triage CLI has at write
     time: plan-tracker task-row shape (AUDIT-149 §4 M1 signatures),
     evidence-log machine-family columns + ID format (DEC-168), agent-locks
-    schema (Check 26), execution-packets structure (Check 18c field table).
-    All logic lives in :func:`check_governance_write_shapes`; this entry is
-    argparse glue + printing (RISK-039 thin-entry discipline).
+    schema (Check 26), execution-packets structure (Check 18c field table),
+    plus the FEAT-057 row-family reconciliation (managed-row provenance
+    against the ``.write-guard-state.json`` baseline). All logic lives in
+    :func:`check_governance_write_shapes`; this entry is argparse glue +
+    printing (RISK-039 thin-entry discipline).
 
-    Check-only contract: the guard writes NOTHING under ``.governance`` —
-    remediation messages name the line and the expected shape, the fix
-    belongs to the writer. Exit 0 = all checked faces PASS; exit 1 = at
-    least one FAIL (a structural breach must not pass silently — the same
-    fail-closed posture as the change-triage write guard); SKIPPED faces
-    (artifact absent) never fail.
+    Check-only contract (FEAT-057 amendment): the guard repairs NOTHING —
+    governance records are never rewritten. The ONE artifact it maintains
+    is its own reconciliation baseline
+    (``.governance/.write-guard-state.json``): the first run establishes
+    the baseline (amnesty — 存量行不追溯, zero WARN), every later run
+    diffs the delta since the previous run and re-baselines after judging.
+    Face 5 posture is WARN (loud disclosure, exit code unaffected); the
+    WARN→BLOCK escalation is left to 0.87. Exit 0 = no FAIL face; exit 1 =
+    at least one FAIL face (a structural breach must not pass silently —
+    the same fail-closed posture as the change-triage write guard);
+    SKIPPED faces (artifact absent) never fail.
     """
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
-    result = check_governance_write_shapes()
+    result = check_governance_write_shapes(persist_state=True)
     faces = (
         ("plan_tracker",
          "plan-tracker 任务表行（M1 签名：重复优先级列/行尾空单元格）"),
@@ -22979,6 +23403,9 @@ def cmd_governance_write_guard(_args):
          "evidence-log 机器行族 TRIAGE/RECO（DEC-168 行族列数 + ID 格式）"),
         ("agent_locks", "agent-locks.json schema（Check 26）"),
         ("execution_packets", "execution-packets.json 结构（Check 18c 字段表）"),
+        ("row_families",
+         "受管行族对账（EVD/DEC/REVIEW/任务状态列/ops 台账——机器凭证 WARN 披露，"
+         "FEAT-057）"),
     )
     print()
     print("=== Governance Write Guard (G3 扩展 — FEAT-011, Coordinator 直写路径) ===")
@@ -23000,14 +23427,26 @@ def cmd_governance_write_guard(_args):
             print("    - {0}: {1}".format(where.strip(), issue["detail"]))
             if issue.get("expected"):
                 print("      期望列形: {0}".format(issue["expected"]))
+    baselined = result["row_families"].get("baselined") or []
+    for rel in baselined:
+        print("  [BASELINE] {0} — 首见受管面建立状态基线（存量行不追溯——amnesty，"
+              "零 WARN）".format(rel))
     print()
     if failed:
-        print("Result: FAIL — {0} issue(s)。守卫只检不改（零 .governance 写入、"
-              "零自动修复）——按上方行号与期望列形修复后由写入者复跑本命令"
-              .format(total))
+        print("Result: FAIL — {0} issue(s)。守卫只检不改（零 .governance 修复——"
+              "状态基线 .write-guard-state.json 为守卫自身工件，FEAT-057）；"
+              "按上方行号与期望列形修复后由写入者复跑本命令".format(total))
         sys.exit(1)
+    warn_total = len(result["row_families"]["issues"])
+    if warn_total:
+        print("Result: PASS — 0 FAIL issue(s), {0} WARN(s)（受管行变更无机器"
+              "凭证——响亮披露不阻断；补 governance_store/task_row_update "
+              "凭证或由写入者复核后复跑本命令即基线翻新；BLOCK 升级留 0.87）。"
+              "守卫只检不改（零 .governance 治理记录写入）。".format(warn_total))
+        return
     print("Result: PASS — 0 issue(s)（SKIPPED = 产物缺席，非缺陷）。"
-          "守卫只检不改（零 .governance 写入）。")
+          "守卫只检不改（零 .governance 治理记录写入；状态基线 "
+          ".write-guard-state.json 为守卫自身工件）。")
 
 
 def cmd_check_duplicate_code(args):

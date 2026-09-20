@@ -451,6 +451,17 @@ class PostCommitWriteGuardWiringTests(unittest.TestCase):
         self.assertNotIn("TASK_ID", section)
         self.assertNotIn("LOCKS_FILE", section)
 
+    def test_warn_count_line_present(self):
+        """FEAT-057 R0 P2-1: WARN-class face-5 issues leave the exit code at
+        0, so the hook panel must surface their count from the guard's
+        Result line — the main automation surface's only trace of a
+        hand-edited row (the hook run consumes the reconciliation window)."""
+        section = _wg_section()
+        self.assertIn("0 FAIL issue(s)", section)
+        self.assertIn("run governance-write-guard for details", section)
+        # the disclosure is WARN-gated: zero WARNs → no extra line
+        self.assertIn('-gt 0', section)
+
 
 # Stub verify_workflow.py stand-in for behavioral runs: emits the REAL CLI's
 # output shapes (issue lines "    - ...", authoritative Result line) with a
@@ -460,6 +471,14 @@ class PostCommitWriteGuardWiringTests(unittest.TestCase):
 _WG_STUB = """\
 import os
 import sys
+
+# The REAL CLI reconfigures stdout to UTF-8 (cmd_governance_write_guard);
+# the stub must match that posture or its em-dash Result lines reach the
+# hook's sed as GBK bytes and stop matching (Windows piped-stdout default).
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
 
 marker = os.environ.get("WG_STUB_MARKER", "")
 if marker:
@@ -475,6 +494,13 @@ if mode == "fail":
     sys.exit(1)
 if mode == "crash":
     sys.exit(1)
+if mode == "warn":
+    print("  [PASS] 受管行族对账（FEAT-057） — 2 issue(s)")
+    print("    - L2 EVD-9001: unattributed row change — use governance_store")
+    print("    - L3 FIX-100: unattributed row change — use task_row_update")
+    print()
+    print("Result: PASS — 0 FAIL issue(s), 2 WARN(s)（响亮披露不阻断）。")
+    sys.exit(0)
 print("  [PASS] plan_tracker — 0 issue(s)")
 print()
 print("Result: PASS — 0 issue(s)（SKIPPED = 产物缺席，非缺陷）。")
@@ -549,10 +575,23 @@ class PostCommitWriteGuardPanelTests(unittest.TestCase):
         out, rc, err = self._run_section(self.repo, self.stub, "pass")
         self.assertIn("GOVERNANCE: write-guard PASS", out)
         self.assertIn("结构检查通过", out)
+        # zero-WARN PASS renders NO warn-count disclosure line
+        self.assertNotIn("run governance-write-guard for details", out)
         self.assertNotIn("UNAVAILABLE", out)
         self.assertNotIn("SKIPPED", out)
         self.assertIn("__WG_DONE__", out)  # set -e survival
         self.assertTrue(self.marker.exists())  # guard actually invoked
+
+    def test_warn_state_renders_warn_count_line(self):
+        """FEAT-057 R0 P2-1: a WARN-class PASS (face-5 row-family
+        reconciliation) keeps rc=0 but its count surfaces on the hook
+        panel — the window consumed by this run is not silent."""
+        out, rc, err = self._run_section(self.repo, self.stub, "warn")
+        self.assertIn("GOVERNANCE: write-guard PASS", out)
+        self.assertIn("write-guard: 2 WARN(s)", out)
+        self.assertIn("run governance-write-guard for details", out)
+        self.assertIn("__WG_DONE__", out)  # set -e survival
+        self.assertTrue(self.marker.exists())
 
     def test_fail_state_renders_panel_and_continues(self):
         out, rc, err = self._run_section(self.repo, self.stub, "fail")

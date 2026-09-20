@@ -10,11 +10,11 @@
     }
   ],
   "generated": {
-    "git_head": "c2cc7c1058c9f1c57b43e617872a0ab95bb65fec",
+    "git_head": "7709987ef215e064e2a9a45eb404aadcb14d7554",
     "loc_caliber": "physical lines (ReadAllLines equivalent — see physical_line_count docstring, facts §1.1)"
   },
   "r1_mainfile_budget": {
-    "anchor_loc": 24852,
+    "anchor_loc": 25291,
     "design_anchor_note": "facts-0.80.0 §3.1 design anchor was 24,252 (2026-09-09 HEAD); FEAT-019 packet mandates 实测为准 at regen time (intervening engine deltas: FIX-300 + FEAT-019 dispatch wiring, then FIX-309 Check 28v wiring: 24,356→24,399, whose rendering was moved into infra/dsh_compat.py so the R4 print budget stayed at 1,311). 只降不升 semantics unchanged; the wiring lines are registered as the R1 self-bootstrap exemption.",
     "path": "infra/verify_workflow.py"
   },
@@ -522,7 +522,7 @@
       "cmd_gemini_auth_preflight": 11,
       "cmd_generate_deterministic_scaffold": 3,
       "cmd_governance_context": 14,
-      "cmd_governance_write_guard": 8,
+      "cmd_governance_write_guard": 10,
       "cmd_loop_engineering_migration": 3,
       "cmd_next_candidates": 1,
       "cmd_opencode_provider_preflight": 14,
@@ -538,7 +538,7 @@
       "cmd_web_console": 61,
       "main": 1
     },
-    "total": 1304
+    "total": 1306
   },
   "r5_registration_integrity": {
     "consumes": "infra/contract_matrix/snapshots.json (FEAT-020)",

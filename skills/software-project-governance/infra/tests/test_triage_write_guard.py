@@ -957,5 +957,295 @@ class GovernanceWriteGuardCmdAndSafetyTests(unittest.TestCase):
             self.assertEqual(before, after)
 
 
+class RowFamilyReconciliationTests(unittest.TestCase):
+    """FEAT-057 面 5：受管行族对账（EVD/DEC/REVIEW 行 + 任务状态列 +
+    ``*.ops.jsonl`` receipt 台账）。
+
+    判据（票面验收）：
+    - amnesty 首跑基线——首见受管面建立 ``.write-guard-state.json`` 基线，
+      存量行属历史事实不追溯（零 WARN）；
+    - 正例——机器标记行变更（governance-store 标记 / task_row_update
+      ``〔op-…〕`` 锚 / receipt ``operation_id``）零 WARN；
+    - 负例——裸行变更 WARN 响亮 + 可指引（detail 携写入器指引；
+      WARN 姿态 face 恒 PASS——BLOCK 升级留 0.87）；
+    - 状态基线仅在 CLI 路径（``persist_state=True``）落盘；probe 调用
+      零写入（contract-matrix representative 提取不触真实 .governance）。
+    """
+
+    # ── fixtures ─────────────────────────────────────────────────────────
+
+    _EVD_SEED = (
+        "| EVD-8001 | FEAT-057 | 产品代码 | seed 旧行（amnesty 样本） | "
+        "事实依据：存量行 | actor | 2026-09-19 | G11 | ✅ 完成 |\n")
+    _EVD_SEED2 = (
+        "| EVD-8002 | FEAT-057 | 产品代码 | seed 第二行 | "
+        "事实依据：存量行 | actor | 2026-09-19 | G11 | ✅ 完成 |\n")
+    _DEC_SEED = (
+        "| DEC-223 | 2026-09-19 | coordinator | seed 决策行 | "
+        "依据：存量 |\n")
+    _REVIEW_SEED = (
+        "| REVIEW-FEAT-057-R0 | FEAT-057 | 治理记录 | seed 审查行 | "
+        "事实依据：存量 | reviewer | 2026-09-19 | G11 | APPROVED |\n")
+    _TRACKER_SEED = (
+        "| 优先级 | 任务ID | 标题 | 依赖 | 目标版本 | 闭环路径 | 状态 |\n"
+        "|---|---|---|---|---|---|---|\n"
+        "| **P1** | FEAT-057 | 行族对账夹具票 | — | 0.86.0 | closure | "
+        "🔄 进行中 (2026-09-19) |\n")
+    _OPS_SEED = '{"operation_id": "op-' + "0" * 32 + \
+        '", "record_kind": "task_row_update"}\n'
+
+    def _seed_gov(self, td):
+        gov = Path(td)
+        (gov / "evidence-log.md").write_text(
+            self._EVD_SEED + self._EVD_SEED2 + self._REVIEW_SEED,
+            encoding="utf-8")
+        (gov / "decision-log.md").write_text(self._DEC_SEED,
+                                             encoding="utf-8")
+        (gov / "plan-tracker.md").write_text(self._TRACKER_SEED,
+                                             encoding="utf-8")
+        (gov / "plan-tracker.md.ops.jsonl").write_text(self._OPS_SEED,
+                                                       encoding="utf-8")
+        return gov
+
+    def _run_guard(self, gov, persist_state=False):
+        tracker = gov / "plan-tracker.md"
+        with mock.patch.object(vw, "SAMPLE_PATH", tracker), \
+             mock.patch.object(vw, "GOVERNANCE_DIR", gov):
+            return vw.check_governance_write_shapes(
+                persist_state=persist_state)
+
+    def _row_family_issues(self, result):
+        return [i for i in result["row_families"]["issues"]
+                if i["type"] == "unattributed_row_change"]
+
+    # ── amnesty 首跑基线 ─────────────────────────────────────────────────
+
+    def test_first_run_establishes_baseline_zero_warn(self):
+        """首跑建立状态基线：存量手写行零 WARN（amnesty），基线文件落盘。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = self._seed_gov(td)
+            result = self._run_guard(gov, persist_state=True)
+            face = result["row_families"]
+            self.assertEqual(face["status"], "PASS", face)
+            self.assertEqual(self._row_family_issues(result), [], face)
+            self.assertEqual(
+                sorted(face["baselined"]),
+                [".governance/decision-log.md",
+                 ".governance/evidence-log.md",
+                 ".governance/plan-tracker.md",
+                 ".governance/plan-tracker.md.ops.jsonl"], face)
+            state_path = gov / ".write-guard-state.json"
+            self.assertTrue(state_path.is_file())
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertIn("evidence-log.md", state["files"])
+
+    def test_probe_mode_never_persists_state(self):
+        """probe 调用（persist_state=False，contract-matrix representative
+        同路径）零写入——状态基线文件不出现。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = self._seed_gov(td)
+            result = self._run_guard(gov, persist_state=False)
+            self.assertEqual(result["row_families"]["status"], "PASS")
+            self.assertFalse(
+                (gov / ".write-guard-state.json").is_file())
+
+    # ── 正例：机器标记行变更零 WARN ─────────────────────────────────────
+
+    def test_machine_marked_row_changes_stay_silent(self):
+        """基线后全部受管面以机器凭证变更 → 零 WARN（凭证判定权威 =
+        governance_store 标记 / task_row_update 〔op-…〕 锚 / receipt
+        operation_id）。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = self._seed_gov(td)
+            self._run_guard(gov, persist_state=True)
+            op = "op-" + "a" * 32
+            (gov / "evidence-log.md").write_text(
+                self._EVD_SEED + self._EVD_SEED2 + self._REVIEW_SEED
+                + "| EVD-8003 | FEAT-057 | 产品代码 | 机器追加行 | "
+                  "事实依据：x（机器写入：governance-store evidence-append "
+                  "{0}；schema v1） | governance-store | 2026-09-20 | G11 "
+                  "| PASS |\n".format(op)
+                + "| REVIEW-FEAT-057-R1 | FEAT-057 | 治理记录 | "
+                  "review-record CLI 机器写入 review 结论记录（round 1） | "
+                  "事实依据：review-record 输出摘要（机器写入） | r.md | "
+                  "reviewer | 2026-09-20 | G11 | APPROVED |\n",
+                encoding="utf-8")
+            (gov / "decision-log.md").write_text(
+                self._DEC_SEED
+                + "| DEC-224 | 2026-09-20 | coordinator | 机器决策行 | "
+                  "依据：y（机器写入：governance-store decision-append "
+                  "{0}；schema v1）\n".format(op),
+                encoding="utf-8")
+            (gov / "plan-tracker.md").write_text(
+                self._TRACKER_SEED.replace(
+                    "🔄 进行中 (2026-09-19)",
+                    "✅ 完成 (2026-09-20)〔{0}〕".format(op)),
+                encoding="utf-8")
+            with (gov / "plan-tracker.md.ops.jsonl").open(
+                    "a", encoding="utf-8") as fh:
+                fh.write('{"operation_id": "' + op
+                         + '", "record_kind": "task_row_update"}\n')
+            result = self._run_guard(gov, persist_state=True)
+            self.assertEqual(self._row_family_issues(result), [], result)
+            self.assertEqual(result["row_families"]["status"], "PASS")
+
+    # ── 负例：裸行变更 WARN 响亮 + 可指引 ───────────────────────────────
+
+    def test_bare_row_changes_warn_loudly_with_writer_guidance(self):
+        """基线后五面裸行变更 → 各一条 unattributed_row_change WARN；face
+        恒 PASS（WARN 姿态——响亮披露不阻断）；detail 携写入器指引。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = self._seed_gov(td)
+            self._run_guard(gov, persist_state=True)
+            (gov / "evidence-log.md").write_text(
+                self._EVD_SEED + self._EVD_SEED2 + self._REVIEW_SEED
+                + "| EVD-8003 | FEAT-057 | 产品代码 | 裸追加行 | "
+                  "事实依据：手写无凭证 | someone | 2026-09-20 | G11 | "
+                  "PASS |\n"
+                + "| REVIEW-FEAT-057-R1 | FEAT-057 | 治理记录 | 裸审查行 | "
+                  "事实依据：手写无凭证 | someone | 2026-09-20 | G11 | "
+                  "APPROVED |\n",
+                encoding="utf-8")
+            (gov / "decision-log.md").write_text(
+                self._DEC_SEED
+                + "| DEC-224 | 2026-09-20 | coordinator | 裸决策行 | "
+                  "依据：手写无凭证\n",
+                encoding="utf-8")
+            (gov / "plan-tracker.md").write_text(
+                self._TRACKER_SEED.replace(
+                    "🔄 进行中 (2026-09-19)", "✅ 完成 (2026-09-20)"),
+                encoding="utf-8")
+            with (gov / "plan-tracker.md.ops.jsonl").open(
+                    "a", encoding="utf-8") as fh:
+                fh.write("hand-edited ledger line without receipt\n")
+            result = self._run_guard(gov, persist_state=True)
+            face = result["row_families"]
+            issues = self._row_family_issues(result)
+            self.assertEqual(len(issues), 5, face)
+            self.assertEqual(face["status"], "PASS")  # WARN 姿态：不 FAIL
+            by_key = {i["task_id"]: i for i in issues}
+            self.assertEqual(
+                {i["file"] for i in issues},
+                {".governance/evidence-log.md",
+                 ".governance/decision-log.md",
+                 ".governance/plan-tracker.md",
+                 ".governance/plan-tracker.md.ops.jsonl"}, issues)
+            for row_id in ("EVD-8003", "REVIEW-FEAT-057-R1", "DEC-224",
+                           "FEAT-057"):
+                self.assertIn(row_id, by_key, issues)
+                self.assertIn("unattributed row change",
+                              by_key[row_id]["detail"])
+                self.assertIn("WARN 姿态 0.86.0", by_key[row_id]["detail"])
+                self.assertIn("BLOCK 升级留 0.87",
+                              by_key[row_id]["detail"])
+                self.assertTrue(by_key[row_id]["line"], issues)
+            self.assertIn("use governance_store", by_key["EVD-8003"]["detail"])
+            self.assertIn("use task_row_update",
+                          by_key["FEAT-057"]["detail"])
+            self.assertIn("receipt 行携 operation_id",
+                          by_key["2"]["detail"])  # ops 行按行号键
+
+    def test_untouched_rows_amnestied_only_changed_row_warns(self):
+        """基线后仅改写一行（无凭证）→ 恰一条 WARN 且锚定该行；
+        未触碰的存量行零打扰。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = self._seed_gov(td)
+            self._run_guard(gov, persist_state=True)
+            (gov / "evidence-log.md").write_text(
+                self._EVD_SEED.replace("seed 旧行（amnesty 样本）",
+                                       "改写行（无凭证手改）")
+                + self._EVD_SEED2 + self._REVIEW_SEED,
+                encoding="utf-8")
+            result = self._run_guard(gov, persist_state=True)
+            issues = self._row_family_issues(result)
+            self.assertEqual(len(issues), 1, result)
+            self.assertEqual(issues[0]["task_id"], "EVD-8001", issues)
+
+    # ── 状态基线异常面 ───────────────────────────────────────────────────
+
+    def test_ops_ledger_midline_insert_pins_displacement_semantics(self):
+        """P3-1（review-FEAT-057-CODE-R0）：ops 台账行号键控下中部插行——
+        裸插行恰一条 WARN（行号锚定插入位），被位移的原 receipt 行（键
+        位移但凭证仍命中）零误报。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = self._seed_gov(td)
+            self._run_guard(gov, persist_state=True)
+            ledger = gov / "plan-tracker.md.ops.jsonl"
+            lines = ledger.read_text(encoding="utf-8").splitlines(keepends=True)
+            self.assertEqual(len(lines), 1, lines)
+            # 裸行插在原 receipt 之前：原行位移至键 2（凭证仍命中→不误报），
+            # 裸行占键 1（无凭证→恰一 WARN）
+            ledger.write_text(
+                "bare midline hand edit\n" + lines[0], encoding="utf-8")
+            result = self._run_guard(gov, persist_state=True)
+            issues = self._row_family_issues(result)
+            self.assertEqual(len(issues), 1, result)
+            self.assertEqual(issues[0]["task_id"], "1", issues)
+            self.assertEqual(issues[0]["line"], 1, issues)
+
+    def test_state_unwritable_disclosed_not_crash(self):
+        """P3-4（review-FEAT-057-CODE-R0）：状态基线写入失败 → WARN 级
+        row_family_state_unwritable 披露（face 恒 PASS、不崩溃），既有
+        基线文件原样保留。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = self._seed_gov(td)
+            self._run_guard(gov, persist_state=True)
+            state_path = gov / ".write-guard-state.json"
+            before = state_path.read_bytes()
+
+            def boom(self_path, *args, **kwargs):
+                raise OSError("disk full (simulated)")
+
+            with mock.patch.object(Path, "write_text", boom):
+                result = self._run_guard(gov, persist_state=True)
+            face = result["row_families"]
+            kinds = [i["type"] for i in face["issues"]]
+            self.assertIn("row_family_state_unwritable", kinds, face)
+            self.assertIn("disk full", face["issues"][-1]["detail"], face)
+            self.assertEqual(face["status"], "PASS")  # WARN 姿态不 FAIL
+            self.assertEqual(state_path.read_bytes(), before)  # 基线未被破坏
+
+    def test_corrupt_state_rebuilds_with_loud_disclosure(self):
+        """状态基线损坏 → WARN 级 row_family_state_unreadable + 按首跑重建
+        （响亮披露，不静默）；重建后状态文件恢复为合法 JSON。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = self._seed_gov(td)
+            self._run_guard(gov, persist_state=True)
+            (gov / ".write-guard-state.json").write_text(
+                "{not valid json", encoding="utf-8")
+            result = self._run_guard(gov, persist_state=True)
+            face = result["row_families"]
+            kinds = [i["type"] for i in face["issues"]]
+            self.assertIn("row_family_state_unreadable", kinds, face)
+            self.assertEqual(face["status"], "PASS")
+            state = json.loads(
+                (gov / ".write-guard-state.json")
+                .read_text(encoding="utf-8"))
+            self.assertIn("evidence-log.md", state["files"])
+
+    # ── 凭证权威绑定（防标记漂移——第二形状源防线） ─────────────────────
+
+    def test_marker_authorities_bound_to_real_writer_output(self):
+        """凭证判据绑定真实写入器产物：governance_store 实建行含守卫
+        前缀常量；task_row_update 状态锚模式为写入器自有常量——任一漂移
+        本测试先红。"""
+        from governance_store import _build_decision_row, _build_evidence_row
+        evd_text, _cells = _build_evidence_row(
+            evd_id="EVD-9500", task_id="FEAT-057", evd_type="产品代码",
+            description="绑定探针", basis="b", artifacts="a", actor="t",
+            date_str="2026-09-20", gate="G11", conclusion="PASS", refs=[],
+            op_id="op-" + "a" * 32)
+        self.assertIn(vw._GOVERNANCE_STORE_MARKER_PREFIX, evd_text)
+        dec_text = _build_decision_row(
+            dec_id="DEC-9000", date_str="2026-09-20", decider="t",
+            content="绑定探针", basis="b", op_id="op-" + "b" * 32)
+        self.assertIn(vw._GOVERNANCE_STORE_MARKER_PREFIX, dec_text)
+        from task_row_update import STATUS_CELL_OP_SUFFIX_PATTERN
+        anchored = "✅ 完成 (2026-09-20)〔op-" + "c" * 32 + "〕"
+        self.assertTrue(STATUS_CELL_OP_SUFFIX_PATTERN.search(anchored))
+        self.assertFalse(STATUS_CELL_OP_SUFFIX_PATTERN.search(
+            anchored + "（后缀手改）"))
+
+
 if __name__ == "__main__":
     unittest.main()

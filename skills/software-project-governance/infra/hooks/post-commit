@@ -267,6 +267,18 @@ else
             0)
                 if printf '%s\n' "$SPG_WG_OUT" | grep -q '^Result: PASS'; then
                     echo "✅ GOVERNANCE: write-guard PASS — .governance 结构检查通过${SPG_WG_ELAPSED}"
+                    # FEAT-057 R0 P2-1: WARN-class issues (face-5 row-family
+                    # reconciliation) leave the rc at 0 but MUST stay
+                    # visible on the hook panel — the guard run here also
+                    # consumes the reconciliation window, so this line is
+                    # the only trace a hand-edited row leaves on the main
+                    # automation surface. (0.87 BLOCK escalation restructures
+                    # the window semantics; rc=1 FAIL faces hit the box
+                    # below unchanged.)
+                    SPG_WG_WARNS=$(printf '%s\n' "$SPG_WG_OUT" | sed -n 's/^Result: PASS — 0 FAIL issue(s), \([0-9][0-9]*\) WARN(s).*/\1/p' | head -n 1)
+                    if [ -n "$SPG_WG_WARNS" ] && [ "$SPG_WG_WARNS" -gt 0 ] 2>/dev/null; then
+                        echo "⚠️  GOVERNANCE: write-guard: ${SPG_WG_WARNS} WARN(s) —— run governance-write-guard for details"
+                    fi
                 else
                     echo "⚠️  GOVERNANCE: write-guard UNAVAILABLE — guard returned rc=0 without a PASS verdict line (unexpected output shape; no verdict reported)."
                 fi

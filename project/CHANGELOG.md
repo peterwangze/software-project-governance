@@ -2,6 +2,60 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.87.0] - 2026-09-21
+
+### 0.87.0 - **治理健康收口（Governance Health Closeout）**：热事实源回填 + 引擎解析缺陷消除 + 门禁容量重定标 + 投影两遍 plan 正道化 + 锁治理 governed 化（REL-084 / FIX-367/368/364/369/366/372/370/371 / DEC-226~228 / EVD-1122~1128）
+
+0.87.0 是 **MINOR** 发布，承载 REL-084（0.87.0 M-0 规划双审闭环——`docs/planning/version-plan-0.87.0.md` 设计半面 R0→R1 + 发布半面 R0 双 **APPROVED_WITH_NOTES/0**）+ **DEC-226（0.87.0 标准链预授权：用户 2026-09-20「我授权 Coordinator 按照推荐进行推进，直到最新规划版本发布」——聚焦集裁定，预授权不免除 M-2 门禁实测与 M-3 双半面审查）**。版本主题：**治理健康收口**——0.86.0 单日双发布收尾后治理健康深检暴露 6 面 FAIL（45 issues），本版收口：热事实源回填（Check 28c×3，FIX-367）/ 引擎列偏移误 FAIL 消除（Check 16/17，FIX-368）/ 快照校验午夜窗时间敏感（FIX-364）/ LRC 语义预算容量重定标（Check 31，FIX-369）/ projection 两遍 plan（FIX-366——**M-1 绕开手法终结**）/ evidence 列约定统一（Check 20 fail-open 恢复，FIX-372）/ 锁清理 governed 化（locks-release writer，FIX-370）/ Check 16/17 历史豁免账本（DEC-227 路线 b，FIX-371），对应 EVD-1122~1128。
+
+**九票交付**（批 1 并行收口修复三票 → 批 2 串行引擎修复两票 → M-0 规划 + 批 1 前置治理票）：
+
+- **FIX-367（热事实源回填，Check 28c×3）**：roadmap 0.86.0 行 / 0.85.0 勘正 / 总览 0.86.0 三面回填（task-row-update 机录 op-98c0f7f6）——0.86.0 发布当日 Check 28c 族缺口按 DEC-226 收口；复发预防 = M-5/M-8 内建 roadmap 0.87.0 行回填义务（R0-DESIGN-F8）。
+- **FIX-368（引擎列偏移，commit `5e56021`）**：`parse_impact_analysis_entries` evd_type/description 列 [4]/[5]→[3]/[4]——EVD-1118 误 FAIL Check 16/17 消除；file_location 红线不动；3 项回归测试 + 4 处 fixture LIVE 迁移。REVIEW-FIX-368-R0 双审 APPROVED_WITH_NOTES/0；EVD-1122。
+- **FIX-364（午夜窗时间敏感，commit `9aa27a6`）**：snapshot freshness fixture 以引擎同口径取日期粒度 + stdlib 时钟注入 + 午夜窗正例/负例双钉。REVIEW-FIX-364-R0 APPROVED_WITH_NOTES/0；EVD-1124。
+- **FIX-369（LRC 预算重定标，commit `a7f89ac`）**：Check 31 SEMANTIC_BUDGET_EXCEEDED 门禁面收口——max_semantic_units **300,000→361,923 = ceil(301,602×1.2)**（**重定标非豁免**——B-9；provenance 注释 + 公式钉值/反豁免 fail-closed 双测试；基线经 FEAT-047 baseline-register 机制登记）。REVIEW-FIX-369-R0 APPROVED_WITH_NOTES/0；EVD-1123。
+- **REL-084（M-0 规划双审，commit `80069a2`）**：version-plan-0.87.0 双半面 APPROVED_WITH_NOTES/0×2（DESIGN R0→R1 / RELEASE R0）+ 批 1 全清治理记录 + roadmap 0.87.0 行；M-1 绕开手法退路预声明（R1-N2）随 FIX-366 落地失效——本版 M-1 走两遍 plan 正道。
+- **FIX-366（projection 两遍 plan，commit `2ab3847`）**：byte_copy source = 同批 transformed target 耦合 → **内存 resolve 一次收敛**；CRLF 连带根因修复（`read_text`→`read_bytes().decode`——transformed target 保留原生换行）；4 测试含 CRLF 护栏双断言。REVIEW-FIX-366 R0 APPROVED_WITH_NOTES→R1 APPROVED；EVD-1125。**0.86.0 披露③ 技术债清偿**：本版 M-1 bump 首次单次 `release-projection --write` 收敛（FEAT-053/058 两版绕开手法撤除——M-0 验收面「绕开手法可撤」兑现）。
+- **FIX-372（evidence 列约定统一三处，commit `aa72c37`）**：Check 20（check_agent_activation）同型 off-by-one 漏检 fail-open 恢复 + evidence format check LIVE 对齐 + entry_method 语义修正；9 处 evidence 列读取点全量排查清单留档。REVIEW-FIX-372-R0 APPROVED_WITH_NOTES/0；EVD-1126。
+- **FIX-370（locks-release writer，commit `dd4537b`）**：governance_store 锁清理 governed 化——task 锚定真删除（active_tasks + file_locks + ops 台账登记）+ B-10 先登记后删除 + released_files 审计章 + 三态/幂等 fail-closed；96 键 CLI 分发面重定基线（FEAT-355 同型）。REVIEW-FIX-370-R0 APPROVED_WITH_NOTES/0；EVD-1127；**批 2 全清**；锁经 locks-release 自释放活体验证（op-7c866828）。
+- **FIX-371（Check 16/17 历史豁免账本，commit `a6d3bfb`）**：DEC-227 路线 b——✅ 终态历史行豁免 + **三面留痕不静默**（result 字典 / 子命令面 / 主运行面——F-1 修复后主运行面 26=8+18 对账闭合）；双形态状态定位（紧凑 7 列 + legacy REQ 行）+ 单扫描源；交付时点真实面 **31→5 FAIL** + exempted 26 显式；REQ-092 blocked 保持 FAIL（零豁免红线活体实证）；R0 NEEDS_CHANGE（F-1）→R1 APPROVED/0；DEC-228 记录面修订；EVD-1128。
+
+**⑥ 治理面**：窗口内 **3 决策**（**DEC-226 0.87.0 标准链预授权**〔聚焦集 = FIX-367/368/LRC 重定标/FIX-366/FIX-364/locks-release；出槽 0.88+ = write-guard WARN→BLOCK 升级/存储分离 JSON 化/closure 铺开/FEAT-044+045/B-7/量测边缘观察 4 项；Check 28s 由 M-8 归档消解不占工程票〕/ **DEC-227 FIX-371 路线 b 历史豁免账本**〔豁免账本仅容纳 2026-09-20 前存量历史行，新增行零豁免全严检；路线 a 数据补录被否——补录=编造风险违反 P1；路线 c 披露基线被否——M-2 门禁仍红；机录行不合格子字段登记时逐条披露〕/ **DEC-228 DEC-227 记录面修订（R0 审查裁决要求）**〔豁免账本三消费方明列：Check 16 / Check 17 / Check 18 事实依据取数 wrapper；Check 18 历史面静默明示承认；主运行面 historical_exempted 计数+有界清单披露义务〕）+ **7 EVD**（EVD-1122~1128——七票交付审查链全部机器写入 governance-store evidence-append，写入器时代自举延续）+ REL-084 双半面审查报告留档（review-REL-084-DESIGN-R0/R1、review-REL-084-RELEASE-R0）；产品任务全部 change-triage 机录 + Developer→Reviewer 审查链（七票全闭环含 NEEDS_CHANGE→R1 转化三票〔FIX-366/370/371〕，0 unresolved blockers）。
+
+### Added
+
+- **locks-release 子命令（FIX-370；行为变更 B-10）**：governance_store 锁清理 governed 化——task 锚定真删除 + 先登记后删除 + released_files 审计章；shrink-locks 保留。用户视角：过期锁悬挂（Check 26 活体——REL-082 过期锁 4 blocking 实证）首次拥有可对账的释放路径。
+- **Check 16/17 历史豁免账本（FIX-371；DEC-227/228）**：✅ 终态历史行豁免 + 活跃行零豁免全严检 + 三消费方留痕——豁免计数与逐行清单可审计。
+
+### Changed
+
+- **Check 31 语义预算容量重定标（FIX-369；行为变更 B-9）**：max_semantic_units 300,000→361,923 = ceil(301,602×1.2)——基线机制设计内数值重定标（FEAT-047 baseline 承载），非 Gate 结构/判定语义变更（VERSIONING L11 显式处置——R0-RELEASE-F3）。
+- **projection 两遍 plan 正道化（FIX-366）**：版本 bump 单次 `release-projection --write` 一次收敛（byte_copy source = 同批 transformed target 耦合消除）；M-1 绕开手法（FEAT-053/058）终结。
+- **全仓版本面 0.86.0→0.87.0（FEAT-059）**：SKILL frontmatter 权威源 + 28 投影面 + 双根 entry bootstrap + REQUIRED_SNIPPETS 引擎锚统一再生。
+
+### Fixed
+
+- **parse_impact_analysis_entries 列偏移（FIX-368）**——EVD-1118 误 FAIL Check 16/17 消除；file_location 红线不动。
+- **snapshot freshness 午夜窗时间敏感（FIX-364）**——fixture 与引擎同口径日期粒度 + 时钟注入 + 正例/负例双钉。
+- **evidence 列约定三处统一（FIX-372）**——Check 20 fail-open 恢复 + format check LIVE 对齐 + entry_method 语义。
+- **热事实源回填（FIX-367）**——roadmap 0.86.0 行 / 0.85.0 勘正 / 总览 0.86.0（Check 28c×3 清零；task-row-update 机录 op-98c0f7f6）。
+
+**行为变更（用户可感知，B-9~B-11 —— MUST 出现在升级说明）**：
+
+- **B-9**（FIX-369·Check 31 容量重定标）：语义预算上限 300,000→361,923（公式 = ceil(实测×1.2)，provenance 基线登记）——**重定标非豁免**（门禁语义不弱化：BLOCKED→有据 PASS；反豁免 fail-closed 双测试钉死重定标必须走公式）。回退通道：还原预算值 + 基线注销（数据级、可执行、双向自洽）。
+- **B-10**（FIX-370·locks-release 释放语义）：新增 release 真删除 + 登记（shrink-locks TTL 收缩保留、语义不变）；先登记后删除（ops 台账先行，删除动作携带 operation_id 审计痕迹）；误删补偿 = acquire 幂等重取（锁条目可重建，不触任务数据）；不可逆面 = 零。
+- **B-11**（FIX-371·Check 16/17 历史豁免账本）：✅ 终态历史行（2026-09-20 前存量）豁免入账本，**新增行零豁免全严检**；豁免在三消费方留痕不静默（Check 16 / Check 17 / Check 18 取数 wrapper——DEC-228①；主运行面打印 historical_exempted 计数 + 有界清单）。回退通道：账本可增删可回滚（DEC-226 非-T2 裁定）。
+
+**如实披露**：① **REQ-092 blocked 面 Check 16/17 FAIL 维持**（交付时点真实面 31→5〔EVD-1128〕→ 勘正回填后 5→3〔FIX-200/FEAT-001 勘正消解〕，其中 REQ-092 blocked 保持 FAIL——真实活跃义务非豁免：Desktop marketplace 外部依赖，result matrix 在场，零豁免红线活体实证）。② **EVD-248 切分器状态泄漏单条误报显形**（FIX-372 审查 F-4 双向影响：format check 单条误报 fail-noisy + Check 20 读路径 fail-blind——FIX-373 triage 在案出槽 0.88+，验收纳入双向影响评估与 Check 20 形状回归 fixture）。③ **FIX-373~376 四票出槽 0.88 登记**（切分器状态泄漏 FIX-373 / 9-cell 豁免消歧 FIX-374 / FIX-375〔FIX-370 遗留〕/ FIX-376——plan-tracker REL-084 状态行出槽注记；0.87 M-2 如实披露该已知噪声）。④ **CRuntime CRLF 保真行为变化（FIX-366 连带修复）**：projection transformed target 保留原生换行（read_bytes().decode 替代 read_text 隐式转换；CRLF 护栏双断言测试在场）。⑤ **版本标记 token 敏感面**：版本 bump 不改变注入面 token 计数——三 profile 逐位复测无回归（见版本投影段）。⑥ **本版不发布什么**：write-guard WARN→BLOCK 升级（DEC-224 双约束）、存储分离 JSON 化（首表 decision-log）、closure 铺开（取消/重开/异常接管）、FEAT-044 回合心跳 + FEAT-045 并行段识别、B-7 index-rebuild + 大表迁移 + 发版管线自举、量测边缘观察 4 项（version-plan-0.87.0 §6 出槽清单）；M-2 门禁实测与 M-3 双半面审查照常（预授权不免除门禁）。⑦ **no-overclaim 边界**：official approval / marketplace approval / universal runtime support / external first-session pilot success 均未被主张；非 Windows 平台未验证，本版验收全部在仓库内完成；RISK-036 继续打开，do not claim 1.0.0 production-ready。
+
+**Breaking changes：无**（`skills/software-project-governance/core/VERSIONING.md` L11 口径：无 MUST 规则删除/重命名、无 governance 文件字段格式变更；B-9 属基线机制设计内数值重定标非判定语义变更〔显式 L11 处置——R0-RELEASE-F3，0.85.0「判定姿态翻转」先例同型〕；B-10 纯新增 CLI、shrink-locks 保留无删除面；B-11 活跃判定语义零弱化）。**MINOR bump 依据**：version-plan-0.87.0（M-0 双半面 APPROVED_WITH_NOTES/0×2）——载荷 = locks-release 新子命令（新增受治理能力面）+ Check 16/17 历史豁免账本 + Check 31 容量重定标 + 七票收口修复；无 breaking。版本号未占用预留（REL-084 Release R0 代验：0.86.0 已发布顺延 +1；无 0.87.x tag/预留冲突；1.0.0 预留位未触碰）。
+
+版本投影 0.86.0 -> 0.87.0：由 M-1 统一执行——**FIX-366 两遍 plan 修复后首次正道交付**：SKILL frontmatter 权威锚先 bump（0.86.0→0.87.0），`release-projection --write` 单次写入 28 个 registry 投影面一次收敛（5 plugin/marketplace + `package.json` + `core/manifest.json` + 4 hook `@version` + DSH persona 版本行 + `adapters/dsh/AGENTS.md.template` + `commands/governance-init.md` 三模板 `@bootstrap-version` + fixture skill/plan + 12 个 fixture 命令面）——**零回滚震荡**（FEAT-053/058「canonical 标记先达目标值→transformed 幂等→再生 byte_copy」绕开手法撤除）；双根 entry bootstrap（repo-root + e2e-fixture，AGENTS.md/CLAUDE.md `@bootstrap-version`）经 `sync_entry_projection` 再生；手工钉 `verify_workflow.py` `REQUIRED_SNIPPETS` 六个版本锚与 JSON 声明面一致。本段随候选打包提交落库；`.governance/plan-tracker.md` `工作流版本` 随发布收口由 Coordinator 更新（过渡态 WARN 如实呈现——本版 verify 唯一预期 WARN）。
+
+**发布时点**：本条目日期取候选落库时点（2026-09-21 +0800）；若 M-5 transition/tag 的 taggerdate 与之不同，按 FIX-349 口径（**taggerdate 权威**）勘误对齐，不预填未生成的 tag 事实。
+
+**Commit 区间（6e25753..M-1 tip）**：git log --oneline 实测 8 行（M-1 候选落库时点，新→旧）——`a6d3bfb` FIX-371 / `dd4537b` FIX-370 / `aa72c37` FIX-372 / `2ab3847` FIX-366 / `80069a2` REL-084 / `9aa27a6` FIX-364 / `a7f89ac` FIX-369 / `5e56021` FIX-368（区间终点随本段所在 M-1 候选 commit 落库后延伸）。
+
 ## [0.86.0] - 2026-09-20
 
 ### 0.86.0 - **确定性核心架构演进第一版：写入器时代**：四类可靠原子写入器 + 一条可恢复标准闭环 + 受管状态变更零人工直写（REL-082 / FEAT-049/051/046/047/055/056/057 + FIX-365 / DEC-218~224 / EVD-1102~1118）

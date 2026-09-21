@@ -269,6 +269,17 @@ STATIC_PIN_EXEMPTIONS = {
     "skills/software-project-governance/infra/tests/test_static_version_pins.py": [
         (158, "0.85.0", _REASON_FUTURE_TARGET),
     ],
+    # 0.87.0 bump-time rows (the FIX-361 designed double signal): FIX-366's
+    # bump-scenario regression constant (NEW_VERSION) and FIX-371's fixture
+    # tracker row (目标版本 column = scenario payload, row self-marked
+    # fixture task) were written with the then-future target while 0.86.0
+    # was active, so each surfaces exactly once — at this bump.
+    "skills/software-project-governance/infra/tests/test_release_projection.py": [
+        (30, "0.87.0", _REASON_FUTURE_TARGET),
+    ],
+    "skills/software-project-governance/infra/tests/test_verify_workflow.py": [
+        (12375, "0.87.0", _REASON_FIXTURE_ROW_TEXT),
+    ],
 }
 
 

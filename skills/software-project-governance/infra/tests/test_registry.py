@@ -99,7 +99,10 @@ _SECTION_RE = re.compile(r"^\s*#\s*" + _DASH + r"{2}\s*([0-9][A-Za-z0-9]*)\.\s")
 # `baseline-register`/`baseline-evaluate` (baseline_metadata.py, FEAT-047).
 # Snapshot + architecture baseline regenerated in the same change
 # (`contract_matrix/generator.py --regen` + `archguard_ratchet.py --regen`).
-FROZEN_CLI_KEYS = 95
+# FIX-370 (0.87.0 batch 2 closure): 95 -> 96 CLI keys — `locks-release`, the
+# release leg of the governance_store locks family (same governance_cost
+# pattern; snapshot counts + keys re-baselined in the same change).
+FROZEN_CLI_KEYS = 96
 FROZEN_SEGMENTS = 71
 
 # FEAT-018 R6 frozen startup budget (``core/architecture-baseline.json`` r6):
@@ -394,8 +397,8 @@ class CommandRegistryTests(unittest.TestCase):
             # in governance_cost.py; the engine wires dispatch only.
             "governance-cost-report",
             # FEAT-055 (0.86.0 batch 2.0): the lock-maintenance writers of
-            # the governance_store family.
-            "locks-amend", "locks-extend",
+            # the governance_store family; FIX-370 added the release leg.
+            "locks-amend", "locks-extend", "locks-release",
             # FEAT-055 (0.86.0 batch 2.0): the task-row state-flip writer
             # (B-1 termination surface; handler in task_row_update.py).
             "task-row-update",

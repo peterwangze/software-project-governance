@@ -93,7 +93,8 @@ import task_row_update
 from task_row_update import cmd_task_row_update
 import governance_store
 from governance_store import (cmd_decision_append, cmd_evidence_append,
-                              cmd_locks_amend, cmd_locks_extend)
+                              cmd_locks_amend, cmd_locks_extend,
+                              cmd_locks_release)
 import baseline_metadata
 from baseline_metadata import cmd_baseline_evaluate, cmd_baseline_register
 
@@ -25177,8 +25178,9 @@ def main(argv=None):
     task_row_update.add_arguments(tru_p)
 
     # governance_store writer family (FEAT-055 / 0.86.0 batch 2.0 —
-    # FEAT-046): locks-extend / locks-amend / evidence-append /
-    # decision-append; args and handlers live in governance_store.py — the
+    # FEAT-046): locks-extend / locks-amend / locks-release (FIX-370) /
+    # evidence-append / decision-append; args and handlers live in
+    # governance_store.py — the
     # engine only wires dispatch, ArchGuard R4 print budget untouched)
     lse_p = subparsers.add_parser(
         "locks-extend",
@@ -25192,6 +25194,14 @@ def main(argv=None):
              "governed writer; operation_id idempotent)",
     )
     governance_store.add_locks_amend_arguments(lsa_p)
+    lsr_p = subparsers.add_parser(
+        "locks-release",
+        help="Release a dispatch task's locks: the active_tasks entry and "
+             "all its file_locks entries, one atomic governed write "
+             "(FIX-370; operation_id idempotent; fail-closed on a lockless "
+             "task)",
+    )
+    governance_store.add_locks_release_arguments(lsr_p)
     eva_p = subparsers.add_parser(
         "evidence-append",
         help="Append one machine-written EVD row (FEAT-046 governed "
@@ -25325,6 +25335,7 @@ def main(argv=None):
         "task-row-update": cmd_task_row_update,
         "locks-extend": cmd_locks_extend,
         "locks-amend": cmd_locks_amend,
+        "locks-release": cmd_locks_release,
         "evidence-append": cmd_evidence_append,
         "decision-append": cmd_decision_append,
         "baseline-register": cmd_baseline_register,

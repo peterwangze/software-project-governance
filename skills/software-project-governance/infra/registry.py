@@ -373,6 +373,10 @@ _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
     # governance_store family (batch-1 module, engine wires dispatch only).
     ("locks-amend", "governance_store.cmd_locks_amend"),
     ("locks-extend", "governance_store.cmd_locks_extend"),
+    # FIX-370 (0.87.0 batch 2 closure): the release leg of the locks
+    # family — task-anchored true deletion (handler in governance_store.py,
+    # engine wires dispatch only).
+    ("locks-release", "governance_store.cmd_locks_release"),
     ("loop-engineering-migration",
      "verify_workflow.cmd_loop_engineering_migration"),
     ("loop-rollup", "verify_workflow.cmd_loop_rollup"),
@@ -395,14 +399,16 @@ _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
     ("verify", "verify_workflow.cmd_verify"),
     ("web-console", "verify_workflow.cmd_web_console"),
 )
-"""95 dispatch keys from the FEAT-020 frozen face (FEAT-031 added
+"""96 dispatch keys from the FEAT-020 frozen face (FEAT-031 added
 ``check-dsh-boundary`` and ``dsh-doctor``; FEAT-032 added
 ``governance-cost-report``; FEAT-037 added ``check-entry-bootstrap-sync``;
 FEAT-033 added ``governance-bootstrap``; FEAT-055 added the three governed
 writer modules — ``task-row-update``, the four governance_store writer
-commands, and the two baseline_metadata commands), each with the module that
+commands, and the two baseline_metadata commands; FIX-370 added
+``locks-release``, the release leg of the governance_store locks family),
+each with the module that
 *defines* its handler (machine-derived: the ``commands`` dict of ``main()``
-cross-referenced with the defining module of every handler name — 16 keys are
+cross-referenced with the defining module of every handler name — 17 keys are
 already outside the engine, the other 79 ride the monolith).  The docstring
 count shipped stale at FEAT-039 time (said 87 with 8 outside when the table
 held 88 with 9 outside); corrected here as part of the deliberate

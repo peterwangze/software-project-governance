@@ -16,8 +16,11 @@ Covers the acceptance red faces and the DoD §4 item 7 negative controls:
     L871 precedent) + lock-contention is retryable;
   - reliability: CRLF preserved, no BOM, explicit UTF-8 (GBK-safe CJK
     payload), byte-prefix preservation, dry-run writes nothing;
-  - locks-extend / locks-amend reuse the acquire-pipeline schema (Check 26
-    mirror): extend/amend/replay/resume/drift refusals;
+  - locks-extend / locks-amend / locks-release reuse the acquire-pipeline
+    schema (Check 26 mirror): extend/amend/replay/resume/drift refusals;
+  - locks-release (FIX-370): happy release (active entry + all owned file
+    locks gone, ops-ledger row on disk), fail-closed zero-write refusal on
+    a lockless task, idempotent replay as a success no-op;
   - markdown pipe special characters: raw pipe refused (shape), inline-code
     span accepted (the engine splitter's documented convention).
 
@@ -1030,6 +1033,135 @@ class LocksAmendTests(StoreTestCase):
         self.assertEqual(data["file_locks"]["docs/a.md"]["ttl_seconds"], 60)
 
 
+class LocksReleaseTests(StoreTestCase):
+    """FIX-370 — the release leg of the locks family (B-10 先登记后删除).
+
+    Task contract three faces: happy release (active entry + ALL owned
+    file locks gone, ops-ledger row carrying the released file list),
+    fail-closed zero-write refusal on a lockless task, and idempotent
+    replay (same operation_id → success no-op, locks file untouched).
+    """
+
+    def seed_release_fixture(self):
+        """FIX-100 holds two file locks + the active entry; FIX-200 holds
+        its own entry + one file lock (must stay untouched)."""
+        locks = {
+            "active_tasks": {
+                "FIX-100": {
+                    "spawned_at": "2026-09-19T10:00:00",
+                    "coordinator_session": "session-x",
+                    "target_files": ["docs/a.md"],
+                    "files": ["docs/a.md", "docs/b.md"],
+                },
+                "FIX-200": {
+                    "spawned_at": "2026-09-19T11:00:00",
+                    "coordinator_session": "session-y",
+                    "target_files": ["docs/c.md"],
+                    "files": ["docs/c.md"],
+                },
+            },
+            "file_locks": {
+                "docs/a.md": {
+                    "locked_by": "FIX-100",
+                    "locked_at": "2026-09-19T10:00:00",
+                    "ttl_seconds": 3600,
+                    "ttl_reason": "seed",
+                },
+                "docs/b.md": {
+                    "locked_by": "FIX-100",
+                    "locked_at": "2026-09-19T10:05:00",
+                    "ttl_seconds": 7200,
+                    "ttl_reason": "amend: added",
+                },
+                "docs/c.md": {
+                    "locked_by": "FIX-200",
+                    "locked_at": "2026-09-19T11:00:00",
+                    "ttl_seconds": 3600,
+                    "ttl_reason": "seed",
+                },
+            },
+        }
+        gs._atomic_write_bytes(
+            self.gov / "agent-locks.json",
+            (json.dumps(locks, ensure_ascii=False, indent=4) + "\n")
+            .encode("utf-8"))
+        return locks
+
+    def call_release(self, **overrides):
+        params = dict(task_id="FIX-100", governance_dir=self.gov,
+                      operation_id=None)
+        params.update(overrides)
+        return gs.locks_release(**params)
+
+    def test_release_removes_active_entry_and_all_owned_file_locks(self):
+        self.seed_release_fixture()
+        result = self.call_release(operation_id=gs.new_operation_id())
+        self.assertFalse(result.get("error"), result)
+        self.assertEqual(result["code"], "ok")
+        data = json.loads(
+            (self.gov / "agent-locks.json").read_text(encoding="utf-8"))
+        self.assertNotIn("FIX-100", data["active_tasks"])
+        self.assertNotIn("docs/a.md", data["file_locks"])
+        self.assertNotIn("docs/b.md", data["file_locks"])
+        # collateral damage zero: the other task's rows stay untouched
+        self.assertIn("FIX-200", data["active_tasks"])
+        self.assertEqual(data["file_locks"]["docs/c.md"]["locked_by"],
+                         "FIX-200")
+        self.assertEqual(gs._validate_locks_schema(data), [])
+        # B-10 留痕: the ok row carries operation_id + the released file
+        # list; the family convention (effects dropped at completion, see
+        # _complete_pending) stays pinned, so the FIX-370 retention field
+        # is the surviving audit record
+        ledger = json.loads(
+            (self.gov / gs.LEDGER_FILE_NAME).read_text(encoding="utf-8"))
+        entry = ledger["operations"][result["operation_id"]]
+        self.assertEqual(entry["status"], "ok")
+        self.assertEqual(entry["command"], "locks-release")
+        self.assertEqual(entry["task_id"], "FIX-100")
+        self.assertIsNone(entry["baseline_effects"])
+        self.assertEqual(entry["released_files"],
+                         ["docs/a.md", "docs/b.md"])
+
+    def test_lockless_task_refused_zero_writes(self):
+        self.seed_release_fixture()
+        before = (self.gov / "agent-locks.json").read_bytes()
+        payload = self.call_release(task_id="FIX-999",
+                                    operation_id=gs.new_operation_id())
+        self.assertRefused(payload, "cross_record_violation")
+        self.assertIn("nothing to release", payload["detail"])
+        self.assertEqual((self.gov / "agent-locks.json").read_bytes(),
+                         before)
+        self.assertFalse((self.gov / gs.LEDGER_FILE_NAME).exists())
+
+    def test_file_locks_only_task_released_without_active_entry(self):
+        locks = self.seed_release_fixture()
+        del locks["active_tasks"]["FIX-200"]
+        gs._atomic_write_bytes(
+            self.gov / "agent-locks.json",
+            (json.dumps(locks, ensure_ascii=False, indent=4) + "\n")
+            .encode("utf-8"))
+        result = self.call_release(task_id="FIX-200",
+                                   operation_id=gs.new_operation_id())
+        self.assertFalse(result.get("error"), result)
+        data = json.loads(
+            (self.gov / "agent-locks.json").read_text(encoding="utf-8"))
+        self.assertNotIn("FIX-200", data["active_tasks"])
+        self.assertNotIn("docs/c.md", data["file_locks"])
+        self.assertIn("docs/a.md", data["file_locks"])  # FIX-100 untouched
+
+    def test_replay_is_success_noop_locks_file_unchanged(self):
+        self.seed_release_fixture()
+        op = gs.new_operation_id()
+        first = self.call_release(operation_id=op)
+        self.assertFalse(first.get("error"), first)
+        after_first = (self.gov / "agent-locks.json").read_bytes()
+        second = self.call_release(operation_id=op)
+        self.assertTrue(second.get("replayed"), second)
+        self.assertEqual(second["code"], "ok")
+        self.assertEqual((self.gov / "agent-locks.json").read_bytes(),
+                         after_first)
+
+
 class ContractFaceTests(unittest.TestCase):
     def test_success_result_carries_revision_and_execution_only(self):
         import tempfile
@@ -1080,8 +1212,8 @@ class ContractFaceTests(unittest.TestCase):
     def test_commands_registry_is_the_composition_root(self):
         self.assertEqual(
             set(gs.COMMANDS),
-            {"locks-extend", "locks-amend", "evidence-append",
-             "decision-append"})
+            {"locks-extend", "locks-amend", "locks-release",
+             "evidence-append", "decision-append"})
         for name, handler in gs.COMMANDS.items():
             self.assertTrue(callable(handler))
 
@@ -1258,6 +1390,26 @@ class WriterCliHandlerTests(StoreTestCase):
         self.assertEqual(code, 0)
         payload = json.loads(out.getvalue())
         self.assertEqual(payload["code"], "ok")
+
+    def test_cmd_locks_release_namespace_exit0(self):
+        out = io.StringIO()
+        with mock.patch.object(gs.sys, "stdout", out):
+            code = gs.cmd_locks_release(argparse.Namespace(
+                task="FIX-100", operation_id=gs.new_operation_id(),
+                timeout=10.0, project_root=str(self.tmp)))
+        self.assertEqual(code, 0)
+        payload = json.loads(out.getvalue())
+        self.assertEqual(payload["code"], "ok")
+
+    def test_cmd_locks_release_lockless_refusal_exit2(self):
+        out = io.StringIO()
+        with mock.patch.object(gs.sys, "stdout", out):
+            code = gs.cmd_locks_release(argparse.Namespace(
+                task="FIX-999", operation_id=gs.new_operation_id(),
+                timeout=10.0, project_root=str(self.tmp)))
+        self.assertEqual(code, 2)
+        payload = json.loads(out.getvalue())
+        self.assertEqual(payload["code"], "cross_record_violation")
 
     def test_cmd_decision_append_refusal_exit2(self):
         out = io.StringIO()

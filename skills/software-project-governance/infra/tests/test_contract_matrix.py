@@ -78,7 +78,11 @@ from contract_matrix import generator as cmg  # noqa: E402
 # pattern); segment face unchanged at 71; snapshot + architecture baseline
 # regenerated via `contract_matrix/generator.py --regen` +
 # `archguard-ratchet --regen` in the same change.
-FROZEN_CLI_KEY_COUNT = 95
+# FIX-370 (0.87.0 batch 2 closure): 95→96 keys (`locks-release` — the release
+# leg of the governance_store locks family, handler in governance_store.py,
+# engine wires dispatch only — governance_cost pattern); segment face
+# unchanged at 71; snapshot counts + keys re-baselined in the same change.
+FROZEN_CLI_KEY_COUNT = 96
 FROZEN_CHECK_SEGMENT_COUNT = 71
 
 

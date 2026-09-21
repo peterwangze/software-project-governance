@@ -164,8 +164,8 @@
           "dynamic-lifecycle-migration"
         ]
       },
-      "handler_count": 92,
-      "key_count": 95,
+      "handler_count": 93,
+      "key_count": 96,
       "keys": [
         "agent-locks-acquire",
         "agent-runtime-e2e",
@@ -245,6 +245,7 @@
         "governance-write-guard",
         "locks-amend",
         "locks-extend",
+        "locks-release",
         "loop-engineering-migration",
         "loop-rollup",
         "loop-telemetry",

@@ -5,11 +5,14 @@ Three command families over the same governed-write pipeline (version-plan
 
     locks-extend     TTL 延展 for existing ``agent-locks.json`` entries
     locks-amend      field/file amendments for existing dispatch locks
+    locks-release    task-anchored release: the active_tasks entry AND every
+                     file lock owned by the task (FIX-370 / B-10)
     evidence-append  machine EVD row append into ``evidence-log.md``
     decision-append  machine DEC row append into ``decision-log.md``
 
-(locks-extend / locks-amend are one family over the same acquire-pipeline
-schema; evidence-append / decision-append share the append pipeline.)
+(locks-extend / locks-amend / locks-release are one family over the same
+acquire-pipeline schema; evidence-append / decision-append share the append
+pipeline.)
 
 Root causes closed here (0.86.0-boundary-audit.md):
 
@@ -169,6 +172,7 @@ __all__ = [
     "locks_amend",
     "locks_extend",
     "locks_load",
+    "locks_release",
     "main",
 ]
 
@@ -1453,7 +1457,10 @@ def _state_matches(data, state) -> bool:
     """Effect-based world judgment: does the live locks data equal ``state``?
 
     An empty per-file snapshot means "file not locked" (the baseline of an
-    amend --add-file); ``active_tasks`` list fields compare as lists.
+    amend --add-file, the target of a release); ``active_tasks`` list
+    fields compare as lists.  A ``None`` active_tasks field is release's
+    absence marker: the keyed entry must be GONE (extend/amend never
+    record ``None``, so their recorded states are judged unchanged).
     """
     if not isinstance(state, dict) or not state:
         return False
@@ -1470,6 +1477,10 @@ def _state_matches(data, state) -> bool:
                 return False
     for task_id, fields in (state.get("active_tasks") or {}).items():
         entry = data["active_tasks"].get(task_id)
+        if fields is None:
+            if entry is not None:
+                return False
+            continue
         if not isinstance(entry, dict):
             return False
         for key, value in fields.items():
@@ -1479,13 +1490,20 @@ def _state_matches(data, state) -> bool:
 
 
 def _locks_execute(governance_dir, op_id, fingerprint, task_id, mutator,
-                   effects_of, *, command, now, timeout_seconds):
+                   effects_of, *, command, now, timeout_seconds,
+                   holds_lock=None):
     """Shared locks apply: world-judged resume → apply → verify → ok.
 
     The ledger records target AND baseline state; a re-run judges the world
     (never the log): world==target → complete; world==baseline (crash
     before apply) → re-apply the deterministic mutator and complete;
     anything else → manual_intervention.  No double-apply, no half state.
+
+    ``holds_lock`` (locks-release, FIX-370): a predicate over the live
+    data replacing the family default ownership guard for NEW operations —
+    the guard still runs AFTER the replay/resume legs, so a replay of a
+    completed release stays a success no-op.  ``None`` keeps the default:
+    the task must hold an active_tasks entry.
     """
     ledger = _load_ledger(governance_dir)
     existing = ledger["operations"].get(op_id)
@@ -1517,7 +1535,13 @@ def _locks_execute(governance_dir, op_id, fingerprint, task_id, mutator,
             "target and baseline state — re-judge manually (the ledger is "
             "never trusted over the world)"))
 
-    if task_id not in data["active_tasks"]:
+    if holds_lock is not None:
+        if not holds_lock(data):
+            _refuse(_error_result(
+                op_id, "cross_record_violation",
+                f"task {task_id} holds no dispatch lock (no active_tasks "
+                f"entry, no file locks) — nothing to release"))
+    elif task_id not in data["active_tasks"]:
         _refuse(_error_result(
             op_id, "cross_record_violation",
             f"task {task_id} holds no active dispatch lock — acquire "
@@ -1779,6 +1803,95 @@ def locks_amend(*, task_id, add_file=None, expected_new=False,
             command="locks-amend", now=now, timeout_seconds=timeout_seconds)
 
 
+@_returns_payload
+def locks_release(*, task_id, governance_dir, repo_root=None,
+                  operation_id=None, now=None, timeout_seconds=10.0):
+    """FIX-370 / version-plan 0.87.0 §5 B-10: release a task's dispatch
+    locks — the task-anchored true deletion the family lacked.
+
+    One atomic write removes the task's ``active_tasks`` entry AND every
+    ``file_locks`` entry with ``locked_by == task_id``.  The governed
+    pipeline records the pending ledger entry (target + baseline effects —
+    the released file list with their prior fields) BEFORE the locks file
+    is written back (B-10 先登记后删除), so a crash in between leaves the
+    effect-based resume path, never a half state.  A re-run with the same
+    ``operation_id`` after a completed release replays as a success no-op.
+
+    Fail-closed: a task holding NEITHER an active_tasks entry NOR any file
+    lock is refused with zero writes (nothing to release).
+    ``closure_chain`` shrink-locks (TTL 收缩) semantics are deliberately
+    untouched — this is deletion with audit, not shrinkage.
+    """
+    now = now if now is not None else datetime.now()
+    op_id = require_operation_id("locks_release", operation_id) \
+        if operation_id else new_operation_id()
+    SCHEMA_WINDOW.require_supported("locks_release", SCHEMA_VERSION)
+    task_id = _locks_common(task_id)
+    governance_dir = Path(governance_dir)
+    fingerprint = _fingerprint({
+        "command": "locks-release", "task": task_id,
+    })
+
+    def holds_lock(data):
+        if task_id in data["active_tasks"]:
+            return True
+        return any(isinstance(entry, dict)
+                   and entry.get("locked_by") == task_id
+                   for entry in data["file_locks"].values())
+
+    def mutate(data, owner):
+        data["active_tasks"].pop(owner, None)
+        for file_path in [f for f, e in data["file_locks"].items()
+                          if isinstance(e, dict)
+                          and e.get("locked_by") == owner]:
+            del data["file_locks"][file_path]
+        return None
+
+    owned_files = []
+
+    def effects_of(data):
+        if not owned_files:
+            # first (baseline) call fixes the released file list; the
+            # target call then snapshots the SAME keys — each now absent
+            # (an empty snapshot means "not locked" per _state_matches)
+            owned_files.extend(sorted(
+                f for f, e in data["file_locks"].items()
+                if isinstance(e, dict) and e.get("locked_by") == task_id))
+        state = {"file_locks": {
+            f: _snapshot_lock_fields(data, [f]).get(f, {})
+            for f in owned_files}}
+        entry = data["active_tasks"].get(task_id)
+        if isinstance(entry, dict):
+            state["active_tasks"] = {
+                task_id: {key: list(entry.get(key, []))
+                          for key in ("target_files", "files")}}
+        else:
+            state["active_tasks"] = {task_id: None}  # absence marker
+        return state
+
+    with _TargetLock(governance_dir / LOCKS_FILE_NAME, timeout_seconds):
+        payload = _locks_execute(
+            governance_dir, op_id, fingerprint, task_id, mutate, effects_of,
+            command="locks-release", now=now, timeout_seconds=timeout_seconds,
+            holds_lock=holds_lock)
+    if payload.get("replay_source") == "apply" and owned_files:
+        # B-10 留痕: the shared pipeline drops effect payloads on the ok
+        # row (family convention); for a DELETION the released file list
+        # is the audit record, so the completed entry is stamped with it —
+        # on the apply leg only (replay_source == "apply"; the "ledger"
+        # replay and the "resume" leg re-judge an already-applied world
+        # where owned_files is empty by construction).  The pending row
+        # already carried the full detail BEFORE the locks write (登记先
+        # 行); this stamp only persists it past completion.
+        def stamp(operation_ledger):
+            stored = operation_ledger["operations"].get(op_id)
+            if stored is not None and stored.get("status") == "ok":
+                stored["released_files"] = list(owned_files)
+
+        _ledger_transaction(governance_dir, stamp, timeout_seconds)
+    return payload
+
+
 # ── composition root (组合根装配 — module-owned, engine untouched) ───────────
 
 
@@ -1841,6 +1954,17 @@ def add_locks_amend_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--timeout", type=float, default=10.0)
 
 
+def add_locks_release_arguments(parser: argparse.ArgumentParser) -> None:
+    """Option fact source for ``locks-release`` (see
+    :func:`add_locks_extend_arguments`)."""
+    parser.add_argument("--task", required=True,
+                        help="dispatch task whose locks are released")
+    parser.add_argument("--operation-id", default="",
+                        help="replay: a released task re-released with the "
+                             "same operation id is a success no-op")
+    parser.add_argument("--timeout", type=float, default=10.0)
+
+
 def add_evidence_append_arguments(parser: argparse.ArgumentParser) -> None:
     """Option fact source for ``evidence-append`` (see
     :func:`add_locks_extend_arguments`)."""
@@ -1898,6 +2022,11 @@ def build_parser():
     p = sub.add_parser("locks-amend", help="amend a dispatch lock")
     add_locks_amend_arguments(p)
 
+    p = sub.add_parser(
+        "locks-release",
+        help="release a task's dispatch locks (active entry + file locks)")
+    add_locks_release_arguments(p)
+
     p = sub.add_parser("evidence-append", help="append one EVD row")
     add_evidence_append_arguments(p)
 
@@ -1909,6 +2038,7 @@ def build_parser():
 COMMANDS = {
     "locks-extend": locks_extend,
     "locks-amend": locks_amend,
+    "locks-release": locks_release,
     "evidence-append": evidence_append,
     "decision-append": decision_append,
 }
@@ -1958,6 +2088,17 @@ def cmd_locks_amend(args) -> int:
     return _emit(payload)
 
 
+def cmd_locks_release(args) -> int:
+    """Engine dispatch face (see :func:`cmd_locks_extend`)."""
+    _configure_stdio()
+    payload = _run(locks_release, dict(
+        task_id=args.task,
+        governance_dir=_governance_dir_from(args),
+        operation_id=args.operation_id or None,
+        timeout_seconds=args.timeout))
+    return _emit(payload)
+
+
 def cmd_evidence_append(args) -> int:
     """Engine dispatch face (see :func:`cmd_locks_extend`)."""
     _configure_stdio()
@@ -1993,6 +2134,7 @@ def cmd_decision_append(args) -> int:
 _CLI_HANDLERS = {
     "locks-extend": cmd_locks_extend,
     "locks-amend": cmd_locks_amend,
+    "locks-release": cmd_locks_release,
     "evidence-append": cmd_evidence_append,
     "decision-append": cmd_decision_append,
 }

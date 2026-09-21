@@ -11890,7 +11890,7 @@ class ParseImpactEntriesColumnLayoutTests(unittest.TestCase):
             "## 当前活跃事项",
             "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
             "|--------|----|------|------|---------|---------|------|",
-            "| **P1** | FIX-312 | hot fix | - | 0.85.0 | tests | ✅ 完成 |",
+            "| **P1** | FIX-312 | hot fix | - | 0.85.0 | tests | 🔄 进行中 |",
         ]
         with tempfile.TemporaryDirectory() as td:
             row = self._live_row("EVD-1044", "FIX-312", "修复",
@@ -11912,7 +11912,7 @@ class ParseImpactEntriesColumnLayoutTests(unittest.TestCase):
             "## 当前活跃事项",
             "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
             "|--------|----|------|------|---------|---------|------|",
-            "| **P1** | REL-082 | 0.86.0 规划闭环 | - | 0.86.0 | tests | ✅ 规划闭环 |",
+            "| **P1** | REL-082 | 0.86.0 规划闭环 | - | 0.86.0 | tests | 🔄 进行中 |",
         ]
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -12237,7 +12237,7 @@ class GoalAlignmentTests(unittest.TestCase):
                 "## 当前活跃事项",
                 "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
                 "|--------|----|------|------|---------|---------|------|",
-                "| **P1** | FIX-073 | guardrails | AUDIT-100 | 0.35.0 | tests | ✅ 已完成 |",
+                "| **P1** | FIX-073 | guardrails | AUDIT-100 | 0.35.0 | tests | 🔄 进行中 |",
             ]), encoding="utf-8")
             ep.write_text(_evidence_row_live(
                 "EVD-073",
@@ -12268,7 +12268,7 @@ class GoalAlignmentTests(unittest.TestCase):
                 "## 当前活跃事项",
                 "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
                 "|--------|----|------|------|---------|---------|------|",
-                "| **P1** | FIX-999 | active hot guardrail | AUDIT-100 | 0.35.0 | tests | ✅ 已完成 |",
+                "| **P1** | FIX-999 | active hot guardrail | AUDIT-100 | 0.35.0 | tests | 🔄 进行中 |",
                 "### 最近完成",
                 "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
                 "| **P1** | FIX-998 | old | AUDIT-100 | 0.34.0 | tests | ✅ 已完成 |",
@@ -12339,8 +12339,8 @@ class GoalAlignmentTests(unittest.TestCase):
                 "## 当前活跃事项",
                 "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
                 "|--------|----|------|------|---------|---------|------|",
-                "| **P1** | REQ-094 | 需求A | - | 0.83.0 | tests | ✅ 已完成 |",
-                "| **P1** | REQ-095 | 需求B | - | 0.83.0 | tests | ✅ 已完成 |",
+                "| **P1** | REQ-094 | 需求A | - | 0.83.0 | tests | 🔄 进行中 |",
+                "| **P1** | REQ-095 | 需求B | - | 0.83.0 | tests | 🔄 进行中 |",
             ]), encoding="utf-8")
             ep.write_text("\n".join([
                 _impact_evidence_row(
@@ -12357,6 +12357,137 @@ class GoalAlignmentTests(unittest.TestCase):
             # The fix: same EVD row -> same description -> NOT template reuse.
             self.assertEqual(r["duplicates"], [])
             self.assertTrue(r["pass"])
+
+
+class HistoricalExemptionTests(unittest.TestCase):
+    """FIX-371/DEC-227 路线 b: ✅-terminal hot-tracker rows are historical
+    bookkeeping — their EVD lines are exempted from the Check 16/17 entry set
+    with an EXPLICIT ledger (never silent). Active/new rows: ZERO exemption —
+    the non-weakening red line is pinned by negative tests.
+
+    Live-face mapping (2026-09-20): EVD-1118/1121 -> REL-082 (✅ 规划闭环) and
+    EVD-1119 -> FEAT-058 (✅ M-1 完成) are ✅-terminal -> exempted; each
+    disposition is disclosed in the ledger.
+    """
+
+    @staticmethod
+    def _plan_line(task_id, status):
+        return f"| **P1** | {task_id} | fixture task | - | 0.87.0 | tests | {status} |"
+
+    @staticmethod
+    def _live_row(evd_id, task_id, evd_type, description):
+        return (
+            f"| {evd_id} | {task_id} | {evd_type} | {description} | "
+            f"事实依据：本测试 fixture 数据 | "
+            f"skills/software-project-governance/infra/verify_workflow.py | "
+            f"Coordinator | 2026-09-20 | G11 | ✅ 完成 |"
+        )
+
+    def _gov_files(self, root, plan_lines, evidence_lines):
+        root = Path(root)
+        gov = root / ".governance"; gov.mkdir(parents=True, exist_ok=True)
+        sp = gov / "plan-tracker.md"
+        ep = gov / "evidence-log.md"
+        sp.write_text("\n".join([
+            "# 计划跟踪",
+            "## 项目配置",
+            "- **项目目标**: 提供一套完整的软件项目治理工作流插件",
+            "## 当前活跃事项",
+            "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+            "|--------|----|------|------|---------|---------|------|",
+        ] + plan_lines), encoding="utf-8")
+        ep.write_text("\n".join(evidence_lines), encoding="utf-8")
+        return sp, ep
+
+    @staticmethod
+    def _bare_row(evd_id, task_id):
+        """实现-type row on a product path with NO 目标对齐/用户影响 fields."""
+        return _evidence_row_live(
+            evd_id, task_id, evd_type="实现",
+            description="历史手写时代行：无目标对齐与用户影响字段",
+            file_location="skills/software-project-governance/infra/verify_workflow.py",
+        )
+
+    def test_goal_alignment_exempts_completed_rows_and_keeps_active_fail(self):
+        """红→绿主线：✅ 终态历史行豁免（留痕）+ 同热表活跃行零豁免仍 FAIL。"""
+        with tempfile.TemporaryDirectory() as td:
+            sp, ep = self._gov_files(td, [
+                self._plan_line("FIX-995", "✅ 已完成"),
+                self._plan_line("FIX-996", "🔄 进行中"),
+            ], [self._bare_row("EVD-995", "FIX-995"),
+                self._bare_row("EVD-996", "FIX-996")])
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_goal_alignment()
+            self.assertFalse(r["pass"])  # active row still FAILs — non-weakening
+            self.assertEqual([e["task_id"] for e in r["entries"]], ["FIX-996"])
+            self.assertEqual(r["historical_exempted"], [
+                {"evd_id": "EVD-995", "task_id": "FIX-995", "status": "✅ 已完成"},
+            ])
+
+    def test_goal_alignment_zero_exemption_for_non_checkmark_statuses(self):
+        """负例（不弱化钉死）：非 ✅ 前缀状态（emoji 活跃/待启/无 emoji 纯文本）
+        一律不豁免。"""
+        with tempfile.TemporaryDirectory() as td:
+            sp, ep = self._gov_files(td, [
+                self._plan_line("FIX-991", "🔄 进行中"),
+                self._plan_line("FIX-992", "📋 待启"),
+                self._plan_line("FIX-993", "进行中"),
+            ], [self._bare_row("EVD-991", "FIX-991"),
+                self._bare_row("EVD-992", "FIX-992"),
+                self._bare_row("EVD-993", "FIX-993")])
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_goal_alignment()
+            self.assertFalse(r["pass"])
+            self.assertEqual(len(r["entries"]), 3)
+            self.assertEqual(r["historical_exempted"], [])
+
+    def test_user_impact_exempts_completed_rows_and_keeps_active_fail(self):
+        """Check 17 同判：✅ 终态行豁免留痕 + 活跃行缺 用户影响 仍 FAIL。"""
+        with tempfile.TemporaryDirectory() as td:
+            sp, ep = self._gov_files(td, [
+                self._plan_line("FIX-995", "✅ 已完成"),
+                self._plan_line("FIX-996", "🔄 进行中"),
+            ], [self._bare_row("EVD-995", "FIX-995"),
+                self._bare_row("EVD-996", "FIX-996")])
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_user_impact()
+            self.assertFalse(r["pass"])
+            self.assertEqual([e["task_id"] for e in r["entries"]], ["FIX-996"])
+            self.assertEqual(r["entries"][0]["status"], "FAIL")
+            self.assertIn("缺少 用户影响", r["entries"][0]["issues"][0])
+            self.assertEqual(r["historical_exempted"], [
+                {"evd_id": "EVD-995", "task_id": "FIX-995", "status": "✅ 已完成"},
+            ])
+
+    def test_parse_ledger_discloses_live_evd_1118_1119_disposition(self):
+        """活体映射：EVD-1118（REL-082 ✅ 规划闭环）/EVD-1119（FEAT-058
+        ✅ M-1 完成）豁免且状态披露；活跃任务行留在检查集。旧签名
+        parse_impact_analysis_entries 保持向后兼容（仅返回非豁免行）。"""
+        with tempfile.TemporaryDirectory() as td:
+            sp, ep = self._gov_files(td, [
+                self._plan_line("REL-082", "✅ 规划闭环"),
+                self._plan_line("FEAT-058", "✅ M-1 完成"),
+                self._plan_line("FIX-371", "🔄 进行中"),
+            ], [
+                self._live_row("EVD-1118", "REL-082", "治理记录",
+                               "无字段历史行（fixture 复刻活体形态）"),
+                self._live_row("EVD-1119", "FEAT-058", "产品代码",
+                               "无字段历史行（fixture 复刻活体形态）"),
+                self._live_row("EVD-996", "FIX-371", "实现", "无字段活跃行"),
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                entries, exempted = vw.parse_impact_analysis_entries_with_exemptions()
+                legacy = vw.parse_impact_analysis_entries()
+            self.assertEqual([e["task_id"] for e in entries], ["FIX-371"])
+            self.assertEqual([(x["evd_id"], x["task_id"], x["status"]) for x in exempted], [
+                ("EVD-1118", "REL-082", "✅ 规划闭环"),
+                ("EVD-1119", "FEAT-058", "✅ M-1 完成"),
+            ])
+            self.assertEqual([e["task_id"] for e in legacy], ["FIX-371"])
 
 
 class UnicodeLineSeparatorScanTests(unittest.TestCase):
@@ -12600,7 +12731,7 @@ class UserImpactTests(unittest.TestCase):
                 "## 当前活跃事项",
                 "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
                 "|--------|----|------|------|---------|---------|------|",
-                "| **P1** | FIX-073 | guardrails | AUDIT-100 | 0.35.0 | tests | ✅ 已完成 |",
+                "| **P1** | FIX-073 | guardrails | AUDIT-100 | 0.35.0 | tests | 🔄 进行中 |",
             ]), encoding="utf-8")
             ep.write_text(_evidence_row_live(
                 "EVD-073",
@@ -12629,7 +12760,7 @@ class UserImpactTests(unittest.TestCase):
                 "## 当前活跃事项",
                 "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
                 "|--------|----|------|------|---------|---------|------|",
-                "| **P1** | FIX-999 | active hot guardrail | AUDIT-100 | 0.35.0 | tests | ✅ 已完成 |",
+                "| **P1** | FIX-999 | active hot guardrail | AUDIT-100 | 0.35.0 | tests | 🔄 进行中 |",
                 "### 最近完成",
                 "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
                 "| **P1** | FIX-998 | old | AUDIT-100 | 0.34.0 | tests | ✅ 已完成 |",
@@ -16723,7 +16854,7 @@ class AgentTeamReviewTests(unittest.TestCase):
                 "## 当前活跃事项",
                 "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
                 "|--------|----|------|------|---------|---------|------|",
-                "| **P1** | FIX-073 | guardrails | AUDIT-100 | 0.35.0 | tests | ✅ 已完成 |",
+                "| **P1** | FIX-073 | guardrails | AUDIT-100 | 0.35.0 | tests | 🔄 进行中 |",
             ])
             evidence_rows = [
                 _evidence_row_generic(

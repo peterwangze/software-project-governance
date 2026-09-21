@@ -12199,12 +12199,27 @@ PRODUCT_CODE_PATTERNS = [
 ]
 
 
-def _plan_task_ids_from_hot_tracker():
-    """Return task-like IDs from the current active hot-task table."""
+# FIX-371/DEC-227 路线 b: a hot-tracker status cell leading with ✅ marks the
+# terminal (完成) state — the row is historical bookkeeping retained in the
+# hot table, not an active task. Only the ✅ prefix exempts; every other
+# status (🔄 活跃 / 📋 待启 / plain text / chains not led by ✅) stays fully
+# guarded — active/new rows have ZERO exemption (non-weakening red line).
+_COMPLETED_STATUS_PREFIX = "✅"
+
+
+def _plan_hot_tracker_task_statuses():
+    """Return {task_id: status cell} from the current active hot-task table.
+
+    FIX-371: single scan-source shared with _plan_task_ids_from_hot_tracker
+    (same section boundaries: `## 当前活跃事项` until `### 最近完成`), so the
+    exemption set is always a subset of the id set the Check 16/17 entry
+    collection consumes. Status cell = last table cell — the same
+    authoritative read parse_current_active_tasks uses.
+    """
     if not SAMPLE_PATH.is_file():
-        return set()
+        return {}
     content = SAMPLE_PATH.read_text(encoding="utf-8")
-    task_ids = set()
+    statuses = {}
     in_active_section = False
     for line in content.split("\n"):
         if line.startswith("## 当前活跃事项"):
@@ -12218,9 +12233,37 @@ def _plan_task_ids_from_hot_tracker():
         if not stripped.startswith("| ") or "---" in stripped:
             continue
         match = re.search(r"\|\s*(?:\*\*)?([A-Z]+-\d+)(?:\*\*)?\s*\|", stripped)
-        if match:
-            task_ids.add(match.group(1))
-    return task_ids
+        if not match:
+            continue
+        cells = _governance_table_cells(stripped)
+        # FIX-371: the hot table mixes shapes — the compact layout ends with
+        # 状态 while the legacy REQ-row layout carries 状态 second-to-last.
+        # The status cell is therefore identified by its ✅ marker (status
+        # cells are the only cells that lead with a status emoji), falling
+        # back to the last cell when no ✅ cell exists (active rows).
+        status = ""
+        for cell in cells:
+            if cell.startswith(_COMPLETED_STATUS_PREFIX):
+                status = cell.strip()
+                break
+        if not status and cells:
+            status = cells[-1].strip()
+        statuses[match.group(1)] = status
+    return statuses
+
+
+def _completed_plan_task_ids_from_hot_tracker():
+    """FIX-371: hot-tracker task ids whose status cell leads with ✅."""
+    return {
+        task_id
+        for task_id, status in _plan_hot_tracker_task_statuses().items()
+        if status.startswith(_COMPLETED_STATUS_PREFIX)
+    }
+
+
+def _plan_task_ids_from_hot_tracker():
+    """Return task-like IDs from the current active hot-task table."""
+    return set(_plan_hot_tracker_task_statuses())
 
 
 def _current_release_task_ids():
@@ -12447,13 +12490,41 @@ def parse_impact_analysis_entries():
     evidence rows. FIX-073: product-code evidence with no standalone impact
     analysis must not make Check 16/17 silently pass with 0 entries.
 
+    FIX-371/DEC-227 路线 b: EVD rows whose task row is ✅-terminal in the hot
+    tracker (historical hand-written-era data) are exempt from the entry set.
+    Backward-compatible wrapper — returns only the non-exempt entries; use
+    parse_impact_analysis_entries_with_exemptions() for the disclosure ledger.
+
     Returns list of dicts: {evd_id, task_id, description, file_location, raw_line}
     """
+    entries, _ = parse_impact_analysis_entries_with_exemptions()
+    return entries
+
+
+def parse_impact_analysis_entries_with_exemptions():
+    """parse_impact_analysis_entries + historical-exemption ledger (FIX-371).
+
+    DEC-227 路线 b: an EVD row whose task row is ✅-terminal in the hot tracker
+    (historical hand-written-era data) is exempt from the Check 16/17 entry
+    set; every exemption is disclosed in the returned ledger — never silent.
+    Rows whose task is active/new or whose ✅-terminal status is unprovable
+    keep zero exemption (fail-closed).
+
+    Returns (entries, historical_exempted); historical_exempted is a list of
+    {evd_id, task_id, status} dicts.
+    """
     if not EVIDENCE_PATH.is_file():
-        return []
+        return [], []
     content = EVIDENCE_PATH.read_text(encoding="utf-8")
     entries = []
-    hot_task_ids = _current_release_task_ids() | _plan_task_ids_from_hot_tracker()
+    historical_exempted = []
+    hot_task_statuses = _plan_hot_tracker_task_statuses()
+    completed_hot_task_ids = {
+        task_id
+        for task_id, status in hot_task_statuses.items()
+        if status.startswith(_COMPLETED_STATUS_PREFIX)
+    }
+    hot_task_ids = _current_release_task_ids() | set(hot_task_statuses)
 
     for line in content.split("\n"):
         line = line.strip()
@@ -12489,10 +12560,20 @@ def parse_impact_analysis_entries():
         )
 
         if explicit_impact or product_delivery:
-            target_ids = sorted(covered_ids & hot_task_ids) if covered_ids & hot_task_ids else [task_id]
+            hot_covered = covered_ids & hot_task_ids
+            target_ids = sorted(hot_covered) if hot_covered else [task_id]
             if not target_ids:
                 target_ids = [task_id]
             for covered_task_id in target_ids:
+                # FIX-371/DEC-227 路线 b: ✅-terminal hot-tracker task -> exempt
+                # with ledger disclosure; anything unproven stays guarded.
+                if covered_task_id in completed_hot_task_ids:
+                    historical_exempted.append({
+                        "evd_id": evd_id,
+                        "task_id": covered_task_id,
+                        "status": hot_task_statuses.get(covered_task_id, ""),
+                    })
+                    continue
                 entries.append({
                     "evd_id": evd_id,
                     "task_id": covered_task_id,
@@ -12500,7 +12581,7 @@ def parse_impact_analysis_entries():
                     "file_location": file_location,
                     "raw_line": line,
                 })
-    return entries
+    return entries, historical_exempted
 
 
 def check_goal_alignment():
@@ -12513,13 +12594,16 @@ def check_goal_alignment():
        (WARN — template reuse; FIX-349 ③: entries fanned out of ONE EVD row
        share a single description by construction and are never compared)
 
-    Returns dict with 'has_project_goal', 'entries', 'duplicates', 'pass'.
+    Returns dict with 'has_project_goal', 'entries', 'duplicates', 'pass' and
+    'historical_exempted' (FIX-371 ledger: ✅-terminal hot-tracker rows exempted
+    from the entry set — disclosed, never silent).
     """
     result = {
         "has_project_goal": False,
         "project_goal": "",
         "entries": [],
         "duplicates": [],
+        "historical_exempted": [],
         "pass": True,
     }
 
@@ -12530,8 +12614,10 @@ def check_goal_alignment():
     if project_goal:
         result["has_project_goal"] = True
 
-    # 2. Parse impact analysis entries
-    entries = parse_impact_analysis_entries()
+    # 2. Parse impact analysis entries (FIX-371/DEC-227 路线 b: historical
+    # ✅-terminal rows exempted with an explicit ledger)
+    entries, historical_exempted = parse_impact_analysis_entries_with_exemptions()
+    result["historical_exempted"] = historical_exempted
     if not entries:
         return result
 
@@ -12602,7 +12688,9 @@ def check_user_impact():
     5. Breaking change: 体验变化=是 but 迁移指南=不需要 (BLOCKING)
     6. Breaking change: migration guide path does not exist (BLOCKING — if path provided)
 
-    Returns dict with 'entries', 'blocking', 'pass'.
+    Returns dict with 'entries', 'blocking', 'pass' and 'historical_exempted'
+    (FIX-371 ledger: ✅-terminal hot-tracker rows exempted from the entry set
+    — disclosed, never silent).
     """
     USER_VISIBLE_PATTERNS = [
         "CLAUDE.md", "README.md", "CHANGELOG.md",
@@ -12618,10 +12706,14 @@ def check_user_impact():
     result = {
         "entries": [],
         "blocking": [],
+        "historical_exempted": [],
         "pass": True,
     }
 
-    entries = parse_impact_analysis_entries()
+    # FIX-371/DEC-227 路线 b: historical ✅-terminal rows exempted with an
+    # explicit ledger — disclosed, never silent.
+    entries, historical_exempted = parse_impact_analysis_entries_with_exemptions()
+    result["historical_exempted"] = historical_exempted
     if not entries:
         return result
 
@@ -15418,6 +15510,12 @@ def _run_full_engine_checks(args):
         project_goal_short = ga_result["project_goal"][:60]
         print(f"│  [INFO] 项目目标: {project_goal_short}...")
     print(f"│  Impact analysis entries: {len(ga_result['entries'])}")
+    ga_exempted = ga_result.get("historical_exempted", [])
+    print(f"│  Historical exempted (FIX-371/DEC-227 ✅-terminal, skipped): {len(ga_exempted)}")
+    for row in ga_exempted[:8]:
+        print(f"│    - {row['task_id']} ({row['evd_id']}): {row['status']}")
+    if len(ga_exempted) > 8:
+        print(f"│    ... and {len(ga_exempted) - 8} more")
     if ga_result["entries"]:
         for e in ga_result["entries"]:
             if e["status"] == "FAIL":
@@ -15446,6 +15544,12 @@ def _run_full_engine_checks(args):
     ui_result = check_user_impact()
     ui_issues = 0
     print(f"│  Impact analysis entries: {len(ui_result['entries'])}")
+    ui_exempted = ui_result.get("historical_exempted", [])
+    print(f"│  Historical exempted (FIX-371/DEC-227 ✅-terminal, skipped): {len(ui_exempted)}")
+    for row in ui_exempted[:8]:
+        print(f"│    - {row['task_id']} ({row['evd_id']}): {row['status']}")
+    if len(ui_exempted) > 8:
+        print(f"│    ... and {len(ui_exempted) - 8} more")
     if ui_result["entries"]:
         for e in ui_result["entries"]:
             if e["status"] == "BLOCKING":
@@ -21356,6 +21460,10 @@ def cmd_check_goal_alignment(args):
         project_goal_short = result["project_goal"][:60]
         print(f"  [INFO] 项目目标: {project_goal_short}...")
     print(f"  Impact analysis entries: {len(result['entries'])}")
+    exempted = result.get("historical_exempted", [])
+    print(f"  Historical exempted (FIX-371/DEC-227 ✅-terminal, skipped): {len(exempted)}")
+    for row in exempted:
+        print(f"    - {row['task_id']} ({row['evd_id']}): {row['status']}")
     if result["entries"]:
         for e in result["entries"]:
             if e["status"] == "FAIL":
@@ -21390,6 +21498,10 @@ def cmd_check_user_impact(args):
     print()
     print("=== User Impact Check ===")
     print(f"  Impact analysis entries: {len(result['entries'])}")
+    exempted = result.get("historical_exempted", [])
+    print(f"  Historical exempted (FIX-371/DEC-227 ✅-terminal, skipped): {len(exempted)}")
+    for row in exempted:
+        print(f"    - {row['task_id']} ({row['evd_id']}): {row['status']}")
     if result["entries"]:
         for e in result["entries"]:
             status_label = {

@@ -10029,31 +10029,52 @@ def check_protocol_compliance():
             line = line.strip()
             if not line.startswith("| EVD-"):
                 continue
-            parts = [p.strip() for p in line.split("|")]
-            # Expected: empty, EVD-XXX, TaskID, Stage, Type, Description, Location, Author, Date, Gate, Notes
-            # parts indices: 0=empty, 1=EVD, 2=TaskID, 3=Stage, 4=Type, 5=Description, 6=Location, 7=Author, 8=Date, 9=Gate, 10=Notes
-            if len(parts) < 11:
+            # FIX-372 (review-FIX-368-CODE-R0 P2-1): validate the LIVE
+            # evidence-log column layout (FIX-368). _governance_table_cells
+            # strips the leading/trailing empties and preserves pipes inside
+            # JSON/code-span cells, so cells are pure data cells:
+            #   LIVE 10-cell rows: 0=EVD, 1=TaskID, 2=Type, 3=Description,
+            #     4=fact basis, 5=Location, 6=EntryMethod(录入方式), 7=Date,
+            #     8=Gate, 9=Notes
+            #   9-cell historical rows (no separate file column): 0=EVD,
+            #     1=TaskID, 2=Type, 3=Description, 4=fact basis, 5=Author,
+            #     6=Date, 7=Gate, 8=Notes
+            # The pre-fix check validated the legacy Stage-column offsets
+            # (3=Stage/4=Type/5=Description), reading the LIVE fact-basis
+            # column as Description (false "missing Description" when the
+            # fact cell was empty) and flagging 9-cell historical rows as
+            # short rows. The Stage requirement is dropped: the LIVE layout
+            # has no Stage column. 9-cell rows are validated against their
+            # own offsets (Author/Date) instead of being rejected.
+            cells = _governance_table_cells(line)
+            if len(cells) < 9:
                 issues["evidence_format"].append(
-                    f"{parts[1] if len(parts) > 1 else '???'}: only {len(parts)-1} fields (expected ≥10)"
+                    f"{cells[0] if cells else '???'}: only {len(cells)} data fields (expected ≥9)"
                 )
                 continue
 
-            evd_id = parts[1]
+            evd_id = cells[0]
             missing = []
-            if not parts[2] or parts[2] == "":
+            if not cells[1]:
                 missing.append("TaskID")
-            if not parts[3] or parts[3] == "":
-                missing.append("Stage")
-            if not parts[4] or parts[4] == "":
+            if not cells[2]:
                 missing.append("Type")
-            if not parts[5] or parts[5] == "":
+            if not cells[3]:
                 missing.append("Description")
-            if not parts[6] or parts[6] == "":
-                missing.append("Location")
-            if not parts[7] or parts[7] == "":
-                missing.append("Author")
-            if not parts[8] or parts[8] == "":
-                missing.append("Date")
+            if len(cells) >= 10:
+                # LIVE 10-cell shape
+                if not cells[5]:
+                    missing.append("Location")
+                if not cells[6]:
+                    missing.append("EntryMethod")
+                if not cells[7]:
+                    missing.append("Date")
+            else:
+                # 9-cell historical shape (no separate file column)
+                if not cells[5]:
+                    missing.append("Author")
+                if not cells[6]:
+                    missing.append("Date")
 
             if missing:
                 issues["evidence_format"].append(
@@ -14220,25 +14241,42 @@ def check_agent_activation():
         return result
     evidence_content = EVIDENCE_PATH.read_text(encoding="utf-8")
 
-    # Build map: task_id -> [(evd_id, file_location, author, description, evd_type)]
+    # Build map: task_id -> [(evd_id, file_location, entry_method, description, evd_type)]
     task_entries = {}
     for line in evidence_content.split("\n"):
         line = line.strip()
         if not line.startswith("| EVD-"):
             continue
-        parts = [p.strip() for p in line.split("|")]
+        # FIX-372: split via _split_governance_table_row (not raw split) so
+        # pipes inside JSON/code-span cells stay intact; the len(parts) < 9
+        # guard keeps the same row-shape reachability (parts[0..8]).
+        parts = [p.strip() for p in _split_governance_table_row(line)]
         if len(parts) < 9:
             continue
         evd_id = parts[1]
         raw_ids = parts[2]
-        evd_type = parts[4] if len(parts) > 4 else ""
-        description = parts[5] if len(parts) > 5 else ""
+        # FIX-372 (review-FIX-368-CODE-R0 P1-1): LIVE evidence-log column
+        # layout is parts[3]=type, parts[4]=description, parts[5]=fact basis,
+        # parts[6]=file location (10 data cells -> 12 split parts incl. the
+        # leading/trailing empties). The pre-fix parts[4]/parts[5] read was a
+        # +1 offset: evd_type read the description column, so
+        # evd_type == "影响分析" was always false and the impact scan swept
+        # the fact-basis column — Check 20 fail-open (analyst_bypassed
+        # systematically under-counted).
+        evd_type = parts[3] if len(parts) > 3 else ""
+        description = parts[4] if len(parts) > 4 else ""
         file_location = parts[6] if len(parts) > 6 else ""
-        author = parts[7] if len(parts) > 7 else ""
+        # FIX-372 (P3-1): parts[7] is the 录入方式 column in LIVE rows
+        # (recorder identity, e.g. "Coordinator 机写"); legacy rows kept the
+        # author there — the column position did not drift, only its label.
+        # Either way the cell carries the recorder identity, so the
+        # Analyst/Architect substring check stays on parts[7]; renamed from
+        # `author` to `entry_method` to match the LIVE column semantics.
+        entry_method = parts[7] if len(parts) > 7 else ""
 
         for tid in expand_task_ids(raw_ids) if raw_ids and re.search(r"[A-Z]+-\d+", raw_ids) else []:
             task_entries.setdefault(tid, []).append(
-                (evd_id, file_location, author, description, evd_type)
+                (evd_id, file_location, entry_method, description, evd_type)
             )
 
     for task_id in sorted(p0_tasks):
@@ -14271,10 +14309,10 @@ def check_agent_activation():
         has_impact_analysis = False
         has_analyst_involvement = False
 
-        for _, _, author, description, evd_type in entries:
+        for _, _, entry_method, description, evd_type in entries:
             if evd_type == "影响分析" or "影响分析" in description:
                 has_impact_analysis = True
-                if "Analyst" in author or "Architect" in author:
+                if "Analyst" in entry_method or "Architect" in entry_method:
                     has_analyst_involvement = True
                 if "Analyst:" in description or "Architect:" in description:
                     has_analyst_involvement = True
@@ -14285,19 +14323,23 @@ def check_agent_activation():
             line = line.strip()
             if not line.startswith("| EVD-"):
                 continue
-            parts = [p.strip() for p in line.split("|")]
+            # FIX-372: same LIVE layout alignment as the main scan above —
+            # parts[3]=type gate, parts[4]=description, parts[7]=entry method
+            # (P1-1/P3-1). Pre-fix the parts[4] != "影响分析" gate was near
+            # always true, leaving this cross-reference path effectively dead.
+            parts = [p.strip() for p in _split_governance_table_row(line)]
             if len(parts) < 9:
                 continue
-            evd_type = parts[4] if len(parts) > 4 else ""
+            evd_type = parts[3] if len(parts) > 3 else ""
             if evd_type != "影响分析":
                 continue
             raw_ids = parts[2]
-            description = parts[5] if len(parts) > 5 else ""
-            author = parts[7] if len(parts) > 7 else ""
+            description = parts[4] if len(parts) > 4 else ""
+            entry_method = parts[7] if len(parts) > 7 else ""
             covered = expand_task_ids(raw_ids) if raw_ids and re.search(r"[A-Z]+-\d+", raw_ids) else set()
             if task_id in covered:
                 has_impact_analysis = True
-                if "Analyst" in author or "Architect" in author:
+                if "Analyst" in entry_method or "Architect" in entry_method:
                     has_analyst_involvement = True
                 if "Analyst:" in description or "Architect:" in description:
                     has_analyst_involvement = True

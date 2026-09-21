@@ -11937,6 +11937,180 @@ class ParseImpactEntriesColumnLayoutTests(unittest.TestCase):
             self.assertTrue(ui["pass"])
 
 
+class AgentActivationColumnLayoutTests(unittest.TestCase):
+    """FIX-372 P1-1: check_agent_activation must read the LIVE evidence-log
+    column layout — parts[3]=type, parts[4]=description, parts[5]=fact basis,
+    parts[6]=file location, parts[7]=entry method (录入方式).
+
+    Pre-fix regression (review-FIX-368-CODE-R0 P1-1): the engine read
+    parts[4]/parts[5] (description/fact-basis columns) as type/description,
+    so evd_type == "影响分析" was always false on LIVE rows and the
+    cross-reference scan was near-dead — has_impact_analysis was
+    systematically missed -> analyst_bypassed under-counted -> Check 20
+    fail-open blind check.
+    """
+
+    @staticmethod
+    def _live_row(evd_id, task_id, evd_type, description, fact,
+                  file_location, entry_method):
+        return (
+            f"| {evd_id} | {task_id} | {evd_type} | {description} | {fact} | "
+            f"{file_location} | {entry_method} | 2026-09-20 | G11 | ✅ 完成 |"
+        )
+
+    def _activation_for(self, tmpdir, evidence_rows):
+        root = Path(tmpdir)
+        gov = root / ".governance"; gov.mkdir(parents=True, exist_ok=True)
+        sp = gov / "plan-tracker.md"
+        ep = gov / "evidence-log.md"
+        plan = "\n".join([
+            "# 计划跟踪",
+            "",
+            "## 任务跟踪",
+            _TASK_COLS,
+            _TASK_SEP,
+            _task_with_priority("TASK-001", priority="P0", status="已完成"),
+        ])
+        sp.write_text(plan, encoding="utf-8")
+        ep.write_text("\n".join(evidence_rows), encoding="utf-8")
+        with patch.object(vw, "SAMPLE_PATH", sp), \
+             patch.object(vw, "EVIDENCE_PATH", ep):
+            return vw.check_agent_activation()
+
+    def test_impact_type_read_from_type_column(self):
+        """type=影响分析 in parts[3] with Analyst in the entry-method column
+        -> analyst_activated=1 (pre-fix: the type column was misread, the
+        impact scan swept the fact-basis column -> activated stayed 0)."""
+        with tempfile.TemporaryDirectory() as td:
+            rows = [
+                self._live_row(
+                    "EVD-801", "TASK-001", "影响分析",
+                    "目标对齐：跨层变更说明文本，满足最小长度要求。",
+                    "事实依据：分析会议记录（fixture 数据）",
+                    "skills/software-project-governance/SKILL.md",
+                    "Analyst 机写（结构化返回）",
+                ),
+                self._live_row(
+                    "EVD-802", "TASK-001", "实现", "Implementation", "",
+                    "commands/governance-status.md", "Developer 机写",
+                ),
+            ]
+            r = self._activation_for(td, rows)
+            self.assertEqual(r["total_p0_cross_layer"], 1)
+            self.assertEqual(r["analyst_activated"], 1)
+            self.assertEqual(r["analyst_bypassed"], 0)
+            self.assertTrue(r["pass"])
+
+    def test_bypass_detected_when_only_coordinator_recorded(self):
+        """LIVE-shape impact row recorded by Coordinator only (no Analyst/
+        Architect identity in entry method or description) -> bypassed=1,
+        pass=False (pre-fix: impact analysis was missed entirely -> fail-open
+        pass)."""
+        with tempfile.TemporaryDirectory() as td:
+            rows = [
+                self._live_row(
+                    "EVD-801", "TASK-001", "影响分析",
+                    "目标对齐：跨层变更说明文本，满足最小长度要求。",
+                    "事实依据：分析会议记录（fixture 数据）",
+                    "skills/software-project-governance/SKILL.md",
+                    "Coordinator 机写",
+                ),
+                self._live_row(
+                    "EVD-802", "TASK-001", "实现", "Implementation", "",
+                    "agents/developer.md", "Developer 机写",
+                ),
+            ]
+            r = self._activation_for(td, rows)
+            self.assertFalse(r["pass"])
+            self.assertEqual(r["analyst_bypassed"], 1)
+            self.assertIn("TASK-001", r["bypassed_tasks"])
+            self.assertEqual(r["analyst_activated"], 0)
+
+    def test_fact_column_not_treated_as_description(self):
+        """Discriminating construction: the fact-basis column carries an
+        'Analyst:' marker but the description/entry-method columns do not —
+        the marker must NOT count as analyst involvement (pre-fix the fact
+        column WAS the description read: the marker wrongly activated while
+        the type check still missed)."""
+        with tempfile.TemporaryDirectory() as td:
+            rows = [
+                self._live_row(
+                    "EVD-801", "TASK-001", "影响分析",
+                    "纯描述文本，无分析师标记。", "Analyst: 影响分析记录",
+                    "skills/software-project-governance/SKILL.md",
+                    "Coordinator 机写",
+                ),
+                self._live_row(
+                    "EVD-802", "TASK-001", "实现", "Implementation", "",
+                    "agents/developer.md", "Developer 机写",
+                ),
+            ]
+            r = self._activation_for(td, rows)
+            self.assertEqual(r["analyst_bypassed"], 1)
+            self.assertEqual(r["analyst_activated"], 0)
+
+
+class EvidenceFormatColumnLayoutTests(unittest.TestCase):
+    """FIX-372 P2-1: check_protocol_compliance evidence-format validation must
+    follow the LIVE evidence-log column layout (FIX-368).
+
+    cells (leading/trailing empties stripped by _governance_table_cells):
+      LIVE 10-cell:  0=EVD 1=TaskID 2=Type 3=Description 4=fact basis
+                     5=Location 6=EntryMethod(录入方式) 7=Date 8=Gate 9=Notes
+      9-cell legacy: 0=EVD 1=TaskID 2=Type 3=Description 4=fact basis
+                     5=Author 6=Date 7=Gate 8=Notes  (no separate file
+                     column; wild rows may lack the trailing pipe — real
+                     EVD-874 yields len(parts)=10 from a raw split)
+
+    Pre-fix regression: the check validated the legacy Stage-column offsets
+    (parts[3]=Stage/parts[4]=Type/parts[5]=Description), so LIVE rows with an
+    empty fact-basis cell were flagged "missing Description" and 9-cell
+    historical rows were rejected as short rows ("only 9 fields").
+    """
+
+    def _format_issues(self, tmpdir, evidence_text):
+        root = Path(tmpdir)
+        gov = root / ".governance"; gov.mkdir(parents=True, exist_ok=True)
+        sp = gov / "plan-tracker.md"
+        ep = gov / "evidence-log.md"
+        sp.write_text("# 计划跟踪\n## 项目配置\n", encoding="utf-8")
+        ep.write_text(evidence_text, encoding="utf-8")
+        with patch.object(vw, "SAMPLE_PATH", sp), \
+             patch.object(vw, "GOVERNANCE_DIR", gov):
+            return vw.check_protocol_compliance()["evidence_format"]
+
+    def test_live_row_with_empty_fact_basis_passes(self):
+        """LIVE 10-cell row with an empty fact-basis cell -> no format issue
+        (pre-fix: the fact cell was read as Description -> false flag)."""
+        with tempfile.TemporaryDirectory() as td:
+            row = ("| EVD-900 | FIX-372 | 实现 | 目标对齐：格式检查回归数据，长度充足。 | "
+                   "| skills/software-project-governance/infra/verify_workflow.py | "
+                   "Coordinator 机写 | 2026-09-20 | G11 | ✅ 完成 |")
+            issues = self._format_issues(td, row)
+            self.assertEqual(issues, [])
+
+    def test_nine_cell_historical_row_not_flagged(self):
+        """9-cell historical row (EVD-874 shape, no file column, no trailing
+        pipe) fully filled -> no format issue (pre-fix: 'only 9 fields
+        (expected ≥10)')."""
+        with tempfile.TemporaryDirectory() as td:
+            row = ("| EVD-874 | FIX-090 | 治理记录 | 历史行描述文本，长度充足。 "
+                   "| 事实依据：历史记录 | Coordinator | 2026-05-02 | G11 | ✅ 完成")
+            issues = self._format_issues(td, row)
+            self.assertEqual(issues, [])
+
+    def test_live_row_missing_location_still_flagged(self):
+        """Retention pin: an empty Location cell in a LIVE row is still
+        reported under the LIVE offsets (guards against over-permissive
+        migration)."""
+        with tempfile.TemporaryDirectory() as td:
+            row = ("| EVD-901 | FIX-372 | 实现 | 目标对齐：格式检查回归数据。 | "
+                   "事实依据：fixture | | Coordinator 机写 | 2026-09-20 | G11 | ✅ 完成 |")
+            issues = self._format_issues(td, row)
+            self.assertEqual(len(issues), 1)
+            self.assertIn("Location", issues[0])
+
+
 def _dated_impact_evidence_row(evd_id, task_id, description, file_location="skills/test.md"):
     return f"| {evd_id} | 2026-06-16 | {task_id} | 架构 | 影响分析 | {description} | {file_location} | Developer | G11 | PASS |"
 
@@ -16711,20 +16885,21 @@ class AgentActivationTests(unittest.TestCase):
                 _task_with_priority("TASK-001", priority="P0", status="已完成"),
             ])
             # Two evidence entries: impact analysis + implementation,
-            # touching two architecture layers (skills/ and commands/)
+            # touching two architecture layers (skills/ and commands/).
+            # FIX-372: migrated to the LIVE column layout (_evidence_row_live)
+            # — the legacy _evidence_row_generic shape (type at parts[4])
+            # mirrored the engine's off-by-one read and masked the fail-open.
             evidence_rows = [
-                _evidence_row_generic(
+                _evidence_row_live(
                     "EVD-001", "TASK-001",
-                    category="架构",
                     evd_type="影响分析",
                     description="目标对齐: cross-layer impact analysis",
                     file_location="skills/software-project-governance/SKILL.md",
                     author="Analyst",
                     gate="G11",
                 ),
-                _evidence_row_generic(
+                _evidence_row_live(
                     "EVD-002", "TASK-001",
-                    category="开发",
                     evd_type="实现",
                     description="Implementation",
                     file_location="commands/governance-status.md",
@@ -16754,19 +16929,18 @@ class AgentActivationTests(unittest.TestCase):
                 _task_with_priority("TASK-001", priority="P0", status="已完成"),
             ])
             # Two evidence entries across two layers: skills/ and agents/
+            # FIX-372: migrated to the LIVE column layout (_evidence_row_live).
             evidence_rows = [
-                _evidence_row_generic(
+                _evidence_row_live(
                     "EVD-001", "TASK-001",
-                    category="架构",
                     evd_type="影响分析",
                     description="Coordinator performed impact analysis solo",
                     file_location="skills/software-project-governance/SKILL.md",
                     author="Coordinator",
                     gate="G11",
                 ),
-                _evidence_row_generic(
+                _evidence_row_live(
                     "EVD-002", "TASK-001",
-                    category="开发",
                     evd_type="实现",
                     description="Implementation",
                     file_location="agents/developer.md",
@@ -16795,8 +16969,9 @@ class AgentActivationTests(unittest.TestCase):
                 _TASK_SEP,
                 _task_with_priority("TASK-001", priority="P1", status="已完成"),
             ])
+            # FIX-372: migrated to the LIVE column layout (_evidence_row_live).
             evidence_rows = [
-                _evidence_row_generic(
+                _evidence_row_live(
                     "EVD-001", "TASK-001",
                     evd_type="实现",
                     file_location="skills/test.py",

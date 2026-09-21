@@ -1,0 +1,71 @@
+diff --git a/skills/software-project-governance/infra/release/projection.py b/skills/software-project-governance/infra/release/projection.py
+index 3926aa0..39100e0 100644
+--- a/skills/software-project-governance/infra/release/projection.py
++++ b/skills/software-project-governance/infra/release/projection.py
+@@ -187,6 +187,41 @@ def build_projection_plan(root: Path, config_path: Optional[Path] = None) -> tup
+     authority_path = _safe_repo_path(root, authority.get("path"), must_exist=True)
+     version = _skill_version(authority_path)
+ 
++    # FIX-366: two-pass plan. Pass 1 resolves every in-memory projection
++    # (structured_json / transformed_text) against the on-disk state FIRST;
++    # pass 2 lets a byte_copy whose source is another projection's target in
++    # the SAME batch consume the resolved content instead of the stale disk
++    # bytes. The single-pass order previously pinned the old version into the
++    # mirror, so every write failed post-validation and rolled back — the plan
++    # could never converge.
++    resolved: Dict[Path, bytes] = {}
++    for item in projections:
++        if not isinstance(item, dict):
++            raise ValueError("projection entries must be objects")
++        kind = item.get("kind")
++        if kind not in ("structured_json", "transformed_text"):
++            continue
++        target = _safe_repo_path(root, item.get("target"), must_exist=True)
++        if kind == "structured_json":
++            payload = json.loads(target.read_text(encoding="utf-8"))
++            payload = _json_pointer_set(deepcopy(payload), item.get("pointer"), version)
++            content = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
++        else:
++            # read_bytes().decode (NOT read_text): keep the file's native
++            # newlines so a byte_copy mirroring this target stays byte-identical
++            # (universal-newline translation here silently LF-normalized the
++            # resolved content and broke exact byte_copy matching).
++            text = target.read_bytes().decode("utf-8")
++            pattern = item.get("pattern")
++            if not isinstance(pattern, str):
++                raise ValueError("transformed_text requires a pattern")
++            replacement = str(item.get("replacement", "{version}")).replace("{version}", version)
++            transformed, count = re.subn(pattern, replacement, text, count=int(item.get("count", 1)), flags=re.MULTILINE)
++            if count != int(item.get("count", 1)):
++                raise ValueError(f"projection pattern count mismatch for `{item.get('target')}`")
++            content = transformed.encode("utf-8")
++        resolved[target] = content
++
+     writes: Dict[str, tuple[bytes, str]] = {}
+     for item in projections:
+         if not isinstance(item, dict):
+@@ -200,21 +235,11 @@ def build_projection_plan(root: Path, config_path: Optional[Path] = None) -> tup
+             source = _safe_repo_path(root, item.get("source"), must_exist=True)
+             if source == target:
+                 raise ValueError("byte projection source and target must differ")
+-            content = source.read_bytes()
++            content = resolved[source] if source in resolved else source.read_bytes()
+         elif kind == "structured_json":
+-            payload = json.loads(target.read_text(encoding="utf-8"))
+-            payload = _json_pointer_set(deepcopy(payload), item.get("pointer"), version)
+-            content = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
++            content = resolved[target]
+         elif kind == "transformed_text":
+-            text = target.read_text(encoding="utf-8")
+-            pattern = item.get("pattern")
+-            if not isinstance(pattern, str):
+-                raise ValueError("transformed_text requires a pattern")
+-            replacement = str(item.get("replacement", "{version}")).replace("{version}", version)
+-            transformed, count = re.subn(pattern, replacement, text, count=int(item.get("count", 1)), flags=re.MULTILINE)
+-            if count != int(item.get("count", 1)):
+-                raise ValueError(f"projection pattern count mismatch for `{target_rel}`")
+-            content = transformed.encode("utf-8")
++            content = resolved[target]
+         else:
+             raise ValueError(f"unsupported projection kind `{kind}`")
+         writes[target_rel] = (content, kind)

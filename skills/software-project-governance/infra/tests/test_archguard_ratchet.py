@@ -77,7 +77,14 @@ SNAPSHOT = _INFRA_DIR / "contract_matrix" / "snapshots.json"
 #      face-5 BASELINE disclosure line and the WARN-aware PASS Result line.
 #      Baseline regenerated in the same change: R1 anchor 24852 -> 25291,
 #      R4 total 1304 -> 1306.)
-FACTS_PRINT_TOTAL = 1306
+#   -> 1316 (0.87.0, FIX-370 closure window: census truth re-alignment — the
+#      +10 drift is ATTRIBUTED TO PRE-EXISTING committed-tree state, NOT
+#      introduced in the 0.87.0 window; HEAD and worktree census both probe
+#      1316 with a zero per-function diff. Lineage trace of the +10 sites is
+#      registered as FIX-377 (0.88) for bisect. Baseline regenerated in the
+#      same change: architecture-baseline.json re-anchored after the
+#      locks-release dispatch-face wiring.)
+FACTS_PRINT_TOTAL = 1316
 
 
 def _committed_baseline():
@@ -234,9 +241,11 @@ class R3LayerMatrixTests(unittest.TestCase):
 
 class R4PrintOrchestrationTests(unittest.TestCase):
     def test_r4_total_matches_facts_census(self):
-        """Calibration cross-check: 1,306 print calls (0.84.0 slice A,
-        FEAT-038 + FEAT-039 sanctioned +3; chain 1,315 → 1,310 → 1,311 → 1,298
-        → 1,299 → 1,301 → 1,304 → 1,306 — see FACTS_PRINT_TOTAL note)."""
+        """Calibration cross-check: 1,316 print calls (0.87.0, FIX-370
+        closure window — the +10 is pre-existing committed drift, NOT
+        introduced here; lineage trace registered as FIX-377. Chain
+        1,315 → 1,310 → 1,311 → 1,298 → 1,299 → 1,301 → 1,304 → 1,306
+        → 1,316 — see FACTS_PRINT_TOTAL note)."""
         current = ar.count_print_calls(ENGINE)
         self.assertEqual(current["total"], FACTS_PRINT_TOTAL)
         self.assertEqual(

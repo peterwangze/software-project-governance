@@ -16854,7 +16854,10 @@ class AgentTeamReviewTests(unittest.TestCase):
                 "## 当前活跃事项",
                 "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
                 "|--------|----|------|------|---------|---------|------|",
-                "| **P1** | FIX-073 | guardrails | AUDIT-100 | 0.35.0 | tests | 🔄 进行中 |",
+                # Check 19 parse_completed_task_ids 依赖行内「已完成」标记——
+                # 勿改为非「已完成」状态（FIX-371 R1 教训：与 Check 16/17
+                # 豁免面 fixture 分离，各自独立行，不共享一行）。
+                "| **P1** | FIX-073 | guardrails | AUDIT-100 | 0.35.0 | tests | ✅ 已完成 |",
             ])
             evidence_rows = [
                 _evidence_row_generic(

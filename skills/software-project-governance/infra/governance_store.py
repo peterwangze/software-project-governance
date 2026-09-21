@@ -1818,8 +1818,8 @@ def locks_release(*, task_id, governance_dir, repo_root=None,
     ``operation_id`` after a completed release replays as a success no-op.
 
     Fail-closed: a task holding NEITHER an active_tasks entry NOR any file
-    lock is refused with zero writes (nothing to release).
-    ``closure_chain`` shrink-locks (TTL 收缩) semantics are deliberately
+    lock is refused with zero writes (nothing to release).  The
+    orchestrator's shrink-locks step (TTL 收缩) semantics are deliberately
     untouched — this is deletion with audit, not shrinkage.
     """
     now = now if now is not None else datetime.now()

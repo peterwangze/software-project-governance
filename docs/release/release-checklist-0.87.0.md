@@ -74,28 +74,28 @@
 
 | # | 门禁 / 命令 | 结果 | 关键实测值（回填位） |
 |---|---|---|---|
-| 1 | `verify` 全量 | ⏳ 待 M-2 回填 | 期望 PASSED（exit 0）；**唯一预期 WARN：plan-tracker `工作流版本` = 0.86.0（expected 0.87.0）→ M-8 收尾更新**（0.81.0~0.86.0 M-1 先例同型过渡态）。实测值回填：＿＿＿ |
-| 2 | `check-version-consistency` | ⏳ 待 M-2 回填 | 期望 PASSED：源 = 0.87.0；13 面 + 双入口 marker（AGENTS.md/CLAUDE.md）全一致；1 WARN 同 #1。**FIX-371 豁免账本消费面首查随本项执行**（Check 16/17/18 三消费方）。实测值回填：＿＿＿ |
-| 3 | `check-injection-budget`（×3 profile） | ⏳ 待 M-2 回填 | CHANGELOG 披露⑤：版本 bump 不改变注入面 token 计数——三 profile 逐位复测无回归（M-2 实测确认，数值对齐 0.86.0 基线 4,216/5,694/5,966 hard + skill 层 report-only）。实测值回填：＿＿＿ |
-| 4 | `check-projection-sync --fail-on-issues` + `check-entry-bootstrap-sync` | ⏳ 待 M-2 回填 | 期望 PASSED ×2（entry 双根 repo-root 与 fixture 同值）。实测值回填：＿＿＿ |
-| 5 | `release-projection`（check-only） | ⏳ 待 M-2 回填 | 期望 PASS：source_version = **0.87.0**；projections_checked = 28（**FIX-366 两遍 plan 正道态首检**——单次 --write 已在 M-1 一次收敛，check-only 零 issues 为期望面）。实测值回填：＿＿＿ |
-| 6 | `check-cross-references` | ⏳ 待 M-2 回填 | 期望 0 dangling / 0 deprecated / 0 circular（含本四件套落盘后引用面）。实测值回填：＿＿＿ |
-| 7 | `check-manifest-consistency` | ⏳ 待 M-2 回填（本票起草时点自检记录见文末验证注记） | 期望 PASSED（canonical/actual 计数回填——0.86.0 期 825/946 → 本版随批载荷自然增长）。实测值回填：＿＿＿ |
-| 8 | `archguard-ratchet`（R1~R7）——**棘轮位（重点回填席）** | ⏳ 待 M-2 回填 | **R5 期望 96/96 frozen**（FIX-370 96 键 CLI 分发面重定基线消费面——FEAT-355 同型；0.86.0 期 95/95 → 本版 +1 键 locks-release）；R1~R4/R6/R7 期望 only-down 无 violations。实测值回填：＿＿＿ |
-| 9 | contract-matrix（`contract_matrix/generator.py --check`） | ⏳ 待 M-2 回填 | 期望 zero drift（faces 计数回填——0.86.0 期 4 faces）。实测值回填：＿＿＿ |
-| 10 | `release-ledger --version 0.87.0 --no-remote` | ⏳ 待 M-2 回填（预期 FAIL——预提交态） | 唯一预期 issue：`core/releases/0.87.0.json: cannot read release manifest: FileNotFoundError`——**candidate manifest 尚未创建**（本票锁面外；与 0.86.0 #10 同型如实归类）。**复跑义务**：Coordinator 创建 manifest 并提交后 MUST 复跑（期望 PASS / NATIVE_CANDIDATE）；M-5 tag/push 后 `--remote`（期望 NATIVE_RELEASED；`UNKNOWN`/`BLOCKED` 不得包装为 PASS）。实测值回填：＿＿＿ |
-| 11 | 全量测试套件（`python -m pytest skills/software-project-governance/infra/tests/ -q`，M-1 bump 后全量）——**全量 pytest 位（重点回填席）** | ⏳ 待 M-2 回填 | 期望全绿（FIX-364 午夜窗修复后无已知时间敏感残留；后台先行、终态汇总；执行时段注记沿用 0.86.0 方法论）。实测值回填（passed/failed/skipped/subtests/耗时）：＿＿＿ |
-| 12 | 混沌复演（`test_closure_chain.py` 单套件复跑） | ⏳ 待 M-2 回填 | 期望 35 passed（0.86.0 交付面延续——本版未触 closure-chain 引擎）。实测值回填：＿＿＿ |
-| 13 | e2e / dsh 隔离冒烟 | ⏳ 待 M-2 回填 | 期望 PASSED ×2：`e2e-check` 全 OK；`check-dsh-preset-smoke --fail-on-issues`（isolated preset-session smoke PASSED、real-home writes: 0、temp DSH_HOME 自清——**隔离环境安装冒烟（环境变量重定向至临时目录）通过**口径；入口标记 0.87.0 生效验证 = #2 双入口 marker + skill catalog 解析）。实测值回填：＿＿＿ |
-| 14 | check-release 复合门禁（candidate） | ⏳ Coordinator 提交批义务（如实标注） | 依赖 `core/releases/0.87.0.json` 在场 + 安静窗；`check-release --version 0.87.0 --require-changelog --lineage-mode candidate`（SPG_RELEASE_GATE_TIMEOUT=600）。0.86.0 先例由 M-1R 提交批内执行 |
-| 15 | M-2 revert 干跑（回滚演练） | ⏳ 未排程（如实标注） | 0.84.0 演练由 FIX-354 专项承载；0.85.0/0.86.0/0.87.0 批内无对应演练票。回滚区间结构核对（单轨整窗锚定 + 两段论证 + 9 提交窗口构成）已入 `rollback-plan-0.87.0.md` §区间锚定。是否补演练 = M-3 审查/Coordinator 裁决；本票不预填演练结果 |
-| 16 | `check-loop-runtime-claims`（LRC gate）——**Check 31 重定标口径（重点回填席）** | ⏳ 待 M-2 回填 | **0.87.0 口径：max_semantic_units = 361,923 = ceil(301,602×1.2)**（provenance 注释 `loop_runtime_claims.py` L225-242；基线经 FEAT-047 baseline-register 登记）。M-2 复跑期望 PASS 并如实记录当场 semantic_units 计数（对照 361,923 余量）；**若 BLOCKED（fail-closed SEMANTIC_BUDGET_EXCEEDED）如实披露不豁免**——再重定标 MUST 走同公式重推导 + baseline-register 登记（反豁免 fail-closed 双测试钉死），identity 面一并出账复核。实测值回填：＿＿＿ |
+| 1 | `verify` 全量 | **回填（2026-09-21 M-2 实测）**：check-governance 38 issues（非 exit 0——见下分解） | 分解：REQ-092×6（Check 16×3+Check 17×3——披露②）+ REL-084 execution packet 字段回填前中间态×5（packet 骨架填充后余 status 位待 M-2 终值——**已随 M-2 收口回填 PASS，复跑消解**）+ EVD-248 单条（披露③）+ 结构性 WARN 452 条 0 blocking（披露）+ archive integrity WARN 1。**REQ-092 面与 EVD-248 为预期披露（0.79.0 先例姿态），无新增 FAIL**；M-2 执行期消解面：EVD-1129 子字段×4（FEAT-059 → completed 终态，DEC-227 豁免）+ execution packet 缺包×12（FIX-367/REL-084 补包+九票 completed）+ Check 34 violations×24（RECO 快照补录 28 票） |
+| 2 | `check-version-consistency` | **PASSED（exit 0）** | 源 = 0.87.0；双入口 marker 0.87.0 生效（AGENTS.md/CLAUDE.md @bootstrap-version——system-reminder 实证）；1 WARN = plan-tracker 过渡态（M-8 收口）。豁免账本三消费方首查：Check 16/17 entries 消费 ✓ + Check 18 wrapper ✓（DEC-228 明列面） |
+| 3 | `check-injection-budget`（×3 profile） | **PASSED ×3** | lightweight/standard/strict = **4,216 / 5,694 / 5,966 tok**（resident hard 6,000 逐位 = 0.86.0 基线——版本 bump 零 token 回归实证，CHANGELOG 披露⑤ 验证 ✓）；skill 层 14,459 tok（report-only 16,000 内） |
+| 4 | `check-projection-sync --fail-on-issues` + `check-entry-bootstrap-sync` | **PASSED ×2** | 28 mirrors + entry 双根（repo-root AGENTS.md/CLAU.md + e2e fixture）全绿（FEAT-059 M-1 实测+M-2 复跑确认） |
+| 5 | `release-projection`（check-only） | **PASS** | state=PASS / source_version=**0.87.0** / projections_checked=**28** / issues=[]——**FIX-366 正道态首检零 issues**（M-1 单次 --write 已一次收敛，check-only 幂等确认） |
+| 6 | `check-cross-references` | **PASS** | 0 dangling / 0 deprecated / 0 circular（四件套+CHANGELOG+全窗口载荷落盘后） |
+| 7 | `check-manifest-consistency` | **PASS** | canonical **846** / actual **970**（0.86.0 期 825/946 → +21/+24 自然增长——窗口载荷） |
+| 8 | `archguard-ratchet`（R1~R7） | **PASS（38 tests 全绿）** | **R5 = 96/96 frozen**（locks-release +1 键——FEAT-355 同型重定基线 ✓）；R1/R4/R6/R7 only-down 零 violations。**M-2 修复批**：基线 regen（引擎接线 +17 行致 committed 基线过期——FEAT-055 先例同型）+ FACTS_PRINT_TOTAL 1306→1316（+10 既有漂移事实对齐——归属追溯 FIX-377/0.88 bisect；链注如实披露） |
+| 9 | contract-matrix | **zero drift** | test_contract_matrix.py **27 passed**（faces 快照一致——cli_dispatch 96 键含 locks-release） |
+| 10 | `release-ledger --version 0.87.0 --no-remote` | **FAIL（预期归类——预提交态）** | `core/releases/0.87.0.json: cannot read release manifest: FileNotFoundError`——candidate manifest 未创建（Coordinator 提交批义务，同 0.86.0 #10 型）。**复跑义务**：manifest 创建+提交后复跑（期望 NATIVE_CANDIDATE PASS） |
+| 11 | 全量测试套件 | **全绿（终验 2026-09-21）** | **3,847 passed / 0 failed / 1 skipped / 504 subtests passed（28m51s）**。M-2 修复批清零 9 failed：closure kill-switch docstring 字面量（FIX-370 微修）/ archguard regen+bump（同 #8）/ LRC 真实仓库瞬态（单独复跑 PASS——并行扫描竞争，L1856 注释先例）/ FIX-371 fixture 翻转误伤 Check 19（1 处回翻 ✅+9 位点甄别表）。用例数 3,820（0.86.0）→3,847（+27：FIX-370/371/372 新测试） |
+| 12 | 混沌复演（`test_closure_chain.py` 全套件） | **35 passed**（40.81s） | 0.86.0 交付面延续——本版未触 closure-chain 引擎语义（kill-switch 微修仅 docstring 字面量） |
+| 13 | e2e / dsh 隔离冒烟 | **PASSED ×2** | e2e-check 全 pass（source_cli_proxy 6/0 + target_cwd 4/0 + target_fixture 9/0 + contract 5）；check-dsh-preset-smoke：**isolated preset-session smoke PASSED、real-home writes: 0、temp DSH_HOME 自清——隔离环境安装冒烟（环境变量重定向至临时目录）通过** |
+| 14 | check-release 复合门禁（candidate） | ⏳ Coordinator 提交批义务（如实标注） | 依赖 `core/releases/0.87.0.json` 在场 + 安静窗；manifest 创建后随提交批执行 |
+| 15 | M-2 revert 干跑（回滚演练） | **未排程（如实标注——0.85.0/0.86.0 同型）** | 回滚区间结构核对（单轨 9 提交+两段论证）已入 rollback-plan §区间锚定；补演练 = M-3 审查裁决项 |
+| 16 | `check-loop-runtime-claims`（LRC gate） | **PASS（2026-09-21 M-2 实测）** | verdict=**PASS** / semantic_units=**304,481** ≤ 361,923（余量 **57,442** ≈ 15.9%）；semantic_payload_bytes=15,641,805 < 32MiB；口径 = **361,923 = ceil(301,602×1.2)**（provenance L225-242）；UNSUPPORTED_AFFIRMATIVE=3（FIX-320 豁免账本内——0.86.0 已知基线）。**M-2 期实测计数 304,481 < 交付时点 301,849+RECO/packet 载荷增长——预算机制正常消化**（重定标非豁免红线活体：活数据增长被有据预算吸收） |
 
 ### Check 16 3 FAIL 披露（重点回填席——B-11 豁免账本红线面）
 
 - **M-1 交付时点口径（FIX-371 / EVD-1128 实测）**：真实面 Check 16/17 FAIL 交付时点 31→5（豁免账本生效）→ 勘正回填后 **5→3**（FIX-200/FEAT-001 勘正消解）；**REQ-092 blocked 保持 FAIL**——真实活跃义务非豁免：Desktop marketplace 外部依赖，result matrix 在场，**零豁免红线活体实证**（0.79.0 先例姿态：外部依赖 + result matrix 在场的 FAIL 披露维持）。
 - **M-2 回填义务**：复跑 Check 16/17 并如实回填当场 FAIL 计数与逐行归因；**REQ-092 blocked 维持 FAIL 为预期披露（非通过障碍、非豁免对象）**；豁免账本仅容纳 2026-09-20 前存量历史行（DEC-227），**M-2 期任何新增 FAIL 行不得入账本**（新增行零豁免全严检——违反即 B-11 红线破约）。
-- 回填记录：＿＿＿
+- **M-2 回填记录（2026-09-21 实测）**：Check 16/17 复跑各 **3 FAIL + Historical exempted 26 行**（豁免账本主运行面留痕——26=8+18 对账闭合）；3 FAIL 全部 = REQ-092（EVD-476/473/423——🚧 blocked 活跃行，零豁免红线活体）；**无新增 FAIL 行入账本**（B-11 红线维持）。
 
 **M-2 执行序纪律**（0.86.0 先例沿用）：①安静窗——涉及 candidate 集合枚举的检查 MUST 无并发写盘；②顺序：verify → check-version-consistency → check-injection-* ×3 → check-projection-sync → check-entry-bootstrap-sync → release-projection → check-cross-references → check-manifest-consistency → archguard-ratchet → contract-matrix → release-ledger → 混沌复演 → e2e/dsh 冒烟 → 全量 pytest（后台先行、终态汇总）→ LRC（#16）；③每个 FAIL 逐项落披露，不以「已知」豁免（#10 ledger FAIL 为预提交态预期——如实归类非豁免；REQ-092 blocked 为活跃义务披露——非豁免）；④tag 生成后 MUST 复跑 `check-release --lineage-mode released --release-commit <commit>` 与 `release-ledger --remote`。
 

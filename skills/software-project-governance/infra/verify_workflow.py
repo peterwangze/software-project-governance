@@ -10046,7 +10046,11 @@ def check_protocol_compliance():
             # fact cell was empty) and flagging 9-cell historical rows as
             # short rows. The Stage requirement is dropped: the LIVE layout
             # has no Stage column. 9-cell rows are validated against their
-            # own offsets (Author/Date) instead of being rejected.
+            # own offsets (Author/Date) instead of being rejected. FIX-374:
+            # a date-shaped cells[6] proves the historical Date cell is
+            # present; a 9-cell row failing that shape test is a truncated
+            # LIVE row (Date cell lost) and is validated against the LIVE
+            # offsets with Date reported missing (review-FIX-372-CODE-R0 F-1).
             cells = _governance_table_cells(line)
             if len(cells) < 9:
                 issues["evidence_format"].append(
@@ -10071,10 +10075,32 @@ def check_protocol_compliance():
                 if not cells[7]:
                     missing.append("Date")
             else:
-                # 9-cell historical shape (no separate file column)
-                if not cells[5]:
-                    missing.append("Author")
-                if not cells[6]:
+                # FIX-374 (review-FIX-372-CODE-R0 F-1): a 9-cell row is
+                # ambiguous — either a genuine historical row (Author in
+                # cells[5], Date in cells[6]) or a truncated LIVE row that
+                # lost its Date cell (the EntryMethod text then sits in
+                # cells[6], and the pre-fix branch read Location/
+                # EntryMethod as Author/Date, silently passing a genuinely
+                # missing Date — fail-blind). Disambiguate by content
+                # shape (_EVIDENCE_DATE_SHAPE_RE): a date-shaped cells[6]
+                # proves the historical Date cell is present; anything
+                # else contradicts the historical Date semantics and is
+                # validated as a truncated LIVE row.
+                if _EVIDENCE_DATE_SHAPE_RE.match(cells[6]):
+                    # Historical shape: the Date cell is date-shaped (and
+                    # thus non-empty) by construction.
+                    if not cells[5]:
+                        missing.append("Author")
+                else:
+                    # Truncated LIVE shape: the Date cell is absent, so
+                    # the LIVE Location/EntryMethod cells shift into the
+                    # historical Author/Date offsets. Validate the LIVE
+                    # columns at their real offsets and report the lost
+                    # Date cell.
+                    if not cells[5]:
+                        missing.append("Location")
+                    if not cells[6]:
+                        missing.append("EntryMethod")
                     missing.append("Date")
 
             if missing:
@@ -12377,6 +12403,17 @@ def _governance_table_cells(line):
     if cells and cells[-1] == "":
         cells = cells[:-1]
     return cells
+
+
+# Date-cell content shape (FIX-374): ``YYYY-MM-DD`` / ``YYYY/MM/DD`` as
+# written by the LIVE evidence-log convention. Sole consumer: the evidence
+# format check in check_protocol_compliance — for an ambiguous 9-cell row,
+# a date-shaped cells[6] proves the historical Date cell is present
+# (genuine historical row); any other value contradicts the historical
+# Date semantics and marks the row as a truncated LIVE row (Date cell
+# lost). Real-data basis: all 12 live 9-cell historical rows in
+# .governance/evidence-log.md carry a date-shaped cells[6].
+_EVIDENCE_DATE_SHAPE_RE = re.compile(r"^\d{4}[-/]\d{1,2}[-/]\d{1,2}$")
 
 
 def _is_incomplete_task_status(status):

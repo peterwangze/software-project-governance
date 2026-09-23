@@ -12220,6 +12220,72 @@ class Fix373SplitterCodeSpanQuoteTests(unittest.TestCase):
         self.assertIn('`echo a|b`', cells[3])
 
 
+class Fix374NineCellDisambiguationTests(unittest.TestCase):
+    """FIX-374: the evidence format check must disambiguate the two 9-cell
+    row shapes by content (review-FIX-372-CODE-R0 F-1).
+
+    Both shapes yield exactly 9 data cells:
+      historical row:  0=EVD 1=TaskID 2=Type 3=Description 4=fact basis
+                       5=Author 6=Date 7=Gate 8=Notes
+      truncated LIVE:  0=EVD 1=TaskID 2=Type 3=Description 4=fact basis
+                       5=Location 6=EntryMethod 7=Gate 8=Notes  (Date cell
+                       lost — LIVE shape minus Date)
+
+    Pre-fix the else-branch read the truncated LIVE row's Location/
+    EntryMethod cells as Author/Date and passed both (fail-blind: a
+    genuinely missing Date was never reported). Disambiguation heuristic:
+    a date-shaped cells[6] proves the historical Date cell is present
+    (historical row); any other value contradicts the historical Date
+    semantics and is validated as a truncated LIVE row with its Date cell
+    missing.
+    """
+
+    def _format_issues(self, tmpdir, evidence_text):
+        root = Path(tmpdir)
+        gov = root / ".governance"; gov.mkdir(parents=True, exist_ok=True)
+        sp = gov / "plan-tracker.md"
+        ep = gov / "evidence-log.md"
+        sp.write_text("# 计划跟踪\n## 项目配置\n", encoding="utf-8")
+        ep.write_text(evidence_text, encoding="utf-8")
+        with patch.object(vw, "SAMPLE_PATH", sp), \
+             patch.object(vw, "GOVERNANCE_DIR", gov):
+            return vw.check_protocol_compliance()["evidence_format"]
+
+    def test_truncated_live_row_missing_date_flagged(self):
+        """Truncated LIVE row (Date cell lost, exactly 9 cells, cells[6]
+        carries EntryMethod text) is reported as missing Date (pre-fix:
+        Location/EntryMethod were read as Author/Date -> silently passed)."""
+        with tempfile.TemporaryDirectory() as td:
+            row = ("| EVD-906 | FIX-374 | 修复 | 目标对齐：9-cell 消歧回归数据。 | "
+                   "事实依据：fixture | .governance/evidence-log.md | "
+                   "Coordinator 机写 | G11 | ✅ 完成 |")
+            issues = self._format_issues(td, row)
+            self.assertEqual(len(issues), 1)
+            self.assertIn("Date", issues[0])
+            self.assertNotIn("Author", issues[0])
+
+    def test_nine_cell_historical_row_with_trailing_pipe_retained(self):
+        """Retention pin: a fully-piped 9-cell historical row whose Date
+        cell (cells[6]) is date-shaped stays exempt (the exemption face
+        must not shrink)."""
+        with tempfile.TemporaryDirectory() as td:
+            row = ("| EVD-907 | FIX-374 | 治理记录 | 历史行描述文本，长度充足。 | "
+                   "事实依据：历史记录 | Coordinator | 2026-09-21 | G11 | ✅ 完成 |")
+            issues = self._format_issues(td, row)
+            self.assertEqual(issues, [])
+
+    def test_truncated_live_row_missing_location_and_date_both_flagged(self):
+        """A truncated LIVE row that also lost its Location cell reports
+        both defects under LIVE semantics (Location empty + Date absent)."""
+        with tempfile.TemporaryDirectory() as td:
+            row = ("| EVD-908 | FIX-374 | 修复 | 目标对齐：双缺消歧回归数据。 | "
+                   "事实依据：fixture | | Coordinator 机写 | G11 | ✅ 完成 |")
+            issues = self._format_issues(td, row)
+            self.assertEqual(len(issues), 1)
+            self.assertIn("Location", issues[0])
+            self.assertIn("Date", issues[0])
+
+
 def _dated_impact_evidence_row(evd_id, task_id, description, file_location="skills/test.md"):
     return f"| {evd_id} | 2026-06-16 | {task_id} | 架构 | 影响分析 | {description} | {file_location} | Developer | G11 | PASS |"
 

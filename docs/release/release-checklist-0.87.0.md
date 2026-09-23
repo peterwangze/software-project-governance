@@ -125,24 +125,24 @@
 - [x] **九票载荷**：批 1 四票 + 批 2 三票（全清）+ FIX-371 全闭环（含 NEEDS_CHANGE→R1 转化三票；0 unresolved blockers）
 - [x] **M-1 版本 bump（全平面）**：`80d71b5`（FEAT-059）——24 tracked 面 + CHANGELOG 段 + FIX-366 正道首活体（EVD-1129）；**M-1 GO**（REVIEW-FEAT-059-R0 APPROVED_WITH_NOTES/0）
 - [x] **M-1R 发布材料**：本四件套（REL-085 锁面 expected-new）
-- [ ] **M-2 快速门禁**：#1~#16 回填位实测回填（重点四席：Check 31 重定标口径 #16 / Check 16 3 FAIL 披露专席 / 全量 pytest #11 / 棘轮 #8）
-- [ ] **M-2 复合门禁（Coordinator 提交批）**：candidate manifest 创建 + 提交 → 复跑 `release-ledger --no-remote`（期望 NATIVE_CANDIDATE PASS）+ `check-release --version 0.87.0 --require-changelog --lineage-mode candidate`（SPG_RELEASE_GATE_TIMEOUT=600）
+- [x] **M-2 快速门禁**：#1~#16 回填位实测回填（重点四席：Check 31 重定标口径 #16 / Check 16 3 FAIL 披露专席 / 全量 pytest #11 / 棘轮 #8）——EVD-1131（2026-09-21 终验：pytest 3,847P/0F、LRC PASS 304,481≤361,923、棘轮 R5=96/96）
+- [x] **M-2 复合门禁（Coordinator 提交批）**：candidate manifest 创建 + 提交 → 复跑 `release-ledger --no-remote`（期望 NATIVE_CANDIDATE PASS）+ `check-release --version 0.87.0 --require-changelog --lineage-mode candidate`（SPG_RELEASE_GATE_TIMEOUT=600）——M-5 transition 时 manifest-only 收口（602f8f3）；released 复跑见 M-6
 - [x] **M-3 前置材料**：本四件套就绪，供 Release Reviewer / Design Reviewer 双半面审查（含 FIX-366 回退风险披露复核输入）
-- [ ] **M-3 双半面审查**：Release Reviewer + Code/Design Reviewer（按变更面）；review-record 机录；复审必达
-- [ ] **M-4 go/no-go**：DEC-226 预授权形态——Coordinator 呈现，门禁不予放弃
-- [ ] **M-5b transition/tag**：candidate → released（单父 transition）+ tag `v0.87.0`（peel = transition commit）+ push——Coordinator 面
-- [ ] **M-6 released 门禁**：`check-release --lineage-mode released --release-commit <commit>` + `release-ledger --remote`
-- [ ] **M-7 push**：master + tag 原子推送
-- [ ] **M-8 提交 + 收尾**：commit message 含 REL-084/REL-085；plan-tracker `工作流版本` → 0.87.0（消 #1 WARN）+ roadmap 0.87.0 行回填；session-snapshot 刷新；`archive.py migrate --auto --dry-run` 触发检测 → `check-archive-integrity` PASS；证据行落账
+- [x] **M-3 双半面审查**：Release Reviewer + Code/Design Reviewer（按变更面）；review-record 机录；复审必达——REVIEW-REL-084-R2 双半面 APPROVED_WITH_NOTES/0×2（2026-09-21，390934a）
+- [x] **M-4 go/no-go**：DEC-226 预授权形态——Coordinator 呈现，门禁不予放弃
+- [x] **M-5b transition/tag**：candidate → released（单父 transition）+ tag `v0.87.0`（peel = transition commit）+ push——Coordinator面——602f8f3（2026-09-21 14:00:57 +0800）+ tag 2026-09-21 14:02:27 +0800（taggerdate 权威——FIX-349）；远端实测 ls-remote 2e5f715
+- [x] **M-6 released 门禁**：`check-release --lineage-mode released --release-commit <commit>` + `release-ledger --remote`——2026-09-23 复跑（EVD-1133）：**release-ledger --remote origin PASS**（NATIVE_RELEASED；tag 本地==远端 602f8f3；event integrity sha256:a1536981）；check-release released 15 项 PASS（version consistency/release fact/hot fact〔三面回填后清零〕/archive integrity/projection sync/cross refs/release lineage/gate sequence/one-dot-zero blockers 全绿）+ 1 FAIL execution gates→governance health exit=1（29 issues=REQ-092×6 已知披露面〔外部依赖零豁免红线活体〕+EVD-248 单条噪声〔FIX-373 承接〕+结构 WARN 0 blocking——EVD-1131 分解口径，0.79.0/0.86.0 先例姿态：非通过障碍、非豁免对象；verify/e2e/unit tests 三子门 PASS）
+- [x] **M-7 push**：master + tag 原子推送——origin 同步实测（status -sb 零偏差 + tag 在远端）
+- [x] **M-8 提交 + 收尾**：commit message 含 REL-084/REL-085；plan-tracker `工作流版本` → 0.87.0（消 #1 WARN）+ roadmap 0.87.0 行回填；session-snapshot 刷新；`archive.py migrate --auto --dry-run` 触发检测 → `check-archive-integrity` PASS；证据行落账——2026-09-23 完成（EVD-1132；归档 9 task+4 evidence，integrity PASS 85/93/178；write-guard PASS；版本过渡 WARN 消解）
 
 ## M-8 收尾义务（Coordinator 面——本票不执行）
 
-- [ ] candidate 提交（四件套 + manifest 入索引后）→ 复跑 `release-ledger --version 0.87.0 --no-remote`（期望 NATIVE_CANDIDATE PASS——刷新 #10）+ check-release candidate（刷新 #14）
-- [ ] plan-tracker：`工作流版本` → 0.87.0；REL-084/REL-085 行状态更新；0.87.0 路线图行 → 已发布（待 tag 后——FIX-367 复发预防义务）
-- [ ] session-snapshot 刷新（含可解析 session_date）——Check 28c hot fact source 面
-- [ ] hooks_drift 一次性重装提示：`cp "<plugin_root>/skills/software-project-governance/infra/hooks/"* .git/hooks/`（DEC-213④）
-- [ ] 归档触发检测与迁移（ADR-006/007；完整性失败阻断发布完成）
-- [ ] 本披露开放项收口：plan-tracker 工作流版本（M-8）/ candidate manifest + ledger 复跑（提交批）/ EVD-248 噪声与 FIX-373~376 → 0.88 triage / M-2 重点四席回填复核
+- [x] candidate 提交（四件套 + manifest 入索引后）→ 复跑 `release-ledger --version 0.87.0 --no-remote`（期望 NATIVE_CANDIDATE PASS——刷新 #10）+ check-release candidate（刷新 #14）——M-5 transition（602f8f3）manifest-only 收口承载；released 复跑见 M-6 行
+- [x] plan-tracker：`工作流版本` → 0.87.0；REL-084/REL-085 行状态更新；0.87.0 路线图行 → 已发布（待 tag 后——FIX-367 复发预防义务）——2026-09-23：版本字段+roadmap 行+总览三面回填；REL-084 状态链机录三段（op-be5784ec/op-ea21c9a9/op-3b9f4745）；REL-085 已于 2026-09-21 ✅
+- [x] session-snapshot 刷新（含可解析 session_date）——Check 28c hot fact source 面——2026-09-23 刷新（session_date: 2026-09-23）
+- [x] hooks_drift 一次性重装提示：`cp "<plugin_root>/skills/software-project-governance/infra/hooks/"* .git/hooks/`（DEC-213④）——实测三 hook 全在场（resolve_entry hooks_installed 全 true），免重装
+- [x] 归档触发检测与迁移（ADR-006/007；完整性失败阻断发布完成）——2026-09-23：9 task + 4 evidence 迁移（plan-tracker 177KB→171KB），check-archive-integrity PASS（85 热/93 归档/178 总）
+- [x] 本披露开放项收口：plan-tracker 工作流版本（M-8）✓ / candidate manifest + ledger 复跑（提交批）——M-5/M-6 承载 ✓ / EVD-248 噪声与 FIX-373~376 → 0.88 triage（REL-084 状态行出槽注记在场）✓ / M-2 重点四席回填复核（EVD-1131）✓
 
 ## 本票自检验证记录（M-1R 起草工位）
 

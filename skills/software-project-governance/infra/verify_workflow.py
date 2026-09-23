@@ -12312,7 +12312,14 @@ def _task_priority_from_table_parts(parts):
 
 
 def _split_governance_table_row(line):
-    """Split a Markdown table row while preserving pipes inside JSON cells."""
+    """Split a Markdown table row while preserving pipes inside JSON cells.
+
+    FIX-373: a ``"`` inside a code span is literal text and must NOT open
+    the JSON-string state — an unguarded quote flipped ``in_string`` on,
+    which in turn suppressed the code-span backtick toggle (backtick branch
+    requires ``not in_string``), pinned the state to end-of-line and folded
+    every remaining pipe (live: EVD-248 row folded 10 data cells -> 5).
+    """
     parts = []
     current = []
     depth = 0
@@ -12336,7 +12343,7 @@ def _split_governance_table_row(line):
                 in_string = False
             continue
 
-        if ch == '"':
+        if ch == '"' and not in_code_span:
             in_string = True
             current.append(ch)
         elif ch in "{[":

@@ -12111,6 +12111,115 @@ class EvidenceFormatColumnLayoutTests(unittest.TestCase):
             self.assertIn("Location", issues[0])
 
 
+class Fix373SplitterCodeSpanQuoteTests(unittest.TestCase):
+    """FIX-373: _split_governance_table_row must not enter in_string state
+    from a quote inside a code span.
+
+    EVD-248 live shape (.governance/evidence-log.md L836): the description
+    cell embeds an rg command in a code span whose pattern text carries
+    escaped quotes (``rg -n \\"^## |^### |...\\"``). Pre-fix the first ``"``
+    inside the code span flipped in_string on, the code-span closing backtick
+    was then ignored (the backtick branch requires ``not in_string``), and
+    in_string stayed open to end-of-line — every remaining pipe was swallowed,
+    a 10-data-cell row folded to 5 cells, and the evidence format check
+    false-flagged "only 5 data fields (expected ≥9)" (single fail-noisy;
+    surfaced after the FIX-372 column-convention repair — REVIEW-FIX-372-CODE-R0
+    F-4 two-way impact).
+    """
+
+    def _evd248_shape_row(self, evd_id):
+        """LIVE 10-cell row whose description embeds the EVD-248 rg code span."""
+        description = (
+            "plan-tracker 格式标准化完成——验证："
+            "`rg -n \\\"^## |^### |FMT-001|FIX-064|实施路线图|样例跟踪表\\\" .governance/plan-tracker.md` "
+            "确认遗留章节已移除且活跃任务仍存在；`Get-Item .governance/plan-tracker.md` "
+            "确认大小 25,738 bytes。目标对齐：减少每次会话 bootstrap 热读负担。"
+            "用户影响：获得=更短更清晰的治理状态文件"
+        )
+        return (
+            f"| {evd_id} | FIX-373 | 修复 | {description} | "
+            "事实依据：EVD-248 折叠实证（10 格完好） | "
+            ".governance/evidence-log.md | Coordinator 机写 | 2026-05-13 | G11 | ✅ 完成 |"
+        )
+
+    def _format_issues(self, tmpdir, evidence_text):
+        root = Path(tmpdir)
+        gov = root / ".governance"; gov.mkdir(parents=True, exist_ok=True)
+        sp = gov / "plan-tracker.md"
+        ep = gov / "evidence-log.md"
+        sp.write_text("# 计划跟踪\n## 项目配置\n", encoding="utf-8")
+        ep.write_text(evidence_text, encoding="utf-8")
+        with patch.object(vw, "SAMPLE_PATH", sp), \
+             patch.object(vw, "GOVERNANCE_DIR", gov):
+            return vw.check_protocol_compliance()["evidence_format"]
+
+    def test_evd248_shape_row_keeps_10_data_cells(self):
+        """Negative pin: escaped quotes inside a code span must not fold the
+        row — 10 data cells survive end-to-end (pre-fix: folded to 5)."""
+        cells = vw._governance_table_cells(self._evd248_shape_row("EVD-900"))
+        self.assertEqual(len(cells), 10)
+        self.assertEqual(cells[0], "EVD-900")
+        self.assertEqual(cells[1], "FIX-373")
+        self.assertIn('rg -n \\"^## |^### |FMT-001', cells[3])
+        self.assertTrue(cells[3].endswith("更短更清晰的治理状态文件"))
+        self.assertEqual(cells[5], ".governance/evidence-log.md")
+        self.assertEqual(cells[9], "✅ 完成")
+
+    def test_single_quote_inside_code_span_does_not_fold_row(self):
+        """Negative pin: one unescaped quote inside a code span (no closing
+        quote in the cell) must not open in_string either (pre-fix: the
+        string never closes and the row folds)."""
+        row = ('| EVD-905 | FIX-373 | 修复 | 模式 `rg "^## file` 匹配章节，'
+               '目标对齐：切分器回归数据。 | '
+               '事实依据：fixture | .governance/evidence-log.md | '
+               'Coordinator 机写 | 2026-09-20 | G11 | ✅ 完成 |')
+        cells = vw._governance_table_cells(row)
+        self.assertEqual(len(cells), 10)
+        self.assertIn('`rg "^## file`', cells[3])
+        self.assertEqual(cells[9], "✅ 完成")
+
+    def test_evd248_shape_row_passes_evidence_format_check(self):
+        """Integration pin: the EVD-248-shaped row no longer false-flags
+        "only 5 data fields (expected ≥9)" in the evidence format check."""
+        with tempfile.TemporaryDirectory() as td:
+            issues = self._format_issues(td, self._evd248_shape_row("EVD-901"))
+        self.assertEqual(issues, [])
+
+    def test_plain_quoted_pipe_outside_code_span_still_preserved(self):
+        """Retention pin (positive face): plain quotes OUTSIDE a code span
+        still enter/exit string state — pipes inside quotes stay unsplit."""
+        row = ('| EVD-902 | FIX-373 | 实现 | 描述含 "quoted | pipe" 文本，'
+               '目标对齐：切分器引号正例回归数据。 | '
+               '事实依据：fixture | .governance/evidence-log.md | '
+               'Coordinator 机写 | 2026-09-20 | G11 | ✅ 完成 |')
+        cells = vw._governance_table_cells(row)
+        self.assertEqual(len(cells), 10)
+        self.assertIn('"quoted | pipe"', cells[3])
+        self.assertEqual(cells[9], "✅ 完成")
+
+    def test_json_escaped_quote_pipe_preservation_retained(self):
+        """Retention pin (positive face): JSON string escape handling
+        (``\\"`` pairs inside a quoted cell) is unchanged."""
+        row = ('| EVD-903 | FIX-373 | 实现 | {"cmd": "echo \\"a|b\\" end"} '
+               '命令快照，目标对齐：切分器转义正例回归数据。 | '
+               '事实依据：fixture | .governance/evidence-log.md | '
+               'Coordinator 机写 | 2026-09-20 | G11 | ✅ 完成 |')
+        cells = vw._governance_table_cells(row)
+        self.assertEqual(len(cells), 10)
+        self.assertIn('{"cmd": "echo \\"a|b\\" end"}', cells[3])
+
+    def test_code_span_pipe_without_quotes_still_preserved(self):
+        """Retention pin (positive face): plain code-span pipes (no quotes
+        involved) keep their existing protection."""
+        row = ('| EVD-904 | FIX-373 | 实现 | 命令 `echo a|b` 通过，'
+               '目标对齐：切分器 code span 正例回归数据。 | '
+               '事实依据：fixture | .governance/evidence-log.md | '
+               'Coordinator 机写 | 2026-09-20 | G11 | ✅ 完成 |')
+        cells = vw._governance_table_cells(row)
+        self.assertEqual(len(cells), 10)
+        self.assertIn('`echo a|b`', cells[3])
+
+
 def _dated_impact_evidence_row(evd_id, task_id, description, file_location="skills/test.md"):
     return f"| {evd_id} | 2026-06-16 | {task_id} | 架构 | 影响分析 | {description} | {file_location} | Developer | G11 | PASS |"
 

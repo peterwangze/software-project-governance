@@ -69,7 +69,7 @@ if ch == '"' and not in_code_span:   # 修复前: if ch == '":'
 | F-1 | **P2** | `project/e2e-test-project/skills/software-project-governance/infra/verify_workflow.py:6879` | e2e 同源切分器副本仍携带同一缺陷（L6879 无守卫 `if ch == '"':`，L6855 旧 docstring）——即 Developer 登记的边缘问题 1，处置合理但**须有承接**，否则副本随源演进持续漂移 | 全仓 grep `def _split_governance_table_row` 恰 2 处（源 L12314 已修 + e2e L6854 未修）；`.gitignore` L31 `project/e2e-test-project/skills/` 证实为 git-ignored runtime fixture（与 Check 27 "ignored e2e fixture 仅 optional consistency" 先例一致，EVD-245） | 不阻塞本 diff。立后续 FIX 任务二选一：(a) 同步副本；(b) 泛化性根治——把切分器抽为共享模块单一事实源，两处引用（P-v1 原则 5"严禁单点修改"的正向落地，本任务已按契约只修共享源） |
 | F-2 | P3 | `verify_workflow.py:12349-12355` | code-span 内 `{[}/]` 仍参与 depth 计数（elif 链无 in_code_span 守卫）——含不配对 `{`/`[` 的 code span 会把 depth 钉到行尾，折叠后续管道。Developer 已登记（边缘 2），无已知实数据误报 | L12349-12355 分支顺序：花括号分支先于管道分支执行，不检查 in_code_span；EVD-248 code span 内无花括号 | 观察项保留。若未来出现实证误报，修法 `elif ch in "{[" and not in_code_span`，且须先补"code-span 内花括号"形状保留钉防过度修复 |
 | F-3 | P3 | `verify_workflow.py:12346-12348, 12362` | 行外（code-span 外）未配对引号仍钉 in_string 至行尾折叠后续管道——既有 JSON 字符串语义，非本 diff 引入；Developer 已登记（边缘 3）且如实声明正例钉只覆盖配对形状 | L12346 开启后唯一闭合路径是 L12342-12343 的配对 `"`；测试 L12188-12198/L12200-12209 只钉配对形状 | 处置合理。可选：补一条 retention pin 显式冻结"未配对引号折叠"为既定语义，防未来被误判为回归 |
-| F-4 | P3 | `test_verify_workflow.py:12134` | 测试 fixture 与 EVD-248 原行非逐字节等价：pattern 管道 5 个（原行 7 个，省略 `审计驱动任务\|四层推进模型`），描述尾部精简。**形状等价**（双 code-span + 转义引号 + 多管道 + 10 格），不影响缺陷机理覆盖强度 | 对照 `.governance/evidence-log.md` L836 原行逐段比对 | 无需修改。不建议改为直接读 live 治理文件作 fixture——单测将依赖治理热数据，得不偿失 |
+| F-4 | P3 | `test_verify_workflow.py:12134` | 测试 fixture 与 EVD-248 原行非逐字节等价：pattern 管道 5 个（原行 7 个——省略了「审计驱动任务」与「四层推进模型」间由竖线分隔的子串），描述尾部精简。**形状等价**（双 code-span + 转义引号 + 多管道 + 10 格），不影响缺陷机理覆盖强度 | 对照 `.governance/evidence-log.md` L836 原行逐段比对 | 无需修改。不建议改为直接读 live 治理文件作 fixture——单测将依赖治理热数据，得不偿失 |
 | F-5 | P3 | `test_verify_workflow.py:12114-12221` | 互斥对的另一半（in_string 抑制反引号分支，L12331）无直接保留钉——现被 L12188-12209 两正例间接覆盖（字符串内管道折叠隐含反引号字面化），且该路径非本 diff 变更面 | L12331 分支 + 测试类用例清单 | 可选：补钉"字符串内反引号不开启 code-span"显式用例 |
 
 ## 5. AI 代码专项 5 项（验收标准 3）
@@ -111,7 +111,7 @@ if ch == '"' and not in_code_span:   # 修复前: if ch == '":'
 | # | 登记内容 | 事实核实 | 判定 |
 |---|---|---|---|
 | 1 | e2e 副本 L6854 同缺陷不顺带改 | **准确**（L6879 无守卫实证；.gitignore L31 ignored fixture） | **合理**——符合 D4 修改纯粹性与 Check 27 optional fixture 先例；但需后续任务承接（F-1 P2） |
-| 2 | code-span 内 `{[}/]` 仍计 depth、`\` 原样追加 | **准确**（L12349-12355 花括号无守卫；`\` 在 code-span 内走 else，escape 仅在 in_string 分支置位，无状态影响） | **合理**——观察项定级恰当，无已知实证（F-2 P3） |
+| 2 | code-span 内 `{[}/]` 仍计 depth、反斜杠字符原样追加 | **准确**（L12349-12355 花括号无守卫；反斜杠在 code-span 内走 else，escape 仅在 in_string 分支置位，无状态影响） | **合理**——观察项定级恰当，无已知实证（F-2 P3） |
 | 3 | 行外未配对引号钉 in_string 至行尾 | **准确**（L12346-12348 开启/L12342-12343 唯一闭合） | **合理**——既有语义如实披露，正例钉覆盖声明与实际相符（F-3 P3） |
 
 ## 10. 硬门槛裁决

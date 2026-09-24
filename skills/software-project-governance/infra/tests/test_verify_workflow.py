@@ -12050,6 +12050,23 @@ class AgentActivationColumnLayoutTests(unittest.TestCase):
             self.assertEqual(r["analyst_activated"], 0)
 
 
+def _format_issues(tmpdir, evidence_text):
+    """FIX-380 (REVIEW-FIX-374 F-4): single source for the evidence-format
+    fixture runner — previously duplicated verbatim as a method in three test
+    classes (EvidenceFormatColumnLayoutTests / Fix373SplitterCodeSpanQuoteTests /
+    Fix374NineCellDisambiguationTests); all call sites route here. Zero
+    behavior change: the body is byte-identical to the extracted originals."""
+    root = Path(tmpdir)
+    gov = root / ".governance"; gov.mkdir(parents=True, exist_ok=True)
+    sp = gov / "plan-tracker.md"
+    ep = gov / "evidence-log.md"
+    sp.write_text("# 计划跟踪\n## 项目配置\n", encoding="utf-8")
+    ep.write_text(evidence_text, encoding="utf-8")
+    with patch.object(vw, "SAMPLE_PATH", sp), \
+         patch.object(vw, "GOVERNANCE_DIR", gov):
+        return vw.check_protocol_compliance()["evidence_format"]
+
+
 class EvidenceFormatColumnLayoutTests(unittest.TestCase):
     """FIX-372 P2-1: check_protocol_compliance evidence-format validation must
     follow the LIVE evidence-log column layout (FIX-368).
@@ -12068,17 +12085,6 @@ class EvidenceFormatColumnLayoutTests(unittest.TestCase):
     historical rows were rejected as short rows ("only 9 fields").
     """
 
-    def _format_issues(self, tmpdir, evidence_text):
-        root = Path(tmpdir)
-        gov = root / ".governance"; gov.mkdir(parents=True, exist_ok=True)
-        sp = gov / "plan-tracker.md"
-        ep = gov / "evidence-log.md"
-        sp.write_text("# 计划跟踪\n## 项目配置\n", encoding="utf-8")
-        ep.write_text(evidence_text, encoding="utf-8")
-        with patch.object(vw, "SAMPLE_PATH", sp), \
-             patch.object(vw, "GOVERNANCE_DIR", gov):
-            return vw.check_protocol_compliance()["evidence_format"]
-
     def test_live_row_with_empty_fact_basis_passes(self):
         """LIVE 10-cell row with an empty fact-basis cell -> no format issue
         (pre-fix: the fact cell was read as Description -> false flag)."""
@@ -12086,7 +12092,7 @@ class EvidenceFormatColumnLayoutTests(unittest.TestCase):
             row = ("| EVD-900 | FIX-372 | 实现 | 目标对齐：格式检查回归数据，长度充足。 | "
                    "| skills/software-project-governance/infra/verify_workflow.py | "
                    "Coordinator 机写 | 2026-09-20 | G11 | ✅ 完成 |")
-            issues = self._format_issues(td, row)
+            issues = _format_issues(td, row)
             self.assertEqual(issues, [])
 
     def test_nine_cell_historical_row_not_flagged(self):
@@ -12096,7 +12102,7 @@ class EvidenceFormatColumnLayoutTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             row = ("| EVD-874 | FIX-090 | 治理记录 | 历史行描述文本，长度充足。 "
                    "| 事实依据：历史记录 | Coordinator | 2026-05-02 | G11 | ✅ 完成")
-            issues = self._format_issues(td, row)
+            issues = _format_issues(td, row)
             self.assertEqual(issues, [])
 
     def test_live_row_missing_location_still_flagged(self):
@@ -12106,7 +12112,7 @@ class EvidenceFormatColumnLayoutTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             row = ("| EVD-901 | FIX-372 | 实现 | 目标对齐：格式检查回归数据。 | "
                    "事实依据：fixture | | Coordinator 机写 | 2026-09-20 | G11 | ✅ 完成 |")
-            issues = self._format_issues(td, row)
+            issues = _format_issues(td, row)
             self.assertEqual(len(issues), 1)
             self.assertIn("Location", issues[0])
 
@@ -12142,17 +12148,6 @@ class Fix373SplitterCodeSpanQuoteTests(unittest.TestCase):
             ".governance/evidence-log.md | Coordinator 机写 | 2026-05-13 | G11 | ✅ 完成 |"
         )
 
-    def _format_issues(self, tmpdir, evidence_text):
-        root = Path(tmpdir)
-        gov = root / ".governance"; gov.mkdir(parents=True, exist_ok=True)
-        sp = gov / "plan-tracker.md"
-        ep = gov / "evidence-log.md"
-        sp.write_text("# 计划跟踪\n## 项目配置\n", encoding="utf-8")
-        ep.write_text(evidence_text, encoding="utf-8")
-        with patch.object(vw, "SAMPLE_PATH", sp), \
-             patch.object(vw, "GOVERNANCE_DIR", gov):
-            return vw.check_protocol_compliance()["evidence_format"]
-
     def test_evd248_shape_row_keeps_10_data_cells(self):
         """Negative pin: escaped quotes inside a code span must not fold the
         row — 10 data cells survive end-to-end (pre-fix: folded to 5)."""
@@ -12182,7 +12177,7 @@ class Fix373SplitterCodeSpanQuoteTests(unittest.TestCase):
         """Integration pin: the EVD-248-shaped row no longer false-flags
         "only 5 data fields (expected ≥9)" in the evidence format check."""
         with tempfile.TemporaryDirectory() as td:
-            issues = self._format_issues(td, self._evd248_shape_row("EVD-901"))
+            issues = _format_issues(td, self._evd248_shape_row("EVD-901"))
         self.assertEqual(issues, [])
 
     def test_plain_quoted_pipe_outside_code_span_still_preserved(self):
@@ -12240,17 +12235,6 @@ class Fix374NineCellDisambiguationTests(unittest.TestCase):
     missing.
     """
 
-    def _format_issues(self, tmpdir, evidence_text):
-        root = Path(tmpdir)
-        gov = root / ".governance"; gov.mkdir(parents=True, exist_ok=True)
-        sp = gov / "plan-tracker.md"
-        ep = gov / "evidence-log.md"
-        sp.write_text("# 计划跟踪\n## 项目配置\n", encoding="utf-8")
-        ep.write_text(evidence_text, encoding="utf-8")
-        with patch.object(vw, "SAMPLE_PATH", sp), \
-             patch.object(vw, "GOVERNANCE_DIR", gov):
-            return vw.check_protocol_compliance()["evidence_format"]
-
     def test_truncated_live_row_missing_date_flagged(self):
         """Truncated LIVE row (Date cell lost, exactly 9 cells, cells[6]
         carries EntryMethod text) is reported as missing Date (pre-fix:
@@ -12259,7 +12243,7 @@ class Fix374NineCellDisambiguationTests(unittest.TestCase):
             row = ("| EVD-906 | FIX-374 | 修复 | 目标对齐：9-cell 消歧回归数据。 | "
                    "事实依据：fixture | .governance/evidence-log.md | "
                    "Coordinator 机写 | G11 | ✅ 完成 |")
-            issues = self._format_issues(td, row)
+            issues = _format_issues(td, row)
             self.assertEqual(len(issues), 1)
             self.assertIn("Date", issues[0])
             self.assertNotIn("Author", issues[0])
@@ -12271,7 +12255,7 @@ class Fix374NineCellDisambiguationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             row = ("| EVD-907 | FIX-374 | 治理记录 | 历史行描述文本，长度充足。 | "
                    "事实依据：历史记录 | Coordinator | 2026-09-21 | G11 | ✅ 完成 |")
-            issues = self._format_issues(td, row)
+            issues = _format_issues(td, row)
             self.assertEqual(issues, [])
 
     def test_truncated_live_row_missing_location_and_date_both_flagged(self):
@@ -12280,7 +12264,7 @@ class Fix374NineCellDisambiguationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             row = ("| EVD-908 | FIX-374 | 修复 | 目标对齐：双缺消歧回归数据。 | "
                    "事实依据：fixture | | Coordinator 机写 | G11 | ✅ 完成 |")
-            issues = self._format_issues(td, row)
+            issues = _format_issues(td, row)
             self.assertEqual(len(issues), 1)
             self.assertIn("Location", issues[0])
             self.assertIn("Date", issues[0])

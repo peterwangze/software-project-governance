@@ -287,8 +287,12 @@ STATIC_PIN_EXEMPTIONS = {
         # (token-content anchors read as the blanket-allow shape this ledger
         # exists to prevent); both rows self-dormant at the 0.88.0 bump
         # (M-1 static-pin 消解清单, version-plan L75) — re-audit there.
-        (12550, "0.87.0", _REASON_FIXTURE_ROW_TEXT),
-        (12674, "0.87.0",
+        # FIX-380 re-anchor 12550->12534 / 12674->12658: the _format_issues
+        # helper dedup (REVIEW-FIX-374 F-4) removed the 3 duplicated methods
+        # and shifted the file -16 lines; caught by RealTreeContractTests
+        # (the designed rot-guard working, same as the FIX-388 re-audit).
+        (12534, "0.87.0", _REASON_FIXTURE_ROW_TEXT),
+        (12658, "0.87.0",
          "synthetic legacy REQ fixture row (FIX-376 F-6①) — the 0.87.0 token "
          "is payload inside the closed-loop path cell \"EVD-997 / 0.87.0\" "
          "and is never compared to the active version"),

@@ -40,6 +40,7 @@ Run:
     python -m pytest skills/software-project-governance/infra/tests/test_closure_chain.py -v
 """
 
+import hashlib
 import io
 import json
 import os
@@ -59,10 +60,12 @@ if str(_INFRA_DIR) not in sys.path:
 import closure_chain as cc  # noqa: E402
 import loop_event_log  # noqa: E402
 import task_row_update as tru  # noqa: E402
+import write_guard_state as wgs  # noqa: E402  (FIX-383 ledger constants)
 
 CC_PATH = Path(cc.__file__).resolve()
 GS_PATH = _INFRA_DIR / "governance_store.py"
 TRU_PATH = _INFRA_DIR / "task_row_update.py"
+VW_PATH = _INFRA_DIR / "verify_workflow.py"
 
 TASK = "FEAT-901"
 DESCRIPTION = ("FEAT-901 标准链收口纵切验证。目标对齐：票收口链把确定性收尾"
@@ -1483,6 +1486,396 @@ class CliStepTimeoutTaxonomyTests(_WorkspaceFixture):
         self.assertNotEqual(payload.get("code"), "schema_violation", payload)
         self.assertEqual(payload["status"], "ready", payload)
         self.assertEqual(payload["steps"][0]["status"], "completed")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Release-window bootstrap (FIX-383 — 0.88.0 阶段 B2, rollback §8 #7
+# ⑩拆票之一): the release chain's checker/writer intermediate states during
+# a version switch — guard baseline not re-generated (基线未 regen),
+# violation-ledger line-index drift (账本行号漂移), a foreign guard state
+# schema (状态文件版本变化), a pending FEAT-060 consumption transaction —
+# converge on re-entry with ZERO manual repair (自举). Fault injection
+# reuses the round-3 BT-9 machinery: named protocol-boundary fault points,
+# parent-controller hard kill, resume judged by the world (查世界不信日志).
+# ═══════════════════════════════════════════════════════════════════════════
+
+_BOOT_VIOLATION_ID = "WV-" + "a" * 32
+_BOOT_GRANT_ID = "grant-" + "b" * 32
+_BOOT_TXN_ID = "txn-" + "c" * 32
+_BOOT_STATE_FILE = ".write-guard-state.json"
+_BOOT_LEDGER_FILE = ".write-guard-violations.json"
+
+
+def _bootstrap_cli(root, *args):
+    """Run verify_workflow write-guard-bootstrap → (exit_code, payload)."""
+    proc = subprocess.run(
+        [sys.executable, str(VW_PATH), "--project-root", str(root),
+         "write-guard-bootstrap"] + list(args),
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        env=_clean_env(), cwd=str(root), check=False, timeout=300)
+    raw = proc.stdout.strip()
+    if not raw:
+        return proc.returncode, {"_empty": True, "_code": proc.returncode,
+                                 "_stderr": proc.stderr[-1200:]}
+    try:
+        return proc.returncode, json.loads(raw)
+    except ValueError:
+        return proc.returncode, {"_raw": raw[-400:],
+                                 "_stderr": proc.stderr[-400:]}
+
+
+def _row_digest32(text):
+    """The guard's row digest (verify_workflow._write_guard_row_digest
+    semantics — 128-bit truncation of the stripped row's sha256)."""
+    return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()[:32]
+
+
+def _bootstrap_run(root, closure_id, **kwargs):
+    """One release-window-bootstrap chain run via the CLI."""
+    return _run_cli(root, "run", "--chain", "release-window-bootstrap",
+                    "--task", TASK, "--closure-id", closure_id, **kwargs)
+
+
+class ReleaseBootstrapTests(_WorkspaceFixture):
+    """FIX-383 acceptance: 自举路径实现 + 故障注入恢复测试（中断后重入
+    零人工修复到达终态）."""
+
+    def test_builtin_bootstrap_spec_parses(self):
+        spec = cc.parse_chain_spec(json.loads(
+            json.dumps(cc.RELEASE_WINDOW_BOOTSTRAP)))
+        self.assertEqual(spec.chain_id, "release-window-bootstrap")
+        self.assertEqual([s.step_id for s in spec.steps],
+                         ["write-guard-converge", "bootstrap-ready"])
+        step = spec.steps[0]
+        self.assertEqual(step.kind, "cli")
+        self.assertIsNone(step.dry_run_flag)  # parse-level resolution only
+        self.assertEqual(step.probe["kind"], "command_exit")
+        self.assertIn("--check-only", step.probe["argv"])
+        self.assertNotIn("--check-only", step.argv)
+
+    def test_standard_chain_summary_bytes_unchanged_by_chain_awareness(self):
+        """FIX-383 generalized the summary payload per chain — the standard
+        chain's endpoint bytes stay the pre-FIX-383 literal (backward
+        compat is guarded, not assumed; unknown chain ids keep the same
+        fallback), and only the bootstrap chain's message names what
+        actually converged."""
+        spec = cc.parse_chain_spec(json.loads(
+            json.dumps(cc.STANDARD_TICKET_CLOSURE)))
+        summary = cc._summary_payload(spec, self.closure_id, TASK, {})
+        self.assertEqual(
+            summary["commit_message_suggestion"],
+            "{0}: review 通过收口（closure-chain 标准链）\n\n"
+            "Closure: {1}\n"
+            "Chain: standard-ticket-closure (FEAT-056 standard ticket "
+            "closure)\n"
+            "Task row flipped via task-row-update; evidence appended via\n"
+            "evidence-append; dispatch-lock TTLs shrunk via locks-amend\n"
+            "(locks-release remains a registered gap — TTL shrink is the\n"
+            "governed stand-in, disclosed not silent).\n"
+            "Completion gate: closure-chain --finalize --closure-id {1}\n"
+            "--commit-sha <sha-of-this-commit>".format(
+                TASK, self.closure_id))
+        self.assertNotIn(".governance/" + _BOOT_STATE_FILE,
+                         summary["do_not_stage"])
+        boot_summary = cc._summary_payload(
+            cc.parse_chain_spec(json.loads(
+                json.dumps(cc.RELEASE_WINDOW_BOOTSTRAP))),
+            self.closure_id, TASK, {})
+        self.assertNotEqual(boot_summary["commit_message_suggestion"],
+                            summary["commit_message_suggestion"])
+        self.assertIn("FIX-383 release-window bootstrap",
+                      boot_summary["commit_message_suggestion"])
+        # the guard's own state artifacts join the do-not-stage class only
+        # on the bootstrap chain (post-commit bookkeeping, FEAT-056 R0 P3-1)
+        self.assertIn(".governance/" + _BOOT_STATE_FILE,
+                      boot_summary["do_not_stage"])
+
+    def test_check_only_is_zero_write_and_reports_unbaselined_window(self):
+        before = _snapshot_tree(self.gov)
+        code, report = _bootstrap_cli(self.root, "--check-only")
+        self.assertEqual(code, 1, report)
+        self.assertFalse(report["converged"])
+        self.assertIn("guard_state_current", report["not_converged"])
+        self.assertEqual(report["tool"],
+                         "governance-write-guard/release-bootstrap-check")
+        # zero writes, zero window consumption (the probe-face contract)
+        self.assertEqual(_snapshot_tree(self.gov), before)
+
+    def test_converge_reaches_ready_and_reentry_reconciles_without_rerun(self):
+        code, payload = _bootstrap_run(self.root, self.closure_id)
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(payload["status"], "ready", payload)
+        by_id = {s["step_id"]: s for s in payload["steps"]}
+        self.assertEqual(by_id["write-guard-converge"]["status"],
+                         "completed")
+        # the chain-aware summary + the guard-owned do_not_stage extension
+        summary = payload["steps"][-1]["summary"]
+        self.assertIn("FIX-383 release-window bootstrap",
+                      summary["commit_message_suggestion"])
+        self.assertIn(".governance/" + _BOOT_STATE_FILE,
+                      summary["do_not_stage"])
+        self.assertIn(".governance/" + _BOOT_LEDGER_FILE,
+                      summary["do_not_stage"])
+        state_path = self.gov / _BOOT_STATE_FILE
+        self.assertTrue(state_path.is_file())
+        code, report = _bootstrap_cli(self.root, "--check-only")
+        self.assertEqual(code, 0, report)
+        self.assertTrue(report["converged"], report)
+        # idempotent re-entry: bookkeeping present + probe confirms the
+        # effect — the guard is NOT re-run (its state artifact is
+        # byte-identical afterwards). ("reconciled" is the crash-window
+        # label — journal not yet completed but world already converged —
+        # covered by the kill-after-effect test below.)
+        state_bytes = state_path.read_bytes()
+        code, payload = _bootstrap_run(self.root, self.closure_id)
+        self.assertEqual(code, 0, payload)
+        by_id = {s["step_id"]: s for s in payload["steps"]}
+        self.assertEqual(by_id["write-guard-converge"]["status"],
+                         "completed")
+        self.assertEqual(by_id["write-guard-converge"].get("note"),
+                         "bookkeeping present; probe confirms effect")
+        self.assertEqual(state_path.read_bytes(), state_bytes)
+        events = _chain_events(self.root, self.closure_id)
+        self.assertEqual([],
+                         loop_event_log.check_cas_monotonicity(events))
+
+    # ── fault injection: kill AFTER the guard's effect landed ───────────
+
+    def test_kill_after_effect_resumes_reconciled_zero_manual_repair(self):
+        handshake = self.tmpdir / "hs-boot-post"
+        proc = _spawn_run(self.root, self.closure_id,
+                          fault_points=[
+                              "post-step-effect:write-guard-converge"],
+                          handshake_dir=handshake,
+                          extra=["--chain", "release-window-bootstrap"])
+        self.assertTrue(
+            _wait_marker(handshake, "post-step-effect:write-guard-converge"),
+            "child never reached the named fault point")
+        proc.kill()
+        proc.wait(timeout=60)
+        self.assertNotEqual(proc.returncode, 0)
+        # the guard's effect landed (baseline established); the chain's
+        # bookkeeping did not (the crash window)
+        state_path = self.gov / _BOOT_STATE_FILE
+        self.assertTrue(state_path.is_file())
+        events = _chain_events(self.root, self.closure_id)
+        self.assertNotIn("step_completed", [e["event_type"] for e in events])
+        state_bytes = state_path.read_bytes()
+        # resume: zero manual repair — the world probe reconciles, the
+        # guard is NOT re-run
+        code, payload = _bootstrap_run(self.root, self.closure_id)
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(payload["status"], "ready", payload)
+        by_id = {s["step_id"]: s for s in payload["steps"]}
+        self.assertEqual(by_id["write-guard-converge"]["status"],
+                         "reconciled")
+        self.assertEqual(state_path.read_bytes(), state_bytes)
+        events = _chain_events(self.root, self.closure_id)
+        self.assertEqual([],
+                         loop_event_log.check_cas_monotonicity(events))
+
+    # ── fault injection: kill BEFORE the guard ran ──────────────────────
+
+    def test_kill_before_effect_resumes_reexecuting_once(self):
+        handshake = self.tmpdir / "hs-boot-pre"
+        proc = _spawn_run(self.root, self.closure_id,
+                          fault_points=["pre-step:write-guard-converge"],
+                          handshake_dir=handshake,
+                          extra=["--chain", "release-window-bootstrap"])
+        self.assertTrue(
+            _wait_marker(handshake, "pre-step:write-guard-converge"),
+            "child never reached the named fault point")
+        proc.kill()
+        proc.wait(timeout=60)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertFalse((self.gov / _BOOT_STATE_FILE).is_file())
+        # resume: the probe misses (world not converged) → the governed
+        # recovery action executes exactly once → terminal state
+        code, payload = _bootstrap_run(self.root, self.closure_id)
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(payload["status"], "ready", payload)
+        by_id = {s["step_id"]: s for s in payload["steps"]}
+        self.assertEqual(by_id["write-guard-converge"]["status"],
+                         "completed")
+        code, report = _bootstrap_cli(self.root, "--check-only")
+        self.assertEqual(code, 0, report)
+        self.assertTrue(report["converged"], report)
+
+    # ── intermediate state: foreign guard-state schema (版本变化) ────────
+
+    def test_foreign_state_schema_converges_with_disclosed_rebaseline(self):
+        (self.gov / _BOOT_STATE_FILE).write_text(
+            json.dumps({"schema_version": 99, "tool": "foreign",
+                        "files": {}}),
+            encoding="utf-8")
+        code, report = _bootstrap_cli(self.root, "--check-only")
+        self.assertEqual(code, 1, report)
+        self.assertIn("guard_state_current", report["not_converged"])
+        # the chain converges: the guard re-baselines loudly (never a
+        # silent amnesty) and the world judgment turns green
+        code, payload = _bootstrap_run(self.root, self.closure_id)
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(payload["status"], "ready", payload)
+        state = json.loads((self.gov / _BOOT_STATE_FILE)
+                           .read_text(encoding="utf-8"))
+        self.assertEqual(state["schema_version"], 1)
+        code, report = _bootstrap_cli(self.root, "--check-only")
+        self.assertEqual(code, 0, report)
+        self.assertTrue(report["converged"], report)
+
+    # ── intermediate state: pending FEAT-060 consumption transaction ────
+
+    def test_pending_txn_resumed_by_chain_three_branch_world_judgment(self):
+        # world==target leg: the ledger journal + the current baseline agree
+        code, payload = _bootstrap_run(self.root, self.closure_id)
+        self.assertEqual(code, 0, payload)
+        state_path = self.gov / _BOOT_STATE_FILE
+        state_bytes = state_path.read_bytes()
+        row = [ln for ln in self.tracker_text().splitlines()
+               if TASK in ln][0]
+        ledger = {
+            "schema_version": wgs.SCHEMA_VERSION, "tool": wgs.TOOL_ID,
+            "updated_at": None,
+            "violations": {
+                _BOOT_VIOLATION_ID: {
+                    "violation_id": _BOOT_VIOLATION_ID,
+                    "family": "plan-tracker.md",
+                    "object_id": TASK,
+                    "before_hash": None,
+                    "after_hash": _row_digest32(row),
+                    "workflow_run_id": "run-fixture",
+                    "hook_identity": wgs.GUARD_CLI_IDENTITY,
+                    "first_seen": "2026-09-24T10:00:00",
+                    "occurrence": 1,
+                    "status": "open",
+                    "grant_id": None,
+                    "consumption_event": None,
+                },
+            },
+            "grants": {
+                _BOOT_GRANT_ID: {
+                    "consumer": wgs.CLI_CONSUMER,
+                    "issued_at": "2026-09-24T10:00:00",
+                    "issued_by_run": "run-fixture",
+                    "status": "active",
+                },
+            },
+            "pending_txn": {
+                "txn_id": _BOOT_TXN_ID, "operation": "consume",
+                "consumer": wgs.CLI_CONSUMER, "grant_id": _BOOT_GRANT_ID,
+                "violation_ids": [_BOOT_VIOLATION_ID],
+                "baseline_target": json.loads(
+                    state_bytes.decode("utf-8")),
+                "baseline_target_sha256": hashlib.sha256(
+                    state_bytes).hexdigest(),
+                "baseline_prev_sha256": "0" * 64,
+                "recorded_at": "2026-09-24T10:00:00",
+            },
+        }
+        (self.gov / _BOOT_LEDGER_FILE).write_text(
+            json.dumps(ledger, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8")
+        code, report = _bootstrap_cli(self.root, "--check-only")
+        self.assertEqual(code, 1, report)
+        self.assertIn("no_pending_txn", report["not_converged"])
+        # the chain converge resumes the transaction (world==target →
+        # finalize only): violation consumed + grant burned + journal cleared
+        recovery_id = cc.new_closure_id()
+        code, payload = _bootstrap_run(self.root, recovery_id)
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(payload["status"], "ready", payload)
+        ledger_after = json.loads((self.gov / _BOOT_LEDGER_FILE)
+                                  .read_text(encoding="utf-8"))
+        self.assertIsNone(ledger_after["pending_txn"])
+        self.assertEqual(
+            ledger_after["violations"][_BOOT_VIOLATION_ID]["status"],
+            "consumed")
+        self.assertEqual(ledger_after["grants"][_BOOT_GRANT_ID]["status"],
+                         "used")
+        code, report = _bootstrap_cli(self.root, "--check-only")
+        self.assertEqual(code, 0, report)
+        self.assertTrue(report["converged"], report)
+
+    # ── intermediate state: violation-ledger line-index drift ───────────
+
+    def test_ledger_drift_detected_then_consumed_by_converge(self):
+        ops_name = "fixture.ops.jsonl"
+        ops_lines = ['{"operation_id": "op-1"}', '{"operation_id": "op-2"}',
+                     '{"operation_id": "op-3"}']
+        (self.gov / ops_name).write_text("\n".join(ops_lines) + "\n",
+                                         encoding="utf-8")
+        code, payload = _bootstrap_cli(self.root)  # converge: baseline ops
+        self.assertEqual(code, 0, payload)
+        # a mid-window shift moved the recorded identity away: the open
+        # violation's object_id points past EOF, its content is gone
+        ledger = {
+            "schema_version": wgs.SCHEMA_VERSION, "tool": wgs.TOOL_ID,
+            "updated_at": None,
+            "violations": {
+                _BOOT_VIOLATION_ID: {
+                    "violation_id": _BOOT_VIOLATION_ID,
+                    "family": ops_name,
+                    "object_id": "5",
+                    "before_hash": None,
+                    "after_hash": _row_digest32(
+                        '{"operation_id": "op-gone"}'),
+                    "workflow_run_id": "run-fixture",
+                    "hook_identity": wgs.GUARD_CLI_IDENTITY,
+                    "first_seen": "2026-09-24T10:00:00",
+                    "occurrence": 1,
+                    "status": "open",
+                    "grant_id": None,
+                    "consumption_event": None,
+                },
+            },
+            "grants": {},
+            "pending_txn": None,
+        }
+        (self.gov / _BOOT_LEDGER_FILE).write_text(
+            json.dumps(ledger, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8")
+        code, report = _bootstrap_cli(self.root, "--check-only")
+        self.assertEqual(code, 1, report)
+        self.assertIn("ledger_no_drift", report["not_converged"])
+        self.assertEqual(len(report["ledger_drift"]), 1, report)
+        self.assertEqual(report["ledger_drift"][0]["violation_id"],
+                         _BOOT_VIOLATION_ID)
+        # the chain converge consumes the drifted record (its identity no
+        # longer reproduces — the eligibility rule judges it consumable)
+        code, payload = _bootstrap_run(self.root, cc.new_closure_id())
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(payload["status"], "ready", payload)
+        ledger_after = json.loads((self.gov / _BOOT_LEDGER_FILE)
+                                  .read_text(encoding="utf-8"))
+        self.assertEqual(
+            ledger_after["violations"][_BOOT_VIOLATION_ID]["status"],
+            "consumed")
+        code, report = _bootstrap_cli(self.root, "--check-only")
+        self.assertEqual(code, 0, report)
+        self.assertTrue(report["converged"], report)
+        self.assertEqual(report["ledger_drift"], [])
+
+    # ── fail-closed: R6 corrupt ledger halts loudly, zero absorption ────
+
+    def test_corrupt_ledger_blocks_loudly_with_zero_ledger_writes(self):
+        (self.gov / _BOOT_LEDGER_FILE).write_text("{not json",
+                                                  encoding="utf-8")
+        ledger_before = (self.gov / _BOOT_LEDGER_FILE).read_bytes()
+        code, payload = _bootstrap_run(self.root, self.closure_id)
+        self.assertEqual(code, 2, payload)
+        self.assertEqual(payload["status"], "blocked", payload)
+        by_id = {s["step_id"]: s for s in payload["steps"]}
+        self.assertEqual(by_id["write-guard-converge"]["status"], "failed")
+        self.assertEqual(by_id["write-guard-converge"].get("code"),
+                         "manual_intervention")
+        # R6: the corrupt ledger is never absorbed or rewritten here —
+        # recovery is manual per rule, disclosed not silent
+        self.assertEqual((self.gov / _BOOT_LEDGER_FILE).read_bytes(),
+                         ledger_before)
+        # the world check says the same thing on its own face
+        code, report = _bootstrap_cli(self.root, "--check-only")
+        self.assertEqual(code, 1, report)
+        self.assertIn("violation_ledger_healthy", report["not_converged"])
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -104,6 +104,22 @@ both would legitimately flip the same task row / append their own evidence
 rows (evolution §6② registered 0.87 open question).  Until that护栏
 exists, operators MUST run one closure per task at a time (单 closure
 单飞); the chain neither detects nor prevents the parallel-siblings shape.
+
+Release-window bootstrap (FIX-383, version-plan-0.88.0 §2 B2 — rollback
+§8 #7 ⑩拆票之一): the release chain (M-1~M-8) depends on checkers/writers
+whose OWN state can sit in an intermediate condition across a version
+switch — the guard reconciliation baseline not re-generated, a
+violation-ledger line-index drift (账本行号漂移), a guard state file whose
+schema the current code no longer reads, or a pending FEAT-060 consumption
+transaction.  The ``release-window-bootstrap`` built-in chain converges
+exactly that world through ONE governed recovery action (verify_workflow
+``write-guard-bootstrap`` — guard-owned artifacts only, zero
+governance-record writes), reusing the FEAT-060 three-branch world-judged
+transaction resume and the effect-based resume machinery above: the
+step's read-only ``--check-only`` probe decides reconcile-vs-execute at
+every run/resume boundary (查世界不信日志), so a mid-switch interruption
+re-enters with zero manual repair; unjudgeable states halt loudly and are
+never silently absorbed.
 """
 
 from __future__ import annotations
@@ -137,6 +153,7 @@ __all__ = [
     "CLOSURE_SCHEMA_VERSION",
     "CLOSURE_TEST_FAULT_ENV",
     "PROBE_KINDS",
+    "RELEASE_WINDOW_BOOTSTRAP",
     "STEP_KINDS",
     "STANDARD_TICKET_CLOSURE",
     "WRITER_ID",
@@ -596,6 +613,56 @@ _PATH_LIKE_INPUTS: Tuple[str, ...] = ("tracker_file",)
 step subprocesses)."""
 
 
+# ── the release-window bootstrap chain (FIX-383, 0.88.0 阶段 B2) ────────────
+
+RELEASE_WINDOW_BOOTSTRAP: Dict[str, Any] = {
+    "chain_id": "release-window-bootstrap",
+    "required_inputs": [],
+    "steps": [
+        {
+            "step_id": "write-guard-converge",
+            "kind": "cli",
+            "description": "verify_workflow write-guard-bootstrap（FIX-383）:"
+                           "守卫自身状态工件收敛——对账基线 regen/推进 + "
+                           "FEAT-060 消费事务三分支查世界 resume + 违规重检测/"
+                           "资格消费（守卫只写自身工件，治理记录零写入）",
+            "argv": [
+                "{python}", "{vw_cli}",
+                "--project-root", "{root}",
+                "write-guard-bootstrap",
+            ],
+            "probe": {
+                "kind": "command_exit",
+                "argv": [
+                    "{python}", "{vw_cli}",
+                    "--project-root", "{root}",
+                    "write-guard-bootstrap", "--check-only",
+                ],
+            },
+            "dry_run_flag": None,  # verify_workflow has no --dry-run face;
+            # resolution is parse-level (--help), disclosed — locks-amend
+            # precedent.
+        },
+        {
+            "step_id": "bootstrap-ready",
+            "kind": "summary",
+            "description": "链终点: 发版窗口守卫状态收敛 ready-to-commit 摘要"
+                           "（M-1~M-8 检查/写入器中间态已收敛，可安全续推）",
+        },
+    ],
+}
+"""The release-window bootstrap chain (FIX-383 — 发版管线自举): the
+version-switch intermediate states of the release chain's DEPENDENT
+checkers/writers (guard baseline not re-generated / violation-ledger
+line-index drift / unreadable guard state schema / pending FEAT-060
+consumption transaction) converge on re-entry with zero manual repair.
+Effect-based at every boundary: the ``--check-only`` read-only probe (exit
+0 = converged) reconciles an already-converged world without re-running
+the writer; a not-converged world executes the ONE governed recovery
+action (``write-guard-bootstrap`` converge mode — guard-owned artifacts
+only)."""
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Template resolution (untrusted input → argv list, never a shell line)
 # ═══════════════════════════════════════════════════════════════════════════
@@ -608,6 +675,7 @@ def _template_mapping(closure_id: str, task: str, inputs: Dict[str, str],
         "python": sys.executable,
         "tru_cli": str(INFRA_DIR / "task_row_update.py"),
         "gs_cli": str(INFRA_DIR / "governance_store.py"),
+        "vw_cli": str(INFRA_DIR / "verify_workflow.py"),
         "root": str(root),
         "gov": str(gov),
         "task": task,
@@ -1140,23 +1208,69 @@ def _execute_external_step(step: StepSpec, argv: Tuple[str, ...], seq: int,
             })}
 
 
-def _summary_payload(spec: ChainSpec, closure_id: str, task: str,
-                     inputs: Dict[str, str]) -> Dict[str, Any]:
-    """The ready-to-commit endpoint payload (round-2 §2: 链终点输出
-    ready-to-commit 摘要 + message 建议; git 操作不在链内)."""
-    subject = inputs.get("commit_subject") or (
-        "{0}: review 通过收口（closure-chain 标准链）".format(task))
-    message = (
-        "{0}\n\n"
-        "Closure: {1}\n"
-        "Chain: {2} (FEAT-056 standard ticket closure)\n"
+_CHAIN_SUMMARY_SUBJECTS: Dict[str, str] = {
+    "standard-ticket-closure":
+        "{0}: review 通过收口（closure-chain 标准链）",
+    "release-window-bootstrap":
+        "{0}: 发版窗口守卫状态自举收敛（closure-chain 自举链, FIX-383）",
+}
+"""Per-chain default commit subject (``commit_subject`` input overrides)."""
+
+_CHAIN_SUMMARY_BODIES: Dict[str, str] = {
+    "standard-ticket-closure":
+        "(FEAT-056 standard ticket closure)\n"
         "Task row flipped via task-row-update; evidence appended via\n"
         "evidence-append; dispatch-lock TTLs shrunk via locks-amend\n"
         "(locks-release remains a registered gap — TTL shrink is the\n"
-        "governed stand-in, disclosed not silent).\n"
+        "governed stand-in, disclosed not silent).",
+    "release-window-bootstrap":
+        "(FIX-383 release-window bootstrap)\n"
+        "Write-guard own-state artifacts converged via verify_workflow\n"
+        "write-guard-bootstrap: baseline re-gen/advance + FEAT-060\n"
+        "pending-transaction three-branch world-judged resume + violation\n"
+        "re-detection/eligible consumption. Guard-owned artifacts only —\n"
+        "zero governance-record writes; unjudgeable states stay loud.",
+}
+"""Per-chain commit-message body. Unknown chain ids fall back to the
+standard text (custom --spec chains keep their pre-FIX-383 output)."""
+
+_CHAIN_OWN_STATE_ARTIFACTS: Dict[str, Tuple[str, ...]] = {
+    "release-window-bootstrap": (
+        ".governance/.write-guard-state.json",
+        ".governance/.write-guard-violations.json",
+        ".governance/.governance-store-locks/",
+    ),
+}
+"""Per-chain ``do_not_stage`` extensions (FEAT-056 R0 P3-1 class): the
+write-guard's own state artifacts are post-commit bookkeeping of the
+release window, exactly like the closure journal — they must NOT be
+staged into the commit the summary describes."""
+
+
+def _summary_payload(spec: ChainSpec, closure_id: str, task: str,
+                     inputs: Dict[str, str]) -> Dict[str, Any]:
+    """The ready-to-commit endpoint payload (round-2 §2: 链终点输出
+    ready-to-commit 摘要 + message 建议; git 操作不在链内).
+
+    FIX-383: the message body is chain-aware (a per-chain table keyed by
+    ``chain_id``) — the standard chain's bytes are unchanged (its table
+    entry IS the previous literal), unknown chain ids keep the standard
+    text as the fallback (custom --spec chains see the same output as
+    before), and the bootstrap chain describes what actually converged.
+    """
+    subject = inputs.get("commit_subject") or (
+        _CHAIN_SUMMARY_SUBJECTS.get(spec.chain_id)
+        or _CHAIN_SUMMARY_SUBJECTS["standard-ticket-closure"]
+    ).format(task)
+    body = (_CHAIN_SUMMARY_BODIES.get(spec.chain_id)
+            or _CHAIN_SUMMARY_BODIES["standard-ticket-closure"])
+    message = (
+        "{0}\n\n"
+        "Closure: {1}\n"
+        "Chain: {2} {3}\n"
         "Completion gate: closure-chain --finalize --closure-id {1}\n"
         "--commit-sha <sha-of-this-commit>".format(
-            subject, closure_id, spec.chain_id))
+            subject, closure_id, spec.chain_id, body))
     return {
         "ready": True,
         "commit_message_suggestion": message,
@@ -1170,7 +1284,7 @@ def _summary_payload(spec: ChainSpec, closure_id: str, task: str,
             ".governance/closure-events.jsonl",
             ".governance/closure-events.jsonl.lock",
             ".governance/closure-locks/",
-        ],
+        ] + list(_CHAIN_OWN_STATE_ARTIFACTS.get(spec.chain_id, ())),
         "finalize_command": None,  # filled after the operator commits
     }
 
@@ -1764,13 +1878,20 @@ def _parse_inputs(pairs: List[str]) -> Dict[str, str]:
     return inputs
 
 
+_BUILTIN_CHAINS: Dict[str, Dict[str, Any]] = {
+    "standard-ticket-closure": STANDARD_TICKET_CLOSURE,
+    "release-window-bootstrap": RELEASE_WINDOW_BOOTSTRAP,
+}
+"""Closed built-in chain registry (``--chain``); a --spec file overrides."""
+
+
 def _builtin_spec(chain_id: str) -> Dict[str, Any]:
-    data = json.loads(json.dumps(STANDARD_TICKET_CLOSURE))  # deep copy
-    if data.get("chain_id") != chain_id:
+    template = _BUILTIN_CHAINS.get(chain_id)
+    if template is None:
         raise ValueError(
             "unknown built-in chain {0!r} (available: {1!r})".format(
-                chain_id, data.get("chain_id")))
-    return data
+                chain_id, sorted(_BUILTIN_CHAINS)))
+    return json.loads(json.dumps(template))  # deep copy
 
 
 def cmd_run(args: argparse.Namespace) -> int:

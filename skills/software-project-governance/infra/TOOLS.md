@@ -618,7 +618,8 @@
 - **WARN→BLOCK 升级**：留 0.87（version-plan §2 批 1 行声明；0.88 重新排布为 FEAT-064——分族 BLOCK 激活，违规状态机/消费权台账为其前置基座）；输出注释与 docstring 均声明升级边界
 - **锁外披露先例**：本守卫不要求 file_lock/agent-locks 在场即可运行（锁缺席不 SKIP 不 FAIL）——对账面以状态基线差分为准，不依赖锁状态；hook ✅ 行后 WARN-gated 计数披露行（`write-guard: N WARN(s) —— run governance-write-guard for details`，N>0 才现——详情需复跑 guard 查看）
 - **安全边界**：守卫只检不改——治理记录零写入零改写（faces 1-4 原契约不变）；唯一落盘工件是状态基线文件与违规台账（均为守卫自身工件，非修复），且仅在 CLI 路径（probe 调用——contract-matrix representative 提取/聚合读/测试——零写入、不消费对账窗口、不建台账）；SKIPPED 面 = 产物缺席非缺陷；faces 1-4 非 UTF-8 fail-closed（FIX-333），面 5 不可读面 WARN 披露后跳过
-- **被以下子工作流使用**：全部阶段（Coordinator 直写后复跑）；CI/CD（post-commit hook 自动面板）
+- **发版管线自举面（FIX-383，0.88.0 B2——rollback §8 #7 ⑩拆票之一）**：`write-guard-bootstrap` 子命令——版本切换期发布链（M-1~M-8）依赖的检查器自身状态工件的自举恢复。**converge 模式**（默认）= 一次 guard persist 路径运行（基线 regen/推进 + FEAT-060 三分支查世界事务 resume + 违规重检测/资格消费）+ 收敛后世界判定——只写守卫自身工件，治理记录零写入；未收敛 → 结构化 `manual_intervention` 拒绝 + exit 1（响亮阻断，不静默吸收）。**`--check-only` 模式** = 只读世界判定（五检查：`guard_state_current` 基线在场且 schema 当前 / `row_families_clean` probe 面零问题〔零写入零消费〕/ `violation_ledger_healthy` 台账健康〔R6 损坏不吸收〕/ `no_pending_txn` 待完成消费事务为空 / `ledger_no_drift` 无行号漂移 open 记录——账本行号漂移 = open 违规登记内容摘要不再命中其登记身份；不可判定面缺席记录按资格规则消费，其余 R1/R4 保持 open 响亮）——发布窗口 preflight/审计面 + closure-chain 自举链 `release-window-bootstrap` 的效果探针（FIX-383：查世界不信日志，中断后重入零人工修复）。退出码：0 收敛 / 1 未收敛
+- **被以下子工作流使用**：全部阶段（Coordinator 直写后复跑）；CI/CD（post-commit hook 自动面板）；发布（M-1~M-8 版本切换期自举——closure-chain `release-window-bootstrap` 链承载）
 
 ### TOOL-050：Loop Runtime Claim Gate
 

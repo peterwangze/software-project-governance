@@ -257,7 +257,9 @@ STATIC_PIN_EXEMPTIONS = {
     "skills/software-project-governance/infra/tests/test_closure_chain.py": [
         # 0.86.0 bump-time row: FEAT-056 fixture tracker row (marked
         # 非真实计划面 in the row itself); version column is scenario payload.
-        (83, "0.86.0", _REASON_FIXTURE_ROW_TEXT),
+        # FIX-383 re-audit: the hashlib/wgs import additions (3 lines incl.
+        # the VW_PATH constant) shifted the row 83->86 (token unchanged).
+        (86, "0.86.0", _REASON_FIXTURE_ROW_TEXT),
     ],
     "skills/software-project-governance/infra/tests/test_triage_write_guard.py": [
         # 0.86.0 bump-time rows: FEAT-057 fixture tracker row (scenario

@@ -573,6 +573,92 @@ class IdempotentResumeTests(_WorkspaceFixture):
         self.assertEqual(self.evidence_text().count(op_evd), 1)
 
 
+class RefusalDetailPassthroughTests(_WorkspaceFixture):
+    """FIX-379 item-1 (0.86.0 M-2 量测边缘观察 #1): a writer CLI's refusal
+    must reach the step_failed envelope with the writer's REAL closed code
+    + detail — never the ``manual_intervention`` fallback with an empty
+    ``detail``.  Two payload shapes exist (nested task_row_update vs flat
+    top-level governance_store); both extract, the audit face keeps both.
+    """
+
+    def test_flat_top_level_refusal_keeps_writer_code_and_detail(self):
+        # governance_store _emit shape: the refusal dict IS the payload.
+        payload = json.dumps({
+            "code": "cross_record_violation",
+            "detail": "reference governance_id:MES-001 is unresolvable "
+                      "(unknown governance id family 'MES')",
+            "error": True,
+            "disposition": "validation",
+        }, ensure_ascii=False)
+        refusal = cc._refusal_from_cli_output(payload, 2)
+        self.assertEqual(refusal["code"], "cross_record_violation")
+        self.assertIn("unknown governance id family", refusal["detail"])
+        self.assertEqual(refusal["exit_code"], 2)
+
+    def test_nested_result_refusal_extraction_unchanged(self):
+        # task_row_update mode-annotated shape — the pre-FIX-379 contract.
+        payload = json.dumps({
+            "mode": "result",
+            "result": {"code": "cross_record_violation",
+                       "detail": "target file not found: x",
+                       "observed_revision": None},
+        }, ensure_ascii=False)
+        refusal = cc._refusal_from_cli_output(payload, 3)
+        self.assertEqual(refusal["code"], "cross_record_violation")
+        self.assertEqual(refusal["detail"], "target file not found: x")
+        self.assertEqual(refusal["exit_code"], 3)
+
+    def test_flat_refusal_boolean_error_flag_never_becomes_detail(self):
+        # The flat shape carries ``error`` as a BOOLEAN flag — a refusal
+        # without a detail must record "" (never leak True into text).
+        payload = json.dumps({"code": "manual_intervention",
+                              "error": True}, ensure_ascii=False)
+        refusal = cc._refusal_from_cli_output(payload, 2)
+        self.assertEqual(refusal["detail"], "")
+        self.assertEqual(refusal["code"], "manual_intervention")
+
+    def test_chain_journal_carries_writer_refusal_detail(self):
+        # Integration: a governance_store CLI step whose writer refuses
+        # with cross_record_violation (unknown governance id family).
+        # Pre-FIX-379 this landed as code=manual_intervention, detail="".
+        spec = _write_fixture_spec(self.root, "gs_refusal_spec.json", {
+            "chain_id": "gs-refusal-fixture",
+            "required_inputs": [],
+            "steps": [
+                {"step_id": "append-evidence", "kind": "cli",
+                 "argv": ["{python}", "{gs_cli}",
+                          "--project-root", "{root}", "evidence-append",
+                          "--task", "{task}", "--type", "产品代码",
+                          "--description", DESCRIPTION,
+                          "--basis", BASIS,
+                          "--artifacts", "closure_chain.py",
+                          "--refs", "governance_id:XXX-1",
+                          "--operation-id", "{op:append-evidence}"],
+                 "probe": {"kind": "text_anchor",
+                           "file": "{gov}/evidence-log.md",
+                           "pattern": "{op:append-evidence}"}},
+                {"step_id": "endpoint", "kind": "summary"},
+            ],
+        })
+        payload = cc.run_chain(cc.parse_chain_spec(json.loads(
+            Path(spec).read_text(encoding="utf-8"))),
+            root=self.root, task=TASK, inputs={},
+            closure_id=self.closure_id)
+        self.assertEqual(payload["status"], "blocked", payload)
+        failed = payload["steps"][0]
+        self.assertEqual(failed["status"], "failed")
+        self.assertEqual(failed["code"], "cross_record_violation")
+        self.assertTrue(failed["detail"], payload)
+        events = _chain_events(self.root, self.closure_id)
+        failures = [e for e in events if e["event_type"] == "step_failed"]
+        self.assertEqual(len(failures), 1)
+        envelope = failures[0]["payload"]
+        self.assertEqual(envelope["code"], "cross_record_violation")
+        self.assertTrue(envelope["detail"], envelope)
+        self.assertIn("unresolvable", envelope["detail"])
+        self.assertEqual(envelope["exit_code"], 2)
+
+
 class DryRunZeroWriteTests(_WorkspaceFixture):
     """--dry-run: probes + writer dry-runs prove every step resolvable
     while the governed workspace stays byte-identical (DoD 5)."""

@@ -486,6 +486,53 @@ class EvidenceRefTests(StoreTestCase):
         payload = self.refs_result(["governance_id:XXX-1"])
         self.assertRefused(payload, "cross_record_violation")
 
+    # ── FIX-379 item-2: id-family vocabulary aligned to a single source ──
+
+    def _seed_plan_tracker(self, *ids):
+        rows = "\n".join(
+            f"| **P1** | {i} | 词表对齐夹具行 | - | 0.88.0 | 验收=测试用例 "
+            f"| approved |" for i in ids)
+        _write_bytes(
+            self.gov / "plan-tracker.md",
+            "# 计划跟踪\n\n| 优先级 | ID | 事项 | 依赖 | 版本 | "
+            "执行面与验收 | 状态 |\n| --- | --- | --- | --- | --- | "
+            "--- | --- |\n" + rows + "\n")
+
+    def test_task_family_outside_old_hand_copy_now_addressable(self):
+        # DOC is an authoritative task-family prefix (task_priority) that
+        # the pre-FIX-379 hand-copied map omitted — a MENTIONED doc-family
+        # task id must be addressable as a governance_id ref.
+        self._seed_plan_tracker("DOC-042")
+        result = self.refs_result(["governance_id:DOC-042"])
+        self.assertFalse(result.get("error"), result)
+        self.assertIn("refs[governance_id:DOC-042=resolvable]",
+                      self.evidence_rows()[-1])
+
+    def test_known_task_family_absent_id_still_refused_as_not_found(self):
+        # Deriving the families is additive only: a known family with an
+        # id genuinely absent from the tracker still refuses (honest
+        # not-found, same closed code).
+        self._seed_plan_tracker("DOC-042")
+        payload = self.refs_result(["governance_id:DOC-999"])
+        self.assertRefused(payload, "cross_record_violation")
+        self.assertIn("not found", payload["detail"])
+
+    def test_id_families_cover_task_family_vocabulary_single_source(self):
+        # The alignment pin: every authoritative task-family prefix maps
+        # to plan-tracker.md; record families keep their dedicated files;
+        # the pre-alignment 13 task prefixes are all covered now.
+        import task_priority as tp
+        for family in tp._TASK_FAMILY_PREFIXES:
+            self.assertEqual(gs._GOVERNANCE_ID_FAMILIES.get(family),
+                             ("plan-tracker.md",), family)
+        self.assertEqual(gs._GOVERNANCE_ID_FAMILIES["DEC"],
+                         ("decision-log.md",))
+        self.assertEqual(gs._GOVERNANCE_ID_FAMILIES["RISK"],
+                         ("risk-log.md",))
+        for family in ("EVD", "REVIEW", "RECO", "TRIAGE"):
+            self.assertEqual(gs._GOVERNANCE_ID_FAMILIES[family],
+                             ("evidence-log.md",), family)
+
     def test_url_alias_syntax_valid_not_fetched(self):
         result = self.refs_result(["url_syntax:https://example.com/doc"])
         self.assertFalse(result.get("error"), result)

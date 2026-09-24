@@ -663,7 +663,14 @@ def _inputs_digest(inputs: Dict[str, str]) -> str:
 def _run_probe(probe: Dict[str, Any], mapping: Dict[str, str],
                closure_id: str) -> Dict[str, Any]:
     """Execute one declared probe. Returns
-    ``{kind, satisfied, detail, anchor}``.  Every branch is READ-ONLY."""
+    ``{kind, satisfied, detail, anchor}``.  Every branch is READ-ONLY.
+
+    Timing semantics (FIX-379 item-4): a probe result is a PRE-PROBE —
+    the world is sampled BEFORE the step's effect exists (or before a
+    resume decides) purely to gate execution/reconciliation.  Callers
+    must never read a ``satisfied`` value as a post-execution
+    verification; the chain re-probes on every run/resume boundary.
+    """
     kind = probe.get("kind")
     if kind not in PROBE_KINDS:
         raise ValueError(
@@ -959,7 +966,23 @@ def _run_subprocess(argv: List[str], timeout: float) -> subprocess.CompletedProc
 
 def _refusal_from_cli_output(stdout_text: str,
                              exit_code: int) -> Dict[str, Any]:
-    """Extract a structured refusal from a writer CLI's JSON payload."""
+    """Extract a structured refusal from a writer CLI's JSON payload.
+
+    FIX-379 item-1 (0.86.0 M-2 量测边缘观察 #1): the governed-writer CLIs
+    emit TWO payload shapes on refusal —
+      * task_row_update nests under ``result``/``refusal`` (mode-annotated
+        top level), while
+      * the governance_store family (``_run`` → ``_emit``) prints the
+        refusal dict at TOP LEVEL (flat ``code``/``detail``/``error``).
+    The extraction previously read only the nested shapes, so every
+    governance_store refusal degraded to the ``manual_intervention``
+    fallback with an EMPTY ``detail`` — the writer's real closed code and
+    remediation text were dropped from the ``step_failed`` envelope (the
+    M-2 B-group run measured ``payload.detail == ""`` with only the exit
+    code preserved).  A top-level dict that itself carries a ``code`` key
+    is now recognized as the third source; nested shapes keep priority so
+    existing payloads extract unchanged.
+    """
     try:
         payload = json.loads(stdout_text.strip() or "{}")
     except ValueError:
@@ -968,12 +991,20 @@ def _refusal_from_cli_output(stdout_text: str,
                     exit_code)}
     result = payload.get("result") if isinstance(payload, dict) else None
     refusal = payload.get("refusal") if isinstance(payload, dict) else None
-    source = refusal or result or {}
+    source = refusal or result or (
+        payload if isinstance(payload, dict) and payload.get("code")
+        else {})
     code = source.get("code") or (
         RESULT_OK if exit_code == 0 else "manual_intervention")
     disposition = ERROR_CODE_DISPOSITIONS.get(code, "manual")
+    detail = source.get("detail") or source.get("error") or ""
+    if not isinstance(detail, str):
+        # The flat governance_store shape carries ``error`` as a BOOLEAN
+        # flag, not a message — a missing detail must stay "" (never leak
+        # ``True`` into the audit text).
+        detail = ""
     return {"code": code, "disposition": disposition,
-            "detail": source.get("detail") or source.get("error") or "",
+            "detail": detail,
             "observed_revision": source.get("observed_revision"),
             "exit_code": exit_code}
 
@@ -1299,6 +1330,17 @@ def _run_locked(spec: ChainSpec, closure_id: str, task: str,
             report_steps.append(info)
             continue
         # effect probe first — the world decides (resume + fresh alike)
+        # FIX-379 item-4 (0.86.0 M-2 量测边缘观察 #4): this is the
+        # PRE-PROBE — the PRE-EXECUTION world observation that decides
+        # reconcile-vs-execute.  A ``satisfied=false`` recorded on a
+        # flip/append step's report/journal payload therefore means "the
+        # effect was not yet in the world when the step started" — it is
+        # the execution-decision INPUT, never a post-execution
+        # verification.  The probe is NOT re-run after the step executes:
+        # completion is recorded by ``step_completed`` + the writer's
+        # receipt, and a later resume re-probes the world afresh (查世界
+        # 不信日志).  Reading the payload as "the effect failed
+        # verification" is the registered misreading this note prevents.
         probe_result = (_run_probe(step.probe, mapping, closure_id)
                         if step.probe else
                         {"kind": None, "satisfied": False,
@@ -1649,7 +1691,22 @@ def build_parser() -> argparse.ArgumentParser:
         description="FEAT-056 closure-chain orchestrator (M3 vertical "
                     "slice) — pure sequence runner over governed writer "
                     "CLIs; effect-based resume; commit/push stay outside "
-                    "the chain")
+                    "the chain",
+        epilog=(
+            "Exit-code scale (this CLI): 0 = run ready/finalized (or "
+            "status/finalize ok); 2 = blocked / awaiting-world-check / "
+            "validation refusal / usage error; 3 = retryable lock "
+            "contention.  FIX-379 item-3 (0.86.0 M-2 observation #3): "
+            "per-family exit SCALES DIFFER across the governed-writer "
+            "CLIs this chain invokes (governance_store: 0 ok / 2 refusal "
+            "/ 3 retryable; task_row_update: 0 ok / 2 usage / 3 "
+            "validation / 4 conflict / 5 retryable / 6 manual) — the "
+            "canonical four-family table lives at the verify_workflow.py "
+            "dispatch comment (FIX-375 F-2/F-3).  The chain itself does "
+            "NOT branch CLI-step failures on writer exit codes: a "
+            "non-zero writer exit is decoded from the writer's structured "
+            "JSON payload (code/disposition/detail), and only EXTERNAL "
+            "steps branch on their declared blocked_exit_codes."))
     parser.add_argument("--project-root", default=".",
                         help="Host project root (default: cwd)")
     parser.add_argument("--schema-version", type=int,

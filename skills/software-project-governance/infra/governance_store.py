@@ -158,6 +158,12 @@ from contracts import (  # L0 — consumed read-only, never redefined
     require_input_fingerprint,
     require_operation_id,
 )
+# FIX-379 item-2: the authoritative task-family vocabulary (single source;
+# change_triage mirrors it verbatim — see the source's own comment).  The
+# underscore name is imported deliberately: growing task_priority a public
+# accessor is out of this ticket's file surface, and a third hand-copy of
+# the list here would re-create the drift the alignment removes.
+from task_priority import _TASK_FAMILY_PREFIXES as _TASK_FAMILY_PREFIXES_SOURCE
 
 __all__ = [
     "COMMANDS",
@@ -218,21 +224,43 @@ _TASK_ID_RE = re.compile(r"^[A-Z]+-\d+$")
 _GIT_OBJECT_RE = re.compile(r"^[0-9a-f]{7,40}$|^HEAD(?:~[0-9]+)?$")
 
 #: governance_id → the hot file (+ archive) whose rows carry that family.
-_GOVERNANCE_ID_FAMILIES = {
+#:
+#: FIX-379 item-2 (0.86.0 M-2 量测边缘观察 #2) — vocabulary alignment to a
+#: single source.  Two layers with different purposes used to drift apart:
+#:   * TASK families (rows live in plan-tracker.md) — DERIVED from
+#:     ``task_priority._TASK_FAMILY_PREFIXES`` (imported above), the
+#:     authoritative task-family vocabulary that change_triage mirrors.
+#:     Every triageable task id is therefore addressable as a
+#:     ``governance_id`` evidence ref (mention-level search in
+#:     plan-tracker.md), closing the "triage books the ticket but the ref
+#:     machine-check rejects its family" gap for the 13 task prefixes the
+#:     previous hand-copied map omitted (FMT/DIAG/MAINT/TD/DESIGN/
+#:     CLEANUP/PRINCIPLE/TASK/RESEARCH/ACCEPT/INIT/PLAN/DOC).  Additive
+#:     only: no previously resolvable ref changes meaning — a ref to an
+#:     id genuinely absent from the tracker still reports unresolvable.
+#:   * RECORD families (rows live in the other hot files) — kept
+#:     explicit: these are record registries, not task ids, and are
+#:     deliberately NOT part of the task-family vocabulary.
+#: Ad-hoc prefixes outside BOTH layers (the M-2 ``MES-001`` incident)
+#: remain unknown-family refusals.  The triage-side entry gate itself
+#: (shape-only ``PREFIX-NNN`` validation in change_triage.py, both the
+#: triage-record and the agent-locks-acquire paths) is unchanged —
+#: constraining it to the task-family vocabulary is a behavior change
+#: that belongs to its own triaged ticket (out of this one's file
+#: surface), see the proposed follow-up in the FIX-379 result.
+_PLAN_TRACKER_ID_FAMILIES = {
+    family: ("plan-tracker.md",)
+    for family in sorted(_TASK_FAMILY_PREFIXES_SOURCE)
+}
+_RECORD_ID_FAMILIES = {
     "DEC": ("decision-log.md",),
     "EVD": ("evidence-log.md",),
     "RISK": ("risk-log.md",),
     "REVIEW": ("evidence-log.md",),
     "RECO": ("evidence-log.md",),
     "TRIAGE": ("evidence-log.md",),
-    "FIX": ("plan-tracker.md",),
-    "FEAT": ("plan-tracker.md",),
-    "REL": ("plan-tracker.md",),
-    "AUDIT": ("plan-tracker.md",),
-    "REQ": ("plan-tracker.md",),
-    "VAL": ("plan-tracker.md",),
-    "SYSGAP": ("plan-tracker.md",),
 }
+_GOVERNANCE_ID_FAMILIES = {**_RECORD_ID_FAMILIES, **_PLAN_TRACKER_ID_FAMILIES}
 
 #: CLI aliases for the contract kinds (documented shorthand, normalized to
 #: the frozen enum — the contract spelling is what gets stored).
@@ -1994,6 +2022,22 @@ def _run(fn, kwargs):
 
 
 def _emit(payload) -> int:
+    """Print the JSON payload and translate ``error``/``disposition`` to
+    the process exit code: 0 ok / 2 refusal / 3 retryable.
+
+    FIX-379 item-3 (0.86.0 M-2 量测边缘观察 #3): this family's scale is
+    THREE-valued by design — conflict-class results (revision_conflict,
+    operation_id_conflict) and validation/manual refusals all share exit
+    2 on purpose.  The FEAT-051 task_row_update family owns a six-value
+    scale (3 validation / 4 conflict / 6 manual) whose disposition
+    classes stay distinct at the process boundary; this FEAT-046 family's
+    refusal GRANULARITY lives in the JSON ``code``/``disposition`` fields,
+    which is what structured callers (the closure-chain CLI steps, the
+    engine dispatch) consume.  Re-scaling here would be a behavior change
+    for every caller migrated by FIX-375 to read exit codes (its
+    canonical per-family table lives at the verify_workflow.py dispatch
+    comment) — differences stay DOCUMENTED, not silently unified.
+    """
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     if payload.get("error"):
         return 3 if payload.get("disposition") == "retryable" else 2
@@ -2216,7 +2260,15 @@ _CLI_HANDLERS = {
 
 
 def main(argv=None) -> int:
-    """CLI entry — JSON summary on stdout, exit 0 ok / 2 refusal / 3 retry."""
+    """CLI entry — JSON summary on stdout, exit 0 ok / 2 refusal / 3 retry.
+
+    Exit-code rationale (FIX-379 item-3): this family collapses all
+    refusal dispositions (validation / conflict / manual) onto exit 2 and
+    keeps only the retryable split on 3 — the fine-grained closed code is
+    always in the JSON payload.  The task_row_update family uses a
+    six-value scale (2 usage / 3 validation / 4 conflict / 5 retryable /
+    6 manual); per-family scales intentionally differ and are tabulated
+    at the verify_workflow.py dispatch comment (FIX-375 F-2/F-3)."""
     _configure_stdio()
     parser = build_parser()
     args = parser.parse_args(argv)

@@ -948,7 +948,7 @@ FORMER_46_GOLDEN = (
     (".governance/evidence-log.md", "table:198:5:3", "NEGATIVE_NONCLAIM", "markdown_table_cell"),
     ("docs/architecture/ADR-011-loop-runtime-claim-correction.md", "fence:106:107:1", "NEGATIVE_NONCLAIM", "fence:html"),
     ("docs/architecture/ADR-011-loop-runtime-claim-correction.md", "clause:247:1", "STRUCTURAL_DATA", "paragraph"),
-    ("docs/architecture/ADR-011-loop-runtime-claim-correction.md", "clause:446:3", "NEGATIVE_NONCLAIM", "paragraph"),
+    ("docs/architecture/ADR-011-loop-runtime-claim-correction.md", "clause:453:3", "NEGATIVE_NONCLAIM", "paragraph"),  # FIX-386 R1: was clause:446:3; mid-doc errata note shifted the paragraph +7 lines (6 quote lines + 1 blank). Documentation-only sync — this ledger's locator column is NOT consumed by the test assertion (path/state/provenance triple counting), kept accurate for the record (REVIEW-FIX-386-CODE-R0 F-1).
     ("docs/release/feature-flags-0.65.0.md", "clause:36:2", "NEGATIVE_NONCLAIM", "paragraph"),
     ("docs/release/release-checklist-0.65.0.md", "clause:59:1", "NEGATIVE_NONCLAIM", "paragraph"),
     ("docs/requirements/loop-engineering-architecture-0.65.0-proposed.md", "clause:808:1", "PLANNED_NOT_ACTIVE", "paragraph"),

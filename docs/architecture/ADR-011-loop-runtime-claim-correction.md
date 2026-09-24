@@ -419,6 +419,13 @@ affirmative claim must still be semantically classified or block.
 | Deep-scan cap 100 was below the observed corpus | The matched-file cap is removed. All candidates are parsed under 1,500-file/24-MiB and 300,000-unit/32-MiB budgets, with overflow blocking and no partial verdict. |
 | No repository baseline proved closure | Validation independently compares candidate paths/bytes, parsed paths, semantic-unit accounting, and zero skip/truncation; mutation fixtures require a new unclassified affirmative claim to fail. |
 
+> Errata (FIX-386, 2026-09-24): the 300,000-unit budget in the row above
+> is the historical capacity recorded when this ADR was written. As of
+> 0.87.0 the Check 31 semantic-unit budget is recalibrated to
+> 361,923 = ceil(301,602 × 1.2) by FIX-369 (see the Errata section at
+> the end of this document). The historical resolution text above is
+> left unchanged.
+
 ### REVIEW-FIX-198-DESIGN-R0 P1-BLOCKING-1 resolution mapping
 
 | Required fix | Resolution | Status |
@@ -540,3 +547,17 @@ Rollback therefore never restores a known runtime-completion overclaim.
   with a 256 MiB process ceiling; streaming is allowed only if it preserves
   complete counts, stable locators, and the no-partial-verdict rule;
 - every finding includes root owner, normalized path, line/locator, claim id, classification, and authority version.
+
+## Errata
+
+- **FIX-386 (2026-09-24) — semantic-unit budget erratum.** The
+  300,000-unit figures above (the REVIEW-FIX-197-DESIGN-R2 resolution
+  row and the extraction bullet under Non-Functional Budget) are
+  historical values as recorded at the time of this ADR. As of 0.87.0
+  the Check 31 semantic-unit budget is recalibrated to
+  361,923 = ceil(301,602 × 1.2) by FIX-369 (capacity re-derivation,
+  baseline-registered via FEAT-047; provenance comment in
+  `skills/software-project-governance/infra/checks/loop_runtime_claims.py`,
+  rollback path in `docs/release/rollback-plan-0.87.0.md`). The
+  historical conclusions of this ADR are intentionally left unchanged;
+  this note only records the current value.

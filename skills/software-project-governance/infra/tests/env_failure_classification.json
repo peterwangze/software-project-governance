@@ -29,7 +29,8 @@
     "manifest_presets": "known defect: manifest.json presets/ dir vs cleanup PLUGIN_SCOPE_DIRS vs disk, three-way drift",
     "review_doc_claim": "docs/reviews/review-FIX-300-CODE-R0.md affirmative loop-runtime clauses unbound -> UNSUPPORTED_AFFIRMATIVE -> semantic verdict BLOCKED",
     "authority_archive_side_effect": "EVD-983 archive migration moved pinned DEC-104 row out of live decision-log -> AUTHORITY_SOURCE_OCCURRENCE found 0",
-    "live_plan_tracker_row": "live-replay test pins REL-071 task row that EVD-983 migration archived out of hot plan-tracker"
+    "live_plan_tracker_row": "live-replay test pins REL-071 task row that EVD-983 migration archived out of hot plan-tracker",
+    "clock_window_sensitive": "assertion depends on local wall-clock position relative to midnight (00:00-02:00 window): a date-only timestamp parsed at that day 00:00 makes a now-Nh derivation cross the day boundary and flip a freshness verdict; deterministic once the clock is injected (family identified by FIX-364/EVD-1124; registered by the AUDIT-152 ledger write-back, FIX-386)"
   },
   "tests": {
     "test_pre_commit_review_evidence.ReviewEvidenceRegexTests.test_a_legacy_end_column_hits": {
@@ -191,6 +192,16 @@
       "evidence": "subTest task_id='REL-071' only: L312 assertTrue(_run_pattern('REL-071', plan_text)) -> False; EVD-983 migration archived the REL-071 task row out of hot plan-tracker (remaining occurrences are evidence cells and a roadmap row that the FIX-282 anchored matcher correctly MISSes by design, test L265-270); matcher behavior correct - pinned live-data precondition expired; not present in AUDIT-151 (pre-migration) nor FIX-301 commit-time evidence (EVD-983 ran after a599843)",
       "since": "2026-09-10 EVD-983 (real archive migration, post a599843)",
       "ticket": "AUDIT-152 recommends live-replay representative refresh + migration checklist item (report section 7)"
+    },
+    "test_resolve_entry.ResolveEntryTests.test_snapshot_freshness_recent_is_fresh": {
+      "class": "env_sensitive",
+      "family": "clock_window_sensitive",
+      "count": 1,
+      "evidence": "fixture wrote a date-only session_date derived from datetime.now() - timedelta(hours=2); the engine parsed it at that day 00:00 and freshness = now - date <= 24h, so a run inside the local 00:00-02:00 window saw the 2h subtraction cross midnight, recorded yesterday's date, and judged the snapshot stale (snapshot_fresh=False); temp-dir isolated fixture, no live-data coupling (0.85.0 M-2 window: 00:41/01:15/01:30 runs; review-FEAT-054-RELEASE-R0 V10② in-window reproduction)",
+      "since": "2026-09-20 (0.85.0 M-2 window, first documented occurrence)",
+      "resolved": true,
+      "resolved_by": "FIX-364 (2026-09-20, commit 9aa27a6): fixture derives session_date at the engine's date granularity + stdlib clock injection (zero new deps) + midnight-window positive/negative double-pin (test_snapshot_freshness_midnight_window_is_fresh / test_snapshot_freshness_midnight_window_stale_stays_stale); REVIEW-FIX-364-CODE-R0 APPROVED_WITH_NOTES/0; EVD-1124",
+      "ticket": "resolved by FIX-364 (was: 0.85.0 checklist #14 recommendation 'FIX-364 candidate + AUDIT-152 ledger registration'); family registered by FIX-386 per EVD-1124 note 'AUDIT-152 账本 proposed 登记待 Developer 席写回'"
     }
   },
   "consumption": {

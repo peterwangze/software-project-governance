@@ -1379,6 +1379,46 @@ class DispatchLockAcquireTests(unittest.TestCase):
             data["file_locks"]["product/existing_a.py"]["locked_by"],
             "FIX-001")
 
+    def test_cross_task_conflict_rejected_with_same_day_triage_record(self):
+        """F-2 verification pin (REVIEW-FIX-370): the cross-task conflict
+        guard keeps rejecting fail-closed even when a same-day
+        change-triage record for THIS task exists and mismatches the lock
+        set — the advisory face-2 cross-check never downgrades a conflict
+        refusal into a WARN'd write, and the incumbent task's lock file
+        is left byte-identical."""
+        rec_dir = self.gov / "change-triage"
+        rec_dir.mkdir(exist_ok=True)
+        (rec_dir / "FIX-210.json").write_text(json.dumps(
+            _triage_record_for_lock(
+                files=["product/triage_says_this.py"])), encoding="utf-8")
+        self._locks_path().write_text(json.dumps({
+            "active_tasks": {"FIX-001": {
+                "agent_role": "Developer",
+                "spawned_at": "2026-09-10T08:00:00",
+                "coordinator_session": "s",
+                "target_files": ["product/existing_a.py"],
+                "description": "other",
+                "acquired": "2026-09-10T08:00:00",
+                "files": ["product/existing_a.py"],
+            }},
+            "file_locks": {"product/existing_a.py": {
+                "locked_by": "FIX-001",
+                "locked_at": "2026-09-10T08:00:00",
+                "ttl_seconds": 3600, "ttl_reason": "held",
+            }},
+        }), encoding="utf-8")
+        before = self._locks_path().read_text(encoding="utf-8")
+        summary = self._acquire()
+        self.assertIn("error", summary)
+        self.assertIn("file lock conflict", summary["error"])
+        self.assertIn("FIX-001", summary["error"])
+        # A refused acquisition carries no face-2 channel and never writes.
+        self.assertNotIn("cross_check", summary)
+        self.assertNotIn("warnings", summary)
+        self.assertNotIn("written", summary)
+        self.assertEqual(self._locks_path().read_text(encoding="utf-8"),
+                         before)
+
     def test_malformed_locks_file_rejected_unchanged(self):
         malformed = "this is not json {"
         self._locks_path().write_text(malformed, encoding="utf-8")
@@ -1527,6 +1567,40 @@ class AgentLocksAcquireCliTests(unittest.TestCase):
         # carries to_be_created → mismatch WARN disclosed on stderr.
         self.assertIn("WARN", done.stderr)
         self.assertIn("product/to_be_created.py", done.stderr)
+
+    def test_cli_cross_task_conflict_exit_2_lock_untouched(self):
+        """F-2 verification pin (REVIEW-FIX-370), cross-task rejection
+        path through the CLI glue: a target already locked by another
+        active task exits 2 fail-closed with the refusal JSON on stdout
+        (house pattern — cmd_change_triage), and the incumbent task's
+        agent-locks.json is left byte-identical (no stale read-modify-
+        write clobber of a concurrent holder's entries)."""
+        (self.gov / "agent-locks.json").write_text(json.dumps({
+            "active_tasks": {"FIX-001": {
+                "agent_role": "Developer",
+                "spawned_at": "2026-09-10T08:00:00",
+                "coordinator_session": "sess-other",
+                "target_files": ["product/existing_a.py"],
+                "description": "other",
+                "acquired": "2026-09-10T08:00:00",
+                "files": ["product/existing_a.py"],
+            }},
+            "file_locks": {"product/existing_a.py": {
+                "locked_by": "FIX-001",
+                "locked_at": "2026-09-10T08:00:00",
+                "ttl_seconds": 3600, "ttl_reason": "held",
+            }},
+        }), encoding="utf-8")
+        before = (self.gov / "agent-locks.json").read_text(encoding="utf-8")
+        done = self._run_cli(
+            "--task", "FIX-210", "--files", "product/existing_a.py",
+            "--ttl-reason", "FIX-386 conflict-path pin")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("file lock conflict", done.stdout)
+        self.assertIn("FIX-001", done.stdout)
+        self.assertEqual(
+            (self.gov / "agent-locks.json").read_text(encoding="utf-8"),
+            before)
 
 
 if __name__ == "__main__":

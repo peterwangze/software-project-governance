@@ -1205,6 +1205,13 @@ NOT_MET/PARTIAL authority.
 - Independent enumeration may optimize traversal and count-only extraction,
   but may not reuse scanner results or skip canonicalization.
 
+> Errata (FIX-386, 2026-09-24): the 300,000 semantic units cap above
+> mirrors ADR-011's historical capacity. As of 0.87.0 the Check 31
+> semantic-unit budget is recalibrated to 361,923 = ceil(301,602 × 1.2)
+> by FIX-369 (see the ADR-011 Errata section and
+> `docs/release/feature-flags-0.87.0.md`). The historical requirement
+> text above is left unchanged.
+
 ### Maintainability
 
 - Semantic policy remains in one scanner; identity comparison remains in one

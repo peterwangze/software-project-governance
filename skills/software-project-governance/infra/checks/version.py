@@ -278,7 +278,20 @@ STATIC_PIN_EXEMPTIONS = {
         (30, "0.87.0", _REASON_FUTURE_TARGET),
     ],
     "skills/software-project-governance/infra/tests/test_verify_workflow.py": [
-        (12375, "0.87.0", _REASON_FIXTURE_ROW_TEXT),
+        # FIX-388 re-audit (FIX-377 finding 4, 0.87.0 ledger): the FIX-371
+        # fixture row re-anchored 12375->12550 — FIX-373's test insertions
+        # (3c3218d) shifted the file and the old anchor went stale (caught by
+        # the stale-exemption audit / RealTreeContractTests: the designed
+        # rot-guard working). The FIX-376 legacy REQ fixture row (3d31c49)
+        # was born unexempted at 12674. Line anchoring kept over dynamizing
+        # (token-content anchors read as the blanket-allow shape this ledger
+        # exists to prevent); both rows self-dormant at the 0.88.0 bump
+        # (M-1 static-pin 消解清单, version-plan L75) — re-audit there.
+        (12550, "0.87.0", _REASON_FIXTURE_ROW_TEXT),
+        (12674, "0.87.0",
+         "synthetic legacy REQ fixture row (FIX-376 F-6①) — the 0.87.0 token "
+         "is payload inside the closed-loop path cell \"EVD-997 / 0.87.0\" "
+         "and is never compared to the active version"),
     ],
 }
 

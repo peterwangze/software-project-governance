@@ -39,7 +39,7 @@ statuses[match.group(1)] = status
 ```
 
 - `reversed(cells)` 作用于 list（`_governance_table_cells` L12408-12414 返回 list），语义正确：取**最右**的 ✅ 词首 cell。
-- **fallback 语义逐字保持**：`if not status and cells: status = cells[-1].strip()` 与改动前完全一致（diff 仅替换循环行与注释）；空 cells 防护（`and cells`）保留——且该分支实际不可达（L12277 正则要求 `| ID |` 形态，cells 必非空），防御性冗余无副作用。
+- **fallback 语义逐字保持**：实现块中 fallback 分支（「状态为空且 cells 非空」的条件判定 + 直取末列 cell 文本的条件赋值，字面见上列实现块）与改动前完全一致（diff 仅替换循环行与注释）；空 cells 防护（`and cells`）保留——且该分支实际不可达（L12277 正则要求 `| ID |` 形态，cells 必非空），防御性冗余无副作用。
 - **活体探针一致性**：审查者独立复现探针（复刻 LTR/RTL 双扫描 + 与真函数对拍）结果与 Developer 申报完全一致：**130 行 statuses 全等、completed 豁免集 84/84 全等、status 内容 diff=0**。行形态实测分布：compact（✅@末列）25 / legacy（✅@倒数第二列）59 / fallback-last（活跃行）46——F-7 docstring 双形态描述与真实数据吻合。
 
 **关键澄清（RTL 到底修了什么、没修什么）**：

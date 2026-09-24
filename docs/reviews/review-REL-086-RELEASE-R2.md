@@ -39,10 +39,10 @@
 | # | 核验项 | 结果 | 证据 |
 |---|--------|------|------|
 | 1 | **L114 修复落位**（git diff 266c32b） | ✅ 两处文字化、语义等价 | §9 表 #2 行：cell2「code-span 内 `{[}/]` 仍计 depth、**`\` 原样追加**」→「…仍计 depth、**反斜杠字符原样追加**」；cell3「**`\`** 在 code-span 内走 else」→「**反斜杠**在 code-span 内走 else」——自指转义 code-span（反引号包反斜杠再包反引号的三字符形态）消除，`{[}/]` code-span 保留（不触发） |
-| 2 | **M-0 落库 commit** | ✅ 266c32b（09:02:42 +0800，六文件 632 行：规划 v2 115 + review-FIX-373 修订 2 行 + REL-086 四份审查报告）+ 7d6ff6a（09:07:48，R1 报告 1 行）——materialize 面（git 已提交内容）生效 |
-| 3 | **check-loop-runtime-claims 实跑** | ✅ **verdict: PASS / exit 0**；semantic_units 306,504 ≤ 361,923——容量+记账双健康（R1 实测 306,179→306,504，+325 治理写入增长，正常斜率） |
-| 4 | **Check 31 聚合面**（check-governance R2） | ✅ **Verdict: PASS**——「complete semantic inventory; zero skip/truncate」「identity attestation (fixture_only staged_index): PASS」「identity_verdict=PASS」（R0 BLOCKED〔inventory 233ccbf2〕→ R1 BLOCKED〔c1345ca9〕→ **R2 PASS〔161c53cb〕**） |
-| 5 | **全库独立扫描复现** | ✅ docs 五目录 532 md 文件 **0 ragged**（与修复方声明一致——本席独立复现，非采信声明） |
+| 2 | **M-0 落库 commit** | ✅ 266c32b（09:02:42 +0800，六文件 632 行：规划 v2 115 + review-FIX-373 修订 2 行 + REL-086 四份审查报告）+ 7d6ff6a（09:07:48，R1 报告 1 行）—— | materialize 面（git 已提交内容）生效 |
+| 3 | **check-loop-runtime-claims 实跑** | ✅ **verdict: PASS / exit 0**； | semantic_units 306,504 ≤ 361,923——容量+记账双健康（R1 实测 306,179→306,504，+325 治理写入增长，正常斜率） |
+| 4 | **Check 31 聚合面**（check-governance R2） | ✅ **Verdict: PASS**—— | 「complete semantic inventory; zero skip/truncate」「identity attestation (fixture_only staged_index): PASS」「identity_verdict=PASS」（R0 BLOCKED〔inventory 233ccbf2〕→ R1 BLOCKED〔c1345ca9〕→ **R2 PASS〔161c53cb〕**） |
+| 5 | **全库独立扫描复现** | ✅ docs 五目录 532 md 文件 **0 ragged** | （与修复方声明一致——本席独立复现，非采信声明） |
 
 ---
 
@@ -58,7 +58,7 @@
 | 「L545-547 机制：`\` 置 escaped 后…」 | 「反斜杠置 escaped 后…」 | 等价 |
 | 「（`{[}/]` 后的 `` `\` `` code-span 自指转义——…」 | 「（自指转义 code-span：**反引号包反斜杠再包反引号的三字符形态**——…」 | **精确保持**——文字化描述准确刻画三字符构成与自指机理 |
 | 「处置建议…（`` `\` `` 改文字化表述…」 | 「（自指形态改文字化表述…」 | 等价 |
-| 事实依据 cell 引述「行首「\| 2 \| …`\` 原样追加…」」 | 「行首为竖线 2 竖线 code-span 内花括号组仍计 depth、反斜杠原样追加等叙述」 | 等价（引述改叙述式） |
+| 事实依据 cell 引述「行首「\| 2 \| …反引号包反斜杠再包反引号的三字符形态 原样追加…」」 | 「行首为竖线 2 竖线 code-span 内花括号组仍计 depth、反斜杠原样追加等叙述」 | 等价（引述改叙述式） |
 | 四个判定要素（①L72 无效+转义机制 ②L114 定位+机理 ③声明不符 ④归因不成立+处置建议） | **全部保留** | 无损 |
 
 **判定：修订语义零损失，且必要**（消除 R1 报告自身的同型触发源；N1 判定内容不受影响）。

@@ -22958,6 +22958,21 @@ def _evidence_machine_row_issues(content):
 # extraction, tests, aggregate reads) stay read-only and never consume the
 # reconciliation window.
 #
+# FEAT-060 (0.88.0 B1 — DEC-224 双约束 + arch Q2): WARN-class observations
+# additionally land in a PERSISTENT violation state machine
+# (``.governance/.write-guard-violations.json``, infra/write_guard_state.py
+# — the implementation entity; this file keeps only thin wiring, RISK-039
+# thin-entry discipline). The WARN output semantics stay byte-identical
+# (WARN posture pinned by DEC-224; BLOCK escalation belongs to FEAT-064);
+# the state machine adds: durable open/consumed/superseded records, same-
+# session second-trigger escalation, cross-session persistence, a
+# consumption-right ledger with pre-granted single-use grants for
+# registered consumers, and an ops-recoverable consume transaction that
+# bundles violation consumption with the baseline advance (crash mid-way
+# → journal-driven resume, never a half state). See the module docstring
+# of infra/write_guard_state.py for the six rules and their WARN-posture
+# interpretation.
+#
 # Credential authority (consumed, never re-stated — FIX-292 lesson):
 #   - EVD/DEC rows → the ``机器写入：governance-store <command> <op>`` marker
 #     built by ``governance_store._build_evidence_row`` /
@@ -23130,7 +23145,8 @@ def _load_write_guard_state(governance_dir):
     return state, None
 
 
-def _reconcile_row_families(governance_dir, persist_state=False):
+def _reconcile_row_families(governance_dir, persist_state=False,
+                            detections_out=None, records_index_out=None):
     """FEAT-057 face 5 engine — 受管行族对账.
 
     Returns ``(result_face, next_state)``. ``result_face`` is the face dict
@@ -23144,6 +23160,13 @@ def _reconcile_row_families(governance_dir, persist_state=False):
     added/changed row instances without a machine credential → one
     ``unattributed_row_change`` WARN each. First sighting of a surface
     (amnesty) records its baseline and discloses it in ``baselined``.
+
+    FEAT-060 out-params (CLI path only; probe calls pass None and stay
+    byte-identical read-only): ``detections_out`` collects offending-row
+    detection dicts for the violation state machine;
+    ``records_index_out`` collects the per-surface current-instance map
+    (object → digests + credential verdicts) the consumption-eligibility
+    judge needs. Neither affects judging or output.
     """
     face = {"status": "SKIPPED", "issues": [], "baselined": []}
     next_state = None
@@ -23189,8 +23212,15 @@ def _reconcile_row_families(governance_dir, persist_state=False):
                           .format(exc),
                 "expected": "UTF-8 文本",
             })
+            if records_index_out is not None:
+                records_index_out[surface] = {"kind": "unreadable"}
             continue
         records = _extract_managed_row_records(surface, content)
+        if records_index_out is not None:
+            records_index_out[surface] = {
+                "kind": "text",
+                "by_key": _credential_index(surface, records),
+            }
         current_sha = _sha256_of(content)
         baseline = baseline_files.get(surface)
         next_files[surface] = {
@@ -23209,7 +23239,8 @@ def _reconcile_row_families(governance_dir, persist_state=False):
             continue
         if baseline.get("sha256") == current_sha:
             continue
-        _judge_row_delta(surface, rel, records, baseline_rows, issues)
+        _judge_row_delta(surface, rel, records, baseline_rows, issues,
+                         detections_out=detections_out)
 
     # ops 台账 surfaces (*.ops.jsonl — line-oriented receipt ledgers).
     for path in sorted(governance_dir.glob("*.ops.jsonl")):
@@ -23227,8 +23258,16 @@ def _reconcile_row_families(governance_dir, persist_state=False):
                           .format(exc),
                 "expected": "UTF-8 JSONL",
             })
+            if records_index_out is not None:
+                records_index_out[path.name] = {"kind": "unreadable"}
             continue
         records = _extract_ops_ledger_records(content)
+        if records_index_out is not None:
+            records_index_out[path.name] = {
+                "kind": "ops",
+                "by_key": _credential_index(path.name, records,
+                                            surface_kind="ops"),
+            }
         current_sha = _sha256_of(content)
         baseline = baseline_files.get(path.name)
         next_files[path.name] = {
@@ -23244,7 +23283,7 @@ def _reconcile_row_families(governance_dir, persist_state=False):
         if baseline.get("sha256") == current_sha:
             continue
         _judge_row_delta(path.name, rel, records, baseline["rows"], issues,
-                         surface_kind="ops")
+                         surface_kind="ops", detections_out=detections_out)
 
     if not surfaces_seen:
         return face, next_state  # SKIPPED — nothing managed, nothing written
@@ -23266,6 +23305,16 @@ def state_path_seen(governance_dir):
     return (governance_dir / _WRITE_GUARD_STATE_FILENAME).is_file()
 
 
+def _write_guard_state_json(baseline_state):
+    """THE serialization of the reconciliation baseline state file —
+    delegated to ``write_guard_state.state_json_text`` (single serializer:
+    the FEAT-060 consumption transaction's resume sha256 comparisons judge
+    these exact bytes, so a second serializer here would be a FIX-292-class
+    second shape source)."""
+    import write_guard_state
+    return write_guard_state.state_json_text(baseline_state)
+
+
 def _rows_snapshot(records):
     """State snapshot of one surface: ``{row_key: [digest, …]}`` (multiset
     per key preserves duplicate row ids)."""
@@ -23277,10 +23326,30 @@ def _rows_snapshot(records):
     return snapshot
 
 
+def _credential_index(surface, records, surface_kind="text"):
+    """FEAT-060 consumption-eligibility index for one surface:
+    ``{object_id: [{"digest", "credentialed"}, …]}`` — the credential
+    verdict reuses the SAME authority the WARN judge consumes
+    (:func:`_row_family_credential_ok`; no second credential source)."""
+    index = {}
+    for record in records:
+        index.setdefault(record["key"], []).append({
+            "digest": record["digest"],
+            "credentialed": _row_family_credential_ok(
+                surface, record["key"], record["text"]),
+        })
+    return index
+
+
 def _judge_row_delta(surface, rel, records, baseline_rows, issues,
-                     surface_kind="text"):
+                     surface_kind="text", detections_out=None):
     """Multiset-diff current records against the baseline digests and emit
-    one WARN per uncredentialed added/changed row instance."""
+    one WARN per uncredentialed added/changed row instance.
+
+    ``detections_out`` (FEAT-060, CLI path only): when a list is supplied,
+    every offending record is also appended as a state-machine detection
+    dict (write_guard_state.build_detection) — the WARN output itself is
+    byte-identical either way; the ledger is the only consumer."""
     baseline_pool = {}
     for key, digests in baseline_rows.items():
         if isinstance(digests, list):
@@ -23292,6 +23361,13 @@ def _judge_row_delta(surface, rel, records, baseline_rows, issues,
             continue
         if _row_family_credential_ok(surface, record["key"], record["text"]):
             continue
+        if detections_out is not None:
+            # before_hash = a baseline instance the new content displaced
+            # (audit hint, not identity — the multiset pool does not say
+            # WHICH instance was replaced).
+            detections_out.append(_build_violation_detection(
+                surface, surface_kind, rel, record,
+                before_hash=(pool[0] if pool else None)))
         if surface_kind == "ops":
             guidance = ("unattributed row change — ops 台账行须由写入器追加"
                         "（receipt 行携 operation_id 凭证）")
@@ -23311,6 +23387,24 @@ def _judge_row_delta(surface, rel, records, baseline_rows, issues,
             "expected": "受管行变更携带机器凭证（governance-store 标记 / "
                         "〔op-…〕 锚 / receipt operation_id）",
         })
+
+
+def _build_violation_detection(surface, surface_kind, rel, record,
+                               before_hash=None):
+    """Face-5 offending record → write_guard_state detection dict
+    (FEAT-060; thin adapter — the field vocabulary lives in the state
+    machine module)."""
+    import write_guard_state
+    return write_guard_state.build_detection(
+        family=surface,
+        family_kind=surface_kind,
+        object_id=record["key"],
+        rel_path=rel,
+        line=record["line"],
+        row_text=record["text"],
+        after_hash=record["digest"],
+        before_hash=before_hash,
+    )
 
 
 def check_governance_write_shapes(*, persist_state=False):
@@ -23346,11 +23440,15 @@ def check_governance_write_shapes(*, persist_state=False):
          (:func:`_reconcile_row_families`). WARN posture: uncredentialed
          changes are disclosed loudly, the face never FAILs (BLOCK
          escalation left to 0.87). The baseline state file is a guard-owned
-         ARTIFACT, not a repair — it is the only thing this guard ever
-         writes, and only when ``persist_state=True`` (the CLI path);
-         probe callers (contract-matrix representative extraction,
-         aggregate reads, tests) stay read-only and never consume the
-         reconciliation window.
+         ARTIFACT, not a repair — together with the FEAT-060 violation
+         ledger it is the only thing this guard ever writes, and only when
+         ``persist_state=True`` (the CLI path); probe callers
+         (contract-matrix representative extraction, aggregate reads,
+         tests) stay read-only and never consume the reconciliation
+         window. FEAT-060: CLI-path observations additionally persist into
+         the violation state machine (infra/write_guard_state.py — six
+         rules, consumption-right ledger, ops-recoverable consume
+         transaction); WARN output bytes are unchanged.
 
     Contract: CHECK-ONLY for governance records — reads the artifacts,
     never repairs or rewrites them (issue messages carry line numbers and
@@ -23484,25 +23582,68 @@ def check_governance_write_shapes(*, persist_state=False):
             }
 
     # Face 5 — row-family reconciliation (FEAT-057, WARN posture).
+    # FEAT-060: on the CLI path the offending rows are ALSO recorded into
+    # the persistent violation state machine
+    # (.governance/.write-guard-violations.json — guard-owned artifact,
+    # same class as the state baseline) and eligible open violations are
+    # consumed through the ops-recoverable transaction, which then owns
+    # the baseline write. WARN output bytes are unchanged either way.
+    detections = [] if persist_state else None
+    records_index = {} if persist_state else None
     row_face, next_state = _reconcile_row_families(
-        GOVERNANCE_DIR, persist_state=persist_state)
+        GOVERNANCE_DIR, persist_state=persist_state,
+        detections_out=detections, records_index_out=records_index)
     if next_state is not None:
-        state_path = GOVERNANCE_DIR / _WRITE_GUARD_STATE_FILENAME
-        try:
-            state_path.write_text(
-                json.dumps(next_state, ensure_ascii=False, indent=2,
-                           sort_keys=True) + "\n",
-                encoding="utf-8")
-        except (IOError, OSError, ValueError) as exc:
-            row_face["issues"].append({
-                "type": "row_family_state_unwritable",
-                "file": ".governance/" + _WRITE_GUARD_STATE_FILENAME,
-                "line": None,
-                "task_id": "",
-                "detail": "对账状态基线写入失败（{0}）——下一轮将以同一基线"
-                          "重复披露同一差异窗口（响亮披露，不静默）".format(exc),
-                "expected": "可写的 .governance 目录",
-            })
+        baseline_in_txn = False
+        skip_baseline = False
+        if persist_state:
+            import write_guard_state  # deferred — heavy peer module
+            sm_result = write_guard_state.reconcile_violation_state(
+                GOVERNANCE_DIR,
+                state_path=GOVERNANCE_DIR / _WRITE_GUARD_STATE_FILENAME,
+                detections=detections or [],
+                records_index=records_index or {},
+                baseline_target=next_state,
+                run_id=write_guard_state.new_run_id(),
+                session_id=os.environ.get(
+                    write_guard_state.SESSION_ENV) or None)
+            for sm_issue in sm_result["issues"]:
+                row_face["issues"].append(sm_issue)
+            baseline_in_txn = sm_result["baseline_written_by_txn"]
+            skip_baseline = sm_result["skip_baseline_advance"]
+        if not baseline_in_txn and not skip_baseline:
+            state_path = GOVERNANCE_DIR / _WRITE_GUARD_STATE_FILENAME
+            try:
+                # P1-1 (review-FEAT-060-R0): the plain advance runs under
+                # the SAME state-file lock the consume transaction and its
+                # resume hold — a concurrent CLI run can no longer
+                # interleave a (timestamp-divergent) baseline write into an
+                # in-flight transaction's {target, prev} world.
+                advanced, lock_detail = (
+                    write_guard_state.advance_baseline_plain(
+                        state_path, _write_guard_state_json(next_state)))
+            except (IOError, OSError, ValueError) as exc:
+                row_face["issues"].append({
+                    "type": "row_family_state_unwritable",
+                    "file": ".governance/" + _WRITE_GUARD_STATE_FILENAME,
+                    "line": None,
+                    "task_id": "",
+                    "detail": "对账状态基线写入失败（{0}）——下一轮将以同一基线"
+                              "重复披露同一差异窗口（响亮披露，不静默）".format(exc),
+                    "expected": "可写的 .governance 目录",
+                })
+            else:
+                if not advanced:
+                    row_face["issues"].append({
+                        "type": "row_family_state_lock_busy",
+                        "file": ".governance/" + _WRITE_GUARD_STATE_FILENAME,
+                        "line": None,
+                        "task_id": "",
+                        "detail": "对账状态基线推进让行（{0}）——本轮不前移基线，"
+                                  "差异窗口保持开放、复跑照常重推（响亮披露，"
+                                  "不静默）".format(lock_detail),
+                        "expected": "状态基线文件锁空闲",
+                    })
     result["row_families"] = row_face
 
     return result
@@ -23629,16 +23770,21 @@ def cmd_governance_write_guard(_args):
     printing (RISK-039 thin-entry discipline).
 
     Check-only contract (FEAT-057 amendment): the guard repairs NOTHING —
-    governance records are never rewritten. The ONE artifact it maintains
-    is its own reconciliation baseline
-    (``.governance/.write-guard-state.json``): the first run establishes
+    governance records are never rewritten. The artifacts it maintains are
+    its OWN state: the reconciliation baseline
+    (``.governance/.write-guard-state.json``) — the first run establishes
     the baseline (amnesty — 存量行不追溯, zero WARN), every later run
-    diffs the delta since the previous run and re-baselines after judging.
-    Face 5 posture is WARN (loud disclosure, exit code unaffected); the
-    WARN→BLOCK escalation is left to 0.87. Exit 0 = no FAIL face; exit 1 =
-    at least one FAIL face (a structural breach must not pass silently —
-    the same fail-closed posture as the change-triage write guard);
-    SKIPPED faces (artifact absent) never fail.
+    diffs the delta since the previous run and re-baselines after judging —
+    and, since FEAT-060, the violation ledger
+    (``.governance/.write-guard-violations.json``, written by
+    infra/write_guard_state.py on this CLI path only: persistent open/
+    consumed/superseded records + consumption-right grants + the
+    ops-recoverable consume transaction; a host with zero violations never
+    sees the file). Face 5 posture is WARN (loud disclosure, exit code
+    unaffected); the WARN→BLOCK escalation is left to 0.87. Exit 0 = no
+    FAIL face; exit 1 = at least one FAIL face (a structural breach must
+    not pass silently — the same fail-closed posture as the change-triage
+    write guard); SKIPPED faces (artifact absent) never fail.
     """
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")

@@ -33,8 +33,10 @@ Run:
 
 import io
 import json
+import os
 import sys
 import tempfile
+import threading
 import types
 import unittest
 from pathlib import Path
@@ -47,6 +49,7 @@ if str(_INFRA_DIR) not in sys.path:
 
 import verify_workflow as vw  # noqa: E402
 import change_triage as ct  # noqa: E402
+import write_guard_state as wgs  # noqa: E402  (FEAT-060 state machine entity)
 
 _FIXTURE_TRACKER = """\
 # Plan Tracker
@@ -1245,6 +1248,867 @@ class RowFamilyReconciliationTests(unittest.TestCase):
         self.assertTrue(STATUS_CELL_OP_SUFFIX_PATTERN.search(anchored))
         self.assertFalse(STATUS_CELL_OP_SUFFIX_PATTERN.search(
             anchored + "（后缀手改）"))
+
+
+# ─── FEAT-060 — write-guard 违规持久状态机 + hook 消费权台账 ────────────────
+
+def _detect(family="evidence-log.md", object_id="EVD-9001", after=None,
+            before=None, kind="text", line=9, text="| EVD-9001 | bare |"):
+    """Detection-dict builder (write_guard_state.build_detection 委托)."""
+    return wgs.build_detection(
+        family, kind, object_id, ".governance/" + family, line, text,
+        after if after is not None else "a" * 32, before)
+
+
+def _baseline_target(files=None):
+    """Minimal realistic reconciliation-baseline target (state file shape)."""
+    return {
+        "schema_version": 1,
+        "tool": "governance-write-guard/row-family-reconciliation",
+        "updated_at": "2026-09-24T00:00:00",
+        "files": files if files is not None else {},
+    }
+
+
+class WriteGuardViolationStateMachineTests(unittest.TestCase):
+    """FEAT-060 六规则红绿测试 + ops 事务性 + CLI 集成
+    （DEC-224 双约束 + version-plan-0.88.0 §2 B1 arch Q2 定案；实现实体
+    ``infra/write_guard_state.py``，本类只测行为契约）。
+
+    规则 → 测试映射（每规则红绿判据——红相 = 违反规则的实现必挂的断言，
+    绿相 = 合规路径的行为断言）：
+      R1 观测≠接受 / 重复      ``test_rule1_*`` —— 记录即 open、消费是唯一
+                               终态；同内容重复观测零新增记录且零改写（纯
+                               去重）；内容变更 = 独立再触发 → supersede 链。
+      R2 WARN 不改基线         ``test_rule2_*`` —— 基线写入对违规记录零权力
+                               （任何经基线路径改写违规状态即挂）。字面
+                               「WARN 不前移对账基线」为 FEAT-064 BLOCK
+                               翻转面（WARN 姿态下吸收窗口是既有行为，
+                               DEC-224 钉住）——口径披露见模块 docstring。
+      R3 同会话二次独立触发升级 ``test_rule3_*`` —— 同会话 escalated=True +
+                               escalated_at；跨会话/无会话身份 False（保守
+                               退化：宁可漏升不可误升）。
+      R4 跨会话保留            ``test_rule4_*`` —— 新会话新 run 后记录仍
+                               open 且 first_seen 不变；对账基线文件重建
+                               （丢失）也不丢未决违规。
+      R5 预授予+单次原子消费   ``test_rule5_*`` —— 有效授权单次消费绿；
+                               同授权二次消费 / 伪造 hook / 未登记 hook /
+                               未授权确保全拒（红相）。
+      R6 台账损坏不吸收不前移  ``test_rule6_*`` —— 损坏 → 响亮披露 + 基线
+                               冻结 + 零写入；修复后窗口重开重录（收敛）。
+    事务性（消费后崩溃 / 基线写崩）：``test_consume_crash_*`` —— 异常注入
+    模拟中途 kill → journal 残留 + 世界判定恢复，无半状态；恢复分目标态
+    （仅收尾）与前像态（重放基线写）两支 + 分歧拒绝支。并发：
+    ``test_concurrent_recordings_serialize``。
+    """
+
+    # ── fixtures ─────────────────────────────────────────────────────────
+
+    def _state_path(self, gov):
+        return Path(gov) / ".write-guard-state.json"
+
+    def _ledger_path(self, gov):
+        return Path(gov) / wgs.LEDGER_FILE_NAME
+
+    def _load(self, gov):
+        return json.loads(self._ledger_path(gov).read_text(encoding="utf-8"))
+
+    def _record(self, gov, detection, *, run_id="run-test", session=None):
+        issues, changed = wgs.record_detections(
+            gov, [detection], run_id=run_id, session_id=session,
+            hook_identity=wgs.GUARD_CLI_IDENTITY)
+        self.assertEqual(issues, [])
+        return changed
+
+    def _open_records(self, ledger):
+        return [r for r in ledger["violations"].values()
+                if r["status"] == "open"]
+
+    def _ensure_grant(self, gov):
+        grant_id, issues = wgs.ensure_grant(
+            gov, consumer=wgs.CLI_CONSUMER, run_id="run-test")
+        self.assertEqual(issues, [])
+        self.assertTrue(grant_id)
+        return grant_id
+
+    # ── R1 观测≠接受 / 重复 ──────────────────────────────────────────────
+
+    def test_rule1_observation_is_not_acceptance(self):
+        """R1 绿：记录即 open（消费事件/授权均空）；红相判据：重复观测不
+        改变状态——未消费前违规不可能自行翻转（消费是唯一终态）。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = Path(td)
+            detection = _detect(after="a" * 32)
+            self._record(gov, detection)
+            record = next(iter(self._load(gov)["violations"].values()))
+            self.assertEqual(record["status"], "open")
+            self.assertIsNone(record["consumption_event"])
+            self.assertIsNone(record["grant_id"])
+            self._record(gov, detection)  # 重复观测
+            record = next(iter(self._load(gov)["violations"].values()))
+            self.assertEqual(record["status"], "open")
+            self.assertIsNone(record["consumption_event"])
+
+    def test_rule1_same_violation_not_duplicated(self):
+        """R1 重复：同违规（同对象同内容）重复检测 → 恰一条记录、occurrence
+        不变、且为纯去重（零改写——changed=False）。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = Path(td)
+            detection = _detect(after="a" * 32)
+            self._record(gov, detection)
+            changed = self._record(gov, detection)
+            self.assertFalse(changed)
+            ledger = self._load(gov)
+            self.assertEqual(len(ledger["violations"]), 1)
+            record = next(iter(ledger["violations"].values()))
+            self.assertEqual(record["occurrence"], 1)
+
+    def test_rule1_independent_trigger_supersedes_with_occurrence(self):
+        """R1 独立再触发（同对象内容变更）→ 旧代 superseded、新代 open、
+        occurrence=2、before_hash 链接旧内容（审计链）。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = Path(td)
+            self._record(gov, _detect(after="a" * 32))
+            self._record(gov, _detect(after="b" * 32, before="a" * 32))
+            by_status = {}
+            for record in self._load(gov)["violations"].values():
+                by_status.setdefault(record["status"], []).append(record)
+            self.assertEqual(len(by_status.get("superseded", [])), 1)
+            self.assertEqual(len(by_status.get("open", [])), 1)
+            new = by_status["open"][0]
+            self.assertEqual(new["occurrence"], 2)
+            self.assertEqual(new["before_hash"], "a" * 32)
+            self.assertIn("supersedes", new["notes"])
+
+    # ── R2 WARN 不改基线（基线对违规状态零权力） ─────────────────────────
+
+    def test_rule2_baseline_advance_never_touches_violation_state(self):
+        """R2：WARN 姿态基线照常推进（吸收差异窗口——既有行为），但基线
+        写入对违规记录零权力——台账字节级不变、记录保持 open（任何经基线
+        路径消费/改写违规的实现即挂）。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = Path(td)
+            self._record(gov, _detect(after="a" * 32))
+            before = self._load(gov)
+            self._state_path(gov).write_text(
+                wgs.state_json_text(_baseline_target()), encoding="utf-8")
+            self.assertEqual(self._load(gov), before)
+            record = next(iter(before["violations"].values()))
+            self.assertEqual(record["status"], "open")
+
+    # ── R3 同会话二次独立触发升级 ────────────────────────────────────────
+
+    def test_rule3_same_session_second_trigger_escalates(self):
+        """R3 绿：同会话同违规第二次独立触发 → escalated=True +
+        escalated_at + occurrence=2。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = Path(td)
+            self._record(gov, _detect(after="a" * 32), session="session-x")
+            self._record(gov, _detect(after="b" * 32), session="session-x")
+            open_records = self._open_records(self._load(gov))
+            self.assertEqual(len(open_records), 1)
+            self.assertTrue(open_records[0]["escalated"])
+            self.assertTrue(open_records[0]["escalated_at"])
+            self.assertEqual(open_records[0]["occurrence"], 2)
+
+    def test_rule3_cross_session_trigger_does_not_escalate(self):
+        """R3 红相判据（升级边界）：不同会话的独立再触发不升级（跨会话
+        累积是 R4 的持久性语义，不是升级信号）。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = Path(td)
+            self._record(gov, _detect(after="a" * 32), session="session-x")
+            self._record(gov, _detect(after="b" * 32), session="session-y")
+            open_records = self._open_records(self._load(gov))
+            self.assertEqual(len(open_records), 1)
+            self.assertFalse(open_records[0]["escalated"])
+
+    def test_rule3_unknown_session_never_escalates(self):
+        """R3 保守退化：会话身份不可用（None）时宁可漏升不可误升——
+        CLI 未注入 GOVERNANCE_SESSION_ID 的现实路径零误报升级。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = Path(td)
+            self._record(gov, _detect(after="a" * 32), session=None)
+            self._record(gov, _detect(after="b" * 32), session=None)
+            open_records = self._open_records(self._load(gov))
+            self.assertEqual(len(open_records), 1)
+            self.assertFalse(open_records[0]["escalated"])
+
+    # ── R4 跨会话保留 ────────────────────────────────────────────────────
+
+    def test_rule4_violations_persist_across_sessions(self):
+        """R4：新会话新 run 重载台账 → 记录仍 open、first_seen 不变
+        （台账是文件态，不随进程/会话消失；对象在场且未 Remediation 时
+        完整状态机步进不消费——消费资格要求凭证或缺席）。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = Path(td)
+            self._record(gov, _detect(after="a" * 32),
+                         run_id="run-1", session="session-1")
+            first_seen = next(iter(
+                self._load(gov)["violations"].values()))["first_seen"]
+            # 会话重启：全新 run/会话——完整状态机步进（检测/消费判定照跑）
+            wgs.reconcile_violation_state(
+                gov, state_path=self._state_path(gov), detections=[],
+                records_index={"evidence-log.md": {
+                    "kind": "text",
+                    "by_key": {"EVD-9001": [
+                        {"digest": "a" * 32, "credentialed": False}]}}},
+                baseline_target=_baseline_target(),
+                run_id="run-2", session_id="session-2")
+            record = next(iter(self._load(gov)["violations"].values()))
+            self.assertEqual(record["status"], "open")
+            self.assertEqual(record["first_seen"], first_seen)
+
+    def test_rule4_open_records_survive_state_baseline_rebuild(self):
+        """R4 加强：对账基线文件重建（损坏重建路径——amnesty 重首见）不丢
+        未决违规——台账独立于基线存续。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = RowFamilyReconciliationTests()._seed_gov(td)
+            tracker = gov / "plan-tracker.md"
+            with mock.patch.object(vw, "SAMPLE_PATH", tracker), \
+                 mock.patch.object(vw, "GOVERNANCE_DIR", gov):
+                vw.check_governance_write_shapes(persist_state=True)
+                (gov / "evidence-log.md").write_text(
+                    RowFamilyReconciliationTests._EVD_SEED
+                    + RowFamilyReconciliationTests._EVD_SEED2
+                    + RowFamilyReconciliationTests._REVIEW_SEED
+                    + "| EVD-8003 | FEAT-060 | bare | d | b | a | actor | "
+                      "2026-09-24 | G11 | PASS |\n",
+                    encoding="utf-8")
+                vw.check_governance_write_shapes(persist_state=True)
+                self.assertEqual(len(self._open_records(self._load(gov))), 1)
+                # 基线文件重建（等价损坏重建后的首跑形态）
+                (self._state_path(gov)).unlink()
+                vw.check_governance_write_shapes(persist_state=True)
+            self.assertEqual(len(self._open_records(self._load(gov))), 1)
+
+    # ── R5 hook 消费权预授予 + 单次原子消费 ──────────────────────────────
+
+    def test_rule5_granted_consumption_is_single_use(self):
+        """R5 绿：预授予 → 单次原子消费成功（record consumed +
+        consumption_event + grant used + pending 清空）；红相：同一授权的
+        第二次消费被拒（grant_used），第二个违规保持 open。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = Path(td)
+            self._record(gov, _detect(object_id="EVD-9001",
+                                      after="a" * 32))
+            self._record(gov, _detect(object_id="EVD-9002",
+                                      after="b" * 32))
+            grant_id = self._ensure_grant(gov)
+            ledger = self._load(gov)
+            vids = sorted(ledger["violations"])
+            payload = wgs.consume_violations(
+                gov, self._state_path(gov), consumer=wgs.CLI_CONSUMER,
+                grant_id=grant_id, violation_ids=[vids[0]],
+                baseline_target=_baseline_target(), run_id="run-test")
+            self.assertTrue(payload["ok"], payload)
+            self.assertEqual(payload["consumed"], [vids[0]])
+            record = self._load(gov)["violations"][vids[0]]
+            self.assertEqual(record["status"], "consumed")
+            self.assertEqual(record["consumption_event"]["consumer"],
+                             wgs.CLI_CONSUMER)
+            self.assertEqual(record["consumption_event"]["grant_id"],
+                             grant_id)
+            self.assertEqual(self._load(gov)["grants"][grant_id]["status"],
+                             "used")
+            self.assertIsNone(self._load(gov)["pending_txn"])
+            # 红相：单次授权已燃——第二次消费被拒，第二个违规不动
+            refused = wgs.consume_violations(
+                gov, self._state_path(gov), consumer=wgs.CLI_CONSUMER,
+                grant_id=grant_id, violation_ids=[vids[1]],
+                baseline_target=_baseline_target(), run_id="run-test")
+            self.assertFalse(refused["ok"])
+            self.assertEqual(refused["error"], "grant_used")
+            self.assertEqual(
+                self._load(gov)["violations"][vids[1]]["status"], "open")
+            self.assertIsNone(self._load(gov)["pending_txn"])  # 拒前零残留
+
+    def test_rule5_forged_hook_identity_refused(self):
+        """R5 伪造 hook（两腿）：①冒用注册身份 + 伪造授权 token →
+        unknown_grant；②授权 token 属另一消费者（手工伪造台账样本——即
+        伪造者的实际形态）→ forged_consumer。两腿均零残留（授权未燃、违规
+        open、无 pending）。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = Path(td)
+            self._record(gov, _detect(after="a" * 32))
+            grant_id = self._ensure_grant(gov)
+            vid = next(iter(self._load(gov)["violations"]))
+            # 腿①：冒用注册身份 + 不存在的授权
+            forged_token = wgs.consume_violations(
+                gov, self._state_path(gov), consumer=wgs.CLI_CONSUMER,
+                grant_id="grant-" + "f" * 32, violation_ids=[vid],
+                baseline_target=_baseline_target(), run_id="run-test")
+            self.assertFalse(forged_token["ok"])
+            self.assertEqual(forged_token["error"], "unknown_grant")
+            # 腿②：token 属他人（伪造者手工植入的台账样本）
+            ledger = self._load(gov)
+            ledger["grants"]["grant-" + "e" * 32] = {
+                "consumer": "some-other-registered-consumer",
+                "issued_at": "2026-09-24T00:00:00",
+                "issued_by_run": "run-forged", "status": "active"}
+            self._ledger_path(gov).write_text(
+                json.dumps(ledger), encoding="utf-8")
+            forged_id = wgs.consume_violations(
+                gov, self._state_path(gov), consumer=wgs.CLI_CONSUMER,
+                grant_id="grant-" + "e" * 32, violation_ids=[vid],
+                baseline_target=_baseline_target(), run_id="run-test")
+            self.assertFalse(forged_id["ok"])
+            self.assertEqual(forged_id["error"], "forged_consumer")
+            ledger = self._load(gov)
+            self.assertEqual(ledger["violations"][vid]["status"], "open")
+            self.assertEqual(ledger["grants"][grant_id]["status"], "active")
+            self.assertIsNone(ledger["pending_txn"])
+
+    def test_rule5_unregistered_hook_refused(self):
+        """R5 无权 hook：未登记消费者既不能获得预授予（ensure_grant 拒绝）
+        也不能消费（consume 拒绝）——消费权闭集在注册表，不在调用方。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = Path(td)
+            self._record(gov, _detect(after="a" * 32))
+            vid = next(iter(self._load(gov)["violations"]))
+            grant_id, issues = wgs.ensure_grant(
+                gov, consumer="rogue-hook", run_id="run-test")
+            self.assertIsNone(grant_id)
+            self.assertEqual(issues[0]["type"], "unregistered_consumer")
+            refused = wgs.consume_violations(
+                gov, self._state_path(gov), consumer="rogue-hook",
+                grant_id="grant-" + "0" * 32, violation_ids=[vid],
+                baseline_target=_baseline_target(), run_id="run-test")
+            self.assertFalse(refused["ok"])
+            self.assertEqual(refused["error"], "unregistered_consumer")
+            self.assertEqual(
+                self._load(gov)["violations"][vid]["status"], "open")
+
+    # ── R6 台账损坏时不吸收不前移 ────────────────────────────────────────
+
+    def test_rule6_corrupted_ledger_no_absorb_no_advance(self):
+        """R6：台账损坏 → 响亮披露 + 基线冻结（新裸变更也不吸收——下一轮
+        可重录）+ 零写入（损坏字节原样）；face 恒 PASS（WARN 姿态）。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = RowFamilyReconciliationTests()._seed_gov(td)
+            tracker = gov / "plan-tracker.md"
+            with mock.patch.object(vw, "SAMPLE_PATH", tracker), \
+                 mock.patch.object(vw, "GOVERNANCE_DIR", gov):
+                vw.check_governance_write_shapes(persist_state=True)
+                (gov / "evidence-log.md").write_text(
+                    RowFamilyReconciliationTests._EVD_SEED
+                    + RowFamilyReconciliationTests._EVD_SEED2
+                    + RowFamilyReconciliationTests._REVIEW_SEED
+                    + "| EVD-8003 | FEAT-060 | bare | d | b | a | actor | "
+                      "2026-09-24 | G11 | PASS |\n",
+                    encoding="utf-8")
+                self._ledger_path(gov).write_text("{not valid json",
+                                                  encoding="utf-8")
+                state_before = self._state_path(gov).read_bytes()
+                ledger_before = self._ledger_path(gov).read_bytes()
+                result = vw.check_governance_write_shapes(persist_state=True)
+            face = result["row_families"]
+            self.assertEqual(face["status"], "PASS")  # WARN 姿态不 FAIL
+            kinds = [i["type"] for i in face["issues"]]
+            self.assertIn("violation_ledger_unreadable", kinds)
+            self.assertEqual(self._state_path(gov).read_bytes(),
+                             state_before)   # 不前移（不吸收）
+            self.assertEqual(self._ledger_path(gov).read_bytes(),
+                             ledger_before)  # 零写入
+
+    def test_rule6_repaired_ledger_reopens_window_and_converges(self):
+        """R6 恢复腿：人工修复台账（重建空台账）后 → 冻结窗口重开 →
+        违规重新检测入账（收敛到一致状态）。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = RowFamilyReconciliationTests()._seed_gov(td)
+            tracker = gov / "plan-tracker.md"
+            with mock.patch.object(vw, "SAMPLE_PATH", tracker), \
+                 mock.patch.object(vw, "GOVERNANCE_DIR", gov):
+                vw.check_governance_write_shapes(persist_state=True)
+                (gov / "evidence-log.md").write_text(
+                    RowFamilyReconciliationTests._EVD_SEED
+                    + RowFamilyReconciliationTests._EVD_SEED2
+                    + RowFamilyReconciliationTests._REVIEW_SEED
+                    + "| EVD-8003 | FEAT-060 | bare | d | b | a | actor | "
+                      "2026-09-24 | G11 | PASS |\n",
+                    encoding="utf-8")
+                self._ledger_path(gov).write_text("{not valid json",
+                                                  encoding="utf-8")
+                vw.check_governance_write_shapes(persist_state=True)
+                # 人工修复：空合法台账（删除=丢失持久状态，已在披露中言明）
+                self._ledger_path(gov).write_text(
+                    json.dumps({"schema_version": 1, "tool": wgs.TOOL_ID,
+                                "updated_at": None, "violations": {},
+                                "grants": {}, "pending_txn": None}),
+                    encoding="utf-8")
+                vw.check_governance_write_shapes(persist_state=True)
+            self.assertEqual(len(self._open_records(self._load(gov))), 1)
+
+    def test_ledger_validation_requires_canonical_fields(self):
+        """P3（review-FEAT-060-R0）：记录缺规范字段（截断/篡改形态）→
+        load_ledger 判损坏（R6 fail-closed，指名缺失字段），不再仅凭
+        status 放行；十二规范字段在场时校验通过（其余测试隐式覆盖）。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = Path(td)
+            self._record(gov, _detect(after="a" * 32))
+            ledger = self._load(gov)
+            vid = next(iter(ledger["violations"]))
+            del ledger["violations"][vid]["occurrence"]
+            self._ledger_path(gov).write_text(json.dumps(ledger),
+                                              encoding="utf-8")
+            loaded, issue = wgs.load_ledger(gov)
+            self.assertIsNone(loaded)
+            self.assertEqual(issue["type"], "violation_ledger_unreadable")
+            self.assertIn("occurrence", issue["detail"])
+
+    # ── ops 可恢复事务：消费后崩溃 / 基线写崩 ────────────────────────────
+
+    def _seed_two_violations_with_state(self, gov):
+        """Baseline state file on disk + two open violations + a grant."""
+        self._state_path(gov).write_text(
+            wgs.state_json_text(_baseline_target(
+                {"evidence-log.md": {"sha256": "old", "rows": {}}})),
+            encoding="utf-8")
+        self._record(gov, _detect(object_id="EVD-9001", after="a" * 32),
+                     run_id="run-1")
+        self._record(gov, _detect(object_id="EVD-9002", after="b" * 32),
+                     run_id="run-1")
+        return self._ensure_grant(gov), sorted(self._load(gov)["violations"])
+
+    def test_consume_crash_during_baseline_write_recovers(self):
+        """消费事务在基线写入步崩溃（kill 模拟——异常注入）：残留 = 仅
+        journal（pending_txn），违规仍 open、授权仍 active、基线保持旧字节
+        ——无半状态；重跑恢复（世界=事务前像 → 重放基线写 → 收尾）→
+        consumed + 授权燃尽 + 基线 = 事务目标，无二次应用。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = Path(td)
+            grant_id, vids = self._seed_two_violations_with_state(gov)
+            state_before = self._state_path(gov).read_bytes()
+            target = _baseline_target({"evidence-log.md": {
+                "sha256": "new", "rows": {}}})
+            real_write = wgs._atomic_write_bytes
+            calls = {"n": 0}
+
+            def flaky_write(path, data):
+                calls["n"] += 1
+                if calls["n"] == 2:  # call 1 = journal, call 2 = baseline
+                    raise OSError("simulated crash: baseline write killed")
+                return real_write(path, data)
+
+            with mock.patch.object(wgs, "_atomic_write_bytes", flaky_write):
+                with self.assertRaises(OSError):
+                    wgs.consume_violations(
+                        gov, self._state_path(gov),
+                        consumer=wgs.CLI_CONSUMER, grant_id=grant_id,
+                        violation_ids=[vids[0]],
+                        baseline_target=target, run_id="run-test")
+            # 残留 = 仅 journal；世界无半状态
+            ledger = self._load(gov)
+            self.assertIsNotNone(ledger["pending_txn"])
+            self.assertEqual(ledger["pending_txn"]["baseline_target"],
+                             target)
+            self.assertEqual(ledger["violations"][vids[0]]["status"],
+                             "open")
+            self.assertEqual(ledger["grants"][grant_id]["status"], "active")
+            self.assertEqual(self._state_path(gov).read_bytes(),
+                             state_before)
+            # 恢复：世界=事务前像 → 重放基线写 → 收尾（日志不凌驾世界）
+            issues, completed, consumed = wgs.resume_pending_txn(
+                gov, self._state_path(gov))
+            self.assertEqual(issues, [])
+            self.assertTrue(completed)
+            self.assertEqual(consumed, [vids[0]])
+            self.assertEqual(
+                self._state_path(gov).read_bytes(),
+                wgs.state_json_text(target).encode("utf-8"))
+            ledger = self._load(gov)
+            self.assertEqual(ledger["violations"][vids[0]]["status"],
+                             "consumed")
+            self.assertEqual(ledger["grants"][grant_id]["status"], "used")
+            self.assertIsNone(ledger["pending_txn"])
+
+    def test_consume_crash_during_finalize_recovers(self):
+        """消费事务在收尾步崩溃（基线已写、台账未收尾）：残留 = journal +
+        基线已在目标态；重跑恢复走「世界=目标 → 仅收尾」支——基线零二次
+        写（字节恒等）、违规 consumed、授权燃尽。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = Path(td)
+            grant_id, vids = self._seed_two_violations_with_state(gov)
+            target = _baseline_target({"evidence-log.md": {
+                "sha256": "new", "rows": {}}})
+            real_save = wgs.save_ledger
+            calls = {"n": 0}
+
+            def flaky_save(gdir, ledger):
+                calls["n"] += 1
+                if calls["n"] == 2:  # call 1 = journal, call 2 = finalize
+                    raise OSError("simulated crash: finalize killed")
+                return real_save(gdir, ledger)
+
+            with mock.patch.object(wgs, "save_ledger", flaky_save):
+                with self.assertRaises(OSError):
+                    wgs.consume_violations(
+                        gov, self._state_path(gov),
+                        consumer=wgs.CLI_CONSUMER, grant_id=grant_id,
+                        violation_ids=[vids[0]],
+                        baseline_target=target, run_id="run-test")
+            # 残留：基线已在目标态（phase 2 完成）、journal 在、违规仍 open
+            self.assertEqual(
+                self._state_path(gov).read_bytes(),
+                wgs.state_json_text(target).encode("utf-8"))
+            self.assertIsNotNone(self._load(gov)["pending_txn"])
+            self.assertEqual(self._load(gov)["violations"][vids[0]]["status"],
+                             "open")
+            baseline_at_crash = self._state_path(gov).read_bytes()
+            issues, completed, consumed = wgs.resume_pending_txn(
+                gov, self._state_path(gov))
+            self.assertEqual(issues, [])
+            self.assertTrue(completed)
+            self.assertEqual(consumed, [vids[0]])
+            self.assertEqual(self._state_path(gov).read_bytes(),
+                             baseline_at_crash)  # 零二次基线写
+            ledger = self._load(gov)
+            self.assertEqual(ledger["violations"][vids[0]]["status"],
+                             "consumed")
+            self.assertIsNone(ledger["pending_txn"])
+
+    def test_resume_diverged_world_refuses_to_advance(self):
+        """恢复第三支（fail-safe）：世界既非事务目标也非事务前像 → 响亮
+        披露 violation_txn_diverged、拒绝推进（不吸收不前移不写违规）。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = Path(td)
+            grant_id, vids = self._seed_two_violations_with_state(gov)
+            real_write = wgs._atomic_write_bytes
+            calls = {"n": 0}
+
+            def flaky_write(path, data):
+                calls["n"] += 1
+                if calls["n"] == 2:
+                    raise OSError("simulated crash: baseline write killed")
+                return real_write(path, data)
+
+            with mock.patch.object(wgs, "_atomic_write_bytes",
+                                   flaky_write):
+                with self.assertRaises(OSError):
+                    wgs.consume_violations(
+                        gov, self._state_path(gov),
+                        consumer=wgs.CLI_CONSUMER, grant_id=grant_id,
+                        violation_ids=[vids[0]],
+                        baseline_target=_baseline_target(
+                            {"evidence-log.md": {"sha256": "new",
+                                                 "rows": {}}}),
+                        run_id="run-test")
+            diverged = b'{"diverged": "world moved on"}'
+            self._state_path(gov).write_bytes(diverged)
+            issues, completed, consumed = wgs.resume_pending_txn(
+                gov, self._state_path(gov))
+            self.assertFalse(completed)
+            self.assertEqual(consumed, [])
+            self.assertEqual(issues[0]["type"], "violation_txn_diverged")
+            self.assertEqual(self._state_path(gov).read_bytes(), diverged)
+            self.assertEqual(self._load(gov)["violations"][vids[0]]["status"],
+                             "open")
+            self.assertIsNotNone(self._load(gov)["pending_txn"])
+
+    # ── 并发 ─────────────────────────────────────────────────────────────
+
+    def test_plain_advance_defers_when_state_lock_held(self):
+        """P1-1（review-FEAT-060-R0）锁覆盖证明：状态文件锁被他进程持有时，
+        plain 推进让行（返回 False + lock busy）且零写入——修复前 plain 路径
+        无锁、会直接写字节（红相判据）；锁释放后照常推进（绿相）。模拟他进程
+        持锁 = 手工创建 O_EXCL 锁文件（同进程 _TargetLock 经 inproc 互斥天然
+        串行，StoreError 竞争面只在跨进程）。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = Path(td)
+            state_path = self._state_path(gov)
+            state_path.write_text(
+                wgs.state_json_text(_baseline_target()), encoding="utf-8")
+            before = state_path.read_bytes()
+            other = _baseline_target({"evidence-log.md": {
+                "sha256": "x", "rows": {}}})
+            lock_dir = gov / ".governance-store-locks"
+            lock_dir.mkdir(exist_ok=True)
+            lock_file = lock_dir / ".write-guard-state.json.lock"
+            lock_file.write_text("999999", encoding="utf-8")  # 他进程持锁
+            advanced, detail = wgs.advance_baseline_plain(
+                state_path, wgs.state_json_text(other), timeout_seconds=0.3)
+            self.assertFalse(advanced)
+            self.assertIn("lock busy", detail)
+            self.assertEqual(state_path.read_bytes(), before)  # 零写入
+            lock_file.unlink()  # 他进程完成 → 锁空闲
+            advanced, detail = wgs.advance_baseline_plain(
+                state_path, wgs.state_json_text(other))
+            self.assertTrue(advanced, detail)
+            self.assertIsNone(detail)
+            # 文本层比较（write_text 在 Windows 做 \n→os.linesep 翻译，与
+            # 既有 plain 路径一致；txn sha 比对两侧同法计算，不受影响）
+            self.assertEqual(state_path.read_text(encoding="utf-8"),
+                             wgs.state_json_text(other))
+
+    def test_concurrent_resume_and_reconcile_stay_coherent(self):
+        """P1-1 并发不变量：崩溃残留的在途事务 × 并发第二进程形态的完整
+        reconcile 步（resume→记录→消费→plain 推进全流程）→ 无 diverged
+        披露、pending 收敛为 None、事务违规 consumed、基线终态 = 某一完整
+        目标字节（共锁下两路各自完整推进，last-writer-wins 语义等价——
+        两路的 files 内容同源，仅 updated_at 异）。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = Path(td)
+            grant_id, vids = self._seed_two_violations_with_state(gov)
+            target_a = _baseline_target({"evidence-log.md": {
+                "sha256": "new", "rows": {}}})
+            real_write = wgs._atomic_write_bytes
+            calls = {"n": 0}
+
+            def flaky_write(path, data):
+                calls["n"] += 1
+                if calls["n"] == 2:
+                    raise OSError("simulated crash: baseline write killed")
+                return real_write(path, data)
+
+            with mock.patch.object(wgs, "_atomic_write_bytes", flaky_write):
+                with self.assertRaises(OSError):
+                    wgs.consume_violations(
+                        gov, self._state_path(gov),
+                        consumer=wgs.CLI_CONSUMER, grant_id=grant_id,
+                        violation_ids=[vids[0]],
+                        baseline_target=target_a, run_id="run-crash")
+            target_b = _baseline_target({"evidence-log.md": {
+                "sha256": "new2", "rows": {}}})
+            results = {}
+
+            def resume_leg():
+                results["resume"] = wgs.resume_pending_txn(
+                    gov, self._state_path(gov))
+
+            def reconcile_leg():
+                results["reconcile"] = wgs.reconcile_violation_state(
+                    gov, state_path=self._state_path(gov), detections=[],
+                    records_index={}, baseline_target=target_b,
+                    run_id="run-b")
+
+            threads = [threading.Thread(target=resume_leg),
+                       threading.Thread(target=reconcile_leg)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+            resume_issues = results["resume"][0]
+            reconcile_issues = results["reconcile"]["issues"]
+            diverged = [i for i in resume_issues + reconcile_issues
+                        if i["type"] == "violation_txn_diverged"]
+            self.assertEqual(diverged, [], (resume_issues, reconcile_issues))
+            ledger = self._load(gov)
+            self.assertIsNone(ledger["pending_txn"])
+            self.assertEqual(ledger["violations"][vids[0]]["status"],
+                             "consumed")
+            final = self._state_path(gov).read_bytes()
+            self.assertIn(final, (
+                wgs.state_json_text(target_a).encode("utf-8"),
+                wgs.state_json_text(target_b).encode("utf-8")))
+
+    def test_concurrent_recordings_serialize(self):
+        """并发：多线程同时记录不同违规 → 全部落账、台账为合法 JSON、零
+        异常（_TargetLock 串行化——同进程 inproc 互斥 + O_EXCL 锁文件）。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = Path(td)
+            errors = []
+
+            def worker(i):
+                try:
+                    issues, _changed = wgs.record_detections(
+                        gov,
+                        [_detect(object_id="EVD-90%02d" % i,
+                                 after=("%02d" % i) * 16)],
+                        run_id="run-%d" % i)
+                    if issues:
+                        errors.append(issues)
+                except BaseException as exc:  # pragma: no cover — 诊断面
+                    errors.append(exc)
+
+            threads = [threading.Thread(target=worker, args=(i,))
+                       for i in range(4)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+            self.assertEqual(errors, [])
+            ledger = self._load(gov)
+            self.assertEqual(len(ledger["violations"]), 4)
+
+    # ── 消费资格判定（消费门核心） ───────────────────────────────────────
+
+    def test_eligibility_requires_credential_or_absence(self):
+        """消费资格：对象在场且无凭证 → 不资格（保持 open）；对象已带凭证
+        / 对象消失 / 受管面整体消失 → 资格；面不可读 → 不资格（fail-safe，
+        不消费判不了的东西）。"""
+        ledger = {"schema_version": 1, "tool": wgs.TOOL_ID,
+                  "updated_at": None, "violations": {
+                      "WV-1": {"status": "open", "family": "evidence-log.md",
+                               "object_id": "EVD-1"}},
+                  "grants": {}, "pending_txn": None}
+        # 在场无凭证 → 不资格
+        index = {"evidence-log.md": {"kind": "text", "by_key": {
+            "EVD-1": [{"digest": "x", "credentialed": False}]}}}
+        self.assertEqual(wgs.eligible_open_violation_ids(ledger, index), [])
+        # 在场带凭证 → 资格
+        index["evidence-log.md"]["by_key"]["EVD-1"] = [
+            {"digest": "x", "credentialed": True}]
+        self.assertEqual(wgs.eligible_open_violation_ids(ledger, index),
+                         ["WV-1"])
+        # 对象消失 / 受管面整体消失 → 资格
+        self.assertEqual(wgs.eligible_open_violation_ids(
+            ledger, {"evidence-log.md": {"kind": "text", "by_key": {}}}),
+            ["WV-1"])
+        self.assertEqual(wgs.eligible_open_violation_ids(ledger, {}),
+                         ["WV-1"])
+        # 面不可读 → 不资格
+        self.assertEqual(wgs.eligible_open_violation_ids(
+            ledger, {"evidence-log.md": {"kind": "unreadable"}}), [])
+
+    # ── CLI 集成（WARN 姿态输出零变化 + 记录/消费闭环 + 会话升级） ───────
+
+    _BARE_ROW = ("| EVD-8003 | FEAT-060 | bare | d | b | a | actor | "
+                 "2026-09-24 | G11 | PASS |\n")
+
+    def _seed_and_record(self, gov):
+        """amnesty 基线 + 裸变更首次 guard run → 违规入账（返回 open record
+        与检测轮 face 结果——该轮即 WARN 判定面）。"""
+        RowFamilyReconciliationTests()._seed_gov(gov)
+        tracker = gov / "plan-tracker.md"
+        with mock.patch.object(vw, "SAMPLE_PATH", tracker), \
+             mock.patch.object(vw, "GOVERNANCE_DIR", gov):
+            vw.check_governance_write_shapes(persist_state=True)
+            (gov / "evidence-log.md").write_text(
+                RowFamilyReconciliationTests._EVD_SEED
+                + RowFamilyReconciliationTests._EVD_SEED2
+                + RowFamilyReconciliationTests._REVIEW_SEED
+                + self._BARE_ROW,
+                encoding="utf-8")
+            detect_result = vw.check_governance_write_shapes(
+                persist_state=True)
+        open_records = self._open_records(self._load(gov))
+        self.assertEqual(len(open_records), 1)
+        return open_records[0], detect_result
+
+    def test_cli_records_violation_with_unchanged_warn_output(self):
+        """CLI 集成：裸变更 → 检测轮 WARN 判定面字节不变
+        （unattributed_row_change 措辞/字段原样、face 恒 PASS），底下多出
+        持久 open 记录（12 规范字段全在）；CLI stdout 零新增行（不含
+        violation/ledger 字样）。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = Path(td)
+            record, detect_result = self._seed_and_record(gov)
+            for key in ("violation_id", "family", "object_id", "before_hash",
+                        "after_hash", "workflow_run_id", "hook_identity",
+                        "first_seen", "occurrence", "status", "grant_id",
+                        "consumption_event"):
+                self.assertIn(key, record)
+            self.assertEqual(record["type"], "unattributed_row_change")
+            self.assertEqual(record["object_id"], "EVD-8003")
+            self.assertEqual(record["hook_identity"], wgs.GUARD_CLI_IDENTITY)
+            face = detect_result["row_families"]
+            self.assertEqual(face["status"], "PASS")
+            warn = [i for i in face["issues"]
+                    if i["type"] == "unattributed_row_change"]
+            self.assertEqual(len(warn), 1)  # 判定面照常（记录不改变披露）
+            self.assertIn("WARN 姿态 0.86.0", warn[0]["detail"])
+            self.assertIn("BLOCK 升级留 0.87", warn[0]["detail"])
+            self.assertIn("unattributed row change", warn[0]["detail"])
+            buf = io.StringIO()
+            tracker = gov / "plan-tracker.md"
+            with mock.patch.object(vw, "SAMPLE_PATH", tracker), \
+                 mock.patch.object(vw, "GOVERNANCE_DIR", gov), \
+                 mock.patch("sys.stdout", buf):
+                vw.cmd_governance_write_guard(types.SimpleNamespace())
+            self.assertNotIn("violation", buf.getvalue())
+            self.assertNotIn("ledger", buf.getvalue())
+
+    def test_cli_remediation_consumes_granted(self):
+        """CLI 集成：补救（行获得机器凭证）→ 下一轮 guard 消费（granted、
+        原子）→ 零 WARN、record consumed、授权燃尽。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = Path(td)
+            record, _detect_result = self._seed_and_record(gov)
+            (gov / "evidence-log.md").write_text(
+                RowFamilyReconciliationTests._EVD_SEED
+                + RowFamilyReconciliationTests._EVD_SEED2
+                + RowFamilyReconciliationTests._REVIEW_SEED
+                + "| EVD-8003 | FEAT-060 | fixed | b（机器写入："
+                  "governance-store evidence-append op-" + "a" * 32
+                + "；schema v1） | a | governance-store | 2026-09-24 | G11 "
+                  "| PASS |\n",
+                encoding="utf-8")
+            tracker = gov / "plan-tracker.md"
+            with mock.patch.object(vw, "SAMPLE_PATH", tracker), \
+                 mock.patch.object(vw, "GOVERNANCE_DIR", gov):
+                result = vw.check_governance_write_shapes(
+                    persist_state=True)
+            face = result["row_families"]
+            self.assertEqual(
+                [i for i in face["issues"]
+                 if i["type"] == "unattributed_row_change"], [])
+            ledger = self._load(gov)
+            consumed = ledger["violations"][record["violation_id"]]
+            self.assertEqual(consumed["status"], "consumed")
+            self.assertEqual(consumed["consumption_event"]["consumer"],
+                             wgs.CLI_CONSUMER)
+            self.assertTrue(ledger["grants"])
+            self.assertTrue(
+                all(g["status"] == "used"
+                    for g in ledger["grants"].values()))
+            self.assertIsNone(ledger["pending_txn"])
+
+    def test_cli_env_session_escalates_second_trigger(self):
+        """CLI 集成（R3 接线）：GOVERNANCE_SESSION_ID 注入后，同会话内同一
+        对象第二次独立触发 → 新代记录 occurrence=2 + escalated=True。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = RowFamilyReconciliationTests()._seed_gov(td)
+            tracker = gov / "plan-tracker.md"
+            with mock.patch.object(vw, "SAMPLE_PATH", tracker), \
+                 mock.patch.object(vw, "GOVERNANCE_DIR", gov), \
+                 mock.patch.dict(os.environ,
+                                 {wgs.SESSION_ENV: "session-x"}):
+                vw.check_governance_write_shapes(persist_state=True)
+                (gov / "evidence-log.md").write_text(
+                    RowFamilyReconciliationTests._EVD_SEED
+                    + RowFamilyReconciliationTests._EVD_SEED2
+                    + RowFamilyReconciliationTests._REVIEW_SEED
+                    + self._BARE_ROW,
+                    encoding="utf-8")
+                vw.check_governance_write_shapes(persist_state=True)
+                (gov / "evidence-log.md").write_text(
+                    RowFamilyReconciliationTests._EVD_SEED
+                    + RowFamilyReconciliationTests._EVD_SEED2
+                    + RowFamilyReconciliationTests._REVIEW_SEED
+                    + self._BARE_ROW.replace("| bare |", "| bare-again |"),
+                    encoding="utf-8")
+                vw.check_governance_write_shapes(persist_state=True)
+            open_records = self._open_records(self._load(gov))
+            self.assertEqual(len(open_records), 1)
+            self.assertEqual(open_records[0]["occurrence"], 2)
+            self.assertTrue(open_records[0]["escalated"])
+            self.assertEqual(open_records[0]["session_id"], "session-x")
+
+    def test_probe_never_writes_violation_ledger(self):
+        """probe 路径（persist_state=False）：有裸变更在场也零写入——不建
+        台账、不动基线（对账窗口零消费，contract-matrix 同路径）。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = RowFamilyReconciliationTests()._seed_gov(td)
+            tracker = gov / "plan-tracker.md"
+            with mock.patch.object(vw, "SAMPLE_PATH", tracker), \
+                 mock.patch.object(vw, "GOVERNANCE_DIR", gov):
+                vw.check_governance_write_shapes(persist_state=True)
+                (gov / "evidence-log.md").write_text(
+                    RowFamilyReconciliationTests._EVD_SEED
+                    + RowFamilyReconciliationTests._EVD_SEED2
+                    + RowFamilyReconciliationTests._REVIEW_SEED
+                    + self._BARE_ROW,
+                    encoding="utf-8")
+                vw.check_governance_write_shapes(persist_state=False)
+            self.assertFalse(self._ledger_path(gov).is_file())
+
+    def test_state_serializer_is_single_source(self):
+        """FIX-292 纪律：引擎 plain-advance 写基线与事务 resume 比对用的是
+        同一序列化器（verify_workflow 委托 write_guard_state.state_json_text
+        ——第二序列化器即漂移）。"""
+        target = _baseline_target({"evidence-log.md": {"sha256": "x",
+                                                       "rows": {}}})
+        self.assertEqual(vw._write_guard_state_json(target),
+                         wgs.state_json_text(target))
 
 
 if __name__ == "__main__":

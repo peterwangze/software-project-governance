@@ -263,8 +263,10 @@ STATIC_PIN_EXEMPTIONS = {
         # 0.86.0 bump-time rows: FEAT-057 fixture tracker row (scenario
         # payload) + one assertion quoting the write-guard WARN disclosure's
         # declarative BLOCK-upgrade version reference (DEC-224 wording).
-        (992, "0.86.0", _REASON_FIXTURE_ROW_TEXT),
-        (1138, "0.86.0", _REASON_GUARD_OUTPUT_ASSERT),
+        # FEAT-060 re-audit: the three test-file import additions shifted
+        # both rows 992->995 and 1138->1141 (tokens unchanged, same rows).
+        (995, "0.86.0", _REASON_FIXTURE_ROW_TEXT),
+        (1141, "0.86.0", _REASON_GUARD_OUTPUT_ASSERT),
     ],
     "skills/software-project-governance/infra/tests/test_static_version_pins.py": [
         (158, "0.85.0", _REASON_FUTURE_TARGET),

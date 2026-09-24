@@ -16,6 +16,11 @@ guard that can actually fail:
 * **FEAT-037 P3-4** — the fixture-mirror inventory registered in the manifest
   must keep matching `PROJECTION_SYNC_PATTERNS` exactly, so a pattern added
   without a manifest update fails here rather than drifting.
+* **FIX-381** — the controlled-backport institution
+  (`legacy_snapshot_backport_policy` + per-snapshot `approved_backports`
+  ledgers) is machine-guarded: hollow policy sections, hollow ledger entries,
+  stale anchors and missing patch markers each redden, and a converged
+  backport-bearing snapshot names the replay-or-promote disposition.
 """
 
 from __future__ import annotations
@@ -291,6 +296,164 @@ class LegacySnapshotDeclarationTests(unittest.TestCase):
             result = check_legacy_snapshots(root, config)
         self.assertFalse(result["pass"])
         self.assertTrue(any("unreadable" in issue for issue in result["issues"]))
+
+
+class BackportPolicyTests(unittest.TestCase):
+    """FIX-381 — the controlled-backport institution is machine-guarded."""
+
+    LEDGER_ENTRY = {
+        "fix_id": "FIX-999", "source_fix": "FIX-001",
+        "approved": "review-FIX-999-CODE-R0 APPROVED/0",
+        "anchor_symbol": "guarded_region", "marker": "FIX-999 (backport",
+        "reason": "sync the guarded region",
+        "dual_run": "probe red->green on both legs",
+        "coupling_reviewed": "no registry-path move; no third copy",
+    }
+    COPY_SOURCE = (
+        "def guarded_region(line):\n"
+        '    """FIX-999 (backport of the FIX-001 fix into this declared'
+        " legacy snapshot).\"\"\"\n"
+        "    return line\n"
+    )
+    POLICY = {
+        "trigger": {"evaluate_when": "a canonical fix touches a declared copy"},
+        "ledger": {"location": "approved_backports"},
+        "dual_run_contract": {"requirement": "probe passes in both trees"},
+        "coupling_check": {"when": "before approval"},
+        "replay_path": {"rule": "regeneration is not a supported write"},
+    }
+
+    def _root_with(self, *, entries, files, policy="default"):
+        """Build a temp root + config; `policy="default"` ships the valid one."""
+        tmp = tempfile.TemporaryDirectory(prefix="fix381_backport_")
+        root = Path(tmp.name)
+        for rel, content in files.items():
+            path = root / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+        config = {"declared_legacy_snapshots": entries}
+        if policy == "default":
+            config["legacy_snapshot_backport_policy"] = dict(self.POLICY)
+        elif policy is not None:
+            config["legacy_snapshot_backport_policy"] = policy
+        config_path = root / "config.json"
+        config_path.write_text(json.dumps(config), encoding="utf-8")
+        return tmp, root, config_path
+
+    # ── shipped registry: the institution is live, not decorative ────────
+    def test_shipped_policy_and_ledger_are_live(self):
+        result = check_legacy_snapshots(ROOT)
+        self.assertTrue(result["pass"], result["issues"])
+        face = result["backport_ledger"]
+        self.assertTrue(face["policy_declared"])
+        self.assertGreaterEqual(face["ledger_entries"], 1)
+        self.assertEqual(face["anchors_resolved"], face["ledger_entries"])
+
+    def test_shipped_ledger_entry_resolves_in_the_real_copy(self):
+        config = json.loads((ROOT / CONFIG_REL).read_text(encoding="utf-8"))
+        entry = next(item for item in config["declared_legacy_snapshots"]
+                     if item["id"] == "fixture-engine")
+        ledger = entry["approved_backports"]
+        self.assertTrue(ledger)
+        copy_text = (ROOT / entry["path"]).read_text(encoding="utf-8",
+                                                     errors="replace")
+        for item in ledger:
+            self.assertIn(item["anchor_symbol"], copy_text,
+                          f"{item['fix_id']} anchor no longer in the copy")
+            self.assertIn(item["marker"], copy_text,
+                          f"{item['fix_id']} patch marker no longer in the copy")
+
+    # ── policy block falsifiability ──────────────────────────────────────
+    def test_hollow_policy_block_fails(self):
+        hollow = {**self.POLICY, "trigger": {}}
+        tmp, root, config = self._root_with(
+            entries=[], files={}, policy=hollow)
+        with tmp:
+            result = check_legacy_snapshots(root, config)
+        self.assertFalse(result["pass"])
+        self.assertTrue(any("hollow" in issue and "trigger" in issue
+                            for issue in result["issues"]))
+
+    def test_policy_block_non_object_fails(self):
+        tmp, root, config = self._root_with(entries=[], files={},
+                                            policy="prose only")
+        with tmp:
+            result = check_legacy_snapshots(root, config)
+        self.assertFalse(result["pass"])
+        self.assertTrue(any("must be an object" in issue
+                            for issue in result["issues"]))
+
+    # ── ledger entry falsifiability ──────────────────────────────────────
+    def _ledger_root(self, ledger, copy_source, canon_source="canonical\n"):
+        return self._root_with(
+            entries=[{"id": "snap", "path": "fixture/copy.py",
+                      "canonical": "canon/copy.py", "scope": "RISK-039",
+                      "reason": "legacy copy",
+                      "approved_backports": ledger}],
+            files={"canon/copy.py": canon_source,
+                   "fixture/copy.py": copy_source})
+
+    def test_valid_ledger_passes(self):
+        tmp, root, config = self._ledger_root([dict(self.LEDGER_ENTRY)],
+                                              self.COPY_SOURCE)
+        with tmp:
+            result = check_legacy_snapshots(root, config)
+        self.assertTrue(result["pass"], result["issues"])
+        self.assertEqual(result["backport_ledger"]["ledger_entries"], 1)
+        self.assertEqual(result["backport_ledger"]["anchors_resolved"], 1)
+
+    def test_ledger_entry_missing_fields_fails(self):
+        hollow_entry = {key: value for key, value in self.LEDGER_ENTRY.items()
+                        if key not in ("reason", "dual_run")}
+        tmp, root, config = self._ledger_root([hollow_entry], self.COPY_SOURCE)
+        with tmp:
+            result = check_legacy_snapshots(root, config)
+        self.assertFalse(result["pass"])
+        self.assertTrue(any("hollow" in issue and "reason" in issue
+                            for issue in result["issues"]))
+
+    def test_stale_anchor_fails(self):
+        renamed = self.COPY_SOURCE.replace("def guarded_region(",
+                                           "def renamed_region(")
+        tmp, root, config = self._ledger_root([dict(self.LEDGER_ENTRY)],
+                                              renamed)
+        with tmp:
+            result = check_legacy_snapshots(root, config)
+        self.assertFalse(result["pass"])
+        self.assertTrue(any("no longer resolves" in issue
+                            for issue in result["issues"]))
+
+    def test_missing_marker_fails(self):
+        reverted = self.COPY_SOURCE.replace("FIX-999 (backport", "FIX-001")
+        tmp, root, config = self._ledger_root([dict(self.LEDGER_ENTRY)],
+                                              reverted)
+        with tmp:
+            result = check_legacy_snapshots(root, config)
+        self.assertFalse(result["pass"])
+        self.assertTrue(any("not present" in issue
+                            for issue in result["issues"]))
+
+    def test_non_list_ledger_fails(self):
+        tmp, root, config = self._ledger_root("prose", self.COPY_SOURCE)
+        with tmp:
+            result = check_legacy_snapshots(root, config)
+        self.assertFalse(result["pass"])
+        self.assertTrue(any("non-empty list" in issue
+                            for issue in result["issues"]))
+
+    # ── converged disposition refinement (semantics review landed) ──────
+    def test_converged_backport_bearing_snapshot_names_replay_disposition(self):
+        tmp, root, config = self._ledger_root(
+            [dict(self.LEDGER_ENTRY)], "identical\n", canon_source="identical\n")
+        with tmp:
+            result = check_legacy_snapshots(root, config)
+        self.assertFalse(result["pass"])
+        self.assertEqual(result["converged"], ["fixture/copy.py"])
+        replay = [issue for issue in result["issues"]
+                  if "replay" in issue and "approved_backports ledger" in issue]
+        self.assertTrue(replay,
+                        "a converged backport-bearing snapshot must name the "
+                        f"replay-or-promote disposition: {result['issues']}")
 
 
 if __name__ == "__main__":

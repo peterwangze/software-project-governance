@@ -211,7 +211,19 @@
       "path": "project/e2e-test-project/skills/software-project-governance/infra/verify_workflow.py",
       "canonical": "skills/software-project-governance/infra/verify_workflow.py",
       "scope": "FEAT-038 P2-4 / RISK-039 / FIX-350",
-      "reason": "The e2e fixture ships a 0.82-era COPY of the engine (≈579KB vs the canonical ≈1.08MB; ~34.7k differing lines). Its routes/attribution still reference tokens that FEAT-038 moved out of the router layer (L3897-3902 doc list, L12476-12499 proxy contract text, L12085/L12092 e2e contract paths), so running `governance-context`/`e2e-check` FROM the fixture cwd FAILs. The active matrix never takes that path (`_e2e_target_cwd_command_matrix` runs status/gate/cleanup only), so there is no live failure. Options weighed at FEAT-040: (a) sync the 4 attribution points by hand — rejected, a 4-line patch on a 34.7k-line divergence manufactures the impression that the copy tracks canonical; (b) promote the file to a byte_copy projection — rejected, a ~530KB fixture rewrite whose blast radius (fixture-local tests and the fixture's own .governance/ assumptions) is far outside a projection-registry task. Chosen: DECLARE the divergence, machine-guarded (this entry, not prose) — `check_legacy_snapshots` reddens if the file disappears, and reddens if it ever converges (a converged copy must be promoted to a real projection instead of keeping a stale 'legacy' label). FIX-380 note (review-FIX-378-CODE-R0 N-1, disclosure completeness): since this entry was written, the copy has received exactly one intentional, documented defect backport — the quote-entry guard at copy L6887 is a FIX-378 targeted backport of the FIX-373 splitter fix (`not in_code_span`-guarded), provenance disclosed in the copy's function docstring (L6857). The rejection narrative above remains the attribution-point decision record; this note adds the backport fact only — no declared field value changes."
+      "reason": "The e2e fixture ships a 0.82-era COPY of the engine (≈579KB vs the canonical ≈1.08MB; ~34.7k differing lines). Its routes/attribution still reference tokens that FEAT-038 moved out of the router layer (L3897-3902 doc list, L12476-12499 proxy contract text, L12085/L12092 e2e contract paths), so running `governance-context`/`e2e-check` FROM the fixture cwd FAILs. The active matrix never takes that path (`_e2e_target_cwd_command_matrix` runs status/gate/cleanup only), so there is no live failure. Options weighed at FEAT-040: (a) sync the 4 attribution points by hand — rejected, a 4-line patch on a 34.7k-line divergence manufactures the impression that the copy tracks canonical; (b) promote the file to a byte_copy projection — rejected, a ~530KB fixture rewrite whose blast radius (fixture-local tests and the fixture's own .governance/ assumptions) is far outside a projection-registry task. Chosen: DECLARE the divergence, machine-guarded (this entry, not prose) — `check_legacy_snapshots` reddens if the file disappears, and reddens if it ever converges (a converged copy must be promoted to a real projection instead of keeping a stale 'legacy' label). FIX-380 note (review-FIX-378-CODE-R0 N-1, disclosure completeness): since this entry was written, the copy has received exactly one intentional, documented defect backport — the quote-entry guard at copy L6887 is a FIX-378 targeted backport of the FIX-373 splitter fix (`not in_code_span`-guarded), provenance disclosed in the copy's function docstring (L6857). The rejection narrative above remains the attribution-point decision record; this note adds the backport fact only — no declared field value changes.",
+      "approved_backports": [
+        {
+          "fix_id": "FIX-378",
+          "source_fix": "FIX-373",
+          "approved": "review-FIX-378-CODE-R0 APPROVED_WITH_NOTES/0 (recorded in the FIX-378 commit)",
+          "anchor_symbol": "_split_governance_table_row",
+          "marker": "FIX-378 (backport",
+          "reason": "same-origin defect: an unguarded quote opens the JSON-string state, pins in_code_span and folds the remaining table-row cells (EVD-248 shape, 10 data cells -> 5); the copy region is live fixture tooling surface, so the FIX-373 canonical fix was synced into this declared snapshot instead of leaving the copy defective",
+          "dual_run": "smoke red->green on BOTH legs: canonical engine from repo root + fixture copy; LIVE 6/5->12/10 recorded verbatim in the FIX-378 commit; probe = quote-in-code-span table row (EVD-248 shape)",
+          "coupling_reviewed": "fixture-test pair intact (fixture-test-verify-workflow stays bound to the legacy engine — neither side promoted alone); no declared path and no PROJECTION_SYNC_PATTERNS member moved; splitter-pin classification recorded not-applicable by FIX-380 note 3 (N-2 ruling / FIX-381 policy carrier / lock face / guard already protects); no third copy of the patched region exists (only canonical + this declared snapshot carry the splitter — FIX-381 glob census)"
+        }
+      ]
     },
     {
       "id": "fixture-tools-doc",
@@ -276,5 +288,66 @@
       "scope": "RISK-039",
       "reason": "Legacy fixture test copy, bound to the legacy fixture engine (its assertions encode the pre-split router contract). Declared together with fixture-engine; promoting one without the other breaks the pair."
     }
-  ]
+  ],
+  "legacy_snapshot_backport_policy": {
+    "policy_id": "FIX-381",
+    "decision_basis": "arch consultation 2026-09-23 Q4 ruling: declared snapshots + controlled backport beats single-sourcing — the fixture freeze has isolation value (e2e tests stay undisturbed by canonical evolution). Single-sourcing would erase a deliberate isolation boundary; the backport face makes divergence a managed resource instead of an implicit parity debt. The only pre-existing backport instance is FIX-378 (registered on the fixture-engine entry below).",
+    "snapshot_inventory": {
+      "location": "declared_legacy_snapshots + declared_legacy_snapshot_scope (both in this file)",
+      "note": "the inventory IS the controlled backport surface — this block references it and never duplicates it (one list, one truth); adding a declared snapshot automatically brings it under this policy"
+    },
+    "trigger": {
+      "evaluate_when": "a defect fix lands in a canonical file that has a declared legacy snapshot copy",
+      "criteria_all": [
+        "same-origin region: the defective code region exists in the snapshot copy (shared lineage, not a look-alike)",
+        "live region: the copy region is reachable by fixture execution or fixture tooling — dead code never triggers",
+        "real effect: left unpatched, the defect would corrupt fixture behaviour or fixture governance data"
+      ],
+      "dispositions": [
+        "backport: apply the minimal patch, register it in the snapshot's approved_backports ledger, run the dual_run_contract",
+        "not-applicable: record the reasons next to the snapshot entry (precedent: FIX-380 note 3 classified the e2e splitter-pin as not-applicable with four reasons)"
+      ],
+      "default": "evaluate every time — silence is not a disposition"
+    },
+    "ledger": {
+      "location": "declared_legacy_snapshots[].approved_backports (this file)",
+      "location_rationale": "chosen over a standalone ledger file: check_legacy_snapshots already reads this registry, so ledger validation rides the existing falsifiability machinery with zero new manifest surface; a standalone file would need a second reader for no added property",
+      "required_fields": ["fix_id", "source_fix", "approved", "anchor_symbol", "marker", "reason", "dual_run", "coupling_reviewed"],
+      "guard": "check_legacy_snapshots validates required fields and resolves anchor_symbol + marker against the copy text — a ledger entry whose anchor no longer resolves, or whose patch marker is gone, reddens (a stale ledger is a failure, not a memory)",
+      "anchor_convention": "anchor_symbol names the function/def the patch touches (line numbers rot — the FIX-388 re-anchor burden is the cautionary precedent); marker is a stable text fragment the patch itself leaves in the copy (provenance docstring)"
+    },
+    "dual_run_contract": {
+      "requirement": "an approved backport is not closed until the reproducing probe passes in BOTH trees",
+      "canonical_leg": "run the probe against the canonical engine from the repo root",
+      "snapshot_leg": "run the same probe against the snapshot copy (fixture cwd, or the extracted region when a full fixture run is out of scope)",
+      "parity": "both legs must agree on the fixed behaviour; the probe must FAIL on the pre-fix state — a probe that cannot fail proves nothing",
+      "sample": "FIX-378: quote-in-code-span table row (EVD-248 shape, 10 data cells). Canonical leg + snapshot leg both fold-proof after the not in_code_span guard; smoke red->green LIVE 6/5->12/10 (FIX-378 commit record)"
+    },
+    "coupling_check": {
+      "when": "before approving any backport",
+      "checklist": [
+        "fixture-own tests bound to the copy (the fixture-test-verify-workflow <-> fixture-engine pair): do they encode the fixed behaviour? patch or promote the pair in the same change, never one side alone",
+        "registry machinery keyed on the file (PROJECTION_SYNC_PATTERNS members, declared snapshot paths, FIXTURE_PREFIX): a backport must not move declared paths or pattern members",
+        "third-copy drift of mirrored DATA, not just code (precedent: FIX-379 found the task_priority prefix vocabulary drifting in archive.py L967-971 — 18 vs the authoritative 20): does the patched region or any table it reads exist in further copies? record a disposition per copy",
+        "cross-file contracts the fixture consumes (plan-tracker parsing shape, governance records the fixture writes): output shape must stay fixture-compatible"
+      ],
+      "record": "coupling_reviewed field on each ledger entry (per-item disposition or a review-report reference)"
+    },
+    "replay_path": {
+      "rule": "declared snapshots are frozen — regenerating one from canonical is NOT a supported write; if a copy is ever regenerated (re-pinned at a new generation, or canonical-copied) the approved backports must be replayed or the declaration retired",
+      "steps": [
+        "1. the whole-file converged guard reddens (expected — do not silence it)",
+        "2. re-apply every approved_backports entry onto the fresh copy: anchor_symbol locates the region, the source-fixed region is re-applied, the marker restored",
+        "3. re-run the dual_run_contract for each replayed backport",
+        "4. update the ledger anchors; divergence must be re-established before the declaration can pass again"
+      ],
+      "canonical_regenerated_case": "if the fresh copy is byte-identical to canonical the exemption reason is gone entirely: promote to a byte_copy projection, delete the declaration, retire the ledger (the backports are absorbed by canonical tracking)"
+    },
+    "guard_semantics_review": {
+      "reviewed_in": "FIX-381 (contracted addendum: converged-red semantics re-check)",
+      "question": "does converged-red misfire after a controlled backport, since the backported region becomes identical to canonical?",
+      "conclusion": "no misfire: the trigger is WHOLE-FILE byte equality (path bytes == canonical bytes), and a local backport on a genuinely divergent snapshot cannot satisfy it (fixture-engine keeps ~34.7k divergent lines after its one backport). What the review did surface: the converged DISPOSITION text was backport-blind — for a backport-bearing snapshot it now names the two legitimate exits (replay-then-redeclare, or promote-and-retire) instead of a bare promote instruction. Trigger granularity: unchanged.",
+      "change_landed": "converged message refinement in check_legacy_snapshots only; no red-trigger logic change"
+    }
+  }
 }

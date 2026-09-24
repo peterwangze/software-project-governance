@@ -27,6 +27,20 @@ class PlannedWrite:
 #: translated through this prefix instead of being compared by accident.
 FIXTURE_PREFIX = "project/e2e-test-project/"
 
+#: FIX-381: fields every ``approved_backports`` ledger entry must carry.
+#: Mirrors the registry policy block's ``ledger.required_fields`` — the guard
+#: and the declared institution name the same contract (no second shape
+#: source).
+BACKPORT_LEDGER_REQUIRED_FIELDS = ("fix_id", "source_fix", "approved",
+                                   "anchor_symbol", "marker", "reason",
+                                   "dual_run", "coupling_reviewed")
+
+#: FIX-381: policy sections a declared ``legacy_snapshot_backport_policy``
+#: must fill — the action-bearing five. Informative keys (decision_basis,
+#: snapshot_inventory, guard_semantics_review) are not enforced.
+BACKPORT_POLICY_REQUIRED_SECTIONS = ("trigger", "ledger", "dual_run_contract",
+                                     "coupling_check", "replay_path")
+
 
 def _projection_matches(write: PlannedWrite, current: bytes) -> bool:
     if write.kind == "byte_copy":
@@ -266,11 +280,38 @@ def check_legacy_snapshots(root: Path, config_path: Optional[Path] = None) -> di
     * a declaration without ``path`` / ``canonical`` / non-empty ``reason``
       and ``scope`` ⇒ FAIL (an unexplained exemption is not auditable).
 
+    FIX-381 adds the controlled-backport face (the registry's
+    ``legacy_snapshot_backport_policy`` + per-snapshot ``approved_backports``
+    ledgers — declared snapshots plus controlled backports instead of
+    single-sourcing). Both are validated when present:
+
+    * a policy block that is not an object, or that lacks a non-empty
+      ``trigger`` / ``ledger`` / ``dual_run_contract`` / ``coupling_check`` /
+      ``replay_path`` section ⇒ FAIL (a declared institution with hollow
+      sections is not auditable);
+    * a backport ledger entry without its required fields (fix_id,
+      source_fix, approved, anchor_symbol, marker, reason, dual_run,
+      coupling_reviewed) ⇒ FAIL;
+    * a ledger entry whose ``anchor_symbol`` no longer resolves in the copy
+      text, or whose ``marker`` (the provenance fragment the patch itself
+      leaves behind) is gone from the copy ⇒ FAIL — a stale ledger is a
+      failure, not a memory.
+
+    Converged-red semantics (FIX-381 review, conclusion on record in the
+    policy block): the trigger stays WHOLE-FILE byte equality — a controlled
+    backport making one region match canonical is expected and does NOT fire
+    (a genuinely divergent snapshot keeps its other divergent lines). What
+    the review refined is the converged DISPOSITION: for a backport-bearing
+    snapshot the message now names the two legitimate exits (replay the
+    ledger then re-declare, or promote and retire the ledger) instead of a
+    bare promote instruction.
+
     Returns ``{"pass", "issues", "declared", "checked", "converged",
-    "missing", "scope", "census"}``. An absent/empty block is legitimate: it
-    means this tree has no declared divergences (``checked`` = 0,
-    ``pass`` = True). ``census`` always carries the same keys (zeroed when the
-    registry is unreadable), so a caller can render it unconditionally.
+    "missing", "scope", "census", "backport_ledger"}``. An absent/empty block
+    is legitimate: it means this tree has no declared divergences
+    (``checked`` = 0, ``pass`` = True). ``census`` and ``backport_ledger``
+    always carry the same keys (zeroed when the registry is unreadable), so a
+    caller can render them unconditionally.
     """
     root = Path(root).resolve()
     config_path = config_path or root / "skills/software-project-governance/core/version-projections.json"
@@ -281,6 +322,8 @@ def check_legacy_snapshots(root: Path, config_path: Optional[Path] = None) -> di
     empty_census = {"inventory": 0, "identical": 0, "divergent": 0,
                     "absent": 0, "declared": 0, "undeclared_in_scope": [],
                     "undeclared_out_of_scope": 0}
+    empty_ledger = {"policy_declared": False, "ledger_entries": 0,
+                    "anchors_resolved": 0}
 
     try:
         config = json.loads(config_path.read_text(encoding="utf-8"))
@@ -288,14 +331,34 @@ def check_legacy_snapshots(root: Path, config_path: Optional[Path] = None) -> di
         return {"pass": False,
                 "issues": [f"legacy-snapshot registry unreadable: {exc}"],
                 "declared": [], "checked": 0, "converged": [], "missing": [],
-                "scope": [], "census": dict(empty_census)}
+                "scope": [], "census": dict(empty_census),
+                "backport_ledger": dict(empty_ledger)}
 
     entries = config.get("declared_legacy_snapshots", [])
     if not isinstance(entries, list):
         return {"pass": False, "issues": ["declared_legacy_snapshots must be a list"],
                 "declared": [], "checked": 0, "converged": [], "missing": [],
-                "scope": [], "census": dict(empty_census)}
+                "scope": [], "census": dict(empty_census),
+                "backport_ledger": dict(empty_ledger)}
     scopes = tuple(config.get("declared_legacy_snapshot_scope") or ())
+
+    # FIX-381: the controlled-backport institution is validated when declared
+    # — a policy block with hollow sections would be prose, not a policy.
+    ledger_face = {"policy_declared": False, "ledger_entries": 0,
+                   "anchors_resolved": 0}
+    policy = config.get("legacy_snapshot_backport_policy")
+    if policy is not None:
+        if not isinstance(policy, dict):
+            issues.append("legacy_snapshot_backport_policy must be an object")
+        else:
+            ledger_face["policy_declared"] = True
+            hollow = sorted(section for section in BACKPORT_POLICY_REQUIRED_SECTIONS
+                            if not policy.get(section))
+            if hollow:
+                issues.append(
+                    "legacy_snapshot_backport_policy is hollow — missing "
+                    f"required sections {hollow} (a declared institution with "
+                    "empty sections is not auditable)")
 
     for entry in entries:
         if not isinstance(entry, dict):
@@ -324,11 +387,61 @@ def check_legacy_snapshots(root: Path, config_path: Optional[Path] = None) -> di
             continue
         if canon.is_file() and path.read_bytes() == canon.read_bytes():
             converged.append(path_rel)
-            issues.append(
-                f"legacy snapshot {identifier!r} has CONVERGED with "
-                f"{canon_rel} — the exemption is stale: promote it to a "
-                "byte_copy projection and delete this declaration")
+            if entry.get("approved_backports"):
+                issues.append(
+                    f"legacy snapshot {identifier!r} has CONVERGED with "
+                    f"{canon_rel} — the exemption is stale: replay the "
+                    "approved_backports ledger onto the fresh copy and "
+                    "re-declare, or (if canonical evolution absorbed the "
+                    "backports) promote it to a byte_copy projection, delete "
+                    "this declaration and retire the ledger")
+            else:
+                issues.append(
+                    f"legacy snapshot {identifier!r} has CONVERGED with "
+                    f"{canon_rel} — the exemption is stale: promote it to a "
+                    "byte_copy projection and delete this declaration")
             continue
+        ledger = entry.get("approved_backports")
+        if ledger is not None:
+            if not isinstance(ledger, list) or not ledger:
+                issues.append(
+                    f"legacy snapshot {identifier!r} approved_backports must "
+                    "be a non-empty list when present")
+            else:
+                copy_text = path.read_text(encoding="utf-8", errors="replace")
+                for item in ledger:
+                    if not isinstance(item, dict):
+                        issues.append(
+                            f"legacy snapshot {identifier!r} backport ledger "
+                            "entry must be an object")
+                        continue
+                    ledger_face["ledger_entries"] += 1
+                    fix_label = str(item.get("fix_id") or "<unlabelled>")
+                    missing_fields = sorted(
+                        field for field in BACKPORT_LEDGER_REQUIRED_FIELDS
+                        if not str(item.get(field) or "").strip())
+                    if missing_fields:
+                        issues.append(
+                            f"legacy snapshot {identifier!r} backport ledger "
+                            f"entry {fix_label!r} is hollow — missing "
+                            f"{missing_fields}")
+                        continue
+                    anchor_ok = item["anchor_symbol"] in copy_text
+                    marker_ok = item["marker"] in copy_text
+                    if anchor_ok and marker_ok:
+                        ledger_face["anchors_resolved"] += 1
+                    if not anchor_ok:
+                        issues.append(
+                            f"legacy snapshot {identifier!r} backport ledger "
+                            f"entry {fix_label!r} anchor "
+                            f"{item['anchor_symbol']!r} no longer resolves in "
+                            "the copy — stale ledger")
+                    if not marker_ok:
+                        issues.append(
+                            f"legacy snapshot {identifier!r} backport ledger "
+                            f"entry {fix_label!r} marker {item['marker']!r} "
+                            "not found in the copy — the recorded patch is "
+                            "not present")
         declared.append({"id": identifier, "path": path_rel,
                          "canonical": canon_rel, "scope": entry.get("scope")})
 
@@ -341,6 +454,7 @@ def check_legacy_snapshots(root: Path, config_path: Optional[Path] = None) -> di
         "missing": missing,
         "scope": list(scopes),
         "census": _legacy_census(root, config, declared, scopes),
+        "backport_ledger": ledger_face,
     }
 
 

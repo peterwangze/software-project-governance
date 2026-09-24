@@ -10086,17 +10086,45 @@ def check_protocol_compliance():
                 # proves the historical Date cell is present; anything
                 # else contradicts the historical Date semantics and is
                 # validated as a truncated LIVE row.
+                #
+                # FIX-382 (review-FIX-374 F-2② combo criterion): within
+                # the non-date cells[6] face, a date-shaped cells[7]
+                # proves the real Date cell survived at its shifted LIVE
+                # offset — the row lost a TRAILING cell (Gate or Notes),
+                # not Date, so "missing Date" there was a false positive;
+                # report the trailing loss instead. Issue count is
+                # unchanged (still flagged, fail-noisy) — only the
+                # message becomes accurate. Residual face kept open by
+                # decision (explicit no-fix + ledger disclosure): losing
+                # a cell BEFORE Date (fact/Location/EntryMethod) is
+                # content-indistinguishable from a genuine historical row
+                # (identical Date/Gate/Notes tail; free-text middle
+                # cells) — criteria extension would false-positive on the
+                # historical exemption face.
                 if _EVIDENCE_DATE_SHAPE_RE.match(cells[6]):
                     # Historical shape: the Date cell is date-shaped (and
                     # thus non-empty) by construction.
                     if not cells[5]:
                         missing.append("Author")
+                elif _EVIDENCE_DATE_SHAPE_RE.match(cells[7]):
+                    # Truncated LIVE, trailing loss (Gate or Notes): the
+                    # Date cell is present at cells[7]; Location/
+                    # EntryMethod emptiness stays validated at their
+                    # unshifted offsets (an empty cell and a lost trailing
+                    # cell can coexist).
+                    if not cells[5]:
+                        missing.append("Location")
+                    if not cells[6]:
+                        missing.append("EntryMethod")
+                    missing.append(
+                        "Gate/Notes (trailing LIVE cell lost"
+                        " — Date present at shifted offset)"
+                    )
                 else:
-                    # Truncated LIVE shape: the Date cell is absent, so
-                    # the LIVE Location/EntryMethod cells shift into the
-                    # historical Author/Date offsets. Validate the LIVE
-                    # columns at their real offsets and report the lost
-                    # Date cell.
+                    # Truncated LIVE with a genuinely lost Date cell (or a
+                    # historical row with an empty/non-separator Date cell
+                    # — fail-noisy either way): validate the LIVE columns
+                    # at their real offsets and report the lost Date cell.
                     if not cells[5]:
                         missing.append("Location")
                     if not cells[6]:
@@ -12420,8 +12448,15 @@ def _governance_table_cells(line):
 # a date-shaped cells[6] proves the historical Date cell is present
 # (genuine historical row); any other value contradicts the historical
 # Date semantics and marks the row as a truncated LIVE row (Date cell
-# lost). Real-data basis: all 12 live 9-cell historical rows in
-# .governance/evidence-log.md carry a date-shaped cells[6].
+# lost). FIX-382 adds a second probe in that truncated face: a date-shaped
+# cells[7] proves the real Date cell survived at its shifted LIVE offset
+# (trailing Gate/Notes cell lost — not a missing Date). Real-data basis
+# (production-parser census 2026-09-24, FIX-382): all 12 live 9-cell
+# historical rows in .governance/evidence-log.md carry a date-shaped
+# cells[6] and a non-date cells[7] — zero incidence on the historical
+# face of either probe (literal-pipe grep counts 11 rows: parser-protected
+# pipes (code-span/JSON-string/bracket-depth) bias — review-FIX-374 F-1
+# count question resolved).
 _EVIDENCE_DATE_SHAPE_RE = re.compile(r"^\d{4}[-/]\d{1,2}[-/]\d{1,2}$")
 
 

@@ -12270,6 +12270,86 @@ class Fix374NineCellDisambiguationTests(unittest.TestCase):
             self.assertIn("Date", issues[0])
 
 
+class Fix382NineCellTrailingLossTests(unittest.TestCase):
+    """FIX-382 (review-FIX-374 F-2②): combo-criteria extension for the 9-cell
+    else-branch — trailing-cell-loss face.
+
+    A LIVE row that lost a TRAILING cell (Gate at index 8 or Notes at 9)
+    folds to exactly 9 cells with a non-date cells[6] (EntryMethod text)
+    AND a date-shaped cells[7] (the real Date cell, shifted left by the
+    loss). The FIX-374 single criterion reported "missing Date" there — a
+    false positive (Date is provably present). The combo criterion
+    (non-date cells[6] AND date-shaped cells[7]) reports the real defect
+    (trailing cell loss) instead. No new silence: every row the old code
+    flagged stays flagged with the same issue count; only the R4/R5
+    message becomes accurate. Real-data basis (production-parser census
+    2026-09-24): all 12 live 9-cell historical rows carry a date-shaped
+    cells[6] and a non-date cells[7] ("G11") — the new branch has zero
+    incidence on the historical exemption face.
+
+    Evaluated and NOT landed (explicit no-fix + ledger disclosure, see the
+    FIX-382 decision table / proposed DEC): a LIVE row that lost a cell
+    BEFORE Date (fact/Location/EntryMethod) is content-indistinguishable
+    from a genuine historical row — identical tail layout (Date/Gate/Notes
+    at cells[6..8]) with free-text middle cells in both readings; any
+    shape heuristic would false-positive on the historical exemption face.
+    Pinned by test_lost_location_before_date_documented_residual_face.
+    """
+
+    def test_trailing_notes_cell_lost_reports_trailing_loss_not_missing_date(self):
+        """LIVE minus Notes (exactly 9 cells, cells[6]=EntryMethod text,
+        cells[7]=real Date) reports the trailing-cell-loss defect instead
+        of the false "missing Date" (pre-fix: false positive)."""
+        with tempfile.TemporaryDirectory() as td:
+            row = ("| EVD-910 | FIX-382 | 修复 | 目标对齐：缺 Notes 截断行回归数据。 | "
+                   "事实依据：fixture | .governance/evidence-log.md | "
+                   "Coordinator 机写 | 2026-09-24 | G11 |")
+            issues = _format_issues(td, row)
+            self.assertEqual(len(issues), 1)
+            self.assertIn("Gate/Notes", issues[0])
+            self.assertIn("trailing LIVE cell lost", issues[0])
+
+    def test_trailing_gate_cell_lost_reports_trailing_loss_not_missing_date(self):
+        """LIVE minus Gate (exactly 9 cells, cells[7]=real Date) reports the
+        trailing-cell-loss defect (pre-fix: false "missing Date")."""
+        with tempfile.TemporaryDirectory() as td:
+            row = ("| EVD-911 | FIX-382 | 修复 | 目标对齐：缺 Gate 截断行回归数据。 | "
+                   "事实依据：fixture | .governance/evidence-log.md | "
+                   "Coordinator 机写 | 2026-09-24 | ✅ 完成 |")
+            issues = _format_issues(td, row)
+            self.assertEqual(len(issues), 1)
+            self.assertIn("Gate/Notes", issues[0])
+            self.assertIn("trailing LIVE cell lost", issues[0])
+
+    def test_trailing_loss_with_empty_location_still_reports_location(self):
+        """An empty Location cell plus a lost trailing cell reports BOTH
+        defects: Location emptiness stays validated at its unshifted
+        offset inside the new trailing-loss branch (pre-fix: false
+        "Location, Date" with the Date half being a false positive)."""
+        with tempfile.TemporaryDirectory() as td:
+            row = ("| EVD-912 | FIX-382 | 修复 | 目标对齐：空 Location 加缺 Notes 回归数据。 | "
+                   "事实依据：fixture | | Coordinator 机写 | 2026-09-24 | G11 |")
+            issues = _format_issues(td, row)
+            self.assertEqual(len(issues), 1)
+            self.assertIn("Location", issues[0])
+            self.assertIn("trailing LIVE cell lost", issues[0])
+
+    def test_lost_location_before_date_documented_residual_face(self):
+        """Documented residual face (explicit no-fix + ledger disclosure —
+        FIX-382 decision table, review-FIX-374 F-2①): a LIVE row that lost
+        its Location cell BEFORE Date is content-indistinguishable from a
+        genuine historical row (identical Date/Gate/Notes tail; free-text
+        middle cells), so no machine criterion can flag it without
+        false-positiving on the historical exemption face. This pin makes
+        the accepted silence auditable — a disclosed trade-off, NOT an
+        endorsed defect; see the proposed DEC entry."""
+        with tempfile.TemporaryDirectory() as td:
+            row = ("| EVD-913 | FIX-382 | 修复 | 目标对齐：缺 Location 截断行（登记残余面）回归数据。 | "
+                   "事实依据：fixture | Coordinator 机写 | 2026-09-24 | G11 | ✅ 完成 |")
+            issues = _format_issues(td, row)
+            self.assertEqual(issues, [])
+
+
 def _dated_impact_evidence_row(evd_id, task_id, description, file_location="skills/test.md"):
     return f"| {evd_id} | 2026-06-16 | {task_id} | 架构 | 影响分析 | {description} | {file_location} | Developer | G11 | PASS |"
 

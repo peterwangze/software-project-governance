@@ -291,8 +291,13 @@ STATIC_PIN_EXEMPTIONS = {
         # helper dedup (REVIEW-FIX-374 F-4) removed the 3 duplicated methods
         # and shifted the file -16 lines; caught by RealTreeContractTests
         # (the designed rot-guard working, same as the FIX-388 re-audit).
-        (12534, "0.87.0", _REASON_FIXTURE_ROW_TEXT),
-        (12658, "0.87.0",
+        # FIX-382 re-anchor 12534->12614 / 12658->12738: the
+        # Fix382NineCellTrailingLossTests class insertion (+80 lines)
+        # shifted the file; caught by the check-version-consistency
+        # stale-exemption WARNs (the designed rot-guard working, same as
+        # the FIX-380/388 re-audits).
+        (12614, "0.87.0", _REASON_FIXTURE_ROW_TEXT),
+        (12738, "0.87.0",
          "synthetic legacy REQ fixture row (FIX-376 F-6①) — the 0.87.0 token "
          "is payload inside the closed-loop path cell \"EVD-997 / 0.87.0\" "
          "and is never compared to the active version"),

@@ -49,8 +49,10 @@ if str(_INFRA_DIR) not in sys.path:
     sys.path.insert(0, str(_INFRA_DIR))
 
 import governance_store as gs  # noqa: E402
+import verify_workflow as vw  # noqa: E402 — FIX-375 边缘① engine dispatch face
 from contracts import (  # noqa: E402
     ERROR_CODE_DISPOSITIONS,
+    ContractViolation,
     OPERATION_ID_PATTERN,
     REFERENCE_VALIDATION_STATES,
 )
@@ -1161,6 +1163,120 @@ class LocksReleaseTests(StoreTestCase):
         self.assertEqual((self.gov / "agent-locks.json").read_bytes(),
                          after_first)
 
+    def test_resume_leg_completing_release_stamps_released_files(self):
+        """FIX-375 边缘③ (REVIEW-FIX-370 F-1): crash AFTER the locks write
+        but BEFORE the ledger completion → the re-run resumes from the
+        recorded target (replay_source == "resume", no re-apply) and the ok
+        row MUST carry ``released_files`` — the same audit semantics the
+        apply leg already has.  RED today: the resume leg completes without
+        running ``effects_of``, so ``owned_files`` stays empty by
+        construction and the apply-leg stamp condition never fires."""
+        self.seed_release_fixture()
+        op = gs.new_operation_id()
+        fingerprint = gs._fingerprint(
+            {"command": "locks-release", "task": "FIX-100"})
+        # 登记先行: the pending entry carries BOTH effect states exactly as
+        # the release pipeline records them — target = released world (empty
+        # per-file snapshot = not locked, None = active entry gone)
+        target_state = {"file_locks": {"docs/a.md": {}, "docs/b.md": {}},
+                        "active_tasks": {"FIX-100": None}}
+        baseline_effects = {
+            "file_locks": {
+                "docs/a.md": {"locked_by": "FIX-100",
+                              "locked_at": "2026-09-19T10:00:00",
+                              "ttl_seconds": 3600, "ttl_reason": "seed"},
+                "docs/b.md": {"locked_by": "FIX-100",
+                              "locked_at": "2026-09-19T10:05:00",
+                              "ttl_seconds": 7200,
+                              "ttl_reason": "amend: added"}},
+            "active_tasks": {"FIX-100": {"target_files": ["docs/a.md"],
+                                         "files": ["docs/a.md",
+                                                   "docs/b.md"]}}}
+        entry = gs._ledger_entry(
+            op, "locks-release", "FIX-100", fingerprint, status="pending",
+            revision=None, now=datetime(2026, 9, 19, 10, 0, 0),
+            pending_effects=target_state, baseline_effects=baseline_effects)
+
+        def seed(ledger):
+            ledger["operations"][op] = entry
+
+        gs._ledger_transaction(self.gov, seed)
+        # the world is ALREADY released: the crash lost only the ledger
+        # completion, FIX-100's active entry and both file locks are gone
+        locks = json.loads(
+            (self.gov / "agent-locks.json").read_text(encoding="utf-8"))
+        del locks["active_tasks"]["FIX-100"]
+        del locks["file_locks"]["docs/a.md"]
+        del locks["file_locks"]["docs/b.md"]
+        gs._atomic_write_bytes(
+            self.gov / "agent-locks.json",
+            (json.dumps(locks, ensure_ascii=False, indent=4) + "\n")
+            .encode("utf-8"))
+        result = self.call_release(operation_id=op)
+        self.assertFalse(result.get("error"), result)
+        self.assertEqual(result.get("replay_source"), "resume")
+        ledger = json.loads(
+            (self.gov / gs.LEDGER_FILE_NAME).read_text(encoding="utf-8"))
+        entry = ledger["operations"][op]
+        self.assertEqual(entry["status"], "ok")
+        self.assertEqual(entry["released_files"],
+                         ["docs/a.md", "docs/b.md"])
+
+    def test_reapply_leg_completing_release_stamps_released_files(self):
+        """FIX-375 F-1 (review R0, 探针⑤): crash AFTER the ledger
+        registration but BEFORE the locks write → the re-run finds world ==
+        recorded baseline, re-applies the mutator and completes with
+        replay_source == "apply".  This recovery leg never runs
+        ``effects_of`` either (owned_files stays empty by construction),
+        so the fresh-apply stamp branch short-circuits — the leg MUST take
+        its audit list from the same pre-read capture.  RED before F-1:
+        the ok row carried no released_files."""
+        self.seed_release_fixture()
+        op = gs.new_operation_id()
+        fingerprint = gs._fingerprint(
+            {"command": "locks-release", "task": "FIX-100"})
+        # 登记先行: target = the released world the crashed apply never
+        # reached; baseline = the fixture world exactly as _state_matches
+        # reads it (the seeded fixture IS the baseline — nothing to mutate)
+        target_state = {"file_locks": {"docs/a.md": {}, "docs/b.md": {}},
+                        "active_tasks": {"FIX-100": None}}
+        baseline_effects = {
+            "file_locks": {
+                "docs/a.md": {"locked_by": "FIX-100",
+                              "locked_at": "2026-09-19T10:00:00",
+                              "ttl_seconds": 3600, "ttl_reason": "seed"},
+                "docs/b.md": {"locked_by": "FIX-100",
+                              "locked_at": "2026-09-19T10:05:00",
+                              "ttl_seconds": 7200,
+                              "ttl_reason": "amend: added"}},
+            "active_tasks": {"FIX-100": {"target_files": ["docs/a.md"],
+                                         "files": ["docs/a.md",
+                                                   "docs/b.md"]}}}
+        entry = gs._ledger_entry(
+            op, "locks-release", "FIX-100", fingerprint, status="pending",
+            revision=None, now=datetime(2026, 9, 19, 10, 0, 0),
+            pending_effects=target_state, baseline_effects=baseline_effects)
+
+        def seed(ledger):
+            ledger["operations"][op] = entry
+
+        gs._ledger_transaction(self.gov, seed)
+        result = self.call_release(operation_id=op)
+        self.assertFalse(result.get("error"), result)
+        self.assertEqual(result.get("replay_source"), "apply")
+        data = json.loads(
+            (self.gov / "agent-locks.json").read_text(encoding="utf-8"))
+        self.assertNotIn("FIX-100", data["active_tasks"])
+        self.assertNotIn("docs/a.md", data["file_locks"])
+        self.assertNotIn("docs/b.md", data["file_locks"])
+        self.assertIn("FIX-200", data["active_tasks"])  # collateral zero
+        ledger = json.loads(
+            (self.gov / gs.LEDGER_FILE_NAME).read_text(encoding="utf-8"))
+        entry = ledger["operations"][op]
+        self.assertEqual(entry["status"], "ok")
+        self.assertEqual(entry["released_files"],
+                         ["docs/a.md", "docs/b.md"])
+
 
 class ContractFaceTests(unittest.TestCase):
     def test_success_result_carries_revision_and_execution_only(self):
@@ -1262,6 +1378,117 @@ class CliSubprocessTests(unittest.TestCase):
         self.assertEqual(target.read_bytes(), before)
         payload = json.loads(proc.stdout.decode("utf-8"))
         self.assertTrue(payload["dry_run"])
+
+    def test_malformed_operation_id_structured_exit2_no_traceback(self):
+        """FIX-375 边缘②: a malformed --operation-id must come back as the
+        structured schema_violation refusal on stdout with a non-zero exit —
+        never as a bare ContractViolation traceback on stderr.  RED today:
+        the exception leaks through the Namespace executor (_run only
+        catches StoreError) and the CLI dies with a traceback (exit 1)."""
+        proc = self._run(
+            "evidence-append", "--task", "FEAT-046", "--type", "产品代码",
+            "--description", DESCRIPTION, "--basis", BASIS,
+            "--artifacts", "cli-guard", "--operation-id", "not-an-op-id")
+        self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+        payload = json.loads(proc.stdout.decode("utf-8"))
+        self.assertEqual(payload["code"], "schema_violation")
+        self.assertNotIn("Traceback", proc.stderr.decode("utf-8"))
+
+
+class MalformedOperationIdTests(StoreTestCase):
+    """FIX-375 边缘② — 畸形 --operation-id 的双面语义钉。
+
+    ``require_operation_id`` (contracts face 1) raises ContractViolation;
+    the writers' ``@_returns_payload`` only converts StoreError, so the
+    exception used to leak to the CLI as a bare traceback.  The dispatch
+    face (``cmd_*`` → ``_run``) now renders the closed-code refusal, while
+    the LIBRARY face keeps raising — import semantics unchanged (the
+    SystemExit/exception disclosure in the task line).
+    """
+
+    def call_cmd_evidence(self, operation_id):
+        out = io.StringIO()
+        with mock.patch.object(gs.sys, "stdout", out):
+            code = gs.cmd_evidence_append(argparse.Namespace(
+                task="FEAT-046", evd_type="产品代码",
+                description=DESCRIPTION, basis=BASIS,
+                artifacts="cli-guard", actor="governance-store",
+                date=None, gate="G11", conclusion="✅ 完成", refs="",
+                operation_id=operation_id, dry_run=False,
+                expected_revision=None, timeout=10.0,
+                project_root=str(self.tmp)))
+        return code, out.getvalue()
+
+    def test_cmd_face_renders_structured_schema_violation(self):
+        code, rendered = self.call_cmd_evidence("not-an-op-id")
+        self.assertEqual(code, 2)
+        payload = json.loads(rendered)
+        self.assertTrue(payload["error"])
+        self.assertEqual(payload["code"], "schema_violation")
+        self.assertEqual(payload["disposition"],
+                         ERROR_CODE_DISPOSITIONS["schema_violation"])
+        self.assertIn("not-an-op-id", payload["detail"])
+
+    def test_library_face_keeps_contract_exception(self):
+        # guard (not a red test): the library face NEVER converts — direct
+        # import callers keep the ContractViolation semantics unchanged.
+        with self.assertRaises(ContractViolation):
+            _call_evidence(self.gov, operation_id="not-an-op-id")
+
+
+class EngineDispatchExitCodeTests(unittest.TestCase):
+    """FIX-375 边缘① — engine dispatch face exit-code transparency.
+
+    verify_workflow.py's ``commands[cmd](args)`` dropped the writer family's
+    int return code (0 ok / 2 refusal / 3 retryable — the FEAT-055 batch
+    handlers are the return-style exception among otherwise sys.exit-style
+    engine handlers), so a refused writer command still exited 0 (假绿).
+    The in-process pin holds ``main`` itself to the return-code contract;
+    the subprocess pins hold the real process exit codes.  Red-state
+    evidence (TRIAGE-FIX-375 机录 2026-09-20 probe): engine-face refusal
+    exited 0 while the module's own CLI exited 2.
+    """
+
+    def setUp(self):
+        import tempfile
+        self._tmp_ctx = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp_ctx.name)
+        self.gov = _make_governance_dir(self.tmp)
+
+    def tearDown(self):
+        self._tmp_ctx.cleanup()
+
+    def test_engine_main_returns_writer_refusal_code(self):
+        out = io.StringIO()
+        with mock.patch.object(gs.sys, "stdout", out):
+            rc = vw.main(["--project-root", str(self.tmp), "locks-extend",
+                          "--task", "nope", "--files", "a.txt",
+                          "--extend-by", "600", "--reason", "r"])
+        self.assertEqual(rc, 2)
+        payload = json.loads(out.getvalue())
+        self.assertEqual(payload["code"], "schema_violation")
+
+    def test_engine_subprocess_refusal_exit2(self):
+        proc = subprocess.run(
+            [sys.executable, str(_INFRA_DIR / "verify_workflow.py"),
+             "--project-root", str(self.tmp), "locks-extend",
+             "--task", "nope", "--files", "a.txt",
+             "--extend-by", "600", "--reason", "r"],
+            capture_output=True, timeout=120)
+        self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+        payload = json.loads(proc.stdout.decode("utf-8"))
+        self.assertEqual(payload["code"], "schema_violation")
+
+    def test_engine_subprocess_success_exit0_unchanged(self):
+        proc = subprocess.run(
+            [sys.executable, str(_INFRA_DIR / "verify_workflow.py"),
+             "--project-root", str(self.tmp), "locks-extend",
+             "--task", "FIX-100", "--files", "docs/a.md",
+             "--extend-by", "600", "--reason", "r"],
+            capture_output=True, timeout=120)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        payload = json.loads(proc.stdout.decode("utf-8"))
+        self.assertEqual(payload["code"], "ok")
 
 
 class StaleLockTakeoverTests(unittest.TestCase):

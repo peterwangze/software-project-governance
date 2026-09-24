@@ -1803,6 +1803,34 @@ def locks_amend(*, task_id, add_file=None, expected_new=False,
             command="locks-amend", now=now, timeout_seconds=timeout_seconds)
 
 
+def _pending_released_files(governance_dir, op_id, fingerprint):
+    """FIX-375 边缘③ + F-1 (REVIEW-FIX-370 F-1): the release recovery
+    legs' audit source.  BOTH cross-crash recovery legs complete the
+    release WITHOUT running ``effects_of`` — the resume leg (world already
+    at the recorded target) and the re-apply leg (world at baseline →
+    re-apply → complete with source="apply") — so the caller's
+    ``owned_files`` stays empty by construction and the fresh-apply stamp
+    condition never fires on either.  The pending entry carried the exact
+    list in its registered ``pending_effects`` (B-10 登记先行), but
+    ``_complete_pending`` nulls the effects in the same transaction that
+    marks the entry ok — the list must therefore be captured BEFORE the
+    pipeline completes the entry.  This is a read-only pre-read of the
+    caller's own operation id, guarded by command AND input fingerprint so
+    a foreign or mutated entry can never feed the audit stamp (a mismatch
+    is simply not stamped — the pipeline itself refuses it independently)."""
+    entry = _load_ledger(governance_dir)["operations"].get(op_id)
+    if not isinstance(entry, dict) or entry.get("status") != "pending":
+        return []
+    if entry.get("command") != "locks-release" \
+            or entry.get("input_fingerprint") != fingerprint:
+        return []
+    effects = entry.get("pending_effects")
+    if not isinstance(effects, dict) \
+            or not isinstance(effects.get("file_locks"), dict):
+        return []
+    return sorted(effects["file_locks"])
+
+
 @_returns_payload
 def locks_release(*, task_id, governance_dir, repo_root=None,
                   operation_id=None, now=None, timeout_seconds=10.0):
@@ -1831,6 +1859,9 @@ def locks_release(*, task_id, governance_dir, repo_root=None,
     fingerprint = _fingerprint({
         "command": "locks-release", "task": task_id,
     })
+    # FIX-375 边缘③: capture the recovery legs' audit list BEFORE the
+    # pipeline completes the pending entry (completion nulls the recorded
+    # effects); a fresh operation reads an empty ledger and gets [].
 
     def holds_lock(data):
         if task_id in data["active_tasks"]:
@@ -1870,23 +1901,50 @@ def locks_release(*, task_id, governance_dir, repo_root=None,
         return state
 
     with _TargetLock(governance_dir / LOCKS_FILE_NAME, timeout_seconds):
+        # F-4 (review R0): the pre-read sits UNDER the target lock — a
+        # same-op-id concurrent re-run can no longer slip between the
+        # pending registration and the locks write — and still BEFORE the
+        # pipeline call (completion nulls the recorded effects, so the
+        # capture must precede it; read-only, no ledger lock taken).
+        resume_released = _pending_released_files(governance_dir, op_id,
+                                                  fingerprint)
         payload = _locks_execute(
             governance_dir, op_id, fingerprint, task_id, mutate, effects_of,
             command="locks-release", now=now, timeout_seconds=timeout_seconds,
             holds_lock=holds_lock)
+    stamped_files = None
     if payload.get("replay_source") == "apply" and owned_files:
         # B-10 留痕: the shared pipeline drops effect payloads on the ok
         # row (family convention); for a DELETION the released file list
-        # is the audit record, so the completed entry is stamped with it —
-        # on the apply leg only (replay_source == "apply"; the "ledger"
-        # replay and the "resume" leg re-judge an already-applied world
+        # is the audit record, so the completed entry is stamped with it.
+        # Fresh apply leg: the list is the effects_of closure's live
+        # capture (the "ledger" replay re-judges an already-applied world
         # where owned_files is empty by construction).  The pending row
         # already carried the full detail BEFORE the locks write (登记先
         # 行); this stamp only persists it past completion.
+        stamped_files = list(owned_files)
+    elif payload.get("replay_source") == "apply" \
+            and not owned_files and resume_released:
+        # F-1 (review R0 / REVIEW-FIX-370 F-1, 探针⑤): the re-apply
+        # recovery leg (world == recorded baseline → the pipeline re-applies
+        # the mutator and completes with source="apply") never runs
+        # effects_of either, so owned_files is empty by construction and
+        # the fresh-apply branch above short-circuits — this leg takes its
+        # list from the SAME pre-read capture (登记先行).  A fresh apply
+        # reads resume_released == [] and never enters this branch.
+        stamped_files = list(resume_released)
+    elif payload.get("replay_source") == "resume" and resume_released:
+        # FIX-375 边缘③ (REVIEW-FIX-370 F-1): the resume leg (world ==
+        # recorded target) completes WITHOUT running effects_of — same
+        # empty owned_files, same pre-read audit source.  With the re-apply
+        # branch above, the released-file audit is identical across ALL
+        # THREE completion legs (fresh apply / re-apply / resume).
+        stamped_files = list(resume_released)
+    if stamped_files is not None:
         def stamp(operation_ledger):
             stored = operation_ledger["operations"].get(op_id)
             if stored is not None and stored.get("status") == "ok":
-                stored["released_files"] = list(owned_files)
+                stored["released_files"] = stamped_files
 
         _ledger_transaction(governance_dir, stamp, timeout_seconds)
     return payload
@@ -1916,6 +1974,23 @@ def _run(fn, kwargs):
         return fn(**kwargs)
     except StoreError as exc:
         return exc.payload
+    except ContractViolation as exc:
+        # FIX-375 边缘②: a malformed --operation-id (contracts face 1,
+        # require_operation_id) raised ContractViolation straight through
+        # the writers' @_returns_payload (which converts StoreError only)
+        # and the CLI printed a bare traceback.  The dispatch face renders
+        # the closed-code refusal instead — raw-dict shape, the same
+        # convention as the writers' own _refuse({"code": "schema_violation",
+        # ...}) refusals (WriterResult would re-validate operation_id, so
+        # _error_result is unusable for a refusal about an INVALID id).
+        # Library callers are NOT routed through here: a direct import
+        # caller keeps the ContractViolation semantics unchanged.
+        return {
+            "code": "schema_violation",
+            "detail": str(exc),
+            "disposition": ERROR_CODE_DISPOSITIONS["schema_violation"],
+            "error": True,
+        }
 
 
 def _emit(payload) -> int:

@@ -25499,8 +25499,27 @@ def main(argv=None):
     }
 
     cmd = args.command or "verify"
-    commands[cmd](args)
+    # FIX-375 边缘① (TRIAGE-FIX-375 机录 2026-09-20; F-2/F-3 勘正 per review
+    # R0): this dispatch dropped every handler's int return code, so a
+    # refused writer command still exited 0 (假绿).  The return now
+    # propagates — per-family exit SCALES DIFFER (do not branch on a
+    # single scale):
+    #   governance_store _emit: 0 ok / 2 refusal / 3 retryable
+    #   task_row_update: 0 ok / 2 usage / 3 validation / 4 conflict /
+    #                    5 retryable / 6 manual
+    #   baseline-register: 0 ok / 3 command error
+    #   baseline-evaluate: 0 pass / 1 fail / 2 not_evaluable / 3 storage
+    # Handlers with no return value (the sys.exit-style majority) are
+    # unaffected: their return is None → exit 0, failures exit internally
+    # as before.  One disclosed non-writer face changes in the same
+    # direction (F-2): check-dsh-preset-compat --fail-on-issues + FAIL
+    # verdict now exits 1 (dsh_compat.run_cli returns 1 — previously the
+    # same 假绿 class; in-repo callers do not pass that flag).  main()
+    # itself stays a plain function — this change adds NO NEW SystemExit
+    # path (the pre-existing sys.exit(2) on a malformed --project-root
+    # stays); only the __main__ tail wraps sys.exit(main()).
+    return commands[cmd](args)
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

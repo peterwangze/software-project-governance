@@ -1436,6 +1436,72 @@ class MalformedOperationIdTests(StoreTestCase):
             _call_evidence(self.gov, operation_id="not-an-op-id")
 
 
+# ── FIX-387: engine host-root rebind surface snapshot/restore ────────────
+# ``_apply_project_root_override`` (verify_workflow.py L234-276) rebinds
+# 12 module globals and mutates REQUIRED_FILES in place whenever the
+# engine is invoked in-process with an explicit --project-root, and the
+# CLI never restores them — process-lifetime state for a CLI, a leak in
+# a shared pytest process (FIX-377 investigation ③: the in-process pin
+# below flipped 18 later-run suite nodes red via
+# ``_host_plugin_roots_divergent()`` while isolated runs stayed green).
+# Every test that reaches that face in-process must snapshot the full
+# surface in setUp and restore it in tearDown.
+_VW_REBIND_GLOBALS = (
+    "HOST_PROJECT_ROOT", "GOVERNANCE_DIR", "EXECUTION_PACKET_PATH",
+    "SAMPLE_PATH", "SESSION_SNAPSHOT_PATH", "EVIDENCE_PATH", "RISK_PATH",
+    "ARCHIVE_INDEX_PATH", "ARCHIVE_TASKS_DIR", "ARCHIVE_EVIDENCE_DIR",
+    "ARCHIVE_DECISIONS_DIR", "ARCHIVE_RISKS_DIR",
+)
+_VW_MISSING = object()
+
+
+def _vw_rebind_surface_snapshot():
+    """Capture the engine host-root rebind surface (globals + REQUIRED_FILES)."""
+    surface = {name: getattr(vw, name, _VW_MISSING)
+               for name in _VW_REBIND_GLOBALS}
+    surface["REQUIRED_FILES"] = dict(vw.REQUIRED_FILES)
+    return surface
+
+
+def _vw_rebind_surface_restore(surface):
+    """Restore a snapshot taken by ``_vw_rebind_surface_snapshot``.
+
+    REQUIRED_FILES is rebuilt in place (clear + update) so objects that
+    captured the dict by reference keep seeing the restored contents.
+    """
+    for name in _VW_REBIND_GLOBALS:
+        value = surface[name]
+        if value is _VW_MISSING:
+            vw.__dict__.pop(name, None)
+        else:
+            setattr(vw, name, value)
+    vw.REQUIRED_FILES.clear()
+    vw.REQUIRED_FILES.update(surface["REQUIRED_FILES"])
+
+
+def _vw_rebind_surface_drift(surface, baseline):
+    """Diff two rebind-surface snapshots; ``{}`` means identical."""
+    drifted = {}
+    for name in _VW_REBIND_GLOBALS:
+        base, current = baseline[name], surface[name]
+        if base is _VW_MISSING or current is _VW_MISSING:
+            if base is not current:
+                drifted[name] = (base, current)
+        elif base != current:
+            drifted[name] = (base, current)
+    if surface["REQUIRED_FILES"] != baseline["REQUIRED_FILES"]:
+        drifted["REQUIRED_FILES"] = (baseline["REQUIRED_FILES"],
+                                     surface["REQUIRED_FILES"])
+    return drifted
+
+
+# Import-time baseline: captured before any test runs, so the file-end
+# canary pins "exactly as verify_workflow loaded them" regardless of the
+# cwd pytest was invoked from — the cwd-independent equivalent of the
+# dogfood identity HOST_PROJECT_ROOT == PLUGIN_ROOT.
+_VW_HOST_BASELINE = _vw_rebind_surface_snapshot()
+
+
 class EngineDispatchExitCodeTests(unittest.TestCase):
     """FIX-375 边缘① — engine dispatch face exit-code transparency.
 
@@ -1447,6 +1513,14 @@ class EngineDispatchExitCodeTests(unittest.TestCase):
     the subprocess pins hold the real process exit codes.  Red-state
     evidence (TRIAGE-FIX-375 机录 2026-09-20 probe): engine-face refusal
     exited 0 while the module's own CLI exited 2.
+
+    FIX-387: the in-process face below is the only in-suite caller that
+    reaches ``_apply_project_root_override`` with a VALID root, so setUp
+    snapshots the full host-root rebind surface and tearDown restores it
+    — the rebinding must not outlive this test (it used to flip 18
+    later-run suite nodes red; the file-end
+    ``HostRootRebindCanaryTests`` pins the surface against its
+    import-time baseline).
     """
 
     def setUp(self):
@@ -1454,11 +1528,21 @@ class EngineDispatchExitCodeTests(unittest.TestCase):
         self._tmp_ctx = tempfile.TemporaryDirectory()
         self.tmp = Path(self._tmp_ctx.name)
         self.gov = _make_governance_dir(self.tmp)
+        # FIX-387: the tests below run the engine in-process with a VALID
+        # --project-root; snapshot the full rebind surface so the CLI's
+        # process-lifetime rebinding (verify_workflow.py L234-276) cannot
+        # outlive a test in this class.
+        self._vw_surface = _vw_rebind_surface_snapshot()
 
     def tearDown(self):
+        _vw_rebind_surface_restore(self._vw_surface)
         self._tmp_ctx.cleanup()
 
     def test_engine_main_returns_writer_refusal_code(self):
+        # FIX-387: kept in-process on purpose — this pin holds main's
+        # return-code contract, which the subprocess siblings cannot see;
+        # the setUp/tearDown snapshot/restore around it keeps the
+        # host-root rebinding from leaking into the shared pytest process.
         out = io.StringIO()
         with mock.patch.object(gs.sys, "stdout", out):
             rc = vw.main(["--project-root", str(self.tmp), "locks-extend",
@@ -1656,6 +1740,38 @@ class WriterCliHandlerTests(StoreTestCase):
         # resolves against the process cwd at use time
         self.assertEqual(gs._governance_dir_from(args),
                          Path(".") / gs.GOVERNANCE_DIR_NAME)
+
+
+class HostRootRebindCanaryTests(unittest.TestCase):
+    """FIX-387 防回归 canary — the engine host-root rebind surface must be
+    identical to its import-time baseline once this file's tests have run.
+
+    ``_apply_project_root_override`` (verify_workflow.py L234-276) rebinds
+    12 module globals and mutates REQUIRED_FILES in place with no restore:
+    that state is the CLI's process lifetime, but a test invoking the
+    engine in-process makes it the pytest process's lifetime.  The
+    FIX-375 polluter (``EngineDispatchExitCodeTests``, pre-FIX-387)
+    leaked host/plugin-root divergence into 18 later-run suite nodes
+    while every isolated run stayed green.  Defined last so pytest
+    (definition order) runs it after every class in this file, it fails
+    if any test here — or any earlier test in the same pytest process —
+    leaks the surface again.
+    """
+
+    def test_host_root_rebind_surface_unchanged_after_file_run(self):
+        drifted = _vw_rebind_surface_drift(
+            _vw_rebind_surface_snapshot(), _VW_HOST_BASELINE)
+        self.assertEqual(
+            drifted, {},
+            "FIX-387 canary: engine host-root rebind surface drifted from "
+            "its import-time baseline — some test in this file (or an "
+            "earlier test in this pytest process) reached the engine "
+            "in-process with an explicit --project-root and leaked "
+            "_apply_project_root_override's rebinding (verify_workflow.py "
+            "L234-276) without restoring it. Snapshot the surface in setUp "
+            "and restore it in tearDown (see EngineDispatchExitCodeTests."
+            "setUp / _vw_rebind_surface_restore); baseline→current: "
+            + repr(drifted))
 
 
 if __name__ == "__main__":

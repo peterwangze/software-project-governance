@@ -12236,11 +12236,27 @@ _COMPLETED_STATUS_PREFIX = "✅"
 def _plan_hot_tracker_task_statuses():
     """Return {task_id: status cell} from the current active hot-task table.
 
-    FIX-371: single scan-source shared with _plan_task_ids_from_hot_tracker
-    (same section boundaries: `## 当前活跃事项` until `### 最近完成`), so the
-    exemption set is always a subset of the id set the Check 16/17 entry
-    collection consumes. Status cell = last table cell — the same
-    authoritative read parse_current_active_tasks uses.
+    FIX-371: single scan-source for the Check 16/17 entry collection —
+    parse_impact_analysis_entries_with_exemptions consumes this statuses
+    dict directly (same section boundaries: `## 当前活跃事项` until
+    `### 最近完成`), so the exemption set is always a subset of the id set
+    the entry collection consumes.
+
+    Status-cell read (FIX-376 F-7 勘正): the compact layout ends with 状态 —
+    those rows read the same cell parse_current_active_tasks reads (last
+    cell, 同源). The legacy REQ-row layout carries 状态 second-to-last —
+    there the ✅ word-prefix read overrides the last-cell read (F-3 分叉
+    口径: a deliberate divergence from parse_current_active_tasks, which
+    always reads the last cell and cannot see a legacy-row ✅ status).
+
+    FIX-376 F-3 刻意分叉 (conservative; DEC-227 unchanged): the exemption
+    predicate stays the narrow ✅-prefix read of this dict — NOT the FIX-292
+    authoritative terminal predicate ``_status_is_completed_cell``. A mixed
+    chain 「🔄 … → ✅ 完成」 is W-7-terminal by that predicate but does not
+    lead with ✅ → stays guarded (no exemption — conservative false-FAIL
+    direction). Widening the exemption face to the authoritative predicate
+    would expand the DEC-227 路线 b exemption semantics and is explicitly
+    not done.
     """
     if not SAMPLE_PATH.is_file():
         return {}
@@ -12264,11 +12280,18 @@ def _plan_hot_tracker_task_statuses():
         cells = _governance_table_cells(stripped)
         # FIX-371: the hot table mixes shapes — the compact layout ends with
         # 状态 while the legacy REQ-row layout carries 状态 second-to-last.
-        # The status cell is therefore identified by its ✅ marker (status
-        # cells are the only cells that lead with a status emoji), falling
-        # back to the last cell when no ✅ cell exists (active rows).
+        # FIX-376 F-3: the ✅ cell is scanned RIGHT-TO-LEFT — the status
+        # column is a row-end anchor in both shapes, so the rightmost
+        # ✅-led cell is the status-cell candidate. The old left-to-right
+        # "first ✅ cell" read let an early ✅-led description/来源 cell
+        # outrank the real status cell whenever both lead with ✅. Residual
+        # theoretical vector outside this ticket's decided scope: an active
+        # row whose real status does not lead with ✅ while an earlier cell
+        # does — column-position pinning was R0's alternative and is not
+        # adopted. Fallback stays the last cell when no ✅-led cell exists
+        # (active rows).
         status = ""
-        for cell in cells:
+        for cell in reversed(cells):
             if cell.startswith(_COMPLETED_STATUS_PREFIX):
                 status = cell.strip()
                 break
@@ -12276,20 +12299,6 @@ def _plan_hot_tracker_task_statuses():
             status = cells[-1].strip()
         statuses[match.group(1)] = status
     return statuses
-
-
-def _completed_plan_task_ids_from_hot_tracker():
-    """FIX-371: hot-tracker task ids whose status cell leads with ✅."""
-    return {
-        task_id
-        for task_id, status in _plan_hot_tracker_task_statuses().items()
-        if status.startswith(_COMPLETED_STATUS_PREFIX)
-    }
-
-
-def _plan_task_ids_from_hot_tracker():
-    """Return task-like IDs from the current active hot-task table."""
-    return set(_plan_hot_tracker_task_statuses())
 
 
 def _current_release_task_ids():

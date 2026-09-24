@@ -12664,6 +12664,52 @@ class HistoricalExemptionTests(unittest.TestCase):
             ])
             self.assertEqual([e["task_id"] for e in legacy], ["FIX-371"])
 
+    def test_goal_alignment_exempts_legacy_req_shape_status_second_to_last(self):
+        """FIX-376 F-6①：legacy REQ 形态（状态=倒数第二列、末列为闭环路径）
+        豁免路径专测——✅ 词首命中的是状态列 cell 而非末列 cell，账本按状态列
+        原文披露；同形态活跃行（🔄 状态、无 ✅ 词首 cell）零豁免留检——
+        非弱化红线在 legacy 形态下同样成立。"""
+        legacy_done = (
+            "| REQ-997 | legacy REQ 形态已完成任务 | 用户反馈 | P0 | - "
+            "| ✅ 已交付 | EVD-997 / 0.87.0 |"
+        )
+        legacy_active = (
+            "| REQ-998 | legacy REQ 形态活跃任务 | 用户反馈 | P1 | - "
+            "| 🔄 进行中 | 0.88.0 交付 |"
+        )
+        with tempfile.TemporaryDirectory() as td:
+            sp, ep = self._gov_files(td, [legacy_done, legacy_active], [
+                self._bare_row("EVD-997", "REQ-997"),
+                self._bare_row("EVD-998", "REQ-998"),
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_goal_alignment()
+            self.assertFalse(r["pass"])  # active legacy row still FAILs
+            self.assertEqual([e["task_id"] for e in r["entries"]], ["REQ-998"])
+            self.assertEqual(r["historical_exempted"], [
+                {"evd_id": "EVD-997", "task_id": "REQ-997", "status": "✅ 已交付"},
+            ])
+
+    def test_parse_mixed_fanout_row_exempts_terminal_and_keeps_active(self):
+        """FIX-376 F-6②：同 EVD 行覆盖 ✅ 终态 + 🔄 活跃任务——fan-out 按
+        任务粒度分流：✅ 任务入豁免账本（披露状态串），🔄 任务留在检查集；
+        legacy wrapper 口径不变（仅返回非豁免行）。"""
+        with tempfile.TemporaryDirectory() as td:
+            sp, ep = self._gov_files(td, [
+                self._plan_line("FIX-995", "✅ 已完成"),
+                self._plan_line("FIX-996", "🔄 进行中"),
+            ], [self._bare_row("EVD-997", "FIX-995, FIX-996")])
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                entries, exempted = vw.parse_impact_analysis_entries_with_exemptions()
+                legacy = vw.parse_impact_analysis_entries()
+            self.assertEqual([e["task_id"] for e in entries], ["FIX-996"])
+            self.assertEqual(exempted, [
+                {"evd_id": "EVD-997", "task_id": "FIX-995", "status": "✅ 已完成"},
+            ])
+            self.assertEqual([e["task_id"] for e in legacy], ["FIX-996"])
+
 
 class UnicodeLineSeparatorScanTests(unittest.TestCase):
     """FIX-349 ⑥: Unicode line/segment separator scan over the governance

@@ -8,7 +8,10 @@ Three command families over the same governed-write pipeline (version-plan
     locks-release    task-anchored release: the active_tasks entry AND every
                      file lock owned by the task (FIX-370 / B-10)
     evidence-append  machine EVD row append into ``evidence-log.md``
-    decision-append  machine DEC row append into ``decision-log.md``
+    decision-append  machine DEC row append — dual-backend since FEAT-061
+                     (md ``decision-log.md`` under MD_ACTIVE authority /
+                     ``decision-store.json`` under JSON_ACTIVE authority;
+                     routed by the persisted authority marker)
 
 (locks-extend / locks-amend / locks-release are one family over the same
 acquire-pipeline schema; evidence-append / decision-append share the append
@@ -666,9 +669,10 @@ def _replay_payload(entry: dict, source="ledger") -> dict:
 
 
 def _ledger_entry(op_id, command, task_id, fingerprint, *, status, revision,
-                  now, pending_effects=None, baseline_effects=None):
+                  now, pending_effects=None, baseline_effects=None,
+                  authority=None):
     timestamp = now.replace(microsecond=0).isoformat()
-    return {
+    entry = {
         "schema_version": SCHEMA_VERSION,
         "command": command,
         "task_id": task_id,
@@ -683,6 +687,13 @@ def _ledger_entry(op_id, command, task_id, fingerprint, *, status, revision,
         "recorded_at": timestamp,
         "updated_at": timestamp,
     }
+    if authority is not None:
+        # FEAT-061 (C1-ARCH-01 epoch fencing audit face): decision-append
+        # entries record the authority snapshot they committed under.
+        # Additive — pre-FEAT-061 entries carry no field and every ledger
+        # reader treats it as optional.
+        entry["authority"] = authority
+    return entry
 
 
 # ── shared append pipeline (B-5 / B-2) ───────────────────────────────────────
@@ -1256,7 +1267,20 @@ def decision_append(*, decider, content, basis="", date=None,
     The live hot-file row shape is 5 cells (DEC-147…DEC-221 convention);
     the four mandatory cells 编号/日期/决策人/决策内容 must be non-empty; the
     trailing 依据 cell is present and carries the machine provenance
-    marker.  Appends at end-of-file — the live convention for new rows.
+    marker.  The record is appended as the LAST item of the authoritative
+    artifact (md: an end-of-file row — the live convention; JSON: the
+    last record).
+
+    FEAT-061 authority routing (C1-ARCH-01): the request is routed by the
+    persisted authority marker (``decision_repository.load_authority`` —
+    absent marker = the initial md world, byte-identical behavior to the
+    pre-FEAT-061 writer).  Frozen authority states reject writes
+    structurally (C1-ARCH-02 冻结完成 = 新写入被拒绝); the JSON backend
+    routes to :func:`_decision_append_json` (same external contract: same
+    arguments, same result envelope, same exit-code scale — only the
+    storage behind the linearized commit changes).  The lazy import keeps
+    the module graph acyclic (decision_repository imports this module's
+    lock/atomic-write/row-splitter primitives at its module level).
     """
     now = now if now is not None else datetime.now()
     op_id = require_operation_id("decision_append", operation_id) \
@@ -1276,13 +1300,40 @@ def decision_append(*, decider, content, basis="", date=None,
     if expected_revision is not None:
         _require_int("--expected-revision", expected_revision)
     SCHEMA_WINDOW.require_supported("decision_append", SCHEMA_VERSION)
-    governance_dir, target, _root = _append_context(
-        governance_dir, repo_root, DECISION_FILE_NAME)
+
+    # ── FEAT-061: authority routing (before target resolution — the JSON
+    #    backend does not require decision-log.md to exist, e.g. while a
+    #    projection is pending for repair) ────────────────────────────────
+    from decision_repository import FROZEN_STATES, load_authority
+    authority = load_authority(governance_dir)
+    if authority["state"] in FROZEN_STATES:
+        _refuse({
+            "code": "illegal_transition",
+            "detail": f"decision writes are FROZEN: authority state "
+                      f"{authority['state']} (migration "
+                      f"{authority.get('migration_id')!r}) — a freeze is "
+                      f"closed exactly when new writes are rejected "
+                      f"(C1-ARCH-02); retry after the migration completes "
+                      f"or aborts",
+            "observed_state": authority["state"],
+            "observed_epoch": authority["epoch"],
+        })
     fingerprint = _fingerprint({
         "command": "decision-append", "decider": decider,
         "content": content, "basis": basis, "date": date_str,
     })
     marker = f"governance-store decision-append {op_id}"
+    if authority["backend"] == "json":
+        return _decision_append_json(
+            decider=decider, content=content, basis=basis,
+            date_str=date_str, governance_dir=governance_dir,
+            repo_root=repo_root, op_id=op_id, fingerprint=fingerprint,
+            marker=marker, expected_revision=expected_revision,
+            dry_run=dry_run, now=now, timeout_seconds=timeout_seconds,
+            authority=authority)
+
+    governance_dir, target, _root = _append_context(
+        governance_dir, repo_root, DECISION_FILE_NAME)
 
     def build(text):
         return _build_decision_row(
@@ -1297,6 +1348,16 @@ def decision_append(*, decider, content, basis="", date=None,
             fingerprint=fingerprint, checked_refs=[])
 
     with _TargetLock(target, timeout_seconds):
+        # ── FEAT-061 / REVIEW-FEAT-061-CODE-R0 P0-F1: in-lock authority
+        # revalidation.  The entry check happens WITHOUT any lock — a
+        # writer descheduled between the entry check and this critical
+        # section can be crossed by the migration's linearization point
+        # (cutover/rollback).  Re-validating epoch+state+backend inside
+        # the target lock closes that window on BOTH legs (the lock is
+        # the same mutual exclusion the migration controller uses, so
+        # under lock hold the marker cannot move again).
+        authority = _revalidate_authority_in_lock(
+            governance_dir, authority, timeout_seconds)
         original = _read_bytes(target)
         if not original.strip():
             # An empty hot file is a degenerate world (the init template
@@ -1353,13 +1414,285 @@ def decision_append(*, decider, content, basis="", date=None,
         def record(operation_ledger):
             operation_ledger["operations"][op_id] = _ledger_entry(
                 op_id, "decision-append", "", fingerprint, status="ok",
-                revision=revision, now=now)
+                revision=revision, now=now,
+                authority={"state": authority["state"],
+                           "epoch": authority["epoch"],
+                           "generation": authority["generation"],
+                           "backend": authority["backend"]})
 
         _ledger_transaction(governance_dir, record, timeout_seconds)
         return _ok_result(
             op_id, revision, detail=f"appended {dec_id} to {target}",
             row_id=dec_id, command="decision-append",
             idempotency_model=IDEMPOTENCY_MODEL)
+
+
+def _revalidate_authority_in_lock(governance_dir, entry_authority,
+                                  timeout_seconds=10.0):
+    """FEAT-061 / REVIEW-FEAT-061-CODE-R0 P0-F1 — in-lock authority
+    revalidation shared by BOTH decision-append legs.
+
+    The entry-time authority check runs WITHOUT any lock, so the
+    migration's single linearization point (the atomic authority-marker
+    replace, C1-ARCH-01) can cross the scheduling gap between the entry
+    check and the target-lock critical section.  Under the target lock —
+    the SAME mutual exclusion every authority transition acquires — the
+    marker is stable, so one fenced re-read here closes the window
+    completely:
+
+    * ``expected_epoch=entry epoch`` — any linearization (freeze/activate/
+      rollback) bumped the epoch → ``revision_conflict`` with the observed
+      epoch; the caller re-judges from the new world (never writes a
+      record that only the projection face would carry).
+    * frozen state re-check — a freeze that started after the entry check
+      rejects the write (C1-ARCH-02 冻结完成 = 新写入被拒绝).
+    * backend re-check — the leg executing must still own the authority;
+      a flipped backend routes the caller back to decision_append.
+    """
+    from decision_repository import FROZEN_STATES, load_authority
+    entry_epoch = entry_authority["epoch"]
+    authority = load_authority(governance_dir, expected_epoch=entry_epoch)
+    if authority["state"] in FROZEN_STATES:
+        _refuse({
+            "code": "illegal_transition",
+            "detail": f"decision writes are FROZEN (in-lock revalidation): "
+                      f"authority state {authority['state']} (migration "
+                      f"{authority.get('migration_id')!r}) — the entry "
+                      f"check passed before the freeze linearized "
+                      f"(C1-ARCH-02); retry after the migration completes "
+                      f"or aborts",
+            "observed_state": authority["state"],
+            "observed_epoch": authority["epoch"],
+        })
+    if authority["backend"] != entry_authority["backend"]:
+        _refuse({
+            "code": "revision_conflict",
+            "detail": f"authority backend flipped between the entry check "
+                      f"({entry_authority['backend']}) and the target lock "
+                      f"({authority['backend']}) — refusing this leg; "
+                      f"re-issue the append against the current authority",
+            "observed_backend": authority["backend"],
+            "observed_epoch": authority["epoch"],
+        })
+    return authority
+
+
+def _decision_append_json(*, decider, content, basis, date_str,
+                          governance_dir, repo_root, op_id, fingerprint,
+                          marker, expected_revision, dry_run, now,
+                          timeout_seconds, authority):
+    """FEAT-061 — the JSON-backend leg of the decision write service
+    (Layer 2; storage codecs come from the Layer 3 adapter).
+
+    Contract invariants (identical to the md leg by construction):
+
+    * same validation (``_build_decision_row`` + ``_decision_row_validator``
+      build and re-validate the row — the JSON record's cells ARE the
+      split of that validated row, so a JSON-era row is byte-identical to
+      what the md convention would carry — the C1-ARCH-07 rollback
+      compatibility window holds by construction);
+    * same CAS channel: ``expected_revision`` compares byte lengths of the
+      authoritative artifact (decision-store.json here);
+    * same idempotency model: ledger replay first, then WORLD recovery via
+      the operation marker in the store's record provenance (crash between
+      store write and ledger write never re-appends; a pre-cutover writer
+      resuming after the switch (case ④) finds its marker in the migrated
+      records);
+    * same crash protocol shape: atomic store write → ledger record
+      (world-judging resume, FEAT-060 pattern);
+    * projection attempt after the commit (C1-ARCH-06): the commit is
+      real when the store write landed; a failed/blocked projection is
+      persisted as ``pending`` in the projection checkpoint and surfaced
+      as ``projection_status`` in the payload (exit code stays 0 — the
+      freshness gate, not the exit code, is what blocks publishing stale
+      evidence).  Retrying the same operation replays — it never
+      re-appends and never re-projects twice.
+    """
+    governance_dir = Path(governance_dir)
+    from decision_repository import (
+        JSON_STORE_FILE,
+        load_json_store,
+        next_decision_id,
+        project_store_to_markdown,
+        write_projection_checkpoint,
+    )
+    json_target = governance_dir / JSON_STORE_FILE
+
+    def _payload_with_projection(payload, projection):
+        if projection is not None:
+            payload["projection_status"] = {
+                "status": projection["status"],
+                "input_store_digest": projection.get(
+                    "input_store_digest"),
+                "md_digest": projection.get("md_digest"),
+            }
+        return payload
+
+    if dry_run:
+        if not json_target.is_file():
+            _refuse({
+                "code": "manual_intervention",
+                "detail": f"{json_target} does not exist — the JSON store "
+                          f"is created by the migration activation, never "
+                          f"by an append",
+            })
+        store = load_json_store(json_target)
+        archive_numbers = _scan_archive_ids(governance_dir, DEC_ROW_PREFIX)
+        dec_id = next_decision_id(store["records"],
+                                  archive_numbers=archive_numbers)
+        row_text = _build_decision_row(
+            dec_id=dec_id, date_str=date_str, decider=decider,
+            content=content, basis=basis, op_id=op_id)
+        _decision_row_validator(row_text, op_id)
+        return {
+            "dry_run": True,
+            "operation_id": op_id,
+            "input_fingerprint": fingerprint,
+            "backend": "json",
+            "next_id": dec_id,
+            "row": row_text,
+            "refs": [],
+            "target": str(json_target),
+            "bytes_written": 0,
+            "code": RESULT_OK,
+            "error": False,
+        }
+
+    with _TargetLock(json_target, timeout_seconds):
+        # ── FEAT-061 / REVIEW-FEAT-061-CODE-R0 P0-F1 (json leg): the same
+        # in-lock authority revalidation as the md leg — the entry check
+        # is lock-free, so a rollback/cutover linearization may cross the
+        # scheduling gap before this critical section is entered.
+        authority = _revalidate_authority_in_lock(
+            governance_dir, authority, timeout_seconds)
+        original = _read_bytes(json_target)
+        if not original.strip():
+            _refuse({
+                "code": "schema_violation",
+                "detail": f"{json_target} is empty — not a valid JSON "
+                          f"store; refuse to append (create it via the "
+                          f"migration activation first)",
+            })
+        if expected_revision is not None \
+                and expected_revision != len(original):
+            _refuse(_error_result(
+                op_id, "revision_conflict",
+                f"expected revision {expected_revision} != observed "
+                f"{len(original)} — re-read the target and re-judge",
+                observed_revision=len(original)))
+        store = load_json_store(json_target)
+        ledger = _load_ledger(governance_dir)
+        existing = ledger["operations"].get(op_id)
+        if existing is not None:
+            decision = decide_operation_replay(
+                existing.get("input_fingerprint"), fingerprint)
+            if decision == "replay":
+                return _replay_payload(existing)
+            _refuse(_error_result(
+                op_id, "operation_id_conflict",
+                "operation id already recorded with a DIFFERENT payload — "
+                "mint a new operation id",
+                observed_revision=len(original)))
+        for record in store["records"]:
+            provenance = record.get("provenance") or {}
+            if provenance.get("op_id") == op_id:
+                # World recovery (查世界不信日志): the record is in the
+                # store, the ledger missed it — case ④'s pre-cutover
+                # writer resuming after the switch lands here too.
+                _recover_append(
+                    governance_dir, op_id, "decision-append", "",
+                    fingerprint, marker, len(original), now)
+                return _replay_payload(
+                    {"result": {"operation_id": op_id, "code": RESULT_OK,
+                                "new_revision": len(original),
+                                "observed_revision": None,
+                                "execution": "succeeded", "detail": None}},
+                    source="world_recovery")
+        archive_numbers = _scan_archive_ids(governance_dir, DEC_ROW_PREFIX)
+        dec_id = next_decision_id(store["records"],
+                                  archive_numbers=archive_numbers)
+        row_text = _build_decision_row(
+            dec_id=dec_id, date_str=date_str, decider=decider,
+            content=content, basis=basis, op_id=op_id)
+        _decision_row_validator(row_text, op_id)
+        cells = _split_row(row_text)
+        new_record = {
+            "id": dec_id,
+            "shape": "live5",
+            "cells": cells,
+            "row_raw": row_text,
+            "source_line": None,
+            "provenance": {"op_id": op_id, "marker": marker},
+            "date": date_str,
+            "decider": decider,
+            "content": content,
+            "basis": cells[4],
+        }
+        # REVIEW-FEAT-061-CODE-R0 P0-F2: rebuild from the loaded store
+        # DICT (not a four-key literal) — optional legal top-level keys
+        # such as ``duplicate_acceptances`` (勘正对 acceptance, persisted
+        # IN the store) must survive the append; dropping them would make
+        # the post-write reread refuse the very store this append just
+        # wrote (a self-inflicted brick).
+        new_store = dict(store)
+        new_store["records"] = list(store["records"]) + [new_record]
+        new_store["items"] = (list(store["items"])
+                              + [{"kind": "record", "id": dec_id}])
+        new_bytes = (json.dumps(new_store, ensure_ascii=False, indent=2)
+                     + "\n").encode("utf-8")
+        _atomic_write_bytes(json_target, new_bytes)
+        # Post-write reread (DoD 4 caliber): re-parse the written store
+        # with the same validator and confirm the record verbatim.
+        reread = load_json_store(json_target)
+        rerecord = next((r for r in reread["records"]
+                         if r["id"] == dec_id), None)
+        if rerecord is None or rerecord["cells"] != cells \
+                or rerecord["row_raw"] != row_text:
+            _refuse({
+                "code": "manual_intervention",
+                "detail": f"post-write reread: record {dec_id} (operation "
+                          f"{op_id}) not found verbatim in {json_target}",
+            })
+        revision = len(_read_bytes(json_target))
+
+        def record_op(operation_ledger):
+            operation_ledger["operations"][op_id] = _ledger_entry(
+                op_id, "decision-append", "", fingerprint, status="ok",
+                revision=revision, now=now,
+                authority={"state": authority["state"],
+                           "epoch": authority["epoch"],
+                           "generation": authority["generation"],
+                           "backend": "json"})
+
+        _ledger_transaction(governance_dir, record_op, timeout_seconds)
+        try:
+            projection = project_store_to_markdown(
+                governance_dir, reason=f"decision-append {op_id}",
+                timeout_seconds=timeout_seconds, json_lock_held=True)
+        except (StoreError, OSError, ValueError,
+                UnicodeDecodeError) as projection_error:
+            # REVIEW-FEAT-061-CODE-R0 P2: the commit is real (store
+            # written + reread + ledger).  EVERY projection failure class
+            # — structured refusal, IO error, corrupt bytes — becomes a
+            # persisted pending checkpoint surfaced in the payload; an
+            # uncaught exception here would escape @_returns_payload and
+            # break the "committed, projection pending, exit 0" promise
+            # (C1-ARCH-06 已提交、投影待修复).
+            checkpoint = write_projection_checkpoint(governance_dir, {
+                "status": "pending",
+                "reason": f"decision-append {op_id}",
+                "last_error": (
+                    projection_error.payload.get("detail")
+                    if isinstance(projection_error, StoreError)
+                    else repr(projection_error)),
+                "attempts": 1,
+            })
+            projection = {"status": "pending", "checkpoint": checkpoint,
+                          "md_digest": None}
+        return _payload_with_projection(_ok_result(
+            op_id, revision, detail=f"appended {dec_id} to {json_target}",
+            row_id=dec_id, command="decision-append",
+            idempotency_model=IDEMPOTENCY_MODEL), projection)
 
 
 # ── agent-locks pipeline (acquire-pipeline schema reuse — B-3) ───────────────

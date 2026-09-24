@@ -1,0 +1,314 @@
+{
+  "rehearsal_root": "C:\\Users\\peter\\AppData\\Local\\Temp\\feat061-rehearsal-oh8s95m0",
+  "simulated_dispositions": [
+    "11 处 DEC-nnn① 形态勘误行 → 演练副本模拟源头处置（空格分隔——真实切换票必须先在源文件显式处置，格式转换不得代劳）"
+  ],
+  "steps": [
+    {
+      "cmd": "sample",
+      "exit": 0,
+      "payload": {
+        "verdict": "PASS",
+        "manifest_path": "C:\\Users\\peter\\AppData\\Local\\Temp\\feat061-rehearsal-oh8s95m0\\.governance\\.decision-migration\\M-FEAT061-REAL-REHEARSAL\\input-manifest.json",
+        "md_sha256": "2389d1911367e2117006acd604809ec9400b2819e8ad7c7f5d7edaf9e71e8516"
+      }
+    },
+    {
+      "cmd": "freeze",
+      "exit": 0,
+      "payload": {
+        "code": "ok",
+        "error": false,
+        "operation": "freeze",
+        "migration_id": "M-FEAT061-REAL-REHEARSAL",
+        "state": "CUTOVER_FROZEN",
+        "epoch": 1,
+        "owner_token": "58917c3e2231412da6410002feb5db97",
+        "frozen_input_digest": "2389d1911367e2117006acd604809ec9400b2819e8ad7c7f5d7edaf9e71e8516",
+        "closure": {
+          "writes_rejected": true,
+          "writes_rejected_mechanism": "authority state CUTOVER_FROZEN — the write service refuses before touching any file",
+          "inflight_converged": true,
+          "inflight_converged_mechanism": "md target lock acquired (mutual exclusion with in-flight appends) + ledger scan clean",
+          "ops_classified": true,
+          "ops_classified_mechanism": "governance-store-ops.json + guard violations ledger scanned: zero pending transactions",
+          "input_fixed": true,
+          "input_fixed_mechanism": "origin manifest digest == frozen md bytes (independent sampler provenance)"
+        },
+        "detail": "decision writes are now FROZEN (CUTOVER_FROZEN) — activation requires the independent proof pack (PASS) and the owner token"
+      }
+    },
+    {
+      "cmd": "shadow",
+      "exit": 2,
+      "payload": {
+        "code": "schema_violation",
+        "detail": "line 120 is a DEC-060 variant row (3 cells) — migration refuses without an explicit per-ID acceptance (cells stay verbatim; acceptances are recorded in the migration manifest)",
+        "error": true,
+        "disposition": "validation"
+      }
+    },
+    {
+      "cmd": "shadow",
+      "exit": 2,
+      "payload": {
+        "code": "schema_violation",
+        "detail": "line 122 is a DEC-061 variant row (25 cells) — migration refuses without an explicit per-ID acceptance (cells stay verbatim; acceptances are recorded in the migration manifest)",
+        "error": true,
+        "disposition": "validation"
+      }
+    },
+    {
+      "cmd": "shadow",
+      "exit": 2,
+      "payload": {
+        "code": "schema_violation",
+        "detail": "line 127 is a DEC-189 variant row (10 cells) — migration refuses without an explicit per-ID acceptance (cells stay verbatim; acceptances are recorded in the migration manifest)",
+        "error": true,
+        "disposition": "validation"
+      }
+    },
+    {
+      "cmd": "shadow",
+      "exit": 2,
+      "payload": {
+        "code": "schema_violation",
+        "detail": "line 128 is a DEC-190 variant row (10 cells) — migration refuses without an explicit per-ID acceptance (cells stay verbatim; acceptances are recorded in the migration manifest)",
+        "error": true,
+        "disposition": "validation"
+      }
+    },
+    {
+      "cmd": "shadow",
+      "exit": 2,
+      "payload": {
+        "code": "schema_violation",
+        "detail": "line 129 is a DEC-191 variant row (10 cells) — migration refuses without an explicit per-ID acceptance (cells stay verbatim; acceptances are recorded in the migration manifest)",
+        "error": true,
+        "disposition": "validation"
+      }
+    },
+    {
+      "cmd": "shadow",
+      "exit": 2,
+      "payload": {
+        "code": "schema_violation",
+        "detail": "line 130 is a DEC-192 variant row (10 cells) — migration refuses without an explicit per-ID acceptance (cells stay verbatim; acceptances are recorded in the migration manifest)",
+        "error": true,
+        "disposition": "validation"
+      }
+    },
+    {
+      "cmd": "shadow",
+      "exit": 2,
+      "payload": {
+        "code": "schema_violation",
+        "detail": "line 132 is a DEC-194 variant row (6 cells) — migration refuses without an explicit per-ID acceptance (cells stay verbatim; acceptances are recorded in the migration manifest)",
+        "error": true,
+        "disposition": "validation"
+      }
+    },
+    {
+      "cmd": "shadow",
+      "exit": 2,
+      "payload": {
+        "code": "cross_record_violation",
+        "detail": "duplicate record id DEC-194 (lines 132 and 134) — aggregating duplicates is refused (C1-ARCH-05); pass an explicit --accept-duplicate note to carry BOTH rows verbatim",
+        "error": true,
+        "disposition": "validation"
+      }
+    },
+    {
+      "cmd": "shadow",
+      "exit": 2,
+      "payload": {
+        "code": "cross_record_violation",
+        "detail": "duplicate record id DEC-214 (lines 155 and 156) — aggregating duplicates is refused (C1-ARCH-05); pass an explicit --accept-duplicate note to carry BOTH rows verbatim",
+        "error": true,
+        "disposition": "validation"
+      }
+    },
+    {
+      "cmd": "shadow",
+      "exit": 2,
+      "payload": {
+        "code": "schema_violation",
+        "detail": "line 157 is a DEC-215 variant row (9 cells) — migration refuses without an explicit per-ID acceptance (cells stay verbatim; acceptances are recorded in the migration manifest)",
+        "error": true,
+        "disposition": "validation"
+      }
+    },
+    {
+      "cmd": "shadow",
+      "exit": 0,
+      "payload": {
+        "code": "ok",
+        "error": false,
+        "operation": "shadow",
+        "migration_id": "M-FEAT061-REAL-REHEARSAL",
+        "frozen_input_digest": "2389d1911367e2117006acd604809ec9400b2819e8ad7c7f5d7edaf9e71e8516",
+        "line_coverage": {
+          "content": 61,
+          "table_header": 1,
+          "table_separator": 1,
+          "record": 116
+        },
+        "record_count": 116,
+        "variant_acceptances": {
+          "DEC-060": "FEAT-061 演练显式接受——行形变体，cells 逐字保留",
+          "DEC-061": "FEAT-061 演练显式接受——行形变体，cells 逐字保留",
+          "DEC-189": "FEAT-061 演练显式接受——行形变体，cells 逐字保留",
+          "DEC-190": "FEAT-061 演练显式接受——行形变体，cells 逐字保留",
+          "DEC-191": "FEAT-061 演练显式接受——行形变体，cells 逐字保留",
+          "DEC-192": "FEAT-061 演练显式接受——行形变体，cells 逐字保留",
+          "DEC-194": "FEAT-061 演练显式接受——行形变体，cells 逐字保留",
+          "DEC-215": "FEAT-061 演练显式接受——行形变体，cells 逐字保留"
+        },
+        "duplicate_acceptances": {
+          "DEC-194": "FEAT-061 演练显式接受——勘正行对，两行逐字保留不聚合",
+          "DEC-214": "FEAT-061 演练显式接受——勘正行对，两行逐字保留不聚合"
+        },
+        "shadow_digest": "97dc0289b2b0983fbc094839127ab6b8681032367d92823073f784b1b0a1006b",
+        "note": "历史勘正不混入格式转换 — cells/row_raw 逐字保留; 内容差异由独立校验器按旧解析器裁决 (independence rule ①)"
+      }
+    },
+    {
+      "cmd": "verify",
+      "exit": 0,
+      "payload": {
+        "code": "ok",
+        "error": false,
+        "operation": "verify",
+        "migration_id": "M-FEAT061-REAL-REHEARSAL",
+        "verdict": "PASS",
+        "verdict_path": "C:\\Users\\peter\\AppData\\Local\\Temp\\feat061-rehearsal-oh8s95m0\\.governance\\.decision-migration\\M-FEAT061-REAL-REHEARSAL\\verify-verdict.json"
+      }
+    },
+    {
+      "cmd": "activate",
+      "exit": 0,
+      "payload": {
+        "code": "ok",
+        "error": false,
+        "operation": "activate",
+        "migration_id": "M-FEAT061-REAL-REHEARSAL",
+        "state": "JSON_ACTIVE",
+        "epoch": 2,
+        "store_digest": "97dc0289b2b0983fbc094839127ab6b8681032367d92823073f784b1b0a1006b",
+        "resumed": false
+      }
+    },
+    {
+      "cmd": "status",
+      "exit": 0,
+      "payload": {
+        "code": "ok",
+        "error": false,
+        "operation": "status",
+        "authority": {
+          "state": "JSON_ACTIVE",
+          "backend": "json",
+          "epoch": 2,
+          "generation": 0,
+          "migration_id": "M-FEAT061-REAL-REHEARSAL",
+          "manifest_digest": "78bf9ce8cb5e928da595cfe9f55c6dbec2528f3ad86e9afabeaef08c3d9c78f3",
+          "owner_token_present": true
+        },
+        "projection_freshness": {
+          "status": "fresh",
+          "store_digest": "97dc0289b2b0983fbc094839127ab6b8681032367d92823073f784b1b0a1006b",
+          "md_digest": "2389d1911367e2117006acd604809ec9400b2819e8ad7c7f5d7edaf9e71e8516"
+        },
+        "store_present": true,
+        "migration_root": "C:\\Users\\peter\\AppData\\Local\\Temp\\feat061-rehearsal-oh8s95m0\\.governance\\.decision-migration"
+      }
+    },
+    {
+      "cmd": "rollback-begin",
+      "exit": 0,
+      "payload": {
+        "code": "ok",
+        "error": false,
+        "operation": "rollback-begin",
+        "state": "ROLLBACK_FROZEN",
+        "epoch": 3,
+        "projection_status_at_freeze": "fresh",
+        "frozen_store_digest": "97dc0289b2b0983fbc094839127ab6b8681032367d92823073f784b1b0a1006b"
+      }
+    },
+    {
+      "cmd": "rollback-export",
+      "exit": 0,
+      "payload": {
+        "code": "ok",
+        "error": false,
+        "operation": "rollback-export",
+        "migration_id": "M-FEAT061-REAL-REHEARSAL",
+        "store_digest": "97dc0289b2b0983fbc094839127ab6b8681032367d92823073f784b1b0a1006b",
+        "export_path": "C:\\Users\\peter\\AppData\\Local\\Temp\\feat061-rehearsal-oh8s95m0\\.governance\\.decision-migration\\M-FEAT061-REAL-REHEARSAL\\rollback-export.md",
+        "record_count": 116,
+        "numbering_state_max_dec": 237,
+        "idempotency_identity_preserved": 14,
+        "reverse_check_verdict": "PASS",
+        "guard_state_note": "guard/基线/其他表文件零触碰 — 仅承诺存储格式回退，不承诺旧二进制回退 (ARCH-07)"
+      }
+    },
+    {
+      "cmd": "rollback-activate",
+      "exit": 0,
+      "payload": {
+        "code": "ok",
+        "error": false,
+        "operation": "rollback-activate",
+        "state": "MD_ACTIVE",
+        "epoch": 4,
+        "md_digest": "2389d1911367e2117006acd604809ec9400b2819e8ad7c7f5d7edaf9e71e8516",
+        "note": "JSON store retained on disk as a non-authoritative artifact; md world resumed (case ⑧: decision_append replay finds markers via world recovery)"
+      }
+    }
+  ],
+  "sample_exit": 0,
+  "variant_acceptances": [
+    "DEC-060",
+    "DEC-061",
+    "DEC-189",
+    "DEC-190",
+    "DEC-191",
+    "DEC-192",
+    "DEC-194",
+    "DEC-215"
+  ],
+  "duplicate_acceptances": [
+    "DEC-194",
+    "DEC-214"
+  ],
+  "verify_verdict": "PASS",
+  "activate_exit": 0,
+  "status": {
+    "code": "ok",
+    "error": false,
+    "operation": "status",
+    "authority": {
+      "state": "JSON_ACTIVE",
+      "backend": "json",
+      "epoch": 2,
+      "generation": 0,
+      "migration_id": "M-FEAT061-REAL-REHEARSAL",
+      "manifest_digest": "78bf9ce8cb5e928da595cfe9f55c6dbec2528f3ad86e9afabeaef08c3d9c78f3",
+      "owner_token_present": true
+    },
+    "projection_freshness": {
+      "status": "fresh",
+      "store_digest": "97dc0289b2b0983fbc094839127ab6b8681032367d92823073f784b1b0a1006b",
+      "md_digest": "2389d1911367e2117006acd604809ec9400b2819e8ad7c7f5d7edaf9e71e8516"
+    },
+    "store_present": true,
+    "migration_root": "C:\\Users\\peter\\AppData\\Local\\Temp\\feat061-rehearsal-oh8s95m0\\.governance\\.decision-migration"
+  },
+  "rollback_begin_exit": 0,
+  "rollback_export_exit": 0,
+  "reverse_check_verdict": "PASS",
+  "rollback_activate_exit": 0,
+  "round_trip_byte_identical_vs_dispositioned_input": true,
+  "real_governance_untouched": true
+}

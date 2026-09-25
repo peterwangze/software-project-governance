@@ -3,6 +3,8 @@
 Tests cover:
   - migrate_by_version: correct extraction and archival of version-range tasks
   - build_index: correct index generation from archive files
+  - rebuild_index: index-loss/corruption recovery — rebuild + integrity
+    verification (FIX-384 B-7a), idempotent on an intact index, damage-tolerant
   - verify_archive_integrity: detects inconsistencies
   - backward compatibility: no archive/ directory = no-op
   - Dry-Run mode: does not modify files
@@ -914,6 +916,464 @@ class TestArchiveBuildIndex(unittest.TestCase):
         content = (self.archive_dir / "index.md").read_text(encoding="utf-8")
         self.assertIn("archive/tasks/recent-completed-2026-04-30_2026-06-27.md", content)
         self.assertIn("## 非结构化归档", content)
+
+
+class TestArchiveIndexRebuild(unittest.TestCase):
+    """FIX-384 (B-7a): archive/index.md rebuild path — index loss/corruption
+    recovery. The index is a pure DERIVATIVE of the archive files: rebuild
+    restores the view, never creates data, never touches the archive files,
+    and must reach integrity PASS even when the archive files themselves
+    carry content-level damage (empty / unreadable / row-less)."""
+
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        self.gov_dir = self.root / ".governance"
+        self.gov_dir.mkdir(parents=True, exist_ok=True)
+        self.archive_dir = self.gov_dir / "archive"
+        for sub in ["tasks", "evidence", "decisions", "risks"]:
+            (self.archive_dir / sub).mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        self.tempdir.cleanup()
+
+    def _create_full_archive_files(self):
+        """Structured archive files across all four categories."""
+        (self.archive_dir / "tasks" / "v0.11.0~v0.12.0.md").write_text(
+            "# 归档 Task 表 — v0.11.0 ~ v0.12.0\n"
+            "- **归档日期**: 2026-05-08\n\n"
+            "### v0.11.0 — Early fixes\n"
+            "| 任务ID | 描述 | 优先级 | 依赖 | 目标版本 | 负责人 | 审查人 | 审查类型 | 闭环路径 | 状态 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
+            "| FIX-001 | Fix bug 1 | P1 | — | 1.0.0 | 阿速 | — | Code Reviewer | TBD | 已完成 |\n"
+            "| FIX-002 | Fix bug 2 | P1 | FIX-001 | 1.0.0 | 阿速 | — | Code Reviewer | TBD | 已完成 |\n",
+            encoding="utf-8",
+        )
+        (self.archive_dir / "evidence" / "v0.11.0~v0.12.0.md").write_text(
+            "# 归档 Evidence 记录 — v0.11.0 ~ v0.12.0\n"
+            "- **归档日期**: 2026-05-08\n\n"
+            "| 证据ID | 关联Task | 摘要 | 日期 | 类型 | 产出 | 负责人 | 审查人 | 审查结果 | 备注 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
+            "| EVD-001 | FIX-001 | Fixed bug 1 | 2026-05-01 | 代码 | src/ | 阿速 | 老赵 | 通过 | — |\n"
+            "| EVD-002 | FIX-002 | Fixed bug 2 | 2026-05-02 | 代码 | src/ | 阿速 | 老赵 | 通过 | — |\n",
+            encoding="utf-8",
+        )
+        (self.archive_dir / "decisions" / "decisions-v0.11.0-0.12.0.md").write_text(
+            "# 归档 Decision 记录 — v0.11.0 ~ v0.12.0\n"
+            "- **归档日期**: 2026-05-08\n\n"
+            "## DEC-001: Use SQLite for storage\n\n"
+            "- 归档版本: v0.11.0（关联 task 已归档）\n\n"
+            "> 原始决策记录（完整字段）：\n"
+            "> | DEC-001 | 2026-05-01 | 存储选型 | 背景 | 决策 | 备选 | 原因 | 影响 | 用户 | FIX-001 | 后续 |\n",
+            encoding="utf-8",
+        )
+        (self.archive_dir / "risks" / "risks-v0.11.0-0.12.0.md").write_text(
+            "# 归档 Risk 记录 — v0.11.0 ~ v0.12.0\n"
+            "- **归档日期**: 2026-05-08\n\n"
+            "| RISK-001 | Data loss during archive | 中 | 已关闭 |\n",
+            encoding="utf-8",
+        )
+
+    def _snapshot_archive_state(self):
+        """Return {rel_path: bytes} for every archive file (index excluded)."""
+        state = {}
+        for sub in ["tasks", "evidence", "decisions", "risks"]:
+            for f in sorted((self.archive_dir / sub).glob("*.md")):
+                if f.name == ".gitkeep":
+                    continue
+                state[f"{sub}/{f.name}"] = f.read_bytes()
+        return state
+
+    # ── Acceptance chain: 索引丢失 → 重建 → integrity PASS ──
+
+    def test_full_chain_index_missing_rebuild_verify_pass(self):
+        """Acceptance chain: index missing → rebuild_index() → integrity PASS.
+        Rebuild must not touch the archive files (pure derivative view)."""
+        self._create_full_archive_files()
+        import archive
+
+        with patch.object(archive, "ROOT", self.root), \
+                patch.object(archive, "PLUGIN_ROOT", self.root):
+            # Pre-state: verify FAILS because the index does not exist.
+            pre = archive.verify_archive_integrity()
+            self.assertFalse(pre["pass"])
+            self.assertTrue(
+                any("index.md 不存在" in i for i in pre["issues"]),
+                f"expected the missing-index issue, got: {pre['issues']}",
+            )
+
+            before = self._snapshot_archive_state()
+            result = archive.rebuild_index()
+
+            self.assertTrue(
+                result["verify_pass"],
+                f"rebuild must reach integrity PASS: {result['verify_issues']}",
+            )
+            self.assertFalse(result["index_existed"])
+            self.assertTrue(result["changed"])
+            self.assertEqual(result["damaged_files"], [])
+            self.assertGreaterEqual(result["task_entries"], 2)
+            self.assertGreaterEqual(result["evidence_entries"], 2)
+            self.assertGreaterEqual(result["decision_entries"], 1)
+            self.assertGreaterEqual(result["risk_entries"], 1)
+            # 重建不创造数据也不破坏归档：archive files byte-identical.
+            self.assertEqual(
+                self._snapshot_archive_state(), before,
+                "rebuild must never modify the archive files",
+            )
+            # Every category's entries are reachable through the index.
+            index = (self.archive_dir / "index.md").read_text(encoding="utf-8")
+            self.assertIn("FIX-001", index)
+            self.assertIn("EVD-001", index)
+            self.assertIn("DEC-001", index)
+            self.assertIn("RISK-001", index)
+            # Post-state: the standalone integrity check (check-archive-integrity
+            # contract) passes against the rebuilt index too.
+            post = archive.verify_archive_integrity()
+            self.assertTrue(
+                post["pass"],
+                f"post-rebuild verify issues: {post['issues']}",
+            )
+
+    def test_full_chain_index_empty_file_rebuild_verify_pass(self):
+        """0-byte index.md (空文件) → rebuild → integrity PASS."""
+        self._create_full_archive_files()
+        (self.archive_dir / "index.md").write_text("", encoding="utf-8")
+        import archive
+
+        with patch.object(archive, "ROOT", self.root), \
+                patch.object(archive, "PLUGIN_ROOT", self.root):
+            result = archive.rebuild_index()
+
+        self.assertTrue(
+            result["verify_pass"],
+            f"rebuild must reach integrity PASS: {result['verify_issues']}",
+        )
+        self.assertTrue(result["index_existed"])
+        self.assertTrue(result["changed"])
+        index = (self.archive_dir / "index.md").read_text(encoding="utf-8")
+        self.assertIn("FIX-001", index)
+        self.assertIn("# 归档索引", index)
+
+    def test_full_chain_index_partial_corruption_rebuild_verify_pass(self):
+        """Partially corrupted index (a risk row lost) → rebuild → integrity
+        PASS, with the regenerated index byte-identical to the healthy one."""
+        self._create_full_archive_files()
+        import archive
+
+        with patch.object(archive, "ROOT", self.root), \
+                patch.object(archive, "PLUGIN_ROOT", self.root):
+            archive.build_index()
+            index_path = self.archive_dir / "index.md"
+            healthy = index_path.read_text(encoding="utf-8")
+
+            risk_row = (
+                "| RISK-001 | Data loss during archive "
+                "| archive/risks/risks-v0.11.0-0.12.0.md |"
+            )
+            self.assertIn(risk_row, healthy,
+                          "fixture guard: expected the risk row in the index")
+            corrupted = healthy.replace(risk_row + "\n", "")
+            index_path.write_text(corrupted, encoding="utf-8")
+
+            # Pre-state: the truncated index lost the risks reference —
+            # verify must FAIL (orphan + Check 3 count mismatch).
+            pre = archive.verify_archive_integrity()
+            self.assertFalse(
+                pre["pass"],
+                f"corrupted index must fail verify: {pre['issues']}",
+            )
+
+            result = archive.rebuild_index()
+
+            self.assertTrue(
+                result["verify_pass"],
+                f"rebuild must reach integrity PASS: {result['verify_issues']}",
+            )
+            self.assertTrue(result["changed"])
+            # Deterministic regeneration: the view is restored byte-identical.
+            self.assertEqual(index_path.read_text(encoding="utf-8"), healthy)
+
+    def test_full_chain_index_garbage_format_rebuild_verify_pass(self):
+        """Format-broken index (prose garbage, no valid sections) → rebuild →
+        integrity PASS."""
+        self._create_full_archive_files()
+        (self.archive_dir / "index.md").write_text(
+            "这不是归档索引\n随便写的垃圾内容\n## 某个别的章节\n",
+            encoding="utf-8",
+        )
+        import archive
+
+        with patch.object(archive, "ROOT", self.root), \
+                patch.object(archive, "PLUGIN_ROOT", self.root):
+            pre = archive.verify_archive_integrity()
+            self.assertFalse(pre["pass"])
+            result = archive.rebuild_index()
+
+        self.assertTrue(
+            result["verify_pass"],
+            f"rebuild must reach integrity PASS: {result['verify_issues']}",
+        )
+        self.assertTrue(result["changed"])
+        index = (self.archive_dir / "index.md").read_text(encoding="utf-8")
+        self.assertIn("## Task 索引", index)
+        self.assertIn("FIX-001", index)
+
+    # ── 重建幂等：已有完好索引时重建 = 等价重生成（no-op） ──
+
+    def test_rebuild_idempotent_with_intact_index(self):
+        """Rebuild with an intact index: equivalent no-op — changed=False,
+        index byte-identical, archive files untouched."""
+        self._create_full_archive_files()
+        import archive
+
+        with patch.object(archive, "ROOT", self.root), \
+                patch.object(archive, "PLUGIN_ROOT", self.root):
+            archive.build_index()
+            index_path = self.archive_dir / "index.md"
+            healthy = index_path.read_text(encoding="utf-8")
+            before = self._snapshot_archive_state()
+
+            result = archive.rebuild_index()
+
+        self.assertTrue(result["verify_pass"])
+        self.assertTrue(result["index_existed"])
+        self.assertFalse(
+            result["changed"],
+            "rebuild with an intact index must be an equivalent no-op",
+        )
+        self.assertEqual(index_path.read_text(encoding="utf-8"), healthy)
+        self.assertEqual(self._snapshot_archive_state(), before)
+
+    # ── 损坏恢复：归档源文件损伤时重建不崩溃、登记、报告 ──
+
+    def test_rebuild_registers_empty_archive_file_and_verifies_pass(self):
+        """0-byte task archive file: registered in 非结构化归档 (not an orphan),
+        reported in damaged_files, integrity PASS after rebuild."""
+        (self.archive_dir / "tasks" / "v0.13.0~v0.14.0.md").write_text(
+            "", encoding="utf-8"
+        )
+        import archive
+
+        with patch.object(archive, "ROOT", self.root), \
+                patch.object(archive, "PLUGIN_ROOT", self.root):
+            result = archive.rebuild_index()
+
+        self.assertTrue(
+            result["verify_pass"],
+            f"empty archive file must not break the rebuild: {result['verify_issues']}",
+        )
+        kinds = {d["file"]: d["kind"] for d in result["damaged_files"]}
+        self.assertEqual(kinds.get("archive/tasks/v0.13.0~v0.14.0.md"), "empty")
+        index = (self.archive_dir / "index.md").read_text(encoding="utf-8")
+        self.assertIn("archive/tasks/v0.13.0~v0.14.0.md", index)
+        self.assertIn("空文件", index)
+
+    def test_rebuild_survives_unreadable_archive_file(self):
+        """Binary-garbage task archive file: rebuild must not raise, the file
+        is registered as 损坏 and integrity stays PASS."""
+        (self.archive_dir / "tasks" / "v0.15.0~v0.16.0.md").write_bytes(
+            b"\xff\xfe\x00\x01binary garbage not utf8 \xff\xff"
+        )
+        import archive
+
+        with patch.object(archive, "ROOT", self.root), \
+                patch.object(archive, "PLUGIN_ROOT", self.root):
+            result = archive.rebuild_index()
+
+        self.assertTrue(
+            result["verify_pass"],
+            f"unreadable archive file must not break the rebuild: {result['verify_issues']}",
+        )
+        kinds = {d["file"]: d["kind"] for d in result["damaged_files"]}
+        self.assertEqual(kinds.get("archive/tasks/v0.15.0~v0.16.0.md"), "decode_errors")
+        index = (self.archive_dir / "index.md").read_text(encoding="utf-8")
+        self.assertIn("archive/tasks/v0.15.0~v0.16.0.md", index)
+        self.assertIn("损坏", index)
+
+    def test_rebuild_salvages_readable_rows_from_partially_corrupted_archive(self):
+        """Partially corrupted task archive (valid rows + binary tail): the
+        readable rows are salvaged into the index, the damage is reported,
+        and integrity PASSes (partial recovery, no data invention)."""
+        readable = (
+            "### v0.17.0\n"
+            "| 任务ID | 描述 | 优先级 | 依赖 | 目标版本 | 负责人 | 审查人 | 审查类型 | 闭环路径 | 状态 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
+            "| FIX-101 | Readable row | P1 | — | 0.17.0 | 阿速 | — | Code Reviewer | TBD | 已完成 |\n"
+        ).encode("utf-8")
+        (self.archive_dir / "tasks" / "v0.17.0~v0.18.0.md").write_bytes(
+            readable + b"\n\xff\xff\xff TRUNCATED BINARY TAIL\n"
+        )
+        import archive
+
+        with patch.object(archive, "ROOT", self.root), \
+                patch.object(archive, "PLUGIN_ROOT", self.root):
+            result = archive.rebuild_index()
+
+        self.assertTrue(
+            result["verify_pass"],
+            f"partially corrupted archive must still verify: {result['verify_issues']}",
+        )
+        index = (self.archive_dir / "index.md").read_text(encoding="utf-8")
+        self.assertIn("FIX-101", index)
+        kinds = {d["file"]: d["kind"] for d in result["damaged_files"]}
+        self.assertEqual(kinds.get("archive/tasks/v0.17.0~v0.18.0.md"), "decode_errors")
+
+    def test_rebuild_registers_rowless_structured_archive_file(self):
+        """A readable, structured-named task archive with no extractable rows
+        (mangled table) is registered (无条目) instead of becoming an orphan."""
+        (self.archive_dir / "tasks" / "v0.19.0~v0.20.0.md").write_text(
+            "# 归档 Task 表 — v0.19.0 ~ v0.20.0\n"
+            "- **归档日期**: 2026-05-08\n"
+            "- **条目数**: 0\n\n"
+            "（正文表结构已损坏，仅存头部）\n",
+            encoding="utf-8",
+        )
+        import archive
+
+        with patch.object(archive, "ROOT", self.root), \
+                patch.object(archive, "PLUGIN_ROOT", self.root):
+            result = archive.rebuild_index()
+
+        self.assertTrue(
+            result["verify_pass"],
+            f"row-less archive must not become an orphan: {result['verify_issues']}",
+        )
+        index = (self.archive_dir / "index.md").read_text(encoding="utf-8")
+        self.assertIn("archive/tasks/v0.19.0~v0.20.0.md", index)
+        self.assertIn("无条目", index)
+
+    def test_rebuild_registers_empty_evidence_archive_file(self):
+        """Entry-less damage handling covers non-task categories too: an
+        empty evidence archive is registered and integrity PASSes."""
+        (self.archive_dir / "evidence" / "v0.21.0~v0.22.0.md").write_text(
+            "", encoding="utf-8"
+        )
+        import archive
+
+        with patch.object(archive, "ROOT", self.root), \
+                patch.object(archive, "PLUGIN_ROOT", self.root):
+            result = archive.rebuild_index()
+
+        self.assertTrue(
+            result["verify_pass"],
+            f"empty evidence archive must not break the rebuild: {result['verify_issues']}",
+        )
+        kinds = {d["file"]: d["kind"] for d in result["damaged_files"]}
+        self.assertEqual(kinds.get("archive/evidence/v0.21.0~v0.22.0.md"), "empty")
+        index = (self.archive_dir / "index.md").read_text(encoding="utf-8")
+        self.assertIn("archive/evidence/v0.21.0~v0.22.0.md", index)
+
+    # ── P1-1 red-green: build/verify Check 3 counting-caliber symmetry ──
+    # REVIEW-FIX-384-R0 P1-1: build_index's extraction caliber and verify
+    # Check 3's counting caliber for decisions/risks disagreed on damaged
+    # rows, making the post-rebuild integrity PASS unreachable (the verify
+    # message "Run build_index() to rebuild" became a dead loop). Both sides
+    # now share ONE extraction function per category; these tests pin the
+    # damaged-row corners.
+
+    def test_rebuild_passes_with_colon_damaged_decision_header(self):
+        """P1-1 corner ①: a DEC header with the colon lost (`## DEC-001 title`)
+        is NOT indexable by the canonical `## DEC-n: title` caliber — the file
+        must be registered entry-less and Check 3 must count 0 on BOTH sides,
+        so the rebuild reaches integrity PASS (red on the pre-fix caliber
+        split: verify counted the damaged header, build_index did not)."""
+        (self.archive_dir / "decisions" / "decisions-v0.11.0-0.12.0.md").write_text(
+            "# 归档 Decision 记录 — v0.11.0 ~ v0.12.0\n"
+            "- **归档日期**: 2026-05-08\n\n"
+            "## DEC-001 Use SQLite for storage\n\n"
+            "- 归档版本: v0.11.0（冒号损坏头，不可索引）\n",
+            encoding="utf-8",
+        )
+        import archive
+
+        with patch.object(archive, "ROOT", self.root), \
+                patch.object(archive, "PLUGIN_ROOT", self.root):
+            result = archive.rebuild_index()
+
+        self.assertTrue(
+            result["verify_pass"],
+            f"colon-damaged DEC header must not dead-loop the rebuild: "
+            f"{result['verify_issues']}",
+        )
+        index = (self.archive_dir / "index.md").read_text(encoding="utf-8")
+        # The damaged file is registered (P2-1 registration-branch coverage).
+        self.assertIn("archive/decisions/decisions-v0.11.0-0.12.0.md", index)
+        self.assertIn("无条目", index)
+
+    def test_rebuild_passes_with_truncated_risk_row(self):
+        """P1-1 corner ②: a truncated risk row (2 data cells instead of ≥4)
+        is NOT indexable — registered entry-less, Check 3 symmetric on both
+        sides, rebuild reaches integrity PASS (red pre-fix: verify counted
+        the truncated row, build_index did not)."""
+        (self.archive_dir / "risks" / "risks-v0.11.0-0.12.0.md").write_text(
+            "# 归档 Risk 记录 — v0.11.0 ~ v0.12.0\n"
+            "- **归档日期**: 2026-05-08\n\n"
+            "| RISK-001 | Data loss during archive\n",
+            encoding="utf-8",
+        )
+        import archive
+
+        with patch.object(archive, "ROOT", self.root), \
+                patch.object(archive, "PLUGIN_ROOT", self.root):
+            result = archive.rebuild_index()
+
+        self.assertTrue(
+            result["verify_pass"],
+            f"truncated risk row must not dead-loop the rebuild: "
+            f"{result['verify_issues']}",
+        )
+        index = (self.archive_dir / "index.md").read_text(encoding="utf-8")
+        # The damaged file is registered (P2-1 registration-branch coverage).
+        self.assertIn("archive/risks/risks-v0.11.0-0.12.0.md", index)
+        self.assertIn("无条目", index)
+
+    # ── 损伤分类器（单元级） ──
+
+    def test_archive_file_damage_classifier(self):
+        """_archive_file_damage: None / unreadable / empty / decode_errors."""
+        import archive
+
+        ok = self.archive_dir / "tasks" / "ok.md"
+        ok.write_text("# 归档\n", encoding="utf-8")
+        self.assertIsNone(archive._archive_file_damage(ok))
+
+        missing = archive._archive_file_damage(
+            self.archive_dir / "tasks" / "missing.md"
+        )
+        self.assertEqual(missing["kind"], "unreadable")
+
+        empty = self.archive_dir / "tasks" / "empty.md"
+        empty.write_bytes(b"")
+        self.assertEqual(archive._archive_file_damage(empty)["kind"], "empty")
+
+        bad = self.archive_dir / "tasks" / "bad.md"
+        bad.write_bytes(b"# ok\n\xff\xfe trailing garbage")
+        damage = archive._archive_file_damage(bad)
+        self.assertEqual(damage["kind"], "decode_errors")
+        self.assertIn("byte", damage["detail"])
+
+    # ── CLI 恢复入口 ──
+
+    def test_cli_rebuild_index_reports_and_exits_zero(self):
+        """`archive.py rebuild-index` rebuilds, prints the integrity verdict,
+        and exits 0; a second run is an idempotent no-op."""
+        self._create_full_archive_files()
+        import archive
+
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            archive.main(["rebuild-index", "--project-root", str(self.root)])
+        printed = out.getvalue()
+        self.assertIn("Status: rebuilt", printed)
+        self.assertIn("Integrity: PASS", printed)
+
+        out2 = io.StringIO()
+        with contextlib.redirect_stdout(out2):
+            archive.main(["rebuild-index", "--project-root", str(self.root)])
+        printed2 = out2.getvalue()
+        self.assertIn("Status: unchanged (idempotent no-op equivalent)", printed2)
+        self.assertIn("Integrity: PASS", printed2)
 
 
 class TestArchiveVerifyIntegrity(unittest.TestCase):

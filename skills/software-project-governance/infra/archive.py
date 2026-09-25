@@ -8,6 +8,9 @@ evidence-log entries, etc.) with a light-weight Markdown index.
 Core functions:
   - migrate_by_version: archive tasks+evidence for a version range
   - build_index: scan archive files, generate archive/index.md
+  - rebuild_index: index-loss/corruption recovery — rebuild the index from
+      the archive files, then verify integrity (FIX-384 / B-7a). The index is
+      a pure DERIVATIVE: rebuild restores the view, never creates data.
   - verify_archive_integrity: check index-archive consistency
   - rollback_last_migration: undo most recent migration
 
@@ -1769,7 +1772,11 @@ def _extract_tasks_from_archive_file(filepath):
     """
     if not filepath.exists():
         return []
-    content = filepath.read_text(encoding="utf-8")
+    # FIX-384: errors="replace" salvages the readable lines of a partially
+    # corrupted archive file instead of crashing on invalid UTF-8. Extracted
+    # IDs still have to match strict regexes, so replacement characters can
+    # never fabricate a phantom entry.
+    content = filepath.read_text(encoding="utf-8", errors="replace")
     results = []
     current_version = None
     # FIX-171: pre-compute the filename-derived version once. It is only used
@@ -1833,7 +1840,8 @@ def _extract_evidence_from_archive_file(filepath):
     """
     if not filepath.exists():
         return []
-    content = filepath.read_text(encoding="utf-8")
+    # FIX-384: damage-tolerant read (see _extract_tasks_from_archive_file).
+    content = filepath.read_text(encoding="utf-8", errors="replace")
     results = []
 
     for line in content.split("\n"):
@@ -1851,6 +1859,69 @@ def _extract_evidence_from_archive_file(filepath):
             if evd_id and _EVD_ID_SHAPE_RE.match(evd_id):
                 results.append((evd_id, task_ids))
 
+    return results
+
+
+def _extract_decisions_from_archive_file(filepath):
+    """Extract decision entries from an archive file — SINGLE SOURCE.
+
+    REVIEW-FIX-384-R0 P1-1: build_index's indexing caliber and
+    verify_archive_integrity Check 3's counting caliber previously used two
+    DIFFERENT regexes (`##\\s+(DEC-\\d+):` with colon vs `^##\\s+DEC-\\d+`
+    without), so a colon-damaged DEC header counted 1 on the verify side and
+    0 on the index side forever — Check 3 could never pass and the verify
+    message "Run build_index() to rebuild" became a dead loop. Both sides now
+    call THIS function, so the calibers can never drift again. The canonical
+    caliber is the strict one (the format _migrate_decisions writes:
+    `## DEC-{n}: {title}`); a damaged header is not indexable and the file is
+    handled by the FIX-384 entry-less registration path instead.
+
+    Returns list of {"id", "title"} dicts (empty when unreadable; damage-
+    tolerant read — see _extract_tasks_from_archive_file).
+    """
+    if not filepath.exists():
+        return []
+    try:
+        content = filepath.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    return [
+        {"id": m.group(1), "title": m.group(2).strip()}
+        for m in re.finditer(r"##\s+(DEC-\d+):\s*(.*)", content)
+    ]
+
+
+def _extract_risks_from_archive_file(filepath):
+    """Extract risk entries from an archive file — SINGLE SOURCE.
+
+    REVIEW-FIX-384-R0 P1-1: the same caliber-split defect as decisions —
+    build_index required ≥4 pipe cells (id + description indexable) while
+    verify Check 3 counted any `| RISK-n`-prefixed line, so a truncated risk
+    row made Check 3 permanently FAIL after a rebuild. Both sides now call
+    THIS function; the canonical caliber is build_index's (a row is indexable
+    only with id + description cells), damaged rows fall to the entry-less
+    registration path.
+
+    Returns list of {"id", "description"} dicts (empty when unreadable;
+    damage-tolerant read — see _extract_tasks_from_archive_file).
+    """
+    if not filepath.exists():
+        return []
+    try:
+        content = filepath.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    results = []
+    for line in content.split("\n"):
+        stripped = line.strip()
+        if not stripped.startswith("| RISK-"):
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) >= 4:
+            risk_id = parts[1]
+            desc = parts[2]
+            if risk_id and re.match(r"RISK-\d+", risk_id):
+                results.append({"id": risk_id, "description": desc})
     return results
 
 
@@ -1908,7 +1979,9 @@ def _unstructured_archive_description(filepath):
     title = ""
     if filepath.exists():
         try:
-            content = filepath.read_text(encoding="utf-8")
+            # FIX-384: errors="replace" — a damaged narrative file must not
+            # crash the index build that is registering it.
+            content = filepath.read_text(encoding="utf-8", errors="replace")
         except OSError:
             content = ""
         for line in content.split("\n")[:15]:
@@ -1942,15 +2015,82 @@ def _get_archived_task_ids():
     return archived
 
 
+# ── Archive-file damage classification (FIX-384 / B-7a) ────────────
+#
+# The index-rebuild path must survive a disaster that also damaged the
+# ARCHIVE files themselves: the rebuild reads whatever is still readable
+# and reports the damage, never crashing and never silently dropping a
+# file (which would turn it into a verify Check 2 orphan and make the
+# post-rebuild integrity PASS unreachable).
+
+def _archive_file_damage(filepath):
+    """FIX-384: classify content-level damage of an archive file (or None).
+
+    Returns None when the file is readable and non-empty, otherwise:
+      {"kind": "empty"|"unreadable"|"decode_errors", "detail": str}
+        - empty         — 0-byte file
+        - unreadable    — OSError while reading (permissions, race, ...)
+        - decode_errors — file is not valid UTF-8 (readable parts can still
+                          be salvaged via errors="replace" reads)
+    """
+    try:
+        data = filepath.read_bytes()
+    except OSError as exc:
+        return {"kind": "unreadable", "detail": exc.__class__.__name__}
+    if not data:
+        return {"kind": "empty", "detail": "0 bytes"}
+    try:
+        data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        return {
+            "kind": "decode_errors",
+            "detail": f"invalid UTF-8 at byte {exc.start}",
+        }
+    return None
+
+
+def _damage_kind_label(damage):
+    """FIX-384: short Chinese kind label for an entry-less archive file."""
+    if damage is None:
+        return "无条目"
+    return {
+        "empty": "空文件",
+        "unreadable": "损坏",
+        "decode_errors": "损坏",
+    }.get(damage.get("kind"), "损坏")
+
+
+def _damage_description(damage):
+    """FIX-384: human-readable description for an entry-less archive file."""
+    if damage is None:
+        return "文件可读但未解析出可索引条目（结构未识别）"
+    kind_zh = {
+        "empty": "空文件（0 字节）",
+        "unreadable": "不可读",
+        "decode_errors": "UTF-8 解码损坏（可读部分已尽力恢复）",
+    }.get(damage.get("kind"), "损坏")
+    detail = damage.get("detail", "")
+    return f"{kind_zh}：{detail}" if detail else kind_zh
+
+
 def build_index():
     """Scan all archive files and build/rebuild archive/index.md.
 
     The index is a Markdown file with tables mapping entry IDs to
     their archive file locations.
 
+    FIX-384 (B-7a): this function IS the rebuild engine for index loss and
+    corruption — it regenerates index.md deterministically from the archive
+    files (the index is a pure derivative: rebuild restores the view, never
+    creates data). Content-level damage in the ARCHIVE files themselves no
+    longer crashes the rebuild or silently orphans a file: empty / unreadable
+    / row-less files are registered in the 非结构化归档 section with a damage
+    label, and every damaged file is reported in ``damaged_files``.
+
     Returns:
         dict with keys: status, task_entries, evidence_entries,
-                        decision_entries, risk_entries
+                        decision_entries, risk_entries, narrative_entries,
+                        damaged_files
     """
     result = {
         "status": "created",
@@ -1959,9 +2099,15 @@ def build_index():
         "decision_entries": 0,
         "risk_entries": 0,
         "narrative_entries": 0,
+        "damaged_files": [],
     }
 
     _ensure_archive_dirs()
+
+    # FIX-384: content-level damage report across all four categories
+    # (empty / unreadable / invalid UTF-8). Registration of entry-less files
+    # below is a VIEW statement about the archive tree, not data creation.
+    damaged_files = []
 
     # Collect task entries
     task_entries = []
@@ -1974,7 +2120,14 @@ def build_index():
         if f.name == ".gitkeep":
             continue
         rel_path = f"archive/tasks/{f.name}"
-        rows = _extract_tasks_from_archive_file(f)
+        damage = _archive_file_damage(f)
+        if damage is not None:
+            damaged_files.append({"file": rel_path, **damage})
+        rows = []
+        try:
+            rows = _extract_tasks_from_archive_file(f)
+        except OSError:
+            rows = []  # unreadable → registered below with a damage label
         if rows:
             for task_id, status, version in rows:
                 task_entries.append({
@@ -1991,6 +2144,16 @@ def build_index():
                 "kind": _unstructured_archive_kind(f),
                 "description": _unstructured_archive_description(f),
             })
+        else:
+            # FIX-384: no extractable entries and no narrative prefix — an
+            # empty / unreadable / structure-unrecognized file. Register it so
+            # verify Check 2 does not flag it as an orphan and the rebuild can
+            # still reach integrity PASS.
+            narrative_entries.append({
+                "file": rel_path,
+                "kind": _damage_kind_label(damage),
+                "description": _damage_description(damage),
+            })
 
     # Collect evidence entries
     evidence_entries = []
@@ -1998,11 +2161,27 @@ def build_index():
         if f.name == ".gitkeep":
             continue
         rel_path = f"archive/evidence/{f.name}"
-        for evd_id, task_ids in _extract_evidence_from_archive_file(f):
+        damage = _archive_file_damage(f)
+        if damage is not None:
+            damaged_files.append({"file": rel_path, **damage})
+        ev_rows = []
+        try:
+            ev_rows = _extract_evidence_from_archive_file(f)
+        except OSError:
+            ev_rows = []
+        for evd_id, task_ids in ev_rows:
             evidence_entries.append({
                 "id": evd_id,
                 "task_ids": task_ids,
                 "file": rel_path,
+            })
+        if not ev_rows:
+            # FIX-384: entry-less evidence archive (empty/unreadable/mangled)
+            # is registered instead of becoming a verify orphan.
+            narrative_entries.append({
+                "file": rel_path,
+                "kind": _damage_kind_label(damage),
+                "description": _damage_description(damage),
             })
 
     # Collect decision entries
@@ -2011,12 +2190,27 @@ def build_index():
         if f.name == ".gitkeep":
             continue
         rel_path = f"archive/decisions/{f.name}"
-        content = f.read_text(encoding="utf-8") if f.exists() else ""
-        for m in re.finditer(r"##\s+(DEC-\d+):\s*(.*)", content):
-            decision_entries.append({
-                "id": m.group(1),
-                "title": m.group(2).strip(),
+        damage = _archive_file_damage(f)
+        if damage is not None:
+            damaged_files.append({"file": rel_path, **damage})
+        # REVIEW-FIX-384-R0 P1-1: single-source extraction shared with
+        # verify Check 3 so the counting calibers can never drift apart on
+        # damaged files.
+        decs = [
+            {
+                "id": d["id"],
+                "title": d["title"],
                 "file": rel_path,
+            }
+            for d in _extract_decisions_from_archive_file(f)
+        ]
+        decision_entries.extend(decs)
+        if not decs:
+            # FIX-384: register the entry-less decision archive.
+            narrative_entries.append({
+                "file": rel_path,
+                "kind": _damage_kind_label(damage),
+                "description": _damage_description(damage),
             })
 
     # Collect risk entries
@@ -2025,27 +2219,34 @@ def build_index():
         if f.name == ".gitkeep":
             continue
         rel_path = f"archive/risks/{f.name}"
-        content = f.read_text(encoding="utf-8") if f.exists() else ""
-        for line in content.split("\n"):
-            stripped = line.strip()
-            if not stripped.startswith("| RISK-"):
-                continue
-            parts = [p.strip() for p in line.split("|")]
-            if len(parts) >= 4:
-                risk_id = parts[1]
-                desc = parts[2]
-                if risk_id and re.match(r"RISK-\d+", risk_id):
-                    risk_entries.append({
-                        "id": risk_id,
-                        "description": desc,
-                        "file": rel_path,
-                    })
+        damage = _archive_file_damage(f)
+        if damage is not None:
+            damaged_files.append({"file": rel_path, **damage})
+        # REVIEW-FIX-384-R0 P1-1: single-source extraction shared with
+        # verify Check 3 (see _extract_risks_from_archive_file).
+        risks = [
+            {
+                "id": r["id"],
+                "description": r["description"],
+                "file": rel_path,
+            }
+            for r in _extract_risks_from_archive_file(f)
+        ]
+        risk_entries.extend(risks)
+        if not risks:
+            # FIX-384: register the entry-less risk archive.
+            narrative_entries.append({
+                "file": rel_path,
+                "kind": _damage_kind_label(damage),
+                "description": _damage_description(damage),
+            })
 
     result["task_entries"] = len(task_entries)
     result["evidence_entries"] = len(evidence_entries)
     result["decision_entries"] = len(decision_entries)
     result["risk_entries"] = len(risk_entries)
     result["narrative_entries"] = len(narrative_entries)
+    result["damaged_files"] = damaged_files
 
     # Build index.md content
     index_lines = [
@@ -2115,7 +2316,9 @@ def build_index():
         "## 非结构化归档",
         "",
         "> 以下文件是归档目录中不含可索引条目（task/evidence/decision/risk 行）的",
-        "> 自由叙述类文件，仅在此登记以满足归档完整性（每个归档 .md 须被索引引用）。",
+        "> 自由叙述类文件，或内容损坏/空文件/结构未识别的归档（FIX-384），仅在此",
+        "> 登记以满足归档完整性（每个归档 .md 须被索引引用）。登记只恢复索引视图，",
+        "> 不创造数据。",
         "",
         "| 归档文件 | 类型 | 描述 |",
         "|---------|------|------|",
@@ -2276,15 +2479,19 @@ def verify_archive_integrity():
         elif subdir == "evidence":
             file_counts["evidence"] += len(_extract_evidence_from_archive_file(f))
         elif subdir == "decisions":
-            # decisions are stored as '## DEC-NNN:' headers
-            content = f.read_text(encoding="utf-8") if f.exists() else ""
-            file_counts["decisions"] += len(re.findall(r"^##\s+DEC-\d+", content, re.MULTILINE))
-        elif subdir == "risks":
-            content = f.read_text(encoding="utf-8") if f.exists() else ""
-            file_counts["risks"] += sum(
-                1 for line in content.split("\n")
-                if line.strip().startswith("| RISK-") and re.match(r"\|\s*RISK-\d+", line.strip())
+            # REVIEW-FIX-384-R0 P1-1: count via the SAME single-source
+            # extraction build_index indexes with — the previous standalone
+            # regex (`^##\s+DEC-\d+`, no colon requirement) disagreed with
+            # build_index's `## DEC-n:` caliber on damaged headers, making
+            # the post-rebuild Check 3 PASS unreachable.
+            file_counts["decisions"] += len(
+                _extract_decisions_from_archive_file(f)
             )
+        elif subdir == "risks":
+            # P1-1: same single-source caliber as build_index (indexable =
+            # id + description cells); truncated rows are handled by the
+            # FIX-384 entry-less registration path on BOTH sides.
+            file_counts["risks"] += len(_extract_risks_from_archive_file(f))
 
     result["total_archived_tasks"] = file_counts["tasks"] + file_counts["evidence"]
 
@@ -2333,6 +2540,64 @@ def verify_archive_integrity():
                 f"rebuild the index, then re-verify."
             )
 
+    return result
+
+
+# ── Index Rebuild — index-loss / corruption recovery (FIX-384 / B-7a) ──
+
+def rebuild_index():
+    """Rebuild archive/index.md from the archive files, then verify integrity.
+
+    FIX-384 (B-7a): the explicit recovery path for a lost or corrupted index.
+    The index is a pure DERIVATIVE of the archive files — the rebuild restores
+    the view, never creates data. Pipeline:
+
+      1. Snapshot whether the index exists (and its content) for the
+         change report.
+      2. build_index() — deterministic regeneration; damage-tolerant at
+         archive-file granularity (empty / unreadable / row-less files are
+         registered in 非结构化归档 and reported in ``damaged_files``).
+      3. verify_archive_integrity() — the rebuilt index must PASS against the
+         same archive files it was derived from (closes the recovery loop;
+         the same PASS that `check-archive-integrity` reports).
+
+    Idempotency: with an already-intact index the regeneration is an
+    equivalent no-op — ``changed`` is False and no archive file is touched.
+
+    Returns:
+        build_index()'s result dict extended with:
+          index_existed  — whether index.md existed before the rebuild
+          changed        — whether the rebuild altered the index content
+          verify_pass    — archive integrity after the rebuild
+          verify_issues  — integrity issues (empty when verify_pass)
+    """
+    index_existed = _index_path().exists()
+    old_content = None
+    if index_existed:
+        try:
+            # An unreadable index counts as missing for comparison purposes
+            # (its content cannot participate in an equality check).
+            old_content = _index_path().read_text(
+                encoding="utf-8", errors="replace"
+            )
+        except OSError:
+            old_content = None
+
+    result = build_index()
+    result["index_existed"] = index_existed
+    result["changed"] = True
+    if index_existed and old_content is not None:
+        try:
+            new_content = _index_path().read_text(
+                encoding="utf-8", errors="replace"
+            )
+        except OSError:
+            new_content = None
+        result["changed"] = new_content != old_content
+
+    verify = verify_archive_integrity()
+    result["verify_pass"] = verify["pass"]
+    result["verify_issues"] = list(verify["issues"])
     return result
 
 
@@ -3299,6 +3564,13 @@ def main(argv=None):
     # build-index
     subparsers.add_parser("build-index", help="Rebuild archive/index.md from archive files")
 
+    # rebuild-index (FIX-384 / B-7a): index-loss/corruption recovery entry —
+    # rebuild + integrity verification in one step.
+    subparsers.add_parser(
+        "rebuild-index",
+        help="Rebuild archive/index.md from archive files, then verify integrity",
+    )
+
     # verify
     subparsers.add_parser("verify", help="Verify archive integrity")
 
@@ -3357,6 +3629,27 @@ def main(argv=None):
         print(f"  Evidence entries: {result['evidence_entries']}")
         print(f"  Decision entries: {result['decision_entries']}")
         print(f"  Risk entries: {result['risk_entries']}")
+
+    elif args.command == "rebuild-index":
+        result = rebuild_index()
+        print(
+            f"  Status: {'rebuilt' if result['changed'] else 'unchanged (idempotent no-op equivalent)'}"
+        )
+        print(f"  Index existed before: {result['index_existed']}")
+        print(f"  Task entries: {result['task_entries']}")
+        print(f"  Evidence entries: {result['evidence_entries']}")
+        print(f"  Decision entries: {result['decision_entries']}")
+        print(f"  Risk entries: {result['risk_entries']}")
+        damaged = result.get("damaged_files", [])
+        if damaged:
+            print(f"  Damaged archive files ({len(damaged)}):")
+            for d in damaged:
+                print(f"    - {d['file']}: {d['kind']} ({d['detail']})")
+        print(f"  Integrity: {'PASS' if result['verify_pass'] else 'FAILED'}")
+        for issue in result["verify_issues"]:
+            print(f"    - {issue}")
+        if not result["verify_pass"]:
+            sys.exit(1)
 
     elif args.command == "verify":
         result = verify_archive_integrity()

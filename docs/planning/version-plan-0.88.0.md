@@ -72,7 +72,7 @@
 
 ## 3b. 发布链映射（DEC-229② 授权面落字——F-3 补入）
 
-- **M-1 版本 bump 票**：随发布链启动时入账（0.87 先例 FEAT-059 形态）——0.87.0→0.88.0 全仓（SKILL.md frontmatter 权威锚 + REQUIRED_SNIPPETS 锚 + 投影 28 面 + 双根 entry sync）+ CHANGELOG 0.88.0 段；M-1 输入清单含 static-version-pin 2 WARN 消解（test_verify_workflow.py:12550 版本字面量派生化 + :12375 stale exemption 复核——F-12）。
+- **M-1 版本 bump 票**：随发布链启动时入账（0.87 先例 FEAT-059 形态）——0.87.0→0.88.0 全仓（SKILL.md frontmatter 权威锚 + REQUIRED_SNIPPETS 锚 + 投影 28 面 + 双根 entry sync）+ CHANGELOG 0.88.0 段；M-1 输入清单含 static-version-pin 消解（test_verify_workflow.py 两行 self-dormant 豁免按 errata F-1 删除〔勘正 2026-09-25：原「:12550 版本字面量派生化」处方经 REVIEW-FIX-388 F-1 裁定否决——bump 时自休眠即消，无需派生化；REVIEW-REL-087-R0 F-1 补正〕）。
 - **M-1R 四件套票**：release-plan（18 票载荷 + M 链全表）/ release-checklist（回填位——四重点席：Check 10 修复验证、Check 16-17 披露、Check 31 修复验证、archguard 棘轮席）/ rollback-plan（区间锚定 + 回退显式化）/ feature-flags 面如有。
 - **M-2 门禁实测**：§3 全条目 + evidence-log 归档后 28s 复测（F-6：现值 1,620KB，M-8 归档消解有效性在 M-2 复测确认——0.87 M-8 归档后仍 1620KB 的先例警示）。
 - **M-3 双半面审查**：产品代码半面（Code Reviewer 链）+ 发布半面（Release Reviewer 链）；按阶段边界分节（§1 假绿对冲）。

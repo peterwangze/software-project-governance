@@ -197,10 +197,11 @@ _REASON_FIXTURE_ROW_TEXT = (
     "version")
 _REASON_GUARD_OUTPUT_ASSERT = (
     "assertion argument quoting the write-guard WARN disclosure's "
-    "declarative BLOCK-upgrade version reference (DEC-224 wording) — it "
-    "pins a product-output statement, not the active version; re-audit if "
-    "the disclosure wording changes (the stale-exemption audit below flags "
-    "token drift automatically)")
+    "posture-origin version reference (the WARN posture was pinned by "
+    "DEC-224 in 0.86.0; FEAT-064 delivered the family-BLOCK mechanism "
+    "alongside it) — it pins a product-output statement, not the active "
+    "version; re-audit if the disclosure wording changes (the "
+    "stale-exemption audit below flags token drift automatically)")
 
 STATIC_PIN_EXEMPTIONS = {
     "skills/software-project-governance/infra/tests/test_bootstrap_aggregate.py": [
@@ -263,12 +264,17 @@ STATIC_PIN_EXEMPTIONS = {
     ],
     "skills/software-project-governance/infra/tests/test_triage_write_guard.py": [
         # 0.86.0 bump-time rows: FEAT-057 fixture tracker row (scenario
-        # payload) + one assertion quoting the write-guard WARN disclosure's
-        # declarative BLOCK-upgrade version reference (DEC-224 wording).
-        # FEAT-060 re-audit: the three test-file import additions shifted
-        # both rows 992->995 and 1138->1141 (tokens unchanged, same rows).
-        (995, "0.86.0", _REASON_FIXTURE_ROW_TEXT),
-        (1141, "0.86.0", _REASON_GUARD_OUTPUT_ASSERT),
+        # payload) + one assertion quoting the write-guard WARN disclosure
+        # (the posture-origin version reference "0.86.0"). FEAT-060
+        # re-audit: the three test-file import additions shifted both rows
+        # 992->995 and 1138->1141 (tokens unchanged, same rows). FEAT-064
+        # re-audit: two more import additions (governance_store +
+        # decision_repository, the F-5 ② composition face) shifted the rows
+        # 995->997 and 1141->1143; the disclosure's tail clause was also
+        # rewritten (the BLOCK mechanism is delivered, not "left to 0.87")
+        # — the "0.86.0" posture-origin token is unchanged on the same rows.
+        (997, "0.86.0", _REASON_FIXTURE_ROW_TEXT),
+        (1143, "0.86.0", _REASON_GUARD_OUTPUT_ASSERT),
     ],
     "skills/software-project-governance/infra/tests/test_static_version_pins.py": [
         (158, "0.85.0", _REASON_FUTURE_TARGET),

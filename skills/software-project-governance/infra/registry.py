@@ -397,19 +397,26 @@ _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
     # termination surface, batch-1 module, engine wires dispatch only).
     ("task-row-update", "task_row_update.cmd_task_row_update"),
     ("verify", "verify_workflow.cmd_verify"),
+    # FIX-383 (0.88.0 B2) registered here by FEAT-064: the command shipped
+    # with its engine dispatch + registry whitelist entry but its _COMMANDS
+    # row was omitted at the landing — the live face (97 keys) and the
+    # regenerated FEAT-064 contract-matrix snapshot exposed the R5 drift.
+    ("write-guard-bootstrap", "verify_workflow.cmd_write_guard_bootstrap"),
     ("web-console", "verify_workflow.cmd_web_console"),
 )
-"""96 dispatch keys from the FEAT-020 frozen face (FEAT-031 added
+"""97 dispatch keys from the FEAT-020 frozen face (FEAT-031 added
 ``check-dsh-boundary`` and ``dsh-doctor``; FEAT-032 added
 ``governance-cost-report``; FEAT-037 added ``check-entry-bootstrap-sync``;
 FEAT-033 added ``governance-bootstrap``; FEAT-055 added the three governed
 writer modules — ``task-row-update``, the four governance_store writer
 commands, and the two baseline_metadata commands; FIX-370 added
-``locks-release``, the release leg of the governance_store locks family),
-each with the module that
+``locks-release``, the release leg of the governance_store locks family;
+FIX-383 added ``write-guard-bootstrap`` — declared here by FEAT-064 after
+its landing omission left the R5 registration drift in place), each with the
+module that
 *defines* its handler (machine-derived: the ``commands`` dict of ``main()``
 cross-referenced with the defining module of every handler name — 17 keys are
-already outside the engine, the other 79 ride the monolith).  The docstring
+already outside the engine, the other 80 ride the monolith).  The docstring
 count shipped stale at FEAT-039 time (said 87 with 8 outside when the table
 held 88 with 9 outside); corrected here as part of the deliberate
 re-baseline rather than silently absorbed."""

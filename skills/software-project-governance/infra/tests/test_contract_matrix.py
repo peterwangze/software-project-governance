@@ -82,7 +82,12 @@ from contract_matrix import generator as cmg  # noqa: E402
 # leg of the governance_store locks family, handler in governance_store.py,
 # engine wires dispatch only — governance_cost pattern); segment face
 # unchanged at 71; snapshot counts + keys re-baselined in the same change.
-FROZEN_CLI_KEY_COUNT = 96
+# FEAT-064 (0.88.0 D1): 96→97 keys — FIX-383's `write-guard-bootstrap` shipped
+# with its engine dispatch but its registry row was omitted at the landing
+# (pre-existing R5 drift); FEAT-064's deliberate guard-output wording change
+# forced the snapshot regeneration that surfaced it, and the registry row +
+# this count were reconciled in the same change.
+FROZEN_CLI_KEY_COUNT = 97
 FROZEN_CHECK_SEGMENT_COUNT = 71
 
 

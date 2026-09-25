@@ -22934,7 +22934,7 @@ def _evidence_machine_row_issues(content):
     return issues
 
 
-# ── FEAT-057: row-family reconciliation (受管行族对账 — WARN posture) ──────
+# ── FEAT-057: row-family reconciliation (受管行族对账) ──────────────────────
 #
 # The structural faces above judge SHAPES; this face judges the PROVENANCE of
 # row-level CHANGES in the managed row families (EVD/REVIEW evidence rows,
@@ -22942,10 +22942,35 @@ def _evidence_machine_row_issues(content):
 # receipt ledgers). It is the institutional close-out of the "8 hand row
 # edits in one session" incident class: a managed row that changed since the
 # last guard run WITHOUT a machine credential is disclosed as a loud WARN
-# pointing the writer at governance_store / task_row_update. Posture is WARN
-# in 0.86.0 — the BLOCK escalation is deliberately left to 0.87
-# (version-plan §2 批 1 行声明); this face never FAILs and never changes the
-# guard exit code.
+# pointing the writer at governance_store / task_row_update.
+#
+# Posture (FEAT-064 — 分族 BLOCK 激活): the DEC-224 five families are ruled
+# PER FAMILY against the FEAT-049 writer-contract registry (the ruling table
+# lives in write_guard_state.FAMILY_RULING_DECLARATION). The shipped default
+# is ALL-WARN (DEC-224-pinned posture) until the Coordinator activates a
+# family's BLOCK posture through the guard CLI's ``--activate-block``
+# management mode, which writes the guard-owned posture config
+# (``.governance/.write-guard-posture.json``; absent = all-WARN = zero
+# behavioral delta; corrupt = fail-safe all-WARN + loud disclosure).
+# Disclosure caliber (review-FEAT-064-R0 P1-1 收敛): the state/baseline
+# bytes and the zero-window output stay byte-identical, while the
+# ``unattributed_row_change`` WARN TEXT was deliberately rewritten in
+# FEAT-064 (the stale "BLOCK 升级留 0.87" tail note became the
+# delivered-mechanism pointer) — that rewrite is the contract-matrix
+# regeneration face (version.py re-audit + snapshots.json + golden_samples,
+# three records in place), not an incidental drift.
+# Under an active BLOCK posture an uncredentialed change in that family is
+# a BLOCK-class face issue: face 5 FAILs and the guard exits 1 (the
+# workflow is blocked loudly — the guard is write-AFTER, it cannot stop the
+# file from being modified, M-0 事实填充项③ wording kept honest), and the
+# offending surface's baseline is HELD at its previous snapshot (the R2
+# flip: no WARN-once-then-absorb under BLOCK — DEC-236 ①). The sanctioned
+# unlock is the writer remediation loop (re-apply through the family's
+# writer → next run consumes the violation through the FEAT-060 transaction
+# which advances the clamped baseline). The break-glass channel
+# (``--break-grant``, time-boxed/count-limited/scoped, every use audited
+# into the ledger) downgrades scoped BLOCK issues to loud WARN-class
+# disclosures while a guard-self-repair window is open — never silent.
 #
 # Amnesty (存量不追溯): the FIRST sighting of a surface establishes its
 # baseline — pre-existing rows are historical facts and are never judged.
@@ -22963,15 +22988,14 @@ def _evidence_machine_row_issues(content):
 # (``.governance/.write-guard-violations.json``, infra/write_guard_state.py
 # — the implementation entity; this file keeps only thin wiring, RISK-039
 # thin-entry discipline). The WARN output semantics stay byte-identical
-# (WARN posture pinned by DEC-224; BLOCK escalation belongs to FEAT-064);
-# the state machine adds: durable open/consumed/superseded records, same-
-# session second-trigger escalation, cross-session persistence, a
-# consumption-right ledger with pre-granted single-use grants for
-# registered consumers, and an ops-recoverable consume transaction that
-# bundles violation consumption with the baseline advance (crash mid-way
-# → journal-driven resume, never a half state). See the module docstring
-# of infra/write_guard_state.py for the six rules and their WARN-posture
-# interpretation.
+# (WARN posture pinned by DEC-224); the state machine adds: durable open/
+# consumed/superseded records, same-session second-trigger escalation,
+# cross-session persistence, a consumption-right ledger with pre-granted
+# single-use grants for registered consumers, and an ops-recoverable consume
+# transaction that bundles violation consumption with the baseline advance
+# (crash mid-way → journal-driven resume, never a half state). See the
+# module docstring of infra/write_guard_state.py for the six rules and
+# their posture interpretation.
 #
 # Credential authority (consumed, never re-stated — FIX-292 lesson):
 #   - EVD/DEC rows → the ``机器写入：governance-store <command> <op>`` marker
@@ -23147,19 +23171,25 @@ def _load_write_guard_state(governance_dir):
 
 def _reconcile_row_families(governance_dir, persist_state=False,
                             detections_out=None, records_index_out=None):
-    """FEAT-057 face 5 engine — 受管行族对账.
+    """FEAT-057 face 5 engine — 受管行族对账 (FEAT-064 posture-aware).
 
     Returns ``(result_face, next_state)``. ``result_face`` is the face dict
-    ``{"status", "issues", "baselined"}``; WARN posture: issues are
-    WARN-class disclosures, the face never FAILs. ``next_state`` is the
-    updated baseline to persist — None when ``persist_state`` is False or
-    nothing may be written (probe callers never consume the window).
+    ``{"status", "issues", "baselined"}``; the shipped all-WARN default
+    keeps every disclosure WARN-class and the face PASS (byte-identical to
+    the FEAT-057/060 era). Under an active family BLOCK posture (guard-owned
+    posture config) an uncredentialed change in that family is a
+    BLOCK-class issue and the face FAILs — the guard CLI then exits 1. The
+    face status is FAIL iff at least one issue carries ``posture ==
+    "block"``; posture-layer and state-machine anomalies stay WARN-class
+    disclosures (fail-safe: a broken posture config degrades to all-WARN
+    loudly, never to a guessed BLOCK).
 
     Per managed surface: file SHA256 fast path (unchanged file → zero
     diff), then a per-row multiset digest diff against the baseline —
     added/changed row instances without a machine credential → one
-    ``unattributed_row_change`` WARN each. First sighting of a surface
-    (amnesty) records its baseline and discloses it in ``baselined``.
+    ``unattributed_row_change`` disclosure each. First sighting of a
+    surface (amnesty) records its baseline and discloses it in
+    ``baselined``.
 
     FEAT-060 out-params (CLI path only; probe calls pass None and stay
     byte-identical read-only): ``detections_out`` collects offending-row
@@ -23186,6 +23216,20 @@ def _reconcile_row_families(governance_dir, persist_state=False,
     # A pre-existing state file counts as a seen surface even when every
     # managed file is gone — the state must shrink, not silently vanish.
     surfaces_seen = state_path_seen(governance_dir)
+
+    # FEAT-064 posture inputs (read-only in BOTH paths — probes never
+    # consume anything): the family posture config + the valid break-glass
+    # scope. A corrupt posture config fails safe to all-WARN (loud); a
+    # corrupt ledger never honors a break-glass window (fail-closed).
+    import write_guard_state as _wgs
+    family_postures, posture_issue = _wgs.load_family_postures(
+        governance_dir)
+    if posture_issue is not None:
+        issues.append(posture_issue)
+    honored_families, break_glass_issue = _wgs.active_break_glass_families(
+        governance_dir, postures=family_postures)
+    if break_glass_issue is not None:
+        issues.append(break_glass_issue)
 
     def _sha256_of(text):
         return hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -23240,7 +23284,9 @@ def _reconcile_row_families(governance_dir, persist_state=False,
         if baseline.get("sha256") == current_sha:
             continue
         _judge_row_delta(surface, rel, records, baseline_rows, issues,
-                         detections_out=detections_out)
+                         detections_out=detections_out,
+                         family_postures=family_postures,
+                         honored_families=honored_families)
 
     # ops 台账 surfaces (*.ops.jsonl — line-oriented receipt ledgers).
     for path in sorted(governance_dir.glob("*.ops.jsonl")):
@@ -23283,12 +23329,17 @@ def _reconcile_row_families(governance_dir, persist_state=False,
         if baseline.get("sha256") == current_sha:
             continue
         _judge_row_delta(path.name, rel, records, baseline["rows"], issues,
-                         surface_kind="ops", detections_out=detections_out)
+                         surface_kind="ops", detections_out=detections_out,
+                         family_postures=family_postures,
+                         honored_families=honored_families)
 
     if not surfaces_seen:
         return face, next_state  # SKIPPED — nothing managed, nothing written
 
-    face["status"] = "PASS"  # WARN posture: never FAIL in 0.86.0
+    # FEAT-064: FAIL iff at least one BLOCK-class disclosure is present
+    # (all-WARN default → PASS — the pinned WARN-era behavior).
+    face["status"] = ("FAIL" if any(issue.get("posture") == "block"
+                                    for issue in issues) else "PASS")
     if persist_state:
         next_state = {
             "schema_version": _WRITE_GUARD_STATE_SCHEMA_VERSION,
@@ -23342,14 +23393,28 @@ def _credential_index(surface, records, surface_kind="text"):
 
 
 def _judge_row_delta(surface, rel, records, baseline_rows, issues,
-                     surface_kind="text", detections_out=None):
+                     surface_kind="text", detections_out=None,
+                     family_postures=None, honored_families=frozenset()):
     """Multiset-diff current records against the baseline digests and emit
-    one WARN per uncredentialed added/changed row instance.
+    one disclosure per uncredentialed added/changed row instance.
+
+    Posture (FEAT-064): the row's DEC-224 canonical family decides the
+    disclosure class — a BLOCK-active family (and not covered by a valid
+    break-glass window) yields a BLOCK-class issue (``posture`` field set;
+    face 5 FAILs on any such issue); everything else — including every
+    family under the shipped all-WARN default — yields the WARN-class
+    disclosure of the FEAT-057/060 era (same type/shape/fields; the TEXT
+    carries FEAT-064's delivered-mechanism tail note in place of the stale
+    "left to 0.87" wording — the deliberate rewrite recorded by the
+    contract-matrix regeneration: version.py re-audit + snapshots.json +
+    golden_samples, review-FEAT-064-R0 P1-1 收敛口径).
 
     ``detections_out`` (FEAT-060, CLI path only): when a list is supplied,
     every offending record is also appended as a state-machine detection
-    dict (write_guard_state.build_detection) — the WARN output itself is
-    byte-identical either way; the ledger is the only consumer."""
+    dict (write_guard_state.build_detection) — the disclosure output itself
+    is unchanged either way; the ledger is the only consumer."""
+    import write_guard_state
+    postures = family_postures or {}
     baseline_pool = {}
     for key, digests in baseline_rows.items():
         if isinstance(digests, list):
@@ -23361,6 +23426,11 @@ def _judge_row_delta(surface, rel, records, baseline_rows, issues,
             continue
         if _row_family_credential_ok(surface, record["key"], record["text"]):
             continue
+        family = write_guard_state.canonical_family(surface, record["key"])
+        block_issue = (
+            family is not None
+            and postures.get(family) == write_guard_state.POSTURE_BLOCK
+            and family not in honored_families)
         if detections_out is not None:
             # before_hash = a baseline instance the new content displaced
             # (audit hint, not identity — the multiset pool does not say
@@ -23377,16 +23447,34 @@ def _judge_row_delta(surface, rel, records, baseline_rows, issues,
         else:
             guidance = ("unattributed row change — use governance_store"
                         "（行须携 机器写入：governance-store 凭证）")
-        issues.append({
-            "type": "unattributed_row_change",
-            "file": rel,
-            "line": record["line"],
-            "task_id": record["key"],
-            "detail": "{0}（WARN 姿态 0.86.0——响亮披露不阻断；BLOCK 升级"
-                      "留 0.87）: {1}".format(record["key"], guidance),
-            "expected": "受管行变更携带机器凭证（governance-store 标记 / "
-                        "〔op-…〕 锚 / receipt operation_id）",
-        })
+        if block_issue:
+            issues.append({
+                "type": "unattributed_row_change",
+                "file": rel,
+                "line": record["line"],
+                "task_id": record["key"],
+                "posture": "block",
+                "detail": ("unattributed row change — BLOCK 姿态（family {0}"
+                           " 分族 BLOCK 已激活——FEAT-064）: {1}；补救 = 经"
+                           "写入器补机器凭证后复跑（违规自动消费、基线随事务"
+                           "收口）；窗口保持开放直至消费（不吸收——DEC-224 "
+                           "R2 BLOCK 翻转）".format(family, guidance)),
+                "expected": "受管行变更携带机器凭证（governance-store 标记 / "
+                            "〔op-…〕 锚 / receipt operation_id）",
+            })
+        else:
+            issues.append({
+                "type": "unattributed_row_change",
+                "file": rel,
+                "line": record["line"],
+                "task_id": record["key"],
+                "detail": "{0}（WARN 姿态 0.86.0——响亮披露不阻断；分族 BLOCK "
+                          "机制已交付未激活——FEAT-064，姿态经 "
+                          "governance-write-guard --show-posture 查看）: {1}"
+                          .format(record["key"], guidance),
+                "expected": "受管行变更携带机器凭证（governance-store 标记 / "
+                            "〔op-…〕 锚 / receipt operation_id）",
+            })
 
 
 def _build_violation_detection(surface, surface_kind, rel, record,
@@ -23407,7 +23495,7 @@ def _build_violation_detection(surface, surface_kind, rel, record,
     )
 
 
-def check_governance_write_shapes(*, persist_state=False):
+def check_governance_write_shapes(*, persist_state=False, session_id=None):
     """FEAT-011 G3 extension — structural write guard over the Coordinator's
     direct-write ``.governance`` artifacts.
 
@@ -23437,18 +23525,27 @@ def check_governance_write_shapes(*, persist_state=False):
          CHANGES in the managed families (EVD/DEC/REVIEW rows, plan-tracker
          task-row status cells, ``*.ops.jsonl`` receipts) against the
          ``.write-guard-state.json`` baseline
-         (:func:`_reconcile_row_families`). WARN posture: uncredentialed
-         changes are disclosed loudly, the face never FAILs (BLOCK
-         escalation left to 0.87). The baseline state file is a guard-owned
-         ARTIFACT, not a repair — together with the FEAT-060 violation
-         ledger it is the only thing this guard ever writes, and only when
+         (:func:`_reconcile_row_families`). FEAT-064 posture: the shipped
+         default is all-WARN (loud disclosure, the face never FAILs);
+         families activated BLOCK through the guard CLI's management mode
+         turn their uncredentialed changes into BLOCK-class issues (face
+         FAILs, exit 1) and hold their baseline until the writer
+         remediation loop closes the window through the consumption
+         transaction. The baseline state file is a guard-owned ARTIFACT,
+         not a repair — together with the FEAT-060 violation ledger it is
+         the only thing this guard ever writes, and only when
          ``persist_state=True`` (the CLI path); probe callers
          (contract-matrix representative extraction, aggregate reads,
          tests) stay read-only and never consume the reconciliation
          window. FEAT-060: CLI-path observations additionally persist into
          the violation state machine (infra/write_guard_state.py — six
          rules, consumption-right ledger, ops-recoverable consume
-         transaction); WARN output bytes are unchanged.
+         transaction).
+
+    ``session_id`` (FEAT-064 R3 wiring): explicit session identity for the
+    violation state machine's same-session escalation rule — overrides the
+    ``GOVERNANCE_SESSION_ID`` environment variable when provided; probes
+    and tests that leave it unset keep the env fallback.
 
     Contract: CHECK-ONLY for governance records — reads the artifacts,
     never repairs or rewrites them (issue messages carry line numbers and
@@ -23581,13 +23678,17 @@ def check_governance_write_shapes(*, persist_state=False):
                 "issues": issues,
             }
 
-    # Face 5 — row-family reconciliation (FEAT-057, WARN posture).
+    # Face 5 — row-family reconciliation (FEAT-057; FEAT-064 posture-aware).
     # FEAT-060: on the CLI path the offending rows are ALSO recorded into
     # the persistent violation state machine
     # (.governance/.write-guard-violations.json — guard-owned artifact,
     # same class as the state baseline) and eligible open violations are
     # consumed through the ops-recoverable transaction, which then owns
-    # the baseline write. WARN output bytes are unchanged either way.
+    # the baseline write. FEAT-064: BLOCK-active families FAIL the face
+    # and hold their baseline until the writer remediation loop closes
+    # the window; the plain advance writes the state machine's EFFECTIVE
+    # (clamped) target; a valid break-glass window is honored by the
+    # judge and audited with one use event per CLI run (不可静默).
     detections = [] if persist_state else None
     records_index = {} if persist_state else None
     row_face, next_state = _reconcile_row_families(
@@ -23596,21 +23697,43 @@ def check_governance_write_shapes(*, persist_state=False):
     if next_state is not None:
         baseline_in_txn = False
         skip_baseline = False
+        advance_target = next_state
         if persist_state:
             import write_guard_state  # deferred — heavy peer module
+            run_id = write_guard_state.new_run_id()
+            # The posture config is loaded again here for the state-machine
+            # step (the face judge loaded its own copy inside
+            # _reconcile_row_families — a second read-only load, same file,
+            # no lock contention; its anomaly issue is already disclosed
+            # through the face).
+            family_postures, _posture_issue = (
+                write_guard_state.load_family_postures(GOVERNANCE_DIR))
             sm_result = write_guard_state.reconcile_violation_state(
                 GOVERNANCE_DIR,
                 state_path=GOVERNANCE_DIR / _WRITE_GUARD_STATE_FILENAME,
                 detections=detections or [],
                 records_index=records_index or {},
                 baseline_target=next_state,
-                run_id=write_guard_state.new_run_id(),
-                session_id=os.environ.get(
-                    write_guard_state.SESSION_ENV) or None)
+                run_id=run_id,
+                session_id=session_id
+                if session_id is not None
+                else os.environ.get(
+                    write_guard_state.SESSION_ENV) or None,
+                family_postures=family_postures)
             for sm_issue in sm_result["issues"]:
                 row_face["issues"].append(sm_issue)
             baseline_in_txn = sm_result["baseline_written_by_txn"]
             skip_baseline = sm_result["skip_baseline_advance"]
+            if not skip_baseline:
+                advance_target = (sm_result.get("baseline_target_effective")
+                                  or next_state)
+            # FEAT-064 break-glass audit — one use event per CLI persist
+            # run under a valid window; a recording failure is loud, never
+            # silent (不可静默记录).
+            _use_recorded, use_issue = write_guard_state.record_break_glass_use(
+                GOVERNANCE_DIR, run_id=run_id)
+            if use_issue is not None:
+                row_face["issues"].append(use_issue)
         if not baseline_in_txn and not skip_baseline:
             state_path = GOVERNANCE_DIR / _WRITE_GUARD_STATE_FILENAME
             try:
@@ -23621,7 +23744,7 @@ def check_governance_write_shapes(*, persist_state=False):
                 # in-flight transaction's {target, prev} world.
                 advanced, lock_detail = (
                     write_guard_state.advance_baseline_plain(
-                        state_path, _write_guard_state_json(next_state)))
+                        state_path, _write_guard_state_json(advance_target)))
             except (IOError, OSError, ValueError) as exc:
                 row_face["issues"].append({
                     "type": "row_family_state_unwritable",
@@ -23756,7 +23879,7 @@ def cmd_agent_locks_acquire(args):
         post_write_check=check_agent_locks_format)
 
 
-def cmd_governance_write_guard(_args):
+def cmd_governance_write_guard(args):
     """Thin entry — governance-write-guard CLI (FEAT-011 / G3 extension).
 
     One command after a Coordinator direct write to ``.governance/`` gives
@@ -23780,17 +23903,40 @@ def cmd_governance_write_guard(_args):
     infra/write_guard_state.py on this CLI path only: persistent open/
     consumed/superseded records + consumption-right grants + the
     ops-recoverable consume transaction; a host with zero violations never
-    sees the file). Face 5 posture is WARN (loud disclosure, exit code
-    unaffected); the WARN→BLOCK escalation is left to 0.87. Exit 0 = no
-    FAIL face; exit 1 = at least one FAIL face (a structural breach must
-    not pass silently — the same fail-closed posture as the change-triage
-    write guard); SKIPPED faces (artifact absent) never fail.
+    sees the file). FEAT-064: face 5 posture is per-family — the shipped
+    default is all-WARN (loud disclosure, exit code unaffected); a family
+    activated BLOCK (guard-owned posture config via ``--activate-block``)
+    FAILs the face on uncredentialed changes (exit 1 — the workflow is
+    blocked loudly; the guard is write-AFTER and cannot stop the file from
+    being modified) and holds its baseline until the writer remediation
+    loop closes the window through the consumption transaction. The
+    recovery break-glass channel (``--break-grant``; 限定留痕 =
+    对象/操作者/理由/有效期/次数 + 每次 CLI 运行 use 审计事件——不可
+    静默) downgrades scoped BLOCK issues to loud WARN-class disclosures
+    while open; ``--deactivate-block`` is the audited B-12 flag rollback
+    (reason + authorized-by demanded). Management-mode reports render
+    inside ``write_guard_state.run_guard_management_cli`` (leaf-module
+    precedent — the engine's print budget does not grow).
+
+    Exit 0 = no FAIL face (or the management mode completed); exit 1 = at
+    least one FAIL face (a structural breach must not pass silently — the
+    same fail-closed posture as the change-triage write guard); exit 2 =
+    a fail-closed management-mode refusal; SKIPPED faces (artifact absent)
+    never fail.
     """
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
-    result = check_governance_write_shapes(persist_state=True)
+    for candidate in ("activate_block", "deactivate_block", "show_posture",
+                      "break_grant", "break_clear", "break_show"):
+        if getattr(args, candidate, None):
+            import write_guard_state
+            sys.exit(write_guard_state.run_guard_management_cli(
+                candidate, args, governance_dir=GOVERNANCE_DIR))
+    result = check_governance_write_shapes(
+        persist_state=True,
+        session_id=getattr(args, "session_id", None))
     faces = (
         ("plan_tracker",
          "plan-tracker 任务表行（M1 签名：重复优先级列/行尾空单元格）"),
@@ -23799,8 +23945,8 @@ def cmd_governance_write_guard(_args):
         ("agent_locks", "agent-locks.json schema（Check 26）"),
         ("execution_packets", "execution-packets.json 结构（Check 18c 字段表）"),
         ("row_families",
-         "受管行族对账（EVD/DEC/REVIEW/任务状态列/ops 台账——机器凭证 WARN 披露，"
-         "FEAT-057）"),
+         "受管行族对账（EVD/DEC/REVIEW/任务状态列/ops 台账——机器凭证披露，"
+         "分族姿态 FEAT-057/FEAT-064）"),
     )
     print()
     print("=== Governance Write Guard (G3 扩展 — FEAT-011, Coordinator 直写路径) ===")
@@ -23830,13 +23976,16 @@ def cmd_governance_write_guard(_args):
     if failed:
         print("Result: FAIL — {0} issue(s)。守卫只检不改（零 .governance 修复——"
               "状态基线 .write-guard-state.json 为守卫自身工件，FEAT-057）；"
-              "按上方行号与期望列形修复后由写入者复跑本命令".format(total))
+              "按上方行号与期望列形修复后由写入者复跑本命令（BLOCK 姿态面："
+              "补救 = 经写入器补机器凭证后复跑自动消费，或经 --break-grant "
+              "限定恢复通道处置——FEAT-064）".format(total))
         sys.exit(1)
     warn_total = len(result["row_families"]["issues"])
     if warn_total:
         print("Result: PASS — 0 FAIL issue(s), {0} WARN(s)（受管行变更无机器"
               "凭证——响亮披露不阻断；补 governance_store/task_row_update "
-              "凭证或由写入者复核后复跑本命令即基线翻新；BLOCK 升级留 0.87）。"
+              "凭证或由写入者复核后复跑本命令即基线翻新；分族 BLOCK 机制已"
+              "交付未激活——FEAT-064，姿态经 --show-posture 查看）。"
               "守卫只检不改（零 .governance 治理记录写入）。".format(warn_total))
         return
     print("Result: PASS — 0 issue(s)（SKIPPED = 产物缺席，非缺陷）。"
@@ -25717,12 +25866,77 @@ def main(argv=None):
 
     # governance-write-guard (FEAT-011 / G3 extension — structural write
     # guard over the Coordinator's DIRECT .governance writes; check-only)
-    subparsers.add_parser(
+    # FEAT-064: + family-posture management modes (--activate-block /
+    # --deactivate-block / --show-posture) and the recovery break-glass
+    # channel (--break-grant / --break-clear / --break-show); the default
+    # no-flag invocation stays the check run.
+    wgp = subparsers.add_parser(
         "governance-write-guard",
         help="Check .governance structural integrity after a Coordinator "
              "direct write (plan-tracker task rows / evidence-log machine "
              "rows / agent-locks / execution-packets — FEAT-011 G3 "
-             "extension; check-only, zero writes)",
+             "extension; check-only, zero writes) — plus FEAT-064 family "
+             "posture management (--activate-block/--deactivate-block/"
+             "--show-posture) and the break-glass channel (--break-grant/"
+             "--break-clear/--break-show)",
+    )
+    wgp_action = wgp.add_mutually_exclusive_group()
+    wgp_action.add_argument(
+        "--activate-block", metavar="FAMILIES", default=None,
+        help="FEAT-064: activate BLOCK posture for comma-listed managed "
+             "families (evidence, review, decision, task_status, "
+             "ops_ledger) — requires --reason/--authorized-by; writes the "
+             "guard-owned posture config (.write-guard-posture.json); the "
+             "REAL flip moment is the Coordinator's decision",
+    )
+    wgp_action.add_argument(
+        "--deactivate-block", metavar="FAMILIES", default=None,
+        help="FEAT-064: the audited B-12 flag rollback — set comma-listed "
+             "families back to WARN (requires --reason/--authorized-by; "
+             "recorded in the posture config history)",
+    )
+    wgp_action.add_argument(
+        "--show-posture", action="store_true",
+        help="FEAT-064: show the declared per-family ruling, the active "
+             "postures and the break-glass state (read-only)",
+    )
+    wgp_action.add_argument(
+        "--break-grant", action="store_true",
+        help="FEAT-064: open the recovery break-glass window (限定留痕: "
+             "--reason/--authorized-by required; scope --families, "
+             "validity --ttl-hours, use count --max-uses; one use event "
+             "per guard CLI run — 不可静默)",
+    )
+    wgp_action.add_argument(
+        "--break-clear", action="store_true",
+        help="FEAT-064: clear the active break-glass window (grant moves "
+             "to break_glass_history; --authorized-by/--reason audited)",
+    )
+    wgp_action.add_argument(
+        "--break-show", action="store_true",
+        help="FEAT-064: show the active break-glass window and history "
+             "(read-only)",
+    )
+    wgp.add_argument(
+        "--families", default="",
+        help="break-glass scope: comma-listed managed families (default: "
+             "* = every BLOCK-active family)",
+    )
+    wgp.add_argument("--reason", default="",
+                     help="why (posture change / break-glass audit)")
+    wgp.add_argument("--authorized-by", dest="authorized_by", default="",
+                     help="who authorized (posture change / break-glass "
+                          "audit)")
+    wgp.add_argument("--ttl-hours", type=float, default=None,
+                     help="break-glass validity in hours "
+                          "(default 24)")
+    wgp.add_argument("--max-uses", type=int, default=None,
+                     help="break-glass use-count limit (default 3)")
+    wgp.add_argument(
+        "--session-id", dest="session_id", default=None,
+        help="FEAT-064 R3 wiring: explicit session identity for the "
+             "violation state machine's same-session escalation rule "
+             "(overrides GOVERNANCE_SESSION_ID)",
     )
 
     # write-guard-bootstrap (FIX-383 — 0.88.0 阶段 B2 发版管线自举): the

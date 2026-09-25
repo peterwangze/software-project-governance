@@ -102,7 +102,13 @@ _SECTION_RE = re.compile(r"^\s*#\s*" + _DASH + r"{2}\s*([0-9][A-Za-z0-9]*)\.\s")
 # FIX-370 (0.87.0 batch 2 closure): 95 -> 96 CLI keys — `locks-release`, the
 # release leg of the governance_store locks family (same governance_cost
 # pattern; snapshot counts + keys re-baselined in the same change).
-FROZEN_CLI_KEYS = 96
+# FEAT-064 (0.88.0 D1): 96 -> 97 CLI keys — FIX-383's `write-guard-bootstrap`
+# shipped with its engine dispatch but the _COMMANDS row was omitted at the
+# landing; the R5 drift surfaced when FEAT-064's deliberate guard-output
+# wording change forced the contract-matrix snapshot regeneration
+# (`generator.py --regen` in the same change — the snapshot now names 97
+# keys and the registry must agree with the live face and the snapshot).
+FROZEN_CLI_KEYS = 97
 FROZEN_SEGMENTS = 71
 
 # FEAT-018 R6 frozen startup budget (``core/architecture-baseline.json`` r6):

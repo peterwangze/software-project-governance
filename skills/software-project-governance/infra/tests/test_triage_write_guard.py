@@ -50,6 +50,8 @@ if str(_INFRA_DIR) not in sys.path:
 import verify_workflow as vw  # noqa: E402
 import change_triage as ct  # noqa: E402
 import write_guard_state as wgs  # noqa: E402  (FEAT-060 state machine entity)
+import governance_store as gstore  # noqa: E402  (FEAT-064 composition face)
+import decision_repository as drepo  # noqa: E402  (FEAT-064 composition face)
 
 _FIXTURE_TRACKER = """\
 # Plan Tracker
@@ -1139,7 +1141,9 @@ class RowFamilyReconciliationTests(unittest.TestCase):
                 self.assertIn("unattributed row change",
                               by_key[row_id]["detail"])
                 self.assertIn("WARN 姿态 0.86.0", by_key[row_id]["detail"])
-                self.assertIn("BLOCK 升级留 0.87",
+                # FEAT-064 wording: the mechanism is delivered (default
+                # all-WARN), the posture is viewable via --show-posture.
+                self.assertIn("分族 BLOCK 机制已交付未激活",
                               by_key[row_id]["detail"])
                 self.assertTrue(by_key[row_id]["line"], issues)
             self.assertIn("use governance_store", by_key["EVD-8003"]["detail"])
@@ -2006,7 +2010,7 @@ class WriteGuardViolationStateMachineTests(unittest.TestCase):
                     if i["type"] == "unattributed_row_change"]
             self.assertEqual(len(warn), 1)  # 判定面照常（记录不改变披露）
             self.assertIn("WARN 姿态 0.86.0", warn[0]["detail"])
-            self.assertIn("BLOCK 升级留 0.87", warn[0]["detail"])
+            self.assertIn("分族 BLOCK 机制已交付未激活", warn[0]["detail"])
             self.assertIn("unattributed row change", warn[0]["detail"])
             buf = io.StringIO()
             tracker = gov / "plan-tracker.md"
@@ -2109,6 +2113,811 @@ class WriteGuardViolationStateMachineTests(unittest.TestCase):
                                                        "rows": {}}})
         self.assertEqual(vw._write_guard_state_json(target),
                          wgs.state_json_text(target))
+
+
+# ─── FEAT-064 — write-guard 分族 BLOCK 激活（0.88.0 阶段 D1 · P1）───────────
+# （fixture 复用直接引用 RowFamilyReconciliationTests——模块级别名会让
+#   pytest 把同一 TestCase 收集两遍）
+
+
+def _activate(gov, families, posture="block"):
+    """Test posture activation (the guard CLI management path's entity)."""
+    payload, refusal = wgs.activate_family_postures(
+        Path(gov), families=families, posture=posture,
+        reason="FEAT-064 测试激活", authorized_by="test-coordinator")
+    assert refusal is None, refusal
+    return payload
+
+
+def _guard_run(gov, persist_state=True, **kwargs):
+    """One guard run against a temp governance dir (CLI-path parity)."""
+    gov = Path(gov)
+    tracker = gov / "plan-tracker.md"
+    with mock.patch.object(vw, "SAMPLE_PATH", tracker), \
+         mock.patch.object(vw, "GOVERNANCE_DIR", gov):
+        return vw.check_governance_write_shapes(
+            persist_state=persist_state, **kwargs)
+
+
+def _ledger(gov):
+    return json.loads(
+        (Path(gov) / wgs.LEDGER_FILE_NAME).read_text(encoding="utf-8"))
+
+
+def _baseline_state(gov):
+    return json.loads(
+        (Path(gov) / ".write-guard-state.json").read_text(encoding="utf-8"))
+
+
+def _row_issues(result):
+    return [i for i in result["row_families"]["issues"]
+            if i["type"] == "unattributed_row_change"]
+
+
+def _block_issues(result):
+    return [i for i in _row_issues(result) if i.get("posture") == "block"]
+
+
+def _mg_args(**kwargs):
+    """Namespace for the guard CLI management modes."""
+    defaults = dict(activate_block=None, deactivate_block=None,
+                    show_posture=False, break_grant=False, break_clear=False,
+                    break_show=False, families="", reason="",
+                    authorized_by="", ttl_hours=None, max_uses=None,
+                    session_id=None)
+    defaults.update(kwargs)
+    return types.SimpleNamespace(**defaults)
+
+
+class WriteGuardFamilyBlockPostureTests(unittest.TestCase):
+    """FEAT-064 分族 BLOCK 机制：逐族姿态 / R2 BLOCK 翻转（基线钳制）/
+    补救闭环 / fail-safe / 激活校验。默认全 WARN 时行为字节恒等（74 基线
+    锚）——机制交付但真实翻转（上线动作）由 Coordinator 裁定执行。
+    """
+
+    def test_default_posture_all_warn_face_never_fails(self):
+        """零回归锚：无姿态配置（默认全 WARN）→ 裸变更照旧 WARN、face 恒
+        PASS、行为与 FEAT-060 时代字节同源（issue 文本含 FEAT-064 指引）。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = RowFamilyReconciliationTests()._seed_gov(td)
+            _guard_run(gov)
+            (gov / "evidence-log.md").write_text(
+                RowFamilyReconciliationTests._EVD_SEED + RowFamilyReconciliationTests._EVD_SEED2 + RowFamilyReconciliationTests._REVIEW_SEED
+                + "| EVD-8003 | FEAT-064 | bare | d | b | a | actor | "
+                  "2026-09-25 | G11 | PASS |\n",
+                encoding="utf-8")
+            result = _guard_run(gov)
+            self.assertEqual(result["row_families"]["status"], "PASS")
+            self.assertFalse((gov / wgs.POSTURE_CONFIG_FILE_NAME).is_file())
+            issues = _row_issues(result)
+            self.assertEqual(len(issues), 1)
+            self.assertNotIn("posture", issues[0])
+
+    def test_block_active_family_fails_face_and_warn_family_stays(self):
+        """BLOCK 族裸变更 → face FAIL（issue 携 posture=block）；同轮
+        task_status（WARN 族）裸变更仍为 WARN 披露——逐族姿态隔离。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = RowFamilyReconciliationTests()._seed_gov(td)
+            _activate(gov, ["evidence"])
+            _guard_run(gov)
+            (gov / "evidence-log.md").write_text(
+                RowFamilyReconciliationTests._EVD_SEED + RowFamilyReconciliationTests._EVD_SEED2 + RowFamilyReconciliationTests._REVIEW_SEED
+                + "| EVD-8003 | FEAT-064 | bare | d | b | a | actor | "
+                  "2026-09-25 | G11 | PASS |\n",
+                encoding="utf-8")
+            (gov / "plan-tracker.md").write_text(
+                RowFamilyReconciliationTests._TRACKER_SEED.replace(
+                    "🔄 进行中 (2026-09-19)", "✅ 完成 (2026-09-25)"),
+                encoding="utf-8")
+            result = _guard_run(gov)
+            self.assertEqual(result["row_families"]["status"], "FAIL")
+            blocks = _block_issues(result)
+            self.assertEqual(len(blocks), 1)
+            self.assertEqual(blocks[0]["task_id"], "EVD-8003")
+            self.assertIn("BLOCK 姿态", blocks[0]["detail"])
+            self.assertIn("FEAT-064", blocks[0]["detail"])
+            warns = [i for i in _row_issues(result)
+                     if i.get("posture") != "block"]
+            self.assertEqual(len(warns), 1)
+            self.assertEqual(warns[0]["task_id"], "FEAT-057")  # tracker row
+
+    def test_block_window_not_absorbed_across_repeats(self):
+        """场景① 重复运行：BLOCK 窗口逐轮重燃（不吸收——DEC-224 R2 翻转）；
+        被阻塞面基线保持前像；重复观测纯去重（单条 open 记录）。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = RowFamilyReconciliationTests()._seed_gov(td)
+            _activate(gov, ["evidence"])
+            _guard_run(gov)
+            amnesty_evidence = _baseline_state(gov)["files"][
+                "evidence-log.md"]
+            (gov / "evidence-log.md").write_text(
+                RowFamilyReconciliationTests._EVD_SEED + RowFamilyReconciliationTests._EVD_SEED2 + RowFamilyReconciliationTests._REVIEW_SEED
+                + "| EVD-8003 | FEAT-064 | bare | d | b | a | actor | "
+                  "2026-09-25 | G11 | PASS |\n",
+                encoding="utf-8")
+            first = _guard_run(gov)
+            self.assertEqual(first["row_families"]["status"], "FAIL")
+            self.assertEqual(len(self._open(gov)), 1)
+            second = _guard_run(gov)
+            self.assertEqual(second["row_families"]["status"], "FAIL")
+            self.assertEqual(len(self._open(gov)), 1)  # R1 纯去重
+            held = _baseline_state(gov)["files"]["evidence-log.md"]
+            self.assertEqual(held, amnesty_evidence)  # 前像保持（不吸收）
+
+    def _open(self, gov):
+        return [r for r in _ledger(gov)["violations"].values()
+                if r["status"] == "open"]
+
+    def test_block_surface_held_while_warn_surface_absorbs(self):
+        """R2 翻转的面粒度：BLOCK 面基线保持前像；同轮 WARN 面（任务状态列）
+        窗口照旧吸收（DEC-224 钉住的 WARN 行为不变）。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = RowFamilyReconciliationTests()._seed_gov(td)
+            _activate(gov, ["evidence"])
+            _guard_run(gov)
+            amnesty = _baseline_state(gov)["files"]
+            (gov / "evidence-log.md").write_text(
+                RowFamilyReconciliationTests._EVD_SEED + RowFamilyReconciliationTests._EVD_SEED2 + RowFamilyReconciliationTests._REVIEW_SEED
+                + "| EVD-8003 | FEAT-064 | bare | d | b | a | actor | "
+                  "2026-09-25 | G11 | PASS |\n",
+                encoding="utf-8")
+            (gov / "plan-tracker.md").write_text(
+                RowFamilyReconciliationTests._TRACKER_SEED.replace(
+                    "🔄 进行中 (2026-09-19)", "✅ 完成 (2026-09-25)"),
+                encoding="utf-8")
+            _guard_run(gov)
+            after = _baseline_state(gov)["files"]
+            self.assertEqual(after["evidence-log.md"],
+                             amnesty["evidence-log.md"])  # held
+            self.assertNotEqual(after["plan-tracker.md"],
+                                amnesty["plan-tracker.md"])  # absorbed
+
+    def test_writer_remediation_consumes_and_unblocks(self):
+        """补救闭环：写入器补机器凭证 → 复跑自动消费（事务）→ 面回 PASS、
+        基线随事务收口（消费与基线更新同动——FEAT-060 机制在 BLOCK 下唯一
+        合法解锁路径）。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = RowFamilyReconciliationTests()._seed_gov(td)
+            _activate(gov, ["evidence"])
+            _guard_run(gov)
+            (gov / "evidence-log.md").write_text(
+                RowFamilyReconciliationTests._EVD_SEED + RowFamilyReconciliationTests._EVD_SEED2 + RowFamilyReconciliationTests._REVIEW_SEED
+                + "| EVD-8003 | FEAT-064 | bare | d | b | a | actor | "
+                  "2026-09-25 | G11 | PASS |\n",
+                encoding="utf-8")
+            blocked = _guard_run(gov)
+            self.assertEqual(blocked["row_families"]["status"], "FAIL")
+            violation_id = self._open(gov)[0]["violation_id"]
+            (gov / "evidence-log.md").write_text(
+                RowFamilyReconciliationTests._EVD_SEED + RowFamilyReconciliationTests._EVD_SEED2 + RowFamilyReconciliationTests._REVIEW_SEED
+                + "| EVD-8003 | FEAT-064 | fixed | b（机器写入："
+                  "governance-store evidence-append op-" + "a" * 32
+                + "；schema v1） | a | governance-store | 2026-09-25 | G11 "
+                  "| PASS |\n",
+                encoding="utf-8")
+            healed = _guard_run(gov)
+            self.assertEqual(healed["row_families"]["status"], "PASS")
+            record = _ledger(gov)["violations"][violation_id]
+            self.assertEqual(record["status"], "consumed")
+            self.assertEqual(
+                _baseline_state(gov)["files"]["evidence-log.md"]["sha256"],
+                __import__("hashlib").sha256(
+                    (gov / "evidence-log.md").read_text(
+                        encoding="utf-8").encode("utf-8")).hexdigest())
+
+    def test_baseline_rebuild_withholds_blocked_surface(self):
+        """基线重建边缘：BLOCK 族 open 违规在场且无前像条目 → fresh amnesty
+        条目被扣留（block_window_baseline_hold 响亮披露）——重建不静默吸收
+        未决窗口。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = RowFamilyReconciliationTests()._seed_gov(td)
+            _activate(gov, ["evidence"])
+            _guard_run(gov)
+            (gov / "evidence-log.md").write_text(
+                RowFamilyReconciliationTests._EVD_SEED + RowFamilyReconciliationTests._EVD_SEED2 + RowFamilyReconciliationTests._REVIEW_SEED
+                + "| EVD-8003 | FEAT-064 | bare | d | b | a | actor | "
+                  "2026-09-25 | G11 | PASS |\n",
+                encoding="utf-8")
+            _guard_run(gov)
+            self.assertEqual(len(self._open(gov)), 1)
+            (gov / ".write-guard-state.json").unlink()  # 基线重建（人工面）
+            result = _guard_run(gov)
+            holds = [i for i in result["row_families"]["issues"]
+                     if i["type"] == "block_window_baseline_hold"]
+            self.assertEqual(len(holds), 1)
+            self.assertNotIn("evidence-log.md",
+                             _baseline_state(gov)["files"])  # 扣留
+            self.assertEqual(len(self._open(gov)), 1)  # 违规不丢（R4）
+
+    def test_posture_config_corrupt_fails_safe_to_warn(self):
+        """姿态配置损坏 → fail-safe 全 WARN + 响亮披露（不猜测、不静默）；
+        恢复指引在场。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = RowFamilyReconciliationTests()._seed_gov(td)
+            (gov / wgs.POSTURE_CONFIG_FILE_NAME).write_text(
+                "{not json", encoding="utf-8")
+            _guard_run(gov)
+            (gov / "evidence-log.md").write_text(
+                RowFamilyReconciliationTests._EVD_SEED + RowFamilyReconciliationTests._EVD_SEED2 + RowFamilyReconciliationTests._REVIEW_SEED
+                + "| EVD-8003 | FEAT-064 | bare | d | b | a | actor | "
+                  "2026-09-25 | G11 | PASS |\n",
+                encoding="utf-8")
+            result = _guard_run(gov)
+            self.assertEqual(result["row_families"]["status"], "PASS")
+            disclosed = [i for i in result["row_families"]["issues"]
+                         if i["type"] == "write_guard_posture_config_unreadable"]
+            self.assertEqual(len(disclosed), 1)
+            self.assertIn("全 WARN", disclosed[0]["detail"])
+
+    def test_activation_fail_closed_refusals(self):
+        """激活/回退 fail-closed：空理由 / 空授权人 / 未知 family / 损坏
+        既有配置全拒（姿态翻转不可静默）。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = RowFamilyReconciliationTests()._seed_gov(td)
+            cases = [
+                ({"families": ["evidence"], "posture": "block",
+                  "reason": "", "authorized_by": "c"}, "schema_violation"),
+                ({"families": ["evidence"], "posture": "block",
+                  "reason": "r", "authorized_by": ""}, "schema_violation"),
+                ({"families": ["nope"], "posture": "block",
+                  "reason": "r", "authorized_by": "c"}, "unknown_family"),
+            ]
+            for kwargs, code in cases:
+                _payload, refusal = wgs.activate_family_postures(
+                    Path(gov), **kwargs)
+                self.assertEqual(refusal["error"], code)
+            self.assertFalse(
+                (gov / wgs.POSTURE_CONFIG_FILE_NAME).is_file())
+            _activate(gov, ["evidence"])
+            (gov / wgs.POSTURE_CONFIG_FILE_NAME).write_text(
+                "corrupt", encoding="utf-8")
+            _payload, refusal = wgs.activate_family_postures(
+                Path(gov), families=["review"], posture="block",
+                reason="r", authorized_by="c")
+            self.assertEqual(refusal["error"], "posture_config_unreadable")
+
+
+class WriteGuardBlockScenarioTests(unittest.TestCase):
+    """FEAT-064 七场景 BLOCK 姿态验收（version-plan D1——与 FEAT-060 六规则
+    同源扩展，BLOCK 下行为先见差异）。场景① 在分族姿态类覆盖；本类覆盖
+    ②并发 / ③消费后崩溃 / ④基线写崩 / ⑤会话重启 / ⑥伪造 hook / ⑦无权 hook。
+    """
+
+    def _seed_blocked(self, gov):
+        """amnesty → BLOCK 激活 → 裸变更一轮（open 违规 + 窗口在场）。"""
+        gov = RowFamilyReconciliationTests()._seed_gov(gov)
+        _activate(gov, ["evidence"])
+        _guard_run(gov)
+        (gov / "evidence-log.md").write_text(
+            RowFamilyReconciliationTests._EVD_SEED + RowFamilyReconciliationTests._EVD_SEED2 + RowFamilyReconciliationTests._REVIEW_SEED
+            + "| EVD-8003 | FEAT-064 | bare | d | b | a | actor | "
+              "2026-09-25 | G11 | PASS |\n",
+            encoding="utf-8")
+        result = _guard_run(gov)
+        self.assertEqual(result["row_families"]["status"], "FAIL")
+        return gov
+
+    def _open(self, gov):
+        return [r for r in _ledger(gov)["violations"].values()
+                if r["status"] == "open"]
+
+    def test_scenario2_concurrent_block_runs_serialize(self):
+        """场景② 并发：两次 guard CLI 并发（BLOCK 激活）→ 判定面双双 FAIL、
+        单条 open 记录（串行去重）、无 diverged、基线一致保持前像。
+        （补丁在主线程统一施加——mock.patch 的模块全局改写在跨线程交错
+        捕获 original 时会互相泄漏，FIX-387 canary 实证。）"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = self._seed_blocked(Path(td))
+            tracker = gov / "plan-tracker.md"
+            results = {}
+
+            def worker(tag):
+                results[tag] = vw.check_governance_write_shapes(
+                    persist_state=True)
+
+            with mock.patch.object(vw, "SAMPLE_PATH", tracker), \
+                 mock.patch.object(vw, "GOVERNANCE_DIR", gov):
+                threads = [threading.Thread(target=worker, args=("a",)),
+                           threading.Thread(target=worker, args=("b",))]
+                for thread in threads:
+                    thread.start()
+                for thread in threads:
+                    thread.join()
+            for tag in ("a", "b"):
+                self.assertEqual(results[tag]["row_families"]["status"],
+                                 "FAIL", tag)
+                self.assertEqual(len(_block_issues(results[tag])), 1, tag)
+                diverged = [i for i in results[tag]["row_families"]["issues"]
+                            if i["type"] == "violation_txn_diverged"]
+                self.assertEqual(diverged, [], tag)
+            self.assertEqual(len(self._open(gov)), 1)
+
+    def test_scenario3_consume_crash_resume_under_block(self):
+        """场景③ 消费后崩溃：补救后消费事务 phase-2 崩溃 → 仅 journal 残留
+        （无半状态）→ 复跑 resume 查世界收敛（consumed、面回 PASS）。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = self._seed_blocked(Path(td))
+            violation_id = self._open(gov)[0]["violation_id"]
+            (gov / "evidence-log.md").write_text(
+                RowFamilyReconciliationTests._EVD_SEED + RowFamilyReconciliationTests._EVD_SEED2 + RowFamilyReconciliationTests._REVIEW_SEED
+                + "| EVD-8003 | FEAT-064 | fixed | b（机器写入："
+                  "governance-store evidence-append op-" + "a" * 32
+                + "；schema v1） | a | governance-store | 2026-09-25 | G11 "
+                  "| PASS |\n",
+                encoding="utf-8")
+            real_write = wgs._atomic_write_bytes
+
+            def crash_state_write(path, data):
+                if str(path).endswith(".write-guard-state.json"):
+                    raise OSError("simulated crash: baseline write killed")
+                return real_write(path, data)
+
+            with mock.patch.object(wgs, "_atomic_write_bytes",
+                                   crash_state_write):
+                with self.assertRaises(OSError):
+                    _guard_run(gov)
+            self.assertIsNotNone(_ledger(gov).get("pending_txn"))
+            healed = _guard_run(gov)
+            diverged = [i for i in healed["row_families"]["issues"]
+                        if i["type"] == "violation_txn_diverged"]
+            self.assertEqual(diverged, [])
+            self.assertEqual(healed["row_families"]["status"], "PASS")
+            self.assertEqual(_ledger(gov)["violations"][violation_id]
+                             ["status"], "consumed")
+
+    def test_scenario4_baseline_write_crash_holds_window(self):
+        """场景④ 基线写崩：plain 推进失败 → 响亮披露 + 窗口保持开放
+        （BLOCK 下基线未推进 → 复跑窗口重燃，先见差异 = WARN 时代 face
+        恒 PASS，BLOCK 下 face FAIL）。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = self._seed_blocked(Path(td))
+
+            def crash(path, state_text, timeout_seconds=10.0):
+                raise OSError("disk full (simulated)")
+
+            with mock.patch.object(wgs, "advance_baseline_plain", crash):
+                result = _guard_run(gov)
+            unwritable = [i for i in result["row_families"]["issues"]
+                          if i["type"] == "row_family_state_unwritable"]
+            self.assertEqual(len(unwritable), 1)
+            self.assertEqual(result["row_families"]["status"], "FAIL")
+            again = _guard_run(gov)
+            self.assertEqual(again["row_families"]["status"], "FAIL")
+            self.assertEqual(len(self._open(gov)), 1)
+
+    def test_scenario5_session_restart_keeps_window_open(self):
+        """场景⑤ 会话重启：无会话身份的新一轮（跨会话保留 R4）→ BLOCK
+        窗口照旧重燃（基线保持前像），记录去重不重记。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = self._seed_blocked(Path(td))
+            record_before = self._open(gov)[0]
+            result = _guard_run(gov)  # 新 run id、无 session——重启形态
+            self.assertEqual(result["row_families"]["status"], "FAIL")
+            record_after = self._open(gov)[0]
+            self.assertEqual(record_after["violation_id"],
+                             record_before["violation_id"])
+            self.assertEqual(record_after["occurrence"], 1)
+
+    def test_scenario6_7_forged_and_unauthorized_cannot_lift_block(self):
+        """场景⑥⑦ 伪造/无权 hook：未登记消费者与伪造身份的消费全拒
+        （R5 红相）→ 违规保持 open、BLOCK 面持续 FAIL——无旁路。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = self._seed_blocked(Path(td))
+            violation_id = self._open(gov)[0]["violation_id"]
+            state_path = Path(gov) / ".write-guard-state.json"
+            baseline_target = _baseline_target({"evidence-log.md": {
+                "sha256": "x", "rows": {}}})
+            # ⑦ 无权（未登记）消费者
+            refused = wgs.consume_violations(
+                Path(gov), state_path, consumer="unregistered/hook",
+                grant_id="grant-x", violation_ids=[violation_id],
+                baseline_target=baseline_target, run_id="run-x")
+            self.assertFalse(refused["ok"])
+            self.assertEqual(refused["error"], "unregistered_consumer")
+            # ⑥ 伪造身份（授权 token 属他人——伪造者手工植入的台账样本，
+            # FEAT-060 R5 腿② 同型）
+            ledger = _ledger(gov)
+            ledger["grants"]["grant-" + "e" * 32] = {
+                "consumer": "some-other-registered-consumer",
+                "issued_at": "2026-09-25T00:00:00",
+                "issued_by_run": "run-forged", "status": "active"}
+            (Path(gov) / wgs.LEDGER_FILE_NAME).write_text(
+                json.dumps(ledger, ensure_ascii=False, indent=2,
+                           sort_keys=True) + "\n", encoding="utf-8")
+            forged = wgs.consume_violations(
+                Path(gov), state_path, consumer=wgs.CLI_CONSUMER,
+                grant_id="grant-" + "e" * 32, violation_ids=[violation_id],
+                baseline_target=baseline_target, run_id="run-x")
+            self.assertFalse(forged["ok"])
+            self.assertEqual(forged["error"], "forged_consumer")
+            result = _guard_run(gov)
+            self.assertEqual(result["row_families"]["status"], "FAIL")
+            self.assertEqual(self._open(gov)[0]["violation_id"],
+                             violation_id)
+
+
+class WriteGuardBreakGlassTests(unittest.TestCase):
+    """FEAT-064 break-glass 恢复通道：限定留痕（对象/操作者/理由/有效期/
+    次数）、不可静默记录、范围化降级、失效惰化、清理入史、fail-closed
+    拒绝梯。"""
+
+    def _seed_blocked(self, gov):
+        gov = RowFamilyReconciliationTests()._seed_gov(gov)
+        _activate(gov, ["evidence", "decision"])
+        _guard_run(gov)
+        (gov / "evidence-log.md").write_text(
+            RowFamilyReconciliationTests._EVD_SEED + RowFamilyReconciliationTests._EVD_SEED2 + RowFamilyReconciliationTests._REVIEW_SEED
+            + "| EVD-8003 | FEAT-064 | bare | d | b | a | actor | "
+              "2026-09-25 | G11 | PASS |\n",
+            encoding="utf-8")
+        (gov / "decision-log.md").write_text(
+            RowFamilyReconciliationTests._DEC_SEED
+            + "| DEC-224 | 2026-09-25 | coordinator | 裸决策行 | "
+              "依据：手写无凭证\n",
+            encoding="utf-8")
+        result = _guard_run(gov)
+        self.assertEqual(result["row_families"]["status"], "FAIL")
+        return gov
+
+    def _open(self, gov):
+        return [r for r in _ledger(gov)["violations"].values()
+                if r["status"] == "open"]
+
+    def test_grant_requires_block_active_and_full_audit(self):
+        with tempfile.TemporaryDirectory() as td:
+            gov = RowFamilyReconciliationTests()._seed_gov(td)
+            grant, refusal = wgs.grant_break_glass(
+                Path(gov), reason="r", authorized_by="c")
+            self.assertIsNone(grant)
+            self.assertEqual(refusal["error"], "no_block_active")
+            _activate(gov, ["evidence"])
+            grant, refusal = wgs.grant_break_glass(
+                Path(gov), reason="", authorized_by="c")
+            self.assertEqual(refusal["error"], "schema_violation")
+            grant, refusal = wgs.grant_break_glass(
+                Path(gov), reason="r", authorized_by="")
+            self.assertEqual(refusal["error"], "schema_violation")
+            grant, refusal = wgs.grant_break_glass(
+                Path(gov), reason="r", authorized_by="c",
+                families=["nope"])
+            self.assertEqual(refusal["error"], "unknown_family")
+            grant, refusal = wgs.grant_break_glass(
+                Path(gov), reason="修复 guard 自身损坏", authorized_by="c")
+            self.assertIsNone(refusal)
+            self.assertEqual(grant["families"], [wgs.BREAK_GLASS_ALL])
+            stored = _ledger(gov)["break_glass"]
+            self.assertEqual(stored["grant_id"], grant["grant_id"])
+            self.assertEqual(stored["uses"], [])
+            second, refusal = wgs.grant_break_glass(
+                Path(gov), reason="r", authorized_by="c")
+            self.assertEqual(refusal["error"], "break_glass_active")
+
+    def test_scope_limited_downgrade(self):
+        """范围化降级：窗口只软化了 scoped 族的 BLOCK（evidence）；范围外
+        （decision）BLOCK 照旧 FAIL——窗口是披露通道，不是全局钥匙。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = self._seed_blocked(Path(td))
+            wgs.grant_break_glass(
+                Path(gov), reason="修复", authorized_by="coord",
+                families=["evidence"])
+            result = _guard_run(gov)
+            self.assertEqual(result["row_families"]["status"], "FAIL")
+            blocks = _block_issues(result)
+            self.assertEqual([i["task_id"] for i in blocks], ["DEC-224"])
+            downgraded = [i for i in _row_issues(result)
+                          if i["task_id"] == "EVD-8003"]
+            self.assertEqual(len(downgraded), 1)
+            self.assertNotIn("posture", downgraded[0])
+            self.assertEqual(len(_ledger(gov)["break_glass"]["uses"]), 1)
+
+    def test_use_audit_exhaustion_and_expiry(self):
+        """次数/有效期：每次 CLI 运行记 use（不可静默）；用满即惰化 + 响亮
+        披露；过期同惰化。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = self._seed_blocked(Path(td))
+            grant, _ = wgs.grant_break_glass(
+                Path(gov), reason="修复", authorized_by="coord",
+                max_uses=1, ttl_hours=1.0)
+            first = _guard_run(gov)
+            self.assertEqual(first["row_families"]["status"], "PASS")
+            inert = [i for i in first["row_families"]["issues"]
+                     if i["type"] == "break_glass_inert"]
+            self.assertEqual(inert, [])
+            second = _guard_run(gov)
+            self.assertEqual(second["row_families"]["status"], "FAIL")
+            inert = [i for i in second["row_families"]["issues"]
+                     if i["type"] == "break_glass_inert"]
+            self.assertEqual(len(inert), 1)
+            self.assertEqual(_block_issues(second)[0]["task_id"],
+                             "EVD-8003")
+            # 过期支：重置 uses 后把 expires_at 拨到过去
+            ledger = _ledger(gov)
+            ledger["break_glass"]["uses"] = []
+            ledger["break_glass"]["expires_at"] = "2000-01-01T00:00:00"
+            (Path(gov) / wgs.LEDGER_FILE_NAME).write_text(
+                json.dumps(ledger, ensure_ascii=False, indent=2,
+                           sort_keys=True) + "\n", encoding="utf-8")
+            third = _guard_run(gov)
+            self.assertEqual(third["row_families"]["status"], "FAIL")
+            inert = [i for i in third["row_families"]["issues"]
+                     if i["type"] == "break_glass_inert"]
+            self.assertEqual(len(inert), 1)
+            self.assertIn("expired", inert[0]["detail"])
+
+    def test_clear_moves_grant_to_history(self):
+        with tempfile.TemporaryDirectory() as td:
+            gov = self._seed_blocked(Path(td))
+            grant, _ = wgs.grant_break_glass(
+                Path(gov), reason="修复", authorized_by="coord")
+            _guard_run(gov)
+            _payload, refusal = wgs.clear_break_glass(
+                Path(gov), cleared_by="", reason="done")
+            self.assertEqual(refusal["error"], "schema_violation")
+            payload, refusal = wgs.clear_break_glass(
+                Path(gov), cleared_by="coord", reason="修复完成")
+            self.assertIsNone(refusal)
+            self.assertEqual(payload["cleared"], grant["grant_id"])
+            ledger = _ledger(gov)
+            self.assertIsNone(ledger["break_glass"])
+            self.assertEqual(len(ledger["break_glass_history"]), 1)
+            self.assertEqual(
+                ledger["break_glass_history"][0]["clear_reason"], "修复完成")
+            result = _guard_run(gov)
+            self.assertEqual(result["row_families"]["status"], "FAIL")
+            # 窗口清理后两个 BLOCK 族（evidence + decision）窗口全部重燃
+            self.assertEqual(len(_block_issues(result)), 2)
+
+    def test_management_cli_modes(self):
+        """管理模式 CLI：激活/回退/show/break-grant/clear 愉快路径 +
+        拒绝路径（exit 2 + stderr 结构化拒绝）。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = RowFamilyReconciliationTests()._seed_gov(td)
+            args = _mg_args(activate_block="evidence,decision",
+                            reason="D1 翻转", authorized_by="coord")
+            buf, err = io.StringIO(), io.StringIO()
+            with mock.patch("sys.stdout", buf), \
+                 mock.patch("sys.stderr", err):
+                code = wgs.run_guard_management_cli("activate_block", args,
+                                                    governance_dir=gov)
+            self.assertEqual(code, 0)
+            self.assertIn("BLOCK 已激活", buf.getvalue())
+            self.assertTrue(
+                (Path(gov) / wgs.POSTURE_CONFIG_FILE_NAME).is_file())
+            with mock.patch("sys.stdout", buf), \
+                 mock.patch("sys.stderr", err):
+                code = wgs.run_guard_management_cli("show_posture",
+                                                    _mg_args(),
+                                                    governance_dir=gov)
+            self.assertEqual(code, 0)
+            self.assertIn("task_status", buf.getvalue())
+            args = _mg_args(deactivate_block="evidence",
+                            reason="B-12 回退演练", authorized_by="coord")
+            with mock.patch("sys.stdout", buf), \
+                 mock.patch("sys.stderr", err):
+                code = wgs.run_guard_management_cli("deactivate_block", args,
+                                                    governance_dir=gov)
+            self.assertEqual(code, 0)
+            postures, _issue = wgs.load_family_postures(Path(gov))
+            self.assertEqual(postures["evidence"], "warn")
+            self.assertEqual(postures["decision"], "block")
+            args = _mg_args(break_grant=True, reason="x",
+                            authorized_by="c")
+            buf, err = io.StringIO(), io.StringIO()
+            with mock.patch("sys.stdout", buf), \
+                 mock.patch("sys.stderr", err):
+                code = wgs.run_guard_management_cli("break_grant", args,
+                                                    governance_dir=gov)
+            self.assertEqual(code, 0)
+            self.assertIn("限定留痕", buf.getvalue())
+            args = _mg_args(break_grant=True, reason="", authorized_by="c")
+            buf, err = io.StringIO(), io.StringIO()
+            with mock.patch("sys.stdout", buf), \
+                 mock.patch("sys.stderr", err):
+                code = wgs.run_guard_management_cli("break_grant", args,
+                                                    governance_dir=gov)
+            self.assertEqual(code, 2)
+            self.assertIn("[REFUSED]", err.getvalue())
+
+
+class WriteGuardLegacyHandoverTests(unittest.TestCase):
+    """FEAT-060 R0 遗留三件的 FEAT-064 兑现面：P2-1 hook_identity 消费不
+    覆写（检测侧溯源保留）/ P2-2 A-B-A 会话序升级定案（会话累计触发计数）
+    / GOVERNANCE_SESSION_ID→--session-id 接线（显式身份优先）。"""
+
+    def test_hook_identity_preserved_through_consumption(self):
+        """P2-1 红相钉住：消费收尾不得覆写 hook_identity（检测侧身份 =
+        INVOKER_ENV 覆写形态；消费方身份只活在 consumption_event）。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = RowFamilyReconciliationTests()._seed_gov(td)
+            _guard_run(gov)
+            (gov / "evidence-log.md").write_text(
+                RowFamilyReconciliationTests._EVD_SEED + RowFamilyReconciliationTests._EVD_SEED2 + RowFamilyReconciliationTests._REVIEW_SEED
+                + "| EVD-8003 | FEAT-064 | bare | d | b | a | actor | "
+                  "2026-09-25 | G11 | PASS |\n",
+                encoding="utf-8")
+            with mock.patch.dict(
+                    os.environ,
+                    {wgs.INVOKER_ENV: "governance-write-guard/test-hook"}):
+                _guard_run(gov)
+            record = [r for r in _ledger(gov)["violations"].values()
+                      if r["status"] == "open"][0]
+            self.assertEqual(record["hook_identity"],
+                             "governance-write-guard/test-hook")
+            (gov / "evidence-log.md").write_text(
+                RowFamilyReconciliationTests._EVD_SEED + RowFamilyReconciliationTests._EVD_SEED2 + RowFamilyReconciliationTests._REVIEW_SEED
+                + "| EVD-8003 | FEAT-064 | fixed | b（机器写入："
+                  "governance-store evidence-append op-" + "a" * 32
+                + "；schema v1） | a | governance-store | 2026-09-25 | G11 "
+                  "| PASS |\n",
+                encoding="utf-8")
+            _guard_run(gov)
+            consumed = _ledger(gov)["violations"][record["violation_id"]]
+            self.assertEqual(consumed["status"], "consumed")
+            self.assertEqual(consumed["hook_identity"],
+                             "governance-write-guard/test-hook")
+            self.assertEqual(consumed["consumption_event"]["consumer"],
+                             wgs.CLI_CONSUMER)
+
+    def test_aba_session_sequence_escalates(self):
+        """P2-2 定案 (a) 会话累计触发计数：x→y→x 序列中会话 x 的第二次独立
+        触发升级（B1 字面语义——review-FEAT-060-R0 P2-2 缺口闭合）。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = Path(td)
+            wgs.record_detections(
+                gov, [_detect(object_id="EVD-9101", after="a" * 32)],
+                run_id="run-1", session_id="x")
+            wgs.record_detections(
+                gov, [_detect(object_id="EVD-9101", after="b" * 32,
+                              before="a" * 32)],
+                run_id="run-2", session_id="y")
+            wgs.record_detections(
+                gov, [_detect(object_id="EVD-9101", after="c" * 32,
+                              before="b" * 32)],
+                run_id="run-3", session_id="x")
+            open_records = [r for r in _ledger(gov)["violations"].values()
+                            if r["status"] == "open"]
+            self.assertEqual(len(open_records), 1)
+            record = open_records[0]
+            self.assertEqual(record["occurrence"], 3)
+            self.assertTrue(record["escalated"])
+            self.assertEqual(record["session_triggers"], {"x": 2, "y": 1})
+            self.assertIsNotNone(record["escalated_at"])
+
+    def test_alternating_sessions_without_repeat_do_not_escalate(self):
+        """保守半边：x→y 各自首次触发不升级（宁可漏升不可误升）。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = Path(td)
+            wgs.record_detections(
+                gov, [_detect(object_id="EVD-9102", after="a" * 32)],
+                run_id="run-1", session_id="x")
+            wgs.record_detections(
+                gov, [_detect(object_id="EVD-9102", after="b" * 32,
+                              before="a" * 32)],
+                run_id="run-2", session_id="y")
+            record = [r for r in _ledger(gov)["violations"].values()
+                      if r["status"] == "open"][0]
+            self.assertFalse(record["escalated"])
+            self.assertEqual(record["session_triggers"], {"x": 1, "y": 1})
+
+    def test_session_id_argument_overrides_env(self):
+        """R3 接线：显式 --session-id 优先于 GOVERNANCE_SESSION_ID；同一
+        显式身份下的第二次独立触发升级。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = RowFamilyReconciliationTests()._seed_gov(td)
+            with mock.patch.dict(os.environ,
+                                 {wgs.SESSION_ENV: "env-session"}):
+                _guard_run(gov)
+                (gov / "evidence-log.md").write_text(
+                    RowFamilyReconciliationTests._EVD_SEED + RowFamilyReconciliationTests._EVD_SEED2 + RowFamilyReconciliationTests._REVIEW_SEED
+                    + "| EVD-8003 | FEAT-064 | bare | d | b | a | actor | "
+                      "2026-09-25 | G11 | PASS |\n",
+                    encoding="utf-8")
+                _guard_run(gov, session_id="arg-session")
+                record = [r for r in _ledger(gov)["violations"].values()
+                          if r["status"] == "open"][0]
+                self.assertEqual(record["session_id"], "arg-session")
+                (gov / "evidence-log.md").write_text(
+                    RowFamilyReconciliationTests._EVD_SEED + RowFamilyReconciliationTests._EVD_SEED2 + RowFamilyReconciliationTests._REVIEW_SEED
+                    + "| EVD-8003 | FEAT-064 | bare-2 | d | b | a | actor "
+                      "| 2026-09-25 | G11 | PASS |\n",
+                    encoding="utf-8")
+                _guard_run(gov, session_id="arg-session")
+            record = [r for r in _ledger(gov)["violations"].values()
+                      if r["status"] == "open"][0]
+            self.assertEqual(record["session_triggers"]["arg-session"], 2)
+            self.assertTrue(record["escalated"])
+
+
+class Feat061CompositionBlockTests(unittest.TestCase):
+    """F-5 ② 组合测试：FEAT-064 BLOCK 激活后 FEAT-061 决策写入路径全部走
+    写入器（零手工写入）——md 权威腿 / JSON 权威腿（含逐次追加 md 投影）/
+    迁移投影逐字重放三腿在 decision 族 BLOCK 姿态下零 unattributed 检测。
+    """
+
+    _DEC_MD_SEED = (
+        "# 当前项目决策记录\n\n"
+        + "| DEC-223 | 2026-09-19 | coordinator | seed 决策行 | "
+          "依据：存量 |\n")
+
+    def _seed(self, td):
+        gov = Path(td)
+        (gov / "decision-log.md").write_text(self._DEC_MD_SEED,
+                                             encoding="utf-8")
+        _activate(gov, ["decision"])
+        result = _guard_run(gov)
+        self.assertEqual(result["row_families"]["status"], "PASS")
+        return gov
+
+    def _assert_zero_decision_detections(self, result):
+        self.assertEqual(
+            [i for i in _row_issues(result)
+             if i["task_id"].startswith("DEC-")], [],
+            result["row_families"]["issues"])
+        self.assertEqual(result["row_families"]["status"], "PASS")
+
+    def test_md_backend_append_zero_block_detections(self):
+        """md 权威腿：decision_append（携机器标记）→ BLOCK 姿态下零检测。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = self._seed(td)
+            appended = gstore.decision_append(
+                decider="Coordinator", content="FEAT-064 组合测试决策行",
+                governance_dir=Path(gov))
+            self.assertEqual(appended["code"], "ok")
+            result = _guard_run(gov)
+            self._assert_zero_decision_detections(result)
+
+    def test_json_backend_append_and_projection_zero_block_detections(self):
+        """JSON 权威腿：store + authority JSON_ACTIVE → decision_append 走
+        JSON 腿（逐次追加 md 投影）→ 投影行携机器标记 → BLOCK 下零检测。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = self._seed(td)
+            items = drepo.classify_md_document(
+                (gov / "decision-log.md").read_text(encoding="utf-8"))
+            store = drepo.build_store_from_document(items)
+            (gov / drepo.JSON_STORE_FILE).write_text(
+                json.dumps(store, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8")
+            drepo.write_authority_transition(
+                gov, from_state=drepo.STATE_MD_ACTIVE,
+                to_state=drepo.STATE_CUTOVER_FROZEN, expected_epoch=0,
+                owner_token="tok-comp")
+            drepo.write_authority_transition(
+                gov, from_state=drepo.STATE_CUTOVER_FROZEN,
+                to_state=drepo.STATE_JSON_ACTIVE, expected_epoch=1,
+                owner_token="tok-comp")
+            appended = gstore.decision_append(
+                decider="Coordinator", content="FEAT-064 JSON 腿决策行",
+                governance_dir=Path(gov))
+            self.assertEqual(appended["code"], "ok")
+            projected = (gov / "decision-log.md").read_text(
+                encoding="utf-8")
+            self.assertIn("FEAT-064 JSON 腿决策行", projected)
+            self.assertIn("机器写入：governance-store decision-append",
+                          projected)
+            result = _guard_run(gov)
+            self._assert_zero_decision_detections(result)
+
+    def test_projection_render_replay_is_digest_identical(self):
+        """迁移投影腿：store 逐字重放（render_markdown）→ 行摘要恒等 →
+        BLOCK 姿态下整表重写零 diff（零手工写入组合义务的格式转换面）。"""
+        with tempfile.TemporaryDirectory() as td:
+            gov = self._seed(td)
+            original = (gov / "decision-log.md").read_text(
+                encoding="utf-8")
+            items = drepo.classify_md_document(original)
+            store = drepo.build_store_from_document(items)
+            rendered = drepo.render_markdown(store)
+            original_rows = {vw._write_guard_row_digest(line.strip())
+                             for line in original.split("\n")
+                             if line.strip().startswith("| DEC-")}
+            rendered_rows = {vw._write_guard_row_digest(line.strip())
+                             for line in rendered.split("\n")
+                             if line.strip().startswith("| DEC-")}
+            self.assertEqual(original_rows, rendered_rows)
+            (gov / "decision-log.md").write_text(rendered,
+                                                 encoding="utf-8")
+            result = _guard_run(gov)
+            self._assert_zero_decision_detections(result)
 
 
 if __name__ == "__main__":

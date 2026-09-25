@@ -164,8 +164,8 @@
           "dynamic-lifecycle-migration"
         ]
       },
-      "handler_count": 93,
-      "key_count": 96,
+      "handler_count": 94,
+      "key_count": 97,
       "keys": [
         "agent-locks-acquire",
         "agent-runtime-e2e",
@@ -262,7 +262,8 @@
         "task-priority-analysis",
         "task-row-update",
         "verify",
-        "web-console"
+        "web-console",
+        "write-guard-bootstrap"
       ]
     },
     "guard_output_pin": {
@@ -278,7 +279,7 @@
         "evidence-log 机器行族 TRIAGE/RECO（DEC-168 行族列数 + ID 格式）",
         "agent-locks.json schema（Check 26）",
         "execution-packets.json 结构（Check 18c 字段表）",
-        "受管行族对账（EVD/DEC/REVIEW/任务状态列/ops 台账——机器凭证 WARN 披露，FEAT-057）"
+        "受管行族对账（EVD/DEC/REVIEW/任务状态列/ops 台账——机器凭证披露，分族姿态 FEAT-057/FEAT-064）"
       ],
       "face_line_regex": "^  \\[(FAIL|PASS|SKIPPED)\\] .+\\ —\\ \\d+\\ issue\\(s\\)$",
       "fixture_strategy": "deterministic temp-dir fixtures: empty host (all SKIPPED → PASS/exit 0) + malformed plan-tracker row (FAIL/exit 1) + well-formed plan-tracker (PASS face/exit 0)",
@@ -415,14 +416,14 @@
   },
   "generated": {
     "generator_relpath": "skills/software-project-governance/infra/contract_matrix/generator.py",
-    "git_head": "7709987ef215e064e2a9a45eb404aadcb14d7554",
+    "git_head": "61618a52eb1b98eade5fb446012626476d6ae9bf",
     "python": {
       "family": "3.14",
       "implementation": "cpython",
       "platform": "win32",
       "version": "3.14.3"
     },
-    "timestamp_utc": "2026-09-20T04:01:42+00:00"
+    "timestamp_utc": "2026-09-24T23:02:52+00:00"
   },
   "python_family_pins": [
     {

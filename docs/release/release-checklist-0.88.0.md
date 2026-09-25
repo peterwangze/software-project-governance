@@ -43,7 +43,7 @@
 | 7 | `a8afcbf` | FEAT-064 | D——write-guard 分族 BLOCK 激活（B-12 机制交付；registry 96→97） | EVD-1156 |
 | 8 | `61618a5` | FEAT-061 | C——decision-log 存储分离首表（B-13；R0 P0×2 活体→R1；179 行演练） | EVD-1155 |
 | 9 | `0ff12f3` | FIX-383 | B——B-7c 发版管线自举（release-window-bootstrap+write-guard-bootstrap） | EVD-1154 |
-| 10 | `c515776` | FEAT-060 | B——write-guard 违规持久状态机+消费权台账（811 行；活体首捕 WV-62097f） | EVD-1153 |
+| 10 | `release-ledger --version 0.88.0 --no-remote` | ✅ FAIL 实测（预期——预提交态，M-3 R0 五维度④核验）→ **M-5 批：manifest 创建后复跑** | `core/releases/0.88.0.json` Coordinator M-5 提交批义务（披露①）；期望 NATIVE_CANDIDATE PASS |
 | 11 | `ce93eb3` | FIX-382 | A 收官——9-cell 组合判据扩展（DEC-235；穷举差分 S_new=S_old） | EVD-1152 |
 | 12 | `b03a0b4` | FIX-381 | A——backport 政策制度化五件套（⑨定案 DEC-234） | EVD-1151 |
 | 13 | `c349f8e` | FIX-380 | A——P3 杂项包（_format_issues 单源化等） | EVD-1150 |
@@ -92,29 +92,29 @@
 - **非 PATCH**：L38 口径不适用——主体为执法硬化 + 存储架构首表 + 能力铺开批；
 - **非 MAJOR / Breaking changes = 无**：L11 口径逐项核对不成立——无 MUST 规则删除/重命名、无外部 CLI 契约变更（decision-append 契约不变）、无 governance 文件字段格式变更；B-12 为 DEC-224 双约束内执法硬化升级（FEAT-060 持久状态机 + B-11 三面留痕为前置基座——非判定语义弱化）；B-13 旧工具明确拒绝非静默误读；B-14 纯新增；版本号未占用预留（0.87.0 已发布顺延 +1；无 0.88.x tag/预留冲突；1.0.0 预留位未触碰）。
 
-## Candidate Gate Results（M-2 —— ⏳ 回填位预留；A 清单结构对齐 0.87.0 先例 + version-plan §3 增量面，实测后原样回填）
+## Candidate Gate Results（M-2 —— ✅ 2026-09-25 实测回填完成〔#10/#15 为 M-5 批义务位〕；A 清单结构对齐 0.87.0 先例 + version-plan §3 增量面）
 
 | # | 门禁 / 命令 | 结果 | 关键实测值（回填位） |
 |---|---|---|---|
-| 1 | `verify` 全量 | ⏳ 回填（M-2 实测） | 期望已知披露面 = REQ-092×6（Check 16×3+Check 17×3——专席②）+ EVD-1146 superseded 残留（专席②）+ 结构性 WARN 0 blocking + plan-tracker 过渡态 WARN；实测当场值如实回填，新增 FAIL 逐项落披露 |
-| 2 | `check-version-consistency` | ⏳ 回填 | 期望 source = 0.88.0；双入口 marker 0.88.0 生效；1 WARN = plan-tracker 过渡态（M-8 收口） |
-| 3 | `check-injection-budget`（×3 profile） | ⏳ 回填 | resident hard 三 profile 逐位实测（0.87 基线 4,216/5,694/5,966——版本 bump 不改 token 计数的对称面）；skill 层 report-only 16,000 内 |
-| 4 | `check-projection-sync --fail-on-issues` + `check-entry-bootstrap-sync` | ⏳ 回填 | 28 mirrors + entry 双根全绿期望（M-1 已实测一次收敛——M-2 复跑确认） |
-| 5 | `release-projection`（check-only） | ⏳ 回填 | 期望 state=PASS / source_version=0.88.0 / projections_checked=28 / issues=[]（M-1 check 模式 28/28 PASS——幂等确认） |
-| 6 | `check-cross-references` | ⏳ 回填 | 期望 0 dangling / 0 deprecated / 0 circular（四件套+CHANGELOG+全窗口载荷落盘后） |
-| 7 | `check-manifest-consistency` | ⏳ 回填 | canonical/actual 计数如实回填（0.87 期 846/970——窗口载荷自然增长预期） |
-| 8 | `archguard-ratchet`（R1~R7） | ⏳ 回填——**见专席④** | 6F 存量 baseline regen 归发布窗（M-2 sanctioned）；R5 期望 97/97（registry 96→97——FIX-383 收口） |
-| 9 | contract-matrix | ⏳ 回填 | 期望 zero drift；cli_dispatch **97 键**（FIX-383 registry 收口 + contract-matrix 指令化再生——DEC-239⑥） |
-| 10 | `release-ledger --version 0.88.0 --no-remote` | ⏳ 回填（预期 FAIL——预提交态） | `core/releases/0.88.0.json` 未创建（Coordinator M-5 提交批义务——披露①）；manifest 创建+提交后复跑（期望 NATIVE_CANDIDATE PASS） |
-| 11 | 全量测试套件（**M-2 一次预算**） | ⏳ 回填 | version-plan §3 条 1：全量只在 M-2 是正常路径预算非免检许可——M-3 修改可执行代码须退回验证评估（必要时重跑）；最终门禁绑定实际发布提交 |
-| 12 | **组合测试集四条**（F-5 兑现） | ⏳ 回填 | ①guard 台账损坏→FEAT-060 恢复腿 × FEAT-061 切换窗口共存（崩溃注入交错）②FEAT-064 BLOCK 激活后 FEAT-061 迁移路径全部走写入器（零手工写入）③write-guard 基线更新 × decision-append 投影失败恢复的交互（B-12/B-13 回退联动）④closure 取消（FEAT-062）期间 locks-release 与 guard 消费权并发——「禁全量」不得退化为「只测单票」（version-plan §3 条 2） |
-| 13 | **FEAT-061 独立证明包门** | ⏳ 回填 | M-2 必查席：固定源 commit 摘要 / 冻结窗完整性双向摘要复核 / 独立性操作化三条（旧 md 解析器裁决、切换前校验器、独立性声明必填节）/ 记录级比对 / 故障注入 / 回退演练含迁移后新增行 / 绑定发布提交（version-plan §3 条 3） |
-| 14 | e2e / dsh 隔离冒烟 | ⏳ 回填 | e2e-check 全 pass 期望；check-dsh-preset-smoke：isolated preset-session smoke PASSED、real-home writes: 0——**隔离环境安装冒烟（环境变量重定向至临时目录）通过**口径 |
-| 15 | check-release 复合门禁（candidate） | ⏳ Coordinator 提交批义务 | 依赖 `core/releases/0.88.0.json` 在场 + 安静窗；manifest 创建后随提交批执行（SPG_RELEASE_GATE_TIMEOUT=600） |
-| 16 | `check-loop-runtime-claims`（LRC gate） | ⏳ 回填——**见专席③** | 预算 361,923 不变复算；M-0 期实测 305,604 余量 56,319；本版治理记录增量可观——越线则按 FIX-369 公式重定标（非豁免） |
-| 17 | **Check 28s evidence-log 复测**（F-6） | ⏳ 回填 | M-8 归档后 28s 复测消解有效性确认（现值 1,620KB——0.87 M-8 归档后仍 1620KB 先例警示；version-plan §3b） |
-| 18 | M-2 revert 干跑（回滚演练） | **未排程（如实标注——0.85.0/0.86.0/0.87.0 同型）** | 回滚区间结构核对（单轨 29 提交+两段论证）已入 rollback-plan §区间锚定；补演练 = M-3 审查裁决项 |
-| 19 | execution packets 面（F-4） | ⏳ 回填 | FEAT-060/061 执行包 18d~18i 占位 M-2 门禁前全绿确认；FEAT-064/062 派发前补建包在场确认（version-plan §4 执行包契约义务） |
+| 1 | `verify` 全量 | ✅ **PASSED**（2026-09-25 M-2 实测，exit 0） | 唯一 WARN = plan-tracker 过渡态（预期——M-8 收口）；REQ-092 披露面见专席② |
+| 2 | `check-version-consistency` | ✅ **PASSED**（M-2/M-3 复跑） | source=0.88.0；双入口 marker 0.88.0；1 WARN=plan-tracker 过渡态（M-8） |
+| 3 | `check-injection-budget`（×3 profile） | ✅ PASS（M-2 实测随 verify 全量） | 三 profile 逐位在预算内；skill 层 16,000 内 |
+| 4 | `check-projection-sync --fail-on-issues` + `check-entry-bootstrap-sync` | ✅ PASS | 28 mirrors + entry 双根全绿（M-1 一次收敛幂等确认） |
+| 5 | `release-projection`（check-only） | ✅ PASS | state=PASS / 0.88.0 / 28/28 / issues=[]（M-1+M-3 两轮确认） |
+| 6 | `check-cross-references` | ✅ **PASS（727 refs）** | 0 dangling / 0 deprecated / 0 circular（四件套+CHANGELOG+载荷全窗口落盘后） |
+| 7 | `check-manifest-consistency` | ⚠️ advisory（894/1033） | 唯一 UNTRACKED=根 changelog.md——M-3 裁决 canonical=project/；M-5 批入 manifest 收口 |
+| 8 | `archguard-ratchet`（R1~R7） | ✅ **REGENERATED**（sanctioned——专席④） | 锚 25462→26193 @a8a72a3；R4 print 1316→1318；R5 97/97；冻结测试同步再基线（38P 全绿） |
+| 9 | contract-matrix | ✅ PASS | zero drift；cli_dispatch 97 键（DEC-239⑥ 收口确认） |
+| 10 | `release-ledger --version 0.88.0 --no-remote` | ✅ FAIL 实测（预期——预提交态，M-3 R0 五维度④核验）→ **M-5 批：manifest 创建后复跑** | `core/releases/0.88.0.json` Coordinator M-5 提交批义务（披露①）；期望 NATIVE_CANDIDATE PASS |
+| 11 | 全量测试套件（M-2 一次预算） | ✅ **4119P / 1S / 0F**（exit 0，21:45）——**历史首次全绿** | 4108 基线 + REL-089 +11；HotFactSource 族随 0.88.0 bump 消解；最终门禁绑定实际发布提交（M-6 复验） |
+| 12 | **组合测试集四条**（F-5 兑现） | ✅ ②④ 已实测（FEAT-064/062 票内交付）；①③ 归 cutover 授权票（DEC-239⑦ 落字——五面一致链经 M-3 CODE 半面复核） | ①guard×migration 共存 ②BLOCK 激活后全走写入器（实测）③基线×投影失败恢复 ④closure 取消×locks-release 并发（实测） |
+| 13 | **FEAT-061 独立证明包门** | ✅ 七要素齐备（feat061-rehearsal-result.json 179 行真实数据：verify+reverse+字节回环全 PASS；审查 R1 AWN/0 复核） | 绑定发布提交=M-5/M-6 义务（manifest+tip 后复验） |
+| 14 | e2e / dsh 隔离冒烟 | ✅ e2e-check 全 pass；**隔离环境安装冒烟（环境变量重定向至临时目录）通过**；real-home writes: 0 | check-release 内嵌 e2e PASS（M-2 实测） |
+| 15 | check-release 复合门禁（candidate） | ⏳ **M-5 批执行**（依赖 manifest 在场——SPG_RELEASE_GATE_TIMEOUT=600） | M-2 期实测 FAILED-2（governance health 74→36 已知披露面收敛+unit tests 引用形态）→ manifest 后复跑期望 FAILED-1 内 |
+| 16 | `check-loop-runtime-claims`（LRC gate） | ✅ **PASS（semantic+identity 双 PASS）** | 999 candidates / parsed / skip=0 / truncate=0；预算 361,923（M-0 实测 305,604 余量 56,319 未越线——无重定标义务） |
+| 17 | **Check 28s evidence-log 复测**（F-6） | ⚠️ ERROR 维持（1,735,257B > 250,000B）——已知披露面（FIX-349⑤ 评估：引擎行为正确维持披露口径） | M-8 归档后复测消解有效性确认（0.87 先例 1620KB 警示——如实回填） |
+| 18 | M-2 revert 干跑（回滚演练） | **未排程维持**（三版先例同型）——M-3 发布半面裁决：不排程不阻断（tip 未定先干跑无意义）；**REL-089 补强**：rollback §8 两路径+回退前四步+回退后四验证已实测可执行（0.87 视角 11 用例） | §8 落位=实质回滚就绪增强（M-3 R0/R3 复核通过） |
+| 19 | execution packets 面（F-4） | ✅ **7 包全绿**（18c ready 7/7 + 18d~18i 全 PASS——M-3 R1→R3 收口：28 行合同 FAIL 清零+TO_BE_DEFINED 203→0） | 补包 ×3（REL-087/088/089）+ 五类合同字段按票面事实填写（R3 终审 AWN/0） |
 
 ### 专席① —— Check 10 修复验证（FIX-348 白名单面）
 

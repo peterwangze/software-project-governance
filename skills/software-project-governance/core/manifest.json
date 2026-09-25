@@ -86,6 +86,7 @@
       "package.json",
       "pyproject.toml",
       "LICENSE",
+      "changelog.md",
       "cordis.patch.yml"
     ],
     "directories": []

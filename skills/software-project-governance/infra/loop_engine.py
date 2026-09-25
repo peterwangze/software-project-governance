@@ -21,6 +21,15 @@ Two additive slices live in this module:
     (``_vw()`` pattern, same as loop_health.py). Load-bearing invariant:
     ``no_global_stage: True`` is ALWAYS set — the result contains no field
     that collapses multiple units into one stage.
+  - **FEAT-044 (0.88.0 slice E3)** — subagent round budget + heartbeat
+    reporting + interrupt-recovery productization. Adds
+    :func:`resolve_round_budget` (parametrized per-round length/cost budgets),
+    :func:`evaluate_round_budget`, :func:`heartbeat_should_fire`,
+    :func:`heartbeat_payload` (the N-idle-rounds REPORT), and
+    :func:`interrupt_recovery_payload` (the productized FIX-357/359 recovery
+    move: interrupt + minimal instruction injection). All PURE; all
+    REPORT-only — nothing here terminates an execution body (FEAT-063
+    alignment: a heartbeat is not a stop proof).
 
 **Why a separate module (not folded into verify_workflow.py):**
 
@@ -67,10 +76,25 @@ Usage:
         payload = escalation_payload(
             "game.chapter.03", "inner", verdict["current_round"], "BLOCKED", verdict["max_rounds"]
         )
+
+    # FEAT-044 additions (0.88.0 E3):
+    from loop_engine import (
+        resolve_round_budget, evaluate_round_budget, heartbeat_should_fire,
+        heartbeat_payload, interrupt_recovery_payload,
+    )
+
+    budget, budget_issues = resolve_round_budget("inner", overrides={"max_idle_rounds": 3})
+    round_verdict = evaluate_round_budget(budget, steps_used=15, idle_rounds=3)
+    if round_verdict["heartbeat_due"]:
+        report = heartbeat_payload("unit.x", "inner", idle_rounds=3, budget=budget)
+        recovery = interrupt_recovery_payload(
+            "unit.x", "inner", reason="heartbeat", idle_rounds=3
+        )
 """
 
 import json
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 # ─── Fixed anchors ─────────────────────────────────────────────
@@ -481,6 +505,408 @@ def activate_loop_state(
 
     base["loop_state"] = new_loop_state
     return base
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# FEAT-044 — 0.88.0 slice E3: subagent round budget + heartbeat reporting +
+# interrupt-recovery productization.
+#
+# Empirical grounding (EVD-1101① "round delay tax" / plan-tracker candidate
+# row): in FIX-357 the Developer subagent's return channel stalled ~15 rounds
+# (work was on disk; two interrupts were needed to extract it) and in FIX-359
+# the Reviewer ran 16 rounds — governance quality was real but latency
+# multiplied 3-5x. This slice productizes the countermeasures as PURE
+# functions (same discipline as FX-189): parametrized per-round budgets, an
+# N-idle-rounds heartbeat REPORT, and the interrupt + minimal-instruction
+# recovery payload.
+#
+# LOAD-BEARING SEMANTIC ALIGNMENT (FEAT-063, version-plan-0.88.0 E2): a
+# heartbeat — and any budget breach — is a REPORT, never a stop proof. Nothing
+# here terminates, kills, or withdraws an execution body; the
+# interrupt/escalate decision stays with the Coordinator/scheduler (and with
+# the tier fuse's human-arbitration path, PP-Fuse-Escalate). FEAT-044 is the
+# reporting half; FEAT-063's takeover/fencing consumes the same reports.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Heartbeat threshold N (default): consecutive artifact-less rounds before the
+# execution body owes the Coordinator/scheduler a heartbeat REPORT.
+# Provenance: FIX-357 (~15-round stall) / FIX-359 (16 rounds) — N=3 surfaces
+# such stalls at roughly one fifth of the observed waiting tax while staying
+# above single-round noise.
+HEARTBEAT_IDLE_ROUNDS_DEFAULT = 3
+
+# The explicit over-budget behavior (hard gate: 超预算行为明确). Advisory by
+# design — it RECOMMENDS interrupt-recovery, it never auto-terminates.
+OVER_BUDGET_ACTION = "report_heartbeat_recommend_interrupt_recovery"
+
+# Default per-round budget (parametrization baseline). ``max_steps_per_round``
+# and ``max_minutes_per_round`` are the two dispatch-facing length/cost
+# dimensions; their values are PROVISIONAL initial thresholds — no measured
+# in-repo baseline exists yet (W-3 provenance discipline: re-derive from
+# measured data before relying on them for enforcement). Every value is
+# overridable per call (:func:`resolve_round_budget`) and per tier via the
+# registry fuse's optional ``round_budget`` key.
+DEFAULT_ROUND_BUDGET = {
+    "max_idle_rounds": HEARTBEAT_IDLE_ROUNDS_DEFAULT,
+    "max_steps_per_round": 12,
+    "max_minutes_per_round": 30,
+    "over_budget_action": OVER_BUDGET_ACTION,
+}
+
+_BUDGET_INT_KEYS = ("max_idle_rounds", "max_steps_per_round", "max_minutes_per_round")
+_BUDGET_ACTION_KEY = "over_budget_action"
+
+
+@dataclass(frozen=True)
+class RoundBudget:
+    """A resolved per-round budget for a subagent execution body (FEAT-044).
+
+    Attributes:
+        tier: the loop tier this budget was resolved for (or ``None``).
+        max_idle_rounds: N — consecutive artifact-less rounds that trigger a
+            heartbeat REPORT (see :func:`heartbeat_should_fire`).
+        max_steps_per_round: per-round length budget in steps (provisional
+            default; parametrized).
+        max_minutes_per_round: per-round wall-clock budget in minutes
+            (provisional default; parametrized).
+        over_budget_action: the explicit over-budget behavior string
+            (advisory recommendation; never an auto-termination).
+        source: provenance marker — which layer last contributed values:
+            ``"defaults"`` | ``"registry"`` | ``"overrides"`` (W-3 lesson:
+            numeric gates carry their provenance).
+    """
+
+    tier: object
+    max_idle_rounds: int
+    max_steps_per_round: int
+    max_minutes_per_round: int
+    over_budget_action: str
+    source: str
+
+
+def _usable_int(value):
+    """Return True for a usable budget/usage integer (int, not bool)."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _validate_budget_patch(patch, issues, source_label):
+    """Validate one budget patch dict; return the valid subset (fail-closed).
+
+    Invalid keys keep their default (the caller merges only the returned
+    subset) and append an issue line — never raise, never guess.
+    """
+    if patch is None:
+        return {}
+    if not isinstance(patch, dict):
+        issues.append("{0}: round budget patch is not a dict — ignored".format(source_label))
+        return {}
+    valid = {}
+    for key, value in patch.items():
+        if key in _BUDGET_INT_KEYS:
+            if _usable_int(value) and value >= 1:
+                valid[key] = value
+            else:
+                issues.append(
+                    "{0}: {1} must be an integer >= 1 (got {2!r}) — default kept".format(
+                        source_label, key, value
+                    )
+                )
+        elif key == _BUDGET_ACTION_KEY:
+            if isinstance(value, str) and value.strip():
+                valid[key] = value
+            else:
+                issues.append(
+                    "{0}: {1} must be a non-empty string (got {2!r}) — default kept".format(
+                        source_label, key, value
+                    )
+                )
+        else:
+            issues.append(
+                "{0}: unknown round-budget key {1!r} ignored".format(source_label, key)
+            )
+    return valid
+
+
+def resolve_round_budget(tier=None, *, overrides=None, plugin_home=None):
+    """Resolve the per-round budget parameters for a subagent execution body.
+
+    FEAT-044 (0.88.0 E3). Parametrization precedence (lowest → highest):
+
+      1. Module defaults (:data:`DEFAULT_ROUND_BUDGET`).
+      2. The tier fuse entry's optional ``round_budget`` key in
+         ``core/loop-engineering-registry.json`` (ADDITIVE read — the shipped
+         registry carries no such key today; this is a forward-compatible
+         config surface, the registry file itself is untouched).
+      3. Explicit ``overrides`` (highest; per-call configurability).
+
+    Fail-closed per key: an invalid value keeps the default and appends an
+    issue line; this function NEVER raises. ``tier=None`` skips the registry
+    layer entirely.
+
+    Returns:
+        ``(RoundBudget, issues_list)`` — the same ``(data, issues)`` contract
+        as :func:`load_loop_registry`.
+
+    Args:
+        tier: loop tier (``setup|inner|middle|outer``) or ``None``.
+        overrides: optional dict of budget overrides (validated per key).
+        plugin_home: optional plugin-home override forwarded to the registry.
+    """
+    issues = []
+    merged = dict(DEFAULT_ROUND_BUDGET)
+    source = "defaults"
+
+    if tier is not None:
+        fuse_id = _tier_to_fuse_id(tier)
+        fuse = get_fuse(fuse_id, plugin_home)
+        if isinstance(fuse, dict):
+            patch = _validate_budget_patch(
+                fuse.get("round_budget"), issues, "registry {0}".format(fuse_id)
+            )
+            if patch:
+                merged.update(patch)
+                source = "registry"
+        else:
+            issues.append(
+                "registry fuse {0} not found — budget resolved from "
+                "defaults/overrides only".format(fuse_id)
+            )
+
+    patch = _validate_budget_patch(overrides, issues, "overrides")
+    if patch:
+        merged.update(patch)
+        source = "overrides"
+
+    budget = RoundBudget(
+        tier=tier,
+        max_idle_rounds=merged["max_idle_rounds"],
+        max_steps_per_round=merged["max_steps_per_round"],
+        max_minutes_per_round=merged["max_minutes_per_round"],
+        over_budget_action=merged["over_budget_action"],
+        source=source,
+    )
+    return budget, issues
+
+
+def evaluate_round_budget(budget, *, steps_used=None, minutes_used=None, idle_rounds=None):
+    """Evaluate one round's usage facts against a :class:`RoundBudget` (PURE).
+
+    Honesty contract (mirrors loop_telemetry): a dimension with a configured
+    limit but NO usable fact is reported in ``not_measured`` — never assumed
+    to be zero, never fabricated. ``heartbeat_due`` fires when
+    ``idle_rounds >= budget.max_idle_rounds`` and is a REPORT trigger, not a
+    termination (FEAT-063: a heartbeat is not a stop proof).
+
+    Args:
+        budget: a :class:`RoundBudget`.
+        steps_used: measured steps consumed by the round (or ``None`` when
+            not measured).
+        minutes_used: measured wall-clock minutes of the round (or ``None``).
+        idle_rounds: consecutive artifact-less rounds reported by the
+            execution body (or ``None`` when not measured).
+
+    Returns:
+        dict with keys:
+          - ``within_budget``: bool — True when no measured breach exists.
+          - ``breaches``: list of ``{"dimension", "limit", "actual"}``.
+          - ``not_measured``: list of dimension names lacking a usable fact.
+          - ``heartbeat_due``: bool.
+          - ``over_budget_action``: the budget's explicit action string.
+          - ``note``: the non-termination marker (FEAT-063 alignment).
+          - ``issues``: per-fact validation notes (never raises).
+    """
+    issues = []
+    checks = (
+        ("steps", budget.max_steps_per_round, steps_used),
+        ("minutes", budget.max_minutes_per_round, minutes_used),
+    )
+    breaches = []
+    not_measured = []
+    for name, limit, actual in checks:
+        if not _usable_int(actual):
+            not_measured.append(name)
+            if actual is not None:
+                issues.append(
+                    "{0} usage fact {1!r} is not a usable integer — "
+                    "treated as not measured".format(name, actual)
+                )
+        elif actual > limit:
+            breaches.append({"dimension": name, "limit": limit, "actual": actual})
+
+    heartbeat_due = False
+    if not _usable_int(idle_rounds):
+        if idle_rounds is not None:
+            issues.append(
+                "idle_rounds fact {0!r} is not a usable integer — "
+                "heartbeat not evaluated".format(idle_rounds)
+            )
+    else:
+        heartbeat_due = idle_rounds >= budget.max_idle_rounds
+
+    return {
+        "within_budget": not breaches,
+        "breaches": breaches,
+        "not_measured": not_measured,
+        "heartbeat_due": heartbeat_due,
+        "over_budget_action": budget.over_budget_action,
+        "note": (
+            "budget evaluation is advisory: an over-budget or heartbeat-due "
+            "round RECOMMENDS interrupt-recovery; nothing is auto-terminated "
+            "(FEAT-063: a heartbeat/timeout is not a stop proof)"
+        ),
+        "issues": issues,
+    }
+
+
+def heartbeat_should_fire(budget, idle_rounds):
+    """PURE predicate: does an N-rounds-without-artifact heartbeat fire?
+
+    Fires iff ``idle_rounds`` is a usable integer and
+    ``idle_rounds >= budget.max_idle_rounds``. Invalid facts NEVER fire
+    (no fabricated heartbeats).
+    """
+    if not isinstance(budget, RoundBudget) or not _usable_int(idle_rounds):
+        return False
+    return idle_rounds >= budget.max_idle_rounds
+
+
+def heartbeat_payload(unit_id, tier, *, idle_rounds, current_round=None,
+                      last_artifact_ref=None, budget=None):
+    """Build the heartbeat REPORT payload (FEAT-044 — 上报，不是判死).
+
+    The report is what the Coordinator/scheduler SEES instead of dead-waiting:
+    it carries the idle-rounds fact, the threshold it crossed, the last
+    artifact anchor (evidence), and the recommended next action. It is a
+    report ONLY — ``stop_proof`` is always False (FEAT-063: 心跳超时不构成
+    停止证明); termination decisions stay with the Coordinator/scheduler.
+
+    Args:
+        unit_id: the flow unit / task the execution body is working.
+        tier: loop tier of the execution body.
+        idle_rounds: consecutive artifact-less rounds (caller-reported fact).
+        current_round: current loop round, when known (evidence context).
+        last_artifact_ref: reference to the last produced artifact (evidence
+            anchor; ``None`` → the report records the gap itself).
+        budget: optional :class:`RoundBudget`; without one the module default
+            threshold applies.
+
+    Returns:
+        A JSON-serializable dict (``kind="round_heartbeat_report"``).
+    """
+    if isinstance(budget, RoundBudget):
+        threshold = budget.max_idle_rounds
+    else:
+        threshold = HEARTBEAT_IDLE_ROUNDS_DEFAULT
+    fires = _usable_int(idle_rounds) and idle_rounds >= threshold
+    if last_artifact_ref is None:
+        evidence_basis = (
+            "idle_rounds reported by the execution body; no artifact anchor "
+            "provided — the report itself records the artifact gap"
+        )
+    else:
+        evidence_basis = (
+            "idle_rounds reported by the execution body; last artifact "
+            "anchor: {0}".format(last_artifact_ref)
+        )
+    return {
+        "kind": "round_heartbeat_report",
+        "unit_id": unit_id,
+        "tier": tier,
+        "current_round": current_round,
+        "idle_rounds": idle_rounds,
+        "idle_threshold": threshold,
+        "fires": bool(fires),
+        "last_artifact_ref": last_artifact_ref,
+        "evidence_basis": evidence_basis,
+        "stop_proof": False,
+        "stop_proof_basis": (
+            "FEAT-063 alignment: a heartbeat (and its threshold crossing) is "
+            "NOT a stop proof — report only; termination/withdrawal decisions "
+            "stay with the Coordinator/scheduler"
+        ),
+        "recommended_action": OVER_BUDGET_ACTION,
+    }
+
+
+def interrupt_recovery_payload(unit_id, tier, *, reason, idle_rounds=None,
+                               current_round=None, last_artifact_ref=None,
+                               budget=None):
+    """Build the productized interrupt + minimal-instruction recovery payload.
+
+    FEAT-044 productizes the recovery move that empirically worked in
+    FIX-357/359 (EVD-1101①): interrupt the stalled execution body, then inject
+    a MINIMAL instruction that makes it continue — no re-planning, no scope
+    expansion, exactly a three-part status return followed by continuing the
+    current step. The scheduler/host performs the actual interrupt (this
+    module is pure and side-effect free); this payload is the mechanism's
+    output: the injection text plus the expected response shape so the
+    Coordinator can verify the recovery.
+
+    Args:
+        unit_id: the flow unit / task the execution body is working.
+        tier: loop tier of the execution body.
+        reason: short interrupt reason (e.g. ``"heartbeat"`` or a budget
+            breach summary).
+        idle_rounds: idle-rounds fact, when known (bound into the text).
+        current_round: current loop round, when known.
+        last_artifact_ref: last artifact anchor, when known (``None`` → the
+            instruction states the artifact gap).
+        budget: optional :class:`RoundBudget` (currently unused for the text;
+            accepted for API symmetry and future bounding).
+
+    Returns:
+        A JSON-serializable dict (``kind="interrupt_recovery"``) with:
+          - ``minimal_instruction``: the fact-bound injection text.
+          - ``expected_response_shape``: the three-part return the Coordinator
+            verifies.
+          - ``escalation_note``: interrupt loops are BOUNDED — a recovery turn
+            that is itself idle for the threshold escalates via the tier fuse
+            path (PP-Fuse-Escalate), it is not interrupted again forever.
+          - ``stop_proof``: always False (FEAT-063 alignment).
+          - ``productized_from``: the empirical provenance (FIX-357/359).
+    """
+    if _usable_int(idle_rounds):
+        idle_txt = str(idle_rounds)
+    else:
+        idle_txt = "an unknown number of"
+    anchor_txt = (
+        str(last_artifact_ref) if last_artifact_ref is not None
+        else "none reported (artifact gap)"
+    )
+    minimal_instruction = (
+        "[interrupt-recovery] Interrupted after {idle} round(s) without an "
+        "artifact. Do NOT re-plan and do NOT expand scope. In your next turn "
+        "return exactly three things: (1) the artifact or concrete progress "
+        "produced so far for unit {uid} (last artifact anchor: {anchor}); "
+        "(2) the single blocker, if any; (3) the one next action to finish "
+        "the current step. Then continue the current step only."
+    ).format(idle=idle_txt, uid=unit_id, anchor=anchor_txt)
+    return {
+        "kind": "interrupt_recovery",
+        "unit_id": unit_id,
+        "tier": tier,
+        "reason": reason,
+        "idle_rounds": idle_rounds,
+        "current_round": current_round,
+        "last_artifact_ref": last_artifact_ref,
+        "minimal_instruction": minimal_instruction,
+        "expected_response_shape": {
+            "artifact_or_progress": "string",
+            "blocker": "string or null",
+            "next_action": "string",
+        },
+        "escalation_note": (
+            "Interrupt loops are bounded: if the recovery turn is itself idle "
+            "for the tier's heartbeat threshold again, escalate via the tier "
+            "fuse path (PP-Fuse-Escalate) instead of interrupting forever."
+        ),
+        "stop_proof": False,
+        "productized_from": (
+            "FIX-357/359 empirically validated recovery move (EVD-1101① "
+            "round delay tax): interrupt the stalled body, inject a minimal "
+            "continue instruction"
+        ),
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════════

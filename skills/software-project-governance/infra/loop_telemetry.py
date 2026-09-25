@@ -39,6 +39,23 @@ whole-software-project DORA report and do not claim the loop engine is
 production-ready. RISK-037/RISK-042 remain open (external validation is
 VAL-008/009).
 
+**FEAT-044 (0.88.0 slice E3) — round-stall (waiting-tax) observability:**
+:func:`compute_stall_report` is the telemetry counterpart of the FEAT-044
+engine mechanisms (``loop_engine.resolve_round_budget`` /
+``heartbeat_should_fire`` / ``interrupt_recovery_payload``). It measures, per
+unit, how many CLOSED rounds (anchor intervals — the same anchoring as the
+cycle-time metric) contain no artifact-type event (default: ``gate_result``,
+the only non-terminal substantive outcome type in the closed event enum) and
+reports the trailing/max idle streaks plus the ``suspects`` whose trailing
+streak reached the heartbeat threshold. Empirical grounding: FIX-357 (~15-round
+Dev stall) / FIX-359 (16 rounds) — EVD-1101① "round delay tax". Honesty
+boundary (FEAT-063 alignment): idle streaks are ATTENTION signals for
+heartbeat reporting — NOT stop proofs; a silent stall (no new anchors at all)
+is visible only as ``last_anchor_ts`` staleness, which needs the caller's
+wall clock to judge (purity forbids this module from using one). Same purity
+contract as :func:`compute_metrics` (no I/O, no ``datetime.now()``, no module
+state).
+
 This module imports only stdlib at module top level. It depends on
 ``loop_event_log`` solely for the *event shape* (it never calls its functions in
 the pure path). It does NOT import ``loop_paro_engine`` /
@@ -53,13 +70,19 @@ Usage::
     report = compute_metrics(events, window="30d")
     for name, mv in report.dora.items():
         print(name, mv.status, mv.value, mv.reason)
+
+    # FEAT-044 (0.88.0 E3): waiting-tax view for heartbeat reporting.
+    from loop_telemetry import compute_stall_report
+    stalls = compute_stall_report(events, idle_threshold=3)
+    for uid in stalls.suspects:
+        print(uid, stalls.units[uid]["idle_streak_trailing"])
 """
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 
-__version__ = "0.69.0"
+__version__ = "0.88.0"  # FEAT-044 (0.88.0 E3) added compute_stall_report; tracks the last slice that changed this module
 
 # The no-overclaim boundary carried on every report (ADR-015 §6.1 scope_note).
 SCOPE_NOTE = (
@@ -179,6 +202,11 @@ __all__ = [
     "MetricsReport",
     "compute_metrics",
     "SCOPE_NOTE",
+    "StallReport",
+    "compute_stall_report",
+    "DEFAULT_ARTIFACT_EVENT_TYPES",
+    "DEFAULT_IDLE_THRESHOLD",
+    "STALL_SCOPE_NOTE",
 ]
 
 
@@ -817,6 +845,238 @@ def compute_metrics(events, *, window=None):
         event_count=len(kept),
         diagnostics=diagnostics,
         scope_note=SCOPE_NOTE,
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# FEAT-044 (0.88.0 E3) — round-stall (waiting-tax) observability
+#
+# The telemetry counterpart of the FEAT-044 engine mechanisms in
+# loop_engine.py (round budget / heartbeat / interrupt-recovery). Pure, same
+# contract as compute_metrics above: no I/O, no wall-clock, no module state.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# The default artifact event types: a closed round counts as ARTIFACT-BEARING
+# when it contains >=1 event of one of these types. Default = ``gate_result``:
+# the only non-terminal substantive outcome type in the closed 14-type event
+# enum (a gate judgment ON produced work). Callers may widen/narrow the set —
+# it is a parameter, not a hardcode.
+DEFAULT_ARTIFACT_EVENT_TYPES = frozenset({"gate_result"})
+
+# Default heartbeat threshold N (trailing artifact-less rounds that flag a
+# unit as a stall suspect). Deliberate MIRROR of
+# loop_engine.HEARTBEAT_IDLE_ROUNDS_DEFAULT — duplicated, not imported, to
+# preserve the telemetry-is-a-consumer, stdlib-only-import contract (ADR-015
+# §6.4); the equality is pinned by a test in tests/test_loop_telemetry.py.
+# Provenance: FIX-357 (~15-round stall) / FIX-359 (16 rounds) — EVD-1101①.
+DEFAULT_IDLE_THRESHOLD = 3
+
+# The no-overclaim boundary carried on every stall report (FEAT-063 aligned).
+STALL_SCOPE_NOTE = (
+    "Round-stall (waiting-tax) observability computed from "
+    "loop-event-log.jsonl. A round is one anchor interval "
+    "(phase_enter/back_edge); a CLOSED round is artifact-bearing when it "
+    "contains an artifact-type event (default: gate_result). Idle streaks "
+    "are ATTENTION signals for heartbeat reporting - they are NOT stop proofs "
+    "(FEAT-063) and do NOT claim an execution body is dead: a silent stall "
+    "(no new anchors at all) is visible only as last_anchor_ts staleness, "
+    "which needs the caller's wall clock to judge. Describes what the event "
+    "log records; does NOT claim the loop engine is production-ready. "
+    "RISK-037/042 remain open."
+)
+
+# Round anchors — the same events _cycle_times_for_unit anchors rounds on.
+_STALL_ROUND_ANCHORS = frozenset({"phase_enter", "back_edge"})
+
+
+@dataclass(frozen=True)
+class StallReport:
+    """The per-unit round-stall (waiting-tax) report (FEAT-044).
+
+    Attributes:
+        window: the window label (mirrors :class:`MetricsReport`).
+        computed_at: ISO-8601 UTC — the latest parseable event timestamp in
+            the windowed input (deterministic; never wall-clock).
+        status: ``"measured"`` when at least one unit contributed; else
+            ``"unknown"`` (with ``reason``) — never a fabricated empty truth.
+        reason: empty when measured; explains the missing data when unknown.
+        idle_threshold: the effective heartbeat threshold N used for
+            ``suspects``.
+        artifact_event_types: the effective artifact-type set (sorted tuple).
+        units: ``{unit_id: {...}}`` per-unit facts — ``rounds_total``,
+            ``artifact_rounds``, ``artifactless_rounds``,
+            ``idle_streak_max``, ``idle_streak_trailing``,
+            ``last_anchor_ts``, ``last_artifact_ts``.
+        suspects: sorted unit ids whose ``idle_streak_trailing`` reached the
+            threshold — heartbeat-attention candidates, NOT stop proofs.
+        units_considered: distinct non-empty unit ids in the windowed set.
+        events_considered: number of events in the windowed set.
+        malformed_timestamps: events skipped for unparseable timestamps
+            (counted pre-window, same convention as :func:`compute_metrics`).
+        scope_note: the no-overclaim boundary string.
+    """
+
+    window: str
+    computed_at: str
+    status: str  # "measured" | "unknown"
+    reason: str
+    idle_threshold: int
+    artifact_event_types: tuple
+    units: dict
+    suspects: tuple
+    units_considered: int
+    events_considered: int
+    malformed_timestamps: int
+    scope_note: str
+
+
+def _effective_artifact_types(artifact_event_types):
+    """Resolve the caller's artifact-type set (tolerant, never raises).
+
+    ``None`` → :data:`DEFAULT_ARTIFACT_EVENT_TYPES`. A bare string is treated
+    as a single type (iterating a raw string would explode it into
+    characters). Any other iterable contributes its str members — an
+    explicitly empty iterable is honored (nothing counts as an artifact).
+    Garbage input falls back to the default.
+    """
+    if artifact_event_types is None:
+        return DEFAULT_ARTIFACT_EVENT_TYPES
+    if isinstance(artifact_event_types, str):
+        return frozenset({artifact_event_types})
+    try:
+        members = {item for item in artifact_event_types if isinstance(item, str)}
+    except TypeError:
+        return DEFAULT_ARTIFACT_EVENT_TYPES
+    return frozenset(members)
+
+
+def _effective_idle_threshold(idle_threshold):
+    """Resolve the heartbeat threshold (int >= 1; garbage → default)."""
+    if isinstance(idle_threshold, int) and not isinstance(idle_threshold, bool) \
+            and idle_threshold >= 1:
+        return idle_threshold
+    return DEFAULT_IDLE_THRESHOLD
+
+
+def compute_stall_report(events, *, artifact_event_types=None,
+                         idle_threshold=None, window=None):
+    """PURE: measure per-unit round-stall (waiting-tax) facts (FEAT-044).
+
+    A unit's rounds are anchored exactly like the cycle-time metric
+    (:func:`_cycle_times_for_unit`): ``phase_enter`` starts the first round,
+    each ``back_edge`` ends the previous round and starts the next. A CLOSED
+    round (a consecutive anchor pair) is artifact-bearing when at least one
+    event whose type is in ``artifact_event_types`` has a parseable timestamp
+    inside ``[start, end]`` (both ends inclusive — a gate_result stamped in
+    the same second as the closing anchor counts for that round). Streaks are
+    counted over CLOSED rounds only; a trailing anchor with no successor is
+    an OPEN round — the log alone cannot time it (purity: no wall-clock), so
+    it is surfaced via ``last_anchor_ts`` for the caller to judge.
+
+    Args:
+        events: list of event dicts (as returned by
+            :func:`loop_event_log.read_events`). Not read from files here.
+        artifact_event_types: ``None`` → :data:`DEFAULT_ARTIFACT_EVENT_TYPES`;
+            otherwise a type set (a bare string = one type). Parameterized.
+        idle_threshold: heartbeat threshold N; ``None``/garbage →
+            :data:`DEFAULT_IDLE_THRESHOLD` (mirrored from loop_engine).
+        window: ``None`` | trailing ``"7d"/"30d"/"90d"`` | explicit
+            ``(start_iso, end_iso)`` — same semantics as
+            :func:`compute_metrics`.
+
+    Returns:
+        :class:`StallReport`. Never raises — malformed events are counted in
+        ``malformed_timestamps`` and skipped; the same input always yields a
+        structurally equal report.
+    """
+    events_list = [ev for ev in list(events) if isinstance(ev, dict)]
+
+    malformed = 0
+    for ev in events_list:
+        if _parse_ts(ev.get("timestamp")) is None:
+            malformed += 1
+
+    kept, latest = _filter_window(events_list, window)
+    window_lbl = _window_label(window)
+    types = _effective_artifact_types(artifact_event_types)
+    threshold = _effective_idle_threshold(idle_threshold)
+
+    by_unit = _by_unit(kept)
+    units = {}
+    suspects = []
+    unit_count = 0
+    for uid, evs in by_unit.items():
+        if not uid:
+            continue
+        unit_count += 1
+        anchors = []
+        artifact_ts = []
+        for ev in evs:
+            et = ev.get("event_type")
+            ts = _parse_ts(ev.get("timestamp"))
+            if ts is None:
+                continue
+            if et in _STALL_ROUND_ANCHORS:
+                anchors.append(ts)
+            if et in types:
+                artifact_ts.append(ts)
+        rounds_total = 0
+        artifact_rounds = 0
+        streak_running = 0
+        streak_max = 0
+        for i in range(1, len(anchors)):
+            start = anchors[i - 1]
+            end = anchors[i]
+            rounds_total += 1
+            bearing = any(start <= a <= end for a in artifact_ts)
+            if bearing:
+                artifact_rounds += 1
+                streak_running = 0
+            else:
+                streak_running += 1
+                if streak_running > streak_max:
+                    streak_max = streak_running
+        units[uid] = {
+            "rounds_total": rounds_total,
+            "artifact_rounds": artifact_rounds,
+            "artifactless_rounds": rounds_total - artifact_rounds,
+            "idle_streak_max": streak_max,
+            "idle_streak_trailing": streak_running,
+            "last_anchor_ts": (
+                anchors[-1].strftime(_TS_FORMAT) if anchors else None
+            ),
+            "last_artifact_ts": (
+                max(artifact_ts).strftime(_TS_FORMAT) if artifact_ts else None
+            ),
+        }
+        if streak_running >= threshold:
+            suspects.append(uid)
+
+    if unit_count >= 1:
+        status = "measured"
+        reason = ""
+    else:
+        status = "unknown"
+        reason = "no units with events in window"
+
+    computed_at = (
+        latest.strftime(_TS_FORMAT) if latest is not None
+        else "1970-01-01T00:00:00Z"
+    )
+
+    return StallReport(
+        window=window_lbl,
+        computed_at=computed_at,
+        status=status,
+        reason=reason,
+        idle_threshold=threshold,
+        artifact_event_types=tuple(sorted(types)),
+        units=units,
+        suspects=tuple(sorted(suspects)),
+        units_considered=unit_count,
+        events_considered=len(kept),
+        malformed_timestamps=malformed,
+        scope_note=STALL_SCOPE_NOTE,
     )
 
 

@@ -14,6 +14,14 @@ both correctness AND the unknown-when-insufficient rule (AUDIT-133 / EVD-707):
     (the AUDIT-133-forbidden ``fuse_trips/total_loops`` proxy).
   - compute_metrics is PURE: no I/O, no ``datetime.now()``, deterministic.
 
+FEAT-044 (0.88.0 E3) adds the waiting-tax test pins: round-budget
+parametrization, the N-idle-rounds heartbeat report, the interrupt + minimal-
+instruction recovery payload (all in loop_engine.py), and the
+``compute_stall_report`` telemetry view — including the cross-module mirror
+guard (telemetry threshold == engine default) and the report→heartbeat→
+recovery pipeline. FEAT-063 alignment is pinned: heartbeats/streaks are
+reports, never stop proofs.
+
 Run:
     python -m pytest skills/software-project-governance/infra/tests/test_loop_telemetry.py -v
 """
@@ -34,6 +42,7 @@ if str(_INFRA_DIR) not in sys.path:
     sys.path.insert(0, str(_INFRA_DIR))
 
 import loop_telemetry as lt  # noqa: E402
+import loop_engine as le  # noqa: E402  (FEAT-044 engine mechanisms)
 import loop_event_log as elog  # noqa: E402
 
 
@@ -89,6 +98,29 @@ def _active_to_exit_unit(uid, start_ts, exit_ts, back_edges=0, day=23):
                       from_phase="reflect", to_phase="exit",
                       loop_count=back_edges))
     return events
+
+
+def _stall_unit(uid, day=23):
+    """FEAT-044 fixture — a unit whose rounds go quiet (the waiting tax).
+
+    Anchors: phase_enter @00:00, back_edge @01:00 / @02:00 / @03:00. Round 1
+    ([00:00, 01:00]) contains a gate_result @00:30 → artifact-bearing. Rounds
+    2 and 3 contain nothing but the closing anchors → artifact-less. No exit
+    event (the unit is mid-loop, stalled). With the default artifact set this
+    yields rounds_total=3, artifact_rounds=1, idle_streak_trailing=2.
+    """
+    return [
+        _ev(uid, "phase_enter", _ts(0, day=day), 0, None, to_phase="plan"),
+        _ev(uid, "gate_result", _ts(0, 30, day=day), 0, 0,
+            from_phase="reflect", to_phase=None,
+            payload={"gate_id": "G6", "gate_result": "NEEDS_CHANGE"}),
+        _ev(uid, "back_edge", _ts(1, day=day), 1, 0,
+            from_phase="reflect", to_phase="plan", loop_count=1),
+        _ev(uid, "back_edge", _ts(2, day=day), 2, 1,
+            from_phase="reflect", to_phase="plan", loop_count=2),
+        _ev(uid, "back_edge", _ts(3, day=day), 3, 2,
+            from_phase="reflect", to_phase="plan", loop_count=3),
+    ]
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -794,6 +826,402 @@ class LoopHealthTelemetryWiringTests(unittest.TestCase):
         self.assertEqual(tele["status"], "available")
         self.assertEqual(tele["dora"]["deployment_frequency"].status, "measured")
         self.assertEqual(tele["dora"]["deployment_frequency"].value, 1)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# FEAT-044 (0.88.0 E3) — test pins: round budget / heartbeat / interrupt-
+# recovery / stall telemetry. Acceptance: 回合预算参数化 + 心跳上报 + interrupt
+# 恢复产品化 + 遥测测试钉. FEAT-063 alignment is pinned throughout: heartbeats
+# and budget breaches are REPORTS, never stop proofs.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class RoundBudgetParametrizationTests(unittest.TestCase):
+    """回合预算参数化 — configurable budget + explicit over-budget behavior."""
+
+    def test_default_budget_shape_and_provenance(self):
+        budget, issues = le.resolve_round_budget("inner")
+        self.assertEqual(budget.max_idle_rounds, 3)
+        self.assertEqual(
+            budget.max_steps_per_round,
+            le.DEFAULT_ROUND_BUDGET["max_steps_per_round"])
+        self.assertEqual(
+            budget.max_minutes_per_round,
+            le.DEFAULT_ROUND_BUDGET["max_minutes_per_round"])
+        self.assertEqual(budget.over_budget_action, le.OVER_BUDGET_ACTION)
+        self.assertEqual(budget.tier, "inner")
+        # W-3 provenance: the source layer is recorded on the budget itself.
+        self.assertEqual(budget.source, "defaults")
+        self.assertEqual(issues, [])
+
+    def test_overrides_take_precedence(self):
+        budget, issues = le.resolve_round_budget(
+            "inner", overrides={"max_idle_rounds": 5, "max_steps_per_round": 7})
+        self.assertEqual(budget.max_idle_rounds, 5)
+        self.assertEqual(budget.max_steps_per_round, 7)
+        self.assertEqual(budget.source, "overrides")
+        self.assertEqual(issues, [])
+
+    def test_registry_round_budget_additive_read(self):
+        """A registry fuse's optional ``round_budget`` key is honored (additive).
+
+        The shipped registry carries no such key; this pins the forward-
+        compatible config surface without touching the registry file.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            core = root / "core"
+            core.mkdir(parents=True)
+            registry = {
+                "$schema": "x", "schema_version": "1.0",
+                "workflow_version": "0.65.0",
+                "loop_fuses": {
+                    "FUSE-INNER-DEFAULT": {
+                        "loop_tier": "inner", "max_rounds": 5,
+                        "escalation_exit": "askuser-escalation",
+                        "round_budget": {"max_idle_rounds": 2},
+                    },
+                },
+            }
+            (core / "loop-engineering-registry.json").write_text(
+                json.dumps(registry), encoding="utf-8")
+            budget, issues = le.resolve_round_budget("inner", plugin_home=str(root))
+        self.assertEqual(budget.max_idle_rounds, 2)
+        # Untouched keys stay at defaults (per-key merge, not whole-patch).
+        self.assertEqual(
+            budget.max_steps_per_round,
+            le.DEFAULT_ROUND_BUDGET["max_steps_per_round"])
+        self.assertEqual(budget.source, "registry")
+        self.assertEqual(issues, [])
+
+    def test_overrides_beat_registry(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            core = root / "core"
+            core.mkdir(parents=True)
+            registry = {
+                "$schema": "x", "schema_version": "1.0",
+                "loop_fuses": {
+                    "FUSE-INNER-DEFAULT": {
+                        "loop_tier": "inner", "max_rounds": 5,
+                        "round_budget": {"max_idle_rounds": 2},
+                    },
+                },
+            }
+            (core / "loop-engineering-registry.json").write_text(
+                json.dumps(registry), encoding="utf-8")
+            budget, _ = le.resolve_round_budget(
+                "inner", overrides={"max_idle_rounds": 6}, plugin_home=str(root))
+        self.assertEqual(budget.max_idle_rounds, 6)
+        self.assertEqual(budget.source, "overrides")
+
+    def test_invalid_values_fail_closed_to_defaults(self):
+        """Garbage budget values keep defaults + issue lines; NEVER raise."""
+        budget, issues = le.resolve_round_budget(
+            "inner",
+            overrides={"max_idle_rounds": 0, "max_steps_per_round": "many",
+                       "unknown_key": 1})
+        self.assertEqual(budget.max_idle_rounds, 3)
+        self.assertEqual(
+            budget.max_steps_per_round,
+            le.DEFAULT_ROUND_BUDGET["max_steps_per_round"])
+        self.assertEqual(budget.source, "defaults")
+        self.assertEqual(len(issues), 3)  # 0 → invalid; "many" → invalid; unknown key
+
+    def test_missing_registry_fuse_fail_closed(self):
+        """No registry → defaults + issue note; the resolver never raises."""
+        with tempfile.TemporaryDirectory() as td:
+            budget, issues = le.resolve_round_budget("inner", plugin_home=td)
+        self.assertEqual(budget.source, "defaults")
+        self.assertEqual(budget.max_idle_rounds, 3)
+        self.assertTrue(any("not found" in i for i in issues))
+
+    def test_tier_none_skips_registry_layer(self):
+        budget, issues = le.resolve_round_budget(None)
+        self.assertEqual(budget.tier, None)
+        self.assertEqual(budget.source, "defaults")
+        self.assertEqual(issues, [])
+
+    def test_evaluate_breaches_not_measured_and_heartbeat(self):
+        budget, _ = le.resolve_round_budget(
+            "inner", overrides={"max_idle_rounds": 3, "max_steps_per_round": 10,
+                                "max_minutes_per_round": 30})
+        v = le.evaluate_round_budget(budget, steps_used=15, minutes_used=None,
+                                     idle_rounds=3)
+        self.assertFalse(v["within_budget"])
+        self.assertEqual(
+            v["breaches"], [{"dimension": "steps", "limit": 10, "actual": 15}])
+        self.assertIn("minutes", v["not_measured"])  # honest: not assumed zero
+        self.assertTrue(v["heartbeat_due"])
+        self.assertEqual(v["over_budget_action"], budget.over_budget_action)
+        self.assertIn("not a stop proof", v["note"])
+
+    def test_evaluate_within_budget(self):
+        budget, _ = le.resolve_round_budget("inner")
+        v = le.evaluate_round_budget(budget, steps_used=5, minutes_used=10,
+                                     idle_rounds=1)
+        self.assertTrue(v["within_budget"])
+        self.assertEqual(v["breaches"], [])
+        self.assertEqual(v["not_measured"], [])
+        self.assertFalse(v["heartbeat_due"])
+
+    def test_evaluate_never_raises_on_garbage_facts(self):
+        budget, _ = le.resolve_round_budget("inner")
+        v = le.evaluate_round_budget(budget, steps_used="lots", minutes_used=True,
+                                     idle_rounds=False)
+        # Garbage facts are "not measured", never assumed zero, never a crash.
+        self.assertEqual(sorted(v["not_measured"]), ["minutes", "steps"])
+        self.assertFalse(v["heartbeat_due"])
+        self.assertTrue(v["issues"])
+        self.assertTrue(v["within_budget"])  # no MEASURED breach
+
+
+class HeartbeatReportTests(unittest.TestCase):
+    """N 轮无产物心跳上报 — threshold semantics + evidence-backed payload."""
+
+    def test_should_fire_threshold_semantics(self):
+        budget, _ = le.resolve_round_budget("inner", overrides={"max_idle_rounds": 3})
+        self.assertFalse(le.heartbeat_should_fire(budget, 0))
+        self.assertFalse(le.heartbeat_should_fire(budget, 2))
+        self.assertTrue(le.heartbeat_should_fire(budget, 3))   # N reached → fires
+        self.assertTrue(le.heartbeat_should_fire(budget, 4))
+        self.assertFalse(le.heartbeat_should_fire(budget, -1))
+        # Invalid facts NEVER fire (no fabricated heartbeats).
+        self.assertFalse(le.heartbeat_should_fire(budget, "3"))
+        self.assertFalse(le.heartbeat_should_fire(budget, True))
+        self.assertFalse(le.heartbeat_should_fire(budget, None))
+
+    def test_payload_contents_evidence_backed(self):
+        p = le.heartbeat_payload("u.FIX-357", "inner", current_round=15,
+                                 idle_rounds=3, last_artifact_ref="EVD-1101")
+        self.assertEqual(p["kind"], "round_heartbeat_report")
+        self.assertEqual(p["unit_id"], "u.FIX-357")
+        self.assertEqual(p["tier"], "inner")
+        self.assertEqual(p["current_round"], 15)
+        self.assertEqual(p["idle_rounds"], 3)
+        self.assertEqual(p["idle_threshold"], le.HEARTBEAT_IDLE_ROUNDS_DEFAULT)
+        self.assertTrue(p["fires"])
+        self.assertEqual(p["last_artifact_ref"], "EVD-1101")
+        self.assertIn("EVD-1101", p["evidence_basis"])
+        self.assertTrue(p["recommended_action"])
+
+    def test_payload_is_report_not_stop_proof(self):
+        """FEAT-063 alignment: the heartbeat carries stop_proof=False + basis."""
+        p = le.heartbeat_payload("u", "inner", idle_rounds=99)
+        self.assertIs(p["stop_proof"], False)
+        self.assertIn("FEAT-063", p["stop_proof_basis"])
+        self.assertIn("NOT a stop proof", p["stop_proof_basis"])
+
+    def test_payload_budget_threshold_used(self):
+        budget, _ = le.resolve_round_budget("outer", overrides={"max_idle_rounds": 2})
+        p = le.heartbeat_payload("u", "outer", idle_rounds=2, budget=budget)
+        self.assertEqual(p["idle_threshold"], 2)
+        self.assertTrue(p["fires"])
+        p2 = le.heartbeat_payload("u", "outer", idle_rounds=1, budget=budget)
+        self.assertEqual(p2["idle_threshold"], 2)
+        self.assertFalse(p2["fires"])
+
+    def test_payload_without_artifact_anchor_reports_gap(self):
+        p = le.heartbeat_payload("u", "inner", idle_rounds=4, last_artifact_ref=None)
+        self.assertIsNone(p["last_artifact_ref"])
+        self.assertIn("gap", p["evidence_basis"].lower())
+
+    def test_payload_json_serializable(self):
+        p = le.heartbeat_payload("u", "inner", current_round=2, idle_rounds=3)
+        json.dumps(p)  # must not raise — the report must be persistable
+
+
+class InterruptRecoveryTests(unittest.TestCase):
+    """interrupt+最小指令恢复产品化 — fact-bound minimal instruction injection."""
+
+    def test_minimal_instruction_is_fact_bound(self):
+        p = le.interrupt_recovery_payload(
+            "u.DEV-357", "inner", reason="no return for ~15 rounds",
+            idle_rounds=15, current_round=15, last_artifact_ref="diff-on-disk")
+        mi = p["minimal_instruction"]
+        # The injection binds the FACTS: unit, idle count, last artifact anchor.
+        self.assertIn("u.DEV-357", mi)
+        self.assertIn("15", mi)
+        self.assertIn("diff-on-disk", mi)
+        # The scope guard is explicit: no re-planning, no scope expansion.
+        self.assertIn("Do NOT re-plan", mi)
+        # The three-part return shape is spelled out in the text.
+        for part in ("(1)", "(2)", "(3)"):
+            self.assertIn(part, mi)
+        self.assertEqual(
+            set(p["expected_response_shape"]),
+            {"artifact_or_progress", "blocker", "next_action"})
+
+    def test_payload_provenance_and_bounded_loops(self):
+        p = le.interrupt_recovery_payload("u", "inner", reason="heartbeat",
+                                          idle_rounds=3)
+        self.assertEqual(p["kind"], "interrupt_recovery")
+        self.assertIn("FIX-357/359", p["productized_from"])
+        self.assertIn("EVD-1101", p["productized_from"])
+        # Interrupt loops are BOUNDED — recovery failure escalates, not repeats.
+        self.assertIn("PP-Fuse-Escalate", p["escalation_note"])
+        self.assertIs(p["stop_proof"], False)
+
+    def test_minimal_instruction_reports_missing_anchor(self):
+        p = le.interrupt_recovery_payload("u", "inner", reason="r",
+                                          idle_rounds=3, last_artifact_ref=None)
+        self.assertIn("none reported", p["minimal_instruction"])
+
+    def test_minimal_instruction_tolerates_unknown_idle(self):
+        p = le.interrupt_recovery_payload("u", "inner", reason="r",
+                                          idle_rounds=None)
+        self.assertIn("an unknown number of", p["minimal_instruction"])
+
+    def test_payload_json_serializable(self):
+        p = le.interrupt_recovery_payload("u", "inner", reason="r", idle_rounds=3)
+        json.dumps(p)  # must not raise
+
+
+class StallReportTelemetryTests(unittest.TestCase):
+    """遥测测试钉 — compute_stall_report measured from the event log."""
+
+    def test_known_sequence_exact(self):
+        r = lt.compute_stall_report(_stall_unit("S1"))
+        self.assertEqual(r.status, "measured")
+        self.assertEqual(r.reason, "")
+        self.assertEqual(r.window, "all")
+        u = r.units["S1"]
+        self.assertEqual(u["rounds_total"], 3)
+        self.assertEqual(u["artifact_rounds"], 1)
+        self.assertEqual(u["artifactless_rounds"], 2)
+        self.assertEqual(u["idle_streak_trailing"], 2)
+        self.assertEqual(u["idle_streak_max"], 2)
+        self.assertEqual(u["last_anchor_ts"], "2026-07-23T03:00:00Z")
+        self.assertEqual(u["last_artifact_ts"], "2026-07-23T00:30:00Z")
+        # Trailing 2 < default threshold 3 → not a suspect.
+        self.assertEqual(r.suspects, ())
+        self.assertEqual(r.idle_threshold, 3)
+        self.assertEqual(r.computed_at, "2026-07-23T03:00:00Z")
+        self.assertEqual(r.malformed_timestamps, 0)
+        self.assertIn("NOT stop proofs", r.scope_note)
+
+    def test_suspect_flagged_at_threshold(self):
+        r = lt.compute_stall_report(_stall_unit("S2"), idle_threshold=2)
+        self.assertEqual(r.idle_threshold, 2)
+        self.assertEqual(r.suspects, ("S2",))
+
+    def test_empty_events_unknown(self):
+        r = lt.compute_stall_report([])
+        self.assertEqual(r.status, "unknown")
+        self.assertTrue(r.reason)
+        self.assertEqual(r.units_considered, 0)
+        self.assertEqual(r.suspects, ())
+        self.assertEqual(r.units, {})
+
+    def test_default_artifact_type_and_parameterized_widening(self):
+        """gate_result is the default artifact; the set is a parameter."""
+        events = _stall_unit("S3")
+        # Widened to include back_edge → every closed round is artifact-bearing.
+        r_wide = lt.compute_stall_report(
+            events, artifact_event_types={"gate_result", "back_edge"})
+        u_wide = r_wide.units["S3"]
+        self.assertEqual(u_wide["artifact_rounds"], 3)
+        self.assertEqual(u_wide["idle_streak_trailing"], 0)
+        # Narrowed to a type that never appears → all rounds idle, suspect at N.
+        r_narrow = lt.compute_stall_report(
+            events, artifact_event_types={"phase_transition"})
+        u_narrow = r_narrow.units["S3"]
+        self.assertEqual(u_narrow["artifact_rounds"], 0)
+        self.assertEqual(u_narrow["idle_streak_trailing"], 3)
+        self.assertEqual(r_narrow.suspects, ("S3",))
+        # A bare string is one type (not exploded into characters).
+        r_str = lt.compute_stall_report(events, artifact_event_types="gate_result")
+        self.assertEqual(r_str.artifact_event_types, ("gate_result",))
+
+    def test_window_filtering_respected(self):
+        recent = _stall_unit("SR", day=23)
+        old = _stall_unit("SO", day=1)
+        r = lt.compute_stall_report(recent + old, window="7d")
+        self.assertEqual(r.window, "7d")
+        self.assertEqual(r.units_considered, 1)
+        self.assertIn("SR", r.units)
+        self.assertNotIn("SO", r.units)
+
+    def test_malformed_timestamps_counted_and_skipped(self):
+        events = _stall_unit("S4") + [
+            _ev("S4", "back_edge", "garbage-timestamp", 9, 8)]
+        r = lt.compute_stall_report(events)
+        self.assertEqual(r.malformed_timestamps, 1)
+        # The malformed anchor is skipped: still exactly 3 closed rounds.
+        self.assertEqual(r.units["S4"]["rounds_total"], 3)
+
+    def test_open_round_not_counted_as_idle_streak(self):
+        """A trailing anchor with no successor is OPEN — streaks count CLOSED
+        rounds only (purity: the log cannot time the open round)."""
+        r = lt.compute_stall_report(
+            [_ev("S6", "phase_enter", _ts(0), 0, None, to_phase="plan")])
+        u = r.units["S6"]
+        self.assertEqual(u["rounds_total"], 0)
+        self.assertEqual(u["idle_streak_trailing"], 0)
+        self.assertEqual(u["last_anchor_ts"], "2026-07-23T00:00:00Z")
+        self.assertIsNone(u["last_artifact_ts"])
+        self.assertEqual(r.suspects, ())
+
+    def test_deterministic_and_non_mutating(self):
+        events = _stall_unit("S5")
+        before = json.loads(json.dumps(events))
+        r1 = lt.compute_stall_report(events)
+        r2 = lt.compute_stall_report(events)
+        self.assertEqual(r1, r2)
+        self.assertEqual(events, before)
+
+    def test_gate_result_on_anchor_boundary_counts_for_that_round(self):
+        """Inclusive interval semantics: a gate_result stamped at the same
+        second as the closing anchor belongs to the round it closes (FEAT-006
+        stamps gate_result + back_edge on the same CAS write)."""
+        events = [
+            _ev("S8", "phase_enter", _ts(0), 0, None, to_phase="plan"),
+            _ev("S8", "gate_result", _ts(1), 0, 0, from_phase="reflect"),
+            _ev("S8", "back_edge", _ts(1), 1, 0, from_phase="reflect",
+                to_phase="plan", loop_count=1),
+        ]
+        r = lt.compute_stall_report(events)
+        u = r.units["S8"]
+        self.assertEqual(u["rounds_total"], 1)
+        self.assertEqual(u["artifact_rounds"], 1)
+        self.assertEqual(u["idle_streak_trailing"], 0)
+
+
+class Feat044CrossModuleConsistencyTests(unittest.TestCase):
+    """Mirror guard: the telemetry threshold stays in lockstep with the engine.
+
+    loop_telemetry deliberately does NOT import loop_engine (stdlib-only
+    import contract, ADR-015 §6.4) — so the two defaults are duplicated by
+    design and their equality is enforced HERE, in the test layer.
+    """
+
+    def test_telemetry_threshold_mirrors_engine_default(self):
+        self.assertEqual(lt.DEFAULT_IDLE_THRESHOLD,
+                         le.HEARTBEAT_IDLE_ROUNDS_DEFAULT)
+
+    def test_engine_default_budget_heartbeat_n_matches_telemetry(self):
+        budget, _ = le.resolve_round_budget("inner")
+        self.assertEqual(budget.max_idle_rounds, lt.DEFAULT_IDLE_THRESHOLD)
+
+    def test_stall_report_feeds_heartbeat_pipeline(self):
+        """E2E pin: measured trailing streak → engine predicate → heartbeat
+        report → interrupt-recovery payload (the FEAT-044 chain)."""
+        events = _stall_unit("S7")
+        r = lt.compute_stall_report(events, idle_threshold=2)
+        streak = r.units["S7"]["idle_streak_trailing"]
+        self.assertEqual(streak, 2)
+        budget, _ = le.resolve_round_budget(
+            "inner", overrides={"max_idle_rounds": 2})
+        self.assertTrue(le.heartbeat_should_fire(budget, streak))
+        p = le.heartbeat_payload(
+            "S7", "inner", idle_rounds=streak, budget=budget,
+            last_artifact_ref="G6@2026-07-23T00:30:00Z")
+        self.assertTrue(p["fires"])
+        self.assertIs(p["stop_proof"], False)
+        rec = le.interrupt_recovery_payload(
+            "S7", "inner", reason="heartbeat", idle_rounds=streak)
+        self.assertIn("S7", rec["minimal_instruction"])
+        self.assertIs(rec["stop_proof"], False)
 
 
 if __name__ == "__main__":

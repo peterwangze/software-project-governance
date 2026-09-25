@@ -39,7 +39,7 @@
 | **前版收尾** | REL-084 M-8 | 0.87.0 发布收口（checklist M-链全勾 + M-6 复跑 + 热事实源三面回填 + 归档 integrity PASS）——属 0.87.0 收尾，本版窗口首位提交 | `fc69196` | EVD-1132/1133 |
 | **阶段 A「契约与卫生」** | FIX-373 | 共享切分器 quote 分支补 not in_code_span 守卫——EVD-248 形状 code-span 内引号折叠误报消解（TDD 红 3F→绿 6/6；消费方指定套件 120 用例 0 失败；0.87 出槽票） | `3c3218d` | EVD-1134/1135；REVIEW-FIX-373-CODE-R0 APPROVED_WITH_NOTES/0 |
 | | FIX-378 | e2e legacy 快照副本切分器守卫同步（FIX-373 F-1 承接；副本 git 忽略——本 commit 仅审查报告面；FIX-381 制度化首条台账） | `44cb534` | EVD-1136/1137；REVIEW-FIX-378-CODE-R0 APPROVED_WITH_NOTES/0 |
-| | FIX-374 | format check 9-cell 豁免与截断 LIVE 行启发式消歧（cells[6] 日期形状判据 `_EVIDENCE_DATE_SHAPE_RE`——fail-blind 消除；豁免面形式化零弱化 S_new⊂S_old） | `6845756` | EVD-1138；REVIEW-FIX-374-CODE-R0 APPROVED_WITH_NOTES/0 |
+| | FIX-374 | format check 9-cell 豁免与截断 LIVE 行启发式消歧（cells[6] 日期形状判据 `_EVIDENCE_DATE_SHAPE_RE`——fail-blind 消除；豁免面形式化零弱化 S_new⊂S_old） | `6845756` | EVD-1138/1139（1139=完成必推荐分析快照——REVIEW-REL-088-R0 P2-1 勘正）；REVIEW-FIX-374-CODE-R0 APPROVED_WITH_NOTES/0 |
 | | FIX-375 | writer 族三边缘收口：①引擎分发返回码透传（exit 0 假绿→exit 2——DEC-230/231）②畸形 --operation-id 结构化 schema_violation ③locks-release 三恢复腿 released_files 审计一致（pre-read 移入 _TargetLock 堵并发） | `04b7a42` | EVD-1140/1141；REVIEW-FIX-375 R0 APPROVED_WITH_NOTES/0→R1 APPROVED/0 |
 | | FIX-376 | FIX-371 遗留候选合并处置——F-3 状态 cell 自右向左扫描（豁免面零变化=定理+活体双证：130 行全等/diff=0——DEC-232 窄口径）+F-4~F-7 | `3d31c49` | EVD-1142；REVIEW-FIX-376-R0 APPROVED_WITH_NOTES/0 |
 | | FIX-386 | 0.87 遗留小项包：AUDIT-152 账本写回（clock_window_sensitive 8→9）+ADR-011/012 勘误注记（300,000→指向 361,923 公式）+FIX-370 F-2 验证（RISK-046 缓解列扩展） | `d6dd300` | EVD-1143；R0 NEEDS_CHANGE/1→R1 APPROVED/0 |

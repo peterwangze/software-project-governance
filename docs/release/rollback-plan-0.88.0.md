@@ -171,7 +171,38 @@ python <plugin_root>/adapters/dsh/launch.py --sync
 - **灰度开关正交**：`GOVERNANCE_LEGACY_BEHAVIOR` **不承载** B-12/B-13 回退——guard 执法与存储权威属安全语义/治理行为，不在 LEGACY_REVERTS 白名单（仅 performance 类）；不存在「legacy 模式下关闭 BLOCK 或回退权威」的中间态（feature-flags-0.88.0 §6 同口径）；
 - **操作者告知义务**：M-3 审查与任何回滚/激活/切换执行前，本节 MUST 随回滚手册一并送达执行工位；B-12 激活与 B-13 切换均为授权票动作（DEC-239② / RISK-059+DEC-238④+DEC-239⑦），不得与版本发布动作捆绑静默执行。
 
-## 8. 0.89 候选池移交清单（回滚后的前进路径——与本版「不发布什么」对齐）
+## 8. 回退路径区分：部署 v0.87.0 tag vs revert 29 commits 重建（REL-089 · DEC-240③）
+
+**共同前提**：源码回退**不撤销数据写入**——0.88 已产生的持久状态工件原地保留（`.write-guard-state.json` / `.write-guard-violations.json` / `.write-guard-posture.json` / `closure-events.jsonl` 0.88 事件 / `closure-generations.json` / `archive/.migration/` / `.decision-migration/` / `.decision-store-state.json`）。兼容性逐工件定性见 `docs/release/rel-089-m3-precondition-report.md` §③：五件安全忽略/兼容，closure journal 部分兼容（读 fail-safe、语义有界不兼容）。
+
+**回退前通用步骤（0.88 仍在位时执行并留档）**：
+1. 登记 in-flight closure 清单：检查 `.governance/closure-events.jsonl` 尾部是否含 0.88-only 事件类型（`closure_cancelled` / `closure_reopened` / `closure_fenced`）——含任一者的 closure 进入「0.88 事件闭包」清单；
+2. `write-guard-bootstrap --check-only` 世界判定留档（converged 与否均留档）；
+3. 确认 `.governance/.decision-store-state.json` 权威状态 = `MD_ACTIVE`（本版缺省必为 MD_ACTIVE；若非——0.88 期间发生过切换——先执行 B-13 反向转换并校验 md 完整性，否则**禁止回退**）；
+4. 冻结写窗（停止一切治理写入）。
+
+**路径 A——部署 v0.87.0 tag**（peel `602f8f3`）：
+- 操作：以 v0.87.0 tag 安装/部署插件，`.governance/` 数据不动；
+- 特性：0.87 代码**不可修补**——closure 语义防线只有运行手册门禁：**回退后禁止 resume/finalize 任何「0.88 事件闭包」清单中的 closure**（0.87 会响亮披露 `unknown closure event_type` problems——出现该披露即停，经人工核对 journal 尾部后处置；恢复 0.88 后再对该闭包做终态操作）；
+- 0.87 下 guard face-5 首跑按 amnesty 对存量行重建基线（0.88 增量键 `updated_at` 被 0.87 容忍读取，首次 0.87 收敛写回 3 键形状——字节面随写收敛，无破坏）；
+- 违规台账/姿态配置/fencing sidecar/续迁游标被 0.87 忽略（不破坏、不可见）。
+
+**路径 B——revert 29 commits 重建**（v0.87.0..M-1 tip，清单见 CHANGELOG 0.88.0「Commit 区间」）：
+- 操作：按 commit 逆序 revert 全部 29 commits → 重建分支 → 安装重建产物，`.governance/` 数据不动；
+- 特性：重建分支**可先行落防御性修复**——按 legacy_snapshot_backport 政策（FIX-381 先例）将 FIX-391（closure 版本感知读取器）backport 进重建分支后再切换，closure 语义面由机检防护（仍建议保留路径 A 的运行手册门禁作为双保险）；
+- 其余工件行为与路径 A 完全一致（同一 0.87 语义基线）。
+
+**回退后验证（DEC-240③ 最低验证映射，两路径同集）**：
+1. 启动：0.87 `verify_workflow.py` 全量 PASSED；
+2. 读写：`governance-store decision-append` 直写 decision-log.md 成功（MD_ACTIVE 世界）；
+3. 任务恢复：仅对 journal 无 0.88 事件的 closure 执行 resume；含 0.88 事件者按门禁处置；
+4. 一致性：0.87 guard face-5 重建基线零意外 WARN（amnesty）；四类 0.88 工件在场不阻断任何 0.87 检查（REL-089 测试基座佐证）。
+
+**恢复 forward（0.88 复装）**：五件被忽略工件原样恢复生效（posture/violations/fencing/续迁游标零丢失）；closure journal 经 0.88 读取器全量可读（0.88 认识全部事件类型）。
+
+---
+
+## 9. 0.89 候选池移交清单（回滚后的前进路径——与本版「不发布什么」对齐）
 
 | # | 候选项 | 来源 | 状态 |
 |---|---|---|---|
@@ -182,6 +213,8 @@ python <plugin_root>/adapters/dsh/launch.py --sync
 | 5 | **GOVERNANCE_SESSION_ID 接线复核**（FEAT-064 已交付接线——DEC-236③ 0.89 BLOCK 前验收复核） | DEC-236③ | 候选 |
 | 6 | **量测协议边缘观察后续面** | version-plan §6 | 候选 |
 | 7 | FIX-380 P2-1 双源互检断言（FIX-381 遗留） | review-FIX-380-R0 | 留后续 |
+| 8 | **FIX-390**：Check 18/18b 改读结构化状态（basis 列+机器凭证 marker 纳入判定——0.88 例外 2×2 FAIL 的消解票；验收含 committed/✅/未知三态回归+两行红→绿活体+豁免面差分归因） | REL-089 条件② / DEC-240② | 0.89 候选 |
+| 9 | **FIX-391**：closure journal 版本感知读取器（0.87 语义误读向量消除——路径 B backport 候选） | REL-089 条件③ | 0.89 候选 |
 
 ---
 *REL-088 M-1R 草案冻结（2026-09-25，REL-088，Governance Developer Agent 起草）。事实基线：窗口起点 `602f8f3`（v0.87.0 peel，taggerdate 2026-09-21 14:02:27 +0800 权威——FIX-349）与 29 提交窗口取自 `git log`/`git rev-list`/`git describe`/`git rev-parse v0.87.0^{}`/`git for-each-ref` 实测；B-12/B-13/B-14 回退口径取自 version-plan-0.88.0 §3b/§5 + CHANGELOG 0.88.0 段行为变更节原文；B-12 通道面取自 `verify_workflow.py` L23908-23917/L25869-25893 + `write_guard_state.py` L1610-1699/L301 实读；B-13 通道面取自 `decision_repository.py` L37-67/L131/L151-163 + `decision_migration.py` L1009-1048 实读；B-13 演练字节回环与切换前置取自 CHANGELOG 披露④ + DEC-237/238（decision-log 实读）+ RISK-059（risk-log 实读）+ EVD-1155；单轨/终点/演练口径对齐 rollback-plan-0.87.0 先例（0.81.0 F-04 / 0.84.0 P-12 教训沿用）。回滚演练未排程（如实标注）；`<发布 tip>` 属 M-5 期义务，本文件不预填。*

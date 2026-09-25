@@ -85,7 +85,9 @@ governance-store lockfile discipline (bounded acquire, hard refusal).
 Fault injection (round-3 BT-9, TEST-ONLY — internal entry points): the
 runner consults the ``CLOSURE_CHAIN_TEST_FAULT_POINTS`` environment
 variable at named protocol-boundary fault points
-(``post-step-effect:<step_id>``, ``post-finalize-verify``).  When set (by
+(``post-step-effect:<step_id>``, ``post-finalize-verify``,
+``post-generations-preread`` — the FEAT-063 takeover window between the
+lock-out pre-read and the generations lock).  When set (by
 the chaos test's parent controller, never by the production CLI), the child
 process writes a handshake marker file and pauses until the parent kills
 it (Popen.kill) or releases it.  No CLI flag exposes this surface.
@@ -97,13 +99,17 @@ task shrunk to a small ceiling).  Actual lock-entry removal/removal of
 active_tasks remains a registered gap for a later slice — reported in the
 chain output, never silently assumed.
 
-Single-flight assumption (FEAT-056 R0 P3-4 disclosure): the per-closure
-run lock makes ONE closure id safe against concurrent resumes, but it does
-NOT arbitrate two DIFFERENT closures driving the SAME task in parallel —
-both would legitimately flip the same task row / append their own evidence
-rows (evolution §6② registered 0.87 open question).  Until that护栏
-exists, operators MUST run one closure per task at a time (单 closure
-单飞); the chain neither detects nor prevents the parallel-siblings shape.
+Single-flight assumption (FEAT-056 R0 P3-4 disclosure, updated FEAT-063):
+the per-closure run lock makes ONE closure id safe against concurrent
+resumes, but it does NOT arbitrate two DIFFERENT closures driving the SAME
+task in parallel — both would legitimately flip the same task row / append
+their own evidence rows (evolution §6② registered 0.87 open question).
+FEAT-063's execution-generation fence closes this shape FOR TASKS BOUND BY
+A TAKEOVER RECORD (a non-holder closure refuses at the write-side entry/
+step checks before any effect); for UNBOUND tasks (no record) the guardrail
+still does not exist — operators MUST run one closure per task at a time
+(单 closure 单飞), the chain neither detects nor prevents the
+parallel-siblings shape there.
 
 Release-window bootstrap (FIX-383, version-plan-0.88.0 §2 B2 — rollback
 §8 #7 ⑩拆票之一): the release chain (M-1~M-8) depends on checkers/writers
@@ -183,9 +189,10 @@ Q5 minimal slice, rollback-0.86.0 §8 #5 清偿):
   command replays/applies the pending leg at the writer (same id + same
   payload → original result) and reconverges with zero manual repair.
   A replay cancel converges with the RECORDED intent from the journal
-  (fresh CLI args are disclosed but never re-recorded — the first
-  authorization stands). Resume of a cancelled closure is refused
-  (terminal semantics); ``finalize`` of a cancelled closure is refused.
+  (fresh CLI args are ignored, never re-recorded — the first
+  authorization stands; review-FEAT-062-R0 F-5 wording). Resume of a
+  cancelled closure is refused (terminal semantics); ``finalize`` of a
+  cancelled closure is refused.
 
   F-5④ combination obligation (version-plan §3): the cancel's
   locks-release leg vs the write-guard's exclusive consumption right
@@ -194,6 +201,85 @@ Q5 minimal slice, rollback-0.86.0 §8 #5 清偿):
   guard CLI's exclusive right), both writers serialize through the shared
   governance-store lock discipline, and both terminal states land exactly
   once.
+
+  Reopen with attempt lineage + execution-generation fencing (FEAT-063,
+  version-plan-0.88.0 §2 E2 — rollback-0.86.0 §8 #5 清偿后半):
+
+  **Reopen (重开)**: ``reopen_closure`` / the ``reopen`` subcommand mints a
+  successor closure for a TERMINAL closure (``REOPENABLE_STATUSES`` =
+  cancelled / finalized) and records the lineage WITHOUT touching any
+  original record (append-only audit — the original journal only GAINS
+  one event):
+
+  1. the original stays terminal (cancelled stays cancelled, finalized
+     stays finalized — reopen never un-terminates; resume of the original
+     keeps refusing; a reopen racing cancel/finalize serializes on the
+     SAME per-closure run lock — the CAS point);
+  2. the successor id is minted fresh; the ORIGINAL journal receives one
+     seq-continuous ``closure_reopened`` event (successor id + attempt
+     number + authorized_by + reason + prior_status); original records
+     are zero-erased (审计链完整);
+  3. SINGLE-SUCCESSOR lineage: a second ``reopen`` of the same closure
+     refuses (``cross_record_violation``) naming the recorded successor —
+     forking the attempt chain would corrupt the numbering; reopen the
+     successor's terminal state instead (the chain deepens: attempt N+1);
+  4. the successor binds the recorded linkage by running with
+     ``--reopen-of <original>``: the run adopts the RECORDED successor id
+     (a different ``--closure-id`` refuses — recorded intent stands, fresh
+     ids never fork) and injects ``reopen_of``/``reopen_attempt`` into the
+     chain inputs, so the successor's ``closure_started`` carries the
+     back-link and the inputs digest binds it (a resume carries the same
+     flag; conflicting fresh ``--input reopen_*`` values refuse);
+  5. authorization discipline is the cancel gate's: ``authorized_by`` +
+     ``reason`` required, single-line, no raw ``|`` (FEAT-062 zero-write
+     field rules, shared helper).
+
+  **Execution generation / fencing token (异常接管)** — FEAT-061 epoch
+  fencing same-type, ARCH-09 owner-token discipline:
+  ``takeover_execution`` / the ``takeover`` subcommand promotes the
+  task's execution generation in ``.governance/closure-generations.json``
+  (closure-domain sidecar; writer-family atomic replace — mkstemp +
+  fsync + os.replace + dir fsync — under the generations lock, the
+  promotion serialized against the prior holder's run lock AND
+  re-validated in-lock: a prior holder that changed between the lock-out
+  pre-read and the lock refuses ``lock_contention`` retryable with ZERO
+  writes — the acquired run lock belonged to a former holder and the
+  real one may be mid-flight, review-FEAT-063-R0 P0-1):
+  generation N+1 binds ``--new-holder`` (a closure id). The WRITE SIDE
+  enforces the fence (旧执行者恢复后不能继续提交 — 旧代际的写入被拒):
+
+  * ``_run_locked`` re-checks the fence at entry AND before every
+    executable step (the FEAT-061 in-lock revalidation shape: entry
+    check + write-point re-check); ``finalize`` checks too;
+  * a stale generation's run refuses ``revision_conflict`` (structured,
+    ZERO effects — no probe, no subprocess, no bookkeeping) and records
+    ONE idempotent ``closure_fenced`` audit event; a stale generation's
+    ``finalize`` refuses the same way;
+  * a stale generation's ``cancel`` still records its terminal + DEC row
+    (termination is not submission) but its locks-release leg SKIPS
+    (``skipped_fenced``) — a stale owner's cancel never releases the
+    newer holder's dispatch locks (ARCH-09 same-type);
+  * unbound tasks (no record) are unfenced — zero behavior change,
+    backward compatible; an UNREADABLE record fails CLOSED (the
+    authority is unjudgeable — repair or remove the sidecar to restore a
+    judgeable world); ``--dry-run`` is a read-only proof and never
+    fences.
+
+  **Heartbeat semantics (如实 — the honest boundary)**: heartbeat timeout
+  does NOT constitute a stop proof (心跳超时不构成停止证明). FEAT-044's
+  round-heartbeat mechanism is E3, NOT this slice — this gate never
+  reads any heartbeat/TTL as evidence of executor death. Takeover
+  requires BOTH (a) explicit human authorization (``authorized_by`` +
+  ``reason``, recorded) and (b) the prior holder's run lock being free
+  (an in-flight chain refuses ``lock_contention``, retryable). Neither
+  condition PROVES the prior executor is dead — they make the human's
+  takeover decision explicit and serialize it against an in-flight run;
+  the write-side fence is what actually protects the world if the
+  judgment is wrong (the stale executor refuses loudly instead of
+  writing). Under the run-lock discipline a mid-run fence is unreachable
+  via the takeover path (the promotion holds the prior holder's run
+  lock); the per-step re-check defends the out-of-band-edit residual and
+  keeps the fence true at every write boundary.
 """
 
 from __future__ import annotations
@@ -205,6 +291,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -224,22 +311,27 @@ import loop_event_log  # module machine — append/read/monotonicity REUSED
 __all__ = [
     "CANCELLABLE_STATUSES",
     "CLOSURE_EVENT_LOG_FILENAME",
+    "CLOSURE_GENERATIONS_FILENAME",
     "CLOSURE_ID_PATTERN",
     "CLOSURE_SCHEMA_VERSION",
     "CLOSURE_TEST_FAULT_ENV",
     "PROBE_KINDS",
     "RELEASE_WINDOW_BOOTSTRAP",
+    "REOPENABLE_STATUSES",
     "STEP_KINDS",
     "STANDARD_TICKET_CLOSURE",
     "WRITER_ID",
+    "ExecutionFenced",
     "cancel_closure",
     "cancel_operation_id",
     "finalize_closure",
     "main",
     "new_closure_id",
+    "reopen_closure",
     "require_closure_id",
     "run_chain",
     "step_operation_id",
+    "takeover_execution",
 ]
 
 WRITER_ID = "closure_chain/0.86.0-batch2"
@@ -290,6 +382,8 @@ CLOSURE_EVENT_TYPES = frozenset({
     "closure_ready",      # ready-to-commit summary emitted (finalize pending)
     "closure_finalized",  # --finalize verified the operator commit
     "closure_cancelled",  # FEAT-062 cancellation gate: immutable terminal
+    "closure_reopened",   # FEAT-063 reopen: successor lineage recorded
+    "closure_fenced",     # FEAT-063 fencing: stale generation refused
 })
 """Closed closure event-type enum (domain-owned per round-2 §2 carving)."""
 
@@ -313,6 +407,17 @@ CANCELLABLE_STATUSES: Tuple[str, ...] = (
 entry). ``finalized``/``cancelled`` are immutable terminals — never in
 this set; a closure whose step effects are undetermined or which carries
 external-step effects is refused by cancel_closure regardless."""
+
+REOPENABLE_STATUSES: Tuple[str, ...] = ("cancelled", "finalized")
+"""Closure states a reopen may succeed on (FEAT-063 重开 — 已取消/已完成):
+ONLY the two immutable terminals. Reopen never un-terminates the original
+— it mints a linked successor; a non-terminal closure needs no reopen
+(it can simply resume)."""
+
+CLOSURE_GENERATIONS_FILENAME = "closure-generations.json"
+"""Per-task execution-generation record (FEAT-063 takeover fencing) under
+``.governance/`` — closure-domain sidecar, same ownership discipline as
+the closure journal (never a locks-family or guard-family file)."""
 
 _CANCEL_DECISION_SLOT = "decision"
 _CANCEL_LOCKS_SLOT = "locks"
@@ -1015,6 +1120,18 @@ class LockContention(Exception):
         self.lock_path = lock_path
 
 
+class ExecutionFenced(Exception):
+    """The closure's task execution generation has moved on (FEAT-063
+    takeover fencing) — this executor is a STALE generation and its
+    writes are refused at the write side (旧代际写入被拒). Carries the
+    structured refusal payload (``revision_conflict`` family, FEAT-061
+    epoch-fencing same-type); never a bare traceback."""
+
+    def __init__(self, payload: Dict[str, Any]) -> None:
+        self.payload = payload
+        super().__init__(payload.get("detail") or "execution fenced")
+
+
 class _RunLock:
     """Exclusive cross-process closure run lock with BOUNDED acquire and a
     hard refusal (never the best-effort-unlocked fallback — a double-running
@@ -1438,7 +1555,8 @@ def _step_world_state(events: List[Dict[str, Any]]) -> Dict[str, str]:
 def run_chain(spec: ChainSpec, *, root: Path, task: str,
               inputs: Dict[str, str], closure_id: Optional[str] = None,
               dry_run: bool = False, world_check: bool = False,
-              lock_timeout: float = 10.0) -> Dict[str, Any]:
+              lock_timeout: float = 10.0,
+              reopen_of: Optional[str] = None) -> Dict[str, Any]:
     """Execute (or resume) a declared chain. Effect-based at every boundary:
 
     1. resume probes the WORLD per step before executing (row flipped?
@@ -1450,16 +1568,39 @@ def run_chain(spec: ChainSpec, *, root: Path, task: str,
        the check runs only when ``world_check`` is explicitly enabled
        (远端查询动作建议非自动执行);
     4. ``dry_run`` writes NOTHING (no journal append, no lock, no step) —
-       probes + writer dry-runs prove every step resolvable.
+       probes + writer dry-runs prove every step resolvable;
+    5. ``reopen_of`` binds the RECORDED reopen linkage (FEAT-063): the
+       referenced closure's ``closure_reopened`` event names the successor
+       id + attempt — the run adopts the recorded successor (a different
+       ``closure_id`` refuses; a fresh id never forks the lineage) and
+       injects ``reopen_of``/``reopen_attempt`` into the inputs so the
+       digest and the successor's ``closure_started`` carry the back-link.
+       A stale execution generation (task fenced to another holder)
+       refuses at the entry/step write-side checks (``ExecutionFenced``).
     """
     root = Path(root)
     if not isinstance(task, str) or not task.strip():
         raise ValueError("run_chain: task id required")
     task = task.strip()
+    inputs = dict(inputs) if inputs else {}
+    if reopen_of is not None:
+        linkage = _resolve_reopen_linkage(root, reopen_of, closure_id)
+        closure_id = linkage["successor_closure_id"]
+        for reserved, value in (("reopen_of", reopen_of),
+                                ("reopen_attempt",
+                                 str(linkage["reopen_attempt"]))):
+            existing = inputs.get(reserved)
+            if existing is not None and existing != value:
+                raise ValueError(
+                    "run_chain: conflicting fresh {0!r} input {1!r} — the "
+                    "recorded reopen linkage stands (recorded intent; "
+                    "drop the conflicting --input)".format(
+                        reserved, existing))
+            inputs[reserved] = value
     closure_id = require_closure_id(
         "run_chain: closure_id", closure_id or new_closure_id())
     merged_inputs: Dict[str, str] = dict(_REQUIRED_INPUT_DEFAULTS)
-    for key, value in (inputs or {}).items():
+    for key, value in inputs.items():
         if not isinstance(key, str) or not isinstance(value, str) or not key:
             raise ValueError(
                 "run_chain: inputs must be a str→str dict (got {0!r})"
@@ -1513,6 +1654,15 @@ def _run_locked(spec: ChainSpec, closure_id: str, task: str,
             "closure {0}: resume inputs digest mismatch — this closure was "
             "started with different inputs (closure identity is "
             "immutable; start a new closure instead)".format(closure_id))
+    # FEAT-063 write-side fence (entry check): a task whose execution
+    # generation is held by another closure refuses THIS executor before
+    # ANY write — a fresh start records nothing at all (zero-write), a
+    # resume records one idempotent closure_fenced audit event first.
+    fence = _execution_fence_refusal(root, task, closure_id)
+    if fence is not None:
+        if resumed:
+            _record_fenced_event(root, log_path, closure_id, fence)
+        raise ExecutionFenced(fence)
     seq, prev_seq = _next_seq(events)
     if not resumed:
         _append_closure_event(
@@ -1536,6 +1686,17 @@ def _run_locked(spec: ChainSpec, closure_id: str, task: str,
             info["note"] = "chain halted at an earlier step"
             report_steps.append(info)
             continue
+        # FEAT-063 write-side fence (per-step re-check — the FEAT-061
+        # in-lock revalidation shape): every governed write boundary
+        # (subprocess spawn / summary emission) re-verifies the execution
+        # generation. Under the run-lock discipline a mid-run fence is
+        # unreachable via the takeover path (the promotion holds this
+        # closure's run lock); this re-check defends the out-of-band-edit
+        # residual and keeps the fence true at every write boundary.
+        fence = _execution_fence_refusal(root, task, closure_id)
+        if fence is not None:
+            _record_fenced_event(root, log_path, closure_id, fence)
+            raise ExecutionFenced(fence)
         if step.kind == "summary":
             ready_present = any(
                 e.get("event_type") == "closure_ready" for e in events)
@@ -1823,7 +1984,9 @@ def finalize_closure(root: Path, closure_id: str, commit_sha: str) \
     lock_path = _closure_lock_dir(root) / (closure_id + ".lock")
     with _RunLock(lock_path, 10.0):
         events, problems = _load_closure_events(log_path, closure_id)
-        if not any(e.get("event_type") == "closure_started" for e in events):
+        started = next((e for e in events
+                        if e.get("event_type") == "closure_started"), None)
+        if started is None:
             return {"closure_id": closure_id, "error": True,
                     "code": "cross_record_violation",
                     "disposition": "validation",
@@ -1845,6 +2008,16 @@ def finalize_closure(root: Path, closure_id: str, commit_sha: str) \
                     "detail": "closure {0} is CANCELLED (immutable "
                               "terminal) — finalize refused".format(
                                   closure_id)}
+        # FEAT-063 write-side fence: a stale generation's finalize would
+        # record a completion submitted by an executor whose generation has
+        # moved on — refused (旧代际写入被拒), one idempotent audit event.
+        started_task = (started.get("payload") or {}).get("task")
+        fence = _execution_fence_refusal(
+            root, started_task if isinstance(started_task, str) else "",
+            closure_id)
+        if fence is not None:
+            _record_fenced_event(root, log_path, closure_id, fence)
+            return fence
         probe = _run_probe(
             {"kind": "git_object_exists", "repo": str(root),
              "sha": commit_sha},
@@ -1885,6 +2058,10 @@ def closure_status(root: Path, closure_id: str) -> Dict[str, Any]:
     finalized = any(e.get("event_type") == "closure_finalized" for e in events)
     cancelled = next((e for e in events
                       if e.get("event_type") == "closure_cancelled"), None)
+    reopened = next((e for e in events
+                     if e.get("event_type") == "closure_reopened"), None)
+    fenced = next((e for e in events
+                   if e.get("event_type") == "closure_fenced"), None)
     ready = any(e.get("event_type") == "closure_ready" for e in events)
     unknown_steps = [s for s, v in step_state.items() if v == "unknown"]
     failed_steps = [s for s, v in step_state.items() if v == "failed"]
@@ -1900,18 +2077,46 @@ def closure_status(root: Path, closure_id: str) -> Dict[str, Any]:
         status = "ready"
     else:
         status = "running"
+    started_payload = (started or {}).get("payload") or {}
+    started_inputs = started_payload.get("inputs") or {}
     return {
         "closure_id": closure_id,
         "found": True,
         "status": status,
-        "task": (started or {}).get("payload", {}).get("task"),
-        "chain_id": (started or {}).get("payload", {}).get("chain_id"),
+        "task": started_payload.get("task"),
+        "chain_id": started_payload.get("chain_id"),
         "started_at": (started or {}).get("timestamp"),
         "cancellation": (None if cancelled is None else {
             "authorized_by": (cancelled.get("payload") or {}).get(
                 "authorized_by"),
             "reason": (cancelled.get("payload") or {}).get("reason"),
             "cancelled_at": cancelled.get("timestamp"),
+        }),
+        # FEAT-063 disclosures: the reopen lineage (both directions) and
+        # the fencing audit — pure disclosure, never part of the derived
+        # status (the terminals stay terminal; cancel stays available).
+        "reopen": (None if reopened is None else {
+            "successor_closure_id": (reopened.get("payload") or {}).get(
+                "successor_closure_id"),
+            "reopen_attempt": (reopened.get("payload") or {}).get(
+                "reopen_attempt"),
+            "prior_status": (reopened.get("payload") or {}).get(
+                "prior_status"),
+            "authorized_by": (reopened.get("payload") or {}).get(
+                "authorized_by"),
+            "reason": (reopened.get("payload") or {}).get("reason"),
+            "reopened_at": reopened.get("timestamp"),
+        }),
+        "reopen_lineage": (None if not started_inputs.get("reopen_of") else {
+            "reopen_of": started_inputs.get("reopen_of"),
+            "reopen_attempt": started_inputs.get("reopen_attempt"),
+        }),
+        "fenced": (None if fenced is None else {
+            "observed_generation": (fenced.get("payload") or {}).get(
+                "observed_generation"),
+            "observed_holder": (fenced.get("payload") or {}).get(
+                "observed_holder"),
+            "fenced_at": fenced.get("timestamp"),
         }),
         "steps": step_state,
         "event_count": len(events),
@@ -1930,6 +2135,35 @@ def _cancel_refusal(closure_id: str, code: str, detail: str) -> Dict[str, Any]:
     return {"closure_id": closure_id, "error": True, "code": code,
             "disposition": ERROR_CODE_DISPOSITIONS.get(code, "manual"),
             "detail": detail}
+
+
+def _registered_field_refusal(closure_id: str,
+                              fields: Dict[str, str]) -> Optional[Dict[str, Any]]:
+    """FEAT-062 entry discipline shared by cancel / reopen / takeover
+    (FEAT-063): every registered authorization field is a non-empty
+    single line without the writer's row delimiter. Zero-write structured
+    refusals; ``|`` is refused because a raw pipe makes the DEC row
+    deterministically unwritable and the leg permanently pending
+    (review-FEAT-062-R0 F-1)."""
+    for label, value in fields.items():
+        if not isinstance(value, str) or not value.strip():
+            return _cancel_refusal(
+                closure_id, "schema_violation",
+                "{0} is required (明确授权者/原因 — a registered "
+                "authorization record needs it)".format(label))
+        if "\n" in value or "\r" in value:
+            return _cancel_refusal(
+                closure_id, "schema_violation",
+                "{0} must be a single line (writer row cells "
+                "cannot carry newlines)".format(label))
+        if "|" in value:
+            return _cancel_refusal(
+                closure_id, "schema_violation",
+                "{0} must not contain '|' (writer table-row cell "
+                "delimiter — a raw pipe makes the decision row "
+                "deterministically unwritable and the cancellation leg "
+                "permanently pending)".format(label))
+    return None
 
 
 def _cancelled_event(events: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -2103,7 +2337,25 @@ def _cancel_locks_leg(root: Path, closure_id: str, task: str,
     ``locks-release`` CLI — task-scoped by the writer itself (the task's
     active entry + ONLY file locks whose ``locked_by == task``), so a lock
     whose ownership changed is never released by this cancel. No locks →
-    no op (the DEC leg carries the cancellation's ops registration)."""
+    no op (the DEC leg carries the cancellation's ops registration).
+
+    FEAT-063 fencing (ARCH-09 owner-token discipline): when the task's
+    execution generation is held by ANOTHER closure, this cancel is a
+    stale generation's cancel — it records the termination (the terminal +
+    DEC leg above) but SKIPS the release (``skipped_fenced``): a stale
+    owner's cancel never releases the newer holder's dispatch locks."""
+    fence = _execution_fence_refusal(root, task, closure_id)
+    if fence is not None:
+        return {"state": "skipped_fenced", "operation_id": None,
+                "code": fence.get("code"),
+                "detail": "task execution generation {0} is held by "
+                          "closure {1} — a stale generation's cancel "
+                          "never releases the newer holder's dispatch "
+                          "locks (FEAT-063 takeover fencing; ARCH-09 "
+                          "same-type)".format(
+                              fence.get("observed_generation"),
+                              fence.get("observed_holder")),
+                "world_before": None, "world_after": None}
     gov = Path(root) / ".governance"
     world = _read_locks_world(gov, task)
     if not world["readable"]:
@@ -2144,11 +2396,14 @@ def _cancel_locks_leg(root: Path, closure_id: str, task: str,
 
 
 def _cancel_reconciliation(root: Path, task: str, dec_leg: Dict[str, Any],
-                           locks_leg: Dict[str, Any]) -> Dict[str, Any]:
+                           locks_leg: Dict[str, Any],
+                           events: List[Dict[str, Any]]) -> Dict[str, Any]:
     """closure 结果 + ops 对账 (FEAT-062 point 6): re-read the journal
-    terminal, the ops ledger (read-only, fail-safe) and the locks world;
-    the WORLD is the truth (查世界不信台账) — a ledger ``ok`` without the
-    world marker is inconsistent, never silently absorbed."""
+    terminal (review-FEAT-062-R0 F-4: the terminal presence is MEASURED
+    from the re-read journal, not hardcoded — the re-read events are the
+    post-leg world), the ops ledger (read-only, fail-safe) and the locks
+    world; the WORLD is the truth (查世界不信台账) — a ledger ``ok``
+    without the world marker is inconsistent, never silently absorbed."""
     gov = Path(root) / ".governance"
     ledger_ops: Dict[str, Any] = {}
     ledger_path = gov / "governance-store-ops.json"
@@ -2174,15 +2429,17 @@ def _cancel_reconciliation(root: Path, task: str, dec_leg: Dict[str, Any],
             dec_in_world = False
     world = _read_locks_world(gov, task)
     locks_world_clear = (
-        locks_leg.get("state") == "skipped_no_locks"
+        locks_leg.get("state") in ("skipped_no_locks", "skipped_fenced")
         or (world["readable"] and not world["held_files"]
             and not world["active_task_entry"]))
     legs_done = (
         dec_leg.get("state") in _CANCEL_LEG_DONE_STATES
         and locks_leg.get("state")
-        in _CANCEL_LEG_DONE_STATES + ("skipped_no_locks",))
+        in _CANCEL_LEG_DONE_STATES
+        + ("skipped_no_locks", "skipped_fenced"))
     consistent = bool(legs_done and dec_in_world and locks_world_clear)
-    return {"journal_terminal": True,
+    return {"journal_terminal": any(
+                e.get("event_type") == "closure_cancelled" for e in events),
             "decision_row_in_world": dec_in_world,
             "ops_ledger": ledger_ops,
             "locks_world_clear": locks_world_clear,
@@ -2317,7 +2574,7 @@ def _cancel_locked(root: Path, closure_id: str, authorized_by: str,
                     "audit); the task row is disclosed, not modified",
         },
         "reconciliation": _cancel_reconciliation(root, task, dec_leg,
-                                                 locks_leg),
+                                                 locks_leg, events),
         "journal": str(log_path),
         "journal_problems": problems,
     }
@@ -2338,29 +2595,10 @@ def cancel_closure(root: Path, closure_id: str, *, authorized_by: str,
     run lock) is retryable with zero changes made."""
     root = Path(root)
     closure_id = require_closure_id("cancel: closure_id", closure_id)
-    for label, value in (("authorized_by", authorized_by),
-                         ("reason", reason)):
-        if not isinstance(value, str) or not value.strip():
-            return _cancel_refusal(
-                closure_id, "schema_violation",
-                "cancel {0} is required (明确授权者/原因 — the cancellation "
-                "decision record needs both)".format(label))
-        if "\n" in value or "\r" in value:
-            return _cancel_refusal(
-                closure_id, "schema_violation",
-                "cancel {0} must be a single line (writer row cells "
-                "cannot carry newlines)".format(label))
-        if "|" in value:
-            # review-FEAT-062-R0 F-1: a raw pipe is the writer's row-cell
-            # delimiter — the DEC row would be deterministically unwritable
-            # and the leg PERMANENTLY pending (never convergent), so the
-            # gate refuses it with zero changes, same class as newlines.
-            return _cancel_refusal(
-                closure_id, "schema_violation",
-                "cancel {0} must not contain '|' (writer table-row cell "
-                "delimiter — a raw pipe makes the decision row "
-                "deterministically unwritable and the cancellation leg "
-                "permanently pending)".format(label))
+    field_refusal = _registered_field_refusal(
+        closure_id, {"authorized_by": authorized_by, "reason": reason})
+    if field_refusal is not None:
+        return field_refusal
     if expected_status is not None \
             and expected_status not in CANCELLABLE_STATUSES:
         return _cancel_refusal(
@@ -2380,6 +2618,511 @@ def cancel_closure(root: Path, closure_id: str, *, authorized_by: str,
                 "detail": "{0} (在途写冲突: an in-flight chain/finalize "
                           "holds the closure run lock — the cancellation "
                           "made ZERO changes; retry after the chain "
+                          "halts)".format(exc)}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Execution generation / takeover fencing (FEAT-063 — FEAT-061 epoch
+# fencing same-type, ARCH-09 owner-token discipline)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _generations_path(root: Path) -> Path:
+    """The per-task execution-generation record:
+    ``<root>/.governance/closure-generations.json``."""
+    return Path(root) / ".governance" / CLOSURE_GENERATIONS_FILENAME
+
+
+def _generations_lock_path(root: Path) -> Path:
+    """Cross-process lock for the generations record (closure-locks
+    precedent: the lock FILE stays; only the byte-range lease is
+    transient)."""
+    return _closure_lock_dir(root) / "generations.lock"
+
+
+def _load_execution_generations(
+        root: Path) -> Tuple[Dict[str, Any], Optional[str]]:
+    """Read the generations record (fail-safe). Missing file → an EMPTY
+    map (unfenced world — zero behavior change for tasks nobody took
+    over). Unreadable/corrupt → ``( {}, error )`` — the caller judges:
+    the fence refuses fail-closed (the authority is unjudgeable), the
+    takeover refuses manual_intervention."""
+    path = _generations_path(root)
+    if not path.is_file():
+        return {}, None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return {}, "closure-generations.json unreadable: {0}".format(exc)
+    if not isinstance(data, dict) or not isinstance(
+            data.get("tasks") or {}, dict):
+        return {}, ("closure-generations.json has an invalid shape "
+                    "(expected an object with a tasks object)")
+    return data, None
+
+
+def _fsync_dir(path: Path) -> None:
+    """Best-effort directory fsync after a replace (POSIX crash-durability
+    nicety; Windows disallows opening directories — swallowed). The
+    governance_store writer-family shape, mirrored locally (the chain
+    never imports the writer module — kill-switch dependency direction)."""
+    try:
+        fd = os.open(str(path), os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def _write_execution_generations(root: Path, data: Dict[str, Any]) -> None:
+    """Atomic replace of the generations record — writer-family reliable
+    persistence discipline (review-FEAT-063-R0 P2-3): same-directory
+    mkstemp temp + fsync + os.replace + best-effort dir fsync. Callers
+    hold ``_generations_lock_path`` — the serialization point."""
+    path = _generations_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = dict(data)
+    payload.setdefault("schema_version", 1)
+    encoded = (json.dumps(payload, ensure_ascii=False, indent=2)
+               + "\n").encode("utf-8")
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(str(tmp_path), str(path))
+        _fsync_dir(path.parent)
+    except BaseException:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+        raise
+
+
+def _execution_fence_refusal(root: Path, task: str,
+                             closure_id: str) -> Optional[Dict[str, Any]]:
+    """The write-side fence probe (FEAT-063): ``None`` = unfenced (the
+    task carries no record, or THIS closure IS the current holder); a
+    dict = structured ``revision_conflict`` refusal (FEAT-061 epoch-
+    fencing same-type: the world's generation moved past this executor).
+    An UNREADABLE record refuses fail-closed for every task — the fence
+    authority is unjudgeable and the module never writes through an
+    unjudgeable authority check."""
+    data, error = _load_execution_generations(root)
+    if error:
+        return {"closure_id": closure_id, "task": task, "error": True,
+                "code": "revision_conflict", "disposition": "conflict",
+                "observed_generation": None, "observed_holder": None,
+                "detail": "execution generation record unreadable ({0}) — "
+                          "the write-side fence cannot be verified; "
+                          "refusing fail-closed (repair or remove "
+                          ".governance/{1} to restore a judgeable world)"
+                          .format(error, CLOSURE_GENERATIONS_FILENAME)}
+    record = (data.get("tasks") or {}).get(task) \
+        if isinstance(data.get("tasks"), dict) else None
+    if not isinstance(record, dict):
+        return None
+    holder = record.get("holder_closure_id")
+    if holder == closure_id:
+        return None
+    return {"closure_id": closure_id, "task": task, "error": True,
+            "code": "revision_conflict", "disposition": "conflict",
+            "observed_generation": record.get("generation"),
+            "observed_holder": holder,
+            "detail": "execution generation fenced: task {0} current "
+                      "generation {1!r} is held by closure {2!r} — this "
+                      "closure {3} is a stale generation; its run/step/"
+                      "finalize writes are refused at the write side "
+                      "(FEAT-063 takeover fencing, 旧代际写入被拒). "
+                      "Recovery: the current holder drives the task; to "
+                      "re-bind this closure run takeover --task {0} "
+                      "--new-holder {3} (explicit authorization required "
+                      "— a heartbeat timeout is never a stop proof)"
+                      .format(task, record.get("generation"), holder,
+                              closure_id)}
+
+
+def _record_fenced_event(root: Path, log_path: Path, closure_id: str,
+                         fence: Dict[str, Any]) -> None:
+    """ONE idempotent ``closure_fenced`` audit event per closure — the
+    journal records WHY this executor stopped participating (the fence is
+    a fact, not an event stream; repeated refusals re-record nothing)."""
+    events, _problems = _load_closure_events(log_path, closure_id)
+    if any(e.get("event_type") == "closure_fenced" for e in events):
+        return
+    seq, prev_seq = _next_seq(events)
+    _append_closure_event(
+        log_path, closure_id, "closure_fenced", seq, prev_seq, {
+            "task": fence.get("task"),
+            "observed_generation": fence.get("observed_generation"),
+            "observed_holder": fence.get("observed_holder"),
+            "detail": (fence.get("detail") or "")[:400],
+            "code_revision": _git_head(root),
+        })
+
+
+def takeover_execution(root: Path, task: str, new_holder: str, *,
+                       authorized_by: str, reason: str,
+                       lock_timeout: float = 10.0) -> Dict[str, Any]:
+    """FEAT-063 异常接管 — promote the task's execution generation and
+    bind a new holder closure (the fencing token's write side).
+
+    Gates (zero-write refusals): task id + ``--new-holder`` closure-id
+    form; ``authorized_by``/``reason`` (the FEAT-062 field discipline —
+    explicit HUMAN authorization). The promotion serializes on (a) the
+    generations record lock and (b) the PRIOR holder's per-closure run
+    lock — an in-flight chain refuses ``lock_contention`` (retryable,
+    zero changes), so a takeover never fences a run that is mid-flight.
+    The in-lock re-read re-validates the prior holder against the world
+    (review-FEAT-063-R0 P0-1): a holder that changed between the lock-out
+    pre-read and the lock means the acquired run lock belonged to a
+    FORMER holder — refuse ``lock_contention`` retryable with zero
+    writes (no in-lock lock-swapping loop; the retry re-judges).
+
+    Heartbeat semantics (如实): heartbeat timeout is NOT a stop proof
+    (心跳超时不构成停止证明). This gate never reads any heartbeat/TTL as
+    evidence of executor death — FEAT-044's round-heartbeat mechanism is
+    E3, not this slice. The two conditions above make the human's
+    takeover decision explicit and serialized; neither PROVES the prior
+    executor is dead. If the judgment is wrong, the write-side fence
+    protects the world: the "dead" executor's next run/step/finalize
+    refuses ``revision_conflict`` loudly (and can be re-bound with
+    another takeover) instead of writing through.
+
+    First takeover on a task (no record): binds generation 1 with no
+    prior holder — nothing is fenced yet, the world only gains the
+    authority record. An unreadable record refuses manual_intervention
+    (unjudgeable authority)."""
+    root = Path(root)
+    if not isinstance(task, str) or not task.strip():
+        return {"error": True, "code": "schema_violation",
+                "disposition": "validation",
+                "detail": "task id is required (接管按任务绑定)"}
+    task = task.strip()
+    new_holder = require_closure_id("takeover: new_holder", new_holder)
+    field_refusal = _registered_field_refusal(
+        new_holder, {"authorized_by": authorized_by, "reason": reason})
+    if field_refusal is not None:
+        return field_refusal
+    data, error = _load_execution_generations(root)
+    if error:
+        return {"task": task, "new_holder": new_holder, "error": True,
+                "code": "manual_intervention",
+                "disposition": "manual",
+                "detail": "{0} — the execution-generation authority is "
+                          "unjudgeable; takeover refused (repair or "
+                          "remove the record first)".format(error)}
+    record = (data.get("tasks") or {}).get(task)
+    if isinstance(record, dict) \
+            and record.get("holder_closure_id") == new_holder:
+        return {"task": task, "new_holder": new_holder, "error": True,
+                "code": "schema_violation",
+                "disposition": "validation",
+                "detail": "closure {0} already holds task {1}'s "
+                          "execution generation (generation {2!r}) — "
+                          "no takeover needed".format(
+                              new_holder, task, record.get("generation"))}
+    prior_holder = record.get("holder_closure_id") \
+        if isinstance(record, dict) else None
+    # TEST-ONLY fault point (BT-9 channel, never a CLI face): pauses AFTER
+    # the lock-out pre-read captured prior_holder and BEFORE the
+    # generations lock — the deterministic window for the P0-1 TOCTOU
+    # red-state injection (a concurrent promotion lands in this gap).
+    _maybe_fault("post-generations-preread")
+    generations_lock = _RunLock(_generations_lock_path(root), lock_timeout)
+    try:
+        generations_lock.__enter__()
+    except LockContention as exc:
+        return {"task": task, "new_holder": new_holder, "error": True,
+                "code": "lock_contention", "disposition": "retryable",
+                "detail": "{0} (another takeover holds the generations "
+                          "record lock — retry)".format(exc)}
+    old_holder_lock = None
+    try:
+        if prior_holder is not None:
+            # serialize the promotion against the prior holder's run —
+            # an in-flight chain holds this lock (lock_contention,
+            # retryable): a takeover never fences a mid-flight run.
+            old_holder_lock = _RunLock(
+                _closure_lock_dir(root) / (prior_holder + ".lock"),
+                lock_timeout)
+            try:
+                old_holder_lock.__enter__()
+            except LockContention as exc:
+                return {"task": task, "new_holder": new_holder,
+                        "error": True, "code": "lock_contention",
+                        "disposition": "retryable",
+                        "detail": "{0} (在途写冲突: the prior holder's "
+                                  "chain is in flight — no heartbeat/"
+                                  "staleness reading proves it dead; "
+                                  "wait for the run to halt or resolve "
+                                  "it out-of-band, then retry)".format(
+                                      exc)}
+        data, error = _load_execution_generations(root)
+        if error:
+            return {"task": task, "new_holder": new_holder, "error": True,
+                    "code": "manual_intervention",
+                    "disposition": "manual",
+                    "detail": "{0} — re-judge after repairing the "
+                              "record".format(error)}
+        tasks = data.setdefault("tasks", {})
+        current = tasks.get(task)
+        observed_holder = current.get("holder_closure_id") \
+            if isinstance(current, dict) else None
+        if observed_holder == new_holder:
+            return {"task": task, "new_holder": new_holder,
+                    "error": True, "code": "schema_violation",
+                    "disposition": "validation",
+                    "detail": "closure {0} already holds task {1}'s "
+                              "execution generation (generation "
+                              "{2!r}) — no takeover needed".format(
+                                  new_holder, task,
+                                  current.get("generation")
+                                  if isinstance(current, dict) else None)}
+        if observed_holder != prior_holder:
+            # P0-1 (review-FEAT-063-R0): the world moved between the
+            # lock-out pre-read and the generations lock — the run lock we
+            # acquired belongs to a FORMER holder, and the REAL prior
+            # holder may be mid-flight. Promoting now would fence a
+            # possibly-in-flight run, violating the lock_contention
+            # invariant (a takeover never fences a mid-flight run). ZERO
+            # writes; the retry re-judges from the current world. No
+            # in-lock lock-swapping loop — swapping to the newly observed
+            # id would just relocate the same race one step further.
+            return {"task": task, "new_holder": new_holder,
+                    "error": True, "code": "lock_contention",
+                    "disposition": "retryable",
+                    "detail": "prior holder changed between the pre-read "
+                              "({0!r}) and the generations lock ({1!r}) — "
+                              "the acquired run lock belongs to a former "
+                              "holder; the promotion made ZERO changes "
+                              "(re-run the takeover against the current "
+                              "world; retryable)".format(
+                                  prior_holder, observed_holder)}
+        prior_generation = current.get("generation") \
+            if isinstance(current, dict) else None
+        generation = (prior_generation + 1) \
+            if isinstance(prior_generation, int) \
+            and not isinstance(prior_generation, bool) else 1
+        promoted_at = datetime.now(timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ")
+        tasks[task] = {
+            "generation": generation,
+            "holder_closure_id": new_holder,
+            "prior_holder_closure_id": prior_holder,
+            "prior_generation": prior_generation,
+            "promoted_by": authorized_by,
+            "promoted_at": promoted_at,
+            "reason": reason,
+        }
+        _write_execution_generations(root, data)
+    finally:
+        if old_holder_lock is not None:
+            old_holder_lock.__exit__(None, None, None)
+        generations_lock.__exit__(None, None, None)
+    return {"task": task, "generation": generation,
+            "holder_closure_id": new_holder,
+            "prior_holder_closure_id": prior_holder,
+            "prior_generation": prior_generation,
+            "promoted_by": authorized_by, "reason": reason,
+            "promoted_at": promoted_at,
+            "generations_file": str(_generations_path(root)),
+            "fence_note": "the prior holder's subsequent run/step/"
+                          "finalize writes are refused at the write side "
+                          "(revision_conflict); heartbeat timeout is "
+                          "not a stop proof — this takeover stands on "
+                          "the recorded authorization above"}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Reopen with attempt lineage (FEAT-063 — append-only, single-successor)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _resolve_reopen_linkage(root: Path, reopen_of: str,
+                            expected_successor: Optional[str]) \
+        -> Dict[str, Any]:
+    """Bind a successor run to the RECORDED reopen linkage (FEAT-063):
+    the referenced closure's ``closure_reopened`` event is the only source
+    of the successor id + attempt (recorded intent — fresh ids/args never
+    fork the lineage). Raises ValueError (zero-write refusals)."""
+    reopen_of = require_closure_id("run_chain: reopen_of", reopen_of)
+    events, _problems = _load_closure_events(
+        default_event_log_path(root), reopen_of)
+    if not any(e.get("event_type") == "closure_started" for e in events):
+        raise ValueError(
+            "reopen_of closure {0} has no journal — nothing to reopen "
+            "(--reopen-of binds a RECORDED reopen linkage; run the "
+            "reopen command first)".format(reopen_of))
+    event = next((e for e in events
+                  if e.get("event_type") == "closure_reopened"), None)
+    if event is None:
+        raise ValueError(
+            "reopen_of closure {0} carries no closure_reopened event — "
+            "run `reopen --closure-id {0}` first; --reopen-of never "
+            "mints a successor".format(reopen_of))
+    payload = event.get("payload") or {}
+    successor = require_closure_id("reopen linkage successor",
+                                   payload.get("successor_closure_id"))
+    attempt = payload.get("reopen_attempt")
+    if not isinstance(attempt, int) or isinstance(attempt, bool) \
+            or attempt < 2:
+        raise ValueError(
+            "reopen linkage event of closure {0} carries an invalid "
+            "reopen_attempt {1!r}".format(reopen_of, attempt))
+    if expected_successor is not None and expected_successor != successor:
+        raise ValueError(
+            "reopen linkage mismatch: closure {0} recorded successor {1} "
+            "but closure id {2!r} was given — the recorded linkage stands "
+            "(single-successor lineage; a fresh id would fork the attempt "
+            "chain)".format(reopen_of, successor, expected_successor))
+    return {"successor_closure_id": successor, "reopen_attempt": attempt,
+            "prior_status": payload.get("prior_status"),
+            "authorized_by": payload.get("authorized_by")}
+
+
+def _reopen_locked(root: Path, closure_id: str, authorized_by: str,
+                   reason: str, log_path: Path) -> Dict[str, Any]:
+    events, problems = _load_closure_events(log_path, closure_id)
+    started = next((e for e in events
+                    if e.get("event_type") == "closure_started"), None)
+    if started is None:
+        return _cancel_refusal(
+            closure_id, "cross_record_violation",
+            "closure {0} has no journal — nothing to reopen".format(
+                closure_id))
+    started_payload = started.get("payload") or {}
+    task = started_payload.get("task")
+    chain_id = started_payload.get("chain_id") or "unknown"
+    if not isinstance(task, str) or not task:
+        return _cancel_refusal(
+            closure_id, "cross_record_violation",
+            "closure {0} journal carries no task id — refusing to reopen"
+            .format(closure_id))
+    prior = next((e for e in events
+                  if e.get("event_type") == "closure_reopened"), None)
+    if prior is not None:
+        prior_payload = prior.get("payload") or {}
+        return _cancel_refusal(
+            closure_id, "cross_record_violation",
+            "closure {0} was already reopened as {1} (attempt {2!r}) — "
+            "reopen THAT closure's terminal state instead; a second "
+            "successor would fork the attempt chain (single-successor "
+            "lineage, FEAT-063)".format(
+                closure_id, prior_payload.get("successor_closure_id"),
+                prior_payload.get("reopen_attempt")))
+    step_state = _step_world_state(events)
+    derived = _derived_status(events, step_state)
+    if derived not in REOPENABLE_STATUSES:
+        return _cancel_refusal(
+            closure_id, "cross_record_violation",
+            "closure {0} is {1!r} — reopen requires a TERMINAL closure "
+            "(cancelled|finalized); a non-terminal closure simply "
+            "resumes, and a cancelled one re-converges via its cancel "
+            "command".format(closure_id, derived))
+    try:
+        own_attempt = int((started_payload.get("inputs") or {})
+                          .get("reopen_attempt"))
+    except (TypeError, ValueError):
+        own_attempt = 1
+    if own_attempt < 1:
+        own_attempt = 1
+    successor = new_closure_id()
+    successor_attempt = own_attempt + 1
+    seq, prev_seq = _next_seq(events)
+    _append_closure_event(
+        log_path, closure_id, "closure_reopened", seq, prev_seq, {
+            "task": task,
+            "chain_id": chain_id,
+            "successor_closure_id": successor,
+            "reopen_attempt": successor_attempt,
+            "prior_status": derived,
+            "authorized_by": authorized_by,
+            "reason": reason,
+            "code_revision": _git_head(root),
+        })
+    original_inputs = dict(started_payload.get("inputs") or {})
+    run_inputs = {key: value for key, value in sorted(original_inputs.items())
+                  if key not in ("reopen_of", "reopen_attempt")}
+    run_argv = [sys.executable, str(Path(__file__).resolve()),
+                "--project-root", str(root), "run", "--task", task,
+                "--closure-id", successor, "--reopen-of", closure_id]
+    if chain_id in _BUILTIN_CHAINS:
+        run_argv += ["--chain", chain_id]
+    for key, value in run_inputs.items():
+        run_argv += ["--input", "{0}={1}".format(key, value)]
+    run_note = ("the successor binds the recorded linkage via "
+                "--reopen-of (adopted successor id + injected "
+                "reopen_of/reopen_attempt inputs; resume carries the "
+                "same flag — inputs-digest identity)")
+    if chain_id not in _BUILTIN_CHAINS:
+        run_note += ("; the original chain {0!r} is not a built-in — "
+                     "pass the same --spec file".format(chain_id))
+    return {
+        "closure_id": closure_id,
+        "task": task,
+        "chain_id": chain_id,
+        "status": "reopened",
+        "successor_closure_id": successor,
+        "reopen_attempt": successor_attempt,
+        "prior_status": derived,
+        "authorized_by": authorized_by,
+        "reason": reason,
+        "original_records_preserved": True,
+        "run_argv": run_argv,
+        "run_note": run_note,
+        "journal": str(log_path),
+        "journal_problems": problems,
+    }
+
+
+def reopen_closure(root: Path, closure_id: str, *, authorized_by: str,
+                   reason: str, lock_timeout: float = 10.0) -> Dict[str, Any]:
+    """FEAT-063 重开 — mint a successor attempt for a TERMINAL closure
+    (cancelled / finalized) and record the lineage WITHOUT touching any
+    original record (append-only audit; 原记录零擦除):
+
+    * the original stays terminal — resume of it keeps refusing, its
+      events are never rewritten, the journal only GAINS one
+      seq-continuous ``closure_reopened`` event (successor id + attempt
+      number + authorization), appended under the SAME per-closure run
+      lock run/finalize/cancel take (CAS with any concurrent terminal
+      action);
+    * SINGLE-SUCCESSOR lineage: a second reopen refuses naming the
+      recorded successor (a fork would corrupt the attempt numbering);
+      the chain deepens by reopening the successor's terminal state;
+    * the successor binds the recorded linkage via
+      ``run --reopen-of <original>`` (see :func:`run_chain`) — the
+      successor's ``closure_started`` carries the back-link and the
+      digest binds it;
+    * authorization discipline = the cancel gate's (shared helper);
+      zero-write structured refusals carry closed M0 codes."""
+    root = Path(root)
+    closure_id = require_closure_id("reopen: closure_id", closure_id)
+    field_refusal = _registered_field_refusal(
+        closure_id, {"authorized_by": authorized_by, "reason": reason})
+    if field_refusal is not None:
+        return field_refusal
+    log_path = default_event_log_path(root)
+    lock_path = _closure_lock_dir(root) / (closure_id + ".lock")
+    try:
+        with _RunLock(lock_path, lock_timeout):
+            return _reopen_locked(root, closure_id, authorized_by, reason,
+                                  log_path)
+    except LockContention as exc:
+        return {"closure_id": closure_id, "error": True,
+                "code": "lock_contention", "disposition": "retryable",
+                "detail": "{0} (在途写冲突: an in-flight chain/finalize/"
+                          "cancel holds the closure run lock — the "
+                          "reopen made ZERO changes; retry after it "
                           "halts)".format(exc)}
 
 
@@ -2405,8 +3148,9 @@ def build_parser() -> argparse.ArgumentParser:
                     "the chain",
         epilog=(
             "Exit-code scale (this CLI): 0 = run ready/finalized (or "
-            "status/finalize ok; cancel consistent); 2 = blocked / "
-            "awaiting-world-check / validation refusal / usage error; "
+            "status/finalize/cancel/reopen/takeover ok); 2 = blocked / "
+            "awaiting-world-check / validation refusal / usage error / "
+            "stale-generation fence refusal (revision_conflict); "
             "3 = retryable lock contention, or a cancelled closure with "
             "a pending convergence leg (re-run the same cancel command).  "
             "FIX-379 item-3 (0.86.0 M-2 observation #3): "
@@ -2446,6 +3190,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Allow read-only world-check commands when resuming "
                         "an UNKNOWN external step (default: suggested "
                         "only, never auto-run)")
+    p.add_argument("--reopen-of", default=None, dest="reopen_of",
+                   help="FEAT-063: bind this run to the RECORDED reopen "
+                        "linkage of the referenced closure (adopts the "
+                        "recorded successor id + attempt; a different "
+                        "--closure-id refuses)")
     p.add_argument("--lock-timeout", type=float, default=10.0)
     # FEAT-056 R0 P3-⑥: the vestigial always-true ``--json`` flag was
     # removed — every subcommand prints a JSON payload unconditionally (the
@@ -2483,6 +3232,40 @@ def build_parser() -> argparse.ArgumentParser:
                    help="per-writer-CLI lock timeout (the DEC/locks legs "
                         "pass it through; a timed-out leg is pending — "
                         "re-run converges)")
+
+    p = sub.add_parser("reopen", help="FEAT-063 重开: mint a linked "
+                       "successor attempt for a TERMINAL closure "
+                       "(cancelled/finalized) — original records are "
+                       "never erased (append-only lineage; single-"
+                       "successor; bind the successor with run "
+                       "--reopen-of)")
+    p.add_argument("--closure-id", required=True)
+    p.add_argument("--authorized-by", required=True,
+                   help="explicit authorizer recorded in the reopen "
+                        "lineage event (明确授权者)")
+    p.add_argument("--reason", required=True,
+                   help="single-line reopen reason")
+    p.add_argument("--lock-timeout", type=float, default=10.0)
+
+    p = sub.add_parser("takeover", help="FEAT-063 异常接管: promote the "
+                       "task's execution generation and bind a new holder "
+                       "closure (write-side fencing — the prior holder's "
+                       "writes are refused afterwards; heartbeat timeout "
+                       "is NEVER a stop proof, explicit authorization "
+                       "required)")
+    p.add_argument("--task", required=True)
+    p.add_argument("--new-holder", required=True, dest="new_holder",
+                   help="closure id of the new executor (fencing-token "
+                        "holder)")
+    p.add_argument("--authorized-by", required=True,
+                   help="explicit human authorizer recorded in the "
+                        "generation record (明确授权者 — heartbeat "
+                        "timeout is not a stop proof)")
+    p.add_argument("--reason", required=True,
+                   help="single-line takeover reason (the stronger "
+                        "evidence / human authorization behind the "
+                        "takeover judgment)")
+    p.add_argument("--lock-timeout", type=float, default=10.0)
     return parser
 
 
@@ -2530,10 +3313,15 @@ def cmd_run(args: argparse.Namespace) -> int:
             spec, root=Path(args.project_root), task=args.task,
             inputs=_parse_inputs(args.input),
             closure_id=args.closure_id, dry_run=args.dry_run,
-            world_check=args.world_check, lock_timeout=args.lock_timeout)
+            world_check=args.world_check, lock_timeout=args.lock_timeout,
+            reopen_of=args.reopen_of)
     except LockContention as exc:
         payload = {"error": True, "code": "lock_contention",
                    "disposition": "retryable", "detail": str(exc)}
+    except ExecutionFenced as exc:
+        # FEAT-063: a stale execution generation is a structured
+        # revision_conflict refusal (never a bare traceback)
+        payload = exc.payload
     except ValueError as exc:
         payload = {"error": True, "code": "schema_violation",
                    "disposition": "validation", "detail": str(exc)}
@@ -2609,11 +3397,49 @@ def cmd_cancel(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_reopen(args: argparse.Namespace) -> int:
+    _configure_stdio()
+    try:
+        payload = reopen_closure(
+            Path(args.project_root), args.closure_id,
+            authorized_by=args.authorized_by, reason=args.reason,
+            lock_timeout=args.lock_timeout)
+    except ValueError as exc:
+        # malformed closure id → closed-code validation refusal, same
+        # convention as cmd_cancel (FEAT-062-R0 F-3 class)
+        payload = {"closure_id": args.closure_id, "error": True,
+                   "code": "schema_violation", "disposition": "validation",
+                   "detail": str(exc)}
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    if payload.get("error"):
+        return 3 if payload.get("disposition") == "retryable" else 2
+    return 0
+
+
+def cmd_takeover(args: argparse.Namespace) -> int:
+    _configure_stdio()
+    try:
+        payload = takeover_execution(
+            Path(args.project_root), args.task, args.new_holder,
+            authorized_by=args.authorized_by, reason=args.reason,
+            lock_timeout=args.lock_timeout)
+    except ValueError as exc:
+        # malformed --new-holder closure id → closed-code validation
+        # refusal, same convention as cmd_cancel
+        payload = {"error": True, "code": "schema_violation",
+                   "disposition": "validation", "detail": str(exc)}
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    if payload.get("error"):
+        return 3 if payload.get("disposition") == "retryable" else 2
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     handlers = {"run": cmd_run, "status": cmd_status,
-                "finalize": cmd_finalize, "cancel": cmd_cancel}
+                "finalize": cmd_finalize, "cancel": cmd_cancel,
+                "reopen": cmd_reopen, "takeover": cmd_takeover}
     return handlers[args.command](args)
 
 

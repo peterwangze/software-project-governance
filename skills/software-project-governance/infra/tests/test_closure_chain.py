@@ -2620,6 +2620,676 @@ class CancellationGuardCombinationTests(_CancellationFixture):
                 if e["event_type"] == "closure_cancelled"), 1)
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# FEAT-063 — closure reopen (attempt lineage) + execution-generation
+# fencing (0.88.0 阶段 E2; rollback-0.86.0 §8 #5 清偿后半)
+# ═══════════════════════════════════════════════════════════════════════════
+
+_FENCE_STEP_SPEC = {
+    "chain_id": "fence-fixture",
+    "steps": [
+        {
+            "step_id": "write-one",
+            "kind": "cli",
+            "argv": ["{python}", "-c",
+                     "import pathlib,sys; "
+                     "pathlib.Path(sys.argv[1]).write_text("
+                     "'one', encoding='utf-8')",
+                     "{input:marker_one}"],
+            "dry_run_flag": None,
+        },
+        {
+            "step_id": "write-two",
+            "kind": "cli",
+            "argv": ["{python}", "-c",
+                     "import pathlib,sys; "
+                     "pathlib.Path(sys.argv[1]).write_text("
+                     "'two', encoding='utf-8')",
+                     "{input:marker_two}"],
+            "dry_run_flag": None,
+        },
+        {"step_id": "end", "kind": "summary"},
+    ],
+}
+"""Two observable cli steps — the per-step fence re-check fixture: the
+fault point pauses after write-one lands, the world is re-bound
+out-of-band, and write-two's write boundary must refuse."""
+
+
+class ReopenLineageTests(_CancellationFixture):
+    """重开 = 保留原 closure + 新尝试编号关联（不擦历史）: the terminal
+    original only GAINS one closure_reopened event; the successor binds
+    the RECORDED linkage via --reopen-of; single-successor lineage."""
+
+    def _cancel_ok(self, reason):
+        code, payload = self._cancel("--authorized-by", "test-coordinator",
+                                     "--reason", reason)
+        self.assertEqual(code, 0, payload)
+        return payload
+
+    def test_reopen_cancelled_records_linkage_zero_erasure(self):
+        self._make_blocked_closure()
+        self._cancel_ok("取消旧链")
+        events_before = _chain_events(self.root, self.closure_id)
+        payload = cc.reopen_closure(
+            self.root, self.closure_id, authorized_by="test-coordinator",
+            reason="验收口径变更后重开")
+        self.assertEqual(payload["status"], "reopened", payload)
+        successor = payload["successor_closure_id"]
+        cc.require_closure_id("successor", successor)
+        self.assertEqual(payload["reopen_attempt"], 2)
+        self.assertEqual(payload["prior_status"], "cancelled")
+        self.assertTrue(payload["original_records_preserved"])
+        # the suggested run argv carries the recorded binding
+        self.assertIsInstance(payload["run_argv"], list)
+        self.assertIn("--reopen-of", payload["run_argv"])
+        self.assertIn(successor, payload["run_argv"])
+        # append-only: original records are byte-identical (零擦除) and the
+        # journal gained exactly ONE seq-continuous closure_reopened event
+        events_after = _chain_events(self.root, self.closure_id)
+        self.assertEqual(len(events_after), len(events_before) + 1)
+        self.assertEqual(events_after[:-1], events_before)
+        reopen_event = events_after[-1]
+        self.assertEqual(reopen_event["event_type"], "closure_reopened")
+        self.assertEqual(cc._validate_closure_event(reopen_event), [])
+        self.assertEqual([], loop_event_log.check_cas_monotonicity(
+            events_after))
+        rp = reopen_event["payload"]
+        self.assertEqual(rp["successor_closure_id"], successor)
+        self.assertEqual(rp["reopen_attempt"], 2)
+        self.assertEqual(rp["prior_status"], "cancelled")
+        self.assertEqual(rp["authorized_by"], "test-coordinator")
+        # the original stays terminal; the status face discloses the
+        # lineage without changing the derived status
+        code, status = _run_cli(self.root, "status",
+                                "--closure-id", self.closure_id)
+        self.assertEqual(code, 0, status)
+        self.assertEqual(status["status"], "cancelled")
+        self.assertEqual(status["reopen"]["successor_closure_id"], successor)
+        self.assertEqual(status["reopen"]["reopen_attempt"], 2)
+        spec_path = _write_fixture_spec(self.root, "spec.json",
+                                        _CANCEL_FLIP_SPEC)
+        proc = subprocess.run(
+            self._resume_cli_argv(spec_path, self.closure_id),
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", env=_clean_env(), cwd=str(self.root),
+            timeout=300)
+        self.assertEqual(proc.returncode, 2, proc.stdout)
+        self.assertIn("CANCELLED", json.loads(proc.stdout)["detail"])
+
+    def test_reopen_finalized_closure(self):
+        self._run_spec(cc.STANDARD_TICKET_CLOSURE)
+        (self.root / "out.md").write_text("x", encoding="utf-8")
+        _git("-C", str(self.root), "add", "-A")
+        _git("-C", str(self.root), "commit", "-q", "-m", "closure commit")
+        sha = _git("-C", str(self.root), "rev-parse", "HEAD").stdout.strip()
+        code, done = _run_cli(self.root, "finalize",
+                              "--closure-id", self.closure_id,
+                              "--commit-sha", sha)
+        self.assertEqual(code, 0, done)
+        payload = cc.reopen_closure(
+            self.root, self.closure_id, authorized_by="test-coordinator",
+            reason="后续工作另起尝试")
+        self.assertEqual(payload["status"], "reopened", payload)
+        self.assertEqual(payload["prior_status"], "finalized")
+        self.assertEqual(payload["reopen_attempt"], 2)
+        # the finalized terminal is untouched — cancel still refuses
+        code, refused = self._cancel("--authorized-by", "test-coordinator",
+                                     "--reason", "too late")
+        self.assertEqual(code, 2, refused)
+        self.assertEqual(refused["code"], "cross_record_violation")
+
+    def test_reopen_requires_terminal_zero_write(self):
+        self._make_blocked_closure()          # blocked = non-terminal
+        before = self._gov_snapshot()
+        payload = cc.reopen_closure(
+            self.root, self.closure_id, authorized_by="test-coordinator",
+            reason="not terminal yet")
+        self.assertEqual(payload["code"], "cross_record_violation", payload)
+        self.assertIn("TERMINAL", payload["detail"])
+        self.assertEqual(self._gov_snapshot(), before)
+        self.assertFalse(any(
+            e["event_type"] == "closure_reopened"
+            for e in _chain_events(self.root, self.closure_id)))
+
+    def test_single_successor_lineage_no_fork(self):
+        self._make_blocked_closure()
+        self._cancel_ok("第一次取消")
+        first = cc.reopen_closure(
+            self.root, self.closure_id, authorized_by="test-coordinator",
+            reason="first reopen")
+        self.assertEqual(first["status"], "reopened", first)
+        count = len(_chain_events(self.root, self.closure_id))
+        before = self._gov_snapshot()
+        second = cc.reopen_closure(
+            self.root, self.closure_id, authorized_by="test-coordinator",
+            reason="fork attempt")
+        self.assertEqual(second["code"], "cross_record_violation", second)
+        self.assertIn(first["successor_closure_id"], second["detail"])
+        self.assertIn("single-successor", second["detail"])
+        self.assertEqual(self._gov_snapshot(), before)
+        self.assertEqual(len(_chain_events(self.root, self.closure_id)),
+                         count)
+
+    def test_successor_binds_recorded_linkage_and_resumes(self):
+        self._make_blocked_closure()
+        self._cancel_ok("取消旧链")
+        opened = cc.reopen_closure(
+            self.root, self.closure_id, authorized_by="test-coordinator",
+            reason="重开")
+        successor = opened["successor_closure_id"]
+        spec = cc.parse_chain_spec(json.loads(json.dumps(
+            _CANCEL_FLIP_SPEC)))
+        # no --closure-id: the run ADOPTS the recorded successor id
+        payload = cc.run_chain(spec, root=self.root, task=TASK,
+                               inputs=dict(EVD_INPUTS),
+                               reopen_of=self.closure_id)
+        self.assertEqual(payload["closure_id"], successor, payload)
+        self.assertEqual(payload["status"], "blocked", payload)
+        started = next(e for e in _chain_events(self.root, successor)
+                       if e["event_type"] == "closure_started")
+        inputs = started["payload"]["inputs"]
+        self.assertEqual(inputs["reopen_of"], self.closure_id)
+        self.assertEqual(inputs["reopen_attempt"], "2")
+        # status face discloses the back-link
+        code, status = _run_cli(self.root, "status",
+                                "--closure-id", successor)
+        self.assertEqual(status["reopen_lineage"],
+                         {"reopen_of": self.closure_id,
+                          "reopen_attempt": "2"}, status)
+        # resume carries the same binding (inputs-digest identity)
+        payload = cc.run_chain(spec, root=self.root, task=TASK,
+                               inputs=dict(EVD_INPUTS), closure_id=successor,
+                               reopen_of=self.closure_id)
+        self.assertEqual(payload["status"], "blocked", payload)
+        # resume WITHOUT the binding → digest mismatch refusal
+        with self.assertRaises(ValueError) as ctx:
+            cc.run_chain(spec, root=self.root, task=TASK,
+                         inputs=dict(EVD_INPUTS), closure_id=successor)
+        self.assertIn("digest mismatch", str(ctx.exception))
+        # a conflicting fresh reopen_of input refuses (recorded intent)
+        with self.assertRaises(ValueError) as ctx:
+            cc.run_chain(spec, root=self.root, task=TASK,
+                         inputs=dict(EVD_INPUTS, reopen_of="closure-"
+                                      + "f" * 32),
+                         closure_id=successor, reopen_of=self.closure_id)
+        self.assertIn("conflicting fresh", str(ctx.exception))
+
+    def test_reopen_binding_refusals(self):
+        fresh = cc.new_closure_id()
+        spec = cc.parse_chain_spec(json.loads(json.dumps(
+            _CANCEL_FLIP_SPEC)))
+        # a closure with no journal at all
+        with self.assertRaises(ValueError) as ctx:
+            cc.run_chain(spec, root=self.root, task=TASK,
+                         inputs=dict(EVD_INPUTS), reopen_of=fresh)
+        self.assertIn("no journal", str(ctx.exception))
+        # a started closure without a recorded reopen event
+        self._make_blocked_closure()
+        with self.assertRaises(ValueError) as ctx:
+            cc.run_chain(spec, root=self.root, task=TASK,
+                         inputs=dict(EVD_INPUTS),
+                         reopen_of=self.closure_id)
+        self.assertIn("never mints a successor", str(ctx.exception))
+        # a recorded linkage stands — a different closure id refuses
+        code, _ = self._cancel("--authorized-by", "test-coordinator",
+                               "--reason", "取消")
+        self.assertEqual(code, 0)
+        opened = cc.reopen_closure(
+            self.root, self.closure_id, authorized_by="test-coordinator",
+            reason="重开")
+        self.assertEqual(opened["status"], "reopened", opened)
+        with self.assertRaises(ValueError) as ctx:
+            cc.run_chain(spec, root=self.root, task=TASK,
+                         inputs=dict(EVD_INPUTS), closure_id=fresh,
+                         reopen_of=self.closure_id)
+        self.assertIn("recorded successor", str(ctx.exception))
+
+    def test_reopen_field_validation_and_malformed_id(self):
+        self._make_blocked_closure()
+        self._cancel_ok("取消")
+        before = self._gov_snapshot()
+        for kwargs in ({"authorized_by": "", "reason": "r"},
+                       {"authorized_by": "test-coordinator",
+                        "reason": "a\nb"},
+                       {"authorized_by": "test-coordinator",
+                        "reason": "a|b"}):
+            payload = cc.reopen_closure(self.root, self.closure_id,
+                                        **kwargs)
+            self.assertEqual(payload["code"], "schema_violation", payload)
+        self.assertEqual(self._gov_snapshot(), before)
+        # malformed closure id → structured refusal, never a traceback
+        code, payload = _run_cli(self.root, "reopen", "--closure-id",
+                                 "bogus", "--authorized-by", "a",
+                                 "--reason", "r")
+        self.assertNotIn("Traceback", payload.get("_stderr", ""))
+        self.assertEqual(code, 2, payload)
+        self.assertEqual(payload.get("code"), "schema_violation", payload)
+
+    def test_attempt_chain_deepens_three_levels(self):
+        """P2-1 (review-FEAT-063-R0): the attempt numbering deepens along
+        the single-successor lineage — A(1) → S2(2) → S3(3); every hop is
+        append-only and the earlier originals stay untouched."""
+        self._make_blocked_closure()
+        self._cancel_ok("取消 A")
+        open1 = cc.reopen_closure(
+            self.root, self.closure_id, authorized_by="test-coordinator",
+            reason="第一跳")
+        self.assertEqual(open1["status"], "reopened", open1)
+        self.assertEqual(open1["reopen_attempt"], 2)
+        s2 = open1["successor_closure_id"]
+        # S2 runs (blocked world) then reaches ITS terminal — the chain
+        # deepens by reopening the successor, never by forking A again
+        spec = cc.parse_chain_spec(json.loads(json.dumps(
+            _CANCEL_FLIP_SPEC)))
+        payload = cc.run_chain(spec, root=self.root, task=TASK,
+                               inputs=dict(EVD_INPUTS), closure_id=s2,
+                               reopen_of=self.closure_id)
+        self.assertEqual(payload["status"], "blocked", payload)
+        cancelled = cc.cancel_closure(self.root, s2,
+                                      authorized_by="test-coordinator",
+                                      reason="S2 终态")
+        self.assertEqual(cancelled["status"], "cancelled", cancelled)
+        open2 = cc.reopen_closure(self.root, s2,
+                                  authorized_by="test-coordinator",
+                                  reason="第二跳")
+        self.assertEqual(open2["status"], "reopened", open2)
+        self.assertEqual(open2["reopen_attempt"], 3)
+        s3 = open2["successor_closure_id"]
+        self.assertNotEqual(s3, s2)
+        # S2's journal carries the full lineage: back-link to A (attempt
+        # 2) + the forward reopen event naming S3 (attempt 3)
+        events_s2 = _chain_events(self.root, s2)
+        started_s2 = next(e for e in events_s2
+                          if e["event_type"] == "closure_started")
+        self.assertEqual(
+            started_s2["payload"]["inputs"]["reopen_of"], self.closure_id)
+        self.assertEqual(
+            started_s2["payload"]["inputs"]["reopen_attempt"], "2")
+        reopens_s2 = [e for e in events_s2
+                      if e["event_type"] == "closure_reopened"]
+        self.assertEqual(len(reopens_s2), 1)
+        self.assertEqual(reopens_s2[0]["payload"]["reopen_attempt"], 3)
+        self.assertEqual(reopens_s2[0]["payload"]["successor_closure_id"],
+                         s3)
+        # A's journal gained exactly ONE reopen event and never changed
+        # after it (the later hops live in their own journals)
+        events_a = _chain_events(self.root, self.closure_id)
+        self.assertEqual(
+            sum(1 for e in events_a
+                if e["event_type"] == "closure_reopened"), 1)
+        self.assertEqual(events_a[-1]["event_type"], "closure_reopened")
+
+
+class ExecutionGenerationFencingTests(_CancellationFixture):
+    """异常接管 = 执行代际/fencing token 写入端校验: after the takeover
+    promotes the generation, the OLD executor's writes are refused at the
+    write side (旧代际写入被拒). Heartbeat timeout is NEVER a stop proof —
+    takeover stands on explicit authorization + the prior holder's run
+    lock being free."""
+
+    def test_takeover_fences_stale_holder_writes(self):
+        """RED-GREEN core: the stale generation's resume is refused with
+        ZERO effects (no probe, no subprocess, no bookkeeping beyond the
+        single idempotent closure_fenced audit event)."""
+        self._make_blocked_closure()
+        stale_id = self.closure_id
+        new_holder = cc.new_closure_id()
+        tracker_before = (self.gov / "plan-tracker.md").read_bytes()
+        evidence_before = (self.gov / "evidence-log.md").read_bytes()
+        locks_before = (self.gov / "agent-locks.json").read_bytes()
+        events_before = _chain_events(self.root, stale_id)
+        payload = cc.takeover_execution(
+            self.root, TASK, new_holder, authorized_by="test-operator",
+            reason="旧执行者失联，人工接管判定（非心跳超时）")
+        self.assertFalse(payload.get("error"), payload)
+        self.assertEqual(payload["generation"], 1)     # first takeover
+        self.assertIsNone(payload["prior_holder_closure_id"])
+        self.assertEqual(payload["holder_closure_id"], new_holder)
+        self.assertIn("not a stop proof", payload["fence_note"])
+        record = json.loads(
+            (self.gov / cc.CLOSURE_GENERATIONS_FILENAME)
+            .read_text(encoding="utf-8"))
+        self.assertEqual(record["schema_version"], 1)
+        self.assertEqual(record["tasks"][TASK]["generation"], 1)
+        self.assertEqual(record["tasks"][TASK]["holder_closure_id"],
+                         new_holder)
+        # GREEN: the stale executor's next run refuses at the fence
+        spec = cc.parse_chain_spec(json.loads(json.dumps(
+            _CANCEL_FLIP_SPEC)))
+        with self.assertRaises(cc.ExecutionFenced) as ctx:
+            cc.run_chain(spec, root=self.root, task=TASK,
+                         inputs=dict(EVD_INPUTS), closure_id=stale_id)
+        fence = ctx.exception.payload
+        self.assertEqual(fence["code"], "revision_conflict", fence)
+        self.assertEqual(fence["disposition"], "conflict")
+        self.assertEqual(fence["observed_holder"], new_holder)
+        self.assertEqual(fence["observed_generation"], 1)
+        self.assertIn("stale generation", fence["detail"])
+        self.assertIn("heartbeat", fence["detail"])
+        # ZERO effects: the governed world is byte-identical
+        self.assertEqual((self.gov / "plan-tracker.md").read_bytes(),
+                         tracker_before)
+        self.assertEqual((self.gov / "evidence-log.md").read_bytes(),
+                         evidence_before)
+        self.assertEqual((self.gov / "agent-locks.json").read_bytes(),
+                         locks_before)
+        # the journal gained exactly ONE idempotent closure_fenced event
+        events_after = _chain_events(self.root, stale_id)
+        self.assertEqual(len(events_after), len(events_before) + 1)
+        self.assertEqual(events_after[-1]["event_type"], "closure_fenced")
+        self.assertEqual(events_after[-1]["payload"]["observed_holder"],
+                         new_holder)
+        with self.assertRaises(cc.ExecutionFenced):
+            cc.run_chain(spec, root=self.root, task=TASK,
+                         inputs=dict(EVD_INPUTS), closure_id=stale_id)
+        self.assertEqual(len(_chain_events(self.root, stale_id)),
+                         len(events_after))     # no second audit event
+
+    def test_takeover_requires_authorization_zero_write(self):
+        self._make_blocked_closure()
+        before = self._gov_snapshot()
+        for kwargs in ({"authorized_by": "", "reason": "r"},
+                       {"authorized_by": "test-operator",
+                        "reason": "a|b"},
+                       {"authorized_by": "test-operator",
+                        "reason": "a\nb"}):
+            payload = cc.takeover_execution(
+                self.root, TASK, cc.new_closure_id(), **kwargs)
+            self.assertEqual(payload["code"], "schema_violation", payload)
+        self.assertFalse(
+            (self.gov / cc.CLOSURE_GENERATIONS_FILENAME).is_file())
+        self.assertEqual(self._gov_snapshot(), before)
+
+    def test_takeover_in_flight_refuses_lock_contention(self):
+        """An in-flight prior holder (its run lock is held) refuses the
+        takeover — no heartbeat/staleness reading is consulted, the lock
+        IS the in-flight evidence; zero changes made."""
+        self._make_blocked_closure()
+        first = cc.takeover_execution(self.root, TASK, self.closure_id,
+                                      authorized_by="test-operator",
+                                      reason="绑定为在途持有者")
+        self.assertFalse(first.get("error"), first)
+        before = self._gov_snapshot()
+        lock_path = (self.gov / "closure-locks"
+                     / (self.closure_id + ".lock"))
+        with cc._RunLock(lock_path, 1.0):
+            payload = cc.takeover_execution(
+                self.root, TASK, cc.new_closure_id(),
+                authorized_by="test-operator", reason="in-flight probe",
+                lock_timeout=0.5)
+        self.assertEqual(payload["code"], "lock_contention", payload)
+        self.assertEqual(payload["disposition"], "retryable")
+        self.assertIn("in flight", payload["detail"])
+        self.assertIn("heartbeat", payload["detail"])
+        # zero changes: the record still binds the ORIGINAL holder
+        self.assertEqual(self._gov_snapshot(), before)
+
+    def test_new_holder_runs_and_third_closure_fenced(self):
+        self._make_blocked_closure()
+        holder_b = cc.new_closure_id()
+        cc.takeover_execution(self.root, TASK, holder_b,
+                              authorized_by="test-operator",
+                              reason="接管到 B")
+        spec = cc.parse_chain_spec(json.loads(json.dumps(
+            _CANCEL_FLIP_SPEC)))
+        # the CURRENT holder runs normally
+        payload = cc.run_chain(spec, root=self.root, task=TASK,
+                               inputs=dict(EVD_INPUTS), closure_id=holder_b)
+        self.assertEqual(payload["status"], "blocked", payload)
+        # a THIRD closure is fenced at fresh start with ZERO writes
+        third = cc.new_closure_id()
+        before = self._gov_snapshot()
+        with self.assertRaises(cc.ExecutionFenced) as ctx:
+            cc.run_chain(spec, root=self.root, task=TASK,
+                         inputs=dict(EVD_INPUTS), closure_id=third)
+        self.assertEqual(ctx.exception.payload["code"],
+                         "revision_conflict")
+        self.assertEqual(_chain_events(self.root, third), [])
+        self.assertEqual(self._gov_snapshot(), before)
+        # re-bind the third closure: generation deepens, prior holder B
+        rebound = cc.takeover_execution(self.root, TASK, third,
+                                        authorized_by="test-operator",
+                                        reason="转绑到 C")
+        self.assertFalse(rebound.get("error"), rebound)
+        self.assertEqual(rebound["generation"], 2)
+        self.assertEqual(rebound["prior_holder_closure_id"], holder_b)
+        payload = cc.run_chain(spec, root=self.root, task=TASK,
+                               inputs=dict(EVD_INPUTS), closure_id=third)
+        self.assertEqual(payload["status"], "blocked", payload)
+
+    def test_finalize_of_stale_generation_refused(self):
+        self._run_spec(cc.STANDARD_TICKET_CLOSURE)
+        (self.root / "out.md").write_text("x", encoding="utf-8")
+        _git("-C", str(self.root), "add", "-A")
+        _git("-C", str(self.root), "commit", "-q", "-m", "closure commit")
+        sha = _git("-C", str(self.root), "rev-parse", "HEAD").stdout.strip()
+        events_before = _chain_events(self.root, self.closure_id)
+        cc.takeover_execution(self.root, TASK, cc.new_closure_id(),
+                              authorized_by="test-operator", reason="接管")
+        refused = cc.finalize_closure(self.root, self.closure_id, sha)
+        self.assertTrue(refused.get("error"), refused)
+        self.assertEqual(refused["code"], "revision_conflict", refused)
+        events_after = _chain_events(self.root, self.closure_id)
+        self.assertEqual(len(events_after), len(events_before) + 1)
+        self.assertEqual(events_after[-1]["event_type"], "closure_fenced")
+        self.assertFalse(any(e["event_type"] == "closure_finalized"
+                             for e in events_after))
+
+    def test_cancel_of_stale_generation_skips_locks_release(self):
+        """ARCH-09 same-type: a stale owner's cancel records the
+        termination but NEVER releases the newer holder's dispatch
+        locks."""
+        self._make_blocked_closure()
+        new_holder = cc.new_closure_id()
+        cc.takeover_execution(self.root, TASK, new_holder,
+                              authorized_by="test-operator", reason="接管")
+        payload = cc.cancel_closure(
+            self.root, self.closure_id, authorized_by="test-coordinator",
+            reason="终止被接管的旧执行者")
+        self.assertEqual(payload["status"], "cancelled", payload)
+        self.assertEqual(payload["legs"]["locks"]["state"],
+                         "skipped_fenced", payload)
+        self.assertIsNone(payload["operation_ids"]["locks"])
+        # the newer holder's dispatch locks stay
+        locks = self.locks_json()
+        self.assertIn("fixture/a.md", locks["file_locks"])
+        self.assertIn(TASK, locks["active_tasks"])
+        # termination still records: terminal event + DEC row + verdict
+        self.assertIsNotNone(self._cancel_event())
+        self.assertEqual(payload["legs"]["decision"]["state"], "done")
+        self.assertTrue(payload["reconciliation"]["consistent"],
+                        payload["reconciliation"])
+        self.assertTrue(payload["reconciliation"]["journal_terminal"])
+
+    def test_generations_record_corrupt_fails_closed(self):
+        self._make_blocked_closure()
+        (self.gov / cc.CLOSURE_GENERATIONS_FILENAME).write_text(
+            "{not json", encoding="utf-8")
+        spec = cc.parse_chain_spec(json.loads(json.dumps(
+            _CANCEL_FLIP_SPEC)))
+        with self.assertRaises(cc.ExecutionFenced) as ctx:
+            cc.run_chain(spec, root=self.root, task=TASK,
+                         inputs=dict(EVD_INPUTS),
+                         closure_id=self.closure_id)
+        fence = ctx.exception.payload
+        self.assertEqual(fence["code"], "revision_conflict", fence)
+        self.assertIn("unreadable", fence["detail"])
+        takeover = cc.takeover_execution(
+            self.root, TASK, cc.new_closure_id(),
+            authorized_by="test-operator", reason="corrupt probe")
+        self.assertEqual(takeover["code"], "manual_intervention", takeover)
+        # repair restores the judgeable world (unbound → unfenced)
+        (self.gov / cc.CLOSURE_GENERATIONS_FILENAME).unlink()
+        payload = cc.run_chain(spec, root=self.root, task=TASK,
+                               inputs=dict(EVD_INPUTS),
+                               closure_id=self.closure_id)
+        self.assertEqual(payload["status"], "blocked", payload)
+
+    def test_takeover_stale_preread_refused_lock_contention_zero_write(self):
+        """P0-1 (review-FEAT-063-R0, 红态注入): T1's pre-read captured
+        holder A; T2's full promotion (A→B) lands in the pre-read→lock
+        window (the ``post-generations-preread`` fault point); T1's
+        in-lock re-read detects the mismatch and refuses with ZERO
+        writes — the acquired run lock belonged to a FORMER holder and
+        promoting on it would fence the REAL holder's possibly-in-flight
+        run (violating the lock_contention invariant)."""
+        import threading  # noqa: E402 (local import — byte-stable block)
+        self._make_blocked_closure()
+        holder_a = self.closure_id
+        first = cc.takeover_execution(self.root, TASK, holder_a,
+                                      authorized_by="test-operator",
+                                      reason="绑定为持有者")
+        self.assertFalse(first.get("error"), first)
+        holder_b = cc.new_closure_id()
+        holder_c = cc.new_closure_id()
+        handshake = self.tmpdir / "handshake-p0"
+        os.environ[cc.CLOSURE_TEST_FAULT_ENV] = json.dumps({
+            "handshake_dir": str(handshake),
+            "points": ["post-generations-preread"]})
+        result = {}
+
+        def stale_takeover():
+            result["payload"] = cc.takeover_execution(
+                self.root, TASK, holder_c, authorized_by="test-operator",
+                reason="stale pre-read probe")
+
+        thread = threading.Thread(target=stale_takeover)
+        thread.start()
+        try:
+            self.assertTrue(
+                _wait_marker(handshake, "post-generations-preread"),
+                "T1 never reached the fault point")
+            # the window is open: T1's pre-read saw A. Drop the fault env
+            # BEFORE T2 so only T1's already-consumed config pauses (T2
+            # must run to completion inside the window), then promote B.
+            os.environ.pop(cc.CLOSURE_TEST_FAULT_ENV, None)
+            second = cc.takeover_execution(
+                self.root, TASK, holder_b, authorized_by="test-operator",
+                reason="窗口内接管到 B")
+            self.assertFalse(second.get("error"), second)
+            self.assertEqual(second["generation"], 2)
+            self.assertEqual(second["holder_closure_id"], holder_b)
+            # the zero-write baseline for T1 = the world AFTER T2's
+            # legitimate promotion (T1 must add nothing to it)
+            after_t2 = self._gov_snapshot()
+        finally:
+            _point_marker(handshake, "post-generations-preread") \
+                .with_suffix(".release").write_text("go", encoding="utf-8")
+            thread.join(timeout=60)
+            os.environ.pop(cc.CLOSURE_TEST_FAULT_ENV, None)
+        payload = result["payload"]
+        self.assertEqual(payload["code"], "lock_contention", payload)
+        self.assertEqual(payload["disposition"], "retryable")
+        self.assertIn("former holder", payload["detail"])
+        self.assertIn("ZERO changes", payload["detail"])
+        # zero writes by T1: B's promotion stands untouched
+        self.assertEqual(self._gov_snapshot(), after_t2)
+        record = json.loads(
+            (self.gov / cc.CLOSURE_GENERATIONS_FILENAME)
+            .read_text(encoding="utf-8"))
+        self.assertEqual(record["tasks"][TASK]["holder_closure_id"],
+                         holder_b)
+        self.assertEqual(record["tasks"][TASK]["generation"], 2)
+
+    def test_per_step_fence_recheck_refuses_out_of_band_rebind(self):
+        """P1-1 (review-FEAT-063-R0): the per-step write-side re-check —
+        the OUT-OF-BAND face. Under the takeover path a mid-run fence is
+        unreachable (the promotion holds the run lock); this test
+        simulates the out-of-band authority change (hand-edit class) via
+        the fault-point window: the chain pauses after write-one lands,
+        the world is re-bound to another holder, and write-two's write
+        boundary refuses — write-one's landed effect STAYS (the fence
+        stops at the NEXT write, never reverts)."""
+        import threading  # noqa: E402 (local import — byte-stable block)
+        executor = cc.new_closure_id()
+        first = cc.takeover_execution(self.root, TASK, executor,
+                                      authorized_by="test-operator",
+                                      reason="绑定为执行者")
+        self.assertFalse(first.get("error"), first)
+        marker_one = self.root / "marker-one.txt"
+        marker_two = self.root / "marker-two.txt"
+        handshake = self.tmpdir / "handshake-step"
+        os.environ[cc.CLOSURE_TEST_FAULT_ENV] = json.dumps({
+            "handshake_dir": str(handshake),
+            "points": ["post-step-effect:write-one"]})
+        result = {}
+
+        def run_chain_thread():
+            try:
+                result["payload"] = cc.run_chain(
+                    cc.parse_chain_spec(json.loads(json.dumps(
+                        _FENCE_STEP_SPEC))),
+                    root=self.root, task=TASK,
+                    inputs={"marker_one": str(marker_one),
+                            "marker_two": str(marker_two)},
+                    closure_id=executor)
+            except cc.ExecutionFenced as exc:
+                result["fenced"] = exc.payload
+
+        thread = threading.Thread(target=run_chain_thread)
+        thread.start()
+        try:
+            self.assertTrue(
+                _wait_marker(handshake, "post-step-effect:write-one"),
+                "the chain never reached the write-one fault point")
+            # OUT-OF-BAND re-bind (hand-edit class — bypasses the takeover
+            # path's run-lock serialization by construction)
+            record = json.loads(
+                (self.gov / cc.CLOSURE_GENERATIONS_FILENAME)
+                .read_text(encoding="utf-8"))
+            record["tasks"][TASK]["holder_closure_id"] = cc.new_closure_id()
+            record["tasks"][TASK]["generation"] += 1
+            (self.gov / cc.CLOSURE_GENERATIONS_FILENAME).write_text(
+                json.dumps(record, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8")
+        finally:
+            _point_marker(handshake, "post-step-effect:write-one") \
+                .with_suffix(".release").write_text("go", encoding="utf-8")
+            thread.join(timeout=60)
+            os.environ.pop(cc.CLOSURE_TEST_FAULT_ENV, None)
+        # write-one's effect landed; write-two never spawned
+        self.assertTrue(marker_one.is_file())
+        self.assertFalse(marker_two.is_file())
+        fence = result.get("fenced")
+        self.assertIsNotNone(fence, result)
+        self.assertEqual(fence["code"], "revision_conflict", fence)
+        self.assertEqual(fence["disposition"], "conflict")
+        # journal: write-one completed + ONE idempotent closure_fenced
+        events = _chain_events(self.root, executor)
+        self.assertEqual(
+            sum(1 for e in events if e["event_type"] == "step_completed"
+                and (e.get("payload") or {}).get("step_id") == "write-one"),
+            1)
+        self.assertEqual(
+            sum(1 for e in events if e["event_type"] == "closure_fenced"),
+            1)
+        self.assertFalse(any(e["event_type"] == "step_started"
+                             and (e.get("payload") or {}).get("step_id")
+                             == "write-two" for e in events))
+
+    def test_same_holder_retakeover_refused_zero_write(self):
+        """P1-2 (review-FEAT-063-R0): re-binding the CURRENT holder
+        refuses (no takeover needed) — the record is byte-identical."""
+        self._make_blocked_closure()
+        first = cc.takeover_execution(self.root, TASK, self.closure_id,
+                                      authorized_by="test-operator",
+                                      reason="首次绑定")
+        self.assertFalse(first.get("error"), first)
+        record_before = (self.gov / cc.CLOSURE_GENERATIONS_FILENAME) \
+            .read_bytes()
+        before = self._gov_snapshot()
+        again = cc.takeover_execution(self.root, TASK, self.closure_id,
+                                      authorized_by="test-operator",
+                                      reason="同 holder 重接管")
+        self.assertEqual(again["code"], "schema_violation", again)
+        self.assertIn("already holds", again["detail"])
+        self.assertEqual(
+            (self.gov / cc.CLOSURE_GENERATIONS_FILENAME).read_bytes(),
+            record_before)
+        self.assertEqual(self._gov_snapshot(), before)
+
+
 def gstore_target_lock(target: Path):
     """A governance-store _TargetLock context (test-side contention
     fixture for the F-5④/interruption scenarios — same lock discipline the

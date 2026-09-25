@@ -1878,5 +1878,755 @@ class ReleaseBootstrapTests(_WorkspaceFixture):
         self.assertIn("violation_ledger_healthy", report["not_converged"])
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# FEAT-062 — closure cancellation vertical slice (arch Q5 minimal slice,
+# rollback-0.86.0 §8 #5 清偿; seven-scenario acceptance + F-5④ combination)
+# ═══════════════════════════════════════════════════════════════════════════
+
+OTHER_TASK = "FEAT-902"
+
+_CANCEL_FLIP_SPEC = {
+    "chain_id": "cancel-fixture",
+    "steps": [
+        {
+            "step_id": "flip",
+            "kind": "cli",
+            "argv": [
+                "{python}", "{tru_cli}",
+                "--task", "{task}",
+                "--from", "approved", "--to", "completed",
+                "--reason", "cancel fixture flip step（machine via "
+                            "task-row-update）",
+                "--operation-id", "{op:flip}",
+                "--file", "{input:tracker_file}",
+                "--json",
+            ],
+            "probe": {
+                "kind": "task_row_state",
+                "file": "{input:tracker_file}",
+                "task": "{task}",
+                "expect": "completed",
+            },
+            "dry_run_flag": "--dry-run",
+        },
+        {
+            "step_id": "halt",
+            "kind": "cli",
+            "argv": ["{python}", "-c", "import sys; sys.exit(2)"],
+            "dry_run_flag": "--dry-run",
+        },
+        {"step_id": "end", "kind": "summary"},
+    ],
+}
+"""A closure that completes ONE governed step (the flip) then blocks —
+the cancellation's retained-effects + reconciliation fixture."""
+
+_CANCEL_EXTERNAL_SPEC = {
+    "chain_id": "cancel-fixture-external",
+    "steps": [
+        {
+            "step_id": "outside",
+            "kind": "external",
+            "argv": ["{python}", "-c", "print('outside effect')"],
+            "timeout_seconds": 30,
+        },
+        {"step_id": "end", "kind": "summary"},
+    ],
+}
+"""A closure whose external step COMPLETED — cancellation must refuse
+explicitly (有副作用明确拒绝; the standard production chain carries no
+external steps, the kind is fixture-only, same as the chaos specs)."""
+
+_DEC_SEED = (
+    "# 决策记录\n\n"
+    "| 编号 | 日期 | 决策人 | 决策内容 | 依据 |\n"
+    "| --- | --- | --- | --- | --- |\n"
+    "| DEC-50 | 2026-09-01 | Coordinator | seed 行（fixture 基线，"
+    "非真实决策面） | seed |\n")
+
+_GUARD_BASELINE_TARGET = {
+    "schema_version": 1,
+    "tool": "governance-write-guard/row-family-reconciliation",
+    "updated_at": "2026-09-25T00:00:00",
+    "files": {},
+}
+
+
+class _CancellationFixture(_WorkspaceFixture):
+    """Cancellation fixtures: a writer-compatible decision log + a second
+    task's dispatch locks (the only-own-locks control)."""
+
+    def setUp(self):
+        super().setUp()
+        (self.gov / "decision-log.md").write_text(_DEC_SEED,
+                                                  encoding="utf-8")
+        locks = self.locks_json()
+        locks["active_tasks"][OTHER_TASK] = {
+            "agent_role": "Developer",
+            "spawned_at": "2026-09-20T10:00:00",
+            "coordinator_session": "fixture-session-b",
+            "target_files": ["fixture/b.md"],
+            "description": "other task control lock",
+            "acquired": "2026-09-20T10:00:00",
+            "files": ["fixture/b.md"],
+        }
+        locks["file_locks"]["fixture/b.md"] = {
+            "locked_by": OTHER_TASK,
+            "locked_at": "2026-09-20T10:00:00",
+            "ttl_seconds": 14400,
+            "ttl_reason": "other task control lock",
+        }
+        (self.gov / "agent-locks.json").write_text(
+            json.dumps(locks, ensure_ascii=False, indent=4) + "\n",
+            encoding="utf-8")
+
+    def _resume_cli_argv(self, spec_path, closure_id):
+        """Full resume CLI argv — the chain's recorded inputs MUST be
+        replayed (closure identity = inputs digest)."""
+        argv = [sys.executable, str(CC_PATH), "--project-root",
+                str(self.root), "run", "--spec", str(spec_path),
+                "--task", TASK, "--closure-id", closure_id]
+        for key, value in EVD_INPUTS.items():
+            argv += ["--input", "{0}={1}".format(key, value)]
+        return argv
+
+    def _run_spec(self, spec, closure_id=None):
+        return cc.run_chain(
+            cc.parse_chain_spec(json.loads(json.dumps(spec))),
+            root=self.root, task=TASK, inputs=dict(EVD_INPUTS),
+            closure_id=closure_id or self.closure_id)
+
+    def _make_blocked_closure(self, closure_id=None):
+        payload = self._run_spec(_CANCEL_FLIP_SPEC, closure_id)
+        self.assertEqual(payload["status"], "blocked", payload)
+        return payload
+
+    def _cancel(self, *args):
+        return _run_cli(self.root, "cancel", "--closure-id",
+                        self.closure_id, *args)
+
+    def _gov_snapshot(self):
+        """Byte snapshot of .governance minus the run-lock bookkeeping
+        (closure-locks/ is the loop_event_log lock-file precedent — its
+        mere creation is not a governance write)."""
+        return {rel: data for rel, data in
+                _snapshot_tree(self.gov).items()
+                if not rel.startswith("closure-locks")}
+
+    def _ops_ledger(self):
+        path = self.gov / "governance-store-ops.json"
+        if not path.is_file():
+            return {}
+        return json.loads(path.read_text(encoding="utf-8")).get(
+            "operations", {})
+
+    def _cancel_event(self):
+        events = _chain_events(self.root, self.closure_id)
+        return next((e for e in events
+                     if e["event_type"] == "closure_cancelled"), None)
+
+
+class CancellationNormalTests(_CancellationFixture):
+    """场景 1（正常取消）+ 场景 7（对账）: a blocked closure with one
+    completed governed step cancels cleanly — terminal journal event,
+    writer-registered DEC row, own locks released, reconciliation
+    consistent, terminal semantics enforced afterwards."""
+
+    def test_normal_cancel_full_semantics_and_reconciliation(self):
+        self._make_blocked_closure()
+        flips_before = self.tracker_text().count("✅ 完成")
+        code, payload = self._cancel(
+            "--authorized-by", "test-coordinator",
+            "--reason", "票作废：验收口径变更，收口链废弃")
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(payload["status"], "cancelled")
+        self.assertFalse(payload["replayed"])
+        self.assertEqual(payload["authorized_by"], "test-coordinator")
+        # terminal journal event: valid envelope, seq continuity holds
+        event = self._cancel_event()
+        self.assertIsNotNone(event)
+        self.assertEqual(cc._validate_closure_event(event), [])
+        events = _chain_events(self.root, self.closure_id)
+        self.assertEqual([], loop_event_log.check_cas_monotonicity(events))
+        self.assertEqual(event["payload"]["observed_status"], "blocked")
+        self.assertEqual(event["payload"]["locks_files"], ["fixture/a.md"])
+        # the DEC row registered THROUGH the writer (machine provenance)
+        dec_op = payload["operation_ids"]["decision"]
+        dec_text = (self.gov / "decision-log.md").read_text(encoding="utf-8")
+        self.assertIn("decision-append {0}".format(dec_op), dec_text)
+        self.assertIn("test-coordinator", dec_text)
+        self.assertIn("closure {0}".format(self.closure_id), dec_text)
+        # the ops ledger carries BOTH cancellation ops (可审计)
+        ops = self._ops_ledger()
+        self.assertEqual(ops[dec_op]["status"], "ok")
+        locks_op = payload["operation_ids"]["locks"]
+        self.assertIsNotNone(locks_op)
+        self.assertEqual(ops[locks_op]["status"], "ok")
+        # own locks released; the other task's locks are untouched
+        locks = self.locks_json()
+        self.assertNotIn(TASK, locks["active_tasks"])
+        self.assertNotIn("fixture/a.md", locks["file_locks"])
+        self.assertIn(OTHER_TASK, locks["active_tasks"])
+        self.assertIn("fixture/b.md", locks["file_locks"])
+        # retained effects: the completed flip STAYS (append-only audit)
+        self.assertEqual(payload["retained_effects"]["completed_steps"],
+                         ["flip"])
+        self.assertEqual(self.tracker_text().count("✅ 完成"), flips_before)
+        self.assertTrue(payload["retained_effects"]["task_row"]["found"])
+        # reconciliation verdict: consistent (场景 7 对账)
+        self.assertTrue(payload["reconciliation"]["consistent"],
+                        payload["reconciliation"])
+        self.assertTrue(payload["reconciliation"]["decision_row_in_world"])
+        self.assertTrue(payload["reconciliation"]["locks_world_clear"])
+
+    def test_terminal_semantics_after_cancel(self):
+        """DEC/EVD/任务终态语义 (ticket point 4): cancelled = terminal —
+        resume refuses, finalize refuses, status reports the terminal."""
+        self._make_blocked_closure()
+        code, _ = self._cancel("--authorized-by", "test-coordinator",
+                               "--reason", "终态语义验证")
+        self.assertEqual(code, 0)
+        # resume refused (terminal semantics — asserted on the message, not
+        # just the code, so a digest-mismatch refusal can't masquerade)
+        spec_path = _write_fixture_spec(self.root, "spec.json",
+                                        _CANCEL_FLIP_SPEC)
+        proc = subprocess.run(
+            self._resume_cli_argv(spec_path, self.closure_id),
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", env=_clean_env(), cwd=str(self.root),
+            timeout=300)
+        self.assertEqual(proc.returncode, 2, proc.stdout)
+        refused = json.loads(proc.stdout)
+        self.assertEqual(refused["code"], "schema_violation")
+        self.assertIn("CANCELLED", refused["detail"])
+        # finalize refused
+        code, refused = _run_cli(self.root, "finalize",
+                                 "--closure-id", self.closure_id,
+                                 "--commit-sha", "deadbee")
+        self.assertEqual(code, 2, refused)
+        self.assertEqual(refused["code"], "cross_record_violation")
+        # status reports the terminal + the recorded authorization
+        code, status = _run_cli(self.root, "status",
+                                "--closure-id", self.closure_id)
+        self.assertEqual(code, 0, status)
+        self.assertEqual(status["status"], "cancelled")
+        self.assertEqual(status["cancellation"]["authorized_by"],
+                         "test-coordinator")
+
+
+class CancellationEntryGateTests(_CancellationFixture):
+    """限定入口: 无权取消（未授权零变化）/ 不可取消状态 / 有副作用明确
+    拒绝 / undetermined world / 在途写冲突 — every gate is a ZERO-WRITE
+    structured refusal."""
+
+    def test_unauthorized_zero_state_change(self):
+        """场景 6（未授权零变化）: missing authorizer/reason →
+        schema_violation, .governance byte-identical."""
+        self._make_blocked_closure()
+        before = self._gov_snapshot()
+        # missing flag → argparse usage error (exit 2, zero writes)
+        code, payload = self._cancel("--reason", "r")
+        self.assertEqual(code, 2, payload)
+        self.assertNotIn("error", payload)   # usage error, not JSON refusal
+        # empty authorizer/reason → structured schema_violation refusal
+        for args in (["--authorized-by", ""],
+                     ["--authorized-by", "   "]):
+            code, payload = self._cancel(*args, "--reason", "r")
+            self.assertEqual(code, 2, payload)
+            self.assertEqual(payload.get("code"), "schema_violation", payload)
+        # missing --reason → argparse usage error (exit 2, zero writes)
+        code, payload = self._cancel("--authorized-by", "test-coordinator")
+        self.assertEqual(code, 2, payload)
+        self.assertNotIn("error", payload)
+        # newline injection refused (writer row cells are single-line)
+        code, payload = self._cancel("--authorized-by", "a\nb",
+                                     "--reason", "r")
+        self.assertEqual(code, 2, payload)
+        self.assertEqual(payload.get("code"), "schema_violation", payload)
+        self.assertEqual(self._gov_snapshot(), before)
+        self.assertIsNone(self._cancel_event())
+
+    def test_unknown_closure_refused_zero_writes(self):
+        fresh = cc.new_closure_id()
+        before = self._gov_snapshot()
+        code, payload = _run_cli(self.root, "cancel", "--closure-id", fresh,
+                                 "--authorized-by", "test-coordinator",
+                                 "--reason", "no such closure")
+        self.assertEqual(code, 2, payload)
+        self.assertEqual(payload["code"], "cross_record_violation", payload)
+        self.assertEqual(self._gov_snapshot(), before)
+
+    def test_finalized_closure_not_cancellable(self):
+        """场景 4（不可取消状态）: finalized = immutable terminal."""
+        self._run_spec(cc.STANDARD_TICKET_CLOSURE)
+        (self.root / "out.md").write_text("x", encoding="utf-8")
+        _git("-C", str(self.root), "add", "-A")
+        _git("-C", str(self.root), "commit", "-q", "-m", "closure commit")
+        sha = _git("-C", str(self.root), "rev-parse", "HEAD").stdout.strip()
+        code, done = _run_cli(self.root, "finalize",
+                              "--closure-id", self.closure_id,
+                              "--commit-sha", sha)
+        self.assertEqual(code, 0, done)
+        before = self._gov_snapshot()
+        code, payload = self._cancel("--authorized-by", "test-coordinator",
+                                     "--reason", "too late")
+        self.assertEqual(code, 2, payload)
+        self.assertEqual(payload["code"], "cross_record_violation", payload)
+        self.assertIn("FINALIZED", payload["detail"])
+        self.assertEqual(self._gov_snapshot(), before)
+
+    def test_external_side_effects_refuse_explicitly(self):
+        """场景 7（有副作用明确拒绝）: an external-step terminal event
+        makes the closure un-cancellable in the minimal slice."""
+        self._run_spec(_CANCEL_EXTERNAL_SPEC)
+        events = _chain_events(self.root, self.closure_id)
+        self.assertTrue(any(e["event_type"] == "step_completed"
+                            for e in events))
+        before = self._gov_snapshot()
+        code, payload = self._cancel("--authorized-by", "test-coordinator",
+                                     "--reason", "outside effect present")
+        self.assertEqual(code, 2, payload)
+        self.assertEqual(payload["code"], "manual_intervention", payload)
+        self.assertIn("external-step", payload["detail"])
+        self.assertEqual(self._gov_snapshot(), before)
+        self.assertIsNone(self._cancel_event())
+
+    def test_undetermined_step_refuses_until_world_converges(self):
+        """A dangling step_started (crash window) = undetermined effect —
+        resume-first protocol, then cancel succeeds."""
+        log_path = cc.default_event_log_path(self.root)
+        merged = dict(cc._REQUIRED_INPUT_DEFAULTS)
+        merged.update(EVD_INPUTS)
+        merged["tracker_file"] = str(
+            self.root / ".governance" / "plan-tracker.md")
+        seq, prev = 1, None
+        cc._append_closure_event(
+            log_path, self.closure_id, "closure_started", seq, prev,
+            {"chain_id": "cancel-fixture", "task": TASK,
+             "inputs_digest": cc._inputs_digest(merged),
+             "inputs": dict(sorted(merged.items())),
+             "code_revision": None})
+        cc._append_closure_event(
+            log_path, self.closure_id, "step_started", seq + 1, seq,
+            {"step_id": "flip", "kind": "cli"})
+        before = self._gov_snapshot()
+        code, payload = self._cancel("--authorized-by", "test-coordinator",
+                                     "--reason", "crash window open")
+        self.assertEqual(code, 2, payload)
+        self.assertEqual(payload["code"], "manual_intervention", payload)
+        self.assertIn("undetermined", payload["detail"])
+        self.assertEqual(self._gov_snapshot(), before)
+        # resume-first protocol: converging the world unlocks the cancel
+        # (the dangling CLI step's probe misses → re-execution → the halt
+        # step blocks → cancellable blocked world)
+        spec_path = _write_fixture_spec(self.root, "spec.json",
+                                        _CANCEL_FLIP_SPEC)
+        proc = subprocess.run(
+            self._resume_cli_argv(spec_path, self.closure_id),
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", env=_clean_env(), cwd=str(self.root),
+            timeout=300)
+        self.assertEqual(proc.returncode, 2, proc.stdout)
+        self.assertEqual(json.loads(proc.stdout)["status"], "blocked")
+        code, payload = self._cancel("--authorized-by", "test-coordinator",
+                                     "--reason", "world converged")
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(payload["status"], "cancelled", payload)
+
+    def test_in_flight_write_conflict_is_retryable_zero_write(self):
+        """在途写冲突: an in-flight chain holds the closure run lock — the
+        cancel refuses lock_contention (retryable) with zero changes."""
+        self._make_blocked_closure()
+        before = self._gov_snapshot()
+        lock_path = (self.gov / "closure-locks"
+                     / (self.closure_id + ".lock"))
+        with cc._RunLock(lock_path, 1.0):
+            proc = subprocess.Popen(
+                [sys.executable, str(CC_PATH), "--project-root",
+                 str(self.root), "cancel", "--closure-id", self.closure_id,
+                 "--authorized-by", "test-coordinator", "--reason",
+                 "while a chain is in flight", "--lock-timeout", "0.5"],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                encoding="utf-8", errors="replace", env=_clean_env(),
+                cwd=str(self.root))
+            out, _err = proc.communicate(timeout=120)
+        self.assertEqual(proc.returncode, 3, out)
+        payload = json.loads(out)
+        self.assertEqual(payload["code"], "lock_contention", payload)
+        self.assertEqual(payload["disposition"], "retryable")
+        self.assertEqual(self._gov_snapshot(), before)
+        self.assertIsNone(self._cancel_event())
+
+    def test_pipe_character_refused_at_zero_write_gate(self):
+        """review-FEAT-062-R0 F-1 (红绿): a raw '|' in reason/authorized_by
+        would make the DEC row deterministically unwritable → the leg
+        permanently pending (non-convergent). The entry gate refuses it
+        with ZERO changes, same class as newlines — 红相判据：任何放行管
+        道符进入写腿的实现都产生永久 pending 的取消（破坏中断恢复必收敛）."""
+        self._make_blocked_closure()
+        before = self._gov_snapshot()
+        for args in (["--authorized-by", "test-coordinator",
+                      "--reason", "a|b"],
+                     ["--authorized-by", "coord|session",
+                      "--reason", "r"]):
+            code, payload = self._cancel(*args)
+            self.assertEqual(code, 2, payload)
+            self.assertEqual(payload.get("code"), "schema_violation", payload)
+            self.assertIn("|", payload.get("detail", ""))
+        self.assertEqual(self._gov_snapshot(), before)
+        self.assertIsNone(self._cancel_event())
+
+
+class CancellationCasTests(_CancellationFixture):
+    """CAS 取消: expected-status CAS + cancel×finalize 竞争单终态
+    （the run lock is the linearization point — exactly ONE terminal)."""
+
+    def test_expect_status_cas_mismatch_returns_observed(self):
+        self._make_blocked_closure()
+        before = self._gov_snapshot()
+        code, payload = self._cancel("--authorized-by", "test-coordinator",
+                                     "--reason", "cas probe",
+                                     "--expect-status", "ready")
+        self.assertEqual(code, 2, payload)
+        self.assertEqual(payload["code"], "revision_conflict", payload)
+        self.assertEqual(payload["observed_status"], "blocked")
+        self.assertEqual(self._gov_snapshot(), before)
+        # matching CAS proceeds
+        code, payload = self._cancel("--authorized-by", "test-coordinator",
+                                     "--reason", "cas match",
+                                     "--expect-status", "blocked")
+        self.assertEqual(code, 0, payload)
+
+    def test_cancel_finalize_race_single_terminal(self):
+        """场景 3（竞争单终态）: two processes race cancel vs finalize —
+        exactly one terminal event lands, the loser refuses (exit 2)."""
+        self._make_blocked_closure()
+        sha = _git("-C", str(self.root), "rev-parse", "HEAD").stdout.strip()
+        cancel_proc = subprocess.Popen(
+            [sys.executable, str(CC_PATH), "--project-root", str(self.root),
+             "cancel", "--closure-id", self.closure_id, "--authorized-by",
+             "test-coordinator", "--reason", "race cancel"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            encoding="utf-8", errors="replace", env=_clean_env(),
+            cwd=str(self.root))
+        finalize_proc = subprocess.Popen(
+            [sys.executable, str(CC_PATH), "--project-root", str(self.root),
+             "finalize", "--closure-id", self.closure_id,
+             "--commit-sha", sha],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            encoding="utf-8", errors="replace", env=_clean_env(),
+            cwd=str(self.root))
+        cancel_out, _ = cancel_proc.communicate(timeout=300)
+        finalize_out, _ = finalize_proc.communicate(timeout=300)
+        cancel_payload = json.loads(cancel_out)
+        finalize_payload = json.loads(finalize_out)
+        events = _chain_events(self.root, self.closure_id)
+        terminals = [e["event_type"] for e in events
+                     if e["event_type"] in ("closure_cancelled",
+                                            "closure_finalized")]
+        self.assertEqual(len(terminals), 1, terminals)
+        # exactly one winner (exit 0); the loser is a structured refusal
+        winners = [p for p, c in ((cancel_payload, cancel_proc.returncode),
+                                  (finalize_payload,
+                                   finalize_proc.returncode))
+                   if c == 0]
+        self.assertEqual(len(winners), 1)
+        loser_codes = [c for c in (cancel_proc.returncode,
+                                   finalize_proc.returncode) if c != 0]
+        self.assertEqual(loser_codes, [2])
+        if terminals == ["closure_cancelled"]:
+            self.assertEqual(finalize_payload["code"],
+                             "cross_record_violation",
+                             finalize_payload)
+        else:
+            self.assertEqual(cancel_payload["code"],
+                             "cross_record_violation", cancel_payload)
+
+
+class CancellationCliRefusalTests(_CancellationFixture):
+    """review-FEAT-062-R0 F-2/F-3: the CLI face never leaks a bare
+    traceback — finalize lock contention is a structured retryable refusal
+    (F-2), and a malformed closure id is a structured validation refusal on
+    BOTH cancel and finalize (F-3)."""
+
+    def test_finalize_lock_contention_structured_refusal(self):
+        """F-2 (红绿): a cancel holding the run lock (writer legs in
+        flight) exhausts finalize's lock budget — structured
+        lock_contention (retryable, exit 3), never a traceback."""
+        self._make_blocked_closure()
+        lock_path = (self.gov / "closure-locks"
+                     / (self.closure_id + ".lock"))
+        with cc._RunLock(lock_path, 1.0):
+            proc = subprocess.Popen(
+                [sys.executable, str(CC_PATH), "--project-root",
+                 str(self.root), "finalize", "--closure-id",
+                 self.closure_id, "--commit-sha", "deadbee"],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                encoding="utf-8", errors="replace", env=_clean_env(),
+                cwd=str(self.root))
+            out, err = proc.communicate(timeout=120)
+        self.assertNotIn("Traceback", err)
+        self.assertEqual(proc.returncode, 3, out)
+        payload = json.loads(out)
+        self.assertEqual(payload["code"], "lock_contention", payload)
+        self.assertEqual(payload["disposition"], "retryable")
+        # the journal is untouched by the refused finalize
+        events = _chain_events(self.root, self.closure_id)
+        self.assertFalse(any(e["event_type"] == "closure_finalized"
+                             for e in events))
+
+    def test_malformed_closure_id_structured_refusal(self):
+        """F-3 (红绿): a malformed closure id → schema_violation JSON on
+        cancel AND finalize, never a bare ValueError traceback."""
+        for sub, extra in (
+                ("cancel", ["--authorized-by", "test-coordinator",
+                            "--reason", "r"]),
+                ("finalize", ["--commit-sha", "deadbee"])):
+            proc = subprocess.run(
+                [sys.executable, str(CC_PATH), "--project-root",
+                 str(self.root), sub, "--closure-id", "not-a-closure-id"]
+                + list(extra),
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", env=_clean_env(), cwd=str(self.root),
+                timeout=300)
+            self.assertNotIn("Traceback", proc.stderr, proc.stderr[-400:])
+            self.assertEqual(proc.returncode, 2, proc.stdout)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload.get("code"), "schema_violation", payload)
+
+
+class CancellationIdempotencyTests(_CancellationFixture):
+    """场景 2（幂等重试/重放）: the same cancel command replays — zero new
+    journal events, zero new DEC rows, zero new ops entries."""
+
+    def test_replay_is_zero_new_events_and_rows(self):
+        self._make_blocked_closure()
+        code, first = self._cancel("--authorized-by", "test-coordinator",
+                                   "--reason", "first cancel")
+        self.assertEqual(code, 0, first)
+        events_after_first = len(_chain_events(self.root, self.closure_id))
+        ops_after_first = sorted(self._ops_ledger())
+        dec_text_after_first = (self.gov / "decision-log.md") \
+            .read_text(encoding="utf-8")
+        # replay with DIFFERENT caller args — the recorded authorization
+        # stands; the legs converge at the writers, nothing is re-recorded
+        code, second = self._cancel("--authorized-by", "someone-else",
+                                    "--reason", "retry with other args")
+        self.assertEqual(code, 0, second)
+        self.assertTrue(second["replayed"])
+        self.assertEqual(second["authorized_by"], "test-coordinator")
+        self.assertEqual(len(_chain_events(self.root, self.closure_id)),
+                         events_after_first)
+        self.assertEqual(sorted(self._ops_ledger()), ops_after_first)
+        self.assertEqual((self.gov / "decision-log.md")
+                         .read_text(encoding="utf-8"),
+                         dec_text_after_first)
+        self.assertTrue(second["reconciliation"]["consistent"])
+
+
+class CancellationInterruptionTests(_CancellationFixture):
+    """场景 5（中断恢复）: a crash/refusal between the terminal event and a
+    writer leg leaves the leg pending — re-running the SAME command
+    converges with zero manual repair (deterministic op ids → replay)."""
+
+    def test_locks_leg_contention_converges_on_retry(self):
+        self._make_blocked_closure()
+        locks_path = self.gov / "agent-locks.json"
+        with gstore_target_lock(locks_path):
+            code, payload = self._cancel(
+                "--authorized-by", "test-coordinator",
+                "--reason", "interrupted release",
+                "--writer-timeout", "2")
+        self.assertEqual(code, 3, payload)      # pending leg → retryable
+        self.assertEqual(payload["status"], "cancelled")
+        self.assertEqual(payload["legs"]["decision"]["state"], "done")
+        self.assertEqual(payload["legs"]["locks"]["state"], "pending")
+        self.assertFalse(payload["reconciliation"]["consistent"])
+        self.assertIsNotNone(self._cancel_event())   # terminal already in
+        # the locks are STILL held (the leg never landed)
+        self.assertIn("fixture/a.md", self.locks_json()["file_locks"])
+        # converge: re-run the SAME command after the holder goes away
+        code, payload = self._cancel("--authorized-by", "test-coordinator",
+                                     "--reason", "converge retry")
+        self.assertEqual(code, 0, payload)
+        self.assertTrue(payload["replayed"])
+        self.assertIn(payload["legs"]["locks"]["state"],
+                      ("done", "done_replayed"))
+        self.assertTrue(payload["reconciliation"]["consistent"])
+        self.assertNotIn("fixture/a.md", self.locks_json()["file_locks"])
+
+    def test_decision_leg_refusal_converges_on_retry(self):
+        self._make_blocked_closure()
+        # degenerate decision world: the writer refuses (empty hot file)
+        (self.gov / "decision-log.md").write_bytes(b"")
+        code, payload = self._cancel("--authorized-by", "test-coordinator",
+                                     "--reason", "dec leg pending")
+        self.assertEqual(code, 3, payload)
+        self.assertEqual(payload["legs"]["decision"]["state"], "pending")
+        self.assertEqual(payload["legs"]["locks"]["state"], "done")
+        self.assertFalse(payload["reconciliation"]["consistent"])
+        # repair the world, then converge — the DEC row lands exactly once
+        (self.gov / "decision-log.md").write_text(_DEC_SEED,
+                                                  encoding="utf-8")
+        code, payload = self._cancel("--authorized-by", "test-coordinator",
+                                     "--reason", "converge retry")
+        self.assertEqual(code, 0, payload)
+        self.assertTrue(payload["replayed"])
+        self.assertEqual(payload["legs"]["decision"]["state"], "done")
+        self.assertTrue(payload["reconciliation"]["consistent"])
+        dec_op = payload["operation_ids"]["decision"]
+        dec_text = (self.gov / "decision-log.md").read_text(encoding="utf-8")
+        self.assertEqual(dec_text.count("decision-append {0}".format(
+            dec_op)), 1)
+
+
+class CancellationLockOwnershipTests(_CancellationFixture):
+    """仅释放自有锁 (ARCH-09 same-type): only the closure task's own locks
+    are released; ownership changed / other-owner locks are never
+    released by a stale cancel."""
+
+    def test_releases_only_own_locks(self):
+        self._make_blocked_closure()
+        code, payload = self._cancel("--authorized-by", "test-coordinator",
+                                     "--reason", "own locks only")
+        self.assertEqual(code, 0, payload)
+        locks = self.locks_json()
+        self.assertNotIn(TASK, locks["active_tasks"])
+        self.assertNotIn("fixture/a.md", locks["file_locks"])
+        self.assertIn(OTHER_TASK, locks["active_tasks"])
+        other_entry = locks["file_locks"]["fixture/b.md"]
+        self.assertEqual(other_entry["locked_by"], OTHER_TASK)
+
+    def test_ownership_changed_lock_not_released(self):
+        """锁所有权变化不误释放: the file lock now belongs to ANOTHER task
+        (fresh world read) — the cancel releases the task's active entry
+        but never the newer owner's file lock."""
+        self._make_blocked_closure()
+        locks = self.locks_json()
+        locks["file_locks"]["fixture/a.md"]["locked_by"] = OTHER_TASK
+        (self.gov / "agent-locks.json").write_text(
+            json.dumps(locks, ensure_ascii=False, indent=4) + "\n",
+            encoding="utf-8")
+        code, payload = self._cancel("--authorized-by", "test-coordinator",
+                                     "--reason", "stale owner")
+        self.assertEqual(code, 0, payload)
+        locks_after = self.locks_json()
+        self.assertNotIn(TASK, locks_after["active_tasks"])
+        released = locks_after["file_locks"]["fixture/a.md"]
+        self.assertEqual(released["locked_by"], OTHER_TASK)
+        # the terminal event recorded the ownership world it SAW: no file
+        # locks owned by the task, but its active_tasks entry was held
+        event = self._cancel_event()
+        self.assertEqual(event["payload"]["locks_files"], [])
+        self.assertTrue(event["payload"]["locks_held"])
+
+    def test_no_locks_held_skips_the_locks_op(self):
+        self._make_blocked_closure()
+        locks = self.locks_json()
+        locks["active_tasks"].pop(TASK)
+        locks["file_locks"].pop("fixture/a.md")
+        (self.gov / "agent-locks.json").write_text(
+            json.dumps(locks, ensure_ascii=False, indent=4) + "\n",
+            encoding="utf-8")
+        code, payload = self._cancel("--authorized-by", "test-coordinator",
+                                     "--reason", "nothing to release")
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(payload["legs"]["locks"]["state"],
+                         "skipped_no_locks")
+        self.assertIsNone(payload["operation_ids"]["locks"])
+        self.assertEqual(
+            sorted(self._ops_ledger()),
+            [payload["operation_ids"]["decision"]])
+        self.assertTrue(payload["reconciliation"]["consistent"])
+
+
+class CancellationGuardCombinationTests(_CancellationFixture):
+    """F-5④ 组合测试 (version-plan §3 ④): closure 取消期间的 locks-release
+    × guard 消费权并发 — both writers run CONCURRENTLY; the consumption
+    right stays the registered guard CLI's exclusive property (the cancel
+    never touches the violations ledger), each terminal state lands
+    exactly once, and both worlds stay consistent."""
+
+    def test_cancel_locks_release_vs_guard_consumption_concurrent(self):
+        # thread-local import: keeps the module import block byte-identical
+        # (STATIC_PIN_EXEMPTIONS keys line numbers on this file)
+        import threading  # noqa: E402
+        # seed one open guard violation + the CLI consumer's grant
+        detection = wgs.build_detection(
+            wgs.FAMILY_EVIDENCE, "text", "EVD-9001",
+            ".governance/evidence-log.md", 2, "| EVD-9001 | bare row |",
+            "a" * 32)
+        issues, _changed = wgs.record_detections(
+            self.gov, [detection], run_id="run-f54",
+            hook_identity=wgs.GUARD_CLI_IDENTITY)
+        self.assertEqual(issues, [])
+        grant_id, grant_issues = wgs.ensure_grant(
+            self.gov, consumer=wgs.CLI_CONSUMER, run_id="run-f54")
+        self.assertEqual(grant_issues, [])
+        ledger = json.loads((self.gov / wgs.LEDGER_FILE_NAME)
+                            .read_text(encoding="utf-8"))
+        violation_ids = sorted(ledger["violations"])
+        self.assertEqual(len(violation_ids), 1)
+        state_path = self.gov / ".write-guard-state.json"
+        # a blocked closure with held locks; then BOTH writers at once
+        self._make_blocked_closure()
+        guard_result = {}
+
+        def guard_consumes():
+            guard_result["payload"] = wgs.consume_violations(
+                self.gov, state_path, consumer=wgs.CLI_CONSUMER,
+                grant_id=grant_id, violation_ids=violation_ids,
+                baseline_target=_GUARD_BASELINE_TARGET, run_id="run-f54")
+
+        thread = threading.Thread(target=guard_consumes)
+        thread.start()
+        payload = cc.cancel_closure(
+            self.root, self.closure_id, authorized_by="test-coordinator",
+            reason="F-5④ combination: locks-release vs guard consumption")
+        thread.join()
+        # guard side: consumed exactly once, by the REGISTERED consumer
+        self.assertTrue(guard_result["payload"]["ok"],
+                        guard_result["payload"])
+        ledger_after = json.loads((self.gov / wgs.LEDGER_FILE_NAME)
+                                  .read_text(encoding="utf-8"))
+        record = ledger_after["violations"][violation_ids[0]]
+        self.assertEqual(record["status"], "consumed")
+        self.assertEqual(record["consumption_event"]["consumer"],
+                         wgs.CLI_CONSUMER)
+        self.assertIsNone(ledger_after["pending_txn"])
+        second = wgs.consume_violations(
+            self.gov, state_path, consumer=wgs.CLI_CONSUMER,
+            grant_id=grant_id, violation_ids=violation_ids,
+            baseline_target=_GUARD_BASELINE_TARGET, run_id="run-f54")
+        self.assertFalse(second["ok"])
+        self.assertEqual(second["error"], "grant_used")   # single-use R5
+        # cancel side: terminal + both writer legs done + consistent
+        self.assertEqual(payload["status"], "cancelled", payload)
+        self.assertTrue(payload["reconciliation"]["consistent"],
+                        payload["reconciliation"])
+        self.assertEqual(payload["legs"]["decision"]["state"], "done")
+        self.assertIn(payload["legs"]["locks"]["state"],
+                      ("done", "done_replayed"))
+        # the two writers' shared world: agent-locks valid, own locks
+        # released, the other owner's locks intact
+        locks = self.locks_json()
+        self.assertNotIn("fixture/a.md", locks["file_locks"])
+        self.assertIn("fixture/b.md", locks["file_locks"])
+        # single terminal per domain: the closure journal is terminal, the
+        # violation is consumed, the grant is used — exactly once each
+        events = _chain_events(self.root, self.closure_id)
+        self.assertEqual(
+            sum(1 for e in events
+                if e["event_type"] == "closure_cancelled"), 1)
+
+
+def gstore_target_lock(target: Path):
+    """A governance-store _TargetLock context (test-side contention
+    fixture for the F-5④/interruption scenarios — same lock discipline the
+    guard's consumption transaction and the writer CLIs serialize on)."""
+    import governance_store as gstore  # noqa: E402 (local composition face)
+    return gstore._TargetLock(Path(target), timeout_seconds=1.0)
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

@@ -120,6 +120,80 @@ step's read-only ``--check-only`` probe decides reconcile-vs-execute at
 every run/resume boundary (查世界不信日志), so a mid-switch interruption
 re-enters with zero manual repair; unjudgeable states halt loudly and are
 never silently absorbed.
+
+Cancellation vertical slice (FEAT-062, version-plan-0.88.0 §2 E1 — arch
+Q5 minimal slice, rollback-0.86.0 §8 #5 清偿):
+
+  ``cancel_closure`` / the ``cancel`` subcommand terminate a non-finalized
+  closure with the restricted entry → CAS → writer-registered op →
+  terminal semantics → own-locks-only release → reconciliation sequence:
+
+  1. **Restricted entry** (限定入口): the closure must exist and sit in a
+     cancellable state (``CANCELLABLE_STATUSES`` = running / blocked /
+     awaiting-world-check / ready); ``finalized`` is an immutable
+     terminal; an explicit ``authorized_by`` + single-line ``reason`` are
+     required (the decision record needs both; newlines and raw ``|`` are
+     refused at the zero-write gate — a pipe would make the DEC row
+     deterministically unwritable and the leg permanently pending,
+     review-FEAT-062-R0 F-1); steps whose effects are
+     UNDETERMINED (``step_unknown`` / dangling ``step_started`` crash
+     window) refuse — resume first to converge, then cancel; any
+     external-step terminal event refuses (有副作用明确拒绝 — the outside
+     effect needs human adjudication, the minimal slice never cancels
+     across one).
+  2. **CAS**: the per-closure run lock (the SAME lock run/finalize take)
+     is the linearization point — a cancel racing finalize yields exactly
+     ONE terminal event, the loser refuses; an optional
+     ``--expect-status`` optimistic CAS refuses with ``revision_conflict``
+     + the observed status (caller re-judges); the terminal append is one
+     seq-continuous journal event under the lock. An in-flight chain holds
+     the run lock → the cancel refuses ``lock_contention`` (retryable,
+     zero changes) — the 在途写冲突 gate.
+  3. **Cancellation op registration**: the DEC row is appended THROUGH the
+     governed writer CLI (``governance_store decision-append``) — never a
+     hand edit (FEAT-064 BLOCK family compliance: the decision row
+     family's legal write path is the writer). The per-closure
+     deterministic operation ids (``cancel_operation_id``) are the
+     idempotency keys; the writer's pending→ok pipeline registers the
+     cancellation ops in the ops ledger (可审计).
+  4. **DEC/EVD/task terminal semantics** (终态语义): the DEC row records
+     authorization + reason; EVD rows appended by the closure REMAIN
+     (append-only audit, never erased); the task row is NOT modified by a
+     cancellation — its current world state is disclosed read-only in the
+     report (completed governed steps are retained effects, disclosed not
+     reverted; a revert is a separate governed decision, out of the
+     minimal slice).
+  5. **Own locks only** (仅释放自有锁 — ARCH-09 same-type per DEC-237
+     C1-ARCH-09): a FRESH world read of agent-locks.json decides whether
+     the task still holds locks; release goes through the governed
+     ``locks-release`` CLI (task-scoped: it removes the task's active
+     entry and ONLY file locks whose ``locked_by == task``), so a lock
+     whose ownership changed is never released by a stale cancel — a
+     stale owner's cancel refuses without releasing the newer owner's
+     state, exactly the decision_migration.cancel precedent.
+  6. **Reconciliation** (closure 结果 + ops 对账): after the terminal
+     event the report re-reads the journal, the ops ledger (read-only,
+     fail-safe) and the locks world and reports per-leg states + a
+     ``consistent`` verdict.
+
+  Ordering discipline (中断恢复): the terminal journal event lands FIRST
+  (one CAS append), then the two writer legs run with deterministic
+  per-closure operation ids; a crash/refusal between legs leaves the
+  closure terminal and the leg pending — re-running the SAME cancel
+  command replays/applies the pending leg at the writer (same id + same
+  payload → original result) and reconverges with zero manual repair.
+  A replay cancel converges with the RECORDED intent from the journal
+  (fresh CLI args are disclosed but never re-recorded — the first
+  authorization stands). Resume of a cancelled closure is refused
+  (terminal semantics); ``finalize`` of a cancelled closure is refused.
+
+  F-5④ combination obligation (version-plan §3): the cancel's
+  locks-release leg vs the write-guard's exclusive consumption right
+  (FEAT-060/064) is exercised concurrently in the test suite — the cancel
+  never touches the violations ledger (consumption stays the registered
+  guard CLI's exclusive right), both writers serialize through the shared
+  governance-store lock discipline, and both terminal states land exactly
+  once.
 """
 
 from __future__ import annotations
@@ -148,6 +222,7 @@ from contracts import (  # L0 — consumed read-only, frozen at revision m0-r1
 import loop_event_log  # module machine — append/read/monotonicity REUSED
 
 __all__ = [
+    "CANCELLABLE_STATUSES",
     "CLOSURE_EVENT_LOG_FILENAME",
     "CLOSURE_ID_PATTERN",
     "CLOSURE_SCHEMA_VERSION",
@@ -157,6 +232,8 @@ __all__ = [
     "STEP_KINDS",
     "STANDARD_TICKET_CLOSURE",
     "WRITER_ID",
+    "cancel_closure",
+    "cancel_operation_id",
     "finalize_closure",
     "main",
     "new_closure_id",
@@ -212,6 +289,7 @@ CLOSURE_EVENT_TYPES = frozenset({
     "step_reconciled",    # world probe found the effect; anchor reused
     "closure_ready",      # ready-to-commit summary emitted (finalize pending)
     "closure_finalized",  # --finalize verified the operator commit
+    "closure_cancelled",  # FEAT-062 cancellation gate: immutable terminal
 })
 """Closed closure event-type enum (domain-owned per round-2 §2 carving)."""
 
@@ -228,6 +306,21 @@ CLOSURE_TEST_FAULT_ENV = "CLOSURE_CHAIN_TEST_FAULT_POINTS"
 """Test-only injection channel (BT-9). Value: JSON
 ``{"handshake_dir": "<dir>", "points": ["post-step-effect:<step>", ...]}``.
 NEVER set by the production CLI; no command-line flag exposes it."""
+
+CANCELLABLE_STATUSES: Tuple[str, ...] = (
+    "running", "blocked", "awaiting-world-check", "ready")
+"""Closure states a cancellation may terminate (FEAT-062 restricted
+entry). ``finalized``/``cancelled`` are immutable terminals — never in
+this set; a closure whose step effects are undetermined or which carries
+external-step effects is refused by cancel_closure regardless."""
+
+_CANCEL_DECISION_SLOT = "decision"
+_CANCEL_LOCKS_SLOT = "locks"
+"""Deterministic per-closure cancellation-op slots (idempotency keys for
+the two writer legs — the DEC registration and the own-locks release)."""
+
+_CANCEL_LEG_DONE_STATES = ("done", "done_replayed")
+"""Leg states that count as converged in the reconciliation verdict."""
 
 _LOCK_STALE_NOTE = "lock file left in place (loop_event_log precedent)"
 
@@ -270,6 +363,19 @@ def step_operation_id(closure_id: str, step_id: str) -> str:
     digest = hashlib.sha256(
         "{0}|{1}".format(closure_id, step_id).encode("utf-8")).hexdigest()
     return "op-" + digest[:32]
+
+
+def cancel_operation_id(closure_id: str, slot: str) -> str:
+    """Deterministic per-closure cancellation-op id (FEAT-062 idempotency
+    key, ``slot`` ∈ {decision, locks}) — STABLE across cancel retries, so
+    a converged retry replays at the writer (same id + same payload →
+    original result, never a second row/second release). Same derivation
+    discipline as :func:`step_operation_id`."""
+    if slot not in (_CANCEL_DECISION_SLOT, _CANCEL_LOCKS_SLOT):
+        raise ValueError(
+            "cancel_operation_id: slot {0!r} not in {1!r}".format(
+                slot, (_CANCEL_DECISION_SLOT, _CANCEL_LOCKS_SLOT)))
+    return step_operation_id(closure_id, "cancel-" + slot)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -661,7 +767,6 @@ Effect-based at every boundary: the ``--check-only`` read-only probe (exit
 the writer; a not-converged world executes the ONE governed recovery
 action (``write-guard-bootstrap`` converge mode — guard-owned artifacts
 only)."""
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Template resolution (untrusted input → argv list, never a shell line)
@@ -1392,6 +1497,16 @@ def _run_locked(spec: ChainSpec, closure_id: str, task: str,
     started = next((e for e in events
                     if e.get("event_type") == "closure_started"), None)
     resumed = started is not None
+    if any(e.get("event_type") == "closure_cancelled" for e in events):
+        # FEAT-062 terminal semantics: a cancelled closure is not
+        # resumable — the world it was converging has been abandoned;
+        # re-running the cancel command converges pending cancellation
+        # legs instead.
+        raise ValueError(
+            "closure {0}: CANCELLED (terminal) — resume refused "
+            "(FEAT-062 终态语义; re-run the cancel command to converge "
+            "pending cancellation effects, or start a new closure)"
+            .format(closure_id))
     if resumed and (started.get("payload") or {}).get("inputs_digest") \
             not in (None, digest):
         raise ValueError(
@@ -1721,6 +1836,15 @@ def finalize_closure(root: Path, closure_id: str, commit_sha: str) \
                     "status": "finalized", "replayed": True,
                     "commit_sha": (prior.get("payload") or {}).get(
                         "commit_sha")}
+        if any(e.get("event_type") == "closure_cancelled" for e in events):
+            # FEAT-062 terminal semantics: the two terminals never cross —
+            # a cancelled closure cannot be finalized after the fact.
+            return {"closure_id": closure_id, "error": True,
+                    "code": "cross_record_violation",
+                    "disposition": "validation",
+                    "detail": "closure {0} is CANCELLED (immutable "
+                              "terminal) — finalize refused".format(
+                                  closure_id)}
         probe = _run_probe(
             {"kind": "git_object_exists", "repo": str(root),
              "sha": commit_sha},
@@ -1759,10 +1883,14 @@ def closure_status(root: Path, closure_id: str) -> Dict[str, Any]:
                     if e.get("event_type") == "closure_started"), None)
     step_state = _step_world_state(events)
     finalized = any(e.get("event_type") == "closure_finalized" for e in events)
+    cancelled = next((e for e in events
+                      if e.get("event_type") == "closure_cancelled"), None)
     ready = any(e.get("event_type") == "closure_ready" for e in events)
     unknown_steps = [s for s, v in step_state.items() if v == "unknown"]
     failed_steps = [s for s, v in step_state.items() if v == "failed"]
-    if finalized:
+    if cancelled is not None:
+        status = "cancelled"
+    elif finalized:
         status = "finalized"
     elif failed_steps:
         status = "blocked"
@@ -1779,11 +1907,480 @@ def closure_status(root: Path, closure_id: str) -> Dict[str, Any]:
         "task": (started or {}).get("payload", {}).get("task"),
         "chain_id": (started or {}).get("payload", {}).get("chain_id"),
         "started_at": (started or {}).get("timestamp"),
+        "cancellation": (None if cancelled is None else {
+            "authorized_by": (cancelled.get("payload") or {}).get(
+                "authorized_by"),
+            "reason": (cancelled.get("payload") or {}).get("reason"),
+            "cancelled_at": cancelled.get("timestamp"),
+        }),
         "steps": step_state,
         "event_count": len(events),
         "journal": str(log_path),
         "journal_problems": problems,
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Cancellation gate (FEAT-062 — arch Q5 minimal vertical slice)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _cancel_refusal(closure_id: str, code: str, detail: str) -> Dict[str, Any]:
+    """Structured zero-write refusal (closed M0 error-code vocabulary)."""
+    return {"closure_id": closure_id, "error": True, "code": code,
+            "disposition": ERROR_CODE_DISPOSITIONS.get(code, "manual"),
+            "detail": detail}
+
+
+def _cancelled_event(events: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    return next((e for e in events
+                 if e.get("event_type") == "closure_cancelled"), None)
+
+
+def _step_kinds(events: List[Dict[str, Any]]) -> Dict[str, str]:
+    """{step_id: declared kind} from the journal's step_started events."""
+    kinds: Dict[str, str] = {}
+    for ev in events:
+        payload = ev.get("payload") or {}
+        step_id = payload.get("step_id")
+        if step_id and ev.get("event_type") == "step_started":
+            kinds[step_id] = payload.get("kind") or ""
+    return kinds
+
+
+def _derived_status(events: List[Dict[str, Any]],
+                    step_state: Dict[str, str]) -> str:
+    """The closure's derived status — the same derivation closure_status
+    uses (cancelled > finalized > blocked > awaiting-world-check > ready >
+    running); the CAS face compares against THIS, the world-derived value
+    (查世界不信日志 — the journal is the audit, the derivation the state)."""
+    if any(e.get("event_type") == "closure_cancelled" for e in events):
+        return "cancelled"
+    if any(e.get("event_type") == "closure_finalized" for e in events):
+        return "finalized"
+    if any(v == "failed" for v in step_state.values()):
+        return "blocked"
+    if any(v == "unknown" for v in step_state.values()):
+        return "awaiting-world-check"
+    if any(e.get("event_type") == "closure_ready" for e in events):
+        return "ready"
+    return "running"
+
+
+def _read_locks_world(governance_dir: Path, task: str) -> Dict[str, Any]:
+    """FRESH read-only ownership snapshot of agent-locks.json (查世界不信
+    日志 — the ARCH-09 ownership check reads the world AT the decision
+    moment, never a remembered state)."""
+    locks_file = Path(governance_dir) / "agent-locks.json"
+    world: Dict[str, Any] = {"readable": True, "file": str(locks_file),
+                             "held_files": [], "active_task_entry": False,
+                             "other_lock_count": 0}
+    if not locks_file.is_file():
+        return world
+    try:
+        data = json.loads(locks_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        world["readable"] = False
+        world["error"] = str(exc)
+        return world
+    file_locks = data.get("file_locks") if isinstance(data, dict) else {}
+    for path, entry in (file_locks or {}).items():
+        if isinstance(entry, dict) and entry.get("locked_by") == task:
+            world["held_files"].append(path)
+        else:
+            world["other_lock_count"] += 1
+    active = data.get("active_tasks") if isinstance(data, dict) else {}
+    world["active_task_entry"] = (isinstance(active, dict)
+                                  and task in active)
+    return world
+
+
+def _inspect_task_row(root: Path, task: str, tracker: str) -> Dict[str, Any]:
+    """Read-only task-row disclosure for the cancel report (取消不修改任
+    务行 — the row's current world state is reported, never rewritten)."""
+    target = Path(tracker)
+    if not target.is_file():
+        target = Path(root) / ".governance" / "plan-tracker.md"
+    if not target.is_file():
+        return {"found": False, "state": None, "detail": "tracker absent"}
+    argv = [sys.executable, str(INFRA_DIR / "task_row_update.py"),
+            "--task", task, "--inspect", "--file", str(target), "--json"]
+    proc = _run_subprocess(argv, 60.0)
+    try:
+        payload = json.loads((proc.stdout or "").strip() or "{}")
+    except ValueError:
+        return {"found": False, "state": None,
+                "detail": "inspect output not JSON (exit {0})".format(
+                    proc.returncode)}
+    if not payload.get("found"):
+        return {"found": False, "state": None, "detail": "row not found"}
+    return {"found": True, "state": payload.get("state"),
+            "detail": "current world state (disclosed, not modified by "
+                      "the cancellation)"}
+
+
+def _run_writer_cli(argv: List[str], timeout: float) -> Dict[str, Any]:
+    """Run one governed writer CLI and return its flat JSON payload. A
+    subprocess timeout is UNKNOWN (the effect MAY have landed) — the
+    deterministic operation id makes the caller's retry a writer-level
+    replay, so the payload reports retryable and the retry converges."""
+    try:
+        proc = _run_subprocess(argv, timeout)
+    except subprocess.TimeoutExpired:
+        return {"error": True, "code": "lock_contention",
+                "disposition": "retryable",
+                "detail": "writer subprocess timed out after {0}s — "
+                          "result unknown (hard-kill crash window); the "
+                          "deterministic operation id makes the retry a "
+                          "writer replay".format(timeout)}
+    try:
+        payload = json.loads((proc.stdout or "").strip() or "{}")
+    except ValueError:
+        return {"error": True, "code": "manual_intervention",
+                "disposition": "manual",
+                "detail": "writer exit {0} with non-JSON output: {1!r}"
+                          .format(proc.returncode,
+                                  (proc.stdout or "")[-200:])}
+    if isinstance(payload, dict):
+        payload.setdefault("exit_code", proc.returncode)
+        return payload
+    return {"error": True, "code": "manual_intervention",
+            "disposition": "manual",
+            "detail": "writer returned a non-dict payload"}
+
+
+_CANCEL_DEC_CONTENT = (
+    "closure {closure_id} 取消（FEAT-062 cancellation gate）：任务 {task} 的 "
+    "{chain_id} 链在 {observed_status} 状态由授权者 {authorized_by} 终态取消。"
+    "原因：{reason}。保留效果：链内已完成 governed 步骤的落盘效果不回滚"
+    "（EVD 行/任务行翻转按 append-only 审计保留）；本取消不修改任务行。")
+_CANCEL_DEC_BASIS = (
+    "事实依据：closure journal closure_cancelled 事件"
+    "（.governance/closure-events.jsonl, unit {closure_id}）"
+    "+ arch Q5 纵切 + rollback-0.86.0 §8 #5")
+"""Deterministic DEC-row templates — EVERY substitution comes from the
+recorded terminal event, so a converged retry produces a byte-identical
+payload and the writer's same-id replay fires (volatile world reads live
+in the REPORT, never in the registered row)."""
+
+
+def _cancel_decision_leg(root: Path, closure_id: str, task: str,
+                         chain_id: str, authorized_by: str, reason: str,
+                         observed_status: str, cancelled_at: str,
+                         writer_timeout: float) -> Dict[str, Any]:
+    """Cancellation-op registration leg (FEAT-062 point 3): the DEC row is
+    appended THROUGH the governed writer CLI (``governance_store
+    decision-append``) — never a hand edit; FEAT-064 BLOCK compliance for
+    the decision row family. The deterministic per-closure operation id is
+    the idempotency key; the writer's pending→ok pipeline registers the op
+    in the ops ledger (可审计). A leg refusal NEVER undoes the terminal
+    event — it stays pending for the converged retry."""
+    op_id = cancel_operation_id(closure_id, _CANCEL_DECISION_SLOT)
+    content = _CANCEL_DEC_CONTENT.format(
+        closure_id=closure_id, task=task, chain_id=chain_id,
+        observed_status=observed_status, authorized_by=authorized_by,
+        reason=reason)
+    basis = _CANCEL_DEC_BASIS.format(closure_id=closure_id)
+    argv = [sys.executable, str(INFRA_DIR / "governance_store.py"),
+            "--project-root", str(root), "decision-append",
+            "--decider", authorized_by, "--content", content,
+            "--basis", basis, "--date", cancelled_at[:10],
+            "--operation-id", op_id, "--timeout", str(writer_timeout)]
+    payload = _run_writer_cli(argv, writer_timeout + 30.0)
+    leg = {"state": "pending", "operation_id": op_id,
+           "code": payload.get("code"), "detail": payload.get("detail"),
+           "replayed": bool(payload.get("replayed"))}
+    if not payload.get("error"):
+        leg["state"] = "done_replayed" if payload.get("replayed") else "done"
+    return leg
+
+
+def _cancel_locks_leg(root: Path, closure_id: str, task: str,
+                      writer_timeout: float) -> Dict[str, Any]:
+    """Own-locks-only release leg (FEAT-062 point 5; ARCH-09 same-type per
+    DEC-237 C1-ARCH-09): a FRESH world read decides whether the task still
+    holds dispatch locks; the release goes through the governed
+    ``locks-release`` CLI — task-scoped by the writer itself (the task's
+    active entry + ONLY file locks whose ``locked_by == task``), so a lock
+    whose ownership changed is never released by this cancel. No locks →
+    no op (the DEC leg carries the cancellation's ops registration)."""
+    gov = Path(root) / ".governance"
+    world = _read_locks_world(gov, task)
+    if not world["readable"]:
+        return {"state": "pending", "operation_id": None, "code": None,
+                "detail": "agent-locks.json unreadable ({0}) — release "
+                          "leg pending".format(world.get("error")),
+                "world_before": world, "world_after": None}
+    if not world["held_files"] and not world["active_task_entry"]:
+        return {"state": "skipped_no_locks", "operation_id": None,
+                "code": None,
+                "detail": "task holds no dispatch locks — nothing to "
+                          "release, no locks op registered",
+                "world_before": world, "world_after": world}
+    op_id = cancel_operation_id(closure_id, _CANCEL_LOCKS_SLOT)
+    argv = [sys.executable, str(INFRA_DIR / "governance_store.py"),
+            "--project-root", str(root), "locks-release",
+            "--task", task, "--operation-id", op_id,
+            "--timeout", str(writer_timeout)]
+    payload = _run_writer_cli(argv, writer_timeout + 30.0)
+    world_after = _read_locks_world(gov, task)
+    leg = {"operation_id": op_id, "code": payload.get("code"),
+           "detail": payload.get("detail"),
+           "replayed": bool(payload.get("replayed")),
+           "world_before": world, "world_after": world_after}
+    if not payload.get("error") and not world_after["held_files"] \
+            and not world_after["active_task_entry"]:
+        # the locks family's _complete_pending marks EVERY ok completion
+        # replayed=True (source="apply" for a fresh apply — the effect-based
+        # pipeline convention); the leg discriminator is replay_source:
+        # "ledger" = a true writer replay, any other source converged THIS
+        # run.
+        leg["state"] = ("done_replayed"
+                        if payload.get("replay_source") == "ledger"
+                        else "done")
+    else:
+        leg["state"] = "pending"
+    return leg
+
+
+def _cancel_reconciliation(root: Path, task: str, dec_leg: Dict[str, Any],
+                           locks_leg: Dict[str, Any]) -> Dict[str, Any]:
+    """closure 结果 + ops 对账 (FEAT-062 point 6): re-read the journal
+    terminal, the ops ledger (read-only, fail-safe) and the locks world;
+    the WORLD is the truth (查世界不信台账) — a ledger ``ok`` without the
+    world marker is inconsistent, never silently absorbed."""
+    gov = Path(root) / ".governance"
+    ledger_ops: Dict[str, Any] = {}
+    ledger_path = gov / "governance-store-ops.json"
+    if ledger_path.is_file():
+        try:
+            data = json.loads(ledger_path.read_text(encoding="utf-8"))
+            operations = data.get("operations") or {}
+            for op_id in (dec_leg.get("operation_id"),
+                          locks_leg.get("operation_id")):
+                if op_id:
+                    ledger_ops[op_id] = (operations.get(op_id) or {}) \
+                        .get("status")
+        except (OSError, ValueError) as exc:
+            ledger_ops["_error"] = "ops ledger unreadable: {0}".format(exc)
+    dec_op = dec_leg.get("operation_id")
+    dec_path = gov / "decision-log.md"
+    dec_in_world = False
+    if dec_op and dec_path.is_file():
+        try:
+            dec_in_world = ("decision-append " + dec_op) \
+                in dec_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            dec_in_world = False
+    world = _read_locks_world(gov, task)
+    locks_world_clear = (
+        locks_leg.get("state") == "skipped_no_locks"
+        or (world["readable"] and not world["held_files"]
+            and not world["active_task_entry"]))
+    legs_done = (
+        dec_leg.get("state") in _CANCEL_LEG_DONE_STATES
+        and locks_leg.get("state")
+        in _CANCEL_LEG_DONE_STATES + ("skipped_no_locks",))
+    consistent = bool(legs_done and dec_in_world and locks_world_clear)
+    return {"journal_terminal": True,
+            "decision_row_in_world": dec_in_world,
+            "ops_ledger": ledger_ops,
+            "locks_world_clear": locks_world_clear,
+            "consistent": consistent,
+            "retry_hint": (None if consistent else
+                           "re-run the SAME cancel command — the "
+                           "deterministic operation ids make the retry "
+                           "replay/apply at the writers and converge the "
+                           "pending leg (exit 3 signals this state)")}
+
+
+def _cancel_locked(root: Path, closure_id: str, authorized_by: str,
+                   reason: str, expected_status: Optional[str],
+                   log_path: Path, writer_timeout: float) -> Dict[str, Any]:
+    events, problems = _load_closure_events(log_path, closure_id)
+    started = next((e for e in events
+                    if e.get("event_type") == "closure_started"), None)
+    if started is None:
+        return _cancel_refusal(
+            closure_id, "cross_record_violation",
+            "closure {0} has no journal — nothing to cancel".format(
+                closure_id))
+    started_payload = started.get("payload") or {}
+    task = started_payload.get("task")
+    chain_id = started_payload.get("chain_id") or "unknown"
+    if not isinstance(task, str) or not task:
+        return _cancel_refusal(
+            closure_id, "cross_record_violation",
+            "closure {0} journal carries no task id — refusing to cancel"
+            .format(closure_id))
+    prior = _cancelled_event(events)
+    step_state = _step_world_state(events)
+    derived = _derived_status(events, step_state)
+    if prior is None:
+        # ── restricted entry (限定入口) — every gate here is zero-write ──
+        if any(e.get("event_type") == "closure_finalized" for e in events):
+            return _cancel_refusal(
+                closure_id, "cross_record_violation",
+                "closure {0} is FINALIZED (immutable terminal) — "
+                "cancellation refused (不可取消状态)".format(closure_id))
+        kinds = _step_kinds(events)
+        external_terminal = sorted(
+            s for s, state in step_state.items()
+            if kinds.get(s) == "external"
+            and state in ("completed", "failed", "unknown"))
+        if external_terminal:
+            return _cancel_refusal(
+                closure_id, "manual_intervention",
+                "closure {0} carries external-step effects {1} — the "
+                "outside action needs human adjudication before any "
+                "cancellation (有副作用明确拒绝; zero changes made)"
+                .format(closure_id, external_terminal))
+        undetermined = sorted(
+            s for s, state in step_state.items()
+            if state in ("unknown", "started"))
+        if undetermined:
+            return _cancel_refusal(
+                closure_id, "manual_intervention",
+                "closure {0} has undetermined step effects {1} (crash "
+                "window / UNKNOWN) — resume first to converge the world, "
+                "then cancel (zero changes made)".format(
+                    closure_id, undetermined))
+        if expected_status is not None and derived != expected_status:
+            refusal = _cancel_refusal(
+                closure_id, "revision_conflict",
+                "CAS mismatch: expected status {0!r} but the closure is "
+                "now {1!r} — re-judge from the observed state (零状态变化)"
+                .format(expected_status, derived))
+            refusal["observed_status"] = derived
+            return refusal
+        # ── the CAS terminal append (one seq-continuous event, under the
+        #    run lock — the same lock run/finalize take) ──
+        locks_world = _read_locks_world(Path(root) / ".governance", task)
+        seq, prev_seq = _next_seq(events)
+        envelope = _append_closure_event(
+            log_path, closure_id, "closure_cancelled", seq, prev_seq, {
+                "task": task,
+                "chain_id": chain_id,
+                "authorized_by": authorized_by,
+                "reason": reason,
+                "observed_status": derived,
+                "expected_status": expected_status,
+                "locks_held": bool(locks_world["held_files"]
+                                   or locks_world["active_task_entry"]),
+                "locks_files": list(locks_world["held_files"]),
+                "code_revision": _git_head(root),
+            })
+        intent = {"authorized_by": authorized_by, "reason": reason,
+                  "observed_status": derived,
+                  "cancelled_at": envelope["timestamp"]}
+    else:
+        # replay: converge with the RECORDED intent — the first
+        # authorization stands; fresh CLI args are never re-recorded
+        prior_payload = prior.get("payload") or {}
+        intent = {"authorized_by": prior_payload.get("authorized_by") or "",
+                  "reason": prior_payload.get("reason") or "",
+                  "observed_status": prior_payload.get("observed_status")
+                  or "",
+                  "cancelled_at": prior.get("timestamp") or ""}
+    # ── writer legs (deterministic ids; a refusal stays pending — the
+    #    terminal event is NOT undone, the retry converges) ──
+    dec_leg = _cancel_decision_leg(
+        root, closure_id, task, chain_id, intent["authorized_by"],
+        intent["reason"], intent["observed_status"],
+        intent["cancelled_at"], writer_timeout)
+    locks_leg = _cancel_locks_leg(root, closure_id, task, writer_timeout)
+    # ── world disclosures + reconciliation ──
+    events, problems_after = _load_closure_events(log_path, closure_id)
+    problems = sorted(set(problems) | set(problems_after))
+    step_state = _step_world_state(events)
+    completed_steps = sorted(s for s, state in step_state.items()
+                             if state == "completed")
+    tracker = (started_payload.get("inputs") or {}).get("tracker_file") \
+        or ".governance/plan-tracker.md"
+    return {
+        "closure_id": closure_id,
+        "task": task,
+        "chain_id": chain_id,
+        "status": "cancelled",
+        "replayed": prior is not None,
+        "authorized_by": intent["authorized_by"],
+        "reason": intent["reason"],
+        "observed_status": intent["observed_status"],
+        "cancelled_at": intent["cancelled_at"],
+        "operation_ids": {"decision": dec_leg.get("operation_id"),
+                          "locks": locks_leg.get("operation_id")},
+        "legs": {"decision": dec_leg, "locks": locks_leg},
+        "retained_effects": {
+            "completed_steps": completed_steps,
+            "task_row": _inspect_task_row(root, task, tracker),
+            "note": "governed effects already landed stay (append-only "
+                    "audit); the task row is disclosed, not modified",
+        },
+        "reconciliation": _cancel_reconciliation(root, task, dec_leg,
+                                                 locks_leg),
+        "journal": str(log_path),
+        "journal_problems": problems,
+    }
+
+
+def cancel_closure(root: Path, closure_id: str, *, authorized_by: str,
+                   reason: str, expected_status: Optional[str] = None,
+                   lock_timeout: float = 10.0,
+                   writer_timeout: float = 30.0) -> Dict[str, Any]:
+    """FEAT-062 cancellation gate — terminate a non-finalized closure.
+
+    Restricted entry → CAS terminal append → writer-registered DEC row +
+    own-locks-only release → reconciliation. See the module docstring
+    section "Cancellation vertical slice" for the full design contract
+    (arch Q5 / rollback-0.86.0 §8 #5 / DEC-237 C1-ARCH-09 same-type /
+    FEAT-064 BLOCK compliance). Zero-write refusals carry a closed M0
+    code; ``lock_contention`` (在途写冲突 — an in-flight chain holds the
+    run lock) is retryable with zero changes made."""
+    root = Path(root)
+    closure_id = require_closure_id("cancel: closure_id", closure_id)
+    for label, value in (("authorized_by", authorized_by),
+                         ("reason", reason)):
+        if not isinstance(value, str) or not value.strip():
+            return _cancel_refusal(
+                closure_id, "schema_violation",
+                "cancel {0} is required (明确授权者/原因 — the cancellation "
+                "decision record needs both)".format(label))
+        if "\n" in value or "\r" in value:
+            return _cancel_refusal(
+                closure_id, "schema_violation",
+                "cancel {0} must be a single line (writer row cells "
+                "cannot carry newlines)".format(label))
+        if "|" in value:
+            # review-FEAT-062-R0 F-1: a raw pipe is the writer's row-cell
+            # delimiter — the DEC row would be deterministically unwritable
+            # and the leg PERMANENTLY pending (never convergent), so the
+            # gate refuses it with zero changes, same class as newlines.
+            return _cancel_refusal(
+                closure_id, "schema_violation",
+                "cancel {0} must not contain '|' (writer table-row cell "
+                "delimiter — a raw pipe makes the decision row "
+                "deterministically unwritable and the cancellation leg "
+                "permanently pending)".format(label))
+    if expected_status is not None \
+            and expected_status not in CANCELLABLE_STATUSES:
+        return _cancel_refusal(
+            closure_id, "schema_violation",
+            "cancel expected status {0!r} not in the cancellable set {1}"
+            .format(expected_status, CANCELLABLE_STATUSES))
+    log_path = default_event_log_path(root)
+    lock_path = _closure_lock_dir(root) / (closure_id + ".lock")
+    try:
+        with _RunLock(lock_path, lock_timeout):
+            return _cancel_locked(root, closure_id, authorized_by, reason,
+                                  expected_status, log_path,
+                                  writer_timeout)
+    except LockContention as exc:
+        return {"closure_id": closure_id, "error": True,
+                "code": "lock_contention", "disposition": "retryable",
+                "detail": "{0} (在途写冲突: an in-flight chain/finalize "
+                          "holds the closure run lock — the cancellation "
+                          "made ZERO changes; retry after the chain "
+                          "halts)".format(exc)}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1808,9 +2405,11 @@ def build_parser() -> argparse.ArgumentParser:
                     "the chain",
         epilog=(
             "Exit-code scale (this CLI): 0 = run ready/finalized (or "
-            "status/finalize ok); 2 = blocked / awaiting-world-check / "
-            "validation refusal / usage error; 3 = retryable lock "
-            "contention.  FIX-379 item-3 (0.86.0 M-2 observation #3): "
+            "status/finalize ok; cancel consistent); 2 = blocked / "
+            "awaiting-world-check / validation refusal / usage error; "
+            "3 = retryable lock contention, or a cancelled closure with "
+            "a pending convergence leg (re-run the same cancel command).  "
+            "FIX-379 item-3 (0.86.0 M-2 observation #3): "
             "per-family exit SCALES DIFFER across the governed-writer "
             "CLIs this chain invokes (governance_store: 0 ok / 2 refusal "
             "/ 3 retryable; task_row_update: 0 ok / 2 usage / 3 "
@@ -1862,6 +2461,28 @@ def build_parser() -> argparse.ArgumentParser:
                        "(verifies the operator commit, records the fact)")
     p.add_argument("--closure-id", required=True)
     p.add_argument("--commit-sha", required=True)
+
+    p = sub.add_parser("cancel", help="FEAT-062 cancellation gate: "
+                       "terminate a non-finalized closure (restricted "
+                       "entry + CAS terminal + writer-registered DEC op "
+                       "+ own-locks-only release + ops reconciliation)")
+    p.add_argument("--closure-id", required=True)
+    p.add_argument("--authorized-by", required=True,
+                   help="explicit authorizer recorded in the cancellation "
+                        "decision row (明确授权者)")
+    p.add_argument("--reason", required=True,
+                   help="single-line cancellation reason (decisions "
+                        "recorded need a reason)")
+    p.add_argument("--expect-status", default=None,
+                   choices=list(CANCELLABLE_STATUSES),
+                   help="CAS: refuse unless the derived status still "
+                        "equals this (revision_conflict returns the "
+                        "observed status)")
+    p.add_argument("--lock-timeout", type=float, default=10.0)
+    p.add_argument("--writer-timeout", type=float, default=30.0,
+                   help="per-writer-CLI lock timeout (the DEC/locks legs "
+                        "pass it through; a timed-out leg is pending — "
+                        "re-run converges)")
     return parser
 
 
@@ -1939,17 +2560,60 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 def cmd_finalize(args: argparse.Namespace) -> int:
     _configure_stdio()
-    payload = finalize_closure(Path(args.project_root), args.closure_id,
-                               args.commit_sha)
+    try:
+        payload = finalize_closure(Path(args.project_root), args.closure_id,
+                                   args.commit_sha)
+    except LockContention as exc:
+        # review-FEAT-062-R0 F-2: a cancel holding the run lock (writer
+        # legs in flight) exhausts finalize's lock budget — structured
+        # retryable refusal, never a bare traceback.
+        payload = {"closure_id": args.closure_id, "error": True,
+                   "code": "lock_contention", "disposition": "retryable",
+                   "detail": str(exc)}
+    except ValueError as exc:
+        # review-FEAT-062-R0 F-3: a malformed closure id is a closed-code
+        # validation refusal, same convention as cmd_run.
+        payload = {"closure_id": args.closure_id, "error": True,
+                   "code": "schema_violation", "disposition": "validation",
+                   "detail": str(exc)}
     print(json.dumps(payload, ensure_ascii=False, indent=2))
-    return 2 if payload.get("error") else 0
+    if payload.get("error"):
+        return 3 if payload.get("disposition") == "retryable" else 2
+    return 0
+
+
+def cmd_cancel(args: argparse.Namespace) -> int:
+    _configure_stdio()
+    try:
+        payload = cancel_closure(
+            Path(args.project_root), args.closure_id,
+            authorized_by=args.authorized_by, reason=args.reason,
+            expected_status=args.expect_status,
+            lock_timeout=args.lock_timeout,
+            writer_timeout=args.writer_timeout)
+    except ValueError as exc:
+        # review-FEAT-062-R0 F-3: a malformed closure id is a closed-code
+        # validation refusal (LockContention is already structured inside
+        # cancel_closure), same convention as cmd_run.
+        payload = {"closure_id": args.closure_id, "error": True,
+                   "code": "schema_violation", "disposition": "validation",
+                   "detail": str(exc)}
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    if payload.get("error"):
+        return 3 if payload.get("disposition") == "retryable" else 2
+    if not (payload.get("reconciliation") or {}).get("consistent", False):
+        # terminal recorded, a convergence leg is pending — re-run the
+        # SAME command (deterministic operation ids make the retry a
+        # writer replay/apply that converges)
+        return 3
+    return 0
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     handlers = {"run": cmd_run, "status": cmd_status,
-                "finalize": cmd_finalize}
+                "finalize": cmd_finalize, "cancel": cmd_cancel}
     return handlers[args.command](args)
 
 

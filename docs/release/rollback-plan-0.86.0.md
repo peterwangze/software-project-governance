@@ -156,7 +156,7 @@ python <plugin_root>/adapters/dsh/launch.py --sync
 | 3 | locks-release 命令缺口（shrink-locks TTL 收缩为最近 Governed 效果——真删除登记缺口） | FEAT-056 gap_disclosure | 候选 |
 | 4 | 存储分离 JSON 化（首表 decision-log） | version-plan §3 / arch round-2 | 候选 |
 | 5 | closure 铺开（取消/重开/异常接管） | FEAT-056 遗留 | 候选 |
-| 6 | FEAT-044 回合心跳 / FEAT-045 并行段识别 | DEC-220 落地映射 | 候选 |
+| 6 | FEAT-044 回合心跳 / FEAT-045 并行段识别 | FEAT-044=本行预留 ID；FEAT-045=DEC-220「闭环链一键化」公理延伸应用（原文已由 FEAT-056 承载——勘正 2026-09-25：原「DEC-220 落地映射」为本行失准，REVIEW-REL-086-DESIGN-R0 P3-2） | 候选 |
 | 7 | B-7 index-rebuild / 大表迁移 / 发版管线自举 | version-plan §3 | 候选 |
 | 8 | FIX-364 snapshot freshness 午夜窗修复（fixture 以引擎同口径取日期粒度） | 0.85.0 M-2 遗留 | triage 在案未实施 |
 | 9 | 量测边缘观察 4 项（journal detail 透传 / triage-id 词表与 governance id family 词表对齐 / conflict 退出码语义统一 / pre-probe 语义注记） | 本版 M-2 量测首跑 | **新增移交**——Coordinator triage |

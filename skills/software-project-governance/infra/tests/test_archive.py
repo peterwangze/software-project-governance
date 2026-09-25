@@ -4566,5 +4566,664 @@ class TestArchiveCliProjectRoot(unittest.TestCase):
         self.assertEqual(self.archive.HOST_PROJECT_ROOT, self._orig_host)
 
 
+# ────────────────────────────────────────────────────────────
+# FIX-385 (B-7b) fixture helpers
+# ────────────────────────────────────────────────────────────
+
+def _make_big_table_world(governance_dir, evidence_count=57):
+    """FIX-385 fixture: a row-heavy evidence-log + the plan-tracker priority
+    table that resolves the FIX-235 completed-hot task mapping.
+
+    Deterministic content: the same world can be rebuilt byte-identically
+    (crash/resume tests reset between runs). Evidence rows referencing
+    FIX-900 (live task, 进行中) are retained; rows referencing FIX-101/102
+    (completed, 目标版本 0.60.0) migrate in the 0.60.0~0.61.0 range.
+    """
+    plan_lines = [
+        "# 当前项目样例",
+        "",
+        "## 项目配置",
+        "- **工作流版本**: 0.88.0",
+        "",
+        "### 优先级一览",
+        "",
+        "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
+        "| **P2** | FIX-101 | task one | — | 0.60.0 | TBD | ✅ 已完成 |",
+        "| **P2** | FIX-102 | task two | FIX-101 | 0.60.0 | TBD | ✅ 已完成 |",
+        "| **P2** | FIX-103 | task three | — | 0.61.0 | TBD | ✅ 已完成 |",
+        "| **P1** | FIX-900 | live task | — | 0.88.0 | TBD | 进行中 |",
+        "",
+    ]
+    (governance_dir / "plan-tracker.md").write_text(
+        "\n".join(plan_lines), encoding="utf-8")
+
+    evd_lines = [
+        "# 证据记录",
+        "",
+        "| 证据ID | 关联Task | 摘要 | 日期 | 类型 | 产出 | 负责人 | 审查人 | 审查结果 | 备注 |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for i in range(1, evidence_count + 1):
+        task = "FIX-900" if i % 17 == 0 else ("FIX-101" if i % 2 else "FIX-102")
+        evd_lines.append(
+            f"| EVD-{i:03d} | {task} | evidence row {i} | 2026-09-24 | 代码 | "
+            f"src/ | 阿速 | 老赵 | 通过 | — |"
+        )
+    (governance_dir / "evidence-log.md").write_text(
+        "\n".join(evd_lines) + "\n", encoding="utf-8")
+
+
+def _make_decision_log_legacy_rows(governance_dir, entries):
+    """FIX-385 fixture: decision-log in the 11-column legacy schema with a
+    关联任务 column, so decisions are migratable in the md world."""
+    lines = [
+        "# 决策记录",
+        "",
+        "| 编号 | 日期 | 主题 | 背景 | 决策内容 | 备选方案 | 选择原因 | 影响范围 | 决策人 | 关联任务 | 后续动作 |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for dec_id, title, related in entries:
+        lines.append(
+            f"| {dec_id} | 2026-09-01 | {title} | ctx | content | alt | why | "
+            f"scope | 阿速 | {related} | follow |"
+        )
+    (governance_dir / "decision-log.md").write_text(
+        "\n".join(lines), encoding="utf-8")
+
+
+class TestBigTableResumableMigration(unittest.TestCase):
+    """FIX-385 (B-7b): batched, journaled, resumable big-table migration
+    (evidence → archive) with FEAT-060/061 crash-recovery semantics.
+
+    Crash injection uses mock.patch on the engine's own write primitives —
+    no product test hooks. Each crash window mirrors a real interruption:
+      - staging crash     → resume continues at the batch cursor
+      - commit crash      (archive written, hot not rewritten) → resume
+                            completes the hot leg without duplicating data
+      - finalize crash    (hot rewritten, journal unfinalized) → resume
+                            finalizes only
+      - hot divergence    (concurrent writer mid-migration) → loud refusal
+    """
+
+    RANGE = ("0.60.0", "0.61.0")
+    MIGRATABLE = 54  # 57 rows − 3 FIX-900-referencing rows retained
+
+    def setUp(self):
+        import archive
+        self.archive = archive
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        self.gov_dir = self.root / ".governance"
+        self.gov_dir.mkdir(parents=True, exist_ok=True)
+        self.archive_dir = self.gov_dir / "archive"
+        for sub in ("tasks", "evidence", "decisions", "risks"):
+            (self.archive_dir / sub).mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        self.tempdir.cleanup()
+
+    # ── helpers ──
+
+    @contextlib.contextmanager
+    def _patched_root(self):
+        with patch.object(self.archive, "ROOT", self.root), \
+             patch.object(self.archive, "PLUGIN_ROOT", self.root):
+            yield
+
+    def _reset_world(self):
+        """Rebuild the pristine deterministic world (clears archive + state)."""
+        import shutil
+        _make_big_table_world(self.gov_dir)
+        for f in (self.archive_dir / "evidence").glob("*.md"):
+            f.unlink()
+        mig = self.archive_dir / ".migration"
+        if mig.exists():
+            shutil.rmtree(mig)
+
+    def _hot_text(self):
+        return (self.gov_dir / "evidence-log.md").read_text(encoding="utf-8")
+
+    def _hot_rows(self):
+        return self._hot_text().count("| EVD-")
+
+    def _journal_path(self):
+        return self.archive._migration_journal_path("evidence", *self.RANGE)
+
+    def _journal(self):
+        jp = self._journal_path()
+        if not jp.is_file():
+            return None
+        return json.loads(jp.read_text(encoding="utf-8"))
+
+    def _archive_files(self):
+        return sorted(p.name for p in (self.archive_dir / "evidence").glob("*.md"))
+
+    def _archive_text(self, name):
+        return (self.archive_dir / "evidence" / name).read_text(encoding="utf-8")
+
+    def _assert_conservation(self):
+        """Every original EVD id appears EXACTLY once across hot + archive."""
+        import re
+        ids = re.findall(r"\| (EVD-\d+) \|", self._hot_text())
+        for name in self._archive_files():
+            ids.extend(re.findall(r"\| (EVD-\d+) \|", self._archive_text(name)))
+        self.assertEqual(sorted(ids),
+                         [f"EVD-{i:03d}" for i in range(1, 58)])
+
+    def _terminal_state_reference(self):
+        """One-shot _migrate_evidence terminal state on a pristine world:
+        returns (hot_text, archive_text) as the equivalence reference."""
+        self._reset_world()
+        mapping = {"FIX-101": "0.60.0", "FIX-102": "0.60.0",
+                   "FIX-103": "0.61.0"}
+        with self._patched_root():
+            count = self.archive._migrate_evidence(
+                self.RANGE[0], self.RANGE[1], mapping, dry_run=False)
+        self.assertEqual(count, self.MIGRATABLE)
+        hot = self._hot_text()
+        files = self._archive_files()
+        self.assertEqual(files, ["evidence-v0.60.0-0.61.0.md"])
+        return hot, self._archive_text(files[0])
+
+    # ── core equivalence (终态等价一次性迁移) ──
+
+    def test_resume_terminal_state_equivalent_to_one_shot(self):
+        ref_hot, ref_arc = self._terminal_state_reference()
+        self._reset_world()
+        with self._patched_root():
+            result = self.archive.migrate_evidence_resumable(
+                self.RANGE[0], self.RANGE[1], batch_size=10)
+        self.assertTrue(result["success"])
+        self.assertEqual(result["migrated"], self.MIGRATABLE)
+        self.assertFalse(result["resumed"])
+        self.assertEqual(result["batches_total"], 6)
+        self.assertEqual(self._hot_text(), ref_hot)
+        files = self._archive_files()
+        self.assertEqual(files, ["evidence-v0.60.0-0.61.0.md"])
+        self.assertEqual(self._archive_text(files[0]), ref_arc)
+        self._assert_conservation()
+
+    # ── crash window: staging (断点续迁 cursor) ──
+
+    def test_stage_crash_resume_skips_completed_batches(self):
+        ref_hot, ref_arc = self._terminal_state_reference()
+        self._reset_world()
+        real_stage = self.archive._migration_write_batch
+        calls = {"n": 0}
+
+        def crashing(batches_dir, batch_index, rows):
+            calls["n"] += 1
+            if calls["n"] > 3:
+                raise OSError("simulated crash after 3 staged batches")
+            return real_stage(batches_dir, batch_index, rows)
+
+        with self._patched_root():
+            with patch.object(self.archive, "_migration_write_batch",
+                              side_effect=crashing):
+                with self.assertRaises(OSError):
+                    self.archive.migrate_evidence_resumable(
+                        self.RANGE[0], self.RANGE[1], batch_size=10)
+            # crash state: cursor at 3, hot table untouched, no archive file
+            journal = self._journal()
+            self.assertEqual(journal["batches_staged"], 3)
+            self.assertEqual(journal["phase"], "staging")
+            self.assertEqual(self._hot_rows(), 57)
+            self.assertEqual(self._archive_files(), [])
+            # resume: only the REMAINING batches are staged (cursor honored,
+            # no restart from batch 0)
+            staged = {"n": 0}
+
+            def counting(batches_dir, batch_index, rows):
+                staged["n"] += 1
+                return real_stage(batches_dir, batch_index, rows)
+
+            with patch.object(self.archive, "_migration_write_batch",
+                              side_effect=counting):
+                result = self.archive.migrate_evidence_resumable(
+                    self.RANGE[0], self.RANGE[1], batch_size=10)
+        self.assertTrue(result["success"])
+        self.assertTrue(result["resumed"])
+        self.assertEqual(result["migrated"], self.MIGRATABLE)
+        self.assertEqual(staged["n"], 3)  # 6 batches total, 3 already staged
+        self.assertEqual(self._hot_text(), ref_hot)
+        files = self._archive_files()
+        self.assertEqual(self._archive_text(files[0]), ref_arc)
+        self._assert_conservation()
+
+    # ── crash window: commit (archive written, hot NOT rewritten) ──
+
+    def test_commit_crash_after_archive_write_resume_completes(self):
+        ref_hot, ref_arc = self._terminal_state_reference()
+        self._reset_world()
+        real_atomic = self.archive._atomic_write_text
+
+        def crashing(path, text):
+            if Path(path).name == "evidence-log.md":
+                raise OSError("simulated crash before hot rewrite")
+            return real_atomic(path, text)
+
+        with self._patched_root():
+            with patch.object(self.archive, "_atomic_write_text",
+                              side_effect=crashing):
+                with self.assertRaises(OSError):
+                    self.archive.migrate_evidence_resumable(
+                        self.RANGE[0], self.RANGE[1], batch_size=10)
+            # the exact window the one-shot path cannot recover from:
+            # archive file written, hot table NOT rewritten
+            files = self._archive_files()
+            self.assertEqual(len(files), 1)
+            self.assertIn("| EVD-001 |", self._archive_text(files[0]))
+            self.assertEqual(self._hot_rows(), 57)
+            # resume: completes the hot rewrite WITHOUT duplicating the archive
+            result = self.archive.migrate_evidence_resumable(
+                self.RANGE[0], self.RANGE[1], batch_size=10)
+        self.assertTrue(result["success"])
+        self.assertTrue(result["resumed"])
+        self.assertEqual(self._archive_files(), files)  # still exactly one
+        self.assertEqual(self._hot_text(), ref_hot)
+        self.assertEqual(self._archive_text(files[0]), ref_arc)
+        self._assert_conservation()
+
+    # ── crash window: finalize (hot rewritten, journal unfinalized) ──
+
+    def test_finalize_crash_resume_completes(self):
+        ref_hot, ref_arc = self._terminal_state_reference()
+        self._reset_world()
+        real_journal = self.archive._migration_write_journal
+
+        def crashing(journal_path, doc):
+            if doc.get("phase") == "finalized":
+                raise OSError("simulated crash before finalize")
+            return real_journal(journal_path, doc)
+
+        with self._patched_root():
+            with patch.object(self.archive, "_migration_write_journal",
+                              side_effect=crashing):
+                with self.assertRaises(OSError):
+                    self.archive.migrate_evidence_resumable(
+                        self.RANGE[0], self.RANGE[1], batch_size=10)
+            # hot already rewritten, journal stuck at commit_intent
+            self.assertEqual(self._hot_rows(), 3)
+            self.assertEqual(self._journal()["phase"], "commit_intent")
+            result = self.archive.migrate_evidence_resumable(
+                self.RANGE[0], self.RANGE[1], batch_size=10)
+        self.assertTrue(result["success"])
+        self.assertTrue(result["resumed"])
+        self.assertEqual(self._hot_text(), ref_hot)
+        self._assert_conservation()
+
+    # ── divergence (concurrent writer mid-migration) ──
+
+    def test_resume_refuses_loudly_on_hot_divergence(self):
+        self._reset_world()
+        real_stage = self.archive._migration_write_batch
+        calls = {"n": 0}
+
+        def crashing(batches_dir, batch_index, rows):
+            calls["n"] += 1
+            if calls["n"] > 2:
+                raise OSError("simulated crash after 2 staged batches")
+            return real_stage(batches_dir, batch_index, rows)
+
+        with self._patched_root():
+            with patch.object(self.archive, "_migration_write_batch",
+                              side_effect=crashing):
+                with self.assertRaises(OSError):
+                    self.archive.migrate_evidence_resumable(
+                        self.RANGE[0], self.RANGE[1], batch_size=10)
+            # a concurrent writer appends a row mid-migration
+            hot = self.gov_dir / "evidence-log.md"
+            hot.write_text(
+                self._hot_text().rstrip("\n") + "\n"
+                "| EVD-058 | FIX-900 | late arrival | 2026-09-25 | 代码 | "
+                "src/ | 阿速 | 老赵 | 通过 | — |\n",
+                encoding="utf-8")
+            with self.assertRaises(self.archive.BigTableMigrationError) as ctx:
+                self.archive.migrate_evidence_resumable(
+                    self.RANGE[0], self.RANGE[1], batch_size=10)
+        self.assertEqual(ctx.exception.payload["code"], "hot_table_diverged")
+        # nothing was migrated behind the operator's back
+        self.assertEqual(self._hot_rows(), 58)
+        self.assertEqual(self._archive_files(), [])
+
+    def test_cursor_ahead_of_staged_artifacts_refuses(self):
+        self._reset_world()
+        real_stage = self.archive._migration_write_batch
+        calls = {"n": 0}
+
+        def crashing(batches_dir, batch_index, rows):
+            calls["n"] += 1
+            if calls["n"] > 3:
+                raise OSError("simulated crash")
+            return real_stage(batches_dir, batch_index, rows)
+
+        with self._patched_root():
+            with patch.object(self.archive, "_migration_write_batch",
+                              side_effect=crashing):
+                with self.assertRaises(OSError):
+                    self.archive.migrate_evidence_resumable(
+                        self.RANGE[0], self.RANGE[1], batch_size=10)
+            # tamper: a staged batch disappears while the cursor claims it
+            (self._journal_path().parent / "batches"
+             / "batch-000001.json").unlink()
+            with self.assertRaises(
+                    self.archive.BigTableMigrationError) as ctx:
+                self.archive.migrate_evidence_resumable(
+                    self.RANGE[0], self.RANGE[1], batch_size=10)
+        self.assertEqual(ctx.exception.payload["code"],
+                         "migration_cursor_ahead_of_artifacts")
+
+    # ── operational modes ──
+
+    def test_dry_run_zero_writes(self):
+        self._reset_world()
+        with self._patched_root():
+            result = self.archive.migrate_evidence_resumable(
+                self.RANGE[0], self.RANGE[1], batch_size=10, dry_run=True)
+        self.assertTrue(result["dry_run"])
+        self.assertEqual(result["migrated"], self.MIGRATABLE)
+        self.assertFalse((self.archive_dir / ".migration").exists())
+        self.assertEqual(self._archive_files(), [])
+        self.assertEqual(self._hot_rows(), 57)
+
+    def test_dry_run_on_resumed_world_zero_writes(self):
+        """FIX-385: dry-run honors zero-write even when a resumable journal
+        exists — a resumed-world dry-run must never stage/commit/apply."""
+        self._reset_world()
+        real_stage = self.archive._migration_write_batch
+        calls = {"n": 0}
+
+        def crashing(batches_dir, batch_index, rows):
+            calls["n"] += 1
+            if calls["n"] > 2:
+                raise OSError("simulated crash after 2 staged batches")
+            return real_stage(batches_dir, batch_index, rows)
+
+        with self._patched_root():
+            with patch.object(self.archive, "_migration_write_batch",
+                              side_effect=crashing):
+                with self.assertRaises(OSError):
+                    self.archive.migrate_evidence_resumable(
+                        self.RANGE[0], self.RANGE[1], batch_size=10)
+            hot_before = self._hot_text()
+            result = self.archive.migrate_evidence_resumable(
+                self.RANGE[0], self.RANGE[1], batch_size=10, dry_run=True)
+            self.assertTrue(result["dry_run"])
+            self.assertTrue(result["resumed"])
+            self.assertEqual(result["migrated"], self.MIGRATABLE)
+            # zero writes: hot unchanged, no archive file, journal untouched
+            self.assertEqual(self._hot_text(), hot_before)
+            self.assertEqual(self._archive_files(), [])
+            self.assertEqual(self._journal()["batches_staged"], 2)
+            self.assertEqual(self._journal()["phase"], "staging")
+
+    def test_nothing_to_migrate_creates_no_journal(self):
+        self._reset_world()
+        with self._patched_root():
+            result = self.archive.migrate_evidence_resumable(
+                "0.80.0", "0.81.0", batch_size=10)
+        self.assertTrue(result["success"])
+        self.assertEqual(result["migrated"], 0)
+        self.assertFalse((self.archive_dir / ".migration").exists())
+
+    def test_second_run_after_finalize_is_idempotent_noop(self):
+        self._reset_world()
+        with self._patched_root():
+            self.archive.migrate_evidence_resumable(
+                self.RANGE[0], self.RANGE[1], batch_size=10)
+            hot_after_first = self._hot_text()
+            files_after_first = self._archive_files()
+            second = self.archive.migrate_evidence_resumable(
+                self.RANGE[0], self.RANGE[1], batch_size=10)
+        self.assertEqual(second["resumed"], "already_finalized")
+        self.assertEqual(second["migrated"], self.MIGRATABLE)
+        self.assertEqual(self._hot_text(), hot_after_first)
+        self.assertEqual(self._archive_files(), files_after_first)
+
+    # ── CLI smoke ──
+
+    def test_cli_migrate_big_table_smoke(self):
+        self._reset_world()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.archive.main(["migrate-big-table", "evidence", "0.60.0",
+                               "0.61.0", "--batch-size", "10",
+                               "--project-root", str(self.root)])
+        self.assertIn("Migrated rows: 54", out.getvalue())
+        self.assertEqual(len(self._archive_files()), 1)
+
+    def test_cli_migrate_big_table_refusal_exits_1(self):
+        self._reset_world()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), \
+             self.assertRaises(SystemExit) as ctx:
+            self.archive.main(["migrate-big-table", "evidence", "0.60.0",
+                               "0.61.0", "--batch-size", "0",
+                               "--project-root", str(self.root)])
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertIn("REFUSED", out.getvalue())
+
+
+class TestDecisionStoreAuthorityInterface(unittest.TestCase):
+    """FIX-385 衔接面: the archive migration mechanism vs the FEAT-061
+    storage-separation architecture.
+
+    A non-MD_ACTIVE decision-store authority must NEVER let the migration
+    rewrite the decision-log projection (fail-closed loud refusal, recorded
+    as a deferral on the run result); the other tables migrate normally and
+    the resumable evidence path is unaffected.
+    """
+
+    def setUp(self):
+        import archive
+        self.archive = archive
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        self.gov_dir = self.root / ".governance"
+        self.gov_dir.mkdir(parents=True, exist_ok=True)
+        self.archive_dir = self.gov_dir / "archive"
+        for sub in ("tasks", "evidence", "decisions", "risks"):
+            (self.archive_dir / sub).mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        self.tempdir.cleanup()
+
+    @contextlib.contextmanager
+    def _patched_root(self):
+        with patch.object(self.archive, "ROOT", self.root), \
+             patch.object(self.archive, "PLUGIN_ROOT", self.root):
+            yield
+
+    def _world(self):
+        _make_big_table_world(self.gov_dir)
+        _make_decision_log_legacy_rows(self.gov_dir, [
+            ("DEC-501", "decision one", "FIX-101"),
+            ("DEC-502", "decision two", "FIX-900"),
+        ])
+
+    def _write_archived_tasks(self):
+        (self.archive_dir / "tasks" / "v0.60.0~v0.61.0.md").write_text(
+            "# 归档 Task 表 — v0.60.0 ~ v0.61.0\n"
+            "- **归档日期**: 2026-09-24\n"
+            "- **归档范围**: plan-tracker.md 中 0.60.0~0.61.0 版本的所有 tasks\n"
+            "- **条目数**: 2\n"
+            "- **上一个归档文件**: 无\n"
+            "- **下一个归档文件**: 无\n"
+            "\n"
+            "### v0.60.0\n"
+            "| 任务ID | 描述 | 优先级 | 依赖 | 目标版本 | 负责人 | 审查人 | "
+            "审查类型 | 闭环路径 | 状态 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
+            "| FIX-101 | task one | P2 | — | 0.60.0 | 阿速 | — | "
+            "Code Reviewer | TBD | 已完成 |\n"
+            "| FIX-102 | task two | P2 | FIX-101 | 0.60.0 | 阿速 | — | "
+            "Code Reviewer | TBD | 已完成 |\n",
+            encoding="utf-8")
+
+    def _write_authority_marker(self, state="JSON_ACTIVE", backend="json",
+                                raw=None):
+        marker = self.gov_dir / ".decision-store-state.json"
+        if raw is not None:
+            marker.write_text(raw, encoding="utf-8")
+            return marker
+        marker.write_text(json.dumps(self._authority_marker_doc(state, backend),
+                                     ensure_ascii=False), encoding="utf-8")
+        return marker
+
+    @staticmethod
+    def _authority_marker_doc(state="JSON_ACTIVE", backend="json"):
+        return {
+            "schema_version": 1, "state": state, "backend": backend,
+            "epoch": 1, "generation": 1, "manifest_digest": None,
+            "migration_id": None, "owner_token": None,
+            "content_digest": None, "frozen": None, "history": [],
+        }
+
+    def _concurrent_cutover_state_probe(self, marker):
+        """REVIEW-FIX-385-R0 F-1: a state probe that simulates the concurrent
+        cutover committing JSON_ACTIVE between the migration's ENTRY gate
+        (call 1) and its IN-LOCK re-check (call 2) — the TOCTOU window."""
+        real_state = self.archive._decision_authority_state
+        calls = {"n": 0}
+
+        def flipping_state():
+            calls["n"] += 1
+            if calls["n"] >= 2:
+                marker.write_text(json.dumps(
+                    self._authority_marker_doc(), ensure_ascii=False),
+                    encoding="utf-8")
+            return real_state()
+
+        return flipping_state
+
+    def test_concurrent_cutover_into_window_refuses_rewrite_in_lock(self):
+        """REVIEW-FIX-385-R0 F-1: the authority flips between the entry gate
+        and the projection rewrite — the IN-LOCK re-check refuses with ZERO
+        writes (the projection is never rewritten with authority posture)."""
+        self._world()
+        self._write_archived_tasks()
+        marker = self.gov_dir / ".decision-store-state.json"
+        with self._patched_root():
+            with patch.object(self.archive, "_decision_authority_state",
+                              side_effect=self._concurrent_cutover_state_probe(
+                                  marker)):
+                with self.assertRaises(
+                        self.archive.DecisionStoreAuthorityConflict) as ctx:
+                    self.archive._migrate_decisions(
+                        "0.60.0", "0.61.0", {"FIX-101": "0.60.0"})
+        self.assertEqual(ctx.exception.payload["authority_state"],
+                         "JSON_ACTIVE")
+        self.assertEqual(ctx.exception.payload["recheck"], "in_lock")
+        # zero writes: projection unchanged, no decisions archive file
+        decision_log = (self.gov_dir / "decision-log.md").read_text(
+            encoding="utf-8")
+        self.assertIn("DEC-501", decision_log)
+        self.assertIn("DEC-502", decision_log)
+        self.assertEqual(
+            [p.name for p in (self.archive_dir / "decisions").glob("*.md")
+             if p.name != ".gitkeep"],
+            [])
+
+    def test_concurrent_cutover_window_records_deferral(self):
+        """REVIEW-FIX-385-R0 F-1: the in-lock refusal flows through
+        migrate_by_version's deferral path (loud, never silent) while the
+        other categories migrate normally."""
+        self._world()
+        self._write_archived_tasks()
+        marker = self.gov_dir / ".decision-store-state.json"
+        decision_before = (self.gov_dir / "decision-log.md").read_text(
+            encoding="utf-8")
+        with self._patched_root():
+            with patch.object(self.archive, "_decision_authority_state",
+                              side_effect=self._concurrent_cutover_state_probe(
+                                  marker)):
+                result = self.archive.migrate_by_version(
+                    "0.60.0", "0.61.0", dry_run=False)
+        self.assertEqual(
+            result["decision_migration_deferred"]["authority_state"],
+            "JSON_ACTIVE")
+        self.assertEqual(result["decision_migration_deferred"]["recheck"],
+                         "in_lock")
+        # projection not rewritten; the other categories still migrated
+        self.assertEqual(
+            (self.gov_dir / "decision-log.md").read_text(encoding="utf-8"),
+            decision_before)
+        self.assertEqual(result["evidence_archived"], 54)
+
+    def test_md_authority_still_migrates_decisions(self):
+        """Control: with no authority marker (md world) the decision route
+        behaves exactly as before FIX-385."""
+        self._world()
+        self._write_archived_tasks()
+        with self._patched_root():
+            result = self.archive.migrate_by_version(
+                "0.60.0", "0.61.0", dry_run=False)
+        self.assertIsNone(result.get("decision_migration_deferred"))
+        self.assertEqual(result["decisions_archived"], 1)
+        decision_log = (self.gov_dir / "decision-log.md").read_text(
+            encoding="utf-8")
+        self.assertNotIn("DEC-501", decision_log)   # migrated
+        self.assertIn("DEC-502", decision_log)      # live ref retained
+
+    def test_json_authority_defers_decisions_and_migrates_other_tables(self):
+        self._world()
+        self._write_archived_tasks()
+        decision_before = (self.gov_dir / "decision-log.md").read_text(
+            encoding="utf-8")
+        self._write_authority_marker()
+        with self._patched_root():
+            result = self.archive.migrate_by_version(
+                "0.60.0", "0.61.0", dry_run=False)
+        self.assertEqual(
+            result["decision_migration_deferred"]["authority_state"],
+            "JSON_ACTIVE")
+        # the md projection was NOT rewritten
+        self.assertEqual(
+            (self.gov_dir / "decision-log.md").read_text(encoding="utf-8"),
+            decision_before)
+        # the other categories migrated normally
+        self.assertEqual(result["evidence_archived"], 54)
+        # deferral is NOT a silent drop: the decision rows stay hot
+        self.assertIn(
+            "DEC-501",
+            (self.gov_dir / "decision-log.md").read_text(encoding="utf-8"))
+
+    def test_direct_decision_migration_raises_on_json_authority(self):
+        self._world()
+        self._write_authority_marker()
+        with self._patched_root():
+            with self.assertRaises(
+                    self.archive.DecisionStoreAuthorityConflict) as ctx:
+                self.archive._migrate_decisions(
+                    "0.60.0", "0.61.0", {"FIX-101": "0.60.0"})
+        self.assertEqual(ctx.exception.payload["authority_state"],
+                         "JSON_ACTIVE")
+
+    def test_corrupt_authority_marker_fails_closed(self):
+        self._world()
+        self._write_authority_marker(raw="{ not valid json")
+        with self._patched_root():
+            with self.assertRaises(
+                    self.archive.DecisionStoreAuthorityConflict) as ctx:
+                self.archive._migrate_decisions(
+                    "0.60.0", "0.61.0", {"FIX-101": "0.60.0"})
+        self.assertEqual(ctx.exception.payload["authority_state"],
+                         "unreadable")
+
+    def test_resumable_evidence_migration_runs_under_json_decision_authority(self):
+        """The evidence big-table path is independent of the decision-store
+        authority (separation of concerns) — it completes and REPORTS the
+        decision world it ran in."""
+        self._world()
+        self._write_authority_marker()
+        with self._patched_root():
+            result = self.archive.migrate_evidence_resumable(
+                "0.60.0", "0.61.0", batch_size=10)
+        self.assertTrue(result["success"])
+        self.assertEqual(result["migrated"], 54)
+        self.assertEqual(result["decision_authority_state"], "JSON_ACTIVE")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -7,6 +7,11 @@ evidence-log entries, etc.) with a light-weight Markdown index.
 
 Core functions:
   - migrate_by_version: archive tasks+evidence for a version range
+  - migrate_evidence_resumable: batched/journaled RESUMABLE migration of a
+      row-heavy governance table (evidence-log) into the archive
+      (FIX-385 / B-7b) — journal → staged batches → single commit
+      linearization point; resume re-judges the world from digests, never
+      from a phase counter (FEAT-060/FEAT-061 pattern)
   - build_index: scan archive files, generate archive/index.md
   - rebuild_index: index-loss/corruption recovery — rebuild the index from
       the archive files, then verify integrity (FIX-384 / B-7a). The index is
@@ -17,10 +22,14 @@ Core functions:
 Design: ADR-006 (docs/architecture/ADR-006-governance-data-scalability.md)
 """
 
+import contextlib
+import hashlib
 import json
+import os
 import re
 import shutil
 import sys
+import tempfile
 import unicodedata
 from datetime import date, datetime
 from pathlib import Path
@@ -94,6 +103,29 @@ ROOT = HOST_PROJECT_ROOT
 FIRST_MIGRATION_PLAN_SIZE_THRESHOLD = 80 * 1024
 TASK_INCREMENTAL_THRESHOLD = 20
 FALLBACK_ARCHIVE_DAYS = 90
+
+# ── FIX-385 (B-7b): big-table resumable migration constants ────────
+BIG_TABLE_MIGRATION_BATCH_SIZE = 200          # rows per staged batch
+_BIG_TABLE_MIGRATION_DIRNAME = ".migration"   # runtime state under archive/
+_MIGRATION_JOURNAL_SCHEMA = "archive-big-table-migration/1"
+# FEAT-061 decision_repository.AUTHORITY_STATE_FILE — the storage-separation
+# authority marker. Name pinned here so the 衔接面 guard can fail closed even
+# when the repository module itself is unavailable (minimal packaging).
+_DECISION_AUTHORITY_MARKER_NAME = ".decision-store-state.json"
+
+
+# FEAT-060/FEAT-061 primitive reuse (single lock/atomic-write source
+# discipline — the same imports decision_migration.py relies on). Isolated
+# loaders (verify_workflow._load_archive_module spec_from_file_location) and
+# minimal packaging may lack the peers; local fallbacks keep the same
+# durability guarantees instead of silently downgrading.
+try:
+    from governance_store import _TargetLock, _atomic_write_bytes
+    import decision_repository as _decision_repository
+except Exception:  # pragma: no cover — fallback path, exercised by layout
+    _TargetLock = None
+    _atomic_write_bytes = None
+    _decision_repository = None
 
 
 def _gov_dir():
@@ -618,8 +650,15 @@ def _make_incremental_archive_filename(version_start, version_end, category="tas
     Continuous archive must not append to an older archive file because rollback
     operates at file granularity.  A repeated range therefore gets its own
     increment file that can be safely unlinked without deleting history.
+
+    FIX-385: the resumable big-table path reuses this discipline for the
+    category-prefixed evidence family too (evidence-vX-Y.md) — a commit never
+    overwrites foreign archive content.
     """
-    base_name = _make_archive_filename(version_start, version_end, category)
+    if category == "tasks":
+        base_name = _make_archive_filename(version_start, version_end, category)
+    else:
+        base_name = f"{category}-v{version_start}-{version_end}.md"
     archive_subdir = _archive_dir() / category
     base_path = archive_subdir / base_name
     if not base_path.exists():
@@ -628,7 +667,11 @@ def _make_incremental_archive_filename(version_start, version_end, category="tas
     today = date.today().isoformat().replace("-", "")
     index = 1
     while True:
-        candidate = f"v{version_start}~v{version_end}-incremental-{today}-{index}.md"
+        if category == "tasks":
+            candidate = f"v{version_start}~v{version_end}-incremental-{today}-{index}.md"
+        else:
+            candidate = (f"{category}-v{version_start}-{version_end}"
+                         f"-incremental-{today}-{index}.md")
         if not (archive_subdir / candidate).exists():
             return candidate
         index += 1
@@ -650,7 +693,14 @@ def _parse_archive_version_range(filename):
     if match:
         return match.group(1), match.group(2)
     # FIX-164: category-prefixed names like evidence-v0.10.0-0.10.0.md
-    m2 = re.match(r"^[a-z]+-v(\d+\.\d+\.\d+)-(\d+\.\d+\.\d+)\.md$", filename)
+    # FIX-385: the category-prefixed family also admits the incremental
+    # suffix (evidence-vX-Y-incremental-YYYYMMDD-N.md) so index/rollback
+    # semantics stay coherent for resumable-path archive files.
+    m2 = re.match(
+        r"^[a-z]+-v(\d+\.\d+\.\d+)-(\d+\.\d+\.\d+)"
+        r"(?:-incremental-\d{8}-\d+)?\.md$",
+        filename,
+    )
     if m2:
         return m2.group(1), m2.group(2)
     return None
@@ -1012,6 +1062,15 @@ def _is_task_family_id(task_id):
 _EVD_ID_SHAPE_RE = re.compile(r"^EVD-(?:[A-Z]+-)?\d+$")
 
 
+# FIX-385: the evidence archive table header, single-sourced so the one-shot
+# path (_migrate_evidence) and the resumable big-table commit compose
+# byte-identical archive files (index compatibility by construction).
+_EVIDENCE_ARCHIVE_TABLE_HEADER = (
+    "| 证据ID | 关联Task | 摘要 | 日期 | 类型 | 产出 | 负责人 | 审查人 | 审查结果 | 备注 |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+)
+
+
 # ── Decision / Risk Migration (FIX-162 / TD-014) ───────────────────
 
 
@@ -1026,6 +1085,14 @@ def _migrate_decisions(version_start, version_end, task_versions, dry_run=False,
     [version_start, version_end] — see _decision_archive_version.
     Writes archived rows to archive/decisions/decisions-v{range}.md in the format
     '## DEC-{n}: {title}' that build_index expects. Returns count migrated.
+
+    FIX-385 衔接面 (B-7b): when the decision table's authority has moved to
+    the FEAT-061 JSON store (authority state != MD_ACTIVE), decision-log.md
+    is a PROJECTION — rewriting it here would corrupt the storage
+    architecture. This raises DecisionStoreAuthorityConflict (loud, fail-
+    closed); the calling surfaces record the deferral and keep migrating
+    the other categories. The store-backed DEC archive read route belongs
+    to the cutover ticket.
 
     FIX-170 note: unlike _migrate_risks, decisions have NO status column — the
     decision-log is an append-only historical record (columns: 编号/日期/主题/
@@ -1050,6 +1117,21 @@ def _migrate_decisions(version_start, version_end, task_versions, dry_run=False,
     retained_active_task_ref / no_task_family_ref / decision_row_too_short /
     ref_version_out_of_range.
     """
+
+    # FIX-385 衔接面: judge the decision-store authority BEFORE touching the
+    # projection file. Corrupt/unreadable markers refuse too ("unreadable").
+    authority_state = _decision_authority_state()
+    if authority_state != "MD_ACTIVE":
+        raise DecisionStoreAuthorityConflict({
+            "code": "decision_store_authority_conflict",
+            "authority_state": authority_state,
+            "detail": (
+                "decision migration refused: decision-store authority state "
+                f"is {authority_state!r}, not MD_ACTIVE — decision-log.md is "
+                "a projection under the FEAT-061 store architecture and is "
+                "never rewritten as authority; the store-backed archive read "
+                "route is the cutover ticket's obligation"),
+        })
 
     dlog = _decision_log()
     if not dlog.exists():
@@ -1112,9 +1194,32 @@ def _migrate_decisions(version_start, version_end, task_versions, dry_run=False,
     archive_path = _archive_dir() / "decisions" / f"decisions-v{version_start}-{version_end}.md"
     header = _build_archive_header(version_start, version_end, "decisions", len(archived),
                                    prev_file=None, next_file=None)
-    _write_archive_file(archive_path, header, archive_body)
-    # Rewrite decision-log without migrated rows
-    dlog.write_text("\n".join(kept_lines), encoding="utf-8")
+    # REVIEW-FIX-385-R0 F-1 (衔接面 TOCTOU): the authority was judged at this
+    # function's entry, but a concurrent cutover can flip the store authority
+    # before the projection rewrite lands. The writes therefore execute inside
+    # the decision-log target lock — the SAME `_TargetLock(md_target)` domain
+    # the cutover's projection leg (decision_repository
+    # .project_store_to_markdown) holds — with an IN-LOCK authority
+    # re-judgment first (mirrors REVIEW-FEAT-061-R0 P0-F1's in-lock re-check
+    # form): a flipped world refuses via the deferral path with ZERO writes;
+    # the projection is never rewritten with authority posture.
+    with _big_table_target_lock(dlog):
+        authority_state = _decision_authority_state()
+        if authority_state != "MD_ACTIVE":
+            raise DecisionStoreAuthorityConflict({
+                "code": "decision_store_authority_conflict",
+                "authority_state": authority_state,
+                "recheck": "in_lock",
+                "detail": (
+                    "decision migration refused at the projection-rewrite "
+                    "critical section: decision-store authority state is "
+                    f"{authority_state!r}, not MD_ACTIVE — a concurrent "
+                    "cutover flipped the authority inside the migration "
+                    "window; zero writes performed"),
+            })
+        _write_archive_file(archive_path, header, archive_body)
+        # Rewrite decision-log without migrated rows
+        dlog.write_text("\n".join(kept_lines), encoding="utf-8")
     return len(archived)
 
 
@@ -1199,6 +1304,88 @@ def _migrate_risks(version_start, version_end, task_versions, dry_run=False,
     return len(archived)
 
 
+def _classify_evidence_rows(content, task_versions, version_start, version_end):
+    """FIX-385: single source of the evidence migration row-classification
+    gate — extracted from _migrate_evidence so the one-shot path and the
+    resumable big-table path can never drift apart (same discipline as the
+    FIX-384 _extract_* single-sourcing).
+
+    The gates are exactly _migrate_evidence's (FIX-164 subset + FIX-171
+    task-family/cross-entity split + FIX-301 compound-ID shape + range
+    membership); see that function's docstring for the full rationale.
+
+    Args:
+        content: the evidence-log.md text.
+        task_versions: ``{task_id: version}`` mapping (this-run + archived
+            + FIX-235 completed-hot, per the caller's semantics).
+        version_start / version_end: the migration range.
+
+    Returns one record per scanned EVD row, in scan order:
+        {"id", "line_idx", "line", "migrate": bool, "version": str|None,
+         "reason": str, "detail": str}
+    Non-EVD lines are not candidates and produce no record. ``reason`` /
+    ``detail`` carry the same values the FIX-301 explain mechanism reports.
+    """
+    records = []
+    for line_idx, line in enumerate(content.split("\n")):
+        stripped = line.strip()
+        if not stripped.startswith("| EVD-"):
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        evd_id = parts[1] if len(parts) > 1 else ""
+        if not (evd_id and _EVD_ID_SHAPE_RE.match(evd_id)):
+            # FIX-301: compound IDs (EVD-FIX-247) are admitted; anything else
+            # (corrupted/malformed rows) is reported as unknown structure.
+            records.append({"id": evd_id or "?", "line_idx": line_idx,
+                            "line": line, "migrate": False, "version": None,
+                            "reason": "unknown_evd_id_shape",
+                            "detail": "row ID shape not recognized"})
+            continue
+        # parts[2] = 关联 Task column; may be comma-separated multiple IDs that
+        # mix task-family (FIX-/REL-/...) and cross-entity (RISK-/DEC-/...) refs.
+        raw_task_ids = parts[2] if len(parts) > 2 else ""
+        ev_task_ids = set()
+        for tid in raw_task_ids.split(","):
+            tid = tid.strip()
+            if tid and re.match(r"[A-Z]+-\d+", tid):
+                ev_task_ids.add(tid)
+        # FIX-171 (AUDIT-126): only task-family IDs gate migration; cross-entity
+        # refs are descriptive context and cannot resolve a version.
+        task_family_ids = {tid for tid in ev_task_ids if _is_task_family_id(tid)}
+        if not task_family_ids:
+            records.append({"id": evd_id, "line_idx": line_idx, "line": line,
+                            "migrate": False, "version": None,
+                            "reason": "no_task_family_ref",
+                            "detail": f"refs: {raw_task_ids[:40] or '(none)'}"})
+            continue
+        if not task_family_ids.issubset(task_versions):
+            missing = sorted(t for t in task_family_ids
+                             if t not in task_versions)
+            records.append({"id": evd_id, "line_idx": line_idx, "line": line,
+                            "migrate": False, "version": None,
+                            "reason": "live_or_unresolvable_task_ref",
+                            "detail": "live/unresolved: "
+                                      + ",".join(missing[:5])})
+            continue
+        ver = None
+        for tid in task_family_ids:
+            v = task_versions.get(tid)
+            if v and _version_in_range(v, version_start, version_end):
+                ver = v
+                break
+        if ver:
+            records.append({"id": evd_id, "line_idx": line_idx, "line": line,
+                            "migrate": True, "version": ver,
+                            "reason": "would_archive", "detail": f"v{ver}"})
+        else:
+            records.append({"id": evd_id, "line_idx": line_idx, "line": line,
+                            "migrate": False, "version": None,
+                            "reason": "ref_version_out_of_range",
+                            "detail": "refs resolve out of range: "
+                                      f"{raw_task_ids[:40]}"})
+    return records
+
+
 def _migrate_evidence(version_start, version_end, task_versions, dry_run=False,
                       explain_out=None):
     """FIX-164: migrate evidence-log rows whose related tasks have been archived.
@@ -1246,7 +1433,6 @@ def _migrate_evidence(version_start, version_end, task_versions, dry_run=False,
     if not elog.exists():
         return 0
     content = elog.read_text(encoding="utf-8")
-    lines = content.split("\n")
 
     def _note(evd_id, reason, detail=""):
         if explain_out is not None:
@@ -1254,82 +1440,26 @@ def _migrate_evidence(version_start, version_end, task_versions, dry_run=False,
                 {"id": evd_id, "reason": reason, "detail": detail[:60]}
             )
 
-    kept_lines = []
-    archived = []  # (original_line, version)
-    for line in lines:
-        stripped = line.strip()
-        if not stripped.startswith("| EVD-"):
-            kept_lines.append(line)
-            continue
-        parts = [p.strip() for p in line.split("|")]
-        evd_id = parts[1] if len(parts) > 1 else ""
-        if not (evd_id and _EVD_ID_SHAPE_RE.match(evd_id)):
-            # FIX-301: compound IDs (EVD-FIX-247) are admitted; anything else
-            # (corrupted/malformed rows) is reported as unknown structure.
-            _note(evd_id or "?", "unknown_evd_id_shape", "row ID shape not recognized")
-            kept_lines.append(line)
-            continue
-        # parts[2] = 关联 Task column; may be comma-separated multiple IDs that
-        # mix task-family (FIX-/REL-/...) and cross-entity (RISK-/DEC-/...) refs.
-        raw_task_ids = parts[2] if len(parts) > 2 else ""
-        ev_task_ids = set()
-        for tid in raw_task_ids.split(","):
-            tid = tid.strip()
-            if tid and re.match(r"[A-Z]+-\d+", tid):
-                ev_task_ids.add(tid)
-        # FIX-171 (AUDIT-126): split into task-family IDs (which can resolve to
-        # a version in task_versions) and cross-entity refs (which cannot, by
-        # definition, and must NOT gate migration — they are descriptive context
-        # like "this evidence also relates to RISK-036"). The old single-set
-        # subset gate `ev_task_ids.issubset(task_versions)` failed whenever any
-        # cross-entity ref was present, blocking 129 in-range EVD rows.
-        task_family_ids = {tid for tid in ev_task_ids if _is_task_family_id(tid)}
-        # cross-entity refs (ev_task_ids - task_family_ids) are intentionally
-        # NOT used for gating or version resolution; kept as descriptive context.
-        # Migrate only when ALL TASK-FAMILY referenced IDs are archived (subset),
-        # then confirm at least one resolved version is in range.
-        #
-        # An EVD with ONLY cross-entity refs and NO task-family ID is ambiguous:
-        # we cannot resolve a version for it (no task-family ref to look up in
-        # task_versions), so it is KEPT hot rather than riskily migrating an
-        # unversionable row (test_migrate_evidence_only_cross_entity_refs_stays).
-        if not task_family_ids:
-            _note(evd_id, "no_task_family_ref",
-                  f"refs: {raw_task_ids[:40] or '(none)'}")
-            kept_lines.append(line)
-            continue
-        if not task_family_ids.issubset(task_versions):
-            missing = sorted(
-                t for t in task_family_ids if t not in task_versions
-            )
-            _note(evd_id, "live_or_unresolvable_task_ref",
-                  "live/unresolved: " + ",".join(missing[:5]))
-            kept_lines.append(line)
-            continue
-        ver = None
-        # Iterate task-family IDs only — cross-entity refs have no entry in
-        # task_versions by definition, so they can never resolve a version.
-        for tid in task_family_ids:
-            v = task_versions.get(tid)
-            if v and _version_in_range(v, version_start, version_end):
-                ver = v
-                break
-        if ver:
-            archived.append((line, ver))
-            _note(evd_id, "would_archive", f"v{ver}")
-        else:
-            _note(evd_id, "ref_version_out_of_range",
-                  f"refs resolve out of range: {raw_task_ids[:40]}")
-            kept_lines.append(line)
+    # FIX-385: row classification is single-sourced in _classify_evidence_rows
+    # (shared with the resumable big-table path) — this function keeps only
+    # the apply semantics (kept/archived split + archive write).
+    records = _classify_evidence_rows(content, task_versions, version_start,
+                                      version_end)
+    for r in records:
+        _note(r["id"], r["reason"], r["detail"])
+    archived = [(r["line"], r["version"]) for r in records if r["migrate"]]
 
     if not archived:
         return 0
     if dry_run:
         return len(archived)
 
+    migrate_line_idx = {r["line_idx"] for r in records if r["migrate"]}
+    kept_lines = [ln for i, ln in enumerate(content.split("\n"))
+                  if i not in migrate_line_idx]
+
     _ensure_archive_dirs()
-    archive_body = ["| 证据ID | 关联Task | 摘要 | 日期 | 类型 | 产出 | 负责人 | 审查人 | 审查结果 | 备注 |",
-                    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
+    archive_body = list(_EVIDENCE_ARCHIVE_TABLE_HEADER)
     archive_body.extend(line for line, _ver in archived)
     archive_path = _archive_dir() / "evidence" / f"evidence-v{version_start}-{version_end}.md"
     header = _build_archive_header(version_start, version_end, "evidence", len(archived),
@@ -1337,6 +1467,614 @@ def _migrate_evidence(version_start, version_end, task_versions, dry_run=False,
     _write_archive_file(archive_path, header, archive_body)
     elog.write_text("\n".join(kept_lines), encoding="utf-8")
     return len(archived)
+
+
+# ── Big-table resumable migration (FIX-385 / B-7b) ─────────────────
+#
+# evidence-log (1.6MB+ in the dogfood host) and other row-heavy governance
+# tables migrate into the archive through a batched, journaled path: the
+# FEAT-060/FEAT-061 pattern (journal → apply → finalize; resume by judging
+# the WORLD, never by trusting a phase counter) applied to a table-range
+# migration.
+#
+# Reuse map (复用, not re-invented):
+#   - _atomic_write_bytes / _TargetLock — governance_store's durability +
+#     mutual-exclusion primitives (single lock/atomic-write source
+#     discipline, the same imports decision_migration.py relies on).
+#   - Journal phase machine + world judgment — the FEAT-061 activation
+#     pattern: the plan pins the input digest; the commit is the single
+#     linearization point; every resume RE-DERIVES the world from digests
+#     (current == pinned input → continue; current == committed
+#     post-image → complete the interrupted leg; anything else → loud
+#     refusal, never a guess).
+#   - _make_incremental_archive_filename — the existing incremental-*
+#     naming discipline guarantees the commit never overwrites foreign
+#     archive content.
+#
+# FEAT-061 衔接面 (storage-separation compatibility): the engine is
+# table-agnostic in construction — a table participates through its
+# (hot file, row classification via _classify_evidence_rows, archive
+# composition) adapter, so the cutover ticket can add a store-routed
+# decision adapter without touching the phase machinery. Until that route
+# exists, a non-MD_ACTIVE decision-store authority makes DECISION-table
+# migration refuse loudly (DecisionStoreAuthorityConflict) instead of
+# rewriting the md projection; the evidence path is unaffected.
+
+class BigTableMigrationError(Exception):
+    """FIX-385: loud, structured refusal of a resumable big-table migration.
+
+    ``payload`` carries {code, detail, ...} (FEAT-061 fail-closed style);
+    the CLI prints it and exits non-zero — refusals are never silent zeros.
+    """
+
+    def __init__(self, payload):
+        super().__init__(payload.get("detail", str(payload)))
+        self.payload = dict(payload)
+
+
+class DecisionStoreAuthorityConflict(BigTableMigrationError):
+    """FIX-385 衔接面: the decision table's authority is NOT the hot md file
+    (FEAT-061 decision-store state != MD_ACTIVE) — decision-log.md is a
+    projection and must never be rewritten as if it were authority. The
+    store-backed DEC archive read route belongs to the cutover ticket."""
+
+
+def _sha256_text(text):
+    """SHA-256 over UTF-8 text bytes — the resumable path pins digests over
+    the exact bytes it writes, so line endings are platform-independent."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _atomic_write_text(path, text):
+    """Durable same-directory atomic write of UTF-8 text (LF bytes).
+
+    Delegates to governance_store._atomic_write_bytes (FEAT-060 durability
+    primitive: temp + fsync + os.replace + dir fsync); the minimal-packaging
+    fallback keeps the same guarantees with a local mkstemp+replace.
+    """
+    data = text.encode("utf-8")
+    if _atomic_write_bytes is not None:
+        _atomic_write_bytes(Path(path), data)
+        return
+    path = Path(path)
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent),
+                                    prefix=path.name + ".", suffix=".tmp")
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, path)
+    except BaseException:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+        raise
+
+
+@contextlib.contextmanager
+def _big_table_target_lock(path):
+    """Mutual exclusion over the hot table during the commit linearization
+    window (governance_store._TargetLock when available)."""
+    if _TargetLock is not None:
+        with _TargetLock(Path(path)):
+            yield
+    else:
+        yield
+
+
+def _decision_authority_state():
+    """FIX-385 衔接面 seam — world judgment of the FEAT-061 decision-store
+    authority (decision_repository.load_authority on the marker file).
+
+    Returns the marker's state string ("MD_ACTIVE" when the marker is
+    absent — the initial md world). A corrupt/unreadable marker returns
+    "unreadable" (fail-closed: callers refuse, never assume md). When the
+    repository module is unavailable, the marker's mere EXISTENCE fails
+    closed — an unvalidatable authority is never silently treated as md.
+    """
+    if _decision_repository is not None:
+        try:
+            state = _decision_repository.load_authority(_gov_dir()).get("state")
+            return state if state else "unreadable"
+        except Exception:
+            return "unreadable"
+    marker = _gov_dir() / _DECISION_AUTHORITY_MARKER_NAME
+    return "MD_ACTIVE" if not marker.exists() else "unreadable"
+
+
+def _migration_state_dir(category, version_start, version_end):
+    """Runtime migration state dir (same artifact class as
+    .decision-migration/): under archive/, carries only .json files so
+    build_index / verify_archive_integrity / _get_existing_archive_files
+    never see it."""
+    return _archive_dir() / _BIG_TABLE_MIGRATION_DIRNAME / (
+        f"{category}-v{version_start}~v{version_end}")
+
+
+def _migration_journal_path(category, version_start, version_end):
+    return _migration_state_dir(category, version_start, version_end) / \
+        "journal.json"
+
+
+def _migration_batch_path(batches_dir, batch_index):
+    return batches_dir / f"batch-{batch_index:06d}.json"
+
+
+def _migration_write_journal(journal_path, doc):
+    doc = dict(doc)
+    doc["updated_at"] = datetime.now().replace(microsecond=0).isoformat()
+    _atomic_write_text(journal_path,
+                       json.dumps(doc, ensure_ascii=False, indent=2) + "\n")
+
+
+def _migration_load_journal(journal_path):
+    """Load the journal; None when absent. Corrupt/schema-foreign → loud
+    failure (FEAT-061 discipline: a required gate input that cannot be read
+    is a refusal, never a pass)."""
+    journal_path = Path(journal_path)
+    if not journal_path.is_file():
+        return None
+    try:
+        doc = json.loads(journal_path.read_bytes().decode("utf-8"))
+    except (OSError, ValueError, UnicodeDecodeError) as exc:
+        raise BigTableMigrationError({
+            "code": "migration_journal_unreadable",
+            "detail": f"{journal_path} is unreadable ({exc}) — the migration "
+                      "journal is required to resume; refusing to guess",
+        })
+    if (not isinstance(doc, dict)
+            or doc.get("schema") != _MIGRATION_JOURNAL_SCHEMA):
+        raise BigTableMigrationError({
+            "code": "migration_journal_unreadable",
+            "detail": f"{journal_path} is not a {_MIGRATION_JOURNAL_SCHEMA} "
+                      "journal — refusing",
+        })
+    return doc
+
+
+def _migration_write_batch(batches_dir, batch_index, rows):
+    """Stage one batch of candidate rows (atomic; content is deterministic
+    from the pinned candidate manifest, so re-staging is idempotent)."""
+    path = _migration_batch_path(batches_dir, batch_index)
+    doc = {"batch": batch_index, "rows": list(rows)}
+    _atomic_write_text(path,
+                       json.dumps(doc, ensure_ascii=False, indent=2) + "\n")
+    return path
+
+
+def _migration_load_batch(batches_dir, batch_index):
+    """Read one staged batch's rows; corrupt → loud failure (the staged
+    artifact is load-bearing for the post-commit resume path)."""
+    path = _migration_batch_path(batches_dir, batch_index)
+    try:
+        doc = json.loads(path.read_bytes().decode("utf-8"))
+    except (OSError, ValueError, UnicodeDecodeError) as exc:
+        raise BigTableMigrationError({
+            "code": "migration_batch_unreadable",
+            "detail": f"{path} is unreadable ({exc}) — staged batch "
+                      "artifacts are required to re-materialize the commit; "
+                      "refusing to guess",
+        })
+    rows = doc.get("rows") if isinstance(doc, dict) else None
+    if not isinstance(rows, list):
+        raise BigTableMigrationError({
+            "code": "migration_batch_unreadable",
+            "detail": f"{path} carries no rows list — refusing",
+        })
+    return rows
+
+
+def _archived_task_versions():
+    """FIX-385: task_id → version mapping from already-archived task files.
+
+    Extracted from migrate_by_version's historical-merge loop (single
+    source) so the resumable big-table path reuses the same mapping
+    discipline. This-run rows keep precedence via setdefault at the caller.
+    """
+    task_versions = {}
+    try:
+        for f in sorted((_archive_dir() / "tasks").glob("*.md")):
+            if f.name == ".gitkeep":
+                continue
+            for task_id, _status, version in _extract_tasks_from_archive_file(f):
+                if task_id and version and version != "unknown":
+                    task_versions.setdefault(task_id, version)
+    except Exception:
+        pass
+    return task_versions
+
+
+def _evidence_task_versions_standalone():
+    """FIX-385: the task_id → version mapping for a STANDALONE (non-
+    migrate_by_version) evidence migration: already-archived tasks plus the
+    FIX-235 completed-hot mapping from plan-tracker."""
+    mapping = _archived_task_versions()
+    try:
+        content = _plan_tracker().read_text(encoding="utf-8")
+    except OSError:
+        return mapping
+    for task_id, version in _parse_completed_task_versions(content).items():
+        mapping.setdefault(task_id, version)
+    return mapping
+
+
+def migrate_evidence_resumable(version_start, version_end, *,
+                               batch_size=BIG_TABLE_MIGRATION_BATCH_SIZE,
+                               dry_run=False, task_versions=None):
+    """FIX-385 (B-7b): batched, journaled, RESUMABLE migration of the
+    evidence-log table into the archive.
+
+    Pipeline (FEAT-060/FEAT-061 crash-recovery semantics):
+
+      plan    — classify rows (single-sourced _classify_evidence_rows),
+                pin the world: input digest + context (task mapping) digest
+                + the full candidate manifest, journal phase=intent.
+      stage   — per-batch cursor: each batch of rows is staged atomically
+                (batches/batch-NNNNNN.json) and the journal cursor
+                (batches_staged) is advanced. An interruption loses at most
+                the current batch; resume continues AT the cursor.
+      commit  — commit_intent pins the linearization point's outputs
+                (archive file name + content digest, expected post-migration
+                hot digest); apply executes under the hot-table lock in the
+                order archive → hot → finalize, so every crash window is
+                recoverable:
+                  crash after archive write  → resume rewrites hot only
+                  crash after hot rewrite    → resume finalizes only
+      resume  — judges the WORLD first: current == pinned input → continue;
+                current == committed post-image → complete the leg;
+                anything else → loud refusal (hot_table_diverged /
+                migration_state_conflict), never a guess. A COMPLETED
+                migration whose journal post-image no longer matches the
+                hot table is an ambiguous world → loud refusal (deleting
+                the journal dir starts a deliberate new migration).
+
+    Args:
+        version_start / version_end: semver range ("0.60.0", "0.61.0").
+        batch_size: rows per staged batch (>= 1).
+        dry_run: plan-only report; zero writes, no journal.
+        task_versions: optional explicit {task_id: version} mapping (this-
+            run-augmented, migrate-style). None → the standalone mapping
+            (_evidence_task_versions_standalone: archived + FIX-235
+            completed-hot).
+
+    Returns a structured result dict (success/migrated/batches_total/
+    resumed/journal_path/archive_file/decision_authority_state/...).
+    Raises BigTableMigrationError on every fail-closed refusal.
+    """
+    if not isinstance(batch_size, int) or isinstance(batch_size, bool) \
+            or batch_size < 1:
+        raise BigTableMigrationError({
+            "code": "schema_violation",
+            "detail": f"batch_size must be an int >= 1, got {batch_size!r}",
+        })
+    elog = _evidence_log()
+    if not elog.exists():
+        return {"success": True, "dry_run": bool(dry_run), "migrated": 0,
+                "batches_total": 0, "batch_size": batch_size, "resumed": False,
+                "skipped": "evidence-log.md 不存在", "journal_path": None,
+                "archive_file": None,
+                "decision_authority_state": _decision_authority_state()}
+    if task_versions is None:
+        evidence_task_versions = _evidence_task_versions_standalone()
+    else:
+        evidence_task_versions = dict(task_versions)
+
+    journal_path = _migration_journal_path("evidence", version_start,
+                                           version_end)
+    state_dir = journal_path.parent
+    batches_dir = state_dir / "batches"
+
+    content = elog.read_text(encoding="utf-8")
+    lines = content.split("\n")
+    input_digest = _sha256_text(content)
+
+    journal = _migration_load_journal(journal_path)
+
+    # ── finalized journal: judge the world ──
+    if journal is not None and journal.get("phase") == "finalized":
+        commit = journal.get("commit") or {}
+        if input_digest == commit.get("hot_after_digest"):
+            return {"success": True, "dry_run": bool(dry_run),
+                    "migrated": len(journal.get("candidates") or []),
+                    "batches_total": journal.get("batches_total"),
+                    "batch_size": journal.get("batch_size"),
+                    "resumed": "already_finalized",
+                    "journal_path": str(journal_path),
+                    "archive_file": f"archive/evidence/"
+                                    f"{commit.get('archive_file')}",
+                    "decision_authority_state": _decision_authority_state()}
+        if input_digest != journal.get("input_digest"):
+            # Ambiguous world: the hot table matches NEITHER the committed
+            # post-image NOR the pinned input. Cannot prove the commit
+            # completed → refuse loudly (a double migration is worse than
+            # a stopped one; FEAT-061 完整性失败重启 semantics).
+            raise BigTableMigrationError({
+                "code": "migration_state_conflict",
+                "detail": (
+                    "journal says finalized but the hot table matches "
+                    "neither the committed post-migration digest nor the "
+                    f"pinned input digest ({journal_path}) — manual "
+                    "inspection required; deleting the migration state dir "
+                    "starts a deliberate NEW migration"),
+            })
+        # Commit recorded but the hot leg provably never ran (hot == pinned
+        # input): fall through and complete the apply leg (idempotent).
+
+    resumed = journal is not None
+    hot_leg_done = False
+    if resumed:
+        # ── resume: world judgment against the pinned plan ──
+        if journal.get("category") != "evidence" or tuple(
+                journal.get("version_range") or ()) != (version_start,
+                                                        version_end):
+            raise BigTableMigrationError({
+                "code": "migration_journal_conflict",
+                "detail": f"{journal_path} belongs to another migration "
+                          f"(category={journal.get('category')!r}, "
+                          f"range={journal.get('version_range')}) — refusing",
+            })
+        doc = journal
+        _commit = doc.get("commit")
+        # Crash-after-hot-rewrite world: the current hot file matches the
+        # COMMITTED post-image — the input-digest check below would
+        # misread this completed leg as divergence. Judge the commit pin
+        # FIRST (world-judgment order: committed → input → diverged).
+        hot_leg_done = bool(_commit) and \
+            input_digest == _commit.get("hot_after_digest")
+        if not hot_leg_done:
+            if input_digest != journal.get("input_digest"):
+                raise BigTableMigrationError({
+                    "code": "hot_table_diverged",
+                    "detail": (
+                        "evidence-log.md diverged from the pinned input digest "
+                        f"(journal {journal.get('input_digest')[:12]}… vs "
+                        f"current {input_digest[:12]}…) — a concurrent writer "
+                        "mutated the table mid-migration; per FEAT-061 "
+                        "completeness semantics this migration is NOT "
+                        "continued: resolve the divergence, then delete the "
+                        "migration state dir to restart"),
+                })
+            context_digest = _sha256_text(json.dumps(
+                sorted(evidence_task_versions.items()),
+                ensure_ascii=False, sort_keys=True))
+            if context_digest != journal.get("context_digest"):
+                raise BigTableMigrationError({
+                    "code": "migration_context_changed",
+                    "detail": (
+                        "the task-version context changed since the plan was "
+                        "pinned — the candidate manifest may no longer match "
+                        "this context; re-judge and restart the migration"),
+                })
+        batch_size = doc["batch_size"]
+        batches_total = doc["batches_total"]
+        if hot_leg_done:
+            # The pinned input no longer exists on disk (this IS the
+            # post-migration world), so pinned line_idx values cannot be
+            # validated against `lines` — their integrity is enforced
+            # cryptographically downstream (batch rows re-materialized and
+            # digest-verified against the commit pin). No line binding here:
+            # neither the archive rows (staged batches) nor the hot text
+            # (current content) is derived from them on this path.
+            candidates = [{"id": c.get("id"), "line_idx": c.get("line_idx"),
+                           "version": c.get("version"), "line": None}
+                          for c in doc.get("candidates") or []]
+        else:
+            candidates = []
+            for c in doc.get("candidates") or []:
+                idx = c.get("line_idx")
+                if not isinstance(idx, int) or idx < 0 or idx >= len(lines):
+                    raise BigTableMigrationError({
+                        "code": "migration_journal_unreadable",
+                        "detail": f"pinned candidate line_idx {idx!r} is out "
+                                  "of range for the pinned input — journal "
+                                  "corrupt",
+                    })
+                candidates.append({"id": c.get("id"), "line_idx": idx,
+                                   "version": c.get("version"),
+                                   "line": lines[idx]})
+        if dry_run:
+            # dry-run honors zero-write on a resumed world too: report the
+            # pinned plan's remaining scope without touching anything.
+            return {"success": True, "dry_run": True,
+                    "migrated": len(candidates),
+                    "batches_total": batches_total, "batch_size": batch_size,
+                    "resumed": True,
+                    "journal_path": str(journal_path),
+                    "archive_file": (f"archive/evidence/"
+                                     f"{doc['commit']['archive_file']}"
+                                     if doc.get("commit") else None),
+                    "decision_authority_state": _decision_authority_state()}
+    else:
+        # ── fresh plan ──
+        records = _classify_evidence_rows(content, evidence_task_versions,
+                                          version_start, version_end)
+        candidates = [r for r in records if r["migrate"]]
+        batches_total = (len(candidates) + batch_size - 1) // batch_size
+        if dry_run:
+            return {"success": True, "dry_run": True,
+                    "migrated": len(candidates),
+                    "batches_total": batches_total, "batch_size": batch_size,
+                    "resumed": False, "journal_path": None,
+                    "archive_file": None,
+                    "decision_authority_state": _decision_authority_state()}
+        if not candidates:
+            return {"success": True, "dry_run": False, "migrated": 0,
+                    "batches_total": 0, "batch_size": batch_size,
+                    "resumed": False,
+                    "skipped": "归档范围内无可迁移 evidence 行",
+                    "journal_path": None, "archive_file": None,
+                    "decision_authority_state": _decision_authority_state()}
+        state_dir.mkdir(parents=True, exist_ok=True)
+        batches_dir.mkdir(parents=True, exist_ok=True)
+        doc = {
+            "schema": _MIGRATION_JOURNAL_SCHEMA,
+            "category": "evidence",
+            "version_range": [version_start, version_end],
+            "input_digest": input_digest,
+            "context_digest": _sha256_text(json.dumps(
+                sorted(evidence_task_versions.items()),
+                ensure_ascii=False, sort_keys=True)),
+            "batch_size": batch_size,
+            "batches_total": batches_total,
+            "candidates": [{"id": c["id"], "line_idx": c["line_idx"],
+                            "version": c["version"]} for c in candidates],
+            "batches_staged": 0,
+            "phase": "intent",
+            "created_at": datetime.now().replace(microsecond=0).isoformat(),
+        }
+        _migration_write_journal(journal_path, doc)
+
+    # ── stage: the batch cursor (断点续迁 granularity) ──
+    batches_staged = doc.get("batches_staged", 0)
+    if resumed:
+        # the cursor never lies ahead of its artifacts — a staged batch that
+        # vanished while the cursor claims it is tampering/corruption → loud
+        for k in range(batches_staged):
+            if not _migration_batch_path(batches_dir, k).is_file():
+                raise BigTableMigrationError({
+                    "code": "migration_cursor_ahead_of_artifacts",
+                    "detail": (f"journal cursor claims batch {k} is staged "
+                               f"but {_migration_batch_path(batches_dir, k)} "
+                               "is missing — journal/artifact inconsistent; "
+                               "refusing"),
+                })
+    batches_dir.mkdir(parents=True, exist_ok=True)
+    doc["phase"] = "staging"
+    for k in range(batches_staged, batches_total):
+        chunk = candidates[k * batch_size:(k + 1) * batch_size]
+        _migration_write_batch(batches_dir, k, [c["line"] for c in chunk])
+        doc["batches_staged"] = k + 1
+        _migration_write_journal(journal_path, doc)
+    doc["phase"] = "staged"
+    doc["batches_staged"] = batches_total
+    _migration_write_journal(journal_path, doc)
+
+    # Deterministic commit outputs, re-materializable from the pinned plan.
+    commit = doc.get("commit")
+
+    if resumed and commit is not None and \
+            input_digest == commit.get("hot_after_digest"):
+        # ── crash-after-hot-rewrite resume: complete the finalize leg only.
+        # The hot file no longer carries the candidate lines, so the rows
+        # are re-materialized from the STAGED BATCH ARTIFACTS (load-bearing)
+        # and verified against the pin — never recomputed from the hot text.
+        archived_rows = []
+        for k in range(batches_total):
+            archived_rows.extend(_migration_load_batch(batches_dir, k))
+        if len(archived_rows) != len(candidates):
+            raise BigTableMigrationError({
+                "code": "migration_state_conflict",
+                "detail": ("staged batches carry "
+                           f"{len(archived_rows)} rows but the pinned "
+                           f"manifest has {len(candidates)} — refusing"),
+            })
+        archive_relname = commit["archive_file"]
+        archive_path = _archive_dir() / "evidence" / archive_relname
+        header = _build_archive_header(version_start, version_end, "evidence",
+                                       len(archived_rows), prev_file=None,
+                                       next_file=None)
+        archive_text = header + "\n" + "\n".join(
+            list(_EVIDENCE_ARCHIVE_TABLE_HEADER) + archived_rows) + "\n"
+        if _sha256_text(archive_text) != commit.get("archive_digest"):
+            raise BigTableMigrationError({
+                "code": "migration_state_conflict",
+                "detail": ("re-materialized archive content does not match "
+                           "the pinned commit digest — journal/artifacts "
+                           "inconsistent; refusing"),
+            })
+        # The pinned post-image is digest-equal to the current world; the
+        # apply block's hot leg is skipped (hot_done=True) — the binding is
+        # only kept so the variable is defined on every path.
+        new_hot_text = content
+        hot_done = True
+    else:
+        # ── fresh or pre-apply resume: compose the commit outputs ──
+        archived_rows = [c["line"] for c in candidates]
+        candidate_idx = {c["line_idx"] for c in candidates}
+        new_hot_text = "\n".join(
+            ln for i, ln in enumerate(lines) if i not in candidate_idx)
+        if resumed and commit is not None:
+            # verify the re-materialized outputs against the pinned commit
+            # (the pin was computed against the same pinned input — any
+            # drift is corruption, never a re-pin)
+            if _sha256_text(new_hot_text) != commit.get("hot_after_digest") \
+                    or len(archived_rows) != commit.get("archive_rows"):
+                raise BigTableMigrationError({
+                    "code": "migration_state_conflict",
+                    "detail": ("pinned commit record does not match the "
+                               "pinned input re-materialization — journal "
+                               "corrupt; refusing"),
+                })
+            archive_relname = commit["archive_file"]
+        else:
+            archive_relname = _next_evidence_archive_filename(
+                version_start, version_end)
+        archive_path = _archive_dir() / "evidence" / archive_relname
+        header = _build_archive_header(version_start, version_end, "evidence",
+                                       len(archived_rows), prev_file=None,
+                                       next_file=None)
+        archive_text = header + "\n" + "\n".join(
+            list(_EVIDENCE_ARCHIVE_TABLE_HEADER) + archived_rows) + "\n"
+        doc["commit"] = {
+            "archive_file": archive_relname,
+            "archive_digest": _sha256_text(archive_text),
+            "hot_after_digest": _sha256_text(new_hot_text),
+            "archive_rows": len(archived_rows),
+        }
+        doc["phase"] = "commit_intent"
+        _migration_write_journal(journal_path, doc)
+        hot_done = False
+
+    # ── apply: the single linearization window (FEAT-060 three-phase) ──
+    with _big_table_target_lock(elog):
+        current_digest = _sha256_text(elog.read_text(encoding="utf-8"))
+        if current_digest == doc["commit"]["hot_after_digest"]:
+            hot_done = True    # crash-after-hot-rewrite world (or idempotent)
+        elif current_digest != doc["input_digest"]:
+            raise BigTableMigrationError({
+                "code": "hot_table_diverged",
+                "detail": (
+                    "evidence-log.md diverged inside the commit window "
+                    "(matches neither the pinned input nor the committed "
+                    "post-image) — freeze-window completeness FAILED; "
+                    "refusing (FEAT-061 semantics: 完整性失败重启)"),
+            })
+        if archive_path.exists():
+            existing_digest = _sha256_text(
+                archive_path.read_text(encoding="utf-8"))
+            if existing_digest != doc["commit"]["archive_digest"]:
+                raise BigTableMigrationError({
+                    "code": "archive_target_conflict",
+                    "detail": (f"{archive_path} already exists with FOREIGN "
+                               "content (digest mismatch vs the pinned "
+                               "commit) — refusing to overwrite"),
+                })
+        else:
+            _atomic_write_text(archive_path, archive_text)
+        if not hot_done:
+            _atomic_write_text(elog, new_hot_text)
+        doc["phase"] = "finalized"
+        _migration_write_journal(journal_path, doc)
+
+    return {"success": True, "dry_run": False, "migrated": len(archived_rows),
+            "batches_total": batches_total, "batch_size": batch_size,
+            "resumed": resumed,
+            "journal_path": str(journal_path),
+            "archive_file": f"archive/evidence/{archive_relname}",
+            "hot_after_digest": doc["commit"]["hot_after_digest"],
+            "decision_authority_state": _decision_authority_state()}
+
+
+def _next_evidence_archive_filename(version_start, version_end):
+    """FIX-385: the commit's archive target under the incremental-* naming
+    discipline (reuse of _make_incremental_archive_filename for the
+    category-prefixed evidence family) — a commit never overwrites foreign
+    archive content."""
+    return _make_incremental_archive_filename(version_start, version_end,
+                                              category="evidence")
 
 
 # ── Auditable Dry-Run Explanation (FIX-301 / AUDIT-150) ─────────────
@@ -1415,6 +2153,7 @@ def migrate_by_version(version_start, version_end, dry_run=False, migrate_eviden
         "evidence_archived": 0,
         "decisions_archived": 0,
         "risks_archived": 0,
+        "decision_migration_deferred": None,
         "archive_files_created": [],
         "details": "",
     }
@@ -1518,15 +2257,10 @@ def migrate_by_version(version_start, version_end, dry_run=False, migrate_eviden
         task_versions.setdefault(_tid, _ver)
     # Also include already-archived tasks (from prior runs) so decisions/risks
     # referencing fully-historical tasks migrate even on a fresh run.
-    try:
-        for f in sorted((_archive_dir() / "tasks").glob("*.md")):
-            if f.name == ".gitkeep":
-                continue
-            for task_id, _status, version in _extract_tasks_from_archive_file(f):
-                if task_id and version and version != "unknown":
-                    task_versions.setdefault(task_id, version)
-    except Exception:
-        pass
+    # FIX-385: the loop is extracted to _archived_task_versions() (single
+    # source — the resumable big-table path reuses the same discipline).
+    for _tid, _ver in _archived_task_versions().items():
+        task_versions.setdefault(_tid, _ver)
 
     # FIX-235: the EVIDENCE mapping additionally includes COMPLETED tasks that
     # remain hot in plan-tracker (rows deliberately kept for full traceability
@@ -1552,10 +2286,20 @@ def migrate_by_version(version_start, version_end, dry_run=False, migrate_eviden
     risk_rows_explain = []
     evidence_rows_explain = []
     if migrate_evidence:
-        result["decisions_archived"] = _migrate_decisions(
-            version_start, version_end, task_versions, dry_run,
-            explain_out=decision_rows_explain
-        )
+        try:
+            result["decisions_archived"] = _migrate_decisions(
+                version_start, version_end, task_versions, dry_run,
+                explain_out=decision_rows_explain
+            )
+        except DecisionStoreAuthorityConflict as exc:
+            # FIX-385 衔接面: DEC is store-authoritative — the DECISION
+            # category defers to the cutover ticket's store route while the
+            # other categories migrate normally. Loud, never silent: the
+            # deferral is recorded on the result and in the CLI output (the
+            # decision rows stay hot, nothing is dropped or rewritten).
+            # REVIEW-FIX-385-R0 F-1: the full refusal payload (including the
+            # in_lock recheck marker) flows through.
+            result["decision_migration_deferred"] = dict(exc.payload)
         result["risks_archived"] = _migrate_risks(
             version_start, version_end, task_versions, dry_run,
             explain_out=risk_rows_explain
@@ -3154,6 +3898,9 @@ def analyze_auto_archive_candidates():
     result["evidence_archived"] = pre_check.get("evidence_archived", 0)
     result["decisions_archived"] = pre_check.get("decisions_archived", 0)
     result["risks_archived"] = pre_check.get("risks_archived", 0)
+    # FIX-385 衔接面: even the dry-run pre-check surfaces the deferral.
+    result["decision_migration_deferred"] = pre_check.get(
+        "decision_migration_deferred")
     migratable_total = (result["tasks_archived"] + result["evidence_archived"]
                         + result["decisions_archived"] + result["risks_archived"])
 
@@ -3246,6 +3993,7 @@ def migrate_auto(dry_run=False):
         "verify_pass": False,
         "dry_run": bool(dry_run),
         "triggers": [],
+        "decision_migration_deferred": None,
         "details": "",
     }
 
@@ -3261,6 +4009,10 @@ def migrate_auto(dry_run=False):
     result["risks_archived"] = analysis.get("risks_archived", 0)
     result["triggers"] = analysis.get("triggers", [])
     result["explain"] = analysis.get("explain", {})  # FIX-301
+    # FIX-385 衔接面: propagate the deferral from the pre-check so the
+    # dry-run path reports it too (the real-run copy happens below).
+    result["decision_migration_deferred"] = analysis.get(
+        "decision_migration_deferred")
 
     if analysis.get("skipped") or not analysis.get("should_archive"):
         result["success"] = analysis.get("success", False)
@@ -3307,6 +4059,9 @@ def migrate_auto(dry_run=False):
     result["archive_files_created"] = migrate_result.get(
         "archive_files_created", []
     )
+    # FIX-385 衔接面: surface a decision-store authority deferral loudly.
+    result["decision_migration_deferred"] = migrate_result.get(
+        "decision_migration_deferred")
 
     # Build index
     build_index()
@@ -3398,6 +4153,15 @@ def _format_auto_summary(result):
         "📦 治理数据归档完成:",
         f"  - 归档范围: {range_str}",
     ]
+
+    # FIX-385 衔接面: a decision-store authority deferral is never silent.
+    deferred = result.get("decision_migration_deferred")
+    if deferred:
+        lines.append(
+            "  - ⚠️ decisions 未迁移（fail-closed）: decision 权威已切换至 "
+            f"FEAT-061 JSON store（state={deferred.get('authority_state')!r}）"
+            "——decision-log.md 是投影，archive 的 DEC 归档路由由 cutover 票接管"
+        )
 
     task_file = next(
         (f for f in result.get("archive_files_created", []) if f.startswith("archive/tasks/")),
@@ -3577,6 +4341,24 @@ def main(argv=None):
     # rollback
     subparsers.add_parser("rollback", help="Rollback the most recent migration")
 
+    # migrate-big-table (FIX-385 / B-7b): batched resumable migration of a
+    # row-heavy governance table into the archive — journal + batch cursor +
+    # crash-safe resume (FEAT-060/061 pattern).
+    p = subparsers.add_parser(
+        "migrate-big-table",
+        help="Batched RESUMABLE migration of a row-heavy governance table "
+             "(evidence) into the archive (FIX-385 B-7b)",
+    )
+    p.add_argument("table", choices=["evidence"],
+                   help="Big table to migrate (evidence-log)")
+    p.add_argument("version_start", help="Start version (e.g. 0.60.0)")
+    p.add_argument("version_end", help="End version (e.g. 0.61.0)")
+    p.add_argument("--batch-size", type=int,
+                   default=BIG_TABLE_MIGRATION_BATCH_SIZE,
+                   help="Rows per staged batch (default: %(default)s)")
+    p.add_argument("--dry-run", action="store_true",
+                   help="Report what would migrate; zero writes")
+
     args = parser.parse_args(parser_argv)
     # --project-root was pre-scanned out of argv (position-independent);
     # apply the explicit host-root override before dispatching (FIX-242).
@@ -3615,11 +4397,42 @@ def main(argv=None):
             print(f"  Evidence archived: {result.get('evidence_archived', 0)}")
             print(f"  Files created: {result.get('archive_files_created', [])}")
             print(f"  {result['details']}")
+            deferred = result.get("decision_migration_deferred")
+            if deferred:
+                # FIX-385 衔接面: the deferral is surfaced, never hidden.
+                print(f"  Decision migration DEFERRED (fail-closed): "
+                      f"authority state {deferred.get('authority_state')!r} "
+                      f"— store-backed DEC route is the cutover ticket's "
+                      f"obligation")
             if not result["success"]:
                 sys.exit(1)
         else:
             print("Error: Either --auto or both version_start and version_end must be provided.")
             migrate_p.print_usage()
+            sys.exit(1)
+
+    elif args.command == "migrate-big-table":
+        try:
+            result = migrate_evidence_resumable(
+                args.version_start, args.version_end,
+                batch_size=args.batch_size, dry_run=args.dry_run)
+        except BigTableMigrationError as exc:
+            # FIX-385: refusals are loud, structured, and non-zero-exit.
+            print(f"  Migration REFUSED: {exc.payload.get('code')}")
+            print(f"  {exc.payload.get('detail')}")
+            sys.exit(1)
+        print(f"  Dry-run: {result.get('dry_run', False)}")
+        print(f"  Migrated rows: {result.get('migrated', 0)}")
+        print(f"  Batches: {result.get('batches_total', 0)} "
+              f"(batch_size={result.get('batch_size')})")
+        print(f"  Resumed: {result.get('resumed', False)}")
+        if result.get("archive_file"):
+            print(f"  Archive file: {result['archive_file']}")
+        if result.get("journal_path"):
+            print(f"  Journal: {result['journal_path']}")
+        print(f"  Decision authority state: "
+              f"{result.get('decision_authority_state')}")
+        if not result.get("success"):
             sys.exit(1)
 
     elif args.command == "build-index":

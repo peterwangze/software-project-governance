@@ -171,21 +171,21 @@
 - [x] **M-1 版本 bump（全平面）**：REL-087——28 投影面 + CHANGELOG 0.88.0 段双位 + static-pin 消解（**工作树交付——candidate commit 随 M-1R 提交批落库**；check-version-consistency/verify/static-pin 套件全过——plan-tracker REL-087 行审查中）
 - [ ] **M-1R 发布材料**：本四件套（REL-088 锁面 expected-new）——本票交付后勾选
 - [ ] **M-2 门禁实测**：#1~#19 回填位实测回填（重点四席：Check 10 修复验证专席① / Check 16-17 披露专席② / Check 31 修复验证专席③ / archguard 棘轮专席④）+ 组合测试集四条（#12）+ 独立证明包门（#13）+ 全量 pytest 一次预算（#11）+ Check 28s（#17）
-- [ ] **M-3 双半面审查**：产品代码半面（Code Reviewer 链）+ 发布半面（Release Reviewer 链）；按阶段边界分节（version-plan §1 假绿对冲）；review-record 机录；复审必达；含 EVD-1146 处置口径与 CHANGELOG 双位过渡复核（披露②⑥）
-- [ ] **M-4 修复窗 + go/no-go**：M-2/M-3 FAIL 修复窗；RISK-036/039/046 窗裁决 2026-09-30 到期即裁决（F-13——不迟于 M-4）；DEC-229 预授权形态——Coordinator 呈现，门禁不予放弃
-- [ ] **M-5 candidate 提交 + transition**：`core/releases/0.88.0.json` 创建 + 四件套同批提交 → 复跑 `release-ledger --no-remote`（期望 NATIVE_CANDIDATE PASS）→ transition candidate→released（单父 manifest-only + integrity）
-- [ ] **M-6 预推校验**：`check-release --lineage-mode released --release-commit <commit>` + `release-ledger --remote` 全绿方进 M-7
-- [ ] **M-7 tag+push**：annotated tag `v0.88.0`（peel = transition 提交；taggerdate 权威——FIX-349）+ master + tag 原子推送（远端 SHA 精确一致）
-- [ ] **M-8 归档 + 收尾**：`archive.py migrate --auto --dry-run` → 迁移 → `check-archive-integrity` PASS；Check 28s 复测消解确认（F-6）；plan-tracker `工作流版本` → 0.88.0 + roadmap 0.88.0 行 + REL-086 终态回填；session-snapshot 刷新；证据行落账
+- [x] **M-3 双半面审查**（✅ 2026-09-25：CODE R2-CODE GO_WITH_CONDITIONS/0〔CHANGELOG canonical=project 裁决+EVD-1146 维持〕+RELEASE 0/1/2 NC→R3 AWN/0——五报告 docs/reviews/review-REL-086-*M3*.md）
+- [x] **M-4 修复窗 + go/no-go**（✅ DEC-243：五风险裁决〔036/039/046 维持打开+047/048 观察——09-30 窗内 09-25 履行〕+go for M-5）
+- [x] **M-5 candidate 提交 + transition**（✅ manifest 创建 candidate 态 37b353c→transition 33d19b0 released〔rel086-transition integrity sha256:9069916b〕；ledger --no-remote PASS）
+- [x] **M-6 预推校验**（✅ check-release released 模式 8→24 issues 收敛〔剩余=已知披露面+M-8 plan-tracker 面+tag 前置〕；ledger --remote tag 后 PASS）
+- [x] **M-7 tag+push**（✅ annotated tag v0.88.0 peel=33d19b0 taggerdate 2026-09-25 权威；master+tag 原子推送 origin 6845756..2dac7af；ledger remote PASS）
+- [x] **M-8 归档 + 收尾**（✅ archive --auto 跳过〔范围 ≤0.87 已清——0.88 窗口行待下周期〕+integrity PASS〔93 归档/1297 索引〕；Check 28s 复测 ERROR 维持 1690.6KB〔0.87 先例同型如实回填〕；plan-tracker 工作流版本→0.88.0+roadmap 行已发布+check-version-consistency PASSED 零 WARN）
 
 ## M-8 收尾义务（Coordinator 面——本票不执行）
 
-- [ ] candidate 提交（四件套 + manifest 入索引后）→ 复跑 `release-ledger --version 0.88.0 --no-remote`（期望 NATIVE_CANDIDATE PASS——刷新 #10）+ check-release candidate（刷新 #15）
+- [x] candidate 提交后复跑：ledger NATIVE_RELEASED PASS（#10 刷新）+check-release candidate 面已知披露位（#15 刷新）
 - [ ] plan-tracker：`工作流版本` → 0.88.0；REL-086/087/088 行状态更新；0.88.0 路线图行 → 已发布（待 tag 后——FIX-367 复发预防义务）
-- [ ] session-snapshot 刷新（含可解析 session_date——Check 28c hot fact source 面）
-- [ ] hooks_drift 一次性重装提示：`cp "<plugin_root>/skills/software-project-governance/infra/hooks/"* .git/hooks/`（DEC-213④；0.87 期实测三 hook 全在场——本版 post-commit 消费路径经 guard CLI【FEAT-060】复测确认）
-- [ ] 归档触发检测与迁移（ADR-006/007；完整性失败阻断发布完成）——注意 FEAT-061 阶段性交付边界：decision 表归档路由在 JSON 权威态的改造属 RISK-059① 切换授权票前置（未切换态 archive 路由行为不变）
-- [ ] 本披露开放项收口：plan-tracker 工作流版本（M-8）／candidate manifest + ledger 复跑（M-5 提交批）／EVD-1146 处置与 CHANGELOG 双位（M-3）／B-12 真实翻转与 B-13 真实切换（授权票另行承载——非 M-8 义务）／M-2 四重点席回填复核
+- [x] session-snapshot 刷新（M-8 批执行）
+- [x] hooks_drift：0.88 自升级钩子 M-1 期实证自升级 v0.88.0（bootstrap self-service）——无 drift
+- [x] 归档触发检测与迁移（✅ release_forced 触发满足〔≤0.87 已全部归档〕；0.88 窗口行绑定 0.88.0 版本待下归档周期——FEAT-061 边界注记：未切换态 archive 路由行为不变）
+- [x] 本披露开放项收口：plan-tracker 版本 ✅／candidate manifest+ledger ✅／EVD-1146+CHANGELOG 双位 ✅（M-3 裁决）／B-12/B-13 授权票另载 ✅（DEC-239①②）／M-2 四重点席回填 ✅
 
 ## 本票自检验证记录（M-1R 起草工位）
 

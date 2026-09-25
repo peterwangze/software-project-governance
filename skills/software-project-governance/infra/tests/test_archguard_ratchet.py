@@ -83,8 +83,15 @@ SNAPSHOT = _INFRA_DIR / "contract_matrix" / "snapshots.json"
 #      1316 with a zero per-function diff. Lineage trace of the +10 sites is
 #      registered as FIX-377 (0.88) for bisect. Baseline regenerated in the
 #      same change: architecture-baseline.json re-anchored after the
-#      locks-release dispatch-face wiring.)
-FACTS_PRINT_TOTAL = 1316
+#      locks-release dispatch-face wiring.
+#      M-2 regen re-baseline (2026-09-25, REL-087/088 window): the sanctioned
+#      archguard-ratchet --regen at the 0.88.0 release gate re-anchored the
+#      committed baseline to a8a72a3 and absorbed the 0.88 A~E batch engine
+#      growth (FEAT-060/063/064 prints among others). Census now probes 1318
+#      (+2 vs the 0.87-era 1316); the only-down ratchet continues from here.
+#      Same M-2 obligation shape as the FEAT-064 contract-matrix rebaseline
+#      (registry 96->97): frozen-count tests track the regenerated truth.
+FACTS_PRINT_TOTAL = 1318
 
 
 def _committed_baseline():
@@ -474,7 +481,15 @@ class BaselineArtifactTests(unittest.TestCase):
         self.assertIsInstance(data["rules_version"], int)
         self.assertRegex(data["generated"]["git_head"],
                          r"^([0-9a-f]{40}|unknown)$")
-        self.assertIn("25", str(data["r1_mainfile_budget"]["anchor_loc"]))
+        # M-2 regen re-baseline (2026-09-25): anchor re-anchored to the
+        # 0.88.0 release-gate regen (26193 at a8a72a3). The legacy substring
+        # check ("25" in str(anchor)) was coincidental — 25462 contained it,
+        # 26193 does not. Assert the exact regenerated anchor instead: the
+        # metadata contract's job is to pin the committed truth, and the
+        # regen itself is the sanctioned change that moves it (only-down
+        # from here). Keep in sync with core/architecture-baseline.json
+        # r1_mainfile_budget.anchor_loc on every sanctioned regen.
+        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 26193)
 
     def test_authored_zone_survives_regen(self):
         existing = _committed_baseline()

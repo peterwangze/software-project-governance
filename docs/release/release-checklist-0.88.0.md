@@ -43,7 +43,7 @@
 | 7 | `a8afcbf` | FEAT-064 | D——write-guard 分族 BLOCK 激活（B-12 机制交付；registry 96→97） | EVD-1156 |
 | 8 | `61618a5` | FEAT-061 | C——decision-log 存储分离首表（B-13；R0 P0×2 活体→R1；179 行演练） | EVD-1155 |
 | 9 | `0ff12f3` | FIX-383 | B——B-7c 发版管线自举（release-window-bootstrap+write-guard-bootstrap） | EVD-1154 |
-| 10 | `release-ledger --version 0.88.0 --no-remote` | ✅ FAIL 实测（预期——预提交态，M-3 R0 五维度④核验）→ **M-5 批：manifest 创建后复跑** | `core/releases/0.88.0.json` Coordinator M-5 提交批义务（披露①）；期望 NATIVE_CANDIDATE PASS |
+| 10 | `501d8dc` | REL-086 | M-2 门禁实测批（archguard regen sanctioned+冻结测试再基线+自举链收敛活体） | commit 501d8dc/36cc899+EVD op-ef25384 |
 | 11 | `ce93eb3` | FIX-382 | A 收官——9-cell 组合判据扩展（DEC-235；穷举差分 S_new=S_old） | EVD-1152 |
 | 12 | `b03a0b4` | FIX-381 | A——backport 政策制度化五件套（⑨定案 DEC-234） | EVD-1151 |
 | 13 | `c349f8e` | FIX-380 | A——P3 杂项包（_format_issues 单源化等） | EVD-1150 |

@@ -280,6 +280,52 @@ Q5 minimal slice, rollback-0.86.0 §8 #5 清偿):
   via the takeover path (the promotion holds the prior holder's run
   lock); the per-step re-check defends the out-of-band-edit residual and
   keeps the fence true at every write boundary.
+
+  Journal version-aware reader (FIX-391 — REL-089 condition-③ closure
+  ticket, DEC-241 附带裁定: the rollback runbook gate becomes CODE):
+
+  The reader knows its own judgment surface — the closed event-type enum
+  (``CLOSURE_EVENT_TYPES``) and the envelope schema window. A closure
+  whose RAW journal carries an event type or ``schema_version`` outside
+  that surface belongs to a NEWER writer; resuming/finalizing it from the
+  kept (partial) view is exactly the measured misread vector — a newer
+  writer's terminal looks like «active» here and the next append collides
+  with an occupied seq. The gate:
+
+    * PREFLIGHT over the COMPLETE raw journal BEFORE any recovery side
+      effect (arch ① 预检模式 — «discover the unknown event halfway
+      through» is not safe): every journal-consuming WRITE entry —
+      run/resume (the ticket MUST), finalize, and the same-vector
+      append/derive entries cancel + reopen — refuses ZERO-WRITE first
+      (a conflicted journal never gains so much as an idempotent
+      closure_fenced audit event from a reader that cannot judge it);
+    * the refusal is a structured ``schema_violation`` payload naming
+      the unknown types / foreign schema versions (machine-readable
+      ``unknown_event_types`` / ``foreign_schema_versions`` lists — the
+      per-closure inventory the runbook used to compile by hand);
+    * READS stay fail-safe (读 fail-safe、写 fail-closed): status and the
+      derivation faces keep disclosing via ``journal_problems`` and never
+      gate on the conflict;
+    * the writer carries an ANTI-OCCUPATION backstop (ticket
+      acceptance — 碰撞向量被写入器侧防占用检查消除): an append whose
+      target seq is already occupied in the raw journal raises — the
+      collision is machine-impossible even for a path that forgets the
+      gate;
+    * the forged-tombstone discipline stands (DEC-241): no reader ever
+      FABRICATES a known-type tombstone to defend an older reader (P1 /
+      append-only) — a tombstone-shaped UNKNOWN event is simply refused:
+      never honored as a terminal, never resumed across;
+    * backward-compat matrix (tests, 红绿逐格): historical 8-type
+      journals and current journals read/complete unchanged (the
+      standard chain's lock-leg resume/finalize is NOT falsely
+      rejected — arch ③ positive), unknown-type and out-of-window-schema
+      journals refuse zero-write (arch ③ negative);
+    * lock ownership (arch ②, pinned by tests): the per-closure run-lock
+      FILE is never deleted and its byte-range lease is per-fd — after a
+      new instance re-acquires the lock, a stale instance's release
+      cannot disturb the new holder's lease (dispatch-lock ownership is
+      pinned by the cancel locks-release tests: ownership-changed locks
+      + skipped_fenced).
 """
 
 from __future__ import annotations
@@ -556,6 +602,29 @@ def _append_closure_event(log_path: Path, closure_id: str, event_type: str,
     if errors:  # pragma: no cover - construction is internally controlled
         raise ValueError(
             "closure event construction invalid: {0}".format(errors))
+    # FIX-391 writer-side ANTI-OCCUPATION backstop (ticket acceptance —
+    # 碰撞向量被写入器侧防占用检查消除): the target seq must be UNOCCUPIED
+    # in the RAW journal. The fail-safe reader drops unknown-type lines,
+    # so a kept-view next-seq can collide with an already-occupied one
+    # (the measured rollback corruption vector: kept=[1,2] → next=3 while
+    # raw 3 is occupied). The entry preflight refuses conflicted journals
+    # before any append; this backstop makes the collision itself
+    # machine-impossible even for a path that forgets the gate.
+    # Occupancy counts TRUE integer seqs only — a corrupted bool stamp
+    # (True == 1 in Python) must not falsely occupy seq 1.
+    occupied = {ev.get("cas_version")
+                for ev in loop_event_log.read_events(
+                    log_path=log_path, unit_id=closure_id)
+                if isinstance(ev, dict)
+                and isinstance(ev.get("cas_version"), int)
+                and not isinstance(ev.get("cas_version"), bool)}
+    if seq in occupied:
+        raise ValueError(
+            "closure {0}: append refused — journal seq {1} is already "
+            "occupied in the raw journal (FIX-391 anti-occupation "
+            "backstop; the reader view that produced this seq is stale "
+            "or truncated — reload the journal, never double-append)"
+            .format(closure_id, seq))
     loop_event_log.append_event(envelope, log_path=log_path)
     return envelope
 
@@ -591,6 +660,79 @@ def _next_seq(events: List[Dict[str, Any]]) -> Tuple[int, Optional[int]]:
     last_int = last if isinstance(last, int) and not isinstance(last, bool) \
         else 0
     return last_int + 1, last_int
+
+
+def _journal_version_conflict(log_path: Path,
+                              closure_id: str) -> Optional[Dict[str, Any]]:
+    """FIX-391 version-aware PREFLIGHT (REL-089 condition-③ closure) —
+    classify the closure's COMPLETE raw journal BEFORE any recovery side
+    effect (arch ① 预检模式: «discover the unknown event halfway through»
+    is not safe — the classification is done up front, over every raw
+    line, while the caller is still zero-write).
+
+    ``None`` = every raw event is judgeable in this reader's judgment
+    surface (closed event-type enum + envelope schema window). Otherwise
+    a zero-write structured ``schema_violation`` refusal: the journal
+    carries event type(s) or envelope ``schema_version``(s) this reader
+    does not know — the closure's semantics belong to a NEWER writer, and
+    resuming/finalizing it from the kept (partial) view is exactly the
+    measured misread vector (a newer terminal looks «active», the next
+    append collides with an occupied seq). Every journal-consuming WRITE
+    entry (run/resume, finalize, cancel, reopen) calls this FIRST; reads
+    stay fail-safe — status/derive faces keep disclosing via
+    ``journal_problems`` and never gate on the conflict
+    (读 fail-safe、写 fail-closed).
+    """
+    raw = loop_event_log.read_events(log_path=log_path, unit_id=closure_id)
+    unknown_types: List[str] = []
+    foreign_versions: List[int] = []
+    for ev in raw:
+        if not isinstance(ev, dict):
+            continue
+        event_type = ev.get("event_type")
+        if isinstance(event_type, str) \
+                and event_type not in CLOSURE_EVENT_TYPES \
+                and event_type not in unknown_types:
+            unknown_types.append(event_type)
+        version = ev.get("schema_version")
+        # Totality over UNTRUSTED raw journal data: a plain range check
+        # instead of CLOSURE_SCHEMA_WINDOW.supports() — the frozen
+        # contract helper requires a POSITIVE int and would raise on a
+        # hand-written 0/negative stamp, and the preflight must refuse,
+        # never crash, on any raw envelope bytes.
+        if isinstance(version, int) and not isinstance(version, bool) \
+                and not (CLOSURE_SCHEMA_WINDOW.minimum <= version
+                         <= CLOSURE_SCHEMA_WINDOW.current) \
+                and version not in foreign_versions:
+            foreign_versions.append(version)
+    if not unknown_types and not foreign_versions:
+        return None
+    details: List[str] = []
+    if unknown_types:
+        details.append(
+            "unknown event type(s) {0} outside this reader's closed "
+            "vocabulary of {1} types".format(unknown_types,
+                                             len(CLOSURE_EVENT_TYPES)))
+    if foreign_versions:
+        details.append(
+            "envelope schema_version(s) {0} outside the supported window "
+            "[{1},{2}]".format(foreign_versions,
+                               CLOSURE_SCHEMA_WINDOW.minimum,
+                               CLOSURE_SCHEMA_WINDOW.current))
+    return {
+        "closure_id": closure_id, "error": True,
+        "code": "schema_violation", "disposition": "validation",
+        "detail": (
+            "closure {0}: journal version conflict (FIX-391 version-aware "
+            "reader) — raw journal carries {1}; the closure's semantics "
+            "belong to a NEWER writer — resume/finalize/terminal entries "
+            "refused with ZERO writes (机器门禁替代回退运行手册). Recovery: "
+            "drive the closure from the writer version that owns those "
+            "event types, or adjudicate it manually".format(
+                closure_id, "; ".join(details))),
+        "unknown_event_types": sorted(unknown_types),
+        "foreign_schema_versions": sorted(foreign_versions),
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1634,6 +1776,14 @@ def _run_locked(spec: ChainSpec, closure_id: str, task: str,
                 inputs: Dict[str, str], mapping: Dict[str, str],
                 digest: str, root: Path, log_path: Path,
                 world_check: bool) -> Dict[str, Any]:
+    # FIX-391 version-aware preflight (arch ①): classify the COMPLETE raw
+    # journal BEFORE any recovery side effect — including the idempotent
+    # closure_fenced audit append and the fresh-start closure_started
+    # append below. A journal this reader cannot fully judge (newer
+    # writer's event types / out-of-window schema) refuses zero-write.
+    conflict = _journal_version_conflict(log_path, closure_id)
+    if conflict is not None:
+        raise ValueError(conflict["detail"])
     events, problems = _load_closure_events(log_path, closure_id)
     started = next((e for e in events
                     if e.get("event_type") == "closure_started"), None)
@@ -1983,6 +2133,12 @@ def finalize_closure(root: Path, closure_id: str, commit_sha: str) \
     log_path = default_event_log_path(root)
     lock_path = _closure_lock_dir(root) / (closure_id + ".lock")
     with _RunLock(lock_path, 10.0):
+        # FIX-391 version-aware preflight (arch ①): before even the
+        # idempotent closure_fenced audit write below — a conflicted
+        # journal never gains an event from a reader that cannot judge it.
+        conflict = _journal_version_conflict(log_path, closure_id)
+        if conflict is not None:
+            return conflict
         events, problems = _load_closure_events(log_path, closure_id)
         started = next((e for e in events
                         if e.get("event_type") == "closure_started"), None)
@@ -2454,6 +2610,14 @@ def _cancel_reconciliation(root: Path, task: str, dec_leg: Dict[str, Any],
 def _cancel_locked(root: Path, closure_id: str, authorized_by: str,
                    reason: str, expected_status: Optional[str],
                    log_path: Path, writer_timeout: float) -> Dict[str, Any]:
+    # FIX-391 version-aware preflight: a cancel derives the status from
+    # the journal and then appends the terminal + releases dispatch locks
+    # — a newer writer's terminal in an unknown type would be misread as
+    # «active» and re-terminated. Refuse zero-write first (the
+    # append/derive face of the same version-misread vector).
+    conflict = _journal_version_conflict(log_path, closure_id)
+    if conflict is not None:
+        return conflict
     events, problems = _load_closure_events(log_path, closure_id)
     started = next((e for e in events
                     if e.get("event_type") == "closure_started"), None)
@@ -2991,6 +3155,12 @@ def _resolve_reopen_linkage(root: Path, reopen_of: str,
 
 def _reopen_locked(root: Path, closure_id: str, authorized_by: str,
                    reason: str, log_path: Path) -> Dict[str, Any]:
+    # FIX-391 version-aware preflight: reopen derives the terminal status
+    # from the journal and mints the attempt lineage — a partial view
+    # must never fork the lineage. Refuse zero-write first.
+    conflict = _journal_version_conflict(log_path, closure_id)
+    if conflict is not None:
+        return conflict
     events, problems = _load_closure_events(log_path, closure_id)
     started = next((e for e in events
                     if e.get("event_type") == "closure_started"), None)

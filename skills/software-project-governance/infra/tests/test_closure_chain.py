@@ -3298,5 +3298,519 @@ def gstore_target_lock(target: Path):
     return gstore._TargetLock(Path(target), timeout_seconds=1.0)
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# FIX-391 — closure journal 版本感知读取器 (REL-089 condition-③ closure
+# ticket, DEC-241 附带裁定): the rollback runbook's resume/finalize gate
+# becomes CODE. A closure whose raw journal carries event type(s) or
+# envelope schema_version(s) this reader does not know belongs to a NEWER
+# writer — every journal-consuming write entry (run/resume, finalize,
+# cancel, reopen) refuses ZERO-WRITE before any recovery side effect
+# (preflight over the COMPLETE journal, arch ①). Reads stay fail-safe.
+# The writer side carries an anti-occupation backstop so the measured
+# seq-collision vector (kept=[1,2] → next=3 while raw 3 is occupied) is
+# machine-impossible. Matrix cells pin every old-journal form's behavior
+# (红绿逐格). The forged-tombstone negative: a tombstone-SHAPED event of
+# an unknown type is refused, never misread as an active closure (the
+# DEC-241 discipline stands — no reader ever FABRICATES a known-type
+# tombstone to defend an older reader; P1/append-only).
+# ═══════════════════════════════════════════════════════════════════════════
+
+_HISTORICAL_EVENT_TYPES = frozenset({
+    "closure_started", "step_started", "step_completed", "step_failed",
+    "step_unknown", "step_reconciled", "closure_ready",
+    "closure_finalized",
+})
+"""The reader vocabulary BEFORE the terminal/lineage/fence trio landed
+(closed enum of 8 types — a historical fact about the journal format's
+first release, not a pin of any active version)."""
+
+_FUTURE_TOMBSTONE_TYPE = "closure_voided"
+"""A plausible NEWER writer's terminal type — unknown to this reader."""
+
+_FUTURE_LINEAGE_TYPE = "closure_superseded"
+"""A plausible NEWER writer's lineage type — unknown to this reader."""
+
+
+def _raw_closure_event(closure_id, event_type, seq, prev_seq,
+                       payload=None, actor="fixture/newer-writer",
+                       schema_version=1):
+    """Build one raw journal envelope (fixture world — hand-assembled,
+    NOT written through the gate; build_event fills id/timestamp)."""
+    ev = loop_event_log.build_event(
+        closure_id, event_type, cas_version=seq, from_version=prev_seq,
+        actor=actor, payload=dict(payload or {}))
+    ev["schema_version"] = schema_version
+    return ev
+
+
+def _append_raw_journal_lines(root, events):
+    """Hand-append raw JSON lines to the closure journal (the simulation
+    of a newer writer's lines landing in a shared journal file)."""
+    log_path = cc.default_event_log_path(root)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(log_path, "a", encoding="utf-8") as handle:
+        for ev in events:
+            handle.write(
+                json.dumps(ev, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def _raw_unit_line_count(root, closure_id):
+    """Line count for one closure in the RAW journal file — counts every
+    parseable line of the unit (known type or not); the zero-write and
+    seq-collision probe the kept-view reader cannot provide."""
+    log_path = cc.default_event_log_path(root)
+    if not log_path.is_file():
+        return 0
+    count = 0
+    for line in log_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(ev, dict) and ev.get("unit_id") == closure_id:
+            count += 1
+    return count
+
+
+def _next_raw_seq(root, closure_id):
+    events = _chain_events(root, closure_id)
+    return (max(e["cas_version"] for e in events) + 1) if events else 1
+
+
+class VersionAwareJournalReaderTests(_CancellationFixture):
+    """FIX-391 红绿矩阵: the version gate refuses conflicted journals
+    zero-write at every write entry; known-vocabulary journals (the
+    backward-compat cells) keep flowing exactly as before."""
+
+    def _conflict(self):
+        return cc._journal_version_conflict(
+            cc.default_event_log_path(self.root), self.closure_id)
+
+    def _make_ready_closure(self, closure_id=None):
+        """A standard-chain closure driven to the ready-to-commit state
+        (flip → evidence → lock-TTL shrink → summary)."""
+        payload = self._run_spec(cc.STANDARD_TICKET_CLOSURE,
+                                 closure_id=closure_id or self.closure_id)
+        self.assertEqual(payload["status"], "ready", payload)
+        return payload
+
+    def _seed_future_tombstone(self):
+        """Hand-append the newer-writer tombstone at the true next raw
+        seq (the measured 0.87-side misread shape: an invisible terminal
+        occupying the seq the kept view would reuse)."""
+        seq = _next_raw_seq(self.root, self.closure_id)
+        _append_raw_journal_lines(self.root, [
+            _raw_closure_event(
+                self.closure_id, _FUTURE_TOMBSTONE_TYPE, seq, seq - 1,
+                {"authorized_by": "newer-writer-operator",
+                 "reason": "terminal in a newer vocabulary",
+                 "observed_status": "cancelled"})])
+        return seq
+
+    # ── vocabulary + preflight units ─────────────────────────────────────
+
+    def test_historical_enum_is_strict_subset_of_live_enum(self):
+        """Matrix precondition: the 8-type historical vocabulary is fully
+        contained in the live closed enum, and the fixture's future types
+        are genuinely unknown to this reader."""
+        self.assertTrue(
+            _HISTORICAL_EVENT_TYPES <= set(cc.CLOSURE_EVENT_TYPES))
+        self.assertEqual(len(_HISTORICAL_EVENT_TYPES), 8)
+        for future in (_FUTURE_TOMBSTONE_TYPE, _FUTURE_LINEAGE_TYPE):
+            self.assertNotIn(future, cc.CLOSURE_EVENT_TYPES)
+
+    def test_preflight_clean_journals_return_none(self):
+        """Matrix cells (backward-compat): a historical-form journal, the
+        current-form journal, and a terminal-recorded journal are ALL
+        judgeable — the gate stays silent (no false rejection)."""
+        self._make_blocked_closure()   # started/step_started/completed/failed
+        self.assertIsNone(self._conflict())
+        self._make_ready_closure()     # + closure_ready (current vocabulary)
+        self.assertIsNone(self._conflict())
+        code, payload = self._cancel("--authorized-by", "test-coordinator",
+                                     "--reason", "matrix cell")
+        self.assertEqual(code, 0, payload)   # + closure_cancelled
+        self.assertIsNone(self._conflict())
+
+    def test_preflight_flags_unknown_event_type(self):
+        self._make_blocked_closure()
+        self.assertIsNone(self._conflict())
+        self._seed_future_tombstone()
+        conflict = self._conflict()
+        self.assertIsNotNone(conflict)
+        self.assertTrue(conflict["error"])
+        self.assertEqual(conflict["code"], "schema_violation")
+        self.assertEqual(conflict["disposition"], "validation")
+        self.assertEqual(conflict["unknown_event_types"],
+                         [_FUTURE_TOMBSTONE_TYPE])
+        self.assertEqual(conflict["foreign_schema_versions"], [])
+        self.assertIn(_FUTURE_TOMBSTONE_TYPE, conflict["detail"])
+        self.assertIn("NEWER writer", conflict["detail"])
+
+    def test_preflight_flags_out_of_window_schema_version(self):
+        """版本感知 beyond types: a KNOWN type carrying an envelope
+        schema_version outside the supported window is a conflict too
+        (refuse foreign/newer schemas, never guess — the window face)."""
+        self._make_blocked_closure()
+        seq = _next_raw_seq(self.root, self.closure_id)
+        _append_raw_journal_lines(self.root, [
+            _raw_closure_event(self.closure_id, "step_reconciled", seq,
+                               seq - 1, {"step_id": "flip"},
+                               schema_version=2)])
+        conflict = self._conflict()
+        self.assertIsNotNone(conflict)
+        self.assertEqual(conflict["unknown_event_types"], [])
+        self.assertEqual(conflict["foreign_schema_versions"], [2])
+        seq = _next_raw_seq(self.root, self.closure_id)
+        _append_raw_journal_lines(self.root, [
+            _raw_closure_event(self.closure_id, "step_reconciled", seq,
+                               seq - 1, {"step_id": "flip"},
+                               schema_version=0)])
+        conflict = self._conflict()
+        self.assertEqual(conflict["foreign_schema_versions"], [0, 2])
+
+    def test_preflight_absent_schema_version_stays_fail_safe(self):
+        """Backward-compat boundary: a known-type event WITHOUT the
+        schema_version stamp is not a version signal — the preflight
+        stays silent (the existing fail-safe envelope lane keeps owning
+        that shape; this fix widens nothing retroactively)."""
+        seq = _next_raw_seq(self.root, self.closure_id)
+        bare = loop_event_log.build_event(
+            self.closure_id, "closure_started", cas_version=seq,
+            from_version=(seq - 1) if seq > 1 else None,
+            actor="fixture/bare", payload={})
+        bare.pop("schema_version", None)
+        _append_raw_journal_lines(self.root, [bare])
+        self.assertIsNone(self._conflict())
+
+    # ── resume gate (run/resume — the ticket MUST) ───────────────────────
+
+    def test_resume_of_unknown_type_closure_refused_zero_write(self):
+        """红绿核心 (DEC-241 实测向量): resume of a closure whose journal
+        carries a newer writer's tombstone — refused ZERO-WRITE with the
+        unknown type named; the kept-view resume that misread the closure
+        as active and collided at the occupied seq is gone."""
+        self._make_blocked_closure()
+        self._seed_future_tombstone()
+        before = self._gov_snapshot()
+        lines_before = _raw_unit_line_count(self.root, self.closure_id)
+        spec_path = _write_fixture_spec(self.root, "spec.json",
+                                        _CANCEL_FLIP_SPEC)
+        proc = subprocess.run(
+            self._resume_cli_argv(spec_path, self.closure_id),
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", env=_clean_env(), cwd=str(self.root),
+            timeout=300)
+        self.assertEqual(proc.returncode, 2, proc.stdout)
+        refused = json.loads(proc.stdout)
+        self.assertEqual(refused["code"], "schema_violation", refused)
+        self.assertEqual(refused["disposition"], "validation")
+        self.assertIn(_FUTURE_TOMBSTONE_TYPE, refused["detail"])
+        # zero writes: no closure_started / fenced / step bookkeeping, no
+        # governed-record change, and NO seq-collision append
+        self.assertEqual(self._gov_snapshot(), before)
+        self.assertEqual(_raw_unit_line_count(self.root, self.closure_id),
+                         lines_before)
+
+    def test_preflight_precedes_the_fenced_audit_write(self):
+        """arch ① 预检 vs 副作用隔离 — the sharp case: a FENCED stale
+        generation whose journal ALSO carries an unknown type. The stale
+        resume would record one closure_fenced audit event; the version
+        preflight must fire FIRST — the fenced-audit write never happens
+        (a conflicted journal must not gain even audit events from a
+        reader that cannot judge it)."""
+        self._make_blocked_closure()
+        new_holder = cc.new_closure_id()
+        takeover = cc.takeover_execution(
+            self.root, TASK, new_holder, authorized_by="test-operator",
+            reason="接管后旧链 journal 被更新版本续写（预检时序钉住）")
+        self.assertFalse(takeover.get("error"), takeover)
+        self._seed_future_tombstone()
+        before = self._gov_snapshot()
+        lines_before = _raw_unit_line_count(self.root, self.closure_id)
+        spec = cc.parse_chain_spec(json.loads(json.dumps(
+            _CANCEL_FLIP_SPEC)))
+        with self.assertRaises(ValueError) as ctx:
+            cc.run_chain(spec, root=self.root, task=TASK,
+                         inputs=dict(EVD_INPUTS), closure_id=self.closure_id)
+        self.assertIn(_FUTURE_TOMBSTONE_TYPE, str(ctx.exception))
+        self.assertIn("NEWER writer", str(ctx.exception))
+        # ZERO writes — in particular NO closure_fenced audit event
+        self.assertEqual(self._gov_snapshot(), before)
+        events = _chain_events(self.root, self.closure_id)
+        self.assertFalse(
+            any(e["event_type"] == "closure_fenced" for e in events))
+        self.assertEqual(_raw_unit_line_count(self.root, self.closure_id),
+                         lines_before)
+
+    # ── finalize gate (the ticket MUST) ──────────────────────────────────
+
+    def test_finalize_of_unknown_type_closure_refused_zero_write(self):
+        self._make_ready_closure()
+        self._seed_future_tombstone()
+        before = self._gov_snapshot()
+        lines_before = _raw_unit_line_count(self.root, self.closure_id)
+        code, refused = _run_cli(self.root, "finalize",
+                                 "--closure-id", self.closure_id,
+                                 "--commit-sha", "deadbee")
+        self.assertEqual(code, 2, refused)
+        self.assertEqual(refused["code"], "schema_violation", refused)
+        self.assertIn(_FUTURE_TOMBSTONE_TYPE, refused["detail"])
+        self.assertEqual(self._gov_snapshot(), before)
+        self.assertEqual(_raw_unit_line_count(self.root, self.closure_id),
+                         lines_before)
+        self.assertFalse(any(
+            e["event_type"] == "closure_finalized"
+            for e in _chain_events(self.root, self.closure_id)))
+
+    # ── the same-vector append/derive entries (cancel / reopen) ─────────
+
+    def test_cancel_of_unknown_type_closure_refused_zero_write(self):
+        """The DEC-241 vector's cancel leg: a closure terminal in a newer
+        vocabulary looks ACTIVE to this reader — an ungated cancel would
+        terminate it again and release the newer holder's dispatch
+        locks. The gate refuses zero-write instead."""
+        self._make_blocked_closure()
+        self._seed_future_tombstone()
+        before = self._gov_snapshot()
+        lines_before = _raw_unit_line_count(self.root, self.closure_id)
+        code, refused = self._cancel("--authorized-by", "test-coordinator",
+                                     "--reason", "误读防护验证")
+        self.assertEqual(code, 2, refused)
+        self.assertEqual(refused["code"], "schema_violation", refused)
+        self.assertIn(_FUTURE_TOMBSTONE_TYPE, refused["detail"])
+        self.assertEqual(self._gov_snapshot(), before)
+        self.assertEqual(_raw_unit_line_count(self.root, self.closure_id),
+                         lines_before)
+        self.assertIsNone(self._cancel_event())
+        locks = self.locks_json()
+        self.assertIn(TASK, locks["active_tasks"])   # nothing released
+
+    def test_reopen_of_unknown_type_closure_refused_zero_write(self):
+        """A finalized closure whose journal later gained a newer writer's
+        event: the derived terminal is no longer judgeable — reopen (the
+        lineage-minting entry) refuses zero-write instead of forking the
+        attempt chain from a partial view."""
+        self._make_ready_closure()
+        (self.root / "out.md").write_text("x", encoding="utf-8")
+        _git("-C", str(self.root), "add", "-A")
+        _git("-C", str(self.root), "commit", "-q", "-m", "closure commit")
+        sha = _git("-C", str(self.root), "rev-parse", "HEAD").stdout.strip()
+        code, done = _run_cli(self.root, "finalize",
+                              "--closure-id", self.closure_id,
+                              "--commit-sha", sha)
+        self.assertEqual(code, 0, done)
+        self._seed_future_lineage()
+        before = self._gov_snapshot()
+        lines_before = _raw_unit_line_count(self.root, self.closure_id)
+        payload = cc.reopen_closure(
+            self.root, self.closure_id, authorized_by="test-coordinator",
+            reason="版本冲突面验证")
+        self.assertEqual(payload["code"], "schema_violation", payload)
+        self.assertIn(_FUTURE_LINEAGE_TYPE, payload["detail"])
+        self.assertEqual(self._gov_snapshot(), before)
+        self.assertEqual(_raw_unit_line_count(self.root, self.closure_id),
+                         lines_before)
+        self.assertFalse(any(
+            e["event_type"] == "closure_reopened"
+            for e in _chain_events(self.root, self.closure_id)))
+
+    def _seed_future_lineage(self):
+        seq = _next_raw_seq(self.root, self.closure_id)
+        _append_raw_journal_lines(self.root, [
+            _raw_closure_event(
+                self.closure_id, _FUTURE_LINEAGE_TYPE, seq, seq - 1,
+                {"successor_closure_id": cc.new_closure_id(),
+                 "reopen_attempt": 2})])
+
+    # ── forged-tombstone negative (arch ③ 负例) ──────────────────────────
+
+    def test_forged_tombstone_shape_never_misread_as_terminal_or_active(self):
+        """负例 (arch ③): a tombstone-SHAPED unknown event must leave the
+        closure in NEITHER diagnosable state — the reader refuses instead
+        of (a) honoring it as a terminal (unknown vocabulary — honoring
+        it would let a forged line terminate a live closure) or (b)
+        misreading the closure as active and resuming across it (the
+        measured 0.87 vector). The kept view contains no terminal."""
+        self._make_blocked_closure()
+        self._seed_future_tombstone()
+        # (a) not honored as a terminal: no known terminal in the kept view
+        events, _problems = cc._load_closure_events(
+            cc.default_event_log_path(self.root), self.closure_id)
+        self.assertFalse(any(
+            e["event_type"] in ("closure_cancelled", "closure_finalized")
+            for e in events))
+        # (b) not resumable across it
+        before = self._gov_snapshot()
+        payload = cc.reopen_closure(
+            self.root, self.closure_id, authorized_by="test-coordinator",
+            reason="伪造终态负例")
+        self.assertEqual(payload["code"], "schema_violation", payload)
+        code, status = _run_cli(self.root, "status",
+                                "--closure-id", self.closure_id)
+        self.assertEqual(code, 0, status)
+        self.assertNotIn(status["status"],
+                         ("cancelled", "finalized"))
+        self.assertTrue(status["journal_problems"])
+        self.assertTrue(any(_FUTURE_TOMBSTONE_TYPE in p
+                            for p in status["journal_problems"]))
+        self.assertEqual(self._gov_snapshot(), before)
+
+    # ── writer-side anti-occupation backstop (ticket acceptance) ─────────
+
+    def test_append_refused_at_occupied_raw_seq(self):
+        """碰撞向量机消灭 (DEC-241 实测: kept=[1,2] → next=3 与 raw 3 相撞):
+        the writer refuses to append into an occupied raw seq — the
+        collision is machine-impossible even for a path that forgets the
+        entry gate; the journal keeps its append-only integrity."""
+        log_path = cc.default_event_log_path(self.root)
+        _append_raw_journal_lines(self.root, [
+            _raw_closure_event(self.closure_id, "closure_started", 1, None,
+                               {"chain_id": "fixture", "task": TASK}),
+            _raw_closure_event(self.closure_id, "closure_ready", 2, 1,
+                               {"step_id": "end"}),
+            _raw_closure_event(self.closure_id, _FUTURE_TOMBSTONE_TYPE, 3,
+                               2, {}),
+        ])
+        self.assertEqual(_raw_unit_line_count(self.root, self.closure_id), 3)
+        with self.assertRaises(ValueError) as ctx:
+            cc._append_closure_event(
+                log_path, self.closure_id, "closure_fenced", 3, 2,
+                {"task": TASK})
+        self.assertIn("occupied", str(ctx.exception))
+        self.assertIn("anti-occupation", str(ctx.exception))
+        self.assertEqual(_raw_unit_line_count(self.root, self.closure_id), 3)
+
+    def test_append_at_free_seq_still_lands(self):
+        """Positive control: the backstop never blocks the normal
+        seq-continuous append path (existing writes unchanged)."""
+        log_path = cc.default_event_log_path(self.root)
+        _append_raw_journal_lines(self.root, [
+            _raw_closure_event(self.closure_id, "closure_started", 1, None,
+                               {"chain_id": "fixture", "task": TASK})])
+        envelope = cc._append_closure_event(
+            log_path, self.closure_id, "step_started", 2, 1,
+            {"step_id": "flip", "kind": "cli"})
+        self.assertEqual(envelope["cas_version"], 2)
+        self.assertEqual(cc._validate_closure_event(envelope), [])
+        self.assertEqual(_raw_unit_line_count(self.root, self.closure_id), 2)
+
+    # ── status stays read-only fail-safe (读 fail-safe 半面不变) ──────────
+
+    def test_status_face_stays_read_only_disclosure_on_conflict(self):
+        self._make_blocked_closure()
+        self._seed_future_tombstone()
+        before = self._gov_snapshot()
+        code, status = _run_cli(self.root, "status",
+                                "--closure-id", self.closure_id)
+        self.assertEqual(code, 0, status)
+        self.assertTrue(status["found"])
+        self.assertEqual(status["status"], "blocked")  # derived from KEPT
+        self.assertTrue(any(_FUTURE_TOMBSTONE_TYPE in p
+                            for p in status["journal_problems"]))
+        self.assertEqual(self._gov_snapshot(), before)
+
+    # ── 0.87-compatibility matrix: every old form keeps flowing ─────────
+
+    def test_matrix_historical_form_journal_status_and_finalize_flow(self):
+        """Matrix cell (旧 journal 形态各得其所 ①): a fully hand-assembled
+        HISTORICAL-form journal (only the 8-type vocabulary, schema
+        version 1) is read, derived, and completed by this reader —
+        no false version rejection on the old form."""
+        log_path = cc.default_event_log_path(self.root)
+        merged = dict(cc._REQUIRED_INPUT_DEFAULTS)
+        merged.update(EVD_INPUTS)
+        _append_raw_journal_lines(self.root, [
+            _raw_closure_event(
+                self.closure_id, "closure_started", 1, None,
+                {"chain_id": "standard-ticket-closure", "task": TASK,
+                 "inputs_digest": cc._inputs_digest(merged),
+                 "inputs": dict(sorted(merged.items())),
+                 "code_revision": None}, actor=cc.WRITER_ID),
+            _raw_closure_event(self.closure_id, "step_started", 2, 1,
+                               {"step_id": "flip-completed", "kind": "cli"},
+                               actor=cc.WRITER_ID),
+            _raw_closure_event(self.closure_id, "step_completed", 3, 2,
+                               {"step_id": "flip-completed",
+                                "execution": "succeeded"},
+                               actor=cc.WRITER_ID),
+            _raw_closure_event(self.closure_id, "closure_ready", 4, 3,
+                               {"step_id": "ready-to-commit"},
+                               actor=cc.WRITER_ID),
+        ])
+        self.assertIsNone(self._conflict())
+        code, status = _run_cli(self.root, "status",
+                                "--closure-id", self.closure_id)
+        self.assertEqual(code, 0, status)
+        self.assertEqual(status["status"], "ready")
+        self.assertEqual(status["journal_problems"], [])
+        sha = _git("-C", str(self.root), "rev-parse", "HEAD").stdout.strip()
+        code, done = _run_cli(self.root, "finalize",
+                              "--closure-id", self.closure_id,
+                              "--commit-sha", sha)
+        self.assertEqual(code, 0, done)
+        self.assertFalse(done.get("error"), done)
+        self.assertEqual(done["status"], "finalized")
+        self.assertIsNone(self._conflict())
+
+    def test_matrix_standard_chain_lock_leg_not_false_rejected(self):
+        """arch ③ 正例: with the version gate live, the STANDARD chain's
+        lock-leg closure flows end-to-end — idempotent resume appends
+        zero events, finalize records the terminal, and the full journal
+        (including the terminal) stays conflict-free."""
+        self._make_ready_closure()
+        events_after_run = _chain_events(self.root, self.closure_id)
+        payload = self._run_spec(cc.STANDARD_TICKET_CLOSURE)   # resume
+        self.assertEqual(payload["status"], "ready", payload)
+        self.assertEqual(
+            _chain_events(self.root, self.closure_id), events_after_run)
+        (self.root / "out.md").write_text("x", encoding="utf-8")
+        _git("-C", str(self.root), "add", "-A")
+        _git("-C", str(self.root), "commit", "-q", "-m", "closure commit")
+        sha = _git("-C", str(self.root), "rev-parse", "HEAD").stdout.strip()
+        code, done = _run_cli(self.root, "finalize",
+                              "--closure-id", self.closure_id,
+                              "--commit-sha", sha)
+        self.assertEqual(code, 0, done)
+        self.assertIsNone(self._conflict())
+
+
+class RunLockOwnershipTests(_WorkspaceFixture):
+    """arch ② 锁归属模型 (钉住现状): the per-closure run lock FILE is
+    never deleted and its byte-range lease is per-fd — after a new
+    instance re-acquires the lock, a stale old instance's release cannot
+    disturb (unlock or delete) the new holder's lease. The dispatch-lock
+    ownership face is pinned separately by CancellationLockOwnershipTests
+    (ownership-changed locks) + ExecutionGenerationFencingTests
+    (skipped_fenced releases)."""
+
+    def test_stale_release_cannot_disturb_new_holder_lease(self):
+        lock_dir = cc._closure_lock_dir(self.root)
+        lock_path = lock_dir / (self.closure_id + ".lock")
+        old = cc._RunLock(lock_path, 10.0)
+        new = cc._RunLock(lock_path, 10.0)
+        probe = cc._RunLock(lock_path, 0.2)
+        with old:
+            pass                       # old instance released its lease
+        with new:                      # new instance re-acquired
+            # a stale/double release from the old instance is a no-op and
+            # must NOT unlock the new holder's lease
+            old.__exit__(None, None, None)
+            with self.assertRaises(cc.LockContention):
+                with probe:
+                    pass
+        # the lock FILE survives every release (never deleted — the
+        # loop_event_log precedent an old instance cannot violate)
+        self.assertTrue(lock_path.is_file())
+        # lease recycling still works for the next acquirer
+        with cc._RunLock(lock_path, 10.0):
+            with self.assertRaises(cc.LockContention):
+                with probe:
+                    pass
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

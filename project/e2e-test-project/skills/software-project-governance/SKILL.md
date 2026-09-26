@@ -149,6 +149,8 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
 
 **AskUserQuestion 是唯一合法的用户提问方式。** 禁止用内联文字问"要不要继续""是否如何如何"——所有需要用户判断的问题必须通过 AskUserQuestion 工具。默认模式：**仅在关键决策停下来**。非关键决策自动执行不中断。
 
+**附件输入通道（FIX-396）**：问题需用户以图片/附件/长自由文本作答（选项无法承载）时，仍 MUST 经 AskUserQuestion 呈现并附固定回退选项（如「📷 通过聊天框发送图片/材料」，不设 recommended/首位默认）；用户选后在对话框发送的图片/消息为合法应答回合——明细见 behavior-protocol.md M5.1c 与 references/interaction-boundary.md。
+
 **关键决策** — 无论何种 permission_mode，**永远**停下来用 AskUserQuestion：
 - 范围变更（新增/删除功能、改变项目边界）
 - 架构决策（技术栈选择、模块拆分、接口设计）
@@ -474,7 +476,7 @@ python skills/software-project-governance/infra/verify_workflow.py execution-pac
 
   | 本文件正文示例 | DSH 等价 |
   |---|---|
-  | AskUserQuestion（第 38/53/187 行等） | `ask_user_question` 工具 |
+  | AskUserQuestion（第 38/53/189 行等） | `ask_user_question` 工具 |
   | Write / Edit / Bash（铁律第 1 条） | `write` / `edit` / `pwsh`（读取用 `read`/`grep`/`glob`） |
   | Agent 工具 spawn（`subagent_type="general-purpose"` 降级方案，第 204-208 行） | `subagent` 工具——prompt = 角色定义全文 + 任务规范 + 调度模板填充；DSH 无 subagent_type 概念，该降级方案不适用，无需降级 |
   | `isolation: "worktree"`（第 195 行） | DSH `subagent` 无此参数 → 同文件并发冲突时 MUST 串行化，或手工创建独立工作树 |

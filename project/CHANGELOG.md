@@ -2,6 +2,74 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.89.0] - 2026-09-26
+
+### 0.89.0 - **治理精度与健康面收口（Governance Precision & Health Closeout）**：任务状态词表收敛 + 终态行刷新 + 检查器判据结构化 + closure 版本感知门禁 + 标准链锁腿真释放（REL-090/091 / FIX-390~395 / FEAT-065 / DEC-244~248 / EVD-1171~1181）
+
+0.89.0 是 **MINOR** 发布，承载 REL-090（0.89.0 M-0 规划双审闭环——`docs/planning/version-plan-0.89.0.md` 设计半面 **R0 APPROVED_WITH_NOTES/0** + 发布半面 **R0 APPROVED_WITH_NOTES/0**，双 GO 2026-09-25）+ **DEC-244（0.89.0 版本范围授权：必选六项——09-30 风险窗履行 + FIX-390/391/392 披露面消解 + FIX-393/394 深检新票 + FEAT-045 P-a（FEAT-065）；B-12/B-13 五前置核验只核验不激活、激活授权票不捆绑）+ DEC-245（0.89.0 执行与发布授权：M-1 版本 bump 启动→批次执行→M-2~M-8 直至版本事务闭环；过程决策点经架构顾问协议——DEC-240 先例延续；安全语义不因授权削减）**。版本主题：**治理精度与健康面收口**——0.88.0 发布后治理健康深检暴露的三类工作按 DEC-246① 主序列交付：状态面收口（FIX-393→FIX-394）→ 披露面消解检查器族（FIX-390+FIX-392，同文件串行）→ closure 链健康面（FIX-391→FEAT-065，同文件串行）；census 收窄承诺前置票 FIX-395 随批次二同窗交付。**本版无新增功能激活**（B-12/B-13 机制 0.88 已交付、出厂姿态不变——见「行为变更」节）。
+
+**七票交付**（DEC-244 六票 + FIX-395 census 收窄前置票；批次间同文件串行约束——version-plan §2 批次排布 + DEC-246①）：
+
+**批次一：状态面收口（2 票）**
+
+- **FIX-393（任务状态词表收敛，commit `8a94d64`）**：三解析器（task-priority / parse_current_active_tasks / archive）终态判据对齐写入器契约——识别写入器终态 committed（ops 台账权威状态源），活体误推荐已交付票（FEAT-060）与 FEAT-061/064/063/385 误 blocked 根因收敛到单一定义。新测试 17/17；定向 377P/0F；活体 tpa `--force` 零已交付票推荐+Blocked=None+40 completed；消费方 3 失败经 git stash 真 HEAD 基线对照完全同形=既有基线红非本票引入；DEC-246① 退出条件（三解析器一致+零推荐+零误 blocked+终态/非终态/未知 token 不放宽不绕过 FIX-390 证据检查）。EVD-1172。
+- **FIX-394（终态行文本刷新机制+13 行一次性对齐，commit `3cb4048`；运行时机制与数据对齐分开验收——DEC-246⑤）**：task-row-update 落状态 token 时刷新状态列进度后缀（B~E 批 10 票+发布链 REL-087/088/089 共 13 行 committed 终态行不再滞留翻转前中途文本）+ 13 行存量一次性后缀对齐（Coordinator 机录凭证：13 张 suffix_refresh 收据落 plan-tracker.md.ops.jsonl 逐行可对账——EVD-1174；committed 审查中/开发中/收尾中 3 词形剩余 0 命中）。新测试 28P+12 subtests；回归 293P+archive 243P；全量 4144P/7F 经 HEAD 干净基线逐一复跑全部复现=既有基线非本票引入。EVD-1173/1174。
+
+**批次二：披露面消解——检查器族（3 票，同文件 `verify_workflow.py` 串行）**
+
+- **FIX-390（Check 18/18b 结构化状态判据，commit `def9508`；DEC-241 例外消解票——REL-089 条件②）**：三态完成判据（writer-committed+锚 / ✅ legacy 前缀 / 未知不猜——按身份复用 FIX-393 谓词）+ Check 18 basis 列回退读位解耦（完成态判定与显示前缀解耦——机录行按 DEC-168 契约落列即被如实判定）+ Check 18b DEC-168 机器凭证接纳（JSON 优先/畸形 op 不认/违规 JSON 不开脱）。机制消解在 fixture 面红绿实证（pre-fix 19F→post-fix 18P+11 subtests；0.88 例外两行活体形状复现——EVD-1140/EVD-1164）；豁免面差分归因 drops=∅ expansion=17 全 writer-committed 逐行留档。**申报勘正（EVD-1176——Coordinator 采纳 Reviewer）**：live census 75→75 逐字节零增量如实更正（live Check 18/18b 入集=0——窗口键控取 0.77 时代 token，0.89.0 窗口未激活；M-2 窗口激活后复测由 REL-092 checklist 席承载）；archguard 引擎 26318 LOC 超锚 26193 处置路由=随 0.89 M-2 统一 sanctioned regen（载荷票未完不中途 regen）。EVD-1175/1176。
+- **FIX-392（Check 30 复合键判据，commit `65c8e4b`；DEC-242③ 消解票；判据语义 DEC-247 落字）**：V3 熔断判据从任务全局轮号修正为链内轮次——①读取侧链归属推导 `_review_chain_attribution`（证据行文本+镜像 report: 双通道；排除 round 镜像/reviewer 命名空间/跨任务引用）②chains 复合键视图（task+chain+round；canonical 零漂移回退）③V3 链内分段（BLOCKED 依 M7.4 闭链终态语义作链段边界——升级后重开段轮次归零）。红先行 6F/3P→9 passed+13 subtests；census Check 30 面 30→25 WARN（V3×5 例外消解，25 条真实缺陷逐行恒等）；熔断三守卫恒绿；review_record.py 零触碰。EVD-1177；DEC-242③ 闭环+DEC-247（前向义务：V2 改链内判定须先补 REL-086 RELEASE-M3 R1 机录行——边缘①）。
+- **FIX-395（Check 28c HotFactSource 终态判定对齐，commit `7795f59`；census 收窄前置票——FIX-393 同族第四消费方）**：`_hot_status_cell_is_delivered` = legacy 字面（S_old 字节不变）∪ 按身份直呼 FIX-393 写入器判据（`_status_is_writer_committed_cell`+写入器链+ops 锚）；三处 28c 判定点换用；版本行映射既有语义（FIX-339 any-cell recall）文档化+测试 pin。TDD 红 4F→绿 8/8；活体 A/B check-hot-fact-source 20→0（0.88.0 roadmap 行 20 条伪 FAIL 簇——18 missing-task+2 overstate——消解）；全量 strict A/B 差分恰=−20 FAIL。**申报勘正（EVD-1179——采纳 Reviewer P1-1）**：R0 时 +23 未豁免字面致 static-pin WARN 27→50 且契约测试 FAIL——R1 derive 修复后 WARN 27=27 恒等/static-pin 0=0/契约 25P。EVD-1178/1179。
+
+**批次三：closure 链健康面（2 票，同文件 `closure_chain.py` 串行——FEAT-065 四红线保持）**
+
+- **FIX-391（closure journal 版本感知读取器，commit `c9b7415`；REL-089 条件③消解）**：`_journal_version_conflict` 在任一恢复副作用前分类完整原始 journal——未知事件类型/出窗 schema_version → schema_violation 零写拒绝+机器清单，四写入口全覆盖（run/resume+finalize+cancel+reopen）；写入器防占用 backstop（seq 碰撞向量机器不可达）；读 fail-safe 半面不变；0.87 兼容矩阵五格红绿逐格（正常链路不误拒）。回退 worlds 的 closure 面从人工运行手册门禁升级为机器门禁（DEC-246⑥ 披露义务兑现——旧 journal 支持范围与未知事件处置路径见「行为变更」节）。路径 B backport 候选保留。TDD 红 13F/4P→绿 17P；全量 87P→104P；test_rel089_release_compat 11P。EVD-1180。
+- **FEAT-065（标准链锁腿真释放升级，commits `ab7a8e1`+`b950fef`；DEC-248 拆分后链内面——FEAT-045 P-a）**：shrink-locks→release-locks 步接线既有 locks-release（cancel 腿同款 argv）+ gate 闭集 lock_ttl_le→task_locks_released 后置条件判定（任务索引+文件锁归属双面扫描、损坏/不可读/归属不明 fail-closed、后继任务锁不计入不误删）+ 三处 no locks-release 过时披露勘正 + lock_ttl 死默认输入移除。四红线集成级实证（释放前同文件互斥/只释放本任务锁/释放后不改受锁文件/提交串行隔离）；中断遗留锁仍依赖人工恢复（受控流程——DEC-248④）；acquire TTL 判定面拆出 FEAT-066（0.90 池，depends_on=FEAT-065——DEC-248②）。TDD 红 13F/99P→绿 112P；既有基线 104P 零回归。收尾批 `b950fef`：R0 审查报告 APPROVED_WITH_NOTES/0 + DEC-248 version-plan §2 行 6 勘正（验收拆分入账——原 triage JSON 原始性保留）。EVD-1181。
+
+**M-0 规划 + 发布链窗口内收尾 + M-1 bump（非批次票）**
+
+- **REL-090（M-0 规划双审+范围入账，commit `76c86a9`）**：version-plan-0.89.0 九节全（范围零扩缩）+ 双审 APPROVED_WITH_NOTES/0×2 + 收口落字批 v1.1（F-1 批次间三票共面串行/F-2 §5 五前置核验回填（③口径漂移 3≠11 如实登记）/F-3 §7 双锚勘正/P2-1 CHANGELOG canonical 继承/F-4 RISK-048 登记/F-5F-6 M-2M-3 注记）+ 六票 triage 机录入账 + roadmap 0.89.0 行。EVD-1171。
+- **REL-086 收尾批（M-6 修复批 `2dac7af` + M-8 收口批 `9347c11`——tag v0.88.0 后落库的前版发布链收尾，载荷归属 0.88.0 闭环）**：checklist 载荷表勘正+projection 再收敛（LRC ragged 消解）+ plan-tracker 工作流版本 0.88.0 三面一致（check-version-consistency PASSED 零 WARN）+ 发布终账 EVD-1170。
+- **REL-091（M-1 版本 bump，本票）**：0.88.0→0.89.0 全仓（SKILL.md frontmatter 权威锚+REQUIRED_SNIPPETS 六锚+投影 28 面+双根 entry sync——REL-087 先例形态）+ CHANGELOG 0.89.0 段（**单 canonical=本文件——DEC-242① 0.88 M-3 裁决直接继承，不复刻双位过渡**）+ static-pin 账本消解（见「如实披露」③）。
+
+**⑥ 治理面**：窗口内 **5 决策**（**DEC-244 0.89.0 范围授权**〔必选六项+五前置核验不激活；激活授权票不捆绑——行为变更需逐项明示授权；挂起 0.90+ 清单七项〕/ **DEC-245 执行与发布授权**〔M-1→M-8 全链推进+arch 顾问决策点协议+安全语义不削减〕/ **DEC-246 链首 arch 顾问咨询 Conditional GO 八条采纳**〔主序列+派发解锁条件+census 以问题身份集合验收+Check 28s 方案 A 前置归档+组合测试四组+⑥无激活措辞收紧+⑦pytest 基线口径+⑧manifest—ledger—tag 绑定 M-5/M-6 核验〕/ **DEC-247 Check 30 V3 链内轮次判据**〔自 0.89.0 起复合键判定——DEC-242③ 消解闭环〕/ **DEC-248 FEAT-065 验收拆分**〔真释放链内面+acquire TTL 拆出 FEAT-066+四红线保留+中断遗留锁人工恢复受控流程〕）+ **11 EVD**（EVD-1171~1181——M-0 规划面+七票交付/数据对齐/申报勘正审查链机器写入延续）+ 审查报告留档（review-REL-090-DESIGN-R0/RELEASE-R0、review-FIX-390-CODE-R0、review-FIX-391-CODE-R0、review-FIX-392-CODE-R0、review-FIX-393-CODE-R0、review-FIX-394-CODE-R0/R1、review-FIX-395-CODE-R0/R1、review-FEAT-065-CODE-R0——docs/reviews/）。**例外消解闭环**：DEC-241 例外×4（FIX-390）、DEC-242③ V3×5（FIX-392）、REL-089 条件③（FIX-391）按各自消解条件在案闭环。
+
+### Added
+
+- **closure journal 版本感知读取器（FIX-391）**：未知事件类型/出窗 schema_version 零写拒绝机器门禁，四写入口全覆盖+seq 防占用 backstop；0.87 兼容矩阵红绿看护。
+- **标准链锁腿真释放（FEAT-065；DEC-248①）**：release-locks 接线+task_locks_released 后置条件 gate（双面扫描 fail-closed）——正常收口路径下同文件族下一票不再撞人工解锁步。
+- **终态行文本刷新机制（FIX-394）**：task-row-update 落 token 刷新状态列进度后缀+13 行存量一次性对齐工具面（机录收据可对账）。
+- **Check 28c 写入器终态判据收敛（FIX-395）**：热事实源按身份直呼 FIX-393 写入器判据，legacy 字面语义字节不变。
+
+### Changed
+
+- **全仓版本面 0.88.0→0.89.0（REL-091）**：SKILL frontmatter 权威源+28 投影面+双根 entry bootstrap+REQUIRED_SNIPPETS 六锚统一再生（REL-087 先例形态——`release-projection --write` 单次收敛，written=17+check 28/28）。
+- **任务状态词表单一事实源（FIX-393）**：三解析器识别写入器终态 committed——ops 台账权威状态源；活体误推荐/误 blocked 面消解。
+- **Check 18/18b 完成态判定与显示前缀解耦（FIX-390；DEC-241 例外消解）**：三态判据+basis 列读位+DEC-168 机器凭证接纳——机录证据行不再假 FAIL，严检面不松动。
+- **Check 30 V3 熔断判据链内轮次化（FIX-392；DEC-247；DEC-242③ 消解）**：复合键（task+chain+round）判定+读取侧链归属推导+BLOCKED 闭链段边界；canonical 零漂移回退。
+
+### Fixed
+
+- **活体任务状态误判（FIX-393）**：已交付票误推荐+四票误 blocked 根因收敛（DEC-246① 退出条件全达成）。
+- **13 行终态滞留装饰文本（FIX-394+EVD-1174）**：运行时刷新机制+存量一次性对齐，热事实源显示面恢复真实。
+- **0.88.0 roadmap 行 20 条伪 FAIL 簇（FIX-395）**：Check 28c 终态判定对齐，活体 20→0。
+- **三处 no locks-release 过时披露+lock_ttl 死输入（FEAT-065 行为修正面）**：披露文本与实现一致+死默认输入移除（见「行为变更」节如实披露）。
+
+**行为变更（DEC-246⑥ 口径——无新增功能激活；含行为修正如实披露，MUST 出现在升级说明）**：
+
+- **无新增功能激活**：**B-12**（write-guard 分族 BLOCK）机制 0.88 已交付（FEAT-064）、出厂全 WARN——0.89 **无 `--activate-block` 执行**；**B-13**（decision-log JSON 权威化）协议层 0.88 已交付（FEAT-061）、权威标记缺省 MD_ACTIVE epoch0——0.89 **无真实切换**（version-plan §8 规划口径；激活授权票独立决策不捆绑——DEC-244）。
+- **行为修正面（如实披露——DEC-246⑥ 措辞收紧）**：① **FEAT-065 gate 闭集替换**：closure gate kind lock_ttl_le→task_locks_released——自定义 spec 链声明 lock_ttl_le 自 0.89.0 起 **fail-closed 拒绝**（闭集纪律，非静默降级）；lock_ttl 死默认输入移除。② **FIX-391 零写拒绝面**：旧版读取器对新版/未知 journal 事件的语义误读与 seq 碰撞双向量由人工处置路径变为写入口零写拒绝——正常链路零感知（兼容矩阵实证不误拒）；跨版本 in-flight closure resume 会 digest 失配拒绝（会话内运营态无跨版本 resume 契约——EVD-1181 迁移指南；路径 B backport 候选保留）。③ **判据收敛面（不放宽）**：FIX-393/394/395 终态/非终态/未知 token 判据收敛不放宽、不绕过 FIX-390 证据检查（DEC-246① 退出条件）；误推荐/伪 FAIL 消失属判据修正非检查弱化。
+
+**如实披露**：① **披露面基线**：check-governance 实测 49 issues（M-1 时点）；REQ-092×6+EVD-1146×1 维持披露（外部依赖零豁免红线/DEC-227 路线 a 不动+披露）；FIX-390 live 面 0.89.0 窗口未激活（窗口键控——M-2 窗口激活后复测，REL-092 checklist 席承载）；archguard 引擎 26318 LOC 超锚 26193（+125=HEAD 既有+本票 +86 归因 EVD-1176）——随 0.89 M-2 统一 sanctioned regen（0.88 M-2 先例同型）。② **09-30 风险窗履行注记**：RISK-036/039/046 复评 + RISK-047/048 同窗观察义务在案（DEC-244 必选项；version-plan §6 时序纪律——不迟于 2026-09-30；M-4 消费其结论，若 M-4 晚于窗口则窗内独立先行入账——DEC-243 先例形态）；**本 M-1 时点尚未履行，无预填未生成事实**。③ **static-pin bump-time 双信号**（FIX-361 设计语义）：0.89 窗口票写入的 then-future 0.89.0 字面量在本 bump 激活 **9 WARN**（test_fix390_structured_status_judgment.py:190/202/306、test_fix393_writer_terminal_states.py:103/174/311/313、test_fix394_progress_suffix_refresh.py:100/500）——全部为 fixture 任务表行/模板 scenario payload 零等值比较，逐行归因登记豁免（bump-time rows 先例同型）；四行 0.88.0 bump-time rows（test_verify_workflow.py:12742、test_archive.py:4586/4595、test_governance_store.py:493）self-dormant **删除**（REL-087 先例同型——fixture 行本体不动）；test_release_projection.py L30/test_static_version_pins.py L158 FUTURE_TARGET 豁免行 dormant **保留**（FIX-361 设计语义「goes dormant afterwards」）；test_fix395_hot_fact_source_writer_terminal.py L19 0.89.0 token 在模块 docstring 内——扫描器注释面按设计跳过，实测零 WARN 无需豁免。④ **plan-tracker `工作流版本` 过渡态 WARN**：0.88.0→0.89.0 由 Coordinator 随发布收口更新（REL-086 M-8 先例同型——本版 verify 唯一预期 WARN）。⑤ **CHANGELOG 单 canonical**：DEC-242①（0.88 M-3 裁决——根 `changelog.md` 为投影面）直接继承：本版段仅落本文件，仓库根 `changelog.md` 不再同步（0.88 双位过渡不复刻——version-plan §3b M-1 RELEASE-R0 P2-1 收口）。⑥ **no-overclaim 边界**：FEAT-065 发布验证两面演示义务（正常收口后继票可获取/中断遗留锁明确拒绝+恢复指引）留 M-2——本版不主张已完成演示；B-12/B-13 激活授权票未决策；RISK-036 维持打开，do not claim 1.0.0 production-ready；§5 五前置核验=只核验不激活（③勘误行计数口径漂移 3≠11 如实登记于 version-plan §5）。
+
+**Breaking changes：无**（`skills/software-project-governance/core/VERSIONING.md` 口径：无 MUST 规则删除/重命名、无外部 CLI 契约变更、无 governance 文件字段格式变更；FIX-391/FEAT-065 新增拒绝面均属 fail-closed 门禁而非既有契约删除——自定义 lock_ttl_le spec 声明被拒见行为修正①；判据收敛不放宽）。**MINOR bump 依据**：version-plan-0.89.0（M-0 双 GO——AWN/0×2 终态）——载荷 = 治理精度与健康面收口（解析判据收敛/检查器结构化/门禁自动化/锁腿真释放）；非纯 bug fix。版本号未占用预留（0.88.0 已发布顺延 +1；无 0.89.x tag/预留冲突；1.0.0 预留位未触碰）。
+
+版本投影 0.88.0 -> 0.89.0：由 M-1 统一执行（REL-087 先例形态）——SKILL frontmatter 权威锚先 bump（0.88.0→0.89.0），REQUIRED_SNIPPETS 六锚手钉（防循环验证独立期望面），`release-projection --write` 单次写入 28 个 registry 投影面一次收敛（written=17+幂等镜像；check 模式 28/28 PASS 零 issue、declared_legacy_snapshots 10 pass）——FIX-366 两遍 plan 正道延续，零回滚震荡；双根 entry bootstrap（repo-root + e2e-fixture，AGENTS.md/CLAUDE.md `@bootstrap-version`）经 `sync_entry_projection --write` 再生（双根 4 文件 PASS）；static-pin 账本消解（披露③——删 4 self-dormant+登记 9 bump-time+保留 2 dormant FUTURE_TARGET）。`.governance/plan-tracker.md` `工作流版本` 随发布收口由 Coordinator 更新（过渡态 WARN 如实呈现——披露④）。
+
+**发布时点**：本条目日期取 M-1 候选落库时点（2026-09-26 +0800）；若 M-5 transition/tag 的 taggerdate 与之不同，按 FIX-349 口径（**taggerdate 权威**）勘误对齐，不预填未生成的 tag 事实。
+
+**Commit 区间（v0.88.0〔peel `33d19b0`〕..M-1 tip）**：git rev-list 实测 11 commits（M-1 候选落库时点，新→旧）——`b950fef` FEAT-065 收尾批 / `ab7a8e1` FEAT-065 / `c9b7415` FIX-391 / `7795f59` FIX-395 / `65c8e4b` FIX-392 / `def9508` FIX-390 / `3cb4048` FIX-394 / `8a94d64` FIX-393 / `76c86a9` REL-090 M-0 立项收口 / `9347c11` REL-086 M-8 收口批 / `2dac7af` REL-086 M-6 修复批；区间终点随本段所在 M-1 候选 commit 落库后延伸。
+
 ## [0.88.0] - 2026-09-25
 
 ### 0.88.0 - **执法硬化 + 存储架构首表 + 能力铺开（Enforcement Hardening & Storage Separation First Table）**：write-guard 分族 BLOCK + decision-log JSON 权威化首表 + closure 取消/重开/接管 + 回合心跳 + B-7 三拆票（REL-086 / FIX-373~389 / FEAT-060~064/044/045 / DEC-229~239 / EVD-1134~1163）

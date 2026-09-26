@@ -288,52 +288,57 @@ STATIC_PIN_EXEMPTIONS = {
         (30, "0.87.0", _REASON_FUTURE_TARGET),
     ],
     "skills/software-project-governance/infra/tests/test_verify_workflow.py": [
-        # 0.88.0 bump-time row (the FIX-361 designed double signal): the
-        # FIX-376 F-6① legacy REQ fixture row's version cell ("0.88.0 交付")
-        # was written with the then-future target while 0.87.0 was active;
-        # it is scenario payload in a legacy-form fixture (the test asserts
-        # the ACTIVE legacy row still FAILs — exemption semantics untouched)
-        # and is never compared to the active version.
-        (12742, "0.88.0", _REASON_FIXTURE_ROW_TEXT),
-        # (History of the removed 0.87.0 rows:) the FIX-371 fixture row +
-        # the FIX-376 legacy REQ fixture row entries were REMOVED at the
-        # 0.88.0 bump per the FIX-361 self-dormancy design: with 0.88.0
-        # active, neither row can match the scan (token != active version),
-        # so the entries would be dead-ledger weight (M-1 static-pin 消解清单,
-        # version-plan L75 errata F-1; FIX-388 EVD migration note). The
-        # fixture rows themselves stay untouched — their 0.87.0 tokens are
-        # scenario payload that simply goes non-active. FIX-388 re-audit
-        # re-anchored the FIX-371 row 12375->12550 (FIX-373 test insertions
-        # shifted the file; caught by the stale-exemption audit /
-        # RealTreeContractTests — the designed rot-guard working) and
-        # registered the FIX-376 row born unexempted at 12674. Line
-        # anchoring kept over dynamizing (token-content anchors read as the
-        # blanket-allow shape this ledger exists to prevent). FIX-380
-        # re-anchor 12550->12534 / 12674->12658: the _format_issues helper
-        # dedup (REVIEW-FIX-374 F-4) removed 3 duplicated methods (-16
-        # lines). FIX-382 re-anchor 12534->12614 / 12658->12738: the
-        # Fix382NineCellTrailingLossTests class insertion (+80 lines) —
-        # all three caught by the designed rot-guard, same as the
-        # FIX-380/388 re-audits.
+        # (History of the removed 0.88.0 row:) the FIX-376 F-6① legacy REQ
+        # fixture row entry (12742, "0.88.0") was REMOVED at the 0.89.0 bump
+        # per the FIX-361 self-dormancy design: with 0.89.0 active, the row
+        # can no longer match the scan (token != active version), so the
+        # entry is dead-ledger weight (M-1 static-pin 消解清单, REL-087
+        # precedent). The fixture row itself stays untouched — its 0.88.0
+        # token is scenario payload that simply goes non-active. The same
+        # bump also removed the 0.88.0 bump-time blocks that had been added
+        # at the previous bump for the 0.87.0-window fixture worlds
+        # (test_archive.py 4586/4595 from FIX-384, test_governance_store.py
+        # 493 from FIX-379) — same self-dormancy ruling, fixture rows
+        # untouched. Earlier history, kept for the audit chain: the FIX-371
+        # fixture row + the FIX-376 legacy REQ row entries were removed at
+        # the 0.88.0 bump the same way after FIX-388 re-anchored 12375->12550
+        # (caught by the stale-exemption audit / RealTreeContractTests — the
+        # designed rot-guard working) and FIX-380 re-anchored
+        # 12550->12534 / 12674->12658 and FIX-382 re-anchored
+        # 12534->12614 / 12658->12738 (each caught by the same rot-guard).
+        # Line anchoring kept over dynamizing (token-content anchors read as
+        # the blanket-allow shape this ledger exists to prevent).
     ],
-    # 0.88.0 bump-time rows (the FIX-361 designed double signal): fixture
-    # worlds written by the 0.87.0-window tickets (FIX-379/384) carrying
+    # 0.89.0 bump-time rows (the FIX-361 designed double signal): fixture
+    # worlds written by the 0.89.0-window tickets (FIX-390/393/394) carrying
     # the then-future target in scenario-payload cells — each surfaces
     # exactly once, at this bump.
-    "skills/software-project-governance/infra/tests/test_archive.py": [
-        # FIX-384 index-rebuild fixture world: the 工作流版本 line and the
-        # live-task row's 目标版本 column are synthetic plan-tracker
-        # scenario data; the archive-range semantics consume the hardcoded
-        # RANGE ("0.60.0", "0.61.0") and never compare these cells to the
-        # active version.
-        (4586, "0.88.0", _REASON_FIXTURE_TABLE),
-        (4595, "0.88.0", _REASON_FIXTURE_ROW_TEXT),
+    "skills/software-project-governance/infra/tests/test_fix390_structured_status_judgment.py": [
+        # FIX-390 fixture world: rows 190/306 are fixture task-table row
+        # templates ({format} placeholders — the 目标版本 column is
+        # synthetic scenario payload); row 202 is the fixture plan-tracker
+        # 工作流版本 line of the same synthetic world. The structured-status
+        # judgment consumes the status/basis columns, never the version cell.
+        (190, "0.89.0", _REASON_FIXTURE_ROW_TEXT),
+        (202, "0.89.0", _REASON_FIXTURE_TABLE),
+        (306, "0.89.0", _REASON_FIXTURE_ROW_TEXT),
     ],
-    "skills/software-project-governance/infra/tests/test_governance_store.py": [
-        # FIX-379 id-family fixture tracker row (版本 column = scenario
-        # payload, row self-marked 夹具行); the test consumes the row's ID
-        # cell for vocabulary alignment, never the version cell.
-        (493, "0.88.0", _REASON_FIXTURE_ROW_TEXT),
+    "skills/software-project-governance/infra/tests/test_fix393_writer_terminal_states.py": [
+        # FIX-393 fixture tracker rows/templates (version column = scenario
+        # payload, one row template with {format} placeholders); the
+        # writer-terminal-state vocabulary tests consume the status cells,
+        # never the version cell.
+        (103, "0.89.0", _REASON_FIXTURE_ROW_TEXT),
+        (174, "0.89.0", _REASON_FIXTURE_ROW_TEXT),
+        (311, "0.89.0", _REASON_FIXTURE_ROW_TEXT),
+        (313, "0.89.0", _REASON_FIXTURE_ROW_TEXT),
+    ],
+    "skills/software-project-governance/infra/tests/test_fix394_progress_suffix_refresh.py": [
+        # FIX-394 fixture tracker row + row template (version column =
+        # scenario payload); the suffix-refresh assertions consume the
+        # status-column progress suffix, never the version cell.
+        (100, "0.89.0", _REASON_FIXTURE_ROW_TEXT),
+        (500, "0.89.0", _REASON_FIXTURE_ROW_TEXT),
     ],
 }
 

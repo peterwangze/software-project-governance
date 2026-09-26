@@ -26,7 +26,7 @@ Design sources (quoted constraints, not re-derived here):
     standalone; engine removal degrades to atomic CLIs, never to hand
     edits.
   * evolution §2.1 — effect-based resume (查世界不信日志): resume probes the
-    world (row flipped? evidence present? lock shrunk?) BEFORE re-running a
+    world (row flipped? evidence present? locks released?) BEFORE re-running a
     step; the log is audit + recovery context, never the truth source.
   * contracts m0-r1 (read-only) — EXECUTION_RESULTS (succeeded/failed/
     unknown), ERROR_CODE_DISPOSITIONS, SchemaVersionWindow, operation-id
@@ -46,9 +46,9 @@ What this module IS:
     round-2 carving (类型/schema 版本/closure_id/顺序号 分域);
   * effect probes (a small closed, read-only set) that let resume check the
     world first: task row state (via the writer's own ``--inspect``),
-    operation-marker anchor in a target file, lock TTL ceiling (agent-locks
-    parse), git object existence / HEAD message (argv-list git, no shell),
-    generic read-only command exit;
+    operation-marker anchor in a target file, task dispatch-locks released
+    (agent-locks ownership scan), git object existence / HEAD message
+    (argv-list git, no shell), generic read-only command exit;
   * a ready-to-commit summary endpoint + ``--finalize`` explicit gate —
     git operations are NOT chain steps (权限语义不焊死进软件); ``--finalize``
     only VERIFIES the operator's commit exists (read-only) and records the
@@ -92,12 +92,16 @@ the chaos test's parent controller, never by the production CLI), the child
 process writes a handshake marker file and pauses until the parent kills
 it (Popen.kill) or releases it.  No CLI flag exposes this surface.
 
-Registered gap (honest disclosure, ticket FEAT-056 design point 5): the
-governance_store has NO ``locks-release`` command; the standard chain's
-lock step is carried by ``locks-amend`` TTL shrink (every lock owned by the
-task shrunk to a small ceiling).  Actual lock-entry removal/removal of
-active_tasks remains a registered gap for a later slice — reported in the
-chain output, never silently assumed.
+Lock step (FEAT-065 — the FEAT-056 design point 5 registered gap is
+CLOSED on the chain face, DEC-248 acceptance split): the governance_store
+HAS the ``locks-release`` command (FIX-370) and the standard chain's lock
+step is the task-scoped TRUE release through it — one governed write
+removes the task's ``active_tasks`` entry AND every ``file_locks`` entry
+with ``locked_by == task``, gated by the ``task_locks_released``
+postcondition probe (an ownership scan that fails closed on an
+unjudgeable locks world; a state observation that never substitutes for
+the writer's receipt and never judges other tasks' locks). The
+acquire-side TTL judgment face is FEAT-066's scope — untouched here.
 
 Single-flight assumption (FEAT-056 R0 P3-4 disclosure, updated FEAT-063):
 the per-closure run lock makes ONE closure id safe against concurrent
@@ -410,7 +414,7 @@ actions; the 0.86.0 production standard chain contains NONE (commit/push 留
 PROBE_KINDS: Tuple[str, ...] = (
     "task_row_state",     # writer --inspect: row state == expected?
     "text_anchor",        # operation marker present in target file?
-    "lock_ttl_le",        # every lock owned by task shrunk to <= ceiling?
+    "task_locks_released",  # task's active entry + owned file locks gone?
     "git_object_exists",  # git cat-file -e <sha> (read-only, argv-list)
     "git_head_message",   # git log -1 --format=%s contains expected text
     "command_exit",       # generic read-only world-check command exits 0
@@ -921,26 +925,24 @@ STANDARD_TICKET_CLOSURE: Dict[str, Any] = {
             "dry_run_flag": "--dry-run",
         },
         {
-            "step_id": "shrink-locks",
+            "step_id": "release-locks",
             "kind": "cli",
-            "description": "locks-amend TTL 收缩（locks-release 缺口承载——"
-                           "governance_store 无 release 命令, 如实披露）",
+            "description": "locks-release 真释放（FEAT-065——governance_store "
+                           "已有 release 命令, FIX-370；DEC-248 验收拆分后链"
+                           "内面）：移除任务 active_tasks 条目与全部 "
+                           "locked_by==task 文件锁（cancel 腿同款接线）",
             "argv": [
                 "{python}", "{gs_cli}",
                 "--project-root", "{root}",
-                "locks-amend",
+                "locks-release",
                 "--task", "{task}",
-                "--ttl-seconds", "{input:lock_ttl}",
-                "--reason", "closure {closure_id}: 收口收缩该任务全部锁 TTL"
-                            "（locks-release 登记缺口, 本步为最近 Governed 效果）",
-                "--operation-id", "{op:shrink-locks}"
+                "--operation-id", "{op:release-locks}"
             ],
             "probe": {
-                "kind": "lock_ttl_le",
+                "kind": "task_locks_released",
                 "task": "{task}",
-                "ttl_max": "{input:lock_ttl}",
             },
-            "dry_run_flag": None,  # locks-amend has no --dry-run (disclosed)
+            "dry_run_flag": None,  # locks-release has no --dry-run (disclosed)
         },
         {
             "step_id": "ready-to-commit",
@@ -951,14 +953,14 @@ STANDARD_TICKET_CLOSURE: Dict[str, Any] = {
     ],
 }
 """The standard ticket-closure chain (review 通过后的票收口链):
-task-row-update（翻转 ✅）→ evidence-append（EVD 行）→ locks-amend TTL 收缩
-（locks-release 缺口承载, 如实披露）→ ready-to-commit 摘要。零业务逻辑:
-每步只是既有写入器 CLI 的 argv 声明; kill-switch = 任一步的 argv 可独立执行。"""
+task-row-update（翻转 ✅）→ evidence-append（EVD 行）→ locks-release 真释放
+（任务 active 条目 + 自持文件锁全量移除, FEAT-065）→ ready-to-commit 摘要。
+零业务逻辑: 每步只是既有写入器 CLI 的 argv 声明; kill-switch = 任一步的
+argv 可独立执行。"""
 
 _REQUIRED_INPUT_DEFAULTS: Dict[str, str] = {
     "from_state": "approved",
     "tracker_file": ".governance/plan-tracker.md",
-    "lock_ttl": "60",
 }
 
 _PATH_LIKE_INPUTS: Tuple[str, ...] = ("tracker_file",)
@@ -1153,41 +1155,92 @@ def _run_probe(probe: Dict[str, Any], mapping: Dict[str, str],
                 "detail": "anchor present (row reused, no re-append)",
                 "anchor": line.strip()[:400]}
 
-    if kind == "lock_ttl_le":
+    if kind == "task_locks_released":
+        # FEAT-065 gate 语义（task_locks_released 后置条件判定）:
+        #   (a) 目标任务的 active_tasks 锁记录已移除;
+        #   (b) file_locks 中不存在仍归属于目标任务的项目 —— 按
+        #       locked_by 归属逐项扫描, 不信任任务索引枚举（防索引
+        #       不同步残留）;
+        #   (c) 不要求这些路径全局无锁 —— 后继任务合法获取的同路径
+        #       锁既不构成失败, 也绝不能被本 gate 触碰;
+        #   (d) 读取失败/数据损坏/归属无法判明 → satisfied=False
+        #       fail-closed：gate 把 writer 推向同世界的 governed 写
+        #       尝试, writer 对同一损坏世界独立拒绝 —— 两层 fail-
+        #       closed, 链停在 blocked, 绝不带着未判明的锁面进入
+        #       下一步;
+        #   (e) 本 probe 是「状态后置条件」观测, 不是「释放操作成功」
+        #       的回执 —— 释放成功的唯一凭证是 writer 的 exit 0
+        #       （step_completed）, 满足的后置条件不得反过来掩盖一次
+        #       失败的 locks-release 调用; 重试复用确定性 operation-id
+        #       走 writer 既有恢复协议, 不绕过。
         locks_file = Path(mapping["gov"]) / "agent-locks.json"
         task = _resolved("task")
-        ceiling = int(_resolved("ttl_max"))
+
+        def _fail(detail: str) -> Dict[str, Any]:
+            return {"kind": kind, "satisfied": False, "detail": detail,
+                    "anchor": None}
+
         if not locks_file.is_file():
             return {"kind": kind, "satisfied": True,
-                    "detail": "no agent-locks.json — nothing to release",
+                    "detail": "no agent-locks.json — the task holds "
+                              "nothing (postcondition holds; a state "
+                              "observation, never a writer receipt)",
                     "anchor": "zero_locks"}
         try:
             data = json.loads(locks_file.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
-            return {"kind": kind, "satisfied": False,
-                    "detail": "agent-locks.json unreadable: {0}".format(exc),
-                    "anchor": None}
-        file_locks = data.get("file_locks") if isinstance(data, dict) else {}
-        owned = {path: entry for path, entry in
-                 (file_locks or {}).items()
-                 if isinstance(entry, dict)
-                 and entry.get("locked_by") == task}
-        if not owned:
+            return _fail(
+                "agent-locks.json unreadable: {0} — the release "
+                "postcondition is unjudgeable (fail-closed)".format(exc))
+        if not isinstance(data, dict):
+            return _fail(
+                "agent-locks.json top level is not an object — "
+                "ownership unjudgeable (fail-closed)")
+        active = data.get("active_tasks")
+        file_locks = data.get("file_locks")
+        if not isinstance(active, dict):
+            return _fail(
+                "agent-locks.json active_tasks missing or not an object "
+                "— ownership unjudgeable (fail-closed)")
+        if not isinstance(file_locks, dict):
+            return _fail(
+                "agent-locks.json file_locks missing or not an object — "
+                "ownership unjudgeable (fail-closed)")
+        owned: List[str] = []
+        others = 0
+        for path, entry in file_locks.items():
+            if not isinstance(entry, dict):
+                return _fail(
+                    "agent-locks.json file_locks entry at {0!r} is not "
+                    "an object — the ownership scan cannot complete "
+                    "(fail-closed)".format(path))
+            if entry.get("locked_by") == task:
+                owned.append(path)
+            else:
+                others += 1
+        owned.sort()
+        active_held = task in active
+        if not active_held and not owned:
             return {"kind": kind, "satisfied": True,
-                    "detail": "task holds no locks — release trivially "
-                              "satisfied",
-                    "anchor": "zero_locks"}
-        over = {p: e.get("ttl_seconds") for p, e in owned.items()
-                if not (isinstance(e.get("ttl_seconds"), int)
-                        and e.get("ttl_seconds") <= ceiling)}
-        satisfied = not over
-        return {"kind": kind, "satisfied": satisfied,
-                "detail": ("all {0} lock(s) ≤ {1}s".format(len(owned), ceiling)
-                           if satisfied else
-                           "locks above ceiling: {0}".format(over)),
-                "anchor": json.dumps({p: e.get("ttl_seconds")
-                                      for p, e in owned.items()},
-                                     ensure_ascii=False, sort_keys=True)}
+                    "detail": ("task holds no dispatch locks — active "
+                               "entry removed, 0 owned file locks, {0} "
+                               "other lock(s) untouched (postcondition "
+                               "holds; a state observation, never a "
+                               "writer receipt)".format(others)),
+                    "anchor": json.dumps(
+                        {"active_entry": False, "owned_file_locks": [],
+                         "other_lock_count": others},
+                        ensure_ascii=False, sort_keys=True)}
+        return {"kind": kind, "satisfied": False,
+                "detail": ("task still holds dispatch locks — active "
+                           "entry present: {0}; owned file locks: {1} — "
+                           "the release effect is not in the world "
+                           "(fail-closed)".format(active_held, owned)),
+                "anchor": json.dumps(
+                    {"active_entry": active_held,
+                     "owned_file_locks": owned,
+                     "other_lock_count": others},
+                    ensure_ascii=False, sort_keys=True)}
 
     if kind == "git_object_exists":
         repo = _resolved("repo")
@@ -1584,9 +1637,11 @@ _CHAIN_SUMMARY_BODIES: Dict[str, str] = {
     "standard-ticket-closure":
         "(FEAT-056 standard ticket closure)\n"
         "Task row flipped via task-row-update; evidence appended via\n"
-        "evidence-append; dispatch-lock TTLs shrunk via locks-amend\n"
-        "(locks-release remains a registered gap — TTL shrink is the\n"
-        "governed stand-in, disclosed not silent).",
+        "evidence-append; dispatch locks released via locks-release\n"
+        "(FEAT-065 true release — the task's active entry + every\n"
+        "file lock it owns are removed; the task_locks_released\n"
+        "postcondition is a state check, never a replacement for the\n"
+        "writer's receipt).",
     "release-window-bootstrap":
         "(FIX-383 release-window bootstrap)\n"
         "Write-guard own-state artifacts converged via verify_workflow\n"

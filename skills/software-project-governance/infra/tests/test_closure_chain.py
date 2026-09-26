@@ -5,7 +5,7 @@ Coverage map (evolution §4 DoD items 0-9 + ticket acceptance):
 
   * spec fail-closed validation (DoD 1 pre-execution full validation)
   * standard ticket-closure end-to-end on a fixture governed workspace —
-    row flip / EVD append / lock TTL shrink / ready-to-commit summary —
+    row flip / EVD append / dispatch-lock true release / ready-to-commit summary —
     with journal envelope + seq-monotonicity validation (DoD 3/4: the
     loop_event_log machine reused; no second persistence implementation)
   * effect-based resume idempotency: a full re-run appends ZERO events and
@@ -328,7 +328,7 @@ class SpecValidationTests(unittest.TestCase):
         self.assertEqual(spec.chain_id, "standard-ticket-closure")
         self.assertEqual([s.step_id for s in spec.steps],
                          ["flip-completed", "append-evidence",
-                          "shrink-locks", "ready-to-commit"])
+                          "release-locks", "ready-to-commit"])
         self.assertEqual(spec.steps[-1].kind, "summary")
 
     def test_unknown_step_kind_refused(self):
@@ -429,7 +429,7 @@ class _WorkspaceFixture(unittest.TestCase):
 
 
 class StandardChainE2ETests(_WorkspaceFixture):
-    """Full standard chain: flip → evidence → lock shrink → summary,
+    """Full standard chain: flip → evidence → locks release → summary,
     then the explicit finalize gate."""
 
     def test_full_chain_ready_and_effects(self):
@@ -454,10 +454,12 @@ class StandardChainE2ETests(_WorkspaceFixture):
         self.assertEqual(self.evidence_text().count(op_evd), 1)
         self.assertIn("EVD-901", self.evidence_text())
 
-        # effect 3: the task's lock TTL shrunk to the ceiling
+        # effect 3: the task's dispatch locks truly released (FEAT-065) —
+        # the active entry AND every owned file lock removed, not a
+        # TTL-shrunk residual lock
         locks = self.locks_json()
-        entry = locks["file_locks"]["fixture/a.md"]
-        self.assertEqual(entry["ttl_seconds"], 60)
+        self.assertNotIn(TASK, locks["active_tasks"])
+        self.assertNotIn("fixture/a.md", locks["file_locks"])
 
         # journal: valid envelopes, strictly monotonic seq, closed enum
         events = _chain_events(self.root, self.closure_id)
@@ -477,7 +479,7 @@ class StandardChainE2ETests(_WorkspaceFixture):
         self.assertEqual(status["status"], "ready")
         self.assertEqual(status["steps"]["flip-completed"], "completed")
         self.assertEqual(status["steps"]["append-evidence"], "completed")
-        self.assertEqual(status["steps"]["shrink-locks"], "completed")
+        self.assertEqual(status["steps"]["release-locks"], "completed")
 
         # ready-to-commit summary: message suggestion + do-not-stage list
         summary = payload["steps"][-1]["summary"]
@@ -688,19 +690,327 @@ class DryRunZeroWriteTests(_WorkspaceFixture):
         self.assertEqual(
             by_id["append-evidence"]["writer_dry_run"]["payload"]
             ["next_id"], "EVD-901")
-        # step 3: locks-amend has no dry-run face — parse-level only,
+        # step 3: locks-release has no dry-run face — parse-level only,
         # disclosed as such
-        self.assertEqual(by_id["shrink-locks"]["writer_dry_run"]["mode"],
+        self.assertEqual(by_id["release-locks"]["writer_dry_run"]["mode"],
                          "parse_level_help")
         self.assertIn("no --dry-run",
-                      by_id["shrink-locks"]["writer_dry_run"]["note"])
+                      by_id["release-locks"]["writer_dry_run"]["note"])
         # probes ran read-only and report the pre-chain world
         self.assertFalse(by_id["flip-completed"]["probe"]["satisfied"])
         self.assertFalse(by_id["append-evidence"]["probe"]["satisfied"])
-        # the fixture lock sits at 14400s — above the 60s ceiling pre-run
-        self.assertFalse(by_id["shrink-locks"]["probe"]["satisfied"])
-        self.assertEqual(by_id["shrink-locks"]["probe"]["detail"],
-                         "locks above ceiling: {'fixture/a.md': 14400}")
+        # the fixture world still holds the dispatch lock pre-run — the
+        # release postcondition does NOT hold (TTL is irrelevant to the
+        # new gate: even a tiny TTL fails while the lock remains, FEAT-065)
+        self.assertFalse(by_id["release-locks"]["probe"]["satisfied"])
+        self.assertEqual(
+            by_id["release-locks"]["probe"]["detail"],
+            "task still holds dispatch locks — active entry present: "
+            "True; owned file locks: ['fixture/a.md'] — the release "
+            "effect is not in the world (fail-closed)")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# FEAT-065 — the standard chain's lock step is the locks-release TRUE
+# release (DEC-248 acceptance split, chain face), gated by the
+# task_locks_released postcondition. Eight-item minimal red/green set.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class ReleaseLocksUpgradeTests(_WorkspaceFixture):
+    """FEAT-065 八项最小红绿集 — the standard chain's shrink-locks TTL
+    step is upgraded to a release-locks TRUE release step. Integration
+    grade throughout: the REAL governance_store ``locks-release`` and
+    ``agent-locks-acquire`` writer CLIs run against a temp-dir governance
+    store (真实存储语义), never a "the argv looked right" mock."""
+
+    SUCCESSOR_TASK = "FEAT-903"
+
+    def _ops_ledger(self):
+        path = self.gov / "governance-store-ops.json"
+        if not path.is_file():
+            return {}
+        return json.loads(path.read_text(encoding="utf-8")).get(
+            "operations", {})
+
+    def _release_probe(self):
+        mapping = cc._template_mapping(self.closure_id, TASK, {}, self.root)
+        return cc._run_probe(
+            {"kind": "task_locks_released", "task": TASK}, mapping,
+            self.closure_id)
+
+    def _acquire_cli(self, task, rel_path):
+        """Real agent-locks-acquire (verify_workflow thin entry) — exit 0
+        = acquired, exit 2 = fail-closed refusal."""
+        return subprocess.run(
+            [sys.executable, str(VW_PATH), "agent-locks-acquire",
+             "--project-root", str(self.root), "--task", task,
+             "--files", rel_path, "--ttl-reason",
+             "FEAT-065 successor acquire probe"],
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", env=_clean_env(), cwd=str(self.root),
+            check=False, timeout=120)
+
+    def _run_standard(self):
+        return cc.run_chain(
+            cc.parse_chain_spec(json.loads(
+                json.dumps(cc.STANDARD_TICKET_CLOSURE))),
+            root=self.root, task=TASK, inputs=dict(EVD_INPUTS),
+            closure_id=self.closure_id)
+
+    # ── 1: the chain actually invokes locks-release, not TTL shrink ─────
+
+    def test_standard_chain_invokes_true_release_not_ttl_shrink(self):
+        payload = self._run_standard()
+        self.assertEqual(payload["status"], "ready", payload)
+        # the world: the active entry AND the owned file lock are GONE
+        # (true deletion — not a TTL-shrunk residual lock)
+        locks = self.locks_json()
+        self.assertNotIn(TASK, locks["active_tasks"])
+        self.assertNotIn("fixture/a.md", locks["file_locks"])
+        # the writer receipt: exactly one locks-release op, none amend
+        op = cc.step_operation_id(self.closure_id, "release-locks")
+        ops = self._ops_ledger()
+        self.assertEqual(ops[op]["command"], "locks-release")
+        self.assertEqual(ops[op]["status"], "ok")
+        self.assertEqual(
+            [k for k, v in ops.items()
+             if v.get("command") == "locks-amend"], [])
+        # the journal records the step EXECUTED via the writer receipt
+        done = [e for e in _chain_events(self.root, self.closure_id)
+                if e["event_type"] == "step_completed"
+                and e["payload"].get("step_id") == "release-locks"]
+        self.assertEqual(len(done), 1)
+        self.assertEqual(done[0]["payload"]["operation_id"], op)
+        self.assertEqual(done[0]["payload"]["execution"], "succeeded")
+
+    # ── 2: tiny TTL but still held → the new gate MUST fail ─────────────
+
+    def test_tiny_ttl_but_still_held_fails_new_gate(self):
+        # the gate semantics REPLACED the TTL ceiling: the old lock_ttl_le
+        # would pass at ttl=1 <= any ceiling; the new gate demands REMOVAL
+        self.assertIn("task_locks_released", cc.PROBE_KINDS)
+        self.assertNotIn("lock_ttl_le", cc.PROBE_KINDS)
+        locks = self.locks_json()
+        self.assertIn(TASK, locks["active_tasks"])
+        locks["file_locks"]["fixture/a.md"]["ttl_seconds"] = 1
+        (self.gov / "agent-locks.json").write_text(
+            json.dumps(locks, ensure_ascii=False, indent=4) + "\n",
+            encoding="utf-8")
+        probe = self._release_probe()
+        self.assertFalse(probe["satisfied"])
+        self.assertIn("fixture/a.md", probe["detail"])
+        self.assertIn("the release effect is not in the world",
+                      probe["detail"])
+
+    # ── 3: index cleaned but the file lock still owned → MUST fail ──────
+
+    def test_index_cleared_but_file_lock_still_owned_fails_gate(self):
+        # 防索引不同步残留: the gate scans file-lock OWNERSHIP, it does
+        # not trust the active_tasks index enumeration
+        locks = self.locks_json()
+        del locks["active_tasks"][TASK]
+        # file_locks keeps fixture/a.md owned by TASK (desync residue)
+        (self.gov / "agent-locks.json").write_text(
+            json.dumps(locks, ensure_ascii=False, indent=4) + "\n",
+            encoding="utf-8")
+        probe = self._release_probe()
+        self.assertFalse(probe["satisfied"])
+        self.assertIn("fixture/a.md", probe["detail"])
+
+    # ── 4: release command failure / unreadable state → never proceed ───
+
+    def test_release_failure_or_unreadable_state_blocks_chain(self):
+        (self.gov / "agent-locks.json").write_text(
+            '{"active_tasks": BROKEN', encoding="utf-8")
+        # probe face: an unjudgeable world is never satisfied (fail-closed)
+        probe = self._release_probe()
+        self.assertFalse(probe["satisfied"])
+        self.assertIn("unreadable", probe["detail"])
+        self.assertIn("fail-closed", probe["detail"])
+        # chain face: the gate's fail-closed drives the governed writer
+        # attempt, the writer refuses the SAME corrupt world (a second
+        # independent fail-closed layer) → the chain halts blocked and
+        # the ready-to-commit endpoint is NEVER emitted
+        payload = self._run_standard()
+        self.assertEqual(payload["status"], "blocked", payload)
+        self.assertEqual(payload["halt"], "blocked")
+        by_id = {s["step_id"]: s for s in payload["steps"]}
+        self.assertEqual(by_id["release-locks"]["status"], "failed")
+        self.assertTrue(by_id["release-locks"].get("code"))
+        self.assertEqual(by_id["ready-to-commit"]["status"], "pending")
+        events = _chain_events(self.root, self.closure_id)
+        self.assertNotIn("closure_ready", [e["event_type"] for e in events])
+        failed = [e for e in events
+                  if e["event_type"] == "step_failed"
+                  and e["payload"].get("step_id") == "release-locks"]
+        self.assertEqual(len(failed), 1)
+        self.assertTrue(failed[0]["payload"].get("detail"))
+
+    # ── 5: red line ① — same-file mutual exclusion before the release,
+    #      successor acquisition succeeds after it ────────────────────────
+
+    def test_same_file_acquire_refused_before_release_allowed_after(self):
+        (self.root / "fixture").mkdir(exist_ok=True)
+        (self.root / "fixture" / "a.md").write_text(
+            "payload\n", encoding="utf-8")
+        # 释放前：第二个任务对同文件的 acquire 必须被拒绝（互斥不放松）
+        refused = self._acquire_cli(self.SUCCESSOR_TASK, "fixture/a.md")
+        self.assertEqual(refused.returncode, 2,
+                         refused.stdout + refused.stderr)
+        # the standard chain releases through the governed writer
+        payload = self._run_standard()
+        self.assertEqual(payload["status"], "ready", payload)
+        locks = self.locks_json()
+        self.assertNotIn(TASK, locks["active_tasks"])
+        self.assertNotIn("fixture/a.md", locks["file_locks"])
+        # 释放完成后：正常后继 acquire 成功（真释放腾出了路径）
+        done = self._acquire_cli(self.SUCCESSOR_TASK, "fixture/a.md")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        locks = self.locks_json()
+        self.assertEqual(
+            locks["file_locks"]["fixture/a.md"]["locked_by"],
+            self.SUCCESSOR_TASK)
+
+    # ── 6: a successor's fresh lock survives the old task's gate/retry ──
+
+    def test_successor_lock_survives_old_task_gate_and_retry(self):
+        payload = self._run_standard()
+        self.assertEqual(payload["status"], "ready", payload)
+        (self.root / "fixture").mkdir(exist_ok=True)
+        (self.root / "fixture" / "a.md").write_text(
+            "payload\n", encoding="utf-8")
+        done = self._acquire_cli(self.SUCCESSOR_TASK, "fixture/a.md")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        # (a) the OLD task's gate stays satisfied — the successor's lock
+        # is not ours, it is never misjudged as a release failure (gate
+        # 语义 (c): 不要求这些路径全局无锁)
+        probe = self._release_probe()
+        self.assertTrue(probe["satisfied"], probe)
+        self.assertIn("1 other lock(s) untouched", probe["detail"])
+        # (b) the deterministic-id retry is a writer REPLAY success no-op
+        # that never deletes the successor's fresh lock
+        op = cc.step_operation_id(self.closure_id, "release-locks")
+        replay = subprocess.run(
+            [sys.executable, str(GS_PATH), "--project-root", str(self.root),
+             "locks-release", "--task", TASK, "--operation-id", op],
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", env=_clean_env(), cwd=str(self.root),
+            check=False, timeout=120)
+        self.assertEqual(replay.returncode, 0, replay.stdout)
+        self.assertTrue(json.loads(replay.stdout).get("replayed"),
+                        replay.stdout)
+        locks = self.locks_json()
+        self.assertEqual(
+            locks["file_locks"]["fixture/a.md"]["locked_by"],
+            self.SUCCESSOR_TASK)
+        self.assertIn(self.SUCCESSOR_TASK, locks["active_tasks"])
+        self.assertNotIn(TASK, locks["active_tasks"])
+
+    # ── 7: the retry protocol — deterministic operation id across the
+    #      crash window, resume reconciles without a second release ──────
+
+    def test_release_retry_reuses_operation_id_after_crash_window(self):
+        handshake = self.tmpdir / "hs_release"
+        proc = _spawn_run(self.root, self.closure_id,
+                          inputs=dict(EVD_INPUTS),
+                          fault_points=["post-step-effect:release-locks"],
+                          handshake_dir=handshake)
+        self.assertTrue(
+            _wait_marker(handshake, "post-step-effect:release-locks"),
+            "child never reached the release fault point")
+        proc.kill()
+        proc.wait(timeout=60)
+        self.assertNotEqual(proc.returncode, 0)
+        # the release EFFECT landed (governed write is atomic), the
+        # bookkeeping did not — the crash window
+        locks = self.locks_json()
+        self.assertNotIn(TASK, locks["active_tasks"])
+        self.assertNotIn("fixture/a.md", locks["file_locks"])
+        events = _chain_events(self.root, self.closure_id)
+        started = [e for e in events
+                   if e["event_type"] == "step_started"
+                   and e["payload"].get("step_id") == "release-locks"]
+        completed = [e for e in events
+                     if e["event_type"] == "step_completed"
+                     and e["payload"].get("step_id") == "release-locks"]
+        self.assertEqual(len(started), 1)
+        self.assertEqual(completed, [])
+        # resume: the postcondition probe finds the effect → reconcile
+        # with the SAME operation id, no second release ever fires
+        code, payload = _run_cli(
+            self.root, "run", "--task", TASK,
+            "--closure-id", self.closure_id,
+            "--input", "evd_type={0}".format(EVD_INPUTS["evd_type"]),
+            "--input",
+            "evd_description={0}".format(EVD_INPUTS["evd_description"]),
+            "--input", "evd_basis={0}".format(EVD_INPUTS["evd_basis"]),
+            "--input",
+            "evd_artifacts={0}".format(EVD_INPUTS["evd_artifacts"]))
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(payload["status"], "ready", payload)
+        by_id = {s["step_id"]: s for s in payload["steps"]}
+        self.assertEqual(by_id["release-locks"]["status"], "reconciled")
+        op = cc.step_operation_id(self.closure_id, "release-locks")
+        ops = self._ops_ledger()
+        self.assertEqual(ops[op]["command"], "locks-release")
+        self.assertEqual(ops[op]["status"], "ok")
+        self.assertEqual(
+            [k for k, v in ops.items()
+             if v.get("command") == "locks-release"], [op])
+
+    # ── 8: the three disclosures are corrected AND the release position
+    #      keeps the commit serial-isolation constraints intact ──────────
+
+    def test_disclosures_corrected_and_serial_isolation_preserved(self):
+        doc = CC_PATH.read_text(encoding="utf-8")
+        # ① module docstring: the false "NO locks-release" disclosure is
+        # gone, the true release is described
+        self.assertNotIn("has NO ``locks-release``", doc)
+        self.assertNotIn("locks-release remains a registered gap", doc)
+        self.assertIn("task_locks_released", doc)
+        self.assertIn("FEAT-065", doc)
+        spec = cc.parse_chain_spec(json.loads(
+            json.dumps(cc.STANDARD_TICKET_CLOSURE)))
+        # ② the step description discloses the true release, no gap story
+        step = spec.steps[2]
+        self.assertEqual(step.step_id, "release-locks")
+        self.assertIn("locks-release", step.argv)
+        self.assertNotIn("locks-amend", step.argv)
+        self.assertNotIn("缺口", step.description)
+        self.assertIn("真释放", step.description)
+        # ③ the endpoint summary discloses the true release
+        summary = cc._summary_payload(spec, self.closure_id, TASK, {})
+        self.assertNotIn("registered gap",
+                         summary["commit_message_suggestion"])
+        self.assertIn("released via locks-release",
+                      summary["commit_message_suggestion"])
+        # 红线④: the release sits AFTER flip/evidence and BEFORE
+        # ready-to-commit — the chain's commit serial isolation is
+        # position-carried and unchanged
+        self.assertEqual(
+            [s.step_id for s in spec.steps],
+            ["flip-completed", "append-evidence", "release-locks",
+             "ready-to-commit"])
+        # 红线③: nothing after the release touches the protected files —
+        # the endpoint step is the engine-computed summary (no argv, no
+        # writer), it journals one closure_ready event and stages nothing
+        # from the locks face
+        ready = spec.steps[3]
+        self.assertEqual(ready.kind, "summary")
+        self.assertFalse(ready.argv)
+        self.assertNotIn(".governance/agent-locks.json",
+                         summary["do_not_stage"])
+        self.assertIn(".governance/closure-events.jsonl",
+                      summary["do_not_stage"])
+        payload = self._run_standard()
+        self.assertEqual(payload["status"], "ready", payload)
+        events = _chain_events(self.root, self.closure_id)
+        idx = next(i for i, e in enumerate(events)
+                   if e["event_type"] == "step_completed"
+                   and e["payload"].get("step_id") == "release-locks")
+        self.assertEqual([e["event_type"] for e in events[idx + 1:]],
+                         ["closure_ready"])
 
 
 class GuardNegativeTests(_WorkspaceFixture):
@@ -1212,9 +1522,9 @@ class KillSwitchTests(_WorkspaceFixture):
         self.assertIn("✅ 完成", self.tracker_text())
         op_evd = cc.step_operation_id(closure_id, "append-evidence")
         self.assertEqual(self.evidence_text().count(op_evd), 1)
-        self.assertEqual(
-            self.locks_json()["file_locks"]["fixture/a.md"]["ttl_seconds"],
-            60)
+        locks = self.locks_json()
+        self.assertNotIn(TASK, locks["active_tasks"])
+        self.assertNotIn("fixture/a.md", locks["file_locks"])
 
     def test_dependency_direction_engine_never_imports_engine_writers(self):
         engine_text = CC_PATH.read_text(encoding="utf-8")
@@ -1569,9 +1879,11 @@ class ReleaseBootstrapTests(_WorkspaceFixture):
             "Chain: standard-ticket-closure (FEAT-056 standard ticket "
             "closure)\n"
             "Task row flipped via task-row-update; evidence appended via\n"
-            "evidence-append; dispatch-lock TTLs shrunk via locks-amend\n"
-            "(locks-release remains a registered gap — TTL shrink is the\n"
-            "governed stand-in, disclosed not silent).\n"
+            "evidence-append; dispatch locks released via locks-release\n"
+            "(FEAT-065 true release — the task's active entry + every\n"
+            "file lock it owns are removed; the task_locks_released\n"
+            "postcondition is a state check, never a replacement for the\n"
+            "writer's receipt).\n"
             "Completion gate: closure-chain --finalize --closure-id {1}\n"
             "--commit-sha <sha-of-this-commit>".format(
                 TASK, self.closure_id))
@@ -3391,7 +3703,7 @@ class VersionAwareJournalReaderTests(_CancellationFixture):
 
     def _make_ready_closure(self, closure_id=None):
         """A standard-chain closure driven to the ready-to-commit state
-        (flip → evidence → lock-TTL shrink → summary)."""
+        (flip → evidence → locks release → summary)."""
         payload = self._run_spec(cc.STANDARD_TICKET_CLOSURE,
                                  closure_id=closure_id or self.closure_id)
         self.assertEqual(payload["status"], "ready", payload)

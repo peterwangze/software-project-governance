@@ -481,15 +481,17 @@ class BaselineArtifactTests(unittest.TestCase):
         self.assertIsInstance(data["rules_version"], int)
         self.assertRegex(data["generated"]["git_head"],
                          r"^([0-9a-f]{40}|unknown)$")
-        # M-2 regen re-baseline (2026-09-25): anchor re-anchored to the
-        # 0.88.0 release-gate regen (26193 at a8a72a3). The legacy substring
-        # check ("25" in str(anchor)) was coincidental — 25462 contained it,
-        # 26193 does not. Assert the exact regenerated anchor instead: the
+        # M-2 regen re-baseline (2026-09-26): anchor re-anchored to the
+        # 0.89.0 release-gate regen (26358 at HEAD; prior 26193 at the
+        # 0.88.0 regen a8a72a3). Growth +165 = EVD-1176 chain (+125:
+        # FIX-393/394 +39, FIX-390 +86) + post-measurement window commits
+        # (FIX-392/FIX-395 consumer faces + REL-091 REQUIRED_SNIPPETS
+        # anchors). Assert the exact regenerated anchor instead: the
         # metadata contract's job is to pin the committed truth, and the
         # regen itself is the sanctioned change that moves it (only-down
         # from here). Keep in sync with core/architecture-baseline.json
         # r1_mainfile_budget.anchor_loc on every sanctioned regen.
-        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 26193)
+        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 26358)
 
     def test_authored_zone_survives_regen(self):
         existing = _committed_baseline()

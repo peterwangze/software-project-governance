@@ -78,22 +78,22 @@
 
 | # | 门禁 / 命令 | 结果 | 关键实测值（回填位） |
 |---|---|---|---|
-| 1 | 全量测试套件（M-2 一次预算） | ⏳ 待回填 | **基线口径 4119P/0F（DEC-246⑦）**——七票新增测试并入：无非预期删除/失败/未说明 skip 增加、新增测试实收执行；当场计数以实测为准不预填；「全量只在 M-2」是预算非免检许可——M-3 改可执行代码须退回验证评估 |
-| 2 | `verify` 全量 | ⏳ 待回填 | 唯一预期 WARN = plan-tracker 过渡态（M-8 收口）；其余逐项如实回填——已知披露面见专席① |
-| 3 | `check-version-consistency` | ⏳ 待回填 | source=0.89.0；双入口 marker 0.89.0；静态钉面期望 0 WARN（M-1 消解后复核） |
-| 4 | `check-injection-budget`（×3 profile） | ⏳ 待回填 | 三 profile 逐位在预算内；版本 bump 不改 token 计数的对称面如实实测注记 |
-| 5 | `check-projection-sync --fail-on-issues` + `check-entry-bootstrap-sync` + `release-projection`（check-only） | ⏳ 待回填 | 28 mirrors + entry 双根 + state=PASS/0.89.0/28/28 期望（M-1 已实测——M-2 复跑确认） |
-| 6 | `check-cross-references` | ⏳ 待回填 | 0 dangling / 0 deprecated / 0 circular 期望（四件套+载荷全窗口落盘后；本票起草时点基线见自检验证记录） |
-| 7 | `check-manifest-consistency` | ⏳ 待回填 | 当场 canonical/actual 对账值如实回填（本票起草时点基线见自检验证记录；docs/release 四文件与 0.88.0 先例同形态——manifest 不逐文件登记 docs/ 面） |
-| 8 | `archguard-ratchet`（R1~R7） | ⏳ 待回填 | **sanctioned regen 席（专席②）**——引擎现值 26318 超锚 26193（EVD-1176 归因链）；**regen 目标值待实测不预填**；R5 期望 97/97；only-down 面 regen 后零 violations 期望 |
-| 9 | contract-matrix | ⏳ 待回填 | zero drift；cli_dispatch 97 键维持期望（DEC-239⑥ 收口面延续） |
-| 10 | `release-ledger --version 0.89.0 --no-remote` | ⏳ 待回填 | 预提交态**预期 FAIL**（manifest 锁面外未建——如实归类非豁免）；M-5 批 manifest 创建后复跑期望 NATIVE_CANDIDATE PASS；DEC-246⑧ 绑定核验 |
-| 11 | e2e / dsh 隔离冒烟 | ⏳ 待回填 | e2e-check 全 pass；**隔离环境安装冒烟（环境变量重定向至临时目录）通过**；real-home writes: 0 |
-| 12 | **组合测试集四项**（version-plan §9——M-2 必查席） | ⏳ 待回填 | ①FIX-393×FIX-394 状态闭环（写入→刷新→读取一致+幂等——DEC-246⑤）②FIX-390×FIX-392 检查器互不回归（DEC-241×4 与 V3×5 同窗转绿；9-cell 列数契约零触碰；身份归属不跨链跨轮借用）③FIX-391×FEAT-065（×FIX-394 closure 腿）链健康（真释放路径不被误拒——正例；伪造 tombstone/未知事件仍拒——负例）④FIX-393 archive 腿×归档完整性（`check-archive-integrity` PASS + `migrate --auto --dry-run` 判定与 FIX-393 判据一致）；**组合②列补充席（专席⑥——F-1：覆盖 FIX-393 verify_workflow.py 腿）**；批次一中间态独立留 EVD（F-5） |
-| 13 | **check-governance census 对账席**（专席①） | ⏳ 待回填 | **51 vs 49 分段归因入 EVD**（REVIEW-REL-091-RELEASE-R0 P2-1）；身份集收窄形态 = REQ-092×n + EVD-1146×1；**窗口激活后 18/18b live 复测席**（专席④——EVD-1176 P3-4）同席承载 |
-| 14 | **Check 28s 前置归档席**（专席③——DEC-246④ 方案 A） | ⏳ 待回填 | 六票集成后、M-2 前：dry-run 先行 → 已封闭历史周期迁移 → 当前链活跃证据保留 → 引用/索引连续性验证 → M-3~M-8 余量；evidence-log 现值 1,761,442B ≈ 1720KB（2026-09-26 实测）；M-8 保留本轮周期归档收口 |
-| 15 | **FEAT-065 双面演示席**（专席⑤——DEC-248④） | ⏳ 待回填 | 面 A 正常收口后继票可获取 ∥ 面 B 中断遗留锁明确拒绝+受控恢复指引——两面分别演示不混一；四红线保持（释放前同文件互斥/只释放本任务锁/释放后不改受锁文件/提交串行隔离） |
-| 16 | check-release 复合门禁（candidate→released 两态） | ⏳ 待回填 | 候选态 = M-5 批执行（依赖 manifest 在场）；released 态 = M-6 批（tag 后 `--lineage-mode released --release-commit <commit>`）；**quality-tools 未安装记 NOT_RUN 不虚报**（ADR-010/stage-release 退出条件承接——version-plan §4.6） |
+| 1 | 全量测试套件（M-2 一次预算） | ✅ **4217P/8F/1S + 556 subtests（1191.45s，2026-09-26 实测）** | 8F 分解：archguard×3（R1/R7/CliGate——专席② regen+pin 再基线后复跑 **38/38P 消解**）+ loop/FIX300×5（既有基线：loop×3〔inventory/performance/adapter〕+FIX300×2——三轮 stash 实证链在案〔session-snapshot 0.89 链首〕，非 0.89 窗口引入）；净新增 **+98**（4119→4217——DEC-246⑦ 七票并入口径）；0 窗口引入 F |
+| 2 | `verify` 全量 | ✅ **PASSED** | 唯一 WARN = plan-tracker 工作流版本 0.88.0 过渡态（L60/披露④设计态维持——M-8 收口） |
+| 3 | `check-version-consistency` | ✅ **PASSED** | source=0.89.0；双入口 marker 0.89.0；静态钉面 **0 WARN**（M-1 消解后复核达成）；过渡态 WARN 为设计态非缺陷 |
+| 4 | `check-injection-budget`（×3 profile） | ✅ **三档全 PASS** | lightweight **4216** / standard **5694** / strict **5966** tok ≤ 6000；版本 bump 零注入面变化（对称面如实注记） |
+| 5 | `check-projection-sync --fail-on-issues` + `check-entry-bootstrap-sync` + `release-projection`（check-only） | ✅ **全 PASS** | projection-sync PASSED + entry-bootstrap-sync PASSED + release-projection **state=PASS / source_version=0.89.0 / issues=[]**（M-1 已实测——M-2 复跑确认一致） |
+| 6 | `check-cross-references` | ✅ **PASS** | 0 dangling / 0 deprecated / 0 circular（四件套+载荷全窗口落盘后复跑） |
+| 7 | `check-manifest-consistency` | ✅ **PASS** | Manifest and filesystem are consistent（917 canonical/1055 actual 对账——docs/release 面不逐文件登记，0.87/0.88 先例同形态） |
+| 8 | `archguard-ratchet`（R1~R7） | ✅ **sanctioned regen 完成——R1~R7 PASS（0 violations）** | 锚 **26193→26358**（+165 归因链：EVD-1176 +125〔FIX-393/394 +39+FIX-390 +86〕+窗口后续 +40〔FIX-392/395 消费面+REL-091 六锚〕——非静默清零）；R4 1318=1318；R5 **97/97+71/71** frozen；R7 committed==fresh True；test_archguard_ratchet **38/38P**（metadata pin 再基线 26193→26358——501d8dc 先例同型义务）；only-down 从 26358 起 |
+| 9 | contract-matrix | ✅ **zero drift** | cli_dispatch **97 键** frozen 维持（R5 承载：97/97 keys+71/71 segments——DEC-239⑥ 收口面延续） |
+| 10 | `release-ledger --version 0.89.0 --no-remote` | ❌ **预期 FAIL 如实归类** | cannot read release manifest: FileNotFoundError（manifest M-5 批创建——披露①预提交态，非豁免） |
+| 11 | e2e / dsh 隔离冒烟 | ✅ **全 pass** | e2e-check：source_cli_proxy 6/0 + target_cwd 4/0 + target_fixture 9/0 + contract 5/0；**隔离环境安装冒烟（环境变量重定向至临时目录）通过**——launch.py --install 渲染 $tmpHome\.agent-presets\governance（版本标记 0.89.0/preset.yml/agent.cordis.yml）；**real-home writes: 0**（真实 .agent-presets 不存在——隔离生效实证）；临时目录已清理 |
+| 12 | **组合测试集四项**（version-plan §9——M-2 必查席） | ✅ **122P + 23 subtests（11.38s）** | ①393×394 状态闭环+②390×392 互不回归+③391×065 链健康+④393 archive 腿：fix390~395+ReleaseLocks+task_row_update 全套件绿（-k 选择实跑）；④命令面 `check-archive-integrity` **PASS**（1,297 索引/178 任务）+ `migrate --auto --dry-run` 判据一致（FIX-393 committed 词汇——50 扫描/0 满足归档）；**专席⑥ 三票共面**（FIX-393 verify_workflow.py 腿×FIX-390 三态×FIX-392 复合键）同窗绿——互不踩实证 |
+| 13 | **check-governance census 对账席**（专席①） | ✅ **39 issues 分段全枚举入 EVD** | 身份集=REQ-092×6+EVD-1146×1（披露席位维持）+REL-090 in-flight 合同×4（18d/e/f/g——M-8 终态消解）+accounting ragged×3+Check 28s ERROR×1；archguard×2 随 regen 消解；49→51→39 时点归因（含 Step D 过早翻转 28c×2 瞬态引入→回滚消解过程事件）入 EVD；**18/18b live PASS**（in-window entries 0——DEC-241 例外两行不在当前窗口重现；P3-4 键控缺陷本测点不复现，如实记录） |
+| 14 | **Check 28s 前置归档席**（专席③——DEC-246④ 方案 A） | ◐ **方案 A 执行=dry-run 无可归档数据** | `migrate --auto --dry-run`：50 tasks 扫描/结构可解析 48/**满足归档条件 0**（保留 48——already_archived=1/out_of_range=44/status_not_archivable=3）+evidence 488/478 保留（live_or_unresolvable=312 等）→**迁移跳过零写**；终值 **1,763,887B/1,437 行（1722.5KB）——ERROR 维持如实披露**；M-8 复测义务保留，不虚报消解 |
+| 15 | **FEAT-065 双面演示席**（专席⑤——DEC-248④） | ✅ **两面分别完成** | 面 A 正常收口 **5P**（真释放接线/释放前 acquire 拒绝→释放后成功/后继锁不被误删/operation-id 受控重试/披露+串行隔离）∥ 面 B 拒绝+受控恢复 **3P**（仍持锁 TTL 小→gate 拒绝/索引清但残留文件锁→拒绝/释放失败不可读→链停）——真实 governance_store CLI+临时 store 零 mock，两面命令输出分别留 EVD |
+| 16 | check-release 复合门禁（candidate→released 两态） | **M-5 批承载**（M-2 时点 NOT_RUN 如实） | candidate 态 = M-5 批执行（依赖 manifest 在场）；released 态 = M-6 批；**quality-tools 未安装记 NOT_RUN 不虚报** |
 | 17 | M-2 revert 干跑（回滚演练） | **未排程维持**（0.85/0.86/0.87/0.88 四版先例同型——批内无演练票）——M-3 发布半面裁决：不排程不阻断（tip 未定先干跑无意义）；rollback-plan-0.89.0 §4 如实标注 + §8 两路径手册在场 | 若补演练 MUST 隔离副本执行 + 真实 `<发布 tip>` 生成后复跑 |
 
 ### 专席① —— check-governance census 对账席（REVIEW-REL-091-RELEASE-R0 P2-1：51 vs 49 分段归因入 EVD）
@@ -163,8 +163,8 @@
 - [x] **M-0 规划确认**：REL-090 双半面 GO（Design R0 AWN/0 + Release R0 AWN/0——F-1~F-6 收口落字；五前置核验回填完成——`76c86a9`，EVD-1171）
 - [x] **七票载荷（三批次）**：批次一 FIX-393→FIX-394 + 批次二 FIX-390/392/395 + 批次三 FIX-391→FEAT-065 全部交付闭环（EVD-1172~1181；审查终态全 AWN/APPROVED——FIX-395 R0 NC→R1 AWN；0 unresolved blockers）
 - [x] **M-1 版本 bump（全平面）**：REL-091——28 投影面 + CHANGELOG 0.89.0 段单 canonical + static-pin 消解（已落库 `b66bd25`；出口四项 PASSED——REVIEW-REL-091-RELEASE-R0 AWN/0，EVD-1182）
-- [ ] **M-1R 发布材料**：本四件套（REL-092 锁面 expected-new）——本票交付后勾选
-- [ ] **M-2 门禁实测**：#1~#17 回填位实测回填——**前置归档席（专席③）M-2 门前先行**；重点席：census 对账席（专席①——51 vs 49 归因）/ archguard 棘轮席（专席② regen）/ 18-18b live 复测席（专席④）/ FEAT-065 双面演示席（专席⑤）/ 组合②列补充席（专席⑥）+ 组合测试四项（#12）+ 全量 pytest 基线口径（#1——DEC-246⑦）
+- [x] **M-1R 发布材料**：本四件套（REL-092 锁面 expected-new）——已交付（bb6a460 + R0 RELEASE AWN/0，EVD-1183）
+- [x] **M-2 门禁实测**（2026-09-26 回填完成）：#1~#17 全席实测回填——前置归档席（专席③）dry-run 无可归档数据（零写跳过）；census 对账席（专席①——39 issues 分段全枚举+49→51→39 归因）/ archguard 棘轮席（专席② regen 26193→26358+pin 再基线 38/38P）/ 18-18b live 复测席（专席④ PASS）/ FEAT-065 双面演示席（专席⑤ 5P∥3P）/ 组合②列补充席（专席⑥ 同窗绿）+ 组合测试四项（#12 122P）+ 全量 pytest（#1 4217P/8F——archguard×3 随 regen 消解+loop/FIX300×5 既有基线披露）；**LRC 复算：BLOCKED（semantic_only）——容量 330,494≤361,923 达标，UNSUPPORTED_AFFIRMATIVE×3 全部位于 legacy review-FIX-300-CODE-R0.md（既有基线面，非 0.89 窗口触碰）如实披露**；#10 ledger 预期 FAIL（M-5 收口）/#16 check-release M-5 承载（NOT_RUN 如实）；**过程事件如实注记**：Coordinator 曾于 M-1 后过早将 plan-tracker 工作流版本翻至 0.89.0（违反 L60 M-8 时序设计）→ 触发 28c×2 瞬态 FAIL → 当场定位根因（release_delivered 判定 vs tag 未生成的链中双束缚）→ 已回滚恢复设计过渡态并复测 28c synchronized——教训入 EVD（发布材料时序纪律：M-8 面收口不得提前）
 - [ ] **M-3 双半面审查**：产品代码半面（Code Reviewer 链）+ 发布半面（Release Reviewer 链）；终态口径 APPROVED / AWN-0；**抽查义务：FIX-390/392 红侧 fixture 非预录形态**（DESIGN-R0 F-6）+ 批次一中间态独立 EVD 抽查（F-5）+ 19→13 映射凭证复核（EVD-1174）
 - [ ] **M-4 修复窗 + 风险窗履行 + go/no-go**：09-30 风险窗履行（RISK-036/039/046 复评 + RISK-047/048 观察——DEC-243 先例形态；窗纪律不迟于 09-30）入账后 go/no-go；arch 顾问意见前置（DEC-245）
 - [ ] **M-5 checklist 全席回填 + candidate 提交 + transition**：manifest `skills/software-project-governance/core/releases/0.89.0.json` 创建（candidate 态）+ TO_BE_DEFINED=0 + ledger 复跑 NATIVE_CANDIDATE PASS + **DEC-246⑧ 绑定核验**

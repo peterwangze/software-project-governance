@@ -1249,6 +1249,7 @@ from checks.review_domain import (  # noqa: E402
     _merge_unresolved_blocker_evidence,
     _entry_unresolved_blocker_evidence,
     _normalize_review_round,
+    _review_chain_attribution,
     _build_review_sequence,
     check_review_closure,
     _task_routing_exempt,

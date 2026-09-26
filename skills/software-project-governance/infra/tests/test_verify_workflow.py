@@ -18881,6 +18881,370 @@ class CheckReviewClosureV6Tests(unittest.TestCase):
             [v["rule"] for v in r["violations"] if v["rule"] == "V6"], [])
 
 
+class CheckReviewClosureCompositeKeyTests(unittest.TestCase):
+    """FIX-392 (DEC-242③): Check 30 V3 fuse judged per review CHAIN.
+
+    One task can run MULTIPLE review chains (design / release / code
+    half-plane chains). The evidence protocol (M7.4 step 4.6 C6/C7) keys
+    REVIEW rows by task + global round only, so a second chain's rounds land
+    on inflated global numbers and the task-global fuse judgment reported
+    keying artifacts (REL-086③: the release half-plane chain's chain-local
+    R0/R2 reports were recorded as global R3/R4 — "global R4 > fuse 3" was a
+    keying artifact, not a substantive fuse breach; the chain's real NC
+    rounds 0/1/2 sit inside the fuse).
+
+    The composite key is (task, chain, round) with a read-side chain
+    attribution field. ``BLOCKED`` is a chain-closing terminal (M7.4 step
+    4.6), so rounds recorded after a BLOCKED round start a new
+    post-escalation segment (REL-080 shape: escalation happened at R3, the
+    approved re-review must not re-report the honored fuse). The write side
+    (review-record CLI, REVIEW-{task}-R{n} rows, 9-cell row contract) is
+    untouched — the chain is derived on the read side only.
+    """
+
+    TASK = "FIX-3920"
+
+    @staticmethod
+    def _entry(task, rid, conclusion, chain=None, chain_round=None):
+        entry = {"id": rid, "task_ref": task, "conclusion": conclusion}
+        if chain is not None:
+            entry["chain"] = chain
+        if chain_round is not None:
+            entry["chain_round"] = chain_round
+        return entry
+
+    @staticmethod
+    def _v3_findings(result):
+        v3_violations = [v for v in result["violations"] if v["rule"] == "V3"]
+        v3_warnings = [w for w in result["warnings"] if w["rule"] == "V3"]
+        return v3_violations, v3_warnings
+
+    # ── 正例 1：同 task 双链各 3 轮 NC —— 链内轮次均在 fuse 内，不熔断 ──
+
+    def test_dual_chains_three_nc_rounds_each_do_not_fuse(self):
+        # Two half-plane chains interleave on the global counter R0..R5
+        # (chain DESIGN: global R0/R2/R4 = local 0/1/2; chain RELEASE:
+        # global R1/R3/R5 = local 0/1/2). The task-global view maxes at 5
+        # with a NEEDS_CHANGE terminal — the pre-FIX-392 judgment V3-FAILed
+        # here ("round 5 > fuse 3"). Chain-locally neither chain left the
+        # fuse: no V3 finding of either severity.
+        seq = [
+            self._entry(self.TASK, "REVIEW-{0}".format(self.TASK),
+                        "NEEDS_CHANGE", "DESIGN", 0),
+            self._entry(self.TASK, "REVIEW-{0}-R1".format(self.TASK),
+                        "NEEDS_CHANGE", "RELEASE", 0),
+            self._entry(self.TASK, "REVIEW-{0}-R2".format(self.TASK),
+                        "NEEDS_CHANGE", "DESIGN", 1),
+            self._entry(self.TASK, "REVIEW-{0}-R3".format(self.TASK),
+                        "NEEDS_CHANGE", "RELEASE", 1),
+            self._entry(self.TASK, "REVIEW-{0}-R4".format(self.TASK),
+                        "NEEDS_CHANGE", "DESIGN", 2),
+            self._entry(self.TASK, "REVIEW-{0}-R5".format(self.TASK),
+                        "NEEDS_CHANGE", "RELEASE", 2),
+        ]
+        r = vw.check_review_closure(
+            review_sequence=seq, plan_tracker_completed={})
+        v3_violations, v3_warnings = self._v3_findings(r)
+        self.assertEqual(v3_violations, [])
+        self.assertEqual(v3_warnings, [])
+        # The only remaining finding is the generic mid-flight V1 WARN.
+        self.assertEqual(r["verdict"], "WARN")
+        self.assertEqual(
+            {w["rule"] for w in r["warnings"]}, {"V1"})
+
+    # ── 正例 2：单链 4 轮复审 NC —— 链内判定下熔断照常触发（fuse 不弱化） ──
+
+    def test_single_chain_four_nc_revisits_still_fuse(self):
+        seq = [
+            self._entry(self.TASK, "REVIEW-{0}".format(self.TASK),
+                        "NEEDS_CHANGE", "RELEASE", 0),
+            self._entry(self.TASK, "REVIEW-{0}-R1".format(self.TASK),
+                        "NEEDS_CHANGE", "RELEASE", 1),
+            self._entry(self.TASK, "REVIEW-{0}-R2".format(self.TASK),
+                        "NEEDS_CHANGE", "RELEASE", 2),
+            self._entry(self.TASK, "REVIEW-{0}-R3".format(self.TASK),
+                        "NEEDS_CHANGE", "RELEASE", 3),
+            self._entry(self.TASK, "REVIEW-{0}-R4".format(self.TASK),
+                        "NEEDS_CHANGE", "RELEASE", 4),
+        ]
+        r = vw.check_review_closure(
+            review_sequence=seq,
+            plan_tracker_completed={self.TASK: True})
+        self.assertEqual(r["verdict"], "FAIL")
+        v3_violations, _ = self._v3_findings(r)
+        self.assertEqual(len(v3_violations), 1)
+        self.assertIn("must escalate to BLOCKED", v3_violations[0]["reason"])
+
+    # ── 负例（伪像回归）：全局键控伪像形态不再触发 V3（REL-086③ 形态） ──
+
+    def test_global_keying_artifact_shape_no_longer_trips_v3(self):
+        # REL-086③ shape: earlier half-plane chains consume global R0-R2;
+        # the release milestone chain's chain-local R0/R2/R3 land on global
+        # R3/R4/R5. Task-global max_round 5 > fuse 3 with an APPROVED
+        # terminal produced the "possible marginal pass" V3 WARN — a pure
+        # keying artifact. Chain-locally the milestone chain maxes at local
+        # round 3 (inside the fuse) and every chain terminates approved.
+        seq = [
+            self._entry(self.TASK, "REVIEW-{0}".format(self.TASK),
+                        "NEEDS_CHANGE", "DESIGN", 0),
+            self._entry(self.TASK, "REVIEW-{0}-R1".format(self.TASK),
+                        "APPROVED", "DESIGN", 1),
+            self._entry(self.TASK, "REVIEW-{0}-R2".format(self.TASK),
+                        "NEEDS_CHANGE", "RELEASE", 0),
+            self._entry(self.TASK, "REVIEW-{0}-R3".format(self.TASK),
+                        "NEEDS_CHANGE", "RELEASE-M3", 0),
+            self._entry(self.TASK, "REVIEW-{0}-R4".format(self.TASK),
+                        "NEEDS_CHANGE", "RELEASE-M3", 2),
+            self._entry(self.TASK, "REVIEW-{0}-R5".format(self.TASK),
+                        "APPROVED", "RELEASE-M3", 3),
+        ]
+        # Differential documentation: the artifact lives in the numbers —
+        # task-global max 5 (past the fuse) vs milestone-chain local max 3
+        # (inside it).
+        chains = vw._build_review_sequence(seq)[self.TASK]["chains"]
+        self.assertEqual(chains["RELEASE-M3"]["max_round"], 3)
+        self.assertEqual(
+            max(chains[k]["max_round"] for k in chains
+                if k != "canonical"), 3)
+        r = vw.check_review_closure(
+            review_sequence=seq,
+            plan_tracker_completed={self.TASK: True})
+        v3_violations, v3_warnings = self._v3_findings(r)
+        self.assertEqual(v3_violations, [])
+        self.assertEqual(v3_warnings, [])
+        self.assertEqual(r["verdict"], "PASS", r["reason"])
+
+    # ── BLOCKED 升级边界：升级后重开的复审轮按新段计数（REL-080 形态） ──
+
+    def test_blocked_escalation_boundary_starts_new_segment(self):
+        # REL-080 shape: R0-R2 NEEDS_CHANGE → R3 BLOCKED (the T2 fuse DID
+        # fire and escalated) → post-escalation re-review R4/R5 NEEDS_CHANGE
+        # → R6 APPROVED. Judging the continuation on the closed chain's
+        # numbering re-reported the already-honored fuse ("round 6 > fuse 3
+        # but R6=APPROVED"). The recorded BLOCKED closes the engagement;
+        # rounds after it restart the count: segment 1 max 3 (terminal
+        # BLOCKED, escalation domain), segment 2 locals 0/1/2 — no V3.
+        seq = [
+            self._entry(self.TASK, "REVIEW-{0}".format(self.TASK),
+                        "NEEDS_CHANGE"),
+            self._entry(self.TASK, "REVIEW-{0}-R1".format(self.TASK),
+                        "NEEDS_CHANGE"),
+            self._entry(self.TASK, "REVIEW-{0}-R2".format(self.TASK),
+                        "NEEDS_CHANGE"),
+            self._entry(self.TASK, "REVIEW-{0}-R3".format(self.TASK),
+                        "BLOCKED"),
+            self._entry(self.TASK, "REVIEW-{0}-R4".format(self.TASK),
+                        "NEEDS_CHANGE"),
+            self._entry(self.TASK, "REVIEW-{0}-R5".format(self.TASK),
+                        "NEEDS_CHANGE"),
+            self._entry(self.TASK, "REVIEW-{0}-R6".format(self.TASK),
+                        "APPROVED"),
+        ]
+        r = vw.check_review_closure(
+            review_sequence=seq,
+            plan_tracker_completed={self.TASK: True})
+        v3_violations, v3_warnings = self._v3_findings(r)
+        self.assertEqual(v3_violations, [])
+        self.assertEqual(v3_warnings, [])
+        self.assertEqual(r["verdict"], "PASS", r["reason"])
+
+    def test_post_escalation_segment_blowing_fuse_still_fails(self):
+        # The escalation boundary is not an exemption: if the POST-escalation
+        # engagement itself burns past the fuse with a NEEDS_CHANGE terminal
+        # (locals 0..4 after the BLOCKED), V3 fires for that segment — the
+        # split cannot hide an un-escalated loop.
+        seq = [
+            self._entry(self.TASK, "REVIEW-{0}".format(self.TASK),
+                        "NEEDS_CHANGE"),
+            self._entry(self.TASK, "REVIEW-{0}-R1".format(self.TASK),
+                        "NEEDS_CHANGE"),
+            self._entry(self.TASK, "REVIEW-{0}-R2".format(self.TASK),
+                        "NEEDS_CHANGE"),
+            self._entry(self.TASK, "REVIEW-{0}-R3".format(self.TASK),
+                        "BLOCKED"),
+            self._entry(self.TASK, "REVIEW-{0}-R4".format(self.TASK),
+                        "NEEDS_CHANGE"),
+            self._entry(self.TASK, "REVIEW-{0}-R5".format(self.TASK),
+                        "NEEDS_CHANGE"),
+            self._entry(self.TASK, "REVIEW-{0}-R6".format(self.TASK),
+                        "NEEDS_CHANGE"),
+            self._entry(self.TASK, "REVIEW-{0}-R7".format(self.TASK),
+                        "NEEDS_CHANGE"),
+            self._entry(self.TASK, "REVIEW-{0}-R8".format(self.TASK),
+                        "NEEDS_CHANGE"),
+        ]
+        r = vw.check_review_closure(
+            review_sequence=seq,
+            plan_tracker_completed={self.TASK: True})
+        self.assertEqual(r["verdict"], "FAIL")
+        v3_violations, _ = self._v3_findings(r)
+        self.assertEqual(len(v3_violations), 1)
+
+    # ── C5 可见性保留：无升级证据的超 fuse APPROVED 仍 WARN（含链归属面） ──
+
+    def test_c5_marginal_pass_warn_preserved_without_escalation(self):
+        seq = [
+            self._entry(self.TASK, "REVIEW-{0}".format(self.TASK),
+                        "NEEDS_CHANGE"),
+            self._entry(self.TASK, "REVIEW-{0}-R1".format(self.TASK),
+                        "NEEDS_CHANGE"),
+            self._entry(self.TASK, "REVIEW-{0}-R2".format(self.TASK),
+                        "NEEDS_CHANGE"),
+            self._entry(self.TASK, "REVIEW-{0}-R3".format(self.TASK),
+                        "NEEDS_CHANGE"),
+            self._entry(self.TASK, "REVIEW-{0}-R4".format(self.TASK),
+                        "APPROVED"),
+        ]
+        r = vw.check_review_closure(
+            review_sequence=seq,
+            plan_tracker_completed={self.TASK: True})
+        self.assertEqual(r["verdict"], "WARN")
+        v3_violations, v3_warnings = self._v3_findings(r)
+        self.assertEqual(v3_violations, [])
+        self.assertEqual(len(v3_warnings), 1)
+        self.assertIn("marginal pass", v3_warnings[0]["reason"])
+
+    def test_c5_marginal_pass_warn_preserved_with_chain_attribution(self):
+        # Same shape as the artifact regression, but the chain genuinely
+        # leaves the fuse chain-locally (local R4 APPROVED, no BLOCKED
+        # escalation anywhere): the C5 marginal-pass WARN stays, now with
+        # the chain named for auditability.
+        seq = [
+            self._entry(self.TASK, "REVIEW-{0}".format(self.TASK),
+                        "NEEDS_CHANGE", "RELEASE", 0),
+            self._entry(self.TASK, "REVIEW-{0}-R1".format(self.TASK),
+                        "NEEDS_CHANGE", "RELEASE", 1),
+            self._entry(self.TASK, "REVIEW-{0}-R2".format(self.TASK),
+                        "NEEDS_CHANGE", "RELEASE", 2),
+            self._entry(self.TASK, "REVIEW-{0}-R3".format(self.TASK),
+                        "NEEDS_CHANGE", "RELEASE", 3),
+            self._entry(self.TASK, "REVIEW-{0}-R4".format(self.TASK),
+                        "APPROVED", "RELEASE", 4),
+        ]
+        r = vw.check_review_closure(
+            review_sequence=seq,
+            plan_tracker_completed={self.TASK: True})
+        self.assertEqual(r["verdict"], "WARN")
+        v3_violations, v3_warnings = self._v3_findings(r)
+        self.assertEqual(v3_violations, [])
+        self.assertEqual(len(v3_warnings), 1)
+        self.assertIn("[chain RELEASE]", v3_warnings[0]["reason"])
+        self.assertIn("marginal pass", v3_warnings[0]["reason"])
+
+    # ── 链归属解析器（读取侧推导——写入面零改动的依据） ──
+
+    def test_chain_attribution_parser_live_row_shapes(self):
+        derive = vw._review_chain_attribution
+        cases = (
+            # (task, row/file text, expected (chain, chain_round))
+            ("REL-086",
+             "docs/reviews/review-REL-086-RELEASE-M3.md; "
+             "review-REL-086-R3.md",
+             ("RELEASE-M3", 0)),
+            ("REL-086",
+             "docs/reviews/review-REL-086-RELEASE-M3-R2.md; "
+             "review-REL-086-R4.md",
+             ("RELEASE-M3", 2)),
+            ("REL-086",
+             "docs/reviews/review-REL-086-CODE-M3.md; "
+             "review-REL-086-R2-code.md",
+             ("CODE-M3", 0)),
+            ("REL-086", "review-REL-086-R0-release.md", (None, None)),
+            ("REL-086", "review-REL-086-R3.md", (None, None)),
+            ("REL-073",
+             ".governance/review-REL-073-CANDIDATE-DESIGN-R0.md; "
+             "review-REL-073-R2.md",
+             ("CANDIDATE-DESIGN", 0)),
+            ("REL-084", "docs/reviews/review-REL-084-M3-DESIGN-R0.md",
+             ("M3-DESIGN", 0)),
+            ("FIX-291", "docs/reviews/review-FIX-291-CODE-R2.md",
+             ("CODE", 2)),
+            ("REL-086", "review-REL-086-DESIGN-R1.md", ("DESIGN", 1)),
+            # A different task's reference never attributes a chain.
+            ("REL-086", "docs/reviews/review-REL-087-CODE-R0.md",
+             (None, None)),
+            # Lowercase slug = reviewer namespace, never a chain.
+            ("REL-086", "review-REL-086-design-R0.md", (None, None)),
+            # Mirror-file body carries the chain ref on the report line.
+            ("REL-086",
+             "# Review Record (machine-written by review-record)\n\n"
+             "- task: REL-086\n- round: R3\n"
+             "- report: docs/reviews/review-REL-086-RELEASE-M3.md\n",
+             ("RELEASE-M3", 0)),
+            # No text / empty text → no attribution.
+            ("REL-086", "", (None, None)),
+        )
+        for task, text, expected in cases:
+            with self.subTest(task=task, text=text[:48]):
+                self.assertEqual(derive(task, text), expected)
+
+    # ── 活体采集面：行文本 + 镜像文件双通道推导（消费侧推导活体） ──
+
+    def test_live_collector_derives_chain_attribution_end_to_end(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gov = root / ".governance"
+            gov.mkdir()
+            (gov / "plan-tracker.md").write_text("# plan\n", encoding="utf-8")
+            rows = "\n".join(
+                "| REVIEW-REL-950{0} | REL-950 | 治理记录 | review | x | "
+                "{1} | release | 2026-09-25 | G11 | {2} |".format(
+                    suffix, report_ref, conclusion)
+                for suffix, report_ref, conclusion in (
+                    ("", "docs/reviews/review-REL-950-DESIGN-R0.md",
+                     "NEEDS_CHANGE"),
+                    ("-R1", "docs/reviews/review-REL-950-DESIGN-R1.md",
+                     "APPROVED"),
+                    ("-R2", "docs/reviews/review-REL-950-RELEASE-R0.md",
+                     "NEEDS_CHANGE"),
+                    ("-R3", "docs/reviews/review-REL-950-RELEASE-M3.md",
+                     "NEEDS_CHANGE"),
+                    ("-R4", "docs/reviews/review-REL-950-RELEASE-M3-R2.md",
+                     "NEEDS_CHANGE"),
+                    ("-R5", "docs/reviews/review-REL-950-RELEASE-M3-R3.md",
+                     "APPROVED"),
+                )) + "\n"
+            (gov / "evidence-log.md").write_text(rows, encoding="utf-8")
+            # Mirror file whose body carries the chain ref (file channel).
+            (gov / "review-REL-950-R5.md").write_text(
+                "# Review Record (machine-written by review-record)\n\n"
+                "- task: REL-950\n- round: R5\n- date: 2026-09-25\n"
+                "- report: docs/reviews/review-REL-950-RELEASE-M3-R3.md\n\n"
+                "**审查结论**: **APPROVED**\n", encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", gov / "plan-tracker.md"), \
+                 patch.object(vw, "EVIDENCE_PATH",
+                              gov / "evidence-log.md"), \
+                 patch.object(vw, "GOVERNANCE_DIR", gov), \
+                 patch("task_priority.parse_task_dependencies",
+                       return_value=[SimpleNamespace(
+                           task_id="REL-950", status="✅ 完成",
+                           priority="P2", dependencies=(),
+                           cross_entity_refs=(), target_version="")]):
+                sequences, completed = vw._collect_live_review_sequences()
+            self.assertIn("REL-950", completed)
+            chains = sequences["REL-950"]["chains"]
+            # Both channels attribute: the milestone chain holds local
+            # rounds 0/2/3 (from the row paths AND the mirror body); the
+            # canonical chain stays empty — nothing is judged task-globally.
+            self.assertEqual(chains["RELEASE-M3"]["max_round"], 3)
+            self.assertEqual(
+                sorted(chains["RELEASE-M3"]["rounds"]), [0, 2, 3])
+            self.assertNotIn("canonical", chains)
+            # Closure over the live-collected sequences: no V3 finding —
+            # the fixture-scale proxy of the DEC-242③ artifact resolution.
+            entries = [dict(e) for e in sequences["REL-950"]["rounds"].values()]
+            r = vw.check_review_closure(
+                review_sequence=[
+                    {"id": e["id"], "task_ref": "REL-950",
+                     "conclusion": e["conclusion"], "chain": e["chain"],
+                     "chain_round": e["chain_round"]}
+                    for e in entries],
+                plan_tracker_completed={"REL-950": True})
+            v3_violations, v3_warnings = self._v3_findings(r)
+            self.assertEqual(v3_violations, [])
+            self.assertEqual(v3_warnings, [])
+
+
 class LoopWiringCallSiteTests(unittest.TestCase):
     """FIX-236.4 / ADR-017 §3.4 (P1-1): process_gate_result call-site check.
 

@@ -1895,6 +1895,103 @@ def _normalize_review_round(raw_id):
     return (task_id, round_n)
 
 
+# ── FIX-392 (DEC-242③): Check 30 V3 composite round key ────────────────────
+# One task can run MULTIPLE review chains (design / release / code
+# half-plane chains). The evidence protocol (M7.4 step 4.6 C6/C7) keys
+# REVIEW rows by task + global round only, so a second chain's rounds land
+# on inflated global numbers (REL-086③: the release half-plane chain's
+# chain-local R0/R2 reports were recorded as global R3/R4 — "global
+# R4 > fuse 3" was a keying artifact, not a substantive fuse breach).
+# FIX-392 adds a READ-SIDE chain attribution so V3 — the only chain-
+# sensitive rule — judges chain-local rounds. The write side is untouched:
+# review-record keeps writing task+round rows and the 9-cell row contract is
+# unchanged; the chain is derived from the chain-named canonical report
+# reference every machine record already carries.
+_CANONICAL_REVIEW_CHAIN = "canonical"
+
+# Chain-named canonical report reference: review-{task}-{CHAIN}[-R{n}].md.
+# Exclusions (NOT chain-scoped — these key by the GLOBAL round):
+#   review-{task}-R{n}.md          canonical machine mirror (round-keyed)
+#   review-{task}-R{n}-{slug}.md   FIX-314 namespaced reviewer mirror
+# i.e. a path whose segment after the task starts with R<n> is round-keyed,
+# never a chain. Chain slugs are FULLY UPPERCASE by naming convention
+# (DESIGN / RELEASE / CODE-M3 / RELEASE-M3 / CANDIDATE-DESIGN / M3-DESIGN);
+# lowercase tails are reviewer slugs. The lookbehind keeps e.g.
+# "preview-..." from matching as a review- reference.
+_REVIEW_CHAIN_REPORT_ROUND_RE = re.compile(
+    r"(?<![A-Za-z0-9-])review-([A-Z]+-\d+)-(.+?)-R(\d+)\.md")
+_REVIEW_CHAIN_REPORT_BARE_RE = re.compile(
+    r"(?<![A-Za-z0-9-])review-([A-Z]+-\d+)-([^.]+)\.md")
+_REVIEW_CHAIN_SLUG_RE = re.compile(r"^[A-Z0-9]+(?:-[A-Z0-9]+)*$")
+_REVIEW_CHAIN_ROUND_TAIL_RE = re.compile(r"^R\d+")
+
+
+def _review_chain_attribution(task_id, text):
+    """FIX-392: derive (chain, chain_round) from chain-named report refs.
+
+    Scans ``text`` (an evidence row or a review-record file body) for
+    ``review-{task}-{CHAIN}[-R{n}].md`` references of THIS task and returns
+    the first valid attribution ``(chain_slug, chain_round)`` — chain_round
+    is 0 for the bare (round-less) report name, mirroring the C6 convention
+    (bare = R0). Returns ``(None, None)`` when nothing qualifies: the caller
+    then files the record under the canonical chain, which reproduces the
+    task-global judgment exactly (zero-drift backward compatibility).
+
+    Conservative by construction: a different task's reference, a lowercase
+    slug (reviewer namespace), or a round-keyed name never attributes a
+    chain — an unattributable record must not silently change the fuse
+    domain.
+    """
+    if not task_id or not text:
+        return (None, None)
+    text = str(text)
+    for regex, has_round in ((_REVIEW_CHAIN_REPORT_ROUND_RE, True),
+                             (_REVIEW_CHAIN_REPORT_BARE_RE, False)):
+        for m in regex.finditer(text):
+            if m.group(1) != task_id:
+                continue
+            slug = m.group(2)
+            if not _REVIEW_CHAIN_SLUG_RE.match(slug):
+                continue
+            if _REVIEW_CHAIN_ROUND_TAIL_RE.match(slug):
+                continue
+            return (slug, int(m.group(3)) if has_round else 0)
+    return (None, None)
+
+
+def _chain_fuse_segments(chain_rounds):
+    """FIX-392: split a chain's rounds into V3-judged escalation segments.
+
+    M7.4 step 4.6: ``BLOCKED`` is a chain-closing terminal (✗ → escalation).
+    Rounds recorded AFTER a BLOCKED round therefore cannot belong to the
+    closed engagement — they are a post-escalation re-engagement and restart
+    the round count (REL-080 shape: escalation fired at R3, the approved
+    re-review must not re-report the already-honored fuse). Returns
+    ``[(segment_max_local_round, terminal_conclusion), ...]`` — one entry
+    per segment, in chain order. A chain without a BLOCKED round yields a
+    single segment whose local rounds equal its recorded rounds (zero drift
+    from the pre-FIX-392 task-global judgment).
+    """
+    segments = []
+    base = 0
+    max_local = None
+    terminal = None
+    for rnd in sorted(chain_rounds):
+        conclusion = chain_rounds[rnd]
+        local = rnd - base
+        if max_local is None or local > max_local:
+            max_local = local
+            terminal = conclusion
+        if conclusion == "BLOCKED":
+            segments.append((max_local, terminal))
+            base = rnd + 1
+            max_local = None
+            terminal = None
+    if max_local is not None:
+        segments.append((max_local, terminal))
+    return segments
+
+
 def _build_review_sequence(review_entries, legacy_files=None):
     """Build per-task_id ordered review sequences from raw entry dicts.
 
@@ -1928,6 +2025,15 @@ def _build_review_sequence(review_entries, legacy_files=None):
     current-format contribution to a round always breaks the provably-
     historical classification (conservative: the historical downgrade only
     survives when EVERY contribution to the round is historical-shaped).
+
+    FIX-392: each sequence additionally carries a ``chains`` view keyed by
+    the composite round key (task → chain → round): entry["chain"] /
+    entry["chain_round"] (read-side derivation — see
+    ``_review_chain_attribution``) file each round under its review chain;
+    unattributed rounds fall under the canonical chain, which reproduces the
+    task-global judgment exactly. V3 (the only chain-sensitive rule)
+    consumes this view; every other rule keeps reading the task-global
+    ``rounds`` table, so the composite key changes nothing else.
     """
     _resolve_shared()
     sequences = {}
@@ -1952,13 +2058,35 @@ def _build_review_sequence(review_entries, legacy_files=None):
             seq = sequences.setdefault(task_ref, {"rounds": {}, "max_round": -1,
                                                   "has_unknown_legacy": True,
                                                   "naming_migrated": False,
-                                                  "min_evidence_date": None})
+                                                  "min_evidence_date": None,
+                                                  "chains": {}})
             seq["has_unknown_legacy"] = True
             continue
         seq = sequences.setdefault(task_id, {"rounds": {}, "max_round": -1,
                                              "has_unknown_legacy": False,
                                              "naming_migrated": False,
-                                             "min_evidence_date": None})
+                                             "min_evidence_date": None,
+                                             "chains": {}})
+        # FIX-392: chain attribution. An explicit entry field wins (fixture
+        # path); otherwise the collector pre-derived it the same way. No
+        # attribution → canonical chain → task-global judgment (unchanged).
+        entry_chain = entry.get("chain")
+        if entry_chain is None:
+            chain_key, chain_round = _CANONICAL_REVIEW_CHAIN, round_n
+        else:
+            chain_key = str(entry_chain)
+            raw_chain_round = entry.get("chain_round")
+            chain_round = (round_n if raw_chain_round is None
+                           else int(raw_chain_round))
+        chain_seq = seq["chains"].setdefault(
+            chain_key, {"rounds": {}, "max_round": -1})
+        existing_chain_c = chain_seq["rounds"].get(chain_round)
+        if existing_chain_c is None or (
+                existing_chain_c not in _REVIEW_TERMINAL_CONCLUSIONS
+                and conclusion in _REVIEW_TERMINAL_CONCLUSIONS):
+            chain_seq["rounds"][chain_round] = conclusion
+        if chain_round > chain_seq["max_round"]:
+            chain_seq["max_round"] = chain_round
         if round_n in seq["rounds"]:
             # Duplicate round — keep the most-terminal conclusion.
             existing = seq["rounds"][round_n]["conclusion"]
@@ -1987,7 +2115,11 @@ def _build_review_sequence(review_entries, legacy_files=None):
                                           "round_explicit": bool(_REVIEW_ID_RE.match(raw_id)
                                                                  and _REVIEW_ID_RE.match(raw_id).group(2)),
                                           "date": seq["rounds"][round_n].get("date"),
-                                          "source_format": seq["rounds"][round_n].get("source_format")}
+                                          "source_format": seq["rounds"][round_n].get("source_format"),
+                                          "chain": seq["rounds"][round_n].get(
+                                              "chain", _CANONICAL_REVIEW_CHAIN),
+                                          "chain_round": seq["rounds"][round_n].get(
+                                              "chain_round", round_n)}
         else:
             m = _REVIEW_ID_RE.match(raw_id)
             round_explicit = bool(m and m.group(2) is not None)
@@ -1995,7 +2127,9 @@ def _build_review_sequence(review_entries, legacy_files=None):
                                       "blocker_evidence": blocker_evidence,
                                       "round_explicit": round_explicit,
                                       "date": parsed_date,
-                                      "source_format": source_format}
+                                      "source_format": source_format,
+                                      "chain": chain_key,
+                                      "chain_round": chain_round}
         seq["max_round"] = max(seq["max_round"], round_n)
         # Track naming migration + earliest evidence date for the V2 historical
         # exemption (FIX-174 R1 P0-2). A round-0 entry is "bare" when its id
@@ -2022,7 +2156,8 @@ def _build_review_sequence(review_entries, legacy_files=None):
         seq = sequences.setdefault(task_ref, {"rounds": {}, "max_round": -1,
                                               "has_unknown_legacy": False,
                                               "naming_migrated": False,
-                                              "min_evidence_date": None})
+                                              "min_evidence_date": None,
+                                              "chains": {}})
         seq["has_unknown_legacy"] = True
 
     return sequences
@@ -2298,26 +2433,57 @@ def check_review_closure(review_sequence=None, plan_tracker_completed=None,
         # fuse breach past MAX_ROUNDS is a more specific / actionable verdict
         # than the generic NEEDS_CHANGE-non-terminal signal (both apply, but
         # the fix is escalation to BLOCKED, not just re-spawning).
-        if max_round > REVIEW_MAX_ROUNDS:
-            if terminal == "NEEDS_CHANGE":
-                result["violations"].append({
-                    "rule": "V3",
-                    "task_id": task_id,
-                    "reason": f"round {max_round} > fuse {REVIEW_MAX_ROUNDS} and "
-                              f"R{max_round}=NEEDS_CHANGE — must escalate to BLOCKED",
-                })
-                continue
-            elif terminal in _REVIEW_APPROVAL_CONCLUSIONS:
-                # C5: round>3 APPROVED only allowed with explicit "接受降级"
-                # escalation decision. We cannot see escalation here, so WARN.
-                result["warnings"].append({
-                    "rule": "V3",
-                    "task_id": task_id,
-                    "reason": f"round {max_round} > fuse {REVIEW_MAX_ROUNDS} but "
-                              f"R{max_round}=APPROVED — possible marginal pass, "
-                              f"confirm escalation accepted degraded",
-                })
-                # fall through to V4 traceability check
+        #
+        # FIX-392 (DEC-242③): the fuse is judged per review CHAIN — composite
+        # key (task, chain, round) — not on the task-global round counter.
+        # Multiple chains of one task (design/release/code half-plane chains)
+        # share the global REVIEW-{task}-R{n} numbering, so a chain's rounds
+        # land on inflated global numbers and the task-global judgment
+        # reported keying artifacts (REL-086③: "global R4 > fuse 3" — the
+        # release half-plane chain's chain-local R0/R2; the chain's real NC
+        # rounds sat inside the fuse). A recorded BLOCKED closes the chain
+        # (M7.4 step 4.6); rounds after it restart the count
+        # (_chain_fuse_segments — REL-080 escalation shape). Unattributed
+        # rounds fall under the canonical chain, which reproduces the
+        # task-global judgment exactly (zero drift for every pre-FIX-392
+        # fixture and task).
+        v3_violations = []
+        v3_warnings = []
+        for chain_key in sorted(seq["chains"]):
+            chain_seq = seq["chains"][chain_key]
+            for seg_max, seg_terminal in _chain_fuse_segments(
+                    chain_seq["rounds"]):
+                if seg_max <= REVIEW_MAX_ROUNDS:
+                    continue
+                chain_ctx = ("" if chain_key == _CANONICAL_REVIEW_CHAIN
+                             else "[chain {0}] ".format(chain_key))
+                if seg_terminal == "NEEDS_CHANGE":
+                    v3_violations.append({
+                        "rule": "V3",
+                        "task_id": task_id,
+                        "reason": f"{chain_ctx}round {seg_max} > fuse "
+                                  f"{REVIEW_MAX_ROUNDS} and "
+                                  f"R{seg_max}=NEEDS_CHANGE — must escalate "
+                                  "to BLOCKED",
+                    })
+                elif seg_terminal in _REVIEW_APPROVAL_CONCLUSIONS:
+                    # C5: round>3 APPROVED only allowed with explicit "接受降级"
+                    # escalation decision. We cannot see escalation here, so
+                    # WARN.
+                    v3_warnings.append({
+                        "rule": "V3",
+                        "task_id": task_id,
+                        "reason": f"{chain_ctx}round {seg_max} > fuse "
+                                  f"{REVIEW_MAX_ROUNDS} but "
+                                  f"R{seg_max}=APPROVED — possible marginal "
+                                  "pass, confirm escalation accepted degraded",
+                    })
+        if v3_violations:
+            result["violations"].extend(v3_violations)
+            continue
+        result["warnings"].extend(v3_warnings)
+        # fall through to V4 traceability check (V3 APPROVED warnings never
+        # blocked V1/V4/V5/V6 — preserved)
 
         # V1: terminal state legality. The highest round's conclusion must be
         # an approved state or BLOCKED, UNLESS the task type is routing-exempt (—).
@@ -2797,6 +2963,11 @@ def _collect_live_review_sequences():
                 task_id, _round = _normalize_review_round(cid)
                 if task_id is None:
                     continue
+                # FIX-392: read-side chain attribution from the chain-named
+                # canonical report reference in the row (write side stays
+                # task+round; nothing here widens the row contract).
+                chain, chain_round = _review_chain_attribution(
+                    task_id, stripped)
                 review_entries.append({
                     "id": cid,
                     "task_ref": task_id,
@@ -2812,6 +2983,8 @@ def _collect_live_review_sequences():
                     "source_format": (
                         "machine" if REVIEW_MACHINE_ROW_MARKER in stripped
                         else "unknown"),
+                    "chain": chain,
+                    "chain_round": chain_round,
                 })
 
     # .governance/review-*.md files.
@@ -2834,6 +3007,7 @@ def _collect_live_review_sequences():
             # Read conclusion from file content.
             conclusion = "UNKNOWN"
             source_format = "unknown"
+            fc = ""  # FIX-392: stays bound when the read fails (attribution below)
             try:
                 fc = rf.read_text(encoding="utf-8")
                 conclusion = _extract_review_conclusion_from_text(fc)
@@ -2856,12 +3030,19 @@ def _collect_live_review_sequences():
             except (IOError, OSError):
                 blocker_evidence = _parse_unresolved_blockers_fields([])
             cid = f"REVIEW-{task_id}-R{round_n}" if round_n else f"REVIEW-{task_id}"
+            # FIX-392: the mirror body carries the canonical chain-named
+            # report reference (``- report:`` line) — same read-side
+            # derivation as the row channel so both channels attribute the
+            # record to the same review chain.
+            chain, chain_round = _review_chain_attribution(task_id, fc)
             review_entries.append({
                 "id": cid,
                 "task_ref": task_id,
                 "conclusion": conclusion,
                 "blocker_evidence": blocker_evidence,
                 "source_format": source_format,
+                "chain": chain,
+                "chain_round": chain_round,
             })
 
     sequences = _build_review_sequence(review_entries, legacy_files=legacy_files)

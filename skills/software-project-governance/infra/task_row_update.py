@@ -156,8 +156,10 @@ from contracts import (  # L0 — consumed read-only, frozen at revision m0-r1
 
 __all__ = [
     "DEFAULT_SCHEMA_VERSION",
+    "REFRESH_ACTION",
     "SCHEMA_VERSION_WINDOW",
     "STATE_CANONICAL_MARKERS",
+    "STALE_PROGRESS_PHRASES",
     "TASK_ROW_UPDATE_RESULT_CODES",
     "WRITER_ID",
     "ExitCode",
@@ -165,10 +167,13 @@ __all__ = [
     "canonical_input_fingerprint",
     "build_candidate_row",
     "detect_row_state",
+    "execute_refresh",
     "execute_update",
+    "find_stale_progress_phrases",
     "inspect_target",
     "locate_task_row",
     "main",
+    "refresh_candidate_row",
     "revision_of",
 ]
 
@@ -191,6 +196,63 @@ DEFAULT_SCHEMA_VERSION = SCHEMA_VERSION_WINDOW.current
 
 STATUS_CELL_OP_SUFFIX_PATTERN = re.compile(r"\s*〔op-[0-9a-f]{32}〕\s*$")
 """Machine-provenance suffix already present on a previously written row."""
+
+_OP_ANCHOR_RE = re.compile(r"〔op-[0-9a-f]{32}〕")
+"""Search-anywhere locator for the ops receipt anchor (FIX-394).
+
+``STATUS_CELL_OP_SUFFIX_PATTERN`` is end-anchored (the flip path strips the
+tail anchor before re-appending); live terminal rows may carry narrative
+brackets AFTER the anchor (FEAT-061's 〔R0 …〕 group), so the refresh surface
+locates the anchor anywhere inside the cell and never assumes it is last.
+"""
+
+_OPEN_PAREN_CHARS = "(（"
+_CLOSE_PAREN_CHARS = ")）"
+
+REFRESH_ACTION = "suffix_refresh"
+"""Receipt ``action`` discriminator for a FIX-394 suffix-alignment write.
+
+Flip receipts carry no ``action`` key (existing ledger rows unchanged); a
+refresh receipt is marked so the ops ledger can distinguish a state flip
+from a terminal-row text alignment at a glance.
+"""
+
+# ── Stale progress-suffix vocabulary (FIX-394) ──────────────────────────────
+
+
+STALE_PROGRESS_PHRASES: Tuple[Tuple[str, str], ...] = (
+    # (word-form, the chain phase it narrates).
+    ("已 lock 待派发", "committed"),
+    ("审查中", "review"),
+    ("待审查", "review"),
+    ("已审查", "approved"),
+    ("开发中", "dev"),
+    ("收尾中", "dev"),
+    ("进行中", "dev"),
+)
+"""Closed vocabulary of STALE mid-flight progress wording (FIX-394).
+
+Facts, not guesses: the four live 0.88 wordings the 13 stale terminal rows
+carry (「已 lock 待派发」×9、「审查中」REL-087、「开发中」REL-088、「收尾中」
+REL-089) plus the chain phases' own word-forms a flip may leave behind
+(「待审查/审查中」review、「已审查」approved、「进行中/开发中/收尾中」dev).
+
+Semantic boundary (deliberate): terminal-state narrative words — 「已发布」
+(REL-086's legitimate release narrative), 「已完成」, 「完成」, 「已交付」 —
+are NEVER in this vocabulary; the refresh clears stale PROGRESS wording, it
+does not erase legitimate history.  Bare English state tokens (``dev``/
+``review``/…) are also deliberately excluded: no live row carries them, and
+a free-text token scan is exactly the B-1 hazard this writer exists to
+avoid.  Extending the vocabulary is a deliberate, test-pinned change.
+"""
+
+_STALE_PHRASE_RES: Tuple[Tuple[str, str, "re.Pattern[str]"], ...] = tuple(
+    (phrase, phase, re.compile(r"[ ]*" + re.escape(phrase) + r"(?=[ ]|$)"))
+    for phrase, phase in STALE_PROGRESS_PHRASES
+)
+"""Compiled per-phrase deleters: leading spaces + phrase, requiring a
+trailing space or end-of-segment (so the separator AFTER the phrase
+survives and neighbours never concatenate)."""
 
 # ── Status-marker vocabulary (writer-owned calibration; M0 froze the state
 #    enum, not the markdown word-forms this table maps them onto) ───────────
@@ -285,6 +347,7 @@ def canonical_input_fingerprint(
     reason: str,
     evidence_refs: Tuple[EvidenceRef, ...],
     schema_version: int,
+    action: Optional[str] = None,
 ) -> str:
     """SHA-256 of the writer's canonical normalized input (contract face 1).
 
@@ -293,23 +356,31 @@ def canonical_input_fingerprint(
     genuine retry of the same request hashes identically even though the
     world moved underneath it (that divergence is what CAS adjudicates, not
     the fingerprint).
+
+    ``action`` (FIX-394): ``None`` (a state flip) keeps the payload — and
+    therefore every fingerprint already on record — byte-identical to the
+    pre-FIX-394 form; a suffix refresh stamps ``action=REFRESH_ACTION`` so
+    a flip and an alignment can never collide on the same operation id.
     """
-    payload = json.dumps(
-        {
-            "operation_id": operation_id,
-            "task_id": task_id,
-            "from": from_state,
-            "to": to_state,
-            "reason": reason,
-            "evidence_refs": [[ref.kind, ref.value] for ref in evidence_refs],
-            "schema_version": schema_version,
-            "record_kind": RECEIPT_RECORD_KIND,
-        },
+    payload = {
+        "operation_id": operation_id,
+        "task_id": task_id,
+        "from": from_state,
+        "to": to_state,
+        "reason": reason,
+        "evidence_refs": [[ref.kind, ref.value] for ref in evidence_refs],
+        "schema_version": schema_version,
+        "record_kind": RECEIPT_RECORD_KIND,
+    }
+    if action is not None:
+        payload["action"] = action
+    canonical = json.dumps(
+        payload,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
     )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 # ── Row parsing / state detection (record-family schema v1) ─────────────────
@@ -400,6 +471,105 @@ def _cell_parts(raw: str) -> Tuple[str, str, str]:
     return raw[:lead], core, raw[len(raw) - trail:]
 
 
+# ── Stale progress-suffix refresh core (FIX-394) ────────────────────────────
+
+
+def _paren_depth_before(text: str, pos: int) -> int:
+    """Parenthesis depth at ``pos`` — half/full-width pairs both count."""
+    depth = 0
+    for ch in text[:pos]:
+        if ch in _OPEN_PAREN_CHARS:
+            depth += 1
+        elif ch in _CLOSE_PAREN_CHARS:
+            if depth > 0:
+                depth -= 1
+    return depth
+
+
+def _refresh_stale_phrases(
+    text: str, to_state: str,
+) -> Tuple[str, Tuple[str, ...]]:
+    """Delete stale progress phrases from paren-free spans of ``text``.
+
+    A terminal flip (``to_state == 'committed'``) clears EVERY stale
+    progress phrase — a terminal row has no in-flight progress left; a
+    non-terminal flip clears only phrases narrating a phase other than the
+    target state, so the row's own phase wording (the narrative chain)
+    survives.  Text inside parentheses — date/narrative brackets — is never
+    touched, and deletion spans never merge neighbouring words (the
+    deleter consumes the leading spaces and requires a trailing space or
+    segment end, so the separator after the phrase survives).
+
+    Returns ``(refreshed_text, removed_phrases)``; ``removed_phrases`` is
+    empty when nothing matched (zero-change detection for the caller).
+    """
+    if to_state == "committed":
+        deleters = _STALE_PHRASE_RES
+    else:
+        deleters = tuple(d for d in _STALE_PHRASE_RES if d[1] != to_state)
+    matches = []  # (start, end, phrase) — phrase kept for the receipt face
+    for phrase, _phase, rx in deleters:
+        for match in rx.finditer(text):
+            if _paren_depth_before(text, match.start()) == 0:
+                matches.append((match.start(), match.end(), phrase))
+    if not matches:
+        return text, ()
+    matches.sort(key=lambda m: (m[0], -m[1]))
+    parts: List[str] = []
+    removed: List[str] = []
+    cursor = 0
+    for start, end, phrase in matches:
+        if start < cursor:  # shadowed by a longer prior match
+            continue
+        parts.append(text[cursor:start])
+        cursor = end
+        if phrase not in removed:
+            removed.append(phrase)
+    parts.append(text[cursor:])
+    return "".join(parts), tuple(removed)
+
+
+def find_stale_progress_phrases(
+    cell_core: str, *, target_state: str,
+) -> Tuple[str, ...]:
+    """Read-only detection: which stale progress phrases does the cell
+    carry (paren-free spans before the ops anchor only)?  Zero matches =
+    the row is already aligned (the alignment surface's no-op criterion).
+    """
+    anchor = _OP_ANCHOR_RE.search(cell_core)
+    scan = cell_core if anchor is None else cell_core[:anchor.start()]
+    found: List[str] = []
+    if target_state == "committed":
+        deleters = _STALE_PHRASE_RES
+    else:
+        deleters = tuple(d for d in _STALE_PHRASE_RES
+                         if d[1] != target_state)
+    for phrase, _phase, rx in deleters:
+        for match in rx.finditer(scan):
+            if _paren_depth_before(scan, match.start()) == 0:
+                found.append(phrase)
+                break
+    return tuple(found)
+
+
+def _refresh_progress_prefix(
+    core: str, to_state: str,
+) -> Tuple[str, Tuple[str, ...]]:
+    """Refresh the stale progress suffix of one status-cell core (FIX-394).
+
+    Scope: BEFORE the ops anchor only.  The anchor itself and any narrative
+    brackets after it (FEAT-061's 〔R0 …〕 group) pass through untouched; a
+    first-hop flip (no anchor yet) treats the whole core as the prefix.
+    Returns ``(refreshed_core, removed_phrases)``.
+    """
+    anchor = _OP_ANCHOR_RE.search(core)
+    if anchor is None:
+        return _refresh_stale_phrases(core, to_state)
+    refreshed, removed = _refresh_stale_phrases(
+        core[:anchor.start()], to_state)
+    return refreshed + core[anchor.start():], removed
+
+
 def build_candidate_row(
     line: str,
     *,
@@ -462,6 +632,11 @@ def build_candidate_row(
                 "build_candidate_row: detected marker for {0!r} vanished "
                 "before the splice (schema_violation)".format(from_state))
         new_core = core[:match.start()] + replacement + core[match.end():]
+    # FIX-394: refresh the stale progress suffix as the new token lands —
+    # a terminal flip leaves NO mid-flight wording behind; a non-terminal
+    # flip keeps the row's own phase wording.  Runs BEFORE the post-splice
+    # re-check so the chain re-reads the final candidate.
+    new_core, _stale_removed = _refresh_progress_prefix(new_core, to_state)
     candidate_cells = list(cells)
     lead, _core, trail = _cell_parts(cells[cell_index])
     candidate_cells[cell_index] = lead + new_core + trail
@@ -1070,6 +1245,413 @@ def execute_update(
         )
 
 
+def refresh_candidate_row(line: str, *, operation_id: str) -> str:
+    """FIX-394 alignment COMPUTE step: refresh one committed terminal row.
+
+    The one-shot alignment surface for rows that are ALREADY at the writer
+    terminal state — ``committed`` has an empty legal-transition tuple, so
+    no flip can ever re-run on them; their stale mid-flight wording can
+    only be fixed in place.  The refresh is surgical and self-verifying:
+
+      1. the row must DETECT as ``committed`` (chain-first, the same
+         detection chain the flip path uses) — any other state is refused:
+         non-terminal rows change state through the governed flip path;
+      2. the status cell must carry EXACTLY ONE ops receipt anchor — an
+         unanchored 「committed …」 display prefix was never written by the
+         governed writer (the B-1 hand-edit class) and is never re-anchored;
+      3. stale progress phrases are cleared from the paren-free span
+         before the anchor (:func:`_refresh_progress_prefix`); the
+         committed token, the date/narrative parentheses, the anchor's
+         position and any brackets after it all survive;
+      4. the anchor is re-stamped to THIS operation's id (the row always
+         names its most recent writer operation — same discipline as a
+         flip); the post-refresh row must STILL detect as ``committed``.
+
+    Every other cell, the cell padding and the line ending are preserved
+    byte-for-byte by construction (the same splice discipline as
+    :func:`build_candidate_row`).
+    """
+    current = detect_row_state(line)
+    if current is None:
+        raise ValueError(
+            "refresh_candidate_row: status cell of the anchored row does "
+            "not match any known state marker (schema_violation: "
+            "record-family v1 vocabulary)")
+    if current != "committed":
+        raise ValueError(
+            "refresh_candidate_row: row is {0!r}, not the terminal state "
+            "'committed' — non-terminal rows change state through the "
+            "governed flip path, never through the alignment surface "
+            "(schema_violation)".format(current))
+    cells = line.split("|")
+    located = _status_cell(cells)
+    if located is None:  # pragma: no cover - detect_row_state found a cell
+        raise ValueError("refresh_candidate_row: status cell vanished")
+    cell_index = located[0]
+    _lead, core, _trail = _cell_parts(cells[cell_index])
+    anchors = list(_OP_ANCHOR_RE.finditer(core))
+    if not anchors:
+        raise ValueError(
+            "refresh_candidate_row: the committed row carries no ops "
+            "receipt anchor 〔op-<32hex>〕 — a cell the governed writer "
+            "never wrote is never re-anchored (B-1 hand-edit class; "
+            "schema_violation: reconcile by hand)")
+    if len(anchors) > 1:
+        raise ValueError(
+            "refresh_candidate_row: ambiguous — {0} ops anchors on one "
+            "status cell; refusing to guess which operation owns the row "
+            "(schema_violation: reconcile by hand)".format(len(anchors)))
+    refreshed_core, _removed = _refresh_progress_prefix(core, "committed")
+    anchor_at = _OP_ANCHOR_RE.search(refreshed_core)
+    if anchor_at is None:  # pragma: no cover - the anchor span is preserved
+        raise ValueError(
+            "refresh_candidate_row: ops anchor lost during refresh "
+            "(schema_violation)")
+    refreshed_core = (
+        refreshed_core[:anchor_at.start()] + "〔" + operation_id + "〕"
+        + refreshed_core[anchor_at.end():])
+    candidate_cells = list(cells)
+    lead, _core, trail = _cell_parts(cells[cell_index])
+    candidate_cells[cell_index] = lead + refreshed_core + trail
+    candidate = "|".join(candidate_cells)
+    # FIX-393 collaboration guard: the refreshed row must STILL satisfy
+    # the writer-terminal criterion the three parsers key on.
+    reread = detect_row_state(candidate)
+    if reread != "committed":
+        raise ValueError(
+            "refresh_candidate_row: post-refresh re-check read {0!r}, "
+            "expected 'committed' — refusing to write a row the parsers "
+            "would no longer recognise as terminal (schema_violation)"
+            .format(reread))
+    return candidate
+
+
+def execute_refresh(
+    *,
+    target: Path,
+    task_id: str,
+    reason: str,
+    evidence_refs: Tuple[EvidenceRef, ...] = (),
+    operation_id: Optional[str] = None,
+    expected_revision: Optional[int] = None,
+    schema_version: int = DEFAULT_SCHEMA_VERSION,
+    ledger: Optional[Path] = None,
+    now_fn=None,
+) -> WriterResult:
+    """One governed suffix-alignment write (FIX-394), five-step flow.
+
+    The alignment twin of :func:`execute_update`: same lock/CAS/replay/
+    atomic-replace/receipt discipline, but the target row is already at the
+    terminal state, so there is no transition to validate — the pre-flight
+    instead proves the row IS terminal (chain-first ``committed`` + exactly
+    one ops anchor) and carries at least one stale progress phrase.  A row
+    with nothing stale resolves to ``ok`` with nothing written and no
+    receipt (an honest no-effect operation records no effect); a retried
+    operation id replays the original result exactly like a flip.
+
+    The receipt carries ``action=REFRESH_ACTION`` and the removed phrase
+    list, so the ops ledger can audit exactly what wording the alignment
+    cleared.
+    """
+    if now_fn is None:
+        def now_fn():
+            return datetime.now(timezone.utc)
+
+    ledger_path = ledger if ledger is not None else _ledger_path_for(target)
+
+    if operation_id is not None:
+        try:
+            require_operation_id("operation_id", operation_id)
+        except ValueError as exc:
+            return WriterResult(
+                operation_id=new_operation_id(),
+                code="schema_violation",
+                detail="malformed operation id refused (pass --operation-id "
+                       "as 'op-' + 32 hex, or omit it to mint one): {0}"
+                       .format(exc))
+    task_id = task_id.strip()
+    if not task_id:
+        return _validation_result(
+            operation_id, "schema_violation", "task_id must be non-empty")
+    if not SCHEMA_VERSION_WINDOW.supports(schema_version):
+        return _validation_result(
+            operation_id, "schema_version_unsupported",
+            "schema version {0} outside supported window {1}-{2} "
+            "(record family: markdown task-row table v1)".format(
+                schema_version,
+                SCHEMA_VERSION_WINDOW.minimum,
+                SCHEMA_VERSION_WINDOW.current))
+    if operation_id is None:
+        operation_id = new_operation_id()
+    fingerprint = canonical_input_fingerprint(
+        operation_id=operation_id,
+        task_id=task_id,
+        from_state="committed",
+        to_state="committed",
+        reason=reason,
+        evidence_refs=evidence_refs,
+        schema_version=schema_version,
+        action=REFRESH_ACTION,
+    )
+    try:
+        request = WriterRequest(
+            task_id=task_id,
+            expected_revision=expected_revision if expected_revision is not None else 1,
+            target_state="committed",
+            operation_id=operation_id,
+            input_fingerprint=fingerprint,
+            evidence_refs=evidence_refs,
+        )
+    except ValueError as exc:
+        return _validation_result(operation_id, "schema_violation", str(exc))
+
+    try:
+        text = _read_file_text(target)
+    except FileNotFoundError:
+        return _validation_result(
+            operation_id, "cross_record_violation",
+            "target file not found: {0}".format(target))
+    except (OSError, UnicodeDecodeError) as exc:
+        return WriterResult(
+            operation_id=operation_id, code="manual_intervention",
+            detail="target unreadable ({0}): {1}".format(
+                type(exc).__name__, exc))
+
+    try:
+        lock = _write_lock(target)
+    except LockContention as exc:
+        return WriterResult(
+            operation_id=operation_id, code="lock_contention",
+            detail=str(exc))
+    with lock:
+        try:
+            text = _read_file_text(target)
+        except (OSError, UnicodeDecodeError) as exc:
+            return WriterResult(
+                operation_id=operation_id, code="manual_intervention",
+                detail="target unreadable under lock ({0}): {1}".format(
+                    type(exc).__name__, exc))
+        observed = revision_of(text)
+
+        receipts = _read_receipts(ledger_path)
+        stored = next(
+            (r for r in receipts if r.get("operation_id") == operation_id),
+            None)
+        stored_fp = stored.get("input_fingerprint") if stored else None
+        try:
+            decision = decide_operation_replay(stored_fp, fingerprint)
+        except ValueError as exc:
+            return _validation_result(operation_id, "schema_violation",
+                                      str(exc))
+        if decision == "replay":
+            prior = _replayable_result_face(stored)
+            if prior is None:
+                return WriterResult(
+                    operation_id=operation_id, code="manual_intervention",
+                    detail="stored receipt for operation {0} is degenerate "
+                           "(missing or invalid writer_result face) — "
+                           "adjudicate the ledger by hand; nothing was "
+                           "re-executed or written".format(operation_id))
+            return WriterResult(
+                operation_id=operation_id,
+                code=RESULT_OK,
+                new_revision=prior["new_revision"],
+                observed_revision=prior.get("observed_revision"),
+                execution=prior["execution"],
+                detail="replay of operation {0} (original result returned, "
+                       "nothing re-executed)".format(operation_id),
+            )
+        if decision == "conflict":
+            return WriterResult(
+                operation_id=operation_id, code="operation_id_conflict",
+                observed_revision=observed,
+                detail="operation id {0} already recorded with a different "
+                       "input fingerprint — mint a new operation id; a "
+                       "stored result is never reused for a different "
+                       "payload".format(operation_id),
+            )
+
+        if expected_revision is not None and observed != expected_revision:
+            return WriterResult(
+                operation_id=operation_id, code="revision_conflict",
+                observed_revision=observed,
+                detail="content-level CAS: expected_revision {0} != "
+                       "observed {1} — re-judge against the current file"
+                       .format(expected_revision, observed))
+
+        try:
+            row_index, row_line = locate_task_row(text, task_id)
+        except ValueError as exc:
+            return _validation_result(
+                operation_id, "cross_record_violation", str(exc))
+        current = detect_row_state(row_line)
+        if current is None:
+            return _validation_result(
+                operation_id, "schema_violation",
+                "anchored row's status cell matches no known state marker "
+                "(record-family v1; legacy rows need manual triage)")
+        if current != "committed":
+            return _validation_result(
+                operation_id, "schema_violation",
+                "row is {0!r}, not the terminal state 'committed' — the "
+                "alignment surface only refreshes terminal rows; "
+                "non-terminal rows change state through the governed flip "
+                "path".format(current))
+        try:
+            cells = row_line.split("|")
+            cell_index = _status_cell(cells)[0]
+            cell_core = _cell_parts(cells[cell_index])[1]
+        except (IndexError, TypeError):  # pragma: no cover - detected above
+            return _validation_result(
+                operation_id, "schema_violation",
+                "anchored row's status cell vanished (schema_violation)")
+        # F-1 (review-FIX-394-CODE-R0): the anchor-count gate precedes the
+        # stale detection — an ambiguous multi-anchor cell is refused even
+        # when it carries no stale wording, in the SAME classification the
+        # dry-run face reports (check order aligned with _dry_run_refresh);
+        # the no-op short-circuit below must never launder a cell this
+        # surface cannot unambiguously re-anchor.
+        anchor_count = len(_OP_ANCHOR_RE.findall(cell_core))
+        if anchor_count == 0:
+            return _validation_result(
+                operation_id, "schema_violation",
+                "the committed row carries no ops receipt anchor "
+                "〔op-<32hex>〕 — a cell the governed writer never wrote "
+                "is never re-anchored (B-1 hand-edit class; "
+                "schema_violation)")
+        if anchor_count > 1:
+            return _validation_result(
+                operation_id, "schema_violation",
+                "ambiguous — {0} ops anchors on one status cell; refusing "
+                "to guess which operation owns the row "
+                "(schema_violation: reconcile by hand)".format(anchor_count))
+        stale = find_stale_progress_phrases(
+            cell_core, target_state="committed")
+        if not stale:
+            return WriterResult(
+                operation_id=operation_id, code=RESULT_OK,
+                new_revision=observed, observed_revision=observed,
+                execution="succeeded",
+                detail="suffix refresh: row {0} is already aligned (no "
+                       "stale progress wording before the ops anchor) — "
+                       "nothing written, no receipt".format(task_id),
+            )
+        try:
+            candidate_row = refresh_candidate_row(
+                row_line, operation_id=operation_id)
+        except ValueError as exc:
+            return _validation_result(operation_id, "schema_violation",
+                                      str(exc))
+        lines = text.splitlines(keepends=True)
+        original_ending = row_line_ending(lines[row_index])
+        lines[row_index] = candidate_row + original_ending
+        new_text = "".join(lines)
+        new_revision = revision_of(new_text)
+
+        _sweep_stale_temps(target)
+        try:
+            _atomic_write(target, new_text)
+        except OSError as exc:
+            return WriterResult(
+                operation_id=operation_id, code="manual_intervention",
+                detail="atomic replace failed, target untouched ({0}): {1}"
+                       .format(type(exc).__name__, exc))
+
+        timestamp = now_fn().isoformat()
+        receipt = {
+            "record_kind": RECEIPT_RECORD_KIND,
+            "action": REFRESH_ACTION,
+            "schema_version": schema_version,
+            "writer": WRITER_ID,
+            "operation_id": operation_id,
+            "task_id": task_id,
+            "from_state": "committed",
+            "to_state": "committed",
+            "reason": reason,
+            "stale_phrases_removed": list(stale),
+            "timestamp": timestamp,
+            "target_file": str(target),
+            "revision_before": observed,
+            "revision_after": new_revision,
+            "row_before_sha256": hashlib.sha256(
+                row_line.encode("utf-8")).hexdigest(),
+            "row_after_sha256": hashlib.sha256(
+                candidate_row.encode("utf-8")).hexdigest(),
+            "input_fingerprint": fingerprint,
+            "evidence_refs": [
+                {"kind": ref.kind, "value": ref.value,
+                 "validation": ref.validation}
+                for ref in request.evidence_refs
+            ],
+            "writer_result": {
+                "code": RESULT_OK,
+                "new_revision": new_revision,
+                "observed_revision": None,
+                "execution": "succeeded",
+            },
+            "enforcement": "WARN",
+        }
+        try:
+            _append_receipt(ledger_path, receipt)
+        except OSError as exc:
+            return WriterResult(
+                operation_id=operation_id, code="manual_intervention",
+                execution="succeeded",
+                detail="row committed (revision {0}) but receipt append "
+                       "failed ({1}: {2}) — effect_present_without_receipt; "
+                       "adjudicate before further writes".format(
+                           new_revision, type(exc).__name__, exc))
+
+        # Write-after re-read self-check: same parsing schema, plus the
+        # alignment-specific invariants (still terminal, still exactly one
+        # anchor, no stale wording survived).
+        try:
+            reread = _read_file_text(target)
+        except (OSError, UnicodeDecodeError) as exc:
+            return WriterResult(
+                operation_id=operation_id, code="manual_intervention",
+                execution="succeeded",
+                detail="committed (revision {0}) but post-write re-read "
+                       "failed ({1}: {2}) — adjudicate".format(
+                           new_revision, type(exc).__name__, exc))
+        if reread != new_text:
+            return WriterResult(
+                operation_id=operation_id, code="manual_intervention",
+                execution="succeeded",
+                detail="post-write self-check mismatch after committing "
+                       "revision {0}: on-disk content differs from the "
+                       "committed candidate — concurrent writer suspected; "
+                       "adjudicate".format(new_revision))
+        try:
+            _, reread_row = locate_task_row(reread, task_id)
+            reread_state = detect_row_state(reread_row)
+            reread_cells = reread_row.split("|")
+            reread_core = _cell_parts(
+                reread_cells[_status_cell(reread_cells)[0]])[1]
+            reread_stale = find_stale_progress_phrases(
+                reread_core, target_state="committed")
+            reread_anchor_count = len(_OP_ANCHOR_RE.findall(reread_core))
+        except ValueError:
+            reread_state, reread_stale, reread_anchor_count = None, (), 0
+        if (reread_state != "committed" or reread_stale
+                or reread_anchor_count != 1):
+            return WriterResult(
+                operation_id=operation_id, code="manual_intervention",
+                execution="succeeded",
+                detail="post-write self-check after committing revision "
+                       "{0}: refreshed row invariants violated (state "
+                       "{1!r}, stale {2}, anchors {3}) — adjudicate"
+                       .format(new_revision, reread_state, reread_stale,
+                               reread_anchor_count))
+
+        return WriterResult(
+            operation_id=operation_id, code=RESULT_OK,
+            new_revision=new_revision, execution="succeeded",
+            detail="suffix refresh: row {0} aligned ({1} removed; receipt "
+                   "{2})".format(task_id, "、".join(stale), operation_id),
+        )
+
+
 def row_line_ending(line_with_ending: str) -> str:
     """Extract the original line ending of a splitlines(keepends=True) row."""
     for ending in ("\r\n", "\n", "\r"):
@@ -1337,6 +1919,124 @@ def _dry_run(
     return payload
 
 
+def _dry_run_refresh(
+    *,
+    target: Path,
+    task_id: str,
+    reason: str,
+    operation_id: str,
+    schema_version: int,
+    expected_revision: Optional[int] = None,
+) -> Dict[str, Any]:
+    """FIX-394 alignment pre-flight with ZERO writes and ZERO locks.
+
+    Mirrors :func:`execute_refresh`'s checks in order (the same preview
+    discipline as the flip path's ``_dry_run``): a preview verdict is NOT a
+    WriterResult — the execute path re-validates everything under the lock.
+    A row with nothing stale previews ``row_after == row_before`` (the
+    honest zero-change face the execute path resolves as a no-op).
+    """
+    payload: Dict[str, Any] = {
+        "mode": "dry-run",
+        "writes_performed": 0,
+        "lock_acquired": False,
+    }
+    try:
+        text = _read_file_text(target)
+    except FileNotFoundError:
+        payload["would_execute"] = False
+        payload["refusal"] = {
+            "code": "cross_record_violation",
+            "detail": "target file not found: {0}".format(target)}
+        return payload
+    except (OSError, UnicodeDecodeError) as exc:
+        payload["would_execute"] = False
+        payload["refusal"] = {
+            "code": "manual_intervention",
+            "detail": "target unreadable ({0}): {1}".format(
+                type(exc).__name__, exc)}
+        return payload
+    payload["observed_revision"] = revision_of(text)
+
+    refusal: Optional[Dict[str, str]] = None
+    if not SCHEMA_VERSION_WINDOW.supports(schema_version):
+        refusal = {"code": "schema_version_unsupported",
+                   "detail": "schema version {0} outside window {1}-{2}"
+                             .format(schema_version,
+                                     SCHEMA_VERSION_WINDOW.minimum,
+                                     SCHEMA_VERSION_WINDOW.current)}
+    elif (expected_revision is not None
+            and payload["observed_revision"] != expected_revision):
+        refusal = {"code": "revision_conflict",
+                   "detail": "content-level CAS: expected_revision {0} != "
+                             "observed {1}".format(
+                                 expected_revision,
+                                 payload["observed_revision"])}
+    if refusal is None:
+        try:
+            row_index, row_line = locate_task_row(text, task_id)
+            current = detect_row_state(row_line)
+            if current is None:
+                refusal = {"code": "schema_violation",
+                           "detail": "status cell matches no known state "
+                                     "marker (record-family v1)"}
+            elif current != "committed":
+                refusal = {"code": "schema_violation",
+                           "detail": "row is {0!r}, not the terminal "
+                                     "state 'committed' — the alignment "
+                                     "surface only refreshes terminal "
+                                     "rows".format(current)}
+            else:
+                cells = row_line.split("|")
+                cell_core = _cell_parts(
+                    cells[_status_cell(cells)[0]])[1]
+                anchor_count = len(_OP_ANCHOR_RE.findall(cell_core))
+                if anchor_count == 0:
+                    refusal = {"code": "schema_violation",
+                               "detail": "the committed row carries no "
+                                         "ops receipt anchor 〔op-<32hex>〕 "
+                                         "(B-1 hand-edit class; never "
+                                         "re-anchored)"}
+                elif anchor_count > 1:
+                    refusal = {"code": "schema_violation",
+                               "detail": "ambiguous — {0} ops anchors on "
+                                         "one status cell".format(
+                                             anchor_count)}
+                else:
+                    stale = find_stale_progress_phrases(
+                        cell_core, target_state="committed")
+                    if stale:
+                        candidate = refresh_candidate_row(
+                            row_line, operation_id=operation_id)
+                    else:
+                        # Already aligned: the execute path is an honest
+                        # no-op (no re-anchor, no write, no receipt) — the
+                        # preview mirrors that exactly instead of showing
+                        # an anchor swap that would never happen.
+                        candidate = row_line
+                    payload["preview"] = {
+                        "row_index_0based": row_index,
+                        "row_before": row_line,
+                        "row_after": candidate,
+                        "stale_phrases_found": list(stale),
+                        "already_aligned": not stale,
+                    }
+        except ValueError as exc:
+            refusal = {"code": "cross_record_violation", "detail": str(exc)}
+    payload["would_execute"] = refusal is None
+    if refusal is not None:
+        payload["refusal"] = refusal
+    else:
+        payload["preview_result"] = {
+            "operation_id": operation_id,
+            "code": RESULT_OK,
+            "dry_run": True,
+            "detail": "preview only — no lock taken, nothing written; the "
+                      "execute path re-validates everything under the lock",
+        }
+    return payload
+
+
 def add_arguments(parser: argparse.ArgumentParser) -> None:
     """The module-owned option fact source (single source of truth).
 
@@ -1389,6 +2089,14 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--inspect", action="store_true",
                         help="Read-only observation: anchor, state, "
                              "observed_revision (the CAS expectation source)")
+    parser.add_argument("--refresh-suffix", action="store_true",
+                        help="FIX-394 alignment surface: refresh a "
+                             "writer-committed TERMINAL row's status cell "
+                             "(clear stale mid-flight progress wording, "
+                             "re-anchor to this operation, receipt). "
+                             "Refuses non-terminal or unanchored rows; "
+                             "--from/--to do not apply (terminal rows "
+                             "have no outgoing legal transition)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Full pre-flight, zero writes, zero locks; "
                              "prints the candidate row (progressive rollout: "
@@ -1440,6 +2148,64 @@ def _execute(args: argparse.Namespace,
                                 ledger=ledger)
         _emit({"mode": "inspect", **report}, args.json)
         return ExitCode.OK if report.get("found") else ExitCode.VALIDATION
+
+    # FIX-394 alignment surface: terminal-row suffix refresh.  --from/--to
+    # do not apply (committed has no outgoing legal transition) — a usage-
+    # level refusal keeps the flag combinations honest.  Everything else
+    # (CAS, operation id, schema version, ledger, dry-run) behaves exactly
+    # like the flip path.
+    if args.refresh_suffix:
+        if args.from_state is not None or args.to_state is not None:
+            parser.error(
+                "--refresh-suffix is the terminal-row alignment surface: "
+                "--from/--to do not apply (the terminal state has no "
+                "outgoing legal transition); pass --task and --reason "
+                "only")
+        if args.reason is None:
+            parser.error("--reason is required for --refresh-suffix")
+        if args.operation_id is not None:
+            try:
+                require_operation_id("operation_id", args.operation_id)
+            except ValueError as exc:
+                _emit({"mode": "result", "result": {
+                    "operation_id": None, "code": "schema_violation",
+                    "detail": "malformed operation id refused (pass "
+                              "--operation-id as 'op-' + 32 hex, or omit "
+                              "it to mint one): {0}".format(exc),
+                }}, args.json)
+                return ExitCode.VALIDATION
+        operation_id = args.operation_id or new_operation_id()
+        if args.dry_run:
+            payload = _dry_run_refresh(
+                target=target, task_id=args.task, reason=args.reason,
+                operation_id=operation_id,
+                schema_version=args.schema_version,
+                expected_revision=args.expected_revision)
+            _emit({"mode": "dry-run", **payload}, args.json)
+            return ExitCode.OK if payload["would_execute"] \
+                else _disposition_exit_code(payload["refusal"]["code"])
+        result = execute_refresh(
+            target=target, task_id=args.task, reason=args.reason,
+            evidence_refs=refs, operation_id=args.operation_id,
+            expected_revision=args.expected_revision,
+            schema_version=args.schema_version, ledger=ledger)
+        replayed = (result.detail or "").startswith("replay of operation")
+        result_face = {
+            "operation_id": result.operation_id,
+            "code": result.code,
+            "action": REFRESH_ACTION,
+            "new_revision": result.new_revision,
+            "observed_revision": result.observed_revision,
+            "execution": result.execution,
+            "detail": result.detail,
+        }
+        if result.code == RESULT_OK and not replayed \
+                and "already aligned" in (result.detail or ""):
+            result_face["changed"] = False
+        _emit({"mode": "result", "result": result_face}, args.json)
+        if result.code == RESULT_OK:
+            return ExitCode.REPLAY if replayed else ExitCode.OK
+        return _disposition_exit_code(result.code)
 
     # Both remaining modes (dry-run, execute) need the full transition
     # triple; a missing member is a usage-level schema refusal.

@@ -446,6 +446,48 @@ def _parse_task_status(line, status_col=None):
     return status
 
 
+# FIX-393 — writer-terminal recognition (0.89.0). Local mirror of the
+# governed writer's status vocabulary (task_row_update._STATE_MARKER_CHAIN —
+# byte-pinned by tests/test_fix393_writer_terminal_states.py; this module
+# keeps no peer import so it stays standalone-runnable). Terminal ⟺ chain
+# first-hit is ``committed`` (contracts.TASK_TRANSITIONS' only terminal
+# state) AND the ops receipt anchor 〔op-<32hex>〕 is present — display-prefix
+# text is never an authoritative status source. Search-anywhere anchor: live
+# cells may carry narrative brackets after the anchor (FEAT-061).
+_WRITER_STATE_MARKER_CHAIN = (
+    ("completed", re.compile(r"✅\s*完成")),
+    ("blocked", re.compile(r"⛔|BLOCKED")),
+    ("dev", re.compile(r"🔄|进行中")),
+    ("committed", re.compile(r"\bcommitted\b|已提交")),
+    ("approved", re.compile(r"\bapproved\b|已审查")),
+    ("review", re.compile(r"\breview\b|待审查|审查中")),
+    ("triaged", re.compile(r"\btriaged\b|已\s*triage")),
+)
+_WRITER_OP_ANCHOR_RE = re.compile(r"〔op-[0-9a-f]{32}〕")
+
+
+def _writer_chain_state(status):
+    """First hit of the writer's ordered marker chain, or None (unknown)."""
+    for state, pattern in _WRITER_STATE_MARKER_CHAIN:
+        if pattern.search(status):
+            return state
+    return None
+
+
+def _task_status_is_writer_committed(status):
+    """True when a status cell is a writer-committed TERMINAL row (FIX-393).
+
+    The governed writer (task_row_update) is the only sanctioned write path
+    for task rows; its committed flip always appends the ops receipt anchor
+    〔op-<32hex>〕. A cell displaying the word 「committed」 WITHOUT the
+    anchor was not writer-written and is never guessed terminal.
+    """
+    s = str(status or "")
+    if not _WRITER_OP_ANCHOR_RE.search(s):
+        return False
+    return _writer_chain_state(s) == "committed"
+
+
 def _task_status_is_archivable(status):
     """FIX-158: determine whether a task status means the task is completed/archivable.
 
@@ -454,12 +496,30 @@ def _task_status_is_archivable(status):
     设计完成, 实现完成, 发布完成, 已撤回/失效, 调研归档, 审视归档, etc.
     All of these indicate the task is closed and can be archived.
     Open states (进行中, 待启动, 停滞, 阻塞, 待) must NOT be archived.
+    FIX-393: writer-committed terminal rows (ops receipt anchor + the
+    writer's committed token) are archivable too — the 0.88.0 delivered
+    batch (「committed 已 lock 待派发 …〔op-…〕」) matches no legacy
+    closed word-form and was invisible to the archiver. A committed-token
+    cell WITHOUT the anchor fails closed: it is never guessed terminal from
+    its display prefix and stays un-archivable.
     """
     if not status:
         return False
     # Open/pending markers — never archive
     open_markers = ("进行中", "待启动", "停滞", "阻塞", "待决", "待定", "未完成", "TO_BE")
     if any(m in status for m in open_markers):
+        return False
+    # FIX-393: writer-committed terminal rows — the governed writer's ops
+    # receipt anchor + its own marker chain are the closed signal.
+    if _task_status_is_writer_committed(status):
+        return True
+    # FIX-393: a committed-token cell WITHOUT the anchor was not written by
+    # the governed writer — its display prefix is never guessed terminal, so
+    # it is judged ONLY by the explicit closed-marker scan below (which it
+    # must fail: 「committed 审查中」/「已提交 (…)」 match no closed marker;
+    # a narrative 已发布/已完成 word-form after the committed prefix would
+    # otherwise be misread by that scan).
+    if _writer_chain_state(status) == "committed":
         return False
     # Closed/delivered markers — archivable
     closed_markers = (

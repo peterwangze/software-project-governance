@@ -10570,11 +10570,45 @@ def _w7_terminal_assertion_positions(text):
     return positions
 
 
+# FIX-393 — writer-terminal recognition (0.89.0). verify_workflow already
+# imports task_row_update (the governed task-row writer), so the writer's
+# OWN chain object is consumed BY IDENTITY — zero drift by construction (the
+# sibling mirrors in task_priority.py / archive.py are byte-pinned to it by
+# tests/test_fix393_writer_terminal_states.py). Terminal ⟺ chain first-hit
+# is ``committed`` (contracts.TASK_TRANSITIONS' only terminal state) AND the
+# ops receipt anchor 〔op-<32hex>〕 is present on the cell — display-prefix
+# text like 「committed 审查中」 without the anchor is never guessed
+# terminal. Search-anywhere anchor: live cells may carry narrative brackets
+# AFTER the anchor (FEAT-061's trailing 〔R0 …〕 group).
+_WRITER_STATE_MARKER_CHAIN = task_row_update._STATE_MARKER_CHAIN
+_WRITER_OP_ANCHOR_RE = re.compile(r"〔op-[0-9a-f]{32}〕")
+
+
+def _status_is_writer_committed_cell(text):
+    """True when an already-cleaned status cell is a writer-committed
+    TERMINAL row (FIX-393): the writer chain's first hit is ``committed``
+    AND the ops receipt anchor 〔op-<32hex>〕 is present. The anchor is the
+    writer's machine provenance mark; a cell that merely displays the word
+    「committed」 without it was not written by the governed writer (the
+    B-1 hand-edit class) and is never guessed terminal.
+    """
+    if not _WRITER_OP_ANCHOR_RE.search(text):
+        return False
+    for state, pattern in _WRITER_STATE_MARKER_CHAIN:
+        if pattern.search(text):
+            return state == "committed"
+    return False
+
+
 def _status_is_completed_cell(cell):
     """Completed status test for task rows (dogfood ✅ conventions + host text-only).
 
     - Any cell with "未完成"/"待完成" is NOT completed.
     - "已完成" → completed (host text-only style).
+    - FIX-393: a writer-committed terminal cell (:func:
+      `_status_is_writer_committed_cell` — ops receipt anchor + the writer
+      chain's committed token, never the display prefix) → completed. The
+      未完成/待完成 veto below outranks it (conservative narrative guard).
     - Leading ``✅`` (dogfood) → completed unless the cell carries an explicit
       active marker (未完成/待完成/进行中/待执行, plus the ⏳/🔄 emoji per
       FIX-291 W-7 — a mixed chain is judged by its trailing state below).
@@ -10594,6 +10628,11 @@ def _status_is_completed_cell(cell):
     if "未完成" in text or "待完成" in text:
         return False
     if "已完成" in text:
+        return True
+    # FIX-393: writer-committed terminal rows — governed-writer authority
+    # (the ops receipt anchor + the writer's own marker chain by identity),
+    # never the display-prefix text.
+    if _status_is_writer_committed_cell(text):
         return True
     # Dogfood cells may carry a transition chain ("⏳ 等待 → ✅ 完成"): any ✅
     # in the status cell marks a delivered endpoint — UNLESS an active marker

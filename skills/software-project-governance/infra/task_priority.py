@@ -188,16 +188,87 @@ _ACTIVE_STATUS_HINTS = {
 }
 
 
+# FIX-393 — writer-terminal recognition (0.89.0).
+#
+# task_row_update.py (0.86.0 M0 batch-1) is the ONLY sanctioned write path
+# for plan-tracker task rows, and contracts.TASK_TRANSITIONS makes
+# ``committed`` the ONLY terminal state (empty legal-transition tuple).
+# A row flipped by the writer carries its status token from the writer's
+# ordered, mutually-exclusive marker chain AND the ops receipt anchor
+# 〔op-<32hex>〕 (task_row_update DoD 9 machine provenance). That
+# combination — NOT the display prefix text — is the authoritative terminal
+# signal: the live 0.88.0 delivered batch (「committed 已 lock 待派发
+# …〔op-…〕」 / 「committed 已发布 …〔op-…〕」) carries no ✅ and no
+# completion word, so the pre-FIX-393 ✅-only rule re-recommended delivered
+# tickets (FEAT-060/REL-086/REL-087) and mis-blocked their dependents
+# (FEAT-061/064/063/385).
+#
+# Local mirror discipline (same pattern as _TASK_FAMILY_PREFIXES being a
+# local copy of the archive.py allow-list): this module stays pure-stdlib
+# with no peer coupling, so the writer's chain is mirrored verbatim below;
+# a sync guard pins the mirror to ``task_row_update._STATE_MARKER_CHAIN``
+# byte-for-byte (tests/test_fix393_writer_terminal_states.py).
+_WRITER_STATE_MARKER_CHAIN = (
+    ("completed", re.compile(r"✅\s*完成")),
+    ("blocked", re.compile(r"⛔|BLOCKED")),
+    ("dev", re.compile(r"🔄|进行中")),
+    ("committed", re.compile(r"\bcommitted\b|已提交")),
+    ("approved", re.compile(r"\bapproved\b|已审查")),
+    ("review", re.compile(r"\breview\b|待审查|审查中")),
+    ("triaged", re.compile(r"\btriaged\b|已\s*triage")),
+)
+# The ops receipt anchor the writer appends to every flipped row's status
+# cell. Search-anywhere (NOT end-anchored): a live cell may carry further
+# narrative brackets AFTER the anchor (FEAT-061's trailing 〔R0 …〕 group).
+_WRITER_OP_ANCHOR_RE = re.compile(r"〔op-[0-9a-f]{32}〕")
+
+
+def _writer_chain_state(status_cell: str):
+    """First hit of the writer's ordered marker chain over a status cell.
+
+    Mirrors ``task_row_update.detect_row_state``'s chain discipline (first
+    hit wins; the fixed order disambiguates compound cells — e.g. the live
+    「committed 审查中 …」 is ``committed``, not ``review``). Returns the
+    state name, or None when nothing matches (unknown → never guessed).
+    """
+    for state, pattern in _WRITER_STATE_MARKER_CHAIN:
+        if pattern.search(status_cell):
+            return state
+    return None
+
+
+def _status_is_writer_committed(status_cell: str) -> bool:
+    """True when the cell is a writer-committed TERMINAL row (FIX-393).
+
+    Terminal ⟺ the writer chain first-hit is ``committed`` (the
+    contracts.TASK_TRANSITIONS terminal state) AND the ops receipt anchor
+    〔op-<32hex>〕 is present. The anchor is the writer's machine
+    provenance mark: a cell that merely displays the word 「committed」
+    without it was not written by the governed writer (the B-1 hand-edit
+    class) and is never guessed terminal — display-prefix text is not an
+    authoritative status source.
+    """
+    s = str(status_cell or "")
+    if not _WRITER_OP_ANCHOR_RE.search(s):
+        return False
+    return _writer_chain_state(s) == "committed"
+
+
 def _status_is_completed(status_cell: str) -> bool:
     """Return True if the status cell indicates the task is completed.
 
-    Completed = the cell contains the ✅ emoji. This is the single reliable
-    signal across all observed plan-tracker status variants (✅ 完成 / ✅ 已交付 /
-    ✅ 已发布 / ✅ 代码完成 / ✅ 设计完成 / ✅ ACCEPTED / etc.). Any cell without ✅
-    is treated as active (pending / blocked / in-progress / paused / stopped),
-    which means the task still blocks its dependents.
+    Completed = the cell contains the ✅ emoji (every hand-written-era
+    variant: ✅ 完成 / ✅ 已交付 / ✅ 已发布 / ✅ 代码完成 / ✅ ACCEPTED /
+    etc.) OR the cell is a writer-committed terminal row
+    (:func:`_status_is_writer_committed` — FIX-393: the governed writer's
+    committed token + ops receipt anchor, e.g. the live 0.88.0
+    「committed 已 lock 待派发 …〔op-…〕」 batch, which carries no ✅).
+    Any other cell is treated as active (pending / blocked / in-progress /
+    paused / stopped / a display-prefix committed WITHOUT the anchor), which
+    means the task still blocks its dependents.
     """
-    return _COMPLETED_EMOJI in status_cell
+    return (_COMPLETED_EMOJI in status_cell
+            or _status_is_writer_committed(status_cell))
 
 
 # Third-class status filter (FIX-237.2 / ADR-017 §4.4 P1-3).
@@ -297,6 +368,11 @@ def _status_is_candidate_eligible(status_cell: str) -> bool:
     if s.startswith("⏳"):
         return True
     if s.startswith(tuple(_NON_CANDIDATE_MARKERS)):
+        return False
+    if _status_is_writer_committed(s):
+        # FIX-393 defense-in-depth (mirrors the ✅ branch): writer-terminal
+        # rows are completed upstream by _status_is_completed and never
+        # reach this predicate.
         return False
     if _status_is_terminal_word(s):
         # FIX-288 ⑦: non-✅ terminal wording (completion-word forms like the

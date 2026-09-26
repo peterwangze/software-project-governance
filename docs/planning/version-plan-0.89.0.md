@@ -25,7 +25,7 @@
 | 3 | FIX-390 | P2 | **Check 18/18b 结构化状态判据**（REL-089 条件②消解票）——检查器改读 basis 列+机器凭证 marker 而非 description 列显示前缀。验收 = 0.88 例外两行（EVD-1140/EVD-1164）红→绿活体 + committed/✅/未知三态回归 + 豁免面差分归因 + 9-cell 列数契约零触碰 | `depends_on=[]` | `verify_workflow.py`、`checks/evidence_domain.py` | TRIAGE-FIX-390（机录 2026-09-25 M-5）；DEC-241；REL-089 报告 |
 | 4 | FIX-391 | P2 | **closure journal 版本感知读取器**（REL-089 条件③消解票）——未知事件类型的闭包禁 resume/finalize（机器门禁替代运行手册）；路径 B backport 候选。验收 = 版本感知读取 + 0.87 兼容矩阵收口 + 红绿测试 | `depends_on=[]` | `closure_chain.py` | TRIAGE-FIX-391（机录 2026-09-25 M-5）；REL-089 ③；rollback §8 |
 | 5 | FIX-392 | P2 | **Check 30 复合键判据**——review 轮次键控修复（task+chain+round 复合键+链归属字段+V3 判定改链内轮次）。验收 = V3×5 例外消解（全局 R4 伪熔断不再误报）+ 判据回归 | `depends_on=[]` | `verify_workflow.py` | TRIAGE-FIX-392（机录 2026-09-25 M-5）；DEC-242；R3 报告 N1 |
-| 6 | FEAT-065 | P2 | **FEAT-045 P-a 落地**——标准链锁腿 locks-release 真释放升级（替代 TTL 收缩）+ acquire TTL 判定面 + 三处 no locks-release 过时披露勘正。验收 = 真释放接线 + TTL 判定 + 红绿测试 + 同文件串行红线保持 | `depends_on=[FEAT-045]`（0.88 已交付——满足） | `closure_chain.py`、`tests/test_closure_chain.py` | TRIAGE-FEAT-065（机录 2026-09-25）；EVD-1159 移交提案 P-a |
+| 6 | FEAT-065 | P2 | **FEAT-045 P-a 落地（DEC-248 验收拆分后范围）**——标准链锁腿 locks-release 真释放升级（替代 TTL 收缩：shrink-locks→release-locks）+ 三处 no locks-release 过时披露勘正；acquire TTL 判定面拆出至 FEAT-066（0.90 池）。验收 = 真释放接线 + task_locks_released 后置条件 gate（任务索引+文件锁归属双面、状态不可读 fail-closed）+ 红绿测试（八项最小集）+ 四红线保持（释放前同文件互斥/只释放本任务锁/释放后不改受锁文件/提交串行隔离）；中断遗留锁仍依赖人工恢复（受控流程）——发布验证分别演示两面 | `depends_on=[FEAT-045]`（0.88 已交付——满足） | `closure_chain.py`、`tests/test_closure_chain.py`（锁面不变——DEC-248①） | TRIAGE-FEAT-065（机录 2026-09-25）；EVD-1159 移交提案 P-a；DEC-248 |
 
 **批次排布建议（依据 triage files/conflicts 机录——同文件面串行）**：
 

@@ -75,6 +75,10 @@ _SHARED_NAMES = (
     "_current_release_impact_entries",
     "_extract_structured_fact_json",
     "_validate_structured_fact_payload",
+    # FIX-390: DEC-168 machine row-family credential predicate (Check 18b
+    # machine-attestation face) — consumed from verify_workflow by identity,
+    # never re-stated here (FIX-292 single-shape-source lesson).
+    "_row_has_governance_store_machine_credential",
 )
 
 
@@ -316,7 +320,19 @@ def check_evidence_quality():
 
 
 def check_fact_grounding():
-    """FIX-080: Check current product-code evidence is grounded in facts."""
+    """FIX-080: Check current product-code evidence is grounded in facts.
+
+    FIX-390 (DEC-241 消解): the fact judgment reads the structured basis
+    column (parts[5]) as the fallback surface. The DEC-168 machine
+    row-family contract (``governance_store._build_evidence_row``) lands the
+    fact basis in that independent column, so contract-compliant machine rows
+    no longer false-FAIL on a description-only read (live: EVD-1140/EVD-1164,
+    the DEC-241 2×2 exception face). The description column keeps priority —
+    hand-era rows are judged exactly as before (向后兼容).
+
+    The ungrounded-claim scan covers BOTH surfaces: whatever text carries
+    the fact basis is held to the same grounding standard (不误放行).
+    """
     _resolve_shared()
     result = {
         "entries": [],
@@ -325,7 +341,12 @@ def check_fact_grounding():
 
     for entry in _current_release_impact_entries():
         desc = entry["description"]
+        basis_text = entry.get("fact_basis", "")
         fact_match = FACT_BASIS_RE.search(desc)
+        fact_source = "description"
+        if fact_match is None and basis_text:
+            fact_match = FACT_BASIS_RE.search(basis_text)
+            fact_source = "basis-column"
         fact_text = fact_match.group(1).strip() if fact_match else ""
         fact_len = len(fact_text)
         issues = []
@@ -341,6 +362,8 @@ def check_fact_grounding():
             result["pass"] = False
 
         speculative_match = UNGROUNDED_CLAIM_RE.search(desc)
+        if speculative_match is None and basis_text:
+            speculative_match = UNGROUNDED_CLAIM_RE.search(basis_text)
         if speculative_match:
             issues.append(f"含未落地推断词: {speculative_match.group(0)}")
             status = "FAIL"
@@ -352,6 +375,7 @@ def check_fact_grounding():
             "has_fact_basis": bool(fact_text),
             "fact_len": fact_len,
             "fact_text": fact_text[:80] + ("..." if fact_len > 80 else ""),
+            "fact_source": fact_source,
             "status": status,
             "issues": issues,
         })
@@ -360,7 +384,19 @@ def check_fact_grounding():
 
 
 def check_structured_evidence():
-    """FIX-083: Check current product-code evidence has machine-readable facts."""
+    """FIX-083: Check current product-code evidence has machine-readable facts.
+
+    FIX-390 (DEC-241 消解): a DEC-168 machine row-family row carries its
+    structured provenance in the writer's own credential marker
+    (``机器写入：governance-store evidence-append op-<32hex>`` — the ops
+    receipt whose operation_id/fingerprint live in the ops ledger, policed
+    by governance-write-guard faces 2/5). When no structured-fact JSON is
+    present, that credential attests the row instead — contract-compliant
+    machine rows no longer false-FAIL (live: EVD-1140/EVD-1164). The JSON
+    path keeps priority and full payload validation; a malformed op id or a
+    foreign writer's marker never attests, and hand-written rows without
+    either keep the strict FAIL (向后兼容；未知不猜).
+    """
     _resolve_shared()
     result = {
         "entries": [],
@@ -369,19 +405,29 @@ def check_structured_evidence():
 
     for entry in _current_release_impact_entries():
         desc = entry["description"]
+        basis_text = entry.get("fact_basis", "")
         raw_json = _extract_structured_fact_json(desc)
+        if not raw_json and basis_text:
+            raw_json = _extract_structured_fact_json(basis_text)
+        # FIX-390: machine-attestation fallback — only when the row carries
+        # NO structured-fact JSON anywhere (a present-but-invalid JSON is
+        # judged on its own defects; the credential never rescues it).
+        machine_attested = False
+        if not raw_json:
+            machine_attested = _row_has_governance_store_machine_credential(
+                entry.get("raw_line", ""))
         issues = []
         status = "PASS"
         payload = None
 
-        if not raw_json:
-            issues.append("缺少 结构化事实: JSON")
-        else:
+        if raw_json:
             try:
                 payload = json.loads(raw_json)
                 issues.extend(_validate_structured_fact_payload(payload))
             except json.JSONDecodeError as exc:
                 issues.append(f"结构化事实 JSON 解析失败: {exc.msg}")
+        elif not machine_attested:
+            issues.append("缺少 结构化事实: JSON")
 
         if issues:
             status = "FAIL"
@@ -391,6 +437,7 @@ def check_structured_evidence():
             "task_id": entry["task_id"],
             "evd_id": entry["evd_id"],
             "has_structured_fact": bool(raw_json),
+            "machine_attested": machine_attested,
             "status": status,
             "issues": issues,
             "commands": len(payload.get("commands", [])) if isinstance(payload, dict) and isinstance(payload.get("commands"), list) else 0,

@@ -12317,13 +12317,17 @@ def _plan_hot_tracker_task_statuses():
     always reads the last cell and cannot see a legacy-row ✅ status).
 
     FIX-376 F-3 刻意分叉 (conservative; DEC-227 unchanged): the exemption
-    predicate stays the narrow ✅-prefix read of this dict — NOT the FIX-292
-    authoritative terminal predicate ``_status_is_completed_cell``. A mixed
-    chain 「🔄 … → ✅ 完成」 is W-7-terminal by that predicate but does not
-    lead with ✅ → stays guarded (no exemption — conservative false-FAIL
-    direction). Widening the exemption face to the authoritative predicate
-    would expand the DEC-227 路线 b exemption semantics and is explicitly
-    not done.
+    predicate stays NARROWER than the FIX-292 authoritative terminal
+    predicate ``_status_is_completed_cell`` — a mixed chain 「🔄 … → ✅ 完成」
+    is W-7-terminal by that predicate but does not lead with ✅ → stays
+    guarded (no exemption — conservative false-FAIL direction). FIX-390
+    (DEC-241 消解, 0.89.0) evolves the exemption face to the three-state
+    structured read :func:`_hot_status_completion_state` — the writer-era
+    terminal (``committed`` + ops anchor, FIX-393 identity) joins the
+    hand-era ✅ prefix — while EVERY other shape (mixed chains, triaged/dev
+    cells with anchors, anchor-less hand-written 「committed」, unknown
+    tokens) keeps the guarded verdict. The F-3 conservative direction is
+    preserved for everything outside those two terminal eras.
     """
     if not SAMPLE_PATH.is_file():
         return {}
@@ -12366,6 +12370,43 @@ def _plan_hot_tracker_task_statuses():
             status = cells[-1].strip()
         statuses[match.group(1)] = status
     return statuses
+
+
+# FIX-390 (DEC-241 消解, 0.89.0) — three-state structured completion read for
+# the Check 16/17/18/18b exemption face. Display prefixes are no longer the
+# only completion authority: the governed writer's own terminal state
+# (``committed`` + ops receipt anchor, FIX-393 criterion consumed BY IDENTITY
+# via :func:`_status_is_writer_committed_cell`) is the machine-era exact
+# analog of the hand-era ✅ prefix (DEC-227 路线 b). States:
+#   "committed" — writer-terminal + 〔op-<32hex>〕 anchor → completed/exempt;
+#   "legacy"    — ✅-led hand-era terminal → completed/exempt (byte-for-byte
+#                 the FIX-371/DEC-227 semantics — S_new ⊇ S_old invariant);
+#   ""          — EVERYTHING else (mixed chains not led by ✅, triaged/dev
+#                 cells with anchors, hand-written 「committed」 without the
+#                 anchor, unknown tokens, empty) → 未知不猜: stays guarded
+#                 (fail-closed; the row is judged on its fact merits instead).
+_HOT_STATUS_STATE_COMMITTED = "committed"
+_HOT_STATUS_STATE_LEGACY = "legacy"
+
+
+def _hot_status_completion_state(status):
+    """Classify a hot-tracker status cell into the FIX-390 three states.
+
+    Returns :data:`_HOT_STATUS_STATE_COMMITTED`, :data:
+    `_HOT_STATUS_STATE_LEGACY` or ``""`` (unknown — never guessed). The
+    committed branch reuses the FIX-393 writer-terminal predicate by
+    identity; a cell that merely displays 「committed」 without the ops
+    anchor was not written by the governed writer (B-1 hand-edit class) and
+    resolves to unknown.
+    """
+    text = _status_clean_cell(status)
+    if not text:
+        return ""
+    if _status_is_writer_committed_cell(text):
+        return _HOT_STATUS_STATE_COMMITTED
+    if text.startswith(_COMPLETED_STATUS_PREFIX):
+        return _HOT_STATUS_STATE_LEGACY
+    return ""
 
 
 def _current_release_task_ids():
@@ -12617,8 +12658,9 @@ def parse_impact_analysis_entries():
     evidence rows. FIX-073: product-code evidence with no standalone impact
     analysis must not make Check 16/17 silently pass with 0 entries.
 
-    FIX-371/DEC-227 路线 b: EVD rows whose task row is ✅-terminal in the hot
-    tracker (historical hand-written-era data) are exempt from the entry set.
+    FIX-371/DEC-227 路线 b: EVD rows whose task row is terminal-complete in
+    the hot tracker (historical hand-written-era ✅ rows; writer-committed
+    rows since FIX-390) are exempt from the entry set.
     Backward-compatible wrapper — returns only the non-exempt entries; use
     parse_impact_analysis_entries_with_exemptions() for the disclosure ledger.
 
@@ -12631,11 +12673,18 @@ def parse_impact_analysis_entries():
 def parse_impact_analysis_entries_with_exemptions():
     """parse_impact_analysis_entries + historical-exemption ledger (FIX-371).
 
-    DEC-227 路线 b: an EVD row whose task row is ✅-terminal in the hot tracker
-    (historical hand-written-era data) is exempt from the Check 16/17 entry
-    set; every exemption is disclosed in the returned ledger — never silent.
-    Rows whose task is active/new or whose ✅-terminal status is unprovable
-    keep zero exemption (fail-closed).
+    DEC-227 路线 b: an EVD row whose task row is terminal-complete in the hot
+    tracker (historical hand-written-era data) is exempt from the Check 16/17
+    entry set; every exemption is disclosed in the returned ledger — never
+    silent. Rows whose task is active/new or whose terminal status is
+    unprovable keep zero exemption (fail-closed).
+
+    FIX-390 (DEC-241 消解): terminal-complete is the three-state structured
+    read :func:`_hot_status_completion_state` — writer-committed terminal
+    cells (ops anchor, FIX-393 identity) join the legacy ✅ prefix; unknown
+    tokens are never guessed. The ✅ face of the ledger is unchanged
+    (S_new ⊇ S_old); the expansion is exactly the writer-committed rows and
+    stays fully disclosed.
 
     Returns (entries, historical_exempted); historical_exempted is a list of
     {evd_id, task_id, status} dicts.
@@ -12649,7 +12698,7 @@ def parse_impact_analysis_entries_with_exemptions():
     completed_hot_task_ids = {
         task_id
         for task_id, status in hot_task_statuses.items()
-        if status.startswith(_COMPLETED_STATUS_PREFIX)
+        if _hot_status_completion_state(status)
     }
     hot_task_ids = _current_release_task_ids() | set(hot_task_statuses)
 
@@ -12705,6 +12754,13 @@ def parse_impact_analysis_entries_with_exemptions():
                     "evd_id": evd_id,
                     "task_id": covered_task_id,
                     "description": description,
+                    # FIX-390: the DEC-168 machine row-family contract lands
+                    # the fact basis in the independent basis column
+                    # (parts[5], governance_store._build_evidence_row
+                    # --basis channel). Surfaced so the Check 18/18b strict
+                    # judgment reads the structured column instead of only
+                    # the description narrative.
+                    "fact_basis": parts[5] if len(parts) > 5 else "",
                     "file_location": file_location,
                     "raw_line": line,
                 })
@@ -12722,8 +12778,9 @@ def check_goal_alignment():
        share a single description by construction and are never compared)
 
     Returns dict with 'has_project_goal', 'entries', 'duplicates', 'pass' and
-    'historical_exempted' (FIX-371 ledger: ✅-terminal hot-tracker rows exempted
-    from the entry set — disclosed, never silent).
+    'historical_exempted' (FIX-371 ledger: terminal-complete hot-tracker rows
+    exempted from the entry set — ✅ prefix, and writer-committed cells since
+    FIX-390; disclosed, never silent).
     """
     result = {
         "has_project_goal": False,
@@ -12816,8 +12873,9 @@ def check_user_impact():
     6. Breaking change: migration guide path does not exist (BLOCKING — if path provided)
 
     Returns dict with 'entries', 'blocking', 'pass' and 'historical_exempted'
-    (FIX-371 ledger: ✅-terminal hot-tracker rows exempted from the entry set
-    — disclosed, never silent).
+    (FIX-371 ledger: terminal-complete hot-tracker rows exempted from the
+    entry set — ✅ prefix, and writer-committed cells since FIX-390;
+    disclosed, never silent).
     """
     USER_VISIBLE_PATTERNS = [
         "CLAUDE.md", "README.md", "CHANGELOG.md",
@@ -15638,7 +15696,7 @@ def _run_full_engine_checks(args):
         print(f"│  [INFO] 项目目标: {project_goal_short}...")
     print(f"│  Impact analysis entries: {len(ga_result['entries'])}")
     ga_exempted = ga_result.get("historical_exempted", [])
-    print(f"│  Historical exempted (FIX-371/DEC-227 ✅-terminal, skipped): {len(ga_exempted)}")
+    print(f"│  Historical exempted (FIX-371/DEC-227 ✅-terminal + FIX-390 writer-committed, skipped): {len(ga_exempted)}")
     for row in ga_exempted[:8]:
         print(f"│    - {row['task_id']} ({row['evd_id']}): {row['status']}")
     if len(ga_exempted) > 8:
@@ -15672,7 +15730,7 @@ def _run_full_engine_checks(args):
     ui_issues = 0
     print(f"│  Impact analysis entries: {len(ui_result['entries'])}")
     ui_exempted = ui_result.get("historical_exempted", [])
-    print(f"│  Historical exempted (FIX-371/DEC-227 ✅-terminal, skipped): {len(ui_exempted)}")
+    print(f"│  Historical exempted (FIX-371/DEC-227 ✅-terminal + FIX-390 writer-committed, skipped): {len(ui_exempted)}")
     for row in ui_exempted[:8]:
         print(f"│    - {row['task_id']} ({row['evd_id']}): {row['status']}")
     if len(ui_exempted) > 8:
@@ -21588,7 +21646,7 @@ def cmd_check_goal_alignment(args):
         print(f"  [INFO] 项目目标: {project_goal_short}...")
     print(f"  Impact analysis entries: {len(result['entries'])}")
     exempted = result.get("historical_exempted", [])
-    print(f"  Historical exempted (FIX-371/DEC-227 ✅-terminal, skipped): {len(exempted)}")
+    print(f"  Historical exempted (FIX-371/DEC-227 ✅-terminal + FIX-390 writer-committed, skipped): {len(exempted)}")
     for row in exempted:
         print(f"    - {row['task_id']} ({row['evd_id']}): {row['status']}")
     if result["entries"]:
@@ -21626,7 +21684,7 @@ def cmd_check_user_impact(args):
     print("=== User Impact Check ===")
     print(f"  Impact analysis entries: {len(result['entries'])}")
     exempted = result.get("historical_exempted", [])
-    print(f"  Historical exempted (FIX-371/DEC-227 ✅-terminal, skipped): {len(exempted)}")
+    print(f"  Historical exempted (FIX-371/DEC-227 ✅-terminal + FIX-390 writer-committed, skipped): {len(exempted)}")
     for row in exempted:
         print(f"    - {row['task_id']} ({row['evd_id']}): {row['status']}")
     if result["entries"]:
@@ -23070,6 +23128,34 @@ _WRITE_GUARD_STATE_TOOL = "governance-write-guard/row-family-reconciliation"
 #  ``（机器写入：governance-store decision-append op-…；schema vN）`` —
 # governance_store._build_evidence_row / _build_decision_row).
 _GOVERNANCE_STORE_MARKER_PREFIX = "机器写入：governance-store"
+
+# FIX-390 (DEC-241 消解, 0.89.0) — the Check 18b machine-attestation
+# credential for DEC-168 machine row-family EVIDENCE rows: the writer's own
+# evidence-append marker with a well-formed op receipt anchor. Consumed, not
+# re-stated (FIX-292 lesson): the prefix comes from the constant above (its
+# drift is bound to really-built rows by the guard tests), and the op-anchor
+# shape mirrors the writer's ``op-<32hex>`` receipt id. Authenticity
+# enforcement (column shape + row-family reconciliation against the ops
+# ledger) lives in governance-write-guard faces 2/5 — Check 18b only consumes
+# the credential shape and never re-implements the ledger check. A marker
+# with a malformed/truncated op id (or a foreign writer's marker) does NOT
+# attest — 未知不猜.
+_EVIDENCE_MACHINE_CREDENTIAL_RE = re.compile(
+    re.escape(_GOVERNANCE_STORE_MARKER_PREFIX)
+    + r"\s+evidence-append\s+op-[0-9a-f]{32}\b"
+)
+
+
+def _row_has_governance_store_machine_credential(raw_line):
+    """True when an evidence-log row carries the DEC-168 machine credential.
+
+    FIX-390 Check 18b input: a row written by ``governance-store
+    evidence-append`` carries its structured provenance (operation id +
+    schema receipt) in the marker inside the basis cell — the machine
+    counterpart of a hand-written structured-fact JSON payload. Row-level
+    search (same granularity as the write-guard face-5 credential scan).
+    """
+    return bool(_EVIDENCE_MACHINE_CREDENTIAL_RE.search(raw_line or ""))
 
 # ops-ledger receipt anchor: task_row_update receipt lines carry the
 # operation id under this key (task_row_update.RECEIPT_RECORD_KIND face).

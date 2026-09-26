@@ -21,7 +21,7 @@
 | # | 票 | 优先级 | 内容与验收判据 | 依赖（triage 机录） | 文件面（triage 机录） | 来源锚 |
 |---|----|--------|---------------|--------------------|----------------------|--------|
 | 1 | FIX-393 | P1 | **任务状态词表收敛**——解析器族识别写入器终态 committed（ops 台账权威状态源）。验收 = task-priority/parse_current_active_tasks/archive 三解析器判据对齐 + 正负测试 + 活体验证零已交付票推荐 | `depends_on=[]` | `task_priority.py`、`verify_workflow.py`、`archive.py` | TRIAGE-FIX-393（机录 2026-09-25）；深检实证 |
-| 2 | FIX-394 | P2 | **终态行文本刷新机制**——task-row-update 落状态 token 时刷新状态列进度后缀 + 13 行一次性数据对齐。验收 = 红绿测试 + 一次性对齐凭证（Coordinator 凭证留痕）+ 披露勘正 | `depends_on=[]` | `task_row_update.py`、`closure_chain.py` | TRIAGE-FIX-394（机录 2026-09-25）；深检实证（ops 收据链完整） |
+| 2 | FIX-394 | P2 | **终态行文本刷新机制**——task-row-update 落状态 token 时刷新状态列进度后缀 + 13 行一次性数据对齐。验收 = 红绿测试 + 一次性对齐凭证（Coordinator 凭证留痕）+ 披露勘正 | `depends_on=[]` | `task_row_update.py`、`closure_chain.py`（**M-3 CODE 勘正 2026-09-26〔P2-2〕：实际 commit 零触碰 closure_chain.py——triage 预报面，实际串行面为 FIX-391→FEAT-065 两票**） | TRIAGE-FIX-394（机录 2026-09-25）；深检实证（ops 收据链完整） |
 | 3 | FIX-390 | P2 | **Check 18/18b 结构化状态判据**（REL-089 条件②消解票）——检查器改读 basis 列+机器凭证 marker 而非 description 列显示前缀。验收 = 0.88 例外两行（EVD-1140/EVD-1164）红→绿活体 + committed/✅/未知三态回归 + 豁免面差分归因 + 9-cell 列数契约零触碰 | `depends_on=[]` | `verify_workflow.py`、`checks/evidence_domain.py` | TRIAGE-FIX-390（机录 2026-09-25 M-5）；DEC-241；REL-089 报告 |
 | 4 | FIX-391 | P2 | **closure journal 版本感知读取器**（REL-089 条件③消解票）——未知事件类型的闭包禁 resume/finalize（机器门禁替代运行手册）；路径 B backport 候选。验收 = 版本感知读取 + 0.87 兼容矩阵收口 + 红绿测试 | `depends_on=[]` | `closure_chain.py` | TRIAGE-FIX-391（机录 2026-09-25 M-5）；REL-089 ③；rollback §8 |
 | 5 | FIX-392 | P2 | **Check 30 复合键判据**——review 轮次键控修复（task+chain+round 复合键+链归属字段+V3 判定改链内轮次）。验收 = V3×5 例外消解（全局 R4 伪熔断不再误报）+ 判据回归 | `depends_on=[]` | `verify_workflow.py` | TRIAGE-FIX-392（机录 2026-09-25 M-5）；DEC-242；R3 报告 N1 |
@@ -33,7 +33,7 @@
 - **批次二（披露面消解——检查器族）**：FIX-390 + FIX-392（同文件 `verify_workflow.py`——串行或分腿审查，防判据互踩）。
 - **批次三（closure 链健康面）**：FIX-391 → FEAT-065（同文件 `closure_chain.py`——FEAT-065 验收含同文件串行红线；FIX-394 的 closure_chain 腿与本批协调时序）。
 
-**批次间全局串行约束（F-1 收口落字——DESIGN-R0）**：`verify_workflow.py` 共面票实为**三票**（FIX-390 / FIX-392 / FIX-393——FIX-393 files 含 verify_workflow.py，triage conflicts 互列）——批次一的 FIX-393 verify_workflow.py 腿与批次二两票**跨批次同文件串行**（派发锁 + 同文件串行红线既有纪律兜底）；M-1R checklist 须为组合②列补充席（覆盖 393 的 verify_workflow.py 腿）。
+**批次间全局串行约束（F-1 收口落字——DESIGN-R0；**M-3 CODE 勘正 2026-09-26〔review-REL-090-CODE-M3 P2-1**〕**：verify_workflow.py 窗口实测**四票共面**——FIX-390/392/393 另加 FIX-395（7795f59，~45 行）+REL-091 六锚面；串行纪律实际未破〔commit 严格串行+M-2 组合 122P 覆盖〕；原「三票」为 triage 快照时点口径**）：`verify_workflow.py` 共面票（FIX-390 / FIX-392 / FIX-393——FIX-393 files 含 verify_workflow.py，triage conflicts 互列）——批次一的 FIX-393 verify_workflow.py 腿与批次二两票**跨批次同文件串行**（派发锁 + 同文件串行红线既有纪律兜底）；M-1R checklist 须为组合②列补充席（覆盖 393 的 verify_workflow.py 腿）。
 
 六票 triage 依赖面全部 unblocked（FEAT-065 依赖 FEAT-045 已于 0.88 交付）。派发锁由 Coordinator 持有（REL-090 expected-new；本任务不操作锁）。
 

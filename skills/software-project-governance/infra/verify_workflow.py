@@ -1660,6 +1660,30 @@ def _status_cell_is_delivered(status):
     return "✅" in status or "已交付" in status or "已完成" in status
 
 
+def _hot_status_cell_is_delivered(status):
+    """Delivered test for Check 28c task rows (FIX-395): the legacy
+    ✅/已交付/已完成 word forms (:func:`_status_cell_is_delivered` — S_old,
+    byte-for-byte) OR the FIX-393 writer-terminal predicate consumed BY
+    IDENTITY (:func:`_status_is_writer_committed_cell` — the governed
+    writer's own chain ``task_row_update._STATE_MARKER_CHAIN`` + the ops
+    receipt anchor; never a fourth mirror). A writer-committed terminal
+    cell (「committed … 〔op-<32hex>〕」) carries none of the legacy
+    literals, so the legacy read alone judged the delivered 0.88.0 release
+    chain (REL-087/088/089) NOT delivered → released_face=False → the
+    roadmap missing-task/overstate pseudo-FAIL cluster (census 20,
+    2026-09-26). Guarded directions preserved: active dev/triaged cells
+    keep the open verdict even when writer-anchored (every writer write
+    carries an anchor — the chain FIRST-HIT must be ``committed``);
+    hand-written 「committed」 without the anchor (B-1 class) and unknown
+    tokens are never guessed terminal (未知不猜). Check 18/18b's narrower
+    FIX-390 three-state exemption face (:func:`_hot_status_completion_state`)
+    is untouched — two faces, two predicates, one FIX-393 authority.
+    """
+    if _status_cell_is_delivered(status):
+        return True
+    return _status_is_writer_committed_cell(_status_clean_cell(status))
+
+
 def _task_id_has_open_status(content, task_id):
     for cells in _find_table_rows_with_cell(content, task_id):
         if len(cells) >= 2 and _normalize_markdown_cell(cells[1]) == task_id:
@@ -1924,12 +1948,16 @@ def _task_statuses_for_hot_source(plan_content, task_id, version=None):
 
 def _hot_task_is_delivered(plan_content, task_id, version=None):
     statuses = _task_statuses_for_hot_source(plan_content, task_id, version=version)
-    return bool(statuses) and any(_status_cell_is_delivered(status) for status in statuses)
+    # FIX-395: writer-committed terminal cells count delivered (FIX-393
+    # criteria by identity) — S_new ⊇ S_old, guarded shapes unchanged.
+    return bool(statuses) and any(_hot_status_cell_is_delivered(status) for status in statuses)
 
 
 def _hot_task_is_open(plan_content, task_id, version=None):
     statuses = _task_statuses_for_hot_source(plan_content, task_id, version=version)
-    return bool(statuses) and any(not _status_cell_is_delivered(status) for status in statuses)
+    # FIX-395: mirror of _hot_task_is_delivered — a writer-committed row no
+    # longer counts open; dev/triaged rows (anchored or not) still do.
+    return bool(statuses) and any(not _hot_status_cell_is_delivered(status) for status in statuses)
 
 
 def _hot_task_ids_for_version(plan_content, version):
@@ -1948,6 +1976,17 @@ def _hot_task_ids_for_version(plan_content, version):
     ``X.Y.Z 或后续`` form) or its 事项 cell opens with the ``发布 <anchor>``
     header form. A bare anchor mention in any other cell (narrative,
     dependency, status) never lifts the released face.
+
+    FIX-395 (version-row mapping semantics — documented, NOT changed): a
+    task whose target cell names a NEWER version still joins ``task_ids``
+    when its narrative mentions the anchor (the bump-source form
+    「V→V+1」, e.g. the live REL-091 row) — existing FIX-339 any-cell
+    recall, deliberately recall-first. The membership only bites through
+    the roadmap enumeration demand, which runs ONLY while ``version`` is
+    unreleased (``not released_face``); once the release face lifts — now
+    writer-committed-aware via :func:`_hot_status_cell_is_delivered` — the
+    enumeration loop is skipped and a swept V+1-target task can no longer
+    FAIL the V roadmap row.
     """
     ids, release_delivered, release_declared = [], False, False
     version_token_re = re.compile(r"(?<![\d.])" + re.escape(version) + r"(?![\d.])")
@@ -1965,7 +2004,7 @@ def _hot_task_ids_for_version(plan_content, version):
             version_token_re.search(normalized[4]) or release_item_re.match(normalized[2])
         ):
             release_declared = True
-            release_delivered = release_delivered or _status_cell_is_delivered(cells[-1])
+            release_delivered = release_delivered or _hot_status_cell_is_delivered(cells[-1])
     return ids, release_delivered, release_declared
 
 

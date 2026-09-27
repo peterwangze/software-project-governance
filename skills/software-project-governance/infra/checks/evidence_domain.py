@@ -67,18 +67,18 @@ _SHARED_NAMES = (
     "GOVERNANCE_CONTEXT_EVIDENCE_TASK_HEADERS",
     "GovernanceDataSource",
     "expand_task_ids",
-    "_context_file",
-    "_context_task",
-    "_extract_task_title_from_line",
-    "_governance_table_cells",
-    "_normalize_priority",
+    "_context_file", "_context_task", "_extract_task_title_from_line",
+    "_governance_table_cells", "_normalize_priority",
     "_current_release_impact_entries",
-    "_extract_structured_fact_json",
-    "_validate_structured_fact_payload",
+    "_extract_structured_fact_json", "_validate_structured_fact_payload",
     # FIX-390: DEC-168 machine row-family credential predicate (Check 18b
-    # machine-attestation face) — consumed from verify_workflow by identity,
-    # never re-stated here (FIX-292 single-shape-source lesson).
+    # machine-attestation face) — by identity, never re-stated (FIX-292).
     "_row_has_governance_store_machine_credential",
+    # FEAT-069 (ADR-RB-2): the RB-2 faces extend the Check 18d
+    # product_success_contract pathway — identity reuse, never re-stated.
+    # (Block kept line-neutral: the R7 regen pins this file's vw-site lines.)
+    "_active_execution_packet_tasks", "_load_execution_packets",
+    "_validate_product_success_contract",
 )
 
 
@@ -624,8 +624,17 @@ def check_evidence_binding_drift():
             except (OSError, UnicodeDecodeError):
                 content = None
             if content is not None:
+                # R0 F-2 (review-FEAT-068-CODE-R0; tightened in FEAT-069):
+                # the old ``\b`` tail could false-bind ACROSS version
+                # segments (runtime ver "0.65" vs row MIGRATION-0.65.0 →
+                # "\b" matched before the "." and evidence_binding_missing
+                # was silently skipped — fail-open direction). Anchor the
+                # stamp to its FOLLOWING delimiter (table pipe / whitespace
+                # / end-of-line) so a strict prefix of a longer row version
+                # never binds.
                 marker = re.compile(
-                    r"^\|\s*MIGRATION-" + re.escape(migration_version) + r"\b"
+                    r"^\|\s*MIGRATION-" + re.escape(migration_version)
+                    + r"(?=\s*\||\s|$)"
                 )
                 migration_row_seen = any(
                     marker.match(line.strip()) for line in content.split("\n")
@@ -782,5 +791,217 @@ def check_structured_evidence():
         })
 
     return result
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ADR-RB-2 goal-layer contract gate (FEAT-069 — ADR-019 §6 step 4 precursor)
+# ═══════════════════════════════════════════════════════════════════════════
+# The two RB-2 residual faces (ADR-019 §4 RB-2 mitigation; hand-over recorded
+# in docs/verification/loop-migration-fullchain-0.90.0.md §6.2):
+#   ① host-activation precondition — at least one unit's
+#     product_success_contract is NOT a TO_BE_DEFINED placeholder and is
+#     traceable to the plan-tracker goal face;
+#   ② sensitive-action gate — contract missing → WARN; sensitive action
+#     (release/flip family) → BLOCK judge.
+#
+# Factory form (B-12/B-13 precedent: 机制先行 + 出厂 WARN + 翻转留授权票):
+# both faces ship WARN-grade. The BLOCK verdict is COMPUTED and observable
+# but NOT enforced until RB2_SENSITIVE_BLOCK_ENFORCED is flipped by the
+# family authorization ticket (ADR-019 §6 step 4: 每票执行 §2.4 权威署名
+# 切换；真阻断属授权票域). The goal faces live in this domain module; the
+# engine only wires the render call (God Module budget discipline, Check 3b
+# precedent).
+
+# Activation switch — factory OFF. Flip to True ONLY via the family
+# authorization ticket (ADR-019 §4 RB-2 / §6 step 4; B-12/B-13 precedent).
+# Callers that flip it MUST treat judge verdict "BLOCK" as an abort of the
+# sensitive action.
+RB2_SENSITIVE_BLOCK_ENFORCED = False
+
+# Sensitive action family (ADR-019 §2.6: 发布/外部副作用/授权翻转 — this gate
+# covers the release/flip family). Matched against the action label.
+RB2_SENSITIVE_ACTION_RE = re.compile(
+    r"(?:\brelease\b|\bpublish\b|\bdeploy\b|\bflip\b|发布|上线|部署|翻转|"
+    r"授权票|authorization[ -]ticket|registry[ -]flip)",
+    re.IGNORECASE,
+)
+
+# plan-tracker goal-face markers — the goal-layer authority face a packet
+# contract must trace to (ADR-019 §2.2: 目标层 = plan-tracker 成功标准 +
+# execution packet product_success_contract). Any-of match; host trackers may
+# use any of these headings.
+RB2_PLAN_TRACKER_GOAL_FACE_MARKERS = (
+    "## 项目总览",
+    "## 成功标准",
+    "## 项目目标",
+)
+
+# Demo action labels the renderer judges so both gate verdicts are
+# observable on every Check 18d run (正负例: sensitive vs non-sensitive
+# against the REAL host contract readiness).
+_RB2_DEMO_SENSITIVE_ACTION = "release 0.90.0 (发布)"
+_RB2_DEMO_NONSENSITIVE_ACTION = "check-governance"
+
+
+def check_goal_layer_contract_readiness(packet_path=None):
+    """ADR-RB-2 face ① — host-activation precondition (FEAT-069).
+
+    Mitigation clause (ADR-019 §4 RB-2): host activation requires at least
+    one unit whose ``product_success_contract`` is not a ``TO_BE_DEFINED``
+    placeholder and is traceable to the plan-tracker goal face. The contract
+    half reuses the Check 18d validator by identity; the traceability half
+    reads the goal face from ``<GOVERNANCE_DIR>/plan-tracker.md``.
+
+    Factory form: WARN-grade only — the precondition never fails the run;
+    blocking enforcement belongs to the family authorization ticket (face ②).
+
+    Returns (never raises; unreadable faces degrade to WARN):
+        {
+          "applicable": True,
+          "plan_tracker_goal_face": bool,
+          "units": [{task_id, contract_ready, issues}, ...],
+          "contract_ready_units": [task_id, ...],
+          "precondition_met": bool,   # goal face AND ≥1 contract-ready unit
+          "warn": [detail strings],
+        }
+    """
+    _resolve_shared()
+    tasks = _active_execution_packet_tasks()
+    packets, load_error = _load_execution_packets(packet_path)
+    plan_text = None
+    try:
+        plan_text = (GOVERNANCE_DIR / "plan-tracker.md").read_text(
+            encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        plan_text = None
+    goal_face = bool(plan_text) and any(
+        marker in plan_text for marker in RB2_PLAN_TRACKER_GOAL_FACE_MARKERS)
+
+    units = []
+    for task in tasks:
+        task_id = task["task_id"]
+        packet = packets.get(task_id) if isinstance(packets, dict) else None
+        if packet is None:
+            issues = ["missing execution packet"]
+        else:
+            issues = _validate_product_success_contract(packet)
+        units.append({
+            "task_id": task_id,
+            "contract_ready": not issues,
+            "issues": issues,
+        })
+    contract_ready_units = [u["task_id"] for u in units if u["contract_ready"]]
+    precondition_met = bool(goal_face and contract_ready_units)
+
+    warns = []
+    if load_error:
+        warns.append(
+            "ADR-RB-2 激活前置无法完整评估: execution packets 不可读（{0}）".format(
+                load_error))
+    if not tasks:
+        warns.append(
+            "ADR-RB-2 宿主激活前置未满足: 无活跃 P0/P1 unit——「至少一个 unit 的 "
+            "product_success_contract 非 TO_BE_DEFINED」不成立（目标层未锚定）")
+    if not goal_face:
+        warns.append(
+            "ADR-RB-2 宿主激活前置未满足: plan-tracker 无目标层面"
+            "（{0} 任一）——契约无法追溯到 plan-tracker 成功标准".format(
+                "/".join(RB2_PLAN_TRACKER_GOAL_FACE_MARKERS)))
+    if tasks and not contract_ready_units:
+        warns.append(
+            "ADR-RB-2 宿主激活前置未满足: 全部活跃 unit 的 product_success_contract"
+            " 为占位/无效（TO_BE_DEFINED 占位符穿透目标层）: {0}".format(
+                "; ".join("{0}: {1}".format(u["task_id"], ", ".join(u["issues"]))
+                          for u in units)))
+
+    return {
+        "applicable": True,
+        "plan_tracker_goal_face": goal_face,
+        "units": units,
+        "contract_ready_units": contract_ready_units,
+        "precondition_met": precondition_met,
+        "warn": warns,
+    }
+
+
+def judge_rb2_contract_gate(action, readiness=None):
+    """ADR-RB-2 face ② — contract-missing gate judge for one action label.
+
+    Verdict table (judge-only; enforcement governed by
+    RB2_SENSITIVE_BLOCK_ENFORCED):
+      contract ready                   → PASS
+      contract missing, non-sensitive  → WARN
+      contract missing, sensitive      → BLOCK
+
+    Factory demotion: with RB2_SENSITIVE_BLOCK_ENFORCED=False a BLOCK verdict
+    is demoted to WARN (the blocked 判据 stays observable in ``raw_verdict``
+    without intercepting the action — 授权票翻转前不阻断). After the family
+    authorization ticket flips the flag, verdict "BLOCK" means the caller
+    MUST abort the sensitive action.
+
+    Returns:
+        {action, sensitive, contract_ready, raw_verdict, verdict, enforcement}
+    """
+    if readiness is None:
+        readiness = check_goal_layer_contract_readiness()
+    contract_ready = bool(readiness.get("precondition_met"))
+    sensitive = bool(RB2_SENSITIVE_ACTION_RE.search(str(action or "")))
+    if contract_ready:
+        raw_verdict = "PASS"
+    elif sensitive:
+        raw_verdict = "BLOCK"
+    else:
+        raw_verdict = "WARN"
+    enforced = bool(RB2_SENSITIVE_BLOCK_ENFORCED)
+    return {
+        "action": str(action or ""),
+        "sensitive": sensitive,
+        "contract_ready": contract_ready,
+        "raw_verdict": raw_verdict,
+        "verdict": raw_verdict if (raw_verdict != "BLOCK" or enforced)
+                   else "WARN",
+        "enforcement": "enforced" if enforced
+                       else "warn-only (factory; flip via family "
+                            "authorization ticket)",
+    }
+
+
+def render_rb2_goal_contract_block():
+    """Print the ADR-RB-2 two-face block after Check 18d (FEAT-069 wiring).
+
+    WARN-grade companion of the Check 18d product-success-contract segment:
+    face ① prints the host-activation precondition verdict; face ② prints
+    the sensitive-action gate judge for a sensitive and a non-sensitive demo
+    action evaluated against the REAL host readiness (正负例 observable per
+    run). Prints only — never counts into check-governance issues (factory
+    form; the authorization ticket owns the enforcement flip).
+    """
+    readiness = check_goal_layer_contract_readiness()
+    print("\n┌─ Check 18d-RB2: Goal-Layer Contract Gate (ADR-RB-2/FEAT-069) ─┐")
+    if readiness["precondition_met"]:
+        print("│  Activation precondition: [PASS] goal-layer contract ready "
+              "({0})".format(", ".join(readiness["contract_ready_units"])))
+    else:
+        for reason in readiness["warn"]:
+            print("│  Activation precondition: [WARN] {0}".format(reason))
+    demo_judges = (
+        ("sensitive demo action {0!r}".format(_RB2_DEMO_SENSITIVE_ACTION),
+         judge_rb2_contract_gate(_RB2_DEMO_SENSITIVE_ACTION, readiness)),
+        ("non-sensitive demo action {0!r}".format(
+            _RB2_DEMO_NONSENSITIVE_ACTION),
+         judge_rb2_contract_gate(_RB2_DEMO_NONSENSITIVE_ACTION, readiness)),
+    )
+    print("│  Sensitive-action gate judge (enforcement={0})".format(
+        demo_judges[0][1]["enforcement"]))
+    for label, judge in demo_judges:
+        if judge["raw_verdict"] == "BLOCK":
+            print("│    [WARN] (judge=BLOCK) {0}: contract missing → BLOCK "
+                  "verdict; enforcement off（授权票翻转前不拦截）".format(label))
+        elif judge["verdict"] == "WARN":
+            print("│    [WARN] {0}: contract missing → WARN（非敏感，不阻断"
+                  "）".format(label))
+        else:
+            print("│    [PASS] {0}: contract ready → gate open".format(label))
+    print("└──────────────────────────────────────────────────────────┘")
 
 

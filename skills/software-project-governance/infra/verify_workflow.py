@@ -1139,7 +1139,7 @@ from checks.evidence_domain import (  # noqa: E402
     check_evidence_quality,
     check_fact_grounding,
     check_structured_evidence,
-    render_evidence_binding_drift_block,
+    render_evidence_binding_drift_block, render_rb2_goal_contract_block,
 )
 
 # ── Risk domain (extracted to infra/checks/risk_domain.py in 0.70.0) ────────
@@ -15884,7 +15884,7 @@ def _run_full_engine_checks(args):
     elif psc_issues == 0:
         print("│  [PASS] Product success contract check passed.")
     all_issues += psc_issues
-    print("└──────────────────────────────────────────────────────┘")
+    print("└──────────────────────────────────────────────────────┘"); render_rb2_goal_contract_block()
 
     # ── 18e. Executable Acceptance Contract (FIX-089) ──
     print("\n┌─ Check 18e: Executable Acceptance Contract (FIX-089) ┐")
@@ -24571,7 +24571,7 @@ def cmd_check_product_success_contracts(args):
             sys.exit(1)
     else:
         print("\n  Result: PASSED — product success contracts are ready")
-    print()
+    print(); render_rb2_goal_contract_block()
 
 
 def cmd_check_acceptance_contracts(args):

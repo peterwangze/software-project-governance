@@ -21,7 +21,11 @@ Aggregated faces (single output, ≤2K token / ≤8KB projection):
                   ``parse_recent_decisions`` and resolve_entry's plan-tracker
                   version regex) the same way resolve_entry mirrors the
                   engine — disclosed here so the two readers stay in sync by
-                  review, not by import (see the R2 note below). R0 P0-1
+                  review, not by import (see the R2 note below). Since
+                  FIX-397④ the risks face carries ONE declared caliber
+                  divergence from ``parse_active_risks`` — its ``open`` count
+                  is the risk-log's NON-CLOSED rows (see
+                  ``parse_risk_summary``). R0 P0-1
                   lesson (0.84.0 R1): review-only sync demonstrably failed on
                   live-shaped files, so the table scanner now mirrors the
                   engine's ``_status_table_stream`` LINE FOR LINE
@@ -315,16 +319,88 @@ def parse_gate_summary(text):
     return dict(counts, next_gate=next_gate)
 
 
-def parse_risk_summary(text, today=None):
-    """Mirror of verify_workflow.parse_active_risks, aggregated to counts.
+#: Bootstrap-local risk status caliber (FIX-397④) — the CLOSED vocabulary
+#: of the risk-log ``当前状态`` column for this count face, matched by
+#: PREFIX after a whitespace/backtick/emphasis strip: live cells carry bold
+#: markers and dated/parenthetical annotations ("**已关闭** (2026-05-05)",
+#: "打开（登记观察）", "**缓解中（2026-09-08 M-0 复评转…）**〔原：已接受…〕").
+#: DECLARED DIVERGENCE from the engine mirror set: the engine's canonical
+#: active-set predicate (checks/risk_domain.is_risk_status_open — exactly
+#: ``打开``, FIX-270 R0 F3; not importable here, engine-free boundary)
+#: answers "which risks do the engine's watchdogs see", while the FIX-397④
+#: charter rules that the bootstrap's active-risk count must equal the
+#: risk-log's NON-CLOSED rows — ``缓解中`` (mitigation in flight) and
+#: annotated ``打开`` forms count as open; ``已关闭`` / ``关闭`` /
+#: ``缓解完成`` never do. Unifying the engine predicate is a Coordinator
+#: decision, not this module's call.
+_RISK_OPEN_STATE_PREFIXES = ("打开", "缓解中")
+_RISK_CLOSED_STATE_PREFIXES = ("已关闭", "关闭", "缓解完成")
 
-    Open predicate mirrors the risk domain's canonical judgement (checks/
-    risk_domain.is_risk_status_open): a risk is open iff its 当前状态 cell
-    is exactly ``打开`` — no parallel marker sets.
+#: Unknown status tokens: counted as open (fail-closed conservative
+#: direction — an unclassifiable risk row must stay visible as an active
+#: risk, never silently absorbed) and disclosed. The disclosure list is
+#: bounded for the ≤8KB projection; ``unknown_count`` carries the truth.
+_RISK_UNKNOWN_DISCLOSURE_CAP = 5
+
+
+def _risk_status_bucket(status_cell):
+    """Bucket a risk status cell for the count face (caliber above)."""
+    s = (status_cell or "").strip().strip("`*").strip()
+    if s.startswith(_RISK_OPEN_STATE_PREFIXES):
+        return "open"
+    if s.startswith(_RISK_CLOSED_STATE_PREFIXES):
+        return "closed"
+    return "unknown"
+
+
+def _resolve_risk_status(cells, status_pos):
+    """Positional-first status resolution, unique-vocabulary-anchor fallback.
+
+    FIX-397④ live-shape tolerance: 8 live rows (RISK-052~059) carry their
+    ``打开`` one column LEFT of the header position (semantic column drift —
+    a missing cell before the status column, balanced by a filler cell
+    after, leaves the row at full width but shifted), so the positional
+    read lands on the mitigation prose and the row silently dropped out of
+    every count. When — and only when — the positional cell matches NO
+    vocabulary token, the row's cells are scanned for vocabulary forms:
+    EXACTLY ONE match anchors the row (mechanical, not a guess); zero or
+    ≥2 matches leave the row ``unknown`` (counted as open + disclosed). A
+    positional cell that DOES match the vocabulary is never overridden.
+    """
+    status = cells[status_pos]
+    bucket = _risk_status_bucket(status)
+    if bucket != "unknown":
+        return status, bucket
+    matches = [(i, _risk_status_bucket(cell))
+               for i, cell in enumerate(cells)
+               if _risk_status_bucket(cell) != "unknown"]
+    if len(matches) == 1:
+        return cells[matches[0][0]], matches[0][1]
+    return status, "unknown"
+
+
+def parse_risk_summary(text, today=None):
+    """The risks face: risk-log NON-CLOSED row count + escalation recency.
+
+    FIX-397④ caliber — the vocabulary and tolerance contracts live in the
+    module constants (``_RISK_OPEN_STATE_PREFIXES`` /
+    ``_RISK_CLOSED_STATE_PREFIXES``) and ``_resolve_risk_status``. The
+    pre-fix mirror of the engine's exact-``打开`` predicate undercounted
+    the live risk-log in two independent ways (bootstrap reported 4 vs 18
+    actual non-closed rows on 2026-09-27): annotated forms
+    ("打开（登记观察）", "**缓解中（…）**") failed the exact match, and the
+    8 shape-drifted rows were skipped outright. Unknown status tokens are
+    COUNTED as open and disclosed via ``unknown_count`` + a bounded
+    ``unknown_statuses`` list — the charter's fail-closed disposition
+    (计入并 WARN), never a silent drop. Escalation recency stays positional
+    on the header ``截止日期`` column: an anchored row's positional
+    deadline cell may read a filler ("—") and then yields NO escalation
+    signal — the fail-safe direction (never a fabricated overdue).
     """
     today = today or date.today()
     summary = {"open": 0, "escalation_overdue": 0, "escalation_soon": 0,
-               "overdue_ids": []}
+               "overdue_ids": [], "unknown_count": 0,
+               "unknown_statuses": []}
     for header, rows in _iter_positional_tables(text):
         if "编号" not in header or "当前状态" not in header:
             continue
@@ -336,12 +412,19 @@ def parse_risk_summary(text, today=None):
         for cells in rows:
             if len(cells) <= width:
                 continue
-            if cells[status_pos].strip() != "打开":
+            status, bucket = _resolve_risk_status(cells, status_pos)
+            if bucket == "closed":
                 continue
             rid = cells[id_pos].strip()
             if not rid:
                 continue
             summary["open"] += 1
+            if bucket == "unknown":
+                summary["unknown_count"] += 1
+                if len(summary["unknown_statuses"]) < \
+                        _RISK_UNKNOWN_DISCLOSURE_CAP:
+                    summary["unknown_statuses"].append(
+                        {"id": rid, "status": _clip(status.strip(), 40)})
             deadline = (cells[deadline_pos].strip()
                         if deadline_pos is not None else "")
             days_left = None
@@ -886,6 +969,13 @@ def format_text(payload):
         % (risks.get("open"), risks.get("escalation_overdue"),
            risks.get("escalation_soon")),
     ]
+    if risks.get("unknown_count"):
+        disclosed = ", ".join(
+            u.get("id", "?") for u in (risks.get("unknown_statuses") or []))
+        lines.append(
+            "risks-unknown: %s row(s) with status tokens outside the "
+            "caliber vocabulary, counted as open (FIX-397④): %s"
+            % (risks["unknown_count"], disclosed or "…"))
     items = candidates.get("items") or []
     if items:
         lines.append("candidates: %s"

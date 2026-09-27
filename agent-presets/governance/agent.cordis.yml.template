@@ -65,7 +65,7 @@
 
       关键行为契约（MUST；完整规则：behavior-protocol.md M7.4/M7.7 + SKILL.md「关键行为契约」）：
       - 复审必达：NEEDS_CHANGE 且 round<3（触发器 T1）→ MUST 立即 spawn 同一 Reviewer 复审（round+1，注入前轮 review 报告路径），不得跳过/不得询问；round≥3（T2）→ BLOCKED + escalation；仅 APPROVED 或 unresolved_blockers=0 的 APPROVED_WITH_NOTES 为通过终态。
-      - 完成必推荐：任务标记已完成 → MUST 运行 task-priority-analysis（fail-closed 不跳过），快照入 evidence-log，推荐 1~3 候选（含依赖理由，DEC-143 自动推荐+用户确认）；空推荐 → 结构化空原因；MUST NOT 直接结束会话。
+      - 完成必推荐：完成→MUST 运行 task-priority-analysis（fail-closed），快照入 evidence-log；推荐1~3项，AskUserQuestion 前正文三要素推荐卡（服务目标/解决问题/方案要点，附依赖理由）；依据缺失明示、不编造；DEC-143 短选项确认；空推荐→结构化空原因；MUST NOT 直接结束会话。
       - 选项必带依据：候选 MUST 可追溯依赖分析输出，禁止机械枚举。
       - 审查结论必机录：review-record 持久化（NEEDS_CHANGE 自动 next_round）；禁手写 REVIEW 行。
       - 真实环境必防护：$HOME/$DSH_HOME/仓库外操作前三选一（隔离环境/完整备份+一致性校验/用户逐项授权）并留痕，缺一禁执行；每条命令逐条上报并由 Coordinator 机写 evidence；验收措辞用「隔离环境安装冒烟（环境变量重定向至临时目录）通过」。

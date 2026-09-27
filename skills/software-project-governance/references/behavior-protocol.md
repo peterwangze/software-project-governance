@@ -555,7 +555,7 @@ Agent 从项目 profile 推断模式。用户可随时通过说"仅在关键决�
           `python skills/software-project-governance/infra/verify_workflow.py review-record --task {task_id} --round {n} --result {结论} --report {reviewer报告路径} [--reviewer {名称}]`
           review-{task}-R{n}.md 文件与 evidence 行由 CLI 机器写入（唯一路径）；NEEDS_CHANGE 时 CLI 自动产出 `next_round`/`prev_report` 复审义务字段——跨会话可从证据直接推导待复审项，复审触发不依赖 Coordinator 记忆。手写 REVIEW-{id} 证据行 = 流程违规（M1.2 快速通道豁免已收窄）；CLI 不可用（工具缺失/执行失败）时 fail-closed：修复环境后重试，不得降级为手写。Check 30c 对无机器来源标记的 REVIEW 记录与缺 `next_round` 的 NEEDS_CHANGE 记录 WARN（渐进 FAIL——升级路径登记于 FIX-260 decision-log）。
 
-   > **最小契约投影（FIX-253/REQ-112；FIX-260 扩展）**：本节 T1-T4、step 4.6 (C8)（审查结论必机录——FIX-260/REQ-107，压缩形式由 DSH persona 契约块第 4 行携带，`check-injection-contract` 锚含 `review-record`）、step 6 与 interaction-boundary.md 任务排序规则的压缩形式由 SKILL.md「关键行为契约」段与 DSH persona（agent-presets/governance/agent.cordis.yml.template）携带；`check-injection-contract` 锚点守护同步。修改本节关键词（复审/NEEDS_CHANGE/review-record/task-priority-analysis/依赖理由）时 MUST 同步注入面，否则 check FAIL。**step 6c 交互基线（DEC-143，R0-W1b 修订）**：step 6c 原「否则可自主执行推荐项并在完成后再次推荐」分支按 DEC-143 废止——任务完成后的推荐统一按「自动推荐 + 用户确认」呈现（选项含推荐候选与「自主执行推荐项」，由用户确认或改选，而非 agent 默认自主执行）；「当且仅当推荐项涉及关键决策（M5.3）时强制 AskUserQuestion」的既有规则不变。step 6 另补一句「推荐为空 → 呈现结构化空原因（禁止机械枚举）」（注入面已先行，出处状态见 §6.2 注）。
+   > **最小契约投影（FIX-253/REQ-112；FIX-260 扩展）**：本节 T1-T4、step 4.6 (C8)（审查结论必机录——FIX-260/REQ-107，压缩形式由 DSH persona 契约块第 4 行携带，`check-injection-contract` 锚含 `review-record`）、step 6 与 interaction-boundary.md 任务排序规则的压缩形式由 SKILL.md「关键行为契约」段与 DSH persona（agent-presets/governance/agent.cordis.yml.template）携带；`check-injection-contract` 锚点守护同步。修改本节关键词（复审/NEEDS_CHANGE/review-record/task-priority-analysis/依赖理由/三要素/推荐卡）时 MUST 同步注入面，否则 check FAIL。**step 6c 交互基线（DEC-143，R0-W1b 修订）**：step 6c 原「否则可自主执行推荐项并在完成后再次推荐」分支按 DEC-143 废止——任务完成后的推荐统一按「自动推荐 + 用户确认」呈现（选项含推荐候选与「自主执行推荐项」，由用户确认或改选，而非 agent 默认自主执行）；「当且仅当推荐项涉及关键决策（M5.3）时强制 AskUserQuestion」的既有规则不变。step 6c 经 FEAT-072/DEC-266 升级为三要素推荐卡呈现（AskUserQuestion 前正文卡 + 短选项与卡片一一对应），上述 DEC-143「自动推荐 + 用户确认」基线不变。step 6 另补一句「推荐为空 → 呈现结构化空原因（禁止机械枚举）」（注入面已先行，出处状态见 §6.2 注）。
 
    **FIX-224 确定性触发器（M5.1b 风格——不依赖 Coordinator 自觉）**：
      当 Coordinator 收到 Reviewer 的审查结论时，MUST 先按 (C8) 通过 `review-record` CLI 机器持久化结论，再检测以下触发条件并执行对应动作，不得跳过：
@@ -585,8 +585,18 @@ Agent 从项目 profile 推断模式。用户可随时通过说"仅在关键决�
    - 如果多个独立变更 → 拆分为独立 commit，每 commit 对应单个 task
 6. **继续（FIX-223 增强版）** — 任务完成后 MUST 执行下一步推荐流程，不得直接结束会话或停止交互：
    - **a. 依赖分析（MUST，FIX-237.5 升级；FIX-262 机器化）**：读 plan-tracker 优先级表的 `依赖` 列，识别刚完成任务解除阻塞了哪些后续任务（即依赖中包含刚完成任务 ID 的任务）；**MUST 运行 `task-priority-analysis` 子命令（FIX-226）**获取依赖排序候选——不存在"如果存在"豁免（工具缺失或失败时按 fail-closed 处理并升级，不得跳过分析）。运行后 MUST 将调用快照记录到 evidence-log（FIX-237.5 证据化）：**优先机器路径**——`task-priority-analysis --evidence-task {task_id}` 自动写入 `RECO-{task_id}` 机器快照行（FIX-262/REQ-108，Check 34 S1 的关联锚）；机器路径不可用时按 EVD-898/899/901/903 先例手写"完成必推荐调用快照"行并绑定 `{task_id} 完成触发`。**session-snapshot 的"下次会话优先级"节 MUST 引用至少一个快照行 ID（RECO-{task} 或 EVD-{n}）**——可验证由推荐快照派生而非自由手写（REQ-108 信号 4，Check 34 S2/S3：缺引用 WARN、悬空引用 FAIL）。
-   - **b. 推荐下一步**：从 unblocked 任务 + 当前最高优先级未完成任务中，结合版本依赖链和当前项目阶段，选择最合理的 1~3 个候选下一步。推荐为空 → MUST 呈现结构化空原因（禁止机械枚举）。
-   - **c. 呈现给用户（DEC-143 交互基线：自动推荐 + 用户确认）**：通过 AskUserQuestion 呈现候选下一步（选项包括推荐项 + "自主执行推荐项" + "暂停"），由用户确认或改选，而非 agent 默认自主执行。当且仅当推荐项涉及关键决策（M5.3）时强制 AskUserQuestion。
+   - **b. 推荐下一步（FEAT-072/DEC-266）**：
+      - MUST 基于 6a 的 task-priority-analysis 输出，从 unblocked 任务及当前最高优先级未完成任务中，结合版本依赖链和当前项目阶段，选择最合理的 1~3 个候选下一步；MUST 核验候选的依赖状态，不得将仍受阻任务表述为可直接执行。
+      - 每项候选 MUST 给出可追溯到本次依赖分析输出的依赖理由，说明为何现在推荐该项；依赖理由 MUST NOT 替代该项的服务目标、解决问题或方案要点。
+      - 推荐为空时，MUST 呈现结构化空原因，MUST NOT 机械枚举未完成事项或虚构候选。
+   - **c. 呈现并确认（DEC-143 交互基线；FEAT-072/DEC-266 三要素推荐卡）**：
+      - 有候选时，MUST 在调用 AskUserQuestion 前的消息正文中，为每项候选呈现一张三要素推荐卡。卡片标题 MUST 使用用户可理解的候选名称，并附任务标识以便追溯；卡片正文 MUST 使用固定三行：`服务目标：`（服务的版本、里程碑或用户痛点）、`解决问题：`（现状问题及有依据的不做后果；未载明的后果不得自行补写）、`方案要点：`（执行路径概要；行内含子标签 `依赖理由：`——为何现在推荐，引用本次 RECO 记录或可定位的分析依据）。
+      - 三要素 MUST 依据可定位的项目记录，用面向用户决策的语言概括；MUST NOT 仅复制任务行原文，或以任务标识、依赖链术语代替解释。缺少依据的字段 MUST 标注「依据缺失：{字段}未载明（已查：{可定位来源}）」；来源不可用或相互冲突时 MUST 如实标注（三态：未载明/来源不可用/依据冲突）。MUST NOT 将推测写成既定目标、问题或方案。
+      - SHOULD 简洁呈现每张卡；方案要点只需支持用户选择，不展开为完整实施计划。
+      - MUST 通过 AskUserQuestion 呈现短选项，推荐项选项 MUST 与正文卡一一对应，并包括「自主执行推荐项」和「暂停」，由用户确认或改选；MUST NOT 默认自主执行。
+      - 缺失信息会影响范围、执行路径或风险判断时，MUST 明示「执行前需澄清」，用户选择该项后 MUST 先澄清再执行；「自主执行推荐项」不得豁免该要求。
+      - 推荐为空时 MUST NOT 提供不存在的推荐项或「自主执行推荐项」，仍 MUST 呈现结构化空原因并请求用户确认后续处理，MUST NOT 直接结束会话。
+      - **session-snapshot 投影（SHOULD，FEAT-072/DEC-266）**：session-snapshot「下次会话优先级」节 SHOULD 为每候选保留轻量投影行（`{任务标识/短名}｜目标：…；问题：…；方案：…｜依据：{RECO 引用}｜待澄清：{如有}`），复用已生成卡不重新研究；下次会话实际呈现推荐时仍须按现行协议取得有效分析，不得把旧 RECO 当作当前状态。bootstrap next_actions 不纳入本投影；next_actions 原文进入完成推荐交互时仍须遵守本条（6c）。
    - **d. 不得直接结束**：除非 plan-tracker 中无未完成任务，或用户明确选择"暂停"，否则 MUST NOT 在任务完成后直接结束会话。
 
 **跳过任何步骤 = 协议违规。** Agent **MUST NOT** 在未完成全部 6 个步骤的情况下声明任务"已完成"。

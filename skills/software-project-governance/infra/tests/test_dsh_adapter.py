@@ -972,6 +972,80 @@ class DshAdapterTests(unittest.TestCase):
                 result["issues"],
             )
 
+    def test_injection_contract_three_element_card_anchors(self):
+        """FEAT-072 / DEC-266 (S6 guard): the three-element recommendation-card
+        anchors are guarded on every face — persona and SKILL.md carry
+        「三要素」/「推荐卡」, the canonical surface (behavior-protocol.md
+        M7.4 step 6c) carries the three full card labels; removing any of
+        them from a copied surface must FAIL check-injection-contract.
+        """
+        if str(_INFRA_DIR) not in sys.path:
+            sys.path.insert(0, str(_INFRA_DIR))
+        import verify_workflow as vw
+
+        persona_rel = "agent-presets/governance/agent.cordis.yml.template"
+        skill_rel = "skills/software-project-governance/SKILL.md"
+        protocol_rel = (
+            "skills/software-project-governance/references/behavior-protocol.md")
+
+        # Positive: the real injection surfaces carry the new anchors.
+        for relative in (persona_rel, skill_rel):
+            text = (_REPO_ROOT / relative).read_text(encoding="utf-8")
+            self.assertIn("三要素", text, relative)
+            self.assertIn("推荐卡", text, relative)
+        canonical = (_REPO_ROOT / protocol_rel).read_text(encoding="utf-8")
+        for label in ("服务目标：", "解决问题：", "方案要点："):
+            self.assertIn(label, canonical)
+
+        # Negative: strip a new anchor from the temp-root copy → FAIL
+        # (same fixture pattern as
+        # test_injection_contract_check_flags_missing_anchor).
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            for relative in vw.INJECTION_CONTRACT_ANCHORS:
+                target = root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(_REPO_ROOT / relative, target)
+
+            baseline = vw.check_injection_contract(root)
+            self.assertEqual(baseline["issues"], [], baseline["issues"])
+
+            persona = root / persona_rel
+            persona.write_text(
+                persona.read_text(encoding="utf-8").replace("推荐卡", ""),
+                encoding="utf-8",
+            )
+            result = vw.check_injection_contract(root)
+            self.assertTrue(
+                any(persona_rel in issue and "推荐卡" in issue
+                    for issue in result["issues"]),
+                result["issues"],
+            )
+
+            skill = root / skill_rel
+            skill.write_text(
+                skill.read_text(encoding="utf-8").replace("三要素", ""),
+                encoding="utf-8",
+            )
+            result = vw.check_injection_contract(root)
+            self.assertTrue(
+                any(skill_rel in issue and "三要素" in issue
+                    for issue in result["issues"]),
+                result["issues"],
+            )
+
+            protocol = root / protocol_rel
+            protocol.write_text(
+                protocol.read_text(encoding="utf-8").replace("方案要点：", ""),
+                encoding="utf-8",
+            )
+            result = vw.check_injection_contract(root)
+            self.assertTrue(
+                any(protocol_rel in issue and "方案要点：" in issue
+                    for issue in result["issues"]),
+                result["issues"],
+            )
+
     def test_preset_metadata_contract(self):
         text = _PRESET_METADATA_PATH.read_text(encoding="utf-8")
         self.assertIn("name:", text)

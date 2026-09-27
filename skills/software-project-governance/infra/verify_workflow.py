@@ -6750,6 +6750,9 @@ INJECTION_CONTRACT_ANCHORS = {
         # real-environment protection (R1 one-of-three / R4 per-command
         # relay / R5 acceptance wording).
         "真实环境必防护", "三选一", "逐条上报", "隔离环境安装冒烟",
+        # FEAT-072 / DEC-266: three-element recommendation-card contract
+        # (M7.4 step 6 projection — card prose before AskUserQuestion).
+        "三要素", "推荐卡",
         VERSION_LINE_ANCHOR,
     ],
     "skills/software-project-governance/SKILL.md": [
@@ -6757,6 +6760,15 @@ INJECTION_CONTRACT_ANCHORS = {
         "task-priority-analysis", "选项必带依据",
         # FIX-274 / F-02 (M7.7 projection): 4th contract item.
         "真实环境必防护", "三选一", "逐条上报", "隔离环境安装冒烟",
+        # FEAT-072 / DEC-266: three-element recommendation-card contract
+        # (M7.4 step 6 projection — card prose before AskUserQuestion).
+        "三要素", "推荐卡",
+    ],
+    # FEAT-072 / DEC-266: canonical surface — M7.4 step 6c MUST carry the
+    # three full card labels; existence-only, fail-closed like every path
+    # above.
+    "skills/software-project-governance/references/behavior-protocol.md": [
+        "服务目标：", "解决问题：", "方案要点：",
     ],
     "adapters/dsh/AGENTS.md.template": ["关键行为契约"],
 }

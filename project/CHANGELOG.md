@@ -2,6 +2,31 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.90.0] - 2026-09-27
+
+### 0.90.0 - **结构切换第一批：迁移验证与已知缺陷收口（Loop Migration Validation & Known-Defect Closeout, Batch 1）**：RB-2 授权票前置批 + E-1 unit 锚定混合方案（人工清单+结构影子）+ 迁移链健壮性自愈（FEAT-069/070/071 + FIX-398 载荷 / FIX-397 搭车 / DEC-252~263 / EVD-1196~1201）
+
+0.90.0 是 **MINOR** 发布，承载 REL-093（0.90.0 M-0 载荷冻结经 arch 顾问 GO——DEC-263；DEC-253 用户授权链 + DEC-255 载荷框架）+ **DEC-252（ADR-019 循环结构切换五步路径）第一批**。版本定义（DEC-263 最终措辞）：**「0.90.0 完成 DEC-252 范围内迁移验证、已知缺陷阶段性收口及切片前置；未完成纵向切片、权威翻转和行为级终态验收」**。B-12/B-13 **不随版翻转**（出厂 WARN-only，RISK-059 未关闭——翻转留独立授权票）。
+
+**载荷四票**（全 R0 APPROVED_WITH_NOTES/0，全部 committed）：
+
+- **FEAT-069（commit `f0999f7`）**：分族授权票前置批——RB-2 敏感动作阻断接线（factory WARN-only，翻转臂 enforced 已验证可达）+ 宿主激活前置判据（模板默认值契约宿主→WARN 六字段穿透明细）+ C-10 八分支 pytest 看护 28 测试（fixture 真走 planner 链零 mock）+ F-2 边界收紧（红→绿实证）。全量 4251P/2F（基线 6→2）。E-6 MIGRATION_VERSION 升戳经 arch 裁决移出（DEC-257：发布版本≠迁移协议版本，随真实迁移授权票）。
+- **FEAT-070（commit `8767858`）**：E-1-B unit 权威清单人工确认路径——`--record-unit-approval/--record-unit-block` 链路 + 版本化 manifest（`schema_version`+`revision`+`entries_digest` NFC/SHA-256 直写检出）+ dry-run 消费接线 + 本仓 28 unit 逐条落盘（**2 confirmed / 26 blocked**——blocked 含 A 组散文伪影 19/B 组多候选 6/撤回物 1，处置 DEC-258/259）。隔离副本三面绿（dry-run/apply/rollback，清单字节前后不变）。
+- **FIX-398（commit `48d21d9`+`0d31ea2`）**：迁移链健壮性——E-4 SIGKILL 提交窗**自愈重入**（勘察证伪提交序调整=假审计轨迹；wc6d 240ms 实证点复演 16/16 零部分态）+ E-5 孤儿备份清扫（四重无信息证明+引用保护）+ E-7 ADR §7 勘误 + F-6 `plan_rederive_failed` 独立 WARN 分流。**RISK-060 关闭**（复评锚 M-4 保持）。
+- **FEAT-071（commit `e61e267`+`12f2ea7`）**：E-1-A 结构锚定派生**影子流水线**——三源结构证据→候选→§2.6 唯一性三态→对照人工清单：**28 行对照零分歧**（2 confirmed 结构存在但机证不可复现→人工权威保持；26 blocked 结构宇宙零产生——散文伪影机检消解）；manifest SHA 五次运行恒等+幂等。**B→A 切换判据成文：4 绿 3 红→当前不可切换**（CJ-1 确认可复现 0/2、CJ-4 结构覆盖 30/32 悬置、CJ-5 外部宿主未验——差距=证据面与决策面未重合，非管线缺陷）。八场景+C-10 副本复跑零劣化；R0 遗留小修面 7 项（FEAT-070-R0 P2-1/P2-2/P3-4/P3-5 + FIX-398-R0 P2-1/P3-1/P3-2）；DEC-261/262 校准（candidate-bytes 24→32MiB、adapter timeout 26→36s，均实测溯源+登记）。
+
+**搭车（非载荷治理修正，DEC-263②）**：FIX-397（commit `8f1f5c3`）——风险计数口径对齐（DEC-256：bootstrap 首屏 4→18=risk-log 非关闭行事实；fail-closed 未知态披露）+ 治理表行 ragged/schema 归一修复；docs 审查报告 ×5。
+
+**已知边界（逐项归因，DEC-263④ 披露口径）**：
+
+- **RB-2 阻断面出厂 WARN-only**——敏感动作「would-block」可观测但零拦截；翻转条件=B-12/B-13 授权票（RISK-059 关闭为前置）。
+- **影子判据三红**——结构派生当前**不可切换**权威清单（见 FEAT-071）；30 悬置结构单元清单为后续确认链工作底稿。
+- **全量测试基线**——M1 门禁实测留痕（REL-093 行）；既有族失败逐项归因披露（M0 pin 漂移族=DEC-249 先例延续；墙钟 tripwire 族已 DEC-262 校准）；不宣称全绿。
+- **RISK-059 未关闭**——权威翻转的前置风险维持打开（09-27 窗内复评：RISK-036 维持打开/039 维持收窄/047/048 维持观察——M-4 锚引用既有留痕）。
+- **卫生批残留（0.91 池）**——FEAT-071-R0 P3×4、FIX-397 残留（RISK-052~059 语义归位等）、F-4/F-5、C 组延期项（DEC-255）。
+
+**行为变更**：无破坏性变更；无机制激活（B-12/B-13 出厂姿态不变）。回滚：tag 级回滚按 release-checklist 纪律（历史 tag 变更需独立 DEC）；迁移工具 apply/rollback 语义与退出码不变（FEAT-070/071 向后兼容钉）。
+
 ## [0.89.0] - 2026-09-26
 
 ### 0.89.0 - **治理精度与健康面收口（Governance Precision & Health Closeout）**：任务状态词表收敛 + 终态行刷新 + 检查器判据结构化 + closure 版本感知门禁 + 标准链锁腿真释放（REL-090/091 / FIX-390~395 / FEAT-065 / DEC-244~248 / EVD-1171~1181）

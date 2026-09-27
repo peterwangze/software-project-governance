@@ -2,6 +2,40 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.91.0] - 未发布（准备态）
+
+### 0.91.0 - **推荐契约与误报消解（Recommendation Card Contract & False-Positive Fix）**：完成必推荐三要素推荐卡契约 + Check 28c 装饰日期误报修复（FEAT-072 + FIX-399 载荷 / DEC-265~267 / EVD-1204/1205/1207）
+
+0.91.0 完善推荐呈现的三要素推荐卡契约，并修复 Check 28c 对路线图装饰日期解析导致的误报。两项变更均已完成独立审查。已知限制包括 strict 注入预算余量较小，以及 evidence-log 尺寸的既有结构性约束；详见发布验证与后续治理记录。
+
+**载荷两票**（DEC-267 M-0 冻结边界内；均 R0 **APPROVED_WITH_NOTES/0**，全部 committed）：
+
+- **FEAT-072（commit `196894a`，2026-09-27）**：完成必推荐三要素推荐卡契约（DEC-266）——M7.4 6b/6c 推荐呈现重写 + 四注入面投影 + 机检锚 canonical 三标签 + 负例测试；persona 净增 +76B（注入预算 standard/strict 两档 PASS）。
+- **FIX-399（commit `9bafdf6`，2026-09-28；HEAD 即此 commit，含两票）**：Check 28c 发布日期解析器装饰日期单元格健壮性——正则容忍装饰尾巴 + 多日期取发布日（末日期）语义 + 6 测试用例；同数据 A/B 净效果 **−1 误报零新增**。
+
+**已知限制（发布态措辞，arch 分层表）**：
+
+- **strict 注入预算余量 9 tok**：strict 档 **5991/6000**（M-1 后实测）——当前口径下净增超 9 tok 即越界；0.92 治理票已登记（含计量器版本/范围/基线）。
+- **evidence-log 尺寸**：1,737,424 bytes（≈1697KB，M-1 时点实测）——DEC-264 既有结构性约束。
+- **28c 正则畸形 markdown 跨行加固延期**：REVIEW-FIX-399-R0 P2-1——0.91+ 候选池。
+- **版本面再生纪律**：本版版本面经 `release-projection --write` 确定性再生（非手改——M-1：权威源 bump → written=17 → 幂等复跑 written=0）。
+
+**决策链**：DEC-265 / DEC-266（三要素推荐卡契约授权）/ DEC-267（0.91.0 M-0 载荷冻结）；**证据**：EVD-1204/1205/1207；TRIAGE ×3。
+
+### Added
+
+- **完成必推荐三要素推荐卡契约（FEAT-072）**：M7.4 6b/6c 推荐呈现重写 + 四注入面投影 + 机检锚 canonical 三标签 + 负例测试；persona 净增 +76B。
+
+### Changed
+
+- **全仓版本面 0.90.0→0.91.0（REL-094 M-1）**：SKILL.md frontmatter 权威源先 bump → `release-projection --write` 单次写入 17 面一次收敛 → 幂等复跑 written=0；注入预算实测 strict 5991/6000、lightweight 4241/6000，均 PASS。
+
+### Fixed
+
+- **Check 28c 路线图装饰日期误报（FIX-399）**：发布日期解析器正则容忍装饰尾巴 + 多日期取发布日（末日期）语义；同数据 A/B −1 误报零新增；6 测试用例看护。
+
+**准备态注记**：本段为 M-1 候选落库时点（2026-09-28 +0800）的**准备态**——发布日期不预填（发布收口按 FIX-349 口径以 taggerdate 权威落字）；发布终账、Commit 区间与发布验证结论随发布链 M-2+ 补记。
+
 ## [0.90.0] - 2026-09-27
 
 ### 0.90.0 - **结构切换第一批：迁移验证与已知缺陷收口（Loop Migration Validation & Known-Defect Closeout, Batch 1）**：RB-2 授权票前置批 + E-1 unit 锚定混合方案（人工清单+结构影子）+ 迁移链健壮性自愈（FEAT-069/070/071 + FIX-398 载荷 / FIX-397 搭车 / DEC-252~263 / EVD-1196~1201）

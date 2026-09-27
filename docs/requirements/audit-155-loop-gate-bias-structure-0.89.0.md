@@ -14,7 +14,7 @@
 
 **核心结论：DEC-097（2026-07-10，"loop 为唯一模型，G1-G11 退化为 loop-setup"）在结构层从未落地。** 0.65.0 交付的 loop-engineering 是一套**自声明 schema-only** 的旁路资产（`loop-engineering-registry.json` L9 `registry_mode: "schema-only-no-runtime-activation"`；L13-14 明文"不修改 classic G1-G11 gate judgment 行为"），而承载项目状态权威坐标的**全部激活结构**——lifecycle-registry 激活模式、core 层 Gate 定义文档、governance-bootstrap 热数据投影、plan-tracker 数据模型、入口 SKILL.md——至今仍是纯线性 stage-gate 模型。loop 引擎的全部运行时能力（rollup/round/fuse/health/migration）只能通过显式 opt-in CLI 访问，每会话必经的 bootstrap 聚合投影中 grep `loop` **零命中**；本仓 dogfood `.governance/flow-unit-runtime.json` 不存在 = loop 运行时在唯一真实宿主上从未初始化。
 
-**用户观察到的"不管项目实际状态都往下一个 Gate 推进"不是行为层的偶发偏差，而是结构层的必然后果**：每会话第一动作消费的热数据（bootstrap `gates.next_gate` = 队列第一个 pending Gate；`project.stage` = 单一全局阶段坐标）与模式确认句模板（`stage: {stage}, Gate {gate}: {status}`）持续把 agent 的项目状态心智锚定在"线性队列中下一个待过门"上。DEC-097 想替换的心智模型（用户原话"线性的状态迁移并不合理"）正是当前热数据每会话重建的模型。
+**用户观察到的"不管项目实际状态都往下一个 Gate 推进"不是行为层的偶发偏差，而是结构层面必经信息环境的必然产物（行为因果为机制推断，见 H-1——成立的是系统必然提供 classic 主坐标，未证明行为占比与切换后目标导向自然成立；R1 notes N-2 顺带修复 2026-09-26）**：每会话第一动作消费的热数据（bootstrap `gates.next_gate` = 队列第一个 pending Gate；`project.stage` = 单一全局阶段坐标）与模式确认句模板（`stage: {stage}, Gate {gate}: {status}`）持续把 agent 的项目状态心智锚定在"线性队列中下一个待过门"上。DEC-097 想替换的心智模型（用户原话"线性的状态迁移并不合理"）正是当前热数据每会话重建的模型。
 
 | # | 关键发现 | 置信度 |
 |---|---|---|
@@ -227,14 +227,14 @@ live `.governance/plan-tracker.md`（本仓 dogfood，0.89.0）：
 | B 结构切换 | 完整（四层全换） | 完全（原决议落地） | 高 | 中-高（机器 rollback 支持在） | 大（需分批授权票） |
 | C 混合渐进 | 中（数据+投影层；判定层保留线性） | 冲突（需修订 DEC-097） | 中 | 中-高 | 中（双写一致性新负担） |
 
-> 决策留给用户 + Design Reviewer。本报告不推荐具体候选——按 Architect 边界，关键架构决策必须经独立审查与用户确认。
+> 决策归用户（Design Reviewer 仅承担质量裁决——通过/条件通过/需修改——不含方案选择）。本报告不推荐具体候选——按 Architect 边界，关键架构决策经独立质量审查后由用户裁决。（R1 notes N-2 顺带修复 2026-09-26）
 
 ---
 
 ## 6. 蓝军挑战（≥3，独立 ID + 缓解措施）
 
 - **RB-1：热数据投影未必是行为主因**。"bootstrap next_gate 拉回线性"与 AUDIT-143 实证的"行为规则在第四层按需文件才断链"可能竞争同一症状的解释权——若主因是注入链断链（规则不在上下文），改投影只是止痛。缓解：与 AUDIT-156（行为面）交叉归因；任何修复立项必须定义行为级验收（新会话不预读第四层文件仍执行 loop 语义——AUDIT-143 REQ-112 验收信号 4 同款），不能只验字段存在。
-- **RB-2：宿主激活从未发生——把"线性偏差"换成"loop 失能"的风险仍在**（R0 修正：原稿前提「loop runtime 从未通过外部验证」被 DEC-133 证伪，时序错置——原引 loop-role-mapping.md L5 的 NOT_MET 是 0.66.1〔2026-07-17〕时点声明，早于 DEC-133〔07-26 关闭 RISK-037/042：VAL-008 dogfood PASS + VAL-009 双外部类型 PASS，Loop Engineering 已升级为 externally-validated runtime〕九天）。**修正后攻击向量**：原型级外部验证曾通过（3 项目原型），但验证通过 ≠ 宿主激活——唯一真实宿主（本仓 dogfood）的 flow-unit-runtime.json 至 0.89.0 不存在、loop-event-log.jsonl 不存在、迁移从未执行；DEC-133 验证的是引擎能力与迁移工具（VAL-009 的原型项目），不是本仓 dogfood 宿主的持续运行态；真实宿主项目激活 loop runtime 的有效性（migration → derive → 判定路由 → rollup 投影全链）在宿主侧仍无运行证据。缓解：候选 B 进入条件 = 在本仓 dogfood 执行完整迁移并验证全链（验证门直接复用 DEC-133 的 8 项关闭标准清单作为 checklist）；候选 A/C 不依赖激活，天然免疫此挑战。
+- **RB-2：宿主激活从未发生——把"线性偏差"换成"loop 失能"的风险仍在**（R0 修正：原稿前提「loop runtime 从未通过外部验证」被 DEC-133 证伪，时序错置——原引 loop-role-mapping.md L5 的 NOT_MET 是 0.66.1〔2026-07-17〕时点声明，早于 DEC-133〔07-26 关闭 RISK-037/042：VAL-008 dogfood PASS + VAL-009 双外部类型 PASS，Loop Engineering 已升级为 externally-validated runtime〕九天）。**修正后攻击向量**：原型级外部验证曾通过（3 项目原型），但验证通过 ≠ 宿主激活——唯一真实宿主（本仓 dogfood）的 flow-unit-runtime.json 至 0.89.0 不存在、loop-event-log.jsonl 不存在、迁移从未执行；DEC-133 验证的是引擎能力与迁移工具（VAL-009 的原型项目），不是本仓 dogfood 宿主的持续运行态；真实宿主项目激活 loop runtime 的有效性（migration → derive → 判定路由 → rollup 投影全链）在宿主侧仍无运行证据。缓解：候选 B 进入条件 = 在本仓 dogfood 执行完整迁移并验证全链（验证门直接复用 DEC-133 的 8 项关闭标准清单作为 checklist）；候选 A 不依赖激活，免疫此挑战；候选 C 因含本仓迁移步骤**不免疫**宿主激活风险——仅免疫「判定权威切换」面（arch 指出、R1 记录为 N-1；R1 notes 顺带修复 2026-09-26）。
 - **RB-3：本报告的因果链是机制推断，非受控实验**。"next_gate/stage 投影 → agent 行为拉回线性"无 A/B 证据；用户观察到的具体行为样本（哪些会话、哪些推进动作）未取证。缓解：报告已将 H-1/H-2 列为显式假设（§7）；修复立项时先做行为取证（最近 N 会话的推进决策与 bootstrap 输出对照），再定改造范围——避免在未证实的因果上投入候选 B 级别的迁移成本。
 - **RB-4：迁移面可能被低估——Gate 表结构是测试与发布链的隐性契约**。`## Gate 状态跟踪` 字面量出现在引擎校验（L4138/L7669）、migration 判据（loop_migration L242）、bootstrap 解析（L121）、测试 fixture（test_verify_workflow 20+ 处）、governance-init 模板（e2e 测试 4 处）——任何数据模型切换的真实改动面以这些消费点为准，而非模板本身。缓解：候选 B 必须 Like FEAT-064 分族翻转先例（机制交付 + 出厂 WARN + 翻转留授权票），且立项时先跑一次 Gate 结构消费点普查（grep 清单进 ADR），把 S-3 成本估算从"预估"降为"清点"。
 

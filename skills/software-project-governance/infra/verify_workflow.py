@@ -1139,6 +1139,7 @@ from checks.evidence_domain import (  # noqa: E402
     check_evidence_quality,
     check_fact_grounding,
     check_structured_evidence,
+    render_evidence_binding_drift_block,
 )
 
 # ── Risk domain (extracted to infra/checks/risk_domain.py in 0.70.0) ────────
@@ -9934,7 +9935,6 @@ def check_gate_consistency():
                     break
             # Don't fail if no direct match — gates are referenced indirectly
             # Instead, check if passed-on-entry gates look suspicious
-            pass
 
         if g["status"] == "passed-on-entry":
             # These are pre-onboarding gates, should have evidence date
@@ -15384,8 +15384,8 @@ def _run_full_engine_checks(args):
                 if len(tasks_list) > 10:
                     print(f"│    ... and {len(tasks_list) - 10} more")
     else:
-        print(f"│  [PASS] Gate status and evidence are consistent.")
-    print("└──────────────────────────────────────────────────────┘")
+        print("│  [PASS] Gate status and evidence are consistent.")
+    print("└──────────────────────────────────────────────────────┘"); all_issues = render_evidence_binding_drift_block(all_issues)
 
     # ── 4. Evidence quality ──
     print("\n┌─ Check 4: Evidence Quality ─────────────────────────┐")

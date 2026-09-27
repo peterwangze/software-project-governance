@@ -383,6 +383,343 @@ def check_fact_grounding():
     return result
 
 
+def check_evidence_binding_drift():
+    """FEAT-068 / C-10: drift check on the machine-maintained faces.
+
+    ADR-019 §2.2 (R0 correction) scopes this check to the machine-maintained
+    faces ONLY (runtime + transition projection): a write bypassing their legal
+    writers (loop_migration / process_gate_result chain) is intercepted, while
+    legal human/protocol writes to the goal and evidence faces stay out of
+    scope. ADR-019 §2.5 fixes the evidence binding four-tuple:
+    (unit, 产物版本, 检查策略版本, 审查主体) — expressed here as the
+    runtime's flow_units[].flow_unit_id / migration_plan_hash /
+    gate_schema@digest / decomposition_confirmed markers.
+
+    Arming: the check applies ONLY when ``.governance/flow-unit-runtime.json``
+    exists (the runtime face loop_migration writes). Legacy hosts (no runtime,
+    classic phase-gate) get ``applicable=False`` and zero issues — pre-switch
+    the Gate table is not yet a machine face and must stay unpoliced
+    (backward compatible: zero behavior change for existing hosts/fixtures).
+
+    FAIL-grade faces (interception):
+      - runtime_face_unreadable / runtime_face_invalid_json — corrupt face.
+      - runtime_face_missing_machine_credential — a required legal-writer
+        marker missing or malformed (schema_version, runtime_contract,
+        workflow_model == "loop-engineering", migration_version, 64-hex
+        migration_plan_hash, migration_timestamp, decomposition_confirmed is
+        True, non-empty flow_units).
+      - runtime_unit_corrupt — per-unit shape violation (duplicate
+        flow_unit_id, empty derivation_reason / gate_state.gate_id, missing
+        loop_state.fuse, dangling dependency).
+      - evidence_binding_missing — runtime claims migration_version V but no
+        ``MIGRATION-V`` row exists in evidence-log.md (the evidence-face half
+        of the §2.5 binding is gone).
+
+    WARN-grade faces (drift needing a legal re-sync via loop_migration, not an
+    interception of a hand-edit):
+      - unit_set_drift — runtime unit set differs from the plan re-derived
+        from the current plan-tracker (legal plan-tracker edits make the
+        runtime stale; ADR-019 §2.2: unit-set changes go through loop-migrate).
+      - gate_schema_drift — runtime gate_schema digest differs from the
+        current registry semantics (检查策略版本升级使既有认证失效, §2.5).
+
+    Returns:
+        dict with keys: applicable (bool), runtime_path (str or None),
+        fail (list of {"type", "detail"}), warn (list of {"type", "detail"}),
+        pass (bool — True iff applicable is False or fail is empty).
+    """
+    _resolve_shared()
+    runtime_path = GOVERNANCE_DIR / "flow-unit-runtime.json"
+    if not runtime_path.is_file():
+        return {
+            "applicable": False,
+            "runtime_path": None,
+            "fail": [],
+            "warn": [],
+            "pass": True,
+        }
+    fails = []
+    warns = []
+    try:
+        runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        fails.append({
+            "type": "runtime_face_unreadable",
+            "detail": (
+                f"{runtime_path}: 机器维护面不可读/不可解析"
+                f"（疑似绕过合法写入方直改或截断）: {exc}"
+            ),
+        })
+        return {
+            "applicable": True,
+            "runtime_path": str(runtime_path),
+            "fail": fails,
+            "warn": warns,
+            "pass": False,
+        }
+    if not isinstance(runtime, dict):
+        fails.append({
+            "type": "runtime_face_invalid_json",
+            "detail": (
+                f"{runtime_path}: 顶层必须是对象，实为 "
+                f"{type(runtime).__name__}"
+            ),
+        })
+        return {
+            "applicable": True,
+            "runtime_path": str(runtime_path),
+            "fail": fails,
+            "warn": warns,
+            "pass": False,
+        }
+
+    # ── Face 1: machine-writer credential markers (§2.5 four-tuple) ─────
+    schema_version = runtime.get("schema_version")
+    runtime_contract = runtime.get("runtime_contract")
+    workflow_model = runtime.get("workflow_model")
+    migration_version = runtime.get("migration_version")
+    migration_plan_hash = runtime.get("migration_plan_hash")
+    migration_timestamp = runtime.get("migration_timestamp")
+    decomposition_confirmed = runtime.get("decomposition_confirmed")
+    flow_units = runtime.get("flow_units")
+    gate_schema = runtime.get("gate_schema")
+
+    if not (isinstance(schema_version, str) and schema_version.strip()):
+        fails.append({
+            "type": "runtime_face_missing_machine_credential",
+            "detail": "schema_version 缺失或为空",
+        })
+    if not (isinstance(runtime_contract, str) and runtime_contract.strip()):
+        fails.append({
+            "type": "runtime_face_missing_machine_credential",
+            "detail": "runtime_contract 缺失或为空",
+        })
+    if workflow_model != "loop-engineering":
+        fails.append({
+            "type": "runtime_face_missing_machine_credential",
+            "detail": (
+                f"workflow_model 必须为 loop-engineering，实为 "
+                f"{workflow_model!r}"
+            ),
+        })
+    if not (isinstance(migration_version, str) and migration_version.strip()):
+        fails.append({
+            "type": "runtime_face_missing_machine_credential",
+            "detail": "migration_version 缺失或为空",
+        })
+        migration_version = None
+    if not (isinstance(migration_plan_hash, str)
+            and re.fullmatch(r"[0-9a-f]{64}", migration_plan_hash)):
+        fails.append({
+            "type": "runtime_face_missing_machine_credential",
+            "detail": (
+                f"migration_plan_hash 必须为 64 位小写十六进制"
+                f"（产物版本绑定），实为 {migration_plan_hash!r}"
+            ),
+        })
+    if not (isinstance(migration_timestamp, str)
+            and migration_timestamp.strip()):
+        fails.append({
+            "type": "runtime_face_missing_machine_credential",
+            "detail": "migration_timestamp 缺失或为空",
+        })
+    if decomposition_confirmed is not True:
+        fails.append({
+            "type": "runtime_face_missing_machine_credential",
+            "detail": (
+                f"decomposition_confirmed 必须为 true（审查主体确认），"
+                f"实为 {decomposition_confirmed!r}"
+            ),
+        })
+    if not (isinstance(flow_units, list) and flow_units):
+        fails.append({
+            "type": "runtime_face_missing_machine_credential",
+            "detail": "flow_units 缺失或为空（unit 绑定缺失）",
+        })
+        flow_units = []
+
+    # ── Face 2: per-unit referential integrity ──────────────────────────
+    unit_ids = []
+    for unit in flow_units:
+        if not isinstance(unit, dict):
+            fails.append({
+                "type": "runtime_unit_corrupt",
+                "detail": f"flow_units 元素不是对象: {unit!r}",
+            })
+            continue
+        fuid = unit.get("flow_unit_id")
+        if not (isinstance(fuid, str) and fuid.strip()):
+            fails.append({
+                "type": "runtime_unit_corrupt",
+                "detail": f"flow_unit_id 缺失或为空: {unit!r}",
+            })
+            continue
+        if fuid in unit_ids:
+            fails.append({
+                "type": "runtime_unit_corrupt",
+                "detail": f"flow_unit_id 重复: {fuid}",
+            })
+        else:
+            unit_ids.append(fuid)
+        for field in ("unit_type", "derivation_reason"):
+            value = unit.get(field)
+            if not (isinstance(value, str) and value.strip()):
+                fails.append({
+                    "type": "runtime_unit_corrupt",
+                    "detail": f"{fuid}: {field} 缺失或为空",
+                })
+        loop_state = unit.get("loop_state")
+        if not isinstance(loop_state, dict) or not isinstance(
+                loop_state.get("fuse"), dict):
+            fails.append({
+                "type": "runtime_unit_corrupt",
+                "detail": f"{fuid}: loop_state.fuse 缺失",
+            })
+        gate_state = unit.get("gate_state")
+        if (not isinstance(gate_state, dict)
+                or not (isinstance(gate_state.get("gate_id"), str)
+                        and gate_state["gate_id"].strip())):
+            fails.append({
+                "type": "runtime_unit_corrupt",
+                "detail": f"{fuid}: gate_state.gate_id 缺失或为空",
+            })
+        if not (isinstance(unit.get("runtime_status"), str)
+                and unit["runtime_status"].strip()):
+            fails.append({
+                "type": "runtime_unit_corrupt",
+                "detail": f"{fuid}: runtime_status 缺失或为空",
+            })
+        deps = unit.get("dependencies")
+        if not isinstance(deps, list) or not all(
+                isinstance(dep, str) for dep in deps):
+            fails.append({
+                "type": "runtime_unit_corrupt",
+                "detail": f"{fuid}: dependencies 必须为字符串列表",
+            })
+
+    id_set = set(unit_ids)
+    for unit in flow_units:
+        if not isinstance(unit, dict):
+            continue
+        deps = unit.get("dependencies")
+        if not isinstance(deps, list):
+            continue
+        for dep in deps:
+            if isinstance(dep, str) and dep not in id_set:
+                fails.append({
+                    "type": "runtime_unit_corrupt",
+                    "detail": (
+                        f"{unit.get('flow_unit_id')}: 悬空依赖 {dep!r}"
+                        f"（不在 unit 集合内）"
+                    ),
+                })
+
+    # ── Face 3: evidence-face half of the §2.5 binding ──────────────────
+    if migration_version:
+        evidence_path = GOVERNANCE_DIR / "evidence-log.md"
+        migration_row_seen = False
+        if evidence_path.is_file():
+            try:
+                content = evidence_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                content = None
+            if content is not None:
+                marker = re.compile(
+                    r"^\|\s*MIGRATION-" + re.escape(migration_version) + r"\b"
+                )
+                migration_row_seen = any(
+                    marker.match(line.strip()) for line in content.split("\n")
+                )
+        if not migration_row_seen:
+            fails.append({
+                "type": "evidence_binding_missing",
+                "detail": (
+                    f"运行态宣称 migration_version={migration_version}，"
+                    f"但 evidence-log.md 无对应 MIGRATION 行"
+                    f"（§2.5 证据绑定缺失——迁移/审查主体在证据层无留痕）"
+                ),
+            })
+
+    # ── Face 4 (WARN): drift vs the legal writers' current outputs ──────
+    # Lazy import: only armed hosts pay it; the module import graph stays
+    # unchanged for every legacy host and fixture (backward compatible).
+    from loop_migration_plan import (  # noqa: WPS433 (deliberate lazy import)
+        _resolve_gate_schema,
+        build_migration_plan,
+    )
+    try:
+        plan_text = (GOVERNANCE_DIR / "plan-tracker.md").read_text(
+            encoding="utf-8")
+        plan = build_migration_plan(
+            str(GOVERNANCE_DIR.parent), None,
+            plan_tracker_text=plan_text,
+        )
+        runtime_ids = sorted(
+            unit.get("flow_unit_id") for unit in flow_units
+            if isinstance(unit, dict)
+            and isinstance(unit.get("flow_unit_id"), str)
+        )
+        derived_ids = sorted(plan.unit_ids)
+        if runtime_ids != derived_ids:
+            warns.append({
+                "type": "unit_set_drift",
+                "detail": (
+                    f"运行态 unit 集（{len(runtime_ids)}）与计划面重派生 "
+                    f"unit 集（{len(derived_ids)}）不一致——计划面合法演化后"
+                    f"运行态未同步；unit 集变更必须经 loop_migration 重新"
+                    f"同步（ADR-019 §2.2）"
+                ),
+            })
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        warns.append({
+            "type": "unit_set_drift",
+            "detail": f"计划面重派生失败，无法比对 unit 集漂移: {exc}",
+        })
+    current_gate_schema = _resolve_gate_schema()
+    if gate_schema is not None and gate_schema != current_gate_schema:
+        warns.append({
+            "type": "gate_schema_drift",
+            "detail": (
+                f"runtime gate_schema={gate_schema!r} 与当前 registry 语义 "
+                f"{current_gate_schema!r} 不一致——检查策略版本升级使既有认证"
+                f"失效（§2.5），需重新迁移认证"
+            ),
+        })
+
+    return {
+        "applicable": True,
+        "runtime_path": str(runtime_path),
+        "fail": fails,
+        "warn": warns,
+        "pass": not fails,
+    }
+
+
+def render_evidence_binding_drift_block(all_issues):
+    """Print the C-10 evidence-binding drift block; return the issue count.
+
+    Engine-dispatch companion of :func:`check_evidence_binding_drift` — the
+    check logic and its presentation live in this domain module so the
+    verify_workflow engine only wires dispatch (checks.injection_budget
+    precedent; R1 mainfile budget keeps verify_workflow.py line-neutral).
+    FAIL entries count into all_issues; WARN entries print without counting.
+    """
+    block = check_evidence_binding_drift()
+    print("\n┌─ Check 3b: C-10 Evidence Binding Drift (FEAT-068) ──┐")
+    if not block.get("applicable"):
+        print("│  [PASS] Machine faces absent (pre-switch host) — not applicable.")
+    else:
+        for issue in block.get("fail", []):
+            all_issues += 1
+            print(f"│  [FAIL] {issue['type']}: {issue['detail']}")
+        for issue in block.get("warn", []):
+            print(f"│  [WARN] {issue['type']}: {issue['detail']}")
+        if block.get("pass"):
+            print("│  [PASS] Machine-maintained faces match legal writers (C-10).")
+    print("└──────────────────────────────────────────────────────┘")
+    return all_issues
+
+
 def check_structured_evidence():
     """FIX-083: Check current product-code evidence has machine-readable facts.
 

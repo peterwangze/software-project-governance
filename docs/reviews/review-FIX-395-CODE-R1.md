@@ -20,10 +20,10 @@ R0 唯一阻塞项 P0-1 已按选型 (b) derive 修复且经独立亲验消除�
 | R0 编号 | 级别 | 内容 | R1 状态 | 依据 |
 |---|---|---|---|---|
 | P0-1 | **P0 阻塞** | 新测试文件 23 处字面 `0.88.0` 未豁免/未 derive，打破 `test_static_version_pins::RealTreeContractTests::test_real_tree_scan_is_warn_only_and_clean` | **✅ 已修复**（选型 b：derive） | §二 亲验四重证据 |
-| P1-1 | P1 | 申报「其余面恒等」不实 + 定向口径漏 static-pin 契约 | **Coordinator 处置中**（超出 Reviewer 范围，注记）：R1 修复申报已如实改口——「FAIL 30=30 恒等」按「仅 stash A 态新文件」口径成立（本复审独立 A/B 双口径均验证，见 §三）；evidence-log 勘正留 Coordinator 落字 |
-| P3-1 | P3 | 28c REQ 行 :2239/2241 legacy 读潜在耦合 | 未变（设计外延，留档候选票）——本次 diff 未触碰 :2239/2241（hunk 恒等核验） |
-| P3-2 | P3 | FIX-069 面 legacy 读（:1691/1873/1883/1884） | 同上，范围外未动 ✓ |
-| P3-3 | P3 | 夹具 REL-088 trailing-group prose 历史形态 | 保留（R0 已判可不改）；docstring :41-48 已同步披露 R1 derive 事实 |
+| P1-1 | P1 | 申报「其余面恒等」不实 + 定向口径漏 static-pin 契约 | **Coordinator 处置中**（超出 Reviewer 范围，注记）：R1 修复申报已如实改口——「FAIL 30=30 恒等」按「仅 stash A 态新文件」口径成立（本复审独立 A/B 双口径均验证，见 §三）；evidence-log 勘正留 Coordinator 落字 | §三 A/B 双口径独立核验；evidence 勘正留 Coordinator |
+| P3-1 | P3 | 28c REQ 行 :2239/2241 legacy 读潜在耦合 | 未变（设计外延，留档候选票）——本次 diff 未触碰 :2239/2241（hunk 恒等核验） | hunk 恒等核验（diff 未触碰 :2239/2241） |
+| P3-2 | P3 | FIX-069 面 legacy 读（:1691/1873/1883/1884） | 同上，范围外未动 ✓ | 同 P3-1 口径（范围外未动） |
+| P3-3 | P3 | 夹具 REL-088 trailing-group prose 历史形态 | 保留（R0 已判可不改）；docstring :41-48 已同步披露 R1 derive 事实 | R0 判定保留 + docstring :41-48 披露 |
 
 ## 二、P0-1 修复核验（亲验四重证据）
 

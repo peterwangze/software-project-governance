@@ -32,7 +32,7 @@
 
 | # | 注入点 | 位置 | 机制 |
 |---|---|---|---|
-| 1-1 | **模式确认句 canonical 定义** | `skills/software-project-governance/SKILL.md` L90（§B0）：``Governance: {trigger_mode} x {permission_mode} \| stage: {stage}, Gate {gate}: {status}, {risk_count} risk(s)`` | 每会话必输出的一句状态确认，把 `stage` + `Gate {gate}: {status}` 定义为项目的标准坐标。always-on 模式使用完整句式（L90）；on-demand/silent-track 为变体（L91-92——前者仅展开 `Governance: on-demand x {permission_mode}` 不含 Gate 状态段，后者不输出面板）（R0 修正：原表述「全部三个触发模式共用此句式定义」与 SKILL.md L89-92 实况不符，2026-09-27） |
+| 1-1 | **模式确认句 canonical 定义** | `skills/software-project-governance/SKILL.md` L90（§B0）：``Governance: {trigger_mode} x {permission_mode} ｜ stage: {stage}, Gate {gate}: {status}, {risk_count} risk(s)`` | 每会话必输出的一句状态确认，把 `stage` + `Gate {gate}: {status}` 定义为项目的标准坐标。always-on 模式使用完整句式（L90）；on-demand/silent-track 为变体（L91-92——前者仅展开 `Governance: on-demand x {permission_mode}` 不含 Gate 状态段，后者不输出面板）（R0 修正：原表述「全部三个触发模式共用此句式定义」与 SKILL.md L89-92 实况不符，2026-09-27） |
 | 1-2 | **注入模板投影链（canonical source）** | `commands/governance-init.md` L222（lightweight 模板）、L278（standard 模板 Step 0 正文两次）、L369（secondary-thin 模板）——同一句式四套模板重复投影 | Step 7 注入模板是 bootstrap 的唯一事实源（FIX-011），该句式经 sync_entry_projection 渲染进仓库根 `CLAUDE.md`（Gate=12 处/loop=0）与 `AGENTS.md`（Gate=4/loop=0），并写入 `adapters/dsh/AGENTS.md.template` L27 |
 | 1-3 | **DSH thin pointer 项目入口** | `adapters/dsh/AGENTS.md.template` L21（「知道阶段/Gate/模式？」）、L27（always-on 确认句全文） | DSH 平台每个以本仓为工作区的会话自动注入 |
 | 1-4 | **status 命令文本面板** | `infra/verify_workflow.py` L11190（`Stage:` 面板行）、L11194（`Latest Gate:` 面板行）、L11528-11544（`cmd_gates` 完整 Gate 队列面板） | Scenario F 状态展示以 Stage/Gate 为主行 |
@@ -62,7 +62,7 @@
 
 | # | 注入点 | 位置 | 机制 |
 |---|---|---|---|
-| 4-1 | **数据结构本身是线性的** | `.governance/plan-tracker.md` `## Gate 状态跟踪` 节：单一全局 11-Gate 队列表（`| G1 | → 调研 | passed-on-entry | ...` 至 `| G11 | → 下一轮 | passed |`） | plan-tracker 的 Gate 表以「阶段转换」为列定义——数据模型层面 Gate 与阶段一一绑定；`## 项目配置` 的「当前阶段」为单值字段（bootstrap `parse_project_config` L627 读取为 `project.stage`） |
+| 4-1 | **数据结构本身是线性的** | `.governance/plan-tracker.md` `## Gate 状态跟踪` 节：单一全局 11-Gate 队列表（`｜ G1 ｜ → 调研 ｜ passed-on-entry ｜ ...` 至 `｜ G11 ｜ → 下一轮 ｜ passed ｜`）  | plan-tracker 的 Gate 表以「阶段转换」为列定义——数据模型层面 Gate 与阶段一一绑定；`## 项目配置` 的「当前阶段」为单值字段（bootstrap `parse_project_config` L627 读取为 `project.stage`） |
 | 4-2 | **核心层定义未随重构更新** | `core/lifecycle.md`（11 阶段生命周期定义，文件最后修改 **2026-05-01 22:05:56**，早于 DEC-097 2026-07-10）；`core/stage-gates.md`（Gate 检查规则）；`SKILL.md` L425-426 参考表（「core/lifecycle.md → 11 阶段生命周期定义」「core/stage-gates.md → Gate 检查规则」） | 0.65.0 重构交付了 `core/loop-engineering-registry.json`（loop_gate_semantics G1-G11 注解），但核心层的阶段/Gate 定义文档保持 pre-DEC-097 形态 |
 | 4-3 | **M6 profile 裁剪表** | `behavior-protocol.md` L435-437（lightweight「G1+G2 合并，G3-G5 跳过…」；standard「全部 11 个 Gate」；strict「全部 11 个 Gate，不允许 passed-with-conditions」） | 即使最激进的 profile 也是对同一条 11-Gate 线性队列做裁剪，而非环化 |
 | 4-4 | **strict 模板的极线性化** | `commands/governance-init.md` L339（strict 差异段：「**阶段纪律**：阶段间不允许重叠；阶段回退需决策记录 + 影响分析」）、L335（「每个 Gate 评分 0~5 分」） | strict profile 把线性阶段模型进一步硬化（禁止重叠=纯瀑布语义） |
@@ -104,11 +104,11 @@ $loop = 'loop','迭代','back-edge','持续演进','loop-exit','loop_state','flo
 
 | 文件（角色） | Gate 类计数 | stage/阶段 | loop/迭代 | 依据 |
 |---|---|---|---|---|
-| `agent-presets/governance/agent.cordis.yml.template`（DSH persona，会话 system 级） | **0** | **0** | **0**（「环」仅出现于「环境」一词，grep 实证 L59/L71） | grep `[Gg]ate` 全文件 0 匹配；`loop\|Loop\|迭代\|环` 仅 2 处「环境」 |
+| `agent-presets/governance/agent.cordis.yml.template`（DSH persona，会话 system 级） | **0** | **0** | **0**（「环」仅出现于「环境」一词，grep 实证 L59/L71） | grep `[Gg]ate` 全文件 0 匹配；`loop｜Loop｜迭代｜环` 仅 2 处「环境」 |
 | `skills/software-project-governance/SKILL.md`（入口层，489 行） | 19 | stage 6 + 阶段 10 | **0** / 0（flow-unit 0、back-edge 0、loop-rollup 0） | pwsh regex 计数 |
 | 仓库根 `CLAUDE.md`（主入口投影产物） | 12 | 8 | **0** | pwsh 计数 |
 | 仓库根 `AGENTS.md`（次要入口薄指针） | 4 | 3 | **0** | pwsh 计数 |
-| `commands/governance-init.md`（注入模板 canonical source） | Gate {n|gate} 3 + 通过 Gate 类多处（L201/208/222/233/241/247/250/272/284/285/293/295/301/317/335/339/352/357/363/369） | 阶段跳跃 2 | **0** | grep L171-379 逐行实证；pwsh 对该文件被拒 |
+| `commands/governance-init.md`（注入模板 canonical source） | Gate {n|gate} 3 + 通过 Gate 类多处（L201/208/222/233/241/247/250/272/284/285/293/295/301/317/335/339/352/357/363/369） | 阶段跳跃 2 | **0** ｜ grep L171-379 逐行实证；pwsh 对该文件被拒 |
 | `references/behavior-protocol.md`（行为协议本体，835 行） | **40** | **21** | **0** / **0** | pwsh regex 计数 |
 | `references/interaction-boundary.md` | 9 | 11 | **0** / 0（推荐 6） | pwsh 计数 |
 | `skills/main-workflow/SKILL.md`（能力层总入口） | Gate 类 13 处（含 L74 线性规则） | 阶段 15+ | **0** | grep 33 处命中逐行分类 |

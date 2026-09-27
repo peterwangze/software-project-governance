@@ -512,6 +512,334 @@ def _verify_backup_hashes(backup_dir, expected_hashes):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Commit-window self-heal + orphan backup hygiene (FIX-398 E-4/E-5, RISK-060)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# The compensating transaction in _commit_runtime_and_evidence restores
+# byte-exactly when an exception is raised — but a hard kill (SIGKILL-class)
+# between the runtime replace and the evidence replace leaves NO exception
+# path: the runtime has landed while the evidence MIGRATION row has not
+# (FEAT-068 scenario ⑥ wc6d, 240ms — RISK-060). Re-apply used to hit the
+# idempotency guard and refuse without compensating, making a manual
+# rollback the only recovery. The heal path below detects that interrupted
+# state on re-entry and compensates (remove the half-committed runtime +
+# the interrupted attempt's now-orphaned backup dir), after which apply
+# proceeds as a fresh, fully-validated 9-step apply.
+#
+# Reconnaissance decision record (FIX-398 assumption_record, 2026-09-27):
+#   - Form chosen: SELF-HEAL RE-ENTRY (interrupted-state detection +
+#     compensation), NOT commit-order adjustment. Swapping the order
+#     (evidence row first, runtime second) merely relocates the partial
+#     state: a kill between the writes would leave a MIGRATION row with no
+#     runtime, and re-apply would append a SECOND MIGRATION row for a
+#     migration that never completed — a false audit trail, arguably worse
+#     than the runtime-without-row window it replaces. Detection+heal keeps
+#     the completed-apply marker unambiguous (runtime + row together) and
+#     makes every interrupted window point converge to zero partial state
+#     or an explicit fail-closed guidance (never an idempotent-refusal
+#     deadlock).
+#   - Write face (P7 red line): the heal only ever REMOVES the interrupted
+#     transaction's own artifacts (the runtime payload this tool family
+#     wrote at MIGRATION_VERSION, its scoped mkstemp leftovers, and the
+#     interrupted attempt's backup dir whose pre-state snapshots were
+#     hash-verified equal to the live files). It never rewrites live
+#     plan-tracker/evidence bytes. Ambiguous states (live evidence differing
+#     from the transaction's pre-state snapshot) fail closed with explicit
+#     guidance instead of guessing. MIGRATION_VERSION is never touched
+#     (DEC-257).
+
+# Evidence-row references to backup dirs: apply's MIGRATION row carries
+# ``backup=<dir-name>`` and rollback's ROLLBACK row carries
+# ``restored_from=<dir-name>``. A backup dir referenced by NEITHER is an
+# orphan of a killed/failed apply (E-5). Parsing is restricted to table rows
+# whose first cell is one of our row ids so prose mentions never bind.
+_BACKUP_REF_ROW_RE = re.compile(
+    r"^\|\s*(?:MIGRATION-\d+(?:\.\d+){0,3}|ROLLBACK-\d+(?:\.\d+){0,3})\b"
+)
+_BACKUP_REF_NAME_RE = re.compile(r"(?:backup|restored_from)=([^\|\s]+)")
+
+# Scoped mkstemp leftovers of an interrupted _atomic_replace_bytes (the temp
+# file is only unlinked on the exception path — a hard kill leaves it).
+_COMMIT_TEMP_GLOBS = (
+    "flow-unit-runtime.json.*.tmp",
+    "evidence-log.md.*.tmp",
+)
+
+
+def _referenced_backup_names(evidence_text):
+    """Backup dir names referenced by MIGRATION/ROLLBACK evidence rows."""
+    names = set()
+    if not evidence_text:
+        return names
+    for line in evidence_text.splitlines():
+        stripped = line.strip()
+        if not _BACKUP_REF_ROW_RE.match(stripped):
+            continue
+        m = _BACKUP_REF_NAME_RE.search(stripped)
+        if m:
+            names.add(m.group(1))
+    return names
+
+
+def _read_runtime_migration_version(runtime_path):
+    """Best-effort ``(parses, migration_version)`` read of the runtime face.
+
+    Never raises: an unreadable/unparseable runtime returns ``(False, None)``
+    (a runtime this module wrote via _atomic_replace_bytes is always complete
+    valid JSON, so an unparseable file is NOT an interrupted-commit artifact
+    and must not be healed/touched by this module).
+    """
+    try:
+        data = json.loads(runtime_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return (False, None)
+    if isinstance(data, dict) and isinstance(data.get("migration_version"), str):
+        return (True, data["migration_version"])
+    return (True, None)
+
+
+def _evidence_has_migration_row(evidence_text, version):
+    """True iff evidence-log carries the ``| MIGRATION-<version>`` table row.
+
+    Mirrors the C-10 Face 3 anchor (checks/evidence_domain.py): the stamp
+    must be followed by a delimiter, and the row must START the line so prose
+    mentions of the stamp never count as the binding row.
+    """
+    if not evidence_text:
+        return False
+    marker = re.compile(
+        r"^\|\s*MIGRATION-" + re.escape(version) + r"(?=\s*\||\s|$)"
+    )
+    return any(marker.match(line.strip()) for line in evidence_text.split("\n"))
+
+
+def _heal_interrupted_commit(host_root, evidence_text):
+    """Detect + compensate an interrupted commit window (FIX-398 E-4).
+
+    Detected state: flow-unit-runtime.json parses and claims
+    ``migration_version == MIGRATION_VERSION`` while evidence-log.md carries
+    NO ``| MIGRATION-<version>`` row. That exact state is only producible by
+    a kill inside _commit_runtime_and_evidence between the two atomic
+    replaces (the evidence write either fully lands or never lands).
+
+    Compensation (all subtractive, P7-safe):
+      1. locate the interrupted attempt's commit-window backup (newest
+         MIGRATION_VERSION dir holding an ``evidence.before`` snapshot —
+         _commit_runtime_and_evidence always writes the snapshots BEFORE the
+         first replace, so the wc6d window guarantees it exists);
+      2. verify the live evidence-log is byte-identical to that pre-state
+         snapshot (proving the interrupted apply never touched evidence);
+         on ANY difference the state is ambiguous (post-kill legal writes vs
+         an out-of-chain row deletion) → fail-closed guidance, no auto-heal;
+      3. remove the half-committed runtime.json + the interrupted commit's
+         scoped .tmp leftovers, then remove the attempt's backup dir (its
+         pre-state equals live — zero information loss; E-5).
+
+    Returns a dict:
+      ``{"detected": False}`` — not an interrupted commit (heal not armed);
+      ``{"detected": True, "healed": True, ...}`` — compensated, apply may
+      proceed fresh;
+      ``{"detected": True, "healed": False, "guidance": ...}`` — fail-closed:
+      the caller must abort with this guidance (rollback is the manual path).
+    """
+    runtime_path = _runtime_path(host_root)
+    if not runtime_path.is_file():
+        return {"detected": False}
+    parses, version = _read_runtime_migration_version(runtime_path)
+    if not parses or version != MIGRATION_VERSION:
+        # Not an artifact of this module's commit window (unparseable or a
+        # foreign stamp) — never touched here (existing apply semantics
+        # govern those states; DEC-257: the stamp contract is not ours to
+        # reinterpret in the heal path).
+        return {"detected": False}
+    if _evidence_has_migration_row(evidence_text, MIGRATION_VERSION):
+        # runtime + row = a COMPLETED apply — the idempotency guard's domain.
+        return {"detected": False}
+    record = {"detected": True, "healed": False, "runtime_version": version}
+
+    snapshot_backups = [
+        (entry, ver) for entry, ver, _ts in _list_migration_backups(host_root)
+        if ver == MIGRATION_VERSION and (entry / "evidence.before").is_file()
+    ]
+    if not snapshot_backups:
+        record["guidance"] = (
+            "interrupted migration commit detected: flow-unit-runtime.json "
+            "claims migration_version {0} but evidence-log.md has no "
+            "MIGRATION-{0} row, and no commit-window backup with a pre-state "
+            "snapshot (evidence.before) exists to verify compensation against. "
+            "Auto-heal refused (fail-closed). Recovery: run --rollback "
+            "(restores from the newest backup), or resolve the runtime/"
+            "evidence state manually. No write performed.".format(MIGRATION_VERSION)
+        )
+        return record
+
+    backup_dir = snapshot_backups[-1][0]
+    record["snapshot_backup"] = backup_dir.name
+    live_hash = _file_sha256(_evidence_log_path(host_root))
+    snapshot_hash = _file_sha256(backup_dir / "evidence.before")
+    record["evidence_matches_pre_state"] = (live_hash == snapshot_hash)
+    if live_hash != snapshot_hash:
+        record["guidance"] = (
+            "interrupted migration commit detected: flow-unit-runtime.json "
+            "claims migration_version {0} but evidence-log.md has no "
+            "MIGRATION-{0} row; however the live evidence-log differs from "
+            "the interrupted transaction's pre-state snapshot ({1}). The "
+            "state is ambiguous (post-interruption legal evidence writes vs "
+            "an out-of-chain edit) — auto-heal refused (fail-closed; P7: no "
+            "guessing with user data). Recovery: run --rollback, or resolve "
+            "manually. No write performed.".format(
+                MIGRATION_VERSION, backup_dir.name)
+        )
+        return record
+
+    # Compensate: remove the interrupted commit's scoped temp leftovers,
+    # then the half-committed runtime, then the attempt's orphaned backup.
+    removed_temps = []
+    temp_failures = []
+    for pattern in _COMMIT_TEMP_GLOBS:
+        for temp in sorted(_gov_dir(host_root).glob(pattern)):
+            try:
+                temp.unlink()
+                removed_temps.append(temp.name)
+            except OSError as exc:
+                temp_failures.append(
+                    "{0}: {1}".format(temp.name, type(exc).__name__)
+                )
+    try:
+        runtime_path.unlink()
+    except OSError as exc:
+        record["guidance"] = (
+            "interrupted migration commit detected but the half-committed "
+            "runtime.json could not be removed ({0}: {1}). Recovery: run "
+            "--rollback, or remove {2} manually, then re-apply. No other "
+            "write performed.".format(type(exc).__name__, exc, runtime_path)
+        )
+        record["temp_files_removed"] = removed_temps
+        record["temp_removal_failures"] = temp_failures
+        return record
+    record.update({
+        "healed": True,
+        "runtime_removed": True,
+        "temp_files_removed": removed_temps,
+        "temp_removal_failures": temp_failures,
+    })
+    cleaned = _remove_backup_dir_best_effort(backup_dir)
+    record["backup_dir_removed"] = backup_dir.name if cleaned else None
+    if not cleaned:
+        record["backup_dir_removal_failure"] = (
+            "orphan backup dir {0} could not be removed; it holds no "
+            "unique state (pre-state snapshots equal live files) and will "
+            "be swept by the next apply's orphan sweep".format(backup_dir.name)
+        )
+    return record
+
+
+def _remove_backup_dir_best_effort(backup_dir):
+    """rmtree a backup dir; True on success, False on any OSError (never raises)."""
+    try:
+        shutil.rmtree(backup_dir)
+        return True
+    except OSError:
+        return False
+
+
+def _sweep_orphan_migration_backups(host_root, evidence_text):
+    """Remove unreferenced, safety-verified orphan backup dirs (FIX-398 E-5).
+
+    An orphan is a MIGRATION_VERSION backup dir referenced by NEITHER a
+    MIGRATION row (``backup=``) NOR a ROLLBACK row (``restored_from=``) —
+    i.e. an apply that was killed after creating its backup but before
+    committing, or whose commit failed and was compensated. Orphans shadow
+    rollback's newest-backup selection and accumulate (FEAT-068 scenario ⑦:
+    3 residue dirs).
+
+    P7 safety verification (a dir is removed ONLY if provably
+    information-free): its manifest parses at this version, its plan-tracker
+    copy hash-equals the live plan-tracker (apply never writes the tracker),
+    its evidence pre-state (``evidence.before`` snapshot, else the
+    ``evidence-log.md`` copy) hash-equals the live evidence-log, and any
+    ``runtime.before`` snapshot is empty (a non-empty pre-existing runtime
+    snapshot means the pre-apply state had a runtime — manual review, not
+    auto-deletion). The sweep is skipped entirely while ANY live runtime
+    file exists (foreign/corrupt-runtime hosts keep today's semantics).
+    Anything unverifiable is NOT deleted — it is disclosed as skipped.
+
+    Runs immediately before apply creates its new backup, so an apply that
+    reaches the write phase always starts from a zero-orphan archive.
+
+    Returns ``{"cleaned": [names], "skipped": [{"name", "reason"}]}``.
+    """
+    result = {"cleaned": [], "skipped": []}
+    if _runtime_path(host_root).is_file():
+        result["skipped"].append({
+            "name": "*",
+            "reason": "sweep skipped: a live flow-unit-runtime.json exists "
+                      "(non-fresh host state) — orphan hygiene deferred",
+        })
+        return result
+    referenced = _referenced_backup_names(evidence_text)
+    live_plan_hash = _file_sha256(_plan_tracker_path(host_root))
+    live_evidence_hash = _file_sha256(_evidence_log_path(host_root))
+    for entry, ver, _ts in _list_migration_backups(host_root):
+        name = entry.name
+        if name in referenced:
+            continue  # referenced by a completed migration/rollback — kept
+        if ver != MIGRATION_VERSION:
+            result["skipped"].append({
+                "name": name, "reason": "foreign migration version — untouched",
+            })
+            continue
+        manifest = None
+        manifest_path = entry / "manifest.json"
+        if manifest_path.is_file():
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                manifest = None
+        if not isinstance(manifest, dict) or manifest.get("migration_version") != MIGRATION_VERSION:
+            result["skipped"].append({
+                "name": name,
+                "reason": "manifest missing/unreadable/wrong version — "
+                          "cannot prove it is information-free",
+            })
+            continue
+        plan_copy = entry / PLAN_TRACKER_FILENAME
+        if not plan_copy.is_file() or _file_sha256(plan_copy) != live_plan_hash:
+            result["skipped"].append({
+                "name": name,
+                "reason": "backup plan-tracker differs from live (apply never "
+                          "writes the tracker) — not a provable no-write orphan",
+            })
+            continue
+        snapshot = entry / "evidence.before"
+        if not snapshot.is_file():
+            snapshot = entry / EVIDENCE_LOG_FILENAME
+        if (not snapshot.is_file()
+                or _file_sha256(snapshot) != live_evidence_hash):
+            result["skipped"].append({
+                "name": name,
+                "reason": "backup evidence pre-state differs from live "
+                          "evidence-log — cannot prove zero information loss",
+            })
+            continue
+        runtime_before = entry / "runtime.before"
+        if runtime_before.is_file() and runtime_before.stat().st_size > 0:
+            result["skipped"].append({
+                "name": name,
+                "reason": "non-empty runtime.before snapshot (a runtime "
+                          "existed pre-apply) — manual review required",
+            })
+            continue
+        if _remove_backup_dir_best_effort(entry):
+            result["cleaned"].append(name)
+        else:
+            result["skipped"].append({
+                "name": name, "reason": "rmtree failed (OSError)",
+            })
+    return result
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Evidence-row writers
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -1460,6 +1788,19 @@ def apply_migration(target_root=None, project_type=None, plugin_home=None,
             "at least one row to anchor the migration record. No write performed."
         ))
 
+    # ── FIX-398 E-4: interrupted-commit detection + self-heal (RISK-060) ──
+    # A kill between the runtime replace and the evidence replace leaves the
+    # runtime landed with no MIGRATION row; without this heal, re-apply hit
+    # the idempotency guard below and refused without compensating (the wc6d
+    # partial state — rollback was the only recovery). Healed state must be
+    # resolved BEFORE the guard so re-entry converges to a fresh, fully
+    # validated apply instead of a refusal deadlock. On any fail-closed arm
+    # the heal returns explicit guidance and apply aborts without writing.
+    heal = _heal_interrupted_commit(host_root, evidence_text)
+    if heal.get("detected") and not heal.get("healed"):
+        return dict(base_result, aborted_reason=heal["guidance"],
+                    interrupted_commit=heal)
+
     # ── Fail-closed: idempotency (runtime.json already at target version) ──
     # A future contract-valid runtime.json is the idempotency marker. The
     # current proposal is not contract-valid and cannot reach this state.
@@ -1585,6 +1926,13 @@ def apply_migration(target_root=None, project_type=None, plugin_home=None,
     # The flow_units count used downstream (audit trail) comes from the plan.
     flow_units = runtime_payload["flow_units"]
 
+    # ── FIX-398 E-5: orphan backup sweep (before creating the new backup) ──
+    # Any apply that reaches the write phase first removes provably
+    # information-free, unreferenced backup dirs left by killed/failed
+    # attempts, so the archive never accumulates roll-back-shadowing orphans
+    # (FEAT-068 scenario ⑦). Unverifiable dirs are kept and disclosed.
+    orphan_sweep = _sweep_orphan_migration_backups(host_root, evidence_text)
+
     # ── Step 5: backup live governance facts after validation ───────────
     try:
         backup_dir, backup_hashes = _backup_governance_files(
@@ -1622,7 +1970,7 @@ def apply_migration(target_root=None, project_type=None, plugin_home=None,
         backup_dir,
     )
     if transaction["state"] != "PASS":
-        return dict(
+        fail_result = dict(
             base_result,
             state=transaction["state"],
             aborted_reason="migration commit failed; compensation attempted",
@@ -1633,13 +1981,38 @@ def apply_migration(target_root=None, project_type=None, plugin_home=None,
             workflow_model={"prior": prior_model, "new": WORKFLOW_MODEL_NEW},
             plan_hash=confirmed_plan.plan_hash,
         )
+        if heal.get("healed"):
+            fail_result["healed_interrupted_commit"] = heal
+        if orphan_sweep["cleaned"] or orphan_sweep["skipped"]:
+            fail_result["orphan_backup_sweep"] = orphan_sweep
+        if transaction["state"] == "FAIL":
+            # FIX-398 E-5: the commit failed but compensation succeeded, so
+            # the backup dir created for THIS attempt is an orphan (no
+            # MIGRATION row will ever reference it; the live files were
+            # restored byte-exactly). Remove it so it cannot shadow a later
+            # rollback's newest-backup selection. Defensive gate: only when
+            # the post-compensation live evidence hash still equals the
+            # attempt's pre-state snapshot. BLOCKED keeps everything — the
+            # recovery journal references the backup dir.
+            snapshot = backup_dir / "evidence.before"
+            if (snapshot.is_file()
+                    and _file_sha256(evidence_path) == _file_sha256(snapshot)
+                    and _remove_backup_dir_best_effort(backup_dir)):
+                fail_result["orphan_backup_removed"] = backup_dir.name
+            else:
+                fail_result["orphan_backup_removed"] = None
+                fail_result["orphan_backup_cleanup"] = (
+                    "kept: post-compensation evidence hash differs from the "
+                    "pre-state snapshot, or removal failed — manual review"
+                )
+        return fail_result
 
     # Record the AFTER hashes (post-write) for the audit trail.
     hashes["plan_tracker_after"] = _file_sha256(plan_path)
     hashes["evidence_log_after"] = _file_sha256(evidence_path)
 
     # ── Step 9: structured result ───────────────────────────────────────
-    return {
+    success_result = {
         "command": "loop-engineering-migration",
         "mode": "apply",
         "applied": True,
@@ -1655,6 +2028,11 @@ def apply_migration(target_root=None, project_type=None, plugin_home=None,
             "runtime visibility only; classic G1-G11 remains compatible via rollback"
         ),
     }
+    if heal.get("healed"):
+        success_result["healed_interrupted_commit"] = heal
+    if orphan_sweep["cleaned"] or orphan_sweep["skipped"]:
+        success_result["orphan_backup_sweep"] = orphan_sweep
+    return success_result
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1923,7 +2301,9 @@ def preview_migration(target_root=None, plugin_home=None, project_type=None):
         v2_validation_issues = _validate_runtime_payload(
             payload, ".governance/flow-unit-runtime.json"
         )
-    except (ValueError, Exception) as exc:  # planner fail-closed → report
+    except Exception as exc:  # planner fail-closed → report (P3-6: the former
+        # ``except (ValueError, Exception)`` tuple was redundant — Exception
+        # subsumes ValueError; semantics unchanged, noise removed)
         preview["plan_derivation_error"] = str(exc)
 
     # ── FEAT-070: consume the unit approval manifest (ADR §2.6 B-first) ──

@@ -420,6 +420,13 @@ def check_evidence_binding_drift():
       - unit_set_drift — runtime unit set differs from the plan re-derived
         from the current plan-tracker (legal plan-tracker edits make the
         runtime stale; ADR-019 §2.2: unit-set changes go through loop-migrate).
+      - plan_rederive_failed — the plan face could not be read / re-derived at
+        all (FIX-398 F-6: a read/derive failure is NOT drift — reporting it as
+        ``unit_set_drift`` misled WARN consumers into reading an outage as a
+        unit-set divergence). Any exception escaping the re-derivation is
+        reported under this type too (FIX-398 F-8: the former narrow
+        except let non-(OSError/UnicodeDecodeError/ValueError) crashes escape
+        the check entirely).
       - gate_schema_drift — runtime gate_schema digest differs from the
         current registry semantics (检查策略版本升级使既有认证失效, §2.5).
 
@@ -679,10 +686,17 @@ def check_evidence_binding_drift():
                     f"同步（ADR-019 §2.2）"
                 ),
             })
-    except (OSError, UnicodeDecodeError, ValueError) as exc:
+    except Exception as exc:  # FIX-398 F-8: any re-derivation failure is
+        # surfaced, never allowed to escape the check (the former narrow
+        # except leaked un-audited derive-component crashes).
         warns.append({
-            "type": "unit_set_drift",
-            "detail": f"计划面重派生失败，无法比对 unit 集漂移: {exc}",
+            # FIX-398 F-6: 读取/重派生失败 ≠ 漂移 — independent WARN type so
+            # consumers can distinguish an outage from a unit-set divergence.
+            # Detail keeps the「计划面重派生失败」anchor text (branch-8 contract).
+            "type": "plan_rederive_failed",
+            "detail": (
+                f"计划面重派生失败（{type(exc).__name__}），无法比对 unit 集漂移: {exc}"
+            ),
         })
     current_gate_schema = _resolve_gate_schema()
     if gate_schema is not None and gate_schema != current_gate_schema:

@@ -177,6 +177,7 @@
 - **约束范围**：ADR-019 §2.2 R0 修正精确口径——仅拦截机器维护面绕过合法写入方的直改/损坏；目标层与证据层合法人工/协议写入不拦截。
 - **四元组映射**（ADR §2.5）：unit=`flow_units[].flow_unit_id`；产物版本=`migration_plan_hash`(64hex)；检查策略版本=`gate_schema@digest`（当前 v2 载荷不持久化顶层 gate_schema，策略版本经 plan hash 传递性绑定——直接持久化属后续票，已防误报 None-guard）；审查主体=`decomposition_confirmed=true` + evidence-log `MIGRATION-<ver>` 行绑定。
 - **六例功能冒烟**（机器判据）：有效态=PASS/零 warn；缺 MIGRATION 行=FAIL(evidence_binding_missing)；悬空依赖=FAIL(runtime_unit_corrupt×28)；无 runtime=not-applicable；坏 hash=FAIL(runtime_face_missing_machine_credential)；CLI 正负例：副本内篡改 runtime → Check 3b `[FAIL]` → 恢复 → `[PASS]`。
+- **披露注记（FIX-398 子项⑤——R0 F-7，时点事实非缺陷）**：ADR §2.2 机器维护面=运行态半面+兼容投影半面两半；本票 C-10 仅武装**运行态半面**。兼容投影半面当前**无生成器、无校验器、零覆盖**——不得将 Check 3b 的 `[PASS]` 误读为机器维护面全面执法；兼容投影半面的生成/校验随后续投影接线票落地时另行武装并留痕。
 - **验收措辞（R1 合规）**：隔离环境安装冒烟（环境变量重定向至临时目录）通过。
 
 ### 6.2 ADR-RB-2 契约非空断言评估（本票范围=评估+证据）

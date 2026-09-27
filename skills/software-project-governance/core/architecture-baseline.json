@@ -10,7 +10,7 @@
     }
   ],
   "generated": {
-    "git_head": "48d21d9713ebfbb9ff2d58ab972b39b407bf4897",
+    "git_head": "e61e26786fb34caa7c3984345f531410168751aa",
     "loc_caliber": "physical lines (ReadAllLines equivalent — see physical_line_count docstring, facts §1.1)"
   },
   "r1_mainfile_budget": {
@@ -358,7 +358,7 @@
         "count": 1,
         "kind": "import_vw",
         "lines": [
-          2275
+          3052
         ],
         "owner_task": "REFACTOR-domains-batch1",
         "path": "loop_migration.py"

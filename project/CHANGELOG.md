@@ -2,8 +2,8 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
-## [0.91.0] - <待回填 taggerdate>
-<!-- 发布日期占位（FIX-349 口径）：发布日期零预填；M-7 annotated tag `v0.91.0` 落地后以 taggerdate 权威回填本行日期单元格。 -->
+## [0.91.0] - 2026-09-28
+<!-- 发布日期 = taggerdate 权威回填：v0.91.0 taggerdate 2026-09-28 05:24:03 +0800（FIX-349 口径，REL-094 M-8 批回填）。 -->
 
 ### 0.91.0 - **推荐契约与误报消解（Recommendation Card Contract & False-Positive Fix）**：完成必推荐三要素推荐卡契约 + Check 28c 装饰日期误报修复（FEAT-072 + FIX-399 载荷 / DEC-265~267 / EVD-1204/1205/1207）
 
@@ -41,11 +41,11 @@
 - **回滚说明**：`git revert 196894a` 单提交回退（无数据迁移；revert 后 `release-projection --write` 再生版本面）。
 - **legacy 通道不覆盖本面**：`GOVERNANCE_LEGACY_BEHAVIOR` 不回退推荐卡呈现（FEAT-040 legacy 只回退性能行为；本面属 agent 行为契约面）。
 
-**发布终账（M-5 时点补记；尾账随 M-6/M-7 收口续记）**：
+**发布终账（M-5 时点补记；尾账已随发布收口续记——REL-094 M-8 批回填）**：
 
 - **M-4④ 发布文档四件套**：`docs/release/release-plan-0.91.0.md` / `release-checklist-0.91.0.md` / `rollback-plan-0.91.0.md` / `feature-flags-0.91.0.md`（commit `5277ca5`）。
 - **M-5 本步（本提交批，提交 hash 由 M-5 提交生成，不预写）**：candidate manifest `skills/software-project-governance/core/releases/0.91.0.json` 创建（N-4 义务；lifecycle=candidate，NATIVE_CANDIDATE——`candidate_commit` 以 `git_commit_adding_path` derivation 指向本提交批）+ 本段发布态改写（本节）。
-- **Commit 区间与发布验证结论**：不预填——M-6/M-7 现场以 `git rev-list --count 3f87459..<发布 tip>` 取值；发布日期按 taggerdate 权威回填（FIX-349 口径）。
+- **Commit 区间与发布验证结论**：`git rev-list --count 3f87459..bd9bfc1` = **8**（2026-09-28 发布 tip 实测；`git describe` = v0.91.0 精确命中——HEAD 即 v0.91.0 peel）。8 提交（旧→新）：`8d25101` 0.90.0 收尾披露批 → `196894a` FEAT-072 → `9bafdf6` FIX-399 → `bc3f052` REL-094 M-1 版本面 → `98104cb` REL-094 M-1R 基线面 → `5277ca5` REL-094 M-4 四件套 → `fed2f53` REL-094 M-5 candidate manifest+发布态改写 → `bd9bfc1` REL-094 M-5b transition（发布 tip）。发布日期已按 taggerdate 权威回填本段标题（2026-09-28——FIX-349 口径）。
 
 ## [0.90.0] - 2026-09-27
 

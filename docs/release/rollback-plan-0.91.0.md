@@ -4,15 +4,15 @@
 
 ## 回滚区间锚定
 
-**回滚区间 = `3f87459..<发布 tip>`**（回退点 = `v0.90.0` tag）：
+**回滚区间 = `3f87459..bd9bfc1`**（回退点 = `v0.90.0` tag）：
 
 - 下界 `3f87459` = `git rev-parse v0.90.0^{}` 实测 = 0.90.0 transition 提交；tag object `d2b2a6d`，taggerdate 2026-09-27 22:07:49 +0800 实测（**FIX-349 口径：taggerdate 权威**）。
-- 上界 = **M-5 transition 提交（发布 tip）**——hash 本文件**不预填**，由 M-5 生成后回填：
+- 上界 = **M-5b transition 提交（发布 tip）= `bd9bfc1`**（v0.91.0 tag peel 实测，tag object `0ea429f`，taggerdate 2026-09-28 05:24:03 +0800 权威——REL-094 M-8 批回填）：
 
-  <!-- 发布 tip 哈希占位：M-5 transition 提交生成后回填（0.81.0 先例 F-04——终点不得预填为候选打包提交） -->
+  <!-- 发布 tip = bd9bfc1：M-5b transition 提交生成后实测回填（0.81.0 先例 F-04 终点纪律已履行——终点=发布 tip，非候选打包提交） -->
 
-- 窗口计数：`git rev-list --count 3f87459..HEAD` = **5**（2026-09-28 实测，HEAD = `98104cb` = REL-094 M-1R；`git describe` = v0.90.0-5-g98104cb 交叉印证）；区间计数不写死，M-5 现场以实际 tip 取值记入 EVD。
-- 区间内 5 提交：`8d25101`（0.90.0 收尾披露批——非 0.91 行为载荷）→ `196894a`（FEAT-072）→ `9bafdf6`（FIX-399）→ `bc3f052`（REL-094 M-1 版本面）→ `98104cb`（REL-094 M-1R 基线面）。
+- 窗口计数：`git rev-list --count 3f87459..HEAD` = **5**（2026-09-28 实测，HEAD = `98104cb` = REL-094 M-1R；`git describe` = v0.90.0-5-g98104cb 交叉印证）；**发布终值（M-8 批回填）：`git rev-list --count 3f87459..bd9bfc1` = 8；`git describe` = v0.91.0 精确命中（HEAD 即 peel）**。
+- 区间内 8 提交（发布终值，M-8 批回填，旧→新）：`8d25101`（0.90.0 收尾披露批——非 0.91 行为载荷）→ `196894a`（FEAT-072）→ `9bafdf6`（FIX-399）→ `bc3f052`（REL-094 M-1 版本面）→ `98104cb`（REL-094 M-1R 基线面）→ `5277ca5`（REL-094 M-4 四件套）→ `fed2f53`（REL-094 M-5 candidate manifest+发布态改写）→ `bd9bfc1`（REL-094 M-5b transition = 发布 tip）。
 
 ## 发布前回滚（任一门禁 FAIL）
 

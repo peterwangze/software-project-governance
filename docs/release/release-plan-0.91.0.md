@@ -12,9 +12,9 @@
 - **No universal/full runtime support claim**：非 Windows 平台未验证；本版全部验收在仓库内与隔离环境口径下完成，隔离验收不等于真实外部环境验证通过。
 - **No 1.0.0 production-ready claim**：RISK-036 继续打开；do not claim 1.0.0 production-ready。
 - **无机制激活主张**：本版**零新增 feature flag、零机制翻转**——B-12/B-13 出厂 WARN-only 姿态不变，RB-2 阻断面维持未翻转（DEC-268(1)：0.91.0 窗口 diff 守卫 token 零命中〔M-3 RELEASE 审查亲证亲跑 #9〕，五前置未齐备，翻转仍需独立授权票）；FEAT-072 三要素推荐卡为 **agent 行为契约呈现面，非 flag 面**（M7.4 6b/6c prose 契约——feature-flags-0.91.0 §3 同口径）。
-- **发布 tip 未生成前不预先编造**：`<发布 tip>`（M-5 transition 提交）与 tag 事实本四件套不预填——hash 一律由 M-5/M-7 生成后回填（FIX-349 口径：taggerdate 权威）。
-- **发布日期不预填**：CHANGELOG 0.91.0 段维持「未发布（准备态）」，发布态日期落字按 taggerdate 权威（M-7 后回填——checklist 放行条件⑥）。
-- **M-5~M-8 数值不预填**：candidate manifest、ledger 双端核对、taggerdate、归档增量、released 验证均为待办回填位——本票只列义务不写通过性数值（已知边界 28s 等点位数值均带时点标注，发布态 MUST 重测落字）。
+- **发布 tip 未生成前不预先编造（起草期纪律——已履行）**：发布 tip（M-5b transition 提交）与 tag 事实本四件套起草期不预填，hash 由 M-5/M-7 生成后回填（FIX-349 口径：taggerdate 权威）。**已履行（M-8 批回填）：发布 tip = `bd9bfc1`（M-5b transition）+ tag `v0.91.0`（object `0ea429f`，taggerdate 2026-09-28 05:24:03 +0800 权威）。**
+- **发布日期不预填**：CHANGELOG 0.91.0 段维持「未发布（准备态）」，发布态日期落字按 taggerdate 权威（M-7 后回填——checklist 放行条件⑥）。**已履行（M-8 批回填）：0.91.0 段标题日期 = 2026-09-28（taggerdate 权威落字）。**
+- **M-5~M-8 数值不预填**：candidate manifest、ledger 双端核对、taggerdate、归档增量、released 验证均为待办回填位——本票只列义务不写通过性数值（已知边界 28s 等点位数值均带时点标注，发布态 MUST 重测落字）。**回填进度（M-8 批）：M-5~M-7 数值已回填（锚 checklist 放行条件⑤~⑧）；归档增量与 released 验证属 M-8 收口——进行中。**
 
 ## 版本号与授权链
 
@@ -32,7 +32,7 @@
 
 ### 载荷构成（两票载荷 + M-1/M-1R 版本与基线面 + M-2/M-3/M-4 门禁审查链——DEC-265~268）
 
-> git 窗口实测（2026-09-28）：**0.91.0 窗口 = `3f87459..<发布 tip>`**（`3f87459` = `git rev-parse v0.90.0^{}` 实测 = v0.90.0 transition 提交；tag object `d2b2a6d`，taggerdate 2026-09-27 22:07:49 +0800 实测——FIX-349 口径 taggerdate 权威）；`3f87459..HEAD`（HEAD = `98104cb` REL-094 M-1R，2026-09-28 02:32 +0800）实测 **5 提交**（`git rev-list --count` 与 `git describe`（v0.90.0-5-g98104cb）双实测交叉印证）。**载荷两票与 CHANGELOG 0.91.0 段同源**（DEC-267(1) M-0 冻结边界内——冻结记录含合并态 HEAD 证明〔冻结时 HEAD=`9bafdf6`〕+ 联合回归 54+20 OK 证据）。
+> git 窗口实测（2026-09-28）：**0.91.0 窗口 = `3f87459..bd9bfc1`**（发布 tip = M-5b transition `bd9bfc1`——M-8 批回填；发布终值 `git rev-list --count` 实测 **8 提交**，`git describe` = v0.91.0 精确命中）（`3f87459` = `git rev-parse v0.90.0^{}` 实测 = v0.90.0 transition 提交；tag object `d2b2a6d`，taggerdate 2026-09-27 22:07:49 +0800 实测——FIX-349 口径 taggerdate 权威）；`3f87459..HEAD`（HEAD = `98104cb` REL-094 M-1R，2026-09-28 02:32 +0800）时点实测 **5 提交**（`git rev-list --count` 与 `git describe`（v0.90.0-5-g98104cb）双实测交叉印证）。**载荷两票与 CHANGELOG 0.91.0 段同源**（DEC-267(1) M-0 冻结边界内——冻结记录含合并态 HEAD 证明〔冻结时 HEAD=`9bafdf6`〕+ 联合回归 54+20 OK 证据）。
 
 | 批 | 任务 | 关键交付 | 提交 | 证据 |
 |---|---|---|---|---|
@@ -67,11 +67,11 @@
 
 ## 回滚区间锚定（与 rollback-plan-0.91.0 §区间锚定同锚同源）
 
-**本版回滚区间（triage 锚定）= `3f87459..<发布 tip>`**（回退点 = `v0.90.0` tag；`3f87459` = tag peel = 0.90.0 transition 提交实测；tag object `d2b2a6d`，taggerdate 2026-09-27 22:07:49 +0800 实测——FIX-349 口径 taggerdate 权威）：
+**本版回滚区间（triage 锚定）= `3f87459..bd9bfc1`**（发布 tip = M-5b transition `bd9bfc1`——M-8 批回填；回退点 = `v0.90.0` tag；`3f87459` = tag peel = 0.90.0 transition 提交实测；tag object `d2b2a6d`，taggerdate 2026-09-27 22:07:49 +0800 实测——FIX-349 口径 taggerdate 权威）：
 
 - **论证①（下界 = `3f87459`，本版单轨无双轨分歧）**：git 区间语义 `X..Y` 排除下界自身。载荷两票（FEAT-072 + FIX-399）+ M-1 版本面 + M-1R 基线面**全部落在 `3f87459` 之后**；搭窗提交（`8d25101` 0.90.0 发布后披露批——非行为载荷）亦在 tag 后落库，如实纳入区间（回退影响 = 披露文档面，见 rollback-plan-0.91.0）。单轨，M-3 审查已复核单轨锚定与窗口计数（M-3 RELEASE 亲跑 #2/#9：窗口 diff 37 文件恰=载荷两票+六锚版本字面量+基线面——冻结边界未越界）。
-- **论证②（终点必须是 `<发布 tip>`，不得是候选打包提交）**：0.81.0 先例 **F-04**——post-candidate 提交会修改区间内新增的 release 文档导致 revert 冲突。终点 MUST 是 M-5 transition 提交（hash 由 M-5 生成后回填，本文件不预编造）。
-- **窗口计数如实登记**：`git rev-list --count 3f87459..HEAD` = **5**（2026-09-28 实测，HEAD = `98104cb`；`git describe` = v0.90.0-5-g98104cb 交叉印证）；区间计数不写死——M-5 现场以 `git rev-list --count 3f87459..<发布 tip>` 取值记入 EVD。
+- **论证②（终点必须是发布 tip，不得是候选打包提交）**：0.81.0 先例 **F-04**——post-candidate 提交会修改区间内新增的 release 文档导致 revert 冲突。**终点 = `bd9bfc1`（M-5b transition 提交，已生成——M-8 批回填实测；起草期不预编造纪律已履行）。**
+- **窗口计数如实登记**：`git rev-list --count 3f87459..HEAD` = **5**（2026-09-28 实测，HEAD = `98104cb`；`git describe` = v0.90.0-5-g98104cb 交叉印证）；**发布终值（M-8 批回填）：`git rev-list --count 3f87459..bd9bfc1` = 8；`git describe` = v0.91.0 精确命中（HEAD 即 peel）。**
 
 ## M-链状态（截至本文件落盘 2026-09-28）
 
@@ -94,10 +94,11 @@
 | 时点 | 内容 |
 |---|---|
 | 2026-09-27 22:07 | v0.90.0 发布（tag taggerdate 22:07:49 +0800 权威，peel `3f87459`，tag object `d2b2a6d`） |
+| 2026-09-28 05:24 | **v0.91.0 发布**（tag taggerdate 05:24:03 +0800 权威，peel `bd9bfc1`，tag object `0ea429f`——REL-094 M-8 批补记；push origin master `8d25101..bd9bfc1` + tag 完成） |
 | 2026-09-27 | DEC-265 用户授权 → DEC-266 FEAT-072 契约裁决 → REL-093 M-8 搭窗批（`8d25101` 22:40）→ FEAT-072 载荷提交（`196894a` 23:43） |
 | 2026-09-28 | FIX-399 载荷提交（`9bafdf6` 00:50）→ DEC-267 M-0 载荷冻结（arch GO）→ M-1（`bc3f052` 01:42）→ M-1R（`98104cb` 02:32）→ M-2 双源门禁（EVD-1210）→ M-3 双半面（R2+R3 AWN/0）→ DEC-268 M-4 收口 → **M-4④ 本批（四件套）** → M-5~M-8 待办（taggerdate 权威，另记） |
 
-## 门禁摘要（M-2 实测已回填；M-5~M-8 数值待办不预填）
+## 门禁摘要（M-2 实测已回填；M-5~M-8 数值回填位——起草期不预填，后续批回填：M-5~M-7 已回填锚 checklist ⑤~⑦，M-8 进行中）
 
 | # | 门禁面 | 实测 / 姿态 | 依据 |
 |---|---|---|---|

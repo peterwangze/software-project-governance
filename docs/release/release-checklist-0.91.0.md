@@ -1,6 +1,6 @@
 # Release Checklist — 0.91.0
 
-- **版本**: 0.91.0 · **日期**: 2026-09-28 · **状态**: M-4 执行中（M-0~M-3 完成、M-4 登记面完成+文档批=本票；M-5~M-8 待办）
+- **版本**: 0.91.0 · **日期**: 2026-09-28 · **状态**: **已发布 v0.91.0**（tag taggerdate 2026-09-28 05:24:03 +0800 权威，peel `bd9bfc1`；M-0~M-7 完成——⑤~⑧ 勾选回填见下表；M-8 归档+版本收口进行中）
 - **主题**: 推荐契约与误报消解（Recommendation Card Contract & False-Positive Fix）——FEAT-072 + FIX-399 载荷 / DEC-265~268 / EVD-1204~1210
 - **版本定义**: 完成 DEC-267 M-0 冻结范围内推荐卡契约交付与 Check 28c 误报消解（arch GO 有条件冻结）；**无破坏性变更、无机制激活（B-12/B-13 出厂姿态不变）；权威翻转与行为级终态验收不在本版**（DEC-263 边界延续）。
 
@@ -43,11 +43,11 @@
 
 | 条件 | M | 发布态义务 |
 |---|---|---|
-| ⑤ | M-5 | 创建 `skills/software-project-governance/core/releases/0.91.0.json`（N-4 义务；NFC/sorted/compact 同 0.90 形态）+ manifest lifecycle candidate→transition（单父=候选 commit；tip 以 M-5 现场 `git rev-parse HEAD` 为准）+ check-release candidate 态执行（DEC-267(4)「不提前伪造完成态」至此解除） |
-| ⑥ | M-5 | CHANGELOG 发布态改写（project+root 投影双位同步）：发布日期=FIX-349 taggerdate 权威（M-7 后回填）+ **行为变更段落段（N-2——B-15 命名承接 B-1~B-14 序列：推荐呈现形态升级 + 回滚说明=git revert 序列/零数据迁移/零 flag 面 + 无依赖变更 stdlib-only）** + **DEC-267(2) 第二从句「计量或生成内容变化也可能越界」逐字补入（N-1）** + 已知边界四条发布时点重测落字（28s 现值/strict 复测/候选池出槽/再生纪律）+ 终账/Commit 区间/发布验证结论补记 + 「HEAD 即此 commit」时点表述改写（M-3 CODE N-2） |
-| ⑦ | M-6 | release-ledger 本地+**remote** 双 PASS（NATIVE_RELEASED；tag_facts local==remote；UNKNOWN/BLOCKED 不得包装 PASS——0.90 条件同型） |
-| ⑧ | M-7 | annotated tag `v0.91.0` + push（peel 机制：tag object→commit；ledger tag_facts 双端核对）+ master push；**taggerdate 权威回填** CHANGELOG 日期与路线图行（FIX-349 口径） |
-| ⑨ | M-8 | 归档迁移（范围扩展至 v0.90.0——M-3 预估增量：任务行 ~6-9/证据行 ~12-18，以现场 dry-run 复测为准）+ check-archive-integrity PASS + **版本收口**（plan-tracker 工作流版本 0.90.0→0.91.0 消解 WARN 24；版本行表序归位——M-3 P3-5）+ 路线图 0.91.0 行终态回填 + released 验证（lineage/changelog/archive/docs/fact-source 全 PASS）+ session-snapshot 三要素投影行首用（FEAT-072 SHOULD 面） |
+| ⑤ ✅ | M-5 | 创建 `skills/software-project-governance/core/releases/0.91.0.json`（N-4 义务；NFC/sorted/compact 同 0.90 形态）+ manifest lifecycle candidate→transition（单父=候选 commit；tip 以 M-5 现场 `git rev-parse HEAD` 为准）+ check-release candidate 态执行（DEC-267(4)「不提前伪造完成态」至此解除）——**✅ 完成回填（M-8 批）**：releases json 随 `fed2f53`（M-5 candidate manifest）入库 + transition 提交 `bd9bfc1`（M-5b，candidate→released 单父翻转，单父=`fed2f53`，0.90 先例 `3f87459` 同型）；态验证面归 M-8 released 复跑（⑨） |
+| ⑥ ✅ | M-5 | CHANGELOG 发布态改写（单 canonical=project/CHANGELOG.md——DEC-242① 继承；原「project+root 投影双位同步」为 0.88 模板残留，M-5 审查 P3-2 勘正）：发布日期=FIX-349 taggerdate 权威（M-7 后回填）+ **行为变更段落段（N-2——B-15 命名承接 B-1~B-14 序列：推荐呈现形态升级 + 回滚说明=git revert 序列/零数据迁移/零 flag 面 + 无依赖变更 stdlib-only）** + **DEC-267(2) 第二从句「计量或生成内容变化也可能越界」逐字补入（N-1）** + 已知边界四条发布时点重测落字（28s 现值/strict 复测/候选池出槽/再生纪律）+ 终账/Commit 区间/发布验证结论补记 + 「HEAD 即此 commit」时点表述改写（M-3 CODE N-2）——**✅ 完成回填（`fed2f53` 发布态改写 + M-8 批收口）**：B-15 段/N-1 第二从句/边界四条重测已在段（fed2f53）；标题日期 2026-09-28 与终账/Commit 区间已回填（M-8 批） |
+| ⑦ ✅ | M-6 | release-ledger 本地+**remote** 双 PASS（NATIVE_RELEASED；tag_facts local==remote；UNKNOWN/BLOCKED 不得包装 PASS——0.90 条件同型）——**✅ 完成回填（M-8 批）**：本地+remote 双 PASS / NATIVE_RELEASED / issues=[]（M-6 ledger 权威实测） |
+| ⑧ ✅ | M-7 | annotated tag `v0.91.0` + push（peel 机制：tag object→commit；ledger tag_facts 双端核对）+ master push；**taggerdate 权威回填** CHANGELOG 日期与路线图行（FIX-349 口径）——**✅ 完成回填（M-8 批）**：tag object `0ea429f`（peel=`bd9bfc1`，taggerdate 2026-09-28 05:24:03 +0800 权威）+ push 完成（origin master `8d25101..bd9bfc1` + tag）；CHANGELOG 日期已回填 2026-09-28（本批），路线图 0.91.0 行（plan-tracker 版本行表 L282）实测已呈已发布态 2026-09-28——M-8 收口面已在位（本批只读核查） |
+| ⑨ 🔄 | M-8 | 归档迁移（范围扩展至 v0.90.0——M-3 预估增量：任务行 ~6-9/证据行 ~12-18，以现场 dry-run 复测为准）+ check-archive-integrity PASS + **版本收口**（plan-tracker 工作流版本 0.90.0→0.91.0 消解 WARN 24；版本行表序归位——M-3 P3-5）+ 路线图 0.91.0 行终态回填 + released 验证（lineage/changelog/archive/docs/fact-source 全 PASS）+ session-snapshot 三要素投影行首用（FEAT-072 SHOULD 面）——**🔄 M-8 进行中（Coordinator 面）**：发布态回填批已落（本批——日期/taggerdate/tip 占位消解 + ⑤~⑧ 勾选回填 + ⑥括注勘正）；归档迁移+版本收口+released 终验待收口 |
 | ⑩ | M-8 | **census/身份集维持至 tag**——零新增未授权阻断项（0.90 条件同型红线）；loop_runtime 裁决执行=内部登记（0.92 候选池去环境化票，不入 CHANGELOG 已知限制）；红线=终版复跑该族再现 FAIL 须归因重评禁静默豁免（DEC-268(1)） |
 
 ## 已知问题与边界（四条——DEC-267(2) arch 分层口径，与 CHANGELOG 0.91.0 段同源）

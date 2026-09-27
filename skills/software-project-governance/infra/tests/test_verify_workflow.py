@@ -1996,6 +1996,82 @@ class HotFactSourceConsistencyTests(unittest.TestCase):
             issues = vw.check_hot_fact_source_consistency(path)
             self.assertTrue(any("session snapshot missing latest published release 0.81.0" in issue for issue in issues))
 
+    # ── FIX-399: Check 28c release-date parser tolerates decorated cells ──
+
+    def test_fix399_release_fact_parses_plain_date_cell(self):
+        """FIX-399 positive: the pure `**YYYY-MM-DD**` cell keeps parsing."""
+        fact = vw._latest_published_release_fact(
+            "| **0.88.0** | **已发布** | **2026-09-25** | **纯格式行** | **tag v0.88.0** |\n"
+        )
+        self.assertEqual(fact["version"], "0.88.0")
+        self.assertEqual(fact["date"], date(2026, 9, 25))
+        self.assertEqual(fact["date_text"], "2026-09-25")
+
+    def _fix399_next_minor_version(self):
+        """FIX-399 fixture latest-release version: one minor past the active
+        version, so these fixtures never pin the current active literal
+        (DEC-213③ static-version-pin) and stay evergreen as versions advance.
+        The engine's version regex only accepts 0.x, so the bump stays in-minor."""
+        from resolve_entry import read_active_version
+
+        parts = (read_active_version() or "0.0.0").split(".")
+        return f"0.{int(parts[1]) + 1}.0"
+
+    def test_fix399_release_fact_parses_decorated_single_date_cell(self):
+        """FIX-399 red→green: a decorated suffix after the date must not drop
+        the released row (real 0.90.0 roadmap shape)."""
+        version = self._fix399_next_minor_version()
+        fact = vw._latest_published_release_fact(
+            f"| **{version}** | **已发布** | **2026-09-27（M-0 DEC-263 arch GO→发布同日——DEC-253 预授权链）** | **装饰行** | **tag v{version}** |\n"
+        )
+        self.assertEqual(fact["version"], version)
+        self.assertEqual(fact["date"], date(2026, 9, 27))
+        self.assertEqual(fact["date_text"], "2026-09-27")
+
+    def test_fix399_release_fact_multi_date_cell_takes_release_date(self):
+        """FIX-399: a multi-date cell's key is its RELEASE time point — the
+        last date in the cell (real 0.89.0 shape: 立项 09-25 … 发布 09-26),
+        not the initiation date the cell opens with."""
+        fact = vw._latest_published_release_fact(
+            "| **0.89.0** | **已发布** | **2026-09-25（M-0 立项）；M-1 启动 2026-09-26；发布 2026-09-26（tag v0.89.0）** | **多日期行** | **tag v0.89.0** |\n"
+        )
+        self.assertEqual(fact["version"], "0.89.0")
+        self.assertEqual(fact["date"], date(2026, 9, 26))
+        self.assertEqual(fact["date_text"], "2026-09-26")
+
+    def test_fix399_release_fact_skips_non_published_rows(self):
+        """FIX-399 negative: 规划/预留 rows never contribute a release fact,
+        even when their date cell holds a real date."""
+        fact = vw._latest_published_release_fact(
+            "| **0.87.0** | **规划中** | **2026-10-01** | **规划行** | **规划** |\n"
+            "| **1.0.0** | **预留** | **2026-12-31** | **预留行** | **不得绕过收口** |\n"
+        )
+        self.assertIsNone(fact)
+
+    def test_fix399_release_fact_skips_published_row_without_date(self):
+        """FIX-399 negative: a 已发布 row whose date cell carries no date is
+        not mis-parsed into a fact."""
+        fact = vw._latest_published_release_fact(
+            "| **0.86.0** | **已发布** | **—** | **无日期行** | **tag v0.86.0** |\n"
+        )
+        self.assertIsNone(fact)
+
+    def test_fix399_snapshot_fact_source_accepts_decorated_release_rows(self):
+        """FIX-399 red→green (defect chain): decorated released rows must feed
+        the snapshot-latest key — a snapshot recording the latest release must
+        not be FAILed against a stale 0.88.0 latest-published fact."""
+        latest = self._fix399_next_minor_version()
+        with tempfile.TemporaryDirectory() as td:
+            plan_path = self._write_plan(td, self._derived_plan_content())
+            decorated_plan = (
+                f"- **工作流版本**: {latest}\n\n"
+                "| **0.88.0** | **已发布** | **2026-09-25** | **纯格式** | **tag v0.88.0** |\n"
+                "| **0.89.0** | **已发布** | **2026-09-25（M-0 立项）；M-1 启动 2026-09-26；发布 2026-09-26（tag v0.89.0）** | **tag v0.89.0** |\n"
+                f"| **{latest}** | **已发布** | **2026-09-27（M-0 DEC-263 arch GO→发布同日）** | **tag v{latest}** |\n"
+            )
+            self._write_snapshot(td, version=latest, session_date="2026-09-27", body=f"{latest} 已发布")
+            self.assertEqual(vw._snapshot_fact_source_issues(decorated_plan, plan_path), [])
+
     # ── FIX-339 R1 repair round (REVIEW-FIX-339-CODE-R0 F-01/F-02/F-05) ──
 
     def test_fix339_r1_rejects_unpublished_claim_when_rel_row_target_misaligned(self):

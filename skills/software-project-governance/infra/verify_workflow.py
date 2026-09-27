@@ -1917,7 +1917,11 @@ FIX_087_REQ_TASKS = {
     "REQ-074": ["FIX-087"],
 }
 
-FIX_105_SNAPSHOT_RELEASE_VERSION_RE = re.compile(r"\|\s*\*\*(0\.\d+(?:\.\d+)?)\*\*\s*\|\s*\*\*已发布\*\*\s*\|\s*\*\*(\d{4}-\d{2}-\d{2})\*\*")
+# FIX-399: the date cell may carry a decorated suffix inside the same bold
+# run (real roadmap shapes: `**2026-09-27（M-0 … GO→发布同日）**`), so the
+# capture no longer requires the closing `**` to sit flush after the date —
+# any non-`*` run up to the closing `**` is tolerated.
+FIX_105_SNAPSHOT_RELEASE_VERSION_RE = re.compile(r"\|\s*\*\*(0\.\d+(?:\.\d+)?)\*\*\s*\|\s*\*\*已发布\*\*\s*\|\s*\*\*((?:\d{4}-\d{2}-\d{2})[^*]*)\*\*")
 # FIX-339 F-03 registration (REVIEW-FIX-339-CODE-R0): two 工作流版本 parsers
 # coexist on purpose. This strict pattern serves the snapshot face and the
 # real session-snapshot.md format (closed `**工作流版本:**` bold run). The hot
@@ -2032,11 +2036,22 @@ def _parse_iso_date(value):
 
 def _latest_published_release_fact(plan_content):
     latest = None
-    for version, date_text in FIX_105_SNAPSHOT_RELEASE_VERSION_RE.findall(plan_content):
-        release_date = _parse_iso_date(date_text)
+    for version, date_cell in FIX_105_SNAPSHOT_RELEASE_VERSION_RE.findall(plan_content):
+        # FIX-399: a decorated cell may narrate several dates (real 0.89.0
+        # shape: 立项 2026-09-25 … 发布 2026-09-26). A 已发布 row feeds the
+        # latest-published-by-date comparison, so its key must be its release
+        # time point — taken as the LAST date in the cell (the release closes
+        # the milestone narrative), not the initiation date it opens with.
+        # Limitation: this assumes the cell narrates dates in chronological
+        # order with the release last; a labelled (发布:) date extraction
+        # would need a roadmap format normalization first.
+        dates = re.findall(r"\d{4}-\d{2}-\d{2}", date_cell)
+        if not dates:
+            continue
+        release_date = _parse_iso_date(dates[-1])
         if release_date is None:
             continue
-        fact = {"version": version, "date": release_date, "date_text": date_text}
+        fact = {"version": version, "date": release_date, "date_text": dates[-1]}
         if latest is None or release_date > latest["date"]:
             latest = fact
     return latest

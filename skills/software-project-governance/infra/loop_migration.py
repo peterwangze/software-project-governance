@@ -37,6 +37,23 @@ risk on ``plan-tracker.md`` and ``evidence-log.md``. The safety contract is:
   PLUGIN_HOME = Path(__file__).resolve().parent.parent
               (= skills/software-project-governance/, where SKILL.md lives)
 
+**Unit approval manifest (FEAT-070 — DEC-254 B-first; ADR-019 §2.6):**
+  ``.governance/flow-unit-approval-manifest.json`` is the authoritative store
+  of HUMAN-CONFIRMED task→unit anchoring decisions (§2.6: ambiguity → confirm
+  or block, never guess). Each entry carries the four-element record required
+  by DEC-254: (task_id + flow_unit_id stable identifier pair,
+  confirmation_evidence, repo_version, reviewer). The ONLY sanctioned writers
+  are :func:`record_unit_approval` / :func:`record_unit_block` in this
+  module; consumers re-validate schema + entries digest on every load, so an
+  out-of-chain edit is detected and the whole manifest fails closed (never
+  partially consumed). Relationship to flow-unit-runtime.json — NO dual fact
+  source: the manifest is the confirmation-side authority; the runtime is the
+  machine-maintained derived face written from a confirmed plan (never a
+  second mapping authority, ADR §2.2); the dry-run consumes the manifest;
+  FEAT-071's structure-anchored derivation shadow MUST consume this SAME
+  structure. See the manifest section banner below the helpers for the full
+  declaration and the reconnaissance decision record.
+
 Usage:
     from loop_migration import apply_migration, rollback_migration, preview_migration
 """
@@ -47,6 +64,8 @@ import os
 import re
 import shutil
 import tempfile
+import time
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -98,6 +117,35 @@ WORKFLOW_MODEL_NEW = "loop-engineering"
 RUNTIME_FILENAME = "flow-unit-runtime.json"
 PLAN_TRACKER_FILENAME = "plan-tracker.md"
 EVIDENCE_LOG_FILENAME = "evidence-log.md"
+
+# FEAT-070: the unit approval manifest (see the manifest section banner below
+# for the storage/relationship declaration). Sits next to
+# flow-unit-runtime.json under .governance/ — the tool family's data-file
+# pattern — as versioned JSON.
+APPROVAL_MANIFEST_FILENAME = "flow-unit-approval-manifest.json"
+APPROVAL_MANIFEST_SCHEMA_VERSION = "1.0"
+APPROVAL_MANIFEST_ID = "flow-unit-approval-manifest/v1"
+
+# Per-entry four-element record (DEC-254): task/unit stable identifier pair +
+# confirmation evidence + repo version + reviewer. ``confirmed_at`` is the
+# writer-stamped UTC instant. All required, all non-empty strings — a manifest
+# entry missing any of them is corrupt (fail-closed, never partially consumed).
+_MANIFEST_ENTRY_REQUIRED_FIELDS = (
+    "flow_unit_id", "task_id", "confirmation_evidence",
+    "repo_version", "reviewer", "confirmed_at",
+)
+# Blocked entries record the §2.6 fail-closed trace instead: why the unit is
+# NOT confirmable and who recorded the block.
+_MANIFEST_BLOCKED_REQUIRED_FIELDS = (
+    "flow_unit_id", "reason", "repo_version", "recorded_by", "recorded_at",
+)
+# Required top-level manifest fields (a hand-written file missing any of them
+# is corrupt — the writer family is the only sanctioned producer).
+_MANIFEST_TOPLEVEL_REQUIRED_FIELDS = (
+    "schema_version", "manifest_id", "project_id",
+    "created_at", "updated_at", "revision", "entries", "blocked",
+    "entries_digest",
+)
 
 # Regex for finding prior migration workflow_model in plan-tracker. Mirrors
 # verify_workflow._parse_plan_workflow_model's approach but is intentionally
@@ -610,6 +658,655 @@ def _commit_runtime_and_evidence(runtime_path, runtime_bytes, evidence_path,
                 "commit failed: {0}: {1}".format(type(exc).__name__, str(exc))
             ],
         }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# UNIT APPROVAL MANIFEST (FEAT-070 — DEC-254 B-first; ADR-019 §2.6)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Storage decision record (FEAT-070 reconnaissance 2026-09-27, validating the
+# execution-packet assumption_record):
+#   - CLI form: this CLI family is FLAG-based (argparse with exclusive action
+#     flags --dry-run/--apply/--rollback); no peer module uses a subcommand
+#     grammar. The approval chain therefore extends the flag family
+#     (--record-unit-approval / --record-unit-block + companion flags) and
+#     reuses the existing --approve-unit flag as the unit designator.
+#   - Storage: the manifest sits NEXT TO flow-unit-runtime.json under
+#     .governance/ (the tool family's existing data-file pattern) as JSON
+#     with a manifest-level schema_version field.
+#
+# UNIFIED STORAGE DECLARATION (single-fact-source rule — load-bearing):
+#   .governance/flow-unit-approval-manifest.json is the authoritative store of
+#   HUMAN-CONFIRMED task→unit anchoring decisions (ADR-019 §2.6: ambiguity →
+#   confirm or block, never guess; wrong anchoring is worse than missing).
+#   Every entry carries the DEC-254 four-element record. Relationship to
+#   flow-unit-runtime.json (NO dual fact source):
+#     - the manifest is the CONFIRMATION-side authority (human decisions);
+#     - flow-unit-runtime.json is the machine-maintained runtime state the
+#       migration tool writes from a confirmed plan — a DERIVED face, never a
+#       second mapping authority (ADR-019 §2.2);
+#     - preview_migration (dry-run) CONSUMES the manifest and reports the
+#       per-unit anchoring status; a derived unit with NO confirmed entry
+#       stays §2.6 fail-closed blocked (no prose guessing);
+#     - FEAT-071's structure-anchored derivation shadow MUST consume THIS
+#       SAME manifest structure (same schema fields, same writer family);
+#       a second mapping format would be a dual-fact-source violation.
+#
+#   The ONLY sanctioned writers are record_unit_approval / record_unit_block
+#   below. The consumer re-validates schema + entries digest on every load:
+#   an out-of-chain (hand) edit is detected and the WHOLE manifest fails
+#   closed — it is never partially consumed.
+
+
+def _approval_manifest_path(host_root):
+    """Return the ``host_root/.governance/flow-unit-approval-manifest.json`` Path."""
+    return _gov_dir(host_root) / APPROVAL_MANIFEST_FILENAME
+
+
+def _sha_text_nfc(text):
+    """SHA-256 hexdigest of the NFC-normalized UTF-8 encoding of ``text``.
+
+    Mirrors the canonical idiom used by loop_migration_plan._sha_text and
+    checks/loop_runtime_claims._sha_text so every hash surface in the
+    migration family normalizes identically.
+    """
+    return hashlib.sha256(
+        unicodedata.normalize("NFC", text).encode("utf-8")
+    ).hexdigest()
+
+
+def _manifest_entries_digest(entries, blocked):
+    """Digest over the manifest's decision payload (entries + blocked only).
+
+    Canonical JSON (sorted keys, compact separators) of ``{"entries": ...,
+    "blocked": ...}`` → NFC → SHA-256. Timestamps and revision are EXCLUDED:
+    they are bookkeeping, not decisions; the digest guards exactly the
+    content a bypass write would have to alter (entries/blocked), which is
+    what the consumer re-checks to detect out-of-chain edits.
+    """
+    canonical = json.dumps(
+        {"entries": entries, "blocked": blocked},
+        ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    )
+    return _sha_text_nfc(canonical)
+
+
+def _validate_approval_manifest_data(data):
+    """Validate an approval-manifest dict. Returns a list of issues (empty ⇒ valid).
+
+    Fail-closed contract: ANY issue makes the manifest corrupt, and a corrupt
+    manifest is never partially consumed (the caller treats every derived
+    unit as unanchored and reports the issues). Checks, in order:
+      1. top-level must be a dict;
+      2. all required top-level fields present;
+      3. schema_version == APPROVAL_MANIFEST_SCHEMA_VERSION and manifest_id
+         == APPROVAL_MANIFEST_ID (an unknown schema is refused, not guessed);
+      4. entries/blocked are lists of dicts whose required fields are all
+         present, non-empty strings;
+      5. no duplicate flow_unit_id within entries; none within blocked; no
+         unit both confirmed and blocked;
+      6. recorded entries_digest equals a recompute over entries+blocked —
+         the out-of-chain-edit detector.
+    """
+    issues = []
+    if not isinstance(data, dict):
+        return ["unit_manifest_corrupt: top-level JSON value is not an object"]
+    for field in _MANIFEST_TOPLEVEL_REQUIRED_FIELDS:
+        if field not in data:
+            issues.append(
+                "unit_manifest_corrupt: missing required top-level field {0!r}".format(field)
+            )
+    if issues:
+        return issues
+    if data.get("schema_version") != APPROVAL_MANIFEST_SCHEMA_VERSION:
+        issues.append(
+            "unit_manifest_corrupt: schema_version {0!r} != supported {1!r}".format(
+                data.get("schema_version"), APPROVAL_MANIFEST_SCHEMA_VERSION
+            )
+        )
+    if data.get("manifest_id") != APPROVAL_MANIFEST_ID:
+        issues.append(
+            "unit_manifest_corrupt: manifest_id {0!r} != {1!r}".format(
+                data.get("manifest_id"), APPROVAL_MANIFEST_ID
+            )
+        )
+    revision = data.get("revision")
+    if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
+        issues.append(
+            "unit_manifest_corrupt: revision must be a positive integer, got {0!r}".format(
+                revision
+            )
+        )
+    entries = data.get("entries")
+    blocked = data.get("blocked")
+    if not isinstance(entries, list):
+        issues.append("unit_manifest_corrupt: entries is not a list")
+        entries = None
+    if not isinstance(blocked, list):
+        issues.append("unit_manifest_corrupt: blocked is not a list")
+        blocked = None
+    if entries is not None:
+        for entry in entries:
+            if not isinstance(entry, dict):
+                issues.append(
+                    "unit_manifest_corrupt: entries contains a non-object item"
+                )
+                continue
+            for field in _MANIFEST_ENTRY_REQUIRED_FIELDS:
+                value = entry.get(field)
+                if not isinstance(value, str) or not value.strip():
+                    issues.append(
+                        "unit_manifest_corrupt: entry {0!r} missing/empty required field {1!r}".format(
+                            entry.get("flow_unit_id"), field
+                        )
+                    )
+    if blocked is not None:
+        for item in blocked:
+            if not isinstance(item, dict):
+                issues.append(
+                    "unit_manifest_corrupt: blocked contains a non-object item"
+                )
+                continue
+            for field in _MANIFEST_BLOCKED_REQUIRED_FIELDS:
+                value = item.get(field)
+                if not isinstance(value, str) or not value.strip():
+                    issues.append(
+                        "unit_manifest_corrupt: blocked entry {0!r} missing/empty required field {1!r}".format(
+                            item.get("flow_unit_id"), field
+                        )
+                    )
+    # Duplicate / overlap detection on the id sets (only when shapes allow).
+    if isinstance(entries, list) and all(isinstance(e, dict) for e in entries):
+        entry_ids = [e.get("flow_unit_id") for e in entries]
+        duplicate_entries = sorted({
+            fid for fid in entry_ids
+            if isinstance(fid, str) and entry_ids.count(fid) > 1
+        })
+        if duplicate_entries:
+            issues.append(
+                "unit_manifest_corrupt: duplicate confirmed flow_unit_id(s) {0}".format(
+                    duplicate_entries
+                )
+            )
+    if isinstance(blocked, list) and all(isinstance(b, dict) for b in blocked):
+        blocked_ids = [b.get("flow_unit_id") for b in blocked]
+        duplicate_blocked = sorted({
+            fid for fid in blocked_ids
+            if isinstance(fid, str) and blocked_ids.count(fid) > 1
+        })
+        if duplicate_blocked:
+            issues.append(
+                "unit_manifest_corrupt: duplicate blocked flow_unit_id(s) {0}".format(
+                    duplicate_blocked
+                )
+            )
+    if (isinstance(entries, list) and isinstance(blocked, list)
+            and all(isinstance(e, dict) for e in entries)
+            and all(isinstance(b, dict) for b in blocked)):
+        entry_id_set = {e.get("flow_unit_id") for e in entries}
+        overlap = sorted(
+            fid for fid in (b.get("flow_unit_id") for b in blocked)
+            if fid in entry_id_set
+        )
+        if overlap:
+            issues.append(
+                "unit_manifest_corrupt: flow_unit_id(s) {0} are both confirmed and blocked".format(
+                    overlap
+                )
+            )
+    # Digest verification — the out-of-chain-edit detector. Only meaningful
+    # when both decision lists are structurally intact.
+    if isinstance(entries, list) and isinstance(blocked, list):
+        recomputed = _manifest_entries_digest(entries, blocked)
+        recorded = data.get("entries_digest")
+        if recorded != recomputed:
+            issues.append(
+                "unit_manifest_corrupt: entries_digest mismatch (recorded {0!r}, "
+                "recomputed {1!r}) — manifest was modified outside the approval "
+                "chain".format(recorded, recomputed)
+            )
+    return issues
+
+
+def _load_approval_manifest(host_root):
+    """Load + validate the approval manifest at host_root.
+
+    Returns ``(state, data, issues)`` where state is one of:
+      - ``"absent"``  — no manifest file (data None, issues empty);
+      - ``"corrupt"`` — unreadable/invalid/fail-closed (data None, issues set);
+      - ``"valid"``   — schema + digest verified (data the parsed dict).
+
+    A corrupt manifest is NEVER partially consumed: data is returned as None
+    so callers cannot accidentally consume a subset of a tampered manifest.
+    """
+    path = _approval_manifest_path(host_root)
+    if not path.is_file():
+        return ("absent", None, [])
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return ("corrupt", None, [
+            "unit_manifest_corrupt: manifest at {0} is unreadable/invalid JSON "
+            "({1}: {2})".format(path, type(exc).__name__, exc)
+        ])
+    issues = _validate_approval_manifest_data(data)
+    if issues:
+        return ("corrupt", None, issues)
+    return ("valid", data, [])
+
+
+def _empty_approval_manifest(project_id, repo_version):
+    """Return a fresh manifest skeleton (schema-versioned, empty decisions)."""
+    now = _now_iso()
+    return {
+        "schema_version": APPROVAL_MANIFEST_SCHEMA_VERSION,
+        "manifest_id": APPROVAL_MANIFEST_ID,
+        "project_id": project_id,
+        "repo_version": repo_version,
+        "created_at": now,
+        "updated_at": now,
+        "revision": 0,  # the writer bumps to 1 on the first recorded decision
+        "entries": [],
+        "blocked": [],
+        "entries_digest": "",
+    }
+
+
+def _write_approval_manifest(host_root, manifest):
+    """Digest-stamp, revision-bump, and atomically persist the manifest.
+
+    Called ONLY by the record chain (single-source-writer discipline). The
+    digest is recomputed over the final entries+blocked payload, the revision
+    is incremented, then the file is replaced atomically. Returns (True, [])
+    on success or (False, issues) if the post-write readback fails validation
+    (reported honestly — never silently swallowed).
+    """
+    manifest["revision"] = int(manifest.get("revision", 0)) + 1
+    manifest["updated_at"] = _now_iso()
+    manifest["entries_digest"] = _manifest_entries_digest(
+        manifest["entries"], manifest["blocked"]
+    )
+    path = _approval_manifest_path(host_root)
+    payload = (json.dumps(manifest, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    _atomic_replace_bytes(path, payload)
+    # Post-write readback: reload from disk and re-run the full validator so
+    # a failed/tampered write is detected immediately, not on next consume.
+    state, readback, readback_issues = _load_approval_manifest(host_root)
+    if state != "valid":
+        return (False, [
+            "manifest post-write readback failed validation (state={0})".format(state)
+        ] + readback_issues)
+    return (True, [])
+
+
+def record_unit_approval(target_root=None, flow_unit_id=None, task_id=None,
+                         confirmation_evidence=None, reviewer=None,
+                         repo_version=None, project_type=None, plugin_home=None):
+    """Record ONE human-confirmed task→unit mapping (FEAT-070 confirm chain).
+
+    This is the §2.6 confirmation writer: it validates the inputs, checks the
+    unit against the CURRENTLY DERIVED candidate set (an operator cannot
+    approve a unit the planner never derived), applies idempotent semantics
+    (re-confirming the same unit with the same task REFRESHES the entry in
+    place — it never forks a second entry), and persists the versioned
+    manifest through the single sanctioned writer.
+
+    Fail-closed refusals (recorded=False, nothing written):
+      - unresolvable host root / unknown flow_unit_id / any empty field;
+      - existing manifest corrupt (a tampered manifest is never overwritten —
+        resolving it is an explicit human action);
+      - the unit is already confirmed with a DIFFERENT task_id (a conflicting
+        mapping must be adjudicated explicitly, not silently overwritten).
+
+    A unit currently in the blocked list MAY be approved: that is exactly the
+    §2.6 adjudication outcome — the block is lifted and the entry records
+    ``supersedes_block_reason`` for the trace.
+
+    Returns a structured result dict: ``recorded: True`` with the manifest
+    revision and the stored entry, or ``recorded: False`` with a
+    ``refused_reason`` (and ``validation_issues`` when the refusal was caused
+    by a corrupt manifest).
+    """
+    started = time.monotonic()
+    base = {
+        "command": "loop-engineering-migration",
+        "mode": "record-unit-approval",
+        "recorded": False,
+        "target": None,
+    }
+    # ── Input validation (before any I/O) ───────────────────────────────
+    for name, value in (
+        ("flow_unit_id", flow_unit_id), ("task_id", task_id),
+        ("confirmation_evidence", confirmation_evidence),
+        ("reviewer", reviewer), ("repo_version", repo_version),
+    ):
+        if not isinstance(value, str) or not value.strip():
+            return dict(base, refused_reason=(
+                "{0} must be a non-empty string (four-element record requires: "
+                "task/unit stable identifiers, confirmation evidence, repo "
+                "version, reviewer)".format(name)
+            ))
+    flow_unit_id = flow_unit_id.strip()
+    task_id = task_id.strip()
+
+    # ── Resolve host root (RISK-040) ────────────────────────────────────
+    host_root = _resolve_host_root(target_root, plugin_home)
+    if host_root is None:
+        return dict(base, refused_reason=(
+            "HOST_PROJECT_ROOT unresolvable (RISK-040 C4 fail-closed): "
+            "target_root={0!r}. No manifest write performed.".format(target_root)
+        ))
+    base["target"] = str(host_root)
+
+    # ── Derive the candidate set: only derived units are approvable ─────
+    chosen_project_type = project_type or "ai-agent-plugin"
+    try:
+        plan = build_migration_plan(
+            str(host_root), chosen_project_type, plugin_home=plugin_home,
+        )
+    except Exception as exc:
+        return dict(base, refused_reason=(
+            "candidate unit derivation failed ({0}); refusing to record an "
+            "approval against an underivable unit set.".format(exc)
+        ))
+    derived_ids = set(plan.unit_ids)
+    if flow_unit_id not in derived_ids:
+        return dict(base, refused_reason=(
+            "unknown flow_unit_id {0!r}: not in the derived candidate set for "
+            "this target (ADR §2.6 — an operator cannot approve a unit the "
+            "planner never derived; derived units: {1})".format(
+                flow_unit_id, sorted(derived_ids)
+            )
+        ))
+
+    # ── Load existing manifest (corrupt → refuse, never overwrite) ──────
+    state, manifest, issues = _load_approval_manifest(host_root)
+    if state == "corrupt":
+        return dict(base, refused_reason=(
+            "existing approval manifest at {0} is corrupt; refusing to "
+            "overwrite it via the approval chain (resolve it explicitly "
+            "first)".format(_approval_manifest_path(host_root))
+        ), validation_issues=issues)
+    if state == "absent":
+        manifest = _empty_approval_manifest(plan.project_id, repo_version.strip())
+
+    # ── Apply the decision (idempotent / conflict-checked) ──────────────
+    entries = manifest["entries"]
+    blocked = manifest["blocked"]
+    existing = next((e for e in entries if e.get("flow_unit_id") == flow_unit_id), None)
+    if existing is not None and existing.get("task_id") != task_id:
+        return dict(base, refused_reason=(
+            "conflicting mapping: {0!r} is already confirmed for task {1!r}; "
+            "re-mapping it to {2!r} requires explicit adjudication (not a "
+            "silent overwrite)".format(
+                flow_unit_id, existing.get("task_id"), task_id
+            )
+        ))
+    blocked_entry = next(
+        (b for b in blocked if b.get("flow_unit_id") == flow_unit_id), None)
+    if blocked_entry is not None:
+        blocked.remove(blocked_entry)  # §2.6 adjudication outcome: unblock
+    entry = {
+        "flow_unit_id": flow_unit_id,
+        "task_id": task_id,
+        "confirmation_evidence": confirmation_evidence.strip(),
+        "repo_version": repo_version.strip(),
+        "reviewer": reviewer.strip(),
+        "confirmed_at": _now_iso(),
+    }
+    if blocked_entry is not None:
+        entry["supersedes_block_reason"] = blocked_entry.get("reason", "")
+    if existing is not None:
+        entries[entries.index(existing)] = entry  # idempotent in-place refresh
+    else:
+        entries.append(entry)
+    manifest["repo_version"] = repo_version.strip()
+
+    ok, write_issues = _write_approval_manifest(host_root, manifest)
+    if not ok:
+        return dict(base, refused_reason=(
+            "manifest post-write validation failed; the record was NOT "
+            "confirmed reliably"
+        ), validation_issues=write_issues)
+    base["recorded"] = True
+    base["manifest_path"] = str(_approval_manifest_path(host_root))
+    base["manifest_revision"] = manifest["revision"]
+    base["entry"] = entry
+    base["elapsed_ms"] = int((time.monotonic() - started) * 1000)
+    return base
+
+
+def record_unit_block(target_root=None, flow_unit_id=None, reason=None,
+                      recorded_by=None, repo_version=None, project_type=None,
+                      plugin_home=None):
+    """Record ONE §2.6 fail-closed block for a derived unit (FEAT-070 chain).
+
+    The blocking path is the honest half of the confirm chain: a unit the
+    operator cannot uniquely interpret is RECORDED as blocked (with the
+    ambiguity reason) instead of being silently guessed. Blocked units remain
+    §2.6-blocked for every consumer (dry-run reports them as unconfirmed).
+
+    Fail-closed refusals (recorded=False, nothing written):
+      - unresolvable root / unknown flow_unit_id / any empty field;
+      - existing manifest corrupt (never overwritten);
+      - the unit is already CONFIRMED — overturning a confirmation is an
+        adjudication decision that must not pass through the block recorder.
+
+    Re-blocking an already-blocked unit refreshes the existing blocked entry
+    in place (no fork).
+
+    Returns a structured result dict (mirrors :func:`record_unit_approval`).
+    """
+    started = time.monotonic()
+    base = {
+        "command": "loop-engineering-migration",
+        "mode": "record-unit-block",
+        "recorded": False,
+        "target": None,
+    }
+    for name, value in (
+        ("flow_unit_id", flow_unit_id), ("reason", reason),
+        ("recorded_by", recorded_by), ("repo_version", repo_version),
+    ):
+        if not isinstance(value, str) or not value.strip():
+            return dict(base, refused_reason=(
+                "{0} must be a non-empty string (blocked trace requires: unit, "
+                "reason, repo version, recorder)".format(name)
+            ))
+    flow_unit_id = flow_unit_id.strip()
+
+    host_root = _resolve_host_root(target_root, plugin_home)
+    if host_root is None:
+        return dict(base, refused_reason=(
+            "HOST_PROJECT_ROOT unresolvable (RISK-040 C4 fail-closed): "
+            "target_root={0!r}. No manifest write performed.".format(target_root)
+        ))
+    base["target"] = str(host_root)
+
+    chosen_project_type = project_type or "ai-agent-plugin"
+    try:
+        plan = build_migration_plan(
+            str(host_root), chosen_project_type, plugin_home=plugin_home,
+        )
+    except Exception as exc:
+        return dict(base, refused_reason=(
+            "candidate unit derivation failed ({0}); refusing to record a "
+            "block against an underivable unit set.".format(exc)
+        ))
+    if flow_unit_id not in set(plan.unit_ids):
+        return dict(base, refused_reason=(
+            "unknown flow_unit_id {0!r}: not in the derived candidate set for "
+            "this target".format(flow_unit_id)
+        ))
+
+    state, manifest, issues = _load_approval_manifest(host_root)
+    if state == "corrupt":
+        return dict(base, refused_reason=(
+            "existing approval manifest at {0} is corrupt; refusing to "
+            "overwrite it via the approval chain (resolve it explicitly "
+            "first)".format(_approval_manifest_path(host_root))
+        ), validation_issues=issues)
+    if state == "absent":
+        manifest = _empty_approval_manifest(plan.project_id, repo_version.strip())
+
+    entries = manifest["entries"]
+    blocked = manifest["blocked"]
+    if any(e.get("flow_unit_id") == flow_unit_id for e in entries):
+        return dict(base, refused_reason=(
+            "flow_unit_id {0!r} is already CONFIRMED in the manifest; "
+            "overturning a confirmation is an adjudication decision and cannot "
+            "pass through the block recorder".format(flow_unit_id)
+        ))
+    blocked_entry = {
+        "flow_unit_id": flow_unit_id,
+        "reason": reason.strip(),
+        "repo_version": repo_version.strip(),
+        "recorded_by": recorded_by.strip(),
+        "recorded_at": _now_iso(),
+    }
+    existing_block = next(
+        (b for b in blocked if b.get("flow_unit_id") == flow_unit_id), None)
+    if existing_block is not None:
+        blocked[blocked.index(existing_block)] = blocked_entry  # refresh, no fork
+    else:
+        blocked.append(blocked_entry)
+    manifest["repo_version"] = repo_version.strip()
+
+    ok, write_issues = _write_approval_manifest(host_root, manifest)
+    if not ok:
+        return dict(base, refused_reason=(
+            "manifest post-write validation failed; the block was NOT "
+            "recorded reliably"
+        ), validation_issues=write_issues)
+    base["recorded"] = True
+    base["manifest_path"] = str(_approval_manifest_path(host_root))
+    base["manifest_revision"] = manifest["revision"]
+    base["blocked_entry"] = blocked_entry
+    base["elapsed_ms"] = int((time.monotonic() - started) * 1000)
+    return base
+
+
+def _build_unit_manifest_face(plan, target_root=None, plugin_home=None):
+    """Build the dry-run's unit-approval-manifest consumption face (FEAT-070).
+
+    The face reports, per derived unit, whether its anchoring is human-
+    confirmed (manifest entry), explicitly blocked (§2.6 trace), or MISSING
+    (no human decision — fail-closed, never prose-guessed). ``ambiguity_count``
+    counts derived units WITHOUT a confirmed entry: 0 is the state in which
+    dry-run consumes the manifest with zero prose-anchoring ambiguity.
+
+    Fail-closed behavior:
+      - manifest absent  → status "absent"; every unit unconfirmed (missing);
+      - manifest corrupt → status "corrupt"; NOT partially consumed; every
+        unit unconfirmed + the corruption issues surfaced;
+      - entries referencing non-derived ids → reported as stale (derivation
+        drift against human decisions);
+      - manifest project_id ≠ derived project_id → explicit issue.
+    """
+    face = {
+        "status": "consumed",
+        "path": None,
+        "schema_version": None,
+        "revision": None,
+        "derived_unit_count": 0,
+        "confirmed_count": 0,
+        "blocked_count": 0,
+        "missing_count": 0,
+        "ambiguity_count": 0,
+        "confirmed_units": [],
+        "unconfirmed_units": [],
+        "stale_manifest_entries": [],
+        "issues": [],
+    }
+    derived_ids = list(plan.unit_ids) if plan is not None else None
+    face["derived_unit_count"] = len(derived_ids) if derived_ids is not None else 0
+
+    host_root = plan.target_root if plan is not None else None
+    if host_root is None:
+        resolved = _resolve_host_root(target_root, plugin_home)
+        host_root = str(resolved) if resolved else None
+    if host_root is None:
+        face["status"] = "unresolvable_target"
+        face["issues"].append(
+            "unit_manifest: target root unresolvable; manifest face skipped"
+        )
+        return face
+    face["path"] = str(_approval_manifest_path(host_root))
+
+    state, data, issues = _load_approval_manifest(host_root)
+    face["issues"].extend(issues)
+    if derived_ids is None:
+        # Plan derivation failed upstream; report the manifest state alone
+        # (no unit comparison is possible without a derived set).
+        face["status"] = "consumed" if state == "valid" else state
+        if state == "valid":
+            face["schema_version"] = data.get("schema_version")
+            face["revision"] = data.get("revision")
+        face["issues"].append(
+            "unit_manifest: plan derivation failed; per-unit anchoring "
+            "comparison skipped"
+        )
+        return face
+
+    if state == "absent":
+        face["status"] = "absent"
+        face["ambiguity_count"] = len(derived_ids)
+        face["unconfirmed_units"] = [
+            {"flow_unit_id": uid, "state": "missing",
+             "detail": "no approval manifest at this target; prose anchoring "
+                       "unresolved (ADR §2.6 fail-closed)"}
+            for uid in derived_ids
+        ]
+        return face
+    if state == "corrupt":
+        face["status"] = "corrupt"
+        face["ambiguity_count"] = len(derived_ids)
+        face["unconfirmed_units"] = [
+            {"flow_unit_id": uid, "state": "missing",
+             "detail": "approval manifest corrupt; not consumed (fail-closed)"}
+            for uid in derived_ids
+        ]
+        return face
+
+    # Valid manifest → exact-id consumption.
+    face["schema_version"] = data.get("schema_version")
+    face["revision"] = data.get("revision")
+    if data.get("project_id") != plan.project_id:
+        face["issues"].append(
+            "unit_manifest_project_mismatch: manifest project_id {0!r} != "
+            "derived {1!r}".format(data.get("project_id"), plan.project_id)
+        )
+    confirmed = {e["flow_unit_id"]: e for e in data["entries"]}
+    blocked = {b["flow_unit_id"]: b for b in data["blocked"]}
+    for uid in derived_ids:
+        if uid in confirmed:
+            face["confirmed_count"] += 1
+            face["confirmed_units"].append(uid)
+        elif uid in blocked:
+            face["blocked_count"] += 1
+            face["unconfirmed_units"].append({
+                "flow_unit_id": uid, "state": "blocked",
+                "detail": blocked[uid].get("reason", ""),
+            })
+        else:
+            face["missing_count"] += 1
+            face["unconfirmed_units"].append({
+                "flow_unit_id": uid, "state": "missing",
+                "detail": "no human decision recorded (ADR §2.6 fail-closed)",
+            })
+    face["ambiguity_count"] = face["blocked_count"] + face["missing_count"]
+    face["stale_manifest_entries"] = sorted(
+        (set(confirmed) | set(blocked)) - set(derived_ids)
+    )
+    if face["stale_manifest_entries"]:
+        face["issues"].append(
+            "unit_manifest_stale_entries: manifest records decision(s) for "
+            "flow_unit_id(s) {0} which the current derivation no longer "
+            "produces (derivation drift vs human decisions)".format(
+                face["stale_manifest_entries"]
+            )
+        )
+    return face
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1190,7 +1887,12 @@ def preview_migration(target_root=None, plugin_home=None, project_type=None):
         ``write_operations``, ``validation_issues``, ``no_overclaim_boundaries``)
         is preserved; FEAT-003 adds ``migration_plan`` (the serialized plan
         including ``plan_hash``), ``plan_hash``, and ``v2_validation_issues``
-        (the v2 validator's verdict on the plan-derived payload).
+        (the v2 validator's verdict on the plan-derived payload). FEAT-070
+        adds ``unit_manifest`` (the per-unit anchoring face consumed from
+        ``flow-unit-approval-manifest.json``) and
+        ``unit_manifest_ambiguity_count`` (derived units without a confirmed
+        entry — 0 means the dry-run consumes the manifest with zero
+        prose-anchoring ambiguity).
     """
     from verify_workflow import (  # deferred to keep module import acyclic
         build_dynamic_lifecycle_migration_preview,
@@ -1209,6 +1911,7 @@ def preview_migration(target_root=None, plugin_home=None, project_type=None):
     migration_plan = None
     plan_hash = None
     v2_validation_issues = []
+    plan = None
     try:
         plan = build_migration_plan(
             target_root, project_type, plugin_home=plugin_home,
@@ -1222,6 +1925,16 @@ def preview_migration(target_root=None, plugin_home=None, project_type=None):
         )
     except (ValueError, Exception) as exc:  # planner fail-closed → report
         preview["plan_derivation_error"] = str(exc)
+
+    # ── FEAT-070: consume the unit approval manifest (ADR §2.6 B-first) ──
+    # The dry-run prefers the human-confirmed manifest: a derived unit with a
+    # confirmed entry is anchored; a unit WITHOUT one stays §2.6 fail-closed
+    # blocked (never prose-guessed). Read-only: the face performs no writes.
+    unit_manifest_face = _build_unit_manifest_face(
+        plan, target_root=target_root, plugin_home=plugin_home,
+    )
+    preview["unit_manifest"] = unit_manifest_face
+    preview["unit_manifest_ambiguity_count"] = unit_manifest_face["ambiguity_count"]
 
     preview["migration_plan"] = migration_plan
     preview["plan_hash"] = plan_hash
@@ -1269,7 +1982,45 @@ if __name__ == "__main__":  # pragma: no cover - manual CLI smoke
     parser.add_argument(
         "--approve-unit", dest="approved_unit_ids", action="append", default=None,
         help=("FEAT-004: restrict the applied plan to this operator-approved "
-              "flow_unit_id (repeatable). Omit to confirm the full derived set."),
+              "flow_unit_id (repeatable). Omit to confirm the full derived set. "
+              "FEAT-070: with --record-unit-approval, names the ONE unit whose "
+              "task→unit mapping is being confirmed into the manifest."),
+    )
+    parser.add_argument(
+        "--record-unit-approval", action="store_true",
+        help=("FEAT-070 (ADR §2.6 confirm chain): record ONE human-confirmed "
+              "task→unit mapping into .governance/flow-unit-approval-manifest.json. "
+              "Requires --approve-unit <flow_unit_id> --approve-task <task_id> "
+              "--approve-evidence <text> --approve-reviewer <who> --repo-version <v>. "
+              "No migration is performed."),
+    )
+    parser.add_argument(
+        "--record-unit-block", action="store_true",
+        help=("FEAT-070 (§2.6 fail-closed trace): record ONE unit as blocked "
+              "(not uniquely interpretable — no guessing). Requires "
+              "--approve-unit <flow_unit_id> --block-reason <text> "
+              "--approve-reviewer <who> --repo-version <v>. "
+              "No migration is performed."),
+    )
+    parser.add_argument(
+        "--approve-task", default=None,
+        help="FEAT-070: task_id of the mapping being confirmed (stable identifier).",
+    )
+    parser.add_argument(
+        "--approve-evidence", default=None,
+        help="FEAT-070: confirmation evidence for the mapping (structural facts).",
+    )
+    parser.add_argument(
+        "--approve-reviewer", default=None,
+        help="FEAT-070: reviewer/recorder identity for the manifest entry.",
+    )
+    parser.add_argument(
+        "--block-reason", default=None,
+        help="FEAT-070: why the unit is NOT uniquely interpretable (block trace).",
+    )
+    parser.add_argument(
+        "--repo-version", default=None,
+        help="FEAT-070: repository version the confirmation is made against.",
     )
     args = parser.parse_args()
 
@@ -1289,6 +2040,45 @@ if __name__ == "__main__":  # pragma: no cover - manual CLI smoke
             expected_plan_hash=args.expected_plan_hash,
             approved_unit_ids=args.approved_unit_ids,
         )
+    elif args.record_unit_approval or args.record_unit_block:
+        # Record mode takes EXACTLY ONE --approve-unit per invocation (逐条
+        # confirmation discipline); the append-flag yields a list, so unwrap
+        # and reject multi-unit record attempts before touching the manifest.
+        unit_arg = args.approved_unit_ids
+        if isinstance(unit_arg, list):
+            if len(unit_arg) != 1:
+                print(json.dumps({
+                    "command": "loop-engineering-migration",
+                    "mode": "record-unit-approval" if args.record_unit_approval
+                            else "record-unit-block",
+                    "recorded": False,
+                    "refused_reason": (
+                        "record mode confirms exactly ONE unit per invocation "
+                        "(--approve-unit given {0} times)".format(len(unit_arg))
+                    ),
+                }, ensure_ascii=False, indent=2))
+                raise SystemExit(1)
+            unit_arg = unit_arg[0]
+        if args.record_unit_approval:
+            result = record_unit_approval(
+                target_root=args.target, flow_unit_id=unit_arg,
+                task_id=args.approve_task,
+                confirmation_evidence=args.approve_evidence,
+                reviewer=args.approve_reviewer,
+                repo_version=args.repo_version,
+                project_type=args.project_type,
+            )
+        else:
+            result = record_unit_block(
+                target_root=args.target, flow_unit_id=unit_arg,
+                reason=args.block_reason,
+                recorded_by=args.approve_reviewer,
+                repo_version=args.repo_version,
+                project_type=args.project_type,
+            )
+        if not result.get("recorded"):
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            raise SystemExit(1)
     else:
         result = preview_migration(
             target_root=args.target, project_type=args.project_type,

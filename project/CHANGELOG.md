@@ -2,7 +2,8 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
-## [0.91.0] - 未发布（准备态）
+## [0.91.0] - <待回填 taggerdate>
+<!-- 发布日期占位（FIX-349 口径）：发布日期零预填；M-7 annotated tag `v0.91.0` 落地后以 taggerdate 权威回填本行日期单元格。 -->
 
 ### 0.91.0 - **推荐契约与误报消解（Recommendation Card Contract & False-Positive Fix）**：完成必推荐三要素推荐卡契约 + Check 28c 装饰日期误报修复（FEAT-072 + FIX-399 载荷 / DEC-265~267 / EVD-1204/1205/1207）
 
@@ -11,16 +12,16 @@
 **载荷两票**（DEC-267 M-0 冻结边界内；均 R0 **APPROVED_WITH_NOTES/0**，全部 committed）：
 
 - **FEAT-072（commit `196894a`，2026-09-27）**：完成必推荐三要素推荐卡契约（DEC-266）——M7.4 6b/6c 推荐呈现重写 + 四注入面投影 + 机检锚 canonical 三标签 + 负例测试；persona 净增 +76B（注入预算 standard/strict 两档 PASS）。
-- **FIX-399（commit `9bafdf6`，2026-09-28；HEAD 即此 commit，含两票）**：Check 28c 发布日期解析器装饰日期单元格健壮性——正则容忍装饰尾巴 + 多日期取发布日（末日期）语义 + 6 测试用例；同数据 A/B 净效果 **−1 误报零新增**。
+- **FIX-399（commit `9bafdf6`，2026-09-28；M-0 冻结时点 HEAD 即此 commit——DEC-267 冻结记录含合并态 HEAD 证明，含两票）**：Check 28c 发布日期解析器装饰日期单元格健壮性——正则容忍装饰尾巴 + 多日期取发布日（末日期）语义 + 6 测试用例；同数据 A/B 净效果 **−1 误报零新增**。
 
 **已知限制（发布态措辞，arch 分层表）**：
 
-- **strict 注入预算余量 9 tok**：strict 档 **5991/6000**（M-1 后实测）——当前口径下净增超 9 tok 即越界；0.92 治理票已登记（含计量器版本/范围/基线）。
-- **evidence-log 尺寸**：1,737,424 bytes（≈1697KB，M-1 时点实测）——DEC-264 既有结构性约束。
+- **strict 注入预算余量 9 tok**：strict 档 **5991/6000**（M-1 实测；M-5 发布态复测 2026-09-28 04:15 +0800 同值）——当前口径下净增超过 9 tok 即越界；**计量或生成内容变化也可能越界**（DEC-267(2) 义务措辞；最终发布态必须再重测）；0.92 治理票已登记（FEAT-073，DEC-268(2)——含计量器/范围/基线/责任人/验收指标）。
+- **evidence-log 尺寸**：1,753,446 bytes（≈1713KB，M-5 提交前最后读取 2026-09-28 05:05 +0800 实测——含 M-5 EVD 机录行增量；早前 1,750,295B@04:15 为 CHANGELOG 首测时点）——DEC-264 既有结构性约束。
 - **28c 正则畸形 markdown 跨行加固延期**：REVIEW-FIX-399-R0 P2-1——0.91+ 候选池。
 - **版本面再生纪律**：本版版本面经 `release-projection --write` 确定性再生（非手改——M-1：权威源 bump → written=17 → 幂等复跑 written=0）。
 
-**决策链**：DEC-265 / DEC-266（三要素推荐卡契约授权）/ DEC-267（0.91.0 M-0 载荷冻结）；**证据**：EVD-1204/1205/1207；TRIAGE ×3。
+**决策链**：DEC-265 / DEC-266（三要素推荐卡契约授权）/ DEC-267（0.91.0 M-0 载荷冻结）/ DEC-268（M-4 风险窗复评留痕 + FEAT-073 登记面收口）；**证据**：EVD-1204/1205/1207；TRIAGE ×3。
 
 ### Added
 
@@ -34,7 +35,17 @@
 
 - **Check 28c 路线图装饰日期误报（FIX-399）**：发布日期解析器正则容忍装饰尾巴 + 多日期取发布日（末日期）语义；同数据 A/B −1 误报零新增；6 测试用例看护。
 
-**准备态注记**：本段为 M-1 候选落库时点（2026-09-28 +0800）的**准备态**——发布日期不预填（发布收口按 FIX-349 口径以 taggerdate 权威落字）；发布终账、Commit 区间与发布验证结论随发布链 M-2+ 补记。
+### 行为变更
+
+- **B-15 完成必推荐呈现形态升级（FEAT-072）**：任务完成后的推荐呈现从依赖理由单要素升级为**三要素推荐卡**（服务目标 / 解决问题 / 方案要点 + 依赖理由），正文卡与短选项一一对应；属 **agent 行为契约面**（M7.4 6b/6c 重写），非 CLI 接口面（`task-priority-analysis` 命令行签名不变）。依据状态三态如实呈现：依据充分给完整推荐卡、依据缺失明示且不编造、依据影响执行先澄清（FEAT-072 契约面）。无破坏性变更、无数据迁移。
+- **回滚说明**：`git revert 196894a` 单提交回退（无数据迁移；revert 后 `release-projection --write` 再生版本面）。
+- **legacy 通道不覆盖本面**：`GOVERNANCE_LEGACY_BEHAVIOR` 不回退推荐卡呈现（FEAT-040 legacy 只回退性能行为；本面属 agent 行为契约面）。
+
+**发布终账（M-5 时点补记；尾账随 M-6/M-7 收口续记）**：
+
+- **M-4④ 发布文档四件套**：`docs/release/release-plan-0.91.0.md` / `release-checklist-0.91.0.md` / `rollback-plan-0.91.0.md` / `feature-flags-0.91.0.md`（commit `5277ca5`）。
+- **M-5 本步（本提交批，提交 hash 由 M-5 提交生成，不预写）**：candidate manifest `skills/software-project-governance/core/releases/0.91.0.json` 创建（N-4 义务；lifecycle=candidate，NATIVE_CANDIDATE——`candidate_commit` 以 `git_commit_adding_path` derivation 指向本提交批）+ 本段发布态改写（本节）。
+- **Commit 区间与发布验证结论**：不预填——M-6/M-7 现场以 `git rev-list --count 3f87459..<发布 tip>` 取值；发布日期按 taggerdate 权威回填（FIX-349 口径）。
 
 ## [0.90.0] - 2026-09-27
 

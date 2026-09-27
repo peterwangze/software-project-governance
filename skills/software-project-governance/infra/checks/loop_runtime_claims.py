@@ -220,7 +220,27 @@ class ClaimScanContext:
 @dataclass(frozen=True)
 class ScanLimits:
     max_candidates: int = 1500
-    max_candidate_bytes: int = 24 * 1024 * 1024
+    # DEC-261 (v0.90.0 batch 2, FEAT-071): recalibrated 24MiB -> 32MiB as a
+    # capacity re-derivation from measurement, never an over-limit waiver
+    # (same discipline as the FIX-369 max_semantic_units move below —
+    # CANDIDATE_BUDGET_EXCEEDED still fail-closes the scan).  Recomputable
+    # formula: max_candidate_bytes = ceil(measured x 1.2).
+    # measured = 25,258,238B (2026-09-27 +08:00, FEAT-071 working tree, full
+    # candidate payload over docs/+project/+skills/ at candidate_count 1054
+    # < the unchanged 1500 budget) — the 24MiB cap left only ~7.6KB headroom
+    # at HEAD 0d31ea2 before this batch's sanctioned payload (+~105KB:
+    # loop_migration.py structural-derivation pipeline +37,775B, new
+    # test_loop_structural_derivation.py +43,693B, shadow verification
+    # report +24,116B), so any normal-sized batch breached it.  Provenance
+    # registered via baseline-register (gate
+    # check-loop-runtime-claims.candidate-bytes).  ceil(25,258,238 x 1.2)
+    # = 30,309,886 → rounded UP to 32MiB = 33,554,432, the scan family's
+    # existing payload constant (max_semantic_payload_bytes below) — one
+    # family, one payload ceiling.  M-2 duty: re-measure at each release
+    # gate; before moving this constant again, re-derive it via the same
+    # formula and register the measurement provenance with
+    # verify_workflow.py baseline-register — silent raises are forbidden.
+    max_candidate_bytes: int = 32 * 1024 * 1024
     max_file_bytes: int = 2 * 1024 * 1024
     # FIX-369 (v0.87.0, DEC-226): recalibrated 300000 -> 361923 as a capacity
     # re-derivation from measurement, never an over-limit waiver —

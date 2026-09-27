@@ -86,11 +86,20 @@ class LoopRuntimeClaimAdapterTests(unittest.TestCase):
         # each run; timeout = p50 x 1.5 (the same coefficient the median
         # budget uses) -> 26 s. Halved (13 s) it stays RED against every
         # observed run (min 15.821 s), so the budget still bites.
+        # DEC-262: recalibrated again 26 s -> 36 s, same FIX-346 discipline
+        # (same-session idle measurement, p50 x 1.5): the candidate payload
+        # grew 15,385,341 B -> 25,258,238 B (+64%, across batches 0.87 ->
+        # 0.90 — NOT introduced by any single ticket), so the scan wall
+        # clock outgrew the 26 s budget (observed family-run
+        # TimeoutExpired twice). This session's idle calibration:
+        # CLI wall clock 3 runs = 24 / 25 / 24 s, p50 = 24 s, verdict PASS
+        # each run; timeout = 24 x 1.5 -> 36 s. Halved (18 s) it stays RED
+        # against every observed run (min 24 s), so the budget still bites.
         completed = subprocess.run(
             [sys.executable, str(_INFRA_DIR / "verify_workflow.py"),
              "check-loop-runtime-claims", "--product-root", str(_INFRA_DIR.parents[2]),
              "--project-root", str(_INFRA_DIR.parents[2])],
-            capture_output=True, text=True, encoding="utf-8", timeout=26,
+            capture_output=True, text=True, encoding="utf-8", timeout=36,
         )
         self.assertEqual(0, completed.returncode, completed.stderr)
         payload = json.loads(completed.stdout)

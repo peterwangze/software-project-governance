@@ -50,12 +50,15 @@ risk on ``plan-tracker.md`` and ``evidence-log.md``. The safety contract is:
   source: the manifest is the confirmation-side authority; the runtime is the
   machine-maintained derived face written from a confirmed plan (never a
   second mapping authority, ADR §2.2); the dry-run consumes the manifest;
-  FEAT-071's structure-anchored derivation shadow MUST consume this SAME
-  structure. See the manifest section banner below the helpers for the full
-  declaration and the reconnaissance decision record.
+  FEAT-071's structure-anchored derivation shadow consumes this SAME
+  structure through the public ``load_approval_manifest`` entry point
+  (FEAT-070-R0 P3-5). See the manifest section banner below the helpers
+  for the full declaration and the reconnaissance decision record.
 
 Usage:
-    from loop_migration import apply_migration, rollback_migration, preview_migration
+    from loop_migration import (apply_migration, rollback_migration,
+                                preview_migration, load_approval_manifest,
+                                derive_structural_units_shadow)
 """
 
 import hashlib
@@ -1024,6 +1027,16 @@ def _commit_runtime_and_evidence(runtime_path, runtime_bytes, evidence_path,
 #   below. The consumer re-validates schema + entries digest on every load:
 #   an out-of-chain (hand) edit is detected and the WHOLE manifest fails
 #   closed — it is never partially consumed.
+#
+#   DIGEST BOUNDARY NOTE (FEAT-070-R0 P3-4): the entries digest is computed
+#   over NFC-NORMALIZED UTF-8 (_sha_text_nfc). Two byte strings that are
+#   NFC-equivalent (differing only in Unicode normalization form) hash
+#   identically, so an NFC-equivalent rewrite of an entry does NOT trip the
+#   out-of-chain-edit detector. This is a deliberate cross-platform
+#   consistency trade-off: the digest is an ACCIDENTAL-CHANGE detector
+#   (hand edits, schema violations, corruption), NOT an adversarial
+#   tamper-proof seal. Byte-exact integrity against an active adversary is
+#   outside this manifest's threat model.
 
 
 def _approval_manifest_path(host_root):
@@ -1221,6 +1234,33 @@ def _load_approval_manifest(host_root):
     if issues:
         return ("corrupt", None, issues)
     return ("valid", data, [])
+
+
+def load_approval_manifest(host_root):
+    """PUBLIC consumption API for the unit approval manifest (P3-5, FEAT-071).
+
+    Stable entry point for downstream consumers — FEAT-071's structure-
+    anchored shadow derivation consumes the manifest THROUGH THIS NAME (no
+    private-name imports), and any future reader must do the same so the
+    consumption contract has exactly one load-bearing seam.
+
+    Consumption contract (changing it requires a change-triage'd ticket):
+      - Returns ``(state, data, issues)`` where ``state`` is:
+          "absent"  — no manifest file (``data is None``, ``issues == []``);
+          "corrupt" — unreadable/invalid/failed validation (``data is
+                      None``; a corrupt manifest is NEVER partially
+                      consumed — fail-closed per ADR-019 §2.6);
+          "valid"   — schema + entries digest verified (``data`` the dict).
+      - Validation covers schema_version/manifest_id, required fields,
+        duplicate/overlapping id sets, and the entries_digest
+        out-of-chain-edit detector (NFC boundary — see the manifest section
+        banner).
+      - STRICTLY READ-ONLY. The only sanctioned writers remain
+        :func:`record_unit_approval` / :func:`record_unit_block`; the
+        manifest is the confirmation-side authority and this loader never
+        mutates it.
+    """
+    return _load_approval_manifest(host_root)
 
 
 def _empty_approval_manifest(project_id, repo_version):
@@ -1521,7 +1561,10 @@ def _build_unit_manifest_face(plan, target_root=None, plugin_home=None):
     confirmed (manifest entry), explicitly blocked (§2.6 trace), or MISSING
     (no human decision — fail-closed, never prose-guessed). ``ambiguity_count``
     counts derived units WITHOUT a confirmed entry: 0 is the state in which
-    dry-run consumes the manifest with zero prose-anchoring ambiguity.
+    dry-run consumes the manifest with zero prose-anchoring ambiguity. When
+    the per-unit comparison cannot run (plan derivation failed),
+    ``status`` is "indeterminate" and ``ambiguity_count`` is None —
+    "not measured", never a misleading zero (FEAT-070-R0 P2-2).
 
     Fail-closed behavior:
       - manifest absent  → status "absent"; every unit unconfirmed (missing);
@@ -1564,15 +1607,22 @@ def _build_unit_manifest_face(plan, target_root=None, plugin_home=None):
     state, data, issues = _load_approval_manifest(host_root)
     face["issues"].extend(issues)
     if derived_ids is None:
-        # Plan derivation failed upstream; report the manifest state alone
-        # (no unit comparison is possible without a derived set).
-        face["status"] = "consumed" if state == "valid" else state
+        # Plan derivation failed upstream; no unit comparison is possible
+        # without a derived set. FEAT-070-R0 P2-2: report this honestly as
+        # status "indeterminate" with ambiguity_count None — the former
+        # ("consumed", 0) pair was misleading: a consumer reading only
+        # ambiguity_count saw a false "zero anchoring ambiguity" although no
+        # per-unit comparison had run at all (the skipped note only lived in
+        # issues). None = "not measured", never "zero".
+        face["status"] = "indeterminate" if state == "valid" else state
+        face["ambiguity_count"] = None
         if state == "valid":
             face["schema_version"] = data.get("schema_version")
             face["revision"] = data.get("revision")
         face["issues"].append(
             "unit_manifest: plan derivation failed; per-unit anchoring "
-            "comparison skipped"
+            "comparison skipped (ambiguity_count is None — not measured, "
+            "not zero)"
         )
         return face
 
@@ -1635,6 +1685,733 @@ def _build_unit_manifest_face(plan, target_root=None, plugin_home=None):
             )
         )
     return face
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STRUCTURE-ANCHORED UNIT DERIVATION — SHADOW MODE (FEAT-071; DEC-254 A-after)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Design contract (DEC-254 A / ADR-019 §2.6 / FEAT-071 execution packet):
+#   - ANCHORING INPUT IS STRUCTURE ONLY. Machine-recorded file evidence from
+#     three sources (change-triage ``files``, agent-locks
+#     ``files``/``target_files``, plan-tracker task-row path tokens) is
+#     mapped onto a FILESYSTEM-DERIVED structural unit universe. Prose
+#     descriptions are DISPLAY-LAYER ONLY: they never produce, filter, or
+#     rank anchoring candidates (the legacy prose-token derivation is
+#     reported as a count/sample only, so its output can be compared — not
+#     consumed).
+#   - UNIQUENESS (§2.6): a task yields an auto-derivable candidate ONLY when
+#     its structural evidence maps to EXACTLY ONE structural unit. Multiple
+#     candidates → escalate to the human confirmation chain. Zero evidence →
+#     fail-closed (never prose-guessed; historical tasks that predate
+#     machine-recorded evidence stay with the human manifest).
+#   - SHADOW ZERO-SIDE-EFFECT: this pipeline is strictly READ-ONLY. It
+#     writes no manifest, no runtime, no evidence row, no archive, no temp
+#     file. Tests pin this with whole-.governance byte snapshots and a
+#     determinism/idempotency check. It flips NO authority: the human
+#     manifest stays the confirmation-side authority (ADR §2.2); the B→A
+#     switch is a separately authorized ticket (DEC-254).
+#   - UNIFIED STORAGE (no dual fact source): the human decision list is
+#     consumed through the PUBLIC :func:`load_approval_manifest` API
+#     (FEAT-070-R0 P3-5) — same schema, same structure, one store.
+
+# Unit-bearing surfaces: first path segment selects the surface, the second
+# names the unit (filesystem rule, not prose).
+_SHADOW_UNIT_BEARING_SURFACES = (
+    ("adapters", "adapter"),
+    ("skills", "skill"),
+)
+
+# Slash-bearing path tokens (repo-relative files or directories), e.g.
+# "skills/x/SKILL.md", "adapters/chrys", ".governance/change-triage/A.json".
+_SHADOW_SLASH_PATH_RE = re.compile(
+    r"(?<![\w.\-/])"
+    r"[A-Za-z0-9._\-]+(?:/[A-Za-z0-9._\-]+)+/?"
+    r"(?![\w.\-/])"
+)
+# Bare filename tokens (no slash), e.g. "test_evidence_binding_drift.py".
+# Resolved against the live tree: UNIQUE basename hit → that path (structural
+# evidence); MULTIPLE hits → recorded as ambiguous and never anchoring;
+# zero hits → unresolved (no evidence).
+_SHADOW_BARE_FILENAME_RE = re.compile(
+    r"(?<![\w.\-/])"
+    r"[A-Za-z0-9][A-Za-z0-9._\-]*\."
+    r"(?:py|md|json|txt|toml|yml|yaml|cfg|ini|sh|ps1|bat|cmd)\b"
+)
+# Task-id shape for plan-tracker table rows (ID cell), e.g. FEAT-071,
+# FIX-398, AUDIT-153, TRIAGE-FEAT-068.
+_SHADOW_TASK_ID_RE = re.compile(r"[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+")
+
+_SHADOW_WALK_EXCLUDED_DIRS = frozenset((
+    ".git", "node_modules", "__pycache__", ".pytest_cache",
+))
+
+
+def _shadow_project_id(host_root):
+    """Sanitized project id fallback (mirrors flow_unit_derive's rule).
+
+    Kept local on purpose: the peer's helper is private and the shadow must
+    not import private names from peers. Only used when plan derivation
+    fails (the normal path takes project_id from the plan).
+    """
+    name = Path(str(host_root)).name
+    sanitized = re.sub(r"[^a-z0-9.\-]+", "-", name.lower())
+    sanitized = re.sub(r"-{2,}", "-", sanitized).strip("-")
+    return sanitized or "unknown-project"
+
+
+def _shadow_normalize_token(raw):
+    """Clean one candidate path token; return a repo-relative POSIX path or None.
+
+    Strips wrapping backticks/quotes and trailing punctuation, normalizes
+    separators, and rejects non-repo-relative forms (URLs, absolute paths,
+    drive letters).
+    """
+    if not isinstance(raw, str):
+        return None
+    token = raw.strip().strip("`\"'“”«»").rstrip(".,;:!?、。」』）)]}。")
+    token = token.strip("`\"'")
+    if not token or token.lower().startswith(("http://", "https://")):
+        return None
+    if "://" in token or re.match(r"^[A-Za-z]:[\\/]", token):
+        return None
+    token = token.replace("\\", "/")
+    while token.startswith("./"):
+        token = token[2:]
+    if not token or token.endswith("/"):
+        token = token.rstrip("/")
+    if not token or "/" not in token and "." not in token.rsplit("/", 1)[-1]:
+        return None
+    return token
+
+
+def _shadow_basename_index(root):
+    """One-time basename → [relative paths] index of the host tree (read-only)."""
+    index = {}
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [
+            d for d in dirnames if d not in _SHADOW_WALK_EXCLUDED_DIRS
+        ]
+        for fn in filenames:
+            rel = os.path.relpath(
+                os.path.join(dirpath, fn), str(root)
+            ).replace("\\", "/")
+            index.setdefault(fn, []).append(rel)
+    return index
+
+
+def _shadow_add_evidence_path(target, root, raw_token, basename_index=None):
+    """Add one raw token's structural evidence to ``target`` (a per-task dict).
+
+    Existing file/dir path → recorded verbatim (structural evidence). Bare
+    filename with EXACTLY ONE live hit → resolved to that path. Multiple
+    hits → recorded under ``ambiguous_basenames`` and NEVER anchoring (§2.6).
+    Anything else → ``unresolved_tokens`` (no evidence implied).
+    """
+    rel = _shadow_normalize_token(raw_token)
+    if rel is None:
+        return
+    candidate = root / rel
+    try:
+        if candidate.is_file() or candidate.is_dir():
+            target["files"].add(rel)
+            return
+    except OSError:  # pragma: no cover - defensive (unreadable path component)
+        pass
+    if basename_index is not None and "/" not in rel:
+        hits = sorted(basename_index.get(rel, []))
+        if len(hits) == 1:
+            target["files"].add(hits[0])
+            return
+        if len(hits) > 1:
+            target["ambiguous_basenames"].setdefault(rel, hits[:5])
+            return
+    target["unresolved_tokens"].append(rel)
+
+
+def _shadow_collect_structural_evidence(host_root):
+    """Collect machine-recorded task→file evidence from the THREE sources.
+
+    Sources (all read-only, all machine-recorded — no prose):
+      S1 ``change_triage_files`` — ``.governance/change-triage/*.json``
+         ``task_id`` + ``files`` fields (the change-triage tool's record);
+      S2 ``agent_lock_files``    — ``.governance/agent-locks.json``
+         ``active_tasks[<id>].files`` + ``target_files`` union;
+      S3 ``task_row_paths``      — plan-tracker ACTIVE-task table rows: path
+         tokens extracted from the row text (the 任务行修改列 evidence —
+         paths appearing in the row's own text, resolved against the tree).
+
+    Returns ``(sources, tasks)``: ``sources`` maps source-key → availability
+    detail; ``tasks`` maps task_id → {"files": set of existing repo-relative
+    paths, "ambiguous_basenames", "unresolved_tokens", "sources": set}.
+    """
+    root = Path(host_root)
+    tasks = {}
+    sources = {}
+
+    def _task(task_id):
+        return tasks.setdefault(task_id, {
+            "files": set(),
+            "ambiguous_basenames": {},
+            "unresolved_tokens": [],
+            "sources": set(),
+        })
+
+    # ── S1: change-triage machine records ────────────────────────────────
+    ct_dir = root / ".governance" / "change-triage"
+    triage_ok = triage_bad = triage_records = 0
+    if ct_dir.is_dir():
+        for p in sorted(ct_dir.glob("*.json")):
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                triage_bad += 1
+                continue
+            if not isinstance(data, dict):
+                triage_bad += 1
+                continue
+            tid = data.get("task_id")
+            files = data.get("files")
+            if (not isinstance(tid, str) or not tid.strip()
+                    or not isinstance(files, list)):
+                triage_bad += 1
+                continue
+            triage_ok += 1
+            record = _task(tid.strip())
+            record["sources"].add("change_triage_files")
+            for f in files:
+                if isinstance(f, str) and f.strip():
+                    _shadow_add_evidence_path(record, root, f.strip())
+        triage_records = triage_ok
+    sources["change_triage_files"] = {
+        "available": triage_records > 0,
+        "records_with_files_field": triage_records,
+        "unreadable_or_malformed": triage_bad,
+        "path": str(ct_dir),
+    }
+
+    # ── S2: agent-locks machine records ──────────────────────────────────
+    locks_path = root / ".governance" / "agent-locks.json"
+    lock_records = 0
+    if locks_path.is_file():
+        try:
+            data = json.loads(locks_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            data = None
+        if isinstance(data, dict) and isinstance(data.get("active_tasks"), dict):
+            for tid, spec in sorted(data["active_tasks"].items()):
+                if not isinstance(spec, dict):
+                    continue
+                record = _task(str(tid))
+                touched = False
+                for field in ("files", "target_files"):
+                    value = spec.get(field)
+                    if isinstance(value, list):
+                        for f in value:
+                            if isinstance(f, str) and f.strip():
+                                touched = True
+                                _shadow_add_evidence_path(record, root, f.strip())
+                if touched:
+                    lock_records += 1
+                    record["sources"].add("agent_lock_files")
+    sources["agent_lock_files"] = {
+        "available": lock_records > 0,
+        "records_with_file_fields": lock_records,
+        "path": str(locks_path),
+    }
+
+    # ── S3: plan-tracker active-task rows ────────────────────────────────
+    pt_path = root / ".governance" / PLAN_TRACKER_FILENAME
+    row_count = 0
+    if pt_path.is_file():
+        try:
+            text = pt_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            text = ""
+        basename_index = None
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped.startswith("|"):
+                continue
+            cells = [c.strip() for c in stripped.strip("|").split("|")]
+            if len(cells) < 3:
+                continue
+            id_cell = cells[1]
+            task_id = id_cell.strip("* ")
+            if not _SHADOW_TASK_ID_RE.fullmatch(task_id):
+                continue
+            row_count += 1
+            record = _task(task_id)
+            record["sources"].add("task_row_paths")
+            if basename_index is None:
+                basename_index = _shadow_basename_index(root)
+            row_without_id = line.replace(id_cell, " ", 1)
+            slash_spans = [
+                (m.start(), m.end())
+                for m in _SHADOW_SLASH_PATH_RE.finditer(row_without_id)
+            ]
+
+            def _in_slash_span(pos, end):
+                return any(s <= pos < e for s, e in slash_spans)
+
+            for m in _SHADOW_SLASH_PATH_RE.finditer(row_without_id):
+                _shadow_add_evidence_path(record, root, m.group(0),
+                                          basename_index)
+            for m in _SHADOW_BARE_FILENAME_RE.finditer(row_without_id):
+                if not _in_slash_span(m.start(), m.end()):
+                    _shadow_add_evidence_path(record, root, m.group(0),
+                                              basename_index)
+    sources["task_row_paths"] = {
+        "available": row_count > 0,
+        "task_rows_scanned": row_count,
+        "path": str(pt_path),
+    }
+    return sources, tasks
+
+
+def _shadow_structural_universe(host_root):
+    """Filesystem-derived structural units — the ONLY anchoring targets.
+
+    - adapter unit = a directory under ``adapters/``;
+    - skill unit   = a directory under ``skills/`` containing ``SKILL.md``;
+    - manifest units: NO structural unit rule exists in this repo layout.
+      The manifest-surface FILES are inventoried (skill-core manifests +
+      plugin/marketplace surfaces + adapter facets) for reporting, but
+      whether they form units — and at what granularity — is undecidable
+      from structure alone; §2.6: no unit is generated, adjudication is
+      human. Prose names never conjure units into existence.
+    """
+    root = Path(host_root)
+    adapters = {}
+    adapters_dir = root / "adapters"
+    if adapters_dir.is_dir():
+        for child in sorted(adapters_dir.iterdir()):
+            if child.is_dir() and not child.name.startswith("."):
+                adapters[child.name] = {
+                    "unit_type": "adapter",
+                    "path": "adapters/" + child.name,
+                }
+    skills = {}
+    skills_dir = root / "skills"
+    if skills_dir.is_dir():
+        for child in sorted(skills_dir.iterdir()):
+            if child.is_dir() and (child / "SKILL.md").is_file():
+                skills[child.name] = {
+                    "unit_type": "skill",
+                    "path": "skills/" + child.name,
+                }
+    manifest_surfaces = []
+    for pattern in ("skills/*/core/manifest.json",
+                    ".claude-plugin/plugin.json",
+                    ".claude-plugin/marketplace.json",
+                    "adapters/*/adapter-manifest.json"):
+        for p in sorted(root.glob(pattern)):
+            if p.is_file():
+                manifest_surfaces.append(
+                    p.relative_to(root).as_posix()
+                )
+    return {
+        "adapters": adapters,
+        "skills": skills,
+        "adapter_count": len(adapters),
+        "skill_count": len(skills),
+        "manifest_surfaces": manifest_surfaces,
+        "manifest_unit_rule": (
+            "no structural unit rule — manifest-surface files inventoried "
+            "only; unit granularity requires human adjudication (ADR §2.6)"
+        ),
+    }
+
+
+def _shadow_map_path_to_unit(rel_path):
+    """Map one repo-relative path onto its structural unit key (or None).
+
+    Prefix rule (structural, not prose): ``adapters/<name>/…`` →
+    ``adapter.<name>``; ``skills/<name>/…`` → ``skill.<name>`` (the adapter
+    facet ``adapters/<name>/adapter-manifest.json`` anchors the PARENT
+    adapter unit — a facet, not a separate unit). Everything else (docs/,
+    .governance/, agents/, root files, .claude-plugin/) is cross-cutting and
+    anchors no unit by itself.
+    """
+    parts = rel_path.split("/")
+    for surface, utype in _SHADOW_UNIT_BEARING_SURFACES:
+        if len(parts) >= 2 and parts[0] == surface and parts[1]:
+            return "{0}.{1}".format(utype, parts[1])
+    return None
+
+
+def _shadow_task_candidates(evidence_tasks):
+    """task→unit candidate generation + the §2.6 uniqueness check.
+
+    Per task: candidates = the sorted set of structural units its evidence
+    paths map onto. Verdict:
+      "unique" — exactly one candidate (auto-derivable; DEC-254 切换判据
+                 "仅唯一可解释项转自动");
+      "multi"  — two or more candidates (escalate to the confirm chain);
+      "none"   — evidence exists but maps to no unit-bearing surface
+                 (cross-cutting task) or no structural evidence at all
+                 (fail-closed — never prose-guessed).
+    Returns rows sorted by task_id (deterministic output).
+    """
+    rows = []
+    for task_id in sorted(evidence_tasks):
+        info = evidence_tasks[task_id]
+        mapped = set()
+        for rel in info["files"]:
+            unit_key = _shadow_map_path_to_unit(rel)
+            if unit_key is not None:
+                mapped.add(unit_key)
+        candidates = sorted(mapped)
+        if not candidates:
+            verdict = "none"
+        elif len(candidates) == 1:
+            verdict = "unique"
+        else:
+            verdict = "multi"
+        rows.append({
+            "task_id": task_id,
+            "evidence_sources": sorted(info["sources"]),
+            "evidence_files": sorted(info["files"]),
+            "ambiguous_basenames": sorted(info["ambiguous_basenames"].items()),
+            "unresolved_tokens": sorted(info["unresolved_tokens"]),
+            "candidate_units": candidates,
+            "verdict": verdict,
+        })
+    return rows
+
+
+def _shadow_normalize_name(name):
+    """Join-key normalization: NFC + casefold (display variance is not
+    anchoring signal — e.g. a human-written ``adapter.Chrys`` joins the
+    structural ``adapters/chrys``; the case difference is reported, never
+    guessed into the anchor)."""
+    return unicodedata.normalize("NFC", name).casefold()
+
+
+def _shadow_find_structural_unit(universe, unit_type, name):
+    """Exact structural-unit lookup by (type, NFC+casefold name)."""
+    if unit_type == "adapter":
+        bucket = universe["adapters"]
+    elif unit_type == "skill":
+        bucket = universe["skills"]
+    else:
+        # No structural rule for other unit types (see the universe docstring).
+        return None
+    norm = _shadow_normalize_name(name)
+    for sname in sorted(bucket):
+        if _shadow_normalize_name(sname) == norm:
+            return {"name": sname, **bucket[sname]}
+    return None
+
+
+def _shadow_compare_with_manifest(manifest_data, universe,
+                                  candidate_rows):
+    """28-row shadow comparison: structural pipeline vs the human list.
+
+    Joins each manifest unit (entries = confirmed, blocked = blocked) against
+    the structural universe by (unit_type, NFC+casefold name) and reports the
+    pipeline verdict, the human decision, and a per-row agreement attribution
+    (证据类型 × 唯一性结果 × 与人工决策一致性). DIVERGENCE rows are flagged
+    loudly and NEVER auto-resolved — authority stays with the human list.
+    A manifest that is not "valid" yields NO rows at all (its data is None —
+    fail-closed, never partially consumed); the manifest face reports that
+    state separately.
+    """
+    unique_anchors = {}
+    ambiguous_mentions = {}
+    for row in candidate_rows:
+        for key in row["candidate_units"]:
+            if row["verdict"] == "unique":
+                unique_anchors.setdefault(key, []).append(row["task_id"])
+            else:
+                ambiguous_mentions.setdefault(key, []).append(row["task_id"])
+
+    rows = []
+    if isinstance(manifest_data, dict):
+        decision_sets = (
+            [("confirmed", e) for e in manifest_data.get("entries", [])
+             if isinstance(e, dict)],
+            [("blocked", b) for b in manifest_data.get("blocked", [])
+             if isinstance(b, dict)],
+        )
+    else:
+        decision_sets = ((), ())
+
+    for decision, item in decision_sets[0] + decision_sets[1]:
+        unit_id = item.get("flow_unit_id", "")
+        parts = unit_id.split(".")
+        unit_type = parts[-2] if len(parts) >= 2 else ""
+        name = parts[-1] if parts else unit_id
+        structural = _shadow_find_structural_unit(universe, unit_type, name)
+        row = {
+            "manifest_unit_id": unit_id,
+            "unit_type": unit_type,
+            "manifest_name": name,
+            "human_decision": decision,
+            "human_task": item.get("task_id") if decision == "confirmed" else None,
+            "structural_unit": structural,
+            "name_normalization_applied": bool(
+                structural is not None and structural["name"] != name
+            ),
+            "unique_anchor_tasks": [],
+            "ambiguous_mention_tasks": [],
+        }
+        if structural is None:
+            row["pipeline_verdict"] = "no_structural_unit"
+            row["evidence_types"] = []
+            if unit_type not in ("adapter", "skill"):
+                row["agreement_note"] = (
+                    "unit_type has no structural unit rule in this repo "
+                    "layout (manifest-surface family inventoried only)"
+                )
+        else:
+            key = "{0}.{1}".format(unit_type, structural["name"])
+            row["unique_anchor_tasks"] = sorted(unique_anchors.get(key, []))
+            row["ambiguous_mention_tasks"] = sorted(
+                ambiguous_mentions.get(key, []))
+            row["evidence_types"] = sorted({
+                src for r in candidate_rows
+                if key in r["candidate_units"]
+                for src in r["evidence_sources"]
+            })
+            if row["unique_anchor_tasks"]:
+                row["pipeline_verdict"] = "reproducible"
+            elif row["ambiguous_mention_tasks"]:
+                row["pipeline_verdict"] = "structural_match_multi_candidate"
+            else:
+                row["pipeline_verdict"] = "structural_match_no_evidence"
+
+        # Agreement attribution (§2.6 discipline — authority stays human).
+        if decision == "confirmed":
+            if row["pipeline_verdict"] == "reproducible":
+                row["agreement"] = "consistent_reproduction"
+                row["agreement_note"] = (
+                    "structural evidence independently reproduces the human "
+                    "confirmation"
+                )
+            elif row["pipeline_verdict"] == "structural_match_no_evidence":
+                row["agreement"] = "consistent_no_evidence"
+                row["agreement_note"] = (
+                    "structural unit exists; current machine evidence cannot "
+                    "re-derive the confirmation (historical predates "
+                    "machine-recorded evidence) — human entry stands, no "
+                    "prose fallback (ADR §2.6)"
+                )
+            elif row["pipeline_verdict"] == "structural_match_multi_candidate":
+                row["agreement"] = "consistent_block_multi_candidate"
+                row["agreement_note"] = (
+                    "structural unit exists but evidence is multi-candidate; "
+                    "the human confirmation stays the authority"
+                )
+            else:
+                row["agreement"] = "DIVERGENCE"
+                row["agreement_note"] = (
+                    "human CONFIRMED a unit the structural universe cannot "
+                    "see — escalate; never auto-resolve"
+                )
+        else:  # blocked
+            if row["pipeline_verdict"] == "no_structural_unit":
+                row["agreement"] = "consistent_absence"
+                row["agreement_note"] = (
+                    "structure-only input produces no such unit — the prose "
+                    "token never enters anchoring (DEC-258: 此类项自然消失)"
+                )
+            elif row["pipeline_verdict"] == "structural_match_no_evidence":
+                row["agreement"] = "consistent_block_no_evidence"
+                row["agreement_note"] = (
+                    "structural unit exists but no machine evidence anchors "
+                    "it — block stands (§2.6 fail-closed)"
+                )
+            elif row["pipeline_verdict"] == "structural_match_multi_candidate":
+                row["agreement"] = "consistent_block_multi_candidate"
+                row["agreement_note"] = (
+                    "multi-candidate evidence — stays on the human "
+                    "confirmation chain (§2.6 escalate)"
+                )
+            else:
+                row["agreement"] = "DIVERGENCE"
+                row["agreement_note"] = (
+                    "structure derives a unique anchor the human BLOCKED — "
+                    "escalate; never auto-flip a human decision"
+                )
+        rows.append(row)
+
+    counts = {}
+    for row in rows:
+        counts[row["agreement"]] = counts.get(row["agreement"], 0) + 1
+    verdict_counts = {}
+    for row in rows:
+        verdict_counts[row["pipeline_verdict"]] = (
+            verdict_counts.get(row["pipeline_verdict"], 0) + 1
+        )
+    return {
+        "rows": rows,
+        "agreement_counts": counts,
+        "pipeline_verdict_counts": verdict_counts,
+        "row_count": len(rows),
+    }
+
+
+def derive_structural_units_shadow(target_root=None, project_type=None,
+                                   plugin_home=None):
+    """Run the structure-anchored derivation pipeline in SHADOW mode.
+
+    FEAT-071 (DEC-254 A-after): structural evidence from three machine
+    sources → task→unit candidates → §2.6 uniqueness check → comparison
+    against the human approval manifest. STRICTLY READ-ONLY (zero writes —
+    pinned by tests) and DETERMINISTIC (no wall-clock in the result, so
+    repeated runs are byte-identical). Authority is NOT flipped: the human
+    manifest remains the confirmation-side authority; the B→A switch is a
+    separately authorized decision.
+
+    Args:
+        target_root: Host project root (str/Path), or None (resolve_entry).
+        project_type: Optional project type for the legacy prose plan face
+            (display only). Defaults to ``"ai-agent-plugin"``.
+        plugin_home: Optional plugin-home override (mainly for tests).
+
+    Returns:
+        A JSON-serializable dict (``mode: "shadow-derive"``) with:
+        ``evidence_sources``, ``structural_universe``,
+        ``prose_face_display_only``, ``task_candidates``,
+        ``anchor_candidates`` (unique-verdict rows only), ``manifest_face``,
+        ``comparison`` (rows + agreement counts), ``switch_judgment_inputs``
+        (machine-checkable counts feeding the B→A criteria), and
+        ``zero_side_effect``. On an unresolvable target: fail-closed with
+        ``shadow_derived: False``.
+    """
+    base = {
+        "command": "loop-engineering-migration",
+        "mode": "shadow-derive",
+        "target": None,
+    }
+    host_root = _resolve_host_root(target_root, plugin_home)
+    if host_root is None:
+        return dict(base, shadow_derived=False, aborted_reason=(
+            "HOST_PROJECT_ROOT unresolvable (RISK-040 C4 fail-closed): "
+            "target_root={0!r}. No read or write performed.".format(target_root)
+        ))
+    host_root = Path(host_root)
+    base["target"] = str(host_root)
+
+    # Legacy prose face — DISPLAY ONLY (count/sample, never an anchor input).
+    chosen_project_type = project_type or "ai-agent-plugin"
+    prose_face = {
+        "note": ("legacy prose-token derivation — display layer only; its "
+                 "units are reported for comparison and are NOT anchoring "
+                 "inputs (DEC-254 A)"),
+        "derived_unit_count": None,
+        "prose_unit_ids": [],
+        "workflow_model_prior": None,
+        "plan_hash": None,
+    }
+    project_id = _shadow_project_id(host_root)
+    try:
+        plan = build_migration_plan(
+            str(host_root), chosen_project_type, plugin_home=plugin_home,
+        )
+        prose_face["derived_unit_count"] = plan.unit_count
+        prose_face["prose_unit_ids"] = sorted(plan.unit_ids)
+        prose_face["workflow_model_prior"] = plan.workflow_model_prior
+        prose_face["plan_hash"] = plan.plan_hash
+        project_id = plan.project_id
+    except Exception as exc:  # planner fail-closed → report, never guess
+        prose_face["plan_derivation_error"] = str(exc)
+
+    universe = _shadow_structural_universe(host_root)
+    sources, evidence_tasks = _shadow_collect_structural_evidence(host_root)
+    candidate_rows = _shadow_task_candidates(evidence_tasks)
+    anchor_rows = [r for r in candidate_rows if r["verdict"] == "unique"]
+
+    state, manifest_data, issues = load_approval_manifest(host_root)
+    manifest_face = {
+        "state": state,
+        "path": str(_approval_manifest_path(host_root)),
+        "project_id": None,
+        "revision": None,
+        "confirmed_count": 0,
+        "blocked_count": 0,
+        "issues": list(issues),
+    }
+    if state == "valid":
+        manifest_face["project_id"] = manifest_data.get("project_id")
+        manifest_face["revision"] = manifest_data.get("revision")
+        manifest_face["confirmed_count"] = len(manifest_data.get("entries", []))
+        manifest_face["blocked_count"] = len(manifest_data.get("blocked", []))
+        if manifest_data.get("project_id") != project_id:
+            manifest_face["issues"].append(
+                "unit_manifest_project_mismatch: manifest project_id {0!r} != "
+                "derived {1!r}".format(manifest_data.get("project_id"), project_id)
+            )
+
+    comparison = _shadow_compare_with_manifest(
+        manifest_data, universe, candidate_rows,
+    )
+
+    structural_keys = sorted(
+        ["adapter.{0}".format(n) for n in universe["adapters"]]
+        + ["skill.{0}".format(n) for n in universe["skills"]]
+    )
+    # Membership uses the SAME NFC+casefold join as the comparison: a human
+    # decision written as "…adapter.Chrys" (project-prefixed, display case)
+    # covers the structural "adapter.chrys".
+    decided_keys = set()
+    if state == "valid":
+        for item in manifest_data.get("entries", []) + manifest_data.get("blocked", []):
+            if isinstance(item, dict):
+                parts = item.get("flow_unit_id", "").split(".")
+                if len(parts) >= 2:
+                    decided_keys.add("{0}.{1}".format(
+                        parts[-2], _shadow_normalize_name(parts[-1])))
+    structural_by_norm = {
+        "{0}.{1}".format(k.split(".", 1)[0],
+                         _shadow_normalize_name(k.split(".", 1)[1])): k
+        for k in structural_keys
+    }
+    switch_inputs = {
+        "confirmed_units_reproduced_by_structure": comparison[
+            "agreement_counts"].get("consistent_reproduction", 0),
+        "confirmed_units_without_machine_evidence": comparison[
+            "agreement_counts"].get("consistent_no_evidence", 0),
+        "divergence_count": comparison["agreement_counts"].get("DIVERGENCE", 0),
+        "rows_without_agreement_attribution": comparison["agreement_counts"].get(
+            "not_comparable", 0),
+        "unique_anchor_candidate_count": len(anchor_rows),
+        "multi_candidate_task_count": sum(
+            1 for r in candidate_rows if r["verdict"] == "multi"),
+        "no_candidate_task_count": sum(
+            1 for r in candidate_rows if r["verdict"] == "none"),
+        "structural_units_total": len(structural_keys),
+        "structural_units_without_human_decision": sorted(
+            structural_by_norm[nk] for nk in structural_by_norm
+            if nk not in decided_keys),
+        "manifest_project_id": manifest_face["project_id"],
+        "derived_project_id": project_id,
+    }
+
+    return dict(base, shadow_derived=True,
+                project_id=project_id,
+                evidence_sources=sources,
+                structural_universe={
+                    "adapter_count": universe["adapter_count"],
+                    "skill_count": universe["skill_count"],
+                    "adapters": sorted(universe["adapters"]),
+                    "skills": sorted(universe["skills"]),
+                    "manifest_surfaces": universe["manifest_surfaces"],
+                    "manifest_unit_rule": universe["manifest_unit_rule"],
+                },
+                prose_face_display_only=prose_face,
+                task_candidates=candidate_rows,
+                anchor_candidates=anchor_rows,
+                manifest_face=manifest_face,
+                comparison=comparison,
+                switch_judgment_inputs=switch_inputs,
+                zero_side_effect={
+                    "write_operations": 0,
+                    "note": ("strictly read-only shadow: no manifest/runtime/"
+                             "evidence/archive/temp writes; pinned by "
+                             "test_loop_structural_derivation zero-write arms"),
+                })
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -2356,6 +3133,13 @@ if __name__ == "__main__":  # pragma: no cover - manual CLI smoke
         help="Print a read-only preview (no writes).",
     )
     parser.add_argument(
+        "--shadow-derive", action="store_true",
+        help=("FEAT-071 (DEC-254 A): run the structure-anchored unit "
+              "derivation pipeline in SHADOW mode — read-only derivation + "
+              "comparison report against the approval manifest; zero writes, "
+              "zero authority flip."),
+    )
+    parser.add_argument(
         "--expected-plan-hash", default=None,
         help="Apply-path plan hash verification (FEAT-003, ADR §4.4). Fail-closed on mismatch.",
     )
@@ -2403,6 +3187,43 @@ if __name__ == "__main__":  # pragma: no cover - manual CLI smoke
         help="FEAT-070: repository version the confirmation is made against.",
     )
     args = parser.parse_args()
+
+    # ── FEAT-070-R0 P2-1: record-flag combination mutex ──────────────────
+    # The record family used to be resolved by SILENT PRECEDENCE: giving both
+    # record flags quietly ran the approval branch, and a record flag next to
+    # --apply was dropped in favor of the migration. Operator intent must
+    # never be silently discarded — every impossible combination fails
+    # loudly here (argparse convention: exit 2) BEFORE any file is touched.
+    # Pre-existing mode-flag precedence (rollback > apply > preview) is NOT
+    # part of this fix and stays untouched (backward compatibility).
+    _RECORD_MODE_FLAGS = ("record_unit_approval", "record_unit_block")
+    _MIGRATION_MODE_FLAGS = ("dry_run", "apply", "rollback", "shadow_derive")
+    _RECORD_ONLY_FLAGS = (
+        "approve_task", "approve_evidence", "approve_reviewer",
+        "block_reason", "repo_version",
+    )
+    record_modes = [f for f in _RECORD_MODE_FLAGS if getattr(args, f)]
+    migration_modes = [f for f in _MIGRATION_MODE_FLAGS if getattr(args, f)]
+    if len(record_modes) > 1:
+        parser.error(
+            "--record-unit-approval and --record-unit-block are mutually "
+            "exclusive (exactly ONE decision per invocation)"
+        )
+    if record_modes and migration_modes:
+        parser.error(
+            "record flags are mutually exclusive with migration modes; got "
+            "--{0} together with {1}".format(
+                record_modes[0].replace("_", "-"),
+                ", ".join("--" + f.replace("_", "-") for f in migration_modes),
+            )
+        )
+    if not record_modes:
+        for f in _RECORD_ONLY_FLAGS:
+            if getattr(args, f, None) is not None:
+                parser.error(
+                    "--{0} is only valid together with --record-unit-approval "
+                    "or --record-unit-block".format(f.replace("_", "-"))
+                )
 
     try:
         import sys
@@ -2459,6 +3280,10 @@ if __name__ == "__main__":  # pragma: no cover - manual CLI smoke
         if not result.get("recorded"):
             print(json.dumps(result, ensure_ascii=False, indent=2))
             raise SystemExit(1)
+    elif args.shadow_derive:
+        result = derive_structural_units_shadow(
+            target_root=args.target, project_type=args.project_type,
+        )
     else:
         result = preview_migration(
             target_root=args.target, project_type=args.project_type,
@@ -2466,5 +3291,7 @@ if __name__ == "__main__":  # pragma: no cover - manual CLI smoke
     print(json.dumps(result, ensure_ascii=False, indent=2))
     if ((args.apply and not result.get("applied"))
             or (args.rollback and not result.get("rolled_back"))
-            or (not args.apply and not args.rollback and result.get("validation_issues"))):
+            or (args.shadow_derive and not result.get("shadow_derived"))
+            or (not args.apply and not args.rollback
+                and result.get("validation_issues"))):
         raise SystemExit(1)

@@ -23,6 +23,17 @@ Replay discipline (execution-packet FIX-398 / RISK-060 closure standard):
     fields). No wall-clock timing is asserted; the subprocess timeout is a
     safety cap, not a judge. MIGRATION_VERSION is never modified (DEC-257).
 
+  FEAT-071 (batch-2 small-fix face) additions, per review-FIX-398-CODE-R0:
+    - P2-1 — the four orphan-sweep safety arms pinned with self-contained
+      fixtures (manifest missing/corrupt, evidence pre-state mismatch,
+      non-empty runtime.before, rmtree failure);
+    - P3-1 — ``test_migration_row_referenced_backup_kept`` rewritten around a
+      REAL ``backup=`` reference fixture (the predecessor was satisfied by
+      the live-runtime skip, so the protection arm never executed);
+    - P3-2 — the heal's scoped-.tmp sweep branch and its failure arms
+      (temp unlink failure recorded non-fatally; runtime unlink failure
+      fails closed with rollback guidance).
+
 Run:
     python -m pytest skills/software-project-governance/infra/tests/test_migration_commit_window.py -v
 """
@@ -358,22 +369,41 @@ class TestOrphanBackupSweep(unittest.TestCase):
             self.assertFalse(backup_dir.exists())
 
     def test_migration_row_referenced_backup_kept(self):
+        """``backup=`` reference protection — REAL reference fixture (P3-1).
+
+        FEAT-071 rewrite: the predecessor of this test was satisfied by the
+        live-runtime skip (the sweep never ran, so the protection arm was
+        never exercised). Here the sweep RUNS: a no-runtime host, one
+        verified backup dir, and live evidence-log text carrying the exact
+        ``| MIGRATION-<ver> | … | backup=<name> |`` row the tool writes.
+        The referenced dir is kept; with the reference removed the SAME dir
+        is provably information-free and swept (contrast arm proving the
+        reference — not luck — is what protected it).
+        """
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             gov = _write_host(root)
-            result = lm.apply_migration(target_root=str(root))
-            self.assertTrue(result["applied"])
-            backup_name = Path(result["backup_dir"]).name
-            evidence = (gov / "evidence-log.md").read_text(encoding="utf-8")
+            backup_dir, _hashes = lm._backup_governance_files(root, VERSION)
+            name = backup_dir.name
+            referenced_evidence = CLASSIC_EVIDENCE_LOG + (
+                "| MIGRATION-{0} | FX-191 | migrated classic-phase-gate -> "
+                "loop-engineering | backup={1} |\n".format(VERSION, name))
 
-            sweep = lm._sweep_orphan_migration_backups(root, evidence)
+            sweep = lm._sweep_orphan_migration_backups(
+                root, referenced_evidence)
 
-            self.assertEqual(sweep["cleaned"], [])
-            # P7 guard: with a live runtime present the whole sweep is
-            # skipped and the skip is disclosed, not silently empty.
-            self.assertEqual(len(sweep["skipped"]), 1)
-            self.assertEqual(sweep["skipped"][0]["name"], "*")
-            self.assertIn(backup_name, _backup_names(root))
+            self.assertEqual(sweep["cleaned"], [],
+                             "a MIGRATION backup= reference protects its dir")
+            self.assertEqual(sweep["skipped"], [],
+                             "the sweep RAN — the dir was judged, not skipped")
+            self.assertTrue(backup_dir.exists())
+
+            contrast = lm._sweep_orphan_migration_backups(
+                root, CLASSIC_EVIDENCE_LOG)
+
+            self.assertEqual(contrast["cleaned"], [name],
+                             "without the reference the same dir is swept")
+            self.assertFalse(backup_dir.exists())
 
     def test_rollback_restored_from_referenced_backup_kept(self):
         with tempfile.TemporaryDirectory() as td:
@@ -453,6 +483,103 @@ class TestOrphanBackupSweep(unittest.TestCase):
             self.assertTrue(backup_dir.exists())
 
 
+# ── FEAT-071 (FIX-398-R0 P2-1): the four sweep safety arms, fixture-pinned ───
+
+
+class TestOrphanSweepSafetyArms(unittest.TestCase):
+    """Each arm of the P7 safety verification must SKIP (disclose, keep) —
+    a dir is removed only when provably information-free. These four arms
+    previously had no test execution (review-FIX-398-CODE-R0 P2-1)."""
+
+    def test_manifest_missing_or_corrupt_skipped(self):
+        """Foreign-VERSION backups are covered by
+        test_foreign_version_backup_kept; this arm pins the manifest-shape
+        checks: a dir whose manifest is missing or unreadable cannot prove
+        it is information-free → skipped, never deleted."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_host(root)
+            missing, _h1 = lm._backup_governance_files(root, VERSION)
+            (missing / "manifest.json").unlink()
+            corrupt, _h2 = lm._backup_governance_files(root, VERSION)
+            (corrupt / "manifest.json").write_text("{ not json,,,",
+                                                    encoding="utf-8")
+
+            result = lm._sweep_orphan_migration_backups(
+                root, CLASSIC_EVIDENCE_LOG)
+
+            self.assertEqual(result["cleaned"], [])
+            self.assertEqual(len(result["skipped"]), 2)
+            for entry in result["skipped"]:
+                self.assertIn("manifest", entry["reason"])
+            for d in (missing, corrupt):
+                self.assertTrue(d.exists(),
+                                "unverifiable dirs are disclosed, never deleted")
+
+    def test_evidence_pre_state_mismatch_skipped(self):
+        """The evidence-mismatch arm is a load-bearing防线: a pre-state that
+        differs from live evidence means the dir may hold unique information."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gov = _write_host(root)
+            backup_dir, _hashes = lm._backup_governance_files(root, VERSION)
+            # The LIVE evidence evolves after the backup was taken.
+            (gov / "evidence-log.md").write_text(
+                CLASSIC_EVIDENCE_LOG
+                + "| EVD-002 | post-backup | legal evidence write |\n",
+                encoding="utf-8")
+
+            result = lm._sweep_orphan_migration_backups(
+                root, CLASSIC_EVIDENCE_LOG)
+
+            self.assertEqual(result["cleaned"], [])
+            self.assertEqual(len(result["skipped"]), 1)
+            self.assertIn("evidence", result["skipped"][0]["reason"])
+            self.assertTrue(backup_dir.exists())
+
+    def test_non_empty_runtime_before_snapshot_skipped(self):
+        """A non-empty runtime.before proves a runtime existed pre-apply —
+        the dir is NOT provably information-free → manual review, never
+        auto-deletion."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gov = _write_host(root)
+            backup_dir, _hashes = lm._backup_governance_files(root, VERSION)
+            (backup_dir / "runtime.before").write_text(
+                '{"legacy": true}', encoding="utf-8")
+
+            result = lm._sweep_orphan_migration_backups(
+                root, CLASSIC_EVIDENCE_LOG)
+
+            self.assertEqual(result["cleaned"], [])
+            self.assertEqual(len(result["skipped"]), 1)
+            self.assertIn("runtime.before", result["skipped"][0]["reason"])
+            self.assertTrue(backup_dir.exists())
+
+    def test_rmtree_failure_disclosed_dir_kept(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_host(root)
+            backup_dir, _hashes = lm._backup_governance_files(root, VERSION)
+
+            patches = [mock.patch.object(lm, "_remove_backup_dir_best_effort",
+                                         return_value=False)]
+            try:
+                for p in patches:
+                    p.start()
+                result = lm._sweep_orphan_migration_backups(
+                    root, CLASSIC_EVIDENCE_LOG)
+            finally:
+                for p in reversed(patches):
+                    p.stop()
+
+            self.assertEqual(result["cleaned"], [])
+            self.assertEqual(result["skipped"],
+                             [{"name": backup_dir.name,
+                               "reason": "rmtree failed (OSError)"}])
+            self.assertTrue(backup_dir.exists())
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Heal fail-closed arms (no commit-window backup available)
 # ═══════════════════════════════════════════════════════════════════════════
@@ -495,6 +622,123 @@ class TestHealFailClosedArms(unittest.TestCase):
 
             self.assertTrue(result["applied"], f"apply failed: {result}")
             self.assertNotIn("healed_interrupted_commit", result)
+
+
+# ── FEAT-071 (FIX-398-R0 P3-2): heal .tmp sweep + unlink failure arms ────────
+
+
+def _seed_interrupted_commit(root, gov, seed_temps=True):
+    """Produce the wc6d interrupted-commit state IN-PROCESS: runtime@VERSION
+    + no MIGRATION row + the commit-window snapshot backup the heal verifies
+    against. The ``evidence.before`` sentinel is written exactly the way
+    _commit_runtime_and_evidence does BEFORE its first replace (L894-895):
+    byte-identical to the live evidence-log, so the pre-state check passes.
+    Optionally seed realistic scoped .tmp leftovers of an interrupted
+    _atomic_replace_bytes."""
+    backup_dir, _hashes = lm._backup_governance_files(root, VERSION)
+    (backup_dir / "evidence.before").write_bytes(
+        (gov / "evidence-log.md").read_bytes())
+    (gov / "flow-unit-runtime.json").write_text(
+        json.dumps({"schema_version": "2.0",
+                    "migration_version": VERSION,
+                    "workflow_model": "loop-engineering"}),
+        encoding="utf-8")
+    temps = []
+    if seed_temps:
+        for stem, suffix in (("flow-unit-runtime.json", "abc123"),
+                             ("evidence-log.md", "def456")):
+            p = gov / "{0}.{1}.tmp".format(stem, suffix)
+            p.write_text("leftover", encoding="utf-8")
+            temps.append(p)
+    return backup_dir, temps
+
+
+class TestHealTempSweepArms(unittest.TestCase):
+
+    def test_heal_sweeps_seeded_commit_temp_leftovers(self):
+        """P3-2: seed REAL .tmp leftovers (glob-shaped per
+        _COMMIT_TEMP_GLOBS) into the wc6d state — re-entry must remove them
+        and disclose the names in temp_files_removed."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gov = _write_host(root)
+            _backup_dir, temps = _seed_interrupted_commit(root, gov)
+
+            result = lm.apply_migration(target_root=str(root))
+
+            self.assertTrue(result["applied"], f"re-entry failed: {result}")
+            heal = result["healed_interrupted_commit"]
+            self.assertTrue(heal["detected"])
+            self.assertTrue(heal["healed"])
+            self.assertEqual(sorted(heal["temp_files_removed"]),
+                             sorted(t.name for t in temps))
+            self.assertEqual(heal["temp_removal_failures"], [])
+            self.assertEqual(list(gov.glob("*.tmp")), [],
+                             "no scoped .tmp leftovers may survive the heal")
+
+    def test_heal_records_temp_removal_failure_and_continues(self):
+        """A temp that cannot be unlinked (real fs failure: it is a
+        directory) is RECORDED non-fatally — the heal still converges and
+        discloses which leftover survived."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gov = _write_host(root)
+            _backup_dir, temps = _seed_interrupted_commit(root, gov)
+            # Turn one seeded temp into a directory: Path.unlink fails with
+            # an OSError subclass on every platform (no mock needed).
+            stuck = temps[0]
+            stuck.unlink()
+            stuck.mkdir()
+
+            result = lm.apply_migration(target_root=str(root))
+
+            self.assertTrue(result["applied"],
+                            "temp failure is non-fatal: {0}".format(result))
+            heal = result["healed_interrupted_commit"]
+            self.assertTrue(heal["healed"])
+            self.assertEqual(len(heal["temp_removal_failures"]), 1)
+            self.assertIn(stuck.name, heal["temp_removal_failures"][0])
+            self.assertIn("Error", heal["temp_removal_failures"][0],
+                          "the OSError class name is surfaced in the detail")
+            self.assertEqual(heal["temp_files_removed"], [temps[1].name])
+            self.assertTrue(stuck.is_dir(),
+                            "the stuck leftover is disclosed, not vanished")
+
+    def test_heal_runtime_unlink_failure_fails_closed_with_guidance(self):
+        """P3-2 second arm: when the half-committed runtime itself cannot be
+        removed, the heal fails CLOSED with explicit --rollback guidance —
+        the runtime stays, nothing else is touched, no write is performed."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gov = _write_host(root)
+            backup_dir, temps = _seed_interrupted_commit(root, gov)
+
+            patches = [mock.patch.object(Path, "unlink",
+                                         side_effect=OSError(13, "denied"))]
+            try:
+                for p in patches:
+                    p.start()
+                result = lm.apply_migration(target_root=str(root))
+            finally:
+                for p in reversed(patches):
+                    p.stop()
+
+            self.assertFalse(result["applied"])
+            self.assertIn("interrupted migration commit detected",
+                          result["aborted_reason"])
+            self.assertIn("could not be removed", result["aborted_reason"])
+            self.assertIn("--rollback", result["aborted_reason"])
+            interrupted = result["interrupted_commit"]
+            self.assertTrue(interrupted["detected"])
+            self.assertFalse(interrupted["healed"])
+            self.assertEqual(interrupted["temp_files_removed"], [])
+            self.assertEqual(len(interrupted["temp_removal_failures"]), 2)
+            # P7: nothing was removed — runtime, temps, backup all intact.
+            self.assertTrue((gov / "flow-unit-runtime.json").is_file())
+            for t in temps:
+                self.assertTrue(t.is_file())
+            self.assertTrue(backup_dir.exists())
+            self.assertEqual(_migration_row_count(gov / "evidence-log.md"), 0)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

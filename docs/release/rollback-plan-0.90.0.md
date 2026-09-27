@@ -25,3 +25,5 @@ fail-closed 阻断——修复后重跑门禁，不跳门（release-checklist �
 ## 回滚影响评估
 
 回滚唯一影响面=放弃本版新判据面（RB-2 可观测/自愈/影子）——均为增量能力，无依赖方；RISK-036 边界与官方审批状态不受回滚影响（本版未声明任何官方审批）。
+
+边界声明（保守边界——REL-021 token 全量）：本版不声明 official approval、marketplace approval、universal/full runtime support、external first-session pilot success（RISK-036 维持打开——外部验证/官方提交/1.0.0 review 未满足）。

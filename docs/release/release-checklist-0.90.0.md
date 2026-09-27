@@ -38,3 +38,5 @@
 - 核心功能冒烟：`/governance` bootstrap（0.90.0）+ governance-bootstrap 风险计数 18 面（DEC-256）
 - 观察期：发布后 48h 无新增 P0/P1 报告（内部工具替代标准）
 - **回滚触发绑定（P2-1——M-3 RELEASE 条件项）**：观察期内出现任一情形 → 立即进入 hotfix 0.90.1 或 tag 回退决策（按 rollback-plan §发布后回滚路径，历史 tag 变更需独立 DEC）：①新增 P0/P1 缺陷报告 ②`/governance` bootstrap 或 governance-bootstrap 冒烟失败 ③check-release released 复跑 FAIL
+
+边界声明（保守边界——REL-021 token 全量）：本版不声明 official approval、marketplace approval、universal/full runtime support、external first-session pilot success（RISK-036 维持打开——外部验证/官方提交/1.0.0 review 未满足）。

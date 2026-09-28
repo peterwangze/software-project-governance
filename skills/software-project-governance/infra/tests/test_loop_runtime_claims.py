@@ -1105,32 +1105,72 @@ class LoopRuntimePerformanceAndGoldenTests(unittest.TestCase):
             identities = []
             finding_snapshots = []
             for _ in range(3):
-                started = time.perf_counter()
+                started = time.process_time()
                 report = lrc.scan_loop_runtime_claims(context)
-                elapsed.append(time.perf_counter() - started)
+                elapsed.append(time.process_time() - started)
                 identities.append((report.verdict, report.inventory.candidate_count, report.semantic_units,
                                    tuple(sorted(report.state_totals.items())), len(report.classification_ledger),
                                    report.inventory.inventory_sha256, report.final_inventory_sha256))
                 finding_snapshots.append([(finding.code, finding.normalized_path) for finding in report.findings[:10]])
             self.assertEqual(1, len(set(identities)))
             self.assertEqual("PASS", identities[0][0], finding_snapshots[0])
-            # FIX-346 performance-budget recalibration — a re-anchored
-            # tripwire, NOT a relaxed assertion: the median-of-three must
-            # still fail when scan cost regresses. The historical 8.0 s was
-            # calibrated in the FIX-215 era, when the tracked subject tree
-            # and the scanner were a fraction of today's size; it has been
-            # unreachable since at least FIX-320 (measured 13.3~17.0 s under
-            # parallel batch load — review-FIX-320-322-CODE-R0 §2#15) and
-            # FIX-345 (16.2 s), i.e. the budget sat 66%~113% under reality.
-            # Idle recalibration on the reference machine (Windows, 3 fresh
-            # runs, CPU load <= 9%, every run verdict PASS, identity intact):
-            # 14.295 / 18.947 / 17.967 s -> p50 = 17.967 s. New budget =
-            # p50 x 1.5 safety factor = 27.0 s. The factor is capped by the
-            # inverse property verified at calibration time: halving the
-            # budget (13.5 s) must stay RED, and every observed idle run
-            # (min 14.295 s) exceeds it — so a future scan that gets ~2x
-            # faster re-tightens the tripwire, and any 2x slowdown fails it.
-            self.assertLess(statistics.median(elapsed), 27.0)
+            # FIX-401 (RISK-048) — the clock domain, not the threshold, is
+            # the fix. The wall-clock median (perf_counter, < 27.0 s) mixed
+            # scanner work with environment noise: under same-machine
+            # parallel governance agents the scheduler/I-O contention
+            # inflated the wall clock while the scanner's own work was
+            # unchanged (FIX-288: 12.4 s vs the then-8 s budget; DEC-262:
+            # family-run wall timeouts x2), i.e. false REDs. The timed
+            # region is exactly scan_loop_runtime_claims: pure Python +
+            # file reads, no subprocess and no thread (the git :index
+            # materialization above runs OUTSIDE the timed loop), so
+            # time.process_time() — this process's user+kernel CPU only —
+            # measures the scanner's own cost. FIX-240 precedent applied to
+            # the clock axis: FIX-240 made the SUBJECT exact (disposable
+            # git-index clone, not the machine-local live tree); FIX-401
+            # makes the CLOCK exact (process CPU, not wall). Rejected
+            # candidates: (b) serial/load tiered thresholds and (c)
+            # skip-under-load both hinge on a parallel-load detector that
+            # is itself a fragile environment-sensitive branch — a false
+            # negative reintroduces the false RED, a false positive
+            # switches tier or skips precisely when parallel agents are
+            # most likely to introduce regressions (DEC-268
+            # silent-exemption red line).
+            #
+            # FIX-346 calibration discipline, re-anchored in the CPU
+            # domain, coefficient unchanged (p50 x 1.5). Anchoring session
+            # 2026-09-28 (HEAD f06a2bf, Windows, 16 logical cores,
+            # ambient-loaded window; every run verdict PASS, identity
+            # stable): CPU 15.453 / 18.547 / 23.406 s -> p50 = 18.547 s
+            # -> budget = 18.547 x 1.5 = 27.8 s. Inverse property vs the
+            # anchoring session: the halved budget (13.9 s) stays RED —
+            # every anchoring run (min 15.453 s) exceeds it, so a future
+            # scan ~2x faster re-tightens the tripwire and ~2x CPU growth
+            # trips it. Same-day load control: 8 foreign busy-loop
+            # processes (50% of the 16 cores) left the CPU median at
+            # 13.688 s (13.000 / 13.688 / 14.062) — CPU-saturation load
+            # does not inflate the process-CPU clock; the same load shape
+            # is what inflated the wall clock the old assertion consumed.
+            #
+            # Environment matrix (load shape x assertion behavior):
+            #   quiet/serial ............. CPU 13.0-15.5 s -> GREEN (floor)
+            #   ambient contention ....... CPU up to 23.406 s -> GREEN (19% margin)
+            #   8-proc CPU saturation .... CPU 13.0-14.1 s -> GREEN (unchanged)
+            #   CPU-class regression ..... >= +50% over anchor p50 (payload or
+            #                              algorithmic; cf. the DEC-262 corpus
+            #                              growth that forced the last wall
+            #                              recalibration) -> RED, bite kept
+            #   residual sensitivity .... frequency scaling / thermal /
+            #                              memory-bandwidth contention can
+            #                              inflate CPU-seconds (observed
+            #                              <= +70% over the quiet floor in the
+            #                              anchoring window); median-of-three
+            #                              absorbs mild instances, the budget
+            #                              covers the observed envelope, and a
+            #                              genuine breach under documented load
+            #                              re-anchors per DEC-262 discipline
+            #                              (attribute first — no silent waiver).
+            self.assertLess(statistics.median(elapsed), 27.8)
 
     def test_structured_removal_or_planned_binding_is_negative_not_ambiguous(self):
         import checks.loop_runtime_claims as lrc

@@ -12,6 +12,11 @@ Core functions:
       (FIX-385 / B-7b) — journal → staged batches → single commit
       linearization point; resume re-judges the world from digests, never
       from a phase counter (FEAT-060/FEAT-061 pattern)
+  - scan_row_families: READ-ONLY dry-run scan of the four governance row
+      families (EVD/REVIEW/RECO/TRIAGE) under unit one's six-condition
+      classification — zero writes; the REVIEW/RECO/TRIAGE families are
+      REFUSED at code level on every write-migration path (FEAT-075 /
+      DEC-278 单元二)
   - build_index: scan archive files, generate archive/index.md
   - rebuild_index: index-loss/corruption recovery — rebuild the index from
       the archive files, then verify integrity (FIX-384 / B-7a). The index is
@@ -28,6 +33,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import unicodedata
@@ -1129,6 +1135,19 @@ _EVIDENCE_REF_ENTITY_TYPES = frozenset({
     "task", "requirement", "other_entity", "missing", "ambiguous",
 })
 
+# FEAT-075 (DEC-278 unit two): failure substates, most severe first — the row
+# reason reports the most severe blocking cause; detail lists every blocking
+# id. Module-level so the EVD classifier and the four-family scanners share
+# ONE ordering (no parallel implementation; extracted verbatim from
+# _classify_evidence_rows's closure body).
+_REF_FAILURE_SUBSTATE_ORDER = (
+    ("ambiguous", "ambiguous_ref"),
+    ("missing", "missing_task_ref"),
+    ("layout_anomaly", "task_layout_anomaly"),
+    ("active", "active_task_ref"),
+    ("version_unparseable", "task_version_unparseable"),
+)
+
 # FEAT-074 (DEC-278 unit one): prefixes typed as registered non-task entities
 # ("other entity: DEC/RISK/DOC etc." per the ruling). DOC follows the DEC-278
 # five-state enumeration even though task_priority.py routes DOC governance ids
@@ -1559,6 +1578,86 @@ def _migrate_risks(version_start, version_end, task_versions, dry_run=False,
     return len(archived)
 
 
+def _make_ref_verdict(task_versions, context):
+    """FEAT-075 (DEC-278 unit two): the shared five-state ref typer + task
+    lifecycle gate — extracted VERBATIM from ``_classify_evidence_rows``'s
+    closure (unit one's semantics, single source) so the four-family
+    read-only scanners REUSE it instead of growing a parallel
+    implementation (DEC-278 §3.1 单元二: 共用分类语义).
+
+    Returns the ``_ref_verdict(tid) -> (entity_state, verdict, payload)``
+    function; see ``_classify_evidence_rows`` docstring for the state and
+    verdict vocabulary.
+    """
+    hot_tasks = context["hot_tasks"]
+    hot_anomalies = context["hot_anomalies"]
+    requirement_ids = context["requirement_ids"]
+
+    def _ref_verdict(tid):
+        """Type ONE referenced id and judge it against the task conditions.
+
+        Returns (entity_state, verdict, payload):
+          entity_state — one of the five _EVIDENCE_REF_ENTITY_TYPES states.
+          verdict      — "pass" (task resolved; payload = version),
+                         "nongate" (descriptive context; payload = None),
+                         "fail" (payload = failure substate:
+                         active / missing / layout_anomaly /
+                         version_unparseable / ambiguous_*).
+        """
+        alias_target = _VERIFIED_TASK_ID_ALIASES.get(tid)
+        gate_id = None
+        prefix = tid.split("-", 1)[0]
+        if prefix == "REQ":
+            # FEAT-074 item 4 (Q2=c): the entity-registration source decides
+            # a REQ reference's semantics BEFORE the task-family allow-list
+            # (REQ- is in _TASK_FAMILY_PREFIXES for genuine task-side REQs).
+            task_side = tid in task_versions or tid in hot_tasks
+            if tid in requirement_ids and task_side:
+                return "ambiguous", "fail", "ambiguous_dual_registration"
+            if tid in requirement_ids:
+                return "requirement", "nongate", None
+            if task_side:
+                gate_id = tid  # a genuine task-side REQ id
+            else:
+                return "missing", "fail", "missing"
+        elif alias_target is not None:
+            # FEAT-074 item 3: per-ID verified alias (FX→archived task);
+            # wildcard family admission is forbidden, unlisted ids fall
+            # through to the unverified-family branch below.
+            gate_id = alias_target
+        elif _is_task_family_id(tid):
+            gate_id = tid
+        else:
+            if prefix in _OTHER_ENTITY_REF_PREFIXES:
+                return "other_entity", "nongate", None
+            # Task-shaped but not a known family and not per-ID verified
+            # (e.g. an unlisted FX-N): identity cannot be confirmed —
+            # DEC-278: keep unresolved, never wildcard-resolve.
+            return "ambiguous", "fail", "ambiguous_unverified_family"
+        # task-side gate on gate_id (alias-resolved where applicable)
+        if gate_id in task_versions:
+            return "task", "pass", task_versions[gate_id]
+        if gate_id in hot_anomalies:
+            # Locatable hot row whose layout is anomalous — columns cannot
+            # be trusted, so lifecycle closure can never be proven from it.
+            return "task", "fail", "layout_anomaly"
+        if gate_id in hot_tasks:
+            info = hot_tasks[gate_id]
+            if not _task_status_is_archivable(info["status"]):
+                return "task", "fail", "active"
+            if not _version_to_tuple(info["version"]):
+                # Terminal but non-semver target (未规划版本 / G9/G11):
+                # owning release cycle cannot be proven closed.
+                return "task", "fail", "version_unparseable"
+            # Terminal + parseable but invisible to the sanctioned completed-
+            # hot mapping — the version cannot be pinned through the mapping
+            # this gate trusts; fail closed rather than re-derive it.
+            return "task", "fail", "version_unparseable"
+        return "missing", "fail", "missing"
+
+    return _ref_verdict
+
+
 def _classify_evidence_rows(content, task_versions, version_start, version_end,
                             *, context=None):
     """FIX-385/FEAT-074: single source of the evidence migration row-
@@ -1633,9 +1732,11 @@ def _classify_evidence_rows(content, task_versions, version_start, version_end,
     """
     if context is None:
         context = _build_classification_context()
-    hot_tasks = context["hot_tasks"]
-    hot_anomalies = context["hot_anomalies"]
-    requirement_ids = context["requirement_ids"]
+
+    # FEAT-075 (DEC-278 unit two): the ref typer + task gate is single-sourced
+    # in _make_ref_verdict (extracted verbatim from this function's closure)
+    # so the four-family scanners share unit one's semantics.
+    _ref_verdict = _make_ref_verdict(task_versions, context)
 
     # FEAT-074 (condition 6): duplicate shape-valid EVD ids inside one input
     # are an ambiguous row identity — every copy fails closed (never split
@@ -1649,78 +1750,6 @@ def _classify_evidence_rows(content, task_versions, version_start, version_end,
         evd_id = parts[1] if len(parts) > 1 else ""
         if evd_id and _EVD_ID_SHAPE_RE.match(evd_id):
             id_line_counts.setdefault(evd_id, []).append(line_idx)
-
-    def _ref_verdict(tid):
-        """Type ONE referenced id and judge it against the task conditions.
-
-        Returns (entity_state, verdict, payload):
-          entity_state — one of the five _EVIDENCE_REF_ENTITY_TYPES states.
-          verdict      — "pass" (task resolved; payload = version),
-                         "nongate" (descriptive context; payload = None),
-                         "fail" (payload = failure substate:
-                         active / missing / layout_anomaly /
-                         version_unparseable / ambiguous_*).
-        """
-        alias_target = _VERIFIED_TASK_ID_ALIASES.get(tid)
-        gate_id = None
-        prefix = tid.split("-", 1)[0]
-        if prefix == "REQ":
-            # FEAT-074 item 4 (Q2=c): the entity-registration source decides
-            # a REQ reference's semantics BEFORE the task-family allow-list
-            # (REQ- is in _TASK_FAMILY_PREFIXES for genuine task-side REQs).
-            task_side = tid in task_versions or tid in hot_tasks
-            if tid in requirement_ids and task_side:
-                return "ambiguous", "fail", "ambiguous_dual_registration"
-            if tid in requirement_ids:
-                return "requirement", "nongate", None
-            if task_side:
-                gate_id = tid  # a genuine task-side REQ id
-            else:
-                return "missing", "fail", "missing"
-        elif alias_target is not None:
-            # FEAT-074 item 3: per-ID verified alias (FX→archived task);
-            # wildcard family admission is forbidden, unlisted ids fall
-            # through to the unverified-family branch below.
-            gate_id = alias_target
-        elif _is_task_family_id(tid):
-            gate_id = tid
-        else:
-            if prefix in _OTHER_ENTITY_REF_PREFIXES:
-                return "other_entity", "nongate", None
-            # Task-shaped but not a known family and not per-ID verified
-            # (e.g. an unlisted FX-N): identity cannot be confirmed —
-            # DEC-278: keep unresolved, never wildcard-resolve.
-            return "ambiguous", "fail", "ambiguous_unverified_family"
-        # task-side gate on gate_id (alias-resolved where applicable)
-        if gate_id in task_versions:
-            return "task", "pass", task_versions[gate_id]
-        if gate_id in hot_anomalies:
-            # Locatable hot row whose layout is anomalous — columns cannot
-            # be trusted, so lifecycle closure can never be proven from it.
-            return "task", "fail", "layout_anomaly"
-        if gate_id in hot_tasks:
-            info = hot_tasks[gate_id]
-            if not _task_status_is_archivable(info["status"]):
-                return "task", "fail", "active"
-            if not _version_to_tuple(info["version"]):
-                # Terminal but non-semver target (未规划版本 / G9/G11):
-                # owning release cycle cannot be proven closed.
-                return "task", "fail", "version_unparseable"
-            # Terminal + parseable but invisible to the sanctioned completed-
-            # hot mapping — the version cannot be pinned through the mapping
-            # this gate trusts; fail closed rather than re-derive it.
-            return "task", "fail", "version_unparseable"
-        return "missing", "fail", "missing"
-
-    # Failure substates, most severe first (the row reason reports the most
-    # severe blocking cause; detail lists every blocking id).
-    _SUBSTATE_ORDER = (
-        ("ambiguous", "ambiguous_ref"),
-        ("missing", "missing_task_ref"),
-        ("layout_anomaly", "task_layout_anomaly"),
-        ("active", "active_task_ref"),
-        ("version_unparseable", "task_version_unparseable"),
-    )
 
     records = []
     for line_idx, line in enumerate(content.split("\n")):
@@ -1783,7 +1812,7 @@ def _classify_evidence_rows(content, task_versions, version_start, version_end,
                     f"refs: {raw_task_ids[:40] or '(none)'}")
             continue
         if gating_fails:
-            for substate, reason in _SUBSTATE_ORDER:
+            for substate, reason in _REF_FAILURE_SUBSTATE_ORDER:
                 ids = sorted(t for t, p in gating_fails.items()
                              if p == substate or (
                                  substate == "ambiguous"
@@ -1808,8 +1837,14 @@ def _classify_evidence_rows(content, task_versions, version_start, version_end,
 
 
 def _migrate_evidence(version_start, version_end, task_versions, dry_run=False,
-                      explain_out=None):
+                      explain_out=None, row_family="EVD"):
     """FIX-164: migrate evidence-log rows whose related tasks have been archived.
+
+    FEAT-075 (DEC-278 §3.1 单元二): ``row_family`` is the write-boundary
+    choke point — only the EVD family has a write-migration path; any other
+    family is refused at code level by _guard_row_family_write_migration
+    regardless of ``dry_run`` (scan_row_families is the read-only surface
+    for the other families).
 
     Evidence-log format: '| EVD-{n} | 关联Task | 摘要 | 日期 | 类型 | ... |'
     parts[2] is the 关联 Task column and may contain comma-separated task IDs.
@@ -1855,6 +1890,7 @@ def _migrate_evidence(version_start, version_end, task_versions, dry_run=False,
     five-state classification (DEC-278 unit one).
     """
     elog = _evidence_log()
+    _guard_row_family_write_migration(row_family)
     if not elog.exists():
         return 0
     content = elog.read_text(encoding="utf-8")
@@ -2148,11 +2184,453 @@ def _evidence_classification_context_digest(task_versions, context):
     return _sha256_text(json.dumps(payload, ensure_ascii=False, sort_keys=True))
 
 
+# ── FEAT-075 (DEC-278 unit two): four-family read-only scan + write guard ──
+#
+# DEC-278 §3.1 单元二: EVD/REVIEW/RECO/TRIAGE four governance row families,
+# read-only dry-run scan reusing unit one's classification semantics (the
+# five entity states + the six task conditions via _make_ref_verdict /
+# _REF_FAILURE_SUBSTATE_ORDER — NO parallel implementation), with each
+# family parsed by its OWN id-shape/schema (no assumed isomorphism: EVD ids
+# are EVD-N / EVD-FIX-247 with refs in the 关联Task column; REVIEW ids
+# embed the reviewed task REVIEW-{TASK}[-SCOPE][-R{n}]; TRIAGE-/RECO- ids
+# embed their governing task TRIAGE-{TASK} / RECO-{TASK}). Per DEC-278 §3.2
+# the scanner writes NOTHING, and the three non-EVD families are REFUSED at
+# code level should they ever reach a write-migration execution path.
+
+#: Families the write-migration paths may carry (DEC-278: the EVD family's
+#: EXISTING migration capability is preserved — no unexpected widening).
+_WRITE_MIGRATION_ROW_FAMILIES = frozenset({"EVD"})
+#: Families that are dry-run-scan-only; reaching a migrate execution path
+#: raises RowFamilyMigrationRejected regardless of dry_run (DEC-278 §3.1
+#: 单元二 item 2 / §3.2: 新行族实际写迁移显式拒绝，非操作员约定).
+_ROW_FAMILY_WRITE_MIGRATION_REFUSED = frozenset({"REVIEW", "RECO", "TRIAGE"})
+#: All four families the read-only scanner covers (DEC-278 §3.1 单元二).
+_SCAN_ROW_FAMILIES = ("EVD", "REVIEW", "RECO", "TRIAGE")
+
+# Per-family id shapes (2026-09-28 live-data verification: 633 REVIEW rows —
+# 404 plain REVIEW-{TASK}-R{n}, 42 with a scope token (CODE/RELEASE/...),
+# multi-segment scopes (DESIGN-IMPL), legacy no-round ids (REVIEW-FIX-170),
+# and 4 historical malformed shapes (REVIEW-FIX-155a,
+# REVIEW-0.45-0.46-FINAL …) counted explicitly as unknown; 199 TRIAGE /
+# 159 RECO rows all match TRIAGE-{TASK} / RECO-{TASK}). Group(1) is the
+# family's EMBEDDED governing task id.
+_ROW_FAMILY_ID_RES = {
+    "REVIEW": re.compile(r"^REVIEW-([A-Z]+-\d+)(?:-[A-Z0-9]+)*(?:-R\d+)?$"),
+    "TRIAGE": re.compile(r"^TRIAGE-([A-Z]+-\d+)$"),
+    "RECO": re.compile(r"^RECO-([A-Z]+-\d+)$"),
+}
+
+
+class RowFamilyMigrationRejected(BigTableMigrationError):
+    """FEAT-075 (DEC-278 §3.2): a dry-run-only governance row family reached
+    a WRITE-migration execution path. Code-level refusal — not an operator
+    convention; the CLI prints the payload and exits non-zero."""
+
+
+def _guard_row_family_write_migration(row_family):
+    """FEAT-075: the write-boundary choke point for every migrate entry.
+
+    EVD passes (existing capability preserved); REVIEW/RECO/TRIAGE raise
+    RowFamilyMigrationRejected regardless of the dry_run flag — those
+    families' sanctioned read-only surface is scan_row_families, and
+    reaching a migration executor at all is the refusal condition (DEC-278
+    §3.2 MUST NOT: 新行族实际迁移——除 dry-run 外零写入迁移).
+    """
+    if row_family in _WRITE_MIGRATION_ROW_FAMILIES:
+        return
+    raise RowFamilyMigrationRejected({
+        "code": "row_family_write_migration_rejected",
+        "detail": (
+            f"row family {row_family!r} is dry-run-only (DEC-278 §3.1 单元二: "
+            f"新行族实际写迁移显式拒绝). Read-only coverage: "
+            f"archive.py scan-families; write migration exists only for "
+            f"{sorted(_WRITE_MIGRATION_ROW_FAMILIES)}"
+        ),
+        "family": row_family,
+    })
+
+
+def _split_ref_ids(cell):
+    """FEAT-075: comma-separated governance-id refs from one table cell
+    (same token grammar as the EVD 关联Task column: PREFIX-N)."""
+    refs = set()
+    for token in (cell or "").split(","):
+        token = token.strip()
+        if token and re.match(r"[A-Z]+-\d+", token):
+            refs.add(token)
+    return refs
+
+
+def _parse_family_row(family, line):
+    """FEAT-075: parse ONE non-EVD family row against its OWN schema.
+
+    Returns (row_id, governing_refs, ref_column_value) or None when the row
+    does not satisfy the family schema (malformed → the scanner counts it
+    as unknown_row_id_shape — explicitly reported, never silently skipped).
+    Governing refs = the id-EMBEDDED task ∪ the 关联任务 column (fail-closed
+    union: a divergence between the two can only retain the row, never
+    release it).
+    """
+    parts = [p.strip() for p in line.split("|")]
+    row_id = parts[1] if len(parts) > 1 else ""
+    match = _ROW_FAMILY_ID_RES[family].match(row_id) if row_id else None
+    if match is None or len(parts) < 3:
+        return None
+    embedded_task = match.group(1)
+    ref_column = parts[2]
+    refs = {embedded_task} | _split_ref_ids(ref_column)
+    return row_id, refs, ref_column
+
+
+def _classify_family_rows(family, lines, line_bytes, task_versions,
+                          version_start, version_end, ref_verdict):
+    """FEAT-075: classify one non-EVD family's rows under unit one's six
+    conditions (shared _make_ref_verdict typer + severity ordering; the
+    would_archive verdict is a DRY-RUN candidacy projection only — write
+    migration for these families is refused by _guard_row_family_write_-
+    migration). Returns per-row records in scan order."""
+    id_line_counts = {}
+    prefix = f"| {family}-"
+    for line_idx, line in enumerate(lines):
+        if not line.strip().startswith(prefix):
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        row_id = parts[1] if len(parts) > 1 else ""
+        if row_id and _ROW_FAMILY_ID_RES[family].match(row_id):
+            id_line_counts.setdefault(row_id, []).append(line_idx)
+
+    records = []
+    for line_idx, line in enumerate(lines):
+        if not line.strip().startswith(prefix):
+            continue
+        parsed = _parse_family_row(family, line)
+        row_bytes = line_bytes[line_idx]
+        if parsed is None:
+            parts = [p.strip() for p in line.split("|")]
+            records.append({"family": family, "id": (parts[1] if len(parts) > 1 else "") or "?",
+                            "line_idx": line_idx, "bytes": row_bytes,
+                            "migrate": False, "version": None,
+                            "reason": "unknown_row_id_shape",
+                            "detail": "row ID shape not recognized for family",
+                            "ref_types": {}})
+            continue
+        row_id, refs, ref_column = parsed
+        ref_types = {}
+        verdicts = {}
+        for tid in sorted(refs):
+            entity_state, verdict, payload = ref_verdict(tid)
+            ref_types[tid] = entity_state
+            verdicts[tid] = (verdict, payload)
+
+        def _record(reason, detail, migrate=False, version=None):
+            records.append({"family": family, "id": row_id,
+                            "line_idx": line_idx, "bytes": row_bytes,
+                            "migrate": migrate, "version": version,
+                            "reason": reason, "detail": detail,
+                            "ref_types": ref_types})
+
+        # Six-condition 6 (row identity): duplicate shape-valid id.
+        if len(id_line_counts.get(row_id, ())) > 1:
+            _record("duplicate_row_id",
+                    f"id appears {len(id_line_counts[row_id])} times in input")
+            continue
+        # Six-condition 5: explicit keep marker — whole-row scan.
+        if any(marker in line for marker in _EVIDENCE_KEEP_MARKERS):
+            _record("explicit_keep_marker",
+                    "row carries an explicit keep marker (retained hot)")
+            continue
+        gating_fails = {tid: payload for tid, (verdict, payload)
+                        in verdicts.items() if verdict == "fail"}
+        if not refs or all(v == "nongate" for v, _p in verdicts.values()):
+            # No gating task ref at all (Q6 date-window handling belongs to
+            # the successor ticket, same boundary as unit one).
+            _record("no_task_family_ref",
+                    f"refs: {(', '.join(sorted(refs)) or '(none)')[:40]}")
+            continue
+        if gating_fails:
+            for substate, reason in _REF_FAILURE_SUBSTATE_ORDER:
+                ids = sorted(t for t, p in gating_fails.items()
+                             if p == substate or (
+                                 substate == "ambiguous"
+                                 and str(p).startswith("ambiguous")))
+                if ids:
+                    _record(reason, "blocking refs: " + ",".join(ids[:5]))
+                    break
+            continue
+        # Six-condition 3: owning cycle = MAX resolved ref version.
+        resolved_versions = [payload for _t, (verdict, payload)
+                             in verdicts.items() if verdict == "pass"]
+        owning = max(resolved_versions, key=_version_to_tuple)
+        if _version_in_range(owning, version_start, version_end):
+            _record("would_archive", f"v{owning} (max ref version)",
+                    migrate=True, version=owning)
+        else:
+            _record("ref_version_out_of_range",
+                    f"owning cycle v{owning} outside "
+                    f"[{version_start}, {version_end}]")
+    return records
+
+
+def _scan_git_commit_anchor(root):
+    """FEAT-075: the reproducibility anchor's git commit (input anchoring is
+    M-0 prerequisite 1 of 5: 测量工具+输入 commit+逐行输出). 'unknown' when
+    git is unavailable — the sha256 digests remain the hard anchor."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=15, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return "unknown"
+    head = (result.stdout or "").strip() if result.returncode == 0 else ""
+    return head or "unknown"
+
+
+def scan_row_families(version_start, version_end, *, families=None,
+                      task_versions=None, context=None, content=None,
+                      plan_tracker_content=None):
+    """FEAT-075 (DEC-278 单元二): READ-ONLY dry-run scan of the four
+    governance row families (EVD/REVIEW/RECO/TRIAGE).
+
+    Classification reuses unit one's semantics single-source: the EVD family
+    is classified by ``_classify_evidence_rows`` itself (zero drift by
+    construction); REVIEW/TRIAGE/RECO by ``_classify_family_rows`` on the
+    shared ``_make_ref_verdict`` typer + ``_REF_FAILURE_SUBSTATE_ORDER``
+    severity ordering (five entity states + six task conditions). Each
+    family keeps its OWN parser/schema (see _ROW_FAMILY_ID_RES /
+    _parse_family_row) — no assumed isomorphism of id shape or ref column.
+
+    Reproducible-baseline carrying (M-0 prerequisite 1 of 5): the report
+    anchors its inputs (git commit + evidence-log/plan-tracker sha256
+    digests) and emits a per-line classification that is saveable and
+    diffable (format_family_scan_tsv). This function performs ZERO writes —
+    not to the evidence-log, not to any .governance file (asserted by
+    regression tests via before/after sha256).
+
+    Args:
+        version_start / version_end: the retention window (would_archive is
+            reported relative to this window; the window NEVER gates what is
+            scanned — every family row produces a record).
+        families: subset of _SCAN_ROW_FAMILIES (None → all four).
+        task_versions: optional {task_id: version} mapping (None → the
+            standalone mapping, same as migrate_evidence_resumable).
+        context: optional prebuilt classification context (None → built
+            from the live plan-tracker / plan_tracker_content).
+        content: optional evidence-log text (None → read the live file).
+        plan_tracker_content: optional plan-tracker text for the context.
+
+    Returns the full report dict (schema row-family-scan/1):
+        anchors / window / coverage (per-family rows+bytes+reasons, explicit
+        malformed and non-family counts — nothing silently skipped) /
+        rows (per-line records: 实体解析 ref_types, 周期归属 version, 保留原因
+        reason+detail, 候选状态 migrate, 字节量 bytes) / write_boundary.
+    """
+    families = tuple(_SCAN_ROW_FAMILIES) if families is None else tuple(families)
+    for family in families:
+        if family not in _SCAN_ROW_FAMILIES:
+            raise ValueError(f"unknown row family {family!r}")
+    elog = _evidence_log()
+    if content is None:
+        raw = elog.read_bytes()
+        content = raw.decode("utf-8")
+        evidence_bytes = len(raw)
+        evidence_digest = _sha256_text(content)
+        evidence_path = str(elog)
+    else:
+        evidence_bytes = len(content.encode("utf-8"))
+        evidence_digest = _sha256_text(content)
+        evidence_path = str(elog)
+    if context is None:
+        context = _build_classification_context(plan_tracker_content)
+    if plan_tracker_content is None:
+        try:
+            # Byte-faithful read (read_text's universal-newline translation
+            # would hash CRLF files differently from their on-disk bytes).
+            plan_tracker_content = _plan_tracker().read_bytes().decode("utf-8")
+        except OSError:
+            plan_tracker_content = ""
+    if task_versions is None:
+        task_versions = _evidence_task_versions_standalone()
+
+    lines = content.split("\n")
+    # FEAT-074 §1 raw byte口径: per-line UTF-8 length + 1 newline byte (the
+    # final line carries none) — CRLF rows keep their \r. Same basis as the
+    # unit-one diff doc and Check 28s st_size totals.
+    line_bytes = [len(line.encode("utf-8")) + (0 if i == len(lines) - 1 else 1)
+                  for i, line in enumerate(lines)]
+
+    rows = []
+    coverage_families = {}
+    for family in families:
+        if family == "EVD":
+            evd_records = _classify_evidence_rows(
+                content, task_versions, version_start, version_end,
+                context=context)
+            family_rows = []
+            for r in evd_records:
+                family_rows.append({
+                    "family": "EVD", "id": r["id"], "line_idx": r["line_idx"],
+                    "bytes": line_bytes[r["line_idx"]], "migrate": r["migrate"],
+                    "version": r["version"], "reason": r["reason"],
+                    "detail": r["detail"], "ref_types": dict(r["ref_types"]),
+                })
+        else:
+            family_rows = _classify_family_rows(
+                family, lines, line_bytes, task_versions,
+                version_start, version_end,
+                _make_ref_verdict(task_versions, context))
+        rows.extend(family_rows)
+        reasons = {}
+        for r in family_rows:
+            slot = reasons.setdefault(r["reason"], [0, 0])
+            slot[0] += 1
+            slot[1] += r["bytes"]
+        coverage_families[family] = {
+            "rows": len(family_rows),
+            "bytes": sum(r["bytes"] for r in family_rows),
+            "malformed_rows": sum(1 for r in family_rows
+                                  if r["reason"] in ("unknown_evd_id_shape",
+                                                     "unknown_row_id_shape")),
+            "would_archive_rows": sum(1 for r in family_rows if r["migrate"]),
+            "would_archive_bytes": sum(r["bytes"] for r in family_rows
+                                       if r["migrate"]),
+            "reasons": reasons,
+        }
+
+    family_prefixes = tuple(f"| {family}-" for family in families)
+    scanned = {r["line_idx"] for r in rows}
+    other_table_lines = 0
+    non_table_lines = 0
+    for line_idx, line in enumerate(lines):
+        if line_idx in scanned:
+            continue
+        stripped = line.strip()
+        if stripped.startswith("|"):
+            other_table_lines += 1
+        else:
+            non_table_lines += 1
+    coverage = {
+        "total_lines": len(lines),
+        "scanned_family_rows": len(rows),
+        "other_table_lines": other_table_lines,
+        "non_table_lines": non_table_lines,
+        "unclaimed_family_prefix_lines": sum(
+            1 for line_idx, line in enumerate(lines)
+            if line_idx not in scanned
+            and line.strip().startswith(family_prefixes)),
+        "families": coverage_families,
+    }
+
+    rows.sort(key=lambda r: (r["family"], r["line_idx"]))
+    return {
+        "schema": "row-family-scan/1",
+        "dry_run": True,
+        "anchors": {
+            "git_commit": _scan_git_commit_anchor(ROOT),
+            "evidence_log_path": evidence_path,
+            "evidence_log_bytes": evidence_bytes,
+            "evidence_log_sha256": evidence_digest,
+            "plan_tracker_sha256": _sha256_text(plan_tracker_content),
+            "task_versions_count": len(task_versions),
+        },
+        "window": {"start": version_start, "end": version_end},
+        "coverage": coverage,
+        "rows": rows,
+        "write_boundary": {
+            "migratable_families": sorted(_WRITE_MIGRATION_ROW_FAMILIES),
+            "write_migration_refused": sorted(
+                _ROW_FAMILY_WRITE_MIGRATION_REFUSED),
+            "note": ("would_archive for REVIEW/TRIAGE/RECO is a dry-run "
+                     "candidacy projection only; their write migration is "
+                     "refused at code level (DEC-278 §3.2)"),
+        },
+    }
+
+
+def format_family_scan_tsv(report):
+    """FEAT-075: the diffable per-line report — one deterministic TSV line
+    per scanned row (sorted family, then scan order), so two runs on the
+    same input diff to nothing and any classification change diffs exactly
+    where it changed."""
+    header = ("family\tid\tline_idx\tbytes\tcandidate\towning_version\t"
+              "reason\tref_types\tdetail")
+    out = [header]
+    for r in report["rows"]:
+        ref_types = ",".join(f"{tid}:{state}"
+                             for tid, state in sorted(r["ref_types"].items()))
+        detail = (r["detail"] or "").replace("\t", " ")
+        out.append("\t".join((
+            r["family"], r["id"], str(r["line_idx"]), str(r["bytes"]),
+            "would_archive" if r["migrate"] else "retain_hot",
+            r["version"] or "-", r["reason"], ref_types, detail,
+        )))
+    return "\n".join(out) + "\n"
+
+
+def format_family_scan_summary(report):
+    """FEAT-075: the human summary the CLI prints (four-family dry-run)."""
+    cov = report["coverage"]
+    lines = []
+    for family, stats in cov["families"].items():
+        lines.append(
+            f"  {family}: {stats['rows']} rows / {stats['bytes']:,} B — "
+            f"would_archive {stats['would_archive_rows']} rows / "
+            f"{stats['would_archive_bytes']:,} B "
+            f"(malformed/unknown {stats['malformed_rows']})")
+        for reason, (count, nbytes) in sorted(stats["reasons"].items(),
+                                              key=lambda kv: (-kv[1][0], kv[0])):
+            lines.append(f"      {reason}: {count} rows / {nbytes:,} B")
+    lines.append(
+        f"  coverage: {cov['total_lines']} lines total = "
+        f"{cov['scanned_family_rows']} family rows + "
+        f"{cov['other_table_lines']} other table lines + "
+        f"{cov['non_table_lines']} non-table lines"
+        + (f" (unclaimed family-prefix lines: "
+           f"{cov['unclaimed_family_prefix_lines']})"
+           if cov["unclaimed_family_prefix_lines"] else ""))
+    return "\n".join(lines)
+
+
+def write_family_scan_outputs(report, tsv_path=None, json_path=None):
+    """FEAT-075: save the per-line dry-run report (可落盘/可 diff — M-0
+    prerequisite 1). Output paths under the .governance directory are
+    REFUSED: the dry-run contract is zero governance-data writes."""
+    guard_dir = _gov_dir().resolve()
+    for label, path in (("tsv", tsv_path), ("json", json_path)):
+        if path is None:
+            continue
+        target = Path(path)
+        try:
+            resolved = target.resolve()
+        except OSError:
+            resolved = target.absolute()
+        if resolved == guard_dir or guard_dir in resolved.parents:
+            raise BigTableMigrationError({
+                "code": "family_scan_output_refused",
+                "detail": (
+                    f"{label} output {path!r} is inside .governance — the "
+                    "dry-run contract writes zero governance data files "
+                    "(DEC-278 单元二红线: dry-run 零写入)"),
+            })
+        if label == "tsv":
+            target.write_text(format_family_scan_tsv(report),
+                              encoding="utf-8", newline="\n")
+        else:
+            target.write_text(
+                json.dumps(report, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8", newline="\n")
+
+
 def migrate_evidence_resumable(version_start, version_end, *,
                                batch_size=BIG_TABLE_MIGRATION_BATCH_SIZE,
-                               dry_run=False, task_versions=None):
+                               dry_run=False, task_versions=None,
+                               row_family="EVD"):
     """FIX-385 (B-7b): batched, journaled, RESUMABLE migration of the
     evidence-log table into the archive.
+
+    FEAT-075 (DEC-278 §3.1 单元二): ``row_family`` gates the write boundary —
+    only EVD migrates; the three dry-run-only families raise
+    RowFamilyMigrationRejected before ANY file is touched.
 
     Pipeline (FEAT-060/FEAT-061 crash-recovery semantics):
 
@@ -2197,6 +2675,7 @@ def migrate_evidence_resumable(version_start, version_end, *,
             "code": "schema_violation",
             "detail": f"batch_size must be an int >= 1, got {batch_size!r}",
         })
+    _guard_row_family_write_migration(row_family)
     elog = _evidence_log()
     if not elog.exists():
         return {"success": True, "dry_run": bool(dry_run), "migrated": 0,
@@ -2575,7 +3054,7 @@ def _finalize_explain(rows):
 # ── Core Migration ─────────────────────────────────────────────────
 
 def migrate_by_version(version_start, version_end, dry_run=False, migrate_evidence=True,
-                       explain=None):
+                       explain=None, row_family="EVD"):
     """Archive completed tasks (and optionally evidence) for a version range.
 
     Args:
@@ -2589,11 +3068,15 @@ def migrate_by_version(version_start, version_end, dry_run=False, migrate_eviden
             scanned/parsed/would_archive/retained/unknown_structure plus a
             per-row {"id","reason","detail"} list collected single-source
             from the migration loops themselves.
+        row_family: FEAT-075 write-boundary gate — only the EVD family has
+            a write-migration path; the three dry-run-only families are
+            refused here at code level (DEC-278 §3.1 单元二).
 
     Returns:
         dict with keys: success, dry_run, tasks_archived, tasks_remaining,
                         evidence_archived, archive_files_created, details
     """
+    _guard_row_family_write_migration(row_family)
     result = {
         "success": False,
         "dry_run": dry_run,
@@ -4401,8 +4884,12 @@ def analyze_auto_archive_candidates():
             )
     return result
 
-def migrate_auto(dry_run=False):
+def migrate_auto(dry_run=False, row_family="EVD"):
     """Auto-detect version range from plan-tracker roadmap and migrate data.
+
+    FEAT-075 (DEC-278 §3.1 单元二): ``row_family`` gates the write boundary
+    (only EVD migrates; the dry-run-only families are refused at code level
+    before any file is touched).
 
     Pipeline:
     1. Parse version roadmap → filter published versions
@@ -4426,6 +4913,7 @@ def migrate_auto(dry_run=False):
         evidence_log_before, evidence_log_after,
         archive_files_created, verify_pass, details
     """
+    _guard_row_family_write_migration(row_family)
     result = {
         "success": False,
         "skipped": False,
@@ -4773,6 +5261,13 @@ def main(argv=None):
                            help="Skip evidence archiving")
     migrate_p.add_argument("--auto", action="store_true",
                            help="Auto-detect version range from plan-tracker roadmap")
+    migrate_p.add_argument("--row-family", default="EVD",
+                           choices=sorted(_WRITE_MIGRATION_ROW_FAMILIES
+                                          | _ROW_FAMILY_WRITE_MIGRATION_REFUSED),
+                           help="Governance row family to migrate (FEAT-075 "
+                                "write boundary: REVIEW/RECO/TRIAGE are "
+                                "REFUSED at code level — dry-run-only via "
+                                "scan-families; DEC-278 §3.2)")
 
     # build-index
     subparsers.add_parser("build-index", help="Rebuild archive/index.md from archive files")
@@ -4807,6 +5302,36 @@ def main(argv=None):
                    help="Rows per staged batch (default: %(default)s)")
     p.add_argument("--dry-run", action="store_true",
                    help="Report what would migrate; zero writes")
+    p.add_argument("--row-family", default="EVD",
+                   choices=sorted(_WRITE_MIGRATION_ROW_FAMILIES
+                                  | _ROW_FAMILY_WRITE_MIGRATION_REFUSED),
+                   help="Governance row family (FEAT-075 write boundary: "
+                        "REVIEW/RECO/TRIAGE are REFUSED at code level; "
+                        "DEC-278 §3.2)")
+
+    # scan-families (FEAT-075 / DEC-278 单元二): READ-ONLY four-family
+    # dry-run scan (EVD/REVIEW/RECO/TRIAGE) — reuses unit one's
+    # classification semantics; zero writes; per-line report saveable as
+    # TSV (--output) / full JSON (--report-json); never writes inside
+    # .governance.
+    scan_p = subparsers.add_parser(
+        "scan-families",
+        help="READ-ONLY dry-run scan of the four governance row families "
+             "(EVD/REVIEW/RECO/TRIAGE) under unit one's six-condition "
+             "classification (FEAT-075 / DEC-278 单元二) — zero writes",
+    )
+    scan_p.add_argument("version_start", help="Retention-window start (e.g. 0.1.0)")
+    scan_p.add_argument("version_end", help="Retention-window end (e.g. 0.91.0)")
+    scan_p.add_argument("--family", action="append", metavar="FAM",
+                        choices=list(_SCAN_ROW_FAMILIES),
+                        help="Restrict to one family (repeatable; "
+                             "default: all four)")
+    scan_p.add_argument("--output", default=None,
+                        help="Write the per-line diffable TSV report here "
+                             "(refused inside .governance)")
+    scan_p.add_argument("--report-json", default=None,
+                        help="Write the full JSON report here (refused "
+                             "inside .governance)")
 
     args = parser.parse_args(parser_argv)
     # --project-root was pre-scanned out of argv (position-independent);
@@ -4822,8 +5347,33 @@ def main(argv=None):
             pass
 
     if args.command == "migrate":
+        try:
+            _guard_row_family_write_migration(
+                getattr(args, "row_family", "EVD"))
+            if args.auto:
+                result = migrate_auto(dry_run=args.dry_run,
+                                      row_family=getattr(args, "row_family",
+                                                         "EVD"))
+            elif args.version_start and args.version_end:
+                result = migrate_by_version(
+                    args.version_start,
+                    args.version_end,
+                    dry_run=args.dry_run,
+                    migrate_evidence=not args.no_evidence,
+                    row_family=getattr(args, "row_family", "EVD"),
+                )
+            else:
+                print("Error: Either --auto or both version_start and "
+                      "version_end must be provided.")
+                migrate_p.print_usage()
+                sys.exit(1)
+        except BigTableMigrationError as exc:
+            # FEAT-075: the write-boundary refusal is loud, structured, and
+            # non-zero-exit (never a silent no-op).
+            print(f"  Migration REFUSED: {exc.payload.get('code')}")
+            print(f"  {exc.payload.get('detail')}")
+            sys.exit(1)
         if args.auto:
-            result = migrate_auto(dry_run=args.dry_run)
             print(_format_auto_summary(result))
             # FIX-301: the auditable explanation renders for BOTH the skip
             # path and the action path — a skip with triggers satisfied must
@@ -4833,13 +5383,7 @@ def main(argv=None):
                 print(explain_report)
             if not result["skipped"] and not result["success"]:
                 sys.exit(1)
-        elif args.version_start and args.version_end:
-            result = migrate_by_version(
-                args.version_start,
-                args.version_end,
-                dry_run=args.dry_run,
-                migrate_evidence=not args.no_evidence,
-            )
+        else:
             print(f"  Dry-run: {result['dry_run']}")
             print(f"  Tasks archived: {result['tasks_archived']}")
             print(f"  Tasks remaining: {result['tasks_remaining']}")
@@ -4855,16 +5399,13 @@ def main(argv=None):
                       f"obligation")
             if not result["success"]:
                 sys.exit(1)
-        else:
-            print("Error: Either --auto or both version_start and version_end must be provided.")
-            migrate_p.print_usage()
-            sys.exit(1)
 
     elif args.command == "migrate-big-table":
         try:
             result = migrate_evidence_resumable(
                 args.version_start, args.version_end,
-                batch_size=args.batch_size, dry_run=args.dry_run)
+                batch_size=args.batch_size, dry_run=args.dry_run,
+                row_family=getattr(args, "row_family", "EVD"))
         except BigTableMigrationError as exc:
             # FIX-385: refusals are loud, structured, and non-zero-exit.
             print(f"  Migration REFUSED: {exc.payload.get('code')}")
@@ -4883,6 +5424,31 @@ def main(argv=None):
               f"{result.get('decision_authority_state')}")
         if not result.get("success"):
             sys.exit(1)
+
+    elif args.command == "scan-families":
+        # FEAT-075: read-only four-family dry-run (DEC-278 单元二). The
+        # refusal for output paths under .governance is loud + non-zero.
+        try:
+            families = tuple(args.family) if args.family else None
+            report = scan_row_families(args.version_start, args.version_end,
+                                       families=families)
+            if args.output or args.report_json:
+                write_family_scan_outputs(report, tsv_path=args.output,
+                                          json_path=args.report_json)
+        except BigTableMigrationError as exc:
+            print(f"  Scan REFUSED: {exc.payload.get('code')}")
+            print(f"  {exc.payload.get('detail')}")
+            sys.exit(1)
+        anchors = report["anchors"]
+        print("  Row-family dry-run (read-only; zero writes)")
+        print(f"  Window: [{report['window']['start']}, "
+              f"{report['window']['end']}]")
+        print(f"  Anchors: commit={anchors['git_commit']} "
+              f"evidence-log={anchors['evidence_log_bytes']:,} B "
+              f"sha256={anchors['evidence_log_sha256'][:12]}…")
+        print(format_family_scan_summary(report))
+        if args.output:
+            print(f"  Per-line TSV report: {args.output}")
 
     elif args.command == "build-index":
         result = build_index()

@@ -16,6 +16,7 @@ or:
 """
 
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -5223,6 +5224,299 @@ class TestDecisionStoreAuthorityInterface(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertEqual(result["migrated"], 54)
         self.assertEqual(result["decision_authority_state"], "JSON_ACTIVE")
+
+
+class FEAT075RowFamilyScanTests(unittest.TestCase):
+    """FEAT-075 (DEC-278 unit two) — four-family read-only dry-run scan +
+    write-boundary refusal.
+
+    Fixtures are SYNTHETIC (hermetic context + explicit task_versions; no
+    dependency on the drifting live governance data). The live-data
+    four-family summary and the 495-line estimate recheck are archived in
+    docs/architecture/feat-075-four-family-dryrun-20260928.md.
+    """
+
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        self.gov_dir = self.root / ".governance"
+        self.gov_dir.mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        self.tempdir.cleanup()
+
+    # ── fixtures ──────────────────────────────────────────────────
+
+    def _ctx(self, hot_rows=(), registry=()):
+        pt = ["### 优先级一览",
+              "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+              "| --- | --- | --- | --- | --- | --- | --- |"]
+        for tid, ver, status in hot_rows:
+            pt.append(f"| **P1** | {tid} | item | — | {ver} | path | {status} |")
+        pt.append("")
+        pt.append("## 需求跟踪矩阵")
+        pt.append("| 需求ID | 需求描述 | 来源 | 优先级 | 关联任务 | 当前状态 | 验证方式 |")
+        pt.append("| --- | --- | --- | --- | --- | --- | --- |")
+        for rid in registry:
+            pt.append(f"| {rid} | desc | src | P0 | FIX-900 | ✅ 已交付 | way |")
+        import archive
+        return archive._build_classification_context("\n".join(pt))
+
+    def _content(self):
+        # Four families + malformed + other-table + non-table lines. Window
+        # 0.1.0~0.90.0; task_versions carry the closed-cycle tasks.
+        return "\n".join([
+            "# 当前项目证据记录",
+            "| REVIEW-FIX-950-CODE-R0 | FIX-950 | 产品代码 | review r0 |",
+            "| REVIEW-FIX-951-R1 | FIX-951 | 产品代码 | review r1 |",
+            "| REVIEW-FIX-952 | FIX-952 | 产品代码 | legacy no-round review |",
+            "| REVIEW-0.4-0.5-FINAL | 0.4-0.5 | 发布 | version-range legacy row |",
+            "| TRIAGE-FIX-950 | FIX-950 | 变更控制 | triage row |",
+            "| TRIAGE-FIX-953 | FIX-953 | 变更控制 | triage active ref |",
+            "| RECO-FIX-950 | FIX-950 | 治理记录 | reco row |",
+            "| RECO-REQ-500 | REQ-500 | 治理记录 | reco requirement-only |",
+            "| EVD-1 | FIX-950 | 产品代码 | evd row |",
+            "| EVD-2 | REQ-500, FIX-950 | 产品代码 | evd mixed refs |",
+            "| MISC-ROW-1 | FIX-950 | 其他 | other table row |",
+            "prose line (non-table)",
+        ])
+
+    def _task_versions(self):
+        return {"FIX-950": "0.80.0", "FIX-951": "0.85.0", "FIX-952": "0.88.0"}
+
+    def _scan(self, content=None, families=None, hot_rows=(), registry=()):
+        import archive
+        return archive.scan_row_families(
+            "0.1.0", "0.90.0", families=families,
+            task_versions=self._task_versions(),
+            context=self._ctx(hot_rows=hot_rows, registry=registry),
+            content=content if content is not None else self._content(),
+            plan_tracker_content="")
+
+    # ── family coverage & shared semantics ───────────────────────
+
+    def test_four_families_identified_and_classified_with_shared_semantics(self):
+        report = self._scan()
+        fam = report["coverage"]["families"]
+        self.assertEqual(set(fam), {"EVD", "REVIEW", "RECO", "TRIAGE"})
+        by_key = {(r["family"], r["id"]): r for r in report["rows"]}
+        # Closed-cycle task → would_archive in EVERY family (same six
+        # conditions, same five-state typer as unit one).
+        for row_id in ("REVIEW-FIX-950-CODE-R0", "TRIAGE-FIX-950",
+                       "RECO-FIX-950", "EVD-1"):
+            family = row_id.split("-")[0]
+            r = by_key[(family, row_id)]
+            self.assertTrue(r["migrate"], row_id)
+            self.assertEqual(r["reason"], "would_archive")
+            self.assertEqual(r["version"], "0.80.0")
+        # Entity typing is shared: registry REQ is a requirement entity and
+        # never gates (Q2=c) — EVD-2's REQ-500 stops gating migration.
+        typed = self._scan(families=("EVD",), registry=("REQ-500",))
+        typed_rows = {(r["family"], r["id"]): r for r in typed["rows"]}
+        self.assertEqual(typed_rows[("EVD", "EVD-2")]["ref_types"]["REQ-500"],
+                         "requirement")
+        self.assertTrue(typed_rows[("EVD", "EVD-2")]["migrate"])
+        # Without the registration the same REQ gates shut as missing
+        # (fail-closed direction preserved).
+        self.assertEqual(by_key[("EVD", "EVD-2")]["ref_types"]["REQ-500"],
+                         "missing")
+        self.assertFalse(by_key[("EVD", "EVD-2")]["migrate"])
+        # Requirement-only RECO row: registered REQ → non-gating, no task
+        # ref → retained hot (Q6 successor boundary, same as unit one);
+        # unregistered → missing fail-closed.
+        typed_reco = self._scan(families=("RECO",), registry=("REQ-500",))
+        reco_rows = {(r["family"], r["id"]): r for r in typed_reco["rows"]}
+        self.assertEqual(
+            reco_rows[("RECO", "RECO-REQ-500")]["ref_types"]["REQ-500"],
+            "requirement")
+        self.assertFalse(reco_rows[("RECO", "RECO-REQ-500")]["migrate"])
+        self.assertEqual(reco_rows[("RECO", "RECO-REQ-500")]["reason"],
+                         "no_task_family_ref")
+        self.assertEqual(by_key[("RECO", "RECO-REQ-500")]["reason"],
+                         "missing_task_ref")
+
+    def test_family_lifecycle_and_id_shapes(self):
+        report = self._scan(families=("REVIEW",))
+        by_key = {(r["family"], r["id"]): r for r in report["rows"]}
+        # Legacy no-round REVIEW id is a REAL shape (FEAT-075 R0 F-4,
+        # mechanically counted at the scan anchor 537dae71…: 633 REVIEW =
+        # 404 plain-with-round + 42 scope-with-round + 183 valid no-round
+        # + 4 malformed; the earlier "187" conflated the valid no-round
+        # count with the first-pass regex's non-round bucket 183+4).
+        self.assertTrue(by_key[("REVIEW", "REVIEW-FIX-952")]["migrate"])
+        # Malformed REVIEW id (version-range legacy) counted, not dropped.
+        bad = by_key[("REVIEW", "REVIEW-0.4-0.5-FINAL")]
+        self.assertEqual(bad["reason"], "unknown_row_id_shape")
+        self.assertEqual(report["coverage"]["families"]["REVIEW"]["malformed_rows"], 1)
+        # Active hot ref (six-condition 2/4) retains the row.
+        active = self._scan(families=("TRIAGE",),
+                            hot_rows=[("FIX-953", "0.82.0", "🔄 进行中")])
+        tri = {(r["family"], r["id"]): r for r in active["rows"]}
+        self.assertFalse(tri[("TRIAGE", "TRIAGE-FIX-953")]["migrate"])
+        self.assertEqual(tri[("TRIAGE", "TRIAGE-FIX-953")]["reason"],
+                         "active_task_ref")
+
+    def test_keep_marker_and_duplicate_gates_apply_to_families(self):
+        content = "\n".join([
+            "| REVIEW-FIX-950-CODE-R0 | FIX-950 | 产品代码 | 保留热 anchor |",
+            "| TRIAGE-FIX-950 | FIX-950 | 变更控制 | first copy |",
+            "| TRIAGE-FIX-950 | FIX-950 | 变更控制 | second copy |",
+        ])
+        report = self._scan(content=content, families=("REVIEW", "TRIAGE"))
+        by_key = {(r["family"], r["id"]): r for r in report["rows"]}
+        # Six-condition 5: keep marker retains regardless of refs.
+        self.assertFalse(by_key[("REVIEW", "REVIEW-FIX-950-CODE-R0")]["migrate"])
+        self.assertEqual(by_key[("REVIEW", "REVIEW-FIX-950-CODE-R0")]["reason"],
+                         "explicit_keep_marker")
+        # Six-condition 6: duplicate shape-valid id fails closed.
+        dup_reasons = [r["reason"] for r in report["rows"]
+                       if r["family"] == "TRIAGE"]
+        self.assertEqual(dup_reasons, ["duplicate_row_id", "duplicate_row_id"])
+
+    def test_unknown_and_other_lines_counted_not_silently_skipped(self):
+        report = self._scan()
+        cov = report["coverage"]
+        self.assertEqual(
+            cov["total_lines"],
+            cov["scanned_family_rows"] + cov["other_table_lines"]
+            + cov["non_table_lines"])
+        self.assertEqual(cov["unclaimed_family_prefix_lines"], 0)
+        # The MISC row and the prose line land in the explicit buckets.
+        self.assertGreaterEqual(cov["other_table_lines"], 1)
+        self.assertGreaterEqual(cov["non_table_lines"], 1)
+
+    def test_evd_family_records_match_unit_one_classifier_exactly(self):
+        import archive
+        report = self._scan(families=("EVD",))
+        unit_one = archive._classify_evidence_rows(
+            self._content(), self._task_versions(), "0.1.0", "0.90.0",
+            context=self._ctx())
+        self.assertEqual(
+            [(r["id"], r["reason"], r["migrate"]) for r in report["rows"]],
+            [(r["id"], r["reason"], r["migrate"]) for r in unit_one])
+
+    # ── read-only + reproducible-baseline contract ────────────────
+
+    def test_scan_is_read_only_sha256_unchanged(self):
+        import archive
+        elog = self.gov_dir / "evidence-log.md"
+        pt = self.gov_dir / "plan-tracker.md"
+        elog.write_text(self._content(), encoding="utf-8")
+        pt.write_text("### 优先级一览\n", encoding="utf-8")
+        before = (hashlib.sha256(elog.read_bytes()).hexdigest(),
+                  hashlib.sha256(pt.read_bytes()).hexdigest())
+        with patch.object(archive, "ROOT", self.root), \
+                patch.object(archive, "PLUGIN_ROOT", self.root):
+            report = archive.scan_row_families("0.1.0", "0.90.0",
+                                               task_versions=self._task_versions())
+        after = (hashlib.sha256(elog.read_bytes()).hexdigest(),
+                 hashlib.sha256(pt.read_bytes()).hexdigest())
+        self.assertEqual(before, after)
+        # Anchors pin the inputs (M-0 prerequisite 1: 测量+输入锚).
+        self.assertEqual(report["anchors"]["evidence_log_sha256"], before[0])
+        self.assertEqual(report["anchors"]["plan_tracker_sha256"], after[1])
+        self.assertGreater(report["anchors"]["evidence_log_bytes"], 0)
+
+    def test_tsv_report_deterministic_and_diffable(self):
+        import archive
+        r1 = self._scan()
+        r2 = self._scan()
+        tsv1 = archive.format_family_scan_tsv(r1)
+        tsv2 = archive.format_family_scan_tsv(r2)
+        self.assertEqual(tsv1, tsv2)
+        self.assertIn("family\tid\tline_idx\tbytes\tcandidate\t", tsv1)
+        self.assertIn("REVIEW\tREVIEW-FIX-950-CODE-R0\t1\t", tsv1)
+
+    def test_scan_output_refused_inside_governance(self):
+        import archive
+        report = self._scan(families=("TRIAGE",))
+        with patch.object(archive, "ROOT", self.root), \
+                patch.object(archive, "PLUGIN_ROOT", self.root), \
+                self.assertRaises(archive.BigTableMigrationError) as caught:
+            archive.write_family_scan_outputs(
+                report, tsv_path=self.gov_dir / "leak.tsv")
+        self.assertEqual(caught.exception.payload["code"],
+                         "family_scan_output_refused")
+
+    # ── write boundary (DEC-278 §3.2) ─────────────────────────────
+
+    def test_write_migration_refused_for_three_families_all_entry_points(self):
+        import archive
+        elog = self.gov_dir / "evidence-log.md"
+        elog.write_text(self._content(), encoding="utf-8")
+        with patch.object(archive, "ROOT", self.root), \
+                patch.object(archive, "PLUGIN_ROOT", self.root):
+            for family in ("REVIEW", "RECO", "TRIAGE"):
+                for dry_run in (False, True):
+                    with self.subTest(family=family, dry_run=dry_run):
+                        with self.assertRaises(
+                                archive.RowFamilyMigrationRejected) as caught:
+                            archive.migrate_by_version(
+                                "0.1.0", "0.90.0", dry_run=dry_run,
+                                row_family=family)
+                        self.assertEqual(
+                            caught.exception.payload["code"],
+                            "row_family_write_migration_rejected")
+                        with self.assertRaises(
+                                archive.RowFamilyMigrationRejected):
+                            archive.migrate_evidence_resumable(
+                                "0.1.0", "0.90.0", dry_run=dry_run,
+                                row_family=family)
+                        with self.assertRaises(
+                                archive.RowFamilyMigrationRejected):
+                            archive.migrate_auto(dry_run=dry_run,
+                                                 row_family=family)
+                        with self.assertRaises(
+                                archive.RowFamilyMigrationRejected):
+                            archive._migrate_evidence(
+                                "0.1.0", "0.90.0", self._task_versions(),
+                                dry_run=dry_run, row_family=family)
+            # The refusal fired BEFORE any write: the evidence-log is intact.
+            self.assertEqual(elog.read_text(encoding="utf-8"), self._content())
+
+    def test_evd_family_existing_migration_path_preserved(self):
+        import archive
+        elog = self.gov_dir / "evidence-log.md"
+        elog.write_text(self._content(), encoding="utf-8")
+        (self.gov_dir / "plan-tracker.md").write_text(
+            "### 优先级一览\n", encoding="utf-8")
+        with patch.object(archive, "ROOT", self.root), \
+                patch.object(archive, "PLUGIN_ROOT", self.root):
+            # Guard passes for EVD (explicit and default) — existing
+            # capability untouched (DEC-278: 现有迁移能力无非预期扩面).
+            archive._guard_row_family_write_migration("EVD")
+            result = archive.migrate_by_version(
+                "0.1.0", "0.90.0", dry_run=True, row_family="EVD")
+            self.assertTrue(result["success"])
+
+    def test_cli_row_family_refusal_and_scan_families(self):
+        import archive
+        runner = archive.main
+        elog = self.gov_dir / "evidence-log.md"
+        elog.write_text(self._content(), encoding="utf-8")
+        before_digest = hashlib.sha256(elog.read_bytes()).hexdigest()
+        argv = ["--project-root", str(self.root)]
+        # CLI refusal: non-zero exit, structured code, evidence untouched.
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), \
+                self.assertRaises(SystemExit) as caught:
+            runner(argv + ["migrate", "0.1.0", "0.90.0", "--dry-run",
+                           "--row-family", "RECO"])
+        self.assertEqual(caught.exception.code, 1)
+        self.assertIn("row_family_write_migration_rejected", out.getvalue())
+        self.assertEqual(hashlib.sha256(elog.read_bytes()).hexdigest(),
+                         before_digest)
+        # CLI scan: read-only summary + per-line TSV output outside .governance.
+        tsv_path = self.root / "scan.tsv"
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.suppress(SystemExit):
+            runner(argv + ["scan-families", "0.1.0", "0.90.0",
+                           "--family", "REVIEW", "--output", str(tsv_path)])
+        self.assertIn("Row-family dry-run (read-only; zero writes)",
+                      out.getvalue())
+        self.assertIn("REVIEW-FIX-950-CODE-R0", tsv_path.read_text("utf-8"))
+        self.assertEqual(hashlib.sha256(elog.read_bytes()).hexdigest(),
+                         before_digest)
 
 
 if __name__ == "__main__":

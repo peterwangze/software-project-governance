@@ -22359,5 +22359,296 @@ class FEAT074EvidenceEntityClassificationTests(unittest.TestCase):
                 tv, self._ctx(registry=("REQ-500",))))
 
 
+class FEAT075ExceptionAnnotationTests(unittest.TestCase):
+    """FEAT-075 (DEC-278 unit two item 4 — M-0 prerequisite 4 of 5):
+    exception-registry annotation at the aggregation layer.
+
+    Four fixture states (合成例外 fixture — the REAL registrations are the
+    Coordinator's post-M-0 duty): effective / expired / over-growth-control
+    / missing registration (plus status-mismatch + malformed-registry
+    fail-closed). The invariant under test everywhere: the underlying check
+    result — findings, byte counts, summary, exit behavior — is NEVER
+    mutated by the annotation (原始 FAIL 与真实字节数保留).
+    """
+
+    CHECK = "governance_data_size"
+    ARTIFACT = ".governance/evidence-log.md"
+
+    def setUp(self):
+        import exception_registry
+        self.er = exception_registry
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        (self.root / ".governance").mkdir(parents=True, exist_ok=True)
+        # The artifact the exceptions scope over (size feeds the growth
+        # control tripwire).
+        self.artifact_path = self.root / self.ARTIFACT
+        self.artifact_path.write_bytes(b"x" * 300000)
+
+    def tearDown(self):
+        self.tempdir.cleanup()
+
+    def _registry(self, **overrides):
+        entry = {
+            "id": "EXC-001",
+            "check_id": self.CHECK,
+            "artifact": self.ARTIFACT,
+            "original_status": "ERROR",
+            "approval_ref": "DEC-280",
+            "approved_on": "2026-09-28",
+            "expires_on": "2026-10-12",
+            "growth_control_bytes": 2000000,
+            "owner": "Coordinator",
+        }
+        entry.update(overrides)
+        doc = {"schema": self.er.EXCEPTIONS_SCHEMA, "exceptions": [entry]}
+        path = self.root / self.er.EXCEPTIONS_RELPATH
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(doc, ensure_ascii=False, indent=2),
+                        encoding="utf-8")
+        return path
+
+    def _findings(self):
+        return [{
+            "check": self.CHECK, "severity": "ERROR",
+            "path": self.ARTIFACT, "bytes": 300000,
+            "reason": "300000 bytes (293.0 KB) exceeds error_bytes=250000",
+        }]
+
+    def _today(self):
+        from datetime import date
+        return date(2026, 10, 1)
+
+    # ── the four fixture states ───────────────────────────────────
+
+    def test_effective_exception_annotates_without_mutating_result(self):
+        self._registry()
+        matched = self.er.annotate_findings(self._findings(), root=self.root,
+                                            today=self._today())
+        self.assertEqual(len(matched["annotations"]), 1)
+        ann = matched["annotations"][0]
+        self.assertEqual(ann["exception_id"], "EXC-001")
+        self.assertEqual(ann["approval_ref"], "DEC-280")
+        self.assertEqual(ann["expires_on"], "2026-10-12")
+        self.assertEqual(matched["not_effective"], [])
+        # Annotation text carries 引用/到期 (DEC-278(5) wording).
+        text = self.er.format_annotation(ann)
+        self.assertIn("exception accepted", text)
+        self.assertIn("ref=DEC-280", text)
+        self.assertIn("expires=2026-10-12", text)
+        # INVARIANT: the underlying finding is byte-identical.
+        self.assertEqual(self._findings(), [{
+            "check": self.CHECK, "severity": "ERROR",
+            "path": self.ARTIFACT, "bytes": 300000,
+            "reason": "300000 bytes (293.0 KB) exceeds error_bytes=250000",
+        }])
+
+    def test_expired_exception_not_effective(self):
+        self._registry(expires_on="2026-09-30")
+        matched = self.er.annotate_findings(self._findings(), root=self.root,
+                                            today=self._today())
+        self.assertEqual(matched["annotations"], [])
+        self.assertEqual(len(matched["not_effective"]), 1)
+        self.assertEqual(matched["not_effective"][0]["state"], "expired")
+        # Fail-closed disclosure, not a silent drop.
+        self.assertIn("2026-09-30", matched["not_effective"][0]["reason"])
+
+    def test_over_growth_control_exception_not_effective(self):
+        # Artifact (300,000 B) exceeds the registered growth control
+        # (250,000 B) — DEC-278(5): 提前重评, annotation does not apply.
+        self._registry(growth_control_bytes=250000)
+        matched = self.er.annotate_findings(self._findings(), root=self.root,
+                                            today=self._today())
+        self.assertEqual(matched["annotations"], [])
+        self.assertEqual(matched["not_effective"][0]["state"],
+                         "over_growth_control")
+
+    def test_missing_registration_not_effective(self):
+        # No registry file at all → nothing annotates, nothing errors.
+        matched = self.er.annotate_findings(self._findings(), root=self.root,
+                                            today=self._today())
+        self.assertEqual(matched["annotations"], [])
+        self.assertEqual(matched["not_effective"], [])
+        self.assertFalse(matched["registry"]["exists"])
+        self.assertEqual(
+            self.er.exception_note(self.CHECK, self.ARTIFACT, "ERROR",
+                                   root=self.root, today=self._today(),
+                                   bytes_value=300000), "")
+
+    # ── additional fail-closed states ─────────────────────────────
+
+    def test_status_mismatch_not_effective(self):
+        self._registry(original_status="WARN")
+        matched = self.er.annotate_findings(self._findings(), root=self.root,
+                                            today=self._today())
+        self.assertEqual(matched["annotations"], [])
+        self.assertEqual(matched["not_effective"][0]["state"],
+                         "status_mismatch")
+
+    def test_malformed_registry_entries_are_inert_and_disclosed(self):
+        path = self.root / self.er.EXCEPTIONS_RELPATH
+        path.write_text(json.dumps({
+            "schema": self.er.EXCEPTIONS_SCHEMA,
+            "exceptions": [{"id": "EXC-BAD",
+                            "check_id": self.CHECK,
+                            "artifact": self.ARTIFACT}],
+        }), encoding="utf-8")
+        matched = self.er.annotate_findings(self._findings(), root=self.root,
+                                            today=self._today())
+        self.assertEqual(matched["annotations"], [])
+        self.assertTrue(matched["registry"]["errors"])
+        # Wrong schema marker → the whole registry is inert.
+        path.write_text('{"schema": "other/1", "exceptions": []}',
+                        encoding="utf-8")
+        matched = self.er.annotate_findings(self._findings(), root=self.root,
+                                            today=self._today())
+        self.assertFalse(matched["registry"]["exceptions"])
+        self.assertTrue(matched["registry"]["errors"])
+
+    def test_wrong_scope_or_artifact_does_not_annotate(self):
+        self._registry(check_id="some_other_check")
+        matched = self.er.annotate_findings(self._findings(), root=self.root,
+                                            today=self._today())
+        self.assertEqual(matched["annotations"], [])
+        self.assertEqual(matched["not_effective"], [])
+
+    def test_registry_file_errors_disclosed_on_render_paths(self):
+        """FEAT-075 R0 F-2: file-level registry errors (malformed entry)
+        surface as a one-line disclosure on the aggregation render paths —
+        attached ONCE (first finding line), underlying counts unchanged.
+        Covers the shared ArchGuard renderer end-to-end and the note
+        helper the Check 28s aggregate block consumes (identical
+        attach-once wiring; the aggregate's own e2e is the bare verify
+        run, inert without a live registry)."""
+        path = self.root / self.er.EXCEPTIONS_RELPATH
+        path.write_text(json.dumps({
+            "schema": self.er.EXCEPTIONS_SCHEMA,
+            "exceptions": [{
+                "id": "EXC-BAD", "check_id": self.CHECK,
+                "artifact": self.ARTIFACT,
+            }],
+        }), encoding="utf-8")
+        # Helper (consumed by both the shared renderer and Check 28s).
+        with patch.object(vw, "HOST_PROJECT_ROOT", self.root):
+            self.assertTrue(vw._exception_registry_error_note().startswith(
+                "registry-error: 1 entry malformed/unreadable"))
+        result = {
+            "summary": {"errors": 2, "warnings": 0},
+            "findings": self._findings() + [
+                {"check": self.CHECK, "severity": "ERROR",
+                 "path": ".governance/plan-tracker.md", "bytes": 250000}],
+        }
+        output = io.StringIO()
+        with patch.object(vw, "HOST_PROJECT_ROOT", self.root), \
+                redirect_stdout(output):
+            errors, warnings = vw._archguard_print_findings("GovDataSize",
+                                                            result)
+        rendered = output.getvalue()
+        # Exactly ONE disclosure line; original findings/bytes unchanged.
+        self.assertEqual(rendered.count("registry-error:"), 1)
+        self.assertIn("registry-error: 1 entry malformed/unreadable", rendered)
+        self.assertIn("[ERROR] governance_data_size:", rendered)
+        self.assertEqual((errors, warnings), (2, 0))
+        # Clean registry (absent) → no disclosure, output byte-identical.
+        path.unlink()
+        output = io.StringIO()
+        with patch.object(vw, "HOST_PROJECT_ROOT", self.root), \
+                redirect_stdout(output):
+            vw._archguard_print_findings("GovDataSize", result)
+        self.assertNotIn("registry-error", output.getvalue())
+
+    # ── engine wiring (annotation-only, inert without a registry) ──
+
+    def test_archguard_render_carries_suffix_and_underlying_counts(self):
+        self._registry()
+        result = {
+            "summary": {"errors": 1, "warnings": 0},
+            "findings": self._findings(),
+        }
+        output = io.StringIO()
+        with patch.object(vw, "HOST_PROJECT_ROOT", self.root), \
+                redirect_stdout(output):
+            errors, warnings = vw._archguard_print_findings("GovDataSize",
+                                                            result)
+        # Original FAIL line + real bytes preserved; annotation appended.
+        rendered = output.getvalue()
+        self.assertIn("[ERROR] governance_data_size:", rendered)
+        self.assertIn("bytes=300000", rendered)
+        self.assertIn("exception accepted (EXC-001, ref=DEC-280, "
+                      "expires=2026-10-12)", rendered)
+        # Summary counts returned unchanged (annotation is not a status).
+        self.assertEqual((errors, warnings), (1, 0))
+        self.assertEqual(result["findings"][0]["severity"], "ERROR")
+
+    def test_archguard_render_byte_identical_without_registry(self):
+        result = {
+            "summary": {"errors": 1, "warnings": 0},
+            "findings": self._findings(),
+        }
+        output = io.StringIO()
+        with patch.object(vw, "HOST_PROJECT_ROOT", self.root), \
+                redirect_stdout(output):
+            vw._archguard_print_findings("GovDataSize", result)
+        self.assertNotIn("exception accepted", output.getvalue())
+        self.assertIn("[ERROR] governance_data_size:", output.getvalue())
+        self.assertIn("bytes=300000", output.getvalue())
+
+    def test_release_disclosure_block_states_and_never_flips_verdict(self):
+        self._registry()
+        block = self.er.release_disclosure_block(root=self.root,
+                                                 today=self._today())
+        self.assertIsNotNone(block)
+        self.assertTrue(block["pass"])  # annotation can never FAIL a release
+        self.assertEqual(len(block["issues"]), 1)
+        self.assertIn("effective", block["issues"][0])
+        self.assertIn("ref=DEC-280", block["issues"][0])
+        # Expired → disclosed as NOT effective, still pass=True.
+        self._registry(expires_on="2026-09-30")
+        block = self.er.release_disclosure_block(root=self.root,
+                                                 today=self._today())
+        self.assertTrue(block["pass"])
+        self.assertIn("NOT effective (expired", block["issues"][0])
+        # No registry → None (backward compatibility: no block at all).
+        (self.root / self.er.EXCEPTIONS_RELPATH).unlink()
+        self.assertIsNone(self.er.release_disclosure_block(root=self.root))
+
+    def test_check_release_readiness_details_wiring(self):
+        self._registry()
+        (self.root / ".governance" / "plan-tracker.md").write_text(
+            "# 计划跟踪\n", encoding="utf-8")
+        # Neutralize the two host-fact sub-checks whose root seams differ
+        # (fact_source reads GOVERNANCE_DIR, hot_fact resolves via cwd) —
+        # this test targets the FEAT-075 wiring, not their behavior.
+        with patch.object(vw, "HOST_PROJECT_ROOT", self.root), \
+                patch.object(vw, "GOVERNANCE_DIR",
+                             self.root / ".governance"), \
+                patch.object(vw, "check_release_readiness_fact_source",
+                             return_value=[]), \
+                patch.object(vw, "check_hot_fact_source_consistency",
+                             return_value=[]):
+            result = vw.check_release_readiness(
+                version=None, require_changelog=False,
+                run_execution_gates=False)
+        self.assertIn("governance_exceptions", result["details"])
+        block = result["details"]["governance_exceptions"]
+        self.assertTrue(block["pass"])
+        # The disclosure NEVER extends the release issue list.
+        self.assertTrue(all("exception accepted" not in issue
+                            for issue in result["issues"]))
+        # Without a registry the details key is absent (inert wiring).
+        (self.root / self.er.EXCEPTIONS_RELPATH).unlink()
+        with patch.object(vw, "HOST_PROJECT_ROOT", self.root), \
+                patch.object(vw, "GOVERNANCE_DIR",
+                             self.root / ".governance"), \
+                patch.object(vw, "check_release_readiness_fact_source",
+                             return_value=[]), \
+                patch.object(vw, "check_hot_fact_source_consistency",
+                             return_value=[]):
+            bare = vw.check_release_readiness(
+                version=None, require_changelog=False,
+                run_execution_gates=False)
+        self.assertNotIn("governance_exceptions", bare["details"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1098,6 +1098,35 @@ from checks.manifest import (  # noqa: E402
     cmd_check_manifest_consistency,
 )
 
+
+def _exception_note(check_id, artifact, severity=None, bytes_value=None):
+    """FEAT-075 (DEC-278 单元二 item 4): annotation suffix for a finding —
+    ``exception accepted (id, ref, expires)`` when an EFFECTIVE governance
+    exception matches, empty otherwise (no registry → byte-identical
+    pre-FEAT-075 output). Deferred import on purpose: the engine's frozen
+    startup-import face (R6) must not grow. Annotation-only — never changes
+    a severity, byte count, or summary (原始 FAIL 与真实字节数保留)."""
+    from exception_registry import exception_note
+    return exception_note(check_id, artifact, severity,
+                          root=HOST_PROJECT_ROOT, bytes_value=bytes_value)
+
+
+def _release_exception_block():
+    """FEAT-075: the release-aggregate exception disclosure (None when no
+    .governance/exceptions.json exists — inert wiring; the Coordinator
+    registers the real exceptions after M-0). Deferred import (R6 face)."""
+    from exception_registry import release_disclosure_block
+    return release_disclosure_block(root=HOST_PROJECT_ROOT)
+
+
+def _exception_registry_error_note():
+    """FEAT-075 R0 F-2: one-line file-level registry-error disclosure (""
+    when clean/absent). Both aggregation render paths attach it ONCE (first
+    finding line) — a scope-matching but malformed exception never
+    annotates silently. Deferred import (R6 face)."""
+    from exception_registry import registry_error_note
+    return registry_error_note(root=HOST_PROJECT_ROOT)
+
 # ── Capability-registry domain (extracted to infra/checks/capability_registry.py in 0.61.1) ──
 # DEC-083 Phase 2 / REQ-103: the capability-registry check domain (capability-
 # registry.json schema validation, FIX-116) now lives in checks.capability_registry.
@@ -7432,6 +7461,16 @@ def check_release_readiness(
         "version": version,
     }
     issues.extend(changelog_issues)
+
+    # ── FEAT-075 (DEC-278 单元二 item 4 / M-0 prerequisite 4 of 5): the
+    # exception-acceptance disclosure. Annotation-only — the block NEVER
+    # touches ``issues`` (a release verdict can't be flipped by an
+    # exception), and it is ABSENT when no .governance/exceptions.json
+    # exists (backward compatibility; the Coordinator registers the real
+    # exceptions after M-0, tests use synthetic fixtures).
+    exceptions_detail = _release_exception_block()
+    if exceptions_detail is not None:
+        details["governance_exceptions"] = exceptions_detail
 
     return {
         "pass": not issues,
@@ -16592,9 +16631,20 @@ def _run_full_engine_checks(args):
     else:
         s = gds["summary"]
         print(f"│  governance files: {s['errors']} ERROR, {s['warnings']} WARN")
+        # FEAT-075 R0 F-2: file-level registry errors disclosed once (first
+        # finding line); "" when clean — output unchanged.
+        gds_err = _exception_registry_error_note()
+        gds_err_shown = not gds_err
         for f in gds["findings"][:8]:
             b = f.get("bytes", 0)
-            print(f"│    [{f['severity']}] {f.get('path','')} {b} bytes ({b/1024:.1f} KB)".rstrip())
+            # FEAT-075: annotation-only exception suffix (原始 FAIL 与真实
+            # 字节照报; no registry → line identical to pre-FEAT-075).
+            gds_note = _exception_note("governance_data_size", f.get('path',''),
+                                       f.get('severity'), bytes_value=b)
+            if not gds_err_shown:
+                gds_note += ("  " if gds_note else "") + gds_err
+                gds_err_shown = True
+            print(f"│    [{f['severity']}] {f.get('path','')} {b} bytes ({b/1024:.1f} KB){gds_note}".rstrip())
         if (s["errors"] or s["warnings"]):
             print("│  (advisory — fatal_on_error=false; does not block release)")
     print("└──────────────────────────────────────────────────────┘")
@@ -22403,10 +22453,20 @@ def cmd_check_mainstream_agent_loading(args):
 # ERROR-level findings.
 
 def _archguard_print_findings(title, result, hint_key="check"):
-    """Render a 3-level ArchGuard result; return (errors, warnings)."""
+    """Render a 3-level ArchGuard result; return (errors, warnings).
+
+    FEAT-075: findings matched by an EFFECTIVE governance exception carry an
+    ``exception accepted (ref, expires)`` suffix — annotation only; the
+    severity, bytes, and summary counts above stay exactly as the check
+    produced them (no registry → byte-identical pre-FEAT-075 output).
+    """
     s = result.get("summary", {}) or {}
     errors = int(s.get("errors", 0))
     warnings = int(s.get("warnings", 0))
+    # FEAT-075 R0 F-2: file-level registry errors disclosed once (first
+    # finding line); "" when clean — output unchanged.
+    reg_err = _exception_registry_error_note()
+    err_shown = not reg_err
     for f in result.get("findings", [])[:25]:
         sev = f.get("severity", "?")
         extra = ""
@@ -22416,7 +22476,12 @@ def _archguard_print_findings(title, result, hint_key="check"):
                 break
         loc = f.get("path") or f.get("hook") or f.get("ledger_id") or ""
         detail = f.get("name") or f.get("reason") or f.get("pattern") or ""
-        print(f"  [{sev}] {f.get(hint_key, '?')}: {loc} {detail}{extra}".rstrip())
+        note = _exception_note(f.get(hint_key), loc, f.get("severity"),
+                               bytes_value=f.get("bytes"))
+        if not err_shown:
+            note += ("  " if note else "") + reg_err
+            err_shown = True
+        print(f"  [{sev}] {f.get(hint_key, '?')}: {loc} {detail}{extra}{note}".rstrip())
     more = len(result.get("findings", [])) - 25
     if more > 0:
         print(f"    ... and {more} more")

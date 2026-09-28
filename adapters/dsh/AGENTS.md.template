@@ -25,8 +25,7 @@
 ## 模式确认（每次会话一句，模式自适应）
 
 - **always-on** → `Governance: {trigger_mode} x {permission_mode} | stage: {stage}, Gate {gate}: {status}, {risk_count} risk(s)`
-- **on-demand** → `Governance: on-demand x {permission_mode}`（仅用户显式调用时展开完整状态）
-- **silent-track** → 不输出治理面板/风险统计/任务进度表
+- **on-demand** → `Governance: on-demand x {permission_mode}`（仅用户显式调用时展开完整状态）；**silent-track** → 不输出治理面板/风险统计/任务进度表
 
 ## Agent Team（DSH 映射）
 

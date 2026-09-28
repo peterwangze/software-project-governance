@@ -21434,11 +21434,15 @@ class Feat039InjectionBudgetTests(unittest.TestCase):
     # separator); the thin pointer was compacted with anchor parity
     # (3013→2859). Same guard discipline: the price cannot move without a
     # deliberate edit here.
+    #
+    # FEAT-073 (2026-09-28): 2859 -> 2766 — secondary-thin B-a/B-b/B-c
+    # 压缩（ADR-020 §3.2，DEC-271）. Same guard discipline: a deliberate
+    # edit rides the ticket, the price never moves silently.
     ENTRY_TEMPLATE_CANONICAL_BYTES = {
         "lightweight": 4555,
         "standard": 9553,
         "strict": 10441,
-        "secondary-thin": 2859,
+        "secondary-thin": 2766,
     }
 
     def test_entry_template_surfaces_price_the_canonical_blocks(self):

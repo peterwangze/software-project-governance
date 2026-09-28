@@ -15,22 +15,18 @@
 
 ### SELF-CHECK（在任何输出之前）
 
-1. 读了 `.governance/plan-tracker.md`？知道阶段/Gate/模式（含 carry-over，session-snapshot）？任一未知 → 立即停止，先读。
-2. 即将输出问句？→ 改用 AskUserQuestion。到达交互边界？→ MUST 使用 AskUserQuestion（完整 SELF-CHECK：SKILL.md「Bootstrap 规程明细」§B0）。
-3. 即将写入的修改/证据是否有事实依据？无支撑 → 标 `BLOCKED`，禁止编造。
+1. 读了 `.governance/plan-tracker.md`？阶段/Gate/模式（含 carry-over）未知 → 立即停止，先读；即将写入的修改/证据无事实依据 → 标 `BLOCKED`，禁止编造。
+2. 即将输出问句？→ 改用 AskUserQuestion；到达交互边界？→ MUST AskUserQuestion（完整 SELF-CHECK：SKILL.md「Bootstrap 规程明细」§B0）。
 
 ### 模式确认（每次会话一句，模式自适应）
 
 - **always-on** → `Governance: {trigger_mode} x {permission_mode} | stage: {stage}, Gate {gate}: {status}, {risk_count} risk(s)`
-- **on-demand** → `Governance: on-demand x {permission_mode}`（仅用户显式调用时展开完整状态）
-- **silent-track** → 不输出治理面板/风险统计/任务进度表
+- **on-demand** → `Governance: on-demand x {permission_mode}`（仅用户显式调用时展开完整状态）；**silent-track** → 不输出治理面板/风险统计/任务进度表
 
 ### 治理状态快速入口
 
-- 计划跟踪 `.governance/plan-tracker.md` · 证据 `.governance/evidence-log.md` · 决策 `.governance/decision-log.md` · 风险 `.governance/risk-log.md`
-- 验证命令：`python <plugin_home>/skills/software-project-governance/infra/verify_workflow.py`（`<plugin_home>` 来自 resolve_entry.py）
-- 治理文件读取编码（FIX-278）：pwsh 读 `.governance` 文件 MUST 显式 UTF-8——`Get-Content -Encoding UTF8`；裸 `Get-Content` 在 Windows 默认 GBK 解码产生 mojibake。
-- 完整治理交互：`/governance`；完整 bootstrap（SELF-CHECK 全文/干活前/提问规则/收工检查）：`CLAUDE.md`（主入口）
+- 计划跟踪 `.governance/plan-tracker.md` · 证据 `.governance/evidence-log.md` · 决策 `.governance/decision-log.md` · 风险 `.governance/risk-log.md`；验证命令：`python <plugin_home>/skills/software-project-governance/infra/verify_workflow.py`（`<plugin_home>` 来自 resolve_entry.py）
+- 完整治理交互：`/governance`；完整 bootstrap（SELF-CHECK 全文/干活前/提问规则/收工检查）：`CLAUDE.md`（主入口）；pwsh 读 `.governance` 文件 MUST 显式 UTF-8：`Get-Content -Encoding UTF8`（裸 `Get-Content` 在 Windows 默认 GBK 解码产生 mojibake——FIX-278）
 
 ## 项目质量原则（P-v1 — DEC-150）
 

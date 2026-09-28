@@ -24,7 +24,7 @@
 | 版本号 | **0.92.0**（MINOR；0.91.0 → 0.92.0 顺延 +1、不跳号、无预留占用；无 0.92.x tag 冲突；CHANGELOG 0.92.0 段同源） |
 | 发布任务 | **REL-095**（M-0 DEC-282 条件冻结 → M-1 `40eb6f7` → M-2 整改链〔`12bef7c`+`df26f7e`；EVD-1233/1234/1235〕→ M-3 双半面 → M-4 本批）——功能载荷锚 `dc45e24`（DEC-282） |
 | 授权链 | **DEC-269**（0.92 批启动）→ DEC-271/272（FEAT-073 路线裁决与完成入账；BT-01 抽测承诺）→ DEC-274（0.92.0 总授权）→ DEC-278（28s 结构性解锁三单元）→ DEC-279~281（三单元完成入账）→ **DEC-282（M-0 条件冻结+版本口径+四封口）** → DEC-283/284/285（M-2 整改三裁决——受控回退／有界迁移扩展授权／EXC-002 纸质例外） |
-| MINOR 依据 | DEC-282(7) 版本口径：「strict 注入预算优化、发布与运行时验证稳定性修复，证据分层结构性解锁与本轮明确遗留项收尾」；六票载荷非纯 bug fix（PATCH 不适用）；Breaking changes = **无**（M-3 CODE 聚合终审：窗口 diff 51 文件 +5333/−216 全部可归因六票申报面或发布链提交——无未申报夹带；共享文件跨票演进零接口冲突） |
+| MINOR 依据 | DEC-282(7) 版本口径：「strict 注入预算优化、发布与运行时验证稳定性修复，证据分层结构性解锁与本轮明确遗留项收尾」；六票载荷非纯 bug fix（PATCH 不适用）；Breaking changes = **无**（M-3 CODE 聚合终审：窗口 diff 51 文件 +5333/−216〔六票+发布链对账区间 `e65b317^..df26f7e`，搭窗 `4cb3081` 除外；全窗 `bd9bfc1..df26f7e`=56 文件 +5523/−239〕全部可归因六票申报面或发布链提交——无未申报夹带；共享文件跨票演进零接口冲突） |
 | 行为变更面 | **无新增 flag**（见 feature-flags-0.92.0）；行为变更 = **B-1~B-7**（strict persona 单源化／release-gate 超时预算／loop 计时去环境化／例外标注机制／LRC 豁免第 5 条／有界迁移 18 EVD 出热／archguard 两次 regen——每项含回滚，feature-flags §非旗标面） |
 | Single-Threaded Owner | Coordinator（发布决策与 `.governance/` 写回）；发布文档面由 Governance Developer Agent 执行，M-3 双半面 Reviewer 独立审查（R2 CODE / R3 RELEASE 均 AWN/0——unresolved_blockers=0） |
 | 用户获得方式 | `/plugin update`（或 `git pull` + reload）——版本号与投影面 bump 保证 marketplace 新鲜度比对生效；升级说明 MUST 携带行为变更段（B-1~B-7——无破坏性变更；数据面有界迁移 18 EVD 出热经实弹演练、消费者读取契约〔archive/index.md〕不变，M-5 落段） |
@@ -108,7 +108,7 @@
 
 | # | 门禁面 | 实测 / 姿态 | 依据 |
 |---|---|---|---|
-| 1 | check-release 聚合（candidate 态） | **FAILED-7 全貌** = 例外覆盖面×2（archive integrity→EXC-002；governance health 28s→EXC-001）+ 阶段预期态×5（28c×2 会话收工+M-8 自愈；release-docs×3 本 M-4 创建即消）+ advisory 披露缺口×2（CR-F1/F2）；**无未预期阻断项**（M-3 RELEASE 判定）——逐项全貌表 = checklist 核心表 | M-3 RELEASE 重点 5；EVD-1235 |
+| 1 | check-release 聚合（candidate 态） | **FAILED-7 全貌** = 例外覆盖面×2（archive integrity→EXC-002；governance health 28s→EXC-001）+ 阶段预期态×5（28c×2 会话收工+M-8 自愈；release-docs×3 本 M-4 创建即消）+ advisory 披露缺口×2（CR-F1/F2）（面级 9 面；issue 级 7）；**无未预期阻断项**（M-3 RELEASE 判定）——逐项全貌表 = checklist 核心表 | M-3 RELEASE 重点 5；EVD-1235 |
 | 2 | 原生执行门 | verify **exit=0** ✓｜unit tests **exit=0** ✓｜e2e **exit=0** ✓｜loop 门 **PASS**（semantic=PASS·identity=PASS·candidates=**1096**·豁免 **5 条**全披露）✓｜one-dot-zero blockers **PASS**（1.0.0 硬阻塞零新增）✓｜release lineage **candidate 态正确** ✓（tag 后以 released 模式复跑——boundary 注记） | M-3 RELEASE 只读复跑（独立双源，与 EVD-1235 逐项一致） |
 | 3 | 注入预算三档 | lightweight **3859** / standard **5337** / strict **5609**（/6000 全 PASS；strict 余量 **9→391 tok**——FEAT-073 兑现） | EVD-1216~1219 |
 | 4 | LRC（loop-claims） | verdict **PASS** / findings **0** / exemptions **5/5** 披露（含 B2 新条目五元组逐键吻合；锚-账本-加载器三方一致，digest `d47f5d16` 独立复算在案） | M-3 CODE 重点 3；EVD-1234 |

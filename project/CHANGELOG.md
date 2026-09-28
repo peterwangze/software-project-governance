@@ -2,11 +2,12 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
-## [0.92.0] - 未发布（准备态）
+## [0.92.0] - <待回填 taggerdate>
+<!-- 发布日期占位（FIX-349 口径）：发布日期零预填；M-7 annotated tag `v0.92.0` 落地后以 taggerdate 权威回填本行日期单元格。 -->
 
-### 0.92.0 - **预算优化、验证稳定性与证据分层结构性解锁（Injection Budget Relief, Verification Stability & Evidence-Layer Structural Unlock）**：strict 注入预算优化、发布与运行时验证稳定性修复，证据分层结构性解锁与本轮明确遗留项收尾（FEAT-073/FIX-400/FIX-401/FEAT-074/FEAT-075/FIX-402 载荷 / DEC-269~272/278~282 / EVD-1216~1229）
+### 0.92.0 - **预算优化、验证稳定性与证据分层结构性解锁（Injection Budget Relief, Verification Stability & Evidence-Layer Structural Unlock）**：strict 注入预算优化、发布与运行时验证稳定性修复，证据分层结构性解锁与本轮明确遗留项收尾（FEAT-073/FIX-400/FIX-401/FEAT-074/FEAT-075/FIX-402 载荷 / DEC-269~285 / EVD-1216~1236）
 
-0.92.0 按 DEC-282 批准的版本口径交付：strict 注入预算优化、发布与运行时验证稳定性修复，证据分层结构性解锁与本轮明确遗留项收尾。结构性解锁已完成；容量问题未技术消除。本轮不执行 EVD 物理迁移，按限期例外控制，后续迁移以读取契约闭合为前提（DEC-282(7) no-overclaim 附加句）。
+0.92.0 按 DEC-282 批准的版本口径交付：strict 注入预算优化、发布与运行时验证稳定性修复，证据分层结构性解锁与本轮明确遗留项收尾。结构性解锁已完成；容量问题未技术消除。本轮不执行 EVD 物理迁移，按限期例外控制，后续迁移以读取契约闭合为前提（DEC-282(7) no-overclaim 附加句——精确口径：178 行历史证据面未迁移由 EXC-002 纸质例外治理，18 行有界迁移〔2 任务+18 EVD〕属 DEC-284 补完成授权，非「本轮不执行」矛盾）。
 
 **载荷六票**（DEC-282(1) M-0 冻结边界内，功能载荷锚 `dc45e24`；全部 committed，审查链全部闭合）：
 
@@ -17,15 +18,31 @@
 - **FEAT-075（commit `16a5157`+`484dd77`）**：四行族只读 dry-run（scan-families）+ 发布聚合层例外标注（DEC-278 单元二）+ archguard R1 anchor 再锚定 26413→26478；R0 NEEDS_CHANGE→R1 AWN/0。
 - **FIX-402（commit `dc45e24`）**：确定性数据校正与存量清偿台账（DEC-278 单元三）——160 唯一 ID 八类逐 ID 归因终态（2 可修/155 登记/3 留热）；R0/R1 NEEDS_CHANGE→R2 AWN/0。
 
-**已知边界披露（Check 28s 例外 EXC-001 条款摘要，DEC-282(4)）**：
+**已知边界披露（发布准入=双例外+B2 豁免——EXC-001 与 EXC-002 条款摘要并列，DEC-282(4)/DEC-285）**：
 
-- **基线与上限**：基线 1,786,197B@post-dc45e24（scan-families 锚 e3972847）；growth_control=绝对上限 2,036,197B（基线+250K，不滚动重置，非新阈值）。
+**EXC-001（Check 28s evidence-log 容量机注例外）**：
+
+- **基线与上限**：基线 1,786,197B@post-dc45e24（scan-families 锚 e3972847）；growth_control=绝对上限 2,036,197B（基线+250K，不滚动重置，非新阈值）；发布时点重测（2026-09-29 M-5 落稿 @HEAD `a31b878`，`check-governance-data-size` 实跑）：热表现值 **1,757,633B**（1716.4KB）≤ 上限，机注两层同屏（原始 ERROR 真实字节+exception accepted 同行——时点演进 1,753,848〔EVD-1235〕→1,755,371→1,755,693〔M-3 双半面〕→1,756,021〔M4R4〕→1,757,633B〔本测〕，增量=机录行追加可归因）。
 - **有效期**：expires 2026-10-12（14 自然日）不自动续期；0.93.0 准入前必须先失效/撤销再重评，禁继承放行。
 - **义务**：每周冷热/总量/积压指标；11 行留热记录口径=「已完成本轮复验，因读取兼容门未闭合而留热，尚未物理迁移」，禁记「自然清偿完成」。
 - **后续迁移前提**：0.93 重新授权最低五条件（消费者矩阵/查询等价证明/统一入口或过渡适配/清单绑定输入锚漂移即停/回读验收+恢复演练）；91 物理未归档 ID 转 0.93 候选池。
-- **版本面再生纪律**：本版版本面经 `release-projection --write` 确定性再生（非手改——M-1：权威源 bump → written=17 → 幂等复跑 written=0）。
 
-**决策链**：DEC-269（0.92 批启动）/ DEC-271/272（FEAT-073 路线裁决与完成入账）/ DEC-278（28s 结构性解锁三单元）/ DEC-279~281（三单元完成入账）/ DEC-282（0.92.0 M-0 条件冻结）；**证据**：EVD-1216~1229。
+**EXC-002（Check 27 证据面 178 行纸质限域例外，DEC-285）**：
+
+- **覆盖面**：Check 27 剩余 178 行历史证据面=160 已归档任务债+4 FEAT-001 双在+14 裸 ID（≤0.90 远期；scan-families [0.1.0,0.90.0] 双源复现 178）；仅覆盖该封闭清单致 should_archive=True 的发布门禁接受面；原始 FAIL 保留不改为通过。
+- **承载体**：纸质例外（DEC-285+基线附件）——**机注不可达**（Check 27 走独立通路无例外机制接线，基线附件 L222 注记）；不覆盖新增任务候选/清单外证据/0.91+ 近周期/其他完整性失败/其他检查/EXC-001 与 B2 条件。
+- **增长容忍 0**：清单外新增容忍 0；候选减少须逐项授权；禁净零兑换；输入锚变→重跑复评（身份级清单绑定，非仅数字 178）。
+- **期限**：min(0.93 准入评审开始, 2026-10-12 绝对截止)——不自动续期，延期须重审批；明文不延长 EXC-001 的 10-12 到期。
+- **基线附件**：`docs/governance/rel-095-exc002-baseline-178-20260928.md`（222 行——稳定身份键+内容摘要+分类+引用任务+判定理由；输入锚 `40eb6f7`+sha256 2365c01c）。
+- **0.93 承接**：FEAT-076（读取契约五条件+91 物理未归档 ID 回填 C-3）；Owner 四角色实名（债务=Coordinator 清单周报/验证=独立复核人/发布批准=DEC-274 预授权链/FEAT-076=兼容证明与后续迁移交付）。
+
+**B2 单条精确豁免（loop-claims 豁免账本第 5 条——非例外面）**：`LRC-EXEMPT-FIX401R0-79-1`（review-FIX-401-R0.md F-3 元文本误判对象；DEC-283 题 2 一次性授权；commit `df26f7e`）——发布门禁 BLOCKED→PASS 逐条披露（详见 M-2 整改叙事与行为变更 B-5）。
+
+**advisory 两面（发布时点重测 2026-09-29 @HEAD `a31b878`，无例外登记）**：decision-log **254,420B** 超阈 250,000B（CR-F1——M-8 补披露后入 0.93 池）；archive.py **5,508 行** 越阈 5,000（CR-F2——0.93 拆分候选）。
+
+**版本面再生纪律**：本版版本面经 `release-projection --write` 确定性再生（非手改——M-1：权威源 bump → written=17 → 幂等复跑 written=0）。
+
+**决策链**：DEC-269（0.92 批启动）/ DEC-270（FEAT-073 ADR-020 研究+R0 审查入账）/ DEC-271/272（FEAT-073 路线裁决与完成入账）/ DEC-273（FIX-400 完成入账）/ DEC-274（0.92.0 收尾批+发布链总授权）/ DEC-275（收尾批框架裁决）/ DEC-276（FIX-396/397 交付状态核对）/ DEC-277（FIX-401 完成入账）/ DEC-278（28s 结构性解锁三单元）/ DEC-279~281（三单元完成入账）/ DEC-282（0.92.0 M-0 条件冻结）/ DEC-283~285（M-2 整改三裁决——受控回退+B2 授权/有界迁移扩展授权/EXC-002 限域例外）；**证据**：EVD-1216~1236（含发布链 EVD-1230~1236）。
 
 ### Added
 
@@ -44,7 +61,27 @@
 - **证据行实体解析与分类（FEAT-074）**：五态实体感知分类（task/requirement/other_entity/missing/ambiguous）替代单桶——结构性错误状态（FEAT 90 行永不可迁移/REQ 40 ID 误门控/FX 历史映射缺失）消除。
 - **确定性数据校正（FIX-402）**：2 可修项落修 + 155 登记类逐 ID 处置留痕；11 行 would_archive 留热（读取兼容门未闭合，口径见 EXC-001）。
 
-**准备态注记**：本段为 M-1 候选落库时点（2026-09-28 +0800）的**准备态**——发布日期不预填（发布收口按 FIX-349 口径以 taggerdate 权威落字）；发布终账、Commit 区间与发布验证结论随发布链 M-2+ 补记。
+### 行为变更
+
+- **B-1（FEAT-073）** strict persona 单源化+薄指针压缩——strict 注入余量 **9→391 tok**（三档实测 lightweight 3859/standard 5337/strict 5609，/6000 全 PASS），strict 档会话更轻；回滚 `git revert e65b317`（无 breaking，回退即恢复 0.91 行为）。
+- **B-2（FIX-400）** release-gate 超时预算 **180→2333s**（=ceil(1554.78×1.5)——DEC-262 先例同式）——门禁信号恢复可信（墙钟预算与实测时长匹配，假超时消除）；回滚 `git revert f06a2bf a7bcd5f`（恢复 180s——假红面回归，不建议单独执行）。
+- **B-3（FIX-401）** loop 计时断言**墙钟→process_time**——并行负载假红消除（RISK-048 收窄，预算 27.0→27.8）；回滚 `git revert 136d65e`（环境敏感面恢复——风险 reopen，不建议）。
+- **B-4（FEAT-075）** 发布聚合层**例外标注机制 exception_registry**——EXC-001 两层同屏（原始 ERROR 真实字节+exception accepted 同行）；**annotation-only** 不改原始结果/字节/退出码；dry-run 零写入代码级强制（`Scan REFUSED` exit 1）；回滚 `git revert 484dd77 16a5157`（机制面；EXC-001 条目属 `.governance/exceptions.json` 治理数据面，随 DEC 处置撤销——非 revert 面）。
+- **B-5（DEC-283 题 2 一次性授权，commit `df26f7e`）** **LRC 豁免账本第 5 条 `LRC-EXEMPT-FIX401R0-79-1`**——发布门禁 BLOCKED→PASS **逐条披露**（九键实测+双锚 re-pin digest 4f8a6cc8→d47f5d16+正负因果测试）；回滚 `git revert df26f7e` 单提交自洽（锚与账本同提交，无悬挂——回退后 LRC 如实恢复 BLOCKED 判定）。
+- **B-6（DEC-284 扩展授权）** 数据面**有界迁移 18 EVD 出热**（2 任务+18 EVD）——消费者读取=**`archive/index.md`**（bootstrap 协议既有——读取契约不变，归档证据=有效证据口径维持）；回滚=迁移面序①（journal 逐 ID 复原+archive.py rollback——EVD-1233 隔离副本实弹演练已证可达基线）。
+- **B-7（`f06a2bf`+`484dd77`——DEC-260 分离提交纪律）** archguard R1 锚**两次 sanctioned regen 26385→26413→26478**——载荷增长受控入锚（fatal gate 全绿 @26478；R6 advisory 205 模块 Δ0；regen deterministic）；回滚=锚随对应功能票 revert 对称回退（分离提交同序）。
+- **回滚总说明**：完整回滚次序（先数据后 git：迁移面→B2→版本面）见 `docs/release/rollback-plan-0.92.0.md` §回滚三序；本版**无破坏性变更、无机制激活**（RB-2/B-12/B-13 出厂姿态不变，翻转留独立授权票）；legacy 通道不覆盖本版行为变更面（`GOVERNANCE_LEGACY_BEHAVIOR` 只回退性能行为——FEAT-040）。
+
+**发布态注记（M-5 改写时点 2026-09-29 +0800；承接 M-1 准备态注记）**：发布日期仍不预填——tag 后 M-8 按 FIX-349 口径以 taggerdate 权威回填本段标题；发布终账尾账（tag/remote 双端核对/发布验证终值）随发布链 M-6~M-8 补记。以下为发布链 M-2~M-5 补记面（RL-F1 全项）。
+
+**M-2 整改叙事（发布链 M-2/M-2R 补记——EVD-1233/1234/1235）**：M-2 首跑四失败面 → **DEC-283 受控回退 6 归期行**（tasks would_archive 8→2；面 A 两残留〔REL-086 两格拆分+FEAT-047 解析器修复使预存版本行首次可解析〕经裁决=正确修复暴露的历史归档债务不回退；B2=唯一语义阻断→单条精确豁免一次性授权）→ **DEC-284 扩展授权有界迁移**（2 任务 REL-086/FEAT-047+18 EVD——4 随行+14 历史义务补完成〔14 任务已归档，EVD 因旧 FEAT 前缀解析缺陷滞留热表=0.86~0.88 发布被中断的归档随行义务〕；EVD-1233 验收 5/6：18/18 精确归档零残留热表/守恒〔evidence 2939→2921 行、plan-tracker 524→522 行〕/幂等复跑 0 动作/journal 逐 ID 可溯〔区分 4 随行 vs 14 补完成〕/隔离副本回滚演练可达基线；第 6 项=Check 27 证据面 178 行非本授权对象）→ **EXC-002 限域例外**（DEC-285——Check 27 剩余 178 行历史证据面=160 已归档任务债+4 FEAT-001 双在+14 裸 ID；纸质承载体〔机注不可达——Check 27 无例外接线〕；增长容忍 0；期限 min(0.93 准入, 2026-10-12)；基线附件 docs/governance/rel-095-exc002-baseline-178-20260928.md）→ **B2 单条精确豁免**（LRC-EXEMPT-FIX401R0-79-1——review-FIX-401-R0.md F-3 元文本误判；九键实测+双锚 re-pin digest 4f8a6cc8→d47f5d16+正负因果测试；EVD-1234 六项验收 6/6；commit `df26f7e`）→ **M-2R 复测有条件收口**（EVD-1235@`df26f7e`：verify/unit/e2e/loop 原生全绿——loop PASS semantic=PASS·identity=PASS·candidates 1096/豁免 5 条全披露；非原生面=28s EXC-001 机注+archive EXC-002 纸质承接+遗留格式面 EVD-702/1194/1198〔0.91 既有披露非本版引入〕——「有条件收口/例外接受（非原生全绿）」原文如实登记）。
+
+**发布终账（M-5 时点补记；尾账随 M-6~M-8 收口续记）**：
+
+- **M-3 双半面审查**：R2 CODE 聚合终审（AWN/0——P2×2 advisory〔CR-F1/F2〕+P3×5；51 文件对账无夹带）+ R3 RELEASE 发布审查（AWN/0 **有条件 GO**——放行条件①~⑩产出）——盘上 `docs/reviews/review-REL-095-CODE-R0.md` / `review-REL-095-RELEASE-R0.md`（commit `a31b878`）。
+- **M-4④ 发布文档四件套**：`docs/release/release-plan-0.92.0.md` / `release-checklist-0.92.0.md` / `rollback-plan-0.92.0.md` / `feature-flags-0.92.0.md`（commit `a31b878`；M4R4 审查 AWN/0——P3×2〔M4R4-F1 区间限定词/F-2 面级计数粒度〕由 M-5 本批顺修 release-plan 两处）。
+- **M-5 本步（本提交批，提交 hash 由 M-5 提交生成，不预写）**：candidate manifest `skills/software-project-governance/core/releases/0.92.0.json` 创建（lifecycle=candidate，NATIVE_CANDIDATE——`candidate_commit` 以 `git_commit_adding_path` derivation 指向本提交批）+ 本段发布态改写（RL-F1 全项）+ release-plan M4R4-F1/F2 两处 P3 顺修。
+- **Commit 区间与发布验证结论**：`git rev-list --count bd9bfc1..HEAD` = **14**（2026-09-29 M-5 落稿时点实测，HEAD=`a31b878`；区间下界 `bd9bfc1`=v0.91.0 tag peel，taggerdate 2026-09-28 05:24:03 +0800 权威；本 M-5 提交批入区后发布终值 M-8 批回填）；发布 tip=M-5b transition 提交（生成后回填）；发布日期按 taggerdate 权威回填（FIX-349 口径）。
 
 ## [0.91.0] - 2026-09-28
 <!-- 发布日期 = taggerdate 权威回填：v0.91.0 taggerdate 2026-09-28 05:24:03 +0800（FIX-349 口径，REL-094 M-8 批回填）。 -->

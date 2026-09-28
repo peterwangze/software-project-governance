@@ -7741,11 +7741,15 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
         self.assertFalse(result["pass"])
         self.assertTrue(any("execution gate: unit tests" in issue for issue in result["issues"]))
 
-    def test_fix234_release_gate_timeout_resolver_defaults_to_180(self):
+    def test_fix234_release_gate_timeout_resolver_defaults_to_budget(self):
         """FIX-234: absent/empty SPG_RELEASE_GATE_TIMEOUT resolves to the
-        historical 180s default (backward compatible)."""
-        self.assertEqual(vw._resolve_release_gate_timeout(""), 180)
-        self.assertEqual(vw._resolve_release_gate_timeout(None), 180)
+        module default. 180 s in the FIX-234 era; 2333 s since the FIX-400
+        wall-clock recalibration (measured provenance lives on the
+        _RELEASE_GATE_TIMEOUT_DEFAULT constant comment — DEC-262(1)/FIX-346
+        discipline, never a silent raise)."""
+        self.assertEqual(vw._RELEASE_GATE_TIMEOUT_DEFAULT, 2333)
+        self.assertEqual(vw._resolve_release_gate_timeout(""), 2333)
+        self.assertEqual(vw._resolve_release_gate_timeout(None), 2333)
 
     def test_fix234_release_gate_timeout_resolver_env_override(self):
         """FIX-234: a positive integer env value overrides the default."""
@@ -7753,11 +7757,12 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
         self.assertEqual(vw._resolve_release_gate_timeout("  42 "), 42)
 
     def test_fix234_release_gate_timeout_resolver_invalid_falls_back(self):
-        """FIX-234: malformed or non-positive values fall back to the 180s
-        default instead of crashing the gate."""
+        """FIX-234: malformed or non-positive values fall back to the module
+        default (2333 s since the FIX-400 recalibration) instead of crashing
+        the gate."""
         for raw in ("abc", "12.5", "0", "-5", " "):
             with self.subTest(raw=raw):
-                self.assertEqual(vw._resolve_release_gate_timeout(raw), 180)
+                self.assertEqual(vw._resolve_release_gate_timeout(raw), 2333)
 
     def test_fix234_release_gate_runner_honors_env_timeout(self):
         """FIX-234: _run_release_validation_command reads
@@ -7987,7 +7992,9 @@ class Feat016DshUpgradeRegressionReleaseGateTests(unittest.TestCase):
                if k != "SPG_RELEASE_GATE_TIMEOUT"}
         with patch.dict(os.environ, env, clear=True):
             vw.run_dsh_upgrade_regression_gates(smoke_runner=smoke)
-        self.assertEqual(180, seen["timeout"])
+        # FIX-400: the env-free path now resolves to the recalibrated
+        # module default (was 180 s at FIX-234 time).
+        self.assertEqual(2333, seen["timeout"])
 
     def test_FEAT_016_runner_normalizes_smoke_failure_into_blocking_issue(self):
         regression = vw.run_dsh_upgrade_regression_gates(

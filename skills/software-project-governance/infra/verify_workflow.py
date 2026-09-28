@@ -6072,16 +6072,42 @@ def check_agent_adapter_contract(root=None, run_runtime=False):
     return failures
 
 
-_RELEASE_GATE_TIMEOUT_DEFAULT = 180
+# FIX-400 (2026-09-28) wall-clock recalibration 180 -> 2333, following the
+# DEC-262(1)/FIX-346 discipline (formula re-anchor with measured provenance —
+# silent raises are forbidden; this is a re-anchored budget, NOT a green-wash).
+# The 180 s default dates to FIX-234, when the bounded unit-test suite still
+# fit inside it; the suite has outgrown it deterministically ever since
+# (0.80.0 REL-077 ~258 s; 0.84.0 273.4 s; 0.91.0 M 1554.78 s) and the known
+# check-release FAILED-2 disclosure carries this same cause (DEC-264(2);
+# M-3 RELEASE ruled the wall-clock component non-blocking).
+# Scope: this timeout bounds the four release execution-gate subprocesses in
+# run_release_execution_gates ("verify" / "governance health" / "e2e check" /
+# the "unit tests" -m unittest run over test_verify_workflow.py — the wall-
+# clock driver) plus the FEAT-016 dsh preset-session smoke (upgrade gate).
+# Provenance: 0.91.0 M calibration-session machine records (DEC-264(2)) —
+# full bounded suite 1554.78 s in a single measurement (pwsh-167 M-1 run:
+# 4351P/1F/1S/540 subtests; M-2 dual-source runs pwsh-170/171: 4359P/0F/1S/
+# 527). Single observation, so it serves as the p50 proxy (n=1, disclosed).
+# New budget = p50 x 1.5 = ceil(1554.78 x 1.5) = ceil(2332.17) = 2333 s.
+# Inverse check at calibration time: halved (1166.5 s) it stays RED against
+# the observed run (1554.78 s), so the budget still bites. Same-session
+# targeted corroboration (2026-09-28, this repo): bounded-command
+# representative subset (release/upgrade-gate/smoke/hook classes, exit 0)
+# single run 15.844 s; static TestLoader count 948 methods — the full-suite
+# machine-record anchor above remains the calibration basis. The
+# SPG_RELEASE_GATE_TIMEOUT env override (FIX-234) keeps priority.
+_RELEASE_GATE_TIMEOUT_DEFAULT = 2333
 _RELEASE_GATE_TIMEOUT_ENV = "SPG_RELEASE_GATE_TIMEOUT"
 
 
 def _resolve_release_gate_timeout(raw):
     """FIX-234: resolve the release-gate timeout from an env-var value.
 
-    Returns the value when it is a positive integer, otherwise the 180s
-    default. Invalid values fall back instead of crashing the gate
-    (backward compatible with the historical hardcoded 180s).
+    Returns the value when it is a positive integer, otherwise the module
+    default (_RELEASE_GATE_TIMEOUT_DEFAULT — 180 s in the FIX-234 era,
+    recalibrated to 2333 s by FIX-400; provenance lives on the constant).
+    Invalid values fall back instead of crashing the gate; that
+    fallback-not-crash contract is unchanged by the recalibration.
     """
     raw = (raw or "").strip()
     if not raw:
@@ -6098,7 +6124,7 @@ def _run_release_validation_command(label, command, timeout=None):
 
     timeout: explicit seconds; when None (default) the
     SPG_RELEASE_GATE_TIMEOUT env var (integer seconds, FIX-234) is honored,
-    falling back to the 180s default for absent/invalid values.
+    falling back to the module default for absent/invalid values.
     """
     if timeout is None:
         timeout = _resolve_release_gate_timeout(
@@ -6143,7 +6169,8 @@ def run_release_execution_gates(runner=_run_release_validation_command,
 
     timeout: optional explicit seconds forwarded to the runner. When omitted,
     the runner resolves its own timeout (SPG_RELEASE_GATE_TIMEOUT env var,
-    default 180s — FIX-234). Custom two-arg runners keep working unchanged.
+    module default — FIX-234, recalibrated by FIX-400). Custom two-arg
+    runners keep working unchanged.
     """
     verify_script = ROOT / "skills/software-project-governance/infra/verify_workflow.py"
     commands = [
@@ -7091,7 +7118,8 @@ def check_dsh_preset_smoke(root=None, timeout=120):
 # redirected DSH_HOME (M7.7 (a)) and fingerprints the real ~/.dsh — a run
 # reporting real-home writes is refused, so this release gate inherits the
 # zero-real-home-write guarantee. Timeout honors the FIX-234 precedent
-# (SPG_RELEASE_GATE_TIMEOUT env override, 180s default).
+# (SPG_RELEASE_GATE_TIMEOUT env override, module default — the FIX-400
+# recalibration provenance lives on _RELEASE_GATE_TIMEOUT_DEFAULT).
 
 DSH_UPGRADE_REGRESSION_LABEL = "dsh preset-session smoke (isolated upgrade regression)"
 

@@ -36,6 +36,7 @@ if str(_INFRA_DIR) not in sys.path:
 
 import verify_workflow as vw
 import cleanup as cleanup_mod
+import archive as archive_mod
 
 
 # ── FEAT-038 (AUDIT-154 A-7) governance-document resolution helpers ─────────
@@ -22033,6 +22034,329 @@ class FEAT038GovernanceOnDemandSplitTests(unittest.TestCase):
                 self.assertEqual(
                     governance_doc(rel), governance_doc(rel, fixture=True),
                     f"fixture drift: {rel}")
+
+
+class FEAT074EvidenceEntityClassificationTests(unittest.TestCase):
+    """FEAT-074 (DEC-278 unit one) — entity-type-aware evidence classification.
+
+    Positive classes cover every one of the five entity states (task /
+    requirement / other_entity / missing / ambiguous) plus each six-condition
+    failure mode; the negative family asserts that active, multi-ref,
+    missing, explicit-keep and duplicate-ID rows can NEVER enter the
+    migration set. Fixtures are SYNTHETIC (deterministic per-state isolation,
+    no dependency on the drifting live governance data); the live-data
+    before/after proof is archived separately in
+    docs/architecture/feat-074-classification-diff-20260928.md.
+    """
+
+    def _evd(self, evd_id, refs, summary="s"):
+        return f"| {evd_id} | {refs} | {summary} | 2026-09-28 | 产品代码 |"
+
+    def _classify(self, rows, task_versions, start="0.1.0", end="0.90.0",
+                  context=None):
+        # Window bounds are HISTORICAL versions on purpose: the FIX-352/353
+        # static-pin discipline forbids pinning the ACTIVE version literally
+        # anywhere in the tree (the live-data windowing proof lives in the
+        # diff doc, not in this fixture).
+        content = "\n".join(rows)
+        return archive_mod._classify_evidence_rows(
+            content, task_versions, start, end, context=context)
+
+    def _ctx(self, hot_rows=(), registry=()):
+        """Build a classification context from synthetic plan-tracker parts.
+
+        hot_rows: (task_id, target_version, status) well-formed 7-col rows.
+        registry: REQ ids for the requirement-registry table.
+        """
+        pt = ["### 优先级一览",
+              "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+              "| --- | --- | --- | --- | --- | --- | --- |"]
+        for tid, ver, status in hot_rows:
+            pt.append(f"| **P1** | {tid} | item | — | {ver} | path | {status} |")
+        pt.append("")
+        pt.append("## 需求跟踪矩阵")
+        pt.append("| 需求ID | 需求描述 | 来源 | 优先级 | 关联任务 | 当前状态 | 验证方式 |")
+        pt.append("| --- | --- | --- | --- | --- | --- | --- |")
+        for rid in registry:
+            pt.append(f"| {rid} | desc | src | P0 | FIX-900 | ✅ 已交付 | way |")
+        return archive_mod._build_classification_context("\n".join(pt))
+
+    def test_feat_prefix_is_task_family_and_migrates(self):
+        # Item 2 regression: FEAT refs must gate as tasks and migrate when
+        # the cycle is closed in-window (pre-fix they fell into
+        # no_task_family_ref forever — the 90-row / 223,895 B error state).
+        self.assertTrue(archive_mod._is_task_family_id("FEAT-010"))
+        records = self._classify([self._evd("EVD-1", "FEAT-010")],
+                                 {"FEAT-010": "0.85.0"})
+        self.assertEqual(len(records), 1)
+        r = records[0]
+        self.assertTrue(r["migrate"])
+        self.assertEqual(r["reason"], "would_archive")
+        self.assertEqual(r["ref_types"], {"FEAT-010": "task"})
+
+    def test_registry_req_is_requirement_entity_and_never_needs_a_version(self):
+        # Item 4 (Q2=c): a requirement-registry REQ is a legal requirement
+        # entity — it does NOT gate and is never required to resolve to a
+        # task version.
+        ctx = self._ctx(registry=("REQ-500",))
+        rows = [self._evd("EVD-1", "REQ-500, FIX-900"),
+                self._evd("EVD-2", "REQ-500")]
+        records = self._classify(rows, {"FIX-900": "0.80.0"}, context=ctx)
+        by_id = {r["id"]: r for r in records}
+        self.assertTrue(by_id["EVD-1"]["migrate"])
+        self.assertEqual(by_id["EVD-1"]["reason"], "would_archive")
+        self.assertEqual(by_id["EVD-1"]["ref_types"]["REQ-500"], "requirement")
+        # Registry-REQ-only row: no gating task ref → retained (Q6 belongs
+        # to the successor ticket), typed requirement.
+        self.assertFalse(by_id["EVD-2"]["migrate"])
+        self.assertEqual(by_id["EVD-2"]["reason"], "no_task_family_ref")
+        self.assertEqual(by_id["EVD-2"]["ref_types"], {"REQ-500": "requirement"})
+
+    def test_task_side_req_is_judged_by_task_lifecycle(self):
+        # A REQ id that is NOT in the registry but IS a real task resolves
+        # through the task mapping. REQ-700 is a SYNTHETIC id (deliberately
+        # not a real registry id like REQ-082, which lives in the live
+        # requirement registry); the hermetic context (no registry) keeps the
+        # live plan-tracker from leaking in.
+        records = self._classify([self._evd("EVD-1", "REQ-700")],
+                                 {"REQ-700": "0.77.0"}, context=self._ctx())
+        self.assertTrue(records[0]["migrate"])
+        self.assertEqual(records[0]["ref_types"], {"REQ-700": "task"})
+
+    def test_dual_registered_req_is_ambiguous(self):
+        # Registry AND task-side → identity ambiguous → gate shut.
+        ctx = self._ctx(registry=("REQ-777",))
+        records = self._classify(
+            [self._evd("EVD-1", "FIX-900, REQ-777")],
+            {"FIX-900": "0.80.0", "REQ-777": "0.80.0"}, context=ctx)
+        self.assertFalse(records[0]["migrate"])
+        self.assertEqual(records[0]["reason"], "ambiguous_ref")
+        self.assertEqual(records[0]["ref_types"]["REQ-777"], "ambiguous")
+
+    def test_missing_ref_fails_closed_with_explainable_reason(self):
+        ctx = self._ctx()
+        records = self._classify([self._evd("EVD-1", "FIX-999")], {},
+                                 context=ctx)
+        self.assertFalse(records[0]["migrate"])
+        self.assertEqual(records[0]["reason"], "missing_task_ref")
+        self.assertEqual(records[0]["ref_types"], {"FIX-999": "missing"})
+        self.assertIn("FIX-999", records[0]["detail"])
+
+    def test_active_hot_ref_retained(self):
+        # Six-condition 2/4: released-version target does NOT prove closure;
+        # an open hot status keeps the row hot (当前工作集/重开).
+        ctx = self._ctx(hot_rows=[("FIX-910", "0.82.0", "🔄 进行中")])
+        records = self._classify([self._evd("EVD-1", "FIX-910")], {},
+                                 context=ctx)
+        self.assertFalse(records[0]["migrate"])
+        self.assertEqual(records[0]["reason"], "active_task_ref")
+        self.assertEqual(records[0]["ref_types"], {"FIX-910": "task"})
+
+    def test_terminal_hot_ref_with_nonsemver_version_retained(self):
+        # Six-condition 3: terminal status but 未规划版本 target — the owning
+        # release cycle cannot be proven closed (fail-closed).
+        ctx = self._ctx(hot_rows=[("FIX-920", "未规划版本", "✅ 已完成")])
+        records = self._classify([self._evd("EVD-1", "FIX-920")], {},
+                                 context=ctx)
+        self.assertFalse(records[0]["migrate"])
+        self.assertEqual(records[0]["reason"], "task_version_unparseable")
+
+    def test_layout_anomalous_hot_ref_retained(self):
+        # A locatable hot row with untrusted columns (7 real pipes) can never
+        # prove lifecycle closure (the REL-086 shape until data normalization).
+        pt = ["### 优先级一览",
+              "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+              "| --- | --- | --- | --- | --- | --- | --- |",
+              "| **P1** | FIX-930 | item | — | 0.88.0 | merged path committed 已发布 〔op-"
+              + "a" * 32 + "〕 |",
+              ""]
+        ctx = archive_mod._build_classification_context("\n".join(pt))
+        self.assertIn("FIX-930", ctx["hot_anomalies"])
+        records = self._classify([self._evd("EVD-1", "FIX-930")], {},
+                                 context=ctx)
+        self.assertFalse(records[0]["migrate"])
+        self.assertEqual(records[0]["reason"], "task_layout_anomaly")
+
+    def test_verified_fx_alias_resolves_and_unverified_fx_fails_closed(self):
+        # Item 3: per-ID verified mappings only — no wildcard FX admission.
+        records = self._classify([self._evd("EVD-1", "FX-130")],
+                                 {"FX-130": "0.64.0"})
+        self.assertTrue(records[0]["migrate"])
+        self.assertEqual(records[0]["reason"], "would_archive")
+        self.assertEqual(records[0]["ref_types"], {"FX-130": "task"})
+        ctx = self._ctx()
+        records = self._classify([self._evd("EVD-2", "FX-999")], {},
+                                 context=ctx)
+        self.assertFalse(records[0]["migrate"])
+        self.assertEqual(records[0]["reason"], "ambiguous_ref")
+        self.assertEqual(records[0]["ref_types"], {"FX-999": "ambiguous"})
+
+    def test_explicit_keep_marker_blocks_otherwise_migratable_row(self):
+        # Six-condition 5: keep markers retain the row regardless of refs.
+        row = "| EVD-1 | FIX-900 | 保留热——归档引擎判据锚点 | 2026-09-28 | 产品代码 |"
+        records = self._classify([row], {"FIX-900": "0.80.0"})
+        self.assertFalse(records[0]["migrate"])
+        self.assertEqual(records[0]["reason"], "explicit_keep_marker")
+
+    def test_duplicate_evd_id_never_enters_migration_set(self):
+        # Negative family: duplicate shape-valid ids fail closed on BOTH
+        # copies — never absorbed by a lenient regex, never split hot/cold.
+        records = self._classify(
+            [self._evd("EVD-900", "FIX-900"), self._evd("EVD-900", "FIX-900")],
+            {"FIX-900": "0.80.0"})
+        self.assertEqual(len(records), 2)
+        for r in records:
+            self.assertFalse(r["migrate"])
+            self.assertEqual(r["reason"], "duplicate_evd_id")
+
+    def test_owning_cycle_is_max_ref_version(self):
+        # Six-condition 3: the row's owning cycle is the MAX resolved ref
+        # version (最晚引用封闭才算封闭) — an in-range ref cannot smuggle a
+        # row whose latest reference belongs to a later, unclosed cycle.
+        records = self._classify(
+            [self._evd("EVD-1", "FIX-900, FIX-901")],
+            {"FIX-900": "0.80.0", "FIX-901": "0.99.0"})
+        self.assertFalse(records[0]["migrate"])
+        self.assertEqual(records[0]["reason"], "ref_version_out_of_range")
+        self.assertIn("0.99.0", records[0]["detail"])
+        # Same refs with the later cycle inside the window migrate with the
+        # owning (max) version recorded.
+        records = self._classify(
+            [self._evd("EVD-1", "FIX-900, FIX-901")],
+            {"FIX-900": "0.80.0", "FIX-901": "0.99.0"},
+            start="0.1.0", end="0.99.0")
+        self.assertTrue(records[0]["migrate"])
+        self.assertEqual(records[0]["version"], "0.99.0")
+
+    def test_in_flight_feat_ticket_rows_stay_hot(self):
+        # Acceptance #1 live pattern: FEAT-073-style rows resolve to the
+        # in-development version and stay hot while the window covers only
+        # released cycles; FEAT-074-style active rows stay hot via status.
+        # (0.99.0 is a SYNTHETIC in-development version — never a real
+        # release, so the FIX-352/353 active-version pin discipline cannot
+        # be tripped when the real development version advances.)
+        in_flight = "0.99.0"
+        ctx = self._ctx(hot_rows=[("FEAT-074", in_flight, "🔄 进行中")])
+        records = self._classify(
+            [self._evd("EVD-1", "FEAT-073"), self._evd("EVD-2", "FEAT-074")],
+            {"FEAT-073": in_flight}, context=ctx)
+        by_id = {r["id"]: r for r in records}
+        self.assertEqual(by_id["EVD-1"]["reason"], "ref_version_out_of_range")
+        self.assertFalse(by_id["EVD-1"]["migrate"])
+        self.assertEqual(by_id["EVD-1"]["ref_types"], {"FEAT-073": "task"})
+        self.assertEqual(by_id["EVD-2"]["reason"], "active_task_ref")
+        self.assertFalse(by_id["EVD-2"]["migrate"])
+        self.assertEqual(by_id["EVD-2"]["ref_types"], {"FEAT-074": "task"})
+
+    def test_other_entity_refs_are_nongating_and_typed(self):
+        # DEC/RISK/DOC refs are registered non-task entities — descriptive
+        # context, typed other_entity, never gating.
+        records = self._classify(
+            [self._evd("EVD-1", "RISK-036, DEC-072, DOC-001, TIER-001")],
+            {"FIX-900": "0.80.0"})
+        self.assertFalse(records[0]["migrate"])
+        self.assertEqual(records[0]["reason"], "no_task_family_ref")
+        self.assertEqual(set(records[0]["ref_types"].values()),
+                         {"other_entity"})
+
+    def test_old_single_bucket_reason_is_gone(self):
+        # DEC-278 unit one: the single live_or_unresolvable_task_ref bucket
+        # is REPLACED by typed reasons — never emitted again.
+        ctx = self._ctx(hot_rows=[("FIX-910", "0.82.0", "🔄 进行中")])
+        rows = [self._evd("EVD-1", "FIX-999"),
+                self._evd("EVD-2", "FIX-910"),
+                self._evd("EVD-3", "FIX-900"),
+                self._evd("EVD-4", "FX-999")]
+        records = self._classify(rows, {"FIX-900": "0.80.0"}, context=ctx)
+        reasons = {r["reason"] for r in records}
+        self.assertNotIn("live_or_unresolvable_task_ref", reasons)
+        self.assertEqual(reasons, {"missing_task_ref", "active_task_ref",
+                                   "would_archive", "ambiguous_ref"})
+
+    def test_ref_types_always_use_five_state_vocabulary(self):
+        rows = [self._evd("EVD-1", "FIX-900, REQ-500, RISK-001, FIX-999, FX-999"),
+                self._evd("EVD-2", "DEC-072")]
+        ctx = self._ctx(registry=("REQ-500",))
+        records = self._classify(rows, {"FIX-900": "0.80.0"}, context=ctx)
+        for r in records:
+            for state in r["ref_types"].values():
+                self.assertIn(state, archive_mod._EVIDENCE_REF_ENTITY_TYPES)
+        self.assertEqual(records[0]["ref_types"],
+                         {"FIX-900": "task", "REQ-500": "requirement",
+                          "RISK-001": "other_entity", "FIX-999": "missing",
+                          "FX-999": "ambiguous"})
+
+    def test_context_none_reads_plan_tracker_from_root(self):
+        # The auto-built context reads the live plan-tracker under the
+        # (patchable) ROOT seam; a missing file degrades to an empty context
+        # and never reopens the version-mapping gate.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".governance").mkdir()
+            (root / ".governance" / "plan-tracker.md").write_text(
+                "### 优先级一览\n"
+                "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n"
+                "| **P1** | FIX-910 | item | — | 0.82.0 | path | 🔄 进行中 |\n",
+                encoding="utf-8")
+            with patch.object(archive_mod, "ROOT", root):
+                ctx = archive_mod._build_classification_context()
+                records = self._classify([self._evd("EVD-1", "FIX-910")], {})
+                # context=None inside the classifier builds from the same
+                # patched world.
+                self.assertIn("FIX-910", ctx["hot_tasks"])
+                self.assertEqual(records[0]["reason"], "active_task_ref")
+            # missing plan-tracker → empty context → unresolvable refs stay
+            # fail-closed (typed missing, never migrated).
+            empty_root = Path(tmp) / "empty"
+            empty_root.mkdir()
+            with patch.object(archive_mod, "ROOT", empty_root):
+                records = self._classify([self._evd("EVD-1", "FIX-910")], {})
+                self.assertEqual(records[0]["reason"], "missing_task_ref")
+
+    def test_escaped_pipe_row_is_well_formed_for_both_parsers(self):
+        # Item 6 (FEAT-047 shape): "\|" inside a cell is NOT a column
+        # separator — the row parses as the normal 7-column layout, enters
+        # the completed-hot mapping, and is no longer reported anomalous.
+        row = ("| **P1** | FEAT-047 | 批 1 票 3（policy_class→block\\|advisory"
+               " 分轴） | TRIAGE-FEAT-047 | 0.86.0 | 产品代码 | ✅ 完成 |")
+        pt = ["### 优先级一览",
+              "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+              "| --- | --- | --- | --- | --- | --- | --- |",
+              row, ""]
+        content = "\n".join(pt)
+        anomalies = []
+        tasks = archive_mod._parse_priority_table_tasks(content,
+                                                        anomalies_out=anomalies)
+        self.assertEqual(anomalies, [])
+        self.assertEqual([t[2] for t in tasks], ["FEAT-047"])
+        self.assertEqual(tasks[0][3], "0.86.0")
+        self.assertIn("完成", tasks[0][4])
+        mapping = archive_mod._parse_completed_task_versions(content)
+        self.assertEqual(mapping.get("FEAT-047"), "0.86.0")
+
+    def test_split_table_row_escaped_aware_primitive(self):
+        parts = archive_mod._split_table_row_escaped_aware(
+            "| a | b\\|c | d |")
+        self.assertEqual([p.strip() for p in parts][1:-1], ["a", "b\\|c", "d"])
+        self.assertEqual(archive_mod._count_unescaped_pipes("| a | b\\|c | d |"), 4)
+
+    def test_resumable_context_digest_covers_entity_context(self):
+        # The pinned context digest covers the requirement registry and the
+        # hot-table states — a registry change between plan and resume is a
+        # CHANGED WORLD (loud refusal), not a silent re-classification.
+        tv = {"FIX-900": "0.80.0"}
+        d1 = archive_mod._evidence_classification_context_digest(
+            tv, self._ctx(registry=("REQ-500",)))
+        d2 = archive_mod._evidence_classification_context_digest(
+            tv, self._ctx(registry=("REQ-500", "REQ-501",)))
+        d3 = archive_mod._evidence_classification_context_digest(
+            tv, self._ctx(hot_rows=[("FIX-910", "0.82.0", "🔄 进行中")]))
+        self.assertNotEqual(d1, d2)
+        self.assertNotEqual(d1, d3)
+        self.assertEqual(
+            d1, archive_mod._evidence_classification_context_digest(
+                tv, self._ctx(registry=("REQ-500",))))
 
 
 if __name__ == "__main__":

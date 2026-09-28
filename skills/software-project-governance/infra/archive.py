@@ -551,12 +551,21 @@ def _parse_priority_table_tasks(content, anomalies_out=None):
     blockquote notes do NOT terminate the scan; only headings do. The two
     parsers must stay in sync.
 
-    Rows whose pipe layout deviates from the 7-column form (pipe count != 8)
-    are skipped conservatively — their column alignment cannot be trusted
-    for PHYSICAL migration (the hot row is deleted after archiving) — and
-    reported through ``anomalies_out`` (list receiving ``(task_id,
+    Rows whose pipe layout deviates from the 7-column form (unescaped pipe
+    count != 8) are skipped conservatively — their column alignment cannot be
+    trusted for PHYSICAL migration (the hot row is deleted after archiving) —
+    and reported through ``anomalies_out`` (list receiving ``(task_id,
     line_index, pipe_count)`` tuples) for the auditable unknown-structure
     list; they are never deleted.
+
+    FEAT-074 (DEC-278 unit one item 6): the count and the split are UNESCAPED-
+    pipe-aware. A row may legitimately embed ``\\|`` inside a cell (rendered
+    as a literal pipe — the FEAT-047 row carried ``block\\|advisory`` and was
+    misjudged as 9-column anomalous even though it has exactly 7 real
+    columns); raw-pipe counting made such completed hot rows invisible to
+    both the task migration and the completed-hot version mapping. Splitting
+    on unescaped pipes keeps the escape sequence inside its cell
+    (content-preserving — the row text is never rewritten).
 
     Returns list of (line_index, original_line, task_id, target_version, status).
     """
@@ -567,7 +576,7 @@ def _parse_priority_table_tasks(content, anomalies_out=None):
         stripped = line.strip()
         # Detect priority table header: first data cell is 优先级, second is ID
         if stripped.startswith("|"):
-            cells = [c.strip() for c in stripped.split("|")]
+            cells = [c.strip() for c in _split_table_row_escaped_aware(stripped)]
             data_cells = cells[1:-1] if len(cells) >= 2 else cells
             if (len(data_cells) >= 2
                     and data_cells[0] == "优先级"
@@ -588,7 +597,7 @@ def _parse_priority_table_tasks(content, anomalies_out=None):
         # Skip separator row
         if re.match(r"^\|[\s\-:|\t]+\|$", stripped):
             continue
-        parts = [p.strip() for p in line.split("|")]
+        parts = [p.strip() for p in _split_table_row_escaped_aware(line)]
         data_parts = parts[1:-1] if len(parts) >= 2 else parts
         # Need at least: priority, ID, ... , status (7 cols typical)
         if len(data_parts) < 3:
@@ -598,12 +607,13 @@ def _parse_priority_table_tasks(content, anomalies_out=None):
         task_id = re.sub(r"[`*]", "", raw_id).strip()
         if not re.match(r"^[A-Z]+-\d+$", task_id):
             continue
-        # FIX-301: pipe-count guard — anomalous layout (extra pipes inside
-        # cells, shifted columns) means column alignment cannot be trusted
-        # for physical migration. Skip conservatively, report for audit.
-        if stripped.count("|") != 8:
+        # FIX-301/FEAT-074: unescaped-pipe-count guard — anomalous layout
+        # (extra REAL pipes inside cells, shifted columns) means column
+        # alignment cannot be trusted for physical migration. Skip
+        # conservatively, report for audit.
+        if _count_unescaped_pipes(stripped) != 8:
             if anomalies_out is not None:
-                anomalies_out.append((task_id, i, stripped.count("|")))
+                anomalies_out.append((task_id, i, _count_unescaped_pipes(stripped)))
             continue
         # Target version in column 5 (data_parts[4]) if present
         target_version = ""
@@ -645,7 +655,7 @@ def _parse_completed_task_versions(content):
             # NOT terminate the scan (the real plan-tracker interleaves them
             # between priority groups).
             continue
-        cells = [c.strip() for c in stripped.split("|")]
+        cells = [c.strip() for c in _split_table_row_escaped_aware(stripped)]
         data_cells = cells[1:-1] if len(cells) >= 2 else cells
         if (len(data_cells) >= 2
                 and data_cells[0] == "优先级"
@@ -656,9 +666,13 @@ def _parse_completed_task_versions(content):
             continue
         if re.match(r"^\|[\s\-:|\t]+\|$", stripped):
             continue
-        if stripped.count("|") != 8:
-            # Anomalous layout (extra pipes inside cells, shifted columns) —
-            # column alignment cannot be trusted, skip conservatively.
+        # FEAT-074: unescaped-pipe guard (parity with
+        # _parse_priority_table_tasks — escaped "\|" inside a cell is NOT a
+        # column separator; the FEAT-047 row is a well-formed 7-column row).
+        if _count_unescaped_pipes(stripped) != 8:
+            # Anomalous layout (extra REAL pipes inside cells, shifted
+            # columns) — column alignment cannot be trusted, skip
+            # conservatively.
             continue
         if len(data_cells) < 5:
             continue
@@ -1080,8 +1094,15 @@ def _is_risk_closed(row, header_line):
 _TASK_FAMILY_PREFIXES = frozenset({
     "FIX", "REL", "AUDIT", "REQ", "FMT", "DIAG", "MAINT", "SYSGAP", "TD",
     "DESIGN", "VAL", "CLEANUP", "PRINCIPLE", "TASK", "RESEARCH", "ACCEPT",
-    "INIT", "PLAN",
+    "INIT", "PLAN", "FEAT",
 })
+
+# FEAT-074 (DEC-278 unit one item 2): FEAT is a legal task family. FEAT tickets
+# are the dominant ticket type since 0.87+; the allow-list was derived from an
+# older data snapshot and its absence made every FEAT-referencing evidence row
+# structurally un-migratable (90 rows / 223,895 B in no_task_family_ref at the
+# 2026-09-28 inventory). task_priority.py's governance-id vocabulary already
+# carries FEAT — this aligns the evidence-migration gate with it.
 
 # Cross-entity prefixes — these are NEVER task IDs and must never gate evidence
 # migration (AUDIT-126 root cause B). Kept for documentation / clarity; the
@@ -1090,15 +1111,109 @@ _CROSS_ENTITY_PREFIXES = frozenset({
     "RISK", "DEC", "REVIEW", "EVD", "TIER", "CONSTRAINT", "TOOL", "ADR",
 })
 
+# FEAT-074 (DEC-278 unit one): the five entity-type states a referenced ID can
+# classify into. The old classifier collapsed every gating failure into the
+# single "live_or_unresolvable_task_ref" bucket; these states replace it.
+#   task        — a task-family (or alias-verified) ID gated by task lifecycle
+#   requirement — a REQ-N registered in the requirement registry (需求登记表);
+#                 a legal requirement entity that is NEVER required to have a
+#                 task version (DEC-278 Q2=c) and does not gate migration
+#   other_entity— a registered non-task entity family (RISK-/DEC-/DOC-/...)
+#   missing     — a task-shaped ID locatable nowhere (no version mapping, no
+#                 hot-table row, no archive row)
+#   ambiguous   — identity cannot be uniquely determined: dual registration
+#                 (REQ in BOTH the requirement registry and the task tables)
+#                 or an unverified task-shaped prefix (e.g. an FX-N id that is
+#                 NOT in the per-ID verified map below)
+_EVIDENCE_REF_ENTITY_TYPES = frozenset({
+    "task", "requirement", "other_entity", "missing", "ambiguous",
+})
+
+# FEAT-074 (DEC-278 unit one): prefixes typed as registered non-task entities
+# ("other entity: DEC/RISK/DOC etc." per the ruling). DOC follows the DEC-278
+# five-state enumeration even though task_priority.py routes DOC governance ids
+# to plan-tracker.md — for EVIDENCE migration gating DOC stays non-gating
+# (pre-fix behavior), and the divergence is recorded in the FEAT-074 report.
+_OTHER_ENTITY_REF_PREFIXES = frozenset(_CROSS_ENTITY_PREFIXES | {"DOC"})
+
+# FEAT-074 (DEC-278 unit one item 3): per-ID verified FX→task mappings. Every
+# entry was verified INDIVIDUALLY against the archived task-version mapping
+# (.governance/archive/tasks — each id resolves to the version noted) and git
+# history (--all -S pickaxe first-mention commits); the full evidence table is
+# archived in docs/architecture/feat-074-classification-diff-20260928.md.
+# Wildcard admission of the "FX" prefix is explicitly FORBIDDEN (DEC-278 §3.1
+# unit one: "FX 逐 ID 核验映射，不许通配替换"); any UNLISTED FX-N (or other
+# unverified task-shaped prefix) stays unresolved and classifies "ambiguous"
+# (fail-closed, with an explainable reason).
+_VERIFIED_TASK_ID_ALIASES = {
+    # FX id -> resolved task id (identity: each verified FX id IS the archived
+    # task; resolution then flows through the normal task_versions mapping).
+    "FX-130": "FX-130",  # v0.64.0 — entry resolver chain (AUDIT-129/DEC-096; first mention 77df046)
+    "FX-131": "FX-131",  # v0.64.0 — entry resolver chain (AUDIT-129/DEC-096; first mention 77df046)
+    "FX-175": "FX-175",  # v0.63.0 — tag-backfill batch (first mention 20bdc53)
+    "FX-177": "FX-177",  # v0.63.1 — docs/release backfill (DOC-001; first mention 7792b4e)
+    "FX-179": "FX-179",  # v0.63.2 — docs/release backfill (DOC-001; first mention 7792b4e)
+    "FX-181": "FX-181",  # v0.63.3 — docs/release backfill (DOC-001; first mention 7792b4e)
+    "FX-183": "FX-183",  # v0.63.4 — docs/release backfill (DOC-001; first mention 7792b4e)
+    "FX-188": "FX-188",  # v0.65.0 — loop-engineering Slice 1: registry layer + loader (999f69d)
+    "FX-189": "FX-189",  # v0.65.0 — loop-engineering Slice 2: loop_engine core (999f69d)
+    "FX-190": "FX-190",  # v0.65.0 — loop-engineering Slice 3: flow_unit_derive (999f69d)
+    "FX-191": "FX-191",  # v0.65.0 — loop-engineering Slice 4: loop_migration apply/rollback (999f69d)
+    "FX-192": "FX-192",  # v0.65.0 — loop-engineering Slice 5: loop_health Check (999f69d)
+    "FX-193": "FX-193",  # v0.65.0 — loop-engineering Slice 6: rollup view (999f69d)
+    "FX-194": "FX-194",  # v0.65.0 — loop-engineering Slice 7: Gate re-labeling (999f69d)
+}
+
+# FEAT-074 (DEC-278 unit one item 5, condition "无显式保留标记"): whole-row keep
+# markers. Vocabulary is the 2026-09-28 design-admission inventory's §5 list
+# (single source); a row carrying ANY marker is retained hot regardless of how
+# migratable its refs look.
+_EVIDENCE_KEEP_MARKERS = (
+    "保留热", "keep-hot", "热保留", "禁止归档", "禁止迁移", "不迁移",
+)
+
+# FEAT-074 (DEC-278 unit one item 6): markdown table rows may carry ESCAPED
+# pipes ("\|") inside cells — rendered as literal pipes, never column
+# separators. Counting raw "|" characters misjudges such rows as anomalous
+# layout (the FEAT-047 row: 9 raw pipes = 8 real columns) and a raw split
+# shifts every downstream column. Split on UNESCAPED pipes only.
+_UNESCAPED_PIPE_SPLIT_RE = re.compile(r"(?<!\\)\|")
+
+
+def _split_table_row_escaped_aware(line):
+    """FEAT-074: split a markdown table row on UNESCAPED pipes only.
+
+    Returns the same shape as line.split("|") — leading/trailing empty strings
+    around the outer pipes — except escaped "\\|" sequences stay inside their
+    cell (content-preserving: the row text is never rewritten).
+    """
+    return _UNESCAPED_PIPE_SPLIT_RE.split(line)
+
+
+def _count_unescaped_pipes(line):
+    """FEAT-074: the number of REAL column separators in a table row."""
+    return len(_UNESCAPED_PIPE_SPLIT_RE.findall(line))
+
 
 def _is_task_family_id(task_id):
     """FIX-171 (AUDIT-126): return True if task_id's prefix is a task-family prefix.
 
     A task-family ID is one that can appear as a Task ID in plan-tracker and
-    therefore can resolve to a version in task_versions (FIX-/REL-/AUDIT-/REQ-/
-    SYSGAP-/TD-/MAINT-/FMT-/DIAG-/...). Cross-entity refs (RISK-/DEC-/REVIEW-/
-    EVD-/TIER-/CONSTRAINT-/TOOL-/ADR-) are descriptive context in an evidence
-    row's 关联 Task cell, never tasks, and must NOT gate evidence migration.
+    therefore can resolve to a version in task_versions (FIX-/REL-/AUDIT-/FEAT-/
+    REQ-/SYSGAP-/TD-/MAINT-/FMT-/DIAG-/...). Cross-entity refs (RISK-/DEC-/
+    REVIEW-/EVD-/TIER-/CONSTRAINT-/TOOL-/ADR-) are descriptive context in an
+    evidence row's 关联 Task cell, never tasks, and must NOT gate evidence
+    migration.
+
+    FEAT-074 (DEC-278 unit one item 2): FEAT- is a task family (see
+    _TASK_FAMILY_PREFIXES). REQ- stays task-family too — a REQ reference is
+    re-typed against the requirement registry at CLASSIFICATION time
+    (_requirement_registry_ids + the five-state logic in
+    _classify_evidence_rows), not by this prefix predicate: a registry REQ is
+    a requirement entity (non-gating, DEC-278 Q2=c) while a task-side REQ is
+    judged by the task lifecycle. Alias-verified historical ids (FX-..., see
+    _VERIFIED_TASK_ID_ALIASES) are admitted per-ID by the classifier even
+    though their prefix is not in this set.
 
     Args:
         task_id: an ID string of the form PREFIX-NNN (caller pre-validates the
@@ -1109,6 +1224,86 @@ def _is_task_family_id(task_id):
     """
     prefix = task_id.split("-", 1)[0]
     return prefix in _TASK_FAMILY_PREFIXES
+
+
+def _requirement_registry_ids(content):
+    """FEAT-074 (DEC-278 Q2=c): REQ-N ids registered in the requirement registry.
+
+    plan-tracker keeps a requirement registry (需求跟踪矩阵) whose header's
+    first data cell starts with 需求ID and whose rows put the REQ id in the
+    FIRST data column. Those REQ entities are REQUIREMENTS, not tasks: they
+    never have a task version and must not be required to resolve into
+    task_versions. Scan semantics mirror the priority-table parsers — blank
+    lines / prose inside the table do not terminate the scan; only headings
+    do; rows keep their first-data-cell REQ-\\d+ id.
+
+    Returns a set of REQ ids (empty when the registry is absent).
+    """
+    ids = set()
+    in_registry = False
+    for line in content.split("\n"):
+        stripped = line.strip()
+        if stripped.startswith("###") or stripped.startswith("##"):
+            in_registry = False
+            continue
+        if not stripped.startswith("|"):
+            continue
+        cells = [c.strip() for c in _split_table_row_escaped_aware(stripped)]
+        data_cells = cells[1:-1] if len(cells) >= 2 else cells
+        if data_cells and data_cells[0].startswith("需求ID"):
+            in_registry = True
+            continue
+        if not in_registry or not data_cells:
+            continue
+        first = re.sub(r"[`*]", "", data_cells[0]).strip()
+        if re.match(r"^REQ-\d+$", first):
+            ids.add(first)
+    return ids
+
+
+def _build_classification_context(plan_tracker_content=None):
+    """FEAT-074 (DEC-278 unit one): the entity-registration context the
+    evidence-row classifier needs beyond ``task_versions``.
+
+    Built single-source here so the one-shot path (_migrate_evidence) and the
+    resumable big-table path (migrate_evidence_resumable) can never drift
+    (same discipline as FIX-385's _classify_evidence_rows extraction):
+
+      hot_tasks        — {task_id: {"status", "version"}} for EVERY well-formed
+                         priority-table row (no status/version filtering): the
+                         "locatable in the hot table" face used to distinguish
+                         an ACTIVE task ref (lifecycle open — retained hot)
+                         from a MISSING one (locatable nowhere).
+      hot_anomalies    — {task_id: unescaped_pipe_count} for layout-anomalous
+                         priority rows: the id is locatable but its columns
+                         are untrusted, so lifecycle can NEVER be proven from
+                         them (fail-closed, explainable reason).
+      requirement_ids  — the requirement-registry REQ ids (see
+                         _requirement_registry_ids).
+
+    ``plan_tracker_content`` None → read the live plan-tracker (missing /
+    unreadable file degrades to an EMPTY context — classification then simply
+    loses the locatable-in-hot-table distinction, never the version-mapping
+    gate; fail-soft is safe because every state it feeds is retain-hot).
+    """
+    if plan_tracker_content is None:
+        try:
+            plan_tracker_content = _plan_tracker().read_text(encoding="utf-8")
+        except OSError:
+            plan_tracker_content = ""
+    anomalies = []
+    hot_tasks = {}
+    for _idx, _line, task_id, target_version, status in \
+            _parse_priority_table_tasks(plan_tracker_content,
+                                        anomalies_out=anomalies):
+        hot_tasks.setdefault(task_id,
+                             {"status": status, "version": target_version})
+    return {
+        "hot_tasks": hot_tasks,
+        "hot_anomalies": {task_id: pipes for task_id, _i, pipes in anomalies},
+        "requirement_ids": frozenset(
+            _requirement_registry_ids(plan_tracker_content)),
+    }
 
 
 # FIX-301: evidence row IDs come in two REAL shapes — plain sequential
@@ -1364,28 +1559,169 @@ def _migrate_risks(version_start, version_end, task_versions, dry_run=False,
     return len(archived)
 
 
-def _classify_evidence_rows(content, task_versions, version_start, version_end):
-    """FIX-385: single source of the evidence migration row-classification
-    gate — extracted from _migrate_evidence so the one-shot path and the
-    resumable big-table path can never drift apart (same discipline as the
-    FIX-384 _extract_* single-sourcing).
+def _classify_evidence_rows(content, task_versions, version_start, version_end,
+                            *, context=None):
+    """FIX-385/FEAT-074: single source of the evidence migration row-
+    classification gate — extracted from _migrate_evidence so the one-shot
+    path and the resumable big-table path can never drift apart (same
+    discipline as the FIX-384 _extract_* single-sourcing).
 
-    The gates are exactly _migrate_evidence's (FIX-164 subset + FIX-171
-    task-family/cross-entity split + FIX-301 compound-ID shape + range
-    membership); see that function's docstring for the full rationale.
+    The gates are _migrate_evidence's (FIX-164 subset + FIX-171 task-family/
+    cross-entity split + FIX-301 compound-ID shape + range membership)
+    re-expressed by FEAT-074 (DEC-278 unit one) as the six-condition task
+    determination — ALL six must hold for a row to migrate, and every failure
+    carries an explainable reason:
+
+      1. 可定位          — every gating ref resolves to a task identity (the
+                           task_versions mapping, a verified per-ID alias, or
+                           a locatable hot-table row). Nowhere-locatable refs
+                           classify "missing" → missing_task_ref.
+      2. 生命周期已关闭  — task_versions membership IS the closure proof
+                           (physically archived, or a hot row whose STATUS is
+                           terminal per _task_status_is_archivable — a
+                           released version alone never proves closure).
+                           Hot rows with an open status classify "active" →
+                           active_task_ref (covers 当前工作集/重开/在途).
+      3. 周期封闭+保留窗 — the row's owning cycle is the MAX resolved ref
+                           version (保守：最晚引用封闭才算封闭 — inventory §2.1
+                           β criterion; matches the FIX-312 decision-domain
+                           newest-governing-version precedent) and must fall
+                           inside [version_start, version_end]. Terminal hot
+                           rows with a non-semver target (未规划版本/G9/G11)
+                           cannot prove cycle closure →
+                           task_version_unparseable (fail-closed).
+      4. 非当前工作集    — active refs (open status) and in-flight versions
+                           (outside the window) both retain the row hot.
+      5. 无显式保留标记  — the whole row is scanned for the
+                           _EVIDENCE_KEEP_MARKERS vocabulary →
+                           explicit_keep_marker.
+      6. 迁移后可定位    — the EVD id must match _EVD_ID_SHAPE_RE (the shared
+                           shape the archive index admits) → else
+                           unknown_evd_id_shape; migrated rows are preserved
+                           verbatim, so an admitted id stays locatable.
+                           Duplicate shape-valid ids inside one input are an
+                           ambiguous identity → duplicate_evd_id (fail-closed;
+                           never absorbed by a lenient regex, DEC-278 §3.2).
+
+    Referenced ids are typed into the five DEC-278 entity states (see
+    _EVIDENCE_REF_ENTITY_TYPES): task / requirement / other_entity / missing
+    / ambiguous — replacing the old single live_or_unresolvable_task_ref
+    bucket. Requirement-registry REQs (Q2=c) and registered cross-entity
+    families are descriptive context and do NOT gate; dual-registered REQs
+    and unverified task-shaped prefixes (FX-N outside
+    _VERIFIED_TASK_ID_ALIASES) classify "ambiguous" and gate the row shut.
 
     Args:
         content: the evidence-log.md text.
         task_versions: ``{task_id: version}`` mapping (this-run + archived
             + FIX-235 completed-hot, per the caller's semantics).
         version_start / version_end: the migration range.
+        context: optional prebuilt classification context (see
+            _build_classification_context). None → built here from the live
+            plan-tracker (single-source helper; missing file degrades to an
+            empty context).
 
     Returns one record per scanned EVD row, in scan order:
         {"id", "line_idx", "line", "migrate": bool, "version": str|None,
-         "reason": str, "detail": str}
+         "reason": str, "detail": str, "ref_types": {ref_id: entity_state}}
     Non-EVD lines are not candidates and produce no record. ``reason`` /
-    ``detail`` carry the same values the FIX-301 explain mechanism reports.
+    ``detail`` carry the same values the FIX-301 explain mechanism reports;
+    reasons: would_archive / no_task_family_ref / ref_version_out_of_range /
+    unknown_evd_id_shape / duplicate_evd_id / explicit_keep_marker /
+    missing_task_ref / active_task_ref / ambiguous_ref /
+    task_layout_anomaly / task_version_unparseable.
     """
+    if context is None:
+        context = _build_classification_context()
+    hot_tasks = context["hot_tasks"]
+    hot_anomalies = context["hot_anomalies"]
+    requirement_ids = context["requirement_ids"]
+
+    # FEAT-074 (condition 6): duplicate shape-valid EVD ids inside one input
+    # are an ambiguous row identity — every copy fails closed (never split
+    # across hot/cold by a lucky first-come-first-migrate).
+    id_line_counts = {}
+    for line_idx, line in enumerate(content.split("\n")):
+        stripped = line.strip()
+        if not stripped.startswith("| EVD-"):
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        evd_id = parts[1] if len(parts) > 1 else ""
+        if evd_id and _EVD_ID_SHAPE_RE.match(evd_id):
+            id_line_counts.setdefault(evd_id, []).append(line_idx)
+
+    def _ref_verdict(tid):
+        """Type ONE referenced id and judge it against the task conditions.
+
+        Returns (entity_state, verdict, payload):
+          entity_state — one of the five _EVIDENCE_REF_ENTITY_TYPES states.
+          verdict      — "pass" (task resolved; payload = version),
+                         "nongate" (descriptive context; payload = None),
+                         "fail" (payload = failure substate:
+                         active / missing / layout_anomaly /
+                         version_unparseable / ambiguous_*).
+        """
+        alias_target = _VERIFIED_TASK_ID_ALIASES.get(tid)
+        gate_id = None
+        prefix = tid.split("-", 1)[0]
+        if prefix == "REQ":
+            # FEAT-074 item 4 (Q2=c): the entity-registration source decides
+            # a REQ reference's semantics BEFORE the task-family allow-list
+            # (REQ- is in _TASK_FAMILY_PREFIXES for genuine task-side REQs).
+            task_side = tid in task_versions or tid in hot_tasks
+            if tid in requirement_ids and task_side:
+                return "ambiguous", "fail", "ambiguous_dual_registration"
+            if tid in requirement_ids:
+                return "requirement", "nongate", None
+            if task_side:
+                gate_id = tid  # a genuine task-side REQ id
+            else:
+                return "missing", "fail", "missing"
+        elif alias_target is not None:
+            # FEAT-074 item 3: per-ID verified alias (FX→archived task);
+            # wildcard family admission is forbidden, unlisted ids fall
+            # through to the unverified-family branch below.
+            gate_id = alias_target
+        elif _is_task_family_id(tid):
+            gate_id = tid
+        else:
+            if prefix in _OTHER_ENTITY_REF_PREFIXES:
+                return "other_entity", "nongate", None
+            # Task-shaped but not a known family and not per-ID verified
+            # (e.g. an unlisted FX-N): identity cannot be confirmed —
+            # DEC-278: keep unresolved, never wildcard-resolve.
+            return "ambiguous", "fail", "ambiguous_unverified_family"
+        # task-side gate on gate_id (alias-resolved where applicable)
+        if gate_id in task_versions:
+            return "task", "pass", task_versions[gate_id]
+        if gate_id in hot_anomalies:
+            # Locatable hot row whose layout is anomalous — columns cannot
+            # be trusted, so lifecycle closure can never be proven from it.
+            return "task", "fail", "layout_anomaly"
+        if gate_id in hot_tasks:
+            info = hot_tasks[gate_id]
+            if not _task_status_is_archivable(info["status"]):
+                return "task", "fail", "active"
+            if not _version_to_tuple(info["version"]):
+                # Terminal but non-semver target (未规划版本 / G9/G11):
+                # owning release cycle cannot be proven closed.
+                return "task", "fail", "version_unparseable"
+            # Terminal + parseable but invisible to the sanctioned completed-
+            # hot mapping — the version cannot be pinned through the mapping
+            # this gate trusts; fail closed rather than re-derive it.
+            return "task", "fail", "version_unparseable"
+        return "missing", "fail", "missing"
+
+    # Failure substates, most severe first (the row reason reports the most
+    # severe blocking cause; detail lists every blocking id).
+    _SUBSTATE_ORDER = (
+        ("ambiguous", "ambiguous_ref"),
+        ("missing", "missing_task_ref"),
+        ("layout_anomaly", "task_layout_anomaly"),
+        ("active", "active_task_ref"),
+        ("version_unparseable", "task_version_unparseable"),
+    )
+
     records = []
     for line_idx, line in enumerate(content.split("\n")):
         stripped = line.strip()
@@ -1399,50 +1735,75 @@ def _classify_evidence_rows(content, task_versions, version_start, version_end):
             records.append({"id": evd_id or "?", "line_idx": line_idx,
                             "line": line, "migrate": False, "version": None,
                             "reason": "unknown_evd_id_shape",
-                            "detail": "row ID shape not recognized"})
+                            "detail": "row ID shape not recognized",
+                            "ref_types": {}})
             continue
         # parts[2] = 关联 Task column; may be comma-separated multiple IDs that
-        # mix task-family (FIX-/REL-/...) and cross-entity (RISK-/DEC-/...) refs.
+        # mix task-family (FIX-/REL-/FEAT-/...), requirement-registry REQs,
+        # cross-entity (RISK-/DEC-/DOC-/...) and alias-verified (FX-...) refs.
         raw_task_ids = parts[2] if len(parts) > 2 else ""
         ev_task_ids = set()
         for tid in raw_task_ids.split(","):
             tid = tid.strip()
             if tid and re.match(r"[A-Z]+-\d+", tid):
                 ev_task_ids.add(tid)
-        # FIX-171 (AUDIT-126): only task-family IDs gate migration; cross-entity
-        # refs are descriptive context and cannot resolve a version.
-        task_family_ids = {tid for tid in ev_task_ids if _is_task_family_id(tid)}
-        if not task_family_ids:
+
+        ref_types = {}
+        verdicts = {}
+        for tid in sorted(ev_task_ids):
+            entity_state, verdict, payload = _ref_verdict(tid)
+            ref_types[tid] = entity_state
+            verdicts[tid] = (verdict, payload)
+
+        def _record(reason, detail, migrate=False, version=None):
             records.append({"id": evd_id, "line_idx": line_idx, "line": line,
-                            "migrate": False, "version": None,
-                            "reason": "no_task_family_ref",
-                            "detail": f"refs: {raw_task_ids[:40] or '(none)'}"})
+                            "migrate": migrate, "version": version,
+                            "reason": reason, "detail": detail,
+                            "ref_types": ref_types})
+
+        # FEAT-074 condition 6 (row identity): duplicate shape-valid id.
+        if len(id_line_counts.get(evd_id, ())) > 1:
+            _record("duplicate_evd_id",
+                    f"id appears {len(id_line_counts[evd_id])} times in input")
             continue
-        if not task_family_ids.issubset(task_versions):
-            missing = sorted(t for t in task_family_ids
-                             if t not in task_versions)
-            records.append({"id": evd_id, "line_idx": line_idx, "line": line,
-                            "migrate": False, "version": None,
-                            "reason": "live_or_unresolvable_task_ref",
-                            "detail": "live/unresolved: "
-                                      + ",".join(missing[:5])})
+        # FEAT-074 condition 5 (explicit keep marker) — whole-row scan.
+        if any(marker in line for marker in _EVIDENCE_KEEP_MARKERS):
+            _record("explicit_keep_marker",
+                    "row carries an explicit keep marker (retained hot)")
             continue
-        ver = None
-        for tid in task_family_ids:
-            v = task_versions.get(tid)
-            if v and _version_in_range(v, version_start, version_end):
-                ver = v
-                break
-        if ver:
-            records.append({"id": evd_id, "line_idx": line_idx, "line": line,
-                            "migrate": True, "version": ver,
-                            "reason": "would_archive", "detail": f"v{ver}"})
+
+        gating_fails = {tid: payload for tid, (verdict, payload)
+                        in verdicts.items() if verdict == "fail"}
+        if not ev_task_ids or all(v == "nongate"
+                                  for v, _p in verdicts.values()):
+            # No gating task ref at all (FIX-171 semantic preserved:
+            # descriptive context cannot resolve a version; Q6 date-window
+            # handling belongs to the successor ticket, not here).
+            _record("no_task_family_ref",
+                    f"refs: {raw_task_ids[:40] or '(none)'}")
+            continue
+        if gating_fails:
+            for substate, reason in _SUBSTATE_ORDER:
+                ids = sorted(t for t, p in gating_fails.items()
+                             if p == substate or (
+                                 substate == "ambiguous"
+                                 and str(p).startswith("ambiguous")))
+                if ids:
+                    _record(reason, "blocking refs: " + ",".join(ids[:5]))
+                    break
+            continue
+        # FEAT-074 condition 3: owning cycle = MAX resolved ref version
+        # (最晚引用封闭才算封闭), must fall inside the retention window.
+        resolved_versions = [payload for _t, (verdict, payload)
+                             in verdicts.items() if verdict == "pass"]
+        owning = max(resolved_versions, key=_version_to_tuple)
+        if _version_in_range(owning, version_start, version_end):
+            _record("would_archive", f"v{owning} (max ref version)",
+                    migrate=True, version=owning)
         else:
-            records.append({"id": evd_id, "line_idx": line_idx, "line": line,
-                            "migrate": False, "version": None,
-                            "reason": "ref_version_out_of_range",
-                            "detail": "refs resolve out of range: "
-                                      f"{raw_task_ids[:40]}"})
+            _record("ref_version_out_of_range",
+                    f"owning cycle v{owning} outside "
+                    f"[{version_start}, {version_end}]")
     return records
 
 
@@ -1485,9 +1846,13 @@ def _migrate_evidence(version_start, version_end, task_versions, dry_run=False,
     migrated.
 
     FIX-301: when ``explain_out`` is a list, every scanned EVD row appends
-    exactly one {"id", "reason", "detail"} record. Reasons: would_archive /
-    no_task_family_ref / live_or_unresolvable_task_ref /
-    ref_version_out_of_range / unknown_evd_id_shape.
+    exactly one {"id", "reason", "detail"} record. Reasons (FEAT-074 entity-
+    aware set): would_archive / no_task_family_ref /
+    ref_version_out_of_range / unknown_evd_id_shape / duplicate_evd_id /
+    explicit_keep_marker / missing_task_ref / active_task_ref /
+    ambiguous_ref / task_layout_anomaly / task_version_unparseable — the old
+    single live_or_unresolvable_task_ref bucket is replaced by the typed
+    five-state classification (DEC-278 unit one).
     """
     elog = _evidence_log()
     if not elog.exists():
@@ -1761,6 +2126,28 @@ def _evidence_task_versions_standalone():
     return mapping
 
 
+def _evidence_classification_context_digest(task_versions, context):
+    """FEAT-074: pin EVERY classification input of a resumable evidence
+    migration — the task-version mapping AND the entity-registration context
+    (hot-table states, layout anomalies, requirement-registry ids) the
+    five-state classifier consumes. A resume whose world (plan-tracker) no
+    longer matches the pinned context refuses loudly instead of silently
+    re-classifying against different entity registrations."""
+    payload = {
+        "task_versions": sorted((str(k), str(v))
+                                for k, v in (task_versions or {}).items()),
+        "hot_tasks": sorted(
+            (str(k), str(v.get("status", "")), str(v.get("version", "")))
+            for k, v in (context or {}).get("hot_tasks", {}).items()),
+        "hot_anomalies": sorted(
+            (str(k), int(p))
+            for k, p in (context or {}).get("hot_anomalies", {}).items()),
+        "requirement_ids": sorted(
+            (context or {}).get("requirement_ids", ())),
+    }
+    return _sha256_text(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+
+
 def migrate_evidence_resumable(version_start, version_end, *,
                                batch_size=BIG_TABLE_MIGRATION_BATCH_SIZE,
                                dry_run=False, task_versions=None):
@@ -1821,6 +2208,9 @@ def migrate_evidence_resumable(version_start, version_end, *,
         evidence_task_versions = _evidence_task_versions_standalone()
     else:
         evidence_task_versions = dict(task_versions)
+    # FEAT-074: the entity-registration context is built ONCE and pinned by
+    # digest — the plan and every resume judge the same world.
+    classification_context = _build_classification_context()
 
     journal_path = _migration_journal_path("evidence", version_start,
                                            version_end)
@@ -1897,9 +2287,8 @@ def migrate_evidence_resumable(version_start, version_end, *,
                         "continued: resolve the divergence, then delete the "
                         "migration state dir to restart"),
                 })
-            context_digest = _sha256_text(json.dumps(
-                sorted(evidence_task_versions.items()),
-                ensure_ascii=False, sort_keys=True))
+            context_digest = _evidence_classification_context_digest(
+                evidence_task_versions, classification_context)
             if context_digest != journal.get("context_digest"):
                 raise BigTableMigrationError({
                     "code": "migration_context_changed",
@@ -1950,7 +2339,8 @@ def migrate_evidence_resumable(version_start, version_end, *,
     else:
         # ── fresh plan ──
         records = _classify_evidence_rows(content, evidence_task_versions,
-                                          version_start, version_end)
+                                          version_start, version_end,
+                                          context=classification_context)
         candidates = [r for r in records if r["migrate"]]
         batches_total = (len(candidates) + batch_size - 1) // batch_size
         if dry_run:
@@ -1974,9 +2364,8 @@ def migrate_evidence_resumable(version_start, version_end, *,
             "category": "evidence",
             "version_range": [version_start, version_end],
             "input_digest": input_digest,
-            "context_digest": _sha256_text(json.dumps(
-                sorted(evidence_task_versions.items()),
-                ensure_ascii=False, sort_keys=True)),
+            "context_digest": _evidence_classification_context_digest(
+                evidence_task_versions, classification_context),
             "batch_size": batch_size,
             "batches_total": batches_total,
             "candidates": [{"id": c["id"], "line_idx": c["line_idx"],

@@ -2,7 +2,7 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
-## [0.92.0] - <待回填 taggerdate>
+## [0.92.0] - 2026-09-29（taggerdate 2026-09-29 01:54:45 +0800 权威〔FIX-349〕；tag v0.92.0 object peel=transition 041c0c4；ledger NATIVE released 本地+remote 双 PASS；event integrity sha256:dac5fe13）
 <!-- 发布日期占位（FIX-349 口径）：发布日期零预填；M-7 annotated tag `v0.92.0` 落地后以 taggerdate 权威回填本行日期单元格。 -->
 
 ### 0.92.0 - **预算优化、验证稳定性与证据分层结构性解锁（Injection Budget Relief, Verification Stability & Evidence-Layer Structural Unlock）**：strict 注入预算优化、发布与运行时验证稳定性修复，证据分层结构性解锁与本轮明确遗留项收尾（FEAT-073/FIX-400/FIX-401/FEAT-074/FEAT-075/FIX-402 载荷 / DEC-269~285 / EVD-1216~1236）
@@ -72,7 +72,7 @@
 - **B-7（`f06a2bf`+`484dd77`——DEC-260 分离提交纪律）** archguard R1 锚**两次 sanctioned regen 26385→26413→26478**——载荷增长受控入锚（fatal gate 全绿 @26478；R6 advisory 205 模块 Δ0；regen deterministic）；回滚=锚随对应功能票 revert 对称回退（分离提交同序）。
 - **回滚总说明**：完整回滚次序（先数据后 git：迁移面→B2→版本面）见 `docs/release/rollback-plan-0.92.0.md` §回滚三序；本版**无破坏性变更、无机制激活**（RB-2/B-12/B-13 出厂姿态不变，翻转留独立授权票）；legacy 通道不覆盖本版行为变更面（`GOVERNANCE_LEGACY_BEHAVIOR` 只回退性能行为——FEAT-040）。
 
-**发布态注记（M-5 改写时点 2026-09-29 +0800；承接 M-1 准备态注记）**：发布日期仍不预填——tag 后 M-8 按 FIX-349 口径以 taggerdate 权威回填本段标题；发布终账尾账（tag/remote 双端核对/发布验证终值）随发布链 M-6~M-8 补记。以下为发布链 M-2~M-5 补记面（RL-F1 全项）。
+**发布态注记（M-5 改写时点 2026-09-29 +0800；承接 M-1 准备态注记）**：发布日期已按 FIX-349 口径以 taggerdate 权威回填（2026-09-29 01:54:45 +0800，tag object peel=041c0c4）；M-6 ledger 双 PASS/M-7 tag+push 已闭环（EVD-1238）；M-8 released 验证与零迁移验证（EVD would=178=EXC-002 基线不变）见 EVD-1239。以下为发布链 M-2~M-5 补记面（RL-F1 全项）。
 
 **M-2 整改叙事（发布链 M-2/M-2R 补记——EVD-1233/1234/1235）**：M-2 首跑四失败面 → **DEC-283 受控回退 6 归期行**（tasks would_archive 8→2；面 A 两残留〔REL-086 两格拆分+FEAT-047 解析器修复使预存版本行首次可解析〕经裁决=正确修复暴露的历史归档债务不回退；B2=唯一语义阻断→单条精确豁免一次性授权）→ **DEC-284 扩展授权有界迁移**（2 任务 REL-086/FEAT-047+18 EVD——4 随行+14 历史义务补完成〔14 任务已归档，EVD 因旧 FEAT 前缀解析缺陷滞留热表=0.86~0.88 发布被中断的归档随行义务〕；EVD-1233 验收 5/6：18/18 精确归档零残留热表/守恒〔evidence 2939→2921 行、plan-tracker 524→522 行〕/幂等复跑 0 动作/journal 逐 ID 可溯〔区分 4 随行 vs 14 补完成〕/隔离副本回滚演练可达基线；第 6 项=Check 27 证据面 178 行非本授权对象）→ **EXC-002 限域例外**（DEC-285——Check 27 剩余 178 行历史证据面=160 已归档任务债+4 FEAT-001 双在+14 裸 ID；纸质承载体〔机注不可达——Check 27 无例外接线〕；增长容忍 0；期限 min(0.93 准入, 2026-10-12)；基线附件 docs/governance/rel-095-exc002-baseline-178-20260928.md）→ **B2 单条精确豁免**（LRC-EXEMPT-FIX401R0-79-1——review-FIX-401-R0.md F-3 元文本误判；九键实测+双锚 re-pin digest 4f8a6cc8→d47f5d16+正负因果测试；EVD-1234 六项验收 6/6；commit `df26f7e`）→ **M-2R 复测有条件收口**（EVD-1235@`df26f7e`：verify/unit/e2e/loop 原生全绿——loop PASS semantic=PASS·identity=PASS·candidates 1096/豁免 5 条全披露；非原生面=28s EXC-001 机注+archive EXC-002 纸质承接+遗留格式面 EVD-702/1194/1198〔0.91 既有披露非本版引入〕——「有条件收口/例外接受（非原生全绿）」原文如实登记）。
 

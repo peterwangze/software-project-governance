@@ -111,10 +111,14 @@ REQUIRED_POLICY_SHA256 = "3e22d0bd4c2df1d2d7bfafe88210447b94481d339d1494974aa0f3
 # (adding, removing or rewording an entry) changes the digest and MUST go
 # through product-code review — that is what makes the exemption face
 # reviewable instead of silently widenable.
-REQUIRED_EXEMPTIONS_SHA256 = "4f8a6cc8bb8b33161d99584a6923c52cca2241da8ca08c2ed28f2826c7a63f52"
+# REL-095 (DEC-283 question 2, one-time): fifth entry added for the FIX-401
+# R0 report's F-3 metatext (reviewer prose quoting a fixture snapshot,
+# misread as a runtime_activation claim) — same re-pin discipline: digest
+# and id anchors below moved together under product-code review.
+REQUIRED_EXEMPTIONS_SHA256 = "d47f5d16c9dc0e60f38c35ed15f3429ffec6d5025f55d1963465cdd912b9a41d"
 REQUIRED_EXEMPTION_IDS = frozenset({
     "LRC-EXEMPT-FIX300R0-71-1", "LRC-EXEMPT-FIX300R0-71-4", "LRC-EXEMPT-FIX300R0-72-1",
-    "LRC-EXEMPT-CHECKLIST0810-241-1",
+    "LRC-EXEMPT-CHECKLIST0810-241-1", "LRC-EXEMPT-FIX401R0-79-1",
 })
 REQUIRED_EXEMPTION_KEYS = frozenset({
     "exemption_id", "finding_code", "root_owner", "normalized_path", "locator",

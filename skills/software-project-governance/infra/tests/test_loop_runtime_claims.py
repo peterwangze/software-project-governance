@@ -1894,7 +1894,7 @@ class FIX320ExemptionLedgerTests(unittest.TestCase):
         self.assertEqual([], report.exemptions_applied)
 
     def test_real_repository_discloses_exactly_the_code_anchored_ledger(self):
-        """Live-tree integration: all four anchored exemptions apply on both
+        """Live-tree integration: all five anchored exemptions apply on both
         scan modes and no classify-stage finding survives. The top-level
         verdict is deliberately not asserted here: a concurrent writer inside
         the scanned tree trips the existing INVENTORY_* re-check protections
@@ -1914,6 +1914,101 @@ class FIX320ExemptionLedgerTests(unittest.TestCase):
                     [], [f for f in report.findings if f.code.startswith("EXEMPTIONS_")])
                 payload = report.as_dict()
                 self.assertEqual(payload["exemptions_count"], len(payload["exemptions_applied"]))
+
+
+class REL095Fix401F3ExemptionTests(unittest.TestCase):
+    """REL-095-B2 (DEC-283 question 2): the single F-3 metatext exemption.
+
+    docs/reviews/review-FIX-401-R0.md's F-3 row is reviewer meta-text quoting
+    a fixture snapshot ("resolved: true" pending R0/commit); the classifier
+    misreads it as UNSUPPORTED_AFFIRMATIVE / LRC-ACTIVE-RUNTIME at
+    accounting:79:1. DEC-283 question 2 authorizes exactly one ledger entry
+    for that object — no widening to the report, the FIX or the directory.
+    These tests pin the causal face against the committed report bytes in an
+    isolated fixture tree: the anchored ledger exempts that finding and the
+    scan PASSes (positive), and removing only this entry while re-anchoring
+    digest and id set consistently resurrects the finding (negative
+    causality — the entry, not a side effect, is what clears the gate).
+    """
+
+    EXEMPTION_ID = "LRC-EXEMPT-FIX401R0-79-1"
+    REPORT_RELATIVE = Path("docs/reviews/review-FIX-401-R0.md")
+    LEDGER_RELATIVE = Path("skills/software-project-governance/core/loop-runtime-claim-exemptions.json")
+
+    def _fixture_with_real_report(self):
+        helper = LoopRuntimeClaimTests("test_clean_complete_inventory_passes")
+        self.addCleanup(helper.doCleanups)
+        stack, product, plugin, host, _, _ = helper._roots()
+        self.addCleanup(stack.cleanup)
+        destination = product / self.REPORT_RELATIVE
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        # Byte-exact copy of the committed report (committed history: the
+        # real object is never rewritten, only read).
+        destination.write_bytes((_INFRA.parents[2] / self.REPORT_RELATIVE).read_bytes())
+        return helper, product, plugin, host
+
+    def test_anchored_ledger_exempts_real_report_and_passes(self):
+        helper, product, plugin, host = self._fixture_with_real_report()
+        baseline = helper._scan(product, plugin, host)
+        self.assertEqual("BLOCKED", baseline.verdict)
+        self.assertEqual(
+            1, len([f for f in baseline.findings if f.stage == "classify"]))
+        finding = next(f for f in baseline.findings if f.stage == "classify")
+        self.assertEqual("UNSUPPORTED_AFFIRMATIVE", finding.code)
+        self.assertEqual("docs/reviews/review-FIX-401-R0.md", finding.normalized_path)
+        self.assertEqual("accounting:79:1", finding.locator)
+        self.assertEqual("LRC-ACTIVE-RUNTIME", finding.claim_id)
+        # The real anchored ledger — its digest and id set are pinned in code,
+        # so no constant patching here: anchors and ledger must agree as-is.
+        (plugin / "core/loop-runtime-claim-exemptions.json").write_bytes(
+            (_INFRA.parents[2] / self.LEDGER_RELATIVE).read_bytes())
+        report = helper._scan(product, plugin, host)
+        self.assertEqual("PASS", report.verdict, report.findings)
+        self.assertEqual([], [f for f in report.findings if f.stage == "classify"])
+        self.assertEqual(
+            [], [f for f in report.findings if f.code.startswith("EXEMPTIONS_")])
+        self.assertEqual(1, len(report.exemptions_applied))
+        applied = report.exemptions_applied[0]
+        self.assertEqual(self.EXEMPTION_ID, applied["exemption_id"])
+        self.assertEqual("UNSUPPORTED_AFFIRMATIVE", applied["finding_code"])
+        self.assertEqual("product_root", applied["root_owner"])
+        self.assertEqual("docs/reviews/review-FIX-401-R0.md", applied["normalized_path"])
+        self.assertEqual("accounting:79:1", applied["locator"])
+        self.assertEqual("LRC-ACTIVE-RUNTIME", applied["claim_id"])
+        payload = report.as_dict()
+        self.assertEqual(1, payload["exemptions_count"])
+
+    def test_removing_entry_with_consistent_anchors_resurrects_finding(self):
+        helper, product, plugin, host = self._fixture_with_real_report()
+        real = json.loads(
+            (_INFRA.parents[2] / self.LEDGER_RELATIVE).read_text(encoding="utf-8"))
+        stripped = {
+            "schema_version": real["schema_version"],
+            "exemptions": [entry for entry in real["exemptions"]
+                           if entry["exemption_id"] != self.EXEMPTION_ID],
+        }
+        ids = {entry["exemption_id"] for entry in stripped["exemptions"]}
+        # Consistent re-anchor (no drift findings of its own): the ledger
+        # without this entry is a legal shape — the B2 finding must simply
+        # survive it, proving the exemption is what removed the finding.
+        for attr, value in (
+            ("REQUIRED_EXEMPTIONS_SHA256", lrc._exemptions_digest(stripped)),
+            ("REQUIRED_EXEMPTION_IDS", frozenset(ids)),
+        ):
+            patcher = patch.object(lrc, attr, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        (plugin / "core/loop-runtime-claim-exemptions.json").write_text(
+            json.dumps(stripped, ensure_ascii=False), encoding="utf-8")
+        report = helper._scan(product, plugin, host)
+        self.assertEqual(
+            [], [f for f in report.findings if f.code.startswith("EXEMPTIONS_")])
+        finding = next(f for f in report.findings if f.code == "UNSUPPORTED_AFFIRMATIVE")
+        self.assertEqual("docs/reviews/review-FIX-401-R0.md", finding.normalized_path)
+        self.assertEqual("accounting:79:1", finding.locator)
+        self.assertEqual("LRC-ACTIVE-RUNTIME", finding.claim_id)
+        self.assertEqual([], report.exemptions_applied)
+        self.assertEqual("BLOCKED", report.verdict)
 
 
 class FIX369SemanticBudgetRecalibrationTests(unittest.TestCase):

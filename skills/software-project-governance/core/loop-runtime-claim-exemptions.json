@@ -44,6 +44,17 @@
       "reason": "已发布 0.81.0 checklist 对 release-ledger 复跑结果的记录性文本（state/trust_level/candidate_commit 事实行），多主语肯定句被语义扫描器判为 AMBIGUOUS_SUBJECT_RELATION；与历史审查报告条目同属已发布产物记录性文本误判族（Coordinator 裁决 2026-09-16 纳入豁免面第 4 条）。",
       "source": "docs/release/release-checklist-0.81.0.md Gate 13 复跑记录（0.81.0 发布产物，candidate_commit a89341e）；EVD-1041 将其归入 FIX-320 族既有基线；FIX-320 处置 (b)（Coordinator 裁决 2026-09-16）。",
       "expected_duration": "该已发布 checklist 存在于扫描面期间持续有效（已发布文档不可改写）；若语义扫描器分类精度后续修复该多主语记录形态误判，应删除本条目并同步 digest 锚。"
+    },
+    {
+      "exemption_id": "LRC-EXEMPT-FIX401R0-79-1",
+      "finding_code": "UNSUPPORTED_AFFIRMATIVE",
+      "root_owner": "product_root",
+      "normalized_path": "docs/reviews/review-FIX-401-R0.md",
+      "locator": "accounting:79:1",
+      "claim_id": "LRC-ACTIVE-RUNTIME",
+      "reason": "元文本误判：审查报告 F-3 行自身（Reviewer 对 fixture 快照措辞的元文本描述——resolved: true 为被引述的 env_failure_classification.json 字段快照及其时序注记，非报告对 loop runtime 能力的当前活跃声明）被语义分类器误读为 runtime_activation 断言（untenable 假阻）；与 FIX-300 族记录性文本误判同机理。报告为已提交历史（禁改写），修 fixture 无效（扫描对象=报告静态文本）。DEC-283 题 2 一次性授权，仅本 F-3 对象、禁扩展至整报告/整 FIX/目录。",
+      "source": "docs/reviews/review-FIX-401-R0.md Findings F-3 行——FIX-401 审查报告（APPROVED_WITH_NOTES 终态 unresolved_blockers=0，随 commit 136d65e 引入）；M-2 实测唯一未豁免语义 finding（UNSUPPORTED_AFFIRMATIVE@accounting:79:1，claim_id=LRC-ACTIVE-RUNTIME 实测非猜造）；DEC-283 题 2 单条精确豁免授权（2026-09-28，REL-095-B2 承载）。",
+      "expected_duration": "非自动续期。0.93 复评撤销条件（DEC-283）：新引文识别/豁免机制能正确处理该对象（该 finding 不再产生）且移除本条目后 check-loop-runtime-claims 仍 PASS 时，删除本条目并同步 REQUIRED_EXEMPTIONS_SHA256 与 REQUIRED_EXEMPTION_IDS 锚（走产品代码审查）；在此之前本条目随该已提交历史报告存在于扫描面期间持续有效。"
     }
   ]
 }

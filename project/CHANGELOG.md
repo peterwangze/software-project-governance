@@ -2,6 +2,50 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.92.0] - 未发布（准备态）
+
+### 0.92.0 - **预算优化、验证稳定性与证据分层结构性解锁（Injection Budget Relief, Verification Stability & Evidence-Layer Structural Unlock）**：strict 注入预算优化、发布与运行时验证稳定性修复，证据分层结构性解锁与本轮明确遗留项收尾（FEAT-073/FIX-400/FIX-401/FEAT-074/FEAT-075/FIX-402 载荷 / DEC-269~272/278~282 / EVD-1216~1229）
+
+0.92.0 按 DEC-282 批准的版本口径交付：strict 注入预算优化、发布与运行时验证稳定性修复，证据分层结构性解锁与本轮明确遗留项收尾。结构性解锁已完成；容量问题未技术消除。本轮不执行 EVD 物理迁移，按限期例外控制，后续迁移以读取契约闭合为前提（DEC-282(7) no-overclaim 附加句）。
+
+**载荷六票**（DEC-282(1) M-0 冻结边界内，功能载荷锚 `dc45e24`；全部 committed，审查链全部闭合）：
+
+- **FEAT-073（commit `e65b317`）**：strict 注入预算 A+B 组合实施——persona 单源化+薄指针压缩，strict 余量 9→391 tok（三档实测 5609/5337/3859 全 PASS），30/30 契约锚保留；R0/R1 双 AWN/0。
+- **FIX-400（commit `a7bcd5f`+`f06a2bf`）**：release-gate 墙钟预算 180→2333s 再校准（DEC-262 先例——release 执行门 unittest 子进程确定性超时消解）+ archguard R1 anchor 再锚定 26385→26413；R0 AWN/0。
+- **FIX-401（commit `136d65e`）**：loop_runtime 计时断言去环境化（墙钟→进程 CPU）——并行负载假红消除，RISK-048 收窄；R0 AWN/0。
+- **FEAT-074（commit `c90768f`）**：证据行实体解析与分类修复（DEC-278 单元一）——五态实体感知分类替代 live_or_unresolvable 单桶，Check 28s 结构性解锁；R0 NEEDS_CHANGE→R1 AWN/0 闭合。
+- **FEAT-075（commit `16a5157`+`484dd77`）**：四行族只读 dry-run（scan-families）+ 发布聚合层例外标注（DEC-278 单元二）+ archguard R1 anchor 再锚定 26413→26478；R0 NEEDS_CHANGE→R1 AWN/0。
+- **FIX-402（commit `dc45e24`）**：确定性数据校正与存量清偿台账（DEC-278 单元三）——160 唯一 ID 八类逐 ID 归因终态（2 可修/155 登记/3 留热）；R0/R1 NEEDS_CHANGE→R2 AWN/0。
+
+**已知边界披露（Check 28s 例外 EXC-001 条款摘要，DEC-282(4)）**：
+
+- **基线与上限**：基线 1,786,197B@post-dc45e24（scan-families 锚 e3972847）；growth_control=绝对上限 2,036,197B（基线+250K，不滚动重置，非新阈值）。
+- **有效期**：expires 2026-10-12（14 自然日）不自动续期；0.93.0 准入前必须先失效/撤销再重评，禁继承放行。
+- **义务**：每周冷热/总量/积压指标；11 行留热记录口径=「已完成本轮复验，因读取兼容门未闭合而留热，尚未物理迁移」，禁记「自然清偿完成」。
+- **后续迁移前提**：0.93 重新授权最低五条件（消费者矩阵/查询等价证明/统一入口或过渡适配/清单绑定输入锚漂移即停/回读验收+恢复演练）；91 物理未归档 ID 转 0.93 候选池。
+- **版本面再生纪律**：本版版本面经 `release-projection --write` 确定性再生（非手改——M-1：权威源 bump → written=17 → 幂等复跑 written=0）。
+
+**决策链**：DEC-269（0.92 批启动）/ DEC-271/272（FEAT-073 路线裁决与完成入账）/ DEC-278（28s 结构性解锁三单元）/ DEC-279~281（三单元完成入账）/ DEC-282（0.92.0 M-0 条件冻结）；**证据**：EVD-1216~1229。
+
+### Added
+
+- **scan-families 只读 dry-run 与发布聚合层例外标注机制（FEAT-075）**：四行族只读入口（分类核单源抽取零漂移——EVD 面与 FEAT-074 差异档字节级一致）+ 例外标注；例外登记机制就绪（EXC-001 首例 live 验证）。
+- **存量清偿台账（FIX-402）**：160 唯一 ID 八类逐 ID 归因台账 + active 12 行复核（11 不可信 open_markers 假阳性/1 可信）。
+
+### Changed
+
+- **全仓版本面 0.91.0→0.92.0（REL-095 M-1）**：SKILL.md frontmatter 权威源先 bump → `release-projection --write` 单次写入 17 面一次收敛 → 幂等复跑 written=0；双根 entry sync（repo root + e2e fixture 的 AGENTS.md/CLAUDE.md bootstrap 段再生）。
+- **strict 注入预算 persona 单源化+薄指针压缩（FEAT-073）**：strict 余量 9→391 tok（三档实测 5609/5337/3859 全 PASS）；字节钉 secondary-thin 2859→2766（deliberate rebase，FEAT-040/041 先例纪律）。
+
+### Fixed
+
+- **release-gate 墙钟预算再校准（FIX-400）**：`_RELEASE_GATE_TIMEOUT_DEFAULT` 180→2333s（ceil(1554.78×1.5)，DEC-262(1) 先例）——check-release unittest 子进程确定性超时消解，发布链 M-2 门禁信号恢复可信。
+- **loop_runtime 计时断言环境敏感假红（FIX-401）**：perf_counter→process_time（墙钟→进程 CPU）——环境噪声从测量中删除而非容纳。
+- **证据行实体解析与分类（FEAT-074）**：五态实体感知分类（task/requirement/other_entity/missing/ambiguous）替代单桶——结构性错误状态（FEAT 90 行永不可迁移/REQ 40 ID 误门控/FX 历史映射缺失）消除。
+- **确定性数据校正（FIX-402）**：2 可修项落修 + 155 登记类逐 ID 处置留痕；11 行 would_archive 留热（读取兼容门未闭合，口径见 EXC-001）。
+
+**准备态注记**：本段为 M-1 候选落库时点（2026-09-28 +0800）的**准备态**——发布日期不预填（发布收口按 FIX-349 口径以 taggerdate 权威落字）；发布终账、Commit 区间与发布验证结论随发布链 M-2+ 补记。
+
 ## [0.91.0] - 2026-09-28
 <!-- 发布日期 = taggerdate 权威回填：v0.91.0 taggerdate 2026-09-28 05:24:03 +0800（FIX-349 口径，REL-094 M-8 批回填）。 -->
 

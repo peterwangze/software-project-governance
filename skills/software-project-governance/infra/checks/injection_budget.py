@@ -210,6 +210,49 @@ TOOL_RETURN_BUDGET_CONSTANT = "MAX_JSON_BYTES"
 TOOL_RETURN_BUDGET_ENFORCER = "_enforce_projection_budget"
 TOOL_RETURN_BUDGET_EXPECTED = 8192
 
+#: FEAT-079 / DEC-290(6) / DEC-291: ADR-021 contract-clause tiered budget —
+#: the freeze line as a machine check. The ADR-021 M1/M2 behavior-contract
+#: clauses ship into the resident surfaces as compressed lines; these
+#: tiers price those clauses independently of the 6000-token resident
+#: ceiling so text smuggled into the clause lines (BC-1 rebound) fails on
+#: its OWN line instead of hiding under the remaining headroom.
+#: Calibration (DEC-291 budget erratum — supersedes the ADR-021 §2.1/§3.1
+#: estimates 160/320, which under-counted the calibrated CJK pricing of
+#: the frozen clause texts): B1a's measured floor across the four resident
+#: surfaces is ~349 tok combined, so the lines are M1 ≤ 180 and M1+M2 ≤
+#: 370. B1a may re-tune ONLY these constants after its per-surface
+#: measured breakdown — never the logic.
+#: Activation-gated like the engine's staged anchor registry (DEC-290(4)
+#: commit order — B1a text first): before the B1a text lands both clauses
+#: are inactive, disclosed in ``notes``, never a silent skip.
+CONTRACT_M1_BUDGET_TOKENS = 180
+CONTRACT_COMBINED_BUDGET_TOKENS = 370
+CONTRACT_CLAUSE_TIERS = (
+    {
+        "key": "m1-demand-source",
+        "anchor": "推荐必标需求源",
+        "budget_tokens": CONTRACT_M1_BUDGET_TOKENS,
+        "label": "M1 推荐必标需求源 (ADR-021 §2.1; DEC-291)",
+    },
+    {
+        "key": "m2-discovery-closure",
+        "anchor": "发现即闭环",
+        "budget_tokens": None,  # no own line — shares the combined 370
+        "label": "M2 发现即闭环 (ADR-021 §3.1; DEC-291)",
+    },
+)
+#: Stage id the activation gate tracks — mirrors the engine's staged
+#: anchor registry stage (keep in sync; FEAT-079 notes).
+CONTRACT_TIERS_STAGE = "ADR-021-B1a"
+CONTRACT_TIERS_INACTIVE_NOTE = (
+    "ADR-021-B1a contract clauses not injected yet — clause tier budget "
+    "inactive (activation-gated; DEC-290(4) commit order: B1a text lands "
+    "first); disclosed here so the gate can never silently disappear")
+CONTRACT_TIERS_PARTIAL_NOTE = (
+    "ADR-021 clause tiers partially active ({active_keys}) — "
+    "{inactive_keys} anchor absent; the combined assertion prices absent "
+    "clauses at 0 until their text lands")
+
 _CJK_CHAR_RE = re.compile(
     r"[\u3000-\u303f\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef]")
 
@@ -524,6 +567,119 @@ def injection_budget_tier_gate(tier):
     return BUDGET_TIER_POLICY.get(tier, {}).get("gate", "hard")
 
 
+def measure_clause_anchor_lines(text, anchor):
+    """FEAT-079: sum calibrated tokens of every line carrying ``anchor``.
+
+    Anti-smuggling primitive: ANY injected line carrying the clause keyword
+    is priced, wherever it hides — multiple lines add up, so splitting a
+    clause across lines (or surfaces) cannot dodge the tier either. Empty
+    text prices 0 (the caller decides what an unresolved surface means).
+    """
+    if not text:
+        return 0
+    return sum(estimate_surface_tokens(line)
+               for line in text.splitlines() if anchor in line)
+
+
+def check_contract_tier_budgets(resident_texts):
+    """FEAT-079 / DEC-290(6) / DEC-291: tiered per-surface budget assertion
+    for the ADR-021 contract clauses across the resident surfaces.
+
+    ``resident_texts`` maps surface name → resolved injected text (the SAME
+    resolutions the budget rows are priced from). Assertion scope is
+    PER-SURFACE (DEC-291 calibration): each clause's anchor-carrying lines
+    are priced per surface; the tier lines (M1 ≤ 180, M1+M2 ≤ 370) apply
+    to EVERY surface independently — the calibrated B1a floor is ~349 tok
+    on the heaviest surface (entry-template: M1 ~171, M1+M2 ~342), and the
+    DEC-291 lines sit just above it. The four-surface TOTAL is reported
+    for visibility but never gated (the per-surface scope is what makes
+    smuggling detectable at the surface that carries it while a legitimate
+    multi-surface injection stays inside every face's own line).
+
+    Per clause: ACTIVE once its anchor appears on any resident surface
+    (partial-state disclosure mirrors the engine's staged anchor registry).
+    All-inactive → notes only (the activation gate is data, not a silent
+    skip); issues here join the report's top-level ``issues`` and move the
+    verdict to FAIL.
+    """
+    clauses = []
+    for spec in CONTRACT_CLAUSE_TIERS:
+        per_surface = {
+            name: measure_clause_anchor_lines(text, spec["anchor"])
+            for name, text in sorted(resident_texts.items())}
+        tokens = sum(per_surface.values())
+        clauses.append({
+            "key": spec["key"],
+            "anchor": spec["anchor"],
+            "label": spec["label"],
+            "budget_tokens": spec["budget_tokens"],
+            "active": tokens > 0,
+            "tokens": tokens,
+            "per_surface": per_surface,
+        })
+    by_name = {clause["key"]: clause for clause in clauses}
+    combined_per_surface = {}
+    for name in resident_texts:
+        combined_per_surface[name] = sum(
+            clause["per_surface"].get(name, 0) for clause in clauses)
+    combined_tokens = sum(combined_per_surface.values())
+    combined = {
+        "budget_tokens": CONTRACT_COMBINED_BUDGET_TOKENS,
+        "tokens": combined_tokens,
+        "per_surface": combined_per_surface,
+        "active": any(clause["active"] for clause in clauses),
+    }
+    issues = []
+    for clause in clauses:
+        if not clause["active"] or clause["budget_tokens"] is None:
+            continue
+        over = {name: value for name, value in clause["per_surface"].items()
+                if value > clause["budget_tokens"]}
+        if over:
+            detail = ", ".join(
+                f"{name}={value}>{clause['budget_tokens']}"
+                for name, value in sorted(over.items()))
+            issues.append(
+                f"contract clause tier '{clause['key']}' over budget on "
+                f"some surfaces ({detail}) — anti-smuggling freeze line, "
+                f"ADR-021 §2.1 acceptance 5 / DEC-290(6) / DEC-291 "
+                f"(per-surface scope; four-surface total "
+                f"{clause['tokens']} tok is reported, not gated)")
+    if combined["active"]:
+        over = {name: value
+                for name, value in combined_per_surface.items()
+                if value > combined["budget_tokens"]}
+        if over:
+            detail = ", ".join(
+                f"{name}={value}>{combined['budget_tokens']}"
+                for name, value in sorted(over.items()))
+            issues.append(
+                f"contract clause combined tier over budget on some "
+                f"surfaces ({detail}) — M1+M2 freeze line, ADR-021 §3.1 / "
+                f"DEC-290(6) / DEC-291 (per-surface scope; four-surface "
+                f"total {combined_tokens} tok is reported, not gated)")
+    notes = []
+    if not combined["active"]:
+        notes.append(CONTRACT_TIERS_INACTIVE_NOTE)
+    else:
+        inactive_keys = [clause["key"] for clause in clauses
+                         if not clause["active"]]
+        if inactive_keys:
+            active_keys = [clause["key"] for clause in clauses
+                           if clause["active"]]
+            notes.append(CONTRACT_TIERS_PARTIAL_NOTE.format(
+                active_keys=", ".join(active_keys),
+                inactive_keys=", ".join(inactive_keys)))
+    return {
+        "stage": CONTRACT_TIERS_STAGE,
+        "clauses": clauses,
+        "combined": combined,
+        "scope": "per-surface",
+        "issues": issues,
+        "notes": notes,
+    }
+
+
 def check_injection_budget(root=None, profile=None, budget_tokens=None):
     """FEAT-039: price the actual injected set and verdict it against budget.
 
@@ -549,8 +705,14 @@ def check_injection_budget(root=None, profile=None, budget_tokens=None):
                     for name, policy in BUDGET_TIER_POLICY.items()}
 
     rows = []
+    # FEAT-079: resident texts feed the contract-clause tier assertions —
+    # the SAME resolutions the rows are priced from, so the tier can never
+    # disagree with the table about what is injected.
+    resident_texts = {}
     for surface in set_injection_budget_surface_profiles(profile):
         text = load_injection_surface(surface, root)
+        if surface["tier"] == "resident":
+            resident_texts[surface["name"]] = text
         cjk = count_cjk_chars(text)
         tokens = estimate_surface_tokens(text)
         tier_budget = tier_budgets.get(surface["tier"], budget)
@@ -644,6 +806,12 @@ def check_injection_budget(root=None, profile=None, budget_tokens=None):
             "BUDGET_TIER_POLICY declares no 'resident' tier — the headline "
             "resident number cannot be derived (fail-closed)")
 
+    # FEAT-079 / DEC-290(6): the ADR-021 clause tiers are a hard-gated face
+    # of this report — an over-limit clause (or combined sum) joins the
+    # top-level issues and moves the verdict to FAIL.
+    contract_tiers = check_contract_tier_budgets(resident_texts)
+    issues.extend(contract_tiers["issues"])
+
     verdict = "FAIL" if issues else (
         "ADVISORY" if gated_over_budget_tiers else "PASS")
     return {
@@ -652,6 +820,7 @@ def check_injection_budget(root=None, profile=None, budget_tokens=None):
         "tokenizer": tokenizer_calibration(),
         "surfaces": rows,
         "tiers": tiers,
+        "contract_tiers": contract_tiers,
         "tokens": (resident_tier or {}).get("tokens", 0),
         "tokens_host": (resident_tier or {}).get("tokens_host", 0),
         "grand_total_tokens": sum(row["tokens"] for row in rows),
@@ -719,6 +888,41 @@ def format_budget_report(result, indent="  ", frame=None):
     for name, tier in result["tiers"].items():
         if tier["over_budget"] and tier.get("note"):
             lines.append(f"{indent}[{tier['gate'].upper()}] {tier['note']}")
+    # FEAT-079 / DEC-290(6): the ADR-021 contract-clause tier face — same
+    # report, same numbers the verdict used (the aggregate Check 33 box and
+    # this standalone subcommand cannot diverge).
+    contract_tiers = result.get("contract_tiers")
+    if contract_tiers:
+        lines.append(
+            f"{indent}Contract clause tiers (FEAT-079 / DEC-290(6) freeze "
+            f"line, stage {contract_tiers['stage']}):")
+        for clause in contract_tiers["clauses"]:
+            own_line = (str(clause["budget_tokens"])
+                        if clause["budget_tokens"] is not None
+                        else "combined-only")
+            carrying = ", ".join(
+                f"{name}={value}"
+                for name, value in clause["per_surface"].items() if value)
+            worst = max(clause["per_surface"].values(), default=0)
+            lines.append(
+                f"{indent}  {clause['key']}: "
+                f"{'active' if clause['active'] else 'inactive'}, "
+                f"worst surface {worst} tok (own line {own_line}; "
+                f"anchor lines: {carrying or 'none'}; total "
+                f"{clause['tokens']} tok reported only)")
+        combined = contract_tiers["combined"]
+        combined_worst = max(
+            (combined.get("per_surface") or {}).values(), default=0)
+        lines.append(
+            f"{indent}  combined M1+M2: "
+            f"{'active' if combined['active'] else 'inactive'}, "
+            f"worst surface {combined_worst} tok "
+            f"<= {combined['budget_tokens']} (hard; per-surface scope, "
+            f"DEC-291; total {combined['tokens']} tok reported only)")
+        for issue in contract_tiers["issues"]:
+            lines.append(f"{indent}  [FAIL] {issue}")
+        for note in contract_tiers["notes"]:
+            lines.append(f"{indent}  [note] {note}")
     guard = result["tool_return_budget"]
     lines.append(f"{indent}Tool-return budget (registered, not "
                  f"re-implemented): {guard['constant']}="

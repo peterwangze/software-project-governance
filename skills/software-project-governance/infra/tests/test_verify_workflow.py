@@ -19969,6 +19969,376 @@ class InjectionContractPresetVersionLineTests(unittest.TestCase):
             )
 
 
+def _strip_staged_clause_anchors(root):
+    """Remove the ADR-021 clause anchors from the copied surfaces.
+
+    FEAT-079 fixtures must be able to construct the PRE-B1a baseline from a
+    live tree that may already carry the B1a text (parallel batches share
+    this working tree). Two strip modes, matched to B1a's actual shapes:
+
+    * WHOLE-LINE drop (persona / governance-init): B1a added brand-new
+      lines there; keeping a word-stripped residual would still price ~300
+      tok into the resident hard gate (measured 6083 > 6000 during this
+      task) — the line must go entirely.
+    * WORD strip (AGENTS / SKILL / behavior-protocol): B1a embedded the
+      keywords into PRE-EXISTING lines (deleting whole lines would break
+      base-registry anchors like 关键行为契约); word removal only ever
+      SHORTENS the line, so no residual can inflate any budget.
+
+    Phase-independent: works identically before and after the B1a commit
+    lands, which is what keeps this suite green in both states.
+    """
+    anchors = ("推荐必标需求源", "发现即闭环", "用户点名")
+    line_drop_files = (
+        "agent-presets/governance/agent.cordis.yml.template",
+        "commands/governance-init.md",
+    )
+    word_strip_files = (
+        "adapters/dsh/AGENTS.md.template",
+        "skills/software-project-governance/SKILL.md",
+        "skills/software-project-governance/references/behavior-protocol.md",
+    )
+    for rel in line_drop_files:
+        path = root / rel
+        if not path.is_file():
+            continue
+        lines = path.read_text(encoding="utf-8").splitlines()
+        kept = [line for line in lines
+                if not any(anchor in line for anchor in anchors)]
+        path.write_text("\n".join(kept) + "\n", encoding="utf-8")
+    for rel in word_strip_files:
+        path = root / rel
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8")
+        for anchor in anchors:
+            text = text.replace(anchor, "")
+        path.write_text(text, encoding="utf-8")
+
+
+class InjectionContractStagedAnchorTests(unittest.TestCase):
+    """FEAT-079 / DEC-290(4): ADR-021 B1b staged anchor registry (existence-only).
+
+    The B1b registry guards the ADR-021 contract-clause anchors BEFORE the
+    B1a text lands (parallel batches). DEC-290(4) orders the COMMITS — B1a
+    text first, registry second — so the staged face is activation-gated
+    (the Check 41 coverage precedent): every staged anchor absent → the
+    stage is INACTIVE, disclosed, not failing (the commit-order window is
+    legitimate); ANY staged anchor present → the stage is ACTIVE and every
+    staged anchor is a hard existence assertion — a partial injection must
+    not pass silently.
+    """
+
+    STAGE = "ADR-021-B1a"
+
+    def _copy_injection_surfaces(self, root):
+        for relative in vw.INJECTION_CONTRACT_ANCHORS:
+            target = root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(vw.ROOT / relative, target)
+
+    def test_registry_covers_all_four_surfaces_with_persona_extra_anchor(self):
+        """The staged registry mirrors the base four surfaces and carries
+        the two ADR-021 clause keywords on each; the persona face alone
+        adds 用户点名 (ADR-021 §2.1 file table: persona 另加「用户点名」)."""
+        staged = vw.INJECTION_CONTRACT_STAGED_ANCHORS[self.STAGE]
+        self.assertEqual(set(staged), set(vw.INJECTION_CONTRACT_ANCHORS))
+        persona = "agent-presets/governance/agent.cordis.yml.template"
+        for path, anchors in staged.items():
+            self.assertIn("推荐必标需求源", anchors, path)
+            self.assertIn("发现即闭环", anchors, path)
+        self.assertIn("用户点名", staged[persona])
+        for path, anchors in staged.items():
+            if path != persona:
+                self.assertNotIn("用户点名", anchors, path)
+
+    def test_live_repo_staged_face_is_coherent(self):
+        """Live tree, phase-agnostic (B1a may or may not have landed in
+        this working tree — the suite stays green in BOTH states):
+        inactive → zero issues + an explicit disclosure field (the
+        commit-order window is legitimate, never a silent skip); active
+        (B1a landed) → the shipped text satisfies every staged anchor."""
+        result = vw.check_injection_contract()
+        staged = result["staged"][self.STAGE]
+        if not staged["active"]:
+            self.assertEqual(staged["missing"], [])
+            self.assertTrue(staged["inactive_reason"])
+        else:
+            self.assertEqual(staged["missing"], [])
+            self.assertEqual(result["issues"], [])
+
+    def test_staged_inactive_before_b1a_text_disclosed_not_failing(self):
+        """All staged anchors stripped (pre-B1a fixture) → inactive: zero
+        issues + the disclosure field the renderers surface."""
+        with _governance_temp_dir(prefix="feat079-b1a-pre-") as td:
+            root = Path(td)
+            self._copy_injection_surfaces(root)
+            _strip_staged_clause_anchors(root)
+            result = vw.check_injection_contract(root)
+            staged = result["staged"][self.STAGE]
+            self.assertFalse(staged["active"])
+            self.assertEqual(staged["missing"], [])
+            self.assertEqual(result["issues"], [])
+            self.assertTrue(staged["inactive_reason"])
+
+    def test_staged_stage_activates_and_passes_when_all_anchors_present(self):
+        """A fully injected fixture activates the stage and passes clean —
+        the post-B1a steady state this registry exists to guard."""
+        with _governance_temp_dir(prefix="feat079-b1a-full-") as td:
+            root = Path(td)
+            self._copy_injection_surfaces(root)
+            _strip_staged_clause_anchors(root)
+            for relative, anchors in (
+                    vw.INJECTION_CONTRACT_STAGED_ANCHORS[self.STAGE].items()):
+                target = root / relative
+                target.write_text(
+                    target.read_text(encoding="utf-8")
+                    + "\n" + "；".join(anchors) + "\n",
+                    encoding="utf-8")
+            result = vw.check_injection_contract(root)
+            staged = result["staged"][self.STAGE]
+            self.assertTrue(staged["active"])
+            self.assertEqual(staged["missing"], [])
+            self.assertEqual(result["issues"], [])
+
+    def test_staged_partial_injection_fails_closed(self):
+        """One anchor present (partial injection) → the whole stage turns on
+        and EVERY missing anchor becomes an issue — the anti-silent-partial
+        face; the missing entries carry the stage id for attribution."""
+        with _governance_temp_dir(prefix="feat079-b1a-partial-") as td:
+            root = Path(td)
+            self._copy_injection_surfaces(root)
+            _strip_staged_clause_anchors(root)
+            skill = root / "skills/software-project-governance/SKILL.md"
+            skill.write_text(
+                skill.read_text(encoding="utf-8") + "\n推荐必标需求源\n",
+                encoding="utf-8")
+            result = vw.check_injection_contract(root)
+            staged = result["staged"][self.STAGE]
+            self.assertTrue(staged["active"])
+            self.assertTrue(staged["missing"])
+            self.assertTrue(result["issues"])
+            for issue in staged["missing"]:
+                self.assertIn(self.STAGE, issue)
+            self.assertIn(
+                "skills/software-project-governance/references/"
+                "behavior-protocol.md",
+                " ".join(staged["missing"]))
+
+
+class ContractTierBudgetTests(unittest.TestCase):
+    """FEAT-079 / DEC-290(6) / DEC-291: ADR-021 contract-clause tiered
+    budget gates.
+
+    The freeze line as a machine check: once the ADR-021 M1/M2 contract
+    clauses are injected into the RESIDENT surfaces, every line carrying a
+    clause anchor is priced (multi-surface sum — splitting a clause across
+    files cannot evade the tier) and the totals are tier-gated per the
+    DEC-291 calibrated lines (M1 ≤ CONTRACT_M1_BUDGET_TOKENS, M1+M2 ≤
+    CONTRACT_COMBINED_BUDGET_TOKENS — the ADR-021 §2.1/§3.1 estimates
+    160/320 under-counted the calibrated CJK pricing; B1a re-tunes the
+    CONSTANTS only, so these tests read them instead of pinning literals).
+    Smuggling extra text into the clause lines FAILs instead of hiding
+    under the 6000-token resident ceiling. Pre-injection (B1a text not
+    landed) the tiers are inactive: disclosed in ``notes``, never a silent
+    skip, verdict unchanged.
+    """
+
+    # ADR-021 §2.1 / §3.1 compressed clause forms — the canonical text the
+    # tier numbers were derived from (M1 ~58 tok, M2 ~62 tok per surface).
+    M1_LINE = ("推荐必标需求源：推荐与排序呈现逐项标注需求源（用户点名、活性缺陷、机器信号"
+               "三选一标注），不标即违规；同优先级内 user-named 未闭合时 machine-signal "
+               "不得排前（DEC-286(7)）。")
+    M2_LINE = ("发现即闭环：问题在触发点当场闭环（FAIL 即修/发现即改/风险即决/发布即结账）；"
+               "「登记待以后」=违规；付不起闭环成本的动作不开始（DEC-286）。")
+    M1_POINTER = "推荐必标需求源——见 SKILL 关键行为契约（ADR-021）。"
+    M2_POINTER = "发现即闭环——见 SKILL 关键行为契约（ADR-021）。"
+
+    def _prepare_budget_fixture(self, root, persona_extra_lines=(),
+                                agents_extra=""):
+        """Copy every budget-surface source into ``root`` (all surfaces must
+        resolve — an unresolved surface is its own fail-closed issue and
+        would drown the tier assertions), strip the live ADR-021 clause
+        anchors back to the pre-B1a baseline (phase-independent fixtures —
+        B1a may already be in the copied tree), then inject the requested
+        clause lines: persona lines land INSIDE the prefix block (same
+        indent, after the 真实环境必防护 line — where B1a actually puts
+        them); AGENTS lines are appended (the file IS the injected
+        payload)."""
+        from checks import injection_budget as ib
+        for surface in ib.INJECTION_BUDGET_SURFACES:
+            target = root / surface["path"]
+            if target.exists():
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(vw.ROOT / surface["path"], target)
+        _strip_staged_clause_anchors(root)
+        if persona_extra_lines:
+            rel = "agent-presets/governance/agent.cordis.yml.template"
+            preset = root / rel
+            text = preset.read_text(encoding="utf-8")
+            anchor_line = next(
+                line for line in text.splitlines()
+                if "真实环境必防护" in line)
+            indent = anchor_line[:len(anchor_line) - len(anchor_line.lstrip())]
+            addition = "\n".join(indent + line
+                                 for line in persona_extra_lines)
+            preset.write_text(
+                text.replace(anchor_line, anchor_line + "\n" + addition),
+                encoding="utf-8")
+        if agents_extra:
+            rel = "adapters/dsh/AGENTS.md.template"
+            target = root / rel
+            target.write_text(
+                target.read_text(encoding="utf-8") + agents_extra,
+                encoding="utf-8")
+
+    def _clauses(self, result):
+        return {c["key"]: c for c in result["contract_tiers"]["clauses"]}
+
+    def test_measure_prices_every_anchor_carrying_line(self):
+        """The pricing primitive sums EVERY line carrying the anchor —
+        non-anchor lines are free, multiple anchor lines add up (a clause
+        split across lines pays for all of them)."""
+        from checks import injection_budget as ib
+        first_line = f"第一条：{self.M1_LINE}"
+        second_line = f"第二条：{self.M1_LINE}"
+        text = ("无关行不计价。\n"
+                f"{first_line}\n"
+                "中间普通行。\n"
+                f"{second_line}\n")
+        priced = ib.measure_clause_anchor_lines(text, "推荐必标需求源")
+        expected = (ib.estimate_surface_tokens(first_line)
+                    + ib.estimate_surface_tokens(second_line))
+        self.assertEqual(priced, expected)
+        self.assertGreater(
+            priced, 2 * ib.estimate_surface_tokens(self.M1_LINE))
+        self.assertEqual(ib.measure_clause_anchor_lines(text, "发现即闭环"), 0)
+        self.assertEqual(ib.measure_clause_anchor_lines("", "推荐必标需求源"), 0)
+
+    def test_live_repo_contract_tier_face_is_coherent(self):
+        """Live tree, phase-agnostic (B1a text may or may not have landed
+        in this working tree — the suite must stay green in BOTH states):
+        the contract_tiers face exists with both clauses; inactive → notes
+        disclose it and no issue; active (B1a landed) → every surface sits
+        inside its per-surface line (DEC-291 calibrated so the shipped B1a
+        text fits) and the verdict stays PASS."""
+        result = vw.check_injection_budget(profile="strict")
+        clauses = self._clauses(result)
+        self.assertIn("m1-demand-source", clauses)
+        self.assertIn("m2-discovery-closure", clauses)
+        ct = result["contract_tiers"]
+        self.assertEqual(ct["scope"], "per-surface")
+        if not ct["combined"]["active"]:
+            self.assertFalse(clauses["m1-demand-source"]["active"])
+            self.assertFalse(clauses["m2-discovery-closure"]["active"])
+            self.assertEqual(ct["issues"], [])
+            self.assertTrue(ct["notes"])
+        else:
+            for clause in clauses.values():
+                if clause["budget_tokens"] is None:
+                    continue
+                for name, value in clause["per_surface"].items():
+                    self.assertLessEqual(
+                        value, clause["budget_tokens"],
+                        f"{clause['key']} on {name}")
+            for name, value in ct["combined"]["per_surface"].items():
+                self.assertLessEqual(
+                    value, ct["combined"]["budget_tokens"], name)
+            self.assertEqual(ct["issues"], [])
+        self.assertEqual(result["verdict"], "PASS")
+
+    def test_over_limit_m1_clause_fails(self):
+        """Negative: an M1 clause line fattened past its DEC-291 line (the
+        compressed form repeated — the smuggling this tier exists to catch)
+        → FAIL with the tier, the measured tokens, and the line in the
+        issue; the literal is read from the module constant so a B1a
+        re-tune never reddens this suite."""
+        from checks import injection_budget as ib
+        with _governance_temp_dir(prefix="feat079-m1-over-") as td:
+            root = Path(td)
+            self._prepare_budget_fixture(
+                root, agents_extra="\n" + self.M1_LINE * 4 + "\n")
+            result = vw.check_injection_budget(root=root, profile="strict")
+            clauses = self._clauses(result)
+            m1 = clauses["m1-demand-source"]
+            self.assertTrue(m1["active"])
+            self.assertGreater(
+                m1["per_surface"]["agent-instructions"],
+                m1["budget_tokens"])
+            tier_issues = result["contract_tiers"]["issues"]
+            self.assertTrue(tier_issues)
+            self.assertTrue(any(
+                "m1-demand-source" in issue
+                and str(ib.CONTRACT_M1_BUDGET_TOKENS) in issue
+                for issue in tier_issues), tier_issues)
+            self.assertEqual(result["verdict"], "FAIL")
+
+    def test_combined_tier_over_limit_fails(self):
+        """Negative: M1 alone fits its own line, M2 alone is un-tiered, but
+        the COMBINED sum crosses the DEC-291 combined ceiling → FAIL on the
+        combined assertion (the line literal comes from the module
+        constant, not a pinned number)."""
+        from checks import injection_budget as ib
+        with _governance_temp_dir(prefix="feat079-combined-over-") as td:
+            root = Path(td)
+            self._prepare_budget_fixture(
+                root,
+                agents_extra=("\n" + self.M1_LINE + "\n"
+                              + self.M2_LINE * 6 + "\n"))
+            result = vw.check_injection_budget(root=root, profile="strict")
+            clauses = self._clauses(result)
+            m1 = clauses["m1-demand-source"]
+            m2 = clauses["m2-discovery-closure"]
+            self.assertLessEqual(m1["tokens"], m1["budget_tokens"])
+            combined = result["contract_tiers"]["combined"]
+            agents_combined = (
+                m1["per_surface"]["agent-instructions"]
+                + m2["per_surface"]["agent-instructions"])
+            self.assertGreater(
+                agents_combined, combined["budget_tokens"])
+            self.assertGreater(
+                combined["per_surface"]["agent-instructions"],
+                combined["budget_tokens"])
+            self.assertTrue(any(
+                str(ib.CONTRACT_COMBINED_BUDGET_TOKENS) in issue
+                for issue in result["contract_tiers"]["issues"]))
+            self.assertEqual(result["verdict"], "FAIL")
+
+    def test_adr_compressed_clauses_within_tiers(self):
+        """Positive: the ADR-021 compressed forms injected where B1a will
+        actually put them (persona prefix lines + AGENTS pointers) activate
+        both clauses, price them above zero, and stay inside both tier
+        lines — the post-B1a steady state must be a clean PASS."""
+        with _governance_temp_dir(prefix="feat079-adr-forms-") as td:
+            root = Path(td)
+            self._prepare_budget_fixture(
+                root,
+                persona_extra_lines=(self.M1_LINE, self.M2_LINE),
+                agents_extra=("\n" + self.M1_POINTER + "\n"
+                              + self.M2_POINTER + "\n"))
+            result = vw.check_injection_budget(root=root, profile="strict")
+            clauses = self._clauses(result)
+            m1 = clauses["m1-demand-source"]
+            m2 = clauses["m2-discovery-closure"]
+            self.assertTrue(m1["active"] and m2["active"])
+            self.assertGreater(m1["tokens"], 0)
+            self.assertGreater(m2["tokens"], 0)
+            combined = result["contract_tiers"]["combined"]
+            for clause in (m1, m2):
+                if clause["budget_tokens"] is None:
+                    continue
+                for name, value in clause["per_surface"].items():
+                    self.assertLessEqual(
+                        value, clause["budget_tokens"],
+                        f"{clause['key']} on {name}")
+            for name, value in combined["per_surface"].items():
+                self.assertLessEqual(
+                    value, combined["budget_tokens"], name)
+            self.assertEqual(result["contract_tiers"]["issues"], [])
+            self.assertEqual(result["verdict"], "PASS")
+
+
 class Fix284WriteGuardMissingRowTests(unittest.TestCase):
     """FIX-284 (review-FIX-279-CODE-R0 P2-1): written-row-missing regression.
 
@@ -21597,11 +21967,20 @@ class Feat039InjectionBudgetTests(unittest.TestCase):
     # FEAT-073 (2026-09-28): 2859 -> 2766 — secondary-thin B-a/B-b/B-c
     # 压缩（ADR-020 §3.2，DEC-271）. Same guard discipline: a deliberate
     # edit rides the ticket, the price never moves silently.
+    #
+    # FEAT-078 (2026-09-29, B1a / DEC-291): the ADR-021 contract clauses
+    # 5/6 entered every Step 7 entry template (+534 B lightweight; +534
+    # standard; +534 strict) and the secondary-thin pointer grew 2766 ->
+    # 2840 (clause pointer line). Same guard discipline: the deliberate
+    # re-price rides the B1a ticket; the tiered freeze lines that keep
+    # these prices bounded live in checks/injection_budget.py
+    # (CONTRACT_M1_BUDGET_TOKENS / CONTRACT_COMBINED_BUDGET_TOKENS,
+    # FEAT-079 / DEC-291).
     ENTRY_TEMPLATE_CANONICAL_BYTES = {
-        "lightweight": 4555,
-        "standard": 9553,
-        "strict": 10441,
-        "secondary-thin": 2766,
+        "lightweight": 5089,
+        "standard": 10087,
+        "strict": 10975,
+        "secondary-thin": 2840,
     }
 
     def test_entry_template_surfaces_price_the_canonical_blocks(self):

@@ -6844,6 +6844,36 @@ INJECTION_CONTRACT_ANCHORS = {
     "adapters/dsh/AGENTS.md.template": ["关键行为契约"],
 }
 
+# FEAT-079 / DEC-290(4): ADR-021 B1b staged anchor registry — the B1a
+# contract-clause anchors, activation-gated. B1a (text) and B1b (registry)
+# are parallel batches with an ordered COMMIT sequence (B1a text commit
+# first); this registry therefore does not fail while the B1a text is
+# absent: every staged anchor absent = stage INACTIVE (disclosed, the
+# commit-order window is legitimate), ANY anchor present = stage ACTIVE and
+# every staged anchor is then a hard existence assertion (a partial
+# injection fails closed — anti-silent-partial). Keyword-anchored like the
+# base registry (ADR-021 §2.1: ordinal counts drift between surfaces,
+# keywords do not). The budget twin of this gate (clause tier freeze line,
+# DEC-290(6)) lives in checks/injection_budget.py.
+INJECTION_CONTRACT_STAGED_ANCHORS = {
+    "ADR-021-B1a": {
+        # persona face: M1 clause + the persona-only 用户点名 (ADR-021 §2.1
+        # file table) + M2 clause.
+        "agent-presets/governance/agent.cordis.yml.template": [
+            "推荐必标需求源", "用户点名", "发现即闭环",
+        ],
+        "skills/software-project-governance/SKILL.md": [
+            "推荐必标需求源", "发现即闭环",
+        ],
+        "skills/software-project-governance/references/behavior-protocol.md": [
+            "推荐必标需求源", "发现即闭环",
+        ],
+        "adapters/dsh/AGENTS.md.template": [
+            "推荐必标需求源", "发现即闭环",
+        ],
+    },
+}
+
 
 def _extract_skill_version(path):
     if not path.is_file():
@@ -6977,10 +7007,52 @@ def check_injection_contract(root=None):
                 anchor = f"治理工作流（v{authority}）"
             if anchor not in text:
                 issues.append(f"{relative}: anchor missing: {anchor}")
+    # FEAT-079 / DEC-290(4): staged anchor faces — activation-gated
+    # existence assertions (all-absent → inactive + disclosure; any-present
+    # → active, every staged anchor then fails closed when missing).
+    staged = {}
+    for stage, anchors_by_path in sorted(
+            INJECTION_CONTRACT_STAGED_ANCHORS.items()):
+        present = {}
+        for relative, anchors in sorted(anchors_by_path.items()):
+            path = root / relative
+            if not path.is_file():
+                present[relative] = {anchor: False for anchor in anchors}
+                continue
+            text = path.read_text(encoding="utf-8")
+            present[relative] = {anchor: anchor in text
+                                 for anchor in anchors}
+        active = any(any(hits.values()) for hits in present.values())
+        missing = []
+        if active:
+            for relative, hits in sorted(present.items()):
+                for anchor, hit in hits.items():
+                    if not hit:
+                        missing.append(
+                            f"{relative}: staged anchor missing "
+                            f"({stage}): {anchor}")
+        staged[stage] = {
+            "active": active,
+            "missing": missing,
+            "anchors_checked": sum(len(v) for v in anchors_by_path.values()),
+            "inactive_reason": (
+                None if active else
+                f"{stage}: no staged anchor present yet — B1a contract "
+                "text not landed (activation-gated; DEC-290(4) commit "
+                "order: text before registry)"),
+        }
+        issues.extend(missing)
+    staged_summary = "; ".join(
+        (f"staged {stage}: inactive (B1a text not landed; DEC-290(4))"
+         if not state["active"] else
+         f"staged {stage}: active, {state['anchors_checked']} anchors guarded")
+        for stage, state in sorted(staged.items()))
     return {
         "issues": issues,
         "files_checked": files_checked,
         "anchors_checked": sum(len(v) for v in INJECTION_CONTRACT_ANCHORS.values()),
+        "staged": staged,
+        "staged_summary": staged_summary,
     }
 
 
@@ -16838,7 +16910,8 @@ def _run_full_engine_checks(args):
     if _product_gate_active(args):
         print("\n┌─ Check 33: Injection Contract (FIX-253/REQ-112) ────────────────────┐")
         ic33 = check_injection_contract()
-        print(f"│  Files checked: {ic33['files_checked']}; anchors: {ic33['anchors_checked']}")
+        print(f"│  Files checked: {ic33['files_checked']}; anchors: {ic33['anchors_checked']}"
+              + (f"; {ic33['staged_summary']}" if ic33["staged_summary"] else ""))
         if ic33["issues"]:
             all_issues += len(ic33["issues"])
             print(f"│  [FAIL] {len(ic33['issues'])} injection-contract issue(s):")
@@ -22024,7 +22097,8 @@ def cmd_check_injection_contract(args):
         pass
     result = check_injection_contract()
     print("\n=== Injection Contract Check (FIX-253/REQ-112) ===")
-    print(f"  Files checked: {result['files_checked']}; anchors: {result['anchors_checked']}")
+    print(f"  Files checked: {result['files_checked']}; anchors: {result['anchors_checked']}"
+          + (f"; {result['staged_summary']}" if result["staged_summary"] else ""))
     if result["issues"]:
         print(f"\n  Result: FAILED — {len(result['issues'])} issue(s)")
         for issue in result["issues"][:20]:

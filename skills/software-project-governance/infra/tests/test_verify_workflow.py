@@ -20016,6 +20016,223 @@ def _strip_staged_clause_anchors(root):
         path.write_text(text, encoding="utf-8")
 
 
+class B3ProvenanceWiringTests(unittest.TestCase):
+    """FEAT-080 / ADR-021 B3: Check 41/42 wiring plumbing.
+
+    The judgement predicates live in ``checks/provenance_domain.py`` (pure,
+    tested there); this suite pins the ENGINE-side plumbing the two new
+    check-governance boxes consume: the PriorityReport → provenance-rows
+    mapping (bucket vocabulary parity), and the session-closure event
+    collector (deterministic column matching over the evidence/risk row
+    families — review NEEDS_CHANGE→problem, review APPROVED*→closure, EVD
+    ✅ 完成 →closure, RISK new row→problem / 终局→closure; the ADR-021
+    §3.2.3 W(session) window degrades to 按日聚合 with an explicit note when
+    no session-snapshot carries today's date — never a silent degrade).
+    """
+
+    def test_provenance_rows_from_report_maps_every_bucket(self):
+        import task_priority as tpa
+        report = tpa.PriorityReport(
+            recommended_next=[tpa.TaskDep(
+                task_id="FIX-001", priority="P1", status="进行中",
+                demand_source="machine-signal", target_version="0.93.0")],
+            non_executable=[tpa.TaskDep(
+                task_id="FIX-002", priority="P1", status="⛔ 停放",
+                demand_source="user-named")],
+            blocked=[tpa.BlockedTask(
+                task=tpa.TaskDep(
+                    task_id="FIX-003", priority="P2", status="进行中",
+                    demand_source="user-named"),
+                blocking_dependencies=("FIX-009",))],
+            completed=[tpa.TaskDep(
+                task_id="FIX-004", priority="P0", status="✅ 完成",
+                demand_source="active-defect")],
+        )
+        rows = vw._provenance_rows_from_report(report)
+        by_id = {row["task_id"]: row for row in rows}
+        self.assertEqual(len(rows), 4)
+        self.assertEqual(by_id["FIX-001"]["bucket"], "recommended")
+        self.assertEqual(by_id["FIX-001"]["demand_source"], "machine-signal")
+        self.assertEqual(by_id["FIX-001"]["target_version"], "0.93.0")
+        self.assertEqual(by_id["FIX-002"]["bucket"], "non_executable")
+        self.assertEqual(by_id["FIX-003"]["bucket"], "blocked")
+        self.assertEqual(by_id["FIX-004"]["bucket"], "completed")
+        for row in rows:
+            self.assertIn("priority", row)
+            self.assertIn("target_version", row)
+
+    def test_collect_session_closure_events_review_pairing(self):
+        with _governance_temp_dir(prefix="feat080-ev-") as td:
+            gov = Path(td)
+            (gov / "evidence-log.md").write_text(
+                "# 证据\n\n"
+                "| REVIEW-FIX-100-CODE-R0 | FIX-100 | 产品代码 | R0 | 依据 "
+                "| 文件 | Reviewer | 2026-09-29 | G11 | NEEDS_CHANGE |  |\n"
+                "| EVD-900 | FIX-100 | impact | 收口 | 依据 | 文件 | Dev "
+                "| 2026-09-29 | G11 | ✅ 完成 |  |\n"
+                "| REVIEW-FIX-101-CODE-R0 | FIX-101 | 产品代码 | R0 | 依据 "
+                "| 文件 | Reviewer | 2026-09-29 | G11 | "
+                "APPROVED_WITH_NOTES |  |\n"
+                "| EVD-901 | FIX-102 | impact | 收口 | 依据 | 文件 | Dev "
+                "| 2026-09-28 | G11 | ✅ 完成 |  |\n",
+                encoding="utf-8")
+            events, note = vw._collect_session_closure_events(
+                gov, today="2026-09-29")
+            kinds = {(e["id"], e["kind"]) for e in events}
+            # review NEEDS_CHANGE raises a problem; the same task's EVD 收口
+            # row (✅ 完成) closes it; an APPROVED review row closes; the
+            # 2026-09-28 row is OUTSIDE the day window entirely.
+            self.assertIn(("FIX-100", "problem"), kinds)
+            self.assertIn(("FIX-100", "closure"), kinds)
+            self.assertIn(("FIX-101", "closure"), kinds)
+            self.assertNotIn(("FIX-102", "closure"), kinds)
+            problems = [e for e in events if e["kind"] == "problem"]
+            self.assertEqual(len(problems), 1)
+
+    def test_collect_session_closure_events_risk_and_daily_note(self):
+        with _governance_temp_dir(prefix="feat080-risk-") as td:
+            gov = Path(td)
+            (gov / "risk-log.md").write_text(
+                "| 编号 | 日期 | 描述 | 阶段 | 触发 | 影响 | 级别 | Owner "
+                "| 当前状态 | 缓解 | 截止 | 关联 | 备注 |\n"
+                "| RISK-900 | 2026-09-29 | 新风险 | 设计 | x | y | 中 | A "
+                "| 观察中 | 无 |  | T1 |  |\n"
+                "| RISK-901 | 2026-09-29 | 已决风险 | 设计 | x | y | 中 | A "
+                "| 已关闭 | 无 |  | T2 |  |\n",
+                encoding="utf-8")
+            events, note = vw._collect_session_closure_events(
+                gov, today="2026-09-29")
+            kinds = {(e["id"], e["kind"]) for e in events}
+            self.assertIn(("RISK-900", "problem"), kinds)
+            self.assertNotIn(("RISK-900", "closure"), kinds)
+            self.assertIn(("RISK-901", "problem"), kinds)
+            self.assertIn(("RISK-901", "closure"), kinds)
+            # no session-snapshot for today → explicit 按日聚合 degradation
+            # note (ADR-021 §3.2.3 / L4: never a silent degrade)
+            self.assertIn("按日聚合", note or "")
+
+    def test_collect_session_closure_events_snapshot_window(self):
+        with _governance_temp_dir(prefix="feat080-snap-") as td:
+            gov = Path(td)
+            (gov / "evidence-log.md").write_text(
+                "# 证据\n\n"
+                "| REVIEW-FIX-100-CODE-R0 | FIX-100 | 产品代码 | R0 | 依据 "
+                "| 文件 | Reviewer | 2026-09-29 | G11 | NEEDS_CHANGE |  |\n",
+                encoding="utf-8")
+            (gov / "session-snapshot.md").write_text(
+                "# Session Snapshot\n\n- 日期：2026-09-29\n- 会话："
+                "dsh-gov-test\n", encoding="utf-8")
+            events, note = vw._collect_session_closure_events(
+                gov, today="2026-09-29")
+            self.assertTrue(
+                any(e["id"] == "FIX-100" and e["kind"] == "problem"
+                    for e in events))
+            self.assertIn("session", (note or "").lower())
+
+    def test_live_provenance_rows_and_inversion_coherent(self):
+        """Live plumbing smoke: the rows build from the real plan-tracker
+        and the inversion guard returns its full structured verdict (any
+        status is acceptable — the assertion is that the wiring produces a
+        complete, judgeable result, not a crash or a bare list)."""
+        from checks import provenance_domain as pd
+        rows = vw._provenance_rows_for_governance()
+        self.assertIsInstance(rows, list)
+        result = pd.check_priority_inversion(rows)
+        self.assertIn(result["status"], ("PASS", "FAIL", "SKIP"))
+        for key in ("coverage", "conflicts", "inv1_pairs", "invx_pairs",
+                    "inv2_parked"):
+            self.assertIn(key, result)
+
+
+class ExecutionPacketIncrementalWriteTests(unittest.TestCase):
+    """FEAT-080 (g): execution-packet --write fidelity.
+
+    The session hit the regeneration-wipes-manual-enrichment pit three
+    times: a full regenerate rebuilds ONLY the active packets, so (1) an
+    unselected task's entry, (2) an inactive task's entry, and (3) any
+    top-level manual key vanish from the runtime file on every --write.
+    The fix: ``--task --write`` becomes an INCREMENTAL MERGE — regenerate
+    exactly the selected packets and carry everything else over
+    value-for-value (FIX-296's drop-the-unselected bug does not return:
+    nothing is dropped, the unselected entries are preserved, not
+    regenerated-and-lost).
+    """
+
+    def _fake_tasks(self):
+        return [
+            {"task_id": "FIX-201", "priority": "P1", "status": "进行中",
+             "title": "task one"},
+            {"task_id": "FIX-202", "priority": "P1", "status": "进行中",
+             "title": "task two"},
+        ]
+
+    def test_task_write_preserves_unselected_inactive_and_top_level(self):
+        from unittest.mock import patch
+        with _governance_temp_dir(prefix="feat080-xp-") as td:
+            packet_path = Path(td) / "execution-packets.json"
+            seed = {
+                "version": 1,
+                "generated_at": "2026-09-28T00:00:00",
+                "coordinator_note": "manual top-level enrichment",
+                "packets": {
+                    "FIX-201": {"task_id": "FIX-201", "priority": "P1",
+                                "status": "进行中",
+                                "manual_note": "hand-enriched context"},
+                    "FIX-202": {"task_id": "FIX-202", "priority": "P1",
+                                "status": "进行中", "seeded": True},
+                    "FIX-199": {"task_id": "FIX-199", "priority": "P2",
+                                "status": "已完成",
+                                "delivery_context": "inactive-task entry"},
+                },
+            }
+            packet_path.write_text(
+                json.dumps(seed, ensure_ascii=False, indent=2),
+                encoding="utf-8")
+            args = SimpleNamespace(write=True, task=["FIX-201"])
+            with patch.object(vw, "EXECUTION_PACKET_PATH", packet_path), \
+                 patch.object(vw, "_active_execution_packet_tasks",
+                              self._fake_tasks):
+                vw.cmd_execution_packet(args)
+            written = json.loads(
+                packet_path.read_text(encoding="utf-8"))
+            # selected packet regenerated; its manual enrichment survives
+            # (existing packet values overlay the regenerated base).
+            self.assertIn("FIX-201", written["packets"])
+            self.assertEqual(
+                written["packets"]["FIX-201"]["manual_note"],
+                "hand-enriched context")
+            # UNSELECTED active entry preserved value-for-value (the
+            # pre-FEAT-080 full-regenerate write dropped it).
+            self.assertIn("FIX-202", written["packets"])
+            self.assertTrue(written["packets"]["FIX-202"].get("seeded"))
+            # inactive-task entry preserved (regeneration only covers the
+            # active set).
+            self.assertIn("FIX-199", written["packets"])
+            self.assertEqual(written["packets"]["FIX-199"]["delivery_context"],
+                             "inactive-task entry")
+            # top-level manual key preserved.
+            self.assertEqual(written["coordinator_note"],
+                             "manual top-level enrichment")
+
+    def test_full_write_still_regenerates_everything(self):
+        """A bare --write (no --task) keeps the FIX-296 semantics: the full
+        active set is regenerated in one pass (the runtime file reflects
+        the live tracker; manual packet-level enrichment still overlays
+        via the existing merge)."""
+        from unittest.mock import patch
+        with _governance_temp_dir(prefix="feat080-xp2-") as td:
+            packet_path = Path(td) / "execution-packets.json"
+            args = SimpleNamespace(write=True, task=[])
+            with patch.object(vw, "EXECUTION_PACKET_PATH", packet_path), \
+                 patch.object(vw, "_active_execution_packet_tasks",
+                              self._fake_tasks):
+                vw.cmd_execution_packet(args)
+            written = json.loads(
+                packet_path.read_text(encoding="utf-8"))
+            self.assertIn("FIX-201", written["packets"])
+            self.assertIn("FIX-202", written["packets"])
+
+
 class InjectionContractStagedAnchorTests(unittest.TestCase):
     """FEAT-079 / DEC-290(4): ADR-021 B1b staged anchor registry (existence-only).
 

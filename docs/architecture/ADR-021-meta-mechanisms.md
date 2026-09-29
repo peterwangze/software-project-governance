@@ -59,7 +59,7 @@ DEC-288 排序裁定：**(M1) 优先级执法底层机制**与 **(M2) 发现即�
 
 **落地形态**：关键行为契约新增一条「推荐必标需求源」（以锚点关键词为锚，不用序数——persona 契约块现为五行〔含「审查结论必机录」，template L58-62 实证〕而 SKILL.md 节为四条，双面序数天然漂移；本条在 SKILL.md 面为第 5 项、persona 面为第 6 行，锚点关键词「推荐必标需求源」两面唯一即足）。
 
-**逐字文本建议（canonical，behavior-protocol.md 与 SKILL.md 携带；R0 修订：倒挂禁令加同优先级限定，与 INV-1 判据及 §2.2.2 排序键三处自洽——F-P1-1）**：
+**逐字文本建议（canonical，behavior-protocol.md 携带全文；SKILL.md 携带压缩形式——FEAT-078 R0 F-2 消歧；R0 修订：倒挂禁令加同优先级限定，与 INV-1 判据及 §2.2.2 排序键三处自洽——F-P1-1）**：
 
 > 5. **推荐必标需求源（DEC-286(7)/DEC-287(5)）**：凡向用户呈现推荐或排序（含完成必推荐的候选清单、交互询问工具中的待选清单、任务进度表摘要），MUST 逐项标注需求源（三类之一：用户点名、活性缺陷、机器信号），标注 MUST 可追溯到 triage 记录或用户原话；不标即违规。**同优先级内** user-named 项未闭合时，machine-signal 项不得排位其前（推荐位倒挂=违规，判据见 Check 41/INV-1；跨 P 级压序经 Check 41 披露 WARN + 发布门拦截，见 ADR-021 §2.2.3/§2.2.4）。
 
@@ -97,7 +97,7 @@ DEC-288 排序裁定：**(M1) 优先级执法底层机制**与 **(M2) 发现即�
 2. `check-injection-budget --profile strict --fail-on-issues` PASS（resident ≤ 6000 tok）。
 3. light/standard profile 同 PASS（三 profile 分开测量）。
 4. `check-entry-bootstrap-sync` PASS（入口模板 canonical 与投影一致）。
-5. **冻结线（机检形式）**：M1 落地后 resident 增量 ≤160 tok 且 M1+M2 合计增量 ≤320 tok（本 ADR 逐字文本的预算上界 + 容差；超出 = 文本被夹带扩充，拒绝）；此后若 `check-injection-budget` 实测余量 <100 tok，**禁止任何使余量下降的注入面变更**，除非同 commit 携带等量瘦身（防 BC-1 回弹——本项即 BC-1 缓解的验收承载）。
+5. **冻结线（机检形式）**：M1 落地后 resident 增量 ≤160 tok 且 M1+M2 合计增量 ≤320 tok（本 ADR 逐字文本的预算上界 + 容差；超出 = 文本被夹带扩充，拒绝）；此后若 `check-injection-budget` 实测余量 <100 tok，**禁止任何使余量下降的注入面变更**，除非同 commit 携带等量瘦身（防 BC-1 回弹——本项即 BC-1 缓解的验收承载）。**分档口径勘误（DEC-291，FEAT-079 落地裁定）**：上列 160/320 为本 ADR 估算值，实测低估了校准 tokenizer 对冻结文本的 CJK 计价——机检分档断言采用 DEC-291 校准线 **M1≤180 / M1+M2≤370**，且按 **per-surface 口径**逐面判超（四个 resident 面各自计价，四面合计仅披露不阻断——B1a 实测四面合计 ~711 tok，合计口径会误拒本 ADR 自身授权的契约文本）；常量承载于 `checks/injection_budget.py`（`CONTRACT_M1_BUDGET_TOKENS`/`CONTRACT_COMBINED_BUDGET_TOKENS`），后续调优只动常量不动逻辑。
 
 **测试计划**：
 - `infra/tests/test_injection_contract.py`（若存在既有套件则扩展）：负例——移除任一面任一锚点 → check FAIL；正例四面全锚 → PASS。
@@ -134,7 +134,7 @@ DEC-288 排序裁定：**(M1) 优先级执法底层机制**与 **(M2) 发现即�
 **demand_source 修订通道（F-P1-3；append-only 事件流——triage 记录不可变原则不破）**：
 
 - **存储形态**：`.governance/change-triage/{TASK_ID}.demand-revisions.jsonl`——append-only 事件流，每行一个修订事件。不触碰不可变的 triage record 本体；`.jsonl` 后缀天然不被 `load_triage_records` 的 `glob("*.json")` 误读（F4）。
-- **事件 schema**：`{"event_id", "task_id", "from", "to", "basis_kind": "user-quote|dec-ref|session-record", "demand_basis", "revised_by", "revised_at"}`——`from` 由写入器从当前 resolve 结果自动派生（调用方不传，防伪造起点）；`to` 必须是三枚举之一；`demand_basis` 必填非空（修订即重新主张需求源，溯源义务与初次标注相同——BC-4 防造假属性不损失：事件不可变 + 带溯源 = 审计链）。
+- **事件 schema**：`{"event_id", "task_id", "from", "to", "basis_kind": "user-quote|dec-ref|session-record", "demand_basis", "revised_by", "revised_at"}`——`from` 由写入器从当前 resolve 结果自动派生（调用方不传，防伪造起点；派生域=写入器可及域：最新修订事件 > triage record——行内标注属 plan-tracker md 面，由 tpa 层消费，不在写入器派生域内，FEAT-077 R1 P3-1 消歧）；`to` 必须是三枚举之一；`demand_basis` 必填非空（修订即重新主张需求源，溯源义务与初次标注相同——BC-4 防造假属性不损失：事件不可变 + 带溯源 = 审计链）。
 - **写入校验（fail-closed）**：目标 task_id 必须已存在 triage record（对不存在的任务修订 → exit 2）；`to` 非法 → exit 2；basis 缺失 → exit 2。
 - **resolve 语义（取最新有效事件）**：§2.2.2 权威链更新为 **最新修订事件（如有）> triage record `demand_source` > 行内标注 > legacy**。有修订事件时，record/行内的旧值是历史快照，**不构成 conflict**（合法漂移通道）；行内标注与 resolve 终值不一致 → WARN 提示同步行内（不 FAIL——事件流才是权威）。conflict（FAIL）仅指**无修订事件时** triage record 与行内标注的未声明矛盾（原语义保留）。
 - **使用场景（DEC-286(7) 核心场景的机器表达）**：用户事后点名一个 active-defect 任务 → 修订事件 `to=user-named, basis_kind=user-quote` → 下次分析权威翻转为 user-named——「用户升级需求源」这一正向漂移从「不可表达/永久 conflict」变为一次可审计的机录动作（R0 RT-1 红队场景闭环）。

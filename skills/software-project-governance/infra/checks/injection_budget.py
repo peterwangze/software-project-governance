@@ -244,6 +244,14 @@ CONTRACT_CLAUSE_TIERS = (
 #: Stage id the activation gate tracks — mirrors the engine's staged
 #: anchor registry stage (keep in sync; FEAT-079 notes).
 CONTRACT_TIERS_STAGE = "ADR-021-B1a"
+#: FEAT-080 / ADR-021 §2.1 acceptance 5: the FREEZE LINE. Once the
+#: resident headroom (budget − measured resident tokens) drops below this,
+#: any further injection-surface growth is forbidden unless the same
+#: commit carries an equal shrink (BC-1 rebound guard). Machine form: a
+#: standing warning line in every budget report (the blocking face is the
+#: review/commit discipline the line feeds — the data can never quietly
+#: stop being true).
+RESIDENT_HEADROOM_FREEZE_TOKENS = 100
 CONTRACT_TIERS_INACTIVE_NOTE = (
     "ADR-021-B1a contract clauses not injected yet — clause tier budget "
     "inactive (activation-gated; DEC-290(4) commit order: B1a text lands "
@@ -821,6 +829,8 @@ def check_injection_budget(root=None, profile=None, budget_tokens=None):
         "surfaces": rows,
         "tiers": tiers,
         "contract_tiers": contract_tiers,
+        "resident_headroom_tokens": budget - (resident_tier or {}).get(
+            "tokens", 0),
         "tokens": (resident_tier or {}).get("tokens", 0),
         "tokens_host": (resident_tier or {}).get("tokens_host", 0),
         "grand_total_tokens": sum(row["tokens"] for row in rows),
@@ -923,6 +933,14 @@ def format_budget_report(result, indent="  ", frame=None):
             lines.append(f"{indent}  [FAIL] {issue}")
         for note in contract_tiers["notes"]:
             lines.append(f"{indent}  [note] {note}")
+    # FEAT-080 / ADR-021 §2.1 acceptance 5: the standing freeze-line face.
+    headroom = result.get("resident_headroom_tokens")
+    if headroom is not None and headroom < RESIDENT_HEADROOM_FREEZE_TOKENS:
+        lines.append(
+            f"{indent}[FROZEN] resident headroom {headroom} tok < "
+            f"{RESIDENT_HEADROOM_FREEZE_TOKENS} — freeze line ACTIVE "
+            f"(ADR-021 §2.1 acceptance 5): no injection-surface growth "
+            f"without an equal same-commit shrink")
     guard = result["tool_return_budget"]
     lines.append(f"{indent}Tool-return budget (registered, not "
                  f"re-implemented): {guard['constant']}="

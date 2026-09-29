@@ -120,7 +120,8 @@ UNVERSIONED_MARKERS = ("未规划版本", "未定版本", "—", "-", "")
 
 # FEAT-077 / ADR-021 §2.2.1 — demand_source (M1 provenance) 三值封闭枚举 +
 # 中文标注词汇（§2 术语与字段命名先决裁决；evidence 行〔标注〕用）。CLI
-# --demand-source 旗标本身属 B3 接线（verify_workflow.py 锁定，F10）。
+# --demand-source 旗标已随 FEAT-080 (B3) required=True 接线——写路径窗口
+# 关闭（DEC-290(5)）。
 DEMAND_SOURCES = ("user-named", "active-defect", "machine-signal")
 DEMAND_SOURCE_ZH = {
     "user-named": "用户点名",
@@ -1324,16 +1325,14 @@ def run_triage(*, task_id: str, title: str = "", priority: str,
         rejected, FEAT-077 task rule: 用户点名需求被 P2 顺延即倒挂入口 —
         NOTE: ADR-021 §2.2.1 carries no such clause; reported to the
         Coordinator as an ADR gap pending amendment);
-      - **窗口协议（Coordinator R0 P1-2 裁定）**: the parameter is OPTIONAL
-        with the conservative default ``machine-signal`` — the ONLY live CLI
-        call site (``cmd_change_triage`` in verify_workflow.py) cannot pass
-        the flag until B3 wires ``--demand-source`` (a required no-default
-        parameter would TypeError the existing call face; an empty-string
-        fail-closed would freeze ALL new-task intake through the window).
-        The conservative default never grants unearned tie-break rank
-        (machine-signal ranks last, ADR-021 §2.2.2 D1). **B3 接线点**: make
-        the CLI flag required at the argparse layer — missing flag then
-        exits 2 upstream and this default path disappears.
+      - **窗口协议（Coordinator R0 P1-2 裁定；窗口已随 FEAT-080/B3 关闭，
+        DEC-290(5)）**: the parameter is OPTIONAL with the conservative
+        default ``machine-signal`` — the historical B2→B3 window shape
+        (the then-locked CLI call site could not pass the flag). FEAT-080
+        wired ``--demand-source`` as required at the argparse layer, so
+        the CLI path can no longer reach this default; it is retained for
+        direct library callers only and still grants no unearned
+        tie-break rank (machine-signal ranks last, ADR-021 §2.2.2 D1).
 
     Args:
         task_id: new task id (PREFIX-NNN).
@@ -1381,9 +1380,8 @@ def run_triage(*, task_id: str, title: str = "", priority: str,
     # ── demand_source intake (FEAT-077 / ADR-021 §2.2.1, fail-closed) ──
     # 窗口协议（Coordinator R0 P1-2 裁定）：参数缺省/空 → 保守默认
     # machine-signal（排序 rank 最末，绝不授予未挣得的 tie-break 优先）；
-    # 显式提供非法值 → fail-closed 零写入。B3 接线点 = verify_workflow.py
-    # argparse 层 --demand-source 设为 required（缺失即上游 exit 2，本默认
-    # 路径随之消失）。
+    # 显式提供非法值 → fail-closed 零写入。FEAT-080 (B3) 已将 CLI 旗标
+    # required=True 接线——CLI 路径不再可达本默认（DEC-290(5) 窗口关闭）。
     demand_source = str(demand_source or "").strip().lower()  # 大小写不敏感归一
     if not demand_source:
         demand_source = "machine-signal"  # 窗口协议保守默认（见上）

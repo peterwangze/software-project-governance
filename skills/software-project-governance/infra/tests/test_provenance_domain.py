@@ -110,19 +110,52 @@ class CheckPriorityInversionInv1Tests(unittest.TestCase):
         result = pd.check_priority_inversion(rows)
         self.assertEqual(result["status"], "PASS", result["issues"])
 
-    def test_cross_level_inversion_is_flagged(self):
-        # ADR-021 §2.2.3 INV-1 has NO priority qualifier: even a P0
-        # machine-signal item ahead of a P1 user-named item in the
-        # recommended pool is flagged — cross-level inversion is exactly
-        # what the 反倒挂判定 兜底 (D1 keeps the SORT from crossing P levels;
-        # the CHECK still surfaces the structural deferral).
+    def test_cross_level_inversion_warns_not_fails(self):
+        # FEAT-080 / ADR-021 §2.2.3 R0 revision (INV-X): a CROSS-level
+        # inversion (P0 machine-signal ahead of P1 user-named) is the D1
+        # known tolerance — the sort deliberately never crosses P levels,
+        # so disclosure is a WARN, never a FAIL (FAIL would misjudge the
+        # structurally tolerated cross-level deferral; the terminal
+        # interception lives with the release gate).
         rows = [
             _row("FIX-001", "machine-signal", priority="P0"),
             _row("FIX-002", "user-named", priority="P1"),
         ]
         result = pd.check_priority_inversion(rows)
-        self.assertEqual(result["status"], "FAIL")
-        self.assertTrue(any("FIX-002" in i for i in result["issues"]))
+        self.assertEqual(result["status"], "PASS", result["issues"])
+        self.assertEqual(result["issues"], [])
+        self.assertTrue(any(
+            "FIX-001" in w and "FIX-002" in w for w in result["warnings"]),
+            result["warnings"])
+        self.assertTrue(result["invx_pairs"])
+        self.assertEqual(result["inv1_pairs"], [])
+
+    def test_invx_absent_when_no_cross_level_pair(self):
+        # No machine-signal ahead of a user-named item → no INV-1 and no
+        # INV-X disclosure either (both faces quiet).
+        rows = [
+            _row("FIX-002", "user-named", priority="P1"),
+            _row("FIX-001", "machine-signal", priority="P0"),
+        ]
+        result = pd.check_priority_inversion(rows)
+        self.assertEqual(result["status"], "PASS")
+        self.assertEqual(result["inv1_pairs"], [])
+        self.assertEqual(result["invx_pairs"], [])
+        self.assertEqual(result["warnings"], [])
+
+    def test_unparsed_priority_warns_conservatively(self):
+        # FEAT-080: a pair whose priorities cannot BOTH be parsed to P-levels
+        # cannot be PROVEN same-level — fail-closed in the disclosure
+        # direction (WARN, INV-X), never a FAIL on unprovable evidence.
+        rows = [
+            _row("FIX-001", "machine-signal", priority=""),
+            _row("FIX-002", "user-named", priority="P1"),
+        ]
+        result = pd.check_priority_inversion(rows)
+        self.assertEqual(result["status"], "PASS", result["issues"])
+        self.assertEqual(result["inv1_pairs"], [])
+        self.assertTrue(any("FIX-002" in w for w in result["warnings"]))
+        self.assertTrue(result["invx_pairs"])
 
 
 class CheckPriorityInversionInv2Tests(unittest.TestCase):

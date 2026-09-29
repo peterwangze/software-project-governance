@@ -867,11 +867,34 @@ class ChangeTriageCliTests(unittest.TestCase):
         (self.gov / "plan-tracker.md").write_text(tracker, encoding="utf-8")
 
     def _run_cli(self, *extra):
+        # FEAT-080 (B3, DEC-290(5)): --demand-source is required at the
+        # argparse layer (intake window closed) — the helper injects the
+        # conservative machine-signal default so each test keeps judging
+        # its OWN step; the missing-flag negative lives right below.
+        argv = [sys.executable, str(_INFRA_DIR / "verify_workflow.py"),
+                "change-triage", "--project-root", str(self.root)]
+        if "--demand-source" not in extra:
+            argv += ["--demand-source", "machine-signal"]
         return subprocess.run(
-            [sys.executable, str(_INFRA_DIR / "verify_workflow.py"),
-             "change-triage", "--project-root", str(self.root)] + list(extra),
+            argv + list(extra),
             capture_output=True, text=True, encoding="utf-8", timeout=60,
         )
+
+    def test_cli_missing_demand_source_exits_two(self):
+        # FEAT-080 (B3): the window is CLOSED — no flag, no intake
+        # (argparse-level exit 2, zero writes; the library-level
+        # machine-signal default is unreachable from the CLI face).
+        done = subprocess.run(
+            [sys.executable, str(_INFRA_DIR / "verify_workflow.py"),
+             "change-triage", "--project-root", str(self.root),
+             "--task", "FIX-108", "--title", "t", "--priority", "P2",
+             "--version", self.planned, "--depends-on", "FIX-100",
+             "--files", "skills/software-project-governance/infra/x.py",
+             "--reason", "r"],
+            capture_output=True, text=True, encoding="utf-8", timeout=60,
+        )
+        self.assertEqual(done.returncode, 2, done.stdout)
+        self.assertFalse((self.gov / "change-triage" / "FIX-108.json").exists())
 
     def test_cli_runs_four_steps_and_writes_record(self):
         done = self._run_cli(
@@ -1126,9 +1149,14 @@ class ChangeTriageProjectVersionCliTests(unittest.TestCase):
             _OLD_HOST_TRACKER, encoding="utf-8")
 
     def _run_cli(self, *extra):
+        # FEAT-080 (B3): inject the now-required --demand-source default so
+        # this FIX-288 face keeps judging its OWN version-fact-source step.
+        argv = [sys.executable, str(_INFRA_DIR / "verify_workflow.py"),
+                "change-triage", "--project-root", str(self.root)]
+        if "--demand-source" not in extra:
+            argv += ["--demand-source", "machine-signal"]
         return subprocess.run(
-            [sys.executable, str(_INFRA_DIR / "verify_workflow.py"),
-             "change-triage", "--project-root", str(self.root)] + list(extra),
+            argv + list(extra),
             capture_output=True, text=True, encoding="utf-8", timeout=60,
         )
 
@@ -1870,6 +1898,48 @@ class DemandRevisionChannelTests(unittest.TestCase):
         self.assertIn("error", summary)
         self.assertIn("basis_kind", summary["error"])
         self.assertFalse(self.events_path.exists())
+
+    def test_malformed_task_id_fails_closed(self):
+        # FEAT-077 R1 P3-3: the malformed-task_id arm of the five-way
+        # fail-closed validation had no dedicated test (FIX-999 above is a
+        # well-formed id with no record — a DIFFERENT arm). One-line
+        # negative: garbage shape → error, zero writes anywhere.
+        summary = self._revise(task_id="garbage")
+        self.assertIn("error", summary)
+        self.assertIn("PREFIX-NNN", summary["error"])
+        self.assertFalse(self.events_path.exists())
+        for path in (self.gov / "change-triage").glob("*"):
+            self.assertNotIn("garbage", path.name)
+
+    def test_failed_evidence_rollback_truncates_existing_stream(self):
+        # FEAT-077 R1 P3-2: the rollback TRUNCATE branch (stream already
+        # exists → restore prior length after a failed evidence append) had
+        # no direct test — the existing suite only covered the
+        # created→unlink branch. Green-by-coverage: the branch itself was
+        # already correct (R1 §2 verified by read); this test pins it.
+        first = self._revise()
+        self.assertFalse(first.get("error"), first)
+        prior_bytes = self.events_path.read_bytes()
+        prior_lines = [ln for ln in prior_bytes.decode("utf-8").splitlines()
+                       if ln.strip()]
+        self.assertEqual(len(prior_lines), 1)
+        # Second revision with an UNWRITABLE evidence path: the event line
+        # lands first, the evidence append fails, the stream must roll
+        # back to its prior single-event length (no half-written state).
+        second = self._revise(
+            to="active-defect",
+            demand_basis="活性缺陷证据锚：EVD-901",
+            basis_kind="dec-ref",
+            evidence_path=self.gov / "nonexistent-dir"
+                          / "evidence-log.md")
+        self.assertIn("error", second, second)
+        after_lines = [ln for ln in
+                       self.events_path.read_text(encoding="utf-8").splitlines()
+                       if ln.strip()]
+        self.assertEqual(len(after_lines), 1,
+                         "failed revision must leave no half-written state")
+        self.assertEqual(self.events_path.read_bytes(), prior_bytes)
+        self.assertEqual(self.record_path.read_bytes(), self.record_before)
 
     def test_revision_normalizes_case_insensitively(self):
         summary = self._revise(to="USER-NAMED")

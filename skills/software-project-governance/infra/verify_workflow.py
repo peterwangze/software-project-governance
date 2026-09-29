@@ -7270,6 +7270,153 @@ def run_dsh_upgrade_regression_gates(smoke_runner=None):
     }
 
 
+# ── FEAT-080 / ADR-021 B3: provenance wiring plumbing ──────────────────────
+#
+# Engine-side assembly shared by the Check 41 (Priority Inversion Guard)
+# box and the release-readiness provenance sub-check: the PriorityReport →
+# provenance-rows mapping and the live row build. The judgement predicates
+# stay in checks/provenance_domain.py (pure, ArchGuard R1 discipline — the
+# engine does I/O assembly and rendering only).
+
+def _provenance_rows_from_report(report):
+    """Map a task_priority.PriorityReport to provenance_domain row dicts.
+
+    Bucket vocabulary parity is the contract (module docstring of
+    provenance_domain): recommended_next → recommended, non_executable →
+    non_executable, blocked → blocked, completed → completed.
+    """
+    def _row(task, bucket):
+        return {
+            "task_id": task.task_id,
+            "demand_source": task.demand_source,
+            "bucket": bucket,
+            "priority": task.priority,
+            "target_version": task.target_version,
+        }
+
+    rows = []
+    for task in getattr(report, "recommended_next", None) or []:
+        rows.append(_row(task, "recommended"))
+    for task in getattr(report, "non_executable", None) or []:
+        rows.append(_row(task, "non_executable"))
+    for blocked in getattr(report, "blocked", None) or []:
+        task = getattr(blocked, "task", None) or blocked
+        rows.append(_row(task, "blocked"))
+    for task in getattr(report, "completed", None) or []:
+        rows.append(_row(task, "completed"))
+    return rows
+
+
+def _provenance_rows_for_governance(tracker_path=None, governance_dir=None):
+    """Live provenance rows: parse → demand-source resolve → report → rows.
+
+    The same orchestration run_cli_analysis uses (L2514-2520): parse the
+    plan-tracker, resolve demand sources against the triage records +
+    revision streams, then compute the bucketed report.
+    """
+    import task_priority as tpa
+    path = Path(tracker_path) if tracker_path else SAMPLE_PATH
+    gov = Path(governance_dir) if governance_dir else GOVERNANCE_DIR
+    if not path.is_file():
+        return []
+    try:
+        resolved, _lag_warnings = tpa._resolve_row_demand_sources(
+            tpa.parse_task_dependencies(path), gov)
+        report = tpa.compute_unblocked_tasks(
+            resolved,
+            archive_completed_ids=tpa.read_archive_index_completed_ids(gov))
+    except Exception:
+        return []
+    return _provenance_rows_from_report(report)
+
+
+# ADR-021 §3.2.2 终局三选一 (「维持待复评」非法) — the RISK closure word
+# set. Matched against the 当前状态 + 备注 columns only (never 缓解 prose,
+# which routinely contains 「关闭」 as part of mitigation narrative).
+_RISK_TERMINAL_WORDS = ("关闭", "收窄", "升级")
+
+
+def _collect_session_closure_events(governance_dir=None, today=None):
+    """FEAT-080 / ADR-021 §3.2.3: W(session) event collection for Check 42.
+
+    Deterministic COLUMN matching over the evidence/risk row families —
+    never semantic guessing:
+
+      - REVIEW rows (evidence-log, date column == today): NEEDS_CHANGE →
+        problem(task); APPROVED* → closure(task) (复审必达 pairing).
+      - EVD rows: a ✅ status → closure(task) (task 收口行).
+      - RISK rows (risk-log, 日期 == today): new row → problem(RISK-id);
+        a terminal word (关闭/收窄/升级) in 当前状态/备注 → closure.
+      - deferred_registration events are NOT collected here (B4 face-5
+        word-set detection scope); the collector reports 0 for that kind.
+
+    Window (ADR-021 §3.2.3 / L4): a session-snapshot carrying today's date
+    upgrades the window note to session identity; otherwise the note
+    discloses the 按日聚合 degradation explicitly — never a silent degrade.
+
+    Returns ``(events, note)``; never raises.
+    """
+    from datetime import date as _date_cls
+    gov = Path(governance_dir) if governance_dir else GOVERNANCE_DIR
+    today = today or _date_cls.today().isoformat()
+    events = []
+    evidence_path = gov / "evidence-log.md"
+    if evidence_path.is_file():
+        try:
+            evidence_lines = evidence_path.read_text(
+                encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError):
+            evidence_lines = []
+        for line in evidence_lines:
+            cells = [cell.strip() for cell in line.split("|")]
+            if len(cells) < 11 or cells[0] or not cells[1]:
+                continue
+            row_id, task = cells[1], cells[2]
+            row_date, status = cells[8], cells[10]
+            if row_date != today:
+                continue
+            if row_id.startswith("REVIEW-"):
+                if status == "NEEDS_CHANGE":
+                    events.append({"id": task, "kind": "problem"})
+                elif status.startswith("APPROVED"):
+                    events.append({"id": task, "kind": "closure"})
+            elif row_id.startswith("EVD-") and "✅" in status:
+                events.append({"id": task, "kind": "closure"})
+    risk_path = gov / "risk-log.md"
+    if risk_path.is_file():
+        try:
+            risk_lines = risk_path.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError):
+            risk_lines = []
+        for line in risk_lines:
+            cells = [cell.strip() for cell in line.split("|")]
+            if len(cells) < 11 or cells[0] or not cells[1].startswith("RISK-"):
+                continue
+            risk_id, row_date = cells[1], cells[2]
+            if row_date != today:
+                continue
+            events.append({"id": risk_id, "kind": "problem"})
+            status_tail = cells[9] + (cells[13] if len(cells) > 13 else "")
+            if any(word in status_tail for word in _RISK_TERMINAL_WORDS):
+                events.append({"id": risk_id, "kind": "closure"})
+    snapshot_path = gov / "session-snapshot.md"
+    window_note = None
+    if snapshot_path.is_file():
+        try:
+            snapshot_text = snapshot_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            snapshot_text = ""
+        if today in snapshot_text:
+            window_note = (f"window=session（session-snapshot 会话身份关联，"
+                           f"{today}）")
+    if window_note is None:
+        window_note = (
+            "window=daily-aggregate（按日聚合，同日多会话合并，精度降级——"
+            f"session-snapshot 未携带 {today}；禁止无标注的静默降级，"
+            "ADR-021 §3.2.3 / §2.4 L4）")
+    return events, window_note
+
+
 def check_release_readiness(
     version=None,
     require_changelog=False,
@@ -7336,6 +7483,34 @@ def check_release_readiness(
         ),
     }
     issues.extend(f"governance pack status: {issue}" for issue in pack_status_issues)
+
+    # FEAT-080 / ADR-021 §2.2.4: provenance release gate (DEC-290(5) wiring;
+    # NF-2 semantics — 排期/改期豁免 rides the task row's target_version,
+    # never a revision event). A release version carrying OPEN
+    # machine-signal work while user-named items stay open → FAIL; payload
+    # rows with undeclared provenance → FAIL (未申报 fail-closed — the
+    # release gate is the last line); no parseable version → SKIP face
+    # inside the sub-check itself (never a silent PASS).
+    if version:
+        from checks import provenance_domain as _provenance_gate_mod
+        provenance_rows = _provenance_rows_for_governance()
+        admission = _provenance_gate_mod.check_release_admission(
+            provenance_rows, {"version": str(version)})
+        details["provenance_release_gate"] = {
+            "pass": admission["status"] != "FAIL",
+            "status": admission["status"],
+            "issues": admission["issues"],
+            "warnings": admission["warnings"],
+            "machine_signal_payload": admission["machine_signal_payload"],
+            "open_user_named": admission["open_user_named"],
+            "deferred_user_named": admission["deferred_user_named"],
+            "undeclared_payload": admission["undeclared_payload"],
+        }
+        issues.extend(f"provenance release gate: {issue}"
+                      for issue in admission["issues"])
+        for warning in admission["warnings"]:
+            details.setdefault("release_warnings", []).append(
+                f"provenance release gate: {warning}")
 
     adapter_issues = check_agent_adapter_contract(run_runtime=run_runtime_adapters)
     details["agent_adapters"] = {
@@ -14630,9 +14805,30 @@ def cmd_execution_packet(args):
             if tid in wanted
         }
     if args.write:
-        # FIX-296 (EVD-959): the write face is always the FULL active packet
-        # set; --task filters the stdout preview only. Writing the filtered
-        # face silently dropped every unselected packet from the runtime file.
+        # FIX-296 (EVD-959): the write face never DROPS packets. FEAT-080
+        # (g) refines the --task --write combination into an INCREMENTAL
+        # MERGE: exactly the selected packets are regenerated; every other
+        # runtime entry (unselected active packets, inactive-task entries,
+        # manual packet-level enrichment) and every top-level manual key
+        # carry over value-for-value — the regeneration-wipes-enrichment
+        # pit this session hit three times. A bare --write keeps the
+        # FIX-296 full-regenerate semantics (file reflects the live
+        # tracker; packet-level enrichment still overlays via the
+        # existing merge in generate_execution_packets).
+        if selected is not None:
+            merged_packets = dict(packets)
+            merged_packets.update(selected)
+            packets_meta = {}
+            try:
+                raw_existing = json.loads(EXECUTION_PACKET_PATH.read_text(
+                    encoding="utf-8"))
+                if isinstance(raw_existing, dict):
+                    packets_meta = {
+                        key: value for key, value in raw_existing.items()
+                        if key not in ("version", "generated_at", "packets")}
+            except (OSError, ValueError):
+                packets_meta = {}
+            payload = {**packets_meta, **payload, "packets": merged_packets}
         EXECUTION_PACKET_PATH.parent.mkdir(parents=True, exist_ok=True)
         EXECUTION_PACKET_PATH.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
@@ -14640,8 +14836,9 @@ def cmd_execution_packet(args):
         )
         note = ""
         if selected is not None:
-            note = (" (--task affects stdout preview only; file written in"
-                    f" full: {', '.join(args.task)})")
+            note = (f" (incremental merge: regenerated {', '.join(args.task)};"
+                    f" preserved {len(merged_packets) - len(selected)} other"
+                    f" entr{'y' if len(merged_packets) - len(selected) == 1 else 'ies'}")
         print(f"[OK] wrote {len(payload['packets'])} execution packet(s) to "
               f"{EXECUTION_PACKET_PATH}{note}")
     else:
@@ -17146,6 +17343,71 @@ def _run_full_engine_checks(args):
         print(f"│  [{cr39['verdict']}] {cr39['reason']}")
     print("└──────────────────────────────────────────────────────┘")
 
+    # ── 41. Priority Inversion Guard (FEAT-080 / ADR-021 §2.2.3) ──
+    # Host-rooted facts (plan-tracker + .governance triage/revision
+    # streams) — never in _PLUGIN_PRODUCT_CHECK_IDS. INV-1 FAILs only on
+    # a PROVEN same-P-level inversion (FEAT-080 R0-revision qualifier);
+    # INV-X discloses cross-level pressure as WARN (the D1 known
+    # tolerance — the sort never crosses P levels; the terminal
+    # interception lives with the release gate); INV-2 fails on a parked
+    # user-named item while machine-signal fills the recommended board.
+    print("\n┌─ Check 41: Priority Inversion Guard (FEAT-080/ADR-021) ─┐")
+    from checks.provenance_domain import check_priority_inversion
+    rows41 = _provenance_rows_for_governance()
+    if not rows41:
+        print("│  [SKIP] plan-tracker 不可读或零任务行——反倒挂判定无判定面")
+    else:
+        inv41 = check_priority_inversion(rows41)
+        cov41 = inv41["coverage"]
+        print(f"│  Rows judged: {cov41['total']} (labeled: "
+              f"{cov41['labeled']}, coverage {cov41['ratio']:.0%})")
+        if inv41["status"] == "FAIL":
+            all_issues += len(inv41["issues"])
+            print(f"│  [FAIL] {len(inv41['issues'])} issue(s):")
+            for issue in inv41["issues"][:8]:
+                print(f"│    - {issue}")
+            if len(inv41["issues"]) > 8:
+                print(f"│    ... and {len(inv41['issues']) - 8} more")
+        elif inv41["status"] == "SKIP":
+            print("│  [SKIP] " + (inv41["warnings"][0] if inv41["warnings"]
+                                else "coverage 0"))
+        else:
+            print("│  [PASS] 无同级倒挂（INV-1）/停放倒挂（INV-2）命中")
+        for warning in inv41["warnings"][:6]:
+            if inv41["status"] != "SKIP":
+                print(f"│  [WARN] {warning}")
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 42. Discovery Closure Rate (FEAT-080 / ADR-021 §3.2.3) ──
+    # DEC-288 M2 effectiveness criterion, machine form
+    # ``session_closure_rate == 1.0 ∧ deferred_detections == 0``. Event
+    # sources = today's evidence/risk row families (deterministic column
+    # matching — see _collect_session_closure_events); <100% is WARN in
+    # the observation window (渐进 FAIL 翻转经 decision-log 入账, ADR
+    # §3.2.1 姿态), never silently skipped.
+    print("\n┌─ Check 42: Discovery Closure Rate (FEAT-080/ADR-021) ──┐")
+    from checks.provenance_domain import session_closure_rate
+    events42, window_note42 = _collect_session_closure_events()
+    rate42 = session_closure_rate(events42)
+    if rate42["problems_raised"] == 0:
+        print(f"│  [SKIP] 当日无新增问题行——无观测义务（{window_note42}）")
+    else:
+        print(f"│  {window_note42}")
+        print(f"│  problems raised: {rate42['problems_raised']}; closed: "
+              f"{rate42['closed']}; rate: "
+              f"{rate42['session_closure_rate']:.0%}; deferred detections: "
+              f"{rate42['deferred_detections']}")
+        if rate42["compliant"]:
+            print("│  [PASS] session_closure_rate == 1.0 ∧ "
+                  "deferred_detections == 0（DEC-288 M2 生效判据）")
+        else:
+            print("│  [WARN] 闭环率 <100% 或 deferred 检测 >0——观察期 WARN "
+                  "起步，渐进 FAIL 翻转经 decision-log 入账（ADR-021 §3.2.3）")
+            for unclosed in rate42["unclosed_ids"][:5]:
+                print(f"│    - unclosed: {unclosed}")
+    print("│  （deferred_registration 词集检测面随 B4 落地——当前采集器该类恒 0）")
+    print("└──────────────────────────────────────────────────────┘")
+
     # ── 28u. DSH Preset Session Smoke (FEAT-015 / RISK-049 ②) ──
     # RISK-049 closure standard (2): "安装后 preset 会话可用" as a repeatable
     # gate instead of reasoning. Blocking: a preset session that cannot load
@@ -17175,12 +17437,14 @@ def _run_full_engine_checks(args):
     # ── 28v. DSH Preset Schema Compat ──
     # A dsh upgrade silently invalidated one shipped-preset row (key `text` vs
     # dsh-persona's required `prefix`) and the WHOLE preset mount was rejected,
-    # so users could not start a session. Neither Check 40 nor Check 28u
-    # compares a composition row against the plugin set a mount actually uses;
-    # this gate does, with the loader's own dialect/evaluate and the resolved
-    # cordis `resolveConfig` (no schema is copied). Fact source = the plugin
-    # package's own compositions → PLUGIN_PRODUCT (FIX-270); no node / no
-    # resolvable plugin set → NOT_RUN, never a silent PASS. Body rendering and
+    # so users could not start a session. Neither the retired Check 40
+    # (FIX-310 manifest guard — number retired, never reused; ADR-021
+    # §2.2.3 RT-4) nor Check 28u compares a composition row against the
+    # plugin set a mount actually uses; this gate does, with the loader's
+    # own dialect/evaluate and the resolved cordis `resolveConfig` (no
+    # schema is copied). Fact source = the plugin package's own
+    # compositions → PLUGIN_PRODUCT (FIX-270); no node / no resolvable
+    # plugin set → NOT_RUN, never a silent PASS. Body rendering and
     # the full rationale live in dsh_compat (R4: orchestration output belongs
     # to the render layer).
     if _product_gate_active(args):
@@ -24220,6 +24484,8 @@ def cmd_change_triage(args):
         reason=getattr(args, "reason", "") or "",
         acceptance=getattr(args, "acceptance", "") or "",
         declared_side_effects=getattr(args, "side_effects", "") or "",
+        demand_source=getattr(args, "demand_source", "") or "",
+        demand_basis=getattr(args, "demand_basis", "") or "",
         plan_tracker_text=plan_tracker_text,
         current_version=current_version,
         governance_dir=GOVERNANCE_DIR,
@@ -24246,6 +24512,37 @@ def cmd_change_triage(args):
               "无行族时 EVD fallback——DEC-168 行族权威），历史异构库中该标准行"
               "可能为旧行（列数漂移）——写入行符合当前格式时先核对标准行本身"
               .format(summary.get("task_id", "?")), file=sys.stderr)
+        sys.exit(2)
+
+
+def cmd_demand_source_revise(args):
+    """Thin entry — demand-source-revise CLI (FEAT-080 / ADR-021 §2.2.1).
+
+    B3 regularization of the revision channel: the window-era Coordinator
+    library-level API becomes a first-class CLI face. Appends ONE
+    demand_source revision event (``change-triage/{TASK_ID}.demand-
+    revisions.jsonl`` + machine evidence row); the immutable triage record
+    is never touched. All validation lives in
+    :func:`change_triage.append_demand_revision` (RISK-039 thin-entry
+    discipline; fail-closed → exit 2, zero writes): malformed task / no
+    triage record / non-enum ``to`` / empty basis / bad basis_kind.
+    """
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    from change_triage import append_demand_revision
+    summary = append_demand_revision(
+        task_id=args.task,
+        to=args.to,
+        demand_basis=getattr(args, "basis", "") or "",
+        basis_kind=getattr(args, "basis_kind", "session-record")
+        or "session-record",
+        revised_by=getattr(args, "authorized_by", "") or "",
+        governance_dir=GOVERNANCE_DIR,
+    )
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    if summary.get("error"):
         sys.exit(2)
 
 
@@ -26204,6 +26501,21 @@ def main(argv=None):
                         choices=["P0", "P1", "P2"],
                         help="Proposed priority (determined with in-flight + "
                              "version-chain context)")
+    # FEAT-080 / ADR-021 §2.2.1 写路径窗口关闭 (DEC-290(5)): the B2-era
+    # conservative machine-signal default could not be passed through the
+    # locked CLI; required=True closes the window — a missing flag exits 2
+    # upstream and the library-level default path becomes unreachable from
+    # this CLI (user-named additionally requires --demand-basis and defaults
+    # to P1 per DEC-286(7), library-side enforcement).
+    ctri_p.add_argument("--demand-source", required=True, dest="demand_source",
+                        choices=["user-named", "active-defect", "machine-signal"],
+                        help="Demand provenance (ADR-021 §2.2.1 three-value "
+                             "enum; REQUIRED — the intake window default is "
+                             "closed, FEAT-080)")
+    ctri_p.add_argument("--demand-basis", default="", dest="demand_basis",
+                        help="Traceability basis REQUIRED for user-named "
+                             "(user quote / DEC ref / session-record anchor; "
+                             "BC-4 防 出身洗白)")
     ctri_p.add_argument("--version", default="未规划版本",
                         help="Target version (semver X.Y.Z or 未规划版本)")
     ctri_p.add_argument("--depends-on", default="",
@@ -26225,6 +26537,32 @@ def main(argv=None):
                              "runs / profile writes / network publishing) — "
                              "R2 fifth step: undeclared detectable side "
                              "effects record a WARN issue")
+
+    # demand-source-revise (FEAT-080 / ADR-021 §2.2.1 F-P1-3 — the revision
+    # channel's B3 CLI regularization; the window-era Coordinator library
+    # API becomes a first-class face)
+    dsr_p = subparsers.add_parser(
+        "demand-source-revise",
+        help="Append one demand_source revision event (append-only jsonl "
+             "+ evidence row; the triage record stays immutable — "
+             "ADR-021 §2.2.1 / FEAT-080)",
+    )
+    dsr_p.add_argument("--task", required=True,
+                       help="Task id (PREFIX-NNN) — MUST already have a "
+                            "triage record")
+    dsr_p.add_argument("--to", required=True,
+                       choices=["user-named", "active-defect", "machine-signal"],
+                       help="Target demand_source (three-value enum)")
+    dsr_p.add_argument("--basis", required=True,
+                       help="Traceability basis (REQUIRED non-empty — the "
+                            "revision re-asserts the provenance claim, same "
+                            "obligation as the initial labeling, BC-4)")
+    dsr_p.add_argument("--basis-kind", default="session-record",
+                       dest="basis_kind",
+                       choices=["user-quote", "dec-ref", "session-record"],
+                       help="Basis kind (default session-record)")
+    dsr_p.add_argument("--authorized-by", default="", dest="authorized_by",
+                       help="Actor annotation (e.g. Coordinator)")
 
     # governance-cost-report (FEAT-032 / AUDIT-154 slice A-1 — governance
     # cost observability: TTFA, time-to-substantive-work, token breakdown,
@@ -26538,6 +26876,7 @@ def main(argv=None):
         "review-record": cmd_review_record,
         "next-candidates": cmd_next_candidates,
         "change-triage": cmd_change_triage,
+        "demand-source-revise": cmd_demand_source_revise,
         "governance-write-guard": cmd_governance_write_guard,
         "write-guard-bootstrap": cmd_write_guard_bootstrap,
         "governance-cost-report": cmd_governance_cost_report,

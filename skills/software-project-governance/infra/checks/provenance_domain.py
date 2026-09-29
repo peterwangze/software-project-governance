@@ -75,6 +75,20 @@ __all__ = [
 # PriorityReport bucket vocabulary (task_priority.PriorityReport fields).
 BUCKETS = ("recommended", "non_executable", "blocked", "completed")
 
+# FEAT-080 / ADR-021 §2.2.3 R0 revision: the P-level qualifier parser. A
+# bare ``P0``/``P1``/``P2`` cell parses to its numeric rank; anything else
+# (empty, prose, markdown noise) parses to None — a pair that cannot BOTH
+# be proven same-level is NEVER a FAIL (fail-closed in the disclosure
+# direction: WARN via INV-X, never a FAIL on unprovable evidence).
+_PRIORITY_RE = re.compile(r"^P([0-9])$")
+
+
+def _priority_rank(value):
+    """Numeric P-level for a bare ``P0``/``P1``/``P2`` cell, else None."""
+    text = str(value or "").strip().upper()
+    match = _PRIORITY_RE.match(text)
+    return int(match.group(1)) if match else None
+
 # Strict semver shape. Unlike task_priority._version_tuple (which returns
 # the (inf, 0, 0) sort-last sentinel for unparseable values), the release
 # gate must DISTINGUISH "no version" from "a version above the release" —
@@ -120,10 +134,18 @@ def check_priority_inversion(rows) -> dict:
 
       - **INV-1 (推荐位倒挂)** — inside the ``recommended`` bucket, in row
         order, a ``machine-signal`` item M ranked above an OPEN ``user-named``
-        item U (``completed`` rows are not open). No priority qualifier: a
-        cross-level inversion (machine P0 ahead of user-named P1) IS flagged —
-        the D1 sort deliberately never crosses P levels, so the 反倒挂判定
-        is the 兜底 layer for the structural deferral DEC-286(7) diagnosed.
+        item U (``completed`` rows are not open) **at the same P-level**
+        (FEAT-080 / ADR-021 §2.2.3 R0 revision: the priority qualifier is
+        part of the judgement — the sort's provenance tie-break operates
+        within a P level, so a same-level inversion proves a sort defect or
+        a hand-written recommendation bypass, both FAIL).
+      - **INV-X (跨级压序披露, WARN)** — M ranked above U where M's P-level
+        is strictly HIGHER (numerically lower) than U's: the D1 known
+        tolerance (the sort deliberately never crosses P levels, ADR-021
+        §2.2.2(5)); disclosed, never blocking — the terminal interception
+        lives with the release gate (§2.2.4). A pair whose levels cannot
+        both be parsed is disclosed the same way (fail-closed in the
+        disclosure direction: never a FAIL on unprovable evidence).
       - **INV-2 (可执行性倒挂)** — a ``user-named`` row sits in the
         ``non_executable`` bucket (dependency-satisfied but held by a status
         marker) while the recommended pool is non-empty AND entirely
@@ -146,7 +168,8 @@ def check_priority_inversion(rows) -> dict:
         dict ``{"status": "PASS"|"FAIL"|"SKIP", "issues": [str],
         "warnings": [str], "coverage": {"labeled", "total", "ratio"},
         "conflicts": [task_id], "inv1_pairs": [[m, u], ...],
-        "inv2_parked": [task_id]}``. Never raises.
+        "invx_pairs": [[m, u], ...], "inv2_parked": [task_id]}``.
+        Never raises.
     """
     rows = _rows(rows)
     issues = []
@@ -164,7 +187,7 @@ def check_priority_inversion(rows) -> dict:
                 "empty rows input — 活跃队列为空，反倒挂判定无判定面"
                 "（ADR-021 §2.2.3）"],
             "coverage": coverage, "conflicts": [],
-            "inv1_pairs": [], "inv2_parked": [],
+            "inv1_pairs": [], "inv2_parked": [], "invx_pairs": [],
         }
 
     # conflict rows FAIL first (数据一致性优先于排序判断 — ADR §2.2.3).
@@ -182,23 +205,52 @@ def check_priority_inversion(rows) -> dict:
                 "（ADR-021 §2.2.3 分阶段 fail-closed / BC-2：覆盖率 > 0 即"
                 "严格执法）"],
             "coverage": coverage, "conflicts": [],
-            "inv1_pairs": [], "inv2_parked": [],
+            "inv1_pairs": [], "inv2_parked": [], "invx_pairs": [],
         }
 
     recommended = [r for r in rows if _bucket(r) == "recommended"]
 
     # INV-1 — machine-signal ranked above an OPEN user-named item.
+    # FEAT-080 / ADR-021 §2.2.3 R0 revision: INV-1 FAILs only on a PROVEN
+    # same-P-level inversion; a cross-level pair (machine P-level strictly
+    # above the user-named one — the D1 known tolerance) and a pair whose
+    # levels cannot both be parsed are disclosed as INV-X WARN instead
+    # (never a FAIL on unprovable evidence; the cross-level terminal
+    # interception lives with the release gate, ADR-021 §2.2.4).
     inv1_pairs = []
+    invx_pairs = []
     for i, m in enumerate(recommended):
         if _source(m) != "machine-signal":
             continue
         for u in recommended[i + 1:]:
-            if _source(u) == "user-named":
+            if _source(u) != "user-named":
+                continue
+            rank_m = _priority_rank(m.get("priority"))
+            rank_u = _priority_rank(u.get("priority"))
+            if (rank_m is not None and rank_u is not None
+                    and rank_m == rank_u):
                 inv1_pairs.append([_task_id(m), _task_id(u)])
                 issues.append(
-                    "INV-1: `{0}`（machine-signal）排位高于开放 user-named 项"
-                    " `{1}`——推荐位倒挂（ADR-021 §2.2.3 / DEC-286(7)）"
-                    .format(_task_id(m), _task_id(u)))
+                    "INV-1: `{0}`（machine-signal，{2}）排位高于同优先级开放"
+                    " user-named 项 `{1}`——推荐位倒挂（ADR-021 §2.2.3 / "
+                    "DEC-286(7)）".format(
+                        _task_id(m), _task_id(u), m.get("priority") or "?"))
+            elif (rank_m is not None and rank_u is not None
+                    and rank_m < rank_u):
+                invx_pairs.append([_task_id(m), _task_id(u)])
+                warnings.append(
+                    "INV-X: `{0}`（machine-signal，P{1}）压序 user-named 项"
+                    " `{2}`（P{3}）——跨 P 级压序为 D1 已知容忍，披露不阻断"
+                    "（终局拦截=发布门，ADR-021 §2.2.2(5)/§2.2.4）".format(
+                        _task_id(m), rank_m, _task_id(u), rank_u))
+            else:
+                invx_pairs.append([_task_id(m), _task_id(u)])
+                warnings.append(
+                    "INV-X: `{0}`（machine-signal）排位高于 user-named 项"
+                    " `{1}`，但 P 级未全部可解析（{2!r} vs {3!r}）——无法"
+                    "证明同级，保守披露不阻断（ADR-021 §2.2.3 FEAT-080）"
+                    .format(_task_id(m), _task_id(u),
+                            m.get("priority"), u.get("priority")))
 
     # INV-2 — parked user-named while machine-signal fills the board.
     inv2_parked = [
@@ -221,6 +273,7 @@ def check_priority_inversion(rows) -> dict:
         "conflicts": conflicts,
         "inv1_pairs": inv1_pairs,
         "inv2_parked": inv2_parked,
+        "invx_pairs": invx_pairs,
     }
 
 

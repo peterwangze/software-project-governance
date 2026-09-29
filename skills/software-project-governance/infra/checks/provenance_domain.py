@@ -1,0 +1,400 @@
+#!/usr/bin/env python3
+"""Priority-enforcement provenance judgements — FEAT-077 / ADR-021 B2 (M1-L2).
+
+Pure judgement pieces for the M1 优先级执法底层机制 (ADR-021
+meta-mechanisms, DEC-288 Wave1). Delivered as the **unwired B2 half-batch**:
+every function here is a pure predicate; the enforcement WIRING (the
+check-governance 反倒挂判定 box, the ``check_release_readiness``
+sub-check, and the 闭环率指标 face) is B3/B4 scope and lives in
+``verify_workflow.py`` — **locked by FIX-404 at delivery time (ADR-021
+§1.3 F10 / §4 批次表: 锁释放后实施)**. Check-box NUMBERS are deliberately
+NOT hardcoded here (编号随 ADR 返工重编) — anchors are ADR-021 §2.2
+section references.
+
+Three functions (each anchored to its ADR section):
+
+  - :func:`check_priority_inversion` — ADR-021 §2.2.3 反倒挂判定
+    (Priority Inversion Guard): INV-1 (a machine-signal item ranked above
+    an OPEN user-named item inside the recommended pool), INV-2 (an
+    unblocked-eligible user-named item parked in ``non_executable`` while
+    the recommended pool is non-empty and entirely machine-signal), staged
+    fail-closed (demand-source coverage 0 → SKIP + WARN, BC-2 存量海瘫痪
+    mitigation) and conflict rows → FAIL (data consistency outranks the
+    ordering judgement).
+  - :func:`check_release_admission` — ADR-021 §2.2.4 发布门判定
+    (provenance release gate): a release version carrying open
+    machine-signal work while user-named items stay open → FAIL;
+    user-named items explicitly deferred to a strictly later version are
+    exempt; a payload task with no declared provenance → FAIL (未申报
+    fail-closed — the release gate is the last line).
+  - :func:`session_closure_rate` — ADR-021 §3.2.3 闭环率指标 (M2
+    effectiveness criterion, DEC-288): in-session closure rate with the
+    deferred-registration zeroing precondition; the machine-checkable form
+    is ``session_closure_rate == 1.0 ∧ deferred_detections == 0``.
+
+Purity contract: this module imports only the standard library plus the
+peer pure module :mod:`task_priority` (the demand-source vocabulary) — it
+NEVER imports ``verify_workflow`` (wiring stays one-way: the engine
+consumes the domain, never the reverse; same discipline as
+``checks/snapshot_domain.py`` / ``checks/gate_domain.py``).
+
+Row contract (shared by the two task-row judgements; mirrors the
+:class:`task_priority.PriorityReport` bucket vocabulary so the B3 wiring
+maps a report to rows mechanically)::
+
+    {
+        "task_id": str,                     # e.g. "FIX-226"
+        "demand_source": str,               # user-named | active-defect |
+                                            # machine-signal | legacy | conflict
+        "bucket": str,                      # recommended | non_executable |
+                                            # blocked | completed
+        "priority": str,                    # optional, informational
+        "target_version": str,              # optional, release-payload match
+    }
+
+``legacy`` (存量未标行, ADR-021 §2.2.1 向后兼容) participates in NEITHER
+side of the inversion judgement — the 反倒挂判定 enforces the DEC-287(5)
+transition discipline only over rows whose provenance is declared; the
+staged fail-closed row below governs the all-legacy board.
+"""
+
+from __future__ import annotations
+
+import re
+
+from task_priority import DEMAND_SOURCE_VALUES
+
+__all__ = [
+    "DEMAND_SOURCE_VALUES",
+    "BUCKETS",
+    "check_priority_inversion",
+    "check_release_admission",
+    "session_closure_rate",
+]
+
+# PriorityReport bucket vocabulary (task_priority.PriorityReport fields).
+BUCKETS = ("recommended", "non_executable", "blocked", "completed")
+
+# Strict semver shape. Unlike task_priority._version_tuple (which returns
+# the (inf, 0, 0) sort-last sentinel for unparseable values), the release
+# gate must DISTINGUISH "no version" from "a version above the release" —
+# an (inf) sentinel would silently classify every unversioned user-named
+# row as explicitly deferred. This parser returns None for anything that is
+# not a bare X.Y.Z.
+_SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+$")
+
+
+def _parse_semver(value) -> tuple:
+    """Strict ``(maj, min, patch)`` for a bare X.Y.Z string, else None."""
+    text = str(value or "").strip()
+    if not _SEMVER_RE.match(text):
+        return None
+    return tuple(int(part) for part in text.split("."))
+
+
+def _rows(rows):
+    """Coerce the input to a list of dicts (defensive; never raises)."""
+    result = []
+    for row in rows or []:
+        if isinstance(row, dict):
+            result.append(row)
+    return result
+
+
+def _bucket(row):
+    return str(row.get("bucket", "") or "")
+
+
+def _source(row):
+    return str(row.get("demand_source", "") or "")
+
+
+def _task_id(row):
+    return str(row.get("task_id", "") or "")
+
+
+def check_priority_inversion(rows) -> dict:
+    """反倒挂判定 — ADR-021 §2.2.3 (Priority Inversion Guard).
+
+    Deterministic, non-semantic machine rules (FAIL = any hit):
+
+      - **INV-1 (推荐位倒挂)** — inside the ``recommended`` bucket, in row
+        order, a ``machine-signal`` item M ranked above an OPEN ``user-named``
+        item U (``completed`` rows are not open). No priority qualifier: a
+        cross-level inversion (machine P0 ahead of user-named P1) IS flagged —
+        the D1 sort deliberately never crosses P levels, so the 反倒挂判定
+        is the 兜底 layer for the structural deferral DEC-286(7) diagnosed.
+      - **INV-2 (可执行性倒挂)** — a ``user-named`` row sits in the
+        ``non_executable`` bucket (dependency-satisfied but held by a status
+        marker) while the recommended pool is non-empty AND entirely
+        ``machine-signal`` — 「用户项被停放而机器项占据全部推荐位」.
+      - **conflict** — any row whose ``demand_source`` is ``conflict``
+        (triage JSON vs 行内标注矛盾, ADR-021 §2.2.2 (3)) FAILs regardless
+        of coverage: data consistency outranks the ordering judgement.
+
+    Staged fail-closed (BC-2 存量海瘫痪 mitigation):
+
+      - demand-source coverage (three-value rows / all rows) == 0 and no
+        conflict rows → **SKIP + WARN** (「provenance 标注覆盖率 0——
+        DEC-287(5) 过渡期执法未落地」); coverage > 0 → strict enforcement.
+
+    Args:
+        rows: ordered row dicts (row contract in the module docstring);
+            the ORDER of ``recommended`` rows carries the rank information.
+
+    Returns:
+        dict ``{"status": "PASS"|"FAIL"|"SKIP", "issues": [str],
+        "warnings": [str], "coverage": {"labeled", "total", "ratio"},
+        "conflicts": [task_id], "inv1_pairs": [[m, u], ...],
+        "inv2_parked": [task_id]}``. Never raises.
+    """
+    rows = _rows(rows)
+    issues = []
+    warnings = []
+    labeled = [r for r in rows if _source(r) in DEMAND_SOURCE_VALUES]
+    coverage = {
+        "labeled": len(labeled),
+        "total": len(rows),
+        "ratio": (len(labeled) / len(rows)) if rows else 0.0,
+    }
+
+    if not rows:
+        return {
+            "status": "SKIP", "issues": [], "warnings": [
+                "empty rows input — 活跃队列为空，反倒挂判定无判定面"
+                "（ADR-021 §2.2.3）"],
+            "coverage": coverage, "conflicts": [],
+            "inv1_pairs": [], "inv2_parked": [],
+        }
+
+    # conflict rows FAIL first (数据一致性优先于排序判断 — ADR §2.2.3).
+    conflicts = [_task_id(r) for r in rows if _source(r) == "conflict"]
+    for tid in conflicts:
+        issues.append(
+            "conflict: `{0}` 行内〔标注〕与 triage 记录 demand_source 冲突——"
+            "数据一致性优先于排序判断，须人工校正（ADR-021 §2.2.2/§2.2.3）"
+            .format(tid))
+
+    if not labeled and not conflicts:
+        return {
+            "status": "SKIP", "issues": [], "warnings": [
+                "provenance 标注覆盖率 0——DEC-287(5) 过渡期执法未落地"
+                "（ADR-021 §2.2.3 分阶段 fail-closed / BC-2：覆盖率 > 0 即"
+                "严格执法）"],
+            "coverage": coverage, "conflicts": [],
+            "inv1_pairs": [], "inv2_parked": [],
+        }
+
+    recommended = [r for r in rows if _bucket(r) == "recommended"]
+
+    # INV-1 — machine-signal ranked above an OPEN user-named item.
+    inv1_pairs = []
+    for i, m in enumerate(recommended):
+        if _source(m) != "machine-signal":
+            continue
+        for u in recommended[i + 1:]:
+            if _source(u) == "user-named":
+                inv1_pairs.append([_task_id(m), _task_id(u)])
+                issues.append(
+                    "INV-1: `{0}`（machine-signal）排位高于开放 user-named 项"
+                    " `{1}`——推荐位倒挂（ADR-021 §2.2.3 / DEC-286(7)）"
+                    .format(_task_id(m), _task_id(u)))
+
+    # INV-2 — parked user-named while machine-signal fills the board.
+    inv2_parked = [
+        _task_id(r) for r in rows
+        if _bucket(r) == "non_executable" and _source(r) == "user-named"]
+    recommended_sources = {_source(r) for r in recommended}
+    if inv2_parked and recommended and recommended_sources <= {"machine-signal"}:
+        for tid in inv2_parked:
+            issues.append(
+                "INV-2: user-named 项 `{0}` 依赖已满足却被停放"
+                "（non_executable），而推荐位非空且全部为 machine-signal——"
+                "结构性大需求被无限顺延的可机检近似（ADR-021 §2.2.3 / "
+                "DEC-286(7)）".format(tid))
+
+    return {
+        "status": "FAIL" if issues else "PASS",
+        "issues": issues,
+        "warnings": warnings,
+        "coverage": coverage,
+        "conflicts": conflicts,
+        "inv1_pairs": inv1_pairs,
+        "inv2_parked": inv2_parked,
+    }
+
+
+def check_release_admission(rows, version_payload) -> dict:
+    """发布门判定 — ADR-021 §2.2.4 (provenance release gate).
+
+    Machine rules (deterministic):
+
+      - **MS** = open rows with ``demand_source="machine-signal"`` whose
+        ``target_version`` equals the release version.
+      - **UN** = open ``user-named`` rows regardless of version — EXCEPT
+        rows whose target version is a bare semver STRICTLY ABOVE the
+        release version (用户已知悉的显式改期, DEC-286(7)「或显式请用户
+        改期」); unversioned/unparseable targets stay in UN (结构性大需求
+        不得因版本边界隐形顺延).
+      - **FAIL**: MS non-empty ∧ UN non-empty → issues pair each MS row with
+        each open UN row (「{MS 项}（machine-signal）载入 {V} 而 user-named
+        {UN 项} 未闭合」).
+      - **未申报 fail-closed**: an OPEN payload row (target_version ==
+        release version) whose ``demand_source`` is neither of the three
+        values → FAIL — 版本载荷的 provenance 不完整即拒绝发布 (新任务
+        门禁下必有记录，缺记录只可能是绕过或存量异常). ``conflict``
+        payload rows FAIL the same way (data consistency).
+      - 存量不在发布门作用域 (BC-2): legacy rows targeting OTHER versions
+        are not part of this payload and are never flagged.
+
+    Args:
+        rows: row dicts (module docstring contract; ``target_version``
+            participates in payload matching).
+        version_payload: ``{"version": "X.Y.Z"}`` — the release version being
+            admitted (a bare semver string is accepted too). Missing or
+            non-semver → SKIP with a warning (a gate without a version has
+            no payload to judge; never a silent PASS).
+
+    Returns:
+        dict ``{"status": "PASS"|"FAIL"|"SKIP", "issues": [str],
+        "warnings": [str], "release_version": str,
+        "machine_signal_payload": [id], "open_user_named": [id],
+        "deferred_user_named": [id], "undeclared_payload": [id]}``.
+        Never raises.
+    """
+    rows = _rows(rows)
+    if isinstance(version_payload, dict):
+        release = str(version_payload.get("version", "") or "").strip()
+    else:
+        release = str(version_payload or "").strip()
+
+    if _parse_semver(release) is None:
+        return {
+            "status": "SKIP", "issues": [], "warnings": [
+                "release version 缺失或非 semver（{0!r}）——发布门无版本载荷"
+                "可判，SKIP 而非静默 PASS（ADR-021 §2.2.4）".format(release)],
+            "release_version": release,
+            "machine_signal_payload": [], "open_user_named": [],
+            "deferred_user_named": [], "undeclared_payload": [],
+        }
+
+    release_vt = _parse_semver(release)
+    issues = []
+
+    open_rows = [r for r in rows if _bucket(r) != "completed"]
+
+    ms = [
+        r for r in open_rows
+        if _source(r) == "machine-signal"
+        and _parse_semver(r.get("target_version")) == release_vt]
+
+    un, deferred = [], []
+    for r in open_rows:
+        if _source(r) != "user-named":
+            continue
+        vt = _parse_semver(r.get("target_version"))
+        if vt is not None and vt > release_vt:
+            deferred.append(_task_id(r))  # 显式改期豁免
+        else:
+            un.append(_task_id(r))
+
+    undeclared = []
+    for r in open_rows:
+        vt = _parse_semver(r.get("target_version"))
+        if vt != release_vt:
+            continue  # 不在本版本载荷内（BC-2：存量不在发布门作用域）
+        source = _source(r)
+        if source in DEMAND_SOURCE_VALUES:
+            continue
+        undeclared.append(_task_id(r))
+        if source == "conflict":
+            issues.append(
+                "provenance release gate: 版本载荷任务 `{0}` demand_source "
+                "conflict（行内标注与 triage 记录矛盾）——数据一致性优先，"
+                "拒绝发布（ADR-021 §2.2.2/§2.2.4）".format(_task_id(r)))
+        else:
+            issues.append(
+                "provenance release gate: 版本载荷任务 `{0}` 无 demand_source "
+                "申报（未标/无 triage 记录）——版本载荷的 provenance 不完整即"
+                "拒绝发布（ADR-021 §2.2.4 / §2.4 fail-closed）".format(
+                    _task_id(r)))
+
+    if ms and un:
+        for m in ms:
+            for u in un:
+                issues.append(
+                    "provenance release gate: `{0}`（machine-signal）载入 "
+                    "{1} 而 user-named `{2}` 未闭合——用户点名需求不得因版本"
+                    "边界隐形顺延（ADR-021 §2.2.4 / DEC-286(7)）".format(
+                        _task_id(m), release, u))
+
+    return {
+        "status": "FAIL" if issues else "PASS",
+        "issues": issues,
+        "warnings": [],
+        "release_version": release,
+        "machine_signal_payload": [_task_id(r) for r in ms],
+        "open_user_named": un,
+        "deferred_user_named": deferred,
+        "undeclared_payload": undeclared,
+    }
+
+
+def session_closure_rate(events) -> dict:
+    """闭环率指标 — ADR-021 §3.2.3 (DEC-288 M2 effectiveness criterion).
+
+    Definition (ADR §3.2.3)::
+
+        session_closure_rate = closed_in_session / problems_raised_in_session
+        违规前置: deferred_detections > 0 → rate = 0.0
+
+    Pairing is ID-association only (ADR §3.2.2 — 行级启发，不追求语义完备):
+    a problem event is closed when a closure event with the SAME id exists in
+    the session (``EVD-{n}`` 问题行 ↔ 同 id 修复行 / ``RISK-{m}`` ↔ 同 id
+    终局 / FAIL→PASS 复跑同 id / review APPROVED 配对同任务 id). 未配对即
+    计入未闭环（保守计数：宁可多计不可漏计——漏计 = 零新账失守）.
+
+    Args:
+        events: list of dicts ``{"id": str, "kind": "problem" | "closure" |
+            "deferred_registration"}``. Unknown kinds and malformed rows are
+            ignored (never raise).
+
+    Returns:
+        dict ``{"problems_raised": int, "closed": int, "unclosed_ids": [id],
+        "deferred_detections": int, "session_closure_rate": float,
+        "compliant": bool}`` where ``compliant`` is the DEC-288 machine form
+        ``session_closure_rate == 1.0 ∧ deferred_detections == 0``. An empty
+        session (no problems, no deferrals) is trivially compliant (rate
+        1.0); any deferred_registration detection zeroes the rate even when
+        every raised problem was closed (「登记待以后」行为本身即未闭环的
+        极端形态). Never raises.
+    """
+    events = [e for e in (events or []) if isinstance(e, dict)]
+    problems = []
+    closure_ids = set()
+    deferred_detections = 0
+    for event in events:
+        kind = str(event.get("kind", "") or "").strip().lower()
+        event_id = str(event.get("id", "") or "")
+        if kind == "problem" and event_id:
+            problems.append(event_id)
+        elif kind == "closure" and event_id:
+            closure_ids.add(event_id)
+        elif kind == "deferred_registration":
+            deferred_detections += 1
+
+    raised = len(problems)
+    closed = len([pid for pid in problems if pid in closure_ids])
+    rate = (closed / raised) if raised else 1.0
+    if deferred_detections:
+        rate = 0.0  # 违规前置（ADR §3.2.3）
+    compliant = (rate == 1.0) and deferred_detections == 0
+
+    return {
+        "problems_raised": raised,
+        "closed": closed,
+        "unclosed_ids": [pid for pid in problems if pid not in closure_ids],
+        "deferred_detections": deferred_detections,
+        "session_closure_rate": rate,
+        "compliant": compliant,
+    }

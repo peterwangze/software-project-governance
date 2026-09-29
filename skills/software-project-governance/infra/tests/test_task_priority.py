@@ -61,10 +61,12 @@ from task_priority import (  # noqa: E402  (import after sys.path setup)
     _version_tuple,
     _walk_blocker_roots,
     compute_unblocked_tasks,
+    demand_source_distribution,
     format_report,
     has_reco_row_today,
     parse_archive_index_completed_ids,
     parse_task_dependencies,
+    resolve_demand_source,
     should_reuse_cached_analysis,
 )
 
@@ -2159,6 +2161,544 @@ class TestTaskPriorityCliArchiveIndex(unittest.TestCase):
             "复用上次分析", rerun.stdout,
             "legacy cache (no archive_index_mtime key) + index present must "
             "not be reused — one extra full run, never a stale report")
+
+
+# ─── FEAT-077 / ADR-021 §2.2.2 — demand_source (provenance) 加权层 ────────────
+#
+# M1-L2 B2 批（锁外先行半批）：demand_source 三值封闭枚举 + 行内〔标注〕解析 +
+# 权威联查（triage JSON > 行内标注 > legacy，冲突 → conflict fail-closed）+
+# 排序 tie-break（ADR-021 裁决点 D1：provenance 排在 priority 之内作第一
+# tie-break，同 P 级内 user-named > active-defect > machine-signal，不跨 P 级）
+# + 渲染标注（每行 src= + 头部 provenance 分布行）。
+_DEMAND_SOURCE_TABLE = """\
+# Plan Tracker
+
+### 优先级一览
+
+| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |
+|--------|----|------|------|---------|---------|------|
+| **P1** | FIX-960 | machine demand | — | 0.1.0 | open | ⏳ 待执行 〔机器信号〕 |
+| **P1** | FIX-961 | user demand | — | 0.2.0 | open | ⏳ 待执行 〔用户点名〕 |
+| **P1** | FIX-962 | unlabeled legacy demand | — | 0.3.0 | open | ⏳ 待执行 |
+| **P1** | FIX-963 | defect demand | — | 0.1.0 | open | ⏳ 待执行 〔活性缺陷〕 |
+"""
+
+
+class TestDemandSourceParsing(unittest.TestCase):
+    """行内〔标注〕解析 — ADR-021 §2.2.2 (2)（依赖列或状态列均可携带）."""
+
+    def _by_id(self, table):
+        return {t.task_id: t for t in parse_task_dependencies(table)}
+
+    def test_status_cell_marker_parsed(self):
+        tasks = self._by_id(_DEMAND_SOURCE_TABLE)
+        self.assertEqual(tasks["FIX-960"].demand_source, "machine-signal")
+        self.assertEqual(tasks["FIX-961"].demand_source, "user-named")
+        self.assertEqual(tasks["FIX-963"].demand_source, "active-defect")
+
+    def test_dependency_cell_marker_parsed(self):
+        # 依赖列携带标注同样生效（ADR §2.2.2：整行原始 cells 扫描）.
+        table = (
+            "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |\n"
+            "|---|---|---|---|---|---|---|\n"
+            "| **P0** | FIX-964 | x | FIX-100〔用户点名〕 | 0.1.0 | c | ⏳ 待执行 |\n"
+        )
+        tasks = self._by_id(table)
+        self.assertEqual(tasks["FIX-964"].demand_source, "user-named")
+
+    def test_no_marker_means_legacy(self):
+        tasks = self._by_id(_DEMAND_SOURCE_TABLE)
+        self.assertEqual(tasks["FIX-962"].demand_source, "legacy")
+
+    def test_default_field_value_is_legacy(self):
+        # TaskDep 默认值保证既有位置参数构造点不破坏（向后兼容）.
+        t = TaskDep("FIX-965", "P0", "⏳ 待执行", (), (), "0.1.0")
+        self.assertEqual(t.demand_source, "legacy")
+
+    def test_id_token_extraction_regression_with_marker(self):
+        # ADR §2.2.2 测试计划：依赖列含〔用户点名〕中文字 → ID 提取结果与
+        # 无标注时 byte-identical（_ID_TOKEN_RE 不受中文字影响，F5）.
+        from task_priority import _parse_dependency_cell
+        marked, _ = _parse_dependency_cell("FIX-100〔用户点名〕, FIX-101")
+        clean, _ = _parse_dependency_cell("FIX-100, FIX-101")
+        self.assertEqual(marked, clean)
+        self.assertEqual(marked, ("FIX-100", "FIX-101"))
+
+    def test_existing_fixtures_stay_legacy_zero_regression(self):
+        # 既有 fixture（无任何〔标注〕）全量解析为 legacy——排序 tie-break
+        # 对 legacy 与 user-named 同 rank，既有顺序断言零回归的结构性保证.
+        for table in (_SAMPLE_TABLE, _NON_EXECUTABLE_TABLE,
+                      _ALL_BLOCKED_TABLE, _TERMINAL_WORD_TABLE):
+            for t in parse_task_dependencies(table):
+                self.assertEqual(t.demand_source, "legacy", t.task_id)
+
+
+class TestDemandSourceSortKey(unittest.TestCase):
+    """排序 tie-break — ADR-021 裁决点 D1（同 P 级内，不跨 P 级）."""
+
+    def test_same_priority_user_named_before_machine_signal(self):
+        # 同 P1：user-named（含 legacy，同 rank 0）先于 machine-signal；
+        # user-named 与 legacy 之间落回 version → id.
+        report = compute_unblocked_tasks(
+            parse_task_dependencies(_DEMAND_SOURCE_TABLE))
+        ids = [t.task_id for t in report.recommended_next]
+        # P1 组内：FIX-961(user,0.2.0) → FIX-962(legacy,0.3.0) →
+        # FIX-963(defect,0.1.0, rank 1) → FIX-960(machine,0.1.0, rank 2)
+        self.assertEqual(ids, ["FIX-961", "FIX-962", "FIX-963", "FIX-960"])
+
+    def test_demand_rank_does_not_cross_priority_levels(self):
+        # 不跨 P 级：P0 machine-signal 仍排在 P1 user-named 之前——跨级
+        # 倒挂由 ADR-021 §2.2.3 反倒挂判定件兜底（D1 理由：跨级压制会
+        # 制造新倒挂）。
+        p0_machine = TaskDep("FIX-970", "P0", "⏳ 待执行", (), (), "0.1.0",
+                             demand_source="machine-signal")
+        p1_user = TaskDep("FIX-971", "P1", "⏳ 待执行", (), (), "0.1.0",
+                          demand_source="user-named")
+        report = compute_unblocked_tasks([p1_user, p0_machine])
+        self.assertEqual([t.task_id for t in report.recommended_next],
+                         ["FIX-970", "FIX-971"])
+
+    def test_full_order_priority_demand_version_id(self):
+        # 完整排序键：priority → demand_source → version → id.
+        a = TaskDep("FIX-982", "P1", "⏳ 待执行", (), (), "0.5.0",
+                    demand_source="user-named")
+        b = TaskDep("FIX-981", "P1", "⏳ 待执行", (), (), "0.2.0",
+                    demand_source="user-named")
+        c = TaskDep("FIX-983", "P1", "⏳ 待执行", (), (), "0.1.0",
+                    demand_source="active-defect")
+        report = compute_unblocked_tasks([a, c, b])
+        self.assertEqual([t.task_id for t in report.recommended_next],
+                         ["FIX-981", "FIX-982", "FIX-983"])
+
+    def test_conflict_sorts_conservatively_as_user_named_rank(self):
+        # conflict 排序按 user-named 保守处理（rank 0）+ 显式披露（ADR
+        # §2.2.2 验收判据 2）.
+        conflict = TaskDep("FIX-984", "P1", "⏳ 待执行", (), (), "0.2.0",
+                           demand_source="conflict")
+        machine = TaskDep("FIX-985", "P1", "⏳ 待执行", (), (), "0.1.0",
+                          demand_source="machine-signal")
+        report = compute_unblocked_tasks([machine, conflict])
+        self.assertEqual([t.task_id for t in report.recommended_next],
+                         ["FIX-984", "FIX-985"])
+        self.assertEqual(report.demand_source_conflicts, ["FIX-984"])
+
+
+class TestResolveDemandSource(unittest.TestCase):
+    """权威联查 — ADR-021 §2.2.2 (3)：triage JSON > 行内标注 > legacy."""
+
+    def test_triage_record_is_authoritative(self):
+        records = [{"task_id": "FIX-990", "demand_source": "user-named"}]
+        self.assertEqual(
+            resolve_demand_source("FIX-990", "legacy", records),
+            "user-named")
+
+    def test_row_marker_used_without_record(self):
+        self.assertEqual(
+            resolve_demand_source("FIX-990", "machine-signal", []),
+            "machine-signal")
+
+    def test_agreeing_sources_return_value(self):
+        records = [{"task_id": "FIX-990", "demand_source": "machine-signal"}]
+        self.assertEqual(
+            resolve_demand_source("FIX-990", "machine-signal", records),
+            "machine-signal")
+
+    def test_conflicting_sources_return_conflict(self):
+        records = [{"task_id": "FIX-990", "demand_source": "machine-signal"}]
+        self.assertEqual(
+            resolve_demand_source("FIX-990", "user-named", records),
+            "conflict")
+
+    def test_no_source_means_legacy(self):
+        self.assertEqual(
+            resolve_demand_source("FIX-990", "legacy", []), "legacy")
+
+    def test_record_without_valid_value_fails_open_to_row_marker(self):
+        # 旧记录无 demand_source 键（~199 存量，F4/ADR §2.2.1 向后兼容）或
+        # 值非法（非三值枚举）→ 记录无权威性，fail-open 到行内标注
+        # （ADR §2.4 L2 tpa 联查降级行）.
+        legacy_record = [{"task_id": "FIX-990"}]
+        self.assertEqual(
+            resolve_demand_source("FIX-990", "active-defect", legacy_record),
+            "active-defect")
+        bogus_record = [{"task_id": "FIX-990", "demand_source": "wild"}]
+        self.assertEqual(
+            resolve_demand_source("FIX-990", "active-defect", bogus_record),
+            "active-defect")
+
+    def test_other_task_record_ignored(self):
+        records = [{"task_id": "FIX-991", "demand_source": "user-named"}]
+        self.assertEqual(
+            resolve_demand_source("FIX-990", "machine-signal", records),
+            "machine-signal")
+
+
+class TestDemandSourceRendering(unittest.TestCase):
+    """渲染 — ADR-021 §2.2.2 (5)：每行 src 标注 + 头部 provenance 分布行."""
+
+    def test_task_lines_carry_src_annotation(self):
+        report = compute_unblocked_tasks(
+            parse_task_dependencies(_DEMAND_SOURCE_TABLE))
+        out = format_report(report)
+        self.assertIn("src=user-named", out)
+        self.assertIn("src=machine-signal", out)
+        self.assertIn("src=active-defect", out)
+        self.assertIn("src=legacy", out)
+
+    def test_header_carries_provenance_distribution_line(self):
+        report = compute_unblocked_tasks(
+            parse_task_dependencies(_DEMAND_SOURCE_TABLE))
+        out = format_report(report)
+        self.assertIn("provenance distribution:", out)
+        self.assertIn("user-named:1", out)
+        self.assertIn("active-defect:1", out)
+        self.assertIn("machine-signal:1", out)
+        self.assertIn("legacy:1", out)
+
+    def test_distribution_helper_counts_all_buckets(self):
+        report = compute_unblocked_tasks(
+            parse_task_dependencies(_DEMAND_SOURCE_TABLE))
+        dist = demand_source_distribution(report)
+        self.assertEqual(
+            dist, {"user-named": 1, "active-defect": 1,
+                   "machine-signal": 1, "legacy": 1})
+
+    def test_conflict_disclosed_in_report(self):
+        conflict = TaskDep("FIX-984", "P1", "⏳ 待执行", (), (), "0.2.0",
+                           demand_source="conflict")
+        out = format_report(compute_unblocked_tasks([conflict]))
+        self.assertIn("DEMAND SOURCE CONFLICT", out)
+        self.assertIn("`FIX-984`", out)
+
+    def test_no_conflict_banner_without_conflicts(self):
+        out = format_report(compute_unblocked_tasks(
+            parse_task_dependencies(_SAMPLE_TABLE)))
+        self.assertNotIn("DEMAND SOURCE CONFLICT", out)
+
+
+class TestDemandSourceCliResolution(unittest.TestCase):
+    """CLI 编排层联查 — run_cli_analysis 解析 triage JSON 权威 demand_source.
+
+    ADR §2.2.2 (3)：联查 I/O 沿 CLI 编排层（run_cli_analysis 调
+    change_triage.load_triage_records——纯函数 purity 契约不破）。
+    """
+
+    _TRACKER = """\
+# Plan Tracker
+
+### 优先级一览
+
+| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |
+|--------|----|------|------|---------|---------|------|
+| **P1** | FIX-980 | machine demand | — | 0.1.0 | open | ⏳ 待执行 〔机器信号〕 |
+| **P1** | FIX-981 | unmarked demand with triage record | — | 0.1.0 | open | ⏳ 待执行 |
+"""
+
+    def _run_cli(self, root):
+        import contextlib
+        import io
+        from task_priority import run_cli_analysis
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = run_cli_analysis(
+                Path(root) / ".governance" / "plan-tracker.md",
+                Path(root) / ".governance",
+                Path(root) / ".governance" / "evidence-log.md",
+                force=True)
+        self.assertEqual(code, 0, buf.getvalue())
+        return buf.getvalue()
+
+    def test_triage_json_overrides_missing_row_marker(self):
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix="spg-tpa-feat077-") as tmp:
+            gov = Path(tmp) / ".governance"
+            (gov / "change-triage").mkdir(parents=True)
+            (gov / "plan-tracker.md").write_text(self._TRACKER, encoding="utf-8")
+            (gov / "change-triage" / "FIX-981.json").write_text(
+                json.dumps({"task_id": "FIX-981",
+                            "demand_source": "user-named"}),
+                encoding="utf-8")
+            out = self._run_cli(tmp)
+            # 行内无标注但 triage 记录 user-named → 权威联查置 user-named，
+            # 同 P 级内排到 machine-signal 之前（D1）.
+            self.assertIn("src=user-named", out)
+            self.assertIn("user-named:1", out)
+            self.assertIn("machine-signal:1", out)
+            rec = out.split("## Recommended next", 1)[1]
+            self.assertLess(rec.index("`FIX-981`"), rec.index("`FIX-980`"))
+
+    def test_conflicting_marker_and_record_disclosed(self):
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix="spg-tpa-feat077c-") as tmp:
+            gov = Path(tmp) / ".governance"
+            (gov / "change-triage").mkdir(parents=True)
+            (gov / "plan-tracker.md").write_text(self._TRACKER, encoding="utf-8")
+            # 行内标〔机器信号〕，triage 记录却是 user-named → conflict.
+            (gov / "change-triage" / "FIX-980.json").write_text(
+                json.dumps({"task_id": "FIX-980",
+                            "demand_source": "user-named"}),
+                encoding="utf-8")
+            out = self._run_cli(tmp)
+            self.assertIn("DEMAND SOURCE CONFLICT", out)
+            self.assertIn("`FIX-980`", out)
+            self.assertIn("src=conflict", out)
+
+    def test_new_triage_record_invalidates_cached_analysis(self):
+        # 联查结果进缓存键：change-triage 目录变化 → 缓存失效（否则新增
+        # triage 记录后报告持旧行内标注结论——stale provenance）.
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix="spg-tpa-feat077m-") as tmp:
+            gov = Path(tmp) / ".governance"
+            gov.mkdir(parents=True)
+            (gov / "plan-tracker.md").write_text(self._TRACKER, encoding="utf-8")
+            first = self._run_cli(tmp)  # force=True: full analysis warm-up
+            self.assertIn("# Task Priority Analysis", first)
+            second = self._run_cli(tmp)
+            # force=True in _run_cli bypasses reuse; use raw second call
+            # without force to assert reuse, then mutate and assert rerun.
+            import contextlib
+            import io
+            from task_priority import run_cli_analysis
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                run_cli_analysis(gov / "plan-tracker.md", gov,
+                                 gov / "evidence-log.md")
+            self.assertIn("复用上次分析", buf.getvalue())
+            (gov / "change-triage").mkdir(exist_ok=True)
+            (gov / "change-triage" / "FIX-981.json").write_text(
+                json.dumps({"task_id": "FIX-981",
+                            "demand_source": "user-named"}),
+                encoding="utf-8")
+            buf2 = io.StringIO()
+            with contextlib.redirect_stdout(buf2):
+                run_cli_analysis(gov / "plan-tracker.md", gov,
+                                 gov / "evidence-log.md")
+            self.assertNotIn(
+                "复用上次分析", buf2.getvalue(),
+                "change-triage dir change must invalidate the cached analysis")
+            self.assertIn("src=user-named", buf2.getvalue())
+
+
+# ─── FEAT-077 增量 / ADR-021 §2.2.2 (3) R0 修订——修订事件感知 resolve ─────────
+#
+# 权威链（R0 修订，F-P1-3）：最新修订事件（如有）> triage record > 行内
+# 〔标注〕> legacy。有修订事件时旧值=历史快照，不构成 conflict（合法漂移
+# 通道）；conflict 仅指无修订事件时 record 与行内标注的未声明矛盾。
+def _event(task_id, to, seq=1, from_value="machine-signal"):
+    return {
+        "event_id": "DSR-{0}-{1:03d}".format(task_id, seq),
+        "task_id": task_id,
+        "from": from_value,
+        "to": to,
+        "basis_kind": "user-quote",
+        "demand_basis": "用户原话（fixture）",
+        "revised_by": "Coordinator",
+        "revised_at": "2026-09-29T12:00:00",
+    }
+
+
+class TestResolveDemandSourceRevisions(unittest.TestCase):
+    """resolve_demand_source 第四参 revision_events（默认 None=零行为改变）."""
+
+    def test_latest_event_overrides_record_and_marker(self):
+        records = [{"task_id": "FIX-990", "demand_source": "machine-signal"}]
+        events = [_event("FIX-990", "active-defect")]
+        self.assertEqual(
+            resolve_demand_source("FIX-990", "user-named", records, events),
+            "active-defect")
+
+    def test_old_mismatch_with_event_is_not_conflict(self):
+        # record 与行内标注矛盾，但存在修订事件 → 历史快照，终值=事件 to，
+        # 不返回 conflict（无事件时同输入返回 conflict——对照组见下）.
+        records = [{"task_id": "FIX-990", "demand_source": "machine-signal"}]
+        events = [_event("FIX-990", "machine-signal")]
+        self.assertEqual(
+            resolve_demand_source("FIX-990", "user-named", records, events),
+            "machine-signal")
+        # 对照：无事件 → conflict（原语义保留）.
+        self.assertEqual(
+            resolve_demand_source("FIX-990", "user-named", records),
+            "conflict")
+
+    def test_none_events_identical_to_three_arg_call(self):
+        """零回归断言：revision_events=None/缺省 与三参调用逐例一致."""
+        cases = [
+            ("FIX-990", "legacy",
+             [{"task_id": "FIX-990", "demand_source": "user-named"}]),
+            ("FIX-990", "machine-signal",
+             [{"task_id": "FIX-990", "demand_source": "machine-signal"}]),
+            ("FIX-990", "machine-signal",
+             [{"task_id": "FIX-990", "demand_source": "user-named"}]),
+            ("FIX-990", "active-defect", []),
+            ("FIX-990", "legacy",
+             [{"task_id": "FIX-991", "demand_source": "user-named"}]),
+            ("FIX-990", "active-defect",
+             [{"task_id": "FIX-990"}]),  # 存量记录无键
+        ]
+        for task_id, marker, records in cases:
+            self.assertEqual(
+                resolve_demand_source(task_id, marker, records, None),
+                resolve_demand_source(task_id, marker, records),
+                (task_id, marker, records))
+            self.assertEqual(
+                resolve_demand_source(task_id, marker, records),
+                resolve_demand_source(task_id, marker, records, None))
+
+    def test_invalid_event_to_ignored_falls_through(self):
+        # 非法 to 的事件不是「合法修订事件」——不构成权威，落回三源链
+        # （此处 record 与行内矛盾且无合法事件 → conflict 保留）.
+        records = [{"task_id": "FIX-990", "demand_source": "machine-signal"}]
+        events = [_event("FIX-990", "wild-value")]
+        self.assertEqual(
+            resolve_demand_source("FIX-990", "user-named", records, events),
+            "conflict")
+
+    def test_events_for_other_task_ignored(self):
+        events = [_event("FIX-991", "user-named")]
+        self.assertEqual(
+            resolve_demand_source("FIX-990", "machine-signal", [], events),
+            "machine-signal")
+
+    def test_multiple_events_latest_wins(self):
+        events = [_event("FIX-990", "active-defect", seq=1),
+                  _event("FIX-990", "user-named", seq=2,
+                         from_value="active-defect")]
+        self.assertEqual(
+            resolve_demand_source("FIX-990", "legacy", [], events),
+            "user-named")
+
+
+class TestDemandSourceRevisionCliTests(unittest.TestCase):
+    """CLI 编排层修订事件联查——jsonl 读取 + 行内滞后 WARN + 缓存失效."""
+
+    _TRACKER = """\
+# Plan Tracker
+
+### 优先级一览
+
+| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |
+|--------|----|------|------|---------|---------|------|
+| **P1** | FIX-980 | machine demand | — | 0.1.0 | open | ⏳ 待执行 〔机器信号〕 |
+| **P1** | FIX-981 | record machine-signal, revised to user-named | — | 0.1.0 | open | ⏳ 待执行 |
+"""
+
+    def _run_cli(self, root, force=True):
+        import contextlib
+        import io
+        from task_priority import run_cli_analysis
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = run_cli_analysis(
+                Path(root) / ".governance" / "plan-tracker.md",
+                Path(root) / ".governance",
+                Path(root) / ".governance" / "evidence-log.md",
+                force=force)
+        self.assertEqual(code, 0, buf.getvalue())
+        return buf.getvalue()
+
+    def _fixture(self, tmp, revise=True):
+        import change_triage as ct
+        gov = Path(tmp) / ".governance"
+        (gov / "change-triage").mkdir(parents=True)
+        (gov / "plan-tracker.md").write_text(self._TRACKER, encoding="utf-8")
+        (gov / "change-triage" / "FIX-981.json").write_text(
+            json.dumps({"task_id": "FIX-981",
+                        "demand_source": "machine-signal"}),
+            encoding="utf-8")
+        if revise:
+            (gov / "evidence-log.md").write_text(
+                "# Evidence Log\n", encoding="utf-8")
+            summary = ct.append_demand_revision(
+                task_id="FIX-981", to="user-named",
+                demand_basis="用户原话：修订演示（fixture）",
+                basis_kind="user-quote", revised_by="Coordinator",
+                governance_dir=gov)
+            assert not summary.get("error"), summary
+        return gov
+
+    def test_revision_event_flips_authority_in_report(self):
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix="spg-tpa-rev-") as tmp:
+            self._fixture(tmp, revise=True)
+            out = self._run_cli(tmp)
+            # 事件终值 user-named 为权威（record 的 machine-signal=历史快照）.
+            self.assertIn("src=user-named", out)
+            self.assertIn("user-named:1", out)
+            rec = out.split("## Recommended next", 1)[1]
+            self.assertLess(rec.index("`FIX-981`"), rec.index("`FIX-980`"))
+            self.assertNotIn("DEMAND SOURCE CONFLICT", out)
+
+    def test_row_marker_lag_warns_sync_hint(self):
+        """行内标注与修订终值不一致 → WARN 提示同步行内（不 FAIL——事件流
+        才是权威，ADR §2.2.1/§2.2.2 R0 修订）."""
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix="spg-tpa-revw-") as tmp:
+            self._fixture(tmp, revise=True)
+            # 给 FIX-981 行内挂一个与终值矛盾的〔标注〕（修订后行内滞后）——
+            # 以该行唯一事项文本锚定替换.
+            tracker = Path(tmp) / ".governance" / "plan-tracker.md"
+            tracker.write_text(
+                self._TRACKER.replace(
+                    "revised to user-named | — | 0.1.0 | open | ⏳ 待执行 |",
+                    "revised to user-named | — | 0.1.0 | open | "
+                    "⏳ 待执行 〔机器信号〕 |"),
+                encoding="utf-8")
+            out = self._run_cli(tmp)
+            self.assertIn("src=user-named", out)
+            self.assertIn("WARN", out)
+            self.assertIn("FIX-981", out)
+            self.assertIn("同步行内", out)
+            self.assertNotIn("DEMAND SOURCE CONFLICT", out)
+
+    def test_no_lag_warning_when_marker_agrees(self):
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix="spg-tpa-revg-") as tmp:
+            self._fixture(tmp, revise=True)
+            tracker = Path(tmp) / ".governance" / "plan-tracker.md"
+            tracker.write_text(
+                self._TRACKER.replace(
+                    "revised to user-named | — | 0.1.0 | open | ⏳ 待执行 |",
+                    "revised to user-named | — | 0.1.0 | open | "
+                    "⏳ 待执行 〔用户点名〕 |"),
+                encoding="utf-8")
+            out = self._run_cli(tmp)
+            self.assertIn("src=user-named", out)
+            self.assertNotIn("同步行内", out)
+
+    def test_jsonl_append_invalidates_cached_analysis(self):
+        """修订事件追加（文件 append——目录 mtime 不变）必须击穿缓存：缓存
+        失效键取 change-triage 目录+全部条目 mtime 的最大值."""
+        import contextlib
+        import io
+        import tempfile
+        from task_priority import run_cli_analysis
+        with tempfile.TemporaryDirectory(prefix="spg-tpa-revm-") as tmp:
+            gov = self._fixture(tmp, revise=False)
+            (gov / "evidence-log.md").write_text(
+                "# Evidence Log\n", encoding="utf-8")
+            out = self._run_cli(tmp, force=True)  # 建缓存（无事件）
+            self.assertIn("machine-signal:2", out)
+            self.assertNotIn("同步行内", out)
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                run_cli_analysis(gov / "plan-tracker.md", gov,
+                                 gov / "evidence-log.md")
+            self.assertIn("复用上次分析", buf.getvalue())
+            # 追加修订事件（append-only——目录 mtime 不变，文件 mtime 变化）.
+            import change_triage as ct
+            summary = ct.append_demand_revision(
+                task_id="FIX-981", to="user-named",
+                demand_basis="用户原话：缓存失效演示",
+                basis_kind="user-quote", revised_by="Coordinator",
+                governance_dir=gov)
+            assert not summary.get("error"), summary
+            buf2 = io.StringIO()
+            with contextlib.redirect_stdout(buf2):
+                run_cli_analysis(gov / "plan-tracker.md", gov,
+                                 gov / "evidence-log.md")
+            self.assertNotIn("复用上次分析", buf2.getvalue(),
+                             "jsonl append must invalidate the cache")
+            self.assertIn("src=user-named", buf2.getvalue())
 
 
 if __name__ == "__main__":

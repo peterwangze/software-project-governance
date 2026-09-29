@@ -104,6 +104,7 @@ from pathlib import Path
 import task_priority
 from task_priority import (
     compute_unblocked_tasks,
+    demand_source_distribution,
     format_report,
     parse_task_dependencies,
 )
@@ -116,6 +117,16 @@ TRIAGE_SUBDIR = "change-triage"
 TRIAGE_SCHEMA_VERSION = 1
 PRIORITIES = ("P0", "P1", "P2")
 UNVERSIONED_MARKERS = ("未规划版本", "未定版本", "—", "-", "")
+
+# FEAT-077 / ADR-021 §2.2.1 — demand_source (M1 provenance) 三值封闭枚举 +
+# 中文标注词汇（§2 术语与字段命名先决裁决；evidence 行〔标注〕用）。CLI
+# --demand-source 旗标本身属 B3 接线（verify_workflow.py 锁定，F10）。
+DEMAND_SOURCES = ("user-named", "active-defect", "machine-signal")
+DEMAND_SOURCE_ZH = {
+    "user-named": "用户点名",
+    "active-defect": "活性缺陷",
+    "machine-signal": "机器信号",
+}
 
 # FEAT-013 / RISK-046 — dispatch-lock write API constants.
 LOCK_FILE_NAME = "agent-locks.json"
@@ -168,7 +179,12 @@ def split_dep_ids(raw: str) -> list:
 
 
 def _report_to_json(report) -> dict:
-    """Serialize a task_priority.PriorityReport to a JSON-safe dict."""
+    """Serialize a task_priority.PriorityReport to a JSON-safe dict.
+
+    FEAT-077 / ADR-021 §2.2.2: the snapshot carries the provenance
+    distribution (+1 additive key) so the triage record's dependency
+    analysis snapshot self-describes its demand-source mix.
+    """
     return {
         "total": report.total,
         "completed": [t.task_id for t in report.completed],
@@ -182,6 +198,7 @@ def _report_to_json(report) -> dict:
         "non_executable": [t.task_id for t in report.non_executable],
         "cycles": [list(c) for c in report.cycles],
         "cycle_warning": report.cycle_warning,
+        "demand_source_distribution": demand_source_distribution(report),
     }
 
 
@@ -688,7 +705,10 @@ def load_triage_records(governance_dir) -> list:
 
     Returns:
         list of record dicts; malformed JSON files are skipped (Check 32
-        flags them separately).
+        flags them separately). The ``*.json`` glob deliberately matches
+        ONLY triage records — the demand-revision event streams
+        (``*.demand-revisions.jsonl``, :func:`load_demand_revisions`) are a
+        separate file class and never leak in here (ADR-021 §2.2.1 F-P1-3).
     """
     records = []
     rec_dir = Path(governance_dir) / TRIAGE_SUBDIR
@@ -703,6 +723,233 @@ def load_triage_records(governance_dir) -> list:
             payload["_record_path"] = str(path)
             records.append(payload)
     return records
+
+
+# ─── FEAT-077 增量 / ADR-021 §2.2.1 — demand_source 修订通道（F-P1-3，R1 a）───
+#
+# append-only 事件流：`.governance/change-triage/{TASK_ID}.demand-revisions.jsonl`
+# ——triage record 本体不可变原则不破（修订不触碰 record，只追加事件行）。
+# 事件 schema（ADR §2.2.1）：
+#   {"event_id", "task_id", "from", "to",
+#    "basis_kind": "user-quote|dec-ref|session-record",
+#    "demand_basis", "revised_by", "revised_at"}
+# `from` 由写入器从当前 resolve 结果派生（调用方不传——防伪造起点）；
+# `to` 必须三枚举之一；`demand_basis` 必填非空（修订即重新主张需求源，
+# 溯源义务与初次标注相同——BC-4 审计链：事件不可变 + 带溯源）。
+DEMAND_REVISION_SUFFIX = ".demand-revisions.jsonl"
+BASIS_KINDS = ("user-quote", "dec-ref", "session-record")
+
+
+def load_demand_revisions(governance_dir) -> list:
+    """Load ALL demand-revision events under ``change-triage/`` (never raises).
+
+    Streams ``*.demand-revisions.jsonl`` in sorted-path order, then line
+    order — within one task's single stream, line order IS chronological
+    order (append-only), so ``resolve_demand_source`` takes the LAST valid
+    event of a task as the latest revision. Malformed lines/files are
+    skipped (conservative; never raises).
+
+    Returns:
+        list of event dicts (raw schema above).
+    """
+    events = []
+    rec_dir = Path(governance_dir) / TRIAGE_SUBDIR
+    if not rec_dir.is_dir():
+        return events
+    for path in sorted(rec_dir.glob("*" + DEMAND_REVISION_SUFFIX)):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, ValueError):
+            continue
+        for raw in text.splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(payload, dict):
+                events.append(payload)
+    return events
+
+
+def _revision_evidence_row(event: dict, artifacts_name: str,
+                           date_str: str) -> str:
+    """Evidence-log row for one demand-revision event (10-column shape).
+
+    Mirrors :func:`_evidence_row`'s column contract: | id | task_ref | type
+    | description | basis | artifacts | actor | date | gate | conclusion |.
+    The description carries the drift arrow + 〔中文需求源〕 marker INSIDE
+    the cell (column count unchanged — FIX-278 G3 guard stays satisfied).
+    """
+    to = str(event.get("to", ""))
+    cells = [
+        str(event.get("event_id", "")),
+        str(event.get("task_id", "")),
+        "变更控制",
+        "demand_source 修订 {0}→{1}（basis_kind={2}）〔{3}〕".format(
+            event.get("from", ""), to,
+            event.get("basis_kind", ""),
+            DEMAND_SOURCE_ZH.get(to, "")),
+        "事实依据：{0}".format(event.get("demand_basis", "")),
+        artifacts_name,
+        str(event.get("revised_by", "") or "demand-revision"),
+        date_str,
+        "G11",
+        "REVISED",
+    ]
+    return "| " + " | ".join(cells) + " |\n"
+
+
+def append_demand_revision(*, task_id: str, to: str, demand_basis: str,
+                           basis_kind: str = "session-record",
+                           revised_by: str = "", governance_dir,
+                           records_dir=None, evidence_path=None,
+                           now=None) -> dict:
+    """Append one demand_source revision event (ADR-021 §2.2.1 F-P1-3).
+
+    Append-only event stream — the immutable triage record is NEVER
+    touched; the revision lands as one JSON line in
+    ``change-triage/{TASK_ID}.demand-revisions.jsonl`` plus a machine
+    evidence row (窗口期补救路径的机写留痕，ADR §2.2.1 L131).
+
+    Fail-closed validation (Never-raises — ``{"error": ...}`` dicts, the
+    CLI thin entry maps to exit 2):
+
+      - malformed ``task_id``;
+      - **the task MUST already have a triage record** (revising a
+        nonexistent task → error — provenance lifecycle rides on an
+        existing intake);
+      - ``to`` outside the three-value enum (case-insensitively
+        normalized, like :func:`run_triage`);
+      - ``demand_basis`` empty/whitespace (溯源义务与初次标注相同——BC-4);
+      - ``basis_kind`` outside ``user-quote|dec-ref|session-record``.
+
+    ``from`` is DERIVED BY THE WRITER from the current resolve result
+    (latest revision event > triage record; the caller cannot supply it —
+    a forged origin is unrepresentable). Best-effort all-or-nothing: if
+    the evidence append fails after the event line landed, the stream is
+    rolled back to its prior length (a failed revision leaves no
+    half-written state; the rollback itself failing is disclosed in the
+    returned error).
+
+    Args:
+        task_id: the task whose provenance is revised (must have a record).
+        to: target demand_source (three-value enum, case-insensitive).
+        demand_basis: traceability basis (REQUIRED non-empty).
+        basis_kind: one of ``user-quote`` / ``dec-ref`` / ``session-record``
+            (default ``session-record``).
+        revised_by: actor annotation (e.g. ``"Coordinator"``).
+        governance_dir: ``.governance`` directory.
+        records_dir / evidence_path: explicit overrides for tests.
+        now: injectable clock (tests); default ``datetime.now()``.
+
+    Returns:
+        dict summary (``event_id`` / ``task_id`` / ``from`` / ``to`` /
+        ``path`` / ``events_total`` / ``evidence_row_written`` /
+        ``written``). ``error`` key present on fail-closed input. Never
+        raises.
+    """
+    task_id = str(task_id or "").strip()
+    if not _TASK_ID_RE.match(task_id):
+        return {"error": "task_id must match PREFIX-NNN (e.g. FIX-241)"}
+    to = str(to or "").strip().lower()
+    if to not in DEMAND_SOURCES:
+        return {"error": "revision target 'to' must be one of "
+                         "user-named/active-defect/machine-signal (got "
+                         "{0!r}) — ADR-021 §2.2.1 修订通道 fail-closed"
+                         .format(to)}
+    demand_basis = str(demand_basis or "").strip()
+    if not demand_basis:
+        return {"error": "demand_basis is required for a demand_source "
+                         "revision（修订即重新主张需求源，溯源义务与初次"
+                         "标注相同——BC-4；ADR-021 §2.2.1）"}
+    basis_kind = str(basis_kind or "session-record").strip().lower()
+    if basis_kind not in BASIS_KINDS:
+        return {"error": "basis_kind must be one of user-quote/dec-ref/"
+                         "session-record (got {0!r}) — ADR-021 §2.2.1"
+                         .format(basis_kind)}
+    revised_by = str(revised_by or "").strip()
+
+    if records_dir is None:
+        records_dir = Path(governance_dir) / TRIAGE_SUBDIR
+    records_dir = Path(records_dir)
+    record_path = records_dir / "{0}.json".format(task_id)
+    if not record_path.is_file():
+        return {"error": "task {0} has no triage record — a demand_source "
+                         "revision rides on an existing intake (revising a "
+                         "nonexistent task is fail-closed; ADR-021 §2.2.1)"
+                         .format(task_id)}
+
+    # `from` derivation — the WRITER resolves the current effective value
+    # (latest revision event > triage record; 行内标注 lives in the
+    # plan-tracker md and is the tpa layer's concern, not the writer's).
+    records = load_triage_records(governance_dir)
+    events = load_demand_revisions(governance_dir)
+    from_value = task_priority.resolve_demand_source(
+        task_id, task_priority.DEMAND_SOURCE_LEGACY, records, events)
+    seq = len([e for e in events
+               if isinstance(e, dict)
+               and str(e.get("task_id", "")) == task_id]) + 1
+
+    moment = now if now is not None else datetime.now()
+    event = {
+        "event_id": "DSR-{0}-{1:03d}".format(task_id, seq),
+        "task_id": task_id,
+        "from": from_value,
+        "to": to,
+        "basis_kind": basis_kind,
+        "demand_basis": demand_basis,
+        "revised_by": revised_by,
+        "revised_at": moment.replace(microsecond=0).isoformat(),
+    }
+
+    events_path = records_dir / "{0}{1}".format(task_id,
+                                                DEMAND_REVISION_SUFFIX)
+    created = not events_path.exists()
+    prior_size = events_path.stat().st_size if not created else 0
+    try:
+        with events_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(event, ensure_ascii=False) + "\n")
+    except OSError as exc:
+        return {"error": "cannot append demand-revision event: {0}".format(
+            exc)}
+
+    if evidence_path is None:
+        evidence_path = Path(governance_dir) / "evidence-log.md"
+    evidence_path = Path(evidence_path)
+    try:
+        with evidence_path.open("a", encoding="utf-8") as fh:
+            fh.write("\n" + _revision_evidence_row(
+                event, events_path.name, moment.date().isoformat()))
+    except OSError as exc:
+        # Best-effort all-or-nothing: roll the just-appended event line
+        # back so no revision lands without its evidence trail.
+        try:
+            if created:
+                events_path.unlink()
+            else:
+                with events_path.open("r+b") as fh:
+                    fh.truncate(prior_size)
+        except OSError:
+            pass  # disclosed below — never silently swallowed
+        return {"error": "cannot append revision evidence row: {0} (the "
+                         "event line was rolled back; if the stream still "
+                         "shows the event, remove the trailing line "
+                         "manually)".format(exc)}
+
+    return {
+        "event_id": event["event_id"],
+        "task_id": task_id,
+        "from": from_value,
+        "to": to,
+        "basis_kind": basis_kind,
+        "path": str(events_path),
+        "events_total": seq,
+        "evidence_row_written": True,
+        "written": True,
+    }
 
 
 # ─── FEAT-013 (RISK-046 root-cause fix) — dispatch-lock write API ───────────
@@ -1012,18 +1259,31 @@ def agent_locks_acquire_cli(args, *, governance_dir, repo_root,
             sys.exit(2)
 
 
-def _evidence_row(task_id: str, record_name: str, date_str: str) -> str:
+def _evidence_row(task_id: str, record_name: str, date_str: str,
+                  demand_zh: str = "") -> str:
     """Evidence-log row in the machine-write contract (mirrors review_record).
 
     Column shape: | id | task_ref | type | description | basis | artifacts |
     actor | date | gate | conclusion |. The description carries no ISO date
     and no conclusion token so live collectors land on the real columns.
+
+    FEAT-077 / ADR-021 §2.2.1 验收判据 3: the declared demand_source appends
+    its 〔中文需求源〕 marker INSIDE the description cell (additive text —
+    column count unchanged, the FIX-278 G3 write guard stays satisfied).
+    Under the 窗口协议 (Coordinator R0 P1-2) the intake always resolves to
+    a valid enum value (default machine-signal), so every record row
+    carries its marker.
     """
+    description = (
+        "change-triage CLI 机器写入 triage 记录"
+        "（依赖/优先级/冲突/版本/执行副作用五步分析）")
+    if demand_zh:
+        description += "〔{0}〕".format(demand_zh)
     cells = [
         "TRIAGE-{0}".format(task_id),
         task_id,
         "变更控制",
-        "change-triage CLI 机器写入 triage 记录（依赖/优先级/冲突/版本/执行副作用五步分析）",
+        description,
         "事实依据：change-triage 输出摘要（机器写入；命令输出 JSON 快照见 "
         "change-triage/{0}.json）".format(task_id),
         record_name,
@@ -1038,16 +1298,42 @@ def _evidence_row(task_id: str, record_name: str, date_str: str) -> str:
 def run_triage(*, task_id: str, title: str = "", priority: str,
                target_version: str, depends_on, files, reason: str = "",
                acceptance: str = "", declared_side_effects: str = "",
+               demand_source: str = "machine-signal", demand_basis: str = "",
                plan_tracker_text: str, current_version: str = "",
                governance_dir, existing_records=None, records_dir=None,
                evidence_path=None) -> dict:
     """Run the mandatory five-step triage and write the machine record.
 
     Fail-closed: any step-ERROR (unknown dependency, invalid priority, empty
-    files, stale target version, new-task cycle, malformed task id) returns
-    ``{"error": ...}`` and writes NOTHING — no record, no evidence row.
-    Step-e (side-effect) issues are WARN (advisory): they land in the
-    record and the summary but never block (WARN 起步，不得静默).
+    files, stale target version, new-task cycle, malformed task id, invalid
+    ``demand_source``, ``user-named`` without ``demand_basis``,
+    ``user-named`` below the P1 floor) returns ``{"error": ...}`` and writes
+    NOTHING — no record, no evidence row. Step-e (side-effect) issues are
+    WARN (advisory): they land in the record and the summary but never
+    block (WARN 起步，不得静默).
+
+    demand_source intake (FEAT-077 / ADR-021 §2.2.1):
+
+      - three-value closed enum ``user-named`` / ``active-defect`` /
+        ``machine-signal``, normalized case-insensitively; an explicit
+        non-enum value → ``{"error": ...}`` zero-write (the CLI thin entry
+        maps it to exit 2);
+      - ``user-named`` REQUIRES ``demand_basis`` (溯源依据：用户原话/DEC
+        引用/活性缺陷证据锚 — 防 BC-4 出身洗白：user-named 判定必须可追溯);
+      - ``user-named`` enforces a P1 priority floor (P2+user-named →
+        rejected, FEAT-077 task rule: 用户点名需求被 P2 顺延即倒挂入口 —
+        NOTE: ADR-021 §2.2.1 carries no such clause; reported to the
+        Coordinator as an ADR gap pending amendment);
+      - **窗口协议（Coordinator R0 P1-2 裁定）**: the parameter is OPTIONAL
+        with the conservative default ``machine-signal`` — the ONLY live CLI
+        call site (``cmd_change_triage`` in verify_workflow.py) cannot pass
+        the flag until B3 wires ``--demand-source`` (a required no-default
+        parameter would TypeError the existing call face; an empty-string
+        fail-closed would freeze ALL new-task intake through the window).
+        The conservative default never grants unearned tie-break rank
+        (machine-signal ranks last, ADR-021 §2.2.2 D1). **B3 接线点**: make
+        the CLI flag required at the argparse layer — missing flag then
+        exits 2 upstream and this default path disappears.
 
     Args:
         task_id: new task id (PREFIX-NNN).
@@ -1064,6 +1350,10 @@ def run_triage(*, task_id: str, title: str = "", priority: str,
         declared_side_effects: side-effect declaration (surface + blast
             radius) — satisfies the step-e declaration duty for
             outside-repo side effects (R2).
+        demand_source: provenance of the demand (ADR-021 §2.2.1 three-value
+            enum, case-insensitive; see the intake rules above).
+        demand_basis: traceability basis for ``user-named`` (REQUIRED when
+            demand_source=user-named).
         plan_tracker_text: raw plan-tracker markdown.
         current_version: the PROJECT's current version — the plan-tracker
             roadmap's highest released row
@@ -1087,6 +1377,35 @@ def run_triage(*, task_id: str, title: str = "", priority: str,
         return {"error": "files is required and must be non-empty for a "
                          "product-code task (quick lane covers .governance/ "
                          "records only — FIX-228 boundary)"}
+
+    # ── demand_source intake (FEAT-077 / ADR-021 §2.2.1, fail-closed) ──
+    # 窗口协议（Coordinator R0 P1-2 裁定）：参数缺省/空 → 保守默认
+    # machine-signal（排序 rank 最末，绝不授予未挣得的 tie-break 优先）；
+    # 显式提供非法值 → fail-closed 零写入。B3 接线点 = verify_workflow.py
+    # argparse 层 --demand-source 设为 required（缺失即上游 exit 2，本默认
+    # 路径随之消失）。
+    demand_source = str(demand_source or "").strip().lower()  # 大小写不敏感归一
+    if not demand_source:
+        demand_source = "machine-signal"  # 窗口协议保守默认（见上）
+    demand_basis = str(demand_basis or "").strip()
+    if demand_source not in DEMAND_SOURCES:
+        return {"error": "demand_source must be one of user-named/"
+                         "active-defect/machine-signal (got {0!r}) — "
+                         "DEC-286(7)/DEC-287: 不标即违规（ADR-021 §2.2.1）"
+                         .format(demand_source)}
+    if demand_source == "user-named" and not demand_basis:
+        return {"error": "demand_basis is required when demand_source="
+                         "user-named（防 BC-4 出身洗白——用户点名判定必须可"
+                         "追溯：用户原话/DEC 引用/活性缺陷证据锚；"
+                         "ADR-021 §2.2.1）"}
+    if (demand_source == "user-named"
+            and str(priority or "").strip().upper() == "P2"):
+        # FEAT-077 规则（ADR-021 R0 返工版 §2.2.1 已正式收编该条款：
+        # P2 化是倒挂以降级形态复活的路径）。拒绝而非静默升级：升级会篡改申报优先级，拒绝保持
+        # 记录如实 + 调用方重新申报 ≥P1。
+        return {"error": "user-named 需求优先级强制 ≥P1（P2+user-named 拒绝"
+                         "——用户点名需求以 P2 顺延即倒挂入口；请以 P0/P1 "
+                         "重新申报，FEAT-077 / DEC-286(7)）"}
 
     # FIX-249 P3-3/P3-4: resolve the record path up front and reject a
     # re-triage BEFORE the pure dependency/priority/version analysis. The
@@ -1185,6 +1504,10 @@ def run_triage(*, task_id: str, title: str = "", priority: str,
                 "proposed": priority_context["proposed"],
                 "in_flight": priority_context["in_flight"],
                 "version_chain": priority_context["version_chain"],
+                # FEAT-077 / ADR-021 §2.2.1 — step-b 优先级判定上下文携带
+                # demand_source（analysis 面回显；身份面顶层键见下）。
+                "demand_source": demand_source,
+                "demand_basis": demand_basis,
             },
             "conflicts": conflicts,
             "version": {
@@ -1197,6 +1520,12 @@ def run_triage(*, task_id: str, title: str = "", priority: str,
         },
         "snapshot": dependency["snapshot"],
     }
+    # 任务身份属性与 title/priority 同级（ADR-021 §2.2.1：身份不进
+    # analysis）。additive——TRIAGE_SCHEMA_VERSION 保持 1（FIX-271 先例）。
+    # 修订通道（ADR-021 §2.2.1 F-P1-3，R1 处置 a）：本键的生命周期修订经
+    # append_demand_revision 的 append-only 事件流管理——record 本体不可变。
+    record["demand_source"] = demand_source
+    record["demand_basis"] = demand_basis
     try:
         (records_dir / record_name).write_text(
             json.dumps(record, ensure_ascii=False, indent=2) + "\n",
@@ -1205,7 +1534,9 @@ def run_triage(*, task_id: str, title: str = "", priority: str,
         return {"error": "cannot write triage record: {0}".format(exc)}
     try:
         with evidence_path.open("a", encoding="utf-8") as fh:
-            fh.write("\n" + _evidence_row(task_id, record_name, today))
+            fh.write("\n" + _evidence_row(
+                task_id, record_name, today,
+                demand_zh=DEMAND_SOURCE_ZH.get(demand_source, "")))
     except OSError as exc:
         # P2-2: the record write above already succeeded, so a failed
         # evidence append would leave a half-written triage (record without
@@ -1248,6 +1579,12 @@ __all__ = [
     "check_conflicts",
     "analyze_side_effects",
     "load_triage_records",
+    "load_demand_revisions",
+    "append_demand_revision",
+    "DEMAND_SOURCES",
+    "DEMAND_SOURCE_ZH",
+    "DEMAND_REVISION_SUFFIX",
+    "BASIS_KINDS",
     "cross_check_triage_files",
     "acquire_dispatch_locks",
     "agent_locks_acquire_cli",

@@ -1603,5 +1603,316 @@ class AgentLocksAcquireCliTests(unittest.TestCase):
             before)
 
 
+# ─── FEAT-077 / ADR-021 §2.2.1 — demand_source 三值 fail-closed 门禁 ──────────
+#
+# M1-L2 B2 批（锁外先行半批）：provenance 三值字段进 change-triage。
+#   - 显式非法值 → {"error": ...} 零写入（CLI exit 2 由既有 thin-entry 模式
+#     承载；--demand-source 旗标本身属 B3 接线——verify_workflow.py 被
+#     FIX-404 锁定，ADR-021 §2.2.1/§4 F10「锁释放后实施」）；
+#   - user-named 必须携带 demand_basis（防 BC-4 出身洗白）；
+#   - user-named 优先级强制 ≥P1（P2+user-named 拒绝——条款已被 ADR-021
+#     R0 返工版正式收编 §2.2.1：P2 化是倒挂以降级形态复活的路径）；
+#   - 缺失参数 → B2 窗口协议（Coordinator R0 P1-2 裁定 / ADR-021 返工版
+#     §2.2.1）：缺省 demand_source="machine-signal" 保守默认（锁内 CLI
+#     调用面零 TypeError + 新入账不冻结）；B3 argparse required=True 落地
+#     后该缺省路径消失，缺失即 exit 2。显式非法值始终 fail-closed 零写入。
+class DemandSourceStepTests(unittest.TestCase):
+    """demand_source intake — run_triage 三值校验/用户点名门/记录键."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="ctds_")
+        self.gov = _governance_dir(self.tmpdir)
+
+    def _run(self, **overrides):
+        kwargs = {
+            "task_id": "FIX-108",
+            "title": "demand source task",
+            "priority": "P1",
+            "target_version": "0.73.0",
+            "depends_on": ["FIX-100"],
+            "files": ["skills/software-project-governance/infra/x.py"],
+            "reason": "TDD fixture",
+            "plan_tracker_text": _FIXTURE_TRACKER,
+            "current_version": "0.72.0",
+            "governance_dir": self.gov,
+            "demand_source": "machine-signal",
+        }
+        kwargs.update(overrides)
+        return ct.run_triage(**kwargs)
+
+    def _record_path(self, task_id="FIX-108"):
+        return self.gov / "change-triage" / ("{0}.json".format(task_id))
+
+    def test_machine_signal_record_carries_top_level_keys(self):
+        summary = self._run()
+        self.assertFalse(summary.get("error"), summary)
+        record = json.loads(self._record_path().read_text(encoding="utf-8"))
+        self.assertEqual(record["demand_source"], "machine-signal")
+        self.assertEqual(record["demand_basis"], "")
+        # analysis 上下文（step b 优先级判定上下文携带 demand_source）.
+        pc = record["analysis"]["priority_context"]
+        self.assertEqual(pc["demand_source"], "machine-signal")
+        self.assertEqual(pc["demand_basis"], "")
+        # evidence 行 description 追加〔中文需求源〕标注（ADR §2.2.1 判据3）.
+        evidence = (self.gov / "evidence-log.md").read_text(encoding="utf-8")
+        self.assertIn("〔机器信号〕", evidence)
+
+    def test_user_named_with_basis_records_and_annotates(self):
+        summary = self._run(
+            demand_source="user-named",
+            demand_basis="用户原话：先把 C 级软件化做完（DEC-287(1)）")
+        self.assertFalse(summary.get("error"), summary)
+        record = json.loads(self._record_path().read_text(encoding="utf-8"))
+        self.assertEqual(record["demand_source"], "user-named")
+        self.assertIn("DEC-287", record["demand_basis"])
+        evidence = (self.gov / "evidence-log.md").read_text(encoding="utf-8")
+        self.assertIn("〔用户点名〕", evidence)
+
+    def test_invalid_demand_source_fails_closed_zero_write(self):
+        for bad in ("wild-guess", "user_named", "usernamed"):
+            summary = self._run(demand_source=bad, task_id="FIX-109")
+            self.assertIn("error", summary, bad)
+            self.assertIn("demand_source", summary["error"])
+            self.assertFalse(self._record_path("FIX-109").exists())
+        evidence = (self.gov / "evidence-log.md").read_text(encoding="utf-8")
+        self.assertNotIn("TRIAGE-FIX-109", evidence)
+
+    def test_demand_source_normalizes_case_insensitively(self):
+        summary = self._run(demand_source="USER-NAMED",
+                            demand_basis="用户原话（大小写归一）")
+        self.assertFalse(summary.get("error"), summary)
+        record = json.loads(self._record_path().read_text(encoding="utf-8"))
+        self.assertEqual(record["demand_source"], "user-named")
+
+    def test_user_named_without_basis_fails_closed(self):
+        """BC-4 出身洗白防线：user-named 判定必须可追溯（ADR §2.2.1）."""
+        summary = self._run(demand_source="user-named", demand_basis="")
+        self.assertIn("error", summary)
+        self.assertIn("demand_basis", summary["error"])
+        self.assertFalse(self._record_path().exists())
+        evidence = (self.gov / "evidence-log.md").read_text(encoding="utf-8")
+        self.assertNotIn("TRIAGE-FIX-108", evidence)
+
+    def test_user_named_p2_rejected_floor_p1(self):
+        """FEAT-077 任务规则：user-named 优先级强制 ≥P1（P2+user-named 拒绝
+        ——用户点名需求被 P2 顺延即倒挂入口；拒绝而非静默升级，保持申报
+        如实）。注：该拒绝条款已被 ADR-021 R0 返工版正式收编 §2.2.1."""
+        summary = self._run(demand_source="user-named",
+                            demand_basis="用户原话", priority="P2")
+        self.assertIn("error", summary)
+        self.assertIn("P1", summary["error"])
+        self.assertFalse(self._record_path().exists())
+        evidence = (self.gov / "evidence-log.md").read_text(encoding="utf-8")
+        self.assertNotIn("TRIAGE-FIX-108", evidence)
+
+    def test_user_named_p0_and_p1_accepted(self):
+        for index, priority in enumerate(("P0", "P1")):
+            summary = self._run(
+                task_id="FIX-11{0}".format(index), demand_source="user-named",
+                demand_basis="用户原话", priority=priority)
+            self.assertFalse(summary.get("error"), summary)
+        self.assertTrue(self._record_path("FIX-110").exists())
+        self.assertTrue(self._record_path("FIX-111").exists())
+
+    def test_missing_demand_source_defaults_machine_signal_window_protocol(self):
+        """窗口协议（Coordinator R0 P1-2 裁定）：参数缺省/空 → 保守默认
+        machine-signal（排序 rank 最末，绝不授予未挣得的 tie-break 优先）；
+        记录照常携带顶层键 + 〔机器信号〕标注。B3 接线点 = CLI argparse 层
+        --demand-source 设为 required 后该默认路径消失。"""
+        for index, missing in enumerate(("", None)):
+            summary = self._run(task_id="FIX-11{0}".format(index),
+                                demand_source=missing)
+            self.assertFalse(summary.get("error"), summary)
+            self.assertNotIn("warnings", summary)
+            record = json.loads(
+                self._record_path("FIX-11{0}".format(index))
+                .read_text(encoding="utf-8"))
+            self.assertEqual(record["demand_source"], "machine-signal")
+            pc = record["analysis"]["priority_context"]
+            self.assertEqual(pc["demand_source"], "machine-signal")
+            evidence = (self.gov / "evidence-log.md").read_text(
+                encoding="utf-8")
+            self.assertIn("〔机器信号〕", evidence)
+
+    def test_active_defect_accepted_without_basis(self):
+        summary = self._run(demand_source="active-defect")
+        self.assertFalse(summary.get("error"), summary)
+        record = json.loads(self._record_path().read_text(encoding="utf-8"))
+        self.assertEqual(record["demand_source"], "active-defect")
+        evidence = (self.gov / "evidence-log.md").read_text(encoding="utf-8")
+        self.assertIn("〔活性缺陷〕", evidence)
+
+    def test_snapshot_report_json_carries_distribution(self):
+        """ADR §2.2.2：_report_to_json +1 键（demand_source_distribution）."""
+        analysis = ct.run_dependency_analysis(_FIXTURE_TRACKER, [])
+        report_json = analysis["snapshot"]["report_json"]
+        self.assertIn("demand_source_distribution", report_json)
+        dist = report_json["demand_source_distribution"]
+        self.assertEqual(dist["legacy"], 3)  # fixture 三行均无〔标注〕
+        self.assertEqual(dist["user-named"], 0)
+
+    def test_schema_version_stays_one_additive(self):
+        """additive 先例（FIX-271）：TRIAGE_SCHEMA_VERSION 保持 1——
+        demand_source 键为 additive，既有读者（Check 32 只验四步）零破坏."""
+        summary = self._run()
+        self.assertFalse(summary.get("error"), summary)
+        record = json.loads(self._record_path().read_text(encoding="utf-8"))
+        self.assertEqual(record["schema_version"], 1)
+        self.assertEqual(ct.TRIAGE_SCHEMA_VERSION, 1)
+
+
+# ─── FEAT-077 增量 / ADR-021 §2.2.1 修订通道（F-P1-3，R1 处置 a）─────────────
+#
+# append-only 事件流：`.governance/change-triage/{TASK_ID}.demand-revisions.jsonl`
+# ——triage record 本体不可变原则不破；`.jsonl` 后缀不被 load_triage_records
+# 的 glob("*.json") 误读。事件 schema：
+#   {"event_id", "task_id", "from", "to",
+#    "basis_kind": "user-quote|dec-ref|session-record",
+#    "demand_basis", "revised_by", "revised_at"}
+# `from` 由写入器从当前 resolve 结果派生（调用方不传，防伪造起点）。
+class DemandRevisionChannelTests(unittest.TestCase):
+    """append_demand_revision / load_demand_revisions — 修订通道五例+边界."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="ctrev_")
+        self.gov = _governance_dir(self.tmpdir)
+        # 初始 record：经 run_triage 窗口协议缺省入账（machine-signal）.
+        self.base = ct.run_triage(
+            task_id="FIX-120", title="window task", priority="P1",
+            target_version="0.73.0", depends_on=["FIX-100"],
+            files=["skills/software-project-governance/infra/x.py"],
+            reason="revision channel fixture",
+            plan_tracker_text=_FIXTURE_TRACKER,
+            current_version="0.72.0", governance_dir=self.gov)
+        assert not self.base.get("error"), self.base
+        self.record_path = self.gov / "change-triage" / "FIX-120.json"
+        self.record_before = self.record_path.read_bytes()
+        self.events_path = (self.gov / "change-triage"
+                            / "FIX-120.demand-revisions.jsonl")
+
+    def _revise(self, **overrides):
+        kwargs = {
+            "task_id": "FIX-120",
+            "to": "user-named",
+            "demand_basis": "用户原话：这条是我点名的（DEC-286(7) 演示锚）",
+            "basis_kind": "user-quote",
+            "revised_by": "Coordinator",
+            "governance_dir": self.gov,
+        }
+        kwargs.update(overrides)
+        return ct.append_demand_revision(**kwargs)
+
+    def test_valid_revision_appends_derived_from_event(self):
+        summary = self._revise()
+        self.assertFalse(summary.get("error"), summary)
+        self.assertTrue(self.events_path.is_file())
+        lines = [ln for ln in
+                 self.events_path.read_text(encoding="utf-8").splitlines()
+                 if ln.strip()]
+        self.assertEqual(len(lines), 1)
+        event = json.loads(lines[0])
+        self.assertEqual(event["event_id"], "DSR-FIX-120-001")
+        self.assertEqual(event["task_id"], "FIX-120")
+        # from 由写入器从当前 resolve 派生（record=machine-signal）——调用方
+        # 未传，伪造起点不可能.
+        self.assertEqual(event["from"], "machine-signal")
+        self.assertEqual(event["to"], "user-named")
+        self.assertEqual(event["basis_kind"], "user-quote")
+        self.assertIn("用户原话", event["demand_basis"])
+        self.assertEqual(event["revised_by"], "Coordinator")
+        self.assertRegex(event["revised_at"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}")
+        # record 本体字节不变（不可变原则）.
+        self.assertEqual(self.record_path.read_bytes(), self.record_before)
+        # 机写 evidence 留痕（窗口期补救路径，ADR §2.2.1 L131）.
+        evidence = (self.gov / "evidence-log.md").read_text(encoding="utf-8")
+        self.assertIn("DSR-FIX-120-001", evidence)
+        self.assertIn("〔用户点名〕", evidence)
+
+    def test_second_revision_derives_from_previous_event(self):
+        first = self._revise()
+        self.assertFalse(first.get("error"), first)
+        second = self._revise(to="active-defect",
+                              demand_basis="活性缺陷证据锚：EVD-900",
+                              basis_kind="dec-ref")
+        self.assertFalse(second.get("error"), second)
+        events = [json.loads(ln) for ln in
+                  self.events_path.read_text(encoding="utf-8").splitlines()
+                  if ln.strip()]
+        self.assertEqual(len(events), 2)
+        self.assertEqual(events[1]["event_id"], "DSR-FIX-120-002")
+        # 链式派生：from = 上一事件终值（最新修订事件 > record）.
+        self.assertEqual(events[1]["from"], "user-named")
+        self.assertEqual(events[1]["to"], "active-defect")
+        self.assertEqual(self.record_path.read_bytes(), self.record_before)
+
+    def test_revision_without_record_fails_closed(self):
+        summary = self._revise(task_id="FIX-999")
+        self.assertIn("error", summary)
+        self.assertIn("triage record", summary["error"])
+        self.assertFalse(
+            (self.gov / "change-triage" / "FIX-999.demand-revisions.jsonl")
+            .exists())
+
+    def test_revision_without_basis_fails_closed(self):
+        summary = self._revise(demand_basis="  ")
+        self.assertIn("error", summary)
+        self.assertIn("demand_basis", summary["error"])
+        self.assertFalse(self.events_path.exists())
+
+    def test_revision_invalid_to_fails_closed(self):
+        for bad in ("wild", "user_named", "USER-NAMED-SUFFIX"):
+            summary = self._revise(to=bad)
+            self.assertIn("error", summary, bad)
+            self.assertFalse(self.events_path.exists(), bad)
+
+    def test_revision_invalid_basis_kind_fails_closed(self):
+        summary = self._revise(basis_kind="guess")
+        self.assertIn("error", summary)
+        self.assertIn("basis_kind", summary["error"])
+        self.assertFalse(self.events_path.exists())
+
+    def test_revision_normalizes_case_insensitively(self):
+        summary = self._revise(to="USER-NAMED")
+        self.assertFalse(summary.get("error"), summary)
+        events = [json.loads(ln) for ln in
+                  self.events_path.read_text(encoding="utf-8").splitlines()
+                  if ln.strip()]
+        self.assertEqual(events[0]["to"], "user-named")
+
+    def test_jsonl_not_globbed_by_load_triage_records(self):
+        self.assertFalse(self._revise().get("error"))
+        records = ct.load_triage_records(self.gov)
+        self.assertEqual([r["task_id"] for r in records], ["FIX-120"])
+        self.assertTrue(all("_record_path" in r for r in records))
+
+    def test_loader_returns_events_and_skips_malformed(self):
+        self.assertFalse(self._revise().get("error"))
+        # 手工追加一行垃圾 + 一行合法事件（模拟历史损坏行——loader 保守跳过）.
+        with self.events_path.open("a", encoding="utf-8") as fh:
+            fh.write("this is not json {\n")
+            fh.write(json.dumps({
+                "event_id": "DSR-FIX-120-003", "task_id": "FIX-120",
+                "from": "user-named", "to": "machine-signal",
+                "basis_kind": "session-record", "demand_basis": "会话记录锚",
+                "revised_by": "Coordinator", "revised_at": "2026-09-29T12:00:00",
+            }) + "\n")
+        events = ct.load_demand_revisions(self.gov)
+        self.assertEqual(len(events), 2)
+        self.assertEqual(events[1]["to"], "machine-signal")
+
+    def test_evidence_failure_rolls_back_event_append(self):
+        """Never-raises + best-effort all-or-nothing：evidence 追加失败时回滚
+        刚追加的事件行（恢复 append 前长度），不留半写状态."""
+        bad_evidence = self.gov / "no-such-dir" / "evidence-log.md"
+        summary = self._revise(evidence_path=bad_evidence)
+        self.assertIn("error", summary)
+        self.assertIn("evidence", summary["error"])
+        self.assertFalse(self.events_path.exists())
+
+    def test_never_raises_on_missing_governance_dir(self):
+        summary = self._revise(governance_dir=self.gov / "ghost" / "deep")
+        self.assertIn("error", summary)  # record 不存在分支命中（目录缺失）
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -59,7 +59,13 @@ archive-index resolution helpers (:func:`parse_archive_index_completed_ids`
 takes TEXT — pure; :func:`read_archive_index_completed_ids` /
 :func:`_archive_index_mtime` read the parameterized index path) and the CLI
 orchestrator :func:`run_cli_analysis` perform explicit, parameterized file
-I/O — they never touch module state and stay stdlib-only.
+I/O — they never touch module state and stay stdlib-only at module level.
+FEAT-077 / ADR-021 §2.2.2 (3) adds one more documented orchestration-layer
+exception: :func:`_resolve_row_demand_sources` lazily imports
+``change_triage.load_triage_records`` (function-local — a module-level
+import would be circular since change_triage imports THIS module) to feed
+the PURE :func:`resolve_demand_source` authority merge; the compute path
+itself stays stdlib-only with no peer coupling.
 
 **Task-family vs cross-entity (FIX-171 precedent):** the ``依赖`` column
 routinely mixes task-family IDs (``FIX-162``, ``REL-047``, ``AUDIT-124`` —
@@ -84,7 +90,7 @@ import json
 import re
 import sys
 import unicodedata
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 from pathlib import Path
 
@@ -132,6 +138,44 @@ _CROSS_ENTITY_PREFIXES = frozenset({
 _ID_TOKEN_RE = re.compile(r"(?<![-A-Z])([A-Z]+)-(\d+)\b")
 # A bare ID cell value (after stripping markdown), e.g. "FIX-226".
 _ID_CELL_RE = re.compile(r"^[A-Z]+-\d+$")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# demand_source (provenance) vocabulary — FEAT-077 / ADR-021 §2.2.2 (M1-L2 B2)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# 需求源三值封闭枚举（ADR-021 §2 术语与字段命名先决裁决：字段名
+# ``demand_source``，不复用 ``provenance``——governance_store.py 已将该词
+# 定义为写入器机器溯源，同词两义是架构腐化 P-v1 D2）。行内（md）标注格式
+# ``〔用户点名〕/〔活性缺陷〕/〔机器信号〕``（全角方括号，与治理文本现有
+# ``〔op-…〕`` 锚风格一致）。
+DEMAND_SOURCE_VALUES = ("user-named", "active-defect", "machine-signal")
+# 无标注存量行 = legacy（ADR §2.2.1 向后兼容：消费者按「缺失 = 未标」处理）；
+# 两面矛盾 = conflict（数据一致性 fail-closed，§2.2.2 (3)）。
+DEMAND_SOURCE_LEGACY = "legacy"
+DEMAND_SOURCE_CONFLICT = "conflict"
+
+_DEMAND_SOURCE_MARKER_RE = re.compile(r"〔(用户点名|活性缺陷|机器信号)〕")
+_MARKER_TO_DEMAND_SOURCE = {
+    "用户点名": "user-named",
+    "活性缺陷": "active-defect",
+    "机器信号": "machine-signal",
+}
+
+# Sort tie-break rank — ADR-021 裁决点 D1（DEC-289 采纳）：provenance 排在
+# priority 之内作第一 tie-break（同 P 级内 user-named > active-defect >
+# machine-signal），**不跨 P 级**——跨级压制会把 user-named 结构性需求抬到
+# P0 阻断热修之上制造新倒挂；跨级倒挂由 ADR-021 §2.2.3 反倒挂判定件兜底
+# （分级执法，B3 接线——编号随 ADR 返工重编，不在此写死）。
+# ``legacy`` 与 ``user-named`` 同 rank（存量未标行保守视为用户/Coordinator
+# 点名，报告面显式披露 legacy 清单倒逼补标）；``conflict`` 亦同 rank 0
+# （排序按 user-named 保守处理 + 显式披露，§2.2.2 验收判据 2）。
+_DEMAND_RANK = {
+    "user-named": 0,
+    "active-defect": 1,
+    "machine-signal": 2,
+    "legacy": 0,
+    "conflict": 0,
+}
 
 
 def _is_task_family_id(task_id: str) -> bool:
@@ -545,6 +589,13 @@ class TaskDep:
         cross_entity_refs: cross-entity IDs found in the ``依赖`` cell (RISK/
             DEC/REVIEW/EVD/...). Carried for reporting only; never blocks.
         target_version: the ``目标版本`` cell text (e.g. ``"0.71.0"`` or ``"—"``).
+        demand_source: provenance of the DEMAND behind the row —
+            ``"user-named"`` / ``"active-defect"`` / ``"machine-signal"``
+            (parsed from an in-row ``〔用户点名〕/〔活性缺陷〕/〔机器信号〕``
+            marker, ADR-021 §2.2.2 (2)), ``"legacy"`` (no marker — 存量未标),
+            or ``"conflict"`` (set by :func:`resolve_demand_source` when the
+            triage record and the row marker disagree). Default ``"legacy"``
+            keeps every pre-FEAT-077 construction site working unchanged.
     """
 
     task_id: str
@@ -553,6 +604,7 @@ class TaskDep:
     dependencies: tuple = ()
     cross_entity_refs: tuple = ()
     target_version: str = ""
+    demand_source: str = DEMAND_SOURCE_LEGACY
 
     def is_completed(self) -> bool:
         """True if this task's status indicates completion (contains ✅)."""
@@ -665,6 +717,11 @@ class PriorityReport:
             "no_active_tasks", "total", "completed", "blocked",
             "non_executable", "message", "nearest_action"}``. None on the
             normal path.
+        demand_source_conflicts: task IDs whose provenance sources disagree
+            (triage record vs 行内〔标注〕, FEAT-077 / ADR-021 §2.2.2 (3)) —
+            set by :func:`compute_unblocked_tasks`; rendered as a
+            DEMAND SOURCE CONFLICT disclosure banner by :func:`format_report`
+            (排序按 user-named 保守处理——数据一致性优先于排序判断).
     """
 
     completed: list = field(default_factory=list)
@@ -678,6 +735,7 @@ class PriorityReport:
     cycle_warning: bool = False
     unblock_recommendation: "UnblockRecommendation | None" = None
     empty_reason: "dict | None" = None
+    demand_source_conflicts: list = field(default_factory=list)  # [task_id]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -823,6 +881,88 @@ def _archive_index_mtime(governance_dir):
         return path.stat().st_mtime if path.is_file() else None
     except OSError:
         return None
+
+
+def _triage_records_mtime(governance_dir):
+    """Max st_mtime over ``change-triage/`` and ALL its entries, or None.
+
+    FEAT-077 cache-guard input: the report is a function of the triage
+    records AND the demand-revision event streams (authority merge,
+    ADR-021 §2.2.1/§2.2.2), so a cache written before a change must not be
+    reused (stale provenance). A directory mtime alone would miss
+    APPENDS to an existing ``.demand-revisions.jsonl`` (append-only — the
+    dir entry set is unchanged, only the file content grows), hence the
+    max-sweep over the directory plus every entry. Records are immutable
+    (FIX-247); appends bump the stream file's mtime — the sweep catches
+    additions, removals and appends alike.
+    """
+    try:
+        path = Path(governance_dir) / "change-triage"
+        if not path.is_dir():
+            return None
+        latest = path.stat().st_mtime
+        for child in path.iterdir():
+            try:
+                mtime = child.stat().st_mtime
+            except OSError:
+                continue
+            if mtime > latest:
+                latest = mtime
+        return latest
+    except OSError:
+        return None
+
+
+def _resolve_row_demand_sources(tasks: list, governance_dir) -> tuple:
+    """Merge revision-event + triage-record authority into parsed rows.
+
+    FEAT-077 / ADR-021 §2.2.2 (3)（R0 修订）: the authority merge (最新修订
+    事件 > triage JSON > 行内〔标注〕 > legacy) is a PURE function
+    (:func:`resolve_demand_source`); the LOADING is the documented I/O
+    exception owned by this CLI orchestration layer — it lazily calls
+    ``change_triage.load_triage_records`` + ``load_demand_revisions``
+    (function-local imports: the compute path stays pure-stdlib with no
+    peer coupling; ``change_triage`` imports THIS module, so module-level
+    imports would be circular). Degradation: unreadable inputs fail-open
+    to the row markers (ADR §2.4 L2 tpa 联查行) — the analysis never
+    blocks.
+
+    Returns ``(tasks, revision_lag_warnings)``: the replaced task list,
+    plus one WARN string per task whose in-row〔标注〕disagrees with the
+    revision-final value while valid revision events exist (行内滞后 →
+    WARN 提示同步行内，不 FAIL——事件流才是权威，ADR §2.2.1 R0 修订).
+    """
+    try:
+        from change_triage import load_demand_revisions, load_triage_records
+        records = load_triage_records(governance_dir)
+        events = load_demand_revisions(governance_dir)
+    except Exception:
+        records = []
+        events = []
+
+    tasks_with_valid_events = set()
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        to = str(event.get("to", "") or "").strip()
+        if to in DEMAND_SOURCE_VALUES:
+            tasks_with_valid_events.add(str(event.get("task_id", "")))
+
+    resolved = []
+    lag_warnings = []
+    for task in tasks:
+        final = resolve_demand_source(
+            task.task_id, task.demand_source, records, events)
+        if (task.task_id in tasks_with_valid_events
+                and task.demand_source in DEMAND_SOURCE_VALUES
+                and task.demand_source != final):
+            lag_warnings.append(
+                "[WARN] demand_source 修订后行内标注滞后：`{0}` 行内〔标注〕"
+                "={1} → 修订终值={2}，请同步行内标注（ADR-021 §2.2.1 修订"
+                "通道——事件流为权威，不构成 conflict）".format(
+                    task.task_id, task.demand_source, final))
+        resolved.append(replace(task, demand_source=final))
+    return resolved, lag_warnings
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1188,6 +1328,16 @@ def _parse_task_row(cells: list, col_index: dict, header_width: int = 0):
             status = c
             break
 
+    # FEAT-077 / ADR-021 §2.2.2 (2) — 行内〔需求源〕标注：扫描整行原始
+    # cells（依赖列或状态列均可携带；首个命中胜出）。中文标注不进入
+    # _ID_TOKEN_RE 的提取路径（F5），依赖解析零回归。
+    demand_source = DEMAND_SOURCE_LEGACY
+    for c in cells:
+        marker = _DEMAND_SOURCE_MARKER_RE.search(c)
+        if marker:
+            demand_source = _MARKER_TO_DEMAND_SOURCE[marker.group(1)]
+            break
+
     return TaskDep(
         task_id=task_id,
         priority=priority,
@@ -1195,6 +1345,7 @@ def _parse_task_row(cells: list, col_index: dict, header_width: int = 0):
         dependencies=task_family,
         cross_entity_refs=cross_entity,
         target_version=target_version,
+        demand_source=demand_source,
     )
 
 
@@ -1270,10 +1421,113 @@ def _detect_cycles(graph: dict) -> list:
 
 
 def _priority_sort_key(task: TaskDep) -> tuple:
-    """Sort key: priority rank ascending (P0 first), then version ascending."""
-    # P0/P1/P2/P9 sort lexicographically because they are zero-padded single
-    # digits ("P0" < "P1" < "P2" < "P9").
-    return (task.priority, _version_tuple(task.target_version), task.task_id)
+    """Sort key: priority rank → demand_source rank → version → task id.
+
+    FEAT-077 / ADR-021 §2.2.2 (4), 裁决点 D1 (DEC-289 采纳): demand_source
+    is the FIRST tie-break WITHIN a priority level (same-P: user-named >
+    active-defect > machine-signal; legacy/conflict rank with user-named),
+    and never crosses priority levels — P0/P1/P2/P9 sort lexicographically
+    first because they are zero-padded single digits ("P0" < "P1" < "P2" <
+    "P9"). Direct ``_DEMAND_RANK`` indexing is deliberate (ADR code
+    verbatim): the enum is closed and both producers (:func:`_parse_task_row`
+    row markers, :func:`resolve_demand_source` authority merge) emit only
+    valid values — a hand-built row with a garbage source fails LOUD here
+    (fail-closed spirit), never silently re-ranks.
+    """
+    return (task.priority, _DEMAND_RANK[task.demand_source],
+            _version_tuple(task.target_version), task.task_id)
+
+
+def resolve_demand_source(task_id: str, row_marker: str,
+                          triage_records, revision_events=None) -> str:
+    """Authority merge: 最新修订事件 > triage record > 行内〔标注〕 > legacy.
+
+    FEAT-077 / ADR-021 §2.2.2 (3)（R0 修订，F-P1-3 修订事件感知；纯函数
+    ——triage 记录与修订事件由 CLI 编排层 :func:`run_cli_analysis` 经
+    ``change_triage.load_triage_records`` / ``load_demand_revisions`` 注入，
+    purity 契约不破）:
+
+      - **最新修订事件（如有）权威**：存在该任务的合法修订事件（``to``
+        为三值枚举）→ 取最新（列表末位）事件的 ``to`` 为终值——record/行内
+        的旧值是历史快照，**不构成 conflict**（合法漂移通道，ADR §2.2.1
+        修订通道）；
+      - 无修订事件时：triage record for ``task_id`` carrying a VALID
+        ``demand_source`` (three-value enum) is authoritative: agreeing
+        with the row marker → that value; disagreeing with a real row
+        marker → ``"conflict"`` (数据一致性 fail-closed——conflict 仅指
+        **未声明修订**的矛盾);
+      - a record WITHOUT the key (~199 存量记录, ADR §2.2.1 向后兼容) or
+        with a non-enum value has NO authority → fail-open to the row
+        marker (ADR §2.4 L2 tpa 联查降级行);
+      - neither source → ``"legacy"``.
+
+    Args:
+        task_id: the task row's ID (matched against ``record["task_id"]``
+            / ``event["task_id"]``).
+        row_marker: the row-level demand_source as parsed by
+            :func:`_parse_task_row` (``legacy`` when the row carries no
+            〔标注〕).
+        triage_records: triage record dicts
+            (:func:`change_triage.load_triage_records` shape); None/empty
+            safe.
+        revision_events: demand-revision event dicts
+            (:func:`change_triage.load_demand_revisions` shape); ``None``
+            (default) keeps the pre-revision-channel three-source behavior
+            EXACTLY (零回归通道).
+
+    Returns:
+        One of ``user-named`` / ``active-defect`` / ``machine-signal`` /
+        ``legacy`` / ``conflict``. Never raises.
+    """
+    if revision_events:
+        latest = None
+        for event in revision_events:
+            if not isinstance(event, dict):
+                continue
+            if str(event.get("task_id", "")) != str(task_id):
+                continue
+            to = str(event.get("to", "") or "").strip()
+            if to in DEMAND_SOURCE_VALUES:
+                latest = to  # list order = append order → last wins
+        if latest is not None:
+            return latest  # 旧值=历史快照，不构成 conflict（§2.2.1 修订通道）
+    record = None
+    for candidate in triage_records or []:
+        if isinstance(candidate, dict) and str(
+                candidate.get("task_id", "")) == str(task_id):
+            record = candidate
+            break
+    record_value = str((record or {}).get("demand_source", "") or "").strip()
+    if record_value not in DEMAND_SOURCE_VALUES:
+        record_value = ""  # 无记录 / 存量无键 / 非法值 → 无权威性
+    row_value = row_marker if row_marker in DEMAND_SOURCE_VALUES else ""
+    if record_value and row_value:
+        if record_value == row_value:
+            return record_value
+        return DEMAND_SOURCE_CONFLICT
+    return record_value or row_value or DEMAND_SOURCE_LEGACY
+
+
+def demand_source_distribution(report) -> dict:
+    """Provenance distribution over every task in a :class:`PriorityReport`.
+
+    FEAT-077 / ADR-021 §2.2.2 (5): the ``format_report`` header line and the
+    change-triage snapshot (``_report_to_json`` +1 键) both consume this
+    count. ``conflict`` rows are NOT counted in the four buckets — they are
+    an error state disclosed separately via
+    ``PriorityReport.demand_source_conflicts`` and the report banner.
+    """
+    counts = {"user-named": 0, "active-defect": 0, "machine-signal": 0,
+              "legacy": 0}
+    buckets = list(getattr(report, "completed", []) or [])
+    buckets.extend(bt.task for bt in getattr(report, "blocked", []) or [])
+    buckets.extend(getattr(report, "unblocked", []) or [])
+    buckets.extend(getattr(report, "non_executable", []) or [])
+    for task in buckets:
+        source = getattr(task, "demand_source", DEMAND_SOURCE_LEGACY)
+        if source in counts:
+            counts[source] += 1
+    return counts
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1695,6 +1949,12 @@ def compute_unblocked_tasks(tasks: list, archive_completed_ids=None) -> Priority
 
     recommended = sorted(unblocked, key=_priority_sort_key)
 
+    # FEAT-077 / ADR-021 §2.2.2 (3): conflict rows are surfaced on the report
+    # (rendered as a disclosure banner; the ordering judgement treats them
+    # conservatively as user-named rank — see _DEMAND_RANK).
+    demand_source_conflicts = [
+        t.task_id for t in tasks if t.demand_source == DEMAND_SOURCE_CONFLICT]
+
     unblock_recommendation = None
     empty_reason = None
     if not recommended:
@@ -1719,6 +1979,7 @@ def compute_unblocked_tasks(tasks: list, archive_completed_ids=None) -> Priority
         cycle_warning=bool(cycles),
         unblock_recommendation=unblock_recommendation,
         empty_reason=empty_reason,
+        demand_source_conflicts=demand_source_conflicts,
     )
 
 
@@ -1746,13 +2007,19 @@ def _clean_status_for_display(status: str) -> str:
 
 
 def _format_task_line(t: TaskDep) -> str:
-    """One-line summary of a task for the report."""
+    """One-line summary of a task for the report.
+
+    FEAT-077 / ADR-021 §2.2.2 (5): every line carries the demand-source
+    annotation ``src={demand_source}`` (DEC-287(5) 过渡期执法：推荐/排序
+    呈现逐项标需求源，不标即违规；legacy 同样显式披露)。
+    """
     deps = ", ".join(t.dependencies) if t.dependencies else "—"
     cross = ", ".join(t.cross_entity_refs) if t.cross_entity_refs else ""
     cross_str = f"  [refs: {cross}]" if cross else ""
     version = t.target_version or "—"
     status = _clean_status_for_display(t.status) or "—"
-    return f"- `{t.task_id}` [{t.priority}] v={version} status={status} deps=[{deps}]{cross_str}"
+    return (f"- `{t.task_id}` [{t.priority}] v={version} status={status} "
+            f"deps=[{deps}]{cross_str} src={t.demand_source}")
 
 
 def format_report(report: PriorityReport) -> str:
@@ -1786,6 +2053,17 @@ def format_report(report: PriorityReport) -> str:
         f"{len(report.blocked)} blocked, "
         f"{len(report.non_executable)} non-executable."
     )
+    # FEAT-077 / ADR-021 §2.2.2 (5) — provenance 分布行（DEC-288 M1 生效
+    # 判据半项的机检面之一：tpa 输出含 provenance 分布 + 每行 src 标注）.
+    dist = demand_source_distribution(report)
+    dist_line = (
+        f"provenance distribution: user-named:{dist['user-named']} "
+        f"active-defect:{dist['active-defect']} "
+        f"machine-signal:{dist['machine-signal']} legacy:{dist['legacy']}")
+    if report.demand_source_conflicts:
+        dist_line += (f" conflict:{len(report.demand_source_conflicts)}"
+                      "（行内标注与 triage 记录矛盾——见下方披露横幅）")
+    lines.append(dist_line)
     lines.append("")
 
     if report.cycles:
@@ -1801,6 +2079,22 @@ def format_report(report: PriorityReport) -> str:
         lines.append("")
         for cyc in report.cycles:
             lines.append("- " + " → ".join(cyc))
+        lines.append("")
+
+    if report.demand_source_conflicts:
+        # FEAT-077 / ADR-021 §2.2.2 验收判据 2 — conflict 显式披露：排序已按
+        # user-named 保守处理（_DEMAND_RANK rank 0），数据一致性须人工校正
+        # （反倒挂判定件对 conflict 判 FAIL，ADR §2.2.3）。
+        lines.append("## ⚠️ DEMAND SOURCE CONFLICT (WARNING — data consistency)")
+        lines.append("")
+        lines.append(
+            "以下任务行内〔标注〕与 triage 记录 demand_source 冲突——排序按 "
+            "user-named 保守处理（ADR-021 §2.2.2/§2.4：conflict fail-closed，"
+            "数据一致性高于可用性），须人工校正后重跑分析。"
+        )
+        lines.append("")
+        for tid in report.demand_source_conflicts:
+            lines.append(f"- `{tid}`")
         lines.append("")
 
     lines.append("## Recommended next")
@@ -2197,15 +2491,31 @@ def run_cli_analysis(tracker_path, governance_dir, evidence_path,
     if reuse:
         reuse = (state.get("archive_index_mtime")
                  == _archive_index_mtime(governance_dir))
+    if reuse:
+        # FEAT-077: the report is also a function of the triage records
+        # (demand_source authority merge) — a cache written before a triage
+        # record appeared must not be reused (stale provenance). Old caches
+        # without the key fail this check whenever a change-triage dir
+        # exists — one extra full run, never a stale report (FIX-341
+        # upgrade pattern).
+        reuse = (state.get("triage_records_mtime")
+                 == _triage_records_mtime(governance_dir))
 
     report = None
     if reuse:
         print("task-priority-analysis: 复用上次分析（--force 重跑）")
         print(state["report_text"])
+        # FEAT-077 修订通道：行内滞后 WARN 随缓存一起重放——复用路径不得
+        # 静默吞掉警告（WARN 起步，不得静默）。
+        for warning in state.get("revision_lag_warnings", []) or []:
+            print(warning)
     else:
         try:
+            resolved_tasks, revision_lag_warnings = (
+                _resolve_row_demand_sources(
+                    parse_task_dependencies(tracker_text), governance_dir))
             report = compute_unblocked_tasks(
-                parse_task_dependencies(tracker_text),
+                resolved_tasks,
                 archive_completed_ids=read_archive_index_completed_ids(
                     governance_dir))
             report_text = format_report(report)
@@ -2213,9 +2523,13 @@ def run_cli_analysis(tracker_path, governance_dir, evidence_path,
             print(f"task-priority-analysis: parse error: {exc}", file=sys.stderr)
             return 2
         print(report_text)
+        for warning in revision_lag_warnings:
+            print(warning)
         write_last_run_state(governance_dir, {
             "date": today, "plan_tracker_mtime": tracker_mtime,
             "archive_index_mtime": _archive_index_mtime(governance_dir),
+            "triage_records_mtime": _triage_records_mtime(governance_dir),
+            "revision_lag_warnings": revision_lag_warnings,
             "report_text": report_text})
 
     # FIX-262 / REQ-108: machine snapshot row for the completion-recommendation
@@ -2249,9 +2563,14 @@ __all__ = [
     "BlockedTask",
     "UnblockRecommendation",
     "PriorityReport",
+    "DEMAND_SOURCE_VALUES",
+    "DEMAND_SOURCE_LEGACY",
+    "DEMAND_SOURCE_CONFLICT",
     "parse_task_dependencies",
     "compute_unblocked_tasks",
     "format_report",
+    "resolve_demand_source",
+    "demand_source_distribution",
     "parse_archive_index_completed_ids",
     "read_archive_index_completed_ids",
     "should_reuse_cached_analysis",

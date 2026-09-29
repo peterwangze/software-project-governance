@@ -2,6 +2,59 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.93.0] - 未发布（准备态）
+<!-- 发布日期占位（FIX-349 口径）：发布日期零预填；M-7 annotated tag `v0.93.0` 落地后以 taggerdate 权威回填本行日期单元格。 -->
+
+### 0.93.0 - **元机制执法双件与例外清偿终局（Meta-Mechanism Enforcement Pair & Exception Ledger Finality）**：需求源执法与发现即闭环两大元机制落地为引擎面，EXC 三例外全部终局，证据分层物理清偿与 SD 完好性根修（DESIGN-021/FEAT-077~080/FEAT-076/FIX-403~409 载荷 / DEC-286(7)+290~296 / EVD-1240~1264 截至组装时点）
+
+0.93.0 按 DEC-292 批授权与 DEC-293 用户裁定单轮交付：元机制双件（M1 需求源执法/M2 发现即闭环——ADR-021 经 DESIGN-021 R0 NEEDS_CHANGE→23 处返工→R1 AWN/0 采纳）+ 例外账本终局（EXC-001 重校准 DEC-295 / EXC-002 关闭 DEC-294 / EXC-003 删除 DEC-296 记账——**三例外全部终局，发布准入零例外承载**）+ 证据分层物理清偿（FEAT-076：1087 行三腿迁移、热表 −70.9%、C-3 91 ID 清偿、Q6 日期窗回退）+ SD 完好性根修（FIX-405 发布门扫描 + FIX-409 投影 writer ACL 三层根修与 write-then-probe——RISK-061 损伤类自此产出自检）。0.92 遗留的两容量问题（decision-log 超 250K 阈/archive.py 超 5K 行）前者已由 FIX-407 物理收敛（259K→177K），后者仍为披露面（0.94 拆分候选——no-overclaim）。
+
+**载荷双窗（12 commits 审查链全闭合，R0/R1 全 AWN/0；终窗 `4f52c6b`）**：
+
+- **DESIGN-021（commit `130ed19`）**：ADR-021 元机制双件设计——M1 优先级执法（需求源标注+同优先级反倒挂）+ M2 发现即闭环（触发点当场闭环纪律）；R0 NEEDS_CHANGE→23 处返工→R1 AWN/0；DEC-290/291 采纳。
+- **FEAT-077（commit `f297eeb`）**：M1-B2 demand_source 字段+优先级加权+provenance_domain 模块+修订通道（NF-1）；R0/R1 AWN/0。
+- **FEAT-078（commit `3544d09`）**：M1-B1a 契约四面注入（M1 条款 5+M2 闭环纪律，实测 348 tok/DEC-291）；R0 AWN/0，零漂移 17/17、30+9 锚。
+- **FEAT-079（commit `2ef9fc2`）**：M1-B1b 分层锚注册（9 锚，部分注入 fail-closed）+ 逐面反走私预算断言（DEC-291 M1≤180/M1+M2≤370）；R0 AWN/0。
+- **FEAT-080（commit `2f3ecd4`+`344ec8c` regen rider）**：M1-B3 接线——Check 41/42 入 check-governance（INV-1 同优先级+INV-X）、CLI `--demand-source` 必填（窗口关闭）、发布门 provenance 子检查、freeze-line、zerodrift 持久测试、execution-packet 增量合并；rider：ArchGuard 26478→26921、R4 1318→1338、contract_matrix 98 键；R0 AWN/0（439 tests）。
+- **FEAT-076（commit `15e0a6d`）**：证据分层迁移与稳态治理——1087 行三腿迁移（热表 −70.9%）、C-3 91 ID 清偿、GovernanceDataSource 家族读取门面、Check 28s 三轨、Q6 日期窗回退；R0 AWN/0 零内容损失；EXC-002 关闭（DEC-294）/EXC-001 重校准（DEC-295）。
+- **FIX-405+FIX-406（commit `d22a4f9`）**：SD 完好性门（RISK-061 扫描+takeown/icacls 处置模板）、Check 17/intake-mirror 谓词统一、INV else 拆分+BLOCKED 收集器、SKILL freeze-line 2866B/预算 3072（DEC-295）、track-1 逐文件重校准（EXC-001 移除）、anchor 27133；R0/R1/R1b AWN/0。
+- **FIX-407（终窗 `4f52c6b`）**：EXC-003 终局——narrative DEC 行族解析器（DEC 锚+日期锚行级识别，fail-closed 四重）+ Q6 日期窗迁移 58 行：decision-log 259,053→**177,202B**（169→111 热行，索引守恒 185）；R0 AWN/0。
+- **FIX-408（终窗 `4f52c6b`）**：SD 测试 hermetic 加固+**归因勘误**（两用例为纯 mock 受害者非加害者——`check_release_readiness` 内未 mock 的 `check_projection_sync` 读真实投影为崩溃路径）+ 模拟路径虚构性守卫；R0 AWN/0。
+- **FIX-409（终窗 `4f52c6b`）**：投影 writer ACL 根修（RISK-061 真实根因）——journal 由 mkdtemp-0700 改 uuid 默认模式、rename 前 SD 归一、**write-then-probe** 拒读显式 FAIL 不静默（与 FIX-405 发布门=根修+检测双保险）+ fixture 沙箱安全化（7/7 绿）；R0 AWN/0。
+- **FIX-403/FIX-404（commit `0ba86ce`/`f627c57`）**：identity fixture TemporaryDirectory 清理崩溃热修（never-crash 契约恢复）+ 清理族扫荡（7 ERROR→0）；R0 AWN/0。
+
+**已知边界披露（发布时点，零例外承载——EXC-001/002/003 全终局）**：advisory 面仅余 plan-tracker/evidence-log 容量 WARN（DEC-295 校准域）与 archive.py **5,959 行/274,228B**（实测 2026-09-29 组装时点）越阈 5,000 行（0.94 拆分候选）；`.pytest_cache` 与两个历史 `spg-projection-*` 拒读目录为环境残留（普通终端可清，新 writer 不再产出）。
+
+**版本面再生纪律**：本版版本面经 `release-projection --write` 确定性再生（权威源 bump → written=17 → 幂等复跑 written=0 → **write_then_probe=PASS**——FIX-409 首个经探针收口的版本面）+ 双根 entry sync（repo root + e2e fixture）；仓库根 `CLAUDE.md` 因历史 SD 受损经 harness 通道字节级复原（10115B，与 sync 计算目标逐字节一致）。
+
+**升级注意**：入口 bootstrap 版本戳已升至 0.93.0（CLAUDE.md/AGENTS.md 双根 + e2e fixture）——已有工作区经 /plugin update 后由 FEAT-035 升级确认门自升级（用户未响应前零写操作）；无破坏性变更、无机制激活翻转（M1/M2 为引擎执法面，行为变更经 DEC-290/291 授权链）。
+
+**决策链**：DEC-286(7)（需求源执法前序）/ DEC-290/291（ADR-021 采纳与注入预算）/ DEC-292（0.93 批授权）/ DEC-293（用户裁定单轮）/ DEC-294（EXC-002 关闭）/ DEC-295（EXC-001 重校准+校准域）/ DEC-296（EXC-003 终局记账）；**证据**：EVD-1240~1264（截至组装时点；发布链证据由 REL-096 收口补齐）。
+
+### Added
+
+- **M1 需求源执法引擎面（FEAT-077/078/079/080）**：demand_source/demand-revision 通道、契约四面注入（30+9 锚零漂移）、分层锚注册反走私预算（M1≤180/M1+M2≤370）、Check 41 反倒挂/Check 42 闭环率、CLI `--demand-source` 必填、发布门 provenance 子检查、zerodrift 持久测试。
+- **SD 完好性门（FIX-405/406）**：RISK-061 扫描（os.access 探测+逐路径处置模板）+ Check 17/intake-mirror 谓词统一 + INV BLOCKED 收集器。
+- **narrative DEC 行族解析器（FIX-407）**：行级 DEC 锚+日期锚识别与 Q6 日期窗裁决（fail-closed：撞号/无日期/不可证 ref/超窗均留热）。
+
+### Changed
+
+- **全仓版本面 0.92.0→0.93.0（REL-096）**：SKILL.md frontmatter 权威源先 bump → `release-projection --write` 单次写入 17 面一次收敛（write_then_probe=PASS）→ 幂等复跑 written=0；双根 entry sync（repo root + e2e fixture 的 AGENTS.md/CLAUDE.md bootstrap 段再生）。
+- **投影 writer 产出面根修（FIX-409）**：journal uuid 默认模式 + rename 前 chmod 0o644 + write-then-probe 拒读显式 FAIL + 清理前归一——受限令牌沙箱自产自检闭环。
+- **证据分层物理迁移（FEAT-076 + FIX-407）**：1087 行三腿迁移 + narrative DEC 58 行迁移；热表/decision-log 双收敛（−70.9% / 259K→177K）。
+
+### Fixed
+
+- **identity fixture TemporaryDirectory 清理崩溃（FIX-403）**：mkdtemp+finally+rmtree(ignore_errors=True) 恢复受限令牌下 never-crash 契约（Py3.14 onexc 转义经 stdlib 源码验证）——契约测试红绿闭环。
+- **TemporaryDirectory 清理族扫荡（FIX-404）**：21038/21601 两处+fixture 加固——环境性 ERROR 7→0，沙箱内测试面全绿。
+- **Check 17/intake-mirror 谓词统一与 INV BLOCKED 收集器（FIX-405）**：SD 完好性门（RISK-061 扫描+takeown/icacls 处置模板）落地——损伤在造成时刻与每次发布门可见，非下次随机访问。
+- **SKILL freeze-line 与 track-1 逐文件重校准（FIX-406）**：freeze-line 2866B/预算 3072（DEC-295）；EXC-001 移除——28s 容量面转逐文件校准域。
+- **EXC-003 终局：narrative DEC 行族迁移（FIX-407）**：行级解析器（DEC 锚+日期锚，fail-closed 四重）+ Q6 日期窗迁移 58 行——decision-log 259,053→177,202B，索引守恒 185；EXC-003 删除。
+- **SD 测试 hermetic 加固与归因勘误（FIX-408）**：两用例补 `check_projection_sync` mock（隔离声明自洽）+ 模拟路径虚构性守卫；勘误：用例为纯 mock 受害者非加害者。
+- **投影 writer ACL 根修（FIX-409）**：journal uuid 默认模式替代 mkdtemp-0700 + rename 前 SD 归一 + **write-then-probe** 拒读显式 FAIL + 清理前归一——RISK-061 损伤类产出自检（本版版本面为首例经探针收口）。
+
+**准备态注记**：本段为 REL-096 组装时点（2026-09-29 +0800）的**准备态**——发布日期不预填（发布收口按 FIX-349 口径以 taggerdate 权威落字）；发布终账、Commit 区间与发布验证结论随发布链 M-2+ 补记。
+
 ## [0.92.0] - 2026-09-29（taggerdate 2026-09-29 01:54:45 +0800 权威〔FIX-349〕；tag v0.92.0 object peel=transition 041c0c4；ledger NATIVE released 本地+remote 双 PASS；event integrity sha256:dac5fe13）
 <!-- 发布日期占位（FIX-349 口径）：发布日期零预填；M-7 annotated tag `v0.92.0` 落地后以 taggerdate 权威回填本行日期单元格。 -->
 

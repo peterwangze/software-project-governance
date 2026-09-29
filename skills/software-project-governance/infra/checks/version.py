@@ -285,7 +285,17 @@ STATIC_PIN_EXEMPTIONS = {
     # fixture task) were written with the then-future target while 0.86.0
     # was active, so each surfaces exactly once — at this bump.
     "skills/software-project-governance/infra/tests/test_release_projection.py": [
-        (30, "0.87.0", _REASON_FUTURE_TARGET),
+        (35, "0.87.0", _REASON_FUTURE_TARGET),
+    ],
+    # 0.93.0 bump-time rows (same designed double signal): the release-
+    # admission fixture worlds written by the 0.93.0-window tickets carry
+    # the then-future target "0.93.0" in scenario-payload cells — an
+    # explicit deferral above the release payload (DEC-286(7) path) and a
+    # machine-signal-outside-payload row. Each surfaces exactly once, at
+    # this bump.
+    "skills/software-project-governance/infra/tests/test_provenance_domain.py": [
+        (323, "0.93.0", _REASON_FUTURE_TARGET),
+        (342, "0.93.0", _REASON_FUTURE_TARGET),
     ],
     "skills/software-project-governance/infra/tests/test_verify_workflow.py": [
         # (History of the removed 0.88.0 row:) the FIX-376 F-6① legacy REQ
@@ -308,6 +318,19 @@ STATIC_PIN_EXEMPTIONS = {
         # 12534->12614 / 12658->12738 (each caught by the same rot-guard).
         # Line anchoring kept over dynamizing (token-content anchors read as
         # the blanket-allow shape this ledger exists to prevent).
+        # 0.93.0 bump-time rows: the FEAT-080 provenance-rows derivation
+        # fixture (TaskDep target_version) and its passthrough assertion —
+        # scenario payload with the then-future target, surfaces exactly
+        # once at this bump.
+        (20038, "0.93.0", _REASON_FUTURE_TARGET),
+        (20056, "0.93.0", _REASON_FUTURE_TARGET),
+        # The two FIX-405 SD-integrity readiness tests call
+        # check_release_readiness(version="0.93.0") — written with the
+        # then-future release as the gate's version parameter; surfaces
+        # once at this bump (rows re-anchored by the FIX-408 hermetic
+        # hardening, tokens unchanged).
+        (20388, "0.93.0", _REASON_FUTURE_TARGET),
+        (20420, "0.93.0", _REASON_FUTURE_TARGET),
     ],
     # 0.89.0 bump-time rows (the FIX-361 designed double signal): fixture
     # worlds written by the 0.89.0-window tickets (FIX-390/393/394) carrying

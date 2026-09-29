@@ -776,8 +776,10 @@ def _parse_archive_version_range(filename):
     # FIX-385: the category-prefixed family also admits the incremental
     # suffix (evidence-vX-Y-incremental-YYYYMMDD-N.md) so index/rollback
     # semantics stay coherent for resumable-path archive files.
+    # FEAT-076: the two-segment family form (evidence-review-vX-Y.md …)
+    # produced by the unlocked three-family write migration.
     m2 = re.match(
-        r"^[a-z]+-v(\d+\.\d+\.\d+)-(\d+\.\d+\.\d+)"
+        r"^[a-z]+(?:-[a-z]+)*-v(\d+\.\d+\.\d+)-(\d+\.\d+\.\d+)"
         r"(?:-incremental-\d{8}-\d+)?\.md$",
         filename,
     )
@@ -824,6 +826,11 @@ def _build_archive_header(version_start, version_end, category, entry_count,
         "evidence": ("归档 Evidence 记录", "evidence-log.md 中"),
         "decisions": ("归档 Decision 记录", "decision-log.md 中"),
         "risks": ("归档 Risk 记录", "risk-log.md 中"),
+        # FEAT-076: the three unlocked row families live in the same hot
+        # table; their archive legs carry family-scoped categories.
+        "evidence-review": ("归档 Review 行族记录", "evidence-log.md 中"),
+        "evidence-triage": ("归档 Triage 行族记录", "evidence-log.md 中"),
+        "evidence-reco": ("归档 Reco 行族记录", "evidence-log.md 中"),
     }
     label, source = category_labels.get(category, (f"归档 {category} 记录", ""))
 
@@ -1344,6 +1351,93 @@ _EVIDENCE_ARCHIVE_TABLE_HEADER = (
     "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
 )
 
+# FEAT-076 (0.93.0): archive table headers for the three non-EVD row
+# families. Migrated rows are preserved VERBATIM (byte-identical to their
+# hot-file form, same fidelity discipline as EVD) — these headers document
+# the observed hot-file schemas at migration time and are descriptive, not
+# load-bearing: extraction/rollback key on the row-id prefix
+# (_ROW_FAMILY_LINE_PREFIXES), never on the header.
+_ROW_FAMILY_ARCHIVE_TABLE_HEADERS = {
+    "REVIEW": (
+        "| 审查ID | 关联任务 | 阶段 | 审查类型 | 结论纪要 | 事实依据 | 审查人 | 日期 | Gate | 状态 |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ),
+    "TRIAGE": (
+        "| Triage ID | 关联任务 | 阶段 | 摘要 | 事实依据 | 产出 | 负责人 | 日期 | Gate | 状态 |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ),
+    "RECO": (
+        "| 建议ID | 关联任务 | 阶段 | 摘要 | 事实依据 | 产出 | 负责人 | 日期 | Gate | 状态 |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ),
+}
+
+
+def _row_family_journal_category(row_family):
+    """FEAT-076: the journal state-dir category for one family's resumable
+    migration. EVD keeps the legacy ``evidence`` category (in-flight 0.92
+    journals stay resolvable); the three unlocked families get their own
+    ``evidence-{family}`` category so same-range migrations of different
+    families NEVER collide on a journal (each judges its own world)."""
+    _guard_row_family_write_migration(row_family)
+    if row_family == "EVD":
+        return "evidence"
+    return f"evidence-{row_family.lower()}"
+
+
+def _row_family_archive_table_header(row_family):
+    """FEAT-076: the archive file table header for one family (EVD keeps
+    the FIX-385 single-sourced header; others use the documented family
+    schema above)."""
+    if row_family == "EVD":
+        return _EVIDENCE_ARCHIVE_TABLE_HEADER
+    return _ROW_FAMILY_ARCHIVE_TABLE_HEADERS[row_family]
+
+
+def _next_family_archive_filename(version_start, version_end, row_family):
+    """FEAT-076: the commit's archive target for one family under
+    archive/evidence/ — ``evidence-v{range}.md`` for EVD (FIX-385 naming
+    discipline preserved via _next_evidence_archive_filename) and
+    ``evidence-{family}-v{range}.md`` for the unlocked families, with the
+    same never-overwrite-foreign-content incremental suffix discipline."""
+    if row_family == "EVD":
+        return _next_evidence_archive_filename(version_start, version_end)
+    category = f"evidence-{row_family.lower()}"
+    subdir = _archive_dir() / "evidence"
+    base_name = f"{category}-v{version_start}-{version_end}.md"
+    if not (subdir / base_name).exists():
+        return base_name
+    today = date.today().isoformat().replace("-", "")
+    index = 1
+    while True:
+        candidate = (f"{category}-v{version_start}-{version_end}"
+                     f"-incremental-{today}-{index}.md")
+        if not (subdir / candidate).exists():
+            return candidate
+        index += 1
+
+
+def _classify_rows_for_family(row_family, content, task_versions,
+                              version_start, version_end, *, context=None):
+    """FEAT-076: single-source row classification dispatch for ALL four
+    families' write-migration paths. EVD → _classify_evidence_rows (unit
+    one); the three unlocked families → _classify_family_rows on the shared
+    _make_ref_verdict typer (the same classification the read-only scanner
+    uses — zero drift between scan candidacy and migration candidacy)."""
+    if context is None:
+        context = _build_classification_context()
+    if row_family == "EVD":
+        return _classify_evidence_rows(
+            content, task_versions, version_start, version_end,
+            context=context)
+    lines = content.split("\n")
+    line_bytes = [len(line.encode("utf-8")) + (0 if i == len(lines) - 1 else 1)
+                  for i, line in enumerate(lines)]
+    return _classify_family_rows(
+        row_family, lines, line_bytes, task_versions,
+        version_start, version_end,
+        _make_ref_verdict(task_versions, context))
+
 
 # ── Decision / Risk Migration (FIX-162 / TD-014) ───────────────────
 
@@ -1578,6 +1672,53 @@ def _migrate_risks(version_start, version_end, task_versions, dry_run=False,
     return len(archived)
 
 
+_ROW_DATE_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
+
+
+def _window_end_release_date(version_end):
+    """FEAT-076 (Q6): the release date of the window-end version, from the
+    plan-tracker roadmap's published rows (已发布 rows carry the release
+    date — FIX-349 taggerdate discipline). None when unresolvable (the
+    fallback then refuses to fire — fail-closed, never a guess)."""
+    try:
+        content = _plan_tracker().read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for entry in _parse_version_roadmap_entries(content):
+        if entry.get("version") == version_end and \
+                entry.get("status") == "已发布":
+            return _parse_iso_date(entry.get("date", ""))
+    return None
+
+
+def _q6_date_window_fallback(line, version_end):
+    """FEAT-076 (DEC-278 单元三 Q6 ruling, 0.93-effective): the date-window
+    fallback for rows with NO gating task-family refs.
+
+    Returns the migration detail string when the row's own date proves
+    closed-cycle membership (row date on/before the window-end version's
+    release date), else None (retain hot — undatable rows and rows newer
+    than the window end are the working set / fail-closed residue).
+
+    The row date is the FIRST ISO yyyy-mm-dd token in the row — schema-
+    drift-tolerant (the date column moved across eras) and unambiguous
+    (ids/refs carry no dates)."""
+    end_date = _window_end_release_date(version_end)
+    if end_date is None:
+        return None
+    m = _ROW_DATE_RE.search(line)
+    if not m:
+        return None
+    try:
+        row_date = datetime.strptime(m.group(1), "%Y-%m-%d").date()
+    except ValueError:
+        return None
+    if row_date > end_date:
+        return None
+    return (f"row date {row_date.isoformat()} ≤ window-end "
+            f"v{version_end} release {end_date.isoformat()} (Q6 fallback)")
+
+
 def _make_ref_verdict(task_versions, context):
     """FEAT-075 (DEC-278 unit two): the shared five-state ref typer + task
     lifecycle gate — extracted VERBATIM from ``_classify_evidence_rows``'s
@@ -1806,10 +1947,19 @@ def _classify_evidence_rows(content, task_versions, version_start, version_end,
         if not ev_task_ids or all(v == "nongate"
                                   for v, _p in verdicts.values()):
             # No gating task ref at all (FIX-171 semantic preserved:
-            # descriptive context cannot resolve a version; Q6 date-window
-            # handling belongs to the successor ticket, not here).
-            _record("no_task_family_ref",
-                    f"refs: {raw_task_ids[:40] or '(none)'}")
+            # descriptive context cannot resolve a version). FEAT-076 (0.93):
+            # the DEC-278 单元三 Q6 ruling takes effect — 实体状态优先，
+            # 日期窗兜底: a refless row whose OWN DATE falls on/before the
+            # window-end version's release date belongs to a closed cycle
+            # and migrates; anything undatable or newer stays hot
+            # (fail-closed — no date, no migration).
+            fallback = _q6_date_window_fallback(line, version_end)
+            if fallback is not None:
+                _record("would_archive_date_window", fallback,
+                        migrate=True, version=None)
+            else:
+                _record("no_task_family_ref",
+                        f"refs: {raw_task_ids[:40] or '(none)'}")
             continue
         if gating_fails:
             for substate, reason in _REF_FAILURE_SUBSTATE_ORDER:
@@ -1904,8 +2054,11 @@ def _migrate_evidence(version_start, version_end, task_versions, dry_run=False,
     # FIX-385: row classification is single-sourced in _classify_evidence_rows
     # (shared with the resumable big-table path) — this function keeps only
     # the apply semantics (kept/archived split + archive write).
-    records = _classify_evidence_rows(content, task_versions, version_start,
-                                      version_end)
+    # FEAT-076: the dispatch covers all four families (EVD → unit one's
+    # classifier; the three unlocked families → the same _make_ref_verdict
+    # semantics the scanner uses — zero drift).
+    records = _classify_rows_for_family(
+        row_family, content, task_versions, version_start, version_end)
     for r in records:
         _note(r["id"], r["reason"], r["detail"])
     archived = [(r["line"], r["version"]) for r in records if r["migrate"]]
@@ -1920,10 +2073,19 @@ def _migrate_evidence(version_start, version_end, task_versions, dry_run=False,
                   if i not in migrate_line_idx]
 
     _ensure_archive_dirs()
-    archive_body = list(_EVIDENCE_ARCHIVE_TABLE_HEADER)
+    archive_body = list(_row_family_archive_table_header(row_family))
     archive_body.extend(line for line, _ver in archived)
-    archive_path = _archive_dir() / "evidence" / f"evidence-v{version_start}-{version_end}.md"
-    header = _build_archive_header(version_start, version_end, "evidence", len(archived),
+    if row_family == "EVD":
+        archive_path = _archive_dir() / "evidence" / \
+            f"evidence-v{version_start}-{version_end}.md"
+    else:
+        # FEAT-076: family legs get their own never-overwrite filename.
+        archive_path = _archive_dir() / "evidence" / \
+            _next_family_archive_filename(version_start, version_end,
+                                          row_family)
+    header = _build_archive_header(version_start, version_end,
+                                   _row_family_journal_category(row_family),
+                                   len(archived),
                                    prev_file=None, next_file=None)
     _write_archive_file(archive_path, header, archive_body)
     elog.write_text("\n".join(kept_lines), encoding="utf-8")
@@ -2197,15 +2359,28 @@ def _evidence_classification_context_digest(task_versions, context):
 # the scanner writes NOTHING, and the three non-EVD families are REFUSED at
 # code level should they ever reach a write-migration execution path.
 
-#: Families the write-migration paths may carry (DEC-278: the EVD family's
-#: EXISTING migration capability is preserved — no unexpected widening).
-_WRITE_MIGRATION_ROW_FAMILIES = frozenset({"EVD"})
-#: Families that are dry-run-scan-only; reaching a migrate execution path
-#: raises RowFamilyMigrationRejected regardless of dry_run (DEC-278 §3.1
-#: 单元二 item 2 / §3.2: 新行族实际写迁移显式拒绝，非操作员约定).
-_ROW_FAMILY_WRITE_MIGRATION_REFUSED = frozenset({"REVIEW", "RECO", "TRIAGE"})
+#: Families the write-migration paths may carry. FEAT-076 (0.93.0, DEC-293
+#: Wave2 全量执行; DEC-287 clearing round; DEC-282 C-1(b)'s 0.93
+#: re-authorization conditions delivered in the same version): the 0.92
+#: write boundary (DEC-278 §3.2 — EVD-only) is superseded; all FOUR
+#: families now carry write migration through the same classification
+#: semantics the scan uses (single source, zero drift).
+_WRITE_MIGRATION_ROW_FAMILIES = frozenset({"EVD", "REVIEW", "RECO", "TRIAGE"})
+#: Families refused at write migration: none of the four known families
+#: anymore (0.93 unlock). The guard choke point REMAINS — any family id
+#: outside _WRITE_MIGRATION_ROW_FAMILIES (typos, future families not yet
+#: admitted) still raises RowFamilyMigrationRejected regardless of dry_run.
+_ROW_FAMILY_WRITE_MIGRATION_REFUSED = frozenset()
 #: All four families the read-only scanner covers (DEC-278 §3.1 单元二).
 _SCAN_ROW_FAMILIES = ("EVD", "REVIEW", "RECO", "TRIAGE")
+#: Row-value prefix each family's hot rows carry (archive extraction,
+#: rollback restoration, and the unified read layer all key on this).
+_ROW_FAMILY_LINE_PREFIXES = {
+    "EVD": "| EVD-",
+    "REVIEW": "| REVIEW-",
+    "TRIAGE": "| TRIAGE-",
+    "RECO": "| RECO-",
+}
 
 # Per-family id shapes (2026-09-28 live-data verification: 633 REVIEW rows —
 # 404 plain REVIEW-{TASK}-R{n}, 42 with a scope token (CODE/RELEASE/...),
@@ -2228,23 +2403,28 @@ class RowFamilyMigrationRejected(BigTableMigrationError):
 
 
 def _guard_row_family_write_migration(row_family):
-    """FEAT-075: the write-boundary choke point for every migrate entry.
+    """The write-boundary choke point for every migrate entry.
 
-    EVD passes (existing capability preserved); REVIEW/RECO/TRIAGE raise
-    RowFamilyMigrationRejected regardless of the dry_run flag — those
-    families' sanctioned read-only surface is scan_row_families, and
-    reaching a migration executor at all is the refusal condition (DEC-278
-    §3.2 MUST NOT: 新行族实际迁移——除 dry-run 外零写入迁移).
+    FEAT-076 (0.93.0): all four known families pass — the 0.92 EVD-only
+    boundary (DEC-278 §3.2) was superseded by the clearing-round
+    authorization chain (DEC-287 → DEC-292 Wave2 unlock → DEC-293 全量执
+    行) WITH the DEC-282 C-1(b) re-authorization conditions delivered in
+    the same version (unified read entry via GovernanceDataSource family
+    surface, consumer matrix, query-equivalence check faces, digest-pinned
+    manifests, read-back + rollback drill). Any family id outside
+    _WRITE_MIGRATION_ROW_FAMILIES still raises — the choke point guards
+    against typos and unadmitted future families, not against the four
+    sanctioned ones.
     """
     if row_family in _WRITE_MIGRATION_ROW_FAMILIES:
         return
     raise RowFamilyMigrationRejected({
         "code": "row_family_write_migration_rejected",
         "detail": (
-            f"row family {row_family!r} is dry-run-only (DEC-278 §3.1 单元二: "
-            f"新行族实际写迁移显式拒绝). Read-only coverage: "
-            f"archive.py scan-families; write migration exists only for "
-            f"{sorted(_WRITE_MIGRATION_ROW_FAMILIES)}"
+            f"row family {row_family!r} is not an admitted write-migration "
+            f"family. Admitted families: "
+            f"{sorted(_WRITE_MIGRATION_ROW_FAMILIES)}; read-only coverage: "
+            f"archive.py scan-families"
         ),
         "family": row_family,
     })
@@ -2309,6 +2489,7 @@ def _classify_family_rows(family, lines, line_bytes, task_versions,
             parts = [p.strip() for p in line.split("|")]
             records.append({"family": family, "id": (parts[1] if len(parts) > 1 else "") or "?",
                             "line_idx": line_idx, "bytes": row_bytes,
+                            "line": line,
                             "migrate": False, "version": None,
                             "reason": "unknown_row_id_shape",
                             "detail": "row ID shape not recognized for family",
@@ -2325,6 +2506,7 @@ def _classify_family_rows(family, lines, line_bytes, task_versions,
         def _record(reason, detail, migrate=False, version=None):
             records.append({"family": family, "id": row_id,
                             "line_idx": line_idx, "bytes": row_bytes,
+                            "line": line,
                             "migrate": migrate, "version": version,
                             "reason": reason, "detail": detail,
                             "ref_types": ref_types})
@@ -2342,10 +2524,16 @@ def _classify_family_rows(family, lines, line_bytes, task_versions,
         gating_fails = {tid: payload for tid, (verdict, payload)
                         in verdicts.items() if verdict == "fail"}
         if not refs or all(v == "nongate" for v, _p in verdicts.values()):
-            # No gating task ref at all (Q6 date-window handling belongs to
-            # the successor ticket, same boundary as unit one).
-            _record("no_task_family_ref",
-                    f"refs: {(', '.join(sorted(refs)) or '(none)')[:40]}")
+            # No gating task ref at all. FEAT-076 (0.93): Q6 date-window
+            # fallback applies to the three unlocked families identically
+            # (DEC-278 单元三 ruling — 实体状态优先，日期窗兜底).
+            fallback = _q6_date_window_fallback(line, version_end)
+            if fallback is not None:
+                _record("would_archive_date_window", fallback,
+                        migrate=True, version=None)
+            else:
+                _record("no_task_family_ref",
+                        f"refs: {(', '.join(sorted(refs)) or '(none)')[:40]}")
             continue
         if gating_fails:
             for substate, reason in _REF_FAILURE_SUBSTATE_ORDER:
@@ -2540,9 +2728,10 @@ def scan_row_families(version_start, version_end, *, families=None,
             "migratable_families": sorted(_WRITE_MIGRATION_ROW_FAMILIES),
             "write_migration_refused": sorted(
                 _ROW_FAMILY_WRITE_MIGRATION_REFUSED),
-            "note": ("would_archive for REVIEW/TRIAGE/RECO is a dry-run "
-                     "candidacy projection only; their write migration is "
-                     "refused at code level (DEC-278 §3.2)"),
+            "note": ("FEAT-076 (0.93.0): all four families carry write "
+                     "migration through migrate-big-table / migrate --auto "
+                     "(ALL); would_archive here IS the migration candidacy "
+                     "the write path uses (single classification source)"),
         },
     }
 
@@ -2628,9 +2817,13 @@ def migrate_evidence_resumable(version_start, version_end, *,
     """FIX-385 (B-7b): batched, journaled, RESUMABLE migration of the
     evidence-log table into the archive.
 
-    FEAT-075 (DEC-278 §3.1 单元二): ``row_family`` gates the write boundary —
-    only EVD migrates; the three dry-run-only families raise
-    RowFamilyMigrationRejected before ANY file is touched.
+    FEAT-076 (0.93.0): ``row_family`` selects WHICH family this leg
+    migrates — all four (EVD/REVIEW/RECO/TRIAGE) are admitted; each family
+    migrates through its OWN journal (category ``evidence`` for EVD,
+    ``evidence-{family}`` for the others) so same-range legs never collide,
+    and classification is single-sourced through
+    _classify_rows_for_family (the same semantics scan-families reports —
+    scan candidacy and migration candidacy cannot drift).
 
     Pipeline (FEAT-060/FEAT-061 crash-recovery semantics):
 
@@ -2676,6 +2869,7 @@ def migrate_evidence_resumable(version_start, version_end, *,
             "detail": f"batch_size must be an int >= 1, got {batch_size!r}",
         })
     _guard_row_family_write_migration(row_family)
+    journal_category = _row_family_journal_category(row_family)
     elog = _evidence_log()
     if not elog.exists():
         return {"success": True, "dry_run": bool(dry_run), "migrated": 0,
@@ -2691,7 +2885,7 @@ def migrate_evidence_resumable(version_start, version_end, *,
     # digest — the plan and every resume judge the same world.
     classification_context = _build_classification_context()
 
-    journal_path = _migration_journal_path("evidence", version_start,
+    journal_path = _migration_journal_path(journal_category, version_start,
                                            version_end)
     state_dir = journal_path.parent
     batches_dir = state_dir / "batches"
@@ -2736,7 +2930,7 @@ def migrate_evidence_resumable(version_start, version_end, *,
     hot_leg_done = False
     if resumed:
         # ── resume: world judgment against the pinned plan ──
-        if journal.get("category") != "evidence" or tuple(
+        if journal.get("category") != journal_category or tuple(
                 journal.get("version_range") or ()) != (version_start,
                                                         version_end):
             raise BigTableMigrationError({
@@ -2817,9 +3011,9 @@ def migrate_evidence_resumable(version_start, version_end, *,
                     "decision_authority_state": _decision_authority_state()}
     else:
         # ── fresh plan ──
-        records = _classify_evidence_rows(content, evidence_task_versions,
-                                          version_start, version_end,
-                                          context=classification_context)
+        records = _classify_rows_for_family(
+            row_family, content, evidence_task_versions,
+            version_start, version_end, context=classification_context)
         candidates = [r for r in records if r["migrate"]]
         batches_total = (len(candidates) + batch_size - 1) // batch_size
         if dry_run:
@@ -2840,7 +3034,8 @@ def migrate_evidence_resumable(version_start, version_end, *,
         batches_dir.mkdir(parents=True, exist_ok=True)
         doc = {
             "schema": _MIGRATION_JOURNAL_SCHEMA,
-            "category": "evidence",
+            "category": journal_category,
+            "row_family": row_family,
             "version_range": [version_start, version_end],
             "input_digest": input_digest,
             "context_digest": _evidence_classification_context_digest(
@@ -2901,11 +3096,13 @@ def migrate_evidence_resumable(version_start, version_end, *,
             })
         archive_relname = commit["archive_file"]
         archive_path = _archive_dir() / "evidence" / archive_relname
-        header = _build_archive_header(version_start, version_end, "evidence",
+        header = _build_archive_header(version_start, version_end,
+                                       journal_category,
                                        len(archived_rows), prev_file=None,
                                        next_file=None)
         archive_text = header + "\n" + "\n".join(
-            list(_EVIDENCE_ARCHIVE_TABLE_HEADER) + archived_rows) + "\n"
+            list(_row_family_archive_table_header(row_family))
+            + archived_rows) + "\n"
         if _sha256_text(archive_text) != commit.get("archive_digest"):
             raise BigTableMigrationError({
                 "code": "migration_state_conflict",
@@ -2938,14 +3135,16 @@ def migrate_evidence_resumable(version_start, version_end, *,
                 })
             archive_relname = commit["archive_file"]
         else:
-            archive_relname = _next_evidence_archive_filename(
-                version_start, version_end)
+            archive_relname = _next_family_archive_filename(
+                version_start, version_end, row_family)
         archive_path = _archive_dir() / "evidence" / archive_relname
-        header = _build_archive_header(version_start, version_end, "evidence",
+        header = _build_archive_header(version_start, version_end,
+                                       journal_category,
                                        len(archived_rows), prev_file=None,
                                        next_file=None)
         archive_text = header + "\n" + "\n".join(
-            list(_EVIDENCE_ARCHIVE_TABLE_HEADER) + archived_rows) + "\n"
+            list(_row_family_archive_table_header(row_family))
+            + archived_rows) + "\n"
         doc["commit"] = {
             "archive_file": archive_relname,
             "archive_digest": _sha256_text(archive_text),
@@ -2981,6 +3180,10 @@ def migrate_evidence_resumable(version_start, version_end, *,
                                "commit) — refusing to overwrite"),
                 })
         else:
+            # FEAT-076: family legs may be the FIRST archive write in a
+            # fresh world — the target subdir must exist before the
+            # atomic write (mkstemp inside a missing dir raises).
+            archive_path.parent.mkdir(parents=True, exist_ok=True)
             _atomic_write_text(archive_path, archive_text)
         if not hot_done:
             _atomic_write_text(elog, new_hot_text)
@@ -3068,15 +3271,22 @@ def migrate_by_version(version_start, version_end, dry_run=False, migrate_eviden
             scanned/parsed/would_archive/retained/unknown_structure plus a
             per-row {"id","reason","detail"} list collected single-source
             from the migration loops themselves.
-        row_family: FEAT-075 write-boundary gate — only the EVD family has
-            a write-migration path; the three dry-run-only families are
-            refused here at code level (DEC-278 §3.1 单元二).
+        row_family: FEAT-076 — one of the four admitted families (EVD is
+            the backward-compatible default, one EVD leg exactly as
+            before), or ``"ALL"`` to carry ALL FOUR families in one pass
+            (the 0.93 steady-state M-8 semantics: every closed cycle's
+            EVD + REVIEW + TRIAGE + RECO rows migrate together). Family
+            counts land in ``row_families_archived``.
 
     Returns:
         dict with keys: success, dry_run, tasks_archived, tasks_remaining,
                         evidence_archived, archive_files_created, details
     """
-    _guard_row_family_write_migration(row_family)
+    if row_family == "ALL":
+        families = ("EVD", "REVIEW", "TRIAGE", "RECO")
+    else:
+        _guard_row_family_write_migration(row_family)
+        families = (row_family,)
     result = {
         "success": False,
         "dry_run": dry_run,
@@ -3085,6 +3295,7 @@ def migrate_by_version(version_start, version_end, dry_run=False, migrate_eviden
         "evidence_archived": 0,
         "decisions_archived": 0,
         "risks_archived": 0,
+        "row_families_archived": {},
         "decision_migration_deferred": None,
         "archive_files_created": [],
         "details": "",
@@ -3236,9 +3447,24 @@ def migrate_by_version(version_start, version_end, dry_run=False, migrate_eviden
             version_start, version_end, task_versions, dry_run,
             explain_out=risk_rows_explain
         )
-        result["evidence_archived"] = _migrate_evidence(
-            version_start, version_end, evidence_task_versions, dry_run,
-            explain_out=evidence_rows_explain
+        # FEAT-076: the evidence leg carries every requested family. EVD
+        # keeps its legacy result slot (evidence_archived — Check 27 and
+        # the CLI print it); each family's count additionally lands in
+        # row_families_archived so the ALL pass is fully auditable.
+        family_explain = {"EVD": evidence_rows_explain}
+        for family in families:
+            if family != "EVD":
+                family_explain[family] = []
+            count = _migrate_evidence(
+                version_start, version_end, evidence_task_versions, dry_run,
+                explain_out=family_explain[family], row_family=family
+            )
+            result["row_families_archived"][family] = count
+            if family == "EVD":
+                result["evidence_archived"] = count
+        evidence_rows_explain.extend(
+            row for family in ("REVIEW", "TRIAGE", "RECO")
+            if family in family_explain for row in family_explain[family]
         )
 
     # FIX-301: aggregate the auditable explanation (all four categories) so
@@ -3538,6 +3764,43 @@ def _extract_evidence_from_archive_file(filepath):
     return results
 
 
+# FEAT-076: the three unlocked row families' index-extraction single
+# source — the same prefix+shape discipline as the EVD extractor above,
+# keyed on _ROW_FAMILY_ID_RES so a damaged id shape never enters the
+# index (it stays countable via the entry-less narrative registration
+# path instead, FIX-384 semantics).
+def _extract_row_families_from_archive_file(filepath):
+    """Extract REVIEW/TRIAGE/RECO rows from an archive evidence file.
+
+    Returns list of {"family", "id", "task_ids"} dicts (empty when the
+    file is unreadable; damage-tolerant read — same as the EVD extractor).
+    """
+    if not filepath.exists():
+        return []
+    content = filepath.read_text(encoding="utf-8", errors="replace")
+    results = []
+    for line in content.split("\n"):
+        stripped = line.strip()
+        for family, prefix in _ROW_FAMILY_LINE_PREFIXES.items():
+            if family == "EVD":
+                continue
+            if not stripped.startswith(prefix):
+                continue
+            parts = [p.strip() for p in line.split("|")]
+            if len(parts) >= 3:
+                row_id = parts[1]
+                match = _ROW_FAMILY_ID_RES[family].match(row_id) \
+                    if row_id else None
+                if match is not None:
+                    results.append({
+                        "family": family,
+                        "id": row_id,
+                        "task_ids": parts[2],
+                    })
+            break
+    return results
+
+
 def _extract_decisions_from_archive_file(filepath):
     """Extract decision entries from an archive file — SINGLE SOURCE.
 
@@ -3833,6 +4096,10 @@ def build_index():
 
     # Collect evidence entries
     evidence_entries = []
+    # FEAT-076: REVIEW/TRIAGE/RECO rows archived alongside EVD under
+    # archive/evidence/ get their own index section (row-id → file), the
+    # same lookup discipline the EVD section provides.
+    family_entries = []
     for f in sorted((_archive_dir() / "evidence").glob("*.md")):
         if f.name == ".gitkeep":
             continue
@@ -3841,17 +4108,27 @@ def build_index():
         if damage is not None:
             damaged_files.append({"file": rel_path, **damage})
         ev_rows = []
+        fam_rows = []
         try:
             ev_rows = _extract_evidence_from_archive_file(f)
+            fam_rows = _extract_row_families_from_archive_file(f)
         except OSError:
             ev_rows = []
+            fam_rows = []
         for evd_id, task_ids in ev_rows:
             evidence_entries.append({
                 "id": evd_id,
                 "task_ids": task_ids,
                 "file": rel_path,
             })
-        if not ev_rows:
+        for row in fam_rows:
+            family_entries.append({
+                "family": row["family"],
+                "id": row["id"],
+                "task_ids": row["task_ids"],
+                "file": rel_path,
+            })
+        if not ev_rows and not fam_rows:
             # FIX-384: entry-less evidence archive (empty/unreadable/mangled)
             # is registered instead of becoming a verify orphan.
             narrative_entries.append({
@@ -3919,6 +4196,7 @@ def build_index():
 
     result["task_entries"] = len(task_entries)
     result["evidence_entries"] = len(evidence_entries)
+    result["family_entries"] = len(family_entries)
     result["decision_entries"] = len(decision_entries)
     result["risk_entries"] = len(risk_entries)
     result["narrative_entries"] = len(narrative_entries)
@@ -3955,6 +4233,23 @@ def build_index():
     for entry in evidence_entries:
         index_lines.append(
             f"| {entry['id']} | {entry['task_ids']} | {entry['file']} |"
+        )
+
+    # FEAT-076: the three unlocked row families' lookup section. Rows are
+    # preserved verbatim in the archive files; this section maps row id →
+    # file so a cold REVIEW/TRIAGE/RECO row stays locatable (the same
+    # 引用透明解析 discipline the EVD section provides).
+    index_lines.extend([
+        "",
+        "## 行族索引（REVIEW/TRIAGE/RECO）",
+        "",
+        "| 行ID | 行族 | 关联任务 | 归档文件 |",
+        "|------|------|---------|---------|",
+    ])
+
+    for entry in family_entries:
+        index_lines.append(
+            f"| {entry['id']} | {entry['family']} | {entry['task_ids']} | {entry['file']} |"
         )
 
     index_lines.extend([
@@ -4103,6 +4398,10 @@ def verify_archive_integrity():
             elif section_name == "Risk 索引":
                 if len(parts) >= 4:
                     refs.add(parts[3])
+            elif section_name.startswith("行族索引"):
+                # FEAT-076: | 行ID | 行族 | 关联任务 | 归档文件 |
+                if len(parts) >= 5:
+                    refs.add(parts[4])
             elif section_name == "非结构化归档":
                 # FIX-176: file is in column 1 (| 归档文件 | 类型 | 描述 |)
                 if len(parts) >= 2:
@@ -4114,13 +4413,17 @@ def verify_archive_integrity():
     index_evidence_refs = _parse_index_section(index_lines, "Evidence 索引")
     index_decision_refs = _parse_index_section(index_lines, "Decision 索引")
     index_risk_refs = _parse_index_section(index_lines, "Risk 索引")
+    # FEAT-076: the unlocked row families' section (file column is
+    # parts[4]: | 行ID | 行族 | 关联任务 | 归档文件 |).
+    index_family_refs = _parse_index_section(
+        index_lines, "行族索引（REVIEW/TRIAGE/RECO）")
     # FIX-176: also collect references from the non-structured archive section
     # so free-prose files (narrative-*, etc.) count as "referenced" for Check 2.
     index_narrative_refs = _parse_index_section(index_lines, "非结构化归档")
 
     all_index_refs = (
         index_task_refs | index_evidence_refs | index_decision_refs
-        | index_risk_refs | index_narrative_refs
+        | index_risk_refs | index_family_refs | index_narrative_refs
     )
 
     # Check 1: Every referenced archive file exists
@@ -4148,12 +4451,17 @@ def verify_archive_integrity():
     # category (tasks/evidence/decisions/risks) so that migrating decisions/risks
     # (FIX-162) does not create a false mismatch. Each category's file count is
     # compared against its index count independently.
-    file_counts = {"tasks": 0, "evidence": 0, "decisions": 0, "risks": 0}
+    file_counts = {"tasks": 0, "evidence": 0, "decisions": 0, "risks": 0,
+                   "families": 0}
     for subdir, f in archive_files:
         if subdir == "tasks":
             file_counts["tasks"] += len(_extract_tasks_from_archive_file(f))
         elif subdir == "evidence":
             file_counts["evidence"] += len(_extract_evidence_from_archive_file(f))
+            # FEAT-076: the three unlocked families live in the same
+            # archive subdir; their rows count in their own category.
+            file_counts["families"] += len(
+                _extract_row_families_from_archive_file(f))
         elif subdir == "decisions":
             # REVIEW-FIX-384-R0 P1-1: count via the SAME single-source
             # extraction build_index indexes with — the previous standalone
@@ -4173,13 +4481,17 @@ def verify_archive_integrity():
 
     # Count index entries per-category. The index has separate sections
     # (## Task 索引 / ## Evidence 索引 / ## Decision 索引 / ## Risk 索引).
-    index_counts = {"tasks": 0, "evidence": 0, "decisions": 0, "risks": 0}
+    index_counts = {"tasks": 0, "evidence": 0, "decisions": 0, "risks": 0,
+                    "families": 0}
     current_section = None
     section_map = {
         "Task 索引": "tasks", "任务索引": "tasks",
         "Evidence 索引": "evidence", "证据索引": "evidence",
         "Decision 索引": "decisions", "决策索引": "decisions",
         "Risk 索引": "risks", "风险索引": "risks",
+        # FEAT-076: the unlocked families' section counts as its own
+        # category (substring match, same discipline as the others).
+        "行族索引": "families",
     }
     for line in index_lines:
         stripped = line.strip()
@@ -4206,7 +4518,7 @@ def verify_archive_integrity():
     # FIX-163 (TD-015): cross-check per-category. Flag any category where
     # file count != index count (drift detection). Per-category avoids the
     # FIX-162 coupling false-positive (decisions/risks counted on both sides).
-    for cat in ("tasks", "evidence", "decisions", "risks"):
+    for cat in ("tasks", "evidence", "decisions", "risks", "families"):
         if file_counts[cat] != index_counts[cat]:
             result["pass"] = False
             result["issues"].append(
@@ -4397,15 +4709,22 @@ def _rollback_task_archive(archive_file):
 
 
 def _rollback_evidence_archive(archive_file):
-    """Restore one evidence archive file into evidence-log.md and remove it."""
+    """Restore one evidence archive file into evidence-log.md and remove it.
+
+    FEAT-076: the file may carry ANY of the four row families' rows —
+    every family-prefixed table row is restored (the 0.92 form only
+    extracted ``| EVD-`` rows, which would have unlinked a family archive
+    file WITHOUT restoring its rows = rollback data loss).
+    """
     archive_content = archive_file.read_text(encoding="utf-8")
     ev_content = _evidence_log().read_text(encoding="utf-8") if _evidence_log().exists() else ""
 
-    # Extract evidence rows from archive
+    # Extract evidence rows from archive (all four families).
     ev_rows = []
     for line in archive_content.split("\n"):
         stripped = line.strip()
-        if stripped.startswith("| EVD-"):
+        if any(stripped.startswith(prefix)
+               for prefix in _ROW_FAMILY_LINE_PREFIXES.values()):
             ev_rows.append(line)
 
     if ev_rows:
@@ -4819,7 +5138,9 @@ def analyze_auto_archive_candidates():
     # explanation exists to eliminate.
     explain = {}
     pre_check = migrate_by_version(
-        version_start, version_end, dry_run=True, explain=explain
+        version_start, version_end, dry_run=True, explain=explain,
+        row_family="ALL"  # FEAT-076: Check 27's face covers all four
+                          # families — the steady-state closure caliber.
     )
     result["tasks_archived"] = pre_check.get("tasks_archived", 0)
 
@@ -4830,11 +5151,18 @@ def analyze_auto_archive_candidates():
     result["evidence_archived"] = pre_check.get("evidence_archived", 0)
     result["decisions_archived"] = pre_check.get("decisions_archived", 0)
     result["risks_archived"] = pre_check.get("risks_archived", 0)
+    # FEAT-076: the four-family face feeds the actionable judgment too —
+    # any family's candidates make the run actionable (Check 27 closure).
+    result["row_families_archived"] = pre_check.get("row_families_archived", {})
     # FIX-385 衔接面: even the dry-run pre-check surfaces the deferral.
     result["decision_migration_deferred"] = pre_check.get(
         "decision_migration_deferred")
     migratable_total = (result["tasks_archived"] + result["evidence_archived"]
-                        + result["decisions_archived"] + result["risks_archived"])
+                        + result["decisions_archived"] + result["risks_archived"]
+                        # non-EVD families only — EVD is already counted in
+                        # evidence_archived (no double counting).
+                        + sum(v for k, v in result["row_families_archived"].items()
+                              if k != "EVD"))
 
     # FIX-158: do NOT early-return when tasks_archived==0. The original code
     # returned here, which made release_forced / fallback_90d dead code
@@ -4884,12 +5212,13 @@ def analyze_auto_archive_candidates():
             )
     return result
 
-def migrate_auto(dry_run=False, row_family="EVD"):
+def migrate_auto(dry_run=False, row_family="ALL"):
     """Auto-detect version range from plan-tracker roadmap and migrate data.
 
-    FEAT-075 (DEC-278 §3.1 单元二): ``row_family`` gates the write boundary
-    (only EVD migrates; the dry-run-only families are refused at code level
-    before any file is touched).
+    FEAT-076 (0.93.0): ``row_family`` defaults to ``"ALL"`` — the steady-
+    state M-8 semantics carry all four families (EVD + REVIEW + TRIAGE +
+    RECO) in one pass. An explicit single family (e.g. "EVD") restores the
+    0.92 behavior for scoped operations.
 
     Pipeline:
     1. Parse version roadmap → filter published versions
@@ -4913,7 +5242,10 @@ def migrate_auto(dry_run=False, row_family="EVD"):
         evidence_log_before, evidence_log_after,
         archive_files_created, verify_pass, details
     """
-    _guard_row_family_write_migration(row_family)
+    if row_family == "ALL":
+        pass  # the four admitted families, dispatched inside migrate_by_version
+    else:
+        _guard_row_family_write_migration(row_family)
     result = {
         "success": False,
         "skipped": False,
@@ -4922,6 +5254,7 @@ def migrate_auto(dry_run=False, row_family="EVD"):
         "versions_range": None,
         "tasks_archived": 0,
         "evidence_archived": 0,
+        "row_families_archived": {},
         "plan_tracker_before": 0,
         "plan_tracker_after": 0,
         "evidence_log_before": 0,
@@ -4982,7 +5315,8 @@ def migrate_auto(dry_run=False, row_family="EVD"):
 
     # Execute migration
     migrate_result = migrate_by_version(
-        version_start, version_end, dry_run=False, migrate_evidence=True
+        version_start, version_end, dry_run=False, migrate_evidence=True,
+        row_family=row_family
     )
 
     if not migrate_result["success"]:
@@ -4993,6 +5327,8 @@ def migrate_auto(dry_run=False, row_family="EVD"):
 
     result["tasks_archived"] = migrate_result["tasks_archived"]
     result["evidence_archived"] = migrate_result.get("evidence_archived", 0)
+    result["row_families_archived"] = migrate_result.get(
+        "row_families_archived", {})
     result["archive_files_created"] = migrate_result.get(
         "archive_files_created", []
     )
@@ -5262,12 +5598,11 @@ def main(argv=None):
     migrate_p.add_argument("--auto", action="store_true",
                            help="Auto-detect version range from plan-tracker roadmap")
     migrate_p.add_argument("--row-family", default="EVD",
-                           choices=sorted(_WRITE_MIGRATION_ROW_FAMILIES
-                                          | _ROW_FAMILY_WRITE_MIGRATION_REFUSED),
-                           help="Governance row family to migrate (FEAT-075 "
-                                "write boundary: REVIEW/RECO/TRIAGE are "
-                                "REFUSED at code level — dry-run-only via "
-                                "scan-families; DEC-278 §3.2)")
+                           choices=sorted(_WRITE_MIGRATION_ROW_FAMILIES) + ["ALL"],
+                           help="Governance row family to migrate (FEAT-076: "
+                                "all four families are admitted; ALL carries "
+                                "EVD+REVIEW+TRIAGE+RECO in one pass — the "
+                                "0.93 steady-state M-8 semantics)")
 
     # build-index
     subparsers.add_parser("build-index", help="Rebuild archive/index.md from archive files")
@@ -5303,11 +5638,10 @@ def main(argv=None):
     p.add_argument("--dry-run", action="store_true",
                    help="Report what would migrate; zero writes")
     p.add_argument("--row-family", default="EVD",
-                   choices=sorted(_WRITE_MIGRATION_ROW_FAMILIES
-                                  | _ROW_FAMILY_WRITE_MIGRATION_REFUSED),
-                   help="Governance row family (FEAT-075 write boundary: "
-                        "REVIEW/RECO/TRIAGE are REFUSED at code level; "
-                        "DEC-278 §3.2)")
+                   choices=sorted(_WRITE_MIGRATION_ROW_FAMILIES),
+                   help="Governance row family for this resumable leg "
+                        "(FEAT-076: all four admitted; one family per "
+                        "invocation — each leg carries its own journal)")
 
     # scan-families (FEAT-075 / DEC-278 单元二): READ-ONLY four-family
     # dry-run scan (EVD/REVIEW/RECO/TRIAGE) — reuses unit one's
@@ -5388,6 +5722,10 @@ def main(argv=None):
             print(f"  Tasks archived: {result['tasks_archived']}")
             print(f"  Tasks remaining: {result['tasks_remaining']}")
             print(f"  Evidence archived: {result.get('evidence_archived', 0)}")
+            families = result.get("row_families_archived") or {}
+            if families:
+                print(f"  Row families archived: "
+                      f"{', '.join(f'{k}={v}' for k, v in sorted(families.items()))}")
             print(f"  Files created: {result.get('archive_files_created', [])}")
             print(f"  {result['details']}")
             deferred = result.get("decision_migration_deferred")
@@ -5412,6 +5750,7 @@ def main(argv=None):
             print(f"  {exc.payload.get('detail')}")
             sys.exit(1)
         print(f"  Dry-run: {result.get('dry_run', False)}")
+        print(f"  Row family: {getattr(args, 'row_family', 'EVD')}")
         print(f"  Migrated rows: {result.get('migrated', 0)}")
         print(f"  Batches: {result.get('batches_total', 0)} "
               f"(batch_size={result.get('batch_size')})")

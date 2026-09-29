@@ -96,6 +96,9 @@ _SHARED_NAMES = (
     # comes from task_priority.parse_task_dependencies (FIX-251-hardened:
     # header tables AND the headerless 最近完成 window tables).
     "_status_is_completed_cell",
+    # FEAT-076: the layered read entry — review coverage for COMPLETED
+    # tasks must see EVD/REVIEW rows that migrated to the cold layer.
+    "GovernanceDataSource",
 )
 
 
@@ -399,11 +402,43 @@ def _review_entry_skip_reason(author, description, file_location, notes=""):
     return ""
 
 
-def _parse_review_coverage_details(evidence_path=None, review_dir=None):
-    """Parse independent review coverage and ignored review-like entries."""
+def _cold_review_evidence_lines():
+    """FEAT-076: EVD + REVIEW rows from the COLD layer (archive/evidence/*).
+
+    Live mode only — fixtures inject their own evidence_path and stay
+    hermetic. Returns [] when the archive is absent (pre-layering world).
+    The GovernanceDataSource is constructed with the CURRENT module-path
+    globals (never its definition-time defaults) so test-time patching of
+    EVIDENCE_PATH/SAMPLE_PATH propagates — fixture isolation preserved.
+    """
+    _resolve_shared()
+    try:
+        ds = GovernanceDataSource(
+            sample_path=SAMPLE_PATH, evidence_path=EVIDENCE_PATH)
+        lines = [r["line"] for r in ds.get_all_family_rows("REVIEW")
+                 if r["source"] == "cold"]
+        lines.extend(r["line"] for r in ds.get_all_family_rows("EVD")
+                     if r["source"] == "cold")
+        return lines
+    except Exception:  # noqa: BLE001 — a broken layer read must never
+        # take the coverage check down; the hot face still reports.
+        return []
+
+
+def _parse_review_coverage_details(evidence_path=None, review_dir=None,
+                                   cold_rows=None):
+    """Parse independent review coverage and ignored review-like entries.
+
+    FEAT-076: in LIVE mode (evidence_path not injected) the cold-layer
+    EVD/REVIEW rows are scanned with the SAME row semantics as the hot
+    face, so coverage for completed tasks survives row migration (DEC-282
+    C-1(b) query-equivalence condition). Fixture callers inject
+    evidence_path and stay isolated from the live archive.
+    """
     _resolve_shared()
     covered = {}
     ignored = []
+    live_mode = evidence_path is None
     evidence_path = Path(evidence_path) if evidence_path is not None else EVIDENCE_PATH
     review_dir = Path(review_dir) if review_dir is not None else evidence_path.parent
 
@@ -411,6 +446,8 @@ def _parse_review_coverage_details(evidence_path=None, review_dir=None):
         return covered, ignored
 
     evidence_content = evidence_path.read_text(encoding="utf-8")
+    if cold_rows is None and live_mode:
+        cold_rows = _cold_review_evidence_lines()
 
     def add_coverage(source, raw_text):
         for match in re.finditer(r"([A-Z]+-\d+(?:~\d+)?)", raw_text):
@@ -419,48 +456,53 @@ def _parse_review_coverage_details(evidence_path=None, review_dir=None):
                 if not inner_id.startswith("REVIEW-"):
                     covered.setdefault(inner_id, []).append(source)
 
-    # 1. Scan evidence-log for REVIEW evidence entries.
-    for line in evidence_content.split("\n"):
-        line = line.strip()
-        if not (line.startswith("| EVD-") or line.startswith("| REVIEW-")):
-            continue
-        parts = [p.strip() for p in line.split("|")]
-        if len(parts) < 8:
-            continue
-        evd_id = parts[1]
-        raw_ids = parts[2]
-        evd_type = parts[4] if len(parts) > 4 else ""
-        description = parts[5] if len(parts) > 5 else ""
-        file_location = parts[6] if len(parts) > 6 else ""
-        author = parts[7] if len(parts) > 7 else ""
-        notes = " ".join(parts[8:])
+    def _scan_row_lines(row_lines):
+        # 1. Scan evidence-log for REVIEW evidence entries.
+        for line in row_lines:
+            line = line.strip()
+            if not (line.startswith("| EVD-") or line.startswith("| REVIEW-")):
+                continue
+            parts = [p.strip() for p in line.split("|")]
+            if len(parts) < 8:
+                continue
+            evd_id = parts[1]
+            raw_ids = parts[2]
+            evd_type = parts[4] if len(parts) > 4 else ""
+            description = parts[5] if len(parts) > 5 else ""
+            file_location = parts[6] if len(parts) > 6 else ""
+            author = parts[7] if len(parts) > 7 else ""
+            notes = " ".join(parts[8:])
 
-        # REVIEW evidence: task ID starts with REVIEW- or type is Code Review/审查.
-        is_review_entry = (
-            evd_id.startswith("REVIEW-")
-            or raw_ids.startswith("REVIEW-")
-            or evd_type == "Code Review"
-            or evd_type == "审查"
-            or "审查" in evd_type
-        )
-        if not is_review_entry:
-            continue
+            # REVIEW evidence: task ID starts with REVIEW- or type is Code Review/审查.
+            is_review_entry = (
+                evd_id.startswith("REVIEW-")
+                or raw_ids.startswith("REVIEW-")
+                or evd_type == "Code Review"
+                or evd_type == "审查"
+                or "审查" in evd_type
+            )
+            if not is_review_entry:
+                continue
 
-        skip_reason = _review_entry_skip_reason(author, description, file_location, notes)
-        if skip_reason:
-            ignored.append({"source": evd_id, "reason": skip_reason, "task_ids": raw_ids})
-            continue
+            skip_reason = _review_entry_skip_reason(author, description, file_location, notes)
+            if skip_reason:
+                ignored.append({"source": evd_id, "reason": skip_reason, "task_ids": raw_ids})
+                continue
 
-        for inner_id in expand_task_ids(raw_ids) if raw_ids and re.search(r"[A-Z]+-\d+", raw_ids) else []:
-            if not inner_id.startswith("REVIEW-"):
-                covered.setdefault(inner_id, []).append(evd_id)
+            for inner_id in expand_task_ids(raw_ids) if raw_ids and re.search(r"[A-Z]+-\d+", raw_ids) else []:
+                if not inner_id.startswith("REVIEW-"):
+                    covered.setdefault(inner_id, []).append(evd_id)
 
-        if raw_ids.startswith("REVIEW-"):
-            # Extract covered task IDs from REVIEW- prefix.
-            add_coverage(evd_id, raw_ids[len("REVIEW-"):])
+            if raw_ids.startswith("REVIEW-"):
+                # Extract covered task IDs from REVIEW- prefix.
+                add_coverage(evd_id, raw_ids[len("REVIEW-"):])
 
-        # Check description and file_location for task references.
-        add_coverage(evd_id, description + " " + file_location)
+            # Check description and file_location for task references.
+            add_coverage(evd_id, description + " " + file_location)
+
+    _scan_row_lines(evidence_content.split("\n"))
+    if cold_rows:
+        _scan_row_lines(list(cold_rows))
 
     # 2. Scan review-*.md files for task references.
     if review_dir.is_dir():
@@ -526,14 +568,17 @@ def check_agent_team_review():
     if not completed:
         return result
 
-    # Read evidence-log
+    # Read evidence-log (FEAT-076: hot + cold — a completed task's EVD rows
+    # may have migrated to the archive; product-code detection must not go
+    # blind for archived tasks).
     if not EVIDENCE_PATH.is_file():
         return result
-    evidence_content = EVIDENCE_PATH.read_text(encoding="utf-8")
+    evidence_lines = EVIDENCE_PATH.read_text(encoding="utf-8").split("\n")
+    evidence_lines.extend(_cold_review_evidence_lines())
 
     # Build map: task_id -> list of evidence metadata
     task_file_locations = {}
-    for line in evidence_content.split("\n"):
+    for line in evidence_lines:
         line = line.strip()
         if not line.startswith("| EVD-"):
             continue

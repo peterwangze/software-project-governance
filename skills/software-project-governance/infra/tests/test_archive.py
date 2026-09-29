@@ -5438,41 +5438,76 @@ class FEAT075RowFamilyScanTests(unittest.TestCase):
         self.assertEqual(caught.exception.payload["code"],
                          "family_scan_output_refused")
 
-    # ── write boundary (DEC-278 §3.2) ─────────────────────────────
+    # ── write boundary (FEAT-076: all four families admitted) ────
 
-    def test_write_migration_refused_for_three_families_all_entry_points(self):
+    def test_write_migration_refused_for_unknown_family_all_entry_points(self):
         import archive
         elog = self.gov_dir / "evidence-log.md"
         elog.write_text(self._content(), encoding="utf-8")
+        bogus = "BOGUS"
         with patch.object(archive, "ROOT", self.root), \
                 patch.object(archive, "PLUGIN_ROOT", self.root):
-            for family in ("REVIEW", "RECO", "TRIAGE"):
-                for dry_run in (False, True):
-                    with self.subTest(family=family, dry_run=dry_run):
-                        with self.assertRaises(
-                                archive.RowFamilyMigrationRejected) as caught:
-                            archive.migrate_by_version(
-                                "0.1.0", "0.90.0", dry_run=dry_run,
-                                row_family=family)
-                        self.assertEqual(
-                            caught.exception.payload["code"],
-                            "row_family_write_migration_rejected")
-                        with self.assertRaises(
-                                archive.RowFamilyMigrationRejected):
-                            archive.migrate_evidence_resumable(
-                                "0.1.0", "0.90.0", dry_run=dry_run,
-                                row_family=family)
-                        with self.assertRaises(
-                                archive.RowFamilyMigrationRejected):
-                            archive.migrate_auto(dry_run=dry_run,
-                                                 row_family=family)
-                        with self.assertRaises(
-                                archive.RowFamilyMigrationRejected):
-                            archive._migrate_evidence(
-                                "0.1.0", "0.90.0", self._task_versions(),
-                                dry_run=dry_run, row_family=family)
+            for dry_run in (False, True):
+                with self.subTest(dry_run=dry_run):
+                    with self.assertRaises(
+                            archive.RowFamilyMigrationRejected) as caught:
+                        archive.migrate_by_version(
+                            "0.1.0", "0.90.0", dry_run=dry_run,
+                            row_family=bogus)
+                    self.assertEqual(
+                        caught.exception.payload["code"],
+                        "row_family_write_migration_rejected")
+                    with self.assertRaises(
+                            archive.RowFamilyMigrationRejected):
+                        archive.migrate_evidence_resumable(
+                            "0.1.0", "0.90.0", dry_run=dry_run,
+                            row_family=bogus)
+                    with self.assertRaises(
+                            archive.RowFamilyMigrationRejected):
+                        archive.migrate_auto(dry_run=dry_run,
+                                             row_family=bogus)
+                    with self.assertRaises(
+                            archive.RowFamilyMigrationRejected):
+                        archive._migrate_evidence(
+                            "0.1.0", "0.90.0", self._task_versions(),
+                            dry_run=dry_run, row_family=bogus)
             # The refusal fired BEFORE any write: the evidence-log is intact.
             self.assertEqual(elog.read_text(encoding="utf-8"), self._content())
+
+    def test_three_families_now_carry_write_migration_dry_run(self):
+        """FEAT-076 (0.93): the 0.92 refusal is superseded — REVIEW/TRIAGE/
+        RECO migrate through the same classification the scanner reports.
+        Dry-run here proves admission + correct candidacy counts; the
+        write-path roundtrip is covered in FEAT076RowFamilyMigrationTests."""
+        import archive
+        elog = self.gov_dir / "evidence-log.md"
+        elog.write_text(self._content(), encoding="utf-8")
+        # Empty hot table + no registry — mirrors _ctx()'s defaults so the
+        # engine's live-built context classifies identically to the scan's.
+        (self.gov_dir / "plan-tracker.md").write_text(
+            "### 优先级一览\n", encoding="utf-8")
+        before_digest = hashlib.sha256(elog.read_bytes()).hexdigest()
+        with patch.object(archive, "ROOT", self.root), \
+                patch.object(archive, "PLUGIN_ROOT", self.root):
+            for family in ("REVIEW", "TRIAGE", "RECO"):
+                with self.subTest(family=family):
+                    archive._guard_row_family_write_migration(family)
+                    result = archive.migrate_evidence_resumable(
+                        "0.1.0", "0.90.0", dry_run=True,
+                        task_versions=self._task_versions(),
+                        row_family=family)
+                    self.assertTrue(result["success"])
+                    self.assertTrue(result["dry_run"])
+                    # The scanner's candidacy == the migration engine's
+                    # candidacy (single classification source, zero drift).
+                    expected = sum(
+                        1 for r in self._scan(families=(family,))["rows"]
+                        if r["migrate"])
+                    self.assertEqual(result["migrated"], expected)
+                    self.assertGreater(result["migrated"], 0)
+            # Dry-run = zero writes.
+            self.assertEqual(
+                hashlib.sha256(elog.read_bytes()).hexdigest(), before_digest)
 
     def test_evd_family_existing_migration_path_preserved(self):
         import archive
@@ -5489,21 +5524,39 @@ class FEAT075RowFamilyScanTests(unittest.TestCase):
                 "0.1.0", "0.90.0", dry_run=True, row_family="EVD")
             self.assertTrue(result["success"])
 
-    def test_cli_row_family_refusal_and_scan_families(self):
+    def test_cli_row_family_migration_and_scan_families(self):
         import archive
         runner = archive.main
         elog = self.gov_dir / "evidence-log.md"
         elog.write_text(self._content(), encoding="utf-8")
+        # The standalone task-version mapping must resolve FIX-950/951/952
+        # (completed-hot rows per FIX-235) for the CLI path, which passes
+        # no explicit task_versions.
+        (self.gov_dir / "plan-tracker.md").write_text(
+            "### 优先级一览\n"
+            "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- |\n"
+            "| **P2** | FIX-950 | item | — | 0.80.0 | path | ✅ 完成 |\n"
+            "| **P2** | FIX-951 | item | — | 0.85.0 | path | ✅ 完成 |\n"
+            "| **P2** | FIX-952 | item | — | 0.88.0 | path | ✅ 完成 |\n",
+            encoding="utf-8")
         before_digest = hashlib.sha256(elog.read_bytes()).hexdigest()
         argv = ["--project-root", str(self.root)]
-        # CLI refusal: non-zero exit, structured code, evidence untouched.
+        # CLI: an unadmitted family is rejected by choices (exit 2, before
+        # any write) — the choke point survives the 0.93 unlock.
         out = io.StringIO()
         with contextlib.redirect_stdout(out), \
                 self.assertRaises(SystemExit) as caught:
             runner(argv + ["migrate", "0.1.0", "0.90.0", "--dry-run",
-                           "--row-family", "RECO"])
-        self.assertEqual(caught.exception.code, 1)
-        self.assertIn("row_family_write_migration_rejected", out.getvalue())
+                           "--row-family", "BOGUS"])
+        self.assertEqual(caught.exception.code, 2)
+        # CLI: a formerly-refused family now migrates (dry-run, zero writes).
+        # Fixture REVIEW rows: FIX-950/951/952 all closed in-window → 3 rows.
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.suppress(SystemExit):
+            runner(argv + ["migrate-big-table", "evidence", "0.1.0", "0.90.0",
+                           "--dry-run", "--row-family", "REVIEW"])
+        self.assertIn("Migrated rows: 3", out.getvalue())
         self.assertEqual(hashlib.sha256(elog.read_bytes()).hexdigest(),
                          before_digest)
         # CLI scan: read-only summary + per-line TSV output outside .governance.
@@ -5517,6 +5570,307 @@ class FEAT075RowFamilyScanTests(unittest.TestCase):
         self.assertIn("REVIEW-FIX-950-CODE-R0", tsv_path.read_text("utf-8"))
         self.assertEqual(hashlib.sha256(elog.read_bytes()).hexdigest(),
                          before_digest)
+
+
+class FEAT076RowFamilyMigrationTests(unittest.TestCase):
+    """FEAT-076 (0.93.0) — the three unlocked families' WRITE migration
+    roundtrip: per-family journals, family-tagged archive files, verbatim
+    row conservation, index family section, integrity counting, rollback
+    restoration, and the ALL steady-state pass.
+
+    Same hermetic-fixture discipline as FEAT075RowFamilyScanTests.
+    """
+
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        self.gov_dir = self.root / ".governance"
+        self.gov_dir.mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        self.tempdir.cleanup()
+
+    def _content(self):
+        return "\n".join([
+            "# 当前项目证据记录",
+            "| REVIEW-FIX-950-CODE-R0 | FIX-950 | 产品代码 | review r0 |",
+            "| REVIEW-FIX-951-R1 | FIX-951 | 产品代码 | review r1 |",
+            "| TRIAGE-FIX-950 | FIX-950 | 变更控制 | triage row |",
+            "| TRIAGE-FIX-953 | FIX-953 | 变更控制 | triage active ref |",
+            "| RECO-FIX-950 | FIX-950 | 治理记录 | reco row |",
+            "| EVD-1 | FIX-950 | 产品代码 | evd row |",
+            "prose line (non-table)",
+        ])
+
+    def _task_versions(self):
+        return {"FIX-950": "0.80.0", "FIX-951": "0.85.0"}
+
+    def _prepare(self):
+        import archive
+        (self.gov_dir / "evidence-log.md").write_text(
+            self._content(), encoding="utf-8")
+        (self.gov_dir / "plan-tracker.md").write_text(
+            "### 优先级一览\n", encoding="utf-8")
+        return archive
+
+    def _family_rows_in_text(self, text, family):
+        prefix = f"| {family}-"
+        return [ln for ln in text.split("\n")
+                if ln.strip().startswith(prefix)]
+
+    def test_resumable_family_leg_roundtrip_conservation_and_index(self):
+        import archive
+        archive = self._prepare()
+        elog = self.gov_dir / "evidence-log.md"
+        before_text = elog.read_text(encoding="utf-8")
+        archive_dir = self.gov_dir / "archive" / "evidence"
+        with patch.object(archive, "ROOT", self.root), \
+                patch.object(archive, "PLUGIN_ROOT", self.root):
+            for family, expected_rows in (("REVIEW", 2), ("TRIAGE", 1),
+                                          ("RECO", 1)):
+                with self.subTest(family=family):
+                    result = archive.migrate_evidence_resumable(
+                        "0.1.0", "0.90.0", task_versions=self._task_versions(),
+                        row_family=family)
+                    self.assertTrue(result["success"])
+                    self.assertEqual(result["migrated"], expected_rows)
+                    # Family-tagged archive file under archive/evidence/.
+                    archive_file = archive_dir / \
+                        f"evidence-{family.lower()}-v0.1.0-0.90.0.md"
+                    self.assertTrue(archive_file.is_file())
+                    content = archive_file.read_text(encoding="utf-8")
+                    # Rows preserved VERBATIM (byte-identical).
+                    for row in self._family_rows_in_text(before_text, family)[:expected_rows]:
+                        self.assertIn(row, content)
+                    # Hot table no longer carries the migrated rows.
+                    hot = elog.read_text(encoding="utf-8")
+                    self.assertEqual(
+                        self._family_rows_in_text(hot, family),
+                        self._family_rows_in_text(before_text, family)[expected_rows:])
+            # Row conservation across layers: every family row from the
+            # original fixture exists in exactly one layer.
+            hot = elog.read_text(encoding="utf-8")
+            cold = "\n".join(f.read_text(encoding="utf-8")
+                             for f in sorted(archive_dir.glob("*.md")))
+            for family in ("REVIEW", "TRIAGE", "RECO"):
+                total = len(self._family_rows_in_text(hot, family)) + \
+                    len(self._family_rows_in_text(cold, family))
+                self.assertEqual(
+                    total, len(self._family_rows_in_text(before_text, family)))
+            # Index: family section present + per-category integrity PASS.
+            build = archive.build_index()
+            self.assertEqual(build["family_entries"], 4)
+            verify = archive.verify_archive_integrity()
+            self.assertTrue(verify["pass"], verify["issues"])
+            index_text = (self.gov_dir / "archive" / "index.md").read_text(
+                encoding="utf-8")
+            self.assertIn("## 行族索引（REVIEW/TRIAGE/RECO）", index_text)
+            self.assertIn("| REVIEW-FIX-950-CODE-R0 | REVIEW |", index_text)
+            self.assertIn("| TRIAGE-FIX-950 | TRIAGE |", index_text)
+            self.assertIn("| RECO-FIX-950 | RECO |", index_text)
+
+    def test_family_journals_are_independent_per_family(self):
+        import archive
+        archive = self._prepare()
+        elog = self.gov_dir / "evidence-log.md"
+        with patch.object(archive, "ROOT", self.root), \
+                patch.object(archive, "PLUGIN_ROOT", self.root):
+            # REVIEW leg first (finalizes its own journal)…
+            r1 = archive.migrate_evidence_resumable(
+                "0.1.0", "0.90.0", task_versions=self._task_versions(),
+                row_family="REVIEW")
+            self.assertTrue(r1["success"])
+            # …then the TRIAGE leg for the SAME range must not collide with
+            # the REVIEW journal (different state dirs) and must still work.
+            r2 = archive.migrate_evidence_resumable(
+                "0.1.0", "0.90.0", task_versions=self._task_versions(),
+                row_family="TRIAGE")
+            self.assertTrue(r2["success"])
+            self.assertEqual(r2["migrated"], 1)
+            self.assertFalse(r2["resumed"])
+            # Both journals exist, each under its family-scoped category dir.
+            migration_root = self.gov_dir / "archive" / ".migration"
+            categories = sorted(p.name for p in migration_root.iterdir())
+            self.assertIn("evidence-review-v0.1.0~v0.90.0", categories)
+            self.assertIn("evidence-triage-v0.1.0~v0.90.0", categories)
+
+    def test_family_leg_idempotent_rerun_reports_finalized(self):
+        import archive
+        archive = self._prepare()
+        with patch.object(archive, "ROOT", self.root), \
+                patch.object(archive, "PLUGIN_ROOT", self.root):
+            first = archive.migrate_evidence_resumable(
+                "0.1.0", "0.90.0", task_versions=self._task_versions(),
+                row_family="RECO")
+            self.assertTrue(first["success"])
+            again = archive.migrate_evidence_resumable(
+                "0.1.0", "0.90.0", task_versions=self._task_versions(),
+                row_family="RECO")
+            # Same finalized journal + unchanged post-image world →
+            # already_finalized (zero double-migration).
+            self.assertEqual(again["resumed"], "already_finalized")
+            self.assertEqual(again["migrated"], first["migrated"])
+
+    def test_family_rollback_restores_rows_and_rebuilds_index(self):
+        import archive
+        archive = self._prepare()
+        elog = self.gov_dir / "evidence-log.md"
+        before = elog.read_text(encoding="utf-8")
+        with patch.object(archive, "ROOT", self.root), \
+                patch.object(archive, "PLUGIN_ROOT", self.root):
+            archive.migrate_evidence_resumable(
+                "0.1.0", "0.90.0", task_versions=self._task_versions(),
+                row_family="REVIEW")
+            archive.build_index()
+            result = archive.rollback_last_migration()
+            self.assertTrue(result["success"])
+            # The family rows came back to the hot table…
+            after = elog.read_text(encoding="utf-8")
+            for row in self._family_rows_in_text(before, "REVIEW"):
+                self.assertIn(row, after)
+            # …the family archive file is gone…
+            self.assertFalse(
+                (self.gov_dir / "archive" / "evidence"
+                 / "evidence-review-v0.1.0-0.90.0.md").exists())
+            # …and the rebuilt index no longer carries the family rows.
+            verify = archive.verify_archive_integrity()
+            self.assertTrue(verify["pass"], verify["issues"])
+
+    def test_migrate_by_version_all_carries_four_families(self):
+        import archive
+        (self.gov_dir / "evidence-log.md").write_text(
+            self._content(), encoding="utf-8")
+        (self.gov_dir / "plan-tracker.md").write_text(
+            "### 优先级一览\n"
+            "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- |\n"
+            "| **P2** | FIX-950 | item | — | 0.80.0 | path | ✅ 完成 |\n"
+            "| **P2** | FIX-951 | item | — | 0.85.0 | path | ✅ 完成 |\n"
+            "| **P2** | FIX-953 | item | — | 0.82.0 | path | 🔄 进行中 |\n",
+            encoding="utf-8")
+        elog = self.gov_dir / "evidence-log.md"
+        with patch.object(archive, "ROOT", self.root), \
+                patch.object(archive, "PLUGIN_ROOT", self.root):
+            result = archive.migrate_by_version(
+                "0.1.0", "0.90.0", dry_run=True, row_family="ALL")
+            self.assertTrue(result["success"])
+            fam = result["row_families_archived"]
+            self.assertEqual(fam.get("EVD", 0), 1)   # EVD-1 (FIX-950)
+            self.assertEqual(fam.get("REVIEW", 0), 2)
+            self.assertEqual(fam.get("TRIAGE", 0), 1)
+            self.assertEqual(fam.get("RECO", 0), 1)
+            # The legacy evidence slot stays the EVD count (Check 27 face
+            # compatibility), and the total is auditable per family.
+            self.assertEqual(result["evidence_archived"], 1)
+            # Real run: all four families' files land, index passes.
+            result = archive.migrate_by_version(
+                "0.1.0", "0.90.0", dry_run=False, row_family="ALL")
+            self.assertTrue(result["success"])
+            archive.build_index()
+            verify = archive.verify_archive_integrity()
+            self.assertTrue(verify["pass"], verify["issues"])
+            hot = elog.read_text(encoding="utf-8")
+            for family in ("REVIEW", "TRIAGE", "RECO"):
+                remaining = [ln for ln in hot.split("\n")
+                             if ln.strip().startswith(f"| {family}-")]
+                # TRIAGE-FIX-953 (active ref) stays hot; others migrated.
+                expected_left = 1 if family == "TRIAGE" else 0
+                self.assertEqual(len(remaining), expected_left)
+
+
+class FEAT076Q6DateWindowFallbackTests(unittest.TestCase):
+    """FEAT-076 (DEC-278 单元三 Q6 ruling, 0.93-effective): rows with NO
+    gating task-family refs fall back to their OWN DATE vs the window-end
+    version's release date — entity-status first, date window second."""
+
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        self.gov_dir = self.root / ".governance"
+        self.gov_dir.mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        self.tempdir.cleanup()
+
+    def _prepare(self, roadmap):
+        import archive
+        (self.gov_dir / "evidence-log.md").write_text("\n".join([
+            "# 当前项目证据记录",
+            # Refless old row (date inside the closed window) → migrates.
+            "| EVD-1 | RISK-001, DEC-002 | 治理记录 | old refless row |"
+            " 事实依据 | out | Coordinator | 2026-05-01 | G11 | 完成 |",
+            # Refless recent row (date after the window-end release) → hot.
+            "| EVD-2 | — | 治理记录 | fresh refless row | 事实依据 | out |"
+            " Coordinator | 2026-09-29 | G11 | 完成 |",
+            # Undatable refless row → fail-closed hot.
+            "| EVD-3 | — | 治理记录 | no date row | 事实依据 | out |"
+            " Coordinator | ??? | G11 | 完成 |",
+            # Same semantics for a family row: TRIAGE-REQ-500 embeds a
+            # REGISTERED requirement entity (nongate) → reaches the
+            # fallback through the family path too.
+            "| TRIAGE-REQ-500 | REQ-500 | 变更控制 | old triage | 事实依据 |"
+            " x.json | change-triage | 2026-05-01 | G11 | TRIAGED |",
+        ]), encoding="utf-8")
+        (self.gov_dir / "plan-tracker.md").write_text(
+            "### 版本路线图\n"
+            "| 版本 | 状态 | 日期 |\n"
+            "| --- | --- | --- |\n"
+            f"{roadmap}\n"
+            "### 优先级一览\n"
+            "## 需求跟踪矩阵\n"
+            "| 需求ID | 需求描述 | 来源 | 优先级 | 关联任务 | 当前状态 | 验证方式 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- |\n"
+            "| REQ-500 | desc | src | P0 | FIX-900 | ✅ 已交付 | way |\n",
+            encoding="utf-8")
+        return archive
+
+    def test_date_window_fallback_classifies_all_four_families(self):
+        archive = self._prepare(
+            "| 0.91.0 | 已发布 | 2026-09-28 |\n"
+            "| 0.92.0 | 已发布 | 2026-09-29 |")
+        with patch.object(archive, "ROOT", self.root), \
+                patch.object(archive, "PLUGIN_ROOT", self.root):
+            report = archive.scan_row_families(
+                "0.1.0", "0.91.0", task_versions={},
+                context=archive._build_classification_context(
+                    (self.gov_dir / "plan-tracker.md").read_text(
+                        encoding="utf-8")),
+                content=(self.gov_dir / "evidence-log.md").read_text(
+                    encoding="utf-8"),
+                plan_tracker_content="")
+        by_key = {(r["family"], r["id"]): r for r in report["rows"]}
+        old = by_key[("EVD", "EVD-1")]
+        self.assertTrue(old["migrate"])
+        self.assertEqual(old["reason"], "would_archive_date_window")
+        self.assertIn("2026-05-01", old["detail"])
+        fresh = by_key[("EVD", "EVD-2")]
+        self.assertFalse(fresh["migrate"])
+        self.assertEqual(fresh["reason"], "no_task_family_ref")
+        undatable = by_key[("EVD", "EVD-3")]
+        self.assertFalse(undatable["migrate"])
+        self.assertEqual(undatable["reason"], "no_task_family_ref")
+        tri = by_key[("TRIAGE", "TRIAGE-REQ-500")]
+        self.assertTrue(tri["migrate"])
+        self.assertEqual(tri["reason"], "would_archive_date_window")
+
+    def test_no_released_window_end_disables_fallback_fail_closed(self):
+        # The window-end version is NOT a released roadmap row → no
+        # authoritative end date → the fallback refuses to fire.
+        archive = self._prepare("| 0.95.0 | 规划中 | — |\n")
+        with patch.object(archive, "ROOT", self.root), \
+                patch.object(archive, "PLUGIN_ROOT", self.root):
+            report = archive.scan_row_families(
+                "0.1.0", "0.91.0", task_versions={},
+                context=archive._build_classification_context(
+                    (self.gov_dir / "plan-tracker.md").read_text(
+                        encoding="utf-8")),
+                content=(self.gov_dir / "evidence-log.md").read_text(
+                    encoding="utf-8"),
+                plan_tracker_content="")
+        by_key = {(r["family"], r["id"]): r for r in report["rows"]}
+        self.assertEqual(by_key[("EVD", "EVD-1")]["reason"],
+                         "no_task_family_ref")
+        self.assertFalse(by_key[("EVD", "EVD-1")]["migrate"])
 
 
 if __name__ == "__main__":

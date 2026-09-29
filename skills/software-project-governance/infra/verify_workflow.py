@@ -21262,7 +21262,20 @@ def _run_identity_attestation_fixture_only():
             "issues": [f"{IDENTITY_ATTESTATION_PENDING} ({exc.code}: {exc.detail})"],
         }
 
-    with tempfile.TemporaryDirectory(prefix="fix200-identity-") as temp_value:
+    # FIX-403: under a UAC-filtered token (DSH sandbox) the fixture dir's
+    # TemporaryDirectory __exit__ cleanup hit PermissionError (WinError 5)
+    # on both scandir and the chmod recovery, crashing the governance gate
+    # and violating this helper's own docstring contract ("never crashes on
+    # identity work").  ignore_cleanup_errors=True does NOT close that
+    # escape on Python 3.14: the recovery chmod raise happens inside
+    # tempfile's onexc handler, outside its ignore_errors checks (verified
+    # empirically against 3.14.3).  mkdtemp + finally +
+    # shutil.rmtree(ignore_errors=True) instead routes every cleanup
+    # OSError to a no-op handler, so a cleanup failure can never escalate
+    # into a crash; at worst the fixture dir is left to the OS TEMP
+    # lifecycle while the identity verdict is still produced.
+    temp_value = tempfile.mkdtemp(prefix="fix200-identity-")
+    try:
         snapshot_dir = Path(temp_value) / "snapshot"
         try:
             identity_report = attest_explicit_sources(
@@ -21291,6 +21304,8 @@ def _run_identity_attestation_fixture_only():
                 "phase": "staged_index",
                 "issues": [f"{IDENTITY_ATTESTATION_PENDING} (builder error: {type(exc).__name__}: {exc})"],
             }
+    finally:
+        shutil.rmtree(temp_value, ignore_errors=True)
     verdict = identity_report.get("identity_verdict", "UNKNOWN")
     issues: list[str] = []
     if verdict != "PASS":

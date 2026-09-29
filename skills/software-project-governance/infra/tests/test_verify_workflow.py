@@ -311,6 +311,68 @@ class FIX300DualCaliberAgreementTests(unittest.TestCase):
         self.assertEqual([], payload["identity_issues"])
 
 
+class FIX403IdentityFixtureCleanupContractTests(unittest.TestCase):
+    """FIX-403: a TemporaryDirectory cleanup failure in the FIX-200 identity
+    fixture must degrade, never crash the governance gate.
+
+    RCA (2026-09-29, three reproductions, default and redirected TEMP with
+    the same signature): under a UAC-filtered token (DSH sandbox) the fixture
+    dir's ``__exit__`` cleanup hit PermissionError (WinError 5) on BOTH the
+    scandir of the self-created directory and the chmod recovery inside
+    tempfile's ``onexc`` handler, and neither was caught — so
+    check-governance (incl. ``--summary-only``, without ``--quick``) crashed
+    instead of reporting the identity verdict, violating the helper's own
+    docstring contract ("the governance check never crashes on identity
+    work").  The failure is simulated here on exactly that surface:
+    ``os.scandir`` and ``os.chmod`` raise PermissionError (errno 13, the
+    Windows Access-Denied mapping, offending path as ``.filename``) for any
+    path under the ``fix200-identity-`` fixture dir, routed through the real
+    ``shutil.rmtree`` cleanup machinery — no wholesale rmtree replacement,
+    so the onexc/ignore_errors routing itself is under test.
+    """
+
+    def test_cleanup_permission_error_degrades_to_verdict_not_crash(self):
+        """Contract: with scandir+chmod both denying the fixture dir at
+        cleanup time, (a) ``_run_identity_attestation_fixture_only`` must
+        not raise, and (b) it still returns the ``{verdict, issues, phase}``
+        shape so the gate reports a real identity outcome instead of a
+        crash."""
+        real_scandir = os.scandir
+        real_chmod = os.chmod
+
+        def denying_scandir(path=".", *args, **kwargs):
+            if "fix200-identity-" in str(path):
+                raise PermissionError(
+                    13, "Access is denied (simulated FIX-403 scandir WinError 5)",
+                    str(path))
+            return real_scandir(path, *args, **kwargs)
+
+        def denying_chmod(path, *args, **kwargs):
+            if "fix200-identity-" in str(path):
+                raise PermissionError(
+                    13, "Access is denied (simulated FIX-403 chmod WinError 5)",
+                    str(path))
+            return real_chmod(path, *args, **kwargs)
+
+        output = io.StringIO()
+        with patch.object(os, "scandir", denying_scandir), \
+                patch.object(os, "chmod", denying_chmod), redirect_stdout(output):
+            try:
+                result = vw._run_identity_attestation_fixture_only()
+            except Exception as exc:
+                # Red shape on unfixed code: PermissionError escaping the
+                # TemporaryDirectory __exit__ cleanup chain (scandir denial
+                # re-raised out of the chmod recovery inside tempfile.onexc).
+                self.fail(
+                    "FIX-403 contract violated: identity fixture crashed on "
+                    f"TemporaryDirectory cleanup failure: {exc!r}")
+        self.assertIn("verdict", result)
+        self.assertIn("issues", result)
+        self.assertIn("phase", result)
+        self.assertIsInstance(result["verdict"], str)
+        self.assertIsInstance(result["issues"], list)
+
+
 class FIX200ScopedAttestationRehearsalTests(unittest.TestCase):
     """FIX-216 preserves the architecture-named scoped rehearsal entry."""
 

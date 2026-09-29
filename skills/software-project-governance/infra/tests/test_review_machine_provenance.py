@@ -244,13 +244,15 @@ class InjectionAnchorExtensionTests(unittest.TestCase):
                              "(DEC-161 raise)")
 
     def test_skill_contract_section_stays_within_budget(self):
-        """FIX-253/FIX-274 budget: entry SKILL 关键行为契约 section ≤ 2.5KB.
+        """FIX-253/FIX-274 budget: entry SKILL 关键行为契约 section ≤ 3KB.
 
         DEC-144 set a 2KB hard cap for this section; raised to 2.5KB by
-        FIX-274 / DEC-162 (2026-08-23) — the M7.7 4th contract item
-        (真实环境必防护) injection requires the headroom
-        (review-FIX-274-CODE-R0 P1-2 disposition; the persona-side raise
-        is DEC-161). Guard mirrors the persona-block test above.
+        FIX-274 / DEC-162 (2026-08-23, four-clause era); raised to 3.0KB
+        by DEC-295(2) (2026-09-29, six-clause era — the B1a injection of
+        clauses 5/6 (DEC-286(7)/DEC-291) added 448B of PERMANENT contract
+        text; measured 2866 after the DEC-295-mandated intro slimming,
+        +206B headroom). Guard mirrors the persona-block test above
+        (the persona budget stays at 2.5KB — different surface).
         """
         text = (
             vw.ROOT / "skills/software-project-governance/SKILL.md"
@@ -258,9 +260,9 @@ class InjectionAnchorExtensionTests(unittest.TestCase):
         start = text.index("关键行为契约")
         end = text.index("产品代码 vs 治理记录边界", start)
         block = text[start:end]
-        self.assertLessEqual(len(block.encode("utf-8")), 2560,
-                             "SKILL 关键行为契约 section exceeds the 2.5KB "
-                             "budget (DEC-162 raise)")
+        self.assertLessEqual(len(block.encode("utf-8")), 3072,
+                             "SKILL 关键行为契约 section exceeds the 3.0KB "
+                             "budget (DEC-295(2) raise)")
 
 
 class MachineRowClassificationTests(unittest.TestCase):

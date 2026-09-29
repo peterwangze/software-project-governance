@@ -493,14 +493,26 @@ class BaselineArtifactTests(unittest.TestCase):
         # FEAT-080 +339 (B3: Check 41/42 boxes, provenance plumbing,
         # demand-source CLI window close + demand-source-revise,
         # release-gate sub-check, execution-packet incremental merge).
-        # R4 print census 1318 -> 1338 in the same regen (sanctioned +20,
-        # see FACTS_PRINT_TOTAL). Assert the exact regenerated anchor:
+        # FIX-405 batch (same 0.93.0 window, 2026-09-29): interim working-tree
+        # bump +44 (26921 -> 26965) predated the FEAT-076 engine-face edits and
+        # was superseded by the release-assembly regen rider (same window):
+        # final re-anchor 26921 -> 27133, measured split — FEAT-076 +129
+        # (GovernanceDataSource read facade +120 module-top; Check 28s
+        # three-track wiring in check_governance_data_size +9), FIX-405 +98/-15
+        # (release_readiness SD sub-check +26; governance_data_size layered
+        # thresholds +28/-3; release_ledger SD gate +30/-6; user_impact
+        # predicate unification +5/-4; session-closure BLOCKED collector +5/-1;
+        # execution-packet F-3 regenerated-set note +4/-1); net +212. The
+        # sd_integrity measurement leaf lives in checks/, so
+        # engine print count stayed 1338 across the whole window (zero drift).
+        # R4 print census 1318 -> 1338 in the FEAT-080 regen (sanctioned
+        # +20, see FACTS_PRINT_TOTAL). Assert the exact regenerated anchor:
         # the metadata contract's job is to pin the committed truth, and
         # the regen itself is the sanctioned change that moves it
         # (only-down from here). Keep in sync with
         # core/architecture-baseline.json r1_mainfile_budget.anchor_loc
         # on every sanctioned regen.
-        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 26921)
+        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 27133)
 
     def test_authored_zone_survives_regen(self):
         existing = _committed_baseline()

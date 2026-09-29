@@ -203,7 +203,7 @@ DEC-288 排序裁定：**(M1) 优先级执法底层机制**与 **(M2) 发现即�
 
 输入 = task-priority-analysis 结果（含 demand_source）+ plan-tracker 解析。`recommended_next` 为全量 unblocked 跨 P 级排序列表（F5 实证 task_priority.py L1696/L1714）。
 
-- **INV-1（推荐位倒挂，FAIL）**：`recommended_next` 列表中存在 machine-signal 项 M 与 user-named 项 U，**M.priority == U.priority（同 P 级）**，且 M 排在 U 之前。同 P 级限定与 §2.2.2 排序键（provenance 仅作 P 级内 tie-break）一致——排序键正确时本判据恒不触发，触发即排序实现缺陷或手写推荐绕过，两者都该 FAIL。
+- **INV-1（推荐位倒挂，FAIL）**：`recommended_next` 列表中存在 machine-signal 项 M 与 user-named 项 U，**M.priority == U.priority（同 P 级）**，且 M 排在 U 之前。同 P 级限定与 §2.2.2 排序键（provenance 仅作 P 级内 tie-break）一致——排序键正确时本判据恒不触发，触发即排序实现缺陷或手写推荐绕过，两者都该 FAIL。**第三形态（FIX-406 P3-3 收编，B4-2 落地）**：M 与 U 的 P 级**均已解析**且 M 的 P 级严格更低（如 M=P2 排 U=P1 前）——排序键正确时同样不可能（P1 恒先于 P2），归 INV-1 FAIL（`checks/provenance_domain.py` else 臂拆分：已解析乱序 FAIL / 未解析保守 WARN——无法证明级序时只披露不阻断）。
 - **INV-X（跨级压序，WARN——披露不阻断）**：`recommended_next` 中存在 machine-signal 项 M 与 user-named 项 U，M.priority 严格高于 U.priority（数值更小，如 M=P0/U=P1），且 M 排在 U 之前 → WARN 列出行对 `{M}（machine-signal,P{i}）压序 {U}（user-named,P{j>i}）`。跨级压序是 D1 设计的**已知容忍**（§2.2.2 第 5 点 D1 已知边界）：排序键不跨级，执法归属 = 本 WARN 披露 + 发布门终端拦截（§2.2.4）。
 - **INV-2（可执行性倒挂，FAIL）**：存在非 completed、依赖已满足（unblocked 资格）的 user-named 项 U 因状态标记被滤入 `non_executable`，同时 `recommended_next` 非空且全部为 machine-signal——「用户项被停放而机器项占据全部推荐位」（DEC-286(7)「结构性大需求不得因装不进本批无限顺延」的可机检近似）。
 

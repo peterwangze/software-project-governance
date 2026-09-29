@@ -437,6 +437,67 @@ class GovernanceDataSizeTest(unittest.TestCase):
             self.assertFalse(result["enabled"])
             self.assertEqual(result["findings"], [])
 
+    def test_dec295_evidence_log_per_file_override_lines(self):
+        """DEC-295(1) track-1 recalibration: the evidence-log face carries a
+        PER-FILE override (warn 400000 / error 650000). Steady-state basis:
+        the typed hot-table residue = 199 permanently-hot registered-ID
+        rows (~280-300KB) + the working set (0.92 closeout + 0.93 in
+        flight); current 515KB + migration wobble. The other faces keep
+        the global 200000/250000 lines — decision-log's EXC-003 exception
+        stays meaningful under the untouched global error line."""
+        schema = {
+            "governance_data_size": {
+                "enabled": True,
+                "warn_bytes": 200000, "error_bytes": 250000,
+                "files": [".governance/evidence-log.md",
+                          ".governance/decision-log.md"],
+                "file_overrides": {
+                    ".governance/evidence-log.md": {
+                        "warn_bytes": 400000, "error_bytes": 650000}},
+            },
+            "gate_integration": {"fatal_on_error": False},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _make_repo(tmp)
+            gov = root / ".governance"
+            gov.mkdir(parents=True, exist_ok=True)
+            # evidence-log at 515KB: under the OLD 250000 line this was an
+            # ERROR (the EXC-001 exception era); under the DEC-295(1)
+            # override it is a WARN (400000 < 515000 < 650000).
+            (gov / "evidence-log.md").write_text(
+                "x" * 515000, encoding="utf-8")
+            # decision-log at 260KB: exceeds the GLOBAL error line → ERROR
+            # (proves the override is scoped per-file, not global).
+            (gov / "decision-log.md").write_text(
+                "x" * 260000, encoding="utf-8")
+            result = vw.check_governance_data_size(root=root, schema=schema)
+            by_path = {f["path"]: f["severity"] for f in result["findings"]}
+            self.assertEqual(by_path.get(".governance/evidence-log.md"),
+                             "WARN")
+            self.assertEqual(by_path.get(".governance/decision-log.md"),
+                             "ERROR")
+            ev = next(f for f in result["findings"]
+                      if f["path"] == ".governance/evidence-log.md")
+            self.assertIn("400000", ev["reason"])
+
+    def test_dec295_live_schema_and_code_comment_carry_anchor(self):
+        """The DEC-295(1) decision is machine-visible in BOTH faces: the
+        committed schema override and the check's own calibration
+        comment (the user ruling's stated basis)."""
+        import inspect
+        import json as _json
+        source = inspect.getsource(vw.check_governance_data_size)
+        self.assertIn("DEC-295", source)
+        live, _err = vw._archguard_load_schema(vw.ROOT)
+        self.assertIsNotNone(live)
+        self.assertIn("DEC-295",
+                      _json.dumps(live, ensure_ascii=False))
+        override = live["governance_data_size"]["file_overrides"][
+            ".governance/evidence-log.md"]
+        self.assertEqual(override["warn_bytes"], 400000)
+        self.assertEqual(override["error_bytes"], 650000)
+        self.assertEqual(live["governance_data_size"]["error_bytes"], 250000)
+
 
 if __name__ == "__main__":
     unittest.main()

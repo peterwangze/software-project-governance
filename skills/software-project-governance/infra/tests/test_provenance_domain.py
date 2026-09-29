@@ -157,6 +157,27 @@ class CheckPriorityInversionInv1Tests(unittest.TestCase):
         self.assertTrue(any("FIX-002" in w for w in result["warnings"]))
         self.assertTrue(result["invx_pairs"])
 
+    def test_lower_priority_machine_ahead_of_higher_user_fails(self):
+        # B4-2 (FIX-405 batch): the resolved-but-out-of-order arm — a
+        # machine-signal item whose P-level is STRICTLY LOWER (P2) ranked
+        # above an OPEN user-named P1 item. With a correct sort key this
+        # shape is impossible (P1 always precedes P2), so its occurrence
+        # proves a sort defect or a hand-written recommendation bypass —
+        # FAIL, never a mere disclosure (the unparsed arm above stays WARN).
+        rows = [
+            _row("FIX-001", "machine-signal", priority="P2"),
+            _row("FIX-002", "user-named", priority="P1"),
+        ]
+        result = pd.check_priority_inversion(rows)
+        self.assertEqual(result["status"], "FAIL")
+        self.assertEqual(result["inv1_pairs"], [["FIX-001", "FIX-002"]])
+        self.assertEqual(result["invx_pairs"], [])
+        self.assertTrue(any(
+            "FIX-001" in i and "FIX-002" in i for i in result["issues"]),
+            result["issues"])
+        self.assertTrue(any("排序" in i or "倒挂" in i
+                            for i in result["issues"]))
+
 
 class CheckPriorityInversionInv2Tests(unittest.TestCase):
     """INV-2 — parked user-named while machine-signal fills the board."""

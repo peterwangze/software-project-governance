@@ -7376,7 +7376,11 @@ def _collect_session_closure_events(governance_dir=None, today=None):
             if row_date != today:
                 continue
             if row_id.startswith("REVIEW-"):
-                if status == "NEEDS_CHANGE":
+                # B4-3 (FIX-405 batch): BLOCKED joins NEEDS_CHANGE as the
+                # not-passed review terminals (复审必达 state machine — both
+                # are 未通过终态; ADR-021 §3.2.2 session pairing owes each a
+                # later terminal pairing).
+                if status in ("NEEDS_CHANGE", "BLOCKED"):
                     events.append({"id": task, "kind": "problem"})
                 elif status.startswith("APPROVED"):
                     events.append({"id": task, "kind": "closure"})
@@ -7511,6 +7515,32 @@ def check_release_readiness(
         for warning in admission["warnings"]:
             details.setdefault("release_warnings", []).append(
                 f"provenance release gate: {warning}")
+
+    # FIX-405 / RISK-061: SD readability over the write-affected faces
+    # (release-projection targets + the .git/hooks face). Unreadable →
+    # FAIL with the takeown/icacls remediation inline (M-1 后置步——
+    # the release gate is where accumulated SD damage must block).
+    from checks.sd_integrity import (
+        hooks_face_paths as _sd_hooks_face,
+        projection_face_paths as _sd_projection_face,
+        scan_sd_readability as _sd_scan,
+    )
+    # FIX-406 F-1: a plan that cannot be built is an EXPLICIT issue — the
+    # face error is lifted into the details/issues faces instead of being
+    # silently dropped behind .get("paths", []) (vacuous-PASS fix).
+    _sd_face = _sd_projection_face(PLUGIN_ROOT)
+    _sd_face_error = _sd_face.get("error")
+    if _sd_face_error:
+        issues.append(f"sd integrity: {_sd_face_error}")
+    _sd_face_paths = list(_sd_face.get("paths", []))
+    _sd_face_paths.extend(_sd_hooks_face(PLUGIN_ROOT))
+    sd_scan = _sd_scan(_sd_face_paths)
+    details["sd_integrity"] = {**sd_scan, "face_error": _sd_face_error}
+    if not sd_scan["pass"]:
+        issues.extend(
+            "sd integrity: {0} unreadable — remediate: {1}".format(path, cmd)
+            for path, cmd in zip(sd_scan["unreadable"],
+                                 sd_scan["remediation"]))
 
     adapter_issues = check_agent_adapter_contract(run_runtime=run_runtime_adapters)
     details["agent_adapters"] = {
@@ -10072,6 +10102,126 @@ class GovernanceDataSource:
                     "task_ids": parts[2],
                 })
         return results
+
+    # ── Row-family layer surface (FEAT-076: the unified read entry) ──
+    #
+    # The evidence-log's four row families (EVD/REVIEW/TRIAGE/RECO) now live
+    # across TWO layers: the hot working set (evidence-log.md) and the cold
+    # archive (archive/evidence/*.md). This surface is the single read entry
+    # layering-aware consumers use (DEC-282 C-1(b) condition 3: 统一入口或
+    # 过渡适配) — direct hot-file reads stay valid ONLY for write targets
+    # and current-ticket semantics (this-session rows are always hot).
+
+    #: Row-id line prefixes per family (mirror of archive._ROW_FAMILY_LINE_
+    #: PREFIXES — kept literal to avoid an import cycle; the archive module
+    #: is the write-side authority, this is the read-side mirror).
+    FAMILY_ROW_PREFIXES = {
+        "EVD": "| EVD-",
+        "REVIEW": "| REVIEW-",
+        "TRIAGE": "| TRIAGE-",
+        "RECO": "| RECO-",
+    }
+
+    def _hot_family_lines(self, family):
+        """Family-prefixed table rows from the hot evidence-log."""
+        prefix = self.FAMILY_ROW_PREFIXES[family]
+        if not self.evidence_path.is_file():
+            return []
+        return [
+            line for line in self.evidence_path.read_text(
+                encoding="utf-8").split("\n")
+            if line.strip().startswith(prefix)
+        ]
+
+    def _cold_family_lines(self, family):
+        """Family-prefixed table rows from ALL archive evidence files
+        (sorted by filename → deterministic order)."""
+        prefix = self.FAMILY_ROW_PREFIXES[family]
+        rows = []
+        for f in self._cold_evidence_files():
+            for line in f.read_text(encoding="utf-8").split("\n"):
+                if line.strip().startswith(prefix):
+                    rows.append({"line": line, "file": f"archive/evidence/{f.name}"})
+        return rows
+
+    def _cold_evidence_files(self):
+        if not self.archive_evidence_dir.is_dir():
+            return []
+        return [f for f in sorted(self.archive_evidence_dir.glob("*.md"))
+                if f.name != ".gitkeep"]
+
+    def get_all_family_rows(self, family):
+        """FEAT-076: ALL rows of one family across BOTH layers.
+
+        Returns a list of {"row_id", "task_ids", "line", "source", "file"}
+        dicts — hot rows carry source="hot" / file=".governance/
+        evidence-log.md", cold rows carry source="cold" / their archive
+        file. Row id + task ids come from the first two cells (same
+        convention every family parser uses).
+        """
+        if family not in self.FAMILY_ROW_PREFIXES:
+            raise ValueError(f"unknown row family {family!r}")
+        rows = []
+        for line in self._hot_family_lines(family):
+            parts = [p.strip() for p in line.split("|")]
+            if len(parts) >= 3:
+                rows.append({
+                    "row_id": parts[1], "task_ids": parts[2], "line": line,
+                    "source": "hot", "file": ".governance/evidence-log.md",
+                })
+        for cold in self._cold_family_lines(family):
+            parts = [p.strip() for p in cold["line"].split("|")]
+            if len(parts) >= 3:
+                rows.append({
+                    "row_id": parts[1], "task_ids": parts[2],
+                    "line": cold["line"], "source": "cold",
+                    "file": cold["file"],
+                })
+        return rows
+
+    def get_all_family_row_ids(self, family):
+        """FEAT-076: set of row ids for one family across both layers."""
+        return {r["row_id"] for r in self.get_all_family_rows(family)}
+
+    def find_row(self, row_id):
+        """FEAT-076: locate ONE row by id across both layers (hot first —
+        the working set wins any id collision by design: new rows are
+        always written hot). Returns the get_all_family_rows record or
+        None."""
+        prefix = row_id.split("-", 1)[0] + "-"
+        for family, fam_prefix in self.FAMILY_ROW_PREFIXES.items():
+            if fam_prefix.lstrip("| ").startswith(prefix):
+                for r in self.get_all_family_rows(family):
+                    if r["row_id"] == row_id:
+                        return r
+        return None
+
+    def layer_stats(self):
+        """FEAT-076: per-family hot/cold row counts + the three-track size
+        basis (DEC-278 Q5: 热工作集容量 / 全库完整性 / 总量增长监测).
+
+        Hot bytes = the hot file's on-disk size (Check 28s basis). Cold
+        bytes = the summed sizes of every archive evidence file. Total =
+        hot + cold (the full-library volume the growth track monitors).
+        """
+        stats = {"families": {}, "layers": {}}
+        for family in self.FAMILY_ROW_PREFIXES:
+            hot_rows = self._hot_family_lines(family)
+            cold = self._cold_family_lines(family)
+            stats["families"][family] = {
+                "hot_rows": len(hot_rows),
+                "cold_rows": len(cold),
+                "total_rows": len(hot_rows) + len(cold),
+            }
+        hot_bytes = (self.evidence_path.stat().st_size
+                     if self.evidence_path.is_file() else 0)
+        cold_bytes = sum(f.stat().st_size for f in self._cold_evidence_files())
+        stats["layers"] = {
+            "hot_bytes": hot_bytes,
+            "cold_bytes": cold_bytes,
+            "total_bytes": hot_bytes + cold_bytes,
+        }
+        return stats
 
     # ── Decision data ──
 
@@ -13264,10 +13414,11 @@ def check_user_impact():
         "commands/", ".claude-plugin/", ".codex-plugin/",
     ]
 
-    VALID_OBTAIN_VALUES = [
-        "plugin update", "governance-init", "governance-update",
-        "手动", "自动生效（下次会话）", "自动生效", "不需要",
-    ]
+    # FIX-406 F-2 predicate unification: the closed vocabulary is defined
+    # ONCE in the writer domain (governance_store.VALID_OBTAIN_VALUES —
+    # the intake mirror and this engine check consume the same constant;
+    # the pre-fix local copy is retired so the two faces can never drift).
+    from governance_store import VALID_OBTAIN_VALUES
 
     result = {
         "entries": [],
@@ -14836,7 +14987,10 @@ def cmd_execution_packet(args):
         )
         note = ""
         if selected is not None:
-            note = (f" (incremental merge: regenerated {', '.join(args.task)};"
+            # F-3 (FIX-405 batch): report the ACTUALLY regenerated set — a
+            # requested-but-absent id must not appear as "regenerated".
+            note = (f" (incremental merge: regenerated "
+                    f"{', '.join(sorted(selected))};"
                     f" preserved {len(merged_packets) - len(selected)} other"
                     f" entr{'y' if len(merged_packets) - len(selected) == 1 else 'ies'}")
         print(f"[OK] wrote {len(payload['packets'])} execution packet(s) to "
@@ -21006,8 +21160,17 @@ def check_governance_data_size(root=None, schema=None):
             "summary": {"errors": 0, "warnings": 0},
             "note": gds.get("note") or "governance_data_size disabled",
         }
+    # DEC-295(1) track-1 recalibration (user ruling, 2026-09-29): the
+    # evidence-log face carries a PER-FILE override — warn 400000 /
+    # error 650000. Calibration basis: the typed hot-table steady state =
+    # 199 permanently-hot registered-ID rows (~280-300KB) + the working
+    # set (0.92 closeout + 0.93 in flight); measured 515KB + migration
+    # wobble headroom. All OTHER faces keep the global 200000/250000
+    # lines (the 256KB single-read guard rationale stays intact for
+    # them; decision-log's EXC-003 exception remains meaningful).
     warn_bytes = gds.get("warn_bytes", 200000)
     error_bytes = gds.get("error_bytes", 250000)
+    file_overrides = gds.get("file_overrides", {})
     files = gds.get("files", [])
     findings = []
     for rel in files:
@@ -21015,19 +21178,44 @@ def check_governance_data_size(root=None, schema=None):
         if not path.exists():
             continue
         size = path.stat().st_size
-        sev = _archguard_severity(size, warn_bytes, error_bytes)
+        override = file_overrides.get(rel, {})
+        face_warn = override.get("warn_bytes", warn_bytes)
+        face_error = override.get("error_bytes", error_bytes)
+        sev = _archguard_severity(size, face_warn, face_error)
         if sev:
             findings.append({
                 "check": "governance_data_size", "severity": sev,
                 "path": rel, "bytes": size,
-                "reason": f"{size} bytes ({size/1024:.1f} KB) exceeds {sev.lower()}_bytes={warn_bytes if sev=='WARN' else error_bytes}",
+                "reason": f"{size} bytes ({size/1024:.1f} KB) exceeds {sev.lower()}_bytes={face_warn if sev=='WARN' else face_error}",
             })
     errors = sum(1 for f in findings if f["severity"] == "ERROR")
     warnings = sum(1 for f in findings if f["severity"] == "WARN")
-    return {
+    result = {
         "enabled": True, "findings": findings,
         "summary": {"errors": errors, "warnings": warnings},
     }
+    # FEAT-076 (DEC-278 Q5 three-track semantics, 0.93 switch): track 1 =
+    # the hot working-set capacity gate above (unchanged schema-driven
+    # severity); track 2 = full-library integrity (check-archive-integrity,
+    # separate check); track 3 = total-volume growth monitoring — reported
+    # here as informational layer facts (hot/cold/total), no new finding
+    # severity. Growth-rate alerting rides the weekly metric duty (EXC
+    # family terms) instead of a second threshold.
+    try:
+        if root is not None:
+            _gov = Path(root) / ".governance"
+            ds = GovernanceDataSource(
+                sample_path=_gov / "plan-tracker.md",
+                evidence_path=_gov / "evidence-log.md",
+            )
+        else:
+            ds = GovernanceDataSource()
+        _stats = ds.layer_stats()
+        result["layers"] = _stats["layers"]
+        result["family_stats"] = _stats["families"]
+    except Exception:  # noqa: BLE001 — informational track, never fatal
+        result["layers"] = None
+    return result
 
 
 
@@ -22488,13 +22676,37 @@ def cmd_release_ledger(args):
 
 
 def cmd_release_projection(args):
-    """Check or atomically write declared artifact projections."""
+    """Check or atomically write declared artifact projections.
+
+    FIX-405 / RISK-061: the --write face appends an ``sd_integrity`` scan
+    over the just-written projection targets (os.access R_OK + takeown/
+    icacls remediation template) — restricted-token SD damage surfaces at
+    the write moment; a damaged face FAILs the command (exit 1) instead
+    of biting the next random access.
+    """
     config = Path(args.config).resolve() if getattr(args, "config", None) else None
-    result = (
-        write_projections(PLUGIN_ROOT, config)
-        if getattr(args, "write", False)
-        else check_projections(PLUGIN_ROOT, config)
-    ).as_dict()
+    if getattr(args, "write", False):
+        result = write_projections(PLUGIN_ROOT, config).as_dict()
+        from checks.sd_integrity import projection_face_paths, scan_sd_readability
+        # FIX-406 F-1: lift the face error instead of silently scanning an
+        # empty path set behind .get("paths", []).
+        _face = projection_face_paths(PLUGIN_ROOT, config)
+        _face_error = _face.get("error")
+        sd_scan = scan_sd_readability(_face.get("paths", []))
+        result["sd_integrity"] = {**sd_scan, "face_error": _face_error}
+        if _face_error:
+            result["state"] = "FAIL"
+            result["issues"] = list(result.get("issues", [])) + [
+                f"sd integrity: {_face_error}"]
+        elif not sd_scan["pass"]:
+            result["state"] = "FAIL"
+            result["issues"] = list(result.get("issues", [])) + [
+                "sd integrity: {0} unreadable — remediate: {1}".format(
+                    path, cmd)
+                for path, cmd in zip(sd_scan["unreadable"],
+                                      sd_scan["remediation"])]
+    else:
+        result = check_projections(PLUGIN_ROOT, config).as_dict()
     print(json.dumps(result, ensure_ascii=False, indent=2))
     if result["state"] != "PASS":
         sys.exit({"FAIL": 1, "UNKNOWN": 2, "BLOCKED": 3}.get(result["state"], 1))

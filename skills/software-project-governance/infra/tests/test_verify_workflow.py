@@ -20089,6 +20089,33 @@ class B3ProvenanceWiringTests(unittest.TestCase):
             problems = [e for e in events if e["kind"] == "problem"]
             self.assertEqual(len(problems), 1)
 
+    def test_collect_session_closure_events_blocked_review_is_problem(self):
+        """B4-3 (FIX-405 batch): a BLOCKED review row is the second
+        not-passed review terminal (same class as NEEDS_CHANGE — the
+        复审必达 state machine treats both as 未通过终态); ADR-021 §3.2.2
+        session pairing: a problem raised until a later APPROVED*/terminal
+        pairing lands. The closure obligation must count it — an unclosed
+        BLOCKED review is exactly the silent-deferral shape Check 42
+        exists to surface."""
+        with _governance_temp_dir(prefix="fix405-blocked-") as td:
+            gov = Path(td)
+            (gov / "evidence-log.md").write_text(
+                "# 证据\n\n"
+                "| REVIEW-FIX-210-CODE-R1 | FIX-210 | 产品代码 | R1 | 依据 "
+                "| 文件 | Reviewer | 2026-09-29 | G11 | BLOCKED |  |\n"
+                "| REVIEW-FIX-211-CODE-R0 | FIX-211 | 产品代码 | R0 | 依据 "
+                "| 文件 | Reviewer | 2026-09-29 | G11 | NEEDS_CHANGE |  |\n"
+                "| REVIEW-FIX-210-CODE-R2 | FIX-210 | 产品代码 | R2 | 依据 "
+                "| 文件 | Reviewer | 2026-09-29 | G11 | APPROVED |  |\n",
+                encoding="utf-8")
+            events, _note = vw._collect_session_closure_events(
+                gov, today="2026-09-29")
+            kinds = {(e["id"], e["kind"]) for e in events}
+            self.assertIn(("FIX-210", "problem"), kinds)
+            self.assertIn(("FIX-210", "closure"), kinds)
+            self.assertIn(("FIX-211", "problem"), kinds)
+            self.assertNotIn(("FIX-211", "closure"), kinds)
+
     def test_collect_session_closure_events_risk_and_daily_note(self):
         with _governance_temp_dir(prefix="feat080-risk-") as td:
             gov = Path(td)
@@ -20231,6 +20258,171 @@ class ExecutionPacketIncrementalWriteTests(unittest.TestCase):
                 packet_path.read_text(encoding="utf-8"))
             self.assertIn("FIX-201", written["packets"])
             self.assertIn("FIX-202", written["packets"])
+
+
+class SdIntegrityGateTests(unittest.TestCase):
+    """FIX-405 / RISK-061: security-descriptor readability scan gate.
+
+    REL-095 M-1 evidence: restricted-token writes produced files/dirs
+    whose Windows SDs deny the current user READ_CONTROL/DELETE (20
+    instances across projection targets / templates / hooks). The gate
+    probes the WRITE-AFFECTED faces with os.access(R_OK), names every
+    unreadable path, and emits the takeown/icacls remediation template —
+    damage becomes visible at the moment it is caused (write commands)
+    and at every release gate run, not at the next random access.
+    """
+
+    def _files(self, root):
+        ok = Path(root) / "ok.txt"
+        ok.write_text("x", encoding="utf-8")
+        bad = Path(root) / "sub" / "bad.txt"
+        bad.parent.mkdir(parents=True, exist_ok=True)
+        bad.write_text("x", encoding="utf-8")
+        return ok, bad
+
+    def test_clean_face_passes(self):
+        from checks import sd_integrity as sdi
+        with _governance_temp_dir(prefix="fix405-clean-") as td:
+            ok, _ = self._files(td)
+            result = sdi.scan_sd_readability([ok])
+            self.assertTrue(result["pass"])
+            self.assertEqual(result["unreadable"], [])
+            self.assertEqual(result["remediation"], [])
+            self.assertEqual(result["scanned"], 1)
+
+    def test_unreadable_face_fails_with_takeown_icacls_remediation(self):
+        from checks import sd_integrity as sdi
+        with _governance_temp_dir(prefix="fix405-bad-") as td:
+            ok, bad = self._files(td)
+
+            def fake_access(path, mode):
+                return Path(path) != bad
+
+            result = sdi.scan_sd_readability([ok, bad], access=fake_access)
+            self.assertFalse(result["pass"])
+            self.assertEqual(result["unreadable"], [str(bad)])
+            self.assertEqual(len(result["remediation"]), 1)
+            self.assertIn("takeown", result["remediation"][0])
+            self.assertIn("icacls", result["remediation"][0])
+            self.assertIn(str(bad), result["remediation"][0])
+            self.assertIn('"%USERNAME%":F', result["remediation"][0])
+
+    def test_directory_remediation_uses_recursive_templates(self):
+        from checks import sd_integrity as sdi
+        with _governance_temp_dir(prefix="fix405-dir-") as td:
+            target_dir = Path(td) / "hooks"
+            target_dir.mkdir()
+            result = sdi.scan_sd_readability(
+                [target_dir], access=lambda _p, _m: False)
+            self.assertFalse(result["pass"])
+            self.assertIn("/r", result["remediation"][0])
+            self.assertIn("/t", result["remediation"][0])
+
+    def test_isdir_probe_failure_falls_back_to_recursive_template(self):
+        """FIX-406 P3-2: when the is_dir probe itself fails (an SD-damaged
+        directory can make stat raise), the remediation must fall back to
+        the RECURSIVE directory template — the file template would lose
+        the /t inheritance grant for the directory's children."""
+        from checks import sd_integrity as sdi
+        damaged_dir = vw.ROOT / "some-damaged-dir"
+        with patch.object(Path, "is_dir", side_effect=OSError("denied")):
+            command = sdi.remediation_for(damaged_dir)
+        self.assertIn("/r", command)
+        self.assertIn("/t", command)
+        self.assertIn(str(damaged_dir), command)
+
+    def test_hooks_face_lists_the_four_governance_hooks(self):
+        from checks import sd_integrity as sdi
+        faces = sdi.hooks_face_paths(vw.ROOT)
+        names = [Path(p).name for p in faces]
+        for hook in ("pre-commit", "prepare-commit-msg", "commit-msg",
+                     "post-commit"):
+            self.assertIn(hook, names)
+        self.assertIn(".git", str(faces[0]))
+
+    def test_projection_face_resolves_from_the_live_plan(self):
+        from checks import sd_integrity as sdi
+        face = sdi.projection_face_paths(vw.PLUGIN_ROOT)
+        self.assertTrue(face.get("paths"), "live plan must yield targets")
+        for path in face["paths"]:
+            self.assertTrue(Path(path).is_absolute(), path)
+
+    def test_release_readiness_carries_sd_integrity_face(self):
+        """The release gate sub-check: an unreadable projection/hook face
+        FAILs readiness with the remediation guidance inline (issues face,
+        zero new engine prints — the aggregate report carries it). The
+        sibling fact-source sub-checks are patched empty so this test
+        judges the SD face alone (they read the host .governance tree,
+        which does not exist under the test cwd)."""
+        from checks import sd_integrity as sdi
+        with patch.object(
+                sdi, "scan_sd_readability",
+                return_value={"scanned": 2, "pass": False,
+                              "unreadable": [str(vw.ROOT / "package.json")],
+                              "remediation": [
+                                  'takeown /f "pkg" && icacls /grant']}), \
+             patch.object(vw, "check_release_readiness_fact_source",
+                          return_value=[]), \
+             patch.object(vw, "check_hot_fact_source_consistency",
+                          return_value=[]), \
+             patch.object(vw, "check_runtime_readiness_matrix",
+                          return_value=[]), \
+             patch.object(vw, "check_first_session_measurement",
+                          return_value=[]):
+            result = vw.check_release_readiness(version="0.93.0")
+        details = result["details"]
+        self.assertIn("sd_integrity", details)
+        sd = details["sd_integrity"]
+        self.assertFalse(sd["pass"])
+        self.assertIn("takeown", " ".join(sd["remediation"]))
+        self.assertTrue(any("takeown" in issue for issue in result["issues"]))
+
+    def test_release_readiness_surfaces_projection_plan_error(self):
+        """FIX-406 F-1: a projection plan that cannot be built must surface
+        as an EXPLICIT sd-integrity issue — the pre-fix shape silently
+        dropped the ``error`` key behind ``.get("paths", [])`` and the
+        readiness aggregate spun a vacuous PASS over an empty face."""
+        from checks import sd_integrity as sdi
+        with patch.object(
+                sdi, "projection_face_paths",
+                return_value={"error": "projection plan unreadable: "
+                                       "boom (fixture)", "paths": []}), \
+             patch.object(vw, "check_release_readiness_fact_source",
+                          return_value=[]), \
+             patch.object(vw, "check_hot_fact_source_consistency",
+                          return_value=[]), \
+             patch.object(vw, "check_runtime_readiness_matrix",
+                          return_value=[]), \
+             patch.object(vw, "check_first_session_measurement",
+                          return_value=[]):
+            result = vw.check_release_readiness(version="0.93.0")
+        self.assertTrue(
+            any("projection plan unreadable" in issue
+                for issue in result["issues"]), result["issues"])
+        self.assertEqual(result["details"]["sd_integrity"]["face_error"],
+                         "projection plan unreadable: boom (fixture)")
+
+    def test_write_face_fails_with_exit_one_on_sd_damage(self):
+        """FIX-406 P2-3: the --write wiring's FAIL→exit-1 contract under a
+        mocked damaged scan (the write itself is mocked PASS so no real
+        projection byte moves)."""
+        from checks import sd_integrity as sdi
+        damaged = {"scanned": 1, "pass": False,
+                   "unreadable": [str(vw.ROOT / "plugin.json")],
+                   "remediation": [
+                       'takeown /f "x" && icacls /f "x" '
+                       '/grant "%USERNAME%":F']}
+        with patch.object(vw, "write_projections") as write_mock, \
+             patch.object(sdi, "scan_sd_readability",
+                          return_value=damaged) as scan_mock:
+            write_mock.return_value.as_dict.return_value = {
+                "state": "PASS", "issues": [], "facts": {"written": 0}}
+            args = SimpleNamespace(write=True, config=None)
+            with self.assertRaises(SystemExit) as raised:
+                vw.cmd_release_projection(args)
+        self.assertEqual(raised.exception.code, 1)
+        self.assertTrue(write_mock.called)
+        self.assertTrue(scan_mock.called)
 
 
 class InjectionContractStagedAnchorTests(unittest.TestCase):

@@ -59,7 +59,7 @@ from contracts import (  # noqa: E402
 
 GOAL = ("目标对齐：批 1 写入器族把确定性结构操作软件化，"
         "消灭手工追加 schema 事故类，与项目目标（过程自动、质量不低质）一致。")
-USER_IMPACT = ("用户影响：获得=锁/EVD/DEC 机器写入路径；感知=结构操作不再手写；"
+USER_IMPACT = ("用户影响：获得=自动生效；感知=结构操作不再手写；"
                "体验变化=正向；迁移指南=不需要。")
 DESCRIPTION = (f"FEAT-046 交付三命令写入器族（locks/evidence/decision）验证。"
                f"{GOAL} {USER_IMPACT}")
@@ -302,6 +302,70 @@ class EvidenceAppendTests(StoreTestCase):
         self.assertFalse(result.get("error"), result)
         self.assertIn("事实依据：没有前缀的载荷会被写入器规范化",
                       self.evidence_rows()[-1])
+
+    # ── B4-1 (FIX-405 batch): Check 17 mirrored at intake ────────────────
+
+    def test_user_impact_with_bad_subfields_refused_at_append(self):
+        """A description carrying 用户影响： but missing any of the four
+        sub-fields (获得=/感知=/体验变化=/迁移指南=) is refused AT APPEND
+        — the EVD-1252 class (a Check 17 after-the-fact red row) can never
+        be written again."""
+        before = self.evidence_bytes()
+        payload = _call_evidence(
+            self.gov,
+            overrides={"description":
+                       "B4-1 验证。"
+                       + GOAL
+                       + " 用户影响：获得=自动生效；感知=可见；"
+                         "体验变化=正向。"},
+            operation_id=gs.new_operation_id())
+        self.assertRefused(payload, "schema_violation")
+        self.assertIn("迁移指南=", payload["detail"])
+        self.assertIn("Check 17", payload["detail"])
+        self.assertEqual(self.evidence_bytes(), before)
+
+    def test_user_impact_with_invalid_obtain_value_refused(self):
+        before = self.evidence_bytes()
+        payload = _call_evidence(
+            self.gov,
+            overrides={"description":
+                       "B4-1 验证。"
+                       + GOAL
+                       + " 用户影响：获得=某种不在枚举里的获得途径；感知=可见；"
+                         "体验变化=正向；迁移指南=不需要。"},
+            operation_id=gs.new_operation_id())
+        self.assertRefused(payload, "schema_violation")
+        self.assertIn("获得", payload["detail"])
+        self.assertEqual(self.evidence_bytes(), before)
+
+    def test_description_without_user_impact_passes_unchanged(self):
+        """The intake mirror triggers ONLY when the 用户影响： passage is
+        present — quick-lane / governance rows without it keep the
+        pre-existing skeleton contract (zero behavior change)."""
+        result = _call_evidence(
+            self.gov,
+            overrides={"description":
+                       "B4-1 无用户影响段验证。" + GOAL},
+            operation_id=gs.new_operation_id())
+        self.assertFalse(result.get("error"), result)
+        self.assertEqual(len(self.evidence_rows()), 3)
+
+    def test_breaking_change_without_migration_guide_refused(self):
+        """FIX-406 F-2: the Check 17 rule-5 BLOCKING mirror — 体验变化=是
+        (a breaking user-visible change) with 迁移指南=不需要 is refused
+        at intake (migration guidance is mandatory for breaking rows)."""
+        before = self.evidence_bytes()
+        payload = _call_evidence(
+            self.gov,
+            overrides={"description":
+                       "FIX-406 F-2 验证。"
+                       + GOAL
+                       + " 用户影响：获得=自动生效；感知=可见；"
+                         "体验变化=是；迁移指南=不需要。"},
+            operation_id=gs.new_operation_id())
+        self.assertRefused(payload, "schema_violation")
+        self.assertIn("迁移指南", payload["detail"])
+        self.assertEqual(self.evidence_bytes(), before)
 
     def test_empty_basis_refused(self):
         payload = _call_evidence(

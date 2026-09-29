@@ -1041,7 +1041,8 @@ def _build_evidence_row(*, evd_id, task_id, evd_type, description, basis,
 
 def _validate_evidence_content(cells):
     """Skeleton-only content checks (W-4: NO semantic scanning beyond the
-    two mirrored engine skeleton rules)."""
+    mirrored engine rules — Check 16 skeleton pair + the B4-1 Check 17
+    intake mirror)."""
     goal = _GOAL_ALIGNMENT_RE.search(cells[3])
     if goal is None:
         _refuse({
@@ -1062,6 +1063,82 @@ def _validate_evidence_content(cells):
         _refuse({
             "code": "schema_violation",
             "detail": "basis cell must carry a non-empty 事实依据： payload",
+        })
+    _validate_user_impact_passage(cells[3])
+
+
+# B4-1 (FIX-405 batch) / FIX-406 F-2: the Check 17 intake mirror — a
+# description that CARRIES a 用户影响： passage must already satisfy the
+# four-subfield shape (获得=/感知=/体验变化=/迁移指南=), the 获得= closed
+# vocabulary, and the rule-5 breaking-change mirror (体验变化=是 with
+# 迁移指南=不需要) at APPEND time. Coverage statement (FIX-406 F-2
+# narrowed): rules 1-4's intake-judgeable faces (missing subfields /
+# out-of-enum 获得 / breaking-change-without-migration) can no longer be
+# WRITTEN through this writer — the EVD-1252 class is closed at intake.
+# Check 17's rule 6 (migration-guide PATH existence) depends on repo
+# state at read time and stays with the engine check as the final gate;
+# rows without the passage keep the pre-existing skeleton contract.
+#
+# FIX-406 F-2 predicate unification: the subfield regexes, the closed
+# vocabulary, and the passage terminator live HERE as the single
+# definition — the engine's Check 17 imports these constants (one
+# definition, two consumers; the writer domain owns the intake shape).
+_USER_IMPACT_PASSAGE_RE = re.compile(
+    r"用户影响[:：](.+?)(?:目标对齐[:：]|范围[:：]|依赖[:：]|架构影响[:：]|$)",
+    re.S)
+VALID_OBTAIN_VALUES = (
+    "plugin update", "governance-init", "governance-update",
+    "手动", "自动生效（下次会话）", "自动生效", "不需要",
+)
+USER_IMPACT_SUBFIELD_RES = (
+    ("获得=", re.compile(r"获得=([^,，;；]*)")),
+    ("感知=", re.compile(r"感知=([^,，;；]*)")),
+    ("体验变化=", re.compile(r"体验变化=([^,，;；]*)")),
+    ("迁移指南=", re.compile(r"迁移指南=([^,，;；]*)")),
+)
+
+
+def _validate_user_impact_passage(description):
+    """Check 17 mirrored at intake: refuse a malformed 用户影响 passage."""
+    passage = _USER_IMPACT_PASSAGE_RE.search(description)
+    if passage is None:
+        return
+    text = passage.group(1).strip()
+    missing = []
+    values = {}
+    for label, pattern in USER_IMPACT_SUBFIELD_RES:
+        match = pattern.search(text)
+        if match is None or not match.group(1).strip():
+            missing.append(label)
+        else:
+            # trailing sentence punctuation rides the LAST subfield's value
+            # (the passage ends with 「…迁移指南=不需要。」) — strip it before
+            # any equality/vocabulary comparison.
+            values[label] = match.group(1).strip().rstrip("。.，,；;、 ")
+    if missing:
+        _refuse({
+            "code": "schema_violation",
+            "detail": "用户影响 passage lacks sub-field(s): "
+                      f"{', '.join(missing)} (Check 17 mirrored at intake — "
+                      "拒坏格式于 append 时，不再产生事后红灯)",
+        })
+    obtain_value = values.get("获得=")
+    if obtain_value is not None and obtain_value not in VALID_OBTAIN_VALUES:
+        _refuse({
+            "code": "schema_violation",
+            "detail": f"获得= 值 {obtain_value!r} 不在合法枚举 "
+                      f"({', '.join(VALID_OBTAIN_VALUES)}) — Check 17 "
+                      "mirrored at intake",
+        })
+    # FIX-406 F-2: rule-5 BLOCKING mirror — a breaking user-visible change
+    # (体验变化=是) with no migration guide (迁移指南=不需要) is refused.
+    if (values.get("体验变化=") == "是"
+            and values.get("迁移指南=") == "不需要"):
+        _refuse({
+            "code": "schema_violation",
+            "detail": "用户影响 passage: 体验变化=是（破坏性变更）搭配 "
+                      "迁移指南=不需要 — 破坏性变更 MUST 携带迁移指南"
+                      "（Check 17 rule-5 BLOCKING mirrored at intake）",
         })
 
 
@@ -1104,6 +1181,11 @@ def evidence_append(*, task_id, evd_type, description, basis, artifacts="",
     actor = _require_text("--actor", actor)
     gate = _require_text("--gate", gate)
     conclusion = _require_text("--conclusion", conclusion)
+    # B4-1 (FIX-405 batch): the Check 17 intake mirror runs BEFORE any
+    # write — a malformed 用户影响 passage is refused with zero bytes
+    # written (the post-write row validator re-runs the same predicate for
+    # structural parity).
+    _validate_user_impact_passage(description)
     date_str = _require_date("--date", date) if date \
         else now.date().isoformat()
     if expected_revision is not None:

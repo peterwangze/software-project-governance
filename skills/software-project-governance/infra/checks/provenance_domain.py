@@ -244,13 +244,29 @@ def check_priority_inversion(rows) -> dict:
                     "（终局拦截=发布门，ADR-021 §2.2.2(5)/§2.2.4）".format(
                         _task_id(m), rank_m, _task_id(u), rank_u))
             else:
-                invx_pairs.append([_task_id(m), _task_id(u)])
-                warnings.append(
-                    "INV-X: `{0}`（machine-signal）排位高于 user-named 项"
-                    " `{1}`，但 P 级未全部可解析（{2!r} vs {3!r}）——无法"
-                    "证明同级，保守披露不阻断（ADR-021 §2.2.3 FEAT-080）"
-                    .format(_task_id(m), _task_id(u),
-                            m.get("priority"), u.get("priority")))
+                if rank_m is None or rank_u is None:
+                    invx_pairs.append([_task_id(m), _task_id(u)])
+                    warnings.append(
+                        "INV-X: `{0}`（machine-signal）排位高于 user-named 项"
+                        " `{1}`，但 P 级未全部可解析（{2!r} vs {3!r}）——无法"
+                        "证明同级，保守披露不阻断（ADR-021 §2.2.3 FEAT-080）"
+                        .format(_task_id(m), _task_id(u),
+                                m.get("priority"), u.get("priority")))
+                else:
+                    # B4-2 (FIX-405 batch): resolved-but-out-of-order — M's
+                    # P-level is STRICTLY LOWER yet it ranks above an OPEN
+                    # user-named item. A correct sort key makes this shape
+                    # impossible (P1 always precedes P2), so its occurrence
+                    # proves a sort defect or a hand-written recommendation
+                    # bypass: FAIL (ADR-021 §2.2.3 R0 立论——排序缺陷或手写
+                    # 绕过均 FAIL), never a mere disclosure.
+                    inv1_pairs.append([_task_id(m), _task_id(u)])
+                    issues.append(
+                        "INV-1: `{0}`（machine-signal，P{1}）排位高于更高优先"
+                        "级开放 user-named 项 `{2}`（P{3}）——排序键正确时不可"
+                        "能的形态：排序缺陷或手写推荐绕过（ADR-021 §2.2.3 / "
+                        "B4-2 拆臂）".format(
+                            _task_id(m), rank_m, _task_id(u), rank_u))
 
     # INV-2 — parked user-named while machine-signal fills the board.
     inv2_parked = [

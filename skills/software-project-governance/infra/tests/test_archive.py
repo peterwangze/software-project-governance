@@ -20,9 +20,12 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import sys
 import tempfile
 import unittest
+import uuid
+from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 
@@ -5871,6 +5874,215 @@ class FEAT076Q6DateWindowFallbackTests(unittest.TestCase):
         self.assertEqual(by_key[("EVD", "EVD-1")]["reason"],
                          "no_task_family_ref")
         self.assertFalse(by_key[("EVD", "EVD-1")]["migrate"])
+
+
+class FIX407DecisionNarrativeMigrationTests(unittest.TestCase):
+    """FIX-407 (EXC-003 终局票): narrative DEC row-family migration.
+
+    Root cause (FEAT-076 report + live dry-run 2026-09-29): 107 of 169 hot
+    decision rows are hand-era narrative rows — compact 5-cell form
+    编号/日期/决策人/决策内容/理由 — that fail the canonical 11-column gate
+    as decision_row_too_short, leaving ZERO migration candidates and the
+    decision-log stuck above the 250,000B global error line under EXC-003
+    (expires 2026-10-12, no renewal, 0.93.0 admission MUST expire it).
+
+    FIX-407 recognizes narrative rows line-level — DEC-NUMBER anchor + ISO
+    date anchor, machine format NOT required — and migrates the terminal
+    ones under the Q6 date-window ruling (DEC-278 单元三, the same rule the
+    evidence family uses): row's own date ≤ window-end release date.  Every
+    unprovable shape stays hot fail-closed: duplicated DEC anchor, no ISO
+    date, any whole-line task ref that cannot be PROVEN archived (active /
+    missing / ambiguous — the fail-closed union; prose mentions can only
+    retain, never release or re-attribute, per the FIX-312 DEC-187 lesson),
+    or an unresolvable/too-new window end.
+    """
+
+    WINDOW_START = "0.1.0"
+    WINDOW_END = "0.91.0"
+    END_DATE = date(2026, 9, 28)
+
+    def setUp(self):
+        import archive
+        self.archive = archive
+
+    def _writable_root(self):
+        # FIX-407: tempfile.mkdtemp dirs (mode 0o700) deny writes under the
+        # UAC-filtered DSH sandbox token — plain default-mode mkdir keeps the
+        # fixture writable here (same discipline as FIX-404's test helper).
+        root = Path(tempfile.gettempdir()) / (
+            "fix407-archive-test-" + uuid.uuid4().hex[:12])
+        root.mkdir()
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        return root
+
+    DECISION_HEADER = (
+        "| 编号 | 日期 | 主题 | 背景 | 决策内容 | 备选方案 | 选择原因 "
+        "| 影响范围 | 决策人 | 关联任务 | 后续动作 |")
+
+    def _make_decision_log(self, gov, rows):
+        lines = ["# 决策记录", "", self.DECISION_HEADER,
+                 "| --- |" * 2 + " --- |" * 9]
+        lines.extend(rows)
+        (gov / "decision-log.md").write_text(
+            "\n".join(lines) + "\n", encoding="utf-8")
+
+    def _run_migrate(self, gov, task_versions=None):
+        explain = []
+        with patch.object(self.archive, "ROOT", gov.parent), \
+                patch.object(self.archive, "PLUGIN_ROOT", gov.parent), \
+                patch.object(self.archive, "_window_end_release_date",
+                             return_value=self.END_DATE):
+            count = self.archive._migrate_decisions(
+                self.WINDOW_START, self.WINDOW_END,
+                task_versions or {"FIX-084": "0.38.0"},
+                dry_run=False, explain_out=explain)
+        return count, explain
+
+    def _reason_of(self, explain, dec_id_prefix):
+        for record in explain:
+            if record["id"].startswith(dec_id_prefix):
+                return record["reason"]
+        return None
+
+    def test_narrative_row_migrates_via_q6_date_window(self):
+        """Positive: a parseable terminal narrative row (DEC anchor + ISO
+        date + zero unprovable refs, dated inside the window) migrates; the
+        archive preserves the '## DEC-n:' header + Q6 attribution + the
+        verbatim original row; an active machine row stays hot."""
+        root = self._writable_root()
+        gov = root / ".governance"
+        gov.mkdir()
+        narrative = ("| DEC-193 | 2026-05-13 | Coordinator | 自约 evidence.* "
+                     "写入路径收口 | 手写纪元紧凑行——Q6 日期窗裁决 |")
+        machine_active = ("| DEC-400 | 2026-05-01 | title | b | c | d | e "
+                          "| f | g | FIX-999 | act |")
+        self._make_decision_log(gov, [narrative, machine_active])
+        count, explain = self._run_migrate(gov)
+        self.assertEqual(1, count)
+        self.assertEqual("would_archive_narrative_q6",
+                         self._reason_of(explain, "DEC-193"))
+        self.assertEqual("retained_active_task_ref",
+                         self._reason_of(explain, "DEC-400"))
+        hot = (gov / "decision-log.md").read_text(encoding="utf-8")
+        self.assertIn("DEC-400", hot)
+        self.assertNotIn("DEC-193", hot)
+        arch = (gov / "archive" / "decisions" /
+                f"decisions-v{self.WINDOW_START}-{self.WINDOW_END}.md"
+                ).read_text(encoding="utf-8")
+        self.assertIn("## DEC-193:", arch)
+        self.assertIn("Q6 日期窗", arch)
+        # FIX-162 P2-1 fidelity: the full original narrative row survives
+        # verbatim inside the quoted-preservation block.
+        self.assertIn("> | DEC-193 | 2026-05-13 | Coordinator | 自约 evidence.*",
+                      arch)
+
+    def test_narrative_boundary_date_equal_to_window_end_migrates(self):
+        """Boundary: row date == window-end release date is inclusive (≤)."""
+        root = self._writable_root()
+        gov = root / ".governance"
+        gov.mkdir()
+        self._make_decision_log(
+            gov, ["| DEC-180 | 2026-09-28 | C | 内容 | 理由 |"])
+        count, explain = self._run_migrate(gov)
+        self.assertEqual(1, count)
+        self.assertEqual("would_archive_narrative_q6",
+                         self._reason_of(explain, "DEC-180"))
+
+    def test_narrative_row_after_window_end_retained(self):
+        """Rows newer than the window-end release date are the working set."""
+        root = self._writable_root()
+        gov = root / ".governance"
+        gov.mkdir()
+        self._make_decision_log(
+            gov, ["| DEC-292 | 2026-09-29 | C | 内容 | 理由 |"])
+        count, explain = self._run_migrate(gov)
+        self.assertEqual(0, count)
+        self.assertEqual("narrative_date_out_of_window",
+                         self._reason_of(explain, "DEC-292"))
+        self.assertIn("DEC-292",
+                      (gov / "decision-log.md").read_text(encoding="utf-8"))
+
+    def test_narrative_row_with_unproven_ref_retained(self):
+        """Fail-closed union: a whole-line task ref that cannot be proven
+        archived (missing FIX-999) retains the narrative row."""
+        root = self._writable_root()
+        gov = root / ".governance"
+        gov.mkdir()
+        self._make_decision_log(
+            gov, ["| DEC-195 | 2026-05-14 | C | 决策内容提及 FIX-999 处置 | 理由 |"])
+        count, explain = self._run_migrate(gov)
+        self.assertEqual(0, count)
+        self.assertEqual("narrative_retained_unproven_ref",
+                         self._reason_of(explain, "DEC-195"))
+
+    def test_narrative_row_with_archived_refs_migrates_via_q6_not_attribution(self):
+        """Whole-line archived refs do NOT re-attribute the row (FIX-312
+        DEC-187 lesson): attribution stays the Q6 window end, never the
+        refs' machine versions."""
+        root = self._writable_root()
+        gov = root / ".governance"
+        gov.mkdir()
+        self._make_decision_log(
+            gov, ["| DEC-197 | 2026-05-15 | C | 决策内容提及 FIX-084 | 理由 |"])
+        count, explain = self._run_migrate(gov)
+        self.assertEqual(1, count)
+        arch = (gov / "archive" / "decisions" /
+                f"decisions-v{self.WINDOW_START}-{self.WINDOW_END}.md"
+                ).read_text(encoding="utf-8")
+        self.assertIn(f"v{self.WINDOW_END}", arch)
+        self.assertNotIn("v0.38.0（关联 task 已归档）", arch)
+
+    def test_narrative_row_without_iso_date_retained(self):
+        """Undatable narrative rows stay hot fail-closed."""
+        root = self._writable_root()
+        gov = root / ".governance"
+        gov.mkdir()
+        self._make_decision_log(
+            gov, ["| DEC-181 | 无日期 | C | 内容 | 理由 |"])
+        count, explain = self._run_migrate(gov)
+        self.assertEqual(0, count)
+        self.assertEqual("narrative_undatable",
+                         self._reason_of(explain, "DEC-181"))
+
+    def test_narrative_anchor_duplicate_with_machine_row_retained(self):
+        """A narrative anchor colliding with ANY other DEC row (machine or
+        narrative) retains the narrative row — identity cannot be split."""
+        root = self._writable_root()
+        gov = root / ".governance"
+        gov.mkdir()
+        machine = ("| DEC-194 | 2026-05-01 | title | b | c | d | e | f "
+                   "| g | FIX-999 | act |")
+        narrative = ("| DEC-194 补记 | 2026-05-02 | Coordinator | 补记内容 "
+                     "| 理由 |")
+        self._make_decision_log(gov, [machine, narrative])
+        count, explain = self._run_migrate(gov)
+        self.assertEqual(0, count)
+        self.assertEqual("narrative_duplicate_anchor",
+                         self._reason_of(explain, "DEC-194 补记"))
+        self.assertEqual("retained_active_task_ref",
+                         self._reason_of(explain, "DEC-194"))
+        hot = (gov / "decision-log.md").read_text(encoding="utf-8")
+        self.assertIn("DEC-194 补记", hot)
+
+    def test_window_end_unreleased_retains_all_narrative(self):
+        """Q6 fail-closed: an unresolvable window-end release date refuses
+        the fallback entirely (never a guess)."""
+        root = self._writable_root()
+        gov = root / ".governance"
+        gov.mkdir()
+        self._make_decision_log(
+            gov, ["| DEC-182 | 2026-05-16 | C | 内容 | 理由 |"])
+        explain = []
+        with patch.object(self.archive, "ROOT", root), \
+                patch.object(self.archive, "PLUGIN_ROOT", root), \
+                patch.object(self.archive, "_window_end_release_date",
+                             return_value=None):
+            count = self.archive._migrate_decisions(
+                self.WINDOW_START, self.WINDOW_END, {"FIX-084": "0.38.0"},
+                dry_run=False, explain_out=explain)
+        self.assertEqual(0, count)
+        self.assertEqual("narrative_date_out_of_window",
+                         self._reason_of(explain, "DEC-182"))
 
 
 if __name__ == "__main__":

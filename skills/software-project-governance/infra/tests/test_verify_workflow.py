@@ -20353,14 +20353,30 @@ class SdIntegrityGateTests(unittest.TestCase):
         zero new engine prints — the aggregate report carries it). The
         sibling fact-source sub-checks are patched empty so this test
         judges the SD face alone (they read the host .governance tree,
-        which does not exist under the test cwd)."""
+        which does not exist under the test cwd).  FIX-408: hermetic on
+        BOTH sides — the simulated unreadable path is a FICTION (asserted
+        below), and check_projection_sync is patched too, because the
+        readiness aggregate reads the REAL e2e projection mirrors through
+        it and an SD-damaged mirror (RISK-061 class — restricted-token
+        projection writes) must crash the engine's own gate report, never
+        this test."""
         from checks import sd_integrity as sdi
+        simulated = vw.ROOT / "sd-simulated-unreadable-fixture.txt"
+        # FIX-408 anti-regression: the simulated target never names a real
+        # repo path — the face string only ever flows through the mock.
+        self.assertFalse(simulated.exists(), simulated)
         with patch.object(
                 sdi, "scan_sd_readability",
                 return_value={"scanned": 2, "pass": False,
-                              "unreadable": [str(vw.ROOT / "package.json")],
+                              "unreadable": [str(simulated)],
                               "remediation": [
                                   'takeown /f "pkg" && icacls /grant']}), \
+             patch.object(vw, "check_projection_sync",
+                          return_value={"pass": True, "issues": [],
+                                        "mirrors_checked": 0,
+                                        "mirrors_discovered": 0,
+                                        "mirrors_skipped_untracked": 0,
+                                        "source_version": None}), \
              patch.object(vw, "check_release_readiness_fact_source",
                           return_value=[]), \
              patch.object(vw, "check_hot_fact_source_consistency",
@@ -20387,6 +20403,12 @@ class SdIntegrityGateTests(unittest.TestCase):
                 sdi, "projection_face_paths",
                 return_value={"error": "projection plan unreadable: "
                                        "boom (fixture)", "paths": []}), \
+             patch.object(vw, "check_projection_sync",
+                          return_value={"pass": True, "issues": [],
+                                        "mirrors_checked": 0,
+                                        "mirrors_discovered": 0,
+                                        "mirrors_skipped_untracked": 0,
+                                        "source_version": None}), \
              patch.object(vw, "check_release_readiness_fact_source",
                           return_value=[]), \
              patch.object(vw, "check_hot_fact_source_consistency",

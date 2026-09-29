@@ -222,9 +222,9 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
 
 **一键验证**：`governance-bootstrap --format json | --format text`（`behavior` 面 + 文本行）；守护测试 `infra/tests/test_behavior_profile.py`；协议面守护（六个注入面必须携带 `行为灰度开关` 标记）同文件。
 
-### 关键行为契约（MUST——注入面最小契约集，FIX-253/REQ-112；完整规则见 references/behavior-protocol.md M7.4 / M7.7）
+### 关键行为契约（MUST；完整规则：references/behavior-protocol.md M7.4/M7.7）
 
-以下六条与铁律同级，违反任何一条 = 流程违规。本段是注入面的 canonical 投影定义处（DSH persona 携带其压缩形式；`check-injection-contract` 锚点守护）：
+六条与铁律同级，违反任一 = 流程违规（本段为 canonical 投影；persona 携带压缩形式，`check-injection-contract` 锚点守护）：
 
 1. **复审必达（M7.4 step 4.6，T1-T4）**：收到 Reviewer 审查结论后 MUST 立即判定并执行——结论含 NEEDS_CHANGE 且 round<3（触发器 T1）→ spawn 同一 Reviewer 复审（round+1，prompt 注入前轮 review 报告路径为强制读取项），不得跳过、不得询问；round≥3 仍 NEEDS_CHANGE（触发器 T2）→ BLOCKED + escalation AskUserQuestion；APPROVED 或带 `unresolved_blockers=0` 的 APPROVED_WITH_NOTES 为唯一通过终态；BLOCKED → escalation。
 2. **完成必推荐（M7.4 step 6，FIX-223/237.5 增强；FEAT-072/DEC-266 三要素推荐卡）**：任务标记已完成→MUST 运行 `task-priority-analysis`（fail-closed 不跳过），快照记入 evidence-log→按依赖推荐 1~3 项；AskUserQuestion 前 MUST 给正文三要素推荐卡（服务目标/解决问题/方案要点，附可追溯依赖理由）；依据缺失 MUST 明示、不得编造，影响执行则先澄清；按 DEC-143 用对应短选项确认，MUST NOT 默认自主执行；空推荐→结构化空原因；MUST NOT 直接结束会话。

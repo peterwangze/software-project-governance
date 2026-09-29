@@ -989,6 +989,78 @@ def _decision_archive_version(line, related_idx, task_versions):
         task_versions[best])
 
 
+def _decision_narrative_title(parts):
+    """FIX-407 (EXC-003 终局票): display title for a narrative decision row.
+
+    The hand-era compact form is 编号/日期/决策人/决策内容/理由 — the first
+    content-bearing cell after the id/date prefix (决策内容, falling back to
+    the owner cell), truncated for the archive header. The full original row
+    is preserved verbatim below the header regardless (FIX-162 P2-1), and a
+    non-``DEC-\\d+``-clean id (e.g. ``DEC-194 补记``) simply falls to the
+    FIX-384 entry-less archive registration — both index calibers stay
+    single-sourced on the strict extractor regex.
+    """
+    for cell in parts[4:6]:
+        if cell:
+            return cell[:80]
+    return (parts[3] if len(parts) > 3 else "") or "（narrative 行）"
+
+
+def _decision_narrative_verdict(line, dec_id, anchor_counts, task_versions,
+                                ref_verdict, version_end):
+    """FIX-407 (EXC-003 终局票): Q6 date-window verdict for narrative DEC rows.
+
+    Narrative 形态识别 is LINE-LEVEL — a ``| DEC-…`` row that already failed
+    the canonical column gate (``decision_row_too_short``: hand-era compact
+    rows, typically 5 cells) is recognized by its DEC-NUMBER anchor plus an
+    ISO date anchor somewhere in the row; the machine-written format is NOT
+    required. The Q6 ruling (DEC-278 单元三 — the same rule the evidence
+    family's unlocked families use) then decides: a row migrates ONLY when
+    its own date proves closed-cycle membership (row date ≤ the window-end
+    version's release date). Fail-closed everywhere:
+
+      - anchor duplicated by ANY other DEC row in the file (machine or
+        narrative) → retained (``narrative_duplicate_anchor``);
+      - no ISO date in the row → retained (``narrative_undatable``);
+      - ANY task-family id token ANYWHERE in the row that the shared ref
+        typer cannot PROVE archived (active / missing / ambiguous /
+        layout-anomaly) → retained (``narrative_retained_unproven_ref``) —
+        the fail-closed union discipline: whole-line prose mentions can
+        only retain, never release or re-attribute a row (the FIX-312
+        DEC-187 lesson);
+      - window-end release date unresolvable, or row date after it →
+        retained (``narrative_date_out_of_window`` — undatable-window and
+        working-set rows share the fail-closed residue).
+
+    Returns ``(migrate, reason, detail, attribution_version)`` — the
+    attribution on success is ALWAYS the window end (never a ref's machine
+    version: narrative columns cannot identify a governing ref, so the row's
+    own date is the only sanctioned attribution).
+    """
+    anchor = re.match(r"DEC-(\d+)", dec_id or "")
+    if anchor is None:
+        return False, "narrative_no_anchor", "", None
+    anchor_id = "DEC-{0}".format(anchor.group(1))
+    if anchor_counts.get(anchor_id, 0) > 1:
+        return False, "narrative_duplicate_anchor", anchor_id, None
+    if _ROW_DATE_RE.search(line) is None:
+        return False, "narrative_undatable", "", None
+    refs = []
+    for m in _DECISION_ID_TOKEN_RE.finditer(line):
+        tid = "{0}-{1}".format(m.group(1), m.group(2))
+        if _is_task_family_id(tid) and tid not in refs:
+            refs.append(tid)
+    unproven = [t for t in refs if ref_verdict(t)[1] != "pass"]
+    if unproven:
+        return (False, "narrative_retained_unproven_ref",
+                "active/missing/ambiguous refs: " + ", ".join(unproven[:5]),
+                None)
+    fallback = _q6_date_window_fallback(line, version_end)
+    if fallback is None:
+        return False, "narrative_date_out_of_window", "", None
+    return True, "would_archive_narrative_q6", fallback, version_end
+
+
 # ── Risk status filtering (FIX-170 / AUDIT-127) ────────────────────
 
 # Closed/done status markers — a risk is migratable ONLY if its status cell
@@ -1507,6 +1579,24 @@ def _migrate_decisions(version_start, version_end, task_versions, dry_run=False,
     content = dlog.read_text(encoding="utf-8")
     lines = content.split("\n")
     related_idx = _decision_related_column_index(lines)
+    # FIX-407 (EXC-003 终局票): pre-pass anchor census + shared ref typer for
+    # the narrative row-family fallback (see _decision_narrative_verdict).
+    anchor_counts = {}
+    for line in lines:
+        stripped = line.strip()
+        if not stripped.startswith("| DEC-"):
+            continue
+        row_parts = [p.strip() for p in line.split("|")]
+        anchor_m = re.match(r"DEC-(\d+)", row_parts[1] if len(row_parts) > 1 else "")
+        if anchor_m:
+            anchor_id = "DEC-" + anchor_m.group(1)
+            anchor_counts[anchor_id] = anchor_counts.get(anchor_id, 0) + 1
+    try:
+        narrative_context = _build_classification_context()
+    except (OSError, ValueError):
+        narrative_context = {"hot_tasks": {}, "hot_anomalies": {},
+                             "requirement_ids": set()}
+    narrative_ref_verdict = _make_ref_verdict(task_versions, narrative_context)
 
     def _note(dec_id, reason, detail=""):
         if explain_out is not None:
@@ -1515,7 +1605,7 @@ def _migrate_decisions(version_start, version_end, task_versions, dry_run=False,
             )
 
     kept_lines = []
-    archived = []  # (dec_id, title, version, original_line)
+    archived = []  # (dec_id, title, version, original_line, q6_detail|None)
     for line in lines:
         stripped = line.strip()
         if not stripped.startswith("| DEC-"):
@@ -1530,9 +1620,23 @@ def _migrate_decisions(version_start, version_end, task_versions, dry_run=False,
         ver, reason, detail = _decision_archive_version(
             line, related_idx, task_versions)
         if ver and _version_in_range(ver, version_start, version_end):
-            archived.append((dec_id, title, ver, line))
+            archived.append((dec_id, title, ver, line, None))
             _note(dec_id, "would_archive", f"v{ver}")
         else:
+            if reason == "decision_row_too_short":
+                # FIX-407: narrative row-family fallback — line-level DEC
+                # anchor + ISO date recognition (machine format NOT
+                # required), Q6 date-window ruling, fail-closed retention.
+                migrate, n_reason, n_detail, n_ver = _decision_narrative_verdict(
+                    line, dec_id, anchor_counts, task_versions,
+                    narrative_ref_verdict, version_end)
+                if migrate and _version_in_range(n_ver, version_start,
+                                                 version_end):
+                    archived.append((dec_id, _decision_narrative_title(parts),
+                                     n_ver, line, n_detail))
+                    _note(dec_id, "would_archive_narrative_q6", n_detail)
+                    continue
+                reason, detail = n_reason, n_detail
             kept_lines.append(line)
             if ver is None:
                 _note(dec_id, reason, detail)
@@ -1546,11 +1650,16 @@ def _migrate_decisions(version_start, version_end, task_versions, dry_run=False,
 
     _ensure_archive_dirs()
     archive_body = []
-    for dec_id, title, ver, line in archived:
+    for dec_id, title, ver, line, q6_detail in archived:
         # build_index expects '## DEC-{n}: {title}' header for indexing.
         archive_body.append(f"## {dec_id}: {title}")
         archive_body.append("")
-        archive_body.append(f"- 归档版本: v{ver}（关联 task 已归档）")
+        if q6_detail:
+            # FIX-407: narrative row — Q6 date-window attribution (the row's
+            # own date ≤ window-end release date; refs never re-attribute).
+            archive_body.append(f"- 归档版本: v{ver}（narrative 行 Q6 日期窗：{q6_detail}）")
+        else:
+            archive_body.append(f"- 归档版本: v{ver}（关联 task 已归档）")
         archive_body.append("")
         # FIX-162 review P2-1: preserve the full original decision row (9+ cols:
         # 背景/决策内容/备选/原因/影响/决策人/关联任务/后续动作) for fidelity,
@@ -3242,7 +3351,10 @@ def _finalize_explain(rows):
     scanned = len(rows)
     unknown_rows = [r for r in rows if r["reason"] in _EXPLAIN_UNKNOWN_REASONS]
     parsed = scanned - len(unknown_rows)
-    would = sum(1 for r in rows if r["reason"] == "would_archive")
+    # FIX-407: narrative candidacy rides the same would_archive* prefix
+    # (would_archive_narrative_q6) — one vocabulary, one count.
+    would = sum(1 for r in rows
+                if str(r["reason"]).startswith("would_archive"))
     return {
         "scanned": scanned,
         "parsed": parsed,

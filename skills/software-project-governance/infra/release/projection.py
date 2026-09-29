@@ -10,6 +10,7 @@ import re
 import shutil
 import tempfile
 from typing import Dict, Iterable, List, Optional
+import uuid
 
 from .model import CheckResult
 
@@ -573,6 +574,35 @@ def check_projections(root: Path, config_path: Optional[Path] = None) -> CheckRe
     )
 
 
+def _journal_dir(root: Path) -> Path:
+    """FIX-409 (RISK-061 root fix): the rollback journal directory.
+
+    ``tempfile.mkdtemp`` created this with mode 0o700 — under a
+    UAC-filtered token every file staged inside inherited a deny-read
+    security descriptor, and ``os.replace`` then carried that damaged SD
+    onto the projection target (the RISK-061 damage class: two e2e
+    projection faces made unreadable plus undeletable ``spg-projection-*``
+    journal litter, reproduced in-session 2026-09-29).  A uuid-named
+    default-mode mkdir keeps the collision safety without the 0700
+    origin; the chmod is best-effort (hostile sandboxes may deny it —
+    the write-then-probe in ``write_projections`` is the hard backstop).
+    """
+    path = root / f"spg-projection-{uuid.uuid4().hex[:12]}"
+    path.mkdir()
+    try:
+        os.chmod(path, 0o755)
+    except OSError:
+        pass
+    return path
+
+
+def _probe_readable(path) -> bool:
+    """FIX-409: the write-then-probe readability oracle (isolated as a
+    module attribute so tests can fault-inject denial without patching
+    the global ``os.access``)."""
+    return os.access(path, os.R_OK)
+
+
 def write_projections(
     root: Path,
     config_path: Optional[Path] = None,
@@ -594,7 +624,7 @@ def write_projections(
     if not changed:
         return CheckResult("PASS", facts={"source_version": version, "written": 0})
 
-    journal_dir = Path(tempfile.mkdtemp(prefix="spg-projection-", dir=str(root)))
+    journal_dir = _journal_dir(root)
     journal = {"version": version, "entries": []}
     staged: Dict[str, Path] = {}
     cleanup_journal = False
@@ -615,11 +645,40 @@ def write_projections(
             target = _safe_repo_path(root, write.relative_path, must_exist=True)
             apply_path = journal_dir / f"{index}.apply"
             shutil.copyfile(staged[write.relative_path], apply_path)
+            # FIX-409: normalize the SD on the file object BEFORE the
+            # rename — os.replace carries the source's security descriptor
+            # onto the target (the mkdtemp-0700 journal was how RISK-061
+            # damage reached the projection faces). Best-effort: hostile
+            # sandboxes may deny chmod; the write-then-probe below is the
+            # hard backstop that surfaces any residual damage.
+            try:
+                os.chmod(apply_path, 0o644)
+            except OSError:
+                pass
             replace(apply_path, target)
             replaced.append(write.relative_path)
         checked = check_projections(root, config_path)
         if checked.state != "PASS":
             raise OSError("post-write projection validation failed")
+        # FIX-409 write-then-probe (root fix paired with the FIX-405
+        # release-gate detection): every replaced target must be READABLE
+        # by the current token the moment the write lands. An unreadable
+        # target is RISK-061 SD damage — reported explicitly (never
+        # silent), WITHOUT rollback: the bytes were just validated, so the
+        # defect is the descriptor, and the remedy is takeown/icacls, not
+        # restoring older content.
+        probe_issues = [
+            f"write-then-probe: {rel} unreadable after write — SD damage "
+            f"(RISK-061 class); remediate: takeown /f \"{root / rel}\" && "
+            f"icacls \"{root / rel}\" /grant \"%USERNAME%:F\""
+            for rel in replaced
+            if not _probe_readable(root / rel)
+        ]
+        if probe_issues:
+            return CheckResult("FAIL", probe_issues, {
+                "source_version": version, "written": len(replaced),
+                "write_then_probe": "FAIL",
+            })
         cleanup_journal = True
     except Exception as exc:
         rollback_issues = []
@@ -643,6 +702,12 @@ def write_projections(
     finally:
         if cleanup_journal:
             for path in journal_dir.glob("*"):
+                # FIX-409: normalize before unlink so journal cleanup also
+                # succeeds where the SD would otherwise deny DELETE.
+                try:
+                    os.chmod(path, 0o644)
+                except OSError:
+                    pass
                 try:
                     path.unlink()
                 except OSError:
@@ -651,4 +716,4 @@ def write_projections(
                 journal_dir.rmdir()
             except OSError:
                 pass
-    return CheckResult("PASS", facts={"source_version": version, "written": len(changed)})
+    return CheckResult("PASS", facts={"source_version": version, "written": len(changed), "write_then_probe": "PASS"})

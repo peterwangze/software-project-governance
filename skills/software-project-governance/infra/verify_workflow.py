@@ -21030,13 +21030,19 @@ def run_external_project_validation(target, keep_workspace=False, workspace_pare
             "issues": ["workspace parent must not be the target directory or inside the target directory"],
             "no_overclaim_boundary": EXTERNAL_PROJECT_VALIDATION_BOUNDARY,
         }
-    temp_ctx = None
+    temp_value = None
     if keep_workspace:
         workspace = Path(tempfile.mkdtemp(prefix="spg-external-validation-", dir=str(parent) if parent else None))
         release_temp = False
     else:
-        temp_ctx = tempfile.TemporaryDirectory(prefix="spg-external-validation-", dir=str(parent) if parent else None)
-        workspace = Path(temp_ctx.name)
+        # FIX-404 (same defect family as FIX-403): TemporaryDirectory cleanup
+        # crashed callers under the UAC-filtered sandbox token — scandir and
+        # chmod PermissionError (WinError 5) escape through tempfile's onexc
+        # recovery, which ignore_cleanup_errors=True does not close on
+        # Python 3.14.  Release via rmtree(ignore_errors=True) instead so a
+        # cleanup failure degrades to a no-op and never crashes the caller.
+        temp_value = tempfile.mkdtemp(prefix="spg-external-validation-", dir=str(parent) if parent else None)
+        workspace = Path(temp_value)
         release_temp = True
     try:
         copied = _copy_external_validation_surface(workspace)
@@ -21065,8 +21071,8 @@ def run_external_project_validation(target, keep_workspace=False, workspace_pare
             "no_overclaim_boundary": EXTERNAL_PROJECT_VALIDATION_BOUNDARY,
         }
     finally:
-        if release_temp and temp_ctx is not None:
-            temp_ctx.cleanup()
+        if release_temp and temp_value is not None:
+            shutil.rmtree(temp_value, ignore_errors=True)
 
 
 def cmd_external_project_validation(args):
@@ -21237,6 +21243,9 @@ def _run_identity_attestation_fixture_only():
     build the attestation (missing files, attestation module issues) degrades
     gracefully to the legacy PENDING behaviour with the underlying error
     message, so the governance check never crashes on identity work.
+    FIX-403/FIX-404: a failure to clean up the fixture temp dir likewise
+    degrades to a no-op (``shutil.rmtree(..., ignore_errors=True)``) —
+    cleanup failure never escalates into a crash and never masks the verdict.
     """
     plugin_home = PLUGIN_ROOT / "skills/software-project-governance"
     policy_path = plugin_home / "core/loop-runtime-claim-allowlist.json"
@@ -21598,7 +21607,11 @@ def _cmd_check_loop_runtime_claims_identity(args):
         subject = {"kind": "commit", "sha": candidate_sha}
         snapshot_label = f"candidate-{candidate_sha}"
 
-    with tempfile.TemporaryDirectory(prefix="fix216-scanner-") as temp_value:
+    # FIX-404: same cleanup-crash family as FIX-403 — see the comment on
+    # _run_identity_attestation_fixture_only.  Cleanup failure must degrade
+    # to a no-op and never mask this function's raise/exit contract.
+    temp_value = tempfile.mkdtemp(prefix="fix216-scanner-")
+    try:
         temporary = Path(temp_value)
         product_root = materialize_loop_runtime_git_root(
             Path(args.product_git_repo), product_ref, getattr(args, "product_prefix", ""),
@@ -21689,6 +21702,8 @@ def _cmd_check_loop_runtime_claims_identity(args):
         sys.stdout.write(canonical_attestation_json_bytes(payload).decode("utf-8"))
         if verdict != "PASS":
             sys.exit(1)
+    finally:
+        shutil.rmtree(temp_value, ignore_errors=True)
 
 
 def cmd_check_sequential_ids(args):

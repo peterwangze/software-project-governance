@@ -23,6 +23,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import uuid
 from contextlib import ExitStack, redirect_stdout
 from datetime import date, timedelta
 from pathlib import Path
@@ -71,6 +72,32 @@ def governance_doc(label, fixture=False):
 def governance_docs(rel_paths, fixture=False):
     """Map repo-relative document labels to their text."""
     return {rel: governance_doc(rel, fixture=fixture) for rel in rel_paths}
+
+
+# ── FIX-404: sandbox-safe fixture temp dir ─────────────────────────────────
+#
+# tempfile.mkdtemp (mode 0o700) dirs deny writes from this very process under
+# the UAC-filtered token of the DSH sandbox: WinError 5 / Errno 13 on every
+# file creation inside (verified empirically 2026-09-29 in-session — plain
+# os.mkdir with 0o600/0o755/0o777 allows writes, 0o700 denies, and even
+# chmod on a 0o700 dir is itself denied).  That made every
+# tempfile.TemporaryDirectory()-based fixture unrunnable here: writes inside
+# the fixture fail first, then __exit__ cleanup crashes with the same
+# WinError 5 — the FIX-403/FIX-404 cleanup-crash defect family.  Affected
+# fixture sites create their dirs through this helper instead (default
+# mkdir mode, writable in this sandbox) and remove them with the FIX-403
+# production protection — shutil.rmtree(ignore_errors=True) — so a cleanup
+# failure degrades to a no-op instead of crashing the suite.
+
+
+@contextlib.contextmanager
+def _governance_temp_dir(prefix="spg-test-"):
+    path = Path(tempfile.gettempdir()) / (prefix + uuid.uuid4().hex[:12])
+    path.mkdir()
+    try:
+        yield str(path)
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
 
 
 class LoopRuntimeClaimAdapterTests(unittest.TestCase):
@@ -250,7 +277,7 @@ class FIX300DualCaliberAgreementTests(unittest.TestCase):
         engine identity sub-phase FAILs (bare REQUIRED_ROOT_UNAVAILABLE on
         the first missing authority source record) while the engine
         semantic caliber PASSes — the EVD-969 divergence shape."""
-        with tempfile.TemporaryDirectory() as td:
+        with _governance_temp_dir() as td:
             host = self._drifted_host(Path(td), populated=False)
             with patch.object(vw, "HOST_PROJECT_ROOT", host):
                 identity = self._engine_identity()
@@ -271,7 +298,7 @@ class FIX300DualCaliberAgreementTests(unittest.TestCase):
         unreachable the standalone ``--fixture-identity`` caliber reports
         the SAME identity verdict and issue text as the engine sub-phase,
         and its top-level verdict aggregates to FAIL with exit 1."""
-        with tempfile.TemporaryDirectory() as td:
+        with _governance_temp_dir() as td:
             host = self._drifted_host(Path(td), populated=False)
             with patch.object(vw, "HOST_PROJECT_ROOT", host):
                 engine = self._engine_identity()
@@ -299,7 +326,7 @@ class FIX300DualCaliberAgreementTests(unittest.TestCase):
         """Differential agreement (green shape): with every host source
         populated from the real governance files, both calibers report
         identity PASS and the standalone aggregate verdict is PASS."""
-        with tempfile.TemporaryDirectory() as td:
+        with _governance_temp_dir() as td:
             host = self._drifted_host(Path(td), populated=True)
             with patch.object(vw, "HOST_PROJECT_ROOT", host):
                 engine = self._engine_identity()
@@ -371,6 +398,68 @@ class FIX403IdentityFixtureCleanupContractTests(unittest.TestCase):
         self.assertIn("phase", result)
         self.assertIsInstance(result["verdict"], str)
         self.assertIsInstance(result["issues"], list)
+
+
+class FIX404ExternalValidationCleanupContractTests(unittest.TestCase):
+    """FIX-404: the FIX-403 cleanup-crash defect family in the external
+    project validation workspace (``spg-external-validation-``).
+
+    ``run_external_validation`` released its workspace via
+    ``TemporaryDirectory.cleanup()`` in a ``finally`` block — under the
+    UAC-filtered token (DSH sandbox) that cleanup hits PermissionError
+    (WinError 5) on scandir and the chmod recovery and escapes through
+    tempfile's ``onexc`` (the exact FIX-403 signature; ``ignore_cleanup_errors``
+    does not close it on Python 3.14), crashing the caller from the finally
+    block.  Contract under test, simulated on the same surface (os.scandir +
+    os.chmod denying the ``spg-external-validation-`` dir, routed through the
+    real rmtree machinery): a cleanup failure must degrade to a no-op and the
+    result dict must still be returned — never a crash.
+    """
+
+    def test_cleanup_permission_error_degrades_to_noop_not_crash(self):
+        """With scandir+chmod both denying the workspace dir at cleanup
+        time, run_external_validation must return its result dict (pass/
+        workspace/issues) instead of letting the cleanup PermissionError
+        escape from the finally block."""
+        real_scandir = os.scandir
+        real_chmod = os.chmod
+
+        def denying_scandir(path=".", *args, **kwargs):
+            if "spg-external-validation-" in str(path):
+                raise PermissionError(
+                    13, "Access is denied (simulated FIX-404 scandir WinError 5)",
+                    str(path))
+            return real_scandir(path, *args, **kwargs)
+
+        def denying_chmod(path, *args, **kwargs):
+            if "spg-external-validation-" in str(path):
+                raise PermissionError(
+                    13, "Access is denied (simulated FIX-404 chmod WinError 5)",
+                    str(path))
+            return real_chmod(path, *args, **kwargs)
+
+        command_result = {
+            "args": [], "exit_code": 0, "stdout_tail": "", "stderr_tail": "",
+        }
+        try:
+            with patch.object(os, "scandir", denying_scandir), \
+                    patch.object(os, "chmod", denying_chmod), \
+                    patch.object(vw, "_copy_external_validation_surface",
+                                 return_value=[]), \
+                    patch.object(vw, "_write_external_validation_governance"), \
+                    patch.object(vw, "_prepare_external_validation_git"), \
+                    patch.object(vw, "_run_external_validation_command",
+                                 return_value=command_result):
+                result = vw.run_external_project_validation(str(_INFRA_DIR))
+        except Exception as exc:
+            # Red shape on unfixed code: PermissionError escaping the
+            # finally-block cleanup of the spg-external-validation- dir.
+            self.fail(
+                "FIX-404 contract violated: external-validation workspace "
+                f"cleanup failure crashed the caller: {exc!r}")
+        self.assertIn("pass", result)
+        self.assertIn("workspace", result)
+        self.assertIn("issues", result)
 
 
 class FIX200ScopedAttestationRehearsalTests(unittest.TestCase):
@@ -462,7 +551,7 @@ class FIX200ScopedAttestationRehearsalTests(unittest.TestCase):
         return ExitStack(), product, plugin, report
 
     def test_atomic_fixture_write_is_visible_and_non_authorizing(self):
-        with tempfile.TemporaryDirectory() as td:
+        with _governance_temp_dir() as td:
             root = Path(td)
             artifact = root / "FIX-216-index.json"
             args = self._args(root, write=artifact)
@@ -487,7 +576,7 @@ class FIX200ScopedAttestationRehearsalTests(unittest.TestCase):
 
     def test_atomic_fixture_compare_consumes_staged_artifact_and_verified_commit(self):
         commit = "1" * 40
-        with tempfile.TemporaryDirectory() as td:
+        with _governance_temp_dir() as td:
             root = Path(td)
             artifact = root / "FIX-216-index.json"
             artifact.write_text("{}\n", encoding="utf-8")
@@ -521,7 +610,7 @@ class FIX200ScopedAttestationRehearsalTests(unittest.TestCase):
         self.assertFalse(payload["authorized"])
 
     def test_fixture_only_is_mandatory_and_full_release_gate_is_not_called(self):
-        with tempfile.TemporaryDirectory() as td:
+        with _governance_temp_dir() as td:
             root = Path(td)
             args = self._args(root, write=root / "index.json")
             args.fixture_only = False
@@ -535,7 +624,7 @@ class FIX200ScopedAttestationRehearsalTests(unittest.TestCase):
                 vw._cmd_check_loop_runtime_claims_identity(args)
 
     def test_identity_mode_requires_exactly_one_persistence_operation(self):
-        with tempfile.TemporaryDirectory() as td:
+        with _governance_temp_dir() as td:
             args = self._args(Path(td))
             with self.assertRaisesRegex(vw.IdentityAttestationError, "SCHEMA_MISSING"):
                 vw._cmd_check_loop_runtime_claims_identity(args)

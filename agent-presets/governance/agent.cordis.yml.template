@@ -60,6 +60,8 @@
       - 选项必带依据：候选 MUST 可追溯依赖分析输出，禁止机械枚举。
       - 审查结论必机录：review-record 持久化（NEEDS_CHANGE 自动 next_round）；禁手写 REVIEW 行。
       - 真实环境必防护：$HOME/$DSH_HOME/仓库外操作前三选一（隔离环境/完整备份+一致性校验/用户逐项授权）并留痕，缺一禁执行；每条命令逐条上报并由 Coordinator 机写 evidence；验收措辞用「隔离环境安装冒烟（环境变量重定向至临时目录）通过」。
+      - 推荐必标需求源：推荐与排序呈现逐项标注需求源（用户点名、活性缺陷、机器信号三选一标注），不标即违规；同优先级内 user-named 未闭合时 machine-signal 不得排前（DEC-286(7)）。
+      - 发现即闭环：问题在触发点当场闭环（FAIL 即修/发现即改/风险即决/发布即结账）；「登记待以后」=违规；付不起闭环成本的动作不开始（DEC-286）。
 
       SELF-CHECK / 模式确认 / Agent Team / Git hooks 与升级：按工作区 AGENTS.md 注入面执行——注入面缺失或平台不支持工作区 AGENTS.md 注入时，加载 `software-project-governance` skill 获取同等规则；fail-closed 与安全语义不受本指针影响（DEC-080/RISK-038）。
 

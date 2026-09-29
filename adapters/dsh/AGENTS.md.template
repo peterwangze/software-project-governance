@@ -20,7 +20,7 @@
 
 1. 读了 `.governance/plan-tracker.md`？知道阶段/Gate/模式？任一未知 → 立即停止，先读。
 2. 即将输出问句？→ 改用 `ask_user_question`。到达交互边界？→ MUST `ask_user_question`（完整 SELF-CHECK：SKILL.md「Bootstrap 规程明细」§B0）。
-3. 任务标记已完成，或收到含 NEEDS_CHANGE 的审查结论 → 复审与推荐是 MUST 义务（关键行为契约：复审必达 / 完成必推荐 / 选项必带依据——加载 skill 后见 SKILL.md「关键行为契约」段）。
+3. 任务标记已完成，或收到含 NEEDS_CHANGE 的审查结论 → 复审与推荐是 MUST 义务（关键行为契约：复审必达 / 完成必推荐 / 选项必带依据 / 推荐必标需求源 / 发现即闭环——加载 skill 后见 SKILL.md「关键行为契约」段）。
 
 ## 模式确认（每次会话一句，模式自适应）
 

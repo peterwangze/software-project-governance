@@ -1046,6 +1046,87 @@ class DshAdapterTests(unittest.TestCase):
                 result["issues"],
             )
 
+    def test_injection_contract_clause5_clause6_all_faces(self):
+        """FEAT-078 / ADR-021 §2.1·§3.1·§4 B1a (S0 guard): M1 clause 5
+        (推荐必标需求源) + M2 clause 6 (发现即闭环) land on every injection
+        face BEFORE the B1b anchor registry — keyword-anchored (ordinal-free,
+        ADR §2.1 rework ruling: face list styles drift, the keyword does not),
+        never line-numbered. Faces: behavior-protocol.md carries the canonical
+        full text (M7.4 end); SKILL.md「关键行为契约」carries the compressed
+        items 5/6; the DSH persona contract block carries the compressed
+        bodies (bullet style); the governance-init.md Step 7 entry templates
+        carry the compressed clauses (lightweight + standard shared base →
+        composed strict); secondary-thin + the DSH agent-instructions
+        template carry the thin pointers. Frozen-text pins (ADR-021 verbatim,
+        BC-1): the clause bodies are asserted character-for-character so any
+        wording change fails here before the injection-budget baseline moves.
+        """
+        if str(_INFRA_DIR) not in sys.path:
+            sys.path.insert(0, str(_INFRA_DIR))
+        import sync_entry_projection as sep
+
+        persona_rel = "agent-presets/governance/agent.cordis.yml.template"
+        skill_rel = "skills/software-project-governance/SKILL.md"
+        protocol_rel = (
+            "skills/software-project-governance/references/behavior-protocol.md")
+        agents_rel = "adapters/dsh/AGENTS.md.template"
+        init_rel = "commands/governance-init.md"
+
+        kw_m1 = "推荐必标需求源"
+        kw_m2 = "发现即闭环"
+
+        # ADR-021 §2.1 L64 / §3.1 L296 — canonical full text (frozen).
+        m1_canonical = "5. **推荐必标需求源（DEC-286(7)/DEC-287(5)）**：凡向用户呈现推荐或排序（含完成必推荐的候选清单、交互询问工具中的待选清单、任务进度表摘要），MUST 逐项标注需求源（三类之一：用户点名、活性缺陷、机器信号），标注 MUST 可追溯到 triage 记录或用户原话；不标即违规。**同优先级内** user-named 项未闭合时，machine-signal 项不得排位其前（推荐位倒挂=违规，判据见 Check 41/INV-1；跨 P 级压序经 Check 41 披露 WARN + 发布门拦截，见 ADR-021 §2.2.3/§2.2.4）。"
+        m2_canonical = "6. **发现即闭环（DEC-286(1)(2)(6)）**：问题在其触发点当场闭环——检查 FAIL 任务内修、审查发现即改即合、风险发现即决（终局三选一：关闭/收窄/升级，「维持待复评」非法）、证据随任务沉档、发布即结账。每个动作当场付清全部闭环成本；「登记待以后」状态废除——新增问题行携带待以后语义 = 可检违规。付不起触发点闭环成本的动作不开始。"
+        # ADR-021 §2.1 L68 / §3.1 L300 — compressed form (frozen).
+        m1_compressed = "5. **推荐必标需求源**：推荐与排序呈现逐项标注需求源（用户点名、活性缺陷、机器信号三选一标注），不标即违规；同优先级内 user-named 未闭合时 machine-signal 不得排前（DEC-286(7)）。"
+        m2_compressed = "6. **发现即闭环**：问题在触发点当场闭环（FAIL 即修/发现即改/风险即决/发布即结账）；「登记待以后」=违规；付不起闭环成本的动作不开始（DEC-286）。"
+        # Persona contract block adaptation (ADR §2.1: 序数仅描述 — bullet
+        # face drops the ordinal/bold wrapper, body stays verbatim).
+        m1_persona = "- 推荐必标需求源：推荐与排序呈现逐项标注需求源（用户点名、活性缺陷、机器信号三选一标注），不标即违规；同优先级内 user-named 未闭合时 machine-signal 不得排前（DEC-286(7)）。"
+        m2_persona = "- 发现即闭环：问题在触发点当场闭环（FAIL 即修/发现即改/风险即决/发布即结账）；「登记待以后」=违规；付不起闭环成本的动作不开始（DEC-286）。"
+
+        # ① behavior-protocol.md — canonical full text, verbatim.
+        protocol_text = (_REPO_ROOT / protocol_rel).read_text(encoding="utf-8")
+        self.assertIn(m1_canonical, protocol_text, "canonical M1 clause (M7.4 end)")
+        self.assertIn(m2_canonical, protocol_text, "canonical M2 clause (M7.4 end)")
+
+        # ② SKILL.md 关键行为契约 — compressed items 5/6, verbatim; the
+        # section intro must count six items once the clauses land.
+        skill_text = (_REPO_ROOT / skill_rel).read_text(encoding="utf-8")
+        self.assertIn(m1_compressed, skill_text, "SKILL.md clause 5 (compressed)")
+        self.assertIn(m2_compressed, skill_text, "SKILL.md clause 6 (compressed)")
+        self.assertIn("以下六条与铁律同级", skill_text,
+                      "关键行为契约 intro must count six items post-FEAT-078")
+
+        # ③ DSH persona contract block — compressed bodies + the B1b-planned
+        # extra anchor 「用户点名」 (ADR §2.1 registry row: persona 面另加).
+        persona_text = (_REPO_ROOT / persona_rel).read_text(encoding="utf-8")
+        self.assertIn(m1_persona, persona_text, "persona clause 5 body")
+        self.assertIn(m2_persona, persona_text, "persona clause 6 body")
+        self.assertIn("用户点名", persona_text, "persona extra anchor 用户点名")
+
+        # ④ DSH agent-instructions thin pointer — keyword anchors.
+        agents_text = (_REPO_ROOT / agents_rel).read_text(encoding="utf-8")
+        self.assertIn(kw_m1, agents_text, "AGENTS.md.template M1 pointer")
+        self.assertIn(kw_m2, agents_text, "AGENTS.md.template M2 pointer")
+
+        # governance-init.md Step 7 — every profile entry template carries
+        # the compressed clauses (strict is composed from the shared base);
+        # the secondary-thin block carries the keyword pointers.
+        init_text = (_REPO_ROOT / init_rel).read_text(encoding="utf-8")
+        templates = sep.extract_canonical_templates(init_text)
+        for profile in ("lightweight", "standard", "strict"):
+            with self.subTest(profile=profile):
+                self.assertIn(m1_compressed, templates[profile],
+                              f"{profile} entry template clause 5")
+                self.assertIn(m2_compressed, templates[profile],
+                              f"{profile} entry template clause 6")
+        self.assertIn(kw_m1, templates["secondary-thin"],
+                      "secondary-thin M1 pointer")
+        self.assertIn(kw_m2, templates["secondary-thin"],
+                      "secondary-thin M2 pointer")
+
     def test_preset_metadata_contract(self):
         text = _PRESET_METADATA_PATH.read_text(encoding="utf-8")
         self.assertIn("name:", text)

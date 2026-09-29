@@ -27,6 +27,7 @@
 
 - 计划跟踪 `.governance/plan-tracker.md` · 证据 `.governance/evidence-log.md` · 决策 `.governance/decision-log.md` · 风险 `.governance/risk-log.md`；验证命令：`python <plugin_home>/skills/software-project-governance/infra/verify_workflow.py`（`<plugin_home>` 来自 resolve_entry.py）
 - 完整治理交互：`/governance`；完整 bootstrap（SELF-CHECK 全文/干活前/提问规则/收工检查）：`CLAUDE.md`（主入口）；pwsh 读 `.governance` 文件 MUST 显式 UTF-8：`Get-Content -Encoding UTF8`（裸 `Get-Content` 在 Windows 默认 GBK 解码产生 mojibake——FIX-278）
+- 推荐必标需求源/发现即闭环——见 SKILL 关键行为契约
 
 ## 项目质量原则（P-v1 — DEC-150）
 

@@ -555,7 +555,7 @@ Agent 从项目 profile 推断模式。用户可随时通过说"仅在关键决�
           `python skills/software-project-governance/infra/verify_workflow.py review-record --task {task_id} --round {n} --result {结论} --report {reviewer报告路径} [--reviewer {名称}]`
           review-{task}-R{n}.md 文件与 evidence 行由 CLI 机器写入（唯一路径）；NEEDS_CHANGE 时 CLI 自动产出 `next_round`/`prev_report` 复审义务字段——跨会话可从证据直接推导待复审项，复审触发不依赖 Coordinator 记忆。手写 REVIEW-{id} 证据行 = 流程违规（M1.2 快速通道豁免已收窄）；CLI 不可用（工具缺失/执行失败）时 fail-closed：修复环境后重试，不得降级为手写。Check 30c 对无机器来源标记的 REVIEW 记录与缺 `next_round` 的 NEEDS_CHANGE 记录 WARN（渐进 FAIL——升级路径登记于 FIX-260 decision-log）。
 
-   > **最小契约投影（FIX-253/REQ-112；FIX-260 扩展）**：本节 T1-T4、step 4.6 (C8)（审查结论必机录——FIX-260/REQ-107，压缩形式由 DSH persona 契约块第 4 行携带，`check-injection-contract` 锚含 `review-record`）、step 6 与 interaction-boundary.md 任务排序规则的压缩形式由 SKILL.md「关键行为契约」段与 DSH persona（agent-presets/governance/agent.cordis.yml.template）携带；`check-injection-contract` 锚点守护同步。修改本节关键词（复审/NEEDS_CHANGE/review-record/task-priority-analysis/依赖理由/三要素/推荐卡）时 MUST 同步注入面，否则 check FAIL。**step 6c 交互基线（DEC-143，R0-W1b 修订）**：step 6c 原「否则可自主执行推荐项并在完成后再次推荐」分支按 DEC-143 废止——任务完成后的推荐统一按「自动推荐 + 用户确认」呈现（选项含推荐候选与「自主执行推荐项」，由用户确认或改选，而非 agent 默认自主执行）；「当且仅当推荐项涉及关键决策（M5.3）时强制 AskUserQuestion」的既有规则不变。step 6c 经 FEAT-072/DEC-266 升级为三要素推荐卡呈现（AskUserQuestion 前正文卡 + 短选项与卡片一一对应），上述 DEC-143「自动推荐 + 用户确认」基线不变。step 6 另补一句「推荐为空 → 呈现结构化空原因（禁止机械枚举）」（注入面已先行，出处状态见 §6.2 注）。
+   > **最小契约投影（FIX-253/REQ-112；FIX-260 扩展）**：本节 T1-T4、step 4.6 (C8)（审查结论必机录——FIX-260/REQ-107，压缩形式由 DSH persona 契约块第 4 行携带，`check-injection-contract` 锚含 `review-record`）、step 6 与 interaction-boundary.md 任务排序规则的压缩形式由 SKILL.md「关键行为契约」段与 DSH persona（agent-presets/governance/agent.cordis.yml.template）携带；`check-injection-contract` 锚点守护同步。修改本节关键词（复审/NEEDS_CHANGE/review-record/task-priority-analysis/依赖理由/三要素/推荐卡）时 MUST 同步注入面，否则 check FAIL。关键行为契约第 5/6 条（推荐必标需求源/发现即闭环——FEAT-078/ADR-021，canonical 全文见本节末尾）的压缩形式同样由 SKILL.md「关键行为契约」段、DSH persona 契约块与 governance-init.md Step 7 入口模板携带（secondary-thin 薄指针与 AGENTS.md.template 携带指针），修改该两条文本时 MUST 同步全部注入面并 re-run check-injection-budget。**step 6c 交互基线（DEC-143，R0-W1b 修订）**：step 6c 原「否则可自主执行推荐项并在完成后再次推荐」分支按 DEC-143 废止——任务完成后的推荐统一按「自动推荐 + 用户确认」呈现（选项含推荐候选与「自主执行推荐项」，由用户确认或改选，而非 agent 默认自主执行）；「当且仅当推荐项涉及关键决策（M5.3）时强制 AskUserQuestion」的既有规则不变。step 6c 经 FEAT-072/DEC-266 升级为三要素推荐卡呈现（AskUserQuestion 前正文卡 + 短选项与卡片一一对应），上述 DEC-143「自动推荐 + 用户确认」基线不变。step 6 另补一句「推荐为空 → 呈现结构化空原因（禁止机械枚举）」（注入面已先行，出处状态见 §6.2 注）。
 
    **FIX-224 确定性触发器（M5.1b 风格——不依赖 Coordinator 自觉）**：
      当 Coordinator 收到 Reviewer 的审查结论时，MUST 先按 (C8) 通过 `review-record` CLI 机器持久化结论，再检测以下触发条件并执行对应动作，不得跳过：
@@ -602,6 +602,12 @@ Agent 从项目 profile 推断模式。用户可随时通过说"仅在关键决�
 **跳过任何步骤 = 协议违规。** Agent **MUST NOT** 在未完成全部 6 个步骤的情况下声明任务"已完成"。
 
 **为什么审查在 commit 之前（Failure Mode 11 的结构性修复）**：M5 使用不足重复出现了 7 次，因为旧的顺序（commit → 审查）制造了一个结构性陷阱：commit 提供了认知闭合，而之后的摘要满足了"告诉用户发生了什么"的冲动。独立摘要与 AskUserQuestion 争夺终端位置——摘要总是胜出，因为它更简单且不需要等待输入。两个结构性变更打破了这个陷阱：(1) 审查移到 commit 之前，使 commit 成为通过审查的奖励而非跳过审查的触发器；(2) 摘要嵌入在 AskUserQuestion 内部——没有独立的摘要输出。AskUserQuestion 就是交付物审查。
+
+> **关键行为契约第 5/6 条（FEAT-078 / ADR-021 §2.1·§3.1 canonical 全文；压缩形式由 SKILL.md「关键行为契约」段、DSH persona 契约块（agent-presets/governance/agent.cordis.yml.template）与 governance-init.md Step 7 入口模板携带，secondary-thin 薄指针与 AGENTS.md.template 携带指针；锚点关键词「推荐必标需求源」「发现即闭环」——`check-injection-contract` 锚点守护）**：
+>
+> 5. **推荐必标需求源（DEC-286(7)/DEC-287(5)）**：凡向用户呈现推荐或排序（含完成必推荐的候选清单、交互询问工具中的待选清单、任务进度表摘要），MUST 逐项标注需求源（三类之一：用户点名、活性缺陷、机器信号），标注 MUST 可追溯到 triage 记录或用户原话；不标即违规。**同优先级内** user-named 项未闭合时，machine-signal 项不得排位其前（推荐位倒挂=违规，判据见 Check 41/INV-1；跨 P 级压序经 Check 41 披露 WARN + 发布门拦截，见 ADR-021 §2.2.3/§2.2.4）。
+>
+> 6. **发现即闭环（DEC-286(1)(2)(6)）**：问题在其触发点当场闭环——检查 FAIL 任务内修、审查发现即改即合、风险发现即决（终局三选一：关闭/收窄/升级，「维持待复评」非法）、证据随任务沉档、发布即结账。每个动作当场付清全部闭环成本；「登记待以后」状态废除——新增问题行携带待以后语义 = 可检违规。付不起触发点闭环成本的动作不开始。
 
 ### M7.5 任务前协议（MANDATORY）
 

@@ -628,6 +628,20 @@ SEGMENTS = (
         "host:governance:.governance/evidence-log.md",
         "host:governance:.governance/change-triage/**",
     ), _RETAIN),
+    # FEAT-080 (0.93.0 B3, DEC-290(5) / ADR-021): the two provenance
+    # sections — 41 反倒挂判定 (priority) and 42 闭环率 (closure). Both
+    # host-governance-rooted; 42 additionally reads the risk-log row family
+    # and the session-snapshot window anchor.
+    SegmentSpec("41", "priority", (
+        "host:governance:.governance/plan-tracker.md",
+        "host:governance:.governance/change-triage/**",
+        "host:governance:.governance/archive/index.md",
+    ), _RETAIN),
+    SegmentSpec("42", "closure", (
+        "host:governance:.governance/evidence-log.md",
+        "host:governance:.governance/risk-log.md",
+        "host:governance:.governance/session-snapshot.md",
+    ), _RETAIN),
 )
 
 # ── C3 逐段裁决（FX-195 §136 C3 行 + 代码核验；默认保留 quick 面）──────────

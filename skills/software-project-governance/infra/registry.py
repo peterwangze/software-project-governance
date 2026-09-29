@@ -153,18 +153,19 @@ CONTRACT_MODE_VOCABULARY: Tuple[str, ...] = ("full", "quick")
 """Mirror of §3.6's literal mode tokens (``domain:<name>`` is a selector)."""
 
 ADVISORY_SEGMENTS: Tuple[str, ...] = (
-    "28p", "28q", "28r", "28s", "28t", "30c", "39",
+    "28p", "28q", "28r", "28s", "28t", "30c", "39", "42",
 )
 """Segments whose engine section never increments ``all_issues``.
 
 Measured, not assumed: an AST pass over ``_run_full_engine_checks`` finds the
-``all_issues`` AugAssign nodes inside each ``# ── <id>. `` section; these 7
+``all_issues`` AugAssign nodes inside each ``# ── <id>. `` section; these 8
 sections have none (comments mentioning the counter do not count), so their
 findings are advisory disclosures — ``28p`` prints ``(advisory)``, ``28s`` /
 ``28t`` cite ``gate_integration.fatal_on_error=false``, ``30c`` / ``39``
 declare the FIX-260 / DEC-159 gradual-WARN convention, and ``28q`` / ``28r``
-print findings without touching the counter. Re-judged by
-``tests/test_registry.py::CheckRegistryTests``.
+print findings without touching the counter; ``42`` carries the ADR-021
+§3.2.3 observation-window WARN posture (渐进 FAIL 翻转经 decision-log 入账,
+never silently). Re-judged by ``tests/test_registry.py::CheckRegistryTests``.
 """
 
 DELEGATED_LOADERS: Dict[str, str] = {
@@ -194,6 +195,10 @@ LOADER_WHITELIST: Tuple[str, ...] = (
     "checks.injection_budget",
     "checks.loop_runtime_claims",
     "checks.manifest",
+    # FEAT-080 (0.93.0 B3, DEC-290(5)): the provenance judgement leaves —
+    # pure predicates for the Check 41/42 sections; the engine wires the
+    # I/O assembly + rendering only (ArchGuard R1 discipline).
+    "checks.provenance_domain",
     "checks.projection",
     "checks.review_domain",
     "checks.risk_domain",
@@ -266,6 +271,10 @@ _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
     # FEAT-055 (0.86.0 batch 2.0): the DEC-append writer of the
     # governance_store family (batch-1 module, engine wires dispatch only).
     ("decision-append", "governance_store.cmd_decision_append"),
+    # FEAT-080 / ADR-021 §2.2.1: the demand_source revision channel's B3
+    # CLI regularization (append-only jsonl + evidence row; engine wires
+    # dispatch only — change_triage pattern).
+    ("demand-source-revise", "verify_workflow.cmd_demand_source_revise"),
     ("check-acceptance-contracts",
      "verify_workflow.cmd_check_acceptance_contracts"),
     ("check-agent-adapters", "verify_workflow.cmd_check_agent_adapters"),
@@ -404,7 +413,7 @@ _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
     ("write-guard-bootstrap", "verify_workflow.cmd_write_guard_bootstrap"),
     ("web-console", "verify_workflow.cmd_web_console"),
 )
-"""97 dispatch keys from the FEAT-020 frozen face (FEAT-031 added
+"""98 dispatch keys from the FEAT-020 frozen face (FEAT-031 added
 ``check-dsh-boundary`` and ``dsh-doctor``; FEAT-032 added
 ``governance-cost-report``; FEAT-037 added ``check-entry-bootstrap-sync``;
 FEAT-033 added ``governance-bootstrap``; FEAT-055 added the three governed
@@ -412,8 +421,9 @@ writer modules — ``task-row-update``, the four governance_store writer
 commands, and the two baseline_metadata commands; FIX-370 added
 ``locks-release``, the release leg of the governance_store locks family;
 FIX-383 added ``write-guard-bootstrap`` — declared here by FEAT-064 after
-its landing omission left the R5 registration drift in place), each with the
-module that
+its landing omission left the R5 registration drift in place; FEAT-080
+added ``demand-source-revise``, the ADR-021 §2.2.1 revision-channel CLI
+regularization), each with the module that
 *defines* its handler (machine-derived: the ``commands`` dict of ``main()``
 cross-referenced with the defining module of every handler name — 17 keys are
 already outside the engine, the other 80 ride the monolith).  The docstring
@@ -495,12 +505,17 @@ _SEGMENT_LOADERS: Tuple[Tuple[str, str], ...] = (
     ("37", "checks.gate_domain.check_gate_sequence_for_release"),
     ("38", "checks.ci_domain.check_ci_evidence"),
     ("39", "checks.triage_domain.check_r1_completion_gate"),
+    # FEAT-080 (0.93.0 B3, DEC-290(5) / ADR-021 §2.2.3+§3.2.3): the two
+    # provenance sections. 41 is BLOCKING (INV-1/INV-2 findings count);
+    # 42 rides ADVISORY_SEGMENTS (observation-window WARN posture).
+    ("41", "checks.provenance_domain.check_priority_inversion"),
+    ("42", "checks.provenance_domain.session_closure_rate"),
 )
-"""71 segments ↔ the entry point the engine's section actually calls.
+"""73 segments ↔ the entry point the engine's section actually calls.
 
 Machine-derived in two passes: the section's single check-entry call name
 (``check_*`` / ``scan_*``) cross-referenced with that symbol's defining infra
-module. 69 of 71 resolve uniquely; ``24`` / ``28b`` name the implementing
+module. 71 of 73 resolve uniquely; ``24`` / ``28b`` name the implementing
 domain module behind an engine delegating wrapper (``DELEGATED_LOADERS``).
 
 Segment ``40`` (``verify_workflow.check_dsh_skills_manifest``) was removed with

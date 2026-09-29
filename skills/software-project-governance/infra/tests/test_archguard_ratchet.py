@@ -91,7 +91,12 @@ SNAPSHOT = _INFRA_DIR / "contract_matrix" / "snapshots.json"
 #      (+2 vs the 0.87-era 1316); the only-down ratchet continues from here.
 #      Same M-2 obligation shape as the FEAT-064 contract-matrix rebaseline
 #      (registry 96->97): frozen-count tests track the regenerated truth.
-FACTS_PRINT_TOTAL = 1318
+#   -> 1338 (0.93.0 B3 window, FEAT-080 / DEC-290(5), 2026-09-29: +20 — the
+#      Check 41 (Priority Inversion Guard) and Check 42 (Discovery Closure
+#      Rate) box renderings, the demand-source-revise CLI output, and the
+#      execution-packet incremental-merge note. Sanctioned regen re-anchored
+#      in the same change; see the R1 anchor lineage note below.
+FACTS_PRINT_TOTAL = 1338
 
 
 def _committed_baseline():
@@ -481,19 +486,21 @@ class BaselineArtifactTests(unittest.TestCase):
         self.assertIsInstance(data["rules_version"], int)
         self.assertRegex(data["generated"]["git_head"],
                          r"^([0-9a-f]{40}|unknown)$")
-        # M-1R regen re-baseline (2026-09-28, REL-094 window): anchor
-        # re-anchored to the 0.91.0 M-1R sanctioned regen (26385 at HEAD;
-        # prior 26358 at the 0.89.0 release-gate regen). Growth +27 =
-        # FEAT-072 锚区 (M7.4 6b/6c 完成必推荐契约注入面 + 机检锚 canonical
-        # 三标签, DEC-266 authorization chain REVIEW-FEAT-072-R0) + FIX-399
-        # regex robustness consumer faces (28c 发布日期解析器); R4 print
-        # census unchanged at 1318. Assert the exact regenerated anchor
-        # instead: the
-        # metadata contract's job is to pin the committed truth, and the
-        # regen itself is the sanctioned change that moves it (only-down
-        # from here). Keep in sync with core/architecture-baseline.json
-        # r1_mainfile_budget.anchor_loc on every sanctioned regen.
-        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 26385)
+        # 0.93.0 B3 regen re-baseline (2026-09-29, FEAT-080 / DEC-260
+        # separation discipline): anchor re-anchored 26478 -> 26921, a
+        # three-ticket lineage — FEAT-078 +30 (B1a entry-text wiring),
+        # FEAT-079 +74 (B1b staged registry + budget tier wiring),
+        # FEAT-080 +339 (B3: Check 41/42 boxes, provenance plumbing,
+        # demand-source CLI window close + demand-source-revise,
+        # release-gate sub-check, execution-packet incremental merge).
+        # R4 print census 1318 -> 1338 in the same regen (sanctioned +20,
+        # see FACTS_PRINT_TOTAL). Assert the exact regenerated anchor:
+        # the metadata contract's job is to pin the committed truth, and
+        # the regen itself is the sanctioned change that moves it
+        # (only-down from here). Keep in sync with
+        # core/architecture-baseline.json r1_mainfile_budget.anchor_loc
+        # on every sanctioned regen.
+        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 26921)
 
     def test_authored_zone_survives_regen(self):
         existing = _committed_baseline()

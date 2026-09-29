@@ -1,7 +1,7 @@
 {
   "faces": {
     "check_segments": {
-      "count": 71,
+      "count": 73,
       "ids": [
         "1",
         "2",
@@ -73,7 +73,9 @@
         "36",
         "37",
         "38",
-        "39"
+        "39",
+        "41",
+        "42"
       ],
       "titles": {
         "1": "Evidence Completeness",
@@ -142,6 +144,8 @@
         "38": "CI Evidence (FIX-267)",
         "39": "R1 Completion Gate (FIX-274)",
         "4": "Evidence Quality",
+        "41": "Priority Inversion Guard (FEAT-080/ADR-021)",
+        "42": "Discovery Closure Rate (FEAT-080/ADR-021)",
         "5": "Protocol Compliance (M8 External)",
         "6": "Tier Audit Completeness",
         "7": "Commit-Task Traceability",
@@ -164,8 +168,8 @@
           "dynamic-lifecycle-migration"
         ]
       },
-      "handler_count": 94,
-      "key_count": 97,
+      "handler_count": 95,
+      "key_count": 98,
       "keys": [
         "agent-locks-acquire",
         "agent-runtime-e2e",
@@ -226,6 +230,7 @@
         "check-version-consistency",
         "check-vertical-slices",
         "decision-append",
+        "demand-source-revise",
         "dsh-doctor",
         "dynamic-flow-gate-migration",
         "dynamic-lifecycle-migration",
@@ -416,14 +421,14 @@
   },
   "generated": {
     "generator_relpath": "skills/software-project-governance/infra/contract_matrix/generator.py",
-    "git_head": "61618a52eb1b98eade5fb446012626476d6ae9bf",
+    "git_head": "2ef9fc206be42a968e4f4e82a8d0d8d800d9c361",
     "python": {
       "family": "3.14",
       "implementation": "cpython",
       "platform": "win32",
       "version": "3.14.3"
     },
-    "timestamp_utc": "2026-09-24T23:02:52+00:00"
+    "timestamp_utc": "2026-09-29T03:36:02+00:00"
   },
   "python_family_pins": [
     {

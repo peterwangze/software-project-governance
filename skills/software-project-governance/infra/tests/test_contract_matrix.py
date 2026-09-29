@@ -87,8 +87,13 @@ from contract_matrix import generator as cmg  # noqa: E402
 # (pre-existing R5 drift); FEAT-064's deliberate guard-output wording change
 # forced the snapshot regeneration that surfaced it, and the registry row +
 # this count were reconciled in the same change.
-FROZEN_CLI_KEY_COUNT = 97
-FROZEN_CHECK_SEGMENT_COUNT = 71
+# FEAT-080 (0.93.0 B3, DEC-290(5)): 97→98 keys — `demand-source-revise`
+# (ADR-021 §2.2.1 F-P1-3 revision-channel CLI regularization; snapshot
+# regenerated + registry row + this count re-baselined in the same change,
+# the F-P2-5 regen discipline); segments 71→73 — the Check 41/42 provenance
+# sections (BLOCKING / ADVISORY respectively, ADR-021 §2.2.3+§3.2.3).
+FROZEN_CLI_KEY_COUNT = 98
+FROZEN_CHECK_SEGMENT_COUNT = 73
 
 
 @lru_cache(maxsize=1)

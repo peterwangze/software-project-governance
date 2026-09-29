@@ -108,8 +108,16 @@ _SECTION_RE = re.compile(r"^\s*#\s*" + _DASH + r"{2}\s*([0-9][A-Za-z0-9]*)\.\s")
 # wording change forced the contract-matrix snapshot regeneration
 # (`generator.py --regen` in the same change — the snapshot now names 97
 # keys and the registry must agree with the live face and the snapshot).
-FROZEN_CLI_KEYS = 97
-FROZEN_SEGMENTS = 71
+# FEAT-080 (0.93.0 B3, DEC-290(5)): 97 -> 98 CLI keys — the demand_source
+# revision channel's CLI regularization `demand-source-revise` (ADR-021
+# §2.2.1 F-P1-3; registry row + snapshot + this count re-baselined in the
+# same change, the F-P2-5 regen discipline).
+# FEAT-080 segments: 71 -> 73 — the Check 41 (Priority Inversion Guard,
+# BLOCKING) and Check 42 (Discovery Closure Rate, ADVISORY_SEGMENTS — the
+# ADR-021 §3.2.3 observation-window WARN posture) sections; SegmentSpec +
+# _SEGMENT_LOADERS + snapshot re-baselined in the same change.
+FROZEN_CLI_KEYS = 98
+FROZEN_SEGMENTS = 73
 
 # FEAT-018 R6 frozen startup budget (``core/architecture-baseline.json`` r6):
 # the acceptance ② comparison frame for "启动 import 集合不增".
@@ -1044,10 +1052,19 @@ class StartupImportTests(unittest.TestCase):
         self.assertEqual(probe["module"], "checks.evidence_domain")
 
     def test_engines_own_startup_face_is_reachable_without_the_registry(self):
-        """The registry is an additive seam: the engine does not import it."""
+        """The registry is an additive seam: the engine does not import it.
+
+        FEAT-080 (d): the assertion is now a REAL import-statement match
+        (``^\\s*(?:from|import)\\s+registry\\b``) — the old bare substring
+        ``"import registry"`` false-positived on FEAT-075's
+        ``from exception_registry import registry_error_note`` (the
+        substring spans ``..._registry import registry_...``). The judged
+        semantics never change: the engine must not import the
+        ``registry`` MODULE itself.
+        """
         source = _engine_source()
-        self.assertNotIn("import registry", source)
-        self.assertNotIn("from registry import", source)
+        self.assertIsNone(
+            re.search(r"(?m)^\s*(?:from|import)\s+registry\b", source))
 
     def test_the_engine_frozen_face_is_not_grown_by_the_registry(self):
         """② "启动 import 集合不增": the engine's own R6 face is untouched

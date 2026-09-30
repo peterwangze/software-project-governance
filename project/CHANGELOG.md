@@ -2,7 +2,7 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
-## [0.93.0] - 未发布（准备态）
+## [0.93.0] - 2026-09-30（taggerdate 权威〔FIX-349 口径〕）
 <!-- 发布日期占位（FIX-349 口径）：发布日期零预填；M-7 annotated tag `v0.93.0` 落地后以 taggerdate 权威回填本行日期单元格。 -->
 
 ### 0.93.0 - **元机制执法双件与例外清偿终局（Meta-Mechanism Enforcement Pair & Exception Ledger Finality）**：需求源执法与发现即闭环两大元机制落地为引擎面，EXC 三例外全部终局，证据分层物理清偿与 SD 完好性根修（DESIGN-021/FEAT-077~080/FEAT-076/FIX-403~409 载荷 / DEC-286(7)+290~296 / EVD-1240~1264 截至组装时点）

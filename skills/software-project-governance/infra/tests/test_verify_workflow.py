@@ -19205,13 +19205,22 @@ class CheckReviewClosureV6Tests(unittest.TestCase):
         self.assertEqual(r["verdict"], "WARN")
 
     def test_v6_historical_pre_normalization_exempt(self):
+        # FIX-413 provably-historical arm (a) (review_domain.py): an
+        # incomplete task whose terminal NEEDS_CHANGE round is dated
+        # pre-FIX-174 normalization (2026-07-18) is pre-era residue —
+        # fully silenced (continue), so no V6 breach AND no V1 WARN
+        # (EVD-1271: live re-spawn WARN 22->4; disclosed as DEC-297).
         seq, completed = self._seq(rounds=(
             (0, "NEEDS_CHANGE", date(2026, 7, 17)),), completed=False)
         r = vw.check_review_closure(
             review_sequence=seq, plan_tracker_completed=completed)
         self.assertEqual(
             [v["rule"] for v in r["violations"] if v["rule"] == "V6"], [])
-        self.assertEqual(r["verdict"], "WARN")  # V1 historical downgrade
+        self.assertEqual(
+            [v["rule"] for v in r["violations"] if v["rule"] == "V1"], [])
+        self.assertEqual(
+            [w["rule"] for w in r["warnings"] if w["rule"] == "V1"], [])
+        self.assertEqual(r["verdict"], "PASS")  # FIX-413 arm (a) full silence
 
     def test_v6_missing_date_no_false_positive(self):
         seq, completed = self._seq(rounds=((0, "NEEDS_CHANGE", None),))

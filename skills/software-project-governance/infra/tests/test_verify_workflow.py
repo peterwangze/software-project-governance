@@ -13313,6 +13313,107 @@ class UserImpactTests(unittest.TestCase):
             self.assertEqual(r["entries"][0]["status"], "FAIL")
 
 
+class FIX410UserImpactLatestWinsTests(unittest.TestCase):
+    """FIX-410: Check 17 read-side latest-wins.
+
+    RCA (live: EVD-1252): a task's malformed old-format user-impact row
+    kept Check 17 FAILing forever even though a compliant correction row
+    was appended later — the write side (intake mirror) already prevents
+    NEW bad rows, but the read side refused to recognize corrections.
+    Latest-wins: per task, only the LATEST field-carrying row is judged;
+    superseded rows stay in the log as append-only history (disclosed via
+    a superseded counter). A task with NO field-carrying row keeps the
+    original per-entry logic (missing-field FAIL stands).
+    """
+
+    _COMPLIANT = (
+        "用户影响: 获得=plugin update, 感知=下次会话启动时自动检测, "
+        "体验变化=否, 迁移指南=不需要"
+    )
+    _MALFORMED = "用户影响: 获得=部分子字段缺失的旧格式行"
+
+    def _setup(self, tmpdir, evidence_lines=None):
+        root = Path(tmpdir)
+        gov = root / ".governance"; gov.mkdir(parents=True, exist_ok=True)
+        plan = "\n".join([
+            "# 计划跟踪",
+            "",
+            "## 项目配置",
+            "- **Profile**: standard",
+        ])
+        sp = gov / "plan-tracker.md"
+        sp.write_text(plan, encoding="utf-8")
+        ep = gov / "evidence-log.md"
+        ep.write_text("\n".join(evidence_lines or []), encoding="utf-8")
+        return sp, ep
+
+    def test_latest_compliant_row_supersedes_older_malformed(self):
+        """旧坏格式行+新合规行 → 只判最新行 → PASS + superseded 披露。"""
+        with _governance_temp_dir(prefix="fix410-latest-wins-") as td:
+            sp, ep = self._setup(td, evidence_lines=[
+                _impact_evidence_row("EVD-001", "TASK-001", self._MALFORMED),
+                _impact_evidence_row("EVD-002", "TASK-001", self._COMPLIANT),
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_user_impact()
+            self.assertTrue(r["pass"], r["entries"])
+            self.assertEqual(len(r["entries"]), 1,
+                             "only the latest field row of the task is judged")
+            self.assertEqual(r["entries"][0]["status"], "PASS")
+            self.assertEqual(r["latest_wins_superseded"], 1)
+
+    def test_latest_malformed_row_fails_despite_older_compliant(self):
+        """旧行合规+新行坏 → 判最新行 → FAIL（latest-wins 不美化最新状态）。"""
+        with _governance_temp_dir(prefix="fix410-latest-bad-") as td:
+            sp, ep = self._setup(td, evidence_lines=[
+                _impact_evidence_row("EVD-001", "TASK-001", self._COMPLIANT),
+                _impact_evidence_row("EVD-002", "TASK-001", self._MALFORMED),
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_user_impact()
+            self.assertFalse(r["pass"])
+            self.assertEqual(len(r["entries"]), 1)
+            self.assertEqual(r["entries"][0]["status"], "FAIL")
+            self.assertEqual(r["latest_wins_superseded"], 1)
+
+    def test_tasks_without_field_rows_keep_original_logic(self):
+        """无 field 行的任务 → 原逻辑（逐行判缺失=FAIL，不进 latest-wins）。"""
+        with _governance_temp_dir(prefix="fix410-no-field-") as td:
+            sp, ep = self._setup(td, evidence_lines=[
+                _impact_evidence_row("EVD-001", "TASK-001", "no field at all"),
+                _impact_evidence_row("EVD-002", "TASK-001", "still no field"),
+                _impact_evidence_row("EVD-003", "TASK-002", self._COMPLIANT),
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_user_impact()
+            self.assertFalse(r["pass"])
+            task_ids = [entry["task_id"] for entry in r["entries"]]
+            self.assertEqual(task_ids, ["TASK-001", "TASK-001", "TASK-002"])
+            self.assertEqual(r["latest_wins_superseded"], 0)
+
+    def test_late_fieldless_row_stays_judged_after_early_field_row(self):
+        """P1-1（FIX-410 R0 审查采纳）：早 field 行合规 + 晚 fieldless 行 →
+        fieldless 晚出行保持原逐行判定（缺失=FAIL）——supersede 仅作用
+        field 承载行，组合执法缝（rule-1 缺失 FAIL 被吞）关闭。"""
+        with _governance_temp_dir(prefix="fix410-late-fieldless-") as td:
+            sp, ep = self._setup(td, evidence_lines=[
+                _impact_evidence_row("EVD-001", "TASK-001", self._COMPLIANT),
+                _impact_evidence_row("EVD-002", "TASK-001",
+                                     "late row without the field"),
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_user_impact()
+            self.assertFalse(r["pass"], r["entries"])
+            judged = [(e["evd_id"], e["status"]) for e in r["entries"]]
+            self.assertEqual(judged,
+                             [("EVD-001", "PASS"), ("EVD-002", "FAIL")])
+            self.assertEqual(r["latest_wins_superseded"], 0)
+
+
 class FactGroundingTests(unittest.TestCase):
     """FIX-080: current product-code evidence must carry fact grounding."""
 
@@ -13848,7 +13949,8 @@ class ExecutionPacketTests(unittest.TestCase):
         Regression for the data-loss footgun: the CLI used to write the
         filtered face wholesale, silently dropping every unselected packet
         from the runtime file."""
-        with tempfile.TemporaryDirectory() as td:
+        # FIX-411: sandbox-safe fixture (the TemporaryDirectory family).
+        with _governance_temp_dir(prefix="fix411-packet-write-") as td:
             _, sp, packet_path = self._setup_plan(td, [
                 "| **P0** | FIX-084 | AI packet | DEC-068 | 0.38.0 | packet command | 📋 待启动 |",
                 "| **P1** | FIX-086 | projection sync | DEC-068 | 0.38.0 | sync guard | 🔄 进行中 |",
@@ -13875,17 +13977,21 @@ class ExecutionPacketTests(unittest.TestCase):
             # Existing filled content survives the existing-merge.
             self.assertEqual(on_disk["packets"]["FIX-086"]["goal"],
                              "filled goal that must survive")
-            # Stdout prints no non-selected packet dump; the OK line
-            # reports the full write and marks the filter preview-only.
+            # Stdout prints no non-selected packet dump; the OK line reports
+            # the FEAT-080 B3 incremental-merge write (preserve + terminal
+            # prune semantics: the regenerated-vs-preserved split replaces
+            # the old "--task filter is preview-only" marker wording).
             self.assertNotIn('"task_id": "FIX-086"', out.getvalue())
             self.assertIn("wrote 2 execution packet(s)", out.getvalue())
-            self.assertIn("--task", out.getvalue())
+            self.assertIn("incremental merge", out.getvalue())
+            self.assertIn("preserved 1 other entry", out.getvalue())
 
     def test_execution_packet_task_filter_print_shows_selected_only_and_writes_nothing(self):
         """FIX-296: without --write the --task filter stays a pure stdout
         preview — only the selected packet is printed and the runtime file
         is left untouched (pre-existing behavior, zero change)."""
-        with tempfile.TemporaryDirectory() as td:
+        # FIX-411: sandbox-safe fixture (the TemporaryDirectory family).
+        with _governance_temp_dir(prefix="fix411-packet-print-") as td:
             _, sp, packet_path = self._setup_plan(td, [
                 "| **P0** | FIX-084 | AI packet | DEC-068 | 0.38.0 | packet command | 📋 待启动 |",
                 "| **P1** | FIX-086 | projection sync | DEC-068 | 0.38.0 | sync guard | 🔄 进行中 |",

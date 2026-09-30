@@ -277,7 +277,9 @@ STATIC_PIN_EXEMPTIONS = {
         (1143, "0.86.0", _REASON_GUARD_OUTPUT_ASSERT),
     ],
     "skills/software-project-governance/infra/tests/test_static_version_pins.py": [
-        (158, "0.85.0", _REASON_FUTURE_TARGET),
+        # FIX-411 re-anchor: the sandbox-fixture hardening import additions
+        # shifted the row 158->166 (token unchanged).
+        (166, "0.85.0", _REASON_FUTURE_TARGET),
     ],
     # 0.87.0 bump-time rows (the FIX-361 designed double signal): FIX-366's
     # bump-scenario regression constant (NEW_VERSION) and FIX-371's fixture
@@ -321,16 +323,17 @@ STATIC_PIN_EXEMPTIONS = {
         # 0.93.0 bump-time rows: the FEAT-080 provenance-rows derivation
         # fixture (TaskDep target_version) and its passthrough assertion —
         # scenario payload with the then-future target, surfaces exactly
-        # once at this bump.
-        (20038, "0.93.0", _REASON_FUTURE_TARGET),
-        (20056, "0.93.0", _REASON_FUTURE_TARGET),
+        # once at this bump. (FIX-410 re-anchor +82; FIX-411 re-anchor +5
+        # — the D-group sandbox-fixture conversions shifted both rows.)
+        (20125, "0.93.0", _REASON_FUTURE_TARGET),
+        (20143, "0.93.0", _REASON_FUTURE_TARGET),
         # The two FIX-405 SD-integrity readiness tests call
         # check_release_readiness(version="0.93.0") — written with the
         # then-future release as the gate's version parameter; surfaces
         # once at this bump (rows re-anchored by the FIX-408 hermetic
-        # hardening, tokens unchanged).
-        (20388, "0.93.0", _REASON_FUTURE_TARGET),
-        (20420, "0.93.0", _REASON_FUTURE_TARGET),
+        # hardening, tokens unchanged; FIX-410 re-anchor +82; FIX-411 +5).
+        (20475, "0.93.0", _REASON_FUTURE_TARGET),
+        (20507, "0.93.0", _REASON_FUTURE_TARGET),
     ],
     # 0.89.0 bump-time rows (the FIX-361 designed double signal): fixture
     # worlds written by the 0.89.0-window tickets (FIX-390/393/394) carrying

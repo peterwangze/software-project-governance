@@ -24,11 +24,22 @@ Fix semantics (FIX-312):
 """
 
 import json
+import shutil
 import sys
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 from unittest.mock import patch
+
+
+def _sandbox_gov_root(prefix):
+    """Sandbox-safe fixture root (FIX-411, the FIX-404 ``TemporaryDirectory``
+    family): mkdtemp dirs (0o700) deny the .governance writes/cleanup under
+    the UAC-filtered DSH sandbox token — a plain default-mode mkdir works."""
+    root = Path(tempfile.gettempdir()) / (prefix + uuid.uuid4().hex[:12])
+    root.mkdir()
+    return root
 
 _HERE = Path(__file__).resolve().parent
 _INFRA_DIR = _HERE.parent
@@ -70,11 +81,10 @@ class DecisionAttributionTests(unittest.TestCase):
     def setUp(self):
         import archive  # noqa: F401  (module-level sys.path injection applies)
         self.archive = archive
-        self.tempdir = tempfile.TemporaryDirectory(prefix="spg-fix312-")
-        self.root = Path(self.tempdir.name)
+        self.root = _sandbox_gov_root("spg-fix312-")
         self.gov = self.root / ".governance"
         self.gov.mkdir(parents=True, exist_ok=True)
-        self.addCleanup(self.tempdir.cleanup)
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
 
     def _write_decision_log(self, rows, header=True):
         lines = ["# 决策记录", ""]
@@ -191,21 +201,28 @@ class DecisionAttributionTests(unittest.TestCase):
                          "legacy fixture shape must still migrate (all refs "
                          "archived)")
 
-    def test_ragged_row_is_reported_unknown_structure(self):
-        """A structurally untrusted row (fewer cells than the schema) is
-        retained fail-closed and lands in the unknown_structure bucket."""
-        ragged = "| DEC-292 | 2026-09-16 | 短行 | 背景 | 决策 |"
-        self._write_decision_log([_DEC187_ROW, ragged])
+    def test_regular_narrative_row_gets_narrative_verdict_not_unknown(self):
+        """FIX-411 B-group contract ruling: the STRUCTURE judgment precedes
+        the narrative judgment — a REGULAR 5-cell row (编号/日期/决策人/
+        决策内容/理由) is the canonical narrative form and receives a
+        NARRATIVE verdict (here: the fixture date falls outside the Q6
+        window → retained hot with a narrative_* reason); it no longer
+        lands in the unknown_structure bucket. Ragged lengths keep
+        decision_row_too_short (see Fix342DefensiveSurfaceTests)."""
+        regular = "| DEC-292 | 2026-09-16 | 短行 | 背景 | 决策 |"
+        self._write_decision_log([_DEC187_ROW, regular])
         task_versions = {
             "FEAT-010": "0.77.0", "FIX-307": "0.80.0", "FIX-308": "0.80.0",
             "FIX-309": "0.80.0", "FIX-310": "0.80.0"}
         explain = []
         count = self._migrate(task_versions, dry_run=True, explain_out=explain)
-        # Dry-run: DEC-187 would archive (1), DEC-292 is unknown structure.
+        # Dry-run: DEC-187 would archive (1), DEC-292 retained via narrative.
         self.assertEqual(count, 1)
         stats = self.archive._finalize_explain(explain)
-        self.assertEqual(stats["unknown_structure"], 1)
-        self.assertIn("DEC-292", stats["unknown_ids"])
+        self.assertEqual(stats["unknown_structure"], 0)
+        reasons = {r["id"]: r["reason"] for r in explain}
+        self.assertTrue(reasons.get("DEC-292", "").startswith("narrative_"),
+                        reasons.get("DEC-292"))
 
     def test_dry_run_reports_would_archive_without_writing(self):
         self._write_decision_log([_DEC187_ROW])
@@ -251,11 +268,10 @@ class Fix342DefensiveSurfaceTests(unittest.TestCase):
     def setUp(self):
         import archive  # noqa: F401  (module-level sys.path injection applies)
         self.archive = archive
-        self.tempdir = tempfile.TemporaryDirectory(prefix="spg-fix342-")
-        self.root = Path(self.tempdir.name)
+        self.root = _sandbox_gov_root("spg-fix342-")
         self.gov = self.root / ".governance"
         self.gov.mkdir(parents=True, exist_ok=True)
-        self.addCleanup(self.tempdir.cleanup)
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
 
     def _write_decision_log(self, rows, header=False):
         lines = ["# 决策记录", ""]

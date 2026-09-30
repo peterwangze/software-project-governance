@@ -2974,7 +2974,20 @@ def _collect_live_review_sequences():
             content = EVIDENCE_PATH.read_text(encoding="utf-8")
         except (IOError, OSError):
             content = ""
-        for line in content.split("\n"):
+        row_lines = content.split("\n")
+        # FIX-410b: cold-layer REVIEW rows join the SAME row scan (FEAT-076
+        # verbatim migration preserved the date column) so an archived round
+        # contributes its historical date — the V1/V5 pre-FIX-174 exemption
+        # (terminal-round date predicate, FIX-233) was unreachable for chains
+        # whose only dated row migrated cold (live RCA 2026-09-29: REL-058
+        # R0=BLOCKED — the historical report file carries no date field; the
+        # archived row carries 2026-07-17). A broken cold read must never
+        # take the closure check down — the hot face still reports.
+        try:
+            row_lines.extend(_cold_review_evidence_lines())
+        except Exception:  # noqa: BLE001
+            pass
+        for line in row_lines:
             stripped = line.strip()
             if not stripped.startswith("|"):
                 continue

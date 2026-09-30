@@ -512,7 +512,14 @@ class BaselineArtifactTests(unittest.TestCase):
         # (only-down from here). Keep in sync with
         # core/architecture-baseline.json r1_mainfile_budget.anchor_loc
         # on every sanctioned regen.
-        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 27133)
+        # FIX-410 G-1 rider re-anchor (2026-09-29): 27133 -> 27164, +31/-0
+        # measured split — FIX-410 +31 (Check 17 read-side latest-wins
+        # pre-pass ~26 incl. the P1-1 review seam narrowing; anchor-dict
+        # 0.92.0->0.93.0 bumps line-count-neutral); FIX-411 +0 on the main
+        # file (its deltas live in checks/review_domain.py, archive.py and
+        # test files). Engine print census stayed 1338 (zero drift — the
+        # latest-wins block prints nothing).
+        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 27164)
 
     def test_authored_zone_survives_regen(self):
         existing = _committed_baseline()

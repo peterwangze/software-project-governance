@@ -42,7 +42,7 @@
 | # | 级 | 位置 | 问题 | 建议 |
 |---|---|---|---|---|
 | R1-F-14 | P3 | CHANGELOG L48 | 「Py3.14 **onesc** 转义」拼写漂移——代码 grep 亲证 6 处全为 `onexc`（tempfile 清理回调，commit `0ba86ce` 原文同）——C1 修复时引入 | tag 前顺手改 onexc（单字） |
-| R1-F-15 | P3 | rollback-plan L20 | fix407-backup 唯一副本位于易失路径（`Temp\dsh-edmOzF\` 会话 spill 形态目录；Temp 清理/会话生命周期可能先于发布结账）——序①回滚依赖此备份 | tag 前复制一份至持久位置（如 `.governance/backups/fix407-rel096/`，gitignored）并在 rollback-plan 补双锚引用 |
+| R1-F-15 | P3 | rollback-plan L20 | fix407-backup 唯一副本位于易失路径（`Temp` 下 `dsh-edmOzF` 会话 spill 形态目录；Temp 清理/会话生命周期可能先于发布结账）——序①回滚依赖此备份 | tag 前复制一份至持久位置（如 `.governance/backups/fix407-rel096/`，gitignored）并在 rollback-plan 补双锚引用 |
 
 **R1 计数**: P0=0 / P1=0 / P2=0 / P3=5（4 未修+1 新引入）——**零阻塞**。
 

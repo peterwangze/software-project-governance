@@ -47,9 +47,24 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stderr, redirect_stdout
+import uuid
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
+
+
+@contextmanager
+def _sandbox_td(prefix="dsh-adapter-fixture-"):
+    """Sandbox-safe fixture dir (FIX-411; the FIX-404 ``TemporaryDirectory``
+    family): mkdtemp dirs (0o700) deny the adapter-fixture writes/cleanup
+    under the UAC-filtered DSH sandbox token — a plain default-mode mkdir
+    works; cleanup carries ``rmtree(ignore_errors=True)`` protection."""
+    root = Path(tempfile.gettempdir()) / (prefix + uuid.uuid4().hex[:12])
+    root.mkdir()
+    try:
+        yield str(root)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
 
 _HERE = Path(__file__).resolve().parent
 _INFRA_DIR = _HERE.parent
@@ -423,7 +438,10 @@ class DshAdapterTests(unittest.TestCase):
             "- id: persona",
             "name: '@deepseek-ai/dsh-persona'",
             "software-project-governance",
-            "resolve_entry.py",
+            # FIX-411: FEAT-078's persona rewrite words the bootstrap entry
+            # as `resolve_entry`（检测面）without the ".py" suffix — the old
+            # marker predates that sanctioned rewording.
+            "resolve_entry",
             "ask_user_question",
             # FIX-253/REQ-112: the persona must carry the compressed
             # behavior contract (关键行为契约) unconditionally.
@@ -445,7 +463,7 @@ class DshAdapterTests(unittest.TestCase):
 
     def test_launch_render_is_pure_substitution(self):
         launch = _load_launch_module()
-        with tempfile.TemporaryDirectory() as td, patch.dict(
+        with _sandbox_td() as td, patch.dict(
             os.environ, {"DSH_HOME": td}, clear=False
         ):
             exit_code = launch.install_preset()
@@ -473,7 +491,7 @@ class DshAdapterTests(unittest.TestCase):
         # referenced ABSOLUTELY — nothing may be copied into the preset dir,
         # otherwise the repo would carry a second source of the same files.
         launch = _load_launch_module()
-        with tempfile.TemporaryDirectory() as td, patch.dict(
+        with _sandbox_td() as td, patch.dict(
             os.environ, {"DSH_HOME": td}, clear=False
         ):
             self.assertEqual(launch.install_preset(), 0)
@@ -499,7 +517,7 @@ class DshAdapterTests(unittest.TestCase):
 
     def test_install_writes_skill_root_marker(self):
         launch = _load_launch_module()
-        with tempfile.TemporaryDirectory() as td, patch.dict(
+        with _sandbox_td() as td, patch.dict(
             os.environ, {"DSH_HOME": td}, clear=False
         ):
             self.assertEqual(launch.install_preset(), 0)
@@ -515,7 +533,7 @@ class DshAdapterTests(unittest.TestCase):
         # FEAT-010 incident / DEC-158 R1: the safe verification path must be
         # side-effect free — --dry-run may not create even the preset root.
         launch = _load_launch_module()
-        with tempfile.TemporaryDirectory() as td, patch.dict(
+        with _sandbox_td() as td, patch.dict(
             os.environ, {"DSH_HOME": td}, clear=False
         ):
             self.assertEqual(launch.install_preset(dry_run=True), 0)
@@ -523,7 +541,7 @@ class DshAdapterTests(unittest.TestCase):
             self.assertFalse((Path(td) / ".agent-presets").exists())
 
     def test_cli_install_dry_run_flag_writes_nothing(self):
-        with tempfile.TemporaryDirectory() as td:
+        with _sandbox_td() as td:
             env = os.environ.copy()
             env["DSH_HOME"] = td
             result = subprocess.run(
@@ -542,7 +560,7 @@ class DshAdapterTests(unittest.TestCase):
 
     def test_bootstrap_dry_run_writes_nothing(self):
         launch = _load_launch_module()
-        with tempfile.TemporaryDirectory() as td:
+        with _sandbox_td() as td:
             project = Path(td) / "project"
             project.mkdir()
             self.assertEqual(
@@ -554,7 +572,7 @@ class DshAdapterTests(unittest.TestCase):
         # Lifecycle symmetry: install must have an official uninstall that
         # deletes exactly the governance preset dir — never siblings.
         launch = _load_launch_module()
-        with tempfile.TemporaryDirectory() as td, patch.dict(
+        with _sandbox_td() as td, patch.dict(
             os.environ, {"DSH_HOME": td}, clear=False
         ):
             self.assertEqual(launch.install_preset(), 0)
@@ -569,7 +587,7 @@ class DshAdapterTests(unittest.TestCase):
 
     def test_uninstall_dry_run_deletes_nothing(self):
         launch = _load_launch_module()
-        with tempfile.TemporaryDirectory() as td, patch.dict(
+        with _sandbox_td() as td, patch.dict(
             os.environ, {"DSH_HOME": td}, clear=False
         ):
             self.assertEqual(launch.install_preset(), 0)
@@ -579,7 +597,7 @@ class DshAdapterTests(unittest.TestCase):
             )
 
     def test_cli_uninstall_flag_removes_preset(self):
-        with tempfile.TemporaryDirectory() as td:
+        with _sandbox_td() as td:
             env = os.environ.copy()
             env["DSH_HOME"] = td
             install = subprocess.run(
@@ -767,7 +785,7 @@ class DshAdapterTests(unittest.TestCase):
         "bash unavailable (hook self-upgrade checks are bash-hosted)",
     )
     def test_hook_discovers_dsh_link_mode_marker(self):
-        with tempfile.TemporaryDirectory() as td:
+        with _sandbox_td() as td:
             root = Path(td) / "target"
             self._init_target_repo(root)
 
@@ -800,7 +818,7 @@ class DshAdapterTests(unittest.TestCase):
         "bash unavailable (hook self-upgrade checks are bash-hosted)",
     )
     def test_hook_discovers_dsh_copy_mode_snapshot(self):
-        with tempfile.TemporaryDirectory() as td:
+        with _sandbox_td() as td:
             root = Path(td) / "target"
             self._init_target_repo(root)
 
@@ -950,7 +968,7 @@ class DshAdapterTests(unittest.TestCase):
             sys.path.insert(0, str(_INFRA_DIR))
         import verify_workflow as vw
 
-        with tempfile.TemporaryDirectory() as td:
+        with _sandbox_td() as td:
             root = Path(td)
             for relative in vw.INJECTION_CONTRACT_ANCHORS:
                 target = root / relative
@@ -1000,7 +1018,7 @@ class DshAdapterTests(unittest.TestCase):
         # Negative: strip a new anchor from the temp-root copy → FAIL
         # (same fixture pattern as
         # test_injection_contract_check_flags_missing_anchor).
-        with tempfile.TemporaryDirectory() as td:
+        with _sandbox_td() as td:
             root = Path(td)
             for relative in vw.INJECTION_CONTRACT_ANCHORS:
                 target = root / relative
@@ -1096,8 +1114,10 @@ class DshAdapterTests(unittest.TestCase):
         skill_text = (_REPO_ROOT / skill_rel).read_text(encoding="utf-8")
         self.assertIn(m1_compressed, skill_text, "SKILL.md clause 5 (compressed)")
         self.assertIn(m2_compressed, skill_text, "SKILL.md clause 6 (compressed)")
-        self.assertIn("以下六条与铁律同级", skill_text,
-                      "关键行为契约 intro must count six items post-FEAT-078")
+        self.assertIn("六条与铁律同级", skill_text,
+                      "关键行为契约 intro must count six items post-FEAT-078 "
+                      "(FIX-411: FIX-405/406's freeze-line compression "
+                      "dropped the 「以下」 prefix — the six-item count stands)")
 
         # ③ DSH persona contract block — compressed bodies + the B1b-planned
         # extra anchor 「用户点名」 (ADR §2.1 registry row: persona 面另加).
@@ -1160,7 +1180,7 @@ class DshAdapterTests(unittest.TestCase):
         # the structural isolation guard is the primary protection and this
         # fingerprint is the detection net.
         launch = _load_launch_module()
-        with tempfile.TemporaryDirectory() as td:
+        with _sandbox_td() as td:
             home = Path(td) / "home"
             home.mkdir()
             (home / "settings.yaml").write_text("a: 1\n", encoding="utf-8")
@@ -1179,7 +1199,7 @@ class DshAdapterTests(unittest.TestCase):
         # verdict, and the real ~/.dsh witness is identical after.
         real_home = Path.home() / ".dsh"
         before = _real_home_witness_oracle(real_home)
-        with tempfile.TemporaryDirectory() as td:
+        with _sandbox_td() as td:
             env = os.environ.copy()
             env["DSH_HOME"] = td
             result = _run_smoke_cli(env)
@@ -1201,7 +1221,7 @@ class DshAdapterTests(unittest.TestCase):
     def test_smoke_cli_refuses_unredirected_dsh_home(self):
         # Negative path 3a: DSH_HOME unset. The guard must refuse BEFORE any
         # write; the decoy home keeps the real ~/.dsh out of scope entirely.
-        with tempfile.TemporaryDirectory() as td:
+        with _sandbox_td() as td:
             decoy = Path(td) / "decoy-home"
             decoy.mkdir()
             result = _run_smoke_cli(_decoy_home_env(decoy))
@@ -1214,7 +1234,7 @@ class DshAdapterTests(unittest.TestCase):
     def test_smoke_cli_refuses_dsh_home_at_user_home(self):
         # Negative path 3b: DSH_HOME == <home>/.dsh — the "误打真实 home"
         # shape, exercised against a decoy home (zero real-home exposure).
-        with tempfile.TemporaryDirectory() as td:
+        with _sandbox_td() as td:
             decoy = Path(td) / "decoy-home"
             decoy.mkdir()
             env = _decoy_home_env(decoy)
@@ -1228,7 +1248,7 @@ class DshAdapterTests(unittest.TestCase):
         # Same guard, unit level: the real home is patched to a temp dir, so a
         # regression can never reach the actual ~/.dsh through this test.
         launch = _load_launch_module()
-        with tempfile.TemporaryDirectory() as td:
+        with _sandbox_td() as td:
             fake_real = Path(td) / "real-home"
             fake_real.mkdir()
             with patch.dict(os.environ, {"DSH_HOME": str(fake_real)}, clear=False), \
@@ -1241,7 +1261,7 @@ class DshAdapterTests(unittest.TestCase):
         # Negative path 3c-i: the skill root resolves to a directory without
         # the catalog skill → the gate names it.
         launch = _load_launch_module()
-        with tempfile.TemporaryDirectory() as td, patch.dict(
+        with _sandbox_td() as td, patch.dict(
             os.environ, {"DSH_HOME": td}, clear=False
         ):
             self.assertEqual(launch.install_preset(), 0)
@@ -1271,7 +1291,7 @@ class DshAdapterTests(unittest.TestCase):
         # Negative path 3c-ii: the shims root exists but carries no
         # /governance projection.
         launch = _load_launch_module()
-        with tempfile.TemporaryDirectory() as td, patch.dict(
+        with _sandbox_td() as td, patch.dict(
             os.environ, {"DSH_HOME": td}, clear=False
         ):
             self.assertEqual(launch.install_preset(), 0)
@@ -1298,7 +1318,7 @@ class DshAdapterTests(unittest.TestCase):
         # customSkillDirs entry resolves against the dsh process CWD and
         # silently empties the catalog — the gate must name it, not pass.
         launch = _load_launch_module()
-        with tempfile.TemporaryDirectory() as td:
+        with _sandbox_td() as td:
             preset = Path(td) / "preset"
             preset.mkdir()
             (preset / "agent.cordis.yml").write_text(
@@ -1323,7 +1343,7 @@ class DshAdapterTests(unittest.TestCase):
         # own "preset loading" gate on the --smoke path — used to read the
         # composition only for customSkillDirs and never parsed a row.
         launch = _load_launch_module()
-        with tempfile.TemporaryDirectory() as td:
+        with _sandbox_td() as td:
             preset = Path(td) / "preset"
             preset.mkdir()
             (preset / "agent.cordis.yml").write_text(
@@ -1351,7 +1371,7 @@ class DshAdapterTests(unittest.TestCase):
 
     def test_verify_preset_loading_accepts_a_contract_shaped_persona_row(self):
         launch = _load_launch_module()
-        with tempfile.TemporaryDirectory() as td:
+        with _sandbox_td() as td:
             preset = Path(td) / "preset"
             preset.mkdir()
             (preset / "agent.cordis.yml").write_text(
@@ -1395,7 +1415,7 @@ class DshAdapterTests(unittest.TestCase):
             (home / "sessions").mkdir()
             return home
 
-        with tempfile.TemporaryDirectory() as td:
+        with _sandbox_td() as td:
             # 1. host-owned subtree activity is tolerated
             home = fresh_home(td, "host-activity")
             baseline = launch._real_home_witness(home)
@@ -1470,7 +1490,7 @@ class DshAdapterTests(unittest.TestCase):
         sys.path.insert(0, str(_INFRA_DIR / "tests"))
         import dsh_fixtures
 
-        with tempfile.TemporaryDirectory() as td:
+        with _sandbox_td() as td:
             path = dsh_fixtures.emit_fixture("FX-WITNESS-01", Path(td))
             proc = subprocess.run(
                 [sys.executable, str(path), str(_LAUNCH_PATH)],
@@ -1485,7 +1505,7 @@ class DshAdapterTests(unittest.TestCase):
         # Defence in depth: if any code path mutated the real home, the
         # before/after witness comparison must FAIL the gate.
         launch = _load_launch_module()
-        with tempfile.TemporaryDirectory() as td:
+        with _sandbox_td() as td:
             isolated = Path(td) / "isolated"
             fake_real = Path(td) / "real-home"
             fake_real.mkdir()
@@ -1510,7 +1530,7 @@ class DshAdapterTests(unittest.TestCase):
         # explicitly as NOT_RUN for the live-session面 — never a silent pass
         # that implies session behavior was verified.
         launch = _load_launch_module()
-        with tempfile.TemporaryDirectory() as td, patch.dict(
+        with _sandbox_td() as td, patch.dict(
             os.environ, {"DSH_HOME": td}, clear=False
         ), patch.object(launch.shutil, "which", return_value=None):
             buffer = io.StringIO()
@@ -1543,7 +1563,7 @@ class DshAdapterTests(unittest.TestCase):
             sys.path.insert(0, str(_INFRA_DIR))
         import verify_workflow as vw
 
-        with tempfile.TemporaryDirectory() as td:
+        with _sandbox_td() as td:
             root = Path(td)
             adapter = root / "adapters" / "dsh"
             adapter.mkdir(parents=True)
@@ -1632,7 +1652,7 @@ class DshAdapterTests(unittest.TestCase):
         if not node:
             self.skipTest("node unavailable (JS renderer cannot be exercised)")
         launch = _load_launch_module()
-        with tempfile.TemporaryDirectory() as td:
+        with _sandbox_td() as td:
             fixture = (
                 _TEMPLATE_PATH.read_text(encoding="utf-8").replace("\r\n", "\n")
                 + "\n# FIX-313 isolated-CR probe: X\rY\n"
@@ -1699,7 +1719,7 @@ class DshAdapterTests(unittest.TestCase):
             "apply(ctx);"
             "process.stdout.write(JSON.stringify(warns));"
         )
-        with tempfile.TemporaryDirectory() as td:
+        with _sandbox_td() as td:
             env = os.environ.copy()
             env["DSH_HOME"] = td
             preset = Path(td) / ".agent-presets" / "governance"
@@ -1744,7 +1764,7 @@ class DshAdapterTests(unittest.TestCase):
         if not node:
             self.skipTest("node unavailable (host row cannot be exercised)")
         lib_uri = (_REPO_ROOT / "lib" / "index.js").resolve().as_uri()
-        with tempfile.TemporaryDirectory() as td:
+        with _sandbox_td() as td:
             # A package copy whose preset payload is absent. V2 (FEAT-030): the
             # payload's location comes from the host contract — the row holds no
             # inlined copy of it (J-4) — so the copy carries the contract and is
@@ -1799,7 +1819,7 @@ class DshAdapterTests(unittest.TestCase):
         # attempt proved it created, and the undecidable name is left alone.
         if not shutil.which("node"):
             self.skipTest("node unavailable (host row cannot be exercised)")
-        with tempfile.TemporaryDirectory() as td:
+        with _sandbox_td() as td:
             root = Path(td)
             pkg = _catching_package_copy(root)
             cwd = root / "cwd"
@@ -1840,7 +1860,7 @@ class DshAdapterTests(unittest.TestCase):
         # rendered preset next to the user's preset root forever.
         if not shutil.which("node"):
             self.skipTest("node unavailable (host row cannot be exercised)")
-        with tempfile.TemporaryDirectory() as td:
+        with _sandbox_td() as td:
             root = Path(td)
             pkg = _catching_package_copy(root)
             cwd = root / "cwd"
@@ -1882,7 +1902,7 @@ class DshAdapterTests(unittest.TestCase):
         # closes F1's fixture gap, F2's rewrite and F3's coverage at once.
         if not shutil.which("node"):
             self.skipTest("node unavailable (host row cannot be exercised)")
-        with tempfile.TemporaryDirectory() as td:
+        with _sandbox_td() as td:
             root = Path(td)
             pkg = _complete_package_copy(root)
             cwd = root / "cwd"
@@ -1917,7 +1937,7 @@ class DshAdapterTests(unittest.TestCase):
         # pre-V10 shape deleted it right before adopting its name).
         if not shutil.which("node"):
             self.skipTest("node unavailable (host row cannot be exercised)")
-        with tempfile.TemporaryDirectory() as td:
+        with _sandbox_td() as td:
             root = Path(td)
             pkg = _complete_package_copy(root)
             cwd = root / "cwd"
@@ -1968,7 +1988,7 @@ class DshAdapterTests(unittest.TestCase):
                 "Node >= 22.15 required for the ESM registerHooks fault "
                 "injection (repo declares engines >= 20) — NOT_RUN per the "
                 "FIX-325 skip/NOT_RUN policy")
-        with tempfile.TemporaryDirectory() as td:
+        with _sandbox_td() as td:
             root = Path(td)
             pkg = _complete_package_copy(root)
             cwd = root / "cwd"

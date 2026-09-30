@@ -30,9 +30,11 @@ Run:
 """
 
 import re
+import shutil
 import sys
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
@@ -59,7 +61,13 @@ class _ScanHarnessMixin:
     """Writes a synthetic tests dir under a temp root and scans it."""
 
     def _scan(self, files, active=_PRE_FIX_ACTIVE, exemptions=None):
-        root = Path(tempfile.mkdtemp(prefix="fix361-"))
+        # FIX-411 (FIX-404 family): mkdtemp dirs (0o700) deny fixture
+        # writes under the UAC-filtered DSH sandbox token — plain
+        # default-mode mkdir instead; best-effort cleanup.
+        root = Path(tempfile.gettempdir()) / (
+            "fix361-" + uuid.uuid4().hex[:12])
+        root.mkdir()
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
         tests_dir = root / "infra" / "tests"
         tests_dir.mkdir(parents=True)
         for name, content in files.items():
@@ -299,7 +307,10 @@ class PostureContractTests(_ScanHarnessMixin, unittest.TestCase):
                          {"infra/tests/test_entry_like.py:1"})
 
     def test_missing_tests_dir_is_silent(self):
-        root = Path(tempfile.mkdtemp(prefix="fix361-empty-"))
+        root = Path(tempfile.gettempdir()) / (
+            "fix361-empty-" + uuid.uuid4().hex[:12])
+        root.mkdir()
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
         self.assertEqual(
             version_checks.scan_static_version_pins(
                 root, active_version=_PRE_FIX_ACTIVE,

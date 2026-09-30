@@ -1623,10 +1623,17 @@ def _migrate_decisions(version_start, version_end, task_versions, dry_run=False,
             archived.append((dec_id, title, ver, line, None))
             _note(dec_id, "would_archive", f"v{ver}")
         else:
-            if reason == "decision_row_too_short":
+            if reason == "decision_row_too_short" and len(parts) == 7:
                 # FIX-407: narrative row-family fallback — line-level DEC
                 # anchor + ISO date recognition (machine format NOT
                 # required), Q6 date-window ruling, fail-closed retention.
+                # FIX-411 structure gate (B-group contract ruling: the
+                # STRUCTURE judgment precedes the narrative judgment): only
+                # the REGULAR narrative shape — exactly 5 data cells
+                # (编号/日期/决策人/决策内容/理由, len(parts)==7 incl. the
+                # split empties) — enters the narrative verdict; ragged
+                # headerless forms (4/6/10/12 cells) keep the FIX-342
+                # fail-closed decision_row_too_short reason.
                 migrate, n_reason, n_detail, n_ver = _decision_narrative_verdict(
                     line, dec_id, anchor_counts, task_versions,
                     narrative_ref_verdict, version_end)

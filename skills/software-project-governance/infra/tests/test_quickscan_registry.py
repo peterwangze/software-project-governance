@@ -32,11 +32,14 @@ Run:
 """
 
 import ast
+import contextlib
 import json
 import re
+import shutil
 import sys
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
@@ -55,6 +58,21 @@ EVAL_DOC = _REPO_ROOT / "docs" / "requirements" / "quickscan-evaluation-0.79.0.m
 
 # FEAT-020 freeze commit (authoritative snapshot provenance).
 FREEZE_COMMIT = "c92bf5d"
+
+
+@contextlib.contextmanager
+def _sandbox_tmp(prefix="quickscan-fixture-"):
+    """Sandbox-safe fixture dir (FIX-411; the discipline test_verify_workflow
+    established as ``_governance_temp_dir`` / FIX-404): mkdtemp dirs (mode
+    0o700) deny writes to the engine-copy fixtures under the UAC-filtered
+    DSH sandbox token — a plain default-mode mkdir keeps them writable, and
+    cleanup carries the same ``rmtree(ignore_errors=True)`` protection."""
+    root = Path(tempfile.gettempdir()) / (prefix + uuid.uuid4().hex[:12])
+    root.mkdir()
+    try:
+        yield str(root)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
 
 # quickscan-evaluation §3.1 C1（现 26 段排除）/ C2 / C3（4 段待判定）。
 # 28v（DSH preset schema-compat guard）与 28u 同源同根（事实源 = 插件包本体
@@ -224,11 +242,11 @@ class Acceptance1CoverageTests(unittest.TestCase):
 
     def test_reconcile_snapshot_negative_control_missing_and_extra(self):
         """Negative control: a drifted registry MUST be reported, never silent."""
-        drifted = tuple(i for i in _snapshot_ids() if i != "28o") + ("41",)
+        drifted = tuple(i for i in _snapshot_ids() if i != "28o") + ("99",)
         report = qr.reconcile_snapshot(actual_ids=drifted)
         self.assertFalse(report.ok)
         self.assertEqual(report.missing, ("28o",))
-        self.assertEqual(report.extra, ("41",))
+        self.assertEqual(report.extra, ("99",))
         self.assertTrue(any("28o" in line for line in report.lines()))
 
     def test_engine_discovery_yields_the_same_segments_as_the_snapshot(self):
@@ -261,17 +279,17 @@ class Acceptance2CompletenessGuardTests(unittest.TestCase):
 
     def test_guard_warns_and_fails_closed_on_a_new_engine_segment(self):
         """Missing-segment fixture: engine grew a Check 41 the table never saw."""
-        fixture = tuple(_snapshot_ids()) + ("41",)
+        fixture = tuple(_snapshot_ids()) + ("99",)
         report = qr.guard_completeness(observed_ids=fixture)
         self.assertFalse(report.ok)
-        self.assertEqual(report.undeclared, ("41",))
+        self.assertEqual(report.undeclared, ("99",))
         self.assertTrue(report.fail_closed)
         self.assertEqual(report.fallback_target, qr.MODE_FULL_FALLBACK)
         self.assertTrue(report.warnings, "guard MUST emit a warning line")
-        self.assertTrue(any("41" in w for w in report.warnings))
+        self.assertTrue(any("99" in w for w in report.warnings))
 
     def test_guard_warning_names_the_fail_closed_reason_code(self):
-        report = qr.guard_completeness(observed_ids=tuple(_snapshot_ids()) + ("41",))
+        report = qr.guard_completeness(observed_ids=tuple(_snapshot_ids()) + ("99",))
         joined = "\n".join(report.warnings)
         self.assertIn(qr.REASON_UNDECLARED_SEGMENT, joined)
         self.assertIn("full", joined)
@@ -382,8 +400,12 @@ class Acceptance4FactSourceRootTests(unittest.TestCase):
         self.assertEqual(qr.fact_source_root("28g"), qr.FACT_SOURCE_MIXED)
 
     def test_fact_source_root_is_unknown_for_an_undeclared_segment(self):
-        """Fail-closed: an unknown segment can never be reported as covered."""
-        self.assertEqual(qr.fact_source_root("41"), qr.FACT_SOURCE_UNKNOWN)
+        """Fail-closed: an unknown segment can never be reported as covered.
+
+        FIX-411: the fixture id moved "41"→"99" — Check 41/42 became REAL
+        registered segments (FEAT-080), so the old fictional id now resolves
+        to a declared segment and no longer exercises the unknown path."""
+        self.assertEqual(qr.fact_source_root("99"), qr.FACT_SOURCE_UNKNOWN)
         self.assertIn(qr.REASON_UNKNOWN_INPUT, qr.FALLBACK_REASON_CODES)
 
     def test_every_segment_has_a_known_root(self):
@@ -721,14 +743,14 @@ class CensusIntegrityTests(unittest.TestCase):
         ``unique=70`` and ``ok=True`` — because §4.1 R5「Check ID 唯一」was only
         machine-checked on the registry side (import-time guard).
         """
-        with tempfile.TemporaryDirectory() as tmp:
+        with _sandbox_tmp() as tmp:
             fixture = _write_engine_fixture(Path(tmp), extra_segments=("29",))
             with self.assertRaisesRegex(ValueError, "duplicate"):
                 qr.discover_engine_segment_ids(fixture)
 
     def test_guard_never_reports_a_duplicate_census_as_ok(self):
         """Untrusted census ⇒ no verdict: the guard must not answer ``ok=True``."""
-        with tempfile.TemporaryDirectory() as tmp:
+        with _sandbox_tmp() as tmp:
             fixture = _write_engine_fixture(Path(tmp), extra_segments=("29",))
             with self.assertRaises(ValueError):
                 qr.guard_completeness(engine_path=fixture)
@@ -775,7 +797,7 @@ class CensusIntegrityTests(unittest.TestCase):
         definition sitting 1..4 lines below the entry ``def``, swallowing the
         sections that follow it (``99`` here).
         """
-        with tempfile.TemporaryDirectory() as tmp:
+        with _sandbox_tmp() as tmp:
             path = Path(tmp) / "verify_workflow.py"
             path.write_text(
                 "def _run_full_engine_checks(args):\n"
@@ -832,9 +854,9 @@ class DesignTraceabilityTests(unittest.TestCase):
 
     def test_unknown_segment_lookup_fails_closed(self):
         with self.assertRaises(KeyError):
-            qr.segment("41")
+            qr.segment("99")
         with self.assertRaises(KeyError):
-            qr.exclusion_reason_code("41")
+            qr.exclusion_reason_code("99")
 
 
 class FailClosedBranchTests(unittest.TestCase):
@@ -854,14 +876,14 @@ class FailClosedBranchTests(unittest.TestCase):
         self.assertEqual(spec.fact_source_root, qr.FACT_SOURCE_UNKNOWN)
 
     def test_engine_discovery_fails_closed_without_the_entry_function(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with _sandbox_tmp() as tmp:
             path = Path(tmp) / "verify_workflow.py"
             path.write_text("def something_else():\n    pass\n", encoding="utf-8")
             with self.assertRaises(ValueError):
                 qr.discover_engine_segment_ids(path)
 
     def test_product_gate_discovery_fails_closed_without_the_anchor(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with _sandbox_tmp() as tmp:
             path = Path(tmp) / "verify_workflow.py"
             path.write_text("x = 1\n", encoding="utf-8")
             with self.assertRaises(ValueError):
@@ -875,7 +897,7 @@ class FailClosedBranchTests(unittest.TestCase):
         ``load_frozen_snapshot_ids`` count guard — degrading to an empty set
         would misreport every plugin-face segment as ungated (over-disclosure).
         """
-        with tempfile.TemporaryDirectory() as tmp:
+        with _sandbox_tmp() as tmp:
             path = Path(tmp) / "verify_workflow.py"
             path.write_text(
                 "_PLUGIN_PRODUCT_CHECK_IDS = frozenset({\n"
@@ -891,7 +913,7 @@ class FailClosedBranchTests(unittest.TestCase):
 
     def test_product_gate_discovery_parses_a_well_formed_block(self):
         """Positive control for the fixture shape used by the guard above."""
-        with tempfile.TemporaryDirectory() as tmp:
+        with _sandbox_tmp() as tmp:
             path = Path(tmp) / "verify_workflow.py"
             path.write_text(
                 "_PLUGIN_PRODUCT_CHECK_IDS = frozenset({\n"
@@ -908,7 +930,7 @@ class FailClosedBranchTests(unittest.TestCase):
         self.assertEqual(len(ids), len(qr.excluded_ids()))
 
     def test_snapshot_loader_fails_closed_on_count_mismatch(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with _sandbox_tmp() as tmp:
             path = _write_snapshot(Path(tmp), count=2, ids=["1"])
             with self.assertRaises(ValueError):
                 qr.load_frozen_snapshot_ids(path)
@@ -918,21 +940,21 @@ class FixtureDrivenGuardTests(unittest.TestCase):
     """② 完整性守卫端到端负对照：引擎源码 fixture 长出新段（不碰真引擎）。"""
 
     def test_guard_discovers_a_new_segment_from_a_fixture_engine(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            fixture = _write_engine_fixture(Path(tmp), extra_segments=("41",))
+        with _sandbox_tmp() as tmp:
+            fixture = _write_engine_fixture(Path(tmp), extra_segments=("99",))
             report = qr.guard_completeness(engine_path=fixture)
-            self.assertEqual(report.undeclared, ("41",))
+            self.assertEqual(report.undeclared, ("99",))
             self.assertTrue(report.fail_closed)
             self.assertEqual(report.fallback_target, qr.MODE_FULL_FALLBACK)
             self.assertTrue(
-                any("41" in w and qr.REASON_UNDECLARED_SEGMENT in w for w in report.warnings)
+                any("99" in w and qr.REASON_UNDECLARED_SEGMENT in w for w in report.warnings)
             )
             # Real engine segments + the one the fixture adds — derived, so a
             # deliberate contract change never silently invalidates the claim.
             self.assertEqual(len(report.observed), len(_snapshot_ids()) + 1)
 
     def test_guard_stays_green_on_a_fixture_engine_without_new_segments(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with _sandbox_tmp() as tmp:
             fixture = _write_engine_fixture(Path(tmp))
             report = qr.guard_completeness(engine_path=fixture)
             self.assertTrue(report.ok)
@@ -941,7 +963,7 @@ class FixtureDrivenGuardTests(unittest.TestCase):
             self.assertIn("fallback_target=full", report.lines()[0])
 
     def test_guard_ignores_non_segment_sections_in_a_fixture_engine(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with _sandbox_tmp() as tmp:
             path = Path(tmp) / "verify_workflow.py"
             path.write_text(
                 "def _run_full_engine_checks(args):\n"
@@ -952,7 +974,7 @@ class FixtureDrivenGuardTests(unittest.TestCase):
             self.assertEqual(qr.guard_completeness(engine_path=path).observed, ())
 
     def test_count_mismatch_guard_accepts_a_matching_fixture_snapshot(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with _sandbox_tmp() as tmp:
             ids = list(_snapshot_ids())
             fixture = _write_snapshot(Path(tmp), count=len(ids), ids=ids)
             self.assertEqual(qr.load_frozen_snapshot_ids(fixture), tuple(_snapshot_ids()))

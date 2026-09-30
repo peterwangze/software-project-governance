@@ -1610,5 +1610,97 @@ class HistoricalGateCauseClauseTests(unittest.TestCase):
         self.assertNotIn("closure basis: archived", v5[0]["reason"])
 
 
+# ── FIX-410b：冷层轮次日期推断（V1 BLOCKED 历史豁免可达性） ────────────
+
+class FIX410bColdLayerRoundDateTests(unittest.TestCase):
+    """FIX-410b：冷链 BLOCKED 链的历史日期可达。
+
+    live RCA（2026-09-29）：REL-058 R0=BLOCKED——历史报告文件（无机器
+    date 字段）是链上唯一贡献 → rounds[0].date=None → FIX-233 的
+    pre-FIX-174 豁免（终轮日期谓词）不可达 → V1 violation。而该轮的
+    verbatim 归档行（archive/evidence/evidence-review-*.md，FEAT-076
+    迁移保留日期列 2026-07-17 < FIX174_NORMALIZATION_DATE=2026-07-18）
+    携带完整日期——修复：冷层 REVIEW 行加入序列扫描（与 FEAT-076
+    coverage 扫描同款注入），归档轮贡献历史日期 → 豁免谓词可达 →
+    WARN。fail-closed 边界：无任何日期贡献 → 违规保持；冷行日期为
+    规范化后日期 → 违规保持（最新日期不得被旧日期掩蔽的对称面）。
+    """
+
+    _HISTORICAL_BLOCKED_FILE = (
+        "# 独立发布后审查 — REL-058\n\n"
+        "## 结论\n\n结论 BLOCKED（escalation closure）\n"
+        "unresolved_blockers=7\n"
+    )
+
+    @staticmethod
+    def _cold_file(row_date):
+        row = (
+            "| REVIEW-REL-058-R0 | REL-058 | 发布 | 独立发布后审查 | "
+            "结论 `BLOCKED`，`unresolved_blockers=7`，"
+            "`release_authorized=false`。 | facts | "
+            "Independent Release Reviewer | {0} | G11 | BLOCKED |"
+        ).format(row_date)
+        return "\n".join([
+            "# 归档 Review 行族记录 — v0.1.0 ~ v0.91.0",
+            "- **归档日期**: 2026-09-29",
+            "",
+            "| 审查ID | 关联任务 | 阶段 | 审查类型 | 结论纪要 | 事实依据 | 审查人 | 日期 | Gate | 状态 |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+            row,
+        ])
+
+    def _run(self, cold_file_text=None):
+        import shutil
+        import tempfile
+        import uuid
+        root = Path(tempfile.gettempdir()) / (
+            "fix410b-" + uuid.uuid4().hex[:12])
+        gov = root / ".governance"
+        (gov / "archive" / "evidence").mkdir(parents=True)
+        (gov / "plan-tracker.md").write_text(
+            "# 计划\n\n### 优先级一览\n", encoding="utf-8")
+        (gov / "evidence-log.md").write_text("", encoding="utf-8")
+        (gov / "review-REL-058-R0.md").write_text(
+            self._HISTORICAL_BLOCKED_FILE, encoding="utf-8")
+        if cold_file_text is not None:
+            (gov / "archive" / "evidence"
+             / "evidence-review-v0.1.0-0.91.0.md").write_text(
+                cold_file_text, encoding="utf-8")
+        try:
+            with mock.patch.object(
+                    vw, "SAMPLE_PATH", gov / "plan-tracker.md"), \
+                 mock.patch.object(
+                     vw, "EVIDENCE_PATH", gov / "evidence-log.md"), \
+                 mock.patch.object(vw, "GOVERNANCE_DIR", gov):
+                return vw.check_review_closure()
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+    def test_archived_round_date_downgrades_v1_blocked_to_warning(self):
+        """冷链历史日期（2026-07-17 < 2026-07-18）→ 豁免可达 → V1 WARN。"""
+        r = self._run(cold_file_text=self._cold_file("2026-07-17"))
+        v1_violations = [v for v in r["violations"]
+                         if v["rule"] == "V1" and v["task_id"] == "REL-058"]
+        self.assertEqual(v1_violations, [], r["violations"])
+        v1_warnings = [w for w in r["warnings"]
+                       if w["rule"] == "V1" and w["task_id"] == "REL-058"]
+        self.assertTrue(v1_warnings, r["warnings"])
+        self.assertIn("downgraded", v1_warnings[0]["reason"])
+
+    def test_undated_blocked_chain_stays_violation(self):
+        """无任何日期贡献（无冷行）→ 豁免不可证 → V1 violation 保持。"""
+        r = self._run(cold_file_text=None)
+        v1 = [v for v in r["violations"]
+              if v["rule"] == "V1" and v["task_id"] == "REL-058"]
+        self.assertTrue(v1, r["violations"])
+
+    def test_post_normalization_cold_date_keeps_violation(self):
+        """冷行日期晚于规范化（2026-09-28）→ 非历史链 → V1 violation 保持。"""
+        r = self._run(cold_file_text=self._cold_file("2026-09-28"))
+        v1 = [v for v in r["violations"]
+              if v["rule"] == "V1" and v["task_id"] == "REL-058"]
+        self.assertTrue(v1, r["violations"])
+
+
 if __name__ == "__main__":
     unittest.main()

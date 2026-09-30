@@ -13434,6 +13434,37 @@ def check_user_impact():
     if not entries:
         return result
 
+    # FIX-410 read-side latest-wins: per task, ONLY the latest
+    # field-carrying (用户影响:) row is judged — a compliant correction
+    # row supersedes older malformed rows of the same task (live RCA:
+    # EVD-1252 kept Check 17 FAILing forever although a compliant
+    # correction row was in place; the write side already prevents NEW
+    # bad rows — the intake mirror — but the read side refused to
+    # recognize corrections). Superseded rows stay in the log as
+    # append-only history and are disclosed via a counter, never silent.
+    # A task with NO field-carrying row keeps the original per-entry
+    # logic (missing-field FAIL stands — fail-closed).
+    _field_re = re.compile(r'用户影响[:：]\s*(.+?)')
+    _latest_field_index = {}
+    for _index, _entry in enumerate(entries):
+        if _field_re.search(_entry["description"]):
+            _latest_field_index[_entry["task_id"]] = _index
+    _judged_entries = []
+    _superseded = 0
+    for _index, _entry in enumerate(entries):
+        _latest = _latest_field_index.get(_entry["task_id"])
+        # P1-1 (FIX-410 R0 review): supersede applies ONLY to field-carrying
+        # rows — a LATER fieldless row keeps its original per-row judgment
+        # (missing field -> FAIL); the earlier combination seam let such a
+        # row be superseded away, swallowing the rule-1 missing-field FAIL.
+        if (_latest is None or _index == _latest
+                or not _field_re.search(_entry["description"])):
+            _judged_entries.append(_entry)
+        else:
+            _superseded += 1
+    result["latest_wins_superseded"] = _superseded
+    entries = _judged_entries
+
     for entry in entries:
         desc = entry["description"]
         file_location = entry["file_location"]

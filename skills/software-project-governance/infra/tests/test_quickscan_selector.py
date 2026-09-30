@@ -162,7 +162,7 @@ class Acceptance1ShadowChannelTests(unittest.TestCase):
         full = _engine_output(selection.chosen, selection.not_quick, issues=0)
         shadow = qs.shadow_compare(quick, full, selection.chosen)
         self.assertTrue(shadow.ok, shadow.mismatches)
-        self.assertEqual(len(shadow.compared), 45)
+        self.assertEqual(len(shadow.compared), len(selection.chosen))
         self.assertEqual(shadow.blocking, ())
 
     def test_sb_execution_shadow_is_blocking_on_a_verdict_mismatch(self):
@@ -189,7 +189,10 @@ class Acceptance1ShadowChannelTests(unittest.TestCase):
     def test_sa_dry_run_lines_carry_reasons_and_declaration_fingerprints(self):
         lines = qs.shadow_dry_run_lines(_selection())
         joined = "\n".join(lines)
-        self.assertIn("chosen=45", joined)
+        # FIX-411: chosen derives from the LIVE registry (47 since FEAT-080
+        # registered Check 41/42 as quick segments) — a literal would break
+        # at every future segment registration.
+        self.assertIn(f"chosen={len(_selection().chosen)}", joined)
         self.assertIn(f"not-run={_not_quick_count()}", joined)
         self.assertIn("PLUGIN_GIT_FACT_SOURCE", joined)
         self.assertIn("fingerprints:", joined)
@@ -226,7 +229,7 @@ class Acceptance2FourStateGuardTests(unittest.TestCase):
         report = self._report(issues=4, issue_map={"3": ["[WARN] a"], "19": ["[FAIL] b"]})
         self.assertEqual(report.not_run, _not_quick_count())
         self.assertEqual(report.failed, 2)
-        self.assertEqual(report.passed, 43)
+        self.assertEqual(report.passed, len(self.selection.chosen) - 2)
         self.assertEqual(report.issues, 4)
         self.assertFalse(report.issues_unknown)
 
@@ -406,7 +409,9 @@ class Acceptance3DefaultPathTests(unittest.TestCase):
             out = buf.getvalue()
             eng.assert_called_once()
             self.assertIn("1 issues (quick)", out)
-            self.assertIn(f"44 passed / 1 failed / {_not_quick_count()} not-run", out)
+            self.assertIn(
+                f"{len(_selection().chosen) - 1} passed / 1 failed"
+                f" / {_not_quick_count()} not-run", out)
             self.assertIn("NOT_RUN", out)
 
     def test_quick_calls_the_engine_with_the_product_gate_disabled(self):
@@ -472,13 +477,15 @@ class Acceptance4Fix304CaliberTests(unittest.TestCase):
         self.assertFalse(qs.selection_contract_violations(selection))
 
     def test_undeclared_engine_segment_fails_closed_and_disables_quick(self):
-        selection = qs.select(observed_ids=_snapshot_ids() + ("41",))
+        # FIX-411: fictional id "99" (Check 41/42 became REAL registered
+        # segments in FEAT-080 — the old "41" fixture now collides).
+        selection = qs.select(observed_ids=_snapshot_ids() + ("99",))
         self.assertTrue(selection.fail_closed)
-        self.assertEqual(selection.undeclared, ("41",))
+        self.assertEqual(selection.undeclared, ("99",))
         self.assertFalse(selection.quick_available)
 
     def test_fallback_report_reports_what_the_engine_actually_did(self):
-        selection = qs.select(observed_ids=_snapshot_ids() + ("41",))
+        selection = qs.select(observed_ids=_snapshot_ids() + ("99",))
         text = _engine_output(qr.registry_ids(), (), issues=1,
                               issue_map={"3": ["[WARN] x"]})
         report = qs.quick_report(text, selection=selection)
@@ -489,11 +496,11 @@ class Acceptance4Fix304CaliberTests(unittest.TestCase):
         notice = "\n".join(report.notices)
         self.assertIn("FALLBACK", notice)
         self.assertIn(f"UNDETERMINED({qr.REASON_UNDECLARED_SEGMENT})", notice)
-        self.assertIn("undeclared=['41']", notice)
+        self.assertIn("undeclared=['99']", notice)
 
     def test_prepare_quick_args_clears_quick_when_the_guard_fails_closed(self):
         args = _args(quick=True, shadow=True)
-        fail_closed = qs.select(observed_ids=_snapshot_ids() + ("41",))
+        fail_closed = qs.select(observed_ids=_snapshot_ids() + ("99",))
         with mock.patch.object(qs, "select", return_value=fail_closed):
             notice = qs.prepare_quick_args(args)
         self.assertFalse(args.quick)
@@ -523,7 +530,7 @@ class Acceptance4Fix304CaliberTests(unittest.TestCase):
         self.assertFalse(healthy.fail_closed)
         self.assertTrue(healthy.quick_available)
         self.assertEqual(qr.MODE_FULL_FALLBACK, "full")
-        broken = qs.select(observed_ids=_snapshot_ids() + ("41",))
+        broken = qs.select(observed_ids=_snapshot_ids() + ("99",))
         self.assertTrue(broken.fail_closed)
         self.assertFalse(broken.quick_available)
 

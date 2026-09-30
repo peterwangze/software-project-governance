@@ -1702,5 +1702,136 @@ class FIX410bColdLayerRoundDateTests(unittest.TestCase):
         self.assertTrue(v1, r["violations"])
 
 
+# ── FIX-413：冷源无日期非终链按历史降级（V1 re-spawn 误报关闭） ────────
+
+class FIX413ColdDatelessRespawnTests(unittest.TestCase):
+    """FIX-413：全链仅冷源贡献且终轮无日期的非终链 → 历史链处理。
+
+    live RCA（2026-09-29 发布夜）：0.92 门绿时 V1×22 re-spawn WARN 不存在
+    ——FIX-410b/412 的冷注入把前纪元链（FIX-031 族）带入扫描面，其 rounds
+    无 date 字段 → 日期判定不可达 → 落「re-spawn expected」WARN×22 →
+    ``--fail-on-issues`` 浮现 → 发布门 execution gates 红。修复：冷源专属
+    （无热行、无 live 报告文件）+ 终轮无日期 → 跳过 re-spawn WARN（与
+    pre_normalization 同哲学：无法证明在途 = 不应假装期待 re-spawn）。
+    fail-closed 边界：热链同形 → WARN 保持；冷链带现代日期 → WARN 保持。
+    """
+
+    @staticmethod
+    def _dateless_row(row_id, task_id):
+        return (
+            "| {0} | {1} | 开发 | 代码审查 | 结论待定（前纪元无结论记录）。 "
+            "| facts | Reviewer |  | G3 | UNKNOWN |"
+        ).format(row_id, task_id)
+
+    @staticmethod
+    def _cold_file(rows):
+        return "\n".join([
+            "# 归档 Review 行族记录 — v0.1.0 ~ v0.91.0",
+            "- **归档日期**: 2026-09-29",
+            "",
+            "| 审查ID | 关联任务 | 阶段 | 审查类型 | 结论纪要 | 事实依据 | 审查人 | 日期 | Gate | 状态 |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+            *rows,
+        ])
+
+    def _run(self, *, hot_rows=(), cold_rows=(), review_files=None):
+        import shutil
+        import tempfile
+        import uuid
+        root = Path(tempfile.gettempdir()) / (
+            "fix413-" + uuid.uuid4().hex[:12])
+        gov = root / ".governance"
+        (gov / "archive" / "evidence").mkdir(parents=True)
+        (gov / "plan-tracker.md").write_text(
+            "# 计划\n\n### 优先级一览\n", encoding="utf-8")
+        (gov / "evidence-log.md").write_text("\n".join(hot_rows),
+                                              encoding="utf-8")
+        for name, text in (review_files or {}).items():
+            (gov / name).write_text(text, encoding="utf-8")
+        if cold_rows:
+            (gov / "archive" / "evidence"
+             / "evidence-review-v0.1.0-0.91.0.md").write_text(
+                self._cold_file(cold_rows), encoding="utf-8")
+        try:
+            with mock.patch.object(
+                    vw, "SAMPLE_PATH", gov / "plan-tracker.md"), \
+                 mock.patch.object(
+                     vw, "EVIDENCE_PATH", gov / "evidence-log.md"), \
+                 mock.patch.object(vw, "GOVERNANCE_DIR", gov):
+                return vw.check_review_closure()
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+    def _respawn_warns(self, r, task_id):
+        return [w for w in r["warnings"]
+                if w["rule"] == "V1" and w["task_id"] == task_id
+                and "re-spawn expected" in w["reason"]]
+
+    def test_cold_only_dateless_chain_no_respawn_warn(self):
+        """冷源专属 + 终轮无日期的非终链 → 不再 re-spawn WARN（历史链）。"""
+        r = self._run(cold_rows=[self._dateless_row(
+            "REVIEW-FIX-031", "FIX-031")])
+        self.assertEqual(self._respawn_warns(r, "FIX-031"), [],
+                         r["warnings"])
+        self.assertEqual(
+            [v for v in r["violations"] if v.get("task_id") == "FIX-031"],
+            [], r["violations"])
+
+    def test_hot_same_shape_keeps_respawn_warn(self):
+        """对照：同形热行（evidence-log 在档）→ re-spawn WARN 保持。"""
+        r = self._run(hot_rows=[self._dateless_row(
+            "REVIEW-FIX-031", "FIX-031")])
+        self.assertTrue(self._respawn_warns(r, "FIX-031"), r["warnings"])
+
+    def test_cold_chain_with_modern_date_keeps_respawn_warn(self):
+        """对照：冷链带现代日期（2026-09-28）→ 可证在途 → WARN 保持。"""
+        row = (
+            "| REVIEW-FIX-031 | FIX-031 | 开发 | 代码审查 | 结论待定。 "
+            "| facts | Reviewer | 2026-09-28 | G3 | UNKNOWN |"
+        )
+        r = self._run(cold_rows=[row])
+        self.assertTrue(self._respawn_warns(r, "FIX-031"), r["warnings"])
+
+    def test_cold_row_plus_live_file_keeps_respawn_warn(self):
+        """对照：冷链 + live 报告文件贡献 → 非冷源专属 → WARN 保持。"""
+        r = self._run(
+            cold_rows=[self._dateless_row("REVIEW-FIX-031", "FIX-031")],
+            review_files={"review-FIX-031.md":
+                          "# 审查\n\n结论 UNKNOWN\n"})
+        self.assertTrue(self._respawn_warns(r, "FIX-031"), r["warnings"])
+
+    def test_pre_normalization_dated_terminal_round_clears(self):
+        """（a）臂：终轮日期 < FIX174 规范化（2026-05-05）→ 前纪元残链 →
+        不再 re-spawn WARN（与 BLOCKED/V6 臂同口径的日期谓词——该臂
+        原缺失此一致性；渠道无关：日期即历史证明）。"""
+        row = (
+            "| REVIEW-FIX-039 | FIX-039 | 开发 | 代码审查 | 结论待定。 "
+            "| facts | Reviewer | 2026-05-05 | G3 | UNKNOWN |"
+        )
+        r = self._run(cold_rows=[row])
+        self.assertEqual(self._respawn_warns(r, "FIX-039"), [],
+                         r["warnings"])
+
+    def test_hot_pre_normalization_dated_terminal_clears(self):
+        """（a）臂热行面披露：热行 + 终轮前规范化日期 → 同谓词清（live
+        FIX-031/FIX-120 即此形——热行但 2026-05/06 前纪元日期；姊妹臂
+        已对此形状一视同仁）。"""
+        row = (
+            "| REVIEW-FIX-031 | FIX-031 | 开发 | 代码审查 | 结论待定。 "
+            "| facts | Reviewer | 2026-05-05 | G3 | UNKNOWN |"
+        )
+        r = self._run(hot_rows=[row])
+        self.assertEqual(self._respawn_warns(r, "FIX-031"), [],
+                         r["warnings"])
+
+    def test_file_only_historical_dateless_clears(self):
+        """（c）臂：file-only + 全历史格式 + 无日期（ADR-007/REL-008 形）
+        → 前纪元手写报告 → 不再 re-spawn WARN。"""
+        r = self._run(review_files={"review-ADR-007.md":
+                                    "# 审查\n\n结论 NEEDS_CHANGE\n"})
+        self.assertEqual(self._respawn_warns(r, "ADR-007"), [],
+                         r["warnings"])
+
+
 if __name__ == "__main__":
     unittest.main()

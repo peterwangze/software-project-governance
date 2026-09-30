@@ -2104,6 +2104,7 @@ def _build_review_sequence(review_entries, legacy_files=None):
                                                   "has_unknown_legacy": True,
                                                   "naming_migrated": False,
                                                   "min_evidence_date": None,
+                                                  "channels": set(),
                                                   "chains": {}})
             seq["has_unknown_legacy"] = True
             continue
@@ -2111,7 +2112,14 @@ def _build_review_sequence(review_entries, legacy_files=None):
                                              "has_unknown_legacy": False,
                                              "naming_migrated": False,
                                              "min_evidence_date": None,
+                                             "channels": set(),
                                              "chains": {}})
+        # FIX-413: chain-level channel census (hot row / cold archived row /
+        # live report file). A sequence whose channels == {"cold"} has NO
+        # live-surface contribution at all — consumed by the V1 re-spawn
+        # historical downgrade. Fixture-path entries carry no channel and
+        # therefore never classify as cold-only (test isolation preserved).
+        seq["channels"].add(str(entry.get("channel") or "unknown"))
         # FIX-392: chain attribution. An explicit entry field wins (fixture
         # path); otherwise the collector pre-derived it the same way. No
         # attribution → canonical chain → task-global judgment (unchanged).
@@ -2202,6 +2210,7 @@ def _build_review_sequence(review_entries, legacy_files=None):
                                               "has_unknown_legacy": False,
                                               "naming_migrated": False,
                                               "min_evidence_date": None,
+                                              "channels": set(),
                                               "chains": {}})
         seq["has_unknown_legacy"] = True
 
@@ -2604,6 +2613,43 @@ def check_review_closure(review_sequence=None, plan_tracker_completed=None,
                 })
             else:
                 # Task not yet completed: NEEDS_CHANGE mid-flight is fine.
+                # FIX-413: provably-historical downgrade — the re-spawn
+                # expectation only makes sense for a chain whose terminal
+                # round is demonstrably CURRENT. Three shapes are provably
+                # historical (same philosophy as the sibling arms' date
+                # predicate and pre_normalization: what cannot be proven
+                # in-flight must not be pretended to await a re-spawn):
+                #   (a) terminal round DATED pre-FIX-174 normalization —
+                #       the exact predicate the BLOCKED arm above and V6
+                #       already apply; this arm was missing it (pre-era
+                #       UNKNOWN/NEEDS_CHANGE rounds dated 2026-05~07 are
+                #       residue, not live re-spawn work — channel-agnostic
+                #       on purpose: the date, not the storage layer, is
+                #       the historical proof);
+                #   (b) cold-only + dateless (FIX-410b/412 cold injection
+                #       surfaced pre-era chains whose rounds predate the
+                #       date discipline itself);
+                #   (c) file-only + every round historical-format +
+                #       dateless (live handwritten pre-era reports — the
+                #       historical file classification BY DEFINITION means
+                #       no machine marker and no date field).
+                # Boundaries that KEEP the WARN (fail-closed): any modern
+                # terminal date (>= FIX174 normalization — machine records
+                # are always dated modern by REQ107 provenance), hot
+                # dateless rows, cold chains with modern dates.
+                _term_date = rounds[max_round].get("date")
+                _provably_historical = (
+                    (_term_date is not None
+                     and _term_date < FIX174_NORMALIZATION_DATE)
+                    or (_term_date is None
+                        and seq.get("channels") == {"cold"})
+                    or (_term_date is None
+                        and seq.get("channels") == {"file"}
+                        and all(rounds[_k].get("source_format") == "historical"
+                                for _k in rounds))
+                )
+                if _provably_historical:
+                    continue
                 result["warnings"].append({
                     "rule": "V1",
                     "task_id": task_id,
@@ -2974,7 +3020,7 @@ def _collect_live_review_sequences():
             content = EVIDENCE_PATH.read_text(encoding="utf-8")
         except (IOError, OSError):
             content = ""
-        row_lines = content.split("\n")
+        row_lines = [(l, "hot") for l in content.split("\n")]
         # FIX-410b: cold-layer REVIEW rows join the SAME row scan (FEAT-076
         # verbatim migration preserved the date column) so an archived round
         # contributes its historical date — the V1/V5 pre-FIX-174 exemption
@@ -2983,11 +3029,15 @@ def _collect_live_review_sequences():
         # R0=BLOCKED — the historical report file carries no date field; the
         # archived row carries 2026-07-17). A broken cold read must never
         # take the closure check down — the hot face still reports.
+        # FIX-413: each row carries its CHANNEL (hot evidence-log row vs
+        # cold archived row) so the V1 re-spawn arm can tell a cold-only
+        # dateless chain (pre-era historical residue) from live work.
         try:
-            row_lines.extend(_cold_review_evidence_lines())
+            row_lines.extend(
+                (l, "cold") for l in _cold_review_evidence_lines())
         except Exception:  # noqa: BLE001
             pass
-        for line in row_lines:
+        for line, row_channel in row_lines:
             stripped = line.strip()
             if not stripped.startswith("|"):
                 continue
@@ -3032,6 +3082,10 @@ def _collect_live_review_sequences():
                     "conclusion": conclusion or "UNKNOWN",
                     "blocker_evidence": _parse_unresolved_blockers_fields(parts[3:]),
                     "date": row_date,
+                    # FIX-413: row channel (hot evidence-log vs cold
+                    # archived) — consumed by the V1 cold-only dateless
+                    # historical downgrade.
+                    "channel": row_channel,
                     # FIX-291 R1 (DESIGN-R0 P2-1 / CODE-R0 P2-2): the row
                     # channel classifies by the machine marker so a
                     # current-format ROW contribution ranks machine(2) and
@@ -3099,6 +3153,10 @@ def _collect_live_review_sequences():
                 "conclusion": conclusion,
                 "blocker_evidence": blocker_evidence,
                 "source_format": source_format,
+                # FIX-413: a live .governance/review-*.md file is a HOT-face
+                # contribution (its presence makes the chain non-cold for
+                # the V1 historical downgrade).
+                "channel": "file",
                 "chain": chain,
                 "chain_round": chain_round,
             })

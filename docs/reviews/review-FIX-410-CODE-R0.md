@@ -111,3 +111,43 @@ pytest test_risk_mitigation_closure.py（全）→ **27 passed**（=声明 27/27
 ## 裁决（§FIX-412）
 
 **APPROVED_WITH_NOTES** — unresolved_blockers=0。五点全立（②为结构性保证+测试钉护建议）；P3×3（两测缺口+直调自洽注记）零阻塞，可并入随批或遗留。
+
+---
+
+# §FIX-413：冷链历史降级三臂谓词（快审，2026-09-29）
+
+- **对象**: review_domain.py V1 re-spawn 臂三臂谓词（(a) 终轮日期<FIX174 线·渠道无关 / (b) cold-only 无日期 / (c) file-only 全历史格式无日期）+ 通道标穿三层（collector 行级 hot/cold + 文件级 file → seq 级 channels 集）+ 7 新测
+- **工作集**: 2 文件 +61/−3、+131/0（与派单 1:1，零范围外 ✓）
+- **结论**: **APPROVED_WITH_NOTES**（unresolved_blockers=0；P3×1）
+
+## ①（a）臂热行承重披露判定——**裁定：成立**
+
+1. **先例同一性（源码实证）**：L2552-2555 V1/V5 豁免（`ev_date is not None and ev_date < FIX174_NORMALIZATION_DATE`）与 V6a（`not pre_normalization`，注释明引 DEC-138 同谓词）**均渠道无关**地适用该日期谓词；re-spawn 臂原缺失此一致性——FIX-413 补齐家族口径，非特例发明
+2. **语义正确**：历史证明=**日期**而非存储层——热行带 2026-05/06 前纪元日期（live RCA：FIX-031/FIX-120 即此形）与冷链同形同残链；若 (a) 臂加渠道条件，同一链在 BLOCKED/V6 判历史、在 re-spawn 臂假装期待复活——体系内不自洽
+3. **无 live 误消风险**：live re-spawn 期待要求终轮为当前轮；终轮日期<2026-07-18 = 数月旧 = 定义上非在途；机写行恒现代日期（REQ107 provenance）→ 受影响种群=前纪元残链=恰好是目标
+4. **「热链零变化」字面冲突的处置**：窄义确实违反（前纪元热链 WARN→skip），但正确不变量读法=「**无现代热链变化**」——现代形状（热行无日期〔测 2〕/现代日期〔测 3〕）均保持 WARN 有专测钉护；Dev 自曝该张力+专设热面测试（`test_hot_pre_normalization_dated_terminal_clears`）=诚实分层。建议交接措辞精确为「无现代热链变化」
+5. **`continue` 安全性（源码实证）**：新 L2652 位于原有无条件 `continue`（L2659）分支内——仅跳过 WARN append 本身，**零下游规则（V5/V4）旁路**
+
+## 五点核验
+
+| # | 要点 | 判定 | 事实依据 |
+|---|------|------|---------|
+| ① | (a) 臂语义 | ✅ **裁定成立**（上五条） | 先例 L2552-2555/V6a/V5-L2672 同谓词渠道无关；专测钉护现代形状 |
+| ② | 残 4（恰=规范化日）fail-closed | ✅ 代码级 | 严格 `<`：`_term_date == 2026-07-18` → 三臂全 false → WARN 保持（(b)/(c) 另要求 `is None` 不触）；**精确边界日无专测**→P3-1（测试覆盖两端 2026-05-05/2026-09-28，恰=线值未钉） |
+| ③ | 通道标 fixture 隔离 | ✅ | `entry.get("channel") or "unknown"`——fixture 直构 entries 无 channel→"unknown" 入集→`== {"cold"}`/`== {"file"}` 永 false=永不冷源专属；live 三层实现核对（行级 hot/cold 元组+file 条目 channel 键+seq.channels 集）；混合渠道（cold+file）保守保持（测 4）；legacy-file-only 兜底 seq channels=∅ 保守不降级 |
+| ④ | 7 测质量+定向绿 | ✅ | 每臂正反对照（(b) 正例+热同形保持+冷链现代日期保持+混合渠道保持；(a) 冷/热两面；(c) 文件形）+ (a) 热面自曝专测；日期类型链（fromisoformat→date 对象比较，无 string<date 隐患）；**复跑 10/10（3/3+7/7）**；live 实证：V1 re-spawn WARN **22→4**（残余=FIX-215~218 现代链设计内保持），verdict WARN 零 violation |
+| ⑤ | 零范围外 | ✅ | git status/numstat：仅 review_domain.py + test_review_closure_legacy.py，1:1 |
+
+## findings（P3×1）
+
+| # | 级别 | 位置 | 问题 | 建议 |
+|---|------|------|------|------|
+| P3-F413-1 | P3 | 测试 | 精确边界日（终轮日期恰=FIX174_NORMALIZATION_DATE 2026-07-18）无专测——严格 `<` 语义已代码级验证，但 `==` 边界未钉护（现测只覆盖两端） | 补一测：date=2026-07-18 → re-spawn WARN 保持 |
+
+## 复跑证据（TEMP=仓库外 `$env:LOCALAPPDATA\Temp\fix413-review`；重试 0/2）
+
+pytest test_review_closure_legacy -k "FIX410b or FIX413" → **10 passed**（3+7=派单 3/3+7/7 ✓）；live `check_review_closure`：re-spawn WARN=4（FIX-215~218 现代链）、总 13 警 0 violation——RCA 所述前纪元 22 警类清零。
+
+## 裁决（§FIX-413）
+
+**APPROVED_WITH_NOTES** — unresolved_blockers=0。(a) 臂语义裁定**成立**（先例同一+日期即证明+零 live 误消+自曝诚实；「热链零变化」建议读作「无现代热链变化」）；P3×1（边界日专测）零阻塞。

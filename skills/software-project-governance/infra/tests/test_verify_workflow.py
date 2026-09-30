@@ -1753,6 +1753,23 @@ class ReleaseReadinessFactSourceTests(unittest.TestCase):
 class HotFactSourceConsistencyTests(unittest.TestCase):
     """FIX-087: plan-tracker hot sections must describe the same active release state."""
 
+    def setUp(self):
+        # FIX-415 cwd-hermeticity pin: every expectation in this class asserts
+        # the plugin-project (dogfood) face — the FIX-087-era 0.38.0 roadmap /
+        # FIX-082~087 / REQ-070~074 / RISK-033 / REL-013 facts. That face is
+        # gated by _hot_fact_source_plugin_scope(), which compares the
+        # module-level HOST_PROJECT_ROOT (bound from the PROCESS cwd at
+        # verify_workflow import time) against PLUGIN_ROOT — it never reads
+        # the passed plan_tracker_path. So the identical fixture went green
+        # under pytest started at the repo root (host==plugin → dogfood) and
+        # red under pytest started at infra/ (roots divergent → host mode
+        # early-returns before the FIX-087-era checks). Pin the roots to
+        # dogfood for the whole class — the same seam FIX-270 itself tests
+        # through _patch_roots() in test_fix270_product_gates.py.
+        patcher = patch.object(vw, "HOST_PROJECT_ROOT", vw.PLUGIN_ROOT)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def _plan_content(
         self,
         *,
@@ -11036,7 +11053,16 @@ class ExternalProjectValidationHarnessTests(unittest.TestCase):
             plan = gov / "plan-tracker.md"
             plan.write_text(vw._external_validation_plan_tracker("0.50.1"), encoding="utf-8")
             output = io.StringIO()
-            with patch.object(vw, "ROOT", root), redirect_stdout(output):
+            # FIX-415 cwd-hermeticity pin: the sentinel-skip protection
+            # expects the plugin-scope face to still yield issues when the
+            # sentinel file is absent. Without the pin the module-level
+            # HOST_PROJECT_ROOT (import-time process cwd) puts the suite in
+            # host mode whenever pytest starts outside the repo root and
+            # the early return yields an empty issue list — the assertion
+            # then fails vacuously ([] != [] was impossible to tell apart).
+            with patch.object(vw, "ROOT", root), \
+                 patch.object(vw, "HOST_PROJECT_ROOT", vw.PLUGIN_ROOT), \
+                 redirect_stdout(output):
                 issues = vw.check_hot_fact_source_consistency(plan)
 
         self.assertNotEqual(issues, [])
@@ -20544,8 +20570,20 @@ class SdIntegrityGateTests(unittest.TestCase):
         mocked damaged scan (the write itself is mocked PASS so no real
         projection byte moves)."""
         from checks import sd_integrity as sdi
+        # FIX-415 disclosure hardening (FIX-408 discipline): the simulated
+        # unreadable path must be a FICTION, asserted non-existent. The
+        # pre-fix mock named <repo-root>/plugin.json — a real-shaped repo
+        # path that never existed under git — and under non-capturing
+        # runners (unittest discover / pytest -s) the command's JSON stdout
+        # leaked it at the suite tail, reading like a genuine SD scan
+        # verdict over the repository (the FIX-415 "root plugin.json
+        # phantom"). The real scan face (28 projection targets + the
+        # .git/hooks face) is fully readable; only the mock payload ever
+        # named this path.
+        simulated = vw.ROOT / "sd-write-face-fictional-unreadable.txt"
+        self.assertFalse(simulated.exists(), simulated)
         damaged = {"scanned": 1, "pass": False,
-                   "unreadable": [str(vw.ROOT / "plugin.json")],
+                   "unreadable": [str(simulated)],
                    "remediation": [
                        'takeown /f "x" && icacls /f "x" '
                        '/grant "%USERNAME%":F']}

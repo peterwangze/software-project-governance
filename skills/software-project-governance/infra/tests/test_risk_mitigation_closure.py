@@ -22,9 +22,12 @@ Run:
     python -m pytest skills/software-project-governance/infra/tests/test_risk_mitigation_closure.py -v
 """
 
+import shutil
 import sys
 import tempfile
 import unittest
+import uuid
+from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
 
@@ -34,6 +37,19 @@ if str(_INFRA_DIR) not in sys.path:
     sys.path.insert(0, str(_INFRA_DIR))
 
 import verify_workflow as vw  # noqa: E402
+
+
+@contextmanager
+def _sandbox_gov_dir(prefix="fix412-risk36-"):
+    """Sandbox-safe fixture root (FIX-411 family): mkdtemp dirs (0o700)
+    deny .governance fixture writes under the UAC-filtered DSH sandbox
+    token — a plain default-mode mkdir works."""
+    root = Path(tempfile.gettempdir()) / (prefix + uuid.uuid4().hex[:12])
+    root.mkdir()
+    try:
+        yield root
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
 
 
 # ── Fixtures ────────────────────────────────────────────────────────────
@@ -263,7 +279,7 @@ class Check36ParserLockTests(unittest.TestCase):
     def test_check2_8_same_raw_parts_index(self):
         """Check 2/8 (check_risk_staleness/escalation) read status/deadline
         from the same raw parts[9]/[11] — the new check must agree."""
-        with tempfile.TemporaryDirectory() as td:
+        with _sandbox_gov_dir(prefix="fix412-parser-") as td:
             risk_path = Path(td) / "risk-log.md"
             risk_path.write_text(
                 _risk_content(
@@ -300,7 +316,7 @@ class Check36TaskPriorityTests(unittest.TestCase):
             "| --- | --- | --- | --- | --- | --- |\n"
             "| P0 | FIX-300 | 任务 | — | 0.76.0 | ⏳ 进行中 |\n"
         )
-        with tempfile.TemporaryDirectory() as td:
+        with _sandbox_gov_dir(prefix="fix412-map-") as td:
             plan_path = Path(td) / "plan-tracker.md"
             plan_path.write_text(plan, encoding="utf-8")
             with mock.patch.object(vw, "SAMPLE_PATH", plan_path):
@@ -332,8 +348,8 @@ class Check36TaskPriorityTests(unittest.TestCase):
             "| --- | --- | --- | --- | --- | --- |\n"
             "| P0 | FIX-300 | 任务 | — | 0.76.0 | ✅ 完成 (2026-08-22) |\n"
         )
-        with tempfile.TemporaryDirectory() as td:
-            gov = Path(td) / ".governance"
+        with _sandbox_gov_dir(prefix="fix412-live-") as td:
+            gov = td / ".governance"
             gov.mkdir()
             (gov / "plan-tracker.md").write_text(plan, encoding="utf-8")
             (gov / "risk-log.md").write_text(
@@ -389,6 +405,71 @@ class Check36ContractTests(unittest.TestCase):
         self.assertIn('line.split("|")', body)
         self.assertIn("parts[9]", body)
         self.assertTrue(hasattr(vw, "check_risk_mitigation_closure"))
+
+
+class Check36ArchiveTaskResolutionTests(unittest.TestCase):
+    """FIX-412: the default task-status map merges the archive-index task
+    face (B1 rule — archive/index.md exists → archived evidence is valid),
+    so a mitigation reference to a genuinely ARCHIVED task resolves as
+    completed instead of false-positive R3「not found (cross-entity)」.
+    Truly nonexistent IDs keep the R3 absent-WARN (fail-closed design)."""
+
+    _PLAN_HOT = (
+        "### 优先级一览\n"
+        "| 优先级 | ID | 任务 | 依赖 | 目标版本 | 状态 |\n"
+        "| --- | --- | --- | --- | --- | --- |\n"
+        "| P0 | FIX-300 | 热表任务 | — | 0.76.0 | ⏳ 进行中 |\n"
+    )
+    _ARCHIVE_INDEX = (
+        "# 归档索引\n\n"
+        "## 任务面\n\n"
+        "| ID | 状态 | 版本 | 归档位置 |\n"
+        "| --- | --- | --- | --- |\n"
+        "| MAINT-002 | 已完成 | 0.6.0 | archive/tasks/legacy-v0.6.0.md |\n"
+        "| OPS-009 | 已终止 | 0.7.0 | archive/tasks/legacy-v0.7.0.md |\n"
+    )
+
+    def _run(self, refs):
+        with _sandbox_gov_dir() as td:
+            gov = td / ".governance"
+            (gov / "archive").mkdir(parents=True)
+            (gov / "plan-tracker.md").write_text(self._PLAN_HOT,
+                                                 encoding="utf-8")
+            (gov / "archive" / "index.md").write_text(self._ARCHIVE_INDEX,
+                                                      encoding="utf-8")
+            with mock.patch.object(vw, "SAMPLE_PATH", gov / "plan-tracker.md"):
+                return vw.check_risk_mitigation_closure(
+                    risk_content=_risk_content(_risk_row(refs=refs)))
+
+    def test_archived_completed_reference_resolves_no_r3(self):
+        """风险引用归档已完成任务（archive/index.md 任务面行）→ 解析为
+        完成，无 R3 absent 误报（B1：归档证据=有效证据）。"""
+        r = self._run("MAINT-002")
+        self.assertEqual(r["verdict"], "PASS")
+        self.assertEqual([w["rule"] for w in r["warnings"]], [])
+        self.assertEqual(r["stats"]["pass"], 1)
+
+    def test_truly_nonexistent_reference_keeps_r3(self):
+        """对照：引用任何层都不存在的 ID → R3 absent-WARN 保持（fail-closed
+        设计不放松——R3 从不升 FAIL，但也绝不静默吞掉未知引用）。"""
+        r = self._run("FIX-999")
+        self.assertEqual(r["verdict"], "WARN")
+        self.assertEqual([w["rule"] for w in r["warnings"]], ["R3"])
+        self.assertIn("not found in the task status map",
+                      r["warnings"][0]["reason"])
+
+    def test_missing_index_falls_back_to_hot_only(self):
+        """无 archive/index.md → 行为与修复前一致（热表 only），零新面。"""
+        with _sandbox_gov_dir() as td:
+            gov = td / ".governance"
+            gov.mkdir()
+            (gov / "plan-tracker.md").write_text(self._PLAN_HOT,
+                                                 encoding="utf-8")
+            with mock.patch.object(vw, "SAMPLE_PATH", gov / "plan-tracker.md"):
+                r = vw.check_risk_mitigation_closure(
+                    risk_content=_risk_content(_risk_row(refs="MAINT-002")))
+        self.assertEqual(r["verdict"], "WARN")
+        self.assertEqual([w["rule"] for w in r["warnings"]], ["R3"])
 
 
 if __name__ == "__main__":

@@ -77,3 +77,37 @@ DEC-213③（archived decisions L107 实读）：「测试/夹具静态版本钉
 ## 5. 裁决
 
 **APPROVED_WITH_NOTES** — unresolved_blockers=0。五点核验全立；**P1-1 强烈建议 commit 前随批一行修**（晚出 fieldless 行逃检缝——修复成本一行+一测，低于后续票）；P3×5 与环境披露×2 不阻塞。HEAD 陈旧红模式的最终裁决归 Coordinator 后台权威全量套件。
+
+---
+
+# §FIX-412：R3 归档感知任务映射（快审，2026-09-29）
+
+- **对象**: risk_domain.py `_archive_terminal_task_statuses()`（archive/index.md 任务面签名解析）并入 `_default_task_status_map` + test_risk_mitigation_closure.py 新类 3 测 + 4 处 fixture 沙箱化
+- **工作集**: 2 文件 +51/0、+85/−4（与派单 1:1，零范围外 ✓）
+- **结论**: **APPROVED_WITH_NOTES**（unresolved_blockers=0；P3×3）
+
+## 五点核验
+
+| # | 要点 | 判定 | 事实依据 |
+|---|------|------|---------|
+| ① | 前提证伪处理完备 | ✅ | OPS-001/MAINT-003~006 跨实体族 + DESIGN/PLAN/DOC 早期族**零踪迹实证**（hot tracker + archive/index.md 任务面均无 grep 命中；risk-log L10/L23 仅作缓解引用出现）→前治理纪元实体按设计保持 R3 WARN（不升 FAIL、不静默吞——`test_truly_nonexistent_reference_keeps_r3` 断言 reason 串）；live 面如实分层：62 归档任务解析（59 完成+3 终止）+ 零踪迹族 R3 残余（live 抽样 RISK-001/006/008/009/011 → DESIGN-001/PLAN-004/DESIGN-005/PLAN-003/DOC-001 全为设计内 WARN）；实现零发明解析 |
+| ② | 热表恒胜（双态不混） | ✅（结构保证）+ P3-1 | 热表四桶（completed/blocked/unblocked/non_executable）先全量填 map，archive 经 `setdefault` 仅补缺（L366-367）——结构性保证一个 task_id 永远单状态；**缺双态回归测**（同 id 热表进行中+归档已完成→热胜） |
+| ③ | 缺档回退 fail-safe | ✅ | 三重防护（is_file 缺→{}；Path 构造 OSError/ValueError→{}；read 失败→{}）never raises；{} 合并=no-op=修复前逐字节同行为（`test_missing_index_falls_back_to_hot_only`）；另：hot parse 失败→`return None` 先于归档合并（L355-359→L366）——归档面不救援热表失败，保守正确 |
+| ④ | 3 新测质量 | ✅ + P3-2 | 三态覆盖：归档完成→PASS 零警+stats.pass=1 / 真不存在→R3 WARN 保持 / 缺档→热-only 回退；fixture 沙箱化 4 处（FIX-411 家族 `_sandbox_gov_dir`）+ SAMPLE_PATH 经 `_resolve_shared()`（check 入口 L432 在 map 构建 L446 前）刷新——patch `vw.SAMPLE_PATH` 全链传播 ✓；复跑 **27/27 passed**；live 探针：62 任务解析正常、签名判别（cells[4]=archive/tasks/ 位置+无空格 id+终态词表）对 EVD/DEC 索引行零误匹配。**缺口**：已终止映射（fixture OPS-009 行在场但无断言——terminated≠completed 诚实映射无直接测试） |
+| ⑤ | 零范围外 | ✅ | git status/numstat：仅 risk_domain.py + test_risk_mitigation_closure.py，与派单 1:1；CRLF 归一化提示同前批（无实害） |
+
+## findings（P3×3，零阻塞）
+
+| # | 级别 | 位置 | 问题 | 建议 |
+|---|------|------|------|------|
+| P3-F412-1 | P3 | 测试 | 双态热恒胜（同 id 热表+归档）无回归测——setdefault 结构性保证现正确，但语义靠实现细节而非断言钉护 | 补一测：同 id 双态→热状态胜 |
+| P3-F412-2 | P3 | 测试 | 已终止映射无直接断言（OPS-009 fixture 行已备，仅差一个用例）——terminated≠completed 的诚实性未被钉护 | 补一测：引用已终止归档任务→非 R3 但也非 completed |
+| P3-F412-3 | P3 | risk_domain L309 | `_archive_terminal_task_statuses` 依赖调用链先行 `_resolve_shared()`（现由 check 入口 L432 契约承担）；绕链直调且未刷新时 `Path(SAMPLE_PATH)` NameError（`_default_task_status_map` 的 try 只包 parse，幸而未刷新时 parse 先炸→None fail-safe，到不了 archive 调用——唯一暴露面=私有函数直调） | 可选：函数内自调 `_resolve_shared()` 一行自洽 |
+
+## 复跑证据（TEMP=仓库外 `$env:LOCALAPPDATA\Temp\fix412-review`；重试 0/2）
+
+pytest test_risk_mitigation_closure.py（全）→ **27 passed**（=声明 27/27 ✓）；live 探针：`_archive_terminal_task_statuses()`=62 条（59 已完成+3 已终止）；live `check_risk_mitigation_closure`：R3 残余=零踪迹族设计内 WARN、R2 violation（RISK-003/DESIGN-002/2026-04-17）=既有存量与本批无关。
+
+## 裁决（§FIX-412）
+
+**APPROVED_WITH_NOTES** — unresolved_blockers=0。五点全立（②为结构性保证+测试钉护建议）；P3×3（两测缺口+直调自洽注记）零阻塞，可并入随批或遗留。

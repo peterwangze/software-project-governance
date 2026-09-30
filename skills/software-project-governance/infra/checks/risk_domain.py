@@ -23,6 +23,7 @@ design and the line-number baseline used during extraction.
 
 import re
 from datetime import date, datetime
+from pathlib import Path
 
 # Peer, pure module (stdlib only) — no import cycle: verify_workflow.py
 # imports this domain at module load, and task_priority never imports back.
@@ -292,6 +293,49 @@ def _mitigation_deadline_overdue(deadline_str, today):
     return today > deadline
 
 
+def _archive_terminal_task_statuses():
+    """FIX-412: the archive-index TASK face, as ``{task_id: status_cell}``.
+
+    B1 rule (archive/index.md exists → archived evidence is valid): rows
+    shaped ``| <task-id> | <status> | <version> | archive/tasks/... |``
+    with a terminal status vocabulary. 已完成 maps to a ✅-bearing cell
+    (the single completion signal ``_task_status_is_completed`` reads);
+    已终止 maps to an honest non-completed cell (terminated ≠ completed —
+    present in the map so the reference is no longer R3-absent, but never
+    falsely completed). Missing/unreadable index → {} (never raises — the
+    hot-only behavior is the exact pre-FIX-412 fallback).
+    """
+    try:
+        path = Path(SAMPLE_PATH).parent / "archive" / "index.md"
+        if not path.is_file():
+            return {}
+    except (OSError, ValueError):
+        return {}
+    statuses = {}
+    try:
+        lines = path.read_text(encoding="utf-8").split("\n")
+    except (OSError, ValueError):
+        return {}
+    for raw in lines:
+        line = raw.strip()
+        if not line.startswith("| "):
+            continue
+        cells = [c.strip() for c in line.split("|")]
+        # Task-face signature: 4+ raw cells, id + terminal status +
+        # version + an archive/tasks/ location column (EVD/DEC index rows
+        # carry different column semantics and never match this shape).
+        if len(cells) < 5 or not cells[4].startswith("archive/tasks/"):
+            continue
+        task_id, status = cells[1], cells[2]
+        if not task_id or " " in task_id:
+            continue
+        if status == "已完成":
+            statuses[task_id] = "✅ 已归档（已完成）"
+        elif status == "已终止":
+            statuses[task_id] = "已归档（已终止）"
+    return statuses
+
+
 def _default_task_status_map():
     """Build ``{task_id: raw status cell}`` from task_priority (FIX-265 / F11).
 
@@ -302,6 +346,11 @@ def _default_task_status_map():
     ``.status`` cell. Returns None when task-priority cannot run (missing
     plan-tracker, unreadable, parse failure) — the caller then fails-safe
     the affected risks to WARN instead of guessing.
+
+    FIX-412: the archive-index task face merges UNDER the hot table (hot
+    status always wins — one task never carries two statuses), so a
+    mitigation reference to a genuinely archived task resolves instead of
+    R3-absent false-flagging (B1: archived evidence is valid evidence).
     """
     try:
         tasks = parse_task_dependencies(SAMPLE_PATH)
@@ -314,6 +363,8 @@ def _default_task_status_map():
         for entry in bucket:
             dep = entry.task if hasattr(entry, "task") else entry
             status_map[dep.task_id] = dep.status
+    for task_id, cell in _archive_terminal_task_statuses().items():
+        status_map.setdefault(task_id, cell)
     return status_map
 
 

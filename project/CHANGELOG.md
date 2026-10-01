@@ -2,6 +2,33 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.93.1] - 未发布（准备态）
+<!-- 发布日期占位（FIX-349 口径）：发布日期零预填；M-7 annotated tag `v0.93.1` 落地后以 taggerdate 权威回填本行日期单元格。 -->
+
+### 0.93.1 - **补丁线：验证根因修复批与归档健康收口（Patch Line: Verification Root-Cause Fix Batch & Archive Health Closure）**：六件根因修复+卫生批（FIX-414~419 载荷 / arch 顾问 D1-D7 裁决集 / 用户 2026-09-30 预授权令 + 0.93.1 M-0 决策）
+
+0.93.1 为 0.93.0 的补丁线版本（无新特性、无机制激活翻转、无破坏性变更、无 `.governance` schema 变更）：按用户 2026-09-30 预授权令（「我授权发布版本承载这次修改」）与 0.93.1 M-0 决策单轮交付，修复范围经 arch 顾问 D1-D7 裁决集界定；版本载荷窗口 `aa405c7..693fea8`（8 commits = 六件 + docs 迁移否证回退对），发布链 REL-097 组装于 2026-10-01（+0800）。
+
+### Fixed
+
+- **FIX-414（commit `65cf188`）**：测试期望与 FIX-413 契约对齐——released 复跑 1F 消除（历史豁免臂 WARN→PASS，静默契约口径一致）。
+- **FIX-415（commit `fe0afcb`）**：HotFact cwd 根因修复——HOST_PROJECT_ROOT import 期绑定在 FIX-270 plugin-scope 门下钉根 + SD 虚构损伤路径补齐，热事实检查不再随运行目录漂移假红。
+- **FIX-416（commit `2fa1ebd`）**：归档触发判定与 CLI 口径对齐——`archive.py migrate --auto` 默认 ALL row-family（Check 27 口径）+ ALL 守卫修正 + 完整分解消息，归档永续红消除。
+- **FIX-417（commit `b12eee1`）**：archive.py 最小内聚拆分 6016→4241 行（28n 阈值 ERROR 清零）+ 7 超限函数分解 + archive_parsing(1435)/archive_indexing(870) 伴随模块——AST 依赖闭包证明 + CLI 字节等价，零行为变化。
+- **FIX-418（commit `693fea8`）**：infra-cwd 11F 分类根治（全数判定为测试隔离面，零产品缺陷）——双 cwd 串行全席 4591/4591 OK、收集集一致。
+- **FIX-419（commit `bdc037e`）**：release_docs 阈值重校准 80→100（arch D4 政策口径）+ 21 周实测速率依据（~4.0-5.5/周，~3-4 周余量）+ TOOLS.md 同步。
+
+**卫生批（对账台账 `docs/reconciliation-0.93.1.md`）**：
+
+- **ragged 根因闭环**：Check 31 ragged 全表 44 行管道审计归零（mismatch=0）。
+- **风险面三态对账**：arch 顾问元裁决三态口径（已修复/历史已对账/裁定闭环）落入对账台账，风险面非证据式关闭如实披露。
+- **28q/28m 消解**：hooks_drift（prepare-commit-msg 重装）+ release_docs_versions 政策口径承载（FIX-419）。
+- **docs 迁移否证回退对（`263779f`↔`7d6c4a7`）**：release docs 归档子目录化经 claim-gate 会计注册表锚原路径证伪并整体回退（28q 改走阈值重校准路径）。
+
+**版本面再生纪律**：本版版本面经 `release-projection --write` 确定性再生（权威源 bump → written=17 → write_then_probe=PASS，sd_integrity 28 scanned/0 unreadable → 幂等复跑 PASS@0.93.1）+ 双根 entry sync（repo root + e2e fixture 的 AGENTS.md/CLAUDE.md bootstrap 段再生）+ 引擎锚同步（REQUIRED_SNIPPETS 六面版本针脚 0.93.1）。
+
+**准备态注记**：本段为 REL-097 组装时点（2026-10-01 +0800）的**准备态**——发布日期不预填（发布收口按 FIX-349 口径以 M-7 annotated tag `v0.93.1` taggerdate 权威落字）；发布终账、Commit 区间终值与发布验证结论随发布链 M-2+ 补记。
+
 ## [0.93.0] - 2026-09-30（taggerdate 权威〔FIX-349 口径〕）
 <!-- 发布日期占位（FIX-349 口径）：发布日期零预填；M-7 annotated tag `v0.93.0` 落地后以 taggerdate 权威回填本行日期单元格。 -->
 

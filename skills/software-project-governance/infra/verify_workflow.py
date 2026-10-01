@@ -18992,13 +18992,39 @@ def check_archive_integrity():
     archive_module = _load_archive_module()
     if archive_module is not None:
         analysis = archive_module.analyze_auto_archive_candidates()
-        result["pending_archive_tasks"] = analysis.get("tasks_archived", 0)
+        # FIX-416: the actionable face must count EVERY migratable family.
+        # The old tasks-only interpolation printed "0 hot completed
+        # task(s)" while the gap actually lived in the non-EVD row
+        # families (REVIEW/TRIAGE/RECO) — a misleading red whose hinted
+        # command (then an EVD-leg CLI default) could not even drain it.
+        families = analysis.get("row_families_archived", {}) or {}
+        actionable_total = (
+            analysis.get("tasks_archived", 0)
+            + analysis.get("evidence_archived", 0)
+            + analysis.get("decisions_archived", 0)
+            + analysis.get("risks_archived", 0)
+            # non-EVD families only — EVD is already counted in
+            # evidence_archived (no double counting).
+            + sum(v for k, v in families.items() if k != "EVD")
+        )
+        result["pending_archive_tasks"] = actionable_total
         result["archive_triggers"] = analysis.get("triggers", [])
         if analysis.get("should_archive"):
+            family_face = ", ".join(
+                f"{k}={v}" for k, v in sorted(families.items()) if v
+            )
+            breakdown = (
+                f"tasks={analysis.get('tasks_archived', 0)}, "
+                f"evidence={analysis.get('evidence_archived', 0)}, "
+                f"decisions={analysis.get('decisions_archived', 0)}, "
+                f"risks={analysis.get('risks_archived', 0)}"
+            )
+            if family_face:
+                breakdown += f", families={family_face}"
             result["pass"] = False
             result["issues"].append(
                 "Archive trigger gap: "
-                f"{analysis.get('tasks_archived', 0)} hot completed task(s) "
+                f"{actionable_total} archivable row(s) ({breakdown}) "
                 f"should be archived via {', '.join(analysis.get('triggers', []))} "
                 f"for v{analysis.get('versions_range', ('?', '?'))[0]}~"
                 f"v{analysis.get('versions_range', ('?', '?'))[1]}. "

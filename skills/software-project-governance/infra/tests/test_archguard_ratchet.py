@@ -519,7 +519,18 @@ class BaselineArtifactTests(unittest.TestCase):
         # file (its deltas live in checks/review_domain.py, archive.py and
         # test files). Engine print census stayed 1338 (zero drift — the
         # latest-wins block prints nothing).
-        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 27164)
+        # FIX-416 rider re-anchor (2026-09-30): 27164 -> 27190, +28/-2
+        # measured split — all in check_archive_integrity's trigger face:
+        # the four-family actionable total (tasks+evidence+decisions+risks+
+        # non-EVD row_families, no double counting) replaces the tasks-only
+        # pending count, and the FAIL issue carries the full per-family
+        # breakdown (the old text read "0 hot completed task(s)" while the
+        # gap lived in the REVIEW/TRIAGE/RECO families). Engine print
+        # census stays 1338 (zero drift — the block prints nothing; the
+        # issue string is data returned in the result dict). Same-window
+        # regen also re-anchors r2_reverse_dependency (FIX-415's test-file
+        # insertion had left it stale — R7 failing at fe0afcb).
+        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 27190)
 
     def test_authored_zone_survives_regen(self):
         existing = _committed_baseline()

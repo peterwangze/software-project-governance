@@ -2106,11 +2106,16 @@ def _migrate_evidence(version_start, version_end, task_versions, dry_run=False,
                       explain_out=None, row_family="EVD"):
     """FIX-164: migrate evidence-log rows whose related tasks have been archived.
 
-    FEAT-075 (DEC-278 §3.1 单元二): ``row_family`` is the write-boundary
-    choke point — only the EVD family has a write-migration path; any other
-    family is refused at code level by _guard_row_family_write_migration
-    regardless of ``dry_run`` (scan_row_families is the read-only surface
-    for the other families).
+    FEAT-075 (DEC-278 §3.1 单元二) → FEAT-076 (0.93.0): ``row_family``
+    selects the write-migration leg. All FOUR families (EVD/REVIEW/TRIAGE/
+    RECO) are admitted — the 0.92 EVD-only boundary was superseded by the
+    clearing-round authorization chain (DEC-287 → DEC-292 Wave2 unlock →
+    DEC-293 全量执行) with the DEC-282 C-1(b) re-authorization conditions
+    delivered in the same version. _guard_row_family_write_migration
+    remains the choke point against typos and unadmitted future families;
+    ``"ALL"`` resolves to the four families at the migration entries
+    (migrate_by_version / migrate_auto). scan_row_families stays the
+    read-only surface for zero-write inspection.
 
     Evidence-log format: '| EVD-{n} | 关联Task | 摘要 | 日期 | 类型 | ... |'
     parts[2] is the 关联 Task column and may contain comma-separated task IDs.
@@ -2581,10 +2586,11 @@ def _parse_family_row(family, line):
 def _classify_family_rows(family, lines, line_bytes, task_versions,
                           version_start, version_end, ref_verdict):
     """FEAT-075: classify one non-EVD family's rows under unit one's six
-    conditions (shared _make_ref_verdict typer + severity ordering; the
-    would_archive verdict is a DRY-RUN candidacy projection only — write
-    migration for these families is refused by _guard_row_family_write_-
-    migration). Returns per-row records in scan order."""
+    conditions (shared _make_ref_verdict typer + severity ordering). The
+    would_archive verdict feeds BOTH surfaces single-source since FEAT-076:
+    the read-only scanner's candidacy projection AND the admitted write
+    migration for these families (zero drift by construction). Returns
+    per-row records in scan order."""
     id_line_counts = {}
     prefix = f"| {family}-"
     for line_idx, line in enumerate(lines):
@@ -5398,6 +5404,12 @@ def migrate_auto(dry_run=False, row_family="ALL"):
     result["risks_archived"] = analysis.get("risks_archived", 0)
     result["triggers"] = analysis.get("triggers", [])
     result["explain"] = analysis.get("explain", {})  # FIX-301
+    # FIX-416: propagate the family face to the dry-run result too — it
+    # previously stayed {} until the real run, so a dry-run preview read
+    # "0 证据" while the ALL-caliber candidates actually lived in the
+    # REVIEW/TRIAGE/RECO families (the 54-vs-28 black box).
+    result["row_families_archived"] = analysis.get(
+        "row_families_archived", {})
     # FIX-385 衔接面: propagate the deferral from the pre-check so the
     # dry-run path reports it too (the real-run copy happens below).
     result["decision_migration_deferred"] = analysis.get(
@@ -5414,12 +5426,20 @@ def migrate_auto(dry_run=False, row_family="ALL"):
     # Dry-run mode: report preview and return
     if dry_run:
         result["success"] = True
+        # FIX-416: the preview must carry the four-family face — an
+        # EVD-only summary next to an ALL-caliber analysis is exactly the
+        # "would_archive 54 but only 28 migrated" ambiguity.
+        family_face = ", ".join(
+            f"{k}={v}" for k, v in sorted(
+                (result.get("row_families_archived") or {}).items()) if v
+        )
         result["details"] = (
             f"Dry-run: 将归档 {result['tasks_archived']} 个 task, "
             f"{result['evidence_archived']} 条证据, "
             f"{result['decisions_archived']} 条决策, "
             f"{result['risks_archived']} 条风险 "
-            f"(v{version_start}~v{version_end}); "
+            + (f"(行家族: {family_face}) " if family_face else "")
+            + f"(v{version_start}~v{version_end}); "
             f"triggers={','.join(result['triggers'])}"
         )
         return result
@@ -5567,6 +5587,17 @@ def _format_auto_summary(result):
             f"archive/evidence/v{result['versions_range'][0]}~v{result['versions_range'][1]}.md",
         )
         lines.append(f"  - 归档 {result['evidence_archived']} 条证据 → {evidence_file}")
+
+    # FIX-416: the non-EVD family legs are part of the ALL steady-state
+    # pass — the summary must show them or a family-leg migration reads
+    # as "0 task, 0 证据" (the 54-vs-28 disclosure gap).
+    family_face = ", ".join(
+        f"{k}={v}" for k, v in sorted(
+            (result.get("row_families_archived") or {}).items())
+        if v and k != "EVD"
+    )
+    if family_face:
+        lines.append(f"  - 归档行家族: {family_face}")
 
     # File size changes
     pt_before = result.get("plan_tracker_before", 0)
@@ -5716,12 +5747,17 @@ def main(argv=None):
                            help="Skip evidence archiving")
     migrate_p.add_argument("--auto", action="store_true",
                            help="Auto-detect version range from plan-tracker roadmap")
-    migrate_p.add_argument("--row-family", default="EVD",
+    migrate_p.add_argument("--row-family", default=None,
                            choices=sorted(_WRITE_MIGRATION_ROW_FAMILIES) + ["ALL"],
                            help="Governance row family to migrate (FEAT-076: "
                                 "all four families are admitted; ALL carries "
                                 "EVD+REVIEW+TRIAGE+RECO in one pass — the "
-                                "0.93 steady-state M-8 semantics)")
+                                "0.93 steady-state M-8 semantics). Default "
+                                "(FIX-416): ALL for --auto — Check 27 counts "
+                                "all four families, so the hinted command "
+                                "must drain them; EVD for an explicit "
+                                "version range (0.92 behavior). An explicit "
+                                "--row-family always wins.")
 
     # build-index
     subparsers.add_parser("build-index", help="Rebuild archive/index.md from archive files")
@@ -5801,19 +5837,33 @@ def main(argv=None):
 
     if args.command == "migrate":
         try:
-            _guard_row_family_write_migration(
-                getattr(args, "row_family", "EVD"))
+            row_family_arg = getattr(args, "row_family", None)
+            if row_family_arg is None:
+                # FIX-416: --auto defaults to the four-family ALL pass so
+                # the command Check 27 hints ("Run archive.py migrate
+                # --auto") can actually drain EVERY family the check counts
+                # under its ALL caliber — the 0.92-era EVD-only default left
+                # REVIEW/TRIAGE/RECO candidates hot forever, a perpetual
+                # check-archive-integrity red. An explicit version range
+                # keeps the 0.92 EVD default; an explicit --row-family
+                # always wins.
+                row_family_arg = "ALL" if args.auto else "EVD"
+            # "ALL" resolves inside migrate_auto / migrate_by_version (the
+            # choke-point guard admits single families only — the old CLI
+            # dispatch passed "ALL" straight in, refusing an explicit
+            # `--row-family ALL` that argparse itself offered as a choice).
+            if row_family_arg != "ALL":
+                _guard_row_family_write_migration(row_family_arg)
             if args.auto:
                 result = migrate_auto(dry_run=args.dry_run,
-                                      row_family=getattr(args, "row_family",
-                                                         "EVD"))
+                                      row_family=row_family_arg)
             elif args.version_start and args.version_end:
                 result = migrate_by_version(
                     args.version_start,
                     args.version_end,
                     dry_run=args.dry_run,
                     migrate_evidence=not args.no_evidence,
-                    row_family=getattr(args, "row_family", "EVD"),
+                    row_family=row_family_arg,
                 )
             else:
                 print("Error: Either --auto or both version_start and "

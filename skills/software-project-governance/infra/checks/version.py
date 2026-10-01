@@ -324,16 +324,22 @@ STATIC_PIN_EXEMPTIONS = {
         # fixture (TaskDep target_version) and its passthrough assertion —
         # scenario payload with the then-future target, surfaces exactly
         # once at this bump. (FIX-410 re-anchor +82; FIX-411 re-anchor +5
-        # — the D-group sandbox-fixture conversions shifted both rows.)
-        (20125, "0.93.0", _REASON_FUTURE_TARGET),
-        (20143, "0.93.0", _REASON_FUTURE_TARGET),
+        # — the D-group sandbox-fixture conversions shifted both rows.
+        # FIX-416 re-anchor +54: FIX-415's HotFact pinning insertion shifted
+        # all four rows below without re-anchoring (RealTreeContractTests
+        # rot-guard caught the stale ledger at fe0afcb); FIX-416 places its
+        # own additions at EOF (zero further drift) and re-anchors to the
+        # actual token lines.)
+        (20179, "0.93.0", _REASON_FUTURE_TARGET),
+        (20197, "0.93.0", _REASON_FUTURE_TARGET),
         # The two FIX-405 SD-integrity readiness tests call
         # check_release_readiness(version="0.93.0") — written with the
         # then-future release as the gate's version parameter; surfaces
         # once at this bump (rows re-anchored by the FIX-408 hermetic
-        # hardening, tokens unchanged; FIX-410 re-anchor +82; FIX-411 +5).
-        (20475, "0.93.0", _REASON_FUTURE_TARGET),
-        (20507, "0.93.0", _REASON_FUTURE_TARGET),
+        # hardening, tokens unchanged; FIX-410 re-anchor +82; FIX-411 +5;
+        # FIX-416 +54 — see the note above).
+        (20529, "0.93.0", _REASON_FUTURE_TARGET),
+        (20561, "0.93.0", _REASON_FUTURE_TARGET),
     ],
     # 0.89.0 bump-time rows (the FIX-361 designed double signal): fixture
     # worlds written by the 0.89.0-window tickets (FIX-390/393/394) carrying

@@ -11059,7 +11059,7 @@ class ExternalProjectValidationHarnessTests(unittest.TestCase):
             # HOST_PROJECT_ROOT (import-time process cwd) puts the suite in
             # host mode whenever pytest starts outside the repo root and
             # the early return yields an empty issue list — the assertion
-            # then fails vacuously ([] != [] was impossible to tell apart).
+            # then fails for a cwd reason, not the sentinel contract itself.
             with patch.object(vw, "ROOT", root), \
                  patch.object(vw, "HOST_PROJECT_ROOT", vw.PLUGIN_ROOT), \
                  redirect_stdout(output):
@@ -20573,7 +20573,9 @@ class SdIntegrityGateTests(unittest.TestCase):
         # FIX-415 disclosure hardening (FIX-408 discipline): the simulated
         # unreadable path must be a FICTION, asserted non-existent. The
         # pre-fix mock named <repo-root>/plugin.json — a real-shaped repo
-        # path that never existed under git — and under non-capturing
+        # path not present in the current tree (root plugin.json was moved
+        # to .claude-plugin/plugin.json in 96ce356, introduced by 9489143)
+        # — and under non-capturing
         # runners (unittest discover / pytest -s) the command's JSON stdout
         # leaked it at the suite tail, reading like a genuine SD scan
         # verdict over the repository (the FIX-415 "root plugin.json
@@ -23764,5 +23766,198 @@ class FEAT075ExceptionAnnotationTests(unittest.TestCase):
         self.assertNotIn("governance_exceptions", bare["details"])
 
 
+
+
+# ────────────────────────────────────────────────────────────
+# FIX-416: Check 27's trigger face — candidates exhausted → PASS
+# (trigger digested); real candidates → FAIL with the full family
+# breakdown. The old message interpolated tasks_archived only, so a
+# gap living in the non-EVD row families read "0 hot completed
+# task(s)" while the hinted `archive.py migrate --auto` (CLI default
+# was the EVD-only leg) could never drain them: a perpetual red.
+# ────────────────────────────────────────────────────────────
+
+class FIX416ArchiveTriggerDisarmTests(unittest.TestCase):
+    """FIX-416: the release_forced trigger must disarm once every
+    migratable candidate is drained, and while candidates remain the
+    Check 27 issue must report the actionable row total across ALL
+    families — not the tasks-only count that read 0."""
+
+    def _make_host(self, *, archived_task=False, review_row=False):
+        """Hermetic host fixture via the FIX-404 sandbox-safe temp dir.
+
+        Roadmap has 2 published versions with RECENT dates (fallback_90d
+        stays out so the only trigger is release_forced from the existing
+        index). The hot task is in-progress (nothing archivable on the
+        tasks face). ``archived_task`` adds one archived FIX-001 +
+        index entry; ``review_row`` adds one REVIEW-family evidence row
+        gated by FIX-001 (would_archive under the ALL caliber).
+        """
+        tmp = _governance_temp_dir(prefix="fix416-")
+        self.addCleanup(tmp.__exit__, None, None, None)
+        root = Path(tmp.__enter__())
+        gov = root / ".governance"
+        gov.mkdir(parents=True)
+        today = date.today()
+        (gov / "plan-tracker.md").write_text(
+            "# plan\n\n"
+            "## 版本规划\n\n### 版本路线图\n\n"
+            "| 版本 | 状态 | 日期 |\n"
+            "| --- | --- | --- |\n"
+            f"| 0.10.0 | 已发布 | {(today - timedelta(days=2)).isoformat()} |\n"
+            f"| 0.11.0 | 已发布 | {(today - timedelta(days=1)).isoformat()} |\n\n"
+            "### v0.11.0 — Latest\n"
+            "| 任务ID | 描述 | 优先级 | 依赖 | 目标版本 | 负责人 | 审查人 | 审查类型 | 闭环路径 | 状态 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
+            "| FIX-002 | keep hot | P1 | — | 0.11.0 | a | — | Code Reviewer | TBD | 进行中 |\n",
+            encoding="utf-8",
+        )
+        if archived_task:
+            (gov / "archive" / "tasks").mkdir(parents=True, exist_ok=True)
+            (gov / "archive" / "tasks" / "v0.10.0.md").write_text(
+                "# 归档\n\n### v0.10.0 — Old\n\n"
+                "| 任务ID | 描述 | 优先级 | 依赖 | 目标版本 | 负责人 | 审查人 | 审查类型 | 闭环路径 | 状态 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
+                "| FIX-001 | done | P1 | — | 0.10.0 | a | — | Code Reviewer | TBD | 已完成 |\n",
+                encoding="utf-8",
+            )
+            (gov / "archive" / "index.md").write_text(
+                "# 归档索引\n\n---\n\n## Task 索引\n\n"
+                "| Task ID | 状态 | 版本 | 归档文件 |\n"
+                "|---------|------|------|---------|\n"
+                "| FIX-001 | 已完成 | 0.10.0 | archive/tasks/v0.10.0.md |\n",
+                encoding="utf-8",
+            )
+        else:
+            # Index alone (release_forced trigger) with zero archive rows.
+            (gov / "archive").mkdir(parents=True, exist_ok=True)
+            (gov / "archive" / "index.md").write_text(
+                "# 归档索引\n\n---\n", encoding="utf-8",
+            )
+        if review_row:
+            (gov / "evidence-log.md").write_text(
+                "# 证据记录\n\n"
+                "| 证据ID | 关联Task | 类型 | 摘要 | 日期 |\n"
+                "| --- | --- | --- | --- | --- |\n"
+                "| REVIEW-FIX-001-R0 | FIX-001 | REVIEW | review record | "
+                f"{(today - timedelta(days=2)).isoformat()} |\n",
+                encoding="utf-8",
+            )
+        return root, gov
+
+    def _run_faces(self, root, gov):
+        """Run the analyzer + Check 27 against the fixture host."""
+        with patch.object(archive_mod, "ROOT", root), \
+             patch.object(archive_mod, "PLUGIN_ROOT", root), \
+             patch.object(vw, "ROOT", root), \
+             patch.object(vw, "SAMPLE_PATH", gov / "plan-tracker.md"), \
+             patch.object(vw, "_load_archive_module",
+                          return_value=archive_mod):
+            analysis = archive_mod.analyze_auto_archive_candidates()
+            result = vw.check_archive_integrity()
+        return analysis, result
+
+    def test_disarm_when_candidates_drained_pass(self):
+        """0 candidates + release_forced satisfied → analysis disarms and
+        Check 27 PASSes (the trigger is digested, not a perpetual red)."""
+        root, gov = self._make_host()
+        analysis, result = self._run_faces(root, gov)
+
+        self.assertTrue(analysis["success"])
+        self.assertFalse(analysis["should_archive"])
+        self.assertEqual(analysis["triggers"], ["release_forced"])
+        self.assertIn("无可归档数据", analysis["reason"])
+        self.assertEqual(analysis["row_families_archived"],
+                         {"EVD": 0, "REVIEW": 0, "TRIAGE": 0, "RECO": 0})
+        self.assertTrue(result["pass"], result["issues"])
+        self.assertEqual(result["pending_archive_tasks"], 0)
+        self.assertFalse([i for i in result["issues"]
+                          if "Archive trigger gap" in i])
+
+    def test_release_forced_with_family_candidates_fails_with_breakdown(self):
+        """release_forced + a real REVIEW-family candidate → still FAIL
+        (anti-whitelisting), but the issue reports the family breakdown
+        and the actionable total — never the misleading
+        "0 hot completed task(s)"."""
+        root, gov = self._make_host(archived_task=True, review_row=True)
+        analysis, result = self._run_faces(root, gov)
+
+        self.assertTrue(analysis["should_archive"])
+        self.assertEqual(analysis["triggers"], ["release_forced"])
+        self.assertEqual(analysis["tasks_archived"], 0)
+        self.assertEqual(analysis["row_families_archived"]["REVIEW"], 1)
+        self.assertFalse(result["pass"])
+        self.assertEqual(result["pending_archive_tasks"], 1)
+        gap = [i for i in result["issues"] if "Archive trigger gap" in i]
+        self.assertEqual(len(gap), 1, result["issues"])
+        self.assertIn("REVIEW=1", gap[0])
+        self.assertIn("1 archivable row(s)", gap[0])
+        self.assertIn("release_forced", gap[0])
+        self.assertNotIn("0 hot completed task(s)", gap[0])
+
+    def test_cli_migrate_auto_defaults_to_all_families(self):
+        """FIX-416 root cause: `migrate --auto` without --row-family must
+        dispatch the ALL pass — Check 27 counts all four families, so the
+        hinted command must be able to drain them. An explicit
+        --row-family wins; an explicit version range keeps the 0.92 EVD
+        default."""
+        captured = {}
+
+        def fake_migrate_auto(dry_run=False, row_family="ALL"):
+            captured["auto_row_family"] = row_family
+            return {
+                "success": True, "skipped": True, "reason": "fixture",
+                "versions_archived": ["0.10.0"],
+                "versions_range": ("0.10.0", "0.11.0"),
+                "tasks_archived": 0, "evidence_archived": 0,
+                "decisions_archived": 0, "risks_archived": 0,
+                "row_families_archived": {}, "triggers": [],
+                "explain": {}, "dry_run": dry_run,
+                "decision_migration_deferred": None,
+                "archive_files_created": [], "verify_pass": False,
+                "plan_tracker_before": 0, "plan_tracker_after": 0,
+                "evidence_log_before": 0, "evidence_log_after": 0,
+                "details": "fixture",
+            }
+
+        def fake_migrate_by_version(vs, ve, dry_run=False,
+                                    migrate_evidence=True, row_family="EVD"):
+            captured["range_row_family"] = row_family
+            return {
+                "success": True, "dry_run": dry_run, "tasks_archived": 0,
+                "tasks_remaining": 0, "evidence_archived": 0,
+                "row_families_archived": {},
+                "decision_migration_deferred": None,
+                "archive_files_created": [], "details": "fixture",
+            }
+
+        out = io.StringIO()
+        with patch.object(archive_mod, "migrate_auto",
+                          side_effect=fake_migrate_auto), \
+             redirect_stdout(out):
+            archive_mod.main(["migrate", "--auto", "--dry-run"])
+        self.assertEqual(captured["auto_row_family"], "ALL")
+
+        with patch.object(archive_mod, "migrate_auto",
+                          side_effect=fake_migrate_auto), \
+             redirect_stdout(out):
+            archive_mod.main(["migrate", "--auto", "--dry-run",
+                              "--row-family", "EVD"])
+        self.assertEqual(captured["auto_row_family"], "EVD")
+
+        # Explicit ALL is a valid CLI choice and must reach migrate_auto
+        # (the pre-fix dispatch guard refused it with exit 1).
+        with patch.object(archive_mod, "migrate_auto",
+                          side_effect=fake_migrate_auto), \
+             redirect_stdout(out):
+            archive_mod.main(["migrate", "--auto", "--dry-run",
+                              "--row-family", "ALL"])
+        self.assertEqual(captured["auto_row_family"], "ALL")
+
+        with patch.object(archive_mod, "migrate_by_version",
+                          side_effect=fake_migrate_by_version), \
+             redirect_stdout(out):
+            archive_mod.main(["migrate", "0.10.0", "0.11.0", "--dry-run"])
+        self.assertEqual(captured["range_row_family"], "EVD")
 if __name__ == "__main__":
     unittest.main()

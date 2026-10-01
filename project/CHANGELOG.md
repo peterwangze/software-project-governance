@@ -2,7 +2,7 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
-## [0.93.1] - 未发布（准备态）
+## [0.93.1] - 已发布（tag v0.93.1@0e277af；taggerdate 2026-10-01 22:44:14 +0800 权威——FIX-349 口径回填）
 <!-- 发布日期占位（FIX-349 口径）：发布日期零预填；M-7 annotated tag `v0.93.1` 落地后以 taggerdate 权威回填本行日期单元格。 -->
 
 ### 0.93.1 - **补丁线：验证根因修复批与归档健康收口（Patch Line: Verification Root-Cause Fix Batch & Archive Health Closure）**：六件根因修复+卫生批（FIX-414~419 载荷 / arch 顾问 D1-D7 裁决集 / 用户 2026-09-30 预授权令 + 0.93.1 M-0 决策）

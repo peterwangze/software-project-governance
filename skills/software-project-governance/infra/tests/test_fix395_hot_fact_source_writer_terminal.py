@@ -55,6 +55,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _HERE = Path(__file__).resolve().parent
 _INFRA_DIR = _HERE.parent
@@ -285,6 +286,24 @@ class Fix395WriterCommittedReleasedFaceTests(unittest.TestCase):
 class Fix395GuardedDirectionsTests(unittest.TestCase):
     """未知不猜 + 活体守护：non-terminal cells never flip, the true-positive
     protections stay byte-for-byte (组合②③互不回归)."""
+
+    def setUp(self):
+        # FIX-418 cwd-hermeticity pin (FIX-415 family): the check-face
+        # assertions below call check_hot_fact_source_consistency(path) with
+        # an explicit fixture path, but the plugin-scope gate
+        # (_hot_fact_source_plugin_scope → _host_plugin_roots_divergent)
+        # reads the MODULE HOST_PROJECT_ROOT — bound from the PROCESS cwd at
+        # verify_workflow import time — and never the passed path. Under a
+        # repo-root cwd (host==plugin → dogfood) the FIX-382-era expectations
+        # ran and the fixtures produced the demanded issues; under an infra/
+        # cwd the roots diverged, host mode exempted the plugin-project
+        # expectations, and issues came back empty (the two failures). Pin
+        # the roots to dogfood for the whole class — the same seam FIX-415
+        # already pinned in test_verify_workflow.py
+        # HotFactSourceConsistencyTests.
+        patcher = mock.patch.object(vw, "HOST_PROJECT_ROOT", vw.PLUGIN_ROOT)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def _write_plan(self, root, content):
         path = Path(root) / "plan-tracker.md"

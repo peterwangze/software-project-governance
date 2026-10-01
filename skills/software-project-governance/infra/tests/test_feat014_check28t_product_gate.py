@@ -50,11 +50,42 @@ def _run_engine_host_mode(product_gates=False):
     ``check_readme_claim_evidence_levels`` is stubbed with a raiser so that a
     leaked 28t run is unambiguous (and the test stays independent of the
     README content itself).
+
+    FIX-418 cwd-hermeticity pin: the engine's parameterless host-facts reads
+    (check_gate_consistency → SAMPLE_PATH, check_release_readiness →
+    GOVERNANCE_DIR, snapshot/evidence/risk/archive checks → the derived
+    constant family) are import-frozen from the PROCESS cwd — patching the
+    roots alone cannot redirect them. Under a repo-root cwd they
+    accidentally hit the dogfood .governance (green by coincidence); under
+    an infra/ cwd they raised FileNotFoundError before the gate assertions.
+    Pin the facts face to the dogfood .governance explicitly (the same
+    constant family _apply_project_root_override rebinds for
+    --project-root) — identical read targets to the green baseline,
+    implicit cwd dependence made explicit (zero behaviour change).
     """
     with tempfile.TemporaryDirectory() as td:
+        gov = Path(vw.ROOT) / ".governance"
         p1 = mock.patch.object(vw, "PLUGIN_ROOT", Path(vw.ROOT))
         p2 = mock.patch.object(vw, "HOST_PROJECT_ROOT", Path(td))
-        with p1, p2:
+        with p1, p2, mock.patch.multiple(
+                vw,
+                GOVERNANCE_DIR=gov,
+                EXECUTION_PACKET_PATH=gov / "execution-packets.json",
+                SAMPLE_PATH=gov / "plan-tracker.md",
+                SESSION_SNAPSHOT_PATH=gov / "session-snapshot.md",
+                EVIDENCE_PATH=gov / "evidence-log.md",
+                RISK_PATH=gov / "risk-log.md",
+                ARCHIVE_INDEX_PATH=gov / "archive" / "index.md",
+                ARCHIVE_TASKS_DIR=gov / "archive" / "tasks",
+                ARCHIVE_EVIDENCE_DIR=gov / "archive" / "evidence",
+                ARCHIVE_DECISIONS_DIR=gov / "archive" / "decisions",
+                ARCHIVE_RISKS_DIR=gov / "archive" / "risks"), \
+             mock.patch.dict(vw.REQUIRED_FILES, {
+                 "Governance Plan Tracker": gov / "plan-tracker.md",
+                 "Governance Evidence Log": gov / "evidence-log.md",
+                 "Governance Decision Log": gov / "decision-log.md",
+                 "Governance Risk Log": gov / "risk-log.md",
+             }):
             with mock.patch.object(
                     vw, "check_readme_claim_evidence_levels",
                     side_effect=AssertionError(

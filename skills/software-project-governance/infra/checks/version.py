@@ -329,17 +329,19 @@ STATIC_PIN_EXEMPTIONS = {
         # all four rows below without re-anchoring (RealTreeContractTests
         # rot-guard caught the stale ledger at fe0afcb); FIX-416 places its
         # own additions at EOF (zero further drift) and re-anchors to the
-        # actual token lines.)
-        (20179, "0.93.0", _REASON_FUTURE_TARGET),
-        (20197, "0.93.0", _REASON_FUTURE_TARGET),
+        # actual token lines. FIX-418: the FEAT-080 fixture + assertion
+        # rows were DISSOLVED by deriving the target version
+        # (read_active_version(), DEC-213③ / FIX-352/353 shape) — dead
+        # ledger weight removed per the M-1 dissolution precedent above.)
         # The two FIX-405 SD-integrity readiness tests call
         # check_release_readiness(version="0.93.0") — written with the
         # then-future release as the gate's version parameter; surfaces
         # once at this bump (rows re-anchored by the FIX-408 hermetic
         # hardening, tokens unchanged; FIX-410 re-anchor +82; FIX-411 +5;
-        # FIX-416 +54 — see the note above).
-        (20529, "0.93.0", _REASON_FUTURE_TARGET),
-        (20561, "0.93.0", _REASON_FUTURE_TARGET),
+        # FIX-416 +54; FIX-418 re-anchor +17: the FIX-300 cwd pin + the
+        # FEAT-080 derive shifted both rows below — see the note above).
+        (20546, "0.93.0", _REASON_FUTURE_TARGET),
+        (20578, "0.93.0", _REASON_FUTURE_TARGET),
     ],
     # 0.89.0 bump-time rows (the FIX-361 designed double signal): fixture
     # worlds written by the 0.89.0-window tickets (FIX-390/393/394) carrying

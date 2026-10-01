@@ -387,6 +387,27 @@ class Check37Br4WiringTests(unittest.TestCase):
     """BR-4 / DEC-153 ②③: already-published version checks run the gate
     interlock in released mode (WARN), never mis-FAIL history."""
 
+    def setUp(self):
+        # FIX-418 cwd-hermeticity pin: the embedded-call tests below run the
+        # REAL check_release_readiness → check_release_readiness_fact_source()
+        # (import-frozen GOVERNANCE_DIR) and check_hot_fact_source_consistency()
+        # (the _governance_dir() seam, which tracks the import-frozen
+        # SAMPLE_PATH) — both parameterless host-facts reads bound from the
+        # PROCESS cwd at verify_workflow import time. Under a repo-root cwd
+        # they accidentally hit the dogfood .governance (tests green by
+        # coincidence); under an infra/ cwd they raised FileNotFoundError
+        # before the wiring assertions. Pin both facts constants to the
+        # dogfood .governance explicitly — same read targets as the green
+        # baseline, implicit cwd dependence made explicit (zero behaviour
+        # change).
+        gov = vw.PLUGIN_ROOT / ".governance"
+        p1 = mock.patch.object(vw, "GOVERNANCE_DIR", gov)
+        p2 = mock.patch.object(vw, "SAMPLE_PATH", gov / "plan-tracker.md")
+        p1.start()
+        p2.start()
+        self.addCleanup(p1.stop)
+        self.addCleanup(p2.stop)
+
     ROADMAP = (
         "## 版本规划\n\n"
         "| 版本 | 状态 | 预计日期 |\n"

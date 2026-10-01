@@ -289,8 +289,18 @@ class FIX300DualCaliberAgreementTests(unittest.TestCase):
                 "IDENTITY_ATTESTATION_FAIL: REQUIRED_ROOT_UNAVAILABLE: "
                 ".governance/archive/decisions/decisions-v0.1.0-0.78.0.md",
                 identity["issues"][0])
-            semantic = vw.scan_loop_runtime_claims(
-                vw._loop_runtime_claim_context("installed_host"))
+            # FIX-418 cwd-hermeticity pin (FIX-415 family): the semantic
+            # caliber below builds its claim context from the MODULE
+            # HOST_PROJECT_ROOT (bound from the PROCESS cwd at
+            # verify_workflow import time). The test asserts the dogfood
+            # semantic face (PASS against the real governed root); without
+            # a pin an infra/ start directory redirected host_root off the
+            # governed root and the verdict came back BLOCKED. Pin the root
+            # — the same target the repo-root baseline always used (zero
+            # behaviour change).
+            with patch.object(vw, "HOST_PROJECT_ROOT", vw.PLUGIN_ROOT):
+                semantic = vw.scan_loop_runtime_claims(
+                    vw._loop_runtime_claim_context("installed_host"))
             self.assertEqual("PASS", semantic.verdict)
 
     def test_fixture_identity_mode_agrees_with_engine_on_missing_sources(self):
@@ -20173,10 +20183,17 @@ class B3ProvenanceWiringTests(unittest.TestCase):
 
     def test_provenance_rows_from_report_maps_every_bucket(self):
         import task_priority as tpa
+        from resolve_entry import read_active_version
+        # FIX-418: derive the fixture's target version (DEC-213③ /
+        # FIX-352/353 shape) instead of pinning the active version
+        # literally — the line-anchored STATIC_PIN_EXEMPTIONS ledger goes
+        # stale on any insert above this test (the FIX-300 cwd pin above
+        # shifted the old literal off its ledger row).
+        active_version = read_active_version()
         report = tpa.PriorityReport(
             recommended_next=[tpa.TaskDep(
                 task_id="FIX-001", priority="P1", status="进行中",
-                demand_source="machine-signal", target_version="0.93.0")],
+                demand_source="machine-signal", target_version=active_version)],
             non_executable=[tpa.TaskDep(
                 task_id="FIX-002", priority="P1", status="⛔ 停放",
                 demand_source="user-named")],
@@ -20194,7 +20211,7 @@ class B3ProvenanceWiringTests(unittest.TestCase):
         self.assertEqual(len(rows), 4)
         self.assertEqual(by_id["FIX-001"]["bucket"], "recommended")
         self.assertEqual(by_id["FIX-001"]["demand_source"], "machine-signal")
-        self.assertEqual(by_id["FIX-001"]["target_version"], "0.93.0")
+        self.assertEqual(by_id["FIX-001"]["target_version"], active_version)
         self.assertEqual(by_id["FIX-002"]["bucket"], "non_executable")
         self.assertEqual(by_id["FIX-003"]["bucket"], "blocked")
         self.assertEqual(by_id["FIX-004"]["bucket"], "completed")
@@ -23959,5 +23976,132 @@ class FIX416ArchiveTriggerDisarmTests(unittest.TestCase):
              redirect_stdout(out):
             archive_mod.main(["migrate", "0.10.0", "0.11.0", "--dry-run"])
         self.assertEqual(captured["range_row_family"], "EVD")
+
+
+# ── FIX-418: cwd-hermeticity seam contracts ─────────────────────────────────
+
+class Fix418CwdHermeticityContractTests(unittest.TestCase):
+    """FIX-418 — the three seams behind the 10 infra-cwd failures.
+
+    All 10 failures (feat014×2 / fix270×2 / fix395×2 / gate_seq×3 /
+    quickscan×1) were (i)-class test bugs: an implicit dependence on the
+    process start directory. verify_workflow binds its host-facts face at
+    import time (``HOST_PROJECT_ROOT = _resolve_host_root()`` → frozen
+    ``GOVERNANCE_DIR`` / ``SAMPLE_PATH`` constants) while its product
+    gates read the MODULE attributes dynamically
+    (``_host_plugin_roots_divergent`` → ``_product_gate_active`` /
+    ``_hot_fact_source_plugin_scope``). Under a repo-root cwd both faces
+    accidentally aligned (facts hit the dogfood .governance, gates saw
+    dogfood mode); under an infra/ cwd they split (facts →
+    FileNotFoundError, gates → host-mode exemption → empty issues).
+    These contracts pin each seam so future tests know exactly what a
+    root patch does and does NOT redirect. The CLI's explicit escape is
+    ``--project-root`` (``_apply_project_root_override`` rebinds the
+    whole facts family, fail-closed) — the cwd bind is by design, not a
+    product defect (DEC-080 / FIX-187).
+    """
+
+    def test_host_facts_constants_stay_import_frozen_under_a_root_patch(self):
+        """F1 contract: patching HOST_PROJECT_ROOT moves gates, not facts.
+
+        The frozen constants keep their import-time values; only the
+        sanctioned ``SAMPLE_PATH`` seam (``_governance_dir()`` tracks its
+        parent) redirects a facts read. Engine-level host-mode tests must
+        pin the facts face explicitly — patching the root alone keeps
+        reading the cwd-frozen files either way.
+        """
+        frozen_sample = vw.SAMPLE_PATH
+        frozen_governance = vw.GOVERNANCE_DIR
+        with _governance_temp_dir() as td:
+            with patch.object(vw, "HOST_PROJECT_ROOT", Path(td)):
+                self.assertEqual(vw.SAMPLE_PATH, frozen_sample)
+                self.assertEqual(vw.GOVERNANCE_DIR, frozen_governance)
+                self.assertEqual(vw._governance_dir(), frozen_sample.parent)
+
+    def test_engine_gate_read_follows_pinned_sample_path_not_cwd(self):
+        """F1 fix pattern: a parameterless engine read follows the pin.
+
+        ``parse_gate_status()`` (the exact frame the feat014/fix270
+        engine runs crashed in) reads ``SAMPLE_PATH`` dynamically, so a
+        test that pins the constant gets hermetic facts regardless of
+        the start directory.
+        """
+        with _governance_temp_dir() as td:
+            plan = Path(td) / "plan-tracker.md"
+            plan.write_text(
+                "# t\n\n## Gate 状态跟踪\n\n"
+                "| Gate | 过渡 | 状态 | 日期 | 证据 |\n"
+                "| --- | --- | --- | --- | --- |\n"
+                "| G1 | passed-on-entry | passed | 2026-10-01 | DEC-900 |\n",
+                encoding="utf-8",
+            )
+            with patch.object(vw, "SAMPLE_PATH", plan):
+                gates = vw.parse_gate_status()
+            self.assertEqual(len(gates), 1)
+            self.assertEqual(gates[0]["gate"], "G1")
+            self.assertEqual(gates[0]["status"], "passed")
+
+    def test_dogfood_pin_restores_plugin_scope_expectations(self):
+        """F2 contract: dogfood assertions must pin the module roots.
+
+        ``check_hot_fact_source_consistency(path)`` takes the fixture path
+        but its plugin-scope gate reads the MODULE ``HOST_PROJECT_ROOT``:
+        under divergent roots the FIX-087-era expectations return early
+        (host-mode downgrade) and the SAME fixture yields no
+        ``roadmap row missing active task`` issue — exactly how the
+        fix395 pair went red. The FIX-415 pin (dogfood for the class)
+        restores the demanded issue (guard stays byte-for-byte).
+        """
+        plan_text = (
+            "# t\n\n## 项目配置\n\n- **工作流版本**: 0.38.0\n\n"
+            "## 项目总览\n\n| 项目 | 阶段 |\n| --- | --- |\n| demo | dev |\n\n"
+            "## 当前活跃事项\n\n"
+            "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- |\n"
+            "| **P2** | FIX-099 | future ticket | — | 0.38.0 | pending | 📋 待启动 |\n\n"
+            "## 版本规划\n\n"
+            "| 版本 | 状态 | 预计日期 | 核心范围 | 包含任务 | 关键交付物 |\n"
+            "| --- | --- | --- | --- | --- | --- |\n"
+            "| **0.37.0** | **已发布** | **2026-05-22** | demo | FIX-080 | tag v0.37.0 |\n"
+            "| **0.38.0** | **进行中** | **2026-05-23** | demo | FIX-082 | — |\n\n"
+            "## 需求跟踪矩阵\n\n| 需求 | 任务 | 状态 |\n| --- | --- | --- |\n"
+        )
+        with _governance_temp_dir() as td:
+            plan = Path(td) / "plan-tracker.md"
+            plan.write_text(plan_text, encoding="utf-8")
+            with _governance_temp_dir() as host:
+                with patch.object(vw, "HOST_PROJECT_ROOT", Path(host)):
+                    exempted = vw.check_hot_fact_source_consistency(plan)
+                self.assertFalse(
+                    any("roadmap row missing active task FIX-099" in i for i in exempted),
+                    "host mode must stay exempt (no product change)",
+                )
+            with patch.object(vw, "HOST_PROJECT_ROOT", vw.PLUGIN_ROOT):
+                pinned = vw.check_hot_fact_source_consistency(plan)
+            self.assertTrue(
+                any("roadmap row missing active task FIX-099" in i for i in pinned),
+                f"dogfood pin must restore the demanded issue: {pinned}",
+            )
+
+    def test_product_gate_default_tracks_the_module_root_pair(self):
+        """F3 contract: the default gate verdict reads the module roots.
+
+        ``_product_gate_active`` (the exact predicate the quickscan
+        default-path test asserted) is dogfood-only by default and is
+        re-enabled by the flag under divergent roots — all states follow
+        the patched MODULE attributes, never the process cwd.
+        """
+        ns = SimpleNamespace(quick=False, product_gates=False)
+        with patch.object(vw, "HOST_PROJECT_ROOT", vw.PLUGIN_ROOT):
+            self.assertTrue(vw._product_gate_active(ns))
+        with _governance_temp_dir() as host:
+            with patch.object(vw, "HOST_PROJECT_ROOT", Path(host)):
+                self.assertFalse(vw._product_gate_active(ns))
+                self.assertTrue(vw._product_gate_active(
+                    SimpleNamespace(quick=False, product_gates=True)))
+                self.assertFalse(vw._product_gate_active(
+                    SimpleNamespace(quick=True, product_gates=True)))
+
+
 if __name__ == "__main__":
     unittest.main()

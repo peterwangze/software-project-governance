@@ -176,7 +176,21 @@ class EngineProductGateTests(unittest.TestCase):
     """引擎级：宿主模式下产品自检默认跳过；--product-gates 显式开启。"""
 
     def _run_engine(self, divergent=True, product_gates=False):
-        """在宿主模式（divergent）下运行引擎；product 检查函数被打桩为 raiser。"""
+        """在宿主模式（divergent）下运行引擎；product 检查函数被打桩为 raiser。
+
+        FIX-418 cwd-hermeticity pin: the engine's parameterless host-facts
+        reads (check_gate_consistency → SAMPLE_PATH, check_release_readiness
+        → GOVERNANCE_DIR, snapshot/evidence/risk/archive checks → the
+        derived constant family) are import-frozen from the PROCESS cwd —
+        patching the roots alone cannot redirect them. Under a repo-root
+        cwd they accidentally hit the dogfood .governance (green by
+        coincidence); under an infra/ cwd they raised FileNotFoundError
+        before the gate assertions. Pin the facts face to the dogfood
+        .governance explicitly (the same constant family
+        _apply_project_root_override rebinds for --project-root) —
+        identical read targets to the green baseline, implicit cwd
+        dependence made explicit (zero behaviour change).
+        """
         stub = types.SimpleNamespace(
             verdict="PASS", issues=[], phase="staged_index",
             findings=[], inventory=types.SimpleNamespace(
@@ -185,6 +199,7 @@ class EngineProductGateTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as td:
             host = Path(td)
+            gov = Path(vw.ROOT) / ".governance"
             with mock.patch.object(vw, "scan_loop_runtime_claims",
                                    side_effect=AssertionError("product check ran: Check 31 claims")):
                 with mock.patch.object(vw, "_run_identity_attestation_fixture_only",
@@ -202,7 +217,25 @@ class EngineProductGateTests(unittest.TestCase):
                                         plugin_root=Path(vw.ROOT),
                                         host_root=host,
                                     )
-                                    with p1, p2:
+                                    with p1, p2, mock.patch.multiple(
+                                            vw,
+                                            GOVERNANCE_DIR=gov,
+                                            EXECUTION_PACKET_PATH=gov / "execution-packets.json",
+                                            SAMPLE_PATH=gov / "plan-tracker.md",
+                                            SESSION_SNAPSHOT_PATH=gov / "session-snapshot.md",
+                                            EVIDENCE_PATH=gov / "evidence-log.md",
+                                            RISK_PATH=gov / "risk-log.md",
+                                            ARCHIVE_INDEX_PATH=gov / "archive" / "index.md",
+                                            ARCHIVE_TASKS_DIR=gov / "archive" / "tasks",
+                                            ARCHIVE_EVIDENCE_DIR=gov / "archive" / "evidence",
+                                            ARCHIVE_DECISIONS_DIR=gov / "archive" / "decisions",
+                                            ARCHIVE_RISKS_DIR=gov / "archive" / "risks"), \
+                                         mock.patch.dict(vw.REQUIRED_FILES, {
+                                             "Governance Plan Tracker": gov / "plan-tracker.md",
+                                             "Governance Evidence Log": gov / "evidence-log.md",
+                                             "Governance Decision Log": gov / "decision-log.md",
+                                             "Governance Risk Log": gov / "risk-log.md",
+                                         }):
                                         buf = io.StringIO()
                                         with redirect_stdout(buf):
                                             vw._run_full_engine_checks(

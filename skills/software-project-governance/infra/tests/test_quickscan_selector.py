@@ -431,6 +431,17 @@ class Acceptance3DefaultPathTests(unittest.TestCase):
         self.assertTrue(seen["quick"])
 
     def test_default_invocation_keeps_the_product_gate_active(self):
+        # FIX-418 cwd-hermeticity pin (FIX-415 family): this test asserts the
+        # DOGFOOD default (gate active without any flag), but
+        # _product_gate_active reads the MODULE HOST_PROJECT_ROOT — bound
+        # from the PROCESS cwd at verify_workflow import time. Under a
+        # repo-root cwd host==plugin → dogfood → gate active (green by
+        # coincidence); under an infra/ cwd the roots diverged → host mode →
+        # gate off by default (the failure). Pin the roots to dogfood so the
+        # assertion targets the intended mode from any start directory.
+        patcher = mock.patch.object(vw, "HOST_PROJECT_ROOT", vw.PLUGIN_ROOT)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         seen = {}
 
         def inner(args):

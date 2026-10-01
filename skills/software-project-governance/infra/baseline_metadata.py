@@ -646,126 +646,45 @@ def register(metadata: BaselineMetadata, registry_path, *,
 # ── evaluation ──────────────────────────────────────────────────────────────
 
 
-def evaluate(
-    gate_id: str,
-    observed_value: Any,
-    *,
-    policy_class: str,
-    threshold: Any,
-    direction: str,
-    registry,
-    observed_unit: Optional[str] = None,
-    observed_scope_digest: Optional[str] = None,
-    current_instrument_version: Optional[str] = None,
-    current_target_digest: Optional[str] = None,
-    floor_value: Any = None,
-    now: Optional[datetime] = None,
-) -> EvaluationOutcome:
-    """Evaluate one observation against the registered baseline.
+def _evaluate_gate_configuration(gate, threshold, floor_value, direction,
+                                 outcome):
+    """FIX-417 (moved verbatim from evaluate): step 1 — deterministic
+    gate-configuration contradictions, checked BEFORE any baseline state
+    so the more fundamental defect is never masked.
 
-    Fail-closed chain (module docstring): gate-configuration contradictions
-    first (they are the gate's own defect and must not be masked by baseline
-    state), then baseline presence, expiry, caliber match, and only then the
-    threshold comparison. Malformed caller inputs are ``ContractViolation``
-    — caller bugs, not gate verdicts.
-
-    Required-observation layering (P1-1, review-FEAT-047-CODE-R0 — two
-    tiers, both fail-loud, neither silently skipped):
-
-      * ``observed_unit`` / ``observed_scope_digest`` are REQUIRED the
-        moment a baseline is present — omitting either is a
-        ``ContractViolation`` (CLI exit 3). The caliber match is the core
-        of the provenance mechanism (新鲜但口径不同同样不能比较), so an
-        omitted caliber must never quietly bypass the comparison and let a
-        drifted-caliber number pass as fresh (the W-3 shape this ticket
-        exists to kill).
-      * ``current_instrument_version`` / ``current_target_digest``: when
-        the baseline's expiry is EVENT-based (``max_age_days`` absent —
-        e.g. the stock row's "SKILL bump or surface SHA change"), these
-        observations are what the expiry condition is checked against, so
-        a missing one is fail-VISIBLE: ``not_evaluable`` with
-        ``instrument_missing`` / ``target_missing`` — degraded to
-        not-evaluable, never "check skipped". When the expiry is
-        time-based (``max_age_days`` present) the event observations are
-        optional: supplied → compared (``instrument_changed`` /
-        ``target_changed``); absent → the TTL carries the expiry check.
-
-    ``now`` is REQUIRED when the baseline carries ``max_age_days`` — a
-    missing clock never silently skips the expiry check.
+    Returns (threshold_value, floor, early) — early is a non-None
+    EvaluationOutcome when the gate itself is misconfigured (never a user
+    failure; the threshold is never auto-adjusted).
     """
-    continuation = continuation_for(policy_class)  # closed enum, fails closed
-    gate = _non_empty_text("evaluate: gate_id", gate_id)
-    _finite_number("evaluate: observed_value", observed_value)
-    if direction not in DIRECTIONS:
-        raise ContractViolation(
-            f"evaluate: unknown direction {direction!r} (closed enum "
-            f"{DIRECTIONS})")
-    if direction == "lower" and floor_value is not None:
-        # P2-3: the frozen-floor contradiction check is defined for
-        # upper-bound gates; a floor on a lower-bound gate is a caller bug —
-        # refused at the entrance, never silently ignored.
-        raise ContractViolation(
-            f"evaluate: floor_value applies to upper-bound gates only "
-            f"(got direction='lower' with floor_value={floor_value!r}) — "
-            f"refuse rather than ignore")
-
-    def axis_action(kind: str) -> Optional[str]:
-        """Continuation-axis action for the evaluation-derived family.
-
-        The axis splits exactly the diagnostics a non-pass verdict produces
-        (expired / mismatched / missed): a blocking gate waits for
-        re-measurement or an explicitly authorized waiver; an advisory gate
-        records the miss and triggers a re-measurement action item.
-        ``gate_configuration_error`` (fix the gate) and ``baseline_missing``
-        (register first) own their repair actions; ``ok`` owns ``none``.
-        """
-        if kind in ("gate_configuration_error", "baseline_missing", "ok"):
-            return None
-        if continuation == "advisory":
-            return ("re-measure (advisory gate: record the miss and trigger "
-                    "a re-measurement action item)")
-        return ("re-measure or obtain an explicitly authorized waiver "
-                "before continuing")
-
-    def outcome(evaluation: str, kind: str, message: str, action: str = None
-                ) -> EvaluationOutcome:
-        resolved = action if action is not None else axis_action(kind)
-        if resolved is None:  # a supplied action is required for these kinds
-            resolved = "none" if kind == "ok" else "resolve the diagnostic"
-        return EvaluationOutcome(
-            gate_id=gate, policy_class=policy_class, evaluation=evaluation,
-            continuation=continuation,
-            diagnostic=Diagnostic(kind=kind, message=message, action=resolved))
-
-    # 1. deterministic gate-configuration contradictions (checked before any
-    #    baseline state so the more fundamental defect is never masked).
-    threshold_value: Optional[float] = None
+    threshold_value = None
     if isinstance(threshold, bool) or not isinstance(threshold, (int, float)) \
             or not math.isfinite(threshold):
-        return outcome(
+        early = outcome(
             "not_evaluable", "gate_configuration_error",
             f"gate {gate!r}: threshold {threshold!r} is not a finite number "
             f"— the gate itself is misconfigured; this is not a user "
             f"failure and the threshold is never auto-adjusted",
             "fix the gate configuration (threshold must be a finite number)")
+        return None, None, early
     threshold_value = float(threshold)
-    floor: Optional[float] = None
+    floor = None
     if floor_value is not None:
         if isinstance(floor_value, bool) \
                 or not isinstance(floor_value, (int, float)) \
                 or not math.isfinite(floor_value):
-            return outcome(
+            early = outcome(
                 "not_evaluable", "gate_configuration_error",
                 f"gate {gate!r}: floor_value {floor_value!r} is not a "
                 f"finite number — the gate itself is misconfigured",
                 "fix the gate configuration (floor_value must be finite or "
                 "omitted)")
+            return threshold_value, None, early
         floor = float(floor_value)
     if direction == "upper" and floor is not None and threshold_value < floor:
         # The EVD-1100 shape: the demanded budget sits below a value the
         # caliber's frozen floor makes unreachable — mathematically
         # impossible, so report the configuration, never a user failure.
-        return outcome(
+        early = outcome(
             "not_evaluable", "gate_configuration_error",
             f"gate {gate!r}: upper-bound threshold {threshold_value:g} is "
             f"below the caliber's frozen floor {floor:g} — mathematically "
@@ -773,32 +692,23 @@ def evaluate(
             f"error, not a user failure",
             "fix the gate configuration (threshold vs frozen floor) or "
             "re-baseline the caliber")
+        return threshold_value, floor, early
+    return threshold_value, floor, None
 
-    # 2. baseline presence.
-    loaded = load_registry(registry)
-    row = loaded["baselines"].get(gate)
-    if row is None:
-        return outcome(
-            "not_evaluable", "baseline_missing",
-            f"gate {gate!r}: no baseline registered in the registry — "
-            f"without provenance the observation is not evaluable",
-            "register the baseline first (baseline-register)")
 
-    # 3. expiry — the evaluation basis invalidates (NOT_EVALUABLE family).
-    meta = BaselineMetadata.from_storage_row(row)
+def _evaluate_baseline_expiry(gate, meta, current_instrument_version,
+                              current_target_digest, now, outcome):
+    """FIX-417 (moved verbatim from evaluate): step 3 — expiry, the
+    evaluation basis invalidation (NOT_EVALUABLE family).
 
-    # P1-1 ①: comparison-side caliber observations are REQUIRED once a
-    # baseline is present — an omitted unit/digest must never silently skip
-    # the caliber match (step 4) and reach the threshold comparison.
-    if observed_unit is None or observed_scope_digest is None:
-        digest_state = "present" if observed_scope_digest else None
-        raise ContractViolation(
-            f"evaluate: observed_unit and observed_scope_digest are "
-            f"required once baseline {gate!r} is registered (got "
-            f"unit={observed_unit!r}, digest={digest_state}) — the caliber "
-            f"match is the provenance core; omitting it must not silently "
-            f"skip (derive the digest via caliber_digest)")
+    P1-1 layering: an event-based expiry condition is checked against the
+    current instrument/target observations — a missing one degrades to
+    not_evaluable (fail-visible), never "check skipped". A time-based
+    expiry requires ``now``; a missing clock never silently skips the
+    check.
 
+    Returns early (non-None EvaluationOutcome) or None.
+    """
     event_based = meta.max_age_days is None
     if event_based and current_instrument_version is None:
         # P1-1 ②: an event-based expiry condition is checked against the
@@ -846,8 +756,16 @@ def evaluate(
                 f"gate {gate!r}: baseline measured at {meta.measured_at} "
                 f"expired after {meta.max_age_days:g}d (now "
                 f"{_as_naive(now).isoformat()})")
+    return None
 
-    # 4. caliber match — fresh but different caliber is never a pass.
+
+def _evaluate_caliber_match(gate, observed_unit, observed_scope_digest,
+                            meta, row, outcome):
+    """FIX-417 (moved verbatim from evaluate): step 4 — caliber match.
+    Fresh but different caliber is never a pass.
+
+    Returns early (non-None EvaluationOutcome) or None.
+    """
     if observed_unit is not None and observed_unit != meta.unit:
         return outcome(
             "not_evaluable", "caliber_mismatch",
@@ -862,6 +780,148 @@ def evaluate(
             f"{observed_scope_digest} != baseline scope_digest "
             f"{row['scope_digest']} — a fresh number measured over a "
             f"different caliber is not comparable")
+    return None
+
+
+def evaluate(
+    gate_id: str,
+    observed_value: Any,
+    *,
+    policy_class: str,
+    threshold: Any,
+    direction: str,
+    registry,
+    observed_unit: Optional[str] = None,
+    observed_scope_digest: Optional[str] = None,
+    current_instrument_version: Optional[str] = None,
+    current_target_digest: Optional[str] = None,
+    floor_value: Any = None,
+    now: Optional[datetime] = None,
+) -> EvaluationOutcome:
+    """Evaluate one observation against the registered baseline.
+
+    Fail-closed chain (module docstring): gate-configuration contradictions
+    first (they are the gate's own defect and must not be masked by baseline
+    state), then baseline presence, expiry, caliber match, and only then the
+    threshold comparison. Malformed caller inputs are ``ContractViolation``
+    — caller bugs, not gate verdicts.
+
+    Required-observation layering (P1-1, review-FEAT-047-CODE-R0 — two
+    tiers, both fail-loud, neither silently skipped):
+
+      * ``observed_unit`` / ``observed_scope_digest`` are REQUIRED the
+        moment a baseline is present — omitting either is a
+        ``ContractViolation`` (CLI exit 3). The caliber match is the core
+        of the provenance mechanism (新鲜但口径不同同样不能比较), so an
+        omitted caliber must never quietly bypass the comparison and let a
+        drifted-caliber number pass as fresh (the W-3 shape this ticket
+        exists to kill).
+      * ``current_instrument_version`` / ``current_target_digest``: when
+        the baseline's expiry is EVENT-based (``max_age_days`` absent —
+        e.g. the stock row's "SKILL bump or surface SHA change"), these
+        observations are what the expiry condition is checked against, so
+        a missing one is fail-VISIBLE: ``not_evaluable`` with
+        ``instrument_missing`` / ``target_missing`` — degraded to
+        not-evaluable, never "check skipped". When the expiry is
+        time-based (``max_age_days`` present) the event observations are
+        optional: supplied → compared (``instrument_changed`` /
+        ``target_changed``); absent → the TTL carries the expiry check.
+
+    ``now`` is REQUIRED when the baseline carries ``max_age_days`` — a
+    missing clock never silently skips the expiry check.
+
+    FIX-417: the three judgement stages are extracted to
+    _evaluate_gate_configuration / _evaluate_baseline_expiry /
+    _evaluate_caliber_match; this function keeps the entrance validation,
+    the outcome factory, and the threshold comparison.
+    """
+    continuation = continuation_for(policy_class)  # closed enum, fails closed
+    gate = _non_empty_text("evaluate: gate_id", gate_id)
+    _finite_number("evaluate: observed_value", observed_value)
+    if direction not in DIRECTIONS:
+        raise ContractViolation(
+            f"evaluate: unknown direction {direction!r} (closed enum "
+            f"{DIRECTIONS})")
+    if direction == "lower" and floor_value is not None:
+        # P2-3: the frozen-floor contradiction check is defined for
+        # upper-bound gates; a floor on a lower-bound gate is a caller bug —
+        # refused at the entrance, never silently ignored.
+        raise ContractViolation(
+            f"evaluate: floor_value applies to upper-bound gates only "
+            f"(got direction='lower' with floor_value={floor_value!r}) — "
+            f"refuse rather than ignore")
+
+    def axis_action(kind: str) -> Optional[str]:
+        """Continuation-axis action for the evaluation-derived family.
+
+        The axis splits exactly the diagnostics a non-pass verdict produces
+        (expired / mismatched / missed): a blocking gate waits for
+        re-measurement or an explicitly authorized waiver; an advisory gate
+        records the miss and triggers a re-measurement action item.
+        ``gate_configuration_error`` (fix the gate) and ``baseline_missing``
+        (register first) own their repair actions; ``ok`` owns ``none``.
+        """
+        if kind in ("gate_configuration_error", "baseline_missing", "ok"):
+            return None
+        if continuation == "advisory":
+            return ("re-measure (advisory gate: record the miss and trigger "
+                    "a re-measurement action item)")
+        return ("re-measure or obtain an explicitly authorized waiver "
+                "before continuing")
+
+    def outcome(evaluation: str, kind: str, message: str, action: str = None
+                ) -> EvaluationOutcome:
+        resolved = action if action is not None else axis_action(kind)
+        if resolved is None:  # a supplied action is required for these kinds
+            resolved = "none" if kind == "ok" else "resolve the diagnostic"
+        return EvaluationOutcome(
+            gate_id=gate, policy_class=policy_class, evaluation=evaluation,
+            continuation=continuation,
+            diagnostic=Diagnostic(kind=kind, message=message, action=resolved))
+
+    # 1. deterministic gate-configuration contradictions (checked before any
+    #    baseline state so the more fundamental defect is never masked).
+    threshold_value, floor, early = _evaluate_gate_configuration(
+        gate, threshold, floor_value, direction, outcome)
+    if early is not None:
+        return early
+
+    # 2. baseline presence.
+    loaded = load_registry(registry)
+    row = loaded["baselines"].get(gate)
+    if row is None:
+        return outcome(
+            "not_evaluable", "baseline_missing",
+            f"gate {gate!r}: no baseline registered in the registry — "
+            f"without provenance the observation is not evaluable",
+            "register the baseline first (baseline-register)")
+
+    # 3. expiry — the evaluation basis invalidates (NOT_EVALUABLE family).
+    meta = BaselineMetadata.from_storage_row(row)
+
+    # P1-1 ①: comparison-side caliber observations are REQUIRED once a
+    # baseline is present — an omitted unit/digest must never silently skip
+    # the caliber match (step 4) and reach the threshold comparison.
+    if observed_unit is None or observed_scope_digest is None:
+        digest_state = "present" if observed_scope_digest else None
+        raise ContractViolation(
+            f"evaluate: observed_unit and observed_scope_digest are "
+            f"required once baseline {gate!r} is registered (got "
+            f"unit={observed_unit!r}, digest={digest_state}) — the caliber "
+            f"match is the provenance core; omitting it must not silently "
+            f"skip (derive the digest via caliber_digest)")
+
+    early = _evaluate_baseline_expiry(
+        gate, meta, current_instrument_version, current_target_digest,
+        now, outcome)
+    if early is not None:
+        return early
+
+    # 4. caliber match — fresh but different caliber is never a pass.
+    early = _evaluate_caliber_match(
+        gate, observed_unit, observed_scope_digest, meta, row, outcome)
+    if early is not None:
+        return early
 
     # 5. threshold comparison — only a fresh, matching caliber reaches here.
     if direction == "upper":

@@ -1296,6 +1296,143 @@ def _evidence_row(task_id: str, record_name: str, date_str: str,
     return "| " + " | ".join(cells) + " |\n"
 
 
+def _intake_demand_source(task_id, priority, demand_source, demand_basis):
+    """FIX-417 (moved verbatim from run_triage): the demand_source intake —
+    FEAT-077 / ADR-021 §2.2.1, fail-closed.
+
+    窗口协议（Coordinator R0 P1-2 裁定）：参数缺省/空 → 保守默认
+    machine-signal（排序 rank 最末，绝不授予未挣得的 tie-break 优先）；
+    显式提供非法值 → fail-closed 零写入。FEAT-080 (B3) 已将 CLI 旗标
+    required=True 接线——CLI 路径不再可达本默认（DEC-290(5) 窗口关闭）。
+
+    Returns (demand_source, demand_basis, error) — error is None on
+    success, else a zero-write rejection message.
+    """
+    demand_source = str(demand_source or "").strip().lower()  # 大小写不敏感归一
+    if not demand_source:
+        demand_source = "machine-signal"  # 窗口协议保守默认（见上）
+    demand_basis = str(demand_basis or "").strip()
+    if demand_source not in DEMAND_SOURCES:
+        return demand_source, demand_basis, (
+            "demand_source must be one of user-named/"
+            "active-defect/machine-signal (got {0!r}) — "
+            "DEC-286(7)/DEC-287: 不标即违规（ADR-021 §2.2.1）"
+            .format(demand_source))
+    if demand_source == "user-named" and not demand_basis:
+        return demand_source, demand_basis, (
+            "demand_basis is required when demand_source="
+            "user-named（防 BC-4 出身洗白——用户点名判定必须可"
+            "追溯：用户原话/DEC 引用/活性缺陷证据锚；"
+            "ADR-021 §2.2.1）")
+    if (demand_source == "user-named"
+            and str(priority or "").strip().upper() == "P2"):
+        # FEAT-077 规则（ADR-021 R0 返工版 §2.2.1 已正式收编该条款：
+        # P2 化是倒挂以降级形态复活的路径）。拒绝而非静默升级：升级会篡改申报优先级，拒绝保持
+        # 记录如实 + 调用方重新申报 ≥P1。
+        return demand_source, demand_basis, (
+            "user-named 需求优先级强制 ≥P1（P2+user-named 拒绝"
+            "——用户点名需求以 P2 顺延即倒挂入口；请以 P0/P1 "
+            "重新申报，FEAT-077 / DEC-286(7)）")
+    return demand_source, demand_basis, None
+
+
+def _build_triage_record(task_id, title, priority_context, version_result,
+                         depends_on, files, reason, demand_source,
+                         demand_basis, dependency, conflicts, side_effect):
+    """FIX-417 (moved verbatim from run_triage): assemble the immutable
+    machine record (TRIAGE_SCHEMA_VERSION 1 — additive keys only).
+
+    任务身份属性与 title/priority 同级（ADR-021 §2.2.1：身份不进
+    analysis）。additive——TRIAGE_SCHEMA_VERSION 保持 1（FIX-271 先例）。
+    修订通道（ADR-021 §2.2.1 F-P1-3，R1 处置 a）：本键的生命周期修订经
+    append_demand_revision 的 append-only 事件流管理——record 本体不可变。
+    """
+    today = date.today().isoformat()
+    record = {
+        "schema_version": TRIAGE_SCHEMA_VERSION,
+        "task_id": task_id,
+        "title": str(title or ""),
+        "priority": priority_context["proposed"],
+        "target_version": version_result["target"],
+        "depends_on": depends_on,
+        "files": [str(f) for f in files],
+        "reason": str(reason or ""),
+        "created_at": today,
+        "tool": "change-triage",
+        "tool_version": __version__,
+        "analysis": {
+            "dependency": {
+                "unblocked": dependency["unblocked"],
+                "blocked": dependency["blocked"],
+                "blocked_by": dependency["blocked_by"],
+                "unknown_deps": dependency["unknown_deps"],
+                "archive_resolved_deps": dependency["archive_resolved_deps"],
+                "cycles": dependency["cycles"],
+                "cycle_warning": dependency["cycle_warning"],
+                "new_task_cycle": dependency["new_task_cycle"],
+            },
+            "priority_context": {
+                "proposed": priority_context["proposed"],
+                "in_flight": priority_context["in_flight"],
+                "version_chain": priority_context["version_chain"],
+                # FEAT-077 / ADR-021 §2.2.1 — step-b 优先级判定上下文携带
+                # demand_source（analysis 面回显；身份面顶层键见下）。
+                "demand_source": demand_source,
+                "demand_basis": demand_basis,
+            },
+            "conflicts": conflicts,
+            "version": {
+                "target": version_result["target"],
+                "current": version_result["current"],
+                "planned_next": version_result["planned_next"],
+                "issues": version_result["issues"],
+            },
+            "side_effect": side_effect,
+        },
+        "snapshot": dependency["snapshot"],
+    }
+    record["demand_source"] = demand_source
+    record["demand_basis"] = demand_basis
+    return record
+
+
+def _write_triage_record(record, records_dir, record_name, evidence_path,
+                         task_id, demand_source):
+    """FIX-417 (moved verbatim from run_triage): machine-write the record
+    + evidence row.
+
+    P2-2: a failed evidence append rolls the record back so the two writes
+    stay all-or-nothing (best-effort — true atomicity across two files is
+    not achievable without a journal; the residual risk is documented in
+    the module contract).
+
+    Returns None on success, else an error message.
+    """
+    try:
+        (records_dir / record_name).write_text(
+            json.dumps(record, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8")
+    except OSError as exc:
+        return "cannot write triage record: {0}".format(exc)
+    today = record["created_at"]
+    try:
+        with evidence_path.open("a", encoding="utf-8") as fh:
+            fh.write("\n" + _evidence_row(
+                task_id, record_name, today,
+                demand_zh=DEMAND_SOURCE_ZH.get(demand_source, "")))
+    except OSError as exc:
+        # P2-2: the record write above already succeeded, so a failed
+        # evidence append would leave a half-written triage (record without
+        # its evidence row). Best-effort roll back the record so the two
+        # writes stay all-or-nothing.
+        try:
+            (records_dir / record_name).unlink()
+        except OSError:
+            pass
+        return "cannot append evidence row: {0}".format(exc)
+    return None
+
+
 def run_triage(*, task_id: str, title: str = "", priority: str,
                target_version: str, depends_on, files, reason: str = "",
                acceptance: str = "", declared_side_effects: str = "",
@@ -1368,6 +1505,11 @@ def run_triage(*, task_id: str, title: str = "", priority: str,
         dict summary (record_path, evidence_row_written, analysis,
         snapshot_ref, wiring-free). ``error`` key present on fail-closed
         input. Never raises.
+
+    FIX-417: the intake validation, the record assembly, and the
+    record+evidence write/rollback are extracted to _intake_demand_source /
+    _build_triage_record / _write_triage_record; this function keeps the
+    five-step analysis flow.
     """
     task_id = str(task_id or "").strip()
     if not _TASK_ID_RE.match(task_id):
@@ -1378,32 +1520,10 @@ def run_triage(*, task_id: str, title: str = "", priority: str,
                          "records only — FIX-228 boundary)"}
 
     # ── demand_source intake (FEAT-077 / ADR-021 §2.2.1, fail-closed) ──
-    # 窗口协议（Coordinator R0 P1-2 裁定）：参数缺省/空 → 保守默认
-    # machine-signal（排序 rank 最末，绝不授予未挣得的 tie-break 优先）；
-    # 显式提供非法值 → fail-closed 零写入。FEAT-080 (B3) 已将 CLI 旗标
-    # required=True 接线——CLI 路径不再可达本默认（DEC-290(5) 窗口关闭）。
-    demand_source = str(demand_source or "").strip().lower()  # 大小写不敏感归一
-    if not demand_source:
-        demand_source = "machine-signal"  # 窗口协议保守默认（见上）
-    demand_basis = str(demand_basis or "").strip()
-    if demand_source not in DEMAND_SOURCES:
-        return {"error": "demand_source must be one of user-named/"
-                         "active-defect/machine-signal (got {0!r}) — "
-                         "DEC-286(7)/DEC-287: 不标即违规（ADR-021 §2.2.1）"
-                         .format(demand_source)}
-    if demand_source == "user-named" and not demand_basis:
-        return {"error": "demand_basis is required when demand_source="
-                         "user-named（防 BC-4 出身洗白——用户点名判定必须可"
-                         "追溯：用户原话/DEC 引用/活性缺陷证据锚；"
-                         "ADR-021 §2.2.1）"}
-    if (demand_source == "user-named"
-            and str(priority or "").strip().upper() == "P2"):
-        # FEAT-077 规则（ADR-021 R0 返工版 §2.2.1 已正式收编该条款：
-        # P2 化是倒挂以降级形态复活的路径）。拒绝而非静默升级：升级会篡改申报优先级，拒绝保持
-        # 记录如实 + 调用方重新申报 ≥P1。
-        return {"error": "user-named 需求优先级强制 ≥P1（P2+user-named 拒绝"
-                         "——用户点名需求以 P2 顺延即倒挂入口；请以 P0/P1 "
-                         "重新申报，FEAT-077 / DEC-286(7)）"}
+    demand_source, demand_basis, intake_error = _intake_demand_source(
+        task_id, priority, demand_source, demand_basis)
+    if intake_error is not None:
+        return {"error": intake_error}
 
     # FIX-249 P3-3/P3-4: resolve the record path up front and reject a
     # re-triage BEFORE the pure dependency/priority/version analysis. The
@@ -1465,6 +1585,11 @@ def run_triage(*, task_id: str, title: str = "", priority: str,
         files, reason=reason, acceptance=acceptance,
         declared=declared_side_effects)
 
+    record = _build_triage_record(
+        task_id, title, priority_context, version_result, depends_on,
+        files, reason, demand_source, demand_basis, dependency, conflicts,
+        side_effect)
+
     # Machine-write the triage record + evidence row.
     if evidence_path is None:
         evidence_path = Path(governance_dir) / "evidence-log.md"
@@ -1474,79 +1599,11 @@ def run_triage(*, task_id: str, title: str = "", priority: str,
     except OSError as exc:
         return {"error": "cannot create triage record dir: {0}".format(exc)}
 
-    today = date.today().isoformat()
-    record = {
-        "schema_version": TRIAGE_SCHEMA_VERSION,
-        "task_id": task_id,
-        "title": str(title or ""),
-        "priority": priority_context["proposed"],
-        "target_version": version_result["target"],
-        "depends_on": depends_on,
-        "files": [str(f) for f in files],
-        "reason": str(reason or ""),
-        "created_at": today,
-        "tool": "change-triage",
-        "tool_version": __version__,
-        "analysis": {
-            "dependency": {
-                "unblocked": dependency["unblocked"],
-                "blocked": dependency["blocked"],
-                "blocked_by": dependency["blocked_by"],
-                "unknown_deps": dependency["unknown_deps"],
-                "archive_resolved_deps": dependency["archive_resolved_deps"],
-                "cycles": dependency["cycles"],
-                "cycle_warning": dependency["cycle_warning"],
-                "new_task_cycle": dependency["new_task_cycle"],
-            },
-            "priority_context": {
-                "proposed": priority_context["proposed"],
-                "in_flight": priority_context["in_flight"],
-                "version_chain": priority_context["version_chain"],
-                # FEAT-077 / ADR-021 §2.2.1 — step-b 优先级判定上下文携带
-                # demand_source（analysis 面回显；身份面顶层键见下）。
-                "demand_source": demand_source,
-                "demand_basis": demand_basis,
-            },
-            "conflicts": conflicts,
-            "version": {
-                "target": version_result["target"],
-                "current": version_result["current"],
-                "planned_next": version_result["planned_next"],
-                "issues": version_result["issues"],
-            },
-            "side_effect": side_effect,
-        },
-        "snapshot": dependency["snapshot"],
-    }
-    # 任务身份属性与 title/priority 同级（ADR-021 §2.2.1：身份不进
-    # analysis）。additive——TRIAGE_SCHEMA_VERSION 保持 1（FIX-271 先例）。
-    # 修订通道（ADR-021 §2.2.1 F-P1-3，R1 处置 a）：本键的生命周期修订经
-    # append_demand_revision 的 append-only 事件流管理——record 本体不可变。
-    record["demand_source"] = demand_source
-    record["demand_basis"] = demand_basis
-    try:
-        (records_dir / record_name).write_text(
-            json.dumps(record, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8")
-    except OSError as exc:
-        return {"error": "cannot write triage record: {0}".format(exc)}
-    try:
-        with evidence_path.open("a", encoding="utf-8") as fh:
-            fh.write("\n" + _evidence_row(
-                task_id, record_name, today,
-                demand_zh=DEMAND_SOURCE_ZH.get(demand_source, "")))
-    except OSError as exc:
-        # P2-2: the record write above already succeeded, so a failed
-        # evidence append would leave a half-written triage (record without
-        # its evidence row). Best-effort roll back the record so the two
-        # writes stay all-or-nothing. True atomicity across two files is not
-        # achievable without a journal; this rollback narrows the window
-        # (the residual risk is documented in the module contract).
-        try:
-            (records_dir / record_name).unlink()
-        except OSError:
-            pass
-        return {"error": "cannot append evidence row: {0}".format(exc)}
+    write_error = _write_triage_record(
+        record, records_dir, record_name, evidence_path, task_id,
+        demand_source)
+    if write_error is not None:
+        return {"error": write_error}
 
     return {
         "task_id": task_id,

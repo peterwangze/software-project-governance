@@ -10812,6 +10812,17 @@ def check_commit_task_references(limit=20):
     This function is the external validation counterpart — it detects commits
     without task ID prefixes, which indicate untracked modifications.
 
+    FIX-420 revert awareness: a revert of tracked work quotes the original
+    subject (``Revert "FIX-397: ..."``), so the tracked-task evidence lives
+    at the start of the quoted original subject, not at the message start.
+    Such a commit counts as tracked, and ``task_id`` records the ORIGINAL
+    task ID in plain machine-readable form (e.g. "FIX-397" — no decorated
+    "(revert)" suffix, so downstream consumers can match it with the same
+    ``[A-Z]+-\\d+`` caliber). Fail-closed boundary: ONLY a ``Revert "``
+    prefix whose quoted original subject itself starts with a legal task
+    ID counts as tracked — plain no-ID subjects and reverts of no-ID
+    subjects remain reported as untracked.
+
     Returns: dict with commits list, issues list, and summary stats.
     """
     import subprocess
@@ -10832,6 +10843,8 @@ def check_commit_task_references(limit=20):
     issues = []
     # Match task ID prefix at start of commit message: "AUDIT-044: ..." or "MAINT-028: ..."
     task_id_pattern = re.compile(r"^([A-Z]+-\d+)")
+    # FIX-420: revert subjects quote the original — `Revert "FIX-397: ..."`.
+    revert_subject_pattern = re.compile(r'^Revert "([^"]*)"')
 
     if not result.stdout:
         return {"error": "git log returned empty output", "commits": [], "issues": []}
@@ -10846,6 +10859,16 @@ def check_commit_task_references(limit=20):
         message = parts[1]
 
         task_match = task_id_pattern.match(message)
+        if task_match is None:
+            # FIX-420: fall back to the quoted original subject of a revert.
+            # Fail-closed: only `Revert "` + a legal task ID at the quoted
+            # subject's start counts as tracked; everything else stays
+            # reported as untracked.
+            revert_match = revert_subject_pattern.match(message)
+            if revert_match is not None:
+                inner_match = task_id_pattern.match(revert_match.group(1))
+                if inner_match is not None:
+                    task_match = inner_match
         has_task_id = task_match is not None
         task_id = task_match.group(1) if has_task_id else None
 

@@ -530,7 +530,15 @@ class BaselineArtifactTests(unittest.TestCase):
         # issue string is data returned in the result dict). Same-window
         # regen also re-anchors r2_reverse_dependency (FIX-415's test-file
         # insertion had left it stale — R7 failing at fe0afcb).
-        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 27190)
+        # FIX-420 rider re-anchor (2026-10-01): 27190 -> 27213, +23/-0
+        # measured split — all in check_commit_task_references'
+        # revert-awareness face: docstring boundary contract (quoted-original
+        # task ID extraction, plain machine-readable task_id, fail-closed
+        # boundary) + revert_subject_pattern + the Revert fallback block in
+        # the subject loop. Engine print census stays 1338 (zero drift —
+        # the function returns data, prints nothing); r2/r6 faces byte-
+        # stable in the same regen.
+        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 27213)
 
     def test_authored_zone_survives_regen(self):
         existing = _committed_baseline()

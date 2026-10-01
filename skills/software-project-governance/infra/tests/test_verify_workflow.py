@@ -24103,5 +24103,85 @@ class Fix418CwdHermeticityContractTests(unittest.TestCase):
                     SimpleNamespace(quick=True, product_gates=True)))
 
 
+# ── FIX-420: Check 7 commit traceability revert awareness ────────────────────
+
+class Fix420CommitTaskRevertAwarenessTests(unittest.TestCase):
+    """FIX-420 — ``check_commit_task_references`` understands revert subjects.
+
+    Defect: only the message-start ``[A-Z]+-\\d+`` prefix counted, so the
+    sanctioned revert 7d6c4a7 (``Revert "FIX-397: archive historical
+    release docs ..."`` — a revert OF tracked work, documented both ways
+    by op-0ee4507c/op-0c3d1b11) was reported as untracked. Semantics after
+    the fix, pinned here: a ``Revert "`` prefix whose quoted original
+    subject starts with a legal task ID counts as tracked (``task_id`` =
+    the plain ORIGINAL id); every other shape — no-ID subjects, reverts of
+    no-ID subjects — stays reported (fail-closed boundary).
+    """
+
+    @staticmethod
+    def _fake_git_log(subjects):
+        """Stub subprocess.run with canned `git log --format=%H %s` rows."""
+        lines = "\n".join(
+            f"{sha:040x} {subject}" for sha, subject in enumerate(subjects, 1)
+        )
+        completed = SimpleNamespace(returncode=0, stdout=lines, stderr="")
+        return lambda cmd, **kwargs: completed
+
+    def _check(self, subjects):
+        with patch("subprocess.run", side_effect=self._fake_git_log(subjects)):
+            return vw.check_commit_task_references(limit=len(subjects))
+
+    def test_revert_with_task_id_inside_quotes_is_tracked(self):
+        result = self._check([
+            "FIX-419: recalibrate release docs threshold",
+            'Revert "FIX-397: archive historical release docs to '
+            'docs/release/archive/ (260 files)"',
+        ])
+        self.assertEqual(result["without_task_id"], 0)
+        self.assertEqual(result["issues"], [])
+        revert_row = result["commits"][1]
+        self.assertTrue(revert_row["has_task_id"])
+        self.assertEqual(revert_row["task_id"], "FIX-397")
+
+    def test_subject_without_task_id_is_reported(self):
+        result = self._check(["Update readme formatting"])
+        self.assertEqual(result["without_task_id"], 1)
+        self.assertEqual(result["issues"][0]["message"],
+                         "Update readme formatting")
+
+    def test_revert_without_task_id_inside_quotes_is_reported(self):
+        result = self._check([
+            'Revert "docs: tweak wording"',
+            # Same anchored pattern applies inside the quotes: a task ID
+            # that does not START the quoted original subject is not
+            # evidence of tracked work.
+            'Revert "docs: see FIX-001 for context"',
+        ])
+        self.assertEqual(result["without_task_id"], 2)
+        self.assertEqual(result["commits"][0]["task_id"], None)
+        self.assertEqual(result["commits"][1]["task_id"], None)
+
+    def test_plain_prefix_behavior_unchanged(self):
+        result = self._check([
+            "FIX-416: migrate --auto defaults to ALL row-family",
+            "MAINT-028: routine dependency bump",
+        ])
+        self.assertEqual(result["without_task_id"], 0)
+        self.assertEqual(result["commits"][0]["task_id"], "FIX-416")
+        self.assertEqual(result["commits"][1]["task_id"], "MAINT-028")
+
+    def test_double_revert_shape_stays_reported(self):
+        # R0 F1 (P2): pin the declared boundary for nested reverts —
+        # `Revert "Revert "FIX-397: ...""` quotes a subject that starts
+        # with `Revert `, not a task ID, so the fail-closed fallback does
+        # NOT fire and the commit stays reported (fail-closed safe side).
+        result = self._check([
+            'Revert "Revert "FIX-397: archive historical release docs""',
+        ])
+        self.assertEqual(result["without_task_id"], 1)
+        self.assertEqual(len(result["issues"]), 1)
+        self.assertEqual(result["commits"][0]["task_id"], None)
+
+
 if __name__ == "__main__":
     unittest.main()

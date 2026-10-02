@@ -28,6 +28,7 @@ from contextlib import ExitStack, redirect_stdout
 from datetime import date, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 from unittest.mock import patch
 
 _HERE = Path(__file__).resolve().parent
@@ -20234,7 +20235,7 @@ class B3ProvenanceWiringTests(unittest.TestCase):
                 "| EVD-901 | FIX-102 | impact | 收口 | 依据 | 文件 | Dev "
                 "| 2026-09-28 | G11 | ✅ 完成 |  |\n",
                 encoding="utf-8")
-            events, note = vw._collect_session_closure_events(
+            events, note, face_state = vw._collect_session_closure_events(
                 gov, today="2026-09-29")
             kinds = {(e["id"], e["kind"]) for e in events}
             # review NEEDS_CHANGE raises a problem; the same task's EVD 收口
@@ -20266,7 +20267,7 @@ class B3ProvenanceWiringTests(unittest.TestCase):
                 "| REVIEW-FIX-210-CODE-R2 | FIX-210 | 产品代码 | R2 | 依据 "
                 "| 文件 | Reviewer | 2026-09-29 | G11 | APPROVED |  |\n",
                 encoding="utf-8")
-            events, _note = vw._collect_session_closure_events(
+            events, _note, _face = vw._collect_session_closure_events(
                 gov, today="2026-09-29")
             kinds = {(e["id"], e["kind"]) for e in events}
             self.assertIn(("FIX-210", "problem"), kinds)
@@ -20285,7 +20286,7 @@ class B3ProvenanceWiringTests(unittest.TestCase):
                 "| RISK-901 | 2026-09-29 | 已决风险 | 设计 | x | y | 中 | A "
                 "| 已关闭 | 无 |  | T2 |  |\n",
                 encoding="utf-8")
-            events, note = vw._collect_session_closure_events(
+            events, note, face_state = vw._collect_session_closure_events(
                 gov, today="2026-09-29")
             kinds = {(e["id"], e["kind"]) for e in events}
             self.assertIn(("RISK-900", "problem"), kinds)
@@ -20307,7 +20308,7 @@ class B3ProvenanceWiringTests(unittest.TestCase):
             (gov / "session-snapshot.md").write_text(
                 "# Session Snapshot\n\n- 日期：2026-09-29\n- 会话："
                 "dsh-gov-test\n", encoding="utf-8")
-            events, note = vw._collect_session_closure_events(
+            events, note, face_state = vw._collect_session_closure_events(
                 gov, today="2026-09-29")
             self.assertTrue(
                 any(e["id"] == "FIX-100" and e["kind"] == "problem"
@@ -20327,6 +20328,484 @@ class B3ProvenanceWiringTests(unittest.TestCase):
         for key in ("coverage", "conflicts", "inv1_pairs", "invx_pairs",
                     "inv2_parked"):
             self.assertIn(key, result)
+
+
+# ═══ FEAT-081 / ADR-021 §3.2.1 B4 — M2 词集检测三件套 ═══════════════════════
+#
+# CR-R1-1（DESIGN-021-R1 终态复审 P1）: before B4 the DEC-288 M2 criterion
+# ``session_closure_rate == 1.0 ∧ deferred_detections == 0`` was trivially
+# satisfiable — nothing PRODUCED deferred_registration events, so
+# deferred_detections was structurally 0 (verify_workflow.py L7350 note and
+# the Check 42 "该类恒 0" disclosure line). These suites pin the B4 delivery:
+# the word-set detection module, its face-5 guard wiring (diff-window scoped,
+# exempt families, negative-context window, WARN posture, three-key ledger),
+# and the Check 42 SKIP 语义分态 (CR-R1-2: vacuum vs orchestration fallback
+# must be distinguishable and traceable — never a silent degrade).
+
+
+class LoopGateProcessorWordSetTests(unittest.TestCase):
+    """B4 module face — checks/loop_gate_processor.py pure functions.
+
+    ADR-021 §3.2.1 三件套: 词集 + 否定语境窗口 + 三键台账. The module is a
+    pure leaf (stdlib only, never imports verify_workflow — the engine
+    consumes it, never the reverse; provenance_domain discipline).
+    """
+
+    def _judge(self, surface, key, text):
+        from checks import loop_gate_processor as lgp
+        return lgp.judge_deferred_row(surface, key, text)
+
+    def test_literal_word_hits_fire_in_scoped_family(self):
+        for word in ("待以后", "后续处理", "后续完善", "待后续", "留待",
+                     "择期", "登记待", "待收尾", "留池", "候选池",
+                     "下版处理", "延后处理"):
+            judgement = self._judge(
+                "evidence-log.md", "EVD-1",
+                "| EVD-1 | T | x | 问题{0} | b | a | 2026-10-02 | G11 | s |"
+                .format(word))
+            self.assertIsNotNone(judgement, word)
+            self.assertTrue(judgement["fired"], word)
+            self.assertEqual(judgement["family"], "evidence")
+            self.assertIn(word, judgement["fired_words"])
+
+    def test_regex_pool_word_pattern(self):
+        # ``0.9[4-9]\s*池`` — the retired 候选池 practice residue (§3.3).
+        for text in ("入 0.94 池", "0.95池", "0.99  池"):
+            judgement = self._judge("plan-tracker.md", "FEAT-081",
+                                    "| P1 | FEAT-081 | {0} | — | v | c | s |"
+                                    .format(text))
+            self.assertIsNotNone(judgement, text)
+            self.assertTrue(judgement["fired"], text)
+            self.assertEqual(judgement["family"], "task_status")
+        # 0.93 is outside the pattern (pre-clearance pools are history).
+        self.assertIsNone(self._judge(
+            "plan-tracker.md", "FEAT-081",
+            "| P1 | FEAT-081 | 0.93 池 | — | v | c | s |"))
+
+    def test_negative_context_window_exempts(self):
+        # ADR §3.2.1 fourth element: a negation marker in the exemption
+        # window (8 chars before OR after the hit — the after-arm carries
+        # the 「'登记待以后'=违规」suffix-judgment shape its acceptance
+        # criterion 3 mandates) → 不触发 (rule-quoting ≠ rule-doing).
+        for prefix in ("废除", "禁止", "违规", "=", "不得"):
+            text = ("| EVD-2 | T | x | {0}登记待以后 的规则引用 | b | a "
+                    "| d | G | s |".format(prefix))
+            judgement = self._judge("evidence-log.md", "EVD-2", text)
+            self.assertIsNotNone(judgement, prefix)
+            self.assertFalse(judgement["fired"], (prefix, judgement))
+            self.assertTrue(all(hit["negative_context_hit"]
+                                for hit in judgement["hits"]), (prefix, judgement))
+        # ADR acceptance criterion 3's suffix shape: =违规 AFTER the hit.
+        judgement = self._judge(
+            "evidence-log.md", "EVD-2",
+            "| EVD-2 | T | x | 「'登记待以后」=违规 | b | a | d | G | s |")
+        self.assertIsNotNone(judgement)
+        self.assertFalse(judgement["fired"], judgement)
+
+    def test_negative_context_window_boundary_is_eight_chars(self):
+        # Preceding-arm boundary: the marker must sit within the 8 chars
+        # immediately before the hit. 7 intervening chars → in window
+        # (exempt); 8 → outside (fires).
+        from checks import loop_gate_processor as lgp
+        self.assertEqual(lgp.NEGATIVE_CONTEXT_WINDOW_CHARS, 8)
+        judgement = self._judge(
+            "evidence-log.md", "EVD-3",
+            "| EVD-3 | T | x | =1234567待以后 | b | a | d | G | s |")
+        self.assertFalse(judgement["fired"], judgement)
+        judgement = self._judge(
+            "evidence-log.md", "EVD-3",
+            "| EVD-3 | T | x | =12345678待以后 | b | a | d | G | s |")
+        self.assertTrue(judgement["fired"], judgement)
+
+    def test_family_scope_and_exemptions(self):
+        from checks import loop_gate_processor as lgp
+        self.assertEqual(
+            lgp.family_for_row("evidence-log.md", "EVD-900"), "evidence")
+        self.assertEqual(
+            lgp.family_for_row("evidence-log.md", "REVIEW-F-0"), "review")
+        self.assertEqual(
+            lgp.family_for_row("decision-log.md", "DEC-290"), "decision")
+        self.assertEqual(
+            lgp.family_for_row("plan-tracker.md", "FEAT-081"), "task_status")
+        self.assertEqual(
+            lgp.family_for_row("plan-tracker.md.ops.jsonl", "1"),
+            "ops_ledger")
+        self.assertIsNone(lgp.family_for_row("session-snapshot.md", "x"))
+        # Exempt families judge to None even with word hits (D3 豁免清单).
+        self.assertIsNone(self._judge(
+            "decision-log.md", "DEC-291",
+            "| DEC-291 | d | c | 登记待以后 裁决原文 | b |"))
+        self.assertIsNone(self._judge(
+            "evidence-log.md", "REVIEW-F-081-CODE-R0",
+            "| REVIEW-F-081-CODE-R0 | F | t | 后续处理 | b | a | d | G | s |"))
+
+    def test_ledger_entry_roundtrip_and_three_key_bucket(self):
+        from checks import loop_gate_processor as lgp
+        entry = lgp.build_ledger_entry(
+            date_str="2026-10-02", surface="evidence-log.md",
+            family="evidence", row_key="EVD-8101", line=9,
+            hit_word="待以后", negative_context_hit=False)
+        self.assertTrue(entry["fired"])  # fired ⇔ not exempted
+        line = json.dumps(entry, ensure_ascii=False)
+        parsed, error = lgp.parse_ledger_line(line)
+        self.assertIsNone(error)
+        self.assertEqual(parsed["row_key"], "EVD-8101")
+        self.assertEqual(
+            lgp.ledger_bucket(parsed), ("待以后", "evidence", False))
+        # Exempted hit carries negative_context_hit=True and fired=False.
+        entry2 = lgp.build_ledger_entry(
+            date_str="2026-10-02", surface="evidence-log.md",
+            family="evidence", row_key="EVD-8102", line=10,
+            hit_word="登记待", negative_context_hit=True)
+        self.assertFalse(entry2["fired"])
+        self.assertEqual(
+            lgp.ledger_bucket(entry2), ("登记待", "evidence", True))
+        # Malformed line → explicit error, never a silent skip.
+        parsed_bad, error_bad = lgp.parse_ledger_line("{not json")
+        self.assertIsNone(parsed_bad)
+        self.assertTrue(error_bad)
+
+    def test_summarize_buckets_false_positive_report(self):
+        # RT-5: the ledger's purpose — 分桶计数 + 否定语境豁免占比 for the
+        # future WARN→FAIL flip decision (report → evidence → decision-log).
+        from checks import loop_gate_processor as lgp
+        entries = [
+            lgp.build_ledger_entry("2026-10-02", "evidence-log.md",
+                                   "evidence", "EVD-1", 1, "待以后", False),
+            lgp.build_ledger_entry("2026-10-02", "evidence-log.md",
+                                   "evidence", "EVD-2", 2, "待以后", False),
+            lgp.build_ledger_entry("2026-10-02", "plan-tracker.md",
+                                   "task_status", "FEAT-1", 3, "登记待", True),
+        ]
+        report = lgp.summarize_ledger_buckets(entries)
+        self.assertEqual(report["total_hits"], 3)
+        self.assertEqual(report["exempted"], 1)
+        self.assertAlmostEqual(report["exemption_ratio"], 1 / 3)
+        buckets = {(b["hit_word"], b["family"], b["negative_context_hit"]):
+                   b["count"] for b in report["buckets"]}
+        self.assertEqual(buckets[("待以后", "evidence", False)], 2)
+        self.assertEqual(buckets[("登记待", "task_status", True)], 1)
+
+    def test_classify_observation_face_skip_kinds(self):
+        # CR-R1-2 分态: vacuum vs orchestration_fallback vs no-SKIP.
+        from checks import loop_gate_processor as lgp
+        anomaly = {"kind": "ledger_parse", "reason": "1 bad line(s)"}
+        skip = lgp.classify_observation_face(0, 0, None)
+        self.assertEqual(skip["skip_kind"], lgp.SKIP_VACUUM)
+        skip = lgp.classify_observation_face(0, 0, anomaly)
+        self.assertEqual(skip["skip_kind"], lgp.SKIP_ORCHESTRATION_FALLBACK)
+        # Anomaly outranks even a non-zero observation face — disclosed.
+        skip = lgp.classify_observation_face(3, 1, anomaly)
+        self.assertEqual(skip["skip_kind"], lgp.SKIP_ORCHESTRATION_FALLBACK)
+        # Deferred detections present → NEVER a SKIP (rate zeroing path).
+        self.assertIsNone(lgp.classify_observation_face(0, 1, None))
+        # Problems present → normal judging, no SKIP.
+        self.assertIsNone(lgp.classify_observation_face(2, 0, None))
+
+
+class DeferredRegistrationFace5Tests(unittest.TestCase):
+    """B4 guard wiring — face-5 diff-window deferred_registration issues
+    plus the three-key observation ledger (CLI face only).
+    """
+
+    _EVD_BASELINE = (
+        "| EVD-8100 | FEAT-081 | 产品代码 | seed 旧行（amnesty 样本） | "
+        "依据：存量行 | actor | 2026-10-01 | G11 | ✅ 完成 |\n")
+    _EVD_DEFERRED = (
+        "| EVD-8101 | FEAT-081 | 产品代码 | 问题登记待以后 | "
+        "依据：新增行 | actor | 2026-10-02 | G11 | 🔄 进行中 |\n")
+    _EVD_NEGATED = (
+        "| EVD-8102 | FEAT-081 | 产品代码 | 「登记待以后」=违规 的规则引用 | "
+        "依据：新增行 | actor | 2026-10-02 | G11 | 🔄 进行中 |\n")
+    _EVD_CREDENTIALED = (
+        "| EVD-8103 | FEAT-081 | 产品代码 | 机器行亦含 后续处理 语义 "
+        "机器写入：governance-store evidence-append op-"
+        + "0" * 32 + " | b | a | 2026-10-02 | G11 | s |\n")
+    _TRACKER_SEED = (
+        "| 优先级 | 任务ID | 标题 | 依赖 | 目标版本 | 闭环路径 | 状态 |\n"
+        "|---|---|---|---|---|---|---|\n"
+        "| **P1** | FEAT-081 | 词集夹具票 | — | 0.94.0 | closure | "
+        "🔄 进行中 (2026-10-01) |\n")
+    _TRACKER_DEFERRED_ROW = (
+        "| **P2** | FEAT-082 | 下版处理 票 | — | 0.94.0 | closure | "
+        "🆕 待启动 |\n")
+
+    def _seed(self, td):
+        gov = Path(td)
+        (gov / "evidence-log.md").write_text(
+            self._EVD_BASELINE, encoding="utf-8")
+        (gov / "plan-tracker.md").write_text(
+            self._TRACKER_SEED, encoding="utf-8")
+        return gov
+
+    def _run_guard(self, gov, persist_state=False, deferred_ledger=False):
+        with mock.patch.object(vw, "SAMPLE_PATH",
+                               gov / "plan-tracker.md"), \
+             mock.patch.object(vw, "GOVERNANCE_DIR", gov):
+            return vw.check_governance_write_shapes(
+                persist_state=persist_state,
+                deferred_ledger=deferred_ledger)
+
+    def _deferred_issues(self, result):
+        return [i for i in result["row_families"]["issues"]
+                if i.get("type") == "deferred_registration"]
+
+    def _ledger_lines(self, gov):
+        path = gov / ".write-guard-deferred-ledger.jsonl"
+        if not path.is_file():
+            return None
+        return path.read_text(encoding="utf-8").splitlines()
+
+    def _baseline(self, gov):
+        self._run_guard(gov, persist_state=True)
+
+    def test_new_evd_row_with_word_fires_warn_issue_and_ledger(self):
+        with _governance_temp_dir(prefix="feat081-evd-") as td:
+            gov = self._seed(td)
+            self._baseline(gov)
+            (gov / "evidence-log.md").write_text(
+                self._EVD_BASELINE + self._EVD_DEFERRED, encoding="utf-8")
+            result = self._run_guard(gov, persist_state=True,
+                                     deferred_ledger=True)
+            face = result["row_families"]
+            issues = self._deferred_issues(result)
+            self.assertEqual(len(issues), 1, face["issues"])
+            issue = issues[0]
+            self.assertEqual(issue["task_id"], "EVD-8101")
+            self.assertIsNone(issue.get("posture"))  # WARN 姿态（渐进 FAIL）
+            self.assertEqual(face["status"], "PASS")  # WARN 不 FAIL face
+            # 三键台账: fired entry bucketed (word × family × neg-context).
+            lines = self._ledger_lines(gov)
+            self.assertTrue(lines, "ledger written on CLI face")
+            from checks import loop_gate_processor as lgp
+            entries = []
+            for line in lines:
+                parsed, error = lgp.parse_ledger_line(line)
+                self.assertIsNone(error, line)
+                entries.append(parsed)
+            hits = [e for e in entries if e["kind"] == "deferred_hit"]
+            self.assertTrue(any(
+                lgp.ledger_bucket(e) in {
+                    ("登记待", "evidence", False), ("待以后", "evidence", False)}
+                for e in hits), hits)
+
+    def test_exempt_families_and_negated_row_do_not_fire(self):
+        with _governance_temp_dir(prefix="feat081-exempt-") as td:
+            gov = self._seed(td)
+            (gov / "decision-log.md").write_text(
+                "| DEC-291 | 2026-10-02 | c | 裁决引用「登记待以后」原文 | b |\n",
+                encoding="utf-8")
+            self._baseline(gov)
+            # decision row changed + negated EVD row added + REVIEW row added.
+            (gov / "decision-log.md").write_text(
+                "| DEC-291 | 2026-10-02 | c | 裁决引用「登记待以后」原文 v2 "
+                "| b |\n", encoding="utf-8")
+            (gov / "evidence-log.md").write_text(
+                self._EVD_BASELINE + self._EVD_NEGATED, encoding="utf-8")
+            result = self._run_guard(gov, persist_state=True,
+                                     deferred_ledger=True)
+            self.assertEqual(self._deferred_issues(result), [])
+            self.assertEqual(result["row_families"]["status"], "PASS")
+            # The negated hit is still OBSERVED in the ledger (三键含豁免占比
+            # 分母——否定语境命中=True)。
+            lines = self._ledger_lines(gov) or []
+            from checks import loop_gate_processor as lgp
+            exempt_hits = []
+            for line in lines:
+                parsed, _err = lgp.parse_ledger_line(line)
+                if parsed and parsed.get("kind") == "deferred_hit":
+                    exempt_hits.append(parsed)
+            self.assertTrue(any(e["negative_context_hit"]
+                                for e in exempt_hits), exempt_hits)
+            self.assertTrue(all(not e["fired"] for e in exempt_hits))
+
+    def test_stock_rows_inside_baseline_not_prosecuted(self):
+        # 窗口限域: 存量行（基线内）含同词 → 零 issue (ADR 验收 4).
+        with _governance_temp_dir(prefix="feat081-stock-") as td:
+            gov = self._seed(td)
+            (gov / "evidence-log.md").write_text(
+                self._EVD_BASELINE + self._EVD_DEFERRED, encoding="utf-8")
+            self._run_guard(gov, persist_state=True)  # amnesty baseline
+            result = self._run_guard(gov, persist_state=True)
+            self.assertEqual(self._deferred_issues(result), [])
+
+    def test_task_status_family_fires_on_new_task_row(self):
+        with _governance_temp_dir(prefix="feat081-task-") as td:
+            gov = self._seed(td)
+            self._baseline(gov)
+            (gov / "plan-tracker.md").write_text(
+                self._TRACKER_SEED + self._TRACKER_DEFERRED_ROW,
+                encoding="utf-8")
+            result = self._run_guard(gov, persist_state=True)
+            issues = self._deferred_issues(result)
+            self.assertEqual(len(issues), 1, result["row_families"]["issues"])
+            self.assertEqual(issues[0]["task_id"], "FEAT-082")
+            self.assertIn("task_status", issues[0]["detail"])
+
+    def test_credentialed_row_still_detected(self):
+        # Detection is orthogonal to write-provenance: a machine-credentialed
+        # row carrying deferral semantics still fires (ADR §3.2.1 判定 has no
+        # credential carve-out).
+        with _governance_temp_dir(prefix="feat081-cred-") as td:
+            gov = self._seed(td)
+            self._baseline(gov)
+            (gov / "evidence-log.md").write_text(
+                self._EVD_BASELINE + self._EVD_CREDENTIALED, encoding="utf-8")
+            result = self._run_guard(gov, persist_state=True)
+            issues = self._deferred_issues(result)
+            self.assertEqual(len(issues), 1, result["row_families"]["issues"])
+
+    def test_converge_path_writes_no_ledger_file(self):
+        # rel089 contract: the internal persist path (converge / direct
+        # check_governance_write_shapes calls) creates ONLY the two guard
+        # artifacts. The ledger is CLI-face only (cmd_governance_write_guard).
+        with _governance_temp_dir(prefix="feat081-novw-") as td:
+            gov = self._seed(td)
+            self._baseline(gov)
+            (gov / "evidence-log.md").write_text(
+                self._EVD_BASELINE + self._EVD_DEFERRED, encoding="utf-8")
+            result = self._run_guard(gov, persist_state=True)  # no ledger kw
+            self.assertEqual(len(self._deferred_issues(result)), 1)
+            self.assertFalse(
+                (gov / ".write-guard-deferred-ledger.jsonl").is_file())
+            # Probe path likewise never writes it.
+            self._run_guard(gov, persist_state=False)
+            self.assertFalse(
+                (gov / ".write-guard-deferred-ledger.jsonl").is_file())
+
+    def test_detector_error_is_loud_not_silent(self):
+        # ADR §2.4 L4: 检测器异常 → fail-closed disclosure (loud, WARN-class
+        # face issue) — never a silent skip.
+        with _governance_temp_dir(prefix="feat081-err-") as td:
+            gov = self._seed(td)
+            self._baseline(gov)
+            (gov / "evidence-log.md").write_text(
+                self._EVD_BASELINE + self._EVD_DEFERRED, encoding="utf-8")
+            from checks import loop_gate_processor as lgp
+            real = lgp.judge_deferred_row
+            with mock.patch.object(
+                    lgp, "judge_deferred_row",
+                    side_effect=RuntimeError("boom")):
+                result = self._run_guard(gov, persist_state=True)
+            kinds = [i.get("type") for i in result["row_families"]["issues"]]
+            self.assertIn("deferred_registration_detector_error", kinds)
+            self.assertNotIn("deferred_registration", kinds)
+            self.assertEqual(result["row_families"]["status"], "PASS")
+            # observation face records the fallback attribution key.
+            observation = result["row_families"].get("deferred_observation")
+            self.assertIsNotNone(observation)
+            self.assertGreater(observation["detector_errors"], 0)
+            self.assertEqual(observation["skip_kind"],
+                             "orchestration_fallback")
+            # restore for teardown hygiene
+            self.assertEqual(lgp.judge_deferred_row, real)
+
+
+class Check42DeferredSignalTests(unittest.TestCase):
+    """CR-R1-1/CR-R1-2 — the DEC-288 M2 criterion is no longer trivially
+    satisfiable: deferred_registration events have a REAL production path
+    (guard word-set hits → observation ledger → Check 42 collector), and
+    the two SKIP kinds (vacuum vs orchestration fallback) are distinct,
+    attributed, disclosed.
+    """
+
+    _LEDGER_TODAY_FIRED = json.dumps({
+        "schema_version": 1, "kind": "deferred_hit", "date": "2026-10-02",
+        "surface": "evidence-log.md", "family": "evidence",
+        "row_key": "EVD-8101", "line": 9, "hit_word": "待以后",
+        "negative_context_hit": False, "fired": True,
+    }, ensure_ascii=False)
+    _LEDGER_TODAY_EXEMPT = json.dumps({
+        "schema_version": 1, "kind": "deferred_hit", "date": "2026-10-02",
+        "surface": "evidence-log.md", "family": "evidence",
+        "row_key": "EVD-8102", "line": 10, "hit_word": "登记待",
+        "negative_context_hit": True, "fired": False,
+    }, ensure_ascii=False)
+    _LEDGER_OTHER_DAY = json.dumps({
+        "schema_version": 1, "kind": "deferred_hit", "date": "2026-10-01",
+        "surface": "evidence-log.md", "family": "evidence",
+        "row_key": "EVD-8000", "line": 3, "hit_word": "待以后",
+        "negative_context_hit": False, "fired": True,
+    }, ensure_ascii=False)
+
+    def test_fired_ledger_entries_feed_collector_and_zero_rate(self):
+        with _governance_temp_dir(prefix="feat081-sig-") as td:
+            gov = Path(td)
+            (gov / ".write-guard-deferred-ledger.jsonl").write_text(
+                self._LEDGER_TODAY_FIRED + "\n"
+                + self._LEDGER_TODAY_EXEMPT + "\n"
+                + self._LEDGER_OTHER_DAY + "\n", encoding="utf-8")
+            events, note, face_state = vw._collect_session_closure_events(
+                gov, today="2026-10-02")
+            deferred = [e for e in events
+                        if e["kind"] == "deferred_registration"]
+            # Only TODAY's FIRED entries count (exempted/other-day excluded).
+            self.assertEqual(deferred, [{"id": "EVD-8101",
+                                         "kind": "deferred_registration"}])
+            self.assertEqual(face_state["deferred_detections"], 1)
+            self.assertIsNone(face_state["anomaly"])
+            # THE CR-R1-1 assertion: 合取不可平凡满足 — deferred > 0 forces
+            # rate 0.0 and compliant False even with zero problems raised.
+            from checks.provenance_domain import session_closure_rate
+            rate = session_closure_rate(events)
+            self.assertEqual(rate["deferred_detections"], 1)
+            self.assertEqual(rate["session_closure_rate"], 0.0)
+            self.assertFalse(rate["compliant"])
+            # And with a deferred signal present the face must NOT classify
+            # as a vacuum SKIP.
+            from checks import loop_gate_processor as lgp
+            self.assertIsNone(lgp.classify_observation_face(
+                rate["problems_raised"], rate["deferred_detections"],
+                face_state["anomaly"]))
+
+    def test_missing_ledger_is_vacuum_not_anomaly(self):
+        with _governance_temp_dir(prefix="feat081-vac-") as td:
+            gov = Path(td)
+            events, note, face_state = vw._collect_session_closure_events(
+                gov, today="2026-10-02")
+            self.assertEqual(events, [])
+            self.assertIsNone(face_state["anomaly"])
+            self.assertEqual(face_state["deferred_detections"], 0)
+            from checks import loop_gate_processor as lgp
+            skip = lgp.classify_observation_face(0, 0, face_state["anomaly"])
+            self.assertEqual(skip["skip_kind"], lgp.SKIP_VACUUM)
+
+    def test_corrupt_ledger_is_orchestration_fallback_disclosed(self):
+        with _governance_temp_dir(prefix="feat081-fb-") as td:
+            gov = Path(td)
+            (gov / ".write-guard-deferred-ledger.jsonl").write_text(
+                self._LEDGER_TODAY_FIRED + "\n{not valid json\n",
+                encoding="utf-8")
+            events, note, face_state = vw._collect_session_closure_events(
+                gov, today="2026-10-02")
+            anomaly = face_state["anomaly"]
+            self.assertIsNotNone(anomaly)
+            self.assertIn("bad", json.dumps(anomaly, ensure_ascii=False))
+            from checks import loop_gate_processor as lgp
+            skip = lgp.classify_observation_face(0, 0, anomaly)
+            self.assertEqual(skip["skip_kind"],
+                             lgp.SKIP_ORCHESTRATION_FALLBACK)
+            self.assertTrue(skip["reason"])  # attributed, never bare
+            # A corrupt ledger does NOT masquerade as a measured zero: the
+            # fired entry before the bad line is still counted (conservative
+            # direction — 宁可披露不可静默), and the anomaly travels alongside.
+            self.assertEqual(face_state["deferred_detections"], 1)
+
+    def test_unreadable_evidence_log_is_not_a_silent_vacuum(self):
+        # CR-R1-2's 编排异常兜底: a row-family read failure used to degrade
+        # silently to "no problems" (== vacuum SKIP). It must now surface as
+        # an orchestration-fallback attribution instead.
+        with _governance_temp_dir(prefix="feat081-ill-") as td:
+            gov = Path(td)
+            (gov / "evidence-log.md").write_bytes(b"\xff\xfe not utf8")
+            events, note, face_state = vw._collect_session_closure_events(
+                gov, today="2026-10-02")
+            anomaly = face_state["anomaly"]
+            self.assertIsNotNone(anomaly)
+            from checks import loop_gate_processor as lgp
+            skip = lgp.classify_observation_face(0, 0, anomaly)
+            self.assertEqual(skip["skip_kind"],
+                             lgp.SKIP_ORCHESTRATION_FALLBACK)
 
 
 class ExecutionPacketIncrementalWriteTests(unittest.TestCase):

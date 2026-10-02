@@ -339,9 +339,13 @@ STATIC_PIN_EXEMPTIONS = {
         # once at this bump (rows re-anchored by the FIX-408 hermetic
         # hardening, tokens unchanged; FIX-410 re-anchor +82; FIX-411 +5;
         # FIX-416 +54; FIX-418 re-anchor +17: the FIX-300 cwd pin + the
-        # FEAT-080 derive shifted both rows below — see the note above).
-        (20546, "0.93.0", _REASON_FUTURE_TARGET),
-        (20578, "0.93.0", _REASON_FUTURE_TARGET),
+        # FEAT-080 derive shifted both rows below — see the note above.
+        # FEAT-081 re-anchor +479: the B4 M2 词集检测 test classes inserted
+        # after B3ProvenanceWiringTests shifted both rows without touching
+        # the tokens — rot-guard caught the stale ledger, re-anchored to
+        # the actual token lines, same FIX-416/FIX-418 discipline.)
+        (21025, "0.93.0", _REASON_FUTURE_TARGET),
+        (21057, "0.93.0", _REASON_FUTURE_TARGET),
     ],
     # 0.89.0 bump-time rows (the FIX-361 designed double signal): fixture
     # worlds written by the 0.89.0-window tickets (FIX-390/393/394) carrying

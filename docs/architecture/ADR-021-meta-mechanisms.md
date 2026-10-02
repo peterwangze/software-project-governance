@@ -322,7 +322,7 @@ DEC-288 排序裁定：**(M1) 优先级执法底层机制**与 **(M2) 发现即�
 - **检测对象**：guard 基线 diff window 内的**新增行**（存量行不追诉——guard 现有窗口语义天然满足；这是选 write-guard 而非独立全量扫描 Check 的决定性理由，备选评估见 §6.2）。
 - **行族范围**：evidence（EVD- 行）、task_status（plan-tracker 任务行）。**豁免行族**：decision（DEC- 行——裁决原文引用「登记待以后」字样是记录治理事实，不是实施该行为；DEC-286/287/288 自身即含此词）、review（REVIEW- 机录行）、ops_ledger（receipt 机器行）。豁免清单是裁决点 D3（§7）。
 - **词集（首个版本，可随台账数据调优）**：`待以后`、`后续处理`、`后续完善`、`待后续`、`留待`、`择期`、`登记待`、`待收尾`、`留池`、`候选池`、`下版处理`、`延后处理`、`0.9[4-9]\s*池`。
-- **否定语境窗口（第四判定要素，规范级）**：命中词**前 8 个字符**内含 `废除`、`禁止`、`违规`、`=`、`不得` 之一 → 不触发（治理文本引用规则原文并否定它 ≠ 实施该行为——「‘登记待以后’=违规」「废除登记待以后」类表述因此豁免；本 ADR、behavior-protocol 契约条款、DEC 裁决原文虽多数已被行族豁免覆盖，本窗口是双保险并覆盖 evidence/task_status 行内的规则引用）。
+- **否定语境窗口（第四判定要素，规范级；方向消歧 DEC-301：双向）**：命中词**前或后 8 个字符**内含 `废除`、`禁止`、`违规`、`=`、`不得` 之一 → 不触发（治理文本引用规则原文并否定它 ≠ 实施该行为——「‘登记待以后’=违规」「废除登记待以后」类表述因此豁免；本 ADR、behavior-protocol 契约条款、DEC 裁决原文虽多数已被行族豁免覆盖，本窗口是双保险并覆盖 evidence/task_status 行内的规则引用）。
 - **判定**：新增行（`^\\|\\s*(EVD-|RISK-|PREFIX-NNN)` 行形状，复用 face-5 行识别）文本命中词集任一 **且** 否定语境窗口不豁免 → 产生 `deferred_registration` 类 face issue。
 - **观察期台账（RT-5，R0 采纳：给「数据回流调词集」一个容器，否则是承诺了没有观测的调优）**：每条 WARN 级检测按三键分桶落账——`命中词 × 行族 × 否定语境命中（布尔）`；翻转 FAIL 前必须产出误报率报告（分桶计数 + 否定语境豁免占比），报告入 evidence 后翻转决议才可提交 decision-log。
 - **姿态**：**渐进 FAIL**（FIX-260/Check 30c 先例：首个版本 WARN 起步 + 台账记录 + 升级路径显式登记；一版观察期后翻 FAIL——翻转经 decision-log 入账，不静默）。与 write-guard 现有 WARN/BLOCK 姿态层正交：`deferred_registration` 作为新 issue type 走 face-5 通用渲染，其 BLOCK 与否由渐进表控制。
@@ -350,20 +350,22 @@ session_closure_rate = closed_in_session / problems_raised_in_session
 
 **会话窗口函数（R0 规格化，F-P3-5——Check 42 实施的前置定义）**：窗口边界优先以 session-snapshot 会话身份关联——`W(session) = {evidence 行 : 行日期 == snapshot 日期 ∧ 行归属经 snapshot「本轮已完成」任务锚或当日 guard diff window 关联}`；session-snapshot 缺会话身份或不可读 → 降级为**按日聚合**并在指标输出显式标注「按日聚合（同日多会话合并，精度降级）」（L4 表 M2 Check 42 行：有新增问题行且 snapshot 不可用 → WARN 披露该降级）。禁止无标注的静默降级。
 
-**落点**：`checks/provenance_domain.py` 同域新函数 `compute_session_closure_metrics(...)`（复用 §3.2.1/3.2.2 判定件）+ **Check 42: Discovery Closure Rate**（编号重定见 §2.2.3——Check 40 退役不复用，check-governance 接线 verify 锁释放后）：当会话有新增问题时输出率值，<100% → WARN（观察期一版）→ 渐进 FAIL；`governance-bootstrap` behavior 面追加该指标（bootstrap_aggregate.py，未锁，+~10 行）。
+**落点**：`checks/provenance_domain.py` 同域新函数 `compute_session_closure_metrics(...)`（复用 §3.2.1/3.2.2 判定件）+ **Check 42: Discovery Closure Rate**（编号重定见 §2.2.3——Check 40 退役不复用，check-governance 接线 verify 锁释放后）：当会话有新增问题时输出率值，<100% → WARN（观察期一版）→ 渐进 FAIL；`governance-bootstrap` behavior 面追加该指标（bootstrap_aggregate.py，未锁，+~10 行）——**B4′ 拆批承载 = FEAT-082**（DEC-301(4)：该子项在 FEAT-081 triage files 边界外，显式拆批禁止悬置；TRIAGE-FEAT-082 已机录）。
 
 **涉及文件 / 代码量汇总**：verify_workflow.py face-5 检测 ≈ 50 行（含否定语境窗口）+ Check 42 接线 ≈ 15 行（**均 verify 锁释放后**）；`checks/provenance_domain.py` 指标函数 ≈ 45 行（含窗口函数，未锁）；`bootstrap_aggregate.py` ≈ 10 行（未锁）。
 
 **验收判据**：
 1. 构造新增 EVD 行含「待以后」→ guard 运行产出 `deferred_registration` issue（WARN 姿态期）+ 台账记录 open（按三键分桶）。
 2. 豁免行族构造（DEC- 行含同词）→ 零 issue。
-3. **否定语境负例（R0 新增，F-P2-4）**：新增 EVD/任务行含「‘登记待以后’=违规」「废除登记待以后」类表述（命中词前 8 字符含 `=`/`废除`）→ 零 issue。
+3. **否定语境负例（R0 新增，F-P2-4；DEC-301 双向消歧）**：新增 EVD/任务行含「‘登记待以后’=违规」「废除登记待以后」类表述（命中词前或后 8 字符含 `=`/`废除`——前例的 `=` 在命中词之后）→ 零 issue。
 4. 存量行（基线内）含同词 → 零 issue（窗口限域证明）。
 5. 闭环率 fixture：3 新增问题 3 闭合 → 100%；2 闭合 → <100% WARN；1 含待以后 → 0%。
 6. 会话窗口：snapshot 带会话身份 → 精确窗口；snapshot 缺失 + 有新增问题行 → 指标输出含「按日聚合（精度降级）」标注（禁止静默降级）。
 7. DEC-288 M2 生效判据机检可用：Check 42 输出即判定面。
 
 **测试计划**：`infra/tests/test_deferred_registration.py`（词集正/负/豁免/窗口/**否定语境**五组）+ `test_session_closure_metrics.py`（率值三档 + 违规前置归零 + 窗口函数两态）+ face-5 集成测试（**verify 锁释放后**在 test_verify_workflow.py 补）。
+
+> **附录勘误（CR-R1-3，FEAT-081 B4 交付实测落点——随 DEC-301 勘误动作入账）**：上列两个独立测试文件未按原落点建立——B4 交付（FEAT-081）将五组用例（词集正/负/豁免/窗口限域/否定语境）并入 `infra/tests/test_verify_workflow.py` 三个测试类（`LoopGateProcessorWordSetTests` / `DeferredRegistrationFace5Tests` / `Check42DeferredSignalTests`，19 用例）；闭环率三档/违规前置归零/窗口函数两态由既有 `tests/test_provenance_domain.py`（FEAT-080 交付）+ 采集器测试承载。理由 = FEAT-081 派发锁边界（三文件）+ 既有套件已覆盖指标面，避免同域第二形状源。face-5 集成测试按原文落 `test_verify_workflow.py`（与本勘误一致）。否定语境窗口按 DEC-301 消歧为**双向**（前或后 8 字符）。
 
 ### 3.3 与既有机制的关系映射（逐项）+ 冲突裁决建议
 
@@ -455,7 +457,7 @@ L1：§2.1（锚点四面/预算三 profile/入口同步/增量分档防夹带/�
 
 - **BC-1 注入预算回弹**：两条款契约把 strict profile 推近 6000 硬门（余量 ~81 tok），后续任何「再加一条契约」的提案都会立即爆预算——这不是缺陷而是设计特性（预算硬门正是反扩张机制），但短期风险是 M1/M2 文本调优（改词、加例）时无意识越线。**缓解**：§2.1 验收判据 5 冻结线（机检形式：余量 <100 tok 时禁止任何使余量下降的注入面变更，防夹带分档断言 M1 ≤160 / M1+M2 ≤320）；`check-injection-budget` 进 B1b 验收命令；两条款文本以本 ADR 逐字建议为基线，改动需 re-run 预算检查。
 - **BC-2 存量海瘫痪**：~199 个既有 triage 记录无 demand_source，若 Check 41/发布门对存量 fail-closed，清偿轮开工即全红——执法机制瘫痪了自己要护航的清偿轮。**缓解**：分阶段 fail-closed（§2.2.3：覆盖率 0 → SKIP+WARN；>0 即严）；发布门只看「版本载荷」任务（本版本 triage 的记录必有该字段——新任务强制），存量不在发布门作用域。
-- **BC-3 词集检测误报**：本 ADR 自身、DEC-286/287/288 原文、behavior-protocol 契约条款都含「登记待以后」字样；治理文档引用规则文本 ≠ 实施该行为。**缓解**：四层限域（R0 升级为规范级，§3.2.1）——只查 guard 受管面新增行（docs/**、skills/** 规则文件不在五族受管面）+ 豁免行族（decision/review/ops）+ **否定语境窗口（词前 8 字符含 `废除|禁止|违规|=|不得` 则不触发——已入 §3.2.1 规范文本与验收判据 3 负例，F-P2-4）** + 观察期台账三键分桶（命中词×行族×否定语境，RT-5）。误报残余走 write-guard 既有 WARN 姿态披露，翻转 FAIL 前必须产出误报率报告。
+- **BC-3 词集检测误报**：本 ADR 自身、DEC-286/287/288 原文、behavior-protocol 契约条款都含「登记待以后」字样；治理文档引用规则文本 ≠ 实施该行为。**缓解**：四层限域（R0 升级为规范级，§3.2.1）——只查 guard 受管面新增行（docs/**、skills/** 规则文件不在五族受管面）+ 豁免行族（decision/review/ops）+ **否定语境窗口（词前或后 8 字符含 `废除|禁止|违规|=|不得` 则不触发——已入 §3.2.1 规范文本与验收判据 3 负例，F-P2-4；方向消歧 DEC-301 双向）** + 观察期台账三键分桶（命中词×行族×否定语境，RT-5）。误报残余走 write-guard 既有 WARN 姿态披露，翻转 FAIL 前必须产出误报率报告。
 - **BC-4 出身洗白（Goodhart）**：把任务标成 user-named 即可插队——demand_source 若无溯源要求，三值枚举会沦为新的优先级套利通道。**缓解**：user-named 强制 `demand_basis`（用户原话/DEC 引用，§2.2.1 fail-closed）；Check 41 的 issue 输出携带 basis 摘要供人工抽验；triage 记录不可变（F4）使造假留痕；**修订通道同样带溯源且不可变（R0，F-P1-3）——防造假属性覆盖生命周期全程，同时不焊死正向漂移（用户事后点名经修订事件合法入账）**。
 
 ---

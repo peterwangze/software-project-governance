@@ -7336,6 +7336,49 @@ def _provenance_rows_for_governance(tracker_path=None, governance_dir=None):
 _RISK_TERMINAL_WORDS = ("关闭", "收窄", "升级")
 
 
+def _read_deferred_ledger_events(governance_dir, today):
+    """FEAT-081 B4: read the M2 observation ledger → ``(events, anomaly)``.
+
+    Fired ``deferred_hit`` entries dated ``today`` become Check 42
+    ``deferred_registration`` events (the REAL signal path that makes the
+    DEC-288 conjunct non-trivially satisfiable — CR-R1-1). A MISSING file
+    is not an anomaly (the guard simply never recorded on this host —
+    vacuum); an unreadable or malformed line IS one (fail-closed
+    disclosure: a broken detection data path must never masquerade as a
+    measured zero — CR-R1-2 orchestration fallback). Entries before a bad
+    line are still counted (conservative direction: 宁可披露不可静默).
+    Never raises.
+    """
+    events = []
+    anomaly = None
+    path = Path(governance_dir) / _DEFERRED_LEDGER_FILENAME
+    if not path.is_file():
+        return events, anomaly
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError) as exc:
+        return events, {"kind": "ledger_read", "reason": str(exc)}
+    from checks import loop_gate_processor as lgp
+    entries = []
+    bad_lines = 0
+    for line in lines:
+        if not line.strip():
+            continue
+        parsed, error = lgp.parse_ledger_line(line)
+        if error is not None:
+            bad_lines += 1
+            continue
+        entries.append(parsed)
+    events = lgp.deferred_events_from_entries(entries, today)
+    if bad_lines:
+        anomaly = {
+            "kind": "ledger_parse",
+            "reason": "{0} bad line(s) in {1}".format(
+                bad_lines, _DEFERRED_LEDGER_FILENAME),
+        }
+    return events, anomaly
+
+
 def _collect_session_closure_events(governance_dir=None, today=None):
     """FEAT-080 / ADR-021 §3.2.3: W(session) event collection for Check 42.
 
@@ -7347,26 +7390,36 @@ def _collect_session_closure_events(governance_dir=None, today=None):
       - EVD rows: a ✅ status → closure(task) (task 收口行).
       - RISK rows (risk-log, 日期 == today): new row → problem(RISK-id);
         a terminal word (关闭/收窄/升级) in 当前状态/备注 → closure.
-      - deferred_registration events are NOT collected here (B4 face-5
-        word-set detection scope); the collector reports 0 for that kind.
+      - deferred_registration events (FEAT-081 B4): collected from the
+        guard's M2 observation ledger — fired deferred_hit entries dated
+        today (_read_deferred_ledger_events; the B4-era "collector reports
+        0 for that kind" note is retired — the detection face now
+        produces them).
 
     Window (ADR-021 §3.2.3 / L4): a session-snapshot carrying today's date
     upgrades the window note to session identity; otherwise the note
     discloses the 按日聚合 degradation explicitly — never a silent degrade.
 
-    Returns ``(events, note)``; never raises.
+    Returns ``(events, note, face_state)`` — ``face_state`` carries the
+    CR-R1-2 SKIP 分态 inputs: ``anomaly`` (ledger read/parse failure, or
+    an evidence/risk row-family read failure — an orchestration fallback,
+    never a silent vacuum) and ``deferred_detections`` (today's fired
+    count). Never raises.
     """
     from datetime import date as _date_cls
     gov = Path(governance_dir) if governance_dir else GOVERNANCE_DIR
     today = today or _date_cls.today().isoformat()
     events = []
+    read_failures = []
     evidence_path = gov / "evidence-log.md"
     if evidence_path.is_file():
         try:
             evidence_lines = evidence_path.read_text(
                 encoding="utf-8").splitlines()
-        except (OSError, UnicodeDecodeError):
+        except (OSError, UnicodeDecodeError) as exc:
             evidence_lines = []
+            read_failures.append(
+                "evidence-log.md unreadable ({0})".format(exc))
         for line in evidence_lines:
             cells = [cell.strip() for cell in line.split("|")]
             if len(cells) < 11 or cells[0] or not cells[1]:
@@ -7390,8 +7443,9 @@ def _collect_session_closure_events(governance_dir=None, today=None):
     if risk_path.is_file():
         try:
             risk_lines = risk_path.read_text(encoding="utf-8").splitlines()
-        except (OSError, UnicodeDecodeError):
+        except (OSError, UnicodeDecodeError) as exc:
             risk_lines = []
+            read_failures.append("risk-log.md unreadable ({0})".format(exc))
         for line in risk_lines:
             cells = [cell.strip() for cell in line.split("|")]
             if len(cells) < 11 or cells[0] or not cells[1].startswith("RISK-"):
@@ -7403,6 +7457,14 @@ def _collect_session_closure_events(governance_dir=None, today=None):
             status_tail = cells[9] + (cells[13] if len(cells) > 13 else "")
             if any(word in status_tail for word in _RISK_TERMINAL_WORDS):
                 events.append({"id": risk_id, "kind": "closure"})
+    deferred_events, ledger_anomaly = _read_deferred_ledger_events(gov, today)
+    events.extend(deferred_events)
+    anomaly = ledger_anomaly
+    if anomaly is None and read_failures:
+        anomaly = {
+            "kind": "row_read",
+            "reason": "; ".join(read_failures),
+        }
     snapshot_path = gov / "session-snapshot.md"
     window_note = None
     if snapshot_path.is_file():
@@ -7418,7 +7480,11 @@ def _collect_session_closure_events(governance_dir=None, today=None):
             "window=daily-aggregate（按日聚合，同日多会话合并，精度降级——"
             f"session-snapshot 未携带 {today}；禁止无标注的静默降级，"
             "ADR-021 §3.2.3 / §2.4 L4）")
-    return events, window_note
+    face_state = {
+        "anomaly": anomaly,
+        "deferred_detections": len(deferred_events),
+    }
+    return events, window_note, face_state
 
 
 def check_release_readiness(
@@ -17590,21 +17656,42 @@ def _run_full_engine_checks(args):
     # DEC-288 M2 effectiveness criterion, machine form
     # ``session_closure_rate == 1.0 ∧ deferred_detections == 0``. Event
     # sources = today's evidence/risk row families (deterministic column
-    # matching — see _collect_session_closure_events); <100% is WARN in
-    # the observation window (渐进 FAIL 翻转经 decision-log 入账, ADR
-    # §3.2.1 姿态), never silently skipped.
+    # matching — see _collect_session_closure_events) PLUS the B4 M2
+    # observation ledger's fired deferred_hit entries (FEAT-081: the
+    # deferred count is a REAL signal now, not a structural zero);
+    # <100% is WARN in the observation window (渐进 FAIL 翻转经
+    # decision-log 入账, ADR §3.2.1 姿态), never silently skipped. SKIP
+    # 语义分态 (CR-R1-2): vacuum (无观测义务) vs orchestration_fallback
+    # (检测面数据缺失——台账不可读/行族读取失败) are attributed and
+    # disclosed distinctly; a deferred signal suppresses SKIP entirely.
     print("\n┌─ Check 42: Discovery Closure Rate (FEAT-080/ADR-021) ──┐")
     from checks.provenance_domain import session_closure_rate
-    events42, window_note42 = _collect_session_closure_events()
+    from checks.loop_gate_processor import (
+        SKIP_ORCHESTRATION_FALLBACK as _SKIP_FALLBACK_42,
+        classify_observation_face as _classify42,
+    )
+    events42, window_note42, face_state42 = _collect_session_closure_events()
     rate42 = session_closure_rate(events42)
-    if rate42["problems_raised"] == 0:
-        print(f"│  [SKIP] 当日无新增问题行——无观测义务（{window_note42}）")
+    skip42 = _classify42(rate42["problems_raised"],
+                         rate42["deferred_detections"],
+                         face_state42["anomaly"])
+    if skip42 is not None and skip42["skip_kind"] != _SKIP_FALLBACK_42:
+        print(f"│  [SKIP] {skip42['reason']}（skip_kind=vacuum；"
+              f"{window_note42}）")
+    elif skip42 is not None:
+        # Orchestration fallback — disclosed WARN, never a plain SKIP and
+        # never a silent zero (CR-R1-2: 编排异常兜底 ≠ 真空面).
+        print(f"│  {window_note42}")
+        print(f"│  [WARN] {skip42['reason']}")
+        print("│  deferred 检测面数据缺失——按降级披露（不静默），修复台账/"
+              "行族读取后复跑（ADR-021 §2.4 / FEAT-081 CR-R1-2）")
     else:
         print(f"│  {window_note42}")
         print(f"│  problems raised: {rate42['problems_raised']}; closed: "
               f"{rate42['closed']}; rate: "
               f"{rate42['session_closure_rate']:.0%}; deferred detections: "
-              f"{rate42['deferred_detections']}")
+              f"{rate42['deferred_detections']}（词集检测面 B4 已落地——"
+              "台账信号路径，FEAT-081）")
         if rate42["compliant"]:
             print("│  [PASS] session_closure_rate == 1.0 ∧ "
                   "deferred_detections == 0（DEC-288 M2 生效判据）")
@@ -17613,7 +17700,11 @@ def _run_full_engine_checks(args):
                   "起步，渐进 FAIL 翻转经 decision-log 入账（ADR-021 §3.2.3）")
             for unclosed in rate42["unclosed_ids"][:5]:
                 print(f"│    - unclosed: {unclosed}")
-    print("│  （deferred_registration 词集检测面随 B4 落地——当前采集器该类恒 0）")
+            if rate42["deferred_detections"]:
+                print(f"│    - deferred_registration ×"
+                      f"{rate42['deferred_detections']}：详见 "
+                      f".governance/{_DEFERRED_LEDGER_FILENAME}"
+                      "（三键台账，词集/窗口经 RT-5 数据回流调优）")
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 28u. DSH Preset Session Smoke (FEAT-015 / RISK-049 ②) ──
@@ -23984,6 +24075,20 @@ _OPS_LEDGER_RECEIPT_ANCHOR = "operation_id"
 _ROW_FAMILY_TEXT_SURFACES = ("evidence-log.md", "decision-log.md",
                              "plan-tracker.md")
 
+# FEAT-081 / ADR-021 §3.2.1 B4: the M2 deferred-registration observation
+# ledger — a guard-owned artifact (same class as the state baseline /
+# violation ledger, FEAT-057/060 contract), append-only JSONL, written on
+# the guard CLI face ONLY (cmd_governance_write_guard — the post-commit
+# hook path; the converge/internal persist paths and probes never create
+# it, keeping the rel089 "converge writes only guard state artifacts"
+# compatibility contract byte-true). Three-key buckets:
+# 命中词 × 行族 × 否定语境命中 — the RT-5 container the WARN→FAIL flip
+# decision owes its false-positive report to. Judgement pieces live in
+# checks/loop_gate_processor.py (pure leaf; the "loop" there is the
+# discovery→closure loop of ADR-021 M2, NOT the ADR-014 PARO runtime
+# module of the same basename at infra/ level).
+_DEFERRED_LEDGER_FILENAME = ".write-guard-deferred-ledger.jsonl"
+
 
 def _write_guard_row_digest(text):
     """Stable row digest (128-bit truncation — collision-safe for
@@ -24114,20 +24219,53 @@ def _load_write_guard_state(governance_dir):
     return state, None
 
 
+def _stamp_deferred_observation(observation):
+    """FEAT-081 B4 / CR-R1-2: stamp the SKIP 分态 attribution onto the
+    face-5 observation counters (mutates ``observation`` in place).
+
+    Detector errors → orchestration_fallback; zero fired hits with the
+    detection orchestration having run → vacuum; fired hits leave
+    ``skip_kind`` None (not a SKIP shape — the rate-zeroing path owns it).
+    Attribution is advisory bookkeeping: a stamping failure never breaks
+    the reconciliation face.
+    """
+    try:
+        from checks import loop_gate_processor as _lgp
+        if observation["detector_errors"]:
+            observation["skip_kind"] = _lgp.SKIP_ORCHESTRATION_FALLBACK
+            observation["reason"] = (
+                "检测器异常 ×{0}——编排异常兜底（fail-closed 披露）".format(
+                    observation["detector_errors"]))
+        elif not observation["fired"]:
+            observation["skip_kind"] = _lgp.SKIP_VACUUM
+            observation["reason"] = (
+                "检测编排运行、零命中（rows_judged={0}）——真空面".format(
+                    observation["rows_judged"]))
+        else:
+            observation["skip_kind"] = None
+            observation["reason"] = "{0} fired deferred hit(s)".format(
+                observation["fired"])
+    except Exception:  # noqa: BLE001 — attribution is advisory bookkeeping
+        pass
+
+
 def _reconcile_row_families(governance_dir, persist_state=False,
-                            detections_out=None, records_index_out=None):
+                            detections_out=None, records_index_out=None,
+                            deferred_out=None):
     """FEAT-057 face 5 engine — 受管行族对账 (FEAT-064 posture-aware).
 
     Returns ``(result_face, next_state)``. ``result_face`` is the face dict
-    ``{"status", "issues", "baselined"}``; the shipped all-WARN default
-    keeps every disclosure WARN-class and the face PASS (byte-identical to
-    the FEAT-057/060 era). Under an active family BLOCK posture (guard-owned
-    posture config) an uncredentialed change in that family is a
-    BLOCK-class issue and the face FAILs — the guard CLI then exits 1. The
-    face status is FAIL iff at least one issue carries ``posture ==
-    "block"``; posture-layer and state-machine anomalies stay WARN-class
-    disclosures (fail-safe: a broken posture config degrades to all-WARN
-    loudly, never to a guessed BLOCK).
+    ``{"status", "issues", "baselined"}`` (B4/FEAT-081 additionally carries
+    ``deferred_observation`` — the M2 detection run's counters + SKIP 分态
+    attribution, consumed by the CLI face's ledger record); the shipped
+    all-WARN default keeps every disclosure WARN-class and the face PASS
+    (byte-identical to the FEAT-057/060 era). Under an active family BLOCK
+    posture (guard-owned posture config) an uncredentialed change in that
+    family is a BLOCK-class issue and the face FAILs — the guard CLI then
+    exits 1. The face status is FAIL iff at least one issue carries
+    ``posture == "block"``; posture-layer and state-machine anomalies stay
+    WARN-class disclosures (fail-safe: a broken posture config degrades to
+    all-WARN loudly, never to a guessed BLOCK).
 
     Per managed surface: file SHA256 fast path (unchanged file → zero
     diff), then a per-row multiset digest diff against the baseline —
@@ -24141,9 +24279,14 @@ def _reconcile_row_families(governance_dir, persist_state=False,
     detection dicts for the violation state machine;
     ``records_index_out`` collects the per-surface current-instance map
     (object → digests + credential verdicts) the consumption-eligibility
-    judge needs. Neither affects judging or output.
+    judge needs. Neither affects judging or output. FEAT-081 B4 adds
+    ``deferred_out`` — the M2 word-set ledger entries (guard CLI face
+    only; None on probes/internal paths).
     """
     face = {"status": "SKIPPED", "issues": [], "baselined": []}
+    observation = {"rows_judged": 0, "hits": 0, "fired": 0,
+                   "detector_errors": 0, "skip_kind": None, "reason": ""}
+    face["deferred_observation"] = observation
     next_state = None
     if not governance_dir.is_dir():
         return face, next_state
@@ -24231,7 +24374,8 @@ def _reconcile_row_families(governance_dir, persist_state=False,
         _judge_row_delta(surface, rel, records, baseline_rows, issues,
                          detections_out=detections_out,
                          family_postures=family_postures,
-                         honored_families=honored_families)
+                         honored_families=honored_families,
+                         deferred_out=deferred_out, observation=observation)
 
     # ops 台账 surfaces (*.ops.jsonl — line-oriented receipt ledgers).
     for path in sorted(governance_dir.glob("*.ops.jsonl")):
@@ -24276,10 +24420,14 @@ def _reconcile_row_families(governance_dir, persist_state=False,
         _judge_row_delta(path.name, rel, records, baseline["rows"], issues,
                          surface_kind="ops", detections_out=detections_out,
                          family_postures=family_postures,
-                         honored_families=honored_families)
+                         honored_families=honored_families,
+                         deferred_out=deferred_out, observation=observation)
 
     if not surfaces_seen:
         return face, next_state  # SKIPPED — nothing managed, nothing written
+
+    _stamp_deferred_observation(observation)
+
 
     # FEAT-064: FAIL iff at least one BLOCK-class disclosure is present
     # (all-WARN default → PASS — the pinned WARN-era behavior).
@@ -24339,7 +24487,8 @@ def _credential_index(surface, records, surface_kind="text"):
 
 def _judge_row_delta(surface, rel, records, baseline_rows, issues,
                      surface_kind="text", detections_out=None,
-                     family_postures=None, honored_families=frozenset()):
+                     family_postures=None, honored_families=frozenset(),
+                     deferred_out=None, observation=None):
     """Multiset-diff current records against the baseline digests and emit
     one disclosure per uncredentialed added/changed row instance.
 
@@ -24359,6 +24508,7 @@ def _judge_row_delta(surface, rel, records, baseline_rows, issues,
     dict (write_guard_state.build_detection) — the disclosure output itself
     is unchanged either way; the ledger is the only consumer."""
     import write_guard_state
+    from checks import loop_gate_processor as _lgp
     postures = family_postures or {}
     baseline_pool = {}
     for key, digests in baseline_rows.items():
@@ -24369,6 +24519,63 @@ def _judge_row_delta(surface, rel, records, baseline_rows, issues,
         if pool and record["digest"] in pool:
             pool.remove(record["digest"])  # unchanged instance
             continue
+        # ── FEAT-081 / ADR-021 §3.2.1 B4: M2 词集检测 ────────────────────
+        # Runs on EVERY added/changed row instance of the scoped families
+        # (evidence EVD- rows + task_status plan-tracker rows), BEFORE and
+        # ORTHOGONAL to the credential judge — a machine-credentialed row
+        # can carry 登记-deferral semantics too (the ADR 判定 has no
+        # credential carve-out). Exempt families (decision/review/ops)
+        # judge to None. A detector-side error is a LOUD WARN-class
+        # disclosure (fail-closed disclosure, ADR §2.4 L4 — never silent).
+        if observation is not None:
+            observation["rows_judged"] = observation.get("rows_judged", 0) + 1
+        try:
+            _deferred = _lgp.judge_deferred_row(
+                surface, record["key"], record["text"])
+        except Exception as exc:  # noqa: BLE001 — detector fail-closed face
+            if observation is not None:
+                observation["detector_errors"] = (
+                    observation.get("detector_errors", 0) + 1)
+            issues.append({
+                "type": "deferred_registration_detector_error",
+                "file": rel,
+                "line": record["line"],
+                "task_id": record["key"],
+                "detail": "M2 词集检测器异常（{0}）——fail-closed 披露不静默"
+                          "（ADR-021 §2.4 L4：检测失效静默 = 「登记待以后」"
+                          "回归不可见；FEAT-081 B4）".format(exc),
+                "expected": "检测器可运行（词集/否定语境窗口为确定性正则，"
+                            "异常即缺陷）",
+            })
+            _deferred = None
+        if _deferred is not None:
+            if observation is not None:
+                observation["hits"] = (
+                    observation.get("hits", 0) + len(_deferred["hits"]))
+                if _deferred["fired"]:
+                    observation["fired"] = observation.get("fired", 0) + 1
+            if _deferred["fired"]:
+                issues.append({
+                    "type": _lgp.DEFERRED_REGISTRATION_ISSUE_TYPE,
+                    "file": rel,
+                    "line": record["line"],
+                    "task_id": record["key"],
+                    "detail": _lgp.render_issue_detail(_deferred),
+                    "expected": _lgp.DEFERRED_ISSUE_EXPECTED,
+                })
+            if deferred_out is not None:
+                from datetime import date as _d
+                today_str = _d.today().isoformat()
+                for _hit in _deferred["hits"]:
+                    deferred_out.append(_lgp.build_ledger_entry(
+                        date_str=today_str,
+                        surface=surface,
+                        family=_deferred["family"],
+                        row_key=record["key"],
+                        line=record["line"],
+                        hit_word=_hit["word"],
+                        negative_context_hit=_hit["negative_context_hit"],
+                    ))
         if _row_family_credential_ok(surface, record["key"], record["text"]):
             continue
         family = write_guard_state.canonical_family(surface, record["key"])
@@ -24440,7 +24647,8 @@ def _build_violation_detection(surface, surface_kind, rel, record,
     )
 
 
-def check_governance_write_shapes(*, persist_state=False, session_id=None):
+def check_governance_write_shapes(*, persist_state=False, session_id=None,
+                                  deferred_ledger=False):
     """FEAT-011 G3 extension — structural write guard over the Coordinator's
     direct-write ``.governance`` artifacts.
 
@@ -24491,6 +24699,16 @@ def check_governance_write_shapes(*, persist_state=False, session_id=None):
     violation state machine's same-session escalation rule — overrides the
     ``GOVERNANCE_SESSION_ID`` environment variable when provided; probes
     and tests that leave it unset keep the env fallback.
+
+    ``deferred_ledger`` (FEAT-081 B4 / ADR-021 §3.2.1): append the M2
+    deferred-registration observation ledger
+    (``.governance/.write-guard-deferred-ledger.jsonl`` — three-key
+    buckets 命中词×行族×否定语境, plus one per-run observation-face record
+    carrying the CR-R1-2 SKIP 分态 attribution). Guard CLI face only —
+    the internal persist path (release-bootstrap converge) and every
+    probe keep the rel089 compatibility contract (converge writes only
+    the two FEAT-057/060 guard artifacts). Requires ``persist_state``;
+    a write failure is a loud WARN-class disclosure, never silent.
 
     Contract: CHECK-ONLY for governance records — reads the artifacts,
     never repairs or rewrites them (issue messages carry line numbers and
@@ -24636,9 +24854,43 @@ def check_governance_write_shapes(*, persist_state=False, session_id=None):
     # judge and audited with one use event per CLI run (不可静默).
     detections = [] if persist_state else None
     records_index = {} if persist_state else None
+    deferred_entries = [] if (persist_state and deferred_ledger) else None
     row_face, next_state = _reconcile_row_families(
         GOVERNANCE_DIR, persist_state=persist_state,
-        detections_out=detections, records_index_out=records_index)
+        detections_out=detections, records_index_out=records_index,
+        deferred_out=deferred_entries)
+    # FEAT-081 B4: persist the M2 observation ledger on the guard CLI face
+    # (entries + one per-run observation-face record with the SKIP 分态
+    # attribution). A failure is a loud WARN-class disclosure — the 台账
+    # is the RT-5 container the WARN→FAIL flip decision owes its report
+    # to, losing it silently is exactly the "登记待以后 回归不可见" shape.
+    if deferred_entries is not None:
+        try:
+            from checks import loop_gate_processor as _lgp
+            from datetime import date as _d
+            _today = _d.today().isoformat()
+            _records = list(deferred_entries)
+            _records.append(_lgp.observation_face_record(
+                row_face.get("deferred_observation")
+                or {"rows_judged": 0, "hits": 0, "fired": 0,
+                    "detector_errors": 0},
+                _today))
+            _ledger_path = GOVERNANCE_DIR / _DEFERRED_LEDGER_FILENAME
+            with _ledger_path.open("a", encoding="utf-8") as _fh:
+                for _entry in _records:
+                    _fh.write(json.dumps(
+                        _entry, ensure_ascii=False) + "\n")
+        except (IOError, OSError, ValueError) as exc:
+            row_face["issues"].append({
+                "type": "deferred_ledger_unwritable",
+                "file": ".governance/" + _DEFERRED_LEDGER_FILENAME,
+                "line": None,
+                "task_id": "",
+                "detail": "M2 观察期台账写入失败（{0}）——本轮检测不入账，"
+                          "响亮披露不静默（FEAT-081 B4 / RT-5：台账是"
+                          "WARN→FAIL 翻转前误报率报告的数据容器）".format(exc),
+                "expected": "可写的 .governance 目录",
+            })
     if next_state is not None:
         baseline_in_txn = False
         skip_baseline = False
@@ -24914,7 +25166,8 @@ def cmd_governance_write_guard(args):
                 candidate, args, governance_dir=GOVERNANCE_DIR))
     result = check_governance_write_shapes(
         persist_state=True,
-        session_id=getattr(args, "session_id", None))
+        session_id=getattr(args, "session_id", None),
+        deferred_ledger=True)  # FEAT-081 B4: M2 词集台账随 CLI 面落账
     faces = (
         ("plan_tracker",
          "plan-tracker 任务表行（M1 签名：重复优先级列/行尾空单元格）"),

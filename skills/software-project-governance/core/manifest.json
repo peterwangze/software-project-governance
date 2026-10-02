@@ -191,6 +191,10 @@
         "type": "file"
       },
       {
+        "path": "skills/software-project-governance/infra/checks/loop_gate_processor.py",
+        "type": "file"
+      },
+      {
         "path": "skills/software-project-governance/infra/tests/test_loop_runtime_claim_attestation.py",
         "type": "file"
       },

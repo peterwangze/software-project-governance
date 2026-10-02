@@ -43,6 +43,13 @@ Aggregated faces (single output, ≤2K token / ≤8KB projection):
                   a ``check-governance`` next_action. NO health check has
                   run — this command never pretends it did (QR-4 禁「没查」
                   报「通过」).
+* ``behavior``  — the FEAT-040 gray-release face (via ``behavior_profile``)
+                  plus the FEAT-082 ``session_closure`` sub-face: the
+                  ADR-021 §3.2.3 closure-rate metric in Check 42's exact
+                  judgment caliber (imported pure domain functions; the
+                  collection arms are disclosed engine mirrors guarded by
+                  differential tests). A METRIC PROJECTION — health checks
+                  remain deferred.
 * ``next_actions`` / ``deferred`` — derived guidance and the fail-safe
                   budget disclosure.
 
@@ -129,6 +136,18 @@ _ID_TOKEN_RE = re.compile(r"^[A-Z]+-\d+$")
 #: table validator — a ``|`` row without a separator row below it is prose
 #: with pipes (or a continuation data row), never a table header.
 _SEPARATOR_ROW_RE = re.compile(r"^\|[\s:\-|]+\|$")
+
+#: FEAT-082 (ADR-021 §3.2.3 B4′) — DISCLOSED MIRRORS of the engine
+#: collector's own constants (``_DEFERRED_LEDGER_FILENAME`` /
+#: ``_RISK_TERMINAL_WORDS`` in verify_workflow.py). Mirrors, not imports:
+#: the engine-free boundary (ArchGuard R2) forbids importing the
+#: collector, and the ledger's JSONL parsing/event shaping IS
+#: single-sourced from ``checks.loop_gate_processor`` — only these two
+#: literals and the row-scan arms mirror the engine, guarded
+#: tuple-for-tuple by ``SessionClosureMirrorTests`` (the R0 P0-1
+#: differential discipline; the F-P3-2 second-shape-source lesson).
+_CLOSURE_LEDGER_FILENAME = ".write-guard-deferred-ledger.jsonl"
+_RISK_TERMINAL_WORDS = ("关闭", "收窄", "升级")
 
 
 class _BudgetExhausted(Exception):
@@ -562,6 +581,245 @@ def plan_tracker_version(text):
     return m.group(1) if m else None
 
 
+# ── session-closure metric (FEAT-082, ADR-021 §3.2.3 B4′) ───────────────────
+#
+# Division of shape sources (the F-P3-2 lesson applied):
+#
+# * JUDGMENT caliber — single-sourced by IMPORT from the pure check-domain
+#   leaves: ``checks.provenance_domain.session_closure_rate`` (rate /
+#   违规前置归零 / compliant) and ``checks.loop_gate_processor.
+#   classify_observation_face`` (SKIP 分态 vacuum vs
+#   orchestration_fallback; deferred>0 suppresses SKIP). Both imports are
+#   FUNCTION-LOCAL — same ArchGuard R6 discipline as ``_behavior`` — so
+#   this module's cold-load import face stays stdlib + the two peer
+#   leaves.
+# * COLLECTION arms — disclosed mirrors of the engine's
+#   ``_collect_session_closure_events`` (verify_workflow.py), returning
+#   the SAME ``(events, window_note, face_state)`` triple so the
+#   bidirectional differential test can assert tuple equality. The
+#   ledger arm reuses ``parse_ledger_line`` /
+#   ``deferred_events_from_entries`` (imported — one JSONL shape source);
+#   only the file reads and the evidence/risk row scans mirror.
+
+
+def _closure_evidence_events(text, today):
+    """Mirror of the engine collector's evidence-log arm (pure).
+
+    Caliber: deterministic COLUMN matching — REVIEW rows dated today
+    pair NEEDS_CHANGE/BLOCKED → problem(task) and APPROVED* →
+    closure(task) (复审必达 pairing); EVD rows dated today with ``✅``
+    in the 备注 column → closure. Out-of-window rows never contribute.
+    """
+    events = []
+    for line in str(text or "").split("\n"):
+        cells = [cell.strip() for cell in line.split("|")]
+        if len(cells) < 11 or cells[0] or not cells[1]:
+            continue
+        row_id, task = cells[1], cells[2]
+        row_date, status = cells[8], cells[10]
+        if row_date != today:
+            continue
+        if row_id.startswith("REVIEW-"):
+            if status in ("NEEDS_CHANGE", "BLOCKED"):
+                events.append({"id": task, "kind": "problem"})
+            elif status.startswith("APPROVED"):
+                events.append({"id": task, "kind": "closure"})
+        elif row_id.startswith("EVD-") and "✅" in status:
+            events.append({"id": task, "kind": "closure"})
+    return events
+
+
+def _closure_risk_events(text, today):
+    """Mirror of the engine collector's risk-log arm (pure).
+
+    Caliber: every RISK row dated today raises a problem(RISK-id); a
+    terminal word (关闭/收窄/升级) in the 当前状态+备注 tail adds the
+    same-day closure (ADR-021 §3.2.2 终局三选一 pairing).
+    """
+    events = []
+    for line in str(text or "").split("\n"):
+        cells = [cell.strip() for cell in line.split("|")]
+        if len(cells) < 11 or cells[0] or not cells[1].startswith("RISK-"):
+            continue
+        risk_id, row_date = cells[1], cells[2]
+        if row_date != today:
+            continue
+        events.append({"id": risk_id, "kind": "problem"})
+        status_tail = cells[9] + (cells[13] if len(cells) > 13 else "")
+        if any(word in status_tail for word in _RISK_TERMINAL_WORDS):
+            events.append({"id": risk_id, "kind": "closure"})
+    return events
+
+
+def _closure_ledger_events(gov_dir, today):
+    """Mirror of the engine's ``_read_deferred_ledger_events``.
+
+    Ledger-line parsing and deferred-event shaping are single-sourced
+    from ``checks.loop_gate_processor``; only the file read mirrors the
+    engine's fail-closed disposition — a MISSING ledger file is vacuum
+    (the guard never recorded here), an unreadable or malformed line IS
+    an anomaly (a broken detection data path must never masquerade as a
+    measured zero — CR-R1-2 orchestration fallback).
+    """
+    from checks.loop_gate_processor import (
+        deferred_events_from_entries,
+        parse_ledger_line,
+    )
+    path = Path(gov_dir) / _CLOSURE_LEDGER_FILENAME
+    if not path.is_file():
+        return [], None
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError) as exc:
+        return [], {"kind": "ledger_read", "reason": str(exc)}
+    entries = []
+    bad_lines = 0
+    for line in lines:
+        if not line.strip():
+            continue
+        parsed, error = parse_ledger_line(line)
+        if error is not None:
+            bad_lines += 1
+            continue
+        entries.append(parsed)
+    events = deferred_events_from_entries(entries, today)
+    anomaly = None
+    if bad_lines:
+        anomaly = {
+            "kind": "ledger_parse",
+            "reason": "{0} bad line(s) in {1}".format(
+                bad_lines, _CLOSURE_LEDGER_FILENAME),
+        }
+    return events, anomaly
+
+
+def _collect_session_closure_events(gov_dir, today=None):
+    """FEAT-082: W(session) event collection — the engine-collector mirror.
+
+    Returns the SAME triple as verify_workflow's
+    ``_collect_session_closure_events`` — ``(events, window_note,
+    face_state)`` — so ``SessionClosureMirrorTests`` asserts tuple
+    equality against the engine (drift guard). Window caliber: a
+    session-snapshot carrying today upgrades the note to session
+    identity; otherwise the 按日聚合 degradation is disclosed in the
+    note itself — never a silent degrade. Never raises.
+    """
+    from datetime import date as _date_cls
+    today = today or _date_cls.today().isoformat()
+    gov = Path(gov_dir)
+    events = []
+    read_failures = []
+    evidence_path = gov / "evidence-log.md"
+    if evidence_path.is_file():
+        try:
+            evidence_text = evidence_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            read_failures.append(
+                "evidence-log.md unreadable ({0})".format(exc))
+        else:
+            events.extend(_closure_evidence_events(evidence_text, today))
+    risk_path = gov / "risk-log.md"
+    if risk_path.is_file():
+        try:
+            risk_text = risk_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            read_failures.append(
+                "risk-log.md unreadable ({0})".format(exc))
+        else:
+            events.extend(_closure_risk_events(risk_text, today))
+    deferred_events, ledger_anomaly = _closure_ledger_events(gov, today)
+    events.extend(deferred_events)
+    anomaly = ledger_anomaly
+    if anomaly is None and read_failures:
+        anomaly = {"kind": "row_read", "reason": "; ".join(read_failures)}
+    snapshot_path = gov / "session-snapshot.md"
+    snapshot_text = ""
+    if snapshot_path.is_file():
+        try:
+            snapshot_text = snapshot_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            snapshot_text = ""
+    if today in snapshot_text:
+        window_note = ("window=session（session-snapshot 会话身份关联，"
+                       "{0}）".format(today))
+    else:
+        window_note = (
+            "window=daily-aggregate（按日聚合，同日多会话合并，精度降级——"
+            "session-snapshot 未携带 {0}；禁止无标注的静默降级，"
+            "ADR-021 §3.2.3 / §2.4 L4）".format(today))
+    face_state = {
+        "anomaly": anomaly,
+        "deferred_detections": len(deferred_events),
+    }
+    return events, window_note, face_state
+
+
+def session_closure_face(gov_dir, today=None):
+    """The ``behavior.session_closure`` sub-face (FEAT-082 / ADR-021
+    §3.2.3 B4′).
+
+    Judgment caliber = Check 42's, single-sourced via the imported pure
+    domain functions (rate + 违规前置归零 + compliant + SKIP 分态).
+    Honesty contract: this is a METRIC PROJECTION — presenting values
+    here does NOT mean any health check ran (``health.state`` stays
+    ``deferred``; the ``source`` field says so). An orchestration
+    fallback nulls every metric field and discloses the anomaly: numbers
+    off a broken/partial read never masquerade as measured (CR-R1-2).
+    """
+    from checks.provenance_domain import session_closure_rate
+    from checks.loop_gate_processor import classify_observation_face
+
+    events, window_note, face_state = _collect_session_closure_events(
+        gov_dir, today=today)
+    rate = session_closure_rate(events)
+    skip = classify_observation_face(
+        rate["problems_raised"], rate["deferred_detections"],
+        face_state["anomaly"])
+    face = {
+        "session_closure_rate": rate["session_closure_rate"],
+        "deferred_detections": rate["deferred_detections"],
+        "problems_raised": rate["problems_raised"],
+        "closed": rate["closed"],
+        "compliant": rate["compliant"],
+        "skip_kind": skip["skip_kind"] if skip else None,
+        "skip_reason": _clip(skip["reason"], 96) if skip else None,
+        "window": ("session" if window_note.startswith("window=session")
+                   else "daily-aggregate"),
+        "window_note": _clip(window_note, 96),
+        "source": ("check-42-caliber metric (FEAT-082 / ADR-021 §3.2.3 "
+                   "B4′); projection only — health checks NOT run"),
+    }
+    if skip and skip["skip_kind"] == "orchestration_fallback":
+        # Check 42's own fallback branch presents no rate either; the
+        # anomaly dict carries the disclosed cause.
+        face.update({
+            "session_closure_rate": None,
+            "deferred_detections": None,
+            "problems_raised": None,
+            "closed": None,
+            "compliant": None,
+            "anomaly": {
+                "kind": str(face_state["anomaly"].get("kind", "")),
+                "reason": _clip(face_state["anomaly"].get("reason", ""), 96),
+            },
+        })
+    return face
+
+
+def _format_session_closure_line(closure):
+    """One-line text rendering (the FEAT-040 behavior-line convention)."""
+    if not closure:
+        return None
+    note = closure.get("window_note") or ""
+    if closure.get("skip_kind"):
+        return "session-closure: SKIP(%s) — %s | %s" % (
+            closure["skip_kind"], closure.get("skip_reason") or "", note)
+    return ("session-closure: rate %.0f%% closed %s/%s deferred %s | %s"
+            % (closure["session_closure_rate"] * 100,
+               closure["closed"], closure["problems_raised"],
+               closure["deferred_detections"], note))
+
+
 # ── candidates: the task-priority-analysis light path (reused verbatim) ─────
 
 
@@ -756,6 +1014,18 @@ def _build_payload(host_root, envelope, budget_ms, profile, started):
     payload["health"] = _health_face()
     payload["behavior"] = _behavior().behavior_face(
         plan_tracker_text=plan_text)
+    # FEAT-082 (ADR-021 §3.2.3 B4′): the closure metric rides the behavior
+    # face as ONE new key. It does governance-file I/O, so it takes its own
+    # budget check — on exhaustion the section lands in ``deferred``
+    # (fail-safe disclosure), never a guessed metric.
+    closure_face = None
+    try:
+        builder.check_budget("behavior.session_closure")
+        closure_face = session_closure_face(gov_dir)
+    except _BudgetExhausted:
+        pass
+    if closure_face is not None:
+        payload["behavior"]["session_closure"] = closure_face
     payload["next_actions"] = _next_actions(payload, envelope)
     payload["deferred"] = builder.deferred
     payload["duration_ms"] = int((time.monotonic() - started) * 1000)
@@ -995,6 +1265,12 @@ def format_text(payload):
                     "run check-governance (v1 not wired)"))
     lines.append(_behavior().format_behavior_line(
         payload.get("behavior")))
+    # FEAT-082: the closure metric's text line — one line, right after
+    # the behavior line (FEAT-040 convention).
+    closure_line = _format_session_closure_line(
+        (payload.get("behavior") or {}).get("session_closure"))
+    if closure_line:
+        lines.append(closure_line)
     next_actions = payload.get("next_actions") or []
     if next_actions:
         lines.append("next:")

@@ -352,7 +352,7 @@ session_closure_rate = closed_in_session / problems_raised_in_session
 
 **落点**：`checks/provenance_domain.py` 同域新函数 `compute_session_closure_metrics(...)`（复用 §3.2.1/3.2.2 判定件）+ **Check 42: Discovery Closure Rate**（编号重定见 §2.2.3——Check 40 退役不复用，check-governance 接线 verify 锁释放后）：当会话有新增问题时输出率值，<100% → WARN（观察期一版）→ 渐进 FAIL；`governance-bootstrap` behavior 面追加该指标（bootstrap_aggregate.py，未锁，+~10 行）——**B4′ 拆批承载 = FEAT-082**（DEC-301(4)：该子项在 FEAT-081 triage files 边界外，显式拆批禁止悬置；TRIAGE-FEAT-082 已机录）。
 
-**涉及文件 / 代码量汇总**：verify_workflow.py face-5 检测 ≈ 50 行（含否定语境窗口）+ Check 42 接线 ≈ 15 行（**均 verify 锁释放后**）；`checks/provenance_domain.py` 指标函数 ≈ 45 行（含窗口函数，未锁）；`bootstrap_aggregate.py` ≈ 10 行（未锁）。
+**涉及文件 / 代码量汇总**：verify_workflow.py face-5 检测 ≈ 50 行（含否定语境窗口）+ Check 42 接线 ≈ 15 行（**均 verify 锁释放后**）；`checks/provenance_domain.py` 指标函数 ≈ 45 行（含窗口函数，未锁）；`bootstrap_aggregate.py` ≈ 10 行（未锁）。〔附录勘误（DEC-302 附带，FEAT-082 交付实测）：`bootstrap_aggregate.py` 实测 +276 行——behavior 面平键在锁外 behavior_profile.py、引擎采集器受 R2 禁导入，最小诚实实现需披露镜像+差分测试守护（review-FEAT-082-CODE-R0 核查点⑨成立）；接口统一票（采集纯函数提取入 checks/provenance_domain 双端调用，落地后回收 ~90 行镜像）承载 = FEAT-083。〕
 
 **验收判据**：
 1. 构造新增 EVD 行含「待以后」→ guard 运行产出 `deferred_registration` issue（WARN 姿态期）+ 台账记录 open（按三键分桶）。

@@ -822,6 +822,15 @@ class ModuleDisciplineTests(unittest.TestCase):
             encoding="utf-8")
         self.assertNotIn("import verify_workflow", source)
         self.assertNotIn("from verify_workflow", source)
+        # FEAT-082: the closure judgment caliber rides FUNCTION-LOCAL
+        # imports of the pure check-domain leaves (same ArchGuard R6
+        # discipline as _behavior's behavior_profile import) — the
+        # MODULE-LEVEL import face must stay stdlib + the two peer leaves.
+        for line in source.split("\n"):
+            if line.startswith(("import ", "from ")):
+                self.assertNotIn("checks.", line,
+                                 "checks.* import must stay function-local "
+                                 "(R6 cold-import budget): %s" % line)
 
     def test_module_never_spawns_subprocesses_or_writes(self):
         source = (_INFRA_DIR / "bootstrap_aggregate.py").read_text(
@@ -840,6 +849,292 @@ class ModuleDisciplineTests(unittest.TestCase):
         spec = reg.command_spec("governance-bootstrap")
         self.assertEqual(spec.handler,
                          "bootstrap_aggregate.cmd_governance_bootstrap")
+
+
+# ── FEAT-082 (ADR-021 §3.2.3 B4′): session-closure metric fixtures ─────────
+#
+# Column shapes mirror the LIVE evidence-log/risk-log headers so the
+# collection caliber is exercised on faithful shapes: evidence cells[1]=
+# row id / cells[2]=task / cells[8]=提交日期 / cells[10]=备注；risk
+# cells[1]=RISK id / cells[2]=日期 / terminal tail = cells[9]+cells[13].
+_CLOSURE_TODAY = "2026-10-02"
+
+_EVIDENCE_HEADER = (
+    "# 证据记录\n\n## 证据\n\n"
+    "| 编号 | 对应任务 ID | 阶段 | 证据类型 | 证据说明 | 证据位置 | 提交人 |"
+    " 提交日期 | 关联 Gate | 备注 |\n"
+    "|------|-----------|------|---------|---------|---------|--------|"
+    "---------|----------|------|\n")
+
+#: 1 problem (REVIEW NEEDS_CHANGE FEAT-102) + 1 closure (APPROVED same
+#: task) + 1 extra closure (EVD ✅ FEAT-103) + one OUT-OF-WINDOW row
+#: (2026-10-01) proving the date filter.
+EVIDENCE_FULL_CLOSURE = _EVIDENCE_HEADER + (
+    "| REVIEW-901 | FEAT-102 | 开发 | 审查 | R0 审查 | p | Claude |"
+    " 2026-10-02 | G8 | NEEDS_CHANGE |\n"
+    "| REVIEW-902 | FEAT-102 | 开发 | 审查 | R1 复审 | p | Claude |"
+    " 2026-10-02 | G8 | APPROVED |\n"
+    "| EVD-901 | FEAT-103 | 开发 | 交付 | 任务收口 | p | Claude |"
+    " 2026-10-02 | G8 | ✅ 完成 |\n"
+    "| REVIEW-903 | FEAT-105 | 开发 | 审查 | 窗口外他日行 | p | Claude |"
+    " 2026-10-01 | G8 | NEEDS_CHANGE |\n")
+
+#: 2 problems, 1 closed — the <100% WARN shape.
+EVIDENCE_PARTIAL_CLOSURE = _EVIDENCE_HEADER + (
+    "| REVIEW-901 | FEAT-102 | 开发 | 审查 | R0 审查 | p | Claude |"
+    " 2026-10-02 | G8 | NEEDS_CHANGE |\n"
+    "| REVIEW-902 | FEAT-102 | 开发 | 审查 | R1 复审 | p | Claude |"
+    " 2026-10-02 | G8 | APPROVED |\n"
+    "| REVIEW-904 | FEAT-104 | 开发 | 审查 | 未复审 | p | Claude |"
+    " 2026-10-02 | G8 | NEEDS_CHANGE |\n")
+
+#: A today-dated RISK row closed the same day (terminal word in the
+#: 备注 tail) + an out-of-window row.
+RISK_LOG_CLOSURE_TERMINAL = """# 风险记录
+
+## 活跃风险
+
+| 编号 | 日期 | 风险/阻塞描述 | 所属阶段 | 触发条件 | 影响 | 严重级别 | Owner | 当前状态 | 缓解动作 | 截止日期 | 关联任务 | 备注 |
+|------|------|--------------|---------|---------|------|---------|-------|---------|---------|---------|---------|------|
+| RISK-910 | 2026-10-02 | 当日风险同日终局 | 维护 | x | y | 中 | Claude | 打开 | 观察 | 2026-10-05 | — | 已关闭（同日终局） |
+| RISK-911 | 2026-10-01 | 窗口外他日风险 | 维护 | x | y | 中 | Claude | 打开 | 观察 | 2026-10-05 | — | 无 |
+"""
+
+
+def _ledger_line(date_str=_CLOSURE_TODAY, row_key="EVD-950",
+                 negative_context_hit=False):
+    """One M2 observation-ledger line, built by the SHAPE SOURCE itself
+    (checks.loop_gate_processor.build_ledger_entry) — the JSONL contract
+    never gets a second fixture-side re-implementation."""
+    from checks import loop_gate_processor as lgp
+    entry = lgp.build_ledger_entry(
+        date_str, "evidence-log.md", "evidence", row_key, 42,
+        "待以后", negative_context_hit)
+    return json.dumps(entry, ensure_ascii=False)
+
+
+LEDGER_FIRED = _ledger_line() + "\n"
+LEDGER_EXEMPT = _ledger_line(row_key="EVD-951",
+                             negative_context_hit=True) + "\n"
+LEDGER_MALFORMED = "{ not-json \n"
+
+SNAPSHOT_WITH_TODAY = "# 会话快照\n\n- 日期：2026-10-02\n- 状态：进行中\n"
+SNAPSHOT_WITHOUT_TODAY = "# 会话快照\n\n- 日期：2026-09-30\n"
+
+
+def _make_closure_fixture(root, evidence=EVIDENCE_FULL_CLOSURE,
+                          risk=RISK_LOG_CLOSURE_TERMINAL, ledger=None,
+                          snapshot=None):
+    """A synthetic .governance tree for the closure-metric faces."""
+    _write_gov(root, "plan-tracker.md", PLAN_TRACKER)
+    _write_gov(root, "evidence-log.md", evidence)
+    _write_gov(root, "risk-log.md", risk)
+    _write_gov(root, "decision-log.md", DECISION_LOG)
+    if ledger is not None:
+        _write_gov(root, ba._CLOSURE_LEDGER_FILENAME, ledger)
+    if snapshot is not None:
+        _write_gov(root, "session-snapshot.md", snapshot)
+
+
+class SessionClosureFaceTests(unittest.TestCase):
+    """FEAT-082 (ADR-021 §3.2.3 B4′): the behavior-face closure metric —
+    Check 42's judgment caliber (SKIP 分态 / 降级标注 / deferred>0 恒不
+    SKIP / 违规前置归零), single-sourced through the imported domain
+    functions."""
+
+    def _face(self, **kwargs):
+        with tempfile.TemporaryDirectory() as tmp:
+            _make_closure_fixture(tmp, **kwargs)
+            return ba.session_closure_face(
+                Path(tmp) / ".governance", today=_CLOSURE_TODAY)
+
+    def test_full_closure_rate_is_1_and_compliant(self):
+        face = self._face()
+        self.assertEqual(face["session_closure_rate"], 1.0)
+        self.assertEqual(face["deferred_detections"], 0)
+        self.assertEqual(face["problems_raised"], 2)   # REVIEW-901 + RISK-910
+        self.assertEqual(face["closed"], 2)
+        self.assertTrue(face["compliant"])
+        self.assertIsNone(face["skip_kind"])
+
+    def test_partial_closure_below_1_judges_not_skips(self):
+        face = self._face(evidence=EVIDENCE_PARTIAL_CLOSURE, risk=RISK_LOG)
+        self.assertEqual(face["session_closure_rate"], 0.5)
+        self.assertEqual(face["problems_raised"], 2)
+        self.assertEqual(face["closed"], 1)
+        self.assertFalse(face["compliant"])
+        # problems_raised > 0 → no SKIP available (live judging face).
+        self.assertIsNone(face["skip_kind"])
+
+    def test_deferred_detection_zeroes_rate_and_never_skips(self):
+        face = self._face(ledger=LEDGER_FIRED)
+        self.assertEqual(face["deferred_detections"], 1)
+        # 违规前置（ADR §3.2.3）: deferred > 0 → rate 0.0 even though
+        # every raised problem closed.
+        self.assertEqual(face["session_closure_rate"], 0.0)
+        self.assertFalse(face["compliant"])
+        # deferred > 0 恒不 SKIP.
+        self.assertIsNone(face["skip_kind"])
+
+    def test_exempted_ledger_hit_is_not_a_detection(self):
+        face = self._face(ledger=LEDGER_EXEMPT)
+        self.assertEqual(face["deferred_detections"], 0)
+        self.assertEqual(face["session_closure_rate"], 1.0)
+
+    def test_vacuum_skip_kind_when_nothing_to_observe(self):
+        face = self._face(evidence="# 证据记录\n", risk="# 风险记录\n")
+        self.assertEqual(face["skip_kind"], "vacuum")
+        self.assertIn("无观测义务", face["skip_reason"])
+        # Trivially compliant vacuum (rate 1.0, deferred 0) still computed
+        # by the single-source function — presented, not guessed.
+        self.assertEqual(face["session_closure_rate"], 1.0)
+        self.assertTrue(face["compliant"])
+
+    def test_orchestration_fallback_nulls_metrics_and_discloses(self):
+        face = self._face(ledger=LEDGER_MALFORMED)
+        self.assertEqual(face["skip_kind"], "orchestration_fallback")
+        # CR-R1-2: numbers off a partial/broken read must not masquerade
+        # as measured — Check 42's fallback branch prints no rate either.
+        self.assertIsNone(face["session_closure_rate"])
+        self.assertIsNone(face["deferred_detections"])
+        self.assertIsNone(face["problems_raised"])
+        self.assertIsNone(face["closed"])
+        self.assertIsNone(face["compliant"])
+        self.assertEqual(face["anomaly"]["kind"], "ledger_parse")
+
+    def test_window_session_when_snapshot_carries_today(self):
+        face = self._face(snapshot=SNAPSHOT_WITH_TODAY)
+        self.assertEqual(face["window"], "session")
+        self.assertIn("window=session", face["window_note"])
+        self.assertIn("会话身份关联", face["window_note"])
+
+    def test_window_daily_aggregate_degradation_is_disclosed(self):
+        face = self._face(snapshot=SNAPSHOT_WITHOUT_TODAY)
+        self.assertEqual(face["window"], "daily-aggregate")
+        # 禁止无标注的静默降级 (ADR §3.2.3 / §2.4 L4).
+        self.assertIn("按日聚合", face["window_note"])
+        self.assertIn("精度降级", face["window_note"])
+
+
+class SessionClosureAggregateTests(unittest.TestCase):
+    """End-to-end wiring: the behavior face gains the closure sub-face
+    (ONE new key; every existing key unchanged), the text face renders
+    the line, budget exhaustion defers the section, and the metric never
+    pretends the health check ran."""
+
+    @staticmethod
+    def _today_fixture_kwargs():
+        today = date.today().isoformat()
+        return {
+            "evidence": EVIDENCE_FULL_CLOSURE.replace(_CLOSURE_TODAY, today),
+            "ledger": LEDGER_FIRED.replace(_CLOSURE_TODAY, today),
+        }
+
+    def test_behavior_face_gains_closure_subface(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _make_closure_fixture(tmp, **self._today_fixture_kwargs())
+            payload = _run_aggregate(tmp)
+        behavior = payload["behavior"]
+        # 向后兼容：既有键零变更（新增键 only）.
+        for key in ("profile", "source", "env_var", "plan_tracker_key",
+                    "reverted", "invariants", "invalid"):
+            self.assertIn(key, behavior)
+        closure = behavior["session_closure"]
+        self.assertEqual(closure["deferred_detections"], 1)
+        self.assertEqual(closure["session_closure_rate"], 0.0)
+        self.assertIsNone(closure["skip_kind"])
+        # 指标呈现 ≠ 健康检查已跑（FEAT-082 验收 2）.
+        self.assertEqual(payload["health"]["state"], "deferred")
+        self.assertIn("check-governance",
+                      payload["health"]["pending_checks"])
+
+    def test_text_face_renders_the_closure_line(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _make_closure_fixture(tmp, **self._today_fixture_kwargs())
+            args = ba.build_arg_parser().parse_args(
+                ["--project-root", tmp, "--format", "text"])
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                ba.cmd_governance_bootstrap(args)
+        lines = buf.getvalue().rstrip("\n").split("\n")
+        self.assertLessEqual(len(lines), 40)
+        closure_lines = [ln for ln in lines
+                         if ln.startswith("session-closure:")]
+        self.assertEqual(len(closure_lines), 1)
+        self.assertIn("deferred 1", closure_lines[0])
+        self.assertIn("rate 0%", closure_lines[0])
+
+    def test_zero_budget_defers_the_closure_section(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _make_closure_fixture(tmp, **self._today_fixture_kwargs())
+            payload = _run_aggregate(tmp, ["--budget-ms", "0"])
+        sections = {d["section"] for d in payload["deferred"]}
+        self.assertIn("behavior.session_closure", sections)
+        for entry in payload["deferred"]:
+            self.assertEqual(entry["reason"], "budget_exhausted")
+        # Fail-safe honesty: the section that never ran is absent.
+        self.assertNotIn("session_closure", payload["behavior"])
+
+
+class SessionClosureMirrorTests(unittest.TestCase):
+    """The collection mirror must match the engine collector
+    tuple-for-tuple, and the face's numbers must equal Check 42's own
+    judgment over the same tree (R0 P0-1 differential discipline for
+    disclosed mirrors — the F-P3-2 second-shape-source lesson made a
+    standing test)."""
+
+    _VARIANTS = {
+        "full": dict(),
+        "partial": dict(evidence=EVIDENCE_PARTIAL_CLOSURE, risk=RISK_LOG),
+        "deferred": dict(ledger=LEDGER_FIRED + LEDGER_EXEMPT),
+        "malformed": dict(ledger=LEDGER_MALFORMED),
+        "snapshot-session": dict(snapshot=SNAPSHOT_WITH_TODAY),
+        "snapshot-stale": dict(snapshot=SNAPSHOT_WITHOUT_TODAY),
+        "vacuum": dict(evidence="# 证据记录\n", risk="# 风险记录\n"),
+    }
+
+    def test_collector_matches_engine_on_every_fixture(self):
+        vw = _import_engine(self)
+        for name, kwargs in self._VARIANTS.items():
+            with tempfile.TemporaryDirectory() as tmp:
+                _make_closure_fixture(tmp, **kwargs)
+                gov = Path(tmp) / ".governance"
+                mine = ba._collect_session_closure_events(
+                    gov, _CLOSURE_TODAY)
+                engine = vw._collect_session_closure_events(
+                    governance_dir=gov, today=_CLOSURE_TODAY)
+            self.assertEqual(
+                mine, engine, "closure-collection mirror drift (%s)" % name)
+
+    def test_face_numbers_equal_check42_judgment_on_same_tree(self):
+        vw = _import_engine(self)
+        from checks.provenance_domain import session_closure_rate
+        from checks.loop_gate_processor import classify_observation_face
+        for name, kwargs in self._VARIANTS.items():
+            with tempfile.TemporaryDirectory() as tmp:
+                _make_closure_fixture(tmp, **kwargs)
+                gov = Path(tmp) / ".governance"
+                face = ba.session_closure_face(gov, _CLOSURE_TODAY)
+                events, _note, state = vw._collect_session_closure_events(
+                    governance_dir=gov, today=_CLOSURE_TODAY)
+            rate = session_closure_rate(events)
+            skip = classify_observation_face(
+                rate["problems_raised"], rate["deferred_detections"],
+                state["anomaly"])
+            expected_skip = skip["skip_kind"] if skip else None
+            self.assertEqual(face["skip_kind"], expected_skip, name)
+            if expected_skip == "orchestration_fallback":
+                continue  # nulled metrics — disclosed, not compared
+            self.assertEqual(
+                face["session_closure_rate"],
+                rate["session_closure_rate"], name)
+            self.assertEqual(
+                face["deferred_detections"],
+                rate["deferred_detections"], name)
+            self.assertEqual(face["problems_raised"],
+                             rate["problems_raised"], name)
+            self.assertEqual(face["closed"], rate["closed"], name)
+            self.assertEqual(face["compliant"], rate["compliant"], name)
 
 
 if __name__ == "__main__":

@@ -2252,6 +2252,52 @@ class HotFactSourceConsistencyTests(unittest.TestCase):
             self._write_snapshot(td, version=latest, session_date="2026-09-27", body=f"{latest} 已发布")
             self.assertEqual(vw._snapshot_fact_source_issues(decorated_plan, plan_path), [])
 
+    # ── FIX-421: Check 28c status-cell parser tolerates decorated tails ──
+
+    def test_fix421_release_fact_parses_decorated_status_cell(self):
+        """FIX-421 red→green: a status cell shaped `**已发布 2026-10-01
+        REL-097（tag …）**` (real 0.93.x roadmap shape) must feed the
+        latest-published fact instead of being dropped by the exact
+        `**已发布**` requirement."""
+        version = self._fix399_next_minor_version()
+        fact = vw._latest_published_release_fact(
+            f"| **{version}** | **已发布 2026-10-01 REL-097（tag v{version}@0e277af，ledger 本地+remote 双 PASS，event integrity sha256:e79cb46b）** | **2026-10-01（taggerdate 2026-10-01 22:44:14 +0800 权威——已回填〔FIX-349〕）** | **装饰状态行** | **tag v{version}** |\n"
+        )
+        self.assertEqual(fact["version"], version)
+        self.assertEqual(fact["date"], date(2026, 10, 1))
+        self.assertEqual(fact["date_text"], "2026-10-01")
+
+    def test_fix421_decorated_status_row_outruns_pure_status_row(self):
+        """FIX-421: the decorated-status row must enter the latest-published
+        competition and outrun the pure-format row — pre-fix the engine fell
+        back to the pure row (the false `latest published release 0.92.0`
+        snapshot FAIL root)."""
+        latest = self._fix399_next_minor_version()
+        fact = vw._latest_published_release_fact(
+            "| **0.92.0** | **已发布** | **2026-09-29（taggerdate 01:54:45 +0800 权威〔FIX-349〕）** | **纯状态行** | **tag v0.92.0** |\n"
+            f"| **{latest}** | **已发布 2026-10-01 REL-097（tag v{latest}@0e277af，ledger 本地+remote 双 PASS，canonicalization 8f6a147）** | **2026-10-01（taggerdate 2026-10-01 22:44:14 +0800 权威——已回填〔FIX-349〕）** | **装饰状态行** | **tag v{latest}** |\n"
+        )
+        self.assertEqual(fact["version"], latest)
+        self.assertEqual(fact["date"], date(2026, 10, 1))
+        self.assertEqual(fact["date_text"], "2026-10-01")
+
+    def test_fix421_snapshot_fact_source_accepts_decorated_status_release_rows(self):
+        """FIX-421 red→green (defect chain): decorated-STATUS released rows
+        must feed the snapshot-latest key — a snapshot recording the latest
+        release must not be FAILed against the stale pure-format row (the
+        real 0.93.1 session-snapshot false FAIL)."""
+        latest = self._fix399_next_minor_version()
+        with tempfile.TemporaryDirectory() as td:
+            plan_path = self._write_plan(td, self._derived_plan_content())
+            decorated_plan = (
+                f"- **工作流版本**: {latest}\n\n"
+                "| **0.92.0** | **已发布** | **2026-09-29（taggerdate 01:54:45 +0800 权威〔FIX-349〕）** | **纯状态行** | **tag v0.92.0** |\n"
+                "| **0.93.0** | **已发布 2026-09-30 REL-096（tag v0.93.0@8107e02，ledger 本地+remote 双 PASS）** | **2026-09-30（taggerdate 2026-09-30 20:41:25 +0800 权威——已回填〔FIX-349〕）** | **装饰状态行** | **tag v0.93.0** |\n"
+                f"| **{latest}** | **已发布 2026-10-01 REL-097（tag v{latest}@0e277af，ledger 本地+remote 双 PASS）** | **2026-10-01（taggerdate 2026-10-01 22:44:14 +0800 权威——已回填〔FIX-349〕）** | **tag v{latest}** |\n"
+            )
+            self._write_snapshot(td, version=latest, session_date="2026-10-01", body=f"{latest} 已发布")
+            self.assertEqual(vw._snapshot_fact_source_issues(decorated_plan, plan_path), [])
+
     # ── FIX-339 R1 repair round (REVIEW-FIX-339-CODE-R0 F-01/F-02/F-05) ──
 
     def test_fix339_r1_rejects_unpublished_claim_when_rel_row_target_misaligned(self):

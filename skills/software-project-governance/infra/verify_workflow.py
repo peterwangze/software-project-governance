@@ -1950,7 +1950,13 @@ FIX_087_REQ_TASKS = {
 # run (real roadmap shapes: `**2026-09-27（M-0 … GO→发布同日）**`), so the
 # capture no longer requires the closing `**` to sit flush after the date —
 # any non-`*` run up to the closing `**` is tolerated.
-FIX_105_SNAPSHOT_RELEASE_VERSION_RE = re.compile(r"\|\s*\*\*(0\.\d+(?:\.\d+)?)\*\*\s*\|\s*\*\*已发布\*\*\s*\|\s*\*\*((?:\d{4}-\d{2}-\d{2})[^*]*)\*\*")
+# FIX-421: the STATUS cell drifted the same way (real 0.93.x shapes:
+# `**已发布 2026-09-30 REL-096（tag …，ledger 双 PASS）**`) — a bold run
+# OPENING with 已发布 plus a decorated tail, no longer the exact literal
+# `**已发布**`. The tail is tolerated with the same non-`*` rule (pure
+# `**已发布**` stays the empty-tail case); the version/date capture groups
+# and the FIX-399 last-date semantics are unchanged.
+FIX_105_SNAPSHOT_RELEASE_VERSION_RE = re.compile(r"\|\s*\*\*(0\.\d+(?:\.\d+)?)\*\*\s*\|\s*\*\*已发布[^*]*\*\*\s*\|\s*\*\*((?:\d{4}-\d{2}-\d{2})[^*]*)\*\*")
 # FIX-339 F-03 registration (REVIEW-FIX-339-CODE-R0): two 工作流版本 parsers
 # coexist on purpose. This strict pattern serves the snapshot face and the
 # real session-snapshot.md format (closed `**工作流版本:**` bold run). The hot

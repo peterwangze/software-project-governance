@@ -344,8 +344,11 @@ STATIC_PIN_EXEMPTIONS = {
         # after B3ProvenanceWiringTests shifted both rows without touching
         # the tokens — rot-guard caught the stale ledger, re-anchored to
         # the actual token lines, same FIX-416/FIX-418 discipline.)
-        (21025, "0.93.0", _REASON_FUTURE_TARGET),
-        (21057, "0.93.0", _REASON_FUTURE_TARGET),
+        # FIX-421 re-anchor +46: the Check 28c status-cell regression tests
+        # inserted after the FIX-399 block shifted both rows below — tokens
+        # unchanged, re-anchored to the actual token lines.
+        (21071, "0.93.0", _REASON_FUTURE_TARGET),
+        (21103, "0.93.0", _REASON_FUTURE_TARGET),
     ],
     # 0.89.0 bump-time rows (the FIX-361 designed double signal): fixture
     # worlds written by the 0.89.0-window tickets (FIX-390/393/394) carrying

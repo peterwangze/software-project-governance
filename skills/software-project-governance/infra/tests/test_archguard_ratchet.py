@@ -538,7 +538,20 @@ class BaselineArtifactTests(unittest.TestCase):
         # the subject loop. Engine print census stays 1338 (zero drift —
         # the function returns data, prints nothing); r2/r6 faces byte-
         # stable in the same regen.
-        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 27213)
+        # FEAT-081 regen (2026-10-01, committed as the B4 M2 rider): anchor
+        # re-anchored 27213 -> 27466 (+253, the B4 M2 词集检测 wiring) but
+        # this frozen literal was left at 27213 — the metadata contract went
+        # red at HEAD (pre-existing failure, caught while attributing the
+        # FIX-421 rider). The FEAT-081 window also left the R4 census at a
+        # measured 1341 vs the FACTS_PRINT_TOTAL 1338 chain (+3 unattributed
+        # print sites — registered for its own attribution ticket).
+        # FIX-421 rider re-anchor (2026-10-02): 27466 -> 27472, +6/-0
+        # measured split — all six lines are the FIX-421 comment block above
+        # FIX_105_SNAPSHOT_RELEASE_VERSION_RE (the regex change itself is
+        # line-count-neutral). Engine print census stays 1341 (zero drift —
+        # FIX-421 adds zero print sites); r2/r6 faces byte-stable in the
+        # same regen.
+        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 27472)
 
     def test_authored_zone_survives_regen(self):
         existing = _committed_baseline()

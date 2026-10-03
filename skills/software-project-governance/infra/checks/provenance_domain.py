@@ -11,7 +11,7 @@ sub-check, and the 闭环率指标 face) is B3/B4 scope and lives in
 NOT hardcoded here (编号随 ADR 返工重编) — anchors are ADR-021 §2.2
 section references.
 
-Three functions (each anchored to its ADR section):
+Four functions (each anchored to its ADR section):
 
   - :func:`check_priority_inversion` — ADR-021 §2.2.3 反倒挂判定
     (Priority Inversion Guard): INV-1 (a machine-signal item ranked above

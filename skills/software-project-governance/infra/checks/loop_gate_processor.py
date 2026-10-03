@@ -45,7 +45,10 @@ deferred signal suppresses SKIP entirely (the rate-zeroing path).
 
 Purity contract (provenance_domain discipline): stdlib only; this module
 NEVER imports ``verify_workflow`` — the engine consumes the domain, never
-the reverse. All I/O (ledger file read/append) stays with the engine.
+the reverse. No I/O lives here: ledger appends (writes) stay with the
+engine, while ledger reads live in the shared leaf
+``provenance_domain.read_deferred_ledger_events`` (FEAT-083), which
+reuses this module's pure parsers via a function-local import.
 """
 
 from __future__ import annotations

@@ -1,0 +1,29 @@
+diff --git a/skills/software-project-governance/infra/checks/loop_gate_processor.py b/skills/software-project-governance/infra/checks/loop_gate_processor.py
+index 70d4fbf..f168e2c 100644
+--- a/skills/software-project-governance/infra/checks/loop_gate_processor.py
++++ b/skills/software-project-governance/infra/checks/loop_gate_processor.py
+@@ -45,7 +45,10 @@ deferred signal suppresses SKIP entirely (the rate-zeroing path).
+ 
+ Purity contract (provenance_domain discipline): stdlib only; this module
+ NEVER imports ``verify_workflow`` — the engine consumes the domain, never
+-the reverse. All I/O (ledger file read/append) stays with the engine.
++the reverse. No I/O lives here: ledger appends (writes) stay with the
++engine, while ledger reads live in the shared leaf
++``provenance_domain.read_deferred_ledger_events`` (FEAT-083), which
++reuses this module's pure parsers via a function-local import.
+ """
+ 
+ from __future__ import annotations
+diff --git a/skills/software-project-governance/infra/checks/provenance_domain.py b/skills/software-project-governance/infra/checks/provenance_domain.py
+index c995391..c550887 100644
+--- a/skills/software-project-governance/infra/checks/provenance_domain.py
++++ b/skills/software-project-governance/infra/checks/provenance_domain.py
+@@ -11,7 +11,7 @@ sub-check, and the 闭环率指标 face) is B3/B4 scope and lives in
+ NOT hardcoded here (编号随 ADR 返工重编) — anchors are ADR-021 §2.2
+ section references.
+ 
+-Three functions (each anchored to its ADR section):
++Four functions (each anchored to its ADR section):
+ 
+   - :func:`check_priority_inversion` — ADR-021 §2.2.3 反倒挂判定
+     (Priority Inversion Guard): INV-1 (a machine-signal item ranked above

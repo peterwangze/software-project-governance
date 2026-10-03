@@ -1,0 +1,123 @@
+diff --git a/skills/software-project-governance/infra/tests/test_provenance_domain.py b/skills/software-project-governance/infra/tests/test_provenance_domain.py
+index afc056e..280f465 100644
+--- a/skills/software-project-governance/infra/tests/test_provenance_domain.py
++++ b/skills/software-project-governance/infra/tests/test_provenance_domain.py
+@@ -521,5 +521,118 @@ class TaskPriorityIntegrationTests(unittest.TestCase):
+         self.assertEqual(result["coverage"]["labeled"], 3)
+ 
+ 
++# ─── source pinning — docstring 口径机器拦截 (FIX-426, 裁决②) ─────────────────
++
++
++class ProvenanceDocstringBulletPinningTests(unittest.TestCase):
++    """provenance_domain module-docstring bullet list pinned to the module.
++
++    FIX-426 (review-FIX-425-CODE-R0 裁决②): the docstring-calibre drift
++    family consumed three review cycles (FEAT-083 R0 P3-1 stale count →
++    FIX-424 fix → FIX-425 裁决① execution). This turns the recurring
++    review finding into a machine interception: the module docstring's
++    function bullet list is pinned to the module surface.
++
++    Falsifiability (which drifts turn this red — the parser is
++    deliberately coupled to the docstring's CURRENT bullet structure,
++    same source-pinning discipline as test_mirror_is_fully_retired):
++      - adding a 5th ``:func:`` bullet without updating the count word
++        ("Four functions") → count-vs-bullets mismatch;
++      - a typo in a bullet's :func: name (e.g. ``check_priority_inversionz``)
++        → name not found on the module;
++      - moving a bullet function out of ``__all__`` → not-exported;
++      - reformatting the bullet lines (dropping the ``- :func:`` prefix)
++        → zero bullets parsed, the parser must be resynced with the
++        docstring (structure change = forced test update, never silent).
++    """
++
++    _WORD_COUNTS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
++                    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
++
++    @staticmethod
++    def _bullet_names():
++        # re is function-local here (the task-priority integration test's
++        # precedent, L504) so this pin adds ZERO line shifts to the file's
++        # existing body — the static-version-pin exemption at L342 (token
++        # "0.93.0", DEC-213) stays anchored to its registered line.
++        import re
++        doc = pd.__doc__ or ""
++        return re.findall(r"^\s*-\s+:func:`([^`]+)`", doc, re.MULTILINE)
++
++    def test_bullet_func_names_exist_on_module_and_in_all(self):
++        names = self._bullet_names()
++        self.assertTrue(
++            names, "no :func: bullets parsed from the module docstring — "
++            "docstring reformat or parser drift (FIX-426 pin)")
++        for name in names:
++            self.assertTrue(
++                hasattr(pd, name),
++                "docstring bullet :func:`%s` does not exist on the module "
++                "(name typo / drift — FIX-426 pin)" % name)
++            self.assertIn(
++                name, pd.__all__,
++                "docstring bullet :func:`%s` is not in __all__ (moved out "
++                "of the export face — FIX-426 pin)" % name)
++
++    def test_count_word_matches_bullet_count(self):
++        import re
++        doc = pd.__doc__ or ""
++        names = self._bullet_names()
++        match = re.search(
++            r"\b(One|Two|Three|Four|Five|Six|Seven|Eight|Nine|Ten)"
++            r"\s+functions\b", doc)
++        self.assertIsNotNone(
++            match, "no '<N> functions' count word in the module docstring "
++            "— docstring reformat or parser drift (FIX-426 pin)")
++        claimed = self._WORD_COUNTS[match.group(1).lower()]
++        self.assertEqual(
++            claimed, len(names),
++            "docstring claims %d function(s) ('%s functions') but lists "
++            "%d :func: bullet(s) — stale count word (the FEAT-083 R0 P3-1 "
++            "drift shape this test exists to intercept)" % (
++                claimed, match.group(1), len(names)))
++
++
++class LoopGateProcessorIoFreePinningTests(unittest.TestCase):
++    """loop_gate_processor's「No I/O lives here」claim made machine-forced.
++
++    FIX-426 (review-FIX-425-CODE-R0 裁决②): the FIX-424 docstring posture
++    claim is pinned by source scan (test_mirror_is_fully_retired
++    assertNotIn discipline). Falsifiability: any ``open(`` / ``read_text(``
++    / ``.write(`` appearing anywhere in the file's text — code, comment
++    or docstring — turns this red; the module-level import face is pinned
++    via ast to the disclosed minimal stdlib set (``__future__``/json/re),
++    so a new module-level import must resync the purity-contract claim.
++    """
++
++    def test_source_contains_no_io_patterns(self):
++        source = (_INFRA_DIR / "checks" / "loop_gate_processor.py").read_text(
++            encoding="utf-8")
++        for pattern in ("open(", "read_text(", ".write("):
++            self.assertNotIn(
++                pattern, source,
++                "I/O pattern %r in loop_gate_processor.py — the docstring "
++                "claims 'No I/O lives here' (FIX-424); move the I/O to the "
++                "engine/shared leaf or update the claim (FIX-426 pin)"
++                % pattern)
++
++    def test_module_level_import_face_is_minimal_stdlib(self):
++        import ast
++        source = (_INFRA_DIR / "checks" / "loop_gate_processor.py").read_text(
++            encoding="utf-8")
++        tree = ast.parse(source)
++        roots = set()
++        for node in tree.body:
++            if isinstance(node, ast.Import):
++                roots.update(alias.name for alias in node.names)
++            elif isinstance(node, ast.ImportFrom):
++                roots.add(node.module or "")
++        self.assertEqual(
++            roots, {"__future__", "json", "re"},
++            "module-level import face drifted from the disclosed minimal "
++            "stdlib set (docstring purity contract: stdlib only, no I/O — "
++            "FIX-426 pin)")
++
++
+ if __name__ == "__main__":
+     unittest.main()

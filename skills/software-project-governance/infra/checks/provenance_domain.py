@@ -3,7 +3,9 @@
 
 Pure judgement pieces for the M1 优先级执法底层机制 (ADR-021
 meta-mechanisms, DEC-288 Wave1). Delivered as the **unwired B2 half-batch**:
-every function here is a pure predicate; the enforcement WIRING (the
+the judgement functions here are pure predicates; FEAT-083 appends one
+disclosed file-reading collection core (see the purity contract below);
+the enforcement WIRING (the
 check-governance 反倒挂判定 box, the ``check_release_readiness``
 sub-check, and the 闭环率指标 face) is B3/B4 scope and lives in
 ``verify_workflow.py`` — **locked by FIX-404 at delivery time (ADR-021
@@ -32,12 +34,13 @@ Four functions (each anchored to its ADR section):
     deferred-registration zeroing precondition; the machine-checkable form
     is ``session_closure_rate == 1.0 ∧ deferred_detections == 0``.
   - :func:`collect_session_closure_events` — the shared W(session)
-    event-collection core (FEAT-083): the evidence/risk row arms, the
-    deferred-ledger arm and the window note, consumed by BOTH the engine's
-    Check 42 (via thin delegation) and the bootstrap aggregate's
-    ``behavior.session_closure`` sub-face. Retires the FEAT-082 disclosed
-    bootstrap mirror (~150 duplicated lines) — one source, zero second
-    implementation (review-FEAT-082-CODE-R0 §6.3 / DEC-302 附带勘误).
+    event-collection core (FEAT-083) — ADR-021 §3.2.3 (W(session)): the
+    evidence/risk row arms, the deferred-ledger arm and the window note,
+    consumed by BOTH the engine's Check 42 (via thin delegation) and the
+    bootstrap aggregate's ``behavior.session_closure`` sub-face. Retires
+    the FEAT-082 disclosed bootstrap mirror (~150 duplicated lines) —
+    one source, zero second implementation (review-FEAT-082-CODE-R0
+    §6.3 / DEC-302 附带勘误).
 
 Purity contract: this module imports only the standard library plus the
 peer pure module :mod:`task_priority` (the demand-source vocabulary) — it

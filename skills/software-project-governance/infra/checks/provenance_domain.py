@@ -31,12 +31,23 @@ Three functions (each anchored to its ADR section):
     effectiveness criterion, DEC-288): in-session closure rate with the
     deferred-registration zeroing precondition; the machine-checkable form
     is ``session_closure_rate == 1.0 ∧ deferred_detections == 0``.
+  - :func:`collect_session_closure_events` — the shared W(session)
+    event-collection core (FEAT-083): the evidence/risk row arms, the
+    deferred-ledger arm and the window note, consumed by BOTH the engine's
+    Check 42 (via thin delegation) and the bootstrap aggregate's
+    ``behavior.session_closure`` sub-face. Retires the FEAT-082 disclosed
+    bootstrap mirror (~150 duplicated lines) — one source, zero second
+    implementation (review-FEAT-082-CODE-R0 §6.3 / DEC-302 附带勘误).
 
 Purity contract: this module imports only the standard library plus the
 peer pure module :mod:`task_priority` (the demand-source vocabulary) — it
 NEVER imports ``verify_workflow`` (wiring stays one-way: the engine
 consumes the domain, never the reverse; same discipline as
-``checks/snapshot_domain.py`` / ``checks/gate_domain.py``).
+``checks/snapshot_domain.py`` / ``checks/gate_domain.py``). FEAT-083 adds
+ONE disclosed file-reading collector at the bottom of this module (the
+shared closure-event collection core); its ``loop_gate_processor``
+dependency rides a FUNCTION-LOCAL import, so the module-level import face
+stays stdlib + task_priority.
 
 Row contract (shared by the two task-row judgements; mirrors the
 :class:`task_priority.PriorityReport` bucket vocabulary so the B3 wiring
@@ -61,6 +72,7 @@ staged fail-closed row below governs the all-legacy board.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 from task_priority import DEMAND_SOURCE_VALUES
 
@@ -70,6 +82,12 @@ __all__ = [
     "check_priority_inversion",
     "check_release_admission",
     "session_closure_rate",
+    "CLOSURE_LEDGER_FILENAME",
+    "RISK_TERMINAL_WORDS",
+    "closure_evidence_events",
+    "closure_risk_events",
+    "read_deferred_ledger_events",
+    "collect_session_closure_events",
 ]
 
 # PriorityReport bucket vocabulary (task_priority.PriorityReport fields).
@@ -467,3 +485,205 @@ def session_closure_rate(events) -> dict:
         "session_closure_rate": rate,
         "compliant": compliant,
     }
+
+
+# ── session-closure event collection (FEAT-083, ADR-021 §3.2.3) ──────────────
+#
+# The W(session) collection core BOTH consumers call — the engine's Check 42
+# (verify_workflow's ``_collect_session_closure_events`` is a thin
+# delegation to :func:`collect_session_closure_events`) and the bootstrap
+# aggregate's ``behavior.session_closure`` sub-face
+# (``bootstrap_aggregate.session_closure_face``). FEAT-083 retires the
+# FEAT-082 disclosed bootstrap mirror (~150 duplicated lines guarded by a
+# tuple-for-tuple differential test — review-FEAT-082-CODE-R0 §6.3,
+# DEC-302 附带勘误): one source, zero second implementation, the
+# differential test converted to interface-equivalence + single-source
+# assertions. Engine-free by construction: this leaf reads the governance
+# tree directly and never imports verify_workflow; the ledger arm's JSONL
+# parsing/event shaping reuses ``checks.loop_gate_processor`` via a
+# FUNCTION-LOCAL import (the R6 cold-import discipline), so this module's
+# module-level import face stays stdlib + task_priority.
+
+#: The guard-owned M2 observation ledger filename — the storage contract
+#: this READER shares with the write-guard CLI face (verify_workflow's
+#: writer, aliased there as ``_DEFERRED_LEDGER_FILENAME``; the two values
+#: are pinned equal by the FEAT-083 interface-equivalence tests).
+CLOSURE_LEDGER_FILENAME = ".write-guard-deferred-ledger.jsonl"
+
+#: ADR-021 §3.2.2 终局三选一 (「维持待复评」非法) — the RISK closure word
+#: set. Matched against the 当前状态 + 备注 columns only (never 缓解 prose,
+#: which routinely contains 「关闭」 as part of mitigation narrative).
+RISK_TERMINAL_WORDS = ("关闭", "收窄", "升级")
+
+
+def closure_evidence_events(text, today):
+    """Evidence-log arm (pure): deterministic COLUMN matching.
+
+    REVIEW rows (date column == ``today``): NEEDS_CHANGE/BLOCKED →
+    problem(task) — BLOCKED joined NEEDS_CHANGE as the not-passed review
+    terminals in FIX-405 (复审必达 state machine: both owe a later
+    terminal pairing); APPROVED* → closure(task). EVD rows dated
+    ``today`` with ``✅`` in the 备注 column → closure(task). Out-of-window
+    rows never contribute. Never raises.
+    """
+    events = []
+    for line in str(text or "").splitlines():
+        cells = [cell.strip() for cell in line.split("|")]
+        if len(cells) < 11 or cells[0] or not cells[1]:
+            continue
+        row_id, task = cells[1], cells[2]
+        row_date, status = cells[8], cells[10]
+        if row_date != today:
+            continue
+        if row_id.startswith("REVIEW-"):
+            if status in ("NEEDS_CHANGE", "BLOCKED"):
+                events.append({"id": task, "kind": "problem"})
+            elif status.startswith("APPROVED"):
+                events.append({"id": task, "kind": "closure"})
+        elif row_id.startswith("EVD-") and "✅" in status:
+            events.append({"id": task, "kind": "closure"})
+    return events
+
+
+def closure_risk_events(text, today):
+    """Risk-log arm (pure): deterministic COLUMN matching.
+
+    Every RISK row dated ``today`` raises a problem(RISK-id); a terminal
+    word (:data:`RISK_TERMINAL_WORDS`) in the 当前状态+备注 tail adds the
+    same-day closure (ADR-021 §3.2.2 终局三选一 pairing). Never raises.
+    """
+    events = []
+    for line in str(text or "").splitlines():
+        cells = [cell.strip() for cell in line.split("|")]
+        if len(cells) < 11 or cells[0] or not cells[1].startswith("RISK-"):
+            continue
+        risk_id, row_date = cells[1], cells[2]
+        if row_date != today:
+            continue
+        events.append({"id": risk_id, "kind": "problem"})
+        status_tail = cells[9] + (cells[13] if len(cells) > 13 else "")
+        if any(word in status_tail for word in RISK_TERMINAL_WORDS):
+            events.append({"id": risk_id, "kind": "closure"})
+    return events
+
+
+def read_deferred_ledger_events(governance_dir, today):
+    """Ledger arm: the M2 observation ledger → ``(events, anomaly)``.
+
+    Fired ``deferred_hit`` entries dated ``today`` become
+    ``deferred_registration`` events (the REAL signal path that makes the
+    DEC-288 conjunct non-trivially satisfiable — CR-R1-1). A MISSING file
+    is not an anomaly (the guard simply never recorded on this host —
+    vacuum); an unreadable or malformed line IS one (fail-closed
+    disclosure: a broken detection data path must never masquerade as a
+    measured zero — CR-R1-2 orchestration fallback). Entries before a bad
+    line are still counted (conservative direction: 宁可披露不可静默).
+    Never raises.
+    """
+    from checks.loop_gate_processor import (
+        deferred_events_from_entries,
+        parse_ledger_line,
+    )
+    events = []
+    anomaly = None
+    path = Path(governance_dir) / CLOSURE_LEDGER_FILENAME
+    if not path.is_file():
+        return events, anomaly
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError) as exc:
+        return events, {"kind": "ledger_read", "reason": str(exc)}
+    entries = []
+    bad_lines = 0
+    for line in lines:
+        if not line.strip():
+            continue
+        parsed, error = parse_ledger_line(line)
+        if error is not None:
+            bad_lines += 1
+            continue
+        entries.append(parsed)
+    events = deferred_events_from_entries(entries, today)
+    if bad_lines:
+        anomaly = {
+            "kind": "ledger_parse",
+            "reason": "{0} bad line(s) in {1}".format(
+                bad_lines, CLOSURE_LEDGER_FILENAME),
+        }
+    return events, anomaly
+
+
+def collect_session_closure_events(governance_dir, today=None):
+    """W(session) event collection for Check 42 / the closure sub-face.
+
+    FEAT-080 / ADR-021 §3.2.3, FEAT-083 single source: the evidence/risk
+    row arms (:func:`closure_evidence_events` /
+    :func:`closure_risk_events` — deterministic COLUMN matching, never
+    semantic guessing), the deferred-ledger arm
+    (:func:`read_deferred_ledger_events` — FEAT-081 B4: the deferred count
+    is a REAL signal now, not a structural zero) and the window note. A
+    session-snapshot carrying today's date upgrades the note to session
+    identity; otherwise the note discloses the 按日聚合 degradation
+    explicitly — never a silent degrade (ADR-021 §3.2.3 / §2.4 L4).
+
+    Returns ``(events, window_note, face_state)`` — ``face_state`` carries
+    the CR-R1-2 SKIP 分态 inputs: ``anomaly`` (ledger read/parse failure,
+    or an evidence/risk row-family read failure — an orchestration
+    fallback, never a silent vacuum) and ``deferred_detections`` (today's
+    fired count). Never raises.
+
+    Unlike the judgement pieces above, this ONE function reads the
+    governance tree (the disclosed file-reading collector — FEAT-083).
+    ``governance_dir`` is required: the engine-side
+    ``governance_dir=None → GOVERNANCE_DIR`` default belongs to the
+    caller because this leaf must stay engine-global-free.
+    """
+    from datetime import date as _date_cls
+    today = today or _date_cls.today().isoformat()
+    gov = Path(governance_dir)
+    events = []
+    read_failures = []
+    evidence_path = gov / "evidence-log.md"
+    if evidence_path.is_file():
+        try:
+            evidence_text = evidence_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            read_failures.append(
+                "evidence-log.md unreadable ({0})".format(exc))
+        else:
+            events.extend(closure_evidence_events(evidence_text, today))
+    risk_path = gov / "risk-log.md"
+    if risk_path.is_file():
+        try:
+            risk_text = risk_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            read_failures.append(
+                "risk-log.md unreadable ({0})".format(exc))
+        else:
+            events.extend(closure_risk_events(risk_text, today))
+    deferred_events, ledger_anomaly = read_deferred_ledger_events(
+        gov, today)
+    events.extend(deferred_events)
+    anomaly = ledger_anomaly
+    if anomaly is None and read_failures:
+        anomaly = {"kind": "row_read", "reason": "; ".join(read_failures)}
+    snapshot_path = gov / "session-snapshot.md"
+    snapshot_text = ""
+    if snapshot_path.is_file():
+        try:
+            snapshot_text = snapshot_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            snapshot_text = ""
+    if today in snapshot_text:
+        window_note = ("window=session（session-snapshot 会话身份关联，"
+                       "{0}）".format(today))
+    else:
+        window_note = (
+            "window=daily-aggregate（按日聚合，同日多会话合并，精度降级——"
+            "session-snapshot 未携带 {0}；禁止无标注的静默降级，"
+            "ADR-021 §3.2.3 / §2.4 L4）".format(today))
+    face_state = {
+        "anomaly": anomaly,
+        "deferred_detections": len(deferred_events),
+    }
+    return events, window_note, face_state

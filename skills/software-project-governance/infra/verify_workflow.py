@@ -7336,161 +7336,24 @@ def _provenance_rows_for_governance(tracker_path=None, governance_dir=None):
     return _provenance_rows_from_report(report)
 
 
-# ADR-021 §3.2.2 终局三选一 (「维持待复评」非法) — the RISK closure word
-# set. Matched against the 当前状态 + 备注 columns only (never 缓解 prose,
-# which routinely contains 「关闭」 as part of mitigation narrative).
-_RISK_TERMINAL_WORDS = ("关闭", "收窄", "升级")
-
-
-def _read_deferred_ledger_events(governance_dir, today):
-    """FEAT-081 B4: read the M2 observation ledger → ``(events, anomaly)``.
-
-    Fired ``deferred_hit`` entries dated ``today`` become Check 42
-    ``deferred_registration`` events (the REAL signal path that makes the
-    DEC-288 conjunct non-trivially satisfiable — CR-R1-1). A MISSING file
-    is not an anomaly (the guard simply never recorded on this host —
-    vacuum); an unreadable or malformed line IS one (fail-closed
-    disclosure: a broken detection data path must never masquerade as a
-    measured zero — CR-R1-2 orchestration fallback). Entries before a bad
-    line are still counted (conservative direction: 宁可披露不可静默).
-    Never raises.
-    """
-    events = []
-    anomaly = None
-    path = Path(governance_dir) / _DEFERRED_LEDGER_FILENAME
-    if not path.is_file():
-        return events, anomaly
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except (OSError, UnicodeDecodeError) as exc:
-        return events, {"kind": "ledger_read", "reason": str(exc)}
-    from checks import loop_gate_processor as lgp
-    entries = []
-    bad_lines = 0
-    for line in lines:
-        if not line.strip():
-            continue
-        parsed, error = lgp.parse_ledger_line(line)
-        if error is not None:
-            bad_lines += 1
-            continue
-        entries.append(parsed)
-    events = lgp.deferred_events_from_entries(entries, today)
-    if bad_lines:
-        anomaly = {
-            "kind": "ledger_parse",
-            "reason": "{0} bad line(s) in {1}".format(
-                bad_lines, _DEFERRED_LEDGER_FILENAME),
-        }
-    return events, anomaly
-
-
 def _collect_session_closure_events(governance_dir=None, today=None):
-    """FEAT-080 / ADR-021 §3.2.3: W(session) event collection for Check 42.
+    """FEAT-083: thin delegation to the shared collection leaf.
 
-    Deterministic COLUMN matching over the evidence/risk row families —
-    never semantic guessing:
-
-      - REVIEW rows (evidence-log, date column == today): NEEDS_CHANGE →
-        problem(task); APPROVED* → closure(task) (复审必达 pairing).
-      - EVD rows: a ✅ status → closure(task) (task 收口行).
-      - RISK rows (risk-log, 日期 == today): new row → problem(RISK-id);
-        a terminal word (关闭/收窄/升级) in 当前状态/备注 → closure.
-      - deferred_registration events (FEAT-081 B4): collected from the
-        guard's M2 observation ledger — fired deferred_hit entries dated
-        today (_read_deferred_ledger_events; the B4-era "collector reports
-        0 for that kind" note is retired — the detection face now
-        produces them).
-
-    Window (ADR-021 §3.2.3 / L4): a session-snapshot carrying today's date
-    upgrades the window note to session identity; otherwise the note
-    discloses the 按日聚合 degradation explicitly — never a silent degrade.
-
-    Returns ``(events, note, face_state)`` — ``face_state`` carries the
-    CR-R1-2 SKIP 分态 inputs: ``anomaly`` (ledger read/parse failure, or
-    an evidence/risk row-family read failure — an orchestration fallback,
-    never a silent vacuum) and ``deferred_detections`` (today's fired
-    count). Never raises.
+    The W(session) collection core (the evidence/risk row arms, the
+    deferred-ledger arm, the window note) lives in
+    ``checks.provenance_domain.collect_session_closure_events`` — engine
+    (Check 42) and bootstrap (the behavior.session_closure sub-face) both
+    consume that ONE source; the FEAT-082 bootstrap mirror is retired
+    (zero second implementation — review-FEAT-082-CODE-R0 §6.3). The
+    legacy signature is preserved (Check 42 + the FEAT-080/081 test call
+    sites unchanged), including the ``governance_dir=None →
+    GOVERNANCE_DIR`` default the leaf cannot own (it must stay
+    engine-global-free); the delegation import is FUNCTION-LOCAL so the
+    frozen cold-import face (ArchGuard R6) is untouched.
     """
-    from datetime import date as _date_cls
-    gov = Path(governance_dir) if governance_dir else GOVERNANCE_DIR
-    today = today or _date_cls.today().isoformat()
-    events = []
-    read_failures = []
-    evidence_path = gov / "evidence-log.md"
-    if evidence_path.is_file():
-        try:
-            evidence_lines = evidence_path.read_text(
-                encoding="utf-8").splitlines()
-        except (OSError, UnicodeDecodeError) as exc:
-            evidence_lines = []
-            read_failures.append(
-                "evidence-log.md unreadable ({0})".format(exc))
-        for line in evidence_lines:
-            cells = [cell.strip() for cell in line.split("|")]
-            if len(cells) < 11 or cells[0] or not cells[1]:
-                continue
-            row_id, task = cells[1], cells[2]
-            row_date, status = cells[8], cells[10]
-            if row_date != today:
-                continue
-            if row_id.startswith("REVIEW-"):
-                # B4-3 (FIX-405 batch): BLOCKED joins NEEDS_CHANGE as the
-                # not-passed review terminals (复审必达 state machine — both
-                # are 未通过终态; ADR-021 §3.2.2 session pairing owes each a
-                # later terminal pairing).
-                if status in ("NEEDS_CHANGE", "BLOCKED"):
-                    events.append({"id": task, "kind": "problem"})
-                elif status.startswith("APPROVED"):
-                    events.append({"id": task, "kind": "closure"})
-            elif row_id.startswith("EVD-") and "✅" in status:
-                events.append({"id": task, "kind": "closure"})
-    risk_path = gov / "risk-log.md"
-    if risk_path.is_file():
-        try:
-            risk_lines = risk_path.read_text(encoding="utf-8").splitlines()
-        except (OSError, UnicodeDecodeError) as exc:
-            risk_lines = []
-            read_failures.append("risk-log.md unreadable ({0})".format(exc))
-        for line in risk_lines:
-            cells = [cell.strip() for cell in line.split("|")]
-            if len(cells) < 11 or cells[0] or not cells[1].startswith("RISK-"):
-                continue
-            risk_id, row_date = cells[1], cells[2]
-            if row_date != today:
-                continue
-            events.append({"id": risk_id, "kind": "problem"})
-            status_tail = cells[9] + (cells[13] if len(cells) > 13 else "")
-            if any(word in status_tail for word in _RISK_TERMINAL_WORDS):
-                events.append({"id": risk_id, "kind": "closure"})
-    deferred_events, ledger_anomaly = _read_deferred_ledger_events(gov, today)
-    events.extend(deferred_events)
-    anomaly = ledger_anomaly
-    if anomaly is None and read_failures:
-        anomaly = {
-            "kind": "row_read",
-            "reason": "; ".join(read_failures),
-        }
-    snapshot_path = gov / "session-snapshot.md"
-    window_note = None
-    if snapshot_path.is_file():
-        try:
-            snapshot_text = snapshot_path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            snapshot_text = ""
-        if today in snapshot_text:
-            window_note = (f"window=session（session-snapshot 会话身份关联，"
-                           f"{today}）")
-    if window_note is None:
-        window_note = (
-            "window=daily-aggregate（按日聚合，同日多会话合并，精度降级——"
-            f"session-snapshot 未携带 {today}；禁止无标注的静默降级，"
-            "ADR-021 §3.2.3 / §2.4 L4）")
-    face_state = {
-        "anomaly": anomaly,
-        "deferred_detections": len(deferred_events),
-    }
-    return events, window_note, face_state
+    from checks.provenance_domain import collect_session_closure_events
+    return collect_session_closure_events(
+        governance_dir if governance_dir else GOVERNANCE_DIR, today=today)
 
 
 def check_release_readiness(

@@ -568,7 +568,16 @@ class BaselineArtifactTests(unittest.TestCase):
         # scope→quick normalization branch (+5, incl. comment). Engine print
         # census stays 1341 (zero drift — FEAT-084 adds zero print sites);
         # r2/r6 faces byte-stable in the same regen.
-        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 27489)
+        # FEAT-083 rider re-anchor (2026-10-03): 27489 -> 27352, -137 net —
+        # the closure-collection core (evidence/risk row arms + the
+        # deferred-ledger arm + the window note, ~155 lines) moved to
+        # checks/provenance_domain as the shared leaf both the engine's
+        # Check 42 and the bootstrap sub-face consume; the engine keeps a
+        # thin delegation (+18, function-local import — the frozen cold
+        # face is untouched, R6 stays 205/Δ0). Engine print census stays
+        # 1341 (zero drift — the delegation prints nothing); r2 face
+        # byte-stable in the same regen (47 sites across 37 files).
+        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 27352)
 
     def test_authored_zone_survives_regen(self):
         existing = _committed_baseline()

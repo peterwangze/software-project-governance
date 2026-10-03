@@ -926,12 +926,15 @@ def _make_closure_fixture(root, evidence=EVIDENCE_FULL_CLOSURE,
                           risk=RISK_LOG_CLOSURE_TERMINAL, ledger=None,
                           snapshot=None):
     """A synthetic .governance tree for the closure-metric faces."""
+    # FEAT-083: the ledger filename is single-sourced from the shared
+    # collection leaf (the bootstrap mirror constant is retired).
+    from checks.provenance_domain import CLOSURE_LEDGER_FILENAME
     _write_gov(root, "plan-tracker.md", PLAN_TRACKER)
     _write_gov(root, "evidence-log.md", evidence)
     _write_gov(root, "risk-log.md", risk)
     _write_gov(root, "decision-log.md", DECISION_LOG)
     if ledger is not None:
-        _write_gov(root, ba._CLOSURE_LEDGER_FILENAME, ledger)
+        _write_gov(root, CLOSURE_LEDGER_FILENAME, ledger)
     if snapshot is not None:
         _write_gov(root, "session-snapshot.md", snapshot)
 
@@ -1014,6 +1017,11 @@ class SessionClosureFaceTests(unittest.TestCase):
         # 禁止无标注的静默降级 (ADR §3.2.3 / §2.4 L4).
         self.assertIn("按日聚合", face["window_note"])
         self.assertIn("精度降级", face["window_note"])
+        # F-P3-3 (review-FEAT-082-CODE-R0 §五): the dedicated wider clip
+        # (160) keeps the FULL degradation note — the ADR anchor no
+        # longer truncates mid-citation.
+        self.assertIn("禁止无标注的静默降级", face["window_note"])
+        self.assertIn("ADR-021 §3.2.3 / §2.4 L4", face["window_note"])
 
 
 class SessionClosureAggregateTests(unittest.TestCase):
@@ -1035,10 +1043,13 @@ class SessionClosureAggregateTests(unittest.TestCase):
             _make_closure_fixture(tmp, **self._today_fixture_kwargs())
             payload = _run_aggregate(tmp)
         behavior = payload["behavior"]
-        # 向后兼容：既有键零变更（新增键 only）.
-        for key in ("profile", "source", "env_var", "plan_tracker_key",
-                    "reverted", "invariants", "invalid"):
-            self.assertIn(key, behavior)
+        # 向后兼容 + FEAT-082「新增键 only」的严格形态（F-P3-2b：存在性
+        # 断言升级为键集合相等——behavior 平键集 = FEAT-040 冻结面，恰 1
+        # 个新增嵌套子面）.
+        self.assertEqual(
+            set(behavior),
+            {"profile", "source", "env_var", "plan_tracker_key",
+             "reverted", "invariants", "invalid", "session_closure"})
         closure = behavior["session_closure"]
         self.assertEqual(closure["deferred_detections"], 1)
         self.assertEqual(closure["session_closure_rate"], 0.0)
@@ -1076,12 +1087,17 @@ class SessionClosureAggregateTests(unittest.TestCase):
         self.assertNotIn("session_closure", payload["behavior"])
 
 
-class SessionClosureMirrorTests(unittest.TestCase):
-    """The collection mirror must match the engine collector
-    tuple-for-tuple, and the face's numbers must equal Check 42's own
-    judgment over the same tree (R0 P0-1 differential discipline for
-    disclosed mirrors — the F-P3-2 second-shape-source lesson made a
-    standing test)."""
+class SessionClosureSingleSourceTests(unittest.TestCase):
+    """FEAT-083: the FEAT-082 disclosed mirror is RETIRED — engine
+    (Check 42's thin delegation) and bootstrap (the behavior sub-face)
+    both consume checks.provenance_domain's collector, so the
+    bidirectional differential is converted to INTERFACE-EQUIVALENCE +
+    SINGLE-SOURCE assertions (review-FEAT-082-CODE-R0 §6.3). The two
+    read-failure arms the old differential never pinned (F-P3-2a) are
+    added on the ONE shared implementation — non-UTF-8 bytes trigger a
+    REAL read failure (same construction as the engine-side
+    Check42DeferredSignalTests), no permission tricks, stable
+    cross-platform."""
 
     _VARIANTS = {
         "full": dict(),
@@ -1093,18 +1109,93 @@ class SessionClosureMirrorTests(unittest.TestCase):
         "vacuum": dict(evidence="# 证据记录\n", risk="# 风险记录\n"),
     }
 
-    def test_collector_matches_engine_on_every_fixture(self):
+    def test_engine_symbol_equals_shared_collector_on_every_fixture(self):
+        # Interface equivalence: the legacy engine symbol (now a thin
+        # delegation, signature unchanged) and a direct call to the
+        # shared leaf return the identical triple on every fixture tree.
         vw = _import_engine(self)
+        from checks import provenance_domain as pd
         for name, kwargs in self._VARIANTS.items():
             with tempfile.TemporaryDirectory() as tmp:
                 _make_closure_fixture(tmp, **kwargs)
                 gov = Path(tmp) / ".governance"
-                mine = ba._collect_session_closure_events(
-                    gov, _CLOSURE_TODAY)
-                engine = vw._collect_session_closure_events(
+                via_engine = vw._collect_session_closure_events(
                     governance_dir=gov, today=_CLOSURE_TODAY)
+                direct = pd.collect_session_closure_events(
+                    gov, today=_CLOSURE_TODAY)
             self.assertEqual(
-                mine, engine, "closure-collection mirror drift (%s)" % name)
+                via_engine, direct,
+                "engine delegation != shared leaf (%s)" % name)
+
+    def test_mirror_is_fully_retired(self):
+        # Zero second implementation, pinned on the sources: every
+        # bootstrap mirror symbol is gone, and the engine keeps ONLY the
+        # thin delegation symbol (its own collection body is gone).
+        ba_source = (_INFRA_DIR / "bootstrap_aggregate.py").read_text(
+            encoding="utf-8")
+        for symbol in ("def _collect_session_closure_events",
+                       "_closure_evidence_events", "_closure_risk_events",
+                       "_closure_ledger_events", "_RISK_TERMINAL_WORDS",
+                       "_CLOSURE_LEDGER_FILENAME"):
+            self.assertNotIn(symbol, ba_source,
+                             "retired mirror symbol still present: %s"
+                             % symbol)
+        vw_source = (_INFRA_DIR / "verify_workflow.py").read_text(
+            encoding="utf-8")
+        self.assertNotIn("_read_deferred_ledger_events", vw_source,
+                         "engine collection body still present")
+        self.assertNotIn("_RISK_TERMINAL_WORDS", vw_source,
+                         "engine word-set constant still present")
+        # The shared leaf owns the vocabulary; the storage contract the
+        # engine's write-guard face keeps (its own alias) is pinned
+        # equal to the leaf's reader constant.
+        from checks import provenance_domain as pd
+        self.assertEqual(pd.RISK_TERMINAL_WORDS, ("关闭", "收窄", "升级"))
+        vw = _import_engine(self)
+        self.assertEqual(pd.CLOSURE_LEDGER_FILENAME,
+                         vw._DEFERRED_LEDGER_FILENAME)
+
+    def test_ledger_read_failure_is_disclosed_not_silent(self):
+        # F-P3-2a arm 1: the ledger exists but is unreadable → the
+        # ledger_read anomaly (orchestration_fallback face), never a
+        # silent vacuum. The engine delegation stays equivalent under
+        # the same failure.
+        vw = _import_engine(self)
+        from checks import provenance_domain as pd
+        with tempfile.TemporaryDirectory() as tmp:
+            _make_closure_fixture(tmp)
+            gov = Path(tmp) / ".governance"
+            (gov / pd.CLOSURE_LEDGER_FILENAME).write_bytes(
+                b"\xff\xfe not utf8")
+            direct = pd.collect_session_closure_events(
+                gov, today=_CLOSURE_TODAY)
+            via_engine = vw._collect_session_closure_events(
+                governance_dir=gov, today=_CLOSURE_TODAY)
+        self.assertEqual(direct, via_engine)
+        self.assertEqual(direct[2]["anomaly"]["kind"], "ledger_read")
+
+    def test_row_read_failure_is_disclosed_not_silent(self):
+        # F-P3-2a arm 2: evidence-log.md unreadable → the row_read
+        # anomaly; the OTHER arms keep collecting (fail-closed
+        # disclosure, not a standing-down of the whole face). The engine
+        # delegation stays equivalent under the same failure.
+        vw = _import_engine(self)
+        from checks import provenance_domain as pd
+        with tempfile.TemporaryDirectory() as tmp:
+            _make_closure_fixture(tmp)
+            gov = Path(tmp) / ".governance"
+            (gov / "evidence-log.md").write_bytes(b"\xff\xfe not utf8")
+            direct = pd.collect_session_closure_events(
+                gov, today=_CLOSURE_TODAY)
+            via_engine = vw._collect_session_closure_events(
+                governance_dir=gov, today=_CLOSURE_TODAY)
+        self.assertEqual(direct, via_engine)
+        anomaly = direct[2]["anomaly"]
+        self.assertEqual(anomaly["kind"], "row_read")
+        self.assertIn("evidence-log.md unreadable", anomaly["reason"])
+        kinds = {(e["id"], e["kind"]) for e in direct[0]}
+        self.assertIn(("RISK-910", "problem"), kinds)
+        self.assertIn(("RISK-910", "closure"), kinds)
 
     def test_face_numbers_equal_check42_judgment_on_same_tree(self):
         vw = _import_engine(self)

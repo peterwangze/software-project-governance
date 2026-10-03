@@ -352,14 +352,38 @@ def parse_gate_summary(text):
 #: annotated ``打开`` forms count as open; ``已关闭`` / ``关闭`` /
 #: ``缓解完成`` never do. Unifying the engine predicate is a Coordinator
 #: decision, not this module's call.
+#:
+#: FIX-422 closed-family extension — the live risk-log also carries
+#: CLOSED forms written as "bold head token + space/full-width
+#: parenthetical + date annotation": ``**已缓解** (2026-09-28 FIX-401
+#: 收窄…)``, ``**降级** (2026-05-05)``, ``**已收窄**（…）``. Under the
+#: strip-then-prefix discipline the leading ``**`` is already gone, so
+#: these are plain new head tokens (``已缓解`` / ``降级`` / ``已收窄``).
+#: Pre-FIX-422 they bucketed ``unknown`` — counted as open AND disclosed
+#: (the fail-closed direction held), but they inflated the open face and
+#: buried the genuinely unclassifiable rows in noise (live 2026-10-03:
+#: unknown_count=4, all annotated closed forms, RISK-026/027/048/061).
+#: Forms still outside the vocabulary stay ``unknown`` (fail-closed
+#: counted-as-open disposition unchanged).
 _RISK_OPEN_STATE_PREFIXES = ("打开", "缓解中")
-_RISK_CLOSED_STATE_PREFIXES = ("已关闭", "关闭", "缓解完成")
+_RISK_CLOSED_STATE_PREFIXES = (
+    "已关闭", "关闭", "缓解完成", "已缓解", "已收窄", "降级")
 
 #: Unknown status tokens: counted as open (fail-closed conservative
 #: direction — an unclassifiable risk row must stay visible as an active
 #: risk, never silently absorbed) and disclosed. The disclosure list is
 #: bounded for the ≤8KB projection; ``unknown_count`` carries the truth.
 _RISK_UNKNOWN_DISCLOSURE_CAP = 5
+
+#: FIX-422 — a deadline cell participates in the overdue/soon judgment
+#: ONLY when it is a PURE ISO date (``YYYY-MM-DD``; surrounding whitespace
+#: is already stripped by the caller). Anything else — a re-review stream
+#: carrying several historical dates plus narrative, a multi-date cell, a
+#: long text — yields NO deadline signal: the fail-safe direction (never
+#: a fabricated overdue). The pre-fix ``deadline[:10]`` read parsed the
+#: FIRST historical date out of re-review prose and fabricated three
+#: overdue escalations (RISK-044/047/048, verified 2026-10-03).
+_PURE_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def _risk_status_bucket(status_cell):
@@ -415,6 +439,20 @@ def parse_risk_summary(text, today=None):
     on the header ``截止日期`` column: an anchored row's positional
     deadline cell may read a filler ("—") and then yields NO escalation
     signal — the fail-safe direction (never a fabricated overdue).
+
+    FIX-422 deadline caliber — the deadline cell participates in the
+    overdue/soon judgment ONLY when it is a PURE ISO date
+    (``YYYY-MM-DD``; at most surrounding whitespace, already stripped).
+    Live risk-log deadline cells have been repurposed as free-text
+    re-review streams (several historical dates plus narrative — the
+    RISK-044/047/048 shapes verified 2026-10-03), and the pre-fix
+    ``deadline[:10]`` read grabbed the FIRST historical date out of that
+    prose, fabricating overdue escalations — a direct violation of this
+    face's own fail-safe contract above. A non-pure cell (re-review
+    stream / multi-date / long text) yields NO deadline signal: fail
+    toward silence, never a fabricated overdue. A pure PAST date still
+    reports overdue honestly — the fix must not swallow real
+    escalations either.
     """
     today = today or date.today()
     summary = {"open": 0, "escalation_overdue": 0, "escalation_soon": 0,
@@ -447,9 +485,13 @@ def parse_risk_summary(text, today=None):
             deadline = (cells[deadline_pos].strip()
                         if deadline_pos is not None else "")
             days_left = None
-            if deadline:
+            # FIX-422: only a PURE ISO date participates — a re-review
+            # stream / multi-date / long-text cell yields no deadline
+            # signal (fail-safe; the pre-fix [:10] read fabricated
+            # overdues out of the first historical date in the prose).
+            if _PURE_ISO_DATE_RE.match(deadline):
                 try:
-                    days_left = (date.fromisoformat(deadline[:10]) - today).days
+                    days_left = (date.fromisoformat(deadline) - today).days
                 except ValueError:
                     days_left = None
             if days_left is not None:

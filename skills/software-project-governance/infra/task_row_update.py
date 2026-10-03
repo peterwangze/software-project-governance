@@ -254,6 +254,96 @@ _STALE_PHRASE_RES: Tuple[Tuple[str, str, "re.Pattern[str]"], ...] = tuple(
 trailing space or end-of-segment (so the separator AFTER the phrase
 survives and neighbours never concatenate)."""
 
+# ── Committed completion marker (FIX-422) ──────────────────────────────────
+
+
+_COMMITTED_TOKEN_RE = re.compile(r"\bcommitted\b")
+"""The committed state token (the marker chain's own word-form)."""
+
+
+def _first_bare_committed_token(scan: str) -> Optional["re.Match[str]"]:
+    """The first paren-free ``committed`` token NOT preceded by the ✅
+    completion marker, or None (FIX-422).
+
+    ``scan`` is the prefix of a status-cell core. Scope discipline
+    matches the FIX-394 stale refresh exactly: tokens inside
+    parenthetical narrative (``_paren_depth_before`` > 0) are NEVER
+    re-rendered, so they are skipped here too. "Preceded" tolerates
+    arbitrary whitespace between ✅ and the token: everything before the
+    token is right-stripped and must END with the ✅ glyph — so both
+    ``✅ committed`` and ``✅  committed`` count as marked, while
+    ``🆕 committed`` / bare ``committed`` are the mis-rendered legacy
+    shapes machine-written before the completion marker joined the
+    canonical form (FIX-422).
+    """
+    for match in _COMMITTED_TOKEN_RE.finditer(scan):
+        if _paren_depth_before(scan, match.start()) > 0:
+            continue  # parenthetical narrative is never re-rendered
+        if scan[:match.start()].rstrip().endswith("✅"):
+            continue  # already carries the marker
+        return match
+    return None
+
+
+def committed_completion_marker_missing(cell_core: str) -> bool:
+    """FIX-422 read-only detection: does the committed token lack its ✅?
+
+    Scope discipline identical to :func:`find_stale_progress_phrases`:
+    the span BEFORE the ops anchor only, parenthetical narrative never
+    consulted. Zero anchor → the whole core is the scan (same first-hop
+    tolerance).
+    """
+    anchor = _OP_ANCHOR_RE.search(cell_core)
+    scan = cell_core if anchor is None else cell_core[:anchor.start()]
+    return _first_bare_committed_token(scan) is not None
+
+
+def _restore_committed_completion_marker(
+        core: str) -> Tuple[str, bool]:
+    """FIX-422 re-render: prefix every bare paren-free ``committed``
+    token with the canonical ✅ completion marker.
+
+    Each bare token's span is re-rendered to the canonical family form —
+    ``✅ committed`` — collapsing the whitespace run before the token to
+    the canonical single separator (a token at the very start of the
+    span takes the marker with no leading space, so cell padding never
+    creeps). ALL bare paren-free tokens are restored in one pass, so the
+    post-write self-check's missing detection can never disagree with
+    the refresh's own output (a one-token-only restore would leave a
+    pathological double-token cell permanently "misaligned"). Returns
+    ``(core, restored)``; ``restored`` is False when every paren-free
+    token already carries the marker (zero-change detection for the
+    caller). Anchored at the SAME ops-anchor prefix boundary as the
+    stale refresh, so the anchor and any post-anchor narrative are
+    untouched; parenthetical narrative is skipped, never re-rendered.
+    """
+    anchor = _OP_ANCHOR_RE.search(core)
+    if anchor is None:
+        head, tail = core, ""
+    else:
+        head, tail = core[:anchor.start()], core[anchor.start():]
+    spans = []
+    for match in _COMMITTED_TOKEN_RE.finditer(head):
+        if _paren_depth_before(head, match.start()) > 0:
+            continue
+        if head[:match.start()].rstrip().endswith("✅"):
+            continue
+        spans.append(match.span())
+    if not spans:
+        return core, False
+    parts: List[str] = []
+    cursor = 0
+    for start, end in spans:
+        between = head[cursor:start]
+        if between.strip():
+            parts.append(between.rstrip() + " ")
+        # else: a whitespace-only run collapses into the single canonical
+        # separator (or vanishes at the very start of the span).
+        parts.append("✅ committed")
+        cursor = end
+    parts.append(head[cursor:])
+    return "".join(parts) + tail, True
+
 # ── Status-marker vocabulary (writer-owned calibration; M0 froze the state
 #    enum, not the markdown word-forms this table maps them onto) ───────────
 
@@ -264,16 +354,29 @@ STATE_CANONICAL_MARKERS: Dict[str, str] = {
     "review": "review",
     "approved": "approved",
     "completed": "✅ 完成",
-    "committed": "committed",
+    "committed": "✅ committed",
     "blocked": "⛔ BLOCKED",
 }
 """Canonical word-form written when a row enters each state.
 
 ``dev``/``completed``/``blocked`` mirror the dominant word-forms already live
 in the tracker's task table (``🔄 进行中`` / ``✅ 完成`` / ``⛔ BLOCKED``);
-the remaining five have no established emoji form in the corpus, so they use
+the remaining four have no established emoji form in the corpus, so they use
 the plain state name rather than an invented decoration (WARN posture — the
 structural join in batch 2.3 consumes receipts, not word-forms).
+
+FIX-422 — ``committed`` renders WITH the ✅ completion marker
+(``✅ committed``, the same family as ``✅ 完成``): committed is the
+successor terminal of completed (contracts.TASK_TRANSITIONS' only
+terminal state), but the pre-fix bare ``committed`` token carried no
+completion word, so every downstream checker keyed on the ✅ completion
+vocabulary (check_risk_mitigation_closure / Check 36
+``_task_status_is_completed`` & kin) misread machine-written terminal
+rows as unfinished (live proof: FEAT-084, row_sha256-verified writer
+output, misjudged 2026-10-03). The detection chain is unchanged —
+``\\bcommitted\\b`` matches the marked form and ``✅\\s*完成`` does not
+match ``✅ committed`` (no 完成 glyph), so legacy bare-token rows keep
+reading ``committed`` and the marked form reads the same state.
 """
 
 # Detection is an *ordered, mutually-exclusive* chain over the status cell
@@ -1263,6 +1366,11 @@ def refresh_candidate_row(line: str, *, operation_id: str) -> str:
          before the anchor (:func:`_refresh_progress_prefix`); the
          committed token, the date/narrative parentheses, the anchor's
          position and any brackets after it all survive;
+      3b. FIX-422: a bare ``committed`` token (no ✅ completion marker —
+         the pre-FIX-422 writer rendering) is re-rendered to the
+         canonical ``✅ committed`` family form
+         (:func:`_restore_committed_completion_marker`, same
+         anchor-prefix scope as the stale refresh);
       4. the anchor is re-stamped to THIS operation's id (the row always
          names its most recent writer operation — same discipline as a
          flip); the post-refresh row must STILL detect as ``committed``.
@@ -1302,6 +1410,8 @@ def refresh_candidate_row(line: str, *, operation_id: str) -> str:
             "status cell; refusing to guess which operation owns the row "
             "(schema_violation: reconcile by hand)".format(len(anchors)))
     refreshed_core, _removed = _refresh_progress_prefix(core, "committed")
+    refreshed_core, _marker_restored = (
+        _restore_committed_completion_marker(refreshed_core))
     anchor_at = _OP_ANCHOR_RE.search(refreshed_core)
     if anchor_at is None:  # pragma: no cover - the anchor span is preserved
         raise ValueError(
@@ -1344,14 +1454,18 @@ def execute_refresh(
     atomic-replace/receipt discipline, but the target row is already at the
     terminal state, so there is no transition to validate — the pre-flight
     instead proves the row IS terminal (chain-first ``committed`` + exactly
-    one ops anchor) and carries at least one stale progress phrase.  A row
-    with nothing stale resolves to ``ok`` with nothing written and no
+    one ops anchor) and carries at least one misalignment: a stale
+    progress phrase (FIX-394) and/or a bare ``committed`` token missing
+    its ✅ completion marker (FIX-422 — the pre-fix canonical rendering).
+    A row with neither resolves to ``ok`` with nothing written and no
     receipt (an honest no-effect operation records no effect); a retried
     operation id replays the original result exactly like a flip.
 
-    The receipt carries ``action=REFRESH_ACTION`` and the removed phrase
-    list, so the ops ledger can audit exactly what wording the alignment
-    cleared.
+    The receipt carries ``action=REFRESH_ACTION``, the removed phrase
+    list and the FIX-422 ``completion_marker_restored`` flag, so the ops
+    ledger can audit exactly what wording the alignment cleared and
+    whether the terminal token was re-rendered to the completion-marker
+    family form.
     """
     if now_fn is None:
         def now_fn():
@@ -1527,14 +1641,17 @@ def execute_refresh(
                 "(schema_violation: reconcile by hand)".format(anchor_count))
         stale = find_stale_progress_phrases(
             cell_core, target_state="committed")
-        if not stale:
+        marker_missing = committed_completion_marker_missing(cell_core)
+        if not stale and not marker_missing:
             return WriterResult(
                 operation_id=operation_id, code=RESULT_OK,
                 new_revision=observed, observed_revision=observed,
                 execution="succeeded",
                 detail="suffix refresh: row {0} is already aligned (no "
-                       "stale progress wording before the ops anchor) — "
-                       "nothing written, no receipt".format(task_id),
+                       "stale progress wording before the ops anchor and "
+                       "the committed token carries its ✅ completion "
+                       "marker) — nothing written, no receipt".format(
+                           task_id),
             )
         try:
             candidate_row = refresh_candidate_row(
@@ -1569,6 +1686,7 @@ def execute_refresh(
             "to_state": "committed",
             "reason": reason,
             "stale_phrases_removed": list(stale),
+            "completion_marker_restored": marker_missing,
             "timestamp": timestamp,
             "target_file": str(target),
             "revision_before": observed,
@@ -1630,19 +1748,23 @@ def execute_refresh(
                 reread_cells[_status_cell(reread_cells)[0]])[1]
             reread_stale = find_stale_progress_phrases(
                 reread_core, target_state="committed")
+            reread_marker_missing = committed_completion_marker_missing(
+                reread_core)
             reread_anchor_count = len(_OP_ANCHOR_RE.findall(reread_core))
         except ValueError:
-            reread_state, reread_stale, reread_anchor_count = None, (), 0
+            reread_state, reread_stale = None, ()
+            reread_marker_missing, reread_anchor_count = False, 0
         if (reread_state != "committed" or reread_stale
-                or reread_anchor_count != 1):
+                or reread_marker_missing or reread_anchor_count != 1):
             return WriterResult(
                 operation_id=operation_id, code="manual_intervention",
                 execution="succeeded",
                 detail="post-write self-check after committing revision "
                        "{0}: refreshed row invariants violated (state "
-                       "{1!r}, stale {2}, anchors {3}) — adjudicate"
-                       .format(new_revision, reread_state, reread_stale,
-                               reread_anchor_count))
+                       "{1!r}, stale {2}, marker missing {3}, anchors "
+                       "{4}) — adjudicate".format(
+                           new_revision, reread_state, reread_stale,
+                           reread_marker_missing, reread_anchor_count))
 
         return WriterResult(
             operation_id=operation_id, code=RESULT_OK,
@@ -1933,8 +2055,9 @@ def _dry_run_refresh(
     Mirrors :func:`execute_refresh`'s checks in order (the same preview
     discipline as the flip path's ``_dry_run``): a preview verdict is NOT a
     WriterResult — the execute path re-validates everything under the lock.
-    A row with nothing stale previews ``row_after == row_before`` (the
-    honest zero-change face the execute path resolves as a no-op).
+    A row with no stale phrase AND no bare committed token (FIX-422)
+    previews ``row_after == row_before`` (the honest zero-change face the
+    execute path resolves as a no-op).
     """
     payload: Dict[str, Any] = {
         "mode": "dry-run",
@@ -2005,7 +2128,9 @@ def _dry_run_refresh(
                 else:
                     stale = find_stale_progress_phrases(
                         cell_core, target_state="committed")
-                    if stale:
+                    marker_missing = committed_completion_marker_missing(
+                        cell_core)
+                    if stale or marker_missing:
                         candidate = refresh_candidate_row(
                             row_line, operation_id=operation_id)
                     else:
@@ -2019,7 +2144,8 @@ def _dry_run_refresh(
                         "row_before": row_line,
                         "row_after": candidate,
                         "stale_phrases_found": list(stale),
-                        "already_aligned": not stale,
+                        "completion_marker_missing": marker_missing,
+                        "already_aligned": not (stale or marker_missing),
                     }
         except ValueError as exc:
             refusal = {"code": "cross_record_violation", "detail": str(exc)}

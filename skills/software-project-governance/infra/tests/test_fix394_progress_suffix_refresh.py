@@ -27,10 +27,22 @@ Refresh semantics boundary (deliberate, test-pinned):
   CLEARED — only the closed stale-progress phrase vocabulary
   (:data:`task_row_update.STALE_PROGRESS_PHRASES`), outside parentheses,
   before the ops anchor.
-  PRESERVED — the committed token itself, the date/narrative parentheses,
-  the ops anchor (re-anchored to the new operation id), any brackets AFTER
-  the anchor (FEAT-061's 〔R0 …〕 review-round narrative), every other
-  column, and the cell's padding whitespace.
+  RE-RENDERED (FIX-422) — a bare ``committed`` token (the pre-FIX-422
+  canonical rendering, no ✅ completion marker) becomes the canonical
+  ``✅ committed`` family form, same anchor-prefix scope.
+  PRESERVED — the committed token's position, the date/narrative
+  parentheses, the ops anchor (re-anchored to the new operation id), any
+  brackets AFTER the anchor (FEAT-061's 〔R0 …〕 review-round narrative),
+  every other column, and the cell's padding whitespace.
+
+FIX-422 note on the canonical form: ``committed`` renders as
+``✅ committed`` (the completion-marker family of ``✅ 完成``) — committed
+is completed's successor terminal, and downstream ✅-vocabulary completion
+checkers (check_risk_mitigation_closure / Check 36 & kin) misread the
+bare token as unfinished (live proof: FEAT-084, row_sha256-verified
+writer output misjudged 2026-10-03). The legacy stale fixtures below keep
+their pre-fix bare-token shapes ON PURPOSE — they are the mis-rendered
+stock the alignment surface must be able to refresh.
 
 Live-cell fixtures below mirror the real rows (shapes verbatim; id/hash
 literals are fixture-local per the DEC-213 static-pin discipline).
@@ -90,8 +102,11 @@ LIVE_MIDCELL_NARRATIVE = (
     "〔R0 NEEDS_CHANGE/2→R1 APPROVED_WITH_NOTES/0；commit 61618a5〕")
 # The target-form reference (REL-086): committed + legitimate release
 # narrative — NOT a stale mid-flight phrase; refresh must be a no-op here.
+# FIX-422: the reference form carries the ✅ completion marker — a bare
+# committed token is itself a misalignment now, so the no-op reference
+# cannot be bare.
 LIVE_RELEASED_REFERENCE = (
-    "committed 已发布 (2026-09-25——发布闭环) 〔" + OP_B + "〕")
+    "✅ committed 已发布 (2026-09-25——发布闭环) 〔" + OP_B + "〕")
 
 LIVE_STALE_SHAPES = (LIVE_LOCKED, LIVE_REVIEWING, LIVE_DEVING, LIVE_WRAPPING)
 
@@ -205,7 +220,12 @@ class TestRuntimeSuffixRefreshOnFlip(_TrackerFixture):
         out = _cell_text(self._flip(
             "✅ 完成 已 lock 待派发 审查中 (2026-09-26)", "completed",
             "committed"))
-        self.assertTrue(out.startswith("committed"), out)
+        # FIX-422: the terminal token renders WITH the ✅ completion
+        # marker (canonical family form of ✅ 完成).
+        self.assertTrue(out.startswith(
+            tru.STATE_CANONICAL_MARKERS["committed"]), out)
+        self.assertEqual(tru.STATE_CANONICAL_MARKERS["committed"],
+                         "✅ committed")
         for stale in ("已 lock 待派发", "审查中", "开发中", "收尾中",
                       "待审查", "已审查", "进行中"):
             self.assertNotIn(stale, out)
@@ -275,7 +295,8 @@ class TestRuntimeSuffixRefreshOnFlip(_TrackerFixture):
                 operation_id="op-{0:032x}".format(i + 1))
             self.assertEqual(result.code, "ok", result.detail)
         cell = self.status_cell_of("FIX-9004")
-        self.assertTrue(cell.startswith("committed"), cell)
+        self.assertTrue(cell.startswith(
+            tru.STATE_CANONICAL_MARKERS["committed"]), cell)
         for stale in ("审查中", "待审查", "已审查", "开发中", "收尾中",
                       "进行中"):
             self.assertNotIn(stale, cell)
@@ -305,7 +326,11 @@ class TestRefreshAlignmentTool(_TrackerFixture):
                 result = self._refresh(task_id, cell, op_id=op_id)
                 self.assertEqual(result.code, "ok", result.detail)
                 out = self.status_cell_of(task_id)
-                self.assertTrue(out.startswith("committed"), out)
+                # FIX-422: the refreshed terminal token carries the ✅
+                # completion marker (the fixtures are the bare-token
+                # legacy shapes — refresh re-renders them).
+                self.assertTrue(out.startswith(
+                    tru.STATE_CANONICAL_MARKERS["committed"]), out)
                 for stale in ("已 lock 待派发", "审查中", "开发中",
                               "收尾中"):
                     self.assertNotIn(stale, out)
@@ -351,6 +376,9 @@ class TestRefreshAlignmentTool(_TrackerFixture):
         self.assertEqual(receipt["task_id"], "FIX-9107")
         self.assertEqual(receipt["from_state"], "committed")
         self.assertEqual(receipt["to_state"], "committed")
+        # FIX-422: the bare-token fixture row was re-rendered with the ✅
+        # completion marker — the receipt discloses it.
+        self.assertTrue(receipt["completion_marker_restored"])
         self.assertNotEqual(receipt["row_before_sha256"],
                             receipt["row_after_sha256"])
 
@@ -483,7 +511,8 @@ class TestRefreshAlignmentTool(_TrackerFixture):
         self.assertEqual(payload["result"]["code"], "ok")
         self.assertEqual(payload["result"]["action"], "suffix_refresh")
         out = self.status_cell_of("FIX-9117")
-        self.assertTrue(out.startswith("committed"))
+        self.assertTrue(out.startswith(
+            tru.STATE_CANONICAL_MARKERS["committed"]))
         self.assertNotIn("已 lock 待派发", out)
 
     def test_cli_rejects_refresh_with_transition_flags(self):
@@ -503,8 +532,136 @@ class TestRefreshAlignmentTool(_TrackerFixture):
         old_cells = line.strip().split("|")
         new_cells = out.strip().split("|")
         idx = tru._status_cell(old_cells)[0]
-        self.assertTrue(new_cells[idx].startswith("   committed "))
+        self.assertTrue(new_cells[idx].startswith(
+            "   " + tru.STATE_CANONICAL_MARKERS["committed"] + " "))
         self.assertTrue(new_cells[idx].endswith("   "))
+
+
+class TestFix422CommittedCompletionMarker(_TrackerFixture):
+    """FIX-422 缺陷② — committed terminal rendering carries the ✅
+    completion marker, and the mis-rendered legacy stock is refreshable.
+
+    Live evidence (2026-10-03): the FEAT-084 row renders as
+    「🆕 committed 待派发 (…)」 — a machine-written product (row_sha256
+    chain-verified) whose bare ``committed`` token carries no completion
+    word, so every downstream ✅-vocabulary completion checker
+    (check_risk_mitigation_closure / Check 36 ``_task_status_is_completed``
+    & kin) misreads the terminal row as unfinished. The same dry-run that
+    day returned ``already_aligned: true, stale_phrases_found: []`` — the
+    stale-phrase vocabulary alone could not see the misrendering. These
+    tests prove the renderer, the detection face and the one-shot
+    re-render capability; the live FEAT-084 row's actual re-render is the
+    Coordinator's write (outside this suite's sandbox).
+    """
+
+    #: The FEAT-084 status-cell shape (2026-10-03; anchor id is
+    #: fixture-local per DEC-213 static-pin discipline).
+    FEAT084_LIVE = (
+        "🆕 committed 待派发 (2026-10-02 立项——DEC-303；0.94 窗口) 〔"
+        + OP_A + "〕")
+
+    def test_canonical_marker_carries_completion_checkmark(self):
+        self.assertEqual(tru.STATE_CANONICAL_MARKERS["committed"],
+                         "✅ committed")
+
+    def test_flip_to_committed_renders_marked_and_detectable(self):
+        # The real writer chain's last hop lands the marked token; both
+        # the marked form and the legacy bare form still detect
+        # ``committed`` (chain unchanged — backward compatible read).
+        line = _row("**P1**", "FIX-9141",
+                    "✅ 完成 (2026-10-03) 〔" + OP_A + "〕")
+        out = tru.build_candidate_row(
+            line, from_state="completed", to_state="committed",
+            operation_id=OP_B)
+        self.assertTrue(_cell_text(out).startswith("✅ committed"))
+        self.assertEqual(tru.detect_row_state(out), "committed")
+        self.assertEqual(tru.detect_row_state(_row(
+            "**P1**", "FIX-9142", self.FEAT084_LIVE)), "committed")
+
+    def test_marker_missing_detection_face(self):
+        self.assertTrue(tru.committed_completion_marker_missing(
+            self.FEAT084_LIVE))
+        self.assertTrue(tru.committed_completion_marker_missing(
+            "committed (2026-10-02 已交付) 〔" + OP_A + "〕"))
+        self.assertFalse(tru.committed_completion_marker_missing(
+            LIVE_RELEASED_REFERENCE))
+        # Post-anchor narrative brackets are out of scope, parentheses
+        # never re-rendered: a bare token inside parens is not a signal.
+        self.assertFalse(tru.committed_completion_marker_missing(
+            "✅ committed (叙事：committed 复议记录) 〔" + OP_A + "〕"))
+
+    def test_feat084_live_shape_dry_run_reports_misalignment(self):
+        """验收 ② (detection): the pre-fix blind spot is gone — the
+        FEAT-084 shape no longer previews ``already_aligned``."""
+        self.write_table(_table(_row("**P1**", "FEAT-9143",
+                                     self.FEAT084_LIVE)))
+        code, payload = self.run_cli(
+            "--task", "FEAT-9143", "--refresh-suffix", "--dry-run",
+            "--reason", "FIX-422 marker restoration", "--file",
+            str(self.target), "--json")
+        self.assertEqual(code, tru.ExitCode.OK)
+        self.assertTrue(payload["would_execute"])
+        preview = payload["preview"]
+        self.assertFalse(preview["already_aligned"])
+        self.assertTrue(preview["completion_marker_missing"])
+        self.assertEqual(preview["stale_phrases_found"], [])
+        self.assertIn("✅ committed", preview["row_after"])
+
+    def test_feat084_live_shape_is_re_rendered_in_place(self):
+        """验收 ② (capability): one governed refresh re-renders the bare
+        token; a second refresh is an honest zero-change no-op."""
+        self.write_table(_table(_row("**P1**", "FEAT-9144",
+                                     self.FEAT084_LIVE)))
+        result = tru.execute_refresh(
+            target=self.target, task_id="FEAT-9144",
+            reason="FIX-422 committed 完成标记重渲染", operation_id=OP_B,
+            ledger=self.ledger)
+        self.assertEqual(result.code, "ok", result.detail)
+        out = self.status_cell_of("FEAT-9144")
+        # The marker joined the token; the legitimate narrative wording
+        # (待派发 parenthetical-free narration, DEC-303 括号注记) survives;
+        # the anchor re-stamped to the refresh operation.
+        self.assertTrue(out.startswith("🆕 ✅ committed 待派发 (2026-10-02 "
+                                       "立项——DEC-303；0.94 窗口) 〔"), out)
+        self.assertIn("〔" + OP_B + "〕", out)
+        self.assertEqual(out.count("〔op-"), 1)
+        self.assertEqual(tru.detect_row_state(
+            tru.locate_task_row(self.read_text(), "FEAT-9144")[1]),
+            "committed")
+        # Downstream ✅-vocabulary faces now see the completion marker.
+        self.assertIn("✅", out)
+        # Second refresh with a NEW operation id: honest no-op, no write,
+        # no receipt (both misalignment kinds resolved).
+        before = self.read_text()
+        receipts_before = self.ledger.read_text(
+            encoding="utf-8").count("\n")
+        result2 = tru.execute_refresh(
+            target=self.target, task_id="FEAT-9144", reason="again",
+            operation_id=OP_C, ledger=self.ledger)
+        self.assertEqual(result2.code, "ok", result2.detail)
+        self.assertIn("already aligned", result2.detail)
+        self.assertEqual(self.read_text(), before)
+        self.assertEqual(
+            self.ledger.read_text(encoding="utf-8").count("\n"),
+            receipts_before, "zero-change appended a receipt")
+
+    def test_marked_row_with_stale_wording_still_refreshes(self):
+        # The two misalignment kinds are independent: a MARKED token with
+        # stale wording refreshes the wording only (marker untouched).
+        cell = ("✅ committed 审查中 (2026-09-25——Reviewer 派发中) 〔"
+                + OP_A + "〕")
+        self.write_table(_table(_row("**P1**", "REL-9145", cell)))
+        result = tru.execute_refresh(
+            target=self.target, task_id="REL-9145", reason="align",
+            operation_id=OP_B, ledger=self.ledger)
+        self.assertEqual(result.code, "ok", result.detail)
+        out = self.status_cell_of("REL-9145")
+        self.assertNotIn("审查中", out)
+        self.assertTrue(out.startswith("✅ committed (2026-09-25"))
+        receipts = [json.loads(line) for line in
+                    self.ledger.read_text(encoding="utf-8").splitlines()
+                    if line.strip()]
+        self.assertFalse(receipts[0]["completion_marker_restored"])
 
 
 class TestComposerClosureCheck1(_TrackerFixture):

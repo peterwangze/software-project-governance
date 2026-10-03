@@ -591,8 +591,11 @@ class ReviewR1FixTests(_WriterFixture):
         self.assertEqual(result.code, "ok", result.detail)
         flipped = tru.locate_task_row(
             self.target.read_text(encoding="utf-8"), "FIX-003")[1]
+        # FIX-422: the committed canonical marker carries the ✅ completion
+        # marker (✅ committed — the completion-marker family of ✅ 完成);
+        # the swap replaces exactly the ✅ 完成 span, padding untouched.
         expected = ("| **P2** | FIX-003 | 描述 cell | refs | 0.86.0 | 执行面 |"
-                    "  \u3000committed (2026-09-19)——EVD 记录 〔" + OP_A
+                    "  \u3000✅ committed (2026-09-19)——EVD 记录 〔" + OP_A
                     + "〕 \u3000 |")
         self.assertEqual(flipped, expected,
                          "flip disturbed bytes outside the state span")

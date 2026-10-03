@@ -253,7 +253,10 @@ STATIC_PIN_EXEMPTIONS = {
         (421, "0.86.0", _REASON_FIXTURE_ROW_TEXT),
         (441, "0.86.0", _REASON_FIXTURE_ROW_TEXT),
         (586, "0.86.0", _REASON_FIXTURE_ROW_TEXT),
-        (594, "0.86.0", _REASON_FIXTURE_ROW_TEXT),
+        # FIX-422 re-audit: the committed-marker comment lines added to
+        # test_flip_row_minimal_byte_diff shifted this row 594->597
+        # (token unchanged, same row).
+        (597, "0.86.0", _REASON_FIXTURE_ROW_TEXT),
     ],
     "skills/software-project-governance/infra/tests/test_closure_chain.py": [
         # 0.86.0 bump-time row: FEAT-056 fixture tracker row (marked
@@ -378,8 +381,12 @@ STATIC_PIN_EXEMPTIONS = {
         # FIX-394 fixture tracker row + row template (version column =
         # scenario payload); the suffix-refresh assertions consume the
         # status-column progress suffix, never the version cell.
-        (100, "0.89.0", _REASON_FIXTURE_ROW_TEXT),
-        (500, "0.89.0", _REASON_FIXTURE_ROW_TEXT),
+        # FIX-422 re-audit: the FIX-422 additions (docstring expansion,
+        # the ✅-marked reference fixture and the completion-marker test
+        # class) shifted both rows 100->115 and 500->529 (tokens
+        # unchanged, same rows).
+        (115, "0.89.0", _REASON_FIXTURE_ROW_TEXT),
+        (529, "0.89.0", _REASON_FIXTURE_ROW_TEXT),
     ],
 }
 

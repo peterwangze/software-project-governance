@@ -314,9 +314,17 @@ class ThreeStateExemptionTests(Fix390FixtureBase):
             vw._status_clean_cell(status_cell)))
         self.assertEqual(vw._hot_status_completion_state(status_cell),
                          "committed")
-        # Anchor stripped → display text alone is NEVER terminal (未知不猜).
+        # Anchor stripped → display text alone is NEVER writer-terminal
+        # (未知不猜: it can never resolve to "committed"). FIX-422 note:
+        # the writer's committed rendering carries ✅ now, so the
+        # credential-stripped cell lands in the LEGACY bucket (the ✅-led
+        # hand-era exemption, FIX-371 semantics — S_old always exempted
+        # ✅-led cells) instead of guarded; display text alone still
+        # cannot masquerade as the machine-era terminal state.
         stripped = status_cell.replace("〔" + op_id + "〕", "").strip()
-        self.assertEqual(vw._hot_status_completion_state(stripped), "")
+        stripped_state = vw._hot_status_completion_state(stripped)
+        self.assertNotEqual(stripped_state, "committed")
+        self.assertEqual(stripped_state, "legacy")
 
     def test_live_fix375_row_stays_guarded_and_rel087_row_exempts(self):
         """活体定位：FIX-375 混合链（→ ✅ 完成，非 ✅ 领头）保持 guarded；

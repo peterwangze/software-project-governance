@@ -113,6 +113,14 @@ LEGACY_REVERTS = (
         "legacy": "会话开始预加载全部 `commands/governance/*.md`（无按需门控）",
         "class": REVERT_CLASS_PERFORMANCE,
     },
+    {
+        "feat": "FEAT-084",
+        "surface": "健康摘要执行面",
+        "modern": "会话健康摘要 `check-governance --summary-only --scope quick`"
+                  "（FEAT-025 quick 面 + 四态汇总行，DEC-303 形态 B）",
+        "legacy": "会话健康摘要复用无 scope 全量引擎（`--summary-only`）",
+        "class": REVERT_CLASS_PERFORMANCE,
+    },
 )
 
 #: `--` the semantics legacy mode MUST NOT touch. ``marker`` tokens must be

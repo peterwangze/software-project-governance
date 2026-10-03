@@ -60,16 +60,16 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
 
 ### 每会话 bootstrap 健康摘要（REQ-145.1, A3）
 
-本 SKILL 每会话经 persona 第一动作（加载本入口 + 运行 `resolve_entry.py --json`）**必然加载**。**执行时序（FEAT-034 首次交互前置）**：第 2 步（resolve_entry，fail-closed 不变）之后先走快路径——运行 `governance-bootstrap --format json` 获取热数据（resolve+状态+候选+migration 标志+next_actions）并**立即**呈现最小状态行 + AskUserQuestion 首次交互；健康摘要（`check-governance --summary-only`）**后置**为用户选择后按需执行的深检——深检结果不作为首次 ask 的前置条件；`health.state="deferred"` 期间状态行健康位显示「待检查」而非绿色通过。**深检后置 ≠ 深检可选**：用户选择推进类动作（发布/版本 bump/治理写回/恢复遗留任务的实际修改）时 MUST 先补跑健康摘要与对应深检再继续。后置执行时按以下契约运行健康摘要：
+本 SKILL 每会话经 persona 第一动作（加载本入口 + 运行 `resolve_entry.py --json`）**必然加载**。**执行时序（FEAT-034 首次交互前置）**：第 2 步（resolve_entry，fail-closed 不变）之后先走快路径——运行 `governance-bootstrap --format json` 获取热数据（resolve+状态+候选+migration 标志+next_actions）并**立即**呈现最小状态行 + AskUserQuestion 首次交互；健康摘要（`check-governance --summary-only --scope quick`）**后置**为用户选择后按需执行的深检——深检结果不作为首次 ask 的前置条件；`health.state="deferred"` 期间状态行健康位显示「待检查」而非绿色通过。**深检后置 ≠ 深检可选**：用户选择推进类动作（发布/版本 bump/治理写回/恢复遗留任务的实际修改）时 MUST 先补跑健康摘要与对应深检再继续——**推进类深检固定 full 面（FEAT-084/DEC-303，安全语义不回退）**：用 `check-governance --summary-only`（缺省 scope=full，全量引擎全部段）或显式 `--scope full`，quick 通过 ≠ 完整治理通过（插件产品自检/ArchGuard/loop-claim 等排除面段不在 quick 面）。后置执行时按以下契约运行健康摘要：
 
-- 运行 `python skills/software-project-governance/infra/verify_workflow.py check-governance --summary-only`（DSH 支持 CLI）。读取 `Governance: {N} issues` 汇总 + 首个 FAIL/WARN 项；摘要**只读、只显示、不阻断**（fail-safe 到简报而非硬失败）：
-  - `Governance: [PASS]`（N=0）→ 无动作，继续 bootstrap。
-  - `Governance: {N} issues`（N>0，附首个 `[FAIL]`/`[WARN]` 行）→ FAIL 级直达用户、WARN 记入会话上下文（M5.4b 纯通知；只读优先，不因摘要本身阻断）。
+- 运行 `python skills/software-project-governance/infra/verify_workflow.py check-governance --summary-only --scope quick`（DSH 支持 CLI；FEAT-084/DEC-303 形态 B——会话摘要默认 quick 面：FEAT-025 注册表 quick 面段执行 + 排除面段 NOT_RUN 披露，段数以注册表为准）。读取四态汇总行 `Governance: {N} issues (quick) | {p} passed / {f} failed / {nr} not-run / {c} cache-reused / {u} undetermined | run check-governance (full) for the {nr} not-run segments`——**quick N 与 full N 是两个口径，不得混读**（`(quick)` 标记与四态计数由 QR-4 机守卫强制；发布门基线/审查 census 一律按 full 口径解读）；NOT_RUN 段逐段携带注册表原因码，全部实质段未执行时 N 显示 `N=unknown` 而非 0；注册表守卫不可信时 fail-closed 自动回退 full 跑满（FIX-304 口径）。摘要**只读、只显示、不阻断**（fail-safe 到简报而非硬失败）；`--level` 详略档仅对 full 面生效，quick 输出不按 level 拆。legacy 回退（FEAT-040）：`GOVERNANCE_LEGACY_BEHAVIOR=1` 时会话摘要命令回退 `--summary-only`（无 scope，全量引擎）。按摘要驱动后续动作：
+  - `Governance: [PASS]`／`0 issues (quick)`（N=0）→ 无动作，继续 bootstrap。
+  - `Governance: {N} issues (quick)`（N>0，附首条 digest——FAIL 类优先，≤3 条）→ FAIL 级直达用户、WARN 记入会话上下文（M5.4b 纯通知；只读优先，不因摘要本身阻断）。
   - `Governance: unavailable` → `check-governance` 不可运行（verify_workflow.py 未定位）→ 继续 bootstrap 不阻断（fail-safe）。
   - `Governance: timed out` → 运行超时（>60s）→ 软超时取消该步，继续会话。
-  - `Governance: N issues (parse degraded)` → 摘要解析降级（输出格式漂移 fail-safe），不报错。
-- **详略分档**（`--level lightweight|standard|strict`，缺省 standard）：轻量=汇总+首个 FAIL；标准=汇总+首个 FAIL/WARN+最多 5 条明细（FAIL 优先，每条截断 130 字符）+「共 N issues，--level strict 查看全部」指引行（FIX-278 G1 top-N——消除 103 字符摘要触发 ~25KB 追查链的放大（audit-148 §2.1））；严格=汇总+全部 FAIL/WARN。三档**跑同一个** `--summary-only`，仅输出详略不同，**不按 profile 拆逻辑**。
-- **bootstrap 聚合快路径（FEAT-033；FEAT-034 起为第二动作）**：会话 bootstrap 在健康摘要之前 MUST 先跑 `python skills/software-project-governance/infra/verify_workflow.py governance-bootstrap --format json`（只读聚合，≤8KB 投影：resolve envelope + 状态投影 + 候选 + migration 标志 + next_actions）以支撑首次交互前置；其 `health.state="deferred"` 表示本命令未做健康检查——健康摘要仍以后置的 `check-governance --summary-only` 为准，deferred 期间显示「待检查」，不得把 deferred 当作已通过。
+  - `Governance: N=unknown (quick)` / `Governance: N issues (parse degraded)` → quick 面无实质执行知识或摘要解析降级（输出格式漂移 fail-safe），不报错；需要确数时运行 full 面深检。
+- **详略分档（full 面）**（`--level lightweight|standard|strict`，缺省 standard）：轻量=汇总+首个 FAIL；标准=汇总+首个 FAIL/WARN+最多 5 条明细（FAIL 优先，每条截断 130 字符）+「共 N issues，--level strict 查看全部」指引行（FIX-278 G1 top-N——消除 103 字符摘要触发 ~25KB 追查链的放大（audit-148 §2.1））；严格=汇总+全部 FAIL/WARN。三档**跑同一个** `--summary-only`，仅输出详略不同，**不按 profile 拆逻辑**。
+- **bootstrap 聚合快路径（FEAT-033；FEAT-034 起为第二动作）**：会话 bootstrap 在健康摘要之前 MUST 先跑 `python skills/software-project-governance/infra/verify_workflow.py governance-bootstrap --format json`（只读聚合，≤8KB 投影：resolve envelope + 状态投影 + 候选 + migration 标志 + next_actions）以支撑首次交互前置；其 `health.state="deferred"` 表示本命令未做健康检查——健康摘要仍以后置的 `check-governance --summary-only --scope quick` 为准，deferred 期间显示「待检查」，不得把 deferred 当作已通过。
 
 ## Bootstrap 规程明细（FEAT-041 契约 v2 承接面——触发器 ↔ 明细锚）
 
@@ -129,7 +129,7 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
 1. 读取 plan-tracker `工作流版本` 和当前安装版本（SKILL.md frontmatter `version`）。
 2. **IF** 当前版本 > 记录版本 → **呈现升级待处理**（AskUserQuestion 升级摘要：版本跨度 + CHANGELOG 要点 + 将执行的写操作清单（显式列出目标文件）+ 回滚方式；选项默认「执行升级（推荐）」），**用户确认后才执行**以下序列——确认前不执行任何写操作：
    - **A. 呈现更新摘要**（并入升级确认 AskUserQuestion——确认前零写操作）：版本跨度 + 从 CHANGELOG.md 提取的新增/修复要点。
-   - **B. 升级平台原生入口文件 bootstrap 段**（用户确认升级后执行——agent 执行）：读取当前入口文件，找到 `## Governance Bootstrap` 段落（FIX-238.2 陈旧标记：段落内 `@bootstrap-version` 头 < SKILL frontmatter `active_version` 即陈旧；无法确定新版本 → 不升级，输出 `/plugin update` 指引）；替换为**与最新模板完全一致**的内容（按 profile 选精简/完整版）；**保留入口文件其余所有内容不变**；输出：`Bootstrap 已升级：v{old} → v{new}。` **深检前置（MUST——DEC-207② P2-1 / M5.5 条 3）**：版本升级写序列属推进类动作——执行 B~E 写操作前 MUST 先完成健康摘要（`check-governance --summary-only`）+ 交叉验证等深检；用户确认升级不免除深检。
+   - **B. 升级平台原生入口文件 bootstrap 段**（用户确认升级后执行——agent 执行）：读取当前入口文件，找到 `## Governance Bootstrap` 段落（FIX-238.2 陈旧标记：段落内 `@bootstrap-version` 头 < SKILL frontmatter `active_version` 即陈旧；无法确定新版本 → 不升级，输出 `/plugin update` 指引）；替换为**与最新模板完全一致**的内容（按 profile 选精简/完整版）；**保留入口文件其余所有内容不变**；输出：`Bootstrap 已升级：v{old} → v{new}。` **深检前置（MUST——DEC-207② P2-1 / M5.5 条 3）**：版本升级写序列属推进类动作——执行 B~E 写操作前 MUST 先完成健康摘要（full 面深检：`check-governance --summary-only`，缺省 scope=full；FEAT-084 起 quick 面不替代推进类深检）+ 交叉验证等深检；用户确认升级不免除深检。
    - **C. 自动补全 plan-tracker 缺失结构**（用户确认升级后直接执行）：项目配置缺少字段？→ 自动添加（permission_mode、工作流版本）；缺少 `## 版本规划` 节？→ 自动添加（版本路线图空表 + 版本里程碑 + V-Gate + 版本规划纪律）；缺少 `## 需求跟踪矩阵` 节？→ 自动添加；缺少 `## 变更控制` 节？→ 自动添加（含快速通道）；变更控制流程是旧版（无快速通道）？→ 自动更新为含快速通道的版本；`.git/hooks/post-commit` / `.git/hooks/commit-msg` 不存在？→ 提示一次性安装命令（agent 不能自动写 .git/hooks/——安全问题）；**插件残留清理删除面**（cleanup.py——dry-run 先行 + 确认后执行；每版本更新时执行）：先运行 `python <plugin_home>/infra/cleanup.py --dry-run` 呈现待删报告（`<plugin_home>` 来自 resolve_entry.py；基于 manifest.json 的结构 diff——不在 canonical manifest 中的文件 = 残留；`.governance/`、`.git/` 硬编码保护不触碰），通过 AskUserQuestion 确认后再执行 `python <plugin_home>/infra/cleanup.py`（不确认 → 跳过清理，不影响其余步骤），输出 `✅ 已清理 {N} 个过期文件/目录`。
    - **D. 更新 plan-tracker `工作流版本`** 为当前版本。
    - **E. 持续归档触发检测与执行**（用户确认升级后执行；归档写操作同 ask-确认前置——dry-run 报告先行呈现，AskUserQuestion 确认后才执行迁移）：运行 `python <plugin_home>/infra/archive.py migrate --auto --dry-run` 检测四类触发器（`<plugin_home>` 来自 resolve_entry.py）：1. 首次迁移：`.governance/archive/index.md` 不存在 AND `plan-tracker.md` > 80 KB AND 已发布版本 ≥ 2；2. 发布强制：出现新的已发布版本后，除最新已发布版本外仍有未归档历史 task；3. task 增量：热文件中可归档 completed task 达到阈值；4. 90 天兜底：长期未归档但仍有可归档历史数据。dry-run 报告需要归档 → 呈现 dry-run 报告并通过 AskUserQuestion 确认后执行：a. `python <plugin_home>/infra/archive.py migrate --auto`；b. `python <plugin_home>/infra/verify_workflow.py check-archive-integrity`；c. 输出归档迁移摘要（格式: 📦 治理数据归档完成: 归档{N}个task→..., plan-tracker: {old}KB→{new}KB(-{pct}%)）。归档完整性失败 → 记录到 risk-log；发布/版本 bump 收尾场景 MUST 阻断完成。无可归档数据 → 跳过归档（不修改文件）。
@@ -206,7 +206,7 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
 - 取值词表封闭：legacy = `1/true/yes/on/legacy`；modern = `0/false/no/off/modern`。**非法值不猜**——非空但不在词表内时既不按 legacy 也不静默按 modern 执行，而是在 `governance-bootstrap` 的 `behavior.invalid` 显式报告后落到下一臂。
 - **生效形态的唯一事实源**：`governance-bootstrap --format json` 的 `behavior` 面（`profile`/`source`/`reverted`/`invariants`/`invalid`）。legacy 生效时回退提示置于 `next_actions` **首位**。
 
-**回退范围（只回退性能/编排行为）**：快路径→六段读取；首次交互前置→深检先行；≤8 字段默认视图→完整快照契约；Scenario 按需→预加载。
+**回退范围（只回退性能/编排行为）**：快路径→六段读取；首次交互前置→深检先行；≤8 字段默认视图→完整快照契约；Scenario 按需→预加载；会话健康摘要 `--scope quick` 四态摘要→无 scope 全量引擎（FEAT-084）。推进类深检固定 full 面属安全语义，不随 legacy 回退。
 
 **安全语义硬边界（legacy 模式一律不回退——无豁免）**：
 

@@ -200,7 +200,7 @@ Bootstrap 注入内容（按 `profile` 差异化——lightweight 注入轻量�
 ### 每次会话第一动作
 读取 `.governance/plan-tracker.md`，确认当前阶段、Gate 状态、活跃风险。如 `.governance/` 不存在，提醒先初始化。
 
-首次交互前置（FEAT-034）：热数据可经单命令快路径获取——`python <plugin_home>/infra/verify_workflow.py governance-bootstrap --format json`（只读聚合；不可用时回退直接读取 plan-tracker）；快路径就绪后立即向用户呈现最小状态行并进入首次 AskUserQuestion 交互，深检后置为用户选择后按需执行（推进类动作前 MUST 补齐）；健康面未检查时（`health.state="deferred"`）显示「待检查」而非通过。
+首次交互前置（FEAT-034）：热数据可经单命令快路径获取——`python <plugin_home>/infra/verify_workflow.py governance-bootstrap --format json`（只读聚合；不可用时回退直接读取 plan-tracker）；快路径就绪后立即向用户呈现最小状态行并进入首次 AskUserQuestion 交互，深检后置为用户选择后按需执行（推进类动作前 MUST 补齐）；健康面未检查时（`health.state="deferred"`）显示「待检查」而非通过。会话健康摘要 = `check-governance --summary-only --scope quick`（FEAT-084；推进类深检用 full 面 `--summary-only`）。
 
 触发模式行为：
 - always-on → 执行完整检查，治理面板可正常输出
@@ -294,7 +294,7 @@ AskUserQuestion 是唯一合法的用户提问方式。禁止内联文字提问�
 **用户要做的仍然只有：/plugin update → 下次会话。** 检测到版本差 → 呈现升级待处理（默认执行升级（推荐）），用户未响应前零写操作。
 
 ### Step 2: 交叉验证（3 项强制检查——后置深检；明细 §B2）
-时序：首次交互后按需执行；推进类动作（发布/版本 bump/治理写回/恢复遗留任务的实际修改）前 MUST 先完成。三项：①证据完整性（已完成任务查 evidence-log，缺则查 archive/index.md——归档证据=有效证据）②Gate 一致性（passed 无对应证据 = 不一致）③风险过期（活跃风险 >7 天未更新）。任一失败 → 列出差距 → AskUserQuestion 征求修复。
+时序：首次交互后按需执行；推进类动作（发布/版本 bump/治理写回/恢复遗留任务的实际修改）前 MUST 先完成。会话健康摘要 = `check-governance --summary-only --scope quick`（FEAT-084）；推进类深检固定 full 面（`--summary-only` 无 scope）。三项：①证据完整性（已完成任务查 evidence-log，缺则查 archive/index.md——归档证据=有效证据）②Gate 一致性（passed 无对应证据 = 不一致）③风险过期（活跃风险 >7 天未更新）。任一失败 → 列出差距 → AskUserQuestion 征求修复。
 
 ### Step 3: 阶段跳跃防护（MANDATORY）
 **IF** 用户请求直接进入开发/测试/发布等后期阶段，但前置 Gate 均为 pending → **MUST** AskUserQuestion 警告（M5.1 禁止内联警告）："当前项目处于 {current_stage} 阶段（Gate {n} pending）。你确定要跳过 {n-1} 个前置阶段直接进入 {requested_stage}？这可能导致返工和架构重构。" 选项：(1) "继续跳过——我已知悉风险" (2) "先完成当前 Gate 检查"。**跳过后 MUST 记录到 decision-log。**

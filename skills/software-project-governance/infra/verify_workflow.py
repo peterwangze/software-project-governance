@@ -15805,12 +15805,23 @@ def cmd_check_governance(args):
     first FAIL; strict=all FAIL/WARN) is printed. The default (no
     ``--summary-only``) path is byte-identical to the pre-existing output —
     the engine body lives in ``_run_full_engine_checks``.
+
+    FEAT-084 (DEC-303 form B): ``--scope quick|full`` declares the execution
+    scope — quick normalizes onto the FEAT-026 wiring (four-state line); the
+    default / ``--scope full`` stay byte-identical (full-caliber N for release
+    gates, census baselines and golden samples — the caliber split is caller
+    declared, never silent).
     """
     # Ensure UTF-8 stdout to handle Chinese characters from .md files (Windows GBK workaround)
     try:
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     except Exception:
         pass
+
+    # FEAT-084: scope quick ⇒ the quick face (FEAT-026 wiring below owns
+    # selection + four-state rendering + FIX-304 fail-closed fallback).
+    if getattr(args, "scope", "full") == "quick":
+        setattr(args, "quick", True)
 
     if getattr(args, "quick", False) or getattr(args, "shadow", False):
         # FEAT-026 Slice-2 wiring: the selector owns the four-state contract and
@@ -26294,6 +26305,12 @@ def main(argv=None):
                          help="S-A/S-B shadow channel (FX-195 §4.1): run quick + full "
                               "in one invocation and compare per-segment verdicts — "
                               "any mismatch is BLOCKING")
+    check_p.add_argument("--scope", dest="scope", default="full",
+                         choices=("quick", "full"),
+                         help="Execution scope (FEAT-084/DEC-303 form B): 'quick' "
+                              "runs the registry quick face with the four-state "
+                              "summary; 'full' (default) keeps full-engine output "
+                              "byte-identical — gates/census stay full")
 
     # execution-packet
     xp_p = subparsers.add_parser(

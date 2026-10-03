@@ -39,7 +39,7 @@
 - **AskUserQuestion 是唯一合法用户提问方式**——MUST NOT 内联文字提问；关键决策永远停下来（范围/架构/发布/风险接受/外部依赖/模式/阶段跳跃），非关键决策自动执行。
 - **M7.4 任务完成协议**：完成 → evidence → check-governance → audit → 再开新任务；**M7.5 先入账再动手**：任何新任务 MUST 先出现在 plan-tracker 中。
 - **治理文件读取编码（FIX-278 G4/F）**：pwsh 读 `.governance` 治理文件 MUST 显式 UTF-8（`-Encoding UTF8` / `ReadAllText(..., [Text.Encoding]::UTF8)`）——裸 `Get-Content` 产生 mojibake（AUDIT-147 D6）。
-- **完整交互规则**（M7.4/M7.5 全文、健康摘要 `--summary-only` 输出契约 FIX-278 G1、编码规约全文）见 `commands/governance/overview.md`。
+- **完整交互规则**（M7.4/M7.5 全文、健康摘要 `--summary-only` 输出契约 FIX-278 G1 + `--scope quick|full` 执行面契约 FEAT-084、编码规约全文）见 `commands/governance/overview.md`。
 
 
 ---
@@ -59,7 +59,7 @@
 
 **第二动作（FEAT-034 首次交互前置——快路径立即 ask）**：`resolved_root_ok == true` 后 MUST 运行 `python <plugin_home>/infra/verify_workflow.py governance-bootstrap --format json`（FEAT-033 只读聚合快路径，≤8KB：resolve envelope + 状态投影 + 候选 + migration 标志 + next_actions），**立即**呈现最小状态行（模式确认句 + 阶段/Gate 摘要 + carry-over/风险计数）并通过 AskUserQuestion 进入首次用户交互——Scenario D 呈现恢复选项（继续上次/审查快照/重新开始），Scenario F 呈现下一步引导（见 Scenario F 规程文件「状态展示后的引导」），其余场景按对应 Scenario 的首个用户决策点呈现。
 
-**深检后置（FEAT-034——用户选择后按需执行）**：`check-governance --summary-only` 健康摘要、plan-tracker 六段热数据逐段读取、交叉验证、版本升级摘要呈现与确认后写序列（Scenario C——FEAT-035 ask-确认前置）、归档检测**不作为首次 ask 的前置条件**——深检结果不阻塞首次交互；`governance-bootstrap` 的 `health.state="deferred"` 期间，状态行健康位显示「待检查」而非绿色通过（诚实语义——deferred ≠ 已检查）。**深检后置 ≠ 深检可选**：用户选择推进类动作（发布/版本 bump/治理写回/恢复遗留任务的实际修改）时 MUST 先补跑对应深检（健康摘要 + 交叉验证 + 按所选动作对应的升级/归档序列）再继续——版本升级写序列属推进类动作（DEC-207② P2-1），写操作执行前深检 MUST 补齐；安全约束零削减，只重排时序。
+**深检后置（FEAT-034——用户选择后按需执行）**：`check-governance --summary-only --scope quick` 健康摘要（FEAT-084/DEC-303 形态 B——会话面默认 quick：quick 面段执行 + 四态汇总行；legacy 回退时为无 scope 全量）、plan-tracker 六段热数据逐段读取、交叉验证、版本升级摘要呈现与确认后写序列（Scenario C——FEAT-035 ask-确认前置）、归档检测**不作为首次 ask 的前置条件**——深检结果不阻塞首次交互；`governance-bootstrap` 的 `health.state="deferred"` 期间，状态行健康位显示「待检查」而非绿色通过（诚实语义——deferred ≠ 已检查）。**深检后置 ≠ 深检可选**：用户选择推进类动作（发布/版本 bump/治理写回/恢复遗留任务的实际修改）时 MUST 先补跑对应深检（健康摘要——**推进类深检固定 full 面**：`check-governance --summary-only`〔缺省 scope=full〕，quick 通过 ≠ 完整治理通过 + 交叉验证 + 按所选动作对应的升级/归档序列）再继续——版本升级写序列属推进类动作（DEC-207② P2-1），写操作执行前深检 MUST 补齐；安全约束零削减，只重排时序。
 
 读取 `scenario_hint`（A..F）并按对应 Scenario 分支：
 

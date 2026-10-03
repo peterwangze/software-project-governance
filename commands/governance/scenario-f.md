@@ -9,7 +9,7 @@
 
 **数据源（MUST，FIX-270 秒级快路径）**：状态展示 = 运行 `python <plugin_home>/infra/verify_workflow.py status`（`<plugin_home>` 来自 resolve_entry.py，先 resolve 后 verify）→ **渲染其输出**（文本或 `status --json`），而不是重新手工读取治理文件。
 
-- **bootstrap 聚合快路径（FEAT-033，推荐入口）**：单次会话引导/路由需要 resolve + 状态 + 候选一次性数据时，MAY 运行 `python <plugin_home>/infra/verify_workflow.py governance-bootstrap --format json`（只读聚合：resolve envelope + 状态投影 + 候选 + migration 标志 + next_actions，≤8KB JSON 投影；`--budget-ms` 超时 fail-safe 返回 `deferred` 明示未完成范围）——一次调用替代"多次 verify 调用 + 多段读 plan-tracker"的串行链。`status` 仍是底层全量投影依赖（Delivery Trust Snapshot / Gate 全表等完整面以 `status` 输出为准）；`governance-bootstrap` 的 `health.state` 恒为 `deferred`（v1 未接线健康检查——健康面 MUST 另跑 `check-governance --summary-only`，不得把 deferred 当作已检查）。
+- **bootstrap 聚合快路径（FEAT-033，推荐入口）**：单次会话引导/路由需要 resolve + 状态 + 候选一次性数据时，MAY 运行 `python <plugin_home>/infra/verify_workflow.py governance-bootstrap --format json`（只读聚合：resolve envelope + 状态投影 + 候选 + migration 标志 + next_actions，≤8KB JSON 投影；`--budget-ms` 超时 fail-safe 返回 `deferred` 明示未完成范围）——一次调用替代"多次 verify 调用 + 多段读 plan-tracker"的串行链。`status` 仍是底层全量投影依赖（Delivery Trust Snapshot / Gate 全表等完整面以 `status` 输出为准）；`governance-bootstrap` 的 `health.state` 恒为 `deferred`（v1 未接线健康检查——健康面 MUST 另跑 `check-governance --summary-only --scope quick`（会话摘要默认，FEAT-084/DEC-303 形态 B；推进类深检用 full 面 `--summary-only` 无 scope），不得把 deferred 当作已检查）。
 - **默认不再要求全量读 4 个治理文件**（plan-tracker.md / evidence-log.md / risk-log.md / decision-log.md）——`status` 命令已用行级结构化解析输出 Scenario F 面板所需全部数据（项目配置 / Gate 状态 / 任务统计 / 活跃风险含 ≤3 天升级线标记 / 最近活动 / 插件版本新鲜度 / 建议下一步线索 / Delivery Trust Snapshot）。
 - **按需展开（例外）**：仅当 (a) 用户展开 `<details>` 详情，(b) `status` 输出字段缺失/解析失败，或 (c) 数据对不上时，才用 read 工具按需读取对应治理文件。
 - **Delivery Trust Snapshot 数据来源** = `status` 命令输出 + `governance-context` 既有输出（两者都是确定性 CLI 输出；Snapshot 字段合约见下方，不得以手工翻读证据文件替代）。
@@ -64,7 +64,7 @@ CLI snapshot 字段集（20 字段，与 `status` 输出逐字一致）：Resume
 
 Pack doc-surface 契约字段集（4 字段）：Pack summary、Default packs、Enabled packs、Pack boundary——载体 = 本文档与 `governance-status.md` 的固定语义行（docs 面），由 `check-governance-pack-status` 专项校验守护，不在任何 CLI snapshot 输出中。
 
-Health 映射注脚：默认视图 Health 位的数据源 = `check-governance --summary-only`，不是 snapshot 字段——完整 CLI artifact 中无对应字段，按 Full 指示行取 artifact 的消费者需另跑 `check-governance` 获取健康面。
+Health 映射注脚：默认视图 Health 位的数据源 = `check-governance --summary-only --scope quick`（会话摘要默认执行面，FEAT-084——quick N 与 full N 是两个口径，`(quick)` 标记机守卫强制），不是 snapshot 字段——完整 CLI artifact 中无对应字段，按 Full 指示行取 artifact 的消费者需另跑 `check-governance`（full）获取健康面。
 
 固定语义行（常量字段值——CLI snapshot 三行与 `status` 输出逐字一致，pack doc-surface 三行为 docs 契约常量、经 `check-governance-pack-status` token 校验；First-run preset guidance 与 Question budget 属机器契约面，不再挤占默认视图）：
 - Preset guidance: lite is the recommended first-run default; standard is for team delivery; strict is for regulated/high-risk work
@@ -83,7 +83,7 @@ Context acceptance harness：运行 `python <plugin_home>/infra/verify_workflow.
 
 ### 状态展示后的引导（MUST）
 
-**时序（FEAT-034 首次交互前置）**：本引导 = 快路径（第二动作）后的首次用户交互——`governance-bootstrap`/`status` 渲染完成后**立即**执行；健康摘要（`check-governance --summary-only`）等深检后置为用户选择后按需执行，`health.state="deferred"` 期间面板健康位显示「待检查」而非通过。
+**时序（FEAT-034 首次交互前置）**：本引导 = 快路径（第二动作）后的首次用户交互——`governance-bootstrap`/`status` 渲染完成后**立即**执行；健康摘要（`check-governance --summary-only --scope quick`，FEAT-084 会话面默认）等深检后置为用户选择后按需执行（推进类深检固定 full 面），`health.state="deferred"` 期间面板健康位显示「待检查」而非通过。
 
 展示完治理面板后，**MUST 通过 AskUserQuestion 引导用户进入下一步**——Scenario F 不是终点，是工作起点。
 

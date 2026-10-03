@@ -61,7 +61,7 @@ Full: 20-field CLI snapshot + 4-field pack doc-surface -> `python <plugin_home>/
   - `python <plugin_home>/infra/verify_workflow.py status`（文本面 Snapshot 段，20 字段全量）与 `status --json`（`delivery_trust_snapshot` 对象，20 键——机器消费入口）；
   - `python <plugin_home>/infra/verify_workflow.py first-run-demo --assert-snapshot`（demo/local-only 范围断言其中 19 字段（`FIRST_RUN_DEMO_REQUIRED_FIELDS`，不含 `Flow-unit lanes`）与 no-overclaim 标记——断言对象是 CLI 机器面，不随交互视图瘦身降级）。
 - Pack doc-surface 契约（4 字段）：Pack summary、Default packs、Enabled packs、Pack boundary——载体 = 本文件与 `/governance` 命令文档的固定语义行（docs 面），由 `check-governance-pack-status` 专项校验守护，不在任何 CLI snapshot 输出中。
-- Health 映射注脚：Health 位数据源 = `check-governance --summary-only`，不是 snapshot 字段——按 Full 指示行取 artifact 的消费者需另跑 `check-governance` 获取健康面。
+- Health 映射注脚：Health 位数据源 = `check-governance --summary-only --scope quick`（会话摘要默认执行面，FEAT-084——quick N 与 full N 是两个口径，`(quick)` 标记机守卫强制），不是 snapshot 字段——按 Full 指示行取 artifact 的消费者需另跑 `check-governance`（full；发布/Gate 检查等高风险场景固定 full 面）获取健康面。
 - 用户显式请求（如"完整状态"）或高风险场景（发布/Gate 检查/版本 bump/故障诊断）时，从 `status` 输出**直接渲染**完整面板，不手工重建。
 - 已有 `.governance/` 状态时，Mode 字段 MUST 写出 `Existing governance state detected`，并保留 carry-over active task count、open risk count、next action。
 - Next/Decision 字段的未完成事项 MUST come from recorded facts only: `.governance/plan-tracker.md` active rows/version roadmap, `.governance/session-snapshot.md` carry-over or next priorities, `.governance/risk-log.md`, and current local context. Every detected item MUST have `Source facts`; if no facts exist, output `not found` and `do not invent` new work.

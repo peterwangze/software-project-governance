@@ -23104,10 +23104,17 @@ class Feat039InjectionBudgetTests(unittest.TestCase):
     # these prices bounded live in checks/injection_budget.py
     # (CONTRACT_M1_BUDGET_TOKENS / CONTRACT_COMBINED_BUDGET_TOKENS,
     # FEAT-079 / DEC-291).
+    #
+    # FEAT-084 (2026-10-02, DEC-303 form B): the session health-summary
+    # line entered the lightweight template (+132 B) and the standard/strict
+    # Step 2 line (+150 B each) — the session face defaults to
+    # `--scope quick` while the deep-check full face stays explicit; the
+    # thin pointer is untouched (pointer semantics, no command line). Same
+    # guard discipline: the re-price rides the FEAT-084 ticket.
     ENTRY_TEMPLATE_CANONICAL_BYTES = {
-        "lightweight": 5089,
-        "standard": 10087,
-        "strict": 10975,
+        "lightweight": 5221,
+        "standard": 10237,
+        "strict": 11125,
         "secondary-thin": 2840,
     }
 

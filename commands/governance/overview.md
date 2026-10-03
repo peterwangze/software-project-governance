@@ -127,7 +127,7 @@ Web console 是可选的本地伴随状态面板，也是用户手动 `/governan
 - **非关键决策自动执行**：任务排序/证据格式/git commit/治理记录更新/实现细节/Gate 自评(通过时)
 - **M7.4 任务完成协议**：完成 → evidence → check-governance → audit → 再开新任务
 - **M7.5 先入账再动手**：任何新任务 MUST 先出现在 plan-tracker 中
-- **健康摘要输出契约（FIX-278 G1）**：`check-governance --summary-only` 默认（standard）输出 = 汇总行 + 首个 FAIL/WARN + 最多 5 条明细（FAIL 优先，每条截断 130 字符）+「共 N issues，--level strict 查看全部」指引行——模型无需再自行跑完整 check 追查（audit-148 §2.1：103 字符摘要 → ≈25KB 追查链，10× 放大）
+- **健康摘要输出契约（FIX-278 G1 + FEAT-084 执行面契约）**：`--scope`（quick|full，缺省 full）是调用方对执行面的显式声明——`--summary-only`（无 scope = full）输出 = 汇总行 + 首个 FAIL/WARN + 最多 5 条明细（FAIL 优先，每条截断 130 字符）+「共 N issues，--level strict 查看全部」指引行（字节等价不变——发布门基线/审查 census 按 full N 口径解读）；`--summary-only --scope quick`（会话健康摘要默认，DEC-303 形态 B）输出 = 四态汇总行 `Governance: {N} issues (quick) | {p} passed / {f} failed / {nr} not-run / {c} cache-reused / {u} undetermined | run check-governance (full) for the {nr} not-run segments` + ≤3 条 digest + NOT_RUN 逐段原因码——quick N 与 full N 是两个口径不得混读；推进类深检（发布/版本 bump/治理写回/升级写序列）固定 full 面，quick 通过 ≠ 完整治理通过——模型无需再自行跑完整 check 追查（audit-148 §2.1：103 字符摘要 → ≈25KB 追查链，10× 放大）
 - **治理文件读取编码（FIX-278 G4/F）**：pwsh 读取 `.governance` 治理文件 MUST 显式 UTF-8——`Get-Content -Encoding UTF8`（或 `[System.IO.File]::ReadAllText($p, [System.Text.Encoding]::UTF8)`）；禁止裸 `Get-Content`——Windows 默认 ANSI/GBK 解码会产生 mojibake（AUDIT-147 D6 / AUDIT-148 §4.3 乱码实证：裸 `-Tail 30` 读 evidence-log 22KB 大面积乱码）
 
 ---

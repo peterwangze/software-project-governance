@@ -108,7 +108,8 @@ def _fake_engine(stdout_text, count):
 
 def _args(**kwargs):
     defaults = dict(summary_only=False, fail_on_issues=False, summary_level="standard",
-                    quick=False, shadow=False, quick_requested=False, product_gates=False)
+                    quick=False, shadow=False, quick_requested=False, product_gates=False,
+                    scope="full")
     defaults.update(kwargs)
     return types.SimpleNamespace(**defaults)
 
@@ -552,6 +553,110 @@ class Acceptance4Fix304CaliberTests(unittest.TestCase):
             qr.guard_completeness(observed_ids=duplicated)
         with self.assertRaises(ValueError):
             qr.reconcile_snapshot(actual_ids=duplicated)
+
+
+# ── ⑤ FEAT-084 --scope quick 接线（DEC-303 形态 B）─────────────────────────
+class ScopeQuickWiringTests(unittest.TestCase):
+    """``--scope quick`` 复用 FEAT-026 接线（零第二选择路径）+ FIX-304 fail-closed。
+
+    形态 B 契约（评估 memo §4）：scope 是调用方对执行面的**显式声明**——
+    quick = 会话摘要面（45 段 + 四态行），full（缺省）= 全量引擎（70 段）。
+    N 口径分叉由调用方声明，绝不静默。
+    """
+
+    def test_scope_quick_dispatches_the_quick_face_with_reason_codes(self):
+        """验收②：--summary-only --scope quick → 四态汇总行 + NOT_RUN 逐段
+        原因码 + tail action（复用 FEAT-026 渲染，非第二实现）。"""
+        selection = _selection()
+        quick_output = _engine_output(selection.chosen, selection.not_quick, issues=1,
+                                      issue_map={"3": ["[WARN] x"]})
+        with mock.patch.object(vw, "_run_full_engine_checks",
+                               side_effect=_fake_engine(quick_output, 1)):
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                vw.cmd_check_governance(_args(summary_only=True, scope="quick"))
+        out = buf.getvalue()
+        self.assertIn("1 issues (quick)", out)
+        self.assertIn(f"{_not_quick_count()} not-run", out)
+        # NOT_RUN 逐段披露行 + 注册表原因码（不是裸段号列表）
+        self.assertIn("[NOT_RUN]", out)
+        reason_codes = set(selection.reasons.values())
+        self.assertTrue(any(code in out for code in reason_codes),
+                        "NOT_RUN 披露必须携带注册表原因码")
+        self.assertIn("run `check-governance` (full)", out)
+
+    def test_scope_quick_ignores_level_tiers(self):
+        """quick 面的披露预算由 selector 契约界定（≤3 条 digest）——
+        ``--level`` 是 full 面的详略档，quick 输出不按 level 拆。"""
+        selection = _selection()
+        quick_output = _engine_output(selection.chosen, selection.not_quick, issues=1,
+                                      issue_map={"3": ["[WARN] x"]})
+        outputs = []
+        for level in ("lightweight", "standard", "strict"):
+            with mock.patch.object(vw, "_run_full_engine_checks",
+                                   side_effect=_fake_engine(quick_output, 1)):
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    vw.cmd_check_governance(_args(
+                        summary_only=True, scope="quick", summary_level=level))
+            outputs.append(buf.getvalue())
+        self.assertEqual(outputs[0], outputs[1])
+        self.assertEqual(outputs[1], outputs[2])
+
+    def test_scope_quick_runs_the_engine_with_the_product_gate_disabled(self):
+        """性能机制（验收①前提）：scope quick 复用 FIX-270 跳过机制。"""
+        seen = {}
+
+        def inner(args):
+            seen["gate"] = vw._product_gate_active(args)
+            print("│  Result: PASSED — 0 issues found\n", end="")
+            return 0
+
+        with mock.patch.object(vw, "_run_full_engine_checks", side_effect=inner):
+            with redirect_stdout(io.StringIO()):
+                vw.cmd_check_governance(_args(summary_only=True, scope="quick"))
+        self.assertFalse(seen["gate"])
+
+    def test_scope_quick_fails_closed_to_full_when_untrusted(self):
+        """验收③ fail-closed：注册表观察不可信（FIX-304 口径）→ 回退 full
+        跑满（skip 面不出现）+ [FALLBACK] 通知。"""
+        untrusted = qs.select(observed_ids=_snapshot_ids() + ("29",))
+        self.assertTrue(untrusted.untrusted)  # fixture 自证
+        full_output = _engine_output(qr.registry_ids(), (), issues=0)
+        with mock.patch.object(qs, "select", return_value=untrusted), \
+             mock.patch.object(vw, "_run_full_engine_checks",
+                               side_effect=_fake_engine(full_output, 0)):
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                vw.cmd_check_governance(_args(summary_only=True, scope="quick"))
+        out = buf.getvalue()
+        self.assertIn("[FALLBACK]", out)
+        self.assertIn(qs.REASON_CENSUS_UNTRUSTED, out)
+        # full 回退：70 段全部执行（每段都有 section，非 [SKIP]）
+        self.assertNotIn("[NOT_RUN]", out)
+
+    def test_scope_quick_keeps_fail_on_issues_exit_semantics(self):
+        """§2.4 硬约束 3：--fail-on-issues 语义不变（仅 N>0 触发 exit 1）。"""
+        selection = _selection()
+        quick_output = _engine_output(selection.chosen, selection.not_quick, issues=2,
+                                      issue_map={"3": ["[WARN] x"], "19": ["[FAIL] y"]})
+        with mock.patch.object(vw, "_run_full_engine_checks",
+                               side_effect=_fake_engine(quick_output, 2)):
+            with redirect_stdout(io.StringIO()):
+                with self.assertRaises(SystemExit) as ctx:
+                    vw.cmd_check_governance(_args(
+                        summary_only=True, scope="quick", fail_on_issues=True))
+        self.assertEqual(ctx.exception.code, 1)
+
+    def test_scope_quick_does_not_exit_when_only_not_run_segments_exist(self):
+        """not-run 不触发也不豁免（N=0 → 不 exit）。"""
+        selection = _selection()
+        quick_output = _engine_output(selection.chosen, selection.not_quick, issues=0)
+        with mock.patch.object(vw, "_run_full_engine_checks",
+                               side_effect=_fake_engine(quick_output, 0)):
+            with redirect_stdout(io.StringIO()):
+                vw.cmd_check_governance(_args(
+                    summary_only=True, scope="quick", fail_on_issues=True))
 
 
 # ── 载体纪律与静态自检 ─────────────────────────────────────────────────────

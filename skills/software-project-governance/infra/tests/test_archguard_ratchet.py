@@ -551,7 +551,13 @@ class BaselineArtifactTests(unittest.TestCase):
         # line-count-neutral). Engine print census stays 1341 (zero drift —
         # FIX-421 adds zero print sites); r2/r6 faces byte-stable in the
         # same regen.
-        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 27472)
+        # FEAT-084 rider re-anchor (2026-10-02): 27472 -> 27489, +17/-0
+        # measured split — argparse ``--scope quick|full`` registration (+7),
+        # cmd_check_governance FEAT-084 docstring paragraph (+5) and the
+        # scope→quick normalization branch (+5, incl. comment). Engine print
+        # census stays 1341 (zero drift — FEAT-084 adds zero print sites);
+        # r2/r6 faces byte-stable in the same regen.
+        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 27489)
 
     def test_authored_zone_survives_regen(self):
         existing = _committed_baseline()

@@ -27,6 +27,7 @@ Run:
 """
 
 import io
+import subprocess
 import sys
 import types
 import unittest
@@ -367,6 +368,81 @@ class SummaryTailLineTwoStateTests(unittest.TestCase):
         out = self._run(text, 3, _args(summary_only=True))
         self.assertIn("共 3 issues，--level strict 查看全部", out)
         self.assertNotIn("构成已全量展示", out)
+
+
+class ScopeContractTests(unittest.TestCase):
+    """FEAT-084 (DEC-303 形态 B) — explicit ``--scope quick|full`` contract.
+
+    Wiring caliber: ``--summary-only --scope quick`` dispatches the FEAT-025/026
+    quick face (four-state summary line, FEAT-026 wiring reused — no second
+    selection path); the default (no ``--scope``) and the explicit
+    ``--scope full`` stay byte-identical to the pre-FEAT-084 summary, so every
+    existing consumer (release-gate baselines, review census, contract-matrix
+    golden samples) keeps its full-caliber N — the N caliber split is caller
+    declared, never silent (evaluation memo §4 form B).
+    """
+
+    _run = SummaryOnlyDispatchTests._run
+
+    def _args_scope(self, **kwargs):
+        scope = kwargs.pop("scope", None)
+        base = _args(**kwargs)
+        if scope is not None:
+            setattr(base, "scope", scope)
+        return base
+
+    def test_scope_full_is_byte_identical_to_the_default_summary(self):
+        """Acceptance ③: explicit ``--scope full`` == no-scope summary — same
+        captured engine text must render the exact same bytes (snapshot-diff
+        caliber, test #4 precedent)."""
+        text = _engine_output(
+            4, fail_lines=["FIX-222: x"], warn_lines=["2 stale risk(s):"])
+        default_out = self._run(text, 4, _args(summary_only=True))
+        full_out = self._run(text, 4, self._args_scope(
+            summary_only=True, scope="full"))
+        self.assertEqual(default_out, full_out)
+
+    def test_scope_quick_prints_the_four_state_summary_line(self):
+        """Acceptance ②: ``--scope quick`` renders the selector's four-state
+        summary line (quick N caliber + not-run count + tail action) instead
+        of the FIX-278 G1 tier output."""
+        text = _engine_output(2, fail_lines=["FIX-222: x"],
+                              warn_lines=["2 stale risk(s):"])
+        out = self._run(text, 2, self._args_scope(
+            summary_only=True, scope="quick"))
+        lines = out.splitlines()
+        self.assertIn("(quick)", lines[0], out)
+        self.assertIn("not-run", lines[0], out)
+        self.assertIn("undetermined", lines[0], out)
+        # tail action: not-run segments must point at the full face
+        self.assertIn("run `check-governance` (full)", out)
+        # the FIX-278 G1 tier guidance is a FULL-face concern — quick does not
+        # invite a strict chase
+        self.assertNotIn("--level strict 查看全部", out)
+
+    def test_scope_quick_without_summary_only_also_dispatches_quick(self):
+        """``--scope quick`` is the caller's execution-scope declaration: it
+        dispatches the quick face even without ``--summary-only`` (equivalent
+        to the FEAT-026 ``--quick`` flag — one selection path)."""
+        text = _engine_output(1, warn_lines=["2 stale risk(s):"])
+        with mock.patch.object(vw, "_run_full_engine_checks",
+                               side_effect=_fake_engine(text, 1)):
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                vw.cmd_check_governance(self._args_scope(scope="quick"))
+        out = buf.getvalue()
+        self.assertIn("(quick)", out.splitlines()[0], out)
+
+    def test_invalid_scope_is_rejected_by_argparse(self):
+        """The scope vocabulary is closed (quick|full) — a bogus value fails
+        at the argparse layer (exit 2), never silently interpreted."""
+        result = subprocess.run(
+            [sys.executable, "-B", str(_INFRA_DIR / "verify_workflow.py"),
+             "check-governance", "--summary-only", "--scope", "bogus"],
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=180, cwd=str(_INFRA_DIR.parents[2]))
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("--scope", result.stderr)
 
 
 class BootstrapContractTests(unittest.TestCase):

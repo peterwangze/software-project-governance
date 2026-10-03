@@ -220,12 +220,12 @@
    - 升级截止日期 ≤ 当前日期的风险 → 立即升级
 3. 向自己确认：当前阶段、最新 Gate 结论、活跃风险数、遗留任务
 4. 如有未解决的条件（passed-with-conditions），**MUST** 优先处理
-5. **健康摘要（R-D1a / REQ-145.1，bootstrap 自动运行——FEAT-034 起为后置深检）**：运行 `python skills/software-project-governance/infra/verify_workflow.py check-governance --summary-only`（DSH 支持 CLI；摘要为只读、只显示、不阻断），按摘要驱动后续动作：
-   - `Governance: [PASS]`（N=0）→ 无动作，继续 bootstrap。
-   - `Governance: {N} issues`（N>0，附首个 `[FAIL]` / `[WARN]` 行——standard 档另附最多 5 条明细（FAIL 优先，每条截断 130 字符）与「共 N issues，--level strict 查看全部」指引行，FIX-278 G1 top-N；G1 契约以 SKILL.md 详略分档与 `_print_check_summary` 为准）→ FAIL 级直达用户、WARN 记入会话上下文（M5.4b 纯通知；**只读优先，不因摘要本身阻断**）。
+5. **健康摘要（R-D1a / REQ-145.1，bootstrap 自动运行——FEAT-034 起为后置深检；FEAT-084 起会话面默认 quick）**：运行 `python skills/software-project-governance/infra/verify_workflow.py check-governance --summary-only --scope quick`（DSH 支持 CLI；DEC-303 形态 B——quick 面段执行 + 排除面段 NOT_RUN 披露，段数以 FEAT-025 注册表为准；legacy 回退：`GOVERNANCE_LEGACY_BEHAVIOR=1` 时会话摘要命令改 `--summary-only` 无 scope 全量引擎；摘要为只读、只显示、不阻断），读取四态汇总行 `Governance: {N} issues (quick) | {p} passed / {f} failed / {nr} not-run / {c} cache-reused / {u} undetermined | …`——quick N 与 full N 是两个口径，不得混读（`(quick)` 标记由 QR-4 机守卫强制；full 面详略档契约以 SKILL.md 详略分档与 `_print_check_summary` 为准，`--level` 仅对 full 面生效）。按摘要驱动后续动作：
+   - `Governance: [PASS]`／`0 issues (quick)`（N=0）→ 无动作，继续 bootstrap。
+   - `Governance: {N} issues (quick)`（N>0，附首条 digest——FAIL 类优先，≤3 条；注册表守卫不可信时 fail-closed 自动回退 full 跑满并附 `[FALLBACK]` 通知，FIX-304 口径）→ FAIL 级直达用户、WARN 记入会话上下文（M5.4b 纯通知；**只读优先，不因摘要本身阻断**）。
    - `Governance: unavailable` → `check-governance` 不可运行（verify_workflow.py 未定位）→ 继续 bootstrap，不阻断（fail-safe 到简报而非硬失败）。
    - `Governance: timed out` → 运行超时（>60s，DEC-149 验收量级）→ 软超时取消该步，继续会话。
-   - `Governance: N issues (parse degraded)` → 摘要解析降级（输出格式漂移 fail-safe），不报错。
+   - `Governance: N=unknown (quick)` / `Governance: N issues (parse degraded)` → quick 面无实质执行知识或摘要解析降级（输出格式漂移 fail-safe），不报错；需要确数时运行 full 面深检。
 
 ### M4.2 会话结束协议
 
@@ -412,9 +412,9 @@ AskUserQuestion 是交互边界的**默认行为**。以下是唯一有效的跳
 
 会话 bootstrap 的交互时序纪律——快路径数据就绪后立即把第一次决策权交给用户，深检后置但不豁免：
 
-1. **快路径立即 ask（MUST）**：第一动作 `resolve_entry.py --json`（fail-closed，不变）之后，第二动作为快路径数据获取（`governance-bootstrap --format json` 单命令聚合，FEAT-033）——就绪后 MUST **立即**呈现最小状态行（模式确认 + 阶段/Gate 摘要 + carry-over/风险计数）并通过 AskUserQuestion 进入首次用户交互。深检（`check-governance --summary-only` 健康摘要、交叉验证、版本升级序列、归档检测）**不作为首次 ask 的前置条件**，后置为用户选择后按需执行。
+1. **快路径立即 ask（MUST）**：第一动作 `resolve_entry.py --json`（fail-closed，不变）之后，第二动作为快路径数据获取（`governance-bootstrap --format json` 单命令聚合，FEAT-033）——就绪后 MUST **立即**呈现最小状态行（模式确认 + 阶段/Gate 摘要 + carry-over/风险计数）并通过 AskUserQuestion 进入首次用户交互。深检（`check-governance --summary-only --scope quick` 健康摘要、交叉验证、版本升级序列、归档检测）**不作为首次 ask 的前置条件**，后置为用户选择后按需执行。
 2. **诚实语义（MUST）**：健康面未检查时（`health.state="deferred"`）状态行健康位显示「待检查」，MUST NOT 显示绿色通过或暗示已检查——deferred 不是 PASS。
-3. **深检后置 ≠ 深检可选（MUST）**：用户选择推进类动作（发布/版本 bump/治理写回/恢复遗留任务的实际修改）时，MUST 先补跑对应深检再继续——本条只重排深检时序，不削减 M6 Gate 义务、M8 验证义务与任何安全约束（fail-closed 第一动作不变）。
+3. **深检后置 ≠ 深检可选（MUST）**：用户选择推进类动作（发布/版本 bump/治理写回/恢复遗留任务的实际修改）时，MUST 先补跑对应深检再继续——推进类深检面固定 full（FEAT-084/DEC-303）：健康摘要深检用 `check-governance --summary-only`（缺省 scope=full）或显式 `--scope full`，**quick 通过 ≠ 完整治理通过**（插件产品自检等排除面段不在 quick 面）；本条只重排深检时序，不削减 M6 Gate 义务、M8 验证义务与任何安全约束（fail-closed 第一动作不变）。
 4. **实质工作时间跟踪义务（arch 判定，AUDIT-154）**：禁止把"首次 ask 提前"单独当作治理提效结论——"先 ask 选完、用户再等数分钟深检"是虚假改善。治理开销评估 MUST 同时跟踪**进入实质工作时间**（time-to-substantive-work，`governance-cost-report`），与 TTFA（time-to-first-ask）成对报告。口径声明：`time_to_work` 是治理开销的 **lower bound**（DEC-205——ask 后的治理性 read/pwsh 计入 first_work_tool），不得把下界当无偏值使用；跨时点轨迹对比不可直接 diff（RISK-052）——效果验证用同快照内对比或新会话采样后重新生成对照。
 
 ## M6. Gate 行为（MANDATORY）

@@ -606,5 +606,59 @@ class FailClosedUnaffectedTests(unittest.TestCase):
         self.assertIn("commands/governance.md", paths)
 
 
+class Feat084HealthSummaryScopeTests(unittest.TestCase):
+    """FEAT-084 (DEC-303 形态 B) — the health-summary quick scope rollback.
+
+    The session protocol's health summary consumes
+    ``check-governance --summary-only --scope quick`` (quick face, four-state
+    line). Under legacy the session summary command falls back to the
+    scope-less ``--summary-only`` (full engine) — a PERFORMANCE revert only:
+    the deep-check full-face obligation (推进类深检 full 必达) is a safety
+    semantic and never rolls back.
+    """
+
+    def test_health_summary_scope_is_registered_as_a_performance_revert(self):
+        entries = [item for item in bp.LEGACY_REVERTS
+                   if item["feat"] == "FEAT-084"]
+        self.assertEqual(len(entries), 1,
+                         "FEAT-084 must land exactly one revert entry")
+        item = entries[0]
+        self.assertEqual(item["class"], bp.REVERT_CLASS_PERFORMANCE)
+        self.assertEqual(item["surface"], "健康摘要执行面")
+        self.assertIn("--scope quick", item["modern"])
+        self.assertIn("全量", item["legacy"])
+
+    def test_legacy_resolution_reports_the_health_summary_surface(self):
+        result = bp.resolve_behavior_profile(
+            env={bp.ENV_VAR: "1"}, plan_tracker_text="")
+        self.assertTrue(result["is_legacy"])
+        self.assertIn("健康摘要执行面", result["revert_ids"])
+
+    def test_session_protocol_publishes_the_quick_scope_default(self):
+        skill = (INFRA.parent / "SKILL.md").read_text(encoding="utf-8")
+        proto = (INFRA.parent / "references" / "behavior-protocol.md"
+                 ).read_text(encoding="utf-8")
+        for name, text in (("SKILL.md", skill),
+                           ("behavior-protocol.md", proto)):
+            with self.subTest(surface=name):
+                self.assertIn("--summary-only --scope quick", text,
+                              f"{name} must publish the session health-summary "
+                              "command with the quick scope (FEAT-084)")
+
+    def test_deep_check_full_face_obligation_survives(self):
+        """验收④：安全语义不回退——推进类深检 full 必达措辞保留且显式。"""
+        skill = (INFRA.parent / "SKILL.md").read_text(encoding="utf-8")
+        proto = (INFRA.parent / "references" / "behavior-protocol.md"
+                 ).read_text(encoding="utf-8")
+        for name, text in (("SKILL.md", skill),
+                           ("behavior-protocol.md", proto)):
+            with self.subTest(surface=name):
+                self.assertIn("深检后置 ≠ 深检可选", text,
+                              f"{name} lost the deep-check-not-optional wording")
+                self.assertIn("scope full", text,
+                              f"{name} must make the deep-check FULL face "
+                              "explicit (quick 通过 ≠ 完整治理通过)")
+
+
 if __name__ == "__main__":
     unittest.main()

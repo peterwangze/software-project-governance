@@ -289,6 +289,11 @@ class GuardOutputPinTests(unittest.TestCase):
         self.assertTrue(stored["expected_line_prefix"].startswith(
             "      期望列形: "))
         self.assertTrue(stored["result_pass_line"].startswith("Result: PASS"))
+        # FIX-423: the PASS line is dual-state since FEAT-081 (empty host
+        # carries the M2 ledger-write WARN; well-formed host renders the
+        # clean zero-WARN line) — both fixtures' lines are pinned separately.
+        self.assertTrue(stored["result_pass_line_wellformed"].startswith(
+            "Result: PASS"))
         self.assertTrue(stored["result_fail_prefix"].startswith(
             "Result: FAIL"))
 
@@ -319,7 +324,12 @@ class GuardOutputPinTests(unittest.TestCase):
                     any(fail_re.match(ln) for ln in lines),
                     "FAIL Result line must match pinned format")
             else:
-                self.assertIn(pin["result_pass_line"], lines,
+                # FIX-423: PASS lines are pinned per fixture — the empty
+                # host discloses the FEAT-081 M2 ledger WARN while the
+                # well-formed host renders the clean zero-WARN line.
+                pass_key = ("result_pass_line" if scenario == "pass"
+                            else "result_pass_line_wellformed")
+                self.assertIn(pin[pass_key], lines,
                               f"{scenario}: PASS Result line drifted")
 
     def test_exit_codes_pinned(self):

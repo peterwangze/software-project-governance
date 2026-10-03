@@ -96,7 +96,18 @@ SNAPSHOT = _INFRA_DIR / "contract_matrix" / "snapshots.json"
 #      Rate) box renderings, the demand-source-revise CLI output, and the
 #      execution-packet incremental-merge note. Sanctioned regen re-anchored
 #      in the same change; see the R1 anchor lineage note below.
-FACTS_PRINT_TOTAL = 1338
+#   -> 1341 (0.93.1 window, FEAT-081 M2 / CR-R1-2, 2026-10-02: +3 in
+#      _run_full_engine_checks — the Check 42 SKIP 语义分态 rendering
+#      replaced the legacy single SKIP print with the vacuum-SKIP /
+#      fallback-WARN branches (window note + WARN reason + degradation
+#      disclosure). architecture-baseline.json was re-anchored in the same
+#      commit (the "archguard rider"), and FEAT-084's later baseline touch
+#      (0377b78, 2026-10-03) carried the same 1341 with a zero per-function
+#      diff — but this frozen-count literal, the third mirror, was left at
+#      1338; synced here by FIX-423 with the bisect evidence
+#      (344ec8c..2aa2377 census: _run_full_engine_checks 608 -> 611, all
+#      other functions unchanged).)
+FACTS_PRINT_TOTAL = 1341
 
 
 def _committed_baseline():

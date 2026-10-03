@@ -293,7 +293,8 @@
       "issue_line_regex": "^    - (?:L\\d+ )?.+$",
       "result_fail_prefix": "Result: FAIL — ",
       "result_fail_regex": "^Result:\\ FAIL\\ —\\ \\d+ issue\\(s\\)。[\\s\\S]*$",
-      "result_pass_line": "Result: PASS — 0 issue(s)（SKIPPED = 产物缺席，非缺陷）。守卫只检不改（零 .governance 治理记录写入；状态基线 .write-guard-state.json 为守卫自身工件）。"
+      "result_pass_line": "Result: PASS — 0 FAIL issue(s), 1 WARN(s)（受管行变更无机器凭证——响亮披露不阻断；补 governance_store/task_row_update 凭证或由写入者复核后复跑本命令即基线翻新；分族 BLOCK 机制已交付未激活——FEAT-064，姿态经 --show-posture 查看）。守卫只检不改（零 .governance 治理记录写入）。",
+      "result_pass_line_wellformed": "Result: PASS — 0 issue(s)（SKIPPED = 产物缺席，非缺陷）。守卫只检不改（零 .governance 治理记录写入；状态基线 .write-guard-state.json 为守卫自身工件）。"
     },
     "result_shapes": {
       "check_change_triage": {
@@ -369,6 +370,16 @@
               "baselined": {
                 "$seq": "list"
               },
+              "deferred_observation": {
+                "$dict": {
+                  "detector_errors": "int",
+                  "fired": "int",
+                  "hits": "int",
+                  "reason": "str",
+                  "rows_judged": "int",
+                  "skip_kind": "str"
+                }
+              },
               "issues": {
                 "$seq": "list"
               },
@@ -421,14 +432,14 @@
   },
   "generated": {
     "generator_relpath": "skills/software-project-governance/infra/contract_matrix/generator.py",
-    "git_head": "2ef9fc206be42a968e4f4e82a8d0d8d800d9c361",
+    "git_head": "768021b3bae3df30e42c645bb3a5a2f7d946a135",
     "python": {
       "family": "3.14",
       "implementation": "cpython",
       "platform": "win32",
       "version": "3.14.3"
     },
-    "timestamp_utc": "2026-09-29T03:36:02+00:00"
+    "timestamp_utc": "2026-10-03T05:26:23+00:00"
   },
   "python_family_pins": [
     {

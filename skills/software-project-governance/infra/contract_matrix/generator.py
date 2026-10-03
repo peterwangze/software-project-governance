@@ -257,9 +257,18 @@ def extract_result_shapes() -> dict:
 # Deterministic fixtures (temp dirs, zero real-environment contact):
 #   A empty host        → all four faces SKIPPED → ``Result: PASS`` exit 0
 #   B malformed tracker → FAIL face with issue lines + 期望列形 → exit 1
+#   C well-formed host  → clean PASS face → ``Result: PASS`` exit 0
 # Markers below are DERIVED from the observed output (prefixes cut from real
 # lines), so any wording/format drift regenerates a different pin and the
 # differential harness reports it.
+#
+# FIX-423: the PASS Result line is dual-state since FEAT-081 — the empty
+# host discloses the M2 deferred-ledger write failure as exactly 1 WARN
+# (loud disclosure, RT-5 caliber: the ledger is the WARN→FAIL flip's
+# false-positive data container) while the well-formed host renders the
+# clean zero-WARN line. The pin therefore carries each fixture's PASS line
+# separately (``result_pass_line`` / ``result_pass_line_wellformed``); a
+# single shared string can no longer represent the face.
 
 _MALFORMED_TRACKER = (
     "# Plan Tracker (contract-matrix fixture)\n"
@@ -348,6 +357,12 @@ def derive_guard_output_pin() -> dict:
         (line for line in fail_lines if line.startswith("Result: FAIL")), None)
     if result_pass is None or result_fail is None:
         raise RuntimeError("guard Result lines not found — engine drift")
+    result_pass_wellformed = next(
+        (line for line in wellformed_lines
+         if line.startswith("Result: PASS")), None)
+    if result_pass_wellformed is None:
+        raise RuntimeError(
+            "wellformed guard Result: PASS line not found — engine drift")
     fail_prefix_match = re.match(r"^(Result: FAIL — )\d+", result_fail)
     if fail_prefix_match is None:
         raise RuntimeError("guard FAIL Result format drifted")
@@ -382,6 +397,7 @@ def derive_guard_output_pin() -> dict:
         "issue_line_regex": r"^    - (?:L\d+ )?.+$",
         "expected_line_prefix": expected_match.group(1),
         "result_pass_line": result_pass,
+        "result_pass_line_wellformed": result_pass_wellformed,
         "result_fail_prefix": fail_prefix_match.group(1),
         "result_fail_regex": "^" + re.escape(fail_prefix_match.group(1))
         + r"\d+ issue\(s\)。[\s\S]*$",

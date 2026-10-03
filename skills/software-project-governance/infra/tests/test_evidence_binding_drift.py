@@ -16,6 +16,8 @@ Also guards, in the same batch (FEAT-069):
     row prefix regex accepts the bumped ``MIGRATION_VERSION`` stamp.
   - ADR-RB-2 two-face goal-layer contract gate (factory WARN form): face ①
     host-activation precondition + face ② sensitive-action gate judge.
+    FIX-431: 发布间隙态（无活跃 P0/P1 unit）→ 两 face 判 N/A 不发 WARN；
+    有活跃 unit 的运行期判定链（PASS/WARN/BLOCK）零变化——正负用例同册守护。
 
 ALL tests use ``tempfile.TemporaryDirectory`` — the real ``.governance/`` is
 NEVER touched. Assertions are content-based only (no wall-clock; RISK-048).
@@ -546,14 +548,59 @@ class TestRB2ActivationPrecondition(unittest.TestCase):
         self.assertTrue(any("成功标准" in w for w in readiness["warn"]),
                         readiness["warn"])
 
-    def test_precondition_warns_when_no_active_units(self):
+    def test_precondition_gap_state_judges_na_without_warn(self):
+        # FIX-431 正例: 发布间隙态（无活跃 P0/P1 unit——任务表全完成）无判定
+        # 对象 → face① 判 N/A，不发「无活跃 P0/P1 unit」WARN（旧实现在此发
+        # WARN 且计入渲染块三条之一）。
         with tempfile.TemporaryDirectory() as td:
             with _HostFixture(
                     td, plan_text=_plan_tracker_text(with_active_task=False),
                     packets={}):
                 readiness = ed.check_goal_layer_contract_readiness()
+        self.assertFalse(readiness["active_units"])
         self.assertFalse(readiness["precondition_met"])
-        self.assertTrue(any("无活跃" in w for w in readiness["warn"]),
+        self.assertEqual(readiness["warn"], [])  # 间隙态零 WARN
+
+    def test_precondition_gap_state_na_even_without_goal_face(self):
+        # 间隙态无判定对象优先于 goal_face 追溯检查——goal_face 缺失 WARN
+        # 只在有活跃 unit 的运行期有意义（运行期形态由
+        # test_precondition_warns_when_goal_face_missing 守护，零变化）。
+        with tempfile.TemporaryDirectory() as td:
+            with _HostFixture(
+                    td, plan_text=_plan_tracker_text(
+                        goal_face=False, with_active_task=False),
+                    packets={}):
+                readiness = ed.check_goal_layer_contract_readiness()
+        self.assertFalse(readiness["active_units"])
+        self.assertFalse(readiness["precondition_met"])
+        self.assertEqual(readiness["warn"], [])
+
+    def test_precondition_gap_state_still_discloses_unreadable_packets(self):
+        # 间隙态改判 N/A 不吞评估完整性异常：execution packets 不可读仍 WARN
+        # （fail-open 披露保持——FIX-431 只重判「无活跃 unit」的判定结论，
+        # 不隐藏异常；安全语义不回退）。
+        with tempfile.TemporaryDirectory() as td:
+            with _HostFixture(
+                    td, plan_text=_plan_tracker_text(with_active_task=False),
+                    packets=None):  # 不写 packets 文件 → load_error
+                readiness = ed.check_goal_layer_contract_readiness()
+        self.assertFalse(readiness["active_units"])
+        self.assertFalse(readiness["precondition_met"])
+        self.assertTrue(any("不可读" in w for w in readiness["warn"]),
+                        readiness["warn"])
+
+    def test_precondition_active_unit_without_contract_still_warns(self):
+        # FIX-431 负例: 有活跃 P0/P1 unit 但无 contract → 现行为 WARN 全保持
+        # （间隙态 N/A 不得外溢到运行期判定链）。
+        with tempfile.TemporaryDirectory() as td:
+            with _HostFixture(
+                    td, plan_text=_plan_tracker_text(goal_face=True),
+                    packets={}):  # 活跃任务存在、无对应 packet
+                readiness = ed.check_goal_layer_contract_readiness()
+        self.assertTrue(readiness["active_units"])
+        self.assertFalse(readiness["precondition_met"])
+        self.assertTrue(any("穿透" in w or "TO_BE_DEFINED" in w
+                            for w in readiness["warn"]),
                         readiness["warn"])
 
 
@@ -601,6 +648,44 @@ class TestRB2SensitiveActionGate(unittest.TestCase):
         # No packets file → contract readiness unmet → would-block family.
         self.assertFalse(j["contract_ready"])
 
+    def test_judge_gap_state_na_for_sensitive_and_nonsensitive(self):
+        # FIX-431 正例: 间隙态（无活跃 P0/P1 unit）无判定语境——demo 契约缺
+        # 失 WARN/BLOCK 只在有活跃 unit 的运行期才有意义 → sensitive 与
+        # non-sensitive 都判 N/A（verdict 与 raw_verdict 同值，不发 WARN）。
+        with tempfile.TemporaryDirectory() as td:
+            with _HostFixture(
+                    td, plan_text=_plan_tracker_text(with_active_task=False),
+                    packets={}):
+                readiness = ed.check_goal_layer_contract_readiness()
+                j_sensitive = ed.judge_rb2_contract_gate(
+                    "release 0.90.0 (发布)", readiness)
+                j_plain = ed.judge_rb2_contract_gate(
+                    "check-governance", readiness)
+        self.assertTrue(j_sensitive["sensitive"])
+        self.assertFalse(j_plain["sensitive"])
+        for j in (j_sensitive, j_plain):
+            self.assertEqual(j["raw_verdict"], "N/A")
+            self.assertEqual(j["verdict"], "N/A")
+
+    def test_judge_gap_state_na_survives_enforced_flip(self):
+        # 边界守护: enforcement 翻转机制（B-12/B-13 授权票域）零触碰——间隙
+        # 态无判定对象，翻转后 sensitive action 仍判 N/A 而非 BLOCK。
+        readiness = {"precondition_met": False, "active_units": False}
+        with mock.patch.object(ed, "RB2_SENSITIVE_BLOCK_ENFORCED", True):
+            j = ed.judge_rb2_contract_gate("授权票翻转 authorization-flip",
+                                           readiness)
+        self.assertEqual(j["raw_verdict"], "N/A")
+        self.assertEqual(j["verdict"], "N/A")
+        self.assertEqual(j["enforcement"], "enforced")
+
+    def test_judge_handbuilt_readiness_keeps_runtime_semantics(self):
+        # 向后兼容: 直接调用方 hand-built readiness（缺 active_units 键）按
+        # 运行期处理——WARN/BLOCK 判定链零变化（既有契约，FIX-431 不外溢）。
+        readiness = {"precondition_met": False}
+        j = ed.judge_rb2_contract_gate("release 0.90.0 (发布)", readiness)
+        self.assertEqual(j["raw_verdict"], "BLOCK")
+        self.assertEqual(j["verdict"], "WARN")
+
 
 class TestRB2RendererBlock(unittest.TestCase):
     """The renderer wiring face — WARN-grade output, never [FAIL]."""
@@ -643,6 +728,38 @@ class TestRB2RendererBlock(unittest.TestCase):
         self.assertIn("(judge=BLOCK)", out)   # 阻断判据可观测
         self.assertIn("enforcement=warn-only", out)
         self.assertNotIn("[FAIL]", out)
+
+    def test_renderer_gap_state_shows_na_no_warn(self):
+        # FIX-431 正例: 间隙态（无活跃 P0/P1）→ face① N/A + demo faces N/A，
+        # 全块零 [WARN] 行（旧实现发三条 WARN：face① 一条 + demo 两条）。
+        with tempfile.TemporaryDirectory() as td:
+            with _HostFixture(
+                    td, plan_text=_plan_tracker_text(with_active_task=False),
+                    packets={}):
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    ed.render_rb2_goal_contract_block()
+        out = buf.getvalue()
+        self.assertIn("Activation precondition: [N/A]", out)
+        self.assertEqual(out.count("[N/A]"), 3)  # face① + 两条 demo
+        self.assertNotIn("[WARN]", out)
+        self.assertNotIn("[FAIL]", out)
+
+    def test_renderer_active_unit_without_contract_keeps_warn(self):
+        # FIX-431 负例: 有活跃 P0/P1 但无 contract → 现行为渲染零变化
+        # （face① WARN + demo judge=BLOCK/WARN 全保持）。
+        with tempfile.TemporaryDirectory() as td:
+            with _HostFixture(
+                    td, plan_text=_plan_tracker_text(goal_face=True),
+                    packets={}):  # 活跃任务存在、无对应 packet
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    ed.render_rb2_goal_contract_block()
+        out = buf.getvalue()
+        self.assertIn("Activation precondition: [WARN]", out)
+        self.assertIn("(judge=BLOCK)", out)
+        self.assertIn("contract missing → WARN", out)
+        self.assertNotIn("[N/A]", out)
 
 
 if __name__ == "__main__":  # pragma: no cover - direct-run convenience

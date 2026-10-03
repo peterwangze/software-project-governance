@@ -1,0 +1,397 @@
+diff --git a/.chrys-plugin/plugin.json b/.chrys-plugin/plugin.json
+index 14a2fe8..a93af55 100644
+--- a/.chrys-plugin/plugin.json
++++ b/.chrys-plugin/plugin.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "software-project-governance",
+-  "version": "0.93.1",
++  "version": "0.94.0",
+   "description": "AI coding delivery trust layer for governance-aware coding agents. Tracks goals, evidence, risks, quality budgets, and release readiness without making broad runtime claims.",
+   "author": {
+     "name": "peterwangze",
+diff --git a/.claude-plugin/marketplace.json b/.claude-plugin/marketplace.json
+index df2f857..802d7bb 100644
+--- a/.claude-plugin/marketplace.json
++++ b/.claude-plugin/marketplace.json
+@@ -9,7 +9,7 @@
+     {
+       "name": "software-project-governance",
+       "description": "AI coding delivery trust layer for governance-aware coding agents. Tracks goals, evidence, risks, quality budgets, and release readiness without making broad runtime claims.",
+-      "version": "0.93.1",
++      "version": "0.94.0",
+       "source": "./",
+       "homepage": "https://github.com/peterwangze/software-project-governance",
+       "repository": "https://github.com/peterwangze/software-project-governance",
+diff --git a/.claude-plugin/plugin.json b/.claude-plugin/plugin.json
+index 1e14517..7290ef9 100644
+--- a/.claude-plugin/plugin.json
++++ b/.claude-plugin/plugin.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "software-project-governance",
+-  "version": "0.93.1",
++  "version": "0.94.0",
+   "description": "AI coding delivery trust layer for governance-aware coding agents. Tracks goals, evidence, risks, quality budgets, and release readiness without making broad runtime claims.",
+   "author": {
+     "name": "peterwangze",
+diff --git a/.codex-plugin/plugin.json b/.codex-plugin/plugin.json
+index 4d2969a..a5864bd 100644
+--- a/.codex-plugin/plugin.json
++++ b/.codex-plugin/plugin.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "software-project-governance",
+-  "version": "0.93.1",
++  "version": "0.94.0",
+   "description": "AI coding delivery trust layer for governance-aware coding agents. Tracks goals, evidence, risks, quality budgets, and release readiness without making broad runtime claims.",
+   "author": {
+     "name": "peterwangze",
+diff --git a/.zcode-plugin/plugin.json b/.zcode-plugin/plugin.json
+index 2ca06f7..980c049 100644
+--- a/.zcode-plugin/plugin.json
++++ b/.zcode-plugin/plugin.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "software-project-governance",
+-  "version": "0.93.1",
++  "version": "0.94.0",
+   "description": "AI coding delivery trust layer for governance-aware coding agents. Tracks goals, evidence, risks, quality budgets, and release readiness without making broad runtime claims.",
+   "author": {
+     "name": "peterwangze",
+diff --git a/AGENTS.md b/AGENTS.md
+index 6edb8c3..1ae63db 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -2,7 +2,7 @@
+ 
+ ## Governance Bootstrap（强制 — 每次会话第一动作 · 次要平台入口薄指针）
+ 
+-> @bootstrap-version: 0.93.1（薄指针版——FEAT-037 双入口去重；完整 bootstrap 见 CLAUDE.md（主入口），行为约束以主入口为准）
++> @bootstrap-version: 0.94.0（薄指针版——FEAT-037 双入口去重；完整 bootstrap 见 CLAUDE.md（主入口），行为约束以主入口为准）
+ 
+ 本工作区存在两个平台原生入口文件。本文件是次要平台入口（Codex/opencode 等）的薄指针投影，不复制完整模板；主入口 `CLAUDE.md` 携带完整 bootstrap（Step 0~4、交叉验证、阶段跳跃防护、Agent Team、Bootstrap 变更纪律）。
+ 
+diff --git a/adapters/dsh/AGENTS.md.template b/adapters/dsh/AGENTS.md.template
+index 099f9a9..ac5f1f8 100644
+--- a/adapters/dsh/AGENTS.md.template
++++ b/adapters/dsh/AGENTS.md.template
+@@ -1,6 +1,6 @@
+ # Governance Bootstrap（DSH — 强制）
+ 
+-> @bootstrap-version: 0.93.1
++> @bootstrap-version: 0.94.0
+ >
+ > 本文件是 software-project-governance 工作流在 DeepSeek Harness 上的项目级原生入口（thin pointer），自动注入以本项目为工作区的每个会话。完整规则在 `software-project-governance` skill 内，本文件不重复 workflow 规则。治理插件仓库根目录：`__GOVERNANCE_REPO_ROOT__`（下称 `<plugin_root>`）。
+ 
+diff --git a/agent-presets/governance/agent.cordis.yml.template b/agent-presets/governance/agent.cordis.yml.template
+index 4ab93ae..0684faa 100644
+--- a/agent-presets/governance/agent.cordis.yml.template
++++ b/agent-presets/governance/agent.cordis.yml.template
+@@ -48,7 +48,7 @@
+     prefix: |-
+       You are a coding agent powered by the {{model}} model, running on the DeepSeek Harness. Your working directory is {{cwd}}.
+ 
+-      你是 software-project-governance 治理工作流（v0.93.1）的 Coordinator，不是单 agent 任务执行者。治理插件仓库根目录：__GOVERNANCE_REPO_ROOT__（下称 <plugin_root>）。infra 命令一律用绝对路径执行，不解析 $WORKFLOW_HOME。
++      你是 software-project-governance 治理工作流（v0.94.0）的 Coordinator，不是单 agent 任务执行者。治理插件仓库根目录：__GOVERNANCE_REPO_ROOT__（下称 <plugin_root>）。infra 命令一律用绝对路径执行，不解析 $WORKFLOW_HOME。
+ 
+       每会话第一动作（bootstrap，fail-closed）：按工作区 AGENTS.md 注入面执行 resolve_entry → 热数据 → 首次交互。
+ 
+diff --git a/commands/governance-init.md b/commands/governance-init.md
+index 4ca9980..8684b86 100644
+--- a/commands/governance-init.md
++++ b/commands/governance-init.md
+@@ -195,7 +195,7 @@ Bootstrap 注入内容（按 `profile` 差异化——lightweight 注入轻量
+ ```markdown
+ ## Governance Bootstrap（由 software-project-governance 插件注入）
+ 
+-> @bootstrap-version: 0.93.1（模板最低引导版本——低于 SKILL frontmatter active_version 即陈旧，先升级本段再继续）
++> @bootstrap-version: 0.94.0（模板最低引导版本——低于 SKILL frontmatter active_version 即陈旧，先升级本段再继续）
+ 
+ ### 每次会话第一动作
+ 读取 `.governance/plan-tracker.md`，确认当前阶段、Gate 状态、活跃风险。如 `.governance/` 不存在，提醒先初始化。
+@@ -266,7 +266,7 @@ AskUserQuestion 是唯一合法的用户提问方式。禁止内联文字提问
+ ```markdown
+ ## Governance Bootstrap（强制 — 每次会话第一动作）
+ 
+-> @bootstrap-version: 0.93.1（模板最低引导版本——低于 SKILL frontmatter active_version 即陈旧，先升级本段再继续）
++> @bootstrap-version: 0.94.0（模板最低引导版本——低于 SKILL frontmatter active_version 即陈旧，先升级本段再继续）
+ >
+ > 契约 v2（FEAT-041/DEC-218）：触发器行内 + 明细按需——「§Bx」= `skills/software-project-governance/SKILL.md`「Bootstrap 规程明细」小节（skill 层按需加载，迁移零丢失）；本模板规则不依赖 skill 加载。
+ 
+@@ -351,7 +351,7 @@ agent 不守协议（跳 Gate/忽略 AskUserQuestion/选择性执行）→ 四
+ ```markdown
+ ## Governance Bootstrap（强制 — 每次会话第一动作 · 次要平台入口薄指针）
+ 
+-> @bootstrap-version: 0.93.1（薄指针版——FEAT-037 双入口去重；完整 bootstrap 见 {PRIMARY_ENTRY}（主入口），行为约束以主入口为准）
++> @bootstrap-version: 0.94.0（薄指针版——FEAT-037 双入口去重；完整 bootstrap 见 {PRIMARY_ENTRY}（主入口），行为约束以主入口为准）
+ 
+ 本工作区存在两个平台原生入口文件。本文件是次要平台入口（Codex/opencode 等）的薄指针投影，不复制完整模板；主入口 `{PRIMARY_ENTRY}` 携带完整 bootstrap（Step 0~4、交叉验证、阶段跳跃防护、Agent Team、Bootstrap 变更纪律）。
+ 
+diff --git a/package.json b/package.json
+index 30ba25b..9262894 100644
+--- a/package.json
++++ b/package.json
+@@ -1,7 +1,7 @@
+ {
+   "$schema": "https://json.schemastore.org/package.json",
+   "name": "@peterwangze/software-project-governance-plugin",
+-  "version": "0.93.1",
++  "version": "0.94.0",
+   "private": true,
+   "license": "MIT",
+   "description": "AI coding delivery trust layer for governance-aware coding agents — agent-neutral npm package identity (owner scope, not agent affiliation) consumed by the zcode plugin host and the dsh plugin (pnpm) carrier. The plugin surface lives in skills/, commands/ and agents/ (the single shared core, never duplicated per adapter); the dsh host row lives in lib/index.js and only renders the preset payload in agent-presets/governance/ (composition template + preset.yml) into the user preset root, with adapters/dsh/launch.py --install as the identical manual/offline path.",
+diff --git a/project/CHANGELOG.md b/project/CHANGELOG.md
+index 3be7db0..0e6ca04 100644
+--- a/project/CHANGELOG.md
++++ b/project/CHANGELOG.md
+@@ -2,6 +2,38 @@
+ 
+ 本文件记录 `software-project-governance` 的每个版本变更。
+ 
++## [0.94.0] - 未发布（准备态）
++<!-- 发布日期占位（FIX-349 口径）：发布日期零预填；M-7 annotated tag `v0.94.0` 落地后以 taggerdate 权威回填本行日期单元格。 -->
++
++### 0.94.0 - **次版本线：治理信号可信与元机制闭环批（Minor Line: Signal Trustworthiness & Meta-Mechanism Closure）**：载荷十票（FEAT-081/082/083/084 + FIX-421~426 / 用户 ask 授权 2026-10-03 启动发布链 REL-098）
++
++0.94.0 为 0.93.1 的次版本线（新特性四件 + 根因修复六件）：M2 元机制执法面闭环（ADR-021 B4 词集检测三件套 + B4′ behavior 面闭环率指标——DEC-288 M2 生效判据不可平凡满足）与治理信号可信度根因修复（Check 28c 版本表解析 / bootstrap fabricated-overdue 族 / 预存 pytest 失败六件归因）单轮交付；无破坏性变更、无机制激活翻转（M2 词集检测 WARN 姿态起步）、无 `.governance` schema 变更（写侧台账三键格式为 0.88.0 FEAT-060 既有面，face-5 观测族按既有格式追加）；版本载荷窗口 `84f8819..af7cfbd`（11 commits = 十票 + FEAT-084 立项评估 memo docs 件），发布链 REL-098 组装于 2026-10-03（+0800）。
++
++### Added
++
++- **FEAT-081（commit `2aa2377`）**：ADR-021 B4 M2 词集检测三件套——`checks/loop_gate_processor.py` 新建（词集 12 字面+1 正则 / 双向否定语境窗口 DEC-301 / 三键台账 / SKIP 分态分类器，stdlib 纯叶子）+ 引擎 face-5 接线（deferred_registration WARN 姿态 + 采集器 3 元组 + Check 42 盒重构 + guard CLI 面台账 I/O）+ 19 新用例 TDD 红绿——DEC-288 M2 生效判据获得真实信号路径（deferred_detections 非恒 0 可测）。
++- **FEAT-082（commit `5de8548`）**：ADR-021 B4′ governance-bootstrap behavior 面闭环率指标——session_closure 嵌套子面（10 叶键，DEC-302 键位裁定）+ 判定口径单源导入（provenance_domain.session_closure_rate + loop_gate_processor.classify_observation_face 零重算）+ 7-fixture 差分镜像守护——M2 闭环率从 Check 42 专属面扩展到每次 bootstrap 可见。
++- **FEAT-084（commit `0377b78`）**：quick-scan 接线会话健康摘要（DEC-303 形态 B / RISK-044 处置主票）——`--scope quick|full` 显式契约 + 会话协议消费 quick + 深检/发布门固定 full + 缺省 full 字节等价 BYTE-IDENTICAL + legacy 第 5 项 performance 回退；健康摘要墙钟 62-70s→14.1/13.4s（≤15s 达标，宿主 3.2s≤5s）+ 四态诚实披露；REQ-145.7 二次修订落表。立项评估 memo 随窗入档（commit `9a527cb`，docs/research/quickscan-wiring-evaluation-0.94.0.md）。
++
++### Changed
++
++- **FEAT-083（commit `c00d70c`）**：closure 采集纯函数提取入 `checks/provenance_domain.py` 双端单源——引擎 155 行采集体→18 行薄委托（签名 byte-for-byte 保留）+ bootstrap ~200 行镜像整体回收 + SessionClosureMirrorTests→接口等价测试 + F-P3-1/2/3 收口 + R7 regen rider（RISK-063 镜像漂移收敛路径落地，零行为变化）。
++
++### Fixed
++
++- **FIX-421（commit `8568b1b`）**：Check 28c 版本表状态列格式漂移解析修复——`FIX_105_SNAPSHOT_RELEASE_VERSION_RE` 状态列放宽为已发布前缀+装饰尾巴（0.93.x 行漏识致 latest_release 回退 0.92.0 / session-snapshot 误报）+ HotFact+3 TDD 回归 + static-pin/archguard/metadata_contract 三强制 rider——检查器信号可信度恢复。
++- **FIX-422（commit `768021b`）**：bootstrap 风险面 fabricated overdue 根因修复（文本漂移→机器误报族治本）——deadline 纯 ISO 日期前置门 fail-safe（复评流水不再产假逾期）+ committed 终态渲染 ✅ 完成标记与 refresh-suffix 重渲染（Check 36 假 FAIL 清零）+ 关闭态词表纳入已缓解/已收窄/降级注记形态；DEC-304 三口径固化；3 类 15 新用例。
++- **FIX-423（commit `9018006`）**：预存 6 pytest 失败逐项归因处置——①②④⑤合法演进→snapshots regen rider（FEAT-081 deferred_observation 键+M2 台账 WARN 变体）+ ③防护网真缺陷→pin 分条修复（result_pass_line_wellformed 双态 PASS 行分条）+ ⑥第三镜像失同步→R4 FACTS_PRINT_TOTAL 1341 再锚（bisect 演化链归因）；DEC-305 pin 双态口径；verify_workflow.py 零修改；全量 4659P/0F 双跑一致——发布门红绿信号即时可信。
++- **FIX-424（commit `3883407`）**：doc-sync 微票——provenance_domain docstring 函数计数 Three→Four + loop_gate_processor purity 契约 I/O 表述现状口径修正（FEAT-083 R0 P3-1/P3-2 闭环）；纯 docstring 零行为变更。
++- **FIX-425（commit `b0075d8`）**：裁决①微票——provenance_domain L6 纯谓词总括改写（judgement functions 限定 + 采集核披露 + purity contract 指针）+ 第 4 bullet 补 ADR-021 §3.2.3 (W(session)) verbatim 锚（review-FIX-424-R0 F1/F2 闭环）；纯 docstring 零行为变更。
++- **FIX-426（commit `af7cfbd`）**：裁决②探索票——docstring 口径 source-pinning 测试（bullet :func: 名实存+属 __all__+计数词互检 + loop_gate_processor I/O-free 姿态 assertNotIn 钉死 + ast 模块级 import 面 {__future__,json,re}），2 类 4 用例零生产码变更——docstring 口径漂移族转机器拦截。
++
++**版本面再生纪律**：本版版本面经 `release-projection --write` 确定性再生（权威源 bump → written=17 → write_then_probe=PASS，sd_integrity 28 scanned/0 unreadable → 幂等复跑 PASS@0.94.0）+ 双根 entry sync（repo root + e2e fixture 的 AGENTS.md/CLAUDE.md bootstrap 段经 sync_entry_projection.py --write 再生）+ 引擎锚同步（REQUIRED_SNIPPETS 六面版本针脚 0.94.0）。
++
++**决策链**：DEC-301（否定语境窗口消歧+B4′ 拆批）/ DEC-302（behavior 嵌套子面键位）/ DEC-303（quick-scan 形态 B 立项）/ DEC-304（FIX-422 三口径固化）/ DEC-305（FIX-423 pin 双态口径）；**证据**：EVD-1292~1305（截至组装时点；发布链证据由 REL-098 收口补齐）。
++
++**准备态注记**：本段为 REL-098 组装时点（2026-10-03 +0800）的**准备态**——发布日期不预填（发布收口按 FIX-349 口径以 M-7 annotated tag `v0.94.0` taggerdate 权威落字）；发布终账、Commit 区间终值与发布验证结论随发布链 M-2+ 补记。
++
+ ## [0.93.1] - 已发布（tag v0.93.1@0e277af；taggerdate 2026-10-01 22:44:14 +0800 权威——FIX-349 口径回填）
+ <!-- 发布日期占位（FIX-349 口径）：发布日期零预填；M-7 annotated tag `v0.93.1` 落地后以 taggerdate 权威回填本行日期单元格。 -->
+ 
+diff --git a/project/e2e-test-project/.governance/plan-tracker.md b/project/e2e-test-project/.governance/plan-tracker.md
+index 3e0da75..b1f0bb5 100644
+--- a/project/e2e-test-project/.governance/plan-tracker.md
++++ b/project/e2e-test-project/.governance/plan-tracker.md
+@@ -6,7 +6,7 @@
+ - **Profile**: standard
+ - **触发模式**: always-on
+ - **操作权限模式**: default-confirm
+-- **工作流版本: 0.93.1
++- **工作流版本: 0.94.0
+ - **当前阶段**: 立项与目标定义（第 1 阶段）
+ 
+ ## Gate 状态跟踪
+diff --git a/project/e2e-test-project/AGENTS.md b/project/e2e-test-project/AGENTS.md
+index 559df6c..7c40c5b 100644
+--- a/project/e2e-test-project/AGENTS.md
++++ b/project/e2e-test-project/AGENTS.md
+@@ -2,7 +2,7 @@
+ 
+ ## Governance Bootstrap（强制 — 每次会话第一动作 · 次要平台入口薄指针）
+ 
+-> @bootstrap-version: 0.93.1（薄指针版——FEAT-037 双入口去重；完整 bootstrap 见 CLAUDE.md（主入口），行为约束以主入口为准）
++> @bootstrap-version: 0.94.0（薄指针版——FEAT-037 双入口去重；完整 bootstrap 见 CLAUDE.md（主入口），行为约束以主入口为准）
+ 
+ 本工作区存在两个平台原生入口文件。本文件是次要平台入口（Codex/opencode 等）的薄指针投影，不复制完整模板；主入口 `CLAUDE.md` 携带完整 bootstrap（Step 0~4、交叉验证、阶段跳跃防护、Agent Team、Bootstrap 变更纪律）。
+ 
+diff --git a/project/e2e-test-project/CLAUDE.md b/project/e2e-test-project/CLAUDE.md
+index dc46df3..f744a50 100644
+--- a/project/e2e-test-project/CLAUDE.md
++++ b/project/e2e-test-project/CLAUDE.md
+@@ -2,7 +2,7 @@
+ 
+ ## Governance Bootstrap（强制 — 每次会话第一动作）
+ 
+-> @bootstrap-version: 0.93.1（模板最低引导版本——低于 SKILL frontmatter active_version 即陈旧，先升级本段再继续）
++> @bootstrap-version: 0.94.0（模板最低引导版本——低于 SKILL frontmatter active_version 即陈旧，先升级本段再继续）
+ >
+ > 契约 v2（FEAT-041/DEC-218）：触发器行内 + 明细按需——「§Bx」= `skills/software-project-governance/SKILL.md`「Bootstrap 规程明细」小节（skill 层按需加载，迁移零丢失）；本模板规则不依赖 skill 加载。
+ 
+diff --git a/project/e2e-test-project/commands/governance-init.md b/project/e2e-test-project/commands/governance-init.md
+index 4ca9980..8684b86 100644
+--- a/project/e2e-test-project/commands/governance-init.md
++++ b/project/e2e-test-project/commands/governance-init.md
+@@ -195,7 +195,7 @@ Bootstrap 注入内容（按 `profile` 差异化——lightweight 注入轻量
+ ```markdown
+ ## Governance Bootstrap（由 software-project-governance 插件注入）
+ 
+-> @bootstrap-version: 0.93.1（模板最低引导版本——低于 SKILL frontmatter active_version 即陈旧，先升级本段再继续）
++> @bootstrap-version: 0.94.0（模板最低引导版本——低于 SKILL frontmatter active_version 即陈旧，先升级本段再继续）
+ 
+ ### 每次会话第一动作
+ 读取 `.governance/plan-tracker.md`，确认当前阶段、Gate 状态、活跃风险。如 `.governance/` 不存在，提醒先初始化。
+@@ -266,7 +266,7 @@ AskUserQuestion 是唯一合法的用户提问方式。禁止内联文字提问
+ ```markdown
+ ## Governance Bootstrap（强制 — 每次会话第一动作）
+ 
+-> @bootstrap-version: 0.93.1（模板最低引导版本——低于 SKILL frontmatter active_version 即陈旧，先升级本段再继续）
++> @bootstrap-version: 0.94.0（模板最低引导版本——低于 SKILL frontmatter active_version 即陈旧，先升级本段再继续）
+ >
+ > 契约 v2（FEAT-041/DEC-218）：触发器行内 + 明细按需——「§Bx」= `skills/software-project-governance/SKILL.md`「Bootstrap 规程明细」小节（skill 层按需加载，迁移零丢失）；本模板规则不依赖 skill 加载。
+ 
+@@ -351,7 +351,7 @@ agent 不守协议（跳 Gate/忽略 AskUserQuestion/选择性执行）→ 四
+ ```markdown
+ ## Governance Bootstrap（强制 — 每次会话第一动作 · 次要平台入口薄指针）
+ 
+-> @bootstrap-version: 0.93.1（薄指针版——FEAT-037 双入口去重；完整 bootstrap 见 {PRIMARY_ENTRY}（主入口），行为约束以主入口为准）
++> @bootstrap-version: 0.94.0（薄指针版——FEAT-037 双入口去重；完整 bootstrap 见 {PRIMARY_ENTRY}（主入口），行为约束以主入口为准）
+ 
+ 本工作区存在两个平台原生入口文件。本文件是次要平台入口（Codex/opencode 等）的薄指针投影，不复制完整模板；主入口 `{PRIMARY_ENTRY}` 携带完整 bootstrap（Step 0~4、交叉验证、阶段跳跃防护、Agent Team、Bootstrap 变更纪律）。
+ 
+diff --git a/project/e2e-test-project/skills/software-project-governance/SKILL.md b/project/e2e-test-project/skills/software-project-governance/SKILL.md
+index 89771c8..2166bf2 100644
+--- a/project/e2e-test-project/skills/software-project-governance/SKILL.md
++++ b/project/e2e-test-project/skills/software-project-governance/SKILL.md
+@@ -1,6 +1,6 @@
+ ---
+ name: software-project-governance
+-version: 0.93.1
++version: 0.94.0
+ description: 软件项目治理工作流——加载后主 agent 即 Coordinator。用户入口：/governance（一条命令覆盖全部场景）
+ ---
+ 
+diff --git a/skills/software-project-governance/SKILL.md b/skills/software-project-governance/SKILL.md
+index 89771c8..2166bf2 100644
+--- a/skills/software-project-governance/SKILL.md
++++ b/skills/software-project-governance/SKILL.md
+@@ -1,6 +1,6 @@
+ ---
+ name: software-project-governance
+-version: 0.93.1
++version: 0.94.0
+ description: 软件项目治理工作流——加载后主 agent 即 Coordinator。用户入口：/governance（一条命令覆盖全部场景）
+ ---
+ 
+diff --git a/skills/software-project-governance/core/manifest.json b/skills/software-project-governance/core/manifest.json
+index 9658328..ce5de34 100644
+--- a/skills/software-project-governance/core/manifest.json
++++ b/skills/software-project-governance/core/manifest.json
+@@ -1,7 +1,7 @@
+ {
+   "$schema": "https://example.com/manifest-schema-v1.json",
+   "workflow": "software-project-governance",
+-  "version": "0.93.1",
++  "version": "0.94.0",
+   "description": "Canonical file manifest. All entries define files/directories/patterns that SHOULD exist after plugin installation or repo checkout. The single source of truth for cleanup and verification.",
+   "source_of_truth": true,
+   "release_projection_contract": {
+diff --git a/skills/software-project-governance/infra/checks/version.py b/skills/software-project-governance/infra/checks/version.py
+index 5f72ee3..e3ae763 100644
+--- a/skills/software-project-governance/infra/checks/version.py
++++ b/skills/software-project-governance/infra/checks/version.py
+@@ -352,6 +352,14 @@ STATIC_PIN_EXEMPTIONS = {
+         # unchanged, re-anchored to the actual token lines.
+         (21071, "0.93.0", _REASON_FUTURE_TARGET),
+         (21103, "0.93.0", _REASON_FUTURE_TARGET),
++        # 0.94.0 bump-time rows (the FIX-361 designed double signal): the
++        # FEAT-081 B4 M2 词集检测 fixtures (_TRACKER_SEED /
++        # _TRACKER_DEFERRED_ROW) carry the then-future target 0.94.0 in the
++        # 目标版本 column — scenario payload written while 0.93.1 was active,
++        # surfacing exactly once at this bump; the word-set judgement
++        # consumes the row text, never the version cell.
++        (20573, "0.94.0", _REASON_FIXTURE_ROW_TEXT),
++        (20576, "0.94.0", _REASON_FIXTURE_ROW_TEXT),
+     ],
+     # 0.89.0 bump-time rows (the FIX-361 designed double signal): fixture
+     # worlds written by the 0.89.0-window tickets (FIX-390/393/394) carrying
+diff --git a/skills/software-project-governance/infra/hooks/commit-msg b/skills/software-project-governance/infra/hooks/commit-msg
+index a4f4a25..d1dcdda 100644
+--- a/skills/software-project-governance/infra/hooks/commit-msg
++++ b/skills/software-project-governance/infra/hooks/commit-msg
+@@ -2,7 +2,7 @@
+ # commit-msg governance hook — installed by software-project-governance
+ # Runs AFTER prepare-commit-msg, so $1 reliably contains the current commit message.
+ # Handles message-dependent checks that pre-commit cannot do (architectural fix: FIX-047).
+-# @version: 0.93.1
++# @version: 0.94.0
+ 
+ set -e
+ 
+diff --git a/skills/software-project-governance/infra/hooks/post-commit b/skills/software-project-governance/infra/hooks/post-commit
+index 73f8cc5..4456068 100644
+--- a/skills/software-project-governance/infra/hooks/post-commit
++++ b/skills/software-project-governance/infra/hooks/post-commit
+@@ -1,7 +1,7 @@
+ #!/bin/bash
+ # post-commit governance hook — installed by software-project-governance
+ # Fires after every git commit. Forces governance visibility at each commit point.
+-# @version: 0.93.1
++# @version: 0.94.0
+ 
+ set -e
+ 
+diff --git a/skills/software-project-governance/infra/hooks/pre-commit b/skills/software-project-governance/infra/hooks/pre-commit
+index 957b72a..e282941 100644
+--- a/skills/software-project-governance/infra/hooks/pre-commit
++++ b/skills/software-project-governance/infra/hooks/pre-commit
+@@ -3,7 +3,7 @@
+ # Runs BEFORE every git commit. BLOCKS commits that don't meet governance criteria.
+ # Handles FILE-DEPENDENT checks only. Message-dependent checks are in commit-msg (FIX-047).
+ # Design assumption: agent WILL NOT follow rules voluntarily. System MUST enforce.
+-# @version: 0.93.1
++# @version: 0.94.0
+ 
+ set -e
+ 
+diff --git a/skills/software-project-governance/infra/hooks/prepare-commit-msg b/skills/software-project-governance/infra/hooks/prepare-commit-msg
+index 634b9c7..c9e46d9 100644
+--- a/skills/software-project-governance/infra/hooks/prepare-commit-msg
++++ b/skills/software-project-governance/infra/hooks/prepare-commit-msg
+@@ -3,7 +3,7 @@
+ # Does not persist commit messages for pre-commit.
+ # pre-commit runs before this hook, so a bridge file would be stale by design.
+ # commit-msg reads the final current message from $1 and is authoritative.
+-# @version: 0.93.1
++# @version: 0.94.0
+ 
+ set -e
+ 
+diff --git a/skills/software-project-governance/infra/verify_workflow.py b/skills/software-project-governance/infra/verify_workflow.py
+index f0602a8..6aaa5d9 100644
+--- a/skills/software-project-governance/infra/verify_workflow.py
++++ b/skills/software-project-governance/infra/verify_workflow.py
+@@ -1054,22 +1054,22 @@ REQUIRED_SNIPPETS = {
+         "## [0.5.0]",
+     ],
+     ROOT / ".claude-plugin/plugin.json": [
+-        "0.93.1",
++        "0.94.0",
+     ],
+     ROOT / ".claude-plugin/marketplace.json": [
+-        "0.93.1",
++        "0.94.0",
+     ],
+     ROOT / ".codex-plugin/plugin.json": [
+-        "0.93.1",
++        "0.94.0",
+     ],
+     ROOT / ".zcode-plugin/plugin.json": [
+-        "0.93.1",
++        "0.94.0",
+     ],
+     ROOT / "package.json": [
+-        "0.93.1",
++        "0.94.0",
+     ],
+     ROOT / "skills/software-project-governance/core/manifest.json": [
+-        "0.93.1",
++        "0.94.0",
+     ],
+ }
+ 

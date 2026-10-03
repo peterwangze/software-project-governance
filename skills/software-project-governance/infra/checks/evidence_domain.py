@@ -825,6 +825,13 @@ def check_structured_evidence():
 # 切换；真阻断属授权票域). The goal faces live in this domain module; the
 # engine only wires the render call (God Module budget discipline, Check 3b
 # precedent).
+#
+# FIX-431 — 发布间隙态改判 N/A: 「无活跃 P0/P1 unit」（任务表全完成）的
+# 间隙态无判定对象/无判定语境——face① 激活前置与 face② demo actions 均判
+# N/A（不发 WARN）。契约缺失 WARN（含 goal_face 追溯面）只在有活跃 unit 的
+# 运行期才有意义；有活跃 unit 的现行为判定链（PASS/WARN/BLOCK）与
+# enforcement 翻转机制（出厂 False，B-12/B-13 授权票域）零变化。间隙态
+# 下 execution packets 不可读的评估完整性 WARN 仍保留（异常不隐藏）。
 
 # Activation switch — factory OFF. Flip to True ONLY via the family
 # authorization ticket (ADR-019 §4 RB-2 / §6 step 4; B-12/B-13 precedent).
@@ -869,9 +876,17 @@ def check_goal_layer_contract_readiness(packet_path=None):
     Factory form: WARN-grade only — the precondition never fails the run;
     blocking enforcement belongs to the family authorization ticket (face ②).
 
+    FIX-431 — 发布间隙态 N/A: with no active P0/P1 unit (release gap state,
+    all task rows complete) the face has NO judgment object, so it judges
+    N/A and emits no WARN: the「无活跃 P0/P1 unit」/ goal-face-missing /
+    placeholder-contract WARNs only carry meaning in the active-unit
+    runtime. An unreadable execution-packets face still WARNs (evaluation
+    integrity is disclosed in every state — 异常不隐藏).
+
     Returns (never raises; unreadable faces degrade to WARN):
         {
           "applicable": True,
+          "active_units": bool,       # False = 发布间隙态 (FIX-431)
           "plan_tracker_goal_face": bool,
           "units": [{task_id, contract_ready, issues}, ...],
           "contract_ready_units": [task_id, ...],
@@ -912,24 +927,25 @@ def check_goal_layer_contract_readiness(packet_path=None):
         warns.append(
             "ADR-RB-2 激活前置无法完整评估: execution packets 不可读（{0}）".format(
                 load_error))
-    if not tasks:
-        warns.append(
-            "ADR-RB-2 宿主激活前置未满足: 无活跃 P0/P1 unit——「至少一个 unit 的 "
-            "product_success_contract 非 TO_BE_DEFINED」不成立（目标层未锚定）")
-    if not goal_face:
-        warns.append(
-            "ADR-RB-2 宿主激活前置未满足: plan-tracker 无目标层面"
-            "（{0} 任一）——契约无法追溯到 plan-tracker 成功标准".format(
-                "/".join(RB2_PLAN_TRACKER_GOAL_FACE_MARKERS)))
-    if tasks and not contract_ready_units:
-        warns.append(
-            "ADR-RB-2 宿主激活前置未满足: 全部活跃 unit 的 product_success_contract"
-            " 为占位/无效（TO_BE_DEFINED 占位符穿透目标层）: {0}".format(
-                "; ".join("{0}: {1}".format(u["task_id"], ", ".join(u["issues"]))
-                          for u in units)))
+    if tasks:
+        # 运行期（有活跃 P0/P1 unit）——判定链现行为零变化（FIX-431 边界）。
+        if not goal_face:
+            warns.append(
+                "ADR-RB-2 宿主激活前置未满足: plan-tracker 无目标层面"
+                "（{0} 任一）——契约无法追溯到 plan-tracker 成功标准".format(
+                    "/".join(RB2_PLAN_TRACKER_GOAL_FACE_MARKERS)))
+        if not contract_ready_units:
+            warns.append(
+                "ADR-RB-2 宿主激活前置未满足: 全部活跃 unit 的 product_success_contract"
+                " 为占位/无效（TO_BE_DEFINED 占位符穿透目标层）: {0}".format(
+                    "; ".join("{0}: {1}".format(u["task_id"], ", ".join(u["issues"]))
+                              for u in units)))
+    # 间隙态（无活跃 P0/P1 unit）→ face① 判 N/A：无判定对象，不发「无活跃
+    # P0/P1 unit」WARN（FIX-431）；load_error 披露除外——评估完整性异常不隐藏。
 
     return {
         "applicable": True,
+        "active_units": bool(tasks),
         "plan_tracker_goal_face": goal_face,
         "units": units,
         "contract_ready_units": contract_ready_units,
@@ -943,6 +959,7 @@ def judge_rb2_contract_gate(action, readiness=None):
 
     Verdict table (judge-only; enforcement governed by
     RB2_SENSITIVE_BLOCK_ENFORCED):
+      no active P0/P1 unit (gap state)  → N/A (FIX-431: 无判定语境)
       contract ready                   → PASS
       contract missing, non-sensitive  → WARN
       contract missing, sensitive      → BLOCK
@@ -951,16 +968,23 @@ def judge_rb2_contract_gate(action, readiness=None):
     is demoted to WARN (the blocked 判据 stays observable in ``raw_verdict``
     without intercepting the action — 授权票翻转前不阻断). After the family
     authorization ticket flips the flag, verdict "BLOCK" means the caller
-    MUST abort the sensitive action.
+    MUST abort the sensitive action. A gap-state N/A is never affected by
+    the flip (no judgment object → nothing to enforce).
 
     Returns:
         {action, sensitive, contract_ready, raw_verdict, verdict, enforcement}
     """
     if readiness is None:
         readiness = check_goal_layer_contract_readiness()
+    # FIX-431: 间隙态（无活跃 P0/P1 unit）无判定语境——契约缺失 WARN/BLOCK
+    # 只在有活跃 unit 的运行期才有意义。Hand-built readiness 缺
+    # ``active_units`` 键时按运行期处理（向后兼容：直接调用方零行为变化）。
+    has_active_units = readiness.get("active_units", True)
     contract_ready = bool(readiness.get("precondition_met"))
     sensitive = bool(RB2_SENSITIVE_ACTION_RE.search(str(action or "")))
-    if contract_ready:
+    if not has_active_units:
+        raw_verdict = "N/A"
+    elif contract_ready:
         raw_verdict = "PASS"
     elif sensitive:
         raw_verdict = "BLOCK"
@@ -987,17 +1011,21 @@ def render_rb2_goal_contract_block():
     face ① prints the host-activation precondition verdict; face ② prints
     the sensitive-action gate judge for a sensitive and a non-sensitive demo
     action evaluated against the REAL host readiness (正负例 observable per
-    run). Prints only — never counts into check-governance issues (factory
-    form; the authorization ticket owns the enforcement flip).
+    run). FIX-431: in the release gap state (no active P0/P1 unit) both
+    faces print [N/A] instead of WARN — no judgment object / no judgment
+    context. Prints only — never counts into check-governance issues
+    (factory form; the authorization ticket owns the enforcement flip).
     """
     readiness = check_goal_layer_contract_readiness()
     print("\n┌─ Check 18d-RB2: Goal-Layer Contract Gate (ADR-RB-2/FEAT-069) ─┐")
     if readiness["precondition_met"]:
         print("│  Activation precondition: [PASS] goal-layer contract ready "
               "({0})".format(", ".join(readiness["contract_ready_units"])))
-    else:
-        for reason in readiness["warn"]:
-            print("│  Activation precondition: [WARN] {0}".format(reason))
+    elif not readiness.get("active_units", True):
+        print("│  Activation precondition: [N/A] 发布间隙态——无活跃 P0/P1 "
+              "unit，goal-contract 无判定对象（FIX-431；不发 WARN）")
+    for reason in readiness["warn"]:
+        print("│  Activation precondition: [WARN] {0}".format(reason))
     demo_judges = (
         ("sensitive demo action {0!r}".format(_RB2_DEMO_SENSITIVE_ACTION),
          judge_rb2_contract_gate(_RB2_DEMO_SENSITIVE_ACTION, readiness)),
@@ -1011,6 +1039,9 @@ def render_rb2_goal_contract_block():
         if judge["raw_verdict"] == "BLOCK":
             print("│    [WARN] (judge=BLOCK) {0}: contract missing → BLOCK "
                   "verdict; enforcement off（授权票翻转前不拦截）".format(label))
+        elif judge["raw_verdict"] == "N/A":
+            print("│    [N/A] {0}: 间隙态无活跃 unit——无判定语境（FIX-431；"
+                  "不发 WARN）".format(label))
         elif judge["verdict"] == "WARN":
             print("│    [WARN] {0}: contract missing → WARN（非敏感，不阻断"
                   "）".format(label))

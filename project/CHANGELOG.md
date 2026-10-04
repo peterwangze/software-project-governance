@@ -2,6 +2,38 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.94.0] - 未发布（准备态）
+<!-- 发布日期占位（FIX-349 口径）：发布日期零预填；M-7 annotated tag `v0.94.0` 落地后以 taggerdate 权威回填本行日期单元格。 -->
+
+### 0.94.0 - **次版本线：治理信号可信与元机制闭环批（Minor Line: Signal Trustworthiness & Meta-Mechanism Closure）**：载荷十票（FEAT-081/082/083/084 + FIX-421~426 / 用户 ask 授权 2026-10-03 启动发布链 REL-098）
+
+0.94.0 为 0.93.1 的次版本线（新特性四件 + 根因修复六件）：M2 元机制执法面闭环（ADR-021 B4 词集检测三件套 + B4′ behavior 面闭环率指标——DEC-288 M2 生效判据不可平凡满足）与治理信号可信度根因修复（Check 28c 版本表解析 / bootstrap fabricated-overdue 族 / 预存 pytest 失败六件归因）单轮交付；无破坏性变更、无机制激活翻转（M2 词集检测 WARN 姿态起步）、无 `.governance` schema 变更（写侧台账三键格式为 0.88.0 FEAT-060 既有面，face-5 观测族按既有格式追加）；版本载荷窗口 `84f8819..af7cfbd`（11 commits = 十票 + FEAT-084 立项评估 memo docs 件），发布链 REL-098 组装于 2026-10-03（+0800）。
+
+### Added
+
+- **FEAT-081（commit `2aa2377`）**：ADR-021 B4 M2 词集检测三件套——`checks/loop_gate_processor.py` 新建（词集 12 字面+1 正则 / 双向否定语境窗口 DEC-301 / 三键台账 / SKIP 分态分类器，stdlib 纯叶子）+ 引擎 face-5 接线（deferred_registration WARN 姿态 + 采集器 3 元组 + Check 42 盒重构 + guard CLI 面台账 I/O）+ 19 新用例 TDD 红绿——DEC-288 M2 生效判据获得真实信号路径（deferred_detections 非恒 0 可测）。
+- **FEAT-082（commit `5de8548`）**：ADR-021 B4′ governance-bootstrap behavior 面闭环率指标——session_closure 嵌套子面（10 叶键，DEC-302 键位裁定）+ 判定口径单源导入（provenance_domain.session_closure_rate + loop_gate_processor.classify_observation_face 零重算）+ 7-fixture 差分镜像守护——M2 闭环率从 Check 42 专属面扩展到每次 bootstrap 可见。
+- **FEAT-084（commit `0377b78`）**：quick-scan 接线会话健康摘要（DEC-303 形态 B / RISK-044 处置主票）——`--scope quick|full` 显式契约 + 会话协议消费 quick + 深检/发布门固定 full + 缺省 full 字节等价 BYTE-IDENTICAL + legacy 第 5 项 performance 回退；健康摘要墙钟 62-70s→14.1/13.4s（≤15s 达标，宿主 3.2s≤5s）+ 四态诚实披露；REQ-145.7 二次修订落表。立项评估 memo 随窗入档（commit `9a527cb`，docs/research/quickscan-wiring-evaluation-0.94.0.md）。
+
+### Changed
+
+- **FEAT-083（commit `c00d70c`）**：closure 采集纯函数提取入 `checks/provenance_domain.py` 双端单源——引擎 155 行采集体→18 行薄委托（签名 byte-for-byte 保留）+ bootstrap ~200 行镜像整体回收 + SessionClosureMirrorTests→接口等价测试 + F-P3-1/2/3 收口 + R7 regen rider（RISK-063 镜像漂移收敛路径落地，零行为变化）。
+
+### Fixed
+
+- **FIX-421（commit `8568b1b`）**：Check 28c 版本表状态列格式漂移解析修复——`FIX_105_SNAPSHOT_RELEASE_VERSION_RE` 状态列放宽为已发布前缀+装饰尾巴（0.93.x 行漏识致 latest_release 回退 0.92.0 / session-snapshot 误报）+ HotFact+3 TDD 回归 + static-pin/archguard/metadata_contract 三强制 rider——检查器信号可信度恢复。
+- **FIX-422（commit `768021b`）**：bootstrap 风险面 fabricated overdue 根因修复（文本漂移→机器误报族治本）——deadline 纯 ISO 日期前置门 fail-safe（复评流水不再产假逾期）+ committed 终态渲染 ✅ 完成标记与 refresh-suffix 重渲染（Check 36 假 FAIL 清零）+ 关闭态词表纳入已缓解/已收窄/降级注记形态；DEC-304 三口径固化；3 类 15 新用例。
+- **FIX-423（commit `9018006`）**：预存 6 pytest 失败逐项归因处置——①②④⑤合法演进→snapshots regen rider（FEAT-081 deferred_observation 键+M2 台账 WARN 变体）+ ③防护网真缺陷→pin 分条修复（result_pass_line_wellformed 双态 PASS 行分条）+ ⑥第三镜像失同步→R4 FACTS_PRINT_TOTAL 1341 再锚（bisect 演化链归因）；DEC-305 pin 双态口径；verify_workflow.py 零修改；全量 4659P/0F 双跑一致——发布门红绿信号即时可信。
+- **FIX-424（commit `3883407`）**：doc-sync 微票——provenance_domain docstring 函数计数 Three→Four + loop_gate_processor purity 契约 I/O 表述现状口径修正（FEAT-083 R0 P3-1/P3-2 闭环）；纯 docstring 零行为变更。
+- **FIX-425（commit `b0075d8`）**：裁决①微票——provenance_domain L6 纯谓词总括改写（judgement functions 限定 + 采集核披露 + purity contract 指针）+ 第 4 bullet 补 ADR-021 §3.2.3 (W(session)) verbatim 锚（review-FIX-424-R0 F1/F2 闭环）；纯 docstring 零行为变更。
+- **FIX-426（commit `af7cfbd`）**：裁决②探索票——docstring 口径 source-pinning 测试（bullet :func: 名实存+属 __all__+计数词互检 + loop_gate_processor I/O-free 姿态 assertNotIn 钉死 + ast 模块级 import 面 {__future__,json,re}），2 类 4 用例零生产码变更——docstring 口径漂移族转机器拦截。
+
+**版本面再生纪律**：本版版本面经 `release-projection --write` 确定性再生（权威源 bump → written=17 → write_then_probe=PASS，sd_integrity 28 scanned/0 unreadable → 幂等复跑 PASS@0.94.0）+ 双根 entry sync（repo root + e2e fixture 的 AGENTS.md/CLAUDE.md bootstrap 段经 sync_entry_projection.py --write 再生）+ 引擎锚同步（REQUIRED_SNIPPETS 六面版本针脚 0.94.0）。
+
+**决策链**：DEC-301（否定语境窗口消歧+B4′ 拆批）/ DEC-302（behavior 嵌套子面键位）/ DEC-303（quick-scan 形态 B 立项）/ DEC-304（FIX-422 三口径固化）/ DEC-305（FIX-423 pin 双态口径）；**证据**：EVD-1292~1305（截至组装时点；发布链证据由 REL-098 收口补齐）。
+
+**准备态注记**：本段为 REL-098 组装时点（2026-10-03 +0800）的**准备态**——发布日期不预填（发布收口按 FIX-349 口径以 M-7 annotated tag `v0.94.0` taggerdate 权威落字）；发布终账、Commit 区间终值与发布验证结论随发布链 M-2+ 补记。
+
 ## [0.93.1] - 已发布（tag v0.93.1@0e277af；taggerdate 2026-10-01 22:44:14 +0800 权威——FIX-349 口径回填）
 <!-- 发布日期占位（FIX-349 口径）：发布日期零预填；M-7 annotated tag `v0.93.1` 落地后以 taggerdate 权威回填本行日期单元格。 -->
 

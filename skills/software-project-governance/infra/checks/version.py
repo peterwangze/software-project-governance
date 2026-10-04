@@ -352,6 +352,14 @@ STATIC_PIN_EXEMPTIONS = {
         # unchanged, re-anchored to the actual token lines.
         (21071, "0.93.0", _REASON_FUTURE_TARGET),
         (21103, "0.93.0", _REASON_FUTURE_TARGET),
+        # 0.94.0 bump-time rows (the FIX-361 designed double signal): the
+        # FEAT-081 B4 M2 词集检测 fixtures (_TRACKER_SEED /
+        # _TRACKER_DEFERRED_ROW) carry the then-future target 0.94.0 in the
+        # 目标版本 column — scenario payload written while 0.93.1 was active,
+        # surfacing exactly once at this bump; the word-set judgement
+        # consumes the row text, never the version cell.
+        (20573, "0.94.0", _REASON_FIXTURE_ROW_TEXT),
+        (20576, "0.94.0", _REASON_FIXTURE_ROW_TEXT),
     ],
     # 0.89.0 bump-time rows (the FIX-361 designed double signal): fixture
     # worlds written by the 0.89.0-window tickets (FIX-390/393/394) carrying

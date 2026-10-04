@@ -68,6 +68,33 @@
       "degraded_capabilities": ["browser", "mcp"]
     }
   },
+  "exploration_channels": {
+    "source_of_truth": "skills/software-project-governance/references/behavior-protocol.md M10.3",
+    "note": "M10.3 four behavior-semantic channels materialized for this platform. consult never maps draw: generation is not consultation (review-FEAT-085-DESIGN-R0 F-3). Honest degradation is legal; capability masquerade is an EXP-03 violation.",
+    "channels": {
+      "discover": {
+        "status": "native",
+        "mapping": "web_search",
+        "evidence": "dsh ships a native web_search tool; used by the live sessions that author and maintain this adapter."
+      },
+      "inspect": {
+        "status": "native",
+        "mapping": "read / grep / glob fs tools",
+        "evidence": "Native fs read/grep/glob tools (runtime_capabilities.tool_calling native)."
+      },
+      "consult": {
+        "status": "native",
+        "mapping": "web_search; route_agent (arch/vision only — draw excluded: generation is not consultation)",
+        "evidence": "route_agent multi-model router with arch (architecture advisor) and vision (image analysis) targets is native; draw routes image generation and MUST NOT be declared as consultation."
+      },
+      "validate": {
+        "status": "native",
+        "mapping": "pwsh + verify_workflow.py / unittest execution",
+        "evidence": "Native pwsh tool executes the validation contract commands; validation.command is required for this adapter."
+      }
+    },
+    "degraded_mode": "When a channel becomes unavailable, record 判定=受限 in the exploration block (M10.2) per EXP-03; never mark offline knowledge as channel results."
+  },
   "runtime_e2e": {
     "e2e_level": "real-agent-target-cwd",
     "command": "dsh",

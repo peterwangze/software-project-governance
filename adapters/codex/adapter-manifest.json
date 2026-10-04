@@ -69,6 +69,37 @@
       "degraded_capabilities": ["ask_user_question", "sub_agent", "tool_calling", "browser", "mcp"]
     }
   },
+  "exploration_channels": {
+    "source_of_truth": "skills/software-project-governance/references/behavior-protocol.md M10.3",
+    "note": "M10.3 four behavior-semantic channels materialized for this platform. consult never maps draw: generation is not consultation (review-FEAT-085-DESIGN-R0 F-3). Honest degradation is legal; capability masquerade is an EXP-03 violation.",
+    "channels": {
+      "discover": {
+        "status": "degraded",
+        "mapping": "host web tooling, when the Codex host mode exposes it",
+        "evidence": "The codex-cli headless read E2E (2026-06-11) did not exercise any web tooling; discovery remains host/mode dependent (runtime_capabilities.tool_calling degraded).",
+        "degraded_mode": "Record 判定=受限 per EXP-03 when web tooling is unavailable; never mark offline knowledge as search results."
+      },
+      "inspect": {
+        "status": "degraded",
+        "mapping": "read-verified file access; deeper tool modes host-dependent",
+        "evidence": "The read-only target-cwd E2E (2026-06-11) exercised file reading; broader tool modes remain host-mode dependent (runtime_capabilities.tool_calling degraded).",
+        "degraded_mode": "Use read-verified paths only and record the inspection limit per EXP-03 when deeper tooling is unavailable."
+      },
+      "consult": {
+        "status": "degraded",
+        "mapping": "route through another host adapter or the outer session",
+        "evidence": "No web or professional-agent consult channel is verified in this adapter, and sub_agent itself is degraded; draw-style generation is not consultation (R0 F-3).",
+        "degraded_mode": "Record 判定=受限 per EXP-03 and degrade to local evidence; do not fabricate external consultation."
+      },
+      "validate": {
+        "status": "degraded",
+        "mapping": "verify_workflow.py / test execution from the repo shell",
+        "evidence": "validation.command is required and git hooks are repository-level (git_hooks native), but in-session command execution is host-mode dependent (runtime_capabilities.tool_calling degraded: local validation commands are required for product closure).",
+        "degraded_mode": "Run the validation commands from the repo shell outside the Codex session and record the results; do not claim in-session execution that did not happen."
+      }
+    },
+    "degraded_mode": "When a channel is unavailable, record 判定=受限 in the exploration block (M10.2) per EXP-03; never mark offline knowledge as channel results."
+  },
   "runtime_e2e": {
     "e2e_level": "real-agent-target-cwd",
     "command": "codex",

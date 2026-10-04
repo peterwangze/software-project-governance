@@ -65,6 +65,35 @@
       "degraded_capabilities": ["ask_user_question", "browser", "mcp"]
     }
   },
+  "exploration_channels": {
+    "source_of_truth": "skills/software-project-governance/references/behavior-protocol.md M10.3",
+    "note": "M10.3 four behavior-semantic channels materialized for this platform. consult never maps draw: generation is not consultation (review-FEAT-085-DESIGN-R0 F-3). Honest degradation is legal; capability masquerade is an EXP-03 violation.",
+    "channels": {
+      "discover": {
+        "status": "degraded",
+        "mapping": "host web search tooling (e.g. WebSearch), when the host plan exposes it",
+        "evidence": "This repo's Claude runtime E2E verified filesystem/read tools and local validation commands only; web discovery remains host/plan dependent and is not proven by this adapter's evidence.",
+        "degraded_mode": "Record 判定=受限 per EXP-03 when web tooling is unavailable; never mark offline knowledge as search results."
+      },
+      "inspect": {
+        "status": "native",
+        "mapping": "Read / Grep / Glob filesystem tools",
+        "evidence": "Claude Code runtime E2E uses filesystem/read tools (runtime_capabilities.tool_calling native)."
+      },
+      "consult": {
+        "status": "degraded",
+        "mapping": "Agent-style delegation for structured second opinions; host web search when available",
+        "evidence": "Agent-style delegation is native (runtime_capabilities.sub_agent), but no web-backed professional-agent consult channel is verified in this adapter; draw-style generation is not consultation (R0 F-3).",
+        "degraded_mode": "Degrade to host-conversation consultation and record the channel limit per EXP-03; do not claim external professional judgment that was not obtained."
+      },
+      "validate": {
+        "status": "native",
+        "mapping": "verify_workflow.py / test execution via local validation commands",
+        "evidence": "Local validation commands are part of this adapter's verified tool calling, and validation.command + git hooks are required (runtime_capabilities.tool_calling/git_hooks native)."
+      }
+    },
+    "degraded_mode": "When a channel is unavailable, record 判定=受限 in the exploration block (M10.2) per EXP-03; never mark offline knowledge as channel results."
+  },
   "runtime_e2e": {
     "e2e_level": "real-agent-target-cwd",
     "command": "claude",

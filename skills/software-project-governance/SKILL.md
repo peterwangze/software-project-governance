@@ -361,6 +361,8 @@ Coordinator 铁律第 1 条"不直接修改产品代码"的具体判定标准。
 | 影响分析（P0/跨层变更） | Analyst + Architect | Design Reviewer + Requirement Reviewer | 自动——分析完成后 | change-impact-checklist Step 1-5 |
 | 任务模糊 | Coordinator 自行处理 | — | 用户触发 | 先记录已知事实、缺失信息、默认假设和下一步验证动作 |
 
+> 新任务/事务分解后 → 探索适用性判断（EXP-01，详见 `references/behavior-protocol.md` M10）。
+
 ## Sub-agent 调度
 
 使用 Agent 工具创建子 agent。每个子 agent 启动时 MUST 加载两个文件：

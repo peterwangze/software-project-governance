@@ -2,6 +2,44 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.95.0] - 未发布（准备态）
+<!-- 发布日期占位（FIX-349 口径）：发布日期零预填；M-7 annotated tag `v0.95.0` 落地后以 taggerdate 权威回填本行日期单元格。 -->
+
+### 0.95.0 - **次版本线：「做薄·开放·主动探索」演进第一批（Minor Line: Thin, Open & Proactive Exploration — First Batch）**：载荷五票（AUDIT-157/158 + FEAT-085/086 + FIX-432 / DEC-312 用户裁定预留 0.95.0 / 发布链 REL-099）
+
+0.95.0 为 0.94.0 的次版本线（「做薄·开放·主动探索」五阶段演进的 **Phase 0 基线与止增 + 有界 Phase 1 最小行为修复** 单轮交付）：Phase 0 交付基线四件套（R5 回溯基线 12 样本三判定——应探索 4/可跳过 8/记录未知率 100% 单独披露；checks 146 项四分层分类 L1 36/L2 25/L3 10/L4 2；W1~W7 越界责任清单三要素全覆盖；注入与架构基线快照——止增纪律随基线生效）；Phase 1 交付 M10 主动生态探索协议 + 三类前瞻样本 5 例行为验收 + 全仓 M0-M9→M10 称谓统一与引文同步守卫。版本载荷经 **DEC-312(7) M-0 冻结为五票**（FEAT-087/088 新票与 FEAT-084 Slice-3 缓存子集均走 0.96.0 候选池——DEC-315/DEC-303(4)，M-0 逐项核算见 `docs/release/m-0-assembly-0.95.0.md`）；无破坏性变更（CLI 接口与 JSON schema 零变更、manifest 新键 additive、1047 unittest 零回归实证——FIX-432 R1 后 1052 待发布门复跑确认）、无机制激活翻转、无 `.governance` schema 变更（exploration 区块复用既有 evidence 载体四字段）；版本载荷窗口 `6da8d04（v0.94.0 tag peel）..<M-1 回填位>`（终值随 M-8 批回填——不预编造），发布链 REL-099 组装于 2026-10-05（+0800）。
+
+### Added
+
+- **M10 主动生态探索协议（FEAT-085——新任务行为面）**：`references/behavior-protocol.md` 新增 M10 节（851→897 行）——M10.1 EXP-01~05 条款表**唯一规范源**；M10.2 exploration 四字段 schema（判定/理由/动作+资源引用/结果状态——复用既有 evidence 载体，不建独立子系统）；M10.3 discover/inspect/consult/validate 四通道行为语义+宿主映射；M10.4 触发入口锚+预算收缩纪律。SKILL.md 薄触发入口一行（L364，零条款复制）。效果：新任务事务初步分解后/路径承诺前有了**探索适用性判断**（应探索/可跳过/受限三态）——应探索时经宿主通道有预算探测并落 exploration 区块，外部输出为候选信息无执行授权。
+- **四通道六平台 exploration_channels 声明（FEAT-086 F-3）**：六平台（claude/codex/gemini/opencode/chrys/dsh）adapter manifest 物理化宿主通道映射与**诚实降级**（consult 不含 draw；dsh native 声明行为兜底 degraded_mode+EXP-03）——通道能力声明与实际一致。
+- **前瞻样本行为验收（FEAT-086）**：三类前瞻样本 5 例（S1 应探索无遗漏/S2 不可联网无越权/S3~S5 可跳过不强制联网）行为全部正确，探索轨迹可辨识回指 evidence 载体（`docs/research/feat-086-prospective-samples-2026-10-04.md`；不回填历史）。
+- **Phase 0 基线与止增纪律（AUDIT-157/158）**：checks 四分层分类底座（准入/退休机制+退役七步流程+批次上限）+W1~W7 责任清单（调用证据/责任人/处置结论）+注入/架构基线快照（resident 4244/6000 tok、M1+M2 342/370）——「做薄」演进有了可验收的分类底座；**止增纪律生效**（新增 check 准入登记条款）。
+
+### Changed
+
+- **M0-M9→M10 全仓称谓统一（FIX-432）**：滞后描述 19 处 sweep（behavior-protocol.md/SKILL.md/governance-init.md/verify_workflow.py 存在性锚/VERSIONING.md/e2e 副本等；豁免披露：冻结 fixture 4+历史记录 6）——规则称谓与 M10 新增节一致。
+- **M10.2 判定↔样本类映射补行（FEAT-086 F-2）+ EXP-04 设计输入 validate 细化（F-6）**：判定值与样本类同轴互查；validate 场景对齐 R5 五要素。
+- **quote_sync 引文同步守卫（FIX-432 F-4）**：`check-cross-references` 新增引文同步维度——规范源丢标记/转述 note 丢标记/引文行漂移**三维负向验证均触发**（check-cross-references 新增 PASS 行）。
+- **六平台 manifest note 规范标记（FIX-432 F-A2）**：note 规则转述携带规范源标记并纳入 quote_sync 监控面——note 同步债务从无守卫转机器拦截。
+
+### Fixed
+
+- **Check 28b 投影漂移（组装期）**：0.95 窗口组装期 Projection Sync Guard 滞后（EVD-1315 时点「28b 待 commit 2」）随载荷 commit 落地闭环——check-governance 基线回落 1 issue（28n 预存，零新增——EVD-1316）。
+- **manifest note 同步债务（F-A2）**：六平台 adapter-manifest note 规则转述漂移（REVIEW-FEAT-086-R0 F-A2）闭合——note 增规范标记+守卫看护（DEC-315① 并入 FIX-432 承载）。
+
+### Breaking changes
+
+**无**——依据：①CLI 接口与 JSON schema 零变更（quote_sync 为既有子命令检查维度扩展；消费点 `.get` 兼容旧结果形——EVD-1316/1317 实证）；②无 MUST 规则删除/重命名（M10 为纯新增节；M0-M9→M10 为称谓统一非判定语义变更——DEC-316(1) 裁定 MANDATORY 后缀为历史视觉锚无规范效力）；③manifest `exploration_channels`/note 规范标记为 additive 新键（check-manifest-consistency 1021 一致 PASS）；④无 Gate 行为语义改变、无 governance 文件字段格式变更（exploration 区块复用既有 evidence 载体）；⑤**1047 unittest 零回归实证**（EVD-1316 时点）——FIX-432 R1 新增 5 用例（QuoteSyncGuardTests）后预期 **1052**，发布门 M-2 复跑闭合（review-FIX-432-CODE-R1 BM-R1-3 残余移交）。
+
+**行为变更（用户可感知，非旗标面——本版无 feature flag 债务）**：agent 新任务多一步探索适用性判断（应探索时经宿主通道有预算探测并落 exploration 区块；可跳过不强制联网；不可联网无越权访问）——回退 = git revert 发布 commit 序列（无 flag 清理面；见 `docs/release/rollback-plan-0.95.0.md`）。
+
+**版本面再生纪律**：本版版本面经 `release-projection --write` 确定性再生（权威源 bump → written=17 → write_then_probe=PASS，sd_integrity 28 scanned/0 unreadable → 幂等复跑 PASS@0.95.0）+ 双根 entry sync（repo root + e2e fixture 的 AGENTS.md/CLAUDE.md bootstrap 段经 sync_entry_projection.py --write 再生，root 10238B/full + 2816B/thin）+ 引擎锚同步（REQUIRED_SNIPPETS 六面版本针脚 0.95.0）+ STATIC_PIN_EXEMPTIONS 0.95.0 bump-time 登记（test_archive.py L5862——FEAT-076 Q6 夹具行经 0.94.0 休眠后恰一次浮现，FIX-361 双信号；0.85~0.89 先例披露口径恢复，闭合 REL-098 M-3a F-2 一句之差）。
+
+**决策链**：DEC-312（演进总纲 A1~A14+0.95.0 用户预留）/ DEC-313（Phase 0 基线裁定通过）/ DEC-314（FEAT-085 拆票与闭环口径）/ DEC-315（FEAT-086 R0 findings 承载归属——F-A6 bump 提醒）/ DEC-316（F-5/F-A5 规则姿态定夺）；**证据**：EVD-1312~1317 + REVIEW-FEAT-085-R0 / REVIEW-FEAT-086-R0 / REVIEW-FIX-432-R0·R1（全 APPROVED_WITH_NOTES/unresolved_blockers=0）——截至组装时点，发布链证据由 REL-099 收口补齐。
+
+**准备态注记**：本段为 REL-099 组装时点（2026-10-05 +0800）的**准备态**——发布日期不预填（发布收口按 FIX-349 口径以 M-7 annotated tag `v0.95.0` taggerdate 权威落字）；发布终账、Commit 区间终值与发布验证结论随发布链 M-2+ 补记。
+
 ## [0.94.0] - 未发布（准备态）
 <!-- 发布日期占位（FIX-349 口径）：发布日期零预填；M-7 annotated tag `v0.94.0` 落地后以 taggerdate 权威回填本行日期单元格。 -->
 

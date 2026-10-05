@@ -361,6 +361,16 @@ STATIC_PIN_EXEMPTIONS = {
         (20573, "0.94.0", _REASON_FIXTURE_ROW_TEXT),
         (20576, "0.94.0", _REASON_FIXTURE_ROW_TEXT),
     ],
+    # 0.95.0 bump-time rows (the FIX-361 designed double signal): the
+    # FEAT-076 Q6 date-window fallback fail-closed fixture (roadmap row
+    # text) carries the then-future window-end 0.95.0 in the version
+    # cell — scenario payload written in the 0.93.0 window, dormant
+    # through 0.94.0, surfacing exactly once at this bump; the
+    # fail-closed judgement consumes the released-status cell, never
+    # the version cell.
+    "skills/software-project-governance/infra/tests/test_archive.py": [
+        (5862, "0.95.0", _REASON_FIXTURE_ROW_TEXT),
+    ],
     # 0.89.0 bump-time rows (the FIX-361 designed double signal): fixture
     # worlds written by the 0.89.0-window tickets (FIX-390/393/394) carrying
     # the then-future target in scenario-payload cells — each surfaces
